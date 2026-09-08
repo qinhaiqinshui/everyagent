@@ -1,0 +1,50 @@
+# Electron Builder 配置(Windows x64:NSIS 安装包 + portable 便携包)
+appId: dev.everyagent.desktop
+productName: Every Agent
+directories:
+  output: release
+  buildResources: build
+files:
+  - dist/**/*
+  - package.json
+  # 系统托盘图标:主进程 createTray 从 app.getAppPath()/build/icon.png 读取,
+  # 打包后经此 files 规则打进 asar(与源代码 build/icon.png 同路径)。
+  - build/icon.png
+extraResources:
+  - from: resources/web
+    to: web
+  - from: resources/backend
+    to: backend
+  - from: resources/jre
+    to: jre
+  # 程序附属文件(rg、eagent-run.py、托管发行版镜像):唯一真源在仓库根 runtime/,
+  # 经 extraResources 原样搬到 <resourcesPath>/runtime(与 web/backend/jre 同层),
+  # 与 paths.ts 打包态 programRoot()=process.resourcesPath、runtimeDir()=.../runtime 对齐。
+  # 注意:不能用 extraFiles——extraFiles 落到应用根(win-unpacked 根),而 worker 的
+  # cwd = resourcesPath,读 ./runtime 只会命中 resources/runtime,落点不一致会导致
+  # 打包后 wsl-direct 探测失败回退 windows-mic。
+  - from: ../runtime
+    to: runtime
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+    - target: portable
+      arch:
+        - x64
+  # 应用/exe 图标(任务管理器图标 + 打包后任务栏图标)。
+  # 相对 buildResources 目录(build/),由 scripts/generate-icon.ps1 生成 build/icon.ico。
+  icon: icon.ico
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  perMachine: false
+  # 安装后必须能在系统里看到入口:
+  # - createStartMenuShortcut 默认已开,这里显式声明,保证开始菜单有快捷方式;
+  # - createDesktopShortcut 用 always,即使用户以前手动删过桌面快捷方式,重装时也会重新创建。
+  createStartMenuShortcut: true
+  createDesktopShortcut: always
+  shortcutName: Every Agent
+portable:
+  artifactName: ${productName}-${version}-portable.${ext}

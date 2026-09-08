@@ -1,0 +1,30 @@
+server:
+  port: 9100
+
+spring:
+  application:
+    name: every-agent-hub
+  # 用户配置覆盖:存在 ~/.everyagent/application-hub.yaml 则覆盖本文件默认值(后加载、优先级更高);
+  # optional: 前缀 = 文件不存在自动忽略,无自定义则零配置文件(hub 不感知部署方式)。
+  # 注意必须用 spring.config.import 而非 additional-location:后者只在定位配置文件之前从
+  # 环境变量/系统属性/命令行读取,写在 application.yml 里会被静默忽略;import 才是"文件内
+  # 引入外部文件"的机制,被导入者优先级更高。
+  config:
+    import: optional:file:${EVERYAGENT_HOME:${user.home}/.everyagent}/application-hub.yaml
+
+hub:
+  # 必填。直接填原始 hub key(与前端设置页、worker hubs[].hub-key 同一密钥),程序启动时
+  # 自行计算 sha256 用于比对——无需手填哈希。未配置 = 启动失败(apiKey 不做白名单:它定义
+  # ownerKey 命名空间,连上 hub 只能"看到" worker 目录,动 worker 数据须另持该 worker 的 apiKey)。
+  hub-key: ${HUB_KEY:sljlw23948LKS}
+  max-frame-bytes: 16777216        # 单帧上限 16 MiB(应用层温和拦截;传输层升级策略按同值+64KiB 余量)
+  pub-rate-per-second: 100         # 每连接 pub 令牌桶
+  pub-burst: 100
+  outbound-queue-limit: 1000       # 慢消费者保护:出口队列上限,溢出断开
+  ping-interval-ms: 15000          # WS 协议层 ping 间隔
+  stale-read-ms: 0                 # >0 时启用"无入站流量判死"(需 pong 可观测,默认关)
+  hello-rate-per-minute: 60        # 单 IP hello 限速(防 key 枚举)
+
+logging:
+  level:
+    dev.everyagent.hub: INFO

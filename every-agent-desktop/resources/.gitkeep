@@ -1,0 +1,4 @@
+# 占位:构建产物由脚本生成(build-backend/build-web/build-jre)。
+# resources/web  ← every-agent-web/dist
+# resources/backend ← hub.jar / worker.jar
+# resources/jre  ← jlink 精简 JRE

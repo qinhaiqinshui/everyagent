@@ -1,0 +1,7 @@
+﻿export type { IconProps } from './types'
+export { TaskChatIcon } from './TaskChatIcon'
+export { FilesIcon } from './FilesIcon'
+export { LogsIcon } from './LogsIcon'
+export { SettingsIcon } from './SettingsIcon'
+export { GitIcon } from './GitIcon'
+export { ExtensionsSidebarIcon } from './ExtensionsSidebarIcon'

@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://every-agent.dev/schema/envelope.schema.json",
+  "title": "Every Agent 控制帧信封",
+  "description": "所有帧均为 UTF-8 JSON 文本帧,type 区分控制帧。must-ignore 总则:接收方对未知字段一律忽略(架构 §3.1)。",
+  "type": "object",
+  "required": ["type"],
+  "properties": {
+    "type": {
+      "type": "string",
+      "enum": ["hello", "welcome", "sub", "unsub", "pub", "msg", "error"]
+    },
+    "ver": { "type": "integer", "description": "协议版本,仅握手帧携带" },
+    "role": { "type": "string", "enum": ["frontend", "worker"], "description": "仅 hello" },
+    "apiKey": { "type": "string", "description": "仅 hello;hub 只存 sha256" },
+    "clientId": { "type": "string", "pattern": "^[a-zA-Z0-9._-]{1,64}$" },
+    "meta": { "type": "object", "description": "仅 hello,可选(worker 上报 hostname/version)" },
+    "sessionId": { "type": "string", "description": "仅 welcome" },
+    "serverTs": { "type": "integer", "description": "仅 welcome,epoch 毫秒" },
+    "channel": {
+      "type": "string",
+      "pattern": "^u\\.[0-9a-f]{64}\\.[a-z0-9._-]{1,150}$",
+      "maxLength": 160
+    },
+    "mid": { "type": "string", "description": "pub 可选,发布方生成 uuid" },
+    "event": { "type": "string", "description": "业务事件名;hub 不解释" },
+    "seq": { "type": "integer", "minimum": 1, "description": "仅 stream 频道事件;worker 写日志时分配,单调无洞" },
+    "ts": { "type": "integer", "description": "epoch 毫秒(UTC),发布方本地时钟" },
+    "payload": { "type": "object" },
+    "ext": {
+      "type": "object",
+      "description": "帧级开放映射;hub 零理解逐帧原样转发;如 ext.traceparent 按 W3C Trace Context"
+    },
+    "from": {
+      "type": "object",
+      "description": "hub 转发时附加的已认证发布者(仅展示用途)",
+      "properties": {
+        "clientId": { "type": "string" },
+        "role": { "type": "string" }
+      }
+    },
+    "code": {
+      "type": "string",
+      "enum": ["NOT_AUTHENTICATED", "VERSION_MISMATCH", "ACL_DENIED", "FRAME_TOO_LARGE", "RATE_LIMITED"],
+      "description": "仅 error 帧"
+    },
+    "detail": { "type": "string" }
+  }
+}

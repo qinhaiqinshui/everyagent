@@ -1,0 +1,84 @@
+/**
+ * 任务输入队列面板样式(n 分支 queuePanel.css 移植,含操作按钮)。
+ * 复用 UI Token 变量,不硬编码颜色/圆角。
+ */
+
+.task-queue-panel {
+  margin: 0 0 4px;
+  background: var(--bg-soft);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  font-size: 13px;
+}
+
+.task-queue-panel__list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.task-queue-panel__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  background: var(--bg-soft);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+}
+
+.task-queue-panel__item-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+}
+
+.task-queue-panel__item-actions {
+  flex-shrink: 0;
+  display: flex;
+  gap: 2px;
+}
+
+.task-queue-panel__btn {
+  padding: 2px 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+}
+
+.task-queue-panel__btn svg {
+  display: block;
+}
+
+.task-queue-panel__btn:hover:not(:disabled) {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.task-queue-panel__btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.task-queue-panel__btn--danger:hover:not(:disabled) {
+  color: var(--accent-red);
+  background: var(--accent-red-dim);
+}
+
+.task-queue-panel__btn--insert:hover:not(:disabled) {
+  color: var(--accent-blue, #3b82f6);
+  background: var(--accent-blue-dim, rgba(59, 130, 246, 0.12));
+}
+
+.task-queue-panel__error {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--accent-red);
+}

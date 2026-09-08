@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+    <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
+    <include resource="org/springframework/boot/logging/logback/console-appender.xml"/>
+
+    <!--
+      日志目录:EVERYAGENT_HOME/logs(桌面版 worker 数据目录),环境变量缺失时回退 ~/.everyagent/logs。
+      - 桌面版主进程以 EVERYAGENT_HOME 启动 worker,日志即落 <EVERYAGENT_HOME>/logs。
+      - 命令行/docker 未设 EVERYAGENT_HOME 时,worker 系统目录默认 ~/.everyagent,日志落 ~/.everyagent/logs。
+    -->
+    <property name="EA_LOG_DIR" value="${EVERYAGENT_HOME:-${user.home}/.everyagent}/logs"/>
+
+    <!-- 主日志:worker 运行日志(含 INFO/DEBUG),每日滚动,保留 7 天 -->
+    <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>${EA_LOG_DIR}/worker.log</file>
+        <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+            <fileNamePattern>${EA_LOG_DIR}/worker.%d{yyyy-MM-dd}.log</fileNamePattern>
+            <maxHistory>7</maxHistory>
+        </rollingPolicy>
+        <encoder>
+            <charset>UTF-8</charset>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%thread] %logger{36} - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <!--
+      AI 安全审议审计日志(独立文件):
+      - 只承载 dev.everyagent.worker.authreview.AuthAudit 的审计数据(decision/confidence/reason/grantKey/prompt...)
+      - 默认目录 <EVERYAGENT_HOME>/logs,可用环境变量 AUTH_REVIEW_LOG_DIR 覆盖
+      - 每天一个文件(auth-review.<yyyy-MM-dd>.log),最多保留 7 天(maxHistory=7)
+    -->
+    <property name="AUTH_REVIEW_LOG_DIR" value="${AUTH_REVIEW_LOG_DIR:-${EA_LOG_DIR}}"/>
+
+    <appender name="AUTH_REVIEW" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>${AUTH_REVIEW_LOG_DIR}/auth-review.log</file>
+        <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+            <fileNamePattern>${AUTH_REVIEW_LOG_DIR}/auth-review.%d{yyyy-MM-dd}.log</fileNamePattern>
+            <maxHistory>7</maxHistory>
+        </rollingPolicy>
+        <encoder>
+            <charset>UTF-8</charset>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%thread] %logger{36} - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <!-- 审计数据专用 logger:级别 DEBUG,additivity=false 只写独立文件,不冒泡到 root -->
+    <logger name="dev.everyagent.worker.authreview.AuthAudit" level="DEBUG" additivity="false">
+        <appender-ref ref="AUTH_REVIEW"/>
+    </logger>
+
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="FILE"/>
+    </root>
+</configuration>

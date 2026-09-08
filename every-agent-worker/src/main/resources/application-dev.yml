@@ -1,0 +1,21 @@
+
+worker:
+  worker-id: ${WORKER_ID:company-pc-dev}
+  hubs:
+    - url: ws://localhost:8100/ws
+      api-key: dev-key
+      # 连接 hub 的凭证(对 hub 的保护);与 api-key 不同,由部署者统一配置。必填:
+      # 原始密钥须与目标 hub 的 hub.hub-key(存其 sha256)对应,缺失该条目 worker 拒绝启动
+      hub-key: ${HUB_KEY:sljlw23948LKS}
+  # 系统目录(架构 §5.9):默认工作区 workspace/、数据 data/;空 = ~/.everyagent
+  home-dir: ${user.home}/.everyagent-dev
+  sandbox:
+    type: windows-mic
+server:
+  port: 8200
+  address: 127.0.0.1 # 管理端口仅本机(架构 §2.2)
+spring:
+  # application.yml 里的 import 解析时看不到本文件(dev profile 后加载),dev home-dir 的
+  # application-worker.yaml 须在这里再引入一次;${worker.home-dir} 取本文件上面的 dev 值。
+  config:
+    import: optional:file:${worker.home-dir}/application-worker.yaml

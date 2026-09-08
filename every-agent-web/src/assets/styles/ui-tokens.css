@@ -1,0 +1,271 @@
+/* =============================================================
+ * ui-tokens.css — 设计系统 Token 真相源（阶段 1 收口）
+ * -------------------------------------------------------------
+ * 规则：
+ *  1. 本文件是项目唯一的视觉变量真相源。组件、原语、页面只引用
+ *     token，不得硬编码颜色/圆角/阴影/间距。
+ *  2. 深色为默认（:root），浅色通过 [data-theme='light'] 覆盖。
+ *  3. 新增视觉值必须先加 token，再在组件里引用，禁止页面内联新色值。
+ *  4. 移动端尺寸覆盖集中在文件末尾的 @media 块。
+ * ============================================================= */
+
+:root {
+  /* ── Color · 背景 / 表面 ─────────────────────────────── */
+  --bg-primary: #0b0d12;
+  --bg-secondary: #11141b;
+  --bg-tertiary: #171b24;
+  --bg-hover: #202631;
+  --bg-active: #232b38;
+  --bg-elevated: #151922;
+  --bg-sunken: #080a0f;
+  --bg-soft: #161a24; /* 淡背景：比主背景略亮的柔和底色，用于输入区上方辅助面板（如任务队列） */
+
+  /* ── Color · 边框 ───────────────────────────────────── */
+  --border: #2a303b;
+  --border-light: #1b202a;
+  --border-strong: #3b4658;
+
+  /* ── Color · 文本 ───────────────────────────────────── */
+  --text-primary: #eef1f5;
+  --text-secondary: #aab3c2;
+  --text-muted: #6f7a8b;
+  --text-faint: #525c6a; /* 最弱文本：比 muted 更淡，用于说明/副内容 */
+
+  /* ── Color · 强调色 ─────────────────────────────────── */
+  --accent-blue: #61a5ff;
+  --accent-blue-dim: rgba(97, 165, 255, 0.16);
+  --accent-blue-soft: rgba(97, 165, 255, 0.1);
+  --accent-green: #41d19c;
+  --accent-green-dim: rgba(65, 209, 156, 0.14);
+  --accent-purple: #b59cff;
+  --accent-purple-dim: rgba(181, 156, 255, 0.14);
+  --accent-amber: #f7bd54;
+  --accent-amber-dim: rgba(247, 189, 84, 0.15);
+  --accent-red: #ff6b6b;
+  --accent-red-dim: rgba(255, 107, 107, 0.14);
+  --accent-cyan: #54d2e8;
+  --accent-cyan-dim: rgba(84, 210, 232, 0.14);
+
+  /* ── Color · 标签页专用 ─────────────────────────────── */
+  --agent-tab-bg: rgba(97, 165, 255, 0.08);
+  --agent-tab-active-bg: rgba(97, 165, 255, 0.18);
+  --agent-tab-border: rgba(97, 165, 255, 0.18);
+  --agent-tab-border-active: rgba(97, 165, 255, 0.4);
+  --agent-tab-text: #b8c7da;
+  --agent-tab-text-active: #eef4ff;
+  --agent-tab-icon: #84b7ff;
+  --agent-tab-icon-active: #c7e0ff;
+
+  --file-tab-bg: rgba(84, 210, 232, 0.08);
+  --file-tab-active-bg: rgba(84, 210, 232, 0.16);
+  --file-tab-border: rgba(84, 210, 232, 0.18);
+  --file-tab-border-active: rgba(84, 210, 232, 0.38);
+  --file-tab-text: #b4d7dc;
+  --file-tab-text-active: #ecfbff;
+  --file-tab-icon: #6fdae8;
+  --file-tab-icon-active: #bff3fb;
+
+  /* ── Radius ─────────────────────────────────────────── */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 8px;
+  --radius-xl: 10px;
+
+  /* ── Shadow / Overlay ───────────────────────────────── */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.28);
+  --shadow-md: 0 12px 34px rgba(0, 0, 0, 0.36);
+  --shadow-lg: 0 22px 64px rgba(0, 0, 0, 0.5);
+  --overlay: rgba(4, 6, 10, 0.7);
+
+  /* ── Code / JSON 语法色 ─────────────────────────────── */
+  --code-bg: #10151e;
+  --code-text: #d7e2f2;
+  --json-key: #9cdcfe;
+  --json-string: #ce9178;
+  --json-number: #b5cea8;
+  --json-boolean: #569cd6;
+  --json-null: #569cd6;
+
+  /* ── Scrollbar ──────────────────────────────────────── */
+  --scrollbar-thumb: #343d4c;
+  --scrollbar-thumb-hover: #465368;
+
+  /* ── Font ───────────────────────────────────────────── */
+  --font-mono: "Cascadia Code", "Fira Code", Consolas, "Courier New", monospace;
+
+  /* ── Layout 尺寸 ────────────────────────────────────── */
+  --sidebar-width: 312px;
+  --mobile-sidebar-width: min(88vw, 360px);
+  --mobile-bottom-bar-height: calc(44px + var(--page-safe-bottom));
+  --titlebar-height: 32px;
+  --titlebar-tab-height: 32px;
+  --titlebar-tab-width: 132px;
+  --titlebar-tab-shoulder-width: 10px;
+  --titlebar-launcher-label-gap: 6px;
+  --titlebar-bg: #1a1f29;
+  --titlebar-tab-bg: #242b37;
+  --titlebar-tab-hover-bg: #2b3340;
+  --titlebar-tab-active-bg: #0f131a;
+  --titlebar-tab-border: #394354;
+  --page-safe-bottom: env(safe-area-inset-bottom, 0px);
+  --page-safe-left: env(safe-area-inset-left, 0px);
+  --page-safe-right: env(safe-area-inset-right, 0px);
+
+  /* ── Task Launcher 派生表面（基于上述 token） ───────── */
+  --task-launcher-page-bg: var(--bg-primary);
+  --task-launcher-surface-bg: var(--bg-secondary);
+  --task-launcher-muted-surface-bg: color-mix(in srgb, var(--bg-tertiary) 92%, var(--bg-secondary));
+  --task-launcher-message-header-bg: var(--task-launcher-muted-surface-bg);
+  --task-launcher-message-body-bg: var(--task-launcher-muted-surface-bg);
+
+  /* ── Spacing 刻度（新增）───────────────────────────────
+   * 唯一允许的间距来源。页面/组件优先用 --space-*，禁止随手写 px 间距。 */
+  --space-0: 0;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+
+  /* ── Typography 刻度（新增）──────────────────────────── */
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-base: 14px;
+  --text-md: 15px;
+  --text-lg: 16px;
+  --text-xl: 18px;
+  --text-2xl: 22px;
+  --text-3xl: 28px;
+  --leading-tight: 1.4;
+  --leading-base: 1.6;
+  --leading-relaxed: 1.75;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+
+  /* ── Motion 动效（新增）──────────────────────────────── */
+  --motion-duration-fast: 120ms;
+  --motion-duration-base: 200ms;
+  --motion-duration-slow: 320ms;
+  --motion-ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+  --motion-ease-emphasized: cubic-bezier(0.2, 0, 0, 1);
+  --motion-ease-out: cubic-bezier(0, 0, 0.2, 1);
+
+  /* ── Z-index 层级量表（新增）───────────────────────────
+   * 全站浮层/弹层/工具栏统一引用，禁止散落字面量。 */
+  --z-base: 1;
+  --z-raised: 10;
+  --z-sticky: 100;
+  --z-dropdown: 1000;
+  --z-overlay: 1050;
+  --z-modal: 1100;
+  --z-toast: 1200;
+  --z-tooltip: 1300;
+
+  /* ── Focus Ring 焦点环（新增）────────────────────────── */
+  --focus-ring-width: 2px;
+  --focus-ring-color: color-mix(in srgb, var(--accent-blue) 55%, transparent);
+  --focus-ring: 0 0 0 var(--focus-ring-width) var(--focus-ring-color);
+  --focus-ring-offset: 2px;
+
+  /* ── Surface Transparency 半透明表面（新增）────────────
+   * 毛玻璃/半透明面板统一引用，禁止内联 rgba/color-mix。 */
+  --surface-translucent-1: color-mix(in srgb, var(--bg-secondary) 82%, transparent);
+  --surface-translucent-2: color-mix(in srgb, var(--bg-secondary) 66%, transparent);
+  --surface-translucent-3: color-mix(in srgb, var(--bg-primary) 72%, transparent);
+  --surface-glass: color-mix(in srgb, var(--bg-elevated) 88%, transparent);
+}
+
+/* ── 浅色主题覆盖 ──────────────────────────────────────── */
+[data-theme='light'] {
+  --bg-primary: #ffffff;
+  --bg-secondary: #ffffff;
+  --bg-tertiary: #ffffff;
+  --bg-hover: #f5f5f5;
+  --bg-active: #ebebeb;
+  --bg-elevated: #ffffff;
+  --bg-sunken: #fafafa;
+  --bg-soft: #f7f8fa; /* 淡背景：浅色主题下与白色页面区分的柔和底色 */
+
+  --border: #d9d9d9;
+  --border-light: #e9e9e9;
+  --border-strong: #bfbfbf;
+
+  --text-primary: #000000;
+  --text-secondary: #111111;
+  --text-muted: #555555;
+  --text-faint: #8c8c8c; /* 最弱文本：比 muted 更淡，用于说明/副内容 */
+
+  --accent-blue: #2f6fed;
+  --accent-blue-dim: rgba(47, 111, 237, 0.12);
+  --accent-blue-soft: rgba(47, 111, 237, 0.09);
+  --accent-green: #058761;
+  --accent-green-dim: rgba(5, 135, 97, 0.12);
+  --accent-purple: #7857d8;
+  --accent-purple-dim: rgba(120, 87, 216, 0.12);
+  --accent-amber: #b97912;
+  --accent-amber-dim: rgba(185, 121, 18, 0.13);
+  --accent-red: #d92d42;
+  --accent-red-dim: rgba(217, 45, 66, 0.12);
+  --accent-cyan: #0087a7;
+  --accent-cyan-dim: rgba(0, 135, 167, 0.12);
+
+  --agent-tab-bg: rgba(47, 111, 237, 0.08);
+  --agent-tab-active-bg: rgba(47, 111, 237, 0.16);
+  --agent-tab-border: rgba(47, 111, 237, 0.16);
+  --agent-tab-border-active: rgba(47, 111, 237, 0.34);
+  --agent-tab-text: #365179;
+  --agent-tab-text-active: #163665;
+  --agent-tab-icon: #2f6fed;
+  --agent-tab-icon-active: #184fb6;
+
+  --file-tab-bg: rgba(0, 135, 167, 0.08);
+  --file-tab-active-bg: rgba(0, 135, 167, 0.14);
+  --file-tab-border: rgba(0, 135, 167, 0.14);
+  --file-tab-border-active: rgba(0, 135, 167, 0.28);
+  --file-tab-text: #365f68;
+  --file-tab-text-active: #124857;
+  --file-tab-icon: #0087a7;
+  --file-tab-icon-active: #00657f;
+
+  --shadow-sm: 0 1px 2px rgba(17, 24, 39, 0.06);
+  --shadow-md: 0 12px 30px rgba(17, 24, 39, 0.1);
+  --shadow-lg: 0 26px 56px rgba(17, 24, 39, 0.16);
+  --overlay: rgba(17, 24, 39, 0.28);
+
+  --code-bg: #ffffff;
+  --code-text: #000000;
+  --json-key: #0550ae;
+  --json-string: #a31515;
+  --json-number: #0b7a4b;
+  --json-boolean: #0b66c2;
+  --json-null: #0b66c2;
+
+  --scrollbar-thumb: #c7c7c7;
+  --scrollbar-thumb-hover: #a8a8a8;
+
+  --titlebar-bg: #f4f4f4;
+  --titlebar-tab-bg: color-mix(in srgb, #ebebeb 92%, #dcdcdc);
+  --titlebar-tab-hover-bg: color-mix(in srgb, #f2f2f2 90%, #e1e1e1);
+  --titlebar-tab-active-bg: #ffffff;
+  --titlebar-tab-border: #d5d5d5;
+
+  --task-launcher-page-bg: #ffffff;
+  --task-launcher-surface-bg: #ffffff;
+  --task-launcher-muted-surface-bg: var(--bg-hover);
+  --task-launcher-message-header-bg: var(--task-launcher-muted-surface-bg);
+  --task-launcher-message-body-bg: var(--task-launcher-muted-surface-bg);
+}
+
+/* ── 移动端尺寸覆盖（新增，迁移自 index.css）────────────── */
+@media (max-width: 768px) {
+  :root {
+    --titlebar-height: 29px;
+    --titlebar-tab-height: 29px;
+    --titlebar-tab-width: 124px;
+    --titlebar-tab-shoulder-width: 8px;
+  }
+}

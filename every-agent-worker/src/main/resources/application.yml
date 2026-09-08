@@ -1,0 +1,145 @@
+
+worker:
+  # 默认 workerId 与桌面版默认(desktop-config.json 的 workerId)保持一致。
+  # 可通过 WORKER_ID 或 ~/.everyagent/application-worker.yaml 覆盖;
+  # 桌面版启动时会按 worker /health 上报值自动对齐 bootstrap。
+  worker-id: ${WORKER_ID:company-pc}
+  # 连接 hub 的唯一配置入口是 worker.hubs 列表(架构 §5.3):每项含 url + api-key + hub-key,支持多 hub
+  # (同 apiKey 多 hub = 可靠性冗余,不同 apiKey = 一台 worker 服务多个用户,数据按 K 隔离);
+  # 不配置则 worker 不连任何 hub;url 有效但 api-key/hub-key 缺失 → 启动失败(凭据必填,无旁路)。
+  hubs:
+    - url: ws://localhost:9100/ws
+      api-key: dev-key
+      # 连接 hub 的凭证(对 hub 的保护);与 api-key 不同,由部署者统一配置。必填:
+      # 原始密钥须与目标 hub 的 hub.hub-key(存其 sha256)对应,缺失该条目 worker 拒绝启动
+      hub-key: ${HUB_KEY:sljlw23948LKS}
+  # 系统目录(架构 §5.9):默认工作区 workspace/、数据 data/;空 = ~/.everyagent
+  home-dir: ${EVERYAGENT_HOME:}
+  # 模型配置(只读,config.get 的唯一数据源):默认用 OpenAI 兼容占位符,真实 provider/apiKey
+  # 由 ~/.everyagent/application-worker.yaml(或开发环境 application-dev.yaml)覆盖,不进 jar/git。
+  # 注意:列表属性整表替换——覆盖文件里写 worker.models 会完整替换本默认表。
+  # workspace-root = 默认工作区(init 注册进 data/workspaces.json);data = 任务落盘/注册表根
+  workspace-root: ${WORKSPACE_ROOT:}
+  data-dir: ${DATA_DIR:}
+  limits:
+    max-concurrent-tasks: 20
+    max-concurrent-subs: 8
+    ask-timeout-ms: 1800000
+    sub-wait-timeout-ms: 300000
+    max-events-per-task: 500000
+    ship-stall-ms: 60000
+  # 危险操作授权(PermissionGate):危险命令正则/系统目录排除/授权弹窗超时;空缺用内置默认
+  # 进程沙箱:单命令看门狗超时(ms);超时强杀子进程。30 分钟 = 1800000。
+  # active-process-limit:Job Object 活动进程数上限(0=不限制)。默认 32。
+  #   rgt 独立工具已移除,模型在沙箱 shell 内直接调 rg(子进程),此值必须 ≥2,
+  #   否则 rg/cmd/where 等一切子进程都会被拒(ERROR_NOT_ENOUGH_QUOTA)。
+  # memory-limit-mb:Job Object 整棵进程树内存上限(MB);0 = 不限制。默认 512。
+  #   mvn/gradle 等构建会启动 JVM,默认 JVM 堆(物理内存 1/4)很容易撞破 512MB
+  #   上限报 ERROR_COMMITMENT_LIMIT(1455,『页面文件太小』)。构建任务建议调大
+  #   到 4096+,并配合 MAVEN_OPTS=-Xmx 把 JVM 堆压在限内。
+  # cpu-hard-cap-percent:Job 内所有进程合计 CPU 时间百分比上限(0-100;0=不限制)。
+  #   注意代码按 Windows 内核单位(1/100 百分比)换算,这里直接填整百分比即可。
+  #   沙箱防失控已默认 50;但 mvn 编译是 CPU 密集任务,28 核机器建议 100(全核)。
+  sandbox:
+    timeout-ms: 1800000
+    active-process-limit: 32
+    memory-limit-mb: 4096
+    cpu-hard-cap-percent: 100
+    # 沙箱类型(docs/ARCHITECTURE.md §7.10):auto | wsl-direct(=direct)| wsl-bwrap(=wsl)| windows-mic(=acl)| none。
+    #   auto(默认/不配)= Windows 平台默认 wsl-direct(发行版 root 完整权限、可丢弃,宿主靠
+    #     automount 关闭隔离);探测失败回退 windows-mic。非 Windows 无内核级沙箱,直接 spawn。
+    #   wsl-direct = 发行版 root 直连:automount 关闭 + 手动 mount 工作区到原路径挂载点(/c/a/foo),
+    #     AI 拥有发行版完整权限,apt install / 改配置 均持久;装坏由宿主重装整个发行版。
+    #   wsl-bwrap = 备选更强隔离:命令经 wsl.exe 进发行版、bubblewrap 挂载命名空间(bind 白名单 + 只读基座),
+    #     探测失败回退 windows-mic(error 日志)。要求 worker 非降权(WSL 服务拒 Low-IL 调用方)。
+#    type: windows-mic
+    # 是否允许沙箱内命令提权(root/sudo)。默认 false。
+    #   true = 全局默认放行(不再弹窗):wsl-bwrap 以 uid 0 运行(新建 user namespace,宿主侧仍非特权,
+    #     需内核允许非特权 userns);windows-mic 跳过 Restricted Token + Low IL 降权。
+    #   false = 默认拒绝;命令含 sudo/su/doas/runas 等提权动词时,弹窗让用户授权(复用危险命令
+    #     授权机制:授权后同类提权命令在所选范围内不再询问,拒绝则命令不执行、错误文本回灌模型)。
+    allow-privilege-escalation: false
+    # 是否启用 seccomp 内核级提权拦截(仅 wsl-bwrap 后端,见 docs/ARCHITECTURE.md §7.11)。
+    #   true = 命令/脚本内 exec setuid 二进制(sudo/su 等)时,内核在 execve 点上报 worker,
+    #     走授权链(AI 审议优先 → 无人值守拒绝 → 人工弹窗)后才放行;拒绝 → 该次 exec EPERM。
+    #     覆盖文本扫描漏掉的别名、包装脚本、脚本内提权;seccomp 不可用(旧内核/权限)时退化为无拦截。
+    #   false = 关闭 seccomp,回退文本扫描(usesPrivilege)启发式。
+    intercept-privilege: true
+    # 是否允许沙箱内命令访问网络。默认 false(deny-all 硬/软拒)。
+    #   true 时放行网络(wsl-bwrap 不加 --unshare-net;其余后端不剥代理 env)。
+    #   任务级更细粒度:保持 false,用户对某个任务选 /网络 斜杠命令即可单独放行该任务网络。
+    allow-network: false
+    # 是否启用 worker 级共享持久状态(装一次、处处可用)。默认 true。
+    #   true 时 wsl-bwrap 把 <persistent-root> 下的 home/opt/usr-local/resolv.conf 读写挂入沙箱,
+    #   并注入 <persistent-root>/env 持久环境变量——所有任务/工作区共享同一工具链(JDK/Maven 等),
+    #   软件装进 /opt 或 /usr/local 即跨任务保留;resolv.conf 持久化修复沙箱内 DNS。
+    #   persistent-root 空 = <data-dir>/sandbox。
+    persistent-state: true
+    #    persistent-root: ""       # 空 = <data-dir>/sandbox;也可指定绝对路径
+    # wsl-bwrap 专属:distro 须预装 python3 + bwrap(rg/git 建议;装配/探针见 scripts/wsl-sandbox-probe.ps1)。
+    wsl:
+      distro: "eagent"              # 空(默认)= WSL 默认发行版(wsl -l -v 带 * 者,免配置即可探测);生产托管发行版显式配 eagent
+      tarball: wsl/eagent-rootfs.tar.gz  # 托管镜像(相对系统目录):在位且发行版缺失时首启自动 wsl --import(免管理员、离线,sha256 同名 .sha256 把关);文件不在=关闭
+    #   ro-islands: []          # 工作区相对只读岛;默认空——agent 需 git commit,.git 不默认保护
+    #   pwsh-enabled: false     # true 时 powershell 命令经发行版内 pwsh 执行(须发行版预装)
+    #   login-shell: true       # true 时 wsl-bwrap 后端 bash 命令以登录 shell(-lc)执行,自动加载 /etc/profile 与 ~/.profile(profile 里 export 的环境变量对每条命令持久生效);默认 false 保持 bash -c(环境白名单确定性)。wsl-direct 恒用 -lc,不受此开关影响。
+  # 原生 git 执行(架构 §7.12):git.* RPC 由 worker 宿主原生 git argv 直传执行,
+  # 不经 wsl/mic 沙箱后端(前端按钮触发的平台受控操作)。凭证走 GIT_ASKPASS env 注入,
+  # 本机 credential.helper / ssh-agent / ~/.ssh 由 git 自行复用。
+  git:
+    # git 可执行文件绝对路径;空 = 自动探测(常见安装路径 + PATH 兜底)。
+    executable: ""
+    # 单个 git 命令超时(ms);clone/pull/push 大仓库可能较慢,默认 5 分钟。
+    timeout-ms: 300000
+  # 模型调用超时(ms):spring-ai OpenAiChatOptions 默认 60s,reasoning 模型深度思考期间
+  # 长时间无 chunk 会被 okhttp 超时主动 CANCEL 流;默认 10 分钟,过长可调小。
+  model-timeout-ms: 600000
+  permissions:
+    auth-timeout-ms: 300000
+    # AI 审议超时(ms):privilege 授权走 AiAuthReviewer 时单次 HTTP options.timeout + 外层总预算硬闸的窗口。
+    review-timeout-ms: 60000
+    # AI 审议超时/异常缺省按拒绝处理(fail-closed);false = 回退人工弹窗,绝不因此放行。
+    review-deny-on-error: true
+    # 可选:审议专用模型的 ConfigStore configId;空则用任务当前模型。
+    review-model: ""
+
+
+server:
+  port: 9200
+  address: 127.0.0.1 # 管理端口仅本机(架构 §2.2)
+
+spring:
+  application:
+    name: every-agent-worker
+  # 用户配置覆盖:存在 ~/.everyagent/application-worker.yaml 则覆盖本文件默认值(后加载、优先级更高);
+  # optional: 前缀 = 文件不存在自动忽略,无自定义则零配置文件(hub/worker 不感知部署方式)。
+  # 注意必须用 spring.config.import 而非 additional-location:后者只在定位配置文件之前从
+  # 环境变量/系统属性/命令行读取,写在 application.yml 里会被静默忽略(见 Spring Boot 文档
+  # 'External Application Property Files');import 才是"文件内引入外部文件"的机制,被导入者优先级更高。
+  # 占位符陷阱:import 路径在加载本文件时即解析,profile 文件(application-dev.yml)此时尚未加载,
+  # 写 ${worker.home-dir} 只会拿到本文件的空默认值,经 optional: 静默变成 file:/application-worker.yaml
+  # 被跳过。故这里只能引用环境变量/系统属性;改了 home-dir 的 profile 须在自己 yml 里再声明一次
+  # import(见 application-dev.yml)。
+  config:
+    import: optional:file:${worker.home-dir}/application-worker.yaml
+  # 模型按 ModelConfig 动态构建,不使用自动装配的 OpenAI 单例(全套排除,缺 api-key 时其余自动配置会启动失败)
+  autoconfigure:
+    exclude:
+      - org.springframework.ai.model.openai.autoconfigure.OpenAiChatAutoConfiguration
+      - org.springframework.ai.model.openai.autoconfigure.OpenAiEmbeddingAutoConfiguration
+      - org.springframework.ai.model.openai.autoconfigure.OpenAiImageAutoConfiguration
+      - org.springframework.ai.model.openai.autoconfigure.OpenAiAudioSpeechAutoConfiguration
+      - org.springframework.ai.model.openai.autoconfigure.OpenAiAudioTranscriptionAutoConfiguration
+      - org.springframework.ai.model.openai.autoconfigure.OpenAiModerationAutoConfiguration
+
+logging:
+  level:
+    dev.everyagent: INFO
+    # AI 请求原始内容打印(排除 apiKey),走 DEBUG 级别:
+    # 由 HttpRequestLoggingInterceptor 在 HTTP 层打印(真实报文,含 skill 渐进式披露索引等全部注入)。
+    # 开发期设为 DEBUG 开启控制台打印,生产环境保持 INFO 即静默。
+    dev.everyagent.worker.task.HttpRequestLoggingInterceptor: info
+
+    dev.everyagent.worker.tools: DEBUG
+    dev.everyagent.worker.os: DEBUG
+    dev.everyagent.worker.task: DEBUG

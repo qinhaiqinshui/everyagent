@@ -1,0 +1,116 @@
+/* =============================================================
+ * ui-patterns.css — 页面模式层样式（阶段 5）
+ * -------------------------------------------------------------
+ * 配套组件：src/components/shared/patterns/*
+ * 规则：
+ *  1. 模式层只表达“如何组合”，不复刻基础控件。
+ *  2. 全部基于 ui-tokens / ui-primitives / ui-controls / ui-overlays。
+ *  3. 不依赖 Bulma panel / tabs / message / card 结构语义。
+ * ============================================================= */
+
+/* ── PageHeader ─────────────────────────────────────────────── */
+.ui-page-header {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-4) var(--space-3);
+  border-bottom: 1px solid var(--border-light);
+}
+.ui-page-header__main { flex: 1 1 auto; min-width: 0; }
+.ui-page-header__title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-lg);
+  font-weight: var(--font-weight-semibold);
+  color: var(--text-primary);
+}
+.ui-page-header__icon { display: inline-flex; width: 20px; height: 20px; color: var(--text-secondary); }
+.ui-page-header__desc { margin-top: var(--space-1); font-size: var(--text-sm); color: var(--text-muted); }
+.ui-page-header__actions { display: flex; align-items: center; gap: var(--space-2); flex: 0 0 auto; }
+
+/* ── PanelSection ───────────────────────────────────────────── */
+.ui-panel-section__header {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+.ui-panel-section__heading { flex: 1 1 auto; min-width: 0; }
+.ui-panel-section__title { font-size: var(--text-base); font-weight: var(--font-weight-semibold); color: var(--text-primary); }
+.ui-panel-section__desc { font-size: var(--text-xs); color: var(--text-muted); margin-top: 2px; }
+.ui-panel-section__actions { display: flex; align-items: center; gap: var(--space-2); flex: 0 0 auto; }
+
+/* ── FilterToolbar ──────────────────────────────────────────── */
+.ui-toolbar--filter { flex-wrap: wrap; row-gap: var(--space-2); }
+
+/* ── StatusNotice ───────────────────────────────────────────── */
+.ui-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-left-width: 3px;
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+}
+.ui-notice__icon { flex: 0 0 auto; display: inline-flex; width: 16px; height: 16px; margin-top: 1px; color: inherit; }
+.ui-notice__body { flex: 1 1 auto; min-width: 0; }
+.ui-notice__title { font-weight: var(--font-weight-semibold); color: var(--text-primary); margin-bottom: 2px; }
+.ui-notice__close { flex: 0 0 auto; margin: -4px -4px 0 0; }
+.ui-notice--neutral { border-left-color: var(--border-strong); }
+.ui-notice--info { border-left-color: var(--accent-blue); background: var(--accent-blue-dim); color: var(--text-primary); }
+.ui-notice--success { border-left-color: var(--accent-green); background: var(--accent-green-dim); color: var(--text-primary); }
+.ui-notice--warn { border-left-color: var(--accent-amber); background: var(--accent-amber-dim); color: var(--text-primary); }
+.ui-notice--danger { border-left-color: var(--accent-red); background: var(--accent-red-dim); color: var(--text-primary); }
+
+/* ── ListItemRow ────────────────────────────────────────────── */
+.ui-list-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  cursor: default;
+  transition: background var(--motion-duration-fast) var(--motion-ease-standard);
+}
+.ui-list-row:hover:not(.is-disabled) { background: var(--bg-hover); }
+.ui-list-row.is-active { background: var(--bg-active); }
+.ui-list-row.is-disabled { opacity: 0.5; cursor: not-allowed; }
+.ui-list-row__leading {
+  flex: 0 0 auto;
+  display: inline-flex;
+  width: 20px;
+  height: 20px;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+}
+.ui-list-row__main { flex: 1 1 auto; min-width: 0; }
+.ui-list-row__title {
+  font-size: var(--text-sm);
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ui-list-row__desc {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ui-list-row__trailing { flex: 0 0 auto; display: inline-flex; align-items: center; gap: var(--space-1); color: var(--text-muted); }
+
+/* ── PageShell ──────────────────────────────────────────────── */
+.ui-page-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+.ui-page-shell__content { flex: 1 1 auto; min-height: 0; }

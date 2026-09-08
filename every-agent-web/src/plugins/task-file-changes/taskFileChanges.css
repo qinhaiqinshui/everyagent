@@ -1,0 +1,121 @@
+.task-file-changes {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-top: 4px;
+}
+
+/* 默认折叠:汇总头(「文件变更」+ 数量),点击展开/收起文件行列表。 */
+.task-file-changes__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+  margin: 0;
+  padding: 4px 9px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  line-height: 1.5;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.task-file-changes__toggle:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.task-file-changes__toggle-icon {
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-muted);
+}
+
+.task-file-changes__toggle-label {
+  color: inherit;
+}
+
+.task-file-changes__toggle-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.task-file-changes__list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.task-file-changes__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  text-align: left;
+}
+
+.task-file-changes__row:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.task-file-changes__name {
+  flex: 0 0 auto;
+  min-width: 0;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.task-file-changes__path {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
+}
+
+.task-file-changes__tag {
+  flex: 0 0 auto;
+  margin-left: auto;
+  font-size: var(--text-xs);
+  font-weight: 700;
+}
+
+.task-file-changes__tag--created {
+  color: var(--accent-green);
+}
+
+.task-file-changes__tag--updated {
+  color: var(--accent-blue);
+}
+
+.task-file-changes__tag--deleted {
+  color: var(--accent-red);
+}

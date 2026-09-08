@@ -1,0 +1,134 @@
+/**
+ * Agent 长条列表面板样式。
+ * 语义色统一走 ui-tokens 的 accent 变量(随主题切换);running 态条内流光滑过、
+ * 状态圆点呼吸。原生横向滚动条隐藏,滚动指示由覆盖式 OverlayScrollbar 承担
+ * (滚动时淡入,停止后淡出)。
+ */
+.nagent-agent-list {
+  padding: 4px 0 0;
+}
+
+/* 恰好包裹滚动行,作为覆盖式滚动指示条的定位锚 */
+.nagent-agent-list__frame {
+  position: relative;
+}
+
+.nagent-agent-list__scroll {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 4px 2px 6px;
+  scrollbar-width: none;
+}
+
+.nagent-agent-list__scroll::-webkit-scrollbar {
+  display: none;
+}
+
+.nagent-agent {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  height: 26px;
+  max-width: 220px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 999px;
+  cursor: pointer;
+  overflow: hidden;
+  -webkit-tap-highlight-color: transparent;
+  transition: filter 0.12s ease;
+}
+
+.nagent-agent__dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.nagent-agent__label {
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.2px;
+  line-height: 1;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.nagent-agent__title {
+  font-size: 11px;
+  line-height: 1;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* running:条内流光滑过 + 圆点呼吸 */
+.nagent-agent--running {
+  background: var(--accent-blue-dim);
+  color: var(--accent-blue);
+}
+.nagent-agent--running::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(100deg, transparent 20%, rgba(255, 255, 255, 0.22) 50%, transparent 80%);
+  transform: translateX(-100%);
+  animation: nagent-agent-sheen 2.6s ease-in-out infinite;
+  pointer-events: none;
+}
+.nagent-agent--running .nagent-agent__dot {
+  animation: nagent-agent-breathe 1.6s ease-in-out infinite;
+}
+
+.nagent-agent--waiting-user {
+  background: var(--accent-amber-dim);
+  color: var(--accent-amber);
+}
+
+.nagent-agent--completed {
+  background: var(--accent-green-dim);
+  color: var(--accent-green);
+}
+
+.nagent-agent--error {
+  background: var(--accent-red-dim);
+  color: var(--accent-red);
+}
+
+.nagent-agent--stopped,
+.nagent-agent--idle {
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+}
+
+.nagent-agent.is-selected {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: 2px;
+}
+
+.nagent-agent:hover {
+  filter: brightness(1.15);
+}
+
+@keyframes nagent-agent-sheen {
+  0% { transform: translateX(-100%); }
+  60%, 100% { transform: translateX(100%); }
+}
+
+@keyframes nagent-agent-breathe {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.45; transform: scale(0.7); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nagent-agent--running::after,
+  .nagent-agent--running .nagent-agent__dot {
+    animation: none;
+  }
+}

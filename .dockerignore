@@ -1,0 +1,6 @@
+# Java 构建层只 COPY 源码,本地产物/依赖不入镜像
+.git
+**/target
+docs
+every-agent-web/node_modules
+every-agent-web/dist

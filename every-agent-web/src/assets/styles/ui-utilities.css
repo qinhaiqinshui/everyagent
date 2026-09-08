@@ -1,0 +1,25 @@
+/* =============================================================
+ * ui-utilities.css — 结构工具类（阶段 2 配套，可选）
+ * -------------------------------------------------------------
+ * 仅承载“纯结构”辅助（flex 布局/伸缩/包裹），不表达任何视觉装饰。
+ * 间距、颜色、圆角等一律走 ui-tokens.css 或 ui-primitives.css 的 modifier。
+ * 不要在此扩展成通用工具框架（不提供 margin/padding/color 字面量工具）。
+ * ============================================================= */
+
+.ui-vstack {
+  display: flex;
+  flex-direction: column;
+}
+.ui-hstack {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+}
+.ui-wrap { flex-wrap: wrap; }
+.ui-grow {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+.ui-shrink-0 { flex: 0 0 auto; }
+.ui-spacer { flex: 1 1 auto; }

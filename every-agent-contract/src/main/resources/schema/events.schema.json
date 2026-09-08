@@ -1,0 +1,168 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://every-agent.dev/schema/events.schema.json",
+  "title": "Every Agent 业务事件清单",
+  "description": "event 字段的取值与 payload 形状(架构 §3.3)。payload 皆为对象;未列出字段 must-ignore。",
+  "type": "object",
+  "oneOf": [
+    { "$ref": "#/$defs/streamEvent" },
+    { "$ref": "#/$defs/tasksEvent" },
+    { "$ref": "#/$defs/inputEvent" },
+    { "$ref": "#/$defs/evtNotification" },
+    { "$ref": "#/$defs/presenceEvent" }
+  ],
+  "$defs": {
+    "usage": {
+      "type": "object",
+      "properties": {
+        "inputTokens": { "type": "integer" },
+        "outputTokens": { "type": "integer" },
+        "totalTokens": { "type": "integer" }
+      }
+    },
+    "agentIdField": { "agentId": { "type": "string", "description": "子 agent 事件必带;主 agent 省略(事件名不分主/子,归属由此字段决定)" } },
+    "streamEvent": {
+      "properties": {
+        "channel": { "pattern": "^u\\.[0-9a-f]{64}\\.task\\.[a-z0-9-]+\\.stream$" },
+        "event": {
+          "enum": [
+            "user.message", "delta", "thinking", "message", "usage",
+            "tool.result",
+            "ask.create", "ask.state", "ask.resolved",
+            "agent.started", "agent.done",
+            "error", "cancelled", "task.duration",
+            "task.trace"
+          ]
+        }
+      },
+      "required": ["event"],
+      "allOf": [
+        {
+          "if": { "properties": { "event": { "const": "delta" } } },
+          "then": { "properties": { "payload": { "$ref": "#/$defs/payloads/delta" } } }
+        },
+        {
+          "if": { "properties": { "event": { "const": "ask.create" } } },
+          "then": { "properties": { "payload": { "$ref": "#/$defs/payloads/askCreate" } } }
+        },
+        {
+          "if": { "properties": { "event": { "const": "task.trace" } } },
+          "then": { "properties": { "payload": { "$ref": "#/$defs/taskTrace" } } }
+        }
+      ]
+    },
+    "payloads": {
+      "delta": {
+        "type": "object",
+        "required": ["text"],
+        "properties": {
+          "text": { "type": "string" },
+          "agentId": { "type": "string" }
+        }
+      },
+      "askCreate": {
+        "type": "object",
+        "required": ["askId", "kind"],
+        "properties": {
+          "askId": { "type": "string" },
+          "kind": { "type": "string", "enum": ["question", "authorization"] },
+          "questions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["id", "prompt"],
+              "properties": {
+                "id": { "type": "string" },
+                "prompt": { "type": "string" },
+                "options": { "type": "array", "items": { "type": "string" } }
+              }
+            }
+          },
+          "question": { "type": "string", "description": "旧字段(磁盘回放兼容);现行 wire 用 questions" },
+          "options": { "type": "array", "items": { "type": "string" }, "description": "旧字段(磁盘回放兼容)" },
+          "timeoutMs": { "type": "integer" },
+          "agentId": { "type": "string" }
+        }
+      }
+    },
+    "taskTrace": {
+      "type": "object",
+      "required": ["traceId", "kind"],
+      "properties": {
+        "traceId": { "type": "string", "description": "同一 trace 生命周期各次更新复用同 id(前端按 traceId 原地 upsert)" },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "auth.review", "request_retry", "context_compression",
+            "task_duration", "file_changes", "model_switch", "model_failover"
+          ],
+          "description": "trace 类型(已枚举为已知 kind 集合,新增 kind 需同步契约)。auth.review = AI 安全审议结论;审计要求:auth.review 一律 persist=true 落盘(事件日志层 ext.persist 标记,供事后追溯)。"
+        },
+        "title": { "type": "string", "description": "trace 标题(收起态标题式 trace 使用)" },
+        "summary": { "type": "string", "description": "收起态文案;缺省由展示层从 content 派生" },
+        "content": { "type": "string", "description": "展开态正文(字符串);缺省表示无展开正文" },
+        "status": { "type": "string", "description": "trace 阶段(retrying/resolved/exhausted/done 等),供前端收起态图标与文案切换" },
+        "createdAt": { "type": "integer", "description": "创建时间,epoch 毫秒" },
+        "metadata": {
+          "type": "object",
+          "description": "各 kind 自定义的结构化附加信息(不做严格枚举,未知字段 must-ignore)。auth.review 的 metadata 字段:decision(ALLOW/DENY/ESCALATE)、confidence(0~1)、reason、scope(run/task)、grantKey、prompt(授权原文)、taskId(被授权任务)、agentId(审议 agentId,如 review-<shortId>)。"
+        }
+      }
+    },
+    "tasksEvent": {
+      "properties": {
+        "channel": { "pattern": "^u\\.[0-9a-f]{64}\\.tasks$" },
+        "event": { "enum": ["task.created", "task.updated"] },
+        "payload": {
+          "type": "object",
+          "required": ["taskId", "workerId", "status", "createdAt"],
+          "properties": {
+            "taskId": { "type": "string" },
+            "workerId": { "type": "string" },
+            "title": { "type": "string" },
+            "status": { "enum": ["created", "running", "waiting-user", "done", "failed", "cancelled"] },
+            "createdAt": { "type": "integer" },
+            "summary": { "type": "string" },
+            "error": { "type": "string" }
+          }
+        }
+      }
+    },
+    "inputEvent": {
+      "properties": {
+        "channel": { "pattern": "^u\\.[0-9a-f]{64}\\.task\\.[a-z0-9-]+\\.input$" },
+        "event": { "enum": ["task.input", "task.dialogInsert", "ask.reply"] },
+        "payload": {
+          "type": "object",
+          "properties": {
+            "text": { "type": "string" },
+            "taskId": { "type": "string" },
+            "index": { "type": "integer", "description": "task.dialogInsert 的队列下标(可选,供 worker 移除该项)" },
+            "askId": { "type": "string" },
+            "answer": { "type": "string" }
+          }
+        }
+      }
+    },
+    "evtNotification": {
+      "properties": {
+        "channel": { "pattern": "^u\\.[0-9a-f]{64}\\.worker\\.[a-zA-Z0-9._-]+\\.evt$" },
+        "event": { "enum": ["rpc.ok", "rpc.err", "rpc.data", "rpc.progress", "config.changed", "fs.changed"] }
+      }
+    },
+    "presenceEvent": {
+      "properties": {
+        "channel": { "pattern": "^u\\.[0-9a-f]{64}\\.workers$" },
+        "event": { "enum": ["worker.online", "worker.offline"] },
+        "payload": {
+          "type": "object",
+          "required": ["workerId"],
+          "properties": {
+            "workerId": { "type": "string" },
+            "meta": { "type": "object" }
+          }
+        }
+      }
+    }
+  }
+}

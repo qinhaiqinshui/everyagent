@@ -1,0 +1,336 @@
+/* =============================================================
+ * ui-overlays.css — 浮层与交互控件样式（阶段 4）
+ * -------------------------------------------------------------
+ * 配套组件：src/components/shared/ui/Popover / Menu / Dialog /
+ *          Tabs / ActionMenu / InlineDropdown
+ * 规则：
+ *  1. 浮层共享统一的阴影 / padding / 标题栏 / 分隔 / 状态表达。
+ *  2. 全部基于 ui-tokens.css，禁止内联视觉字面量。
+ *  3. 浮层与 Bulma dropdown / modal 语法无关。
+ * ============================================================= */
+
+/* ── Popover 浮层容器 ───────────────────────────────────────── */
+.ui-popover {
+  position: fixed;
+  z-index: var(--z-dropdown);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+  padding: var(--space-1);
+}
+
+/* ── Menu 菜单（统一弹出式选项列表）──────────────────────────
+ * 视觉与聊天输入 @/ 弹层（.ui-menu__item）一致：
+ *   - 容器 .ui-menu--popup：仅作为「浮层视觉 surface」（边框/圆角/阴影/背景/内边距）。
+ *     不在此处声明 position：定位由使用方决定——
+ *       · MenuList 通过 portal 挂到 body，自行内联 position:fixed + 坐标；
+ *       · composer @/ 弹层内联在输入框容器里，由 .nagent-composer__slash-pop/.at-pop 提供 position:absolute。
+ *     这样避免与调用方定位类（absolute / fixed）因加载顺序互相覆盖。
+ *   - 条目 .ui-menu__item：图标 + 标题 + 描述 + 标签 四段式。
+ * 列表行「更多操作」、工具栏「更多操作」、composer @/ 弹层均复用此样式。
+ */
+.ui-menu {
+  display: flex;
+  flex-direction: column;
+  width: max-content;
+  min-width: 0;
+  max-width: min(340px, calc(100vw - 16px));
+  max-height: 340px;
+  overflow: auto;
+}
+/* 浮层视觉 surface：与 Popover 共用同一套浮层视觉（边框/圆角/阴影/背景/内边距）。
+ * 定位由使用方声明，本类不设置 position。 */
+.ui-menu--popup {
+  z-index: var(--z-dropdown);
+  padding: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-md);
+}
+.ui-menu__group-label {
+  padding: var(--space-2) var(--space-2) var(--space-1);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: 0.04em;
+}
+.ui-menu__item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  max-width: 100%;
+  align-self: stretch;
+  box-sizing: border-box;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-primary);
+  padding: calc(var(--space-1) * 0.5) var(--space-2);
+  font-size: var(--text-sm);
+  line-height: 1.25;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+  text-align: left;
+  transition: background var(--motion-duration-fast) var(--motion-ease-standard);
+}
+/* 以按钮形态渲染的菜单项（MenuList）在视觉上与普通菜单项一致 */
+.ui-menu button.ui-menu__item {
+  font: inherit;
+}
+.ui-menu__item--custom {
+  cursor: default;
+  padding: 0;
+}
+.ui-menu__item--custom:hover { background: transparent; }
+.ui-menu__caret {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+}
+.ui-menu__submenu-anchor {
+  position: relative;
+}
+.ui-menu--submenu {
+  position: fixed;
+  z-index: var(--z-dropdown);
+}
+.ui-menu__item:hover:not(.is-disabled) { background: var(--bg-hover); }
+.ui-menu__item.is-active { background: var(--bg-active); transform: translateY(-1px); }
+.ui-menu__item.is-disabled { opacity: 0.45; cursor: not-allowed; }
+.ui-menu__item--danger { color: var(--accent-red); }
+.ui-menu__item--danger:hover:not(.is-disabled) { background: var(--accent-red-dim); }
+/* 左侧图标 chip */
+.ui-menu__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: var(--space-4);
+  height: var(--space-4);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+  line-height: 1;
+}
+.ui-menu__icon svg { width: 12px; height: 12px; }
+/* 标题（正常字重与颜色，不撑满） */
+.ui-menu__label {
+  flex: 0 1 auto;
+  min-width: 0;
+  font-weight: 400;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* 中间描述文字（同字号仅颜色更淡以明显区分于主内容；flex 自动撑满，超长截断） */
+.ui-menu__desc {
+  flex: 1 1 auto;
+  min-width: 40px;
+  color: var(--text-faint);
+  font-weight: 400;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: left;
+}
+/* 右侧标签（如 System） */
+.ui-menu__tag {
+  flex: 0 0 auto;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--text-muted);
+  background: var(--bg-tertiary);
+  padding: 1px 7px;
+  border-radius: 999px;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+.ui-menu__hint {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+.ui-menu__empty {
+  padding: var(--space-3) var(--space-2);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  text-align: center;
+}
+
+/* ── ListRowActions 列表行更多操作按钮 ────────────────────────
+ * 行为（与 AGENTS.md 对齐）：
+ * - 默认隐藏；桌面端 hover 整行（.ui-row）时显示，点击弹菜单。
+ * - 移动端（≤768）：触发按钮不渲染；由行「长按」经 openMenu 直接弹菜单。
+ */
+.ui-row-actions {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity var(--motion-duration-fast) var(--motion-ease-standard),
+    visibility var(--motion-duration-fast) var(--motion-ease-standard);
+}
+.ui-row:hover .ui-row-actions {
+  opacity: 1;
+  visibility: visible;
+}
+.ui-row-actions__trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background var(--motion-duration-fast) var(--motion-ease-standard),
+    color var(--motion-duration-fast) var(--motion-ease-standard);
+}
+.ui-row-actions__trigger:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+.ui-row-actions__trigger:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* 文件树：行内容 wrapper 改为 flex 容器，让标题撑满整行。
+   原因：antd v6 的 .ant-tree-node-content-wrapper 是 block + 内部 inline 流，
+   .ant-tree-title 默认 inline span，titleRender 的 flex div 宽度会收缩到内容宽度，
+   导致 size/时间文本紧贴文件名、右列不对齐、整体行宽小于父容器。 */
+.ws-tree .ant-tree-node-content-wrapper {
+  display: flex;
+  align-items: center;
+}
+
+/* 文件树:switcher 容器(目录行显示 FolderIcon 开/合图标的位置)改 flex 居中。
+   antd 默认只用 text-align:center(水平)+ 无垂直居中,SVG 作为 inline element
+   与文字 baseline 对齐 → 视觉贴底。改为 flex 容器后 SVG 真正水平+垂直居中。
+   alignSelf:stretch(来自 antd)保留 → switcher 高度 = 父 treenode 行高。 */
+.ws-tree .ant-tree-switcher {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* 文件树：叶子行(文件)的 switcher 空占位隐藏。
+   目录行 switcher 显示 FolderIcon 开/合图标;叶子行 noop 只是 22×22 空 span,
+   由 antd 加 .ant-tree-switcher-noop 类,这里直接不占布局。 */
+.ws-tree .ant-tree-switcher-noop {
+  display: none;
+}
+
+/* 文件树：桌面端更多操作浮层覆盖在文件大小之上，
+   移除右侧预留位（不占布局空间），hover 时隐藏大小文本由按钮原地替换 */
+.ws-tree-row__actions-overlay {
+  pointer-events: none;
+}
+.ws-tree-row__actions-overlay .ui-row-actions {
+  pointer-events: auto;
+}
+.ui-row:hover .ws-tree-row__size {
+  visibility: hidden;
+}
+
+/* 移动端：禁用 hover 揭示，触发按钮不渲染；菜单由行长按经 openMenu 弹出 */
+@media (max-width: 768px) {
+  .ui-row {
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  .ui-row:hover .ui-row-actions {
+    opacity: 0;
+    visibility: hidden;
+  }
+  .ui-row-actions__trigger {
+    display: none;
+  }
+  .ws-tree-row__actions-overlay {
+    display: none;
+  }
+}
+
+/* ── Dialog 对话框 ─────────────────────────────────────────── */
+.ui-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  background: var(--overlay);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-4);
+}
+.ui-dialog {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  width: 100%;
+  max-width: 480px;
+  max-height: 86vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  color: var(--text-primary);
+}
+.ui-dialog__header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-4) var(--space-4) var(--space-3);
+}
+.ui-dialog__title {
+  flex: 1 1 auto;
+  font-size: var(--text-lg);
+  font-weight: var(--font-weight-semibold);
+  color: var(--text-primary);
+}
+.ui-dialog__body {
+  padding: 0 var(--space-4) var(--space-4);
+  overflow: auto;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  line-height: var(--leading-base);
+}
+.ui-dialog__footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--border-light);
+}
+
+/* ── Tabs 选项卡 ───────────────────────────────────────────── */
+.ui-tabs {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  border-bottom: 1px solid var(--border);
+}
+.ui-tab {
+  appearance: none;
+  background: transparent;
+  border: none;
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  transition: color var(--motion-duration-fast) var(--motion-ease-standard), border-color var(--motion-duration-fast) var(--motion-ease-standard);
+}
+.ui-tab:hover:not(:disabled) { color: var(--text-primary); }
+.ui-tab.is-active { color: var(--accent-blue); border-bottom-color: var(--accent-blue); }
+.ui-tab:disabled { opacity: 0.5; cursor: not-allowed; }
+.ui-tab__icon { display: inline-flex; margin-right: var(--space-1); vertical-align: middle; }

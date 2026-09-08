@@ -1,0 +1,58 @@
+/* 任务线程面板样式：只保留面板自身的加载/错误提示样式；
+   轮次内容全部复用线程消息组件与全局样式（AgentMessageThread / nagent-msg-* /
+   nagent-round-collapse 系列，见 chatPanel.css），颜色/圆角/字号取全局 UI Token。 */
+
+.task-rounds {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-width: 0;
+}
+
+/* 首次拉取中（尚无快照）。 */
+.task-rounds__loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 160px;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+/* 拉取失败提示（无快照时整块展示；已有快照时贴内容下方，不打断已渲染轮次）。 */
+.task-rounds__error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  margin-top: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  word-break: break-all;
+}
+
+.task-rounds__error-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.task-rounds__retry {
+  flex: none;
+  padding: 2px 10px;
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.task-rounds__retry:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}

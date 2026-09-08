@@ -1,0 +1,234 @@
+/* ─── 文件差异对比（FileDiffPanel）样式 ───────────────────────────
+ * 从旧项目 plugins/git/git.css 迁移（614-842 行）。
+ * diff 标签在 Git 侧栏双击变更文件 / 任务文件变更追踪中复用，
+ * 组件与注册表（FileDiffTabType）均已就位，唯独样式在迁移时丢失。
+ * 黄色系变量已按新 token 体系将 --accent-yellow 替换为 --accent-amber。
+ */
+
+.file-diff-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  width: 100%;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.file-diff-panel__toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border-light);
+  background: var(--bg-primary);
+}
+
+.file-diff-panel__open-file {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.file-diff-panel__open-file-label {
+  white-space: nowrap;
+}
+
+.file-diff-panel__open-file:hover {
+  background: var(--accent-blue-soft);
+  color: var(--text-primary);
+}
+
+.file-diff-panel__open-file:focus-visible {
+  outline: 2px solid var(--focus-ring-color);
+  outline-offset: 1px;
+}
+
+.file-diff-panel__view-toggle {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid color-mix(in srgb, var(--border) 92%, transparent);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.file-diff-panel__view-button {
+  min-height: 24px;
+  height: 24px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  box-shadow: none;
+  font-size: var(--text-xs);
+}
+
+.file-diff-panel__view-button.is-active {
+  background: color-mix(in srgb, var(--accent-blue) 16%, var(--bg-primary));
+  color: var(--text-primary);
+}
+
+.file-diff-panel__view-button + .file-diff-panel__view-button {
+  border-left: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+}
+
+.file-diff-panel__body {
+  min-height: 0;
+  overflow: auto;
+  background: var(--bg-secondary);
+}
+
+.file-diff-panel__table {
+  width: 100%;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.6;
+  color: var(--text-primary);
+}
+
+.file-diff-panel__table--split {
+  display: flex;
+  flex-direction: column;
+}
+
+.file-diff-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.file-diff-cell {
+  display: grid;
+  grid-template-columns: 52px 20px minmax(0, 1fr);
+  align-items: stretch;
+  min-width: 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--border-light) 88%, transparent);
+}
+
+.file-diff-cell--right {
+  border-left: 1px solid color-mix(in srgb, var(--border-light) 88%, transparent);
+}
+
+.file-diff-cell__line-number,
+.file-diff-cell__marker,
+.file-diff-unified-line__line-number,
+.file-diff-unified-line__marker {
+  padding: 0 8px;
+  min-height: 22px;
+  display: flex;
+  align-items: center;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.file-diff-cell__line-number,
+.file-diff-unified-line__line-number {
+  justify-content: flex-end;
+  color: var(--text-muted);
+  user-select: none;
+  background: color-mix(in srgb, var(--bg-primary) 92%, transparent);
+}
+
+.file-diff-cell__marker,
+.file-diff-unified-line__marker {
+  justify-content: center;
+  color: var(--text-muted);
+  user-select: none;
+}
+
+.file-diff-cell__content,
+.file-diff-unified-line__content {
+  display: block;
+  min-width: 0;
+  padding: 2px 8px;
+  min-height: 22px;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+
+.file-diff-cell--context .file-diff-cell__content,
+.file-diff-unified-line--context .file-diff-unified-line__content {
+  background: transparent;
+}
+
+.file-diff-cell--added .file-diff-cell__content,
+.file-diff-cell--added .file-diff-cell__marker,
+.file-diff-unified-line--added .file-diff-unified-line__content,
+.file-diff-unified-line--added .file-diff-unified-line__marker {
+  background: color-mix(in srgb, var(--accent-green) 20%, var(--bg-secondary));
+  color: color-mix(in srgb, var(--accent-green) 28%, var(--text-primary));
+}
+
+.file-diff-cell--removed .file-diff-cell__content,
+.file-diff-cell--removed .file-diff-cell__marker,
+.file-diff-unified-line--removed .file-diff-unified-line__content,
+.file-diff-unified-line--removed .file-diff-unified-line__marker {
+  background: color-mix(in srgb, var(--accent-red) 18%, var(--bg-secondary));
+  color: color-mix(in srgb, var(--accent-red) 28%, var(--text-primary));
+}
+
+.file-diff-cell--added .file-diff-cell__line-number,
+.file-diff-unified-line--added .file-diff-unified-line__line-number {
+  background: color-mix(in srgb, var(--accent-green) 12%, var(--bg-primary));
+  color: color-mix(in srgb, var(--accent-green) 44%, var(--text-primary));
+}
+
+.file-diff-cell--removed .file-diff-cell__line-number,
+.file-diff-unified-line--removed .file-diff-unified-line__line-number {
+  background: color-mix(in srgb, var(--accent-red) 10%, var(--bg-primary));
+  color: color-mix(in srgb, var(--accent-red) 44%, var(--text-primary));
+}
+
+.file-diff-cell--empty .file-diff-cell__content,
+.file-diff-cell--empty .file-diff-cell__marker {
+  background: color-mix(in srgb, var(--bg-primary) 58%, transparent);
+}
+
+.file-diff-inline {
+  display: inline;
+}
+
+.file-diff-inline--changed {
+  border-radius: 3px;
+}
+
+.file-diff-panel__table--unified {
+  display: flex;
+  flex-direction: column;
+}
+
+.file-diff-unified-line {
+  display: grid;
+  grid-template-columns: 52px 20px minmax(0, 1fr);
+  border-bottom: 1px solid color-mix(in srgb, var(--border-light) 88%, transparent);
+}
+
+@media (max-width: 768px) {
+  .file-diff-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .file-diff-cell--right {
+    border-left: none;
+  }
+}
+
+.file-diff-panel__empty {
+  padding: 14px;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}

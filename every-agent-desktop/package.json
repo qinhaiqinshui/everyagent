@@ -1,0 +1,24 @@
+{
+  "name": "every-agent-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Every Agent 桌面版:Electron 承载 frontend + hub + worker 一体运行",
+  "main": "dist/main/index.js",
+  "scripts": {
+    "compile": "tsc -p tsconfig.main.json && tsc -p tsconfig.preload.json",
+    "start": "electron .",
+    "build:backend": "node scripts/build-backend.mjs",
+    "build:web": "node scripts/build-web.mjs",
+    "build:jre": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-jre.ps1",
+    "build:wsl": "node scripts/copy-wsl-rootfs.mjs",
+    "build:assets": "npm run build:backend && npm run build:web && npm run build:jre && npm run build:wsl",
+    "dist": "npm run compile && npm run build:assets && electron-builder",
+    "dist:dir": "npm run compile && npm run build:assets && electron-builder --dir"
+  },
+  "devDependencies": {
+    "electron": "^44.2.0",
+    "electron-builder": "^24.13.3",
+    "typescript": "^5.2.2",
+    "@types/node": "^20.14.0"
+  }
+}

@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://every-agent.dev/schema/rpc.schema.json",
+  "title": "RPC 信封与应答",
+  "description": "rpc 帧走 cmd 频道(不携带 seq);应答统一广播到 evt 频道,reqId 供匹配(架构 §3.5)。",
+  "type": "object",
+  "$defs": {
+    "rpcRequest": {
+      "type": "object",
+      "required": ["reqId", "method"],
+      "properties": {
+        "reqId": { "type": "string" },
+        "method": { "type": "string", "pattern": "^[a-z0-9]+(\\.[a-z0-9]+)+$" },
+        "params": { "type": "object" }
+      }
+    },
+    "rpcOk": {
+      "type": "object",
+      "required": ["reqId", "result"],
+      "properties": {
+        "reqId": { "type": "string" },
+        "result": { "type": "object" }
+      }
+    },
+    "rpcErr": {
+      "type": "object",
+      "required": ["reqId", "code", "message"],
+      "properties": {
+        "reqId": { "type": "string" },
+        "code": {
+          "enum": ["UNKNOWN_METHOD", "BAD_PARAMS", "NOT_FOUND", "SANDBOX_DENIED", "BUSY", "INTERNAL"]
+        },
+        "message": { "type": "string" }
+      }
+    },
+    "rpcData": {
+      "type": "object",
+      "required": ["reqId", "batch", "hasMore"],
+      "properties": {
+        "reqId": { "type": "string" },
+        "batch": { "type": "array", "items": { "type": "object" } },
+        "hasMore": { "type": "boolean" }
+      }
+    },
+    "rpcProgress": {
+      "type": "object",
+      "required": ["reqId", "message"],
+      "properties": {
+        "reqId": { "type": "string" },
+        "message": { "type": "string" },
+        "pct": { "type": "integer", "minimum": 0, "maximum": 100 }
+      }
+    }
+  }
+}

@@ -1,0 +1,219 @@
+/* =============================================================
+ * ui-primitives.css — 基础样式原语（阶段 2）
+ * -------------------------------------------------------------
+ * 规则：
+ *  1. 原语只表达“结构”，不表达任何业务语义。
+ *  2. 所有视觉值必须来自 ui-tokens.css，禁止内联颜色/圆角/阴影/间距。
+ *  3. 原语可配合 modifier class（如 .ui-card--interactive），但 modifier
+ *     只改结构态（hover/active/紧凑/透传），不改业务含义。
+ *  4. 禁止在页面里为“普通卡片 / 普通工具栏 / 普通空态 / 普通 section”
+ *     重新写一套局部样式——直接用这些原语。
+ *  5. 本层不是 Bulma，不引入 Bulma 版式语法。
+ * ============================================================= */
+
+/* ── Surface · 通用浮起表面 ──────────────────────────────────── */
+.ui-surface {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  color: var(--text-primary);
+}
+.ui-surface--overlay {
+  background: var(--surface-glass);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  box-shadow: var(--shadow-md);
+}
+.ui-surface--sunken {
+  background: var(--bg-sunken);
+  border-color: var(--border-light);
+}
+.ui-surface--translucent { background: var(--surface-translucent-2); }
+
+/* ── Panel · 带内边距的区块容器 ─────────────────────────────── */
+.ui-panel {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4);
+}
+.ui-panel--flush { padding: 0; }
+.ui-panel--tight { padding: var(--space-3); }
+.ui-panel--raised { box-shadow: var(--shadow-sm); }
+.ui-panel--sunken { background: var(--bg-sunken); }
+
+/* ── Card · 信息承载卡片 ────────────────────────────────────── */
+.ui-card {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.ui-card--tight { padding: var(--space-3); gap: var(--space-1); }
+.ui-card--interactive {
+  cursor: pointer;
+  transition:
+    background var(--motion-duration-fast) var(--motion-ease-standard),
+    border-color var(--motion-duration-fast) var(--motion-ease-standard),
+    transform var(--motion-duration-fast) var(--motion-ease-standard);
+}
+.ui-card--interactive:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+}
+.ui-card--interactive:active { transform: translateY(1px); }
+
+/* ── Toolbar · 水平工具栏 ───────────────────────────────────── */
+.ui-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  min-height: 40px;
+}
+.ui-toolbar--compact {
+  min-height: 32px;
+  padding: var(--space-1) var(--space-2);
+  gap: var(--space-1);
+}
+.ui-toolbar--bare {
+  background: transparent;
+  border-color: transparent;
+  padding: 0;
+}
+.ui-toolbar__group {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.ui-toolbar__spacer { flex: 1 1 auto; }
+
+/* ── Section · 垂直分区（含可选标题）────────────────────────── */
+.ui-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.ui-section__header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding-bottom: var(--space-2);
+}
+.ui-section__title {
+  font-size: var(--text-sm);
+  font-weight: var(--font-weight-semibold);
+  color: var(--text-primary);
+}
+.ui-section__desc {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+.ui-section__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+/* ── Empty · 空态块 ─────────────────────────────────────────── */
+.ui-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  text-align: center;
+  padding: var(--space-8) var(--space-4);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--bg-sunken);
+  color: var(--text-muted);
+}
+.ui-empty__icon {
+  font-size: var(--text-3xl);
+  line-height: 1;
+  color: var(--text-muted);
+  opacity: 0.85;
+}
+.ui-empty__title {
+  font-size: var(--text-sm);
+  font-weight: var(--font-weight-semibold);
+  color: var(--text-secondary);
+}
+.ui-empty__desc {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  max-width: 36ch;
+}
+.ui-empty__action { margin-top: var(--space-1); }
+
+/* ── Divider · 分割线 ───────────────────────────────────────── */
+.ui-divider {
+  border: none;
+  background: var(--border);
+  height: 1px;
+  width: 100%;
+  margin: 0;
+  flex: 0 0 auto;
+}
+.ui-divider--vertical {
+  width: 1px;
+  height: auto;
+  align-self: stretch;
+  min-height: 16px;
+}
+.ui-divider--light { background: var(--border-light); }
+.ui-divider--space { margin: var(--space-3) 0; }
+
+/* ── Status · 状态指示（点 + 文本）─────────────────────────── */
+.ui-status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+.ui-status__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--text-muted);
+  flex: 0 0 auto;
+}
+.ui-status--success { color: var(--accent-green); }
+.ui-status--success .ui-status__dot { background: var(--accent-green); }
+.ui-status--warning { color: var(--accent-amber); }
+.ui-status--warning .ui-status__dot { background: var(--accent-amber); }
+.ui-status--danger { color: var(--accent-red); }
+.ui-status--danger .ui-status__dot { background: var(--accent-red); }
+.ui-status--info { color: var(--accent-blue); }
+.ui-status--info .ui-status__dot { background: var(--accent-blue); }
+
+/* ── ScrollShell · 自定义滚动容器 ───────────────────────────── */
+.ui-scroll-shell {
+  overflow: auto;
+  min-height: 0;
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+}
+.ui-scroll-shell::-webkit-scrollbar { width: 10px; height: 10px; }
+.ui-scroll-shell::-webkit-scrollbar-track { background: transparent; }
+.ui-scroll-shell::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+.ui-scroll-shell::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+  background-clip: content-box;
+}
+.ui-scroll-shell--hidden { scrollbar-width: none; }
+.ui-scroll-shell--hidden::-webkit-scrollbar { display: none; }

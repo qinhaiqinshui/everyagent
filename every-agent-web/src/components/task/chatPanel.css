@@ -1,0 +1,2274 @@
+/* ─────────────────────────────────────────────────────────────
+ * chatPanel.css —  面板风格聊天界面
+ * 单列全宽、左对齐流式消息，工具调用可折叠，顶部精简状态栏。
+ * 全部复用 src/index.css 中的主题变量，明暗主题自动适配。
+ * ───────────────────────────────────────────────────────────── */
+
+/* ─── 顶部状态栏 ───────────────────────────────────────────── */
+.nagent-header {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 14px;
+  border-bottom: 1px solid var(--border-light);
+  background: var(--bg-secondary);
+  min-width: 0;
+  flex-shrink: 0;
+}
+
+.nagent-header--running {
+  background: var(--accent-blue-dim);
+}
+
+.nagent-header__dot {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  font-size: var(--text-xs);
+}
+
+.nagent-header__title {
+  font-size: var(--text-base);
+  font-weight: 700;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1 1 auto;
+  color: var(--text-primary);
+}
+
+.nagent-header__right {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+  flex-shrink: 0;
+  flex-wrap: nowrap;
+}
+
+.nagent-header__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  flex-wrap: nowrap;
+}
+
+/* 胶囊 / 状态徽章 */
+.nagent-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--text-xs);
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  border-radius: 999px;
+  padding: 4px 6px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.nagent-pill:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.nagent-pill--status {
+  font-weight: 800;
+}
+
+.nagent-pill--green {
+  color: var(--accent-green);
+  border-color: color-mix(in srgb, var(--accent-green) 40%, var(--border-light));
+  background: var(--accent-green-dim);
+}
+
+.nagent-pill--red {
+  color: var(--accent-red);
+  border-color: color-mix(in srgb, var(--accent-red) 40%, var(--border-light));
+  background: var(--accent-red-dim);
+}
+
+.nagent-pill--blue {
+  color: var(--accent-blue);
+  border-color: color-mix(in srgb, var(--accent-blue) 40%, var(--border-light));
+  background: var(--accent-blue-dim);
+}
+
+.nagent-pill--amber {
+  color: var(--accent-amber);
+  border-color: color-mix(in srgb, var(--accent-amber) 40%, var(--border-light));
+  background: var(--accent-amber-dim);
+}
+
+.nagent-pill--muted {
+  color: var(--text-muted);
+}
+
+/* 上下文窗口「电池」指示器 */
+.ctx-battery {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.ctx-battery__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+  border: none;
+  background: transparent;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  font: inherit;
+  color: var(--text-secondary);
+}
+
+.ctx-battery__cell {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  width: 16px;
+  height: 12px;
+  padding: 2px;
+  box-sizing: border-box;
+  border: 1.5px solid var(--border-light);
+  border-radius: 2px;
+  background: var(--bg-tertiary);
+  overflow: hidden;
+}
+
+.ctx-battery__fill {
+  display: block;
+  height: 100%;
+  border-radius: 1px;
+  min-width: 0;
+  transition: width 0.18s ease, background-color 0.18s ease;
+}
+
+.ctx-battery__fill--ok { background: var(--accent-green); }
+.ctx-battery__fill--warn { background: var(--accent-amber); }
+.ctx-battery__fill--danger { background: var(--accent-red); }
+
+/* 电池正极小突 */
+.ctx-battery__nub {
+  width: 3px;
+  height: 4px;
+  border-radius: 0 1px 1px 0;
+  background: var(--border-light);
+  flex-shrink: 0;
+}
+
+.ctx-battery__pct {
+  font-size: var(--text-xs);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  min-width: 30px;
+  text-align: left;
+}
+
+.ctx-battery__pct--ok { color: var(--accent-green); }
+.ctx-battery__pct--warn { color: var(--accent-amber); }
+.ctx-battery__pct--danger { color: var(--accent-red); }
+
+/* 详情弹窗：仅承载浮层视觉。定位由使用方决定——组件 portal 到 body 后内联
+   position: fixed 贴合触发按钮（优先向上展开、带视口边界钳制）。
+   此处不得声明 position / top / left / bottom / right，否则会与内联定位互相覆盖。 */
+.ctx-battery__popover {
+  z-index: 50;
+  width: 244px;
+  padding: 12px;
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  background: var(--bg-elevated);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.3);
+  color: var(--text-primary);
+}
+
+.ctx-battery__popover-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.ctx-battery__popover-title {
+  font-size: var(--text-sm);
+  font-weight: 700;
+}
+
+.ctx-battery__popover-model {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 132px;
+}
+
+.ctx-battery__bar {
+  position: relative;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-light);
+  overflow: hidden;
+  margin-bottom: 10px;
+}
+
+.ctx-battery__bar-fill {
+  display: block;
+  height: 100%;
+  transition: width 0.18s ease, background-color 0.18s ease;
+}
+
+.ctx-battery__details {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ctx-battery__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: var(--text-xs);
+}
+
+.ctx-battery__row dt {
+  margin: 0;
+  color: var(--text-muted);
+}
+
+.ctx-battery__row dd {
+  margin: 0;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.ctx-battery__row--highlight dd {
+  font-size: var(--text-sm);
+  font-weight: 800;
+}
+
+.ctx-battery__meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-light);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.ctx-battery__empty {
+  padding: 6px 2px 2px;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+/* 移动端紧凑：顶栏空间有限，缩小电池格与字号 */
+@media (max-width: 768px) {
+  .ctx-battery__btn {
+    gap: 0;
+    padding: 2px 4px;
+  }
+
+  .ctx-battery__cell {
+    width: 14px;
+    height: 9px;
+  }
+
+  .ctx-battery__pct {
+    font-size: var(--text-xs);
+    margin-left: 5px;
+  }
+
+  /* 窄屏收窄以免超出视口；定位仍由组件内联 fixed 负责，此处不声明位置属性 */
+  .ctx-battery__popover {
+    max-width: calc(100vw - 16px);
+  }
+}
+
+/* 顶栏操作按钮 */
+.nagent-btn {
+  border: 1px solid var(--border-light);
+  border-radius: 999px;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  padding: 4px 11px;
+  font-size: var(--text-xs);
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.nagent-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.nagent-btn--danger {
+  color: var(--accent-red);
+  border-color: color-mix(in srgb, var(--accent-red) 36%, var(--border-light));
+  background: var(--accent-red-dim);
+}
+
+.nagent-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* 任务文件弹出面板 */
+.nagent-files-popover__item:hover {
+  background: var(--bg-hover);
+}
+
+/* 任务文件项“更多”按钮 */
+.nagent-files-more-btn {
+  flex: 0 0 auto;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  padding: 0 8px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.nagent-files-more-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.nagent-files-more-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.nagent-files-action-menu__item:hover {
+  background: var(--bg-hover);
+}
+
+/* ─── 聊天窗布局：顶/底固定，仅中间消息区滚动 ──────────────── */
+.nagent-chat {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+}
+
+/* 线程滚动区的外层定位容器：承载「滚动到底部」等悬浮层（absolute 定位不随内容滚动）。 */
+.nagent-chat__thread-wrap {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.nagent-chat__scroll-to-bottom {
+  position: absolute;
+  right: 16px;
+  bottom: 12px;
+  z-index: var(--z-raised);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  color: var(--text-secondary);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  cursor: pointer;
+  box-shadow: var(--shadow-sm);
+  transition: color 0.15s, background 0.15s, border-color 0.15s;
+}
+
+.nagent-chat__scroll-to-bottom:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+}
+
+.nagent-chat__scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 14px 16px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.nagent-chat__composer {
+  flex-shrink: 0;
+  padding: 0 16px 16px;
+}
+
+/* ─── 消息流容器 ───────────────────────────────────────────── */
+.nagent-thread {
+  display: flex;
+  flex-direction: column;
+  /* 关键：外层 .nagent-chat__scroll 是 flex 容器，若不限定 flex-shrink:0，
+     内容高于容器时本项会被收缩到容器高度，导致真实内容溢出、滚动失效、
+     底部 padding 被裁掉。固定不收缩才能让滚动容器正确滚动并露出底部留白。 */
+  flex-shrink: 0;
+  min-height: 0;
+}
+
+/* ─── 线程顶部「上滚续拉更早」状态提示 ────────────────────
+   由 TaskChat 的 topNotice（经 TaskThread.topNotice 传入）驱动：
+   用户上滚到顶部续拉更早时显示「正在加载更早消息…」，
+   拉到无更早后显示「已到最早消息」。随文档流,不 fixed。 */
+.nagent-thread__earlier-notice {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 2px 0 8px;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+/* ─── 线程底部任务状态横幅（跟随文档流，非固定）───────────
+   由 TaskChat 的 isRunInFlight（经 TaskThread.isGenerating 传入）驱动：
+   任务运行中常驻于消息流末尾、随消息被向下顶，不 fixed。
+   文案从一组短语随机轮播（见 TaskThread.ThreadStatusBanner），避免单调。
+   颜色统一走 token，无内联字面量。 */
+.nagent-thread__status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+/* 运行中状态左侧使用静态品牌 Logo，避免旋转动效抢占底部提示注意力。 */
+.nagent-thread__status-logo {
+  width: 12px;
+  height: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+}
+
+/* 扫光文字：底层文字常驻可读，伪元素只负责慢速高光横扫。 */
+.nagent-thread__status-text {
+  position: relative;
+  display: inline-block;
+  color: var(--text-muted);
+  overflow: hidden;
+}
+
+.nagent-thread__status-text::after {
+  content: attr(data-text);
+  position: absolute;
+  inset: 0;
+  background-image: linear-gradient(
+    105deg,
+    transparent 0%,
+    transparent 34%,
+    color-mix(in srgb, var(--accent-blue) 28%, transparent) 44%,
+    color-mix(in srgb, var(--text-primary) 86%, var(--accent-green)) 50%,
+    color-mix(in srgb, var(--accent-green) 26%, transparent) 56%,
+    transparent 66%,
+    transparent 100%
+  );
+  background-size: 260% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: nagent-thinking-shimmer 3.8s ease-in-out infinite;
+  pointer-events: none;
+}
+
+@keyframes nagent-thinking-shimmer {
+  0% { background-position: 180% 0; }
+  58% { background-position: -180% 0; }
+  100% { background-position: -180% 0; }
+}
+
+/* 降低动效偏好：保留可读性，停用扫光。 */
+@media (prefers-reduced-motion: reduce) {
+  .nagent-thread__status-text {
+    color: var(--text-muted);
+  }
+  .nagent-thread__status-text::after {
+    content: none;
+  }
+}
+
+.nagent-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 180px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-lg);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  background: var(--bg-secondary);
+}
+
+/* ─── 消息分组：连续同角色消息的间距 ─────────────────────── */
+.nagent-msg-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.nagent-msg-group:last-child {
+  margin-bottom: 0;
+}
+
+/* ─── 终态折叠：最后一轮 AI 过程内容折叠为用户消息 + AI 最终回复 ─── */
+.nagent-round-collapse {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  width: 100%;
+  min-width: 0;
+}
+
+.nagent-round-collapse__process {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-width: 0;
+}
+
+/* 最终回复之后的系统 trace（如任务耗时）在展开时放回最终回复下方，保留原始顺序。 */
+.nagent-round-collapse__process--after {
+  margin-top: 8px;
+}
+
+.nagent-round-collapse__marker {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+  margin: 2px 0 6px;
+  padding: 4px 9px;
+  border: 1px solid var(--border-light);
+  border-radius: 999px;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  line-height: 1.5;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.nagent-round-collapse__marker:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  border-color: var(--border-strong);
+}
+
+.nagent-round-collapse__marker-chevron {
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-muted);
+}
+
+/* 折叠标记左侧的本轮耗时(rounds.jsonl durationMs 回填;折叠/展开态均显示)。 */
+.nagent-round-collapse__duration {
+  display: inline-flex;
+  align-items: center;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.nagent-round-collapse__brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.nagent-round-collapse__brand-name {
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.nagent-round-collapse__final {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-width: 0;
+}
+
+/* ─── 单条消息 ───────────────────────────────────────────── */
+.nagent-msg {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 2px 0;
+  border-radius: var(--radius-md);
+  width: 100%;
+  box-sizing: border-box;
+}
+
+/* ─── 非用户消息靠左 ─────────────────────────────────────── */
+.nagent-msg__body {
+  flex: 0 1 auto;
+  min-width: 0;
+  /* 非用户消息无最大宽度限制，宽度由消息流容器决定（铺满）；
+     用户消息（--user）自行声明 max-width: 94% 保留靠右气泡形态。 */
+}
+
+/* 非用户消息体统一撑满可用宽度（无最大宽度限制），使 trace、AI 输出、
+   思考内容、工具调用的右边缘与消息流容器对齐。 */
+.nagent-msg:not(.nagent-msg--user) .nagent-msg__body {
+  width: 100%;
+}
+
+.nagent-msg__meta {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-bottom: 4px;
+  padding: 0 2px;
+}
+
+.nagent-msg__role {
+  font-size: var(--text-xs);
+  font-weight: 700;
+}
+
+.nagent-msg__role--user {
+  color: var(--accent-blue);
+}
+
+.nagent-msg__role--assistant {
+  color: var(--accent-purple);
+}
+
+.nagent-msg__role--tool {
+  color: var(--accent-green);
+}
+
+.nagent-msg__role--system {
+  color: var(--text-secondary);
+}
+
+.nagent-msg__time {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.nagent-msg__placeholder {
+  font-size: var(--text-xs);
+  font-style: italic;
+  color: var(--text-muted);
+}
+
+/* ─── 用户消息：容器靠右、内容左对齐 ──────────────────────── */
+.nagent-msg--user {
+  justify-content: flex-end;
+}
+
+.nagent-msg__body--user {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  margin-left: auto;
+  /* 用户消息气泡保留最大宽度 94%（不随非用户消息铺满），靠右展示 */
+  max-width: 94%;
+}
+
+/* ─── 用户消息气泡（轻量） ─────────────────────────────── */
+.nagent-msg__bubble--user {
+  position: relative;
+  width: fit-content;
+  max-width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 8px 12px;
+  /* 容器仍靠右；左下角小圆角形成柔和尖角，无额外尾巴 */
+  border-radius: 14px 14px 4px 14px;
+  background: color-mix(in srgb, var(--accent-blue) 12%, var(--bg-primary));
+  border: none;
+}
+
+.nagent-msg__body--assistant {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  margin-right: auto;
+}
+
+.nagent-msg__content {
+  width: 100%;
+  min-width: 0;
+  font-size: var(--text-sm);
+  line-height: 1.7;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.nagent-msg__content--user-replay {
+  /* 用块级 + 左对齐让正文与引用 chip 自然行内流动，
+     避免 flex-wrap 把开头的 @ 引用 chip 单独挤到一行。 */
+  display: block;
+  text-align: left;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.nagent-msg__inline-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.nagent-msg__inline-chip {
+  display: inline-flex;
+  vertical-align: middle;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  padding: 2px 8px 2px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border-light);
+  /* 中性色：比主题背景略深一点，不使用蓝色 */
+  background: color-mix(in srgb, var(--bg-primary) 84%, #000);
+  color: var(--text-primary);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  font-style: normal;
+  line-height: 1.5;
+  vertical-align: baseline;
+  letter-spacing: 0.1px;
+}
+
+/* 所有回放胶囊统一可点击（点击弹详情），不再按类型着色/分支 */
+.nagent-msg__inline-chip {
+  cursor: pointer;
+  user-select: none;
+}
+
+.nagent-msg__inline-chip-label {
+  min-width: 0;
+  word-break: break-word;
+  font-style: normal;
+}
+
+.nagent-msg__selection-summary {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.nagent-msg__selection-group {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+}
+
+.nagent-msg__selection-label {
+  flex: 0 0 auto;
+  font-size: var(--text-xs);
+  font-weight: 700;
+  color: var(--text-muted);
+}
+
+.nagent-msg__selection-chips {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.nagent-msg__selection-chip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--accent-green) 30%, var(--border-light));
+  background: color-mix(in srgb, var(--accent-green-dim) 34%, var(--bg-primary));
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.nagent-msg__reasoning {
+  width: 100%;
+  min-width: 0;
+}
+
+.nagent-msg__reasoning--system {
+  margin-bottom: 0;
+}
+
+.nagent-msg__reasoning-header {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+
+.nagent-msg__reasoning-toggle {
+  display: inline-flex;
+  align-items: center;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.nagent-msg__reasoning-content {
+  font-size: var(--text-xs);
+  line-height: 1.7;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  margin-top: 4px;
+}
+
+.nagent-msg__reasoning-content > *:first-child {
+  margin-top: 0;
+}
+
+.nagent-msg__reasoning-content--streaming {
+  margin-top: 0;
+}
+
+.nagent-msg__reasoning-chevron {
+  color: currentColor;
+  transition: transform 0.15s ease;
+}
+
+.nagent-msg__reasoning-chevron.is-open {
+  transform: rotate(90deg);
+}
+
+.nagent-msg__placeholder--user {
+  font-size: var(--text-xs);
+  text-align: left;
+}
+
+.nagent-msg__placeholder--assistant {
+  font-size: var(--text-xs);
+  text-align: left;
+}
+
+.nagent-msg__tool-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  margin-top: 8px;
+}
+
+.nagent-msg__streaming-indicator {
+  display: inline-flex;
+  align-items: center;
+ margin-top: 8px;
+ font-size: var(--text-xs);
+ color: var(--text-muted);
+}
+
+.nagent-msg__streaming-indicator--retry {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+
+.nagent-msg__retry-reason {
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  color: var(--accent-amber);
+  word-break: break-word;
+}
+
+/* ─── 连续同角色消息：后续消息隐藏头像和角色名 ────────────── */
+.nagent-msg--continuation {
+  padding-top: 0;
+}
+
+.nagent-msg--continuation .nagent-msg__avatar {
+  visibility: hidden;
+  width: 0;
+  flex: 0 0 0;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.nagent-msg--continuation .nagent-msg__meta {
+  display: none;
+}
+
+.nagent-msg--tool .nagent-msg__body,
+.nagent-msg--system .nagent-msg__body {
+  margin-right: auto;
+}
+
+/* 工具消息去掉头像和角色名；padding-left 与其它非用户消息一致（18px），
+   由 .nagent-msg:not(.nagent-msg--user) 统一提供，无需额外补偿。 */
+
+.nagent-msg--tool .nagent-msg__avatar,
+.nagent-msg--tool .nagent-msg__meta {
+  display: none;
+}
+
+/* ─── 头像 ──────────────────────────────────────────────── */
+.nagent-msg__avatar {
+  flex: 0 0 24px;
+  width: 24px;
+  height: 24px;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--text-xs);
+  font-weight: 700;
+  color: #fff;
+  margin-top: 1px;
+}
+
+.nagent-msg__avatar--user {
+  background: var(--accent-blue);
+}
+
+.nagent-msg__avatar--assistant {
+  background: color-mix(in srgb, var(--accent-purple) 76%, #ffffff 24%);
+}
+
+.nagent-msg__avatar--tool {
+  background: color-mix(in srgb, var(--accent-green) 78%, #ffffff 22%);
+}
+
+.nagent-msg__avatar--system {
+  background: color-mix(in srgb, var(--text-muted) 30%, var(--bg-tertiary));
+  color: var(--text-secondary);
+}
+
+[data-theme='light'] .nagent-msg__avatar--system {
+  background: color-mix(in srgb, var(--text-muted) 20%, var(--bg-tertiary));
+}
+
+/* ─── 工具调用单行概要 ─────────────────────────────────────── */
+/* 工具调用容器（assistant 下发块挂载点）。此容器是内部 .nagent-tool width:100% 的
+   百分比基准——若不显式锁宽，block 容器可被 inline 内容撑到 max-content，
+   导致 .nagent-tool 相对一个被撑开的基准撑破 .nagent-msg__body 最大宽度。
+   显式 width:100% + max-width:100% 把基准锁回 body 内容宽，
+   使工具消息与 trace 保持同一右边缘。 */
+.nagent-msg__tool-calls {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.nagent-tool {
+  margin-top: 4px;
+  margin-bottom: 4px;
+  /* assistant body 为 flex column + align-items:flex-start，子元素默认不拉伸、
+     只取内容 max-content 宽度，长参数会撑破统一最大宽度。
+     显式占满 body 宽度，内部 flex 收缩才能正常截断。 */
+  box-sizing: border-box;
+  width: 100%;
+  /* 防止内部超长内容把块本身撑宽、突破统一最大宽度（与 trace 同模型） */
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.nagent-tool--result {
+  border-left-color: transparent;
+  margin-top: 0;
+}
+
+/* 下发的工具调用贴紧其后的结果，减少下边距 */
+.nagent-tool--call {
+  margin-bottom: 0;
+}
+
+/* 折叠态弱化：降低整体透明度与文字对比，避免抢视线 */
+.nagent-tool:not(.is-open) .nagent-tool__summary {
+  opacity: 0.68;
+}
+
+.nagent-tool:not(.is-open) .nagent-tool__name,
+.nagent-tool:not(.is-open) .nagent-tool__icon {
+  opacity: 0.85;
+}
+
+.nagent-tool__summary {
+  display: flex;
+  /* baseline 对齐：工具名（无衬线 UI 字体）与参数预览（--font-mono）字体度量不同，
+     center 会让两段文字的基线落在不同高度（水平方向错位 1~2px）；
+     baseline 让两者共用同一文字基线。图标（SVG 无基线）由下方 align-self:center 单独居中。 */
+  align-items: baseline;
+  gap: 8px;
+  /* 显式 box-sizing 避免 <button> 内联元素被 content 撑破父宽。
+     显式 overflow:hidden 兜底,即使某种渲染条件下 inline-preview 无法收缩到位,
+     也能保留在 summary button 边界内被裁掉(与 trace .nagent-trace-shell__summary 同模型)。 */
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  user-select: none;
+  font-size: var(--text-xs);
+  font-weight: 500;
+  color: var(--text-secondary);
+  text-align: left;
+  overflow: hidden;
+}
+
+.nagent-tool__summary:hover {
+  color: var(--text-primary);
+}
+
+.nagent-tool__chevron {
+  color: var(--text-muted);
+  /* 第4块：固定宽度，始终显示，紧跟在内容右侧 */
+  flex: 0 0 auto;
+  flex-shrink: 0;
+  /* summary 走 baseline 对齐，SVG 无文字基线（会以底边当基线），
+     显式居中保持图标在行内的光学垂直位置。 */
+  align-self: center;
+}
+
+.nagent-tool__icon {
+  /* 第1块：固定宽度，始终显示 */
+  flex: 0 0 auto;
+  flex-shrink: 0;
+  /* 同 chevron：baseline 容器内的 SVG 图标单独居中。 */
+  align-self: center;
+}
+
+.nagent-tool__icon--return {
+  color: var(--accent-cyan);
+  /* 返回扳手与下发扳手方向一致（flipped 镜像已移除） */
+}
+
+/* 工具调用异常：图标转红（覆盖返回青色） */
+.nagent-tool__icon--error {
+  color: var(--accent-red);
+}
+
+
+.nagent-tool__name {
+  color: var(--text-secondary);
+  /* 第2块：工具名随内容定宽，不可缩小（保持原宽）；
+     过长时单行省略（nowrap + ellipsis 兜底），
+     参数块（flex-shrink:100）优先收缩，保证两端图标始终可见。 */
+  flex: 0 0 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.nagent-tool__inline-preview {
+  min-width: 0;
+  /* max-width 兜底:把 max-content 锁回父容器宽,确保 chevron 始终紧贴 inline-preview
+     右边缘、且保持在 body 最大宽度内可见(与 trace .nagent-trace-shell__text 同模型
+     —— width:100% + min-width:0 + ellipsis,chevron 紧贴而非推到屏幕外)。 */
+  max-width: 100%;
+  /* 第3块：参数随内容定宽、不增长（chevron 紧贴内容而非固定最右）；
+     超出统一最大宽度时优先收缩并省略，把空间让给工具名与两端图标。
+     flex-shrink 用标准 1(不写 magic number 100,与 trace 保持一致避免 flex 算法不均分)。 */
+  flex: 0 1 auto;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* 参数预览允许选中复制：覆盖 summary 的 user-select:none。
+     拖选不误触折叠由各视图 onClick 的选区守卫（hasActiveTextSelection）保证。 */
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.nagent-tool__detail {
+  margin-top: 8px;
+  margin-left: 21px;
+}
+
+/* 合并块内：每个调用 / 结果作为子项 */
+.nagent-tool__result-item + .nagent-tool__result-item {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-subtle, rgba(127, 127, 127, 0.18));
+}
+
+.nagent-tool__result-item-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+  font-size: var(--text-xs);
+}
+
+.nagent-tool--call .nagent-tool__result-item-head .nagent-tool__icon {
+  color: var(--text-muted);
+}
+
+.nagent-tool__detail-path {
+  margin-left: auto;
+  border: 1px solid color-mix(in srgb, var(--accent-blue) 28%, var(--border-light));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent-blue-dim) 48%, var(--bg-primary));
+  color: var(--accent-blue);
+  padding: 2px 8px;
+  font-size: var(--text-xs);
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.nagent-tool__detail-path:hover {
+  background: color-mix(in srgb, var(--accent-blue-dim) 68%, var(--bg-hover));
+}
+
+.nagent-tool__detail-annotation {
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
+/* ─── 工具美化视图（read_file 等专用视图，由 toolViews 注册表接管渲染）─── */
+
+/* 专用视图复用 .nagent-tool 基础壳，这里只补充其内部结构样式。 */
+.nagent-tool--readfile {
+  margin-bottom: 0;
+}
+
+/* create_file / update_file 视图复用 read_file 内部结构类，仅需自身外边距。 */
+.nagent-tool--filewrite {
+  margin-bottom: 0;
+}
+
+/* powershell / bash 命令执行视图复用 read_file 内部结构类，仅需自身外边距。 */
+.nagent-tool--execmd {
+  margin-bottom: 0;
+}
+
+/* 默认/通用视图的普通文本结果：基础类 .nagent-tool__result-text 已内建
+   "完整展开 + 自动换行、仅内容超出时横向滚动、无竖向滚动条"模型（pre-wrap + overflow-y:hidden），
+   --raw 修饰类随之废弃；DefaultToolView 中的双类引用继续生效，样式由基础类提供。 */
+
+/* 展开态仅显示返回结果，路径/参数元数据不再单独渲染（与 grep 视图一致）。 */
+
+/* 返回结果：与参数区视觉隔离，单独成块 */
+.nagent-tool__result-block {
+  margin-top: var(--space-2, 8px);
+  padding-top: var(--space-2, 8px);
+  border-top: 1px solid var(--border-subtle, rgba(127, 127, 127, 0.18));
+}
+
+.nagent-tool__result-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2, 8px);
+  margin-bottom: var(--space-1, 4px);
+}
+
+.nagent-tool__result-title {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  font-weight: 500;
+}
+
+/* ─── 工具调用聚合壳（一次 AI 下发多条相同 tool 调用时的可折叠外层）─────
+   视觉上沿用 .nagent-tool 的容器定字号 / 折叠态弱化 / 工具名不收缩 /
+   inline-preview 优先收缩模型,只补 .is-open 下的容器描边和组间距。 */
+.nagent-tool-group {
+  /* 与单条 .nagent-tool 同样的基础定位 */
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  /* 展开态外壳描边,给"一个组"的视觉边界;折叠态只有一行,不要边框噪音。 */
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+}
+
+/* 折叠态弱化（与单条 .nagent-tool 保持一致,抢视线） */
+.nagent-tool-group:not(.is-open) .nagent-tool-group__summary {
+  opacity: 0.68;
+}
+
+.nagent-tool-group:not(.is-open) .nagent-tool-group__name,
+.nagent-tool-group:not(.is-open) .nagent-tool-group__icon {
+  opacity: 0.85;
+}
+
+/* 展开态:加底色与边框,把"组"与周围消息流区分开 */
+.nagent-tool-group.is-open {
+  border-color: var(--border-subtle, rgba(127, 127, 127, 0.18));
+  background: color-mix(in srgb, var(--bg-secondary) 60%, transparent);
+  margin-bottom: 8px;
+}
+
+.nagent-tool-group__summary {
+  display: flex;
+  /* 与 .nagent-tool__summary 同模型：baseline 对齐消除工具名（UI 字体）与
+     inline-preview（mono 字体）的水平错位；SVG 图标经 align-self:center 居中。 */
+  align-items: baseline;
+  gap: 8px;
+  /* 与 .nagent-tool__summary 同模型:box-sizing + max-width + overflow:hidden 兜底,
+     防止 inline-preview 内容把 <button> 自身撑出 body 最大宽度(与 trace 同模型)。 */
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  padding: 4px 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  user-select: none;
+  font-size: var(--text-xs);
+  font-weight: 500;
+  color: var(--text-secondary);
+  text-align: left;
+  overflow: hidden;
+}
+
+.nagent-tool-group__summary:hover {
+  color: var(--text-primary);
+}
+
+.nagent-tool-group__chevron {
+  color: var(--text-muted);
+  /* 固定宽度,始终显示,紧跟在内容右侧 */
+  flex: 0 0 auto;
+  flex-shrink: 0;
+  /* baseline 容器内的 SVG 无文字基线,显式居中(同 .nagent-tool__chevron)。 */
+  align-self: center;
+}
+
+.nagent-tool-group__icon {
+  /* 固定宽度,始终显示 */
+  flex: 0 0 auto;
+  flex-shrink: 0;
+  /* 同 chevron:baseline 容器内的 SVG 图标单独居中。 */
+  align-self: center;
+}
+
+/* 整组任一 entry 报错时图标转红,与 .nagent-tool__icon--error 一致 */
+.nagent-tool-group__icon--error {
+  color: var(--accent-red);
+}
+
+.nagent-tool-group__name {
+  color: var(--text-secondary);
+  /* 工具名定宽,不收缩,过长省略(单 entry 同模型) */
+  flex: 0 0 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 调用次数徽章:视觉与 inline-preview 同级,小一号、突出"重复"语义 */
+.nagent-tool-group__count {
+  flex: 0 0 auto;
+  flex-shrink: 0;
+  padding: 0 6px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--accent-blue) 28%, var(--border-light));
+  background: color-mix(in srgb, var(--accent-blue-dim) 48%, var(--bg-primary));
+  color: var(--accent-blue);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 16px;
+  white-space: nowrap;
+}
+
+.nagent-tool-group__inline-preview {
+  min-width: 0;
+  /* 与 .nagent-tool__inline-preview 同模型：max-width 兜底,把 max-content 锁回父容器,
+     即使总基础宽度未溢出父容器也确保 inline-preview 不会把后续 chevron 推出
+     .nagent-msg__body 的最大宽度(对应 trace 的视觉模型——保持统一右边界)。 */
+  max-width: 100%;
+  /* 与 trace .nagent-trace-shell__text 同模型:flex: 1 1 auto 占满剩余空间,
+     内容过长时 ellipsis,chevron 始终保持在父容器右边界内可见。
+     去除 magic number flex-shrink:100(改用标准 1),与 trace 保持一致避免 flex 算法不均分。 */
+  flex: 1 1 auto;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* 参数预览允许选中复制：覆盖 group summary 的 user-select:none（同单条模型）。 */
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+/* 展开态:内部容器,顶部分割线来自 group 边框的下半段;首条 entry 直接顶到分割线,
+   后续 entry 复用原有 4px 上下间距,不需要再补 group 级别间距(免得总间距过大)。 */
+.nagent-tool-group__detail {
+  margin-top: 6px;
+  padding: 0 0 6px 21px;
+  border-top: 1px solid var(--border-subtle, rgba(127, 127, 127, 0.12));
+}
+
+/* 结果文本：完整展开、不设高度上限，始终无竖向滚动条。
+   内容能放下时自动换行显示（不出现横向滚动条）；仅当存在无法断开的超宽内容
+   （超长 URL / 无空格长串等，pre-wrap + normal 不会强制断词）时才横向溢出，
+   overflow-x:auto 在内容超出时才显示横向滚动条。 */
+.nagent-tool__result-text {
+  margin: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: var(--space-2, 8px);
+  border-radius: var(--radius-sm, 6px);
+  background: var(--bg-secondary, rgba(127, 127, 127, 0.08));
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: normal;
+}
+
+/* ─── Trace 通用壳 ─────────────────────────────────────────── */
+.nagent-trace-shell {
+  display: block;
+  /* trace 是 .nagent-thread 直接子元素不走 .nagent-msg__body，
+     与消息正文一样无最大宽度限制，width:100% 铺满消息流容器。 */
+  width: 100%;
+  min-width: 0;
+  /* 防止在 .nagent-thread flex 列里被 flex-shrink 压成 0：
+     overflow:hidden 会让 flex 子项的 min-height:auto 解析为 0，从而被压缩消失 */
+  flex-shrink: 0;
+  margin-top: var(--space-2);
+  margin-bottom: var(--space-2);
+  /* 折叠态：无边框无背景，视觉融入消息流；展开态才显示边框与背景（见 .is-open）。 */
+  overflow: hidden;
+}
+
+/* 展开态：恢复边框、圆角与背景，与折叠态形成明显区分。 */
+.nagent-trace-shell.is-open {
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+}
+
+.nagent-trace-shell__summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  min-width: 0;
+  /* 左内边距归零：左侧 18px 缩进由 .nagent-msg 提供，使 trace 内容与消息同一左基线；
+     仅保留右侧 --space-3，避免折叠图标贴边。 */
+  padding: 0 var(--space-3) 0 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  /* 容器统一字号/字重/行高 → 所有子元素 (title / summary 文件名) 继承同一规格，
+     保证在同一 baseline 上对齐 (与工具调用 .nagent-tool__summary 一致的"容器定字号"模型)。 */
+  font-size: var(--text-sm);
+  font-weight: 400;
+  line-height: var(--line-normal, 1.4);
+  color: var(--text-secondary);
+  text-align: left;
+}
+
+.nagent-trace-shell__summary:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+/* 折叠态：悬停也不显示背景，保持与折叠态一致的纯净外观（仅保留文字颜色强调）。 */
+.nagent-trace-shell:not(.is-open) .nagent-trace-shell__summary:hover {
+  background: transparent;
+}
+
+/* 无 content 的 trace：不可展开，去掉点击态光标，避免误以为可交互。 */
+.nagent-trace-shell__summary--static {
+  cursor: default;
+}
+
+.nagent-trace-shell__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  color: var(--text-secondary);
+}
+
+.nagent-trace-shell__title {
+  flex: 0 0 auto;
+  min-width: 0;
+  /* 字号/字重/行高继承 summary 容器，与下方 summary 文件名同基线对齐。 */
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+.nagent-trace-shell__text {
+  flex: 0 1 auto;
+  min-width: 0;
+  /* 不增长：让折叠图标紧贴 summary 内容右侧（与工具调用一致），而非被推到最右。
+     内容过长时收缩并省略，把空间留给图标。 */
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.nagent-trace-shell__chevron {
+  flex: 0 0 auto;
+  /* 与工具调用一致：固定宽度、始终显示、紧贴内容右侧，不用 margin-left:auto 推到最右。 */
+  color: var(--text-muted);
+}
+
+.nagent-trace-shell__content {
+  border-top: 1px solid var(--border-subtle, var(--border-light));
+  padding: var(--space-2) var(--space-3) var(--space-3);
+}
+
+.nagent-trace-shell__pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-primary);
+  font-size: var(--text-xs);
+  line-height: 1.6;
+}
+
+.nagent-trace-shell__empty {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+/* ─── 底部输入区 ───────────────────────────────────────────── */
+.nagent-composer-dock {
+  border-top: none;
+  padding-top: 12px;
+  flex-shrink: 0;
+}
+
+.nagent-composer {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.nagent-composer:focus-within {
+  border-color: var(--accent-blue);
+  box-shadow: 0 0 0 0.125em var(--accent-blue-soft);
+}
+
+.nagent-composer__tools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.nagent-composer__tool-group-label {
+  font-size: var(--text-xs);
+  font-weight: 700;
+  color: var(--text-muted);
+  margin-right: 2px;
+}
+
+.nagent-composer__tool-chip {
+  border: 1px solid var(--border-light);
+  border-radius: 999px;
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  padding: 4px 10px;
+  font-size: var(--text-xs);
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.nagent-composer__tool-chip:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.nagent-composer__tool-chip:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.nagent-composer__tool-chip--cmd {
+  color: var(--accent-blue);
+  background: color-mix(in srgb, var(--accent-blue-dim) 40%, var(--bg-primary));
+}
+
+.nagent-composer__tool-chip--token {
+  color: var(--accent-green);
+  background: color-mix(in srgb, var(--accent-green-dim) 44%, var(--bg-primary));
+}
+
+.nagent-composer__textarea {
+  min-height: 84px;
+  max-height: 280px;
+  resize: none;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  padding: 4px 2px;
+  font-size: var(--text-sm);
+  line-height: 1.7;
+  font-family: inherit;
+  outline: none;
+  box-sizing: border-box;
+  width: 100%;
+}
+
+.nagent-composer__textarea::placeholder {
+  color: var(--text-muted);
+}
+
+.nagent-composer__input-wrap {
+  position: relative;
+}
+
+.nagent-composer__token-list {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+
+/* ── 内联富文本输入框（contentEditable，胶囊渲染在光标处） ── */
+
+.nagent-inline-editor {
+  position: relative;
+  min-height: 34px;
+  max-height: 240px;
+  overflow-y: auto;
+  transition: min-height 0.18s ease;
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  border: none;
+  color: var(--text-primary);
+  font-size: var(--text-sm);
+  line-height: 1.6;
+  font-family: inherit;
+  outline: none;
+  white-space: pre-wrap;
+  word-break: break-word;
+  box-sizing: border-box;
+  width: 100%;
+}
+
+.nagent-inline-editor:focus {
+  border: none;
+}
+
+/* 聚焦时扩大输入框高度，失焦时收缩回最小高度 */
+.nagent-inline-editor:focus-within {
+  min-height: 96px;
+}
+
+.nagent-inline-editor--empty::before {
+  content: attr(data-placeholder);
+  position: absolute;
+  top: 0;
+  left: 0;
+  color: var(--text-muted);
+  pointer-events: none;
+}
+
+.nagent-inline-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  vertical-align: baseline;
+  padding: 1px 4px 1px 6px;
+  margin: 0 1px;
+  border-radius: 999px;
+  border: 1px solid var(--border-light);
+  /* 中性色：比主题背景略深一点，不使用蓝色 */
+  /* background: color-mix(in srgb, var(--bg-primary) 84%, #000); */
+  color: var(--text-primary);
+  font-size: var(--text-xs);
+  /* font-weight: 600; */
+  line-height: 1.5;
+  font-style: normal;
+  user-select: none;
+  white-space: nowrap;
+}
+
+/* 所有内联胶囊统一可点击（点击弹详情），不再按类型着色/分支、不再渲染逐类图标 */
+.nagent-inline-chip {
+  cursor: pointer;
+}
+
+.nagent-inline-chip__label {
+  font-style: normal;
+  min-width: 0;
+}
+
+.nagent-inline-chip__close {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  line-height: 1;
+  padding: 0;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.nagent-inline-chip__close:hover {
+  background: color-mix(in srgb, var(--accent-red) 18%, transparent);
+  color: var(--accent-red);
+}
+
+/* 有芯片时 textarea 减小最小高度 */
+.nagent-composer--has-chip {
+  min-height: 56px;
+}
+
+/* ── Slash 命令菜单（简洁三段式风格） ── */
+
+/* 定位壳：视觉（边框/圆角/阴影/内边距/背景）由 .ui-menu.ui-menu--popup 提供，
+   与列表行「更多操作」、工具栏「更多操作」弹层完全一致。 */
+.nagent-composer__slash-pop {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 100%;
+  margin-bottom: 6px;
+  max-height: 320px;
+  overflow-y: auto;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+/* 斜杠命令列表：优先保证「标题」完整显示——标题占据自然宽度且不截断，
+   描述在剩余空间内收缩并截断。仅作用于当前弹层，不影响其它复用 .ui-menu__* 的菜单
+   （列表行/工具栏「更多操作」、@ 文件引用弹层等仍沿用全局截断策略）。 */
+/* 容器放宽上限：默认 .ui-menu 限死 340px，长标题即便 overflow:visible 也会被容器边缘裁掉。
+   放开到「输入框宽度 ∩ 视口宽度」，让标题能按自然宽度完整横向展开；超出部分由描述收缩吸收，
+   标题始终不被截断（以输入容器/视口为安全边界，避免横向溢出屏幕）。 */
+.nagent-composer__slash-pop.ui-menu {
+  max-width: min(100%, calc(100vw - 16px));
+}
+.nagent-composer__slash-pop .ui-menu__label {
+  flex: 0 0 auto; /* 不收缩：标题始终按自然宽度完整展示 */
+  overflow: visible; /* 覆盖全局的 overflow:hidden + 省略号，避免主内容被截断 */
+}
+.nagent-composer__slash-pop .ui-menu__desc {
+  min-width: 0; /* 允许描述完全收缩，把空间优先让给标题 */
+}
+
+.nagent-composer__at-pop {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 100%;
+  margin-bottom: 6px;
+  max-height: 320px;
+  overflow-y: auto;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+/* 文件名弹层：优先保证文件名完整显示，不被截断（与 / 命令弹层一致）。
+   容器放宽上限，让文件名按自然宽度横向展开；超出部分由路径描述收缩吸收。 */
+.nagent-composer__at-pop.ui-menu {
+  max-width: min(100%, calc(100vw - 16px));
+}
+.nagent-composer__at-pop .ui-menu__label {
+  flex: 0 0 auto; /* 不收缩：文件名始终按自然宽度完整展示 */
+  overflow: visible; /* 覆盖全局的 overflow:hidden + 省略号，避免文件名被截断 */
+}
+.nagent-composer__at-pop .ui-menu__desc {
+  min-width: 0; /* 允许路径完全收缩，把空间优先让给文件名 */
+}
+
+/* 输入框下方「全部Agent」筛选菜单：标题（id+title）按自然宽度完整成行展示，撑大菜单项宽度，不出现横向滚动条。
+   该筛选项是子菜单（.ui-menu--submenu），其 max-width 由 JS 按「可用水平空间」内联写入
+   （Menu.tsx: maxWidth = min(submenuRect.width, spaceRight|spaceLeft)），会把菜单收窄到比内容更窄，
+   导致 nowrap 长文本溢出、菜单内部出现横向滚动条。
+   这里用 !important 覆盖该内联上限，让子菜单按内容自然撑宽；以「视口宽度」为安全边界，
+   避免超出视口产生页面级横向滚动条。label 恢复单行 nowrap，使 id+title 完整撑大项宽。 */
+.nagent-composer__agent-filter-pop .ui-menu--submenu {
+  max-width: calc(100vw - 16px) !important; /* 覆盖 JS 内联收窄，杜绝内部横向滚动条 */
+}
+.nagent-composer__agent-filter-pop .ui-menu__label {
+  flex: 0 0 auto; /* 不收缩：id+title 按自然宽度完整展示，撑大菜单项 */
+  min-width: 0;
+  white-space: nowrap; /* 单行完整展示，不换行 */
+  overflow: visible;
+}
+
+.nagent-composer__at-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 4px 8px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--border-light, rgba(128,128,128,0.12));
+}
+
+.nagent-composer__at-title {
+  font-size: var(--text-xs);
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: 0.01em;
+}
+
+.nagent-composer__at-hint {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 60%;
+}
+
+.nagent-composer__slash-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.nagent-composer__slash-group--compact + .nagent-composer__slash-group--compact {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-light, rgba(128,128,128,0.12));
+}
+
+.nagent-composer__slash-group + .nagent-composer__slash-group {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-light, rgba(128,128,128,0.12));
+}
+
+.nagent-composer__slash-group-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 4px 8px;
+  font-size: var(--text-xs);
+  font-weight: 700;
+  color: var(--text-muted, #888);
+  text-transform: none;
+  letter-spacing: 0.01em;
+  user-select: none;
+}
+
+/* 弹层条目已统一复用 .ui-menu__item（含 .ui-menu__icon/.ui-menu__label/
+   .ui-menu__desc/.ui-menu__tag），此处不再重复定义条目视觉。 */
+
+/* 空态 / 搜索中提示（目录浏览态、无匹配、目录为空等） */
+.nagent-composer__slash-empty {
+  padding: 12px 10px;
+  font-size: var(--text-xs);
+  color: var(--text-muted, #888);
+  user-select: none;
+}
+
+.nagent-composer__slash-empty--at {
+  padding: 16px 14px;
+  text-align: center;
+}
+
+.nagent-composer__interaction-pop {
+  padding: 12px 14px;
+  gap: 10px;
+  max-height: 320px;
+}
+
+.nagent-composer__interaction-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.nagent-composer__interaction-title {
+  font-size: var(--text-sm);
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.nagent-composer__interaction-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.nagent-composer__interaction-close:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.nagent-composer__interaction-desc {
+  font-size: var(--text-xs);
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+.nagent-composer__interaction-search {
+  width: 100%;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  padding: 7px 9px;
+  font-size: var(--text-xs);
+  outline: none;
+}
+
+.nagent-composer__interaction-search:focus {
+  border-color: var(--accent-blue);
+}
+
+.nagent-composer__interaction-options {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow-y: auto;
+  max-height: 180px;
+}
+
+.nagent-composer__interaction-option {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  width: 100%;
+  padding: 8px 9px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.nagent-composer__interaction-option:hover {
+  background: var(--bg-hover);
+}
+
+.nagent-composer__interaction-option-label {
+  font-size: var(--text-xs);
+  font-weight: 700;
+}
+
+.nagent-composer__interaction-option-desc {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.nagent-composer__interaction-empty {
+  padding: 10px 8px;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.nagent-composer__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.nagent-composer__hint {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.nagent-composer__truncation {
+  margin-bottom: var(--space-2);
+}
+
+.nagent-composer__send {
+  min-width: 96px;
+  flex-shrink: 0;
+  border: none;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #0e8c6d, #1d6ef2);
+  color: #fff;
+  padding: 8px 16px;
+  font-size: var(--text-xs);
+  font-weight: 700;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.nagent-composer__send:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ─── 输入区 footer：模型配置 / 思考强度 / 发送按钮同一行 ─────────── */
+
+/* 任务级 token 胶囊（slash 选中后底部回显）不进 contentEditable；
+   胶囊本身不可点击/不弹详情（cursor:default），仅 ✕ 可点击删除。
+   胶囊现在渲染在 footer 左侧电池左边（.task-composer-footer__left），
+   保留 __controls 选择器以兼容草稿面板等仍挂在中间控件组的挂载位置。 */
+.task-composer-footer__controls .nagent-inline-chip,
+.task-composer-footer__left .nagent-inline-chip {
+  cursor: default;
+}
+
+.task-composer-footer__controls .nagent-inline-chip__close,
+.task-composer-footer__left .nagent-inline-chip__close {
+  cursor: pointer;
+}
+
+/* 任务级 token 胶囊与模型/思考强度 compact 控件对齐：
+   同高 + 垂直居中，避免胶囊与下拉控件在 footer 行内高度/基线错位。 */
+.task-composer-footer__controls .nagent-inline-chip,
+.task-composer-footer__left .nagent-inline-chip,
+.task-composer-footer__controls .task-launcher-compact-control {
+  display: flex;
+  align-items: center;
+  height: 24px;
+  box-sizing: border-box;
+}
+
+.task-composer-footer {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* 中间控件区：模型配置 / 思考强度 / 更多操作 / 停止按钮按内容宽度排列。
+   与左侧分组一起放入 `.task-composer-footer__scroll` 横向滚动容器，空间不足时横向滚动，
+   发送按钮位于容器之外保持固定。 */
+.task-composer-footer__controls {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+/* 横向滚动容器：占据发送按钮之外的剩余宽度，内容溢出时横向滚动（原生滚动条隐藏，
+   滚动时显示底部指示条，见 HScrollArea）。 */
+.task-composer-footer__scroll {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* 左侧固定分组：任务文件按钮 + 上下文电池，不随中间控件伸缩。 */
+.task-composer-footer__left {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+/* 发送按钮固定不动：不参与横向滚动、默认不收缩并贴右；空间不足时（移动端）允许收缩宽度。 */
+.task-composer-footer__send {
+  flex: 0 0 auto;
+}
+
+/* 任务状态点（标题栏标签 / 后续可复用）。 */
+.task-status-dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  overflow: hidden;
+}
+
+/* 移动端：始终保持单行，空间不足时缩小发送按钮（去文案、缩内边距），不换行。 */
+@media (max-width: 768px) {
+  .task-composer-footer__send {
+    flex: 0 1 auto;
+    min-width: 0;
+    padding: 8px 12px;
+  }
+
+  .task-composer-footer__send-label {
+    display: none;
+  }
+}
+
+.nagent-error {
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid color-mix(in srgb, var(--accent-red) 40%, transparent);
+  background: var(--accent-red-dim);
+  color: var(--accent-red);
+  font-size: var(--text-xs);
+  line-height: 1.6;
+}
+
+/* ─── 幽灵按钮（次级操作） ─────────────────────────────────── */
+.nagent-btn--ghost {
+  color: var(--text-muted);
+  background: transparent;
+  border-color: transparent;
+}
+
+.nagent-btn--ghost:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+/* ─── Launcher 多聊主机 ───────────────────────────────────── */
+.launcher-chat-host {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+}
+
+.launcher-chat-host__bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-light);
+  background: var(--bg-secondary);
+  flex-shrink: 0;
+}
+
+.launcher-chat-host__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.launcher-chat-stack {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  position: relative;
+}
+
+.launcher-chat-stack__pane {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ─── 富文本消息内容 + 结构化输出块（HTML 标签协议） ──────────── */
+.nagent-rich-content {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.nagent-output-block {
+  border: 1px solid color-mix(in srgb, var(--accent-purple, #7c5cff) 28%, var(--border-light));
+  border-left: 3px solid var(--accent-purple, #7c5cff);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--accent-purple-dim, #2a2350) 26%, var(--bg-secondary));
+  overflow: hidden;
+}
+
+.nagent-output-block__tag {
+  padding: 5px 10px;
+  font-family: var(--font-mono, monospace);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  color: var(--accent-purple, #7c5cff);
+  background: color-mix(in srgb, var(--accent-purple-dim, #2a2350) 50%, var(--bg-primary));
+  border-bottom: 1px solid color-mix(in srgb, var(--accent-purple, #7c5cff) 20%, var(--border-light));
+}
+
+.nagent-output-block__body {
+  margin: 0;
+  padding: 10px 12px;
+  font-family: var(--font-mono, monospace);
+  font-size: var(--text-xs);
+  line-height: 1.6;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-x: auto;
+}
+
+/* ── 胶囊详情弹层（纯展示，portal 到 body + 内联 fixed 定位） ── */
+.nagent-slash-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: 280px;
+  padding: 10px 12px;
+}
+
+.nagent-slash-detail__icon {
+  width: 16px;
+  height: 16px;
+  color: var(--text-secondary);
+}
+
+.nagent-slash-detail__icon svg {
+  display: block;
+  width: 16px;
+  height: 16px;
+}
+
+.nagent-slash-detail__title {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.nagent-slash-detail__subtitle {
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.nagent-slash-detail__group {
+  align-self: flex-start;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border-light);
+  background: color-mix(in srgb, var(--bg-primary) 84%, #000);
+}
+
+.nagent-slash-detail__type {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  font-family: var(--font-mono, monospace);
+}
+
+.nagent-slash-detail__close {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  line-height: 1;
+  padding: 2px 4px;
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.nagent-slash-detail__close:hover {
+  background: color-mix(in srgb, var(--accent-red) 18%, transparent);
+  color: var(--accent-red);
+}
+
+/* ─── 折叠图标：默认隐藏（全设备），仅 AI 思考内容常显 ──
+   例外：AI 思考过程（.nagent-msg__reasoning，无 --system）的折叠图标保持常显，
+   便于一眼识别思考内容可展开；其余折叠块（系统提示词、工具调用、多调用聚合壳、
+   trace）的展开/折叠图标默认隐藏。桌面鼠标设备（hover: hover + pointer: fine）
+   悬停到折叠行或键盘聚焦时显示，界面更干净、可发现性不丢；触摸设备无 hover，
+   图标保持隐藏——折叠功能仍可通过点击折叠行/头部整行触发（系统提示词头部
+   已整行可点，见 AgentMessageThread SystemPromptBlock）。 */
+.nagent-msg__reasoning--system .nagent-msg__reasoning-toggle,
+.nagent-tool__chevron,
+.nagent-tool-group__chevron,
+.nagent-trace-shell__chevron {
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+/* 系统提示词块图标隐藏后，头部整行作为可点击折叠区，给出手型提示。 */
+.nagent-msg__reasoning--system .nagent-msg__reasoning-header {
+  cursor: pointer;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .nagent-msg__reasoning--system:hover .nagent-msg__reasoning-toggle,
+  .nagent-msg__reasoning--system .nagent-msg__reasoning-toggle:focus-visible,
+  .nagent-tool__summary:hover .nagent-tool__chevron,
+  .nagent-tool__summary:focus-visible .nagent-tool__chevron,
+  .nagent-tool-group__summary:hover .nagent-tool-group__chevron,
+  .nagent-tool-group__summary:focus-visible .nagent-tool-group__chevron,
+  .nagent-trace-shell__summary:hover .nagent-trace-shell__chevron,
+  .nagent-trace-shell__summary:focus-visible .nagent-trace-shell__chevron {
+    opacity: 1;
+  }
+}

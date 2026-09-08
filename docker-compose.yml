@@ -1,0 +1,43 @@
+# dev 拓扑(架构 §8):hub 公网中转 + worker 出站连入 + 正式前端静态托管。
+# 用法:HUB_KEY=<你的hub密钥原文> docker-compose up --build(hub 启动自算 sha256)
+services:
+  hub:
+    build:
+      context: .
+      dockerfile: every-agent-hub/Dockerfile
+    ports:
+      - "9100:9100"
+    environment:
+      # 必填:原始 hub key;hub 启动时自行计算 sha256,未配置拒绝启动
+      HUB_KEY: ${HUB_KEY:-}
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      dockerfile: every-agent-worker/Dockerfile
+    environment:
+      WORKER_ID: ${WORKER_ID:-company-pc}
+      # 必填:原始 hub key(与 hub 侧同一密钥);未配置 worker 拒绝启动
+      HUB_KEY: ${HUB_KEY:-}
+      # 系统目录(模型配置/默认工作区/数据)整体入卷;工作区可再经前端 workspace.set 切换
+      EVERYAGENT_HOME: /everyagent
+    volumes:
+      - worker-home:/everyagent
+    restart: unless-stopped
+    depends_on:
+      - hub
+
+  # 正式前端(n 分支 UI 壳:任务/文件树/git 遥控,内置 hub 客户端 SDK)
+  webapp:
+    build:
+      context: .
+      dockerfile: every-agent-web/Dockerfile
+    ports:
+      - "5174:80"
+    restart: unless-stopped
+    depends_on:
+      - hub
+
+volumes:
+  worker-home:

@@ -1,0 +1,29 @@
+/* 模型/思考强度下拉弹层宽度与横向滚动处理。
+ *
+ * 桌面：保持 antd 默认的自适应宽度（dropdownMatchSelectWidth=false），
+ *       选项完整显示，屏幕够宽无需限制。
+ * 移动端：视口窄，长 configId/模型名会把弹层撑出屏幕。antd 的 adjustX 是
+ *         「翻转」逻辑（弹层放不下就翻到 trigger 另一侧），翻转后 left 会变成
+ *         负值、把弹层顶到屏幕左侧之外。因此这里直接固定左边缘与宽度，绕开
+ *         翻转定位，并让选项内容保持完整宽度、超出时横向滚动查看。
+ */
+
+@media (max-width: 768px) {
+  .task-model-select-dropdown {
+    /* 固定左边缘 + 固定宽度，避免被 rc-trigger 翻转定位顶出屏幕左侧 */
+    left: 12px !important;
+    width: calc(100vw - 24px) !important;
+    max-width: none !important;
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+  }
+
+  /* 选项内容默认会被 text-overflow: ellipsis 省略，导致无溢出、无滚动条；
+     这里保持完整宽度（nowrap + visible），使其溢出弹层从而触发横向滚动。 */
+  .task-model-select-dropdown .ant-select-item-option-content {
+    flex: 0 0 auto !important;
+    white-space: nowrap;
+    overflow: visible !important;
+    text-overflow: clip !important;
+  }
+}
