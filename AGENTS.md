@@ -14,4 +14,4 @@
 - **红线 · 复用 Spring AI 框架,禁止重复造轮子**:worker 的 agent 执行必须走 `ChatClient` + `Advisor` 生态,**不得手搓** agent 循环、工具调用循环、响应聚合、system 提示词拼接等 Spring AI 2 已有能力。Agent 执行链(`AgentRunner` 等)只能是**很薄的一层**——负责把 `Prompt` 交给 `ChatClient`、`ToolCallingAdvisor` 接管工具循环、自定义 `Advisor` 注入 skill/记忆/护栏等增强;所有可用 `ChatClient.advisors()` / `defaultAdvisors()` / `defaultTools()` / `ToolCallback` 表达的能力,一律复用,不允许自实现等价逻辑。新增 agent 能力优先做成 `Advisor`,而非改写执行核心。
 - **红线 · 一个 Advisor 只负责一个功能**:能用新增 `Advisor` 实现的增强(注入 skill、发射 worker 事件、记忆、护栏等),绝不在执行核心或别处手搓等价逻辑;不得把多个不相关职责塞进同一个 `Advisor`。事件发射等需挂钩工具循环的增强,通过**继承** `ToolCallingAdvisor` 并重写其受保护 hook(`doAfterStream` / `doGetNextInstructionsForToolCallStream` 等)实现,不得另起一层包裹或重复实现递归循环。
 - 主 Agent 与子 Agent **共用同一运行入口与 Advisor 链**,仅 `agentId` 不同(与 nagent 做法一致);禁止为子 agent 单独复制一套执行逻辑。
-- 提交信息中文,一次一事。
+- 在完成开发/bug修复任务后提交本次修改。提交信息中文,一次一事。
