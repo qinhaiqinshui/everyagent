@@ -1358,7 +1358,7 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
         t.createdAt(meta.path("createdAt").asLong(0));
         t.aiReview = meta.path("aiReview").asBoolean(false);      // AI 审议任务级开关(plan-unattended-ai-auth 步骤3)
         t.unattended = meta.path("unattended").asBoolean(false);  // 无人值守任务级开关(plan-unattended-ai-auth 步骤3)
-        t.networkAllowed = meta.path("networkAllowed").asBoolean(false); // 网络开关任务级(/网络)
+        t.networkBlocked = meta.path("networkBlocked").asBoolean(false); // 禁网开关任务级(/禁用网络)
         t.seedUsageMeta(meta.path("usage")); // 恢复最近一轮上下文用量(续跑后列表/电池数据不丢)
         restoreAgentLedger(t, meta); // 恢复子 agent 台账(冷启动后 list_agents/wait_agents 正常)
         // slash 任务级 token 回读(仅 slash 层存储、业务方不读;随 meta.json 落盘,冷启动续跑恢复)。

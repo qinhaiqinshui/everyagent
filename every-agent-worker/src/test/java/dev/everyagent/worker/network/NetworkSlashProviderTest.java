@@ -26,8 +26,8 @@ import static org.mockito.Mockito.when;
 
 /**
  * NetworkSlashProvider 单测:`/` 候选 id=network:on;select 返回 1 个 bottom 结果
- * (token 可 parse 为 kind=network.access);taskId 非空时置 {@code TaskEntry.networkAllowed=true}
- * 并落盘,为空时不写业务标记仍返回胶囊;cancel 复位 networkAllowed 并落盘。
+ * (token 可 parse 为 kind=network.access);taskId 非空时置 {@code TaskEntry.networkBlocked=true}
+ * 并落盘,为空时不写业务标记仍返回胶囊;cancel 复位 networkBlocked 并落盘。
  */
 class NetworkSlashProviderTest {
 
@@ -64,7 +64,7 @@ class NetworkSlashProviderTest {
     void itemsExposeNetworkCandidate() {
         SlashCommandItem it = item();
         assertEquals("network:on", it.id());
-        assertEquals("网络", it.title());
+        assertEquals("禁用网络", it.title());
         assertTrue(NetworkToken.enabledIn(it.insertText()), "insertText 应为网络 opaque token");
     }
 
@@ -81,7 +81,7 @@ class NetworkSlashProviderTest {
         assertEquals(NetworkToken.KIND, tok.kind(), "token kind=network.access");
 
         verify(taskManager).runningTask("t-1");
-        assertTrue(task.networkAllowed, "业务标记 networkAllowed 应置位");
+        assertTrue(task.networkBlocked, "业务标记 networkBlocked 应置位(禁用本任务网络)");
         assertTrue(persisted.get() >= 1, "置位后应落盘 meta");
     }
 
@@ -93,16 +93,16 @@ class NetworkSlashProviderTest {
         assertEquals(1, results.size(), "空 taskId(草稿态)仍返回胶囊");
         assertEquals(SlashDisplayPosition.BOTTOM, results.get(0).position());
         verify(taskManager, never()).runningTask(any());
-        assertFalse(task.networkAllowed, "空 taskId 不写业务标记");
+        assertFalse(task.networkBlocked, "空 taskId 不写业务标记");
         assertEquals(0, persisted.get(), "空 taskId 不落盘");
     }
 
     @Test
     void cancelTurnsNetworkOffAndPersists() {
-        task.networkAllowed = true;
+        task.networkBlocked = true;
         SlashCommandItem it = item();
         it.cancelHandler().onCancel(it, NetworkToken.buildToken(), "t-1");
-        assertFalse(task.networkAllowed, "取消网络胶囊应复位 networkAllowed");
+        assertFalse(task.networkBlocked, "取消禁用网络胶囊应复位 networkBlocked");
         assertTrue(persisted.get() >= 1, "取消后应落盘 meta");
     }
 }

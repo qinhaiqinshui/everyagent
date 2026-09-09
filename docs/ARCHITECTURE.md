@@ -444,14 +444,14 @@ ask 管道承载第二类阻塞请求:**危险操作授权**。`PermissionGate` 
 
 | 后端 | 语义 | 何时启用 |
 |---|---|---|
-| **wsl-direct**(Windows 默认) | 命令在托管的 WSL2 发行版(`eagent`,可丢弃系统)内以 root 运行;宿主盘隔离 = 关闭 automount + 每命令手动挂载工作区 + seccomp deny-mount 过滤器;网络按任务级开关 unshare -n | `auto`(Windows 默认)/ 显式 `wsl-direct`;发行版缺失自动导入(rootfs 随包,sha256 校验) |
-| **wsl-bwrap** | 命令经 bwrap 挂载命名空间运行:授权根 = `--bind` 白名单(授权=绑定,撤销=下次不绑,宿主零残留),网络 `--unshare-net` 硬拒,工作区外宿主盘**不可见**(读白名单) | 显式 `wsl-bwrap`(更强隔离的用户知情选择) |
+| **wsl-direct**(Windows 默认) | 命令在托管的 WSL2 发行版(`eagent`,可丢弃系统)内以 root 运行;宿主盘隔离 = 关闭 automount + 每命令手动挂载工作区 + seccomp deny-mount 过滤器;网络默认放行,任务级 `/禁用网络` 时 unshare -n | `auto`(Windows 默认)/ 显式 `wsl-direct`;发行版缺失自动导入(rootfs 随包,sha256 校验) |
+| **wsl-bwrap** | 命令经 bwrap 挂载命名空间运行:授权根 = `--bind` 白名单(授权=绑定,撤销=下次不绑,宿主零残留),网络默认放行,任务级 `/禁用网络` 时 `--unshare-net` 硬拒(新 netns 仅 down 的 lo,连回环也不通),工作区外宿主盘**不可见**(读白名单) | 显式 `wsl-bwrap`(更强隔离的用户知情选择) |
 | **windows-mic** | Restricted Token + Low IL + Job Object + 目录 Low 标注 + DACL 可写授权(Windows 原生路径) | `windows-mic` / WSL 探测失败回退 |
 | **none/direct** | 直接 spawn(仅超时/输出护栏/网络代理 env 剥离) | 显式 `none` / 非 Windows |
 
 - `worker.sandbox.type`: `auto`(默认)| `wsl-direct` | `wsl-bwrap` | `windows-mic` | `none`(别名 acl/wsl/direct 兼容)。
 - **Windows Low IL 可写性契约**(对 windows-mic 后端):工作区树 + EXEC 授权目录必须由 worker 在命令执行前配置为沙箱可写——① 标注 Low 完整性(SACL `S:(ML;OICI;NW;;;LW)`),解决 MIC 的 NO_WRITE_UP;② `WindowsAcl` 给工作区根追加可继承 Allow ACE(本地 Users `(OI)(CI)` 修改+删除权限),解决 ACL 残缺。工作区外保持默认 Medium → 沙箱内写被 OS 拒,构成弹窗授权之外的 OS 级兜底。
-- **网络策略**:默认 deny(命令无网络);wsl-direct 未开网络开关则不 unshare(可访问网络);wsl-bwrap deny = `--unshare-net`。
+- **网络策略**:默认放行(`worker.sandbox.allow-network=true`,命令可访问网络,含回环 127.0.0.1);任务级 `/禁用网络` 或全局 `allow-network=false` 才断网——wsl-direct = `unshare -n`(新建无 eth0 的 netns)、wsl-bwrap = `--unshare-net`(新 netns 仅 down 的 lo,连回环也不通)、direct/mic = 剥代理 env(advisory)。
 - **Windows 沙箱技术路线说明**:曾评估 AppContainer(Low IL 标注的继任者),因"capability 模型不适合开放式开发工作流+普通 ACE 全失效的读模型破坏面太大"(OpenAI 对 Windows 沙箱的弃用理由同源)而放弃,整体迁往 WSL2 生态(Claude Code 对 Windows 用户的官方推荐路径);windows-mic 保留为回退后端。
 
 ### 7.11 提权拦截(seccomp,LINUX 侧)

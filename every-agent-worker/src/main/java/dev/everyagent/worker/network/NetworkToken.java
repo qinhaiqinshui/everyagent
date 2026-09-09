@@ -4,7 +4,7 @@ import dev.everyagent.contract.json.Json;
 import dev.everyagent.worker.slash.SlashTokenEncoder;
 
 /**
- * 「/网络」斜杠能力 capsule token 的 worker 侧实现(仿 {@code modelpool.ModelPoolToken}:
+ * 「/禁用网络」斜杠能力 capsule token 的 worker 侧实现(仿 {@code modelpool.ModelPoolToken}:
  * opaque token 三要素——固定 kind、构造、命中扫描)。
  *
  * <p>职责:
@@ -18,11 +18,12 @@ import dev.everyagent.worker.slash.SlashTokenEncoder;
  *
  * <p>本 token 是任务级 bottom 开关的触发标记,不承载任何需 AI 理解的内容;提交解析
  * (从 AI 上下文剥离)由 {@code NetworkSlashResolver} 接管:本 kind 解析为 {@code ""},
- * token 被清空、不注入模型上下文。真正的「放行网络」由 {@code CommandExecutor}
- * 按任务级 {@code TaskEntry.networkAllowed} 生效(沙箱三后端各自落地)。
+ * token 被清空、不注入模型上下文。真正的「禁用网络」由 {@code CommandExecutor}
+ * 按任务级 {@code TaskEntry.networkBlocked} 生效(沙箱三后端各自落地)。
  *
- * <p>本次任务有效:选中 /网络 即开启任务级开关(写入任务 meta.json 落盘),
- * 之后本任务所有轮次持续生效、再运行仍保持,直至 ✕ 取消。
+ * <p>本次任务有效:选中 /禁用网络 即开启任务级禁网开关(写入任务 meta.json 落盘),
+ * 之后本任务所有轮次持续生效、再运行仍保持,直至 ✕ 取消。worker 级默认
+ * {@code sandbox.allow-network=true}(放行网络),本开关只对单任务收窄。
  */
 public final class NetworkToken {
 
@@ -32,12 +33,12 @@ public final class NetworkToken {
     private NetworkToken() {
     }
 
-    /** 构造网络 opaque token(select 直接返回该串 → 底部渲染胶囊)。 */
+    /** 构造「禁用网络」opaque token(select 直接返回该串 → 底部渲染胶囊)。 */
     public static String buildToken() {
         return SlashTokenEncoder.buildToken(
                 KIND,
-                "网络",
-                "允许本任务访问网络（默认关闭，本任务有效）",
+                "禁用网络",
+                "禁止本任务访问网络（默认放行，本任务有效）",
                 Json.obj().put("enabled", true));
     }
 

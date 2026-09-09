@@ -135,9 +135,9 @@ public class CommandExecutor {
         // 授权根由动态 ensureMount 承担,此参数为空。
         java.util.List<Path> extraRoots = sandbox.isWslBwrap() ? gate.execRootsSandboxed(task)
                 : java.util.List.of();
-        // 网络许可:任务级 /网络 开关开启 或 worker 全局默认放行 → 本次命令放行网络;
-        // 否则按 deny-all 断网(三个后端各自落地:wsl --unshare-net / unshare -n / 剥代理 env)
-        boolean allowNetwork = task.networkAllowed || sandbox.networkAllowedByDefault();
+        // 网络许可:任务级 /禁用网络 开关未开 且 worker 全局默认放行 → 本次命令放行网络;
+        // 否则按 deny 断网(三个后端各自落地:wsl --unshare-net / unshare -n / 剥代理 env)
+        boolean allowNetwork = !task.networkBlocked && sandbox.networkAllowedByDefault();
         // 提权授权:优先走 seccomp 内核级拦截(仅 wsl-bwrap + 未全局放行 + 开关开启),
         // 它能覆盖文本扫描漏掉的别名/脚本内 setuid 提权;否则退回文本扫描启发式。
         // wsl-direct 恒 root,无提权授权概念。

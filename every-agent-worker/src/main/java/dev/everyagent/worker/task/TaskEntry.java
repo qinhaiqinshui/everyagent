@@ -89,12 +89,12 @@ public final class TaskEntry {
     public volatile boolean unattended;
 
     /**
-     * 网络开关(任务级):开启后本任务后续所有命令的网络访问被放行(覆盖 worker 级
-     * {@code sandbox.network-policy=deny-all} 默认拒网),随 {@link #summaryJson()} 落盘
-     * meta.json、再运行仍保持。由 {@code NetworkSlashProvider} 的 onSelect/onCancel 置位复位
-     * 并落盘。默认 false = 无网络(用户选 /网络 显式开启)。
+     * 禁网开关(任务级):开启后本任务后续所有命令禁止访问网络(覆盖 worker 级
+     * {@code sandbox.allow-network=true} 默认放行),随 {@link #summaryJson()} 落盘
+     * meta.json、再运行仍保持。由 {@code NetworkSlashProvider}(/禁用网络)的 onSelect/onCancel
+     * 置位复位并落盘。默认 false = 继承全局默认(放行),用户选 /禁用网络 显式关闭。
      */
-    public volatile boolean networkAllowed;
+    public volatile boolean networkBlocked;
 
     /**
      * slash 任务级 token 槽:自包含 opaque token 串数组,仅 slash 层存储、业务方不读。
@@ -287,8 +287,8 @@ public final class TaskEntry {
         if (unattended) {
             n.put("unattended", true);
         }
-        if (networkAllowed) {
-            n.put("networkAllowed", true);
+        if (networkBlocked) {
+            n.put("networkBlocked", true);
         }
         // 子 agent 台账(冷启动恢复 + list_agents/wait_agents;含历史终态)。
         // 运行中的活实体在每次状态变化时同步进台账,此处统一序列化。

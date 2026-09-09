@@ -65,10 +65,11 @@ worker:
     #     覆盖文本扫描漏掉的别名、包装脚本、脚本内提权;seccomp 不可用(旧内核/权限)时退化为无拦截。
     #   false = 关闭 seccomp,回退文本扫描(usesPrivilege)启发式。
     intercept-privilege: true
-    # 是否允许沙箱内命令访问网络。默认 false(deny-all 硬/软拒)。
-    #   true 时放行网络(wsl-bwrap 不加 --unshare-net;其余后端不剥代理 env)。
-    #   任务级更细粒度:保持 false,用户对某个任务选 /网络 斜杠命令即可单独放行该任务网络。
-    allow-network: false
+    # 是否允许沙箱内命令访问网络。默认 true(放行:含回环与出站;wsl-bwrap 不加 --unshare-net、
+    # wsl-direct 不 unshare、direct/mic 不剥代理 env)。
+    #   false 回落到 network-policy(deny-all 硬/软拒,audit-only 放行)。
+    #   任务级更细粒度:保持 true,用户对某个任务选 /禁用网络 斜杠命令即可单独关闭该任务网络。
+    allow-network: true
     # 是否启用 worker 级共享持久状态(装一次、处处可用)。默认 true。
     #   true 时 wsl-bwrap 把 <persistent-root> 下的 home/opt/usr-local/resolv.conf 读写挂入沙箱,
     #   并注入 <persistent-root>/env 持久环境变量——所有任务/工作区共享同一工具链(JDK/Maven 等),
