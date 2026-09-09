@@ -72,7 +72,9 @@ web / hub / worker / desktop 四个模块**互相解耦、物尽其用**,可按�
 - **desktop 也能多 hub** → 桌面版内置的 worker 是完整的 worker,在 `~/.everyagent/application-worker.yaml` 里配多个 `worker.hubs` 条目,即可把这份「桌面 worker」同时注册到本地 hub 和远端公网 hub——「开箱即用的单机」与「到哪都能遥控的远程」同步成立。
 
 > 提示:`worker.hubs` 为列表且**整表替换**——覆盖文件里想同时保留本地与远端,需把两个条目都写上。
-
+> 
+### 给AI的提示词非常少！没有那么多限制，一切交给AI！
+要想自己添加更多系统提示词，就在工作区根目录agents.md文档中编辑。
 ---
 
 ## 📸 界面预览
