@@ -15,6 +15,8 @@ export type ButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
   block?: boolean
   /** 危险态（红色）。 */
   danger?: boolean
+  /** 加载中态(禁用并显示转圈;透传给 antd Button)。 */
+  loading?: boolean
 }
 
 const VARIANT_TO_ANTD: Record<ButtonVariant, AntButtonProps['type']> = {

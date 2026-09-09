@@ -28,7 +28,12 @@ public final class TaskEntry {
     /** 内存持有,永不写入事件日志或频段。 */
     public final String apiKey;
     /** 任务挂靠的工作区根(worker 机器上的绝对路径,创建时定死)。 */
-    public final String workspaceRoot;
+    /**
+     * 工作区根(meta.workspace;挂靠关系,任务数据存系统目录不随之迁移)。
+     * 非 final:workspaces.resolveMissing 纠正路径时整体改挂到新目录(见
+     * {@link dev.everyagent.worker.task.TaskManager#redirectWorkspace})。
+     */
+    public String workspaceRoot;
     /** 主 agent 稳定 Id:任务生命周期内不变,即 &lt;mainAgentId&gt;.jsonl 文件名(Spring AI conversationId)。 */
     public final String mainAgentId;
     public final EventLog log;

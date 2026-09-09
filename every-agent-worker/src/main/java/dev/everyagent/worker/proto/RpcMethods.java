@@ -26,6 +26,8 @@ public final class RpcMethods {
     public static final String WORKSPACES_LIST = "workspaces.list";
     public static final String WORKSPACES_ADD = "workspaces.add";
     public static final String WORKSPACES_REMOVE = "workspaces.remove";
+    /** 启动自检缺失工作区落定:action=delete(删除注册+级联任务数据)/redirect(纠正到新目录)。 */
+    public static final String WORKSPACES_RESOLVE_MISSING = "workspaces.resolveMissing";
     public static final String FS_LIST = "fs.list";
     /** 定位文件/目录(懒加载):沿路径逐段 stat 返回节点链,旁支零查找。 */
     public static final String FS_REVEAL = "fs.reveal";

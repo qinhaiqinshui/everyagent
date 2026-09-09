@@ -20,6 +20,8 @@ export interface WorkspaceEntry {
   addedAt: number
   /** 来源 worker(多 worker 合并后区分归属)。 */
   workerId: string
+  /** worker 启动自检判定该目录已不存在(被移动/删除),待用户选择删除或纠正路径。 */
+  missing?: boolean
 }
 
 /** workspaces.list 应答(worker 端形状,workerId 由前端补)。 */
@@ -163,6 +165,27 @@ class WorkspaceRegistryService {
   /** 移除注册(不删磁盘文件);成功即应用并广播。 */
   async remove(workerId: string, root: string): Promise<WorkspaceRegistry> {
     const registry = await hubSession.rpcTo(workerId, 'workspaces.remove', { root }) as WorkspaceRegistry
+    this.mutation++
+    this.applyFor(workerId, registry)
+    return registry
+  }
+
+  /**
+   * 启动自检缺失工作区落定(worker 端 workspaces.resolveMissing):
+   * - action=delete:删除注册 + 级联删除挂靠任务数据(默认工作区不可删除);
+   * - action=redirect:纠正注册到用户移动后的新目录(newRoot 必填),并迁移任务归属。
+   */
+  async resolveMissing(
+    workerId: string,
+    root: string,
+    action: 'delete' | 'redirect',
+    newRoot?: string,
+  ): Promise<WorkspaceRegistry> {
+    const registry = await hubSession.rpcTo(workerId, 'workspaces.resolveMissing', {
+      root,
+      action,
+      ...(action === 'redirect' ? { newRoot } : {}),
+    }) as WorkspaceRegistry
     this.mutation++
     this.applyFor(workerId, registry)
     return registry

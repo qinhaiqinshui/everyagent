@@ -26,6 +26,8 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -34,6 +36,12 @@ import java.util.concurrent.ConcurrentHashMap;
  * 工作区只是任务属性(meta.workspace),不是存储维度——任务统一存系统目录
  * data/tasks/<taskId>/(工作区是用户数据目录,不存任务数据)。
  * 校验规则不变:绝对路径、不得是系统目录本身或其祖先、realpath 规范化。
+ *
+ * <p>启动自检:init 时校验 workspaces.json 已注册工作区,目录缺失(用户移动/删除工作区后
+ * 重启)的记录进 {@code missing}——注册表快照对该条目标记 missing,前端据此弹窗让用户
+ * 选择「删除工作区(连带任务数据)」或「纠正路径(选择移动后的新目录)」,经
+ * {@code workspaces.resolveMissing} RPC 落定(架构 §5.9)。未处理的缺失工作区禁止 resolve
+ * (任务/fs/git 无法在其上运行,避免沙箱挂载失败或新建空目录掩盖数据丢失)。
  */
 @Component
 public class WorkspaceManager {
@@ -63,6 +71,12 @@ public class WorkspaceManager {
     private final Map<String, Root> cache = new ConcurrentHashMap<>();
     /** 注册表:normalize 路径字符串 → 条目。 */
     private final Map<String, Registered> registry = new ConcurrentHashMap<>();
+    /**
+     * 启动自检发现的「目录缺失」工作区(root 规范键;架构 §5.9)。只含从 workspaces.json
+     * 载入且目录不存在的条目;init 刚注册的默认工作区(全新安装尚未创建)不在此列。
+     * 未落定前 resolve 拒绝该工作区;经 workspaces.resolveMissing 删除/纠正后移除。
+     */
+    private final Set<String> missing = ConcurrentHashMap.newKeySet();
 
     public WorkspaceManager(WorkerProperties props, RpcDispatcher dispatcher, HubPool pool,
             ObjectProvider<TaskManager> taskManagers) {
@@ -73,17 +87,22 @@ public class WorkspaceManager {
         dispatcher.register(RpcMethods.WORKSPACES_LIST, this::rpcList);
         dispatcher.register(RpcMethods.WORKSPACES_ADD, this::rpcAdd);
         dispatcher.register(RpcMethods.WORKSPACES_REMOVE, this::rpcRemove);
+        dispatcher.register(RpcMethods.WORKSPACES_RESOLVE_MISSING, this::rpcResolveMissing);
     }
 
     @PostConstruct
     synchronized void init() throws IOException {
         systemDir = props.resolveHomeDir();
-        defaultRoot = props.resolveInitialWorkspace();
+        defaultRoot = readDefaultOverride().orElseGet(props::resolveInitialWorkspace);
         Files.createDirectories(systemDir);
         Files.createDirectories(props.resolveDataDir());
         loadRegistry();
+        // 自检只针对「本次从 workspaces.json 载入」的条目;随后再注册默认工作区,
+        // 保证全新安装(默认目录尚未创建)不会被误判为「移动后丢失」。
+        validateRegistry();
         register(defaultRoot); // 默认工作区始终在册(注册即广播;此刻 hub 未连则安静跳过)
-        log.info("工作区注册表 {} 项(默认 {}),系统目录 {}", registry.size(), defaultRoot, systemDir);
+        log.info("工作区注册表 {} 项(默认 {}),系统目录 {},缺失待处理 {} 项",
+                registry.size(), defaultRoot, systemDir, missing.size());
     }
 
     /**
@@ -99,6 +118,10 @@ public class WorkspaceManager {
             throw new BadParamsException("工作区必须是 worker 所在机器的绝对路径: " + raw);
         }
         Path norm = in.toAbsolutePath().normalize();
+        if (missing.contains(norm.toString())) {
+            throw new BadParamsException(
+                    "工作区目录不存在(可能已被移动或删除),请先选择「纠正路径」或「删除工作区」: " + raw);
+        }
         Root cached = cache.get(norm.toString());
         if (cached != null) {
             return cached;
@@ -156,12 +179,77 @@ public class WorkspaceManager {
         if (registry.remove(key) == null) {
             throw new BadParamsException("工作区未注册: " + key);
         }
+        missing.remove(key);
+        cache.remove(key);
         persistRegistry();
         broadcastRegistry();
         // 级联删除该工作区下的任务数据(任务落盘 data/tasks/<taskId>/,与用户目录无关)。
         TaskManager taskManager = taskManagers.getIfAvailable();
         if (taskManager != null) {
             taskManager.deleteByWorkspace(key);
+        }
+        ctx.ok(snapshot());
+    }
+
+    /**
+     * 启动自检发现的缺失工作区落定(架构 §5.9):前端弹窗后回传用户选择。
+     * - action=delete:移除注册并级联删除挂靠该工作区的任务数据;默认工作区不可删除。
+     * - action=redirect:把注册表条目纠正到用户选定的新目录(newRoot 必填,须真实存在),
+     *   并迁移挂靠该工作区的任务 meta.workspace;若为默认工作区,同时持久化新的默认根,
+     *   避免下次重启又按配置把旧(已失效)路径重新注册回来。
+     */
+    private synchronized void rpcResolveMissing(RpcContext ctx) throws IOException {
+        String raw = ctx.strParam("root");
+        String key = Path.of(raw).toAbsolutePath().normalize().toString();
+        if (!registry.containsKey(key)) {
+            throw new BadParamsException("工作区未注册: " + key);
+        }
+        String action = ctx.strParam("action");
+        switch (action) {
+            case "delete" -> resolveMissingDelete(ctx, key);
+            case "redirect" -> resolveMissingRedirect(ctx, key);
+            default -> throw new BadParamsException("action 仅支持 delete/redirect: " + action);
+        }
+    }
+
+    private void resolveMissingDelete(RpcContext ctx, String key) throws IOException {
+        if (key.equals(defaultRoot.toString())) {
+            throw new BadParamsException("默认工作区不可删除,请选择「纠正路径」: " + key);
+        }
+        registry.remove(key);
+        missing.remove(key);
+        cache.remove(key);
+        persistRegistry();
+        broadcastRegistry();
+        TaskManager taskManager = taskManagers.getIfAvailable();
+        if (taskManager != null) {
+            taskManager.deleteByWorkspace(key);
+        }
+        ctx.ok(snapshot());
+    }
+
+    private void resolveMissingRedirect(RpcContext ctx, String key) throws IOException {
+        String newRaw = ctx.strParam("newRoot");
+        Path newPath = Path.of(newRaw).toAbsolutePath().normalize();
+        if (!Files.isDirectory(newPath)) {
+            throw new BadParamsException("新目录不存在或不是目录: " + newRaw);
+        }
+        Root newRoot = prepare(newPath); // 校验不越界(含系统目录即拒)
+        Registered existing = registry.remove(key);
+        missing.remove(key);
+        cache.remove(key);
+        String newKey = newRoot.path().toString();
+        long addedAt = existing == null ? System.currentTimeMillis() : existing.addedAt();
+        registry.put(newKey, new Registered(newKey, addedAt));
+        if (key.equals(defaultRoot.toString())) {
+            writeDefaultOverride(newKey);
+            defaultRoot = newRoot.path();
+        }
+        persistRegistry();
+        broadcastRegistry();
+        TaskManager taskManager = taskManagers.getIfAvailable();
+        if (taskManager != null) {
+            taskManager.redirectWorkspace(key, newKey);
         }
         ctx.ok(snapshot());
     }
@@ -195,7 +283,14 @@ public class WorkspaceManager {
     private ObjectNode snapshot() {
         ArrayNode arr = Json.arr();
         for (Registered r : list()) {
-            arr.add(Json.toJson(r));
+            String key = Path.of(r.root()).toAbsolutePath().normalize().toString();
+            ObjectNode o = Json.obj()
+                    .put("root", r.root())
+                    .put("addedAt", r.addedAt());
+            if (missing.contains(key)) {
+                o.put("missing", true);
+            }
+            arr.add(o);
         }
         return Json.obj().put("defaultRoot", defaultRoot.toString()).set("workspaces", arr);
     }
@@ -229,6 +324,45 @@ public class WorkspaceManager {
         } catch (IOException | RuntimeException e) {
             log.warn("workspaces.json 读取失败,忽略注册表", e);
         }
+    }
+
+    /** 启动自检:仅校验本次从 workspaces.json 载入的条目,目录缺失即标记待处理。 */
+    private void validateRegistry() {
+        for (Registered r : registry.values()) {
+            Path p = Path.of(r.root()).toAbsolutePath().normalize();
+            if (!Files.isDirectory(p)) {
+                missing.add(p.toString());
+                log.warn("工作区目录不存在(可能已被移动/删除),等待用户处理: {}", r.root());
+            }
+        }
+    }
+
+    /** 默认工作区覆盖(纠正路径后持久化,避免下次重启按配置注册回旧路径)。 */
+    private Path defaultOverrideFile() {
+        return props.resolveDataDir().resolve("workspace-default.json");
+    }
+
+    private Optional<Path> readDefaultOverride() {
+        Path f = defaultOverrideFile();
+        if (!Files.isRegularFile(f)) {
+            return Optional.empty();
+        }
+        try {
+            String root = Json.parse(Files.readString(f)).path("root").asString("");
+            if (!root.isEmpty()) {
+                return Optional.of(Path.of(root).toAbsolutePath().normalize());
+            }
+        } catch (IOException | RuntimeException e) {
+            log.warn("默认工作区覆盖读取失败,回退配置", e);
+        }
+        return Optional.empty();
+    }
+
+    private void writeDefaultOverride(String root) throws IOException {
+        Path f = defaultOverrideFile();
+        Path tmp = f.resolveSibling("workspace-default.json.tmp");
+        Files.writeString(tmp, Json.write(Json.obj().put("root", root)));
+        AtomicFiles.replace(tmp, f);
     }
 
     /** 原子写注册表(临时文件 + ATOMIC_MOVE)。 */
