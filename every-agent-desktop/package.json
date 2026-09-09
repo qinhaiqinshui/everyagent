@@ -1,6 +1,6 @@
 {
   "name": "every-agent-desktop",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Every Agent 桌面版:Electron 承载 frontend + hub + worker 一体运行",
   "main": "dist/main/index.js",

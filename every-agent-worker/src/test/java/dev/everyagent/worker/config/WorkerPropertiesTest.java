@@ -83,20 +83,19 @@ class WorkerPropertiesTest {
     }
 
     @Test
-    void sandboxDefaultsDenyNetworkAndEscalation() {
+    void sandboxDefaultsAllowNetworkAndDenyEscalation() {
         WorkerProperties props = new WorkerProperties();
         WorkerProperties.Sandbox s = props.getSandbox();
-        // 默认:拒绝网络、拒绝提权
-        assertFalse(s.isAllowNetwork());
+        // 默认:放行网络(含回环)、拒绝提权
+        assertTrue(s.isAllowNetwork());
         assertFalse(s.isAllowPrivilegeEscalation());
         // 默认:seccomp 内核级提权拦截开启(默认要开启)
         assertTrue(s.isInterceptPrivilege());
-        // 默认 networkPolicy=deny-all → networkDenied()=true
-        assertTrue(s.networkDenied());
-        // 显式放行网络 → 判定放开
-        s.setAllowNetwork(true);
+        // 默认 allowNetwork=true → networkDenied()=false
         assertFalse(s.networkDenied());
+        // 显式关闭网络 → 回落 networkPolicy(deny-all 拒网)
         s.setAllowNetwork(false);
+        assertTrue(s.networkDenied());
         // networkPolicy 非 deny-all(audit-only)且未显式放行 → 判定放开
         s.setNetworkPolicy("audit-only");
         assertFalse(s.networkDenied());

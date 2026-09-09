@@ -618,9 +618,9 @@ public class WorkerProperties {
          */
         private int activeProcessLimit = 32;
         /**
-         * 网络出口策略:
+         * 网络出口策略(仅在 {@code allowNetwork=false} 时生效):
          * <ul>
-         *   <li>{@code deny-all} - 子进程不继承任何代理,且强制清空网络相关 env(默认,最严);</li>
+         *   <li>{@code deny-all} - 子进程不继承任何代理,且强制清空网络相关 env(最严);</li>
          *   <li>{@code audit-only} - 允许网络但子进程 env 注入审计代理(代理层实现 allowlist)。</li>
          * </ul>
          * 注意:Job Object 管不了网络,deny-all 靠剥离代理 env + 父进程不提供代理实现;
@@ -648,11 +648,12 @@ public class WorkerProperties {
          */
         private boolean interceptPrivilege = true;
         /**
-         * 是否允许沙箱内命令访问网络。默认 false = 禁止(维持 deny-all 语义)。
-         * true 强制放行(wsl-bwrap 不加 --unshare-net;direct/mic 不剥代理 env);
+         * 是否允许沙箱内命令访问网络。默认 true = 放行(含回环 127.0.0.1 与出站;
+         * wsl-bwrap 不加 {@code --unshare-net} / wsl-direct 不 unshare / direct/mic 不剥代理 env)。
          * false 回落到 networkPolicy(deny-all 硬/软拒,audit-only 放行)。
+         * 任务级更细粒度:保持 true,用户对某个任务选 /禁用网络 斜杠命令即可单独关闭该任务网络。
          */
-        private boolean allowNetwork = false;
+        private boolean allowNetwork = true;
         /**
          * worker 级共享持久状态(装一次、处处可用):true 时 wsl-bwrap 后端把持久根下的
          * home/opt/usr-local/resolv.conf 以读写绑定挂入沙箱,并注入持久 env 文件——
@@ -866,7 +867,7 @@ public class WorkerProperties {
         }
 
         /**
-         * 统一网络判定:allowNetwork=true 显式放行;否则回落 networkPolicy,
+         * 统一网络判定:allowNetwork(默认 true = 放行)显式放行;否则回落 networkPolicy,
          * 仅 deny-all 视为拒网(direct/mic 剥代理 env,wsl-bwrap 加 --unshare-net)。
          */
         public boolean networkDenied() {

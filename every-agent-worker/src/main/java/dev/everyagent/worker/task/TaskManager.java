@@ -1229,6 +1229,46 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
         return deleted;
     }
 
+    /**
+     * workspaces.resolveMissing(纠正路径)迁移:把挂靠旧工作区根的任务 meta.workspace
+     * 改到新根,保证任务仍归属移动后的工作区、后续运行沙箱挂载新目录。运行中任务直接改
+     * 内存字段并回写 meta;磁盘终态任务原地改 meta.json 后替换内存索引镜像。返回迁移数。
+     */
+    public int redirectWorkspace(String oldRoot, String newRoot) {
+        int moved = 0;
+        for (TaskStore.StoredTask st : store.scan()) {
+            if (!oldRoot.equals(st.summary().path("workspace").asString(""))) {
+                continue;
+            }
+            ObjectNode copy = st.summary().deepCopy();
+            copy.put("workspace", newRoot);
+            try {
+                TaskStore.writeMeta(st.dir(), copy);
+            } catch (java.io.IOException e) {
+                log.warn("任务 workspace 迁移写盘失败 task={}", st.taskId(), e);
+                continue;
+            }
+            diskTasks.put(st.taskId(), new TaskStore.StoredTask(st.taskId(), st.dir(), copy));
+            moved++;
+        }
+        for (TaskEntry t : tasks.values()) {
+            if (!oldRoot.equals(t.workspaceRoot)) {
+                continue;
+            }
+            t.workspaceRoot = newRoot;
+            try {
+                store.updateMeta(t.taskId); // 运行中任务:meta 供应商读最新 workspaceRoot
+            } catch (RuntimeException e) {
+                log.debug("运行中任务 workspace 迁移写盘失败 task={}", t.taskId, e);
+            }
+            moved++;
+        }
+        if (moved > 0) {
+            log.info("workspaces.resolveMissing 迁移 {} 个任务({} -> {})", moved, oldRoot, newRoot);
+        }
+        return moved;
+    }
+
     private void rpcConfigGet(RpcContext ctx) {
         ArrayNode arr = Json.arr();
         for (ModelConfig c : configs.list()) {
@@ -1318,7 +1358,7 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
         t.createdAt(meta.path("createdAt").asLong(0));
         t.aiReview = meta.path("aiReview").asBoolean(false);      // AI 审议任务级开关(plan-unattended-ai-auth 步骤3)
         t.unattended = meta.path("unattended").asBoolean(false);  // 无人值守任务级开关(plan-unattended-ai-auth 步骤3)
-        t.networkAllowed = meta.path("networkAllowed").asBoolean(false); // 网络开关任务级(/网络)
+        t.networkBlocked = meta.path("networkBlocked").asBoolean(false); // 禁网开关任务级(/禁用网络)
         t.seedUsageMeta(meta.path("usage")); // 恢复最近一轮上下文用量(续跑后列表/电池数据不丢)
         restoreAgentLedger(t, meta); // 恢复子 agent 台账(冷启动后 list_agents/wait_agents 正常)
         // slash 任务级 token 回读(仅 slash 层存储、业务方不读;随 meta.json 落盘,冷启动续跑恢复)。

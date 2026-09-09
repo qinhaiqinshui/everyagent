@@ -335,7 +335,7 @@ public final class OsSandbox {
     /**
      * 在沙箱中执行命令(指定 shell + 附加授权根 + 网络/提权许可)。
      *
-     * @param allowNetwork   是否放行网络(任务级 /网络 或 worker 默认放行)
+     * @param allowNetwork   是否放行网络(任务级 /禁用网络 未开启 且 worker 默认放行)
      * @param allowPrivilege 是否允许以提权方式运行(命令含 sudo 等且用户已授权,或 worker 默认放行)
      */
     public ExecResult spawnSandboxed(String command, Path cwd, Map<String, String> extraEnv,

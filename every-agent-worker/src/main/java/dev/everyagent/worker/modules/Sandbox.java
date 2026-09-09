@@ -89,6 +89,33 @@ public final class Sandbox {
         return target;
     }
 
+    /**
+     * 解析「可能存在也可能不存在」的路径(git.discard 恢复已删除/丢失文件等场景):
+     * normalize + 词法前缀校验;路径存在则 realpath 防符号链接逃逸,不存在则对最近的
+     * 已存在祖先做 realpath 校验(父目录为符号链接指向工作区外同拒)。不创建任何目录,
+     * 与 {@link #resolveExisting} 的区别仅在目标文件缺失不视为错误。
+     */
+    public Path resolveLoose(String rel) throws IOException {
+        Path norm = root.path().resolve(rel).normalize();
+        if (!allowed(norm)) {
+            throw new SandboxViolationException("路径越界: " + rel);
+        }
+        Path real;
+        if (Files.exists(norm)) {
+            real = norm.toRealPath();
+        } else {
+            Path ancestor = norm.getParent();
+            while (ancestor != null && !Files.exists(ancestor)) {
+                ancestor = ancestor.getParent();
+            }
+            real = ancestor == null ? null : ancestor.toRealPath();
+        }
+        if (real != null && !allowedReal(real)) {
+            throw new SandboxViolationException("符号链接逃逸: " + rel);
+        }
+        return norm;
+    }
+
     /** 破坏性操作(delete/move 源)禁止作用于工作区根本身或任一授权根本身。 */
     public void requireNotRoot(Path p) {
         if (p.equals(root.path()) || p.equals(root.realPath())) {

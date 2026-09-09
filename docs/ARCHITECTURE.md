@@ -220,6 +220,7 @@ worker 端 `RpcDispatcher` 注册方法;应答回**请求来源连接**的 `evt`
 | `task.queueRemove` / `task.queueMove` | 删除/重排某条队列输入 |
 | `config.get` | 模型配置只读(Spring 配置承载,见 §7.17) |
 | `workspaces.list` / `workspaces.add` / `workspaces.remove` | 工作区注册表 CRUD(多工作区并行) |
+| `workspaces.resolveMissing` | 启动自检缺失工作区落定:action=delete(删除注册并级联任务数据)/redirect(纠正到新目录并迁移任务归属) |
 | `fs.list` / `fs.reveal` / `fs.read` / `fs.write` / `fs.mkdir` / `fs.move` / `fs.delete` / `fs.browse` | 工作区文件操作,**必带 workspace 参数**,沙箱限定;文件树懒加载；`fs.browse` 列盘符/逐层浏览目录 |
 | `git.status` / `git.log` / `git.diff` / `git.commit` / `git.pull` / `git.push` / `git.discard` / `git.init` / `git.clone` / `git.remote.add` / `git.remote.list` | 工作区 git 快操作,必带 workspace;由 `NativeGit` 调宿主原生 git argv 直传执行(§7.12) |
 | 大型迁移(批量 checkout / 大仓库迁移) | 建为 Task,进度走任务流 |
@@ -443,14 +444,14 @@ ask 管道承载第二类阻塞请求:**危险操作授权**。`PermissionGate` 
 
 | 后端 | 语义 | 何时启用 |
 |---|---|---|
-| **wsl-direct**(Windows 默认) | 命令在托管的 WSL2 发行版(`eagent`,可丢弃系统)内以 root 运行;宿主盘隔离 = 关闭 automount + 每命令手动挂载工作区 + seccomp deny-mount 过滤器;网络按任务级开关 unshare -n | `auto`(Windows 默认)/ 显式 `wsl-direct`;发行版缺失自动导入(rootfs 随包,sha256 校验) |
-| **wsl-bwrap** | 命令经 bwrap 挂载命名空间运行:授权根 = `--bind` 白名单(授权=绑定,撤销=下次不绑,宿主零残留),网络 `--unshare-net` 硬拒,工作区外宿主盘**不可见**(读白名单) | 显式 `wsl-bwrap`(更强隔离的用户知情选择) |
+| **wsl-direct**(Windows 默认) | 命令在托管的 WSL2 发行版(`eagent`,可丢弃系统)内以 root 运行;宿主盘隔离 = 关闭 automount + 每命令手动挂载工作区 + seccomp deny-mount 过滤器;网络默认放行,任务级 `/禁用网络` 时 unshare -n | `auto`(Windows 默认)/ 显式 `wsl-direct`;发行版缺失自动导入(rootfs 随包,sha256 校验) |
+| **wsl-bwrap** | 命令经 bwrap 挂载命名空间运行:授权根 = `--bind` 白名单(授权=绑定,撤销=下次不绑,宿主零残留),网络默认放行,任务级 `/禁用网络` 时 `--unshare-net` 硬拒(新 netns 仅 down 的 lo,连回环也不通),工作区外宿主盘**不可见**(读白名单) | 显式 `wsl-bwrap`(更强隔离的用户知情选择) |
 | **windows-mic** | Restricted Token + Low IL + Job Object + 目录 Low 标注 + DACL 可写授权(Windows 原生路径) | `windows-mic` / WSL 探测失败回退 |
 | **none/direct** | 直接 spawn(仅超时/输出护栏/网络代理 env 剥离) | 显式 `none` / 非 Windows |
 
 - `worker.sandbox.type`: `auto`(默认)| `wsl-direct` | `wsl-bwrap` | `windows-mic` | `none`(别名 acl/wsl/direct 兼容)。
 - **Windows Low IL 可写性契约**(对 windows-mic 后端):工作区树 + EXEC 授权目录必须由 worker 在命令执行前配置为沙箱可写——① 标注 Low 完整性(SACL `S:(ML;OICI;NW;;;LW)`),解决 MIC 的 NO_WRITE_UP;② `WindowsAcl` 给工作区根追加可继承 Allow ACE(本地 Users `(OI)(CI)` 修改+删除权限),解决 ACL 残缺。工作区外保持默认 Medium → 沙箱内写被 OS 拒,构成弹窗授权之外的 OS 级兜底。
-- **网络策略**:默认 deny(命令无网络);wsl-direct 未开网络开关则不 unshare(可访问网络);wsl-bwrap deny = `--unshare-net`。
+- **网络策略**:默认放行(`worker.sandbox.allow-network=true`,命令可访问网络,含回环 127.0.0.1);任务级 `/禁用网络` 或全局 `allow-network=false` 才断网——wsl-direct = `unshare -n`(新建无 eth0 的 netns)、wsl-bwrap = `--unshare-net`(新 netns 仅 down 的 lo,连回环也不通)、direct/mic = 剥代理 env(advisory)。
 - **Windows 沙箱技术路线说明**:曾评估 AppContainer(Low IL 标注的继任者),因"capability 模型不适合开放式开发工作流+普通 ACE 全失效的读模型破坏面太大"(OpenAI 对 Windows 沙箱的弃用理由同源)而放弃,整体迁往 WSL2 生态(Claude Code 对 Windows 用户的官方推荐路径);windows-mic 保留为回退后端。
 
 ### 7.11 提权拦截(seccomp,LINUX 侧)
@@ -529,6 +530,7 @@ ask 管道承载第二类阻塞请求:**危险操作授权**。`PermissionGate` 
 ```
 data/                                # <home>/data(EVERYAGENT_HOME 可覆盖;docker 挂卷)
 ├─ workspaces.json                   # 工作区注册表 {root, addedAt}
+├─ workspace-default.json            # 默认工作区纠正后的根覆盖(缺失工作区 redirect 时写入)
 └─ tasks/<taskId>/                   # 任务目录(不再按用户/ownerKey 分目录);永久保留
    ├─ meta.json                      # TaskSummary(含最近一轮上下文用量、agents 子 agent 台账、任务级开关)+ mainAgentId
    ├─ grants.json                    # task 档授权 {taskGrants, extraRoots}(§7.8,首次授权时原子写)
@@ -640,7 +642,9 @@ Input:  queued → consumed | discarded(任务取消)
 
 **程序附属文件**:rg 二进制、eagent-run.py、WSL 托管镜像统一放**程序根 `<程序根>/runtime/`**(程序根 = JVM 工作目录 user.dir;打包态 = resources 目录,IDE 态 = 仓库根),随安装包分发、运行时只读引用、以字面相对路径 `./runtime` 解析;不打进 jar、不写入系统目录。`worker.program-dir` 配置用于打包态显式指定。
 
-**多工作区并行**:`data/workspaces.json` 注册表 `{root, addedAt}`;`fs.*`/`git.*`/`task.run`(新建)每次调用**必带 `workspace` 参数**(绝对路径),沙箱根在调用时按该参数解析;默认工作区始终在册、不可移除;注册表变化广播 `workspaces.changed`;写操作广播 `fs.changed{workspace,path,kind}`,前端按工作区分组刷新。
+**多工作区并行**:`data/workspaces.json` 注册表 `{root, addedAt}`;`fs.*`/`git.*`/`task.run`(新建)每次调用**必带 `workspace` 参数**(绝对路径),沙箱根在调用时按该参数解析;默认工作区始终在册、不可移除;注册表变化广播 `workspaces.changed`(快照每条约目含缺失标记 `missing`);写操作广播 `fs.changed{workspace,path,kind}`,前端按工作区分组刷新。
+
+**启动自检(工作区被移动/删除)**:worker 启动时校验 `workspaces.json` 载入的已注册目录,缺失者(用户移动/删除目录后重启)在注册表快照标记 `missing`并广播,前端弹窗要求二选一——`workspaces.resolveMissing {action:"delete"}` 删除注册并级联删除挂靠任务数据,或 `{action:"redirect",newRoot}` 纠正到移动后的新目录并把挂靠任务的 `meta.workspace` 一并迁移;默认工作区不可删除、只可纠正(纠正会持久化新的默认根覆盖,重启不再按旧配置恢复)。未落定的缺失工作区 `resolve` 拒绝,避免沙箱挂载失败或静默新建空目录掩盖数据丢失。
 
 **skill 只读例外**:系统目录 `skills/` 是 AI 文件工具对系统路径的**唯一只读免授权**例外——`read_file` 经权限责任链节点 `SkillsReadAllowCheck` 直接放行(realpath 前缀判定);**任何写操作不在此放行,仍走授权决议链**;其余系统路径(data/、runtime/ 等)与普通工作区外目录同权,一律走授权决议(弹窗/AI 审议)。
 

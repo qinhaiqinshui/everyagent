@@ -36,6 +36,7 @@ import UserInteractionHost from './UserInteractionHost'
 import PendingUserInteractionIndicator from './PendingUserInteractionIndicator'
 import BrowserNotificationHost from './BrowserNotificationHost'
 import BrowserNotificationGuide from './BrowserNotificationGuide'
+import MissingWorkspaceRepairHost from './MissingWorkspaceRepairHost'
 import { WorkspaceShellProvider } from './WorkspaceShellContext'
 import { domainEventBus, DOMAIN_EVENTS } from '@/events/eventBus'
 import { AppUiProvider, useAppUi } from './AppUiContext'
@@ -762,10 +763,17 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
     if (sidebarOpen) {
       nextIds.push(activeSidebarPanelId)
     }
+    // 三个面板图标(任务/文件/源代码管理)的选中态必须互斥,只跟随当前展开的面板。
+    // 激活标签映射的活动项仅对非面板项(如设置页)生效,避免任务聊天页激活时
+    // 把「任务」面板图标也点亮,破坏三个面板图标的互斥。
     const workspaceActivityItemId = activeWorkspaceTab
       ? getTabDefinition(activeWorkspaceTab)?.getSidebarActivityId?.(activeWorkspaceTab) ?? null
       : null
-    if (workspaceActivityItemId && !nextIds.includes(workspaceActivityItemId)) {
+    if (
+      workspaceActivityItemId
+      && !SIDEBAR_PANEL_ACTIVITY_IDS.has(workspaceActivityItemId)
+      && !nextIds.includes(workspaceActivityItemId)
+    ) {
       nextIds.push(workspaceActivityItemId)
     }
     return nextIds
@@ -915,6 +923,7 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
         <PendingUserInteractionIndicator />
         <BrowserNotificationHost />
         <BrowserNotificationGuide />
+        <MissingWorkspaceRepairHost />
           </div>
         </WorkspaceShellProvider>
       </AntApp>
@@ -930,6 +939,9 @@ function renderWorkspaceTabContent(
   if (!def) return null
   return def.renderTab(tab, ctx)
 }
+
+/** 侧边栏三个面板图标(id)的选中态必须互斥,只由当前展开的面板决定。 */
+const SIDEBAR_PANEL_ACTIVITY_IDS: ReadonlySet<string> = new Set(['tasks', 'files', 'git'])
 
 function buildSidebarActivityItems(openTopLevelPageIds: TopLevelPageId[]) {
   return [
