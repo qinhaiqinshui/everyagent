@@ -155,7 +155,7 @@ public class GitService {
             addArgs.add(".");
         } else {
             for (String p : paths) {
-                sb.resolveExisting(p); // 越界/不存在路径直接拒
+                sb.resolveLoose(p); // 已删除(缺失)文件也允许提交删除,仅校验沙箱不越界
             }
             addArgs.addAll(paths);
         }
@@ -254,7 +254,7 @@ public class GitService {
         ArrayNode discarded = Json.arr();
         ArrayNode skipped = Json.arr();
         for (String p : paths) {
-            sb.resolveExisting(p); // 越界/不存在路径直接拒
+            sb.resolveLoose(p); // 已删除/丢失文件需能被 restore 恢复,仅校验沙箱不越界
             if (!trackedChanged.contains(normalizeRel(p))) {
                 skipped.add(p);
                 continue;

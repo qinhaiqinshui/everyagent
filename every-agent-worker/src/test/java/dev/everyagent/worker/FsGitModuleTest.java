@@ -265,6 +265,26 @@ class FsGitModuleTest {
         assertTrue(clone.contains("rpc.err") && clone.contains("BAD_PARAMS"), clone);
     }
 
+    @Test
+    @Order(23)
+    void gitDiscardRestoresDeletedFile() {
+        // 回归:放弃更改选中「已删除/已丢失」文件时,文件已不在磁盘,原 resolveExisting
+        // 会误报 NOT_FOUND;应允许该路径并交由 git restore 从 HEAD 恢复(含中文路径)。
+        String path = "novels/三国/修炼体系.md";
+        String b64 = Base64.getEncoder().encodeToString("修炼内容".getBytes(StandardCharsets.UTF_8));
+        assertTrue(rpc("fs.write", p("{\"path\":\"" + path + "\",\"contentBase64\":\"" + b64 + "\"}"))
+                .contains("rpc.ok"), "先创建待跟踪文件");
+        assertTrue(rpc("git.commit", p("{\"message\":\"提交修炼体系\"}")).contains("rpc.ok"), "先提交出 HEAD 版本");
+        assertTrue(rpc("fs.delete", p("{\"path\":\"" + path + "\"}")).contains("rpc.ok"), "删除工作区文件");
+        assertTrue(rpc("git.status", p("{}")).contains(path), "状态应标记该文件已删除");
+
+        String d = rpc("git.discard", p("{\"paths\":[\"" + path + "\"]}"));
+        assertTrue(d.contains("rpc.ok"), d);
+        JsonNode res = Json.parse(d).path("payload").path("result");
+        assertTrue(res.path("discarded").toString().contains(path), "已删除文件应被恢复而非 NOT_FOUND: " + d);
+        assertTrue(rpc("fs.read", p("{\"path\":\"" + path + "\"}")).contains("rpc.ok"), "放弃更改后文件应重新存在");
+    }
+
     // ---- workspace(架构 §5.9:多工作区注册表,fs/git/task.run 每调用显式指定)----
 
     @Test
