@@ -613,6 +613,7 @@ const InlineComposer = React.forwardRef<InlineComposerHandle, InlineComposerProp
       aria-multiline="true"
       aria-label={placeholder}
       data-placeholder={placeholder ?? ''}
+      enterKeyHint="enter"
       onInput={handleInput}
       onPaste={handlePaste}
       onKeyUp={reportCaret}

@@ -565,6 +565,13 @@ export default function TaskComposerSurface({
       if (slashOpen) {
         setSlashOpen(false)
       }
+      if (isMobile) {
+        // 移动端：软键盘的回车/换行不触发提交，改为插入换行符；
+        // 提交统一由底部发送按钮完成，避免误触回车直接发消息。
+        event.preventDefault()
+        editorRef.current?.insertText('\n')
+        return
+      }
       if (submitDisabled) {
         return
       }
@@ -577,6 +584,7 @@ export default function TaskComposerSurface({
     slashOpen,
     slashOrdered,
     slashActiveIndex,
+    isMobile,
     submitDisabled,
     applyAtActiveSelection,
     applySlashSelection,
