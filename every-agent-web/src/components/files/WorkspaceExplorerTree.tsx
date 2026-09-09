@@ -1,11 +1,11 @@
 import React from 'react'
-import { Tree, Tooltip, theme } from 'antd'
-import type { TreeDataNode } from 'antd'
+import { Dropdown, Tree, Tooltip, theme } from 'antd'
+import type { MenuProps, TreeDataNode } from 'antd'
 import { FolderIcon } from '../shared/AppGlyphs'
-import ListRowActions, { type ListRowActionItem, type ListRowActionsHandle } from '../shared/ui/ListRowActions'
+import type { ListRowActionItem } from '../shared/ui/ListRowActions'
 import { Checkbox } from '../shared/ui'
 import { useResponsiveViewport } from '@/hooks/useResponsiveViewport'
-import { useLongPress, type LongPressHandlers } from '@/hooks/useLongPress'
+import { useLongPress } from '@/hooks/useLongPress'
 import type {
   WorkspaceExplorerContextTarget,
   WorkspaceExplorerNode,
@@ -59,8 +59,9 @@ export default function WorkspaceExplorerTree({
   const treeRef = React.useRef<{
     scrollTo: (opts: { key: React.Key; offset?: number }) => void
   } | null>(null)
-  const actionsRef = React.useRef<ListRowActionsHandle | null>(null)
   const containerRef = React.useRef<HTMLDivElement | null>(null)
+  // 当前打开右键菜单的行路径：同一时刻只允许一个右键菜单打开(原生右键习惯)，由各 TreeNodeRow 受控。
+  const [openMenuPath, setOpenMenuPath] = React.useState<string | null>(null)
 
   const expandedKeys = React.useMemo(() => Array.from(expandedPaths), [expandedPaths])
 
@@ -89,14 +90,6 @@ export default function WorkspaceExplorerTree({
     return () => window.clearTimeout(id)
   }, [locatePath, locateRequestedAt, onLocateApplied])
 
-  const { wasLongPressed, ...longPressHandlers } = useLongPress({
-    isMobile,
-    delay: 500,
-    onLongPress: (el, point) => {
-      actionsRef.current?.openMenu(el, point)
-    },
-  })
-
   if (nodes.length === 0) {
     return (
       <div style={{ padding: token.paddingSM, color: token.colorTextDisabled, fontSize: token.fontSizeSM }}>
@@ -107,10 +100,8 @@ export default function WorkspaceExplorerTree({
 
   const titleRender = (dataNode: TreeDataNode) => {
     const node = (dataNode as TreeDataNode & { dataRef: WorkspaceExplorerNode }).dataRef
-    const isDirectory = node.type === 'directory'
     const isMultiSelect = multiSelectMode && !!onToggleSelectedPath
     const isSelected = isMultiSelect && !!selectedPaths?.has(node.path)
-    const metaText = metaMode === 'size' ? formatBytes(node.size) : formatMtime(node.mtimeMs)
     const target: WorkspaceExplorerContextTarget = {
       workspaceRoot,
       path: node.path,
@@ -119,7 +110,7 @@ export default function WorkspaceExplorerTree({
       openTarget: node.openTarget,
     }
     const customItems = getActionItems?.(target) ?? []
-    const moreActionItems: ListRowActionItem[] = onRequestDelete
+    const allItems: ListRowActionItem[] = onRequestDelete
       ? [
           ...customItems,
           {
@@ -130,99 +121,32 @@ export default function WorkspaceExplorerTree({
           },
         ]
       : customItems
+    // 树行右键菜单统一走 antd Dropdown(trigger=contextMenu)：把自定义动作项映射成 antd Menu items，
+    // 由 antd 负责弹层定位/关闭/键盘等，业务动作仍通过原 onSelect 回调触发(目标即当前行 target)。
+    const menuItems: MenuProps['items'] = allItems.map((item) => ({
+      key: item.key,
+      label: item.label,
+      icon: item.icon,
+      danger: item.danger,
+      disabled: item.disabled,
+      onClick: () => item.onSelect?.(),
+    }))
 
     return (
-      <div
-        data-key={node.path}
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: token.paddingXS,
-          width: '100%',
-          cursor: 'default',
-          // 名称文字允许鼠标选中复制(文件/文件夹名)
-          userSelect: 'text',
-          ...(isSelected ? {
-            background: 'color-mix(in srgb, var(--accent-blue-dim) 55%, transparent)',
-            borderRadius: 'var(--radius-sm)',
-          } : null),
-        }}
-        onClick={(e) => {
-          if (wasLongPressed()) return
-          // 不阻止冒泡:让 antd 的 onSelect 正常触发(单击选中高亮)。
-          // 目录展开/收起改由双击(onDoubleClick)或点击 FolderIcon(onExpand)触发。
-        }}
-        onDoubleClick={(e) => {
-          e.stopPropagation()
-          // 双击目录:展开/收起(单击只选中,双击 toggle,与文件系统习惯一致)
-          if (isDirectory) {
-            onToggleDirectory(node.path)
-            return
-          }
-          // 双击文件:打开编辑
-          if (!node.openTarget) return
-          onOpenFile(node.openTarget)
-        }}
-        onContextMenu={(e) => {
-          e.preventDefault()
-          actionsRef.current?.openMenu(e.currentTarget, { x: e.clientX, y: e.clientY })
-        }}
-        onPointerDown={longPressHandlers.onPointerDown}
-        onPointerMove={longPressHandlers.onPointerMove}
-        onPointerUp={longPressHandlers.onPointerUp}
-        onPointerLeave={longPressHandlers.onPointerLeave}
-      >
-        {isMultiSelect ? (
-          <span
-            style={{ flexShrink: 0, display: 'inline-flex', alignItems: 'center' }}
-            onClick={(event) => event.stopPropagation()}
-          >
-            <Checkbox
-              checked={isSelected}
-              onChange={() => onToggleSelectedPath?.(node.path)}
-              aria-label={`选择 ${node.name}`}
-            />
-          </span>
-        ) : null}
-        <span
-          style={{
-            flex: 1,
-            minWidth: 0,
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-          }}
-        >
-          {node.name}
-        </span>
-        {metaText ? (
-          <Tooltip title={metaMode === 'size' ? `大小 ${metaText}` : `修改于 ${metaText}`}>
-            <span
-              style={{
-                flexShrink: 0,
-                fontSize: token.fontSizeSM,
-                color: token.colorTextTertiary,
-                fontFamily: '"Cascadia Code", "Fira Code", Consolas, monospace',
-              }}
-            >
-              {metaText}
-            </span>
-          </Tooltip>
-        ) : null}
-        {moreActionItems.length > 0 ? (
-          // ListRowActions 触发按钮 22×22 永久占位(ui-overlays 默认 visibility:hidden 仍占布局,
-          // 而 WorkspaceExplorerTree 未接入 .ui-row hover 体系,该按钮永远不显示) → 缩到 0 宽
-          // 让 actionsRef 仍可用(openMenu 由右键/长按调用,不依赖 trigger DOM),但不再占布局
-          <span style={{ flexShrink: 0, width: 0, height: 0, overflow: 'hidden' }}>
-            <ListRowActions
-              ref={actionsRef}
-              items={moreActionItems}
-              title={`${node.type === 'directory' ? '文件夹' : '文件'}更多操作`}
-              isMobile={isMobile}
-            />
-          </span>
-        ) : null}
-      </div>
+      <TreeNodeRow
+        node={node}
+        target={target}
+        menuItems={menuItems}
+        open={openMenuPath === node.path}
+        onOpenChange={(next) => setOpenMenuPath(next ? node.path : null)}
+        isMobile={isMobile}
+        isMultiSelect={isMultiSelect}
+        isSelected={isSelected}
+        metaMode={metaMode}
+        onToggleDirectory={onToggleDirectory}
+        onOpenFile={onOpenFile}
+        onToggleSelectedPath={onToggleSelectedPath}
+      />
     )
   }
 
@@ -288,6 +212,144 @@ export default function WorkspaceExplorerTree({
         style={{ fontSize: token.fontSizeSM }}
       />
     </div>
+  )
+}
+
+/**
+ * 单行树节点主体：每行独立持有 open(菜单开关)/长按状态，右键菜单用 antd Dropdown(trigger=contextMenu) 实现。
+ *
+ * 背景：此前右键/长按菜单是组件级单个共享 actionsRef(ListRowActions)，所有 titleRender 行
+ * 都挂同一个 ref，React 会让它最终指向最后一个挂载的行 → 无论右键哪一行，菜单都绑定到
+ * 目录最后一个文件。改为每行独立组件后，动作项命中当前行 target，右键菜单由 antd 管理(定位/关闭/键盘)。
+ */
+function TreeNodeRow({
+  node,
+  target,
+  menuItems,
+  open,
+  onOpenChange,
+  isMobile,
+  isMultiSelect,
+  isSelected,
+  metaMode,
+  onToggleDirectory,
+  onOpenFile,
+  onToggleSelectedPath,
+}: {
+  node: WorkspaceExplorerNode
+  target: WorkspaceExplorerContextTarget
+  menuItems: MenuProps['items']
+  /** 是否打开右键菜单(由父级统一控制：同一时刻只有一个右键菜单打开)。 */
+  open: boolean
+  onOpenChange: (next: boolean) => void
+  isMobile: boolean
+  isMultiSelect: boolean
+  isSelected: boolean
+  metaMode?: 'size' | 'modified'
+  onToggleDirectory: (path: string) => void
+  onOpenFile: (target: WorkspaceExplorerOpenTarget) => void
+  onToggleSelectedPath?: (path: string) => void
+}) {
+  const { token } = useToken()
+  const isDirectory = node.type === 'directory'
+  const metaText = metaMode === 'size' ? formatBytes(node.size) : formatMtime(node.mtimeMs)
+  // 移动端长按弹出右键菜单：直接控制受控 Dropdown 的 open；桌面端处理器为空操作。
+  const { wasLongPressed, ...longPressHandlers } = useLongPress({
+    isMobile,
+    delay: 500,
+    onLongPress: () => onOpenChange(true),
+  })
+
+  const content = (
+    <div
+      data-key={node.path}
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: token.paddingXS,
+        width: '100%',
+        cursor: 'default',
+        // 名称文字允许鼠标选中复制(文件/文件夹名)
+        userSelect: 'text',
+        ...(isSelected ? {
+          background: 'color-mix(in srgb, var(--accent-blue-dim) 55%, transparent)',
+          borderRadius: 'var(--radius-sm)',
+        } : null),
+      }}
+      onClick={() => {
+        if (wasLongPressed()) return
+        // 不阻止冒泡:让 antd 的 onSelect 正常触发(单击选中高亮)。
+        // 目录展开/收起改由双击(onDoubleClick)或点击 FolderIcon(onExpand)触发。
+      }}
+      onDoubleClick={(e) => {
+        e.stopPropagation()
+        // 双击目录:展开/收起(单击只选中,双击 toggle,与文件系统习惯一致)
+        if (isDirectory) {
+          onToggleDirectory(node.path)
+          return
+        }
+        // 双击文件:打开编辑
+        if (!node.openTarget) return
+        onOpenFile(node.openTarget)
+      }}
+      onPointerDown={longPressHandlers.onPointerDown}
+      onPointerMove={longPressHandlers.onPointerMove}
+      onPointerUp={longPressHandlers.onPointerUp}
+      onPointerLeave={longPressHandlers.onPointerLeave}
+      onContextMenu={longPressHandlers.onContextMenu}
+    >
+      {isMultiSelect ? (
+        <span
+          style={{ flexShrink: 0, display: 'inline-flex', alignItems: 'center' }}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <Checkbox
+            checked={isSelected}
+            onChange={() => onToggleSelectedPath?.(node.path)}
+            aria-label={`选择 ${node.name}`}
+          />
+        </span>
+      ) : null}
+      <span
+        style={{
+          flex: 1,
+          minWidth: 0,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+        }}
+      >
+        {node.name}
+      </span>
+      {metaText ? (
+        <Tooltip title={metaMode === 'size' ? `大小 ${metaText}` : `修改于 ${metaText}`}>
+          <span
+            style={{
+              flexShrink: 0,
+              fontSize: token.fontSizeSM,
+              color: token.colorTextTertiary,
+              fontFamily: '"Cascadia Code", "Fira Code", Consolas, monospace',
+            }}
+          >
+            {metaText}
+          </span>
+        </Tooltip>
+      ) : null}
+    </div>
+  )
+
+  if (!menuItems?.length) {
+    return content
+  }
+  return (
+    <Dropdown
+      open={open}
+      onOpenChange={onOpenChange}
+      trigger={['contextMenu']}
+      menu={{ items: menuItems }}
+    >
+      {content}
+    </Dropdown>
   )
 }
 
