@@ -8,6 +8,11 @@
  * 多工作区(架构 §5.9/D16):与资源管理器同布局——顶部「工作区(N)」标题与
  * 添加工作区入口,每个注册工作区一张分组卡片,git 状态/提交/变更树均落本组
  * 工作区;不做暂存(staging):无 staged/unstaged 二分(按需求)。
+ *
+ * 选中模型对齐 VS Code SCM:默认**无勾选框、提交=全部更改**;文件级操作
+ * (查看差异/放弃更改/删除未跟踪文件)经**右键菜单**触达;右键「多选」进入
+ * 多选模式后树才显示勾选框,提交/放弃仅作用于勾选集;勾选集绑定在树行上——
+ * 状态刷新后剪除已不在变更列表中的路径(文件消失即取消勾选,计数永不失真)。
  */
 import React from 'react'
 import { Tree, Input, Button, Badge, Modal, Form, Checkbox, App } from 'antd'
@@ -30,6 +35,7 @@ import { antdConfirm } from '@/utils/appAntdBridge'
 import { domainEventBus, DOMAIN_EVENTS } from '@/events/eventBus'
 import SidebarScrollArea from '@/components/shared/SidebarScrollArea'
 import MoreActionsButton, { type MoreActionItem } from '@/components/shared/MoreActionsButton'
+import { MenuList, type MenuListItem } from '@/components/shared/ui/Menu'
 
 interface GitStatusResult {
   branch?: string
@@ -231,10 +237,21 @@ function GitWorkspaceGroupPanel({
   const [status, setStatus] = React.useState<GitStatusResult | null>(null)
   const [selectedPaths, setSelectedPaths] = React.useState<Set<string>>(new Set())
   const [commitMessage, setCommitMessage] = React.useState('')
-  const [busy, setBusy] = React.useState<'status' | 'commit' | 'pull' | 'push' | 'init' | 'clone' | 'discard' | null>('status')
+  const [busy, setBusy] = React.useState<'status' | 'commit' | 'pull' | 'push' | 'init' | 'clone' | 'discard' | 'delete' | null>('status')
   const [diffLoadingPath, setDiffLoadingPath] = React.useState<string | null>(null)
   /** 卡片折叠态:折叠时仅保留头部行(工作区名 + 操作按钮),隐藏提交区/更改树等内容。 */
   const [collapsed, setCollapsed] = React.useState(false)
+  /** 多选模式:树显示勾选框,提交/放弃仅作用于勾选集(右键「多选」进入)。 */
+  const [multiSelect, setMultiSelect] = React.useState(false)
+  /** 右键菜单:触发点坐标 + 目标文件(路径 + 状态类别);null = 关闭。 */
+  const [contextMenu, setContextMenu] = React.useState<{
+    x: number
+    y: number
+    path: string
+    statusKey: StatusArrayKey
+  } | null>(null)
+  /** 更改树容器(右键菜单 MenuList 的锚元素)。 */
+  const treeRef = React.useRef<HTMLDivElement | null>(null)
 
   const connected = hub.state === 'open'
   const hasWorker = hub.directory.some((w) => w.online && w.enabled && w.hasApiKey && !w.error && !w.connecting)
@@ -284,10 +301,10 @@ function GitWorkspaceGroupPanel({
   const treeData = React.useMemo(() => buildTreeData(leaves), [leaves])
 
   /**
-   * 状态刷新后剪除已不在变更列表中的勾选路径。典型:新增(未跟踪)文件被勾选后又
-   * 被删除——git status 对其彻底不可见,勾选集若残留该陈旧路径,「提交(N 文件)」
-   * 计数会大于更改列表实际项数,且把已不存在的路径发给 worker,使 git add 因
-   * unmatched pathspec 整体失败、提交被阻断。
+   * 勾选集绑定在树行上:状态刷新后剪除已不在变更列表中的勾选路径。典型:新增
+   * (未跟踪)文件被勾选后又删除——git status 对其彻底不可见,勾选集若残留该
+   * 陈旧路径,提交计数会大于更改列表实际项数,且把已不存在的路径发给 worker,
+   * 使 git add 因 unmatched pathspec 整体失败、提交被阻断。
    */
   const leafPaths = React.useMemo(() => new Set(leaves.map((leaf) => leaf.path)), [leaves])
   React.useEffect(() => {
@@ -297,18 +314,6 @@ function GitWorkspaceGroupPanel({
       return next.size === current.size ? current : next
     })
   }, [leafPaths])
-
-  const togglePath = React.useCallback((path: string) => {
-    setSelectedPaths((current) => {
-      const next = new Set(current)
-      if (next.has(path)) {
-        next.delete(path)
-      } else {
-        next.add(path)
-      }
-      return next
-    })
-  }, [])
 
   /** 双击变更文件:经 openDiffTab 在主区打开独立 diff 标签页(替代旧内联 diff)。 */
   const openFileDiff = React.useCallback(async (path: string) => {
@@ -384,26 +389,35 @@ function GitWorkspaceGroupPanel({
     }
   }, [refresh, workspaceRoot, message])
 
+  /**
+   * 提交:默认模式提交**全部更改**(不带 paths,worker `add -A -- .`);
+   * 多选模式仅提交勾选集。成功后清空勾选并退出多选。
+   */
   const handleCommit = React.useCallback(async () => {
     const messageText = commitMessage.trim()
     if (!messageText) {
       message.error('请填写提交说明')
       return
     }
+    if (multiSelect && selectedPaths.size === 0) {
+      message.error('多选模式下请先勾选要提交的文件')
+      return
+    }
     setBusy('commit')
     try {
-      const paths = Array.from(selectedPaths)
-      const result = await gitGateway.commit(workspaceRoot, messageText, paths.length > 0 ? paths : undefined)
+      const paths = multiSelect ? Array.from(selectedPaths) : undefined
+      const result = await gitGateway.commit(workspaceRoot, messageText, paths && paths.length > 0 ? paths : undefined)
       message.success(`已提交 ${result?.shortId ?? ''}`)
       setCommitMessage('')
       setSelectedPaths(new Set())
+      setMultiSelect(false)
       await refresh()
     } catch (commitError) {
       message.error(commitError instanceof Error ? commitError.message : '提交失败')
     } finally {
       setBusy(null)
     }
-  }, [commitMessage, selectedPaths, refresh, workspaceRoot, message])
+  }, [commitMessage, multiSelect, selectedPaths, refresh, workspaceRoot, message])
 
   const handlePull = React.useCallback(async (credential?: GitCredential) => {
     setBusy('pull')
@@ -435,14 +449,13 @@ function GitWorkspaceGroupPanel({
     }
   }, [refresh, workspaceRoot, message])
 
-  /** 放弃选中文件的更改(恢复为 HEAD 内容,不可撤销)。 */
-  const handleDiscard = React.useCallback(async () => {
-    const paths = Array.from(selectedPaths)
+  /** 放弃指定文件的更改(恢复为 HEAD 内容,不可撤销)。多选模式下右键勾选行 = 批量。 */
+  const handleDiscard = React.useCallback(async (paths: string[]) => {
     if (paths.length === 0) return
     const confirmed = await new Promise<boolean>((resolve) => {
       modal.confirm({
         title: '放弃更改',
-        content: `放弃选中的 ${paths.length} 个文件的更改?此操作不可撤销。`,
+        content: `放弃 ${paths.length} 个文件的更改?此操作不可撤销。`,
         okText: '放弃',
         okButtonProps: { danger: true },
         cancelText: '取消',
@@ -458,13 +471,63 @@ function GitWorkspaceGroupPanel({
       const skippedCount = result.skipped?.length ?? 0
       message.success(`已放弃 ${discardedCount} 个文件的更改${skippedCount > 0 ? `,${skippedCount} 个未跟踪文件跳过` : ''}`)
       setSelectedPaths(new Set())
+      setMultiSelect(false)
       await refresh()
     } catch (discardError) {
       message.error(discardError instanceof Error ? discardError.message : '放弃更改失败')
     } finally {
       setBusy(null)
     }
-  }, [selectedPaths, refresh, workspaceRoot, message, modal])
+  }, [refresh, workspaceRoot, message, modal])
+
+  /** 删除未跟踪文件(对齐 VS Code:未跟踪文件没有「放弃更改」,只有删除)。 */
+  const handleDeleteUntracked = React.useCallback(async (path: string) => {
+    const confirmed = await new Promise<boolean>((resolve) => {
+      modal.confirm({
+        title: '删除文件',
+        content: `删除未跟踪文件 ${path}?该文件从未提交,删除后无法从 git 恢复。`,
+        okText: '删除',
+        okButtonProps: { danger: true },
+        cancelText: '取消',
+        onOk: () => resolve(true),
+        onCancel: () => resolve(false),
+      })
+    })
+    if (!confirmed) return
+    setBusy('delete')
+    try {
+      await workspaceGateway.deletePath(workspaceRoot, path)
+      message.success(`已删除 ${path}`)
+      setSelectedPaths((current) => {
+        if (!current.has(path)) return current
+        const next = new Set(current)
+        next.delete(path)
+        return next
+      })
+      await refresh()
+    } catch (deleteError) {
+      message.error(deleteError instanceof Error ? deleteError.message : '删除文件失败')
+    } finally {
+      setBusy(null)
+    }
+  }, [refresh, workspaceRoot, message, modal])
+
+  /** 进入多选模式(右键「多选」):树显示勾选框并预勾选触发行。 */
+  const enterMultiSelect = React.useCallback((path: string) => {
+    setMultiSelect(true)
+    setSelectedPaths((current) => {
+      if (current.has(path)) return current
+      const next = new Set(current)
+      next.add(path)
+      return next
+    })
+  }, [])
+
+  /** 退出多选模式:清空勾选,回到「提交=全部更改」默认态。 */
+  const exitMultiSelect = React.useCallback(() => {
+    setMultiSelect(false)
+    setSelectedPaths(new Set())
+  }, [])
 
   const [remoteModalOpen, setRemoteModalOpen] = React.useState(false)
   const [remoteForm] = Form.useForm<{ name: string; url: string }>()
@@ -563,14 +626,51 @@ function GitWorkspaceGroupPanel({
 
   const moreItems: MoreActionItem[] = [
     { key: 'refresh', label: '刷新', onSelect: () => void refresh() },
-    ...(selectedPaths.size > 0
-      ? [{ key: 'discard', label: `放弃更改(${selectedPaths.size})`, danger: true, onSelect: () => void handleDiscard() }]
+    ...(multiSelect
+      ? [{ key: 'exit-multi', label: '退出多选', onSelect: exitMultiSelect }]
       : []),
     { key: 'pull', label: '拉取', onSelect: () => void handlePull() },
     { key: 'push', label: '推送', onSelect: () => void ensureRemoteThenPush() },
     { key: 'init', label: '初始化仓库', onSelect: () => void handleInit() },
     { key: 'remove-workspace', label: '移除工作区…', danger: true, onSelect: () => void handleRemoveWorkspace(entry) },
   ]
+
+  /**
+   * 右键菜单项(变更文件操作):查看差异 / 放弃更改(未跟踪=删除文件,对齐
+   * VS Code)/ 多选进出。多选模式下右键勾选行 → 放弃作用于整个勾选集
+   * (对齐 VS Code:操作作用于包含右键行的选择),并提供「提交选中」快捷入口。
+   */
+  const fileMenuItems: MenuListItem[] = (() => {
+    if (!contextMenu) return []
+    const { path, statusKey } = contextMenu
+    const batch = multiSelect && selectedPaths.has(path) && selectedPaths.size > 0
+    const discardTargets = batch ? Array.from(selectedPaths) : [path]
+    const items: MenuListItem[] = [
+      { key: 'diff', label: '查看差异', onSelect: () => void openFileDiff(path) },
+    ]
+    if (statusKey === 'untracked') {
+      items.push({ key: 'delete', label: '删除文件', danger: true, onSelect: () => void handleDeleteUntracked(path) })
+    } else {
+      items.push({
+        key: 'discard',
+        label: batch ? `放弃更改(${discardTargets.length} 个文件)` : '放弃更改',
+        danger: true,
+        onSelect: () => void handleDiscard(discardTargets),
+      })
+    }
+    if (multiSelect) {
+      items.push({
+        key: 'commit-selection',
+        label: `提交选中(${selectedPaths.size} 文件)`,
+        disabled: selectedPaths.size === 0 || !commitMessage.trim(),
+        onSelect: () => void handleCommit(),
+      })
+      items.push({ key: 'exit-multi', label: '退出多选', onSelect: exitMultiSelect })
+    } else {
+      items.push({ key: 'multi', label: '多选', onSelect: () => enterMultiSelect(path) })
+    }
+    return items
+  })()
 
   return (
     <div style={groupStyle}>
@@ -635,9 +735,9 @@ function GitWorkspaceGroupPanel({
             <Input.TextArea
               value={commitMessage}
               onChange={(event) => setCommitMessage(event.target.value)}
-              placeholder={selectedPaths.size > 0
+              placeholder={multiSelect
                 ? `提交选中的 ${selectedPaths.size} 个文件…`
-                : '消息'}
+                : '消息(提交全部更改)'}
               autoSize={{ minRows: 2, maxRows: 6 }}
               styles={{ textarea: { resize: 'none' } }}
             />
@@ -645,9 +745,16 @@ function GitWorkspaceGroupPanel({
               <Button
                 type="primary"
                 onClick={() => void handleCommit()}
-                disabled={busy !== null || !commitMessage.trim()}
+                disabled={busy !== null
+                  || !commitMessage.trim()
+                  || leaves.length === 0
+                  || (multiSelect && selectedPaths.size === 0)}
               >
-                {busy === 'commit' ? '提交中…' : `提交${selectedPaths.size > 0 ? `(${selectedPaths.size} 文件)` : ''}`}
+                {busy === 'commit'
+                  ? '提交中…'
+                  : multiSelect
+                    ? `提交选中(${selectedPaths.size} 文件)`
+                    : '提交'}
               </Button>
             </div>
           </div>
@@ -655,37 +762,80 @@ function GitWorkspaceGroupPanel({
           <div style={changesHeaderStyle}>
             <h3 style={columnTitleStyle}>更改</h3>
             <Badge count={leaves.length} showZero color="var(--accent-blue)" style={{ color: '#fff' }} />
+            {multiSelect ? (
+              <div style={multiSelectBarStyle}>
+                <span style={multiSelectCountStyle}>已选 {selectedPaths.size}/{leaves.length}</span>
+                <Button
+                  type="text"
+                  size="small"
+                  style={miniButtonStyle}
+                  disabled={busy !== null || leaves.length === 0}
+                  onClick={() => setSelectedPaths(
+                    selectedPaths.size === leaves.length
+                      ? new Set()
+                      : new Set(leaves.map((leaf) => leaf.path)),
+                  )}
+                >
+                  {selectedPaths.size === leaves.length && leaves.length > 0 ? '清空' : '全选'}
+                </Button>
+                <Button type="text" size="small" style={miniButtonStyle} disabled={busy !== null} onClick={exitMultiSelect}>
+                  完成
+                </Button>
+              </div>
+            ) : null}
           </div>
           {leaves.length === 0 ? (
             <div style={columnEmptyStyle}>工作区干净</div>
           ) : (
-            <Tree.DirectoryTree
-              treeData={treeData}
-              showIcon
-              defaultExpandAll
-              selectable={false}
-              onDoubleClick={(_event, node) => {
-                const key = (node as { key?: React.Key }).key
-                if (typeof key === 'string' && key.startsWith('file:')) {
+            <div ref={treeRef}>
+              <Tree.DirectoryTree
+                treeData={treeData}
+                showIcon
+                defaultExpandAll
+                selectable={false}
+                onDoubleClick={(_event, node) => {
+                  const key = (node as { key?: React.Key }).key
+                  if (typeof key === 'string' && key.startsWith('file:')) {
+                    const path = key.slice('file:'.length)
+                    void openFileDiff(path)
+                  }
+                }}
+                onRightClick={({ event, node }) => {
+                  const key = (node as { key?: React.Key }).key
+                  if (typeof key !== 'string' || !key.startsWith('file:')) return
                   const path = key.slice('file:'.length)
-                  void openFileDiff(path)
-                }
-              }}
-              onCheck={(checked: React.Key[] | { checked: React.Key[]; halfChecked: React.Key[] }) => {
-                const keys = Array.isArray(checked) ? checked : checked.checked
-                const paths = (keys as string[])
-                  .filter((k) => k.startsWith('file:'))
-                  .map((k) => k.slice('file:'.length))
-                setSelectedPaths(new Set(paths))
-              }}
-              checkable
-              checkedKeys={Array.from(selectedPaths).map((p) => `file:${p}`)}
-            />
+                  const statusKey = leaves.find((leaf) => leaf.path === path)?.statusKey
+                  if (!statusKey) return
+                  setContextMenu({ x: event.clientX, y: event.clientY, path, statusKey })
+                }}
+                checkable={multiSelect}
+                onCheck={(checked: React.Key[] | { checked: React.Key[]; halfChecked: React.Key[] }) => {
+                  if (!multiSelect) return
+                  const keys = Array.isArray(checked) ? checked : checked.checked
+                  const paths = (keys as string[])
+                    .filter((k) => k.startsWith('file:'))
+                    .map((k) => k.slice('file:'.length))
+                  setSelectedPaths(new Set(paths))
+                }}
+                checkedKeys={multiSelect ? Array.from(selectedPaths).map((p) => `file:${p}`) : []}
+              />
+            </div>
           )}
           {diffLoadingPath ? (
             <div style={diffLoadingStyle}>
               <InlineSpinner size={13} color="currentColor" trackColor="transparent" /> 正在加载 {diffLoadingPath} 的差异…
             </div>
+          ) : null}
+
+          {contextMenu && treeRef.current ? (
+            <MenuList
+              anchor={treeRef.current}
+              anchorPoint={{ x: contextMenu.x, y: contextMenu.y }}
+              anchorPointMode="top-start"
+              items={fileMenuItems}
+              onClose={() => setContextMenu(null)}
+              title="变更文件操作"
+            />
           ) : null}
         </>
       )}
@@ -1009,6 +1159,27 @@ const changesHeaderStyle: React.CSSProperties = {
   alignItems: 'center',
   gap: 8,
   flexShrink: 0,
+}
+
+/** 多选模式工具条(标题行右缘):已选计数 + 全选/清空 + 完成。 */
+const multiSelectBarStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 2,
+  marginLeft: 'auto',
+}
+
+const multiSelectCountStyle: React.CSSProperties = {
+  fontSize: 'var(--text-xs)',
+  color: 'var(--text-muted)',
+  whiteSpace: 'nowrap',
+}
+
+const miniButtonStyle: React.CSSProperties = {
+  fontSize: 'var(--text-xs)',
+  height: 22,
+  padding: '0 6px',
+  color: 'var(--text-muted)',
 }
 
 const columnTitleStyle: React.CSSProperties = {
