@@ -26,6 +26,7 @@ import {
 import { taskStore } from '@/hub/taskStore'
 import { workspaceRegistry } from '@/hub/workspaceRegistry'
 import type { WorkerInfo } from '@/hub/session'
+import { APP_NAME, APP_VERSION, APP_COPYRIGHT, APP_LICENSE } from '@/appInfo'
 
 function workerStatusLabel(worker: WorkerInfo): string {
   if (worker.error) return '连接失败 · ' + worker.error.code
@@ -384,6 +385,28 @@ export default function SettingsPanel() {
           <span style={hintStyle}>{notificationHint}</span>
         </div>
       </section>
+
+      <section style={sectionStyle}>
+        <h3 style={sectionTitleStyle}>关于</h3>
+        <div style={aboutGridStyle}>
+          <div style={aboutRowStyle}>
+            <span style={aboutLabelStyle}>软件名称</span>
+            <span style={aboutValueStyle}>{APP_NAME}</span>
+          </div>
+          <div style={aboutRowStyle}>
+            <span style={aboutLabelStyle}>版本</span>
+            <span style={aboutValueMonoStyle}>{APP_VERSION}</span>
+          </div>
+          <div style={aboutRowStyle}>
+            <span style={aboutLabelStyle}>所有权</span>
+            <span style={aboutValueStyle}>{APP_COPYRIGHT}</span>
+          </div>
+          <div style={aboutRowStyle}>
+            <span style={aboutLabelStyle}>许可证</span>
+            <span style={aboutValueStyle}>{APP_LICENSE}</span>
+          </div>
+        </div>
+      </section>
     </WorkspacePageShell>
   )
 }
@@ -561,4 +584,36 @@ const workerKeyInputStyle: React.CSSProperties = {
   fontFamily: 'var(--font-mono, monospace)',
   flex: 1,
   minWidth: 160,
+}
+
+const aboutGridStyle: React.CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 8,
+  maxWidth: 480,
+}
+
+const aboutRowStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'baseline',
+  gap: 12,
+}
+
+const aboutLabelStyle: React.CSSProperties = {
+  fontSize: 'var(--text-xs)',
+  color: 'var(--text-muted)',
+  flexShrink: 0,
+  minWidth: 56,
+}
+
+const aboutValueStyle: React.CSSProperties = {
+  fontSize: 'var(--text-xs)',
+  color: 'var(--text-primary)',
+  wordBreak: 'break-all',
+}
+
+const aboutValueMonoStyle: React.CSSProperties = {
+  fontSize: 'var(--text-xs)',
+  color: 'var(--text-primary)',
+  fontFamily: 'var(--font-mono, monospace)',
 }
