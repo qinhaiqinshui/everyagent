@@ -316,6 +316,34 @@ class FsGitModuleTest {
         assertTrue(s3.contains("\"ahead\":0"), "推送后 ahead 应归零: " + s3);
     }
 
+    @Test
+    @Order(25)
+    void gitCommitSkipsStaleSelectedPaths() {
+        // 回归:侧栏勾选「新增(未跟踪)文件」后文件又被删除——git status 对其彻底
+        // 不可见,前端勾选集残留该陈旧路径时,git add -A -- <paths> 会因
+        // unmatched pathspec 整体失败使提交被阻断;应跳过已无变更的路径提交其余选中项。
+        String gone = "novels/三国/星辉一体论·草案.md";
+        String b64 = Base64.getEncoder().encodeToString("草稿".getBytes(StandardCharsets.UTF_8));
+        assertTrue(rpc("fs.write", p("{\"path\":\"" + gone + "\",\"contentBase64\":\"" + b64 + "\"}"))
+                .contains("rpc.ok"), "先创建待勾选的新文件");
+        assertTrue(rpc("fs.delete", p("{\"path\":\"" + gone + "\"}")).contains("rpc.ok"), "新增文件又被删除");
+        String mod64 = Base64.getEncoder().encodeToString("第三版".getBytes(StandardCharsets.UTF_8));
+        assertTrue(rpc("fs.write", p("{\"path\":\"gitfile.txt\",\"contentBase64\":\"" + mod64 + "\"}"))
+                .contains("rpc.ok"), "制造一个真实变更");
+        String s = rpc("git.status", p("{}"));
+        assertFalse(s.contains(gone), "已删除的未跟踪文件不应出现在状态里: " + s);
+
+        // 模拟前端陈旧勾选集:有效路径 + 已消失路径混合提交,应成功提交有效部分。
+        String c = rpc("git.commit", p(
+                "{\"message\":\"跳过陈旧路径\",\"paths\":[\"gitfile.txt\",\"" + gone + "\"]}"));
+        assertTrue(c.contains("rpc.ok"), "混合陈旧路径的提交应成功: " + c);
+        assertFalse(rpc("git.status", p("{}")).contains("gitfile.txt"), "选中文件应已提交");
+
+        // 选中路径全部已无变更:清晰报 BAD_PARAMS(绝不静默回退成全量提交)。
+        String stale = rpc("git.commit", p("{\"message\":\"全陈旧\",\"paths\":[\"" + gone + "\"]}"));
+        assertTrue(stale.contains("rpc.err") && stale.contains("BAD_PARAMS"), stale);
+    }
+
     // ---- workspace(架构 §5.9:多工作区注册表,fs/git/task.run 每调用显式指定)----
 
     @Test

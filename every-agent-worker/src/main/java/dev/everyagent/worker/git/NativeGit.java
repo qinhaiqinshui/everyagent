@@ -205,6 +205,14 @@ public class NativeGit {
             s.addAll(conflicting);
             return s;
         }
+
+        /** 当前存在变更的全部路径(7 类合集,含未跟踪;供 commit 过滤已失效的选中路径)。 */
+        public java.util.Set<String> allChanged() {
+            java.util.Set<String> s = trackedChanged();
+            s.addAll(added);
+            s.addAll(untracked);
+            return s;
+        }
     }
 
     // ---- 内部 ----

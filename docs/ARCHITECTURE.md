@@ -470,6 +470,7 @@ ask 管道承载第二类阻塞请求:**危险操作授权**。`PermissionGate` 
 - **可执行文件定位**:启动探测一次并缓存——`worker.git.executable` 显式指定 > Windows 常见安装路径(`C:\Program Files\Git\bin\git.exe`、`C:\Program Files\Git\cmd\git.exe`、`C:\Program Files (x86)\Git\...`) > PATH 兜底;全部失败明确报错(「git 不可用,请安装 Git for Windows」),不静默回退。
 - **稳定化参数**:每个命令预置 `git -C <workspace> -c color.ui=false -c core.quotepath=false --no-pager`,读命令加 `--no-optional-locks`(防 `.git/index.lock` 残留/竞争);env 设 `GIT_TERMINAL_PROMPT=0`(缺凭证 fail-fast,不卡死)、`LC_ALL=C.UTF-8`(输出编码稳定)。
 - **路径沙箱**:复用 `Sandbox` realpath 前缀 jail(§5.9);用户 path 参数先经 `Sandbox` 校验再进 argv。
+- **commit 路径过滤**:`git.commit` 显式 paths 先对全部路径做 jail 校验,再与当前变更集(status 7 类合集)求交集——已无变更的陈旧路径(如前端勾选后被删除的未跟踪文件,git status 中彻底不可见)对本次提交是 no-op,直接跳过,避免 `git add` 因 unmatched pathspec 整体失败;交集为空报 `BAD_PARAMS`(提示刷新),绝不静默回退成全量提交。
 - **并发**:per-workspace 串行锁——写操作(`commit/pull/push/discard/init/clone/remote.add` 与自动同步)同 workspace 串行;读操作带 `--no-optional-locks` 可并发。
 - **执行出口**:`OsSandbox.spawnNative(String[] argv, Path cwd, Map<String,String> env)`(宿主原生 argv 直传,非 wsl/mic);git 超时用 `worker.git.timeout-ms`(默认长于统一命令超时,clone/pull/push 大仓库可能较慢)。
 

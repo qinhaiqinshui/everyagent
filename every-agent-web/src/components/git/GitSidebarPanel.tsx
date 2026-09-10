@@ -283,6 +283,21 @@ function GitWorkspaceGroupPanel({
   const leaves = React.useMemo(() => (status ? collectLeaves(status) : []), [status])
   const treeData = React.useMemo(() => buildTreeData(leaves), [leaves])
 
+  /**
+   * 状态刷新后剪除已不在变更列表中的勾选路径。典型:新增(未跟踪)文件被勾选后又
+   * 被删除——git status 对其彻底不可见,勾选集若残留该陈旧路径,「提交(N 文件)」
+   * 计数会大于更改列表实际项数,且把已不存在的路径发给 worker,使 git add 因
+   * unmatched pathspec 整体失败、提交被阻断。
+   */
+  const leafPaths = React.useMemo(() => new Set(leaves.map((leaf) => leaf.path)), [leaves])
+  React.useEffect(() => {
+    setSelectedPaths((current) => {
+      if (current.size === 0) return current
+      const next = new Set(Array.from(current).filter((path) => leafPaths.has(path)))
+      return next.size === current.size ? current : next
+    })
+  }, [leafPaths])
+
   const togglePath = React.useCallback((path: string) => {
     setSelectedPaths((current) => {
       const next = new Set(current)
