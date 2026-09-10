@@ -687,6 +687,13 @@ function GitWorkspaceGroupPanel({
             />
           </span>
           <span style={groupTitleStyle} title={workspaceRoot}>{getWorkspaceDisplayName(workspaceRoot)}</span>
+          {initialized && status?.branch ? (
+            <span style={headerBranchPillStyle} title={`当前分支 ${status.branch}`}>
+              <BranchIcon />
+              <span style={headerBranchTextStyle}>{status.branch}</span>
+            </span>
+          ) : null}
+          <span style={{ flex: 1, minWidth: 0 }} aria-hidden />
           {isDefault ? <span style={groupBadgeStyle}>默认</span> : null}
         </div>
         <div style={sectionHeaderActionsStyle}>
@@ -716,14 +723,7 @@ function GitWorkspaceGroupPanel({
       {!collapsed && (
         <>
           <div style={workspaceRootStyle} title={workspaceRoot}>{workspaceRoot}</div>
-          {initialized && status?.branch ? (
-        <div style={branchRowStyle}>
-          <span style={branchPillStyle} title="当前分支">
-            <BranchIcon /> {status.branch}
-          </span>
-        </div>
-      ) : null}
-      {initialized === false ? (
+          {initialized === false ? (
         <GitNotInitializedView
           disabled={busy !== null}
           onInit={() => void handleInit()}
@@ -1093,7 +1093,7 @@ const groupTitleStyle: React.CSSProperties = {
   textOverflow: 'ellipsis',
   whiteSpace: 'nowrap',
   minWidth: 0,
-  flex: 1,
+  flex: '0 1 auto',
 }
 
 const groupBadgeStyle: React.CSSProperties = {
@@ -1112,23 +1112,27 @@ const workspaceRootStyle: React.CSSProperties = {
   padding: '0 2px',
 }
 
-const branchRowStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 6,
-  padding: '0 2px',
-}
-
-const branchPillStyle: React.CSSProperties = {
+/** 头部行内分支胶囊:紧跟工作区名展示当前分支(折叠态也可见);长分支名内部省略。 */
+const headerBranchPillStyle: React.CSSProperties = {
   display: 'inline-flex',
   alignItems: 'center',
+  gap: 4,
   borderRadius: 999,
-  padding: '2px 8px',
+  padding: '1px 8px',
   fontSize: 'var(--text-xs)',
   fontFamily: 'var(--font-mono, monospace)',
   background: 'var(--bg-secondary)',
   color: 'var(--text-muted)',
   flexShrink: 0,
+  maxWidth: '45%',
+  overflow: 'hidden',
+}
+
+/** 胶囊内分支名(flex 子项,省略号需落在自身)。 */
+const headerBranchTextStyle: React.CSSProperties = {
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
 }
 
 const iconButtonStyle: React.CSSProperties = {
