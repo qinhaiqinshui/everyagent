@@ -741,22 +741,21 @@ function GitWorkspaceGroupPanel({
               autoSize={{ minRows: 2, maxRows: 6 }}
               styles={{ textarea: { resize: 'none' } }}
             />
-            <div style={commitRowStyle}>
-              <Button
-                type="primary"
-                onClick={() => void handleCommit()}
-                disabled={busy !== null
-                  || !commitMessage.trim()
-                  || leaves.length === 0
-                  || (multiSelect && selectedPaths.size === 0)}
-              >
-                {busy === 'commit'
-                  ? '提交中…'
-                  : multiSelect
-                    ? `提交选中(${selectedPaths.size} 文件)`
-                    : '提交'}
-              </Button>
-            </div>
+            <Button
+              block
+              type="primary"
+              onClick={() => void handleCommit()}
+              disabled={busy !== null
+                || !commitMessage.trim()
+                || leaves.length === 0
+                || (multiSelect && selectedPaths.size === 0)}
+            >
+              {busy === 'commit'
+                ? '提交中…'
+                : multiSelect
+                  ? `提交选中(${selectedPaths.size} 文件)`
+                  : '提交'}
+            </Button>
           </div>
 
           <div style={changesHeaderStyle}>
@@ -1151,11 +1150,6 @@ const commitAreaStyle: React.CSSProperties = {
   gap: 6,
   paddingBottom: 8,
   borderBottom: '1px solid var(--border-light)',
-}
-
-const commitRowStyle: React.CSSProperties = {
-  display: 'flex',
-  justifyContent: 'flex-end',
 }
 
 const changesHeaderStyle: React.CSSProperties = {
