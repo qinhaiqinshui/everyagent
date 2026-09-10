@@ -321,6 +321,17 @@ body[data-theme='light'] {
   to { transform: rotate(360deg); }
 }
 
+/* 源代码管理拉取/推送进行中:箭头沿作用方向轻推循环(与 spin 同节,供 GitSidebarPanel 内联 animation 引用) */
+@keyframes iconNudgeDown {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(2.5px); }
+}
+
+@keyframes iconNudgeUp {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-2.5px); }
+}
+
 @keyframes slideIn {
   from { transform: translateX(-8px); opacity: 0; }
   to { transform: translateX(0); opacity: 1; }

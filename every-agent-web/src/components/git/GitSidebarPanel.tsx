@@ -567,6 +567,8 @@ function GitWorkspaceGroupPanel({
       setCredentialSubmitting(true)
       const values = await credentialForm.validateFields()
       const credential: GitCredential = { username: values.username.trim(), password: values.password }
+      // 带 busy 进行中状态驱动对应图标动画(clone 无侧栏图标,仅占位防误触)
+      setBusy(credentialPrompt.action === 'pull' ? 'pull' : credentialPrompt.action === 'push' ? 'push' : 'clone')
       await credentialPrompt.retry(credential, Boolean(values.save))
       setCredentialPrompt(null)
       message.success(credentialPrompt.action === 'clone' ? '克隆成功' : '操作成功')
@@ -574,6 +576,7 @@ function GitWorkspaceGroupPanel({
       message.error(credError instanceof Error ? credError.message : '凭证提交失败')
     } finally {
       setCredentialSubmitting(false)
+      setBusy(null)
     }
   }, [credentialForm, credentialPrompt, message])
 
@@ -713,10 +716,10 @@ function GitWorkspaceGroupPanel({
         </div>
         <div style={sectionHeaderActionsStyle}>
           <Button type="text" style={iconButtonStyle} onClick={() => void refresh()} disabled={busy !== null} title="刷新">
-            {busy === 'status' ? <InlineSpinner size={13} color="currentColor" trackColor="transparent" /> : <RefreshIcon />}
+            <RefreshIcon busy={busy === 'status'} />
           </Button>
           <Button type="text" style={iconButtonStyle} onClick={() => void handlePull()} disabled={busy !== null || !initialized} title="拉取">
-            <PullIcon />
+            <PullIcon busy={busy === 'pull'} />
           </Button>
           <Badge
             count={status?.ahead ?? 0}
@@ -729,7 +732,7 @@ function GitWorkspaceGroupPanel({
             title={status && (status.ahead ?? 0) > 0 ? `${status.ahead} 个提交待推送` : undefined}
           >
             <Button type="text" style={iconButtonStyle} onClick={() => void ensureRemoteThenPush()} disabled={busy !== null || !initialized} title="推送">
-              <PushIcon />
+              <PushIcon busy={busy === 'push'} />
             </Button>
           </Badge>
           <MoreActionsButton items={moreItems} title="更多操作" disabled={busy !== null} />
@@ -1004,18 +1007,45 @@ async function handleRemoveWorkspace(entry: WorkspaceEntry): Promise<void> {
 }
 
 // ---- 内联图标(轻量,避免引入额外依赖) ----
+// 进行中动画:图标本身动起来(刷新=spin 旋转/拉取=向下轻推/推送=向上轻推),
+// keyframes 住全局 index.css(与既有 spin 同节);span 需 inline-block,transform 才生效。
 
 function BranchIcon() {
   return <span style={{ fontSize: 12, marginRight: 2 }}>⎇</span>
 }
-function RefreshIcon() {
-  return <span style={{ fontSize: 14 }}>⟳</span>
+
+/** 刷新图标;busy=true 时旋转(进行中)。 */
+function RefreshIcon({ busy = false }: { busy?: boolean }) {
+  return (
+    <span
+      style={{ fontSize: 14, display: 'inline-block', animation: busy ? 'spin 0.9s linear infinite' : undefined }}
+      aria-hidden
+    >
+      ⟳
+    </span>
+  )
 }
-function PullIcon() {
-  return <span style={{ fontSize: 14 }}>⇩</span>
+/** 拉取图标;busy=true 时向下轻推循环(进行中)。 */
+function PullIcon({ busy = false }: { busy?: boolean }) {
+  return (
+    <span
+      style={{ fontSize: 14, display: 'inline-block', animation: busy ? 'iconNudgeDown 0.8s ease-in-out infinite' : undefined }}
+      aria-hidden
+    >
+      ⇩
+    </span>
+  )
 }
-function PushIcon() {
-  return <span style={{ fontSize: 14 }}>⇧</span>
+/** 推送图标;busy=true 时向上轻推循环(进行中)。 */
+function PushIcon({ busy = false }: { busy?: boolean }) {
+  return (
+    <span
+      style={{ fontSize: 14, display: 'inline-block', animation: busy ? 'iconNudgeUp 0.8s ease-in-out infinite' : undefined }}
+      aria-hidden
+    >
+      ⇧
+    </span>
+  )
 }
 
 // ---- 布局样式(与资源管理器 OpenFilesSidebarPanel 分组卡片对齐) ----
