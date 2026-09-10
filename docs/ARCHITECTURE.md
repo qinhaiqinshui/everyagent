@@ -452,6 +452,7 @@ ask 管道承载第二类阻塞请求:**危险操作授权**。`PermissionGate` 
 - `worker.sandbox.type`: `auto`(默认)| `wsl-direct` | `wsl-bwrap` | `windows-mic` | `none`(别名 acl/wsl/direct 兼容)。
 - **Windows Low IL 可写性契约**(对 windows-mic 后端):工作区树 + EXEC 授权目录必须由 worker 在命令执行前配置为沙箱可写——① 标注 Low 完整性(SACL `S:(ML;OICI;NW;;;LW)`),解决 MIC 的 NO_WRITE_UP;② `WindowsAcl` 给工作区根追加可继承 Allow ACE(本地 Users `(OI)(CI)` 修改+删除权限),解决 ACL 残缺。工作区外保持默认 Medium → 沙箱内写被 OS 拒,构成弹窗授权之外的 OS 级兜底。
 - **网络策略**:默认放行(`worker.sandbox.allow-network=true`,命令可访问网络,含回环 127.0.0.1);任务级 `/禁用网络` 或全局 `allow-network=false` 才断网——wsl-direct = `unshare -n`(新建无 eth0 的 netns)、wsl-bwrap = `--unshare-net`(新 netns 仅 down 的 lo,连回环也不通)、direct/mic = 剥代理 env(advisory)。
+- **命令 stdin 契约**:AI 命令的 stdin 一律接 null 设备(`/dev/null`;windows-mic 后端为 NULL 句柄),不得是"打开的空管道"。wsl 系后端载荷经 stdin 传入,但 wsl.exe→发行版的 stdio 桥接会保持 Linux 侧管道写端打开(worker 侧关闭管道也不传播 EOF);若让 bash 继承它,`rg`/`grep` 无路径参数时据 stdin 可读判定改读 stdin(静默空结果,与"无匹配"不可区分),`cat` 等阻塞读则挂到超时。落地:eagent-run.py 在 exec bash/bwrap 前把 fd 0 重定向到 `/dev/null`(seccomp supervisor 除外——其 stdin 承载 priv-ans 控制帧);direct 后端 ProcessBuilder `redirectInput` null 设备。
 - **Windows 沙箱技术路线说明**:曾评估 AppContainer(Low IL 标注的继任者),因"capability 模型不适合开放式开发工作流+普通 ACE 全失效的读模型破坏面太大"(OpenAI 对 Windows 沙箱的弃用理由同源)而放弃,整体迁往 WSL2 生态(Claude Code 对 Windows 用户的官方推荐路径);windows-mic 保留为回退后端。
 
 ### 7.11 提权拦截(seccomp,LINUX 侧)
@@ -663,7 +664,7 @@ Input:  queued → consumed | discarded(任务取消)
 
 ### 8.2 多 worker 聚合
 
-一个 hub 下可有多台 worker。前端以 1 条目录连接(hubKey)看全部在线 worker(presence),对每台已启用 worker 用其 apiKey 建数据连接,任务列表/工作区/git 按 worker 合并展示、按归属定向操作;任务归属 worker 由前端按帧来源动态标注(TaskSummary 后端不含 workerId)。凭证 AES-GCM 加密存 localStorage,presence 指纹(ownerFingerprint 前 16 hex)支持 worker 改名后自动复用凭证。
+一个 hub 下可有多台 worker。前端以 1 条目录连接(hubKey)看全部在线 worker(presence),对每台已启用且在线(presence)的 worker 用其 apiKey 建数据连接(离线 worker 不建连——hub 对 apiKey 不做白名单校验,离线也建连会误报「已连接」),任务列表/工作区/git 按 worker 合并展示、按归属定向操作;任务归属 worker 由前端按帧来源动态标注(TaskSummary 后端不含 workerId)。凭证 AES-GCM 加密存 localStorage,presence 指纹(ownerFingerprint 前 16 hex)支持 worker 改名后自动复用凭证。
 
 ### 8.3 轮次浏览与懒加载
 

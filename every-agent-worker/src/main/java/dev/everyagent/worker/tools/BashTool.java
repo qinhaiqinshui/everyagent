@@ -20,7 +20,8 @@ public class BashTool {
 
     @Tool(name = "bash", description = "在系统上用 bash 执行真实 OS 命令;"
             + "rg 已加入 PATH,可直接执行 rg 命令,内容搜索尽量使用rg命令，性能更好;"
-            + "命令工作目录默认为任务工作区根;")
+            + "命令工作目录默认为任务工作区根;"
+            + "stdin 为 /dev/null,命令无法从 stdin 读入输入;")
     public String bash(
             @ToolParam(description = "要执行的 bash 命令,如 \"git status\"") String command) {
         return exec.execute(command, "bash");

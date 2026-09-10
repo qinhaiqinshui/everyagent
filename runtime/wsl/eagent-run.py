@@ -251,6 +251,27 @@ def _write_frame(frame):
     sys.stdout.flush()
 
 
+def _stdin_null():
+    """把 fd 0 重定向到 /dev/null(AI 命令的 stdin 契约,见 docs/ARCHITECTURE.md §7.10)。
+
+    载荷经 stdin 传入后已读毕,但 wsl.exe→发行版 的 stdio 桥接会保持 Linux 侧管道
+    写端打开(worker 侧关闭管道也不传播 EOF)。若让 bash/bwrap 继承这个「打开的空
+    管道」作 stdin:rg/grep 无路径参数时据 stdin 可读判定改读 stdin(静默空结果,
+    与「无匹配」不可区分),cat 等阻塞读 stdin 的命令则挂到超时。重定向 /dev/null
+    后读 stdin 的命令立即 EOF,rg 无路径参数时正确回退到搜索当前目录。
+    seccomp 的 supervisor 不调用本函数:其 stdin 承载 priv-ans 控制帧(须保持)。
+    失败(OSError,如 /dev/null 不可开)静默保留原 stdin:与修复前行为一致,不阻断命令。
+    """
+    try:
+        fd = os.open(os.devnull, os.O_RDONLY)
+        try:
+            os.dup2(fd, 0)
+        finally:
+            os.close(fd)
+    except OSError:
+        pass
+
+
 def seccomp_main(payload):
     """seccomp 提权拦截主流程:fork supervisor + sandbox,内核事件级拦截 setuid exec。"""
     libc = _libc()
@@ -287,6 +308,9 @@ def seccomp_main(payload):
         except OSError:
             pass
         set_limits(payload.get("limits") or {})
+        # stdin 接 /dev/null:载荷已由 supervisor 读毕;supervisor 自身的 stdin 承载
+        # priv-ans 控制帧须保持,但沙箱内命令的 stdin 不得是打开的空管道(§7.10 契约)
+        _stdin_null()
         try:
             os.execvp("bwrap", bwrap_argv)
         except OSError as e:
@@ -590,7 +614,9 @@ def direct_main(payload):
     # ⑤ 资源上限
     set_limits(payload.get("limits") or {})
 
-    # ⑥ exec bash -lc(继承 seccomp + no_new_privs + netns)
+    # ⑥ exec bash -lc(继承 seccomp + no_new_privs + netns);stdin 接 /dev/null:
+    #    载荷已读毕,须切断 wsl.exe 桥接留下的打开空管道(rg 无路径参数静默空结果等)
+    _stdin_null()
     cwd = payload.get("cwd") or "/"
     command = payload.get("command") or "true"
     argv = ["bash", "-lc", "cd " + _shq(cwd) + " && " + command]
@@ -721,6 +747,10 @@ def main():
         pass  # 登记失败不阻断:仅损失显式击杀路径,die-with-parent 仍在
 
     set_limits(payload.get("limits") or {})
+
+    # stdin 接 /dev/null:载荷已读毕,切断 wsl.exe 桥接留下的打开空管道
+    # (rg 无路径参数静默空结果/cat 挂起,§7.10 stdin 契约)
+    _stdin_null()
 
     try:
         os.execvp("bwrap", build_bwrap_argv(payload))
