@@ -5,9 +5,9 @@
     <parent>
         <groupId>dev.everyagent</groupId>
         <artifactId>every-agent-parent</artifactId>
-        <version>0.1.0-SNAPSHOT</version>
+        <version>0.1.2</version>
     </parent>
-
+    <version>0.1.2</version>
     <artifactId>every-agent-hub</artifactId>
     <name>every-agent-hub</name>
     <description>公网消息中心:纯中转,零状态零缓冲零业务逻辑</description>
