@@ -59,6 +59,8 @@ export interface WorkerInfo {
 export interface WorkerConnectResult {
   ok: boolean
   error: { code: string; detail: string } | null
+  /** worker 当前是否在线(presence)。离线时保存凭证成功但未建连(连接无意义),调用方据此给出准确文案。 */
+  online?: boolean
 }
 
 const WEB_DIRECTORY_CLIENT_ID = 'web-fe-directory'
@@ -182,7 +184,7 @@ class HubSession {
         enabled: cred?.enabled ?? false,
         hasApiKey: Boolean(cred?.apiKeyEnc),
         connecting: this.connectingWorkers.get(workerId) ?? false,
-        connected: this.workerClients.get(workerId)?.state === 'open',
+        connected: Boolean(this.workersOnline.get(workerId)) && this.workerClients.get(workerId)?.state === 'open',
         error: this.workerErrors.get(workerId) ?? null,
       })
     }
@@ -222,6 +224,14 @@ class HubSession {
     workers.push({ workerId, apiKeyEnc: enc, enabled: true, ownerKey: k })
     this.config = { ...this.config, workers }
     saveConnectionConfig(this.config)
+    // apiKey 变更即命名空间(K)变更:若已用旧 key 建连,必须先关闭再按新 key 重建,
+    // 否则旧连接继续用旧 K 订阅,新 key 不会生效(任务/RPC 会落在错误的命名空间)。
+    const existing = this.workerClients.get(workerId)
+    if (existing) {
+      existing.close()
+      this.workerClients.delete(workerId)
+    }
+    this.workerErrors.delete(workerId)
     this.notifyDirectory()
     await this.connectWorker(workerId)
     this.notifyWorkers()
@@ -252,10 +262,19 @@ class HubSession {
     return enabled ? this.workerConnectResult(workerId) : { ok: true, error: null }
   }
 
-  /** 汇总某 worker 的连接结果:error 优先,其次以「连接是否已 open」判定成功。 */
+  /** 汇总某 worker 的连接结果:error 优先;离线不算失败(未建连是预期),据 online 给出准确文案。 */
   private workerConnectResult(workerId: string): WorkerConnectResult {
     const error = this.workerErrors.get(workerId) ?? null
-    return { ok: this.clientFor(workerId) !== null, error }
+    const online = this.workersOnline.get(workerId) ?? false
+    if (error) {
+      return { ok: false, error, online }
+    }
+    // 离线 worker:凭证/开关已保存,但数据连接无从谈起(建连只对在线 worker 有意义),
+    // 不算失败;真实状态由目录行(离线)展示,调用方据 online 给出准确文案。
+    if (!online) {
+      return { ok: true, error: null, online: false }
+    }
+    return { ok: this.clientFor(workerId) !== null, error: null, online: true }
   }
 
   disconnect(): void {
@@ -348,8 +367,14 @@ class HubSession {
       for (const fn of this.frameListeners) fn(frame)
     }
     directory.onResync = () => {
+      // 目录重连后 hub 会重发 presence 快照(只发在线,不补发 offline):先清掉旧在线标记,
+      // 避免目录断线期间已下线的 worker 残留「在线/已连接」状态;在线 worker 由随后的
+      // worker.online 快照重建连接。
+      this.workersOnline.clear()
+      this.notifyWorkers()
+      this.notifyDirectory()
       for (const fn of this.resyncListeners) fn()
-      // 目录重连后重建全部启用 worker 连接。
+      // 目录重连后重建全部在线 worker 连接(依赖即将到来的 presence 快照)。
       void this.connectConfiguredWorkers()
     }
     directory.onError = (frame) => {
@@ -377,7 +402,7 @@ class HubSession {
     }
   }
 
-  /** 为所有「启用且已填 apiKey」的 worker 建立连接。 */
+  /** 为所有「启用且已填 apiKey」的 worker 建立连接(实际建连还要求 presence 在线,见 connectWorker)。 */
   private async connectConfiguredWorkers(): Promise<void> {
     if (!this.config) return
     for (const cred of this.config.workers) {
@@ -394,6 +419,9 @@ class HubSession {
   private async connectWorker(workerId: string, ownerFingerprint?: string): Promise<void> {
     const config = this.config
     if (!config || !this.connected) return
+    // 只对 presence 在线 worker 建数据连接:hub 对 apiKey 不做白名单校验(只校验 hubKey),
+    // 离线也建连会握手成功但 worker 并不在——WS 通了 ≠ worker 可用,状态会误报「已连接」。
+    if (!this.workersOnline.get(workerId)) return
     if (this.workerClients.has(workerId) || this.connectingWorkers.get(workerId)) return
     let cred = config.workers.find((w) => w.workerId === workerId)
     // 指纹匹配:worker 改了 workerId(ln)后,凭 ownerKey 前缀找到同一身份的老凭证并迁移。
