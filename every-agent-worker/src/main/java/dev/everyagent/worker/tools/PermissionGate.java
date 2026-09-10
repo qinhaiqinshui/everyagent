@@ -5,6 +5,7 @@ import dev.everyagent.worker.modules.WorkspaceManager.Root;
 import dev.everyagent.worker.task.TaskEntry;
 import dev.everyagent.worker.tools.permission.AuthorizeCheck;
 import dev.everyagent.worker.tools.permission.CommandCheck;
+import dev.everyagent.worker.tools.permission.ExternalRootAllowCheck;
 import dev.everyagent.worker.tools.permission.GrantRegistry;
 import dev.everyagent.worker.tools.permission.MissingPathCheck;
 import dev.everyagent.worker.tools.permission.OverBroadRootCheck;
@@ -34,15 +35,18 @@ import java.util.List;
  *
  * <ul>
  *   <li>文件路径链:{@link WorkspaceAllowCheck} → {@link MissingPathCheck} →
- *       {@link SkillsReadAllowCheck}(skills 目录只读放行)→ {@link OverBroadRootCheck}
- *       → {@link AuthorizeCheck};</li>
+ *       {@link SkillsReadAllowCheck}(skills 目录只读放行)→
+ *       {@link ExternalRootAllowCheck}(工作区外部授权根放行环,用户显式选择=已授权,
+ *       §7.8/§7.17)→ {@link OverBroadRootCheck} → {@link AuthorizeCheck};</li>
  *   <li>命令链:{@link CommandCheck}(危险动词 + 越界路径逐项授权);</li>
  *   <li>提权链:{@link PrivilegeCheck}(提权动词 / seccomp setuid exec)。</li>
  * </ul>
  *
  * <p>授权决议链(弹窗 / AI 审议 / 无人值守)与 grant 状态由 {@link GrantRegistry} 承载;
  * 系统目录 / 程序目录与普通工作区外目录同权,全部走授权决议链,不再有硬拒不弹窗;
- * skills 目录只读内容经 {@link SkillsReadAllowCheck} 直接放行(其余操作仍走授权决议链)。
+ * skills 目录只读内容经 {@link SkillsReadAllowCheck} 直接放行(其余操作仍走授权决议链);
+ * 工作区外部授权根(用户经 @ 弹窗显式选择,§7.17)经 {@link ExternalRootAllowCheck}
+ * 放行环直接放行(完全读写,不再弹窗)。
  * 主/子 agent 按 taskId 共享授权。
  */
 @Component
@@ -62,13 +66,14 @@ public class PermissionGate {
 
     public PermissionGate(WorkspaceManager workspaces, GrantRegistry grants,
             WorkspaceAllowCheck workspaceAllow, MissingPathCheck missing,
-            SkillsReadAllowCheck skillsRead, OverBroadRootCheck overBroad,
+            SkillsReadAllowCheck skillsRead, ExternalRootAllowCheck externalRoots,
+            OverBroadRootCheck overBroad,
             AuthorizeCheck authorize,
             CommandCheck commandCheck, PrivilegeCheck privilegeCheck) {
         this.workspaces = workspaces;
         this.grants = grants;
         this.pathChain = new PermissionChain(
-                List.of(workspaceAllow, missing, skillsRead, overBroad, authorize));
+                List.of(workspaceAllow, missing, skillsRead, externalRoots, overBroad, authorize));
         this.cmdChain = new PermissionChain(List.of(commandCheck));
         this.privChain = new PermissionChain(List.of(privilegeCheck));
     }

@@ -111,6 +111,10 @@ public class GrantRegistry {
      * 一律拒收——含历史 grants.json 载入的旧宽根(修复前落盘的 {@code C:\} 等)。
      * 命令执行器两后端共用:windows-mic 侧不进 Low 标注/ACL,wsl-bwrap 侧不进 --bind
      * 白名单(否则一个 C:\ 会把整个 /mnt/c 以读写挂进沙箱,读隔离被击穿)。
+     *
+     * <p>外部授权根并入(§7.17):该工作区的 externalRoots(用户显式选择=已授权,
+     * 完全读写)同样进入本视图——注册时已过宽根滤过,这里按同一谓词再滤一遍(纵深),
+     * 与已授权 EXEC 根去重后拼接。
      */
     public List<Path> execRootsSandboxed(TaskEntry t) {
         Path wsLex = null;
@@ -126,6 +130,17 @@ public class GrantRegistry {
         for (Path root : execRoots(t.taskId)) {
             if (OverBroadRootCheck.isOverBroadRoot(root, wsLex, wsReal)) {
                 log.warn("[gate] L2 拒收过度宽泛 EXEC 根(不进沙箱/标注/ACL)task={} root={}",
+                        t.taskId, root);
+                continue;
+            }
+            out.add(root);
+        }
+        for (Path root : workspaces.externalRootsOf(t.workspaceRoot)) {
+            if (out.contains(root)) {
+                continue; // 与已授权 EXEC 根重叠:去重
+            }
+            if (OverBroadRootCheck.isOverBroadRoot(root, wsLex, wsReal)) {
+                log.warn("[gate] L2 拒收过度宽泛外部授权根(不进沙箱/标注/ACL)task={} root={}",
                         t.taskId, root);
                 continue;
             }

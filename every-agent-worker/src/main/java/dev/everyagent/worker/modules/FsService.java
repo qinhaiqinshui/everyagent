@@ -88,16 +88,29 @@ public class FsService {
      * 浏览目录(方案 B):不经 workspace 沙箱,用于「新建工作区选择目录」前的逐层浏览。
      * - path 缺省/空:返回当前文件系统的所有根/盘符(第一层)。
      * - 否则:列出该绝对路径下的直接子目录(仅目录,不列文件)。
+     * - 可选 includeFiles=true:文件与目录一起列出,条目带 kind(file/directory,按文件名混排),
+     *   响应加 supportsFiles:true 能力标记(前端探测用);缺省 false 时响应与旧契约逐字节兼容。
      * 依赖运行 worker 进程的文件系统权限;无权限/路径非法时 IO 异常透传为 RPC 错误。
      */
     private void browse(RpcContext ctx) throws IOException {
         String raw = ctx.optStrParam("path", "").trim();
+        // RPC 层暂无 optBoolParam,按 optStrParam 既有模式解析;
+        // 兼容 JSON 布尔(true/false)与字符串("true"/"false")两种携带方式。
+        boolean includeFiles = "true".equalsIgnoreCase(ctx.optStrParam("includeFiles", "false").trim());
         if (raw.isEmpty()) {
             ArrayNode roots = Json.arr();
             for (Path root : java.nio.file.FileSystems.getDefault().getRootDirectories()) {
-                roots.add(Json.obj().put("path", root.toString()).put("name", root.toString()));
+                ObjectNode e = Json.obj().put("path", root.toString()).put("name", root.toString());
+                if (includeFiles) {
+                    e.put("kind", "directory"); // 盘符/根必为目录
+                }
+                roots.add(e);
             }
-            ctx.ok(Json.obj().put("isRoot", true).set("entries", roots));
+            ObjectNode res = Json.obj().put("isRoot", true);
+            if (includeFiles) {
+                res.put("supportsFiles", true);
+            }
+            ctx.ok(res.set("entries", roots));
             return;
         }
         Path dir = Path.of(raw).toAbsolutePath().normalize();
@@ -107,7 +120,7 @@ public class FsService {
         List<Path> children = new ArrayList<>();
         try (DirectoryStream<Path> ds = Files.newDirectoryStream(dir)) {
             for (Path c : ds) {
-                if (Files.isDirectory(c)) {
+                if (includeFiles || Files.isDirectory(c)) {
                     children.add(c);
                 }
             }
@@ -115,9 +128,17 @@ public class FsService {
         children.sort(Comparator.comparing((Path p) -> p.getFileName().toString()));
         ArrayNode entries = Json.arr();
         for (Path c : children) {
-            entries.add(Json.obj().put("path", c.toString()).put("name", c.getFileName().toString()));
+            ObjectNode e = Json.obj().put("path", c.toString()).put("name", c.getFileName().toString());
+            if (includeFiles) {
+                e.put("kind", Files.isDirectory(c) ? "directory" : "file");
+            }
+            entries.add(e);
         }
-        ctx.ok(Json.obj().put("isRoot", false).put("path", dir.toString()).set("entries", entries));
+        ObjectNode res = Json.obj().put("isRoot", false).put("path", dir.toString());
+        if (includeFiles) {
+            res.put("supportsFiles", true);
+        }
+        ctx.ok(res.set("entries", entries));
     }
 
     /**

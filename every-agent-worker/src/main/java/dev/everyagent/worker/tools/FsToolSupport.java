@@ -78,9 +78,18 @@ public class FsToolSupport {
     public record ReadResult(String text, boolean truncated) {
     }
 
-    /** 按任务工作区根 + 已授权外部根绑定沙箱(附带系统技能目录只读根,skills 读免授权 §13.8)。 */
+    /**
+     * 按任务工作区根 + 已授权外部根绑定沙箱(附带系统技能目录只读根,skills 读免授权 §13.8;
+     * 另并入该工作区外部授权根——用户显式选择=已授权,§7.17,read_file/write_text 等
+     * 经 gate 放行环后由沙箱直接放行,与 extraRoots 去重)。
+     */
     private Sandbox sandbox(TaskEntry t) throws IOException {
         List<Path> roots = new ArrayList<>(gate.extraRoots(t.taskId));
+        for (Path ext : workspaces.externalRootsOf(t.workspaceRoot)) {
+            if (!roots.contains(ext)) {
+                roots.add(ext); // externalRoots 为 realpath 形态,与授权根重叠时去重
+            }
+        }
         roots.addAll(skillsReadonlyRoots());
         return new Sandbox(workspaces.resolve(t.workspaceRoot), roots);
     }

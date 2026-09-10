@@ -4,6 +4,7 @@ import dev.everyagent.contract.json.Json;
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.hub.HubLink;
 import dev.everyagent.worker.hub.HubPool;
+import dev.everyagent.worker.os.wsl.WslUmounter;
 import dev.everyagent.worker.rpc.BadParamsException;
 import dev.everyagent.worker.rpc.RpcContext;
 import dev.everyagent.worker.rpc.RpcDispatcher;
@@ -52,6 +53,11 @@ class WorkspaceManagerTest {
         return new RpcContext(link, "req-" + System.nanoTime(), method, params);
     }
 
+    /** 打桩 WslUmounter(伪造 runner,不触发真实 wsl.exe;恒返回 0 = 命令成功)。 */
+    private WslUmounter noUmount() {
+        return new WslUmounter(new WorkerProperties(), (argv, timeoutMs) -> 0);
+    }
+
     private void invokeResolveMissing(WorkspaceManager wm, ObjectNode params) throws Exception {
         Method m = WorkspaceManager.class.getDeclaredMethod("rpcResolveMissing", RpcContext.class);
         m.setAccessible(true);
@@ -86,7 +92,7 @@ class WorkspaceManagerTest {
         ObjectProvider<TaskManager> provider = mock(ObjectProvider.class);
         when(provider.getIfAvailable()).thenReturn(tm);
         WorkspaceManager wm = new WorkspaceManager(props(tempDir.resolve("home"), dataDir, valid),
-                mock(RpcDispatcher.class), mock(HubPool.class), provider);
+                mock(RpcDispatcher.class), mock(HubPool.class), provider, noUmount());
         wm.init();
 
         assertEquals(2, wm.list().size());
@@ -109,7 +115,7 @@ class WorkspaceManagerTest {
         ObjectProvider<TaskManager> provider = mock(ObjectProvider.class);
         when(provider.getIfAvailable()).thenReturn(tm);
         WorkspaceManager wm = new WorkspaceManager(props(tempDir.resolve("home"), dataDir, valid),
-                mock(RpcDispatcher.class), mock(HubPool.class), provider);
+                mock(RpcDispatcher.class), mock(HubPool.class), provider, noUmount());
         wm.init();
 
         Path newDir = tempDir.resolve("new-home");
@@ -140,7 +146,7 @@ class WorkspaceManagerTest {
         ObjectProvider<TaskManager> provider = mock(ObjectProvider.class);
         when(provider.getIfAvailable()).thenReturn(tm);
         WorkspaceManager wm = new WorkspaceManager(props(tempDir.resolve("home"), dataDir, valid),
-                mock(RpcDispatcher.class), mock(HubPool.class), provider);
+                mock(RpcDispatcher.class), mock(HubPool.class), provider, noUmount());
         wm.init();
 
         // 默认工作区(valid)不可删除。

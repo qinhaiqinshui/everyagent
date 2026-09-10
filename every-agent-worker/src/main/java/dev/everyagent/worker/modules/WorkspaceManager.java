@@ -4,7 +4,9 @@ import dev.everyagent.contract.json.Json;
 import dev.everyagent.worker.AtomicFiles;
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.hub.HubPool;
+import dev.everyagent.worker.os.wsl.WslUmounter;
 import dev.everyagent.worker.proto.RpcMethods;
+import dev.everyagent.worker.tools.permission.OverBroadRootCheck;
 import dev.everyagent.worker.rpc.BadParamsException;
 import dev.everyagent.worker.rpc.RpcDispatcher;
 import dev.everyagent.worker.rpc.RpcContext;
@@ -52,8 +54,17 @@ public class WorkspaceManager {
     public record Root(Path path, Path realPath) {
     }
 
-    /** 注册表条目(workspaces.json 单项:{root, addedAt},无存储维度)。 */
-    public record Registered(String root, long addedAt) {
+    /**
+     * 注册表条目(workspaces.json 单项:{root, addedTs, externalRoots?},无存储维度)。
+     * externalRoots = 工作区外部授权根(realpath 规范化后的 Windows 原生绝对路径,
+     * 按注册序;保持反包含的「宽根集」);旧文件无该字段读入为空列表。
+     */
+    public record Registered(String root, long addedAt, List<String> externalRoots) {
+
+        /** 兼容旧调用:无外部授权根的条目。 */
+        public Registered(String root, long addedAt) {
+            this(root, addedAt, List.of());
+        }
     }
 
     private final WorkerProperties props;
@@ -64,6 +75,11 @@ public class WorkspaceManager {
      * TaskManager 会构成构造器循环。用 ObjectProvider 懒解析,仅 workspaces.remove 级联删除时取用。
      */
     private final ObjectProvider<TaskManager> taskManagers;
+    /**
+     * 外部授权根级联 umount 收口(独立组件,不注入 OsSandbox——后者构造注入了本类,
+     * 反向依赖会构成构造循环);仅删除工作区时 best-effort 调用,失败不阻塞删除流程。
+     */
+    private final WslUmounter umounter;
 
     private Path systemDir;
     private Path defaultRoot;
@@ -79,13 +95,15 @@ public class WorkspaceManager {
     private final Set<String> missing = ConcurrentHashMap.newKeySet();
 
     public WorkspaceManager(WorkerProperties props, RpcDispatcher dispatcher, HubPool pool,
-            ObjectProvider<TaskManager> taskManagers) {
+            ObjectProvider<TaskManager> taskManagers, WslUmounter umounter) {
         this.props = props;
         this.dispatcher = dispatcher;
         this.pool = pool;
         this.taskManagers = taskManagers;
+        this.umounter = umounter;
         dispatcher.register(RpcMethods.WORKSPACES_LIST, this::rpcList);
         dispatcher.register(RpcMethods.WORKSPACES_ADD, this::rpcAdd);
+        dispatcher.register(RpcMethods.WORKSPACES_ADD_EXTERNAL_ROOT, this::rpcAddExternalRoot);
         dispatcher.register(RpcMethods.WORKSPACES_REMOVE, this::rpcRemove);
         dispatcher.register(RpcMethods.WORKSPACES_RESOLVE_MISSING, this::rpcResolveMissing);
     }
@@ -153,6 +171,96 @@ public class WorkspaceManager {
         return defaultRoot;
     }
 
+    // ---- 外部授权根(数据层;沙箱消费方另行接入) ----
+
+    /** addExternalRoot 结果:action = registered(新增)/absorbed(吸收替换旧根)/skipped(幂等或已被包含);roots = 注册后全量根。 */
+    public record ExternalRootsUpdate(String action, List<Path> roots) {
+    }
+
+    /**
+     * 注册工作区外部授权根:外部路径必须存在(toRealPath 解析),目录→授权根取自身、
+     * 文件→取父目录;过宽根(盘根、工作区祖先/自身,{@link OverBroadRootCheck} 单点
+     * 判定)拒收;与已有根去重并做包含吸收(新根是旧根祖先→旧根被替换),幂等注册
+     * 无副作用;立即落盘(workspaces.json,原子写)。
+     *
+     * @return 注册结果与注册后全量外部授权根(realpath 形态)
+     */
+    public synchronized ExternalRootsUpdate addExternalRoot(String workspace, String externalPath)
+            throws IOException {
+        if (workspace == null || workspace.isBlank()) {
+            throw new BadParamsException("缺少参数 workspace(工作区绝对路径)");
+        }
+        String key = Path.of(workspace.trim()).toAbsolutePath().normalize().toString();
+        Registered entry = registry.get(key);
+        if (entry == null) {
+            throw new BadParamsException("工作区未注册: " + key);
+        }
+        Root ws = resolve(workspace); // 缺失工作区/越界在此被拒(在册条目本已合法,此处复用校验与缓存)
+        if (externalPath == null || externalPath.isBlank()) {
+            throw new BadParamsException("缺少参数 path(外部路径)");
+        }
+        Path in = Path.of(externalPath.trim());
+        if (!in.isAbsolute()) {
+            throw new BadParamsException("外部路径必须是 worker 所在机器的绝对路径: " + externalPath);
+        }
+        Path real;
+        try {
+            real = in.toRealPath();
+        } catch (IOException e) {
+            throw new BadParamsException("外部路径不存在或不可解析: " + externalPath);
+        }
+        Path authRoot = Files.isDirectory(real) ? real : real.getParent();
+        if (authRoot == null) {
+            throw new BadParamsException("无法确定授权根(路径直指文件系统根): " + real);
+        }
+        if (OverBroadRootCheck.isOverBroadRoot(authRoot, ws.path(), ws.realPath())) {
+            throw new BadParamsException("外部授权根过宽(盘根/工作区祖先或自身),拒收: " + authRoot);
+        }
+        List<Path> existing = entry.externalRoots().stream().map(Path::of).toList();
+        if (existing.stream().anyMatch(e -> covers(e, authRoot))) {
+            return new ExternalRootsUpdate("skipped", existing); // 与已有根相同或被其包含:幂等跳过
+        }
+        List<Path> merged = new ArrayList<>();
+        for (Path e : existing) {
+            if (!covers(authRoot, e)) { // 包含吸收:被新根包含的旧根剔除
+                merged.add(e);
+            }
+        }
+        String action = merged.size() < existing.size() ? "absorbed" : "registered";
+        merged.add(authRoot);
+        registry.put(key, new Registered(key, entry.addedAt(),
+                merged.stream().map(Path::toString).toList()));
+        persistRegistry();
+        return new ExternalRootsUpdate(action, merged);
+    }
+
+    /** 工作区的外部授权根(realpath 形态,注册序);未注册或无根返回空列表(消费方安全默认)。 */
+    public List<Path> externalRootsOf(String workspaceRoot) {
+        if (workspaceRoot == null || workspaceRoot.isBlank()) {
+            return List.of();
+        }
+        Registered e = registry.get(Path.of(workspaceRoot.trim()).toAbsolutePath().normalize().toString());
+        return e == null ? List.of() : e.externalRoots().stream().map(Path::of).toList();
+    }
+
+    /**
+     * <b>全部工作区</b>外部授权根汇总(realpath 形态,按注册序跨工作区去重)。
+     * 供 wsl-direct 后端并入每条命令的挂载列表(与工作区根同语义:跨任务共享、
+     * runner trusted 阶段幂等挂载,§7.17);无任何外部根返回空列表。
+     */
+    public List<Path> allExternalRoots() {
+        List<Path> out = new ArrayList<>();
+        for (Registered r : list()) {
+            for (String raw : r.externalRoots()) {
+                Path p = Path.of(raw);
+                if (!out.contains(p)) {
+                    out.add(p);
+                }
+            }
+        }
+        return out;
+    }
+
     // ---- RPC ----
 
     private void rpcList(RpcContext ctx) {
@@ -166,6 +274,14 @@ public class WorkspaceManager {
         ctx.ok(snapshot().put("addedRoot", root.path().toString()));
     }
 
+    /** 注册工作区外部授权根(授权决议链消费;数据层语义见 {@link #addExternalRoot})。 */
+    private void rpcAddExternalRoot(RpcContext ctx) throws IOException {
+        ExternalRootsUpdate u = addExternalRoot(ctx.strParam("workspace"), ctx.strParam("path"));
+        ArrayNode roots = Json.arr();
+        u.roots().forEach(r -> roots.add(r.toString()));
+        ctx.ok(Json.obj().put("action", u.action()).set("externalRoots", roots));
+    }
+
     /**
      * 移除注册(不删工作区目录本身——用户真实数据不动;但挂靠该工作区的任务数据一并删除,
      * 任务数据落系统目录 data/tasks/&lt;taskId&gt;/ 不属用户目录)。默认工作区不可移除。
@@ -176,7 +292,8 @@ public class WorkspaceManager {
         if (key.equals(defaultRoot.toString())) {
             throw new BadParamsException("默认工作区不可移除: " + key);
         }
-        if (registry.remove(key) == null) {
+        Registered removed = registry.remove(key);
+        if (removed == null) {
             throw new BadParamsException("工作区未注册: " + key);
         }
         missing.remove(key);
@@ -188,6 +305,8 @@ public class WorkspaceManager {
         if (taskManager != null) {
             taskManager.deleteByWorkspace(key);
         }
+        // 级联 umount 本工作区独有的外部授权根(其余工作区仍引用的保留;best-effort 不阻塞)。
+        unmountExclusiveExternalRoots(removed);
         ctx.ok(snapshot());
     }
 
@@ -216,7 +335,7 @@ public class WorkspaceManager {
         if (key.equals(defaultRoot.toString())) {
             throw new BadParamsException("默认工作区不可删除,请选择「纠正路径」: " + key);
         }
-        registry.remove(key);
+        Registered removed = registry.remove(key);
         missing.remove(key);
         cache.remove(key);
         persistRegistry();
@@ -224,6 +343,10 @@ public class WorkspaceManager {
         TaskManager taskManager = taskManagers.getIfAvailable();
         if (taskManager != null) {
             taskManager.deleteByWorkspace(key);
+        }
+        // 与 workspaces.remove 同语义:级联 umount 独有外部授权根(best-effort 不阻塞)。
+        if (removed != null) {
+            unmountExclusiveExternalRoots(removed);
         }
         ctx.ok(snapshot());
     }
@@ -240,7 +363,9 @@ public class WorkspaceManager {
         cache.remove(key);
         String newKey = newRoot.path().toString();
         long addedAt = existing == null ? System.currentTimeMillis() : existing.addedAt();
-        registry.put(newKey, new Registered(newKey, addedAt));
+        // 纠正的是工作区自身路径,外部授权根(realpath 在工作区之外)随条目保留。
+        List<String> externalRoots = existing == null ? List.of() : existing.externalRoots();
+        registry.put(newKey, new Registered(newKey, addedAt, externalRoots));
         if (key.equals(defaultRoot.toString())) {
             writeDefaultOverride(newKey);
             defaultRoot = newRoot.path();
@@ -255,6 +380,49 @@ public class WorkspaceManager {
     }
 
     // ---- 内部 ----
+
+    /**
+     * 删除工作区后级联 umount 其「独有」外部授权根:收集其余在册工作区仍引用的根
+     * (realpath 对比;后代也算引用——候选根之下还有别人的挂载点时一并保留,防孤儿
+     * 挂载),无人引用的交 {@link WslUmounter} best-effort 卸载(wsl 系后端才实际
+     * 执行)。失败仅告警,绝不阻塞删除流程。
+     */
+    private void unmountExclusiveExternalRoots(Registered removed) {
+        if (removed.externalRoots().isEmpty()) {
+            return;
+        }
+        List<Path> stillUsed = new ArrayList<>();
+        for (Registered r : registry.values()) {
+            for (String raw : r.externalRoots()) {
+                stillUsed.add(Path.of(raw));
+            }
+        }
+        for (String raw : removed.externalRoots()) {
+            Path root = Path.of(raw);
+            boolean shared = stillUsed.stream().anyMatch(p -> covers(root, p));
+            if (!shared) {
+                try {
+                    umounter.umountQuietly(root);
+                } catch (RuntimeException e) {
+                    log.warn("外部授权根级联卸载异常(不影响工作区删除): {} - {}", root, e.getMessage());
+                }
+            }
+        }
+    }
+
+    /**
+     * a 覆盖 b(b 等于 a 或其后代)。externalRoots 存的是 Windows 原生绝对路径,而单测
+     * 宿主可能是 Linux——{@code Path.startsWith} 按宿主分隔符切元素,对反斜杠路径会退化成
+     * 整串相等,故统一按分隔符归一后的字符串前缀判定(realpath 无尾分隔符)。
+     */
+    private static boolean covers(Path a, Path b) {
+        if (a == null || b == null) {
+            return false;
+        }
+        String x = a.toString().replace('\\', '/');
+        String y = b.toString().replace('\\', '/');
+        return y.equals(x) || y.startsWith(x + "/");
+    }
 
     /** 校验并落定工作区根:创建缺失目录,realpath 规范化;含系统目录即拒。 */
     private Root prepare(Path in) throws IOException {
@@ -287,6 +455,11 @@ public class WorkspaceManager {
             ObjectNode o = Json.obj()
                     .put("root", r.root())
                     .put("addedAt", r.addedAt());
+            if (!r.externalRoots().isEmpty()) {
+                ArrayNode ext = Json.arr();
+                r.externalRoots().forEach(ext::add);
+                o.set("externalRoots", ext);
+            }
             if (missing.contains(key)) {
                 o.put("missing", true);
             }
@@ -318,12 +491,29 @@ public class WorkspaceManager {
                         continue;
                     }
                     registry.put(Path.of(root).toAbsolutePath().normalize().toString(),
-                            new Registered(root, n.path("addedTs").asLong(System.currentTimeMillis())));
+                            new Registered(root, n.path("addedTs").asLong(System.currentTimeMillis()),
+                                    readExternalRoots(n)));
                 }
             }
         } catch (IOException | RuntimeException e) {
             log.warn("workspaces.json 读取失败,忽略注册表", e);
         }
+    }
+
+    /** 旧格式兼容:无 externalRoots 字段(或非数组/空串项)读入为空列表,不视为损坏。 */
+    private static List<String> readExternalRoots(JsonNode n) {
+        JsonNode arr = n.path("externalRoots");
+        if (!arr.isArray()) {
+            return List.of();
+        }
+        List<String> out = new ArrayList<>();
+        for (JsonNode x : arr) {
+            String s = x.asString("");
+            if (!s.isEmpty()) {
+                out.add(s);
+            }
+        }
+        return List.copyOf(out);
     }
 
     /** 启动自检:仅校验本次从 workspaces.json 载入的条目,目录缺失即标记待处理。 */
@@ -372,7 +562,13 @@ public class WorkspaceManager {
         List<Registered> sorted = list();
         ArrayNode arr = Json.arr();
         for (Registered r : sorted) {
-            arr.add(Json.obj().put("root", r.root()).put("addedTs", r.addedAt()));
+            ObjectNode o = Json.obj().put("root", r.root()).put("addedTs", r.addedAt());
+            if (!r.externalRoots().isEmpty()) { // 空列表不写字段:未注册外部根的文件保持旧格式形状
+                ArrayNode ext = Json.arr();
+                r.externalRoots().forEach(ext::add);
+                o.set("externalRoots", ext);
+            }
+            arr.add(o);
         }
         Files.writeString(tmp, Json.write(arr));
         AtomicFiles.replace(tmp, f); // 原子替换(失败已清理 tmp 后抛出,不残留垃圾)

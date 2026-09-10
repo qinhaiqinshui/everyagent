@@ -11,6 +11,7 @@ import dev.everyagent.worker.task.TaskEntry;
 import dev.everyagent.worker.task.TaskStore;
 import dev.everyagent.worker.tools.permission.AuthorizeCheck;
 import dev.everyagent.worker.tools.permission.CommandCheck;
+import dev.everyagent.worker.tools.permission.ExternalRootAllowCheck;
 import dev.everyagent.worker.tools.permission.GrantRegistry;
 import dev.everyagent.worker.tools.permission.MissingPathCheck;
 import dev.everyagent.worker.tools.permission.OverBroadRootCheck;
@@ -108,6 +109,7 @@ class PermissionGateReviewTest {
                 new WorkspaceAllowCheck(),
                 new MissingPathCheck(),
                 new SkillsReadAllowCheck(new WorkerProperties()),
+                new ExternalRootAllowCheck(wm),
                 new OverBroadRootCheck(),
                 new AuthorizeCheck(grants),
                 new CommandCheck(new WorkerProperties(), wm, grants),
