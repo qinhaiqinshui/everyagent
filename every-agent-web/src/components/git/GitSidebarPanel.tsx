@@ -239,8 +239,14 @@ function GitWorkspaceGroupPanel({
   const [commitMessage, setCommitMessage] = React.useState('')
   const [busy, setBusy] = React.useState<'status' | 'commit' | 'pull' | 'push' | 'init' | 'clone' | 'discard' | 'delete' | null>('status')
   const [diffLoadingPath, setDiffLoadingPath] = React.useState<string | null>(null)
-  /** 卡片折叠态:折叠时仅保留头部行(工作区名 + 操作按钮),隐藏提交区/更改树等内容。 */
-  const [collapsed, setCollapsed] = React.useState(false)
+  /**
+   * 卡片折叠态:折叠时仅保留头部行(工作区名 + 分支 + 操作按钮),隐藏提交区/更改树。
+   * 默认折叠;检测到「从无变更 → 有变更」的转变时自动展开——切回面板/操作后刷新
+   * 出变更的工作区一眼可见。用户在仍有变更时手动折叠不被打扰(ref 仍为 true 不触发
+   * 展开);变更清零后再出现新变更会再次展开。
+   */
+  const [collapsed, setCollapsed] = React.useState(true)
+  const prevHadChangesRef = React.useRef<boolean | null>(null)
   /** 多选模式:树显示勾选框,提交/放弃仅作用于勾选集(右键「多选」进入)。 */
   const [multiSelect, setMultiSelect] = React.useState(false)
   /** 右键菜单:触发点坐标 + 目标文件(路径 + 状态类别);null = 关闭。 */
@@ -314,6 +320,15 @@ function GitWorkspaceGroupPanel({
       return next.size === current.size ? current : next
     })
   }, [leafPaths])
+
+  /** 变更从无到有 → 自动展开本工作区分组(语义见 collapsed 声明处注释)。 */
+  React.useEffect(() => {
+    const hasChanges = leaves.length > 0
+    if (hasChanges && prevHadChangesRef.current !== true) {
+      setCollapsed(false)
+    }
+    prevHadChangesRef.current = hasChanges
+  }, [leaves.length])
 
   /** 双击变更文件:经 openDiffTab 在主区打开独立 diff 标签页(替代旧内联 diff)。 */
   const openFileDiff = React.useCallback(async (path: string) => {
