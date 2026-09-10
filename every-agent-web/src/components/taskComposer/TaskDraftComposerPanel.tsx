@@ -131,6 +131,7 @@ export default function TaskDraftComposerPanel({
             draft={draft}
             workspace={selectedWorkspace || undefined}
             workerId={workerId}
+            isMobile={isMobile}
             placeholder="输入你想让当前任务处理的内容"
             submitLabel={submitLabel}
             submitDisabled={submitDisabled}

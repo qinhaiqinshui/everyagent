@@ -696,6 +696,7 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
             taskId={effectiveTaskId}
             workerId={ownerWorkerId}
             workspace={entry?.workspace}
+            isMobile={isMobile}
             abovePanel={(
               <div className="nagent-composer__above-stack">
                 <AgentListPanel

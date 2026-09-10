@@ -55,6 +55,11 @@ public final class OsSandbox {
     /** 单流输出字符上限(stdout / stderr 各自适用):超出截断,防止超大输出撑爆上下文 / 内存。 */
     private static final int MAX_OUTPUT_CHARS = 1_000_000;
 
+    /** 子进程 stdin 的 null 设备(Windows=NUL 设备,其余=/dev/null),见命令 stdin 契约 §7.10。 */
+    private static final java.io.File NULL_INPUT = new java.io.File(
+            System.getProperty("os.name").toLowerCase(java.util.Locale.ROOT).contains("win")
+                    ? "NUL" : "/dev/null");
+
     /** 解析后的沙箱后端。 */
     public enum Backend {
         /** WSL2 发行版 + bubblewrap 挂载命名隔离。 */
@@ -413,6 +418,11 @@ public final class OsSandbox {
             boolean allowNetwork, long timeoutMs) {
         ProcessBuilder pb = new ProcessBuilder(cmd);
         pb.directory(cwd.toFile());
+        // stdin 接 null 设备(命令 stdin 契约,§7.10):本方法从不向 stdin 写入,保持默认
+        // 管道只会给子进程留下一个「打开的空管道」——rg/grep 无路径参数时据 stdin 可读
+        // 判定改读 stdin(静默空结果,与「无匹配」不可区分),cat 等阻塞读则挂到超时;
+        // null 设备使读 stdin 的命令立即 EOF。Windows 用 NUL 设备(设备名路径解析)。
+        pb.redirectInput(ProcessBuilder.Redirect.from(NULL_INPUT));
         pb.environment().putAll(sanitizedEnv(extraEnv, allowNetwork));
         try {
             Process p = pb.start();

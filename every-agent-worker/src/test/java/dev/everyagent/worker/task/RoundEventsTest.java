@@ -90,7 +90,7 @@ class RoundEventsTest {
 
         // 闭合后再次开轮又为 true
         events.message(MAIN, "", "第一答", List.of());
-        rounds.persistClosedRounds(store, log, "t1", MAIN, null, null);
+        rounds.persistClosedRounds(store, log, "t1", MAIN, null, null, 0L);
         long s3 = events.userMessage("第二问");
         assertTrue(rounds.openRoundAtStart(store, "t1", s3, "第二问", null), "已闭合尾行 → 追加新行=true");
     }
@@ -100,7 +100,7 @@ class RoundEventsTest {
     @Test
     void persistClosedRoundsReturnsNewlyClosedRounds() {
         long startSeq = openAndEmitClosedRound("第一问", "第一答");
-        List<RoundIndex.Round> closed = rounds.persistClosedRounds(store, log, "t1", MAIN, null, null);
+        List<RoundIndex.Round> closed = rounds.persistClosedRounds(store, log, "t1", MAIN, null, null, 0L);
         assertEquals(1, closed.size(), "本次确实新闭合了一轮");
         RoundIndex.Round r = closed.get(0);
         assertEquals(startSeq, r.startSeq());
@@ -109,13 +109,13 @@ class RoundEventsTest {
         assertNotNull(r.endSeq());
 
         // 幂等:再调用返回空(已闭合,不算新闭合)
-        assertTrue(rounds.persistClosedRounds(store, log, "t1", MAIN, null, null).isEmpty(), "幂等:已闭合轮不再计入新闭合");
+        assertTrue(rounds.persistClosedRounds(store, log, "t1", MAIN, null, null, 0L).isEmpty(), "幂等:已闭合轮不再计入新闭合");
 
         // 无最终回复的未闭合轮(中间输入/中断)不产生新闭合
         long s2 = events.userMessage("被中断之问");
         rounds.openRoundAtStart(store, "t1", s2, "被中断之问", null);
         events.delta(MAIN, "半截");
-        assertTrue(rounds.persistClosedRounds(store, log, "t1", MAIN, null, null).isEmpty(), "无最终回复:无新闭合轮");
+        assertTrue(rounds.persistClosedRounds(store, log, "t1", MAIN, null, null, 0L).isEmpty(), "无最终回复:无新闭合轮");
     }
 
     // ---- 磁盘 jsonl 不含 round 事件(经 TaskStore 真落盘)----
@@ -133,7 +133,7 @@ class RoundEventsTest {
             events.roundOpened(startSeq, "第一问");
             events.delta(MAIN, "流");
             events.message(MAIN, "", "第一答", List.of());
-            for (RoundIndex.Round r : rounds.persistClosedRounds(store, log, "t1", MAIN, null, null)) {
+            for (RoundIndex.Round r : rounds.persistClosedRounds(store, log, "t1", MAIN, null, null, 0L)) {
                 if (r.endSeq() != null) {
                     events.roundClosed(r.startSeq(), r.endSeq(), r.finalReply());
                 }

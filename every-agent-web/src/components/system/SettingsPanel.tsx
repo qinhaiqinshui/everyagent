@@ -30,8 +30,8 @@ import type { WorkerInfo } from '@/hub/session'
 function workerStatusLabel(worker: WorkerInfo): string {
   if (worker.error) return '连接失败 · ' + worker.error.code
   if (worker.connecting) return '连接中…'
-  if (worker.connected) return '已连接'
   if (!worker.online) return '离线'
+  if (worker.connected) return '已连接'
   if (!worker.hasApiKey) return '未配置'
   if (!worker.enabled) return '已禁用'
   return '未连接'
@@ -40,6 +40,7 @@ function workerStatusLabel(worker: WorkerInfo): string {
 function workerStatusColor(worker: WorkerInfo): string {
   if (worker.error) return 'var(--accent-red)'
   if (worker.connecting) return 'var(--accent-amber)'
+  if (!worker.online) return 'var(--text-muted)'
   if (worker.connected) return 'var(--accent-green)'
   return 'var(--text-muted)'
 }
@@ -116,7 +117,11 @@ export default function SettingsPanel() {
       if (result.ok) {
         await taskStore.refresh()
         await workspaceRegistry.refresh()
-        setMessage('已连接 worker ' + workerId)
+        setMessage(
+          result.online
+            ? '已连接 worker ' + workerId
+            : '已保存 worker ' + workerId + ' 的 apiKey(worker 当前离线)',
+        )
         setMessageTone('ok')
       } else {
         const detail = result.error?.detail || result.error?.code || '未知错误'
@@ -144,7 +149,11 @@ export default function SettingsPanel() {
       if (enabled) {
         await taskStore.refresh()
         await workspaceRegistry.refresh()
-        setMessage('已连接 worker ' + workerId)
+        setMessage(
+          result.online
+            ? '已连接 worker ' + workerId
+            : '已启用 worker ' + workerId + '(worker 当前离线)',
+        )
       } else {
         void taskStore.refresh()
         void workspaceRegistry.refresh()

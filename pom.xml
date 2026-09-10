@@ -12,7 +12,7 @@
 
     <groupId>dev.everyagent</groupId>
     <artifactId>every-agent-parent</artifactId>
-    <version>0.1.0-SNAPSHOT</version>
+    <version>0.1.2</version>
     <packaging>pom</packaging>
     <name>every-agent</name>
     <description>哪里都可以使用的 Agent —— worker 执行器 + hub 消息中心 + client SDK</description>

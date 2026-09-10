@@ -54,6 +54,7 @@ public class PowerShellTool {
         String desc = "在 Windows 上用 PowerShell 执行真实 OS 命令。"
                 + "rg 已加入 PATH,可直接执行 rg 命令，内容搜索尽量使用rg命令，性能更好;"
                 + "命令工作目录固定为任务工作区根;"
+                + "stdin 为 null 设备,命令无法从 stdin 读入输入;"
                 + "⚠️ 当前系统默认编码: " + systemEncoding
                 + "若输出含中文出现乱码,请在命令前先执行 [Console]::OutputEncoding=[System.Text.Encoding]::UTF8 再输出,"
                 + "或先执行 chcp 65001 切换代码页)。";

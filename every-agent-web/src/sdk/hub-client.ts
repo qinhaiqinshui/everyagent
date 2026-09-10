@@ -161,7 +161,16 @@ export class HubClient {
         reject(new Error('连接关闭'));
       };
       ws.onerror = () => {
+        // 连接错误必须立即失败:不能只 clearTimeout(failTimer) 等 onclose——若 onclose
+        // 不触发(浏览器边缘场景),connect() 的 Promise 会永久 pending,上层连接状态
+        // 永远卡在「连接中」。这里主动 close + reject,让调用方总能拿到结果。
         clearTimeout(failTimer);
+        try {
+          ws.close();
+        } catch {
+          // 某些状态下 close 可能抛错,忽略即可(reject 已保证调用方不再等待)。
+        }
+        reject(new Error('WebSocket 连接失败'));
       };
     });
   }

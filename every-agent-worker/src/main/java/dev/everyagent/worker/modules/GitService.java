@@ -71,6 +71,9 @@ public class GitService {
         o.set("missing", arr(s.missing()));
         o.set("untracked", arr(s.untracked()));
         o.set("conflicting", arr(s.conflicting()));
+        int[] aheadBehind = aheadBehind(sb);
+        o.put("ahead", aheadBehind[0]);
+        o.put("behind", aheadBehind[1]);
         ctx.ok(o);
     }
 
@@ -520,6 +523,36 @@ public class GitService {
             throw new RuntimeException("git.status 失败: " + (r.stderr() == null ? "" : r.stderr()));
         }
         return NativeGit.parseStatus(r.stdout());
+    }
+
+    /**
+     * 当前分支相对上游跟踪分支的 ahead/behind 提交数(纯本地,不触网)。
+     * 未配置上游(如刚 init + remote add 尚未 push)或 detached 返回 0/0——
+     * 角标只表达「有已提交未推送到远端」,无上游时无法判定,不猜测。
+     * 实现:git rev-list --left-right --count @{upstream}...HEAD → 输出「behind ahead」。
+     */
+    private int[] aheadBehind(Sandbox sb) {
+        try {
+            NativeResult r = git.runRead(sb.root(), List.of(
+                    "rev-list", "--left-right", "--count", "@{upstream}...HEAD"), CredentialSpec.none());
+            if (r.exitCode() != 0) {
+                return new int[] { 0, 0 };
+            }
+            String[] parts = r.stdout().trim().split("\\s+");
+            int behind = parts.length > 0 ? parseCount(parts[0]) : 0;
+            int ahead = parts.length > 1 ? parseCount(parts[1]) : 0;
+            return new int[] { ahead, behind };
+        } catch (IOException e) {
+            return new int[] { 0, 0 };
+        }
+    }
+
+    private static int parseCount(String s) {
+        try {
+            return (int) Long.parseLong(s.trim());
+        } catch (NumberFormatException e) {
+            return 0;
+        }
     }
 
     /** 是否有未合并冲突(porcelain 存在 unmerged 状态码)。 */

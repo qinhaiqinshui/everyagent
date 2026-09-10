@@ -208,10 +208,13 @@ public class RoundIndexStore {
      * @param fileChangesLight 本轮文件变更轻量摘要数组(随闭合行内联进 rounds.jsonl;无变更 null)
      * @param fileChangesFull  本轮文件变更全文({changes:[...]};非 null 时对每个新闭合轮写
      *                         {@code file-changes/<roundId>.json},失败仅记日志不阻断)
+     * @param durationMs       本轮端到端耗时(RoundIndexAdvisor 从计时槽算得;随闭合行<b>同一次
+     *                         落盘内联</b>,保证 round.closed 推送时耗时已在磁盘;≤0 视为未知不写)
      * @return 本次实际「新闭合」的轮(幂等跳过与未闭合沿用不计入;失败为空列表)
      */
     public List<RoundIndex.Round> persistClosedRounds(TaskStore store, EventLog log,
-            String taskId, String mainAgentId, JsonNode fileChangesLight, JsonNode fileChangesFull) {
+            String taskId, String mainAgentId, JsonNode fileChangesLight, JsonNode fileChangesFull,
+            long durationMs) {
         try {
             Path dir = store.dirOf(taskId);
             long anchor = store.lastRoundStartSeq(dir);
@@ -224,7 +227,8 @@ public class RoundIndexStore {
                 return List.of();
             }
             List<RoundIndex.Round> newlyClosed =
-                    applyRounds(store, taskId, store.readRounds(dir), found, fileChangesLight);
+                    applyRounds(store, taskId, store.readRounds(dir), found, fileChangesLight,
+                            durationMs);
             if (fileChangesFull != null) {
                 for (RoundIndex.Round r : newlyClosed) {
                     if (r.roundId() != null && !r.roundId().isBlank()) {
@@ -240,9 +244,9 @@ public class RoundIndexStore {
     }
 
     /**
-     * 回填本轮耗时(MeasureDurationAdvisor 在 agent 流 doOnComplete 时调用,仅主 agent):
-     * 把 durationMs 写入 rounds.jsonl「最后一条已闭合轮」行(本轮收口时刚由增量补写落盘,
-     * 或续跑把未闭合尾行改判闭合时的那一行)。
+     * 回填本轮耗时(幂等兜底;主路径已由 {@link #persistClosedRounds} 随闭合行内联):
+     * 把 durationMs 写入 rounds.jsonl「最后一条已闭合轮」行——仅当该行尚无耗时(≤0)时生效,
+     * 覆盖非流式 call 等不经闭合行内联路径的旁路,以及内联失效(计时槽未打点等)的防御。
      *
      * <p>幂等/防御:文件不存在、无已闭合轮、耗时 ≤ 0、或该轮已有耗时(>0)时均跳过;
      * 每轮只由自身 run 的 advisor 回填一次,不覆盖历史。未闭合轮(endSeq 空、含本轮
@@ -300,7 +304,7 @@ public class RoundIndexStore {
      */
     private static List<RoundIndex.Round> applyRounds(TaskStore store, String taskId,
             List<RoundIndex.Round> existing, List<RoundIndex.Round> found,
-            JsonNode fileChangesLight) throws IOException {
+            JsonNode fileChangesLight, long durationMs) throws IOException {
         Map<Long, RoundIndex.Round> byStart = new LinkedHashMap<>();
         for (RoundIndex.Round r : existing) {
             byStart.putIfAbsent(r.startSeq(), r); // 撕行已由 readRounds 过滤,不参与对账
@@ -316,10 +320,12 @@ public class RoundIndexStore {
             }
             if (r.closed()) {
                 // 未闭合尾行 → 闭合行:原地改写(index 沿用磁盘行;roundId 沿用 prior 的稳定主键,
-                // 不新生成;耗时由 MeasureDurationAdvisor 另行回填;fileChanges 写入本轮轻量摘要)
+                // 不新生成;耗时随行内联——prior 已有耗时(>0)不覆盖,未知(≤0)且本轮计时有效
+                // 时用本轮 elapsed;fileChanges 写入本轮轻量摘要)
+                long dur = prior.durationMs() > 0 ? prior.durationMs() : Math.max(0L, durationMs);
                 RoundIndex.Round closed = new RoundIndex.Round(prior.roundId(), prior.index(),
                         r.startSeq(), r.endSeq(), r.user(), r.finalReply(),
-                        r.subs(), prior.durationMs(), fileChangesLight,
+                        r.subs(), dur, fileChangesLight,
                         r.userMessage() != null ? r.userMessage() : prior.userMessage());
                 if (store.rewriteRound(taskId, closed)) {
                     newlyClosed.add(closed); // 磁盘闭合成功才算「本轮新闭合」(带正确 roundId,供全文落盘)

@@ -64,7 +64,7 @@ public class RoundIndexAdvisor implements StreamAdvisor {
                 .doOnComplete(this::persistRounds);
     }
 
-    /** 一轮用户任务流完成:增量补写已闭合轮,并对本次新闭合的轮推 round.closed(异常自吞,不阻断 onComplete)。 */
+    /** 一轮用户任务流完成:增量补写已闭合轮(耗时随行内联),并对本次新闭合的轮推 round.closed(异常自吞,不阻断 onComplete)。 */
     private void persistRounds() {
         if (a.kind != AgentEntity.Kind.MAIN) {
             return; // 防御:仅主 agent(工厂只给主链挂载)
@@ -74,9 +74,14 @@ public class RoundIndexAdvisor implements StreamAdvisor {
         JsonNode full = a.task.fileChangesFull;
         a.task.fileChangesLight = null;
         a.task.fileChangesFull = null;
+        // 本轮端到端耗时:MeasureDurationAdvisor 组装时打点(同 run 实例,此刻必已写入);
+        // 随闭合行同一次落盘内联,保证下方 round.closed 推送时耗时已在磁盘(消除「前端收到
+        // 通知即拉快照、却拉在耗时回填之前」的竞态,见 §7.15.1)。
+        long startedAt = a.task.roundDurationStart;
+        long elapsed = startedAt > 0 ? System.currentTimeMillis() - startedAt : 0L;
         List<RoundIndex.Round> closed =
                 rounds.persistClosedRounds(store, a.task.log, a.task.taskId, a.task.mainAgentId,
-                        light, full);
+                        light, full, elapsed);
         for (RoundIndex.Round r : closed) {
             if (r.endSeq() != null) {
                 // round.closed 与 rounds.jsonl 闭合行同源;瞬态不落盘,仅推 stream 频道。
