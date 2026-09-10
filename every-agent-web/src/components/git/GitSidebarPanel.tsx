@@ -553,8 +553,6 @@ function GitWorkspaceGroupPanel({
     { key: 'remove-workspace', label: '移除工作区…', danger: true, onSelect: () => void handleRemoveWorkspace(entry) },
   ]
 
-  const remoteHint = 'push/pull/clone 凭证优先走 worker 本机 git 配置;需要认证时会弹窗输入,可加密保存到工作区(架构 §13.6)。'
-
   return (
     <div style={groupStyle}>
       <div style={groupHeaderStyle}>
@@ -622,7 +620,6 @@ function GitWorkspaceGroupPanel({
                 {busy === 'commit' ? '提交中…' : `提交${selectedPaths.size > 0 ? `(${selectedPaths.size} 文件)` : ''}`}
               </Button>
             </div>
-            <p style={hintStyle}>{remoteHint}</p>
           </div>
 
           <div style={changesHeaderStyle}>
@@ -674,7 +671,7 @@ function GitWorkspaceGroupPanel({
         destroyOnClose
       >
         <p style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', margin: '0 0 12px' }}>
-          当前仓库没有关联任何远程。填写远程地址以关联后推送(凭证保存在 worker 本机 git 配置)。
+          当前仓库没有关联任何远程。填写远程地址以关联后推送。
         </p>
         <Form form={remoteForm} layout="vertical" initialValues={{ name: 'origin' }}>
           <Form.Item name="name" label="远程名称" rules={[{ required: true, message: '请填写远程名称' }]}>
@@ -975,12 +972,6 @@ const commitAreaStyle: React.CSSProperties = {
 const commitRowStyle: React.CSSProperties = {
   display: 'flex',
   justifyContent: 'flex-end',
-}
-
-const hintStyle: React.CSSProperties = {
-  margin: 0,
-  fontSize: 'var(--text-xs)',
-  color: 'var(--text-muted)',
 }
 
 const changesHeaderStyle: React.CSSProperties = {
