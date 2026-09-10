@@ -223,28 +223,8 @@ public class GitService {
         }
         ArrayNode arr = Json.arr();
         String remote = url == null ? "origin" : url;
-        for (String line : r.stdout().split("\n")) {
-            String t = line.trim();
-            if (t.isEmpty() || t.startsWith("To ") || t.equals("Done")) {
-                continue;
-            }
-            String[] parts = t.split("\t", -1);
-            if (parts.length >= 3) {
-                String flag = parts[0];
-                String refSpec = parts[1];
-                String ref = refSpec;
-                int colon = refSpec.indexOf(':');
-                if (colon >= 0) {
-                    ref = refSpec.substring(colon + 1);
-                }
-                String status = switch (flag) {
-                    case "=" -> "UP_TO_DATE";
-                    case "!" -> "REJECTED";
-                    case "+" -> "FORCED";
-                    default -> "OK";
-                };
-                arr.add(Json.obj().put("remote", remote).put("ref", ref).put("status", status));
-            }
+        for (NativeGit.PushUpdate u : NativeGit.parsePushUpdates(r.stdout())) {
+            arr.add(Json.obj().put("remote", remote).put("ref", u.ref()).put("status", u.status()));
         }
         ctx.ok(Json.obj().set("updates", arr));
     }

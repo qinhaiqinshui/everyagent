@@ -215,6 +215,51 @@ public class NativeGit {
         }
     }
 
+    /**
+     * 解析 {@code git push --porcelain} 输出为更新条目列表。
+     *
+     * <p>实测输出形态(git ≥2.x,transport.c print_ref_status porcelain 分支):
+     * 行 = {@code <flag>\t<from>:<to>\t<summary>[\t<reason>]},首行 {@code To <url>}、
+     * 末行 {@code Done} 为信封;flag 单字符——{@code ' '}更新成功、{@code '='}up-to-date、
+     * {@code '!'}拒绝、{@code '+'}强推、{@code '*'}新建引用、{@code '-'}删除。
+     *
+     * <p><b>仅去行尾空白、绝不 trim 行首</b>:成功更新的 flag 恰是行首空格,trim 会把
+     * 首字段吞掉使 {@code split("\t")} 少一段、条目被整体丢弃(增量推送「已推送」
+     * 误报为「没有需要推送的更新」的根因)。
+     */
+    public static List<PushUpdate> parsePushUpdates(String stdout) {
+        List<PushUpdate> out = new ArrayList<>();
+        if (stdout == null || stdout.isEmpty()) {
+            return out;
+        }
+        for (String raw : stdout.split("\n", -1)) {
+            String t = raw.stripTrailing(); // 保行首(flag 可能是空格),仅剥行尾 \r/空白
+            if (t.isEmpty() || t.startsWith("To ") || t.equals("Done")) {
+                continue;
+            }
+            String[] parts = t.split("\t", -1);
+            if (parts.length < 3) {
+                continue; // 防御:非法记录
+            }
+            String flag = parts[0];
+            String refSpec = parts[1];
+            int colon = refSpec.indexOf(':');
+            String ref = colon >= 0 ? refSpec.substring(colon + 1) : refSpec;
+            String status = switch (flag) {
+                case "=" -> "UP_TO_DATE";
+                case "!" -> "REJECTED";
+                case "+" -> "FORCED";
+                default -> "OK"; // ' ' 成功更新 / '*' 新建引用 / '-' 删除
+            };
+            out.add(new PushUpdate(flag, ref, status));
+        }
+        return out;
+    }
+
+    /** git push --porcelain 的单个更新条目(flag 原字符 + 远端 ref + 稳定状态码)。 */
+    public record PushUpdate(String flag, String ref, String status) {
+    }
+
     // ---- 内部 ----
 
     private NativeResult run(Path workspace, List<String> args, boolean readOnly,

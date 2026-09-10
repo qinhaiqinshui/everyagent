@@ -83,4 +83,52 @@ class NativeGitTest {
         assertTrue(NativeGit.isNotRepo(new NativeResult("", "fatal: not a git repository (or any of the parent directories): .git", 128)));
         assertFalse(NativeGit.isNotRepo(new NativeResult("", "fatal: No such remote 'origin'", 2)));
     }
+
+    @Test
+    void parsePushUpdatesIncrementalUpdateKeepsLeadingSpaceFlag() {
+        // 实测输出(git 2.x,增量更新):更新行以空格 flag 开头,trim 会吞掉首字段导致条目被丢弃
+        String out = "To /repo/bare\n"
+                + " \trefs/heads/master:refs/heads/master\ta5a8cb8..53b2587\n"
+                + "Done\n";
+        var updates = NativeGit.parsePushUpdates(out);
+        assertEquals(1, updates.size());
+        assertEquals("refs/heads/master", updates.get(0).ref());
+        assertEquals("OK", updates.get(0).status());
+        assertEquals(" ", updates.get(0).flag());
+    }
+
+    @Test
+    void parsePushUpdatesAllFlags() {
+        // 实测形态:新建引用 '*';up-to-date '='、拒绝 '!'、强推 '+' 同构
+        String out = "To https://github.com/u/r.git\n"
+                + "*\trefs/heads/dev:refs/heads/dev\t[new branch]\n"
+                + "=\trefs/heads/main:refs/heads/main\t[up to date]\n"
+                + "!\trefs/heads/x:refs/heads/x\t[rejected] (non-fast-forward)\n"
+                + "+\trefs/heads/y:refs/heads/y\tforced update\n"
+                + "-\trefs/heads/z\t[deleted]\n"
+                + "Done\n";
+        var updates = NativeGit.parsePushUpdates(out);
+        assertEquals(5, updates.size());
+        assertEquals("OK", updates.get(0).status());
+        assertEquals("UP_TO_DATE", updates.get(1).status());
+        assertEquals("REJECTED", updates.get(2).status());
+        assertEquals("FORCED", updates.get(3).status());
+        assertEquals("OK", updates.get(4).status()); // 删除 '-' 归 OK(现有状态映射无 DELETE)
+        assertEquals("refs/heads/z", updates.get(4).ref()); // 删除行 refspec 无 from: 段
+    }
+
+    @Test
+    void parsePushUpdatesCrlfAndEdgeLines() {
+        // CRLF 行尾(Windows git)+ 信封行/空行/非法行防御
+        String out = "To /repo/bare\r\n"
+                + " \trefs/heads/master:refs/heads/master\ta..b\r\n"
+                + "\r\n"
+                + "garbage\r\n"
+                + "Done\r\n";
+        var updates = NativeGit.parsePushUpdates(out);
+        assertEquals(1, updates.size());
+        assertEquals("refs/heads/master", updates.get(0).ref());
+        assertTrue(NativeGit.parsePushUpdates("").isEmpty());
+        assertTrue(NativeGit.parsePushUpdates(null).isEmpty());
+    }
 }
