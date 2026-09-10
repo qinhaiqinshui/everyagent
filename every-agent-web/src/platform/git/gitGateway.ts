@@ -69,7 +69,7 @@ function rpcForWorkspace(workspace: string, method: string, params: Record<strin
 }
 
 export const gitGateway = {
-  /** 读取仓库状态(未初始化时抛 GitNotInitializedError)。 */
+  /** 读取仓库状态(未初始化时抛 GitNotInitializedError;含相对上游的 ahead/behind 提交数,纯本地不触网)。 */
   async status(workspace: string): Promise<{
     branch?: string
     added?: string[]
@@ -79,6 +79,10 @@ export const gitGateway = {
     missing?: string[]
     untracked?: string[]
     conflicting?: string[]
+    /** 当前分支领先上游(已提交未推送)的提交数;无上游/非跟踪分支为 0。 */
+    ahead?: number
+    /** 当前分支落后上游的提交数;无上游/非跟踪分支为 0。 */
+    behind?: number
   }> {
     try {
       return (await rpcForWorkspace(workspace, 'git.status', { workspace })) as never

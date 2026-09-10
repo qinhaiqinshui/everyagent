@@ -40,6 +40,10 @@ interface GitStatusResult {
   missing?: string[]
   untracked?: string[]
   conflicting?: string[]
+  /** 当前分支领先上游(已提交未推送)的提交数;无上游/非跟踪分支为 0。 */
+  ahead?: number
+  /** 当前分支落后上游的提交数;无上游/非跟踪分支为 0。 */
+  behind?: number
 }
 
 interface GitLogCommit {
@@ -577,9 +581,20 @@ function GitWorkspaceGroupPanel({
           <Button type="text" style={iconButtonStyle} onClick={() => void handlePull()} disabled={busy !== null || !initialized} title="拉取">
             <PullIcon />
           </Button>
-          <Button type="text" style={iconButtonStyle} onClick={() => void ensureRemoteThenPush()} disabled={busy !== null || !initialized} title="推送">
-            <PushIcon />
-          </Button>
+          <Badge
+            count={status?.ahead ?? 0}
+            showZero={false}
+            size="small"
+            overflowCount={99}
+            color="var(--accent-blue)"
+            style={{ color: '#fff', boxShadow: 'none' }}
+            offset={[-4, 4]}
+            title={status && (status.ahead ?? 0) > 0 ? `${status.ahead} 个提交待推送` : undefined}
+          >
+            <Button type="text" style={iconButtonStyle} onClick={() => void ensureRemoteThenPush()} disabled={busy !== null || !initialized} title="推送">
+              <PushIcon />
+            </Button>
+          </Badge>
           <MoreActionsButton items={moreItems} title="更多操作" disabled={busy !== null} />
         </div>
       </div>

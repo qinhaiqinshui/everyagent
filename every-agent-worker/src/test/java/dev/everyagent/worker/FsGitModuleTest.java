@@ -285,6 +285,37 @@ class FsGitModuleTest {
         assertTrue(rpc("fs.read", p("{\"path\":\"" + path + "\"}")).contains("rpc.ok"), "放弃更改后文件应重新存在");
     }
 
+    @Test
+    @Order(24)
+    void gitStatusReportsAheadBehind() throws Exception {
+        // 未配置上游:git.status 应带 ahead/behind 字段且为 0(推送角标「已提交未推送」不误报)。
+        String s0 = rpc("git.status", p("{}"));
+        assertTrue(s0.contains("\"ahead\":0") && s0.contains("\"behind\":0"),
+                "无上游时 ahead/behind 应为 0: " + s0);
+
+        // 配置远端 + 上游跟踪分支:push 后 ahead=0。
+        Path remote = Path.of("target", "test-remote-fsgit-" + System.nanoTime()).toAbsolutePath();
+        Files.createDirectories(remote);
+        runGit(remote, "init", "--bare", ".");
+        runGit(WS, "remote", "add", "origin", remote.toString());
+        runGit(WS, "push", "-u", "origin", "main");
+        String s1 = rpc("git.status", p("{}"));
+        assertTrue(s1.contains("\"ahead\":0"), "push 后不应有未推送提交: " + s1);
+
+        // 再提交一个本地提交:ahead 应变为 1。
+        String b64 = Base64.getEncoder().encodeToString("待推送".getBytes(StandardCharsets.UTF_8));
+        assertTrue(rpc("fs.write", p("{\"path\":\"push-pending.txt\",\"contentBase64\":\"" + b64 + "\"}"))
+                .contains("rpc.ok"), "先创建待推送文件");
+        assertTrue(rpc("git.commit", p("{\"message\":\"待推送提交\"}")).contains("rpc.ok"), "提交");
+        String s2 = rpc("git.status", p("{}"));
+        assertTrue(s2.contains("\"ahead\":1"), "本地领先 1 个提交: " + s2);
+
+        // 推送后 ahead 归零(顺带验证 git.push 走原生 git 对 bare 远端成功)。
+        assertTrue(rpc("git.push", p("{}")).contains("rpc.ok"), "推送");
+        String s3 = rpc("git.status", p("{}"));
+        assertTrue(s3.contains("\"ahead\":0"), "推送后 ahead 应归零: " + s3);
+    }
+
     // ---- workspace(架构 §5.9:多工作区注册表,fs/git/task.run 每调用显式指定)----
 
     @Test
