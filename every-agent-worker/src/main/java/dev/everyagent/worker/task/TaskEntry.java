@@ -140,6 +140,14 @@ public final class TaskEntry {
     public volatile FileChangesCollector fileChanges;
 
     /**
+     * 本轮耗时打点(MeasureDurationAdvisor 在主 agent 每次流组装时写,RoundIndexAdvisor
+     * 落盘闭合行时读取算 elapsed,随行内联 durationMs——一次写入,消除「先闭合、后回填」
+     * 两段写与 round.closed 推送的竞态;见 §7.15.1)。运行期状态,不落盘;runTask 单线程
+     * 串行消费,同轮打点与读取无并发。
+     */
+    public volatile long roundDurationStart;
+
+    /**
      * 本轮文件改动轻量摘要(FileChangeAdvisor 收口时写,RoundIndexAdvisor 消费后清空):
      * 仅 filePath/fileName/changeType/saveCount 的数组,随 rounds.jsonl 每轮行内联落盘。
      */

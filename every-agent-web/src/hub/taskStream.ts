@@ -161,6 +161,16 @@ class ManagedStream {
       void this.refreshRounds()
       return
     }
+    // 主 agent 终态兜底:任务收口后再拉一次 rounds 快照,保证 durationMs/闭合行等最终落盘
+    // 数据在前端最终一致——round.closed 触发的拉取可能早于耗时写入(旁路/兜底回填场景),
+    // 终态是天然的最终一致校准点;历史回放(initial)时 open 已建齐骨架,跳过以免重复拉取。
+    if (event.event === 'agent.status' && !event.initial) {
+      const agentKey = event.agentId ?? (event.payload?.agentId as string | undefined) ?? ''
+      const status = String(event.payload?.status ?? '')
+      if (!agentKey && (status === 'done' || status === 'failed' || status === 'stopped')) {
+        void this.refreshRounds()
+      }
+    }
     // ask 事件单独走卡片,不进线程。
     if (event.event === 'ask.create' || event.event === 'ask.state' || event.event === 'ask.resolved') {
       this.dispatchAskEvent(event)

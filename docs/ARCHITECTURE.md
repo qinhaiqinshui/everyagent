@@ -554,7 +554,7 @@ data/                                # <home>/data(EVERYAGENT_HOME 可覆盖;doc
 主 agent 侧生成轮次索引(每行一轮:用户输入 → 主 agent 最终回复):
 
 - 行格式:`{index, startSeq, endSeq, user, finalReply, processCount, subs, durationMs, fileChanges, userMessage}`;seq 一律字符串;`endSeq=""` = 未闭合轮;`processCount` = 该轮开区间内过程事件数(0 = 纯问答轮,前端不显示折叠标记);`userMessage` = 完整 user.message payload(懒加载骨架)。
-- 增量写:消费用户输入即 `openRoundAtStart` 落一行 `endSeq=""`;`RoundIndexAdvisor` 在主 agent 最终回复后 `rewriteRound` 原位改写闭合(临时文件 + 原子 move,与追加同锁串行)。
+- 增量写:消费用户输入即 `openRoundAtStart` 落一行 `endSeq=""`;`RoundIndexAdvisor` 在主 agent 最终回复后 `rewriteRound` 原位改写闭合(临时文件 + 原子 move,与追加同锁串行)。**`durationMs` 随闭合行同一次落盘内联写入**(读 `MeasureDurationAdvisor` 组装时打点的 per-run 计时槽 `TaskEntry.roundDurationStart`),`round.closed` 通知在闭合行落盘**之后**推送——前端收到通知拉 `task.rounds` 时耗时必已就位。历史上「先闭合推送、后单独回填耗时」的两段写存在竞态:前端在回填完成前拉快照会拿到 `durationMs=0` 且无后续刷新触发,表现为本轮耗时不显示(重连才恢复)。`RoundIndexStore.recordDuration` 保留为幂等兜底(行内已有耗时即跳过,覆盖非流式等旁路)。
 - 旧任务首次 `task.rounds` 惰性全量生成落盘;任务终态 do `finalizeRounds` 补写未闭合轮。中断/失败/取消的未闭合轮自然保留。
 - 前端"双击打开任务" = 拉 meta → 一次 `task.rounds` 渲染折叠轮次 → 展开按 seq 区间懒加载过程内容。
 

@@ -11,10 +11,15 @@ import reactor.core.publisher.Flux;
 /**
  * 本轮用户任务耗时 advisor(架构 §5.2 + 红线:一个 advisor 只负责一个功能)。
  *
- * <p>仿 node 侧 {@code measureDuration} 节点:在 {@link #before} 打点,包裹整个
- * {@code agent.execute}(含 {@link WorkerToolEventAdvisor} 驱动的递归工具循环),
- * 收口时把本轮耗时经 {@link RoundIndexStore#recordDuration} 回填进 rounds.jsonl
- * 的最后一轮(不再发 {@code task.trace} 的 {@code task_duration} 事件)。
+ * <p>仿 node 侧 {@code measureDuration} 节点:打点包裹整个 {@code agent.execute}(含
+ * {@link WorkerToolEventAdvisor} 驱动的递归工具循环),不再发 {@code task.trace} 的
+ * {@code task_duration} 事件。耗时落盘有两条路径:
+ * <b>主路径</b>——组装时打点写入 per-run 计时槽 {@code TaskEntry.roundDurationStart},
+ * 内层 {@link RoundIndexAdvisor}(其 doOnComplete 先于本 advisor 触发)落盘闭合行时读取算
+ * elapsed,<b>随闭合行同一次写入内联 durationMs</b>(round.closed 通知在落盘之后推送,
+ * 前端收到通知拉 task.rounds 时耗时必已在磁盘,消除「先推送、后回填」竞态);
+ * <b>兜底路径</b>——本 advisor 流 doOnComplete 时经 {@link RoundIndexStore#recordDuration}
+ * 幂等回填(闭合行已带耗时即跳过),覆盖非流式 call 等旁路与内联失效的防御。
  *
  * <p>与 node 侧口径一致:仅主 agent 生效——子 agent 不挂本 advisor(见
  * {@code AgentClientFactory.forMain}),避免嵌套 agent 重复计时与噪声;计时只反映主 agent
@@ -33,9 +38,9 @@ import reactor.core.publisher.Flux;
  * {@code doFinally} 在<b>下游 onComplete 之后</b>执行,会与 {@code TaskManager.finish()}
  * 竞态;{@code doOnComplete} 在向下游转发 onComplete <b>之前</b>执行,顺序与线程都安全。
  * <b>回填顺序(关键)</b>:Reactor 的 {@code doOnComplete} 由最内层先触发——内层
- * {@link RoundIndexAdvisor}(order=HIGHEST_PRECEDENCE+10)先增量落盘 rounds.jsonl,
- * 本 advisor(最外层)随后把耗时回填进最后一条已闭合轮。取消/异常不触发 onComplete,
- * 故不回填耗时(startedAt 随 per-run 实例丢弃)。
+ * {@link RoundIndexAdvisor}(order=HIGHEST_PRECEDENCE+10)先增量落盘 rounds.jsonl
+ * (已内联 durationMs),本 advisor(最外层)随后幂等兜底(行内已有耗时即跳过)。
+ * 取消/异常不触发 onComplete,故不回填耗时(startedAt 随 per-run 实例丢弃)。
  * 非流式 {@code call} 走默认 {@code adviseCall}:nextCall 阻塞到整条链(含工具循环)收口,
  * 末尾 message 已落盘,故 {@link #after} 时序天然正确(该路径不经 runTask 循环),保留直接回填。
  *
@@ -75,6 +80,7 @@ public class MeasureDurationAdvisor implements BaseAdvisor {
     @Override
     public ChatClientRequest before(ChatClientRequest chatClientRequest, AdvisorChain advisorChain) {
         startedAt = System.currentTimeMillis();
+        a.task.roundDurationStart = startedAt; // 计时槽:RoundIndexAdvisor 落盘闭合行时读取内联
         return chatClientRequest;
     }
 
@@ -106,6 +112,7 @@ public class MeasureDurationAdvisor implements BaseAdvisor {
     public Flux<ChatClientResponse> adviseStream(ChatClientRequest chatClientRequest,
             StreamAdvisorChain streamAdvisorChain) {
         startedAt = System.currentTimeMillis();
+        a.task.roundDurationStart = startedAt; // 计时槽:RoundIndexAdvisor 落盘闭合行时读取内联
         return streamAdvisorChain.nextStream(chatClientRequest)
                 .doOnComplete(() -> {
                     if (startedAt == 0) {
@@ -113,9 +120,8 @@ public class MeasureDurationAdvisor implements BaseAdvisor {
                     }
                     long elapsed = System.currentTimeMillis() - startedAt;
                     startedAt = 0; // 防重入/重复计时
-                    // 回填进 rounds.jsonl 最后一轮(不再发 task_duration trace)。
-                    // 顺序由 doOnComplete 嵌套保证:内层 RoundIndexAdvisor 已先增量落盘该轮,
-                    // 本 doOnComplete 在外层后触发 → 耗时恰回填到刚落盘的那一轮。
+                    // 幂等兜底(主路径已由 RoundIndexAdvisor 随闭合行内联 durationMs;
+                    // 行内已有耗时时 recordDuration 跳过)。不再发 task_duration trace。
                     rounds.recordDuration(store, a.task.taskId, elapsed);
                 });
     }
