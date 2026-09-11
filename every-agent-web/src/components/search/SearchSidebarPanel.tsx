@@ -296,6 +296,20 @@ export default function SearchSidebarPanel() {
     setCollapsedFiles(new Set())
   }, [])
 
+  /**
+   * 全部折叠/全部展开合并为单个切换按钮：
+   * 存在任意被折叠的分组 → 当前可执行「展开全部」；否则 → 「折叠全部」。
+   * 新结果落地时的默认折叠策略会预置部分折叠分组，按钮语义随状态自动切换。
+   */
+  const hasCollapsedFiles = collapsedFiles.size > 0
+  const toggleCollapseAll = React.useCallback(() => {
+    if (hasCollapsedFiles) {
+      expandAll()
+    } else {
+      collapseAll()
+    }
+  }, [collapseAll, expandAll, hasCollapsedFiles])
+
   /** 输入框键盘：Enter 触发搜索；聚焦时 Alt+C / Alt+W / Alt+R 切换三个匹配开关。 */
   const handleSearchInputKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
     if (event.altKey && !event.ctrlKey && !event.metaKey) {
@@ -496,18 +510,10 @@ export default function SearchSidebarPanel() {
           <IconButton
             variant="ghost"
             size="sm"
-            icon={<ChevronDownIcon size={14} style={chevronCollapsedTransformStyle} />}
-            aria-label="折叠全部"
-            title="折叠全部"
-            onClick={collapseAll}
-          />
-          <IconButton
-            variant="ghost"
-            size="sm"
-            icon={<ChevronDownIcon size={14} />}
-            aria-label="展开全部"
-            title="展开全部"
-            onClick={expandAll}
+            icon={<ChevronDownIcon size={14} style={hasCollapsedFiles ? undefined : chevronCollapsedTransformStyle} />}
+            aria-label={hasCollapsedFiles ? '展开全部' : '折叠全部'}
+            title={hasCollapsedFiles ? '展开全部' : '折叠全部'}
+            onClick={toggleCollapseAll}
           />
         </div>
       </div>
