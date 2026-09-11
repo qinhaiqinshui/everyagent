@@ -686,7 +686,6 @@ function GitWorkspaceGroupPanel({
       : []),
     { key: 'pull', label: '拉取', onSelect: () => void handlePull() },
     { key: 'push', label: '推送', onSelect: () => void ensureRemoteThenPush() },
-    { key: 'init', label: '初始化仓库', onSelect: () => void handleInit() },
   ]
 
   /**
