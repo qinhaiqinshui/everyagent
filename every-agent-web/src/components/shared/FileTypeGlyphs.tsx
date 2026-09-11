@@ -229,6 +229,20 @@ const EXT_RENDERERS: Record<string, (props: AppGlyphProps) => React.ReactElement
   pom: (p) => <PomChip {...p} />,
   // docker 相关:yml/yaml 扩展名已归属 YAML,compose 身份靠文件名前缀特判。
   'dockerfile': (p) => <DockerChip {...p} />,
+  // shell 脚本:琥珀色 $ 提示符(sh/bash/zsh/fish 脚本与 bashrc/zshrc/profile 配置)。
+  sh: (p) => <LangChip {...p} color="var(--accent-amber)" sigil="$" fontSize={12} />,
+  bash: (p) => <LangChip {...p} color="var(--accent-amber)" sigil="$" fontSize={12} />,
+  zsh: (p) => <LangChip {...p} color="var(--accent-amber)" sigil="$" fontSize={12} />,
+  fish: (p) => <LangChip {...p} color="var(--accent-amber)" sigil="$" fontSize={12} />,
+  ksh: (p) => <LangChip {...p} color="var(--accent-amber)" sigil="$" fontSize={12} />,
+  csh: (p) => <LangChip {...p} color="var(--accent-amber)" sigil="$" fontSize={12} />,
+  bashrc: (p) => <LangChip {...p} color="var(--accent-amber)" sigil="$" fontSize={12} />,
+  zshrc: (p) => <LangChip {...p} color="var(--accent-amber)" sigil="$" fontSize={12} />,
+  profile: (p) => <LangChip {...p} color="var(--accent-amber)" sigil="$" fontSize={12} />,
+  // PowerShell:蓝色 PS 字标(脚本 ps1 / 模块 psm1 / 模块清单 psd1)。
+  ps1: (p) => <LangChip {...p} color="var(--accent-blue)" sigil="PS" fontSize={9} />,
+  psm1: (p) => <LangChip {...p} color="var(--accent-blue)" sigil="PS" fontSize={9} />,
+  psd1: (p) => <LangChip {...p} color="var(--accent-blue)" sigil="PS" fontSize={9} />,
 }
 
 /**
