@@ -212,22 +212,21 @@
   align-items: center;
 }
 
-/* 文件树:switcher 容器(目录行显示展开/收起箭头的位置)改 flex 居中。
+/* 文件树:switcher(展开/收起图标)独占一列,容器改 flex 居中。
    antd 默认只用 text-align:center(水平)+ 无垂直居中,SVG 作为 inline element
    与文字 baseline 对齐 → 视觉贴底。改为 flex 容器后 SVG 真正水平+垂直居中。
-   alignSelf:stretch(来自 antd)保留 → switcher 高度 = 父 treenode 行高。 */
-.ws-tree .ant-tree-switcher {
+   同时清零 antd 默认的列尾 margin(4px),收紧图标列与名称之间的距离;
+   选择器用 .ws-tree.ant-tree 复合提升优先级,压过 antd 运行时注入的同名规则。 */
+.ws-tree.ant-tree .ant-tree-switcher {
   display: flex;
   align-items: center;
   justify-content: center;
+  margin-inline-end: 0;
 }
 
-/* 文件树：叶子行(文件)的 switcher 空占位隐藏。
-   目录行 switcher 显示展开/收起箭头;叶子行 noop 只是 22×22 空 span,
-   由 antd 加 .ant-tree-switcher-noop 类,这里直接不占布局。 */
-.ws-tree .ant-tree-switcher-noop {
-  display: none;
-}
+/* 文件树：叶子行(文件)不显示折叠图标,但保留 switcher 空占位列。
+   antd 会给叶子行渲染 noop 空 span(与目录行同 24px 列宽),这里不再隐藏,
+   使文件名与同层文件夹名称左对齐、缩进一致。 */
 
 /* 文件树：桌面端更多操作浮层覆盖在文件大小之上，
    移除右侧预留位（不占布局空间），hover 时隐藏大小文本由按钮原地替换 */

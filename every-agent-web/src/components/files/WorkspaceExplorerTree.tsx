@@ -194,11 +194,12 @@ export default function WorkspaceExplorerTree({
           // 单击仅选中(高亮)。目录展开/收起由双击(onDoubleClick)或点击箭头(onExpand)触发。
           onSelectPath(key)
         }}
-        // 展开/收起图标 = 通用折叠箭头(收起朝右 ChevronRight,展开朝下 ChevronDown)。
+        // 展开/收起图标 = 通用折叠箭头(收起朝右 ChevronRight,展开朝下 ChevronDown),独占一列。
         // 注意:antd 6 会把用户 switcherIcon 包进 SwitcherIconCom 再传给 rc-tree,
-        // 故 switcher span 必然渲染(返回 false 只能清空内容,span 仍占 22×22);
-        // 此处利用该位置显示开合箭头,不再返回 false。叶子行的空 span 由 CSS 隐藏。
-        // SVG 居中由 .ws-tree .ant-tree-switcher 的 display:flex 负责,SVG 自身保持默认 block。
+        // 故 switcher span 必然渲染(返回 false 只能清空内容,span 仍占位)。
+        // 叶子行(文件)返回 null → antd 渲染 noop 空 span 保留占位(不隐藏),
+        // 使文件名与文件夹名称左对齐、缩进一致;列尾 margin 由 CSS 清零,收紧图标与名称间距。
+        // SVG 居中由 .ws-tree.ant-tree .ant-tree-switcher 的 display:flex 负责,SVG 自身保持默认 block。
         switcherIcon={({ isLeaf, expanded }) => {
           if (isLeaf) return null
           return expanded ? (
