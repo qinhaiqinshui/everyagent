@@ -72,13 +72,19 @@ public final class OsReveal {
                 "array:string:" + uri, "string:");
     }
 
-    /** 拉起进程:stdin/输出全部丢弃(文件管理器不需要交互,防输出管道反压阻塞)。 */
-    private static Process start(List<String> argv) throws IOException {
-        return new ProcessBuilder(argv)
-                .redirectInput(ProcessBuilder.Redirect.DISCARD)
+    /**
+     * 拉起进程:输出全部丢弃(文件管理器不需要交互,防输出管道反压阻塞);
+     * stdin 保持默认管道并在启动后立即关闭写端,子进程读 stdin 直接得 EOF——
+     * 注意 {@link ProcessBuilder.Redirect#DISCARD} 类型为 WRITE,不能用于
+     * redirectInput(JDK 会抛 IllegalArgumentException),此处即等价的"丢弃"。
+     */
+    static Process start(List<String> argv) throws IOException {
+        Process p = new ProcessBuilder(argv)
                 .redirectOutput(ProcessBuilder.Redirect.DISCARD)
                 .redirectError(ProcessBuilder.Redirect.DISCARD)
                 .start();
+        p.getOutputStream().close();
+        return p;
     }
 
     /** 等待进程退出并校验退出码:超时强杀、非零退出码均视为失败抛 IOException。 */
