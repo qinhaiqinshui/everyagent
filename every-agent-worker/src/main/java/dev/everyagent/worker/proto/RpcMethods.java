@@ -26,6 +26,8 @@ public final class RpcMethods {
     public static final String WORKSPACES_LIST = "workspaces.list";
     public static final String WORKSPACES_ADD = "workspaces.add";
     public static final String WORKSPACES_REMOVE = "workspaces.remove";
+    /** 注册工作区外部授权根(参数 workspace + path;目录→自身、文件→父目录,过宽根拒收,去重/包含吸收)。 */
+    public static final String WORKSPACES_ADD_EXTERNAL_ROOT = "workspaces.addExternalRoot";
     /** 启动自检缺失工作区落定:action=delete(删除注册+级联任务数据)/redirect(纠正到新目录)。 */
     public static final String WORKSPACES_RESOLVE_MISSING = "workspaces.resolveMissing";
     public static final String FS_LIST = "fs.list";

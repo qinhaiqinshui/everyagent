@@ -6,7 +6,7 @@
  * 前置:JAVA_HOME 指向 JDK 25,mvn 在 PATH(或 MAVEN_HOME 指向 mvn 目录)。
  */
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, readdirSync, copyFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, copyFileSync, statSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -23,9 +23,14 @@ function findJar(moduleDir, prefix, suffix = '.jar') {
     (f) => f.startsWith(prefix) && f.endsWith(suffix) && !f.endsWith('-sources.jar') && !f.endsWith('-javadoc.jar'),
   )
   if (files.length === 0) return null
-  // 优先选中 exec 分类器(Spring Boot 可执行 jar):排序取文件名最长的(exec.jar 比普通 jar 长)。
-  files.sort((a, b) => b.length - a.length)
-  return join(target, files[0])
+  // ① 优先 exec 分类器(hub 配了 classifier 的 Spring Boot 可执行 jar);
+  // ② 同组取 mtime 最新:target 常残留多版本旧 jar,按文件名猜版本不可靠——
+  //   曾按「文件名最长」选,SNAPSHOT 旧包恒最长相中,导致打包进的是陈年 worker
+  //   (前端新而 fs.browse 能力缺失,外部文件选择降级仅目录的根因)。
+  const newest = (a, b) => statSync(join(target, b)).mtimeMs - statSync(join(target, a)).mtimeMs
+  const exec = files.filter((f) => f.endsWith('-exec.jar')).sort(newest)
+  if (exec.length > 0) return join(target, exec[0])
+  return join(target, [...files].sort(newest)[0])
 }
 
 function run(cmd, args) {
@@ -72,4 +77,6 @@ const hubOut = join(backendDir, 'hub.jar')
 const workerOut = join(backendDir, 'worker.jar')
 copyFileSync(hubJar, hubOut)
 copyFileSync(workerJar, workerOut)
-console.log(`[build-backend] 复制完成:\n  ${hubJar} -> ${hubOut}\n  ${workerJar} -> ${workerOut}`)
+console.log(
+  `[build-backend] 复制完成:\n  ${hubJar} -> ${hubOut} (${statSync(hubOut).size} bytes)\n  ${workerJar} -> ${workerOut} (${statSync(workerOut).size} bytes)`,
+)

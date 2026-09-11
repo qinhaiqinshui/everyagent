@@ -358,7 +358,7 @@ public final class OsSandbox {
         }
         if (backend() == Backend.WSL_DIRECT) {
             WslBwrapSandbox.OsResult r = WslDirectSandbox.run(command, cwd, props, exec,
-                    MAX_OUTPUT_CHARS, allWorkspaceRoots(), allowNetwork);
+                    MAX_OUTPUT_CHARS, wslDirectMountRoots(), allowNetwork);
             return new ExecResult(r.stdout(), r.stderr(), r.exitCode(), r.aborted());
         }
         return WindowsSandbox.run(command, cwd, extraEnv, cfg, exec, MAX_OUTPUT_CHARS, s,
@@ -376,6 +376,29 @@ public final class OsSandbox {
             log.warn("[sandbox] 读取工作区注册表失败,忽略动态挂载: {}", e.getMessage());
             return List.of();
         }
+    }
+
+    /**
+     * wsl-direct 挂载列表:全部已注册工作区根 <b>+</b> 全部工作区的外部授权根(§7.17,
+     * 与工作区根同语义:跨任务共享、runner trusted 阶段幂等 _ensure_mount;WslDirectSandbox
+     * 的 mountPairs 对非工作区路径按同一 WslPathMapper.toDirectMount 生成 {src,dest} 对)。
+     * Path 去重(externalRoot 与工作区根或彼此重叠时);任一读取失败按可取到的子集降级。
+     * 包私有供单测钉住载荷拼装契约。
+     */
+    List<Path> wslDirectMountRoots() {
+        List<Path> roots = new java.util.ArrayList<>(allWorkspaceRoots());
+        if (workspaces != null) {
+            try {
+                for (Path ext : workspaces.allExternalRoots()) {
+                    if (!roots.contains(ext)) {
+                        roots.add(ext);
+                    }
+                }
+            } catch (RuntimeException e) {
+                log.warn("[sandbox] 读取外部授权根失败,忽略该部分挂载: {}", e.getMessage());
+            }
+        }
+        return roots;
     }
 
     private static String normalizeShell(String shell) {

@@ -150,7 +150,8 @@ public class AgentClientFactory {
      * SystemInfoAdvisor(+50,注入工作区/OS 环境信息)→ AgentsMdAdvisor(+60,读取工作区
      * agents.md 注入约束)→ SkillAdvisor(+100,注入 skill 渐进式披露索引)→ GitAutoSyncAdvisor(+140,读取本轮 /自动同步 标记,任务收口后触发
      * git 同步)→ SlashTokenResolveAdvisor(+150,统一按 kind 解析/剥离 input 里的 opaque
-     * token)→ UnattendedModeAdvisor(+200,任务级无人值守开关:开启时过滤 ask_user + 注入
+     * token,透传 a.task 供任务感知 kind(如 system.external_file 注册外部授权根)使用)→
+     * UnattendedModeAdvisor(+200,任务级无人值守开关:开启时过滤 ask_user + 注入
      * 无人值守提示词)→ LoopRepeatGuardAdvisor(+300,事件发射 + 工具循环 + 死循环检测)→
      * DialogInsertAdvisor(+330,普通 StreamAdvisor,工具循环内侧下行阶段:把任务队列「插入
      * 到当前对话」的用户消息 drain 并追加到 instructions,随工具结果一起提交给 AI)→
@@ -170,7 +171,7 @@ public class AgentClientFactory {
                         new AgentsMdAdvisor(a.task.workspaceRoot),
                         skillAdvisor,
                         new GitAutoSyncAdvisor(a, gitService),
-                        new SlashTokenResolveAdvisor(slashTokenHandler),
+                        new SlashTokenResolveAdvisor(slashTokenHandler, a.task),
                         new UnattendedModeAdvisor(a),
                         newLoopGuardedAdvisor(a, tcm),
                         new DialogInsertAdvisor(a),

@@ -44,6 +44,17 @@ interface FsReadResult {
   offset?: number
 }
 
+/** fs.browse(includeFiles=true) 应答形态:目录/文件混合条目 + worker 能力标记。 */
+export interface BrowseEntriesResult {
+  /** true = 文件系统根/盘符列表(absPath 为空请求;条目均为目录)。 */
+  isRoot: boolean
+  /** 当前目录绝对路径(worker 侧规范化回显;根列表视图无此字段)。 */
+  path?: string
+  entries: Array<{ path: string; name: string; kind?: 'file' | 'directory' }>
+  /** true = worker 支持混合列出文件;缺省(老 worker)时前端按纯目录选择器降级。 */
+  supportsFiles?: boolean
+}
+
 // ---- base64 与二进制互转(UTF-8 安全) ----
 
 function bytesToBase64(bytes: Uint8Array): string {
@@ -337,5 +348,33 @@ export const workspaceGateway = {
       entries?: Array<{ path: string; name: string }>
     }
     return result.entries ?? []
+  },
+
+  /**
+   * 浏览某绝对路径下的直接子项(目录 + 文件):fs.browse 的 `includeFiles: true` 形态,
+   * 供「@ 弹窗 → 工作区外文件/文件夹选择框」渲染文件图标与能力降级判定。
+   * 与 browseDir 同源(不经 workspace 沙箱,依赖 worker 进程文件系统权限),差异:
+   * - 保留响应完整形态(isRoot/path/supportsFiles),不折叠为纯 entries;
+   * - absPath 为空时返回文件系统根/盘符列表(isRoot=true,与 browseRoots 同源)。
+   * 老 worker 忽略 includeFiles:只返回目录且无 kind/supportsFiles 字段,不报错——
+   * 前端据 supportsFiles 缺失降级为纯目录选择器。
+   */
+  async browseDirEntries(workerId: string, absPath: string): Promise<BrowseEntriesResult> {
+    const result = await hubSession.rpcTo(workerId, 'fs.browse', { path: absPath, includeFiles: true }) as {
+      isRoot?: boolean
+      path?: string
+      entries?: Array<{ path: string; name: string; kind?: string }>
+      supportsFiles?: boolean
+    }
+    return {
+      isRoot: result.isRoot === true,
+      path: typeof result.path === 'string' ? result.path : undefined,
+      entries: (result.entries ?? []).map((entry) => ({
+        path: entry.path,
+        name: entry.name,
+        kind: entry.kind === 'file' || entry.kind === 'directory' ? entry.kind : undefined,
+      })),
+      supportsFiles: result.supportsFiles === true,
+    }
   },
 }

@@ -83,4 +83,22 @@ class WslPathMapperTest {
         String win = "rg -n foo C:/Users/haigui/.yu/s23ds84dsgl920dfbldf932gd/eagent";
         assertEquals(win, WslPathMapper.translateCommand(win, WS));
     }
+
+    // ---- toDirectMount:wsl-direct 原路径挂载点(工作区与外部授权根共用同一形态) ----
+
+    @Test
+    void toDirectMountMapsDrivePathsForAnyRoot() {
+        // wsl-direct 的 mountPairs 对非工作区路径(外部授权根)按同一函数生成 {src,dest}
+        assertEquals("/c/Users/ext/data", WslPathMapper.toDirectMount(Path.of("C:\\Users\\ext\\data")));
+        assertEquals("/d/a b", WslPathMapper.toDirectMount(Path.of("d:\\a b")));
+        assertEquals("/c", WslPathMapper.toDirectMount(Path.of("C:\\"))); // 盘根挂载点 /c
+        assertEquals("/c/x", WslPathMapper.toDirectMount(Path.of("C:/x/"))); // 尾分隔符归一
+    }
+
+    @Test
+    void toDirectMountRejectsUncAndRelative() {
+        assertNull(WslPathMapper.toDirectMount(Path.of("\\\\server\\share")));
+        assertNull(WslPathMapper.toDirectMount(Path.of("relative/path")));
+        assertNull(WslPathMapper.toDirectMount(null));
+    }
 }

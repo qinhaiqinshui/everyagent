@@ -1785,6 +1785,17 @@
   max-width: 60%;
 }
 
+/* 标题行带右侧动作按钮(+ 选工作区外文件)时:提示文案占中间弹性区并右对齐,按钮固定最右。 */
+.nagent-composer__at-header--actions .nagent-composer__at-hint {
+  flex: 1 1 auto;
+  min-width: 0;
+  text-align: right;
+}
+
+.nagent-composer__at-external {
+  flex: 0 0 auto;
+}
+
 .nagent-composer__slash-group {
   display: flex;
   flex-direction: column;

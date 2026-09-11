@@ -9,14 +9,16 @@ import {
   type WorkspaceFileEntry,
 } from '@/query/workspaceFileQueryService'
 import { buildWorkspaceFileToken } from '@/composerToken/workspaceFileToken'
+import { buildExternalFileToken, type ExternalFileEntry } from '@/composerToken/externalFileToken'
 import { isOpaqueTokenText } from '@/composerToken/composerOpaqueToken'
 import {
   cancelTaskToken,
   extractSlashId,
 } from '@/slash/taskScopedTokens'
 import InlineComposer, { type InlineComposerHandle, type InlineComposerChange } from './InlineComposer'
-import { Button } from '@/components/shared/ui'
-import { FileIcon, FolderIcon } from '../shared/AppGlyphs'
+import ExternalFilePickerModal from './ExternalFilePickerModal'
+import { Button, IconButton } from '@/components/shared/ui'
+import { FileIcon, FolderIcon, PlusIcon } from '../shared/AppGlyphs'
 import {
   slashCommandRegistry,
   type SlashCommandItem,
@@ -245,6 +247,8 @@ export default function TaskComposerSurface({
   const [atResults, setAtResults] = React.useState<WorkspaceFileEntry[]>([])
   const [atLoading, setAtLoading] = React.useState(false)
   const atSearchTimer = React.useRef<number | null>(null)
+  /** 「@ 弹窗 → 工作区外文件/文件夹」选择框(经 fs.browse 选工作区外路径)。 */
+  const [externalPickerOpen, setExternalPickerOpen] = React.useState(false)
 
   /** `/` 弹层滚动容器与各选项元素引用（键盘/鼠标切换高亮时把选中项滚进可视区，见下方 useEffect）。 */
   const slashPopRef = React.useRef<HTMLDivElement | null>(null)
@@ -445,6 +449,28 @@ export default function TaskComposerSurface({
   const selectFileEntry = React.useCallback((entry: WorkspaceFileEntry) => {
     selectEntryAsToken(entry)
   }, [selectEntryAsToken])
+
+  /**
+   * 「文件引用」标题行 + 按钮:删掉输入框中的 `@query` 触发片段(含 @ 本身,
+   * deleteBefore 与 selectEntryAsToken 同式),清空 @ 弹窗状态后打开外部文件选择框。
+   */
+  const openExternalFilePicker = React.useCallback(() => {
+    editorRef.current?.insertText('', atQuery.length + 1)
+    setAtOpen(false)
+    setAtBrowse(null)
+    setAtQuery('')
+    setAtActiveIndex(0)
+    setAtStart(-1)
+    setExternalPickerOpen(true)
+  }, [atQuery])
+
+  /** 选中外部文件/目录:构造外部引用 token 在光标处插入(不删字符),聚焦编辑器并关闭选择框。 */
+  const handleExternalFilePick = React.useCallback((entry: ExternalFileEntry) => {
+    const externalToken = buildExternalFileToken(entry)
+    editorRef.current?.insertToken(externalToken, 0)
+    editorRef.current?.focus()
+    setExternalPickerOpen(false)
+  }, [])
 
   const applyAtActiveSelection = React.useCallback(() => {
     const item = atActiveList[atSafeActiveIndex]
@@ -656,11 +682,21 @@ export default function TaskComposerSurface({
         ) : null}
         {atOpen ? (
           <div ref={atPopRef} className="nagent-composer__at-pop ui-menu ui-menu--popup" role="listbox" aria-label="文件引用选择">
-            <div className="nagent-composer__at-header">
+            <div className="nagent-composer__at-header nagent-composer__at-header--actions">
               <div className="nagent-composer__at-title">文件引用</div>
               <div className="nagent-composer__at-hint">
                 {atBrowse ? (atBrowse.relativePath || '当前目录') : '工作区搜索'}
               </div>
+              <IconButton
+                className="nagent-composer__at-external"
+                icon={<PlusIcon size={14} />}
+                aria-label="选择工作区外文件/文件夹"
+                title="选择工作区外文件/文件夹"
+                variant="ghost"
+                size="sm"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={openExternalFilePicker}
+              />
             </div>
             <>
               {atLoading ? (
@@ -738,6 +774,13 @@ export default function TaskComposerSurface({
           ) : null}
         </div>
       ) : null}
+      <ExternalFilePickerModal
+        open={externalPickerOpen}
+        onClose={() => setExternalPickerOpen(false)}
+        onPick={handleExternalFilePick}
+        workspaceRoot={workspace}
+        workerId={workerId}
+      />
     </div>
     </>
   )

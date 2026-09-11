@@ -1,6 +1,6 @@
 {
   "name": "every-agent-web",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "private": true,
   "description": "every-agent 前端:n 分支 UI 壳接入 hub 管道(任务/文件树/git)",
   "scripts": {

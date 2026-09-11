@@ -160,7 +160,18 @@ public class GitService {
             for (String p : paths) {
                 sb.resolveLoose(p); // 已删除(缺失)文件也允许提交删除,仅校验沙箱不越界
             }
-            addArgs.addAll(paths);
+            // 与当前变更集求交集后再 add:已无变更的陈旧路径(如勾选后被删除的
+            // 未跟踪文件,git status 中彻底消失)对本次提交是 no-op,直接跳过——
+            // 否则 git add 会因 unmatched pathspec 整体失败、提交被阻断。
+            java.util.Set<String> changed = statusData(sb).allChanged();
+            for (String p : paths) {
+                if (changed.contains(normalizeRel(p))) {
+                    addArgs.add(p);
+                }
+            }
+            if (addArgs.size() == 3) { // 仍只有 ["add","-A","--"] = 交集为空
+                throw new BadParamsException("选中的文件均已无变更(可能已被删除或提交),请刷新更改列表后重试");
+            }
         }
         NativeResult add = git.runWrite(sb.root(), addArgs, CredentialSpec.none());
         if (!add.ok()) {
@@ -212,28 +223,8 @@ public class GitService {
         }
         ArrayNode arr = Json.arr();
         String remote = url == null ? "origin" : url;
-        for (String line : r.stdout().split("\n")) {
-            String t = line.trim();
-            if (t.isEmpty() || t.startsWith("To ") || t.equals("Done")) {
-                continue;
-            }
-            String[] parts = t.split("\t", -1);
-            if (parts.length >= 3) {
-                String flag = parts[0];
-                String refSpec = parts[1];
-                String ref = refSpec;
-                int colon = refSpec.indexOf(':');
-                if (colon >= 0) {
-                    ref = refSpec.substring(colon + 1);
-                }
-                String status = switch (flag) {
-                    case "=" -> "UP_TO_DATE";
-                    case "!" -> "REJECTED";
-                    case "+" -> "FORCED";
-                    default -> "OK";
-                };
-                arr.add(Json.obj().put("remote", remote).put("ref", ref).put("status", status));
-            }
+        for (NativeGit.PushUpdate u : NativeGit.parsePushUpdates(r.stdout())) {
+            arr.add(Json.obj().put("remote", remote).put("ref", u.ref()).put("status", u.status()));
         }
         ctx.ok(Json.obj().set("updates", arr));
     }
