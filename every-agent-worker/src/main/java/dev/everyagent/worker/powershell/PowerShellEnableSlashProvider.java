@@ -20,8 +20,10 @@ import dev.everyagent.worker.task.TaskManager;
  *
  * <p><b>仅 WSL+Linux 沙箱后端注册</b>({@link OsSandbox#isWslBackend()},即
  * wsl-bwrap / wsl-direct):WSL 后端命令方言是 bash,AI 默认只有 bash 工具;选中本条目后
- * 主/子 agent 工具集在 bash 之外<b>追加</b>{@code powershell} 工具(经发行版内 pwsh 执行,
- * 须 {@code worker.sandbox.wsl.pwsh-enabled=true}),让 AI 同时拥有 powershell 与 bash。
+ * 主/子 agent 工具集在 bash 之外<b>追加</b>{@code powershell} 工具——命令<b>回宿主
+ * Windows 原生沙箱执行</b>(windows-mic 语义:Restricted Token + Low IL + Job Object +
+ * 目录标注/ACL,经 {@code CommandExecutor} 的 powershell 分支强制 native;wsl 发行版内
+ * 不要求安装 pwsh),让 AI 同时拥有 powershell 与 bash。
  * <b>windows-mic(Windows+ACL)后端不注册</b>:该后端命令工具本就是 PowerShellTool,
  * 无「追加 powershell」需求,故 `/` 菜单不出现本条目。
  *

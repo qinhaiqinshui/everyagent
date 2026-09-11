@@ -1536,10 +1536,11 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
                 tools.add(c);
             }
             // 任务级「启用 powershell」(仅 WSL+Linux 后端有该斜杠条目):bash 之外追加
-            // PowerShellTool(发行版内 pwsh 执行),让 AI 同时拥有 powershell 与 bash;
-            // windows-mic 后端无此开关,PowerShellTool 已在上方独占注册,不会重复。
+            // PowerShellTool——命令回宿主 Windows 原生沙箱(windows-mic 语义)执行,
+            // 让 AI 同时拥有 powershell 与 bash;windows-mic 后端无此开关,
+            // PowerShellTool 已在上方独占注册,不会重复。
             if (t.powershellEnabled) {
-                tools.add(new PowerShellTool(exec, sandbox.isWslBackend()).toolCallback());
+                tools.add(new PowerShellTool(exec).toolCallback());
             }
         }
         // M5:fs/git 模型工具在此追加;tool.result 事件由 AgentRunner 统一发射

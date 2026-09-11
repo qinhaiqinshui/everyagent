@@ -9,6 +9,7 @@ import dev.everyagent.worker.task.TaskEntry;
 
 import java.nio.file.Path;
 import java.util.HashMap;
+import java.util.Locale;
 import java.util.Map;
 import java.util.regex.Pattern;
 
@@ -65,6 +66,9 @@ public class CommandExecutor {
     private final String agentId;
     /** 打包 rg 二进制所在目录(可空);非空时 bash/powershell 子进程把它注入 PATH。 */
     private final Path rgBinDir;
+    /** 是否 Windows 宿主(powershell 工具仅 Windows 注册;Low 标注/ACL 亦仅 Windows 有意义)。 */
+    private final boolean windowsHost = System.getProperty("os.name")
+            .toLowerCase(Locale.ROOT).contains("win");
     /** Low 完整性标注失败的一次性告警标记(仅首次失败时记日志,防刷屏)。 */
     private volatile boolean writableRootWarned;
 
@@ -93,12 +97,16 @@ public class CommandExecutor {
         if (command == null || command.trim().isEmpty()) {
             return "execute: command 不能为空";
         }
+        boolean powershell = "powershell".equalsIgnoreCase(shell);
+        // powershell 工具始终走宿主 Windows 原生沙箱:WSL 后端任务级 /启用powershell 动态注册
+        // 时也强制回 Windows 原生(wsl 发行版内不保证安装 pwsh),命令语义与 windows-mic 一致
+        // (Restricted Token + Low IL + Job Object + 目录标注/ACL)。bash 等保持后端方言。
+        boolean wsl = sandbox.isWslBackend() && !powershell;
         // wsl-bwrap 后端:模型命令是 bash/POSIX 方言(/workspace、/mnt/<盘>),授权判定仍在
         // Windows 路径域进行——喂给门禁的是翻译副本(真实执行的命令保持原文)。
         // wsl-direct 后端:发行版整体为可丢弃隔离单元(宿主 automount 关闭 + 只手动挂载
         // 工作区),命令危险动词/越界路径授权无需 worker 层门禁,gating 交由发行版隔离承担。
-        boolean wsl = sandbox.isWslBackend();
-        boolean wslDirect = sandbox.isWslDirect();
+        boolean wslDirect = wsl && sandbox.isWslDirect();
         String gateCmd = null;
         if (!wslDirect) {
             gateCmd = wsl ? WslPathMapper.translateCommand(command, Path.of(task.workspaceRoot))
@@ -111,38 +119,49 @@ public class CommandExecutor {
         }
         Path cwd = Path.of(task.workspaceRoot);
         if (!wsl) {
-            // 仅 mic 后端需要宿主侧 Low 标注/ACL 预处理;wsl 系列后端无宿主状态标注需求
-            prepareWritableRoots(cwd);
+            // 需要宿主侧 Low 标注/ACL 预处理:windows-mic 后端(powershell/bash 均走)与
+            // WSL 后端下的 powershell 强制 native(powershell=true 强制,即使全局非 mic)
+            prepareWritableRoots(cwd, powershell);
         }
         Map<String, String> env = new HashMap<>();
         // bash/powershell 且配置了 rgBinDir 时,把打包 rg 二进制所在目录注入子进程 PATH,
         // 使模型可直接敲 rg(其余 shell 如 cmd/auto/raw 不注入,保持原行为)。
         // wsl 系列后端不注入:Windows 侧 rg.exe 进不了发行版,rg 由发行版自带(安装脚本/apt)
         if (!wsl && rgBinDir != null
-                && ("powershell".equalsIgnoreCase(shell) || "bash".equalsIgnoreCase(shell))) {
+                && (powershell || "bash".equalsIgnoreCase(shell))) {
             String sysPath = System.getenv("PATH");
             env.put("PATH", rgBinDir + java.io.File.pathSeparator + (sysPath == null ? "" : sysPath));
         }
-        // powershell 专属(非 wsl 后端):授权检查之后给命令串预置非成功流抑制(progress +
+        // powershell 专属(Windows 原生域):授权检查之后给命令串预置非成功流抑制(progress +
         // information,权限检查与审计日志始终是用户原始命令)。WindowsSandbox 两条 spawn 路径均把
         // 该串作为整段脚本执行,前缀同时生效;用户命令自身若显式设置该偏好,后写覆盖本前缀。
-        String spawnCmd = !wsl && "powershell".equalsIgnoreCase(shell)
-                ? POWERSHELL_PREFIX + command
-                : command;
+        String spawnCmd = powershell ? POWERSHELL_PREFIX + command : command;
         // wsl-bwrap 后端:已授权 EXEC 根随调用挂载进沙箱(授权=绑定,撤销=下次不绑,零宿主状态);
-        // 走 execRootsSandboxed(§13.3 L2 过滤)——过度宽泛根(如历史 C:\)不得进 --bind 白名单,
+        // 走 execRootsSandboxed(§13.3 L2 过滤)——过度宽泛根(如历史 C:\\)不得进 --bind 白名单,
         // 否则整个 /mnt/c 会被读写挂进沙箱,读隔离被击穿。wsl-direct 不建 bwrap 命名空间,
-        // 授权根由动态 ensureMount 承担,此参数为空。
-        java.util.List<Path> extraRoots = sandbox.isWslBwrap() ? gate.execRootsSandboxed(task)
+        // 授权根由动态 ensureMount 承担,此参数为空。powershell 走 Windows 原生,
+        // 附加根由 prepareWritableRoots 的 Low 标注/ACL 消费,不参与 bwrap 挂载。
+        java.util.List<Path> extraRoots = !wsl && sandbox.isWslBwrap() ? gate.execRootsSandboxed(task)
                 : java.util.List.of();
         // 网络许可:任务级 /禁用网络 开关未开 且 worker 全局默认放行 → 本次命令放行网络;
         // 否则按 deny 断网(三个后端各自落地:wsl --unshare-net / unshare -n / 剥代理 env)
         boolean allowNetwork = !task.networkBlocked && sandbox.networkAllowedByDefault();
         // 提权授权:优先走 seccomp 内核级拦截(仅 wsl-bwrap + 未全局放行 + 开关开启),
         // 它能覆盖文本扫描漏掉的别名/脚本内 setuid 提权;否则退回文本扫描启发式。
-        // wsl-direct 恒 root,无提权授权概念。
+        // wsl-direct 恒 root,无提权授权概念。powershell 走 Windows 原生沙箱,
+        // 提权由 Restricted Token / 是否保留当前 token 决定,同样先经门禁。
+        boolean allowPrivilege = sandbox.privilegeAllowedByDefault();
+        if (!allowPrivilege && gateCmd != null && PermissionGate.usesPrivilege(gateCmd)) {
+            gate.requirePrivilege(task, agentId, gateCmd); // 拒绝/超时抛 PermissionDeniedException → 命令不执行
+            allowPrivilege = true;
+        }
         ExecResult r;
-        if (sandbox.useSeccompInterception()) {
+        if (powershell) {
+            // WSL 后端下 powershell 工具也强制回宿主 Windows 原生沙箱(windows-mic 语义),
+            // 不走 wsl 发行版 pwsh(bash 方言才进 WSL)。
+            r = sandbox.spawnSandboxedWindows(spawnCmd, cwd, env, shell, extraRoots, allowNetwork,
+                    allowPrivilege);
+        } else if (sandbox.useSeccompInterception()) {
             r = sandbox.spawnSandboxedSeccomp(spawnCmd, cwd, env, shell, extraRoots, allowNetwork,
                     (execPath, pid, syscall) -> {
                         try {
@@ -159,16 +178,11 @@ public class CommandExecutor {
                         }
                     });
         } else {
-            boolean allowPrivilege = sandbox.privilegeAllowedByDefault();
-            if (!allowPrivilege && gateCmd != null && PermissionGate.usesPrivilege(gateCmd)) {
-                gate.requirePrivilege(task, agentId, gateCmd); // 拒绝/超时抛 PermissionDeniedException → 命令不执行
-                allowPrivilege = true;
-            }
             r = sandbox.spawnSandboxed(spawnCmd, cwd, env, shell, extraRoots, allowNetwork,
                     allowPrivilege);
         }
         // powershell 专属:输出层剥除 CLIXML 流记录噪声(兜底,覆盖 Preference 未能抑制的残余)
-        if (!wsl && "powershell".equalsIgnoreCase(shell)) {
+        if (powershell) {
             r = stripClixml(r);
         }
         log.info("[exec] task={} backend={} rc={} aborted={} cmd={}", task.taskId,
@@ -228,8 +242,11 @@ public class CommandExecutor {
      * 提示,避免每条命令尾部常驻噪声(真实写入失败会在命令自身的 stdout/stderr
      * 显现,模型/用户可见性不受影响);后续命令不再重复告警(防刷屏)。
      */
-    private void prepareWritableRoots(Path cwd) {
-        if (!sandbox.isWindowsSandboxActive()) {
+    private void prepareWritableRoots(Path cwd, boolean forceNative) {
+        // 仅在真正走 Windows 原生进程时标注:windows-mic 全局后端(isWindowsSandboxActive),
+        // 或 WSL 后端下 powershell 强制 native(forceNative=true,发行版内无 pwsh,命令回宿主执行)。
+        // 非 Windows 宿主恒跳过(powershell 工具仅 Windows 注册;jna 平台库只在 Windows 可用)。
+        if (!windowsHost || (!forceNative && !sandbox.isWindowsSandboxActive())) {
             return;
         }
         boolean ok = WindowsIntegrity.ensureWritable(cwd);
