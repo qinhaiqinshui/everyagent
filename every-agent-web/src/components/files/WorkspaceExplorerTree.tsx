@@ -1,7 +1,8 @@
 import React from 'react'
 import { Dropdown, Tree, Tooltip, theme } from 'antd'
 import type { MenuProps, TreeDataNode } from 'antd'
-import { ChevronDownIcon, ChevronRightIcon } from '../shared/AppGlyphs'
+import { ChevronDownIcon, ChevronRightIcon, FolderIcon } from '../shared/AppGlyphs'
+import { FileTypeIcon } from '../shared/FileTypeGlyphs'
 import type { ListRowActionItem } from '../shared/ui/ListRowActions'
 import { Checkbox } from '../shared/ui'
 import { useResponsiveViewport } from '@/hooks/useResponsiveViewport'
@@ -156,7 +157,7 @@ export default function WorkspaceExplorerTree({
         ref={treeRef as never}
         treeData={treeData}
         titleRender={titleRender}
-        // 名称前不渲染 icon(极简):开合状态由 switcherIcon 箭头表达
+        // antd 内置 icon 槽位仍关闭:类型图标由 titleRender(TreeNodeRow)自行渲染
         showIcon={false}
         // 关闭 DirectoryTree 默认的 expandAction='click'(单击节点自动展开目录)。
         // 展开/收起改为:双击名称(onDoubleClick toggle) 或 单击箭头(onExpand)。
@@ -309,6 +310,15 @@ function TreeNodeRow({
           />
         </span>
       ) : null}
+      {/* 名称前置类型图标:文件行按扩展名渲染语言徽章(未知退化为中性文件轮廓),
+          目录行用极简描边文件夹,与 switcher 箭头列错开一级缩进。 */}
+      <span style={{ flexShrink: 0, display: 'inline-flex', alignItems: 'center' }}>
+        {isDirectory ? (
+          <FolderIcon size={14} style={{ color: 'var(--text-muted)' }} />
+        ) : (
+          <FileTypeIcon fileName={node.name} size={14} />
+        )}
+      </span>
       <span
         style={{
           flex: 1,

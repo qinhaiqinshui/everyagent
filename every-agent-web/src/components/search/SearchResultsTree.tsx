@@ -1,5 +1,6 @@
 import React from 'react'
-import { ChevronDownIcon, FileTextIcon } from '../shared/AppGlyphs'
+import { ChevronDownIcon } from '../shared/AppGlyphs'
+import { FileTypeIcon } from '../shared/FileTypeGlyphs'
 import type {
   WorkspaceContentSearchFileResult,
   WorkspaceContentSearchHit,
@@ -28,36 +29,6 @@ interface MatchSegments {
 const MAX_LINE_LENGTH = 250
 /** 中间截断时命中片段前后各保留的字符数。 */
 const TRUNCATE_KEEP = 110
-
-/** 常见后缀 → 主题色（文件名/文件图标着色，简化版的 VSCode 文件关联色）。 */
-const FILE_TONE_BY_EXT: Record<string, string> = {
-  ts: 'var(--accent-blue)',
-  tsx: 'var(--accent-blue)',
-  js: 'var(--accent-amber)',
-  jsx: 'var(--accent-amber)',
-  mjs: 'var(--accent-amber)',
-  cjs: 'var(--accent-amber)',
-  json: 'var(--accent-amber)',
-  html: 'var(--accent-amber)',
-  css: 'var(--accent-purple)',
-  scss: 'var(--accent-purple)',
-  less: 'var(--accent-purple)',
-  md: 'var(--accent-cyan)',
-  yml: 'var(--accent-green)',
-  yaml: 'var(--accent-green)',
-  py: 'var(--accent-green)',
-  go: 'var(--accent-cyan)',
-  rs: 'var(--accent-red)',
-  java: 'var(--accent-red)',
-}
-
-function getFileTone(fileName: string): string {
-  const dotIndex = fileName.lastIndexOf('.')
-  if (dotIndex <= 0) {
-    return 'var(--text-secondary)'
-  }
-  return FILE_TONE_BY_EXT[fileName.slice(dotIndex + 1).toLowerCase()] ?? 'var(--text-secondary)'
-}
 
 /**
  * 命中行 → 三段式展示文本。
@@ -146,7 +117,6 @@ function FileResultGroup({
   const fileName = slashIndex >= 0 ? file.path.slice(slashIndex + 1) : file.path
   const dirPath = slashIndex > 0 ? file.path.slice(0, slashIndex) : ''
   const matches = file.matches ?? []
-  const tone = getFileTone(fileName)
 
   return (
     <div style={fileGroupStyle}>
@@ -173,9 +143,9 @@ function FileResultGroup({
           <ChevronDownIcon size={13} style={collapsed ? fileChevronCollapsedStyle : undefined} />
         </span>
         <span style={fileIconStyle}>
-          <FileTextIcon size={13} style={{ color: tone }} />
+          <FileTypeIcon fileName={fileName} size={13} />
         </span>
-        <span style={{ ...fileNameStyle, color: tone }}>{fileName}</span>
+        <span style={fileNameStyle}>{fileName}</span>
         {dirPath ? <span style={fileDirStyle}>{dirPath}</span> : null}
         <span style={fileCountStyle}>{matches.length}</span>
       </div>
@@ -284,6 +254,7 @@ const fileIconStyle: React.CSSProperties = {
 const fileNameStyle: React.CSSProperties = {
   fontSize: 'var(--text-xs)',
   fontWeight: 600,
+  color: 'var(--text-primary)',
   overflow: 'hidden',
   textOverflow: 'ellipsis',
   whiteSpace: 'nowrap',
