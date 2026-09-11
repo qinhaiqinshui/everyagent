@@ -457,6 +457,7 @@ ask 管道承载第二类阻塞请求:**危险操作授权**。`PermissionGate` 
 - **Windows Low IL 可写性契约**(对 windows-mic 后端):工作区树 + EXEC 授权目录必须由 worker 在命令执行前配置为沙箱可写——① 标注 Low 完整性(SACL `S:(ML;OICI;NW;;;LW)`),解决 MIC 的 NO_WRITE_UP;② `WindowsAcl` 给工作区根追加可继承 Allow ACE(本地 Users `(OI)(CI)` 修改+删除权限),解决 ACL 残缺。工作区外保持默认 Medium → 沙箱内写被 OS 拒,构成弹窗授权之外的 OS 级兜底。
 - **工作区外部授权根的沙箱消费**(§7.17):文件工具侧并入 `FsToolSupport` 的 Sandbox 附加根(read_file/create_file/update_file 直接放行);命令侧并入 `GrantRegistry.execRootsSandboxed` 安全过滤视图(过宽根同被拒收)——wsl-bwrap 随命令以 `rw --bind` 白名单挂载(挂载点 `/mnt/<盘>` 原生形态);windows-mic Low 完整性标注 + DACL 可写(同工作区契约);wsl-direct 把**全部工作区**的 externalRoots 并入每条命令的 `WslDirectSandbox` 挂载列表(drvfs 读写挂载,runner trusted 阶段幂等 `_ensure_mount`;挂载长存,删除工作区时按 §7.17 级联 umount;bwrap 按次 bind 天然跟随,mic 标注幂等无残留)。
 - **网络策略**:默认放行(`worker.sandbox.allow-network=true`,命令可访问网络,含回环 127.0.0.1);任务级 `/禁用网络` 或全局 `allow-network=false` 才断网——wsl-direct = `unshare -n`(新建无 eth0 的 netns)、wsl-bwrap = `--unshare-net`(新 netns 仅 down 的 lo,连回环也不通)、direct/mic = 剥代理 env(advisory)。
+- **PowerShell 方言可选开启**(wsl 系列后端):WSL 后端命令方言为 bash,AI 默认只有 `bash` 工具;用户对某任务选 `/启用powershell`(kind=`powershell.enable`,任务级开关 `TaskEntry.powershellEnabled`,随 meta 持久化)后,主/子 agent 工具集在 bash 之外**追加** `powershell` 工具(经发行版内 pwsh 执行,须发行版预装 pwsh 且 `worker.sandbox.wsl.pwsh-enabled=true`),与 bash 并存。windows-mic(Windows+ACL)后端命令工具本就是 PowerShellTool,**不注册**该斜杠条目(`PowerShellEnableSlashProvider` 仅 `sandbox.isWslBackend()` 时注册)。
 - **命令 stdin 契约**:AI 命令的 stdin 一律接 null 设备(`/dev/null`;windows-mic 后端为 NULL 句柄),不得是"打开的空管道"。wsl 系后端载荷经 stdin 传入,但 wsl.exe→发行版的 stdio 桥接会保持 Linux 侧管道写端打开(worker 侧关闭管道也不传播 EOF);若让 bash 继承它,`rg`/`grep` 无路径参数时据 stdin 可读判定改读 stdin(静默空结果,与"无匹配"不可区分),`cat` 等阻塞读则挂到超时。落地:eagent-run.py 在 exec bash/bwrap 前把 fd 0 重定向到 `/dev/null`(seccomp supervisor 除外——其 stdin 承载 priv-ans 控制帧);direct 后端 ProcessBuilder `redirectInput` null 设备。
 - **Windows 沙箱技术路线说明**:曾评估 AppContainer(Low IL 标注的继任者),因"capability 模型不适合开放式开发工作流+普通 ACE 全失效的读模型破坏面太大"(OpenAI 对 Windows 沙箱的弃用理由同源)而放弃,整体迁往 WSL2 生态(Claude Code 对 Windows 用户的官方推荐路径);windows-mic 保留为回退后端。
 
@@ -606,7 +607,7 @@ worker(进程)
 | **Ask** | askId(短 ID `q_…`)、taskId、agentId、kind、question、options?、status、answer?、answeredBy?、timeoutAt | 运行时的 CompletableFuture 不入模型 |
 | **Input** | taskId、text、rawContent?、ts、from(sessionId) | 状态:queued → consumed(取消时 discarded);`rawContent` 为原始输入(含 opaque token 串) |
 
-**斜杠命令与任务级开关**:斜杠命令由 worker 动态注册(`slash.list`/`slash.select`/`slash.cancel`);任选中可返回多个结果(如 `/无人值守` 一次返回「无人值守」+「AI 审议」两个胶囊);任务级 token(模型池、AI 审议、无人值守等)随 meta 持久化、再运行保持,`slash.taskTokens.apply` 用于落地 token 携带的数据。
+**斜杠命令与任务级开关**:斜杠命令由 worker 动态注册(`slash.list`/`slash.select`/`slash.cancel`);任选中可返回多个结果(如 `/无人值守` 一次返回「无人值守」+「AI 审议」两个胶囊);任务级 token(模型池、AI 审议、无人值守、禁用网络、启用 powershell 等)随 meta 持久化、再运行保持,`slash.taskTokens.apply` 用于落地 token 携带的数据。其中 `/启用powershell` 仅 WSL+Linux 沙箱后端注册(windows-mic 后端命令工具本就是 PowerShellTool,无追加需求),开启后主/子 agent 工具集在 bash 之外追加 `powershell` 工具。
 
 **composer token(opaque token)双轨与 worker 解析**:输入框胶囊(斜杠命令、`@` 文件引用等)由前端构造为 inline opaque token(`[[[[agent-token::::<kind>||||label/summary/payload…]]]]`,4 连符号定界零转义);提交走**双轨**——`text` 为人类可读明文,原始 token 串随 `Input.rawContent` 上行(重开/回放按 rawContent 还原胶囊)。worker 侧 `SlashTokenResolveAdvisor` 在 user 消息进入模型前扫描正文、交 `SlashTokenHandler` 按 kind 分发解析为提交文本(未知 kind/解析失败保留原串);已注册 kind:技能命令 → 技能名、`git.auto_sync` → 空串、`system.workspace_file` → 工作区相对路径明文。
 

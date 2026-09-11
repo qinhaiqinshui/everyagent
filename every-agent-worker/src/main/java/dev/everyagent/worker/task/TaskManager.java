@@ -1359,6 +1359,7 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
         t.aiReview = meta.path("aiReview").asBoolean(false);      // AI 审议任务级开关(plan-unattended-ai-auth 步骤3)
         t.unattended = meta.path("unattended").asBoolean(false);  // 无人值守任务级开关(plan-unattended-ai-auth 步骤3)
         t.networkBlocked = meta.path("networkBlocked").asBoolean(false); // 禁网开关任务级(/禁用网络)
+        t.powershellEnabled = meta.path("powershellEnabled").asBoolean(false); // 启用 powershell 开关任务级(/启用powershell)
         t.seedUsageMeta(meta.path("usage")); // 恢复最近一轮上下文用量(续跑后列表/电池数据不丢)
         restoreAgentLedger(t, meta); // 恢复子 agent 台账(冷启动后 list_agents/wait_agents 正常)
         // slash 任务级 token 回读(仅 slash 层存储、业务方不读;随 meta.json 落盘,冷启动续跑恢复)。
@@ -1533,6 +1534,12 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
         } else {
             for (ToolCallback c : ToolCallbacks.from(new BashTool(exec))) {
                 tools.add(c);
+            }
+            // 任务级「启用 powershell」(仅 WSL+Linux 后端有该斜杠条目):bash 之外追加
+            // PowerShellTool(发行版内 pwsh 执行),让 AI 同时拥有 powershell 与 bash;
+            // windows-mic 后端无此开关,PowerShellTool 已在上方独占注册,不会重复。
+            if (t.powershellEnabled) {
+                tools.add(new PowerShellTool(exec, sandbox.isWslBackend()).toolCallback());
             }
         }
         // M5:fs/git 模型工具在此追加;tool.result 事件由 AgentRunner 统一发射

@@ -450,6 +450,10 @@ public class SubAgentManager {
             for (ToolCallback c : ToolCallbacks.from(new BashTool(exec))) {
                 tools.add(c);
             }
+            // 任务级「启用 powershell」(与主线一致):bash 之外追加 PowerShellTool
+            if (task.powershellEnabled) {
+                tools.add(new PowerShellTool(exec, sandbox.isWslBackend()).toolCallback());
+            }
         }
         // 模型装配:普通模型 → OpenAiChatModel;provider=model-pool → ModelPoolChatModel(自动容灾)。
         ChatModelFactory.AgentModel am = modelFactory.buildAgentModel(cfg, agentId, task.events, null);
