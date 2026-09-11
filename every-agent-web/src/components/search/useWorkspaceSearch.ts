@@ -206,6 +206,18 @@ export function useWorkspaceSearch() {
     })
   }, [])
 
+  /**
+   * 重置为初始 idle 态(清结果/错误/非法正则标记,并作废在途查询):
+   * 搜索面板切换 worker/工作区绑定时清旧结果用。
+   */
+  const reset = React.useCallback(() => {
+    generationRef.current += 1
+    setResult(null)
+    setError('')
+    setRegexInvalid(false)
+    setStatus('idle')
+  }, [])
+
   /** 摘要文案：搜索中提示 / 完成后的「N 个结果 · M 个文件（截断说明）」。 */
   const summary = React.useMemo(() => {
     if (status === 'searching') {
@@ -226,5 +238,6 @@ export function useWorkspaceSearch() {
     summary,
     run,
     cancel,
+    reset,
   }
 }

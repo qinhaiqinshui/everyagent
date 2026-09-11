@@ -504,16 +504,20 @@ function WorkspaceGroupPanel({
 
   /**
    * 跳转到独立搜索面板:切面板(壳层上下文的统一跳转通道) + 发领域事件携带搜索
-   * 范围(工作区根 + 目标目录),搜索面板订阅事件预填范围并聚焦输入框。
+   * 范围(所属 worker + 工作区根 + 目标目录),搜索面板订阅事件预填 worker/工作区
+   * 绑定与范围并聚焦输入框。
    */
   const handleRequestSearch = React.useCallback((target: WorkspaceExplorerContextTarget) => {
     setActiveSidebarPanel('search')
     domainEventBus.emit(DOMAIN_EVENTS.WORKSPACE_SEARCH_PANEL_REQUESTED, {
+      // 本组件(WorkspaceGroupPanel)作用域持有 entry: WorkspaceEntry,workerId 直接
+      // 取来源 worker(与 target.workspaceRoot 同源,无需反查注册表兜底)。
+      workerId: entry.workerId,
       workspaceRoot: target.workspaceRoot,
       rootPath: target.path,
       label: target.name,
     })
-  }, [setActiveSidebarPanel])
+  }, [entry.workerId, setActiveSidebarPanel])
 
   const handleRequestRootSearch = React.useCallback(() => {
     handleRequestSearch({ workspaceRoot, path: '', name: '工作区根目录', type: 'directory' })

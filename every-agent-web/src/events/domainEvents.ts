@@ -252,6 +252,8 @@ export type DomainEventMap = {
     panelId: string
   }
   [DOMAIN_EVENTS.WORKSPACE_SEARCH_PANEL_REQUESTED]: {
+    /** 范围所属工作区的 worker。 */
+    workerId: string
     /** 搜索范围所属工作区根（worker 机器绝对路径）。 */
     workspaceRoot: string
     /** 搜索根路径（业务绝对形态；空串表示工作区根）。 */
