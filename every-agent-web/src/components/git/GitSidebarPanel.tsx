@@ -23,6 +23,7 @@ import { ChevronDownIcon, ChevronRightIcon, FolderIcon } from '@/components/shar
 import { FileTypeIcon } from '@/components/shared/FileTypeGlyphs'
 import { useHub } from '@/hub/HubProvider'
 import { workspaceRegistry, type WorkspaceEntry } from '@/hub/workspaceRegistry'
+// antdConfirm 已随「移除工作区」入口下线而移除
 import { useWorkspaceShell } from '@/components/app/WorkspaceShellContext'
 import {
   gitGateway,
@@ -32,7 +33,6 @@ import {
   type GitRemote,
 } from '@/platform/git/gitGateway'
 import { workspaceGateway } from '@/platform/fs/workspaceGateway'
-import { antdConfirm } from '@/utils/appAntdBridge'
 import { domainEventBus, DOMAIN_EVENTS } from '@/events/eventBus'
 import SidebarScrollArea from '@/components/shared/SidebarScrollArea'
 import MoreActionsButton, { type MoreActionItem } from '@/components/shared/MoreActionsButton'
@@ -687,7 +687,6 @@ function GitWorkspaceGroupPanel({
     { key: 'pull', label: '拉取', onSelect: () => void handlePull() },
     { key: 'push', label: '推送', onSelect: () => void ensureRemoteThenPush() },
     { key: 'init', label: '初始化仓库', onSelect: () => void handleInit() },
-    { key: 'remove-workspace', label: '移除工作区…', danger: true, onSelect: () => void handleRemoveWorkspace(entry) },
   ]
 
   /**
@@ -1057,28 +1056,7 @@ function getWorkspaceDisplayName(root: string): string {
   return index >= 0 ? normalized.slice(index + 1) : normalized
 }
 
-/** 移除工作区注册:挂靠该工作区的任务数据一并删除,工作区目录文件不受影响。 */
-async function handleRemoveWorkspace(entry: WorkspaceEntry): Promise<void> {
-  const confirmed = await new Promise<boolean>((resolve) => {
-    antdConfirm({
-      title: '移除工作区注册',
-      content: `移除工作区注册?该工作区下的任务数据将一并删除,工作区目录文件不受影响:${entry.root}`,
-      okText: '移除',
-      okButtonProps: { danger: true },
-      cancelText: '取消',
-      onOk: () => resolve(true),
-      onCancel: () => resolve(false),
-    })
-  })
-  if (!confirmed) {
-    return
-  }
-  try {
-    await workspaceRegistry.remove(entry.workerId, entry.root)
-  } catch {
-    // 失败静默:注册表广播会带回最新状态;失败详情可从控制台网络请求排查。
-  }
-}
+/** 移除工作区注册已迁移至资源管理器侧栏,源代码管理不再提供该入口。 */
 
 // ---- 内联图标(轻量,避免引入额外依赖) ----
 // 进行中动画:图标本身动起来(刷新=spin 旋转/拉取=向下轻推/推送=向上轻推),
