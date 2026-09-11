@@ -1,7 +1,7 @@
 import React from 'react'
 import { Dropdown, Tree, Tooltip, theme } from 'antd'
 import type { MenuProps, TreeDataNode } from 'antd'
-import { FolderIcon } from '../shared/AppGlyphs'
+import { ChevronDownIcon, ChevronRightIcon } from '../shared/AppGlyphs'
 import type { ListRowActionItem } from '../shared/ui/ListRowActions'
 import { Checkbox } from '../shared/ui'
 import { useResponsiveViewport } from '@/hooks/useResponsiveViewport'
@@ -70,7 +70,7 @@ export default function WorkspaceExplorerTree({
       const isDirectory = node.type === 'directory'
       return {
         key: node.path,
-        // 名称前不渲染 folder/file 图标:开合状态由 switcherIcon(FolderIcon open/closed)表达
+        // 名称前不渲染 folder/file 图标:开合状态由 switcherIcon(通用箭头)表达
         title: node.name,
         isLeaf: !isDirectory,
         children: isDirectory && node.children?.length ? node.children.map(toNode) : undefined,
@@ -156,10 +156,10 @@ export default function WorkspaceExplorerTree({
         ref={treeRef as never}
         treeData={treeData}
         titleRender={titleRender}
-        // 名称前不渲染 icon(重复);开合状态由 switcherIcon 的 FolderIcon 表达
+        // 名称前不渲染 icon(极简):开合状态由 switcherIcon 箭头表达
         showIcon={false}
         // 关闭 DirectoryTree 默认的 expandAction='click'(单击节点自动展开目录)。
-        // 展开/收起改为:双击名称(onDoubleClick toggle) 或 单击 FolderIcon(onExpand)。
+        // 展开/收起改为:双击名称(onDoubleClick toggle) 或 单击箭头(onExpand)。
         expandAction={false}
         blockNode
         selectable={!multiSelectMode}
@@ -191,22 +191,20 @@ export default function WorkspaceExplorerTree({
         onSelect={(keys) => {
           const key = keys[0] as string | undefined
           if (!key) return
-          // 单击仅选中(高亮)。目录展开/收起由双击(onDoubleClick)或点击 FolderIcon(onExpand)触发。
+          // 单击仅选中(高亮)。目录展开/收起由双击(onDoubleClick)或点击箭头(onExpand)触发。
           onSelectPath(key)
         }}
-        // 展开/收起图标 = FolderIcon 开/合形态(替代 antd 自带箭头)。
+        // 展开/收起图标 = 通用折叠箭头(收起朝右 ChevronRight,展开朝下 ChevronDown)。
         // 注意:antd 6 会把用户 switcherIcon 包进 SwitcherIconCom 再传给 rc-tree,
         // 故 switcher span 必然渲染(返回 false 只能清空内容,span 仍占 22×22);
-        // 此处利用该位置显示开合图标,不再返回 false。叶子行的空 span 由 CSS 隐藏。
+        // 此处利用该位置显示开合箭头,不再返回 false。叶子行的空 span 由 CSS 隐藏。
         // SVG 居中由 .ws-tree .ant-tree-switcher 的 display:flex 负责,SVG 自身保持默认 block。
         switcherIcon={({ isLeaf, expanded }) => {
           if (isLeaf) return null
-          return (
-            <FolderIcon
-              size={14}
-              open={expanded}
-              style={{ color: token.colorTextSecondary }}
-            />
+          return expanded ? (
+            <ChevronDownIcon size={12} style={{ color: token.colorTextTertiary }} />
+          ) : (
+            <ChevronRightIcon size={12} style={{ color: token.colorTextTertiary }} />
           )
         }}
         style={{ fontSize: token.fontSizeSM }}
@@ -279,7 +277,7 @@ function TreeNodeRow({
       onClick={() => {
         if (wasLongPressed()) return
         // 不阻止冒泡:让 antd 的 onSelect 正常触发(单击选中高亮)。
-        // 目录展开/收起改由双击(onDoubleClick)或点击 FolderIcon(onExpand)触发。
+        // 目录展开/收起改由双击(onDoubleClick)或点击箭头(onExpand)触发。
       }}
       onDoubleClick={(e) => {
         e.stopPropagation()
