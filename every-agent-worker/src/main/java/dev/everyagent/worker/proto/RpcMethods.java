@@ -40,6 +40,9 @@ public final class RpcMethods {
     public static final String FS_DELETE = "fs.delete";
     /** 浏览目录(方案 B:列盘符/根,再逐层列子目录;不经 workspace 沙箱,依赖 worker 进程权限)。 */
     public static final String FS_BROWSE = "fs.browse";
+    /** 工作区文本内容搜索(内置 rg,架构 §5.10):jailed 到工作区根,JSON lines 解析为
+     * 结构化结果;大结果复用 fs.read 的 rpc.data 分批 + 末帧 ok 汇总。 */
+    public static final String FS_SEARCH = "fs.search";
     /** 斜杠命令清单(动态注册,数据来源下沉 worker;前端只负责渲染与插入)。 */
     public static final String SLASH_LIST = "slash.list";
     /** 斜杠命令选中:携带 token 与 taskId 触发条目 selectHandler(taskId 可空=草稿态,不写任务 meta)。 */

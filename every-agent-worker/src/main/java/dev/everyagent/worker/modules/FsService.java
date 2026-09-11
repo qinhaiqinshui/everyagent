@@ -36,9 +36,10 @@ public class FsService {
 
     private static final Logger log = LoggerFactory.getLogger(FsService.class);
 
-    /** 单帧内联上限:超过则 rpc.data 分批回传(架构 §5.4)。 */
-    private static final int INLINE_MAX = 256 * 1024;
-    private static final int CHUNK = 192 * 1024;
+    /** 单帧内联上限:超过则 rpc.data 分批回传(架构 §5.4);fs.search 分批复用同款阈值(包私有共享)。 */
+    static final int INLINE_MAX = 256 * 1024;
+    /** rpc.data 单批大小上限(基础值);fs.search 按文件边界切批,单文件项可超出(不撕裂文件项)。 */
+    static final int CHUNK = 192 * 1024;
     /** 单次写入上限,防协议滥用。 */
     private static final int MAX_WRITE = 16 * 1024 * 1024;
 
