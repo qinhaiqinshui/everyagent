@@ -7,7 +7,7 @@
         <artifactId>every-agent-parent</artifactId>
         <version>0.2.0</version>
     </parent>
-    <version>0.2.0</version>
+    <version>0.3.0</version>
     <artifactId>every-agent-worker</artifactId>
     <name>every-agent-worker</name>
     <description>worker 执行器:托管任务运行时、workspace、模型配置(9200 仅本地管理)</description>
