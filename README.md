@@ -76,14 +76,17 @@ web / hub / worker / desktop 四个模块**互相解耦、物尽其用**,可按�
 ---
 
 ## 📸 界面预览
-网页版前端（连着同一个worker）
+- 网页版前端（连着同一个worker）
 ![主界面总览](screenshots/1.png)
-桌面App（连着同一个worker）
+- 桌面App（连着同一个worker）
 ![主界面总览3](screenshots/3.png)
-桌面App（连着同一个worker）
+- 桌面App（连着同一个worker）
 ![主界面总览4](screenshots/4.png)
-移动端（连着同一个worker）
+- 移动端（连着同一个worker）
 ![多端控制](screenshots/2.png)
+
+- 子Agent 和 任务队列
+![主界面总览6](screenshots/5.png)
 
 ---
 
