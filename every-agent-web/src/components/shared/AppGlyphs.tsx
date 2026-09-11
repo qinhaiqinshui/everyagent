@@ -219,6 +219,19 @@ export function FolderPlusIcon({ size = 16, style }: AppGlyphProps) {
   )
 }
 
+/** 在系统文件管理器中显示图标（文件夹轮廓 + 向外 ↗ 箭头）。 */
+export function FolderArrowOutIcon({ size = 16, style }: AppGlyphProps) {
+  return (
+    <Svg size={size} style={style}>
+      <path d="M2.7 4.5H6L7.2 5.6H11.4V7.4H2.7V4.5Z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
+      <path d="M2.7 7.4V11.8H7.6" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
+      <path d="M9.6 6.6L13.5 2.7" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+      <path d="M13.5 2.7H10.9" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+      <path d="M13.5 2.7V5.3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+    </Svg>
+  )
+}
+
 /** 下载图标（托盘 + 向下箭头）。 */
 export function DownloadIcon({ size = 16, style }: AppGlyphProps) {
   return (

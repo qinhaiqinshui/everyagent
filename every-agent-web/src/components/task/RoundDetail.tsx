@@ -16,6 +16,10 @@ import TaskThread from './TaskThread'
  * - endSeq 为空（未闭合尾轮）时拉到 items 末尾（此场景由外层按尾轮处理，本组件通常只用于闭合轮）。
  *
  * 切片依赖 messageId（形如 `m-<seq>`）定位端点，items 恒按 seq 升序，故中间即为该轮过程内容。
+ *
+ * agent 过滤（「只看该 agent」）：matches 谓词非空时切片后再按归属过滤，仅显示该 agent 的
+ * 过程项。纯渲染派生——只过滤已加载内容，不触发任何拉取；用户展开/滚动续拉折入的新内容
+ * 经 items 引用变化自动纳入过滤。过滤后为空则不渲染线程（折叠条在外层照常）。
  */
 export interface RoundDetailProps {
   /** 该轮摘要（rounds.jsonl 行）。 */
@@ -28,7 +32,13 @@ export interface RoundDetailProps {
   isGenerating?: boolean
   /** 外部正在一次性拉取该轮区间（显示加载提示）。 */
   loading?: boolean
+  /** agent 过滤谓词（「只看该 agent」）：仅放行归属该 agent 的线程项；缺省不过滤。 */
+  matches?: (item: TaskThreadItem) => boolean
 }
+
+/** 加载指示延迟展示阈值(ms):本地 worker / 缓存命中时轮内容几十毫秒内即达,立即渲染
+ *  指示块会在内容到达前闪现一帧大空盒再被内容顶掉(首次展开的「闪烁」),短加载不显示指示器。 */
+const LOADING_HINT_DELAY_MS = 200
 
 export default function RoundDetail({
   round,
@@ -36,21 +46,34 @@ export default function RoundDetail({
   taskId,
   isGenerating = false,
   loading = false,
+  matches,
 }: RoundDetailProps): React.ReactNode {
   const slice = React.useMemo<TaskThreadItem[]>(
-    () => sliceRound(items, round),
-    [items, round.startSeq, round.endSeq],
+    () => (matches ? sliceRound(items, round).filter(matches) : sliceRound(items, round)),
+    [items, round.startSeq, round.endSeq, matches],
   )
+
+  /** 延迟加载指示:loading 持续超过阈值才显示;内容优先——分页续拉(loading 中)已有
+   *  内容照常渲染,不再被加载块整体顶掉(旧版滚动续拉也会闪一下,同根因)。 */
+  const [showLoading, setShowLoading] = React.useState(false)
+  React.useEffect(() => {
+    if (!loading) {
+      setShowLoading(false)
+      return
+    }
+    const timer = window.setTimeout(() => setShowLoading(true), LOADING_HINT_DELAY_MS)
+    return () => window.clearTimeout(timer)
+  }, [loading])
 
   return (
     <div className="nagent-round-detail nagent-round-collapse__process">
-      {loading ? (
-        <div className="nagent-empty">
+      {slice.length > 0 ? (
+        <TaskThread taskId={taskId} items={slice} isGenerating={isGenerating} />
+      ) : showLoading ? (
+        <div className="nagent-round-detail__loading" role="status">
           <InlineSpinner size={14} />
           <span>正在加载第 {round.index} 轮过程内容…</span>
         </div>
-      ) : slice.length > 0 ? (
-        <TaskThread taskId={taskId} items={slice} isGenerating={isGenerating} />
       ) : null}
     </div>
   )

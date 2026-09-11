@@ -19,9 +19,11 @@ import { Tree, Input, Button, Badge, Modal, Form, Checkbox, App } from 'antd'
 import type { TreeDataNode } from 'antd'
 import { InlineSpinner } from '@/components/shared/ui'
 import { GitIcon } from '@/components/icon'
-import { ChevronDownIcon } from '@/components/shared/AppGlyphs'
+import { ChevronDownIcon, ChevronRightIcon, FolderIcon } from '@/components/shared/AppGlyphs'
+import { FileTypeIcon } from '@/components/shared/FileTypeGlyphs'
 import { useHub } from '@/hub/HubProvider'
 import { workspaceRegistry, type WorkspaceEntry } from '@/hub/workspaceRegistry'
+// antdConfirm 已随「移除工作区」入口下线而移除
 import { useWorkspaceShell } from '@/components/app/WorkspaceShellContext'
 import {
   gitGateway,
@@ -31,7 +33,6 @@ import {
   type GitRemote,
 } from '@/platform/git/gitGateway'
 import { workspaceGateway } from '@/platform/fs/workspaceGateway'
-import { antdConfirm } from '@/utils/appAntdBridge'
 import { domainEventBus, DOMAIN_EVENTS } from '@/events/eventBus'
 import SidebarScrollArea from '@/components/shared/SidebarScrollArea'
 import MoreActionsButton, { type MoreActionItem } from '@/components/shared/MoreActionsButton'
@@ -105,19 +106,54 @@ function collectLeaves(status: GitStatusResult): ChangeLeaf[] {
     .sort((a, b) => a.path.localeCompare(b.path))
 }
 
-function buildTreeData(leaves: ChangeLeaf[]): TreeDataNode[] {
-  interface TreeNode {
-    node: TreeDataNode
-    children: Map<string, TreeNode>
-    isLeaf: boolean
-  }
-  const root = new Map<string, TreeNode>()
+/**
+ * 变更文件行标题:名称前置文件类型图标(与资源管理器树一致——按扩展名渲染语言
+ * 徽章,未知退化为中性文件轮廓),文件名不截断(超宽由树容器横向滚动),变更类型
+ * 徽标(M/A/D…)放行尾并 sticky 固定在可视区右缘——横向滚动长文件名时徽标不随内容滚走。
+ */
+function renderChangeFileTitle(name: string, badge: { letter: string; tone: string; label: string }) {
+  return (
+    <span style={changeFileTitleStyle}>
+      <span style={changeIconSlotStyle}>
+        <FileTypeIcon fileName={name} size={15} />
+      </span>
+      <span style={{ whiteSpace: 'nowrap' }}>{name}</span>
+      <span className="ws-change-badge-slot" style={changeBadgeSlotStyle} title={badge.label}>
+        <span style={{ ...changeBadgeStyle, background: badge.tone }}>{badge.letter}</span>
+      </span>
+    </span>
+  )
+}
 
-  const ensureDir = (parent: Map<string, TreeNode>, name: string): TreeNode => {
+/**
+ * 变更目录行标题:极简描边文件夹图标 + 目录名(与资源管理器树目录行一致)。
+ */
+function renderChangeDirTitle(name: string) {
+  return (
+    <span style={changeFileTitleStyle}>
+      <span style={changeIconSlotStyle}>
+        <FolderIcon size={15} style={{ color: 'var(--text-muted)' }} />
+      </span>
+      <span style={{ whiteSpace: 'nowrap' }}>{name}</span>
+    </span>
+  )
+}
+
+function buildTreeData(leaves: ChangeLeaf[]): TreeDataNode[] {
+  interface Branch {
+    /** 排序与展示名(目录名/文件名);title 可能是 JSX,排序不依赖 title。 */
+    name: string
+    key: string
+    children: Map<string, Branch>
+    isLeaf: boolean
+    badge?: { letter: string; tone: string; label: string }
+  }
+  const root = new Map<string, Branch>()
+
+  const ensureDir = (parent: Map<string, Branch>, name: string): Branch => {
     let entry = parent.get(name)
     if (!entry) {
-      const node: TreeDataNode = { key: `dir:${name}`, title: name, isLeaf: false }
-      entry = { node, children: new Map(), isLeaf: false }
+      entry = { name, key: `dir:${name}`, children: new Map(), isLeaf: false }
       parent.set(name, entry)
     }
     return entry
@@ -132,52 +168,30 @@ function buildTreeData(leaves: ChangeLeaf[]): TreeDataNode[] {
       const dirName = parts[i]
       prefix = prefix ? `${prefix}/${dirName}` : dirName
       const dir = ensureDir(cursor, dirName)
-      dir.node.key = `dir:${prefix}`
+      dir.key = `dir:${prefix}`
       cursor = dir.children
     }
-    const badge = STATUS_BADGE[leaf.statusKey]
-    const leafNode: TreeDataNode = {
+    cursor.set(fileName, {
+      name: fileName,
       key: `file:${leaf.path}`,
+      children: new Map(),
       isLeaf: true,
-      title: (
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
-          <span
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              width: 16,
-              height: 16,
-              borderRadius: 3,
-              fontSize: 11,
-              fontWeight: 700,
-              color: '#fff',
-              background: badge.tone,
-              flexShrink: 0,
-            }}
-            title={badge.label}
-          >
-            {badge.letter}
-          </span>
-          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{fileName}</span>
-        </span>
-      ),
-    }
-    cursor.set(fileName, { node: leafNode, children: new Map(), isLeaf: true })
+      badge: STATUS_BADGE[leaf.statusKey],
+    })
   }
 
-  const toDataNode = (map: Map<string, TreeNode>): TreeDataNode[] =>
+  const toDataNode = (map: Map<string, Branch>): TreeDataNode[] =>
     Array.from(map.values())
+      .sort((a, b) => {
+        if (a.isLeaf !== b.isLeaf) return a.isLeaf ? 1 : -1
+        return a.name.localeCompare(b.name)
+      })
       .map((entry) => ({
-        ...entry.node,
+        key: entry.key,
+        title: entry.isLeaf && entry.badge ? renderChangeFileTitle(entry.name, entry.badge) : entry.isLeaf ? entry.name : renderChangeDirTitle(entry.name),
+        isLeaf: entry.isLeaf,
         children: entry.isLeaf ? undefined : toDataNode(entry.children),
       }))
-      .sort((a, b) => {
-        const aLeaf = !a.children
-        const bLeaf = !b.children
-        if (aLeaf !== bLeaf) return aLeaf ? 1 : -1
-        return String(a.title).localeCompare(String(b.title))
-      })
 
   return toDataNode(root)
 }
@@ -305,6 +319,29 @@ function GitWorkspaceGroupPanel({
 
   const leaves = React.useMemo(() => (status ? collectLeaves(status) : []), [status])
   const treeData = React.useMemo(() => buildTreeData(leaves), [leaves])
+
+  /**
+   * 受控展开(与资源管理器树同交互):单击目录行不展开(expandAction=false),
+   * 由双击目录名或单击箭头 toggle。与文件树一致按「已折叠集合」存储——
+   * 默认全部展开(等价原 defaultExpandAll),状态刷新后新出现的目录默认展开。
+   */
+  const allDirKeys = React.useMemo(() => {
+    const keys = new Set<string>()
+    for (const leaf of leaves) {
+      const parts = leaf.path.split('/')
+      let prefix = ''
+      for (let i = 0; i < parts.length - 1; i++) {
+        prefix = prefix ? `${prefix}/${parts[i]}` : parts[i]
+        keys.add(`dir:${prefix}`)
+      }
+    }
+    return keys
+  }, [leaves])
+  const [collapsedDirKeys, setCollapsedDirKeys] = React.useState<Set<string>>(new Set())
+  const expandedKeys = React.useMemo(
+    () => Array.from(allDirKeys).filter((key) => !collapsedDirKeys.has(key)),
+    [allDirKeys, collapsedDirKeys],
+  )
 
   /**
    * 勾选集绑定在树行上:状态刷新后剪除已不在变更列表中的勾选路径。典型:新增
@@ -649,8 +686,6 @@ function GitWorkspaceGroupPanel({
       : []),
     { key: 'pull', label: '拉取', onSelect: () => void handlePull() },
     { key: 'push', label: '推送', onSelect: () => void ensureRemoteThenPush() },
-    { key: 'init', label: '初始化仓库', onSelect: () => void handleInit() },
-    { key: 'remove-workspace', label: '移除工作区…', danger: true, onSelect: () => void handleRemoveWorkspace(entry) },
   ]
 
   /**
@@ -804,15 +839,52 @@ function GitWorkspaceGroupPanel({
           {leaves.length === 0 ? (
             <div style={columnEmptyStyle}>工作区干净</div>
           ) : (
-            <div ref={treeRef}>
+            <div ref={treeRef} style={changesTreeScrollerStyle}>
               <Tree.DirectoryTree
+                // 与资源管理器树同样式:复用 ws-tree(箭头列宽/缩进/叶子占位),
+                // ws-changes-tree 追加横向滚动规则(长文件名不截断,出横向滚动条)。
+                className="ws-tree ws-changes-tree"
                 treeData={treeData}
-                showIcon
-                defaultExpandAll
+                showIcon={false}
+                blockNode
+                expandAction={false}
                 selectable={false}
+                expandedKeys={expandedKeys}
+                onExpand={(keys) => {
+                  const next = new Set(keys.map(String))
+                  setCollapsedDirKeys(new Set(Array.from(allDirKeys).filter((key) => !next.has(key))))
+                }}
+                // 与资源管理器树同款折叠箭头(叶子返回 null,antd 渲染空占位保持名称对齐)。
+                switcherIcon={({ isLeaf, expanded }) => {
+                  if (isLeaf) return null
+                  return expanded ? (
+                    <ChevronDownIcon size={12} style={{ color: 'var(--text-muted)' }} />
+                  ) : (
+                    <ChevronRightIcon size={12} style={{ color: 'var(--text-muted)' }} />
+                  )
+                }}
+                styles={{
+                  itemTitle: {
+                    display: 'flex',
+                    flex: 1,
+                    minWidth: 0,
+                    alignItems: 'center',
+                  },
+                }}
                 onDoubleClick={(_event, node) => {
                   const key = (node as { key?: React.Key }).key
-                  if (typeof key === 'string' && key.startsWith('file:')) {
+                  if (typeof key !== 'string') return
+                  if (key.startsWith('dir:')) {
+                    // 双击目录:展开/收起(单击不触发,与文件树一致)
+                    setCollapsedDirKeys((prev) => {
+                      const next = new Set(prev)
+                      if (next.has(key)) next.delete(key)
+                      else next.add(key)
+                      return next
+                    })
+                    return
+                  }
+                  if (key.startsWith('file:')) {
                     const path = key.slice('file:'.length)
                     void openFileDiff(path)
                   }
@@ -983,28 +1055,7 @@ function getWorkspaceDisplayName(root: string): string {
   return index >= 0 ? normalized.slice(index + 1) : normalized
 }
 
-/** 移除工作区注册:挂靠该工作区的任务数据一并删除,工作区目录文件不受影响。 */
-async function handleRemoveWorkspace(entry: WorkspaceEntry): Promise<void> {
-  const confirmed = await new Promise<boolean>((resolve) => {
-    antdConfirm({
-      title: '移除工作区注册',
-      content: `移除工作区注册?该工作区下的任务数据将一并删除,工作区目录文件不受影响:${entry.root}`,
-      okText: '移除',
-      okButtonProps: { danger: true },
-      cancelText: '取消',
-      onOk: () => resolve(true),
-      onCancel: () => resolve(false),
-    })
-  })
-  if (!confirmed) {
-    return
-  }
-  try {
-    await workspaceRegistry.remove(entry.workerId, entry.root)
-  } catch {
-    // 失败静默:注册表广播会带回最新状态;失败详情可从控制台网络请求排查。
-  }
-}
+/** 移除工作区注册已迁移至资源管理器侧栏,源代码管理不再提供该入口。 */
 
 // ---- 内联图标(轻量,避免引入额外依赖) ----
 // 进行中动画:图标本身动起来(刷新=spin 旋转/拉取=向下轻推/推送=向上轻推),
@@ -1245,6 +1296,53 @@ const diffLoadingStyle: React.CSSProperties = {
   fontSize: 'var(--text-xs)',
   color: 'var(--text-muted)',
   padding: '6px 4px',
+}
+
+/** 变更树横向滚动容器:长文件名撑开树宽,出横向滚动条(badge sticky 固定右缘的参照系)。 */
+const changesTreeScrollerStyle: React.CSSProperties = {
+  overflowX: 'auto',
+}
+
+/** 变更树行标题:名称前置类型图标(与文件树同款),文件名不截断(白名单 nowrap,超宽横向滚动),徽标推到行尾。 */
+const changeFileTitleStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+  width: '100%',
+  minWidth: 0,
+}
+
+/** 名称前置类型图标槽(与资源管理器树同款:文件夹/文件类型图标 15px)。 */
+const changeIconSlotStyle: React.CSSProperties = {
+  flexShrink: 0,
+  display: 'inline-flex',
+  alignItems: 'center',
+}
+
+/**
+ * 变更类型徽标槽:marginLeft:auto 落在行尾;position:sticky + right:0 相对横向滚动
+ * 容器固定在可视区右缘——滚动长文件名时徽标不随内容滚走。左侧 padding 遮住
+ * 从徽标下穿过的文件名文字,背景色由 .ws-change-badge-slot(CSS) 给实底。
+ */
+const changeBadgeSlotStyle: React.CSSProperties = {
+  marginLeft: 'auto',
+  position: 'sticky',
+  right: 0,
+  flexShrink: 0,
+  display: 'inline-flex',
+  paddingLeft: 8,
+}
+
+const changeBadgeStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  width: 16,
+  height: 16,
+  borderRadius: 3,
+  fontSize: 11,
+  fontWeight: 700,
+  color: '#fff',
 }
 
 const emptyStyle: React.CSSProperties = {

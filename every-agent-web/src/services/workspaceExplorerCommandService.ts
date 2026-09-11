@@ -109,6 +109,14 @@ export const workspaceExplorerCommandService = {
   },
 
   /**
+   * 在系统文件管理器中显示(对标 VSCode Reveal in File Explorer):
+   * 在运行 worker 的机器上打开文件管理器并选中/定位目标;目录定位目录本身。
+   */
+  async revealInOsFileManager(workspaceRoot: string, path: string): Promise<void> {
+    await workspaceGateway.revealInOsFileManager(workspaceRoot, path)
+  },
+
+  /**
    * 上传文件到工作区目标目录下。
    * 多选文件时按文件名平铺写入；目录上传时按 webkitRelativePath 保持原层级。
    * 同名文件会被覆盖（二进制写入）。

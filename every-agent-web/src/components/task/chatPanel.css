@@ -560,6 +560,18 @@
   min-width: 0;
 }
 
+/* 轮过程加载指示(RoundDetail 延迟 200ms 才显示):轻量居中行,不用 nagent-empty 的
+   180px 虚线大空盒——空盒在内容到达前后闪现会造成展开区明显闪烁与布局跳动。 */
+.nagent-round-detail__loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 16px 0;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
 /* 最终回复之后的系统 trace（如任务耗时）在展开时放回最终回复下方，保留原始顺序。 */
 .nagent-round-collapse__process--after {
   margin-top: 8px;

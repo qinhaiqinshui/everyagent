@@ -4,6 +4,7 @@ import dev.everyagent.contract.json.Json;
 import dev.everyagent.contract.rpc.Rpc;
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.hub.HubPool;
+import dev.everyagent.worker.os.OsReveal;
 import dev.everyagent.worker.proto.Channels;
 import dev.everyagent.worker.proto.RpcMethods;
 import dev.everyagent.worker.rpc.BadParamsException;
@@ -36,9 +37,10 @@ public class FsService {
 
     private static final Logger log = LoggerFactory.getLogger(FsService.class);
 
-    /** 单帧内联上限:超过则 rpc.data 分批回传(架构 §5.4)。 */
-    private static final int INLINE_MAX = 256 * 1024;
-    private static final int CHUNK = 192 * 1024;
+    /** 单帧内联上限:超过则 rpc.data 分批回传(架构 §5.4);fs.search 分批复用同款阈值(包私有共享)。 */
+    static final int INLINE_MAX = 256 * 1024;
+    /** rpc.data 单批大小上限(基础值);fs.search 按文件边界切批,单文件项可超出(不撕裂文件项)。 */
+    static final int CHUNK = 192 * 1024;
     /** 单次写入上限,防协议滥用。 */
     private static final int MAX_WRITE = 16 * 1024 * 1024;
 
@@ -54,6 +56,7 @@ public class FsService {
 
         dispatcher.register(RpcMethods.FS_LIST, this::list);
         dispatcher.register(RpcMethods.FS_REVEAL, this::reveal);
+        dispatcher.register(RpcMethods.FS_REVEAL_IN_OS, this::revealInOs);
         dispatcher.register(RpcMethods.FS_READ, this::read);
         dispatcher.register(RpcMethods.FS_WRITE, this::write);
         dispatcher.register(RpcMethods.FS_MKDIR, this::mkdir);
@@ -160,6 +163,20 @@ public class FsService {
             chain.add(entry(cur));
         }
         ctx.ok(Json.obj().put("path", sb.display(target)).set("chain", chain));
+    }
+
+    /**
+     * 在运行 worker 的宿主系统文件管理器中选中目标(架构 §5.5,对标 VSCode
+     * Reveal in File Explorer):Windows explorer /select、macOS open -R、
+     * Linux FileManager1 → xdg-open 降级,由 OsReveal 承担;路径经沙箱
+     * resolveExisting 校验(防越界/符号链接逃逸)。
+     * 远程访问场景窗口在 worker 所在电脑上弹出;无桌面环境时 IO 异常转 RPC 错误。
+     */
+    private void revealInOs(RpcContext ctx) throws IOException {
+        Sandbox sb = sandbox(ctx);
+        Path target = sb.resolveExisting(ctx.strParam("path"));
+        OsReveal.reveal(target);
+        ctx.ok(Json.obj().put("path", sb.display(target)));
     }
 
     private void read(RpcContext ctx) throws IOException {

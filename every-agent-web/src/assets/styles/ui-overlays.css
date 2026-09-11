@@ -212,21 +212,58 @@
   align-items: center;
 }
 
-/* 文件树:switcher 容器(目录行显示 FolderIcon 开/合图标的位置)改 flex 居中。
+/* 文件树:switcher(展开/收起图标)独占一列,容器改 flex 居中。
    antd 默认只用 text-align:center(水平)+ 无垂直居中,SVG 作为 inline element
    与文字 baseline 对齐 → 视觉贴底。改为 flex 容器后 SVG 真正水平+垂直居中。
-   alignSelf:stretch(来自 antd)保留 → switcher 高度 = 父 treenode 行高。 */
-.ws-tree .ant-tree-switcher {
+   同时清零 antd 默认的列尾 margin(4px) 并把列宽 24px 压到 14px:
+   12px 的 SVG(viewBox 16)中 chevron 图形右侧自带 ~4px 透明区,
+   压列宽后图标到名称的视觉间隙从 ~7px 收紧到 ~3px;
+   选择器用 .ws-tree.ant-tree 复合提升优先级,压过 antd 运行时注入的同名规则。 */
+.ws-tree.ant-tree .ant-tree-switcher {
   display: flex;
   align-items: center;
   justify-content: center;
+  width: 14px;
+  margin-inline-end: 0;
 }
 
-/* 文件树：叶子行(文件)的 switcher 空占位隐藏。
-   目录行 switcher 显示 FolderIcon 开/合图标;叶子行 noop 只是 22×22 空 span,
-   由 antd 加 .ant-tree-switcher-noop 类,这里直接不占布局。 */
-.ws-tree .ant-tree-switcher-noop {
-  display: none;
+/* 文件树：switcher hover 背景伪元素随列宽自适应。
+   antd 给 ::before 按默认 switcherSize 定宽 24px,列压缩后会溢出盖到名称开头,
+   改为 100% 跟随当前列宽。 */
+.ws-tree.ant-tree .ant-tree-switcher::before {
+  width: 100%;
+}
+
+/* 文件树：叶子行(文件)不显示折叠图标,但保留 switcher 空占位列。
+   antd 会给叶子行渲染 noop 空 span(与目录行同 14px 列宽),这里不再隐藏,
+   使文件名与同层文件夹名称左对齐、缩进一致。 */
+
+/* 文件树：收紧父子层级缩进。
+   antd 默认每级缩进单元宽度 indentSize = titleHeight = 24px,这里压缩为 12px;
+   缩进单元是 rc-tree 渲染的 ant-tree-indent-unit span,宽度来自 CSS token(无内联样式),
+   选择器用 .ws-tree.ant-tree 复合提升优先级,压过 antd 运行时注入的宽度规则。 */
+.ws-tree.ant-tree .ant-tree-indent-unit {
+  width: 12px;
+}
+
+/* ── 源代码管理:变更树(复用 ws-tree 箭头列/缩进/叶子占位样式) ── */
+
+/* 变更树:树根按内容撑宽(超长文件名不截断),短内容仍撑满容器;
+   滚动容器(组件内联 overflowX:auto)据此出横向滚动条。 */
+.ws-changes-tree.ant-tree {
+  width: max-content;
+  min-width: 100%;
+}
+
+/* 变更树:行内容不换行(目录名/文件名超宽时横向滚动而非折行)。 */
+.ws-changes-tree.ant-tree .ant-tree-node-content-wrapper {
+  white-space: nowrap;
+}
+
+/* 变更树:变更类型徽标槽(sticky 固定可视区右缘)实底背景,
+   遮住横向滚动时从徽标下方穿过的文件名文字。 */
+.ws-change-badge-slot {
+  background: var(--bg-primary);
 }
 
 /* 文件树：桌面端更多操作浮层覆盖在文件大小之上，

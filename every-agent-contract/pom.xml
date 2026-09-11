@@ -5,9 +5,9 @@
     <parent>
         <groupId>dev.everyagent</groupId>
         <artifactId>every-agent-parent</artifactId>
-        <version>0.2.0</version>
+        <version>0.3.0</version>
     </parent>
-    <version>0.2.0</version>
+    <version>0.3.0</version>
     <artifactId>every-agent-contract</artifactId>
     <name>every-agent-contract</name>
     <description>JSON Schema 契约 + Java DTO(三层唯一共享依赖)</description>

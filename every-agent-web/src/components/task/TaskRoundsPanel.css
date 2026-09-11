@@ -40,6 +40,19 @@
   min-width: 0;
 }
 
+/* agent 过滤提示条（「只看该 agent」激活时置顶展示）：显式告知只过滤已加载内容，
+   不主动拉取，避免空结果被误读为该 agent 无消息。 */
+.task-rounds__filter-hint {
+  padding: 6px 10px;
+  margin-bottom: 8px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  text-align: center;
+}
+
 .task-rounds__retry {
   flex: none;
   padding: 2px 10px;
