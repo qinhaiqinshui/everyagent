@@ -19,7 +19,8 @@ import { Tree, Input, Button, Badge, Modal, Form, Checkbox, App } from 'antd'
 import type { TreeDataNode } from 'antd'
 import { InlineSpinner } from '@/components/shared/ui'
 import { GitIcon } from '@/components/icon'
-import { ChevronDownIcon, ChevronRightIcon } from '@/components/shared/AppGlyphs'
+import { ChevronDownIcon, ChevronRightIcon, FolderIcon } from '@/components/shared/AppGlyphs'
+import { FileTypeIcon } from '@/components/shared/FileTypeGlyphs'
 import { useHub } from '@/hub/HubProvider'
 import { workspaceRegistry, type WorkspaceEntry } from '@/hub/workspaceRegistry'
 import { useWorkspaceShell } from '@/components/app/WorkspaceShellContext'
@@ -106,16 +107,34 @@ function collectLeaves(status: GitStatusResult): ChangeLeaf[] {
 }
 
 /**
- * 变更文件行标题:文件名不截断(超宽由树容器横向滚动),变更类型徽标(M/A/D…)
- * 放行尾并 sticky 固定在可视区右缘——横向滚动长文件名时徽标不随内容滚走。
+ * 变更文件行标题:名称前置文件类型图标(与资源管理器树一致——按扩展名渲染语言
+ * 徽章,未知退化为中性文件轮廓),文件名不截断(超宽由树容器横向滚动),变更类型
+ * 徽标(M/A/D…)放行尾并 sticky 固定在可视区右缘——横向滚动长文件名时徽标不随内容滚走。
  */
 function renderChangeFileTitle(name: string, badge: { letter: string; tone: string; label: string }) {
   return (
     <span style={changeFileTitleStyle}>
+      <span style={changeIconSlotStyle}>
+        <FileTypeIcon fileName={name} size={15} />
+      </span>
       <span style={{ whiteSpace: 'nowrap' }}>{name}</span>
       <span className="ws-change-badge-slot" style={changeBadgeSlotStyle} title={badge.label}>
         <span style={{ ...changeBadgeStyle, background: badge.tone }}>{badge.letter}</span>
       </span>
+    </span>
+  )
+}
+
+/**
+ * 变更目录行标题:极简描边文件夹图标 + 目录名(与资源管理器树目录行一致)。
+ */
+function renderChangeDirTitle(name: string) {
+  return (
+    <span style={changeFileTitleStyle}>
+      <span style={changeIconSlotStyle}>
+        <FolderIcon size={15} style={{ color: 'var(--text-muted)' }} />
+      </span>
+      <span style={{ whiteSpace: 'nowrap' }}>{name}</span>
     </span>
   )
 }
@@ -169,7 +188,7 @@ function buildTreeData(leaves: ChangeLeaf[]): TreeDataNode[] {
       })
       .map((entry) => ({
         key: entry.key,
-        title: entry.isLeaf && entry.badge ? renderChangeFileTitle(entry.name, entry.badge) : entry.name,
+        title: entry.isLeaf && entry.badge ? renderChangeFileTitle(entry.name, entry.badge) : entry.isLeaf ? entry.name : renderChangeDirTitle(entry.name),
         isLeaf: entry.isLeaf,
         children: entry.isLeaf ? undefined : toDataNode(entry.children),
       }))
@@ -1307,13 +1326,20 @@ const changesTreeScrollerStyle: React.CSSProperties = {
   overflowX: 'auto',
 }
 
-/** 变更文件行标题:文件名不截断(白名单 nowrap,超宽横向滚动),徽标推到行尾。 */
+/** 变更树行标题:名称前置类型图标(与文件树同款),文件名不截断(白名单 nowrap,超宽横向滚动),徽标推到行尾。 */
 const changeFileTitleStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
-  gap: 6,
+  gap: 8,
   width: '100%',
   minWidth: 0,
+}
+
+/** 名称前置类型图标槽(与资源管理器树同款:文件夹/文件类型图标 15px)。 */
+const changeIconSlotStyle: React.CSSProperties = {
+  flexShrink: 0,
+  display: 'inline-flex',
+  alignItems: 'center',
 }
 
 /**
