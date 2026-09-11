@@ -24,7 +24,8 @@ import java.util.concurrent.atomic.AtomicLong;
  *
  * <p>仿 node 侧 {@code agent.execute.empty_response_retry} 节点(novel_agent-n
  * {@code src/agent/agent/nodes/emptyResponseRetry.ts}):本轮模型响应为空
- * (无正文、无 reasoning、无工具调用)时,按指数退避重调同一请求,直到拿到非空响应或
+ * (无正文、无 reasoning、无工具调用)时,按配置退避策略({@code worker.retry.strategy},
+ * 与瞬时错误重试共享,默认 fixed 固定间隔)重调同一请求,直到拿到非空响应或
  * 重试额度耗尽;耗尽抛 {@link ModelCallException}(任务层收口为 error 事件,对应 n 的
  * code=492 empty_response_retry_exceeded 文案语义)。
  *

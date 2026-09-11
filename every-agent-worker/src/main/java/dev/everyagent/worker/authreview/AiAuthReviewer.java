@@ -172,10 +172,12 @@ public class AiAuthReviewer {
         ChatModel chatModel = am.chatModel();
         AgentEntity reviewEntity = buildReviewEntity(t, reviewAgentId, reviewOptions, chatModel, grantKey, prompt);
 
-        // 收敛的重试参数:审议总预算窗口短(默认 60s),默认 retry(base 3s、factor 5、
-        // maxRequestRetries=5)瞬时错误退避最坏 ~39min 会空耗预算;此处压缩为 1 次空响应
-        // 重试 + 1 次瞬时重试、退避 1s*2^ 递增,让窗口内真正跑完 1 次尝试 + 有限重试/容灾切换。
+        // 收敛的重试参数:审议总预算窗口短(默认 60s),任务默认 retry(fixed 3s、
+        // maxRequestRetries=30)瞬时错误退避最坏 ~90s 会空耗预算;此处压缩为 1 次空响应
+        // 重试 + 1 次瞬时重试、指数退避 1s 起(factor 2),让窗口内真正跑完
+        // 1 次尝试 + 有限重试/容灾切换。
         WorkerProperties.Retry reviewRetry = new WorkerProperties.Retry();
+        reviewRetry.setStrategy(WorkerProperties.Retry.STRATEGY_EXPONENTIAL);
         reviewRetry.setMaxEmptyResponseRetries(1);
         reviewRetry.setMaxRequestRetries(1);
         reviewRetry.setBackoffBaseMs(1_000);
