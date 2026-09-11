@@ -228,6 +228,14 @@
    antd 会给叶子行渲染 noop 空 span(与目录行同 24px 列宽),这里不再隐藏,
    使文件名与同层文件夹名称左对齐、缩进一致。 */
 
+/* 文件树：收紧父子层级缩进。
+   antd 默认每级缩进单元宽度 indentSize = titleHeight = 24px,这里压缩为 16px;
+   缩进单元是 rc-tree 渲染的 ant-tree-indent-unit span,宽度来自 CSS token(无内联样式),
+   选择器用 .ws-tree.ant-tree 复合提升优先级,压过 antd 运行时注入的宽度规则。 */
+.ws-tree.ant-tree .ant-tree-indent-unit {
+  width: 16px;
+}
+
 /* 文件树：桌面端更多操作浮层覆盖在文件大小之上，
    移除右侧预留位（不占布局空间），hover 时隐藏大小文本由按钮原地替换 */
 .ws-tree-row__actions-overlay {
