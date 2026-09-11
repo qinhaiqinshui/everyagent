@@ -360,8 +360,13 @@ function WorkspaceGroupPanel({
       const nextPath = await workspaceExplorerCommandService.renamePath(workspaceRoot, renameTarget.path, renameValue)
       const nextBusinessPath = toBusinessAbsolutePath(nextPath)
       renameFileTabs(workspaceRoot, renameTarget.path, nextBusinessPath)
-      // 重命名目录后迁移展开态:旧路径 key 残留会导致刷新失败、展开图标与实际状态错位。
-      setExpandedPaths((prev) => migrateExpandedPaths(prev, renameTarget.path, nextBusinessPath))
+      // 重命名目录后迁移展开态(先同步 ref,让随后的整树刷新读到新路径),避免旧路径 key 残留。
+      const nextExpanded = migrateExpandedPaths(expandedPathsRef.current, renameTarget.path, nextBusinessPath)
+      expandedPathsRef.current = nextExpanded
+      setExpandedPaths(nextExpanded)
+      // 立即整树保持展开刷新:把磁盘上的新路径(重命名目录及其子层级)拉回树,
+      // 避免残留旧节点、展开图标与子项错位(用户看到「折叠但图标展开」)。
+      void reloadTree(showInternalFiles, true)
       showToast('已重命名', 'success')
       if (selectedExplorerPath === renameTarget.path) {
         setSelectedExplorerPath(nextBusinessPath)
@@ -373,7 +378,7 @@ function WorkspaceGroupPanel({
     } finally {
       setRenaming(false)
     }
- }, [renameFileTabs, renameTarget, renameValue, renaming, selectedExplorerPath, showToast, workspaceRoot])
+ }, [renameFileTabs, renameTarget, renameValue, renaming, reloadTree, selectedExplorerPath, showInternalFiles, showToast, workspaceRoot])
 
   const handleRequestMove = React.useCallback((target: WorkspaceExplorerContextTarget) => {
     setMoveTarget(target)
@@ -389,11 +394,15 @@ function WorkspaceGroupPanel({
       const nextPath = await workspaceExplorerCommandService.movePath(workspaceRoot, moveTarget.path, moveTargetDir)
       const nextBusinessPath = toBusinessAbsolutePath(nextPath)
       renameFileTabs(workspaceRoot, moveTarget.path, nextBusinessPath)
-      // 移动目录后迁移展开态,避免旧路径 key 残留。
-      setExpandedPaths((prev) => migrateExpandedPaths(prev, moveTarget.path, nextBusinessPath))
+      // 移动目录后迁移展开态,并把目标目录一并加入展开集合(同步 ref,让随后的整树刷新读到完整最新状态)。
+      const nextExpanded = migrateExpandedPaths(expandedPathsRef.current, moveTarget.path, nextBusinessPath)
+      const withTarget = moveTargetDir ? new Set(nextExpanded).add(moveTargetDir) : nextExpanded
+      expandedPathsRef.current = withTarget
+      setExpandedPaths(withTarget)
       // 展开目标目录，便于用户立即看到移动结果。
       expandDirChildren(moveTargetDir)
-      setExpandedPaths((prev) => new Set(prev).add(moveTargetDir))
+      // 立即整树保持展开刷新,把磁盘新路径拉回树。
+      void reloadTree(showInternalFiles, true)
       // 选中项若处于被移动路径下，跟随前缀替换，避免选中态指向失效路径。
       if (selectedExplorerPath && (selectedExplorerPath === moveTarget.path || selectedExplorerPath.startsWith(`${moveTarget.path}/`))) {
         const nextSelected = selectedExplorerPath === moveTarget.path
@@ -409,7 +418,7 @@ function WorkspaceGroupPanel({
     } finally {
       setMoving(false)
     }
-  }, [moveTarget, moveTargetDir, moving, renameFileTabs, selectedExplorerPath, showToast, workspaceRoot, expandDirChildren])
+  }, [moveTarget, moveTargetDir, moving, renameFileTabs, reloadTree, selectedExplorerPath, showInternalFiles, showToast, workspaceRoot, expandDirChildren])
 
   /** 切换多选模式;退出时清空已选集合。 */
   const toggleMultiSelectMode = React.useCallback(() => {
@@ -490,15 +499,22 @@ function WorkspaceGroupPanel({
         const nextPath = await workspaceExplorerCommandService.movePath(workspaceRoot, path, batchMoveDir)
         moved.push({ oldPath: path, newPath: nextPath })
       }
+      let nextExpanded = expandedPathsRef.current
       for (const { oldPath, newPath } of moved) {
         const newBusinessPath = toBusinessAbsolutePath(newPath)
         renameFileTabs(workspaceRoot, oldPath, newBusinessPath)
-        // 移动目录后迁移展开态,避免旧路径 key 残留。
-        setExpandedPaths((prev) => migrateExpandedPaths(prev, oldPath, newBusinessPath))
+        // 移动目录后迁移展开态(逐个前缀迁移,同步 ref)。
+        nextExpanded = migrateExpandedPaths(nextExpanded, oldPath, newBusinessPath)
       }
-      // 展开目标目录,便于用户立即看到移动结果。
+      // 展开目标目录,并把目标目录一并加入展开集合(同步 ref)。
+      if (batchMoveDir) {
+        nextExpanded = new Set(nextExpanded).add(batchMoveDir)
+      }
+      expandedPathsRef.current = nextExpanded
+      setExpandedPaths(nextExpanded)
       expandDirChildren(batchMoveDir)
-      setExpandedPaths((prev) => new Set(prev).add(batchMoveDir))
+      // 立即整树保持展开刷新,把磁盘新路径拉回树。
+      void reloadTree(showInternalFiles, true)
       // 选中项若在被移动路径下,跟随前缀替换,避免选中态指向失效路径。
       if (selectedExplorerPath) {
         const matched = moved.find(({ oldPath }) => selectedExplorerPath === oldPath || selectedExplorerPath.startsWith(`${oldPath}/`))
@@ -516,7 +532,7 @@ function WorkspaceGroupPanel({
     } finally {
       setBatchMoving(false)
     }
-  }, [batchMoveDir, batchMoving, expandDirChildren, renameFileTabs, selectedExplorerPath, selectedPaths, showToast, workspaceRoot])
+  }, [batchMoveDir, batchMoving, expandDirChildren, reloadTree, renameFileTabs, selectedExplorerPath, selectedPaths, showInternalFiles, showToast, workspaceRoot])
 
   const handleRequestCreate = React.useCallback((mode: 'file' | 'directory', target: WorkspaceExplorerContextTarget) => {
     setCreateMode(mode)
