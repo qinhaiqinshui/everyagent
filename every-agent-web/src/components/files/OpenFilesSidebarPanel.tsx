@@ -4,23 +4,18 @@ import { useAppUi } from '@/components/app/AppUiContext'
 import { domainEventBus, DOMAIN_EVENTS } from '@/events/eventBus'
 import { WORKSPACE_EXPLORER_ROOT_LABEL, workspaceExplorerQueryService } from '@/query/workspaceExplorerQueryService'
 import { findExplorerNode, upsertExplorerChildren } from '@/query/workspaceExplorerTreeUtils'
-import { searchWorkspaceContent, type WorkspaceContentSearchHit, type WorkspaceContentSearchResult } from '@/query/workspaceContentSearch'
-import { workspaceGateway } from '@/platform/fs/workspaceGateway'
 import { workspaceRegistry, type WorkspaceEntry } from '@/hub/workspaceRegistry'
 import { antdConfirm } from '@/utils/appAntdBridge'
-import { INTERNAL_DIR_NAMES, toBusinessAbsolutePath } from '@/platform/fs/pathUtils'
+import { toBusinessAbsolutePath } from '@/platform/fs/pathUtils'
 import { workspaceExplorerCommandService } from '@/services/workspaceExplorerCommandService'
 import ConfirmDialog from '../shared/ConfirmDialog'
 import MoreActionsButton, { type MoreActionItem } from '../shared/MoreActionsButton'
-import { CloseIcon, DownloadIcon, FilePlusIcon, FileTextIcon, FolderPlusIcon, MagnifierCheckIcon, UploadIcon, ChevronDownIcon, CheckIcon } from '../shared/AppGlyphs'
+import { DownloadIcon, FilePlusIcon, FileTextIcon, FolderPlusIcon, MagnifierCheckIcon, UploadIcon, ChevronDownIcon, CheckIcon } from '../shared/AppGlyphs'
 import SidebarScrollArea from '../shared/SidebarScrollArea'
-import FileSearchResultsPanel from './FileSearchResultsPanel'
 import WorkspaceExplorerTree from './WorkspaceExplorerTree'
 import WorkspacePathPicker from '@/components/shared/ui/WorkspacePathPicker'
 import { pickFiles } from '@/utils/filePicker'
-import { Button, IconButton, TextInput, Checkbox } from '@/components/shared/ui'
-import { Input } from 'antd'
-import type { InputRef } from 'antd'
+import { Button, TextInput } from '@/components/shared/ui'
 import type { ListRowActionItem } from '@/components/shared/ui/ListRowActions'
 import type {
   WorkspaceExplorerContextTarget,
@@ -82,6 +77,7 @@ function WorkspaceGroupPanel({
     closeGlobalFileTab,
     openGlobalFileTab,
     renameFileTabs,
+    setActiveSidebarPanel,
   } = useWorkspaceShell()
   const { showToast } = useAppUi()
   const [treeNodes, setTreeNodes] = React.useState<WorkspaceExplorerNode[]>([])
@@ -108,15 +104,8 @@ function WorkspaceGroupPanel({
   const [creating, setCreating] = React.useState(false)
   const [reloading, setReloading] = React.useState(false)
   const [treeError, setTreeError] = React.useState('')
-  const [searchTarget, setSearchTarget] = React.useState<WorkspaceExplorerContextTarget | null>(null)
-  const [searchQuery, setSearchQuery] = React.useState('')
-  const [searchCaseSensitive, setSearchCaseSensitive] = React.useState(false)
-  const [searchResult, setSearchResult] = React.useState<WorkspaceContentSearchResult | null>(null)
-  const [searching, setSearching] = React.useState(false)
-  const [searchError, setSearchError] = React.useState('')
   const [showInternalFiles, setShowInternalFiles] = React.useState(false)
   const [metaMode, setMetaMode] = React.useState<'size' | 'modified'>('size')
-  const searchInputRef = React.useRef<InputRef | null>(null)
   /** 卡片折叠态:折叠时仅保留头部行(工作区名 + 更多操作),隐藏路径/搜索/文件树等内容。 */
   const [collapsed, setCollapsed] = React.useState(false)
   /** 多选模式:开启后树行前置复选框,支持批量删除/移动。 */
@@ -513,15 +502,18 @@ function WorkspaceGroupPanel({
     }
   }, [expandDirChildren, showToast, workspaceRoot])
 
+  /**
+   * 跳转到独立搜索面板:切面板(壳层上下文的统一跳转通道) + 发领域事件携带搜索
+   * 范围(工作区根 + 目标目录),搜索面板订阅事件预填范围并聚焦输入框。
+   */
   const handleRequestSearch = React.useCallback((target: WorkspaceExplorerContextTarget) => {
-    setSearchTarget(target)
-    setSearchQuery('')
-    setSearchResult(null)
-    setSearchError('')
-    requestAnimationFrame(() => {
-      searchInputRef.current?.focus()
+    setActiveSidebarPanel('search')
+    domainEventBus.emit(DOMAIN_EVENTS.WORKSPACE_SEARCH_PANEL_REQUESTED, {
+      workspaceRoot: target.workspaceRoot,
+      rootPath: target.path,
+      label: target.name,
     })
-  }, [])
+  }, [setActiveSidebarPanel])
 
   const handleRequestRootSearch = React.useCallback(() => {
     handleRequestSearch({ workspaceRoot, path: '', name: '工作区根目录', type: 'directory' })
@@ -533,57 +525,7 @@ function WorkspaceGroupPanel({
 
   const toggleInternalFiles = React.useCallback(() => {
     setShowInternalFiles((current) => !current)
-    setSearchResult(null)
-    setSearchError('')
   }, [])
-
-  const closeSearch = React.useCallback(() => {
-    setSearchTarget(null)
-    setSearchQuery('')
-    setSearchResult(null)
-    setSearchError('')
-    setSearchCaseSensitive(false)
-  }, [])
-
-  const runSearch = React.useCallback(async () => {
-    if (!searchTarget || searching) return
-    const query = searchQuery.trim()
-    if (!query) {
-      setSearchError('请输入搜索正则')
-      return
-    }
-    let regex: RegExp
-    try {
-      regex = new RegExp(query, searchCaseSensitive ? undefined : 'i')
-    } catch (err) {
-      setSearchError(`正则非法：${err instanceof Error ? err.message : String(err)}`)
-      return
-    }
-    setSearching(true)
-    setSearchError('')
-    try {
-      const result = await searchWorkspaceContent({
-        rootPath: searchTarget.path,
-        regex,
-        matchMode: 'content',
-        walkFiles: (rootPath) => walkWorkspaceFiles(workspaceRoot, rootPath, showInternalFiles),
-        readFileText: (filePath) => workspaceGateway.readTextFile(workspaceRoot, filePath),
-      })
-      setSearchResult(result)
-    } catch (err) {
-      setSearchResult(null)
-      setSearchError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setSearching(false)
-    }
-  }, [searchCaseSensitive, searchQuery, searchTarget, searching, showInternalFiles, workspaceRoot])
-
-  const handleOpenSearchHit = React.useCallback((filePath: string, hit: WorkspaceContentSearchHit) => {
-    openGlobalFileTab({
-      workspaceRoot,
-      filePath,
-    }, { mode: 'readwrite', lineNumber: hit.lineNumber })
-  }, [openGlobalFileTab, workspaceRoot])
 
   const getFileActionItems = React.useCallback((target: WorkspaceExplorerContextTarget): ListRowActionItem[] => {
     const items: ListRowActionItem[] = []
@@ -743,59 +685,6 @@ function WorkspaceGroupPanel({
           <>
             <div style={workspaceRootStyle} title={workspaceRoot}>{workspaceRoot}</div>
         {treeError ? <div style={emptyStyle}>{treeError}</div> : null}
-        {searchTarget ? (
-          <div style={searchPanelStyle}>
-            <div style={searchHeaderRowStyle}>
-              <span style={searchTargetLabelStyle}>搜索：{searchTarget.name}</span>
-              <IconButton
-                type="button"
-                onClick={closeSearch}
-                icon={<CloseIcon size={13} />}
-                aria-label="关闭搜索"
-                title="关闭搜索"
-                style={searchCloseButtonStyle}
-              />
-            </div>
-            <div style={searchInputRowStyle}>
-              <Input
-                ref={searchInputRef}
-                type="text"
-                value={searchQuery}
-                placeholder="输入正则搜索文件内容"
-                onChange={(event) => setSearchQuery(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter') {
-                    void runSearch()
-                  }
-                }}
-                style={searchInputStyle}
-              />
-              <Checkbox
-                checked={searchCaseSensitive}
-                onChange={(event) => setSearchCaseSensitive(event.target.checked)}
-              >
-                Aa
-              </Checkbox>
-              <Button
-                type="button"
-                onClick={() => void runSearch()}
-                disabled={searching}
-                style={searchRunButtonStyle}
-              >
-                {searching ? '搜索中...' : '搜索'}
-              </Button>
-            </div>
-            {searchError ? <div style={searchErrorStyle}>{searchError}</div> : null}
-            {searchResult ? (
-              <>
-                <div style={searchSummaryStyle}>
-                  找到 {searchResult.files.length} 个文件 / {searchResult.matchCount} 处命中{searchResult.truncated ? '（结果过多已截断）' : ''}
-                </div>
-                <FileSearchResultsPanel result={searchResult} onOpenHit={handleOpenSearchHit} />
-              </>
-            ) : null}
-          </div>
-        ) : null}
         {multiSelectMode ? (
           <div style={multiSelectBarStyle}>
             <span style={multiSelectCountStyle}>已选 {selectedPaths.size} 项</span>
@@ -1152,32 +1041,6 @@ const batchPathItemStyle: React.CSSProperties = {
   lineHeight: 1.6,
 }
 
-/**
- * 递归收集目录下全部文件路径（文件直接返回自身）。
- * UI 搜索专用：直读 workspaceGateway，不走 AI 权限网关;限定在指定工作区内。
- */
-async function walkWorkspaceFiles(workspaceRoot: string, rootPath: string, includeInternalFiles = false): Promise<string[]> {
-  const stat = await workspaceGateway.stat(workspaceRoot, rootPath)
-  if (!stat.isDirectory) {
-    return [rootPath]
-  }
-  const result: string[] = []
-  async function recurse(dir: string): Promise<void> {
-    const rows = await workspaceGateway.listDir(workspaceRoot, dir)
-    for (const row of rows) {
-      if (row.isDirectory) {
-        // 跳过内部保留目录（如 .git 仓库元数据），不纳入搜索枚举。
-        if (!includeInternalFiles && INTERNAL_DIR_NAMES.has(row.name)) continue
-        await recurse(row.path)
-      } else {
-        result.push(row.path)
-      }
-    }
-  }
-  await recurse(rootPath)
-  return result
-}
-
 const panelStyle: React.CSSProperties = {
   width: '100%',
   height: '100%',
@@ -1294,95 +1157,4 @@ const emptyStyle: React.CSSProperties = {
   padding: '12px 8px',
   color: 'var(--text-muted)',
   fontSize: 'var(--text-xs)',
-}
-
-const searchPanelStyle: React.CSSProperties = {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 6,
-  padding: '8px 10px',
-  border: '1px solid var(--border)',
-  borderRadius: 'var(--radius-md)',
-  background: 'var(--bg-primary)',
-}
-
-const searchHeaderRowStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'space-between',
-  gap: 8,
-}
-
-const searchTargetLabelStyle: React.CSSProperties = {
-  fontSize: 'var(--text-xs)',
-  fontWeight: 700,
-  color: 'var(--text-primary)',
-  overflow: 'hidden',
-  textOverflow: 'ellipsis',
-  whiteSpace: 'nowrap',
-  minWidth: 0,
-  flex: 1,
-}
-
-const searchCloseButtonStyle: React.CSSProperties = {
-  border: 'none',
-  background: 'transparent',
-  color: 'var(--text-muted)',
-  cursor: 'pointer',
-  padding: 2,
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  flexShrink: 0,
-}
-
-const searchInputRowStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 6,
-}
-
-const searchInputStyle: React.CSSProperties = {
-  flex: 1,
-  minWidth: 0,
-  padding: '5px 8px',
-  borderRadius: 'var(--radius-sm)',
-  border: '1px solid var(--border)',
-  background: 'var(--bg-secondary)',
-  color: 'var(--text-primary)',
-  fontSize: 'var(--text-xs)',
-  outline: 'none',
-}
-
-const searchCaseToggleStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 3,
-  fontSize: 'var(--text-xs)',
-  color: 'var(--text-muted)',
-  cursor: 'pointer',
-  flexShrink: 0,
-}
-
-const searchRunButtonStyle: React.CSSProperties = {
-  border: '1px solid var(--border)',
-  borderRadius: 'var(--radius-sm)',
-  background: 'var(--bg-secondary)',
-  color: 'var(--text-primary)',
-  cursor: 'pointer',
-  fontSize: 'var(--text-xs)',
-  fontWeight: 600,
-  padding: '4px 10px',
-  whiteSpace: 'nowrap',
-  flexShrink: 0,
-}
-
-const searchErrorStyle: React.CSSProperties = {
-  fontSize: 'var(--text-xs)',
-  color: 'var(--accent-red, var(--text-muted))',
-}
-
-const searchSummaryStyle: React.CSSProperties = {
-  fontSize: 'var(--text-xs)',
-  color: 'var(--text-muted)',
 }

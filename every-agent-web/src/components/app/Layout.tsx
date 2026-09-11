@@ -23,6 +23,7 @@ import { getAntdTheme } from '@/theme/antdTheme'
 import {
   FilesIcon,
   GitIcon,
+  SearchSidebarIcon,
   SettingsIcon,
   TaskChatIcon,
 } from '@/components/icon'
@@ -69,6 +70,7 @@ import { DRAFT_TASK_ID, setDraftPreset } from '@/components/task/taskChatDraft'
 const LazyTasksPanel = createLazyRouteComponent(() => import('@/components/task/TasksPanel'))
 const LazyOpenFilesSidebarPanel = createLazyRouteComponent(() => import('@/components/files/OpenFilesSidebarPanel'))
 const LazyGitSidebarPanel = createLazyRouteComponent(() => import('@/components/git/GitSidebarPanel'))
+const LazySearchSidebarPanel = createLazyRouteComponent(() => import('@/components/search/SearchSidebarPanel'))
 
 /**
  * 计算移动端侧边栏允许的最大高度。
@@ -253,15 +255,16 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
     scheduleLazyRoutePreload([
       LazyTasksPanel.preload,
       LazyOpenFilesSidebarPanel.preload,
+      LazyGitSidebarPanel.preload,
+      LazySearchSidebarPanel.preload,
       () => import('@/components/system/SettingsPanel'),
-      () => import('@/components/git/GitSidebarPanel'),
       () => import('@/components/files/FileTabPage'),
       () => import('@/components/task/TaskChat'),
     ])
   ), [])
 
   React.useEffect(() => {
-    const validPanelIds = new Set<SidebarPanelId>(['tasks', 'files', 'git'])
+    const validPanelIds = new Set<SidebarPanelId>(['tasks', 'files', 'git', 'search'])
     if (!validPanelIds.has(activeSidebarPanelId)) {
       setActiveSidebarPanelId('tasks')
     }
@@ -763,9 +766,9 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
     if (sidebarOpen) {
       nextIds.push(activeSidebarPanelId)
     }
-    // 三个面板图标(任务/文件/源代码管理)的选中态必须互斥,只跟随当前展开的面板。
+    // 各面板图标(任务/文件/搜索/源代码管理)的选中态必须互斥,只跟随当前展开的面板。
     // 激活标签映射的活动项仅对非面板项(如设置页)生效,避免任务聊天页激活时
-    // 把「任务」面板图标也点亮,破坏三个面板图标的互斥。
+    // 把「任务」面板图标也点亮,破坏面板图标的互斥。
     const workspaceActivityItemId = activeWorkspaceTab
       ? getTabDefinition(activeWorkspaceTab)?.getSidebarActivityId?.(activeWorkspaceTab) ?? null
       : null
@@ -869,6 +872,9 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
               <SidebarPanelHost panelId="files" visible={activeSidebarPanelId === 'files'}>
                 <LazyOpenFilesSidebarPanel />
               </SidebarPanelHost>
+              <SidebarPanelHost panelId="search" visible={activeSidebarPanelId === 'search'}>
+                <LazySearchSidebarPanel />
+              </SidebarPanelHost>
               <SidebarPanelHost panelId="git" visible={activeSidebarPanelId === 'git'}>
                 <LazyGitSidebarPanel embedded />
               </SidebarPanelHost>
@@ -940,13 +946,14 @@ function renderWorkspaceTabContent(
   return def.renderTab(tab, ctx)
 }
 
-/** 侧边栏三个面板图标(id)的选中态必须互斥,只由当前展开的面板决定。 */
-const SIDEBAR_PANEL_ACTIVITY_IDS: ReadonlySet<string> = new Set(['tasks', 'files', 'git'])
+/** 侧边栏各面板图标(id)的选中态必须互斥,只由当前展开的面板决定。 */
+const SIDEBAR_PANEL_ACTIVITY_IDS: ReadonlySet<string> = new Set(['tasks', 'files', 'git', 'search'])
 
 function buildSidebarActivityItems(openTopLevelPageIds: TopLevelPageId[]) {
   return [
     { id: 'tasks', label: '任务', icon: <TaskChatIcon /> },
     { id: 'files', label: '文件', icon: <FilesIcon /> },
+    { id: 'search', label: '搜索', icon: <SearchSidebarIcon /> },
     { id: 'git', label: '源代码管理', icon: <GitIcon /> },
     { id: 'settings', label: '设置', icon: <SettingsIcon />, badgeCount: openTopLevelPageIds.includes('settings') ? 1 : undefined },
   ]

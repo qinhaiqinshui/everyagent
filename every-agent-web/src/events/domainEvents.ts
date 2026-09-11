@@ -109,6 +109,7 @@ export const DOMAIN_EVENTS = {
   WORKSPACE_FILE_CHANGED: 'workspace-file-changed',
   WORKSPACE_REGISTRY_CHANGED: 'workspace-registry-changed',
   SIDEBAR_PANEL_SHOWN: 'sidebar-panel-shown',
+  WORKSPACE_SEARCH_PANEL_REQUESTED: 'workspace-search-panel-requested',
   APP_NOTIFICATION_ADDED: 'app-notification-added',
   APP_NOTIFICATION_REMOVED: 'app-notification-removed',
   WORKSPACE_OPEN_AI_CALL_LOG_REQUESTED: 'workspace-open-ai-call-log-requested',
@@ -249,6 +250,14 @@ export type DomainEventMap = {
   [DOMAIN_EVENTS.SIDEBAR_PANEL_SHOWN]: {
     /** 被显示出来的侧边栏面板 ID。 */
     panelId: string
+  }
+  [DOMAIN_EVENTS.WORKSPACE_SEARCH_PANEL_REQUESTED]: {
+    /** 搜索范围所属工作区根（worker 机器绝对路径）。 */
+    workspaceRoot: string
+    /** 搜索根路径（业务绝对形态；空串表示工作区根）。 */
+    rootPath: string
+    /** 范围显示名（目录名或「工作区根目录」）。 */
+    label: string
   }
   [DOMAIN_EVENTS.WORKSPACE_REGISTRY_CHANGED]: {
     /** 默认工作区根(worker 机器上的绝对路径,始终在册)。 */

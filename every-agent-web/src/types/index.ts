@@ -742,7 +742,7 @@ export interface UserInteractionResult {
 }
 
 /** 系统内置左侧活动栏面板 ID。 */
-export type BuiltinSidebarPanelId = 'tasks' | 'files'
+export type BuiltinSidebarPanelId = 'tasks' | 'files' | 'search'
 
 /** 左侧活动栏面板 ID。 */
 export type SidebarPanelId = BuiltinSidebarPanelId | string
