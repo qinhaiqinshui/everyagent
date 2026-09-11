@@ -416,6 +416,19 @@ export const workspaceGateway = {
   },
 
   /**
+   * 在运行 worker 的机器上打开系统文件管理器并选中目标(对标 VSCode
+   * Reveal in File Explorer):Windows 资源管理器选中目标本身、macOS Finder
+   * 显示定位、Linux 优先 FileManager1 选中、无实现退化打开所在目录。
+   * 窗口在 worker 宿主机器上弹出(远程访问场景即 worker 所在电脑);
+   * 无桌面环境(worker 无头运行)时抛 RPC 错误。
+   */
+  async revealInOsFileManager(workspaceRoot: string, path: string): Promise<void> {
+    wireFsChanged()
+    const normalized = normalizeWorkspaceRelativePath(path)
+    await rpcForWorkspace(workspaceRoot, 'fs.revealInOs', { path: toWorkerPath(normalized) })
+  },
+
+  /**
    * 浏览目录(方案 B):不经 workspace 沙箱,用于「新建工作区选目录」前的逐层浏览。
    * 第一层(path 缺省)返回文件系统所有根/盘符;否则返回该绝对路径下的直接子目录。
    * 依赖运行 worker 进程的文件系统权限;无权限/路径非法时抛 RPC 错误。

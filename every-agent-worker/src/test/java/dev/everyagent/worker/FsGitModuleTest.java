@@ -177,6 +177,20 @@ class FsGitModuleTest {
         assertTrue(rpc("fs.delete", p("{\"path\":\".\"}")).contains("SANDBOX_DENIED"));
     }
 
+    /**
+     * fs.revealInOs 参数与沙箱校验:与读同款 jailed(resolveExisting)——越界路径拒收、
+     * 不存在路径 NOT_FOUND。两条断言跨 OS 确定性成立;成功路径依赖宿主桌面环境
+     * (explorer/Finder/xdg-open),不在测试中断言。
+     */
+    @Test
+    @Order(14)
+    void fsRevealInOsValidated() {
+        String denied = rpc("fs.revealInOs", p("{\"path\":\"../escape.txt\"}"));
+        assertTrue(denied.contains("SANDBOX_DENIED"), denied);
+        String missing = rpc("fs.revealInOs", p("{\"path\":\"no-such-file.txt\"}"));
+        assertTrue(missing.contains("NOT_FOUND"), missing);
+    }
+
     @Test
     @Order(12)
     void fsMkdirMoveDeleteTree() {

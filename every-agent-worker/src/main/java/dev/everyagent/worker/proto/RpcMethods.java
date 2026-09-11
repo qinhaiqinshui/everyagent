@@ -33,6 +33,8 @@ public final class RpcMethods {
     public static final String FS_LIST = "fs.list";
     /** 定位文件/目录(懒加载):沿路径逐段 stat 返回节点链,旁支零查找。 */
     public static final String FS_REVEAL = "fs.reveal";
+    /** 在运行 worker 的宿主系统文件管理器中选中目标(对标 VSCode Reveal in File Explorer)。 */
+    public static final String FS_REVEAL_IN_OS = "fs.revealInOs";
     public static final String FS_READ = "fs.read";
     public static final String FS_WRITE = "fs.write";
     public static final String FS_MKDIR = "fs.mkdir";

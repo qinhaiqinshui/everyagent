@@ -10,7 +10,7 @@ import { toBusinessAbsolutePath } from '@/platform/fs/pathUtils'
 import { workspaceExplorerCommandService } from '@/services/workspaceExplorerCommandService'
 import ConfirmDialog from '../shared/ConfirmDialog'
 import MoreActionsButton, { type MoreActionItem } from '../shared/MoreActionsButton'
-import { DownloadIcon, FilePlusIcon, FileTextIcon, FolderPlusIcon, MagnifierCheckIcon, UploadIcon, ChevronDownIcon, CheckIcon } from '../shared/AppGlyphs'
+import { DownloadIcon, FilePlusIcon, FileTextIcon, FolderArrowOutIcon, FolderPlusIcon, MagnifierCheckIcon, UploadIcon, ChevronDownIcon, CheckIcon } from '../shared/AppGlyphs'
 import SidebarScrollArea from '../shared/SidebarScrollArea'
 import WorkspaceExplorerTree from './WorkspaceExplorerTree'
 import WorkspacePathPicker from '@/components/shared/ui/WorkspacePathPicker'
@@ -489,6 +489,19 @@ function WorkspaceGroupPanel({
     }
   }, [showToast, workspaceRoot])
 
+  /**
+   * 在系统文件管理器中显示(对标 VSCode Reveal in File Explorer):worker 在
+   * 宿主机器上打开文件管理器并选中目标;远程访问场景窗口在 worker 所在电脑弹出。
+   */
+  const handleRequestRevealInOs = React.useCallback(async (target: WorkspaceExplorerContextTarget) => {
+    try {
+      await workspaceExplorerCommandService.revealInOsFileManager(workspaceRoot, target.path)
+      showToast('已在系统文件管理器中定位', 'success')
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : String(error), 'error')
+    }
+  }, [showToast, workspaceRoot])
+
   const handleRequestUpload = React.useCallback(async (mode: 'file' | 'directory', target: WorkspaceExplorerContextTarget) => {
     const files = await pickFiles(mode === 'directory')
     if (files.length === 0) return
@@ -593,8 +606,14 @@ function WorkspaceGroupPanel({
       icon: <DownloadIcon size={13} />,
       onSelect: () => handleRequestDownload(target),
     })
+    items.push({
+      key: 'reveal-in-os',
+      label: '在系统文件管理器中显示',
+      icon: <FolderArrowOutIcon size={13} />,
+      onSelect: () => handleRequestRevealInOs(target),
+    })
    return items
-  }, [handleOpenFile, handleRequestCreate, handleRequestDownload, handleRequestMove, handleRequestRenameTarget, handleRequestSearch, handleRequestUpload])
+  }, [handleOpenFile, handleRequestCreate, handleRequestDownload, handleRequestMove, handleRequestRenameTarget, handleRequestRevealInOs, handleRequestSearch, handleRequestUpload])
 
   const rootMoreActionItems = React.useMemo<MoreActionItem[]>(() => [
     {
