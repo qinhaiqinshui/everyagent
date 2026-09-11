@@ -171,9 +171,16 @@ class FsGitModuleTest {
     void sandboxPathsDenied() {
         assertTrue(rpc("fs.read", p("{\"path\":\"../escape.txt\"}")).contains("SANDBOX_DENIED"));
         String b64 = Base64.getEncoder().encodeToString("x".getBytes());
-        assertTrue(rpc("fs.write", p("{\"path\":\"..\\\\..\\\\x.txt\",\"contentBase64\":\"" + b64 + "\"}"))
+        // 越界用平台分隔符构造(Windows 反斜杠/Linux 正斜杠都须触发 SANDBOX_DENIED),
+        // 反斜杠需 JSON 转义;不硬编码 Windows 路径语法,保证测试跨平台可移植
+        String escape = (".." + java.io.File.separator + ".." + java.io.File.separator + "x.txt")
+                .replace("\\", "\\\\");
+        assertTrue(rpc("fs.write", p("{\"path\":\"" + escape + "\",\"contentBase64\":\"" + b64 + "\"}"))
                 .contains("SANDBOX_DENIED"));
-        assertTrue(rpc("fs.read", p("{\"path\":\"C:/Windows/win.ini\"}")).contains("SANDBOX_DENIED"));
+        // 工作区外的绝对路径一律拒(allowed 校验先于存在性,用不存在的路径即可,
+        // 不依赖 C:/Windows 这类 Windows 专属盘符路径)
+        assertTrue(rpc("fs.read", p("{\"path\":\"/definitely-outside-everyagent.txt\"}"))
+                .contains("SANDBOX_DENIED"));
         assertTrue(rpc("fs.delete", p("{\"path\":\".\"}")).contains("SANDBOX_DENIED"));
     }
 
@@ -384,9 +391,10 @@ class FsGitModuleTest {
         String sys = Json.write(Json.obj().put("path", ".")
                 .put("workspace", workerProps.resolveHomeDir().toString()));
         assertTrue(rpc("fs.list", sys).contains("SANDBOX_DENIED"), "系统目录本身被拒");
-        String home = Json.write(Json.obj().put("path", ".")
-                .put("workspace", System.getProperty("user.home")));
-        assertTrue(rpc("fs.list", home).contains("SANDBOX_DENIED"), "系统目录祖先被拒");
+        // 系统目录的父目录必然是其祖先:不依赖「项目位于 user.home 之下」的机器布局
+        String ancestor = Json.write(Json.obj().put("path", ".")
+                .put("workspace", workerProps.resolveHomeDir().getParent().toString()));
+        assertTrue(rpc("fs.list", ancestor).contains("SANDBOX_DENIED"), "系统目录祖先被拒");
     }
 
     @Test
