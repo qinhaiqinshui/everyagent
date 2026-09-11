@@ -77,23 +77,37 @@ public final class WslDirectSandbox {
                 + " && command -v findmnt >/dev/null && id -u";
         Capture c = runCapture(WslBwrapSandbox.wslCmd(distro, "-u", "root", "-e", "/bin/sh", "-c", cmd),
                 PROBE_TIMEOUT_MS);
-        // wsl.exe 旧版自身消息为 UTF-16LE(字节流掺 NUL):成功判定与错误码/文案匹配前必须先
-        // 剥 NUL,否则中文「不存在…」与纯 "0" 都会失配(历史 bug:发行版缺失被误判为未归类,
-        // 自动导入永不触发;WSL 2.6 对不存在发行版报 WSL_E_DISTRO_NOT_FOUND 而非 E_ACCESSDENIED)
-        boolean ok = c.rc() == 0 && "0".equals(WslBwrapSandbox.ascii(c.out()).strip());
+        // wsl.exe 旧版自身消息为 UTF-16LE(字节流掺 NUL):判定与匹配前必须先剥 NUL,否则中文
+        // 「不存在…」与纯 "0" 都会失配(历史 bug:发行版缺失被误判为未归类,自动导入永不触发;
+        // WSL 2.6 对不存在发行版报 WSL_E_DISTRO_NOT_FOUND 而非 E_ACCESSDENIED)。
+        // 成败只看 stdout(id -u 输出纯 "0"):wsl.exe 往 stderr 打的无害提示(如「检测到 localhost
+        // 代理配置」)不得参与判定,否则系统代理开启时会把可用的 wsl-direct 误判为失败回退 windows-mic。
+        boolean ok = probeOutputOk(c.rc(), c.out());
         if (ok) {
             return new WslBwrapSandbox.ProbeResult(true, null, "");
         }
-        String out = truncate(WslBwrapSandbox.ascii(c.out()), 400);
-        if (c.rc() != 0 && WslBwrapSandbox.isDistroNotFound(c.out())) {
-            return new WslBwrapSandbox.ProbeResult(false, WslBwrapSandbox.Cause.DISTRO_NOT_FOUND, out);
+        // 失败断因匹配在 stdout+stderr 合并视图上做:真实错误(发行版不存在/拒绝访问)可能落在
+        // 任一输出流,合并后 contains 匹配语义不变。
+        String full = WslBwrapSandbox.ascii(c.diagText());
+        String brief = truncate(full.isEmpty() ? "(无输出)" : full, 400);
+        if (c.rc() != 0 && WslBwrapSandbox.isDistroNotFound(full)) {
+            return new WslBwrapSandbox.ProbeResult(false, WslBwrapSandbox.Cause.DISTRO_NOT_FOUND, brief);
         }
-        if (c.rc() != 0 && WslBwrapSandbox.isAccessDenied(c.out())) {
-            return new WslBwrapSandbox.ProbeResult(false, WslBwrapSandbox.Cause.ACCESS_DENIED, out);
+        if (c.rc() != 0 && WslBwrapSandbox.isAccessDenied(full)) {
+            return new WslBwrapSandbox.ProbeResult(false, WslBwrapSandbox.Cause.ACCESS_DENIED, brief);
         }
-        String brief = "wsl-direct 探测失败(dist=" + WslBwrapSandbox.distroLabel(distro) + ",rc=" + c.rc()
-                + "): " + out;
-        return new WslBwrapSandbox.ProbeResult(false, WslBwrapSandbox.Cause.UNKNOWN, brief);
+        String briefMsg = "wsl-direct 探测失败(dist=" + WslBwrapSandbox.distroLabel(distro) + ",rc=" + c.rc()
+                + "): " + brief;
+        return new WslBwrapSandbox.ProbeResult(false, WslBwrapSandbox.Cause.UNKNOWN, briefMsg);
+    }
+
+    /**
+     * wsl-direct 探测成功判定:rc==0 且 stdout 为纯 "0"(id -u 输出)。
+     * <b>只看 stdout</b>——wsl.exe 的无害提示(如「检测到 localhost 代理配置」)走 stderr,
+     * 参与判定会把可用后端误判为失败回退 windows-mic(修复:runCapture 已分离两路输出)。
+     */
+    static boolean probeOutputOk(int rc, String stdout) {
+        return rc == 0 && "0".equals(WslBwrapSandbox.ascii(stdout).strip());
     }
 
     /**
@@ -297,33 +311,50 @@ public final class WslDirectSandbox {
 
     private static Capture runCapture(List<String> cmd, long timeoutMs) {
         try {
-            ProcessBuilder pb = new ProcessBuilder(cmd).redirectErrorStream(true);
+            // 分离两路输出:wsl.exe 的无害提示(如「检测到 localhost 代理配置」)走 stderr,
+            // 探测成败只看 stdout,两者混流会让代理开启时误判探测失败。
+            ProcessBuilder pb = new ProcessBuilder(cmd).redirectErrorStream(false);
             pb.environment().put("WSL_UTF8", "1");
             Process p = pb.start();
-            StringBuilder sb = new StringBuilder();
-            Thread reader = Thread.ofVirtual().start(() -> {
+            StringBuilder outSb = new StringBuilder();
+            StringBuilder errSb = new StringBuilder();
+            Thread outReader = Thread.ofVirtual().start(() -> {
                 try (InputStream in = p.getInputStream()) {
-                    byte[] buf = new byte[4096];
-                    int n;
-                    while ((n = in.read(buf)) >= 0 && sb.length() < 8192) {
-                        sb.append(new String(buf, 0, n, StandardCharsets.UTF_8));
-                    }
+                    readInto(in, outSb);
+                } catch (IOException ignored) {
+                    // 进程被杀/管道断:读到多少算多少
+                }
+            });
+            Thread errReader = Thread.ofVirtual().start(() -> {
+                try (InputStream in = p.getErrorStream()) {
+                    readInto(in, errSb);
                 } catch (IOException ignored) {
                     // 进程被杀/管道断:读到多少算多少
                 }
             });
             if (!p.waitFor(timeoutMs, TimeUnit.MILLISECONDS)) {
                 p.destroyForcibly();
-                joinQuiet(reader, 500);
-                return new Capture(RC_TIMEOUT, sb.toString());
+                joinQuiet(outReader, 500);
+                joinQuiet(errReader, 500);
+                return new Capture(RC_TIMEOUT, outSb.toString(), errSb.toString());
             }
-            joinQuiet(reader, 1000);
-            return new Capture(p.exitValue(), sb.toString());
+            joinQuiet(outReader, 1000);
+            joinQuiet(errReader, 1000);
+            return new Capture(p.exitValue(), outSb.toString(), errSb.toString());
         } catch (IOException e) {
-            return new Capture(RC_LAUNCH_FAIL, e.getMessage() == null ? "IOException" : e.getMessage());
+            return new Capture(RC_LAUNCH_FAIL, "", e.getMessage() == null ? "IOException" : e.getMessage());
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            return new Capture(RC_LAUNCH_FAIL, "interrupted");
+            return new Capture(RC_LAUNCH_FAIL, "", "interrupted");
+        }
+    }
+
+    /** 将输入流按 UTF-8 读入 StringBuffer,上限 8K 字符(与旧合并读取语义一致,防超限撑爆内存)。 */
+    private static void readInto(InputStream in, StringBuilder sb) throws IOException {
+        byte[] buf = new byte[4096];
+        int n;
+        while ((n = in.read(buf)) >= 0 && sb.length() < 8192) {
+            sb.append(new String(buf, 0, n, StandardCharsets.UTF_8));
         }
     }
 
@@ -365,6 +396,10 @@ public final class WslDirectSandbox {
         return s == null ? "" : (s.length() <= n ? s : s.substring(0, n) + "...");
     }
 
-    private record Capture(int rc, String out) {
+    private record Capture(int rc, String out, String err) {
+        /** 错误匹配用合并视图:wsl.exe 错误可能落在 stdout 或 stderr。 */
+        String diagText() {
+            return WslBwrapSandbox.mergeDiagnostics(out, err);
+        }
     }
 }

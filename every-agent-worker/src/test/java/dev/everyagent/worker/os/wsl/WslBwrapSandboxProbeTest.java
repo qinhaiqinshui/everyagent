@@ -247,4 +247,22 @@ class WslBwrapSandboxProbeTest {
         assertEquals("/opt/maven", env.get("MAVEN_HOME"));
         assertEquals("/usr/bin", env.get("PATH")); // 已有键不受影响
     }
+
+    @Test
+    void mergeDiagnosticsCombinesStdoutAndStderr() {
+        // 空侧直接取另一侧
+        assertEquals("", WslBwrapSandbox.mergeDiagnostics("", ""));
+        assertEquals("out", WslBwrapSandbox.mergeDiagnostics("out", ""));
+        assertEquals("err", WslBwrapSandbox.mergeDiagnostics("", "err"));
+        // 两路都有:以换行拼接,供 contains 错误码匹配
+        assertEquals("0\nwsl: 检测到 localhost 代理配置", WslBwrapSandbox.mergeDiagnostics("0", "wsl: 检测到 localhost 代理配置"));
+        // null 视为空
+        assertEquals("", WslBwrapSandbox.mergeDiagnostics(null, null));
+        assertEquals("err", WslBwrapSandbox.mergeDiagnostics(null, "err"));
+        // 合并视图必须保留错误码(可被 isAccessDenied/isDistroNotFound 命中)
+        String merged = WslBwrapSandbox.mergeDiagnostics("", "拒绝访问。\n错误代码: Wsl/E_ACCESSDENIED");
+        assertTrue(WslBwrapSandbox.isAccessDenied(merged));
+        String merged2 = WslBwrapSandbox.mergeDiagnostics("no distribution named eagent", "");
+        assertTrue(WslBwrapSandbox.isDistroNotFound(merged2));
+    }
 }

@@ -216,8 +216,8 @@ public final class WslBwrapSandbox {
                 installDir.toString(), tar.toString(), "--version", "2"), IMPORT_TIMEOUT_MS);
         if (c.rc() != 0) {
             log.warn("[sandbox] wsl --import 失败 rc={} out={}", c.rc(),
-                    truncate(ascii(c.out()), 200));
-            return new ProbeResult(false, Cause.IMPORT_FAILED, truncate(ascii(c.out()), 200));
+                    truncate(ascii(c.diagText()), 200));
+            return new ProbeResult(false, Cause.IMPORT_FAILED, truncate(ascii(c.diagText()), 200));
         }
         log.info("[sandbox] 托管发行版 {} 导入完成,重新探测", MANAGED_DISTRO);
         return reprobe.get();
@@ -274,10 +274,10 @@ public final class WslBwrapSandbox {
     /** 冒烟失败后的断因定位:先认输出里的明确错误码,列表核对发行版在位性,最后 P/B-S 标记。 */
     private static ProbeResult diagnose(String distro, Capture smoke) {
         if (smoke.rc() == RC_LAUNCH_FAIL) {
-            return new ProbeResult(false, Cause.WSL_UNAVAILABLE, smoke.out());
+            return new ProbeResult(false, Cause.WSL_UNAVAILABLE, smoke.diagText());
         }
-        if (isAccessDenied(smoke.out())) {
-            return new ProbeResult(false, Cause.ACCESS_DENIED, truncate(smoke.out(), 200));
+        if (isAccessDenied(smoke.diagText())) {
+            return new ProbeResult(false, Cause.ACCESS_DENIED, truncate(smoke.diagText(), 200));
         }
         if (smoke.rc() == RC_TIMEOUT) {
             return new ProbeResult(false, Cause.TIMEOUT, "");
@@ -285,7 +285,7 @@ public final class WslBwrapSandbox {
         // 发行版在位性以 wsl -l -v 为准:错误码作快路径,列表核对兜住任何 locale 文案
         DistroList dl = listDistros();
         boolean missing = dl != null && !distro.isBlank() && !dl.names().contains(distro);
-        if (isDistroNotFound(smoke.out()) || missing) {
+        if (isDistroNotFound(smoke.diagText()) || missing) {
             return distroMissing(distro, dl, smoke);
         }
         String markers = "command -v python3 >/dev/null; echo P=$?; "
@@ -300,7 +300,7 @@ public final class WslBwrapSandbox {
             return new ProbeResult(false, cause, "");
         }
         // 标记全过但冒烟失败:瞬时态(VM 冷启动竞态一类),带原始输出让人复跑
-        return new ProbeResult(false, Cause.UNKNOWN, truncate(smoke.out(), 200));
+        return new ProbeResult(false, Cause.UNKNOWN, truncate(smoke.diagText(), 200));
     }
 
     /** wsl -l -v 列表;拿不到(rc!=0)返回 null,调用方不据此判定在位性。 */
@@ -311,7 +311,7 @@ public final class WslBwrapSandbox {
 
     private static ProbeResult distroMissing(String distro, DistroList dl, Capture smoke) {
         if (dl == null) {
-            return new ProbeResult(false, Cause.DISTRO_NOT_FOUND, truncate(smoke.out(), 200));
+            return new ProbeResult(false, Cause.DISTRO_NOT_FOUND, truncate(smoke.diagText(), 200));
         }
         String installed = dl.names().isEmpty() ? "(无)"
                 : String.join(", ", dl.names()) + (dl.def() == null ? "" : "(默认 " + dl.def() + ")");
@@ -451,6 +451,17 @@ public final class WslBwrapSandbox {
     /** 去 UTF-16LE 空字节(旧版 wsl.exe 不识别 WSL_UTF8 时的输出形态),供错误码匹配。 */
     static String ascii(String s) {
         return s == null ? "" : s.replace("\0", "");
+    }
+
+    /** 错误诊断用合并视图:wsl.exe 错误可能落在 stdout 或 stderr,合并后 contains 匹配语义不变。 */
+    static String mergeDiagnostics(String out, String err) {
+        if (out == null || out.isEmpty()) {
+            return err == null ? "" : err;
+        }
+        if (err == null || err.isEmpty()) {
+            return out;
+        }
+        return out + "\n" + err;
     }
 
     /** wsl.exe 输出是否表示「发行版不存在」:新旧错误码 + 中英文文案,先剥 UTF-16 NUL。 */
@@ -1047,34 +1058,51 @@ public final class WslBwrapSandbox {
      */
     private static Capture runCapture(List<String> cmd, long timeoutMs) {
         try {
-            ProcessBuilder pb = new ProcessBuilder(cmd).redirectErrorStream(true);
+            // 分离两路输出:wsl.exe 的无害提示(如「检测到 localhost 代理配置」)走 stderr,
+            // 列表/标记解析只看 stdout;错误码匹配在 Capture.diagText() 合并视图上做。
+            ProcessBuilder pb = new ProcessBuilder(cmd).redirectErrorStream(false);
             // wsl.exe 自身消息(非子进程输出)按 UTF-8 输出;旧版不识别则 UTF-16LE,ascii() 兼容匹配
             pb.environment().put("WSL_UTF8", "1");
             Process p = pb.start();
-            StringBuilder sb = new StringBuilder();
-            Thread reader = Thread.ofVirtual().start(() -> {
+            StringBuilder outSb = new StringBuilder();
+            StringBuilder errSb = new StringBuilder();
+            Thread outReader = Thread.ofVirtual().start(() -> {
                 try (InputStream in = p.getInputStream()) {
-                    byte[] buf = new byte[4096];
-                    int n;
-                    while ((n = in.read(buf)) >= 0 && sb.length() < 8192) {
-                        sb.append(new String(buf, 0, n, StandardCharsets.UTF_8));
-                    }
+                    readInto(in, outSb);
+                } catch (IOException ignored) {
+                    // 进程被杀/管道断:读到多少算多少
+                }
+            });
+            Thread errReader = Thread.ofVirtual().start(() -> {
+                try (InputStream in = p.getErrorStream()) {
+                    readInto(in, errSb);
                 } catch (IOException ignored) {
                     // 进程被杀/管道断:读到多少算多少
                 }
             });
             if (!p.waitFor(timeoutMs, TimeUnit.MILLISECONDS)) {
                 p.destroyForcibly();
-                joinQuiet(reader, 500);
-                return new Capture(RC_TIMEOUT, sb.toString());
+                joinQuiet(outReader, 500);
+                joinQuiet(errReader, 500);
+                return new Capture(RC_TIMEOUT, outSb.toString(), errSb.toString());
             }
-            joinQuiet(reader, 1000);
-            return new Capture(p.exitValue(), sb.toString());
+            joinQuiet(outReader, 1000);
+            joinQuiet(errReader, 1000);
+            return new Capture(p.exitValue(), outSb.toString(), errSb.toString());
         } catch (IOException e) {
-            return new Capture(RC_LAUNCH_FAIL, e.getMessage() == null ? "IOException" : e.getMessage());
+            return new Capture(RC_LAUNCH_FAIL, "", e.getMessage() == null ? "IOException" : e.getMessage());
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            return new Capture(RC_LAUNCH_FAIL, "interrupted");
+            return new Capture(RC_LAUNCH_FAIL, "", "interrupted");
+        }
+    }
+
+    /** 将输入流按 UTF-8 读入 StringBuffer,上限 8K 字符(与旧合并读取语义一致,防超限撑爆内存)。 */
+    private static void readInto(InputStream in, StringBuilder sb) throws IOException {
+        byte[] buf = new byte[4096];
+        int n;
+        while ((n = in.read(buf)) >= 0 && sb.length() < 8192) {
+            sb.append(new String(buf, 0, n, StandardCharsets.UTF_8));
         }
     }
 
@@ -1086,7 +1114,11 @@ public final class WslBwrapSandbox {
         }
     }
 
-    private record Capture(int rc, String out) {
+    private record Capture(int rc, String out, String err) {
+        /** 错误匹配用合并视图:wsl.exe 错误可能落在 stdout 或 stderr。 */
+        String diagText() {
+            return mergeDiagnostics(out, err);
+        }
     }
 
     /** 读任务收尾等待(进程已死后管道很快 EOF,超时/异常回退空串)。 */
