@@ -84,6 +84,35 @@ function ImageChip({ size = 16, style }: AppGlyphProps) {
   )
 }
 
+/** Docker:青色鲸鱼驮集装箱(容器/镜像身份),线条式。 */
+function DockerChip({ size = 16, style }: AppGlyphProps) {
+  const color = 'var(--accent-cyan)'
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 16 16"
+      style={{ display: 'block', flexShrink: 0, ...style }}
+      aria-hidden="true"
+    >
+      {/* 上层集装箱(两枚,带内嵌线增强体积感) */}
+      <path d="M3.7 6.3h2.6v2.4H3.7z M6.7 6.3h2.6v2.4H6.7z" fill={color} opacity="0.85" />
+      {/* 下层集装箱(三枚) */}
+      <path d="M2.2 9.1h2.6v2.4H2.2z M5.2 9.1h2.6v2.4H5.2z M8.2 9.1h2.6v2.4H8.2z" fill={color} />
+      {/* 鲸鱼身(托起集装箱的曲线船体) */}
+      <path
+        d="M1.6 12.2h12.1c.9 0 1.6-.5 1.9-1.3l.3-.8c.1-.3-.2-.6-.5-.5l-1.5.5"
+        stroke={color}
+        strokeWidth="1.2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        fill="none"
+      />
+      <path d="M1.6 12.2c-.5 0-.8-.4-.8-.8v-.3h.8v1.1Z" fill={color} />
+    </svg>
+  )
+}
+
 /** Maven pom:琥珀色 m + 左上小角标,呼应 pom.xml 的 Maven 身份。 */
 function PomChip({ size = 16, style }: AppGlyphProps) {
   const color = 'var(--accent-amber)'
@@ -198,6 +227,8 @@ const EXT_RENDERERS: Record<string, (props: AppGlyphProps) => React.ReactElement
   webp: (p) => <ImageChip {...p} />,
   ico: (p) => <ImageChip {...p} />,
   pom: (p) => <PomChip {...p} />,
+  // docker 相关:yml/yaml 扩展名已归属 YAML,compose 身份靠文件名前缀特判。
+  'dockerfile': (p) => <DockerChip {...p} />,
 }
 
 /**
@@ -212,8 +243,16 @@ export function FileTypeIcon({ fileName, size = 16, style }: {
 }) {
   const dotIndex = fileName.lastIndexOf('.')
   const ext = dotIndex >= 0 ? fileName.slice(dotIndex + 1).toLowerCase() : ''
-  // 按完整文件名特判:pom.xml 的身份在文件名而非扩展名(xml 泛型太宽)。
-  const nameRender = fileName.toLowerCase() === 'pom.xml' ? EXT_RENDERERS.pom : undefined
+  const lowerName = fileName.toLowerCase()
+  // 按完整文件名特判:身份在文件名而非扩展名。
+  // - pom.xml:Maven 身份(xml 泛型太宽);
+  // - Dockerfile / *.dockerfile:容器构建文件;
+  // - docker-compose.*(yml/yaml/override) 与 compose.*.yaml / compose.yaml:编排文件。
+  const nameRender
+    = lowerName === 'pom.xml' ? EXT_RENDERERS.pom
+      : lowerName === 'dockerfile' || ext === 'dockerfile' ? EXT_RENDERERS.dockerfile
+        : /^docker-compose([-.]|$)/.test(lowerName) || /^compose\.[^.]*\.ya?ml$/.test(lowerName) || lowerName === 'compose.yaml' || lowerName === 'compose.yml' ? EXT_RENDERERS.dockerfile
+          : undefined
   const render = nameRender ?? EXT_RENDERERS[ext]
   if (render) {
     return render({ size, style })
