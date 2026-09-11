@@ -229,8 +229,8 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
   const [submitting, setSubmitting] = React.useState(false)
   const [stopping, setStopping] = React.useState(false)
   const [error, setError] = React.useState('')
-  // agent 选中态(点击输入框上方 agent 长条切换):轮次视图不按 agent 过滤,
-  // 仅驱动列表高亮与外部 agentId 透传入口。
+  // agent 选中态(点击输入框上方 agent 长条切换):非空时轮次视图按该 agent 过滤
+  // (仅过滤已加载内容,不触发拉取,见 TaskRoundsPanel matches 谓词)。
   const [filterAgentId, setFilterAgentId] = React.useState('')
 
   // 实时信号链:订阅 taskStream(agentStates/contextUsage/taskModel/ask 等状态信号
@@ -678,6 +678,8 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
           items={items}
           isGenerating={isTaskRunning}
           scrollRoot={threadScrollRefNode.current}
+          filterAgentId={filterAgentId}
+          mainAgentId={mainAgentId}
         />
       )}
       composer={(

@@ -16,6 +16,10 @@ import TaskThread from './TaskThread'
  * - endSeq 为空（未闭合尾轮）时拉到 items 末尾（此场景由外层按尾轮处理，本组件通常只用于闭合轮）。
  *
  * 切片依赖 messageId（形如 `m-<seq>`）定位端点，items 恒按 seq 升序，故中间即为该轮过程内容。
+ *
+ * agent 过滤（「只看该 agent」）：matches 谓词非空时切片后再按归属过滤，仅显示该 agent 的
+ * 过程项。纯渲染派生——只过滤已加载内容，不触发任何拉取；用户展开/滚动续拉折入的新内容
+ * 经 items 引用变化自动纳入过滤。过滤后为空则不渲染线程（折叠条在外层照常）。
  */
 export interface RoundDetailProps {
   /** 该轮摘要（rounds.jsonl 行）。 */
@@ -28,6 +32,8 @@ export interface RoundDetailProps {
   isGenerating?: boolean
   /** 外部正在一次性拉取该轮区间（显示加载提示）。 */
   loading?: boolean
+  /** agent 过滤谓词（「只看该 agent」）：仅放行归属该 agent 的线程项；缺省不过滤。 */
+  matches?: (item: TaskThreadItem) => boolean
 }
 
 export default function RoundDetail({
@@ -36,10 +42,11 @@ export default function RoundDetail({
   taskId,
   isGenerating = false,
   loading = false,
+  matches,
 }: RoundDetailProps): React.ReactNode {
   const slice = React.useMemo<TaskThreadItem[]>(
-    () => sliceRound(items, round),
-    [items, round.startSeq, round.endSeq],
+    () => (matches ? sliceRound(items, round).filter(matches) : sliceRound(items, round)),
+    [items, round.startSeq, round.endSeq, matches],
   )
 
   return (

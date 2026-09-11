@@ -5,8 +5,9 @@
  * thumb 可拖拽);每个 agent 一个胶囊长条:左侧状态圆点 + 短 ID(主 agent =
  * task.mainAgentId,子 agent = sub_…)+ 可选标题,不同背景色 = 不同状态(running /
  * waiting-user / completed / error / stopped),running 态条内有流光滑过、圆点呼吸。
- * 点击某 agent → 线程只显示该 agent 的消息(复用 TaskChat 的 filterAgentId 过滤);
- * 再次点击同一 agent 恢复「全部」。仅当任务存在子 agent 时渲染(纯主 agent 任务无此面板)。
+ * 点击某 agent → 线程只显示已加载内容中该 agent 的消息(TaskRoundsPanel 按归属过滤,
+ * 纯渲染派生、不触发拉取);再次点击同一 agent 恢复「全部」。仅当任务存在子 agent 时渲染
+ * (纯主 agent 任务无此面板)。
  */
 import React from 'react'
 import type { AgentStatus } from '@/types'

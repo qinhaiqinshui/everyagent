@@ -25,6 +25,11 @@ import './TaskRoundsPanel.css'
  *   流式增量接上，顶部（user 之后）backward sentinel 支持往上翻历史（到达 startSeq 停）；
  * - 轮末文件变更：rounds.jsonl 每轮携带轻量 fileChanges（无变更时缺失），折叠/展开态均在
  *   当前轮最后渲染轮末文件变更视图，点击行按 roundId 拉全文再开 diff（见 plugins/task-file-changes）。
+ * - agent 过滤（「只看该 agent」，filterAgentId 非空）：闭合轮展开态（RoundDetail）与尾轮
+ *   过程流仅显示归属该 agent 的项；轮骨架（user 气泡/折叠条/final 摘要/文件变更）不过滤，
+ *   避免未加载轮被误判「消失」。纯渲染派生——只过滤已加载内容，不新增任何拉取触发；
+ *   用户展开/滚动加载折入的新内容经 items 引用变化自动纳入过滤，其他 agent 的流式增量
+ *   被挡在视图外（DOM 不变 → MutationObserver 不触发 → 不会误贴底）。
  */
 export interface TaskRoundsPanelProps {
   /** 当前任务 ID。 */
@@ -39,6 +44,10 @@ export interface TaskRoundsPanelProps {
   scrollRoot?: HTMLElement | null
   /** 空任务提示文案。 */
   emptyText?: string
+  /** agent 过滤（「只看该 agent」）：'' = 不过滤；非空 = 仅显示归属该 agent 的已加载内容。 */
+  filterAgentId?: string
+  /** 主 agent 稳定 Id（线程内主 agent 消息 agentId 为空串，过滤前归一用）。 */
+  mainAgentId?: string
 }
 
 export default function TaskRoundsPanel({
@@ -48,6 +57,8 @@ export default function TaskRoundsPanel({
   isGenerating = false,
   scrollRoot,
   emptyText,
+  filterAgentId = '',
+  mainAgentId = '',
 }: TaskRoundsPanelProps): React.ReactNode {
   /** 已展开的轮 roundId 集合（多轮可同时展开）。 */
   const [expandedSet, setExpandedSet] = React.useState<ReadonlySet<string>>(() => new Set())
@@ -209,7 +220,16 @@ export default function TaskRoundsPanel({
     updatePageState('open', { dir: 'backward', cursor: firstEventSeq, loading: false, done: false })
   }, [tailStartSeq, live, items, updatePageState])
 
-  /** 尾轮线程项：从 items 中 tailStartSeq 起点开始切片（含 user 气泡，剥 foldRole 防折叠）。 */
+  /** agent 过滤谓词：'' = 不过滤（原样全过）；否则仅放行归属该 agent 的线程项。
+   * 纯渲染派生，不触发任何拉取——被过滤掉的流式增量不产生 DOM 变化，不影响自动贴底。 */
+  const matches = React.useCallback(
+    (it: TaskThreadItem) => !filterAgentId || itemAgentKey(it, mainAgentId) === filterAgentId,
+    [filterAgentId, mainAgentId],
+  )
+
+  /** 尾轮线程项：从 items 中 tailStartSeq 起点开始切片（含 user 气泡，剥 foldRole 防折叠）。
+   * 过滤态：切片后按归属过滤（子 agent 过滤会滤掉 user 气泡，但外层 tailUserItem 恒显，
+   * 视觉上 user 气泡不丢）。 */
   const tailItems = React.useMemo<TaskThreadItem[]>(() => {
     if (!tailStartSeq) return []
     let idx = items.findIndex(
@@ -222,8 +242,8 @@ export default function TaskRoundsPanel({
       )
     }
     if (idx < 0) return []
-    return items.slice(idx).map(stripFoldRole)
-  }, [items, tailStartSeq])
+    return items.slice(idx).filter(matches).map(stripFoldRole)
+  }, [items, tailStartSeq, matches])
 
   /** 尾轮 user 项（items 中本条；foldRound 已由 rounds.jsonl userMessage 插入）。 */
   const tailUserItem = React.useMemo<TaskThreadItem | undefined>(() => {
@@ -263,6 +283,11 @@ export default function TaskRoundsPanel({
       {loadingBlock}
       {roundsError ? errorBar : null}
       {emptyBlock}
+      {filterAgentId ? (
+        <div className="task-rounds__filter-hint" role="status">
+          仅显示已加载内容中该 agent 的消息，展开轮次可加载更多
+        </div>
+      ) : null}
       {closedRounds.map((round) => {
         const expanded = expandedSet.has(round.roundId)
         const pageState = pageStates[round.roundId]
@@ -276,6 +301,7 @@ export default function TaskRoundsPanel({
             workspaceRoot={workspaceRoot}
             pageState={pageState}
             scrollRoot={scrollRoot}
+            matches={matches}
             onToggle={() => handleToggle(round)}
             onLoadMore={() => startForward(round)}
           />
@@ -322,6 +348,7 @@ function ClosedRoundView({
   workspaceRoot,
   pageState,
   scrollRoot,
+  matches,
   onToggle,
   onLoadMore,
 }: {
@@ -332,6 +359,8 @@ function ClosedRoundView({
   workspaceRoot?: string
   pageState?: RoundPageState
   scrollRoot?: HTMLElement | null
+  /** agent 过滤谓词（「只看该 agent」）：透传 RoundDetail，只作用于展开态过程内容。 */
+  matches: (item: TaskThreadItem) => boolean
   onToggle: () => void
   onLoadMore: () => void
 }): React.ReactNode {
@@ -376,6 +405,7 @@ function ClosedRoundView({
               items={items}
               taskId={taskId}
               loading={pageState?.loading ?? false}
+              matches={matches}
             />
             {pageState && !pageState.done ? (
               <LazyLoadSentinel
@@ -540,6 +570,13 @@ function stripFoldRole(item: TaskThreadItem): TaskThreadItem {
   return item.type === 'agent_message' && item.foldRole
     ? { ...item, foldRole: undefined }
     : item
+}
+
+/** 线程项归属 agent：主 agent 消息与无主 trace 的 agentId 为空串（缺省=主线程），
+ * 归一到 mainAgentId 后再比较；task_trace.agentId 字段语义即「用于前端按 agent 过滤」。 */
+function itemAgentKey(item: TaskThreadItem, mainAgentId: string): string {
+  if (item.type === 'agent_message') return item.message.agentId || mainAgentId
+  return item.trace.agentId || mainAgentId
 }
 
 /** 从线程项提取精确排序 seq 字符串（agent_message 的 messageId 形如 `m-${seq}`；task_trace 无 messageId）。 */
