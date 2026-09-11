@@ -36,6 +36,10 @@ export interface RoundDetailProps {
   matches?: (item: TaskThreadItem) => boolean
 }
 
+/** 加载指示延迟展示阈值(ms):本地 worker / 缓存命中时轮内容几十毫秒内即达,立即渲染
+ *  指示块会在内容到达前闪现一帧大空盒再被内容顶掉(首次展开的「闪烁」),短加载不显示指示器。 */
+const LOADING_HINT_DELAY_MS = 200
+
 export default function RoundDetail({
   round,
   items,
@@ -49,15 +53,27 @@ export default function RoundDetail({
     [items, round.startSeq, round.endSeq, matches],
   )
 
+  /** 延迟加载指示:loading 持续超过阈值才显示;内容优先——分页续拉(loading 中)已有
+   *  内容照常渲染,不再被加载块整体顶掉(旧版滚动续拉也会闪一下,同根因)。 */
+  const [showLoading, setShowLoading] = React.useState(false)
+  React.useEffect(() => {
+    if (!loading) {
+      setShowLoading(false)
+      return
+    }
+    const timer = window.setTimeout(() => setShowLoading(true), LOADING_HINT_DELAY_MS)
+    return () => window.clearTimeout(timer)
+  }, [loading])
+
   return (
     <div className="nagent-round-detail nagent-round-collapse__process">
-      {loading ? (
-        <div className="nagent-empty">
+      {slice.length > 0 ? (
+        <TaskThread taskId={taskId} items={slice} isGenerating={isGenerating} />
+      ) : showLoading ? (
+        <div className="nagent-round-detail__loading" role="status">
           <InlineSpinner size={14} />
           <span>正在加载第 {round.index} 轮过程内容…</span>
         </div>
-      ) : slice.length > 0 ? (
-        <TaskThread taskId={taskId} items={slice} isGenerating={isGenerating} />
       ) : null}
     </div>
   )
