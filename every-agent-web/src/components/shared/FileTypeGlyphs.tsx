@@ -84,6 +84,32 @@ function ImageChip({ size = 16, style }: AppGlyphProps) {
   )
 }
 
+/** SQL:紫色数据库圆柱(顶面椭圆 + 柱身 + 两道环纹,经典数据库记号)。 */
+function DatabaseChip({ size = 16, style }: AppGlyphProps) {
+  const color = 'var(--accent-purple)'
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 16 16"
+      style={{ display: 'block', flexShrink: 0, ...style }}
+      aria-hidden="true"
+    >
+      {/* 柱身 */}
+      <path
+        d="M3.2 4.4v7.2c0 1.2 2.2 2.2 4.8 2.2s4.8-1 4.8-2.2V4.4"
+        stroke={color}
+        strokeWidth="1.3"
+        fill="none"
+      />
+      {/* 顶面椭圆 */}
+      <ellipse cx="8" cy="4.4" rx="4.8" ry="2" stroke={color} strokeWidth="1.3" fill="none" />
+      {/* 环纹(分层) */}
+      <path d="M3.2 8c.6 1 2.4 1.7 4.8 1.7S12.2 9 12.8 8" stroke={color} strokeWidth="1" fill="none" opacity="0.8" />
+    </svg>
+  )
+}
+
 /** Docker:青色鲸鱼驮集装箱(容器/镜像身份),线条式。 */
 function DockerChip({ size = 16, style }: AppGlyphProps) {
   const color = 'var(--accent-cyan)'
@@ -243,6 +269,8 @@ const EXT_RENDERERS: Record<string, (props: AppGlyphProps) => React.ReactElement
   ps1: (p) => <LangChip {...p} color="var(--accent-blue)" sigil="PS" fontSize={9} />,
   psm1: (p) => <LangChip {...p} color="var(--accent-blue)" sigil="PS" fontSize={9} />,
   psd1: (p) => <LangChip {...p} color="var(--accent-blue)" sigil="PS" fontSize={9} />,
+  // SQL:紫色数据柱(圆柱数据库经典记号)。
+  sql: (p) => <DatabaseChip {...p} />,
 }
 
 /**
