@@ -50,6 +50,64 @@ function LangChip({ size = 16, style, color, sigil, fontSize }: {
   )
 }
 
+/** 图片:紫色图片轮廓(山 + 太阳),png/jpg/gif/svg 等共用。 */
+function ImageChip({ size = 16, style }: AppGlyphProps) {
+  const color = 'var(--accent-purple)'
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 16 16"
+      style={{ display: 'block', flexShrink: 0, ...style }}
+      aria-hidden="true"
+    >
+      <rect
+        x="2.2"
+        y="3.2"
+        width="11.6"
+        height="9.6"
+        rx="1.8"
+        fill="none"
+        stroke={color}
+        strokeWidth="1.4"
+      />
+      <circle cx="5.7" cy="6.3" r="1.1" fill={color} />
+      <path
+        d="M3.4 11.6 6.8 8.4l2 1.9 2-2.1 2 2.1"
+        stroke={color}
+        strokeWidth="1.4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        fill="none"
+      />
+    </svg>
+  )
+}
+
+/** Maven pom:琥珀色 m + 左上小角标,呼应 pom.xml 的 Maven 身份。 */
+function PomChip({ size = 16, style }: AppGlyphProps) {
+  const color = 'var(--accent-amber)'
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 16 16"
+      style={{ display: 'block', flexShrink: 0, ...style }}
+      aria-hidden="true"
+    >
+      <text x="8" y="11.6" textAnchor="middle" fontSize="10.5" fontWeight={900} fill={color}>
+        m
+      </text>
+      <path
+        d="M11.6 4.2v1.4"
+        stroke={color}
+        strokeWidth="1.2"
+        strokeLinecap="round"
+      />
+    </svg>
+  )
+}
+
 /** Java:无底色,主题色咖啡杯(杯身 + 杯柄 + 热气),放大撑满视窗。 */
 function JavaChip({ size = 16, style }: AppGlyphProps) {
   const cupColor = 'var(--accent-red)'
@@ -130,6 +188,16 @@ const EXT_RENDERERS: Record<string, (props: AppGlyphProps) => React.ReactElement
   go: (p) => <LangChip {...p} color="var(--accent-cyan)" sigil="GO" fontSize={9} />,
   rs: (p) => <LangChip {...p} color="var(--accent-red)" sigil="RS" fontSize={9} />,
   java: (p) => <JavaChip {...p} />,
+  txt: (p) => <LangChip {...p} color="var(--text-secondary)" sigil="TXT" fontSize={6.2} />,
+  zip: (p) => <LangChip {...p} color="var(--accent-amber)" sigil="ZIP" fontSize={6.2} />,
+  png: (p) => <ImageChip {...p} />,
+  jpg: (p) => <ImageChip {...p} />,
+  jpeg: (p) => <ImageChip {...p} />,
+  gif: (p) => <ImageChip {...p} />,
+  svg: (p) => <ImageChip {...p} />,
+  webp: (p) => <ImageChip {...p} />,
+  ico: (p) => <ImageChip {...p} />,
+  pom: (p) => <PomChip {...p} />,
 }
 
 /**
