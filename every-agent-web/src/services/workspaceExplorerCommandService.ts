@@ -32,6 +32,11 @@ export const workspaceExplorerCommandService = {
     }
     const parentDir = oldPath.includes('/') ? oldPath.slice(0, oldPath.lastIndexOf('/')) : ''
     const newPath = parentDir ? `${parentDir}/${cleanName}` : cleanName
+    // 同名 no-op 直接拒绝:否则 fs.move(from,from) 会静默成功但名字不变,
+    // 界面却提示「重命名成功」,造成假成功(Windows 上 Files.move 同路径不抛错)。
+    if (newPath === oldPath) {
+      throw new Error('新名称与当前名称相同')
+    }
     await workspaceGateway.rename(workspaceRoot, oldPath, newPath)
     return newPath
   },

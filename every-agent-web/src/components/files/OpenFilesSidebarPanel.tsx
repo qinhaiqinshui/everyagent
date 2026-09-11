@@ -308,7 +308,7 @@ function WorkspaceGroupPanel({
     } finally {
       setRenaming(false)
     }
- }, [renameFileTabs, renameTarget, renaming, selectedExplorerPath, showToast, workspaceRoot])
+ }, [renameFileTabs, renameTarget, renameValue, renaming, selectedExplorerPath, showToast, workspaceRoot])
 
   const handleRequestMove = React.useCallback((target: WorkspaceExplorerContextTarget) => {
     setMoveTarget(target)
