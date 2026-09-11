@@ -246,6 +246,26 @@
   width: 12px;
 }
 
+/* ── 源代码管理:变更树(复用 ws-tree 箭头列/缩进/叶子占位样式) ── */
+
+/* 变更树:树根按内容撑宽(超长文件名不截断),短内容仍撑满容器;
+   滚动容器(组件内联 overflowX:auto)据此出横向滚动条。 */
+.ws-changes-tree.ant-tree {
+  width: max-content;
+  min-width: 100%;
+}
+
+/* 变更树:行内容不换行(目录名/文件名超宽时横向滚动而非折行)。 */
+.ws-changes-tree.ant-tree .ant-tree-node-content-wrapper {
+  white-space: nowrap;
+}
+
+/* 变更树:变更类型徽标槽(sticky 固定可视区右缘)实底背景,
+   遮住横向滚动时从徽标下方穿过的文件名文字。 */
+.ws-change-badge-slot {
+  background: var(--bg-primary);
+}
+
 /* 文件树：桌面端更多操作浮层覆盖在文件大小之上，
    移除右侧预留位（不占布局空间），hover 时隐藏大小文本由按钮原地替换 */
 .ws-tree-row__actions-overlay {
