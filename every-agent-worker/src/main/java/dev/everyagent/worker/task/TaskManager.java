@@ -76,6 +76,8 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
     private static final long AGENT_META_PERSIST_INTERVAL_MS = 30_000;
     /** task.rounds 惰性全量生成/未闭合轮扫描的单次窗口上限(记录数;EventLog 内存护栏 50 万,同量级封顶)。 */
     private static final int ROUNDS_REBUILD_MAX = 500_000;
+    /** taskId 查重重生成的最大尝试次数(连续冲突即失败,防御死循环)。 */
+    private static final int MAX_TASKID_ATTEMPTS = 10_000;
 
     private final HubPool pool;
     private final ConfigStore configs;
@@ -901,6 +903,27 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
         return n;
     }
 
+    /**
+     * 生成与内存/磁盘均不冲突的 taskId(ShortIds 契约约定的「调用方查重兜底」)。
+     * <p>ShortIds 的随机盐 + 每进程自增计数器在 worker 重启后会重置:盐空间仅 36² 时,
+     * 重启频繁下生日悖论使「同盐 + 计数器从 1 重头」撞出旧 taskId 的概率不可忽略。
+     * 一旦撞上,新建任务会复用旧任务目录——meta.json 被新标题覆盖、事件追加进旧 agent 日志,
+     * 表现为「新建任务却打开旧任务、旧任务续跑且标题被顶成新标题」(实测 t_ct1/t_ct2 事故)。
+     * 故此处对 tasks(内存)/diskTasks(磁盘索引)/任务目录(磁盘直查)三重查重,冲突则递增重生成。
+     */
+    private String uniqueTaskId() {
+        for (int i = 0; i < MAX_TASKID_ATTEMPTS; i++) {
+            String id = ShortIds.taskId();
+            if (tasks.containsKey(id) || diskTasks.containsKey(id)
+                    || Files.isDirectory(store.dirOf(id))) {
+                log.warn("taskId 与现有任务冲突,重生成: {}", id);
+                continue;
+            }
+            return id;
+        }
+        throw new IllegalStateException("无法生成唯一 taskId(连续 " + MAX_TASKID_ATTEMPTS + " 次冲突)");
+    }
+
     /** task.run:创建/续跑合一——无 taskId=新建(workspace 必填),有 taskId=运行中入队/终态冷启动续跑。 */
     private void rpcTaskRun(RpcContext ctx) {
         String input = ctx.strParam("input");
@@ -934,7 +957,7 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
             ctx.err(Rpc.ERR_INTERNAL, "工作区目录不可用: " + e.getMessage());
             return;
         }
-        String taskId = ShortIds.taskId();
+        String taskId = uniqueTaskId();
         String mainAgentId = ShortIds.mainAgentId();
         ResolvedConfig cfg = configs.resolve(ctx.optStrParam("configId", null));
         TaskEntry t = new TaskEntry(taskId, title, cfg.snapshot(),
