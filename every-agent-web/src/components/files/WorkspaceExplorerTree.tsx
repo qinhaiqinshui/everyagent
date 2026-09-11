@@ -314,9 +314,9 @@ function TreeNodeRow({
           目录行用极简描边文件夹,与 switcher 箭头列错开一级缩进。 */}
       <span style={{ flexShrink: 0, display: 'inline-flex', alignItems: 'center' }}>
         {isDirectory ? (
-          <FolderIcon size={14} style={{ color: 'var(--text-muted)' }} />
+          <FolderIcon size={15} style={{ color: 'var(--text-muted)' }} />
         ) : (
-          <FileTypeIcon fileName={node.name} size={14} />
+          <FileTypeIcon fileName={node.name} size={15} />
         )}
       </span>
       <span

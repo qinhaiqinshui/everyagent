@@ -143,7 +143,7 @@ function FileResultGroup({
           <ChevronDownIcon size={13} style={collapsed ? fileChevronCollapsedStyle : undefined} />
         </span>
         <span style={fileIconStyle}>
-          <FileTypeIcon fileName={fileName} size={13} />
+          <FileTypeIcon fileName={fileName} size={14} />
         </span>
         <span style={fileNameStyle}>{fileName}</span>
         {dirPath ? <span style={fileDirStyle}>{dirPath}</span> : null}

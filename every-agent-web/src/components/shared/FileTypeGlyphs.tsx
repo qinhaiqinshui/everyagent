@@ -19,7 +19,7 @@ interface AppGlyphProps {
   style?: React.CSSProperties
 }
 
-/** 单个语言 sigil:无底色,主题色粗体字符居中(裁剪到 16×16 视窗内)。 */
+/** 单个语言 sigil:无底色,主题色粗体字符撑满视窗(基线随字号自动居中)。 */
 function LangChip({ size = 16, style, color, sigil, fontSize }: {
   color: string
   sigil: string
@@ -37,12 +37,12 @@ function LangChip({ size = 16, style, color, sigil, fontSize }: {
     >
       <text
         x="8"
-        y="11.2"
+        y={8 + fontSize * 0.36}
         textAnchor="middle"
         fontSize={fontSize}
-        fontWeight={800}
+        fontWeight={900}
         fill={color}
-        letterSpacing={sigil.length > 1 ? -0.3 : 0}
+        letterSpacing={sigil.length > 1 ? -0.4 : 0}
       >
         {sigil}
       </text>
@@ -50,7 +50,7 @@ function LangChip({ size = 16, style, color, sigil, fontSize }: {
   )
 }
 
-/** Java:无底色,主题色咖啡杯(杯身 + 杯柄 + 热气)。 */
+/** Java:无底色,主题色咖啡杯(杯身 + 杯柄 + 热气),放大撑满视窗。 */
 function JavaChip({ size = 16, style }: AppGlyphProps) {
   const cupColor = 'var(--accent-red)'
   return (
@@ -62,27 +62,27 @@ function JavaChip({ size = 16, style }: AppGlyphProps) {
       aria-hidden="true"
     >
       <path
-        d="M4.4 8h6.2v2.2a2.4 2.4 0 0 1-2.4 2.4H6.8a2.4 2.4 0 0 1-2.4-2.4V8Z"
+        d="M4.2 7.8h6v2.4a2.6 2.6 0 0 1-2.6 2.6H6.8a2.6 2.6 0 0 1-2.6-2.6V7.8Z"
         fill={cupColor}
       />
       <path
-        d="M10.6 8.6h0.7a1.4 1.4 0 0 1 0 2.8h-0.7"
+        d="M10.4 8.4h0.7a1.5 1.5 0 0 1 0 3h-0.7"
         stroke={cupColor}
-        strokeWidth="1.1"
+        strokeWidth="1.2"
         strokeLinecap="round"
         fill="none"
       />
       <path
-        d="M6.5 4.9v1.4M9.2 4.9v1.4"
+        d="M6.3 4.4v1.5M9.1 4.4v1.5"
         stroke={cupColor}
-        strokeWidth="1.1"
+        strokeWidth="1.2"
         strokeLinecap="round"
       />
     </svg>
   )
 }
 
-/** Markdown:无底色,主题色粗体 M + 右侧小下箭头(经典 M↓ 记号简化版)。 */
+/** Markdown:无底色,主题色粗体 M + 右侧小下箭头(经典 M↓ 记号简化版),放大撑满视窗。 */
 function MarkdownChip({ size = 16, style }: AppGlyphProps) {
   const color = 'var(--accent-cyan)'
   return (
@@ -93,13 +93,13 @@ function MarkdownChip({ size = 16, style }: AppGlyphProps) {
       style={{ display: 'block', flexShrink: 0, ...style }}
       aria-hidden="true"
     >
-      <text x="6.8" y="11.4" textAnchor="middle" fontSize="8" fontWeight={800} fill={color}>
+      <text x="6.4" y="11.8" textAnchor="middle" fontSize="10" fontWeight={900} fill={color}>
         M
       </text>
       <path
-        d="M10.8 8.2v3m0 0-1.1-1.1m1.1 1.1 1.1-1.1"
+        d="M10.9 7.9v3.4m0 0-1.2-1.2m1.2 1.2 1.2-1.2"
         stroke={color}
-        strokeWidth="1.2"
+        strokeWidth="1.4"
         strokeLinecap="round"
         strokeLinejoin="round"
         fill="none"
@@ -110,25 +110,25 @@ function MarkdownChip({ size = 16, style }: AppGlyphProps) {
 
 /** 扩展名 → 图标渲染器(色值沿用旧 FILE_TONE_BY_EXT 的主题变量,观感延续)。 */
 const EXT_RENDERERS: Record<string, (props: AppGlyphProps) => React.ReactElement> = {
-  ts: (p) => <LangChip {...p} color="var(--accent-blue)" sigil="TS" fontSize={6.8} />,
-  tsx: (p) => <LangChip {...p} color="var(--accent-blue)" sigil="TS" fontSize={6.8} />,
-  js: (p) => <LangChip {...p} color="var(--accent-amber)" sigil="JS" fontSize={6.8} />,
-  jsx: (p) => <LangChip {...p} color="var(--accent-amber)" sigil="JS" fontSize={6.8} />,
-  mjs: (p) => <LangChip {...p} color="var(--accent-amber)" sigil="JS" fontSize={6.8} />,
-  cjs: (p) => <LangChip {...p} color="var(--accent-amber)" sigil="JS" fontSize={6.8} />,
-  json: (p) => <LangChip {...p} color="var(--accent-amber)" sigil="{}" fontSize={6.6} />,
-  html: (p) => <LangChip {...p} color="var(--accent-amber)" sigil="<>" fontSize={6.2} />,
-  htm: (p) => <LangChip {...p} color="var(--accent-amber)" sigil="<>" fontSize={6.2} />,
-  css: (p) => <LangChip {...p} color="var(--accent-purple)" sigil="#" fontSize={8.5} />,
-  scss: (p) => <LangChip {...p} color="var(--accent-purple)" sigil="#" fontSize={8.5} />,
-  less: (p) => <LangChip {...p} color="var(--accent-purple)" sigil="#" fontSize={8.5} />,
+  ts: (p) => <LangChip {...p} color="var(--accent-blue)" sigil="TS" fontSize={9} />,
+  tsx: (p) => <LangChip {...p} color="var(--accent-blue)" sigil="TS" fontSize={9} />,
+  js: (p) => <LangChip {...p} color="var(--accent-amber)" sigil="JS" fontSize={9} />,
+  jsx: (p) => <LangChip {...p} color="var(--accent-amber)" sigil="JS" fontSize={9} />,
+  mjs: (p) => <LangChip {...p} color="var(--accent-amber)" sigil="JS" fontSize={9} />,
+  cjs: (p) => <LangChip {...p} color="var(--accent-amber)" sigil="JS" fontSize={9} />,
+  json: (p) => <LangChip {...p} color="var(--accent-amber)" sigil="{}" fontSize={9} />,
+  html: (p) => <LangChip {...p} color="var(--accent-amber)" sigil="<>" fontSize={8.5} />,
+  htm: (p) => <LangChip {...p} color="var(--accent-amber)" sigil="<>" fontSize={8.5} />,
+  css: (p) => <LangChip {...p} color="var(--accent-purple)" sigil="#" fontSize={12} />,
+  scss: (p) => <LangChip {...p} color="var(--accent-purple)" sigil="#" fontSize={12} />,
+  less: (p) => <LangChip {...p} color="var(--accent-purple)" sigil="#" fontSize={12} />,
   md: (p) => <MarkdownChip {...p} />,
   markdown: (p) => <MarkdownChip {...p} />,
-  yml: (p) => <LangChip {...p} color="var(--accent-green)" sigil="Y" fontSize={8.5} />,
-  yaml: (p) => <LangChip {...p} color="var(--accent-green)" sigil="Y" fontSize={8.5} />,
-  py: (p) => <LangChip {...p} color="var(--accent-green)" sigil="PY" fontSize={6.8} />,
-  go: (p) => <LangChip {...p} color="var(--accent-cyan)" sigil="GO" fontSize={6.8} />,
-  rs: (p) => <LangChip {...p} color="var(--accent-red)" sigil="RS" fontSize={6.8} />,
+  yml: (p) => <LangChip {...p} color="var(--accent-green)" sigil="Y" fontSize={11} />,
+  yaml: (p) => <LangChip {...p} color="var(--accent-green)" sigil="Y" fontSize={11} />,
+  py: (p) => <LangChip {...p} color="var(--accent-green)" sigil="PY" fontSize={9} />,
+  go: (p) => <LangChip {...p} color="var(--accent-cyan)" sigil="GO" fontSize={9} />,
+  rs: (p) => <LangChip {...p} color="var(--accent-red)" sigil="RS" fontSize={9} />,
   java: (p) => <JavaChip {...p} />,
 }
 
