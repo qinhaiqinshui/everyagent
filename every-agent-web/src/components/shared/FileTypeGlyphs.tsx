@@ -212,7 +212,9 @@ export function FileTypeIcon({ fileName, size = 16, style }: {
 }) {
   const dotIndex = fileName.lastIndexOf('.')
   const ext = dotIndex >= 0 ? fileName.slice(dotIndex + 1).toLowerCase() : ''
-  const render = EXT_RENDERERS[ext]
+  // 按完整文件名特判:pom.xml 的身份在文件名而非扩展名(xml 泛型太宽)。
+  const nameRender = fileName.toLowerCase() === 'pom.xml' ? EXT_RENDERERS.pom : undefined
+  const render = nameRender ?? EXT_RENDERERS[ext]
   if (render) {
     return render({ size, style })
   }
