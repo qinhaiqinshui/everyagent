@@ -222,6 +222,7 @@ worker 端 `RpcDispatcher` 注册方法;应答回**请求来源连接**的 `evt`
 | `workspaces.list` / `workspaces.add` / `workspaces.remove` | 工作区注册表 CRUD(多工作区并行) |
 | `workspaces.resolveMissing` | 启动自检缺失工作区落定:action=delete(删除注册并级联任务数据)/redirect(纠正到新目录并迁移任务归属) |
 | `fs.list` / `fs.reveal` / `fs.read` / `fs.write` / `fs.mkdir` / `fs.move` / `fs.delete` / `fs.browse` | 工作区文件操作,**必带 workspace 参数**,沙箱限定;文件树懒加载；`fs.browse`(不经沙箱)列盘符/逐层浏览目录,可选 `includeFiles`(boolean,缺省 false 仅目录,完全兼容现有行为):true 时目录条目同时列出文件,每条目带 `kind:"file"\|"directory"`,响应带 `supportsFiles:true` 能力标记(前端能力探测;老前端不传/老 worker 不带按 must-ignore 双向兼容,§5.6) |
+| `fs.search` | 工作区文本内容搜索(内置 rg,§5.10),**必带 workspace 参数**,沙箱 jailed 到工作区根;入参 `pattern` / `isRegex` / `caseSensitive` / `wholeWord` / `includeGlobs` / `excludeGlobs`(逗号分隔 glob,include 用 `-g '!*' -g glob` 放行、exclude 用 `-g !glob`) / `maxResults`(默认 1000,触顶 kill rg 置 `truncated`);rg 参数 `--hidden --json --crlf -e <pattern>`(固定串加 `--fixed-strings`),逐行解析 JSON lines(`type:match` 的 `submatches` → 命中片段);结果项 `{path, lineNumber, line, matchIndex, matchText}`,按文件聚合;大结果复用 `fs.read` 的 `rpc.data` 分批 + 末帧 `ok` 汇总(§5.4);老前端不调用零影响,老 worker 无此方法时前端按 must-ignore 降级纯前端搜索(§5.6) |
 | `git.status` / `git.log` / `git.diff` / `git.commit` / `git.pull` / `git.push` / `git.discard` / `git.init` / `git.clone` / `git.remote.add` / `git.remote.list` | 工作区 git 快操作,必带 workspace;由 `NativeGit` 调宿主原生 git argv 直传执行(§7.12) |
 | 大型迁移(批量 checkout / 大仓库迁移) | 建为 Task,进度走任务流 |
 | `git.credential.save` | 保存 git 远端凭证(AES-GCM 加密落盘,§7.12;只写不读回) |
