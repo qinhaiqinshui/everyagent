@@ -559,14 +559,16 @@ const panelStyle: React.CSSProperties = {
 
 const selectAreaStyle: React.CSSProperties = {
   display: 'flex',
-  flexDirection: 'column',
+  flexDirection: 'row',
   gap: 6,
   padding: '10px 10px 0',
   flexShrink: 0,
 }
 
+/** worker 与工作区同行并排:各占一半(flex:1),minWidth:0 允许长名截断省略。 */
 const selectStyle: React.CSSProperties = {
-  width: '100%',
+  flex: 1,
+  width: 'auto',
   minWidth: 0,
   fontSize: 'var(--text-xs)',
 }
