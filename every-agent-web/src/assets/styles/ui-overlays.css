@@ -248,12 +248,15 @@
    同时清零 antd 默认的列尾 margin(4px) 并把列宽 24px 压到 14px:
    12px 的 SVG(viewBox 16)中 chevron 图形右侧自带 ~4px 透明区,
    压列宽后图标到名称的视觉间隙从 ~7px 收紧到 ~3px;
-   选择器用 .ws-tree.ant-tree 复合提升优先级,压过 antd 运行时注入的同名规则。 */
+   选择器用 .ws-tree.ant-tree 复合提升优先级,压过 antd 运行时注入的同名规则。
+   右 padding 4px 用于扩大折叠图标的点击热区(宽 18px = 14px 内容 + 4px padding)。 */
 .ws-tree.ant-tree .ant-tree-switcher {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 14px;
+  width: 18px;
+  padding-right: 4px;
+  box-sizing: border-box;
   margin-inline-end: 0;
 }
 
