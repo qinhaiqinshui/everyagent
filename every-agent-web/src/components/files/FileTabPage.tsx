@@ -13,6 +13,17 @@ import { domainEventBus, DOMAIN_EVENTS } from '@/events/eventBus'
 import { fileTabQueryService } from '@/query/fileTabQueryService'
 import { clearFileTabDirtyState, setFileTabDirtyState } from '@/services/fileDirtyStateRegistry'
 import { fileTabCommandService } from '@/services/fileTabCommandService'
+import { workspaceGateway, type WorkspaceFileStat } from '@/platform/fs/workspaceGateway'
+import { normalizeWorkspaceRelativePath } from '@/platform/fs/pathUtils'
+import PropertiesDialog, { type PropertyItem } from '../shared/PropertiesDialog'
+import {
+  countPlainTextChars,
+  countTotalChars,
+  formatPropertyBytes,
+  formatPropertyTime,
+  isMarkdownFileName,
+  joinWorkspaceDiskPath,
+} from './filePropertyUtils'
 import { pluginDispatcher } from '@/plugin/PluginDispatcher'
 import type { UiFileSidebarPanelDefinition } from '@/plugin/types'
 import type { FileTabOpenMode } from '@/types'
@@ -59,6 +70,13 @@ export default function FileTabPage({
   const [activeFileSidebarPanelId, setActiveFileSidebarPanelId] = React.useState<string | null>(null)
   const [editorHeaderActions, setEditorHeaderActions] = React.useState<FileContentHeaderAction[]>([])
   const [externalReloadRequestedAt, setExternalReloadRequestedAt] = React.useState(0)
+  /** 文件属性弹窗:true = 打开。属性数据异步 stat 获取(FileTabResource 不含 size/time)。 */
+  const [propertiesOpen, setPropertiesOpen] = React.useState(false)
+  const [fileStat, setFileStat] = React.useState<WorkspaceFileStat | null>(null)
+  /** 属性弹窗 .md 字符统计(实时读取文件后填充;null = 非 md 或尚未加载)。 */
+  const [propertyMdStats, setPropertyMdStats] = React.useState<{ totalChars: number; textChars: number } | null>(null)
+  /** md 字符统计实时读取防竞态:记录当前请求标识,过期响应丢弃。 */
+  const propertyMdKeyRef = React.useRef<string | null>(null)
   const fileNameInputRef = React.useRef<InputRef>(null)
   const savingRef = React.useRef(false)
   const justSavedRef = React.useRef(false)
@@ -388,6 +406,38 @@ export default function FileTabPage({
     setRefreshRevision((current) => current + 1)
   }, [file, isDirty, isFileNameDirty, showToast])
 
+  /** 打开文件属性弹窗：实时 stat 获取 size/时间；.md 文件实时读取内容统计字符。 */
+  const handleRequestProperties = React.useCallback(() => {
+    if (!file) return
+    setPropertiesOpen(true)
+    setFileStat(null)
+    setPropertyMdStats(null)
+    // 实时获取磁盘属性(FileTabResource 不含 size/时间;每次打开都重新 stat,不缓存)。
+    void workspaceGateway.stat(file.workspaceRoot, file.filePath)
+      .then((stat) => setFileStat(stat))
+      .catch(() => setFileStat(null))
+    // .md 文件实时读取磁盘内容计算字符统计(而非用已加载 content 快照,保证最新)。
+    if (isMarkdownFileName(file.fileName)) {
+      const key = `${file.workspaceRoot}|${file.filePath}`
+      propertyMdKeyRef.current = key
+      void workspaceGateway.readTextFile(file.workspaceRoot, file.filePath)
+        .then((text) => {
+          if (propertyMdKeyRef.current !== key) return
+          setPropertyMdStats({
+            totalChars: countTotalChars(text),
+            textChars: countPlainTextChars(text),
+          })
+        })
+        .catch(() => {
+          if (propertyMdKeyRef.current === key) {
+            setPropertyMdStats(null)
+          }
+        })
+    } else {
+      propertyMdKeyRef.current = null
+    }
+  }, [file])
+
   const handleEnableEditing = React.useCallback(() => {
     if (!file || openMode === 'readwrite') return
     setGlobalFileTabMode(file.id, 'readwrite')
@@ -437,6 +487,12 @@ export default function FileTabPage({
         onSelect: handleRefresh,
         disabled: loading || saving,
       },
+      {
+        key: 'properties',
+        label: '属性',
+        onSelect: handleRequestProperties,
+        disabled: !file,
+      },
     )
 
     for (const panel of availableFileSidebarPanels) {
@@ -456,6 +512,7 @@ export default function FileTabPage({
     file,
     handleEnableEditing,
     handleRefresh,
+    handleRequestProperties,
     isMobile,
     loading,
     requestWorkspaceFileLocate,
@@ -490,6 +547,12 @@ export default function FileTabPage({
         onSelect: handleRefresh,
         disabled: loading || saving,
       },
+      {
+        key: 'properties',
+        label: '属性',
+        onSelect: handleRequestProperties,
+        disabled: !file,
+      },
     ]
 
     for (const panel of availableFileSidebarPanels) {
@@ -501,7 +564,7 @@ export default function FileTabPage({
     }
 
     return items
-  }, [activeFileSidebarPanelId, availableFileSidebarPanels, file, handleRefresh, isMobile, loading, requestWorkspaceFileLocate, error, saving])
+  }, [activeFileSidebarPanelId, availableFileSidebarPanels, file, handleRefresh, handleRequestProperties, isMobile, loading, requestWorkspaceFileLocate, error, saving])
 
   if (!file) {
     return (
@@ -660,8 +723,56 @@ export default function FileTabPage({
           </div>
         ) : null}
       </div>
+      <PropertiesDialog
+        open={propertiesOpen}
+        title="属性"
+        name={file?.fileName}
+        items={file ? buildFileTabPropertyItems(file, fileStat, propertyMdStats) : []}
+        onClose={() => setPropertiesOpen(false)}
+      />
     </>
   )
+}
+
+/** 组装文件标签页属性条目：与文件树属性逻辑一致。md 文件额外显示字符统计。 */
+function buildFileTabPropertyItems(
+  file: FileTabResource,
+  stat: WorkspaceFileStat | null,
+  mdStats: { totalChars: number; textChars: number } | null,
+): PropertyItem[] {
+  const items: PropertyItem[] = [
+    { label: '文件名', value: file.fileName },
+    {
+      label: '大小',
+      value: stat ? formatPropertyBytes(stat.size) : '读取中…',
+    },
+    {
+      label: '相对路径',
+      value: normalizeWorkspaceRelativePath(file.filePath),
+    },
+    {
+      label: '完整路径',
+      value: joinWorkspaceDiskPath(file.workspaceRoot, file.filePath),
+    },
+    {
+      label: '创建时间',
+      value: stat ? formatPropertyTime(stat.createdTs) : '读取中…',
+    },
+    {
+      label: '编辑时间',
+      value: stat ? formatPropertyTime(stat.mtimeMs) : '读取中…',
+    },
+  ]
+  if (isMarkdownFileName(file.fileName)) {
+    if (mdStats) {
+      items.push({ label: '总字符数', value: String(mdStats.totalChars) })
+      items.push({ label: '纯文字字符', value: String(mdStats.textChars) })
+    } else {
+      items.push({ label: '总字符数', value: '读取中…' })
+      items.push({ label: '纯文字字符', value: '读取中…' })
+    }
+  }
+  return items
 }
 
 function normalizeFileNameDraft(value: string, currentFileName: string): string {
