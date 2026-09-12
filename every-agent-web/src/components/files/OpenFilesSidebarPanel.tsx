@@ -14,7 +14,7 @@ import {
   countTotalChars,
   formatPropertyBytes,
   formatPropertyTime,
-  isMarkdownFileName,
+  isTextFileName,
   joinWorkspaceDiskPath,
 } from './filePropertyUtils'
 import ConfirmDialog from '../shared/ConfirmDialog'
@@ -134,10 +134,10 @@ function WorkspaceGroupPanel({
   const [batchMoving, setBatchMoving] = React.useState(false)
   /** 属性弹窗:当前查看属性的节点目标;null = 关闭。 */
   const [propertiesTarget, setPropertiesTarget] = React.useState<WorkspaceExplorerContextTarget | null>(null)
-  /** 属性弹窗中 .md 文件的字符统计(异步读取后填充;null = 非 md 或尚未加载)。 */
-  const [propertiesMdStats, setPropertiesMdStats] = React.useState<{ totalChars: number; textChars: number } | null>(null)
-  /** md 字符统计异步读取防竞态:记录当前请求的路径标识,过期响应丢弃。 */
-  const mdStatsRequestKeyRef = React.useRef<string | null>(null)
+  /** 属性弹窗中文本文件的字符统计(异步读取后填充;null = 非文本文件或尚未加载)。 */
+  const [propertiesTextStats, setPropertiesTextStats] = React.useState<{ totalChars: number; textChars: number } | null>(null)
+  /** 文本文件字符统计异步读取防竞态:记录当前请求的路径标识,过期响应丢弃。 */
+  const textStatsRequestKeyRef = React.useRef<string | null>(null)
   /** 工作区属性弹窗:当前查看属性的工作区条目;null = 关闭。 */
   const [workspacePropertiesTarget, setWorkspacePropertiesTarget] = React.useState<WorkspaceEntry | null>(null)
 
@@ -666,29 +666,29 @@ function WorkspaceGroupPanel({
   /** 打开属性弹窗:用节点目标里携带的 size/mtime/createdTs 组装属性条目。 */
   const handleRequestProperties = React.useCallback((target: WorkspaceExplorerContextTarget) => {
     setPropertiesTarget(target)
-    // .md 文件额外读取内容统计字符数(总字符 / 纯文字字符);非 md 置空。
-    if (target.type === 'file' && isMarkdownFileName(target.name)) {
+    // 文本文件额外读取内容统计字符数(总字符 / 纯文字字符);非文本文件置空。
+    if (target.type === 'file' && isTextFileName(target.name)) {
       const requestKey = `${target.workspaceRoot}|${target.path}`
-      mdStatsRequestKeyRef.current = requestKey
-      setPropertiesMdStats(null)
+      textStatsRequestKeyRef.current = requestKey
+      setPropertiesTextStats(null)
       const relPath = normalizeWorkspaceRelativePath(target.path)
       void workspaceGateway.readTextFile(target.workspaceRoot, relPath)
         .then((content) => {
           // 过期响应丢弃:用户已切换查看其它节点。
-          if (mdStatsRequestKeyRef.current !== requestKey) return
-          setPropertiesMdStats({
+          if (textStatsRequestKeyRef.current !== requestKey) return
+          setPropertiesTextStats({
             totalChars: countTotalChars(content),
             textChars: countPlainTextChars(content),
           })
         })
         .catch(() => {
-          if (mdStatsRequestKeyRef.current === requestKey) {
-            setPropertiesMdStats(null)
+          if (textStatsRequestKeyRef.current === requestKey) {
+            setPropertiesTextStats(null)
           }
         })
     } else {
-      mdStatsRequestKeyRef.current = null
-      setPropertiesMdStats(null)
+      textStatsRequestKeyRef.current = null
+      setPropertiesTextStats(null)
     }
   }, [])
 
@@ -1103,7 +1103,7 @@ function WorkspaceGroupPanel({
         open={Boolean(propertiesTarget)}
         title="属性"
         name={propertiesTarget?.name}
-        items={propertiesTarget ? buildPropertyItems(propertiesTarget, propertiesMdStats) : []}
+        items={propertiesTarget ? buildPropertyItems(propertiesTarget, propertiesTextStats) : []}
         onClose={() => setPropertiesTarget(null)}
       />
       <PropertiesDialog
@@ -1177,11 +1177,11 @@ function getDeleteDialogTitle(target: WorkspaceExplorerContextTarget | null): st
 /**
  * 组装属性弹窗条目：
  * - 通用:文件名/目录名、相对工作区根的相对路径、磁盘完整路径、创建/编辑时间;
- * - 文件额外显示大小;.md 文件额外显示字符统计(mdStats)。
+ * - 文件额外显示大小;文本文件额外显示字符统计(textStats)。
  */
 function buildPropertyItems(
   target: WorkspaceExplorerContextTarget,
-  mdStats: { totalChars: number; textChars: number } | null,
+  textStats: { totalChars: number; textChars: number } | null,
 ): PropertyItem[] {
   const items: PropertyItem[] = []
   items.push({
@@ -1211,15 +1211,15 @@ function buildPropertyItems(
     label: '编辑时间',
     value: formatPropertyTime(target.mtimeMs ?? 0),
   })
-  if (target.type === 'file' && isMarkdownFileName(target.name)) {
-    if (mdStats) {
+  if (target.type === 'file' && isTextFileName(target.name)) {
+    if (textStats) {
       items.push({
         label: '总字符数',
-        value: String(mdStats.totalChars),
+        value: String(textStats.totalChars),
       })
       items.push({
         label: '纯文字字符',
-        value: String(mdStats.textChars),
+        value: String(textStats.textChars),
       })
     } else {
       items.push({
