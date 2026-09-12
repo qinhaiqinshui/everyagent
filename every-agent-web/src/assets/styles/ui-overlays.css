@@ -212,6 +212,20 @@
   align-items: center;
 }
 
+/* 文件树：行 hover/选中高亮统一为项目灰调(与 ui-list-row 的 bg-hover/bg-active 一致)，
+   替代 antd 默认的淡蓝选中底(controlItemBgActive / colorPrimaryBgHover)。
+   双击/单击选中后不再是突兀的品牌蓝底色，而是与任务列表等一致的柔和选中态。 */
+.ws-tree.ant-tree .ant-tree-node-content-wrapper:hover {
+  background-color: var(--bg-hover);
+}
+.ws-tree.ant-tree .ant-tree-node-content-wrapper.ant-tree-node-selected {
+  color: var(--text-primary);
+  background-color: var(--bg-active);
+}
+.ws-tree.ant-tree .ant-tree-node-content-wrapper.ant-tree-node-selected:hover {
+  background-color: var(--bg-active);
+}
+
 /* 文件树:switcher(展开/收起图标)独占一列,容器改 flex 居中。
    antd 默认只用 text-align:center(水平)+ 无垂直居中,SVG 作为 inline element
    与文字 baseline 对齐 → 视觉贴底。改为 flex 容器后 SVG 真正水平+垂直居中。
