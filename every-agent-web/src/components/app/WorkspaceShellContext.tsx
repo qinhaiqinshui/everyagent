@@ -90,6 +90,17 @@ export interface WorkspaceShellActions {
     /** 标签标题（缺省为「变更对比：${fileName}」）。 */
     title?: string
   }) => string
+  /** 打开顶级 Git 历史标签（按路径展示提交历史列表）。 */
+  openGitHistoryTab: (input: {
+    /** 所属工作区根(worker 机器绝对路径)。 */
+    workspaceRoot: string
+    /** 历史目标路径(工作区相对路径,空串 = 仓库级历史)。 */
+    path: string
+    /** 目标名称(文件名/目录名/「工作区」)。 */
+    name: string
+    /** 标签标题(缺省为「Git 历史：${name}」)。 */
+    title?: string
+  }) => string
 }
 
 type WorkspaceShellContextValue = WorkspaceShellState & WorkspaceShellActions

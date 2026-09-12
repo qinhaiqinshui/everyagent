@@ -80,9 +80,18 @@ public class GitService {
     private void log(RpcContext ctx) throws IOException {
         int max = (int) Math.min(ctx.optLongParam("max", 50), LOG_MAX);
         Sandbox sb = sandbox(ctx);
-        NativeResult r = git.runRead(sb.root(), List.of(
+        List<String> args = new ArrayList<>(List.of(
                 "log", "-n", String.valueOf(max), "-z",
-                "--format=%H%x1f%h%x1f%an%x1f%ae%x1f%ct%x1f%s"), CredentialSpec.none());
+                "--format=%H%x1f%h%x1f%an%x1f%ae%x1f%ct%x1f%s"));
+        // 可选 path:只返回影响该路径的提交(git log -- <path>,文件级历史/目录历史)。
+        // 用 resolveLoose 校验沙箱不越界——历史路径可能已删除,不要求文件真实存在。
+        String path = ctx.optStrParam("path", null);
+        if (path != null && !path.isEmpty()) {
+            sb.resolveLoose(path);
+            args.add("--");
+            args.add(path);
+        }
+        NativeResult r = git.runRead(sb.root(), args, CredentialSpec.none());
         if (r.exitCode() != 0) {
             if (NativeGit.isNotRepo(r)) {
                 throw new NotFoundException("工作区不是 git 仓库");

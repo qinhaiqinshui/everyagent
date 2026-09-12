@@ -91,8 +91,8 @@ export const gitGateway = {
     }
   },
 
-  /** 读取提交历史。 */
-  async log(workspace: string, max = 30): Promise<Array<{
+  /** 读取提交历史(可带 path 过滤为仅影响该文件/目录的提交)。 */
+  async log(workspace: string, max = 30, path?: string): Promise<Array<{
     id: string
     shortId: string
     author: string
@@ -101,7 +101,11 @@ export const gitGateway = {
     message: string
   }>> {
     try {
-      const result = await rpcForWorkspace(workspace, 'git.log', { workspace, max }) as { commits?: unknown[] }
+      const result = await rpcForWorkspace(workspace, 'git.log', {
+        workspace,
+        max,
+        ...(path ? { path } : {}),
+      }) as { commits?: unknown[] }
       return (result.commits ?? []) as never
     } catch (err) {
       normalizeError(err)

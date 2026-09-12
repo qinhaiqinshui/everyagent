@@ -9,12 +9,14 @@ import type { WorkspaceTab } from '@/types'
 import type { UiWorkspaceTabTypeDefinition } from './types'
 import { fileTabType } from '@/components/files/fileTabType'
 import { diffTabType } from '@/components/files/FileDiffTabType'
+import { gitHistoryTabType } from '@/components/files/GitHistoryTabType'
 import { taskChatTabType } from '@/components/task/taskChatTabType'
 import { pageTabTypes } from '@/components/system/pageTabTypes'
 
 const cachedDefinitions: UiWorkspaceTabTypeDefinition[] = [
   fileTabType,
   diffTabType,
+  gitHistoryTabType,
   taskChatTabType,
   ...pageTabTypes,
 ]

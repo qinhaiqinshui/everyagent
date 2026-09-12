@@ -880,6 +880,22 @@ export interface WorkspaceDiffTab {
   afterContent: string
 }
 
+/** 顶级 Git 历史标签（git-history）：按路径展示提交历史列表。 */
+export interface WorkspaceGitHistoryTab {
+  /** 标签 ID，形如 `git-history:${path}:${workspaceRoot}`。 */
+  id: `git-history:${string}`
+  /** 标签类型常量。 */
+  tabType: 'git-history'
+  /** 所属工作区根(worker 机器绝对路径;git log 落对应工作区)。 */
+  workspaceRoot: string
+  /** 历史目标路径(工作区相对路径,空串 = 仓库级历史)。 */
+  path: string
+  /** 目标名称(文件名/目录名/「工作区」)。 */
+  name: string
+  /** 标签标题。 */
+  title: string
+}
+
 /** 统一顶层工作区标签。 */
 export type WorkspaceTab =
   | WorkspacePageTab
@@ -888,6 +904,7 @@ export type WorkspaceTab =
   | WorkspaceTaskChatTab
   | WorkspacePluginTab
   | WorkspaceDiffTab
+  | WorkspaceGitHistoryTab
 
 /** 打开工作区文件选项。 */
 export interface OpenWorkspaceFileOptions {
