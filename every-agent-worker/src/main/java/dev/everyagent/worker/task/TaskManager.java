@@ -412,14 +412,14 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
         long waitMs = Math.max(0, ctx.optLongParam("waitMs", 0));
         int limit = (int) Math.max(1, Math.min(500, ctx.optLongParam("limit", 200)));
         int count = (int) Math.max(1, ctx.optLongParam("count", 1));
-        Path dir = store.dirOf(taskId);
         // 存在性:目录在盘 或 内存任务/磁盘索引可见任一即存在(热任务 track 前目录可能未建,
         // 终态 finish 窗口内 tasks 仍驻留;三者全缺才算不存在/已删)
-        boolean known = Files.isDirectory(dir) || tasks.containsKey(taskId) || diskTasks.containsKey(taskId);
+        boolean known = store.taskDirExists(taskId) || tasks.containsKey(taskId) || diskTasks.containsKey(taskId);
         if (!known) {
             ctx.err(Rpc.ERR_NOT_FOUND, "task 不存在: " + taskId);
             return;
         }
+        Path dir = store.dirOf(taskId); // known → 已登记或已 scan,dirOf 不抛
         TaskEntry live = tasks.get(taskId);
         ObjectNode meta = live == null ? store.readMeta(dir) : null;
         String mainAgentId = live != null ? live.mainAgentId
@@ -598,13 +598,13 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
      */
     private void rpcTaskRounds(RpcContext ctx) {
         String taskId = ctx.strParam("taskId");
-        Path dir = store.dirOf(taskId);
         // 存在性:与 task.poll 同口径(目录在盘 或 内存任务/磁盘索引可见任一即存在)
-        boolean known = Files.isDirectory(dir) || tasks.containsKey(taskId) || diskTasks.containsKey(taskId);
+        boolean known = store.taskDirExists(taskId) || tasks.containsKey(taskId) || diskTasks.containsKey(taskId);
         if (!known) {
             ctx.err(Rpc.ERR_NOT_FOUND, "task 不存在: " + taskId);
             return;
         }
+        Path dir = store.dirOf(taskId); // known → 已登记或已 scan,dirOf 不抛
         TaskEntry live = tasks.get(taskId);
         ObjectNode meta = live == null ? store.readMeta(dir) : null;
         String mainAgentId = live != null ? live.mainAgentId
@@ -645,8 +645,7 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
     private void rpcTaskFileChanges(RpcContext ctx) {
         String taskId = ctx.strParam("taskId");
         String roundId = ctx.strParam("roundId");
-        Path dir = store.dirOf(taskId);
-        boolean known = Files.isDirectory(dir) || tasks.containsKey(taskId) || diskTasks.containsKey(taskId);
+        boolean known = store.taskDirExists(taskId) || tasks.containsKey(taskId) || diskTasks.containsKey(taskId);
         if (!known) {
             ctx.err(Rpc.ERR_NOT_FOUND, "task 不存在: " + taskId);
             return;
@@ -682,13 +681,13 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
             return;
         }
         int limit = (int) Math.max(1, Math.min(500, ctx.optLongParam("limit", 50)));
-        Path dir = store.dirOf(taskId);
         // 存在性:与 task.poll / task.rounds 同口径(目录在盘 或 内存任务/磁盘索引可见任一即存在)
-        boolean known = Files.isDirectory(dir) || tasks.containsKey(taskId) || diskTasks.containsKey(taskId);
+        boolean known = store.taskDirExists(taskId) || tasks.containsKey(taskId) || diskTasks.containsKey(taskId);
         if (!known) {
             ctx.err(Rpc.ERR_NOT_FOUND, "task 不存在: " + taskId);
             return;
         }
+        Path dir = store.dirOf(taskId); // known → 已登记或已 scan,dirOf 不抛
         TaskEntry live = tasks.get(taskId);
         ObjectNode meta = live == null ? store.readMeta(dir) : null;
         String mainAgentId = live != null ? live.mainAgentId
@@ -1221,6 +1220,7 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
             return DeleteResult.NOT_FOUND;
         }
         store.delete(st.dir());
+        store.forgetTask(taskId); // 忘记 workspaceId 映射(幂等:已删除/未登记均无害)
         pool.pubAllTasks(Events.TASK_DELETED, null,
                 Json.obj().put("taskId", taskId), null);
         return DeleteResult.OK;

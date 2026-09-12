@@ -574,8 +574,7 @@ public class TaskStore {
      * 任务目录绝对路径(由 taskWorkspace 映射反查 workspaceId)。
      * 运行中(track 已登记)与磁盘任务(scan 已回填)均可用;未登记时懒发现:
      * 遍历 workspaces/&lt;wsId&gt;/tasks/ 找含该 taskId 的目录并登记(测试/手工建目录场景),
-     * 仍找不到返回不可能存在的占位路径,调用方按 Files.isDirectory 判空即可
-     * (DataPusherManager 等"存在性检查"语义),不会抛异常。
+     * 仍找不到抛 IllegalStateException(fail-fast,避免写路径静默落脏目录)。
      */
     public Path dirOf(String taskId) {
         String workspaceId = taskWorkspace.get(taskId);
@@ -585,9 +584,24 @@ public class TaskStore {
                 taskWorkspace.put(taskId, workspaceId);
                 return dirOf(taskId, workspaceId);
             }
-            return props.resolveWorkspacesDir().resolve("__unknown__").resolve(taskId);
+            throw new IllegalStateException(
+                    "任务未登记 workspaceId 且磁盘未发现对应目录,无法定位: " + taskId);
         }
         return dirOf(taskId, workspaceId);
+    }
+
+    /** 任务目录是否存在(映射/懒发现后判定;未知任务/别的 worker 任务返回 false,不抛异常)。 */
+    public boolean taskDirExists(String taskId) {
+        try {
+            return Files.isDirectory(dirOf(taskId));
+        } catch (IllegalStateException e) {
+            return false;
+        }
+    }
+
+    /** 忘掉已删除任务的 workspaceId 映射(单任务删除后调用;运行中任务不适用)。 */
+    public void forgetTask(String taskId) {
+        taskWorkspace.remove(taskId);
     }
 
     /** 懒发现:遍历 workspaces/&lt;wsId&gt;/tasks/ 找含该 taskId 的目录;未找到返回 null。 */
@@ -609,16 +623,6 @@ public class TaskStore {
             log.debug("工作区目录扫描失败(懒发现 task={}): {}", taskId, e.getMessage());
         }
         return null;
-    }
-
-    /** 递归删除某工作区的任务根目录 workspaces/&lt;workspaceId&gt;/tasks(幂等;workspaces.remove 级联共用)。 */
-    public void deleteWorkspaceTasks(String workspaceId) {
-        try {
-            deleteRecursively(props.resolveWorkspacesDir().resolve(workspaceId).resolve("tasks"));
-        } catch (IOException e) {
-            log.warn("工作区任务目录删除失败 workspaceId={}", workspaceId, e);
-        }
-        taskWorkspace.entrySet().removeIf(e -> e.getValue().equals(workspaceId));
     }
 
     // ---- 轮次索引 rounds.jsonl(与 meta.json、<agentId>.jsonl 同级;seq 一律字符串防 JS 精度)----
@@ -757,7 +761,7 @@ public class TaskStore {
             Files.createDirectories(sub);
             Path f = sub.resolve(roundId + ".json");
             Files.writeString(f, Json.write(fullContent), StandardCharsets.UTF_8);
-        } catch (IOException e) {
+        } catch (IOException | RuntimeException e) {
             log.warn("轮次文件变更全文写盘失败 task={} round={}(不影响任务运行)", taskId, roundId, e);
         }
     }
@@ -769,11 +773,11 @@ public class TaskStore {
         if (roundId == null || roundId.isBlank()) {
             return null;
         }
-        Path f = dirOf(taskId).resolve("file-changes").resolve(roundId + ".json");
-        if (!Files.isRegularFile(f)) {
-            return null;
-        }
         try {
+            Path f = dirOf(taskId).resolve("file-changes").resolve(roundId + ".json");
+            if (!Files.isRegularFile(f)) {
+                return null;
+            }
             return Json.parse(Files.readString(f, StandardCharsets.UTF_8));
         } catch (IOException | RuntimeException e) {
             log.warn("轮次文件变更全文读取失败 task={} round={}", taskId, roundId, e);

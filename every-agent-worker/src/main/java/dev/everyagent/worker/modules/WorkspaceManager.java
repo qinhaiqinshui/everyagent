@@ -513,27 +513,34 @@ public class WorkspaceManager {
         broadcastRegistry();
     }
 
-    /** 删除工作区任务根目录 workspaces/&lt;wsId&gt;/(仅含任务数据,不属用户目录);幂等,缺失忽略。 */
+    /**
+     * 清理工作区任务根目录 workspaces/&lt;wsId&gt;/ 中<b>已无任务数据的空目录结构</b>。
+     * 运行中任务目录非空(meta.json/jsonl)必然保留——与级联删除「运行中任务跳过」语义一致,
+     * 绝不误删用户数据;空 tasks/ 与快照目录一并清除。幂等,缺失忽略。
+     */
     private void deleteWorkspaceDir(String workspaceId) {
         try {
-            deleteRecursively(workspacesDir(workspaceId));
+            deleteEmptyOnly(workspacesDir(workspaceId));
         } catch (IOException e) {
-            log.warn("工作区任务目录删除失败 workspaces/{} (任务目录已由级联删除处理)", workspaceId, e);
+            log.warn("工作区任务目录清理失败 workspaces/{} (运行中任务目录保留)", workspaceId, e);
         }
     }
 
-    private static void deleteRecursively(Path p) throws IOException {
-        if (!Files.exists(p)) {
+    /** 自底向上删除<b>空目录树</b>:任何非空目录(含任务数据/运行中任务)原样保留,只清空结构。 */
+    private static void deleteEmptyOnly(Path dir) throws IOException {
+        if (!Files.isDirectory(dir)) {
             return;
         }
-        if (Files.isDirectory(p)) {
-            try (DirectoryStream<Path> ds = Files.newDirectoryStream(p)) {
-                for (Path c : ds) {
-                    deleteRecursively(c);
-                }
+        try (DirectoryStream<Path> ds = Files.newDirectoryStream(dir)) {
+            for (Path c : ds) {
+                deleteEmptyOnly(c);
             }
         }
-        Files.deleteIfExists(p);
+        try {
+            Files.deleteIfExists(dir);
+        } catch (java.nio.file.DirectoryNotEmptyException e) {
+            // 非空(运行中任务等):原样保留
+        }
     }
 
     /** workspaces.list 应答与 workspaces.changed 广播共用的注册表快照。 */

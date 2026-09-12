@@ -12,7 +12,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.JsonNode;
 
-import java.nio.file.Files;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -90,7 +89,7 @@ public class DataPusherManager implements HubPool.Listener, TaskManager.TaskResu
         String key = sessionId + "|" + taskId;
         if (Frames.SUBSCRIBER_JOIN.equals(event)) {
             // 校验 taskId 属于本 worker:内存运行中或磁盘目录存在(否则可能是别的 worker 的任务)
-            if (tasks.get(taskId) == null && !Files.isDirectory(store.dirOf(taskId))) {
+            if (tasks.get(taskId) == null && !store.taskDirExists(taskId)) {
                 log.debug("忽略非本 worker 任务的订阅通知 channel={}", channel);
                 return;
             }
@@ -144,7 +143,7 @@ public class DataPusherManager implements HubPool.Listener, TaskManager.TaskResu
         if (sessionId.isEmpty() || taskId.isEmpty()) {
             return;
         }
-        if (tasks.get(taskId) == null && !Files.isDirectory(store.dirOf(taskId))) {
+        if (tasks.get(taskId) == null && !store.taskDirExists(taskId)) {
             log.debug("忽略非本 worker 任务的任务输入通知 task={}", taskId);
             return;
         }

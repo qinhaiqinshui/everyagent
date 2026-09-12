@@ -88,23 +88,12 @@ public final class LegacyLayoutMigrator {
     private void run() throws IOException, InterruptedException {
         System.out.println("[migrate] 系统目录: " + home);
 
-        // 幂等:新注册表已存在且旧任务目录不存在 → 已迁移过。
-        Path newRegistry = workspacesDir.resolve(REGISTRY_NAME);
-        Path oldTasks = dataDir.resolve("tasks");
-        if (Files.isRegularFile(newRegistry) && !Files.isDirectory(oldTasks)) {
-            System.out.println("[migrate] 已迁移(workspaces.json 已存在且旧 data/tasks 不存在),跳过");
-            return;
-        }
-
         // 1) 默认工作区改名 workspace → defaultworkspace。
         renameDefaultWorkspace();
 
         // 2) 载入旧注册表并分配 id。
         List<Entry> entries = loadOldRegistry();
-        if (entries.isEmpty() && !Files.isDirectory(oldTasks)) {
-            System.out.println("[migrate] 无旧注册表且无旧任务目录,无需迁移");
-            return;
-        }
+        Path oldTasks = dataDir.resolve("tasks");
 
         // 3) 迁移任务目录(按 meta.workspace 映射到 workspaceId)。
         migrateTasks(entries);
@@ -122,7 +111,13 @@ public final class LegacyLayoutMigrator {
         cleanLegacyData();
         cleanLegacyWsl();
 
-        System.out.println("[migrate] 迁移完成。重启 worker 生效(托管发行版将由 autoImport 重建到 sandbox/distro)");
+        // 不设整体短路:任一步骤中断后重跑仍按顺序补齐(每步自身幂等),
+        // 避免「新注册表已写、后续清理未完成」时被跳过。
+        if (entries.isEmpty() && !Files.isDirectory(oldTasks)) {
+            System.out.println("[migrate] 无旧注册表且无旧任务目录(可能已迁移),跳过");
+        } else {
+            System.out.println("[migrate] 迁移完成。重启 worker 生效(托管发行版将由 autoImport 重建到 sandbox/distro)");
+        }
     }
 
     private void renameDefaultWorkspace() throws IOException {
