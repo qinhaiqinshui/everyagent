@@ -230,6 +230,8 @@ export default function TaskComposerSurface({
   const editorRef = React.useRef<InlineComposerHandle | null>(null)
   const editorTextRef = React.useRef(draft.text)
   const editorCaretRef = React.useRef(0)
+  /** 打开「工作区外文件/文件夹」选择框前记录的光标偏移（删除 @query 后的位置）。 */
+  const externalInsertOffsetRef = React.useRef(0)
   const [slashOpen, setSlashOpen] = React.useState(false)
   const [slashQuery, setSlashQuery] = React.useState('')
   const [slashActiveIndex, setSlashActiveIndex] = React.useState(0)
@@ -456,6 +458,10 @@ export default function TaskComposerSurface({
    */
   const openExternalFilePicker = React.useCallback(() => {
     editorRef.current?.insertText('', atQuery.length + 1)
+    // 记录删除 @query 后的光标偏移：外部选择框是模态框，打开后输入框会失焦，
+    // 回填时 window.getSelection() 不再可靠（重新聚焦可能把光标丢到内容开头），
+    // 需用该偏移通过 insertTokenAtOffset 精确定位，避免胶囊跑到所有文字前面。
+    externalInsertOffsetRef.current = editorCaretRef.current
     setAtOpen(false)
     setAtBrowse(null)
     setAtQuery('')
@@ -464,10 +470,10 @@ export default function TaskComposerSurface({
     setExternalPickerOpen(true)
   }, [atQuery])
 
-  /** 选中外部文件/目录:构造外部引用 token 在光标处插入(不删字符),聚焦编辑器并关闭选择框。 */
+  /** 选中外部文件/目录:构造外部引用 token 在记录的偏移处插入(不删字符),聚焦编辑器并关闭选择框。 */
   const handleExternalFilePick = React.useCallback((entry: ExternalFileEntry) => {
     const externalToken = buildExternalFileToken(entry)
-    editorRef.current?.insertToken(externalToken, 0)
+    editorRef.current?.insertTokenAtOffset(externalToken, externalInsertOffsetRef.current)
     editorRef.current?.focus()
     setExternalPickerOpen(false)
   }, [])
