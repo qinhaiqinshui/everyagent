@@ -7,6 +7,7 @@ import { findExplorerNode, upsertExplorerChildren } from '@/query/workspaceExplo
 import { workspaceRegistry, workspaceActivity, type WorkspaceEntry } from '@/hub/workspaceRegistry'
 import { antdConfirm } from '@/utils/appAntdBridge'
 import { normalizeWorkspaceRelativePath, toBusinessAbsolutePath } from '@/platform/fs/pathUtils'
+import { workspaceGateway } from '@/platform/fs/workspaceGateway'
 import { workspaceExplorerCommandService } from '@/services/workspaceExplorerCommandService'
 import ConfirmDialog from '../shared/ConfirmDialog'
 import PropertiesDialog, { type PropertyItem } from '../shared/PropertiesDialog'
@@ -125,6 +126,10 @@ function WorkspaceGroupPanel({
   const [batchMoving, setBatchMoving] = React.useState(false)
   /** 属性弹窗:当前查看属性的节点目标;null = 关闭。 */
   const [propertiesTarget, setPropertiesTarget] = React.useState<WorkspaceExplorerContextTarget | null>(null)
+  /** 属性弹窗中 .md 文件的字符统计(异步读取后填充;null = 非 md 或尚未加载)。 */
+  const [propertiesMdStats, setPropertiesMdStats] = React.useState<{ totalChars: number; textChars: number } | null>(null)
+  /** md 字符统计异步读取防竞态:记录当前请求的路径标识,过期响应丢弃。 */
+  const mdStatsRequestKeyRef = React.useRef<string | null>(null)
   /** 工作区属性弹窗:当前查看属性的工作区条目;null = 关闭。 */
   const [workspacePropertiesTarget, setWorkspacePropertiesTarget] = React.useState<WorkspaceEntry | null>(null)
 
@@ -653,6 +658,30 @@ function WorkspaceGroupPanel({
   /** 打开属性弹窗:用节点目标里携带的 size/mtime/createdTs 组装属性条目。 */
   const handleRequestProperties = React.useCallback((target: WorkspaceExplorerContextTarget) => {
     setPropertiesTarget(target)
+    // .md 文件额外读取内容统计字符数(总字符 / 纯文字字符);非 md 置空。
+    if (target.type === 'file' && isMarkdownFileName(target.name)) {
+      const requestKey = `${target.workspaceRoot}|${target.path}`
+      mdStatsRequestKeyRef.current = requestKey
+      setPropertiesMdStats(null)
+      const relPath = normalizeWorkspaceRelativePath(target.path)
+      void workspaceGateway.readTextFile(target.workspaceRoot, relPath)
+        .then((content) => {
+          // 过期响应丢弃:用户已切换查看其它节点。
+          if (mdStatsRequestKeyRef.current !== requestKey) return
+          setPropertiesMdStats({
+            totalChars: countTotalChars(content),
+            textChars: countPlainTextChars(content),
+          })
+        })
+        .catch(() => {
+          if (mdStatsRequestKeyRef.current === requestKey) {
+            setPropertiesMdStats(null)
+          }
+        })
+    } else {
+      mdStatsRequestKeyRef.current = null
+      setPropertiesMdStats(null)
+    }
   }, [])
 
   const getFileActionItems = React.useCallback((target: WorkspaceExplorerContextTarget): ListRowActionItem[] => {
@@ -1066,7 +1095,7 @@ function WorkspaceGroupPanel({
         open={Boolean(propertiesTarget)}
         title="属性"
         name={propertiesTarget?.name}
-        items={propertiesTarget ? buildPropertyItems(propertiesTarget) : []}
+        items={propertiesTarget ? buildPropertyItems(propertiesTarget, propertiesMdStats) : []}
         onClose={() => setPropertiesTarget(null)}
       />
       <PropertiesDialog
@@ -1137,8 +1166,15 @@ function getDeleteDialogTitle(target: WorkspaceExplorerContextTarget | null): st
   return target?.type === 'directory' ? '删除文件夹' : '删除文件'
 }
 
-/** 组装属性弹窗条目:文件显示 文件名/大小/创建时间/编辑时间;目录只显示 目录名/创建时间/编辑时间。 */
-function buildPropertyItems(target: WorkspaceExplorerContextTarget): PropertyItem[] {
+/**
+ * 组装属性弹窗条目：
+ * - 通用:文件名/目录名、相对工作区根的相对路径、磁盘完整路径、创建/编辑时间;
+ * - 文件额外显示大小;.md 文件额外显示字符统计(mdStats)。
+ */
+function buildPropertyItems(
+  target: WorkspaceExplorerContextTarget,
+  mdStats: { totalChars: number; textChars: number } | null,
+): PropertyItem[] {
   const items: PropertyItem[] = []
   items.push({
     label: target.type === 'directory' ? '目录名' : '文件名',
@@ -1150,6 +1186,15 @@ function buildPropertyItems(target: WorkspaceExplorerContextTarget): PropertyIte
       value: formatPropertyBytes(target.size ?? 0),
     })
   }
+  // 相对工作区根目录的相对路径:node.path 带前导 '/',去掉即工作区相对形态。
+  items.push({
+    label: '相对路径',
+    value: normalizeWorkspaceRelativePath(target.path),
+  })
+  items.push({
+    label: '完整路径',
+    value: joinWorkspaceDiskPath(target.workspaceRoot, target.path),
+  })
   items.push({
     label: '创建时间',
     value: formatPropertyTime(target.createdTs ?? 0),
@@ -1158,6 +1203,27 @@ function buildPropertyItems(target: WorkspaceExplorerContextTarget): PropertyIte
     label: '编辑时间',
     value: formatPropertyTime(target.mtimeMs ?? 0),
   })
+  if (target.type === 'file' && isMarkdownFileName(target.name)) {
+    if (mdStats) {
+      items.push({
+        label: '总字符数',
+        value: String(mdStats.totalChars),
+      })
+      items.push({
+        label: '纯文字字符',
+        value: String(mdStats.textChars),
+      })
+    } else {
+      items.push({
+        label: '总字符数',
+        value: '读取中…',
+      })
+      items.push({
+        label: '纯文字字符',
+        value: '读取中…',
+      })
+    }
+  }
   return items
 }
 
@@ -1190,6 +1256,32 @@ function formatPropertyTime(value: number): string {
   const hours = pad(date.getHours())
   const minutes = pad(date.getMinutes())
   return `${year}-${month}-${day} ${hours}:${minutes}`
+}
+
+/** 是否 .md 文件(大小写不敏感)。 */
+function isMarkdownFileName(name: string): boolean {
+  return /\.md$/i.test(name)
+}
+
+/** 拼接工作区磁盘完整路径:根 + 工作区相对路径(去掉业务路径前导 '/')。 */
+function joinWorkspaceDiskPath(workspaceRoot: string, path: string): string {
+  const root = workspaceRoot.replace(/[\\/]+$/, '')
+  const rel = normalizeWorkspaceRelativePath(path)
+  return rel ? `${root}/${rel}` : root
+}
+
+/** 内容总字符数(含符号/空白/换行等一切字符)。 */
+function countTotalChars(content: string): number {
+  return content.length
+}
+
+/**
+ * 纯文字字符数:去掉空白符、标点/符号类 Unicode 字符后剩余的字符数。
+ * 以 Unicode 属性 \p{P}(标点) 与 \p{S}(符号) 表达「符号」,辅以 \s 空白;
+ * 保留文字本身(中英文、数字等)。emoji 属 \p{S}(符号),不计入纯文字。
+ */
+function countPlainTextChars(content: string): number {
+  return content.replace(/[\s\p{P}\p{S}]/gu, '').length
 }
 
 /** 删除确认弹窗副标题。 */
