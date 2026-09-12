@@ -77,7 +77,7 @@ public final class TaskEvents {
         p.put("startSeq", String.valueOf(startSeq));
         p.put("user", user == null ? "" : user);
         ObjectNode ext = Json.obj().put("persist", false);
-        return log.append(Events.ROUND_OPENED, p, mainAgentId, ext).seq();
+        return log.append(Events.ROUND_OPENED, p, mainAgentId, ext, true).seq();
     }
 
     /**
@@ -90,21 +90,21 @@ public final class TaskEvents {
         p.put("endSeq", String.valueOf(endSeq));
         p.put("finalReply", finalReply == null ? "" : finalReply);
         ObjectNode ext = Json.obj().put("persist", false);
-        return log.append(Events.ROUND_CLOSED, p, mainAgentId, ext).seq();
+        return log.append(Events.ROUND_CLOSED, p, mainAgentId, ext, true).seq();
     }
 
     /** 正文流(瞬态,不落盘;主/子同名,agentId 决定归属;同轮共享轮 seq)。 */
     public long delta(String agentId, String text) {
         ObjectNode p = Json.obj();
         p.put("text", text);
-        return log.append(roundSeq(agentId), Events.DELTA, p, agentId, null).seq();
+        return log.append(roundSeq(agentId), Events.DELTA, p, agentId, null, true).seq();
     }
 
     /** 思考流(瞬态,不落盘;主/子同名;同轮共享轮 seq)。 */
     public long thinking(String agentId, String text) {
         ObjectNode p = Json.obj();
         p.put("text", text);
-        return log.append(roundSeq(agentId), Events.THINKING, p, agentId, null).seq();
+        return log.append(roundSeq(agentId), Events.THINKING, p, agentId, null, true).seq();
     }
 
     /** 完成一轮:完整思考 + 正文 + 工具调用下发(真实 id)。落盘的权威记录(主/子同名)。 */
@@ -505,7 +505,7 @@ public final class TaskEvents {
             p.set("metadata", metadata);
         }
         ObjectNode ext = persist ? null : Json.obj().put("persist", false);
-        return log.append(Events.TASK_TRACE, p, mainAgentId, ext).seq();
+        return log.append(Events.TASK_TRACE, p, mainAgentId, ext, !persist).seq();
     }
 
     /** 收起态摘要:重试进行中的「第 x/总 次 · y 秒后重试」文案。 */

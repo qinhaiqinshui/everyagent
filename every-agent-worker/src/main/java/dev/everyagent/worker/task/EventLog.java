@@ -15,6 +15,9 @@ import java.util.concurrent.CopyOnWriteArrayList;
  * 同一轮 AI 回复的流式 delta/thinking 与定型 message 共享同一 seq(由 TaskEvents 预分配传入)。
  * 任务终态后随 TaskEntry 整体销毁(D8/D18,无修剪无 retention——磁盘 jsonl 是全量真相);
  * 超过 maxEvents 抛 LogOverflowException(RAM 护栏;磁盘不受影响)。
+ * <p>计数口径:只对<b>持久</b>(落盘)事件计数。流式瞬态事件(delta/thinking 及
+ * {@code ext.persist=false} 的 trace)虽仍进内存缓冲供实时推送,但不占用 maxEvents 护栏——
+ * 护栏只保护落盘事件;瞬态风暴由流护栏({@code ModelLengthGuardAdvisor})治理(§13.5)。
  */
 public final class EventLog {
 
@@ -32,6 +35,8 @@ public final class EventLog {
     private final long maxEvents;
     private final ArrayDeque<EventRecord> records = new ArrayDeque<>();
     private final CopyOnWriteArrayList<Listener> listeners = new CopyOnWriteArrayList<>();
+    /** 已追加的持久(落盘)事件数——maxEvents 护栏只按此计数,瞬态事件不计入。 */
+    private long persistentSize = 0;
 
     /** 已分配的最大 seq 水位(seed 可预置,append 只增不减)。 */
     private long lastSeq = 0;
@@ -52,9 +57,20 @@ public final class EventLog {
 
     /** 自动分配 Snowflake ID 追加(各事件类型的独立 seq;进程内严格单调递增)。 */
     public EventRecord append(String event, JsonNode payload, String agentId, JsonNode ext) {
+        return append(event, payload, agentId, ext, false);
+    }
+
+    /**
+     * 带瞬态标记的自动分配 seq 追加:{@code transientEvent=true} 的事件(流式
+     * delta/thinking、瞬态 trace 等)只进内存缓冲供实时推送,<b>不占用</b>
+     * {@code maxEvents} 护栏计数——护栏只保护落盘(持久)事件,瞬态风暴由
+     * {@code ModelLengthGuardAdvisor} 等流护栏治理。仍占 seq(磁盘 seq 有洞合法)。
+     */
+    public EventRecord append(String event, JsonNode payload, String agentId, JsonNode ext,
+            boolean transientEvent) {
         EventRecord record;
         synchronized (this) {
-            if (records.size() >= maxEvents) {
+            if (!transientEvent && persistentSize >= maxEvents) {
                 throw new LogOverflowException("事件数已达上限 " + maxEvents);
             }
             long seq = SnowflakeId.next();
@@ -66,6 +82,9 @@ public final class EventLog {
             lastSeq = seq;
             record = new EventRecord(seq, System.currentTimeMillis(), event, agentId, payload, ext);
             records.addLast(record);
+            if (!transientEvent) {
+                persistentSize++;
+            }
         }
         for (Listener l : listeners) {
             l.onAppend(); // 仅信号,微秒级,不阻塞任务线程
@@ -80,9 +99,21 @@ public final class EventLog {
      * 抬升会破坏共享不变量。水位仍只增不减(取 max),供 readRange/lastSeq 使用。
      */
     public EventRecord append(long seq, String event, JsonNode payload, String agentId, JsonNode ext) {
+        return append(seq, event, payload, agentId, ext, false);
+    }
+
+    /**
+     * 带瞬态标记的显式 seq 追加:同轮 delta/thinking/message 共享同一 seq 时,由 TaskEvents
+     * 按 agentId 维护轮内 seq 传入;瞬态标记语义与 {@link #append(String, JsonNode, String,
+     * JsonNode, boolean)} 相同——不占 maxEvents 护栏计数。显式 seq <b>不抬升、不强制单调</b>:
+     * 同轮多帧共用同一 seq(等价),跨 agent 并发交错时该 seq 可能小于并发事件水位,
+     * 抬升会破坏共享不变量。水位仍只增不减(取 max),供 readRange/lastSeq 使用。
+     */
+    public EventRecord append(long seq, String event, JsonNode payload, String agentId, JsonNode ext,
+            boolean transientEvent) {
         EventRecord record;
         synchronized (this) {
-            if (records.size() >= maxEvents) {
+            if (!transientEvent && persistentSize >= maxEvents) {
                 throw new LogOverflowException("事件数已达上限 " + maxEvents);
             }
             if (seq > lastSeq) {
@@ -90,6 +121,9 @@ public final class EventLog {
             }
             record = new EventRecord(seq, System.currentTimeMillis(), event, agentId, payload, ext);
             records.addLast(record);
+            if (!transientEvent) {
+                persistentSize++;
+            }
         }
         for (Listener l : listeners) {
             l.onAppend(); // 仅信号,微秒级,不阻塞任务线程
@@ -219,6 +253,11 @@ public final class EventLog {
 
     public synchronized int size() {
         return records.size();
+    }
+
+    /** 持久(落盘)事件数——maxEvents 护栏按此计数(瞬态事件不计入)。 */
+    public synchronized long persistentSize() {
+        return persistentSize;
     }
 
     public void addListener(Listener l) {

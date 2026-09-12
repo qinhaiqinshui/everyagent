@@ -284,6 +284,12 @@ public class WorkerProperties {
         private long maxEventsPerTask = 500_000;
         private long shipStallMs = 60_000;
         /**
+         * 模型流「无输出」判定窗口(ms):流在超过该时长无任何 chunk(思考/正文)时触发
+         * {@code ModelLengthGuardAdvisor} 的 finish_reason=length 判定(若自估输出 token
+         * 已≈maxTokens)。须短于 model-timeout-ms(默认 10 分钟)才能避免空等读超时。默认 120s。
+         */
+        private long modelLengthStallMs = 120_000;
+        /**
          * 死循环检测阈值:连续 N 轮完全相同的工具调用(名称+参数集合签名)即收口。
          * ≤0 关闭检测。默认 3(与 novel_agent-n 运行护栏一致)。
          */
@@ -363,6 +369,14 @@ public class WorkerProperties {
 
         public void setShipStallMs(long shipStallMs) {
             this.shipStallMs = shipStallMs;
+        }
+
+        public long getModelLengthStallMs() {
+            return modelLengthStallMs;
+        }
+
+        public void setModelLengthStallMs(long modelLengthStallMs) {
+            this.modelLengthStallMs = modelLengthStallMs;
         }
 
         public int getMaxRepeatedToolRounds() {

@@ -91,4 +91,39 @@ class EventLogTest {
         assertThrows(EventLog.LogOverflowException.class,
                 () -> log.append("c", Json.obj(), "a1", null));
     }
+
+    @Test
+    void transientEventsDoNotCountTowardOverflow() {
+        EventLog log = new EventLog(2);
+        log.append("user.message", Json.obj(), "a1", null);              // 持久 1
+        log.append("message", Json.obj(), "a1", null);                   // 持久 2
+        assertThrows(EventLog.LogOverflowException.class,
+                () -> log.append("tool.result", Json.obj(), "a1", null), // 持久 3 → 溢出
+                "持久事件达上限仍抛");
+        assertEquals(2, log.persistentSize());
+
+        // 瞬态事件(同轮 delta/thinking 共享轮 seq)不占计数:即使塞很多也不抛
+        long r = log.append("delta", Json.obj(), "a1", null, true).seq();
+        log.append(r, "thinking", Json.obj(), "a1", null, true);
+        log.append(r, "delta", Json.obj(), "a1", null, true);
+        log.append(r, "thinking", Json.obj(), "a1", null, true);
+        assertEquals(2, log.persistentSize(), "瞬态事件不改变持久计数");
+        assertTrue(log.size() >= 6, "瞬态事件仍进内存缓冲(供实时推送)");
+    }
+
+    @Test
+    void transientOnlyLogDoesNotOverflow() {
+        EventLog log = new EventLog(2);
+        long r = log.append("delta", Json.obj(), "a1", null, true).seq();
+        for (int i = 0; i < 100; i++) {
+            log.append(r, "thinking", Json.obj(), "a1", null, true);
+        }
+        assertEquals(0, log.persistentSize());
+        assertEquals(101, log.size());
+        // 之后持久事件照常受护栏约束
+        log.append("message", Json.obj(), "a1", null);
+        log.append("usage", Json.obj(), "a1", null);
+        assertThrows(EventLog.LogOverflowException.class,
+                () -> log.append("tool.result", Json.obj(), "a1", null));
+    }
 }

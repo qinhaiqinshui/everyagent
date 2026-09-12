@@ -21,6 +21,7 @@ import dev.everyagent.worker.task.GitAutoSyncAdvisor;
 import dev.everyagent.worker.task.LlmContextSummarizer;
 import dev.everyagent.worker.task.LoopRepeatGuardAdvisor;
 import dev.everyagent.worker.task.MeasureDurationAdvisor;
+import dev.everyagent.worker.task.ModelLengthGuardAdvisor;
 import dev.everyagent.worker.task.ModelPoolChatModel;
 import dev.everyagent.worker.task.RoundIndexAdvisor;
 import dev.everyagent.worker.task.RoundIndexStore;
@@ -178,6 +179,7 @@ public class AgentClientFactory {
                         new FileChangeAdvisor(a),
                         new EmptyResponseRetryAdvisor(a, props.getRetry()),
                         new TransientErrorRetryAdvisor(a, props.getRetry()),
+                        new ModelLengthGuardAdvisor(a, props),
                         newContextCompressionAdvisor(a))
                 .build();
     }
@@ -202,6 +204,7 @@ public class AgentClientFactory {
                         new FileChangeAdvisor(a),
                         new EmptyResponseRetryAdvisor(a, props.getRetry()),
                         new TransientErrorRetryAdvisor(a, props.getRetry()),
+                        new ModelLengthGuardAdvisor(a, props),
                         newContextCompressionAdvisor(a))
                 .build();
     }

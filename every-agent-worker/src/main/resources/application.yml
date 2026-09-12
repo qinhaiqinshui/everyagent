@@ -28,6 +28,9 @@ worker:
     sub-wait-timeout-ms: 300000
     max-events-per-task: 500000
     ship-stall-ms: 60000
+    # 模型流「无输出」判定窗口(ms):ModelLengthGuardAdvisor 据此把「长时间无输出 + 自估输出
+    # ≈ maxTokens」判定为 finish_reason=length,避免空等 10 分钟读超时(须短于 model-timeout-ms)。
+    length-stall-ms: 120000
   # 危险操作授权(PermissionGate):危险命令正则/系统目录排除/授权弹窗超时;空缺用内置默认
   # 进程沙箱:单命令看门狗超时(ms);超时强杀子进程。30 分钟 = 1800000。
   # active-process-limit:Job Object 活动进程数上限(0=不限制)。默认 32。

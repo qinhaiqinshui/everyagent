@@ -303,7 +303,7 @@ wss 强制 + 证书;hello 失败限速(防 key 枚举);单 IP / 全局连接数�
 | **功能模块** | ConfigStore(模型配置只读)、WorkspaceManager(工作区注册表)、FsService(沙箱内文件操作)、GitService(工作区 git 快操作 RPC)、NativeGit(宿主原生 git 执行器,§7.12)、GitCredentialStore(git 凭证加密存储) |
 | **任务路由索引** | `taskId → {dir, summary}`(磁盘任务的元数据索引,boot 扫描构建) |
 
-**无修剪、无 retention**:任务永久保留。内存 EventLog 受 `maxEventsPerTask`(默认 50 万)护栏(防 RAM 失控;磁盘 jsonl 全量不受影响)。
+**无修剪、无 retention**:任务永久保留。内存 EventLog 受 `maxEventsPerTask`(默认 50 万)护栏(防 RAM 失控;磁盘 jsonl 全量不受影响)。计数口径:护栏只计**持久(落盘)事件**;流式瞬态事件(delta/thinking 及 `ext.persist=false` 的 trace)虽进内存缓冲供实时推送,但不占用计数——瞬态风暴由 `ModelLengthGuardAdvisor`(§7.3)治理。
 
 ### 7.3 Agent 执行链(Spring AI Advisor 生态)
 
@@ -314,11 +314,13 @@ worker 的 agent 执行**复用 Spring AI 2 框架**,不手搓 agent 循环/工�
 ```
 MeasureDurationAdvisor(计时) → SkillAdvisor(skill 渐进式披露索引) → LoopRepeatGuardAdvisor(事件发射 + 工具循环 + 死循环检测)
 → DialogInsertAdvisor(队列项「插入到当前对话」,主 agent 专属) → EmptyResponseRetryAdvisor(空响应重调)
-→ TransientErrorRetryAdvisor(瞬时错误退避) → ContextCompressionAdvisor(上下文压缩,最内层)
+→ TransientErrorRetryAdvisor(瞬时错误退避) → ModelLengthGuardAdvisor(输出预算耗尽护栏,finish_reason=length)
+→ ContextCompressionAdvisor(上下文压缩,最内层)
 ```
 
 - 核心事件发射由 `WorkerToolEventAdvisor` 完成(继承 Spring AI `ToolCallingAdvisor`,重写受保护 hook 发射 delta/message/usage/tool 等事件,**不另起一层重复实现递归循环**)。
 - 重试退避算法由 `worker.retry.strategy` 选择,空响应重试与瞬时错误重试共享:`fixed`(默认,固定 `backoff-base-ms` 间隔、`max-request-retries` 默认 30 次,适合网络抖动场景的稳定节奏恢复)或 `exponential`(`base × factor^(n-1)` 递增退避);未知取值回落 `exponential`(旧行为)。
+- `ModelLengthGuardAdvisor`(order=工具循环+300,瞬时重试内侧、上下文压缩外侧):识别「输出预算耗尽」这一确定性失败——实际收到 `finish_reason=length` 即报错;或流在超 `worker.limits.length-stall-ms`(默认 120s,须短于 model-timeout-ms 的 10 分钟)无任何 chunk 且自估输出 token ≈ 配置 maxTokens(无 tokenizer,CJK≈1 token、其余≈4 字符 1 token,20%~40% 容差)时判定等价 length 并报同一错误。错误为自定义非重试异常(避免被瞬时重试反复退避放大瞬态事件风暴),信息含「精简输入/拆分任务/降低 reasoningEffort/调大 maxTokens」建议,经任务层 error 收口呈现给用户。
 - `LoopRepeatGuardAdvisor` 叠加**死循环检测**:比较本轮与上一轮工具调用签名(名称+参数集合,顺序无关),连续重复达 `worker.limits.max-repeated-tool-rounds`(默认 3)即中断任务(error 收口)。
 - `DialogInsertAdvisor`(普通 StreamAdvisor,在主 agent 的工具循环下行阶段)把任务队列「插入到当前对话」的用户消息 drain 并追加给 AI + 发射 `user.message` 事件;子 agent 按 kind==MAIN 旁路(对话是一次性嵌套,不接收任务队列输入)。
 - 主 Agent 与子 Agent **共用同一执行入口与 Advisor 链**,仅 agentId 不同;子 agent 不挂计时与 skill,但同挂上下文压缩。
