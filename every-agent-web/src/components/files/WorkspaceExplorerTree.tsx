@@ -266,7 +266,7 @@ function TreeNodeRow({
       style={{
         display: 'flex',
         alignItems: 'center',
-        gap: token.paddingXS,
+        gap: token.paddingXXS,
         width: '100%',
         cursor: 'default',
         // 名称文字允许鼠标选中复制(文件/文件夹名)
