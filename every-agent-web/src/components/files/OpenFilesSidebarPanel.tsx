@@ -777,16 +777,16 @@ function WorkspaceGroupPanel({
       onSelect: toggleInternalFiles,
     },
     {
-      key: 'toggle-meta-mode',
-      // 三态循环:none(默认隐藏) → 显示文件大小 → 显示最后编辑时间 → 隐藏。
-      label:
-        metaMode === 'none' ? '显示文件大小'
-          : metaMode === 'size' ? '显示最后编辑时间'
-            : '隐藏元信息',
+      key: 'show-size',
+      label: '显示文件大小',
+      active: metaMode === 'size',
+      onSelect: () => setMetaMode('size'),
+    },
+    {
+      key: 'show-modified',
+      label: '显示最后编辑时间',
       active: metaMode === 'modified',
-      onSelect: () => setMetaMode((current) => (
-        current === 'none' ? 'size' : current === 'size' ? 'modified' : 'none'
-      )),
+      onSelect: () => setMetaMode('modified'),
     },
     {
       key: 'remove-workspace',
