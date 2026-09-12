@@ -108,7 +108,8 @@ function WorkspaceGroupPanel({
   const [reloading, setReloading] = React.useState(false)
   const [treeError, setTreeError] = React.useState('')
   const [showInternalFiles, setShowInternalFiles] = React.useState(false)
-  const [metaMode, setMetaMode] = React.useState<'size' | 'modified'>('size')
+  /** 行尾元信息显示模式：none(默认隐藏)、size(文件大小)、modified(最后编辑时间)。 */
+  const [metaMode, setMetaMode] = React.useState<'size' | 'modified' | 'none'>('none')
   /** 卡片折叠态:折叠时仅保留头部行(工作区名 + 更多操作),隐藏路径/搜索/文件树等内容。 */
   const [collapsed, setCollapsed] = React.useState(false)
   /** 多选模式:开启后树行前置复选框,支持批量删除/移动。 */
@@ -672,6 +673,12 @@ function WorkspaceGroupPanel({
         },
       )
     }
+    // 显示大小:开启行尾文件大小元信息(默认隐藏),与资源管理器更多菜单的「显示文件大小」同源。
+    items.push({
+      key: 'show-size',
+      label: '显示大小',
+      onSelect: () => setMetaMode('size'),
+    })
    items.push({
      key: 'rename',
      label: '重命名',
@@ -754,9 +761,15 @@ function WorkspaceGroupPanel({
     },
     {
       key: 'toggle-meta-mode',
-      label: metaMode === 'size' ? '显示最后编辑时间' : '显示文件大小',
+      // 三态循环:none(默认隐藏) → 显示文件大小 → 显示最后编辑时间 → 隐藏。
+      label:
+        metaMode === 'none' ? '显示文件大小'
+          : metaMode === 'size' ? '显示最后编辑时间'
+            : '隐藏元信息',
       active: metaMode === 'modified',
-      onSelect: () => setMetaMode((current) => (current === 'size' ? 'modified' : 'size')),
+      onSelect: () => setMetaMode((current) => (
+        current === 'none' ? 'size' : current === 'size' ? 'modified' : 'none'
+      )),
     },
     {
       key: 'remove-workspace',
