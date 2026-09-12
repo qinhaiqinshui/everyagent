@@ -73,10 +73,6 @@ export default function FileTabPage({
   /** 文件属性弹窗:true = 打开。属性数据异步 stat 获取(FileTabResource 不含 size/time)。 */
   const [propertiesOpen, setPropertiesOpen] = React.useState(false)
   const [fileStat, setFileStat] = React.useState<WorkspaceFileStat | null>(null)
-  /** 属性弹窗文本文件字符统计(实时读取文件后填充;null = 非文本文件或尚未加载)。 */
-  const [propertyTextStats, setPropertyTextStats] = React.useState<{ totalChars: number; textChars: number } | null>(null)
-  /** 文本文件字符统计实时读取防竞态:记录当前请求标识,过期响应丢弃。 */
-  const propertyTextKeyRef = React.useRef<string | null>(null)
   const fileNameInputRef = React.useRef<InputRef>(null)
   const savingRef = React.useRef(false)
   const justSavedRef = React.useRef(false)
@@ -406,36 +402,15 @@ export default function FileTabPage({
     setRefreshRevision((current) => current + 1)
   }, [file, isDirty, isFileNameDirty, showToast])
 
-  /** 打开文件属性弹窗：实时 stat 获取 size/时间；文本文件实时读取内容统计字符。 */
+  /** 打开文件属性弹窗：实时 stat 获取 size/时间；字符统计纯前端用已加载内容快照计算。 */
   const handleRequestProperties = React.useCallback(() => {
     if (!file) return
     setPropertiesOpen(true)
     setFileStat(null)
-    setPropertyTextStats(null)
     // 实时获取磁盘属性(FileTabResource 不含 size/时间;每次打开都重新 stat,不缓存)。
     void workspaceGateway.stat(file.workspaceRoot, file.filePath)
       .then((stat) => setFileStat(stat))
       .catch(() => setFileStat(null))
-    // 文本文件实时读取磁盘内容计算字符统计(而非用已加载 content 快照,保证最新)。
-    if (isTextFileName(file.fileName)) {
-      const key = `${file.workspaceRoot}|${file.filePath}`
-      propertyTextKeyRef.current = key
-      void workspaceGateway.readTextFile(file.workspaceRoot, file.filePath)
-        .then((text) => {
-          if (propertyTextKeyRef.current !== key) return
-          setPropertyTextStats({
-            totalChars: countTotalChars(text),
-            textChars: countPlainTextChars(text),
-          })
-        })
-        .catch(() => {
-          if (propertyTextKeyRef.current === key) {
-            setPropertyTextStats(null)
-          }
-        })
-    } else {
-      propertyTextKeyRef.current = null
-    }
   }, [file])
 
   const handleEnableEditing = React.useCallback(() => {
@@ -727,18 +702,18 @@ export default function FileTabPage({
         open={propertiesOpen}
         title="属性"
         name={file?.fileName}
-        items={file ? buildFileTabPropertyItems(file, fileStat, propertyTextStats) : []}
+        items={file ? buildFileTabPropertyItems(file, fileStat, findSourceContent) : []}
         onClose={() => setPropertiesOpen(false)}
       />
     </>
   )
 }
 
-/** 组装文件标签页属性条目：与文件树属性逻辑一致。文本文件额外显示字符统计。 */
+/** 组装文件标签页属性条目：与文件树属性逻辑一致。文本文件额外显示字符统计(纯前端,基于当前内容快照)。 */
 function buildFileTabPropertyItems(
   file: FileTabResource,
   stat: WorkspaceFileStat | null,
-  textStats: { totalChars: number; textChars: number } | null,
+  statsSource: string,
 ): PropertyItem[] {
   const items: PropertyItem[] = [
     { label: '文件名', value: file.fileName },
@@ -764,13 +739,9 @@ function buildFileTabPropertyItems(
     },
   ]
   if (isTextFileName(file.fileName)) {
-    if (textStats) {
-      items.push({ label: '总字符数', value: String(textStats.totalChars) })
-      items.push({ label: '纯文字字符', value: String(textStats.textChars) })
-    } else {
-      items.push({ label: '总字符数', value: '读取中…' })
-      items.push({ label: '纯文字字符', value: '读取中…' })
-    }
+    // 纯前端计算:基于已加载内容快照(编辑态含未保存草稿,只读态为已读内容)。不调后端。
+    items.push({ label: '总字符数', value: String(countTotalChars(statsSource)) })
+    items.push({ label: '纯文字字符', value: String(countPlainTextChars(statsSource)) })
   }
   return items
 }
