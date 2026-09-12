@@ -1006,9 +1006,11 @@ export interface GuardrailSettings {
   maxEmptyResponseRetries: number
   /** 可重试瞬时错误（限流 / 5xx / 网络抖动等）的最大退避重试次数。 */
   maxRequestRetries: number
-  /** 可重试瞬时错误退避重试的基础间隔（毫秒）。 */
+  /** 退避算法策略：fixed = 固定间隔重试；exponential = 指数退避（base × factor^(n-1)）。 */
+  retryStrategy: 'fixed' | 'exponential'
+  /** 重试退避的基础间隔（毫秒）；fixed 策略下即每次重试的固定间隔。 */
   retryBackoffBaseMs: number
-  /** 可重试瞬时错误退避重试的增长系数。 */
+  /** 指数退避重试的增长系数（仅 exponential 策略生效）。 */
   retryBackoffFactor: number
   /** 超限弹窗的超时时间（毫秒）；到点未作答按「中止」处理。 */
   limitPromptTimeoutMs: number
@@ -1020,7 +1022,8 @@ export const GUARDRAIL_SETTINGS_DEFAULTS: GuardrailSettings = {
   maxRepeatedToolRounds: 3,
   toolExecutionTimeoutMs: 300000,
   maxEmptyResponseRetries: 2,
-  maxRequestRetries: 5,
+  maxRequestRetries: 30,
+  retryStrategy: 'fixed',
   retryBackoffBaseMs: 3000,
   retryBackoffFactor: 5,
   limitPromptTimeoutMs: 3600000,

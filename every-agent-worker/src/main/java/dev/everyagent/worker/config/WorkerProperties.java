@@ -452,20 +452,38 @@ public class WorkerProperties {
 
     /**
      * 模型调用重试(空响应重试 + 瞬时错误退避重试,分别由两个 advisor 消费;
-     * 默认值与 novel_agent-n 运行护栏 GUARDRAIL_SETTINGS_DEFAULTS 一致)。
+     * 退避算法由 {@link #strategy} 选择,两类重试共享同一算法)。
      */
     public static class Retry {
+        /** 策略常量:固定间隔退避(默认)——每次重试恒等 {@code backoffBaseMs}。 */
+        public static final String STRATEGY_FIXED = "fixed";
+        /** 策略常量:指数退避——base * factor^(attempt-1)(与 n 的 computeRetryDelayMs 同式)。 */
+        public static final String STRATEGY_EXPONENTIAL = "exponential";
+
         /** 空响应(无正文/无 reasoning/无工具调用)最大重试次数;耗尽收口为任务错误。 */
         private int maxEmptyResponseRetries = 2;
         /** 可重试瞬时错误(限流 429 / 5xx / 网络抖动)的最大退避重试次数。 */
-        private int maxRequestRetries = 5;
-        /** 退避基础间隔(ms)。 */
+        private int maxRequestRetries = 30;
+        /** 退避基础间隔(ms);fixed 策略下即每次重试的固定间隔。 */
         private long backoffBaseMs = 3_000;
-        /** 退避增长系数。 */
+        /** 退避增长系数(仅 exponential 策略生效)。 */
         private double backoffFactor = 5;
+        /**
+         * 退避算法策略(空响应重试与瞬时错误重试共享):
+         * {@code fixed}(默认)= 固定 {@code backoffBaseMs} 间隔重试;
+         * {@code exponential} = {@code base * factor^(attempt-1)} 指数退避。
+         * 未知/空取值回落 exponential(升级前旧配置的行为),大小写不敏感。
+         */
+        private String strategy = STRATEGY_FIXED;
 
-        /** 指数退避间隔:base * factor^(attempt-1)(与 n 的 computeRetryDelayMs 同式,无上限)。 */
+        /**
+         * 退避间隔(ms):fixed 策略恒返回 {@code backoffBaseMs};exponential 策略返回
+         * base * factor^(attempt-1)(无上限)。attempt ≤ 0 按 1 计。
+         */
         public long backoffMs(long attempt) {
+            if (STRATEGY_FIXED.equalsIgnoreCase(strategy)) {
+                return backoffBaseMs;
+            }
             long a = Math.max(1, attempt);
             return Math.round(backoffBaseMs * Math.pow(backoffFactor, a - 1));
         }
@@ -500,6 +518,14 @@ public class WorkerProperties {
 
         public void setBackoffFactor(double backoffFactor) {
             this.backoffFactor = backoffFactor;
+        }
+
+        public String getStrategy() {
+            return strategy;
+        }
+
+        public void setStrategy(String strategy) {
+            this.strategy = strategy;
         }
     }
 

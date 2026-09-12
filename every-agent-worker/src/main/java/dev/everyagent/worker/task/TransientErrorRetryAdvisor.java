@@ -30,7 +30,9 @@ import java.util.concurrent.atomic.AtomicLong;
  *
  * <p>仿 node 侧 {@code ai.call.retry_request} 节点(novel_agent-n
  * {@code src/ai/chain/nodes/retryRequest.ts}):可重试瞬时错误(限流 429 / 5xx /
- * 网络抖动)按指数退避重调同一请求,最多 {@code maxRequestRetries} 次;耗尽后原错误
+ * 网络抖动)按配置退避策略({@code worker.retry.strategy},默认 fixed 固定间隔,
+ * 可选 exponential 指数退避)重调同一请求,最多 {@code maxRequestRetries} 次;
+ * 耗尽后原错误
  * 上抛(任务层收口)。n 的「耗尽后询问继续」属 task 层交互,worker 无对应交互通道,
  * 直接失败(用户可再运行任务)。
  *

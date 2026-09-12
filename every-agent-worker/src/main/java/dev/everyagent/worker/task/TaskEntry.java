@@ -97,6 +97,18 @@ public final class TaskEntry {
     public volatile boolean networkBlocked;
 
     /**
+     * 启用 powershell 开关(任务级):开启后主/子 agent 工具集在 bash 之外<b>追加</b>
+     * {@code powershell} 工具(WSL 后端经发行版内 pwsh 执行),让 AI 同时拥有 powershell
+     * 与 bash 两个命令工具;随 {@link #summaryJson()} 落盘 meta.json、再运行仍保持。
+     * 由 {@code PowerShellEnableSlashProvider}(/启用powershell)的 onSelect/onCancel
+     * 置位复位并落盘;buildMainAgent/buildAgent 每次运行构建工具集时实时读本字段
+     * (选中/取消从下一轮或再运行起生效)。
+     * 仅 WSL+Linux 沙箱后端注册该斜杠条目;windows-mic(Windows+ACL)后端命令工具本就
+     * 是 PowerShellTool,不注册,本开关在该后端无意义(默认 false)。
+     */
+    public volatile boolean powershellEnabled;
+
+    /**
      * slash 任务级 token 槽:自包含 opaque token 串数组,仅 slash 层存储、业务方不读。
      * 新任务由 task.run 的 taskTokens 入参写入,随 meta.json 的 slashTaskTokens 落盘,
      * 冷启动续跑(startRerun)回读恢复。线程安全(CopyOnWriteArrayList),快照读。
@@ -297,6 +309,9 @@ public final class TaskEntry {
         }
         if (networkBlocked) {
             n.put("networkBlocked", true);
+        }
+        if (powershellEnabled) {
+            n.put("powershellEnabled", true);
         }
         // 子 agent 台账(冷启动恢复 + list_agents/wait_agents;含历史终态)。
         // 运行中的活实体在每次状态变化时同步进台账,此处统一序列化。

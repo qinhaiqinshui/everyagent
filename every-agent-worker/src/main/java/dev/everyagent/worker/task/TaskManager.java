@@ -76,6 +76,8 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
     private static final long AGENT_META_PERSIST_INTERVAL_MS = 30_000;
     /** task.rounds 惰性全量生成/未闭合轮扫描的单次窗口上限(记录数;EventLog 内存护栏 50 万,同量级封顶)。 */
     private static final int ROUNDS_REBUILD_MAX = 500_000;
+    /** taskId 查重重生成的最大尝试次数(连续冲突即失败,防御死循环)。 */
+    private static final int MAX_TASKID_ATTEMPTS = 10_000;
 
     private final HubPool pool;
     private final ConfigStore configs;
@@ -901,6 +903,27 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
         return n;
     }
 
+    /**
+     * 生成与内存/磁盘均不冲突的 taskId(ShortIds 契约约定的「调用方查重兜底」)。
+     * <p>ShortIds 的随机盐 + 每进程自增计数器在 worker 重启后会重置:盐空间仅 36² 时,
+     * 重启频繁下生日悖论使「同盐 + 计数器从 1 重头」撞出旧 taskId 的概率不可忽略。
+     * 一旦撞上,新建任务会复用旧任务目录——meta.json 被新标题覆盖、事件追加进旧 agent 日志,
+     * 表现为「新建任务却打开旧任务、旧任务续跑且标题被顶成新标题」(实测 t_ct1/t_ct2 事故)。
+     * 故此处对 tasks(内存)/diskTasks(磁盘索引)/任务目录(磁盘直查)三重查重,冲突则递增重生成。
+     */
+    private String uniqueTaskId() {
+        for (int i = 0; i < MAX_TASKID_ATTEMPTS; i++) {
+            String id = ShortIds.taskId();
+            if (tasks.containsKey(id) || diskTasks.containsKey(id)
+                    || Files.isDirectory(store.dirOf(id))) {
+                log.warn("taskId 与现有任务冲突,重生成: {}", id);
+                continue;
+            }
+            return id;
+        }
+        throw new IllegalStateException("无法生成唯一 taskId(连续 " + MAX_TASKID_ATTEMPTS + " 次冲突)");
+    }
+
     /** task.run:创建/续跑合一——无 taskId=新建(workspace 必填),有 taskId=运行中入队/终态冷启动续跑。 */
     private void rpcTaskRun(RpcContext ctx) {
         String input = ctx.strParam("input");
@@ -934,7 +957,7 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
             ctx.err(Rpc.ERR_INTERNAL, "工作区目录不可用: " + e.getMessage());
             return;
         }
-        String taskId = ShortIds.taskId();
+        String taskId = uniqueTaskId();
         String mainAgentId = ShortIds.mainAgentId();
         ResolvedConfig cfg = configs.resolve(ctx.optStrParam("configId", null));
         TaskEntry t = new TaskEntry(taskId, title, cfg.snapshot(),
@@ -1359,6 +1382,7 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
         t.aiReview = meta.path("aiReview").asBoolean(false);      // AI 审议任务级开关(plan-unattended-ai-auth 步骤3)
         t.unattended = meta.path("unattended").asBoolean(false);  // 无人值守任务级开关(plan-unattended-ai-auth 步骤3)
         t.networkBlocked = meta.path("networkBlocked").asBoolean(false); // 禁网开关任务级(/禁用网络)
+        t.powershellEnabled = meta.path("powershellEnabled").asBoolean(false); // 启用 powershell 开关任务级(/启用powershell)
         t.seedUsageMeta(meta.path("usage")); // 恢复最近一轮上下文用量(续跑后列表/电池数据不丢)
         restoreAgentLedger(t, meta); // 恢复子 agent 台账(冷启动后 list_agents/wait_agents 正常)
         // slash 任务级 token 回读(仅 slash 层存储、业务方不读;随 meta.json 落盘,冷启动续跑恢复)。
@@ -1533,6 +1557,13 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
         } else {
             for (ToolCallback c : ToolCallbacks.from(new BashTool(exec))) {
                 tools.add(c);
+            }
+            // 任务级「启用 powershell」(仅 WSL+Linux 后端有该斜杠条目):bash 之外追加
+            // PowerShellTool——命令回宿主 Windows 原生沙箱(windows-mic 语义)执行,
+            // 让 AI 同时拥有 powershell 与 bash;windows-mic 后端无此开关,
+            // PowerShellTool 已在上方独占注册,不会重复。
+            if (t.powershellEnabled) {
+                tools.add(new PowerShellTool(exec).toolCallback());
             }
         }
         // M5:fs/git 模型工具在此追加;tool.result 事件由 AgentRunner 统一发射

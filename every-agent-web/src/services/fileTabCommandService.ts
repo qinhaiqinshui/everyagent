@@ -66,6 +66,10 @@ async function renameFile(file: FileTabResource, nextFileName: string): Promise<
   const currentExtension = getExtension(file.fileName)
   const normalizedName = appendExtensionIfMissing(sanitizePathSegment(nextFileName), currentExtension)
   const nextPath = parentPath ? `${parentPath}/${normalizedName}` : normalizedName
+  // 同名 no-op 直接拒绝:fs.move(from,from) 会静默成功但名字不变(Windows Files.move 同路径不抛错)。
+  if (nextPath === file.filePath) {
+    throw new Error('新名称与当前名称相同')
+  }
   await workspaceGateway.rename(file.workspaceRoot, file.filePath, nextPath)
   return {
     filePath: nextPath,

@@ -210,6 +210,36 @@
 .ws-tree .ant-tree-node-content-wrapper {
   display: flex;
   align-items: center;
+  /* 去掉 antd 默认的左右 padding(8px)，让标题内容顶到行边缘，与 switcher 箭头列紧凑衔接。 */
+  padding-inline: 0 !important;
+}
+
+/* 文件树（DirectoryTree）选中/悬停高亮统一为项目灰调(与 ui-list-row 的 bg-hover/bg-active 一致)。
+   根因:antd 目录树把「选中态」背景画在 .ant-tree-treenode-selected 上(默认 colorPrimary 实心蓝),
+   把「悬停态」背景画在 .ant-tree-node-content-wrapper 的 :before 伪元素上(默认 controlItemBgHover),
+   而非画在 content-wrapper 自身 background——因此需覆盖 treenode 与 :before 两处。
+   且 antd 样式为运行时 cssinjs 注入、带 hash 前缀、位于文档末尾,需 !important 压过。 */
+.ws-tree.ant-tree.ant-tree-directory .ant-tree-treenode-selected {
+  background: var(--bg-active) !important;
+}
+.ws-tree.ant-tree.ant-tree-directory .ant-tree-treenode-selected .ant-tree-node-content-wrapper,
+.ws-tree.ant-tree.ant-tree-directory .ant-tree-treenode-selected .ant-tree-node-content-wrapper:hover {
+  color: var(--text-primary) !important;
+  background: transparent !important;
+}
+.ws-tree.ant-tree.ant-tree-directory .ant-tree-treenode-selected .ant-tree-node-content-wrapper:before,
+.ws-tree.ant-tree.ant-tree-directory .ant-tree-treenode-selected .ant-tree-node-content-wrapper:hover:before {
+  background: var(--bg-active) !important;
+}
+.ws-tree.ant-tree.ant-tree-directory .ant-tree-node-content-wrapper:hover {
+  background: transparent !important;
+}
+.ws-tree.ant-tree.ant-tree-directory .ant-tree-node-content-wrapper:hover:before {
+  background: var(--bg-hover) !important;
+}
+/* 选中态下 switcher 箭头恢复为正文灰色(antd 默认会随选中态变白/变色)。 */
+.ws-tree.ant-tree.ant-tree-directory .ant-tree-treenode-selected .ant-tree-switcher {
+  color: var(--text-muted) !important;
 }
 
 /* 文件树:switcher(展开/收起图标)独占一列,容器改 flex 居中。
@@ -218,12 +248,15 @@
    同时清零 antd 默认的列尾 margin(4px) 并把列宽 24px 压到 14px:
    12px 的 SVG(viewBox 16)中 chevron 图形右侧自带 ~4px 透明区,
    压列宽后图标到名称的视觉间隙从 ~7px 收紧到 ~3px;
-   选择器用 .ws-tree.ant-tree 复合提升优先级,压过 antd 运行时注入的同名规则。 */
+   选择器用 .ws-tree.ant-tree 复合提升优先级,压过 antd 运行时注入的同名规则。
+   右 padding 4px 用于扩大折叠图标的点击热区(宽 18px = 14px 内容 + 4px padding)。 */
 .ws-tree.ant-tree .ant-tree-switcher {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 14px;
+  width: 18px;
+  padding-right: 4px;
+  box-sizing: border-box;
   margin-inline-end: 0;
 }
 

@@ -379,6 +379,11 @@ export default function TasksPanel({
         }
       }}
       onDoubleClick={batchActive ? undefined : () => handleOpenTask(task)}
+      onMouseDown={(e) => {
+        // 阻止浏览器「双击选中文字」的默认行为:双击打开任务时,卡片内文字不应被高亮选中。
+        // e.detail 为本次按压的连击计数,>1 表示双击/三击的第二次及以后按压;preventDefault 只拦默认选字,不影响 click/dblclick 触发。
+        if (e.detail > 1) e.preventDefault()
+      }}
       {...longPressHandlers}
       style={{
         ...taskCardStyle,

@@ -89,6 +89,9 @@ function WorkspaceGroupPanel({
   const [expandedPaths, setExpandedPaths] = React.useState<Set<string>>(new Set([WORKSPACE_EXPLORER_ROOT_LABEL]))
   const expandedPathsRef = React.useRef(expandedPaths)
   expandedPathsRef.current = expandedPaths
+  /** 文件变更事件合并刷新的暂存与定时器(一次 rename 会触发 delete+write+rename 多个事件,短窗合并只刷一次)。 */
+  const pendingFileChangedRef = React.useRef<Array<{ filePath: string; oldFilePath?: string }>>([])
+  const fileChangedFlushTimerRef = React.useRef<number | null>(null)
   const [deleteTarget, setDeleteTarget] = React.useState<WorkspaceExplorerContextTarget | null>(null)
   const [deleting, setDeleting] = React.useState(false)
   const [renameTarget, setRenameTarget] = React.useState<WorkspaceExplorerContextTarget | null>(null)
@@ -125,14 +128,31 @@ function WorkspaceGroupPanel({
       if (!keepExpanded) {
         setTreeNodes(nextTree)
       } else {
-        // 保持展开:对已展开且旧树中已加载的目录逐个重拉,其余保持未加载。
+        // 保持展开:对每个展开目录按路径重拉(loadChildren 只依赖 path),不依赖旧树节点是否存在。
+        // 这样重命名/移动目录后 expandedPaths 已迁移到新路径、旧树中找不到新节点时,也能正确填充子节点。
         let tree = nextTree
         for (const dirPath of expandedPathsRef.current) {
           if (dirPath === WORKSPACE_EXPLORER_ROOT_LABEL) continue
-          const oldNode = findExplorerNode(treeNodesRef.current, dirPath)
-          if (!oldNode || oldNode.type !== 'directory' || !oldNode.loaded) continue
-          const children = await workspaceExplorerQueryService.loadChildren(workspaceRoot, oldNode, { includeInternalFiles })
-          tree = upsertExplorerChildren(tree, dirPath, children)
+          const probeNode: WorkspaceExplorerNode = {
+            path: dirPath,
+            name: dirPath.slice(dirPath.lastIndexOf('/') + 1),
+            type: 'directory',
+            size: 0,
+            mtimeMs: 0,
+          }
+          try {
+            const children = await workspaceExplorerQueryService.loadChildren(workspaceRoot, probeNode, { includeInternalFiles })
+            tree = upsertExplorerChildren(tree, dirPath, children)
+          } catch {
+            // 目录可能已被重命名/删除(旧路径失效):跳过该目录,不要整树失败置空。
+            // 同时把失效 key 从展开集合移除,避免展开图标与实际状态错位。
+            setExpandedPaths((prev) => {
+              if (!prev.has(dirPath)) return prev
+              const next = new Set(prev)
+              next.delete(dirPath)
+              return next
+            })
+          }
         }
         setTreeNodes(tree)
       }
@@ -146,25 +166,60 @@ function WorkspaceGroupPanel({
   }, [workspaceRoot])
 
   /**
-   * 文件变更事件的增量刷新:重拉受影响文件的父目录(仅当该目录已在树中加载)。
-   * 根级文件/未加载目录直接刷新第一层;未加载目录展开时会自动拉到最新,无需刷新。
+   * 合并窗口内到达的文件变更事件一次性刷新(架构事件风暴防护):
+   * 一次 rename 实际会广播 delete(from) + write(to) + rename 三个事件,若逐条刷新会
+   * 连续 reload 互相覆盖,既闪烁又可能把展开态带偏。短窗(80ms)合并后:
+   * - 先迁移目录展开态(rename 场景,旧路径 key 会残留导致刷新失败/图标错位);
+   * - 有根级事件 → 整树保持展开刷新一次;否则对受影响父目录增量刷新(去重)。
    */
-  const refreshDirFromEvent = React.useCallback(async (changedPath: string | undefined) => {
-    const parts = (changedPath ?? '').replace(/^\/+/, '').split('/').filter(Boolean)
-    if (parts.length <= 1) {
-      void reloadTree(showInternalFiles, true)
+  const flushFileChangedEvents = React.useCallback(async (items: Array<{ filePath: string; oldFilePath?: string }>) => {
+    // 重命名/移动目录后,把展开集合中的旧路径前缀迁移为新路径,保持展开语义。
+    for (const item of items) {
+      if (item.oldFilePath && item.oldFilePath !== item.filePath) {
+        expandedPathsRef.current = migrateExpandedPaths(expandedPathsRef.current, item.oldFilePath, item.filePath)
+        setExpandedPaths(expandedPathsRef.current)
+      }
+    }
+    const hasRootLevel = items.some((item) => {
+      const parts = (item.filePath ?? '').replace(/^\/+/, '').split('/').filter(Boolean)
+      return parts.length <= 1
+    })
+    const hasRename = items.some((item) => Boolean(item.oldFilePath) && item.oldFilePath !== item.filePath)
+    // rename 低频且需要迁移展开态、给新目录补加载子节点:整树保持展开刷新一次到位;
+    // 其余高频单文件变更(create/modify/delete)走增量刷新,避免大项目全量重拉。
+    if (hasRename || hasRootLevel) {
+      await reloadTree(showInternalFiles, true)
       return
     }
-    const dirPath = `/${parts.slice(0, -1).join('/')}`
-    const dirNode = findExplorerNode(treeNodesRef.current, dirPath)
-    if (!dirNode || dirNode.type !== 'directory' || !dirNode.loaded) return
-    try {
-      const children = await workspaceExplorerQueryService.loadChildren(workspaceRoot, dirNode, { includeInternalFiles: showInternalFiles })
-      setTreeNodes((prev) => upsertExplorerChildren(prev, dirPath, children))
-    } catch {
-      // 刷新失败静默:下次展开/整树刷新会带回最新状态
+    const dirPaths = new Set<string>()
+    for (const item of items) {
+      const parts = (item.filePath ?? '').replace(/^\/+/, '').split('/').filter(Boolean)
+      if (parts.length <= 1) continue
+      dirPaths.add(`/${parts.slice(0, -1).join('/')}`)
+    }
+    for (const dirPath of dirPaths) {
+      const dirNode = findExplorerNode(treeNodesRef.current, dirPath)
+      if (!dirNode || dirNode.type !== 'directory' || !dirNode.loaded) continue
+      try {
+        const children = await workspaceExplorerQueryService.loadChildren(workspaceRoot, dirNode, { includeInternalFiles: showInternalFiles })
+        setTreeNodes((prev) => upsertExplorerChildren(prev, dirPath, children))
+      } catch {
+        // 刷新失败静默:下次展开/整树刷新会带回最新状态
+      }
     }
   }, [reloadTree, showInternalFiles, workspaceRoot])
+
+  /** 登记文件变更事件并在短窗内合并刷新。 */
+  const scheduleFileChanged = React.useCallback((payload: { filePath: string; oldFilePath?: string }) => {
+    pendingFileChangedRef.current.push(payload)
+    if (fileChangedFlushTimerRef.current !== null) return
+    fileChangedFlushTimerRef.current = window.setTimeout(() => {
+      fileChangedFlushTimerRef.current = null
+      const items = pendingFileChangedRef.current
+      pendingFileChangedRef.current = []
+      void flushFileChangedEvents(items)
+    }, 80)
+  }, [flushFileChangedEvents])
 
   React.useEffect(() => {
     void reloadTree(showInternalFiles)
@@ -174,10 +229,13 @@ function WorkspaceGroupPanel({
     const unsubscribeWorkspaceReload = domainEventBus.subscribe(DOMAIN_EVENTS.WORKSPACE_RELOAD_ALL_FILES_REQUESTED, () => {
       void reloadTree(showInternalFiles, true)
     })
-    // 细粒度文件变更由底层网关统一广播(带 workspaceRoot):只增量刷新受影响目录,保持展开状态。
+    // 细粒度文件变更由底层网关统一广播(带 workspaceRoot):短窗合并后增量刷新受影响目录,保持展开状态。
     const unsubscribeFileChanged = domainEventBus.subscribe(DOMAIN_EVENTS.WORKSPACE_FILE_CHANGED, (payload) => {
       if (payload.workspaceRoot !== workspaceRoot) return
-      void refreshDirFromEvent(payload.filePath)
+      scheduleFileChanged({
+        filePath: payload.filePath,
+        oldFilePath: payload.operation === 'rename' ? payload.oldFilePath : undefined,
+      })
     })
     // 侧边栏切到本面板时（onShow）主动刷新，保持展开状态。
     const unsubscribePanelShown = domainEventBus.subscribe(DOMAIN_EVENTS.SIDEBAR_PANEL_SHOWN, (payload) => {
@@ -189,8 +247,12 @@ function WorkspaceGroupPanel({
       unsubscribeWorkspaceReload()
       unsubscribeFileChanged()
       unsubscribePanelShown()
+      if (fileChangedFlushTimerRef.current !== null) {
+        window.clearTimeout(fileChangedFlushTimerRef.current)
+        fileChangedFlushTimerRef.current = null
+      }
     }
-  }, [reloadTree, refreshDirFromEvent, showInternalFiles, workspaceRoot])
+  }, [reloadTree, scheduleFileChanged, showInternalFiles, workspaceRoot])
 
   /**
    * 展开目录并懒加载其子节点(幂等:已加载/非目录/未在树中则跳过)。
@@ -296,10 +358,18 @@ function WorkspaceGroupPanel({
     setRenaming(true)
     try {
       const nextPath = await workspaceExplorerCommandService.renamePath(workspaceRoot, renameTarget.path, renameValue)
-      renameFileTabs(workspaceRoot, renameTarget.path, nextPath)
+      const nextBusinessPath = toBusinessAbsolutePath(nextPath)
+      renameFileTabs(workspaceRoot, renameTarget.path, nextBusinessPath)
+      // 重命名目录后迁移展开态(先同步 ref,让随后的整树刷新读到新路径),避免旧路径 key 残留。
+      const nextExpanded = migrateExpandedPaths(expandedPathsRef.current, renameTarget.path, nextBusinessPath)
+      expandedPathsRef.current = nextExpanded
+      setExpandedPaths(nextExpanded)
+      // 立即整树保持展开刷新:把磁盘上的新路径(重命名目录及其子层级)拉回树,
+      // 避免残留旧节点、展开图标与子项错位(用户看到「折叠但图标展开」)。
+      void reloadTree(showInternalFiles, true)
       showToast('已重命名', 'success')
       if (selectedExplorerPath === renameTarget.path) {
-        setSelectedExplorerPath(nextPath)
+        setSelectedExplorerPath(nextBusinessPath)
       }
       setRenameTarget(null)
       setRenameValue('')
@@ -308,7 +378,7 @@ function WorkspaceGroupPanel({
     } finally {
       setRenaming(false)
     }
- }, [renameFileTabs, renameTarget, renaming, selectedExplorerPath, showToast, workspaceRoot])
+ }, [renameFileTabs, renameTarget, renameValue, renaming, reloadTree, selectedExplorerPath, showInternalFiles, showToast, workspaceRoot])
 
   const handleRequestMove = React.useCallback((target: WorkspaceExplorerContextTarget) => {
     setMoveTarget(target)
@@ -322,15 +392,22 @@ function WorkspaceGroupPanel({
     setMoving(true)
     try {
       const nextPath = await workspaceExplorerCommandService.movePath(workspaceRoot, moveTarget.path, moveTargetDir)
-      renameFileTabs(workspaceRoot, moveTarget.path, nextPath)
+      const nextBusinessPath = toBusinessAbsolutePath(nextPath)
+      renameFileTabs(workspaceRoot, moveTarget.path, nextBusinessPath)
+      // 移动目录后迁移展开态,并把目标目录一并加入展开集合(同步 ref,让随后的整树刷新读到完整最新状态)。
+      const nextExpanded = migrateExpandedPaths(expandedPathsRef.current, moveTarget.path, nextBusinessPath)
+      const withTarget = moveTargetDir ? new Set(nextExpanded).add(moveTargetDir) : nextExpanded
+      expandedPathsRef.current = withTarget
+      setExpandedPaths(withTarget)
       // 展开目标目录，便于用户立即看到移动结果。
       expandDirChildren(moveTargetDir)
-      setExpandedPaths((prev) => new Set(prev).add(moveTargetDir))
+      // 立即整树保持展开刷新,把磁盘新路径拉回树。
+      void reloadTree(showInternalFiles, true)
       // 选中项若处于被移动路径下，跟随前缀替换，避免选中态指向失效路径。
       if (selectedExplorerPath && (selectedExplorerPath === moveTarget.path || selectedExplorerPath.startsWith(`${moveTarget.path}/`))) {
         const nextSelected = selectedExplorerPath === moveTarget.path
-          ? nextPath
-          : `${nextPath}${selectedExplorerPath.slice(moveTarget.path.length)}`
+          ? nextBusinessPath
+          : `${nextBusinessPath}${selectedExplorerPath.slice(moveTarget.path.length)}`
         setSelectedExplorerPath(nextSelected)
       }
       showToast('已移动', 'success')
@@ -341,7 +418,7 @@ function WorkspaceGroupPanel({
     } finally {
       setMoving(false)
     }
-  }, [moveTarget, moveTargetDir, moving, renameFileTabs, selectedExplorerPath, showToast, workspaceRoot, expandDirChildren])
+  }, [moveTarget, moveTargetDir, moving, renameFileTabs, reloadTree, selectedExplorerPath, showInternalFiles, showToast, workspaceRoot, expandDirChildren])
 
   /** 切换多选模式;退出时清空已选集合。 */
   const toggleMultiSelectMode = React.useCallback(() => {
@@ -422,17 +499,28 @@ function WorkspaceGroupPanel({
         const nextPath = await workspaceExplorerCommandService.movePath(workspaceRoot, path, batchMoveDir)
         moved.push({ oldPath: path, newPath: nextPath })
       }
+      let nextExpanded = expandedPathsRef.current
       for (const { oldPath, newPath } of moved) {
-        renameFileTabs(workspaceRoot, oldPath, newPath)
+        const newBusinessPath = toBusinessAbsolutePath(newPath)
+        renameFileTabs(workspaceRoot, oldPath, newBusinessPath)
+        // 移动目录后迁移展开态(逐个前缀迁移,同步 ref)。
+        nextExpanded = migrateExpandedPaths(nextExpanded, oldPath, newBusinessPath)
       }
-      // 展开目标目录,便于用户立即看到移动结果。
+      // 展开目标目录,并把目标目录一并加入展开集合(同步 ref)。
+      if (batchMoveDir) {
+        nextExpanded = new Set(nextExpanded).add(batchMoveDir)
+      }
+      expandedPathsRef.current = nextExpanded
+      setExpandedPaths(nextExpanded)
       expandDirChildren(batchMoveDir)
-      setExpandedPaths((prev) => new Set(prev).add(batchMoveDir))
+      // 立即整树保持展开刷新,把磁盘新路径拉回树。
+      void reloadTree(showInternalFiles, true)
       // 选中项若在被移动路径下,跟随前缀替换,避免选中态指向失效路径。
       if (selectedExplorerPath) {
         const matched = moved.find(({ oldPath }) => selectedExplorerPath === oldPath || selectedExplorerPath.startsWith(`${oldPath}/`))
         if (matched) {
-          setSelectedExplorerPath(matched.newPath + selectedExplorerPath.slice(matched.oldPath.length))
+          const newBusinessPath = toBusinessAbsolutePath(matched.newPath)
+          setSelectedExplorerPath(newBusinessPath + selectedExplorerPath.slice(matched.oldPath.length))
         }
       }
       showToast(`已移动 ${paths.length} 项`, 'success')
@@ -444,7 +532,7 @@ function WorkspaceGroupPanel({
     } finally {
       setBatchMoving(false)
     }
-  }, [batchMoveDir, batchMoving, expandDirChildren, renameFileTabs, selectedExplorerPath, selectedPaths, showToast, workspaceRoot])
+  }, [batchMoveDir, batchMoving, expandDirChildren, reloadTree, renameFileTabs, selectedExplorerPath, selectedPaths, showInternalFiles, showToast, workspaceRoot])
 
   const handleRequestCreate = React.useCallback((mode: 'file' | 'directory', target: WorkspaceExplorerContextTarget) => {
     setCreateMode(mode)
@@ -985,8 +1073,31 @@ function getDeleteDialogTitle(target: WorkspaceExplorerContextTarget | null): st
   return target?.type === 'directory' ? '删除文件夹' : '删除文件'
 }
 
+/** 删除确认弹窗副标题。 */
 function getDeleteDialogSubtitle(target: WorkspaceExplorerContextTarget | null): string {
   return target?.type === 'directory' ? '会直接删除当前工作区文件夹及其内容' : '会直接删除当前工作区文件'
+}
+
+/**
+ * 把展开集合中命中 oldPath 前缀的目录 key 迁移为 newPath(重命名/移动目录后保持展开语义)。
+ * 与 Layout.renameFileTabs 的 resolveRenamedPath 同款前缀替换;expandedPaths 存业务绝对路径。
+ */
+function migrateExpandedPaths(expanded: Set<string>, oldPath: string, newPath: string): Set<string> {
+  if (!oldPath || !newPath || oldPath === newPath) return expanded
+  let changed = false
+  const next = new Set<string>()
+  for (const key of expanded) {
+    if (key === oldPath) {
+      next.add(newPath)
+      changed = true
+    } else if (key.startsWith(`${oldPath}/`)) {
+      next.add(`${newPath}${key.slice(oldPath.length)}`)
+      changed = true
+    } else {
+      next.add(key)
+    }
+  }
+  return changed ? next : expanded
 }
 
 function getDeleteDialogMessage(target: WorkspaceExplorerContextTarget | null): string {

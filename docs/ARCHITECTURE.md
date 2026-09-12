@@ -317,6 +317,7 @@ MeasureDurationAdvisor(计时) → SkillAdvisor(skill 渐进式披露索引) →
 ```
 
 - 核心事件发射由 `WorkerToolEventAdvisor` 完成(继承 Spring AI `ToolCallingAdvisor`,重写受保护 hook 发射 delta/message/usage/tool 等事件,**不另起一层重复实现递归循环**)。
+- 重试退避算法由 `worker.retry.strategy` 选择,空响应重试与瞬时错误重试共享:`fixed`(默认,固定 `backoff-base-ms` 间隔、`max-request-retries` 默认 30 次,适合网络抖动场景的稳定节奏恢复)或 `exponential`(`base × factor^(n-1)` 递增退避);未知取值回落 `exponential`(旧行为)。
 - `LoopRepeatGuardAdvisor` 叠加**死循环检测**:比较本轮与上一轮工具调用签名(名称+参数集合,顺序无关),连续重复达 `worker.limits.max-repeated-tool-rounds`(默认 3)即中断任务(error 收口)。
 - `DialogInsertAdvisor`(普通 StreamAdvisor,在主 agent 的工具循环下行阶段)把任务队列「插入到当前对话」的用户消息 drain 并追加给 AI + 发射 `user.message` 事件;子 agent 按 kind==MAIN 旁路(对话是一次性嵌套,不接收任务队列输入)。
 - 主 Agent 与子 Agent **共用同一执行入口与 Advisor 链**,仅 agentId 不同;子 agent 不挂计时与 skill,但同挂上下文压缩。
@@ -457,6 +458,7 @@ ask 管道承载第二类阻塞请求:**危险操作授权**。`PermissionGate` 
 - **Windows Low IL 可写性契约**(对 windows-mic 后端):工作区树 + EXEC 授权目录必须由 worker 在命令执行前配置为沙箱可写——① 标注 Low 完整性(SACL `S:(ML;OICI;NW;;;LW)`),解决 MIC 的 NO_WRITE_UP;② `WindowsAcl` 给工作区根追加可继承 Allow ACE(本地 Users `(OI)(CI)` 修改+删除权限),解决 ACL 残缺。工作区外保持默认 Medium → 沙箱内写被 OS 拒,构成弹窗授权之外的 OS 级兜底。
 - **工作区外部授权根的沙箱消费**(§7.17):文件工具侧并入 `FsToolSupport` 的 Sandbox 附加根(read_file/create_file/update_file 直接放行);命令侧并入 `GrantRegistry.execRootsSandboxed` 安全过滤视图(过宽根同被拒收)——wsl-bwrap 随命令以 `rw --bind` 白名单挂载(挂载点 `/mnt/<盘>` 原生形态);windows-mic Low 完整性标注 + DACL 可写(同工作区契约);wsl-direct 把**全部工作区**的 externalRoots 并入每条命令的 `WslDirectSandbox` 挂载列表(drvfs 读写挂载,runner trusted 阶段幂等 `_ensure_mount`;挂载长存,删除工作区时按 §7.17 级联 umount;bwrap 按次 bind 天然跟随,mic 标注幂等无残留)。
 - **网络策略**:默认放行(`worker.sandbox.allow-network=true`,命令可访问网络,含回环 127.0.0.1);任务级 `/禁用网络` 或全局 `allow-network=false` 才断网——wsl-direct = `unshare -n`(新建无 eth0 的 netns)、wsl-bwrap = `--unshare-net`(新 netns 仅 down 的 lo,连回环也不通)、direct/mic = 剥代理 env(advisory)。
+- **PowerShell 方言可选开启**(wsl 系列后端):WSL 后端命令方言为 bash,AI 默认只有 `bash` 工具;用户对某任务选 `/启用powershell`(kind=`powershell.enable`,任务级开关 `TaskEntry.powershellEnabled`,随 meta 持久化)后,主/子 agent 工具集在 bash 之外**追加** `powershell` 工具——该命令**回宿主 Windows 原生沙箱执行**(windows-mic 语义:Restricted Token + Low IL + Job Object + 目录标注/ACL,经 `CommandExecutor` 的 powershell 分支强制 native,wsl 发行版内不要求安装 pwsh),与 bash 并存。windows-mic(Windows+ACL)后端命令工具本就是 PowerShellTool,**不注册**该斜杠条目(`PowerShellEnableSlashProvider` 仅 `sandbox.isWslBackend()` 时注册)。
 - **命令 stdin 契约**:AI 命令的 stdin 一律接 null 设备(`/dev/null`;windows-mic 后端为 NULL 句柄),不得是"打开的空管道"。wsl 系后端载荷经 stdin 传入,但 wsl.exe→发行版的 stdio 桥接会保持 Linux 侧管道写端打开(worker 侧关闭管道也不传播 EOF);若让 bash 继承它,`rg`/`grep` 无路径参数时据 stdin 可读判定改读 stdin(静默空结果,与"无匹配"不可区分),`cat` 等阻塞读则挂到超时。落地:eagent-run.py 在 exec bash/bwrap 前把 fd 0 重定向到 `/dev/null`(seccomp supervisor 除外——其 stdin 承载 priv-ans 控制帧);direct 后端 ProcessBuilder `redirectInput` null 设备。
 - **Windows 沙箱技术路线说明**:曾评估 AppContainer(Low IL 标注的继任者),因"capability 模型不适合开放式开发工作流+普通 ACE 全失效的读模型破坏面太大"(OpenAI 对 Windows 沙箱的弃用理由同源)而放弃,整体迁往 WSL2 生态(Claude Code 对 Windows 用户的官方推荐路径);windows-mic 保留为回退后端。
 
@@ -606,7 +608,7 @@ worker(进程)
 | **Ask** | askId(短 ID `q_…`)、taskId、agentId、kind、question、options?、status、answer?、answeredBy?、timeoutAt | 运行时的 CompletableFuture 不入模型 |
 | **Input** | taskId、text、rawContent?、ts、from(sessionId) | 状态:queued → consumed(取消时 discarded);`rawContent` 为原始输入(含 opaque token 串) |
 
-**斜杠命令与任务级开关**:斜杠命令由 worker 动态注册(`slash.list`/`slash.select`/`slash.cancel`);任选中可返回多个结果(如 `/无人值守` 一次返回「无人值守」+「AI 审议」两个胶囊);任务级 token(模型池、AI 审议、无人值守等)随 meta 持久化、再运行保持,`slash.taskTokens.apply` 用于落地 token 携带的数据。
+**斜杠命令与任务级开关**:斜杠命令由 worker 动态注册(`slash.list`/`slash.select`/`slash.cancel`);任选中可返回多个结果(如 `/无人值守` 一次返回「无人值守」+「AI 审议」两个胶囊);任务级 token(模型池、AI 审议、无人值守、禁用网络、启用 powershell 等)随 meta 持久化、再运行保持,`slash.taskTokens.apply` 用于落地 token 携带的数据。其中 `/启用powershell` 仅 WSL+Linux 沙箱后端注册(windows-mic 后端命令工具本就是 PowerShellTool,无追加需求),开启后主/子 agent 工具集在 bash 之外追加 `powershell` 工具。
 
 **composer token(opaque token)双轨与 worker 解析**:输入框胶囊(斜杠命令、`@` 文件引用等)由前端构造为 inline opaque token(`[[[[agent-token::::<kind>||||label/summary/payload…]]]]`,4 连符号定界零转义);提交走**双轨**——`text` 为人类可读明文,原始 token 串随 `Input.rawContent` 上行(重开/回放按 rawContent 还原胶囊)。worker 侧 `SlashTokenResolveAdvisor` 在 user 消息进入模型前扫描正文、交 `SlashTokenHandler` 按 kind 分发解析为提交文本(未知 kind/解析失败保留原串);已注册 kind:技能命令 → 技能名、`git.auto_sync` → 空串、`system.workspace_file` → 工作区相对路径明文。
 
@@ -837,7 +839,7 @@ docker-compose 一键:`HUB_KEY=你的密钥 docker-compose up --build`;数据落
 | D21 | 事件分类:瞬态(delta/thinking)只发前端消耗 seq;持久(message 等)落盘回放 | 流式体验与权威记录分层 |
 | D22 | 按 agent 分文件 `<agentId>.jsonl`,行内恒记 agentId | agentId 即 conversationId;冷启动与回放归并单位 |
 | D23 | 输入走 worker 级频道 `u.K.worker.<id>.input` | 订阅数 O(worker×hub) 不随任务数增长 |
-| D24 | 短 ID:`{前缀}_{2位盐}{base36 序号}`(t_/a_/sub_/q_) | 人可读可念;单 worker 查重兜底 |
+| D24 | 短 ID:`{前缀}_{3位盐}{base36 序号}`(t_/a_/sub_/q_) | 人可读可念;单 worker 查重兜底 |
 | D25 | contract 只承载纯协议,业务常量住 worker proto | workflow 演进零改 contract、零改 hub |
 | D26 | 命令沙箱多后端:Windows 默认 wsl-direct、wsl-bwrap 显式、windows-mic 回退 | 「零管理员 + 网络硬隔离 + 零宿主残留」在原生 Windows 不可兼得;WSL2 生态已验证 |
 | D27 | 授权语义(seccomp 场景)= WSL 原生 root 重跑 | NNP + userns 不映射 uid0 + 基座只读 → 沙箱内真实提权物理不可行 |
@@ -855,7 +857,7 @@ docker-compose 一键:`HUB_KEY=你的密钥 docker-compose up --build`;数据落
 
 本章是给实现者的红线清单:以下行为已定死,不按个人偏好变更。与其余章节冲突时,先改文档再改代码。
 
-1. **编码、时间与 ID**:帧为 UTF-8 JSON;ts 一律 epoch 毫秒(UTC);短 ID 规则 `{前缀}_{2位盐}{base36 序号}`,全局唯一从不复用;ownerKey = sha256(apiKey) 64 位小写 hex。
+1. **编码、时间与 ID**:帧为 UTF-8 JSON;ts 一律 epoch 毫秒(UTC);短 ID 规则 `{前缀}_{3位盐}{base36 序号}`,全局唯一从不复用;ownerKey = sha256(apiKey) 64 位小写 hex。
 2. **频道与信封(hub 红线)**:频道名字符集 `[a-z0-9._-]` 长度 ≤160,必须以 `u.<ownerKey>.` 开头;hub 只解析 `type`/`channel`(及 hello 握手字段),`event`/`seq`/`payload`/`ext` 原样转发;不存在角色×频道权限矩阵;seq 只属于任务流事件空间,由 task.poll/stream 携带;error 分级(断开 vs 拒单帧);连接抢占(worker 同 clientId 新连关旧连)。
 3. **RPC 生命周期**:reqId 连接内唯一,ok/err 已出则后续同 reqId 帧忽略;未知 method → UNKNOWN_METHOD;参数不合法 → BAD_PARAMS;超时是纯客户端语义(SDK 默认 30s),要中断须显式 rpc.cancel;task.run 新建支持 idempotencyKey(10 分钟窗口去重);task.delete 是任务唯一删除路径,无任何自动清理。
 4. **错误码两个命名空间,勿混用**:hub `error` = NOT_AUTHENTICATED/VERSION_MISMATCH(断开)、ACL_DENIED/FRAME_TOO_LARGE/RATE_LIMITED(单帧拒绝);`rpc.err` = UNKNOWN_METHOD/BAD_PARAMS/NOT_FOUND/SANDBOX_DENIED/BUSY/INTERNAL/AUTH_REQUIRED。

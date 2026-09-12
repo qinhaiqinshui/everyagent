@@ -365,6 +365,24 @@ public final class OsSandbox {
                 allowNetwork, allowPrivilege);
     }
 
+    /**
+     * 强制以 Windows 原生沙箱执行(不按解析后端分发):供 WSL 后端下动态启用的 powershell
+     * 工具使用——wsl 发行版内不保证安装 pwsh,PowerShell 命令回宿主 Windows 原生沙箱
+     * (windows-mic 语义:Restricted Token + Low IL + Job Object + 目录标注/ACL)运行,
+     * 与 WSL 后端的 bash 方言并存。沙箱禁用/后端不可用时退化为直接 spawn(与其它后端一致)。
+     */
+    public ExecResult spawnSandboxedWindows(String command, Path cwd, Map<String, String> extraEnv,
+            String shell, List<Path> extraRoots, boolean allowNetwork, boolean allowPrivilege) {
+        String s = normalizeShell(shell);
+        if (!cfg.isEnabled() || backend() == Backend.DIRECT) {
+            log.warn("[sandbox] 沙箱已禁用,powershell 直接 spawn(仅超时/输出护栏): {}",
+                    truncate(command, 120));
+            return runDirect(command, cwd, extraEnv, s, allowNetwork);
+        }
+        return WindowsSandbox.run(command, cwd, extraEnv, cfg, exec, MAX_OUTPUT_CHARS, s,
+                allowNetwork, allowPrivilege);
+    }
+
     /** 全部已注册工作区宿主路径(wsl-direct 动态挂载用);未初始化时回退空表。 */
     private List<Path> allWorkspaceRoots() {
         if (workspaces == null) {

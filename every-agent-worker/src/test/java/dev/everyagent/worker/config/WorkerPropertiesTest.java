@@ -209,4 +209,67 @@ class WorkerPropertiesTest {
         assertEquals(Boolean.TRUE, m.getIsDefault());
         assertNotNull(m.getParams());
     }
+
+    // ===== retry 退避策略(fixed 默认 / exponential)=====
+
+    @Test
+    void retryDefaultsToFixedStrategyWith30RetriesAnd3sInterval() {
+        WorkerProperties.Retry r = new WorkerProperties.Retry();
+        // 新默认:固定 3s 间隔、最多 30 次重试
+        assertEquals(WorkerProperties.Retry.STRATEGY_FIXED, r.getStrategy());
+        assertEquals(30, r.getMaxRequestRetries());
+        assertEquals(3_000L, r.getBackoffBaseMs());
+    }
+
+    @Test
+    void fixedStrategyBackoffIsConstantBaseMs() {
+        WorkerProperties.Retry r = new WorkerProperties.Retry();
+        // fixed 策略:任意 attempt 恒返回 backoffBaseMs(默认 3s),不随次数增长
+        for (long attempt = 1; attempt <= 30; attempt++) {
+            assertEquals(3_000L, r.backoffMs(attempt), "attempt=" + attempt);
+        }
+    }
+
+    @Test
+    void fixedStrategyHonorsCustomBaseMsAndNonPositiveAttempt() {
+        WorkerProperties.Retry r = new WorkerProperties.Retry();
+        r.setStrategy(WorkerProperties.Retry.STRATEGY_FIXED);
+        r.setBackoffBaseMs(1_500);
+        assertEquals(1_500L, r.backoffMs(1));
+        assertEquals(1_500L, r.backoffMs(7));
+        // attempt ≤ 0 按 1 计,固定间隔不受影响
+        assertEquals(1_500L, r.backoffMs(0));
+        assertEquals(1_500L, r.backoffMs(-3));
+    }
+
+    @Test
+    void fixedStrategyIsCaseInsensitive() {
+        WorkerProperties.Retry r = new WorkerProperties.Retry();
+        r.setStrategy("FIXED");
+        assertEquals(3_000L, r.backoffMs(5));
+    }
+
+    @Test
+    void exponentialStrategyKeepsLegacyFormula() {
+        WorkerProperties.Retry r = new WorkerProperties.Retry();
+        r.setStrategy(WorkerProperties.Retry.STRATEGY_EXPONENTIAL);
+        // base * factor^(attempt-1):3s、15s、75s(与 novel_agent-n computeRetryDelayMs 同式)
+        assertEquals(3_000L, r.backoffMs(1));
+        assertEquals(15_000L, r.backoffMs(2));
+        assertEquals(75_000L, r.backoffMs(3));
+        // attempt ≤ 0 按 1 计
+        assertEquals(3_000L, r.backoffMs(0));
+    }
+
+    @Test
+    void unknownOrNullStrategyFallsBackToExponential() {
+        WorkerProperties.Retry r = new WorkerProperties.Retry();
+        // 未知/空取值回落 exponential(升级前旧配置的行为),不抛异常
+        r.setStrategy("bogus");
+        assertEquals(15_000L, r.backoffMs(2));
+        r.setStrategy(null);
+        assertEquals(15_000L, r.backoffMs(2));
+        r.setStrategy("");
+        assertEquals(15_000L, r.backoffMs(2));
+    }
 }
