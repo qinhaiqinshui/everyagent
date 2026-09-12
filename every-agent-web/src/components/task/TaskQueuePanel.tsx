@@ -93,6 +93,7 @@ export default function TaskQueuePanel({
               <button
                 type="button"
                 className="task-queue-panel__btn task-queue-panel__btn--insert"
+                onMouseDown={(event) => event.preventDefault()}
                 onClick={() => handleInsert(idx, text)}
                 disabled={busy || !running}
                 title={running ? '插入到当前对话' : '任务未在运行,无法插入'}
@@ -103,6 +104,7 @@ export default function TaskQueuePanel({
               <button
                 type="button"
                 className="task-queue-panel__btn"
+                onMouseDown={(event) => event.preventDefault()}
                 onClick={() => handleMoveUp(idx)}
                 disabled={busy || idx === 0}
                 title="上移"
@@ -113,6 +115,7 @@ export default function TaskQueuePanel({
               <button
                 type="button"
                 className="task-queue-panel__btn"
+                onMouseDown={(event) => event.preventDefault()}
                 onClick={() => handleMoveDown(idx)}
                 disabled={busy || idx === items.length - 1}
                 title="下移"
@@ -123,6 +126,7 @@ export default function TaskQueuePanel({
               <button
                 type="button"
                 className="task-queue-panel__btn"
+                onMouseDown={(event) => event.preventDefault()}
                 onClick={() => handleEdit(idx, text)}
                 disabled={busy}
                 title="编辑"
@@ -133,6 +137,7 @@ export default function TaskQueuePanel({
               <button
                 type="button"
                 className="task-queue-panel__btn task-queue-panel__btn--danger"
+                onMouseDown={(event) => event.preventDefault()}
                 onClick={() => handleDelete(idx)}
                 disabled={busy}
                 title="删除"
