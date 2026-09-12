@@ -778,15 +778,15 @@ function WorkspaceGroupPanel({
     },
     {
       key: 'show-size',
-      label: '显示文件大小',
+      label: metaMode === 'size' ? '隐藏文件大小' : '显示文件大小',
       active: metaMode === 'size',
-      onSelect: () => setMetaMode('size'),
+      onSelect: () => setMetaMode((current) => (current === 'size' ? 'none' : 'size')),
     },
     {
       key: 'show-modified',
-      label: '显示最后编辑时间',
+      label: metaMode === 'modified' ? '隐藏最后编辑时间' : '显示最后编辑时间',
       active: metaMode === 'modified',
-      onSelect: () => setMetaMode('modified'),
+      onSelect: () => setMetaMode((current) => (current === 'modified' ? 'none' : 'modified')),
     },
     {
       key: 'remove-workspace',
