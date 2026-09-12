@@ -210,6 +210,8 @@
 .ws-tree .ant-tree-node-content-wrapper {
   display: flex;
   align-items: center;
+  /* 去掉 antd 默认的左右 padding(8px)，让标题内容顶到行边缘，与 switcher 箭头列紧凑衔接。 */
+  padding-inline: 0 !important;
 }
 
 /* 文件树（DirectoryTree）选中/悬停高亮统一为项目灰调(与 ui-list-row 的 bg-hover/bg-active 一致)。
