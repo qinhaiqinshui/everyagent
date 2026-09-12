@@ -9,8 +9,8 @@ worker:
       hub-key: ${HUB_KEY:sljlw23948LKS}
   # 系统目录(架构 §5.9):默认工作区 workspace/、数据 data/;空 = ~/.everyagent
   home-dir: ${user.home}/.everyagent-dev
-  sandbox:
-    type: windows-mic
+  #sandbox:
+   # type: windows-mic
 server:
   port: 8200
   address: 127.0.0.1 # 管理端口仅本机(架构 §2.2)
