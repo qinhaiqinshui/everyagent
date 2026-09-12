@@ -20,7 +20,6 @@ import dev.everyagent.worker.task.FileChangeAdvisor;
 import dev.everyagent.worker.task.GitAutoSyncAdvisor;
 import dev.everyagent.worker.task.LlmContextSummarizer;
 import dev.everyagent.worker.task.LoopRepeatGuardAdvisor;
-import dev.everyagent.worker.task.MeasureDurationAdvisor;
 import dev.everyagent.worker.task.ModelLengthGuardAdvisor;
 import dev.everyagent.worker.task.ModelPoolChatModel;
 import dev.everyagent.worker.task.RoundIndexAdvisor;
@@ -141,13 +140,13 @@ public class AgentClientFactory {
     }
 
     /**
-     * 主 agent 的 ChatClient:挂 任务耗时 + 文件改动收集 + 环境信息 + skill + 事件(含死循环检测)
-     * + 重试双 advisor。容灾在模型层:任务 configId 为池配置时 a.chatModel 即 ModelPoolChatModel。
-     * 工具集走 {@code a.tools}(prompt options.toolCallbacks),不在此 defaultTools 重复注册。
-     * <p>顺序(由 getOrder 决定,非列表序):MeasureDurationAdvisor(HIGHEST_PRECEDENCE,最外层,
-     * 包裹整条链含工具循环,流完成帧把耗时回填进 rounds.jsonl,不再发 task_duration trace)→
-     * RoundIndexAdvisor(+10,每轮用户任务流 doOnComplete 后增量补写 rounds.jsonl 轮次索引,
-     * 仅主 agent)→
+     * 主 agent 的 ChatClient:挂 轮次索引(含任务耗时) + 文件改动收集 + 环境信息 + skill + 事件
+     * (含死循环检测) + 重试双 advisor。容灾在模型层:任务 configId 为池配置时 a.chatModel 即
+     * ModelPoolChatModel。工具集走 {@code a.tools}(prompt options.toolCallbacks),不在此
+     * defaultTools 重复注册。
+     * <p>顺序(由 getOrder 决定,非列表序):RoundIndexAdvisor(HIGHEST_PRECEDENCE+10,最外层,
+     * 每轮用户任务流 doOnComplete 后增量补写 rounds.jsonl 轮次索引,<b>本轮耗时</b>由开轮时
+     * 随行落盘的 startedAt 从磁盘计算并随闭合行内联,不再内存计时,仅主 agent)→
      * SystemInfoAdvisor(+50,注入工作区/OS 环境信息)→ AgentsMdAdvisor(+60,读取工作区
      * agents.md 注入约束)→ SkillAdvisor(+100,注入 skill 渐进式披露索引)→ GitAutoSyncAdvisor(+140,读取本轮 /自动同步 标记,任务收口后触发
      * git 同步)→ SlashTokenResolveAdvisor(+150,统一按 kind 解析/剥离 input 里的 opaque
@@ -166,7 +165,6 @@ public class AgentClientFactory {
     public ChatClient forMain(AgentEntity a, SkillAdvisor skillAdvisor, ToolCallingManager tcm) {
         return ChatClient.builder(a.chatModel)
                 .defaultAdvisors(
-                        new MeasureDurationAdvisor(a, taskStore, roundIndexStore),
                         new RoundIndexAdvisor(a, taskStore, roundIndexStore),
                         new SystemInfoAdvisor(a.task.workspaceRoot, osSandbox.isWslBackend(), osSandbox.isWslDirect()),
                         new AgentsMdAdvisor(a.task.workspaceRoot),

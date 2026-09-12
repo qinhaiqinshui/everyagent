@@ -205,8 +205,9 @@ export interface RoundSummary {
   /** 该轮内子 Agent 活动区间（恒为数组；无子 Agent 为空数组）。 */
   subs: RoundSubSummary[]
   /**
-   * 本轮用户任务端到端耗时（毫秒；MeasureDurationAdvisor 收口回填，rounds.jsonl 每行携带，
-   * 旧行/未记录缺省视为 0）。0 表示无耗时数据，前端折叠时折叠图标左侧不显示。
+   * 本轮用户任务端到端耗时（毫秒；worker 开轮时落盘 startedAt、闭合时以当前时间减磁盘
+   * startedAt 计算，随 rounds.jsonl 每行携带；旧行/未记录缺省视为 0）。0 表示无耗时数据，
+   * 前端折叠时折叠图标左侧不显示。
    */
   durationMs?: number
   /**

@@ -41,12 +41,12 @@ class TaskStoreRoundsTest {
 
     private static RoundIndex.Round closedRound() {
         return new RoundIndex.Round("round_test", 1L, 10L, 20L, "第一问", "第一答",
-                List.of(new RoundIndex.SubRange(SUB, "子任务", 12L, 18L)), 0L, null, null);
+                List.of(new RoundIndex.SubRange(SUB, "子任务", 12L, 18L)), 0L, 1234567890L, null, null);
     }
 
     private static RoundIndex.Round openRound() {
         return new RoundIndex.Round("round_test", 2L, 30L, null, "第二问", "",
-                List.of(new RoundIndex.SubRange(SUB, "未收尾子任务", 32L, null)), 0L, null, null);
+                List.of(new RoundIndex.SubRange(SUB, "未收尾子任务", 32L, null)), 0L, 1234567900L, null, null);
     }
 
     @Test
@@ -73,6 +73,7 @@ class TaskStoreRoundsTest {
         String line1 = Files.readAllLines(dir.resolve("rounds.jsonl")).get(0);
         assertTrue(line1.contains("\"startSeq\":\"10\""), "startSeq 序列化为字符串: " + line1);
         assertTrue(line1.contains("\"endSeq\":\"20\""), line1);
+        assertTrue(line1.contains("\"startedAt\":1234567890"), line1);
         assertTrue(line1.contains("\"subs\":[{\"agentId\":\"sub_x9\",\"title\":\"子任务\","
                 + "\"startSeq\":\"12\",\"endSeq\":\"18\"}]"), line1);
 
@@ -84,8 +85,8 @@ class TaskStoreRoundsTest {
         TaskStore store = newStore();
         Files.createDirectories(t1dir());
         store.appendRound("t1", closedRound());
-        store.appendRound("t1", new RoundIndex.Round("round_test", 2L, 30L, 40L, "u2", "r2", List.of(), 0L, null, null));
-        store.appendRound("t1", new RoundIndex.Round("round_test", 3L, 50L, 60L, "u3", "r3", List.of(), 0L, null, null));
+        store.appendRound("t1", new RoundIndex.Round("round_test", 2L, 30L, 40L, "u2", "r2", List.of(), 0L, 0L, null, null));
+        store.appendRound("t1", new RoundIndex.Round("round_test", 3L, 50L, 60L, "u3", "r3", List.of(), 0L, 0L, null, null));
         Path dir = dataDir.resolve("workspaces").resolve("defaultworkspace").resolve("tasks").resolve("t1");
         assertEquals(50, store.lastRoundStartSeq(dir));
         assertEquals(3, store.readRounds(dir).size());
@@ -127,7 +128,7 @@ class TaskStoreRoundsTest {
 
         // 续跑补完:startSeq 匹配的未闭合行被闭合版原位替换(index 沿用磁盘行)
         RoundIndex.Round closedSeed = new RoundIndex.Round("round_test", 2L, 30L, 44L, "第二问", "补完之答",
-                List.of(new RoundIndex.SubRange(SUB, "未收尾子任务", 32L, 40L)), 0L, null, null);
+                List.of(new RoundIndex.SubRange(SUB, "未收尾子任务", 32L, 40L)), 0L, 0L, null, null);
         assertTrue(store.rewriteRound("t1", closedSeed), "命中目标行应返回 true");
 
         List<RoundIndex.Round> rounds = store.readRounds(dir);
@@ -149,7 +150,7 @@ class TaskStoreRoundsTest {
         store.appendRound("t1", closedRound());
         Path dir = dataDir.resolve("workspaces").resolve("defaultworkspace").resolve("tasks").resolve("t1");
         String before = Files.readString(dir.resolve("rounds.jsonl"));
-        RoundIndex.Round stranger = new RoundIndex.Round("round_test", 9L, 999L, 1000L, "陌生轮", "答", List.of(), 0L, null, null);
+        RoundIndex.Round stranger = new RoundIndex.Round("round_test", 9L, 999L, 1000L, "陌生轮", "答", List.of(), 0L, 0L, null, null);
         assertFalse(store.rewriteRound("t1", stranger), "无 startSeq 匹配行返回 false");
         assertEquals(before, Files.readString(dir.resolve("rounds.jsonl")), "文件未动");
         assertTrue(!Files.exists(dir.resolve("rounds.jsonl.tmp")));
@@ -164,7 +165,7 @@ class TaskStoreRoundsTest {
                 .put("changeType", "updated").put("saveCount", 1);
         Files.createDirectories(t1dir());
         store.appendRound("t1", new RoundIndex.Round("round_abc123", 1L, 10L, 20L, "第一问",
-                "第一答", List.of(), 0L, light, null));
+                "第一答", List.of(), 0L, 0L, light, null));
 
         List<RoundIndex.Round> rounds = store.readRounds(dataDir.resolve("workspaces").resolve("defaultworkspace").resolve("tasks").resolve("t1"));
         assertEquals(1, rounds.size());
@@ -187,7 +188,7 @@ class TaskStoreRoundsTest {
         TaskStore store = newStore();
         // roundId 为 null(旧行/scan 阶段)且 fileChanges 为 null:两字段都不写
         Files.createDirectories(t1dir());
-        store.appendRound("t1", new RoundIndex.Round(null, 1L, 10L, 20L, "问", "答", List.of(), 0L, null, null));
+        store.appendRound("t1", new RoundIndex.Round(null, 1L, 10L, 20L, "问", "答", List.of(), 0L, 0L, null, null));
         String line = Files.readString(dataDir.resolve("workspaces").resolve("defaultworkspace").resolve("tasks").resolve("t1").resolve("rounds.jsonl"));
         assertFalse(line.contains("\"roundId\""), "roundId=null 不写字段: " + line);
         assertFalse(line.contains("\"fileChanges\""), "fileChanges=null 不写字段: " + line);
@@ -201,7 +202,7 @@ class TaskStoreRoundsTest {
     void roundWithBlankRoundIdNormalizesToNull() throws Exception {
         TaskStore store = newStore();
         Files.createDirectories(t1dir());
-        store.appendRound("t1", new RoundIndex.Round("", 1L, 10L, 20L, "问", "答", List.of(), 0L, null, null));
+        store.appendRound("t1", new RoundIndex.Round("", 1L, 10L, 20L, "问", "答", List.of(), 0L, 0L, null, null));
         assertNull(store.readRounds(dataDir.resolve("workspaces").resolve("defaultworkspace").resolve("tasks").resolve("t1")).get(0).roundId(),
                 "roundId 空串在构造阶段归一为 null(不写字段)");
     }

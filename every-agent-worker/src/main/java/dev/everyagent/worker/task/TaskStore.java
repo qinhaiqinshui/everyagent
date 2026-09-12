@@ -669,8 +669,9 @@ public class TaskStore {
     }
 
     // ---- 轮次索引 rounds.jsonl(与 meta.json、<agentId>.jsonl 同级;seq 一律字符串防 JS 精度)----
-    // 每行一轮:{index,startSeq,endSeq,user,finalReply,subs:[{agentId,title,startSeq,endSeq}],userMessage?};
+    // 每行一轮:{index,startSeq,endSeq,user,finalReply,durationMs,startedAt,subs:[{agentId,title,startSeq,endSeq}],userMessage?};
     // endSeq 为 "" 表示未闭合;
+    // startedAt = 开轮落盘时刻(epoch 毫秒;旧行缺失=0 未知,闭合时不据此计耗时);
     // userMessage = 完整 user.message payload(懒加载骨架起点;旧行缺失不写);
     // append 单行(无 fsync,崩溃丢尾部由重启标 failed 自愈);读侧容忍撕行(末行半行/解析失败即弃);
     // 「闭合磁盘上已有的未闭合轮」(续跑改判闭合)走 rewriteRound 原位替换单行(append-only 改不了行)。
@@ -837,6 +838,7 @@ public class TaskStore {
         line.put("user", safeText(round.user()));
         line.put("finalReply", safeText(round.finalReply()));
         line.put("durationMs", round.durationMs());
+        line.put("startedAt", round.startedAt());
         if (round.roundId() != null && !round.roundId().isBlank()) {
             line.put("roundId", round.roundId()); // roundId 稳定主键:缺失(旧行)不写
         }
@@ -875,6 +877,7 @@ public class TaskStore {
             String user = n.path("user").asString("");
             String finalReply = n.path("finalReply").asString("");
             long durationMs = n.path("durationMs").asLong(0); // 旧行缺失 → 0(未记录耗时)
+            long startedAt = n.path("startedAt").asLong(0); // 旧行缺失 → 0(未知,闭合时不据此计耗时)
             String roundId = n.path("roundId").asString(null); // 旧行缺失 → null
             JsonNode fileChanges = n.path("fileChanges"); // 缺失/null → null;存在则按 JsonNode 原样读入
             if (fileChanges.isMissingNode() || fileChanges.isNull()) {
@@ -898,7 +901,7 @@ public class TaskStore {
                 }
             }
             return new RoundIndex.Round(roundId, index, startSeq, endSeq, user, finalReply,
-                    subs, durationMs, fileChanges, userMessage);
+                    subs, durationMs, startedAt, fileChanges, userMessage);
         } catch (RuntimeException e) {
             return null; // 撕行
         }

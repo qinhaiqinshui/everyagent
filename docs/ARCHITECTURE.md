@@ -312,7 +312,7 @@ worker 的 agent 执行**复用 Spring AI 2 框架**,不手搓 agent 循环/工�
 主 agent advisor 链(每 run 新建实例,状态随实例隔离):
 
 ```
-MeasureDurationAdvisor(计时) → SkillAdvisor(skill 渐进式披露索引) → LoopRepeatGuardAdvisor(事件发射 + 工具循环 + 死循环检测)
+RoundIndexAdvisor(轮次索引+耗时,最外层) → SkillAdvisor(skill 渐进式披露索引) → LoopRepeatGuardAdvisor(事件发射 + 工具循环 + 死循环检测)
 → DialogInsertAdvisor(队列项「插入到当前对话」,主 agent 专属) → EmptyResponseRetryAdvisor(空响应重调)
 → TransientErrorRetryAdvisor(瞬时错误退避) → ModelLengthGuardAdvisor(输出预算耗尽护栏,finish_reason=length)
 → ContextCompressionAdvisor(上下文压缩,最内层)
@@ -572,8 +572,8 @@ ask 管道承载第二类阻塞请求:**危险操作授权**。`PermissionGate` 
 
 主 agent 侧生成轮次索引(每行一轮:用户输入 → 主 agent 最终回复):
 
-- 行格式:`{index, startSeq, endSeq, user, finalReply, processCount, subs, durationMs, fileChanges, userMessage}`;seq 一律字符串;`endSeq=""` = 未闭合轮;`processCount` = 该轮开区间内过程事件数(0 = 纯问答轮,前端不显示折叠标记);`userMessage` = 完整 user.message payload(懒加载骨架)。
-- 增量写:消费用户输入即 `openRoundAtStart` 落一行 `endSeq=""`;`RoundIndexAdvisor` 在主 agent 最终回复后 `rewriteRound` 原位改写闭合(临时文件 + 原子 move,与追加同锁串行)。**`durationMs` 随闭合行同一次落盘内联写入**(读 `MeasureDurationAdvisor` 组装时打点的 per-run 计时槽 `TaskEntry.roundDurationStart`),`round.closed` 通知在闭合行落盘**之后**推送——前端收到通知拉 `task.rounds` 时耗时必已就位。历史上「先闭合推送、后单独回填耗时」的两段写存在竞态:前端在回填完成前拉快照会拿到 `durationMs=0` 且无后续刷新触发,表现为本轮耗时不显示(重连才恢复)。`RoundIndexStore.recordDuration` 保留为幂等兜底(行内已有耗时即跳过,覆盖非流式等旁路)。
+- 行格式:`{index, startSeq, endSeq, user, finalReply, durationMs, startedAt, subs, fileChanges, userMessage}`;seq 一律字符串;`endSeq=""` = 未闭合轮;`startedAt` = 开轮落盘时刻(epoch 毫秒,耗时从磁盘算的起点;`durationMs` = 闭合时当前时间 − startedAt);`userMessage` = 完整 user.message payload(懒加载骨架)。
+- 增量写:消费用户输入即 `openRoundAtStart` 落一行 `endSeq=""`(并把 `startedAt = System.currentTimeMillis()` 随行落盘);`RoundIndexAdvisor` 在主 agent 最终回复后 `rewriteRound` 原位改写闭合(临时文件 + 原子 move,与追加同锁串行)。**`durationMs` 随闭合行同一次落盘内联写入**——耗时不再内存中计算:闭合轮时 `applyRounds` 取当前时间减去磁盘行的 `startedAt`(开轮落盘时刻)得到;任务出错停止后继续(续跑改判闭合)也以最初开轮时刻计耗时,跨运行延续不失真。`round.closed` 通知在闭合行落盘**之后**推送——前端收到通知拉 `task.rounds` 时耗时必已就位。历史上「先闭合推送、后单独回填耗时」的两段写存在竞态:前端在回填完成前拉快照会拿到 `durationMs=0` 且无后续刷新触发,表现为本轮耗时不显示(重连才恢复)。旧行/scan 行无 `startedAt`(0)时闭合不计算耗时(保持 0,优雅降级)。
 - 旧任务首次 `task.rounds` 惰性全量生成落盘;任务终态 do `finalizeRounds` 补写未闭合轮。中断/失败/取消的未闭合轮自然保留。
 - 前端"双击打开任务" = 拉 meta → 一次 `task.rounds` 渲染折叠轮次 → 展开按 seq 区间懒加载过程内容。
 

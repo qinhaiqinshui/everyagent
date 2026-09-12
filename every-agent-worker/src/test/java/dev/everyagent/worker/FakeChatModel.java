@@ -120,7 +120,7 @@ class FakeChatModel implements org.springframework.ai.chat.model.ChatModel {
 
     /**
      * 终答末片:携带 finishReason=stop(对齐真实 OpenAI 流终片)。BaseAdvisor.after
-     * (如 MeasureDurationAdvisor 的 task.duration)仅对带 finishReason 的 chunk 触发,
+     * 等收口逻辑仅对带 finishReason 的 chunk 触发,
      * 全部用 textChunk 会让收口类 advisor 在测试里静默失活。
      */
     private static ChatResponse finalTextChunk(String s) {

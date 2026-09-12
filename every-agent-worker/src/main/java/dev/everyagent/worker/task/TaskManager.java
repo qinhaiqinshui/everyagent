@@ -831,7 +831,7 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
             lastIndex++;
             store.appendRound(taskId, new RoundIndex.Round(ShortIds.next("round"), lastIndex,
                     r.startSeq(), r.endSeq(), r.user(), r.finalReply(),
-                    r.subs(), 0L, null, r.userMessage()));
+                    r.subs(), 0L, 0L, null, r.userMessage()));
             existingStarts.add(r.startSeq());
         }
     }
@@ -1476,8 +1476,9 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
                     throw new InterruptedException("cancelled");
                 }
                 // 文件改动收集与收口由 FileChangeAdvisor 承担(每轮 run 前建收集器、流完成时填充
-                // light/full 槽);RoundIndexAdvisor 在流完成时把摘要/全文随轮落盘,
-                // MeasureDurationAdvisor 再回填耗时——经 doOnComplete 嵌套顺序保证「文件变更先、耗时后」。
+                // light/full 槽);RoundIndexAdvisor 在流完成时把摘要/全文随轮落盘,并把本轮耗时
+                // (开轮时随行落盘的 startedAt → 当前时间)一并与闭合行内联——经 doOnComplete
+                // 嵌套顺序保证「文件变更先、轮次(含耗时)后」同一次写入。
                 runner.run(main);
                 UserInput next = t.inputQueue.poll();
                 if (next == null) {

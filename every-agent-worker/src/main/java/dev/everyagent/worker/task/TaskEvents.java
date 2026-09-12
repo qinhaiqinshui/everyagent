@@ -379,8 +379,8 @@ public final class TaskEvents {
     }
 
     // NOTE:本轮用户任务端到端耗时不再发 task_duration trace——RoundIndexAdvisor 落盘闭合行时
-    // 内联进 rounds.jsonl(计时槽 TaskEntry.roundDurationStart,见 §7.15.1;MeasureDurationAdvisor
-    // 的 recordDuration 仅幂等兜底),前端折叠标记旁展示。
+    // 内联进 rounds.jsonl(开轮时随行落盘 startedAt,闭合时取当前时间减磁盘 startedAt 计算,
+    // 见 §7.15.1;不再内存计时),前端折叠标记旁展示。
     // NOTE:本轮文件变更不再发 kind='file_changes' 的 task.trace——轻量摘要内联进 rounds.jsonl
     // 每轮行(fileChanges 字段),全文单独落盘 file-changes/<roundId>.json,经 task.fileChanges RPC 读取。
 
