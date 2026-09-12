@@ -6,6 +6,7 @@ import {
 } from '@/query/workspaceContentSearch'
 import { workspaceGateway } from '@/platform/fs/workspaceGateway'
 import { INTERNAL_DIR_NAMES } from '@/platform/fs/pathUtils'
+import { searchTasksContent, type TaskContentSearchResult } from '@/query/taskContentSearch'
 import { walkWorkspaceFiles } from './walkWorkspaceFiles'
 
 /** 搜索执行状态机：未搜索 / 搜索中 / 完成 / 出错。 */
@@ -31,7 +32,16 @@ export interface WorkspaceSearchRunOptions {
   rootPath: string
   /** 是否枚举内部保留目录（默认 false，与资源管理器默认一致）。 */
   includeInternalFiles?: boolean
+  /** 搜索目标：files = 工作区文件内容（默认），tasks = 任务内容。 */
+  target?: 'files' | 'tasks'
+  /** 任务内容搜索目标 worker（仅 tasks 模式；files 模式忽略）。 */
+  workerId?: string
+  /** 任务所属工作区稳定 id（仅 tasks 模式；files 模式忽略）。 */
+  workspaceId?: string
 }
+
+/** 搜索结果统一形状：文件内容搜索 / 任务内容搜索共用同一状态机（files 项语义随 target 不同）。 */
+export type WorkspaceSearchResultShape = WorkspaceContentSearchResult | TaskContentSearchResult
 
 const REGEX_META_PATTERN = /[.*+?^${}()|[\]\\]/g
 
@@ -95,14 +105,14 @@ export function buildWorkspaceSearchRegExp(
  */
 export function useWorkspaceSearch() {
   const [status, setStatus] = React.useState<WorkspaceSearchStatus>('idle')
-  const [result, setResult] = React.useState<WorkspaceContentSearchResult | null>(null)
+  const [result, setResult] = React.useState<WorkspaceSearchResultShape | null>(null)
   const [error, setError] = React.useState('')
   /** 非法正则标记：面板据此给输入框加红框（正则修正前不触发搜索）。 */
   const [regexInvalid, setRegexInvalid] = React.useState(false)
   /** 查询代际：发起/取消时递增，用于中断旧查询与丢弃过期结果。 */
   const generationRef = React.useRef(0)
   /** 结果镜像：cancel 回到「已有结果展示态」时需要读取最新结果，用 ref 旁路闭包。 */
-  const resultRef = React.useRef<WorkspaceContentSearchResult | null>(result)
+  const resultRef = React.useRef<WorkspaceSearchResultShape | null>(result)
   resultRef.current = result
 
   const run = React.useCallback(async (options: WorkspaceSearchRunOptions) => {
@@ -126,6 +136,42 @@ export function useWorkspaceSearch() {
     generationRef.current = generation
     setStatus('searching')
     try {
+      // 任务内容搜索：worker 侧 task.search（rg + 后处理），不走文件 walk/fs.search。
+      if ((options.target ?? 'files') === 'tasks') {
+        if (!options.workerId) {
+          setError('请先选择 worker')
+          setStatus('error')
+          return
+        }
+        if (!options.workspaceId) {
+          setError('当前工作区不支持任务内容搜索（缺少 workspaceId）')
+          setStatus('error')
+          return
+        }
+        try {
+          const taskResult = await searchTasksContent(options.workerId, {
+            workspaceId: options.workspaceId,
+            pattern,
+            isRegex: options.useRegex,
+            caseSensitive: options.caseSensitive,
+            wholeWord: options.wholeWord,
+            maxResults: 500,
+          })
+          if (generationRef.current !== generation) {
+            return
+          }
+          setResult(taskResult)
+          setStatus('done')
+        } catch (taskError) {
+          if (generationRef.current !== generation) {
+            return
+          }
+          setResult(null)
+          setError(taskError instanceof Error ? taskError.message : String(taskError))
+          setStatus('error')
+        }
+        return
+      }
       let nextResult: WorkspaceContentSearchResult | null = null
       // 优先后端 fs.search：整工作区搜索且未确认该 worker 不支持时，走 worker 侧内置 rg。
       // 限定整工作区：fs.search 契约只搜工作区根（无子目录范围参数），带范围的搜索

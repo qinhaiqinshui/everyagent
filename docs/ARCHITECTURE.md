@@ -217,6 +217,7 @@ worker 端 `RpcDispatcher` 注册方法;应答回**请求来源连接**的 `evt`
 | `task.rounds` | 轮次索引拉取(rounds.jsonl 全部行 + 运行中未闭合轮 open;旧任务首次惰性全量生成落盘) |
 | `task.roundTail` | 按轮起点(startSeq)取该轮末尾 limit 条事件,用于初始渲染 |
 | `task.fileChanges` | 单轮文件变更全文:`file-changes/<roundId>.json` 的 `{changes:[...]}` |
+| `task.search` | 任务内容搜索(内置 rg + worker 后处理):按 `workspaceId`(可选,缺省=全部工作区)枚举 `workspaces/<workspaceId>/tasks/<taskId>/`,复用 rg 搜索 `rounds.jsonl`(每行一轮,含 user/finalReply 正文);入参 `pattern` / `isRegex` / `caseSensitive` / `wholeWord` / `maxResults`(默认 500),pattern 语义与 `fs.search` 共用 `buildMatchArgs`;rg 命中 JSON 原始行后由 worker `parseRoundLine` 解析、对 user/finalReply 干净文本二次匹配(消除字段名/转义噪音,同时得到准确 `matchIndex`/`matchText`);结果项 `{taskId, title, workspace, workspaceId, status, matches:[{roundIndex, field:'user'|'finalReply', line, matchIndex, matchText}]}`,按任务聚合;大结果复用 `rpc.data` 分批 + 末帧 `ok` 汇总(§5.4) |
 | `task.queueRemove` / `task.queueMove` | 删除/重排某条队列输入 |
 | `config.get` | 模型配置只读(Spring 配置承载,见 §7.17) |
 | `workspaces.list` / `workspaces.add` / `workspaces.remove` | 工作区注册表 CRUD(多工作区并行) |

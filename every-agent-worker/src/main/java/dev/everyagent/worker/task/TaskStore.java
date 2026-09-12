@@ -243,6 +243,42 @@ public class TaskStore {
         return out;
     }
 
+    /**
+     * 扫描指定工作区(workspaceId)下全部任务目录(meta.json 存在即算);回填 taskWorkspace 映射。
+     * 任务搜索按工作区归类定位:只遍历 workspaces/<workspaceId>/tasks/ 一个分支,比全量 scan 高效。
+     */
+    public List<StoredTask> scanWorkspace(String workspaceId) {
+        List<StoredTask> out = new ArrayList<>();
+        Path tasksRoot = props.resolveWorkspacesDir().resolve(workspaceId).resolve("tasks");
+        if (!Files.isDirectory(tasksRoot)) {
+            return out;
+        }
+        try (DirectoryStream<Path> taskDirs = Files.newDirectoryStream(tasksRoot)) {
+            for (Path taskDir : taskDirs) {
+                if (!Files.isDirectory(taskDir)) {
+                    continue;
+                }
+                Path meta = taskDir.resolve("meta.json");
+                if (!Files.isRegularFile(meta)) {
+                    continue;
+                }
+                try {
+                    JsonNode s = Json.parse(Files.readString(meta));
+                    if (s.isObject()) {
+                        String taskId = taskDir.getFileName().toString();
+                        taskWorkspace.put(taskId, workspaceId);
+                        out.add(new StoredTask(taskId, taskDir, (ObjectNode) s, workspaceId));
+                    }
+                } catch (IOException | RuntimeException e) {
+                    log.warn("meta 读取失败 {}", meta, e);
+                }
+            }
+        } catch (IOException e) {
+            log.warn("工作区任务目录扫描失败 {}", tasksRoot, e);
+        }
+        return out;
+    }
+
     /** 读 meta.json(重启改写后回读)。 */
     public ObjectNode readMeta(Path dir) {
         try {
@@ -816,8 +852,8 @@ public class TaskStore {
         return Json.write(line);
     }
 
-    /** 一行 jsonl → Round;解析失败返回 null(撕行/坏行)。 */
-    private static RoundIndex.Round parseRoundLine(String line) {
+    /** 一行 jsonl → Round;解析失败返回 null(撕行/坏行)。公开:task.search 按命中行解析轮次。 */
+    public static RoundIndex.Round parseRoundLine(String line) {
         try {
             JsonNode n = Json.parse(line);
             if (!n.isObject()) {
