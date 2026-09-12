@@ -246,9 +246,16 @@ public class TaskStore {
     /**
      * 扫描指定工作区(workspaceId)下全部任务目录(meta.json 存在即算);回填 taskWorkspace 映射。
      * 任务搜索按工作区归类定位:只遍历 workspaces/<workspaceId>/tasks/ 一个分支,比全量 scan 高效。
+     * 目录层防御:workspaceId 必须是稳定 id 形态(defaultworkspace / w_xxxxx),拒绝路径分隔符/
+     * `.`/`..`/绝对路径等穿越形态(调用方未校验时兜底,不产生越界路径)。
      */
     public List<StoredTask> scanWorkspace(String workspaceId) {
         List<StoredTask> out = new ArrayList<>();
+        if (workspaceId == null || workspaceId.isBlank()
+                || !workspaceId.matches("[A-Za-z0-9][A-Za-z0-9_-]*")) {
+            log.warn("非法 workspaceId,跳过任务枚举: {}", workspaceId);
+            return out;
+        }
         Path tasksRoot = props.resolveWorkspacesDir().resolve(workspaceId).resolve("tasks");
         if (!Files.isDirectory(tasksRoot)) {
             return out;

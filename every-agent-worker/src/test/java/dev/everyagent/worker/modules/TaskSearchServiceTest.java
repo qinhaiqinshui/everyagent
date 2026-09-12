@@ -166,6 +166,13 @@ class TaskSearchServiceTest {
         return Json.obj().put("workspaceId", workspaceId).put("pattern", pattern);
     }
 
+    /** 断言 rpc.err 并返回错误消息(参数非法类用例,不依赖 rg 可用性)。rpc.err payload = {reqId, code, message}。 */
+    private String callErr(ObjectNode params) throws Exception {
+        JsonNode reply = call(params);
+        assertEquals("rpc.err", reply.path("event").asString(), reply.toString());
+        return reply.path("payload").path("message").asString("");
+    }
+
     // ---- ① 二次匹配 Pattern(纯函数) ----
 
     @Test
@@ -188,6 +195,37 @@ class TaskSearchServiceTest {
         assertTrue(ci.matcher("NEEDLE").find(), "默认忽略大小写");
         java.util.regex.Pattern cs = TaskSearchService.compileSearchPattern("needle", false, true, false);
         assertTrue(!cs.matcher("NEEDLE").find(), "大小写敏感时不命中大写");
+    }
+
+    @Test
+    void compileSearchPatternDoesNotMatchAcrossLines() {
+        // 不加 DOTALL:'.' 不跨换行,与 rg 单行搜索一致(finalReply 含真换行时)。
+        java.util.regex.Pattern p = TaskSearchService.compileSearchPattern("foo.*bar", true, false, false);
+        assertTrue(p.matcher("foo bar").find());
+        assertTrue(!p.matcher("foo\nbar").find(), "多行模式:'.' 不匹配换行");
+    }
+
+    // ---- ①.5 参数校验(非法请求稳定拒绝,不依赖 rg) ----
+
+    @Test
+    void requiresWorkspaceId() throws Exception {
+        ObjectNode params = Json.obj().put("pattern", "needle");
+        String err = callErr(params);
+        assertTrue(err.contains("workspaceId"), "缺 workspaceId 应可读报错: " + err);
+    }
+
+    @Test
+    void rejectsPathTraversalWorkspaceId() throws Exception {
+        for (String bad : List.of("..", "../etc", "a/b", "a\\b", "/abs", ".", "a.b")) {
+            String err = callErr(params(bad, "needle"));
+            assertTrue(err.contains("workspaceId"), "非法 id 应报 workspaceId 错误: " + bad + " → " + err);
+        }
+    }
+
+    @Test
+    void rejectsBlankPattern() throws Exception {
+        String err = callErr(params("defaultworkspace", "   "));
+        assertTrue(err.contains("pattern"), "空白 pattern 应报错: " + err);
     }
 
     // ---- ② 真实 rg 进程 ----

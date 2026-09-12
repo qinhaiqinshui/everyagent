@@ -89,12 +89,22 @@ public class TaskSearchService {
     // ---- RPC 入口 ----
 
     private void search(RpcContext ctx) throws IOException, InterruptedException {
+        // 参数先校验(不依赖 rg 可用性,非法请求稳定拒绝):
+        // workspaceId 必填(前端恒传当前选中工作区稳定 id;拒绝缺省全量扫描)且必须是注册表
+        // 稳定 id 形态(defaultworkspace / w_xxxxx)——RPC 参数可控,直接拼路径前先拦穿越形态
+        // (.. / 路径分隔符 / 绝对路径),目录层另有 TaskStore.scanWorkspace 兜底防御。
+        String workspaceId = ctx.strParam("workspaceId");
+        if (!isValidWorkspaceId(workspaceId)) {
+            throw new BadParamsException("workspaceId 非法: " + workspaceId);
+        }
+        String pattern = ctx.strParam("pattern");
+        if (pattern.isBlank()) {
+            throw new BadParamsException("pattern 不能为空");
+        }
         if (!rg.available()) {
             throw new IOException("rg 不可用: 未找到内置 ripgrep(<程序根>/runtime/bin/ 或"
                     + " worker.tools.rg-path),无法执行任务搜索");
         }
-        String workspaceId = ctx.optStrParam("workspaceId", "");
-        String pattern = ctx.strParam("pattern");
         boolean isRegex = boolParam(ctx, "isRegex");
         boolean caseSensitive = boolParam(ctx, "caseSensitive");
         boolean wholeWord = boolParam(ctx, "wholeWord");
@@ -110,10 +120,8 @@ public class TaskSearchService {
         } catch (PatternSyntaxException e) {
             throw new BadParamsException("正则表达式非法: " + e.getMessage());
         }
-        // 枚举任务:按 workspaceId 直接定位该工作区任务根;缺省 = 全部工作区(防呆,前端恒传)。
-        List<TaskStore.StoredTask> tasks = workspaceId.isBlank()
-                ? store.scan()
-                : store.scanWorkspace(workspaceId);
+        // 枚举任务:按 workspaceId 直接定位该工作区任务根。
+        List<TaskStore.StoredTask> tasks = store.scanWorkspace(workspaceId);
         SearchOutcome out = searchTasks(tasks, pattern, isRegex, caseSensitive, wholeWord,
                 pat, maxResults);
         reply(ctx, out);
@@ -251,6 +259,11 @@ public class TaskSearchService {
                 appendFieldHits(matches, round, pat, hit.lineNumber());
                 if (matches.size() >= remaining) {
                     truncated = true;
+                    // 一行 user+finalReply 可能一次加 2 条:截断到 remaining,
+                    // 保证单任务命中数不越界(否则 matchCount 与 files 内条数不一致)。
+                    if (matches.size() > remaining) {
+                        matches.subList(remaining, matches.size()).clear();
+                    }
                     break; // 触顶:不再消费输出,交 finally kill
                 }
             }
@@ -313,7 +326,8 @@ public class TaskSearchService {
 
     /**
      * 编译二次匹配用的 Java Pattern(与 rg 的 pattern 语义对齐:固定串转义 / 全字包裹 /
-     * 大小写敏感标志)。DOTALL 让 '.' 通配换行,与 rg 对 JSON 行内的字符通配行为近似。
+     * 大小写敏感标志)。不加 DOTALL:rg 单行搜索不跨行,Java Pattern 默认 '.' 也不匹配
+     * 换行,两者行为一致(JSON 转义还原后的真换行不会被 '.' 跨过)。
      */
     static Pattern compileSearchPattern(String pattern, boolean isRegex, boolean caseSensitive,
             boolean wholeWord) {
@@ -321,8 +335,7 @@ public class TaskSearchService {
         if (wholeWord) {
             source = "\\b(?:" + source + ")\\b";
         }
-        return Pattern.compile(source, (caseSensitive ? 0 : Pattern.CASE_INSENSITIVE)
-                | Pattern.DOTALL);
+        return Pattern.compile(source, (caseSensitive ? 0 : Pattern.CASE_INSENSITIVE));
     }
 
     // ---- 参数帮助 ----
@@ -330,6 +343,14 @@ public class TaskSearchService {
     /** 布尔参数(缺省 false;兼容 JSON 布尔与字符串,同 fs.search)。 */
     private static boolean boolParam(RpcContext ctx, String name) {
         return "true".equalsIgnoreCase(ctx.optStrParam(name, "false").trim());
+    }
+
+    /**
+     * workspaceId 合法性:必须是注册表稳定 id 形态(defaultworkspace / w_xxxxx)。
+     * 拒绝空串、路径分隔符、`.`/`..`/绝对路径等穿越形态——RPC 参数可控,拼路径前必须先验。
+     */
+    private static boolean isValidWorkspaceId(String id) {
+        return id != null && !id.isBlank() && id.matches("[A-Za-z0-9][A-Za-z0-9_-]*");
     }
 
     // ---- 应答 ----

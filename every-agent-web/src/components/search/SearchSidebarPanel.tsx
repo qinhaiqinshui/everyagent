@@ -287,6 +287,8 @@ export default function SearchSidebarPanel() {
           setExcludeOpen(false)
         }
         setSearchTarget(next)
+        // 清空旧目标的结果/错误/在途查询：两种目标的结果对象形状不同，混用渲染会错乱。
+        searchReset()
       },
     },
     ...(isTasks
