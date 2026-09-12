@@ -4,6 +4,7 @@ import dev.everyagent.contract.json.Json;
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.hub.HubLink;
 import dev.everyagent.worker.hub.HubPool;
+import dev.everyagent.worker.modules.WorkspaceManager.Registered;
 import dev.everyagent.worker.os.wsl.WslUmounter;
 import dev.everyagent.worker.rpc.BadParamsException;
 import dev.everyagent.worker.rpc.RpcContext;
@@ -12,6 +13,7 @@ import dev.everyagent.worker.task.TaskManager;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.beans.factory.ObjectProvider;
+import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.node.ArrayNode;
 import tools.jackson.databind.node.ObjectNode;
 
@@ -162,5 +164,72 @@ class WorkspaceManagerTest {
         invokeResolveMissing(wm, del);
         assertTrue(wm.list().stream().noneMatch(r -> r.root().equals(moved.toAbsolutePath().normalize().toString())));
         verify(tm).deleteByWorkspaceId(org.mockito.ArgumentMatchers.anyString());
+    }
+
+    @Test
+    void touchActivityUpdatesLastActivityAtAndPersists() throws Exception {
+        Path home = tempDir.resolve("home");
+        Path valid = tempDir.resolve("valid-ws");
+        Path moved = tempDir.resolve("moved-ws");
+        Files.createDirectories(valid);
+        seedRegistry(home, valid, moved); // 无 lastActivityTs → 回退 addedTs(1000/2000)
+
+        TaskManager tm = mock(TaskManager.class);
+        ObjectProvider<TaskManager> provider = mock(ObjectProvider.class);
+        when(provider.getIfAvailable()).thenReturn(tm);
+        WorkspaceManager wm = new WorkspaceManager(props(home, valid),
+                mock(RpcDispatcher.class), mock(HubPool.class), provider, noUmount());
+        wm.init();
+
+        String key = valid.toAbsolutePath().normalize().toString();
+        Registered before = wm.list().stream().filter(r -> r.root().equals(key)).findFirst().orElseThrow();
+        assertEquals(1000L, before.lastActivityAt(), "旧注册表无 lastActivityTs 应回退 addedTs");
+
+        long stamp = System.currentTimeMillis();
+        wm.touchActivity(valid.toString()); // 显式传入 root(前端/任务挂靠口径)
+        Registered after = wm.list().stream().filter(r -> r.root().equals(key)).findFirst().orElseThrow();
+        assertTrue(after.lastActivityAt() >= stamp, "touchActivity 后最后活动时间应推进到当前时刻");
+        assertEquals(before.addedAt(), after.addedAt(), "addedAt 不受影响");
+        assertEquals(before.externalRoots(), after.externalRoots(), "externalRoots 不受影响");
+
+        // 重复调用只前进不回退(时钟回拨/同毫秒保护):值单调,且不破坏注册表。
+        wm.touchActivity(valid.toString());
+        Registered again = wm.list().stream().filter(r -> r.root().equals(key)).findFirst().orElseThrow();
+        assertTrue(again.lastActivityAt() >= after.lastActivityAt(), "重复 touchActivity 应保持单调不后退");
+        assertEquals(before.addedAt(), again.addedAt(), "addedAt 不受影响");
+
+        // 落盘校验:workspaces.json 写入最新 lastActivityTs 字段。
+        Path f = home.resolve("workspaces").resolve("workspaces.json");
+        JsonNode arr = Json.parse(Files.readString(f));
+        boolean found = false;
+        for (JsonNode n : arr) {
+            if (key.equals(n.path("root").asString(""))) {
+                assertEquals(again.lastActivityAt(), n.path("lastActivityTs").asLong(0), "落盘 lastActivityTs");
+                found = true;
+            }
+        }
+        assertTrue(found, "workspaces.json 应包含目标工作区条目");
+    }
+
+    @Test
+    void touchActivityUnknownRootIsNoOp() throws Exception {
+        Path home = tempDir.resolve("home");
+        Path valid = tempDir.resolve("valid-ws");
+        Path moved = tempDir.resolve("moved-ws");
+        Files.createDirectories(valid);
+        seedRegistry(home, valid, moved);
+
+        TaskManager tm = mock(TaskManager.class);
+        ObjectProvider<TaskManager> provider = mock(ObjectProvider.class);
+        when(provider.getIfAvailable()).thenReturn(tm);
+        WorkspaceManager wm = new WorkspaceManager(props(home, valid),
+                mock(RpcDispatcher.class), mock(HubPool.class), provider, noUmount());
+        wm.init();
+
+        // 未注册目录 / 空 / 空白 root:静默跳过,不抛异常、不改变注册表。
+        assertDoesNotThrow(() -> wm.touchActivity(tempDir.resolve("never-registered").toString()));
+        assertDoesNotThrow(() -> wm.touchActivity("  "));
+        assertDoesNotThrow(() -> wm.touchActivity(null));
+        assertEquals(2, wm.list().size(), "未知 root 不新增不修改条目");
     }
 }

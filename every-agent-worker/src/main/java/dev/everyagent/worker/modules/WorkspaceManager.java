@@ -61,17 +61,20 @@ public class WorkspaceManager {
     }
 
     /**
-     * 注册表条目(workspaces.json 单项:{id, root, addedTs, externalRoots?})。
+     * 注册表条目(workspaces.json 单项:{id, root, addedTs, lastActivityTs, externalRoots?})。
      * id = 稳定工作区 ID(默认工作区恒为 defaultworkspace,其它 w_ 短 id;纠正路径保留,
      * 任务按 id 归属,任务目录随 id 归类不随 root 迁移);root = 规范化后的工作区根
-     * (纠正路径时更新);externalRoots = 工作区外部授权根(realpath 规范化后的 Windows
+     * (纠正路径时更新);lastActivityAt = 工作区最近一次活动时间(epoch ms,任务收口时
+     * 经 {@link WorkspaceActivityTracker} 刷新,前端按此倒序渲染工作区;旧文件无该字段
+     * 时回退注册时间);externalRoots = 工作区外部授权根(realpath 规范化后的 Windows
      * 原生绝对路径,按注册序;保持反包含的「宽根集」);旧文件无该字段读入为空列表。
      */
-    public record Registered(String id, String root, long addedAt, List<String> externalRoots) {
+    public record Registered(String id, String root, long addedAt, long lastActivityAt,
+            List<String> externalRoots) {
 
-        /** 兼容旧调用:无 id/外部授权根的条目(id 置 null,由 loadRegistry 按规则补分配)。 */
+        /** 兼容旧调用:无 id/外部授权根的条目(id 置 null,由 loadRegistry 按规则补分配;lastActivityAt 回退注册时间)。 */
         public Registered(String root, long addedAt) {
-            this(null, root, addedAt, List.of());
+            this(null, root, addedAt, addedAt, List.of());
         }
     }
 
@@ -183,6 +186,34 @@ public class WorkspaceManager {
         return out;
     }
 
+    /**
+     * 刷新工作区最后活动时间(epoch ms):任务收口等「工作区有活动」时经
+     * {@link dev.everyagent.worker.modules.WorkspaceActivityTracker} 调用。按 root(规范化键)
+     * 定位条目并改为当前时刻,随后原子落盘 + 广播注册表变化(前端据此按最近活动倒序渲染)。
+     * 未注册/空白 root 静默跳过(不影响任务收口);幂等:目标时间不晚于当前值则不写。
+     */
+    public synchronized void touchActivity(String workspaceRoot) {
+        if (workspaceRoot == null || workspaceRoot.isBlank()) {
+            return;
+        }
+        String key = Path.of(workspaceRoot.trim()).toAbsolutePath().normalize().toString();
+        Registered entry = registry.get(key);
+        if (entry == null) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        if (entry.lastActivityAt() >= now) {
+            return; // 幂等(时钟回拨/并发同毫秒),不落盘不广播
+        }
+        registry.put(key, new Registered(entry.id(), key, entry.addedAt(), now, entry.externalRoots()));
+        try {
+            persistRegistry();
+        } catch (IOException e) {
+            log.warn("工作区最后活动时间落盘失败(不影响收口): {}", key, e);
+        }
+        broadcastRegistry();
+    }
+
     public Path systemDir() {
         return systemDir;
     }
@@ -267,7 +298,7 @@ public class WorkspaceManager {
         }
         String action = merged.size() < existing.size() ? "absorbed" : "registered";
         merged.add(authRoot);
-        registry.put(key, new Registered(entry.id(), key, entry.addedAt(),
+        registry.put(key, new Registered(entry.id(), key, entry.addedAt(), entry.lastActivityAt(),
                 merged.stream().map(Path::toString).toList()));
         persistRegistry();
         return new ExternalRootsUpdate(action, merged);
@@ -406,10 +437,11 @@ public class WorkspaceManager {
         String newKey = newRoot.path().toString();
         long addedAt = existing == null ? System.currentTimeMillis() : existing.addedAt();
         // 纠正的是工作区自身路径,外部授权根(realpath 在工作区之外)随条目保留;
-        // workspaceId 保留(身份不变,只改 root),任务目录不搬。
+        // workspaceId 保留(身份不变,只改 root),任务目录不搬;最后活动时间保留原值。
         String id = existing == null ? ShortIds.next("w") : existing.id();
+        long lastActivityAt = existing == null ? System.currentTimeMillis() : existing.lastActivityAt();
         List<String> externalRoots = existing == null ? List.of() : existing.externalRoots();
-        registry.put(newKey, new Registered(id, newKey, addedAt, externalRoots));
+        registry.put(newKey, new Registered(id, newKey, addedAt, lastActivityAt, externalRoots));
         if (DEFAULT_WORKSPACE_ID.equals(id)) {
             // 默认工作区纠正路径:直接写回注册表 id=defaultworkspace 条目的 root(不再有覆盖文件)。
             defaultRoot = newRoot.path();
@@ -487,7 +519,8 @@ public class WorkspaceManager {
         if (existing != null) {
             return;
         }
-        registry.put(key, new Registered(ShortIds.next("w"), key, System.currentTimeMillis(), List.of()));
+        registry.put(key, new Registered(ShortIds.next("w"), key,
+                System.currentTimeMillis(), System.currentTimeMillis(), List.of()));
         persistRegistry();
         broadcastRegistry(); // task.create 注册新工作区时,前端资源管理器即时感知
     }
@@ -502,13 +535,14 @@ public class WorkspaceManager {
         if (existing != null) {
             if (!DEFAULT_WORKSPACE_ID.equals(existing.id())) {
                 registry.put(key, new Registered(DEFAULT_WORKSPACE_ID, key,
-                        existing.addedAt(), existing.externalRoots()));
+                        existing.addedAt(), existing.lastActivityAt(), existing.externalRoots()));
                 persistRegistry();
                 broadcastRegistry();
             }
             return;
         }
-        registry.put(key, new Registered(DEFAULT_WORKSPACE_ID, key, System.currentTimeMillis(), List.of()));
+        registry.put(key, new Registered(DEFAULT_WORKSPACE_ID, key,
+                System.currentTimeMillis(), System.currentTimeMillis(), List.of()));
         persistRegistry();
         broadcastRegistry();
     }
@@ -550,7 +584,8 @@ public class WorkspaceManager {
             String key = Path.of(r.root()).toAbsolutePath().normalize().toString();
             ObjectNode o = Json.obj()
                     .put("root", r.root())
-                    .put("addedAt", r.addedAt());
+                    .put("addedAt", r.addedAt())
+                    .put("lastActivityAt", r.lastActivityAt());
             if (r.id() != null) { // 旧条目未补 id 时省略,前端按可选字段兼容
                 o.put("id", r.id());
             }
@@ -601,6 +636,7 @@ public class WorkspaceManager {
                     }
                     registry.put(key, new Registered(id, root,
                             n.path("addedTs").asLong(System.currentTimeMillis()),
+                            n.path("lastActivityTs").asLong(n.path("addedTs").asLong(System.currentTimeMillis())),
                             readExternalRoots(n)));
                 }
             }
@@ -643,7 +679,7 @@ public class WorkspaceManager {
         }
     }
 
-    /** 原子写注册表(临时文件 + ATOMIC_MOVE);条目带 id 字段。 */
+    /** 原子写注册表(临时文件 + ATOMIC_MOVE);条目带 id / lastActivityTs 字段。 */
     private void persistRegistry() throws IOException {
         Path f = props.resolveWorkspacesDir().resolve("workspaces.json");
         Path tmp = f.resolveSibling("workspaces.json.tmp");
@@ -653,6 +689,9 @@ public class WorkspaceManager {
             ObjectNode o = Json.obj().put("root", r.root()).put("addedTs", r.addedAt());
             if (r.id() != null) { // 旧兼容构造 id=null 不写字段
                 o.put("id", r.id());
+            }
+            if (r.lastActivityAt() > 0) { // 最后活动时间;旧格式文件无该字段,新条目总是带
+                o.put("lastActivityTs", r.lastActivityAt());
             }
             if (!r.externalRoots().isEmpty()) { // 空列表不写字段:未注册外部根的文件保持旧格式形状
                 ArrayNode ext = Json.arr();

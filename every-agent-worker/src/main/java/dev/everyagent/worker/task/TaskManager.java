@@ -95,6 +95,8 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
     private final RipgrepBinary rgbin;
     private final SlashCommandRegistry slashRegistry;
     private final RoundIndexStore roundIndexStore;
+    /** 工作区最后活动时间跟踪(任务收口时刷新,前端按最近活动倒序渲染)。 */
+    private final dev.everyagent.worker.modules.WorkspaceActivityTracker activityTracker;
 
     /** 热任务(运行中驻留内存;finish 即驱逐)。 */
     private final Map<String, TaskEntry> tasks = new ConcurrentHashMap<>();
@@ -122,7 +124,8 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
             AgentRunner runner, SubAgentManager subs, PendingAsks asks, WorkerProperties props,
             RpcDispatcher dispatcher, dev.everyagent.worker.modules.WorkspaceManager workspaces,
             FsToolSupport fs, OsSandbox sandbox, TaskStore store, PermissionGate gate, RipgrepBinary rgbin,
-            SlashCommandRegistry slashRegistry, RoundIndexStore roundIndexStore) {
+            SlashCommandRegistry slashRegistry, RoundIndexStore roundIndexStore,
+            dev.everyagent.worker.modules.WorkspaceActivityTracker activityTracker) {
         this.pool = pool;
         this.configs = configs;
         this.modelFactory = modelFactory;
@@ -139,6 +142,7 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
         this.rgbin = rgbin;
         this.slashRegistry = slashRegistry;
         this.roundIndexStore = roundIndexStore;
+        this.activityTracker = activityTracker;
     }
 
     @PostConstruct
@@ -1651,6 +1655,8 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
             store.untrack(t.taskId);
             gate.untrack(t.taskId); // 授权内存驱逐(任务级已在 grants.json,再运行 lazy 重载)
             tasks.remove(t.taskId, t); // 两参原子:认领者(并发 rerun/delete)以此判断输赢
+            // 收口附带:刷新该任务挂靠工作区的最后活动时间(独立类,失败不影响收口)。
+            activityTracker.onTaskFinished(t.workspaceRoot);
         }
     }
 

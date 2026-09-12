@@ -4,7 +4,7 @@ import { useAppUi } from '@/components/app/AppUiContext'
 import { domainEventBus, DOMAIN_EVENTS } from '@/events/eventBus'
 import { WORKSPACE_EXPLORER_ROOT_LABEL, workspaceExplorerQueryService } from '@/query/workspaceExplorerQueryService'
 import { findExplorerNode, upsertExplorerChildren } from '@/query/workspaceExplorerTreeUtils'
-import { workspaceRegistry, type WorkspaceEntry } from '@/hub/workspaceRegistry'
+import { workspaceRegistry, workspaceActivity, type WorkspaceEntry } from '@/hub/workspaceRegistry'
 import { antdConfirm } from '@/utils/appAntdBridge'
 import { normalizeWorkspaceRelativePath, toBusinessAbsolutePath } from '@/platform/fs/pathUtils'
 import { workspaceExplorerCommandService } from '@/services/workspaceExplorerCommandService'
@@ -1161,12 +1161,13 @@ function buildPropertyItems(target: WorkspaceExplorerContextTarget): PropertyIte
   return items
 }
 
-/** 组装工作区属性弹窗条目:名称/根路径/Id。 */
+/** 组装工作区属性弹窗条目:名称/根路径/Id/最后活动时间。 */
 function buildWorkspacePropertyItems(entry: WorkspaceEntry): PropertyItem[] {
   return [
     { label: '名称', value: getWorkspaceDisplayName(entry.root) },
     { label: '根路径', value: entry.root },
     { label: 'Id', value: entry.id ?? '—' },
+    { label: '最后活动时间', value: formatPropertyTime(workspaceActivity(entry)) },
   ]
 }
 
