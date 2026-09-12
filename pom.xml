@@ -12,7 +12,7 @@
 
     <groupId>dev.everyagent</groupId>
     <artifactId>every-agent-parent</artifactId>
-    <version>0.3.0</version>
+    <version>0.3.1</version>
     <packaging>pom</packaging>
     <name>every-agent</name>
     <description>哪里都可以使用的 Agent —— worker 执行器 + hub 消息中心 + client SDK</description>
@@ -27,7 +27,7 @@
         <java.version>25</java.version>
         <spring-ai.version>2.0.1</spring-ai.version>
         <!-- 模块版本独立演进:contract(协议,低频)由该属性统一引用;worker/hub 版本见各自 pom -->
-        <every-agent-contract.version>0.3.0</every-agent-contract.version>
+        <every-agent-contract.version>0.3.1</every-agent-contract.version>
     </properties>
 
     <dependencyManagement>
