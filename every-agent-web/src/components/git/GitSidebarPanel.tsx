@@ -272,11 +272,13 @@ function GitWorkspaceGroupPanel({
   } | null>(null)
   /** 更改树容器(右键菜单 MenuList 的锚元素)。 */
   const treeRef = React.useRef<HTMLDivElement | null>(null)
-  /** 工作区级「Git 历史」折叠区:默认折叠,展开时才调用原生 git log。 */
+  /** 工作区级「Git 历史」折叠区:默认折叠,首次展开时才调用原生 git log 并缓存。 */
   const [historyExpanded, setHistoryExpanded] = React.useState(false)
   const [historyCommits, setHistoryCommits] = React.useState<GitLogCommit[]>([])
   const [historyLoading, setHistoryLoading] = React.useState(false)
   const [historyError, setHistoryError] = React.useState('')
+  /** 首次展开缓存标记:已成功加载过则折叠/再展开不再重复请求,除非手动刷新。 */
+  const [historyLoaded, setHistoryLoaded] = React.useState(false)
 
   const connected = hub.state === 'open'
   const hasWorker = hub.directory.some((w) => w.online && w.enabled && w.hasApiKey && !w.error && !w.connecting)
@@ -303,32 +305,35 @@ function GitWorkspaceGroupPanel({
     }
   }, [workspaceRoot, message])
 
-  // 工作区「Git 历史」懒加载:折叠时不请求;每次从折叠展开时重新拉取(数据最新)。
-  React.useEffect(() => {
-    if (!historyExpanded) return
-    let cancelled = false
+  // 工作区「Git 历史」加载:首次展开时调用并缓存;手动刷新(带 toast 报错)强制重新拉取。
+  const loadWorkspaceHistory = React.useCallback(async (showErrorToast: boolean) => {
     setHistoryLoading(true)
     setHistoryError('')
-    gitGateway.log(workspaceRoot, 50)
-      .then((rows) => {
-        if (cancelled) return
-        setHistoryCommits(rows)
-      })
-      .catch((historyLoadError) => {
-        if (cancelled) return
-        if (historyLoadError instanceof GitNotInitializedError) {
-          setHistoryError('此工作区不是 Git 仓库')
-        } else {
-          setHistoryError(historyLoadError instanceof Error ? historyLoadError.message : String(historyLoadError))
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setHistoryLoading(false)
-      })
-    return () => {
-      cancelled = true
+    try {
+      const rows = await gitGateway.log(workspaceRoot, 50)
+      setHistoryCommits(rows)
+      setHistoryLoaded(true)
+    } catch (historyLoadError) {
+      const text = historyLoadError instanceof GitNotInitializedError
+        ? '此工作区不是 Git 仓库'
+        : (historyLoadError instanceof Error ? historyLoadError.message : String(historyLoadError))
+      if (showErrorToast) {
+        // 手动刷新失败:已有缓存数据保留,仅弹 toast 提示。
+        message.error(`刷新 Git 历史失败:${text}`)
+      } else {
+        // 首次加载失败:不置 loaded,折叠再展开会重试。
+        setHistoryError(text)
+      }
+    } finally {
+      setHistoryLoading(false)
     }
-  }, [historyExpanded, workspaceRoot])
+  }, [workspaceRoot, message])
+
+  // 首次展开缓存:未加载过才请求;折叠→再展开直接使用缓存,不重复调 git.log。
+  React.useEffect(() => {
+    if (!historyExpanded || historyLoaded || historyLoading) return
+    void loadWorkspaceHistory(false)
+  }, [historyExpanded, historyLoaded, historyLoading, loadWorkspaceHistory])
 
   React.useEffect(() => {
     if (connected && hasWorker) {
@@ -946,7 +951,7 @@ function GitWorkspaceGroupPanel({
                 style={historyHeaderStyle}
                 role="button"
                 tabIndex={0}
-                title={historyExpanded ? '折叠 Git 历史' : '展开并加载 Git 历史'}
+                title={historyExpanded ? '折叠 Git 历史' : '展开 Git 历史'}
                 onClick={() => setHistoryExpanded((current) => !current)}
                 onKeyDown={(event) => {
                   if (event.key === 'Enter' || event.key === ' ') {
@@ -965,6 +970,22 @@ function GitWorkspaceGroupPanel({
                 <span style={historyHeaderTitleStyle}>Git 历史</span>
                 {historyExpanded && !historyLoading && !historyError ? (
                   <span style={historyCountStyle}>{historyCommits.length}</span>
+                ) : null}
+                <span style={{ flex: 1, minWidth: 0 }} aria-hidden />
+                {historyExpanded ? (
+                  <button
+                    type="button"
+                    style={historyRefreshButtonStyle}
+                    title="刷新 Git 历史"
+                    aria-label="刷新 Git 历史"
+                    disabled={historyLoading}
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      void loadWorkspaceHistory(true)
+                    }}
+                  >
+                    <RefreshIcon busy={historyLoading} />
+                  </button>
                 ) : null}
               </div>
               {historyExpanded ? (
@@ -1423,6 +1444,21 @@ const historyCountStyle: React.CSSProperties = {
   fontSize: 'var(--text-xs)',
   color: 'var(--text-muted)',
   flexShrink: 0,
+}
+
+const historyRefreshButtonStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  width: 22,
+  height: 22,
+  padding: 0,
+  border: 'none',
+  background: 'transparent',
+  color: 'var(--text-muted)',
+  cursor: 'pointer',
+  flexShrink: 0,
+  borderRadius: 'var(--radius-sm)',
 }
 
 const historyStatusStyle: React.CSSProperties = {
