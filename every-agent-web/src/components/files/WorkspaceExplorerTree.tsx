@@ -281,6 +281,11 @@ function TreeNodeRow({
         // 不阻止冒泡:让 antd 的 onSelect 正常触发(单击选中高亮)。
         // 目录展开/收起改由双击(onDoubleClick)或点击箭头(onExpand)触发。
       }}
+      onMouseDown={(e) => {
+        // 阻止浏览器「双击选中文字」的默认行为:双击打开文件/展开目录时,文件名不应被高亮选中。
+        // e.detail 为本次按压的连击计数,>1 表示双击/三击的第二次及以后按压;preventDefault 只拦默认选字,不影响 click/dblclick 触发。
+        if (e.detail > 1) e.preventDefault()
+      }}
       onDoubleClick={(e) => {
         e.stopPropagation()
         // 双击目录:展开/收起(单击只选中,双击 toggle,与文件系统习惯一致)
