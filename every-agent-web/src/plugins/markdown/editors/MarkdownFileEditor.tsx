@@ -154,6 +154,12 @@ function MarkdownFileEditor({
     }
   ), [onHeaderActionsChange])
 
+  // 计算带工作区上下文的预览参数:内嵌相对路径图片以 md 文件所在目录为解析基准。
+  const markdownPreviewContext = React.useMemo(() => ({
+    workspaceRoot: file.workspaceRoot,
+    baseDir: getMarkdownBaseDir(file.filePath),
+  }), [file.filePath, file.workspaceRoot])
+
   if (loading) {
     return null
   }
@@ -209,7 +215,13 @@ function MarkdownFileEditor({
             }}
           >
             <div style={contentWrapStyle}>
-              <MarkdownPreview ref={previewComponentRef} content={content} wrapLines={wrapLines} />
+              <MarkdownPreview
+                ref={previewComponentRef}
+                content={content}
+                wrapLines={wrapLines}
+                workspaceRoot={markdownPreviewContext.workspaceRoot}
+                baseDir={markdownPreviewContext.baseDir}
+              />
             </div>
           </div>
           {!isMobile && showOutline ? (
@@ -242,6 +254,8 @@ function MarkdownFileEditor({
             findRegex={findRegex}
             findActiveIndex={findActiveIndex}
             findEnabled={findEnabled}
+            workspaceRoot={markdownPreviewContext.workspaceRoot}
+            baseDir={markdownPreviewContext.baseDir}
           />
         </div>
         {!isMobile && showOutline ? (
@@ -260,6 +274,13 @@ export const descriptor: FileContentEditorDescriptor = {
   label: 'Markdown',
   extensions: ['.md'],
   Component: MarkdownFileEditor,
+}
+
+/** 取 md 文件所在目录(工作区相对路径形态,空串 = 工作区根),供内嵌图片相对路径解析。 */
+function getMarkdownBaseDir(filePath: string): string {
+  const normalized = filePath.replace(/\\/g, '/').replace(/^\/+/, '')
+  const slashIndex = normalized.lastIndexOf('/')
+  return slashIndex < 0 ? '' : normalized.slice(0, slashIndex)
 }
 
 const containerStyle: React.CSSProperties = {

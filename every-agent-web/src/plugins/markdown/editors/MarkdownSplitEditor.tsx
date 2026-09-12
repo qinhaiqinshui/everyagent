@@ -30,6 +30,10 @@ type MarkdownSplitEditorProps = {
   findActiveIndex?: number
   /** 是否启用查找高亮叠层。 */
   findEnabled?: boolean
+  /** 所属工作区根（透传预览，用于解析内嵌相对路径图片）。 */
+  workspaceRoot?: string
+  /** md 文件所在目录（工作区相对路径，空串=根）。 */
+  baseDir?: string
 }
 
 const MarkdownSplitEditor = React.forwardRef<MarkdownSplitEditorHandle, MarkdownSplitEditorProps>(({
@@ -46,6 +50,8 @@ const MarkdownSplitEditor = React.forwardRef<MarkdownSplitEditorHandle, Markdown
   findRegex,
   findActiveIndex,
   findEnabled,
+  workspaceRoot,
+  baseDir,
 }, ref) => {
   const hostRef = React.useRef<HTMLDivElement | null>(null)
   const [ratio, setRatio] = React.useState(50)
@@ -175,7 +181,7 @@ const MarkdownSplitEditor = React.forwardRef<MarkdownSplitEditorHandle, Markdown
             }}
           >
             <div style={previewContentStyle}>
-              <MarkdownPreview ref={previewRef} content={value} wrapLines={wrapLines} />
+              <MarkdownPreview ref={previewRef} content={value} wrapLines={wrapLines} workspaceRoot={workspaceRoot} baseDir={baseDir} />
             </div>
           </div>
         </section>
@@ -233,7 +239,7 @@ const MarkdownSplitEditor = React.forwardRef<MarkdownSplitEditorHandle, Markdown
               }}
             >
               <div style={previewContentStyle}>
-                <MarkdownPreview ref={previewRef} content={value} wrapLines={wrapLines} />
+                <MarkdownPreview ref={previewRef} content={value} wrapLines={wrapLines} workspaceRoot={workspaceRoot} baseDir={baseDir} />
               </div>
             </div>
           </section>

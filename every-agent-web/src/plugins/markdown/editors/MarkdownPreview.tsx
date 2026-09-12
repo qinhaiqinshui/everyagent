@@ -11,9 +11,11 @@ import {
   isMarkdownTableSeparatorLine,
   parseMarkdownTableAlignments,
   renderMarkdownInline,
+  type MarkdownInlineRenderOptions,
   type MarkdownTableAlignment,
   splitMarkdownTableRow,
 } from '@/components/shared/markdown/sharedMarkdownRenderer'
+import MarkdownImage from './MarkdownImage'
 
 type MarkdownListItem = {
   text: string
@@ -80,10 +82,14 @@ export type MarkdownPreviewHandle = {
 type MarkdownPreviewProps = {
   content: string
   wrapLines?: boolean
+  /** 所属工作区根(用于解析内嵌相对路径图片);缺省时内嵌图片仅外部 URL 可渲染。 */
+  workspaceRoot?: string
+  /** md 文件所在目录(工作区相对路径,空串 = 工作区根);内嵌图片相对路径解析基准。 */
+  baseDir?: string
 }
 
 export default React.forwardRef<MarkdownPreviewHandle, MarkdownPreviewProps>(function MarkdownPreview(
-  { content, wrapLines = true },
+  { content, wrapLines = true, workspaceRoot, baseDir },
   ref,
 ) {
   const headingIds = React.useMemo(() => {
@@ -93,6 +99,17 @@ export default React.forwardRef<MarkdownPreviewHandle, MarkdownPreviewProps>(fun
     })
     return nextHeadingIds
   }, [content])
+
+  // 内联渲染选项:样式 + 图片渲染器。有工作区上下文时才启用内嵌图片(相对路径可经 fs.read 解析)。
+  const inlineRenderOptions = React.useMemo<MarkdownInlineRenderOptions>(() => ({
+    strong: strongStyle,
+    inlineCode: inlineCodeStyle,
+    renderImage: workspaceRoot
+      ? (src, alt, key) => (
+        <MarkdownImage key={key} src={src} alt={alt} workspaceRoot={workspaceRoot} baseDir={baseDir} />
+      )
+      : undefined,
+  }), [baseDir, workspaceRoot])
 
   const documentTree = React.useMemo(
     () => parseMarkdownDocument(content, headingIds),
@@ -150,10 +167,10 @@ export default React.forwardRef<MarkdownPreviewHandle, MarkdownPreviewProps>(fun
     <div style={rootStyle}>
       {documentTree.introBlocks.length > 0 && (
         <div style={sectionBodyStyle}>
-          {documentTree.introBlocks.map((block) => renderBlock(block, 0, wrapLines))}
+          {documentTree.introBlocks.map((block) => renderBlock(block, 0, wrapLines, inlineRenderOptions))}
         </div>
       )}
-      {documentTree.sections.map((section) => renderSection(section, 0, collapsedHeadingIds, toggleSectionCollapsed, wrapLines))}
+      {documentTree.sections.map((section) => renderSection(section, 0, collapsedHeadingIds, toggleSectionCollapsed, wrapLines, inlineRenderOptions))}
     </div>
   )
 })
@@ -164,6 +181,7 @@ function renderSection(
   collapsedHeadingIds: Set<string>,
   onToggle: (headingId: string) => void,
   wrapLines: boolean,
+  inlineRenderOptions: MarkdownInlineRenderOptions,
 ): React.ReactNode {
   const isCollapsed = collapsedHeadingIds.has(section.id)
   const childDepth = depth + 1
@@ -175,11 +193,11 @@ function renderSection(
         marginLeft: `${depth * 18}px`,
       }}
     >
-      {renderSectionHeading(section, isCollapsed, onToggle)}
+      {renderSectionHeading(section, isCollapsed, onToggle, inlineRenderOptions)}
       {!isCollapsed && (
         <div style={sectionBodyStyle}>
-          {section.blocks.map((block) => renderBlock(block, childDepth, wrapLines))}
-          {section.children.map((child) => renderSection(child, childDepth, collapsedHeadingIds, onToggle, wrapLines))}
+          {section.blocks.map((block) => renderBlock(block, childDepth, wrapLines, inlineRenderOptions))}
+          {section.children.map((child) => renderSection(child, childDepth, collapsedHeadingIds, onToggle, wrapLines, inlineRenderOptions))}
         </div>
       )}
     </section>
@@ -190,11 +208,12 @@ function renderSectionHeading(
   section: MarkdownSection,
   isCollapsed: boolean,
   onToggle: (headingId: string) => void,
+  inlineRenderOptions: MarkdownInlineRenderOptions,
 ): React.ReactNode {
   const headingContent = (
     <>
       <span style={headingToggleIconStyle}>{isCollapsed ? '▸' : '▾'}</span>
-      <span>{renderMarkdownInline(section.text, inlineRenderStyles)}</span>
+      <span>{renderMarkdownInline(section.text, inlineRenderOptions)}</span>
     </>
   )
 
@@ -213,20 +232,20 @@ function renderSectionHeading(
   )
 }
 
-function renderBlock(block: MarkdownBlock, depth: number, wrapLines: boolean): React.ReactNode {
+function renderBlock(block: MarkdownBlock, depth: number, wrapLines: boolean, inlineRenderOptions: MarkdownInlineRenderOptions): React.ReactNode {
   const blockOffset = `${depth * 18}px`
 
   if (block.type === 'paragraph') {
     return (
       <p key={block.key} style={{ ...buildParagraphStyle(wrapLines), marginLeft: blockOffset }}>
-        {renderMarkdownInline(block.text, inlineRenderStyles)}
+        {renderMarkdownInline(block.text, inlineRenderOptions)}
       </p>
     )
   }
   if (block.type === 'blockquote') {
     return (
       <blockquote key={block.key} style={{ ...buildBlockquoteStyle(wrapLines), marginLeft: blockOffset }}>
-        {renderMarkdownInline(block.text, inlineRenderStyles)}
+        {renderMarkdownInline(block.text, inlineRenderOptions)}
       </blockquote>
     )
   }
@@ -244,7 +263,7 @@ function renderBlock(block: MarkdownBlock, depth: number, wrapLines: boolean): R
     )
   }
   if (block.type === 'list') {
-    return renderListItems(block.items, block.ordered, 0, block.key, wrapLines)
+    return renderListItems(block.items, block.ordered, 0, block.key, wrapLines, inlineRenderOptions)
   }
   return (
     <div key={block.key} style={{ ...tableWrapStyle, marginLeft: blockOffset }}>
@@ -259,7 +278,7 @@ function renderBlock(block: MarkdownBlock, depth: number, wrapLines: boolean): R
                   textAlign: block.alignments[cellIndex] ?? 'left',
                 }}
               >
-                {renderMarkdownInline(cell, inlineRenderStyles)}
+                {renderMarkdownInline(cell, inlineRenderOptions)}
               </th>
             ))}
           </tr>
@@ -276,7 +295,7 @@ function renderBlock(block: MarkdownBlock, depth: number, wrapLines: boolean): R
                       textAlign: block.alignments[cellIndex] ?? 'left',
                     }}
                   >
-                    {renderMarkdownInline(row[cellIndex] ?? '', inlineRenderStyles)}
+                    {renderMarkdownInline(row[cellIndex] ?? '', inlineRenderOptions)}
                   </td>
                 ))}
               </tr>
@@ -294,6 +313,7 @@ function renderListItems(
   depth: number,
   keyPrefix: string,
   wrapLines: boolean,
+  inlineRenderOptions: MarkdownInlineRenderOptions,
 ): React.ReactNode {
   const marker = ordered ? 'decimal' : depth === 0 ? 'disc' : depth === 1 ? 'circle' : 'square'
   const ListTag = ordered ? 'ol' : 'ul'
@@ -308,9 +328,9 @@ function renderListItems(
     >
       {items.map((item, index) => (
         <li key={`${keyPrefix}-${index}`} style={buildListItemStyle(wrapLines)}>
-          {renderMarkdownInline(item.text, inlineRenderStyles)}
+          {renderMarkdownInline(item.text, inlineRenderOptions)}
           {item.children.length > 0 && (
-            renderListItems(item.children, item.ordered, depth + 1, `${keyPrefix}-${index}-child`, wrapLines)
+            renderListItems(item.children, item.ordered, depth + 1, `${keyPrefix}-${index}-child`, wrapLines, inlineRenderOptions)
           )}
         </li>
       ))}
