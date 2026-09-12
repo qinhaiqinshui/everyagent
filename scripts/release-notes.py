@@ -13,6 +13,7 @@ release-notes.py —— 提取「最新 tag → 指定 ref(默认 HEAD)」之间
 
 输出为 Markdown,重定向即可保存:python scripts/release-notes.py > RELEASE_NOTES.md
 注:「最新 tag」取 git describe --tags --abbrev=0,即从 HEAD 回溯可直达的最近 tag。
+输出顶部会追加「影响模块」行:汇总提交范围内被修改文件所属的业务模块(仅统计五个业务模块目录,根目录文件不纳入)。
 """
 
 import argparse
@@ -26,6 +27,15 @@ try:
     sys.stderr.reconfigure(encoding="utf-8")
 except AttributeError:
     pass
+
+# 业务模块目录(按 docs/ARCHITECTURE.md 的模块顺序);根目录文件不纳入「影响模块」
+MODULE_DIRS = [
+    "every-agent-hub",
+    "every-agent-worker",
+    "every-agent-web",
+    "every-agent-contract",
+    "every-agent-desktop",
+]
 
 
 def die(msg: str) -> None:
@@ -49,6 +59,21 @@ def run_git(args, check=True, ignore_stderr=False):
         err = proc.stderr.strip() if not ignore_stderr else ""
         die(f"git {' '.join(args)} 失败: {err or '未知错误'}")
     return proc.returncode, proc.stdout.rstrip("\n")
+
+
+def affected_modules(from_tag, to_ref):
+    """返回提交范围内被修改文件所属的业务模块(去重、按 MODULE_DIRS 顺序);根目录文件不纳入。"""
+    if from_tag:
+        _, files_out = run_git(["diff", "--name-only", f"{from_tag}..{to_ref}"])
+    else:
+        # 仓库尚无 tag:以 to_ref 的整棵树作为「全部变更」,等于从空树对比
+        _, files_out = run_git(["ls-tree", "-r", "--name-only", to_ref])
+    tops = set()
+    for path in files_out.splitlines():
+        path = path.strip()
+        if path:
+            tops.add(path.split("/", 1)[0])
+    return [m for m in MODULE_DIRS if m in tops]
 
 
 def parse_args():
@@ -122,10 +147,14 @@ def main():
 
     _, to_hash = run_git(["rev-parse", "--short", args.to_ref])
 
+    modules = affected_modules(from_tag, args.to_ref)
+
     # ---------- 输出 ----------
     print(f"# Release Notes({from_hint} → {args.to_ref}@{to_hash.strip()})")
     print()
     print(f"> 共 {count} 条提交,生成于 {datetime.now():%Y-%m-%d %H:%M:%S}。")
+    if modules:
+        print(f"影响模块：{'、'.join(modules)}")
 
     if args.list:
         print()
