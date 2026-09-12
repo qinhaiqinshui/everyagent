@@ -27,12 +27,12 @@ class AgentLedgerTest {
     @Test
     void agentLedgerPersistsToMetaAndRoundTrips() throws Exception {
         WorkerProperties props = new WorkerProperties();
-        props.setDataDir(dataDir.toString());
+        props.setHomeDir(dataDir.toString());
         TaskStore store = new TaskStore(props);
 
         ModelSnapshot snap = new ModelSnapshot("cfg1", "p", null, "m",
                 Json.obj().put("contextWindowTokens", 100_000));
-        TaskEntry t = new TaskEntry("t1", "任务", snap, "sk", "C:/ws", "a_main1", 1000);
+        TaskEntry t = new TaskEntry("t1", "任务", snap, "sk", "C:/ws", "defaultworkspace", "a_main1", 1000);
 
         // 模拟子 agent 台账项(与 AgentEntity.toSummary 同形)
         ObjectNode a = Json.obj()
@@ -55,7 +55,7 @@ class AgentLedgerTest {
         assertEquals("completed", agents.get(0).path("status").asString());
 
         // 落盘 + 读回(冷启动恢复的供体路径)
-        store.track("t1", t.log, t::summaryJson);
+        store.track("t1", "defaultworkspace", t.log, t::summaryJson);
         store.updateMeta("t1");
         ObjectNode read = store.readMeta(store.dirOf("t1"));
         JsonNode readAgents = read.path("agents");

@@ -20,6 +20,8 @@ export interface WorkspaceEntry {
   addedAt: number
   /** 来源 worker(多 worker 合并后区分归属)。 */
   workerId: string
+  /** 稳定工作区 id(defaultworkspace 或 w_xxxxx);旧 worker 无此字段时为 undefined。 */
+  id?: string
   /** worker 启动自检判定该目录已不存在(被移动/删除),待用户选择删除或纠正路径。 */
   missing?: boolean
 }

@@ -177,7 +177,7 @@ public final class WslBwrapSandbox {
      *
      * <p>只服务托管目标——未配置 distro 且镜像在位,或显式配置 {@code eagent};用户显式
      * 指定的其他名字不越权代装。流程:sha256 校验(fail-closed,镜像同目录
-     * {@code .sha256})→ 清空安装目录残留 → {@code wsl --import eagent <系统目录>/wsl/distro
+     * {@code .sha256})→ 清空安装目录残留 → {@code wsl --import eagent <sandbox 根>/distro
      * <镜像> --version 2} → 由调用方重探。不可导入/失败返回可读断因(走统一回退日志);
      * 镜像在位且发行版缺失通常意味着首次安装,一次性成本(解包 ≤ 数分钟)。
      *
@@ -202,7 +202,7 @@ public final class WslBwrapSandbox {
             return new ProbeResult(false, Cause.IMPORT_FAILED,
                     "sha256 校验失败:" + tar.getFileName() + ".sha256");
         }
-        Path installDir = props.resolveHomeDir().resolve("wsl").resolve("distro");
+        Path installDir = props.resolveSandboxPersistentRoot().resolve("distro");
         cleanDir(installDir); // 上次半途导入的残留:目录归 worker 所有,可安全清
         // wsl.exe --import 不会递归创建 InstallLocation 的父目录;父目录缺失时报
         // ERROR_PATH_NOT_FOUND(系统找不到指定的路径)。这里先递归建目录。

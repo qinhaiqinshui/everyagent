@@ -73,7 +73,7 @@ class PermissionGateReviewTest {
     private TaskEntry task(boolean aiReview, boolean unattended) throws Exception {
         ModelSnapshot snap = new ModelSnapshot("cfg", "openai-compat",
                 "http://localhost:9999/v1", "m", null);
-        TaskEntry t = new TaskEntry("t-1", "任务", snap, "k", ws.toString(), "main-agent", 10_000);
+        TaskEntry t = new TaskEntry("t-1", "任务", snap, "k", ws.toString(), "defaultworkspace", "main-agent", 10_000);
         t.aiReview = aiReview;
         t.unattended = unattended;
         return t;

@@ -378,7 +378,7 @@ class FsGitModuleTest {
         assertEquals(WS.toAbsolutePath().normalize().toString(), first.path("root").asString(), w);
         assertTrue(first.path("addedAt").asLong(0) > 0, "注册表字段 {root, addedAt}: " + first);
         assertFalse(w.contains("wsKey"), "wsKey 已随存储维度移除: " + first);
-        assertTrue(Files.exists(workerProps.resolveDataDir().resolve("workspaces.json")),
+        assertTrue(Files.exists(workerProps.resolveWorkspacesDir().resolve("workspaces.json")),
                 "注册表持久化于 data/workspaces.json");
     }
 
@@ -420,7 +420,7 @@ class FsGitModuleTest {
             registered |= stranger.normalize().toString().equals(wsn.path("root").asString());
         }
         assertTrue(registered, "task.run 注册工作区: " + list2);
-        assertTrue(Files.isRegularFile(workerProps.resolveDataDir().resolve("tasks").resolve(taskId)
+        assertTrue(Files.isRegularFile(workerProps.resolveWorkspacesDir().resolve("defaultworkspace").resolve("tasks").resolve(taskId)
                 .resolve("meta.json")),
                 "任务数据住系统目录 data/tasks/<taskId>,不落工作区");
         rpc("task.cancel", "{\"taskId\":\"" + taskId + "\"}");

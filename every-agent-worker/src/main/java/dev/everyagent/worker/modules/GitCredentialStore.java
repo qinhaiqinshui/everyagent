@@ -2,8 +2,6 @@ package dev.everyagent.worker.modules;
 
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.worker.AtomicFiles;
-import dev.everyagent.worker.config.WorkerProperties;
-import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -20,14 +18,16 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.SecureRandom;
 import java.util.Base64;
+import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * git 远端凭证加密存储(架构 §7.12 补充;见 docs/ARCHITECTURE.md §7.12):
  * 用户在前端输入后经 git.credential.save 落盘为 <workspace>/.everyagent/.git-credentials.enc,
- * AES-256-GCM 加密(每次随机 IV,AAD=host 绑定条目防串换),密钥由 worker 首次启动
- * 自动生成存 <dataDir>/keys/git-credential.key——不要求用户记忆主密码,换机/删 key
- * 后旧密文即失效,重新输入即可。
+ * AES-256-GCM 加密(每次随机 IV,AAD=host 绑定条目防串换),密钥按工作区独立:首次
+ * 在该工作区保存凭证时自动生成存 <workspaceRoot>/.everyagent/.git-credential.key,
+ * 与密文同级——不要求用户记忆主密码,换机/删 key 后旧密文即失效,重新输入即可。
  *
  * <p>明文账号密码仅存在于 worker 进程内存;磁盘上只有密文。文件按 workspace 隔离
  * (各工作区各自的 .everyagent/.git-credentials.enc),同一工作区内按 host 索引多账号。
@@ -39,30 +39,15 @@ public class GitCredentialStore {
     private static final String FILE_NAME = ".git-credentials.enc";
     private static final int GCM_TAG_BITS = 128;
 
-    private final WorkerProperties props;
-    /** 自动生成的 AES-256 密钥(进程生命周期内常驻,懒加载于首用)。 */
-    private volatile SecretKey key;
-
-    public GitCredentialStore(WorkerProperties props) {
-        this.props = props;
-    }
-
-    @PostConstruct
-    void init() {
-        // 密钥懒加载在 save/load 时触发;此处仅确保 data/keys 目录可建,避免首用才报错。
-        try {
-            Files.createDirectories(keyPath().getParent());
-        } catch (java.io.IOException e) {
-            log.warn("git 凭证密钥目录创建失败: {}", e.getMessage());
-        }
-    }
+    /** 按工作区缓存各自独立的 AES-256 密钥(key = workspaceRoot 的 Path,懒加载于首用)。 */
+    private final Map<Path, SecretKey> keys = new ConcurrentHashMap<>();
 
     // ---- 对外 API ----
 
     /** 保存(或覆盖)某 host 的凭证,加密落盘工作区。 */
     public synchronized void save(Path workspaceRoot, String host, String username, String password) {
         try {
-            byte[] keyBytes = loadKey().getEncoded();
+            byte[] keyBytes = loadKey(workspaceRoot).getEncoded();
             byte[] iv = new byte[12];
             new SecureRandom().nextBytes(iv);
             Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
@@ -104,7 +89,7 @@ public class GitCredentialStore {
             if (entry.isMissingNode()) {
                 return Optional.empty();
             }
-            byte[] keyBytes = loadKey().getEncoded();
+            byte[] keyBytes = loadKey(workspaceRoot).getEncoded();
             Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
             cipher.init(Cipher.DECRYPT_MODE, new SecretKeySpec(keyBytes, "AES"),
                     new GCMParameterSpec(GCM_TAG_BITS, Base64.getDecoder().decode(entry.path("iv").asString())));
@@ -142,8 +127,8 @@ public class GitCredentialStore {
 
     // ---- 内部 ----
 
-    private Path keyPath() {
-        return props.resolveDataDir().resolve("keys").resolve("git-credential.key");
+    private Path keyPath(Path workspaceRoot) {
+        return workspaceRoot.resolve(".everyagent").resolve(".git-credential.key");
     }
 
     Path fileOf(Path workspaceRoot) {
@@ -161,16 +146,17 @@ public class GitCredentialStore {
         AtomicFiles.replace(tmp, file); // 原子替换(失败已清理 tmp 后抛出,不残留垃圾)
     }
 
-    /** 自动生成/加载 AES-256 密钥(Base64 落盘 <dataDir>/keys/git-credential.key)。 */
-    private synchronized SecretKey loadKey() throws Exception {
-        SecretKey cached = key;
+    /** 自动生成/加载某工作区的 AES-256 密钥(Base64 落盘 <workspaceRoot>/.everyagent/.git-credential.key)。 */
+    private synchronized SecretKey loadKey(Path workspaceRoot) throws Exception {
+        SecretKey cached = keys.get(workspaceRoot);
         if (cached != null) {
             return cached;
         }
-        Path path = keyPath();
+        Path path = keyPath(workspaceRoot);
+        SecretKey loaded;
         if (Files.isRegularFile(path)) {
             byte[] decoded = Base64.getDecoder().decode(Files.readString(path).trim());
-            key = new SecretKeySpec(decoded, "AES");
+            loaded = new SecretKeySpec(decoded, "AES");
         } else {
             KeyGenerator kg = KeyGenerator.getInstance("AES");
             kg.init(256);
@@ -178,9 +164,10 @@ public class GitCredentialStore {
             Files.createDirectories(path.getParent());
             Files.writeString(path, Base64.getEncoder().encodeToString(generated.getEncoded()),
                     StandardCharsets.UTF_8);
-            key = generated;
+            loaded = generated;
             log.info("已自动生成 git 凭证加密密钥: {}", path);
         }
-        return key;
+        keys.put(workspaceRoot, loaded);
+        return loaded;
     }
 }

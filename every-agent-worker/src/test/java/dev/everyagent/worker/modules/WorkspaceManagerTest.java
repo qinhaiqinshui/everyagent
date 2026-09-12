@@ -38,10 +38,9 @@ class WorkspaceManagerTest {
     @TempDir
     Path tempDir;
 
-    private WorkerProperties props(Path home, Path data, Path defaultWs) {
+    private WorkerProperties props(Path home, Path defaultWs) {
         WorkerProperties p = new WorkerProperties();
         p.setHomeDir(home.toString());
-        p.setDataDir(data.toString());
         p.setWorkspaceRoot(defaultWs.toString());
         return p;
     }
@@ -71,27 +70,28 @@ class WorkspaceManagerTest {
         }
     }
 
-    /** 预置 workspaces.json:一个有效、一个缺失(模拟用户移动目录后重启)。 */
-    private void seedRegistry(Path dataDir, Path valid, Path missing) throws Exception {
-        Files.createDirectories(dataDir);
+    /** 预置注册表 workspaces/workspaces.json:一个有效、一个缺失(模拟用户移动目录后重启)。 */
+    private void seedRegistry(Path home, Path valid, Path missing) throws Exception {
+        Path registryDir = home.resolve("workspaces");
+        Files.createDirectories(registryDir);
         ArrayNode arr = Json.arr();
         arr.add(Json.obj().put("root", valid.toAbsolutePath().normalize().toString()).put("addedTs", 1000L));
         arr.add(Json.obj().put("root", missing.toAbsolutePath().normalize().toString()).put("addedTs", 2000L));
-        Files.writeString(dataDir.resolve("workspaces.json"), Json.write(arr));
+        Files.writeString(registryDir.resolve("workspaces.json"), Json.write(arr));
     }
 
     @Test
     void startupMarksMissing_ValidResolves_MissingBlocked() throws Exception {
-        Path dataDir = tempDir.resolve("data");
+        Path home = tempDir.resolve("home");
         Path valid = tempDir.resolve("valid-ws");
         Path moved = tempDir.resolve("moved-ws");
         Files.createDirectories(valid);
-        seedRegistry(dataDir, valid, moved);
+        seedRegistry(home, valid, moved);
 
         TaskManager tm = mock(TaskManager.class);
         ObjectProvider<TaskManager> provider = mock(ObjectProvider.class);
         when(provider.getIfAvailable()).thenReturn(tm);
-        WorkspaceManager wm = new WorkspaceManager(props(tempDir.resolve("home"), dataDir, valid),
+        WorkspaceManager wm = new WorkspaceManager(props(home, valid),
                 mock(RpcDispatcher.class), mock(HubPool.class), provider, noUmount());
         wm.init();
 
@@ -105,16 +105,16 @@ class WorkspaceManagerTest {
 
     @Test
     void redirectRepairsPathAndMigratesTasks() throws Exception {
-        Path dataDir = tempDir.resolve("data");
+        Path home = tempDir.resolve("home");
         Path valid = tempDir.resolve("valid-ws");
         Path moved = tempDir.resolve("moved-ws");
         Files.createDirectories(valid);
-        seedRegistry(dataDir, valid, moved);
+        seedRegistry(home, valid, moved);
 
         TaskManager tm = mock(TaskManager.class);
         ObjectProvider<TaskManager> provider = mock(ObjectProvider.class);
         when(provider.getIfAvailable()).thenReturn(tm);
-        WorkspaceManager wm = new WorkspaceManager(props(tempDir.resolve("home"), dataDir, valid),
+        WorkspaceManager wm = new WorkspaceManager(props(home, valid),
                 mock(RpcDispatcher.class), mock(HubPool.class), provider, noUmount());
         wm.init();
 
@@ -136,16 +136,16 @@ class WorkspaceManagerTest {
 
     @Test
     void deleteRemovesRegistryAndCascadesTasks_DefaultNotDeletable() throws Exception {
-        Path dataDir = tempDir.resolve("data");
+        Path home = tempDir.resolve("home");
         Path valid = tempDir.resolve("valid-ws");
         Path moved = tempDir.resolve("moved-ws");
         Files.createDirectories(valid);
-        seedRegistry(dataDir, valid, moved);
+        seedRegistry(home, valid, moved);
 
         TaskManager tm = mock(TaskManager.class);
         ObjectProvider<TaskManager> provider = mock(ObjectProvider.class);
         when(provider.getIfAvailable()).thenReturn(tm);
-        WorkspaceManager wm = new WorkspaceManager(props(tempDir.resolve("home"), dataDir, valid),
+        WorkspaceManager wm = new WorkspaceManager(props(home, valid),
                 mock(RpcDispatcher.class), mock(HubPool.class), provider, noUmount());
         wm.init();
 
@@ -155,12 +155,12 @@ class WorkspaceManagerTest {
                 .put("action", "delete");
         assertThrows(BadParamsException.class, () -> invokeResolveMissing(wm, defaultDel));
 
-        // 缺失的非默认工作区可删除,且级联删除任务。
+        // 缺失的非默认工作区可删除,且级联删除任务(按稳定 id)。
         ObjectNode del = Json.obj()
                 .put("root", moved.toAbsolutePath().normalize().toString())
                 .put("action", "delete");
         invokeResolveMissing(wm, del);
         assertTrue(wm.list().stream().noneMatch(r -> r.root().equals(moved.toAbsolutePath().normalize().toString())));
-        verify(tm).deleteByWorkspace(moved.toAbsolutePath().normalize().toString());
+        verify(tm).deleteByWorkspaceId(org.mockito.ArgumentMatchers.anyString());
     }
 }

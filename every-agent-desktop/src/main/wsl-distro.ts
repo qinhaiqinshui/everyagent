@@ -7,7 +7,7 @@
  * 回退 windows-mic)。
  *
  * 镜像来源:程序根 runtime/wsl/(随安装/解压分发,`<程序根>/runtime/wsl/eagent-rootfs.tar.gz`),
- * 直接使用、不再复制到 `<home>/wsl/`。`wsl --import` 的发行版 rootfs 仍落 `<home>/wsl/distro/`。
+ * 直接使用、不再复制到 `<home>/sandbox/`。`wsl --import` 的发行版 rootfs 仍落 `<home>/sandbox/distro/`。
  *
  * 说明:本模块只做「提前、可视化」的检查与自动导入,幂等——若 worker 后续探测时
  * 再次 autoImport 会因为发行版已存在而跳过,不产生重复导入。
@@ -138,7 +138,7 @@ function expectedSha256(tarball: string): string | null {
 /**
  * 检查并(必要时)自动导入托管发行版。
  *
- * @param home     EVERYAGENT_HOME(发行版 rootfs 最终落在 <home>/wsl/distro/)
+ * @param home     EVERYAGENT_HOME(发行版 rootfs 最终落在 <home>/sandbox/distro/)
  * @param distro   目标发行版名(默认 eagent)
  * @param onStatus 进度回调(透传到桌面启动页)
  * @param bundledDir 程序根 runtime/(由 paths.runtimeDir() 提供);镜像实际在 <bundledDir>/wsl/。
@@ -184,7 +184,7 @@ export async function ensureWslDistro(
       return { wslAvailable: true, distroPresent: true, importedNow: false, detail }
     }
 
-    // 3) 镜像来源:程序根 runtime/wsl/(随安装/解压分发),直接使用、不再复制到 <home>/wsl
+    // 3) 镜像来源:程序根 runtime/wsl/(随安装/解压分发),直接使用、不再复制到 <home>/sandbox
     const tarball = bundledDir ? join(bundledDir, 'wsl', TARBALL_NAME) : ''
 
     if (!tarball || !existsSync(tarball)) {
@@ -201,7 +201,7 @@ export async function ensureWslDistro(
       return { wslAvailable: true, distroPresent: false, importedNow: false, detail }
     }
 
-    const installDir = join(home, 'wsl', 'distro')
+    const installDir = join(home, 'sandbox', 'distro')
     // wsl.exe --import 不会递归创建 InstallLocation 的父目录;父目录缺失时报
     // ERROR_PATH_NOT_FOUND(系统找不到指定的路径)。这里先递归建目录。
     try {

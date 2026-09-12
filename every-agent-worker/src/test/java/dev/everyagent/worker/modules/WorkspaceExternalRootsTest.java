@@ -61,10 +61,9 @@ class WorkspaceExternalRootsTest {
         }
     }
 
-    private WorkerProperties props(Path home, Path data, Path defaultWs) {
+    private WorkerProperties props(Path home, Path defaultWs) {
         WorkerProperties p = new WorkerProperties();
         p.setHomeDir(home.toString());
-        p.setDataDir(data.toString());
         p.setWorkspaceRoot(defaultWs.toString());
         p.getSandbox().getWsl().setDistro("eagent"); // 测试钉住 -d eagent 命令形态
         return p;
@@ -115,7 +114,7 @@ class WorkspaceExternalRootsTest {
         Path dataDir = tempDir.resolve("data");
         Path ws = tempDir.resolve("ws");
         Files.createDirectories(ws);
-        WorkerProperties p = props(tempDir.resolve("home"), dataDir, ws);
+        WorkerProperties p = props(tempDir.resolve("home"), ws);
         WorkspaceManager wm = newManager(p, null, mock(TaskManager.class));
         wm.init();
 
@@ -149,7 +148,7 @@ class WorkspaceExternalRootsTest {
         Path dataDir = tempDir.resolve("data");
         Path ws = tempDir.resolve("ws");
         Files.createDirectories(ws);
-        WorkspaceManager wm = newManager(props(tempDir.resolve("home"), dataDir, ws), null,
+        WorkspaceManager wm = newManager(props(tempDir.resolve("home"), ws), null,
                 mock(TaskManager.class));
         wm.init();
 
@@ -171,7 +170,7 @@ class WorkspaceExternalRootsTest {
         Path dataDir = tempDir.resolve("data");
         Path ws = tempDir.resolve("ws");
         Files.createDirectories(ws);
-        WorkspaceManager wm = newManager(props(tempDir.resolve("home"), dataDir, ws), null,
+        WorkspaceManager wm = newManager(props(tempDir.resolve("home"), ws), null,
                 mock(TaskManager.class));
         wm.init();
 
@@ -192,7 +191,7 @@ class WorkspaceExternalRootsTest {
         Path dataDir = tempDir.resolve("data");
         Path ws = tempDir.resolve("ws");
         Files.createDirectories(ws);
-        WorkspaceManager wm = newManager(props(tempDir.resolve("home"), dataDir, ws), null,
+        WorkspaceManager wm = newManager(props(tempDir.resolve("home"), ws), null,
                 mock(TaskManager.class));
         wm.init();
 
@@ -215,12 +214,12 @@ class WorkspaceExternalRootsTest {
         Files.createDirectories(wsA);
         Files.createDirectories(old);
         // 旧格式:无 externalRoots 字段,读入为空列表且不报错。
-        Files.createDirectories(dataDir);
+        Files.createDirectories(tempDir.resolve("home").resolve("workspaces"));
         ArrayNode arr = Json.arr();
         arr.add(Json.obj().put("root", norm(old)).put("addedTs", 1000L));
-        Files.writeString(dataDir.resolve("workspaces.json"), Json.write(arr));
+        Files.writeString(tempDir.resolve("home").resolve("workspaces").resolve("workspaces.json"), Json.write(arr));
 
-        WorkerProperties p = props(tempDir.resolve("home"), dataDir, wsA);
+        WorkerProperties p = props(tempDir.resolve("home"), wsA);
         WorkspaceManager wm1 = newManager(p, null, mock(TaskManager.class));
         wm1.init();
         assertTrue(wm1.externalRootsOf(old.toString()).isEmpty());
@@ -228,7 +227,7 @@ class WorkspaceExternalRootsTest {
         Path ext = tempDir.resolve("ext").resolve("keep");
         Files.createDirectories(ext);
         wm1.addExternalRoot(old.toString(), ext.toString());
-        assertTrue(Files.readString(dataDir.resolve("workspaces.json")).contains("externalRoots"));
+        assertTrue(Files.readString(tempDir.resolve("home").resolve("workspaces").resolve("workspaces.json")).contains("externalRoots"));
 
         // 重启(新实例同一 data 目录):已注册根按 realpath 原样恢复。
         WorkspaceManager wm2 = newManager(p, null, mock(TaskManager.class));
@@ -244,7 +243,7 @@ class WorkspaceExternalRootsTest {
             throws Exception {
         Path dataDir = tempDir.resolve("data");
         Path def = tempDir.resolve("def-ws");
-        Files.createDirectories(dataDir);
+        Files.createDirectories(tempDir.resolve("home").resolve("workspaces"));
         Files.createDirectories(def);
         Files.createDirectories(wsB);
         Files.createDirectories(wsC);
@@ -256,8 +255,8 @@ class WorkspaceExternalRootsTest {
         arr.add(Json.obj().put("root", norm(wsC)).put("addedTs", 3000L)
                 .set("externalRoots", Json.arr()
                         .add("C:\\ext\\shared").add("C:\\ext\\cOnly").add("C:\\ext\\nest")));
-        Files.writeString(dataDir.resolve("workspaces.json"), Json.write(arr));
-        WorkspaceManager wm = newManager(props(tempDir.resolve("home"), dataDir, def), runner, tm);
+        Files.writeString(tempDir.resolve("home").resolve("workspaces").resolve("workspaces.json"), Json.write(arr));
+        WorkspaceManager wm = newManager(props(tempDir.resolve("home"), def), runner, tm);
         wm.init();
         return wm;
     }
@@ -278,8 +277,8 @@ class WorkspaceExternalRootsTest {
                 runner.calls.get(0));
         // 删除流程不受 umount 步骤影响:注册表与任务级联照常。
         assertTrue(wm.list().stream().noneMatch(r -> r.root().equals(norm(wsC))));
-        verify(tm).deleteByWorkspace(norm(wsC));
-        assertFalse(Files.readString(tempDir.resolve("data").resolve("workspaces.json"))
+        verify(tm).deleteByWorkspaceId(org.mockito.ArgumentMatchers.anyString());
+        assertFalse(Files.readString(tempDir.resolve("home").resolve("workspaces").resolve("workspaces.json"))
                 .contains("cOnly"));
     }
 
@@ -297,7 +296,7 @@ class WorkspaceExternalRootsTest {
         assertEquals(2, failing.calls.size());
         assertTrue(failing.calls.get(1).contains("umount") && failing.calls.get(1).contains("-l"));
         assertTrue(wm.list().stream().noneMatch(r -> r.root().equals(norm(wsC))));
-        verify(tm).deleteByWorkspace(norm(wsC));
+        verify(tm).deleteByWorkspaceId(org.mockito.ArgumentMatchers.anyString());
 
         // runner 抛异常同样不外泄(删除流程绝不阻塞)。
         RecordingRunner boom = new RecordingRunner();
@@ -312,7 +311,7 @@ class WorkspaceExternalRootsTest {
         Path dataDir = tempDir.resolve("data");
         Path ws = tempDir.resolve("ws");
         Files.createDirectories(ws);
-        WorkspaceManager wm = newManager(props(tempDir.resolve("home"), dataDir, ws), null,
+        WorkspaceManager wm = newManager(props(tempDir.resolve("home"), ws), null,
                 mock(TaskManager.class));
         wm.init();
         Path ext = tempDir.resolve("ext").resolve("r");
@@ -334,7 +333,7 @@ class WorkspaceExternalRootsTest {
         Path def = tempDir.resolve("def-ws");
         Path wsB = tempDir.resolve("wsB");
         Path wsC = tempDir.resolve("wsC");
-        Files.createDirectories(dataDir);
+        Files.createDirectories(tempDir.resolve("home").resolve("workspaces"));
         Files.createDirectories(def);
         Files.createDirectories(wsB);
         Files.createDirectories(wsC);
@@ -345,8 +344,8 @@ class WorkspaceExternalRootsTest {
                 .set("externalRoots", Json.arr().add("C:\\ext\\shared").add("C:\\ext\\bOnly")));
         arr.add(Json.obj().put("root", norm(wsC)).put("addedTs", 3000L)
                 .set("externalRoots", Json.arr().add("C:\\ext\\shared").add("C:\\ext\\cOnly")));
-        Files.writeString(dataDir.resolve("workspaces.json"), Json.write(arr));
-        WorkspaceManager wm = newManager(props(tempDir.resolve("home"), dataDir, def), null,
+        Files.writeString(tempDir.resolve("home").resolve("workspaces").resolve("workspaces.json"), Json.write(arr));
+        WorkspaceManager wm = newManager(props(tempDir.resolve("home"), def), null,
                 mock(TaskManager.class));
         wm.init();
 
@@ -360,7 +359,7 @@ class WorkspaceExternalRootsTest {
         Path dataDir = tempDir.resolve("data");
         Path ws = tempDir.resolve("ws");
         Files.createDirectories(ws);
-        WorkspaceManager wm = newManager(props(tempDir.resolve("home"), dataDir, ws), null,
+        WorkspaceManager wm = newManager(props(tempDir.resolve("home"), ws), null,
                 mock(TaskManager.class));
         wm.init();
         assertTrue(wm.allExternalRoots().isEmpty());

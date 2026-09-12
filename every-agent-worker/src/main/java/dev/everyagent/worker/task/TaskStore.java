@@ -39,20 +39,26 @@ import java.util.function.Supplier;
 /**
  * 任务落盘(架构 §5.3 持久化 sink,与 Shipper 同构,fire-and-forget):
  * 单虚拟线程把各任务日志按 record.agentId 路由追加到
- * &lt;data&gt;/tasks/&lt;taskId&gt;/&lt;agentId&gt;.jsonl
+ * workspaces/&lt;workspaceId&gt;/tasks/&lt;taskId&gt;/&lt;agentId&gt;.jsonl
  * (行 = {seq,ts,event,agentId,payload[,ext]};ext 为 null 不写字段)。
  * 瞬态流式事件(delta/thinking,主/子同名)不落盘也不写占位行;含瞬态的最高 seq 水位经
  * meta.json 的 seqLast 字段持久化,重启续号从该水位起步;磁盘 lastSeq 可能落后于内存 lastSeq,
  * 读侧按 seq 归并 + 前端 SeqRegressionError 自愈兜底。
  * 任务永久保留:retention 不存在,delete(用户主动)是唯一删除路径。
  * 不做 fsync:进程崩溃至多丢缓冲尾部,meta 仍非终态 → 下次启动标 failed 自愈。
- * 读侧容忍撕行(末行无换行/解析失败即弃)。任务统一存 data/tasks/&lt;taskId&gt;/，不做旧布局迁移。
+ * 读侧容忍撕行(末行无换行/解析失败即弃)。任务按工作区归类存
+ * workspaces/&lt;workspaceId&gt;/tasks/&lt;taskId&gt;/，不做旧布局迁移。
  */
 @Component
 public class TaskStore {
 
     /** 磁盘上的一个任务目录(scan/恢复/索引的单位)。 */
-    public record StoredTask(String taskId, Path dir, ObjectNode summary) {
+    public record StoredTask(String taskId, Path dir, ObjectNode summary, String workspaceId) {
+        /** 兼容旧 3 参构造(无 workspaceId;从 summary.workspaceId 提取,缺失为 null;新代码请用 4 参)。 */
+        public StoredTask(String taskId, Path dir, ObjectNode summary) {
+            this(taskId, dir, summary,
+                    summary == null ? null : summary.path("workspaceId").asString(null));
+        }
     }
 
     /** flush(taskId) 最长等待(超时放行,meta 仍非终态 → 重启自愈)。 */
@@ -92,6 +98,8 @@ public class TaskStore {
 
     private final WorkerProperties props;
     private final Map<String, Tracked> tracked = new ConcurrentHashMap<>();
+    /** taskId → workspaceId(定位 dirOf;track 登记、scan 回填,delete 清理)。 */
+    private final Map<String, String> taskWorkspace = new ConcurrentHashMap<>();
     private final Semaphore wake = new Semaphore(0);
     private volatile boolean running = true;
     private Thread sinkThread;
@@ -122,16 +130,17 @@ public class TaskStore {
     // ---- 写路径 ----
 
     /** 开始落盘一个任务:建目录、写初始 meta、挂日志监听(writer 按 agent 懒开)。 */
-    public synchronized void track(String taskId, EventLog log,
+    public synchronized void track(String taskId, String workspaceId, EventLog log,
             Supplier<ObjectNode> meta) throws IOException {
         if (tracked.containsKey(taskId)) {
             return;
         }
-        Path dir = dirOf(taskId);
+        Path dir = dirOf(taskId, workspaceId);
         Files.createDirectories(dir);
         writeMeta(dir, meta.get());
         Tracked t = new Tracked(taskId, log, meta, dir);
         tracked.put(taskId, t);
+        taskWorkspace.put(taskId, workspaceId);
         log.addListener(() -> wake.release());
         wake.release();
     }
@@ -170,7 +179,7 @@ public class TaskStore {
         }
     }
 
-    /** 停止跟踪(关全部 writer;目录保留——任务永久)。 */
+    /** 停止跟踪(关全部 writer;目录保留——任务永久;taskWorkspace 映射保留,dirOf 仍可定位)。 */
     public void untrack(String taskId) {
         Tracked t = tracked.remove(taskId);
         if (t != null) {
@@ -189,34 +198,47 @@ public class TaskStore {
 
     // ---- 读路径(冷数据)----
 
-    /** 扫描 data/tasks/ 下全部任务目录(meta.json 存在即算)。 */
+    /** 扫描 workspaces/&lt;workspaceId&gt;/tasks/ 下全部任务目录(meta.json 存在即算);回填 taskWorkspace 映射。 */
     public List<StoredTask> scan() {
         List<StoredTask> out = new ArrayList<>();
-        Path tasksRoot = props.resolveDataDir().resolve("tasks");
-        if (!Files.isDirectory(tasksRoot)) {
+        Path workspacesRoot = props.resolveWorkspacesDir();
+        if (!Files.isDirectory(workspacesRoot)) {
             return out;
         }
-        try (DirectoryStream<Path> taskDirs = Files.newDirectoryStream(tasksRoot)) {
-            for (Path taskDir : taskDirs) {
-                if (!Files.isDirectory(taskDir)) {
+        try (DirectoryStream<Path> wsDirs = Files.newDirectoryStream(workspacesRoot)) {
+            for (Path wsDir : wsDirs) {
+                if (!Files.isDirectory(wsDir)) {
+                    continue; // workspaces.json 等文件跳过
+                }
+                Path tasksRoot = wsDir.resolve("tasks");
+                if (!Files.isDirectory(tasksRoot)) {
                     continue;
                 }
-                Path meta = taskDir.resolve("meta.json");
-                if (!Files.isRegularFile(meta)) {
-                    continue;
-                }
-                try {
-                    JsonNode s = Json.parse(Files.readString(meta));
-                    if (s.isObject()) {
-                        out.add(new StoredTask(taskDir.getFileName().toString(),
-                                taskDir, (ObjectNode) s));
+                String workspaceId = wsDir.getFileName().toString();
+                try (DirectoryStream<Path> taskDirs = Files.newDirectoryStream(tasksRoot)) {
+                    for (Path taskDir : taskDirs) {
+                        if (!Files.isDirectory(taskDir)) {
+                            continue;
+                        }
+                        Path meta = taskDir.resolve("meta.json");
+                        if (!Files.isRegularFile(meta)) {
+                            continue;
+                        }
+                        try {
+                            JsonNode s = Json.parse(Files.readString(meta));
+                            if (s.isObject()) {
+                                String taskId = taskDir.getFileName().toString();
+                                taskWorkspace.put(taskId, workspaceId);
+                                out.add(new StoredTask(taskId, taskDir, (ObjectNode) s, workspaceId));
+                            }
+                        } catch (IOException | RuntimeException e) {
+                            log.warn("meta 读取失败 {}", meta, e);
+                        }
                     }
-                } catch (IOException | RuntimeException e) {
-                    log.warn("meta 读取失败 {}", meta, e);
                 }
             }
         } catch (IOException e) {
-            log.warn("任务目录扫描失败 {}", tasksRoot, e);
+            log.warn("任务目录扫描失败 {}", workspacesRoot, e);
         }
         return out;
     }
@@ -540,8 +562,63 @@ public class TaskStore {
         return summary;
     }
 
+    /**
+     * 任务目录绝对路径(workspaces/&lt;workspaceId&gt;/tasks/&lt;taskId&gt;/)。
+     * 带 workspaceId 重载:新建/续跑等已知归属场景直接拼路径,不依赖映射。
+     */
+    public Path dirOf(String taskId, String workspaceId) {
+        return props.resolveWorkspacesDir().resolve(workspaceId).resolve("tasks").resolve(taskId);
+    }
+
+    /**
+     * 任务目录绝对路径(由 taskWorkspace 映射反查 workspaceId)。
+     * 运行中(track 已登记)与磁盘任务(scan 已回填)均可用;未登记时懒发现:
+     * 遍历 workspaces/&lt;wsId&gt;/tasks/ 找含该 taskId 的目录并登记(测试/手工建目录场景),
+     * 仍找不到返回不可能存在的占位路径,调用方按 Files.isDirectory 判空即可
+     * (DataPusherManager 等"存在性检查"语义),不会抛异常。
+     */
     public Path dirOf(String taskId) {
-        return props.resolveDataDir().resolve("tasks").resolve(taskId);
+        String workspaceId = taskWorkspace.get(taskId);
+        if (workspaceId == null) {
+            workspaceId = discoverWorkspace(taskId);
+            if (workspaceId != null) {
+                taskWorkspace.put(taskId, workspaceId);
+                return dirOf(taskId, workspaceId);
+            }
+            return props.resolveWorkspacesDir().resolve("__unknown__").resolve(taskId);
+        }
+        return dirOf(taskId, workspaceId);
+    }
+
+    /** 懒发现:遍历 workspaces/&lt;wsId&gt;/tasks/ 找含该 taskId 的目录;未找到返回 null。 */
+    private String discoverWorkspace(String taskId) {
+        Path root = props.resolveWorkspacesDir();
+        if (!Files.isDirectory(root)) {
+            return null;
+        }
+        try (DirectoryStream<Path> wsDirs = Files.newDirectoryStream(root)) {
+            for (Path wsDir : wsDirs) {
+                if (!Files.isDirectory(wsDir)) {
+                    continue;
+                }
+                if (Files.isDirectory(wsDir.resolve("tasks").resolve(taskId))) {
+                    return wsDir.getFileName().toString();
+                }
+            }
+        } catch (IOException e) {
+            log.debug("工作区目录扫描失败(懒发现 task={}): {}", taskId, e.getMessage());
+        }
+        return null;
+    }
+
+    /** 递归删除某工作区的任务根目录 workspaces/&lt;workspaceId&gt;/tasks(幂等;workspaces.remove 级联共用)。 */
+    public void deleteWorkspaceTasks(String workspaceId) {
+        try {
+            deleteRecursively(props.resolveWorkspacesDir().resolve(workspaceId).resolve("tasks"));
+        } catch (IOException e) {
+            log.warn("工作区任务目录删除失败 workspaceId={}", workspaceId, e);
+        }
+        taskWorkspace.entrySet().removeIf(e -> e.getValue().equals(workspaceId));
     }
 
     // ---- 轮次索引 rounds.jsonl(与 meta.json、<agentId>.jsonl 同级;seq 一律字符串防 JS 精度)----

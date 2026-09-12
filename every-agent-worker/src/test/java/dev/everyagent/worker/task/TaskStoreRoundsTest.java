@@ -29,9 +29,13 @@ class TaskStoreRoundsTest {
 
     private static final String SUB = "sub_x9";
 
+    private Path t1dir() {
+        return dataDir.resolve("workspaces").resolve("defaultworkspace").resolve("tasks").resolve("t1");
+    }
+
     private TaskStore newStore() {
         WorkerProperties props = new WorkerProperties();
-        props.setDataDir(dataDir.toString());
+        props.setHomeDir(dataDir.toString());
         return new TaskStore(props);
     }
 
@@ -48,9 +52,10 @@ class TaskStoreRoundsTest {
     @Test
     void appendReadRoundTripClosedAndOpen() throws Exception {
         TaskStore store = newStore();
+        Files.createDirectories(t1dir());
         store.appendRound("t1", closedRound());
         store.appendRound("t1", openRound());
-        Path dir = dataDir.resolve("tasks").resolve("t1");
+        Path dir = dataDir.resolve("workspaces").resolve("defaultworkspace").resolve("tasks").resolve("t1");
         assertTrue(Files.isRegularFile(dir.resolve("rounds.jsonl")), "rounds.jsonl 与 meta 同级落盘");
 
         List<RoundIndex.Round> rounds = store.readRounds(dir);
@@ -77,10 +82,11 @@ class TaskStoreRoundsTest {
     @Test
     void lastRoundStartSeqTracksLastLine() throws Exception {
         TaskStore store = newStore();
+        Files.createDirectories(t1dir());
         store.appendRound("t1", closedRound());
         store.appendRound("t1", new RoundIndex.Round("round_test", 2L, 30L, 40L, "u2", "r2", List.of(), 0L, null, null));
         store.appendRound("t1", new RoundIndex.Round("round_test", 3L, 50L, 60L, "u3", "r3", List.of(), 0L, null, null));
-        Path dir = dataDir.resolve("tasks").resolve("t1");
+        Path dir = dataDir.resolve("workspaces").resolve("defaultworkspace").resolve("tasks").resolve("t1");
         assertEquals(50, store.lastRoundStartSeq(dir));
         assertEquals(3, store.readRounds(dir).size());
     }
@@ -88,9 +94,10 @@ class TaskStoreRoundsTest {
     @Test
     void tornTailToleratedByReadAndZeroedByLastStartSeq() throws Exception {
         TaskStore store = newStore();
+        Files.createDirectories(t1dir());
         store.appendRound("t1", closedRound());
         store.appendRound("t1", openRound());
-        Path dir = dataDir.resolve("tasks").resolve("t1");
+        Path dir = dataDir.resolve("workspaces").resolve("defaultworkspace").resolve("tasks").resolve("t1");
         // 模拟崩溃残留:末行半行 JSON 无换行
         Files.writeString(dir.resolve("rounds.jsonl"), "{\"index\":3,\"startSeq\":\"40",
                 StandardOpenOption.APPEND);
@@ -101,7 +108,7 @@ class TaskStoreRoundsTest {
     @Test
     void missingRoundsFileReturnsEmptyAndZero() throws Exception {
         TaskStore store = newStore();
-        Path dir = dataDir.resolve("tasks").resolve("t_empty");
+        Path dir = dataDir.resolve("workspaces").resolve("defaultworkspace").resolve("tasks").resolve("t_empty");
         Files.createDirectories(dir);
         assertTrue(store.readRounds(dir).isEmpty(), "rounds.jsonl 缺失返回空列表");
         assertEquals(0, store.lastRoundStartSeq(dir));
@@ -112,9 +119,10 @@ class TaskStoreRoundsTest {
     @Test
     void rewriteRoundClosesUnclosedLineInPlace() throws Exception {
         TaskStore store = newStore();
+        Files.createDirectories(t1dir());
         store.appendRound("t1", closedRound());
         store.appendRound("t1", openRound());
-        Path dir = dataDir.resolve("tasks").resolve("t1");
+        Path dir = dataDir.resolve("workspaces").resolve("defaultworkspace").resolve("tasks").resolve("t1");
         assertEquals(2, store.readRounds(dir).size());
 
         // 续跑补完:startSeq 匹配的未闭合行被闭合版原位替换(index 沿用磁盘行)
@@ -137,8 +145,9 @@ class TaskStoreRoundsTest {
     @Test
     void rewriteRoundWithoutMatchLeavesFileUntouched() throws Exception {
         TaskStore store = newStore();
+        Files.createDirectories(t1dir());
         store.appendRound("t1", closedRound());
-        Path dir = dataDir.resolve("tasks").resolve("t1");
+        Path dir = dataDir.resolve("workspaces").resolve("defaultworkspace").resolve("tasks").resolve("t1");
         String before = Files.readString(dir.resolve("rounds.jsonl"));
         RoundIndex.Round stranger = new RoundIndex.Round("round_test", 9L, 999L, 1000L, "陌生轮", "答", List.of(), 0L, null, null);
         assertFalse(store.rewriteRound("t1", stranger), "无 startSeq 匹配行返回 false");
@@ -153,10 +162,11 @@ class TaskStoreRoundsTest {
         light.addObject()
                 .put("filePath", "/a.md").put("fileName", "a.md")
                 .put("changeType", "updated").put("saveCount", 1);
+        Files.createDirectories(t1dir());
         store.appendRound("t1", new RoundIndex.Round("round_abc123", 1L, 10L, 20L, "第一问",
                 "第一答", List.of(), 0L, light, null));
 
-        List<RoundIndex.Round> rounds = store.readRounds(dataDir.resolve("tasks").resolve("t1"));
+        List<RoundIndex.Round> rounds = store.readRounds(dataDir.resolve("workspaces").resolve("defaultworkspace").resolve("tasks").resolve("t1"));
         assertEquals(1, rounds.size());
         RoundIndex.Round back = rounds.get(0);
         assertEquals("round_abc123", back.roundId(), "roundId round-trip 保留");
@@ -167,7 +177,7 @@ class TaskStoreRoundsTest {
         assertEquals(1, back.fileChanges().get(0).path("saveCount").asInt());
 
         // 行内序列化检查:roundId 与 fileChanges 字段显式写出
-        String line = Files.readAllLines(dataDir.resolve("tasks").resolve("t1").resolve("rounds.jsonl")).get(0);
+        String line = Files.readAllLines(dataDir.resolve("workspaces").resolve("defaultworkspace").resolve("tasks").resolve("t1").resolve("rounds.jsonl")).get(0);
         assertTrue(line.contains("\"roundId\":\"round_abc123\""), "行内含 roundId: " + line);
         assertTrue(line.contains("\"fileChanges\":[{\"filePath\":\"/a.md\""), "行内含 fileChanges: " + line);
     }
@@ -176,12 +186,13 @@ class TaskStoreRoundsTest {
     void roundWithoutChangesOmitsRoundIdAndFileChanges() throws Exception {
         TaskStore store = newStore();
         // roundId 为 null(旧行/scan 阶段)且 fileChanges 为 null:两字段都不写
+        Files.createDirectories(t1dir());
         store.appendRound("t1", new RoundIndex.Round(null, 1L, 10L, 20L, "问", "答", List.of(), 0L, null, null));
-        String line = Files.readString(dataDir.resolve("tasks").resolve("t1").resolve("rounds.jsonl"));
+        String line = Files.readString(dataDir.resolve("workspaces").resolve("defaultworkspace").resolve("tasks").resolve("t1").resolve("rounds.jsonl"));
         assertFalse(line.contains("\"roundId\""), "roundId=null 不写字段: " + line);
         assertFalse(line.contains("\"fileChanges\""), "fileChanges=null 不写字段: " + line);
 
-        List<RoundIndex.Round> rounds = store.readRounds(dataDir.resolve("tasks").resolve("t1"));
+        List<RoundIndex.Round> rounds = store.readRounds(dataDir.resolve("workspaces").resolve("defaultworkspace").resolve("tasks").resolve("t1"));
         assertNull(rounds.get(0).roundId(), "缺失 roundId 读回 null");
         assertNull(rounds.get(0).fileChanges(), "缺失 fileChanges 读回 null");
     }
@@ -189,14 +200,16 @@ class TaskStoreRoundsTest {
     @Test
     void roundWithBlankRoundIdNormalizesToNull() throws Exception {
         TaskStore store = newStore();
+        Files.createDirectories(t1dir());
         store.appendRound("t1", new RoundIndex.Round("", 1L, 10L, 20L, "问", "答", List.of(), 0L, null, null));
-        assertNull(store.readRounds(dataDir.resolve("tasks").resolve("t1")).get(0).roundId(),
+        assertNull(store.readRounds(dataDir.resolve("workspaces").resolve("defaultworkspace").resolve("tasks").resolve("t1")).get(0).roundId(),
                 "roundId 空串在构造阶段归一为 null(不写字段)");
     }
 
     @Test
     void writeReadRoundFileChangesRoundTrip() throws Exception {
         TaskStore store = newStore();
+        Files.createDirectories(t1dir());
         ObjectNode full = Json.obj();
         ArrayNode fullChanges = Json.arr();
         fullChanges.addObject()
@@ -205,7 +218,7 @@ class TaskStoreRoundsTest {
                 .put("afterContent", "新").put("saveCount", 3);
         full.set("changes", fullChanges);
         store.writeRoundFileChanges("t1", "round_abc123", full);
-        Path f = dataDir.resolve("tasks").resolve("t1").resolve("file-changes").resolve("round_abc123.json");
+        Path f = dataDir.resolve("workspaces").resolve("defaultworkspace").resolve("tasks").resolve("t1").resolve("file-changes").resolve("round_abc123.json");
         assertTrue(Files.isRegularFile(f), "全文文件应写到 file-changes/<roundId>.json");
         assertEquals(full, store.readRoundFileChanges("t1", "round_abc123"), "读回内容一致");
         assertEquals("updated", store.readRoundFileChanges("t1", "round_abc123")

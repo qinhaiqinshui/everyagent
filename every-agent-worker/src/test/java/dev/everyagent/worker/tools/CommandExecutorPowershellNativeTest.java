@@ -29,7 +29,7 @@ class CommandExecutorPowershellNativeTest {
     private static TaskEntry newTask() {
         ModelSnapshot snap = new ModelSnapshot("cfg", "openai-compat",
                 "http://localhost:9999/v1", "m", null);
-        return new TaskEntry("t-1", "任务", snap, "k", WS, "main-agent", 10_000);
+        return new TaskEntry("t-1", "任务", snap, "k", WS, "defaultworkspace", "main-agent", 10_000);
     }
 
     /** WSL 后端 mock:isWslBackend=true,isWslDirect=false,非 windows-mic 生效态。 */

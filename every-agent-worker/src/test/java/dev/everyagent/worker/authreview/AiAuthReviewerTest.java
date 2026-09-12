@@ -66,7 +66,7 @@ class AiAuthReviewerTest {
     private TaskEntry newTask(String cfgId, String apiKey) {
         ModelSnapshot snap = new ModelSnapshot(cfgId, "openai-compat",
                 "http://localhost:9999/v1", "task-model", null);
-        return new TaskEntry("t-1", "任务", snap, apiKey, "ws", "main-agent", 10_000);
+        return new TaskEntry("t-1", "任务", snap, apiKey, "ws", "defaultworkspace", "main-agent", 10_000);
     }
 
     private OpenAiChatOptions baseOptions() {
@@ -265,7 +265,7 @@ class AiAuthReviewerTest {
     @Test
     void doesNotCreateNewTaskEntryOrEventLog() throws Exception {
         reviewer(preset("{\"decision\":\"ALLOW\"}")).review(task, "c::del", "AI 请求");
-        verify(taskStore, never()).track(any(), any(), any());
+        verify(taskStore, never()).track(any(), any(), any(), any());
         assertTrue(task.subs.isEmpty(), "审议不复用/新建子 agent 集合");
         assertTrue(task.agentLedger.isEmpty(), "审议不进 agent 台账");
         // 事件只落原任务 EventLog(不新建);task.trace auth.review persist=true(ext 为 null)

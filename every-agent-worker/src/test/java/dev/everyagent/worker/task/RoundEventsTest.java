@@ -37,7 +37,7 @@ class RoundEventsTest {
     @BeforeEach
     void setUp() {
         props = new WorkerProperties();
-        props.setDataDir(dataDir.toString());
+        props.setHomeDir(dataDir.toString());
         store = new TaskStore(props);
         rounds = new RoundIndexStore();
         log = new EventLog(100_000);
@@ -45,7 +45,7 @@ class RoundEventsTest {
     }
 
     private Path dir() {
-        return dataDir.resolve("tasks").resolve("t1");
+        return dataDir.resolve("workspaces").resolve("defaultworkspace").resolve("tasks").resolve("t1");
     }
 
     // ---- TaskEvents 事件形:瞬态 + 主 agent(任务级)----
@@ -124,7 +124,7 @@ class RoundEventsTest {
     void roundEventsAreNotPersistedToJsonl() throws Exception {
         store.start();
         try {
-            store.track("t1", log, () -> Json.obj()
+            store.track("t1", "defaultworkspace", log, () -> Json.obj()
                     .put("taskId", "t1").put("status", "running")
                     .put("mainAgentId", MAIN).put("createdAt", System.currentTimeMillis()));
 

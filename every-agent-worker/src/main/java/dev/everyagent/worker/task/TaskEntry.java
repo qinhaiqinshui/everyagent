@@ -27,13 +27,18 @@ public final class TaskEntry {
     public final ModelSnapshot snapshot;
     /** 内存持有,永不写入事件日志或频段。 */
     public final String apiKey;
-    /** 任务挂靠的工作区根(worker 机器上的绝对路径,创建时定死)。 */
     /**
-     * 工作区根(meta.workspace;挂靠关系,任务数据存系统目录不随之迁移)。
+     * 工作区根(meta.workspace;挂靠关系,任务数据存 workspaces/&lt;workspaceId&gt;/tasks 不随之迁移)。
      * 非 final:workspaces.resolveMissing 纠正路径时整体改挂到新目录(见
      * {@link dev.everyagent.worker.task.TaskManager#redirectWorkspace})。
      */
     public String workspaceRoot;
+    /**
+     * 任务挂靠工作区的稳定 id(meta.workspaceId;磁盘存储维度,任务数据目录
+     * workspaces/&lt;workspaceId&gt;/tasks/&lt;taskId&gt;/ 的定位键)。
+     * 创建时定死,纠正路径/再运行均不变(root 改变不影响 id)。
+     */
+    public final String workspaceId;
     /** 主 agent 稳定 Id:任务生命周期内不变,即 &lt;mainAgentId&gt;.jsonl 文件名(Spring AI conversationId)。 */
     public final String mainAgentId;
     public final EventLog log;
@@ -175,13 +180,14 @@ public final class TaskEntry {
     private final AtomicLong lastActivityMs = new AtomicLong(createdAt);
 
     public TaskEntry(String taskId, String title,
-            ModelSnapshot snapshot, String apiKey, String workspaceRoot, String mainAgentId,
+            ModelSnapshot snapshot, String apiKey, String workspaceRoot, String workspaceId, String mainAgentId,
             long maxEvents) {
         this.taskId = taskId;
         this.title = title;
         this.snapshot = snapshot;
         this.apiKey = apiKey;
         this.workspaceRoot = workspaceRoot;
+        this.workspaceId = workspaceId;
         this.mainAgentId = mainAgentId;
         this.log = new EventLog(maxEvents);
         this.events = new TaskEvents(log, mainAgentId);
@@ -300,6 +306,8 @@ public final class TaskEntry {
                 snapshot.configId(),
                 usageSummary());
         ObjectNode n = (ObjectNode) Json.toJson(s);
+        // 稳定工作区 id(磁盘存储维度;TaskSummary record 保持不动,wire/meta 上额外携带)。
+        n.put("workspaceId", workspaceId);
         // 任务级开关随 meta 落盘:缺失 = false,再运行据此保持开启(磁盘是唯一真相源)。
         if (aiReview) {
             n.put("aiReview", true);

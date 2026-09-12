@@ -41,6 +41,8 @@ export interface WorkerTaskSummary {
   error?: string | null
   /** 任务挂靠的工作区根(工作区隔离的过滤键)。 */
   workspace?: string | null
+  /** 任务挂靠工作区的稳定 id(新 worker 提供;旧 worker 无此字段时为 undefined)。 */
+  workspaceId?: string | null
   /** 运行中任务的待消费输入快照(运行时态不落盘;终态/磁盘行无此字段=空)。 */
   pendingInputs?: string[]
   /** 任务创建时冻结的模型配置 ID(worker TaskSummary 已下发,前端据其反查模型信息)。 */
@@ -70,6 +72,8 @@ export interface TaskListEntry {
   error: string
   /** 任务挂靠的工作区根(TasksPanel 按工作区分组)。 */
   workspace: string
+  /** 任务挂靠工作区的稳定 id(新 worker 提供;旧数据/旧 worker 为 null)。 */
+  workspaceId?: string | null
   /** 待消费输入快照(队列面板展示;空=无排队)。 */
   pendingInputs: string[]
   /** 任务创建时冻结的模型配置 ID(据其反查模型信息;空=未知)。 */
@@ -137,6 +141,8 @@ function toEntry(summary: WorkerTaskSummary): TaskListEntry {
   const workspace = summary.workspace && summary.workspace.length > 0
     ? summary.workspace
     : (existing?.workspace ?? '')
+  // 稳定工作区 id(新 worker 提供;旧 worker/局部增量未携带时为 undefined/null,简单透传不做兜底)。
+  const workspaceId = summary.workspaceId
 
   const title = summary.title?.trim() || existing?.title || `任务 ${summary.taskId.slice(0, 8)}`
   const createdAt = summary.createdAt ?? existing?.createdAt ?? 0
@@ -162,6 +168,7 @@ function toEntry(summary: WorkerTaskSummary): TaskListEntry {
     summary: summary.summary ?? existing?.summary ?? '',
     error: summary.error ?? existing?.error ?? '',
     workspace,
+    workspaceId,
     pendingInputs: summary.pendingInputs ?? existing?.pendingInputs ?? [],
     configId: summary.configId ?? existing?.configId ?? '',
     mainAgentId: summary.mainAgentId ?? existing?.mainAgentId ?? '',

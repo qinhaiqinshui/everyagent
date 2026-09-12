@@ -160,6 +160,9 @@ class WorkerIntegrationTest {
     WorkerProperties workerProps;
 
     @Autowired
+    dev.everyagent.worker.task.TaskStore taskStore;
+
+    @Autowired
     HubPool pool;
 
     private final String k = Ids.ownerKey(KEY);
@@ -229,7 +232,7 @@ class WorkerIntegrationTest {
         JsonNode meta = readMeta(taskId);
         String mainAgentId = meta.path("mainAgentId").asString();
         assertTrue(mainAgentId.startsWith("a_"), mainAgentId);
-        java.nio.file.Path dir = workerProps.resolveDataDir().resolve("tasks").resolve(taskId);
+        java.nio.file.Path dir = taskStore.dirOf(taskId);
         List<String> lines;
         try {
             lines = Files.readAllLines(dir.resolve(mainAgentId + ".jsonl"));
@@ -355,7 +358,7 @@ class WorkerIntegrationTest {
         assertEquals(callId, toolResult.path("payload").path("callId").asString(), "run_agent 结果配对");
         // 磁盘:子 agent 独立文件
         JsonNode meta = readMeta(taskId);
-        java.nio.file.Path dir = workerProps.resolveDataDir().resolve("tasks").resolve(taskId);
+        java.nio.file.Path dir = taskStore.dirOf(taskId);
         assertTrue(Files.isRegularFile(dir.resolve(subId + ".jsonl")), "子 agent 分文件: " + dir);
         assertTrue(Files.isRegularFile(dir.resolve(meta.path("mainAgentId").asString() + ".jsonl")));
     }
@@ -421,7 +424,7 @@ class WorkerIntegrationTest {
             }
         }
         assertTrue(found, "列表包含任务 A: " + all);
-        java.nio.file.Path dirA = workerProps.resolveDataDir().resolve("tasks").resolve(ta);
+        java.nio.file.Path dirA = taskStore.dirOf(ta);
         assertTrue(Files.isRegularFile(dirA.resolve("meta.json")),
                 "meta.json 落系统目录: " + dirA);
         assertTrue(Files.isRegularFile(dirA.resolve(readMeta(ta).path("mainAgentId").asString() + ".jsonl")),
@@ -475,7 +478,7 @@ class WorkerIntegrationTest {
         // createdAt 不随续写重置;mainAgentId 稳定(同一 jsonl 文件续写)
         JsonNode meta2 = readMeta(taskId);
         assertEquals(createdAt, meta2.path("createdAt").asLong(), "createdAt 沿用原值");
-        java.nio.file.Path dir = workerProps.resolveDataDir().resolve("tasks").resolve(taskId);
+        java.nio.file.Path dir = taskStore.dirOf(taskId);
         try (var files = Files.list(dir)) {
             // rounds.jsonl 是轮次索引(§5.8),与事件日志分开,不计入
             assertEquals(1, files.filter(p -> {
@@ -589,7 +592,7 @@ class WorkerIntegrationTest {
         String taskId = create("待删除任务");
         fe.await(t -> t.contains("\"event\":\"task.updated\"") && t.contains("\"status\":\"done\""),
                 "任务完成");
-        java.nio.file.Path dir = workerProps.resolveDataDir().resolve("tasks").resolve(taskId);
+        java.nio.file.Path dir = taskStore.dirOf(taskId);
         assertTrue(Files.isDirectory(dir));
 
         String resp = rpc("task.delete", "{\"taskId\":\"" + taskId + "\"}");
@@ -948,7 +951,7 @@ class WorkerIntegrationTest {
     private JsonNode readMeta(String taskId) {
         try {
             return Json.parse(Files.readString(
-                    workerProps.resolveDataDir().resolve("tasks").resolve(taskId).resolve("meta.json")));
+                    taskStore.dirOf(taskId).resolve("meta.json")));
         } catch (java.io.IOException e) {
             throw new AssertionError("meta 读取失败 task=" + taskId, e);
         }

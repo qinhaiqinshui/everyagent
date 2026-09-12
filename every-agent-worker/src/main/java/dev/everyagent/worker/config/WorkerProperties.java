@@ -12,7 +12,7 @@ import java.util.Map;
  * 支持向多个 hub 注册:hubs 列表每项 {url, apiKey, hubKey};hubs 是唯一配置入口,
  * 为空时不连接任何 hub。同一 apiKey 配多个 hub = 输出冗余扇出;
  * 不同 apiKey = 多用户共用一个 worker,apiKey 只用于连接认证,不决定任务存储/归属;
- * 任务统一存 data/tasks/<taskId>/(不存在顶层 worker.api-key——apiKey 按 hub 条目各自配置)。
+ * 工作区注册表与任务数据统一存 workspaces/(不存在顶层 worker.api-key——apiKey 按 hub 条目各自配置)。
  */
 @ConfigurationProperties("worker")
 public class WorkerProperties {
@@ -20,12 +20,10 @@ public class WorkerProperties {
     private String workerId = "company-pc";
     /** 多 hub 注册列表(hubs 为唯一入口;空 = 不连任何 hub)。 */
     private List<HubConfig> hubs = new ArrayList<>();
-    /** 系统目录(架构 §5.9):模型配置/默认工作区/数据;空 = ~/.everyagent。 */
+    /** 系统目录(架构 §5.9):模型配置/默认工作区/workspaces/沙箱;空 = ~/.everyagent。 */
     private String homeDir = "";
-    /** 默认工作区(init 时注册进注册表)。空 = <系统目录>/workspace。 */
+    /** 默认工作区(init 时注册进注册表)。空 = <系统目录>/defaultworkspace。 */
     private String workspaceRoot = "";
-    /** worker 数据目录(任务落盘/工作区注册表)。空 = <系统目录>/data。 */
-    private String dataDir = "";
     /** 系统技能目录(skill 知识包;空 = <系统目录>/skills)。AI 工具只读访问,写一律拒绝。 */
     private String skillsDir = "";
     /**
@@ -211,25 +209,23 @@ public class WorkerProperties {
                 : java.nio.file.Path.of(h)).toAbsolutePath().normalize();
     }
 
-    /** 数据目录绝对路径;配置为空时取 <系统目录>/data。 */
-    public java.nio.file.Path resolveDataDir() {
-        String d = dataDir == null || dataDir.isBlank() ? null : dataDir.trim();
-        return (d == null ? resolveHomeDir().resolve("data") : java.nio.file.Path.of(d))
-                .toAbsolutePath().normalize();
+    /** workspaces 目录绝对路径(工作区注册表 + 任务数据,架构 §5.9);恒为 <系统目录>/workspaces。 */
+    public java.nio.file.Path resolveWorkspacesDir() {
+        return resolveHomeDir().resolve("workspaces").toAbsolutePath().normalize();
     }
 
-    /** 沙箱持久状态根目录绝对路径;配置为空时取 <数据目录>/sandbox。 */
+    /** 沙箱持久状态根目录绝对路径;配置为空时取 <系统目录>/sandbox。 */
     public java.nio.file.Path resolveSandboxPersistentRoot() {
         String p = sandbox.getPersistentRoot() == null || sandbox.getPersistentRoot().isBlank()
                 ? null : sandbox.getPersistentRoot().trim();
-        return (p == null ? resolveDataDir().resolve("sandbox") : java.nio.file.Path.of(p))
+        return (p == null ? resolveHomeDir().resolve("sandbox") : java.nio.file.Path.of(p))
                 .toAbsolutePath().normalize();
     }
 
-    /** 初始工作区绝对路径;配置为空时取 <系统目录>/workspace(默认工作区)。 */
+    /** 初始工作区绝对路径;配置为空时取 <系统目录>/defaultworkspace(默认工作区)。 */
     public java.nio.file.Path resolveInitialWorkspace() {
         String w = workspaceRoot == null || workspaceRoot.isBlank() ? null : workspaceRoot.trim();
-        return (w == null ? resolveHomeDir().resolve("workspace") : java.nio.file.Path.of(w))
+        return (w == null ? resolveHomeDir().resolve("defaultworkspace") : java.nio.file.Path.of(w))
                 .toAbsolutePath().normalize();
     }
 
@@ -561,14 +557,6 @@ public class WorkerProperties {
         this.homeDir = homeDir;
     }
 
-    public String getDataDir() {
-        return dataDir;
-    }
-
-    public void setDataDir(String dataDir) {
-        this.dataDir = dataDir;
-    }
-
     public String getSkillsDir() {
         return skillsDir;
     }
@@ -687,7 +675,7 @@ public class WorkerProperties {
          * windows-mic / direct 后端运行在宿主文件系统上,天然已持久,此开关主要控制持久 env 注入。
          */
         private boolean persistentState = true;
-        /** 持久状态根目录(空 = &lt;数据目录&gt;/sandbox);worker 级共享,跨任务/重启保留。 */
+        /** 持久状态根目录(空 = &lt;系统目录&gt;/sandbox);worker 级共享,跨任务/重启保留。 */
         private String persistentRoot = "";
 
         /**

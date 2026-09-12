@@ -40,9 +40,12 @@ class RoundIndexPersistTest {
     private TaskEvents events;
 
     @BeforeEach
-    void setUp() {
+    void setUp() throws Exception {
         props = new WorkerProperties();
-        props.setDataDir(dataDir.toString());
+        props.setHomeDir(dataDir.toString());
+        // 预建默认工作区任务目录:RoundIndexStore 走 store.dirOf("t1") 懒发现定位。
+        Files.createDirectories(dataDir.resolve("workspaces").resolve("defaultworkspace")
+                .resolve("tasks").resolve("t1"));
         store = new TaskStore(props);
         rounds = new RoundIndexStore();
         log = new EventLog(100_000);
@@ -50,7 +53,7 @@ class RoundIndexPersistTest {
     }
 
     private Path dir() {
-        return dataDir.resolve("tasks").resolve("t1");
+        return dataDir.resolve("workspaces").resolve("defaultworkspace").resolve("tasks").resolve("t1");
     }
 
     /** 开一轮:user.message 落盘后调用 openRoundAtStart(与 consumeInput 同路径)。 */

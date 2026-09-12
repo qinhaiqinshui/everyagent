@@ -177,7 +177,7 @@ class WorkerHubE2eTest {
         assertEquals(last, tail.get(0).path("seq").asLong(), "增量返回最后一条事件");
 
         // 任务数据落系统目录 data/tasks/<taskId>/(经真实链路全量持久化,按 agent 分文件)
-        java.nio.file.Path taskDir = workerProps.resolveDataDir().resolve("tasks").resolve(taskId);
+        java.nio.file.Path taskDir = workerProps.resolveWorkspacesDir().resolve("defaultworkspace").resolve("tasks").resolve(taskId);
         JsonNode meta = Json.parse(java.nio.file.Files.readString(taskDir.resolve("meta.json")));
         String mainAgentId = meta.path("mainAgentId").asString();
         assertTrue(mainAgentId.startsWith("a_"), mainAgentId);

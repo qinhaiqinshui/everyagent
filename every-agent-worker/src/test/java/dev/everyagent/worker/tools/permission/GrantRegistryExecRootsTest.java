@@ -36,7 +36,7 @@ class GrantRegistryExecRootsTest {
     private TaskEntry task(Path ws) {
         ModelSnapshot snap = new ModelSnapshot("cfg", "openai-compat",
                 "http://localhost:9999/v1", "m", null);
-        return new TaskEntry("t-1", "任务", snap, "k", ws.toString(), "main-agent", 10_000);
+        return new TaskEntry("t-1", "任务", snap, "k", ws.toString(), "defaultworkspace", "main-agent", 10_000);
     }
 
     /** 弹窗打桩:答「本任务全程允许」(TASK 档,EXEC 根随授权落档)。 */
