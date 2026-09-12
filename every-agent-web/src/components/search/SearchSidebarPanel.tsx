@@ -5,7 +5,7 @@ import { useWorkspaceShell } from '../app/WorkspaceShellContext'
 import { domainEventBus, DOMAIN_EVENTS } from '@/events/eventBus'
 import { hubSession, type WorkerInfo } from '@/hub/session'
 import { workspaceRegistry } from '@/hub/workspaceRegistry'
-import { toBusinessAbsolutePath } from '@/platform/fs/pathUtils'
+import { normalizeWorkspaceRelativePath, toBusinessAbsolutePath } from '@/platform/fs/pathUtils'
 import type { WorkspaceContentSearchHit } from '@/query/workspaceContentSearch'
 import SidebarScrollArea from '../shared/SidebarScrollArea'
 import { IconButton, InlineSpinner } from '@/components/shared/ui'
@@ -40,10 +40,11 @@ function displayRootLabel(root: string): string {
  *   落定默认项），未选齐前搜索不可发起；
  * - 输入区：搜索词 + Aa（大小写）/ ab|（全字）/ .*（正则）三个开关（聚焦时支持
  *   Alt+C / Alt+W / Alt+R 切换）；搜索完全由回车触发，右侧「更多」按钮弹出菜单，
- *   其中「添加包含过滤器 / 添加排除过滤器」两项相互独立，各自切换对应 glob 输入区；
+ *   其中「添加搜索范围 / 添加包含过滤器 / 添加排除过滤器」三项相互独立：范围项展开
+ *   输入框让用户主动输入目录（回车生效并立即搜索），过滤器两项各自切换对应 glob 输入区；
  * - 非法正则：输入框红框 + 错误提示，不触发搜索；
- * - 范围：当前选中工作区根；资源管理器右键「搜索」经 WORKSPACE_SEARCH_PANEL_REQUESTED
- *   事件跳转预填 worker/工作区/目录，可「×」恢复为工作区根；
+ * - 范围：当前选中工作区根；可由「更多」菜单主动添加目录，或由资源管理器右键「搜索」
+ *   经 WORKSPACE_SEARCH_PANEL_REQUESTED 事件跳转预填 worker/工作区/目录，可「×」恢复为工作区根；
  * - 结果树：SearchResultsTree 按文件分组渲染，命中行点击打开文件并定位到行。
  */
 export default function SearchSidebarPanel() {
@@ -74,6 +75,10 @@ export default function SearchSidebarPanel() {
   const [includeOpen, setIncludeOpen] = React.useState(false)
   /** 排除过滤器输入区独立展开态。 */
   const [excludeOpen, setExcludeOpen] = React.useState(false)
+  /** 搜索范围输入区独立展开态。 */
+  const [scopeOpen, setScopeOpen] = React.useState(false)
+  /** 搜索范围输入草稿（展开时初始化为当前范围，回车提交后生效）。 */
+  const [scopeDraft, setScopeDraft] = React.useState('')
   /** 折叠态的文件分组路径集合（结果树展开策略由面板统一持有，供折叠/展开全部）。 */
   const [collapsedFiles, setCollapsedFiles] = React.useState<Set<string>>(new Set())
   const searchInputRef = React.useRef<InputRef | null>(null)
@@ -178,6 +183,7 @@ export default function SearchSidebarPanel() {
     setWorkerId(nextWorkerId)
     setWorkspaceRoot(firstRootOf(nextWorkerId))
     setScope(null)
+    setScopeOpen(false)
     searchReset()
   }, [firstRootOf, searchReset, workerId])
 
@@ -186,11 +192,15 @@ export default function SearchSidebarPanel() {
     if (!nextRoot || nextRoot === workspaceRoot) return
     setWorkspaceRoot(nextRoot)
     setScope(null)
+    setScopeOpen(false)
     searchReset()
   }, [searchReset, workspaceRoot])
 
-  /** 发起搜索：以当前输入区全部选项与解析后的范围调用状态机（绑定未选齐时守卫不发起）。 */
-  const runSearch = React.useCallback(() => {
+  /**
+   * 发起搜索：以当前输入区全部选项与解析后的范围调用状态机（绑定未选齐时守卫不发起）。
+   * rootPathOverride 用于范围输入框提交时按新范围立即搜索（绕过 React 状态异步更新的闭包旧值）。
+   */
+  const runSearch = React.useCallback((rootPathOverride?: string) => {
     if (!bindingReady) return
     void search.run({
       pattern: query,
@@ -200,15 +210,58 @@ export default function SearchSidebarPanel() {
       includePatterns: includePatterns.trim() || undefined,
       excludePatterns: excludePatterns.trim() || undefined,
       workspaceRoot,
-      rootPath: scopeRootPath,
+      rootPath: rootPathOverride ?? scopeRootPath,
     })
   }, [bindingReady, caseSensitive, excludePatterns, includePatterns, query, scopeRootPath, search, useRegex, workspaceRoot])
 
+  /** 是否存在已生效的非根范围（范围行据此展示，菜单项据此切换「添加/移除」）。 */
+  const hasScope = Boolean(activeScope && scopeRootPath)
+
   /**
-   * 「更多」菜单项：添加/移除包含过滤器与排除过滤器。
-   * 两项相互独立，各自切换对应过滤输入区的显隐（互不联动）。
+   * 提交搜索范围：把用户输入规范化为业务绝对路径（前导 `/`），空输入/仅根视为恢复工作区根；
+   * 设置范围后收起输入区，并按新范围立即发起搜索。
+   */
+  const commitScope = React.useCallback((raw: string) => {
+    const normalized = normalizeWorkspaceRelativePath(raw)
+    const nextRootPath = normalized ? toBusinessAbsolutePath(normalized) : ''
+    setScopeOpen(false)
+    if (!normalized) {
+      setScope(null)
+    } else {
+      setScope({
+        workspaceRoot,
+        rootPath: nextRootPath,
+        label: normalized.split('/').pop() || '工作区根目录',
+      })
+    }
+    // 已有搜索词时按新范围立即搜索；否则仅落定范围，待用户输入关键词后回车触发。
+    if (query.trim()) {
+      runSearch(nextRootPath)
+    }
+  }, [query, runSearch, workspaceRoot])
+
+  /**
+   * 「更多」菜单项：添加/移除搜索范围与包含/排除过滤器。
+   * 三项相互独立：范围项在「已设置范围 / 展开输入框」时切换为移除，过滤器两项各自
+   * 切换对应输入区的显隐（互不联动）。
    */
   const moreItems: MoreActionItem[] = [
+    {
+      key: 'scope',
+      label: hasScope || scopeOpen ? '移除搜索范围' : '添加搜索范围',
+      active: hasScope || scopeOpen,
+      onSelect: () => {
+        if (hasScope) {
+          setScope(null)
+          setScopeOpen(false)
+        } else if (scopeOpen) {
+          setScopeOpen(false)
+        } else {
+          setScopeDraft(scopeRootPath)
+          setScopeOpen(true)
+        }
+      },
+    },
     {
       key: 'include-filter',
       label: includeOpen ? '移除包含过滤器' : '添加包含过滤器',
@@ -265,6 +318,7 @@ export default function SearchSidebarPanel() {
         setWorkerId(requestedWorkerId)
         setWorkspaceRoot(requestedWorkspaceRoot)
         setScope({ workspaceRoot: requestedWorkspaceRoot, rootPath, label })
+        setScopeOpen(false)
         // 绑定随事件变化，旧工作区结果作废。
         searchReset()
         focusInput()
@@ -449,8 +503,25 @@ export default function SearchSidebarPanel() {
           )}
         </div>
 
-        {includeOpen || excludeOpen ? (
+        {scopeOpen || includeOpen || excludeOpen ? (
           <div style={filtersStyle}>
+            {scopeOpen ? (
+              <Input
+                autoFocus
+                type="text"
+                aria-label="搜索范围"
+                placeholder="搜索范围目录，例：/src 或 src/components（回车生效，留空为工作区根）"
+                value={scopeDraft}
+                onChange={(event) => setScopeDraft(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault()
+                    commitScope(scopeDraft)
+                  }
+                }}
+                style={filterInputStyle}
+              />
+            ) : null}
             {includeOpen ? (
               <Input
                 type="text"
