@@ -824,7 +824,6 @@ function WorkspaceGroupPanel({
         </div>
         {!collapsed && (
           <>
-            <div style={workspaceRootStyle} title={workspaceRoot}>{workspaceRoot}</div>
         {treeError ? <div style={emptyStyle}>{treeError}</div> : null}
         {multiSelectMode ? (
           <div style={multiSelectBarStyle}>
@@ -1305,16 +1304,6 @@ const groupBadgeStyle: React.CSSProperties = {
   fontSize: 'var(--text-xs)',
   color: 'var(--accent-blue)',
   flexShrink: 0,
-}
-
-const workspaceRootStyle: React.CSSProperties = {
-  fontSize: 'var(--text-xs)',
-  color: 'var(--text-muted)',
-  fontFamily: '"Cascadia Code", "Fira Code", Consolas, monospace',
-  overflow: 'hidden',
-  textOverflow: 'ellipsis',
-  whiteSpace: 'nowrap',
-  padding: '0 2px',
 }
 
 const emptyStyle: React.CSSProperties = {

@@ -810,7 +810,6 @@ function GitWorkspaceGroupPanel({
       </div>
       {!collapsed && (
         <>
-          <div style={workspaceRootStyle} title={workspaceRoot}>{workspaceRoot}</div>
           {initialized === false ? (
         <GitNotInitializedView
           disabled={busy !== null}
@@ -1310,16 +1309,6 @@ const groupBadgeStyle: React.CSSProperties = {
   fontSize: 'var(--text-xs)',
   color: 'var(--accent-blue)',
   flexShrink: 0,
-}
-
-const workspaceRootStyle: React.CSSProperties = {
-  fontSize: 'var(--text-xs)',
-  color: 'var(--text-muted)',
-  fontFamily: '"Cascadia Code", "Fira Code", Consolas, monospace',
-  overflow: 'hidden',
-  textOverflow: 'ellipsis',
-  whiteSpace: 'nowrap',
-  padding: '0 2px',
 }
 
 /** 头部行内分支胶囊:紧跟工作区名展示当前分支(折叠态也可见);长分支名内部省略。 */
