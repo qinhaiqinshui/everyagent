@@ -556,7 +556,7 @@ ask 管道承载第二类阻塞请求:**危险操作授权**。`PermissionGate` 
 └─ skills/                           # 内置 skill 知识包(启动时从 classpath 物化)
 ```
 
-**旧布局迁移**:`data/` 与 `wsl/` 目录已彻底删除;存量旧数据由独立迁移命令/脚本手动执行一次迁移(幂等、可重试),不随 worker 启动自动跑。
+**旧布局迁移**:`data/` 与 `wsl/` 目录已彻底删除;存量旧数据由独立迁移脚本手动执行一次迁移——`python3 scripts/migrate-workspaces.py [--home <EVERYAGENT_HOME>]`(幂等、可重试,不随 worker 启动自动跑;迁移逻辑为 Python,不依赖 mvn 打包)。
 
 **五项持久化规则**(实现定死):
 
