@@ -125,6 +125,8 @@ function WorkspaceGroupPanel({
   const [batchMoving, setBatchMoving] = React.useState(false)
   /** 属性弹窗:当前查看属性的节点目标;null = 关闭。 */
   const [propertiesTarget, setPropertiesTarget] = React.useState<WorkspaceExplorerContextTarget | null>(null)
+  /** 工作区属性弹窗:当前查看属性的工作区条目;null = 关闭。 */
+  const [workspacePropertiesTarget, setWorkspacePropertiesTarget] = React.useState<WorkspaceEntry | null>(null)
 
   const reloadTree = React.useCallback(async (includeInternalFiles: boolean, keepExpanded = false) => {
     setReloading(true)
@@ -803,6 +805,11 @@ function WorkspaceGroupPanel({
       onSelect: () => setMetaMode((current) => (current === 'modified' ? 'none' : 'modified')),
     },
     {
+      key: 'workspace-properties',
+      label: '属性',
+      onSelect: () => setWorkspacePropertiesTarget(entry),
+    },
+    {
       key: 'remove-workspace',
       label: '移除工作区…',
       danger: true,
@@ -1062,6 +1069,13 @@ function WorkspaceGroupPanel({
         items={propertiesTarget ? buildPropertyItems(propertiesTarget) : []}
         onClose={() => setPropertiesTarget(null)}
       />
+      <PropertiesDialog
+        open={Boolean(workspacePropertiesTarget)}
+        title="工作区属性"
+        name={workspacePropertiesTarget ? getWorkspaceDisplayName(workspacePropertiesTarget.root) : undefined}
+        items={workspacePropertiesTarget ? buildWorkspacePropertyItems(workspacePropertiesTarget) : []}
+        onClose={() => setWorkspacePropertiesTarget(null)}
+      />
     </div>
   )
 }
@@ -1145,6 +1159,15 @@ function buildPropertyItems(target: WorkspaceExplorerContextTarget): PropertyIte
     value: formatPropertyTime(target.mtimeMs ?? 0),
   })
   return items
+}
+
+/** 组装工作区属性弹窗条目:名称/根路径/Id。 */
+function buildWorkspacePropertyItems(entry: WorkspaceEntry): PropertyItem[] {
+  return [
+    { label: '名称', value: getWorkspaceDisplayName(entry.root) },
+    { label: '根路径', value: entry.root },
+    { label: 'Id', value: entry.id ?? '—' },
+  ]
 }
 
 /** 字节大小格式化为可读文本(B/KB/MB)。 */
