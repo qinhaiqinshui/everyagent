@@ -212,18 +212,32 @@
   align-items: center;
 }
 
-/* 文件树：行 hover/选中高亮统一为项目灰调(与 ui-list-row 的 bg-hover/bg-active 一致)，
-   替代 antd 默认的淡蓝选中底(controlItemBgActive / colorPrimaryBgHover)。
-   双击/单击选中后不再是突兀的品牌蓝底色，而是与任务列表等一致的柔和选中态。 */
-.ws-tree.ant-tree .ant-tree-node-content-wrapper:hover {
-  background-color: var(--bg-hover);
+/* 文件树（DirectoryTree）选中/悬停高亮统一为项目灰调(与 ui-list-row 的 bg-hover/bg-active 一致)。
+   根因:antd 目录树把「选中态」背景画在 .ant-tree-treenode-selected 上(默认 colorPrimary 实心蓝),
+   把「悬停态」背景画在 .ant-tree-node-content-wrapper 的 :before 伪元素上(默认 controlItemBgHover),
+   而非画在 content-wrapper 自身 background——因此需覆盖 treenode 与 :before 两处。
+   且 antd 样式为运行时 cssinjs 注入、带 hash 前缀、位于文档末尾,需 !important 压过。 */
+.ws-tree.ant-tree.ant-tree-directory .ant-tree-treenode-selected {
+  background: var(--bg-active) !important;
 }
-.ws-tree.ant-tree .ant-tree-node-content-wrapper.ant-tree-node-selected {
-  color: var(--text-primary);
-  background-color: var(--bg-active);
+.ws-tree.ant-tree.ant-tree-directory .ant-tree-treenode-selected .ant-tree-node-content-wrapper,
+.ws-tree.ant-tree.ant-tree-directory .ant-tree-treenode-selected .ant-tree-node-content-wrapper:hover {
+  color: var(--text-primary) !important;
+  background: transparent !important;
 }
-.ws-tree.ant-tree .ant-tree-node-content-wrapper.ant-tree-node-selected:hover {
-  background-color: var(--bg-active);
+.ws-tree.ant-tree.ant-tree-directory .ant-tree-treenode-selected .ant-tree-node-content-wrapper:before,
+.ws-tree.ant-tree.ant-tree-directory .ant-tree-treenode-selected .ant-tree-node-content-wrapper:hover:before {
+  background: var(--bg-active) !important;
+}
+.ws-tree.ant-tree.ant-tree-directory .ant-tree-node-content-wrapper:hover {
+  background: transparent !important;
+}
+.ws-tree.ant-tree.ant-tree-directory .ant-tree-node-content-wrapper:hover:before {
+  background: var(--bg-hover) !important;
+}
+/* 选中态下 switcher 箭头恢复为正文灰色(antd 默认会随选中态变白/变色)。 */
+.ws-tree.ant-tree.ant-tree-directory .ant-tree-treenode-selected .ant-tree-switcher {
+  color: var(--text-muted) !important;
 }
 
 /* 文件树:switcher(展开/收起图标)独占一列,容器改 flex 居中。
