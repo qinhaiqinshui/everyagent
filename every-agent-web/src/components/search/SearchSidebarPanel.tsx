@@ -9,7 +9,8 @@ import { toBusinessAbsolutePath } from '@/platform/fs/pathUtils'
 import type { WorkspaceContentSearchHit } from '@/query/workspaceContentSearch'
 import SidebarScrollArea from '../shared/SidebarScrollArea'
 import { IconButton, InlineSpinner } from '@/components/shared/ui'
-import { ChevronDownIcon, CloseIcon, SearchIcon } from '../shared/AppGlyphs'
+import MoreActionsButton, { type MoreActionItem } from '../shared/MoreActionsButton'
+import { ChevronDownIcon, CloseIcon } from '../shared/AppGlyphs'
 import SearchResultsTree from './SearchResultsTree'
 import { useWorkspaceSearch } from './useWorkspaceSearch'
 
@@ -38,7 +39,8 @@ function displayRootLabel(root: string): string {
  * - 绑定：顶部 worker / 工作区两个必选下拉（多 worker 显式归属，注册表就绪后自动
  *   落定默认项），未选齐前搜索不可发起；
  * - 输入区：搜索词 + Aa（大小写）/ ab|（全字）/ .*（正则）三个开关（聚焦时支持
- *   Alt+C / Alt+W / Alt+R 切换）+ ‥ 展开「包含/排除文件」glob 过滤器；
+ *   Alt+C / Alt+W / Alt+R 切换）；搜索完全由回车触发，右侧「更多」按钮弹出菜单，
+ *   其中「添加包含过滤器 / 添加排除过滤器」两项相互独立，各自切换对应 glob 输入区；
  * - 非法正则：输入框红框 + 错误提示，不触发搜索；
  * - 范围：当前选中工作区根；资源管理器右键「搜索」经 WORKSPACE_SEARCH_PANEL_REQUESTED
  *   事件跳转预填 worker/工作区/目录，可「×」恢复为工作区根；
@@ -68,8 +70,10 @@ export default function SearchSidebarPanel() {
   const [useRegex, setUseRegex] = React.useState(false)
   const [includePatterns, setIncludePatterns] = React.useState('')
   const [excludePatterns, setExcludePatterns] = React.useState('')
-  /** 过滤器区（包含/排除 glob）展开态。 */
-  const [filtersOpen, setFiltersOpen] = React.useState(false)
+  /** 包含过滤器输入区独立展开态。 */
+  const [includeOpen, setIncludeOpen] = React.useState(false)
+  /** 排除过滤器输入区独立展开态。 */
+  const [excludeOpen, setExcludeOpen] = React.useState(false)
   /** 折叠态的文件分组路径集合（结果树展开策略由面板统一持有，供折叠/展开全部）。 */
   const [collapsedFiles, setCollapsedFiles] = React.useState<Set<string>>(new Set())
   const searchInputRef = React.useRef<InputRef | null>(null)
@@ -199,6 +203,25 @@ export default function SearchSidebarPanel() {
       rootPath: scopeRootPath,
     })
   }, [bindingReady, caseSensitive, excludePatterns, includePatterns, query, scopeRootPath, search, useRegex, workspaceRoot])
+
+  /**
+   * 「更多」菜单项：添加/移除包含过滤器与排除过滤器。
+   * 两项相互独立，各自切换对应过滤输入区的显隐（互不联动）。
+   */
+  const moreItems: MoreActionItem[] = [
+    {
+      key: 'include-filter',
+      label: includeOpen ? '移除包含过滤器' : '添加包含过滤器',
+      active: includeOpen,
+      onSelect: () => setIncludeOpen((current) => !current),
+    },
+    {
+      key: 'exclude-filter',
+      label: excludeOpen ? '移除排除过滤器' : '添加排除过滤器',
+      active: excludeOpen,
+      onSelect: () => setExcludeOpen((current) => !current),
+    },
+  ]
 
   /**
    * 新结果落地时重置折叠策略：
@@ -389,12 +412,6 @@ export default function SearchSidebarPanel() {
             suffix={(
               <span style={inputTogglesStyle}>
                 <SearchToggleButton
-                  label="‥"
-                  title="切换包含/排除文件过滤器"
-                  active={filtersOpen}
-                  onClick={() => setFiltersOpen((current) => !current)}
-                />
-                <SearchToggleButton
                   label="Aa"
                   title="区分大小写 (Alt+C)"
                   active={caseSensitive}
@@ -428,48 +445,44 @@ export default function SearchSidebarPanel() {
               />
             </>
           ) : (
-            <IconButton
-              variant="ghost"
-              size="sm"
-              icon={<SearchIcon size={14} />}
-              aria-label="搜索"
-              title="搜索（Enter）"
-              onClick={runSearch}
-              disabled={!bindingReady}
-            />
+            <MoreActionsButton items={moreItems} title="更多操作" />
           )}
         </div>
 
-        {filtersOpen ? (
+        {includeOpen || excludeOpen ? (
           <div style={filtersStyle}>
-            <Input
-              type="text"
-              aria-label="包含的文件"
-              placeholder="包含的文件，例：*.ts, src/**"
-              value={includePatterns}
-              onChange={(event) => setIncludePatterns(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') {
-                  event.preventDefault()
-                  runSearch()
-                }
-              }}
-              style={filterInputStyle}
-            />
-            <Input
-              type="text"
-              aria-label="排除的文件"
-              placeholder="排除的文件，例：*.css, dist/**"
-              value={excludePatterns}
-              onChange={(event) => setExcludePatterns(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') {
-                  event.preventDefault()
-                  runSearch()
-                }
-              }}
-              style={filterInputStyle}
-            />
+            {includeOpen ? (
+              <Input
+                type="text"
+                aria-label="包含的文件"
+                placeholder="包含的文件，例：*.ts, src/**"
+                value={includePatterns}
+                onChange={(event) => setIncludePatterns(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault()
+                    runSearch()
+                  }
+                }}
+                style={filterInputStyle}
+              />
+            ) : null}
+            {excludeOpen ? (
+              <Input
+                type="text"
+                aria-label="排除的文件"
+                placeholder="排除的文件，例：*.css, dist/**"
+                value={excludePatterns}
+                onChange={(event) => setExcludePatterns(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault()
+                    runSearch()
+                  }
+                }}
+                style={filterInputStyle}
+              />
+            ) : null}
           </div>
         ) : null}
 
@@ -522,7 +535,7 @@ export default function SearchSidebarPanel() {
 }
 
 /**
- * 输入框内嵌的小型开关按钮（Aa / ab| / .* / ‥）。
+ * 输入框内嵌的小型开关按钮（Aa / ab| / .*）。
  * onMouseDown 阻止默认行为，点击后焦点留在输入框内（Enter 可继续触发搜索）。
  */
 function SearchToggleButton({
