@@ -109,6 +109,9 @@ export default function WorkspaceExplorerTree({
       name: node.name,
       type: node.type,
       openTarget: node.openTarget,
+      size: node.size,
+      mtimeMs: node.mtimeMs,
+      createdTs: node.createdTs,
     }
     const customItems = getActionItems?.(target) ?? []
     const allItems: ListRowActionItem[] = onRequestDelete

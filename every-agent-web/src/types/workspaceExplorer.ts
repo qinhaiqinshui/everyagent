@@ -30,6 +30,12 @@ export interface WorkspaceExplorerContextTarget {
   type: 'directory' | 'file'
   /** 如果是文件节点，可附带打开目标。 */
   openTarget?: WorkspaceExplorerOpenTarget
+  /** 节点大小(目录懒加载不做子树聚合,恒为 0)。 */
+  size?: number
+  /** 最近修改时间。 */
+  mtimeMs?: number
+  /** 创建时间(worker 毫秒;平台不支持时 0,前端按「未知」处理)。 */
+  createdTs?: number
 }
 
 /**
@@ -48,6 +54,8 @@ export interface WorkspaceExplorerNode {
   size: number
   /** 最近修改时间。 */
   mtimeMs: number
+  /** 创建时间(worker 毫秒;平台不支持时 0,前端按「未知」处理)。 */
+  createdTs: number
   /** 子节点列表。目录节点已加载后才有值(空数组 = 已加载且为空目录)。 */
   children?: WorkspaceExplorerNode[]
   /** 目录节点:子节点是否已尝试加载(避免空目录重复请求)。 */

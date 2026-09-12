@@ -9,6 +9,7 @@ import { antdConfirm } from '@/utils/appAntdBridge'
 import { normalizeWorkspaceRelativePath, toBusinessAbsolutePath } from '@/platform/fs/pathUtils'
 import { workspaceExplorerCommandService } from '@/services/workspaceExplorerCommandService'
 import ConfirmDialog from '../shared/ConfirmDialog'
+import PropertiesDialog, { type PropertyItem } from '../shared/PropertiesDialog'
 import MoreActionsButton, { type MoreActionItem } from '../shared/MoreActionsButton'
 import { DownloadIcon, FilePlusIcon, FileTextIcon, FolderArrowOutIcon, FolderPlusIcon, MagnifierCheckIcon, UploadIcon, ChevronDownIcon, CheckIcon } from '../shared/AppGlyphs'
 import SidebarScrollArea from '../shared/SidebarScrollArea'
@@ -122,6 +123,8 @@ function WorkspaceGroupPanel({
   const [batchMoveOpen, setBatchMoveOpen] = React.useState(false)
   const [batchMoveDir, setBatchMoveDir] = React.useState('')
   const [batchMoving, setBatchMoving] = React.useState(false)
+  /** 属性弹窗:当前查看属性的节点目标;null = 关闭。 */
+  const [propertiesTarget, setPropertiesTarget] = React.useState<WorkspaceExplorerContextTarget | null>(null)
 
   const reloadTree = React.useCallback(async (includeInternalFiles: boolean, keepExpanded = false) => {
     setReloading(true)
@@ -141,6 +144,7 @@ function WorkspaceGroupPanel({
             type: 'directory',
             size: 0,
             mtimeMs: 0,
+            createdTs: 0,
           }
           try {
             const children = await workspaceExplorerQueryService.loadChildren(workspaceRoot, probeNode, { includeInternalFiles })
@@ -644,6 +648,11 @@ function WorkspaceGroupPanel({
     setShowInternalFiles((current) => !current)
   }, [])
 
+  /** 打开属性弹窗:用节点目标里携带的 size/mtime/createdTs 组装属性条目。 */
+  const handleRequestProperties = React.useCallback((target: WorkspaceExplorerContextTarget) => {
+    setPropertiesTarget(target)
+  }, [])
+
   const getFileActionItems = React.useCallback((target: WorkspaceExplorerContextTarget): ListRowActionItem[] => {
     const items: ListRowActionItem[] = []
     // 文件行显式提供「打开」:双击之外的第二入口,移动端长按菜单里是唯一入口。
@@ -696,6 +705,11 @@ function WorkspaceGroupPanel({
       label: '显示 Git 历史',
       onSelect: () => handleRequestGitHistory(target),
     })
+    items.push({
+      key: 'properties',
+      label: '属性',
+      onSelect: () => handleRequestProperties(target),
+    })
    items.push({
      key: 'rename',
      label: '重命名',
@@ -725,7 +739,7 @@ function WorkspaceGroupPanel({
       onSelect: () => handleRequestRevealInOs(target),
     })
    return items
-  }, [handleOpenFile, handleRequestCreate, handleRequestDownload, handleRequestGitHistory, handleRequestMove, handleRequestRenameTarget, handleRequestRevealInOs, handleRequestSearch, handleRequestUpload])
+  }, [handleOpenFile, handleRequestCreate, handleRequestDownload, handleRequestGitHistory, handleRequestMove, handleRequestProperties, handleRequestRenameTarget, handleRequestRevealInOs, handleRequestSearch, handleRequestUpload])
 
   const rootMoreActionItems = React.useMemo<MoreActionItem[]>(() => [
     {
@@ -1041,6 +1055,13 @@ function WorkspaceGroupPanel({
           </div>
         }
       />
+      <PropertiesDialog
+        open={Boolean(propertiesTarget)}
+        title="属性"
+        name={propertiesTarget?.name}
+        items={propertiesTarget ? buildPropertyItems(propertiesTarget) : []}
+        onClose={() => setPropertiesTarget(null)}
+      />
     </div>
   )
 }
@@ -1100,6 +1121,51 @@ function dedupeWorkspacePaths(paths: string[]): string[] {
 
 function getDeleteDialogTitle(target: WorkspaceExplorerContextTarget | null): string {
   return target?.type === 'directory' ? '删除文件夹' : '删除文件'
+}
+
+/** 组装属性弹窗条目:文件显示 文件名/大小/创建时间/编辑时间;目录只显示 目录名/创建时间/编辑时间。 */
+function buildPropertyItems(target: WorkspaceExplorerContextTarget): PropertyItem[] {
+  const items: PropertyItem[] = []
+  items.push({
+    label: target.type === 'directory' ? '目录名' : '文件名',
+    value: target.name,
+  })
+  if (target.type === 'file') {
+    items.push({
+      label: '大小',
+      value: formatPropertyBytes(target.size ?? 0),
+    })
+  }
+  items.push({
+    label: '创建时间',
+    value: formatPropertyTime(target.createdTs ?? 0),
+  })
+  items.push({
+    label: '编辑时间',
+    value: formatPropertyTime(target.mtimeMs ?? 0),
+  })
+  return items
+}
+
+/** 字节大小格式化为可读文本(B/KB/MB)。 */
+function formatPropertyBytes(value: number): string {
+  if (!value || value < 0) return '0B'
+  if (value < 1024) return `${value}B`
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)}KB`
+  return `${(value / 1024 / 1024).toFixed(1)}MB`
+}
+
+/** 时间戳(毫秒)格式化为「年-月-日 时:分」;0/无效 = 未知。 */
+function formatPropertyTime(value: number): string {
+  if (!value || Number.isNaN(value)) return '未知'
+  const date = new Date(value)
+  const pad = (num: number) => String(num).padStart(2, '0')
+  const year = date.getFullYear()
+  const month = pad(date.getMonth() + 1)
+  const day = pad(date.getDate())
+  const hours = pad(date.getHours())
+  const minutes = pad(date.getMinutes())
+  return `${year}-${month}-${day} ${hours}:${minutes}`
 }
 
 /** 删除确认弹窗副标题。 */
