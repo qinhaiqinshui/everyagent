@@ -1619,6 +1619,7 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
         if (t.status.terminal()) {
             return;
         }
+        String workspaceRootToTouch = null;
         synchronized (t) {
             if (t.status.terminal()) {
                 return;
@@ -1655,9 +1656,11 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
             store.untrack(t.taskId);
             gate.untrack(t.taskId); // 授权内存驱逐(任务级已在 grants.json,再运行 lazy 重载)
             tasks.remove(t.taskId, t); // 两参原子:认领者(并发 rerun/delete)以此判断输赢
-            // 收口附带:刷新该任务挂靠工作区的最后活动时间(独立类,失败不影响收口)。
-            activityTracker.onTaskFinished(t.workspaceRoot);
+            workspaceRootToTouch = t.workspaceRoot; // 收口附带:工作区最后活动时间在锁外交给跟踪器
         }
+        // 收口附带:刷新该任务挂靠工作区的最后活动时间。放在 synchronized(t) 块之外,
+        // 避免与 workspaces.remove 的锁序(t→wm)构成倒置(后者持有 wm 锁再取任务锁)。
+        activityTracker.onTaskFinished(workspaceRootToTouch);
     }
 
     private void setStatus(TaskEntry t, TaskStatus s) {
