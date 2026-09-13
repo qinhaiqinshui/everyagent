@@ -17,6 +17,10 @@ import { openSlashItemDetail } from './SlashItemDetailPopover'
  *   与「纯粹文本视图」一致，供 `/` `@` 触发检测与提交替换复用。
  * - 序列化读 `data-opaque`（构造时写入的 opaqueText），不依赖运行时 token 列表，
  *   因此即使刚插入的 token 尚未进入 React 状态也能正确还原。
+ * - 光标必须落在文本节点**内部**（如零宽空格节点 setStart(zw, 1)），绝不能停在
+ *   contenteditable=false 胶囊后面的元素边界（setStartAfter）。Chrome 中元素边界光标
+ *   会让中文输入法的 composition 无法开启：首键被当成原始字母直接上屏、拼音合成从
+ *   第二个键重新开始，表现为「首键变字母」「一个标点变成两个」。
  */
 
 const ZW = '​'
@@ -259,6 +263,32 @@ function getCaretTextOffset(root: HTMLElement): number {
   return total
 }
 
+/**
+ * 把「元素边界」光标位置归一化到相邻文本节点内部。
+ *
+ * Chrome 中光标停在 contenteditable=false 胶囊后面的元素边界（container 是父元素而非
+ * 文本节点）时，中文输入法 composition 无法开启：首键被当成原始字母直接上屏、拼音
+ * 合成从第二个键重新开始，表现为「首键变字母」「一个标点输入成两个」。
+ * 这里优先落进前面的文本节点末尾，其次落进后面的文本节点开头，都没有才保留原位置。
+ */
+function normalizeCaretIntoTextNode(
+  container: Node,
+  offset: number,
+): { container: Node; offset: number } {
+  if (container.nodeType === Node.TEXT_NODE) {
+    return { container, offset }
+  }
+  const prev = offset > 0 ? container.childNodes[offset - 1] : null
+  if (prev && prev.nodeType === Node.TEXT_NODE) {
+    return { container: prev, offset: (prev.textContent ?? '').length }
+  }
+  const next = container.childNodes[offset] ?? null
+  if (next && next.nodeType === Node.TEXT_NODE) {
+    return { container: next, offset: 0 }
+  }
+  return { container, offset }
+}
+
 /** 把光标设置到「序列化偏移」处。 */
 function setCaretAtTextOffset(root: HTMLElement, target: number): void {
   const pos = domPositionAtOffset(root, target)
@@ -270,7 +300,8 @@ function setCaretAtTextOffset(root: HTMLElement, target: number): void {
     range.collapse(false)
   } else {
     try {
-      range.setStart(pos.container, pos.offset)
+      const norm = normalizeCaretIntoTextNode(pos.container, pos.offset)
+      range.setStart(norm.container, norm.offset)
     } catch {
       range.selectNodeContents(root)
       range.collapse(false)
@@ -299,7 +330,8 @@ function deleteBackwardChars(root: HTMLElement, count: number): void {
   range.deleteContents()
   const caret = document.createRange()
   try {
-    caret.setStart(start.container, start.offset)
+    const norm = normalizeCaretIntoTextNode(start.container, start.offset)
+    caret.setStart(norm.container, norm.offset)
   } catch {
     caret.selectNodeContents(root)
     caret.collapse(false)
@@ -326,7 +358,10 @@ function insertChipAtCaret(root: HTMLElement, token: ChatComposerToken): void {
     sr.insertNode(zw)
     sr.insertNode(built)
     const after = document.createRange()
-    after.setStartAfter(zw)
+    // 光标落在零宽空格文本节点内部（offset 1 = 零宽空格之后），
+    // 而非元素边界（setStartAfter）。否则 Chrome 中文输入法 composition 无法开启，
+    // 首键会变成原始字母。
+    after.setStart(zw, 1)
     after.collapse(true)
     sel.removeAllRanges()
     sel.addRange(after)
@@ -334,7 +369,7 @@ function insertChipAtCaret(root: HTMLElement, token: ChatComposerToken): void {
     root.appendChild(built)
     root.appendChild(zw)
     const after = document.createRange()
-    after.setStartAfter(zw)
+    after.setStart(zw, 1)
     after.collapse(true)
     sel?.removeAllRanges()
     sel?.addRange(after)
@@ -350,15 +385,17 @@ function insertTextAtCaret(root: HTMLElement, text: string): void {
     const node = document.createTextNode(text)
     sr.insertNode(node)
     const after = document.createRange()
-    after.setStartAfter(node)
+    // 光标落进文本节点内部末尾，而非元素边界（IME 安全，见 insertChipAtCaret）。
+    after.setStart(node, node.data.length)
     after.collapse(true)
     sel.removeAllRanges()
     sel.addRange(after)
   } else {
-    root.appendChild(document.createTextNode(text))
+    const node = document.createTextNode(text)
+    root.appendChild(node)
     const after = document.createRange()
-    after.selectNodeContents(root)
-    after.collapse(false)
+    after.setStart(node, node.data.length)
+    after.collapse(true)
     sel?.removeAllRanges()
     sel?.addRange(after)
   }
