@@ -841,6 +841,17 @@ public final class WslBwrapSandbox {
             roIslands.add(bind(src, WslPathMapper.WORKSPACE_MOUNT + "/" + relPosix));
             roIslands.add(bind(src, src));
         }
+        // 系统技能目录(§7.17,skill 知识包):以只读绑定挂入沙箱(AI 经 bash 只读读取,
+        // 与 read_file 走宿主 Java 侧读取并存),按原生 /mnt 形态挂载(与授权根同形态,
+        // 与 Skill 注入给模型的 Windows 路径同源);boundDest 去重——与工作区/授权根
+        // 目标重叠时跳过(默认布局 skills 在系统目录、不与工作区重叠)
+        Path skillsDir = props.resolveSkillsDir();
+        if (Files.isDirectory(skillsDir)) {
+            String src = WslPathMapper.toWsl(skillsDir);
+            if (src != null && boundDest.add(src)) {
+                roIslands.add(bind(src, src));
+            }
+        }
 
         // 环境:白名单重建 + XDG 三件套指向工作区内(pip/npm/dotnet 缓存不落发行版)
         ensureDirs(cwd);

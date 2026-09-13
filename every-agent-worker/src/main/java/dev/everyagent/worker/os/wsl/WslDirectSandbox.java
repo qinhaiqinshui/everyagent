@@ -136,7 +136,7 @@ public final class WslDirectSandbox {
         payload.put("runId", runId);
         payload.put("command", command);
         payload.put("cwd", cwdMount);
-        payload.put("workspaces", mountPairs(allWorkspaces, cwd));
+        payload.put("workspaces", mountPairs(allWorkspaces, cwd, props.resolveSkillsDir()));
         payload.put("network", allowNetwork ? "open" : "deny");
         payload.put("limits", Map.of(
                 "asMb", Math.max(0, cfg.getMemoryLimitMb()),
@@ -267,14 +267,24 @@ public final class WslDirectSandbox {
     }
 
     /**
-     * 全部已注册工作区 + 当前工作区的挂载对 [{src, dest}](Windows 源 → 原路径挂载点)。
+     * 全部已注册工作区 + 当前工作区 + 系统技能目录的挂载对
+     * [{src, dest} | {src, dest, ro:"true"}](Windows 源 → 原路径挂载点)。
      *
      * <p>工作区根与外部授权根已在 {@link OsSandbox#wslDirectMountRoots()} 经
      * {@link WorkspaceManager#pruneStaleAndListMountRoots()} 完成失效清理;
      * 此处仅对 cwd 做存在性防御(cwd 不属于注册表,不存在时不应阻塞命令执行)。
+     *
+     * <p>系统技能目录(§7.17,skill 知识包)以<b>只读</b>挂载对加入载荷
+     * ({@code ro:"true"}):AI 经 bash 工具在沙箱内只读读取知识包正文,与
+     * {@code read_file} 走宿主 Java 侧读取并存;runner trusted 阶段按该标记
+     * 以 {@code mount -t drvfs -o ro} 挂载,与工作区读写挂载分离。技能目录
+     * 默认 {@code <系统目录>/skills}(宿主本地盘),{@link WslPathMapper#toDirectMount}
+     * 映射为原路径挂载点(如 {@code /c/Users/.../.everyagent/skills}),
+     * 与 Skill 注入给模型的 Windows 路径同源。技能目录与工作区根 dest
+     * 重叠时(配置异常,不会发生于默认布局)跳过只读对,避免重复挂载。
      * 包私有供单测钉住契约。
      */
-    static List<Map<String, String>> mountPairs(List<Path> allWorkspaces, Path cwd) {
+    static List<Map<String, String>> mountPairs(List<Path> allWorkspaces, Path cwd, Path skillsDir) {
         Set<Path> roots = new LinkedHashSet<>();
         if (cwd != null) {
             roots.add(cwd);
@@ -283,14 +293,26 @@ public final class WslDirectSandbox {
             roots.addAll(allWorkspaces);
         }
         List<Map<String, String>> pairs = new ArrayList<>();
+        java.util.Set<String> dests = new java.util.LinkedHashSet<>();
         for (Path ws : roots) {
             if (!Files.isDirectory(ws)) {
                 log.debug("[sandbox] 跳过不存在的挂载源(已删除/未创建): {}", ws);
                 continue;
             }
             String dest = WslPathMapper.toDirectMount(ws);
-            if (dest != null) {
+            if (dest != null && dests.add(dest)) {
                 pairs.add(Map.of("src", ws.toString(), "dest", dest));
+            }
+        }
+        // 系统技能目录:只读挂载对(ro:true),dest 与工作区根重叠时跳过(默认布局不重叠)
+        if (skillsDir != null && Files.isDirectory(skillsDir)) {
+            String dest = WslPathMapper.toDirectMount(skillsDir);
+            if (dest != null && dests.add(dest)) {
+                Map<String, String> ro = new LinkedHashMap<>();
+                ro.put("src", skillsDir.toString());
+                ro.put("dest", dest);
+                ro.put("ro", "true");
+                pairs.add(ro);
             }
         }
         return pairs;
