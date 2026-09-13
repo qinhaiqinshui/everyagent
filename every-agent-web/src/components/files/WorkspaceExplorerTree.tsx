@@ -79,7 +79,7 @@ export default function WorkspaceExplorerTree({
       }
     }
     return nodes.map(toNode) as unknown as TreeDataNode[]
-  }, [nodes, expandedPaths])
+  }, [nodes])
 
   // 定位：当 locatePath 变化且已提供时间戳时，滚动到对应行
   React.useEffect(() => {

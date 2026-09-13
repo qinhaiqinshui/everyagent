@@ -13,6 +13,8 @@
   <img alt="PRs Welcome" src="https://img.shields.io/badge/PRs-welcome-brightgreen">
 </p>
 
+[简体中文](README.md) | [English](README.en.md)
+
 **Every Agent** 是一套「**公网可及、本机执行**」的 AI Agent 系统 —— 一句话:**自己的 Agent,哪里都能用**。
 
 - ✅ **开源 · 免费 · 自托管(self-hosted)**:代码、文件、数据全部留在你自己的电脑上,不经过任何第三方服务器,适合重视隐私与数据主权的个人开发者和小团队;

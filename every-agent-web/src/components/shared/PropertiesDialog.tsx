@@ -32,6 +32,8 @@ export default function PropertiesDialog({
   items,
   onClose,
 }: PropertiesDialogProps) {
+  if (!open) return null
+
   const dialog = (
     <div
       className="confirm-dialog__overlay"

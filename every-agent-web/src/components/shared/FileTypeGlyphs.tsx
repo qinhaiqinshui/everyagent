@@ -274,14 +274,17 @@ const EXT_RENDERERS: Record<string, (props: AppGlyphProps) => React.ReactElement
 }
 
 /**
- * 按文件名渲染文件类型图标:已知扩展名 → 语言徽章;未知 → 中性文件轮廓
- * (跟随文字色,muted 弱化,避免与命中内容抢焦点)。
+ * 按文件名渲染文件类型图标:已知扩展名 → 语言徽章;未知 → 兜底渲染
+ * (缺省走中性文件轮廓,跟随文字色 muted 弱化,避免与命中内容抢焦点;
+ * 调用方也可传 `fallback` 自定义未识别时的图标,例如标题栏想沿用自带文件图标)。
  */
-export function FileTypeIcon({ fileName, size = 16, style }: {
+export function FileTypeIcon({ fileName, size = 16, style, fallback }: {
   /** 完整文件名(取最后一个 '.' 之后判断扩展名,无后缀按未知处理)。 */
   fileName: string
   size?: number
   style?: React.CSSProperties
+  /** 未识别扩展名时的兜底渲染;缺省用中性文件轮廓(FileTextIcon + muted 色)。 */
+  fallback?: React.ReactNode
 }) {
   const dotIndex = fileName.lastIndexOf('.')
   const ext = dotIndex >= 0 ? fileName.slice(dotIndex + 1).toLowerCase() : ''
@@ -298,6 +301,9 @@ export function FileTypeIcon({ fileName, size = 16, style }: {
   const render = nameRender ?? EXT_RENDERERS[ext]
   if (render) {
     return render({ size, style })
+  }
+  if (fallback != null) {
+    return <>{fallback}</>
   }
   return <FileTextIcon size={size} style={{ color: 'var(--text-muted)', ...style }} />
 }

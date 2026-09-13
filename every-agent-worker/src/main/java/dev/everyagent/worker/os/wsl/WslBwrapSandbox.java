@@ -76,7 +76,7 @@ public final class WslBwrapSandbox {
     private static final long LIST_TIMEOUT_MS = 15_000;
     private static final long DIAG_TIMEOUT_MS = 30_000;
     /** 托管发行版名(wsl --import 目标;镜像在位且未配置 distro 时自动启用)。 */
-    public static final String MANAGED_DISTRO = "eagent";
+    public static final String MANAGED_DISTRO = "EveryAgent";
     /** 沙箱内持久状态的固定挂载点(worker 级共享,见 {@link #applyPersistentState})。 */
     private static final String PERSIST_HOME_MOUNT = "/root";
     private static final String PERSIST_OPT_MOUNT = "/opt";
@@ -175,9 +175,9 @@ public final class WslBwrapSandbox {
     /**
      * L2 自举:发行版缺失时的托管镜像自动导入(OsSandbox 在 DISTRO_NOT_FOUND 时调用)。
      *
-     * <p>只服务托管目标——未配置 distro 且镜像在位,或显式配置 {@code eagent};用户显式
+     * <p>只服务托管目标——未配置 distro 且镜像在位,或显式配置 {@code EveryAgent};用户显式
      * 指定的其他名字不越权代装。流程:sha256 校验(fail-closed,镜像同目录
-     * {@code .sha256})→ 清空安装目录残留 → {@code wsl --import eagent <sandbox 根>/distro
+     * {@code .sha256})→ 清空安装目录残留 → {@code wsl --import EveryAgent <sandbox 根>/distro
      * <镜像> --version 2} → 由调用方重探。不可导入/失败返回可读断因(走统一回退日志);
      * 镜像在位且发行版缺失通常意味着首次安装,一次性成本(解包 ≤ 数分钟)。
      *
@@ -327,7 +327,7 @@ public final class WslBwrapSandbox {
                 "确认 wsl --status 可运行(WSL 未安装或损坏)"),
         DISTRO_NOT_FOUND("发行版不存在",
                 "worker.sandbox.wsl.distro 指向已有发行版(wsl -l -v 查看;留空 = 默认发行版),"
-                        + "或导入托管发行版 powershell -File scripts\\wsl-sandbox-probe.ps1 -Distro eagent -Tarball rootfs.tar.gz"),
+                        + "或导入托管发行版 powershell -File scripts\\wsl-sandbox-probe.ps1 -Distro EveryAgent -Tarball rootfs.tar.gz"),
         PYTHON3_MISSING("发行版缺 python3",
                 "powershell -File scripts\\wsl-sandbox-probe.ps1 -Distro <发行版> -Setup(装 python3/bubblewrap/ripgrep/git)"),
         BWRAP_MISSING("发行版缺 bwrap(bubblewrap)",
@@ -339,7 +339,7 @@ public final class WslBwrapSandbox {
                 "wsl --shutdown 后重启 worker 重试"),
         IMPORT_FAILED("托管镜像自动导入失败",
                 "检查 <系统目录>/wsl/eagent-rootfs.tar.gz 与同名 .sha256 是否完好;或手动导入 "
-                        + "powershell -File scripts\\wsl-sandbox-probe.ps1 -Distro eagent -Tarball <镜像>;"
+                        + "powershell -File scripts\\wsl-sandbox-probe.ps1 -Distro EveryAgent -Tarball <镜像>;"
                         + "详见 docs/ARCHITECTURE.md §7.10"),
         UNKNOWN("未归类失败",
                 "复跑 powershell -File scripts\\wsl-sandbox-probe.ps1 全量探针定位");

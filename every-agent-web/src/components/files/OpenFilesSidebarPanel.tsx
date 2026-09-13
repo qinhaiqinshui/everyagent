@@ -292,6 +292,8 @@ function WorkspaceGroupPanel({
   /**
    * 定位文件/目录:worker 沿路径逐段 stat 返回节点链(旁支零查找),
    * 沿链逐级加载目录子项并展开,选中目标。同路径去重(force 时强制重跑)。
+   * 已加载的目录跳过重载:loadChildren 返回的子目录节点 loaded:false、无 children,
+   * 直接替换会清空已展开子树,造成「折叠→再展开」闪烁(与 expandDirChildren 的幂等保护一致)。
    */
   const revealPath = React.useCallback(async (targetPath: string, force = false) => {
     if (!force && lastRevealedPathRef.current === targetPath) return
@@ -301,17 +303,26 @@ function WorkspaceGroupPanel({
       let tree = treeNodesRef.current
       for (const node of chain) {
         if (node.type !== 'directory') continue
+        const existing = findExplorerNode(tree, node.path)
+        if (existing?.type === 'directory' && existing.loaded) continue
         const children = await workspaceExplorerQueryService.loadChildren(workspaceRoot, node, { includeInternalFiles: showInternalFiles })
         tree = upsertExplorerChildren(tree, node.path, children)
         setTreeNodes(tree)
       }
       setExpandedPaths((prev) => {
+        let changed = false
         const next = new Set(prev)
-        next.add(WORKSPACE_EXPLORER_ROOT_LABEL)
-        for (const node of chain) {
-          if (node.type === 'directory') next.add(node.path)
+        if (!next.has(WORKSPACE_EXPLORER_ROOT_LABEL)) {
+          next.add(WORKSPACE_EXPLORER_ROOT_LABEL)
+          changed = true
         }
-        return next
+        for (const node of chain) {
+          if (node.type === 'directory' && !next.has(node.path)) {
+            next.add(node.path)
+            changed = true
+          }
+        }
+        return changed ? next : prev
       })
       setSelectedExplorerPath(targetPath)
       setTreeError('')

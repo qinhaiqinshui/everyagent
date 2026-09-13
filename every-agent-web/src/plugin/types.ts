@@ -128,8 +128,8 @@ export interface UiWorkspaceTabTypeDefinition {
   pluginId: string
   /** 渲染标签主体。内置读 tab 强类型字段，插件读 tab.data。 */
   renderTab: (tab: WorkspaceTab, ctx: WorkspaceTabRenderContext) => ReactNode
-  /** 渲染图标（活动栏 / 标题栏用）。 */
-  renderIcon: () => ReactNode
+  /** 渲染图标（活动栏 / 标题栏用）。接收当前 tab,便于按文件名等动态选择图标。 */
+  renderIcon: (tab: WorkspaceTab) => ReactNode
   /** 短标签（标题栏文字）。 */
   getLabel: (tab: WorkspaceTab) => string
   /**

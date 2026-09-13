@@ -10,6 +10,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -265,8 +266,15 @@ public final class WslDirectSandbox {
         }
     }
 
-    /** 全部已注册工作区 + 当前工作区的挂载对 [{src, dest}](Windows 源 → 原路径挂载点)。 */
-    private static List<Map<String, String>> mountPairs(List<Path> allWorkspaces, Path cwd) {
+    /**
+     * 全部已注册工作区 + 当前工作区的挂载对 [{src, dest}](Windows 源 → 原路径挂载点)。
+     *
+     * <p>工作区根与外部授权根已在 {@link OsSandbox#wslDirectMountRoots()} 经
+     * {@link WorkspaceManager#pruneStaleAndListMountRoots()} 完成失效清理;
+     * 此处仅对 cwd 做存在性防御(cwd 不属于注册表,不存在时不应阻塞命令执行)。
+     * 包私有供单测钉住契约。
+     */
+    static List<Map<String, String>> mountPairs(List<Path> allWorkspaces, Path cwd) {
         Set<Path> roots = new LinkedHashSet<>();
         if (cwd != null) {
             roots.add(cwd);
@@ -276,6 +284,10 @@ public final class WslDirectSandbox {
         }
         List<Map<String, String>> pairs = new ArrayList<>();
         for (Path ws : roots) {
+            if (!Files.isDirectory(ws)) {
+                log.debug("[sandbox] 跳过不存在的挂载源(已删除/未创建): {}", ws);
+                continue;
+            }
             String dest = WslPathMapper.toDirectMount(ws);
             if (dest != null) {
                 pairs.add(Map.of("src", ws.toString(), "dest", dest));

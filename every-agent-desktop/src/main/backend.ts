@@ -170,7 +170,7 @@ export async function startBackend(
   log(`创建日志目录: ${paths.logsDir}`)
   mkdirSync(paths.logsDir, { recursive: true })
 
-  // 发行版 preflight:worker 需要 wsl-direct 的托管发行版(eagent)。
+  // 发行版 preflight:worker 需要 wsl-direct 的托管发行版(EveryAgent)。
   // 在独立 utilityProcess 中执行(主进程不直接 spawn wsl.exe,规避 native 崩溃风险);
   // fire-and-forget:任何异常都不影响 hub/worker 启动(worker 自身 autoImport 兜底)。
   const wslCheck = utilityProcess.fork(join(__dirname, 'wsl-check-entry.js'), [], {
@@ -187,7 +187,7 @@ export async function startBackend(
   try {
     wslCheck.postMessage({
       home: paths.home,
-      distro: 'eagent',
+      distro: 'EveryAgent',
       bundledDir: runtimeDir(),
     })
   } catch (error) {

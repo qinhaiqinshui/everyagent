@@ -13,6 +13,7 @@ import type { WorkspaceTab, WorkspaceFileTab } from '@/types'
 import type { FileTabResource } from '@/types/fileTabs'
 import type { UiWorkspaceTabTypeDefinition, WorkspaceTabRenderContext } from '@/plugin/types'
 import { FilesIcon } from '@/components/icon'
+import { FileTypeIcon } from '@/components/shared/FileTypeGlyphs'
 import { createLazyRouteComponent } from '@/components/shared/LazyRouteView'
 
 const LazyFileTabPage = createLazyRouteComponent(() => import('@/components/files/FileTabPage'))
@@ -45,7 +46,15 @@ export const fileTabType: UiWorkspaceTabTypeDefinition = {
       />
     )
   },
-  renderIcon: () => <FilesIcon />,
+  /**
+   * 按文件名渲染文件类型图标:已知扩展名用 FileTypeIcon 的语言徽章;
+   * 未识别扩展名/无后缀沿用原来的 FilesIcon 兜底。
+   */
+  renderIcon: (tab: WorkspaceTab) => (
+    tab.tabType === 'file'
+      ? <FileTypeIcon fileName={tab.fileName} fallback={<FilesIcon />} />
+      : <FilesIcon />
+  ),
   getLabel: (tab: WorkspaceTab) => (tab.tabType === 'file' ? tab.fileName : ''),
   getTitle: (tab: WorkspaceTab) => (tab.tabType === 'file' ? tab.filePath : ''),
   getCloseAriaLabel: (tab: WorkspaceTab) =>

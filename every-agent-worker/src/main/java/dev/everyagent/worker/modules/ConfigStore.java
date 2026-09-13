@@ -101,7 +101,9 @@ public class ConfigStore {
                 m.getModel(), m.getApiKey(), paramsNode, m.getIsDefault(), null);
     }
 
-    /** 解析池成员 configId 列表(逗号分隔,trim/去空/去重,顺序保持;首个 = 主模型)。 */
+    /** 解析池成员 configId 列表(逗号分隔,trim/去空/去重,顺序保持;首个 = 主模型)。
+     *  成员 config-id 不存在(笔误/漏配)为<b>非致命</b>配置错误:跳过该成员并 error 告警,
+     *  仅当池因此无任何有效成员时才抛 IllegalStateException(见下方)。 */
     private static List<String> parsePoolMembers(WorkerProperties.Model m,
             Map<String, WorkerProperties.Model> index) {
         String configId = m.getConfigId().trim();
@@ -118,8 +120,13 @@ public class ConfigStore {
             }
             WorkerProperties.Model member = index.get(id);
             if (member == null) {
-                throw new IllegalStateException("worker.models[" + configId
-                        + "] 池成员 config-id 不存在: " + id);
+                // 池成员 config-id 不存在(笔误/漏配)= 非致命配置错误:跳过该成员并 error 告警,
+                // 让 worker 仍可启动(容灾池本意即「单成员不可用不影响整体」);仅当池因此无任何
+                // 有效成员时才拒绝启动(见下方 members.isEmpty() 分支)。避免一个成员笔误崩掉整个
+                // worker、连配置修复界面都进不去的死循环。
+                log.error("[config] worker.models[{}] 池成员 config-id 不存在,已跳过: {}",
+                        configId, id);
+                continue;
             }
             String mp = member.getProvider() == null ? "" : member.getProvider().trim();
             if (POOL_PROVIDER.equals(mp)) {

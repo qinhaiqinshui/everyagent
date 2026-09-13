@@ -118,7 +118,7 @@ class WslBwrapSandboxProbeTest {
         assertTrue(WslBwrapSandbox.isDistroNotFound(utf16le("不存在具有所提供名称的分发。")));
         // 英文文案与旧错误码
         assertTrue(WslBwrapSandbox.isDistroNotFound("There is no distribution with the supplied name."));
-        assertTrue(WslBwrapSandbox.isDistroNotFound("no distribution named eagent"));
+        assertTrue(WslBwrapSandbox.isDistroNotFound("no distribution named EveryAgent"));
         // 无任何发行版时的提示
         assertTrue(WslBwrapSandbox.isDistroNotFound("适用于 Linux 的 Windows 子系统没有已安装的分发。"));
         // 无关输出不误判
@@ -140,8 +140,8 @@ class WslBwrapSandboxProbeTest {
                 WslBwrapSandbox.wslCmd("", "-e", "python3", "/mnt/c/x/eagent-run.py"));
         assertEquals(List.of("wsl.exe", "-e", "/bin/sh", "-c", "true"),
                 WslBwrapSandbox.wslCmd(null, "-e", "/bin/sh", "-c", "true"));
-        assertEquals(List.of("wsl.exe", "-d", "eagent", "-e", "python3", "r.py"),
-                WslBwrapSandbox.wslCmd(" eagent ", "-e", "python3", "r.py"));
+        assertEquals(List.of("wsl.exe", "-d", "EveryAgent", "-e", "python3", "r.py"),
+                WslBwrapSandbox.wslCmd(" EveryAgent ", "-e", "python3", "r.py"));
     }
 
     @Test
@@ -208,7 +208,7 @@ class WslBwrapSandboxProbeTest {
         props.setHomeDir(home.toString());
         // 无配置无镜像:WSL 默认发行版(空)
         assertEquals("", WslBwrapSandbox.effectiveDistro(props));
-        // 配置 tarball 兜底命中 → 托管 eagent(打包产品的零配置形态)
+        // 配置 tarball 兜底命中 → 托管 EveryAgent(打包产品的零配置形态)
         Path other = Files.createTempFile("rootfs", ".tar.gz");
         props.getSandbox().getWsl().setTarball(other.toString());
         assertEquals(WslBwrapSandbox.MANAGED_DISTRO, WslBwrapSandbox.effectiveDistro(props));
@@ -262,7 +262,7 @@ class WslBwrapSandboxProbeTest {
         // 合并视图必须保留错误码(可被 isAccessDenied/isDistroNotFound 命中)
         String merged = WslBwrapSandbox.mergeDiagnostics("", "拒绝访问。\n错误代码: Wsl/E_ACCESSDENIED");
         assertTrue(WslBwrapSandbox.isAccessDenied(merged));
-        String merged2 = WslBwrapSandbox.mergeDiagnostics("no distribution named eagent", "");
+        String merged2 = WslBwrapSandbox.mergeDiagnostics("no distribution named EveryAgent", "");
         assertTrue(WslBwrapSandbox.isDistroNotFound(merged2));
     }
 }

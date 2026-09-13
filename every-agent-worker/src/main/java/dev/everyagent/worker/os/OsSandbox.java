@@ -397,26 +397,28 @@ public final class OsSandbox {
     }
 
     /**
-     * wsl-direct 挂载列表:全部已注册工作区根 <b>+</b> 全部工作区的外部授权根(§7.17,
-     * 与工作区根同语义:跨任务共享、runner trusted 阶段幂等 _ensure_mount;WslDirectSandbox
-     * 的 mountPairs 对非工作区路径按同一 WslPathMapper.toDirectMount 生成 {src,dest} 对)。
-     * Path 去重(externalRoot 与工作区根或彼此重叠时);任一读取失败按可取到的子集降级。
-     * 包私有供单测钉住载荷拼装契约。
+     * wsl-direct 挂载列表:清理宿主上已不存在的注册工作区根与外部授权根后,
+     * 返回存活列表(注册工作区根 <b>+</b> 全部工作区的外部授权根,§7.17,
+     * 与工作区根同语义:跨任务共享、runner trusted 阶段幂等 _ensure_mount;
+     * WslDirectSandbox 的 mountPairs 对非工作区路径按同一 WslPathMapper.toDirectMount
+     * 生成 {src,dest} 对)。Path 去重(externalRoot 与工作区根或彼此重叠时);
+     * 任一读取失败按可取到的子集降级。包私有供单测钉住载荷拼装契约。
+     *
+     * <p>失效清理经 {@link WorkspaceManager#pruneStaleAndListMountRoots()} 完成:
+     * 不存在的注册工作区根(默认工作区除外)从注册表移除,不存在的
+     * externalRoots 从所属工作区剔除,原子落盘 + 广播;目录复活后下次命令
+     * 靠幂等 _ensure_mount 自愈重挂。
      */
     List<Path> wslDirectMountRoots() {
-        List<Path> roots = new java.util.ArrayList<>(allWorkspaceRoots());
-        if (workspaces != null) {
-            try {
-                for (Path ext : workspaces.allExternalRoots()) {
-                    if (!roots.contains(ext)) {
-                        roots.add(ext);
-                    }
-                }
-            } catch (RuntimeException e) {
-                log.warn("[sandbox] 读取外部授权根失败,忽略该部分挂载: {}", e.getMessage());
-            }
+        if (workspaces == null) {
+            return List.of();
         }
-        return roots;
+        try {
+            return workspaces.pruneStaleAndListMountRoots();
+        } catch (RuntimeException e) {
+            log.warn("[sandbox] 清理失效挂载源失败,按存活子集降级: {}", e.getMessage());
+            return List.of();
+        }
     }
 
     private static String normalizeShell(String shell) {

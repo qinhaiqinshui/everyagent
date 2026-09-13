@@ -850,7 +850,7 @@ public class WorkerProperties {
             /**
              * 发行版名:空(默认)= WSL 默认发行版(wsl -l -v 带 * 者,开发机通常即 Ubuntu)
              * ——机器无关的「已有可用」,免配置即可探测通过。生产托管路径:wsl --import
-             * 导入 {@code eagent} 后显式配置(零污染基础层、interop 关闭)。
+             * 导入 {@code EveryAgent} 后显式配置(零污染基础层、interop 关闭)。
              * 须已安装 python3 与 bwrap(探测把关,失败断因见 {@code WslBwrapSandbox.probe})。
              */
             private String distro = "";
@@ -859,7 +859,7 @@ public class WorkerProperties {
              * 优先使用程序根 {@code ./runtime/wsl/eagent-rootfs.tar.gz}(随安装包
              * 分发、只读引用,见 {@code WslBwrapSandbox.tarballFor});此处配置在程序根
              * 无镜像时生效(兼容旧/手动放置)。文件在位且发行版缺失时,启动探测自动
-             * {@code wsl --import eagent}(免管理员、离线;sha256 以同目录 {@code <镜像名>.sha256}
+             * {@code wsl --import EveryAgent}(免管理员、离线;sha256 以同目录 {@code <镜像名>.sha256}
              * 把关,缺失/不符拒绝导入)。默认指向打包含义下的旧约定位置——开发机无此文件即
              * 自动关闭,零打扰;置空串显式关闭。
              */

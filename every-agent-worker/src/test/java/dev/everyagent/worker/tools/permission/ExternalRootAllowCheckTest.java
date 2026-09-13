@@ -123,7 +123,7 @@ class ExternalRootAllowCheckTest {
         p.setHomeDir(tempDir.resolve("home").toString());
         p.setHomeDir(tempDir.resolve("data").toString());
         p.setWorkspaceRoot(ws.toString());
-        p.getSandbox().getWsl().setDistro("eagent");
+        p.getSandbox().getWsl().setDistro("EveryAgent");
         ObjectProvider<TaskManager> provider = mock(ObjectProvider.class);
         when(provider.getIfAvailable()).thenReturn(mock(TaskManager.class));
         WorkspaceManager wm = new WorkspaceManager(p, mock(RpcDispatcher.class), mock(HubPool.class),

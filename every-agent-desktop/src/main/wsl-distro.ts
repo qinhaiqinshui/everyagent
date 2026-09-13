@@ -1,8 +1,8 @@
 /**
- * WSL 发行版 preflight:desktop 启动后端前检查托管发行版(eagent)是否已导入。
+ * WSL 发行版 preflight:desktop 启动后端前检查托管发行版(EveryAgent)是否已导入。
  *
  * 与 worker 侧 OsSandbox.resolveWslDirect → WslBwrapSandbox.autoImport 行为对齐:
- * 发行版在位 → 跳过;发行版缺失 + 镜像在位且 sha256 校验通过 → 自动 `wsl --import eagent`
+ * 发行版在位 → 跳过;发行版缺失 + 镜像在位且 sha256 校验通过 → 自动 `wsl --import EveryAgent`
  * (免管理员、离线);镜像缺失/校验失败 → 仅提示,不阻断桌面启动(worker 探测失败会自行
  * 回退 windows-mic)。
  *
@@ -30,7 +30,7 @@ export interface WslDistroCheck {
 
 type StatusFn = (message: string) => void
 
-const MANAGED_DISTRO = 'eagent'
+const MANAGED_DISTRO = 'EveryAgent'
 const TARBALL_NAME = 'eagent-rootfs.tar.gz'
 
 /**
@@ -139,7 +139,7 @@ function expectedSha256(tarball: string): string | null {
  * 检查并(必要时)自动导入托管发行版。
  *
  * @param home     EVERYAGENT_HOME(发行版 rootfs 最终落在 <home>/sandbox/distro/)
- * @param distro   目标发行版名(默认 eagent)
+ * @param distro   目标发行版名(默认 EveryAgent)
  * @param onStatus 进度回调(透传到桌面启动页)
  * @param bundledDir 程序根 runtime/(由 paths.runtimeDir() 提供);镜像实际在 <bundledDir>/wsl/。
  *                   为空则跳过打包资源。

@@ -1,4 +1,4 @@
-﻿# eagent wsl-bwrap 沙箱一键装配(傻瓜式入口)
+﻿# EveryAgent wsl-bwrap 沙箱一键装配(傻瓜式入口)
 #
 # 用法:双击 scripts\wsl-setup.cmd,或在普通 PowerShell(非管理员、非沙箱)里:
 #     powershell -NoProfile -ExecutionPolicy Bypass -File scripts\wsl-setup.ps1
@@ -7,7 +7,7 @@
 # 流程(wsl2-bubblewrap-sandbox-design.md §4.7/§7):
 #   [1/6] 自检(Windows / 调用方非 Low-IL —— WSL 服务拒绝降权调用方)
 #   [2/6] WSL 平台(缺则引导 UAC 启用;版本钉 2)
-#   [3/6] 发行版(托管镜像自动导入 > 托管 eagent 已在 > WSL 默认发行版 > 引导安装)
+#   [3/6] 发行版(托管镜像自动导入 > 托管 EveryAgent 已在 > WSL 默认发行版 > 引导安装)
 #   [4/6] 依赖(发行版内装 python3/bubblewrap/ripgrep/git,root 直装,需网络)
 #   [5/6] userns 修复(Ubuntu 24.04 AppArmor 限制,自动尝试)
 #   [6/6] 终验(调 wsl-sandbox-probe.ps1 全量 12 项)→ 提示重启 worker
@@ -68,7 +68,7 @@ function Guide-Elevate($label, $wslArgs) {
 }
 
 Write-Host "==================================================" -ForegroundColor Cyan
-Write-Host " eagent wsl-bwrap 沙箱一键装配(可重复运行,已装会跳过)" -ForegroundColor Cyan
+Write-Host " EveryAgent wsl-bwrap 沙箱一键装配(可重复运行,已装会跳过)" -ForegroundColor Cyan
 Write-Host "==================================================" -ForegroundColor Cyan
 
 # ---- [1/6] 自检 ----
@@ -119,14 +119,14 @@ if ($target -ne "") {
     }
     Ok "使用指定发行版 $target"
 } else {
-    # 自动:托管镜像 > eagent 已在 > WSL 默认发行版
+    # 自动:托管镜像 > EveryAgent 已在 > WSL 默认发行版
     $tar = $Tarball
     if ($tar -eq "" -and (Test-Path (Join-Path $eagentHome "wsl\eagent-rootfs.tar.gz"))) {
         $tar = Join-Path $eagentHome "wsl\eagent-rootfs.tar.gz"
     }
-    if ($distros.names -contains "eagent") {
-        $target = "eagent"
-        Ok "托管发行版 eagent 已在位"
+    if ($distros.names -contains "EveryAgent") {
+        $target = "EveryAgent"
+        Ok "托管发行版 EveryAgent 已在位"
     } elseif ($tar -ne "" -and (Test-Path $tar)) {
         Say "  发现托管镜像:$tar" "Gray"
         $shaFile = "$tar.sha256"
@@ -140,13 +140,13 @@ if ($target -ne "") {
         if ($shaOk) {
             New-Item -ItemType Directory -Force -Path $managedDir | Out-Null
             Say "  导入中(解包约 1~5 分钟)…" "Gray"
-            & wsl.exe --import eagent $managedDir $tar --version 2 | Out-Null
+            & wsl.exe --import EveryAgent $managedDir $tar --version 2 | Out-Null
             if ($LASTEXITCODE -eq 0) {
                 # 烤 wsl.conf:interop 关闭收窄逃逸面;automount 必须开(启动器/绑定源走 /mnt)
-                & wsl.exe -d eagent -u root -e /bin/sh -c "printf '[automount]\nenabled=true\n[interop]\nenabled=false\nappendWindowsPath=false\n' > /etc/wsl.conf" | Out-Null
-                & wsl.exe --terminate eagent 2>$null
-                $target = "eagent"
-                Ok "托管发行版 eagent 导入完成(依赖已烤入镜像,跳过第 4 步联网安装)"
+                & wsl.exe -d EveryAgent -u root -e /bin/sh -c "printf '[automount]\nenabled=true\n[interop]\nenabled=false\nappendWindowsPath=false\n' > /etc/wsl.conf" | Out-Null
+                & wsl.exe --terminate EveryAgent 2>$null
+                $target = "EveryAgent"
+                Ok "托管发行版 EveryAgent 导入完成(依赖已烤入镜像,跳过第 4 步联网安装)"
             } else {
                 Bad "wsl --import 失败(rc=$LASTEXITCODE),改走既有发行版"
             }
