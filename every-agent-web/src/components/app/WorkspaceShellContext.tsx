@@ -79,8 +79,8 @@ export interface WorkspaceShellActions {
     filePath: string
     /** 文件名。 */
     fileName: string
-    /** 变更类型。 */
-    changeType: 'created' | 'updated'
+    /** 变更类型(含 deleted)。 */
+    changeType: 'created' | 'updated' | 'deleted'
     /** 变更前内容。 */
     beforeContent: string
     /** 变更后内容。 */
@@ -89,6 +89,10 @@ export interface WorkspaceShellActions {
     workspaceRoot?: string
     /** 标签标题（缺省为「变更对比：${fileName}」）。 */
     title?: string
+    /** 是否为二进制文件(历史提交详情)。 */
+    binary?: boolean
+    /** 是否允许「恢复此版本」(仅 Git 历史提交详情)。 */
+    allowRestore?: boolean
   }) => string
   /** 打开顶级 Git 历史标签（按路径展示提交历史列表）。 */
   openGitHistoryTab: (input: {

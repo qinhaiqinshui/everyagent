@@ -143,12 +143,16 @@ export type TaskStatus = 'idle' | 'running' | 'completed' | 'stopped' | 'error'
 export interface TaskFileChange {
   /** 文件路径。 */
   filePath: string
-  /** 变更类型。 */
-  changeType: 'created' | 'updated'
+  /** 变更类型(含 deleted:历史提交中的删除文件,after 为空)。 */
+  changeType: 'created' | 'updated' | 'deleted'
   /** 变更前内容。 */
   beforeContent?: string
   /** 变更后内容。 */
   afterContent?: string
+  /** 是否为二进制文件(历史提交详情;二进制不读全文、不可恢复)。 */
+  binary?: boolean
+  /** 是否允许「恢复此版本」(仅 Git 历史提交详情开启;SCM/任务 diff 不显示)。 */
+  allowRestore?: boolean
 }
 
 // ─── 任务轮次索引类型（task.rounds / rounds.jsonl，plan-rounds-jsonl 步骤 5）─────
@@ -873,12 +877,16 @@ export interface WorkspaceDiffTab {
   fileName: string
   /** 标签标题。 */
   title: string
-  /** 变更类型。 */
-  changeType: 'created' | 'updated'
+  /** 变更类型(含 deleted)。 */
+  changeType: 'created' | 'updated' | 'deleted'
   /** 变更前内容。 */
   beforeContent: string
   /** 变更后内容。 */
   afterContent: string
+  /** 是否为二进制文件(历史提交详情)。 */
+  binary?: boolean
+  /** 是否允许「恢复此版本」(仅 Git 历史提交详情)。 */
+  allowRestore?: boolean
 }
 
 /** 顶级 Git 历史标签（git-history）：按路径展示提交历史列表。 */

@@ -431,11 +431,13 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
     input: {
       filePath: string
       fileName: string
-      changeType: 'created' | 'updated'
+      changeType: 'created' | 'updated' | 'deleted'
       beforeContent: string
       afterContent: string
       workspaceRoot?: string
       title?: string
+      binary?: boolean
+      allowRestore?: boolean
     },
   ): string => {
     const tabTitle = input.title && input.title.trim()
@@ -449,6 +451,8 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
       beforeContent: input.beforeContent,
       afterContent: input.afterContent,
       workspaceRoot: input.workspaceRoot,
+      ...(input.binary !== undefined ? { binary: input.binary } : {}),
+      ...(input.allowRestore !== undefined ? { allowRestore: input.allowRestore } : {}),
     })
     openWorkspaceTab(nextDiffTab)
     return nextDiffTab.id
