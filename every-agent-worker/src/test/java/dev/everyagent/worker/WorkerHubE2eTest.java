@@ -5,6 +5,7 @@ import dev.everyagent.contract.ids.Ids;
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.hub.HubApplication;
 import dev.everyagent.worker.config.WorkerProperties;
+import dev.everyagent.worker.task.ModelRateLimiterRegistry;
 import dev.everyagent.worker.hub.HubPool;
 import dev.everyagent.worker.modules.ConfigStore.ResolvedConfig;
 import dev.everyagent.worker.proto.Channels;
@@ -76,7 +77,7 @@ class WorkerHubE2eTest {
         @Bean
         @Primary
         ChatModelFactory fakeModelFactory(WorkerProperties props) {
-            return new ChatModelFactory(props) {
+            return new ChatModelFactory(props, new ModelRateLimiterRegistry(props)) {
                 @Override
                 public org.springframework.ai.chat.model.ChatModel build(ResolvedConfig cfg,
                         org.springframework.ai.openai.OpenAiChatOptions options, String agentId) {
@@ -177,7 +178,7 @@ class WorkerHubE2eTest {
         assertEquals(last, tail.get(0).path("seq").asLong(), "增量返回最后一条事件");
 
         // 任务数据落系统目录 data/tasks/<taskId>/(经真实链路全量持久化,按 agent 分文件)
-        java.nio.file.Path taskDir = workerProps.resolveDataDir().resolve("tasks").resolve(taskId);
+        java.nio.file.Path taskDir = workerProps.resolveWorkspacesDir().resolve("defaultworkspace").resolve("tasks").resolve(taskId);
         JsonNode meta = Json.parse(java.nio.file.Files.readString(taskDir.resolve("meta.json")));
         String mainAgentId = meta.path("mainAgentId").asString();
         assertTrue(mainAgentId.startsWith("a_"), mainAgentId);

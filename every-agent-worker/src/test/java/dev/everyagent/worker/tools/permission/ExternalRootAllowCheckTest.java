@@ -121,7 +121,7 @@ class ExternalRootAllowCheckTest {
     private WorkspaceManager realManager(Path ws) throws Exception {
         WorkerProperties p = new WorkerProperties();
         p.setHomeDir(tempDir.resolve("home").toString());
-        p.setDataDir(tempDir.resolve("data").toString());
+        p.setHomeDir(tempDir.resolve("data").toString());
         p.setWorkspaceRoot(ws.toString());
         p.getSandbox().getWsl().setDistro("eagent");
         ObjectProvider<TaskManager> provider = mock(ObjectProvider.class);
@@ -179,7 +179,7 @@ class ExternalRootAllowCheckTest {
     private TaskEntry task(Path ws) {
         ModelSnapshot snap = new ModelSnapshot("cfg", "openai-compat",
                 "http://localhost:9999/v1", "m", null);
-        return new TaskEntry("t-1", "任务", snap, "k", ws.toString(), "main-agent", 10_000);
+        return new TaskEntry("t-1", "任务", snap, "k", ws.toString(), "defaultworkspace", "main-agent", 10_000);
     }
 
     @Test

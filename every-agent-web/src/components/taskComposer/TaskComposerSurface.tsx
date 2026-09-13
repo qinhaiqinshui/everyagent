@@ -691,7 +691,7 @@ export default function TaskComposerSurface({
             <div className="nagent-composer__at-header nagent-composer__at-header--actions">
               <div className="nagent-composer__at-title">文件引用</div>
               <div className="nagent-composer__at-hint">
-                {atBrowse ? (atBrowse.relativePath || '当前目录') : '工作区搜索'}
+                {atBrowse ? (atBrowse.relativePath || '') : ''}
               </div>
               <IconButton
                 className="nagent-composer__at-external"

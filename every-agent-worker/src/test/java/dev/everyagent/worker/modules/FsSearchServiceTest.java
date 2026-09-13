@@ -63,7 +63,7 @@ class FsSearchServiceTest {
     void setUp() throws Exception {
         WorkerProperties props = new WorkerProperties();
         props.setHomeDir(tempDir.resolve("home").toString());
-        props.setDataDir(tempDir.resolve("data").toString());
+        props.setHomeDir(tempDir.resolve("data").toString());
         ws = tempDir.resolve("ws");
         props.setWorkspaceRoot(ws.toString());
         Path rgBin = locateRg();

@@ -21,7 +21,7 @@ $env:WSL_UTF8 = "1"
 try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
 $script:fail = 0
 $eagentHome = Join-Path $env:USERPROFILE ".everyagent"
-$managedDir = Join-Path $eagentHome "wsl\distro"
+$managedDir = Join-Path $eagentHome "sandbox\distro"
 
 function Say($msg, $color)      { Write-Host $msg -ForegroundColor $color }
 function Step($n, $t)           { Write-Host "`n===== [$n/6] $t =====" -ForegroundColor Cyan }

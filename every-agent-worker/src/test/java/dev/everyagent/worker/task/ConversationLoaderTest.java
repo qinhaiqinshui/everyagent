@@ -34,7 +34,7 @@ class ConversationLoaderTest {
     @BeforeEach
     void setUp() throws Exception {
         WorkerProperties props = new WorkerProperties();
-        props.setDataDir(dataDir.toString());
+        props.setHomeDir(dataDir.toString());
         store = new TaskStore(props); // 读路径无状态,不必 start
         dir = dataDir.resolve("f".repeat(64)).resolve("t1");
         Files.createDirectories(dir);

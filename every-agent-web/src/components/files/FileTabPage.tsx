@@ -13,6 +13,17 @@ import { domainEventBus, DOMAIN_EVENTS } from '@/events/eventBus'
 import { fileTabQueryService } from '@/query/fileTabQueryService'
 import { clearFileTabDirtyState, setFileTabDirtyState } from '@/services/fileDirtyStateRegistry'
 import { fileTabCommandService } from '@/services/fileTabCommandService'
+import { workspaceGateway, type WorkspaceFileStat } from '@/platform/fs/workspaceGateway'
+import { normalizeWorkspaceRelativePath } from '@/platform/fs/pathUtils'
+import PropertiesDialog, { type PropertyItem } from '../shared/PropertiesDialog'
+import {
+  countPlainTextChars,
+  countTotalChars,
+  formatPropertyBytes,
+  formatPropertyTime,
+  isTextFileName,
+  joinWorkspaceDiskPath,
+} from './filePropertyUtils'
 import { pluginDispatcher } from '@/plugin/PluginDispatcher'
 import type { UiFileSidebarPanelDefinition } from '@/plugin/types'
 import type { FileTabOpenMode } from '@/types'
@@ -59,14 +70,28 @@ export default function FileTabPage({
   const [activeFileSidebarPanelId, setActiveFileSidebarPanelId] = React.useState<string | null>(null)
   const [editorHeaderActions, setEditorHeaderActions] = React.useState<FileContentHeaderAction[]>([])
   const [externalReloadRequestedAt, setExternalReloadRequestedAt] = React.useState(0)
+  /** 文件属性弹窗:true = 打开。属性数据异步 stat 获取(FileTabResource 不含 size/time)。 */
+  const [propertiesOpen, setPropertiesOpen] = React.useState(false)
+  const [fileStat, setFileStat] = React.useState<WorkspaceFileStat | null>(null)
   const fileNameInputRef = React.useRef<InputRef>(null)
   const savingRef = React.useRef(false)
   const justSavedRef = React.useRef(false)
   const dirtyRef = React.useRef(false)
   dirtyRef.current = draftContent !== content
   const openMode: FileTabOpenMode = file?.mode ?? 'readonly'
-  const canEditContent = Boolean(file && openMode === 'readwrite')
-  const canRenameFile = Boolean(file && openMode === 'readwrite')
+  // 编辑器解析提前:canEditContent/canRenameFile 等需参考 readonly 能力位(图片等二进制只读编辑器)。
+  const selectedEditorDescriptor = React.useMemo(() => {
+    if (file?.editorKind) {
+      return listFileContentEditors().find((item) => item.kind === file.editorKind) ?? getFallbackFileContentEditor()
+    }
+    // 未显式指定编辑器种类时，按文件扩展名解析（如 .md → Markdown 编辑器、.png → 图片编辑器）。
+    // 否则会始终落到兜底纯文本编辑器，缺失预览/编辑等专属控件。
+    return resolveFileContentEditorByPath(file?.filePath ?? '')
+  }, [file?.editorKind, file?.filePath])
+  /** 二进制只读编辑器（图片等）：不提供编辑/保存/查找，读取走 data URL 而非文本解码。 */
+  const isReadonlyEditor = Boolean(selectedEditorDescriptor.readonly)
+  const canEditContent = Boolean(file && openMode === 'readwrite' && !isReadonlyEditor)
+  const canRenameFile = Boolean(file && openMode === 'readwrite' && !isReadonlyEditor)
   const [findOpen, setFindOpen] = React.useState(false)
   const editorContainerRef = React.useRef<HTMLDivElement | null>(null)
   // 查找始终基于「当前可见可编辑」的源文本：编辑态搜草稿、其余态搜已读内容。
@@ -84,14 +109,6 @@ export default function FileTabPage({
     activeIndex: find.activeIndex,
     enabled: findOpen,
   })
-  const selectedEditorDescriptor = React.useMemo(() => {
-    if (file?.editorKind) {
-      return listFileContentEditors().find((item) => item.kind === file.editorKind) ?? getFallbackFileContentEditor()
-    }
-    // 未显式指定编辑器种类时，按文件扩展名解析（如 .md → Markdown 编辑器）。
-    // 否则会始终落到兜底纯文本编辑器，缺失预览/编辑等专属控件。
-    return resolveFileContentEditorByPath(file?.filePath ?? '')
-  }, [file?.editorKind, file?.filePath])
   const isFallbackEditor = React.useMemo(() => {
     if (!file) return false
     const extension = getFileExtension(file.fileName || file.filePath).toLowerCase()
@@ -106,13 +123,18 @@ export default function FileTabPage({
     setContent('')
     setDraftContent('')
 
-    fileTabQueryService.readTextContent(file).then((nextContent) => {
+    // 只读二进制编辑器（图片）读 data URL；其余读文本。二者都是 string，共用 content 通道。
+    const read = isReadonlyEditor
+      ? fileTabQueryService.readBinaryDataUrl(file)
+      : fileTabQueryService.readTextContent(file)
+
+    read.then((nextContent) => {
       setContent(nextContent)
       setDraftContent(nextContent)
     })
       .catch((readError) => setError(String(readError)))
       .finally(() => setLoading(false))
-  }, [file?.id, file?.reloadKey, refreshRevision, externalReloadRequestedAt])
+  }, [file?.id, file?.reloadKey, refreshRevision, externalReloadRequestedAt, isReadonlyEditor])
 
   React.useEffect(() => {
     if (!file) return
@@ -186,7 +208,7 @@ export default function FileTabPage({
   const normalizedFileNameDraft = file ? normalizeFileNameDraft(fileNameDraft, file.fileName) : ''
   const isFileNameDirty = Boolean(canRenameFile && file && normalizedFileNameDraft && normalizedFileNameDraft !== file.fileName)
   const showSaveButton = canEditContent || nameEditing || isFileNameDirty
-  const showEditButton = Boolean(file && openMode === 'readonly')
+  const showEditButton = Boolean(file && openMode === 'readonly' && !isReadonlyEditor)
   const availableFileSidebarPanels = React.useMemo(
     () => file ? fileSidebarPanels.filter((panel) => panel.isAvailable?.(file) ?? true) : [],
     [file, fileSidebarPanels],
@@ -322,6 +344,8 @@ export default function FileTabPage({
   React.useEffect(() => {
     if (!file) return
     const handleFindKeyDown = (event: KeyboardEvent) => {
+      // 只读二进制编辑器（图片）没有文本可查找：不拦截浏览器原生查找，也不启用查找条。
+      if (isReadonlyEditor) return
       const key = event.key.toLowerCase()
       const isFindToggle = (event.ctrlKey || event.metaKey) && !event.shiftKey && key === 'f'
       const isFindNext = (event.ctrlKey || event.metaKey) && !event.shiftKey && key === 'g'
@@ -357,7 +381,7 @@ export default function FileTabPage({
     return () => {
       window.removeEventListener('keydown', handleFindKeyDown)
     }
-  }, [file, findOpen, find])
+  }, [file, findOpen, find, isReadonlyEditor])
 
   /**
    * 编辑态（textarea）下没有可高亮的文本节点：查找条改由行级滚动定位当前命中。
@@ -388,10 +412,23 @@ export default function FileTabPage({
     setRefreshRevision((current) => current + 1)
   }, [file, isDirty, isFileNameDirty, showToast])
 
+  /** 打开文件属性弹窗：实时 stat 获取 size/时间；字符统计纯前端用已加载内容快照计算。 */
+  const handleRequestProperties = React.useCallback(() => {
+    if (!file) return
+    setPropertiesOpen(true)
+    setFileStat(null)
+    // 实时获取磁盘属性(FileTabResource 不含 size/时间;每次打开都重新 stat,不缓存)。
+    void workspaceGateway.stat(file.workspaceRoot, file.filePath)
+      .then((stat) => setFileStat(stat))
+      .catch(() => setFileStat(null))
+  }, [file])
+
   const handleEnableEditing = React.useCallback(() => {
     if (!file || openMode === 'readwrite') return
+    // 二进制只读编辑器（图片）不支持编辑态。
+    if (isReadonlyEditor) return
     setGlobalFileTabMode(file.id, 'readwrite')
-  }, [file, openMode, setGlobalFileTabMode])
+  }, [file, isReadonlyEditor, openMode, setGlobalFileTabMode])
 
   const mobileMoreActionItems = React.useMemo<MoreActionItem[]>(() => {
     if (!isMobile) return []
@@ -418,7 +455,7 @@ export default function FileTabPage({
       label: '查找',
       icon: <SearchIcon size={13} />,
       onSelect: () => setFindOpen(true),
-      disabled: loading || Boolean(error),
+      disabled: loading || Boolean(error) || isReadonlyEditor,
     })
 
     items.push(
@@ -436,6 +473,12 @@ export default function FileTabPage({
         label: loading ? '刷新中...' : '刷新',
         onSelect: handleRefresh,
         disabled: loading || saving,
+      },
+      {
+        key: 'properties',
+        label: '属性',
+        onSelect: handleRequestProperties,
+        disabled: !file,
       },
     )
 
@@ -456,7 +499,9 @@ export default function FileTabPage({
     file,
     handleEnableEditing,
     handleRefresh,
+    handleRequestProperties,
     isMobile,
+    isReadonlyEditor,
     loading,
     requestWorkspaceFileLocate,
     error,
@@ -473,7 +518,7 @@ export default function FileTabPage({
         label: '查找',
         icon: <SearchIcon size={13} />,
         onSelect: () => setFindOpen(true),
-        disabled: loading || Boolean(error),
+        disabled: loading || Boolean(error) || isReadonlyEditor,
       },
       {
         key: 'locate-file',
@@ -490,6 +535,12 @@ export default function FileTabPage({
         onSelect: handleRefresh,
         disabled: loading || saving,
       },
+      {
+        key: 'properties',
+        label: '属性',
+        onSelect: handleRequestProperties,
+        disabled: !file,
+      },
     ]
 
     for (const panel of availableFileSidebarPanels) {
@@ -501,7 +552,7 @@ export default function FileTabPage({
     }
 
     return items
-  }, [activeFileSidebarPanelId, availableFileSidebarPanels, file, handleRefresh, isMobile, loading, requestWorkspaceFileLocate, error, saving])
+  }, [activeFileSidebarPanelId, availableFileSidebarPanels, file, handleRefresh, handleRequestProperties, isMobile, isReadonlyEditor, loading, requestWorkspaceFileLocate, error, saving])
 
   if (!file) {
     return (
@@ -638,7 +689,7 @@ export default function FileTabPage({
             ) : null}
           </div>
         </WorkspacePageShell>
-        {findOpen && file && !loading && !error ? (
+        {findOpen && file && !loading && !error && !isReadonlyEditor ? (
           <div style={findBarHostStyle}>
             <FindInFileBar
               query={find.query}
@@ -660,8 +711,52 @@ export default function FileTabPage({
           </div>
         ) : null}
       </div>
+      <PropertiesDialog
+        open={propertiesOpen}
+        title="属性"
+        name={file?.fileName}
+        items={file ? buildFileTabPropertyItems(file, fileStat, findSourceContent) : []}
+        onClose={() => setPropertiesOpen(false)}
+      />
     </>
   )
+}
+
+/** 组装文件标签页属性条目：与文件树属性逻辑一致。文本文件额外显示字符统计(纯前端,基于当前内容快照)。 */
+function buildFileTabPropertyItems(
+  file: FileTabResource,
+  stat: WorkspaceFileStat | null,
+  statsSource: string,
+): PropertyItem[] {
+  const items: PropertyItem[] = [
+    { label: '文件名', value: file.fileName },
+    {
+      label: '大小',
+      value: stat ? formatPropertyBytes(stat.size) : '读取中…',
+    },
+    {
+      label: '相对路径',
+      value: normalizeWorkspaceRelativePath(file.filePath),
+    },
+    {
+      label: '完整路径',
+      value: joinWorkspaceDiskPath(file.workspaceRoot, file.filePath),
+    },
+    {
+      label: '创建时间',
+      value: stat ? formatPropertyTime(stat.createdTs) : '读取中…',
+    },
+    {
+      label: '编辑时间',
+      value: stat ? formatPropertyTime(stat.mtimeMs) : '读取中…',
+    },
+  ]
+  if (isTextFileName(file.fileName)) {
+    // 纯前端计算:基于已加载内容快照(编辑态含未保存草稿,只读态为已读内容)。不调后端。
+    items.push({ label: '总字符数', value: String(countTotalChars(statsSource)) })
+    items.push({ label: '纯文字字符', value: String(countPlainTextChars(statsSource)) })
+  }
+  return items
 }
 
 function normalizeFileNameDraft(value: string, currentFileName: string): string {

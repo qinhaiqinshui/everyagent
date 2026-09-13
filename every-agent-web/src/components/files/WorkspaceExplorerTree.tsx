@@ -46,8 +46,8 @@ export default function WorkspaceExplorerTree({
   onOpenFile: (target: WorkspaceExplorerOpenTarget) => void
   onRequestDelete?: (target: WorkspaceExplorerContextTarget) => void
   getActionItems?: (target: WorkspaceExplorerContextTarget) => ListRowActionItem[]
-  /** 行尾元信息显示模式：文件大小或最后编辑时间。 */
-  metaMode?: 'size' | 'modified'
+  /** 行尾元信息显示模式：文件大小、最后编辑时间，或 none(默认隐藏)。 */
+  metaMode?: 'size' | 'modified' | 'none'
   /** 多选模式：开启后每行前置复选框，复选框切换选中，行单击不再触发单选高亮。 */
   multiSelectMode?: boolean
   /** 多选模式下的已选路径集合（仅在 multiSelectMode 时使用）。 */
@@ -109,6 +109,9 @@ export default function WorkspaceExplorerTree({
       name: node.name,
       type: node.type,
       openTarget: node.openTarget,
+      size: node.size,
+      mtimeMs: node.mtimeMs,
+      createdTs: node.createdTs,
     }
     const customItems = getActionItems?.(target) ?? []
     const allItems: ListRowActionItem[] = onRequestDelete
@@ -245,14 +248,20 @@ function TreeNodeRow({
   isMobile: boolean
   isMultiSelect: boolean
   isSelected: boolean
-  metaMode?: 'size' | 'modified'
+  metaMode?: 'size' | 'modified' | 'none'
   onToggleDirectory: (path: string) => void
   onOpenFile: (target: WorkspaceExplorerOpenTarget) => void
   onToggleSelectedPath?: (path: string) => void
 }) {
   const { token } = useToken()
   const isDirectory = node.type === 'directory'
-  const metaText = metaMode === 'size' ? formatBytes(node.size) : formatMtime(node.mtimeMs)
+  // 默认(none)不显示行尾元信息；「显示大小」/「显示最后编辑时间」才各自启用对应文本。
+  const metaText =
+    metaMode === 'size'
+      ? formatBytes(node.size)
+      : metaMode === 'modified'
+        ? formatMtime(node.mtimeMs)
+        : ''
   // 移动端长按弹出右键菜单：直接控制受控 Dropdown 的 open；桌面端处理器为空操作。
   const { wasLongPressed, ...longPressHandlers } = useLongPress({
     isMobile,

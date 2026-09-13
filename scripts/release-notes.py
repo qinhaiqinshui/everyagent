@@ -12,7 +12,8 @@ release-notes.py —— 提取「最新 tag → 指定 ref(默认 HEAD)」之间
   python scripts/release-notes.py --match 'v*'        # 仅把匹配 v* 的 tag 视作候选"最新 tag"
 
 输出为 Markdown,重定向即可保存:python scripts/release-notes.py > RELEASE_NOTES.md
-注:「最新 tag」取 git describe --tags --abbrev=0,即从 HEAD 回溯可直达的最近 tag。
+注:「最新 tag」默认取全仓库按版本号降序最新的 tag(可选 --match 过滤),不要求它从 HEAD 可达。
+这样即使最新 tag 挂在 main 而当前在 dev 分支,也能正确跳过已发布提交。
 输出顶部会追加「影响模块」行:汇总提交范围内被修改文件所属的业务模块(仅统计五个业务模块目录,根目录文件不纳入)。
 """
 
@@ -59,6 +60,26 @@ def run_git(args, check=True, ignore_stderr=False):
         err = proc.stderr.strip() if not ignore_stderr else ""
         die(f"git {' '.join(args)} 失败: {err or '未知错误'}")
     return proc.returncode, proc.stdout.rstrip("\n")
+
+
+def latest_tag(match_glob=None):
+    """返回全仓库「最新」的 tag:按版本号降序取第一个(可用 glob 过滤);无 tag 返回 None。
+
+    不用 git describe --tags --abbrev=0:describe 只返回「从 HEAD 可达」的最近 tag,
+    当最新 tag(如 v0.3.1)挂在 main 而当前分支是 dev 时,describe 会退回很旧的 tag,
+    导致输出混入最新 tag 之前已发布的提交。
+    """
+    args = ["tag", "--sort=-version:refname", "--list"]
+    if match_glob:
+        args.append(match_glob)
+    code, out = run_git(args, check=False)
+    if code != 0:
+        return None
+    for line in out.splitlines():
+        tag = line.strip()
+        if tag:
+            return tag
+    return None
 
 
 def affected_modules(from_tag, to_ref):
@@ -117,15 +138,10 @@ def main():
     if code != 0:
         die(f"终点 ref 不存在: {args.to_ref}")
 
-    # 确定起始 tag:未指定则取 HEAD 回溯可直达的最近 tag
+    # 确定起始 tag:未指定则取全仓库最新的 tag(按版本号降序,可选 --match 过滤)
     from_tag = args.from_tag
     if not from_tag:
-        describe_args = ["describe", "--tags", "--abbrev=0"]
-        if args.match:
-            describe_args += ["--match", args.match]
-        code, out = run_git(describe_args, check=False)
-        if code == 0:
-            from_tag = out.strip()
+        from_tag = latest_tag(args.match)
 
     if from_tag:
         rev_range = f"{from_tag}..{args.to_ref}"

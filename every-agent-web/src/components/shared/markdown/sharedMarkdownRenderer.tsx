@@ -2,16 +2,24 @@ import React from 'react'
 
 export type MarkdownTableAlignment = 'left' | 'center' | 'right'
 
+/** 内联渲染选项：兼容原 styles 字段（strong/inlineCode），新增图片渲染器。 */
+export type MarkdownInlineRenderOptions = {
+  strong?: React.CSSProperties
+  inlineCode?: React.CSSProperties
+  /**
+   * 图片语法（![alt](src)）渲染器；未提供时该语法以原文文本降级显示，
+   * 保证无工作区上下文（如聊天消息里的 Markdown）也不会丢失内容。
+   */
+  renderImage?: (src: string, alt: string, key: string) => React.ReactNode
+}
+
 export function renderMarkdownInline(
   text: string,
-  styles?: {
-    strong?: React.CSSProperties
-    inlineCode?: React.CSSProperties
-  },
+  options: MarkdownInlineRenderOptions = {},
   keyPrefix = '',
 ): React.ReactNode[] {
   const nodes: React.ReactNode[] = []
-  const pattern = /(\*\*[^*]+\*\*|`[^`]+`)/g
+  const pattern = /(!\[[^\]]*\]\([^)]+\)|\*\*[^*]+\*\*|`[^`]+`)/g
   let lastIndex = 0
   let match: RegExpExecArray | null
   let key = 0
@@ -22,15 +30,23 @@ export function renderMarkdownInline(
     }
 
     const token = match[0]
-    if (token.startsWith('**') && token.endsWith('**')) {
+    if (token.startsWith('![')) {
+      const imageMatch = /^!\[([^\]]*)\]\(([^)]+)\)$/.exec(token)
+      if (imageMatch && options.renderImage) {
+        nodes.push(options.renderImage(imageMatch[1], imageMatch[2].trim(), `${keyPrefix}image-${key++}`))
+      } else {
+        // 无图片渲染器时降级为原文，不丢信息。
+        nodes.push(token)
+      }
+    } else if (token.startsWith('**') && token.endsWith('**')) {
       nodes.push(
-        <strong key={`${keyPrefix}strong-${key++}`} style={styles?.strong}>
+        <strong key={`${keyPrefix}strong-${key++}`} style={options.strong}>
           {token.slice(2, -2)}
         </strong>,
       )
     } else if (token.startsWith('`') && token.endsWith('`')) {
       nodes.push(
-        <code key={`${keyPrefix}code-${key++}`} style={styles?.inlineCode}>
+        <code key={`${keyPrefix}code-${key++}`} style={options.inlineCode}>
           {token.slice(1, -1)}
         </code>,
       )
@@ -48,17 +64,14 @@ export function renderMarkdownInline(
 
 export function renderMarkdownInlineWithBreaks(
   lines: string[],
-  styles?: {
-    strong?: React.CSSProperties
-    inlineCode?: React.CSSProperties
-  },
+  options: MarkdownInlineRenderOptions = {},
 ): React.ReactNode[] {
   const nodes: React.ReactNode[] = []
   lines.forEach((line, index) => {
     if (index > 0) {
       nodes.push(<br key={`br-${index}`} />)
     }
-    nodes.push(...renderMarkdownInline(line, styles, `line-${index}-`))
+    nodes.push(...renderMarkdownInline(line, options, `line-${index}-`))
   })
   return nodes
 }

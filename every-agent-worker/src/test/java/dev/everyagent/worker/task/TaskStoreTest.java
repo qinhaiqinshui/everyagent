@@ -22,7 +22,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * TaskStore 纯单测(@TempDir,无 Spring):
- * 任务统一存 data/tasks/&lt;taskId&gt;/、按 agent 分文件路由、瞬态不落盘、
+ * 任务按工作区归类存 workspaces/&lt;workspaceId&gt;/tasks/&lt;taskId&gt;/、按 agent 分文件路由、瞬态不落盘、
  * ext null 不写行、agentId 恒非空、merge 读序、旧 events.jsonl 兼容、
  * 重启标 failed、撕行容忍、delete。
  */
@@ -40,7 +40,7 @@ class TaskStoreTest {
     @BeforeEach
     void setUp() {
         props = new WorkerProperties();
-        props.setDataDir(dataDir.toString());
+        props.setHomeDir(dataDir.toString());
         store = new TaskStore(props);
         store.start();
     }
@@ -48,6 +48,11 @@ class TaskStoreTest {
     @AfterEach
     void tearDown() throws InterruptedException {
         store.stop();
+    }
+
+    /** 新布局任务根:workspaces/defaultworkspace/tasks(单测任务统一挂默认工作区)。 */
+    private Path tasksRoot() {
+        return props.resolveWorkspacesDir().resolve("defaultworkspace").resolve("tasks");
     }
 
     private static ObjectNode summary(String taskId, String status) {
@@ -60,8 +65,8 @@ class TaskStoreTest {
     void routesByAgentSkipsTransientAndOmitsNullExt() throws Exception {
         EventLog logA = new EventLog(1000);
         EventLog logB = new EventLog(1000);
-        store.track("ta", logA, () -> summary("ta", "running"));
-        store.track("tb", logB, () -> summary("tb", "running"));
+        store.track("ta", "defaultworkspace", logA, () -> summary("ta", "running"));
+        store.track("tb", "defaultworkspace", logB, () -> summary("tb", "running"));
 
         TaskEvents evA = new TaskEvents(logA, MAIN);
         long seqUser = evA.userMessage("你好"); // 落盘
@@ -81,8 +86,8 @@ class TaskStoreTest {
         assertEquals(seqSubDelta, seqSubMsg, "子 agent 同轮共享");
         assertTrue(seqUsage > seqMsg, "独立事件 seq 递增");
 
-        Path dirA = dataDir.resolve("tasks").resolve("ta");
-        Path dirB = dataDir.resolve("tasks").resolve("tb");
+        Path dirA = tasksRoot().resolve("ta");
+        Path dirB = tasksRoot().resolve("tb");
         assertTrue(Files.isRegularFile(dirA.resolve("meta.json")), "任务布局 data/tasks/<taskId>/");
         assertTrue(Files.isRegularFile(dirB.resolve("meta.json")), "每任务独立目录");
 
@@ -131,23 +136,24 @@ class TaskStoreTest {
     @Test
     void scanFindsTaskDirsUnderTasksRoot() throws Exception {
         EventLog log = new EventLog(10);
-        store.track("t1", log, () -> summary("t1", "running"));
+        store.track("t1", "defaultworkspace", log, () -> summary("t1", "running"));
         log.append("message", Json.obj().put("text", "a"), MAIN, null);
         store.flush("t1");
-        // 非法形状:tasks 下的非目录文件、无 meta.json 的目录,均不入索引
-        Files.createDirectories(dataDir.resolve("tasks").resolve("no-meta"));
-        Files.writeString(dataDir.resolve("tasks").resolve("workspaces.json"), "{}");
+        // 非法形状:workspaces 根下的非目录文件(workspaces.json)、tasks 下的无 meta.json 目录,均不入索引
+        Files.createDirectories(tasksRoot().resolve("no-meta"));
+        Files.writeString(props.resolveWorkspacesDir().resolve("workspaces.json"), "{}");
 
         List<TaskStore.StoredTask> scanned = store.scan();
         assertEquals(1, scanned.size());
         assertEquals("t1", scanned.get(0).taskId());
-        assertEquals(dataDir.resolve("tasks").resolve("t1"), scanned.get(0).dir());
+        assertEquals("defaultworkspace", scanned.get(0).workspaceId(), "scan 回填 workspaceId");
+        assertEquals(tasksRoot().resolve("t1"), scanned.get(0).dir());
     }
 
     @Test
     void restartMarksNonTerminalFailedInMainFile() throws Exception {
         EventLog log = new EventLog(1000);
-        store.track("t1", log, () -> summary("t1", "running"));
+        store.track("t1", "defaultworkspace", log, () -> summary("t1", "running"));
         long seq = log.append("message", Json.obj().put("text", "hi"), MAIN, null).seq();
         store.flush("t1");
         store.stop(); // 模拟进程退出
@@ -179,15 +185,15 @@ class TaskStoreTest {
     void tasksIsolatedOnDisk() throws Exception {
         EventLog la = new EventLog(10);
         EventLog lb = new EventLog(10);
-        store.track("ta", la, () -> summary("ta", "running"));
-        store.track("tb", lb, () -> summary("tb", "running"));
+        store.track("ta", "defaultworkspace", la, () -> summary("ta", "running"));
+        store.track("tb", "defaultworkspace", lb, () -> summary("tb", "running"));
         la.append("message", Json.obj().put("text", "a"), MAIN, null);
         lb.append("message", Json.obj().put("text", "b"), MAIN, null);
         store.flush("ta");
         store.flush("tb");
-        assertTrue(Files.isRegularFile(dataDir.resolve("tasks").resolve("ta").resolve(MAIN + ".jsonl")),
+        assertTrue(Files.isRegularFile(tasksRoot().resolve("ta").resolve(MAIN + ".jsonl")),
                 "ta 独立任务目录");
-        assertTrue(Files.isRegularFile(dataDir.resolve("tasks").resolve("tb").resolve(MAIN + ".jsonl")),
+        assertTrue(Files.isRegularFile(tasksRoot().resolve("tb").resolve(MAIN + ".jsonl")),
                 "tb 独立任务目录");
         assertEquals(2, store.scan().size());
     }
@@ -195,7 +201,7 @@ class TaskStoreTest {
     @Test
     void legacyEventsJsonlReadable() throws Exception {
         // 旧单文件布局的任务目录:readEvents 天然兼容(行无 agentId → 主线程 wire)
-        Path dir = dataDir.resolve("tasks").resolve("told");
+        Path dir = tasksRoot().resolve("told");
         Files.createDirectories(dir);
         Files.writeString(dir.resolve("events.jsonl"), """
                 {"seq":1,"ts":1,"event":"user.message","payload":{"text":"旧问"}}
@@ -215,15 +221,15 @@ class TaskStoreTest {
     @Test
     void tornTailTolerated() throws Exception {
         EventLog log = new EventLog(1000);
-        store.track("t1", log, () -> summary("t1", "done"));
+        store.track("t1", "defaultworkspace", log, () -> summary("t1", "done"));
         long seqA = log.append("message", Json.obj().put("text", "a"), MAIN, null).seq();
         long seqB = log.append("message", Json.obj().put("text", "b"), MAIN, null).seq();
         store.flush("t1");
         store.untrack("t1");
         // 模拟崩溃残留:半行 JSON 无换行
-        Files.writeString(dataDir.resolve("tasks").resolve("t1").resolve(MAIN + ".jsonl"),
+        Files.writeString(tasksRoot().resolve("t1").resolve(MAIN + ".jsonl"),
                 "{\"seq\":3,\"ts\":1,\"event\":\"del", java.nio.file.StandardOpenOption.APPEND);
-        Path dir = dataDir.resolve("tasks").resolve("t1");
+        Path dir = tasksRoot().resolve("t1");
         assertEquals(2, store.readEvents(dir, MAIN, 0, 100).size(), "撕行被跳过");
         assertEquals(seqB, store.diskLastSeq(dir), "撕行不计入 lastSeq");
         assertTrue(seqB > seqA, "雪花 ID 进程内递增");
@@ -232,11 +238,11 @@ class TaskStoreTest {
     @Test
     void deleteRemovesDirPermanently() throws Exception {
         EventLog log = new EventLog(1000);
-        store.track("t1", log, () -> summary("t1", "done"));
+        store.track("t1", "defaultworkspace", log, () -> summary("t1", "done"));
         log.append("message", Json.obj().put("text", "a"), MAIN, null);
         store.flush("t1");
         store.untrack("t1");
-        Path dir = dataDir.resolve("tasks").resolve("t1");
+        Path dir = tasksRoot().resolve("t1");
         assertTrue(Files.isDirectory(dir));
         store.delete(dir);
         assertFalse(Files.exists(dir), "用户删除是唯一删除路径,目录整体移除");
@@ -244,7 +250,7 @@ class TaskStoreTest {
 
     @Test
     void queueRoundTripArbitraryTextAndEmptyOverwrite() throws Exception {
-        Path dir = dataDir.resolve("tasks").resolve("tq");
+        Path dir = tasksRoot().resolve("tq");
         Files.createDirectories(dir);
         // 文件不存在 → 空列表
         assertEquals(List.of(), store.readQueue(dir), "queue.jsonl 缺失返回空列表");
@@ -266,7 +272,7 @@ class TaskStoreTest {
 
     @Test
     void deleteQueueRemovesFileAndIgnoresMissing() throws Exception {
-        Path dir = dataDir.resolve("tasks").resolve("tq2");
+        Path dir = tasksRoot().resolve("tq2");
         Files.createDirectories(dir);
         store.writeQueue(dir, List.of(UserInput.of("a"), UserInput.of("b")));
         assertTrue(Files.isRegularFile(dir.resolve("queue.jsonl")));

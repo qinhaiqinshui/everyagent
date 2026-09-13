@@ -36,8 +36,8 @@ import tools.jackson.databind.JsonNode;
  * </ul>
  *
  * <p><b>顺序(关键)</b>:收口填充发生在内层该轮 doOnComplete(整 run 全部工具调用已记录),
- * 早于最外层 {@link MeasureDurationAdvisor} 的 doOnComplete → 耗时回填恒在文件变更之后
- * (rounds.jsonl 每轮 durationMs 与 fileChanges 分离,互不干扰)。注意:由于本 advisor 位于工具循环驱动层内层,fileChanges 的
+ * 先于最外层 {@link RoundIndexAdvisor} 的 doOnComplete → 文件变更与轮次(含耗时,由
+ * RoundIndexStore 从磁盘 startedAt 计算)同一次落盘互不干扰。注意:由于本 advisor 位于工具循环驱动层内层,fileChanges 的
  * 消费({@link RoundIndexAdvisor#persistRounds} 落盘)会排在<b>最终回答 message 之前</b>(在最后一轮模型流完成、权威 message 落盘前即收口)——这是
  * 「内层直接看到工具轮」与「回合末收口」不可兼得的取舍;如需 fileChanges 排在最终 message 之后,
  * 需将收口拆到外层(见最终交付说明)。
@@ -72,7 +72,7 @@ public class FileChangeAdvisor implements StreamAdvisor {
     public int getOrder() {
         // 位于 LoopRepeatGuardAdvisor(ToolCallingAdvisor,HIGHEST+300)内层、模型(ChatModelStreamAdvisor)外层:
         // doOnNext 直接看到模型流,工具轮为模型层合并后的完整消息(含 toolCalls)。
-        // doOnComplete 先于最外层 MeasureDurationAdvisor 触发 → file_changes 先落盘、「Done in」后写。
+        // doOnComplete 先于最外层 RoundIndexAdvisor 触发 → file_changes 与轮次索引(含耗时)同一轮落盘。
         return Ordered.HIGHEST_PRECEDENCE + 301;
     }
 

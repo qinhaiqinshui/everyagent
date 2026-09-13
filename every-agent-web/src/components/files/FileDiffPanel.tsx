@@ -5,6 +5,7 @@ import { buildLineDiff, buildSideBySideRows, type SideBySideDiffRow } from '@/ut
 import { Button } from '@/components/shared/ui'
 import { useWorkspaceShell } from '@/components/app/WorkspaceShellContext'
 import { useAppUi } from '@/components/app/AppUiContext'
+import { App } from 'antd'
 import { workspaceRegistry } from '@/hub/workspaceRegistry'
 import { workspaceGateway } from '@/platform/fs/workspaceGateway'
 import { FilesIcon } from '@/components/icon'
@@ -51,7 +52,9 @@ export default function FileDiffPanel({ fileChange, workspaceRoot: diffWorkspace
   const { isMobile } = useResponsiveViewport()
   const { openGlobalFileTab } = useWorkspaceShell()
   const { showToast } = useAppUi()
+  const { modal } = App.useApp()
   const [viewType, setViewType] = React.useState<'unified' | 'split'>(isMobile ? 'unified' : 'split')
+  const [restoring, setRestoring] = React.useState(false)
 
   React.useEffect(() => {
     if (isMobile) {
@@ -81,6 +84,40 @@ export default function FileDiffPanel({ fileChange, workspaceRoot: diffWorkspace
     }, { mode: 'readwrite' })
   }, [diffWorkspaceRoot, fileChange.filePath, openGlobalFileTab, showToast])
 
+  /** 恢复此版本:把工作区文件覆盖为 diff 右侧(after)内容。仅 allowRestore 显示;二进制/deleted 禁用。 */
+  const canRestore = Boolean(
+    fileChange.allowRestore
+    && !fileChange.binary
+    && fileChange.changeType !== 'deleted'
+    && (fileChange.afterContent ?? '').length > 0,
+  )
+  const handleRestore = React.useCallback(() => {
+    if (!canRestore) return
+    const workspaceRoot = diffWorkspaceRoot ?? workspaceRegistry.primaryRoot()
+    if (!workspaceRoot) {
+      showToast('暂无可用的工作区，无法恢复。', 'error')
+      return
+    }
+    modal.confirm({
+      title: '恢复此版本',
+      content: `将把工作区文件 ${fileChange.filePath} 的内容覆盖为该提交版本，此操作不可撤销。确定恢复？`,
+      okText: '恢复',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      onOk: async () => {
+        setRestoring(true)
+        try {
+          await workspaceGateway.writeTextFile(workspaceRoot, fileChange.filePath, fileChange.afterContent ?? '')
+          showToast('已恢复此版本', 'success')
+        } catch (restoreError) {
+          showToast(restoreError instanceof Error ? restoreError.message : String(restoreError), 'error')
+        } finally {
+          setRestoring(false)
+        }
+      },
+    })
+  }, [canRestore, diffWorkspaceRoot, fileChange.filePath, fileChange.afterContent, modal, showToast])
+
   if (diffRows.length === 0) {
     return (
       <div className="file-diff-panel">
@@ -103,6 +140,20 @@ export default function FileDiffPanel({ fileChange, workspaceRoot: diffWorkspace
           <FilesIcon size={14} />
           <span className="file-diff-panel__open-file-label">打开文件</span>
         </Button>
+        {fileChange.allowRestore ? (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="file-diff-panel__open-file"
+            title={canRestore ? '恢复此版本（覆盖当前工作区文件）' : '二进制/已删除文件不可恢复'}
+            aria-label="恢复此版本"
+            disabled={!canRestore || restoring}
+            onClick={handleRestore}
+          >
+            <FilesIcon size={14} />
+            <span className="file-diff-panel__open-file-label">{restoring ? '恢复中…' : '恢复此版本'}</span>
+          </Button>
+        ) : null}
         <div className="file-diff-panel__view-toggle" role="group" aria-label="差异视图切换">
           <Button
             variant="ghost"

@@ -12,7 +12,7 @@ import java.util.Map;
  * 支持向多个 hub 注册:hubs 列表每项 {url, apiKey, hubKey};hubs 是唯一配置入口,
  * 为空时不连接任何 hub。同一 apiKey 配多个 hub = 输出冗余扇出;
  * 不同 apiKey = 多用户共用一个 worker,apiKey 只用于连接认证,不决定任务存储/归属;
- * 任务统一存 data/tasks/<taskId>/(不存在顶层 worker.api-key——apiKey 按 hub 条目各自配置)。
+ * 工作区注册表与任务数据统一存 workspaces/(不存在顶层 worker.api-key——apiKey 按 hub 条目各自配置)。
  */
 @ConfigurationProperties("worker")
 public class WorkerProperties {
@@ -20,12 +20,10 @@ public class WorkerProperties {
     private String workerId = "company-pc";
     /** 多 hub 注册列表(hubs 为唯一入口;空 = 不连任何 hub)。 */
     private List<HubConfig> hubs = new ArrayList<>();
-    /** 系统目录(架构 §5.9):模型配置/默认工作区/数据;空 = ~/.everyagent。 */
+    /** 系统目录(架构 §5.9):模型配置/默认工作区/workspaces/沙箱;空 = ~/.everyagent。 */
     private String homeDir = "";
-    /** 默认工作区(init 时注册进注册表)。空 = <系统目录>/workspace。 */
+    /** 默认工作区(init 时注册进注册表)。空 = <系统目录>/defaultworkspace。 */
     private String workspaceRoot = "";
-    /** worker 数据目录(任务落盘/工作区注册表)。空 = <系统目录>/data。 */
-    private String dataDir = "";
     /** 系统技能目录(skill 知识包;空 = <系统目录>/skills)。AI 工具只读访问,写一律拒绝。 */
     private String skillsDir = "";
     /**
@@ -211,25 +209,23 @@ public class WorkerProperties {
                 : java.nio.file.Path.of(h)).toAbsolutePath().normalize();
     }
 
-    /** 数据目录绝对路径;配置为空时取 <系统目录>/data。 */
-    public java.nio.file.Path resolveDataDir() {
-        String d = dataDir == null || dataDir.isBlank() ? null : dataDir.trim();
-        return (d == null ? resolveHomeDir().resolve("data") : java.nio.file.Path.of(d))
-                .toAbsolutePath().normalize();
+    /** workspaces 目录绝对路径(工作区注册表 + 任务数据,架构 §5.9);恒为 <系统目录>/workspaces。 */
+    public java.nio.file.Path resolveWorkspacesDir() {
+        return resolveHomeDir().resolve("workspaces").toAbsolutePath().normalize();
     }
 
-    /** 沙箱持久状态根目录绝对路径;配置为空时取 <数据目录>/sandbox。 */
+    /** 沙箱持久状态根目录绝对路径;配置为空时取 <系统目录>/sandbox。 */
     public java.nio.file.Path resolveSandboxPersistentRoot() {
         String p = sandbox.getPersistentRoot() == null || sandbox.getPersistentRoot().isBlank()
                 ? null : sandbox.getPersistentRoot().trim();
-        return (p == null ? resolveDataDir().resolve("sandbox") : java.nio.file.Path.of(p))
+        return (p == null ? resolveHomeDir().resolve("sandbox") : java.nio.file.Path.of(p))
                 .toAbsolutePath().normalize();
     }
 
-    /** 初始工作区绝对路径;配置为空时取 <系统目录>/workspace(默认工作区)。 */
+    /** 初始工作区绝对路径;配置为空时取 <系统目录>/defaultworkspace(默认工作区)。 */
     public java.nio.file.Path resolveInitialWorkspace() {
         String w = workspaceRoot == null || workspaceRoot.isBlank() ? null : workspaceRoot.trim();
-        return (w == null ? resolveHomeDir().resolve("workspace") : java.nio.file.Path.of(w))
+        return (w == null ? resolveHomeDir().resolve("defaultworkspace") : java.nio.file.Path.of(w))
                 .toAbsolutePath().normalize();
     }
 
@@ -288,6 +284,12 @@ public class WorkerProperties {
         private long maxEventsPerTask = 500_000;
         private long shipStallMs = 60_000;
         /**
+         * 模型流「无输出」判定窗口(ms):流在超过该时长无任何 chunk(思考/正文)时触发
+         * {@code ModelLengthGuardAdvisor} 的 finish_reason=length 判定(若自估输出 token
+         * 已≈maxTokens)。须短于 model-timeout-ms(默认 10 分钟)才能避免空等读超时。默认 120s。
+         */
+        private long modelLengthStallMs = 120_000;
+        /**
          * 死循环检测阈值:连续 N 轮完全相同的工具调用(名称+参数集合签名)即收口。
          * ≤0 关闭检测。默认 3(与 novel_agent-n 运行护栏一致)。
          */
@@ -306,6 +308,11 @@ public class WorkerProperties {
         private double contextSafetyRatio = 0.9;
         /** 工具定义等固定预留 token(估算用量时累加,量级小:实测 tool input ~1.6k)。默认 4096。 */
         private long contextToolReserveTokens = 4096;
+        /**
+         * 模型请求限流全局默认(per-model 的 rpm/max-concurrency/tpm 在 worker.models[].params 配置;
+         * 这里统一排队与估算参数,见 docs/design-model-rate-limit.md)。
+         */
+        private ModelRate modelRate = new ModelRate();
         /**
          * 是否启用「上轮实测 offset 校准」:true = 用上一轮实测用量校准上下文估算,
          * false = 回退纯 reserve 估算。默认 true。
@@ -367,6 +374,14 @@ public class WorkerProperties {
 
         public void setShipStallMs(long shipStallMs) {
             this.shipStallMs = shipStallMs;
+        }
+
+        public long getModelLengthStallMs() {
+            return modelLengthStallMs;
+        }
+
+        public void setModelLengthStallMs(long modelLengthStallMs) {
+            this.modelLengthStallMs = modelLengthStallMs;
         }
 
         public int getMaxRepeatedToolRounds() {
@@ -447,6 +462,132 @@ public class WorkerProperties {
 
         public void setContextMaxToolResultChars(int contextMaxToolResultChars) {
             this.contextMaxToolResultChars = contextMaxToolResultChars;
+        }
+
+        public ModelRate getModelRate() {
+            return modelRate;
+        }
+
+        public void setModelRate(ModelRate modelRate) {
+            this.modelRate = modelRate == null ? new ModelRate() : modelRate;
+        }
+    }
+
+    /**
+     * 模型请求限流全局默认(架构 docs/design-model-rate-limit.md §4):
+     * per-model 的 rpm / max-concurrency / tpm 在 {@code worker.models[].params} 各自配置;
+     * 这里统一排队、tpm 估算与 EMA 校准的全局参数。
+     */
+    public static class ModelRate {
+        /** 每模型等待队列容量:同时在等的请求超过该值 → 立即转 ModelRateLimitException(不再排队)。 */
+        private int queueCapacity = 8;
+        /** 排队最长等待时间(ms);超时仍未放行 → ModelRateLimitException。 */
+        private long waitTimeoutMs = 300_000;
+        /** tpm 记账/估算滑动窗口(秒)。 */
+        private long estWindowSec = 60;
+        /** tpm 压力触发延迟的保守余量(估算到该比例即开始延迟新起步)。 */
+        private double estSafetyRatio = 0.85;
+        /** 估算系数 EMA 学习率(0~1;越大越快贴近真实,越小越平滑)。 */
+        private double estEmaAlpha = 0.1;
+        /** 估算系数上下界保护(防止异常样本把系数拉飞)。 */
+        private double estFactorMin = 0.3;
+        private double estFactorMax = 3.0;
+        /** 排队等待超过该时长(ms)即发瞬态 model_rate_wait trace(前端可见排队提示)。 */
+        private long waitTraceThresholdMs = 1000;
+        /**
+         * 全局默认限流值(worker.models[].params 未显式配置时回退;见 design §4)。
+         * 三项任一 >0 即生效;某模型要关闭某维度,在该模型 params 里显式设 0。
+         */
+        private int defaultRpm = 60;
+        private int defaultMaxConcurrency = 4;
+        private long defaultTpm = 0;
+
+        public int getQueueCapacity() {
+            return queueCapacity;
+        }
+
+        public void setQueueCapacity(int queueCapacity) {
+            this.queueCapacity = queueCapacity;
+        }
+
+        public long getWaitTimeoutMs() {
+            return waitTimeoutMs;
+        }
+
+        public void setWaitTimeoutMs(long waitTimeoutMs) {
+            this.waitTimeoutMs = waitTimeoutMs;
+        }
+
+        public long getEstWindowSec() {
+            return estWindowSec;
+        }
+
+        public void setEstWindowSec(long estWindowSec) {
+            this.estWindowSec = estWindowSec;
+        }
+
+        public double getEstSafetyRatio() {
+            return estSafetyRatio;
+        }
+
+        public void setEstSafetyRatio(double estSafetyRatio) {
+            this.estSafetyRatio = estSafetyRatio;
+        }
+
+        public double getEstEmaAlpha() {
+            return estEmaAlpha;
+        }
+
+        public void setEstEmaAlpha(double estEmaAlpha) {
+            this.estEmaAlpha = estEmaAlpha;
+        }
+
+        public double getEstFactorMin() {
+            return estFactorMin;
+        }
+
+        public void setEstFactorMin(double estFactorMin) {
+            this.estFactorMin = estFactorMin;
+        }
+
+        public double getEstFactorMax() {
+            return estFactorMax;
+        }
+
+        public void setEstFactorMax(double estFactorMax) {
+            this.estFactorMax = estFactorMax;
+        }
+
+        public long getWaitTraceThresholdMs() {
+            return waitTraceThresholdMs;
+        }
+
+        public void setWaitTraceThresholdMs(long waitTraceThresholdMs) {
+            this.waitTraceThresholdMs = waitTraceThresholdMs;
+        }
+
+        public int getDefaultRpm() {
+            return defaultRpm;
+        }
+
+        public void setDefaultRpm(int defaultRpm) {
+            this.defaultRpm = defaultRpm;
+        }
+
+        public int getDefaultMaxConcurrency() {
+            return defaultMaxConcurrency;
+        }
+
+        public void setDefaultMaxConcurrency(int defaultMaxConcurrency) {
+            this.defaultMaxConcurrency = defaultMaxConcurrency;
+        }
+
+        public long getDefaultTpm() {
+            return defaultTpm;
+        }
+
+        public void setDefaultTpm(long defaultTpm) {
+            this.defaultTpm = defaultTpm;
         }
     }
 
@@ -559,14 +700,6 @@ public class WorkerProperties {
 
     public void setHomeDir(String homeDir) {
         this.homeDir = homeDir;
-    }
-
-    public String getDataDir() {
-        return dataDir;
-    }
-
-    public void setDataDir(String dataDir) {
-        this.dataDir = dataDir;
     }
 
     public String getSkillsDir() {
@@ -687,7 +820,7 @@ public class WorkerProperties {
          * windows-mic / direct 后端运行在宿主文件系统上,天然已持久,此开关主要控制持久 env 注入。
          */
         private boolean persistentState = true;
-        /** 持久状态根目录(空 = &lt;数据目录&gt;/sandbox);worker 级共享,跨任务/重启保留。 */
+        /** 持久状态根目录(空 = &lt;系统目录&gt;/sandbox);worker 级共享,跨任务/重启保留。 */
         private String persistentRoot = "";
 
         /**

@@ -13,14 +13,14 @@ worker:
       # 连接 hub 的凭证(对 hub 的保护);与 api-key 不同,由部署者统一配置。必填:
       # 原始密钥须与目标 hub 的 hub.hub-key(存其 sha256)对应,缺失该条目 worker 拒绝启动
       hub-key: ${HUB_KEY:sljlw23948LKS}
-  # 系统目录(架构 §5.9):默认工作区 workspace/、数据 data/;空 = ~/.everyagent
+  # 系统目录(架构 §5.9):默认工作区 defaultworkspace/、workspaces/(注册表+任务数据)、
+  # sandbox/ 顶级(沙箱持久状态);空 = ~/.everyagent
   home-dir: ${EVERYAGENT_HOME:}
   # 模型配置(只读,config.get 的唯一数据源):默认用 OpenAI 兼容占位符,真实 provider/apiKey
   # 由 ~/.everyagent/application-worker.yaml(或开发环境 application-dev.yaml)覆盖,不进 jar/git。
   # 注意:列表属性整表替换——覆盖文件里写 worker.models 会完整替换本默认表。
-  # workspace-root = 默认工作区(init 注册进 data/workspaces.json);data = 任务落盘/注册表根
+  # workspace-root = 默认工作区(init 注册进 workspaces/workspaces.json);workspaces/ = 任务落盘/注册表根
   workspace-root: ${WORKSPACE_ROOT:}
-  data-dir: ${DATA_DIR:}
   limits:
     max-concurrent-tasks: 20
     max-concurrent-subs: 8
@@ -28,6 +28,21 @@ worker:
     sub-wait-timeout-ms: 300000
     max-events-per-task: 500000
     ship-stall-ms: 60000
+    # 模型流「无输出」判定窗口(ms):ModelLengthGuardAdvisor 据此把「长时间无输出 + 自估输出
+    # ≈ maxTokens」判定为 finish_reason=length,避免空等 10 分钟读超时(须短于 model-timeout-ms)。
+    length-stall-ms: 120000
+    # 模型请求限流全局默认(per-model 的 rpm/max-concurrency/tpm 在 worker.models[].params
+    # 各自配置;未显式配置的模型回退到这里的 default-*;某模型要关闭某维度,在其 params 显式设 0)。
+    model-rate:
+      queue-capacity: 8          # 每模型等待队列容量(同时等待超该值 → 立即报错)
+      wait-timeout-ms: 300000    # 排队最长等待(5 分钟);超时仍未放行 → ModelRateLimitException
+      est-window-sec: 60         # tpm 记账/估算滑动窗口(秒,与厂商 tpm 口径对齐)
+      est-safety-ratio: 0.85     # tpm 压力触发延迟的保守余量(预到 85% 即延迟新起步)
+      est-ema-alpha: 0.1         # 估算系数 EMA 学习率(越大越快贴近真实)
+      wait-trace-threshold-ms: 1000   # 排队等待超过该时长(ms)发瞬态 model_rate_wait trace
+      default-rpm: 60            # 全局默认:每分钟最多发起请求数
+      default-max-concurrency: 4 # 全局默认:同时 in-flight 请求上限(长思考防重叠)
+      default-tpm: 0             # 全局默认 tpm(厂商套餐差异大,默认不启用;需者各模型显式配)
   # 危险操作授权(PermissionGate):危险命令正则/系统目录排除/授权弹窗超时;空缺用内置默认
   # 进程沙箱:单命令看门狗超时(ms);超时强杀子进程。30 分钟 = 1800000。
   # active-process-limit:Job Object 活动进程数上限(0=不限制)。默认 32。
@@ -74,9 +89,9 @@ worker:
     #   true 时 wsl-bwrap 把 <persistent-root> 下的 home/opt/usr-local/resolv.conf 读写挂入沙箱,
     #   并注入 <persistent-root>/env 持久环境变量——所有任务/工作区共享同一工具链(JDK/Maven 等),
     #   软件装进 /opt 或 /usr/local 即跨任务保留;resolv.conf 持久化修复沙箱内 DNS。
-    #   persistent-root 空 = <data-dir>/sandbox。
+    #   persistent-root 空 = <系统目录>/sandbox。
     persistent-state: true
-    #    persistent-root: ""       # 空 = <data-dir>/sandbox;也可指定绝对路径
+    #    persistent-root: ""       # 空 = <系统目录>/sandbox;也可指定绝对路径
     # wsl-bwrap 专属:distro 须预装 python3 + bwrap(rg/git 建议;装配/探针见 scripts/wsl-sandbox-probe.ps1)。
     wsl:
       distro: "eagent"              # 空(默认)= WSL 默认发行版(wsl -l -v 带 * 者,免配置即可探测);生产托管发行版显式配 eagent

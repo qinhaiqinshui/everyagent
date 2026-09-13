@@ -32,6 +32,8 @@ export const diffTabType: UiWorkspaceTabTypeDefinition = {
           changeType: diffTab.changeType,
           beforeContent: diffTab.beforeContent,
           afterContent: diffTab.afterContent,
+          binary: diffTab.binary,
+          allowRestore: diffTab.allowRestore,
         }}
       />
     )

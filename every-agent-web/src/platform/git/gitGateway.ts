@@ -16,6 +16,15 @@ export interface GitRemote {
   url: string
 }
 
+/** git.show 返回的单个变更文件项(文本文件带 before/after,二进制标记 binary)。 */
+export interface GitCommitFileChange {
+  path: string
+  changeType: 'created' | 'updated' | 'deleted'
+  beforeContent?: string
+  afterContent?: string
+  binary: boolean
+}
+
 /** 本次调用的临时凭证(前端 AUTH_REQUIRED 弹窗输入,仅本次请求生效,不落盘)。 */
 export interface GitCredential {
   username: string
@@ -91,8 +100,8 @@ export const gitGateway = {
     }
   },
 
-  /** 读取提交历史。 */
-  async log(workspace: string, max = 30): Promise<Array<{
+  /** 读取提交历史(可带 path 过滤为仅影响该文件/目录的提交)。 */
+  async log(workspace: string, max = 30, path?: string): Promise<Array<{
     id: string
     shortId: string
     author: string
@@ -101,7 +110,11 @@ export const gitGateway = {
     message: string
   }>> {
     try {
-      const result = await rpcForWorkspace(workspace, 'git.log', { workspace, max }) as { commits?: unknown[] }
+      const result = await rpcForWorkspace(workspace, 'git.log', {
+        workspace,
+        max,
+        ...(path ? { path } : {}),
+      }) as { commits?: unknown[] }
       return (result.commits ?? []) as never
     } catch (err) {
       normalizeError(err)
@@ -118,6 +131,18 @@ export const gitGateway = {
         throw new Error('git.diff 返回结构异常:worker 仍在运行旧版本(仅返回 unified diff 文本),请重启 worker 后重试')
       }
       return result as TaskFileChange
+    } catch (err) {
+      normalizeError(err)
+    }
+  },
+
+  /** 读取某次提交的变更文件清单与全文(历史详情;文本文件带 before/after,二进制标记 binary)。 */
+  async showCommit(workspace: string, commit: string): Promise<{
+    commit: string
+    files: GitCommitFileChange[]
+  }> {
+    try {
+      return (await rpcForWorkspace(workspace, 'git.show', { workspace, commit })) as never
     } catch (err) {
       normalizeError(err)
     }

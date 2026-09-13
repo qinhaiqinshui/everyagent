@@ -143,12 +143,16 @@ export type TaskStatus = 'idle' | 'running' | 'completed' | 'stopped' | 'error'
 export interface TaskFileChange {
   /** 文件路径。 */
   filePath: string
-  /** 变更类型。 */
-  changeType: 'created' | 'updated'
+  /** 变更类型(含 deleted:历史提交中的删除文件,after 为空)。 */
+  changeType: 'created' | 'updated' | 'deleted'
   /** 变更前内容。 */
   beforeContent?: string
   /** 变更后内容。 */
   afterContent?: string
+  /** 是否为二进制文件(历史提交详情;二进制不读全文、不可恢复)。 */
+  binary?: boolean
+  /** 是否允许「恢复此版本」(仅 Git 历史提交详情开启;SCM/任务 diff 不显示)。 */
+  allowRestore?: boolean
 }
 
 // ─── 任务轮次索引类型（task.rounds / rounds.jsonl，plan-rounds-jsonl 步骤 5）─────
@@ -205,8 +209,9 @@ export interface RoundSummary {
   /** 该轮内子 Agent 活动区间（恒为数组；无子 Agent 为空数组）。 */
   subs: RoundSubSummary[]
   /**
-   * 本轮用户任务端到端耗时（毫秒；MeasureDurationAdvisor 收口回填，rounds.jsonl 每行携带，
-   * 旧行/未记录缺省视为 0）。0 表示无耗时数据，前端折叠时折叠图标左侧不显示。
+   * 本轮用户任务端到端耗时（毫秒；worker 开轮时落盘 startedAt、闭合时以当前时间减磁盘
+   * startedAt 计算，随 rounds.jsonl 每行携带；旧行/未记录缺省视为 0）。0 表示无耗时数据，
+   * 前端折叠时折叠图标左侧不显示。
    */
   durationMs?: number
   /**
@@ -872,12 +877,32 @@ export interface WorkspaceDiffTab {
   fileName: string
   /** 标签标题。 */
   title: string
-  /** 变更类型。 */
-  changeType: 'created' | 'updated'
+  /** 变更类型(含 deleted)。 */
+  changeType: 'created' | 'updated' | 'deleted'
   /** 变更前内容。 */
   beforeContent: string
   /** 变更后内容。 */
   afterContent: string
+  /** 是否为二进制文件(历史提交详情)。 */
+  binary?: boolean
+  /** 是否允许「恢复此版本」(仅 Git 历史提交详情)。 */
+  allowRestore?: boolean
+}
+
+/** 顶级 Git 历史标签（git-history）：按路径展示提交历史列表。 */
+export interface WorkspaceGitHistoryTab {
+  /** 标签 ID，形如 `git-history:${path}:${workspaceRoot}`。 */
+  id: `git-history:${string}`
+  /** 标签类型常量。 */
+  tabType: 'git-history'
+  /** 所属工作区根(worker 机器绝对路径;git log 落对应工作区)。 */
+  workspaceRoot: string
+  /** 历史目标路径(工作区相对路径,空串 = 仓库级历史)。 */
+  path: string
+  /** 目标名称(文件名/目录名/「工作区」)。 */
+  name: string
+  /** 标签标题。 */
+  title: string
 }
 
 /** 统一顶层工作区标签。 */
@@ -888,6 +913,7 @@ export type WorkspaceTab =
   | WorkspaceTaskChatTab
   | WorkspacePluginTab
   | WorkspaceDiffTab
+  | WorkspaceGitHistoryTab
 
 /** 打开工作区文件选项。 */
 export interface OpenWorkspaceFileOptions {

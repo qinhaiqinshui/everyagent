@@ -77,7 +77,7 @@ public final class TaskEvents {
         p.put("startSeq", String.valueOf(startSeq));
         p.put("user", user == null ? "" : user);
         ObjectNode ext = Json.obj().put("persist", false);
-        return log.append(Events.ROUND_OPENED, p, mainAgentId, ext).seq();
+        return log.append(Events.ROUND_OPENED, p, mainAgentId, ext, true).seq();
     }
 
     /**
@@ -90,21 +90,21 @@ public final class TaskEvents {
         p.put("endSeq", String.valueOf(endSeq));
         p.put("finalReply", finalReply == null ? "" : finalReply);
         ObjectNode ext = Json.obj().put("persist", false);
-        return log.append(Events.ROUND_CLOSED, p, mainAgentId, ext).seq();
+        return log.append(Events.ROUND_CLOSED, p, mainAgentId, ext, true).seq();
     }
 
     /** 正文流(瞬态,不落盘;主/子同名,agentId 决定归属;同轮共享轮 seq)。 */
     public long delta(String agentId, String text) {
         ObjectNode p = Json.obj();
         p.put("text", text);
-        return log.append(roundSeq(agentId), Events.DELTA, p, agentId, null).seq();
+        return log.append(roundSeq(agentId), Events.DELTA, p, agentId, null, true).seq();
     }
 
     /** 思考流(瞬态,不落盘;主/子同名;同轮共享轮 seq)。 */
     public long thinking(String agentId, String text) {
         ObjectNode p = Json.obj();
         p.put("text", text);
-        return log.append(roundSeq(agentId), Events.THINKING, p, agentId, null).seq();
+        return log.append(roundSeq(agentId), Events.THINKING, p, agentId, null, true).seq();
     }
 
     /** 完成一轮:完整思考 + 正文 + 工具调用下发(真实 id)。落盘的权威记录(主/子同名)。 */
@@ -379,8 +379,8 @@ public final class TaskEvents {
     }
 
     // NOTE:本轮用户任务端到端耗时不再发 task_duration trace——RoundIndexAdvisor 落盘闭合行时
-    // 内联进 rounds.jsonl(计时槽 TaskEntry.roundDurationStart,见 §7.15.1;MeasureDurationAdvisor
-    // 的 recordDuration 仅幂等兜底),前端折叠标记旁展示。
+    // 内联进 rounds.jsonl(开轮时随行落盘 startedAt,闭合时取当前时间减磁盘 startedAt 计算,
+    // 见 §7.15.1;不再内存计时),前端折叠标记旁展示。
     // NOTE:本轮文件变更不再发 kind='file_changes' 的 task.trace——轻量摘要内联进 rounds.jsonl
     // 每轮行(fileChanges 字段),全文单独落盘 file-changes/<roundId>.json,经 task.fileChanges RPC 读取。
 
@@ -484,6 +484,34 @@ public final class TaskEvents {
         return s.configId() == null ? "" : s.configId();
     }
 
+    /**
+     * 模型限流排队 trace(瞬态,不落盘;kind='model_rate_wait'):请求进入排队等待时发,
+     * 前端据此展示「模型「X」正在排队(N/M)」。traceId 稳定(每个请求排队一段用同一 id
+     * 原地 upsert),由 {@code RateLimitedChatModel} 在等待轮询中调用。
+     *
+     * @param traceId    同一次请求排队的稳定 id(空则新建;由调用方跨轮询复用)
+     * @param configId   模型 configId
+     * @param waiters    当前排队的请求数(含本请求)
+     * @param inFlight   当前 in-flight 请求数
+     * @param tpmPressure 当前 tpm 压力(估算,仅展示)
+     * @param waitMs     本次预计等待时长
+     */
+    public String modelRateWait(String traceId, String configId, int waiters, int inFlight,
+            long tpmPressure, long waitMs) {
+        String id = (traceId == null || traceId.isEmpty()) ? ShortIds.next("trace") : traceId;
+        ObjectNode meta = Json.obj();
+        meta.put("configId", configId == null ? "" : configId);
+        meta.put("waiters", waiters);
+        meta.put("inFlight", inFlight);
+        meta.put("tpmPressure", tpmPressure);
+        meta.put("waitMs", waitMs);
+        appendTrace(id, "model_rate_wait", "模型限流排队",
+                "模型「" + (configId == null ? "" : configId) + "」正在排队(在飞 " + inFlight
+                        + " / 排队 " + waiters + ")",
+                null, "waiting", meta, false);
+        return id;
+    }
+
     /** 统一 trace 事件出口:payload 与前端 TaskTraceRecord 同形;persist=false 经 ext 标记为瞬态。 */
     private long appendTrace(String traceId, String kind, String title, String summary,
             String content, String status, JsonNode metadata, boolean persist) {
@@ -505,7 +533,7 @@ public final class TaskEvents {
             p.set("metadata", metadata);
         }
         ObjectNode ext = persist ? null : Json.obj().put("persist", false);
-        return log.append(Events.TASK_TRACE, p, mainAgentId, ext).seq();
+        return log.append(Events.TASK_TRACE, p, mainAgentId, ext, !persist).seq();
     }
 
     /** 收起态摘要:重试进行中的「第 x/总 次 · y 秒后重试」文案。 */

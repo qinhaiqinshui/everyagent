@@ -39,9 +39,9 @@ class TailReadPerformanceTest {
     @BeforeEach
     void setUp() throws Exception {
         WorkerProperties props = new WorkerProperties();
-        props.setDataDir(dataDir.toString());
+        props.setHomeDir(dataDir.toString());
         store = new TaskStore(props); // 只走读路径,无需 start sink 线程
-        taskDir = Files.createDirectories(dataDir.resolve("tasks").resolve("t-perf"));
+        taskDir = Files.createDirectories(dataDir.resolve("workspaces").resolve("defaultworkspace").resolve("tasks").resolve("t-perf"));
     }
 
     private static String row(long seq, String event, String text) {

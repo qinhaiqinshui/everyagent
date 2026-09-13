@@ -4,6 +4,7 @@ import dev.everyagent.contract.frame.Frames;
 import dev.everyagent.contract.ids.Ids;
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.worker.config.WorkerProperties;
+import dev.everyagent.worker.task.ModelRateLimiterRegistry;
 import dev.everyagent.worker.hub.HubPool;
 import dev.everyagent.worker.modules.ConfigStore.ResolvedConfig;
 import dev.everyagent.worker.proto.Channels;
@@ -79,7 +80,7 @@ class FsGitModuleTest {
         @Bean
         @Primary
         ChatModelFactory fakeModelFactory(WorkerProperties props) {
-            return new ChatModelFactory(props) {
+            return new ChatModelFactory(props, new ModelRateLimiterRegistry(props)) {
                 @Override
                 public org.springframework.ai.chat.model.ChatModel build(ResolvedConfig cfg,
                         org.springframework.ai.openai.OpenAiChatOptions options, String agentId) {
@@ -252,6 +253,102 @@ class FsGitModuleTest {
 
     @Test
     @Order(21)
+    void gitShowCommitListsFilesAndContents() throws Exception {
+        // 独立提交场景:新建 + 修改 + 删除 + 二进制,验证 git.show 变更清单与全文。
+        String b64a = Base64.getEncoder().encodeToString("show 内容 A".getBytes(StandardCharsets.UTF_8));
+        rpc("fs.write", p("{\"path\":\"show-a.txt\",\"contentBase64\":\"" + b64a + "\"}"));
+        assertTrue(rpc("git.commit", p("{\"message\":\"show 根提交\"}")).contains("rpc.ok"), "根提交");
+
+        // 提交2:改 a、新建 c、加二进制
+        String b64b = Base64.getEncoder().encodeToString("show 内容 A 改".getBytes(StandardCharsets.UTF_8));
+        rpc("fs.write", p("{\"path\":\"show-a.txt\",\"contentBase64\":\"" + b64b + "\"}"));
+        String b64c = Base64.getEncoder().encodeToString("show 内容 C".getBytes(StandardCharsets.UTF_8));
+        rpc("fs.write", p("{\"path\":\"show-c.txt\",\"contentBase64\":\"" + b64c + "\"}"));
+        String b64bin = Base64.getEncoder().encodeToString(noisyBinaryBytes(4096));
+        rpc("fs.write", p("{\"path\":\"show.bin\",\"contentBase64\":\"" + b64bin + "\"}"));
+        assertTrue(rpc("git.commit", p("{\"message\":\"show 二提\"}")).contains("rpc.ok"), "二提");
+        String log2 = rpc("git.log", p("{}"));
+        String secondId = Json.parse(log2).path("payload").path("result").path("commits").path(0).path("id").asString();
+
+        String s2 = rpc("git.show", p("{\"commit\":\"" + secondId + "\"}"));
+        assertTrue(s2.contains("rpc.ok"), s2);
+        JsonNode files2 = Json.parse(s2).path("payload").path("result").path("files");
+        assertTrue(files2.isArray() && files2.size() >= 3, "应含改 a / 新 c / 二进制: " + s2);
+
+        boolean sawUpdatedA = false;
+        boolean sawCreatedC = false;
+        boolean sawBinary = false;
+        for (JsonNode f : files2) {
+            if (f.path("path").asString().equals("show-a.txt")) {
+                assertEquals("updated", f.path("changeType").asString(), s2);
+                assertTrue(f.path("beforeContent").asString().contains("show 内容 A"), s2);
+                assertTrue(f.path("afterContent").asString().contains("show 内容 A 改"), s2);
+                sawUpdatedA = true;
+            }
+            if (f.path("path").asString().equals("show-c.txt")) {
+                assertEquals("created", f.path("changeType").asString(), s2);
+                assertTrue(f.path("beforeContent").asString().isEmpty(), "新增 before 应为空: " + s2);
+                assertTrue(f.path("afterContent").asString().contains("show 内容 C"), s2);
+                sawCreatedC = true;
+            }
+            if (f.path("path").asString().equals("show.bin")) {
+                assertTrue(f.path("binary").asBoolean(true), "含 NUL 应为二进制: " + s2);
+                assertTrue(!f.has("beforeContent") && !f.has("afterContent"), "二进制不读全文: " + s2);
+                sawBinary = true;
+            }
+        }
+        assertTrue(sawUpdatedA && sawCreatedC && sawBinary, "三类变更都覆盖: " + s2);
+
+        // 提交3:删除 a → deleted
+        assertTrue(rpc("fs.delete", p("{\"path\":\"show-a.txt\"}")).contains("rpc.ok"), "删除 a");
+        assertTrue(rpc("git.commit", p("{\"message\":\"show 删除\"}")).contains("rpc.ok"), "删提");
+        String log3 = rpc("git.log", p("{}"));
+        String thirdId = Json.parse(log3).path("payload").path("result").path("commits").path(0).path("id").asString();
+        String s3 = rpc("git.show", p("{\"commit\":\"" + thirdId + "\"}"));
+        assertTrue(s3.contains("rpc.ok"), s3);
+        JsonNode files3 = Json.parse(s3).path("payload").path("result").path("files");
+        boolean sawDeleted = false;
+        for (JsonNode f : files3) {
+            if (f.path("path").asString().equals("show-a.txt")) {
+                assertEquals("deleted", f.path("changeType").asString(), s3);
+                assertTrue(f.path("beforeContent").asString().contains("show 内容 A 改"), s3);
+                assertTrue(f.path("afterContent").asString().isEmpty(), "删除 after 应为空: " + s3);
+                sawDeleted = true;
+            }
+        }
+        assertTrue(sawDeleted, "应含删除项: " + s3);
+
+        // 根提交:before 为空(log 倒序,最旧的根提交在最后一条)
+        String log1 = rpc("git.log", p("{\"max\":\"50\"}"));
+        JsonNode commits1 = Json.parse(log1).path("payload").path("result").path("commits");
+        String rootId = null;
+        for (JsonNode cnode : commits1) {
+            rootId = cnode.path("id").asString(); // 遍历到最后一条 = 最旧
+        }
+        assertTrue(rootId != null && !rootId.isEmpty(), "应能取到根提交 id");
+        String sRoot = rpc("git.show", p("{\"commit\":\"" + rootId + "\"}"));
+        assertTrue(sRoot.contains("rpc.ok"), sRoot);
+        boolean sawRootCreated = false;
+        for (JsonNode f : Json.parse(sRoot).path("payload").path("result").path("files")) {
+            if (f.path("path").asString().equals("show-a.txt")) {
+                assertEquals("created", f.path("changeType").asString(), "根提交应 created: " + sRoot);
+                assertTrue(f.path("beforeContent").asString().isEmpty(), "根提交父版本应不存在: " + sRoot);
+                assertTrue(f.path("afterContent").asString().contains("show 内容 A"), sRoot);
+                sawRootCreated = true;
+            }
+        }
+        assertTrue(sawRootCreated, "根提交应含 show-a.txt: " + sRoot);
+    }
+
+    @Test
+    @Order(22)
+    void gitShowCommitBadParams() {
+        // 缺 commit / 不存在 commit → 清晰报错,不静默。
+        assertTrue(rpc("git.show", p("{}")).contains("BAD_PARAMS"), "缺 commit 被拒");
+        assertTrue(rpc("git.show", p("{\"commit\":\"deadbeefdeadbeefdeadbeefdeadbeefdeadbeef\"}")).contains("BAD_PARAMS"),
+                "不存在的 commit 被拒");
+    }
+
     void gitCommitLogDiff() {
         String c = rpc("git.commit", p("{\"message\":\"首次提交\"}"));
         assertTrue(c.contains("rpc.ok"), c);
@@ -378,7 +475,7 @@ class FsGitModuleTest {
         assertEquals(WS.toAbsolutePath().normalize().toString(), first.path("root").asString(), w);
         assertTrue(first.path("addedAt").asLong(0) > 0, "注册表字段 {root, addedAt}: " + first);
         assertFalse(w.contains("wsKey"), "wsKey 已随存储维度移除: " + first);
-        assertTrue(Files.exists(workerProps.resolveDataDir().resolve("workspaces.json")),
+        assertTrue(Files.exists(workerProps.resolveWorkspacesDir().resolve("workspaces.json")),
                 "注册表持久化于 data/workspaces.json");
     }
 
@@ -420,7 +517,7 @@ class FsGitModuleTest {
             registered |= stranger.normalize().toString().equals(wsn.path("root").asString());
         }
         assertTrue(registered, "task.run 注册工作区: " + list2);
-        assertTrue(Files.isRegularFile(workerProps.resolveDataDir().resolve("tasks").resolve(taskId)
+        assertTrue(Files.isRegularFile(workerProps.resolveWorkspacesDir().resolve("defaultworkspace").resolve("tasks").resolve(taskId)
                 .resolve("meta.json")),
                 "任务数据住系统目录 data/tasks/<taskId>,不落工作区");
         rpc("task.cancel", "{\"taskId\":\"" + taskId + "\"}");
@@ -490,5 +587,16 @@ class FsGitModuleTest {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
+    }
+
+    /** 生成含 NUL 与高字节的伪随机二进制内容(确保 git 判为二进制)。 */
+    private static byte[] noisyBinaryBytes(int size) {
+        byte[] bytes = new byte[size];
+        java.util.Random rnd = new java.util.Random(0xbeef);
+        rnd.nextBytes(bytes);
+        for (int i = 0; i < bytes.length; i += 16) {
+            bytes[i] = 0; // 每 16 字节插入 NUL,保证判为二进制
+        }
+        return bytes;
     }
 }

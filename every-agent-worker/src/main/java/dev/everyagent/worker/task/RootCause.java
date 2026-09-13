@@ -3,10 +3,10 @@ package dev.everyagent.worker.task;
 /**
  * 异常根因提取(沿 cause 链到底),用于任务失败日志/事件收口。
  *
- * <p>背景:主 agent 的 advisor 链含 4 个 {@code implements BaseAdvisor} 的 advisor
- * (MeasureDuration/SystemInfo/Skill/GitAutoSync),各自用 Spring AI BaseAdvisor 默认
+ * <p>背景:主 agent 的 advisor 链含多个 {@code implements BaseAdvisor} 的 advisor
+ * (SystemInfo/Skill/GitAutoSync 等),各自用 Spring AI BaseAdvisor 默认
  * {@code adviseStream},其 {@code onErrorResume} 会把任意错误包装成
- * {@code IllegalStateException("Stream processing failed", cause)}——嵌套 4 层后
+ * {@code IllegalStateException("Stream processing failed", cause)}——嵌套多层后
  * 完整堆栈数百行 reactor operator 帧刷屏,真实错误(message)被埋在最里层。
  * 收口统一取最内层 cause,一行摘要即可定位。
  */

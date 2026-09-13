@@ -5,6 +5,7 @@ import dev.everyagent.contract.ids.Ids;
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.hub.HubApplication;
 import dev.everyagent.worker.config.WorkerProperties;
+import dev.everyagent.worker.task.ModelRateLimiterRegistry;
 import dev.everyagent.worker.hub.HubPool;
 import dev.everyagent.worker.modules.ConfigStore.ResolvedConfig;
 import dev.everyagent.worker.proto.Channels;
@@ -95,7 +96,7 @@ class MultiHubE2eTest {
         @Bean
         @Primary
         ChatModelFactory fakeModelFactory(WorkerProperties props) {
-            return new ChatModelFactory(props) {
+            return new ChatModelFactory(props, new ModelRateLimiterRegistry(props)) {
                 @Override
                 public org.springframework.ai.chat.model.ChatModel build(ResolvedConfig cfg,
                         org.springframework.ai.openai.OpenAiChatOptions options, String agentId) {
@@ -188,7 +189,7 @@ class MultiHubE2eTest {
         assertTrue(events.stream().anyMatch(e -> e.path("event").asString().equals("message")),
                 "第二 hub 连接可回放");
         // 任务统一落 data/tasks/<taskId>/(不做 owner 分隔)
-        assertTrue(java.nio.file.Files.isRegularFile(workerProps.resolveDataDir().resolve("tasks")
+        assertTrue(java.nio.file.Files.isRegularFile(workerProps.resolveWorkspacesDir().resolve("defaultworkspace").resolve("tasks")
                 .resolve(taskId).resolve("meta.json")), "任务落 data/tasks/<taskId>/");
 
         // hubB 建自己的任务:照常闭环,且不做 owner 隔离 → A 侧同样可见
@@ -196,7 +197,7 @@ class MultiHubE2eTest {
         feB.await(t -> t.contains("\"event\":\"task.updated\"") && t.contains("\"status\":\"done\"")
                 && t.contains(taskB), "B 任务闭环");
         feA1.await(t -> t.contains(taskB), "不做隔离:A 侧也收到 B 的任务通知");
-        assertTrue(java.nio.file.Files.isRegularFile(workerProps.resolveDataDir().resolve("tasks")
+        assertTrue(java.nio.file.Files.isRegularFile(workerProps.resolveWorkspacesDir().resolve("defaultworkspace").resolve("tasks")
                 .resolve(taskB).resolve("meta.json")), "B 任务落 data/tasks/<taskB>/");
         // tasks.list 返回全部(不做 owner 过滤)
         assertTrue(rpc(feB, "tasks.list", "{}").contains(taskId), "B 列表也见 A 任务(返回全部)");
@@ -227,7 +228,7 @@ class MultiHubE2eTest {
 
         // 不做 owner 隔离:任意连接(包括 B)均可删除该任务
         assertTrue(rpc(feB, "task.delete", "{\"taskId\":\"" + taskId + "\"}").contains("\"deleted\":true"));
-        assertFalse(java.nio.file.Files.exists(workerProps.resolveDataDir().resolve("tasks").resolve(taskId)),
+        assertFalse(java.nio.file.Files.exists(workerProps.resolveWorkspacesDir().resolve("defaultworkspace").resolve("tasks").resolve(taskId)),
                 "目录删除");
     }
 

@@ -39,6 +39,8 @@ export interface WorkspaceFileStat {
   isDirectory: boolean
   size: number
   mtimeMs: number
+  /** 创建时间(worker 毫秒;平台不支持时 0,前端按「未知」处理)。 */
+  createdTs: number
 }
 
 /** fs.read 应答:小文件内联 base64,大文件分批。 */
@@ -363,7 +365,7 @@ export const workspaceGateway = {
     wireFsChanged()
     const normalized = normalizeWorkspaceRelativePath(path)
     if (!normalized) {
-      return { path: '/', name: '', isDirectory: true, size: 0, mtimeMs: 0 }
+      return { path: '/', name: '', isDirectory: true, size: 0, mtimeMs: 0, createdTs: 0 }
     }
     const parent = dirname(normalized)
     const name = basename(normalized)
@@ -379,7 +381,7 @@ export const workspaceGateway = {
     wireFsChanged()
     const normalized = normalizeWorkspaceRelativePath(path)
     const result = await rpcForWorkspace(workspaceRoot, 'fs.list', { path: toWorkerPath(normalized) }) as {
-      entries?: Array<{ name: string; dir: boolean; size: number; modifiedTs: number }>
+      entries?: Array<{ name: string; dir: boolean; size: number; modifiedTs: number; createdTs?: number }>
     }
     const entries = result.entries ?? []
     // 行路径沿 n 约定带前导斜杠(如 /data/novels)——资源树节点、expandAncestors
@@ -390,6 +392,7 @@ export const workspaceGateway = {
       isDirectory: entry.dir,
       size: entry.size,
       mtimeMs: entry.modifiedTs,
+      createdTs: entry.createdTs ?? 0,
     }))
   },
 
@@ -402,7 +405,7 @@ export const workspaceGateway = {
     wireFsChanged()
     const normalized = normalizeWorkspaceRelativePath(path)
     const result = await rpcForWorkspace(workspaceRoot, 'fs.reveal', { path: normalized }) as {
-      chain?: Array<{ name: string; dir: boolean; size: number; modifiedTs: number }>
+      chain?: Array<{ name: string; dir: boolean; size: number; modifiedTs: number; createdTs?: number }>
     }
     const chain = result.chain ?? []
     const segments = normalized.split('/').filter(Boolean)
@@ -412,6 +415,7 @@ export const workspaceGateway = {
       isDirectory: entry.dir,
       size: entry.size,
       mtimeMs: entry.modifiedTs,
+      createdTs: entry.createdTs ?? 0,
     }))
   },
 

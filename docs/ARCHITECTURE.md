@@ -217,6 +217,7 @@ worker 端 `RpcDispatcher` 注册方法;应答回**请求来源连接**的 `evt`
 | `task.rounds` | 轮次索引拉取(rounds.jsonl 全部行 + 运行中未闭合轮 open;旧任务首次惰性全量生成落盘) |
 | `task.roundTail` | 按轮起点(startSeq)取该轮末尾 limit 条事件,用于初始渲染 |
 | `task.fileChanges` | 单轮文件变更全文:`file-changes/<roundId>.json` 的 `{changes:[...]}` |
+| `task.search` | 任务内容搜索(内置 rg + worker 后处理):`workspaceId` 必填且必须是稳定 id 形态(`defaultworkspace` / `w_xxxxx`,拒绝路径穿越),按 `workspaces/<workspaceId>/tasks/<taskId>/` 枚举任务目录,复用 rg 搜索 `rounds.jsonl`(每行一轮,含 user/finalReply 正文);入参 `pattern` / `isRegex` / `caseSensitive` / `wholeWord` / `maxResults`(默认 500),pattern 语义与 `fs.search` 共用 `buildMatchArgs`;rg 命中 JSON 原始行后由 worker `parseRoundLine` 解析、对 user/finalReply 干净文本二次匹配(消除字段名/转义噪音,同时得到准确 `matchIndex`/`matchText`);结果项 `{taskId, title, workspace, workspaceId, status, matches:[{roundIndex, field:'user'|'finalReply', line, matchIndex, matchText}]}`,按任务聚合;大结果复用 `rpc.data` 分批 + 末帧 `ok` 汇总(§5.4) |
 | `task.queueRemove` / `task.queueMove` | 删除/重排某条队列输入 |
 | `config.get` | 模型配置只读(Spring 配置承载,见 §7.17) |
 | `workspaces.list` / `workspaces.add` / `workspaces.remove` | 工作区注册表 CRUD(多工作区并行) |
@@ -292,7 +293,7 @@ wss 强制 + 证书;hello 失败限速(防 key 枚举);单 IP / 全局连接数�
 |---|---|
 | **HubPool** | 多 hub 出站连接池:每连接独立 WS 客户端 + 重连循环 + 心跳;路由 API 按命名空间扇出 / 回源 |
 | **EventLog** | 每任务内存日志(运行中);append 即分配 seq;`seed(seqLastOf)` 供再运行接续;尾部只读供 task.poll 归并 |
-| **TaskStore** | 持久层:`data/tasks/<taskId>/` 按 agent 分文件 `*.jsonl`;启动扫描建索引;**随机访问分块反向读取原语**(ReverseLineReader 从文件尾 64KB 块向前扫,不整文件重扫) |
+| **TaskStore** | 持久层:`workspaces/<workspaceId>/tasks/<taskId>/` 按 agent 分文件 `*.jsonl`;启动扫描建索引;**随机访问分块反向读取原语**(ReverseLineReader 从文件尾 64KB 块向前扫,不整文件重扫) |
 | **TaskManager** | 运行编排:创建/取消/再运行(冷启动)/删除;`finish()` 驱逐内存驻留 |
 | **DataPusher / DataPusherManager** | 定向推送器(§7.13):每 (sessionId,taskId) 一个虚拟线程,把运行中任务 EventLog 增量(含瞬态)推到 stream 频道;含**窗口式 credit 背压**(stream.ack) |
 | **ConversationLoader** | 冷启动:从磁盘 jsonl 重建 conversation |
@@ -302,7 +303,7 @@ wss 强制 + 证书;hello 失败限速(防 key 枚举);单 IP / 全局连接数�
 | **功能模块** | ConfigStore(模型配置只读)、WorkspaceManager(工作区注册表)、FsService(沙箱内文件操作)、GitService(工作区 git 快操作 RPC)、NativeGit(宿主原生 git 执行器,§7.12)、GitCredentialStore(git 凭证加密存储) |
 | **任务路由索引** | `taskId → {dir, summary}`(磁盘任务的元数据索引,boot 扫描构建) |
 
-**无修剪、无 retention**:任务永久保留。内存 EventLog 受 `maxEventsPerTask`(默认 50 万)护栏(防 RAM 失控;磁盘 jsonl 全量不受影响)。
+**无修剪、无 retention**:任务永久保留。内存 EventLog 受 `maxEventsPerTask`(默认 50 万)护栏(防 RAM 失控;磁盘 jsonl 全量不受影响)。计数口径:护栏只计**持久(落盘)事件**;流式瞬态事件(delta/thinking 及 `ext.persist=false` 的 trace)虽进内存缓冲供实时推送,但不占用计数——瞬态风暴由 `ModelLengthGuardAdvisor`(§7.3)治理。
 
 ### 7.3 Agent 执行链(Spring AI Advisor 生态)
 
@@ -311,13 +312,15 @@ worker 的 agent 执行**复用 Spring AI 2 框架**,不手搓 agent 循环/工�
 主 agent advisor 链(每 run 新建实例,状态随实例隔离):
 
 ```
-MeasureDurationAdvisor(计时) → SkillAdvisor(skill 渐进式披露索引) → LoopRepeatGuardAdvisor(事件发射 + 工具循环 + 死循环检测)
+RoundIndexAdvisor(轮次索引+耗时,最外层) → SkillAdvisor(skill 渐进式披露索引) → LoopRepeatGuardAdvisor(事件发射 + 工具循环 + 死循环检测)
 → DialogInsertAdvisor(队列项「插入到当前对话」,主 agent 专属) → EmptyResponseRetryAdvisor(空响应重调)
-→ TransientErrorRetryAdvisor(瞬时错误退避) → ContextCompressionAdvisor(上下文压缩,最内层)
+→ TransientErrorRetryAdvisor(瞬时错误退避) → ModelLengthGuardAdvisor(输出预算耗尽护栏,finish_reason=length)
+→ ContextCompressionAdvisor(上下文压缩,最内层)
 ```
 
 - 核心事件发射由 `WorkerToolEventAdvisor` 完成(继承 Spring AI `ToolCallingAdvisor`,重写受保护 hook 发射 delta/message/usage/tool 等事件,**不另起一层重复实现递归循环**)。
 - 重试退避算法由 `worker.retry.strategy` 选择,空响应重试与瞬时错误重试共享:`fixed`(默认,固定 `backoff-base-ms` 间隔、`max-request-retries` 默认 30 次,适合网络抖动场景的稳定节奏恢复)或 `exponential`(`base × factor^(n-1)` 递增退避);未知取值回落 `exponential`(旧行为)。
+- `ModelLengthGuardAdvisor`(order=工具循环+300,瞬时重试内侧、上下文压缩外侧):识别「输出预算耗尽」这一确定性失败——实际收到 `finish_reason=length` 即报错;或流在超 `worker.limits.length-stall-ms`(默认 120s,须短于 model-timeout-ms 的 10 分钟)无任何 chunk 且自估输出 token ≈ 配置 maxTokens(无 tokenizer,CJK≈1 token、其余≈4 字符 1 token,20%~40% 容差)时判定等价 length 并报同一错误。错误为自定义非重试异常(避免被瞬时重试反复退避放大瞬态事件风暴),信息含「精简输入/拆分任务/降低 reasoningEffort/调大 maxTokens」建议,经任务层 error 收口呈现给用户。
 - `LoopRepeatGuardAdvisor` 叠加**死循环检测**:比较本轮与上一轮工具调用签名(名称+参数集合,顺序无关),连续重复达 `worker.limits.max-repeated-tool-rounds`(默认 3)即中断任务(error 收口)。
 - `DialogInsertAdvisor`(普通 StreamAdvisor,在主 agent 的工具循环下行阶段)把任务队列「插入到当前对话」的用户消息 drain 并追加给 AI + 发射 `user.message` 事件;子 agent 按 kind==MAIN 旁路(对话是一次性嵌套,不接收任务队列输入)。
 - 主 Agent 与子 Agent **共用同一执行入口与 Advisor 链**,仅 agentId 不同;子 agent 不挂计时与 skill,但同挂上下文压缩。
@@ -329,6 +332,18 @@ MeasureDurationAdvisor(计时) → SkillAdvisor(skill 渐进式披露索引) →
 - `worker.models` 里新增一种特殊配置项:`model` 字段用逗号分隔的池成员 configId 列表(`model: "deepseek,qwen"`,首个 = 主模型),configId 指向它即「任务默认带容灾」。
 - `ChatModelFactory.buildAgentModel` 遇到该 provider 产出 `ModelPoolChatModel`(组合各成员的 OpenAiChatModel,按序逐个尝试):请求异常(非网络、非终态)时切下一个成员重试——每个成员用**自己的完整 options 快照**(baseUrl/apiKey/model 在构建时固定),成功即返回该成员真实响应;网络异常、空响应耗尽、取消类原样上抛;流式带防重护栏(已下发 chunk 后流中断不切换)。容灾切换发 `task.trace(kind=model_failover)`。
 - 待池耗尽不做包络,最后异常原样上抛,交给外层瞬时错误重试 advisor 退避重跑。
+
+### 7.4.1 模型请求限流(调用端 rpm/并发/tpm 闸门)
+
+**背景**:厂商限的是 rpm/tpm(不是 rps);一次事故即「主 agent 同时派发 8 个子 agent → 8 个长思考流同时全速吐 token → 瞬时叠加撞 429 → 退避重试放大瞬态事件风暴 → LogOverflow」。调用端需要**前置主动限流**,而不是只靠后置 429 重试。
+
+**机制**(`ModelRateLimiter` + `RateLimitedChatModel` 装饰器,挂在 `ChatModelFactory.build` 产物外层;主/子/AI 审议/池成员全部自动生效,见 docs/design-model-rate-limit.md):
+
+- 每模型独立配置(`worker.models[].params`):`rpm`(每分钟发起数,滑动窗口)、`max-concurrency`(同时 in-flight 上限,**长思考重叠的核心闸门**)、`tpm`(可选参考线)、`token-est-factor`(估算系数初始值)。**缺省回退全局默认限流(rpm=60 / max-concurrency=4 / tpm=0),不是裸奔不限流**;某模型要关闭某维度,在其 params 显式设 0。
+- 请求起步经 `ModelRateLimiter.acquire` 排队等放行:rpm 窗口 / 并发信号量 / tpm 压力三关;超限进有界等待队列(默认队列 8、等 5 分钟),**正常排队不报错**,仅队列满 + 超时才抛 `ModelRateLimitException`(非重试,文案含「减少同步派发/调大配置」建议)。
+- **tpm 记账**:流中无协议级 usage(OpenAI 兼容只在末帧带),故流中用自算文本 token 粗估(CJK≈1、其余≈4 字符 1 token)累计;请求完成后用厂商真实 usage 记账入 60s 窗口,并 EMA 反向校准估算系数(`token-est-factor`,每模型独立,持久化 `~/.everyagent/model-rate-state.json`,重启接续)。
+- 全局默认:`worker.limits.model-rate.{queue-capacity, wait-timeout-ms, est-window-sec, est-safety-ratio, est-ema-alpha, default-rpm, default-max-concurrency, default-tpm}`。
+- **观测(P2)**:排队等待发瞬态 `task.trace(kind=model_rate_wait)`(前端展示「模型正在排队」);`config.get` 响应带 `rateStatus` 数组(每模型 inFlight/waiters/factor 等运行态)。
 
 ### 7.5 上下文管理
 
@@ -358,7 +373,7 @@ worker ── HubPool ──┬─ conn₁ (url₁, apiKey₁ → K₁)  订阅 
 ```
 
 - 配置:`worker.hubs: [{url, api-key, hub-key}]`(三者必填)。同 apiKey 配多 hub = 可靠性冗余;不同 apiKey = 一台 worker 服务多个命名空间。
-- **任务不做 owner 隔离**:任务数据统一 `data/tasks/<taskId>/`,任务事件扇出到 worker 的全部连接;`tasks.list` 返回全部任务。数据隔离靠命名空间(不同 apiKey 连接到不同 hub/频道域)+ worker 侧文件沙箱。
+- **任务不做 owner 隔离**:任务数据按工作区归类 `workspaces/<workspaceId>/tasks/<taskId>/`,任务事件扇出到 worker 的全部连接;`tasks.list` 返回全部任务。数据隔离靠命名空间(不同 apiKey 连接到不同 hub/频道域)+ worker 侧文件沙箱。
 - **故障语义**:单连接故障不影响其余连接;全部断开 → 内存任务照跑完落盘(输出无人消费,天然背压),重连后前端从磁盘 ∪ 内存尾部拉取补齐。
 - worker 从不订阅任何 per-task 频道:输入统一走 worker 级 `u.K.worker.<id>.input`(每连接一条),订阅数 O(worker×hub)。
 
@@ -418,7 +433,7 @@ ask 管道承载第二类阻塞请求:**危险操作授权**。`PermissionGate` 
 
 **弹窗形态**:`ask.create{kind:"authorization"}` 三选项(拒绝 / 本轮运行内允许 / 本任务全程允许),答案回传稳定 token `deny`/`run`/`task`;未识别/超时/取消一律按拒绝(安全缺省)。
 
-**两档生效**:`run` 档纯内存,本轮输入处理完即清;`task` 档持久化 `data/tasks/<taskId>/grants.json`,冷启动再运行恢复。
+**两档生效**:`run` 档纯内存,本轮输入处理完即清;`task` 档持久化 `workspaces/<workspaceId>/tasks/<taskId>/grants.json`,冷启动再运行恢复。
 
 **授权粒度**:路径类按「最深已存在祖先 realpath」、动词类按规范化动词,避免同目录/同动词反复弹;同 key 并发只弹一张卡(inFlight future)。
 
@@ -488,7 +503,7 @@ ask 管道承载第二类阻塞请求:**危险操作授权**。`PermissionGate` 
 3. 认证失败 → 读工作区 `.everyagent/.git-credentials.enc` 该 host 条目 → 解密后按 ① 注入重试;
 4. 仍失败 → `rpc.err(AUTH_REQUIRED)` 弹凭证输入(判定 = 非零退出 **且** stderr 命中 `Authentication failed` / `could not read Username` / `could not read Password` 等关键字,避免网络错误/远端 404 误判)。
 
-- **加密存储**:密钥 `<dataDir>/keys/git-credential.key`(首次启动自动生成 32B AES-256);算法 AES/GCM/NoPadding,随机 IV,AAD=host 绑定条目;密文 JSON `{version, entries:{host:{iv,cipher,ts}}}` 存工作区 `.everyagent/.git-credentials.enc`,明文永不落盘。
+- **加密存储**:每工作区一把密钥 `<workspaceRoot>/.everyagent/.git-credential.key`(首次启动自动生成 32B AES-256,与密文 `.git-credentials.enc` 同级);算法 AES/GCM/NoPadding,随机 IV,AAD=host 绑定条目;密文 JSON `{version, entries:{host:{iv,cipher,ts}}}` 存工作区 `.everyagent/.git-credentials.enc`,明文永不落盘。
 - 前端 Git 面板捕获 `AUTH_REQUIRED(host)` → 凭证 Modal(账号/密码/「保存凭证到工作区(加密)」复选框)→ 先带临时凭证重试(克隆时根仍为空),成功后再 `git.credential.save` 落盘。
 - 凭证仅存工作区加密文件与 worker 内存,不经 hub / 前端 localStorage;协议不提供"读取凭证"RPC(save 只进不出)。
 - 自动同步(git 自动提交)保持静默:只走本机凭证 + 加密凭证,不弹窗。
@@ -537,17 +552,25 @@ ask 管道承载第二类阻塞请求:**危险操作授权**。`PermissionGate` 
 ### 7.15 持久化与磁盘布局
 
 ```
-data/                                # <home>/data(EVERYAGENT_HOME 可覆盖;docker 挂卷)
-├─ workspaces.json                   # 工作区注册表 {root, addedAt, externalRoots?}
-├─ workspace-default.json            # 默认工作区纠正后的根覆盖(缺失工作区 redirect 时写入)
-└─ tasks/<taskId>/                   # 任务目录(不再按用户/ownerKey 分目录);永久保留
-   ├─ meta.json                      # TaskSummary(含最近一轮上下文用量、agents 子 agent 台账、任务级开关)+ mainAgentId
-   ├─ grants.json                    # task 档授权 {taskGrants, extraRoots}(§7.8,首次授权时原子写)
-   ├─ <mainAgentId>.jsonl            # 主 agent 会话 + 任务级事件
-   ├─ rounds.jsonl                   # 轮次索引(§7.15.1)
-   ├─ <subAgentId>.jsonl             # 子 agent 独立会话
-   └─ file-changes/<roundId>.json    # 单轮文件变更记录(经 task.fileChanges 拉取)
+~/.everyagent/                       # <home>(EVERYAGENT_HOME 可覆盖;docker 挂卷)
+├─ defaultworkspace/                 # 默认工作区根(原 workspace/ 改名,自动注册 id=defaultworkspace)
+│   └─ .everyagent/                  # 工作区级 git 凭证加密存储(密文 .git-credentials.enc + 密钥 .git-credential.key 同级,§7.12)
+├─ workspaces/
+│   ├─ workspaces.json               # 唯一工作区注册表 {id, root, addedTs, lastActivityTs?, externalRoots?}(默认工作区也在册)
+│   ├─ defaultworkspace/tasks/<taskId>/      # 默认工作区任务目录;永久保留
+│   │   ├─ meta.json                 # TaskSummary(含 workspaceId、最近一轮上下文用量、agents 子 agent 台账、任务级开关)+ mainAgentId
+│   │   ├─ grants.json               # task 档授权 {taskGrants, extraRoots}(§7.8,首次授权时原子写)
+│   │   ├─ <mainAgentId>.jsonl       # 主 agent 会话 + 任务级事件
+│   │   ├─ rounds.jsonl              # 轮次索引(§7.15.1)
+│   │   ├─ <subAgentId>.jsonl        # 子 agent 独立会话
+│   │   └─ file-changes/<roundId>.json   # 单轮文件变更记录(经 task.fileChanges 拉取)
+│   └─ w_xxxxx/tasks/<taskId>/       # 其它工作区任务目录(结构同默认工作区)
+├─ sandbox/                          # 沙箱持久状态(home/opt/usr-local/resolv.conf/env;worker.sandbox.persistent-root 可覆盖)
+│   └─ distro/                       # WSL 托管发行版 rootfs(原 wsl/distro 迁入;运行期状态,可整体重装)
+└─ skills/                           # 内置 skill 知识包(启动时从 classpath 物化)
 ```
+
+**旧布局迁移**:`data/` 与 `wsl/` 目录已彻底删除;存量旧数据由独立迁移脚本手动执行一次迁移——`python3 scripts/migrate-workspaces.py [--home <EVERYAGENT_HOME>]`(幂等、可重试,不随 worker 启动自动跑;迁移逻辑为 Python,不依赖 mvn 打包)。
 
 **五项持久化规则**(实现定死):
 
@@ -561,8 +584,8 @@ data/                                # <home>/data(EVERYAGENT_HOME 可覆盖;doc
 
 主 agent 侧生成轮次索引(每行一轮:用户输入 → 主 agent 最终回复):
 
-- 行格式:`{index, startSeq, endSeq, user, finalReply, processCount, subs, durationMs, fileChanges, userMessage}`;seq 一律字符串;`endSeq=""` = 未闭合轮;`processCount` = 该轮开区间内过程事件数(0 = 纯问答轮,前端不显示折叠标记);`userMessage` = 完整 user.message payload(懒加载骨架)。
-- 增量写:消费用户输入即 `openRoundAtStart` 落一行 `endSeq=""`;`RoundIndexAdvisor` 在主 agent 最终回复后 `rewriteRound` 原位改写闭合(临时文件 + 原子 move,与追加同锁串行)。**`durationMs` 随闭合行同一次落盘内联写入**(读 `MeasureDurationAdvisor` 组装时打点的 per-run 计时槽 `TaskEntry.roundDurationStart`),`round.closed` 通知在闭合行落盘**之后**推送——前端收到通知拉 `task.rounds` 时耗时必已就位。历史上「先闭合推送、后单独回填耗时」的两段写存在竞态:前端在回填完成前拉快照会拿到 `durationMs=0` 且无后续刷新触发,表现为本轮耗时不显示(重连才恢复)。`RoundIndexStore.recordDuration` 保留为幂等兜底(行内已有耗时即跳过,覆盖非流式等旁路)。
+- 行格式:`{index, startSeq, endSeq, user, finalReply, durationMs, startedAt, subs, fileChanges, userMessage}`;seq 一律字符串;`endSeq=""` = 未闭合轮;`startedAt` = 开轮落盘时刻(epoch 毫秒,耗时从磁盘算的起点;`durationMs` = 闭合时当前时间 − startedAt);`userMessage` = 完整 user.message payload(懒加载骨架)。
+- 增量写:消费用户输入即 `openRoundAtStart` 落一行 `endSeq=""`(并把 `startedAt = System.currentTimeMillis()` 随行落盘);`RoundIndexAdvisor` 在主 agent 最终回复后 `rewriteRound` 原位改写闭合(临时文件 + 原子 move,与追加同锁串行)。**`durationMs` 随闭合行同一次落盘内联写入**——耗时不再内存中计算:闭合轮时 `applyRounds` 取当前时间减去磁盘行的 `startedAt`(开轮落盘时刻)得到;任务出错停止后继续(续跑改判闭合)也以最初开轮时刻计耗时,跨运行延续不失真。`round.closed` 通知在闭合行落盘**之后**推送——前端收到通知拉 `task.rounds` 时耗时必已就位。历史上「先闭合推送、后单独回填耗时」的两段写存在竞态:前端在回填完成前拉快照会拿到 `durationMs=0` 且无后续刷新触发,表现为本轮耗时不显示(重连才恢复)。旧行/scan 行无 `startedAt`(0)时闭合不计算耗时(保持 0,优雅降级)。
 - 旧任务首次 `task.rounds` 惰性全量生成落盘;任务终态 do `finalizeRounds` 补写未闭合轮。中断/失败/取消的未闭合轮自然保留。
 - 前端"双击打开任务" = 拉 meta → 一次 `task.rounds` 渲染折叠轮次 → 展开按 seq 区间懒加载过程内容。
 
@@ -581,7 +604,7 @@ data/                                # <home>/data(EVERYAGENT_HOME 可覆盖;doc
 
 ```
 worker(进程)
-├─ WorkerConfig:workerId、hubs[{url,apiKey,hubKey}]、homeDir(系统目录)、skillsDir、workspaceRoot(默认工作区初始值)、
+├─ WorkerConfig:workerId、hubs[{url,apiKey,hubKey}]、homeDir(系统目录)、skillsDir、workspaceRoot(默认工作区根,默认 `<home>/defaultworkspace`)、
 │              limits{maxConcurrentTasks(20)、maxConcurrentSubs、askTimeoutMs(30min)、subWaitTimeoutMs(5min)、
 │              maxEventsPerTask(50万)、context 系列、maxRepeatedToolRounds(3)}
 ├─ ModelConfig[]:configId、provider、baseUrl、model、params、default   ← 由 Spring 配置承载(§7.17)
@@ -601,7 +624,7 @@ worker(进程)
 
 | 实体 | 字段 | 说明 |
 |---|---|---|
-| **Task** | taskId(短 ID `t_…`)、workerId、title?、workspace(meta 属性)、status、modelSnapshot、createdAt/startedAt/endedAt、summary?、error?、usage、inputQueue、agents、asks、eventLog、mainAgentId | modelSnapshot 为创建时快照;usage 聚合值 |
+| **Task** | taskId(短 ID `t_…`)、workerId、title?、workspaceId/workspace(均 meta 属性)、status、modelSnapshot、createdAt/startedAt/endedAt、summary?、error?、usage、inputQueue、agents、asks、eventLog、mainAgentId | modelSnapshot 为创建时快照;usage 聚合值 |
 | **Agent** | agentId(主 `a_…` / 子 `sub_…`)、taskId、parentId、kind(main/sub)、title、status、systemPrompt、toolset、conversation、usage、createdAt/endedAt | 主/子统一建模;子的 toolset 剔除 agent 工具(结构性禁递归) |
 | **Message** | messageId、role(system/user/assistant/tool)、content、toolCalls?、toolCallId?、ts、meta{compressed?} | LLM 语义条目,仅存 conversation |
 | **Event** | taskId、seq、ts、event、agentId、payload、ext? | 不可变;文件行 agentId 恒非空;瞬态不入盘 |
@@ -647,21 +670,21 @@ Input:  queued → consumed | discarded(任务取消)
 | `application-hub.yaml` | 【可选】hub 用户配置覆盖 |
 | `application-dev.yaml` | 【可选】开发覆盖(IDEA 经 additional-location 显式指定) |
 | `skills/` | 内置 skill 知识包(启动时从 classpath 物化,AI 经 read_file 只读访问) |
-| `workspace/` | 默认工作区(注册表首项,始终在册) |
-| `wsl/distro/` | WSL 托管发行版 rootfs(运行期状态,可整体重装) |
-| `data/` | 工作区注册表 `workspaces.json` + 任务数据 `tasks/<taskId>/` |
+| `defaultworkspace/` | 默认工作区根(原 `workspace/` 改名,自动注册 id=defaultworkspace,始终在册;内含 `.everyagent/` 工作区级 git 凭证加密存储) |
+| `workspaces/` | 唯一工作区注册表 `workspaces.json` + 按工作区归类的任务数据 `workspaces/<workspaceId>/tasks/<taskId>/` |
+| `sandbox/` | 沙箱持久状态(home/opt/usr-local/resolv.conf/env;`worker.sandbox.persistent-root` 可覆盖);内含 `distro/` = WSL 托管发行版 rootfs(原 `wsl/distro` 迁入,运行期状态,可整体重装) |
 
 **配置分层**:进程配置全部来自 jar 内 `application.yml` 默认 + `~/.everyagent/application-*.yaml` 用户覆盖(`spring.config.additional-location: optional:file:${EVERYAGENT_HOME:${user.home}/.everyagent}/application-worker.yaml`,自动加载,无自定义则零配置文件)。**模型配置由 `worker.models`(Spring 配置)承载**,默认在 jar 内(apiKey 占位符),真实 key 只写用户覆盖文件(机器级、不进工作区、不进 jar/git、不进事件日志)。
 
 **程序附属文件**:rg 二进制、eagent-run.py、WSL 托管镜像统一放**程序根 `<程序根>/runtime/`**(程序根 = JVM 工作目录 user.dir;打包态 = resources 目录,IDE 态 = 仓库根),随安装包分发、运行时只读引用、以字面相对路径 `./runtime` 解析;不打进 jar、不写入系统目录。`worker.program-dir` 配置用于打包态显式指定。
 
-**多工作区并行**:`data/workspaces.json` 注册表 `{root, addedAt, externalRoots?}`;`fs.*`/`git.*`/`task.run`(新建)每次调用**必带 `workspace` 参数**(绝对路径),沙箱根在调用时按该参数解析;默认工作区始终在册、不可移除;注册表变化广播 `workspaces.changed`(快照每条约目含缺失标记 `missing`);写操作广播 `fs.changed{workspace,path,kind}`,前端按工作区分组刷新。
+**多工作区并行**:注册表 `workspaces/workspaces.json` 条目 `{id, root, addedTs, lastActivityTs?, externalRoots?}`,引入**稳定 workspaceId**——默认工作区 id 恒为 `defaultworkspace`;其它工作区首次注册用 ShortIds 生成 `w_xxxxx` 短 id,落盘进注册表 `id` 字段,此后不变。默认工作区根默认 `<home>/defaultworkspace` 并自动注册进注册表(id=defaultworkspace),始终在册、不可移除。`fs.*`/`git.*`/`task.run`(新建)每次调用**必带 `workspace` 参数**(绝对路径),沙箱根在调用时按该参数解析;注册表变化广播 `workspaces.changed`(`workspaces.list` 与快照每项带 `id`、`addedAt`、`lastActivityAt`(任务收口刷新,旧条目回退注册时间),仍带 `defaultRoot`;缺失项含缺失标记 `missing`);写操作广播 `fs.changed{workspace,path,kind}`,前端按工作区分组刷新。**任务收口按「最后活动时间」倒序渲染**:收口路径(`TaskManager.finish`)经独立组件 `WorkspaceActivityTracker` 刷新任务挂靠工作区的 `lastActivityTs` 并广播(失败不阻塞收口);前端 `workspaceRegistry` 合并后按 `lastActivityAt ?? addedAt` 倒序,任务面板 / 文件管理器 / 源代码管理器渲染工作区顺序一致地对齐「最近活动的在最上面」。
 
 **工作区外部授权根(externalRoots)**:工作区条目的 `externalRoots` 字段(realpath 规范化路径数组)承载用户经 `@` 弹窗 `+` 图标显式选择的工作区外路径(§7.16),授权语义 = **完全读写(READ+WRITE+EXEC)**——「用户显式选择=已授权」:文件路径责任链 `ExternalRootAllowCheck` 放行环直接放行、不弹授权 ask(§7.8),各沙箱后端按 §7.10 消费。**注册规则**:目录=自身、文件=父目录;去重与包含吸收(新根被已有根包含 → 跳过,已有根被新根包含 → 替换);复用 `OverBroadRootCheck` 语义拒收过宽根(盘根、工作区祖先/工作区自身)。**生命周期为工作区级**(跟工作区走,非任务级);`workspaces.remove` 删除工作区时级联清理:仅 wsl-direct 后端,对该工作区**独有**(其余工作区 externalRoots 的 realpath 均未引用)的根 best-effort umount——`wsl.exe -d eagent -u root -e umount <挂载点>`(挂载点 = `WslPathMapper.toDirectMount(原生路径)`),失败 lazy umount 兜底,仍失败仅 WARN 不阻塞删除;bwrap 按次 bind 天然跟随,mic 标注幂等无残留。
 
-**启动自检(工作区被移动/删除)**:worker 启动时校验 `workspaces.json` 载入的已注册目录,缺失者(用户移动/删除目录后重启)在注册表快照标记 `missing`并广播,前端弹窗要求二选一——`workspaces.resolveMissing {action:"delete"}` 删除注册并级联删除挂靠任务数据,或 `{action:"redirect",newRoot}` 纠正到移动后的新目录并把挂靠任务的 `meta.workspace` 一并迁移;默认工作区不可删除、只可纠正(纠正会持久化新的默认根覆盖,重启不再按旧配置恢复)。未落定的缺失工作区 `resolve` 拒绝,避免沙箱挂载失败或静默新建空目录掩盖数据丢失。
+**启动自检(工作区被移动/删除)**:worker 启动时校验 `workspaces/workspaces.json` 载入的已注册目录,缺失者(用户移动/删除目录后重启)在注册表快照标记 `missing`并广播,前端弹窗要求二选一——`workspaces.resolveMissing {action:"delete"}` 删除注册并**直接删 `workspaces/<wsId>/` 整个目录(任务数据随删)**,或 `{action:"redirect",newRoot}` 纠正到移动后的新目录——**保留 `id`、只改 `root` 并迁移挂靠任务的 `meta.workspace`,任务目录不搬**;默认工作区不可删除、只可纠正(纠正后的根直接写回 `workspaces.json` 中 id=defaultworkspace 条目的 `root`,重启读回,不再需要 `workspace-default.json` 覆盖文件)。未落定的缺失工作区 `resolve` 拒绝,避免沙箱挂载失败或静默新建空目录掩盖数据丢失。
 
-**skill 只读例外**:系统目录 `skills/` 是 AI 文件工具对系统路径的**唯一只读免授权**例外——`read_file` 经权限责任链节点 `SkillsReadAllowCheck` 直接放行(realpath 前缀判定);**任何写操作不在此放行,仍走授权决议链**;其余系统路径(data/、runtime/ 等)与普通工作区外目录同权,一律走授权决议(弹窗/AI 审议)。
+**skill 只读例外**:系统目录 `skills/` 是 AI 文件工具对系统路径的**唯一只读免授权**例外——`read_file` 经权限责任链节点 `SkillsReadAllowCheck` 直接放行(realpath 前缀判定);**任何写操作不在此放行,仍走授权决议链**;其余系统路径(workspaces/、sandbox/、runtime/ 等)与普通工作区外目录同权,一律走授权决议(弹窗/AI 审议)。
 
 ---
 
@@ -835,7 +858,7 @@ docker-compose 一键:`HUB_KEY=你的密钥 docker-compose up --build`;数据落
 | D17 | hub 不做角色×频道 ACL 矩阵,只留连接级命名空间校验;同命名空间互信 | hub 是 RPC 转发中心,业务规则住 worker;个人部署可接受 |
 | D18 | 运行即销毁 + 冷启动:终态驱逐内存驻留,再运行从磁盘载入 | 内存不随历史任务数增长;磁盘唯一真相源 |
 | D19 | worker 多 hub 注册(HubPool):事件按连接扇出、RPC 回源 | 同 key 多 hub 冗余 / 多命名空间共用一台 worker;hub 零改动 |
-| D20 | **任务数据统一 `data/tasks/<taskId>/`(不做 owner 隔离)** | 单人部署简化;数据边界靠命名空间 + 文件沙箱 |
+| D20 | **任务数据按工作区归类 `workspaces/<workspaceId>/tasks/<taskId>/`(不做 owner 隔离)** | 单人部署简化;数据边界靠命名空间 + 文件沙箱;删除工作区即随删该区任务数据 |
 | D21 | 事件分类:瞬态(delta/thinking)只发前端消耗 seq;持久(message 等)落盘回放 | 流式体验与权威记录分层 |
 | D22 | 按 agent 分文件 `<agentId>.jsonl`,行内恒记 agentId | agentId 即 conversationId;冷启动与回放归并单位 |
 | D23 | 输入走 worker 级频道 `u.K.worker.<id>.input` | 订阅数 O(worker×hub) 不随任务数增长 |

@@ -111,9 +111,9 @@ class WorkerPropertiesTest {
     void sandboxPersistentRootResolvesToDataDirSandboxByDefault() {
         WorkerProperties props = new WorkerProperties();
         props.setHomeDir("");
-        // 默认:persistent-root 为空 → <数据目录>/sandbox;数据目录默认 <系统目录>/data
+        // 默认:persistent-root 为空 → <系统目录>/sandbox(数据目录已移除,sandbox 升顶级)
         java.nio.file.Path root = props.resolveSandboxPersistentRoot();
-        assertEquals(props.resolveDataDir().resolve("sandbox").toAbsolutePath().normalize(), root);
+        assertEquals(props.resolveHomeDir().resolve("sandbox").toAbsolutePath().normalize(), root);
     }
 
     @Test

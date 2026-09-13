@@ -45,6 +45,9 @@ public final class RpcMethods {
     /** 工作区文本内容搜索(内置 rg,架构 §5.10):jailed 到工作区根,JSON lines 解析为
      * 结构化结果;大结果复用 fs.read 的 rpc.data 分批 + 末帧 ok 汇总。 */
     public static final String FS_SEARCH = "fs.search";
+    /** 任务内容搜索(内置 rg + worker 后处理):按 workspaceId 枚举任务,搜索 rounds.jsonl
+     * 轮次索引,解析 JSON 后对 user/finalReply 干净文本二次匹配消除字段名噪音。 */
+    public static final String TASK_SEARCH = "task.search";
     /** 斜杠命令清单(动态注册,数据来源下沉 worker;前端只负责渲染与插入)。 */
     public static final String SLASH_LIST = "slash.list";
     /** 斜杠命令选中:携带 token 与 taskId 触发条目 selectHandler(taskId 可空=草稿态,不写任务 meta)。 */
@@ -58,6 +61,8 @@ public final class RpcMethods {
     public static final String GIT_STATUS = "git.status";
     public static final String GIT_LOG = "git.log";
     public static final String GIT_DIFF = "git.diff";
+    /** 读取某次提交的变更文件清单与全文(历史详情/恢复此版本;必带 commit)。 */
+    public static final String GIT_SHOW = "git.show";
     public static final String GIT_COMMIT = "git.commit";
     public static final String GIT_PULL = "git.pull";
     public static final String GIT_PUSH = "git.push";

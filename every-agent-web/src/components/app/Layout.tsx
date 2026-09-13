@@ -53,6 +53,7 @@ import {
   createWorkspacePluginTab,
   createWorkspaceDiffTab,
   createWorkspacePageTab,
+  createWorkspaceGitHistoryTab,
   filterWorkspaceTabs,
   removeWorkspaceTab,
   upsertWorkspaceTab,
@@ -430,11 +431,13 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
     input: {
       filePath: string
       fileName: string
-      changeType: 'created' | 'updated'
+      changeType: 'created' | 'updated' | 'deleted'
       beforeContent: string
       afterContent: string
       workspaceRoot?: string
       title?: string
+      binary?: boolean
+      allowRestore?: boolean
     },
   ): string => {
     const tabTitle = input.title && input.title.trim()
@@ -448,6 +451,8 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
       beforeContent: input.beforeContent,
       afterContent: input.afterContent,
       workspaceRoot: input.workspaceRoot,
+      ...(input.binary !== undefined ? { binary: input.binary } : {}),
+      ...(input.allowRestore !== undefined ? { allowRestore: input.allowRestore } : {}),
     })
     openWorkspaceTab(nextDiffTab)
     return nextDiffTab.id
@@ -487,6 +492,25 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
       pluginTabType,
       pluginId,
       data,
+      title: tabTitle,
+    })
+    openWorkspaceTab(nextTab)
+    return nextTab.id
+  }, [openWorkspaceTab])
+
+  const openGitHistoryTab = React.useCallback((input: {
+    workspaceRoot: string
+    path: string
+    name: string
+    title?: string
+  }): string => {
+    const tabTitle = input.title && input.title.trim()
+      ? input.title.trim()
+      : `Git 历史：${input.name}`
+    const nextTab = createWorkspaceGitHistoryTab({
+      workspaceRoot: input.workspaceRoot,
+      path: input.path,
+      name: input.name,
       title: tabTitle,
     })
     openWorkspaceTab(nextTab)
@@ -735,6 +759,7 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
     openTaskChatTab,
     openPluginTab,
     openDiffTab,
+    openGitHistoryTab,
   }), [
     activeSidebarPanelId,
     activeWorkspaceTab,
@@ -745,6 +770,7 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
     openGlobalFileTab,
     openPluginTab,
     openDiffTab,
+    openGitHistoryTab,
     renameFileTabs,
     selectedFilePath,
     workspaceFileLocateRequest,

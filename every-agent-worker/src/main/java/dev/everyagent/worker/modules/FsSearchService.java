@@ -300,22 +300,9 @@ public class FsSearchService {
      */
     static List<String> buildArgs(String pattern, boolean isRegex, boolean caseSensitive,
             boolean wholeWord, List<String> includeGlobs, List<String> excludeGlobs) {
-        String effective = pattern;
-        if (wholeWord) {
-            String body = isRegex ? pattern : escapeRegex(pattern);
-            effective = "\\b(?:" + body + ")\\b";
-        }
         List<String> args = new ArrayList<>();
         args.add("--hidden");
-        args.add("--json");
-        args.add("--crlf");
-        args.add("--no-config");
-        args.add(caseSensitive ? "--case-sensitive" : "--ignore-case");
-        if (!isRegex && !wholeWord) {
-            args.add("--fixed-strings");
-        }
-        args.add("-e");
-        args.add(effective);
+        args.addAll(buildMatchArgs(pattern, isRegex, caseSensitive, wholeWord));
         if (!includeGlobs.isEmpty()) {
             args.add("-g");
             args.add("!*");
@@ -329,6 +316,40 @@ public class FsSearchService {
             args.add("!" + g);
         }
         args.add(".");
+        return args;
+    }
+
+    /**
+     * 匹配语义段({@code --json --crlf --no-config} + 大小写/固定串/全字 + {@code -e pattern}):
+     * fs.search 与 task.search 共用,保证两类搜索的 pattern 语义一致;不含 {@code --hidden}/
+     * glob/搜索路径(由调用方按各自目标补齐)。
+     * <ul>
+     *   <li>大小写:不敏感(缺省)加 {@code --ignore-case},敏感加 {@code --case-sensitive};</li>
+     *   <li>固定串(isRegex=false 且非全字):pattern <b>原样</b> + {@code --fixed-strings}
+     *       ——rg -F 是纯字节字面量匹配、不做反转义,转义与 -F 并用会让含元字符的搜索词
+     *       (如 {@code C++}、{@code foo.bar})失效;</li>
+     *   <li>全字:不用 -w,由本侧包 {@code \b(?:...)\b} 后按正则传(包裹后必为正则模式,
+     *       不能再加 --fixed-strings,否则 \b 会被当字面量);固定串先转义正则元字符再包裹,
+     *       保持字面量语义。</li>
+     * </ul>
+     */
+    static List<String> buildMatchArgs(String pattern, boolean isRegex, boolean caseSensitive,
+            boolean wholeWord) {
+        String effective = pattern;
+        if (wholeWord) {
+            String body = isRegex ? pattern : escapeRegex(pattern);
+            effective = "\\b(?:" + body + ")\\b";
+        }
+        List<String> args = new ArrayList<>();
+        args.add("--json");
+        args.add("--crlf");
+        args.add("--no-config");
+        args.add(caseSensitive ? "--case-sensitive" : "--ignore-case");
+        if (!isRegex && !wholeWord) {
+            args.add("--fixed-strings");
+        }
+        args.add("-e");
+        args.add(effective);
         return args;
     }
 

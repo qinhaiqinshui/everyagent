@@ -62,7 +62,7 @@ class ExternalFileTokenResolverTest {
     private static WorkerProperties props(Path home, Path data, Path defaultWs) {
         WorkerProperties p = new WorkerProperties();
         p.setHomeDir(home.toString());
-        p.setDataDir(data.toString());
+        p.setHomeDir(data.toString());
         p.setWorkspaceRoot(defaultWs.toString());
         return p;
     }
@@ -70,7 +70,7 @@ class ExternalFileTokenResolverTest {
     private static TaskEntry task(String workspaceRoot) {
         ModelSnapshot snap = new ModelSnapshot("cfg", "openai-compat",
                 "http://localhost:9999/v1", "m", null);
-        return new TaskEntry("t-1", "任务", snap, "k", workspaceRoot, "main-agent", 10_000);
+        return new TaskEntry("t-1", "任务", snap, "k", workspaceRoot, "defaultworkspace", "main-agent", 10_000);
     }
 
     /** 构造 external_file opaque token(absolutePath 传 null = payload 缺该字段)。 */

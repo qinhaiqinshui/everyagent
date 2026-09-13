@@ -272,6 +272,13 @@ function GitWorkspaceGroupPanel({
   } | null>(null)
   /** 更改树容器(右键菜单 MenuList 的锚元素)。 */
   const treeRef = React.useRef<HTMLDivElement | null>(null)
+  /** 工作区级「Git 历史」折叠区:默认折叠,首次展开时才调用原生 git log 并缓存。 */
+  const [historyExpanded, setHistoryExpanded] = React.useState(false)
+  const [historyCommits, setHistoryCommits] = React.useState<GitLogCommit[]>([])
+  const [historyLoading, setHistoryLoading] = React.useState(false)
+  const [historyError, setHistoryError] = React.useState('')
+  /** 首次展开缓存标记:已成功加载过则折叠/再展开不再重复请求,除非手动刷新。 */
+  const [historyLoaded, setHistoryLoaded] = React.useState(false)
 
   const connected = hub.state === 'open'
   const hasWorker = hub.directory.some((w) => w.online && w.enabled && w.hasApiKey && !w.error && !w.connecting)
@@ -280,10 +287,8 @@ function GitWorkspaceGroupPanel({
     if (!workspaceRoot) return
     setBusy('status')
     try {
-      const [statusResult, ] = await Promise.all([
-        gitGateway.status(workspaceRoot),
-        gitGateway.log(workspaceRoot, 30).catch(() => []),
-      ])
+      // 历史提交不再随刷新预取(结果此前被丢弃):工作区「Git 历史」折叠区懒加载,展开时才调 git.log。
+      const statusResult = await gitGateway.status(workspaceRoot)
       setInitialized(true)
       setStatus(statusResult)
     } catch (refreshError) {
@@ -299,6 +304,36 @@ function GitWorkspaceGroupPanel({
       setBusy(null)
     }
   }, [workspaceRoot, message])
+
+  // 工作区「Git 历史」加载:首次展开时调用并缓存;手动刷新(带 toast 报错)强制重新拉取。
+  const loadWorkspaceHistory = React.useCallback(async (showErrorToast: boolean) => {
+    setHistoryLoading(true)
+    setHistoryError('')
+    try {
+      const rows = await gitGateway.log(workspaceRoot, 50)
+      setHistoryCommits(rows)
+      setHistoryLoaded(true)
+    } catch (historyLoadError) {
+      const text = historyLoadError instanceof GitNotInitializedError
+        ? '此工作区不是 Git 仓库'
+        : (historyLoadError instanceof Error ? historyLoadError.message : String(historyLoadError))
+      if (showErrorToast) {
+        // 手动刷新失败:已有缓存数据保留,仅弹 toast 提示。
+        message.error(`刷新 Git 历史失败:${text}`)
+      } else {
+        // 首次加载失败:不置 loaded,折叠再展开会重试。
+        setHistoryError(text)
+      }
+    } finally {
+      setHistoryLoading(false)
+    }
+  }, [workspaceRoot, message])
+
+  // 首次展开缓存:未加载过才请求;折叠→再展开直接使用缓存,不重复调 git.log。
+  React.useEffect(() => {
+    if (!historyExpanded || historyLoaded || historyLoading) return
+    void loadWorkspaceHistory(false)
+  }, [historyExpanded, historyLoaded, historyLoading, loadWorkspaceHistory])
 
   React.useEffect(() => {
     if (connected && hasWorker) {
@@ -775,7 +810,6 @@ function GitWorkspaceGroupPanel({
       </div>
       {!collapsed && (
         <>
-          <div style={workspaceRootStyle} title={workspaceRoot}>{workspaceRoot}</div>
           {initialized === false ? (
         <GitNotInitializedView
           disabled={busy !== null}
@@ -910,6 +944,73 @@ function GitWorkspaceGroupPanel({
               />
             </div>
           )}
+          {initialized === true ? (
+            <div style={historySectionStyle}>
+              <div
+                style={historyHeaderStyle}
+                role="button"
+                tabIndex={0}
+                title={historyExpanded ? '折叠 Git 历史' : '展开 Git 历史'}
+                onClick={() => setHistoryExpanded((current) => !current)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault()
+                    setHistoryExpanded((current) => !current)
+                  }
+                }}
+              >
+                <span style={groupChevronButtonStyle}>
+                  {historyExpanded ? (
+                    <ChevronDownIcon size={12} style={groupChevronStyle} />
+                  ) : (
+                    <ChevronRightIcon size={12} style={groupChevronStyle} />
+                  )}
+                </span>
+                <span style={historyHeaderTitleStyle}>Git 历史</span>
+                {historyExpanded && !historyLoading && !historyError ? (
+                  <span style={historyCountStyle}>{historyCommits.length}</span>
+                ) : null}
+                <span style={{ flex: 1, minWidth: 0 }} aria-hidden />
+                {historyExpanded ? (
+                  <button
+                    type="button"
+                    style={historyRefreshButtonStyle}
+                    title="刷新 Git 历史"
+                    aria-label="刷新 Git 历史"
+                    disabled={historyLoading}
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      void loadWorkspaceHistory(true)
+                    }}
+                  >
+                    <RefreshIcon busy={historyLoading} />
+                  </button>
+                ) : null}
+              </div>
+              {historyExpanded ? (
+                historyLoading ? (
+                  <div style={historyStatusStyle}>
+                    <InlineSpinner size={12} color="currentColor" trackColor="transparent" /> 正在加载提交历史…
+                  </div>
+                ) : historyError ? (
+                  <div style={historyStatusStyle}>{historyError}</div>
+                ) : historyCommits.length === 0 ? (
+                  <div style={historyStatusStyle}>暂无提交</div>
+                ) : (
+                  <div style={historyListStyle}>
+                    {historyCommits.map((commit) => (
+                      <div key={commit.id} style={historyRowStyle}>
+                        <span style={historyShortIdStyle}>{commit.shortId || commit.id.slice(0, 8)}</span>
+                        <span style={historyMessageStyle} title={commit.message}>{commit.message || '(无提交说明)'}</span>
+                        <span style={historyMetaStyle} title={commit.author}>{commit.author || commit.email || ''}</span>
+                        <span style={historyTimeStyle}>{formatHistoryTime(commit.ts)}</span>
+                      </div>
+                    ))}
+                  </div>
+                )
+              ) : null}
+            </div>
+          ) : null}
           {diffLoadingPath ? (
             <div style={diffLoadingStyle}>
               <InlineSpinner size={13} color="currentColor" trackColor="transparent" /> 正在加载 {diffLoadingPath} 的差异…
@@ -1046,6 +1147,19 @@ function GitNotInitializedView({
       </div>
     </div>
   )
+}
+
+/** 提交时间戳(毫秒)格式化为「年-月-日 时:分」。 */
+function formatHistoryTime(ts: number): string {
+  if (!ts || Number.isNaN(ts)) return ''
+  const date = new Date(ts)
+  const pad = (num: number) => String(num).padStart(2, '0')
+  const year = date.getFullYear()
+  const month = pad(date.getMonth() + 1)
+  const day = pad(date.getDate())
+  const hours = pad(date.getHours())
+  const minutes = pad(date.getMinutes())
+  return `${year}-${month}-${day} ${hours}:${minutes}`
 }
 
 /** 工作区显示名:根路径最后一段(如 D:\projects\novel → novel)。 */
@@ -1197,16 +1311,6 @@ const groupBadgeStyle: React.CSSProperties = {
   flexShrink: 0,
 }
 
-const workspaceRootStyle: React.CSSProperties = {
-  fontSize: 'var(--text-xs)',
-  color: 'var(--text-muted)',
-  fontFamily: '"Cascadia Code", "Fira Code", Consolas, monospace',
-  overflow: 'hidden',
-  textOverflow: 'ellipsis',
-  whiteSpace: 'nowrap',
-  padding: '0 2px',
-}
-
 /** 头部行内分支胶囊:紧跟工作区名展示当前分支(折叠态也可见);长分支名内部省略。 */
 const headerBranchPillStyle: React.CSSProperties = {
   display: 'inline-flex',
@@ -1296,6 +1400,110 @@ const diffLoadingStyle: React.CSSProperties = {
   fontSize: 'var(--text-xs)',
   color: 'var(--text-muted)',
   padding: '6px 4px',
+}
+
+/** 工作区级「Git 历史」折叠区:无自己的垂直滚动,直接撑开,滚动复用最外层 SidebarScrollArea。 */
+const historySectionStyle: React.CSSProperties = {
+  marginTop: 4,
+  paddingTop: 6,
+  borderTop: '1px solid var(--border-light)',
+}
+
+const historyHeaderStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 6,
+  minWidth: 0,
+  cursor: 'pointer',
+  borderRadius: 'var(--radius-sm)',
+  padding: '2px 0',
+}
+
+const historyHeaderTitleStyle: React.CSSProperties = {
+  fontSize: 'var(--text-sm)',
+  fontWeight: 700,
+  color: 'var(--text-muted)',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+  minWidth: 0,
+}
+
+const historyCountStyle: React.CSSProperties = {
+  fontSize: 'var(--text-xs)',
+  color: 'var(--text-muted)',
+  flexShrink: 0,
+}
+
+const historyRefreshButtonStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  width: 22,
+  height: 22,
+  padding: 0,
+  border: 'none',
+  background: 'transparent',
+  color: 'var(--text-muted)',
+  cursor: 'pointer',
+  flexShrink: 0,
+  borderRadius: 'var(--radius-sm)',
+}
+
+const historyStatusStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 6,
+  padding: '4px 4px',
+  fontSize: 'var(--text-xs)',
+  color: 'var(--text-muted)',
+}
+
+const historyListStyle: React.CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 1,
+  padding: '2px 0 4px',
+}
+
+const historyRowStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+  padding: '4px 4px',
+  fontSize: 'var(--text-xs)',
+  minWidth: 0,
+}
+
+const historyShortIdStyle: React.CSSProperties = {
+  flexShrink: 0,
+  fontFamily: '"Cascadia Code", "Fira Code", Consolas, monospace',
+  color: 'var(--accent-blue)',
+  fontWeight: 600,
+}
+
+const historyMessageStyle: React.CSSProperties = {
+  flex: 1,
+  minWidth: 0,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+  color: 'var(--text-primary)',
+}
+
+const historyMetaStyle: React.CSSProperties = {
+  flexShrink: 0,
+  maxWidth: '20%',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+  color: 'var(--text-secondary)',
+}
+
+const historyTimeStyle: React.CSSProperties = {
+  flexShrink: 0,
+  fontFamily: '"Cascadia Code", "Fira Code", Consolas, monospace',
+  color: 'var(--text-muted)',
 }
 
 /** 变更树横向滚动容器:长文件名撑开树宽,出横向滚动条(badge sticky 固定右缘的参照系)。 */

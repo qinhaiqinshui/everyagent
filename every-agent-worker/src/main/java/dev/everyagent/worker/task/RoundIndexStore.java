@@ -64,10 +64,10 @@ public class RoundIndexStore {
         }
 
         RoundIndex.Round toRound() {
-            // durationMs 由 MeasureDurationAdvisor 在流收口时回填,扫描阶段恒为 0;
+            // durationMs/startedAt 扫描阶段均未知为 0(闭合行耗时由 applyRounds 从磁盘 prior.startedAt 算);
             // fileChanges 扫描阶段未知为 null(由 applyRounds 按轻量摘要写入闭合行)。
             return new RoundIndex.Round(roundId, index, startSeq, endSeq, user, finalReply,
-                    subs.stream().map(SubBuilder::toSubRange).toList(), 0L, null,
+                    subs.stream().map(SubBuilder::toSubRange).toList(), 0L, 0L, null,
                     userMessage);
         }
     }
@@ -155,7 +155,7 @@ public class RoundIndexStore {
         for (RoundIndex.Round r : rounds) {
             out.add(new RoundIndex.Round(r.roundId(), r.index() + baseIndex, r.startSeq(),
                     r.endSeq(), r.user(), r.finalReply(), r.subs(),
-                    r.durationMs(), r.fileChanges(), r.userMessage()));
+                    r.durationMs(), r.startedAt(), r.fileChanges(), r.userMessage()));
         }
         return out;
     }
@@ -168,6 +168,9 @@ public class RoundIndexStore {
      * <li>最后一行未闭合 → 沿用当前轮,不写(中间输入/续跑不开新轮)。</li>
      * </ul>
      * 不扫描事件、不做终态补写/对账:轮行随开轮即持久化,中断/失败/取消的未闭合轮自然留在文件里。
+     * 开轮即记录 {@code startedAt = System.currentTimeMillis()} 并随行落盘——耗时口径以磁盘为
+     * 唯一真相源:闭合轮时由 {@link #applyRounds} 取当前时间减去磁盘 startedAt 计算,不再依赖内存
+     * 计时槽,任务出错停止后继续(续跑改判闭合)也以最初开轮时刻计耗时,不会因为重新打点而失真。
      * 异常全部吞掉(仅记日志),绝不阻断任务输入消费。
      *
      * @return true=真的追加了新行(新开一轮);false=沿用未闭合尾行未写或写盘失败
@@ -183,8 +186,9 @@ public class RoundIndexStore {
             }
             long index = last == null ? 1 : last.index() + 1;
             String roundId = ShortIds.next("round");
+            long startedAt = System.currentTimeMillis(); // 开始时间随开轮落盘,耗时从磁盘计算
             store.appendRound(taskId, new RoundIndex.Round(roundId, index, startSeq, null, user, "",
-                    List.of(), 0L, null, userMessage));
+                    List.of(), 0L, startedAt, null, userMessage));
             return true;
         } catch (IOException | RuntimeException e) {
             LOG.warn("开轮落盘失败 task={}(不影响任务运行)", taskId, e);
@@ -208,13 +212,10 @@ public class RoundIndexStore {
      * @param fileChangesLight 本轮文件变更轻量摘要数组(随闭合行内联进 rounds.jsonl;无变更 null)
      * @param fileChangesFull  本轮文件变更全文({changes:[...]};非 null 时对每个新闭合轮写
      *                         {@code file-changes/<roundId>.json},失败仅记日志不阻断)
-     * @param durationMs       本轮端到端耗时(RoundIndexAdvisor 从计时槽算得;随闭合行<b>同一次
-     *                         落盘内联</b>,保证 round.closed 推送时耗时已在磁盘;≤0 视为未知不写)
      * @return 本次实际「新闭合」的轮(幂等跳过与未闭合沿用不计入;失败为空列表)
      */
     public List<RoundIndex.Round> persistClosedRounds(TaskStore store, EventLog log,
-            String taskId, String mainAgentId, JsonNode fileChangesLight, JsonNode fileChangesFull,
-            long durationMs) {
+            String taskId, String mainAgentId, JsonNode fileChangesLight, JsonNode fileChangesFull) {
         try {
             Path dir = store.dirOf(taskId);
             long anchor = store.lastRoundStartSeq(dir);
@@ -227,8 +228,7 @@ public class RoundIndexStore {
                 return List.of();
             }
             List<RoundIndex.Round> newlyClosed =
-                    applyRounds(store, taskId, store.readRounds(dir), found, fileChangesLight,
-                            durationMs);
+                    applyRounds(store, taskId, store.readRounds(dir), found, fileChangesLight);
             if (fileChangesFull != null) {
                 for (RoundIndex.Round r : newlyClosed) {
                     if (r.roundId() != null && !r.roundId().isBlank()) {
@@ -244,52 +244,6 @@ public class RoundIndexStore {
     }
 
     /**
-     * 回填本轮耗时(幂等兜底;主路径已由 {@link #persistClosedRounds} 随闭合行内联):
-     * 把 durationMs 写入 rounds.jsonl「最后一条已闭合轮」行——仅当该行尚无耗时(≤0)时生效,
-     * 覆盖非流式 call 等不经闭合行内联路径的旁路,以及内联失效(计时槽未打点等)的防御。
-     *
-     * <p>幂等/防御:文件不存在、无已闭合轮、耗时 ≤ 0、或该轮已有耗时(>0)时均跳过;
-     * 每轮只由自身 run 的 advisor 回填一次,不覆盖历史。未闭合轮(endSeq 空、含本轮
-     * 正常收口前的中断尾行)不写耗时。写失败只记日志,不阻断 agent 流。
-     *
-     * @param store      落盘组件(position 目录定位 + rounds 读写)
-     * @param taskId     任务 id
-     * @param durationMs 本轮端到端耗时(毫秒)
-     */
-    public void recordDuration(TaskStore store, String taskId, long durationMs) {
-        if (durationMs <= 0) {
-            return;
-        }
-        try {
-            Path dir = store.dirOf(taskId);
-            List<RoundIndex.Round> rounds = store.readRounds(dir);
-            if (rounds.isEmpty()) {
-                return;
-            }
-            // 最后一条已闭合轮 = 刚由本 run 收口落盘的行(增量路径只写闭合轮;续跑改判闭合
-            // 也保持为末行)。若最后一行是未闭合轮(中断尾行),则往前找最近一条闭合轮。
-            RoundIndex.Round target = null;
-            for (int i = rounds.size() - 1; i >= 0; i--) {
-                RoundIndex.Round r = rounds.get(i);
-                if (r.closed()) {
-                    target = r;
-                    break;
-                }
-            }
-            if (target == null || target.durationMs() > 0) {
-                return; // 无闭合轮或已记录过耗时:幂等跳过
-            }
-            RoundIndex.Round updated = new RoundIndex.Round(target.roundId(), target.index(),
-                    target.startSeq(), target.endSeq(), target.user(), target.finalReply(),
-                    target.subs(), durationMs, target.fileChanges(),
-                    target.userMessage());
-            store.rewriteRound(taskId, updated);
-        } catch (IOException | RuntimeException e) {
-            LOG.warn("轮次耗时回填失败 task={}(不影响任务运行)", taskId, e);
-        }
-    }
-
-    /**
      * 扫描出的轮与磁盘已有行对账(仅闭合路径使用):
      * <ul>
      * <li>磁盘已存在且已闭合 → 跳过(幂等);</li>
@@ -299,12 +253,17 @@ public class RoundIndexStore {
      * <li>磁盘不存在 → 跳过,不补写(开轮路径负责落盘,不做自愈/对账)。</li>
      * </ul>
      *
+     * <p><b>耗时口径(磁盘唯一真相源)</b>:闭合轮时取当前时间减去磁盘 prior 行的 startedAt
+     * (开轮落盘时刻),随闭合行同一次写入内联 durationMs——不依赖内存计时槽;中断/失败后继续
+     * (续跑改判闭合)也以最初开轮时刻计耗时,本轮耗时跨运行延续不失真。prior.startedAt 未知(0,
+     * 旧行/scan)时不计耗时(保持 0)。prior 已有耗时(>0)不覆盖(幂等)。
+     *
      * @return 本次实际<b>新闭合</b>的轮(含 startSeq/endSeq/finalReply,供 round.closed 事件发射;
      *         幂等跳过与双双未闭合不计入)
      */
     private static List<RoundIndex.Round> applyRounds(TaskStore store, String taskId,
             List<RoundIndex.Round> existing, List<RoundIndex.Round> found,
-            JsonNode fileChangesLight, long durationMs) throws IOException {
+            JsonNode fileChangesLight) throws IOException {
         Map<Long, RoundIndex.Round> byStart = new LinkedHashMap<>();
         for (RoundIndex.Round r : existing) {
             byStart.putIfAbsent(r.startSeq(), r); // 撕行已由 readRounds 过滤,不参与对账
@@ -320,12 +279,16 @@ public class RoundIndexStore {
             }
             if (r.closed()) {
                 // 未闭合尾行 → 闭合行:原地改写(index 沿用磁盘行;roundId 沿用 prior 的稳定主键,
-                // 不新生成;耗时随行内联——prior 已有耗时(>0)不覆盖,未知(≤0)且本轮计时有效
-                // 时用本轮 elapsed;fileChanges 写入本轮轻量摘要)
-                long dur = prior.durationMs() > 0 ? prior.durationMs() : Math.max(0L, durationMs);
+                // 不新生成;耗时随行内联——prior 已有耗时(>0)不覆盖,未知(≤0)且 prior.startedAt
+                // 有效时取「当前时间 − 磁盘 startedAt」;fileChanges 写入本轮轻量摘要)
+                long dur = prior.durationMs() > 0
+                        ? prior.durationMs()
+                        : (prior.startedAt() > 0
+                                ? Math.max(0L, System.currentTimeMillis() - prior.startedAt())
+                                : 0L);
                 RoundIndex.Round closed = new RoundIndex.Round(prior.roundId(), prior.index(),
                         r.startSeq(), r.endSeq(), r.user(), r.finalReply(),
-                        r.subs(), dur, fileChangesLight,
+                        r.subs(), dur, prior.startedAt(), fileChangesLight,
                         r.userMessage() != null ? r.userMessage() : prior.userMessage());
                 if (store.rewriteRound(taskId, closed)) {
                     newlyClosed.add(closed); // 磁盘闭合成功才算「本轮新闭合」(带正确 roundId,供全文落盘)

@@ -95,6 +95,8 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
     private final RipgrepBinary rgbin;
     private final SlashCommandRegistry slashRegistry;
     private final RoundIndexStore roundIndexStore;
+    /** 工作区最后活动时间跟踪(任务收口时刷新,前端按最近活动倒序渲染)。 */
+    private final dev.everyagent.worker.modules.WorkspaceActivityTracker activityTracker;
 
     /** 热任务(运行中驻留内存;finish 即驱逐)。 */
     private final Map<String, TaskEntry> tasks = new ConcurrentHashMap<>();
@@ -122,7 +124,8 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
             AgentRunner runner, SubAgentManager subs, PendingAsks asks, WorkerProperties props,
             RpcDispatcher dispatcher, dev.everyagent.worker.modules.WorkspaceManager workspaces,
             FsToolSupport fs, OsSandbox sandbox, TaskStore store, PermissionGate gate, RipgrepBinary rgbin,
-            SlashCommandRegistry slashRegistry, RoundIndexStore roundIndexStore) {
+            SlashCommandRegistry slashRegistry, RoundIndexStore roundIndexStore,
+            dev.everyagent.worker.modules.WorkspaceActivityTracker activityTracker) {
         this.pool = pool;
         this.configs = configs;
         this.modelFactory = modelFactory;
@@ -139,6 +142,7 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
         this.rgbin = rgbin;
         this.slashRegistry = slashRegistry;
         this.roundIndexStore = roundIndexStore;
+        this.activityTracker = activityTracker;
     }
 
     @PostConstruct
@@ -172,7 +176,7 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
                     ObjectNode fixed = store.markRestartFailed(st, "worker 重启中断");
                     log.info("重启恢复:任务 {} 标为 failed(worker 重启中断)", st.taskId());
                     diskTasks.put(st.taskId(), new TaskStore.StoredTask(
-                            st.taskId(), st.dir(), fixed));
+                            st.taskId(), st.dir(), fixed, st.workspaceId()));
                     continue;
                 } catch (java.io.IOException e) {
                     log.warn("重启恢复失败 task={}", st.taskId(), e);
@@ -412,14 +416,14 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
         long waitMs = Math.max(0, ctx.optLongParam("waitMs", 0));
         int limit = (int) Math.max(1, Math.min(500, ctx.optLongParam("limit", 200)));
         int count = (int) Math.max(1, ctx.optLongParam("count", 1));
-        Path dir = store.dirOf(taskId);
         // 存在性:目录在盘 或 内存任务/磁盘索引可见任一即存在(热任务 track 前目录可能未建,
         // 终态 finish 窗口内 tasks 仍驻留;三者全缺才算不存在/已删)
-        boolean known = Files.isDirectory(dir) || tasks.containsKey(taskId) || diskTasks.containsKey(taskId);
+        boolean known = store.taskDirExists(taskId) || tasks.containsKey(taskId) || diskTasks.containsKey(taskId);
         if (!known) {
             ctx.err(Rpc.ERR_NOT_FOUND, "task 不存在: " + taskId);
             return;
         }
+        Path dir = store.dirOf(taskId); // known → 已登记或已 scan,dirOf 不抛
         TaskEntry live = tasks.get(taskId);
         ObjectNode meta = live == null ? store.readMeta(dir) : null;
         String mainAgentId = live != null ? live.mainAgentId
@@ -598,13 +602,13 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
      */
     private void rpcTaskRounds(RpcContext ctx) {
         String taskId = ctx.strParam("taskId");
-        Path dir = store.dirOf(taskId);
         // 存在性:与 task.poll 同口径(目录在盘 或 内存任务/磁盘索引可见任一即存在)
-        boolean known = Files.isDirectory(dir) || tasks.containsKey(taskId) || diskTasks.containsKey(taskId);
+        boolean known = store.taskDirExists(taskId) || tasks.containsKey(taskId) || diskTasks.containsKey(taskId);
         if (!known) {
             ctx.err(Rpc.ERR_NOT_FOUND, "task 不存在: " + taskId);
             return;
         }
+        Path dir = store.dirOf(taskId); // known → 已登记或已 scan,dirOf 不抛
         TaskEntry live = tasks.get(taskId);
         ObjectNode meta = live == null ? store.readMeta(dir) : null;
         String mainAgentId = live != null ? live.mainAgentId
@@ -645,8 +649,7 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
     private void rpcTaskFileChanges(RpcContext ctx) {
         String taskId = ctx.strParam("taskId");
         String roundId = ctx.strParam("roundId");
-        Path dir = store.dirOf(taskId);
-        boolean known = Files.isDirectory(dir) || tasks.containsKey(taskId) || diskTasks.containsKey(taskId);
+        boolean known = store.taskDirExists(taskId) || tasks.containsKey(taskId) || diskTasks.containsKey(taskId);
         if (!known) {
             ctx.err(Rpc.ERR_NOT_FOUND, "task 不存在: " + taskId);
             return;
@@ -682,13 +685,13 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
             return;
         }
         int limit = (int) Math.max(1, Math.min(500, ctx.optLongParam("limit", 50)));
-        Path dir = store.dirOf(taskId);
         // 存在性:与 task.poll / task.rounds 同口径(目录在盘 或 内存任务/磁盘索引可见任一即存在)
-        boolean known = Files.isDirectory(dir) || tasks.containsKey(taskId) || diskTasks.containsKey(taskId);
+        boolean known = store.taskDirExists(taskId) || tasks.containsKey(taskId) || diskTasks.containsKey(taskId);
         if (!known) {
             ctx.err(Rpc.ERR_NOT_FOUND, "task 不存在: " + taskId);
             return;
         }
+        Path dir = store.dirOf(taskId); // known → 已登记或已 scan,dirOf 不抛
         TaskEntry live = tasks.get(taskId);
         ObjectNode meta = live == null ? store.readMeta(dir) : null;
         String mainAgentId = live != null ? live.mainAgentId
@@ -828,7 +831,7 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
             lastIndex++;
             store.appendRound(taskId, new RoundIndex.Round(ShortIds.next("round"), lastIndex,
                     r.startSeq(), r.endSeq(), r.user(), r.finalReply(),
-                    r.subs(), 0L, null, r.userMessage()));
+                    r.subs(), 0L, 0L, null, r.userMessage()));
             existingStarts.add(r.startSeq());
         }
     }
@@ -911,11 +914,11 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
      * 表现为「新建任务却打开旧任务、旧任务续跑且标题被顶成新标题」(实测 t_ct1/t_ct2 事故)。
      * 故此处对 tasks(内存)/diskTasks(磁盘索引)/任务目录(磁盘直查)三重查重,冲突则递增重生成。
      */
-    private String uniqueTaskId() {
+    private String uniqueTaskId(String workspaceId) {
         for (int i = 0; i < MAX_TASKID_ATTEMPTS; i++) {
             String id = ShortIds.taskId();
             if (tasks.containsKey(id) || diskTasks.containsKey(id)
-                    || Files.isDirectory(store.dirOf(id))) {
+                    || Files.isDirectory(store.dirOf(id, workspaceId))) {
                 log.warn("taskId 与现有任务冲突,重生成: {}", id);
                 continue;
             }
@@ -957,11 +960,16 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
             ctx.err(Rpc.ERR_INTERNAL, "工作区目录不可用: " + e.getMessage());
             return;
         }
-        String taskId = uniqueTaskId();
+        // 稳定 workspaceId(注册后必在册;防御兜底回退默认 id,任务目录据此归类)。
+        String workspaceId = workspaces.idOfRoot(root.path().toString());
+        if (workspaceId == null) {
+            workspaceId = WorkspaceManager.DEFAULT_WORKSPACE_ID;
+        }
+        String taskId = uniqueTaskId(workspaceId);
         String mainAgentId = ShortIds.mainAgentId();
         ResolvedConfig cfg = configs.resolve(ctx.optStrParam("configId", null));
         TaskEntry t = new TaskEntry(taskId, title, cfg.snapshot(),
-                cfg.apiKey(), root.path().toString(), mainAgentId,
+                cfg.apiKey(), root.path().toString(), workspaceId, mainAgentId,
                 props.getLimits().getMaxEventsPerTask());
         tasks.put(taskId, t);
         // slash 任务级 token(task.run 可选入参 taskTokens):仅采纳合法 opaque(parseToken 非空);
@@ -987,7 +995,7 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
             idem.put(idemKey, new IdemEntry(taskId, System.currentTimeMillis()));
         }
         try {
-            store.track(taskId, t.log, t::summaryJson);
+            store.track(taskId, workspaceId, t.log, t::summaryJson);
         } catch (java.io.IOException e) {
             log.error("任务落盘启动失败 task={}(继续内存运行,重启后丢失)", taskId, e);
         }
@@ -1216,21 +1224,22 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
             return DeleteResult.NOT_FOUND;
         }
         store.delete(st.dir());
+        store.forgetTask(taskId); // 忘记 workspaceId 映射(幂等:已删除/未登记均无害)
         pool.pubAllTasks(Events.TASK_DELETED, null,
                 Json.obj().put("taskId", taskId), null);
         return DeleteResult.OK;
     }
 
     /**
-     * workspaces.remove 级联:删除挂靠指定工作区根的全部任务数据
-     * (meta.json/jsonl 等系统落盘,位于 data/tasks/&lt;taskId&gt;/;绝不动工作区目录本身)。
-     * 运行中任务跳过(与 task.delete 语义一致),返回实际删除数。
+     * workspaces.remove 级联:删除挂靠指定工作区稳定 id 的全部任务数据
+     * (meta.json/jsonl 等系统落盘,位于 workspaces/&lt;workspaceId&gt;/tasks/&lt;taskId&gt;/;
+     * 绝不动工作区目录本身)。运行中任务跳过(与 task.delete 语义一致),返回实际删除数。
      */
-    public int deleteByWorkspace(String workspaceRoot) {
+    public int deleteByWorkspaceId(String workspaceId) {
         int deleted = 0;
         // 冷任务(磁盘索引;含已驱逐的终态任务)
         for (TaskStore.StoredTask st : store.scan()) {
-            if (!workspaceRoot.equals(st.summary().path("workspace").asString(""))) {
+            if (!workspaceId.equals(st.workspaceId())) {
                 continue;
             }
             if (deleteTask(st.taskId()) == DeleteResult.OK) {
@@ -1239,7 +1248,7 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
         }
         // 热任务(运行中驻留内存;运行中由 deleteTask 拒绝,终态兜底删除)
         for (TaskEntry t : tasks.values()) {
-            if (!workspaceRoot.equals(t.workspaceRoot)) {
+            if (!workspaceId.equals(t.workspaceId)) {
                 continue;
             }
             if (deleteTask(t.taskId) == DeleteResult.OK) {
@@ -1247,7 +1256,7 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
             }
         }
         if (deleted > 0) {
-            log.info("workspaces.remove 级联删除 {} 个任务(工作区 {})", deleted, workspaceRoot);
+            log.info("workspaces.remove 级联删除 {} 个任务(工作区 {})", deleted, workspaceId);
         }
         return deleted;
     }
@@ -1271,7 +1280,8 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
                 log.warn("任务 workspace 迁移写盘失败 task={}", st.taskId(), e);
                 continue;
             }
-            diskTasks.put(st.taskId(), new TaskStore.StoredTask(st.taskId(), st.dir(), copy));
+            diskTasks.put(st.taskId(), new TaskStore.StoredTask(st.taskId(), st.dir(), copy,
+                    st.workspaceId()));
             moved++;
         }
         for (TaskEntry t : tasks.values()) {
@@ -1300,7 +1310,24 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
                     c.params(), c.isDefault(), c.members());
             arr.add(Json.toJson(safe));
         }
-        ctx.ok(Json.obj().set("models", arr));
+        ObjectNode out = Json.obj().set("models", arr);
+        // 限流运行态(P2):排队/在飞/估算系数,前端据此展示模型当前负载。
+        ArrayNode rates = Json.arr();
+        for (ModelRateLimiter.Snapshot s : modelFactory.rateLimitSnapshots()) {
+            ObjectNode o = Json.obj();
+            o.put("configId", s.configId());
+            o.put("enabled", s.enabled());
+            o.put("rpm", s.rpm());
+            o.put("maxConcurrency", s.maxConcurrency());
+            o.put("tpm", s.tpm());
+            o.put("inFlight", s.inFlight());
+            o.put("waiters", s.waiters());
+            o.put("factor", Math.round(s.factor() * 1000.0) / 1000.0);
+            o.put("sampleCount", s.sampleCount());
+            rates.add(o);
+        }
+        out.set("rateStatus", rates);
+        ctx.ok(out);
     }
 
     // ---- 终态任务再运行(冷启动;无"续跑"概念,对 agent 就是一次普通运行)----
@@ -1374,9 +1401,17 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
                 cfg = configs.resolve(null);
             }
         }
+        // 稳定工作区 id:新 meta 直读;旧 meta 无该字段时按 workspace 反查注册表,仍无回退默认。
+        String workspaceId = meta.path("workspaceId").asString(null);
+        if (workspaceId == null || workspaceId.isEmpty()) {
+            workspaceId = workspaces.idOfRoot(meta.path("workspace").asString(""));
+            if (workspaceId == null) {
+                workspaceId = WorkspaceManager.DEFAULT_WORKSPACE_ID;
+            }
+        }
         TaskEntry t = new TaskEntry(taskId,
                 meta.path("title").asString("继续对话"), cfg.snapshot(), cfg.apiKey(),
-                meta.path("workspace").asString(null), mainAgentId,
+                meta.path("workspace").asString(null), workspaceId, mainAgentId,
                 props.getLimits().getMaxEventsPerTask());
         t.createdAt(meta.path("createdAt").asLong(0));
         t.aiReview = meta.path("aiReview").asBoolean(false);      // AI 审议任务级开关(plan-unattended-ai-auth 步骤3)
@@ -1418,7 +1453,7 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
         }
         // 再运行启动:恢复悬空队列后即开始;实时增量由上方通知唤醒的定向推送器换挂推送,历史/补齐由前端拉取
         try {
-            store.track(taskId, t.log, t::summaryJson);
+            store.track(taskId, workspaceId, t.log, t::summaryJson);
         } catch (java.io.IOException e) {
             log.error("再运行落盘启动失败 task={}(继续内存运行)", taskId, e);
         }
@@ -1458,8 +1493,9 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
                     throw new InterruptedException("cancelled");
                 }
                 // 文件改动收集与收口由 FileChangeAdvisor 承担(每轮 run 前建收集器、流完成时填充
-                // light/full 槽);RoundIndexAdvisor 在流完成时把摘要/全文随轮落盘,
-                // MeasureDurationAdvisor 再回填耗时——经 doOnComplete 嵌套顺序保证「文件变更先、耗时后」。
+                // light/full 槽);RoundIndexAdvisor 在流完成时把摘要/全文随轮落盘,并把本轮耗时
+                // (开轮时随行落盘的 startedAt → 当前时间)一并与闭合行内联——经 doOnComplete
+                // 嵌套顺序保证「文件变更先、轮次(含耗时)后」同一次写入。
                 runner.run(main);
                 UserInput next = t.inputQueue.poll();
                 if (next == null) {
@@ -1601,6 +1637,7 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
         if (t.status.terminal()) {
             return;
         }
+        String workspaceRootToTouch = null;
         synchronized (t) {
             if (t.status.terminal()) {
                 return;
@@ -1633,11 +1670,15 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
             }
             store.updateMeta(t.taskId);
             diskTasks.put(t.taskId, new TaskStore.StoredTask(t.taskId,
-                    store.dirOf(t.taskId), t.summaryJson()));
+                    store.dirOf(t.taskId), t.summaryJson(), t.workspaceId));
             store.untrack(t.taskId);
             gate.untrack(t.taskId); // 授权内存驱逐(任务级已在 grants.json,再运行 lazy 重载)
             tasks.remove(t.taskId, t); // 两参原子:认领者(并发 rerun/delete)以此判断输赢
+            workspaceRootToTouch = t.workspaceRoot; // 收口附带:工作区最后活动时间在锁外交给跟踪器
         }
+        // 收口附带:刷新该任务挂靠工作区的最后活动时间。放在 synchronized(t) 块之外,
+        // 避免与 workspaces.remove 的锁序(t→wm)构成倒置(后者持有 wm 锁再取任务锁)。
+        activityTracker.onTaskFinished(workspaceRootToTouch);
     }
 
     private void setStatus(TaskEntry t, TaskStatus s) {

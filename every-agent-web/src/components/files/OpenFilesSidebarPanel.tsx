@@ -4,11 +4,21 @@ import { useAppUi } from '@/components/app/AppUiContext'
 import { domainEventBus, DOMAIN_EVENTS } from '@/events/eventBus'
 import { WORKSPACE_EXPLORER_ROOT_LABEL, workspaceExplorerQueryService } from '@/query/workspaceExplorerQueryService'
 import { findExplorerNode, upsertExplorerChildren } from '@/query/workspaceExplorerTreeUtils'
-import { workspaceRegistry, type WorkspaceEntry } from '@/hub/workspaceRegistry'
+import { workspaceRegistry, workspaceActivity, type WorkspaceEntry } from '@/hub/workspaceRegistry'
 import { antdConfirm } from '@/utils/appAntdBridge'
-import { toBusinessAbsolutePath } from '@/platform/fs/pathUtils'
+import { normalizeWorkspaceRelativePath, toBusinessAbsolutePath } from '@/platform/fs/pathUtils'
+import { workspaceGateway } from '@/platform/fs/workspaceGateway'
 import { workspaceExplorerCommandService } from '@/services/workspaceExplorerCommandService'
+import {
+  countPlainTextChars,
+  countTotalChars,
+  formatPropertyBytes,
+  formatPropertyTime,
+  isTextFileName,
+  joinWorkspaceDiskPath,
+} from './filePropertyUtils'
 import ConfirmDialog from '../shared/ConfirmDialog'
+import PropertiesDialog, { type PropertyItem } from '../shared/PropertiesDialog'
 import MoreActionsButton, { type MoreActionItem } from '../shared/MoreActionsButton'
 import { DownloadIcon, FilePlusIcon, FileTextIcon, FolderArrowOutIcon, FolderPlusIcon, MagnifierCheckIcon, UploadIcon, ChevronDownIcon, CheckIcon } from '../shared/AppGlyphs'
 import SidebarScrollArea from '../shared/SidebarScrollArea'
@@ -78,6 +88,7 @@ function WorkspaceGroupPanel({
     openGlobalFileTab,
     renameFileTabs,
     setActiveSidebarPanel,
+    openGitHistoryTab,
   } = useWorkspaceShell()
   const { showToast } = useAppUi()
   const [treeNodes, setTreeNodes] = React.useState<WorkspaceExplorerNode[]>([])
@@ -108,7 +119,8 @@ function WorkspaceGroupPanel({
   const [reloading, setReloading] = React.useState(false)
   const [treeError, setTreeError] = React.useState('')
   const [showInternalFiles, setShowInternalFiles] = React.useState(false)
-  const [metaMode, setMetaMode] = React.useState<'size' | 'modified'>('size')
+  /** 行尾元信息显示模式：none(默认隐藏)、size(文件大小)、modified(最后编辑时间)。 */
+  const [metaMode, setMetaMode] = React.useState<'size' | 'modified' | 'none'>('none')
   /** 卡片折叠态:折叠时仅保留头部行(工作区名 + 更多操作),隐藏路径/搜索/文件树等内容。 */
   const [collapsed, setCollapsed] = React.useState(false)
   /** 多选模式:开启后树行前置复选框,支持批量删除/移动。 */
@@ -120,6 +132,14 @@ function WorkspaceGroupPanel({
   const [batchMoveOpen, setBatchMoveOpen] = React.useState(false)
   const [batchMoveDir, setBatchMoveDir] = React.useState('')
   const [batchMoving, setBatchMoving] = React.useState(false)
+  /** 属性弹窗:当前查看属性的节点目标;null = 关闭。 */
+  const [propertiesTarget, setPropertiesTarget] = React.useState<WorkspaceExplorerContextTarget | null>(null)
+  /** 属性弹窗中文本文件的字符统计(异步读取后填充;null = 非文本文件或尚未加载)。 */
+  const [propertiesTextStats, setPropertiesTextStats] = React.useState<{ totalChars: number; textChars: number } | null>(null)
+  /** 文本文件字符统计异步读取防竞态:记录当前请求的路径标识,过期响应丢弃。 */
+  const textStatsRequestKeyRef = React.useRef<string | null>(null)
+  /** 工作区属性弹窗:当前查看属性的工作区条目;null = 关闭。 */
+  const [workspacePropertiesTarget, setWorkspacePropertiesTarget] = React.useState<WorkspaceEntry | null>(null)
 
   const reloadTree = React.useCallback(async (includeInternalFiles: boolean, keepExpanded = false) => {
     setReloading(true)
@@ -139,6 +159,7 @@ function WorkspaceGroupPanel({
             type: 'directory',
             size: 0,
             mtimeMs: 0,
+            createdTs: 0,
           }
           try {
             const children = await workspaceExplorerQueryService.loadChildren(workspaceRoot, probeNode, { includeInternalFiles })
@@ -628,8 +649,47 @@ function WorkspaceGroupPanel({
     void reloadTree(showInternalFiles)
   }, [reloadTree, showInternalFiles])
 
+  /** 打开 Git 历史标签页（按路径 git log -- <path>，文件/目录均支持）。 */
+  const handleRequestGitHistory = React.useCallback((target: WorkspaceExplorerContextTarget) => {
+    openGitHistoryTab({
+      workspaceRoot: target.workspaceRoot,
+      // 资源树 node.path 是带前导 / 的业务绝对路径,git log 需要无前导 / 的工作区相对路径。
+      path: normalizeWorkspaceRelativePath(target.path),
+      name: target.name,
+    })
+  }, [openGitHistoryTab])
+
   const toggleInternalFiles = React.useCallback(() => {
     setShowInternalFiles((current) => !current)
+  }, [])
+
+  /** 打开属性弹窗:用节点目标里携带的 size/mtime/createdTs 组装属性条目。 */
+  const handleRequestProperties = React.useCallback((target: WorkspaceExplorerContextTarget) => {
+    setPropertiesTarget(target)
+    // 文本文件额外读取内容统计字符数(总字符 / 纯文字字符);非文本文件置空。
+    if (target.type === 'file' && isTextFileName(target.name)) {
+      const requestKey = `${target.workspaceRoot}|${target.path}`
+      textStatsRequestKeyRef.current = requestKey
+      setPropertiesTextStats(null)
+      const relPath = normalizeWorkspaceRelativePath(target.path)
+      void workspaceGateway.readTextFile(target.workspaceRoot, relPath)
+        .then((content) => {
+          // 过期响应丢弃:用户已切换查看其它节点。
+          if (textStatsRequestKeyRef.current !== requestKey) return
+          setPropertiesTextStats({
+            totalChars: countTotalChars(content),
+            textChars: countPlainTextChars(content),
+          })
+        })
+        .catch(() => {
+          if (textStatsRequestKeyRef.current === requestKey) {
+            setPropertiesTextStats(null)
+          }
+        })
+    } else {
+      textStatsRequestKeyRef.current = null
+      setPropertiesTextStats(null)
+    }
   }, [])
 
   const getFileActionItems = React.useCallback((target: WorkspaceExplorerContextTarget): ListRowActionItem[] => {
@@ -672,6 +732,23 @@ function WorkspaceGroupPanel({
         },
       )
     }
+    // 显示大小:开启行尾文件大小元信息(默认隐藏),与资源管理器更多菜单的「显示文件大小」同源。
+    items.push({
+      key: 'show-size',
+      label: '显示大小',
+      onSelect: () => setMetaMode('size'),
+    })
+    // 显示 Git 历史:打开主区历史标签页,按路径调原生 git log -- <path>。
+    items.push({
+      key: 'git-history',
+      label: '显示 Git 历史',
+      onSelect: () => handleRequestGitHistory(target),
+    })
+    items.push({
+      key: 'properties',
+      label: '属性',
+      onSelect: () => handleRequestProperties(target),
+    })
    items.push({
      key: 'rename',
      label: '重命名',
@@ -701,7 +778,7 @@ function WorkspaceGroupPanel({
       onSelect: () => handleRequestRevealInOs(target),
     })
    return items
-  }, [handleOpenFile, handleRequestCreate, handleRequestDownload, handleRequestMove, handleRequestRenameTarget, handleRequestRevealInOs, handleRequestSearch, handleRequestUpload])
+  }, [handleOpenFile, handleRequestCreate, handleRequestDownload, handleRequestGitHistory, handleRequestMove, handleRequestProperties, handleRequestRenameTarget, handleRequestRevealInOs, handleRequestSearch, handleRequestUpload])
 
   const rootMoreActionItems = React.useMemo<MoreActionItem[]>(() => [
     {
@@ -753,10 +830,21 @@ function WorkspaceGroupPanel({
       onSelect: toggleInternalFiles,
     },
     {
-      key: 'toggle-meta-mode',
-      label: metaMode === 'size' ? '显示最后编辑时间' : '显示文件大小',
+      key: 'show-size',
+      label: metaMode === 'size' ? '隐藏文件大小' : '显示文件大小',
+      active: metaMode === 'size',
+      onSelect: () => setMetaMode((current) => (current === 'size' ? 'none' : 'size')),
+    },
+    {
+      key: 'show-modified',
+      label: metaMode === 'modified' ? '隐藏最后编辑时间' : '显示最后编辑时间',
       active: metaMode === 'modified',
-      onSelect: () => setMetaMode((current) => (current === 'size' ? 'modified' : 'size')),
+      onSelect: () => setMetaMode((current) => (current === 'modified' ? 'none' : 'modified')),
+    },
+    {
+      key: 'workspace-properties',
+      label: '属性',
+      onSelect: () => setWorkspacePropertiesTarget(entry),
     },
     {
       key: 'remove-workspace',
@@ -794,7 +882,6 @@ function WorkspaceGroupPanel({
         </div>
         {!collapsed && (
           <>
-            <div style={workspaceRootStyle} title={workspaceRoot}>{workspaceRoot}</div>
         {treeError ? <div style={emptyStyle}>{treeError}</div> : null}
         {multiSelectMode ? (
           <div style={multiSelectBarStyle}>
@@ -1012,6 +1099,20 @@ function WorkspaceGroupPanel({
           </div>
         }
       />
+      <PropertiesDialog
+        open={Boolean(propertiesTarget)}
+        title="属性"
+        name={propertiesTarget?.name}
+        items={propertiesTarget ? buildPropertyItems(propertiesTarget, propertiesTextStats) : []}
+        onClose={() => setPropertiesTarget(null)}
+      />
+      <PropertiesDialog
+        open={Boolean(workspacePropertiesTarget)}
+        title="工作区属性"
+        name={workspacePropertiesTarget ? getWorkspaceDisplayName(workspacePropertiesTarget.root) : undefined}
+        items={workspacePropertiesTarget ? buildWorkspacePropertyItems(workspacePropertiesTarget) : []}
+        onClose={() => setWorkspacePropertiesTarget(null)}
+      />
     </div>
   )
 }
@@ -1071,6 +1172,77 @@ function dedupeWorkspacePaths(paths: string[]): string[] {
 
 function getDeleteDialogTitle(target: WorkspaceExplorerContextTarget | null): string {
   return target?.type === 'directory' ? '删除文件夹' : '删除文件'
+}
+
+/**
+ * 组装属性弹窗条目：
+ * - 通用:文件名/目录名、相对工作区根的相对路径、磁盘完整路径、创建/编辑时间;
+ * - 文件额外显示大小;文本文件额外显示字符统计(textStats)。
+ */
+function buildPropertyItems(
+  target: WorkspaceExplorerContextTarget,
+  textStats: { totalChars: number; textChars: number } | null,
+): PropertyItem[] {
+  const items: PropertyItem[] = []
+  items.push({
+    label: target.type === 'directory' ? '目录名' : '文件名',
+    value: target.name,
+  })
+  if (target.type === 'file') {
+    items.push({
+      label: '大小',
+      value: formatPropertyBytes(target.size ?? 0),
+    })
+  }
+  // 相对工作区根目录的相对路径:node.path 带前导 '/',去掉即工作区相对形态。
+  items.push({
+    label: '相对路径',
+    value: normalizeWorkspaceRelativePath(target.path),
+  })
+  items.push({
+    label: '完整路径',
+    value: joinWorkspaceDiskPath(target.workspaceRoot, target.path),
+  })
+  items.push({
+    label: '创建时间',
+    value: formatPropertyTime(target.createdTs ?? 0),
+  })
+  items.push({
+    label: '编辑时间',
+    value: formatPropertyTime(target.mtimeMs ?? 0),
+  })
+  if (target.type === 'file' && isTextFileName(target.name)) {
+    if (textStats) {
+      items.push({
+        label: '总字符数',
+        value: String(textStats.totalChars),
+      })
+      items.push({
+        label: '纯文字字符',
+        value: String(textStats.textChars),
+      })
+    } else {
+      items.push({
+        label: '总字符数',
+        value: '读取中…',
+      })
+      items.push({
+        label: '纯文字字符',
+        value: '读取中…',
+      })
+    }
+  }
+  return items
+}
+
+/** 组装工作区属性弹窗条目:名称/根路径/Id/最后活动时间。 */
+function buildWorkspacePropertyItems(entry: WorkspaceEntry): PropertyItem[] {
+  return [
+    { label: '名称', value: getWorkspaceDisplayName(entry.root) },
+    { label: '根路径', value: entry.root },
+    { label: 'Id', value: entry.id ?? '—' },
+    { label: '最后活动时间', value: formatPropertyTime(workspaceActivity(entry)) },
+  ]
 }
 
 /** 删除确认弹窗副标题。 */
@@ -1275,16 +1447,6 @@ const groupBadgeStyle: React.CSSProperties = {
   fontSize: 'var(--text-xs)',
   color: 'var(--accent-blue)',
   flexShrink: 0,
-}
-
-const workspaceRootStyle: React.CSSProperties = {
-  fontSize: 'var(--text-xs)',
-  color: 'var(--text-muted)',
-  fontFamily: '"Cascadia Code", "Fira Code", Consolas, monospace',
-  overflow: 'hidden',
-  textOverflow: 'ellipsis',
-  whiteSpace: 'nowrap',
-  padding: '0 2px',
 }
 
 const emptyStyle: React.CSSProperties = {

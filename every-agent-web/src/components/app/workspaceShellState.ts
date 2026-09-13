@@ -7,6 +7,7 @@ import type {
   WorkspacePluginTab,
   WorkspacePageTab,
   WorkspaceDiffTab,
+  WorkspaceGitHistoryTab,
   WorkspaceTab,
 } from '@/types'
 
@@ -114,6 +115,19 @@ export function createWorkspaceDiffTab(tab: Omit<WorkspaceDiffTab, 'tabType' | '
     ...tab,
     id: `diff:${tab.filePath}` as const,
     tabType: 'diff',
+  }
+}
+
+/**
+ * 创建顶级 Git 历史标签（id 由 `git-history:${path}:${workspaceRoot}` 确定性构造——同一路径恒为同一标签）。
+ */
+export function createWorkspaceGitHistoryTab(
+  tab: Omit<WorkspaceGitHistoryTab, 'tabType' | 'id'>,
+): WorkspaceGitHistoryTab {
+  return {
+    ...tab,
+    id: `git-history:${tab.path}:${tab.workspaceRoot}` as const,
+    tabType: 'git-history',
   }
 }
 

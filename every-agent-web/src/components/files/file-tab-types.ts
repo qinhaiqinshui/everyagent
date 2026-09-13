@@ -59,6 +59,11 @@ export type FileContentEditorDescriptor = {
   extensions: string[]
   /** 是否作为未知扩展名时的兜底文本编辑器。这里只允许一个 true。 */
   isFallback?: boolean
+  /**
+   * 二进制只读类编辑器（图片/PDF 等）：不支持可编辑态。
+   * 外壳据此屏蔽「编辑/保存/查找」等文本相关入口，并走二进制读取（data URL）而非文本解码。
+   */
+  readonly?: boolean
   /** 编辑器组件。 */
   Component: ComponentType<FileContentEditorProps>
 }

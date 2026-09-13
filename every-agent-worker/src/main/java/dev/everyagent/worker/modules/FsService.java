@@ -282,7 +282,18 @@ public class FsService {
         o.put("dir", Files.isDirectory(p));
         o.put("size", Files.isDirectory(p) ? 0 : Files.size(p));
         o.put("modifiedTs", Files.getLastModifiedTime(p).toMillis());
+        o.put("createdTs", createdTs(p));
         return o;
+    }
+
+    /** 读取创建时间;平台/文件系统不支持(如部分 POSIX 无 birth time)时返回 0,前端按「未知」处理。 */
+    private long createdTs(Path p) {
+        try {
+            return Files.readAttributes(p, java.nio.file.attribute.BasicFileAttributes.class)
+                    .creationTime().toMillis();
+        } catch (Exception e) {
+            return 0L;
+        }
     }
 
     /** fs.changed 通知发往操作发起者的全部 hub 连接(按 ownerKey 扇出)。 */

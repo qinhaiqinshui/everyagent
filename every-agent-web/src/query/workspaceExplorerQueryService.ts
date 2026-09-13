@@ -77,6 +77,7 @@ function toExplorerNode(workspaceRoot: string, row: WorkspaceFileStat, includeIn
       type: 'file',
       size: row.size,
       mtimeMs: row.mtimeMs,
+      createdTs: row.createdTs,
       openTarget: buildOpenTarget(workspaceRoot, row.path, row.name),
     }
   }
@@ -87,6 +88,7 @@ function toExplorerNode(workspaceRoot: string, row: WorkspaceFileStat, includeIn
     // 懒加载后目录大小不做子树聚合(整树统计已随 fs.tree 移除),统一为 0。
     size: 0,
     mtimeMs: row.mtimeMs,
+    createdTs: row.createdTs,
     loaded: false,
   }
 }

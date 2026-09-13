@@ -39,20 +39,26 @@ import java.util.function.Supplier;
 /**
  * 任务落盘(架构 §5.3 持久化 sink,与 Shipper 同构,fire-and-forget):
  * 单虚拟线程把各任务日志按 record.agentId 路由追加到
- * &lt;data&gt;/tasks/&lt;taskId&gt;/&lt;agentId&gt;.jsonl
+ * workspaces/&lt;workspaceId&gt;/tasks/&lt;taskId&gt;/&lt;agentId&gt;.jsonl
  * (行 = {seq,ts,event,agentId,payload[,ext]};ext 为 null 不写字段)。
  * 瞬态流式事件(delta/thinking,主/子同名)不落盘也不写占位行;含瞬态的最高 seq 水位经
  * meta.json 的 seqLast 字段持久化,重启续号从该水位起步;磁盘 lastSeq 可能落后于内存 lastSeq,
  * 读侧按 seq 归并 + 前端 SeqRegressionError 自愈兜底。
  * 任务永久保留:retention 不存在,delete(用户主动)是唯一删除路径。
  * 不做 fsync:进程崩溃至多丢缓冲尾部,meta 仍非终态 → 下次启动标 failed 自愈。
- * 读侧容忍撕行(末行无换行/解析失败即弃)。任务统一存 data/tasks/&lt;taskId&gt;/，不做旧布局迁移。
+ * 读侧容忍撕行(末行无换行/解析失败即弃)。任务按工作区归类存
+ * workspaces/&lt;workspaceId&gt;/tasks/&lt;taskId&gt;/，不做旧布局迁移。
  */
 @Component
 public class TaskStore {
 
     /** 磁盘上的一个任务目录(scan/恢复/索引的单位)。 */
-    public record StoredTask(String taskId, Path dir, ObjectNode summary) {
+    public record StoredTask(String taskId, Path dir, ObjectNode summary, String workspaceId) {
+        /** 兼容旧 3 参构造(无 workspaceId;从 summary.workspaceId 提取,缺失为 null;新代码请用 4 参)。 */
+        public StoredTask(String taskId, Path dir, ObjectNode summary) {
+            this(taskId, dir, summary,
+                    summary == null ? null : summary.path("workspaceId").asString(null));
+        }
     }
 
     /** flush(taskId) 最长等待(超时放行,meta 仍非终态 → 重启自愈)。 */
@@ -92,6 +98,8 @@ public class TaskStore {
 
     private final WorkerProperties props;
     private final Map<String, Tracked> tracked = new ConcurrentHashMap<>();
+    /** taskId → workspaceId(定位 dirOf;track 登记、scan 回填,delete 清理)。 */
+    private final Map<String, String> taskWorkspace = new ConcurrentHashMap<>();
     private final Semaphore wake = new Semaphore(0);
     private volatile boolean running = true;
     private Thread sinkThread;
@@ -122,16 +130,17 @@ public class TaskStore {
     // ---- 写路径 ----
 
     /** 开始落盘一个任务:建目录、写初始 meta、挂日志监听(writer 按 agent 懒开)。 */
-    public synchronized void track(String taskId, EventLog log,
+    public synchronized void track(String taskId, String workspaceId, EventLog log,
             Supplier<ObjectNode> meta) throws IOException {
         if (tracked.containsKey(taskId)) {
             return;
         }
-        Path dir = dirOf(taskId);
+        Path dir = dirOf(taskId, workspaceId);
         Files.createDirectories(dir);
         writeMeta(dir, meta.get());
         Tracked t = new Tracked(taskId, log, meta, dir);
         tracked.put(taskId, t);
+        taskWorkspace.put(taskId, workspaceId);
         log.addListener(() -> wake.release());
         wake.release();
     }
@@ -170,7 +179,7 @@ public class TaskStore {
         }
     }
 
-    /** 停止跟踪(关全部 writer;目录保留——任务永久)。 */
+    /** 停止跟踪(关全部 writer;目录保留——任务永久;taskWorkspace 映射保留,dirOf 仍可定位)。 */
     public void untrack(String taskId) {
         Tracked t = tracked.remove(taskId);
         if (t != null) {
@@ -189,10 +198,65 @@ public class TaskStore {
 
     // ---- 读路径(冷数据)----
 
-    /** 扫描 data/tasks/ 下全部任务目录(meta.json 存在即算)。 */
+    /** 扫描 workspaces/&lt;workspaceId&gt;/tasks/ 下全部任务目录(meta.json 存在即算);回填 taskWorkspace 映射。 */
     public List<StoredTask> scan() {
         List<StoredTask> out = new ArrayList<>();
-        Path tasksRoot = props.resolveDataDir().resolve("tasks");
+        Path workspacesRoot = props.resolveWorkspacesDir();
+        if (!Files.isDirectory(workspacesRoot)) {
+            return out;
+        }
+        try (DirectoryStream<Path> wsDirs = Files.newDirectoryStream(workspacesRoot)) {
+            for (Path wsDir : wsDirs) {
+                if (!Files.isDirectory(wsDir)) {
+                    continue; // workspaces.json 等文件跳过
+                }
+                Path tasksRoot = wsDir.resolve("tasks");
+                if (!Files.isDirectory(tasksRoot)) {
+                    continue;
+                }
+                String workspaceId = wsDir.getFileName().toString();
+                try (DirectoryStream<Path> taskDirs = Files.newDirectoryStream(tasksRoot)) {
+                    for (Path taskDir : taskDirs) {
+                        if (!Files.isDirectory(taskDir)) {
+                            continue;
+                        }
+                        Path meta = taskDir.resolve("meta.json");
+                        if (!Files.isRegularFile(meta)) {
+                            continue;
+                        }
+                        try {
+                            JsonNode s = Json.parse(Files.readString(meta));
+                            if (s.isObject()) {
+                                String taskId = taskDir.getFileName().toString();
+                                taskWorkspace.put(taskId, workspaceId);
+                                out.add(new StoredTask(taskId, taskDir, (ObjectNode) s, workspaceId));
+                            }
+                        } catch (IOException | RuntimeException e) {
+                            log.warn("meta 读取失败 {}", meta, e);
+                        }
+                    }
+                }
+            }
+        } catch (IOException e) {
+            log.warn("任务目录扫描失败 {}", workspacesRoot, e);
+        }
+        return out;
+    }
+
+    /**
+     * 扫描指定工作区(workspaceId)下全部任务目录(meta.json 存在即算);回填 taskWorkspace 映射。
+     * 任务搜索按工作区归类定位:只遍历 workspaces/<workspaceId>/tasks/ 一个分支,比全量 scan 高效。
+     * 目录层防御:workspaceId 必须是稳定 id 形态(defaultworkspace / w_xxxxx),拒绝路径分隔符/
+     * `.`/`..`/绝对路径等穿越形态(调用方未校验时兜底,不产生越界路径)。
+     */
+    public List<StoredTask> scanWorkspace(String workspaceId) {
+        List<StoredTask> out = new ArrayList<>();
+        if (workspaceId == null || workspaceId.isBlank()
+                || !workspaceId.matches("[A-Za-z0-9][A-Za-z0-9_-]*")) {
+            log.warn("非法 workspaceId,跳过任务枚举: {}", workspaceId);
+            return out;
+        }
+        Path tasksRoot = props.resolveWorkspacesDir().resolve(workspaceId).resolve("tasks");
         if (!Files.isDirectory(tasksRoot)) {
             return out;
         }
@@ -208,15 +272,16 @@ public class TaskStore {
                 try {
                     JsonNode s = Json.parse(Files.readString(meta));
                     if (s.isObject()) {
-                        out.add(new StoredTask(taskDir.getFileName().toString(),
-                                taskDir, (ObjectNode) s));
+                        String taskId = taskDir.getFileName().toString();
+                        taskWorkspace.put(taskId, workspaceId);
+                        out.add(new StoredTask(taskId, taskDir, (ObjectNode) s, workspaceId));
                     }
                 } catch (IOException | RuntimeException e) {
                     log.warn("meta 读取失败 {}", meta, e);
                 }
             }
         } catch (IOException e) {
-            log.warn("任务目录扫描失败 {}", tasksRoot, e);
+            log.warn("工作区任务目录扫描失败 {}", tasksRoot, e);
         }
         return out;
     }
@@ -540,13 +605,73 @@ public class TaskStore {
         return summary;
     }
 
+    /**
+     * 任务目录绝对路径(workspaces/&lt;workspaceId&gt;/tasks/&lt;taskId&gt;/)。
+     * 带 workspaceId 重载:新建/续跑等已知归属场景直接拼路径,不依赖映射。
+     */
+    public Path dirOf(String taskId, String workspaceId) {
+        return props.resolveWorkspacesDir().resolve(workspaceId).resolve("tasks").resolve(taskId);
+    }
+
+    /**
+     * 任务目录绝对路径(由 taskWorkspace 映射反查 workspaceId)。
+     * 运行中(track 已登记)与磁盘任务(scan 已回填)均可用;未登记时懒发现:
+     * 遍历 workspaces/&lt;wsId&gt;/tasks/ 找含该 taskId 的目录并登记(测试/手工建目录场景),
+     * 仍找不到抛 IllegalStateException(fail-fast,避免写路径静默落脏目录)。
+     */
     public Path dirOf(String taskId) {
-        return props.resolveDataDir().resolve("tasks").resolve(taskId);
+        String workspaceId = taskWorkspace.get(taskId);
+        if (workspaceId == null) {
+            workspaceId = discoverWorkspace(taskId);
+            if (workspaceId != null) {
+                taskWorkspace.put(taskId, workspaceId);
+                return dirOf(taskId, workspaceId);
+            }
+            throw new IllegalStateException(
+                    "任务未登记 workspaceId 且磁盘未发现对应目录,无法定位: " + taskId);
+        }
+        return dirOf(taskId, workspaceId);
+    }
+
+    /** 任务目录是否存在(映射/懒发现后判定;未知任务/别的 worker 任务返回 false,不抛异常)。 */
+    public boolean taskDirExists(String taskId) {
+        try {
+            return Files.isDirectory(dirOf(taskId));
+        } catch (IllegalStateException e) {
+            return false;
+        }
+    }
+
+    /** 忘掉已删除任务的 workspaceId 映射(单任务删除后调用;运行中任务不适用)。 */
+    public void forgetTask(String taskId) {
+        taskWorkspace.remove(taskId);
+    }
+
+    /** 懒发现:遍历 workspaces/&lt;wsId&gt;/tasks/ 找含该 taskId 的目录;未找到返回 null。 */
+    private String discoverWorkspace(String taskId) {
+        Path root = props.resolveWorkspacesDir();
+        if (!Files.isDirectory(root)) {
+            return null;
+        }
+        try (DirectoryStream<Path> wsDirs = Files.newDirectoryStream(root)) {
+            for (Path wsDir : wsDirs) {
+                if (!Files.isDirectory(wsDir)) {
+                    continue;
+                }
+                if (Files.isDirectory(wsDir.resolve("tasks").resolve(taskId))) {
+                    return wsDir.getFileName().toString();
+                }
+            }
+        } catch (IOException e) {
+            log.debug("工作区目录扫描失败(懒发现 task={}): {}", taskId, e.getMessage());
+        }
+        return null;
     }
 
     // ---- 轮次索引 rounds.jsonl(与 meta.json、<agentId>.jsonl 同级;seq 一律字符串防 JS 精度)----
-    // 每行一轮:{index,startSeq,endSeq,user,finalReply,subs:[{agentId,title,startSeq,endSeq}],userMessage?};
+    // 每行一轮:{index,startSeq,endSeq,user,finalReply,durationMs,startedAt,subs:[{agentId,title,startSeq,endSeq}],userMessage?};
     // endSeq 为 "" 表示未闭合;
+    // startedAt = 开轮落盘时刻(epoch 毫秒;旧行缺失=0 未知,闭合时不据此计耗时);
     // userMessage = 完整 user.message payload(懒加载骨架起点;旧行缺失不写);
     // append 单行(无 fsync,崩溃丢尾部由重启标 failed 自愈);读侧容忍撕行(末行半行/解析失败即弃);
     // 「闭合磁盘上已有的未闭合轮」(续跑改判闭合)走 rewriteRound 原位替换单行(append-only 改不了行)。
@@ -680,7 +805,7 @@ public class TaskStore {
             Files.createDirectories(sub);
             Path f = sub.resolve(roundId + ".json");
             Files.writeString(f, Json.write(fullContent), StandardCharsets.UTF_8);
-        } catch (IOException e) {
+        } catch (IOException | RuntimeException e) {
             log.warn("轮次文件变更全文写盘失败 task={} round={}(不影响任务运行)", taskId, roundId, e);
         }
     }
@@ -692,11 +817,11 @@ public class TaskStore {
         if (roundId == null || roundId.isBlank()) {
             return null;
         }
-        Path f = dirOf(taskId).resolve("file-changes").resolve(roundId + ".json");
-        if (!Files.isRegularFile(f)) {
-            return null;
-        }
         try {
+            Path f = dirOf(taskId).resolve("file-changes").resolve(roundId + ".json");
+            if (!Files.isRegularFile(f)) {
+                return null;
+            }
             return Json.parse(Files.readString(f, StandardCharsets.UTF_8));
         } catch (IOException | RuntimeException e) {
             log.warn("轮次文件变更全文读取失败 task={} round={}", taskId, roundId, e);
@@ -713,6 +838,7 @@ public class TaskStore {
         line.put("user", safeText(round.user()));
         line.put("finalReply", safeText(round.finalReply()));
         line.put("durationMs", round.durationMs());
+        line.put("startedAt", round.startedAt());
         if (round.roundId() != null && !round.roundId().isBlank()) {
             line.put("roundId", round.roundId()); // roundId 稳定主键:缺失(旧行)不写
         }
@@ -735,8 +861,8 @@ public class TaskStore {
         return Json.write(line);
     }
 
-    /** 一行 jsonl → Round;解析失败返回 null(撕行/坏行)。 */
-    private static RoundIndex.Round parseRoundLine(String line) {
+    /** 一行 jsonl → Round;解析失败返回 null(撕行/坏行)。公开:task.search 按命中行解析轮次。 */
+    public static RoundIndex.Round parseRoundLine(String line) {
         try {
             JsonNode n = Json.parse(line);
             if (!n.isObject()) {
@@ -751,6 +877,7 @@ public class TaskStore {
             String user = n.path("user").asString("");
             String finalReply = n.path("finalReply").asString("");
             long durationMs = n.path("durationMs").asLong(0); // 旧行缺失 → 0(未记录耗时)
+            long startedAt = n.path("startedAt").asLong(0); // 旧行缺失 → 0(未知,闭合时不据此计耗时)
             String roundId = n.path("roundId").asString(null); // 旧行缺失 → null
             JsonNode fileChanges = n.path("fileChanges"); // 缺失/null → null;存在则按 JsonNode 原样读入
             if (fileChanges.isMissingNode() || fileChanges.isNull()) {
@@ -774,7 +901,7 @@ public class TaskStore {
                 }
             }
             return new RoundIndex.Round(roundId, index, startSeq, endSeq, user, finalReply,
-                    subs, durationMs, fileChanges, userMessage);
+                    subs, durationMs, startedAt, fileChanges, userMessage);
         } catch (RuntimeException e) {
             return null; // 撕行
         }

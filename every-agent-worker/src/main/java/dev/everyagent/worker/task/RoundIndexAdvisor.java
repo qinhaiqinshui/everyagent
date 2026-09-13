@@ -20,13 +20,11 @@ import java.util.List;
  * 实际扫描与落盘逻辑全部在 {@link RoundIndexStore#persistClosedRounds}(幂等、
  * 异常自吞,返回新闭合轮列表);本类只是 doOnComplete 薄壳,不改动任何流语义。
  *
- * <p>时机(与 {@link MeasureDurationAdvisor} 同款 doOnComplete 推理):本 advisor 位于
- * {@code MeasureDurationAdvisor}(最外层,HIGHEST_PRECEDENCE)的内层、其余 advisor 的
- * 外层(order = HIGHEST_PRECEDENCE + 10),其 {@code doOnComplete} 在内层整条流(含
- * ToolCallingAdvisor 递归工具循环、每轮权威 message 事件)全部完成之后、向下游转发
- * onComplete 之前触发——此时本轮最终回复的 message 事件已在内存 EventLog 中,
- * 扫描窗口即可闭合该轮。取消/异常不触发 doOnComplete;未闭合尾轮的 endSeq="" 行已在
- * 开轮路径({@code consumeInput → openRoundAtStart})持久化,终态不做补写/对账;
+ * <p>时机:本 advisor 位于整条主 agent advisor 链的最外层(order = HIGHEST_PRECEDENCE + 10),
+ * 其 {@code doOnComplete} 在内层整条流(含 ToolCallingAdvisor 递归工具循环、每轮权威 message
+ * 事件)全部完成之后、向下游转发 onComplete 之前触发——此时本轮最终回复的 message 事件已在
+ * 内存 EventLog 中,扫描窗口即可闭合该轮。取消/异常不触发 doOnComplete;未闭合尾轮的
+ * endSeq="" 行已在开轮路径({@code consumeInput → openRoundAtStart})持久化,终态不做补写/对账;
  * rounds.jsonl 缺失时另由 {@code task.rounds} 首次惰性全量生成兜底。
  *
  * <p>设计纪律:per-run 物化(每 run 新建实例,状态随实例隔离),多任务并发安全;
@@ -52,7 +50,7 @@ public class RoundIndexAdvisor implements StreamAdvisor {
 
     @Override
     public int getOrder() {
-        // MeasureDurationAdvisor(HIGHEST_PRECEDENCE)内层、SystemInfoAdvisor(+50)外层:
+        // 主链最外层、SystemInfoAdvisor(+50)外层:
         // doOnComplete 晚于全部内层 advisor(最终回复 message 事件已入日志)即可。
         return Ordered.HIGHEST_PRECEDENCE + 10;
     }
@@ -64,7 +62,7 @@ public class RoundIndexAdvisor implements StreamAdvisor {
                 .doOnComplete(this::persistRounds);
     }
 
-    /** 一轮用户任务流完成:增量补写已闭合轮(耗时随行内联),并对本次新闭合的轮推 round.closed(异常自吞,不阻断 onComplete)。 */
+    /** 一轮用户任务流完成:增量补写已闭合轮(耗时由 RoundIndexStore 从磁盘 startedAt 计算并随行内联),并对本次新闭合的轮推 round.closed(异常自吞,不阻断 onComplete)。 */
     private void persistRounds() {
         if (a.kind != AgentEntity.Kind.MAIN) {
             return; // 防御:仅主 agent(工厂只给主链挂载)
@@ -74,14 +72,13 @@ public class RoundIndexAdvisor implements StreamAdvisor {
         JsonNode full = a.task.fileChangesFull;
         a.task.fileChangesLight = null;
         a.task.fileChangesFull = null;
-        // 本轮端到端耗时:MeasureDurationAdvisor 组装时打点(同 run 实例,此刻必已写入);
-        // 随闭合行同一次落盘内联,保证下方 round.closed 推送时耗时已在磁盘(消除「前端收到
-        // 通知即拉快照、却拉在耗时回填之前」的竞态,见 §7.15.1)。
-        long startedAt = a.task.roundDurationStart;
-        long elapsed = startedAt > 0 ? System.currentTimeMillis() - startedAt : 0L;
+        // 本轮端到端耗时:由 persistClosedRounds/applyRounds 取当前时间减去开轮时随行落盘的
+        // startedAt 计算,随闭合行同一次落盘内联,保证下方 round.closed 推送时耗时已在磁盘
+        // (消除「前端收到通知即拉快照、却拉在耗时写入之前」的竞态,见 §7.15.1);耗时不再依赖
+        // 内存计时槽,任务出错停止后继续(续跑改判闭合)同样以磁盘 startedAt 计耗时。
         List<RoundIndex.Round> closed =
                 rounds.persistClosedRounds(store, a.task.log, a.task.taskId, a.task.mainAgentId,
-                        light, full, elapsed);
+                        light, full);
         for (RoundIndex.Round r : closed) {
             if (r.endSeq() != null) {
                 // round.closed 与 rounds.jsonl 闭合行同源;瞬态不落盘,仅推 stream 频道。

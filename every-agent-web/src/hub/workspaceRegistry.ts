@@ -18,10 +18,19 @@ export interface WorkspaceEntry {
   root: string
   /** 注册时间(ms)。 */
   addedAt: number
+  /** 最后活动时间(ms):任务收口时由 worker 刷新;旧 worker/旧注册表无该字段时为 undefined。 */
+  lastActivityAt?: number
   /** 来源 worker(多 worker 合并后区分归属)。 */
   workerId: string
+  /** 稳定工作区 id(defaultworkspace 或 w_xxxxx);旧 worker 无此字段时为 undefined。 */
+  id?: string
   /** worker 启动自检判定该目录已不存在(被移动/删除),待用户选择删除或纠正路径。 */
   missing?: boolean
+}
+
+/** 工作区排序键:最后活动时间,旧条目回退注册时间(与 worker 端 lastActivityAt 口径一致)。 */
+export function workspaceActivity(entry: WorkspaceEntry): number {
+  return entry.lastActivityAt ?? entry.addedAt
 }
 
 /** workspaces.list 应答(worker 端形状,workerId 由前端补)。 */
@@ -248,6 +257,9 @@ class WorkspaceRegistryService {
         workspaces.push({ ...entry, workerId })
       }
     }
+    // 渲染排序:按「最后活动时间」倒序(任务收口刷新;旧条目回退注册时间),最新最上。
+    // 任务面板/文件管理器/源代码管理器均直接消费本数组,排序在此一处生效。
+    workspaces.sort((a, b) => workspaceActivity(b) - workspaceActivity(a))
     const prev = this.current
     this.current = { defaultRoot, workspaces }
     for (const fn of this.listeners) {
