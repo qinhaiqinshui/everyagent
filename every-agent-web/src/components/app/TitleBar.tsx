@@ -98,7 +98,7 @@ export default function TitleBar() {
             {workspaceTabs.map((tab) => {
               const isActive = tab.id === activeWorkspaceTabId
               const def = getTabDefinition(tab)
-              const icon = def?.renderIcon() ?? null
+              const icon = def?.renderIcon(tab) ?? null
               const customLabel = def?.renderLabel?.(tab) ?? null
               const label = def?.getLabel(tab) ?? ''
               const title = def?.getTitle(tab) ?? (typeof customLabel === 'string' ? customLabel : label)
