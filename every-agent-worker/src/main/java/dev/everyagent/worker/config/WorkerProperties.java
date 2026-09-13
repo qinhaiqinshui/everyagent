@@ -492,6 +492,13 @@ public class WorkerProperties {
         /** 估算系数上下界保护(防止异常样本把系数拉飞)。 */
         private double estFactorMin = 0.3;
         private double estFactorMax = 3.0;
+        /**
+         * 全局默认限流值(worker.models[].params 未显式配置时回退;见 design §4)。
+         * 三项任一 >0 即生效;某模型要关闭某维度,在该模型 params 里显式设 0。
+         */
+        private int defaultRpm = 60;
+        private int defaultMaxConcurrency = 4;
+        private long defaultTpm = 0;
 
         public int getQueueCapacity() {
             return queueCapacity;
@@ -547,6 +554,30 @@ public class WorkerProperties {
 
         public void setEstFactorMax(double estFactorMax) {
             this.estFactorMax = estFactorMax;
+        }
+
+        public int getDefaultRpm() {
+            return defaultRpm;
+        }
+
+        public void setDefaultRpm(int defaultRpm) {
+            this.defaultRpm = defaultRpm;
+        }
+
+        public int getDefaultMaxConcurrency() {
+            return defaultMaxConcurrency;
+        }
+
+        public void setDefaultMaxConcurrency(int defaultMaxConcurrency) {
+            this.defaultMaxConcurrency = defaultMaxConcurrency;
+        }
+
+        public long getDefaultTpm() {
+            return defaultTpm;
+        }
+
+        public void setDefaultTpm(long defaultTpm) {
+            this.defaultTpm = defaultTpm;
         }
     }
 

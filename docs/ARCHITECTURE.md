@@ -339,10 +339,10 @@ RoundIndexAdvisor(轮次索引+耗时,最外层) → SkillAdvisor(skill 渐进�
 
 **机制**(`ModelRateLimiter` + `RateLimitedChatModel` 装饰器,挂在 `ChatModelFactory.build` 产物外层;主/子/AI 审议/池成员全部自动生效,见 docs/design-model-rate-limit.md):
 
-- 每模型独立配置(`worker.models[].params`):`rpm`(每分钟发起数,滑动窗口)、`max-concurrency`(同时 in-flight 上限,**长思考重叠的核心闸门**)、`tpm`(可选参考线)、`token-est-factor`(估算系数初始值);全缺省 = 不限流(现状兼容)。
+- 每模型独立配置(`worker.models[].params`):`rpm`(每分钟发起数,滑动窗口)、`max-concurrency`(同时 in-flight 上限,**长思考重叠的核心闸门**)、`tpm`(可选参考线)、`token-est-factor`(估算系数初始值)。**缺省回退全局默认限流(rpm=60 / max-concurrency=4 / tpm=0),不是裸奔不限流**;某模型要关闭某维度,在其 params 显式设 0。
 - 请求起步经 `ModelRateLimiter.acquire` 排队等放行:rpm 窗口 / 并发信号量 / tpm 压力三关;超限进有界等待队列(默认队列 8、等 30s),**正常排队不报错**,仅队列满 + 超时才抛 `ModelRateLimitException`(非重试,文案含「减少同步派发/调大配置」建议)。
 - **tpm 记账**:流中无协议级 usage(OpenAI 兼容只在末帧带),故流中用自算文本 token 粗估(CJK≈1、其余≈4 字符 1 token)累计;请求完成后用厂商真实 usage 记账入 60s 窗口,并 EMA 反向校准估算系数(`token-est-factor`,每模型独立,持久化 `~/.everyagent/model-rate-state.json`,重启接续)。
-- 全局默认:`worker.limits.model-rate.{queue-capacity, wait-timeout-ms, est-window-sec, est-safety-ratio, est-ema-alpha}`。
+- 全局默认:`worker.limits.model-rate.{queue-capacity, wait-timeout-ms, est-window-sec, est-safety-ratio, est-ema-alpha, default-rpm, default-max-concurrency, default-tpm}`。
 
 ### 7.5 上下文管理
 

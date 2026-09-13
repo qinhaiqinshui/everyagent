@@ -1,5 +1,6 @@
 package dev.everyagent.worker.task;
 
+import dev.everyagent.worker.config.WorkerProperties;
 import tools.jackson.databind.JsonNode;
 
 /**
@@ -13,8 +14,14 @@ import tools.jackson.databind.JsonNode;
  *   <li>{@code tpm}            厂商 tpm 上限(可选参考线,③④使用的目标);</li>
  *   <li>{@code tokenEstFactor} 估算系数初始值(持久化校准结果优先)。</li>
  * </ul>
- * 三项限流限制(rpm/maxConcurrency/tpm)全缺省/≤0 → {@link #enabled()} = false,
- * 即该模型不限流(现状兼容,升级无感)。
+ *
+ * <p>缺省回退规则(关键:缺省<b>不等于</b>不限流):
+ * <ul>
+ *   <li>params 未写某字段 → 回退 {@code worker.limits.model-rate.default-*} 全局默认;</li>
+ *   <li>params 显式写 {@code 0} → 关闭该维度(不限流);</li>
+ *   <li>params 显式写 {@code >0} → 覆盖全局默认。</li>
+ * </ul>
+ * 三项最终值全为 0 → {@link #enabled()} = false(全局默认亦全 0 时的兜底)。
  */
 public final class ModelRateLimitConfig {
 
@@ -30,10 +37,11 @@ public final class ModelRateLimitConfig {
         this.tokenEstFactor = tokenEstFactor;
     }
 
-    public static ModelRateLimitConfig from(JsonNode params) {
-        int rpm = 0;
-        int concurrency = 0;
-        long tpm = 0;
+    public static ModelRateLimitConfig from(JsonNode params, WorkerProperties.ModelRate defaults) {
+        // 起点 = 全局默认(非 0);params 显式值覆盖,显式 0 关闭该维度。
+        int rpm = defaults == null ? 0 : defaults.getDefaultRpm();
+        int concurrency = defaults == null ? 0 : defaults.getDefaultMaxConcurrency();
+        long tpm = defaults == null ? 0 : defaults.getDefaultTpm();
         double factor = 1.0;
         if (params != null && params.isObject()) {
             if (params.has("rpm")) {

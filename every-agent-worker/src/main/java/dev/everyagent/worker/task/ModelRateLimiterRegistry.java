@@ -30,10 +30,11 @@ public class ModelRateLimiterRegistry {
         this.stateStore = new ModelRateStateStore(props);
     }
 
-    /** 获取 configId 对应限流器;未配置任何限制 → empty(装饰器直通)。 */
+    /** 获取 configId 对应限流器;最终限流值全为 0 → empty(装饰器直通)。 */
     public Optional<ModelRateLimiter> of(String configId, JsonNode params) {
         return Optional.ofNullable(limiters.computeIfAbsent(configId, id -> {
-            ModelRateLimitConfig cfg = ModelRateLimitConfig.from(params);
+            ModelRateLimitConfig cfg = ModelRateLimitConfig.from(params,
+                    props.getLimits().getModelRate());
             if (!cfg.enabled()) {
                 return null;
             }
