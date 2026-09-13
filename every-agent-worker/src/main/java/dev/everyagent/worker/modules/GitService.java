@@ -48,6 +48,7 @@ public class GitService {
         dispatcher.register(RpcMethods.GIT_STATUS, this::status);
         dispatcher.register(RpcMethods.GIT_LOG, this::log);
         dispatcher.register(RpcMethods.GIT_DIFF, this::diff);
+        dispatcher.register(RpcMethods.GIT_SHOW, this::show);
         dispatcher.register(RpcMethods.GIT_COMMIT, this::commit);
         dispatcher.register(RpcMethods.GIT_PULL, this::pull);
         dispatcher.register(RpcMethods.GIT_PUSH, this::push);
@@ -121,6 +122,138 @@ public class GitService {
             commits.add(n);
         }
         ctx.ok(Json.obj().set("commits", commits));
+    }
+
+    /**
+     * 读取某次提交的变更文件清单与全文(历史详情 / 恢复此版本)。
+     * - 变更清单:git diff-tree --name-status -r -z <commit>(A/M/D/R/C/T);
+     * - 二进制判定:git diff-tree --numstat -r -z <commit> 的 `-\t-`;
+     * - 每个文本文件读父版本 git show <commit>^:<path> 与本提交版本 git show <commit>:<path>。
+     * 必带 commit(commitId 或 shortId);路径为提交内相对路径,用 resolveLoose 校验沙箱不越界
+     * (历史路径可能已删除,不要求文件真实存在)。
+     */
+    private void show(RpcContext ctx) throws IOException {
+        Sandbox sb = sandbox(ctx);
+        String commit = ctx.strParam("commit");
+        if (commit == null || commit.isEmpty()) {
+            throw new BadParamsException("git.show 需要 commit 参数");
+        }
+        // 归一化为完整 id(不存在/非提交抛错误)
+        NativeResult rev = git.runRead(sb.root(), List.of("rev-parse", "--verify", commit + "^{commit}"),
+                CredentialSpec.none());
+        if (rev.exitCode() != 0) {
+            if (NativeGit.isNotRepo(rev)) {
+                throw new NotFoundException("工作区不是 git 仓库");
+            }
+            throw new BadParamsException("提交不存在: " + commit);
+        }
+        String fullId = rev.stdout().trim();
+
+        // 变更文件清单 name-status(--root:根提交也显示其新增文件)
+        NativeResult ns = git.runRead(sb.root(), List.of(
+                "diff-tree", "--no-commit-id", "--name-status", "-r", "-z", "--root", fullId),
+                CredentialSpec.none());
+        if (ns.exitCode() != 0) {
+            if (NativeGit.isNotRepo(ns)) {
+                throw new NotFoundException("工作区不是 git 仓库");
+            }
+            throw new RuntimeException("git.show 读取变更清单失败: " + (ns.stderr() == null ? "" : ns.stderr()));
+        }
+        List<String> paths = new ArrayList<>();
+        List<String> changeTypes = new ArrayList<>();
+        parseNameStatus(ns.stdout(), paths, changeTypes);
+
+        // 二进制判定 numstat(--root:根提交的 numstat 也输出;按 path 匹配,不依赖顺序)
+        NativeResult num = git.runRead(sb.root(), List.of(
+                "diff-tree", "--no-commit-id", "--numstat", "-r", "-z", "--root", fullId),
+                CredentialSpec.none());
+        java.util.Set<String> binaryPaths = parseBinaryPaths(num.exitCode() == 0 ? num.stdout() : "");
+
+        ArrayNode files = Json.arr();
+        for (int i = 0; i < paths.size(); i++) {
+            String path = paths.get(i);
+            sb.resolveLoose(path); // 越界校验(历史路径可能已删除)
+            boolean binary = binaryPaths.contains(path);
+            ObjectNode n = Json.obj()
+                    .put("path", path)
+                    .put("changeType", changeTypes.get(i))
+                    .put("binary", binary);
+            if (!binary) {
+                // before = 父提交版本(根提交无父 → 空)
+                NativeResult beforeR = git.runRead(sb.root(),
+                        List.of("show", fullId + "^:" + path), CredentialSpec.none());
+                String before = beforeR.exitCode() == 0 ? beforeR.stdout() : "";
+                // after = 本提交版本(删除 → git show 失败 → 空)
+                NativeResult afterR = git.runRead(sb.root(),
+                        List.of("show", fullId + ":" + path), CredentialSpec.none());
+                String after = afterR.exitCode() == 0 ? afterR.stdout() : "";
+                n.put("beforeContent", before);
+                n.put("afterContent", after);
+            }
+            files.add(n);
+        }
+        ctx.ok(Json.obj().put("commit", fullId).set("files", files));
+    }
+
+    /**
+     * 解析 `git diff-tree --name-status -r -z` 输出为路径与变更类型列表(与 numstat 同序)。
+     * 输出形态:status 与 path 交替以 NUL 结尾,如 `M\0a.txt\0A\0c.txt\0`;
+     * 默认不检测 rename(diff-tree 未加 -M),rename 表现为 D+old / A+new 两条记录。
+     */
+    private static void parseNameStatus(String stdout, List<String> paths, List<String> changeTypes) {
+        if (stdout == null || stdout.isEmpty()) {
+            return;
+        }
+        String[] parts = stdout.split("\0", -1);
+        for (int i = 0; i < parts.length; i += 2) {
+            String status = parts[i];
+            if (status.isEmpty()) {
+                break; // 尾空段
+            }
+            char code = status.charAt(0);
+            String path = (i + 1 < parts.length) ? parts[i + 1] : "";
+            if (path.isEmpty()) {
+                break;
+            }
+            paths.add(path);
+            changeTypes.add(statusToChangeType(code));
+        }
+    }
+
+    /** name-status 状态字母 → 前端 changeType(A=created,D=deleted,其余=updated)。 */
+    private static String statusToChangeType(char status) {
+        if (status == 'A') {
+            return "created";
+        }
+        if (status == 'D') {
+            return "deleted";
+        }
+        return "updated"; // M/R/C/T
+    }
+
+    /**
+     * 解析 `git diff-tree --numstat -r -z` 输出为二进制路径集合。
+     * 输出形态:每条记录以 NUL 结尾,内部为 `加行\t删行\t路径`,二进制为 `-\t-\t路径`
+     * (与 name-status 的 `状态\0路径\0` 不同,numstat 整条记录一段)。
+     */
+    private static java.util.Set<String> parseBinaryPaths(String stdout) {
+        java.util.Set<String> binaries = new java.util.HashSet<>();
+        if (stdout == null || stdout.isEmpty()) {
+            return binaries;
+        }
+        for (String rec : stdout.split("\0", -1)) {
+            if (rec.isEmpty()) {
+                continue;
+            }
+            String[] f = rec.split("\t", -1);
+            if (f.length < 3) {
+                continue;
+            }
+            if ("-".equals(f[0]) && "-".equals(f[1])) {
+                binaries.add(f[2]);
+            }
+        }
+        return binaries;
     }
 
     /**

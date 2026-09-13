@@ -61,6 +61,8 @@ public final class RpcMethods {
     public static final String GIT_STATUS = "git.status";
     public static final String GIT_LOG = "git.log";
     public static final String GIT_DIFF = "git.diff";
+    /** 读取某次提交的变更文件清单与全文(历史详情/恢复此版本;必带 commit)。 */
+    public static final String GIT_SHOW = "git.show";
     public static final String GIT_COMMIT = "git.commit";
     public static final String GIT_PULL = "git.pull";
     public static final String GIT_PUSH = "git.push";
