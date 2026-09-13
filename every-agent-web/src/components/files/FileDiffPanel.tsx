@@ -84,12 +84,18 @@ export default function FileDiffPanel({ fileChange, workspaceRoot: diffWorkspace
     }, { mode: 'readwrite' })
   }, [diffWorkspaceRoot, fileChange.filePath, openGlobalFileTab, showToast])
 
-  /** 恢复此版本:把工作区文件覆盖为 diff 右侧(after)内容。仅 allowRestore 显示;二进制/deleted 禁用。 */
+  /**
+   * 恢复此版本:把工作区文件覆盖为 diff 内容。仅 allowRestore 显示;二进制禁用。
+   * 恢复目标:常规文件 = 该提交版本(after);deleted 文件 = 删除前版本(before),写回即重新创建该文件。
+   */
+  const isDeleted = fileChange.changeType === 'deleted'
+  const restoreContent = isDeleted
+    ? (fileChange.beforeContent ?? '')
+    : (fileChange.afterContent ?? '')
   const canRestore = Boolean(
     fileChange.allowRestore
     && !fileChange.binary
-    && fileChange.changeType !== 'deleted'
-    && (fileChange.afterContent ?? '').length > 0,
+    && restoreContent.length > 0,
   )
   const handleRestore = React.useCallback(() => {
     if (!canRestore) return
@@ -100,15 +106,17 @@ export default function FileDiffPanel({ fileChange, workspaceRoot: diffWorkspace
     }
     modal.confirm({
       title: '恢复此版本',
-      content: `将把工作区文件 ${fileChange.filePath} 的内容覆盖为该提交版本，此操作不可撤销。确定恢复？`,
+      content: isDeleted
+        ? `该提交删除了文件 ${fileChange.filePath}，将按删除前的内容重新创建该文件，此操作不可撤销。确定恢复？`
+        : `将把工作区文件 ${fileChange.filePath} 的内容覆盖为该提交版本，此操作不可撤销。确定恢复？`,
       okText: '恢复',
       okButtonProps: { danger: true },
       cancelText: '取消',
       onOk: async () => {
         setRestoring(true)
         try {
-          await workspaceGateway.writeTextFile(workspaceRoot, fileChange.filePath, fileChange.afterContent ?? '')
-          showToast('已恢复此版本', 'success')
+          await workspaceGateway.writeTextFile(workspaceRoot, fileChange.filePath, restoreContent)
+          showToast(isDeleted ? '已恢复被删除的文件' : '已恢复此版本', 'success')
         } catch (restoreError) {
           showToast(restoreError instanceof Error ? restoreError.message : String(restoreError), 'error')
         } finally {
@@ -116,7 +124,7 @@ export default function FileDiffPanel({ fileChange, workspaceRoot: diffWorkspace
         }
       },
     })
-  }, [canRestore, diffWorkspaceRoot, fileChange.filePath, fileChange.afterContent, modal, showToast])
+  }, [canRestore, isDeleted, diffWorkspaceRoot, fileChange.filePath, restoreContent, modal, showToast])
 
   if (diffRows.length === 0) {
     return (
@@ -145,7 +153,7 @@ export default function FileDiffPanel({ fileChange, workspaceRoot: diffWorkspace
             variant="ghost"
             size="sm"
             className="file-diff-panel__open-file"
-            title={canRestore ? '恢复此版本（覆盖当前工作区文件）' : '二进制/已删除文件不可恢复'}
+            title={canRestore ? (isDeleted ? '恢复此版本（按删除前内容重新创建文件）' : '恢复此版本（覆盖当前工作区文件）') : '二进制文件不可恢复'}
             aria-label="恢复此版本"
             disabled={!canRestore || restoring}
             onClick={handleRestore}
