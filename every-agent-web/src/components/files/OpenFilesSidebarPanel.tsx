@@ -310,12 +310,19 @@ function WorkspaceGroupPanel({
         setTreeNodes(tree)
       }
       setExpandedPaths((prev) => {
+        let changed = false
         const next = new Set(prev)
-        next.add(WORKSPACE_EXPLORER_ROOT_LABEL)
-        for (const node of chain) {
-          if (node.type === 'directory') next.add(node.path)
+        if (!next.has(WORKSPACE_EXPLORER_ROOT_LABEL)) {
+          next.add(WORKSPACE_EXPLORER_ROOT_LABEL)
+          changed = true
         }
-        return next
+        for (const node of chain) {
+          if (node.type === 'directory' && !next.has(node.path)) {
+            next.add(node.path)
+            changed = true
+          }
+        }
+        return changed ? next : prev
       })
       setSelectedExplorerPath(targetPath)
       setTreeError('')
