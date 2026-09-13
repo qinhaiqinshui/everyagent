@@ -1,6 +1,6 @@
 # 模型请求限流与 tpm 精确记账方案
 
-> 状态:**P0/P1 已实现**(rpm 并发闸门 + tpm 记账 + 系数持久化);P2(观测提示)待做
+> 状态:**P0/P1/P2 已实现**(rpm 并发闸门 + tpm 记账 + 系数持久化 + 排队 trace + config.get 透出);前端展示可选
 > 所属:every-agent-worker · 配置/运行时能力
 > 关联事故:t_62j3 LogOverflowException(8 个子 agent 同模型并发长思考 → 429 tpm/rpm → 退避重试放大大瞬态事件风暴)
 
@@ -293,9 +293,19 @@ onComplete(usage): // 流完成
 
 ## 9. 可选增强(第二期)
 
-1. **前端可见性**:`config.get` 返回每模型排队占用/活跃流数/当前 tpm 压力;任务内发 `model_rate_wait` 瞬态 trace 提示排队。
-2. **tpm 触发参数化**:当 tpm 压力接近阈值时,可通过任务 slash 动态调低该任务对某模型的并发(如 `/限流`),给用户主动降载手段。
-3. **池级叠加**:池外壳总 tpm/rpm 封顶,避免多个子任务各自用不同成员但整池仍超。
+已实现(P2):
+1. **排队 trace**:请求进入排队等待时,`RateLimitedChatModel` 经 `ModelRateLimiter` 的
+   `onWait` 观察者发瞬态 `task.trace(kind=model_rate_wait)`,前端据此展示
+   「模型「X」正在排队(在飞 N / 排队 M)」;按 `worker.limits.model-rate.wait-trace-threshold-ms`
+   (默认 1000ms)节流,同一请求复用 traceId 原地 upsert。
+2. **config.get 透出**:`rpcConfigGet` 响应新增 `rateStatus` 数组,每项含
+   `configId/enabled/rpm/maxConcurrency/tpm/inFlight/waiters/factor/sampleCount`,
+   前端据此展示模型当前负载与估算系数。
+
+仍未做(可选):
+3. **前端可视化**:`config.get` 返回的 `rateStatus` 与 `model_rate_wait` trace 的前端卡片渲染。
+4. **tpm 触发参数化**:任务 slash 动态调低某模型的并发(/限流)。
+5. **池级叠加**:池外壳总 tpm/rpm 封顶。
 
 ---
 

@@ -1310,7 +1310,24 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
                     c.params(), c.isDefault(), c.members());
             arr.add(Json.toJson(safe));
         }
-        ctx.ok(Json.obj().set("models", arr));
+        ObjectNode out = Json.obj().set("models", arr);
+        // 限流运行态(P2):排队/在飞/估算系数,前端据此展示模型当前负载。
+        ArrayNode rates = Json.arr();
+        for (ModelRateLimiter.Snapshot s : modelFactory.rateLimitSnapshots()) {
+            ObjectNode o = Json.obj();
+            o.put("configId", s.configId());
+            o.put("enabled", s.enabled());
+            o.put("rpm", s.rpm());
+            o.put("maxConcurrency", s.maxConcurrency());
+            o.put("tpm", s.tpm());
+            o.put("inFlight", s.inFlight());
+            o.put("waiters", s.waiters());
+            o.put("factor", Math.round(s.factor() * 1000.0) / 1000.0);
+            o.put("sampleCount", s.sampleCount());
+            rates.add(o);
+        }
+        out.set("rateStatus", rates);
+        ctx.ok(out);
     }
 
     // ---- 终态任务再运行(冷启动;无"续跑"概念,对 agent 就是一次普通运行)----

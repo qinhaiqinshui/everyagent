@@ -5,6 +5,8 @@ import jakarta.annotation.PreDestroy;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.JsonNode;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
@@ -42,6 +44,18 @@ public class ModelRateLimiterRegistry {
             return new ModelRateLimiter(id, cfg, props.getLimits().getModelRate(), persisted,
                     (factor, samples) -> stateStore.record(id, factor, samples));
         }));
+    }
+
+    /** 所有已建限流器的运行态快照(config.get 透出 P2)。 */
+    public List<ModelRateLimiter.Snapshot> snapshots() {
+        List<ModelRateLimiter.Snapshot> out = new ArrayList<>();
+        limiters.forEach((id, l) -> {
+            if (l != null) {
+                out.add(l.snapshot());
+            }
+        });
+        out.sort(java.util.Comparator.comparing(ModelRateLimiter.Snapshot::configId));
+        return out;
     }
 
     @PreDestroy

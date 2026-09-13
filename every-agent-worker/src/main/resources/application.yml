@@ -39,6 +39,7 @@ worker:
       est-window-sec: 60         # tpm 记账/估算滑动窗口(秒,与厂商 tpm 口径对齐)
       est-safety-ratio: 0.85     # tpm 压力触发延迟的保守余量(预到 85% 即延迟新起步)
       est-ema-alpha: 0.1         # 估算系数 EMA 学习率(越大越快贴近真实)
+      wait-trace-threshold-ms: 1000   # 排队等待超过该时长(ms)发瞬态 model_rate_wait trace
       default-rpm: 60            # 全局默认:每分钟最多发起请求数
       default-max-concurrency: 4 # 全局默认:同时 in-flight 请求上限(长思考防重叠)
       default-tpm: 0             # 全局默认 tpm(厂商套餐差异大,默认不启用;需者各模型显式配)

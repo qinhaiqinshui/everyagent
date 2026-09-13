@@ -492,6 +492,8 @@ public class WorkerProperties {
         /** 估算系数上下界保护(防止异常样本把系数拉飞)。 */
         private double estFactorMin = 0.3;
         private double estFactorMax = 3.0;
+        /** 排队等待超过该时长(ms)即发瞬态 model_rate_wait trace(前端可见排队提示)。 */
+        private long waitTraceThresholdMs = 1000;
         /**
          * 全局默认限流值(worker.models[].params 未显式配置时回退;见 design §4)。
          * 三项任一 >0 即生效;某模型要关闭某维度,在该模型 params 里显式设 0。
@@ -554,6 +556,14 @@ public class WorkerProperties {
 
         public void setEstFactorMax(double estFactorMax) {
             this.estFactorMax = estFactorMax;
+        }
+
+        public long getWaitTraceThresholdMs() {
+            return waitTraceThresholdMs;
+        }
+
+        public void setWaitTraceThresholdMs(long waitTraceThresholdMs) {
+            this.waitTraceThresholdMs = waitTraceThresholdMs;
         }
 
         public int getDefaultRpm() {

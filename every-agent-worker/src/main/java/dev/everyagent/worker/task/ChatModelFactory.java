@@ -58,7 +58,7 @@ public class ChatModelFactory {
             UnaryOperator<OpenAiChatOptions> optionsCustomizer) {
         if (!cfg.isPool()) {
             OpenAiChatOptions options = apply(options(cfg), optionsCustomizer);
-            return new AgentModel(build(cfg, options, agentId), options);
+            return new AgentModel(build(cfg, options, agentId, events), options);
         }
         ResolvedConfig primary = cfg.poolMembers().get(0);
         OpenAiChatOptions primaryOptions = apply(options(primary), optionsCustomizer);
@@ -74,7 +74,7 @@ public class ChatModelFactory {
         List<ModelSnapshot> memberSnapshots = new ArrayList<>(cfg.poolMembers().size());
         for (ResolvedConfig m : cfg.poolMembers()) {
             OpenAiChatOptions o = apply(options(m), optionsCustomizer);
-            members.add(build(m, o, agentId));
+            members.add(build(m, o, agentId, events));
             memberOptions.add(o);
             memberSnapshots.add(m.snapshot());
         }
@@ -96,18 +96,38 @@ public class ChatModelFactory {
      * 放行、流中/完成后记账与系数校准。池模型的每个成员同样经此包裹(各成员自己的限额)。
      */
     public ChatModel build(ResolvedConfig cfg, OpenAiChatOptions options, String agentId) {
+        return build(cfg, options, agentId, null);
+    }
+
+    /**
+     * 构建 ChatModel(OpenAI 兼容协议)。HTTP 层挂 {@link HttpRequestLoggingInterceptor}
+     * 打印真实请求体(含 skill 渐进式披露索引等 advisor 注入后的完整报文);
+     * agentId 仅用于日志前缀标识。
+     *
+     * <p>若该模型配置了限流参数(rpm/max-concurrency/tpm),外层再包
+     * {@link RateLimitedChatModel}(docs/design-model-rate-limit.md §8):请求起步排队等
+     * 放行、流中/完成后记账与系数校准。池模型的每个成员同样经此包裹(各成员自己的限额)。
+     * events 可空(无事件上下文时排队只记日志不发 trace)。
+     */
+    public ChatModel build(ResolvedConfig cfg, OpenAiChatOptions options, String agentId,
+            TaskEvents events) {
         ChatModel raw = OpenAiChatModel.builder()
                 .options(options)
                 .httpClientBuilderCustomizer(b -> b.interceptor(new HttpRequestLoggingInterceptor(agentId)))
                 .build();
         Optional<ModelRateLimiter> limiter = rateLimiterRegistry.of(
                 cfg.snapshot().configId(), cfg.snapshot().params());
-        return limiter.map(l -> (ChatModel) new RateLimitedChatModel(raw, l)).orElse(raw);
+        return limiter.map(l -> (ChatModel) new RateLimitedChatModel(raw, l, events,
+                props.getLimits().getModelRate().getWaitTraceThresholdMs())).orElse(raw);
+    }
+
+    /** 已建限流器的运行态快照(config.get 透出排队/在飞/估算系数;P2)。 */
+    public List<ModelRateLimiter.Snapshot> rateLimitSnapshots() {
+        return rateLimiterRegistry.snapshots();
     }
 
     /** 完整请求参数快照:baseUrl/apiKey/model/流式与采样参数,随 prompt 逐轮透传。 */
-    public OpenAiChatOptions options(ResolvedConfig cfg) {
-        OpenAiChatOptions.Builder b = OpenAiChatOptions.builder()
+    public OpenAiChatOptions options(ResolvedConfig cfg) {        OpenAiChatOptions.Builder b = OpenAiChatOptions.builder()
                 .baseUrl(cfg.snapshot().baseUrl())
                 .apiKey(cfg.apiKey())
                 .model(cfg.snapshot().model())

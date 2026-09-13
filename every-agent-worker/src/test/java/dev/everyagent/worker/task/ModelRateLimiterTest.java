@@ -136,4 +136,47 @@ class ModelRateLimiterTest {
             throw new AssertionError("期望 ModelRateLimitException,得到 " + e, e);
         }
     }
+
+    @Test
+    void waitObserverNotifiedWhileQueued() throws Exception {
+        ModelRateLimitConfig cfg = new ModelRateLimitConfig(0, 1, 0, 1.0);
+        ModelRateLimiter limiter = new ModelRateLimiter("m", cfg, defaults(5000), -1, null);
+        ModelRateLimiter.Permit p1 = limiter.acquire();
+        AtomicReference<ModelRateLimiter.WaitInfo> observed = new AtomicReference<>();
+        AtomicReference<Long> observedWaitMs = new AtomicReference<>();
+        Thread t = new Thread(() -> {
+            try {
+                limiter.acquire((info, waitMs) -> {
+                    observed.set(info);
+                    observedWaitMs.set(waitMs);
+                });
+            } catch (Exception ignored) {
+            }
+        });
+        t.setDaemon(true);
+        t.start();
+        Thread.sleep(300);
+        p1.complete(0);
+        t.join(2000);
+        assertNotNull(observed.get(), "排队时观察者应被回调");
+        assertEquals("m", observed.get().configId());
+        assertEquals(1, observed.get().inFlight(), "在飞 1 个");
+        assertTrue(observed.get().waiters() >= 0);
+        assertNotNull(observedWaitMs.get());
+    }
+
+    @Test
+    void snapshotReflectsRuntimeState() throws Exception {
+        ModelRateLimitConfig cfg = new ModelRateLimitConfig(2, 1, 100_000, 1.0);
+        ModelRateLimiter limiter = new ModelRateLimiter("m", cfg, defaults(5000), -1, null);
+        ModelRateLimiter.Permit p1 = limiter.acquire();
+        ModelRateLimiter.Snapshot s = limiter.snapshot();
+        assertTrue(s.enabled());
+        assertEquals(2, s.rpm());
+        assertEquals(1, s.maxConcurrency());
+        assertEquals(1, s.inFlight());
+        assertEquals(0, s.waiters());
+        p1.complete(0);
+        assertEquals(0, limiter.snapshot().inFlight(), "释放后在飞归零");
+    }
 }

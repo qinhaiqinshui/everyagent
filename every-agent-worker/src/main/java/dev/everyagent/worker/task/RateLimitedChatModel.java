@@ -22,17 +22,24 @@ public final class RateLimitedChatModel implements ChatModel {
 
     private final ChatModel delegate;
     private final ModelRateLimiter limiter;
+    /** 任务事件发射器(可空):排队超阈值时发瞬态 model_rate_wait trace。 */
+    private final TaskEvents events;
+    /** 排队等待超过该时长(ms)才发 trace(避免频繁小抖动刷屏)。 */
+    private final long waitTraceThresholdMs;
 
-    public RateLimitedChatModel(ChatModel delegate, ModelRateLimiter limiter) {
+    public RateLimitedChatModel(ChatModel delegate, ModelRateLimiter limiter,
+            TaskEvents events, long waitTraceThresholdMs) {
         this.delegate = delegate;
         this.limiter = limiter;
+        this.events = events;
+        this.waitTraceThresholdMs = waitTraceThresholdMs;
     }
 
     @Override
     public ChatResponse call(Prompt prompt) {
         ModelRateLimiter.Permit permit;
         try {
-            permit = limiter.acquire();
+            permit = limiter.acquire(events == null ? null : this::onWait);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new AgentCancelledException("interrupted");
@@ -52,7 +59,7 @@ public final class RateLimitedChatModel implements ChatModel {
         return Flux.defer(() -> {
             ModelRateLimiter.Permit permit;
             try {
-                permit = limiter.acquire();
+                permit = limiter.acquire(events == null ? null : this::onWait);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 return Flux.error(new AgentCancelledException("interrupted"));
@@ -99,4 +106,24 @@ public final class RateLimitedChatModel implements ChatModel {
         Integer out = response.getMetadata().getUsage().getCompletionTokens();
         return out == null ? 0 : out;
     }
+
+    /** 排队等待观察者:按节流阈值发瞬态 model_rate_wait trace(同一请求复用 traceId 原地 upsert)。 */
+    private void onWait(ModelRateLimiter.WaitInfo info, Long waitMs) {
+        long threshold = Math.max(0, waitTraceThresholdMs);
+        long now = System.currentTimeMillis();
+        synchronized (this) {
+            if (now - lastWaitTraceAt < threshold) {
+                return; // 节流:阈值内不重复发
+            }
+            lastWaitTraceAt = now;
+        }
+        String id = events.modelRateWait(waitTraceId, info.configId(), info.waiters(),
+                info.inFlight(), info.tpmPressure(), waitMs == null ? 0 : waitMs);
+        if (waitTraceId == null) {
+            waitTraceId = id;
+        }
+    }
+
+    private String waitTraceId = null;
+    private long lastWaitTraceAt = 0;
 }

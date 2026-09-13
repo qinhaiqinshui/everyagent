@@ -484,6 +484,34 @@ public final class TaskEvents {
         return s.configId() == null ? "" : s.configId();
     }
 
+    /**
+     * 模型限流排队 trace(瞬态,不落盘;kind='model_rate_wait'):请求进入排队等待时发,
+     * 前端据此展示「模型「X」正在排队(N/M)」。traceId 稳定(每个请求排队一段用同一 id
+     * 原地 upsert),由 {@code RateLimitedChatModel} 在等待轮询中调用。
+     *
+     * @param traceId    同一次请求排队的稳定 id(空则新建;由调用方跨轮询复用)
+     * @param configId   模型 configId
+     * @param waiters    当前排队的请求数(含本请求)
+     * @param inFlight   当前 in-flight 请求数
+     * @param tpmPressure 当前 tpm 压力(估算,仅展示)
+     * @param waitMs     本次预计等待时长
+     */
+    public String modelRateWait(String traceId, String configId, int waiters, int inFlight,
+            long tpmPressure, long waitMs) {
+        String id = (traceId == null || traceId.isEmpty()) ? ShortIds.next("trace") : traceId;
+        ObjectNode meta = Json.obj();
+        meta.put("configId", configId == null ? "" : configId);
+        meta.put("waiters", waiters);
+        meta.put("inFlight", inFlight);
+        meta.put("tpmPressure", tpmPressure);
+        meta.put("waitMs", waitMs);
+        appendTrace(id, "model_rate_wait", "模型限流排队",
+                "模型「" + (configId == null ? "" : configId) + "」正在排队(在飞 " + inFlight
+                        + " / 排队 " + waiters + ")",
+                null, "waiting", meta, false);
+        return id;
+    }
+
     /** 统一 trace 事件出口:payload 与前端 TaskTraceRecord 同形;persist=false 经 ext 标记为瞬态。 */
     private long appendTrace(String traceId, String kind, String title, String summary,
             String content, String status, JsonNode metadata, boolean persist) {

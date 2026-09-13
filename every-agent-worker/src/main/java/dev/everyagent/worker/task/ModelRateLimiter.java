@@ -85,11 +85,32 @@ public final class ModelRateLimiter {
         return factor;
     }
 
+    /** 运行时状态快照(config.get 透出 P2)。 */
+    public Snapshot snapshot() {
+        synchronized (monitor) {
+            return new Snapshot(configId, cfg.enabled(), cfg.rpm(), cfg.maxConcurrency(), cfg.tpm(),
+                    inFlight, waiters, factor, sampleCount.get());
+        }
+    }
+
+    /** 运行时状态(供前端 config.get 展示;P2)。 */
+    public record Snapshot(String configId, boolean enabled, int rpm, int maxConcurrency, long tpm,
+            int inFlight, int waiters, double factor, long sampleCount) {
+    }
+
+    /** 排队等待信息(每次等待轮询回调;P2 trace 内容源)。 */
+    public record WaitInfo(String configId, int waiters, int inFlight, long tpmPressure) {
+    }
+
     /**
      * 阻塞等待放行(虚拟线程内可阻塞;可被中断)。放行后返回一个 {@link Permit} 生命周期句柄,
      * 调用方须在完成/取消时归还(否则并发额度泄漏)。
+     *
+     * @param onWait 排队观察者(可选,每次进入等待轮询时回调,供 P2 发 model_rate_wait trace;
+     *               回调在锁内执行,须轻量、不可重入本 limiter)
      */
-    public Permit acquire() throws InterruptedException, ModelRateLimitException {
+    public Permit acquire(BiConsumer<WaitInfo, Long> onWait)
+            throws InterruptedException, ModelRateLimitException {
         synchronized (monitor) {
             long deadline = System.currentTimeMillis() + Math.max(1, defaults.getWaitTimeoutMs());
             if (waiters >= Math.max(1, defaults.getQueueCapacity())) {
@@ -109,17 +130,17 @@ public final class ModelRateLimiter {
                         if (rollMs <= 0) {
                             continue; // 已可滚出,立即重估
                         }
-                        waitUpTo(rollMs, deadline);
+                        waitAndNotify(rollMs, deadline, onWait);
                         continue;
                     }
                     // ② 并发上限
                     if (cfg.maxConcurrency() > 0 && inFlight >= cfg.maxConcurrency()) {
-                        waitUpTo(REEVAL_TICK_MS, deadline);
+                        waitAndNotify(REEVAL_TICK_MS, deadline, onWait);
                         continue;
                     }
                     // ③ tpm 压力(估算 + 已完成窗口)
                     if (tpmPressureExceeded()) {
-                        waitUpTo(REEVAL_TICK_MS, deadline);
+                        waitAndNotify(REEVAL_TICK_MS, deadline, onWait);
                         continue;
                     }
 
@@ -134,6 +155,10 @@ public final class ModelRateLimiter {
         }
     }
 
+    public Permit acquire() throws InterruptedException, ModelRateLimitException {
+        return acquire(null);
+    }
+
     /** 等待至多 min(ms, 剩余 deadline);超时抛错。 */
     private void waitUpTo(long ms, long deadline) throws InterruptedException {
         long now = System.currentTimeMillis();
@@ -146,6 +171,26 @@ public final class ModelRateLimiter {
         if (System.currentTimeMillis() >= deadline) {
             throw timeout();
         }
+    }
+
+    /** 等待并通知排队观察者(计算当前 tpm 压力供 trace 展示)。 */
+    private void waitAndNotify(long ms, long deadline, BiConsumer<WaitInfo, Long> onWait)
+            throws InterruptedException {
+        if (onWait != null) {
+            long pressure = currentTpmPressure();
+            onWait.accept(new WaitInfo(configId, waiters, inFlight, pressure),
+                    Math.min(ms, Math.max(0, deadline - System.currentTimeMillis())));
+        }
+        waitUpTo(ms, deadline);
+    }
+
+    /** 当前 tpm 压力(已完成窗口 token + 活跃流估算,未留安全余量)。 */
+    private long currentTpmPressure() {
+        long completed = 0;
+        for (TokenSample s : tpmWindow) {
+            completed += s.outputTokens();
+        }
+        return completed + estActiveOutput;
     }
 
     /** ③:已完成的 60s token 用量 + 活跃流估算(留安全余量) 是否已达 tpm。 */

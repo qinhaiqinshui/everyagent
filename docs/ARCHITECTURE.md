@@ -343,6 +343,7 @@ RoundIndexAdvisor(轮次索引+耗时,最外层) → SkillAdvisor(skill 渐进�
 - 请求起步经 `ModelRateLimiter.acquire` 排队等放行:rpm 窗口 / 并发信号量 / tpm 压力三关;超限进有界等待队列(默认队列 8、等 30s),**正常排队不报错**,仅队列满 + 超时才抛 `ModelRateLimitException`(非重试,文案含「减少同步派发/调大配置」建议)。
 - **tpm 记账**:流中无协议级 usage(OpenAI 兼容只在末帧带),故流中用自算文本 token 粗估(CJK≈1、其余≈4 字符 1 token)累计;请求完成后用厂商真实 usage 记账入 60s 窗口,并 EMA 反向校准估算系数(`token-est-factor`,每模型独立,持久化 `~/.everyagent/model-rate-state.json`,重启接续)。
 - 全局默认:`worker.limits.model-rate.{queue-capacity, wait-timeout-ms, est-window-sec, est-safety-ratio, est-ema-alpha, default-rpm, default-max-concurrency, default-tpm}`。
+- **观测(P2)**:排队等待发瞬态 `task.trace(kind=model_rate_wait)`(前端展示「模型正在排队」);`config.get` 响应带 `rateStatus` 数组(每模型 inFlight/waiters/factor 等运行态)。
 
 ### 7.5 上下文管理
 
