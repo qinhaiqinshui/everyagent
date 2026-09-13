@@ -482,7 +482,7 @@ public class WorkerProperties {
         /** 每模型等待队列容量:同时在等的请求超过该值 → 立即转 ModelRateLimitException(不再排队)。 */
         private int queueCapacity = 8;
         /** 排队最长等待时间(ms);超时仍未放行 → ModelRateLimitException。 */
-        private long waitTimeoutMs = 30_000;
+        private long waitTimeoutMs = 300_000;
         /** tpm 记账/估算滑动窗口(秒)。 */
         private long estWindowSec = 60;
         /** tpm 压力触发延迟的保守余量(估算到该比例即开始延迟新起步)。 */

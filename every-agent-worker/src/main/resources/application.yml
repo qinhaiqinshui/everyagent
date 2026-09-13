@@ -35,7 +35,7 @@ worker:
     # 各自配置;未显式配置的模型回退到这里的 default-*;某模型要关闭某维度,在其 params 显式设 0)。
     model-rate:
       queue-capacity: 8          # 每模型等待队列容量(同时等待超该值 → 立即报错)
-      wait-timeout-ms: 30000     # 排队最长等待;超时仍未放行 → ModelRateLimitException
+      wait-timeout-ms: 300000    # 排队最长等待(5 分钟);超时仍未放行 → ModelRateLimitException
       est-window-sec: 60         # tpm 记账/估算滑动窗口(秒,与厂商 tpm 口径对齐)
       est-safety-ratio: 0.85     # tpm 压力触发延迟的保守余量(预到 85% 即延迟新起步)
       est-ema-alpha: 0.1         # 估算系数 EMA 学习率(越大越快贴近真实)

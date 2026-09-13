@@ -116,7 +116,7 @@ worker:
   limits:
     model-rate:
       queue-capacity: 8        # 每模型等待队列容量(超过即不再排队,转错误)
-      wait-timeout-ms: 30000   # 排队最长等待
+      wait-timeout-ms: 300000   # 排队最长等待(5 分钟)
       est-window-sec: 60       # 估算/记账滑动窗口(不动导出,可调)
       est-safety-ratio: 0.85   # tpm 触发延迟的保守余量(预估到 85% 即开始延迟新起步)
       est-ema-alpha: 0.1       # 校准系数 EMA 学习率
@@ -245,7 +245,7 @@ onComplete(usage): // 流完成
 自定义非重试异常 `ModelRateLimitException`(非 429/5xx/IO/超时,`TransientErrorRetryAdvisor` 不重试,避免放大):
 
 ```
-模型「智谱」请求拥堵:等待 30s 仍未获得放行(并发=2 满 / rpm=60 满 / tpm 临近上限)。
+模型「智谱」请求拥堵:等待 5 分钟仍未获得放行(并发=2 满 / rpm=60 满 / tpm 临近上限)。
 建议: 1) 减少同时派发的子 agent/并行任务数量; 2) 调大该模型 rpm / max-concurrency
 (按厂商套餐); 3) 稍后重试。
 ```
@@ -337,7 +337,7 @@ onComplete(usage): // 流完成
 
 | 项 | 说明 |
 |---|---|
-| 排队延迟 | 正常排队最长 wait-timeout(默认 30s);交互略有等待,换取不报错/不 429 |
+| 排队延迟 | 正常排队最长 wait-timeout(默认 5 分钟);交互略有等待,换取不报错/不 429 |
 | 估算误差 | ③ 是近似;④ 事后精确记账会逐步校准系数,长期误差收敛 |
 | 持久化写失败 | 静默降级到默认系数,不阻塞;下个校准点重试 |
 | 配置缺省 | 缺省回退全局默认限流(rpm=60/concurrency=4),不再是裸奔不限流;某模型可显式设 0 关闭某维度 |
