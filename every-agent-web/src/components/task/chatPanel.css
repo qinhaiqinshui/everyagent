@@ -1600,7 +1600,7 @@
 .nagent-inline-editor {
   position: relative;
   /* 输入框固定高度，内容超出时在内部垂直滚动，不随聚焦状态变化。 */
-  height: 96px;
+  height: 66px;
   overflow-y: auto;
   padding: 0;
   border-radius: 0;
