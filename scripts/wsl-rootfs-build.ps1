@@ -1,8 +1,8 @@
-# eagent managed distro rootfs build -- PowerShell edition (Windows host; equivalent to wsl-rootfs-build.sh)
+# EveryAgent managed distro rootfs build -- PowerShell edition (Windows host; equivalent to wsl-rootfs-build.sh)
 #
 # Artifacts: eagent-rootfs.tar.gz + eagent-rootfs.tar.gz.sha256 -- 放仓库根 runtime/wsl/
 # (唯一真源,electron-builder extraResources 打进 <resourcesPath>/runtime/wsl),
-# worker 探测到发行版缺失即自动 wsl --import eagent (offline, sha256 gated).
+# worker 探测到发行版缺失即自动 wsl --import EveryAgent (offline, sha256 gated).
 #
 # Prereq: Docker Desktop (WSL2 backend), docker.exe on PATH.
 # Usage (normal PowerShell):
@@ -49,7 +49,7 @@ function Bad($m) { Write-Host "  [FAIL] $m" -ForegroundColor Red; exit 1 }
 $docker = (Get-Command docker -ErrorAction SilentlyContinue)
 if (-not $docker) { Bad "docker not found. Install Docker Desktop (WSL2 backend), or run wsl-rootfs-build.sh on Linux/CI, or use the manual fallback in the header." }
 
-Say "===== [eagent] no-systemd minimal rootfs build ($Base) ====="
+Say "===== [EveryAgent] no-systemd minimal rootfs build ($Base) ====="
 
 # cleanup previous container (may not exist; stderr suppressed via 2>&1)
 $null = & docker rm -f $CID 2>&1

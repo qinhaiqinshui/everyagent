@@ -8,11 +8,11 @@
 #   托管发行版导入:          powershell -File scripts\wsl-sandbox-probe.ps1 -Tarball rootfs.tar.x64.tar.gz
 #
 # 参数:
-#   -Distro <name>   发行版名(默认 eagent;开发试点可直接指向既有发行版如 Ubuntu)
+#   -Distro <name>   发行版名(默认 EveryAgent;开发试点可直接指向既有发行版如 Ubuntu)
 #   -Setup           探针前先在该发行版内安装 python3/bubblewrap/ripgrep/git(需网络,apt)
 #   -Tarball <path>  先 wsl --import <Distro> %LOCALAPPDATA%\eagent\wsl <Tarball> 再探针(不装包)
 param(
-    [string]$Distro = "eagent",
+    [string]$Distro = "EveryAgent",
     [switch]$Setup,
     [string]$Tarball = ""
 )
@@ -90,10 +90,10 @@ Check "bwrap 沙箱冒烟" ($r[1] -match "BWRAP_OK") ($r[1].Trim())
 $r = WslExec "$bwrapBase --unshare-net -- /bin/sh -c 'getent hosts example.com >/dev/null 2>&1 && echo NET_LEAK || echo NET_DENIED'" 30
 Check "unshare-net 全拒" ($r[1] -match "NET_DENIED") ($r[1].Trim())
 
-# ---- 8. interop 禁用状态:仅托管发行版(eagent)硬性要求 false(镜像已烤入
+# ---- 8. interop 禁用状态:仅托管发行版(EveryAgent)硬性要求 false(镜像已烤入
 #      wsl.conf);日常发行版开着 interop 只算多一条逃逸面,按提示项处理 ----
 $r = WslExec "grep -A2 '^\[interop\]' /etc/wsl.conf 2>/dev/null || echo NO_WSL_CONF"
-if ($Distro -eq "eagent") {
+if ($Distro -eq "EveryAgent") {
     Check "interop 状态(托管发行版应为 false)" ($r[1] -match "enabled\s*=\s*false") ($r[1].Trim() -replace "`n", "; ")
 } else {
     Write-Host ("[INFO] interop 状态(仅托管发行版要求 false):" + ($r[1].Trim() -replace "`n", "; "))

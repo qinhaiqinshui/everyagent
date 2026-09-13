@@ -26,7 +26,7 @@
     不传 --home 时默认 $EVERYAGENT_HOME 或 ~/.everyagent。
 
 注意:WSL 托管发行版 rootfs 由 WSL 注册表绑定,不能搬目录——Windows 下本脚本
-会先 `wsl.exe --unregister eagent`,删除旧 wsl/,重启 worker 时由 autoImport
+会先 `wsl.exe --unregister EveryAgent`,删除旧 wsl/,重启 worker 时由 autoImport
 自动重建到 sandbox/distro。
 """
 
@@ -291,16 +291,16 @@ def clean_legacy_wsl(home):
     unregistered = False
     if os.name == "nt":
         try:
-            r = subprocess.run(["wsl.exe", "--unregister", "eagent"],
+            r = subprocess.run(["wsl.exe", "--unregister", "EveryAgent"],
                                capture_output=True, text=True, timeout=120)
             unregistered = r.returncode == 0
         except (OSError, subprocess.SubprocessError) as e:
             print("[migrate] wsl.exe 不可用,跳过 unregister:", e)
     if unregistered:
-        print("[migrate] 已 wsl --unregister eagent(重启 worker 自动导入到 sandbox/distro)")
+        print("[migrate] 已 wsl --unregister EveryAgent(重启 worker 自动导入到 sandbox/distro)")
         delete_quietly(wsl_dir)
     else:
-        print("[migrate] 旧 wsl/ 目录存在:请确认已 wsl --unregister eagent 后删除,"
+        print("[migrate] 旧 wsl/ 目录存在:请确认已 wsl --unregister EveryAgent 后删除,"
               "或重启 worker 由 autoImport 重建到 sandbox/distro")
 
 

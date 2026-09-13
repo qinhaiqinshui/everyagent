@@ -330,6 +330,7 @@ RoundIndexAdvisor(轮次索引+耗时,最外层) → SkillAdvisor(skill 渐进�
 **模型池 = 一个模型 provider**(`provider: model-pool`,产出 `ModelPoolChatModel`),主/子 agent 与 AI 审议共用同一入口:
 
 - `worker.models` 里新增一种特殊配置项:`model` 字段用逗号分隔的池成员 configId 列表(`model: "deepseek,qwen"`,首个 = 主模型),configId 指向它即「任务默认带容灾」。
+- 池成员 config-id 不存在(笔误/漏配)为**非致命**配置错误:`ConfigStore` 启动解析时跳过该成员并 error 告警(容灾池本意即「单成员不可用不影响整体」),仅当池因此无任何有效成员时才拒绝启动;避免一个成员笔误崩掉整个 worker、连配置修复界面都进不去的死循环。
 - `ChatModelFactory.buildAgentModel` 遇到该 provider 产出 `ModelPoolChatModel`(组合各成员的 OpenAiChatModel,按序逐个尝试):请求异常(非网络、非终态)时切下一个成员重试——每个成员用**自己的完整 options 快照**(baseUrl/apiKey/model 在构建时固定),成功即返回该成员真实响应;网络异常、空响应耗尽、取消类原样上抛;流式带防重护栏(已下发 chunk 后流中断不切换)。容灾切换发 `task.trace(kind=model_failover)`。
 - 待池耗尽不做包络,最后异常原样上抛,交给外层瞬时错误重试 advisor 退避重跑。
 
@@ -464,7 +465,7 @@ ask 管道承载第二类阻塞请求:**危险操作授权**。`PermissionGate` 
 
 | 后端 | 语义 | 何时启用 |
 |---|---|---|
-| **wsl-direct**(Windows 默认) | 命令在托管的 WSL2 发行版(`eagent`,可丢弃系统)内以 root 运行;宿主盘隔离 = 关闭 automount + 每命令手动挂载工作区 + seccomp deny-mount 过滤器;网络默认放行,任务级 `/禁用网络` 时 unshare -n | `auto`(Windows 默认)/ 显式 `wsl-direct`;发行版缺失自动导入(rootfs 随包,sha256 校验) |
+| **wsl-direct**(Windows 默认) | 命令在托管的 WSL2 发行版(`EveryAgent`,可丢弃系统)内以 root 运行;宿主盘隔离 = 关闭 automount + 每命令手动挂载工作区 + seccomp deny-mount 过滤器;网络默认放行,任务级 `/禁用网络` 时 unshare -n | `auto`(Windows 默认)/ 显式 `wsl-direct`;发行版缺失自动导入(rootfs 随包,sha256 校验) |
 | **wsl-bwrap** | 命令经 bwrap 挂载命名空间运行:授权根 = `--bind` 白名单(授权=绑定,撤销=下次不绑,宿主零残留),网络默认放行,任务级 `/禁用网络` 时 `--unshare-net` 硬拒(新 netns 仅 down 的 lo,连回环也不通),工作区外宿主盘**不可见**(读白名单) | 显式 `wsl-bwrap`(更强隔离的用户知情选择) |
 | **windows-mic** | Restricted Token + Low IL + Job Object + 目录 Low 标注 + DACL 可写授权(Windows 原生路径) | `windows-mic` / WSL 探测失败回退 |
 | **none/direct** | 直接 spawn(仅超时/输出护栏/网络代理 env 剥离) | 显式 `none` / 非 Windows |
@@ -680,7 +681,7 @@ Input:  queued → consumed | discarded(任务取消)
 
 **多工作区并行**:注册表 `workspaces/workspaces.json` 条目 `{id, root, addedTs, lastActivityTs?, externalRoots?}`,引入**稳定 workspaceId**——默认工作区 id 恒为 `defaultworkspace`;其它工作区首次注册用 ShortIds 生成 `w_xxxxx` 短 id,落盘进注册表 `id` 字段,此后不变。默认工作区根默认 `<home>/defaultworkspace` 并自动注册进注册表(id=defaultworkspace),始终在册、不可移除。`fs.*`/`git.*`/`task.run`(新建)每次调用**必带 `workspace` 参数**(绝对路径),沙箱根在调用时按该参数解析;注册表变化广播 `workspaces.changed`(`workspaces.list` 与快照每项带 `id`、`addedAt`、`lastActivityAt`(任务收口刷新,旧条目回退注册时间),仍带 `defaultRoot`;缺失项含缺失标记 `missing`);写操作广播 `fs.changed{workspace,path,kind}`,前端按工作区分组刷新。**任务收口按「最后活动时间」倒序渲染**:收口路径(`TaskManager.finish`)经独立组件 `WorkspaceActivityTracker` 刷新任务挂靠工作区的 `lastActivityTs` 并广播(失败不阻塞收口);前端 `workspaceRegistry` 合并后按 `lastActivityAt ?? addedAt` 倒序,任务面板 / 文件管理器 / 源代码管理器渲染工作区顺序一致地对齐「最近活动的在最上面」。
 
-**工作区外部授权根(externalRoots)**:工作区条目的 `externalRoots` 字段(realpath 规范化路径数组)承载用户经 `@` 弹窗 `+` 图标显式选择的工作区外路径(§7.16),授权语义 = **完全读写(READ+WRITE+EXEC)**——「用户显式选择=已授权」:文件路径责任链 `ExternalRootAllowCheck` 放行环直接放行、不弹授权 ask(§7.8),各沙箱后端按 §7.10 消费。**注册规则**:目录=自身、文件=父目录;去重与包含吸收(新根被已有根包含 → 跳过,已有根被新根包含 → 替换);复用 `OverBroadRootCheck` 语义拒收过宽根(盘根、工作区祖先/工作区自身)。**生命周期为工作区级**(跟工作区走,非任务级);`workspaces.remove` 删除工作区时级联清理:仅 wsl-direct 后端,对该工作区**独有**(其余工作区 externalRoots 的 realpath 均未引用)的根 best-effort umount——`wsl.exe -d eagent -u root -e umount <挂载点>`(挂载点 = `WslPathMapper.toDirectMount(原生路径)`),失败 lazy umount 兜底,仍失败仅 WARN 不阻塞删除;bwrap 按次 bind 天然跟随,mic 标注幂等无残留。
+**工作区外部授权根(externalRoots)**:工作区条目的 `externalRoots` 字段(realpath 规范化路径数组)承载用户经 `@` 弹窗 `+` 图标显式选择的工作区外路径(§7.16),授权语义 = **完全读写(READ+WRITE+EXEC)**——「用户显式选择=已授权」:文件路径责任链 `ExternalRootAllowCheck` 放行环直接放行、不弹授权 ask(§7.8),各沙箱后端按 §7.10 消费。**注册规则**:目录=自身、文件=父目录;去重与包含吸收(新根被已有根包含 → 跳过,已有根被新根包含 → 替换);复用 `OverBroadRootCheck` 语义拒收过宽根(盘根、工作区祖先/工作区自身)。**生命周期为工作区级**(跟工作区走,非任务级);`workspaces.remove` 删除工作区时级联清理:仅 wsl-direct 后端,对该工作区**独有**(其余工作区 externalRoots 的 realpath 均未引用)的根 best-effort umount——`wsl.exe -d EveryAgent -u root -e umount <挂载点>`(挂载点 = `WslPathMapper.toDirectMount(原生路径)`),失败 lazy umount 兜底,仍失败仅 WARN 不阻塞删除;bwrap 按次 bind 天然跟随,mic 标注幂等无残留。
 
 **启动自检(工作区被移动/删除)**:worker 启动时校验 `workspaces/workspaces.json` 载入的已注册目录,缺失者(用户移动/删除目录后重启)在注册表快照标记 `missing`并广播,前端弹窗要求二选一——`workspaces.resolveMissing {action:"delete"}` 删除注册并**直接删 `workspaces/<wsId>/` 整个目录(任务数据随删)**,或 `{action:"redirect",newRoot}` 纠正到移动后的新目录——**保留 `id`、只改 `root` 并迁移挂靠任务的 `meta.workspace`,任务目录不搬**;默认工作区不可删除、只可纠正(纠正后的根直接写回 `workspaces.json` 中 id=defaultworkspace 条目的 `root`,重启读回,不再需要 `workspace-default.json` 覆盖文件)。未落定的缺失工作区 `resolve` 拒绝,避免沙箱挂载失败或静默新建空目录掩盖数据丢失。
 

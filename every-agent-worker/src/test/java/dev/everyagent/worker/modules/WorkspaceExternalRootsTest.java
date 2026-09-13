@@ -65,7 +65,7 @@ class WorkspaceExternalRootsTest {
         WorkerProperties p = new WorkerProperties();
         p.setHomeDir(home.toString());
         p.setWorkspaceRoot(defaultWs.toString());
-        p.getSandbox().getWsl().setDistro("eagent"); // 测试钉住 -d eagent 命令形态
+        p.getSandbox().getWsl().setDistro("EveryAgent"); // 测试钉住 -d EveryAgent 命令形态
         return p;
     }
 
@@ -273,7 +273,7 @@ class WorkspaceExternalRootsTest {
 
         // 独有根 cOnly 卸载;shared 与 B 共享不卸;nest 之下有 B 的 nest\inner 引用不卸。
         assertEquals(List.of("/c/ext/cOnly"), runner.mounts());
-        assertEquals(List.of("wsl.exe", "-d", "eagent", "-u", "root", "-e", "umount", "/c/ext/cOnly"),
+        assertEquals(List.of("wsl.exe", "-d", "EveryAgent", "-u", "root", "-e", "umount", "/c/ext/cOnly"),
                 runner.calls.get(0));
         // 删除流程不受 umount 步骤影响:注册表与任务级联照常。
         assertTrue(wm.list().stream().noneMatch(r -> r.root().equals(norm(wsC))));

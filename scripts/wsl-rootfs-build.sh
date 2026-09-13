@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# eagent 托管发行版镜像构建(wsl2-bubblewrap-sandbox-design.md §4.1/§12.3,§4.8 wsl-direct)。
+# EveryAgent 托管发行版镜像构建(wsl2-bubblewrap-sandbox-design.md §4.1/§12.3,§4.8 wsl-direct)。
 #
 # 产物:eagent-rootfs.tar.gz + eagent-rootfs.tar.gz.sha256 —— 放仓库根 runtime/wsl/
 # (唯一真源,electron-builder extraResources 打进 <resourcesPath>/runtime/wsl),
-# worker 首启探测到发行版缺失即自动 wsl --import eagent(免管理员、离线,构建时把依赖全部烤进镜像)。
+# worker 首启探测到发行版缺失即自动 wsl --import EveryAgent(免管理员、离线,构建时把依赖全部烤进镜像)。
 #
 # 在有 docker 的 Linux/CI 上运行:
 #   scripts/wsl-rootfs-build.sh [基础镜像] [输出目录]

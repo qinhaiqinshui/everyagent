@@ -7,7 +7,7 @@
  *
  * 产物:<仓库根>/runtime/wsl/{eagent-rootfs.tar.gz, eagent-rootfs.tar.gz.sha256}
  * 随 electron-builder extraResources(from: ../runtime)打进安装包 <resourcesPath>/runtime;
- * 运行时 preflight(wsl-distro.ts)直接用该镜像自动 wsl --import eagent(不再复制到
+ * 运行时 preflight(wsl-distro.ts)直接用该镜像自动 wsl --import EveryAgent(不再复制到
  * <EVERYAGENT_HOME>/wsl/)。
  *
  * 用法:npm run build:wsl(由 build:assets 调用)。

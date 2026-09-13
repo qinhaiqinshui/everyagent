@@ -16,7 +16,7 @@ worker 运行时以**字面相对路径 `./runtime`** 按 `user.dir` **只读引
 |---|---|---|
 | `bin/rg.exe`（Windows）/ `bin/rg`（Linux, musl 静态） | ripgrep，注入 bash/powershell 子进程 `PATH` 供 AI 直接执行 `rg` | `RipgrepBinary`（定位 `./runtime/bin/`） |
 | `wsl/eagent-run.py` | WSL 发行版侧启动器（stdin 载荷 → bwrap / root 直连） | `WslBwrapSandbox.resolveRunner()` / `WslDirectSandbox`（定位 `./runtime/wsl/`） |
-| `wsl/eagent-rootfs.tar.gz` + `.sha256` | 托管发行版 `eagent` 镜像，发行版缺失时自动 `wsl --import` | `WslBwrapSandbox.tarballFor()` / desktop preflight（定位 `./runtime/wsl/`） |
+| `wsl/eagent-rootfs.tar.gz` + `.sha256` | 托管发行版 `EveryAgent` 镜像，发行版缺失时自动 `wsl --import` | `WslBwrapSandbox.tarballFor()` / desktop preflight（定位 `./runtime/wsl/`） |
 
 > 镜像与 rg 二进制体积大，不入 git（见仓库根 `.gitignore` 的 `runtime/wsl/eagent-rootfs.tar.gz*`）；
 > `eagent-run.py` 随源码入 git。
@@ -64,7 +64,7 @@ scripts/wsl-rootfs-build.sh ./runtime/wsl
 ```
 
 打包：`electron-builder.yml` 的 `extraResources`（`from: ../runtime`）把本目录原样搬进
-`<resourcesPath>/runtime`。运行时 desktop preflight 直接用该目录镜像自动 `wsl --import eagent`
+`<resourcesPath>/runtime`。运行时 desktop preflight 直接用该目录镜像自动 `wsl --import EveryAgent`
 （不再复制到 `~/.everyagent/wsl/`）；worker 探测的 `tarballFor()` 也优先读
 `./runtime/wsl/eagent-rootfs.tar.gz`。
 

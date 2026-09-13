@@ -94,7 +94,7 @@ worker:
     #    persistent-root: ""       # 空 = <系统目录>/sandbox;也可指定绝对路径
     # wsl-bwrap 专属:distro 须预装 python3 + bwrap(rg/git 建议;装配/探针见 scripts/wsl-sandbox-probe.ps1)。
     wsl:
-      distro: "eagent"              # 空(默认)= WSL 默认发行版(wsl -l -v 带 * 者,免配置即可探测);生产托管发行版显式配 eagent
+      distro: "EveryAgent"              # 空(默认)= WSL 默认发行版(wsl -l -v 带 * 者,免配置即可探测);生产托管发行版显式配 EveryAgent
       tarball: wsl/eagent-rootfs.tar.gz  # 托管镜像(相对系统目录):在位且发行版缺失时首启自动 wsl --import(免管理员、离线,sha256 同名 .sha256 把关);文件不在=关闭
     #   ro-islands: []          # 工作区相对只读岛;默认空——agent 需 git commit,.git 不默认保护
     #   pwsh-enabled: false     # true 时 powershell 命令经发行版内 pwsh 执行(须发行版预装)

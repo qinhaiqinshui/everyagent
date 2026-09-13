@@ -1,7 +1,7 @@
 # wsl-direct 后端发行版装配:关闭 automount,让沙箱发行版内只可见工作区
 #
 # 用法(普通 PowerShell,非管理员、非沙箱):
-#     powershell -NoProfile -ExecutionPolicy Bypass -File scripts\wsl-direct-enable.ps1 [-Distro eagent]
+#     powershell -NoProfile -ExecutionPolicy Bypass -File scripts\wsl-direct-enable.ps1 [-Distro EveryAgent]
 #
 # 与 wsl-bwrap 的 wsl.conf 差异:两种后端的 automount 取向相反——
 #   wsl-bwrap:automount=true (启动器/绑定源走 /mnt,需整盘挂载)
@@ -10,7 +10,7 @@
 #
 # 生效条件:wsl.conf 改动需 wsl --terminate 后重启发行版进程才生效。
 param(
-    [string]$Distro = "eagent"   # 目标发行版;默认 eagent(托管)
+    [string]$Distro = "EveryAgent"   # 目标发行版;默认 EveryAgent(托管)
 )
 
 $ErrorActionPreference = "SilentlyContinue"

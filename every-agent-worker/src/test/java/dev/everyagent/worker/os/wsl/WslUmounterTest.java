@@ -38,7 +38,7 @@ class WslUmounterTest {
     private WorkerProperties props() {
         WorkerProperties p = new WorkerProperties();
         p.setHomeDir(java.nio.file.Path.of("build/tmp-umounter-home").toString());
-        p.getSandbox().getWsl().setDistro("eagent");
+        p.getSandbox().getWsl().setDistro("EveryAgent");
         return p;
     }
 
@@ -46,7 +46,7 @@ class WslUmounterTest {
     void buildsWslUmountCommandWithDirectMountPoint() {
         FakeRunner runner = new FakeRunner();
         new WslUmounter(props(), runner).umountQuietly(Path.of("C:\\a\\b"));
-        assertEquals(List.of(List.of("wsl.exe", "-d", "eagent", "-u", "root", "-e", "umount", "/c/a/b")),
+        assertEquals(List.of(List.of("wsl.exe", "-d", "EveryAgent", "-u", "root", "-e", "umount", "/c/a/b")),
                 runner.calls);
     }
 
