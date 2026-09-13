@@ -10,6 +10,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -265,8 +266,14 @@ public final class WslDirectSandbox {
         }
     }
 
-    /** 全部已注册工作区 + 当前工作区的挂载对 [{src, dest}](Windows 源 → 原路径挂载点)。 */
-    private static List<Map<String, String>> mountPairs(List<Path> allWorkspaces, Path cwd) {
+    /**
+     * 全部已注册工作区 + 当前工作区的挂载对 [{src, dest}](Windows 源 → 原路径挂载点)。
+     *
+     * <p>宿主上已不存在的目录(任务数据目录被清理、外部授权根失效等)直接跳过——
+     * 否则 runner 每次命令都白挂一次 drvfs 失败并打 stderr 噪音,且目录复活后
+     * 下次命令会自愈重挂(幂等 _ensure_mount),无需在此处记忆。包私有供单测钉住契约。
+     */
+    static List<Map<String, String>> mountPairs(List<Path> allWorkspaces, Path cwd) {
         Set<Path> roots = new LinkedHashSet<>();
         if (cwd != null) {
             roots.add(cwd);
@@ -276,6 +283,10 @@ public final class WslDirectSandbox {
         }
         List<Map<String, String>> pairs = new ArrayList<>();
         for (Path ws : roots) {
+            if (!Files.isDirectory(ws)) {
+                log.debug("[sandbox] 跳过不存在的挂载源(已删除/未创建): {}", ws);
+                continue;
+            }
             String dest = WslPathMapper.toDirectMount(ws);
             if (dest != null) {
                 pairs.add(Map.of("src", ws.toString(), "dest", dest));
