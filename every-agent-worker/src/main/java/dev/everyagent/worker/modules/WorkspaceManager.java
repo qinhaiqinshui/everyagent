@@ -331,6 +331,81 @@ public class WorkspaceManager {
         return out;
     }
 
+    /**
+     * 清理宿主上已不存在的注册工作区根与外部授权根(沙箱挂载前调用,best-effort)。
+     * 注册工作区根:不存在即移除注册(默认工作区除外);外部授权根:从所属工作区的
+     * externalRoots 中剔除。有变更时原子落盘 + 广播注册表变化。
+     * 返回清理后仍存活的全部根列表(注册工作区根 + 外部授权根,Path 去重)。
+     *
+     * <p>与 {@link #rpcRemove} 不同:本方法仅做注册表级清理,不级联删除任务数据、
+     * 不触发级联 umount——任务数据保留在系统目录,目录复活后仍可重新注册/纠正;
+     * umount 由 runner 幂等 _ensure_mount 兜底,无需主动卸载已失效挂载点。
+     */
+    public synchronized List<Path> pruneStaleAndListMountRoots() {
+        boolean changed = false;
+
+        // ① 清理不存在的注册工作区根(默认工作区除外)
+        String defaultKey = defaultRoot != null ? defaultRoot.toString() : null;
+        List<String> staleWsKeys = new ArrayList<>();
+        for (Registered r : registry.values()) {
+            if (defaultKey != null && r.root().equals(defaultKey)) {
+                continue; // 默认工作区即使目录不存在也保留(可能重新创建)
+            }
+            if (!Files.isDirectory(Path.of(r.root()))) {
+                staleWsKeys.add(r.root());
+            }
+        }
+        for (String key : staleWsKeys) {
+            registry.remove(key);
+            missing.remove(key);
+            cache.remove(key);
+            changed = true;
+            log.info("工作区根目录已不存在,从注册表移除: {}", key);
+        }
+
+        // ② 清理各工作区不存在的 externalRoots
+        for (Registered r : list()) { // list() 返回副本,遍历安全
+            List<String> staleExt = new ArrayList<>();
+            for (String raw : r.externalRoots()) {
+                if (!Files.isDirectory(Path.of(raw))) {
+                    staleExt.add(raw);
+                }
+            }
+            if (!staleExt.isEmpty()) {
+                List<String> remaining = new ArrayList<>(r.externalRoots());
+                remaining.removeAll(staleExt);
+                registry.put(r.root(), new Registered(r.id(), r.root(), r.addedAt(),
+                        r.lastActivityAt(), remaining));
+                changed = true;
+                log.info("工作区 {} 的外部授权根已不存在,移除: {}", r.root(), staleExt);
+            }
+        }
+
+        if (changed) {
+            try {
+                persistRegistry();
+            } catch (IOException e) {
+                log.warn("清理失效挂载源后注册表落盘失败: {}", e.getMessage());
+            }
+            broadcastRegistry();
+        }
+
+        // ③ 返回存活列表(注册工作区根 + 外部授权根,Path 去重)
+        List<Path> out = new ArrayList<>();
+        for (Registered r : list()) {
+            out.add(Path.of(r.root()));
+        }
+        for (Registered r : list()) {
+            for (String raw : r.externalRoots()) {
+                Path p = Path.of(raw);
+                if (!out.contains(p)) {
+                    out.add(p);
+                }
+            }
+        }
+        return out;
+    }
+
     // ---- RPC ----
 
     private void rpcList(RpcContext ctx) {

@@ -269,9 +269,10 @@ public final class WslDirectSandbox {
     /**
      * 全部已注册工作区 + 当前工作区的挂载对 [{src, dest}](Windows 源 → 原路径挂载点)。
      *
-     * <p>宿主上已不存在的目录(任务数据目录被清理、外部授权根失效等)直接跳过——
-     * 否则 runner 每次命令都白挂一次 drvfs 失败并打 stderr 噪音,且目录复活后
-     * 下次命令会自愈重挂(幂等 _ensure_mount),无需在此处记忆。包私有供单测钉住契约。
+     * <p>工作区根与外部授权根已在 {@link OsSandbox#wslDirectMountRoots()} 经
+     * {@link WorkspaceManager#pruneStaleAndListMountRoots()} 完成失效清理;
+     * 此处仅对 cwd 做存在性防御(cwd 不属于注册表,不存在时不应阻塞命令执行)。
+     * 包私有供单测钉住契约。
      */
     static List<Map<String, String>> mountPairs(List<Path> allWorkspaces, Path cwd) {
         Set<Path> roots = new LinkedHashSet<>();

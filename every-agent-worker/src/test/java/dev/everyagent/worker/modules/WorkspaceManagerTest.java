@@ -20,6 +20,7 @@ import tools.jackson.databind.node.ObjectNode;
 import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -231,5 +232,132 @@ class WorkspaceManagerTest {
         assertDoesNotThrow(() -> wm.touchActivity("  "));
         assertDoesNotThrow(() -> wm.touchActivity(null));
         assertEquals(2, wm.list().size(), "未知 root 不新增不修改条目");
+    }
+
+    // ---- pruneStaleAndListMountRoots:沙箱挂载前清理失效注册条目 ----
+
+    @Test
+    void pruneStaleRemovesNonexistentWorkspaceRootsExceptDefault() throws Exception {
+        Path home = tempDir.resolve("home");
+        Path defaultWs = tempDir.resolve("default-ws");
+        Path validWs = tempDir.resolve("valid-ws");
+        Path goneWs = tempDir.resolve("gone-ws");
+        Files.createDirectories(defaultWs);
+        Files.createDirectories(validWs);
+        // goneWs 故意不创建:模拟已删除的任务数据目录
+
+        Path registryDir = home.resolve("workspaces");
+        Files.createDirectories(registryDir);
+        ArrayNode arr = Json.arr();
+        arr.add(Json.obj().put("root", defaultWs.toAbsolutePath().normalize().toString())
+                .put("id", WorkspaceManager.DEFAULT_WORKSPACE_ID).put("addedTs", 1000L));
+        arr.add(Json.obj().put("root", validWs.toAbsolutePath().normalize().toString())
+                .put("id", "w_valid").put("addedTs", 2000L));
+        arr.add(Json.obj().put("root", goneWs.toAbsolutePath().normalize().toString())
+                .put("id", "w_gone").put("addedTs", 3000L));
+        Files.writeString(registryDir.resolve("workspaces.json"), Json.write(arr));
+
+        WorkspaceManager wm = new WorkspaceManager(props(home, defaultWs),
+                mock(RpcDispatcher.class), mock(HubPool.class), mock(ObjectProvider.class), noUmount());
+        wm.init();
+
+        List<Path> alive = wm.pruneStaleAndListMountRoots();
+        assertTrue(alive.contains(defaultWs), "默认工作区(即使存在)保留");
+        assertTrue(alive.contains(validWs), "有效工作区保留");
+        assertTrue(!alive.contains(goneWs), "不存在的注册工作区根被移除");
+        assertTrue(wm.list().stream().noneMatch(r -> r.root().equals(goneWs.toAbsolutePath().normalize().toString())),
+                "注册表中已清除失效条目");
+    }
+
+    @Test
+    void pruneStaleRemovesNonexistentExternalRoots() throws Exception {
+        Path home = tempDir.resolve("home");
+        Path ws = tempDir.resolve("ws");
+        Path extAlive = tempDir.resolve("ext-alive");
+        Path extGone = tempDir.resolve("ext-gone");
+        Files.createDirectories(ws);
+        Files.createDirectories(extAlive);
+        // extGone 故意不创建
+
+        Path registryDir = home.resolve("workspaces");
+        Files.createDirectories(registryDir);
+        ArrayNode arr = Json.arr();
+        ArrayNode ext = Json.arr();
+        ext.add(extAlive.toAbsolutePath().normalize().toString());
+        ext.add(extGone.toAbsolutePath().normalize().toString());
+        arr.add(Json.obj().put("root", ws.toAbsolutePath().normalize().toString())
+                .put("id", "w_test").put("addedTs", 1000L).set("externalRoots", ext));
+        Files.writeString(registryDir.resolve("workspaces.json"), Json.write(arr));
+
+        WorkspaceManager wm = new WorkspaceManager(props(home, ws),
+                mock(RpcDispatcher.class), mock(HubPool.class), mock(ObjectProvider.class), noUmount());
+        wm.init();
+
+        List<Path> alive = wm.pruneStaleAndListMountRoots();
+        assertTrue(alive.contains(ws), "工作区根保留");
+        assertTrue(alive.contains(extAlive), "存活的外部授权根保留");
+        assertTrue(!alive.contains(extGone), "不存在的的外部授权根被移除");
+
+        // 落盘校验:workspaces.json 中 externalRoots 只剩存活项
+        Path f = home.resolve("workspaces").resolve("workspaces.json");
+        JsonNode saved = Json.parse(Files.readString(f));
+        for (JsonNode n : saved) {
+            if (ws.toAbsolutePath().normalize().toString().equals(n.path("root").asString(""))) {
+                JsonNode savedExt = n.path("externalRoots");
+                assertEquals(1, savedExt.size(), "externalRoots 只剩存活项");
+                assertEquals(extAlive.toAbsolutePath().normalize().toString(), savedExt.get(0).asString());
+            }
+        }
+    }
+
+    @Test
+    void pruneStaleDefaultWorkspaceSurvivesEvenIfMissing() throws Exception {
+        Path home = tempDir.resolve("home");
+        Path defaultWs = tempDir.resolve("default-ws");
+        // defaultWs 故意不创建:默认工作区目录缺失但注册表条目仍在
+
+        Path registryDir = home.resolve("workspaces");
+        Files.createDirectories(registryDir);
+        ArrayNode arr = Json.arr();
+        arr.add(Json.obj().put("root", defaultWs.toAbsolutePath().normalize().toString())
+                .put("id", WorkspaceManager.DEFAULT_WORKSPACE_ID).put("addedTs", 1000L));
+        Files.writeString(registryDir.resolve("workspaces.json"), Json.write(arr));
+
+        WorkspaceManager wm = new WorkspaceManager(props(home, defaultWs),
+                mock(RpcDispatcher.class), mock(HubPool.class), mock(ObjectProvider.class), noUmount());
+        wm.init();
+
+        List<Path> alive = wm.pruneStaleAndListMountRoots();
+        assertTrue(alive.contains(defaultWs), "默认工作区即使目录不存在也保留(用户可能重新创建)");
+        assertEquals(1, wm.list().size(), "注册表条目仍在");
+    }
+
+    @Test
+    void pruneStaleNoChangeWhenAllAlive() throws Exception {
+        Path home = tempDir.resolve("home");
+        Path ws = tempDir.resolve("ws");
+        Path ext = tempDir.resolve("ext");
+        Files.createDirectories(ws);
+        Files.createDirectories(ext);
+
+        Path registryDir = home.resolve("workspaces");
+        Files.createDirectories(registryDir);
+        ArrayNode arr = Json.arr();
+        ArrayNode extArr = Json.arr();
+        extArr.add(ext.toAbsolutePath().normalize().toString());
+        arr.add(Json.obj().put("root", ws.toAbsolutePath().normalize().toString())
+                .put("id", "w_test").put("addedTs", 1000L).set("externalRoots", extArr));
+        Files.writeString(registryDir.resolve("workspaces.json"), Json.write(arr));
+
+        WorkspaceManager wm = new WorkspaceManager(props(home, ws),
+                mock(RpcDispatcher.class), mock(HubPool.class), mock(ObjectProvider.class), noUmount());
+        wm.init();
+
+        List<Path> alive = wm.pruneStaleAndListMountRoots();
+        assertEquals(2, alive.size(), "全部存活:工作区根 + 外部授权根");
+        assertTrue(alive.contains(ws));
+        assertTrue(alive.contains(ext));
+        assertEquals(1, wm.list().size(), "注册表不变");
+        assertEquals(1, wm.list().get(0).externalRoots().size(), "externalRoots 不变");
     }
 }
