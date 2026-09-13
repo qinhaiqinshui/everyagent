@@ -63,11 +63,26 @@ class ConfigStoreTest {
     }
 
     @Test
-    void poolReferencingMissingMemberFailsFast() {
+    void poolReferencingMissingMemberSkipsIt() {
+        // 池成员 config-id 不存在(笔误/漏配)= 非致命:跳过该成员,保留其余有效成员。
+        ConfigStore store = new ConfigStore(props(
+                model("a", "pa", "ma"),
+                model("b", "pb", "mb"),
+                model("pool", "model-pool", "a,no-such,b")), POOL);
+        ResolvedConfig cfg = store.resolve("pool");
+        assertTrue(cfg.isPool(), "池配置 isPool 应为 true");
+        assertEquals(List.of("a", "b"),
+                cfg.poolMembers().stream().map(m -> m.snapshot().configId()).toList(),
+                "缺失成员应被跳过,有效成员按序保留");
+    }
+
+    @Test
+    void poolAllMembersMissingFailsFast() {
+        // 池引用的所有成员都不存在 = 池无有效成员,仍拒绝启动。
         assertThrows(IllegalStateException.class,
                 () -> new ConfigStore(props(
                         model("a", "pa", "ma"),
-                        model("pool", "model-pool", "a,no-such")), POOL));
+                        model("pool", "model-pool", "no-such-1,no-such-2")), POOL));
     }
 
     @Test
