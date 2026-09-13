@@ -1599,10 +1599,9 @@
 
 .nagent-inline-editor {
   position: relative;
-  min-height: 34px;
-  max-height: 240px;
+  /* 输入框固定高度，内容超出时在内部垂直滚动，不随聚焦状态变化。 */
+  height: 96px;
   overflow-y: auto;
-  transition: min-height 0.18s ease;
   padding: 0;
   border-radius: 0;
   background: transparent;
@@ -1620,11 +1619,6 @@
 
 .nagent-inline-editor:focus {
   border: none;
-}
-
-/* 聚焦时扩大输入框高度，失焦时收缩回最小高度 */
-.nagent-inline-editor:focus-within {
-  min-height: 96px;
 }
 
 .nagent-inline-editor--empty::before {
