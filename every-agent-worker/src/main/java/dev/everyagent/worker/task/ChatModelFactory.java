@@ -12,6 +12,7 @@ import tools.jackson.databind.JsonNode;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.function.UnaryOperator;
 
 /**
@@ -33,9 +34,11 @@ public class ChatModelFactory {
     }
 
     private final WorkerProperties props;
+    private final ModelRateLimiterRegistry rateLimiterRegistry;
 
-    public ChatModelFactory(WorkerProperties props) {
+    public ChatModelFactory(WorkerProperties props, ModelRateLimiterRegistry rateLimiterRegistry) {
         this.props = props;
+        this.rateLimiterRegistry = rateLimiterRegistry;
     }
 
     /**
@@ -87,12 +90,19 @@ public class ChatModelFactory {
      * 构建 ChatModel(OpenAI 兼容协议)。HTTP 层挂 {@link HttpRequestLoggingInterceptor}
      * 打印真实请求体(含 skill 渐进式披露索引等 advisor 注入后的完整报文);
      * agentId 仅用于日志前缀标识。
+     *
+     * <p>若该模型配置了限流参数(rpm/max-concurrency/tpm),外层再包
+     * {@link RateLimitedChatModel}(docs/design-model-rate-limit.md §8):请求起步排队等
+     * 放行、流中/完成后记账与系数校准。池模型的每个成员同样经此包裹(各成员自己的限额)。
      */
     public ChatModel build(ResolvedConfig cfg, OpenAiChatOptions options, String agentId) {
-        return OpenAiChatModel.builder()
+        ChatModel raw = OpenAiChatModel.builder()
                 .options(options)
                 .httpClientBuilderCustomizer(b -> b.interceptor(new HttpRequestLoggingInterceptor(agentId)))
                 .build();
+        Optional<ModelRateLimiter> limiter = rateLimiterRegistry.of(
+                cfg.snapshot().configId(), cfg.snapshot().params());
+        return limiter.map(l -> (ChatModel) new RateLimitedChatModel(raw, l)).orElse(raw);
     }
 
     /** 完整请求参数快照:baseUrl/apiKey/model/流式与采样参数,随 prompt 逐轮透传。 */

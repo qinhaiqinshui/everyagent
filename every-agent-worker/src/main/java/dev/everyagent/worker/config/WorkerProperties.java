@@ -309,6 +309,11 @@ public class WorkerProperties {
         /** 工具定义等固定预留 token(估算用量时累加,量级小:实测 tool input ~1.6k)。默认 4096。 */
         private long contextToolReserveTokens = 4096;
         /**
+         * 模型请求限流全局默认(per-model 的 rpm/max-concurrency/tpm 在 worker.models[].params 配置;
+         * 这里统一排队与估算参数,见 docs/design-model-rate-limit.md)。
+         */
+        private ModelRate modelRate = new ModelRate();
+        /**
          * 是否启用「上轮实测 offset 校准」:true = 用上一轮实测用量校准上下文估算,
          * false = 回退纯 reserve 估算。默认 true。
          */
@@ -457,6 +462,91 @@ public class WorkerProperties {
 
         public void setContextMaxToolResultChars(int contextMaxToolResultChars) {
             this.contextMaxToolResultChars = contextMaxToolResultChars;
+        }
+
+        public ModelRate getModelRate() {
+            return modelRate;
+        }
+
+        public void setModelRate(ModelRate modelRate) {
+            this.modelRate = modelRate == null ? new ModelRate() : modelRate;
+        }
+    }
+
+    /**
+     * 模型请求限流全局默认(架构 docs/design-model-rate-limit.md §4):
+     * per-model 的 rpm / max-concurrency / tpm 在 {@code worker.models[].params} 各自配置;
+     * 这里统一排队、tpm 估算与 EMA 校准的全局参数。
+     */
+    public static class ModelRate {
+        /** 每模型等待队列容量:同时在等的请求超过该值 → 立即转 ModelRateLimitException(不再排队)。 */
+        private int queueCapacity = 8;
+        /** 排队最长等待时间(ms);超时仍未放行 → ModelRateLimitException。 */
+        private long waitTimeoutMs = 30_000;
+        /** tpm 记账/估算滑动窗口(秒)。 */
+        private long estWindowSec = 60;
+        /** tpm 压力触发延迟的保守余量(估算到该比例即开始延迟新起步)。 */
+        private double estSafetyRatio = 0.85;
+        /** 估算系数 EMA 学习率(0~1;越大越快贴近真实,越小越平滑)。 */
+        private double estEmaAlpha = 0.1;
+        /** 估算系数上下界保护(防止异常样本把系数拉飞)。 */
+        private double estFactorMin = 0.3;
+        private double estFactorMax = 3.0;
+
+        public int getQueueCapacity() {
+            return queueCapacity;
+        }
+
+        public void setQueueCapacity(int queueCapacity) {
+            this.queueCapacity = queueCapacity;
+        }
+
+        public long getWaitTimeoutMs() {
+            return waitTimeoutMs;
+        }
+
+        public void setWaitTimeoutMs(long waitTimeoutMs) {
+            this.waitTimeoutMs = waitTimeoutMs;
+        }
+
+        public long getEstWindowSec() {
+            return estWindowSec;
+        }
+
+        public void setEstWindowSec(long estWindowSec) {
+            this.estWindowSec = estWindowSec;
+        }
+
+        public double getEstSafetyRatio() {
+            return estSafetyRatio;
+        }
+
+        public void setEstSafetyRatio(double estSafetyRatio) {
+            this.estSafetyRatio = estSafetyRatio;
+        }
+
+        public double getEstEmaAlpha() {
+            return estEmaAlpha;
+        }
+
+        public void setEstEmaAlpha(double estEmaAlpha) {
+            this.estEmaAlpha = estEmaAlpha;
+        }
+
+        public double getEstFactorMin() {
+            return estFactorMin;
+        }
+
+        public void setEstFactorMin(double estFactorMin) {
+            this.estFactorMin = estFactorMin;
+        }
+
+        public double getEstFactorMax() {
+            return estFactorMax;
+        }
+
+        public void setEstFactorMax(double estFactorMax) {
+            this.estFactorMax = estFactorMax;
         }
     }
 

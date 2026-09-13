@@ -31,6 +31,14 @@ worker:
     # 模型流「无输出」判定窗口(ms):ModelLengthGuardAdvisor 据此把「长时间无输出 + 自估输出
     # ≈ maxTokens」判定为 finish_reason=length,避免空等 10 分钟读超时(须短于 model-timeout-ms)。
     length-stall-ms: 120000
+    # 模型请求限流全局默认(per-model 的 rpm/max-concurrency/tpm 在 worker.models[].params
+    # 各自配置;这里统一排队与估算参数,见 docs/design-model-rate-limit.md §4)。
+    model-rate:
+      queue-capacity: 8          # 每模型等待队列容量(同时等待超该值 → 立即报错)
+      wait-timeout-ms: 30000     # 排队最长等待;超时仍未放行 → ModelRateLimitException
+      est-window-sec: 60         # tpm 记账/估算滑动窗口(秒,与厂商 tpm 口径对齐)
+      est-safety-ratio: 0.85     # tpm 压力触发延迟的保守余量(预到 85% 即延迟新起步)
+      est-ema-alpha: 0.1         # 估算系数 EMA 学习率(越大越快贴近真实)
   # 危险操作授权(PermissionGate):危险命令正则/系统目录排除/授权弹窗超时;空缺用内置默认
   # 进程沙箱:单命令看门狗超时(ms);超时强杀子进程。30 分钟 = 1800000。
   # active-process-limit:Job Object 活动进程数上限(0=不限制)。默认 32。
