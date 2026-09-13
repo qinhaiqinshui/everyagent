@@ -120,7 +120,7 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
   const [sidebarOpen, setSidebarOpen] = React.useState(false)
   const [activeSidebarPanelId, setActiveSidebarPanelId] = React.useState<SidebarPanelId>('tasks')
   const [gitChangeCount, setGitChangeCount] = React.useState(0)
-  const [desktopSidebarWidth, setDesktopSidebarWidth] = React.useState(312)
+  const [desktopSidebarWidth, setDesktopSidebarWidth] = React.useState(264)
   const [mobileSidebarHeight, setMobileSidebarHeight] = React.useState(() => getMobileSidebarDefaultHeight())
   const [workspaceTabs, setWorkspaceTabs] = React.useState<WorkspaceTab[]>([])
   const [activeWorkspaceTabId, setActiveWorkspaceTabId] = React.useState<WorkspaceTab['id'] | null>(null)
