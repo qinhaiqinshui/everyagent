@@ -1,0 +1,30 @@
+# 统一行尾约定：所有文本文件在工作区一律使用 CRLF（Windows 风格）。
+# 索引（仓库内部）存储为 LF，checkout 时自动转为 CRLF，commit 时自动转回 LF。
+# 这样沙箱（Linux）与宿主（Windows）工作区行尾一致，消除跨平台行尾 diff 噪声。
+
+* text=auto eol=crlf
+
+# ── 二进制文件：不做行尾转换 ──────────────────────────────────
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.icns binary
+*.bmp binary
+*.webp binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
+*.eot binary
+*.pdf binary
+*.zip binary
+*.gz binary
+*.jar binary
+*.class binary
+
+# 可执行二进制
+runtime/bin/rg binary
+runtime/bin/rg.exe binary
