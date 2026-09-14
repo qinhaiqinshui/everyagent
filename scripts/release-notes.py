@@ -100,7 +100,7 @@ def affected_modules(from_tag, to_ref):
 def parse_args():
     parser = argparse.ArgumentParser(
         description="提取「最新 tag → 终点 ref(默认 HEAD)」的 commit message,输出 Markdown release note 草稿。"
-                    "分组模式会把 \"前缀: 描述\" 风格的提交按前缀归类(如 前端/worker/feat),无前缀或前缀过长的归入「其他」。",
+                    "分组模式按首个冒号(:或：)前的内容作为前缀归类(如 前端/worker/feat),没有冒号的归入「其他」。",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "示例:\n"
@@ -179,17 +179,16 @@ def main():
             print(f"- {subject}({h})")
         return
 
-    # 分组模式:按首个冒号(半角/全角)前的短前缀归类,保持首次出现顺序
+    # 分组模式:按首个冒号(半角/全角)前的内容作为前缀归类,保持首次出现顺序;
+    # 没有冒号、或冒号前为空白的归入「其他」
     groups: dict[str, list[str]] = {}
     for line in lines:
         subject, _, h = line.rpartition("\t")
         prefix, rest = "", subject
         for i, ch in enumerate(subject):
             if ch in (":", "："):
-                candidate = subject[:i]
-                if candidate and len(candidate) <= 12 and " " not in candidate:
-                    prefix = candidate
-                    rest = subject[i + 1:].lstrip(" ")
+                prefix = subject[:i].strip()
+                rest = subject[i + 1:].lstrip(" ")
                 break
         groups.setdefault(prefix or "其他", []).append(f"- {rest}({h})")
 
