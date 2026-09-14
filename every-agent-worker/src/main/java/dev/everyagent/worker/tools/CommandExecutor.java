@@ -235,32 +235,12 @@ public class CommandExecutor {
     }
 
     /**
-     * Windows 沙箱生效时把工作区与 EXEC 授权根配置为沙箱可写(§13.6,幂等:
-     * 每 worker 进程每根一次):① Low 完整性标注(解决 MIC NO_WRITE_UP,工作区内
-     * 原本也只能读);② DACL 追加本地 Users 可写 ACE(增删改查,解决「授权了也
-     * 写不进去」的 ACL 残缺场景)。标注失败仅记一次日志告警——不向命令结果注入
-     * 提示,避免每条命令尾部常驻噪声(真实写入失败会在命令自身的 stdout/stderr
-     * 显现,模型/用户可见性不受影响);后续命令不再重复告警(防刷屏)。
+     * Medium IL 方案:沙箱进程运行在 Medium IL(Restricted Token 去特权但不降级),
+     * 天然可写工作区与已授权目录,无需标注 Low 完整性或追加 DACL。
+     * 零文件系统副作用,零残留。详见 docs/design-windows-mic-medium-il.md
      */
     private void prepareWritableRoots(Path cwd, boolean forceNative) {
-        // 仅在真正走 Windows 原生进程时标注:windows-mic 全局后端(isWindowsSandboxActive),
-        // 或 WSL 后端下 powershell 强制 native(forceNative=true,发行版内无 pwsh,命令回宿主执行)。
-        // 非 Windows 宿主恒跳过(powershell 工具仅 Windows 注册;jna 平台库只在 Windows 可用)。
-        if (!windowsHost || (!forceNative && !sandbox.isWindowsSandboxActive())) {
-            return;
-        }
-        boolean ok = WindowsIntegrity.ensureWritable(cwd);
-        ok &= WindowsAcl.grantWriteAccess(cwd);
-        // §13.3 L2:EXEC 根按 isOverBroadRoot 过滤(防御纵深:门禁即使再出解析 bug,
-        // 盘根/工作区祖先也点不燃标注/ACL 机器);L3 在 WindowsIntegrity/WindowsAcl 入口再断言一次
-        for (Path extra : gate.execRootsSandboxed(task)) {
-            ok &= WindowsIntegrity.ensureWritable(extra);
-            ok &= WindowsAcl.grantWriteAccess(extra);
-        }
-        if (!ok && !writableRootWarned) {
-            writableRootWarned = true;
-            log.warn("[sandbox] 工作区/授权目录 Low 完整性标注或可写 ACL 未完全成功,部分路径的文件写入可能被系统拒绝");
-        }
+        // Medium IL 天然可写,无需标注/ACL——空体
     }
 
     private static String truncate(String s, int n) {
