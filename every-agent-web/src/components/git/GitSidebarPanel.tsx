@@ -785,26 +785,29 @@ function GitWorkspaceGroupPanel({
           {isDefault ? <span style={groupBadgeStyle}>默认</span> : null}
         </div>
         <div style={sectionHeaderActionsStyle}>
-          <Button type="text" style={iconButtonStyle} onClick={() => void refresh()} disabled={busy !== null} title="刷新">
-            <RefreshIcon busy={busy === 'status'} />
-          </Button>
-          <Button type="text" style={iconButtonStyle} onClick={() => void handlePull()} disabled={busy !== null || !initialized} title="拉取">
-            <PullIcon busy={busy === 'pull'} />
-          </Button>
-          <Badge
-            count={status?.ahead ?? 0}
-            showZero={false}
-            size="small"
-            overflowCount={99}
-            color="var(--accent-blue)"
-            style={{ color: '#fff', boxShadow: 'none' }}
-            offset={[-4, 4]}
-            title={status && (status.ahead ?? 0) > 0 ? `${status.ahead} 个提交待推送` : undefined}
-          >
-            <Button type="text" style={iconButtonStyle} onClick={() => void ensureRemoteThenPush()} disabled={busy !== null || !initialized} title="推送">
-              <PushIcon busy={busy === 'push'} />
+          {/* 刷新/拉取/推送三键为紧凑簇(gap 2);「更多操作」与其保持原 8 间距 */}
+          <div style={gitActionClusterStyle}>
+            <Button type="text" style={iconButtonStyle} onClick={() => void refresh()} disabled={busy !== null} title="刷新">
+              <RefreshIcon busy={busy === 'status'} />
             </Button>
-          </Badge>
+            <Button type="text" style={iconButtonStyle} onClick={() => void handlePull()} disabled={busy !== null || !initialized} title="拉取">
+              <PullIcon busy={busy === 'pull'} />
+            </Button>
+            <Badge
+              count={status?.ahead ?? 0}
+              showZero={false}
+              size="small"
+              overflowCount={99}
+              color="var(--accent-blue)"
+              style={{ color: '#fff', boxShadow: 'none' }}
+              offset={[-4, 4]}
+              title={status && (status.ahead ?? 0) > 0 ? `${status.ahead} 个提交待推送` : undefined}
+            >
+              <Button type="text" style={iconButtonStyle} onClick={() => void ensureRemoteThenPush()} disabled={busy !== null || !initialized} title="推送">
+                <PushIcon busy={busy === 'push'} />
+              </Button>
+            </Badge>
+          </div>
           <MoreActionsButton items={moreItems} title="更多操作" disabled={busy !== null} />
         </div>
       </div>
@@ -1244,6 +1247,13 @@ const sectionHeaderActionsStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   gap: 8,
+}
+
+/** 刷新/拉取/推送紧凑簇(三键间距收紧为 2,与「更多操作」的外层 8 区分)。 */
+const gitActionClusterStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 2,
 }
 
 const groupStyle: React.CSSProperties = {
