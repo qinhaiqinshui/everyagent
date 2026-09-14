@@ -25,6 +25,13 @@ interface PendingAskEntry {
   agentId: string
   request: UserInteractionRequest
   notificationId: string
+  /**
+   * 是否已向外广播过 USER_INTERACTION_REQUESTED(弹窗/悬浮窗)。
+   * 历史回放(DataPusher 回扫段,initial=true)的 ask.create 静默注册(emitted=false),
+   * 待 debounce flush 时统一 emit;若 flush 前 ask.resolved 已到(已完成任务回放),
+   * settleAsk 据此跳过 CLEARED emit,避免悬浮窗闪烁。
+   */
+  emitted: boolean
 }
 
 /** worker ask.create / ask.state 的 payload 形状(架构 §5.4)。 */
@@ -218,24 +225,64 @@ function notifyAsk(entry: PendingAskEntry): void {
 }
 
 /**
+ * 历史回放 debounce flush 延迟(ms):回放中 ask.create 后若 50ms 内 ask.resolved
+ * 到达(已完成任务),跳过 emit 避免悬浮窗闪烁;超时仍未 settle(运行中任务)则统一 emit。
+ */
+const FLUSH_DELAY_MS = 50
+let flushTimer: ReturnType<typeof setTimeout> | null = null
+
+/**
+ * 延迟 flush:扫描所有 emitted=false 的 pending ask,对仍未被 settle 的统一 emit
+ * REQUESTED(弹窗/悬浮窗)。被 settle 的 ask 在 settleAsk 中已从 pendingAsks 移除,
+ * 自然跳过——避免已完成任务回放时悬浮窗先弹后隐的闪烁。
+ */
+function scheduleFlush(): void {
+  if (flushTimer) return
+  flushTimer = setTimeout(() => {
+    flushTimer = null
+    for (const entry of pendingAsks.values()) {
+      if (entry.emitted) continue
+      entry.emitted = true
+      notifyAsk(entry)
+      domainEventBus.emit(DOMAIN_EVENTS.USER_INTERACTION_REQUESTED, {
+        taskId: entry.taskId,
+        agentId: entry.agentId,
+        request: { ...entry.request },
+      })
+    }
+  }, FLUSH_DELAY_MS)
+}
+
+/**
  * 任务流事件入口:ask.create / ask.state(pending)。幂等,重放安全。
- * @param opts.silent 历史回放(DataPusher 磁盘全量推送,ext.initial=true)模式:只登记
- *  pendingAsks(「待回答」入口可见),不弹系统通知、不触发卡片弹窗。历史 ask 未必仍有效
- *  (worker 重启后 PendingAsks 已清空),自动弹窗会误报「当前交互请求已结束」;
- *  只有实时 ask.create/ask.state 走完整弹出路径。
+ *
+ * @param opts.initial 历史回放(DataPusher 回扫段,ext.initial=true):静默注册
+ *  (emitted=false),不立即 emit 事件/弹通知;由 debounce flush 延迟决定——若 50ms 内
+ *  ask.resolved 到达(已完成任务回放),settleAsk 先把 ask 移除,flush 跳过,悬浮窗不闪;
+ *  若 50ms 后仍 pending(运行中任务刷新页面),flush 统一 emit 触发弹窗/悬浮窗。
+ *  实时(非 initial)ask.create 走完整弹出路径。
  */
 export function upsertPendingAsk(
   taskId: string,
   payload: WorkerAskPayload,
-  opts?: { silent?: boolean },
+  opts?: { initial?: boolean },
 ): void {
-  const silent = Boolean(opts?.silent)
+  const initial = Boolean(opts?.initial)
   if (!payload.askId) return
   if (settledAskIds.has(payload.askId)) return
   if (pendingAsks.has(payload.askId)) {
-    // ask.state 周期重发:仅刷新通知,不重建卡片。
+    // ask.state 周期重发或实时 ask.create 重复到达:不重建卡片、不再弹通知。
+    // 若 ask 在回放期间静默注册(emitted=false)、此时收到实时帧(非 initial)→ 补发。
     const existing = pendingAsks.get(payload.askId)!
-    if (!silent) notifyAsk(existing)
+    if (!initial && !existing.emitted) {
+      existing.emitted = true
+      notifyAsk(existing)
+      domainEventBus.emit(DOMAIN_EVENTS.USER_INTERACTION_REQUESTED, {
+        taskId: existing.taskId,
+        agentId: existing.agentId,
+        request: { ...existing.request },
+      })
+    }
     return
   }
   const request = toInteractionRequest(payload)
@@ -244,9 +291,13 @@ export function upsertPendingAsk(
     agentId: payload.agentId ?? '',
     request,
     notificationId: `ask-${payload.askId}`,
+    emitted: !initial,
   }
   pendingAsks.set(payload.askId, entry)
-  if (!silent) {
+  if (initial) {
+    // 历史回放:静默注册,debounce flush 决定是否弹出(防已完成任务回放闪烁)。
+    scheduleFlush()
+  } else {
     notifyAsk(entry)
     domainEventBus.emit(DOMAIN_EVENTS.USER_INTERACTION_REQUESTED, {
       taskId,
@@ -266,6 +317,9 @@ export function settleAsk(askId: string): void {
   if (!entry) return
   pendingAsks.delete(askId)
   removeAppNotification(entry.notificationId)
+  // 回放期间静默注册(emitted=false)的 ask 被 settle:从未向 UI 广播过 REQUESTED,
+  // 跳过 CLEARED emit——悬浮窗从未显示,无需隐藏,避免无效闪烁。
+  if (!entry.emitted) return
   domainEventBus.emit(DOMAIN_EVENTS.USER_INTERACTION_CLEARED, {
     taskId: entry.taskId,
     agentId: entry.agentId,
