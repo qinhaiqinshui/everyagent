@@ -729,7 +729,7 @@ const checkboxStyle: React.CSSProperties = {
 const listStyle: React.CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
-  gap: 8,
+  gap: 6,
   minHeight: 0,
   overflowY: 'auto',
   paddingRight: 2,
@@ -738,8 +738,8 @@ const listStyle: React.CSSProperties = {
 const groupSectionStyle: React.CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
-  gap: 6,
-  padding: '8px 6px',
+  gap: 4,
+  padding: '6px 6px',
   borderRadius: 'var(--radius-md)',
   border: '1px solid var(--border-light)',
   background: 'var(--bg-primary)',
@@ -788,7 +788,7 @@ const groupLabelStyle: React.CSSProperties = {
 const groupTasksStyle: React.CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
-  gap: 6,
+  gap: 3,
 }
 
 const taskCardStyle: React.CSSProperties = {
@@ -803,10 +803,10 @@ const taskCardStyle: React.CSSProperties = {
   borderRadius: 'var(--radius-md)',
   background: 'var(--bg-primary)',
   color: 'var(--text-primary)',
-  padding: '10px 12px',
+  padding: '6px 10px',
   display: 'flex',
   flexDirection: 'column',
-  gap: 8,
+  gap: 3,
 }
 
 const browseTaskCardStyle: React.CSSProperties = {
@@ -854,8 +854,7 @@ const taskCardHeaderStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'flex-start',
   justifyContent: 'space-between',
-  gap: 8,
-  marginBottom: 6,
+  gap: 6,
 }
 
 const taskTitleStyle: React.CSSProperties = {
