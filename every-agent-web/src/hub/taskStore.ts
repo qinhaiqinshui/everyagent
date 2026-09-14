@@ -13,6 +13,7 @@
  */
 import type { ContextMonitorSnapshot, TaskStatus } from '@/types'
 import { hubSession } from './session'
+import { workspaceRegistry } from './workspaceRegistry'
 import { channels } from '@every-agent/client'
 
 /** worker TaskDtos.UsageSummary 的前端形状(最近一轮主 agent 实测 usage + 窗口上限 + 模型)。 */
@@ -181,9 +182,22 @@ function toEntry(summary: WorkerTaskSummary): TaskListEntry {
 
 type ChangeListener = (tasks: TaskListEntry[]) => void
 
-/** 任务列表分页:首屏每台 worker 只拉最近 INITIAL_PAGE_SIZE 个;组内点「加载更多」每次续拉 LOAD_MORE_PAGE_SIZE 个。 */
+/** 任务列表分页:首屏每个工作区只拉最近 INITIAL_PAGE_SIZE 个;组内点「加载更多」每次续拉 LOAD_MORE_PAGE_SIZE 个。 */
 const INITIAL_PAGE_SIZE = 5
 const LOAD_MORE_PAGE_SIZE = 10
+
+/** 分页键:worker × workspace 过滤(空串=不过滤,兜底未挂靠工作区的旧任务);\u0001 控制符作分隔,不会出现在 workerId/路径中。 */
+function pageKey(workerId: string, workspace: string): string {
+  return `${workerId}\u0001${workspace}`
+}
+
+/** 单个分页键的游标状态。 */
+interface PageState {
+  /** 该过滤口径下已拉取条数(下一页 offset)。 */
+  offset: number
+  /** 该过滤口径下是否还有更多。 */
+  hasMore: boolean
+}
 
 class TaskStore {
   /** taskId → 条目。 */
@@ -192,12 +206,12 @@ class TaskStore {
   private started = false
   /** 已发起的列表刷新(防重入)。 */
   private refreshing: Promise<void> | null = null
-  /** 每台 worker 已拉取的任务数(下一页 offset)。 */
-  private workerOffsets = new Map<string, number>()
-  /** 每台 worker 是否还有更多(hasMore)。 */
-  private workerHasMore = new Map<string, boolean>()
-  /** 正在续拉分页的 worker 集合(逐台防重入,支持按 worker 定向续拉)。 */
-  private loadingMoreWorkers = new Set<string>()
+  /** 各分页键(worker×workspace)的游标:同一 worker 的多个工作区各自独立分页,互不串联。 */
+  private pageStates = new Map<string, PageState>()
+  /** 正在续拉的分页键集合(逐键防重入)。 */
+  private loadingPages = new Set<string>()
+  /** 工作区注册表订阅退订函数(start 时注册)。 */
+  private unsubscribeRegistry: (() => void) | null = null
 
   start(): void {
     if (this.started) return
@@ -237,34 +251,57 @@ class TaskStore {
     if (hubSession.connected) {
       void this.refresh()
     }
+    // 工作区注册表就绪/变更后重新校准:refresh 按 worker×workspace 拉首页,
+    // 注册表晚于连接到达(时序竞态)时补拉,保证每个工作区都有独立分页游标。
+    if (!this.unsubscribeRegistry) {
+      this.unsubscribeRegistry = workspaceRegistry.subscribe(() => {
+        void this.refresh()
+      })
+    }
   }
 
-  /** 全量校准:遍历所有已连 worker 并发 tasks.list 拉**首页**(最近 INITIAL_PAGE_SIZE 个)合并(以 worker 为准,清掉本地多出的条目)。 */
+  /**
+   * 全量校准:遍历所有已连 worker,按「已注册工作区各拉一页首页(最近 INITIAL_PAGE_SIZE 个,
+   * workspace 过滤)+ 一页未过滤首页(兜底未挂靠工作区的旧任务)」合并(以 worker 为准,
+   * 清掉本地多出的条目)。分页游标按 worker×workspace 各自独立记录,组间互不串联。
+   */
   async refresh(): Promise<void> {
     if (this.refreshing) return this.refreshing
     this.refreshing = (async () => {
       try {
-        this.workerOffsets.clear()
-        this.workerHasMore.clear()
+        this.pageStates.clear()
         const entries: TaskListEntry[] = []
         const pending: Array<Promise<void>> = []
         hubSession.forEachConnectedWorker((workerId, client) => {
-          pending.push((async () => {
-            try {
-              const result = await client.rpc(workerId, 'tasks.list', { limit: INITIAL_PAGE_SIZE, offset: 0 })
-              const incoming = (result?.tasks ?? []) as WorkerTaskSummary[]
-              this.workerOffsets.set(workerId, incoming.length)
-              this.workerHasMore.set(workerId, Boolean(result?.hasMore))
-              for (const summary of incoming) {
-                const entry = toEntry(summary)
-                if (!entry.workerId) entry.workerId = workerId
-                entries.push(entry)
+          // 分页口径=该 worker 的每个已注册工作区 + 未过滤(空串);Set 去重。
+          const scopes = new Set<string>([''])
+          for (const ws of workspaceRegistry.workspacesOf(workerId)) {
+            if (ws.root) scopes.add(ws.root)
+          }
+          for (const workspace of scopes) {
+            pending.push((async () => {
+              try {
+                const result = await client.rpc(workerId, 'tasks.list', {
+                  ...(workspace ? { workspace } : null),
+                  limit: INITIAL_PAGE_SIZE,
+                  offset: 0,
+                })
+                const incoming = (result?.tasks ?? []) as WorkerTaskSummary[]
+                this.pageStates.set(pageKey(workerId, workspace), {
+                  offset: incoming.length,
+                  hasMore: Boolean(result?.hasMore),
+                })
+                for (const summary of incoming) {
+                  const entry = toEntry(summary)
+                  if (!entry.workerId) entry.workerId = workerId
+                  entries.push(entry)
+                }
+              } catch (error) {
+                // 单台 worker 失败不影响整体合并(保留其余 worker 数据)。
+                console.warn(`[taskStore] tasks.list 失败(${workerId}${workspace ? `:${workspace}` : ''}):`, error)
               }
-            } catch (error) {
-              // 单台 worker 失败不影响整体合并(保留其余 worker 数据)。
-              console.warn(`[taskStore] tasks.list 失败(${workerId}):`, error)
-            }
-          })())
+            })())
+          }
         })
         await Promise.all(pending)
         this.tasks.clear()
@@ -282,52 +319,45 @@ class TaskStore {
     return this.refreshing
   }
 
-  /** 还有更多可分页拉取的任务(workerId 指定时只看该 worker,缺省=任意 worker 还有更多)。 */
-  hasMore(workerId?: string): boolean {
-    if (workerId !== undefined) {
-      return this.workerHasMore.get(workerId) === true
-    }
-    for (const has of this.workerHasMore.values()) {
-      if (has) return true
-    }
-    return false
+  /** 该 worker×workspace 口径下是否还有更多可分页拉取的任务。 */
+  hasMore(workerId: string, workspace: string): boolean {
+    return this.pageStates.get(pageKey(workerId, workspace))?.hasMore === true
   }
 
   /**
-   * 点击组内「加载更多」续拉:对还有更多(且未在拉取中)的 worker 逐台取下一页
-   * (offset=已拉条数)合并进镜像;workerId 指定时只续拉该 worker(工作区分组定向续拉)。
-   * 逐台防重入(同 worker 并发点击合并为一次);单台失败保留其 hasMore 下次点击重试。
+   * 点击组内「加载更多」续拉:按 worker×workspace 口径取下一页(offset=该口径已拉条数,
+   * workspace 过滤)合并进镜像——同一 worker 的其他工作区分页不受影响,不会串联。
+   * 单键防重入;失败保留该键 hasMore 下次点击重试。
    */
-  async loadMore(workerId?: string): Promise<void> {
-    const pending: Array<Promise<void>> = []
-    hubSession.forEachConnectedWorker((id, client) => {
-      if (!this.workerHasMore.get(id)) return
-      if (this.loadingMoreWorkers.has(id)) return
-      if (workerId !== undefined && id !== workerId) return
-      this.loadingMoreWorkers.add(id)
-      pending.push((async () => {
-        try {
-          const offset = this.workerOffsets.get(id) ?? 0
-          const result = await client.rpc(id, 'tasks.list', { limit: LOAD_MORE_PAGE_SIZE, offset })
-          const incoming = (result?.tasks ?? []) as WorkerTaskSummary[]
-          this.workerOffsets.set(id, offset + incoming.length)
-          this.workerHasMore.set(id, Boolean(result?.hasMore))
-          for (const summary of incoming) {
-            const entry = toEntry(summary)
-            if (!entry.workerId) entry.workerId = id
-            this.tasks.set(entry.taskId, entry)
-          }
-        } catch (error) {
-          // 单台 worker 失败不影响整体;hasMore 保持 true,下次点击重试。
-          console.warn(`[taskStore] tasks.list 分页失败(${id}):`, error)
-        } finally {
-          this.loadingMoreWorkers.delete(id)
+  async loadMore(workerId: string, workspace: string): Promise<void> {
+    const key = pageKey(workerId, workspace)
+    if (this.loadingPages.has(key)) return
+    const state = this.pageStates.get(key)
+    if (!state || !state.hasMore) return
+    this.loadingPages.add(key)
+    try {
+      const client = hubSession.workerClients.get(workerId)
+      if (client && client.k) {
+        const result = await client.rpc(workerId, 'tasks.list', {
+          ...(workspace ? { workspace } : null),
+          limit: LOAD_MORE_PAGE_SIZE,
+          offset: state.offset,
+        })
+        const incoming = (result?.tasks ?? []) as WorkerTaskSummary[]
+        state.offset += incoming.length
+        state.hasMore = Boolean(result?.hasMore)
+        for (const summary of incoming) {
+          const entry = toEntry(summary)
+          if (!entry.workerId) entry.workerId = workerId
+          this.tasks.set(entry.taskId, entry)
         }
-      })())
-    })
-    if (pending.length === 0) return
-    await Promise.all(pending)
-    this.sortAndNotify()
+      }
+    } catch (error) {
+      console.warn(`[taskStore] tasks.list 分页失败(${workerId}${workspace ? `:${workspace}` : ''}):`, error)
+    } finally {
+      this.loadingPages.delete(key)
+      this.sortAndNotify()
+    }
   }
 
   /**

@@ -111,17 +111,19 @@ export default function TasksPanel({
     }
   }, [])
 
-  // 分页:默认只加载最近 PAGE_SIZE 个,组内点击「加载更多」按组来源 worker 拉下一页。
+  // 分页:默认只加载最近 INITIAL_PAGE_SIZE 个,组内点击「加载更多」按组的
+  // worker×workspace 口径拉下一页(同一 worker 的其他工作区互不影响、不串联)。
   const loadingGroupsRef = React.useRef(new Set<string>())
   const [loadingGroups, setLoadingGroups] = React.useState<ReadonlySet<string>>(new Set())
 
-  const handleGroupLoadMore = React.useCallback((groupKey: string, workerIds: string[]) => {
+  /** 组的分页口径:workerId + workspace 过滤(空串=未挂靠工作区组,不过滤)。 */
+  const handleGroupLoadMore = React.useCallback((groupKey: string, pages: Array<{ workerId: string; workspace: string }>) => {
     if (loadingGroupsRef.current.has(groupKey)) return
-    const targets = workerIds.filter((workerId) => taskStore.hasMore(workerId))
+    const targets = pages.filter((page) => taskStore.hasMore(page.workerId, page.workspace))
     if (targets.length === 0) return
     loadingGroupsRef.current.add(groupKey)
     setLoadingGroups((current) => new Set(current).add(groupKey))
-    void Promise.all(targets.map((workerId) => taskStore.loadMore(workerId))).finally(() => {
+    void Promise.all(targets.map((page) => taskStore.loadMore(page.workerId, page.workspace))).finally(() => {
       loadingGroupsRef.current.delete(groupKey)
       setLoadingGroups((current) => {
         const next = new Set(current)
@@ -164,12 +166,12 @@ export default function TasksPanel({
    * registry 未加载返回 null 回退扁平列表（防首帧全部误归尾组）。
    * workspace 为空（旧任务）或已不在注册表（workspaces.remove 不删任务）的
    * 任务合并于尾组「未挂靠工作区」。
-   * workerIds 为组内任务的来源 worker（组内「加载更多」按 worker 定向续拉）。
+   * pages 为组的分页口径(workerId+workspace 过滤;组内「加载更多」按此定向续拉)。
    */
-  const groups = React.useMemo<(TaskListGroup<TaskListItemSnapshot> & { workerIds: string[] })[] | null>(() => {
+  const groups = React.useMemo<(TaskListGroup<TaskListItemSnapshot> & { pages: Array<{ workerId: string; workspace: string }> })[] | null>(() => {
     if (!registry) return null
     const knownRoots = new Set(registry.workspaces.map((entry) => entry.root))
-    const out: Array<TaskListGroup<TaskListItemSnapshot> & { workerIds: string[] }> = []
+    const out: Array<TaskListGroup<TaskListItemSnapshot> & { pages: Array<{ workerId: string; workspace: string }> }> = []
     for (const entry of registry.workspaces) {
       const groupTasks = tasks.filter((task) => task.workspace === entry.root)
       out.push({
@@ -177,7 +179,7 @@ export default function TasksPanel({
         label: workspaceGroupLabel(entry.root),
         title: entry.root,
         tasks: groupTasks,
-        workerIds: entry.workerId ? [entry.workerId] : [],
+        pages: entry.workerId ? [{ workerId: entry.workerId, workspace: entry.root }] : [],
         ...(onCreateNewTask
           ? {
               actions: [{
@@ -195,7 +197,8 @@ export default function TasksPanel({
         key: 'ws:__none__',
         label: '未挂靠工作区',
         tasks: unattached,
-        workerIds: [...new Set(unattached.map((task) => task.workerId).filter((workerId): workerId is string => Boolean(workerId)))],
+        pages: [...new Set(unattached.map((task) => task.workerId).filter((workerId): workerId is string => Boolean(workerId)))]
+          .map((workerId) => ({ workerId, workspace: '' })),
       })
     }
     return out
@@ -479,8 +482,8 @@ export default function TasksPanel({
    * 组内「加载更多」:挂在组内任务列表末尾(工作区分组内部底部),
    * 点击仅向该组来源 worker 续拉下一页;无更多或拉取中不渲染/显示加载中。
    */
-  const renderGroupLoadMore = (group: { key: string; workerIds: string[] }) => {
-    if (!group.workerIds.some((workerId) => taskStore.hasMore(workerId))) {
+  const renderGroupLoadMore = (group: { key: string; pages: Array<{ workerId: string; workspace: string }> }) => {
+    if (!group.pages.some((page) => taskStore.hasMore(page.workerId, page.workspace))) {
       return null
     }
     if (loadingGroups.has(group.key)) {
@@ -494,7 +497,7 @@ export default function TasksPanel({
         style={loadMoreLinkStyle}
         onClick={(event) => {
           event.preventDefault()
-          handleGroupLoadMore(group.key, group.workerIds)
+          handleGroupLoadMore(group.key, group.pages)
         }}
       >
         加载更多
