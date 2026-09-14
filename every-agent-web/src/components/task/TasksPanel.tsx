@@ -897,7 +897,7 @@ const statusPillStyle: React.CSSProperties = {
   borderRadius: 999,
   padding: '1px 6px',
   fontSize: 'var(--text-xs)',
-  fontWeight: 700,
+  fontWeight: 400,
   flexShrink: 0,
   background: 'transparent',
 }
