@@ -181,8 +181,9 @@ function toEntry(summary: WorkerTaskSummary): TaskListEntry {
 
 type ChangeListener = (tasks: TaskListEntry[]) => void
 
-/** 任务列表默认每页条数:首屏只拉最近 PAGE_SIZE 个,组内点「加载更多」再续拉下一页。 */
-const PAGE_SIZE = 10
+/** 任务列表分页:首屏每台 worker 只拉最近 INITIAL_PAGE_SIZE 个;组内点「加载更多」每次续拉 LOAD_MORE_PAGE_SIZE 个。 */
+const INITIAL_PAGE_SIZE = 5
+const LOAD_MORE_PAGE_SIZE = 10
 
 class TaskStore {
   /** taskId → 条目。 */
@@ -238,7 +239,7 @@ class TaskStore {
     }
   }
 
-  /** 全量校准:遍历所有已连 worker 并发 tasks.list 拉**首页**(最近 PAGE_SIZE 个)合并(以 worker 为准,清掉本地多出的条目)。 */
+  /** 全量校准:遍历所有已连 worker 并发 tasks.list 拉**首页**(最近 INITIAL_PAGE_SIZE 个)合并(以 worker 为准,清掉本地多出的条目)。 */
   async refresh(): Promise<void> {
     if (this.refreshing) return this.refreshing
     this.refreshing = (async () => {
@@ -250,7 +251,7 @@ class TaskStore {
         hubSession.forEachConnectedWorker((workerId, client) => {
           pending.push((async () => {
             try {
-              const result = await client.rpc(workerId, 'tasks.list', { limit: PAGE_SIZE, offset: 0 })
+              const result = await client.rpc(workerId, 'tasks.list', { limit: INITIAL_PAGE_SIZE, offset: 0 })
               const incoming = (result?.tasks ?? []) as WorkerTaskSummary[]
               this.workerOffsets.set(workerId, incoming.length)
               this.workerHasMore.set(workerId, Boolean(result?.hasMore))
@@ -307,7 +308,7 @@ class TaskStore {
       pending.push((async () => {
         try {
           const offset = this.workerOffsets.get(id) ?? 0
-          const result = await client.rpc(id, 'tasks.list', { limit: PAGE_SIZE, offset })
+          const result = await client.rpc(id, 'tasks.list', { limit: LOAD_MORE_PAGE_SIZE, offset })
           const incoming = (result?.tasks ?? []) as WorkerTaskSummary[]
           this.workerOffsets.set(id, offset + incoming.length)
           this.workerHasMore.set(id, Boolean(result?.hasMore))
