@@ -77,7 +77,7 @@ function fieldLabel(field: TaskContentSearchHit['field']): string {
 function statusLabel(status: string): string {
   switch (status) {
     case 'done':
-      return '已完成'
+      return '完成'
     case 'running':
       return '运行中'
     case 'failed':
