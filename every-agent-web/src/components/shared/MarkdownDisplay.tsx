@@ -7,6 +7,7 @@ import {
   renderMarkdownInline,
   renderMarkdownInlineWithBreaks,
   splitMarkdownTableRow,
+  MarkdownTable,
 } from './markdown/sharedMarkdownRenderer'
 
 export default function MarkdownDisplay({ content }: { content: string }) {
@@ -154,7 +155,7 @@ export default function MarkdownDisplay({ content }: { content: string }) {
   return <div style={rootStyle}>{elements}</div>
 }
 
-function TableBlock({
+const TableBlock = React.memo(function TableBlock({
   headers,
   alignments,
   rows,
@@ -164,46 +165,15 @@ function TableBlock({
   rows: string[][]
 }) {
   return (
-    <div style={tableWrapStyle}>
-      <table style={tableStyle}>
-        <thead>
-          <tr>
-            {headers.map((cell, index) => (
-              <th
-                key={`header-${index}`}
-                style={{
-                  ...tableHeaderCellStyle,
-                  textAlign: alignments[index] ?? 'left',
-                }}
-              >
-                {renderMarkdownInline(cell, inlineRenderStyles)}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        {rows.length > 0 ? (
-          <tbody>
-            {rows.map((row, rowIndex) => (
-              <tr key={`row-${rowIndex}`}>
-                {headers.map((_, cellIndex) => (
-                  <td
-                    key={`cell-${rowIndex}-${cellIndex}`}
-                    style={{
-                      ...tableCellStyle,
-                      textAlign: alignments[cellIndex] ?? 'left',
-                    }}
-                  >
-                    {renderMarkdownInline(row[cellIndex] ?? '', inlineRenderStyles)}
-                  </td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        ) : null}
-      </table>
-    </div>
+    <MarkdownTable
+      headers={headers}
+      alignments={alignments}
+      rows={rows}
+      inlineOptions={inlineRenderStyles}
+      styles={displayTableStyles}
+    />
   )
-}
+})
 
 type ListItemNode = {
   text: string
@@ -392,41 +362,25 @@ const codeBlockStyle: React.CSSProperties = {
   border: '1px solid color-mix(in srgb, var(--border-light) 85%, transparent)',
 }
 
-const tableWrapStyle: React.CSSProperties = {
-  width: '100%',
-  overflowX: 'auto',
-  margin: '6px 0',
-  border: '1px solid color-mix(in srgb, var(--border-light) 85%, transparent)',
-  borderRadius: 'var(--radius-md)',
-}
-
-const tableStyle: React.CSSProperties = {
-  width: '100%',
-  borderCollapse: 'collapse',
-  background: 'color-mix(in srgb, var(--bg-tertiary) 48%, transparent)',
-}
-
-const tableHeaderCellStyle: React.CSSProperties = {
-  padding: '10px 12px',
-  fontSize: 'var(--text-xs)',
-  lineHeight: 1.6,
-  fontWeight: 700,
-  color: 'var(--text-primary)',
-  background: 'color-mix(in srgb, var(--bg-tertiary) 82%, transparent)',
-  borderBottom: '1px solid var(--border-light)',
-  whiteSpace: 'nowrap',
-  verticalAlign: 'top',
-}
-
-const tableCellStyle: React.CSSProperties = {
-  padding: '9px 12px',
-  fontSize: 'var(--text-sm)',
-  lineHeight: 1.75,
-  color: 'var(--text-secondary)',
-  borderTop: '1px solid color-mix(in srgb, var(--border-light) 78%, transparent)',
-  verticalAlign: 'top',
-  whiteSpace: 'pre-wrap',
-  wordBreak: 'break-word',
+const displayTableStyles = {
+  wrap: {
+    margin: '6px 0',
+    border: '1px solid color-mix(in srgb, var(--border-light) 85%, transparent)' as const,
+    borderRadius: 'var(--radius-md)',
+    background: 'color-mix(in srgb, var(--bg-tertiary) 48%, transparent)' as const,
+  },
+  table: {
+    background: 'color-mix(in srgb, var(--bg-tertiary) 48%, transparent)' as const,
+  },
+  headerCell: {
+    background: 'color-mix(in srgb, var(--bg-tertiary) 82%, transparent)' as const,
+    borderBottom: '1px solid var(--border-light)' as const,
+    color: 'var(--text-primary)' as const,
+  },
+  bodyCell: {
+    borderTop: '1px solid color-mix(in srgb, var(--border-light) 78%, transparent)' as const,
+    color: 'var(--text-secondary)' as const,
+  },
 }
 
 const hrStyle: React.CSSProperties = {
