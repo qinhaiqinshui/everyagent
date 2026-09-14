@@ -440,6 +440,19 @@ export default function TasksPanel({
           {task.taskId}
         </span>
         <span
+          style={{ ...taskMetaStyle, cursor: 'help' }}
+          title={formatTaskTime(task.updatedAt)}
+          onClick={(event) => handleToggleTime(event, task.taskId)}
+        >
+          {(() => {
+            const relative = formatRelativeTime(task.updatedAt)
+            // 超过 7 天默认绝对时间;点击切换相对/绝对展示。
+            return relative !== null && !absoluteTimeTaskIds.has(task.taskId)
+              ? relative
+              : formatTaskTime(task.updatedAt)
+          })()}
+        </span>
+        <span
           style={{
             ...statusPillStyle,
             ...(task.statusTone === 'active'
@@ -454,19 +467,6 @@ export default function TasksPanel({
           }}
         >
           {task.statusLabel}
-        </span>
-        <span
-          style={{ ...taskMetaStyle, cursor: 'help' }}
-          title={formatTaskTime(task.updatedAt)}
-          onClick={(event) => handleToggleTime(event, task.taskId)}
-        >
-          {(() => {
-            const relative = formatRelativeTime(task.updatedAt)
-            // 超过 7 天默认绝对时间;点击切换相对/绝对展示。
-            return relative !== null && !absoluteTimeTaskIds.has(task.taskId)
-              ? relative
-              : formatTaskTime(task.updatedAt)
-          })()}
         </span>
         {task.contextUsage ? (
           <span style={ctxIndicatorStyle}>
