@@ -2,14 +2,11 @@ package dev.everyagent.worker.tools;
 
 import dev.everyagent.worker.os.OsSandbox;
 import dev.everyagent.worker.os.OsSandbox.ExecResult;
-import dev.everyagent.worker.os.windows.WindowsAcl;
-import dev.everyagent.worker.os.windows.WindowsIntegrity;
 import dev.everyagent.worker.os.wsl.WslPathMapper;
 import dev.everyagent.worker.task.TaskEntry;
 
 import java.nio.file.Path;
 import java.util.HashMap;
-import java.util.Locale;
 import java.util.Map;
 import java.util.regex.Pattern;
 
@@ -66,12 +63,6 @@ public class CommandExecutor {
     private final String agentId;
     /** 打包 rg 二进制所在目录(可空);非空时 bash/powershell 子进程把它注入 PATH。 */
     private final Path rgBinDir;
-    /** 是否 Windows 宿主(powershell 工具仅 Windows 注册;Low 标注/ACL 亦仅 Windows 有意义)。 */
-    private final boolean windowsHost = System.getProperty("os.name")
-            .toLowerCase(Locale.ROOT).contains("win");
-    /** Low 完整性标注失败的一次性告警标记(仅首次失败时记日志,防刷屏)。 */
-    private volatile boolean writableRootWarned;
-
     public CommandExecutor(OsSandbox sandbox, TaskEntry task, PermissionGate gate, String agentId) {
         this(sandbox, task, gate, agentId, null);
     }
@@ -119,8 +110,7 @@ public class CommandExecutor {
         }
         Path cwd = Path.of(task.workspaceRoot);
         if (!wsl) {
-            // 需要宿主侧 Low 标注/ACL 预处理:windows-mic 后端(powershell/bash 均走)与
-            // WSL 后端下的 powershell 强制 native(powershell=true 强制,即使全局非 mic)
+            // Medium IL 方案:沙箱进程运行在 Medium IL,天然可写工作区,无需预处理
             prepareWritableRoots(cwd, powershell);
         }
         Map<String, String> env = new HashMap<>();
@@ -140,7 +130,7 @@ public class CommandExecutor {
         // 走 execRootsSandboxed(§13.3 L2 过滤)——过度宽泛根(如历史 C:\\)不得进 --bind 白名单,
         // 否则整个 /mnt/c 会被读写挂进沙箱,读隔离被击穿。wsl-direct 不建 bwrap 命名空间,
         // 授权根由动态 ensureMount 承担,此参数为空。powershell 走 Windows 原生,
-        // 附加根由 prepareWritableRoots 的 Low 标注/ACL 消费,不参与 bwrap 挂载。
+        // 附加根 prepareWritableRoots 已空体(Medium IL 无需标注);不参与 bwrap 挂载。
         java.util.List<Path> extraRoots = !wsl && sandbox.isWslBwrap() ? gate.execRootsSandboxed(task)
                 : java.util.List.of();
         // 网络许可:任务级 /禁用网络 开关未开 且 worker 全局默认放行 → 本次命令放行网络;
