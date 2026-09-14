@@ -17,8 +17,7 @@ import { Checkbox } from 'antd'
 
 const runtimeService = getDefaultRuntimeService()
 
-/** 触底续拉阈值:距滚动视口底部该像素内视为触底,触发下一页加载。 */
-const LOAD_MORE_THRESHOLD = 120
+
 
 /** 工作区组标签短名:根路径末段(盘符根/斜杠根退化为全路径,完整根见组头 title)。 */
 function workspaceGroupLabel(root: string): string {
@@ -112,11 +111,9 @@ export default function TasksPanel({
     }
   }, [])
 
-  // 触底续拉(分页):默认只加载最近 PAGE_SIZE 个,滑动触底再向 worker 拉下一页。
+  // 分页:默认只加载最近 PAGE_SIZE 个,点击「加载更多」向 worker 拉下一页。
   const loadingMoreRef = React.useRef(false)
   const [loadingMore, setLoadingMore] = React.useState(false)
-  const listViewportRef = React.useRef<HTMLDivElement | null>(null)
-  const sentinelRef = React.useRef<HTMLDivElement | null>(null)
 
   const handleLoadMore = React.useCallback(() => {
     if (loadingMoreRef.current) return
@@ -128,29 +125,6 @@ export default function TasksPanel({
       setLoadingMore(false)
     })
   }, [])
-
-  const handleListScroll = React.useCallback((event: React.UIEvent<HTMLDivElement>) => {
-    const node = event.currentTarget
-    const distanceFromBottom = node.scrollHeight - (node.scrollTop + node.clientHeight)
-    if (distanceFromBottom <= LOAD_MORE_THRESHOLD) {
-      handleLoadMore()
-    }
-  }, [handleLoadMore])
-
-  // 触底哨兵:当哨兵进入滚动视口(含首屏内容未撑满、以及用户滑到底)即续拉。
-  // 依赖 tasks 重建观察器,每次列表变化后立即重判一次,保证「内容未满一屏」时也能逐页补齐。
-  React.useEffect(() => {
-    const viewport = listViewportRef.current
-    const sentinel = sentinelRef.current
-    if (!viewport || !sentinel || typeof IntersectionObserver === 'undefined') return
-    const observer = new IntersectionObserver((entries) => {
-      if (entries.some((entry) => entry.isIntersecting)) {
-        handleLoadMore()
-      }
-    }, { root: viewport, rootMargin: `0px 0px ${LOAD_MORE_THRESHOLD}px 0px` })
-    observer.observe(sentinel)
-    return () => observer.disconnect()
-  }, [tasks, handleLoadMore])
 
   // 工作区分组(D16):任务按挂靠工作区分组展示,无"当前工作区"过滤,多工作区任务并陈。
   const [registry, setRegistry] = React.useState(workspaceRegistry.current)
@@ -497,8 +471,6 @@ export default function TasksPanel({
     >
       <SidebarScrollArea
         style={listStyle}
-        viewportRef={listViewportRef}
-        onScroll={handleListScroll}
       >
         {error ? (
           <div style={errorStyle}>{error}</div>
@@ -603,11 +575,23 @@ export default function TasksPanel({
         {!error && tasks.length === 0 ? (
           <div style={emptyStyle}>暂无任务</div>
         ) : null}
-        <div ref={sentinelRef} style={loadMoreFooterStyle}>
+        <div style={loadMoreFooterStyle}>
           {loadingMore
             ? '加载中…'
             : taskStore.hasMore()
-              ? '上滑加载更多'
+              ? (
+                <a
+                  style={loadMoreLinkStyle}
+                  onClick={(event) => {
+                    event.preventDefault()
+                    handleLoadMore()
+                  }}
+                  href="#load-more"
+                  role="button"
+                >
+                  加载更多
+                </a>
+              )
               : tasks.length > 0
                 ? '已加载全部任务'
                 : ''}
@@ -931,12 +915,21 @@ const errorStyle: React.CSSProperties = {
   padding: '8px 4px',
 }
 
-/** 触底续拉页脚(哨兵挂载点):弱化文案,不干扰列表主体。 */
+/** 列表底部加载更多页脚:弱化文案,不干扰列表主体。 */
 const loadMoreFooterStyle: React.CSSProperties = {
   fontSize: 'var(--text-xs)',
   color: 'var(--text-muted)',
   textAlign: 'center',
   padding: '6px 4px',
+  userSelect: 'none',
+}
+
+const loadMoreLinkStyle: React.CSSProperties = {
+  color: 'var(--accent-blue)',
+  cursor: 'pointer',
+  textDecoration: 'none',
+  fontSize: 'var(--text-xs)',
+  fontWeight: 600,
   userSelect: 'none',
 }
 
