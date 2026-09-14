@@ -108,8 +108,8 @@ public final class OsSandbox {
             case WSL_DIRECT -> log.info("[sandbox] 生效后端 = wsl-direct(配置 {}):distro={},root 完整权限,"
                     + "发行版可丢弃,宿主 automount 关闭 + 工作区手动挂载,命令方言 bash", configured,
                     WslBwrapSandbox.distroLabel(WslBwrapSandbox.effectiveDistro(props)));
-            case WINDOWS_MIC -> log.info("[sandbox] 生效后端 = windows-mic(配置 {}):Restricted Token + Low IL "
-                    + "+ Job Object,工作区/授权根目录有 Low 标注与 ACL 副作用(§13.6)", configured);
+            case WINDOWS_MIC -> log.info("[sandbox] 生效后端 = windows-mic(配置 {}):Restricted Token + Medium IL "
+                    + "+ Job Object,零文件系统副作用(详见 design-windows-mic-medium-il.md)", configured);
             case DIRECT -> {
                 if (!cfg.isEnabled() || "none".equals(normalizeBackend(cfg.getType()))) {
                     log.info("[sandbox] 沙箱未启用,命令直接 spawn(仅超时/输出护栏):type={}", configured);

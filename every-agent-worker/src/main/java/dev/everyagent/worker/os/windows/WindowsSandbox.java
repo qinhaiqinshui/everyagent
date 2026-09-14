@@ -32,7 +32,8 @@ import java.util.concurrent.TimeUnit;
  * <p>执行链:
  * <ol>
  *   <li>取当前进程 token → {@code CreateRestrictedToken} 去掉全部特权 / SID(disable-max-privilege);</li>
- *   <li>设 token 完整性级别为 Low({@code SECURITY_MANDATORY_LOW_RID}),写不进 Medium 以上对象;</li>
+ *   <li>不降级完整性级别——保留 Medium IL,天然可写工作区(零文件系统副作用,详见
+ *       docs/design-windows-mic-medium-il.md);</li>
  *   <li>{@code CreateJobObject} + {@code SetInformationJobObject} 设:
  *       ActiveProcessLimit(默认 32,允许 shell 内 rg/git 等有限子进程,防失控进程树)、
  *       JobMemoryLimit(内存上限)、KillOnJobClose(父死子亡);</li>
@@ -50,8 +51,8 @@ import java.util.concurrent.TimeUnit;
  *
  * <p>已知边界(与语言无关):Job Object 管不了网络;本实现靠 {@code deny-all}
  * 剥离代理 env(在 OsSandbox 已处理),真网络隔离需本地代理(本版 TODO)。
- * Low IL 进程写不了默认 Medium 的用户文件(NO_WRITE_UP)——工作区/授权根须先经
- * {@link WindowsIntegrity#ensureWritable} 标注 Low 完整性(§13.6),否则工作区内也只能读不能写。
+ * Medium IL 进程可写同完整性级别的用户文件——越界写拦截由 PermissionGate 责任链
+ * 承担(L1 扫描 → L2 过滤 → OverBroadRootCheck 拒收),无 OS 级写隔离兜底。
  */
 public final class WindowsSandbox {
 
@@ -91,9 +92,9 @@ public final class WindowsSandbox {
             if (hRestricted == null) {
                 return new ExecResult("", "[sandbox] 构建进程 token 失败,拒绝执行", 1, false);
             }
-            if (!allowPrivilege && !applyLowIntegrity(hRestricted)) {
-                log.warn("[sandbox] 设 Low IL 失败,继续(降权仍生效)");
-            }
+            // Medium IL 方案:不降级完整性级别。Restricted Token 去特权仍生效,
+            // Medium IL 天然可写工作区,无需标注 Low 完整性或追加 DACL。
+            // 详见 docs/design-windows-mic-medium-il.md
 
             hJob = K.CreateJobObjectW(null, null);
             if (hJob == null) {

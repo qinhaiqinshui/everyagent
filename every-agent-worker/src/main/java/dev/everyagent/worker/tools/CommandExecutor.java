@@ -2,14 +2,11 @@ package dev.everyagent.worker.tools;
 
 import dev.everyagent.worker.os.OsSandbox;
 import dev.everyagent.worker.os.OsSandbox.ExecResult;
-import dev.everyagent.worker.os.windows.WindowsAcl;
-import dev.everyagent.worker.os.windows.WindowsIntegrity;
 import dev.everyagent.worker.os.wsl.WslPathMapper;
 import dev.everyagent.worker.task.TaskEntry;
 
 import java.nio.file.Path;
 import java.util.HashMap;
-import java.util.Locale;
 import java.util.Map;
 import java.util.regex.Pattern;
 
@@ -66,12 +63,6 @@ public class CommandExecutor {
     private final String agentId;
     /** 打包 rg 二进制所在目录(可空);非空时 bash/powershell 子进程把它注入 PATH。 */
     private final Path rgBinDir;
-    /** 是否 Windows 宿主(powershell 工具仅 Windows 注册;Low 标注/ACL 亦仅 Windows 有意义)。 */
-    private final boolean windowsHost = System.getProperty("os.name")
-            .toLowerCase(Locale.ROOT).contains("win");
-    /** Low 完整性标注失败的一次性告警标记(仅首次失败时记日志,防刷屏)。 */
-    private volatile boolean writableRootWarned;
-
     public CommandExecutor(OsSandbox sandbox, TaskEntry task, PermissionGate gate, String agentId) {
         this(sandbox, task, gate, agentId, null);
     }
@@ -119,8 +110,7 @@ public class CommandExecutor {
         }
         Path cwd = Path.of(task.workspaceRoot);
         if (!wsl) {
-            // 需要宿主侧 Low 标注/ACL 预处理:windows-mic 后端(powershell/bash 均走)与
-            // WSL 后端下的 powershell 强制 native(powershell=true 强制,即使全局非 mic)
+            // Medium IL 方案:沙箱进程运行在 Medium IL,天然可写工作区,无需预处理
             prepareWritableRoots(cwd, powershell);
         }
         Map<String, String> env = new HashMap<>();
@@ -140,7 +130,7 @@ public class CommandExecutor {
         // 走 execRootsSandboxed(§13.3 L2 过滤)——过度宽泛根(如历史 C:\\)不得进 --bind 白名单,
         // 否则整个 /mnt/c 会被读写挂进沙箱,读隔离被击穿。wsl-direct 不建 bwrap 命名空间,
         // 授权根由动态 ensureMount 承担,此参数为空。powershell 走 Windows 原生,
-        // 附加根由 prepareWritableRoots 的 Low 标注/ACL 消费,不参与 bwrap 挂载。
+        // 附加根 prepareWritableRoots 已空体(Medium IL 无需标注);不参与 bwrap 挂载。
         java.util.List<Path> extraRoots = !wsl && sandbox.isWslBwrap() ? gate.execRootsSandboxed(task)
                 : java.util.List.of();
         // 网络许可:任务级 /禁用网络 开关未开 且 worker 全局默认放行 → 本次命令放行网络;
@@ -235,32 +225,12 @@ public class CommandExecutor {
     }
 
     /**
-     * Windows 沙箱生效时把工作区与 EXEC 授权根配置为沙箱可写(§13.6,幂等:
-     * 每 worker 进程每根一次):① Low 完整性标注(解决 MIC NO_WRITE_UP,工作区内
-     * 原本也只能读);② DACL 追加本地 Users 可写 ACE(增删改查,解决「授权了也
-     * 写不进去」的 ACL 残缺场景)。标注失败仅记一次日志告警——不向命令结果注入
-     * 提示,避免每条命令尾部常驻噪声(真实写入失败会在命令自身的 stdout/stderr
-     * 显现,模型/用户可见性不受影响);后续命令不再重复告警(防刷屏)。
+     * Medium IL 方案:沙箱进程运行在 Medium IL(Restricted Token 去特权但不降级),
+     * 天然可写工作区与已授权目录,无需标注 Low 完整性或追加 DACL。
+     * 零文件系统副作用,零残留。详见 docs/design-windows-mic-medium-il.md
      */
     private void prepareWritableRoots(Path cwd, boolean forceNative) {
-        // 仅在真正走 Windows 原生进程时标注:windows-mic 全局后端(isWindowsSandboxActive),
-        // 或 WSL 后端下 powershell 强制 native(forceNative=true,发行版内无 pwsh,命令回宿主执行)。
-        // 非 Windows 宿主恒跳过(powershell 工具仅 Windows 注册;jna 平台库只在 Windows 可用)。
-        if (!windowsHost || (!forceNative && !sandbox.isWindowsSandboxActive())) {
-            return;
-        }
-        boolean ok = WindowsIntegrity.ensureWritable(cwd);
-        ok &= WindowsAcl.grantWriteAccess(cwd);
-        // §13.3 L2:EXEC 根按 isOverBroadRoot 过滤(防御纵深:门禁即使再出解析 bug,
-        // 盘根/工作区祖先也点不燃标注/ACL 机器);L3 在 WindowsIntegrity/WindowsAcl 入口再断言一次
-        for (Path extra : gate.execRootsSandboxed(task)) {
-            ok &= WindowsIntegrity.ensureWritable(extra);
-            ok &= WindowsAcl.grantWriteAccess(extra);
-        }
-        if (!ok && !writableRootWarned) {
-            writableRootWarned = true;
-            log.warn("[sandbox] 工作区/授权目录 Low 完整性标注或可写 ACL 未完全成功,部分路径的文件写入可能被系统拒绝");
-        }
+        // Medium IL 天然可写,无需标注/ACL——空体
     }
 
     private static String truncate(String s, int n) {

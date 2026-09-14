@@ -6,8 +6,8 @@
 - worker:本地事件日志先行,发布/落盘永不阻塞任务线程;任务跑在虚拟线程(Java 25)。任务流混合模型:实时增量由 DataPusher 定向推送(stream 频道,ext.target=sessionId),历史/补齐走 `task.poll`(§7.13)。
 - seq 是任务流事件空间(每任务从 1 单调递增、跨运行延续;瞬态占号不落盘 → 磁盘回放有洞合法),wire 上以**字符串**携带(task.poll rpc.data 事件项与 stream 推送帧,雪花 ID 超 2^53);运行中任务日志永不修剪。
 - 频道即鉴权边界:`u.<ownerKey>.` 前缀 ACL;`fs.*`/`git.*`/`task.run`(新建)按调用必带 `workspace` 参数,jailed 到该工作区根(先 realpath 再校验前缀)。
-- 危险操作必须经 `PermissionGate` 用户授权(§7.8):AI 工具的**工作区外**路径访问一律先弹 `kind=authorization` 的 ask(拒绝/本轮运行/本任务三档),拒绝抛异常回灌模型;命令中的危险动词**仅当命令引用可能落在工作区外的路径时**才需授权,工作区内增删改查直接放行(授权护的是「工作区外」,不是删除这个动作本身;cwd 锁定 + Low IL 可写性契约兜底);不得绕过 gate 直接放行越界 IO。
-- 工作区在沙箱内可写(windows-mic 后端)是「完整性标注 + DACL 授权」两条腿(§7.10):Low IL 标注解决 MIC 拦截,`WindowsAcl` 给工作区树**追加**本地 Users 可写 ACE 解决 ACL 残缺;只对工作区/EXEC 授权根生效,工作区外仍被 OS 层拒写;不得为图省事把工作区 ACL 开放到 Everyone,也不得绕过 gate 直接放行越界 IO。
+- 危险操作必须经 `PermissionGate` 用户授权(§7.8):AI 工具的**工作区外**路径访问一律先弹 `kind=authorization` 的 ask(拒绝/本轮运行/本任务三档),拒绝抛异常回灌模型;命令中的危险动词**仅当命令引用可能落在工作区外的路径时**才需授权,工作区内增删改查直接放行(授权护的是「工作区外」,不是删除这个动作本身;cwd 锁定 + PermissionGate 责任链兜底);不得绕过 gate 直接放行越界 IO。
+- 工作区在沙箱内可写(windows-mic 后端):沙箱进程运行在 Medium IL(Restricted Token 去特权但不降级),天然可写工作区与已授权目录,不对文件系统做任何标注或 ACL 修改——零副作用、零残留(§7.10);越界写拦截由 PermissionGate 责任链承担,无 OS 级写隔离兜底;不得绕过 gate 直接放行越界 IO。
 - 任务/对话数据由 worker 落盘 `data/tasks/<taskId>/`(多端同步真相源);前端不做任务数据 localStorage 持久化。
 - 版本统一由根 pom 锁定(Spring Boot 4.1.x / Spring AI 2.0.x),三层不得各自升版本。
 - 构建:`JAVA_HOME` 指向 JDK 25(如 Corretto 25);maven 在 PATH 中可用即可。
