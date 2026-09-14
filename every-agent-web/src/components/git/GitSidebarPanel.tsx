@@ -787,10 +787,10 @@ function GitWorkspaceGroupPanel({
         <div style={sectionHeaderActionsStyle}>
           {/* 刷新/拉取/推送三键为紧凑簇(gap 2);「更多操作」与其保持原 8 间距 */}
           <div style={gitActionClusterStyle}>
-            <Button type="text" style={iconButtonStyle} onClick={() => void refresh()} disabled={busy !== null} title="刷新">
+            <Button type="text" style={gitIconButtonStyle} onClick={() => void refresh()} disabled={busy !== null} title="刷新">
               <RefreshIcon busy={busy === 'status'} />
             </Button>
-            <Button type="text" style={iconButtonStyle} onClick={() => void handlePull()} disabled={busy !== null || !initialized} title="拉取">
+            <Button type="text" style={gitIconButtonStyle} onClick={() => void handlePull()} disabled={busy !== null || !initialized} title="拉取">
               <PullIcon busy={busy === 'pull'} />
             </Button>
             <Badge
@@ -803,7 +803,7 @@ function GitWorkspaceGroupPanel({
               offset={[-4, 4]}
               title={status && (status.ahead ?? 0) > 0 ? `${status.ahead} 个提交待推送` : undefined}
             >
-              <Button type="text" style={iconButtonStyle} onClick={() => void ensureRemoteThenPush()} disabled={busy !== null || !initialized} title="推送">
+              <Button type="text" style={gitIconButtonStyle} onClick={() => void ensureRemoteThenPush()} disabled={busy !== null || !initialized} title="推送">
                 <PushIcon busy={busy === 'push'} />
               </Button>
             </Badge>
@@ -1249,13 +1249,6 @@ const sectionHeaderActionsStyle: React.CSSProperties = {
   gap: 8,
 }
 
-/** 刷新/拉取/推送紧凑簇(三键间距收紧为 2,与「更多操作」的外层 8 区分)。 */
-const gitActionClusterStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 2,
-}
-
 const groupStyle: React.CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
@@ -1352,6 +1345,22 @@ const iconButtonStyle: React.CSSProperties = {
   height: 28,
   fontSize: 'var(--text-sm)',
   color: 'var(--text-muted)',
+}
+
+/** 刷新/拉取/推送紧凑簇(三键间距收紧为 2,与「更多操作」的外层 8 区分)。 */
+const gitActionClusterStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 2,
+}
+
+/** 簇内图标按钮:22×22(antd text 按钮默认 padding 会撑到 32,需 padding 0)。 */
+const gitIconButtonStyle: React.CSSProperties = {
+  ...iconButtonStyle,
+  width: 22,
+  height: 22,
+  minWidth: 22,
+  padding: 0,
 }
 
 const commitAreaStyle: React.CSSProperties = {
