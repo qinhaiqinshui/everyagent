@@ -934,9 +934,9 @@ const errorStyle: React.CSSProperties = {
   padding: '8px 4px',
 }
 
-/** 组内「加载更多」页脚:弱化文案,不干扰列表主体。 */
+/** 组内「加载更多」页脚(加载中文案):弱化显示,不干扰列表主体。 */
 const loadMoreFooterStyle: React.CSSProperties = {
-  fontSize: 'var(--text-xs)',
+  fontSize: 11,
   color: 'var(--text-muted)',
   textAlign: 'center',
   userSelect: 'none',
@@ -947,7 +947,7 @@ const loadMoreLinkStyle: React.CSSProperties = {
   color: 'var(--accent-blue)',
   cursor: 'pointer',
   textDecoration: 'none',
-  fontSize: 'var(--text-xs)',
+  fontSize: 11,
   fontWeight: 600,
   userSelect: 'none',
   textAlign: 'center',
