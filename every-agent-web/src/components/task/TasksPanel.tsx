@@ -414,22 +414,6 @@ export default function TasksPanel({
         <div style={taskTitleStyle} title={task.displayTitle}>
           {task.displayTitle}
         </div>
-        <span
-          style={{
-            ...statusPillStyle,
-            ...(task.statusTone === 'active'
-              ? activeStatusPillStyle
-              : task.statusTone === 'completed'
-                ? completedStatusPillStyle
-                : task.statusTone === 'stopped'
-                ? stoppedStatusPillStyle
-                : task.statusTone === 'error'
-                ? errorStatusPillStyle
-                : idleStatusPillStyle),
-          }}
-        >
-          {task.statusLabel}
-        </span>
         {!batchActive ? (
           <span style={{ marginLeft: 'auto' }}>
             <ListRowActions
@@ -454,6 +438,22 @@ export default function TasksPanel({
       <div style={taskMetaRowStyle}>
         <span style={taskIdStyle} title={task.taskId}>
           {task.taskId}
+        </span>
+        <span
+          style={{
+            ...statusPillStyle,
+            ...(task.statusTone === 'active'
+              ? activeStatusPillStyle
+              : task.statusTone === 'completed'
+                ? completedStatusPillStyle
+                : task.statusTone === 'stopped'
+                ? stoppedStatusPillStyle
+                : task.statusTone === 'error'
+                ? errorStatusPillStyle
+                : idleStatusPillStyle),
+          }}
+        >
+          {task.statusLabel}
         </span>
         <span
           style={{ ...taskMetaStyle, cursor: 'help' }}
