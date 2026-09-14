@@ -181,7 +181,7 @@ function toEntry(summary: WorkerTaskSummary): TaskListEntry {
 
 type ChangeListener = (tasks: TaskListEntry[]) => void
 
-/** 任务列表默认每页条数:首屏只拉最近 PAGE_SIZE 个,滑动触底再续拉下一页。 */
+/** 任务列表默认每页条数:首屏只拉最近 PAGE_SIZE 个,组内点「加载更多」再续拉下一页。 */
 const PAGE_SIZE = 10
 
 class TaskStore {
@@ -195,8 +195,8 @@ class TaskStore {
   private workerOffsets = new Map<string, number>()
   /** 每台 worker 是否还有更多(hasMore)。 */
   private workerHasMore = new Map<string, boolean>()
-  /** 续拉更多分页(防重入)。 */
-  private loadingMore = false
+  /** 正在续拉分页的 worker 集合(逐台防重入,支持按 worker 定向续拉)。 */
+  private loadingMoreWorkers = new Set<string>()
 
   start(): void {
     if (this.started) return
@@ -281,8 +281,11 @@ class TaskStore {
     return this.refreshing
   }
 
-  /** 还有更多可分页拉取的任务(任意 worker hasMore)。 */
-  hasMore(): boolean {
+  /** 还有更多可分页拉取的任务(workerId 指定时只看该 worker,缺省=任意 worker 还有更多)。 */
+  hasMore(workerId?: string): boolean {
+    if (workerId !== undefined) {
+      return this.workerHasMore.get(workerId) === true
+    }
     for (const has of this.workerHasMore.values()) {
       if (has) return true
     }
@@ -290,39 +293,40 @@ class TaskStore {
   }
 
   /**
-   * 滑动触底续拉:对还有更多的 worker 逐台取下一页(offset=已拉条数)合并进镜像。
-   * 幂等防重入;单台失败保留其 hasMore 下次滑动重试。
+   * 点击组内「加载更多」续拉:对还有更多(且未在拉取中)的 worker 逐台取下一页
+   * (offset=已拉条数)合并进镜像;workerId 指定时只续拉该 worker(工作区分组定向续拉)。
+   * 逐台防重入(同 worker 并发点击合并为一次);单台失败保留其 hasMore 下次点击重试。
    */
-  async loadMore(): Promise<void> {
-    if (this.loadingMore || !this.hasMore()) return
-    this.loadingMore = true
-    try {
-      const pending: Array<Promise<void>> = []
-      hubSession.forEachConnectedWorker((workerId, client) => {
-        if (!this.workerHasMore.get(workerId)) return
-        pending.push((async () => {
-          try {
-            const offset = this.workerOffsets.get(workerId) ?? 0
-            const result = await client.rpc(workerId, 'tasks.list', { limit: PAGE_SIZE, offset })
-            const incoming = (result?.tasks ?? []) as WorkerTaskSummary[]
-            this.workerOffsets.set(workerId, offset + incoming.length)
-            this.workerHasMore.set(workerId, Boolean(result?.hasMore))
-            for (const summary of incoming) {
-              const entry = toEntry(summary)
-              if (!entry.workerId) entry.workerId = workerId
-              this.tasks.set(entry.taskId, entry)
-            }
-          } catch (error) {
-            // 单台失败不影响整体;hasMore 保持 true,下次滑动重试。
-            console.warn(`[taskStore] tasks.list 分页失败(${workerId}):`, error)
+  async loadMore(workerId?: string): Promise<void> {
+    const pending: Array<Promise<void>> = []
+    hubSession.forEachConnectedWorker((id, client) => {
+      if (!this.workerHasMore.get(id)) return
+      if (this.loadingMoreWorkers.has(id)) return
+      if (workerId !== undefined && id !== workerId) return
+      this.loadingMoreWorkers.add(id)
+      pending.push((async () => {
+        try {
+          const offset = this.workerOffsets.get(id) ?? 0
+          const result = await client.rpc(id, 'tasks.list', { limit: PAGE_SIZE, offset })
+          const incoming = (result?.tasks ?? []) as WorkerTaskSummary[]
+          this.workerOffsets.set(id, offset + incoming.length)
+          this.workerHasMore.set(id, Boolean(result?.hasMore))
+          for (const summary of incoming) {
+            const entry = toEntry(summary)
+            if (!entry.workerId) entry.workerId = id
+            this.tasks.set(entry.taskId, entry)
           }
-        })())
-      })
-      await Promise.all(pending)
-      this.sortAndNotify()
-    } finally {
-      this.loadingMore = false
-    }
+        } catch (error) {
+          // 单台 worker 失败不影响整体;hasMore 保持 true,下次点击重试。
+          console.warn(`[taskStore] tasks.list 分页失败(${id}):`, error)
+        } finally {
+          this.loadingMoreWorkers.delete(id)
+        }
+      })())
+    })
+    if (pending.length === 0) return
+    await Promise.all(pending)
+    this.sortAndNotify()
   }
 
   /**

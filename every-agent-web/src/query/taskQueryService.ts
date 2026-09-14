@@ -55,6 +55,8 @@ export interface TaskListItemSnapshot {
   contextUsage?: ContextMonitorSnapshot | null
   /** 任务挂靠的工作区根(TasksPanel 按工作区分组)。 */
   workspace?: string
+  /** 任务归属 worker(TasksPanel 组内「加载更多」按 worker 定向续拉)。 */
+  workerId?: string
 }
 
 /** Task 壳层摘要快照。 */
@@ -77,6 +79,7 @@ function toListItem(entry: TaskListEntry): TaskListItemSnapshot {
     // 不再依赖打开聊天页建流;聊天页流折叠到实时值后优先实时)。
     contextUsage: taskStreamManager.peekState(entry.taskId)?.contextUsage ?? entry.contextUsage ?? null,
     workspace: entry.workspace,
+    workerId: entry.workerId,
   }
 }
 
