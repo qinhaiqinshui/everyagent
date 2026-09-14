@@ -1,5 +1,6 @@
 package dev.everyagent.worker.task;
 
+import com.openai.errors.OpenAIIoException;
 import dev.everyagent.worker.config.WorkerProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -15,6 +16,7 @@ import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.ChatOptions;
 import reactor.core.publisher.Flux;
 
+import java.io.IOException;
 import java.time.Duration;
 import java.util.Set;
 import java.util.concurrent.TimeoutException;
@@ -24,22 +26,27 @@ import java.util.concurrent.atomic.AtomicReference;
 /**
  * 模型「输出预算耗尽」护栏 advisor(红线:一个 advisor 只负责一个功能)。
  *
- * <p>背景:reasoning 模型(如 glm-5.3)在长思考任务里会把整个 maxTokens 输出预算
- * 全部耗在 thinking 上、始终不产出正文/工具调用;某些 provider 此时<b>不优雅断开</b>——
- * 既不回 {@code finish_reason=length}、也不结束 SSE,而是静默挂起连接,客户端只能等
- * okhttp 读超时(默认 10 分钟)才 CANCEL 流,随后又被外层瞬时错误重试当成网络抖动
- * 反复重跑,每一波都重新吐出数万条瞬态 thinking 事件,最终把内存事件日志刷爆
- * (LogOverflowException)。
- *
- * <p>职责(单一):识别「输出量已达上限但未完成」这一<b>确定性</b>失败——
- * <ol>
- *   <li>实际收到 {@code finish_reason=length} → 报 {@link ModelLengthExhaustedException};</li>
- *   <li>流长时间无输出(超 {@code worker.limits.length-stall-ms})且本 advisor 自行估算的
- *       累计输出 token ≈ 配置 maxTokens → 判定等价于 finish_reason=length,报同一错误,
- *       避免空等 10 分钟读超时。</li>
- * </ol>
- * 错误为自定义非重试异常(非 OpenAIServiceException/IO/超时),外层瞬时错误重试不会
- * 重复退避;错误信息给足调整建议(精简输入/拆分任务/降低 reasoningEffort/调大 maxTokens)。
+\r
+ * <p>背景:reasoning 模型(如 glm-5.3)在长思考任务里会把整个 maxTokens 输出预算\r
+ * 全部耗在 thinking 上、始终不产出正文/工具调用;某些 provider 此时<b>不优雅断开</b>——\r
+ * 既不回 {@code finish_reason=length}、也不结束 SSE,而是静默挂起连接,客户端只能等\r
+ * okhttp 读超时(默认 10 分钟)才 CANCEL 流,随后又被外层瞬时错误重试当成网络抖动\r
+ * 反复重跑,每一波都重新吐出数万条瞬态 thinking 事件,最终把内存事件日志刷爆\r
+ * (LogOverflowException)。\r
+ *\r
+ * <p>职责(单一):识别「输出量已达上限但未完成」这一<b>确定性</b>失败——\r
+ * <ol>\r
+ *   <li>实际收到 {@code finish_reason=length} → 报 {@link ModelLengthExhaustedException};</li>\r
+ *   <li>流长时间无输出(超 {@code worker.limits.length-stall-ms})且本 advisor 自行估算的\r
+ *       累计输出 token ≈ 配置 maxTokens → 判定等价于 finish_reason=length,报同一错误,\r
+ *       避免空等 10 分钟读超时;</li>\r
+ *   <li>provider 在预算耗尽处<b>粗暴断流</b>(不发 length 帧、也不静默挂起,长思考 chunk\r
+ *       持续到达后以 IOException 瞬时中断)——流被网络级错误中断且自估输出 ≈ maxTokens\r
+ *       时同样判定等价 length,报同一错误;否则该错误会被外层瞬时重试当作普通网络抖动\r
+ *       退避重跑,每次重试重新整段长思考再次占满预算、再次断流,循环几十分钟。</li>\r
+ * </ol>\r
+ * 错误为自定义非重试异常(非 OpenAIServiceException/IO/超时),外层瞬时错误重试不会\r
+ * 重复退避;错误信息给足调整建议(精简输入/拆分任务/降低 reasoningEffort/调大 maxTokens)。\r
  *
  * <p>位置:order = {@link ToolCallingAdvisor#DEFAULT_ORDER} + 300,位于瞬时错误重试
  * (+200)内侧、上下文压缩(+400)外侧——紧贴模型流,能逐 chunk 看到原始输出;其抛出的
@@ -88,7 +95,7 @@ public class ModelLengthGuardAdvisor implements CallAdvisor, StreamAdvisor {
         if (cr != null && cr.hasFinishReasons(LENGTH)) {
             long think = estimateTokens(reasoningOf(cr));
             long text = estimateTokens(textOf(cr));
-            throw lengthExhausted(think, text, maxTokensOf(request), false);
+            throw lengthExhausted(think, text, maxTokensOf(request), Cause.FINISH_REASON);
         }
         return response;
     }
@@ -110,28 +117,41 @@ public class ModelLengthGuardAdvisor implements CallAdvisor, StreamAdvisor {
                         ChatResponse cr = chunk.chatResponse();
                         if (cr != null && cr.hasFinishReasons(LENGTH)) {
                             throw lengthExhausted(tokensOf(thinkCjk, thinkOther),
-                                    tokensOf(textCjk, textOther), maxTokens, false);
+                                    tokensOf(textCjk, textOther), maxTokens, Cause.FINISH_REASON);
                         }
                     });
             if (stallMs > 0) {
-                flux = flux.timeout(Duration.ofMillis(stallMs))
-                        .onErrorResume(e -> {
-                            if (e instanceof TimeoutException) {
-                                long think = tokensOf(thinkCjk, thinkOther);
-                                long text = tokensOf(textCjk, textOther);
-                                if (maxTokens != null && nearMax(think + text, maxTokens)) {
-                                    log.warn("任务 {} agent {} 流 {}ms 无输出且自估输出 {} tokens≈maxTokens {}，"
-                                            + "判定 finish_reason=length",
-                                            a.task.taskId, a.agentId, stallMs, think + text, maxTokens);
-                                    return Flux.error(lengthExhausted(think, text, maxTokens, true));
-                                }
-                                // 输出远未达上限即长时间无数据:真·网络/服务端停顿,原样上抛交瞬时重试。
-                                return Flux.error(e);
-                            }
-                            return Flux.error(e);
-                        });
+                flux = flux.timeout(Duration.ofMillis(stallMs));
             }
-            return flux;
+            // 流中断统一收口:stall 超时或网络级错误断流且自估输出已≈maxTokens → 判定等价
+            // finish_reason=length。第三条路径兜底「provider 在输出预算耗尽处粗暴断流」(不发
+            // length 帧、也不静默挂起,长思考 chunk 持续到达后以 IOException 瞬时中断):若不在此
+            // 收口,该错误会被外层瞬时重试当作普通网络抖动退避重跑——每次重试重新整段长思考
+            // 再次占满预算、再次断流,循环几十分钟。转换出的非重试异常穿透瞬时重试直达任务层。
+            return flux.onErrorResume(e -> {
+                boolean stall = e instanceof TimeoutException;
+                if (!stall && !isNetworkError(e)) {
+                    return Flux.error(e);
+                }
+                long think = tokensOf(thinkCjk, thinkOther);
+                long text = tokensOf(textCjk, textOther);
+                if (maxTokens != null && nearMax(think + text, maxTokens)) {
+                    if (stall) {
+                        log.warn("任务 {} agent {} 流 {}ms 无输出且自估输出 {} tokens≈maxTokens {}，"
+                                        + "判定 finish_reason=length",
+                                a.task.taskId, a.agentId, stallMs, think + text, maxTokens);
+                    } else {
+                        log.warn("任务 {} agent {} 流被网络级错误中断({}: {})且自估输出 {} tokens≈maxTokens {}，"
+                                        + "判定 finish_reason=length",
+                                a.task.taskId, a.agentId, e.getClass().getSimpleName(),
+                                e.getMessage(), think + text, maxTokens);
+                    }
+                    return Flux.error(lengthExhausted(think, text, maxTokens,
+                            stall ? Cause.STALL : Cause.DISCONNECTED));
+                }
+                // 输出远未达上限:真·网络/服务端停顿,原样上抛交瞬时重试。
+                return Flux.error(e);
+            });
         });
     }
 
@@ -243,12 +263,14 @@ public class ModelLengthGuardAdvisor implements CallAdvisor, StreamAdvisor {
 
     /** 构造给足信息的 length 耗尽错误(非重试:确定性失败)。 */
     private ModelLengthExhaustedException lengthExhausted(long thinkTokens, long textTokens,
-            Integer maxTokens, boolean synthesized) {
+            Integer maxTokens, Cause cause) {
         long total = thinkTokens + textTokens;
         StringBuilder sb = new StringBuilder(256);
-        sb.append(synthesized
-                ? "模型长时间无输出且输出量已达上限(判定为 finish_reason=length)"
-                : "模型输出已达上限(finish_reason=length)");
+        sb.append(switch (cause) {
+            case FINISH_REASON -> "模型输出已达上限(finish_reason=length)";
+            case STALL -> "模型长时间无输出且输出量已达上限(判定为 finish_reason=length)";
+            case DISCONNECTED -> "模型流被中断且输出量已达上限(判定为 finish_reason=length)";
+        });
         sb.append(":已输出约 ").append(total).append(" tokens")
                 .append("(思考≈").append(thinkTokens).append(" / 正文≈").append(textTokens).append(')');
         if (maxTokens != null) {
@@ -257,6 +279,32 @@ public class ModelLengthGuardAdvisor implements CallAdvisor, StreamAdvisor {
         sb.append(",但未产出有效完成结果。建议:1)精简输入或把任务拆分成多步,避免单轮让模型思考过久;")
                 .append("2)降低 reasoningEffort 或减小单次输出预算;3)如需更长输出,调大 maxTokens 后重试。");
         return new ModelLengthExhaustedException(sb.toString());
+    }
+
+    /**
+     * 网络级错误判定(沿 cause 链下沉,深度封顶防环):SDK IO 信封/IO/超时。
+     * provider 在输出预算耗尽处粗暴断开 SSE(不发 finish_reason=length、也不静默挂起)时,
+     * 客户端表现为 IO 异常——配合自估输出 ≈ maxTokens 即等价 length 耗尽(见 adviseStream 收口)。
+     * 判定口径与 {@link TransientErrorRetryAdvisor} 的网络级瞬时判定一致。
+     */
+    static boolean isNetworkError(Throwable error) {
+        int depth = 0;
+        for (Throwable t = error; t != null && depth < 8; depth++, t = t.getCause()) {
+            if (t instanceof OpenAIIoException || t instanceof IOException || t instanceof TimeoutException) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** length 判定成因(供错误文案区分来源)。 */
+    private enum Cause {
+        /** 实际收到 finish_reason=length 帧。 */
+        FINISH_REASON,
+        /** 流 stall 超时且自估输出 ≈ maxTokens。 */
+        STALL,
+        /** 流被网络级错误中断且自估输出 ≈ maxTokens(provider 粗暴断流)。 */
+        DISCONNECTED
     }
 
     /** 输出预算耗尽(等价 finish_reason=length)。非重试,由任务层统一 error 收口。 */
