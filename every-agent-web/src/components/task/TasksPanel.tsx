@@ -159,9 +159,11 @@ export default function TasksPanel({
 
   /**
    * 任务列表分组：按挂靠工作区内置分组（D16，无插件路径）。
-   * 组序=注册表顺序（默认工作区在前），只保留非空组；registry 未加载返回 null
-   * 回退扁平列表（防首帧全部误归尾组）。workspace 为空（旧任务）或已不在
-   * 注册表（workspaces.remove 不删任务）的任务合并于尾组「未挂靠工作区」。
+   * 组序=注册表顺序（默认工作区在前），所有已注册工作区都展示（空组显示
+   * 「暂无任务」占位，保证初始即可见全部工作区并支持「在此新建任务」）；
+   * registry 未加载返回 null 回退扁平列表（防首帧全部误归尾组）。
+   * workspace 为空（旧任务）或已不在注册表（workspaces.remove 不删任务）的
+   * 任务合并于尾组「未挂靠工作区」。
    * workerIds 为组内任务的来源 worker（组内「加载更多」按 worker 定向续拉）。
    */
   const groups = React.useMemo<(TaskListGroup<TaskListItemSnapshot> & { workerIds: string[] })[] | null>(() => {
@@ -170,7 +172,6 @@ export default function TasksPanel({
     const out: Array<TaskListGroup<TaskListItemSnapshot> & { workerIds: string[] }> = []
     for (const entry of registry.workspaces) {
       const groupTasks = tasks.filter((task) => task.workspace === entry.root)
-      if (groupTasks.length === 0) continue
       out.push({
         key: `ws:${entry.root}`,
         label: workspaceGroupLabel(entry.root),
@@ -606,13 +607,17 @@ export default function TasksPanel({
                 {collapsed ? null : (
                   <div style={groupTasksStyle}>
                     {group.tasks.map((task) => renderTaskCard(task, group.key))}
+                    {group.tasks.length === 0 ? (
+                      <div style={groupEmptyStyle}>暂无任务</div>
+                    ) : null}
                     {renderGroupLoadMore(group)}
                   </div>
                 )}
               </div>
             )
           })}
-        {!error && tasks.length === 0 ? (
+        {/* registry 未加载时的兜底空态;分组模式下空组各自显示「暂无任务」占位。 */}
+        {!error && groups === null && tasks.length === 0 ? (
           <div style={emptyStyle}>暂无任务</div>
         ) : null}
       </SidebarScrollArea>
@@ -926,6 +931,14 @@ const emptyStyle: React.CSSProperties = {
   fontSize: 'var(--text-xs)',
   color: 'var(--text-muted)',
   padding: '8px 4px',
+}
+
+/** 组内「暂无任务」占位(空工作区分组仍展示组头,组体给一行弱提示)。 */
+const groupEmptyStyle: React.CSSProperties = {
+  fontSize: 'var(--text-xs)',
+  color: 'var(--text-muted)',
+  padding: '2px 4px',
+  userSelect: 'none',
 }
 
 const errorStyle: React.CSSProperties = {
