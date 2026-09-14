@@ -110,6 +110,14 @@ export default function TerminalPage({ tab }: TerminalPageProps) {
     // 先 sub 频道再 open,避免 worker 在 term.open 后立即推送的首帧丢失。
     client.sub(channel)
 
+    // 页面刷新/关闭时 best-effort 发送 term.close(WS 拆除前可能来不及,
+    // worker 侧有 subscriber.leave + onHubDisconnected 三层兜底回收,见 TerminalService)。
+    const handleCloseOnUnload = () => {
+      void terminalGateway.close(tab.workspaceRoot, termId)
+    }
+    window.addEventListener('beforeunload', handleCloseOnUnload)
+    window.addEventListener('pagehide', handleCloseOnUnload)
+
     let exited = false
     const offFrame = hubSession.onFrame((frame) => {
       if (frame.channel !== channel) return
@@ -158,6 +166,8 @@ export default function TerminalPage({ tab }: TerminalPageProps) {
       resizeObserver.disconnect()
       dataDisposable.dispose()
       offFrame()
+      window.removeEventListener('beforeunload', handleCloseOnUnload)
+      window.removeEventListener('pagehide', handleCloseOnUnload)
       client.unsub(channel)
       void terminalGateway.close(tab.workspaceRoot, termId)
       term.dispose()

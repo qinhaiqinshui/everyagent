@@ -1,7 +1,9 @@
 package dev.everyagent.worker.modules;
 
+import dev.everyagent.contract.frame.Frames;
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.worker.config.WorkerProperties;
+import dev.everyagent.worker.hub.HubLink;
 import dev.everyagent.worker.hub.HubPool;
 import dev.everyagent.worker.os.pty.TerminalPty;
 import dev.everyagent.worker.os.pty.TerminalPtyFactory;
@@ -10,14 +12,18 @@ import dev.everyagent.worker.proto.RpcMethods;
 import dev.everyagent.worker.rpc.BadParamsException;
 import dev.everyagent.worker.rpc.RpcDispatcher;
 import dev.everyagent.worker.rpc.RpcContext;
+import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
+import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.node.ObjectNode;
 
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Base64;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -28,9 +34,21 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * <p>会话表 termId → TerminalSession 在内存中(worker 不可变地障,进程退出即销毁);
  * PTY 引擎基于 pty4j(跨平台 ConPTY/WinPTY/openpty),复用框架禁止重复造轮子。
+ *
+ * <p><b>孤儿进程防护(三层兜底)</b>:
+ * <ol>
+ *   <li>前端正常关闭标签页 → term.close RPC → 会话回收;</li>
+ *   <li>前端刷新/浏览器崩溃 → hub 检测 WS 断开 → subscriber.leave 通知 →
+ *       {@link #onHubMessage} 解析 term.*.stream 频道的 leave → 回收该 termId 的会话;
+ *       若 leave 通知丢失(hub 缓陷),{@link #onHubDisconnected} 兜底清理该连接上
+ *       最后活跃的所有终端会话;</li>
+ *   <li>worker 进程关闭 → {@link #destroy} 清理全部会话。</li>
+ * </ol>
+ * 前端无法可靠发送 term.close(页面刷新即 WS 拆除),worker 侧兜底是唯一可靠路径,
+ * 与 DataPusherManager 的 onHubDisconnected 清理推送器是完全同款的架构范式。
  */
 @Component
-public class TerminalService {
+public class TerminalService implements HubPool.Listener {
 
     private static final Logger log = LoggerFactory.getLogger(TerminalService.class);
 
@@ -51,6 +69,11 @@ public class TerminalService {
         dispatcher.register(RpcMethods.TERM_INPUT, this::input);
         dispatcher.register(RpcMethods.TERM_RESIZE, this::resize);
         dispatcher.register(RpcMethods.TERM_CLOSE, this::close);
+    }
+
+    @PostConstruct
+    void init() {
+        pool.addListener(this);
     }
 
     // ---- RPC 方法实现 ----
@@ -78,16 +101,18 @@ public class TerminalService {
         TerminalPty pty = TerminalPtyFactory.open(cwd, cols, rows, shell, null);
 
         String ownerKey = ctx.ownerKey();
-        TerminalSession session = new TerminalSession(pty, termId, ownerKey, props.getWorkerId());
+        long pid = pty.pid();
+        TerminalSession session = new TerminalSession(pty, termId, ownerKey, props.getWorkerId(),
+                ctx.conn(), pid);
         sessions.put(termId, session);
 
         // 起虚拟线程读 PTY 输出,持续推送到 termStream 频道(Java 25 虚拟线程)
         Thread.startVirtualThread(() -> readLoop(termId));
 
-        log.info("终端会话已打开: termId={}, cwd={}, cols={}, rows={}, shell={}",
-                termId, cwd, cols, rows, shell);
+        log.info("终端会话已打开: termId={}, pid={}, cwd={}, cols={}, rows={}, shell={}",
+                termId, pid, cwd, cols, rows, shell);
 
-        ctx.ok(Json.obj().put("termId", termId).put("pid", 0));
+        ctx.ok(Json.obj().put("termId", termId).put("pid", pid));
     }
 
     /**
@@ -129,21 +154,109 @@ public class TerminalService {
     }
 
     /**
-     * term.close:取会话 → pty.close() → sessions.remove → ok({})。
+     * term.close:取会话 → closeSession → ok({})。
      */
     private void close(RpcContext ctx) throws IOException {
         String termId = ctx.strParam("termId");
-        TerminalSession session = sessions.remove(termId);
+        TerminalSession session = sessions.get(termId);
         if (session == null) {
             throw new BadParamsException("终端会话不存在: " + termId);
+        }
+        closeSession(termId);
+        log.info("终端会话已关闭: termId={}", termId);
+        ctx.ok(Json.obj());
+    }
+
+    // ---- 内部工具 ----
+
+    /**
+     * 回收终端会话(幂等):从会话表移除 → close PTY → kill 子进程。
+     * readLoop 在 PTY close 后 read 返回 null/异常自然退出,finally 也会 remove(幂等 no-op)。
+     */
+    private void closeSession(String termId) {
+        TerminalSession session = sessions.remove(termId);
+        if (session == null) {
+            return;
         }
         try {
             session.pty.close();
         } catch (IOException e) {
             log.debug("关闭 PTY 异常(已忽略): termId={}", termId, e);
         }
-        log.info("终端会话已关闭: termId={}", termId);
-        ctx.ok(Json.obj());
+    }
+
+    /** 从终端 stream 频道名解析 termId;非终端频道返回 null。 */
+    private static String termIdOf(String channel) {
+        if (channel == null || !channel.startsWith("u.")) {
+            return null;
+        }
+        int ownerEnd = channel.indexOf('.', 2);
+        if (ownerEnd < 0) {
+            return null;
+        }
+        String rest = channel.substring(ownerEnd + 1);
+        if (!rest.startsWith("term.") || !rest.endsWith(".stream")) {
+            return null;
+        }
+        String termId = rest.substring("term.".length(), rest.length() - ".stream".length());
+        return termId.isEmpty() ? null : termId;
+    }
+
+    // ---- HubPool.Listener:孤儿进程防护(前端刷新/WS 断开时 worker 侧兜底清理) ----
+
+    /**
+     * hub 消息:监听 subscriber.leave 通知——前端断开 WS 时 hub 发 leave 到
+     * u.&lt;K&gt;.term.&lt;termId&gt;.stream 频道,据此回收对应终端会话。
+     * subscriber.join 忽略(终端会话由前端主动 term.open 建立,不依赖 join)。
+     */
+    @Override
+    public void onHubMessage(HubLink conn, JsonNode frame) {
+        String event = frame.path("event").asString("");
+        if (!Frames.SUBSCRIBER_LEAVE.equals(event)) {
+            return;
+        }
+        String channel = frame.path("channel").asString("");
+        String termId = termIdOf(channel);
+        if (termId == null) {
+            return; // 非终端频道
+        }
+        TerminalSession session = sessions.get(termId);
+        if (session == null) {
+            return;
+        }
+        // 只清理属于该连接(ownerKey 匹配)的会话,避免多 hub 跨连接误清
+        if (!conn.k().equals(session.ownerKey)) {
+            return;
+        }
+        log.info("subscriber.leave 回收终端会话: termId={}, channel={}", termId, channel);
+        closeSession(termId);
+    }
+
+    /**
+     * hub 连接断开:该连接上的所有前端已掉线,清理关联的终端会话防泄漏。
+     * 与 DataPusherManager.onHubDisconnected 清理推送器同款兜底范式。
+     */
+    @Override
+    public void onHubDisconnected(HubLink conn) {
+        String ownerKey = conn.k();
+        for (String termId : new ArrayList<>(sessions.keySet())) {
+            TerminalSession session = sessions.get(termId);
+            if (session != null && ownerKey.equals(session.ownerKey)) {
+                log.info("hub 断开回收终端会话: termId={}, ownerKey={}", termId, ownerKey);
+                closeSession(termId);
+            }
+        }
+    }
+
+    /**
+     * worker 关闭:清理全部终端会话,kill 所有 PTY 子进程,防孤儿进程。
+     */
+    @PreDestroy
+    void destroy() {
+        for (String termId : new ArrayList<>(sessions.keySet())) {
+            log.info("worker 关闭回收终端会话: termId={}", termId);
+            closeSession(termId);
+        }
     }
 
     // ---- PTY 读循环(虚拟线程) ----
@@ -209,18 +322,24 @@ public class TerminalService {
     /**
      * 终端会话上下文:持有 PTY 实例与发布所需的身份信息。
      * readLoop 在独立虚拟线程中运行,通过本对象获取 ownerKey 等发布参数。
+     * conn 用于 hub 断开时按连接清理(hub 断开 → onHubDisconnected → 按 ownerKey 匹配回收)。
      */
     static final class TerminalSession {
         final TerminalPty pty;
         final String termId;
         final String ownerKey;
         final String workerId;
+        final HubLink conn;
+        final long pid;
 
-        TerminalSession(TerminalPty pty, String termId, String ownerKey, String workerId) {
+        TerminalSession(TerminalPty pty, String termId, String ownerKey, String workerId,
+                HubLink conn, long pid) {
             this.pty = pty;
             this.termId = termId;
             this.ownerKey = ownerKey;
             this.workerId = workerId;
+            this.conn = conn;
+            this.pid = pid;
         }
     }
 }

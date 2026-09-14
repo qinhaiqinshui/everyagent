@@ -47,6 +47,9 @@ public interface TerminalPty extends Closeable {
     /** 子进程是否仍在运行。 */
     boolean isAlive();
 
+    /** 子进程 PID(操作系统级进程标识;平台不支持或进程已退出时返回 -1)。 */
+    long pid();
+
     /**
      * 幂等关闭:stop PTY 进程、回收资源。
      * 多次调用安全,后续调用为 no-op。

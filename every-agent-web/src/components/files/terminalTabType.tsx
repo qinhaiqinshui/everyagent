@@ -31,4 +31,13 @@ export const terminalTabType: UiWorkspaceTabTypeDefinition = {
   getCloseAriaLabel: (tab: WorkspaceTab) =>
     (tab.tabType === 'terminal' ? `关闭终端 ${tab.name}` : '关闭终端标签'),
   getSidebarActivityId: () => null,
+  /**
+   * 关闭标签时显式清理:TerminalPage 的 useEffect cleanup 会调 term.close,
+   * 此处不重复调,但确保 closeWorkspaceTabNow 被调用(触发 React unmount → cleanup)。
+   * 若无 onClose,closeWorkspaceTab 也会 fallback 到 closeWorkspaceTabNow,
+   * 但显式声明让清理意图更清晰,并防止未来 onClose 链路变更遗漏终端清理。
+   */
+  onClose: (_tab: WorkspaceTab, ctx: WorkspaceTabRenderContext) => {
+    ctx.closeTab(_tab.id)
+  },
 }

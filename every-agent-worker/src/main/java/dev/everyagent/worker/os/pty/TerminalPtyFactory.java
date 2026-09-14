@@ -170,6 +170,18 @@ public final class TerminalPtyFactory {
         }
 
         @Override
+        public long pid() {
+            if (closed) {
+                return -1;
+            }
+            try {
+                return process.pid();
+            } catch (Exception e) {
+                return -1;
+            }
+        }
+
+        @Override
         public void close() throws IOException {
             if (closed) {
                 return;
