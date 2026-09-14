@@ -105,6 +105,17 @@ export interface WorkspaceShellActions {
     /** 标签标题(缺省为「Git 历史：${name}」)。 */
     title?: string
   }) => string
+  /** 打开内嵌终端标签(xterm.js + worker PTY;每次打开新建 termId,不复用)。 */
+  openTerminalTab: (input: {
+    /** 所属工作区根(worker 机器绝对路径)。 */
+    workspaceRoot: string
+    /** 终端工作目录(工作区相对路径,空串 = 工作区根)。 */
+    path: string
+    /** 目录名(标签显示用)。 */
+    name: string
+    /** 来源 worker(term.* RPC 定向目标)。 */
+    workerId: string
+  }) => string
 }
 
 type WorkspaceShellContextValue = WorkspaceShellState & WorkspaceShellActions

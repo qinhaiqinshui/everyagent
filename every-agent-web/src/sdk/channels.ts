@@ -99,4 +99,6 @@ export const channels = {
   workerInput: (k: string, workerId: string) => `u.${k}.worker.${workerId}.input`,
   tasks: (k: string) => `u.${k}.tasks`,
   taskStream: (k: string, taskId: string) => `u.${k}.task.${taskId}.stream`,
+  /** 内嵌终端实时输出:worker 定向推送(term.output/term.exited);与 worker 侧 proto/Channels.java 逐字对齐。 */
+  termStream: (k: string, termId: string) => `u.${k}.term.${termId}.stream`,
 } as const;

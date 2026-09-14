@@ -20,7 +20,7 @@ import {
 import ConfirmDialog from '../shared/ConfirmDialog'
 import PropertiesDialog, { type PropertyItem } from '../shared/PropertiesDialog'
 import MoreActionsButton, { type MoreActionItem } from '../shared/MoreActionsButton'
-import { DownloadIcon, FilePlusIcon, FileTextIcon, FolderArrowOutIcon, FolderPlusIcon, MagnifierCheckIcon, UploadIcon, ChevronDownIcon, CheckIcon } from '../shared/AppGlyphs'
+import { DownloadIcon, FilePlusIcon, FileTextIcon, FolderArrowOutIcon, FolderPlusIcon, MagnifierCheckIcon, UploadIcon, ChevronDownIcon, CheckIcon, TerminalIcon } from '../shared/AppGlyphs'
 import SidebarScrollArea from '../shared/SidebarScrollArea'
 import WorkspaceExplorerTree from './WorkspaceExplorerTree'
 import WorkspacePathPicker from '@/components/shared/ui/WorkspacePathPicker'
@@ -89,6 +89,7 @@ function WorkspaceGroupPanel({
     renameFileTabs,
     setActiveSidebarPanel,
     openGitHistoryTab,
+    openTerminalTab,
   } = useWorkspaceShell()
   const { showToast } = useAppUi()
   const [treeNodes, setTreeNodes] = React.useState<WorkspaceExplorerNode[]>([])
@@ -622,6 +623,15 @@ function WorkspaceGroupPanel({
     }
   }, [showToast, workspaceRoot])
 
+  const handleRequestOpenTerminal = React.useCallback((target: WorkspaceExplorerContextTarget) => {
+    openTerminalTab({
+      workspaceRoot: target.workspaceRoot,
+      path: target.path,
+      name: target.name || '工作区',
+      workerId: entry.workerId,
+    })
+  }, [entry, openTerminalTab])
+
   const handleRequestUpload = React.useCallback(async (mode: 'file' | 'directory', target: WorkspaceExplorerContextTarget) => {
     const files = await pickFiles(mode === 'directory')
     if (files.length === 0) return
@@ -783,13 +793,19 @@ function WorkspaceGroupPanel({
       onSelect: () => handleRequestDownload(target),
     })
     items.push({
+      key: 'open-terminal',
+      label: '在终端中打开',
+      icon: <TerminalIcon size={13} />,
+      onSelect: () => handleRequestOpenTerminal(target),
+    })
+    items.push({
       key: 'reveal-in-os',
       label: '在系统文件管理器中显示',
       icon: <FolderArrowOutIcon size={13} />,
       onSelect: () => handleRequestRevealInOs(target),
     })
    return items
-  }, [handleOpenFile, handleRequestCreate, handleRequestDownload, handleRequestGitHistory, handleRequestMove, handleRequestProperties, handleRequestRenameTarget, handleRequestRevealInOs, handleRequestSearch, handleRequestUpload])
+  }, [handleOpenFile, handleRequestCreate, handleRequestDownload, handleRequestGitHistory, handleRequestMove, handleRequestOpenTerminal, handleRequestProperties, handleRequestRenameTarget, handleRequestRevealInOs, handleRequestSearch, handleRequestUpload])
 
   const rootMoreActionItems = React.useMemo<MoreActionItem[]>(() => [
     {

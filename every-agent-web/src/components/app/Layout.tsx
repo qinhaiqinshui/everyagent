@@ -18,6 +18,7 @@ import type {
   TopLevelPageId,
   WorkspaceTab,
   WorkspaceTaskChatTab,
+  WorkspaceTerminalTab,
 } from '@/types'
 import { getAntdTheme } from '@/theme/antdTheme'
 import {
@@ -517,6 +518,25 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
     return nextTab.id
   }, [openWorkspaceTab])
 
+  const openTerminalTab = React.useCallback((input: {
+    workspaceRoot: string
+    path: string
+    name: string
+    workerId: string
+  }): string => {
+    const nextTab: WorkspaceTerminalTab = {
+      id: `term:${crypto.randomUUID()}`,
+      tabType: 'terminal',
+      workspaceRoot: input.workspaceRoot,
+      workerId: input.workerId,
+      path: input.path,
+      name: input.name,
+      title: `终端: ${input.name}`,
+    }
+    openWorkspaceTab(nextTab)
+    return nextTab.id
+  }, [openWorkspaceTab])
+
   const closeGlobalFileTab = React.useCallback((fileTabId: `file:${string}`) => {
     closeWorkspaceTabNow(fileTabId)
   }, [closeWorkspaceTabNow])
@@ -760,6 +780,7 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
     openPluginTab,
     openDiffTab,
     openGitHistoryTab,
+    openTerminalTab,
   }), [
     activeSidebarPanelId,
     activeWorkspaceTab,
@@ -771,6 +792,7 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
     openPluginTab,
     openDiffTab,
     openGitHistoryTab,
+    openTerminalTab,
     renameFileTabs,
     selectedFilePath,
     workspaceFileLocateRequest,

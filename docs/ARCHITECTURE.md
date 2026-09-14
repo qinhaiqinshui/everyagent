@@ -160,6 +160,7 @@ wss://hub:9100/ws
 | `u.<K>.worker.<id>.input` | **worker 级输入频道**:`task.input` / `ask.reply` / `stream.ack`(worker 每连接订阅一次,订阅数 O(worker×hub)) | 命名空间内任意角色 |
 | `u.<K>.tasks` | 任务生命周期:`task.created` / `task.updated` / `task.deleted` | 命名空间内任意角色 |
 | `u.<K>.task.<id>.stream` | **运行中任务实时增量**(worker 定向推送,`ext.target=sessionId` 只投该会话) | 命名空间内任意角色 |
+| `u.<K>.term.<termId>.stream` | **内嵌终端实时输出**(worker 定向推送：event `term.output` payload `{data: base64}`；进程退出推 `term.exited`) | 命名空间内任意角色 |
 
 > **stream 订阅通知**:前端 sub/unsub `u.<K>.task.<id>.stream` 时,hub 向该命名空间的在线 worker 连接定向发 `subscriber.join/subscriber.leave`(`payload={sessionId,taskId}`)——这是无状态 fire-and-forget 通知(hub 不存订阅簿),worker 据此按 (sessionId,taskId) 建/销 DataPusher(§7.13)。
 
@@ -224,6 +225,7 @@ worker 端 `RpcDispatcher` 注册方法;应答回**请求来源连接**的 `evt`
 | `workspaces.resolveMissing` | 启动自检缺失工作区落定:action=delete(删除注册并级联任务数据)/redirect(纠正到新目录并迁移任务归属) |
 | `fs.list` / `fs.reveal` / `fs.read` / `fs.write` / `fs.mkdir` / `fs.move` / `fs.delete` / `fs.browse` | 工作区文件操作,**必带 workspace 参数**,沙箱限定;文件树懒加载；`fs.browse`(不经沙箱)列盘符/逐层浏览目录,可选 `includeFiles`(boolean,缺省 false 仅目录,完全兼容现有行为):true 时目录条目同时列出文件,每条目带 `kind:"file"\|"directory"`,响应带 `supportsFiles:true` 能力标记(前端能力探测;老前端不传/老 worker 不带按 must-ignore 双向兼容,§5.6) |
 | `fs.revealInOs` | 在**运行 worker 的宿主机器**上打开系统文件管理器并选中目标(资源树右键「在系统文件管理器中显示」,对标 VSCode Reveal in File Explorer),**必带 workspace 参数**,路径经沙箱 `resolveExisting` 校验(防越界/符号链接逃逸);Windows `explorer.exe /select,<path>`(fire-and-forget,退出码不表征成败)、macOS `open -R`、Linux 优先 freedesktop FileManager1 `ShowItems` 选中目标、无 dbus/无注册实现退化 `xdg-open` 打开所在目录;argv 直传无 shell 解析;无桌面环境(无头 worker/无文件管理器)抛 IO 异常转 RPC 错误;远程访问场景窗口在 worker 所在电脑弹出;老前端不调用零影响 |
+| `term.open` / `term.input` / `term.resize` / `term.close` | Web 内嵌终端会话(§7.18，真 PTY)：`term.open` 必带 `workspace`+`termId`(前端生成,先 sub 频道再 open 防丢首帧)+`path`(目录,沙箱 `resolveExisting` 校验,非目录拒收)+`cols`/`rows`+可选 `shell`，返回 `{termId, pid}`；`term.input` 入参 `{termId, data(base64)}`；`term.resize` 入参 `{termId, cols, rows}`；`term.close` 入参 `{termId}`。输出经 `u.<K>.term.<termId>.stream` 定向推送；老前端不调用零影响，老 worker 无此方法时前端按 must-ignore 降级提示 |
 | `fs.search` | 工作区文本内容搜索(内置 rg,§5.10),**必带 workspace 参数**,沙箱 jailed 到工作区根;入参 `pattern` / `isRegex` / `caseSensitive` / `wholeWord` / `includeGlobs` / `excludeGlobs`(逗号分隔 glob,include 用 `-g '!*' -g glob` 放行、exclude 用 `-g !glob`) / `maxResults`(默认 1000,触顶 kill rg 置 `truncated`);rg 参数 `--hidden --json --crlf -e <pattern>`(固定串加 `--fixed-strings`),逐行解析 JSON lines(`type:match` 的 `submatches` → 命中片段);结果项 `{path, lineNumber, line, matchIndex, matchText}`,按文件聚合;大结果复用 `fs.read` 的 `rpc.data` 分批 + 末帧 `ok` 汇总(§5.4);老前端不调用零影响,老 worker 无此方法时前端按 must-ignore 降级纯前端搜索(§5.6) |
 | `git.status` / `git.log` / `git.diff` / `git.commit` / `git.pull` / `git.push` / `git.discard` / `git.init` / `git.clone` / `git.remote.add` / `git.remote.list` | 工作区 git 快操作,必带 workspace;由 `NativeGit` 调宿主原生 git argv 直传执行(§7.12) |
 | 大型迁移(批量 checkout / 大仓库迁移) | 建为 Task,进度走任务流 |
@@ -687,6 +689,17 @@ Input:  queued → consumed | discarded(任务取消)
 **启动自检(工作区被移动/删除)**:worker 启动时校验 `workspaces/workspaces.json` 载入的已注册目录,缺失者(用户移动/删除目录后重启)在注册表快照标记 `missing`并广播,前端弹窗要求二选一——`workspaces.resolveMissing {action:"delete"}` 删除注册并**直接删 `workspaces/<wsId>/` 整个目录(任务数据随删)**,或 `{action:"redirect",newRoot}` 纠正到移动后的新目录——**保留 `id`、只改 `root` 并迁移挂靠任务的 `meta.workspace`,任务目录不搬**;默认工作区不可删除、只可纠正(纠正后的根直接写回 `workspaces.json` 中 id=defaultworkspace 条目的 `root`,重启读回,不再需要 `workspace-default.json` 覆盖文件)。未落定的缺失工作区 `resolve` 拒绝,避免沙箱挂载失败或静默新建空目录掩盖数据丢失。
 
 **skill 只读例外**:系统目录 `skills/` 是 AI 文件工具对系统路径的**唯一只读免授权**例外——`read_file` 经权限责任链节点 `SkillsReadAllowCheck` 直接放行(realpath 前缀判定);**任何写操作不在此放行,仍走授权决议链**;其余系统路径(workspaces/、sandbox/、runtime/ 等)与普通工作区外目录同权,一律走授权决议(弹窗/AI 审议)。`skills/` 同时只读挂入 wsl 系列沙箱(§7.10:wsl-direct drvfs `-o ro`、wsl-bwrap `--ro-bind`),bash 工具在沙箱内同样只读可达,写经 OS 层拒;windows-mic 后端跑在宿主,Medium IL 读写用户文件本就放行,无需挂载。
+
+### 7.18 内嵌终端(term.*)
+
+文件树目录右键「在终端中打开」→ 前端主区开 xterm.js 内嵌终端标签页,worker 用**真 PTY** 拉起交互式 shell,cwd 为右键目录;输出经频道推送、输入走 RPC(§5.5)。
+
+- **PTY 实现**:Windows 用 ConPTY(`CreatePseudoConsole`/`ResizePseudoConsole`/`ClosePseudoConsole` + `InitializeProcThreadAttributeList`/`UpdateProcThreadAttribute` + `STARTUPINFOEX`/`PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE`),经 `Win32Ex` 同款「扩展平台接口再 `Native.load`」范式补齐(jna-platform 5.16 已在 worker 依赖树,经已有 JNA 依赖,零新增);Unix/macOS 用 libc `openpty`(或 `posix_openpt`+`grantpt`+`unlockpt`+`ptsname`)经 JNA。**非本平台实现类不加载**(跨平台编译安全降级,仿 `WindowsSandbox`)。
+- **shell 选择与 cwd**:Windows 取 `ComSpec`/`cmd.exe`,Unix 取 `$SHELL`/`/bin/sh`;cwd 由 `workspace`+`path` 经沙箱 `resolveExisting` 解析且必为目录(与 `fs.*` 同级权限,不额外提权);argv 直传无 shell 解析。
+- **双向传输**:worker 起**虚拟线程**读 PTY 输出并 `pubForOwner` 定向推送到 `u.<K>.term.<termId>.stream`(event `term.output`,payload `{data: base64}`;进程退出推 `term.exited`);输入/尺寸/关闭走 `term.input`/`term.resize`/`term.close` RPC。hub 零状态只路由,不存会话、不存订阅簿。
+- **会话生命周期**:存 worker 内存 `ConcurrentHashMap<termId, 会话>`;进程退出或 `term.close` 回收;worker 重启会话即失效;不实现跨前端重载续接(前端标签状态本就不持久化)。
+- **前端契约**:termId 由前端生成,**先 sub 频道再 `term.open`** 避免丢首帧;xterm `onData` → `term.input`(base64);ResizeObserver/FitAddon → `term.resize`;标签关闭 → `term.close`。
+- **平台降级**:无 PTY 能力/无桌面环境的平台抛 IO 异常转 RPC 错误,前端 toast 提示,不影响其他功能。
 
 ---
 

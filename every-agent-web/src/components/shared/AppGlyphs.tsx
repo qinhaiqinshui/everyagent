@@ -401,6 +401,17 @@ export function WrenchIcon({ size = 16, style, className, flipped = false }: App
  * 盾牌校验图标（AI 安全审议 auth.review trace 用）：盾牌轮廓 + 对勾。
  * 语义：AI 安全审议已对授权请求给出结论（放行/拒绝/升级）。
  */
+/** 终端图标（圆角窗口外框 + `>` 提示符 + 短横光标）。 */
+export function TerminalIcon({ size = 16, style }: AppGlyphProps) {
+  return (
+    <Svg size={size} style={style}>
+      <rect x="2.2" y="3" width="11.6" height="10" rx="1.4" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M4.4 6.5L6.5 8L4.4 9.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M7.5 9.7H11" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+    </Svg>
+  )
+}
+
 export function ShieldCheckIcon({ size = 16, style }: AppGlyphProps) {
   return (
     <Svg size={size} style={style}>

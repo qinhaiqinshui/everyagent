@@ -905,6 +905,24 @@ export interface WorkspaceGitHistoryTab {
   title: string
 }
 
+/** 内嵌终端标签：worker 侧 PTY 会话(termId 即标签内生成,打开时先 sub 频道再 term.open)。 */
+export interface WorkspaceTerminalTab {
+  /** 标签 ID，形如 `term:<uuid>`。 */
+  id: `term:${string}`
+  /** 标签类型常量。 */
+  tabType: 'terminal'
+  /** 所属工作区根(worker 机器绝对路径)。 */
+  workspaceRoot: string
+  /** 来源 worker(term.* RPC 定向目标)。 */
+  workerId: string
+  /** 终端工作目录(工作区相对路径,空串 = 工作区根)。 */
+  path: string
+  /** 目录名(标签显示用)。 */
+  name: string
+  /** 标签标题。 */
+  title: string
+}
+
 /** 统一顶层工作区标签。 */
 export type WorkspaceTab =
   | WorkspacePageTab
@@ -914,6 +932,7 @@ export type WorkspaceTab =
   | WorkspacePluginTab
   | WorkspaceDiffTab
   | WorkspaceGitHistoryTab
+  | WorkspaceTerminalTab
 
 /** 打开工作区文件选项。 */
 export interface OpenWorkspaceFileOptions {
