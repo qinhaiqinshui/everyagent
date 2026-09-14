@@ -9,6 +9,7 @@ import dev.everyagent.worker.hub.HubPool;
 import dev.everyagent.worker.modules.ConfigStore.ResolvedConfig;
 import dev.everyagent.worker.proto.Channels;
 import dev.everyagent.worker.task.ChatModelFactory;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -51,7 +52,11 @@ class FsGitModuleTest {
 
     private static final String KEY = "test-key-fsgit";
     /** 每次运行唯一目录:避免清理旧 .git 的 Windows 删除竞态(init 对已存在 .git 会跳过骨架写入)。 */
-    private static final Path WS = Path.of("target/test-ws-fsgit-" + System.nanoTime());
+    private static final Path WS = TestCleanup.register(
+            Path.of("target/test-ws-fsgit-" + System.nanoTime()));
+    /** 系统目录(每次运行唯一,@AfterAll 统一清理)。 */
+    private static final Path HOME_DIR = TestCleanup.register(
+            Path.of("target/test-home-fsgit-" + System.nanoTime()).toAbsolutePath().normalize());
     private static final AtomicLong REQ = new AtomicLong();
 
     /** 预占端口:HubLink 构造时即捕获 hub URL,必须首连就指向本测试的 FakeHub。 */
@@ -101,7 +106,7 @@ class FsGitModuleTest {
         r.add("worker.hub-initial-backoff-ms", () -> "100");
         r.add("worker.hub-max-backoff-ms", () -> "300");
         // 系统目录每次运行唯一:models.json/workspace.json 不落真实用户主目录,也不跨运行串状态
-        r.add("worker.home-dir", () -> "target/test-home-fsgit-" + System.nanoTime());
+        r.add("worker.home-dir", () -> HOME_DIR.toString());
         r.add("worker.workspace-root", () -> WS.toString());
     }
 
@@ -143,6 +148,11 @@ class FsGitModuleTest {
         if (fe != null) {
             fe.close();
         }
+    }
+
+    @AfterAll
+    static void cleanupDirs() {
+        TestCleanup.deleteAll();
     }
 
     // ---- fs ----
@@ -412,7 +422,8 @@ class FsGitModuleTest {
                 "无上游时 ahead/behind 应为 0: " + s0);
 
         // 配置远端 + 上游跟踪分支:push 后 ahead=0。
-        Path remote = Path.of("target", "test-remote-fsgit-" + System.nanoTime()).toAbsolutePath();
+        Path remote = TestCleanup.register(
+                Path.of("target", "test-remote-fsgit-" + System.nanoTime()).toAbsolutePath());
         Files.createDirectories(remote);
         runGit(remote, "init", "--bare", ".");
         runGit(WS, "remote", "add", "origin", remote.toString());
@@ -497,7 +508,8 @@ class FsGitModuleTest {
     @Test
     @Order(32)
     void fsDoesNotRegisterTaskRunDoes() {
-        Path stranger = Path.of("target/test-ws-stranger-" + System.nanoTime()).toAbsolutePath();
+        Path stranger = TestCleanup.register(
+                Path.of("target/test-ws-stranger-" + System.nanoTime()).toAbsolutePath());
         int before = wsCount();
         // fs 调用陌生目录:可用但不进注册表(工作区因任务而注册)
         assertTrue(rpc("fs.list", Json.write(Json.obj().put("path", ".")

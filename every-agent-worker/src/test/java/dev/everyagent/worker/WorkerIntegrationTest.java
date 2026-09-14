@@ -11,6 +11,7 @@ import dev.everyagent.worker.modules.ConfigStore.ResolvedConfig;
 import dev.everyagent.worker.proto.Channels;
 import dev.everyagent.worker.slash.SlashTokenEncoder;
 import dev.everyagent.worker.task.ChatModelFactory;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -49,6 +50,9 @@ class WorkerIntegrationTest {
     /** 默认工作区(workspace-root 同值,task.run 新建必填 workspace 参数)。 */
     private static final java.nio.file.Path WS =
             java.nio.file.Path.of("target/test-workspace").toAbsolutePath().normalize();
+    /** 系统目录(每次运行唯一,@AfterAll 统一清理)。 */
+    private static final java.nio.file.Path HOME_DIR = TestCleanup.register(
+            java.nio.file.Path.of("target/test-home-" + System.nanoTime()).toAbsolutePath().normalize());
 
     /** 预占固定端口:worker 的 hub URL 须在属性解析期就知道指向本应用 FakeHub。 */
     private static final int PORT = freePort();
@@ -124,8 +128,8 @@ class WorkerIntegrationTest {
         // FAIL: 用例本就立即失败不受影响
         r.add("worker.retry.max-request-retries", () -> "0");
         // 系统目录每次运行唯一:models.json 不落真实用户主目录,任务落盘也不跨运行串状态
-        r.add("worker.home-dir", () -> "target/test-home-" + System.nanoTime());
-        r.add("worker.workspace-root", () -> "target/test-workspace");
+        r.add("worker.home-dir", () -> HOME_DIR.toString());
+        r.add("worker.workspace-root", () -> WS.toString());
         // 模型配置(只读):直接经 Spring 属性注入 worker.models(模型池用例的故障/正常桩模型)。
         // 默认配置仍来自 application.yml 的 default 占位,FakeChatModel 分派只认这些池模型名。
         r.add("worker.models[0].config-id", () -> "pool-b");
@@ -189,7 +193,10 @@ class WorkerIntegrationTest {
         }
     }
 
-    // ---- 用例 ----
+    @AfterAll
+    static void cleanupDirs() {
+        TestCleanup.deleteAll();
+    }
 
     @Test
     void taskLifecycleTransientLiveAndPersistentDisk() {
@@ -394,10 +401,10 @@ class WorkerIntegrationTest {
 
     @Test
     void workspaceIsolationAndDiskPersistence() {
-        java.nio.file.Path wsA = java.nio.file.Path.of("target/test-ws-a-" + System.nanoTime())
-                .toAbsolutePath().normalize();
-        java.nio.file.Path wsB = java.nio.file.Path.of("target/test-ws-b-" + System.nanoTime())
-                .toAbsolutePath().normalize();
+        java.nio.file.Path wsA = TestCleanup.register(
+                java.nio.file.Path.of("target/test-ws-a-" + System.nanoTime()).toAbsolutePath().normalize());
+        java.nio.file.Path wsB = TestCleanup.register(
+                java.nio.file.Path.of("target/test-ws-b-" + System.nanoTime()).toAbsolutePath().normalize());
         // 无 workspace → BAD_PARAMS(多工作区并行后隐式全局态是竞态源)
         assertTrue(rpc("task.run", "{\"input\":\"无工作区\"}").contains("BAD_PARAMS"));
 

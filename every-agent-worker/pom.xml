@@ -5,9 +5,9 @@
     <parent>
         <groupId>dev.everyagent</groupId>
         <artifactId>every-agent-parent</artifactId>
-        <version>0.5.0</version>
+        <version>0.5.1</version>
     </parent>
-    <version>0.5.0</version>
+    <version>0.5.1</version>
     <artifactId>every-agent-worker</artifactId>
     <name>every-agent-worker</name>
     <description>worker 执行器:托管任务运行时、workspace、模型配置(9200 仅本地管理)</description>
@@ -87,7 +87,7 @@
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
                 <configuration>
-                    <argLine>--add-opens java.base/sun.misc=ALL-UNNAMED --add-opens java.base/java.lang=ALL-UNNAMED --add-opens java.base/java.lang.reflect=ALL-UNNAMED</argLine>
+                    <argLine>-Xmx2g -Xms512m --add-opens java.base/sun.misc=ALL-UNNAMED --add-opens java.base/java.lang=ALL-UNNAMED --add-opens java.base/java.lang.reflect=ALL-UNNAMED</argLine>
                 </configuration>
             </plugin>
         </plugins>

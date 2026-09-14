@@ -52,6 +52,9 @@ class MultiHubE2eTest {
     private static final String HUB_KEY = "sljlw23948LKS";
     private static final java.nio.file.Path WS =
             java.nio.file.Path.of("target/test-ws-multi").toAbsolutePath().normalize();
+    /** 系统目录(每次运行唯一,@AfterAll 统一清理)。 */
+    private static final java.nio.file.Path HOME_DIR = TestCleanup.register(
+            java.nio.file.Path.of("target/test-home-multi-" + System.nanoTime()).toAbsolutePath().normalize());
 
     static ConfigurableApplicationContext hubA1;
     static ConfigurableApplicationContext hubA2;
@@ -89,6 +92,7 @@ class MultiHubE2eTest {
                 app.close();
             }
         }
+        TestCleanup.deleteAll();
     }
 
     @TestConfiguration(proxyBeanMethods = false)
@@ -120,7 +124,7 @@ class MultiHubE2eTest {
         r.add("worker.hubs[2].hub-key", () -> HUB_KEY);
         r.add("worker.hub-initial-backoff-ms", () -> "100");
         r.add("worker.hub-max-backoff-ms", () -> "300");
-        r.add("worker.home-dir", () -> "target/test-home-multi-" + System.nanoTime());
+        r.add("worker.home-dir", () -> HOME_DIR.toString());
         r.add("worker.workspace-root", () -> "target/test-ws-multi");
     }
 

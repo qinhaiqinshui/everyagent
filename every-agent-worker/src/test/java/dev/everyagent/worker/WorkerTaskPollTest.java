@@ -9,6 +9,7 @@ import dev.everyagent.worker.hub.HubPool;
 import dev.everyagent.worker.modules.ConfigStore.ResolvedConfig;
 import dev.everyagent.worker.proto.Channels;
 import dev.everyagent.worker.task.ChatModelFactory;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -48,6 +49,9 @@ class WorkerTaskPollTest {
     private static final AtomicLong REQ = new AtomicLong();
     private static final java.nio.file.Path WS =
             java.nio.file.Path.of("target/test-workspace-poll").toAbsolutePath().normalize();
+    /** 系统目录(每次运行唯一,@AfterAll 统一清理)。 */
+    private static final java.nio.file.Path HOME_DIR = TestCleanup.register(
+            java.nio.file.Path.of("target/test-home-poll-" + System.nanoTime()).toAbsolutePath().normalize());
     private static final int PORT = freePort();
 
     private static int freePort() {
@@ -103,7 +107,7 @@ class WorkerTaskPollTest {
         r.add("worker.limits.ask-timeout-ms", () -> "120000");
         r.add("worker.limits.sub-wait-timeout-ms", () -> "15000");
         r.add("worker.retry.max-request-retries", () -> "0");
-        r.add("worker.home-dir", () -> "target/test-home-poll-" + System.nanoTime());
+        r.add("worker.home-dir", () -> HOME_DIR.toString());
         r.add("worker.workspace-root", () -> "target/test-workspace-poll");
     }
 
@@ -136,7 +140,10 @@ class WorkerTaskPollTest {
         }
     }
 
-    // ---- task.poll 用例 ----
+    @AfterAll
+    static void cleanupDirs() {
+        TestCleanup.deleteAll();
+    }
 
     @Test
     void terminalTaskRoundsAndEventsModes() {
