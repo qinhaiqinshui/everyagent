@@ -320,7 +320,7 @@ RoundIndexAdvisor(轮次索引+耗时,最外层) → SkillAdvisor(skill 渐进�
 
 - 核心事件发射由 `WorkerToolEventAdvisor` 完成(继承 Spring AI `ToolCallingAdvisor`,重写受保护 hook 发射 delta/message/usage/tool 等事件,**不另起一层重复实现递归循环**)。
 - 重试退避算法由 `worker.retry.strategy` 选择,空响应重试与瞬时错误重试共享:`fixed`(默认,固定 `backoff-base-ms` 间隔、`max-request-retries` 默认 30 次,适合网络抖动场景的稳定节奏恢复)或 `exponential`(`base × factor^(n-1)` 递增退避);未知取值回落 `exponential`(旧行为)。
-- `ModelLengthGuardAdvisor`(order=工具循环+300,瞬时重试内侧、上下文压缩外侧):识别「输出预算耗尽」这一确定性失败——实际收到 `finish_reason=length` 即报错;或流在超 `worker.limits.length-stall-ms`(默认 120s,须短于 model-timeout-ms 的 10 分钟)无任何 chunk 且自估输出 token ≈ 配置 maxTokens(无 tokenizer,CJK≈1 token、其余≈4 字符 1 token,20%~40% 容差)时判定等价 length 并报同一错误。错误为自定义非重试异常(避免被瞬时重试反复退避放大瞬态事件风暴),信息含「精简输入/拆分任务/降低 reasoningEffort/调大 maxTokens」建议,经任务层 error 收口呈现给用户。
+- `ModelLengthGuardAdvisor`(order=工具循环+300,瞬时重试内侧、上下文压缩外侧):识别「输出预算耗尽」这一确定性失败,三条路径殊途同归报同一错误——①实际收到 `finish_reason=length` 即报错;②流超 `worker.limits.length-stall-ms`(默认 120s,须短于 model-timeout-ms 的 10 分钟)无任何 chunk 且自估输出 token ≈ 配置 maxTokens(无 tokenizer,CJK≈1 token、其余≈4 字符 1 token,20%~40% 容差)时判定等价 length;③provider 在预算耗尽处**粗暴断流**(不发 length 帧、也不静默挂起,客户端表现为 IOException)——流被网络级错误中断且自估输出 ≈ maxTokens 时同样判定等价 length,避免被瞬时重试当作普通网络抖动反复退避、每次重试重新整段长思考再次占满预算(长思考模型一轮可耗数万 token,循环几十分钟)。错误为自定义非重试异常(穿透瞬时重试,避免放大瞬态事件风暴),信息含「精简输入/拆分任务/降低 reasoningEffort/调大 maxTokens」建议,经任务层 error 收口呈现给用户。
 - `LoopRepeatGuardAdvisor` 叠加**死循环检测**:比较本轮与上一轮工具调用签名(名称+参数集合,顺序无关),连续重复达 `worker.limits.max-repeated-tool-rounds`(默认 3)即中断任务(error 收口)。
 - `DialogInsertAdvisor`(普通 StreamAdvisor,在主 agent 的工具循环下行阶段)把任务队列「插入到当前对话」的用户消息 drain 并追加给 AI + 发射 `user.message` 事件;子 agent 按 kind==MAIN 旁路(对话是一次性嵌套,不接收任务队列输入)。
 - 主 Agent 与子 Agent **共用同一执行入口与 Advisor 链**,仅 agentId 不同;子 agent 不挂计时与 skill,但同挂上下文压缩。
@@ -473,6 +473,7 @@ ask 管道承载第二类阻塞请求:**危险操作授权**。`PermissionGate` 
 - `worker.sandbox.type`: `auto`(默认)| `wsl-direct` | `wsl-bwrap` | `windows-mic` | `none`(别名 acl/wsl/direct 兼容)。
 - **Windows Low IL 可写性契约**(对 windows-mic 后端):工作区树 + EXEC 授权目录必须由 worker 在命令执行前配置为沙箱可写——① 标注 Low 完整性(SACL `S:(ML;OICI;NW;;;LW)`),解决 MIC 的 NO_WRITE_UP;② `WindowsAcl` 给工作区根追加可继承 Allow ACE(本地 Users `(OI)(CI)` 修改+删除权限),解决 ACL 残缺。工作区外保持默认 Medium → 沙箱内写被 OS 拒,构成弹窗授权之外的 OS 级兜底。
 - **工作区外部授权根的沙箱消费**(§7.17):文件工具侧并入 `FsToolSupport` 的 Sandbox 附加根(read_file/create_file/update_file 直接放行);命令侧并入 `GrantRegistry.execRootsSandboxed` 安全过滤视图(过宽根同被拒收)——wsl-bwrap 随命令以 `rw --bind` 白名单挂载(挂载点 `/mnt/<盘>` 原生形态);windows-mic Low 完整性标注 + DACL 可写(同工作区契约);wsl-direct 把**全部工作区**的 externalRoots 并入每条命令的 `WslDirectSandbox` 挂载列表(drvfs 读写挂载,runner trusted 阶段幂等 `_ensure_mount`;挂载长存,删除工作区时按 §7.17 级联 umount;bwrap 按次 bind 天然跟随,mic 标注幂等无残留);Java 侧 `OsSandbox.wslDirectMountRoots()` 每次先经 `WorkspaceManager.pruneStaleAndListMountRoots()` 把宿主上已不存在的根(任务数据目录被清理、外部授权根失效)**从注册表剔除并落盘**(默认工作区除外,目录复活后仍可重新注册/纠正;仅注册表级清理,不级联删任务数据),避免失效条目反复进挂载载荷打 stderr 噪音;`mountPairs` 仅对不属于注册表的 cwd 保留存在性防御)。
+- **系统技能目录的沙箱只读挂载**(§7.17):系统目录 `skills/`(skill 知识包,AI 经 `read_file` 只读免授权访问)同时以**只读**形态挂入 wsl 系列沙箱,使 AI 的 bash 工具在沙箱内也能 `cat`/`grep` 知识包正文(与 `read_file` 走宿主 Java 侧读取并存)——wsl-direct 把 `resolveSkillsDir()` 作为只读挂载对加入 `WslDirectSandbox` 挂载载荷(`{src,dest,ro:true}`,runner trusted 阶段 `mount -t drvfs -o ro`,幂等,挂载点 = `WslPathMapper.toDirectMount` 原路径形态 `/c/...`,与工作区读写挂载分离);wsl-bwrap 以 `--ro-bind` 按原生 `/mnt/<盘>` 形态绑定(载荷 `roIslands`,与工作区 `--bind` 白名单同源、只读)。windows-mic 后端命令跑在宿主、Low IL 进程读 Medium 文件本就放行,无需挂载。`skills/` 是系统目录中对 AI 文件工具唯一只读开放的子目录,沙箱侧同样只读:写操作经 PermissionGate `SkillsReadAllowCheck` 不放行、走授权决议链(§7.17),drvfs/bwrap 只读挂载构成 OS 级兜底。
 - **网络策略**:默认放行(`worker.sandbox.allow-network=true`,命令可访问网络,含回环 127.0.0.1);任务级 `/禁用网络` 或全局 `allow-network=false` 才断网——wsl-direct = `unshare -n`(新建无 eth0 的 netns)、wsl-bwrap = `--unshare-net`(新 netns 仅 down 的 lo,连回环也不通)、direct/mic = 剥代理 env(advisory)。
 - **PowerShell 方言可选开启**(wsl 系列后端):WSL 后端命令方言为 bash,AI 默认只有 `bash` 工具;用户对某任务选 `/启用powershell`(kind=`powershell.enable`,任务级开关 `TaskEntry.powershellEnabled`,随 meta 持久化)后,主/子 agent 工具集在 bash 之外**追加** `powershell` 工具——该命令**回宿主 Windows 原生沙箱执行**(windows-mic 语义:Restricted Token + Low IL + Job Object + 目录标注/ACL,经 `CommandExecutor` 的 powershell 分支强制 native,wsl 发行版内不要求安装 pwsh),与 bash 并存。windows-mic(Windows+ACL)后端命令工具本就是 PowerShellTool,**不注册**该斜杠条目(`PowerShellEnableSlashProvider` 仅 `sandbox.isWslBackend()` 时注册)。
 - **命令 stdin 契约**:AI 命令的 stdin 一律接 null 设备(`/dev/null`;windows-mic 后端为 NULL 句柄),不得是"打开的空管道"。wsl 系后端载荷经 stdin 传入,但 wsl.exe→发行版的 stdio 桥接会保持 Linux 侧管道写端打开(worker 侧关闭管道也不传播 EOF);若让 bash 继承它,`rg`/`grep` 无路径参数时据 stdin 可读判定改读 stdin(静默空结果,与"无匹配"不可区分),`cat` 等阻塞读则挂到超时。落地:eagent-run.py 在 exec bash/bwrap 前把 fd 0 重定向到 `/dev/null`(seccomp supervisor 除外——其 stdin 承载 priv-ans 控制帧);direct 后端 ProcessBuilder `redirectInput` null 设备。
@@ -670,7 +671,7 @@ Input:  queued → consumed | discarded(任务取消)
 | `application-worker.yaml` | 【可选】worker 用户配置覆盖(模型 `worker.models`、hub 连接、沙箱等;存在才生效) |
 | `application-hub.yaml` | 【可选】hub 用户配置覆盖 |
 | `application-dev.yaml` | 【可选】开发覆盖(IDEA 经 additional-location 显式指定) |
-| `skills/` | 内置 skill 知识包(启动时从 classpath 物化,AI 经 read_file 只读访问) |
+| `skills/` | 内置 skill 知识包(启动时从 classpath 物化,AI 经 read_file 只读访问;同时只读挂入 wsl 沙箱供 bash 工具读取,§7.10) |
 | `defaultworkspace/` | 默认工作区根(原 `workspace/` 改名,自动注册 id=defaultworkspace,始终在册;内含 `.everyagent/` 工作区级 git 凭证加密存储) |
 | `workspaces/` | 唯一工作区注册表 `workspaces.json` + 按工作区归类的任务数据 `workspaces/<workspaceId>/tasks/<taskId>/` |
 | `sandbox/` | 沙箱持久状态(home/opt/usr-local/resolv.conf/env;`worker.sandbox.persistent-root` 可覆盖);内含 `distro/` = WSL 托管发行版 rootfs(原 `wsl/distro` 迁入,运行期状态,可整体重装) |
@@ -685,7 +686,7 @@ Input:  queued → consumed | discarded(任务取消)
 
 **启动自检(工作区被移动/删除)**:worker 启动时校验 `workspaces/workspaces.json` 载入的已注册目录,缺失者(用户移动/删除目录后重启)在注册表快照标记 `missing`并广播,前端弹窗要求二选一——`workspaces.resolveMissing {action:"delete"}` 删除注册并**直接删 `workspaces/<wsId>/` 整个目录(任务数据随删)**,或 `{action:"redirect",newRoot}` 纠正到移动后的新目录——**保留 `id`、只改 `root` 并迁移挂靠任务的 `meta.workspace`,任务目录不搬**;默认工作区不可删除、只可纠正(纠正后的根直接写回 `workspaces.json` 中 id=defaultworkspace 条目的 `root`,重启读回,不再需要 `workspace-default.json` 覆盖文件)。未落定的缺失工作区 `resolve` 拒绝,避免沙箱挂载失败或静默新建空目录掩盖数据丢失。
 
-**skill 只读例外**:系统目录 `skills/` 是 AI 文件工具对系统路径的**唯一只读免授权**例外——`read_file` 经权限责任链节点 `SkillsReadAllowCheck` 直接放行(realpath 前缀判定);**任何写操作不在此放行,仍走授权决议链**;其余系统路径(workspaces/、sandbox/、runtime/ 等)与普通工作区外目录同权,一律走授权决议(弹窗/AI 审议)。
+**skill 只读例外**:系统目录 `skills/` 是 AI 文件工具对系统路径的**唯一只读免授权**例外——`read_file` 经权限责任链节点 `SkillsReadAllowCheck` 直接放行(realpath 前缀判定);**任何写操作不在此放行,仍走授权决议链**;其余系统路径(workspaces/、sandbox/、runtime/ 等)与普通工作区外目录同权,一律走授权决议(弹窗/AI 审议)。`skills/` 同时只读挂入 wsl 系列沙箱(§7.10:wsl-direct drvfs `-o ro`、wsl-bwrap `--ro-bind`),bash 工具在沙箱内同样只读可达,写经 OS 层拒;windows-mic 后端跑在宿主,Low IL 读 Medium 文件本就放行,无需挂载。
 
 ---
 

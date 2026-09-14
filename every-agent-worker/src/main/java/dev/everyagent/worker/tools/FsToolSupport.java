@@ -94,28 +94,37 @@ public class FsToolSupport {
         return new Sandbox(workspaces.resolve(t.workspaceRoot), roots);
     }
 
-    /** 系统技能目录只读附加根(realpath + 词法形态;懒解析一次)。 */
+    /**
+     * 系统技能目录只读附加根(realpath + 词法形态)。
+     *
+     * <p>解析成功后缓存(目录不会在运行期移动);<b>失败不缓存</b>——技能目录尚未物化
+     * (BuiltInSkills.materialize 失败/延迟)时返回空列表,但不写入缓存,下次调用重试,
+     * 使「物化晚于首次使用」能自愈(否则会永久缓存空根,直到 worker 重启)。
+     */
     private List<Path> skillsReadonlyRoots() {
         List<Path> cached = skillsReadonlyRoots;
         if (cached != null) {
             return cached;
         }
         synchronized (this) {
-            if (skillsReadonlyRoots == null) {
-                List<Path> built = new ArrayList<>();
-                Path lexical = props.resolveSkillsDir();
-                try {
-                    Path real = lexical.toRealPath();
-                    built.add(real);
-                    if (!real.equals(lexical)) {
-                        built.add(lexical);
-                    }
-                } catch (IOException e) {
-                    // 技能目录尚未物化:不加根(其下路径本就按 NotFound 报错),不阻断
-                }
-                skillsReadonlyRoots = List.copyOf(built);
+            if (skillsReadonlyRoots != null) {
+                return skillsReadonlyRoots;
             }
-            return skillsReadonlyRoots;
+            Path lexical = props.resolveSkillsDir();
+            try {
+                Path real = lexical.toRealPath();
+                List<Path> built = new ArrayList<>();
+                built.add(real);
+                if (!real.equals(lexical)) {
+                    built.add(lexical);
+                }
+                skillsReadonlyRoots = List.copyOf(built); // 仅成功才缓存
+                return skillsReadonlyRoots;
+            } catch (IOException e) {
+                // 技能目录尚未物化:不加根(其下路径本就按 NotFound 报错),不阻断;
+                // 不缓存空结果,使后续物化可自愈
+                return List.of();
+            }
         }
     }
 

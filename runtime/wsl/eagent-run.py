@@ -559,10 +559,13 @@ def _ensure_mount(workspaces):
 
     必须在装 seccomp 前执行(装了 seccomp 后 mount 被 EPERM)。
     单个工作区挂载失败只打印提示,不阻断其余——尽力而为。
+    载荷项带 "ro": true 时按只读挂载(mount -t drvfs -o ro):
+    系统技能目录(§7.17 skill 知识包)对 AI 沙箱只读开放,与工作区读写挂载分离。
     """
     for ws in workspaces or []:
         src = ws.get("src")
         dest = ws.get("dest")
+        ro = bool(ws.get("ro"))
         if not src or not dest:
             continue
         try:
@@ -571,9 +574,13 @@ def _ensure_mount(workspaces):
             sys.stderr.write("[sandbox] mkdir 挂载点失败 %s: %s\n" % (dest, e))
             continue
         if _run(["findmnt", "-n", dest]) == 0:
-            continue  # 已挂载
-        if _run(["mount", "-t", "drvfs", src, dest]) != 0:
-            sys.stderr.write("[sandbox] 挂载失败 %s -> %s\n" % (src, dest))
+            continue  # 已挂载(读写/只读均跳过,幂等)
+        mount_cmd = ["mount", "-t", "drvfs"]
+        if ro:
+            mount_cmd += ["-o", "ro"]
+        mount_cmd += [src, dest]
+        if _run(mount_cmd) != 0:
+            sys.stderr.write("[sandbox] 挂载失败 %s -> %s%s\n" % (src, dest, "(ro)" if ro else ""))
 
 
 def direct_main(payload):

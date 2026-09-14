@@ -17,8 +17,7 @@ import { Checkbox } from 'antd'
 
 const runtimeService = getDefaultRuntimeService()
 
-/** 触底续拉阈值:距滚动视口底部该像素内视为触底,触发下一页加载。 */
-const LOAD_MORE_THRESHOLD = 120
+
 
 /** 工作区组标签短名:根路径末段(盘符根/斜杠根退化为全路径,完整根见组头 title)。 */
 function workspaceGroupLabel(root: string): string {
@@ -112,45 +111,27 @@ export default function TasksPanel({
     }
   }, [])
 
-  // 触底续拉(分页):默认只加载最近 PAGE_SIZE 个,滑动触底再向 worker 拉下一页。
-  const loadingMoreRef = React.useRef(false)
-  const [loadingMore, setLoadingMore] = React.useState(false)
-  const listViewportRef = React.useRef<HTMLDivElement | null>(null)
-  const sentinelRef = React.useRef<HTMLDivElement | null>(null)
+  // 分页:默认只加载最近 INITIAL_PAGE_SIZE 个,组内点击「加载更多」按组的
+  // worker×workspace 口径拉下一页(同一 worker 的其他工作区互不影响、不串联)。
+  const loadingGroupsRef = React.useRef(new Set<string>())
+  const [loadingGroups, setLoadingGroups] = React.useState<ReadonlySet<string>>(new Set())
 
-  const handleLoadMore = React.useCallback(() => {
-    if (loadingMoreRef.current) return
-    if (!taskStore.hasMore()) return
-    loadingMoreRef.current = true
-    setLoadingMore(true)
-    void taskStore.loadMore().finally(() => {
-      loadingMoreRef.current = false
-      setLoadingMore(false)
+  /** 组的分页口径:workerId + workspace 过滤(空串=未挂靠工作区组,不过滤)。 */
+  const handleGroupLoadMore = React.useCallback((groupKey: string, pages: Array<{ workerId: string; workspace: string }>) => {
+    if (loadingGroupsRef.current.has(groupKey)) return
+    const targets = pages.filter((page) => taskStore.hasMore(page.workerId, page.workspace))
+    if (targets.length === 0) return
+    loadingGroupsRef.current.add(groupKey)
+    setLoadingGroups((current) => new Set(current).add(groupKey))
+    void Promise.all(targets.map((page) => taskStore.loadMore(page.workerId, page.workspace))).finally(() => {
+      loadingGroupsRef.current.delete(groupKey)
+      setLoadingGroups((current) => {
+        const next = new Set(current)
+        next.delete(groupKey)
+        return next
+      })
     })
   }, [])
-
-  const handleListScroll = React.useCallback((event: React.UIEvent<HTMLDivElement>) => {
-    const node = event.currentTarget
-    const distanceFromBottom = node.scrollHeight - (node.scrollTop + node.clientHeight)
-    if (distanceFromBottom <= LOAD_MORE_THRESHOLD) {
-      handleLoadMore()
-    }
-  }, [handleLoadMore])
-
-  // 触底哨兵:当哨兵进入滚动视口(含首屏内容未撑满、以及用户滑到底)即续拉。
-  // 依赖 tasks 重建观察器,每次列表变化后立即重判一次,保证「内容未满一屏」时也能逐页补齐。
-  React.useEffect(() => {
-    const viewport = listViewportRef.current
-    const sentinel = sentinelRef.current
-    if (!viewport || !sentinel || typeof IntersectionObserver === 'undefined') return
-    const observer = new IntersectionObserver((entries) => {
-      if (entries.some((entry) => entry.isIntersecting)) {
-        handleLoadMore()
-      }
-    }, { root: viewport, rootMargin: `0px 0px ${LOAD_MORE_THRESHOLD}px 0px` })
-    observer.observe(sentinel)
-    return () => observer.disconnect()
-  }, [tasks, handleLoadMore])
 
   // 工作区分组(D16):任务按挂靠工作区分组展示,无"当前工作区"过滤,多工作区任务并陈。
   const [registry, setRegistry] = React.useState(workspaceRegistry.current)
@@ -180,14 +161,16 @@ export default function TasksPanel({
 
   /**
    * 任务列表分组：按挂靠工作区内置分组（D16，无插件路径）。
-   * 组序=注册表顺序（默认工作区在前），只保留非空组；registry 未加载返回 null
-   * 回退扁平列表（防首帧全部误归尾组）。workspace 为空（旧任务）或已不在
-   * 注册表（workspaces.remove 不删任务）的任务合并于尾组「未挂靠工作区」。
+   * 组序=注册表顺序（默认工作区在前），只保留有任务的分组，空工作区不展示；
+   * registry 未加载返回 null 回退扁平列表（防首帧全部误归尾组）。
+   * workspace 为空（旧任务）或已不在注册表（workspaces.remove 不删任务）的
+   * 任务合并于尾组「未挂靠工作区」。
+   * pages 为组的分页口径(workerId+workspace 过滤;组内「加载更多」按此定向续拉)。
    */
-  const groups = React.useMemo<TaskListGroup<TaskListItemSnapshot>[] | null>(() => {
+  const groups = React.useMemo<(TaskListGroup<TaskListItemSnapshot> & { pages: Array<{ workerId: string; workspace: string }> })[] | null>(() => {
     if (!registry) return null
     const knownRoots = new Set(registry.workspaces.map((entry) => entry.root))
-    const out: TaskListGroup<TaskListItemSnapshot>[] = []
+    const out: Array<TaskListGroup<TaskListItemSnapshot> & { pages: Array<{ workerId: string; workspace: string }> }> = []
     for (const entry of registry.workspaces) {
       const groupTasks = tasks.filter((task) => task.workspace === entry.root)
       if (groupTasks.length === 0) continue
@@ -196,6 +179,7 @@ export default function TasksPanel({
         label: workspaceGroupLabel(entry.root),
         title: entry.root,
         tasks: groupTasks,
+        pages: entry.workerId ? [{ workerId: entry.workerId, workspace: entry.root }] : [],
         ...(onCreateNewTask
           ? {
               actions: [{
@@ -209,7 +193,13 @@ export default function TasksPanel({
     }
     const unattached = tasks.filter((task) => !task.workspace || !knownRoots.has(task.workspace))
     if (unattached.length > 0) {
-      out.push({ key: 'ws:__none__', label: '未挂靠工作区', tasks: unattached })
+      out.push({
+        key: 'ws:__none__',
+        label: '未挂靠工作区',
+        tasks: unattached,
+        pages: [...new Set(unattached.map((task) => task.workerId).filter((workerId): workerId is string => Boolean(workerId)))]
+          .map((workerId) => ({ workerId, workspace: '' })),
+      })
     }
     return out
   }, [tasks, registry, onCreateNewTask])
@@ -488,6 +478,33 @@ export default function TasksPanel({
   )
   }
 
+  /**
+   * 组内「加载更多」:挂在组内任务列表末尾(工作区分组内部底部),
+   * 点击仅向该组来源 worker 续拉下一页;无更多或拉取中不渲染/显示加载中。
+   */
+  const renderGroupLoadMore = (group: { key: string; pages: Array<{ workerId: string; workspace: string }> }) => {
+    if (!group.pages.some((page) => taskStore.hasMore(page.workerId, page.workspace))) {
+      return null
+    }
+    if (loadingGroups.has(group.key)) {
+      return <div key="load-more" style={loadMoreFooterStyle}>加载中…</div>
+    }
+    return (
+      <a
+        key="load-more"
+        href="#load-more"
+        role="button"
+        style={loadMoreLinkStyle}
+        onClick={(event) => {
+          event.preventDefault()
+          handleGroupLoadMore(group.key, group.pages)
+        }}
+      >
+        加载更多
+      </a>
+    )
+  }
+
   return (
     <div
       style={{
@@ -497,8 +514,6 @@ export default function TasksPanel({
     >
       <SidebarScrollArea
         style={listStyle}
-        viewportRef={listViewportRef}
-        onScroll={handleListScroll}
       >
         {error ? (
           <div style={errorStyle}>{error}</div>
@@ -595,23 +610,16 @@ export default function TasksPanel({
                 {collapsed ? null : (
                   <div style={groupTasksStyle}>
                     {group.tasks.map((task) => renderTaskCard(task, group.key))}
+                    {renderGroupLoadMore(group)}
                   </div>
                 )}
               </div>
             )
           })}
+        {/* 全局空态:无任何任务时不渲染分组,给一行弱提示(registry 未加载时同理)。 */}
         {!error && tasks.length === 0 ? (
           <div style={emptyStyle}>暂无任务</div>
         ) : null}
-        <div ref={sentinelRef} style={loadMoreFooterStyle}>
-          {loadingMore
-            ? '加载中…'
-            : taskStore.hasMore()
-              ? '上滑加载更多'
-              : tasks.length > 0
-                ? '已加载全部任务'
-                : ''}
-        </div>
       </SidebarScrollArea>
       <ConfirmDialog
         open={confirmOpen}
@@ -931,13 +939,24 @@ const errorStyle: React.CSSProperties = {
   padding: '8px 4px',
 }
 
-/** 触底续拉页脚(哨兵挂载点):弱化文案,不干扰列表主体。 */
+/** 组内「加载更多」页脚(加载中文案):弱化显示,不干扰列表主体。 */
 const loadMoreFooterStyle: React.CSSProperties = {
-  fontSize: 'var(--text-xs)',
+  fontSize: 11,
   color: 'var(--text-muted)',
   textAlign: 'center',
-  padding: '6px 4px',
   userSelect: 'none',
+}
+
+/** 组内「加载更多」链接(a 标签,点击后向该组来源 worker 续拉下一页)。 */
+const loadMoreLinkStyle: React.CSSProperties = {
+  color: 'var(--accent-blue)',
+  cursor: 'pointer',
+  textDecoration: 'none',
+  fontSize: 11,
+  fontWeight: 600,
+  userSelect: 'none',
+  textAlign: 'center',
+  padding: '2px 0',
 }
 
 const ctxIndicatorStyle: React.CSSProperties = {
