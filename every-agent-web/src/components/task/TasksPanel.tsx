@@ -895,34 +895,30 @@ const taskMetaStyle: React.CSSProperties = {
 
 const statusPillStyle: React.CSSProperties = {
   borderRadius: 999,
-  padding: '2px 8px',
+  padding: '1px 6px',
   fontSize: 'var(--text-xs)',
   fontWeight: 700,
   flexShrink: 0,
+  background: 'transparent',
 }
 
 const activeStatusPillStyle: React.CSSProperties = {
-  background: 'var(--accent-blue-dim)',
   color: 'var(--accent-blue)',
 }
 
 const idleStatusPillStyle: React.CSSProperties = {
-  background: 'var(--bg-secondary)',
   color: 'var(--text-muted)',
 }
 
 const completedStatusPillStyle: React.CSSProperties = {
-  background: 'var(--accent-green-dim)',
   color: 'var(--accent-green)',
 }
 
 const stoppedStatusPillStyle: React.CSSProperties = {
-  background: 'color-mix(in srgb, var(--accent-amber) 14%, transparent)',
   color: 'var(--accent-amber)',
 }
 
 const errorStatusPillStyle: React.CSSProperties = {
-  background: 'var(--accent-red-dim)',
   color: 'var(--accent-red)',
 }
 
