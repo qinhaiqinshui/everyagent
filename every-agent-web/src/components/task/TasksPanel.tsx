@@ -948,7 +948,7 @@ const loadMoreLinkStyle: React.CSSProperties = {
   cursor: 'pointer',
   textDecoration: 'none',
   fontSize: 11,
-  fontWeight: 600,
+  fontWeight: 400,
   userSelect: 'none',
   textAlign: 'center',
   padding: '2px 0',
