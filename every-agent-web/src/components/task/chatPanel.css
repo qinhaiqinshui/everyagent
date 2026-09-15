@@ -1165,6 +1165,10 @@
 
 .nagent-tool__detail-path {
   margin-left: auto;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   border: 1px solid color-mix(in srgb, var(--accent-blue) 28%, var(--border-light));
   border-radius: 999px;
   background: color-mix(in srgb, var(--accent-blue-dim) 48%, var(--bg-primary));
@@ -1172,12 +1176,22 @@
   padding: 2px 8px;
   font-size: var(--text-xs);
   font-weight: 700;
+  /* 降级为纯文本 span 时去掉指针手型与背景，保持可读但不可点的视觉提示。 */
   cursor: pointer;
   white-space: nowrap;
 }
 
 .nagent-tool__detail-path:hover {
   background: color-mix(in srgb, var(--accent-blue-dim) 68%, var(--bg-hover));
+}
+
+/* 不可点的降级态（缺工作区根）：无指针手型，hover 不变色，仅作路径展示。 */
+.nagent-tool__detail-path--static {
+  cursor: default;
+}
+
+.nagent-tool__detail-path--static:hover {
+  background: color-mix(in srgb, var(--accent-blue-dim) 48%, var(--bg-primary));
 }
 
 .nagent-tool__detail-annotation {

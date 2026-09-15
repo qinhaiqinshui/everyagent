@@ -11,6 +11,7 @@ import RoundDetail from './RoundDetail'
 import LazyLoadSentinel from './LazyLoadSentinel'
 import { RoundFileChangesView } from '@/plugins/task-file-changes'
 import { taskStore } from '@/hub/taskStore'
+import { TaskWorkspaceProvider } from './TaskWorkspaceContext'
 import './TaskRoundsPanel.css'
 
 /**
@@ -279,51 +280,53 @@ export default function TaskRoundsPanel({
     ) : null
 
   return (
-    <div className="task-rounds">
-      {loadingBlock}
-      {roundsError ? errorBar : null}
-      {emptyBlock}
-      {filterAgentId ? (
-        <div className="task-rounds__filter-hint" role="status">
-          仅显示已加载内容中该 agent 的消息，展开轮次可加载更多
-        </div>
-      ) : null}
-      {closedRounds.map((round) => {
-        const expanded = expandedSet.has(round.roundId)
-        const pageState = pageStates[round.roundId]
-        return (
-          <ClosedRoundView
-            key={round.roundId}
-            round={round}
-            expanded={expanded}
-            items={items}
+    <TaskWorkspaceProvider workspaceRoot={workspaceRoot}>
+      <div className="task-rounds">
+        {loadingBlock}
+        {roundsError ? errorBar : null}
+        {emptyBlock}
+        {filterAgentId ? (
+          <div className="task-rounds__filter-hint" role="status">
+            仅显示已加载内容中该 agent 的消息，展开轮次可加载更多
+          </div>
+        ) : null}
+        {closedRounds.map((round) => {
+          const expanded = expandedSet.has(round.roundId)
+          const pageState = pageStates[round.roundId]
+          return (
+            <ClosedRoundView
+              key={round.roundId}
+              round={round}
+              expanded={expanded}
+              items={items}
+              taskId={taskId}
+              workspaceRoot={workspaceRoot}
+              pageState={pageState}
+              scrollRoot={scrollRoot}
+              matches={matches}
+              onToggle={() => handleToggle(round)}
+              onLoadMore={() => startForward(round)}
+            />
+          )
+        })}
+        {tailStartSeq ? (
+          <TailRoundView
             taskId={taskId}
-            workspaceRoot={workspaceRoot}
-            pageState={pageState}
+            userItem={tailUserItem}
+            tailItems={tailItems}
+            isGenerating={isGenerating}
+            live={live}
+            pageState={live ? pageStates['open'] : (terminalTail ? pageStates[terminalTail.roundId] : undefined)}
             scrollRoot={scrollRoot}
-            matches={matches}
-            onToggle={() => handleToggle(round)}
-            onLoadMore={() => startForward(round)}
+            onLoadMoreBackward={() => {
+              const cur = pageStatesRef.current['open']
+              if (cur && cur.cursor) startBackward(tailStartSeq, cur.cursor)
+            }}
+            onLoadMoreForward={() => terminalTail && startForward(terminalTail)}
           />
-        )
-      })}
-      {tailStartSeq ? (
-        <TailRoundView
-          taskId={taskId}
-          userItem={tailUserItem}
-          tailItems={tailItems}
-          isGenerating={isGenerating}
-          live={live}
-          pageState={live ? pageStates['open'] : (terminalTail ? pageStates[terminalTail.roundId] : undefined)}
-          scrollRoot={scrollRoot}
-          onLoadMoreBackward={() => {
-            const cur = pageStatesRef.current['open']
-            if (cur && cur.cursor) startBackward(tailStartSeq, cur.cursor)
-          }}
-          onLoadMoreForward={() => terminalTail && startForward(terminalTail)}
-        />
-      ) : null}
-    </div>
+        ) : null}
+      </div>
+    </TaskWorkspaceProvider>
   )
 }
 
