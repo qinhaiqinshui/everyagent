@@ -160,8 +160,9 @@ public final class TerminalPtyFactory {
             if (cols < 1 || rows < 1) {
                 throw new IllegalArgumentException("cols and rows must be >= 1");
             }
-            // pty4j WinSize 构造签名:WinSize(columns, rows);内部处理 SIGWINCH/ConPTY resize
-            process.setWinSize(new WinSize(rows, cols));
+            // pty4j WinSize 构造签名:WinSize(columns, rows);
+            // 内部处理 SIGWINCH/ConPTY resize
+            process.setWinSize(new WinSize(cols, rows));
         }
 
         @Override
