@@ -290,6 +290,14 @@ public class WorkerProperties {
          */
         private long modelLengthStallMs = 120_000;
         /**
+         * 「输出已达上限」的绝对阈值兜底(tokens):模型配置<b>未显式设置 maxTokens</b>
+         * (provider 按服务端默认预算截断,客户端不可见)时,流中断(stall/断流)且自估
+         * 输出 ≥ 该值即判定等价 finish_reason=length。理由:「断流 + 已输出数万 token」
+         * 是预算耗尽的强信号,且此类波次重试代价极高(每次重放整段长思考,循环几十分钟)。
+         * ≤0 = 关闭兜底(未配置 maxTokens 时流中断一律交瞬时重试)。默认 32768。
+         */
+        private long lengthDisconnectMinTokens = 32_768;
+        /**
          * 死循环检测阈值:连续 N 轮完全相同的工具调用(名称+参数集合签名)即收口。
          * ≤0 关闭检测。默认 3(与 novel_agent-n 运行护栏一致)。
          */
@@ -382,6 +390,14 @@ public class WorkerProperties {
 
         public void setModelLengthStallMs(long modelLengthStallMs) {
             this.modelLengthStallMs = modelLengthStallMs;
+        }
+
+        public long getLengthDisconnectMinTokens() {
+            return lengthDisconnectMinTokens;
+        }
+
+        public void setLengthDisconnectMinTokens(long lengthDisconnectMinTokens) {
+            this.lengthDisconnectMinTokens = lengthDisconnectMinTokens;
         }
 
         public int getMaxRepeatedToolRounds() {

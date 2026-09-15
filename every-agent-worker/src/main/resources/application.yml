@@ -31,6 +31,10 @@ worker:
     # 模型流「无输出」判定窗口(ms):ModelLengthGuardAdvisor 据此把「长时间无输出 + 自估输出
     # ≈ maxTokens」判定为 finish_reason=length,避免空等 10 分钟读超时(须短于 model-timeout-ms)。
     length-stall-ms: 120000
+    # 「输出已达上限」绝对阈值兜底(tokens):模型配置未显式设置 maxTokens 时,流中断(stall/
+    # 断流)且自估输出 ≥ 该值即判定等价 finish_reason=length(断流+数万 token 输出是预算耗尽
+    # 强信号,重试代价极高)。≤0 关闭兜底。默认 32768。
+    length-disconnect-min-tokens: 32768
     # 模型请求限流全局默认(per-model 的 rpm/max-concurrency/tpm 在 worker.models[].params
     # 各自配置;未显式配置的模型回退到这里的 default-*;某模型要关闭某维度,在其 params 显式设 0)。
     model-rate:

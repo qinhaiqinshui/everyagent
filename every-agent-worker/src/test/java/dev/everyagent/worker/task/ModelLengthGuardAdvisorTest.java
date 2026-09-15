@@ -90,6 +90,45 @@ class ModelLengthGuardAdvisorTest {
     }
 
     /**
+     * 场景(t_vvk3 实测):模型配置<b>未设置 maxTokens</b>(provider 按服务端默认预算截断,
+     * 客户端不可见)时,长思考断流后原判定链断裂(maxTokens=null → nearMax 恒 false),
+     * IOException 穿透到外层瞬时重试反复退避重跑。兜底:断流且自估输出 ≥
+     * length-disconnect-min-tokens(默认 32768)即判定等价 length,快速收口。
+     */
+    @Test
+    void disconnectWithoutMaxTokensFallsBackToAbsoluteThreshold() {
+        Flux<ChatClientResponse> source = Flux.<ChatClientResponse>just(
+                        thinkingChunk("思".repeat(40_000), null))   // 4 万 CJK ≈ 4 万 tokens ≥ 32768
+                .concatWith(Flux.error(new IOException("Stream was closed")));
+        ModelLengthGuardAdvisor advisor = advisor(source);
+        OpenAiChatOptions noMaxTokens = OpenAiChatOptions.builder().build(); // 未设置 maxTokens
+
+        StepVerifier.create(advisor.adviseStream(request(noMaxTokens), chain(source)))
+                .expectNextCount(1)
+                .expectError(ModelLengthGuardAdvisor.ModelLengthExhaustedException.class)
+                .verify();
+    }
+
+    /**
+     * 场景:未配置 maxTokens 且输出远未达绝对阈值(短输出+断流=真网络抖动)
+     * → 原样上抛 IOException 交瞬时重试,兜底不误伤。
+     */
+    @Test
+    void shortDisconnectWithoutMaxTokensStillRetries() {
+        Flux<ChatClientResponse> source = Flux.<ChatClientResponse>just(
+                        thinkingChunk("短思考", null))
+                .concatWith(Flux.error(new IOException("Stream was closed")));
+        ModelLengthGuardAdvisor advisor = advisor(source);
+        OpenAiChatOptions noMaxTokens = OpenAiChatOptions.builder().build();
+
+        StepVerifier.create(advisor.adviseStream(request(noMaxTokens), chain(source)))
+                .expectNextCount(1)
+                .expectErrorMatches(e -> e instanceof IOException
+                        && !(e instanceof ModelLengthGuardAdvisor.ModelLengthExhaustedException))
+                .verify();
+    }
+
+    /**
      * 场景:网络级错误中断但累计输出远未达 maxTokens(真·网络抖动)→ 原样上抛 IOException,
      * 交外层瞬时重试 advisor 退避重调。
      */
