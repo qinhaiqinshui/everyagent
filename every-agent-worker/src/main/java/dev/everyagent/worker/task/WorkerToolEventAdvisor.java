@@ -100,6 +100,11 @@ public class WorkerToolEventAdvisor extends ToolCallingAdvisor {
         if (cr == null || cr.getResult() == null || cr.getResult().getOutput() == null) {
             return;
         }
+        // 防御:任务已终态(用户取消/finish 完成)时不再发射瞬态事件。
+        // 即使 reactive 链的 dispose 有微秒级竞态窗口,残留 chunk 也不会泄漏到前端。
+        if (a.task.status.terminal()) {
+            return;
+        }
         AssistantMessage out = cr.getResult().getOutput();
         String piece = out.getText();
         if (piece != null && !piece.isEmpty()) {
@@ -125,17 +130,17 @@ public class WorkerToolEventAdvisor extends ToolCallingAdvisor {
         if (out == null) {
             return chatClientResponse;
         }
-        // 关键诊断:任务终态后若仍在发射轮次事件,说明模型流未被真正取消(dispose 漏掉),
-        // 后台 reactor 线程继续驱动工具循环。此处告警便于定位"取消后仍收到消息"。
+        // 防御:任务已终态时不再发射任何事件(取消后 dispose 与 reactor 线程间有竞态窗口,
+        // 残留轮次在此直接丢弃,不再产生 message/usage 等落盘事件,也不写入 lastText)。
         if (a.task.status.terminal()) {
-            log.warn("[leak] 任务已终态({})但仍发射轮次事件 agentId={} taskId={} thread={}",
-                    a.task.status, a.agentId, a.task.taskId, Thread.currentThread().getName());
-        } else {
-            log.debug("[advisor] doAfterStream 发射轮次 agentId={} taskId={} hasToolCalls={} thread={}",
-                    a.agentId, a.task.taskId,
-                    out.getToolCalls() != null && !out.getToolCalls().isEmpty(),
-                    Thread.currentThread().getName());
+            log.warn("[leak-guard] 任务已终态({}),拦截轮次事件发射 agentId={} thread={}",
+                    a.task.status, a.agentId, Thread.currentThread().getName());
+            return chatClientResponse;
         }
+        log.debug("[advisor] doAfterStream 发射轮次 agentId={} taskId={} hasToolCalls={} thread={}",
+                a.agentId, a.task.taskId,
+                out.getToolCalls() != null && !out.getToolCalls().isEmpty(),
+                Thread.currentThread().getName());
         String agentId = a.agentId;
         // 文本(逐字 delta 已在 adviseStream tap 逐 chunk 发出;此处只记终值供收口/子 agent 结果用)
         String text = out.getText() == null ? "" : out.getText();
@@ -229,6 +234,10 @@ public class WorkerToolEventAdvisor extends ToolCallingAdvisor {
                     for (ToolResponseMessage.ToolResponse r : trm.getResponses()) {
                         if (!currentCallIds.contains(r.id())) {
                             continue; // 历史轮次的工具结果:本轮未下发,不重复发射
+                        }
+                        // 防御:任务已终态时不再发射 tool.result(与 doAfterStream 同语义)
+                        if (a.task.status.terminal()) {
+                            continue;
                         }
                         String summary = r.responseData() == null ? "(无返回)" : r.responseData();
                         boolean truncated = summary.length() > MAX_TOOL_EVENT_CHARS;

@@ -99,16 +99,22 @@ public class AgentRunner {
         try {
             while (!done.await(100, TimeUnit.MILLISECONDS)) {
                 if (Thread.currentThread().isInterrupted()) {
-                    log.debug("[cancel] 轮询检测到中断标记,执行 dispose agentId={} holderNull={} thread={}",
+                    log.debug("[cancel] 轮询检测到中断标记 agentId={} holderNull={} thread={}",
                             a.agentId, holder[0] == null, Thread.currentThread().getName());
-                    holder[0].dispose();
                     throw new InterruptedException("流式输出被取消");
                 }
             }
         } catch (InterruptedException awaitEx) {
-            // 关键诊断:await 自身被中断抛出时会跳过上面的 dispose,flux 可能仍在后台运行。
-            log.debug("[cancel] done.await 抛出 InterruptedException(跳过 in-loop dispose) agentId={} holderNull={} thread={}",
-                    a.agentId, holder[0] == null, Thread.currentThread().getName());
+            // 关键修复:无论中断是从 await 抛出还是从轮询检测到,都必须 dispose 掉
+            // reactive 订阅链。否则 Future.cancel(true) 只中断了等 latch 的虚拟线程,
+            // 而 flux 实际跑在 boundedElastic/reactor 线程上——订阅链未取消 →
+            // 工具循环继续执行(bash/模型调用),事件继续向后端/前端泄漏,
+            // 直到模型自然结束。表现为"点停止后任务显示已取消,过一会又收到消息"。
+            if (holder[0] != null) {
+                holder[0].dispose();
+                log.debug("[cancel] 已 dispose reactive 订阅链 agentId={} thread={}",
+                        a.agentId, Thread.currentThread().getName());
+            }
             throw awaitEx;
         }
         log.debug("[run] 模型流自然结束 agentId={} thread={}", a.agentId, Thread.currentThread().getName());
