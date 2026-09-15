@@ -127,6 +127,8 @@ public class SubAgentManager {
             task.events.agentStarted(id, sub.title, input);
             task.events.agentStatus(id, "running"); // 子 agent 开始运行(agent 列表状态机)
             vt.execute(ft);
+            log.debug("[sub] 启动子 agent id={} taskId={} blocking={} reuse={} thread={}",
+                    id, task.taskId, blocking, reuse, Thread.currentThread().getName());
         }
 
         if (!blocking) {
@@ -153,15 +155,23 @@ public class SubAgentManager {
 
     /** 子 agent 运行体(vt 线程):任何收口路径都写工具契约终态 + error 快照,finally 置 finished。 */
     private void runSub(TaskEntry task, String id, AgentEntity sub) {
+        log.debug("[sub] runSub 进入 id={} taskId={} thread={} interruptFlag={}",
+                id, task.taskId, Thread.currentThread().getName(), Thread.currentThread().isInterrupted());
         try {
             runner.run(sub);
             // 正常完成:只有未被 stop 侧抢先置为 stopped 时才发 done(终态唯一声明)。
             if (sub.claimTerminal("completed")) {
+                log.debug("[sub] 正常完成 claimTerminal(completed)=true id={} thread={}",
+                        id, Thread.currentThread().getName());
                 task.events.agentDone(id, sub.lastText, sub.usage());
                 task.events.agentStatus(id, "done");
+            } else {
+                log.debug("[sub] 正常完成但 claimTerminal=false(已被停止侧抢先) id={} subStatus={} thread={}",
+                        id, sub.status, Thread.currentThread().getName());
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+            log.debug("[sub] 捕获 InterruptedException id={} thread={}", id, Thread.currentThread().getName());
             emitStopped(task, sub); // stop_agent / 级联取消
         } catch (Throwable t) {
             // 根因摘要:BaseAdvisor 包装会把真实错误埋在最里层(见 RootCause)。
@@ -178,6 +188,8 @@ public class SubAgentManager {
             // 收口:台账刷新为终态 + 触发持久化(崩溃后冷启动可恢复台账)。
             task.agentLedger.put(id, sub.toSummary());
             task.persist();
+            log.debug("[sub] runSub 收口退出 id={} subStatus={} finished=true thread={}",
+                    id, sub.status, Thread.currentThread().getName());
         }
     }
 
@@ -186,7 +198,10 @@ public class SubAgentManager {
      * stop_agent / 任务取消级联调用;如果子线程已抢先收口(completed/error),此处不覆盖。
      */
     private void emitStopped(TaskEntry task, AgentEntity sub) {
-        if (!sub.claimTerminal("stopped")) {
+        boolean claimed = sub.claimTerminal("stopped");
+        log.debug("[sub] emitStopped id={} claimed={} 现status={} thread={}",
+                sub.agentId, claimed, sub.status, Thread.currentThread().getName());
+        if (!claimed) {
             return;
         }
         sub.updateActivity(null, null, "已取消");
@@ -326,7 +341,9 @@ public class SubAgentManager {
         if (sub != null && isTerminal(sub.status)) {
             return "子 agent 已结束(" + sub.status + "),无需停止: " + agentId;
         }
-        f.cancel(true);
+        boolean cancelled = f.cancel(true);
+        log.debug("[sub] stop 请求 id={} cancel(true)={} futureDone={} thread={}",
+                agentId, cancelled, f.isDone(), Thread.currentThread().getName());
         // 不能只 cancel future:FutureTask 尚未开始执行(cancel 只置 CANCELLED 不跑 runSub)、
         // 或子线程未能立刻响应中断时,前端会一直看到 running。这里同步声明终态并发事件。
         if (sub != null) {
@@ -405,8 +422,12 @@ public class SubAgentManager {
     public void stopAll(TaskEntry task) {
         synchronized (task) {
             task.stopRequested = true; // 统一入口置位:任何全停路径都不允许再启动新子 agent
+            log.debug("[sub] stopAll 进入 taskId={} 子数={} thread={}",
+                    task.taskId, task.subFutures.size(), Thread.currentThread().getName());
             for (Future<?> f : task.subFutures.values()) {
-                f.cancel(true);
+                boolean c = f.cancel(true);
+                log.debug("[sub] stopAll cancel id={} cancel(true)={} done={} thread={}",
+                        "?", c, f.isDone(), Thread.currentThread().getName());
             }
             // 见 stop():cancel 不保证 runSub 会执行收口(未启动/未及时响应中断的 future 永远停在 running),
             // 这里对全部未终态实体同步声明 stopped,确保任务取消/失败/停机路径下前端状态能收口。

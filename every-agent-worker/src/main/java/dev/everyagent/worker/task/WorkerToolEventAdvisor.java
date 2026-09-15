@@ -55,6 +55,8 @@ import java.util.concurrent.atomic.AtomicReference;
  */
 public class WorkerToolEventAdvisor extends ToolCallingAdvisor {
 
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(WorkerToolEventAdvisor.class);
+
     /** 工具返回事件侧截断阈值;返回给模型的仍是完整结果(与 AgentRunner 同源语义)。 */
     private static final int MAX_TOOL_EVENT_CHARS = 100_000;
 
@@ -122,6 +124,17 @@ public class WorkerToolEventAdvisor extends ToolCallingAdvisor {
         AssistantMessage out = cr.getResult().getOutput();
         if (out == null) {
             return chatClientResponse;
+        }
+        // 关键诊断:任务终态后若仍在发射轮次事件,说明模型流未被真正取消(dispose 漏掉),
+        // 后台 reactor 线程继续驱动工具循环。此处告警便于定位"取消后仍收到消息"。
+        if (a.task.status.terminal()) {
+            log.warn("[leak] 任务已终态({})但仍发射轮次事件 agentId={} taskId={} thread={}",
+                    a.task.status, a.agentId, a.task.taskId, Thread.currentThread().getName());
+        } else {
+            log.debug("[advisor] doAfterStream 发射轮次 agentId={} taskId={} hasToolCalls={} thread={}",
+                    a.agentId, a.task.taskId,
+                    out.getToolCalls() != null && !out.getToolCalls().isEmpty(),
+                    Thread.currentThread().getName());
         }
         String agentId = a.agentId;
         // 文本(逐字 delta 已在 adviseStream tap 逐 chunk 发出;此处只记终值供收口/子 agent 结果用)
