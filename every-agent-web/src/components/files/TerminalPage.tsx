@@ -11,6 +11,8 @@ import '@xterm/xterm/css/xterm.css'
 import React from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
+import { Dropdown } from 'antd'
+import type { MenuProps } from 'antd'
 import { channels } from '@every-agent/client'
 import { hubSession } from '@/hub/session'
 import { loadThemeMode } from '@/settings/localSettings'
@@ -103,6 +105,46 @@ export default function TerminalPage({ tab }: TerminalPageProps) {
   const termRef = React.useRef<Terminal | null>(null)
   const [errorText, setErrorText] = React.useState<string | null>(null)
   const [themeMode, setThemeMode] = React.useState<ThemeMode>(loadThemeMode)
+  const [menuOpen, setMenuOpen] = React.useState(false)
+
+  // ── 终端右键菜单(仿 VSCode:选中文字→复制,无选中→粘贴,子菜单含全选/清屏) ──
+
+  const getSelectedText = React.useCallback((): string => {
+    const term = termRef.current
+    if (!term) return ''
+    const selection = term.getSelection()
+    return selection || ''
+  }, [])
+
+  const copySelection = React.useCallback(async () => {
+    const text = getSelectedText()
+    if (text) {
+      try { await navigator.clipboard.writeText(text) } catch { /* ignore */ }
+    }
+  }, [getSelectedText])
+
+  const pasteFromClipboard = React.useCallback(async () => {
+    const term = termRef.current
+    if (!term) return
+    try {
+      const text = await navigator.clipboard.readText()
+      if (text) {
+        term.paste(text)
+      }
+    } catch { /* ignore */ }
+  }, [])
+
+  const selectAll = React.useCallback(() => {
+    const term = termRef.current
+    if (!term) return
+    term.selectAll()
+  }, [])
+
+  const clearTerminal = React.useCallback(() => {
+    const term = termRef.current
+    if (!term) return
+    term.clear()
+  }, [])
 
   // 订阅主题变化(明暗模式切换时同步 xterm 主题)。
   React.useEffect(() => {
@@ -185,6 +227,15 @@ export default function TerminalPage({ tab }: TerminalPageProps) {
       terminalGateway.input(tab.workspaceRoot, termId, strToBase64(data)).catch(() => {})
     })
 
+    // 右键菜单(仿 VSCode):有选中文字→复制,无选中→粘贴;菜单含全选/清屏。
+    term.attachCustomKeyEventHandler((event) => {
+      // 阻止浏览器默认右键菜单
+      if (event.type === 'contextmenu') {
+        return false
+      }
+      return true
+    })
+
     // 容器尺寸变化 → fit → resize(节流,避免拖拽窗口时 RPC 风暴)。
     // 仅在 PTY 打开成功后注册,避免 open 尚未完成时 resize RPC 报"会话不存在"
     // 且此时 fit 改变 xterm 尺寸会导致与 worker PTY 行宽不一致。
@@ -232,18 +283,76 @@ export default function TerminalPage({ tab }: TerminalPageProps) {
     }
   }, [tab.workspaceRoot, tab.path, tab.workerId])
 
+  // 右键菜单项(仿 VSCode)
+  const contextMenuItems: MenuProps['items'] = [
+    {
+      key: 'copy',
+      label: '复制',
+      disabled: !getSelectedText(),
+      onClick: () => void copySelection(),
+    },
+    {
+      key: 'paste',
+      label: '粘贴',
+      onClick: () => void pasteFromClipboard(),
+    },
+    { type: 'divider' },
+    {
+      key: 'select-all',
+      label: '全选',
+      onClick: () => selectAll(),
+    },
+    {
+      key: 'clear',
+      label: '清屏',
+      onClick: () => clearTerminal(),
+    },
+  ]
+
+  // 右键:有选中文字→直接复制(仿 VSCode);无选中→显示菜单(粘贴等)
+  const handleContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault()
+    const term = termRef.current
+    if (!term) return
+    const hasSelection = !!getSelectedText()
+    if (hasSelection) {
+      // 有选中:复制后清除选区(仿 VSCode)
+      void copySelection().then(() => term.clearSelection())
+    } else {
+      // 无选中:显示菜单
+      setMenuOpen(true)
+    }
+  }
+
+  // 点击左键时关闭菜单
+  const handlePointerDown = () => {
+    if (menuOpen) setMenuOpen(false)
+  }
+
   return (
     <div
       style={{
         height: '100%',
         display: 'flex',
         flexDirection: 'column',
-        background: themeMode === 'dark' ? 'var(--bg-primary)' : 'var(--bg-primary)',
+        background: 'var(--bg-primary)',
         minHeight: 0,
         overflow: 'hidden',
       }}
     >
-      <div ref={containerRef} style={{ flex: 1, minHeight: 0 }} />
+      <Dropdown
+        menu={{ items: contextMenuItems }}
+        trigger={['contextMenu']}
+        open={menuOpen}
+        onOpenChange={setMenuOpen}
+      >
+        <div
+          ref={containerRef}
+          style={{ flex: 1, minHeight: 0 }}
+          onContextMenu={handleContextMenu}
+          onPointerDown={handlePointerDown}
+        />
+      </Dropdown>
       {errorText && (
         <div
           style={{
