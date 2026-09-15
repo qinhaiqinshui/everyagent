@@ -217,12 +217,7 @@ export default function TerminalPage({ tab }: TerminalPageProps) {
       } else if (frame.event === 'term.exited') {
         if (!exited) {
           exited = true
-          const reason = (frame.payload as { reason?: string } | null)?.reason
-          if (reason === 'idle_timeout') {
-            term.write('\r\n\x1b[33m[终端因长时间无操作已自动关闭]\x1b[0m\r\n')
-          } else {
-            term.write('\r\n\x1b[33m[终端已结束]\x1b[0m\r\n')
-          }
+          term.write('\r\n\x1b[33m[终端已结束]\x1b[0m\r\n')
         }
       }
     })
