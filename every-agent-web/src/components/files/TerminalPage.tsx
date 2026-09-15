@@ -196,7 +196,7 @@ export default function TerminalPage({ tab }: TerminalPageProps) {
         overflow: 'hidden',
       }}
     >
-      <div ref={containerRef} style={{ flex: 1, minHeight: 0, padding: '4px 8px' }} />
+      <div ref={containerRef} style={{ flex: 1, minHeight: 0, padding: '0 8px' }} />
       {errorText && (
         <div
           style={{
