@@ -191,12 +191,12 @@ export default function TerminalPage({ tab }: TerminalPageProps) {
         height: '100%',
         display: 'flex',
         flexDirection: 'column',
-        background: '#1e1e1e',
+        background: themeMode === 'dark' ? '#1e1e1e' : '#ffffff',
         minHeight: 0,
         overflow: 'hidden',
       }}
     >
-      <div ref={containerRef} style={{ flex: 1, minHeight: 0, padding: '0 8px' }} />
+      <div ref={containerRef} style={{ flex: 1, minHeight: 0 }} />
       {errorText && (
         <div
           style={{
