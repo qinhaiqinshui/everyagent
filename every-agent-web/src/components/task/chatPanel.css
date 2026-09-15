@@ -1164,7 +1164,7 @@
 }
 
 .nagent-tool__detail-path {
-  margin-left: auto;
+  /* 紧跟工具名之后排列（不加 margin-left:auto 推到最右）。 */
   max-width: 100%;
   min-width: 0;
   overflow: hidden;
