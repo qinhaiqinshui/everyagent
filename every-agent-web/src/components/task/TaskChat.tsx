@@ -418,12 +418,20 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
     }
   }, [agentId])
 
-  // 进入任务 / 切回任务页：一律贴底并恢复自动跟随（userControll=false）。
-  // 按用户语义移除滚动位置记忆：不再保留切走时的位置，每次进入都从最新消息继续。
+  // 进入任务 / 切回任务页：
+  // - 首次打开该任务标签时贴底并恢复自动跟随（userControll=false），
+  //   让用户直接看到最新消息。
+  // - 之后切走到其他标签再切回，不动滚动条——原位置保持。
+  const hasActivatedRef = React.useRef(false)
   React.useLayoutEffect(() => {
     if (!isActive) {
       return
     }
+    if (hasActivatedRef.current) {
+      // 已激活过，切回不动滚动。
+      return
+    }
+    hasActivatedRef.current = true
     userControllRef.current = false
     const node = threadScrollRefNode.current
     if (!node) {
