@@ -47,7 +47,7 @@ function strToBase64(text: string): string {
 
 function themeFor(mode: ThemeMode): ITheme {
   return mode === 'dark'
-    ? { background: '#1e1e1e', foreground: '#cccccc', cursor: '#cccccc' }
+    ? { background: '#0b0d12', foreground: '#cccccc', cursor: '#cccccc' }
     : { background: '#ffffff', foreground: '#333333', cursor: '#333333' }
 }
 
@@ -191,7 +191,7 @@ export default function TerminalPage({ tab }: TerminalPageProps) {
         height: '100%',
         display: 'flex',
         flexDirection: 'column',
-        background: themeMode === 'dark' ? '#1e1e1e' : '#ffffff',
+        background: themeMode === 'dark' ? 'var(--bg-primary)' : 'var(--bg-primary)',
         minHeight: 0,
         overflow: 'hidden',
       }}
