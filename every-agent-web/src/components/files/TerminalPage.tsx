@@ -92,6 +92,7 @@ export default function TerminalPage({ tab }: TerminalPageProps) {
       cursorBlink: true,
       fontFamily: "'Cascadia Code', 'Fira Code', 'Consolas', 'Courier New', monospace",
       fontSize: 13,
+      letterSpacing: 0,
       theme: themeFor(loadThemeMode()),
     })
     termRef.current = term
@@ -101,12 +102,8 @@ export default function TerminalPage({ tab }: TerminalPageProps) {
     // 先同步 fit 得到容器实际尺寸,再用实际 cols/rows 打开 PTY;
     // 否则 worker 用 80×24 输出但 xterm 已被 fit 改成实际尺寸,行宽不匹配
     // 会导致光标与输入内容错位(内容在光标上方好多行)。
-    let actualCols = 80
-    let actualRows = 24
     try {
       fitAddon.fit()
-      actualCols = term.cols
-      actualRows = term.rows
     } catch {
       // 忽略:容器尺寸为 0 时 fit 抛异常,用默认 80×24
     }
@@ -141,24 +138,33 @@ export default function TerminalPage({ tab }: TerminalPageProps) {
       terminalGateway.input(tab.workspaceRoot, termId, strToBase64(data)).catch(() => {})
     })
 
-    // 容器尺寸变化 → fit → resize(节流,避免拖拽窗口时 RPC 风暴)
+    // 容器尺寸变化 → fit → resize(节流,避免拖拽窗口时 RPC 风暴)。
+    // 仅在 PTY 打开成功后注册,避免 open 尚未完成时 resize RPC 报"会话不存在"
+    // 且此时 fit 改变 xterm 尺寸会导致与 worker PTY 行宽不一致。
     let resizeTimer: ReturnType<typeof setTimeout> | null = null
-    const resizeObserver = new ResizeObserver(() => {
-      if (resizeTimer) clearTimeout(resizeTimer)
-      resizeTimer = setTimeout(() => {
-        try {
-          fitAddon.fit()
-          void terminalGateway.resize(tab.workspaceRoot, termId, term.cols, term.rows).catch(() => {})
-        } catch {
-          // 忽略:容器尺寸为 0 时 fit 抛异常
-        }
-      }, 100)
-    })
-    resizeObserver.observe(container)
+    let resizeObserver: ResizeObserver | null = null
+    const startResizeObserver = () => {
+      resizeObserver = new ResizeObserver(() => {
+        if (resizeTimer) clearTimeout(resizeTimer)
+        resizeTimer = setTimeout(() => {
+          try {
+            fitAddon.fit()
+            void terminalGateway.resize(tab.workspaceRoot, termId, term.cols, term.rows).catch(() => {})
+          } catch {
+            // 忽略:容器尺寸为 0 时 fit 抛异常
+          }
+        }, 100)
+      })
+      resizeObserver.observe(container)
+    }
 
-    // 打开 PTY(用 fit 后的实际尺寸,避免行宽不匹配)
+    // 打开 PTY(用 fit 后的实际尺寸,避免行宽不匹配);
+    // open 成功后注册 ResizeObserver,避免竞态。
     void terminalGateway
-      .open(tab.workspaceRoot, termId, tab.path, actualCols, actualRows)
+      .open(tab.workspaceRoot, termId, tab.path, term.cols, term.rows)
+      .then(() => {
+        startResizeObserver()
+      })
       .catch((err) => {
         const msg = err instanceof Error ? err.message : String(err)
         term.write(`\r\n\x1b[31m[终端打开失败: ${msg}]\x1b[0m\r\n`)
@@ -167,7 +173,7 @@ export default function TerminalPage({ tab }: TerminalPageProps) {
 
     return () => {
       if (resizeTimer) clearTimeout(resizeTimer)
-      resizeObserver.disconnect()
+      resizeObserver?.disconnect()
       dataDisposable.dispose()
       offFrame()
       window.removeEventListener('beforeunload', handleCloseOnUnload)
