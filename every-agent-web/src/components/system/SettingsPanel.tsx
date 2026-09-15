@@ -23,6 +23,7 @@ import {
   loadBrowserNotificationsEnabled,
   saveBrowserNotificationsEnabled,
 } from '@/settings/browserNotifications'
+import { hubSession } from '@/hub/session'
 import { taskStore } from '@/hub/taskStore'
 import { workspaceRegistry } from '@/hub/workspaceRegistry'
 import type { WorkerInfo } from '@/hub/session'
@@ -61,6 +62,9 @@ export default function SettingsPanel() {
   const [notificationsEnabled, setNotificationsEnabled] = React.useState<boolean>(loadBrowserNotificationsEnabled)
   const [notificationPermission, setNotificationPermission] = React.useState<NotificationPermissionState>(getSystemNotificationPermission)
   const [requestingNotification, setRequestingNotification] = React.useState(false)
+  const [reloadingModels, setReloadingModels] = React.useState(false)
+  const [modelReloadHint, setModelReloadHint] = React.useState('')
+  const [modelReloadTone, setModelReloadTone] = React.useState<'ok' | 'error'>('ok')
   const isDesktopNotification = getNotificationAdapter()?.source === 'desktop'
 
   const connected = hub.state === 'open'
@@ -174,6 +178,49 @@ export default function SettingsPanel() {
   const handleToggleNotifications = (checked: boolean) => {
     setNotificationsEnabled(checked)
     saveBrowserNotificationsEnabled(checked)
+  }
+
+  const handleReloadModelConfig = async () => {
+    if (reloadingModels) return
+    const connectedWorkers: string[] = []
+    hub.directory.forEach((w) => {
+      if (w.connected) connectedWorkers.push(w.workerId)
+    })
+    if (connectedWorkers.length === 0) {
+      setModelReloadHint('无已连接的 worker')
+      setModelReloadTone('error')
+      return
+    }
+    setReloadingModels(true)
+    setModelReloadHint('')
+    try {
+      const results = await Promise.allSettled(
+        connectedWorkers.map((id) => hubSession.rpcTo(id, 'config.reload')),
+      )
+      const succeeded: string[] = []
+      const failed: string[] = []
+      results.forEach((r, i) => {
+        if (r.status === 'fulfilled') {
+          succeeded.push(connectedWorkers[i])
+        } else {
+          failed.push(connectedWorkers[i])
+        }
+      })
+      if (failed.length === 0) {
+        setModelReloadHint('已重新读取 ' + succeeded.length + ' 台 worker 的模型配置')
+        setModelReloadTone('ok')
+      } else {
+        setModelReloadHint(
+          '已重新读取 ' + succeeded.length + ' 台,' + failed.length + ' 台失败(' + failed.join(', ') + ')',
+        )
+        setModelReloadTone('error')
+      }
+    } catch (error) {
+      setModelReloadHint(error instanceof Error ? error.message : '重新读取模型配置失败')
+      setModelReloadTone('error')
+    } finally {
+      setReloadingModels(false)
+    }
   }
 
   const handleRequestNotification = async () => {
@@ -344,6 +391,28 @@ export default function SettingsPanel() {
           <Button type="button" variant="secondary" style={secondaryButtonStyle} onClick={handleRefreshWorkers}>
             刷新
           </Button>
+        </div>
+      </section>
+
+      <section style={sectionStyle}>
+        <h3 style={sectionTitleStyle}>模型配置</h3>
+        <p style={hintStyle}>
+          模型配置在 worker 侧的 application-worker.yaml 中维护。修改配置文件后点击「重新读取」即可让 worker 热加载,
+          无需重启;仅影响后续新建任务,运行中任务使用创建时冻结的快照。
+        </p>
+        <div style={actionsStyle}>
+          <Button
+            type="button"
+            variant="secondary"
+            style={secondaryButtonStyle}
+            onClick={() => void handleReloadModelConfig()}
+            disabled={reloadingModels}
+          >
+            {reloadingModels ? '重新读取中…' : '重新读取模型配置'}
+          </Button>
+          {modelReloadHint ? (
+            <span style={modelReloadTone === 'error' ? errorStyle : okStyle}>{modelReloadHint}</span>
+          ) : null}
         </div>
       </section>
 

@@ -23,6 +23,8 @@ public final class RpcMethods {
     /** 移动(重排)某条队列输入(参数 taskId, fromIndex, toIndex)。 */
     public static final String TASK_QUEUE_MOVE = "task.queueMove";
     public static final String CONFIG_GET = "config.get";
+    /** 重新读取模型配置(重新解析 worker.models,应用用户在外部 YAML 中的修改)。 */
+    public static final String CONFIG_RELOAD = "config.reload";
     public static final String WORKSPACES_LIST = "workspaces.list";
     public static final String WORKSPACES_ADD = "workspaces.add";
     public static final String WORKSPACES_REMOVE = "workspaces.remove";

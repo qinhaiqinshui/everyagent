@@ -277,6 +277,7 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
         dispatcher.register(RpcMethods.TASK_QUEUE_REMOVE, this::rpcTaskQueueRemove);
         dispatcher.register(RpcMethods.TASK_QUEUE_MOVE, this::rpcTaskQueueMove);
         dispatcher.register(RpcMethods.CONFIG_GET, this::rpcConfigGet);
+        dispatcher.register(RpcMethods.CONFIG_RELOAD, this::rpcConfigReload);
     }
 
     /**
@@ -1328,6 +1329,21 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
         }
         out.set("rateStatus", rates);
         ctx.ok(out);
+    }
+
+    /**
+     * config.reload:重新读取模型配置(架构 §5.10)。
+     * 从 {@code <系统目录>/application-worker.yaml} 重新解析 worker.models,
+     * 成功后广播 config.changed{keys:["models"]} 通知前端刷新。
+     * 仅影响后续新建任务的模型解析;运行中任务使用创建时冻结的快照,不受影响。
+     */
+    private void rpcConfigReload(RpcContext ctx) {
+        int count = configs.reload();
+        // 广播 config.changed 通知前端 modelConfigs 服务自动刷新模型列表。
+        pool.broadcastEvt(Events.CONFIG_CHANGED,
+                Json.toJson(new Events.ConfigChanged(List.of("models"))));
+        log.info("config.reload 完成:模型配置已重新加载,共 {} 条", count);
+        ctx.ok(Json.obj().put("models", count));
     }
 
     // ---- 终态任务再运行(冷启动;无"续跑"概念,对 agent 就是一次普通运行)----
