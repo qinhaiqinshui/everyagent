@@ -624,10 +624,14 @@ function WorkspaceGroupPanel({
   }, [showToast, workspaceRoot])
 
   const handleRequestOpenTerminal = React.useCallback((target: WorkspaceExplorerContextTarget) => {
+    // 文件节点:取所在目录(最后一个 / 之前的部分);目录节点:用自身路径。
+    const dirPath = target.type === 'file' && target.path.includes('/')
+      ? target.path.slice(0, target.path.lastIndexOf('/'))
+      : (target.type === 'file' ? '' : target.path)
     openTerminalTab({
       workspaceRoot: target.workspaceRoot,
-      path: target.path,
-      name: target.name || '工作区',
+      path: dirPath,
+      name: target.type === 'file' ? (target.path.includes('/') ? target.path.slice(0, target.path.lastIndexOf('/')) : '工作区') : (target.name || '工作区'),
       workerId: entry.workerId,
     })
   }, [entry, openTerminalTab])
@@ -751,12 +755,6 @@ function WorkspaceGroupPanel({
           icon: <UploadIcon size={13} />,
           onSelect: () => handleRequestUpload('directory', target),
         },
-        {
-          key: 'open-terminal',
-          label: '在终端中打开',
-          icon: <TerminalIcon size={13} />,
-          onSelect: () => handleRequestOpenTerminal(target),
-        },
       )
     }
     // 显示大小:开启行尾文件大小元信息(默认隐藏),与资源管理器更多菜单的「显示文件大小」同源。
@@ -797,6 +795,12 @@ function WorkspaceGroupPanel({
       label: '下载',
       icon: <DownloadIcon size={13} />,
       onSelect: () => handleRequestDownload(target),
+    })
+    items.push({
+      key: 'open-terminal',
+      label: '在终端中打开',
+      icon: <TerminalIcon size={13} />,
+      onSelect: () => handleRequestOpenTerminal(target),
     })
     items.push({
       key: 'reveal-in-os',
