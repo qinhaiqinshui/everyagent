@@ -25,6 +25,41 @@ import { openSlashItemDetail } from './SlashItemDetailPopover'
 
 const ZW = '​'
 
+// ── 临时 IME 诊断日志（复现后移除）─────────────────────────────────────────────
+// 在控制台执行 localStorage.setItem('ime_debug','1') 后刷新开启；去掉或置 '0' 关闭。
+const IME_DEBUG =
+  typeof localStorage !== 'undefined' && localStorage.getItem('ime_debug') === '1'
+function dbg(...args: unknown[]): void {
+  if (IME_DEBUG) console.log('[ime]', ...args)
+}
+/** 描述编辑器根节点的子节点结构（节点类型/文本内容）。 */
+function describeChildren(root: HTMLElement): string {
+  return Array.from(root.childNodes)
+    .map((n) => {
+      if (n.nodeType === Node.TEXT_NODE) return `TEXT("${n.textContent}")`
+      if (n.nodeType === Node.ELEMENT_NODE) {
+        const el = n as HTMLElement
+        return `EL(${el.tagName}${isChip(n) ? ',chip' : ''})`
+      }
+      return `N${n.nodeType}`
+    })
+    .join(' | ') || '(empty)'
+}
+/** 描述当前光标落点（容器类型 + 偏移 + 是否为元素边界）。 */
+function describeCaret(root: HTMLElement): string {
+  const sel = window.getSelection()
+  if (!sel || sel.rangeCount === 0) return 'no-selection'
+  const range = sel.getRangeAt(0)
+  if (!root.contains(range.endContainer)) return 'outside'
+  const c = range.endContainer
+  const isText = c.nodeType === Node.TEXT_NODE
+  const tag = isText
+    ? `TEXT("${(c.textContent ?? '').slice(0, 12)}")`
+    : `EL(${(c as HTMLElement).tagName ?? '?'})`
+  return `${tag}@${range.endOffset} boundary=${isText ? 'no' : 'YES'}`
+}
+
+
 /** 输入框变化上报（由内联编辑器触发）。 */
 export interface InlineComposerChange {
   /** 含内联 opaque token 的原始内容（展示用）。 */
@@ -423,6 +458,8 @@ const InlineComposer = React.forwardRef<InlineComposerHandle, InlineComposerProp
   const editorRef = React.useRef<HTMLDivElement | null>(null)
   const tokensRef = React.useRef<ChatComposerToken[]>(tokens)
   const lastEmittedRef = React.useRef<string>(rawContent)
+  /** 是否处于输入法合成中（composition 进行中）。 */
+  const isComposingRef = React.useRef(false)
 
   // 用 ref 持有最新的回调，避免命令式句柄（useImperativeHandle）闭包到旧 props。
   const onChangeRef = React.useRef(onChange)
@@ -445,7 +482,11 @@ const InlineComposer = React.forwardRef<InlineComposerHandle, InlineComposerProp
   React.useEffect(() => {
     const root = editorRef.current
     if (!root) return
-    if (rawContent === lastEmittedRef.current) return
+    if (rawContent === lastEmittedRef.current) {
+      dbg('rebuild-effect: skip (eq) composing=', isComposingRef.current, 'raw=', JSON.stringify(rawContent))
+      return
+    }
+    dbg('rebuild-effect: REBUILD composing=', isComposingRef.current, 'raw=', JSON.stringify(rawContent), 'last=', JSON.stringify(lastEmittedRef.current), 'children=', describeChildren(root))
     root.innerHTML = buildEditorHtml(rawContent, tokens)
     lastEmittedRef.current = rawContent
     updateEmptyState(root, rawContent)
@@ -487,9 +528,28 @@ const InlineComposer = React.forwardRef<InlineComposerHandle, InlineComposerProp
   }, [])
 
   const handleInput = React.useCallback(() => {
+    const root = editorRef.current
+    dbg('input composing=', isComposingRef.current, 'caret=', root ? describeCaret(root) : '-', 'children=', root ? describeChildren(root) : '-')
     emitFromDom()
     reportCaret()
   }, [emitFromDom, reportCaret])
+
+  // 记录用户把光标移动到元素边界的情况（复现「最左侧吞中文」的关键证据）。
+  React.useEffect(() => {
+    if (!IME_DEBUG) return
+    const root = editorRef.current
+    if (!root) return
+    const handler = () => {
+      const sel = window.getSelection()
+      if (!sel || sel.rangeCount === 0) return
+      const range = sel.getRangeAt(0)
+      if (!root.contains(range.endContainer)) return
+      const isBoundary = range.endContainer.nodeType !== Node.TEXT_NODE
+      dbg('selchange composing=', isComposingRef.current, 'caret=', describeCaret(root), isBoundary ? '<<< ELEMENT BOUNDARY' : '')
+    }
+    document.addEventListener('selectionchange', handler)
+    return () => document.removeEventListener('selectionchange', handler)
+  }, [])
 
   /**
    * 粘贴处理：识别剪贴板文本中的 `[[[[...]]]]` opaque 串并还原成胶囊，
@@ -652,6 +712,16 @@ const InlineComposer = React.forwardRef<InlineComposerHandle, InlineComposerProp
       data-placeholder={placeholder ?? ''}
       enterKeyHint="enter"
       onInput={handleInput}
+      onCompositionStart={() => {
+        isComposingRef.current = true
+        const root = editorRef.current
+        dbg('compositionstart caret=', root ? describeCaret(root) : '-', 'children=', root ? describeChildren(root) : '-')
+      }}
+      onCompositionEnd={() => {
+        isComposingRef.current = false
+        const root = editorRef.current
+        dbg('compositionend caret=', root ? describeCaret(root) : '-', 'children=', root ? describeChildren(root) : '-')
+      }}
       onPaste={handlePaste}
       onKeyUp={reportCaret}
       onClick={handleRootClick}
