@@ -68,7 +68,7 @@ export default function AgentListPanel({ agents, filterAgentId, onSelect }: Agen
             )
           })}
         </div>
-        <OverlayScrollbar targetRef={scrollRef} version={agents.length} />
+        <OverlayScrollbar targetRef={scrollRef} version={agents.length} hoverReveal />
       </div>
     </div>
   )
