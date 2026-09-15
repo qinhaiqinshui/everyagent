@@ -348,6 +348,14 @@ RoundIndexAdvisor(轮次索引+耗时,最外层) → SkillAdvisor(skill 渐进�
 - 全局默认:`worker.limits.model-rate.{queue-capacity, wait-timeout-ms, est-window-sec, est-safety-ratio, est-ema-alpha, default-rpm, default-max-concurrency, default-tpm}`。
 - **观测(P2)**:排队等待发瞬态 `task.trace(kind=model_rate_wait)`(前端展示「模型正在排队」);`config.get` 响应带 `rateStatus` 数组(每模型 inFlight/waiters/factor 等运行态)。
 
+### 7.4.2 模型 HTTP 超时语义(callTimeout 解除,流式长思考不限总时长)
+
+**机制**(`ChatModelFactory.build` 经 `httpClientBuilderCustomizer` 挂 `StreamTimeoutReleaseInterceptor`,主/子/池成员/AI 审议全部生效):
+
+- spring-ai 的 `OpenAiChatOptions.timeout(t)` 单值在 openai-java 展开为 `Timeout.request(t)`,最终映射 okhttp **`callTimeout`(整个调用的总时长上限,含流式全程)**;且 `AbstractOpenAiOptions.getTimeout()` 永远非 null(未设时默认 60s),per-request 四分量**每次覆盖** client 级配置,`httpClientBuilderCustomizer.timeout(...)` 无法纠正。reasoning 模型(reasoningEffort=high)单轮长思考可达数十分钟,callTimeout 到点 okhttp 强制断流(IOException)——表象与 provider 粗暴断流一致,且断流时输出量=思考速度×上限时长,常低于 maxTokens 的 80%,`ModelLengthGuardAdvisor` 比例判定不命中,落入瞬时重试死循环(每次重试重放整段长思考,再次到点断流)。
+- 根治:应用拦截器内对每个 call 执行 `chain.call().timeout().clearTimeout()`——okhttp 原生支持运行期解除 call 级总时长,流式响应只要持续有 chunk 即不限总时长;同时剥除 `X-Stainless-Timeout` 请求头(该头携带 callTimeout 秒数,防 provider 按头掐流)。
+- 兜底仍在:静默挂起由 okhttp readTimeout(读间隔上限,openai-java 默认 10 分钟)与 `ModelLengthGuardAdvisor` 的 stall(120s)先后兜住;真网络断连照常抛 IOException 交瞬时重试。`worker.model-timeout-ms` 语义因此调整为「读间隔上限的期望值」(仍写入 options.timeout,构成 per-request connect/read/write 默认分量的参考基准)。
+
 ### 7.5 上下文管理
 
 **双事实源分离**(红线):`Event`(不可变,磁盘 jsonl)是传输/回放/审计的事实源;`conversation: Message[]` 是 LLM 工作态,随运行销毁,再运行时由 ConversationLoader 重建。
