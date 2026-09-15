@@ -46,21 +46,56 @@ function strToBase64(text: string): string {
 }
 
 function themeFor(mode: ThemeMode): ITheme {
-  return mode === 'dark'
-    ? {
-        background: '#0b0d12',
-        foreground: '#eef1f5',
-        cursor: '#eef1f5',
-        selectionBackground: 'rgba(97, 165, 255, 0.3)',
-        selectionForeground: '#ffffff',
-      }
-    : {
-        background: '#ffffff',
-        foreground: '#1a1a1a',
-        cursor: '#333333',
-        selectionBackground: 'rgba(47, 111, 237, 0.25)',
-        selectionForeground: '#000000',
-      }
+  if (mode === 'dark') {
+    return {
+      background: '#0b0d12',
+      foreground: '#eef1f5',
+      cursor: '#eef1f5',
+      selectionBackground: 'rgba(97, 165, 255, 0.3)',
+      selectionForeground: '#ffffff',
+      // ANSI 16 色:与全局深色调色板对齐
+      black: '#0b0d12',
+      red: '#ff6b6b',
+      green: '#41d19c',
+      yellow: '#f7bd54',
+      blue: '#61a5ff',
+      magenta: '#b59cff',
+      cyan: '#5fcfff',
+      white: '#eef1f5',
+      brightBlack: '#6f7a8b',
+      brightRed: '#ff8e8e',
+      brightGreen: '#5fe5b0',
+      brightYellow: '#ffd17a',
+      brightBlue: '#82baff',
+      brightMagenta: '#c9b3ff',
+      brightCyan: '#82dfff',
+      brightWhite: '#ffffff',
+    }
+  }
+  return {
+    background: '#ffffff',
+    foreground: '#1a1a1a',
+    cursor: '#333333',
+    selectionBackground: 'rgba(47, 111, 237, 0.25)',
+    selectionForeground: '#000000',
+    // ANSI 16 色:浅色背景下用饱和度较高的深色,确保可读
+    black: '#000000',
+    red: '#d92d42',
+    green: '#058761',
+    yellow: '#b97912',
+    blue: '#2f6fed',
+    magenta: '#7857d8',
+    cyan: '#0087a7',
+    white: '#1a1a1a',
+    brightBlack: '#666666',
+    brightRed: '#e5484d',
+    brightGreen: '#0a9f70',
+    brightYellow: '#d4900f',
+    brightBlue: '#3b7af0',
+    brightMagenta: '#8567e0',
+    brightCyan: '#0a9bc0',
+    brightWhite: '#000000',
+  }
 }
 
 export default function TerminalPage({ tab }: TerminalPageProps) {
