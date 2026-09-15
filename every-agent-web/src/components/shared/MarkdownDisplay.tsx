@@ -9,12 +9,14 @@ import {
   splitMarkdownTableRow,
   MarkdownTable,
 } from './markdown/sharedMarkdownRenderer'
+import CodeBlock from './markdown/CodeBlock'
 
 export default function MarkdownDisplay({ content }: { content: string }) {
   const lines = normalizeMarkdownContent(content).split('\n')
   const elements: React.ReactNode[] = []
   let paragraphBuffer: string[] = []
   let codeBuffer = ''
+  let codeBlockLanguage: string | undefined
   let inCodeBlock = false
   let sequence = 0
 
@@ -31,11 +33,10 @@ export default function MarkdownDisplay({ content }: { content: string }) {
   const flushCode = () => {
     if (!codeBuffer) return
     elements.push(
-      <pre key={`code-${sequence++}`} style={codeBlockStyle}>
-        <code>{codeBuffer}</code>
-      </pre>,
+      <CodeBlock key={`code-${sequence++}`} code={codeBuffer.replace(/\n$/, '')} language={codeBlockLanguage} variant="display" />,
     )
     codeBuffer = ''
+    codeBlockLanguage = undefined
   }
 
   const flushBlocks = () => {
@@ -52,6 +53,7 @@ export default function MarkdownDisplay({ content }: { content: string }) {
         inCodeBlock = false
       } else {
         inCodeBlock = true
+        codeBlockLanguage = line.slice(3).trim() || undefined
       }
       continue
     }
@@ -347,19 +349,6 @@ const blockquoteStyle: React.CSSProperties = {
   color: 'var(--text-secondary)',
   fontSize: 'var(--text-sm)',
   lineHeight: 1.75,
-}
-
-const codeBlockStyle: React.CSSProperties = {
-  margin: '4px 0',
-  padding: '12px 14px',
-  borderRadius: 'var(--radius-md)',
-  color: 'var(--text-primary)',
-  fontSize: 'var(--text-xs)',
-  lineHeight: 1.7,
-  fontFamily: 'var(--font-mono)',
-  whiteSpace: 'pre-wrap',
-  overflowX: 'auto',
-  border: '1px solid color-mix(in srgb, var(--border-light) 85%, transparent)',
 }
 
 const displayTableStyles = {

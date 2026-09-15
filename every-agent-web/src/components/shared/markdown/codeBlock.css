@@ -1,0 +1,158 @@
+/* ─── Markdown 代码块共享样式(CodeBlock.tsx)───────────────────────────────
+ * 主题色一律映射到项目 CSS 变量(--code-* / --accent-* / --text-*),
+ * 明暗主题切换时自动跟随,无需两套主题文件。
+ * 移动端:正文 white-space:pre + overflow-x:auto,长行横向滚动不撑破容器。 */
+
+.code-block {
+  background: var(--code-bg);
+  color: var(--code-text);
+  border: 1px solid color-mix(in srgb, var(--border-light) 85%, transparent);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  width: 100%;
+  min-width: 0;
+  margin-top: 10px;
+  margin-bottom: 10px;
+}
+
+.code-block__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 12px;
+  background: color-mix(in srgb, var(--bg-tertiary) 55%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--border-light) 70%, transparent);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+}
+
+.code-block__lang {
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-family: var(--font-mono);
+  user-select: none;
+}
+
+.code-block__copy {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  font-family: inherit;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.code-block__copy:hover {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--accent-blue) 14%, transparent);
+}
+
+.code-block__copy:active {
+  background: color-mix(in srgb, var(--accent-blue) 22%, transparent);
+}
+
+.code-block__pre {
+  margin: 0;
+  padding: 12px 14px;
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  line-height: 1.6;
+  white-space: pre;
+  word-break: normal;
+  overflow-wrap: normal;
+  /* 保证高亮 token 颜色不被外层 color 覆盖,统一交给 token 类控制。 */
+  color: var(--code-text);
+}
+
+.code-block--display .code-block__pre {
+  font-size: var(--text-xs);
+  padding: 10px 12px;
+}
+
+.code-block__pre code {
+  font-family: inherit;
+  font-size: inherit;
+  background: transparent;
+  padding: 0;
+}
+
+/* ─── Prism token 主题 → 项目 accent 变量 ─────────────────────────────── */
+
+.code-block .token.comment,
+.code-block .token.prolog,
+.code-block .token.cdata,
+.code-block .token.doctype {
+  color: var(--text-muted);
+}
+
+.code-block .token.keyword,
+.code-block .token.tag,
+.code-block .token.important,
+.code-block .token.atrule,
+.code-block .token.rule {
+  color: var(--accent-purple);
+}
+
+.code-block .token.string,
+.code-block .token.char,
+.code-block .token.attr-value,
+.code-block .token.regex,
+.code-block .token.url {
+  color: var(--accent-green);
+}
+
+.code-block .token.number,
+.code-block .token.boolean,
+.code-block .token.constant,
+.code-block .token.symbol,
+.code-block .token.unit {
+  color: var(--accent-amber);
+}
+
+.code-block .token.function,
+.code-block .token.attr-name,
+.code-block .token.selector,
+.code-block .token.property {
+  color: var(--accent-blue);
+}
+
+.code-block .token.class-name,
+.code-block .token.builtin,
+.code-block .token.maybe-class-name,
+.code-block .token.entity,
+.code-block .token.namespace {
+  color: var(--accent-cyan);
+}
+
+.code-block .token.operator,
+.code-block .token.punctuation,
+.code-block .token.delimiter {
+  color: var(--text-secondary);
+}
+
+.code-block .token.variable,
+.code-block .token.placeholder {
+  color: var(--code-text);
+}
+
+.code-block .token.inserted {
+  color: var(--accent-green);
+}
+
+.code-block .token.deleted {
+  color: var(--accent-red);
+}
+
+.code-block .token.bold {
+  font-weight: 700;
+}
+
+.code-block .token.italic {
+  font-style: italic;
+}
