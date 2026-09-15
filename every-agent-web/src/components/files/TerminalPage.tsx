@@ -228,13 +228,9 @@ export default function TerminalPage({ tab }: TerminalPageProps) {
     })
 
     // 右键菜单(仿 VSCode):有选中文字→复制,无选中→粘贴;菜单含全选/清屏。
-    term.attachCustomKeyEventHandler((event) => {
-      // 阻止浏览器默认右键菜单
-      if (event.type === 'contextmenu') {
-        return false
-      }
-      return true
-    })
+    // 不在 attachCustomKeyEventHandler 中拦截 contextmenu——xterm 收到 contextmenu
+    // 会立即清除选区,导致 handleContextMenu 取不到选中文本。改为由外层 div 的
+    // onContextMenu 事件统一处理(preventDefault 阻止浏览器默认菜单即可)。
 
     // 容器尺寸变化 → fit → resize(节流,避免拖拽窗口时 RPC 风暴)。
     // 仅在 PTY 打开成功后注册,避免 open 尚未完成时 resize RPC 报"会话不存在"
@@ -309,15 +305,14 @@ export default function TerminalPage({ tab }: TerminalPageProps) {
     },
   ]
 
-  // 右键:有选中文字→直接复制(仿 VSCode);无选中→显示菜单(粘贴等)
+  // 右键:有选中文字→直接复制(仿 VSCode,不清除选区让用户可见);
+  // 无选中→显示菜单(粘贴/全选/清屏)
   const handleContextMenu = (e: React.MouseEvent) => {
     e.preventDefault()
-    const term = termRef.current
-    if (!term) return
     const hasSelection = !!getSelectedText()
     if (hasSelection) {
-      // 有选中:复制后清除选区(仿 VSCode)
-      void copySelection().then(() => term.clearSelection())
+      // 有选中:复制(不清除选区,仿 VSCode 行为)
+      void copySelection()
     } else {
       // 无选中:显示菜单
       setMenuOpen(true)
