@@ -751,6 +751,12 @@ function WorkspaceGroupPanel({
           icon: <UploadIcon size={13} />,
           onSelect: () => handleRequestUpload('directory', target),
         },
+        {
+          key: 'open-terminal',
+          label: '在终端中打开',
+          icon: <TerminalIcon size={13} />,
+          onSelect: () => handleRequestOpenTerminal(target),
+        },
       )
     }
     // 显示大小:开启行尾文件大小元信息(默认隐藏),与资源管理器更多菜单的「显示文件大小」同源。
@@ -791,12 +797,6 @@ function WorkspaceGroupPanel({
       label: '下载',
       icon: <DownloadIcon size={13} />,
       onSelect: () => handleRequestDownload(target),
-    })
-    items.push({
-      key: 'open-terminal',
-      label: '在终端中打开',
-      icon: <TerminalIcon size={13} />,
-      onSelect: () => handleRequestOpenTerminal(target),
     })
     items.push({
       key: 'reveal-in-os',
