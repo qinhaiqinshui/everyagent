@@ -23,7 +23,7 @@ import java.util.Map;
  *
  * <p>平台默认 shell:
  * <ul>
- *   <li>Windows:{@code %ComSpec%}(默认 {@code cmd.exe});</li>
+ *   <li>Windows:{@code powershell.exe}(PowerShell 支持跨会话命令历史,PSReadLine 模块自带持久化);</li>
  *   <li>Unix:{@code $SHELL} 或 {@code /bin/sh}。</li>
  * </ul>
  *
@@ -50,7 +50,7 @@ public final class TerminalPtyFactory {
      * @param cols     初始列数({@code >= 1})
      * @param rows     初始行数({@code >= 1})
      * @param shell    shell 路径;{@code null} 按平台默认
-     *                 (Windows: ComSpec/cmd.exe;Unix: $SHELL 或 /bin/sh)
+     *                 (Windows: powershell.exe;Unix: $SHELL 或 /bin/sh)
      * @param extraEnv 额外环境变量;{@code null}=不追加(仍会注入默认 TERM)
      * @return 已打开的 {@link TerminalPty}
      * @throws IOException              cwd 不存在或 PTY 创建失败
@@ -91,10 +91,10 @@ public final class TerminalPtyFactory {
         return new Pty4jTerminalPty(process);
     }
 
-    /** 平台默认 shell 路径。 */
+    /** 平台默认 shell 路径:Windows 用 PowerShell(跨会话命令历史),Unix 用 $SHELL 或 /bin/sh。 */
     private static String defaultShell() {
         if (WINDOWS) {
-            return System.getenv().getOrDefault("ComSpec", "cmd.exe");
+            return "powershell.exe";
         }
         return System.getenv().getOrDefault("SHELL", "/bin/sh");
     }
