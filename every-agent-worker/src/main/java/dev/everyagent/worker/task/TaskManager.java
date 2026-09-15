@@ -277,6 +277,7 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
         dispatcher.register(RpcMethods.TASK_QUEUE_REMOVE, this::rpcTaskQueueRemove);
         dispatcher.register(RpcMethods.TASK_QUEUE_MOVE, this::rpcTaskQueueMove);
         dispatcher.register(RpcMethods.CONFIG_GET, this::rpcConfigGet);
+        dispatcher.register(RpcMethods.CONFIG_RELOAD, this::rpcConfigReload);
     }
 
     /**
@@ -1091,9 +1092,10 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
         asks.cancelTask(t.taskId, "user");
         subs.stopAll(t);
         Future<?> f = t.runFuture;
-        if (f != null) {
-            f.cancel(true);
-        }
+        boolean cancelled = f != null && f.cancel(true);
+        log.debug("[cancel] rpcTaskCancel taskId={} runFutureNull={} cancelled={} futureDone={} interruptFlagNow={} callerThread={}",
+                t.taskId, f == null, cancelled, f != null && f.isDone(),
+                Thread.currentThread().isInterrupted(), Thread.currentThread().getName());
         ctx.ok(Json.obj().put("taskId", t.taskId).put("status", "cancelling"));
     }
 
@@ -1330,6 +1332,21 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
         ctx.ok(out);
     }
 
+    /**
+     * config.reload:重新读取模型配置(架构 §5.10)。
+     * 从 {@code <系统目录>/application-worker.yaml} 重新解析 worker.models,
+     * 成功后广播 config.changed{keys:["models"]} 通知前端刷新。
+     * 仅影响后续新建任务的模型解析;运行中任务使用创建时冻结的快照,不受影响。
+     */
+    private void rpcConfigReload(RpcContext ctx) {
+        int count = configs.reload();
+        // 广播 config.changed 通知前端 modelConfigs 服务自动刷新模型列表。
+        pool.broadcastEvt(Events.CONFIG_CHANGED,
+                Json.toJson(new Events.ConfigChanged(List.of("models"))));
+        log.info("config.reload 完成:模型配置已重新加载,共 {} 条", count);
+        ctx.ok(Json.obj().put("models", count));
+    }
+
     // ---- 终态任务再运行(冷启动;无"续跑"概念,对 agent 就是一次普通运行)----
 
     /**
@@ -1482,6 +1499,8 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
     private void runTask(TaskEntry t, UserInput initialInput, List<Message> priorConversation) {
         AgentEntity main = null;
         try {
+            log.debug("[run] runTask 开始 taskId={} thread={} interruptFlag={}",
+                    t.taskId, Thread.currentThread().getName(), Thread.currentThread().isInterrupted());
             t.startedAt = System.currentTimeMillis();
             setStatus(t, TaskStatus.RUNNING);
             t.events.agentStatus(t.mainAgentId, "running"); // 主 agent 开跑(agent 列表状态机)
@@ -1490,6 +1509,8 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
             consumeInput(t, main, initialInput);
             while (true) {
                 if (Thread.currentThread().isInterrupted()) {
+                    log.debug("[cancel] runTask 循环顶检测到中断标记 taskId={} thread={}",
+                            t.taskId, Thread.currentThread().getName());
                     throw new InterruptedException("cancelled");
                 }
                 // 文件改动收集与收口由 FileChangeAdvisor 承担(每轮 run 前建收集器、流完成时填充
@@ -1497,6 +1518,8 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
                 // (开轮时随行落盘的 startedAt → 当前时间)一并与闭合行内联——经 doOnComplete
                 // 嵌套顺序保证「文件变更先、轮次(含耗时)后」同一次写入。
                 runner.run(main);
+                log.debug("[run] runner.run 正常返回(本轮 agent 完成) taskId={} thread={} interruptFlag={}",
+                        t.taskId, Thread.currentThread().getName(), Thread.currentThread().isInterrupted());
                 UserInput next = t.inputQueue.poll();
                 if (next == null) {
                     // 队列插入兜底:插入事件在收尾轮模型调用期间(advisor 的 before 已过)到达时,
@@ -1512,12 +1535,18 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
                 consumeInput(t, main, next);
                 publishQueue(t); // 消费一条少一条(与 user.message 同拍广播)
             }
+            log.debug("[run] 所有轮次完成,进入收口等待子 agent taskId={} thread={} interruptFlag={}",
+                    t.taskId, Thread.currentThread().getName(), Thread.currentThread().isInterrupted());
             subs.awaitAllBeforeFinish(t); // 收口:自动等待全部子 agent(§5.6)
             if (Thread.currentThread().isInterrupted()) {
+                log.debug("[cancel] awaitAll 后检测到中断标记,转 CANCELLED taskId={}", t.taskId);
                 throw new InterruptedException("cancelled");
             }
+            log.debug("[run] 进入 finish(DONE) taskId={} thread={}", t.taskId, Thread.currentThread().getName());
             finish(t, TaskStatus.DONE, null);
         } catch (InterruptedException e) {
+            log.debug("[cancel] runTask 捕获 InterruptedException → CANCELLED taskId={} thread={} interruptFlag={}",
+                    t.taskId, Thread.currentThread().getName(), Thread.currentThread().isInterrupted());
             // 先收口再恢复中断标记:finish 内 flush / updateMeta 需要文件 I/O,
             // 若带着中断标记进入会立即抛 ClosedByInterruptException,导致终态收口不完整。
             t.stopRequested = true; // 与 rpcTaskCancel 同语义:停止后不再启动新子 agent
@@ -1635,8 +1664,12 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
      */
     private void finish(TaskEntry t, TaskStatus status, String error) {
         if (t.status.terminal()) {
+            log.debug("[finish] 已是终态,跳过 taskId={} 当前status={} 目标status={} thread={}",
+                    t.taskId, t.status, status, Thread.currentThread().getName());
             return;
         }
+        log.debug("[finish] 进入 finish taskId={} status={} error={} thread={}",
+                t.taskId, status, error, Thread.currentThread().getName());
         String workspaceRootToTouch = null;
         synchronized (t) {
             if (t.status.terminal()) {
@@ -1674,6 +1707,8 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
             store.untrack(t.taskId);
             gate.untrack(t.taskId); // 授权内存驱逐(任务级已在 grants.json,再运行 lazy 重载)
             tasks.remove(t.taskId, t); // 两参原子:认领者(并发 rerun/delete)以此判断输赢
+            log.debug("[finish] 任务已移除出内存追踪 taskId={} status={} thread={}",
+                    t.taskId, status, Thread.currentThread().getName());
             workspaceRootToTouch = t.workspaceRoot; // 收口附带:工作区最后活动时间在锁外交给跟踪器
         }
         // 收口附带:刷新该任务挂靠工作区的最后活动时间。放在 synchronized(t) 块之外,

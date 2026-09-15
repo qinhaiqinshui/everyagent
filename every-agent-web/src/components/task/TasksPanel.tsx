@@ -414,22 +414,6 @@ export default function TasksPanel({
         <div style={taskTitleStyle} title={task.displayTitle}>
           {task.displayTitle}
         </div>
-        <span
-          style={{
-            ...statusPillStyle,
-            ...(task.statusTone === 'active'
-              ? activeStatusPillStyle
-              : task.statusTone === 'completed'
-                ? completedStatusPillStyle
-                : task.statusTone === 'stopped'
-                ? stoppedStatusPillStyle
-                : task.statusTone === 'error'
-                ? errorStatusPillStyle
-                : idleStatusPillStyle),
-          }}
-        >
-          {task.statusLabel}
-        </span>
         {!batchActive ? (
           <span style={{ marginLeft: 'auto' }}>
             <ListRowActions
@@ -467,6 +451,22 @@ export default function TasksPanel({
               ? relative
               : formatTaskTime(task.updatedAt)
           })()}
+        </span>
+        <span
+          style={{
+            ...statusPillStyle,
+            ...(task.statusTone === 'active'
+              ? activeStatusPillStyle
+              : task.statusTone === 'completed'
+                ? completedStatusPillStyle
+                : task.statusTone === 'stopped'
+                ? stoppedStatusPillStyle
+                : task.statusTone === 'error'
+                ? errorStatusPillStyle
+                : idleStatusPillStyle),
+          }}
+        >
+          {task.statusLabel}
         </span>
         {task.contextUsage ? (
           <span style={ctxIndicatorStyle}>
@@ -729,7 +729,7 @@ const checkboxStyle: React.CSSProperties = {
 const listStyle: React.CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
-  gap: 8,
+  gap: 6,
   minHeight: 0,
   overflowY: 'auto',
   paddingRight: 2,
@@ -738,8 +738,8 @@ const listStyle: React.CSSProperties = {
 const groupSectionStyle: React.CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
-  gap: 6,
-  padding: '8px 6px',
+  gap: 4,
+  padding: '6px 6px',
   borderRadius: 'var(--radius-md)',
   border: '1px solid var(--border-light)',
   background: 'var(--bg-primary)',
@@ -788,7 +788,7 @@ const groupLabelStyle: React.CSSProperties = {
 const groupTasksStyle: React.CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
-  gap: 6,
+  gap: 3,
 }
 
 const taskCardStyle: React.CSSProperties = {
@@ -803,10 +803,10 @@ const taskCardStyle: React.CSSProperties = {
   borderRadius: 'var(--radius-md)',
   background: 'var(--bg-primary)',
   color: 'var(--text-primary)',
-  padding: '10px 12px',
+  padding: '6px 10px',
   display: 'flex',
   flexDirection: 'column',
-  gap: 8,
+  gap: 3,
 }
 
 const browseTaskCardStyle: React.CSSProperties = {
@@ -854,8 +854,7 @@ const taskCardHeaderStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'flex-start',
   justifyContent: 'space-between',
-  gap: 8,
-  marginBottom: 6,
+  gap: 6,
 }
 
 const taskTitleStyle: React.CSSProperties = {
@@ -896,34 +895,30 @@ const taskMetaStyle: React.CSSProperties = {
 
 const statusPillStyle: React.CSSProperties = {
   borderRadius: 999,
-  padding: '2px 8px',
+  padding: '1px 6px',
   fontSize: 'var(--text-xs)',
-  fontWeight: 700,
+  fontWeight: 400,
   flexShrink: 0,
+  background: 'transparent',
 }
 
 const activeStatusPillStyle: React.CSSProperties = {
-  background: 'var(--accent-blue-dim)',
   color: 'var(--accent-blue)',
 }
 
 const idleStatusPillStyle: React.CSSProperties = {
-  background: 'var(--bg-secondary)',
   color: 'var(--text-muted)',
 }
 
 const completedStatusPillStyle: React.CSSProperties = {
-  background: 'var(--accent-green-dim)',
   color: 'var(--accent-green)',
 }
 
 const stoppedStatusPillStyle: React.CSSProperties = {
-  background: 'color-mix(in srgb, var(--accent-amber) 14%, transparent)',
   color: 'var(--accent-amber)',
 }
 
 const errorStatusPillStyle: React.CSSProperties = {
-  background: 'var(--accent-red-dim)',
   color: 'var(--accent-red)',
 }
 
@@ -953,7 +948,7 @@ const loadMoreLinkStyle: React.CSSProperties = {
   cursor: 'pointer',
   textDecoration: 'none',
   fontSize: 11,
-  fontWeight: 600,
+  fontWeight: 400,
   userSelect: 'none',
   textAlign: 'center',
   padding: '2px 0',

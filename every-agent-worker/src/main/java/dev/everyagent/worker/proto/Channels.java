@@ -33,4 +33,9 @@ public final class Channels {
     public static String taskStream(String k, String taskId) {
         return "u." + k + ".task." + taskId + ".stream";
     }
+
+    /** 内嵌终端实时输出:worker 定向推送(term.output/term.exited);前端 sub/unsub。 */
+    public static String termStream(String k, String termId) {
+        return "u." + k + ".term." + termId + ".stream";
+    }
 }

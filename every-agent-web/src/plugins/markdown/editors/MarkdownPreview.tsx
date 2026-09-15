@@ -14,6 +14,7 @@ import {
   type MarkdownInlineRenderOptions,
   type MarkdownTableAlignment,
   splitMarkdownTableRow,
+  MarkdownTable,
 } from '@/components/shared/markdown/sharedMarkdownRenderer'
 import MarkdownImage from './MarkdownImage'
 
@@ -266,43 +267,14 @@ function renderBlock(block: MarkdownBlock, depth: number, wrapLines: boolean, in
     return renderListItems(block.items, block.ordered, 0, block.key, wrapLines, inlineRenderOptions)
   }
   return (
-    <div key={block.key} style={{ ...tableWrapStyle, marginLeft: blockOffset }}>
-      <table style={tableStyle}>
-        <thead>
-          <tr>
-            {block.headers.map((cell, cellIndex) => (
-              <th
-                key={`${block.key}-th-${cellIndex}`}
-                style={{
-                  ...tableHeaderCellStyle,
-                  textAlign: block.alignments[cellIndex] ?? 'left',
-                }}
-              >
-                {renderMarkdownInline(cell, inlineRenderOptions)}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        {block.rows.length > 0 && (
-          <tbody>
-            {block.rows.map((row, rowIndex) => (
-              <tr key={`${block.key}-tr-${rowIndex}`}>
-                {block.headers.map((_, cellIndex) => (
-                  <td
-                    key={`${block.key}-td-${rowIndex}-${cellIndex}`}
-                    style={{
-                      ...tableBodyCellStyle,
-                      textAlign: block.alignments[cellIndex] ?? 'left',
-                    }}
-                  >
-                    {renderMarkdownInline(row[cellIndex] ?? '', inlineRenderOptions)}
-                  </td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        )}
-      </table>
+    <div key={block.key} style={{ marginLeft: blockOffset }}>
+      <MarkdownTable
+        headers={block.headers}
+        alignments={block.alignments}
+        rows={block.rows}
+        inlineOptions={inlineRenderOptions}
+        styles={previewTableStyles}
+      />
     </div>
   )
 }
@@ -713,43 +685,21 @@ const ulStyle: React.CSSProperties = {
   padding: 0,
 }
 
-const tableWrapStyle: React.CSSProperties = {
-  width: 'max-content',
-  minWidth: '100%',
-  marginTop: 12,
-  marginBottom: 16,
-  border: '1px solid var(--border-light)',
-  borderRadius: 'var(--radius-md)',
-  background: 'var(--bg-primary)',
-}
-
-const tableStyle: React.CSSProperties = {
-  width: '100%',
-  borderCollapse: 'collapse',
-  minWidth: 360,
-}
-
-const tableHeaderCellStyle: React.CSSProperties = {
-  padding: '10px 12px',
-  textAlign: 'left',
-  fontSize: 'var(--text-xs)',
-  fontWeight: 700,
-  color: 'var(--text-primary)',
-  background: 'var(--bg-secondary)',
-  borderBottom: '1px solid var(--border)',
-  whiteSpace: 'nowrap',
-}
-
-const tableBodyCellStyle: React.CSSProperties = {
-  padding: '10px 12px',
-  textAlign: 'left',
-  verticalAlign: 'top',
-  fontSize: 'var(--text-sm)',
-  lineHeight: 1.7,
-  color: 'var(--text-primary)',
-  borderTop: '1px solid var(--border-light)',
-  wordBreak: 'break-word',
-  overflowWrap: 'anywhere',
+const previewTableStyles = {
+  wrap: {
+    marginTop: 12,
+    marginBottom: 16,
+    border: '1px solid var(--border-light)' as const,
+    borderRadius: 'var(--radius-md)',
+    background: 'var(--bg-primary)' as const,
+  },
+  headerCell: {
+    background: 'var(--bg-secondary)' as const,
+    borderBottom: '1px solid var(--border)' as const,
+  },
+  bodyCell: {
+    color: 'var(--text-primary)' as const,
+  },
 }
 
 function buildListItemStyle(wrapLines: boolean): React.CSSProperties {

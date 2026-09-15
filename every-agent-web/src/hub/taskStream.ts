@@ -197,10 +197,11 @@ class ManagedStream {
       settleAsk(askId)
       return
     }
-    // 历史回放(轮询尾段首拉/上滚/重校准,initial=true)的 ask 只登记「待回答」入口,
-    // 不弹卡片/通知——历史 ask 未必仍有效(worker 重启后 PendingAsks 已清空),自动弹窗会误报;
-    // 实时增量轮询的 ask.create/ask.state(pending) 才走完整弹出路径。
-    upsertPendingAsk(this.taskId, payload as WorkerAskPayload, { silent: event.initial ?? false })
+    // 历史回放(initial=true)的 ask.create 静默注册,由 askStore debounce flush 决定是否弹出:
+    // 已完成任务回放时 ask.resolved 紧随其后,flush 前 ask 被 settle → 跳过 emit,悬浮窗不闪;
+    // 运行中任务刷新页面时 50ms 内无新帧 → flush 统一 emit,立即弹出弹窗/悬浮窗。
+    // 实时(非 initial)ask.create 走完整弹出路径。
+    upsertPendingAsk(this.taskId, payload as WorkerAskPayload, { initial: event.initial ?? false })
   }
 
   /**

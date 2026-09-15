@@ -1,6 +1,6 @@
 {
   "name": "every-agent-web",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "private": true,
   "description": "every-agent 前端:n 分支 UI 壳接入 hub 管道(任务/文件树/git)",
   "scripts": {
@@ -11,6 +11,8 @@
   },
   "dependencies": {
     "@ant-design/icons": "^6.3.2",
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/xterm": "^5.5.0",
     "antd": "^6.6.1",
     "jszip": "^3.10.1",
     "react": "^18.2.0",

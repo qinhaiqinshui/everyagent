@@ -160,6 +160,7 @@ wss://hub:9100/ws
 | `u.<K>.worker.<id>.input` | **worker 级输入频道**:`task.input` / `ask.reply` / `stream.ack`(worker 每连接订阅一次,订阅数 O(worker×hub)) | 命名空间内任意角色 |
 | `u.<K>.tasks` | 任务生命周期:`task.created` / `task.updated` / `task.deleted` | 命名空间内任意角色 |
 | `u.<K>.task.<id>.stream` | **运行中任务实时增量**(worker 定向推送,`ext.target=sessionId` 只投该会话) | 命名空间内任意角色 |
+| `u.<K>.term.<termId>.stream` | **内嵌终端实时输出**(worker 定向推送：event `term.output` payload `{data: base64}`；进程退出推 `term.exited`) | 命名空间内任意角色 |
 
 > **stream 订阅通知**:前端 sub/unsub `u.<K>.task.<id>.stream` 时,hub 向该命名空间的在线 worker 连接定向发 `subscriber.join/subscriber.leave`(`payload={sessionId,taskId}`)——这是无状态 fire-and-forget 通知(hub 不存订阅簿),worker 据此按 (sessionId,taskId) 建/销 DataPusher(§7.13)。
 
@@ -224,6 +225,7 @@ worker 端 `RpcDispatcher` 注册方法;应答回**请求来源连接**的 `evt`
 | `workspaces.resolveMissing` | 启动自检缺失工作区落定:action=delete(删除注册并级联任务数据)/redirect(纠正到新目录并迁移任务归属) |
 | `fs.list` / `fs.reveal` / `fs.read` / `fs.write` / `fs.mkdir` / `fs.move` / `fs.delete` / `fs.browse` | 工作区文件操作,**必带 workspace 参数**,沙箱限定;文件树懒加载；`fs.browse`(不经沙箱)列盘符/逐层浏览目录,可选 `includeFiles`(boolean,缺省 false 仅目录,完全兼容现有行为):true 时目录条目同时列出文件,每条目带 `kind:"file"\|"directory"`,响应带 `supportsFiles:true` 能力标记(前端能力探测;老前端不传/老 worker 不带按 must-ignore 双向兼容,§5.6) |
 | `fs.revealInOs` | 在**运行 worker 的宿主机器**上打开系统文件管理器并选中目标(资源树右键「在系统文件管理器中显示」,对标 VSCode Reveal in File Explorer),**必带 workspace 参数**,路径经沙箱 `resolveExisting` 校验(防越界/符号链接逃逸);Windows `explorer.exe /select,<path>`(fire-and-forget,退出码不表征成败)、macOS `open -R`、Linux 优先 freedesktop FileManager1 `ShowItems` 选中目标、无 dbus/无注册实现退化 `xdg-open` 打开所在目录;argv 直传无 shell 解析;无桌面环境(无头 worker/无文件管理器)抛 IO 异常转 RPC 错误;远程访问场景窗口在 worker 所在电脑弹出;老前端不调用零影响 |
+| `term.open` / `term.input` / `term.resize` / `term.close` | Web 内嵌终端会话(§7.18，真 PTY)：`term.open` 必带 `workspace`+`termId`(前端生成,先 sub 频道再 open 防丢首帧)+`path`(目录,沙箱 `resolveExisting` 校验,非目录拒收)+`cols`/`rows`+可选 `shell`，返回 `{termId, pid}`；`term.input` 入参 `{termId, data(base64)}`；`term.resize` 入参 `{termId, cols, rows}`；`term.close` 入参 `{termId}`。输出经 `u.<K>.term.<termId>.stream` 定向推送；老前端不调用零影响，老 worker 无此方法时前端按 must-ignore 降级提示 |
 | `fs.search` | 工作区文本内容搜索(内置 rg,§5.10),**必带 workspace 参数**,沙箱 jailed 到工作区根;入参 `pattern` / `isRegex` / `caseSensitive` / `wholeWord` / `includeGlobs` / `excludeGlobs`(逗号分隔 glob,include 用 `-g '!*' -g glob` 放行、exclude 用 `-g !glob`) / `maxResults`(默认 1000,触顶 kill rg 置 `truncated`);rg 参数 `--hidden --json --crlf -e <pattern>`(固定串加 `--fixed-strings`),逐行解析 JSON lines(`type:match` 的 `submatches` → 命中片段);结果项 `{path, lineNumber, line, matchIndex, matchText}`,按文件聚合;大结果复用 `fs.read` 的 `rpc.data` 分批 + 末帧 `ok` 汇总(§5.4);老前端不调用零影响,老 worker 无此方法时前端按 must-ignore 降级纯前端搜索(§5.6) |
 | `git.status` / `git.log` / `git.diff` / `git.commit` / `git.pull` / `git.push` / `git.discard` / `git.init` / `git.clone` / `git.remote.add` / `git.remote.list` | 工作区 git 快操作,必带 workspace;由 `NativeGit` 调宿主原生 git argv 直传执行(§7.12) |
 | 大型迁移(批量 checkout / 大仓库迁移) | 建为 Task,进度走任务流 |
@@ -320,7 +322,7 @@ RoundIndexAdvisor(轮次索引+耗时,最外层) → SkillAdvisor(skill 渐进�
 
 - 核心事件发射由 `WorkerToolEventAdvisor` 完成(继承 Spring AI `ToolCallingAdvisor`,重写受保护 hook 发射 delta/message/usage/tool 等事件,**不另起一层重复实现递归循环**)。
 - 重试退避算法由 `worker.retry.strategy` 选择,空响应重试与瞬时错误重试共享:`fixed`(默认,固定 `backoff-base-ms` 间隔、`max-request-retries` 默认 30 次,适合网络抖动场景的稳定节奏恢复)或 `exponential`(`base × factor^(n-1)` 递增退避);未知取值回落 `exponential`(旧行为)。
-- `ModelLengthGuardAdvisor`(order=工具循环+300,瞬时重试内侧、上下文压缩外侧):识别「输出预算耗尽」这一确定性失败,三条路径殊途同归报同一错误——①实际收到 `finish_reason=length` 即报错;②流超 `worker.limits.length-stall-ms`(默认 120s,须短于 model-timeout-ms 的 10 分钟)无任何 chunk 且自估输出 token ≈ 配置 maxTokens(无 tokenizer,CJK≈1 token、其余≈4 字符 1 token,20%~40% 容差)时判定等价 length;③provider 在预算耗尽处**粗暴断流**(不发 length 帧、也不静默挂起,客户端表现为 IOException)——流被网络级错误中断且自估输出 ≈ maxTokens 时同样判定等价 length,避免被瞬时重试当作普通网络抖动反复退避、每次重试重新整段长思考再次占满预算(长思考模型一轮可耗数万 token,循环几十分钟)。错误为自定义非重试异常(穿透瞬时重试,避免放大瞬态事件风暴),信息含「精简输入/拆分任务/降低 reasoningEffort/调大 maxTokens」建议,经任务层 error 收口呈现给用户。
+- `ModelLengthGuardAdvisor`(order=工具循环+300,瞬时重试内侧、上下文压缩外侧):识别「输出预算耗尽」这一确定性失败,三条路径殊途同归报同一错误——①实际收到 `finish_reason=length` 即报错;②流超 `worker.limits.length-stall-ms`(默认 120s,须短于 model-timeout-ms 的 10 分钟)无任何 chunk;③provider 在预算耗尽处**粗暴断流**(不发 length 帧、也不静默挂起,客户端表现为 IOException)。②③的「输出已达上限」判定(无 tokenizer,CJK≈1 token、其余≈4 字符 1 token):模型配置了 maxTokens 时用 20%~40% 容差的 ≈maxTokens 比例判定;**未配置 maxTokens 时**(provider 用服务端默认预算,客户端不可见)用绝对阈值兜底——自估输出 ≥ `worker.limits.length-disconnect-min-tokens`(默认 32768)即判定,「断流+已输出数万 token」是预算耗尽强信号,重试代价极高(每次重放整段长思考,长思考模型一轮可耗数万 token、循环几十分钟)。错误为自定义非重试异常(穿透瞬时重试,避免放大瞬态事件风暴),信息含「精简输入/拆分任务/降低 reasoningEffort/调大 maxTokens」建议,经任务层 error 收口呈现给用户。
 - `LoopRepeatGuardAdvisor` 叠加**死循环检测**:比较本轮与上一轮工具调用签名(名称+参数集合,顺序无关),连续重复达 `worker.limits.max-repeated-tool-rounds`(默认 3)即中断任务(error 收口)。
 - `DialogInsertAdvisor`(普通 StreamAdvisor,在主 agent 的工具循环下行阶段)把任务队列「插入到当前对话」的用户消息 drain 并追加给 AI + 发射 `user.message` 事件;子 agent 按 kind==MAIN 旁路(对话是一次性嵌套,不接收任务队列输入)。
 - 主 Agent 与子 Agent **共用同一执行入口与 Advisor 链**,仅 agentId 不同;子 agent 不挂计时与 skill,但同挂上下文压缩。
@@ -345,6 +347,14 @@ RoundIndexAdvisor(轮次索引+耗时,最外层) → SkillAdvisor(skill 渐进�
 - **tpm 记账**:流中无协议级 usage(OpenAI 兼容只在末帧带),故流中用自算文本 token 粗估(CJK≈1、其余≈4 字符 1 token)累计;请求完成后用厂商真实 usage 记账入 60s 窗口,并 EMA 反向校准估算系数(`token-est-factor`,每模型独立,持久化 `~/.everyagent/model-rate-state.json`,重启接续)。
 - 全局默认:`worker.limits.model-rate.{queue-capacity, wait-timeout-ms, est-window-sec, est-safety-ratio, est-ema-alpha, default-rpm, default-max-concurrency, default-tpm}`。
 - **观测(P2)**:排队等待发瞬态 `task.trace(kind=model_rate_wait)`(前端展示「模型正在排队」);`config.get` 响应带 `rateStatus` 数组(每模型 inFlight/waiters/factor 等运行态)。
+
+### 7.4.2 模型 HTTP 超时语义(callTimeout 解除,流式长思考不限总时长)
+
+**机制**(`ChatModelFactory.build` 经 `httpClientBuilderCustomizer` 挂 `StreamTimeoutReleaseInterceptor`,主/子/池成员/AI 审议全部生效):
+
+- spring-ai 的 `OpenAiChatOptions.timeout(t)` 单值在 openai-java 展开为 `Timeout.request(t)`,最终映射 okhttp **`callTimeout`(整个调用的总时长上限,含流式全程)**;且 `AbstractOpenAiOptions.getTimeout()` 永远非 null(未设时默认 60s),per-request 四分量**每次覆盖** client 级配置,`httpClientBuilderCustomizer.timeout(...)` 无法纠正。reasoning 模型(reasoningEffort=high)单轮长思考可达数十分钟,callTimeout 到点 okhttp 强制断流(IOException)——表象与 provider 粗暴断流一致,且断流时输出量=思考速度×上限时长,常低于 maxTokens 的 80%,`ModelLengthGuardAdvisor` 比例判定不命中,落入瞬时重试死循环(每次重试重放整段长思考,再次到点断流)。
+- 根治:应用拦截器内对每个 call 执行 `chain.call().timeout().clearTimeout()`——okhttp 原生支持运行期解除 call 级总时长,流式响应只要持续有 chunk 即不限总时长;同时剥除 `X-Stainless-Timeout` 请求头(该头携带 callTimeout 秒数,防 provider 按头掐流)。
+- 兜底仍在:静默挂起由 okhttp readTimeout(读间隔上限,openai-java 默认 10 分钟)与 `ModelLengthGuardAdvisor` 的 stall(120s)先后兜住;真网络断连照常抛 IOException 交瞬时重试。`worker.model-timeout-ms` 语义因此调整为「读间隔上限的期望值」(仍写入 options.timeout,构成 per-request connect/read/write 默认分量的参考基准)。
 
 ### 7.5 上下文管理
 
@@ -687,6 +697,17 @@ Input:  queued → consumed | discarded(任务取消)
 **启动自检(工作区被移动/删除)**:worker 启动时校验 `workspaces/workspaces.json` 载入的已注册目录,缺失者(用户移动/删除目录后重启)在注册表快照标记 `missing`并广播,前端弹窗要求二选一——`workspaces.resolveMissing {action:"delete"}` 删除注册并**直接删 `workspaces/<wsId>/` 整个目录(任务数据随删)**,或 `{action:"redirect",newRoot}` 纠正到移动后的新目录——**保留 `id`、只改 `root` 并迁移挂靠任务的 `meta.workspace`,任务目录不搬**;默认工作区不可删除、只可纠正(纠正后的根直接写回 `workspaces.json` 中 id=defaultworkspace 条目的 `root`,重启读回,不再需要 `workspace-default.json` 覆盖文件)。未落定的缺失工作区 `resolve` 拒绝,避免沙箱挂载失败或静默新建空目录掩盖数据丢失。
 
 **skill 只读例外**:系统目录 `skills/` 是 AI 文件工具对系统路径的**唯一只读免授权**例外——`read_file` 经权限责任链节点 `SkillsReadAllowCheck` 直接放行(realpath 前缀判定);**任何写操作不在此放行,仍走授权决议链**;其余系统路径(workspaces/、sandbox/、runtime/ 等)与普通工作区外目录同权,一律走授权决议(弹窗/AI 审议)。`skills/` 同时只读挂入 wsl 系列沙箱(§7.10:wsl-direct drvfs `-o ro`、wsl-bwrap `--ro-bind`),bash 工具在沙箱内同样只读可达,写经 OS 层拒;windows-mic 后端跑在宿主,Medium IL 读写用户文件本就放行,无需挂载。
+
+### 7.18 内嵌终端(term.*)
+
+文件树目录右键「在终端中打开」→ 前端主区开 xterm.js 内嵌终端标签页,worker 用**真 PTY** 拉起交互式 shell,cwd 为右键目录;输出经频道推送、输入走 RPC(§5.5)。
+
+- **PTY 实现**:Windows 用 ConPTY(`CreatePseudoConsole`/`ResizePseudoConsole`/`ClosePseudoConsole` + `InitializeProcThreadAttributeList`/`UpdateProcThreadAttribute` + `STARTUPINFOEX`/`PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE`),经 `Win32Ex` 同款「扩展平台接口再 `Native.load`」范式补齐(jna-platform 5.16 已在 worker 依赖树,经已有 JNA 依赖,零新增);Unix/macOS 用 libc `openpty`(或 `posix_openpt`+`grantpt`+`unlockpt`+`ptsname`)经 JNA。**非本平台实现类不加载**(跨平台编译安全降级,仿 `WindowsSandbox`)。
+- **shell 选择与 cwd**:Windows 取 `ComSpec`/`cmd.exe`,Unix 取 `$SHELL`/`/bin/sh`;cwd 由 `workspace`+`path` 经沙箱 `resolveExisting` 解析且必为目录(与 `fs.*` 同级权限,不额外提权);argv 直传无 shell 解析。
+- **双向传输**:worker 起**虚拟线程**读 PTY 输出并 `pubForOwner` 定向推送到 `u.<K>.term.<termId>.stream`(event `term.output`,payload `{data: base64}`;进程退出推 `term.exited`);输入/尺寸/关闭走 `term.input`/`term.resize`/`term.close` RPC。hub 零状态只路由,不存会话、不存订阅簿。
+- **会话生命周期**:存 worker 内存 `ConcurrentHashMap<termId, 会话>`;进程退出或 `term.close` 回收;worker 重启会话即失效;不实现跨前端重载续接(前端标签状态本就不持久化)。
+- **前端契约**:termId 由前端生成,**先 sub 频道再 `term.open`** 避免丢首帧;xterm `onData` → `term.input`(base64);ResizeObserver/FitAddon → `term.resize`;标签关闭 → `term.close`。
+- **平台降级**:无 PTY 能力/无桌面环境的平台抛 IO 异常转 RPC 错误,前端 toast 提示,不影响其他功能。
 
 ---
 

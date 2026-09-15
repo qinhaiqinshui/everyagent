@@ -5,9 +5,9 @@
     <parent>
         <groupId>dev.everyagent</groupId>
         <artifactId>every-agent-parent</artifactId>
-        <version>0.5.0</version>
+        <version>0.6.0</version>
     </parent>
-    <version>0.5.0</version>
+    <version>0.6.0</version>
     <artifactId>every-agent-worker</artifactId>
     <name>every-agent-worker</name>
     <description>worker 执行器:托管任务运行时、workspace、模型配置(9200 仅本地管理)</description>
@@ -37,6 +37,12 @@
             <groupId>net.java.dev.jna</groupId>
             <artifactId>jna-platform</artifactId>
             <version>5.16.0</version>
+        </dependency>
+        <!-- 内嵌终端 PTY 引擎(§7.18):JetBrains pty4j,自带全部平台原生库(Linux .so / macOS .dylib / Windows .dll) -->
+        <dependency>
+            <groupId>org.jetbrains.pty4j</groupId>
+            <artifactId>pty4j</artifactId>
+            <version>0.13.10</version>
         </dependency>
         <dependency>
             <groupId>dev.everyagent</groupId>
@@ -87,7 +93,7 @@
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
                 <configuration>
-                    <argLine>--add-opens java.base/sun.misc=ALL-UNNAMED --add-opens java.base/java.lang=ALL-UNNAMED --add-opens java.base/java.lang.reflect=ALL-UNNAMED</argLine>
+                    <argLine>-Xmx1g -Xms256m -XX:TieredStopAtLevel=1 -XX:CICompilerCount=2 -XX:ReservedCodeCacheSize=64m -XX:CompressedClassSpaceSize=128m -Xss512k --add-opens java.base/sun.misc=ALL-UNNAMED --add-opens java.base/java.lang=ALL-UNNAMED --add-opens java.base/java.lang.reflect=ALL-UNNAMED</argLine>
                 </configuration>
             </plugin>
         </plugins>

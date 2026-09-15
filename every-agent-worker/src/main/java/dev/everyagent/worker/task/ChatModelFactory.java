@@ -113,7 +113,12 @@ public class ChatModelFactory {
             TaskEvents events) {
         ChatModel raw = OpenAiChatModel.builder()
                 .options(options)
-                .httpClientBuilderCustomizer(b -> b.interceptor(new HttpRequestLoggingInterceptor(agentId)))
+                .httpClientBuilderCustomizer(b -> b
+                        // 打印真实请求体(含 skill 渐进式披露索引等 advisor 注入后的完整报文)
+                        .interceptor(new HttpRequestLoggingInterceptor(agentId))
+                        // 解除 okhttp callTimeout 总时长上限(§7.4.2):流式长思考不限总时长,
+                        // 静默由 readTimeout + ModelLengthGuardAdvisor stall 兜底。
+                        .interceptor(StreamTimeoutReleaseInterceptor.INSTANCE))
                 .build();
         Optional<ModelRateLimiter> limiter = rateLimiterRegistry.of(
                 cfg.snapshot().configId(), cfg.snapshot().params());
@@ -136,9 +141,10 @@ public class ChatModelFactory {
                 // TransientErrorRetryAdvisor 负责(退避/日志/次数更可控),避免双层重试叠加、
                 // 以及同一请求在 HTTP 层重复打印(每次重试都是一次新请求)。
                 .maxRetries(0)
-                // spring-ai OpenAiChatOptions 默认 timeout=60s(AbstractOpenAiOptions.DEFAULT_TIMEOUT),
-                // 对 reasoning 模型(深度思考期间长时间无 chunk)过短,会被 okhttp 超时主动 CANCEL 流
-                // (StreamResetException: stream was reset: CANCEL);覆盖为 worker.model-timeout-ms(默认 10 分钟)。
+                // spring-ai OpenAiChatOptions 默认 timeout=60s(AbstractOpenAiOptions.DEFAULT_TIMEOUT)。
+                // 注意:该单值在 openai-java 映射为 okhttp callTimeout(调用总时长上限,§7.4.2),
+                // 已由 StreamTimeoutReleaseInterceptor 对流式解除;此处保留 worker.model-timeout-ms
+                // 作为读间隔超时的期望基准(reasoning 模型深度思考期间 chunk 间隔可能较长)。
                 .timeout(Duration.ofMillis(props.getModelTimeoutMs()));
         JsonNode params = cfg.snapshot().params();
         if (params != null && params.isObject()) {

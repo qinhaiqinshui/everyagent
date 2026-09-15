@@ -23,6 +23,8 @@ public final class RpcMethods {
     /** 移动(重排)某条队列输入(参数 taskId, fromIndex, toIndex)。 */
     public static final String TASK_QUEUE_MOVE = "task.queueMove";
     public static final String CONFIG_GET = "config.get";
+    /** 重新读取模型配置(重新解析 worker.models,应用用户在外部 YAML 中的修改)。 */
+    public static final String CONFIG_RELOAD = "config.reload";
     public static final String WORKSPACES_LIST = "workspaces.list";
     public static final String WORKSPACES_ADD = "workspaces.add";
     public static final String WORKSPACES_REMOVE = "workspaces.remove";
@@ -42,6 +44,17 @@ public final class RpcMethods {
     public static final String FS_DELETE = "fs.delete";
     /** 浏览目录(方案 B:列盘符/根,再逐层列子目录;不经 workspace 沙箱,依赖 worker 进程权限)。 */
     public static final String FS_BROWSE = "fs.browse";
+
+    // ---- 内嵌终端(§7.18) ----
+
+    /** 打开终端会话:workspace+termId+path+cols+rows+可选 shell,返回 {termId, pid}。 */
+    public static final String TERM_OPEN = "term.open";
+    /** 写入终端:termId+data(base64)。 */
+    public static final String TERM_INPUT = "term.input";
+    /** 调整终端尺寸:termId+cols+rows。 */
+    public static final String TERM_RESIZE = "term.resize";
+    /** 关闭终端会话:termId。 */
+    public static final String TERM_CLOSE = "term.close";
     /** 工作区文本内容搜索(内置 rg,架构 §5.10):jailed 到工作区根,JSON lines 解析为
      * 结构化结果;大结果复用 fs.read 的 rpc.data 分批 + 末帧 ok 汇总。 */
     public static final String FS_SEARCH = "fs.search";

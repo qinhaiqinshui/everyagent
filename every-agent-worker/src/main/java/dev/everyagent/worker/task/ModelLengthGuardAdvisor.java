@@ -37,16 +37,19 @@ import java.util.concurrent.atomic.AtomicReference;
  * <p>职责(单一):识别「输出量已达上限但未完成」这一<b>确定性</b>失败——\r
  * <ol>\r
  *   <li>实际收到 {@code finish_reason=length} → 报 {@link ModelLengthExhaustedException};</li>\r
- *   <li>流长时间无输出(超 {@code worker.limits.length-stall-ms})且本 advisor 自行估算的\r
- *       累计输出 token ≈ 配置 maxTokens → 判定等价于 finish_reason=length,报同一错误,\r
- *       避免空等 10 分钟读超时;</li>\r
- *   <li>provider 在预算耗尽处<b>粗暴断流</b>(不发 length 帧、也不静默挂起,长思考 chunk\r
- *       持续到达后以 IOException 瞬时中断)——流被网络级错误中断且自估输出 ≈ maxTokens\r
- *       时同样判定等价 length,报同一错误;否则该错误会被外层瞬时重试当作普通网络抖动\r
- *       退避重跑,每次重试重新整段长思考再次占满预算、再次断流,循环几十分钟。</li>\r
- * </ol>\r
- * 错误为自定义非重试异常(非 OpenAIServiceException/IO/超时),外层瞬时错误重试不会\r
- * 重复退避;错误信息给足调整建议(精简输入/拆分任务/降低 reasoningEffort/调大 maxTokens)。\r
+ *   <li>流长时间无输出(超 {@code worker.limits.length-stall-ms})且自估累计输出已达上限
+ *       → 判定等价于 finish_reason=length,报同一错误,避免空等 10 分钟读超时;</li>
+ *   <li>provider 在预算耗尽处<b>粗暴断流</b>(不发 length 帧、也不静默挂起,长思考 chunk
+ *       持续到达后以 IOException 瞬时中断)——流被网络级错误中断且自估输出已达上限时同样
+ *       判定等价 length,报同一错误;否则该错误会被外层瞬时重试当作普通网络抖动退避重跑,
+ *       每次重试重新整段长思考再次占满预算、再次断流,循环几十分钟。</li>
+ * </ol>
+ * ②③的「输出已达上限」判定:配置了 maxTokens 时用比例(80%~140% 容差);<b>未配置
+ * maxTokens</b>(provider 按服务端默认预算截断,客户端不可见)时用绝对阈值
+ * {@code worker.limits.length-disconnect-min-tokens} 兜底——「断流/停滞 + 已输出数万
+ * token」是预算耗尽的强信号,快速收口优于高代价重放。
+ * 错误为自定义非重试异常(非 OpenAIServiceException/IO/超时),外层瞬时错误重试不会
+ * 重复退避;错误信息给足调整建议(精简输入/拆分任务/降低 reasoningEffort/调大 maxTokens)。
  *
  * <p>位置:order = {@link ToolCallingAdvisor#DEFAULT_ORDER} + 300,位于瞬时错误重试
  * (+200)内侧、上下文压缩(+400)外侧——紧贴模型流,能逐 chunk 看到原始输出;其抛出的
@@ -123,7 +126,7 @@ public class ModelLengthGuardAdvisor implements CallAdvisor, StreamAdvisor {
             if (stallMs > 0) {
                 flux = flux.timeout(Duration.ofMillis(stallMs));
             }
-            // 流中断统一收口:stall 超时或网络级错误断流且自估输出已≈maxTokens → 判定等价
+            // 流中断统一收口:stall 超时或网络级错误断流且自估输出已达上限 → 判定等价
             // finish_reason=length。第三条路径兜底「provider 在输出预算耗尽处粗暴断流」(不发
             // length 帧、也不静默挂起,长思考 chunk 持续到达后以 IOException 瞬时中断):若不在此
             // 收口,该错误会被外层瞬时重试当作普通网络抖动退避重跑——每次重试重新整段长思考
@@ -135,16 +138,17 @@ public class ModelLengthGuardAdvisor implements CallAdvisor, StreamAdvisor {
                 }
                 long think = tokensOf(thinkCjk, thinkOther);
                 long text = tokensOf(textCjk, textOther);
-                if (maxTokens != null && nearMax(think + text, maxTokens)) {
+                if (reachedOutputLimit(think + text, maxTokens)) {
+                    String basis = lengthBasis(think + text, maxTokens);
                     if (stall) {
-                        log.warn("任务 {} agent {} 流 {}ms 无输出且自估输出 {} tokens≈maxTokens {}，"
+                        log.warn("任务 {} agent {} 流 {}ms 无输出且自估输出 {} tokens已达上限({}),"
                                         + "判定 finish_reason=length",
-                                a.task.taskId, a.agentId, stallMs, think + text, maxTokens);
+                                a.task.taskId, a.agentId, stallMs, think + text, basis);
                     } else {
-                        log.warn("任务 {} agent {} 流被网络级错误中断({}: {})且自估输出 {} tokens≈maxTokens {}，"
+                        log.warn("任务 {} agent {} 流被网络级错误中断({}: {})且自估输出 {} tokens已达上限({}),"
                                         + "判定 finish_reason=length",
                                 a.task.taskId, a.agentId, e.getClass().getSimpleName(),
-                                e.getMessage(), think + text, maxTokens);
+                                e.getMessage(), think + text, basis);
                     }
                     return Flux.error(lengthExhausted(think, text, maxTokens,
                             stall ? Cause.STALL : Cause.DISCONNECTED));
@@ -228,6 +232,32 @@ public class ModelLengthGuardAdvisor implements CallAdvisor, StreamAdvisor {
         long low = maxTokens * NEAR_MAX_LOW_NUM / NEAR_MAX_LOW_DEN;
         long high = maxTokens * NEAR_MAX_HIGH_NUM / NEAR_MAX_HIGH_DEN;
         return tokens >= low && tokens <= high;
+    }
+
+    /**
+     * 「输出已达上限」统一判定(stall/断流收口共用):
+     * <ul>
+     *   <li>模型配置了 maxTokens → {@link #nearMax}(比例判定,80%~140% 容差);</li>
+     *   <li>未配置 maxTokens(provider 按服务端默认预算截断,客户端不可见)→ 绝对阈值
+     *       {@code worker.limits.length-disconnect-min-tokens} 兜底:「断流/停滞 + 已输出
+     *       数万 token」是预算耗尽的强信号,且此类波次重试代价极高(每次重放整段长思考),
+     *       快速收口优于反复退避。</li>
+     * </ul>
+     */
+    private boolean reachedOutputLimit(long tokens, Integer maxTokens) {
+        if (maxTokens != null && maxTokens > 0) {
+            return nearMax(tokens, maxTokens);
+        }
+        long min = props.getLimits().getLengthDisconnectMinTokens();
+        return min > 0 && tokens >= min;
+    }
+
+    /** 判定依据描述(供日志/错误信息区分「≈maxTokens」与「绝对阈值兜底」两种口径)。 */
+    private String lengthBasis(long tokens, Integer maxTokens) {
+        if (maxTokens != null && maxTokens > 0) {
+            return "≈maxTokens " + maxTokens;
+        }
+        return "未配置 maxTokens,≥兜底阈值 " + props.getLimits().getLengthDisconnectMinTokens();
     }
 
     private static Integer maxTokensOf(ChatClientRequest request) {

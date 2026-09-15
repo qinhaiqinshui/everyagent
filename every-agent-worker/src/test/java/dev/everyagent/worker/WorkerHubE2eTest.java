@@ -49,6 +49,9 @@ class WorkerHubE2eTest {
     /** 默认工作区(workspace-root 同值,task.run/fs 必填 workspace 参数)。 */
     private static final java.nio.file.Path WS =
             java.nio.file.Path.of("target/test-ws-e2e").toAbsolutePath().normalize();
+    /** 系统目录(每次运行唯一,@AfterAll 统一清理)。 */
+    private static final java.nio.file.Path HOME_DIR = TestCleanup.register(
+            java.nio.file.Path.of("target/test-home-e2e-" + System.nanoTime()).toAbsolutePath().normalize());
 
     static ConfigurableApplicationContext hubApp;
     static int hubPort;
@@ -70,6 +73,7 @@ class WorkerHubE2eTest {
         if (hubApp != null) {
             hubApp.close();
         }
+        TestCleanup.deleteAll();
     }
 
     @TestConfiguration(proxyBeanMethods = false)
@@ -96,7 +100,7 @@ class WorkerHubE2eTest {
         r.add("worker.hub-initial-backoff-ms", () -> "100");
         r.add("worker.hub-max-backoff-ms", () -> "300");
         // 系统目录每次运行唯一:models.json 不落真实用户主目录,持久化工作区选择也不跨运行串状态
-        r.add("worker.home-dir", () -> "target/test-home-e2e-" + System.nanoTime());
+        r.add("worker.home-dir", () -> HOME_DIR.toString());
         r.add("worker.workspace-root", () -> "target/test-ws-e2e");
     }
 

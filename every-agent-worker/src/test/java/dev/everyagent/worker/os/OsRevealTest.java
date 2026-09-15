@@ -1,5 +1,7 @@
 package dev.everyagent.worker.os;
 
+import dev.everyagent.worker.TestCleanup;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
@@ -45,7 +47,7 @@ class OsRevealTest {
         // 子进程阻塞在 read 上,waitFor 必超时失败(回归 stdin 重定向语义)。
         String src = "public class P { public static void main(String[] a) throws Exception {"
                 + "System.exit(System.in.read() == -1 ? 0 : 1);} }";
-        Path dir = Path.of("target", "osreveal-test");
+        Path dir = TestCleanup.register(Path.of("target", "osreveal-test"));
         java.nio.file.Files.createDirectories(dir);
         Path file = dir.resolve("P.java");
         java.nio.file.Files.writeString(file, src);
@@ -59,5 +61,10 @@ class OsRevealTest {
         // 拉起不存在的命令应报 IOException(而非 RuntimeException),供 RPC 层转错误应答。
         assertThrows(IOException.class,
                 () -> OsReveal.start(List.of("definitely-no-such-cmd-everyagent")));
+    }
+
+    @AfterAll
+    static void cleanupDirs() {
+        TestCleanup.deleteAll();
     }
 }

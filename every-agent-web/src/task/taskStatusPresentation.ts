@@ -12,9 +12,9 @@ export function formatTaskStatus(status: TaskStatus): string {
     case 'running':
       return '运行中'
     case 'completed':
-      return '已完成'
+      return '完成'
     case 'stopped':
-      return '已停止'
+      return '停止'
     case 'error':
       return '错误'
     default:

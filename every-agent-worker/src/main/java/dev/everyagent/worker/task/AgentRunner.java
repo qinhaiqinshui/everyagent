@@ -2,6 +2,8 @@ package dev.everyagent.worker.task;
 
 import dev.everyagent.worker.AgentClientFactory;
 import dev.everyagent.worker.skill.SkillAdvisor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.Prompt;
@@ -28,6 +30,8 @@ import java.util.concurrent.TimeUnit;
  */
 @Component
 public class AgentRunner {
+
+    private static final Logger log = LoggerFactory.getLogger(AgentRunner.class);
 
     private final AgentClientFactory clientFactory;
     private final SkillAdvisor skillAdvisor;
@@ -63,7 +67,21 @@ public class AgentRunner {
         java.util.concurrent.atomic.AtomicReference<Throwable> error =
                 new java.util.concurrent.atomic.AtomicReference<>();
         Disposable[] holder = new Disposable[1];
-        holder[0] = cc.prompt(prompt).stream().chatClientResponse().subscribe(
+        log.debug("[run] 订阅模型流 agentId={} kind={} taskId={} vtThread={}",
+                a.agentId, a.kind, a.task.taskId, Thread.currentThread().getName());
+        holder[0] = cc.prompt(prompt).stream().chatClientResponse()
+                // 生命周期诊断:观察 flux 终态信号与执行线程,确认 dispose/中断后流是否真的结束。
+                .doOnSubscribe(s -> log.debug("[flux] onSubscribe agentId={} thread={}",
+                        a.agentId, Thread.currentThread().getName()))
+                .doOnComplete(() -> log.debug("[flux] onComplete agentId={} thread={}",
+                        a.agentId, Thread.currentThread().getName()))
+                .doOnError(e -> log.debug("[flux] onError agentId={} thread={} err={}",
+                        a.agentId, Thread.currentThread().getName(), e.toString()))
+                .doOnCancel(() -> log.debug("[flux] onCancel agentId={} thread={}",
+                        a.agentId, Thread.currentThread().getName()))
+                .doFinally(sig -> log.debug("[flux] doFinally agentId={} signal={} thread={}",
+                        a.agentId, sig, Thread.currentThread().getName()))
+                .subscribe(
                 r -> {
                     // 响应经 advisor 链内部处理(工具循环递归);事件已在 WorkerToolEventAdvisor 发。
                     // 聚合后的最终轮 ChatClientResponse 在此可忽略——终态由 flux 完成判定。
@@ -71,15 +89,35 @@ public class AgentRunner {
                 e -> {
                     error.compareAndSet(null, e);
                     done.countDown();
+                    log.debug("[flux] subscriber onError→latch agentId={} err={}", a.agentId, e.toString());
                 },
-                done::countDown);
+                () -> {
+                    done.countDown();
+                    log.debug("[flux] subscriber onComplete→latch agentId={}", a.agentId);
+                });
 
-        while (!done.await(100, TimeUnit.MILLISECONDS)) {
-            if (Thread.currentThread().isInterrupted()) {
-                holder[0].dispose();
-                throw new InterruptedException("流式输出被取消");
+        try {
+            while (!done.await(100, TimeUnit.MILLISECONDS)) {
+                if (Thread.currentThread().isInterrupted()) {
+                    log.debug("[cancel] 轮询检测到中断标记 agentId={} holderNull={} thread={}",
+                            a.agentId, holder[0] == null, Thread.currentThread().getName());
+                    throw new InterruptedException("流式输出被取消");
+                }
             }
+        } catch (InterruptedException awaitEx) {
+            // 关键修复:无论中断是从 await 抛出还是从轮询检测到,都必须 dispose 掉
+            // reactive 订阅链。否则 Future.cancel(true) 只中断了等 latch 的虚拟线程,
+            // 而 flux 实际跑在 boundedElastic/reactor 线程上——订阅链未取消 →
+            // 工具循环继续执行(bash/模型调用),事件继续向后端/前端泄漏,
+            // 直到模型自然结束。表现为"点停止后任务显示已取消,过一会又收到消息"。
+            if (holder[0] != null) {
+                holder[0].dispose();
+                log.debug("[cancel] 已 dispose reactive 订阅链 agentId={} thread={}",
+                        a.agentId, Thread.currentThread().getName());
+            }
+            throw awaitEx;
         }
+        log.debug("[run] 模型流自然结束 agentId={} thread={}", a.agentId, Thread.currentThread().getName());
         Throwable t = error.get();
         if (t != null) {
             if (t instanceof InterruptedException ie) {

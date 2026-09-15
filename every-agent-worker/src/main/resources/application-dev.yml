@@ -17,3 +17,13 @@ spring:
   # application-worker.yaml 须在这里再引入一次;${worker.home-dir} 取本文件上面的 dev 值。
   config:
     import: optional:file:${worker.home-dir}/application-worker.yaml
+
+# 取消/停止链路诊断日志(临时排查"停止后不立即停止、后台继续运行"问题):
+# 观察 AgentRunner 的 flux 生命周期(dispose 是否生效)、TaskManager 的 cancel/runTask/finish
+# 收口、SubAgentManager 的子 agent 级联停止。排查完成后可调回 INFO。
+logging:
+  level:
+    dev.everyagent.worker.task.AgentRunner: debug
+    dev.everyagent.worker.task.TaskManager: debug
+    dev.everyagent.worker.task.SubAgentManager: debug
+    dev.everyagent.worker.task.WorkerToolEventAdvisor: debug
