@@ -83,6 +83,9 @@ public final class TerminalPtyFactory {
                 .setInitialRows(rows)
                 .setConsole(false)
                 .setRedirectErrorStream(true)
+                // Windows:优先使用 ConPTY(Win10+ 原生),失败自动 fallback winpty;
+                // 不设则直接走 winpty,在新版 Windows 上可能不兼容。
+                .setUseWinConPty(true)
                 .start();
 
         return new Pty4jTerminalPty(process);

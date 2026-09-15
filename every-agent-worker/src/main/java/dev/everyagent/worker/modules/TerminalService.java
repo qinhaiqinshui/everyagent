@@ -98,7 +98,19 @@ public class TerminalService implements HubPool.Listener {
             throw new BadParamsException("cols/rows 必须 >= 1 (got cols=" + cols + ", rows=" + rows + ")");
         }
 
-        TerminalPty pty = TerminalPtyFactory.open(cwd, cols, rows, shell, null);
+        TerminalPty pty;
+        try {
+            pty = TerminalPtyFactory.open(cwd, cols, rows, shell, null);
+        } catch (IOException e) {
+            // PTY 创建失败:把根因透传给前端(而非笼统的 "Couldn't create PTY"),
+            // 便于排查(如 ConPTY/winpty 原生库加载失败、shell 路径不存在等)。
+            String cause = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
+            Throwable root = e.getCause();
+            if (root != null && root.getMessage() != null) {
+                cause += " → " + root.getMessage();
+            }
+            throw new IOException("创建终端失败: " + cause, e);
+        }
 
         String ownerKey = ctx.ownerKey();
         long pid = pty.pid();
