@@ -26,6 +26,8 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * 内嵌终端会话管理(架构 §7.18):term.open/input/resize/close 四个 RPC 方法,
@@ -52,6 +54,11 @@ public class TerminalService implements HubPool.Listener {
 
     private static final Logger log = LoggerFactory.getLogger(TerminalService.class);
 
+    /** 空闲超时:30 分钟无数据交换(输入或输出)自动回收终端会话,防孤儿进程。 */
+    static final long IDLE_TIMEOUT_MS = TimeUnit.MINUTES.toMillis(30);
+    /** 空闲回收扫描间隔:5 分钟。 */
+    private static final long IDLE_CHECK_INTERVAL_MS = TimeUnit.MINUTES.toMillis(5);
+
     /** 会话表:termId → TerminalSession(内存态,worker 进程退出即销毁)。 */
     private final ConcurrentHashMap<String, TerminalSession> sessions = new ConcurrentHashMap<>();
 
@@ -74,6 +81,48 @@ public class TerminalService implements HubPool.Listener {
     @PostConstruct
     void init() {
         pool.addListener(this);
+        // 空闲回收虚拟线程:定期扫描超时会话,close PTY + 推 term.exited。
+        Thread.startVirtualThread(this::idleReaperLoop);
+    }
+
+    private volatile boolean stopping = false;
+
+    /**
+     * 空闲回收循环:每 {@link #IDLE_CHECK_INTERVAL_MS} 扫描一次会话表,
+     * 若某会话 {@link TerminalSession#lastActivityAt} 距今超过 {@link #IDLE_TIMEOUT_MS},
+     * 则回收该会话并推送 term.exited(reason=idle_timeout) 通知前端。
+     */
+    private void idleReaperLoop() {
+        while (!stopping) {
+            try {
+                Thread.sleep(IDLE_CHECK_INTERVAL_MS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+            long now = System.currentTimeMillis();
+            for (String termId : new ArrayList<>(sessions.keySet())) {
+                TerminalSession session = sessions.get(termId);
+                if (session == null) continue;
+                long idleMs = now - session.lastActivityAt.get();
+                if (idleMs > IDLE_TIMEOUT_MS) {
+                    log.info("空闲超时回收终端会话: termId={}, idleMs={}ms (超 {}ms)",
+                            termId, idleMs, IDLE_TIMEOUT_MS);
+                    // 推送 term.exited 通知前端
+                    String channel = Channels.termStream(session.ownerKey, termId);
+                    ObjectNode exitPayload = Json.obj()
+                            .put("termId", termId)
+                            .put("reason", "idle_timeout");
+                    try {
+                        pool.pubForOwner(session.ownerKey, channel, "term.exited",
+                                null, exitPayload, null);
+                    } catch (Exception e) {
+                        log.warn("推送 term.exited(idle_timeout) 失败: termId={}", termId, e);
+                    }
+                    closeSession(termId);
+                }
+            }
+        }
     }
 
     // ---- RPC 方法实现 ----
@@ -144,6 +193,7 @@ public class TerminalService implements HubPool.Listener {
             throw new BadParamsException("data 不是合法 base64");
         }
         session.pty.write(bytes);
+        session.touch();
         ctx.ok(Json.obj());
     }
 
@@ -265,6 +315,7 @@ public class TerminalService implements HubPool.Listener {
      */
     @PreDestroy
     void destroy() {
+        stopping = true;
         for (String termId : new ArrayList<>(sessions.keySet())) {
             log.info("worker 关闭回收终端会话: termId={}", termId);
             closeSession(termId);
@@ -305,6 +356,7 @@ public class TerminalService implements HubPool.Listener {
                         .put("termId", termId)
                         .put("data", enc.encodeToString(chunk));
                 pool.pubForOwner(ownerKey, channel, "term.output", null, payload, null);
+                session.touch();
             }
         } catch (IOException e) {
             log.debug("PTY 读循环 IO 异常: termId={}", termId, e);
@@ -343,6 +395,8 @@ public class TerminalService implements HubPool.Listener {
         final String workerId;
         final HubLink conn;
         final long pid;
+        /** 最后活动时间(输入或输出),用于空闲超时回收。 */
+        final AtomicLong lastActivityAt;
 
         TerminalSession(TerminalPty pty, String termId, String ownerKey, String workerId,
                 HubLink conn, long pid) {
@@ -352,6 +406,12 @@ public class TerminalService implements HubPool.Listener {
             this.workerId = workerId;
             this.conn = conn;
             this.pid = pid;
+            this.lastActivityAt = new AtomicLong(System.currentTimeMillis());
+        }
+
+        /** 更新最后活动时间(输入写入或输出读取时调用)。 */
+        void touch() {
+            lastActivityAt.set(System.currentTimeMillis());
         }
     }
 }
