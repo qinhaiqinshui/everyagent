@@ -26,7 +26,7 @@ export const terminalTabType: UiWorkspaceTabTypeDefinition = {
   },
   renderIcon: () => <TerminalIcon size={15} />,
   getLabel: (tab: WorkspaceTab) =>
-    (tab.tabType === 'terminal' ? (tab.title || `终端: ${tab.name || '工作区'}`) : ''),
+    (tab.tabType === 'terminal' ? (tab.name || '终端') : ''),
   getTitle: (tab: WorkspaceTab) => (tab.tabType === 'terminal' ? tab.path : ''),
   getCloseAriaLabel: (tab: WorkspaceTab) =>
     (tab.tabType === 'terminal' ? `关闭终端 ${tab.name}` : '关闭终端标签'),

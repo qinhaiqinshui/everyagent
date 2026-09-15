@@ -531,7 +531,7 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
       workerId: input.workerId,
       path: input.path,
       name: input.name,
-      title: `终端: ${input.name}`,
+      title: input.name,
     }
     openWorkspaceTab(nextTab)
     return nextTab.id
