@@ -98,14 +98,18 @@ export default function TerminalPage({ tab }: TerminalPageProps) {
     const fitAddon = new FitAddon()
     term.loadAddon(fitAddon)
     term.open(container)
-    // 容器可能尚未完成布局,下一帧再 fit 一次。
-    requestAnimationFrame(() => {
-      try {
-        fitAddon.fit()
-      } catch {
-        // 忽略:容器尺寸为 0 时 fit 抛异常
-      }
-    })
+    // 先同步 fit 得到容器实际尺寸,再用实际 cols/rows 打开 PTY;
+    // 否则 worker 用 80×24 输出但 xterm 已被 fit 改成实际尺寸,行宽不匹配
+    // 会导致光标与输入内容错位(内容在光标上方好多行)。
+    let actualCols = 80
+    let actualRows = 24
+    try {
+      fitAddon.fit()
+      actualCols = term.cols
+      actualRows = term.rows
+    } catch {
+      // 忽略:容器尺寸为 0 时 fit 抛异常,用默认 80×24
+    }
 
     // 先 sub 频道再 open,避免 worker 在 term.open 后立即推送的首帧丢失。
     client.sub(channel)
@@ -152,9 +156,9 @@ export default function TerminalPage({ tab }: TerminalPageProps) {
     })
     resizeObserver.observe(container)
 
-    // 打开 PTY
+    // 打开 PTY(用 fit 后的实际尺寸,避免行宽不匹配)
     void terminalGateway
-      .open(tab.workspaceRoot, termId, tab.path, term.cols, term.rows)
+      .open(tab.workspaceRoot, termId, tab.path, actualCols, actualRows)
       .catch((err) => {
         const msg = err instanceof Error ? err.message : String(err)
         term.write(`\r\n\x1b[31m[终端打开失败: ${msg}]\x1b[0m\r\n`)
