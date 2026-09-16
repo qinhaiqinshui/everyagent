@@ -14,6 +14,7 @@ import dev.everyagent.worker.rpc.SandboxViolationException;
 import dev.everyagent.worker.task.TaskEntry;
 import tools.jackson.databind.node.ObjectNode;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
@@ -58,6 +59,8 @@ public class FsToolSupport {
         this(workspaces, props, pool, gate, null);
     }
 
+    // 双构造器须显式指定注入用哪个,否则 Spring 无法抉择回退找无参构造(测试用 4 参重载)
+    @Autowired
     public FsToolSupport(WorkspaceManager workspaces, WorkerProperties props, HubPool pool,
             PermissionGate gate, OsSandbox osSandbox) {
         this.workspaces = workspaces;
