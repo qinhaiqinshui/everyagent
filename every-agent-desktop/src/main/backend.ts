@@ -31,12 +31,10 @@ export interface BackendHandles {
    * 前端建连/发 RPC 必须使用这个真实值,否则 cmd 频道名对不上,RPC 被 hub 丢弃。
    */
   workerId: string
-  /** 优雅停止:先 worker 后 hub,超时强杀;外部进程(null)跳过。 */
-  stop: () => Promise<void>
   /**
    * 全部停止:对所有 hub/worker(含外部进程)发送 POST /admin/shutdown,触发 Spring 优雅关闭。
-   * desktop 自己启动的进程:HTTP shutdown 超时后 child.kill() 兜底。
-   * 外部进程:HTTP shutdown 超时只记日志(不按端口强杀)。
+   * desktop 自己启动的进程:HTTP shutdown 后等 child exit,超时 child.kill() 兜底。
+   * 外部进程:HTTP shutdown 后轮询 /health 等待退出,超时只记日志(不按端口强杀)。
    */
   stopAll: () => Promise<void>
 }
@@ -212,7 +210,7 @@ function spawnJava(
 
 /**
  * 向 /admin/shutdown 发送 POST 请求,触发 Spring Boot 优雅关闭。
- * 返回后等待端口变为不可达(进程退出),最多等 waitMs。
+ * 用于外部进程(desktop 无 child 句柄):发送后轮询 /health 等待端口变为不可达,最多等 waitMs。
  */
 async function shutdownViaHttp(
   port: number,
@@ -230,7 +228,6 @@ async function shutdownViaHttp(
     })
     if (res.ok) {
       log(`外部 ${label}:已发送 shutdown 指令,等待进程退出...`)
-      // 等待端口变为不可达
       const deadline = Date.now() + waitMs
       while (Date.now() < deadline) {
         try {
@@ -249,9 +246,54 @@ async function shutdownViaHttp(
       log(`外部 ${label}:shutdown 返回 HTTP ${res.status}`)
     }
   } catch (error) {
-    // 连接被拒说明进程已经不在了
     log(`外部 ${label}:shutdown 请求失败(可能已停止): ${(error as Error).message}`)
   }
+}
+
+/**
+ * 对 desktop 自己启动的子进程:发送 HTTP shutdown 后等待 child 自然退出(不轮询 /health——
+ * Spring 优雅关闭期间 /health 可能持续 200 直到 context 完全关闭,轮询会白等)。
+ * 超时后 child.kill('SIGKILL') 兜底。
+ */
+async function shutdownChild(
+  child: ChildProcess,
+  port: number,
+  adminKey: string,
+  label: string,
+  log: StatusFn,
+  waitMs: number,
+): Promise<void> {
+  // 已退出则跳过
+  if (child.exitCode !== null || child.killed) {
+    log(`${label}:进程已退出`)
+    return
+  }
+  // 发送 HTTP shutdown
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/admin/shutdown`, {
+      method: 'POST',
+      headers: { 'X-Admin-Key': adminKey },
+      signal: AbortSignal.timeout(5000),
+    })
+    if (res.ok) {
+      log(`${label}:已发送 shutdown 指令,等待进程优雅退出...`)
+    } else if (res.status === 401) {
+      log(`${label}:shutdown 认证失败,直接 kill`)
+    } else {
+      log(`${label}:shutdown 返回 HTTP ${res.status},直接 kill`)
+    }
+  } catch (error) {
+    log(`${label}:shutdown 请求失败: ${(error as Error).message},直接 kill`)
+  }
+  // 等待 child 自然退出,超时强杀
+  await new Promise<void>((resolve) => {
+    if (child.exitCode !== null || child.killed) return resolve()
+    const timer = setTimeout(() => {
+      try { child.kill('SIGKILL') } catch { /* ignore */ }
+    }, waitMs)
+    child.once('exit', () => { clearTimeout(timer); resolve() })
+  })
+  log(`${label}:进程已退出`)
 }
 
 export async function startBackend(
@@ -387,68 +429,25 @@ export async function startBackend(
     )
   }
 
-  // 优雅停止:只停 desktop 自己启动的进程;外部进程(null)跳过。
-  const stop = async (): Promise<void> => {
-    if (worker) {
-      log('停止 worker...')
-      await stopProcess(worker, 8000)
-    } else {
-      log('worker 为外部进程,跳过停止')
-    }
-    if (hub) {
-      log('停止 hub...')
-      await stopProcess(hub, 5000)
-    } else {
-      log('hub 为外部进程,跳过停止')
-    }
-  }
   // 全部停止:对所有 hub/worker 发送 HTTP shutdown 触发 Spring 优雅关闭。
-  // desktop 自己启动的进程:HTTP shutdown 超时后 child.kill() 兜底。
-  // 外部进程:HTTP shutdown 超时只记日志(不按端口强杀,避免误杀)。
+  // desktop 自己启动的进程:HTTP shutdown 后等 child 自然退出(不轮询 /health),超时 kill。
+  // 外部进程:HTTP shutdown 后轮询 /health 等待退出,超时只记日志(不按端口强杀)。
   const stopAll = async (): Promise<void> => {
     // 先停 worker 再停 hub(worker 先断开 hub 连接)
     if (worker) {
       log('停止 worker(HTTP shutdown + 兜底 kill)...')
-      await shutdownViaHttp(cfg.workerPort, cfg.workerApiKey, 'worker', log, 8000)
-      await stopProcess(worker, 3000)
+      await shutdownChild(worker, cfg.workerPort, cfg.workerApiKey, 'worker', log, 8000)
     } else {
       log('停止外部 worker(HTTP shutdown)...')
       await shutdownViaHttp(cfg.workerPort, cfg.workerApiKey, 'worker', log, 8000)
     }
     if (hub) {
       log('停止 hub(HTTP shutdown + 兜底 kill)...')
-      await shutdownViaHttp(cfg.hubPort, cfg.hubKey, 'hub', log, 5000)
-      await stopProcess(hub, 3000)
+      await shutdownChild(hub, cfg.hubPort, cfg.hubKey, 'hub', log, 5000)
     } else {
       log('停止外部 hub(HTTP shutdown)...')
       await shutdownViaHttp(cfg.hubPort, cfg.hubKey, 'hub', log, 5000)
     }
   }
-  return { hub, worker, workerId: actualWorkerId, stop, stopAll }
-}
-
-function stopProcess(child: ChildProcess, graceMs: number): Promise<void> {
-  return new Promise((resolve) => {
-    if (!child || child.exitCode !== null || child.killed) return resolve()
-    const timer = setTimeout(() => {
-      try {
-        child.kill('SIGKILL')
-      } catch {
-        /* ignore */
-      }
-    }, graceMs)
-    child.once('exit', () => {
-      clearTimeout(timer)
-      resolve()
-    })
-    try {
-      // 注意:Node 在 Windows 上 child.kill('SIGTERM') 实际走 TerminateProcess(硬杀),
-      // 不会触发 Spring Boot 的 @PreDestroy 优雅停机;worker 的磁盘写入本就是 fire-and-forget
-      // 增量落盘,硬杀至多损失极少量未 flush 的尾事件,重开时由磁盘冷启动重建。可接受。
-      child.kill('SIGTERM')
-    } catch {
-      clearTimeout(timer)
-      resolve()
-    }
-  })
+  return { hub, worker, workerId: actualWorkerId, stopAll }
 }

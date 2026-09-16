@@ -89,7 +89,7 @@ public class WebConfig {
                         }
                         applicationContext.close();
                     }, "hub-shutdown");
-                    t.setDaemon(true);
+                    t.setDaemon(false);
                     t.start();
                     return ok().bodyValue(Map.of("status", "shutting down"));
                 });
