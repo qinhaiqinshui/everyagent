@@ -172,9 +172,10 @@ export class HubClient {
       ws.onclose = () => {
         clearTimeout(failTimer);
         this.ws = null;
-        // 页面隐藏(切后台/锁屏)期间的断开:iOS 上 JS 定时器已被冻结,RPC 即使
-        // 超时也无人处理——按挂起语义冻结在途请求,等 pageshow/visibilitychange
-        // 恢复时统一重连 + 重放,而不是 failPending 让错误在解冻瞬间集中冒出。
+        // 页面隐藏(切后台/锁屏)期间的断开:iOS Safari / Chrome freeze 会冻结 JS
+        // 定时器,RPC 即使超时也无人处理——按挂起语义冻结在途请求,等 pageshow /
+        // visibilitychange 恢复时统一重连 + 重放,而不是 failPending 让错误在解冻
+        // 瞬间集中冒出。电脑黑屏时 onclose 可能也是 freeze 期间首批解冻的事件。
         if (this.suspended || this.isPageHidden()) {
           this.freezePending();
           this.suspended = true;
@@ -439,13 +440,34 @@ export class HubClient {
     this.setState('reconnecting');
   }
 
-  /** 恢复:强制重建全新连接(不信任任何残留 socket),welcome 后重放挂起请求。 */
+  /**
+   * 恢复:强制重建全新连接(不信任任何残留 socket),welcome 后重放挂起请求。
+   *
+   * 无条件重连——不依赖 suspended 标志:电脑黑屏 freeze 期间 onclose 和 pageshow
+   * 的派发顺序不确定(可能 onclose 先 → suspended=true → pageshow → resume 正常;
+   * 也可能 pageshow 先 → suspended 仍 false → resume no-op → 连接永远不重建)。
+   * 只要页面回到前台(visible)且连接不在 open,就强制重连。
+   */
   private resume(): void {
     if (this.manualClose) return;
-    if (!this.suspended) return;
     this.suspended = false;
+    // 已连接/首次连接未建立(idle)时无需强制重连。
+    // connecting:页面首次加载时 pageshow 事件(persisted=false)也会触发 resume,
+    // 此时初始连接正在进行,不应强制关闭在途 WebSocket 并重建。
+    // 真正的挂起恢复——页面曾切到后台时 suspend() 已把状态置为 'reconnecting',
+    // 不会停留在 'connecting'。
+    if (this.stateValue === 'open' || this.stateValue === 'idle' || this.stateValue === 'connecting') return;
+    // 已有重连定时器在跑(正常网络断线重连):让它继续,不要打乱退避节奏。
+    // 但若连接已断且无定时器(freeze 后 onclose 没走 scheduleReconnect 的情况),
+    // 立即触发一次重连。
+    if (this.reconnectTimer) return;
+    // 清掉可能残留的僵尸 socket(挂起期间 onclose 可能没触发,ws 引用还在)
+    if (this.ws) {
+      try { this.ws.close() } catch {}
+      this.ws = null;
+    }
     void this.connect().catch(() => {
-      // 恢复瞬间网络可能尚未就绪(iOS 解锁后 Wi-Fi/蜂窝需要数百毫秒重连):
+      // 恢复瞬间网络可能尚未就绪(解锁后 Wi-Fi/蜂窝需要数百毫秒重连):
       // 显式兜底重连,退避由 scheduleReconnect 负责(已有重连定时器时为空操作)。
       if (!this.manualClose && this.stateValue !== 'open') {
         this.scheduleReconnect();
