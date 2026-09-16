@@ -227,14 +227,14 @@ const variantStyles: Record<MarkdownVariant, {
     heading: previewHeadingStyles,
   },
   display: {
-    paragraph: { ...baseParagraphStyle, fontSize: 'var(--text-sm)', lineHeight: 1.7, color: 'var(--text-secondary)' },
-    blockquote: { ...baseBlockquoteStyle, margin: '4px 0', color: 'var(--text-secondary)', fontSize: 'var(--text-sm)', lineHeight: 1.75 },
+    paragraph: { ...baseParagraphStyle, fontSize: 'var(--text-sm)', lineHeight: 1.5, color: 'var(--text-secondary)' },
+    blockquote: { ...baseBlockquoteStyle, margin: '4px 0', color: 'var(--text-secondary)', fontSize: 'var(--text-sm)', lineHeight: 1.5 },
     list: { margin: '2px 0 4px', padding: 0, paddingLeft: '1.6em', listStyleType: 'disc' },
-    listItem: { fontSize: 'var(--text-sm)', lineHeight: 1.6, color: 'var(--text-secondary)', marginBottom: 2 },
+    listItem: { fontSize: 'var(--text-sm)', lineHeight: 1.5, color: 'var(--text-secondary)', marginBottom: 2 },
     tableWrap: { ...baseTableWrapStyle, margin: '6px 0', background: 'color-mix(in srgb, var(--bg-tertiary) 48%, transparent)', borderColor: 'color-mix(in srgb, var(--border-light) 85%, transparent)' },
     table: { ...baseTableStyle, background: 'color-mix(in srgb, var(--bg-tertiary) 48%, transparent)' },
     th: { ...baseThStyle, lineHeight: 1.6, color: 'var(--text-primary)', background: 'color-mix(in srgb, var(--bg-tertiary) 82%, transparent)', borderBottomColor: 'var(--border-light)' },
-    td: { ...baseTdStyle, lineHeight: 1.75, color: 'var(--text-secondary)', borderTopColor: 'color-mix(in srgb, var(--border-light) 78%, transparent)' },
+    td: { ...baseTdStyle, lineHeight: 1.6, color: 'var(--text-secondary)', borderTopColor: 'color-mix(in srgb, var(--border-light) 78%, transparent)' },
     hr: { ...baseHrStyle, margin: '8px 0' },
     code: { padding: '1px 5px', borderRadius: 5, color: 'var(--text-primary)', fontSize: 'var(--text-xs)', fontFamily: 'var(--font-mono)', border: '1px solid color-mix(in srgb, var(--border-light) 80%, transparent)' },
     strong: { fontWeight: 700, color: 'var(--text-primary)' },
@@ -246,10 +246,17 @@ const variantStyles: Record<MarkdownVariant, {
 
 type IntrinsicProps<Tag extends keyof JSX.IntrinsicElements> = JSX.IntrinsicElements[Tag] & ExtraProps
 
+/** 从 react-markdown 传入的 props 中剥离 node，避免泄漏到 DOM 属性。 */
+function stripNode<T extends object>(props: T): Omit<T, 'node'> {
+  const { node, ...rest } = props as Record<string, unknown>
+  void node
+  return rest as Omit<T, 'node'>
+}
+
 function buildWrapStyle(wrapLines: boolean | undefined): React.CSSProperties {
   return wrapLines === false
     ? { whiteSpace: 'pre', wordBreak: 'normal', overflowWrap: 'normal' }
-    : { whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflowWrap: 'anywhere' }
+    : { whiteSpace: 'normal', wordBreak: 'break-word', overflowWrap: 'anywhere' }
 }
 
 export function buildMarkdownComponents(options: MarkdownComponentOptions): Components {
@@ -258,7 +265,10 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
   const wrap = buildWrapStyle(wrapLines)
 
   const makeHeading = (level: number) => {
-    const Heading = ({ node, children, ...rest }: IntrinsicProps<'h1'>) => {
+    const Heading = (props: IntrinsicProps<'h1'>) => {
+      const { children } = props
+      const { node } = props
+      const rest = stripNode(props)
       const line = node?.position?.start?.line
       const id = line != null ? resolveHeadingId?.(line - 1) : undefined
       return React.createElement(
@@ -300,17 +310,27 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
     )
   }
 
-  const Th = ({ node, children, align, ...rest }: IntrinsicProps<'th'>) => (
-    <th {...rest} style={{ ...s.th, textAlign: (align ?? node?.properties?.align) as React.CSSProperties['textAlign'] }}>
-      {children}
-    </th>
-  )
+  const Th = (props: IntrinsicProps<'th'>) => {
+    const { children, align, node } = props
+    const rest = stripNode(props)
+    delete rest.align
+    return (
+      <th {...rest} style={{ ...s.th, textAlign: (align ?? node?.properties?.align) as React.CSSProperties['textAlign'] }}>
+        {children}
+      </th>
+    )
+  }
 
-  const Td = ({ node, children, align, ...rest }: IntrinsicProps<'td'>) => (
-    <td {...rest} style={{ ...s.td, textAlign: (align ?? node?.properties?.align) as React.CSSProperties['textAlign'] }}>
-      {children}
-    </td>
-  )
+  const Td = (props: IntrinsicProps<'td'>) => {
+    const { children, align, node } = props
+    const rest = stripNode(props)
+    delete rest.align
+    return (
+      <td {...rest} style={{ ...s.td, textAlign: (align ?? node?.properties?.align) as React.CSSProperties['textAlign'] }}>
+        {children}
+      </td>
+    )
+  }
 
   const components: Components = {
     h1: makeHeading(1),
@@ -319,24 +339,33 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
     h4: makeHeading(4),
     h5: makeHeading(5),
     h6: makeHeading(6),
-    p: ({ children, ...rest }: IntrinsicProps<'p'>) => (
-      <p {...rest} style={{ ...s.paragraph, ...wrap }}>{children}</p>
-    ),
-    blockquote: ({ children, ...rest }: IntrinsicProps<'blockquote'>) => (
-      <blockquote {...rest} style={{ ...s.blockquote, ...wrap }}>{children}</blockquote>
-    ),
-    ul: ({ children, ...rest }: IntrinsicProps<'ul'>) => (
-      <ul {...rest} style={s.list}>{children}</ul>
-    ),
-    ol: ({ children, ...rest }: IntrinsicProps<'ol'>) => (
-      <ol {...rest} style={{ ...s.list, listStyleType: 'decimal' }}>{children}</ol>
-    ),
-    li: ({ children, className, ...rest }: IntrinsicProps<'li'>) => {
+    p: (props: IntrinsicProps<'p'>) => {
+      const { children } = props
+      const rest = stripNode(props)
+      return <p {...rest} style={{ ...s.paragraph, ...wrap }}>{children}</p>
+    },
+    blockquote: (props: IntrinsicProps<'blockquote'>) => {
+      const { children } = props
+      const rest = stripNode(props)
+      return <blockquote {...rest} style={{ ...s.blockquote, ...wrap }}>{children}</blockquote>
+    },
+    ul: (props: IntrinsicProps<'ul'>) => {
+      const { children } = props
+      const rest = stripNode(props)
+      return <ul {...rest} style={s.list}>{children}</ul>
+    },
+    ol: (props: IntrinsicProps<'ol'>) => {
+      const { children } = props
+      const rest = stripNode(props)
+      return <ol {...rest} style={{ ...s.list, listStyleType: 'decimal' }}>{children}</ol>
+    },
+    li: (props: IntrinsicProps<'li'>) => {
+      const { children, className } = props
+      const rest = stripNode(props)
       const isTaskItem = typeof className === 'string' && className.includes('task-list-item')
       return (
         <li
           {...rest}
-          className={className}
           style={{ ...s.listItem, ...wrap, ...(isTaskItem ? { listStyleType: 'none', paddingLeft: 0 } : null) }}
         >
           {children}
@@ -344,20 +373,31 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
       )
     },
     pre: PreBlock,
-    code: ({ children, ...rest }: IntrinsicProps<'code'>) => (
-      <code {...rest} style={s.code}>{children}</code>
-    ),
+    code: (props: IntrinsicProps<'code'>) => {
+      const { children } = props
+      const rest = stripNode(props)
+      return <code {...rest} style={s.code}>{children}</code>
+    },
     table: TableBlock,
     th: Th,
     td: Td,
-    hr: ({ ...rest }: IntrinsicProps<'hr'>) => <hr {...rest} style={s.hr} />,
-    a: ({ children, href, ...rest }: IntrinsicProps<'a'>) => (
-      <a {...rest} href={href} target="_blank" rel="noopener noreferrer nofollow" style={baseLinkStyle}>{children}</a>
-    ),
-    strong: ({ children, ...rest }: IntrinsicProps<'strong'>) => (
-      <strong {...rest} style={s.strong}>{children}</strong>
-    ),
-    img: ({ src, alt, ...rest }: IntrinsicProps<'img'>) => {
+    hr: (props: IntrinsicProps<'hr'>) => {
+      const rest = stripNode(props)
+      return <hr {...rest} style={s.hr} />
+    },
+    a: (props: IntrinsicProps<'a'>) => {
+      const { children, href } = props
+      const rest = stripNode(props)
+      return <a {...rest} href={href} target="_blank" rel="noopener noreferrer nofollow" style={baseLinkStyle}>{children}</a>
+    },
+    strong: (props: IntrinsicProps<'strong'>) => {
+      const { children } = props
+      const rest = stripNode(props)
+      return <strong {...rest} style={s.strong}>{children}</strong>
+    },
+    img: (props: IntrinsicProps<'img'>) => {
+      const { src, alt } = props
+      const rest = stripNode(props)
       if (renderImage && typeof src === 'string') {
         return <>{renderImage(src, alt ?? '')}</>
       }
