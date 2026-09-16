@@ -88,6 +88,106 @@ const editorTheme = EditorView.theme({
     border: 'none',
     background: 'transparent',
   },
+
+  /* ─── 搜索面板（.cm-panel.cm-search）项目风格覆写 ───────────────────
+   * CM6 内置搜索面板用裸 input + button + label 堆叠，视觉零定制。
+   * 这里把它改造成项目风格：flex 行布局、圆角胶囊按钮、紧凑间距、
+   * 输入框/按钮尺寸与 FindInFileBar 已删除前一致，移动端友好。 */
+  '.cm-panel.cm-search': {
+    padding: '6px 10px',
+    display: 'flex',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: '4px',
+    position: 'relative',
+    backgroundColor: 'var(--bg-tertiary)',
+    borderBottom: '1px solid var(--border-light)',
+  },
+  /* 搜索/替换输入框 */
+  '.cm-panel.cm-search .cm-textfield': {
+    flex: '1',
+    minWidth: '120px',
+    maxWidth: '300px',
+    backgroundColor: 'var(--bg-primary)',
+    color: 'var(--text-primary)',
+    border: '1px solid var(--border)',
+    borderRadius: 'var(--radius-sm, 4px)',
+    padding: '3px 8px',
+    fontSize: 'var(--text-sm, 13px)',
+    outline: 'none',
+    margin: '0',
+  },
+  '.cm-panel.cm-search .cm-textfield:focus': {
+    borderColor: 'color-mix(in srgb, var(--accent-blue) 50%, var(--border))',
+  },
+  /* 操作按钮：next / prev / all / replace / replaceAll */
+  '.cm-panel.cm-search .cm-button': {
+    backgroundColor: 'var(--bg-secondary)',
+    color: 'var(--text-secondary)',
+    border: '1px solid var(--border)',
+    borderRadius: '999px',
+    padding: '2px 10px',
+    fontSize: 'var(--text-xs, 12px)',
+    fontWeight: 500,
+    cursor: 'pointer',
+    whiteSpace: 'nowrap',
+    margin: '0',
+    lineHeight: '1.6',
+  },
+  '.cm-panel.cm-search .cm-button:hover': {
+    color: 'var(--text-primary)',
+    background: 'color-mix(in srgb, var(--accent-blue) 12%, var(--bg-secondary))',
+  },
+  '.cm-panel.cm-search .cm-button:active': {
+    background: 'color-mix(in srgb, var(--accent-blue) 20%, var(--bg-secondary))',
+  },
+  /* 关闭按钮 */
+  '.cm-panel.cm-search button[name="close"]': {
+    position: 'absolute',
+    top: '4px',
+    right: '6px',
+    border: 'none',
+    background: 'transparent',
+    color: 'var(--text-muted)',
+    fontSize: '16px',
+    lineHeight: 1,
+    padding: '2px 4px',
+    cursor: 'pointer',
+    borderRadius: 'var(--radius-sm, 4px)',
+    margin: '0',
+    width: 'auto',
+    height: 'auto',
+  },
+  '.cm-panel.cm-search button[name="close"]:hover': {
+    color: 'var(--text-primary)',
+    background: 'color-mix(in srgb, var(--accent-blue) 14%, transparent)',
+  },
+  /* 复选框 + 标签 */
+  '.cm-panel.cm-search label': {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '2px',
+    fontSize: 'var(--text-xs, 12px)',
+    color: 'var(--text-muted)',
+    whiteSpace: 'nowrap',
+    margin: '0',
+    cursor: 'pointer',
+    userSelect: 'none',
+  },
+  '.cm-panel.cm-search label:hover': {
+    color: 'var(--text-secondary)',
+  },
+  '.cm-panel.cm-search input[type="checkbox"]': {
+    margin: '0',
+    cursor: 'pointer',
+    width: '14px',
+    height: '14px',
+    accentColor: 'var(--accent-blue)',
+  },
+  /* <br> 分隔符（替换行）不占额外空间 */
+  '.cm-panel.cm-search br': {
+    display: 'none',
+  },
   '.cm-searchMatch': {
     backgroundColor: 'var(--accent-amber-dim)',
     borderRadius: '2px',
