@@ -88,7 +88,7 @@
 
 /* ─── Prism token 主题 → 项目 accent 变量 ───────────────────────────────
  * 以 .prism-tokens 为共享 scope,Markdown 代码块(CodeBlock)与
- * 代码文件编辑器(CodeFileEditor)均挂该 class,token 配色一致、主题自动跟随。 */
+ * 代码文件编辑器(UniversalFileEditor)均挂该 class,token 配色一致、主题自动跟随。 */
 
 .prism-tokens .token.comment,
 .prism-tokens .token.prolog,
