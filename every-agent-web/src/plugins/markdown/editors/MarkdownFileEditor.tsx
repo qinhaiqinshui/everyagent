@@ -23,9 +23,6 @@ function MarkdownFileEditor({
   onDraftChange,
   onHeaderActionsChange,
   onRequestEditMode,
-  findRegex,
-  findActiveIndex,
-  findEnabled,
 }: FileContentEditorProps) {
   const [showOutline, setShowOutline] = React.useState(false)
   const { isMobile } = useResponsiveViewport()
@@ -251,9 +248,6 @@ function MarkdownFileEditor({
             lineLocateRequestedAt={lineLocateRequestedAt}
             onLineLocateApplied={onLineLocateApplied}
             onViewModeChange={setViewMode}
-            findRegex={findRegex}
-            findActiveIndex={findActiveIndex}
-            findEnabled={findEnabled}
             workspaceRoot={markdownPreviewContext.workspaceRoot}
             baseDir={markdownPreviewContext.baseDir}
           />

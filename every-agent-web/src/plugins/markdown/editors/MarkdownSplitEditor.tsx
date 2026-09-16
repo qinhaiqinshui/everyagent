@@ -1,5 +1,6 @@
 import React from 'react'
-import LineNumberedSourceView from '@/components/shared/LineNumberedSourceView'
+import CodeMirrorEditor from '@/components/shared/CodeMirrorEditor'
+import { markdown } from '@codemirror/lang-markdown'
 import MarkdownPreview, { type MarkdownPreviewHandle } from './MarkdownPreview'
 import ScrollEdgeToggleFab from '@/components/shared/ScrollEdgeToggleFab'
 
@@ -8,6 +9,9 @@ type ViewMode = 'split' | 'editor' | 'preview'
 
 const MIN_RATIO = 20
 const MAX_RATIO = 80
+
+// Markdown 语言扩展（单例缓存）。
+const mdLanguage = markdown()
 
 export type MarkdownSplitEditorHandle = {
   scrollToHeading: (headingId: string) => void
@@ -24,12 +28,6 @@ type MarkdownSplitEditorProps = {
   lineLocateRequestedAt?: number
   onLineLocateApplied?: () => void
   onViewModeChange: (mode: ViewMode) => void
-  /** 文件内查找正则（可编辑态 textarea 高亮叠层用）。 */
-  findRegex?: RegExp | null
-  /** 当前命中序号（0-based）。 */
-  findActiveIndex?: number
-  /** 是否启用查找高亮叠层。 */
-  findEnabled?: boolean
   /** 所属工作区根（透传预览，用于解析内嵌相对路径图片）。 */
   workspaceRoot?: string
   /** md 文件所在目录（工作区相对路径，空串=根）。 */
@@ -47,15 +45,12 @@ const MarkdownSplitEditor = React.forwardRef<MarkdownSplitEditorHandle, Markdown
   lineLocateRequestedAt,
   onLineLocateApplied,
   onViewModeChange,
-  findRegex,
-  findActiveIndex,
-  findEnabled,
   workspaceRoot,
   baseDir,
 }, ref) => {
   const hostRef = React.useRef<HTMLDivElement | null>(null)
   const [ratio, setRatio] = React.useState(50)
-  const editorRef = React.useRef<HTMLTextAreaElement | null>(null)
+  const editorScrollRef = React.useRef<HTMLElement | null>(null)
   const previewScrollRef = React.useRef<HTMLDivElement | null>(null)
   const previewRef = React.useRef<MarkdownPreviewHandle | null>(null)
   const dragStateRef = React.useRef<{
@@ -109,9 +104,9 @@ const MarkdownSplitEditor = React.forwardRef<MarkdownSplitEditorHandle, Markdown
     ? { width: `${100 - ratio}%` }
     : { height: `${100 - ratio}%` }
   const fabScrollTargetRefs = React.useMemo(() => {
-    if (viewMode === 'editor') return [editorRef]
+    if (viewMode === 'editor') return [editorScrollRef]
     if (viewMode === 'preview') return [previewScrollRef]
-    return [editorRef, previewScrollRef]
+    return [editorScrollRef, previewScrollRef]
   }, [viewMode])
 
   const scrollHeadingIntoView = React.useCallback((headingId: string) => {
@@ -149,41 +144,47 @@ const MarkdownSplitEditor = React.forwardRef<MarkdownSplitEditorHandle, Markdown
     })
   }, [scrollHeadingIntoView, value, viewMode])
 
+  // 统一渲染 CodeMirror 编辑器（editor 模式和 split 模式共用）。
+  const editorPane = (
+    <CodeMirrorEditor
+      value={value}
+      onChange={onChange}
+      editable
+      language={mdLanguage}
+      wrapLines={wrapLines}
+      lineNumber={lineNumber}
+      lineLocateRequestedAt={lineLocateRequestedAt}
+      onLineLocateApplied={onLineLocateApplied}
+      scrollRef={editorScrollRef}
+    />
+  )
+
+  // 统一渲染预览面板。
+  const previewPane = (
+    <div
+      ref={previewScrollRef}
+      style={{
+        ...previewScrollStyle,
+        overflowX: 'auto',
+      }}
+    >
+      <div style={previewContentStyle}>
+        <MarkdownPreview ref={previewRef} content={value} wrapLines={wrapLines} workspaceRoot={workspaceRoot} baseDir={baseDir} />
+      </div>
+    </div>
+  )
+
   return (
     <div ref={hostRef} style={containerStyle} className="markdown-split-editor">
       {viewMode === 'editor' && (
         <section style={singlePaneStyle}>
-          <LineNumberedSourceView
-            content={value}
-            editable
-            value={value}
-            onChange={onChange}
-            wrapLines={wrapLines}
-            onWrapLinesChange={onWrapLinesChange}
-            lineNumber={lineNumber}
-            lineLocateRequestedAt={lineLocateRequestedAt}
-            onLineLocateApplied={onLineLocateApplied}
-            scrollTargetRef={editorRef}
-            findRegex={findRegex}
-            findActiveIndex={findActiveIndex}
-            findEnabled={findEnabled}
-          />
+          {editorPane}
         </section>
       )}
 
       {viewMode === 'preview' && (
         <section style={singlePaneStyle}>
-          <div
-            ref={previewScrollRef}
-            style={{
-              ...previewScrollStyle,
-              overflowX: 'auto',
-            }}
-          >
-            <div style={previewContentStyle}>
-              <MarkdownPreview ref={previewRef} content={value} wrapLines={wrapLines} workspaceRoot={workspaceRoot} baseDir={baseDir} />
-            </div>
-          </div>
+          {previewPane}
         </section>
       )}
 
@@ -200,21 +201,7 @@ const MarkdownSplitEditor = React.forwardRef<MarkdownSplitEditorHandle, Markdown
             style={{ ...paneStyle, ...firstPaneStyle }}
             className="markdown-split-editor__pane markdown-split-editor__pane--editor"
           >
-            <LineNumberedSourceView
-              content={value}
-              editable
-              value={value}
-              onChange={onChange}
-              wrapLines={wrapLines}
-              onWrapLinesChange={onWrapLinesChange}
-              lineNumber={lineNumber}
-              lineLocateRequestedAt={lineLocateRequestedAt}
-              onLineLocateApplied={onLineLocateApplied}
-              scrollTargetRef={editorRef}
-              findRegex={findRegex}
-              findActiveIndex={findActiveIndex}
-              findEnabled={findEnabled}
-            />
+            {editorPane}
           </section>
 
           <div
@@ -231,17 +218,7 @@ const MarkdownSplitEditor = React.forwardRef<MarkdownSplitEditorHandle, Markdown
             style={{ ...paneStyle, ...secondPaneStyle }}
             className="markdown-split-editor__pane markdown-split-editor__pane--preview"
           >
-            <div
-              ref={previewScrollRef}
-              style={{
-                ...previewScrollStyle,
-                overflowX: 'auto',
-              }}
-            >
-              <div style={previewContentStyle}>
-                <MarkdownPreview ref={previewRef} content={value} wrapLines={wrapLines} workspaceRoot={workspaceRoot} baseDir={baseDir} />
-              </div>
-            </div>
+            {previewPane}
           </section>
         </div>
       )}
@@ -306,30 +283,10 @@ const dividerVerticalStyle: React.CSSProperties = {
   cursor: 'row-resize',
 }
 
-const editorStyle: React.CSSProperties = {
-  flex: 1,
-  width: '100%',
-  height: '100%',
-  minHeight: 0,
-  border: 'none',
-  outline: 'none',
-  resize: 'none',
-  padding: '16px 18px',
-  background: 'transparent',
-  color: 'var(--text-primary)',
-  fontSize: 'var(--text-base)',
-  lineHeight: 1.8,
-  fontFamily: '"Cascadia Code", "Fira Code", Consolas, monospace',
-  boxSizing: 'border-box',
-  // 阻止到达边界后的 overscroll 向祖先滚动容器链式回弹，避免移动端顶部下拉持续闪烁。
-  overscrollBehaviorY: 'contain',
-}
-
 const previewScrollStyle: React.CSSProperties = {
   flex: 1,
   minHeight: 0,
   overflow: 'auto',
-  // 阻止 overscroll 向祖先链式回弹，避免移动端顶部下拉持续闪烁。
   overscrollBehavior: 'contain',
 }
 

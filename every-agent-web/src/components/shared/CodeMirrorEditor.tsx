@@ -41,6 +41,8 @@ export type CodeMirrorEditorProps = {
   style?: React.CSSProperties
   /** 外层容器 className。 */
   className?: string
+  /** 滚动元素 ref 回调；返回 CodeMirror 内部 .cm-scroller 元素，供 ScrollEdgeToggleFab 等外部组件使用。 */
+  scrollRef?: React.MutableRefObject<HTMLElement | null>
 }
 
 export default function CodeMirrorEditor({
@@ -54,6 +56,7 @@ export default function CodeMirrorEditor({
   onLineLocateApplied,
   style,
   className,
+  scrollRef,
 }: CodeMirrorEditorProps) {
   const hostRef = React.useRef<HTMLDivElement | null>(null)
   const viewRef = React.useRef<EditorView | null>(null)
@@ -123,10 +126,17 @@ export default function CodeMirrorEditor({
 
     const view = new EditorView({ state, parent: hostRef.current })
     viewRef.current = view
+    // 暴露 .cm-scroller 给外部组件（如 ScrollEdgeToggleFab）。
+    if (scrollRef) {
+      scrollRef.current = view.scrollDOM
+    }
 
     return () => {
       view.destroy()
       viewRef.current = null
+      if (scrollRef) {
+        scrollRef.current = null
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
