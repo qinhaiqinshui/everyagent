@@ -1,179 +1,18 @@
 import React from 'react'
+import type { Components, ExtraProps } from 'react-markdown'
+import type { Element, ElementContent } from 'hast'
+import CodeBlock from './CodeBlock'
 
-export type MarkdownTableAlignment = 'left' | 'center' | 'right'
+export type MarkdownVariant = 'preview' | 'display'
 
-/** 内联渲染选项：兼容原 styles 字段（strong/inlineCode），新增图片渲染器。 */
-export type MarkdownInlineRenderOptions = {
-  strong?: React.CSSProperties
-  inlineCode?: React.CSSProperties
-  /**
-   * 图片语法（![alt](src)）渲染器；未提供时该语法以原文文本降级显示，
-   * 保证无工作区上下文（如聊天消息里的 Markdown）也不会丢失内容。
-   */
-  renderImage?: (src: string, alt: string, key: string) => React.ReactNode
-}
-
-export function renderMarkdownInline(
-  text: string,
-  options: MarkdownInlineRenderOptions = {},
-  keyPrefix = '',
-): React.ReactNode[] {
-  const nodes: React.ReactNode[] = []
-  const pattern = /(!\[[^\]]*\]\([^)]+\)|\*\*[^*]+\*\*|`[^`]+`)/g
-  let lastIndex = 0
-  let match: RegExpExecArray | null
-  let key = 0
-
-  while ((match = pattern.exec(text)) !== null) {
-    if (match.index > lastIndex) {
-      nodes.push(text.slice(lastIndex, match.index))
-    }
-
-    const token = match[0]
-    if (token.startsWith('![')) {
-      const imageMatch = /^!\[([^\]]*)\]\(([^)]+)\)$/.exec(token)
-      if (imageMatch && options.renderImage) {
-        nodes.push(options.renderImage(imageMatch[1], imageMatch[2].trim(), `${keyPrefix}image-${key++}`))
-      } else {
-        // 无图片渲染器时降级为原文，不丢信息。
-        nodes.push(token)
-      }
-    } else if (token.startsWith('**') && token.endsWith('**')) {
-      nodes.push(
-        <strong key={`${keyPrefix}strong-${key++}`} style={options.strong}>
-          {token.slice(2, -2)}
-        </strong>,
-      )
-    } else if (token.startsWith('`') && token.endsWith('`')) {
-      nodes.push(
-        <code key={`${keyPrefix}code-${key++}`} style={options.inlineCode}>
-          {token.slice(1, -1)}
-        </code>,
-      )
-    }
-
-    lastIndex = match.index + token.length
-  }
-
-  if (lastIndex < text.length) {
-    nodes.push(text.slice(lastIndex))
-  }
-
-  return nodes
-}
-
-export function renderMarkdownInlineWithBreaks(
-  lines: string[],
-  options: MarkdownInlineRenderOptions = {},
-): React.ReactNode[] {
-  const nodes: React.ReactNode[] = []
-  lines.forEach((line, index) => {
-    if (index > 0) {
-      nodes.push(<br key={`br-${index}`} />)
-    }
-    nodes.push(...renderMarkdownInline(line, options, `line-${index}-`))
-  })
-  return nodes
-}
-
-export function isMarkdownTableHeaderLine(line: string): boolean {
-  const cells = splitMarkdownTableRow(line)
-  return cells.length > 0
-    && cells.some((cell) => cell.length > 0)
-    && hasUnescapedPipe(line)
-}
-
-export function isMarkdownTableSeparatorLine(line: string): boolean {
-  const cells = splitMarkdownTableRow(line)
-  return cells.length > 0
-    && cells.every((cell) => /^:?-{3,}:?$/.test(cell.replace(/\s+/g, '')))
-}
-
-export function isMarkdownTableDataLine(line: string): boolean {
-  return hasUnescapedPipe(line) && splitMarkdownTableRow(line).length > 0
-}
-
-export function parseMarkdownTableAlignments(line: string): MarkdownTableAlignment[] {
-  return splitMarkdownTableRow(line).map((cell) => {
-    const normalized = cell.replace(/\s+/g, '')
-    const startsWithColon = normalized.startsWith(':')
-    const endsWithColon = normalized.endsWith(':')
-
-    if (startsWithColon && endsWithColon) return 'center'
-    if (endsWithColon) return 'right'
-    return 'left'
-  })
-}
-
-export function splitMarkdownTableRow(line: string): string[] {
-  const normalized = line.trim().replace(/^\|/, '').replace(/\|$/, '')
-  const cells: string[] = []
-  let current = ''
-  let escaped = false
-
-  for (const char of normalized) {
-    if (escaped) {
-      current += char
-      escaped = false
-      continue
-    }
-
-    if (char === '\\') {
-      escaped = true
-      continue
-    }
-
-    if (char === '|') {
-      cells.push(current.trim())
-      current = ''
-      continue
-    }
-
-    current += char
-  }
-
-  if (escaped) {
-    current += '\\'
-  }
-  cells.push(current.trim())
-
-  return cells
-}
-
-function hasUnescapedPipe(line: string): boolean {
-  let escaped = false
-
-  for (const char of line) {
-    if (escaped) {
-      escaped = false
-      continue
-    }
-    if (char === '\\') {
-      escaped = true
-      continue
-    }
-    if (char === '|') {
-      return true
-    }
-  }
-
-  return false
-}
-
-/** 表格样式覆盖项：允许调用方在共享默认样式基础上按场景（编辑器预览 / 聊天消息）覆盖。 */
-export type MarkdownTableStyles = {
-  wrap?: React.CSSProperties
-  table?: React.CSSProperties
-  headerCell?: React.CSSProperties
-  bodyCell?: React.CSSProperties
-}
-
-export type MarkdownTableProps = {
-  headers: string[]
-  alignments: MarkdownTableAlignment[]
-  rows: string[][]
-  inlineOptions?: MarkdownInlineRenderOptions
-  styles?: MarkdownTableStyles
+export type MarkdownComponentOptions = {
+  variant: MarkdownVariant
+  /** 段落/列表/引用的换行模式：true=自动换行(pre-wrap)，false=不换行(pre)。 */
+  wrapLines?: boolean
+  /** 大纲跳转：根据 hast 节点的起始行号(0-based)解析标题 id。仅 preview 场景需要。 */
+  resolveHeadingId?: (line: number) => string | undefined
+  /** 图片渲染器；缺省时回退为原生 <img>。仅 preview 场景需要工作区上下文图片。 */
+  renderImage?: (src: string, alt: string) => React.ReactNode
 }
 
 /** 统计列宽前剥离内联 markdown 语法（图片取 alt），避免语法符号干扰字符数占比。 */
@@ -232,96 +71,299 @@ export function computeTableColumnWidths(headers: string[], rows: string[][]): s
   return widths.map((width) => `${width.toFixed(2)}%`)
 }
 
-/**
- * 共享 Markdown 表格渲染组件（MarkdownPreview / MarkdownDisplay 共用）。
- * 使用 tableLayout: fixed + colgroup 按内容字符数占比分配列宽，
- * 内容超宽时在单元格内自动换行，不再撑破容器或横向滚动。
- */
-export function MarkdownTable({ headers, alignments, rows, inlineOptions, styles }: MarkdownTableProps) {
-  const columnWidths = computeTableColumnWidths(headers, rows)
-  return (
-    <div style={{ ...markdownTableWrapStyle, ...styles?.wrap }}>
-      <table style={{ ...markdownTableStyle, ...styles?.table }}>
-        <colgroup>
-          {columnWidths.map((width, index) => (
-            <col key={`col-${index}`} style={{ width }} />
-          ))}
-        </colgroup>
-        <thead>
-          <tr>
-            {headers.map((cell, index) => (
-              <th
-                key={`th-${index}`}
-                style={{
-                  ...markdownTableHeaderCellStyle,
-                  ...styles?.headerCell,
-                  textAlign: alignments[index] ?? 'left',
-                }}
-              >
-                {renderMarkdownInline(cell, inlineOptions ?? {}, `th-${index}-`)}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        {rows.length > 0 && (
-          <tbody>
-            {rows.map((row, rowIndex) => (
-              <tr key={`tr-${rowIndex}`}>
-                {headers.map((_, cellIndex) => (
-                  <td
-                    key={`td-${rowIndex}-${cellIndex}`}
-                    style={{
-                      ...markdownTableBodyCellStyle,
-                      ...styles?.bodyCell,
-                      textAlign: alignments[cellIndex] ?? 'left',
-                    }}
-                  >
-                    {renderMarkdownInline(row[cellIndex] ?? '', inlineOptions ?? {}, `td-${rowIndex}-${cellIndex}-`)}
-                  </td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        )}
-      </table>
-    </div>
-  )
+/** 递归收集 hast 节点的纯文本内容。 */
+function collectHastText(node: ElementContent | undefined): string {
+  if (!node) return ''
+  if (node.type === 'text') return node.value
+  if (node.type === 'element') return node.children.map(collectHastText).join('')
+  return ''
 }
 
-const markdownTableWrapStyle: React.CSSProperties = {
+/** 从 hast table 节点提取表头与数据行纯文本，供列宽计算使用。 */
+function extractTableMatrix(node: Element | undefined): { headers: string[]; rows: string[][] } {
+  const headers: string[] = []
+  const rows: string[][] = []
+  if (!node) return { headers, rows }
+
+  for (const section of node.children) {
+    if (section.type !== 'element') continue
+    if (section.tagName === 'thead') {
+      for (const tr of section.children) {
+        if (tr.type !== 'element' || tr.tagName !== 'tr') continue
+        for (const cell of tr.children) {
+          if (cell.type === 'element' && (cell.tagName === 'th' || cell.tagName === 'td')) {
+            headers.push(collectHastText(cell))
+          }
+        }
+      }
+    } else if (section.tagName === 'tbody') {
+      for (const tr of section.children) {
+        if (tr.type !== 'element' || tr.tagName !== 'tr') continue
+        const row: string[] = []
+        for (const cell of tr.children) {
+          if (cell.type === 'element' && (cell.tagName === 'th' || cell.tagName === 'td')) {
+            row.push(collectHastText(cell))
+          }
+        }
+        if (row.length > 0) rows.push(row)
+      }
+    }
+  }
+  return { headers, rows }
+}
+
+/** 递归收集 React 节点树的纯文本（用于代码块文本提取）。 */
+function extractReactText(node: React.ReactNode): string {
+  if (node == null || node === false || node === true) return ''
+  if (typeof node === 'string' || typeof node === 'number') return String(node)
+  if (React.isValidElement(node)) {
+    return extractReactText(node.props.children as React.ReactNode)
+  }
+  if (Array.isArray(node)) return node.map(extractReactText).join('')
+  return ''
+}
+
+// ───────────────────────── 样式 ─────────────────────────
+
+const baseParagraphStyle: React.CSSProperties = {
+  margin: 0,
+  lineHeight: 1.8,
+}
+
+const baseBlockquoteStyle: React.CSSProperties = {
+  padding: '8px 12px',
+  borderLeft: '3px solid color-mix(in srgb, var(--bg-tertiary) 75%, #000)',
+  borderRadius: '0 var(--radius-md) var(--radius-md) 0',
+}
+
+const baseTableWrapStyle: React.CSSProperties = {
   width: '100%',
-  marginTop: 12,
-  marginBottom: 16,
   border: '1px solid var(--border-light)',
   borderRadius: 'var(--radius-md)',
-  background: 'var(--bg-primary)',
 }
 
-const markdownTableStyle: React.CSSProperties = {
+const baseTableStyle: React.CSSProperties = {
   width: '100%',
   borderCollapse: 'collapse',
   tableLayout: 'fixed',
 }
 
-const markdownTableHeaderCellStyle: React.CSSProperties = {
+const baseThStyle: React.CSSProperties = {
   padding: '10px 12px',
   fontSize: 'var(--text-xs)',
   fontWeight: 700,
-  color: 'var(--text-primary)',
-  background: 'var(--bg-secondary)',
-  borderBottom: '1px solid var(--border)',
   verticalAlign: 'top',
+  borderBottom: '1px solid var(--border)',
   wordBreak: 'break-word',
   overflowWrap: 'anywhere',
 }
 
-const markdownTableBodyCellStyle: React.CSSProperties = {
-  padding: '10px 12px',
-  verticalAlign: 'top',
+const baseTdStyle: React.CSSProperties = {
+  padding: '9px 12px',
   fontSize: 'var(--text-sm)',
   lineHeight: 1.7,
-  color: 'var(--text-primary)',
+  verticalAlign: 'top',
   borderTop: '1px solid var(--border-light)',
   wordBreak: 'break-word',
   overflowWrap: 'anywhere',
+}
+
+const baseHrStyle: React.CSSProperties = {
+  width: '100%',
+  border: 'none',
+  borderTop: '1px solid var(--border-light)',
+}
+
+const baseLinkStyle: React.CSSProperties = {
+  color: 'var(--accent-blue, var(--text-link, #3b82f6))',
+  textDecoration: 'none',
+  wordBreak: 'break-word',
+}
+
+const previewHeadingStyles: Record<number, React.CSSProperties> = {
+  1: { margin: '24px 0 12px', fontSize: 'var(--text-2xl)', fontWeight: 600, lineHeight: 1.3, color: 'var(--text-primary)', borderBottom: '1px solid var(--border)', paddingBottom: 8 },
+  2: { margin: '20px 0 10px', fontSize: 'var(--text-xl)', fontWeight: 600, lineHeight: 1.35, color: 'var(--text-primary)' },
+  3: { margin: '16px 0 8px', fontSize: 'var(--text-md)', fontWeight: 600, lineHeight: 1.4, color: 'var(--text-primary)' },
+  4: { margin: '14px 0 6px', fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--text-primary)' },
+  5: { margin: '12px 0 4px', fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--text-secondary)' },
+  6: { margin: '10px 0 4px', fontSize: 'var(--text-xs)', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.02em' },
+}
+
+const displayHeadingStyles: Record<number, React.CSSProperties> = {
+  1: { margin: '0 0 8px', fontSize: 'var(--text-xl)', fontWeight: 700, lineHeight: 1.35, color: 'var(--text-primary)' },
+  2: { margin: '4px 0 8px', fontSize: 'var(--text-lg)', fontWeight: 700, lineHeight: 1.4, color: 'var(--text-primary)' },
+  3: { margin: '4px 0 6px', fontSize: 'var(--text-base)', fontWeight: 700, lineHeight: 1.45, color: 'var(--text-primary)' },
+  4: { margin: '4px 0 4px', fontSize: 'var(--text-sm)', fontWeight: 700, color: 'var(--text-primary)' },
+  5: { margin: '4px 0 2px', fontSize: 'var(--text-xs)', fontWeight: 700, color: 'var(--text-secondary)' },
+  6: { margin: '4px 0 2px', fontSize: 'var(--text-xs)', fontWeight: 700, color: 'var(--text-muted)' },
+}
+
+const variantStyles: Record<MarkdownVariant, {
+  paragraph: React.CSSProperties
+  blockquote: React.CSSProperties
+  list: React.CSSProperties
+  listItem: React.CSSProperties
+  tableWrap: React.CSSProperties
+  table: React.CSSProperties
+  th: React.CSSProperties
+  td: React.CSSProperties
+  hr: React.CSSProperties
+  code: React.CSSProperties
+  strong: React.CSSProperties
+  heading: Record<number, React.CSSProperties>
+}> = {
+  preview: {
+    paragraph: { ...baseParagraphStyle, fontSize: 'var(--text-base)', color: 'var(--text-primary)', marginBottom: 4 },
+    blockquote: { ...baseBlockquoteStyle, margin: '8px 0', color: 'var(--text-secondary)', fontSize: 'var(--text-sm)', background: 'var(--bg-tertiary)' },
+    list: { margin: '8px 0 10px', padding: 0, paddingLeft: '1.4em', listStyleType: 'disc' },
+    listItem: { fontSize: 'var(--text-base)', lineHeight: 1.8, color: 'var(--text-primary)', marginBottom: 4 },
+    tableWrap: { ...baseTableWrapStyle, margin: '12px 0 16px', background: 'var(--bg-primary)' },
+    table: baseTableStyle,
+    th: { ...baseThStyle, color: 'var(--text-primary)', background: 'var(--bg-secondary)' },
+    td: { ...baseTdStyle, color: 'var(--text-primary)' },
+    hr: { ...baseHrStyle, margin: '16px 0', borderTopColor: 'var(--border)' },
+    code: { background: 'var(--bg-tertiary)', padding: '1px 5px', borderRadius: 3, fontSize: 'var(--text-xs)', fontFamily: 'var(--font-mono)' },
+    strong: { fontWeight: 700, color: 'var(--text-primary)' },
+    heading: previewHeadingStyles,
+  },
+  display: {
+    paragraph: { ...baseParagraphStyle, fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' },
+    blockquote: { ...baseBlockquoteStyle, margin: '4px 0', color: 'var(--text-secondary)', fontSize: 'var(--text-sm)', lineHeight: 1.75 },
+    list: { margin: '2px 0 2px 18px', padding: 0, paddingLeft: '1.6em', listStyleType: 'disc' },
+    listItem: { fontSize: 'var(--text-sm)', lineHeight: 1.75, color: 'var(--text-secondary)', marginBottom: 4 },
+    tableWrap: { ...baseTableWrapStyle, margin: '6px 0', background: 'color-mix(in srgb, var(--bg-tertiary) 48%, transparent)', borderColor: 'color-mix(in srgb, var(--border-light) 85%, transparent)' },
+    table: { ...baseTableStyle, background: 'color-mix(in srgb, var(--bg-tertiary) 48%, transparent)' },
+    th: { ...baseThStyle, lineHeight: 1.6, color: 'var(--text-primary)', background: 'color-mix(in srgb, var(--bg-tertiary) 82%, transparent)', borderBottomColor: 'var(--border-light)' },
+    td: { ...baseTdStyle, lineHeight: 1.75, color: 'var(--text-secondary)', borderTopColor: 'color-mix(in srgb, var(--border-light) 78%, transparent)' },
+    hr: { ...baseHrStyle, margin: '8px 0' },
+    code: { padding: '1px 5px', borderRadius: 5, color: 'var(--text-primary)', fontSize: 'var(--text-xs)', fontFamily: 'var(--font-mono)', border: '1px solid color-mix(in srgb, var(--border-light) 80%, transparent)' },
+    strong: { fontWeight: 700, color: 'var(--text-primary)' },
+    heading: displayHeadingStyles,
+  },
+}
+
+// ───────────────────────── 组件工厂 ─────────────────────────
+
+type IntrinsicProps<Tag extends keyof JSX.IntrinsicElements> = JSX.IntrinsicElements[Tag] & ExtraProps
+
+function buildWrapStyle(wrapLines: boolean | undefined): React.CSSProperties {
+  return wrapLines === false
+    ? { whiteSpace: 'pre', wordBreak: 'normal', overflowWrap: 'normal' }
+    : { whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflowWrap: 'anywhere' }
+}
+
+export function buildMarkdownComponents(options: MarkdownComponentOptions): Components {
+  const { variant, wrapLines = true, resolveHeadingId, renderImage } = options
+  const s = variantStyles[variant]
+  const wrap = buildWrapStyle(wrapLines)
+
+  const makeHeading = (level: number) => {
+    const Heading = ({ node, children, ...rest }: IntrinsicProps<'h1'>) => {
+      const line = node?.position?.start?.line
+      const id = line != null ? resolveHeadingId?.(line - 1) : undefined
+      return React.createElement(
+        `h${level}`,
+        { ...rest, id, 'data-markdown-heading-id': id, style: s.heading[level] },
+        children,
+      )
+    }
+    return Heading
+  }
+
+  const PreBlock = ({ children }: IntrinsicProps<'pre'>) => {
+    const childArray = React.Children.toArray(children)
+    const codeEl = childArray.find(React.isValidElement) as
+      | React.ReactElement<{ className?: string; children?: React.ReactNode }>
+      | undefined
+    const className = codeEl?.props?.className
+    const lang = /language-([\w-]+)/.exec(className ?? '')?.[1]
+    const text = extractReactText(codeEl ? codeEl.props.children : children).replace(/\n$/, '')
+    return <CodeBlock code={text} language={lang} variant={variant} style={{ margin: variant === 'preview' ? '10px 0' : '4px 0' }} />
+  }
+
+  const TableBlock = ({ node, children }: IntrinsicProps<'table'>) => {
+    const { headers, rows } = extractTableMatrix(node)
+    const widths = computeTableColumnWidths(headers, rows)
+    return (
+      <div style={s.tableWrap}>
+        <table style={s.table}>
+          {widths.length > 0 && (
+            <colgroup>
+              {widths.map((width, index) => (
+                <col key={`col-${index}`} style={{ width }} />
+              ))}
+            </colgroup>
+          )}
+          {children}
+        </table>
+      </div>
+    )
+  }
+
+  const Th = ({ node, children, align, ...rest }: IntrinsicProps<'th'>) => (
+    <th {...rest} style={{ ...s.th, textAlign: (align ?? node?.properties?.align) as React.CSSProperties['textAlign'] }}>
+      {children}
+    </th>
+  )
+
+  const Td = ({ node, children, align, ...rest }: IntrinsicProps<'td'>) => (
+    <td {...rest} style={{ ...s.td, textAlign: (align ?? node?.properties?.align) as React.CSSProperties['textAlign'] }}>
+      {children}
+    </td>
+  )
+
+  const components: Components = {
+    h1: makeHeading(1),
+    h2: makeHeading(2),
+    h3: makeHeading(3),
+    h4: makeHeading(4),
+    h5: makeHeading(5),
+    h6: makeHeading(6),
+    p: ({ children, ...rest }: IntrinsicProps<'p'>) => (
+      <p {...rest} style={{ ...s.paragraph, ...wrap }}>{children}</p>
+    ),
+    blockquote: ({ children, ...rest }: IntrinsicProps<'blockquote'>) => (
+      <blockquote {...rest} style={{ ...s.blockquote, ...wrap }}>{children}</blockquote>
+    ),
+    ul: ({ children, ...rest }: IntrinsicProps<'ul'>) => (
+      <ul {...rest} style={s.list}>{children}</ul>
+    ),
+    ol: ({ children, ...rest }: IntrinsicProps<'ol'>) => (
+      <ol {...rest} style={{ ...s.list, listStyleType: 'decimal' }}>{children}</ol>
+    ),
+    li: ({ children, className, ...rest }: IntrinsicProps<'li'>) => {
+      const isTaskItem = typeof className === 'string' && className.includes('task-list-item')
+      return (
+        <li
+          {...rest}
+          className={className}
+          style={{ ...s.listItem, ...wrap, ...(isTaskItem ? { listStyleType: 'none', paddingLeft: 0 } : null) }}
+        >
+          {children}
+        </li>
+      )
+    },
+    pre: PreBlock,
+    code: ({ children, ...rest }: IntrinsicProps<'code'>) => (
+      <code {...rest} style={s.code}>{children}</code>
+    ),
+    table: TableBlock,
+    th: Th,
+    td: Td,
+    hr: ({ ...rest }: IntrinsicProps<'hr'>) => <hr {...rest} style={s.hr} />,
+    a: ({ children, href, ...rest }: IntrinsicProps<'a'>) => (
+      <a {...rest} href={href} target="_blank" rel="noopener noreferrer nofollow" style={baseLinkStyle}>{children}</a>
+    ),
+    strong: ({ children, ...rest }: IntrinsicProps<'strong'>) => (
+      <strong {...rest} style={s.strong}>{children}</strong>
+    ),
+    img: ({ src, alt, ...rest }: IntrinsicProps<'img'>) => {
+      if (renderImage && typeof src === 'string') {
+        return <>{renderImage(src, alt ?? '')}</>
+      }
+      return <img {...rest} src={src} alt={alt} loading="lazy" style={{ maxWidth: '100%', height: 'auto' }} />
+    },
+  }
+
+  return components
 }
