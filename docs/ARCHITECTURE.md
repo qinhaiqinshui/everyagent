@@ -740,12 +740,12 @@ Input:  queued → consumed | discarded(任务取消)
 
 Electron 将 web + hub + worker **一体打包**为 Windows x64 便携(portable)与安装包(NSIS):
 
-- **进程模型**:主进程 spawn 本地 hub 与 worker 两个 Spring Boot 子进程(`javaw.exe`,jlink 精简 JRE 随包);前端经本地静态服务加载(127.0.0.1 随机端口,保证 localhost 安全上下文),preload 以 contextBridge 注入开箱即用连接配置。**支持复用外部进程**:启动前调 `GET /admin/identify`(认证探测,携带 `X-Admin-Key` 请求头)判断 hub(:6101)/worker(:6102)是否已在运行——已在运行则跳过启动直接复用;端口被别的程序占用(认证失败)则报错。
-- **独立后端启动**:`resources/start-backend.bat` 可脱离 Desktop GUI 独立启动 hub + worker(含健康检测与端口复用判断),适配 Windows 任务计划程序"系统启动时"触发器(Session 0 无 GUI 场景);Desktop 后续打开时自动检测到已有进程,不重复启动,关闭时也不停掉它们。
+- **进程模型**:主进程 spawn 本地 hub 与 worker 两个 Spring Boot 子进程(`javaw.exe`,jlink 精简 JRE 随包);前端经本地静态服务加载(127.0.0.1 随机端口,保证 localhost 安全上下文),preload 以 contextBridge 注入开箱即用连接配置。**hub 始终跟随 desktop 启停**(desktop 独占管理,退出时一并停止);**worker 支持外部进程复用**——启动前调 `GET /admin/identify`(认证探测,携带 `X-Admin-Key` = workerApiKey)判断 worker(:6102)是否已在运行,已在运行则跳过启动直接复用;端口被别的程序占用则报错。
+- **独立 worker 启动**:`resources/start-backend.bat` 可脱离 Desktop GUI 独立启动 worker(hub 仍由 desktop 管理,不在此启动);适配 Windows 任务计划程序"系统启动时"触发器(Session 0 无 GUI 场景);worker 启动后自动重试连接 hub,desktop 后续打开时自动检测到已有 worker,不重复启动。
 - **配置注入**:生成 hub/worker yaml 经 `--spring.config.additional-location` 覆盖 jar 内默认(整表覆盖 `worker.hubs`,避免误连远端);数据目录复用 `EVERYAGENT_HOME`(缺省 `~/.everyagent`),与命令行/docker 共用同一批任务/工作区/模型。
 - **运行时配置**:每次启动读 `<EVERYAGENT_HOME>/desktop-config.json`(hubKey/workerApiKey/workerId/端口),首次生成;日志统一落 `<EVERYAGENT_HOME>/logs/`。
-- **管理端点**:hub/worker 各提供 `GET /admin/identify`(认证后返回服务标识)与 `POST /admin/shutdown`(认证后触发 Spring 优雅关闭);认证用 `X-Admin-Key` 请求头(hub 校验 hubKey sha256,worker 校验 hubs[0].apiKey 明文);仅监听 127.0.0.1,POST + 自定义头防 CSRF。
-- **生命周期**:单实例锁、占位页/错误页(含日志目录)、托盘提供「退出桌面」(仅退 GUI,hub/worker 全部保留,desktop 启动的 java 进程转为孤儿,下次启动自动复用)与「全部退出」(对所有 hub/worker 发 `POST /admin/shutdown` 触发 Spring 优雅关闭;desktop 自己启动的进程 HTTP shutdown 超时后 child.kill() 兜底,外部进程超时只记日志不按端口强杀);`before-quit` 按 `quitScope` 决定是否停后端。
+- **管理端点(仅 worker)**:worker 提供 `GET /admin/identify`(认证后返回 worker 身份)与 `POST /admin/shutdown`(认证后触发 Spring 优雅关闭);认证用 `X-Admin-Key` 请求头(与 hubs[0].apiKey 明文比对);仅监听 127.0.0.1,POST + 自定义头防 CSRF。hub 无 admin 端点(hub 可能公网部署,暴露 shutdown 接口会被持有 hubKey 的人关掉)。
+- **生命周期**:单实例锁、占位页/错误页(含日志目录)、托盘提供「退出桌面」(停 hub,worker 保留运行,下次启动自动复用)与「全部退出」(停 hub + 对所有 worker 发 `POST /admin/shutdown` 优雅关闭);`before-quit` 按 `quitScope` 决定停 hub 或停全部。
 - **构建流水线**:`build-backend.mjs`(mvn 打包)、`build-web.mjs`(前端 dist)、`build-jre.ps1`(jlink);electron-builder `extraResources(from: ../runtime → to: runtime)` 把程序附属文件打进安装包。
 
 ---

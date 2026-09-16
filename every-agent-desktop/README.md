@@ -93,36 +93,37 @@ JRE 缺失时回退系统 `java`(Windows 下 `windowsHide` 隐藏控制台)。
 - **配置注入**:`desktop-hub.yml` / `desktop-worker.yml` 生成到 `<EVERYAGENT_HOME>/desktop/`,
   经 `--spring.config.additional-location=file:///...` 覆盖 jar 内默认值。
 - **单实例锁**:二次启动聚焦已有窗口。
-- **优雅退出**:托盘「退出桌面」仅退 GUI,hub/worker(含 desktop 启动的)全部保留,下次启动自动复用;「全部退出」对所有 hub/worker 发送 `POST /admin/shutdown` 触发 Spring 优雅关闭——desktop 自己启动的进程 HTTP shutdown 超时后 `child.kill()` 兜底,外部进程超时只记日志(不按端口强杀,零误杀风险)。
+- **优雅退出**:托盘「退出桌面」停 hub,worker 保留运行(下次启动自动复用);「全部退出」停 hub + 对所有 worker 发 `POST /admin/shutdown` 触发 Spring 优雅关闭——desktop 自己启动的 worker HTTP shutdown 超时后 `child.kill()` 兜底,外部 worker 超时只记日志(不按端口强杀,零误杀风险)。
 
-## 管理端点(仅限本机)
+## 管理端点(仅 worker,仅本机)
 
-hub(:6101)与 worker(:6102)各提供两个管理端点,用于外部进程探测与优雅关闭:
+worker(:6102)提供两个管理端点,用于外部进程探测与优雅关闭:
 
 | 端点 | 认证 | 说明 |
 |---|---|---|
-| `GET /admin/identify` | `X-Admin-Key` | 返回 `{"service":"hub"}` 或 `{"service":"worker","workerId":"..."}` |
+| `GET /admin/identify` | `X-Admin-Key` | 返回 `{"service":"worker","workerId":"..."}` |
 | `POST /admin/shutdown` | `X-Admin-Key` | 延迟 500ms 触发 `ApplicationContext.close()` 优雅关闭 |
 
-- **认证**:hub 校验 `X-Admin-Key` 的 sha256 与 hubKey 匹配;worker 校验 `X-Admin-Key` 与 hubs[0].apiKey 明文匹配。
+- **认证**:`X-Admin-Key` 与 hubs[0].apiKey 明文比对。
 - **安全**:仅监听 127.0.0.1(外部网络不可达);POST + 自定义请求头(浏览器不会自动携带,防 CSRF)。
-- **密钥来源**:desktop-config.json 中的 hubKey / workerApiKey。
+- **密钥来源**:desktop-config.json 中的 workerApiKey。
+- **hub 无 admin 端点**:hub 可能公网部署,暴露 shutdown 接口会被持有 hubKey 的人关掉,故不提供。hub 始终由 desktop 独占管理,退出时 `child.kill` 停止。
 
-## 独立后端启动(无 GUI 场景)
+## 独立 worker 启动(无 GUI 场景)
 
-安装包内附带 `resources/start-backend.bat`,可在无 Desktop GUI 的情况下启动 hub + worker。
+安装包内附带 `resources/start-backend.bat`,可在无 Desktop GUI 的情况下独立启动 worker(hub 仍由 desktop 管理,不在此启动)。
 适配 Windows 任务计划程序"系统启动时"触发器(Session 0 无 GUI 场景,如服务器/无人值守机器)。
 
 **任务计划程序配置**:
 
-1. 触发器选"**登录时**"(推荐)或"系统启动时"(后者需最高权限且因 Session 0 无 GUI 仅后端运行)。
+1. 触发器选"**登录时**"(推荐)或"系统启动时"(后者需最高权限且因 Session 0 无 GUI 仅 worker 运行)。
 2. 操作 → 启动程序:程序填 `<安装根>\resources\start-backend.bat`。
-3. 脚本会自动检测 hub/worker 是否已在运行(端口复用),避免重复启动。
-4. 日志输出到 `<EVERYAGENT_HOME>\logs\{hub,worker}.out.log`。
+3. 脚本会自动检测 worker 是否已在运行(端口复用),避免重复启动。
+4. worker 启动后自动重试连接 hub;desktop 后续打开时检测到已有 worker,不重复启动。
 
 **Desktop 交互**:
-- Desktop 启动时调 `GET /admin/identify`(认证探测)判断 hub/worker 是否已在运行。
-- 已在运行 → 跳过启动,直接复用(日志显示"外部进程")。
-- 端口被别的程序占用(认证失败) → 报错提示端口冲突。
-- 托盘「退出桌面」:保留所有后端进程(含 desktop 自己启动的,退出后转为外部孤儿,下次启动自动复用)。
-- 托盘「全部退出」:对所有 hub/worker 发送 `POST /admin/shutdown` 触发 Spring 优雅关闭。
+- Desktop 启动时:hub 直接 spawn(检查端口是否被占);worker 调 `GET /admin/identify`(认证探测)判断是否已在运行。
+- worker 已在运行 → 跳过启动,直接复用(日志显示"外部进程")。
+- worker 端口被别的程序占用(认证失败) → 报错提示端口冲突。
+- 托盘「退出桌面」:停 hub,worker 保留运行(下次启动自动复用)。
+- 托盘「全部退出」:停 hub + 对所有 worker 发 `POST /admin/shutdown` 触发 Spring 优雅关闭。

@@ -1,16 +1,18 @@
 @echo off
 setlocal enabledelayedexpansion
 rem ========================================================================
-rem Every Agent 后端独立启动脚本
+rem Every Agent worker 独立启动脚本
 rem
-rem 用途:脱离 Desktop GUI 独立启动 hub + worker(含健康检测与端口复用)。
+rem 用途:脱离 Desktop GUI 独立启动 worker(hub 仍由 desktop 管理,不在此启动)。
 rem 适配 Windows 任务计划程序"系统启动时"触发器(Session 0 无 GUI 场景)。
+rem worker 启动后会自动连接 hub(localhost:6101);若 hub 尚未启动,worker 会
+rem 持续重试连接,直到 desktop 启动拉起 hub 后自动连上。
 rem
 rem 用法:
 rem   直接运行:双击或在命令行执行
 rem   任务计划程序:程序填此 bat 路径,"起始于"填 resources 目录;触发器选
 rem                "登录时"或"系统启动时"(后者需以最高权限运行,且因 Session 0
-rem                无 GUI,仅后端进程启动,Desktop 窗口/托盘不显示——这是预期行为)。
+rem                无 GUI,仅 worker 进程启动,Desktop 窗口/托盘不显示——这是预期行为)。
 rem
 rem 打包后此脚本位于 <安装根>\resources\start-backend.bat,
 rem 同目录下有 jre\、backend\、runtime\ 等(resourcesPath 即程序根)。
@@ -30,36 +32,7 @@ set "JAVA_EXE=jre\bin\javaw.exe"
 if not exist "%JAVA_EXE%" set "JAVA_EXE=jre\bin\java.exe"
 if not exist "%JAVA_EXE%" set "JAVA_EXE=java"
 
-set "HUB_URL=http://127.0.0.1:6101/health"
 set "WORKER_URL=http://127.0.0.1:6102/health"
-
-rem ------------------------------------------------------------------
-rem  启动 hub
-rem ------------------------------------------------------------------
-echo [%date% %time%] 检查 hub 健康状态...
-call :check_http "%HUB_URL%"
-if !errorlevel! equ 0 (
-    echo [%date% %time%] hub 已在运行,跳过启动
-) else (
-    echo [%date% %time%] 启动 hub...
-    start "" "%JAVA_EXE%" -jar "backend\hub.jar" 1>> "%EVERYAGENT_HOME%\logs\hub.out.log" 2>&1
-)
-
-rem 等待 hub 就绪(最多 30 秒)
-set HUB_WAIT=0
-:wait_hub
-call :check_http "%HUB_URL%"
-if !errorlevel! equ 0 goto hub_ready
-set /a HUB_WAIT+=1
-if !HUB_WAIT! geq 30 (
-    echo [%date% %time%] hub 启动超时 ^(30s^),退出
-    popd
-    exit /b 1
-)
-timeout /t 1 /nobreak >nul
-goto wait_hub
-:hub_ready
-echo [%date% %time%] hub 就绪
 
 rem ------------------------------------------------------------------
 rem  启动 worker
@@ -74,22 +47,24 @@ if !errorlevel! equ 0 (
 )
 
 rem 等待 worker 就绪(健康检查 + hub 连接,最多 120 秒)
+rem worker 会自动重试连接 hub;若 hub 尚未启动,worker 的 hubConnected 会保持 false,
+rem 此脚本会等待 hub 就绪后才退出(预期 hub 由 desktop 启动,desktop 启动后 worker 自动连上)。
 set WORKER_WAIT=0
 :wait_worker
 call :check_worker_ready "%WORKER_URL%"
 if !errorlevel! equ 0 goto worker_ready
 set /a WORKER_WAIT+=1
 if !WORKER_WAIT! geq 120 (
-    echo [%date% %time%] worker 就绪超时 ^(120s^),退出
+    echo [%date% %time%] worker 等待 hub 就绪超时 ^(120s^),worker 进程已启动但可能尚未连接 hub
     popd
-    exit /b 1
+    exit /b 0
 )
 timeout /t 1 /nobreak >nul
 goto wait_worker
 :worker_ready
 echo [%date% %time%] worker 就绪 ^(hub 连接已建立^)
 
-echo [%date% %time%] 后端启动完成
+echo [%date% %time%] worker 启动完成
 popd
 exit /b 0
 

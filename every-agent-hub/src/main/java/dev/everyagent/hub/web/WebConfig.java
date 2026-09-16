@@ -1,9 +1,7 @@
 package dev.everyagent.hub.web;
 
-import dev.everyagent.contract.ids.Ids;
 import dev.everyagent.hub.config.HubProperties;
 import dev.everyagent.hub.ws.HubWsHandler;
-import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.reactive.function.server.RouterFunction;
@@ -17,21 +15,11 @@ import reactor.netty.http.server.WebsocketServerSpec;
 import java.util.Map;
 
 import static org.springframework.web.reactive.function.server.RequestPredicates.GET;
-import static org.springframework.web.reactive.function.server.RequestPredicates.POST;
 import static org.springframework.web.reactive.function.server.RouterFunctions.route;
 import static org.springframework.web.reactive.function.server.ServerResponse.ok;
-import static org.springframework.web.reactive.function.server.ServerResponse.status;
 
 @Configuration
 public class WebConfig {
-
-    private final HubProperties props;
-    private final ConfigurableApplicationContext applicationContext;
-
-    public WebConfig(HubProperties props, ConfigurableApplicationContext applicationContext) {
-        this.props = props;
-        this.applicationContext = applicationContext;
-    }
 
     @Bean
     public SimpleUrlHandlerMapping wsMapping(HubWsHandler handler) {
@@ -56,53 +44,5 @@ public class WebConfig {
     @Bean
     public RouterFunction<ServerResponse> health() {
         return route(GET("/health"), req -> ok().bodyValue(Map.of("status", "UP")));
-    }
-
-    /**
-     * 管理端点:认证后返回 hub 身份标识。
-     * 认证方式:X-Admin-Key 请求头,经 Ids.ownerKey() 计算 sha256 与 hub.hub-key-sha 比对。
-     */
-    @Bean
-    public RouterFunction<ServerResponse> adminIdentify() {
-        return route(GET("/admin/identify"),
-                req -> authenticate(req.headers().firstHeader("X-Admin-Key"))
-                        ? ok().bodyValue(Map.of("service", "hub"))
-                        : status(401).bodyValue(Map.of("error", "unauthorized")));
-    }
-
-    /**
-     * 管理端点:认证后延迟 500ms 触发 ApplicationContext.close(),延迟在独立线程执行
-     * 以确保 HTTP 响应能正常返回。
-     */
-    @Bean
-    public RouterFunction<ServerResponse> adminShutdown() {
-        return route(POST("/admin/shutdown"),
-                req -> {
-                    if (!authenticate(req.headers().firstHeader("X-Admin-Key"))) {
-                        return status(401).bodyValue(Map.of("error", "unauthorized"));
-                    }
-                    Thread t = new Thread(() -> {
-                        try {
-                            Thread.sleep(500L);
-                        } catch (InterruptedException e) {
-                            Thread.currentThread().interrupt();
-                        }
-                        applicationContext.close();
-                    }, "hub-shutdown");
-                    t.setDaemon(false);
-                    t.start();
-                    return ok().bodyValue(Map.of("status", "shutting down"));
-                });
-    }
-
-    /**
-     * 管理端点认证:将 X-Admin-Key 请求头值 trim 后经 Ids.ownerKey() 计算 sha256,
-     * 与 hub 启动时派生的 hub-key-sha 比对。空值直接拒绝。
-     */
-    private boolean authenticate(String adminKey) {
-        if (adminKey == null || adminKey.isBlank()) {
-            return false;
-        }
-        return Ids.ownerKey(adminKey.trim()).equals(props.getHubKeySha());
     }
 }

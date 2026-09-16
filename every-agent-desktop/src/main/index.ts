@@ -296,7 +296,7 @@ function createTray(): void {
         {
           label: '退出桌面',
           click: () => {
-            pushStatus('托盘菜单:退出桌面(后端 hub/worker 保留运行)')
+            pushStatus('托盘菜单:退出桌面(worker 保留运行,下次启动自动复用)')
             quitScope = 'desktop'
             app.quit()
           },
@@ -532,12 +532,13 @@ app.on('before-quit', (event) => {
         pushStatus('全部退出:正在停止 hub / worker...')
         if (backend) await backend.stopAll()
       } else {
-        pushStatus('退出桌面:后端 hub/worker 保留运行(下次启动自动复用)')
-        // desktop 启动的 java 进程此时不停止,转为孤儿进程(下次启动时被探测复用)。
+        // 退出桌面:hub 始终跟随 desktop(停 hub);worker 保留(下次启动自动复用)。
+        pushStatus('退出桌面:停止 hub,worker 保留运行(下次启动自动复用)')
+        if (backend) await backend.stopHub()
       }
     } finally {
       if (staticServer) staticServer.close()
-      pushStatus(quitScope === 'all' ? '后端已停止,退出' : '桌面退出,后端保留运行')
+      pushStatus(quitScope === 'all' ? '后端已停止,退出' : 'hub 已停止,worker 保留运行,退出')
       app.exit(0)
     }
   })()

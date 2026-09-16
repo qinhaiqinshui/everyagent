@@ -1,12 +1,7 @@
 /**
  * 后端子进程编排:用 jlink 精简 JRE 的 javaw.exe 启动本地 hub 与 worker。
- * 不再生成任何 yml——hub/worker 进程配置由 jar 内 application.yml 默认 +
- * ~/.everyagent/application-*.yaml 用户覆盖决定(optional:file 自动加载),
- * desktop 只负责拉起进程、注入 EVERYAGENT_HOME,并把 cwd 设为程序根
- * (worker 以字面相对路径 ./runtime 定位程序附属文件,见 paths.programRoot)。
- *
- * 外部进程复用:启动前调 /admin/identify(认证探测)判断 hub/worker 是否已在运行——
- * 已在运行则跳过启动,退出时只停 desktop 自己启动的进程(「退出桌面」)或全部 HTTP shutdown(「全部退出」)。
+ * hub 始终跟随 desktop 启停(child.kill);worker 支持外部进程复用(认证探测 +
+ * HTTP shutdown 优雅关闭),可脱离 desktop 经 start-backend.bat 独立启动。
  */
 import { spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, mkdirSync, openSync } from 'node:fs'
@@ -16,13 +11,11 @@ import type { DesktopConfig, DesktopPaths } from './config'
 import { runtimeDir, programRoot, hubJar, jreJavaExe, jreJavaExeFallback, workerJar } from './paths'
 
 export interface BackendHandles {
+  /** hub 子进程(始终由 desktop 启动,退出时一并停止)。 */
+  hub: ChildProcess
   /**
-   * hub 子进程;null 表示 hub 为外部进程(desktop 未启动它,退出时不停止)。
+   * worker 子进程;null 表示 worker 为外部进程(desktop 未启动它)。
    * 外部进程典型来源:任务计划程序经 start-backend.bat 启动。
-   */
-  hub: ChildProcess | null
-  /**
-   * worker 子进程;null 表示 worker 为外部进程(desktop 未启动它,退出时不停止)。
    */
   worker: ChildProcess | null
   /**
@@ -32,11 +25,15 @@ export interface BackendHandles {
    */
   workerId: string
   /**
-   * 全部停止:对所有 hub/worker(含外部进程)发送 POST /admin/shutdown,触发 Spring 优雅关闭。
-   * desktop 自己启动的进程:HTTP shutdown 后等 child exit,超时 child.kill() 兜底。
-   * 外部进程:HTTP shutdown 后轮询 /health 等待退出,超时只记日志(不按端口强杀)。
+   * 全部停止:hub 走 child.kill;worker(含外部进程)走 POST /admin/shutdown 优雅关闭。
+   * desktop 自己启动的 worker:HTTP shutdown 后等 child exit,超时 child.kill 兜底。
+   * 外部 worker:HTTP shutdown 后轮询 /health 等待退出,超时只记日志。
    */
   stopAll: () => Promise<void>
+  /**
+   * 仅停 hub(child.kill):用于「退出桌面」——hub 始终跟随 desktop,worker 保留运行。
+   */
+  stopHub: () => Promise<void>
 }
 
 type StatusFn = (message: string) => void
@@ -52,22 +49,21 @@ function resolveJavaExe(): { exe: string; windowsHide: boolean } {
 type IdentifyResult =
   /** 端口无监听(连接被拒/超时),可安全启动 */
   | { status: 'port-free' }
-  /** 端口被本服务占用,可复用 */
-  | { status: 'ours'; service: string }
+  /** 端口被本 worker 占用,可复用 */
+  | { status: 'ours' }
   /** 端口已被别的程序占用(认证失败/路径不存在/服务标识不匹配) */
   | { status: 'port-occupied'; detail: string }
 
 /**
- * 认证探测:GET /admin/identify,携带 X-Admin-Key 请求头。
+ * worker 认证探测:GET /admin/identify,携带 X-Admin-Key(workerApiKey)请求头。
  * 区分三种状态:
  * - port-free:连接被拒/超时 → 端口空闲,可启动;
- * - ours:认证通过且 service 匹配 → 本服务,可复用;
+ * - ours:认证通过且 service=worker → 本 worker,可复用;
  * - port-occupied:收到 HTTP 响应但不匹配(401/404/200 但 service 不对)→ 端口被占,报错。
  */
-async function identifyService(
+async function identifyWorker(
   port: number,
   adminKey: string,
-  expectedService: string,
   timeoutMs: number,
 ): Promise<IdentifyResult> {
   const url = `http://127.0.0.1:${port}/admin/identify`
@@ -78,31 +74,30 @@ async function identifyService(
     })
     if (res.ok) {
       const body = (await res.json().catch(() => null)) as { service?: unknown } | null
-      if (body && typeof body.service === 'string' && body.service === expectedService) {
-        return { status: 'ours', service: body.service }
+      if (body && typeof body.service === 'string' && body.service === 'worker') {
+        return { status: 'ours' }
       }
-      // 200 但 service 不匹配:可能是本服务的另一个角色(如用 hubKey 探 worker),
-      // 或别的程序恰好返回 200。一律视为端口被占。
       const got = body?.service ?? 'unknown'
-      return {
-        status: 'port-occupied',
-        detail: `/${res.status} service=${got}(期望 ${expectedService})`,
-      }
+      return { status: 'port-occupied', detail: `service=${got}(期望 worker)` }
     }
-    // 非 200 响应(401/404/500 等):端口有程序在监听,但不是本服务或密钥不对
-    return {
-      status: 'port-occupied',
-      detail: `HTTP ${res.status}`,
-    }
-  } catch (error) {
-    // 连接被拒(ECONNREFUSED)→ 端口无监听,可安全启动
-    // 超时也可能是端口被防火墙等拦截,但本地 127.0.0.1 超时极少见,视为 port-free
-    const msg = (error as Error).message ?? String(error)
-    if (msg.includes('ECONNREFUSED') || msg.includes('fetch failed') || msg.includes('aborted')) {
-      return { status: 'port-free' }
-    }
-    // 其他网络错误也视为 port-free(宁可启动失败也不要误报端口被占)
+    return { status: 'port-occupied', detail: `HTTP ${res.status}` }
+  } catch {
+    // 连接被拒/超时 → 端口空闲,可安全启动
     return { status: 'port-free' }
+  }
+}
+
+/**
+ * 简单端口探测:向 /health 发 GET 请求,判断端口是否有程序在监听。
+ * 返回 true = 端口可达(有程序在跑),false = 端口空闲。
+ * 用于 hub:hub 始终跟随 desktop,只需判断端口是否被占(被占则报错)。
+ */
+async function probePortOccupied(port: number, timeoutMs: number): Promise<boolean> {
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(timeoutMs) })
+    return res.ok
+  } catch {
+    return false
   }
 }
 
@@ -360,32 +355,27 @@ export async function startBackend(
   const workerHealthUrl = `http://127.0.0.1:${cfg.workerPort}/health`
 
   // ------------------------------------------------------------------
-  // 认证探测已有 hub:GET /admin/identify 携带 hubKey 认证。
-  // 识别成功 = 我们的服务,复用;连接被拒 = 启动;端口被占 = 报错提示用户。
+  // hub:始终跟随 desktop 启停。只检查端口是否被占(被占则报错)。
   // ------------------------------------------------------------------
-  let hub: ChildProcess | null = null
-  const hubResult = await identifyService(cfg.hubPort, cfg.hubKey, 'hub', 2000)
-  if (hubResult.status === 'ours') {
-    log('hub 已在运行(外部进程),跳过启动')
-  } else if (hubResult.status === 'port-occupied') {
+  if (await probePortOccupied(cfg.hubPort, 2000)) {
     throw new Error(
-      `端口 ${cfg.hubPort} 已被其他程序占用(${hubResult.detail}),` +
+      `端口 ${cfg.hubPort} 已被占用(hub 应由 desktop 独占管理),` +
         `请在 desktop-config.json 中修改 hubPort,或手动释放端口后重试`,
     )
-  } else {
-    log(`启动 hub (${hubJarPath}) ...`)
-    hub = spawnJava('hub', hubJarPath, [], hubLog, env, programRoot())
-    log(`等待 hub 健康检查 ${hubHealthUrl} (30s)...`)
-    await waitHttp(hubHealthUrl, 30000, 'hub', hub)
-    log('hub 健康检查通过')
   }
+  log(`启动 hub (${hubJarPath}) ...`)
+  const hub = spawnJava('hub', hubJarPath, [], hubLog, env, programRoot())
+  log(`等待 hub 健康检查 ${hubHealthUrl} (30s)...`)
+  await waitHttp(hubHealthUrl, 30000, 'hub', hub)
+  log('hub 健康检查通过')
 
   // ------------------------------------------------------------------
-  // 认证探测已有 worker:GET /admin/identify 携带 workerApiKey 认证。
+  // worker 认证探测:GET /admin/identify 携带 workerApiKey 认证。
+  // 识别成功 = 本 worker,复用;连接被拒 = 启动;端口被占 = 报错提示用户。
   // ------------------------------------------------------------------
   let worker: ChildProcess | null = null
   let actualWorkerId = ''
-  const workerResult = await identifyService(cfg.workerPort, cfg.workerApiKey, 'worker', 2000)
+  const workerResult = await identifyWorker(cfg.workerPort, cfg.workerApiKey, 2000)
   if (workerResult.status === 'ours') {
     log('检测到 worker 已在运行(外部进程),等待 hub 连接就绪...')
     try {
@@ -429,9 +419,10 @@ export async function startBackend(
     )
   }
 
-  // 全部停止:对所有 hub/worker 发送 HTTP shutdown 触发 Spring 优雅关闭。
-  // desktop 自己启动的进程:HTTP shutdown 后等 child 自然退出(不轮询 /health),超时 kill。
-  // 外部进程:HTTP shutdown 后轮询 /health 等待退出,超时只记日志(不按端口强杀)。
+  // 全部停止:hub 走 child.kill(desktop 独占管理,始终由 desktop 启动);
+  // worker(含外部进程)走 POST /admin/shutdown 优雅关闭。
+  // desktop 自己启动的 worker:HTTP shutdown 后等 child 自然退出,超时 child.kill 兜底。
+  // 外部 worker:HTTP shutdown 后轮询 /health 等待退出,超时只记日志。
   const stopAll = async (): Promise<void> => {
     // 先停 worker 再停 hub(worker 先断开 hub 连接)
     if (worker) {
@@ -441,13 +432,31 @@ export async function startBackend(
       log('停止外部 worker(HTTP shutdown)...')
       await shutdownViaHttp(cfg.workerPort, cfg.workerApiKey, 'worker', log, 8000)
     }
+    // hub 始终由 desktop 启动,直接 child.kill(Windows SIGTERM 即硬杀;hub 无状态,硬杀零损失)
     if (hub) {
-      log('停止 hub(HTTP shutdown + 兜底 kill)...')
-      await shutdownChild(hub, cfg.hubPort, cfg.hubKey, 'hub', log, 5000)
-    } else {
-      log('停止外部 hub(HTTP shutdown)...')
-      await shutdownViaHttp(cfg.hubPort, cfg.hubKey, 'hub', log, 5000)
+      log('停止 hub...')
+      await new Promise<void>((resolve) => {
+        if (hub.exitCode !== null || hub.killed) return resolve()
+        const timer = setTimeout(() => {
+          try { hub.kill('SIGKILL') } catch { /* ignore */ }
+        }, 5000)
+        hub.once('exit', () => { clearTimeout(timer); resolve() })
+        try { hub.kill('SIGTERM') } catch { /* ignore */ }
+      })
     }
   }
-  return { hub, worker, workerId: actualWorkerId, stopAll }
+  const stopHub = async (): Promise<void> => {
+    if (hub) {
+      log('停止 hub(退出桌面,worker 保留)...')
+      await new Promise<void>((resolve) => {
+        if (hub.exitCode !== null || hub.killed) return resolve()
+        const timer = setTimeout(() => {
+          try { hub.kill('SIGKILL') } catch { /* ignore */ }
+        }, 5000)
+        hub.once('exit', () => { clearTimeout(timer); resolve() })
+        try { hub.kill('SIGTERM') } catch { /* ignore */ }
+      })
+    }
+  }
+  return { hub, worker, workerId: actualWorkerId, stopAll, stopHub }
 }
