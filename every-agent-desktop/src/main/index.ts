@@ -46,6 +46,8 @@ let staticServer: StaticServer | null = null
 let bootstrap: DesktopBootstrap | null = null
 let cfg: DesktopConfig | null = null
 let quitting = false
+/** 退出范围:desktop=仅退桌面端(后端进程全部保留,下次启动自动复用);all=连同 hub/worker 一并结束。 */
+let quitScope: 'desktop' | 'all' = 'desktop'
 
 interface StartupLine {
   time: string
@@ -292,9 +294,18 @@ function createTray(): void {
         { label: '显示 Every Agent', click: showMainWindow },
         { type: 'separator' },
         {
-          label: '退出',
+          label: '退出桌面',
           click: () => {
-            pushStatus('托盘菜单:退出应用')
+            pushStatus('托盘菜单:退出桌面(后端 hub/worker 保留运行)')
+            quitScope = 'desktop'
+            app.quit()
+          },
+        },
+        {
+          label: '全部退出(含 hub/worker)',
+          click: () => {
+            pushStatus('托盘菜单:全部退出(停止 hub/worker)')
+            quitScope = 'all'
             app.quit()
           },
         },
@@ -347,7 +358,7 @@ function createWindow(html: string): void {
   win.on('unmaximize', emitMaximizedChanged)
 
   // 关闭按钮(及 Alt+F4 等关闭途径)→ 隐藏窗口,程序后台运行,不退出。
-  // 真正退出走托盘菜单「退出」→ before-quit → 停止后端 → app.exit,
+  // 真正退出走托盘菜单「退出桌面」或「全部退出」→ before-quit → 按 quitScope 决定是否停后端 → app.exit,
   // 该流程经 before-quit preventDefault 中止,不会走到这里的 close 拦截。
   win.on('close', (event) => {
     pushStatus('收到窗口关闭请求,隐藏到托盘后台运行')
@@ -496,7 +507,7 @@ function windowControlsSnippet(): string {
 
 app.on('window-all-closed', () => {
   pushStatus('所有窗口已关闭,应用保持后台运行(可通过系统托盘恢复)')
-  // 关闭即后台运行:不退出。真正退出走托盘菜单「退出」。
+  // 关闭即后台运行:不退出。真正退出走托盘菜单「退出桌面」或「全部退出」。
 })
 
 app.on('activate', () => {
@@ -514,14 +525,19 @@ app.on('activate', () => {
 app.on('before-quit', (event) => {
   if (quitting) return
   quitting = true
-  pushStatus('应用即将退出,正在停止后端...')
   event.preventDefault()
   void (async () => {
     try {
-      if (backend) await backend.stop()
+      if (quitScope === 'all') {
+        pushStatus('全部退出:正在停止 hub / worker...')
+        if (backend) await backend.stopAll()
+      } else {
+        pushStatus('退出桌面:后端 hub/worker 保留运行(下次启动自动复用)')
+        // desktop 启动的 java 进程此时不停止,转为孤儿进程(下次启动时被探测复用)。
+      }
     } finally {
       if (staticServer) staticServer.close()
-      pushStatus('后端已停止,退出')
+      pushStatus(quitScope === 'all' ? '后端已停止,退出' : '桌面退出,后端保留运行')
       app.exit(0)
     }
   })()

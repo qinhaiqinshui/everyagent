@@ -5,7 +5,7 @@
  * desktop 只负责拉起进程、注入 EVERYAGENT_HOME,并把 cwd 设为程序根
  * (worker 以字面相对路径 ./runtime 定位程序附属文件,见 paths.programRoot)。
  */
-import { spawn, type ChildProcess } from 'node:child_process'
+import { spawn, execFile, type ChildProcess } from 'node:child_process'
 import { existsSync, mkdirSync, openSync } from 'node:fs'
 import { join } from 'node:path'
 import { app, utilityProcess } from 'electron'
@@ -30,6 +30,11 @@ export interface BackendHandles {
   workerId: string
   /** 优雅停止:先 worker 后 hub,超时强杀;外部进程(null)跳过。 */
   stop: () => Promise<void>
+  /**
+   * 全部停止:desktop 自己启动的走优雅停止;外部进程按监听端口定位 PID 强杀。
+   * 用于托盘「全部退出」——不管 hub/worker 是否外部启动,一律结束。
+   */
+  stopAll: () => Promise<void>
 }
 
 type StatusFn = (message: string) => void
@@ -291,7 +296,22 @@ export async function startBackend(
       log('hub 为外部进程,跳过停止')
     }
   }
-  return { hub, worker, workerId: actualWorkerId, stop }
+  // 全部停止:desktop 自己启动的走优雅停止;外部进程按监听端口定位 PID 强杀。
+  const stopAll = async (): Promise<void> => {
+    if (worker) {
+      log('停止 worker...')
+      await stopProcess(worker, 8000)
+    } else {
+      await killByPort(cfg.workerPort, 'worker', log)
+    }
+    if (hub) {
+      log('停止 hub...')
+      await stopProcess(hub, 5000)
+    } else {
+      await killByPort(cfg.hubPort, 'hub', log)
+    }
+  }
+  return { hub, worker, workerId: actualWorkerId, stop, stopAll }
 }
 
 function stopProcess(child: ChildProcess, graceMs: number): Promise<void> {
@@ -318,4 +338,74 @@ function stopProcess(child: ChildProcess, graceMs: number): Promise<void> {
       resolve()
     }
   })
+}
+
+function execFileP(cmd: string, args: string[]): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile(cmd, args, { windowsHide: true }, (err, stdout) => {
+      if (err) reject(err)
+      else resolve(String(stdout))
+    })
+  })
+}
+
+/**
+ * 查找监听指定 TCP 端口的进程 PID(去重)。
+ * Windows 用 netstat -ano 解析 LISTENING 行;其他平台(开发态)用 lsof。
+ * 排除 desktop 自身 pid。失败返回空数组(调用方降级为"无需处理")。
+ */
+async function pidsListeningOn(port: number): Promise<number[]> {
+  if (process.platform === 'win32') {
+    try {
+      const out = await execFileP('netstat', ['-ano', '-p', 'tcp'])
+      const pids = new Set<number>()
+      const suffix = `:${port}`
+      for (const line of out.split(/\r?\n/)) {
+        const cols = line.trim().split(/\s+/)
+        if (cols.length < 5 || cols[3] !== 'LISTENING') continue
+        // endsWith 精确匹配端口段:':9100' 不会误中 ':91001'(末 5 字符不等)。
+        if (!cols[1].endsWith(suffix)) continue
+        const pid = Number(cols[cols.length - 1])
+        if (Number.isInteger(pid) && pid > 0 && pid !== process.pid) pids.add(pid)
+      }
+      return [...pids]
+    } catch {
+      return []
+    }
+  }
+  try {
+    const out = await execFileP('lsof', ['-ti', `tcp:${port}`, '-sTCP:LISTEN'])
+    return out
+      .split(/\s+/)
+      .filter(Boolean)
+      .map(Number)
+      .filter((p) => Number.isInteger(p) && p > 0 && p !== process.pid)
+  } catch {
+    return []
+  }
+}
+
+/**
+ * 按监听端口强杀占用进程:用于「全部退出」时结束外部启动的 hub/worker
+ * (desktop 没有其子进程句柄)。Windows taskkill /F /T(含子树);
+ * 失败(如外部进程以 SYSTEM 身份运行、当前用户无权终止)只记日志,不阻塞退出。
+ */
+async function killByPort(port: number, label: string, log: StatusFn): Promise<void> {
+  const pids = await pidsListeningOn(port)
+  if (pids.length === 0) {
+    log(`外部 ${label}:端口 ${port} 无监听进程,无需处理`)
+    return
+  }
+  for (const pid of pids) {
+    try {
+      log(`停止外部 ${label} 进程 pid=${pid}(监听端口 ${port})...`)
+      if (process.platform === 'win32') {
+        await execFileP('taskkill', ['/PID', String(pid), '/F', '/T'])
+      } else {
+        process.kill(pid, 'SIGKILL')
+      }
+    } catch (error) {
+      log(`停止外部 ${label} pid=${pid} 失败(忽略): ${(error as Error).message}`)
+    }
+  }
 }

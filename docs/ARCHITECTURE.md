@@ -744,7 +744,7 @@ Electron 将 web + hub + worker **一体打包**为 Windows x64 便携(portable)
 - **独立后端启动**:`resources/start-backend.bat` 可脱离 Desktop GUI 独立启动 hub + worker(含健康检测与端口复用判断),适配 Windows 任务计划程序"系统启动时"触发器(Session 0 无 GUI 场景);Desktop 后续打开时自动检测到已有进程,不重复启动,关闭时也不停掉它们。
 - **配置注入**:生成 hub/worker yaml 经 `--spring.config.additional-location` 覆盖 jar 内默认(整表覆盖 `worker.hubs`,避免误连远端);数据目录复用 `EVERYAGENT_HOME`(缺省 `~/.everyagent`),与命令行/docker 共用同一批任务/工作区/模型。
 - **运行时配置**:每次启动读 `<EVERYAGENT_HOME>/desktop-config.json`(hubKey/workerApiKey/workerId/端口),首次生成;日志统一落 `<EVERYAGENT_HOME>/logs/`。
-- **生命周期**:单实例锁、占位页/错误页(含日志目录)、before-quit 先停 worker 再停 hub(超时强杀);若 hub/worker 为外部进程(非 desktop 启动)则跳过停止,由外部管理生命周期。
+- **生命周期**:单实例锁、占位页/错误页(含日志目录)、托盘提供「退出桌面」(仅退 GUI,hub/worker 全部保留,desktop 启动的 java 进程转为孤儿,下次启动自动复用)与「全部退出」(连同 hub/worker 一并结束,外部进程按监听端口定位 PID 强杀);`before-quit` 按 `quitScope` 决定是否停后端。
 - **构建流水线**:`build-backend.mjs`(mvn 打包)、`build-web.mjs`(前端 dist)、`build-jre.ps1`(jlink);electron-builder `extraResources(from: ../runtime → to: runtime)` 把程序附属文件打进安装包。
 
 ---

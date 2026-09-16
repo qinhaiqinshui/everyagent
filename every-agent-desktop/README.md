@@ -93,8 +93,7 @@ JRE 缺失时回退系统 `java`(Windows 下 `windowsHide` 隐藏控制台)。
 - **配置注入**:`desktop-hub.yml` / `desktop-worker.yml` 生成到 `<EVERYAGENT_HOME>/desktop/`,
   经 `--spring.config.additional-location=file:///...` 覆盖 jar 内默认值。
 - **单实例锁**:二次启动聚焦已有窗口。
-- **优雅退出**:`before-quit` 先 SIGTERM worker(触发落盘)再停 hub,超时强杀;退出无残留 java 进程。
-  若 hub/worker 为外部进程(经 `start-backend.bat` 启动),则跳过停止,由外部管理生命周期。
+- **优雅退出**:托盘「退出桌面」仅退 GUI,hub/worker(含 desktop 启动的)全部保留,下次启动自动复用;「全部退出」连同 hub/worker 一并结束——desktop 自己启动的走优雅停止,外部进程(经 `start-backend.bat` 启动)按监听端口定位 PID 强杀(`taskkill /F /T`)。
 
 ## 独立后端启动(无 GUI 场景)
 
@@ -111,4 +110,5 @@ JRE 缺失时回退系统 `java`(Windows 下 `windowsHide` 隐藏控制台)。
 **Desktop 交互**:
 - Desktop 启动时自动探测 hub(:9100)与 worker(:9200)是否已在运行。
 - 已在运行 → 跳过启动,直接复用(日志显示"外部进程")。
-- Desktop 退出时只停自己启动的进程;外部进程不受影响,继续运行。
+- 托盘「退出桌面」:保留所有后端进程(含 desktop 自己启动的,退出后转为外部孤儿,下次启动自动复用)。
+- 托盘「全部退出」:连同 hub/worker 一并结束,外部进程按监听端口定位 PID 强杀。
