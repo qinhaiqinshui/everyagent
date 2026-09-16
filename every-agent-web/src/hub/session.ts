@@ -213,6 +213,30 @@ class HubSession {
     await this.reconnect()
   }
 
+  /**
+   * 前台恢复兜底(移动端切后台/锁屏场景):若目录连接恰在挂起窗口内失败被 teardown
+   * (client=null / state=closed),页面回前台时静默重建。已连接/连接中/限流退避中/
+   * 致命错误待用户修正时均为空操作(ensureConnected 自带守卫)。
+   */
+  private lifecycleResumeWired = false
+
+  private wireLifecycleResume(): void {
+    if (this.lifecycleResumeWired || typeof window === 'undefined') return
+    this.lifecycleResumeWired = true
+    const onShow = () => {
+      if (this.rateLimitTimer || this.fatalError) return
+      if (!this.configured) return
+      if (this.client && this.state !== 'closed') return
+      void this.ensureConnected().catch((error) => {
+        console.warn('[hub] 前台恢复重连失败(静默,下次回前台会再试):', error)
+      })
+    }
+    window.addEventListener('pageshow', onShow)
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') onShow()
+    })
+  }
+
   /** 为指定 worker 保存 apiKey(加密)并(重)建其连接。 */
   async setWorkerApiKey(workerId: string, apiKey: string): Promise<WorkerConnectResult> {
     if (!this.config) {
@@ -388,6 +412,7 @@ class HubSession {
     }
     try {
       await directory.connect()
+      this.wireLifecycleResume()
       this.clearRateLimited()
       this.workersOnline.clear()
       directory.sub(channels.workers(directory.k))
