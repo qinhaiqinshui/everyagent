@@ -213,6 +213,12 @@ async function startup(): Promise<void> {
 
     pushStatus('启动本地后端(hub / worker)...')
     backend = await startBackend(cfg, paths, pushStatus)
+    pushStatus(
+      backend.hub ? 'hub 由 desktop 启动' : 'hub 为外部进程(复用)',
+    )
+    pushStatus(
+      backend.worker ? 'worker 由 desktop 启动' : 'worker 为外部进程(复用)',
+    )
 
     // worker 实际 workerId 可能与 desktop-config.json 的配置值不一致(worker 可经
     // application-worker.yaml / WORKER_ID 覆盖默认)。前端建连与 tasks.list 等 RPC 必须以

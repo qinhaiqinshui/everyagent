@@ -13,15 +13,22 @@ import type { DesktopConfig, DesktopPaths } from './config'
 import { runtimeDir, programRoot, hubJar, jreJavaExe, jreJavaExeFallback, workerJar } from './paths'
 
 export interface BackendHandles {
-  hub: ChildProcess
-  worker: ChildProcess
+  /**
+   * hub 子进程;null 表示 hub 为外部进程(desktop 未启动它,退出时不停止)。
+   * 外部进程典型来源:任务计划程序经 start-backend.bat 启动。
+   */
+  hub: ChildProcess | null
+  /**
+   * worker 子进程;null 表示 worker 为外部进程(desktop 未启动它,退出时不停止)。
+   */
+  worker: ChildProcess | null
   /**
    * worker /health 上报的实际 workerId(可能不同于 desktop-config.json 配置值:
    * worker 侧 application-worker.yaml 或 WORKER_ID 环境变量可覆盖默认)。
    * 前端建连/发 RPC 必须使用这个真实值,否则 cmd 频道名对不上,RPC 被 hub 丢弃。
    */
   workerId: string
-  /** 优雅停止:先 worker 后 hub,超时强杀。 */
+  /** 优雅停止:先 worker 后 hub,超时强杀;外部进程(null)跳过。 */
   stop: () => Promise<void>
 }
 
@@ -33,6 +40,16 @@ function resolveJavaExe(): { exe: string; windowsHide: boolean } {
   if (existsSync(jreJavaExeFallback())) return { exe: jreJavaExeFallback(), windowsHide: true }
   if (process.platform === 'win32') return { exe: 'java', windowsHide: true }
   return { exe: 'java', windowsHide: false }
+}
+
+/** 快速探测 HTTP 端点是否可达且返回 200(用于检测已有外部进程)。 */
+async function probeHttp(url: string, timeoutMs: number): Promise<boolean> {
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) })
+    return res.ok
+  } catch {
+    return false
+  }
 }
 
 async function waitHttp(
@@ -197,40 +214,82 @@ export async function startBackend(
   const env: NodeJS.ProcessEnv = { ...process.env, EVERYAGENT_HOME: paths.home }
   const hubLog = join(paths.logsDir, 'hub.out.log')
   const workerLog = join(paths.logsDir, 'worker.out.log')
+  const hubUrl = `http://127.0.0.1:${cfg.hubPort}/health`
+  const workerUrl = `http://127.0.0.1:${cfg.workerPort}/health`
 
-  log(`启动 hub (${hubJarPath}) ...`)
-  const hub = spawnJava('hub', hubJarPath, [], hubLog, env, programRoot())
+  // ------------------------------------------------------------------
+  // 探测已有 hub:若外部已启动(任务计划程序 / start-backend.bat)则复用。
+  // ------------------------------------------------------------------
+  let hub: ChildProcess | null = null
+  if (await probeHttp(hubUrl, 2000)) {
+    log('hub 已在运行(外部进程),跳过启动')
+  } else {
+    log(`启动 hub (${hubJarPath}) ...`)
+    hub = spawnJava('hub', hubJarPath, [], hubLog, env, programRoot())
+    log(`等待 hub 健康检查 ${hubUrl} (30s)...`)
+    await waitHttp(hubUrl, 30000, 'hub', hub)
+    log('hub 健康检查通过')
+  }
 
-  log(`等待 hub 健康检查 http://127.0.0.1:${cfg.hubPort}/health (30s)...`)
-  await waitHttp(`http://127.0.0.1:${cfg.hubPort}/health`, 30000, 'hub', hub)
-  log('hub 健康检查通过')
+  // ------------------------------------------------------------------
+  // 探测已有 worker:端口能响应说明进程在(外部启动);不响应说明需启动。
+  // 若端口能响应但 hubConnected=false(hub 刚由 desktop 启动,worker 尚未重连),
+  // 给 30s 等待重连;超时仍标记为外部(不能 spawn——会端口冲突)。
+  // ------------------------------------------------------------------
+  let worker: ChildProcess | null = null
+  let actualWorkerId = ''
+  if (await probeHttp(workerUrl, 2000)) {
+    log('检测到 worker 已在运行(外部进程),等待 hub 连接就绪...')
+    try {
+      actualWorkerId = await waitWorkerReady(workerUrl, 30000, 'worker')
+      log(
+        actualWorkerId
+          ? `worker 就绪(外部,hub 连接已建立,workerId=${actualWorkerId})`
+          : 'worker 就绪(外部,hub 连接已建立,未读到 workerId)',
+      )
+    } catch {
+      // worker 端口在但 hubConnected 一直 false:可能是 worker 刚启动还在连 hub,
+      // 或 hub 连接断开。无论哪种都不能再 spawn(端口已占)。尝试读 workerId 后复用。
+      log('警告:外部 worker 未在 30s 内建立 hub 连接,仍标记为外部进程(不启动新实例)')
+      try {
+        const res = await fetch(workerUrl, { signal: AbortSignal.timeout(2000) })
+        if (res.ok) {
+          const body = (await res.json().catch(() => null)) as { workerId?: unknown } | null
+          if (body && typeof body.workerId === 'string') actualWorkerId = body.workerId.trim()
+        }
+      } catch { /* ignore */ }
+    }
+  } else {
+    log(`启动 worker (${workerJarPath}) ...`)
+    // 程序附属文件(rg、eagent-run.py、镜像)随安装包分发到 <程序根>/runtime;
+    // worker 以字面相对路径 ./runtime 按 user.dir 定位,故这里把 cwd 设为程序根。
+    worker = spawnJava('worker', workerJarPath, [], workerLog, env, programRoot())
+    // 启动顺序关键:必须等到 worker 就绪(健康检查通过且 hub 连接建立)再加载前端,
+    // 否则前端首屏 tasks.list 落在 worker 尚未订阅 cmd 频道的窗口,任务列表恒为空,
+    // 只能去设置页手动「保存并连接」重建连接后才恢复。
+    log(`等待 worker 就绪(健康检查 + hub 连接) ${workerUrl} (120s)...`)
+    actualWorkerId = await waitWorkerReady(workerUrl, 120000, 'worker', worker)
+    log(
+      actualWorkerId
+        ? `worker 就绪(hub 连接已建立,workerId=${actualWorkerId})`
+        : 'worker 就绪(hub 连接已建立,未读到 workerId)',
+    )
+  }
 
-  log(`启动 worker (${workerJarPath}) ...`)
-  // 程序附属文件(rg、eagent-run.py、镜像)随安装包分发到 <程序根>/runtime;
-  // worker 以字面相对路径 ./runtime 按 user.dir 定位,故这里把 cwd 设为程序根。
-  const worker = spawnJava('worker', workerJarPath, [], workerLog, env, programRoot())
-
-  // 启动顺序关键:必须等到 worker 就绪(健康检查通过且 hub 连接建立)再加载前端,
-  // 否则前端首屏 tasks.list 落在 worker 尚未订阅 cmd 频道的窗口,任务列表恒为空,
-  // 只能去设置页手动「保存并连接」重建连接后才恢复。
-  log(`等待 worker 就绪(健康检查 + hub 连接) http://127.0.0.1:${cfg.workerPort}/health (120s)...`)
-  const actualWorkerId = await waitWorkerReady(
-    `http://127.0.0.1:${cfg.workerPort}/health`,
-    120000,
-    'worker',
-    worker,
-  )
-  log(
-    actualWorkerId
-      ? `worker 就绪(hub 连接已建立,workerId=${actualWorkerId})`
-      : 'worker 就绪(hub 连接已建立,未读到 workerId)',
-  )
-
+  // 优雅停止:只停 desktop 自己启动的进程;外部进程(null)跳过。
   const stop = async (): Promise<void> => {
-    log('停止 worker...')
-    await stopProcess(worker, 8000)
-    log('停止 hub...')
-    await stopProcess(hub, 5000)
+    if (worker) {
+      log('停止 worker...')
+      await stopProcess(worker, 8000)
+    } else {
+      log('worker 为外部进程,跳过停止')
+    }
+    if (hub) {
+      log('停止 hub...')
+      await stopProcess(hub, 5000)
+    } else {
+      log('hub 为外部进程,跳过停止')
+    }
   }
   return { hub, worker, workerId: actualWorkerId, stop }
 }

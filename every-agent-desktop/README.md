@@ -94,3 +94,21 @@ JRE 缺失时回退系统 `java`(Windows 下 `windowsHide` 隐藏控制台)。
   经 `--spring.config.additional-location=file:///...` 覆盖 jar 内默认值。
 - **单实例锁**:二次启动聚焦已有窗口。
 - **优雅退出**:`before-quit` 先 SIGTERM worker(触发落盘)再停 hub,超时强杀;退出无残留 java 进程。
+  若 hub/worker 为外部进程(经 `start-backend.bat` 启动),则跳过停止,由外部管理生命周期。
+
+## 独立后端启动(无 GUI 场景)
+
+安装包内附带 `resources/start-backend.bat`,可在无 Desktop GUI 的情况下启动 hub + worker。
+适配 Windows 任务计划程序"系统启动时"触发器(Session 0 无 GUI 场景,如服务器/无人值守机器)。
+
+**任务计划程序配置**:
+
+1. 触发器选"**登录时**"(推荐)或"系统启动时"(后者需最高权限且因 Session 0 无 GUI 仅后端运行)。
+2. 操作 → 启动程序:程序填 `<安装根>\resources\start-backend.bat`。
+3. 脚本会自动检测 hub/worker 是否已在运行(端口复用),避免重复启动。
+4. 日志输出到 `<EVERYAGENT_HOME>\logs\{hub,worker}.out.log`。
+
+**Desktop 交互**:
+- Desktop 启动时自动探测 hub(:9100)与 worker(:9200)是否已在运行。
+- 已在运行 → 跳过启动,直接复用(日志显示"外部进程")。
+- Desktop 退出时只停自己启动的进程;外部进程不受影响,继续运行。

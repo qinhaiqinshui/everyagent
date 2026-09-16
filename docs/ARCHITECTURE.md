@@ -740,10 +740,11 @@ Input:  queued → consumed | discarded(任务取消)
 
 Electron 将 web + hub + worker **一体打包**为 Windows x64 便携(portable)与安装包(NSIS):
 
-- **进程模型**:主进程 spawn 本地 hub 与 worker 两个 Spring Boot 子进程(`javaw.exe`,jlink 精简 JRE 随包);前端经本地静态服务加载(127.0.0.1 随机端口,保证 localhost 安全上下文),preload 以 contextBridge 注入开箱即用连接配置。
+- **进程模型**:主进程 spawn 本地 hub 与 worker 两个 Spring Boot 子进程(`javaw.exe`,jlink 精简 JRE 随包);前端经本地静态服务加载(127.0.0.1 随机端口,保证 localhost 安全上下文),preload 以 contextBridge 注入开箱即用连接配置。**支持复用外部进程**:启动前探测 hub(:9100/health)与 worker(:9200/health)是否已在运行——已在运行则跳过启动直接复用,退出时只停 desktop 自己启动的进程;外部启动的进程(如经任务计划程序)不受影响。
+- **独立后端启动**:`resources/start-backend.bat` 可脱离 Desktop GUI 独立启动 hub + worker(含健康检测与端口复用判断),适配 Windows 任务计划程序"系统启动时"触发器(Session 0 无 GUI 场景);Desktop 后续打开时自动检测到已有进程,不重复启动,关闭时也不停掉它们。
 - **配置注入**:生成 hub/worker yaml 经 `--spring.config.additional-location` 覆盖 jar 内默认(整表覆盖 `worker.hubs`,避免误连远端);数据目录复用 `EVERYAGENT_HOME`(缺省 `~/.everyagent`),与命令行/docker 共用同一批任务/工作区/模型。
 - **运行时配置**:每次启动读 `<EVERYAGENT_HOME>/desktop-config.json`(hubKey/workerApiKey/workerId/端口),首次生成;日志统一落 `<EVERYAGENT_HOME>/logs/`。
-- **生命周期**:单实例锁、占位页/错误页(含日志目录)、before-quit 先停 worker 再停 hub(超时强杀)。
+- **生命周期**:单实例锁、占位页/错误页(含日志目录)、before-quit 先停 worker 再停 hub(超时强杀);若 hub/worker 为外部进程(非 desktop 启动)则跳过停止,由外部管理生命周期。
 - **构建流水线**:`build-backend.mjs`(mvn 打包)、`build-web.mjs`(前端 dist)、`build-jre.ps1`(jlink);electron-builder `extraResources(from: ../runtime → to: runtime)` 把程序附属文件打进安装包。
 
 ---
