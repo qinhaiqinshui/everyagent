@@ -92,7 +92,7 @@ class FakeChatModel implements org.springframework.ai.chat.model.ChatModel {
         if (text.contains("SUB:")) {
             String subInput = text.substring(text.indexOf("SUB:") + 4).trim();
             return Flux.just(toolCallChunk("call-sub-1", "run_agent",
-                    "{\"input\":\"" + subInput + "\",\"title\":\"子任务\",\"blocking\":true}"));
+                    "{\"input\":\"" + subInput + "\",\"title\":\"子任务\"}"));
         }
         if (text.contains("EXEC:")) {
             // EXEC:<原始 JSON args>:透传平台命令工具参数(测危险命令授权);工具名按运行时 OS 选(与注册侧一致)
