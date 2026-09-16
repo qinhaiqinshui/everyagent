@@ -16,6 +16,8 @@ type LineNumberedSourceViewProps = {
   fontFamily?: string
   padding?: string
   readonlyClassName?: string
+  /** 只读态语法高亮 HTML（Prism 输出）；提供时用 dangerouslySetInnerHTML 替代纯文本渲染。 */
+  highlightHtml?: string | null
   /** 文件内查找正则（带 g 标志）；可编辑态用它在 textarea 背后渲染高亮叠层。 */
   findRegex?: RegExp | null
   /** 当前命中序号（0-based），标亮「当前」匹配。 */
@@ -40,6 +42,7 @@ export default function LineNumberedSourceView({
   fontFamily = '"Cascadia Code", "Fira Code", Consolas, monospace',
   padding = '20px 0',
   readonlyClassName,
+  highlightHtml,
   findRegex,
   findActiveIndex = 0,
   findEnabled = false,
@@ -313,8 +316,9 @@ export default function LineNumberedSourceView({
             lineHeight,
             fontFamily,
           }}
+          dangerouslySetInnerHTML={highlightHtml ? { __html: highlightHtml } : undefined}
         >
-          {content}
+          {highlightHtml ? undefined : content}
         </pre>
       </div>
       {measureNode}

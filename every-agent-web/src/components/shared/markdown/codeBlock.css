@@ -86,77 +86,79 @@
   padding: 0;
 }
 
-/* ─── Prism token 主题 → 项目 accent 变量 ─────────────────────────────── */
+/* ─── Prism token 主题 → 项目 accent 变量 ───────────────────────────────
+ * 以 .prism-tokens 为共享 scope,Markdown 代码块(CodeBlock)与
+ * 代码文件编辑器(CodeFileEditor)均挂该 class,token 配色一致、主题自动跟随。 */
 
-.code-block .token.comment,
-.code-block .token.prolog,
-.code-block .token.cdata,
-.code-block .token.doctype {
+.prism-tokens .token.comment,
+.prism-tokens .token.prolog,
+.prism-tokens .token.cdata,
+.prism-tokens .token.doctype {
   color: var(--text-muted);
 }
 
-.code-block .token.keyword,
-.code-block .token.tag,
-.code-block .token.important,
-.code-block .token.atrule,
-.code-block .token.rule {
+.prism-tokens .token.keyword,
+.prism-tokens .token.tag,
+.prism-tokens .token.important,
+.prism-tokens .token.atrule,
+.prism-tokens .token.rule {
   color: var(--accent-purple);
 }
 
-.code-block .token.string,
-.code-block .token.char,
-.code-block .token.attr-value,
-.code-block .token.regex,
-.code-block .token.url {
+.prism-tokens .token.string,
+.prism-tokens .token.char,
+.prism-tokens .token.attr-value,
+.prism-tokens .token.regex,
+.prism-tokens .token.url {
   color: var(--accent-green);
 }
 
-.code-block .token.number,
-.code-block .token.boolean,
-.code-block .token.constant,
-.code-block .token.symbol,
-.code-block .token.unit {
+.prism-tokens .token.number,
+.prism-tokens .token.boolean,
+.prism-tokens .token.constant,
+.prism-tokens .token.symbol,
+.prism-tokens .token.unit {
   color: var(--accent-amber);
 }
 
-.code-block .token.function,
-.code-block .token.attr-name,
-.code-block .token.selector,
-.code-block .token.property {
+.prism-tokens .token.function,
+.prism-tokens .token.attr-name,
+.prism-tokens .token.selector,
+.prism-tokens .token.property {
   color: var(--accent-blue);
 }
 
-.code-block .token.class-name,
-.code-block .token.builtin,
-.code-block .token.maybe-class-name,
-.code-block .token.entity,
-.code-block .token.namespace {
+.prism-tokens .token.class-name,
+.prism-tokens .token.builtin,
+.prism-tokens .token.maybe-class-name,
+.prism-tokens .token.entity,
+.prism-tokens .token.namespace {
   color: var(--accent-cyan);
 }
 
-.code-block .token.operator,
-.code-block .token.punctuation,
-.code-block .token.delimiter {
+.prism-tokens .token.operator,
+.prism-tokens .token.punctuation,
+.prism-tokens .token.delimiter {
   color: var(--text-secondary);
 }
 
-.code-block .token.variable,
-.code-block .token.placeholder {
+.prism-tokens .token.variable,
+.prism-tokens .token.placeholder {
   color: var(--code-text);
 }
 
-.code-block .token.inserted {
+.prism-tokens .token.inserted {
   color: var(--accent-green);
 }
 
-.code-block .token.deleted {
+.prism-tokens .token.deleted {
   color: var(--accent-red);
 }
 
-.code-block .token.bold {
+.prism-tokens .token.bold {
   font-weight: 700;
 }
 
-.code-block .token.italic {
+.prism-tokens .token.italic {
   font-style: italic;
 }

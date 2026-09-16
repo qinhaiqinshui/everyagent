@@ -8,7 +8,7 @@ type FileContentEditorModule = {
 // 核心只保留 Json / Text（及 fallback）编辑器；`.md` 等插件自带编辑器通过
 // 通用扩展扫描从 `src/plugins/*/editors/` 发现（如 markdown 插件）。
 const editorModuleMap = import.meta.glob(
-  ['./JsonFileEditor.tsx', './TextFileEditor.tsx', '../../../plugins/*/editors/*FileEditor.tsx'],
+  ['./CodeFileEditor.tsx', './JsonFileEditor.tsx', './TextFileEditor.tsx', '../../../plugins/*/editors/*FileEditor.tsx'],
   { eager: true },
 ) as Record<string, FileContentEditorModule>
 
