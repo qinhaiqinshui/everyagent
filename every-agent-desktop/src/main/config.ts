@@ -42,8 +42,8 @@ const DEFAULTS: DesktopConfig = {
   hubKey: 'sljlw23948LKS',
   workerApiKey: 'dev-key',
   workerId: 'company-pc',
-  hubPort: 9100,
-  workerPort: 9200,
+  hubPort: 6101,
+  workerPort: 6102,
   gpuWorkaround: true,
 }
 

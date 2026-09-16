@@ -47,9 +47,9 @@ class WorkerPropertiesTest {
     @Test
     void resolveHubs_returnsValidHubsAsIs() {
         WorkerProperties props = new WorkerProperties();
-        HubConfig hubA = new HubConfig("ws://hub-a:9100/ws", "key-a", "hub-secret");
-        HubConfig hubB = new HubConfig("ws://hub-b:9100/ws", "key-b", "hub-secret");
-        HubConfig hubC = new HubConfig("ws://hub-c:9100/ws", "key-c", "hub-secret");
+        HubConfig hubA = new HubConfig("ws://hub-a:6101/ws", "key-a", "hub-secret");
+        HubConfig hubB = new HubConfig("ws://hub-b:6101/ws", "key-b", "hub-secret");
+        HubConfig hubC = new HubConfig("ws://hub-c:6101/ws", "key-c", "hub-secret");
         props.setHubs(Arrays.asList(hubA, hubB, hubC));
 
         List<HubConfig> out = props.resolveHubs();
@@ -59,7 +59,7 @@ class WorkerPropertiesTest {
         assertSame(hubA, out.get(0));
         assertSame(hubB, out.get(1));
         assertSame(hubC, out.get(2));
-        assertEquals("ws://hub-a:9100/ws", out.get(0).getUrl());
+        assertEquals("ws://hub-a:6101/ws", out.get(0).getUrl());
         assertEquals("key-a", out.get(0).getApiKey());
         assertEquals("key-b", out.get(1).getApiKey());
         assertEquals("key-c", out.get(2).getApiKey());
@@ -69,7 +69,7 @@ class WorkerPropertiesTest {
     @Test
     void resolveHubs_filtersNullAndBlankUrlEntries() {
         WorkerProperties props = new WorkerProperties();
-        HubConfig valid = new HubConfig("ws://hub-valid:9100/ws", "key-valid", "hub-secret");
+        HubConfig valid = new HubConfig("ws://hub-valid:6101/ws", "key-valid", "hub-secret");
         HubConfig nullUrl = new HubConfig(null, "key-null-url", "hub-secret");
         HubConfig blankUrl = new HubConfig("   ", "key-blank-url", "hub-secret");
         props.setHubs(Arrays.asList(null, valid, nullUrl, blankUrl, null));
@@ -135,9 +135,9 @@ class WorkerPropertiesTest {
     @Test
     void resolveHubs_filtersBlankOnlyAndKeepsOtherValid() {
         WorkerProperties props = new WorkerProperties();
-        HubConfig hubA = new HubConfig("ws://hub-a:9100/ws", "key-a", "hub-secret");
+        HubConfig hubA = new HubConfig("ws://hub-a:6101/ws", "key-a", "hub-secret");
         HubConfig blankUrl = new HubConfig("", "key-blank", "hub-secret");
-        HubConfig hubB = new HubConfig("ws://hub-b:9100/ws", "key-b", "hub-secret");
+        HubConfig hubB = new HubConfig("ws://hub-b:6101/ws", "key-b", "hub-secret");
         props.setHubs(Arrays.asList(hubA, blankUrl, hubB));
 
         List<HubConfig> out = props.resolveHubs();

@@ -1,5 +1,7 @@
 package dev.everyagent.worker.task;
 
+import dev.everyagent.worker.slash.SlashTokenHandler;
+
 import org.springframework.ai.chat.client.ChatClientRequest;
 import org.springframework.ai.chat.client.ChatClientResponse;
 import org.springframework.ai.chat.client.advisor.ToolCallingAdvisor;
@@ -25,6 +27,15 @@ import java.util.List;
  * 排在同批工具结果之后。同时发射 {@code user.message} 事件(前端右侧用户消息区可见、落盘回放完整)
  * 并同步进 {@code a.conversation}(跨轮/再运行上下文不丢)。
  *
+ * <p>slashitem 解析:由于 {@link dev.everyagent.worker.skill.SlashTokenResolveAdvisor}(order +150)
+ * 位于工具循环<b>之外</b>(外层,每请求仅运行一次),而本 advisor 在工具循环<b>内侧</b>才注入消息,
+ * 外层 advisor 已扫过、不会回头处理被插入的消息。因此本 advisor 在注入前自行调用
+ * {@link SlashTokenHandler#resolve(String, dev.everyagent.worker.task.TaskEntry)}
+ * 把 opaque token 解析为提交文本——保证当前轮模型即可见解析后文本,与正常
+ * {@code consumeInput} 路径(下一轮由 {@code SlashTokenResolveAdvisor} 解析)效果一致。
+ * 解析后文本同步写入 {@code a.conversation} 与 {@code user.message} 事件;
+ * {@code rawContent} 仍保留原始 opaque 串供前端回放还原胶囊。
+ *
  * <p>顺序:order = {@code ToolCallingAdvisor.DEFAULT_ORDER + 30}(= HIGHEST+330),位于工具循环
  * 内侧、FileChangeAdvisor(+301)之后、EmptyResponseRetryAdvisor(+400)之前——每个工具循环迭代的下行阶段
  * 都穿过本 advisor,而空响应/瞬时错误重试各自 copy 其后的链,不经过本 advisor,不会重复注入。主/子 agent 共用同一
@@ -37,9 +48,11 @@ import java.util.List;
 public class DialogInsertAdvisor implements StreamAdvisor {
 
     private final AgentEntity a;
+    private final SlashTokenHandler slashTokenHandler;
 
-    public DialogInsertAdvisor(AgentEntity a) {
+    public DialogInsertAdvisor(AgentEntity a, SlashTokenHandler slashTokenHandler) {
         this.a = a;
+        this.slashTokenHandler = slashTokenHandler;
     }
 
     @Override
@@ -62,6 +75,8 @@ public class DialogInsertAdvisor implements StreamAdvisor {
 
     /**
      * 下行阶段注入:把本轮积压的插入用户输入 drain 并追加到发给模型的历史末尾。
+     * 注入前调用 {@link SlashTokenHandler#resolve} 解析 opaque token(外层
+     * {@code SlashTokenResolveAdvisor} 已执行过、不会回头处理工具循环内侧注入的消息)。
      * 队列空 / 子 agent / 无主 agent 实体时原样返回,不改写请求。
      */
     private ChatClientRequest inject(ChatClientRequest chatClientRequest) {
@@ -76,13 +91,15 @@ public class DialogInsertAdvisor implements StreamAdvisor {
         UserInput input;
         while ((input = a.pendingDialogInserts.poll()) != null) {
             String text = input.text();
+            String resolved = slashTokenHandler.resolve(text, a.task);
             // user.message 事件:前端右侧用户消息区显示 + 落盘回放完整(与 consumeInput 同事件)。
-            // rawContent 保留原始 opaque 串,供前端回放还原胶囊。
-            a.task.events.userMessage(text, input.rawContent());
-            // 同步进工作态会话:跨轮 / 同任务后续 run 上下文不丢
-            a.conversation.add(new UserMessage(text));
+            // resolved 为 AI 实际可见文本;rawContent 保留原始 opaque 串,供前端回放还原胶囊。
+            a.task.events.userMessage(resolved, input.rawContent());
+            // 同步进工作态会话:跨轮 / 同任务后续 run 上下文不丢(存解析后文本,
+            // 下一轮 SlashTokenResolveAdvisor 扫描无 token 幂等跳过)
+            a.conversation.add(new UserMessage(resolved));
             // 追加到下一轮 instructions(排在工具结果之后,随工具结果一起提交给 AI)
-            instructions.add(new UserMessage(text));
+            instructions.add(new UserMessage(resolved));
             changed = true;
         }
         if (!changed) {

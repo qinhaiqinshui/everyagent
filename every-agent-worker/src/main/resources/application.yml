@@ -8,7 +8,7 @@ worker:
   # (同 apiKey 多 hub = 可靠性冗余,不同 apiKey = 一台 worker 服务多个用户,数据按 K 隔离);
   # 不配置则 worker 不连任何 hub;url 有效但 api-key/hub-key 缺失 → 启动失败(凭据必填,无旁路)。
   hubs:
-    - url: ws://localhost:9100/ws
+    - url: ws://localhost:6101/ws
       api-key: dev-key
       # 连接 hub 的凭证(对 hub 的保护);与 api-key 不同,由部署者统一配置。必填:
       # 原始密钥须与目标 hub 的 hub.hub-key(存其 sha256)对应,缺失该条目 worker 拒绝启动
@@ -125,7 +125,7 @@ worker:
 
 
 server:
-  port: 9200
+  port: 6102
   address: 127.0.0.1 # 管理端口仅本机(架构 §2.2)
 
 spring:

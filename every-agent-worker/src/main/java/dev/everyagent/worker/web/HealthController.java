@@ -8,7 +8,7 @@ import org.springframework.web.bind.annotation.RestController;
 import tools.jackson.databind.node.ArrayNode;
 import tools.jackson.databind.node.ObjectNode;
 
-/** 本机健康检查(9200 仅监听 127.0.0.1)。 */
+/** 本机健康检查(6102 仅监听 127.0.0.1)。 */
 @RestController
 public class HealthController {
 
