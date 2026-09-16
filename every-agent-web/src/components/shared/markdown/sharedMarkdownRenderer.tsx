@@ -128,7 +128,6 @@ function extractReactText(node: React.ReactNode): string {
 
 const baseParagraphStyle: React.CSSProperties = {
   margin: 0,
-  lineHeight: 1.8,
 }
 
 const baseBlockquoteStyle: React.CSSProperties = {
@@ -214,7 +213,7 @@ const variantStyles: Record<MarkdownVariant, {
   heading: Record<number, React.CSSProperties>
 }> = {
   preview: {
-    paragraph: { ...baseParagraphStyle, fontSize: 'var(--text-base)', color: 'var(--text-primary)', marginBottom: 4 },
+    paragraph: { ...baseParagraphStyle, fontSize: 'var(--text-base)', lineHeight: 1.8, color: 'var(--text-primary)', marginBottom: 4 },
     blockquote: { ...baseBlockquoteStyle, margin: '8px 0', color: 'var(--text-secondary)', fontSize: 'var(--text-sm)', background: 'var(--bg-tertiary)' },
     list: { margin: '6px 0 8px', padding: 0, paddingLeft: '1.4em', listStyleType: 'disc' },
     listItem: { fontSize: 'var(--text-base)', lineHeight: 1.6, color: 'var(--text-primary)', marginBottom: 2 },
@@ -228,7 +227,7 @@ const variantStyles: Record<MarkdownVariant, {
     heading: previewHeadingStyles,
   },
   display: {
-    paragraph: { ...baseParagraphStyle, fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' },
+    paragraph: { ...baseParagraphStyle, fontSize: 'var(--text-sm)', lineHeight: 1.7, color: 'var(--text-secondary)' },
     blockquote: { ...baseBlockquoteStyle, margin: '4px 0', color: 'var(--text-secondary)', fontSize: 'var(--text-sm)', lineHeight: 1.75 },
     list: { margin: '2px 0 4px', padding: 0, paddingLeft: '1.6em', listStyleType: 'disc' },
     listItem: { fontSize: 'var(--text-sm)', lineHeight: 1.6, color: 'var(--text-secondary)', marginBottom: 2 },

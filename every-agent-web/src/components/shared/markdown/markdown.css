@@ -13,3 +13,8 @@
 .md-root li > p {
   margin: 0;
 }
+
+/* 连续段落间距：相邻 <p> 之间留少量间距，末段不产生尾部空白。 */
+.md-root p + p {
+  margin-top: 4px;
+}
