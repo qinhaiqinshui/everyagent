@@ -60,7 +60,7 @@ const MarkdownPreview = React.forwardRef<MarkdownPreviewHandle, MarkdownPreviewP
   }), [headingIdSet])
 
   return (
-    <div style={rootStyle}>
+    <div className="md-root" style={rootStyle}>
       <Markdown remarkPlugins={[remarkGfm]} components={components}>
         {normalized}
       </Markdown>

@@ -1,0 +1,15 @@
+/* Markdown 渲染（react-markdown）的结构性修正。
+ * 基础样式走 buildMarkdownComponents 内联；此处仅处理内联样式难以表达的
+ * 后代选择器场景。根容器需带 .md-root 类名。 */
+
+/* 嵌套列表：li 内的 ul/ol 收紧上下间距（基础 margin 叠加 li 间距会显得过大） */
+.md-root li > ul,
+.md-root li > ol {
+  margin: 2px 0 0;
+}
+
+/* 列表项内段落：松散列表（项间有空行）remark 会把 li 内容包进 <p>，
+ * 去掉段落 margin，避免与 li 自身间距叠加。 */
+.md-root li > p {
+  margin: 0;
+}

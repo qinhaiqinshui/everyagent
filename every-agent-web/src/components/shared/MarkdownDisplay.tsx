@@ -16,9 +16,11 @@ const MarkdownDisplay = React.memo(function MarkdownDisplay({ content }: { conte
   const normalized = React.useMemo(() => normalizeMarkdownContent(content), [content])
   if (!normalized.trim()) return null
   return (
-    <Markdown remarkPlugins={[remarkGfm]} components={displayComponents}>
-      {normalized}
-    </Markdown>
+    <div className="md-root">
+      <Markdown remarkPlugins={[remarkGfm]} components={displayComponents}>
+        {normalized}
+      </Markdown>
+    </div>
   )
 })
 

@@ -2,6 +2,7 @@ import React from 'react'
 import type { Components, ExtraProps } from 'react-markdown'
 import type { Element, ElementContent } from 'hast'
 import CodeBlock from './CodeBlock'
+import './markdown.css'
 
 export type MarkdownVariant = 'preview' | 'display'
 
