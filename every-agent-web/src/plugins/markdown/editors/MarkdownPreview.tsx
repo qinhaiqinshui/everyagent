@@ -17,6 +17,7 @@ import {
   MarkdownTable,
 } from '@/components/shared/markdown/sharedMarkdownRenderer'
 import MarkdownImage from './MarkdownImage'
+import CodeBlock from '@/components/shared/markdown/CodeBlock'
 
 type MarkdownListItem = {
   text: string
@@ -47,6 +48,7 @@ type MarkdownBlock =
     type: 'code'
     key: string
     content: string
+    language?: string
   }
   | {
     type: 'list'
@@ -258,24 +260,23 @@ function renderBlock(block: MarkdownBlock, depth: number, wrapLines: boolean, in
   }
   if (block.type === 'code') {
     return (
-      <pre key={block.key} style={{ ...codeBlockStyle, marginLeft: blockOffset }}>
-        <code>{block.content}</code>
-      </pre>
+      <div key={block.key} style={{ marginLeft: blockOffset }}>
+        <CodeBlock code={block.content} language={block.language} variant="preview" />
+      </div>
     )
   }
   if (block.type === 'list') {
     return renderListItems(block.items, block.ordered, 0, block.key, wrapLines, inlineRenderOptions)
   }
   return (
-    <div key={block.key} style={{ marginLeft: blockOffset }}>
-      <MarkdownTable
-        headers={block.headers}
-        alignments={block.alignments}
-        rows={block.rows}
-        inlineOptions={inlineRenderOptions}
-        styles={previewTableStyles}
-      />
-    </div>
+    <MarkdownTable
+      key={block.key}
+      headers={block.headers}
+      alignments={block.alignments}
+      rows={block.rows}
+      inlineOptions={inlineRenderOptions}
+      styles={previewTableStyles}
+    />
   )
 }
 
@@ -319,6 +320,7 @@ function parseMarkdownDocument(content: string, headingIds: Map<number, string>)
   const sectionStack: MarkdownSection[] = []
   let codeBlockLines: string[] = []
   let codeBlockStartLine = -1
+  let codeBlockLanguage: string | undefined
   let inCodeBlock = false
   let blockIndex = 0
 
@@ -336,9 +338,11 @@ function parseMarkdownDocument(content: string, headingIds: Map<number, string>)
       type: 'code',
       key: `code-${codeBlockStartLine}-${blockIndex++}`,
       content: codeBlockLines.join('\n'),
+      language: codeBlockLanguage,
     })
     codeBlockLines = []
     codeBlockStartLine = -1
+    codeBlockLanguage = undefined
   }
 
   for (let index = 0; index < lines.length; index += 1) {
@@ -352,6 +356,7 @@ function parseMarkdownDocument(content: string, headingIds: Map<number, string>)
         inCodeBlock = true
         codeBlockStartLine = index
         codeBlockLines = []
+        codeBlockLanguage = line.slice(3).trim() || undefined
       }
       continue
     }
@@ -715,21 +720,6 @@ const liStyleBase: React.CSSProperties = {
   fontSize: 'var(--text-base)',
   lineHeight: 1.8,
   color: 'var(--text-primary)',
-}
-
-const codeBlockStyle: React.CSSProperties = {
-  background: 'var(--code-bg)',
-  color: 'var(--code-text)',
-  padding: '14px 18px',
-  borderRadius: 'var(--radius-md)',
-  fontSize: 'var(--text-sm)',
-  lineHeight: 1.6,
-  width: 'max-content',
-  minWidth: '100%',
-  marginTop: 10,
-  marginBottom: 10,
-  fontFamily: 'var(--font-mono)',
-  whiteSpace: 'pre',
 }
 
 const rootStyle: React.CSSProperties = {

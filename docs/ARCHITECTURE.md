@@ -14,11 +14,11 @@ Every Agent 是一套「**公网可及、本机执行**」的 AI Agent 系统:AI
 
 | 模块 | 职责 | 端口 |
 |---|---|---|
-| `every-agent-hub` | 公网消息中心:纯中转 WebSocket (WebFlux/Reactor),零状态、零缓冲、零业务逻辑 | 9100 |
-| `every-agent-worker` | 执行器:Spring Boot + Spring AI 2,托管任务运行时、模型调用、workspace、沙箱进程 | 9200(仅本地健康检查) |
+| `every-agent-hub` | 公网消息中心:纯中转 WebSocket (WebFlux/Reactor),零状态、零缓冲、零业务逻辑 | 6101 |
+| `every-agent-worker` | 执行器:Spring Boot + Spring AI 2,托管任务运行时、模型调用、workspace、沙箱进程 | 6102(仅本地健康检查) |
 | `every-agent-web` | 前端:React + TS,内置 TS 客户端 SDK,经 hub 遥控 worker | 5174(dev) |
 | `every-agent-contract` | 纯协议契约:帧信封 / RPC 信封 / 通用错误码 / 身份哈希(Java DTO + TS 类型) | — |
-| `every-agent-desktop` | Electron 桌面版:web + hub + worker 一体打包(Windows x64 便携/安装包) | 本地 9100/9200 |
+| `every-agent-desktop` | Electron 桌面版:web + hub + worker 一体打包(Windows x64 便携/安装包) | 本地 6101/6102 |
 
 ### 1.1 设计理念
 
@@ -77,11 +77,11 @@ Every Agent 是一套「**公网可及、本机执行**」的 AI Agent 系统:AI
 
 | 层 | 技术 | 端口 |
 |---|---|---|
-| hub | Java 25,Spring Boot WebFlux(Reactor Netty WS) | 9100(/ws + /health) |
-| worker | Java 25,Spring Boot + Spring AI 2,JDK 内置 HttpClient WebSocket(多连接 HubPool),虚拟线程 | 9200(仅 127.0.0.1 健康/管理) |
+| hub | Java 25,Spring Boot WebFlux(Reactor Netty WS) | 6101(/ws + /health) |
+| worker | Java 25,Spring Boot + Spring AI 2,JDK 内置 HttpClient WebSocket(多连接 HubPool),虚拟线程 | 6102(仅 127.0.0.1 健康/管理) |
 | web | React + TS,内置 TS 客户端 SDK | 5174(dev)/ 静态托管 |
 | contract | 纯协议:帧/RPC 信封/错误码/身份哈希(Java DTO + TS 类型) | — |
-| desktop | Electron(内置 Node 24),spawn 本地 hub/worker 子进程(jlink 精简 JRE 25) | 本地 9100/9200 |
+| desktop | Electron(内置 Node 24),spawn 本地 hub/worker 子进程(jlink 精简 JRE 25) | 本地 6101/6102 |
 
 版本统一由仓库根父 pom 锁定(Spring Boot 4.1.x / Spring AI 2.0.x),各模块不得各自升版本。
 
@@ -121,7 +121,7 @@ Every Agent 是一套「**公网可及、本机执行**」的 AI Agent 系统:AI
 ### 5.1 连接与握手
 
 ```
-wss://hub:9100/ws
+wss://hub:6101/ws
 → { "type":"hello", "ver":2, "role":"frontend"|"worker", "apiKey":"sk-...", "hubKey":"hub-secret", "clientId":"fe-1",
     "meta": { "hostname":"home-pc", "version":"0.1.0" } }        // hubKey 必填;meta 可选,worker 上报
 ← { "type":"welcome", "ver":2, "sessionId":"s-17", "serverTs":1755859200000 }
@@ -740,10 +740,12 @@ Input:  queued → consumed | discarded(任务取消)
 
 Electron 将 web + hub + worker **一体打包**为 Windows x64 便携(portable)与安装包(NSIS):
 
-- **进程模型**:主进程 spawn 本地 hub 与 worker 两个 Spring Boot 子进程(`javaw.exe`,jlink 精简 JRE 随包);前端经本地静态服务加载(127.0.0.1 随机端口,保证 localhost 安全上下文),preload 以 contextBridge 注入开箱即用连接配置。
+- **进程模型**:主进程 spawn 本地 hub 与 worker 两个 Spring Boot 子进程(`javaw.exe`,jlink 精简 JRE 随包);前端经本地静态服务加载(127.0.0.1 随机端口,保证 localhost 安全上下文),preload 以 contextBridge 注入开箱即用连接配置。**hub 始终跟随 desktop 启停**(desktop 独占管理,退出时一并停止);**worker 支持外部进程复用**——启动前调 `GET /admin/identify`(认证探测,携带 `X-Admin-Key` = workerApiKey)判断 worker(:6102)是否已在运行,已在运行则跳过启动直接复用;端口被别的程序占用则报错。
+- **独立 worker 启动**:`resources/start-backend.bat` 可脱离 Desktop GUI 独立启动 worker(hub 仍由 desktop 管理,不在此启动);适配 Windows 任务计划程序"系统启动时"触发器(Session 0 无 GUI 场景);worker 启动后自动重试连接 hub,desktop 后续打开时自动检测到已有 worker,不重复启动。
 - **配置注入**:生成 hub/worker yaml 经 `--spring.config.additional-location` 覆盖 jar 内默认(整表覆盖 `worker.hubs`,避免误连远端);数据目录复用 `EVERYAGENT_HOME`(缺省 `~/.everyagent`),与命令行/docker 共用同一批任务/工作区/模型。
 - **运行时配置**:每次启动读 `<EVERYAGENT_HOME>/desktop-config.json`(hubKey/workerApiKey/workerId/端口),首次生成;日志统一落 `<EVERYAGENT_HOME>/logs/`。
-- **生命周期**:单实例锁、占位页/错误页(含日志目录)、before-quit 先停 worker 再停 hub(超时强杀)。
+- **管理端点(仅 worker)**:worker 提供 `GET /admin/identify`(认证后返回 worker 身份)与 `POST /admin/shutdown`(认证后触发 Spring 优雅关闭);认证用 `X-Admin-Key` 请求头(与 hubs[0].apiKey 明文比对);仅监听 127.0.0.1,POST + 自定义头防 CSRF。hub 无 admin 端点(hub 可能公网部署,暴露 shutdown 接口会被持有 hubKey 的人关掉)。
+- **生命周期**:单实例锁、占位页/错误页(含日志目录)、托盘提供「退出桌面」(停 hub,worker 保留运行,下次启动自动复用)与「全部退出」(停 hub + 对所有 worker 发 `POST /admin/shutdown` 优雅关闭);`before-quit` 按 `quitScope` 决定停 hub 或停全部。
 - **构建流水线**:`build-backend.mjs`(mvn 打包)、`build-web.mjs`(前端 dist)、`build-jre.ps1`(jlink);electron-builder `extraResources(from: ../runtime → to: runtime)` 把程序附属文件打进安装包。
 
 ---
@@ -821,8 +823,8 @@ worker                         hub                    前端(可能 0 个在线)
 
 ```
 .                                  # 仓库根 = every-agent 项目根
-├── every-agent-hub/               # 消息中心(Spring Boot WebFlux,9100)
-├── every-agent-worker/            # 执行器(Spring Boot + Spring AI 2,9200 仅本地健康)
+├── every-agent-hub/               # 消息中心(Spring Boot WebFlux,6101)
+├── every-agent-worker/            # 执行器(Spring Boot + Spring AI 2,6102 仅本地健康)
 │   └─ src/main/java/.../proto/    # 业务常量住 worker:事件名 / DTO / RPC 方法名 / 频道构造 / 短 ID
 ├── every-agent-web/               # React 前端(内置 TS 客户端 SDK src/sdk/)
 ├── every-agent-contract/          # 纯协议契约:帧信封 / RPC 信封 / 错误码 / 身份哈希(Java DTO + TS 类型)
@@ -837,7 +839,7 @@ worker                         hub                    前端(可能 0 个在线)
 
 ```bash
 # Java 部分(JDK 25;Spring Boot 4.1.x / Spring AI 2.0.x 由根 pom 锁定)
-mvn -pl every-agent-hub spring-boot:run          # hub @ 9100
+mvn -pl every-agent-hub spring-boot:run          # hub @ 6101
 mvn -pl every-agent-worker spring-boot:run       # worker,出站连 hub
 
 # 前端
@@ -853,8 +855,8 @@ docker-compose 一键:`HUB_KEY=你的密钥 docker-compose up --build`;数据落
 ### 11.3 部署形态
 
 - **dev**:docker-compose,或本地 mvn ×2 + npm。
-- **prod**:hub 与前端静态站部署公网服务器(LB 的 WS 空闲超时 ≥ 60s);worker 在个人 PC 以出站 wss 连入(docker 或系统服务),通过 `worker.hubs` 配置(`worker.hubs[].url` 指向公网 hub,每项 `url + api-key + hub-key`);9200 管理端口仅绑定 127.0.0.1。
-- **桌面版**:every-agent-desktop 安装包开箱即用,本地 9100/9200,与命令行/docker 共用 `EVERYAGENT_HOME` 数据。
+- **prod**:hub 与前端静态站部署公网服务器(LB 的 WS 空闲超时 ≥ 60s);worker 在个人 PC 以出站 wss 连入(docker 或系统服务),通过 `worker.hubs` 配置(`worker.hubs[].url` 指向公网 hub,每项 `url + api-key + hub-key`);6102 管理端口仅绑定 127.0.0.1。
+- **桌面版**:every-agent-desktop 安装包开箱即用,本地 6101/6102,与命令行/docker 共用 `EVERYAGENT_HOME` 数据。
 
 ---
 
@@ -909,6 +911,6 @@ docker-compose 一键:`HUB_KEY=你的密钥 docker-compose up --build`;数据落
 4. **错误码两个命名空间,勿混用**:hub `error` = NOT_AUTHENTICATED/VERSION_MISMATCH(断开)、ACL_DENIED/FRAME_TOO_LARGE/RATE_LIMITED(单帧拒绝);`rpc.err` = UNKNOWN_METHOD/BAD_PARAMS/NOT_FOUND/SANDBOX_DENIED/BUSY/INTERNAL/AUTH_REQUIRED。
 5. **并发与上限**:maxConcurrentTasks(20)超限 task.run 新建 → BUSY(不排队);maxConcurrentSubs 超限 run_agent 返回错误文本由模型自决;maxEventsPerTask(50 万)超限抛 LogOverflow(磁盘 jsonl 全量不受影响);续跑放行不查并发上限。
 6. **沙箱**:路径必须先规范化(realpath)再校验 workspace 根前缀,拒绝 `..`、绝对路径逃逸与符号链接逃逸;字符串前缀匹配不够;授权护的是「工作区外」,不是删除动作本身;不得绕过 PermissionGate 直接放行越界 IO;windows-mic 后端沙箱进程运行在 Medium IL,不对文件系统做标注或 ACL 修改;git 凭证只存 worker 本机加密文件,不经协议传输,注入走 env(askpass) 不经 shell 参数;
-7. **生命周期**:终态任务收到 task.run{taskId} = 冷启动一次普通运行;worker 优雅停机(SIGTERM)受影响任务标 failed 再关连接;9200 仅绑定 127.0.0.1;worker 每条 hub 连接建立即 sub 该命名空间 cmd + input 两个频道,从不订阅 per-task 频道。
+7. **生命周期**:终态任务收到 task.run{taskId} = 冷启动一次普通运行;worker 优雅停机(SIGTERM)受影响任务标 failed 再关连接;6102 仅绑定 127.0.0.1;worker 每条 hub 连接建立即 sub 该命名空间 cmd + input 两个频道,从不订阅 per-task 频道。
 8. **复用 Spring AI,禁止重复造轮子**:agent 执行必须走 ChatClient + Advisor 生态,不得手搓 agent 循环、工具循环、响应聚合、system 拼接;执行链只能是很薄一层;新增 agent 能力优先做成 Advisor;一个 Advisor 只负责一个功能;事件发射等需挂钩工具循环的增强通过继承 ToolCallingAdvisor 并重写受保护 hook 实现;主/子 agent 共用同一运行入口与 Advisor 链,仅 agentId 不同。
 9. **文档**:本文档是唯一架构事实源;根目录 AGENTS.md 只写核心约束(每会话加载,保持精简),细节一律进 docs/。

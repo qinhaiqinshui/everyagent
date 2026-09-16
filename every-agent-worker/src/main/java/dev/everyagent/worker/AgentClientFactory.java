@@ -54,7 +54,8 @@ import org.springframework.context.annotation.Configuration;
  *       工具集含 {@code SubAgentTools}(可派生子 agent),由 {@link AgentEntity#tools} 携带。</li>
  *   <li>子 agent:挂 {@link SystemInfoAdvisor}(同样需要知道工作区与系统) + {@link AgentsMdAdvisor}
  *       (工作区 agents.md 约束) + {@link WorkerToolEventAdvisor}
- *       (不挂 skill、不挂派发工具——其 {@code tools} 本就不含 {@code SubAgentTools},结构上禁递归)。</li>
+ *       (不挂 skill、不挂派发工具、不注册 ask_user——其 {@code tools} 本就不含 {@code SubAgentTools} 与
+ *       {@code AskUserTool},结构上禁递归且不可向用户提问)。</li>
  * </ul>
  *
  * <p>重试双 advisor(n 侧空响应重试 + 瞬时错误退避重试的 advisor 化,角色无关主/子同挂):
@@ -173,7 +174,7 @@ public class AgentClientFactory {
                         new SlashTokenResolveAdvisor(slashTokenHandler, a.task),
                         new UnattendedModeAdvisor(a),
                         newLoopGuardedAdvisor(a, tcm),
-                        new DialogInsertAdvisor(a),
+                        new DialogInsertAdvisor(a, slashTokenHandler),
                         new FileChangeAdvisor(a),
                         new EmptyResponseRetryAdvisor(a, props.getRetry()),
                         new TransientErrorRetryAdvisor(a, props.getRetry()),
@@ -184,9 +185,9 @@ public class AgentClientFactory {
 
     /**
      * 子 agent 的 ChatClient:事件(含死循环检测 + 文件改动记录)+ 无人值守 + 重试双 advisor
-     * + 上下文压缩(不挂 skill、不挂派发工具;容灾在模型层——任务 configId 为池配置时
+     * + 上下文压缩(不挂 skill、不挂派发工具、不注册 ask_user;容灾在模型层——任务 configId 为池配置时
      * a.chatModel 即 ModelPoolChatModel,子 agent 同样自动换池容灾;无人值守为任务级开关,
-     * 子 agent 同样注册 ask_user,无人值守时同样剥离 ask_user 并注入提示词;上下文压缩同样
+     * 子 agent 不注册 ask_user,无人值守 advisor 对子 agent 无工具可剥离但同样注入提示词;上下文压缩同样
      * 最内层每轮生效。子 agent 的 FileChangeAdvisor 只记录文件改动到共享回合槽,不写
      * trace——任务级文件变更由主 agent 统一收口填充槽并随轮落盘。DialogInsertAdvisor
      * 子 agent 同挂但按 kind 旁路(不接收任务队列用户输入))。
@@ -198,7 +199,7 @@ public class AgentClientFactory {
                         new AgentsMdAdvisor(a.task.workspaceRoot),
                         new UnattendedModeAdvisor(a),
                         newLoopGuardedAdvisor(a, tcm),
-                        new DialogInsertAdvisor(a),
+                        new DialogInsertAdvisor(a, slashTokenHandler),
                         new FileChangeAdvisor(a),
                         new EmptyResponseRetryAdvisor(a, props.getRetry()),
                         new TransientErrorRetryAdvisor(a, props.getRetry()),

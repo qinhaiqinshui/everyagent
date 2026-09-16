@@ -4,7 +4,6 @@ import dev.everyagent.contract.json.Json;
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.modules.ConfigStore;
 import dev.everyagent.worker.modules.ConfigStore.ResolvedConfig;
-import dev.everyagent.worker.tools.AskUserTool;
 import dev.everyagent.worker.tools.BashTool;
 import dev.everyagent.worker.tools.CommandExecutor;
 import dev.everyagent.worker.tools.FileTools;
@@ -451,10 +450,8 @@ public class SubAgentManager {
             cfg = new ResolvedConfig(task.snapshot, task.apiKey);
         }
         // 子 agent 工具集不含 run_agent 等(结构上禁止递归);tool.result 事件由 AgentRunner 统一发射
+        // 子 agent 不注册 ask_user:提问只能由主 agent 发起,子 agent 通过返回结果向上传递信息
         List<ToolCallback> tools = new ArrayList<>();
-        for (ToolCallback c : ToolCallbacks.from(new AskUserTool(asks, props, task, agentId))) {
-            tools.add(c);
-        }
         // 文件工具(file,与主线一致;子 agent 不含 run_agent 等;授权按 taskId 与主 agent 共享)
         for (ToolCallback c : ToolCallbacks.from(new FileTools(fs, task, agentId))) {
             tools.add(c);

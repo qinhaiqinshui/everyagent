@@ -25,6 +25,10 @@ extraResources:
   # 打包后 wsl-direct 探测失败回退 windows-mic。
   - from: ../runtime
     to: runtime
+  # 独立后端启动脚本:用于任务计划程序等无 GUI 场景启动 hub + worker。
+  # 落到 <resourcesPath>/start-backend.bat(programRoot 同目录,脚本内 cwd 即程序根)。
+  - from: scripts/start-backend.bat
+    to: start-backend.bat
 win:
   target:
     - target: nsis

@@ -10,6 +10,15 @@ import { openSlashItemDetail } from './SlashItemDetailPopover'
  * 用 `contentEditable` 的 div 取代原生 `<textarea>`，使命令 / 技能 / 文件胶囊
  * 能渲染在触发位置的光标处（而不是输入框顶部的独立胶囊条）。
  *
+ * ⚠️ 已知 bug（第三方输入法，非本框架问题）：
+ *   iOS 上「微信输入法」与 contentEditable 不兼容——在光标处启动 composition 时
+ *   会失败，表现为输入的中文闪烁一下后消失（英文按键的字母也一并被清除、光标丢失）。
+ *   经排查排除了 React 重渲染打断 composition 的可能（逐一注释 onInput / onKeyUp /
+ *   onChange / onCaretChange / compositionend 及 draft useState→useRef 后问题依旧），
+ *   将 contentEditable div 换成原生 <textarea> 后微信输入法即正常。
+ *   苹果自带输入法及其它主流第三方输入法（搜狗/百度等）不受影响。
+ *   此为微信输入法对 contentEditable composition 的实现缺陷，暂不处理。
+ *
  * 设计要点（IME 安全）：
  * - 仅在「外部 rawContent 变化且与上次自上报内容不同」时才用 `innerHTML` 重建 DOM；
  *   用户内部输入只改 DOM 并就地序列化，绝不整段覆盖，避免中文输入法合成被打断、光标丢失。

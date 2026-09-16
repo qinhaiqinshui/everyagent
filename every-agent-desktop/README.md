@@ -7,8 +7,8 @@
 ```
 ┌────────────────────── every-agent-desktop(Electron) ──────────────────────┐
 │  main 进程                                                                 │
-│   ├─ spawn hub.jar   (jlink JRE javaw.exe,127.0.0.1:9100,等 /health)      │
-│   ├─ spawn worker.jar (连 ws://127.0.0.1:9100/ws,复用 EVERYAGENT_HOME)    │
+│   ├─ spawn hub.jar   (jlink JRE javaw.exe,127.0.0.1:6101,等 /health)      │
+│   ├─ spawn worker.jar (连 ws://127.0.0.1:6101/ws,复用 EVERYAGENT_HOME)    │
 │   └─ 本地静态服务 127.0.0.1:<随机端口> → 加载 resources/web(前端 dist)     │
 │  renderer(前端,经 preload 注入 bootstrap)                                  │
 │   └─ 自动 applyConfig(hub) + setWorkerApiKey(worker) → 开箱即用连接       │
@@ -27,8 +27,8 @@
   "hubKey": "sljlw23948LKS",
   "workerApiKey": "dev-key",
   "workerId": "company-pc",
-  "hubPort": 9100,
-  "workerPort": 9200
+  "hubPort": 6101,
+  "workerPort": 6102
 }
 ```
 
@@ -93,4 +93,37 @@ JRE 缺失时回退系统 `java`(Windows 下 `windowsHide` 隐藏控制台)。
 - **配置注入**:`desktop-hub.yml` / `desktop-worker.yml` 生成到 `<EVERYAGENT_HOME>/desktop/`,
   经 `--spring.config.additional-location=file:///...` 覆盖 jar 内默认值。
 - **单实例锁**:二次启动聚焦已有窗口。
-- **优雅退出**:`before-quit` 先 SIGTERM worker(触发落盘)再停 hub,超时强杀;退出无残留 java 进程。
+- **优雅退出**:托盘「退出桌面」停 hub,worker 保留运行(下次启动自动复用);「全部退出」停 hub + 对所有 worker 发 `POST /admin/shutdown` 触发 Spring 优雅关闭——desktop 自己启动的 worker HTTP shutdown 超时后 `child.kill()` 兜底,外部 worker 超时只记日志(不按端口强杀,零误杀风险)。
+
+## 管理端点(仅 worker,仅本机)
+
+worker(:6102)提供两个管理端点,用于外部进程探测与优雅关闭:
+
+| 端点 | 认证 | 说明 |
+|---|---|---|
+| `GET /admin/identify` | `X-Admin-Key` | 返回 `{"service":"worker","workerId":"..."}` |
+| `POST /admin/shutdown` | `X-Admin-Key` | 延迟 500ms 触发 `ApplicationContext.close()` 优雅关闭 |
+
+- **认证**:`X-Admin-Key` 与 hubs[0].apiKey 明文比对。
+- **安全**:仅监听 127.0.0.1(外部网络不可达);POST + 自定义请求头(浏览器不会自动携带,防 CSRF)。
+- **密钥来源**:desktop-config.json 中的 workerApiKey。
+- **hub 无 admin 端点**:hub 可能公网部署,暴露 shutdown 接口会被持有 hubKey 的人关掉,故不提供。hub 始终由 desktop 独占管理,退出时 `child.kill` 停止。
+
+## 独立 worker 启动(无 GUI 场景)
+
+安装包内附带 `resources/start-backend.bat`,可在无 Desktop GUI 的情况下独立启动 worker(hub 仍由 desktop 管理,不在此启动)。
+适配 Windows 任务计划程序"系统启动时"触发器(Session 0 无 GUI 场景,如服务器/无人值守机器)。
+
+**任务计划程序配置**:
+
+1. 触发器选"**登录时**"(推荐)或"系统启动时"(后者需最高权限且因 Session 0 无 GUI 仅 worker 运行)。
+2. 操作 → 启动程序:程序填 `<安装根>\resources\start-backend.bat`。
+3. 脚本会自动检测 worker 是否已在运行(端口复用),避免重复启动。
+4. worker 启动后自动重试连接 hub;desktop 后续打开时检测到已有 worker,不重复启动。
+
+**Desktop 交互**:
+- Desktop 启动时:hub 直接 spawn(检查端口是否被占);worker 调 `GET /admin/identify`(认证探测)判断是否已在运行。
+- worker 已在运行 → 跳过启动,直接复用(日志显示"外部进程")。
+- worker 端口被别的程序占用(认证失败) → 报错提示端口冲突。
+- 托盘「退出桌面」:停 hub,worker 保留运行(下次启动自动复用)。
+- 托盘「全部退出」:停 hub + 对所有 worker 发 `POST /admin/shutdown` 触发 Spring 优雅关闭。

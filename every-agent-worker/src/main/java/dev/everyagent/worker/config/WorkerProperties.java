@@ -134,7 +134,7 @@ public class WorkerProperties {
 
     /** 单个 hub 注册项:{url, apiKey, hubKey} 一条连接,三者均必填。 */
     public static class HubConfig {
-        private String url = "ws://localhost:9100/ws";
+        private String url = "ws://localhost:6101/ws";
         private String apiKey = "";
         /**
          * 连接 hub 的凭证(对 hub 的保护);与 apiKey 不同,由部署者统一配置。

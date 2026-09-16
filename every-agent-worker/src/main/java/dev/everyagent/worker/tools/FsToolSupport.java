@@ -5,6 +5,9 @@ import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.hub.HubPool;
 import dev.everyagent.worker.modules.Sandbox;
 import dev.everyagent.worker.modules.WorkspaceManager;
+import dev.everyagent.worker.os.OsSandbox;
+import dev.everyagent.worker.os.wsl.WslBwrapSandbox;
+import dev.everyagent.worker.os.wsl.WslPathMapper;
 
 import dev.everyagent.worker.rpc.NotFoundException;
 import dev.everyagent.worker.rpc.SandboxViolationException;
@@ -45,16 +48,23 @@ public class FsToolSupport {
     private final WorkerProperties props;
     private final HubPool pool;
     private final PermissionGate gate;
+    private final OsSandbox osSandbox;
 
     /** 系统技能目录只读附加根缓存(skills 读免授权,§13.8;懒解析)。 */
     private volatile List<Path> skillsReadonlyRoots;
 
     public FsToolSupport(WorkspaceManager workspaces, WorkerProperties props, HubPool pool,
             PermissionGate gate) {
+        this(workspaces, props, pool, gate, null);
+    }
+
+    public FsToolSupport(WorkspaceManager workspaces, WorkerProperties props, HubPool pool,
+            PermissionGate gate, OsSandbox osSandbox) {
         this.workspaces = workspaces;
         this.props = props;
         this.pool = pool;
         this.gate = gate;
+        this.osSandbox = osSandbox;
     }
 
     /** 目录列举条目(路径为相对工作区根、'/' 分隔的显示名)。 */
@@ -128,18 +138,109 @@ public class FsToolSupport {
         }
     }
 
+    /**
+     * WSL 沙箱后端的 Linux 路径翻译(wsl-direct / wsl-bwrap)。
+     *
+     * <p>WSL 后端下 AI 在 Linux 沙箱内运行,产生的路径是 Linux 形态(如
+     * {@code /c/Users/.../file}、{@code /workspace/src/main.java}、{@code /tmp/output.txt}),
+     * 而文件工具经 Java NIO 在 Windows 宿主侧操作,须先把 Linux 路径翻译为 Windows 路径。
+     *
+     * <p>翻译规则:
+     * <ol>
+     *   <li>非 WSL 后端 / 相对路径 / 已是 Windows 绝对路径 → 原样返回;</li>
+     *   <li>工作区挂载点前缀(wsl-direct 为 {@code /c/Users/.../eagent},wsl-bwrap 为
+     *       {@code /workspace})→ 剥离前缀转为工作区相对路径;</li>
+     *   <li>已挂载的外部根前缀(externalRoots / gate extraRoots / skillsReadonlyRoots)
+     *       → 翻译为对应 Windows 绝对路径;</li>
+     *   <li>wsl-bwrap 的 {@code /mnt/<drive>/...} 前缀(不属于任何已知挂载根)
+     *       → 翻译为 Windows 盘符路径;</li>
+     *   <li>其余 WSL 发行版内部路径({@code /tmp/}、{@code /root/} 等)
+     *       → 翻译为 UNC 路径 {@code \\wsl$\<distro>\...}。</li>
+     * </ol>
+     *
+     * <p>翻译后的路径仍经 {@link PermissionGate} 授权和 {@link Sandbox} 越界校验,
+     * 安全模型不变。非 WSL 后端时本方法原样返回 {@code rel},零行为变化。
+     */
+    private String resolveWslPath(TaskEntry t, String rel) {
+        if (osSandbox == null || !osSandbox.isWslBackend() || rel == null || rel.isBlank()) {
+            return rel;
+        }
+        String trimmed = rel.trim();
+        // 相对路径:原样返回(workspace-relative)
+        if (!trimmed.startsWith("/")) {
+            return trimmed;
+        }
+        // 已是 Windows 绝对路径(drive letter 或 UNC):原样返回
+        if (trimmed.length() >= 2 && Character.isLetter(trimmed.charAt(0))
+                && trimmed.charAt(1) == ':') {
+            return trimmed;
+        }
+        Path wsRoot = Path.of(t.workspaceRoot);
+        boolean wslDirect = osSandbox.isWslDirect();
+
+        // 收集全部已知挂载根(工作区 + 外部授权根 + gate 授权根 + skills 只读根)
+        // 按路径长度降序,保证最长(最具体)的根优先匹配
+        List<Path> allRoots = new ArrayList<>();
+        allRoots.add(wsRoot);
+        allRoots.addAll(workspaces.externalRootsOf(t.workspaceRoot));
+        allRoots.addAll(gate.extraRoots(t.taskId));
+        allRoots.addAll(skillsReadonlyRoots());
+        allRoots.sort((a, b) -> b.toString().length() - a.toString().length());
+
+        for (Path root : allRoots) {
+            String mount = wslDirect ? WslPathMapper.toDirectMount(root) : WslPathMapper.toWsl(root);
+            if (mount == null) {
+                continue;
+            }
+            if (trimmed.equals(mount)) {
+                return root.equals(wsRoot) ? "." : root.toString().replace('\\', '/');
+            }
+            if (trimmed.startsWith(mount + "/")) {
+                String suffix = trimmed.substring(mount.length()); // includes leading /
+                if (root.equals(wsRoot)) {
+                    return suffix.substring(1); // 剥离前导 / 转为相对路径
+                }
+                return root.toString().replace('\\', '/') + suffix;
+            }
+        }
+
+        // wsl-bwrap: /mnt/<drive>/... 形式(不属于任何已知挂载根)
+        if (!wslDirect) {
+            String winPath = WslPathMapper.toWindowsToken(trimmed, wsRoot);
+            if (winPath != null) {
+                // 翻译结果是否落在工作区下 → 转为相对路径
+                Path win = Path.of(winPath).toAbsolutePath().normalize();
+                Path wsNorm = wsRoot.toAbsolutePath().normalize();
+                if (win.startsWith(wsNorm)) {
+                    String suffix = wsNorm.relativize(win).toString().replace('\\', '/');
+                    return suffix.isEmpty() ? "." : suffix;
+                }
+                return winPath;
+            }
+        }
+
+        // WSL 发行版内部路径(/tmp/、/root/ 等)→ UNC 路径 \\wsl$\<distro>\...
+        String distro = WslBwrapSandbox.effectiveDistro(props);
+        if (distro == null || distro.isBlank()) {
+            return trimmed; // 无法确定发行版名,原样返回让 IO 层报错
+        }
+        return "\\\\wsl$\\" + distro + trimmed.replace("/", "\\");
+    }
+
     /** 授权解析已存在路径:工作区内/已授权为无感直通,越界则先经授权门(阻塞)。 */
     private Path resolveExistingAuthorized(TaskEntry t, String agentId, String rel,
             PermissionGate.Op op) throws IOException {
-        gate.requirePath(t, agentId, rel, op);
-        return sandbox(t).resolveExisting(rel);
+        String resolved = resolveWslPath(t, rel);
+        gate.requirePath(t, agentId, resolved, op);
+        return sandbox(t).resolveExisting(resolved);
     }
 
     /** 授权解析写入目标(可不存在):同 {@link #resolveExistingAuthorized}。 */
     private Path resolveTargetAuthorized(TaskEntry t, String agentId, String rel,
             PermissionGate.Op op) throws IOException {
-        gate.requirePath(t, agentId, rel, op);
-        return sandbox(t).resolveTarget(rel);
+        String resolved = resolveWslPath(t, rel);
+        gate.requirePath(t, agentId, resolved, op);
+        return sandbox(t).resolveTarget(resolved);
     }
 
     /**
@@ -182,11 +283,12 @@ public class FsToolSupport {
     public boolean exists(TaskEntry t, String rel) {
         try {
             Sandbox sb = sandbox(t);
+            String resolved = resolveWslPath(t, rel);
             try {
-                sb.resolveExisting(rel);
+                sb.resolveExisting(resolved);
                 return true;
             } catch (SandboxViolationException e) {
-                return Files.exists(sb.root().resolve(rel).normalize());
+                return Files.exists(sb.root().resolve(resolved).normalize());
             } catch (NotFoundException e) {
                 return false;
             }
@@ -243,10 +345,11 @@ public class FsToolSupport {
     public void remove(TaskEntry t, String agentId, String rel, boolean recursive, boolean force)
             throws IOException {
         Sandbox sb = sandbox(t);
+        String resolved = resolveWslPath(t, rel);
         Path target;
         try {
-            gate.requirePath(t, agentId, rel, PermissionGate.Op.WRITE);
-            target = sb.resolveExisting(rel);
+            gate.requirePath(t, agentId, resolved, PermissionGate.Op.WRITE);
+            target = sb.resolveExisting(resolved);
         } catch (NotFoundException | SandboxViolationException e) {
             if (force) {
                 return;
