@@ -29,7 +29,7 @@ public class AskUserTool {
     /** LLM 传入的单题结构:题干 + 候选选项(只支持选择题)。 */
     public record AskQuestionInput(
             @JsonDeserialize(using = LenientStringDeserializer.class)
-            @ToolParam(description = "问题文本,清晰具体的字符串") String prompt,
+            @ToolParam(description = "问题文本,清晰具体的字符串") String question,
             @JsonDeserialize(using = LenientStringListDeserializer.class)
             @ToolParam(description = "候选选项列表,必须是纯文本字符串数组,如 [\"方案A\",\"方案B\"]"
                     + "(至少 1 个;前端会自动追加「其他」选项;不要传对象)", required = false) List<String> options) {
@@ -120,7 +120,7 @@ public class AskUserTool {
             // 题目 id 由 PendingAsks.ask 以真实 askId 派生(askId_i),此处传占位 id。
             List<PendingAsks.AskQuestion> built = new ArrayList<>();
             for (AskQuestionInput q : questions) {
-                String prompt = q.prompt() == null ? "" : q.prompt();
+                String prompt = q.question() == null ? "" : q.question();
                 List<String> opts = q.options() == null ? List.of() : q.options();
                 built.add(new PendingAsks.AskQuestion("", prompt, opts));
             }
