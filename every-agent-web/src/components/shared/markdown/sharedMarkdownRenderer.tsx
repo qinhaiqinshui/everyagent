@@ -215,8 +215,8 @@ const variantStyles: Record<MarkdownVariant, {
   preview: {
     paragraph: { ...baseParagraphStyle, fontSize: 'var(--text-base)', color: 'var(--text-primary)', marginBottom: 4 },
     blockquote: { ...baseBlockquoteStyle, margin: '8px 0', color: 'var(--text-secondary)', fontSize: 'var(--text-sm)', background: 'var(--bg-tertiary)' },
-    list: { margin: '8px 0 10px', padding: 0, paddingLeft: '1.4em', listStyleType: 'disc' },
-    listItem: { fontSize: 'var(--text-base)', lineHeight: 1.8, color: 'var(--text-primary)', marginBottom: 4 },
+    list: { margin: '6px 0 8px', padding: 0, paddingLeft: '1.4em', listStyleType: 'disc' },
+    listItem: { fontSize: 'var(--text-base)', lineHeight: 1.6, color: 'var(--text-primary)', marginBottom: 2 },
     tableWrap: { ...baseTableWrapStyle, margin: '12px 0 16px', background: 'var(--bg-primary)' },
     table: baseTableStyle,
     th: { ...baseThStyle, color: 'var(--text-primary)', background: 'var(--bg-secondary)' },
@@ -229,8 +229,8 @@ const variantStyles: Record<MarkdownVariant, {
   display: {
     paragraph: { ...baseParagraphStyle, fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' },
     blockquote: { ...baseBlockquoteStyle, margin: '4px 0', color: 'var(--text-secondary)', fontSize: 'var(--text-sm)', lineHeight: 1.75 },
-    list: { margin: '2px 0 2px 18px', padding: 0, paddingLeft: '1.6em', listStyleType: 'disc' },
-    listItem: { fontSize: 'var(--text-sm)', lineHeight: 1.75, color: 'var(--text-secondary)', marginBottom: 4 },
+    list: { margin: '2px 0 4px', padding: 0, paddingLeft: '1.6em', listStyleType: 'disc' },
+    listItem: { fontSize: 'var(--text-sm)', lineHeight: 1.6, color: 'var(--text-secondary)', marginBottom: 2 },
     tableWrap: { ...baseTableWrapStyle, margin: '6px 0', background: 'color-mix(in srgb, var(--bg-tertiary) 48%, transparent)', borderColor: 'color-mix(in srgb, var(--border-light) 85%, transparent)' },
     table: { ...baseTableStyle, background: 'color-mix(in srgb, var(--bg-tertiary) 48%, transparent)' },
     th: { ...baseThStyle, lineHeight: 1.6, color: 'var(--text-primary)', background: 'color-mix(in srgb, var(--bg-tertiary) 82%, transparent)', borderBottomColor: 'var(--border-light)' },
