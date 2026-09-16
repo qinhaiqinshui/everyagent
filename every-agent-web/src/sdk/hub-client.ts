@@ -37,21 +37,12 @@ interface PendingRpc {
   reject: (e: Error) => void;
   onData?: (batch: any[], hasMore: boolean) => void;
   onProgress?: (message: string, pct?: number) => void;
-  timer: ReturnType<typeof setTimeout> | null;
-  /** 重放所需的原始调用信息(挂起恢复后换新 reqId 重发)。 */
-  workerId: string;
-  method: string;
-  params?: Record<string, unknown>;
-  timeoutMs: number;
-  /** 截止时刻(挂起期间不走表;恢复时按剩余时间重新计时)。 */
-  deadline: number;
+  timer: ReturnType<typeof setTimeout>;
 }
 
 export class HubClient {
   private ws: WebSocket | null = null;
   private pendingRpc = new Map<string, PendingRpc>();
-  /** 已受理但尚未发往 hub 的 RPC(挂起/重连窗口内入队,welcome 后统一补发)。 */
-  private queuedRpc: PendingRpc[] = [];
   private desiredSubs = new Set<string>();
   private reqSeq = 0;
   private midSeq = 0;
@@ -160,9 +151,6 @@ export class HubClient {
             this.send({ type: 'sub', channel: ch });
           }
           this.setState('open');
-          // 挂起恢复:重放被冻结的在途 RPC + 补发排队 RPC,调用方 Promise 从未中断。
-          this.replayPending();
-          this.flushQueue();
           resolve();
           this.onResync?.();
           return;
@@ -177,7 +165,6 @@ export class HubClient {
         // visibilitychange 恢复时统一重连 + 重放,而不是 failPending 让错误在解冻
         // 瞬间集中冒出。电脑黑屏时 onclose 可能也是 freeze 期间首批解冻的事件。
         if (this.suspended || this.isPageHidden()) {
-          this.freezePending();
           this.suspended = true;
           this.setState('reconnecting');
           reject(new Error('页面挂起,连接已冻结'));
@@ -246,9 +233,6 @@ export class HubClient {
   /**
    * 对指定 worker 发 RPC:先确保已 sub 其 evt 频道,再向 cmd 频道发 rpc。
    * 返回 rpc.ok 的 result;rpc.err 抛 RpcError;rpc.data 经 onData 流式回调。
-   *
-   * 挂起/重连窗口内的请求不立即失败:入队等待连接恢复后补发,避免用户回前台瞬间
-   * 看到「hub 未连接」错误。已发出的请求在挂起时被冻结(超时不走表),恢复后重放。
    */
   rpc(
     workerId: string,
@@ -260,53 +244,27 @@ export class HubClient {
       onProgress?: (message: string, pct?: number) => void;
     },
   ): Promise<any> {
-    // §6.1 订阅次序约束:先 evt 再 cmd(sub 在非 open 时只记 desiredSubs,welcome 后补发)
+    if (!this.ws || this.stateValue !== 'open') {
+      return Promise.reject(new Error('hub 未连接'));
+    }
+    // §6.1 订阅次序约束:先 evt 再 cmd
     this.sub(channels.workerEvt(this.k, workerId));
-    const timeoutMs = opts?.timeoutMs ?? this.opts.rpcTimeoutMs;
-    const pending: PendingRpc = {
-      resolve: () => {},
-      reject: () => {},
-      onData: opts?.onData,
-      onProgress: opts?.onProgress,
-      timer: null,
-      workerId,
-      method,
-      params,
-      timeoutMs,
-      deadline: Date.now() + timeoutMs,
-    };
-    return new Promise<any>((resolve, reject) => {
-      pending.resolve = resolve;
-      pending.reject = reject;
-      if (this.ws && this.ws.readyState === WebSocket.OPEN && this.stateValue === 'open') {
-        this.dispatchRpc(pending);
-      } else if (
-        this.suspended ||
-        this.stateValue === 'reconnecting' ||
-        this.stateValue === 'connecting'
-      ) {
-        // 连接正在重建或页面挂起:入队,welcome 后 flushQueue 统一补发;
-        // 截止时刻已在 deadline 中记录,补发时按剩余时间计时,过长则超时。
-        this.queuedRpc.push(pending);
-      } else {
-        reject(new Error('hub 未连接'));
-      }
-    });
-  }
-
-  /**
-   * 生成新 reqId、挂定时器、发往 cmd 频道。timer 计时长度取 pending.deadline 的剩余
-   * (重放/补发场景)或完整 timeoutMs(首次发送)。
-   */
-  private dispatchRpc(pending: PendingRpc): void {
     const reqId = `req-${++this.reqSeq}`;
-    const remaining = Math.max(pending.deadline - Date.now(), 0);
-    pending.timer = setTimeout(() => {
-      this.pendingRpc.delete(reqId);
-      pending.reject(new Error(`rpc ${pending.method} 超时(${pending.timeoutMs}ms)`));
-    }, remaining);
-    this.pendingRpc.set(reqId, pending);
-    this.pub(channels.workerCmd(this.k, pending.workerId), 'rpc', { reqId, method: pending.method, params: pending.params });
+    const timeoutMs = opts?.timeoutMs ?? this.opts.rpcTimeoutMs;
+    return new Promise<any>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pendingRpc.delete(reqId);
+        reject(new Error(`rpc ${method} 超时(${timeoutMs}ms)`));
+      }, timeoutMs);
+      this.pendingRpc.set(reqId, {
+        resolve,
+        reject,
+        onData: opts?.onData,
+        onProgress: opts?.onProgress,
+        timer,
+      });
+      this.pub(channels.workerCmd(this.k, workerId), 'rpc', { reqId, method, params });
+    });
   }
 
   // ---- 内部 ----
@@ -327,14 +285,14 @@ export class HubClient {
         switch (frame.event) {
           case 'rpc.ok': {
             const p = payload as unknown as RpcOk;
-            if (pending.timer) clearTimeout(pending.timer);
+            clearTimeout(pending.timer);
             this.pendingRpc.delete(reqId);
             pending.resolve(p.result);
             return;
           }
           case 'rpc.err': {
             const p = payload as unknown as RpcErr;
-            if (pending.timer) clearTimeout(pending.timer);
+            clearTimeout(pending.timer);
             this.pendingRpc.delete(reqId);
             pending.reject(new RpcError(p.code, p.message));
             return;
@@ -361,51 +319,10 @@ export class HubClient {
 
   private failPending(error: Error): void {
     for (const [, p] of this.pendingRpc) {
-      if (p.timer) clearTimeout(p.timer);
+      clearTimeout(p.timer);
       p.reject(error);
     }
     this.pendingRpc.clear();
-    // 排队的请求一并失败(客户端关闭等场景)。
-    const queued = this.queuedRpc;
-    this.queuedRpc = [];
-    for (const p of queued) p.reject(error);
-  }
-
-  /** 冻结在途 RPC:清掉超时定时器但保留请求,挂起期间超时不走表。 */
-  private freezePending(): void {
-    for (const [, p] of this.pendingRpc) {
-      if (p.timer) {
-        clearTimeout(p.timer);
-        p.timer = null;
-      }
-    }
-  }
-
-  /** 挂起恢复:在途 RPC 全部换新 reqId 重发,剩余超时按 deadline 重新计算。 */
-  private replayPending(): void {
-    const entries = Array.from(this.pendingRpc.values());
-    this.pendingRpc.clear();
-    for (const p of entries) {
-      if (p.deadline - Date.now() <= 0) {
-        // 挂起期间实际已超时(如锁屏数小时):直接失败,不再无谓重发。
-        p.reject(new Error(`rpc ${p.method} 超时(${p.timeoutMs}ms)`));
-        continue;
-      }
-      this.dispatchRpc(p);
-    }
-  }
-
-  /** 补发排队请求(welcome 后);已过 deadline 的直接超时。 */
-  private flushQueue(): void {
-    const queued = this.queuedRpc;
-    this.queuedRpc = [];
-    for (const p of queued) {
-      if (p.deadline - Date.now() <= 0) {
-        p.reject(new Error(`rpc ${p.method} 超时(${p.timeoutMs}ms)`));
-        continue;
-      }
-      this.dispatchRpc(p);
-    }
   }
 
   /** 页面是否处于隐藏态(切后台/锁屏)。非浏览器环境恒 false。 */
@@ -414,16 +331,14 @@ export class HubClient {
   }
 
   /**
-   * 挂起:冻结在途 RPC、暂停重连退避、主动关闭当前 socket(iOS 上它已是僵尸连接,
-   * 留着只会让恢复后发出的请求继续黑洞)。不做任何 reject——挂起是用户正常行为,
-   * 恢复后一切自动续跑。
+   * 挂起:关闭当前 socket(iOS/Chrome freeze 后它已是僵尸连接),暂停重连退避。
+   * 不做 failPending——挂起是用户正常行为,在途 RPC 会在 onclose 的挂起分支
+   * 被保留(not rejected),恢复后连接重建、onResync 触发业务层重新拉取数据。
    */
   private suspend(): void {
     if (this.manualClose || this.suspended) return;
-    // 从未连接/已关闭的连接没有可挂起的资源——尤其不能让它在 resume 时被意外拉起。
     if (this.stateValue === 'idle' || this.stateValue === 'closed') return;
     this.suspended = true;
-    this.freezePending();
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;

@@ -397,7 +397,9 @@ class HubSession {
       this.workersOnline.clear()
       this.notifyWorkers()
       this.notifyDirectory()
-      for (const fn of this.resyncListeners) fn()
+      // 不在此处 fire resyncListeners:目录连接恢复 ≠ worker 连接就绪。
+      // resyncListeners 由各 worker 连接的 onResync 逐个触发(worker welcome 后,
+      // 该 worker 的 RPC 通道已真正可用),避免业务层在 worker 尚未连接时发 RPC 报错。
       // 目录重连后重建全部在线 worker 连接(依赖即将到来的 presence 快照)。
       void this.connectConfiguredWorkers()
     }
