@@ -34,7 +34,7 @@ import org.springframework.ai.tool.ToolCallback;
  * conversationHistory(含初始注入的 system 区,提示词全轮保持),不重新经过外层 advisor
  * 的 before,因此本 advisor 单次改写即可全轮生效,无需每轮重注。
  *
- * <p>主/子 agent 同挂:子 agent 也注册 ask_user,无人值守时同样不可提问。
+ * <p>主/子 agent 同挂:子 agent 不注册 ask_user,无人值守时同样注入提示词(无工具可剥离)。
  * AI 审议开关({@code aiReview})本身不影响 ask_user 可见性——只有 unattended=true 才剥离。
  */
 public class UnattendedModeAdvisor implements BaseAdvisor {
