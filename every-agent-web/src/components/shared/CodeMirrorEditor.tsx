@@ -189,23 +189,30 @@ export default function CodeMirrorEditor({
   }, [wrapLines])
 
   // ── 行定位：lineLocateRequestedAt 变化时滚动到目标行 ──
+  // 用 requestAnimationFrame 延迟一帧，确保 CodeMirror DOM 布局完成后再滚动，
+  // 否则编辑器刚挂载时视口尺寸未定，scrollIntoView 无效。
   React.useEffect(() => {
     if (lineLocateRequestedAt == null || lineNumber == null) return
     const view = viewRef.current
     if (!view) return
 
-    const doc = view.state.doc
-    const line = Math.min(Math.max(1, lineNumber), doc.lines)
-    const lineStart = doc.line(line).from
+    const rafId = requestAnimationFrame(() => {
+      const v = viewRef.current
+      if (!v) return
+      const doc = v.state.doc
+      const line = Math.min(Math.max(1, lineNumber), doc.lines)
+      const lineStart = doc.line(line).from
 
-    view.dispatch({
-      effects: EditorView.scrollIntoView(
-        lineStart,
-        { y: 'center' },
-      ),
+      v.dispatch({
+        effects: EditorView.scrollIntoView(
+          lineStart,
+          { y: 'center' },
+        ),
+      })
+      onLineLocateApplied?.()
     })
 
-    onLineLocateApplied?.()
+    return () => cancelAnimationFrame(rafId)
   }, [lineLocateRequestedAt, lineNumber, onLineLocateApplied])
 
   return (

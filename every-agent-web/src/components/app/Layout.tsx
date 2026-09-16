@@ -413,20 +413,23 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
     options?: OpenWorkspaceFileOptions,
   ) => {
     const fileTabId = buildFileTabId(target)
+    // 标签页已存在时，保留原 reloadKey（避免重新读盘导致编辑器卸载/重挂载闪烁），
+    // 仅更新行定位字段。仅新建标签页时才设 reloadKey。
+    const existingTab = workspaceTabs.find((item) => item.id === fileTabId && item.tabType === 'file') as import('@/types').WorkspaceFileTab | undefined
     const nextFileTab = createWorkspaceFileTab({
       id: fileTabId,
       workspaceRoot: target.workspaceRoot,
       filePath: target.filePath,
       fileName: getFileNameFromPath(target.filePath),
-      mode: options?.mode ?? 'readonly',
-      reloadKey: Date.now(),
+      mode: options?.mode ?? existingTab?.mode ?? 'readonly',
+      reloadKey: existingTab?.reloadKey ?? Date.now(),
       nameEditRequestedAt: options?.startNameEditing ? Date.now() : undefined,
       lineNumber: options?.lineNumber,
       lineLocateRequestedAt: options?.lineNumber !== undefined ? Date.now() : undefined,
     })
     openWorkspaceTab(nextFileTab)
     return fileTabId
-  }, [openWorkspaceTab])
+  }, [openWorkspaceTab, workspaceTabs])
 
   const openDiffTab = React.useCallback((
     input: {
