@@ -159,12 +159,19 @@ export class HubClient {
       };
       ws.onclose = () => {
         clearTimeout(failTimer);
+        // 旧 socket 的 onclose 延迟触发(suspend 关闭旧 socket 后 resume 已创建新 socket):
+        // 如果 this.ws 已不是本次 connect 创建的 ws,说明已有新一轮 connect 接管,
+        // 旧 socket 的事件不应干扰当前连接——直接丢弃,不做 failPending / setState / reject。
+        if (this.ws !== ws) {
+          reject(new Error('连接关闭(旧 socket)'));
+          return;
+        }
         this.ws = null;
-        // 页面隐藏(切后台/锁屏)期间的断开:iOS Safari / Chrome freeze 会冻结 JS
-        // 定时器,RPC 即使超时也无人处理——按挂起语义冻结在途请求,等 pageshow /
-        // visibilitychange 恢复时统一重连 + 重放,而不是 failPending 让错误在解冻
-        // 瞬间集中冒出。电脑黑屏时 onclose 可能也是 freeze 期间首批解冻的事件。
-        if (this.suspended || this.isPageHidden()) {
+        // 页面挂起(pagehide 触发)期间,旧 socket 的 onclose 可能延迟到达。
+        // suspend() 已置 suspended=true 并把 this.ws 设为 null,所以这里的
+        // this.ws !== ws 守卫会丢弃它,不会走到 failPending。
+        // 但如果 WS 是远端主动断开(服务端关闭、网络切换等),走正常断开流程。
+        if (this.suspended) {
           this.suspended = true;
           this.setState('reconnecting');
           reject(new Error('页面挂起,连接已冻结'));
@@ -179,6 +186,10 @@ export class HubClient {
         reject(new Error('连接关闭'));
       };
       ws.onerror = () => {
+        // 旧 socket 的 onerror 延迟触发:同 onclose,已由新 connect 接管时丢弃。
+        if (this.ws !== ws) {
+          return;
+        }
         // 连接错误必须立即失败:不能只 clearTimeout(failTimer) 等 onclose——若 onclose
         // 不触发(浏览器边缘场景),connect() 的 Promise 会永久 pending,上层连接状态
         // 永远卡在「连接中」。这里主动 close + reject,让调用方总能拿到结果。
@@ -325,11 +336,6 @@ export class HubClient {
     this.pendingRpc.clear();
   }
 
-  /** 页面是否处于隐藏态(切后台/锁屏)。非浏览器环境恒 false。 */
-  private isPageHidden(): boolean {
-    return typeof document !== 'undefined' && document.visibilityState === 'hidden';
-  }
-
   /**
    * 挂起:关闭当前 socket(iOS/Chrome freeze 后它已是僵尸连接),暂停重连退避。
    * 不做 failPending——挂起是用户正常行为,在途 RPC 会在 onclose 的挂起分支
@@ -391,22 +397,31 @@ export class HubClient {
   }
 
   /**
-   * 生命周期监听:visibilitychange / pagehide / pageshow。
-   * 只对浏览器环境接线;每次 connect 幂等。
+   * 生命周期监听:pagehide(挂起) / pageshow(恢复) / visibilitychange(恢复)。
+   *
+   * 挂起只由 pagehide 触发——它标志着页面即将被冻结/卸载(移动端切后台、bfcache、
+   * 电脑锁屏等),WS 连接即将失效。不由 visibilitychange(hidden) 触发挂起:
+   * 桌面浏览器切标签页时 visibilityState 也会变 hidden,但 JS 继续运行、WS 保持活跃,
+   * 此时挂起重连是多余且有害的。
+   *
+   * 恢复由 pageshow 和 visibilitychange(visible) 共同触发:覆盖 bfcache 恢复、
+   * 移动端回前台、电脑解锁等各种路径。
    */
   private wireLifecycle(): void {
     if (this.lifecycleWired) return;
     if (typeof document === 'undefined' || typeof window === 'undefined') return;
     this.lifecycleWired = true;
+    // pagehide = 挂起(移动端切后台 / bfcache / 电脑锁屏):此时才需要断开 + 重连。
+    window.addEventListener('pagehide', () => this.suspend());
+    // pageshow = 恢复(bfcache 恢复等):强制重连。
+    window.addEventListener('pageshow', () => this.resume());
+    // visibilitychange(visible) = 恢复:覆盖从其他标签页切回、电脑解锁等场景。
+    // 不在 hidden 时挂起——桌面切标签页只是 hidden 但 WS 仍活跃。
     document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'hidden') {
-        this.suspend();
-      } else {
+      if (document.visibilityState === 'visible') {
         this.resume();
       }
     });
-    window.addEventListener('pagehide', () => this.suspend());
-    window.addEventListener('pageshow', () => this.resume());
   }
 
   private backoffMs(attempt: number): number {
