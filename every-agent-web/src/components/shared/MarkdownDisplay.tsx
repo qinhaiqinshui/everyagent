@@ -16,7 +16,7 @@ const MarkdownDisplay = React.memo(function MarkdownDisplay({ content }: { conte
   const normalized = React.useMemo(() => normalizeMarkdownContent(content), [content])
   if (!normalized.trim()) return null
   return (
-    <div className="md-root">
+    <div className="md-root" style={rootStyle}>
       <Markdown remarkPlugins={[remarkGfm]} components={displayComponents}>
         {normalized}
       </Markdown>
@@ -28,6 +28,13 @@ export default MarkdownDisplay
 
 /** 聊天场景组件映射（无工作区上下文、无大纲），模块级单例避免每次渲染重建。 */
 const displayComponents = buildMarkdownComponents({ variant: 'display' })
+
+/** 根容器：flex column，所有块级元素 margin 归零，间距由 gap 统一控制。 */
+const rootStyle: React.CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 4,
+}
 
 /**
  * 归一化 AI 输出：

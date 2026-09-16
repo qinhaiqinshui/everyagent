@@ -2,19 +2,14 @@
  * 基础样式走 buildMarkdownComponents 内联；此处仅处理内联样式难以表达的
  * 后代选择器场景。根容器需带 .md-root 类名。 */
 
-/* 嵌套列表：li 内的 ul/ol 收紧上下间距（基础 margin 叠加 li 间距会显得过大） */
+/* 嵌套列表：li 内的 ul/ol 收紧上下间距 */
 .md-root li > ul,
 .md-root li > ol {
   margin: 2px 0 0;
 }
 
-/* 列表项内段落：松散列表（项间有空行）remark 会把 li 内容包进 <p>，
+/* 列表项内段落：松散列表（项间空行）remark 会把 li 内容包进 <p>，
  * 去掉段落 margin，避免与 li 自身间距叠加。 */
 .md-root li > p {
   margin: 0;
-}
-
-/* 连续段落间距：相邻 <p> 之间留少量间距，末段不产生尾部空白。 */
-.md-root p + p {
-  margin-top: 4px;
 }
