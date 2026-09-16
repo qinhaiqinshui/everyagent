@@ -269,15 +269,14 @@ function renderBlock(block: MarkdownBlock, depth: number, wrapLines: boolean, in
     return renderListItems(block.items, block.ordered, 0, block.key, wrapLines, inlineRenderOptions)
   }
   return (
-    <div key={block.key} style={{ marginLeft: blockOffset }}>
-      <MarkdownTable
-        headers={block.headers}
-        alignments={block.alignments}
-        rows={block.rows}
-        inlineOptions={inlineRenderOptions}
-        styles={previewTableStyles}
-      />
-    </div>
+    <MarkdownTable
+      key={block.key}
+      headers={block.headers}
+      alignments={block.alignments}
+      rows={block.rows}
+      inlineOptions={inlineRenderOptions}
+      styles={previewTableStyles}
+    />
   )
 }
 
