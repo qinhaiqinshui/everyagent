@@ -243,7 +243,6 @@ function MarkdownFileEditor({
             viewMode={viewMode}
             layout={layout}
             wrapLines={wrapLines}
-            onWrapLinesChange={setWrapLines}
             lineNumber={lineNumber}
             lineLocateRequestedAt={lineLocateRequestedAt}
             onLineLocateApplied={onLineLocateApplied}

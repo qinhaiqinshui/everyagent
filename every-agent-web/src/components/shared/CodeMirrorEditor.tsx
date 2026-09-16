@@ -197,7 +197,6 @@ export default function CodeMirrorEditor({
     const doc = view.state.doc
     const line = Math.min(Math.max(1, lineNumber), doc.lines)
     const lineStart = doc.line(line).from
-    const lineEnd = doc.line(line).to
 
     view.dispatch({
       effects: EditorView.scrollIntoView(

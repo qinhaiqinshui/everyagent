@@ -23,7 +23,6 @@ type MarkdownSplitEditorProps = {
   viewMode: ViewMode
   layout: PreviewLayout
   wrapLines: boolean
-  onWrapLinesChange: (nextValue: boolean) => void
   lineNumber?: number
   lineLocateRequestedAt?: number
   onLineLocateApplied?: () => void
@@ -40,7 +39,6 @@ const MarkdownSplitEditor = React.forwardRef<MarkdownSplitEditorHandle, Markdown
   viewMode,
   layout,
   wrapLines,
-  onWrapLinesChange,
   lineNumber,
   lineLocateRequestedAt,
   onLineLocateApplied,

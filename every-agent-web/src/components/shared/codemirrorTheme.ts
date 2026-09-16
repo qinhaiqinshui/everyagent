@@ -126,7 +126,7 @@ const editorTheme = EditorView.theme({
   '.cm-scroller': {
     overflow: 'auto',
   },
-}, { dark: true })
+})
 
 /**
  * 语法高亮配色——与 codeBlock.css 中 .prism-tokens .token.* 一一对应。

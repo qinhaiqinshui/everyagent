@@ -34,10 +34,8 @@ const EXTENSION_MAP: Record<string, () => LanguageSupport> = {
   go: () => go(),
   // Python
   py: () => python(),
-  // Shell
-  sh: () => yaml(), // CM6 无 bash 语言包,用近似高亮降级;保持与 Prism 一致用 bash
-  bash: () => yaml(),
-  zsh: () => yaml(),
+  // Shell — CM6 无 bash 语言包,降级为纯文本(无高亮)
+  // sh: () => yaml(),  ← 错误：YAML 高亮不适用于 shell 脚本
   // SQL
   sql: () => sql(),
   // YAML

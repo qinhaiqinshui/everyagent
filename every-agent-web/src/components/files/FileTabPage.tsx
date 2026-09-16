@@ -355,7 +355,7 @@ export default function FileTabPage({
     return () => {
       window.removeEventListener('keydown', handleFindKeyDown)
     }
-  }, [file, isReadonlyEditor])
+  }, [file, getCmView, isReadonlyEditor])
 
   const handleRefresh = React.useCallback(() => {
     if (!file) return
@@ -455,6 +455,7 @@ export default function FileTabPage({
     defaultHeaderActions,
     editorProvidesViewMode,
     file,
+    getCmView,
     handleEnableEditing,
     handleRefresh,
     handleRequestProperties,
@@ -510,7 +511,7 @@ export default function FileTabPage({
     }
 
     return items
-  }, [activeFileSidebarPanelId, availableFileSidebarPanels, file, handleRefresh, handleRequestProperties, isMobile, isReadonlyEditor, loading, requestWorkspaceFileLocate, error, saving])
+  }, [activeFileSidebarPanelId, availableFileSidebarPanels, file, getCmView, handleRefresh, handleRequestProperties, isMobile, isReadonlyEditor, loading, requestWorkspaceFileLocate, error, saving])
 
   if (!file) {
     return (
