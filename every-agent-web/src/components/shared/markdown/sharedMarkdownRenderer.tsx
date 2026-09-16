@@ -180,6 +180,35 @@ const baseLinkStyle: React.CSSProperties = {
   wordBreak: 'break-word',
 }
 
+const taskCheckedStyle: React.CSSProperties = {
+  flexShrink: 0,
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  width: '1.2em',
+  height: '1.2em',
+  marginTop: 2,
+  borderRadius: 3,
+  fontSize: '0.85em',
+  fontWeight: 700,
+  color: '#fff',
+  background: 'var(--accent-green, #22c55e)',
+  lineHeight: 1,
+}
+
+const taskUncheckedStyle: React.CSSProperties = {
+  flexShrink: 0,
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  width: '1.2em',
+  height: '1.2em',
+  marginTop: 2,
+  borderRadius: 3,
+  border: '1.5px solid var(--border-strong, #888)',
+  boxSizing: 'border-box',
+}
+
 const previewHeadingStyles: Record<number, React.CSSProperties> = {
   1: { margin: '24px 0 12px', fontSize: 'var(--text-2xl)', fontWeight: 600, lineHeight: 1.3, color: 'var(--text-primary)', borderBottom: '1px solid var(--border)', paddingBottom: 8 },
   2: { margin: '20px 0 10px', fontSize: 'var(--text-xl)', fontWeight: 600, lineHeight: 1.35, color: 'var(--text-primary)' },
@@ -363,12 +392,40 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
       const { children, className } = props
       const rest = stripNode(props)
       const isTaskItem = typeof className === 'string' && className.includes('task-list-item')
+      if (!isTaskItem) {
+        return (
+          <li {...rest} style={{ ...s.listItem, ...wrap }}>
+            {children}
+          </li>
+        )
+      }
+      // GFM 任务列表项：react-markdown 渲染成 <input type="checkbox" disabled checked>，
+      // 替换为彩色 ✓/◻ 图标，过滤掉原生 checkbox。
+      const childArray = React.Children.toArray(children)
+      const checkboxEl = childArray.find(
+        (child) => React.isValidElement(child) && (child as React.ReactElement<{ type?: string }>).props?.type === 'checkbox',
+      ) as React.ReactElement<{ checked?: boolean }> | undefined
+      const isChecked = checkboxEl?.props?.checked === true
+      const contentNodes = childArray.filter((child) => child !== checkboxEl)
       return (
         <li
           {...rest}
-          style={{ ...s.listItem, ...wrap, ...(isTaskItem ? { listStyleType: 'none', paddingLeft: 0 } : null) }}
+          style={{
+            ...s.listItem,
+            ...wrap,
+            listStyleType: 'none',
+            paddingLeft: 0,
+            display: 'flex',
+            alignItems: 'flex-start',
+            gap: 6,
+          }}
         >
-          {children}
+          <span style={isChecked ? taskCheckedStyle : taskUncheckedStyle}>
+            {isChecked ? '✓' : ''}
+          </span>
+          <span style={{ flex: 1, minWidth: 0 }}>
+            {contentNodes}
+          </span>
         </li>
       )
     },
