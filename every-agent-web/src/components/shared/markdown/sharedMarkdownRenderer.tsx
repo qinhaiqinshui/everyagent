@@ -182,18 +182,9 @@ const baseLinkStyle: React.CSSProperties = {
 
 const taskCheckedStyle: React.CSSProperties = {
   flexShrink: 0,
-  display: 'inline-flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  width: '1.2em',
-  height: '1.2em',
-  marginTop: 2,
-  borderRadius: 3,
-  fontSize: '0.85em',
-  fontWeight: 700,
-  color: '#fff',
-  background: 'var(--accent-green, #22c55e)',
-  lineHeight: 1,
+  fontSize: '1em',
+  lineHeight: 1.3,
+  marginTop: 1,
 }
 
 const taskUncheckedStyle: React.CSSProperties = {
@@ -421,7 +412,7 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
           }}
         >
           <span style={isChecked ? taskCheckedStyle : taskUncheckedStyle}>
-            {isChecked ? '✓' : ''}
+            {isChecked ? '✅' : ''}
           </span>
           <span style={{ flex: 1, minWidth: 0 }}>
             {contentNodes}
