@@ -152,7 +152,7 @@ const baseThStyle: React.CSSProperties = {
   padding: '10px 12px',
   fontSize: 'var(--text-xs)',
   fontWeight: 700,
-  verticalAlign: 'top',
+  verticalAlign: 'middle',
   borderBottom: '1px solid var(--border)',
   wordBreak: 'break-word',
   overflowWrap: 'anywhere',
@@ -315,7 +315,7 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
     const rest = stripNode(props)
     delete rest.align
     return (
-      <th {...rest} style={{ ...s.th, textAlign: (align ?? node?.properties?.align) as React.CSSProperties['textAlign'] }}>
+      <th {...rest} style={{ ...s.th, textAlign: (align ?? node?.properties?.align ?? 'center') as React.CSSProperties['textAlign'] }}>
         {children}
       </th>
     )
