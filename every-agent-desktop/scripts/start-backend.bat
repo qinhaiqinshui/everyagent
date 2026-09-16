@@ -30,8 +30,8 @@ set "JAVA_EXE=jre\bin\javaw.exe"
 if not exist "%JAVA_EXE%" set "JAVA_EXE=jre\bin\java.exe"
 if not exist "%JAVA_EXE%" set "JAVA_EXE=java"
 
-set "HUB_URL=http://127.0.0.1:9100/health"
-set "WORKER_URL=http://127.0.0.1:9200/health"
+set "HUB_URL=http://127.0.0.1:6101/health"
+set "WORKER_URL=http://127.0.0.1:6102/health"
 
 rem ------------------------------------------------------------------
 rem  启动 hub

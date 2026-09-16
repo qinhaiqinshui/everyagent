@@ -4,8 +4,11 @@
  * ~/.everyagent/application-*.yaml 用户覆盖决定(optional:file 自动加载),
  * desktop 只负责拉起进程、注入 EVERYAGENT_HOME,并把 cwd 设为程序根
  * (worker 以字面相对路径 ./runtime 定位程序附属文件,见 paths.programRoot)。
+ *
+ * 外部进程复用:启动前调 /admin/identify(认证探测)判断 hub/worker 是否已在运行——
+ * 已在运行则跳过启动,退出时只停 desktop 自己启动的进程(「退出桌面」)或全部 HTTP shutdown(「全部退出」)。
  */
-import { spawn, execFile, type ChildProcess } from 'node:child_process'
+import { spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, mkdirSync, openSync } from 'node:fs'
 import { join } from 'node:path'
 import { app, utilityProcess } from 'electron'
@@ -31,8 +34,9 @@ export interface BackendHandles {
   /** 优雅停止:先 worker 后 hub,超时强杀;外部进程(null)跳过。 */
   stop: () => Promise<void>
   /**
-   * 全部停止:desktop 自己启动的走优雅停止;外部进程按监听端口定位 PID 强杀。
-   * 用于托盘「全部退出」——不管 hub/worker 是否外部启动,一律结束。
+   * 全部停止:对所有 hub/worker(含外部进程)发送 POST /admin/shutdown,触发 Spring 优雅关闭。
+   * desktop 自己启动的进程:HTTP shutdown 超时后 child.kill() 兜底。
+   * 外部进程:HTTP shutdown 超时只记日志(不按端口强杀)。
    */
   stopAll: () => Promise<void>
 }
@@ -47,13 +51,27 @@ function resolveJavaExe(): { exe: string; windowsHide: boolean } {
   return { exe: 'java', windowsHide: false }
 }
 
-/** 快速探测 HTTP 端点是否可达且返回 200(用于检测已有外部进程)。 */
-async function probeHttp(url: string, timeoutMs: number): Promise<boolean> {
+/**
+ * 认证探测:GET /admin/identify,携带 X-Admin-Key 请求头。
+ * 返回 'hub' / 'worker' 表示识别到本服务;null 表示端口无响应、认证失败或非本服务。
+ */
+async function identifyService(
+  port: number,
+  adminKey: string,
+  timeoutMs: number,
+): Promise<string | null> {
   try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) })
-    return res.ok
+    const res = await fetch(`http://127.0.0.1:${port}/admin/identify`, {
+      headers: { 'X-Admin-Key': adminKey },
+      signal: AbortSignal.timeout(timeoutMs),
+    })
+    if (res.ok) {
+      const body = (await res.json().catch(() => null)) as { service?: unknown } | null
+      if (body && typeof body.service === 'string') return body.service
+    }
+    return null
   } catch {
-    return false
+    return null
   }
 }
 
@@ -65,7 +83,7 @@ async function waitHttp(
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
-    // 子进程已退出则立即失败,避免“进程崩了还干等超时”。
+    // 子进程已退出则立即失败,避免"进程崩了还干等超时"。
     if (child && child.exitCode !== null) {
       throw new Error(
         `${label} 进程提前退出(code=${child.exitCode}, signal=${child.signalCode ?? 'null'}):${url}`,
@@ -99,7 +117,7 @@ async function waitWorkerReady(
 ): Promise<string> {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
-    // 子进程已退出则立即失败,避免“进程崩了还干等超时”。
+    // 子进程已退出则立即失败,避免"进程崩了还干等超时"。
     if (child && child.exitCode !== null) {
       throw new Error(
         `${label} 进程提前退出(code=${child.exitCode}, signal=${child.signalCode ?? 'null'}):${url}`,
@@ -157,6 +175,50 @@ function spawnJava(
     console.info(`[desktop] ${label} 进程退出 code=${code} signal=${signal}`)
   })
   return child
+}
+
+/**
+ * 向 /admin/shutdown 发送 POST 请求,触发 Spring Boot 优雅关闭。
+ * 返回后等待端口变为不可达(进程退出),最多等 waitMs。
+ */
+async function shutdownViaHttp(
+  port: number,
+  adminKey: string,
+  label: string,
+  log: StatusFn,
+  waitMs: number,
+): Promise<void> {
+  const url = `http://127.0.0.1:${port}/admin/shutdown`
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'X-Admin-Key': adminKey },
+      signal: AbortSignal.timeout(5000),
+    })
+    if (res.ok) {
+      log(`外部 ${label}:已发送 shutdown 指令,等待进程退出...`)
+      // 等待端口变为不可达
+      const deadline = Date.now() + waitMs
+      while (Date.now() < deadline) {
+        try {
+          await fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(1000) })
+          // 端口仍可达,继续等
+        } catch {
+          log(`外部 ${label}:进程已退出`)
+          return
+        }
+        await new Promise((r) => setTimeout(r, 300))
+      }
+      log(`外部 ${label}:shutdown 已发送但进程未在 ${waitMs}ms 内退出`)
+    } else if (res.status === 401) {
+      log(`外部 ${label}:shutdown 认证失败(密钥不匹配),无法停止`)
+    } else {
+      log(`外部 ${label}:shutdown 返回 HTTP ${res.status}`)
+    }
+  } catch (error) {
+    // 连接被拒说明进程已经不在了
+    log(`外部 ${label}:shutdown 请求失败(可能已停止): ${(error as Error).message}`)
+  }
 }
 
 export async function startBackend(
@@ -219,34 +281,40 @@ export async function startBackend(
   const env: NodeJS.ProcessEnv = { ...process.env, EVERYAGENT_HOME: paths.home }
   const hubLog = join(paths.logsDir, 'hub.out.log')
   const workerLog = join(paths.logsDir, 'worker.out.log')
-  const hubUrl = `http://127.0.0.1:${cfg.hubPort}/health`
-  const workerUrl = `http://127.0.0.1:${cfg.workerPort}/health`
+  const hubHealthUrl = `http://127.0.0.1:${cfg.hubPort}/health`
+  const workerHealthUrl = `http://127.0.0.1:${cfg.workerPort}/health`
 
   // ------------------------------------------------------------------
-  // 探测已有 hub:若外部已启动(任务计划程序 / start-backend.bat)则复用。
+  // 认证探测已有 hub:GET /admin/identify 携带 hubKey 认证。
+  // 识别成功 = 我们的服务,复用;不可达 = 启动;401 = 端口被别的程序占用(报错)。
   // ------------------------------------------------------------------
   let hub: ChildProcess | null = null
-  if (await probeHttp(hubUrl, 2000)) {
+  const hubIdentity = await identifyService(cfg.hubPort, cfg.hubKey, 2000)
+  if (hubIdentity === 'hub') {
     log('hub 已在运行(外部进程),跳过启动')
+  } else if (hubIdentity !== null) {
+    // 端口能响应但非 hub 服务(401 或 service 不匹配)
+    throw new Error(
+      `端口 ${cfg.hubPort} 已被其他程序占用(/admin/identify 返回非 hub),请更换 hubPort 或释放端口`,
+    )
   } else {
     log(`启动 hub (${hubJarPath}) ...`)
     hub = spawnJava('hub', hubJarPath, [], hubLog, env, programRoot())
-    log(`等待 hub 健康检查 ${hubUrl} (30s)...`)
-    await waitHttp(hubUrl, 30000, 'hub', hub)
+    log(`等待 hub 健康检查 ${hubHealthUrl} (30s)...`)
+    await waitHttp(hubHealthUrl, 30000, 'hub', hub)
     log('hub 健康检查通过')
   }
 
   // ------------------------------------------------------------------
-  // 探测已有 worker:端口能响应说明进程在(外部启动);不响应说明需启动。
-  // 若端口能响应但 hubConnected=false(hub 刚由 desktop 启动,worker 尚未重连),
-  // 给 30s 等待重连;超时仍标记为外部(不能 spawn——会端口冲突)。
+  // 认证探测已有 worker:GET /admin/identify 携带 workerApiKey 认证。
   // ------------------------------------------------------------------
   let worker: ChildProcess | null = null
   let actualWorkerId = ''
-  if (await probeHttp(workerUrl, 2000)) {
+  const workerIdentity = await identifyService(cfg.workerPort, cfg.workerApiKey, 2000)
+  if (workerIdentity === 'worker') {
     log('检测到 worker 已在运行(外部进程),等待 hub 连接就绪...')
     try {
-      actualWorkerId = await waitWorkerReady(workerUrl, 30000, 'worker')
+      actualWorkerId = await waitWorkerReady(workerHealthUrl, 30000, 'worker')
       log(
         actualWorkerId
           ? `worker 就绪(外部,hub 连接已建立,workerId=${actualWorkerId})`
@@ -257,13 +325,17 @@ export async function startBackend(
       // 或 hub 连接断开。无论哪种都不能再 spawn(端口已占)。尝试读 workerId 后复用。
       log('警告:外部 worker 未在 30s 内建立 hub 连接,仍标记为外部进程(不启动新实例)')
       try {
-        const res = await fetch(workerUrl, { signal: AbortSignal.timeout(2000) })
+        const res = await fetch(workerHealthUrl, { signal: AbortSignal.timeout(2000) })
         if (res.ok) {
           const body = (await res.json().catch(() => null)) as { workerId?: unknown } | null
           if (body && typeof body.workerId === 'string') actualWorkerId = body.workerId.trim()
         }
       } catch { /* ignore */ }
     }
+  } else if (workerIdentity !== null) {
+    throw new Error(
+      `端口 ${cfg.workerPort} 已被其他程序占用(/admin/identify 返回非 worker),请更换 workerPort 或释放端口`,
+    )
   } else {
     log(`启动 worker (${workerJarPath}) ...`)
     // 程序附属文件(rg、eagent-run.py、镜像)随安装包分发到 <程序根>/runtime;
@@ -272,8 +344,8 @@ export async function startBackend(
     // 启动顺序关键:必须等到 worker 就绪(健康检查通过且 hub 连接建立)再加载前端,
     // 否则前端首屏 tasks.list 落在 worker 尚未订阅 cmd 频道的窗口,任务列表恒为空,
     // 只能去设置页手动「保存并连接」重建连接后才恢复。
-    log(`等待 worker 就绪(健康检查 + hub 连接) ${workerUrl} (120s)...`)
-    actualWorkerId = await waitWorkerReady(workerUrl, 120000, 'worker', worker)
+    log(`等待 worker 就绪(健康检查 + hub 连接) ${workerHealthUrl} (120s)...`)
+    actualWorkerId = await waitWorkerReady(workerHealthUrl, 120000, 'worker', worker)
     log(
       actualWorkerId
         ? `worker 就绪(hub 连接已建立,workerId=${actualWorkerId})`
@@ -296,19 +368,26 @@ export async function startBackend(
       log('hub 为外部进程,跳过停止')
     }
   }
-  // 全部停止:desktop 自己启动的走优雅停止;外部进程按监听端口定位 PID 强杀。
+  // 全部停止:对所有 hub/worker 发送 HTTP shutdown 触发 Spring 优雅关闭。
+  // desktop 自己启动的进程:HTTP shutdown 超时后 child.kill() 兜底。
+  // 外部进程:HTTP shutdown 超时只记日志(不按端口强杀,避免误杀)。
   const stopAll = async (): Promise<void> => {
+    // 先停 worker 再停 hub(worker 先断开 hub 连接)
     if (worker) {
-      log('停止 worker...')
-      await stopProcess(worker, 8000)
+      log('停止 worker(HTTP shutdown + 兜底 kill)...')
+      await shutdownViaHttp(cfg.workerPort, cfg.workerApiKey, 'worker', log, 8000)
+      await stopProcess(worker, 3000)
     } else {
-      await killByPort(cfg.workerPort, 'worker', log)
+      log('停止外部 worker(HTTP shutdown)...')
+      await shutdownViaHttp(cfg.workerPort, cfg.workerApiKey, 'worker', log, 8000)
     }
     if (hub) {
-      log('停止 hub...')
-      await stopProcess(hub, 5000)
+      log('停止 hub(HTTP shutdown + 兜底 kill)...')
+      await shutdownViaHttp(cfg.hubPort, cfg.hubKey, 'hub', log, 5000)
+      await stopProcess(hub, 3000)
     } else {
-      await killByPort(cfg.hubPort, 'hub', log)
+      log('停止外部 hub(HTTP shutdown)...')
+      await shutdownViaHttp(cfg.hubPort, cfg.hubKey, 'hub', log, 5000)
     }
   }
   return { hub, worker, workerId: actualWorkerId, stop, stopAll }
@@ -338,74 +417,4 @@ function stopProcess(child: ChildProcess, graceMs: number): Promise<void> {
       resolve()
     }
   })
-}
-
-function execFileP(cmd: string, args: string[]): Promise<string> {
-  return new Promise((resolve, reject) => {
-    execFile(cmd, args, { windowsHide: true }, (err, stdout) => {
-      if (err) reject(err)
-      else resolve(String(stdout))
-    })
-  })
-}
-
-/**
- * 查找监听指定 TCP 端口的进程 PID(去重)。
- * Windows 用 netstat -ano 解析 LISTENING 行;其他平台(开发态)用 lsof。
- * 排除 desktop 自身 pid。失败返回空数组(调用方降级为"无需处理")。
- */
-async function pidsListeningOn(port: number): Promise<number[]> {
-  if (process.platform === 'win32') {
-    try {
-      const out = await execFileP('netstat', ['-ano', '-p', 'tcp'])
-      const pids = new Set<number>()
-      const suffix = `:${port}`
-      for (const line of out.split(/\r?\n/)) {
-        const cols = line.trim().split(/\s+/)
-        if (cols.length < 5 || cols[3] !== 'LISTENING') continue
-        // endsWith 精确匹配端口段:':9100' 不会误中 ':91001'(末 5 字符不等)。
-        if (!cols[1].endsWith(suffix)) continue
-        const pid = Number(cols[cols.length - 1])
-        if (Number.isInteger(pid) && pid > 0 && pid !== process.pid) pids.add(pid)
-      }
-      return [...pids]
-    } catch {
-      return []
-    }
-  }
-  try {
-    const out = await execFileP('lsof', ['-ti', `tcp:${port}`, '-sTCP:LISTEN'])
-    return out
-      .split(/\s+/)
-      .filter(Boolean)
-      .map(Number)
-      .filter((p) => Number.isInteger(p) && p > 0 && p !== process.pid)
-  } catch {
-    return []
-  }
-}
-
-/**
- * 按监听端口强杀占用进程:用于「全部退出」时结束外部启动的 hub/worker
- * (desktop 没有其子进程句柄)。Windows taskkill /F /T(含子树);
- * 失败(如外部进程以 SYSTEM 身份运行、当前用户无权终止)只记日志,不阻塞退出。
- */
-async function killByPort(port: number, label: string, log: StatusFn): Promise<void> {
-  const pids = await pidsListeningOn(port)
-  if (pids.length === 0) {
-    log(`外部 ${label}:端口 ${port} 无监听进程,无需处理`)
-    return
-  }
-  for (const pid of pids) {
-    try {
-      log(`停止外部 ${label} 进程 pid=${pid}(监听端口 ${port})...`)
-      if (process.platform === 'win32') {
-        await execFileP('taskkill', ['/PID', String(pid), '/F', '/T'])
-      } else {
-        process.kill(pid, 'SIGKILL')
-      }
-    } catch (error) {
-      log(`停止外部 ${label} pid=${pid} 失败(忽略): ${(error as Error).message}`)
-    }
-  }
 }

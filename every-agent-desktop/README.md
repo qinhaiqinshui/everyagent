@@ -7,8 +7,8 @@
 ```
 ┌────────────────────── every-agent-desktop(Electron) ──────────────────────┐
 │  main 进程                                                                 │
-│   ├─ spawn hub.jar   (jlink JRE javaw.exe,127.0.0.1:9100,等 /health)      │
-│   ├─ spawn worker.jar (连 ws://127.0.0.1:9100/ws,复用 EVERYAGENT_HOME)    │
+│   ├─ spawn hub.jar   (jlink JRE javaw.exe,127.0.0.1:6101,等 /health)      │
+│   ├─ spawn worker.jar (连 ws://127.0.0.1:6101/ws,复用 EVERYAGENT_HOME)    │
 │   └─ 本地静态服务 127.0.0.1:<随机端口> → 加载 resources/web(前端 dist)     │
 │  renderer(前端,经 preload 注入 bootstrap)                                  │
 │   └─ 自动 applyConfig(hub) + setWorkerApiKey(worker) → 开箱即用连接       │
@@ -27,8 +27,8 @@
   "hubKey": "sljlw23948LKS",
   "workerApiKey": "dev-key",
   "workerId": "company-pc",
-  "hubPort": 9100,
-  "workerPort": 9200
+  "hubPort": 6101,
+  "workerPort": 6102
 }
 ```
 
@@ -93,7 +93,20 @@ JRE 缺失时回退系统 `java`(Windows 下 `windowsHide` 隐藏控制台)。
 - **配置注入**:`desktop-hub.yml` / `desktop-worker.yml` 生成到 `<EVERYAGENT_HOME>/desktop/`,
   经 `--spring.config.additional-location=file:///...` 覆盖 jar 内默认值。
 - **单实例锁**:二次启动聚焦已有窗口。
-- **优雅退出**:托盘「退出桌面」仅退 GUI,hub/worker(含 desktop 启动的)全部保留,下次启动自动复用;「全部退出」连同 hub/worker 一并结束——desktop 自己启动的走优雅停止,外部进程(经 `start-backend.bat` 启动)按监听端口定位 PID 强杀(`taskkill /F /T`)。
+- **优雅退出**:托盘「退出桌面」仅退 GUI,hub/worker(含 desktop 启动的)全部保留,下次启动自动复用;「全部退出」对所有 hub/worker 发送 `POST /admin/shutdown` 触发 Spring 优雅关闭——desktop 自己启动的进程 HTTP shutdown 超时后 `child.kill()` 兜底,外部进程超时只记日志(不按端口强杀,零误杀风险)。
+
+## 管理端点(仅限本机)
+
+hub(:6101)与 worker(:6102)各提供两个管理端点,用于外部进程探测与优雅关闭:
+
+| 端点 | 认证 | 说明 |
+|---|---|---|
+| `GET /admin/identify` | `X-Admin-Key` | 返回 `{"service":"hub"}` 或 `{"service":"worker","workerId":"..."}` |
+| `POST /admin/shutdown` | `X-Admin-Key` | 延迟 500ms 触发 `ApplicationContext.close()` 优雅关闭 |
+
+- **认证**:hub 校验 `X-Admin-Key` 的 sha256 与 hubKey 匹配;worker 校验 `X-Admin-Key` 与 hubs[0].apiKey 明文匹配。
+- **安全**:仅监听 127.0.0.1(外部网络不可达);POST + 自定义请求头(浏览器不会自动携带,防 CSRF)。
+- **密钥来源**:desktop-config.json 中的 hubKey / workerApiKey。
 
 ## 独立后端启动(无 GUI 场景)
 
@@ -108,7 +121,8 @@ JRE 缺失时回退系统 `java`(Windows 下 `windowsHide` 隐藏控制台)。
 4. 日志输出到 `<EVERYAGENT_HOME>\logs\{hub,worker}.out.log`。
 
 **Desktop 交互**:
-- Desktop 启动时自动探测 hub(:9100)与 worker(:9200)是否已在运行。
+- Desktop 启动时调 `GET /admin/identify`(认证探测)判断 hub/worker 是否已在运行。
 - 已在运行 → 跳过启动,直接复用(日志显示"外部进程")。
+- 端口被别的程序占用(认证失败) → 报错提示端口冲突。
 - 托盘「退出桌面」:保留所有后端进程(含 desktop 自己启动的,退出后转为外部孤儿,下次启动自动复用)。
-- 托盘「全部退出」:连同 hub/worker 一并结束,外部进程按监听端口定位 PID 强杀。
+- 托盘「全部退出」:对所有 hub/worker 发送 `POST /admin/shutdown` 触发 Spring 优雅关闭。
