@@ -18,15 +18,20 @@ export type CodeBlockProps = {
  * 头部条:左侧语言标签 + 右侧复制按钮;正文 Prism 高亮,长行横向滚动不撑破容器(移动端)。
  */
 export default function CodeBlock({ code, language, variant = 'preview', style }: CodeBlockProps) {
-  const lang = normalizeCodeLanguage(language)
+  const lang = React.useMemo(() => normalizeCodeLanguage(language), [language])
   const html = React.useMemo(() => (lang ? highlightCode(code, lang) : null), [code, lang])
   const [copied, setCopied] = React.useState(false)
+  const timerRef = React.useRef<number | undefined>(undefined)
+
+  // 组件卸载时清理待触发的「已复制」回退计时器,避免对已卸载组件 setState。
+  React.useEffect(() => () => window.clearTimeout(timerRef.current), [])
 
   const handleCopy = React.useCallback(() => {
     copyText(code)
       .then(() => {
         setCopied(true)
-        window.setTimeout(() => setCopied(false), 1500)
+        window.clearTimeout(timerRef.current)
+        timerRef.current = window.setTimeout(() => setCopied(false), 1500)
       })
       .catch(() => {
         setCopied(false)
@@ -46,7 +51,7 @@ export default function CodeBlock({ code, language, variant = 'preview', style }
           {copied ? '已复制' : '复制'}
         </button>
       </div>
-      <pre className="code-block__pre">
+      <pre className="code-block__pre" tabIndex={0}>
         {html
           ? <code className={`language-${lang}`} dangerouslySetInnerHTML={{ __html: html }} />
           : <code>{code}</code>}
@@ -69,7 +74,10 @@ async function copyText(text: string): Promise<void> {
   textarea.focus()
   textarea.select()
   try {
-    document.execCommand('copy')
+    // execCommand 返回 false 时复制实际失败,必须抛错让 UI 不误报「已复制」。
+    if (!document.execCommand('copy')) {
+      throw new Error('execCommand copy failed')
+    }
   } finally {
     document.body.removeChild(textarea)
   }

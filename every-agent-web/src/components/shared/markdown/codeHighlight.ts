@@ -18,6 +18,7 @@ import 'prismjs/components/prism-go'
 import 'prismjs/components/prism-sql'
 import 'prismjs/components/prism-jsx'
 import 'prismjs/components/prism-tsx'
+import 'prismjs/components/prism-yaml'
 
 /** fence 信息串 → Prism 语言名的常见别名映射。 */
 const LANGUAGE_ALIASES: Record<string, string> = {

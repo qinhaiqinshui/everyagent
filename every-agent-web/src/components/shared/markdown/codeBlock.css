@@ -73,6 +73,10 @@
 .code-block--display .code-block__pre {
   font-size: var(--text-xs);
   padding: 10px 12px;
+  /* 聊天输出场景长行自动换行(对齐原 MarkdownDisplay 行为),避免横向滚动打断阅读流。 */
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .code-block__pre code {
