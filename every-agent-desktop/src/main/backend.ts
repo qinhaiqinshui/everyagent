@@ -51,27 +51,60 @@ function resolveJavaExe(): { exe: string; windowsHide: boolean } {
   return { exe: 'java', windowsHide: false }
 }
 
+type IdentifyResult =
+  /** 端口无监听(连接被拒/超时),可安全启动 */
+  | { status: 'port-free' }
+  /** 端口被本服务占用,可复用 */
+  | { status: 'ours'; service: string }
+  /** 端口已被别的程序占用(认证失败/路径不存在/服务标识不匹配) */
+  | { status: 'port-occupied'; detail: string }
+
 /**
  * 认证探测:GET /admin/identify,携带 X-Admin-Key 请求头。
- * 返回 'hub' / 'worker' 表示识别到本服务;null 表示端口无响应、认证失败或非本服务。
+ * 区分三种状态:
+ * - port-free:连接被拒/超时 → 端口空闲,可启动;
+ * - ours:认证通过且 service 匹配 → 本服务,可复用;
+ * - port-occupied:收到 HTTP 响应但不匹配(401/404/200 但 service 不对)→ 端口被占,报错。
  */
 async function identifyService(
   port: number,
   adminKey: string,
+  expectedService: string,
   timeoutMs: number,
-): Promise<string | null> {
+): Promise<IdentifyResult> {
+  const url = `http://127.0.0.1:${port}/admin/identify`
   try {
-    const res = await fetch(`http://127.0.0.1:${port}/admin/identify`, {
+    const res = await fetch(url, {
       headers: { 'X-Admin-Key': adminKey },
       signal: AbortSignal.timeout(timeoutMs),
     })
     if (res.ok) {
       const body = (await res.json().catch(() => null)) as { service?: unknown } | null
-      if (body && typeof body.service === 'string') return body.service
+      if (body && typeof body.service === 'string' && body.service === expectedService) {
+        return { status: 'ours', service: body.service }
+      }
+      // 200 但 service 不匹配:可能是本服务的另一个角色(如用 hubKey 探 worker),
+      // 或别的程序恰好返回 200。一律视为端口被占。
+      const got = body?.service ?? 'unknown'
+      return {
+        status: 'port-occupied',
+        detail: `/${res.status} service=${got}(期望 ${expectedService})`,
+      }
     }
-    return null
-  } catch {
-    return null
+    // 非 200 响应(401/404/500 等):端口有程序在监听,但不是本服务或密钥不对
+    return {
+      status: 'port-occupied',
+      detail: `HTTP ${res.status}`,
+    }
+  } catch (error) {
+    // 连接被拒(ECONNREFUSED)→ 端口无监听,可安全启动
+    // 超时也可能是端口被防火墙等拦截,但本地 127.0.0.1 超时极少见,视为 port-free
+    const msg = (error as Error).message ?? String(error)
+    if (msg.includes('ECONNREFUSED') || msg.includes('fetch failed') || msg.includes('aborted')) {
+      return { status: 'port-free' }
+    }
+    // 其他网络错误也视为 port-free(宁可启动失败也不要误报端口被占)
+    return { status: 'port-free' }
   }
 }
 
@@ -286,16 +319,16 @@ export async function startBackend(
 
   // ------------------------------------------------------------------
   // 认证探测已有 hub:GET /admin/identify 携带 hubKey 认证。
-  // 识别成功 = 我们的服务,复用;不可达 = 启动;401 = 端口被别的程序占用(报错)。
+  // 识别成功 = 我们的服务,复用;连接被拒 = 启动;端口被占 = 报错提示用户。
   // ------------------------------------------------------------------
   let hub: ChildProcess | null = null
-  const hubIdentity = await identifyService(cfg.hubPort, cfg.hubKey, 2000)
-  if (hubIdentity === 'hub') {
+  const hubResult = await identifyService(cfg.hubPort, cfg.hubKey, 'hub', 2000)
+  if (hubResult.status === 'ours') {
     log('hub 已在运行(外部进程),跳过启动')
-  } else if (hubIdentity !== null) {
-    // 端口能响应但非 hub 服务(401 或 service 不匹配)
+  } else if (hubResult.status === 'port-occupied') {
     throw new Error(
-      `端口 ${cfg.hubPort} 已被其他程序占用(/admin/identify 返回非 hub),请更换 hubPort 或释放端口`,
+      `端口 ${cfg.hubPort} 已被其他程序占用(${hubResult.detail}),` +
+        `请在 desktop-config.json 中修改 hubPort,或手动释放端口后重试`,
     )
   } else {
     log(`启动 hub (${hubJarPath}) ...`)
@@ -310,8 +343,8 @@ export async function startBackend(
   // ------------------------------------------------------------------
   let worker: ChildProcess | null = null
   let actualWorkerId = ''
-  const workerIdentity = await identifyService(cfg.workerPort, cfg.workerApiKey, 2000)
-  if (workerIdentity === 'worker') {
+  const workerResult = await identifyService(cfg.workerPort, cfg.workerApiKey, 'worker', 2000)
+  if (workerResult.status === 'ours') {
     log('检测到 worker 已在运行(外部进程),等待 hub 连接就绪...')
     try {
       actualWorkerId = await waitWorkerReady(workerHealthUrl, 30000, 'worker')
@@ -332,9 +365,10 @@ export async function startBackend(
         }
       } catch { /* ignore */ }
     }
-  } else if (workerIdentity !== null) {
+  } else if (workerResult.status === 'port-occupied') {
     throw new Error(
-      `端口 ${cfg.workerPort} 已被其他程序占用(/admin/identify 返回非 worker),请更换 workerPort 或释放端口`,
+      `端口 ${cfg.workerPort} 已被其他程序占用(${workerResult.detail}),` +
+        `请在 desktop-config.json 中修改 workerPort,或手动释放端口后重试`,
     )
   } else {
     log(`启动 worker (${workerJarPath}) ...`)
