@@ -315,7 +315,7 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
     const rest = stripNode(props)
     delete rest.align
     return (
-      <th {...rest} style={{ ...s.th, textAlign: (align ?? node?.properties?.align ?? 'center') as React.CSSProperties['textAlign'] }}>
+      <th {...rest} style={{ ...s.th, textAlign: (align ?? node?.properties?.align ?? 'left') as React.CSSProperties['textAlign'] }}>
         {children}
       </th>
     )
