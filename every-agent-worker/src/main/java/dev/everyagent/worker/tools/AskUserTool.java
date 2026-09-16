@@ -1,5 +1,10 @@
 package dev.everyagent.worker.tools;
 
+import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.databind.DeserializationContext;
+import com.fasterxml.jackson.databind.JsonDeserializer;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.task.AgentCancelledException;
 import dev.everyagent.worker.task.PendingAsks;
@@ -7,6 +12,7 @@ import dev.everyagent.worker.task.TaskEntry;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -22,9 +28,73 @@ public class AskUserTool {
 
     /** LLM 传入的单题结构:题干 + 候选选项(只支持选择题)。 */
     public record AskQuestionInput(
-            @ToolParam(description = "问题文本,清晰具体") String prompt,
-            @ToolParam(description = "候选选项列表(至少 1 个;前端会自动追加「其他」选项)",
-                    required = false) List<String> options) {
+            @JsonDeserialize(using = LenientStringDeserializer.class)
+            @ToolParam(description = "问题文本,清晰具体的字符串") String prompt,
+            @JsonDeserialize(using = LenientStringListDeserializer.class)
+            @ToolParam(description = "候选选项列表,必须是纯文本字符串数组,如 [\"方案A\",\"方案B\"]"
+                    + "(至少 1 个;前端会自动追加「其他」选项;不要传对象)", required = false) List<String> options) {
+    }
+
+    /**
+     * 容错字符串反序列化:LLM 偶尔把 String 字段传成对象(如 {"text": "..."}),
+     * 统一收敛为字符串,避免参数格式错误打断任务。
+     */
+    public static final class LenientStringDeserializer extends JsonDeserializer<String> {
+        @Override
+        public String deserialize(JsonParser p, DeserializationContext ctxt) throws IOException {
+            return LenientCoercing.toString(p.readValueAsTree());
+        }
+    }
+
+    /**
+     * 容错字符串列表反序列化:LLM 常把 options 传成对象数组
+     * (如 [{"label":"A"}])或单个字符串,统一收敛为字符串列表。
+     */
+    public static final class LenientStringListDeserializer extends JsonDeserializer<List<String>> {
+        @Override
+        public List<String> getNullValue(DeserializationContext ctxt) {
+            return List.of();
+        }
+
+        @Override
+        public List<String> deserialize(JsonParser p, DeserializationContext ctxt) throws IOException {
+            JsonNode node = p.readValueAsTree();
+            List<String> out = new ArrayList<>();
+            if (node == null || node.isNull()) {
+                return out;
+            }
+            if (node.isArray()) {
+                for (JsonNode item : node) {
+                    out.add(LenientCoercing.toString(item));
+                }
+            } else {
+                out.add(LenientCoercing.toString(node));
+            }
+            return out;
+        }
+    }
+
+    /** 通用收敛:把任意 JSON 节点压成字符串。 */
+    private static final class LenientCoercing {
+        private static final String[] TEXT_KEYS = {"text", "label", "name", "value", "title", "option", "content"};
+
+        static String toString(JsonNode node) {
+            if (node == null || node.isNull()) {
+                return "";
+            }
+            if (node.isValueNode()) {
+                return node.asText();
+            }
+            if (node.isObject()) {
+                for (String key : TEXT_KEYS) {
+                    JsonNode v = node.get(key);
+                    if (v != null && v.isValueNode()) {
+                        return v.asText();
+                    }
+                }
+            }
+            return node.toString();
+        }
     }
 
     private final PendingAsks asks;
