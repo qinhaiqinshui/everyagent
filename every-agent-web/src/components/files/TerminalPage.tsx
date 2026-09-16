@@ -18,6 +18,7 @@ import { hubSession } from '@/hub/session'
 import { loadThemeMode } from '@/settings/localSettings'
 import { domainEventBus, DOMAIN_EVENTS } from '@/events/eventBus'
 import { terminalGateway } from '@/platform/fs/terminalGateway'
+import { randomUUID } from '@/utils/uuid'
 import type { ITheme } from '@xterm/xterm'
 import type { ThemeMode, WorkspaceTerminalTab } from '@/types'
 
@@ -172,7 +173,7 @@ export default function TerminalPage({ tab }: TerminalPageProps) {
       return
     }
 
-    const termId = crypto.randomUUID()
+    const termId = randomUUID()
     const channel = channels.termStream(client.k, termId)
 
     const term = new Terminal({

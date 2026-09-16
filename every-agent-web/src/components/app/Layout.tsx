@@ -63,6 +63,7 @@ import { BrandMark } from '../shared/BrandLoadingBlock'
 import { createLazyRouteComponent, scheduleLazyRoutePreload } from '@/components/shared/LazyRouteView'
 import { useHub } from '@/hub/HubProvider'
 import { hubSession } from '@/hub/session'
+import { randomUUID } from '@/utils/uuid'
 import { taskStore } from '@/hub/taskStore'
 import { taskStreamManager } from '@/hub/taskStream'
 import { workspaceRegistry } from '@/hub/workspaceRegistry'
@@ -528,7 +529,7 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
     workerId: string
   }): string => {
     const nextTab: WorkspaceTerminalTab = {
-      id: `term:${crypto.randomUUID()}`,
+      id: `term:${randomUUID()}`,
       tabType: 'terminal',
       workspaceRoot: input.workspaceRoot,
       workerId: input.workerId,
