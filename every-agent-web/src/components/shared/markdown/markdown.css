@@ -13,3 +13,13 @@
 .md-root li > p {
   margin: 0;
 }
+
+/* 任务列表项（- [x] / - [ ]）：checkbox 悬挂到项目符号位置，
+ * 让任务项文本与普通列表项文本一样起始于 ul 内容边缘。
+ * 否则 checkbox 自身宽度会把文本右推、吃掉嵌套子项的相对缩进，
+ * 导致子项文本几乎与父项文本齐平。 */
+.md-root li.task-list-item > input[type='checkbox'],
+.md-root li.task-list-item > p > input[type='checkbox'] {
+  margin: 0 0.45em 0 -1.3em;
+  vertical-align: middle;
+}
