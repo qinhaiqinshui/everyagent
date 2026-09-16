@@ -45,11 +45,18 @@ const editorTheme = EditorView.theme({
   '.cm-activeLine': {
     backgroundColor: 'color-mix(in srgb, var(--bg-tertiary) 40%, transparent)',
   },
-  '.cm-selectionBackground, ::selection': {
-    backgroundColor: 'var(--accent-blue-dim)',
+  /* 选中色：仿 VS Code，区分聚焦(高对比)与失焦(低对比)两种状态。
+   * 失焦选中用灰色——编辑器未聚焦时选区仍可见但不抢眼；
+   * 聚焦选中用蓝色——编辑器聚焦时选区清晰可读、文字不被遮挡。
+   * 用不透明色值而非半透明 dim 变量，确保深色模式下选区清晰可见。 */
+  '.cm-selectionBackground': {
+    backgroundColor: 'var(--cm-selection-unfocused)',
   },
-  '&.cm-focused .cm-selectionBackground, &.cm-focused .cm-selectionLayer .cm-selectionBackground': {
-    backgroundColor: 'var(--accent-blue-dim)',
+  '&.cm-focused .cm-selectionBackground': {
+    backgroundColor: 'var(--cm-selection-focused)',
+  },
+  '::selection': {
+    backgroundColor: 'var(--cm-selection-focused)',
   },
   '.cm-cursor, .cm-dropCursor': {
     borderLeftColor: 'var(--accent-blue)',
