@@ -51,6 +51,14 @@ function MarkdownFileEditor({
     previousModeRef.current = mode
   }, [mode, viewMode])
 
+  // 行定位请求（如搜索结果点击跳转到指定行）到来时切到源码视图：
+  // 预览视图不挂载 CodeMirror，行定位无法生效；split/editor 视图保持不动。
+  React.useEffect(() => {
+    if (lineLocateRequestedAt == null) return
+    if (mode === 'readonly') return
+    setViewMode((current) => (current === 'preview' ? 'editor' : current))
+  }, [lineLocateRequestedAt, mode])
+
   React.useEffect(() => {
     setWrapLines(true)
   }, [file.id])
