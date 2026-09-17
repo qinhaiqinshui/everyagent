@@ -152,14 +152,14 @@ const baseThStyle: React.CSSProperties = {
   padding: '10px 12px',
   fontSize: 'var(--text-xs)',
   fontWeight: 700,
-  verticalAlign: 'middle',
+  verticalAlign: 'top',
   borderBottom: '1px solid var(--border)',
   wordBreak: 'break-word',
   overflowWrap: 'anywhere',
 }
 
 const baseTdStyle: React.CSSProperties = {
-  padding: '9px 12px',
+  padding: '10px 12px',
   fontSize: 'var(--text-sm)',
   lineHeight: 1.7,
   verticalAlign: 'top',
