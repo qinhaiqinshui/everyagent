@@ -46,19 +46,17 @@ const editorTheme = EditorView.theme({
     backgroundColor: 'color-mix(in srgb, var(--bg-tertiary) 40%, transparent)',
   },
   /* 选中色：聚焦与失焦统一使用浅蓝色。
-   * CM6 baseTheme 用高特异性选择器 '&light/dark.cm-focused > .cm-scroller >
+   * CM6 baseTheme 用高特异性选择器 '.cm-focused > .cm-scroller >
    * .cm-selectionLayer .cm-selectionBackground' 设了默认色(#d7d4f0/#233)，
-   * 必须用同等选择器覆盖才能生效。 */
+   * 必须用同等选择器覆盖才能生效。EditorView.theme() 不支持 &light/&dark
+   * 语法，所以直接用完整 class 选择器。 */
   '.cm-selectionBackground': {
     backgroundColor: 'var(--cm-selection-unfocused)',
   },
   '&.cm-focused .cm-selectionBackground': {
     backgroundColor: 'var(--cm-selection-focused)',
   },
-  '&light.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground': {
-    backgroundColor: 'var(--cm-selection-focused)',
-  },
-  '&dark.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground': {
+  '.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground': {
     backgroundColor: 'var(--cm-selection-focused)',
   },
   '::selection': {
