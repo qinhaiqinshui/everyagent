@@ -698,6 +698,8 @@ Input:  queued → consumed | discarded(任务取消)
 
 **skill 只读例外**:系统目录 `skills/` 是 AI 文件工具对系统路径的**唯一只读免授权**例外——`read_file` 经权限责任链节点 `SkillsReadAllowCheck` 直接放行(realpath 前缀判定);**任何写操作不在此放行,仍走授权决议链**;其余系统路径(workspaces/、sandbox/、runtime/ 等)与普通工作区外目录同权,一律走授权决议(弹窗/AI 审议)。`skills/` 同时只读挂入 wsl 系列沙箱(§7.10:wsl-direct drvfs `-o ro`、wsl-bwrap `--ro-bind`),bash 工具在沙箱内同样只读可达,写经 OS 层拒;windows-mic 后端跑在宿主,Medium IL 读写用户文件本就放行,无需挂载。
 
+**skill 知识包路径的沙箱注入**:`SkillAdvisor` 注入 system prompt 的知识包路径按当前沙箱后端解析(§7.17):WSL 系列沙箱下 `Skill.knowledgePath`(宿主 Windows 绝对路径)经 `WslPathMapper` 翻译为 AI 沙箱内可见的 `/` 开头 Linux 路径(wsl-direct `/c/...`、wsl-bwrap `/mnt/c/...`),使 AI 的 `bash`(`cat`/`grep`)与 `read_file`(经 `FsToolSupport.resolveWslPath` 反向翻译回宿主路径)均能直接使用同一路径;非 WSL 后端原样注入宿主路径。`Skill` record 仍存宿主绝对路径(物化/沙箱挂载均以此为准),路径翻译仅发生在注入提示词时。
+
 ### 7.18 内嵌终端(term.*)
 
 文件树目录右键「在终端中打开」→ 前端主区开 xterm.js 内嵌终端标签页,worker 用**真 PTY** 拉起交互式 shell,cwd 为右键目录;输出经频道推送、输入走 RPC(§5.5)。
