@@ -253,7 +253,7 @@ const singlePaneStyle: React.CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
   overflow: 'hidden',
-  background: 'var(--bg-secondary)',
+  background: 'var(--bg-primary)',
 }
 
 const paneStyle: React.CSSProperties = {
@@ -262,7 +262,7 @@ const paneStyle: React.CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
   overflow: 'hidden',
-  background: 'var(--bg-secondary)',
+  background: 'var(--bg-primary)',
 }
 
 const dividerStyle: React.CSSProperties = {

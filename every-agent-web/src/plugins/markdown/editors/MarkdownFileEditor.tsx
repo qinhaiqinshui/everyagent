@@ -282,6 +282,7 @@ const containerStyle: React.CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
   overflow: 'hidden',
+  background: 'var(--bg-primary)',
 }
 
 const bodyStyle: React.CSSProperties = {
