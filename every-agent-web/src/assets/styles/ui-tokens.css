@@ -81,7 +81,7 @@
   --code-bg: #10151e;
   --code-text: #d7e2f2;
   /* CodeMirror 选中色：仿 VS Code Dark+，聚焦选中(蓝灰不透明)与失焦选中(灰不透明)区分。 */
-  --cm-selection-focused: #1f5599;
+  --cm-selection-focused: #4a9eff;
   --cm-selection-unfocused: #4a9eff;
   --json-key: #9cdcfe;
   --json-string: #ce9178;
