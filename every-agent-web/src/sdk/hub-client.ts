@@ -368,16 +368,38 @@ export class HubClient {
    * 的派发顺序不确定(可能 onclose 先 → suspended=true → pageshow → resume 正常;
    * 也可能 pageshow 先 → suspended 仍 false → resume no-op → 连接永远不重建)。
    * 只要页面回到前台(visible)且连接不在 open,就强制重连。
+   *
+   * 僵尸连接检测:仅关闭显示器(不锁屏/不睡眠)时 pagehide 不会触发,suspend()
+   * 未执行,state 仍为 'open' 但 WebSocket 实际已因网卡节能而断开(CLOSING/CLOSED)。
+   * 此时检查 readyState——非 OPEN 即视为僵尸,主动重建,避免等到 onclose 延迟
+   * 触发 failPending 风暴(多个在途 RPC 被拒绝 → UI 弹出多个错误提示)。
    */
   private resume(): void {
     if (this.manualClose) return;
     this.suspended = false;
-    // 已连接/首次连接未建立(idle)时无需强制重连。
+    // 已连接且 WebSocket 确实存活:无需重连。
     // connecting:页面首次加载时 pageshow 事件(persisted=false)也会触发 resume,
     // 此时初始连接正在进行,不应强制关闭在途 WebSocket 并重建。
     // 真正的挂起恢复——页面曾切到后台时 suspend() 已把状态置为 'reconnecting',
     // 不会停留在 'connecting'。
-    if (this.stateValue === 'open' || this.stateValue === 'idle' || this.stateValue === 'connecting') return;
+    if (this.stateValue === 'idle' || this.stateValue === 'connecting') return;
+    if (this.stateValue === 'open') {
+      // 僵尸连接检测:仅关闭显示器时 pagehide 不触发,WS 可能已断但 onclose 尚未
+      // 到达(state 仍为 'open')。检查 readyState——非 OPEN 即主动重建,避免
+      // onclose 延迟到达后 failPending 拒绝全部在途 RPC 弹出多个错误提示。
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) return;
+      // WS 已非 OPEN(CLOSING/CLOSED 或 null):标记为僵尸,走重连流程。
+      // 不调用 failPending——onclose 处理器会自行处理(且可能已经处理过);
+      // 这里只负责尽快触发重建,让用户无感恢复。
+      this.ws = null;
+      this.setState('reconnecting');
+      void this.connect().catch(() => {
+        if (!this.manualClose && this.stateValue !== 'open') {
+          this.scheduleReconnect();
+        }
+      });
+      return;
+    }
     // 已有重连定时器在跑(正常网络断线重连):让它继续,不要打乱退避节奏。
     // 但若连接已断且无定时器(freeze 后 onclose 没走 scheduleReconnect 的情况),
     // 立即触发一次重连。
