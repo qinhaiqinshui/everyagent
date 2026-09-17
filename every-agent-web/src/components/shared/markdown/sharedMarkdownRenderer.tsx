@@ -140,6 +140,7 @@ const baseTableWrapStyle: React.CSSProperties = {
   width: '100%',
   border: '1px solid var(--border-light)',
   borderRadius: 'var(--radius-md)',
+  overflow: 'hidden',
 }
 
 const baseTableStyle: React.CSSProperties = {
