@@ -56,7 +56,7 @@ const editorTheme = EditorView.theme({
   '&.cm-focused .cm-selectionBackground': {
     backgroundColor: 'var(--cm-selection-focused)',
   },
-  '.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground': {
+  '&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground': {
     backgroundColor: 'var(--cm-selection-focused)',
   },
   '::selection': {
