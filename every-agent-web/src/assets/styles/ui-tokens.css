@@ -188,7 +188,7 @@
   --bg-primary: #ffffff;
   --bg-secondary: #ffffff;
   --bg-tertiary: #ffffff;
-  --bg-table: #f0f2f5; /* Markdown 表格背景：比主背景略灰 */
+  --bg-table: #fcfdfd; /* Markdown 表格背景：比主背景略灰 */
   --bg-hover: #f5f5f5;
   --bg-active: #ebebeb;
   --bg-elevated: #ffffff;
