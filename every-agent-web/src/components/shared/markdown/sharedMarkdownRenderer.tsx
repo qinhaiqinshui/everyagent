@@ -251,7 +251,7 @@ const variantStyles: Record<MarkdownVariant, {
     blockquote: { ...baseBlockquoteStyle, margin: '4px 0', color: 'var(--text-secondary)', fontSize: 'var(--text-sm)', lineHeight: 1.75 },
     list: { margin: '2px 0 2px 18px', padding: 0, paddingLeft: 2, listStyleType: 'disc' },
     listItem: { fontSize: 'var(--text-sm)', lineHeight: 1.75, color: 'var(--text-secondary)', marginBottom: 4 },
-    tableWrap: { ...baseTableWrapStyle, margin: '6px 0', background: 'color-mix(in srgb, var(--bg-tertiary) 48%, transparent)', borderColor: 'color-mix(in srgb, var(--border-light) 85%, transparent)' },
+    tableWrap: { ...baseTableWrapStyle, margin: '6px 0', border: '1px solid color-mix(in srgb, var(--border-light) 85%, transparent)', background: 'color-mix(in srgb, var(--bg-tertiary) 48%, transparent)' },
     table: { ...baseTableStyle, background: 'color-mix(in srgb, var(--bg-tertiary) 48%, transparent)' },
     th: { ...baseThStyle, lineHeight: 1.6, color: 'var(--text-primary)', background: 'color-mix(in srgb, var(--bg-tertiary) 82%, transparent)', borderBottomColor: 'var(--border-light)' },
     td: { ...baseTdStyle, lineHeight: 1.75, color: 'var(--text-secondary)', borderTopColor: 'color-mix(in srgb, var(--border-light) 78%, transparent)' },
