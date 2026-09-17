@@ -189,31 +189,53 @@ export default function CodeMirrorEditor({
   }, [wrapLines])
 
   // ── 行定位：lineLocateRequestedAt 变化时滚动到目标行 ──
-  // 用 requestAnimationFrame 延迟一帧，确保 CodeMirror DOM 布局完成后再滚动，
-  // 否则编辑器刚挂载时视口尺寸未定，scrollIntoView 无效。
+  // 用双重 requestAnimationFrame 确保浏览器完成 layout 后再滚动：
+  // 第一帧让 React 完成 DOM 提交，第二帧让浏览器完成 layout 计算，
+  // 之后 CodeMirror 的 scrollIntoView 才能正确计算滚动位置。
+  // 文档为空时不执行定位——首次打开文件时可能先以空内容挂载，文件读取完成
+  // 后内容才就绪；此时不应消费 lineLocateRequestedAt（否则会清除定位请求，
+  // 导致内容就绪后无法再次定位）。
+  // ── 行定位：lineLocateRequestedAt 变化时滚动到目标行 ──
+  // 用双重 requestAnimationFrame 确保浏览器完成 layout 后再滚动：
+  // 第一帧让 React 完成 DOM 提交，第二帧让浏览器完成 layout 计算，
+  // 之后 CodeMirror 的 scrollIntoView 才能正确计算滚动位置。
+  // 文档为空时不执行定位——首次打开文件时可能先以空内容挂载，文件读取完成
+  // 后内容才就绪；此时不应消费 lineLocateRequestedAt（否则会清除定位请求，
+  // 导致内容就绪后无法再次定位）。
+  // 依赖 value：当内容从空变为有值时重新触发定位。
   React.useEffect(() => {
     if (lineLocateRequestedAt == null || lineNumber == null) return
     const view = viewRef.current
     if (!view) return
+    // 文档为空时跳过——内容尚未就绪，scrollIntoView 无意义且会错误消费定位请求。
+    if (view.state.doc.length === 0) return
 
-    const rafId = requestAnimationFrame(() => {
-      const v = viewRef.current
-      if (!v) return
-      const doc = v.state.doc
-      const line = Math.min(Math.max(1, lineNumber), doc.lines)
-      const lineStart = doc.line(line).from
+    let raf1 = 0
+    let raf2 = 0
 
-      v.dispatch({
-        effects: EditorView.scrollIntoView(
-          lineStart,
-          { y: 'center' },
-        ),
+    raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => {
+        const v = viewRef.current
+        if (!v) return
+        const doc = v.state.doc
+        const line = Math.min(Math.max(1, lineNumber), doc.lines)
+        const lineStart = doc.line(line).from
+
+        v.dispatch({
+          effects: EditorView.scrollIntoView(
+            lineStart,
+            { y: 'center' },
+          ),
+        })
+        onLineLocateApplied?.()
       })
-      onLineLocateApplied?.()
     })
 
-    return () => cancelAnimationFrame(rafId)
-  }, [lineLocateRequestedAt, lineNumber, onLineLocateApplied])
+    return () => {
+      cancelAnimationFrame(raf1)
+      cancelAnimationFrame(raf2)
+    }
+  }, [lineLocateRequestedAt, lineNumber, onLineLocateApplied, value])
 
   return (
     <div
