@@ -210,12 +210,12 @@ const previewHeadingStyles: Record<number, React.CSSProperties> = {
 }
 
 const displayHeadingStyles: Record<number, React.CSSProperties> = {
-  1: { margin: 0, fontSize: 'var(--text-xl)', fontWeight: 700, lineHeight: 1.35, color: 'var(--text-primary)' },
-  2: { margin: 0, fontSize: 'var(--text-lg)', fontWeight: 700, lineHeight: 1.4, color: 'var(--text-primary)' },
-  3: { margin: 0, fontSize: 'var(--text-base)', fontWeight: 700, lineHeight: 1.45, color: 'var(--text-primary)' },
-  4: { margin: 0, fontSize: 'var(--text-sm)', fontWeight: 700, color: 'var(--text-primary)' },
-  5: { margin: 0, fontSize: 'var(--text-xs)', fontWeight: 700, color: 'var(--text-secondary)' },
-  6: { margin: 0, fontSize: 'var(--text-xs)', fontWeight: 700, color: 'var(--text-muted)' },
+  1: { margin: '0 0 8px', fontSize: 'var(--text-xl)', fontWeight: 700, lineHeight: 1.35, color: 'var(--text-primary)' },
+  2: { margin: '4px 0 8px', fontSize: 'var(--text-lg)', fontWeight: 700, lineHeight: 1.4, color: 'var(--text-primary)' },
+  3: { margin: '4px 0 6px', fontSize: 'var(--text-base)', fontWeight: 700, lineHeight: 1.45, color: 'var(--text-primary)' },
+  4: { margin: '4px 0 4px', fontSize: 'var(--text-sm)', fontWeight: 700, color: 'var(--text-primary)' },
+  5: { margin: '4px 0 2px', fontSize: 'var(--text-xs)', fontWeight: 700, color: 'var(--text-secondary)' },
+  6: { margin: '4px 0 2px', fontSize: 'var(--text-xs)', fontWeight: 700, color: 'var(--text-muted)' },
 }
 
 const variantStyles: Record<MarkdownVariant, {
@@ -247,15 +247,15 @@ const variantStyles: Record<MarkdownVariant, {
     heading: previewHeadingStyles,
   },
   display: {
-    paragraph: { ...baseParagraphStyle, fontSize: 'var(--text-sm)', lineHeight: 1.4, color: 'var(--text-secondary)', margin: 0 },
-    blockquote: { ...baseBlockquoteStyle, margin: 0, color: 'var(--text-secondary)', fontSize: 'var(--text-sm)', lineHeight: 1.4 },
-    list: { margin: 0, padding: 0, paddingLeft: '1.6em', listStyleType: 'disc' },
-    listItem: { fontSize: 'var(--text-sm)', lineHeight: 1.3, color: 'var(--text-secondary)' },
-    tableWrap: { ...baseTableWrapStyle, margin: 0, background: 'color-mix(in srgb, var(--bg-tertiary) 48%, transparent)', borderColor: 'color-mix(in srgb, var(--border-light) 85%, transparent)' },
+    paragraph: { ...baseParagraphStyle, fontSize: 'var(--text-sm)', lineHeight: 1.8, color: 'var(--text-secondary)', margin: 0 },
+    blockquote: { ...baseBlockquoteStyle, margin: '4px 0', color: 'var(--text-secondary)', fontSize: 'var(--text-sm)', lineHeight: 1.75 },
+    list: { margin: '2px 0 2px 18px', padding: 0, paddingLeft: 2, listStyleType: 'disc' },
+    listItem: { fontSize: 'var(--text-sm)', lineHeight: 1.75, color: 'var(--text-secondary)', marginBottom: 4 },
+    tableWrap: { ...baseTableWrapStyle, margin: '6px 0', background: 'color-mix(in srgb, var(--bg-tertiary) 48%, transparent)', borderColor: 'color-mix(in srgb, var(--border-light) 85%, transparent)' },
     table: { ...baseTableStyle, background: 'color-mix(in srgb, var(--bg-tertiary) 48%, transparent)' },
     th: { ...baseThStyle, lineHeight: 1.6, color: 'var(--text-primary)', background: 'color-mix(in srgb, var(--bg-tertiary) 82%, transparent)', borderBottomColor: 'var(--border-light)' },
-    td: { ...baseTdStyle, lineHeight: 1.5, color: 'var(--text-secondary)', borderTopColor: 'color-mix(in srgb, var(--border-light) 78%, transparent)' },
-    hr: { ...baseHrStyle, margin: 0 },
+    td: { ...baseTdStyle, lineHeight: 1.75, color: 'var(--text-secondary)', borderTopColor: 'color-mix(in srgb, var(--border-light) 78%, transparent)' },
+    hr: { ...baseHrStyle, margin: '8px 0' },
     code: { padding: '1px 5px', borderRadius: 5, color: 'var(--text-primary)', fontSize: 'var(--text-xs)', fontFamily: 'var(--font-mono)', border: '1px solid color-mix(in srgb, var(--border-light) 80%, transparent)' },
     strong: { fontWeight: 700, color: 'var(--text-primary)' },
     heading: displayHeadingStyles,
