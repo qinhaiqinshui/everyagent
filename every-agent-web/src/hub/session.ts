@@ -37,6 +37,7 @@ type ResyncListener = () => void
 type FatalErrorListener = (error: { code: string; detail: string } | null) => void
 type RateLimitedListener = (limited: boolean) => void
 type DirectoryListener = (infos: WorkerInfo[]) => void
+type ReconnectingListener = (reconnecting: boolean) => void
 
 /** 前端可见的 worker 纳管信息(目录 + 本地开关 + 连接错误)。 */
 export interface WorkerInfo {
@@ -114,6 +115,10 @@ class HubSession {
   private fatalErrorListeners = new Set<FatalErrorListener>()
   private rateLimitedListeners = new Set<RateLimitedListener>()
   private directoryListeners = new Set<DirectoryListener>()
+  private reconnectingListeners = new Set<ReconnectingListener>()
+
+  /** 是否有任一连接(目录/worker)正在重连(瞬态断连,传输层自动重连中)。 */
+  private reconnecting = false
 
   // ---- 订阅 ----
 
@@ -156,10 +161,32 @@ class HubSession {
     return () => this.directoryListeners.delete(fn)
   }
 
+  /** 任一连接(目录/worker)正在重连时触发——UI 层弹重连模态框阻塞用户操作。 */
+  onReconnecting(fn: ReconnectingListener): () => void {
+    this.reconnectingListeners.add(fn)
+    return () => this.reconnectingListeners.delete(fn)
+  }
+
   // ---- 派生 ----
 
   get connected(): boolean {
     return this.state === 'open'
+  }
+
+  /** 是否有任一连接正在重连。 */
+  get isReconnecting(): boolean {
+    return this.reconnecting
+  }
+
+  /** 聚合所有连接的重连状态:目录连接或任一 worker 连接处于 'reconnecting'。 */
+  private updateReconnecting(): void {
+    const next =
+      this.state === 'reconnecting' ||
+      Array.from(this.workerClients.values()).some((c) => c.state === 'reconnecting')
+    if (this.reconnecting !== next) {
+      this.reconnecting = next
+      for (const fn of this.reconnectingListeners) fn(next)
+    }
   }
 
   /** 是否已配置 hub 连接(双道鉴权模型下 hubUrl 与 hubKey 都必填)。 */
@@ -384,6 +411,7 @@ class HubSession {
     this.client = directory
     directory.onStateChange = (s) => {
       this.state = s
+      this.updateReconnecting()
       for (const fn of this.stateListeners) fn(s)
     }
     directory.onMessage = (frame) => {
@@ -491,6 +519,7 @@ class HubSession {
     })
     this.workerClients.set(workerId, client)
     client.onStateChange = () => {
+      this.updateReconnecting()
       this.notifyDirectory()
     }
     client.onMessage = (frame) => {

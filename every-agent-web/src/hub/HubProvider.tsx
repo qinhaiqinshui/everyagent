@@ -29,6 +29,8 @@ export interface HubContextValue {
   fatalError: { code: string; detail: string } | null
   /** 是否被 hub 限流(静默退避中)。 */
   rateLimited: boolean
+  /** 是否有任一连接(目录/worker)正在重连(瞬态断连,传输层自动重连中)。 */
+  reconnecting: boolean
 }
 
 const HubContext = React.createContext<HubContextValue | null>(null)
@@ -41,6 +43,7 @@ export function HubProvider({ children }: { children: React.ReactNode }) {
   const [resyncVersion, setResyncVersion] = React.useState(0)
   const [fatalError, setFatalError] = React.useState(hubSession.fatalError)
   const [rateLimited, setRateLimited] = React.useState(hubSession.rateLimited)
+  const [reconnecting, setReconnecting] = React.useState(hubSession.isReconnecting)
 
   React.useEffect(() => {
     const unsubState = hubSession.onState(setState)
@@ -53,6 +56,7 @@ export function HubProvider({ children }: { children: React.ReactNode }) {
     })
     const unsubFatal = hubSession.onFatalError(setFatalError)
     const unsubRateLimited = hubSession.onRateLimited(setRateLimited)
+    const unsubReconnecting = hubSession.onReconnecting(setReconnecting)
     void hubSession.ensureConnected()
     return () => {
       unsubState()
@@ -61,6 +65,7 @@ export function HubProvider({ children }: { children: React.ReactNode }) {
       unsubResync()
       unsubFatal()
       unsubRateLimited()
+      unsubReconnecting()
     }
   }, [])
 
@@ -91,7 +96,8 @@ export function HubProvider({ children }: { children: React.ReactNode }) {
     resyncVersion,
     fatalError,
     rateLimited,
-  }), [state, workers, directory, config, resyncVersion, fatalError, rateLimited])
+    reconnecting,
+  }), [state, workers, directory, config, resyncVersion, fatalError, rateLimited, reconnecting])
 
   return <HubContext.Provider value={value}>{children}</HubContext.Provider>
 }

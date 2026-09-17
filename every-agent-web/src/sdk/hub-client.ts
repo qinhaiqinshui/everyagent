@@ -38,6 +38,12 @@ interface PendingRpc {
   onData?: (batch: any[], hasMore: boolean) => void;
   onProgress?: (message: string, pct?: number) => void;
   timer: ReturnType<typeof setTimeout>;
+  /** 重放所需:RPC 目标 worker、方法与参数(重连后重新发送)。 */
+  workerId: string;
+  method: string;
+  params?: Record<string, unknown>;
+  /** 原始超时(重放时重置计时)。 */
+  timeoutMs: number;
 }
 
 export class HubClient {
@@ -151,6 +157,8 @@ export class HubClient {
             this.send({ type: 'sub', channel: ch });
           }
           this.setState('open');
+          // 重连成功:重放在途 RPC(瞬态断连期间挂起的请求),业务层全程无感知。
+          this.replayPendingRpcs();
           resolve();
           this.onResync?.();
           return;
@@ -161,7 +169,7 @@ export class HubClient {
         clearTimeout(failTimer);
         // 旧 socket 的 onclose 延迟触发(suspend 关闭旧 socket 后 resume 已创建新 socket):
         // 如果 this.ws 已不是本次 connect 创建的 ws,说明已有新一轮 connect 接管,
-        // 旧 socket 的事件不应干扰当前连接——直接丢弃,不做 failPending / setState / reject。
+        // 旧 socket 的事件不应干扰当前连接——直接丢弃,不做 holdPendingRpcs / setState / reject。
         if (this.ws !== ws) {
           reject(new Error('连接关闭(旧 socket)'));
           return;
@@ -169,19 +177,25 @@ export class HubClient {
         this.ws = null;
         // 页面挂起(pagehide 触发)期间,旧 socket 的 onclose 可能延迟到达。
         // suspend() 已置 suspended=true 并把 this.ws 设为 null,所以这里的
-        // this.ws !== ws 守卫会丢弃它,不会走到 failPending。
+        // this.ws !== ws 守卫会丢弃它,不会走到下面的分支。
         // 但如果 WS 是远端主动断开(服务端关闭、网络切换等),走正常断开流程。
         if (this.suspended) {
           this.suspended = true;
+          this.holdPendingRpcs();
           this.setState('reconnecting');
           reject(new Error('页面挂起,连接已冻结'));
           return;
         }
-        this.failPending(new Error('hub 连接断开'));
-        if (!this.manualClose) {
-          this.scheduleReconnect();
-        } else {
+        if (this.manualClose) {
+          // 手动关闭:直接拒绝所有在途 RPC(用户意图断连)。
+          this.failPending(new Error('客户端关闭'));
           this.setState('closed');
+        } else {
+          // 瞬态断连:挂起在途 RPC(暂停超时,等重连后重放),不向业务层抛错误。
+          // 重连由 scheduleReconnect 驱动;重连成功后 replayPendingRpcs 重放,
+          // 业务层全程无感知(不弹错误提示,仅 UI 层弹重连模态框)。
+          this.holdPendingRpcs();
+          this.scheduleReconnect();
         }
         reject(new Error('连接关闭'));
       };
@@ -207,6 +221,7 @@ export class HubClient {
   close(): void {
     this.manualClose = true;
     this.suspended = false;
+    this.clearHoldTimer();
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -273,6 +288,10 @@ export class HubClient {
         onData: opts?.onData,
         onProgress: opts?.onProgress,
         timer,
+        workerId,
+        method,
+        params,
+        timeoutMs,
       });
       this.pub(channels.workerCmd(this.k, workerId), 'rpc', { reqId, method, params });
     });
@@ -329,11 +348,58 @@ export class HubClient {
   }
 
   private failPending(error: Error): void {
+    this.clearHoldTimer();
     for (const [, p] of this.pendingRpc) {
       clearTimeout(p.timer);
       p.reject(error);
     }
     this.pendingRpc.clear();
+  }
+
+  /** 持有在途 RPC 的最大时长(毫秒):超时后放弃重放,拒绝全部挂起请求。 */
+  private static readonly HOLD_TIMEOUT_MS = 30_000;
+  private holdTimer: ReturnType<typeof setTimeout> | null = null;
+
+  private clearHoldTimer(): void {
+    if (this.holdTimer) {
+      clearTimeout(this.holdTimer);
+      this.holdTimer = null;
+    }
+  }
+
+  /**
+   * 挂起在途 RPC:暂停超时计时器,等待重连后重放。
+   * 不拒绝任何请求——业务层全程无感知,仅 UI 层弹重连模态框。
+   * 设置 holdTimer:若重连耗时过长(HOLD_TIMEOUT_MS),放弃重放并拒绝全部请求。
+   */
+  private holdPendingRpcs(): void {
+    for (const [, p] of this.pendingRpc) {
+      clearTimeout(p.timer);
+    }
+    if (this.pendingRpc.size > 0) {
+      this.clearHoldTimer();
+      this.holdTimer = setTimeout(() => {
+        this.holdTimer = null;
+        this.failPending(new Error('重连超时,请检查网络连接'));
+      }, HubClient.HOLD_TIMEOUT_MS);
+    }
+  }
+
+  /**
+   * 重放挂起的在途 RPC:在重连成功(welcome + 订阅恢复)后调用。
+   * 用相同 reqId 重新发送 rpc 帧——worker 收到后正常处理并应答,
+   * 业务层的 Promise 正常 resolve/reject,全程无感知。
+   */
+  private replayPendingRpcs(): void {
+    if (this.pendingRpc.size === 0) return;
+    this.clearHoldTimer();
+    for (const [reqId, p] of this.pendingRpc) {
+      p.timer = setTimeout(() => {
+        this.pendingRpc.delete(reqId);
+        p.reject(new Error(`rpc ${p.method} 超时(${p.timeoutMs}ms)`));
+      }, p.timeoutMs);
+      this.pub(channels.workerCmd(this.k, p.workerId), 'rpc', { reqId, method: p.method, params: p.params });
+    }
   }
 
   /**
@@ -349,6 +415,8 @@ export class HubClient {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+    // 挂起在途 RPC:暂停超时,等 resume 重连后重放,业务层无感知。
+    this.holdPendingRpcs();
     const ws = this.ws;
     this.ws = null;
     if (ws) {
@@ -389,8 +457,8 @@ export class HubClient {
       // onclose 延迟到达后 failPending 拒绝全部在途 RPC 弹出多个错误提示。
       if (this.ws && this.ws.readyState === WebSocket.OPEN) return;
       // WS 已非 OPEN(CLOSING/CLOSED 或 null):标记为僵尸,走重连流程。
-      // 不调用 failPending——onclose 处理器会自行处理(且可能已经处理过);
-      // 这里只负责尽快触发重建,让用户无感恢复。
+      // 挂起在途 RPC,等重连后重放(不调用 failPending)。
+      this.holdPendingRpcs();
       this.ws = null;
       this.setState('reconnecting');
       void this.connect().catch(() => {

@@ -38,6 +38,7 @@ import UserInteractionHost from './UserInteractionHost'
 import PendingUserInteractionIndicator from './PendingUserInteractionIndicator'
 import BrowserNotificationHost from './BrowserNotificationHost'
 import BrowserNotificationGuide from './BrowserNotificationGuide'
+import ReconnectionModal from './ReconnectionModal'
 import MissingWorkspaceRepairHost from './MissingWorkspaceRepairHost'
 import { WorkspaceShellProvider } from './WorkspaceShellContext'
 import { domainEventBus, DOMAIN_EVENTS } from '@/events/eventBus'
@@ -981,6 +982,7 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
         <PendingUserInteractionIndicator />
         <BrowserNotificationHost />
         <BrowserNotificationGuide />
+        <ReconnectionModal />
         <MissingWorkspaceRepairHost />
           </div>
         </WorkspaceShellProvider>
