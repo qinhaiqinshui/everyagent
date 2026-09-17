@@ -44,8 +44,8 @@ worker:
       est-safety-ratio: 0.85     # tpm 压力触发延迟的保守余量(预到 85% 即延迟新起步)
       est-ema-alpha: 0.1         # 估算系数 EMA 学习率(越大越快贴近真实)
       wait-trace-threshold-ms: 1000   # 排队等待超过该时长(ms)发瞬态 model_rate_wait trace
-      default-rpm: 60            # 全局默认:每分钟最多发起请求数
-      default-max-concurrency: 4 # 全局默认:同时 in-flight 请求上限(长思考防重叠)
+      default-rpm: 120            # 全局默认:每分钟最多发起请求数
+      default-max-concurrency: 6 # 全局默认:同时 in-flight 请求上限(长思考防重叠)
       default-tpm: 0             # 全局默认 tpm(厂商套餐差异大,默认不启用;需者各模型显式配)
   # 危险操作授权(PermissionGate):危险命令正则/系统目录排除/授权弹窗超时;空缺用内置默认
   # 进程沙箱:单命令看门狗超时(ms);超时强杀子进程。30 分钟 = 1800000。

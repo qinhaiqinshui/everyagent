@@ -22,7 +22,7 @@ import org.springframework.core.Ordered;
  * <pre>
  * # 工作区
  * - 当前工作区位置： &lt;workspaceRoot&gt;(wsl-bwrap 后端为 /workspace,wsl-direct 为原路径挂载点 /c/a/foo)
- * - 当前操作系统：Windows 11(wsl 系列后端为 Linux)
+ * - 当前操作系统：Windows 11(wsl 系列后端为 Linux（WSL沙箱环境，宿主机为Windows 11）)
  * </pre>
  * 让模型知道自己在哪个工作区、跑在什么系统上(Windows 注册 powershell、Linux/macOS
  * 注册 bash,命令选择与路径语义依赖该信息);wsl 系列后端时 AI 实际运行在 Linux
@@ -41,8 +41,10 @@ public class SystemInfoAdvisor implements BaseAdvisor {
 
     /** 本任务工作区根(Windows 域,可为 null:旧格式冷启动无工作区,省略该行)。 */
     private final String workspaceRoot;
-    /** 操作系统描述(进程启动后不变,静态只读)。 */
-    private final String os;
+    /** 宿主机操作系统名称(进程启动后不变,静态只读;wsl 系列后端时,宿主机仍为 Windows)。 */
+    private final String hostOs;
+    /** AI 实际运行的操作系统描述(wsl 系列后端为 Linux,其余取宿主机 os.name)。 */
+    private final String execOs;
     /** 是否 wsl 系列沙箱后端:是则以 Linux 视角注入(当前操作系统:Linux)。 */
     private final boolean wslBackend;
     /** 是否 wsl-direct 后端:工作区以原路径挂载点 /c/a/foo 注入(而非 /workspace)。 */
@@ -52,7 +54,8 @@ public class SystemInfoAdvisor implements BaseAdvisor {
         this.workspaceRoot = workspaceRoot;
         this.wslBackend = wslBackend;
         this.wslDirect = wslDirect;
-        this.os = wslBackend ? "Linux" : System.getProperty("os.name", "unknown");
+        this.hostOs = System.getProperty("os.name", "unknown");
+        this.execOs = wslBackend ? "Linux" : this.hostOs;
     }
 
     @Override
@@ -87,7 +90,12 @@ public class SystemInfoAdvisor implements BaseAdvisor {
                     .append(shellHint).append("工具会在沙箱中执行，如果你要创建临时文件，务必在当前工作区的.everyagent目录下进行。\n")
                     .append("在工作区下读取和修改文件不会被沙箱拦截。");
         }
-        sb.append("\n- 当前操作系统：").append(os);
+        sb.append("\n- 当前操作系统：").append(execOs);
+        if (wslBackend) {
+            // wsl 系列后端:AI 实际运行在 Linux 沙箱内,但宿主机为 Windows,
+            // 同时注入宿主机信息,避免与 agents.md 中用户书写的宿主机描述矛盾
+            sb.append("（WSL沙箱环境，宿主机为").append(hostOs).append("）");
+        }
         List<Message> instructions = new ArrayList<>(chatClientRequest.prompt().getInstructions());
         // 插入位置:首部连续 SystemMessage 区的末尾(与 SkillAdvisor 一致,不落会话末位)。
         int insertAt = 0;
