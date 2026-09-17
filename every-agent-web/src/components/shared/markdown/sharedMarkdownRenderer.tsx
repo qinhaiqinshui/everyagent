@@ -437,6 +437,20 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
     a: (props: IntrinsicProps<'a'>) => {
       const { children, href } = props
       const rest = stripNode(props)
+      // 页内锚点链接(如目录 #xxx)：禁用点击跳转，导航由大纲面板承担；
+      // 否则 href="#xxx" 会被当外部链接开新窗口。
+      if (typeof href === 'string' && href.startsWith('#')) {
+        return (
+          <a
+            {...rest}
+            href={href}
+            style={{ ...baseLinkStyle, cursor: 'text' }}
+            onClick={(event) => event.preventDefault()}
+          >
+            {children}
+          </a>
+        )
+      }
       return <a {...rest} href={href} target="_blank" rel="noopener noreferrer nofollow" style={baseLinkStyle}>{children}</a>
     },
     strong: (props: IntrinsicProps<'strong'>) => {
