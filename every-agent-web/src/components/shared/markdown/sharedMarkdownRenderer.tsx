@@ -236,7 +236,7 @@ const variantStyles: Record<MarkdownVariant, {
   preview: {
     paragraph: { ...baseParagraphStyle, fontSize: 'var(--text-base)', lineHeight: 1.8, color: 'var(--text-primary)', marginBottom: 4 },
     blockquote: { ...baseBlockquoteStyle, margin: '8px 0', color: 'var(--text-secondary)', fontSize: 'var(--text-sm)', background: 'var(--bg-tertiary)' },
-    list: { margin: '6px 0 8px', padding: 0, paddingLeft: '1.4em', listStyleType: 'disc' },
+    list: { margin: '6px 0 8px', padding: 0, paddingLeft: '1.4em', listStyleType: 'disc', whiteSpace: 'normal' },
     listItem: { fontSize: 'var(--text-base)', lineHeight: 1.6, color: 'var(--text-primary)', marginBottom: 2 },
     tableWrap: { ...baseTableWrapStyle, margin: '12px 0 16px', background: 'var(--bg-table)' },
     table: baseTableStyle,
@@ -250,7 +250,7 @@ const variantStyles: Record<MarkdownVariant, {
   display: {
     paragraph: { ...baseParagraphStyle, fontSize: 'var(--text-sm)', lineHeight: 1.8, color: 'var(--text-secondary)', margin: 0 },
     blockquote: { ...baseBlockquoteStyle, margin: '4px 0', color: 'var(--text-secondary)', fontSize: 'var(--text-sm)', lineHeight: 1.75 },
-    list: { margin: '2px 0 2px 18px', padding: 0, paddingLeft: 2, listStyleType: 'disc' },
+    list: { margin: '2px 0 2px 18px', padding: 0, paddingLeft: 2, listStyleType: 'disc', whiteSpace: 'normal' },
     listItem: { fontSize: 'var(--text-sm)', lineHeight: 1.75, color: 'var(--text-secondary)', marginBottom: 4 },
     tableWrap: { ...baseTableWrapStyle, margin: '6px 0', border: '1px solid color-mix(in srgb, var(--border-light) 85%, transparent)', background: 'var(--bg-table)' },
     table: baseTableStyle,
