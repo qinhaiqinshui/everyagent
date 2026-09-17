@@ -45,14 +45,20 @@ const editorTheme = EditorView.theme({
   '.cm-activeLine': {
     backgroundColor: 'color-mix(in srgb, var(--bg-tertiary) 40%, transparent)',
   },
-  /* 选中色：仿 VS Code，区分聚焦(高对比)与失焦(低对比)两种状态。
-   * 失焦选中用灰色——编辑器未聚焦时选区仍可见但不抢眼；
-   * 聚焦选中用蓝色——编辑器聚焦时选区清晰可读、文字不被遮挡。
-   * 用不透明色值而非半透明 dim 变量，确保深色模式下选区清晰可见。 */
+  /* 选中色：聚焦与失焦统一使用浅蓝色。
+   * CM6 baseTheme 用高特异性选择器 '&light/dark.cm-focused > .cm-scroller >
+   * .cm-selectionLayer .cm-selectionBackground' 设了默认色(#d7d4f0/#233)，
+   * 必须用同等选择器覆盖才能生效。 */
   '.cm-selectionBackground': {
     backgroundColor: 'var(--cm-selection-unfocused)',
   },
   '&.cm-focused .cm-selectionBackground': {
+    backgroundColor: 'var(--cm-selection-focused)',
+  },
+  '&light.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground': {
+    backgroundColor: 'var(--cm-selection-focused)',
+  },
+  '&dark.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground': {
     backgroundColor: 'var(--cm-selection-focused)',
   },
   '::selection': {
