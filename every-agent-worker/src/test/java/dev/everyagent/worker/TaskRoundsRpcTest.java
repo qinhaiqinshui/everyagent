@@ -83,6 +83,16 @@ class TaskRoundsRpcTest {
         @Primary
         ChatModelFactory fakeModelFactory(WorkerProperties props) {
             return new ChatModelFactory(props, new ModelRateLimiterRegistry(props)) {
+                // 覆写带 events 的 4 参重载:buildAgentModel 普通模型路径实际分派到这里
+                // (模型限流改造引入该路径后,仅覆写 3 参重载拦不到 agent 装配,
+                // 任务会打到假 base-url 上 UnknownHostException)。
+                @Override
+                public org.springframework.ai.chat.model.ChatModel build(ResolvedConfig cfg,
+                        org.springframework.ai.openai.OpenAiChatOptions options, String agentId,
+                        dev.everyagent.worker.task.TaskEvents events) {
+                    return new FakeChatModel();
+                }
+
                 @Override
                 public org.springframework.ai.chat.model.ChatModel build(ResolvedConfig cfg,
                         org.springframework.ai.openai.OpenAiChatOptions options, String agentId) {
@@ -236,11 +246,19 @@ class TaskRoundsRpcTest {
         JsonNode last = rounds.get(rounds.size() - 1);
         assertTrue(last.path("startSeq").isString() && last.path("startSeq").asString().length() > 5);
         long startSeq = Long.parseLong(last.path("startSeq").asString());
-        long endSeq = Long.parseLong(last.path("endSeq").asString());
-        assertTrue(endSeq > startSeq, "模型收尾 message 闭合该轮: " + last);
-        assertEquals("ASK:要继续吗", last.path("user").asString());
-        assertTrue(last.path("finalReply").asString().contains("已确认"),
-                "finalReply = 模型收尾正文: " + last.path("finalReply").asString());
+        // 取消竞态两分支(上方注释口径):模型已收到取消 toolResult 并收尾 → 闭合,endSeq>startSeq
+        // 且 finalReply=收尾正文;取消先停流、模型未收尾 → 保持开轮路径写入的 endSeq="" 未闭合行。
+        String endSeqRaw = last.path("endSeq").asString();
+        if (!endSeqRaw.isEmpty()) {
+            long endSeq = Long.parseLong(endSeqRaw);
+            assertTrue(endSeq > startSeq, "模型收尾 message 闭合该轮: " + last);
+            assertEquals("ASK:要继续吗", last.path("user").asString());
+            assertTrue(last.path("finalReply").asString().contains("已确认"),
+                    "finalReply = 模型收尾正文: " + last.path("finalReply").asString());
+        } else {
+            assertEquals("ASK:要继续吗", last.path("user").asString());
+            assertEquals("", last.path("finalReply").asString(), "未收尾分支无最终回复");
+        }
         assertEquals("cancelled", r.result().path("status").asString());
         assertFalse(r.result().path("live").asBoolean(false));
         assertTrue(r.result().path("open").isNull(), "终态任务 open=null");
@@ -346,7 +364,7 @@ class TaskRoundsRpcTest {
         String rid = "round_seeded_1";
         String line = "{\"index\":1,\"startSeq\":\"" + r0.path("startSeq").asString()
                 + "\",\"endSeq\":\"" + r0.path("endSeq").asString()
-                + "\"roundId\":\"" + rid + "\","
+                + "\",\"roundId\":\"" + rid + "\","
                 + "\"fileChanges\":[{\"filePath\":\"/a.md\",\"fileName\":\"a.md\",\"changeType\":\"updated\",\"saveCount\":1}],"
                 + "\"subs\":[]}\n";
         Files.writeString(dir.resolve("rounds.jsonl"), line, StandardCharsets.UTF_8);
