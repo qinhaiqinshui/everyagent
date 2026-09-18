@@ -897,7 +897,12 @@ public final class WslBwrapSandbox {
                 // 进程树上限留给 cgroup pids-max(Phase 2),此处 0 = 不设 RLIMIT_NPROC,
                 // 失控兜底仍由超时 pgid 击杀承担。
                 "nproc", 0,
-                "asMb", Math.max(0, cfg.getMemoryLimitMb()),
+                // memMb → cgroup v2 memory.max(真实内存占用上限,eagent-run.py trusted
+                // 阶段建组迁移;非特权 runner 写 cgroup 失败时降级为不限)。**不再用
+                // RLIMIT_AS**:它限虚拟地址空间,V8 指针压缩 cage 保留 4GB + 每个
+                // Wasm memory GB 级 guard region,undici/node fetch/vite build 一碰
+                // Wasm 即溢出崩溃(§7.10)
+                "memMb", Math.max(0, cfg.getMemoryLimitMb()),
                 "cpuSec", timeoutSec,
                 "fsizeMb", 0);
 
