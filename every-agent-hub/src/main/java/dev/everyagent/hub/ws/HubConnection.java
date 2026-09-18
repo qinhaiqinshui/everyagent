@@ -203,6 +203,9 @@ public final class HubConnection {
                     handlePub(node);
                 }
             }
+            // 应用层 ping:仅证明连接存活,回 pong 无害 → 不要求鉴权、不路由、不记业务日志。
+            // (protocol 级判死走 pingTick 的 WS ping/pong,与此互不干扰)
+            case Frames.PING -> deliver(Frames.wirePong(System.currentTimeMillis()));
             default -> closeProtocol("bad or server-side frame type: '" + type + "'");
         }
     }
