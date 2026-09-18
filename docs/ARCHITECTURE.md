@@ -122,14 +122,15 @@ Every Agent 是一套「**公网可及、本机执行**」的 AI Agent 系统:AI
 
 ```
 wss://hub:6101/ws
-→ { "type":"hello", "ver":2, "role":"frontend"|"worker", "apiKey":"sk-...", "hubKey":"hub-secret", "clientId":"fe-1",
+→ { "type":"hello", "ver":3, "role":"frontend"|"worker", "apiKey":"sk-...", "hubKey":"hub-secret", "clientId":"fe-1",
     "meta": { "hostname":"home-pc", "version":"0.1.0" } }        // hubKey 必填;meta 可选,worker 上报
-← { "type":"welcome", "ver":2, "sessionId":"s-17", "serverTs":1755859200000 }
+← { "type":"welcome", "ver":3, "sessionId":"s-17", "serverTs":1755859200000 }
 ```
 
-- `ver` 为协议版本(当前 **2**),握手协商一次;无共同版本 → `VERSION_MISMATCH` 断开。不逐帧携带版本。
+- `ver` 为协议版本(当前 **3**),握手协商一次;无共同版本 → `VERSION_MISMATCH` 断开。不逐帧携带版本。
 - 未 hello 就 pub/sub → `NOT_AUTHENTICATED` 并断开。
-- 控制帧全集:`hello` `welcome` `sub` `unsub` `pub` `msg` `error`。
+- 控制帧全集:`hello` `welcome` `sub` `unsub` `pub` `msg` `error` `ping` `pong`。
+- **ping/pong(应用层心跳帧)**:`{"type":"ping","ts":…}` / `{"type":"pong","ts":…}`。前端与 worker 的应用层心跳:间隔 5s,**仅当本周期内无任何帧到达时才发 ping**;判死唯一依据 = **发出 ping 后 15s 无任何帧到达**(不是「距上帧超时」——主动退订降载后连接合法空闲,按距上帧判死会误杀;探测有应答=活,探测超时=死);hub 收到 ping 即回 pong(不路由、不记录)。协议 v3 全链端统一升级,不兼容 v2。
 
 ```jsonc
 // 订阅 / 退订(hub 无缓冲,sub 不带 since)
@@ -264,7 +265,7 @@ hub 只解析信封的 `type` / `channel`(及 hello 握手字段);`event` / `seq
 - **ChannelRegistry** — channel → 订阅者集合;pub 到来即遍历投递(带 `ext.target` 时只定向投给该 sessionId);前端 sub/unsub stream 频道时向该命名空间在线 worker 发 join/leave 通知。
 - **PresenceService** — worker 会话建立/断开时向 `u.<K>.workers` 发 worker.online/offline;订阅时补发全量快照。
 - **慢消费者保护** — 每连接出口队列上限 1000 条,溢出断开;前端自动重连 + 重新拉取,不丢数据。
-- **心跳** — WS ping 每 15s,45s 无 pong 判死。
+- **心跳** — WS protocol-level ping 每 15s,45s 无 pong 判死;同时响应应用层 ping 帧——收到即回 pong,不路由、不记录(§5.1)。
 
 ### 6.3 公网加固清单
 
@@ -293,7 +294,7 @@ wss 强制 + 证书;hello 失败限速(防 key 枚举);单 IP / 全局连接数�
 
 | 组件 | 职责 |
 |---|---|
-| **HubPool** | 多 hub 出站连接池:每连接独立 WS 客户端 + 重连循环 + 心跳;路由 API 按命名空间扇出 / 回源 |
+| **HubPool** | 多 hub 出站连接池:每连接(HubLink)独立 WS 客户端 + 重连循环;HubLink 应用层心跳——5s 周期仅空闲时(本周期无任何帧到达)才发 ping,ping 后 15s 无帧判死,主动关闭触发重连(§5.1);路由 API 按命名空间扇出 / 回源 |
 | **EventLog** | 每任务内存日志(运行中);append 即分配 seq;`seed(seqLastOf)` 供再运行接续;尾部只读供 task.poll 归并 |
 | **TaskStore** | 持久层:`workspaces/<workspaceId>/tasks/<taskId>/` 按 agent 分文件 `*.jsonl`;启动扫描建索引;**随机访问分块反向读取原语**(ReverseLineReader 从文件尾 64KB 块向前扫,不整文件重扫) |
 | **TaskManager** | 运行编排:创建/取消/再运行(冷启动)/删除;`finish()` 驱逐内存驻留 |
@@ -524,10 +525,11 @@ ask 管道承载第二类阻塞请求:**危险操作授权**。`PermissionGate` 
 
 **实时增量 = worker 定向推送**(DataPusher):前端 sub `u.K.task.<id>.stream` → hub 向 worker 发 `subscriber.join{sessionId,taskId}` → DataPusherManager 校验归属后按 (sessionId,taskId) 建推送器;推送器虚拟线程把运行中任务内存 EventLog 增量(含瞬态 delta/thinking)推到 stream 频道,`ext={target:sessionId, operate, initial}`。
 
-- **窗口式背压(credit + ack)**:DataPusher 维护 `nextPushIndex`(每推一帧 +1)与 `ackedIndex`;`nextPushIndex - ackedIndex >= CREDIT_WINDOW(512)` 且未超时(`ACK_TIMEOUT_MS=5000`)时阻塞等待前端 ack;每帧 ext 携带 `credit=true/creditIndex`;前端消费完一帧后经 worker 级 input 频道回 `stream.ack{taskId,creditIndex}`,worker 只路由释放窗口、不建推送器。老前端不识别 credit 则不 ack → 超时降级无背压,兼容。多前端窗口独立,慢端不拖累快端。
+- **窗口式背压(credit + ack)**:DataPusher 维护 `nextPushIndex`(每推一帧 +1)与 `ackedIndex`;`nextPushIndex - ackedIndex >= CREDIT_WINDOW(128)` 时**持续真阻塞**等待前端 ack——直到 ack / 连接断开 / 推送器销毁,无超时降级(全链端统一升级,无老前端兼容负担);每帧 ext 携带 `credit=true/creditIndex`;前端消费完一帧后经 worker 级 input 频道回 `stream.ack{taskId,creditIndex}`,worker 只路由释放窗口、不建推送器。多前端窗口独立,慢端不拖累快端。
 - **先订阅后首拉**:前端 `open()` 先 sub stream 再拉初始(rounds + roundTail),推送首扫与首拉重叠的部分前端按 seq 去重吸收。
 - **生命周期**:unsub/前端断连 → 销毁推送器;worker⇄hub 断链 → 清扫该连接推送器;任务再运行换新 EventLog → 换挂从头推;任务终态 → 收尾排水一次后空转。
-- **降级语义**:推送非阻塞,出站队列满丢帧 + WARN(事件日志是事实源);前端慢 → hub sink 溢出断连 → 重连 resync;漏帧由前端按需拉取补齐。
+- **降级语义**:推送非阻塞,出站队列满丢帧 + WARN(事件日志是事实源);前端慢 → hub sink 溢出断连 → 重连 reconnect;漏帧由前端按需拉取补齐。
+- **慢消费者三道防线**:① 真背压——窗口满即持续阻塞等待 ack,无超时降级;② `CREDIT_WINDOW(128)`——多任务同屏总积压 N×128 < hub 出口队列 1000;③ 前端 hidden 时对全部活跃 stream 频道主动 unsub 降载(hub 发 subscriber.leave → worker 销毁推送器,彻底不推),visible 时重 sub + 重拉校准——`visibilitychange` 只管订阅降载,不参与连接生死(连接生死唯一由心跳判定,§5.1)。
 
 **`task.poll { taskId, afterSeq?, beforeSeq?, limit?, mode?('events'|'rounds'), count?, waitMs? }`** 是任务流的**统一读取 RPC**:打开首拉、上滚分页、区间拉取、重连补齐、终局补拉、长轮询全部经它完成。
 
@@ -719,14 +721,14 @@ Input:  queued → consumed | discarded(任务取消)
 
 ### 8.1 SDK 面
 
-- **HubClient** — connect / hello / sub / pub / 自动重连(重连后自动重订阅 + onResync 重拉校准);`rpc(workerId, method, params)` 按 reqId 匹配 ok/err/data/progress,默认 30s 超时。
+- **HubClient** — connect / hello / sub / pub / 自动重连(重连后自动重订阅 desiredSubs + 广播 onReconnect 供上层重拉校准);应用层心跳——5s 周期仅空闲时(本周期无任何帧到达)发 ping 探测,ping 后 15s 无帧判死,判死后零退避首试重连(§5.1);`rpc(workerId, method, params)` 按 reqId 匹配 ok/err/data/progress,默认 30s 超时。
 - **订阅次序约束** — 对任一 worker:**先 sub 其 `evt` 频道,再发 `cmd`**(rpc 应答全部落在 evt 频道)。
 - **TaskPacketView** — 数据包模式:打开任务 = 先 sub stream 频道(worker 据 join 建推送器收到实时增量)→ `task.rounds` + `task.roundTail` 拉初始 → 之后仅靠定向推送收流式(帧与拉取帧同一路 seq 去重/排序聚合);帧消费后回 `stream.ack` 释放背压窗口(§7.13);上滚 `loadBefore(beforeSeq)` 拉更早轮次;`resync()` = 重订阅 + 重拉。
 - **channels / ownerKey** — 频道名构造与 sha256 身份,与 Java 契约逐字对齐。
 
 ### 8.2 多 worker 聚合
 
-一个 hub 下可有多台 worker。前端以 1 条目录连接(hubKey)看全部在线 worker(presence),对每台已启用且在线(presence)的 worker 用其 apiKey 建数据连接(离线 worker 不建连——hub 对 apiKey 不做白名单校验,离线也建连会误报「已连接」),任务列表/工作区/git 按 worker 合并展示、按归属定向操作;任务归属 worker 由前端按帧来源动态标注(TaskSummary 后端不含 workerId)。凭证 AES-GCM 加密存 localStorage,presence 指纹(ownerFingerprint 前 16 hex)支持 worker 改名后自动复用凭证。
+一个 hub 下可有多台 worker。前端以 1 条目录连接(hubKey)看全部在线 worker(presence),对每台已启用的 worker 用其 apiKey 建数据连接;**worker 离线时连接保持建立**(WS 本身健康,仅 presence 变化;显示态 = `presence && wsOpen` 双条件,不靠断连表达离线),RPC 向离线 worker 排队直到超时拒绝(holdTimer 兜底),仅致命错误(鉴权失败等,凭证不修正重试永远失败)才替换连接实例,任务列表/工作区/git 按 worker 合并展示、按归属定向操作;任务归属 worker 由前端按帧来源动态标注(TaskSummary 后端不含 workerId)。凭证 AES-GCM 加密存 localStorage,presence 指纹(ownerFingerprint 前 16 hex)支持 worker 改名后自动复用凭证。
 
 ### 8.3 轮次浏览与懒加载
 
@@ -810,12 +812,12 @@ worker                         hub                    前端(可能 0 个在线)
 
 | 场景 | 行为 |
 |---|---|
-| 前端断线 | hub cleanup 发 subscriber.leave → 推送器销毁,任务照跑落盘;重连后重订阅(join 重建推送器)+ resync 补齐 |
-| 单个 hub 宕机/重启 | 其余连接照常收发;受影响前端重连 + resync,零丢失 |
+| 前端断线 | hub cleanup 发 subscriber.leave → 推送器销毁,任务照跑落盘;重连恢复 = welcome 后重发 desiredSubs(含仍打开的 stream 频道,join 重建推送器)+ 重放在途 RPC + 广播 onReconnect——上层只重拉数据校准,不重建 view(HubClient 实例瞬态重连不替换) |
+| 单个 hub 宕机/重启 | 其余连接照常收发;受影响前端重连 + reconnect 补齐,零丢失 |
 | 全部 hub 宕机 | 任务继续跑完并落盘(输出无人消费,天然背压);恢复后重订阅 + 从磁盘拉取补齐 |
-| worker 断线(到 hub) | 指数退避重连;期间 hub 发 worker.offline,前端显示离线;恢复后 worker.online 触发 resync |
+| worker 断线(到 hub) | 指数退避重连;期间 hub 发 worker.offline,前端显示离线;恢复后 worker.online 触发 reconnect 重拉校准 |
 | 家中 PC 关机/worker 崩溃 | 运行中任务终止;**磁盘数据完整**:开机重启后索引重建、任务列表回归、非终态标 failed;发消息继续对话(冷启动) |
-| 慢消费者 | hub 出口队列(1000)溢出断开该前端;前端重连 + resync;worker 出站队列满丢帧 + WARN(事件日志为事实源) |
+| 慢消费者 | hub 出口队列(1000)溢出断开该前端;前端重连 + reconnect(三道防线,§7.13);worker 出站队列满丢帧 + WARN(事件日志为事实源) |
 
 ---
 
