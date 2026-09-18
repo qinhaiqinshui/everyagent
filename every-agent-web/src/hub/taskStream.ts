@@ -5,6 +5,7 @@
  * 打开任务(open)时一次性建齐骨架:
  * - task.rounds 全量轮次 → folder.foldRound 折入 user(rounds.jsonl userMessage)与闭合轮合成 final;
  * - 运行中未闭合尾轮 → task.roundTail 拉「最后一页」(200)与流式增量接上;
+ * - task.agents 拉子 agent 台账建 agentMeta(胶囊列表/悬停卡片数据源);
  * - 之后 worker 定向推送(stream 频道)的流式增量(delta/thinking/message/tool/子 agent 等)
  *   实时折入同一 folder。
  * 线程数据唯一真相源 = folder.state.items(TaskThreadItem[]),按 seq 去重/排序,
@@ -15,14 +16,16 @@
  * 轮次开启/闭合由后端推送 round.opened/round.closed 信号事件(不落盘、不折入 items),
  * 收到后仅触发 rounds 快照刷新(重新 task.rounds + 幂等 foldRound),前端不在本地判开/闭。
  *
- * 实时信号链(同一折叠器状态):agentStates(agent 列表)/contextUsage(上下文电池)/
+ * 实时信号链(同一折叠器状态):agentStates(agent 列表)/agentMeta(子 agent 台账+用量快照)/
+ * contextUsage(上下文电池)/
  * ask 登记(askStore)/taskModel;输入/控制:sendInput(task.input 入队)/cancel(task.cancel)/replyAsk。
- * 重连:hubSession.onReconnect → 对所有活跃句柄只重拉数据校准(rounds+尾段);瞬态重连
+ * 重连:hubSession.onReconnect → 对所有活跃句柄只重拉数据校准(rounds+尾段+子 agent 台账);瞬态重连
  * HubClient 实例不变、view 监听器仍有效、desiredSubs 已自动重发,无需重建 view。
  * 渲染节流:折叠推进合并为 50ms 一拍,防止大任务历史回放时逐事件触发重渲染。
  */
 import {
   TaskPacketView,
+  fetchTaskAgents,
   fetchTaskRounds,
   fetchTaskRoundTail,
   type TaskStreamEvent,
@@ -127,6 +130,8 @@ class ManagedStream {
   rounds: TaskRoundsResult | null = null
   /** rounds 索引最近一次拉取错误(null=无错误)。 */
   roundsError: string | null = null
+  /** task.agents 台账本 open 周期内已拉取(open() 进入时复位 → 重连 resync 再次 open 允许重拉)。 */
+  agentsSeeded = false
 
   constructor(public taskId: string, public workerId: string) {
     this.folder = new TaskEventFolder(emptyThreadState(taskId))
@@ -364,6 +369,24 @@ class ManagedStream {
     this.notify()
   }
 
+  /**
+   * task.agents 拉子 agent 台账建 agentMeta(胶囊列表/悬停卡片数据源):loadRoundsIntoFolder
+   * 之后顺带拉一次,seedAgents 幂等(字段级合并,实时事件后到可覆盖);失败 warn 不阻断。
+   * agentsSeeded 节流:同一 open 周期内只拉一次。
+   */
+  private async loadAgentsIntoFolder(): Promise<void> {
+    if (this.agentsSeeded) return
+    this.agentsSeeded = true
+    const client = hubSession.workerClient(this.workerId)
+    if (!client) return
+    try {
+      const res = await fetchTaskAgents(client, this.workerId, { taskId: this.taskId })
+      if (this.folder.seedAgents(res.agents, res.mainAgentId)) this.notify()
+    } catch (error) {
+      console.warn(`[taskStream] 拉取子 agent 台账失败(${this.taskId}):`, error)
+    }
+  }
+
   /** wire 事件 → 折叠器事件(seq/ts/event/agentId/payload,口径与推送/轮询路径一致)。 */
   private toFoldableEvent(item: TaskPollWireEvent): FoldableTaskEvent {
     return {
@@ -378,6 +401,8 @@ class ManagedStream {
   async open(): Promise<void> {
     if (this.opening) return this.opening
     const opening = (async () => {
+      // open 周期复位:重连 resync 再次 open 时允许重拉 task.agents 校准台账。
+      this.agentsSeeded = false
       if (!this.workerId) {
         // 分页窗口外的老任务 / 重连后仍开的旧标签:镜像缺失时定向补齐归属 worker。
         const entry = await taskStore.ensureLoaded(this.taskId)
@@ -400,6 +425,8 @@ class ManagedStream {
         this.notify()
         console.warn(`[taskStream] 加载任务轮次失败(${this.taskId}):`, error)
       }
+      // task.agents 拉子 agent 台账建 agentMeta(胶囊列表/悬停卡片数据源);失败 warn 不阻断。
+      await this.loadAgentsIntoFolder()
     })()
     this.opening = opening
     try {
