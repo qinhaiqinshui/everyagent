@@ -645,14 +645,16 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
         agentId: agent.agentId,
         title: agent.title,
         status: isMain
-          ? (states[''] ?? 'idle')
+          // 主 agent:流事件状态优先;终态任务刷新后 agent.status 不随 rounds 骨架折入,
+          // 用任务状态兜底(词表同为 idle/running/completed/stopped/error),避免胶囊灰化。
+          ? (states[''] ?? (entry?.status ?? 'idle'))
           : (states[agent.agentId] ?? 'idle'),
         isMain,
         meta,
         contextRatio,
       }
     })
-  }, [agents, mainAgentId, stream, agentMeta])
+  }, [agents, mainAgentId, stream, agentMeta, entry?.status])
 
   /** 点击 agent 长条:切换选中态(再点同一 agent 由面板回传 '' 恢复全部;轮次视图下仅高亮)。 */
   const handleSelectAgent = React.useCallback((agentId: string) => {

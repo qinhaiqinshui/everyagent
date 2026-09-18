@@ -430,6 +430,16 @@ export class TaskEventFolder {
     for (const item of agents) {
       if (!item || !item.agentId) continue
       const key = item.agentId === mainAgentId ? '' : item.agentId
+      // 状态兜底:历史任务打开时流事件(agent.status)不随 rounds 骨架折入,agentStates
+      // 无该键 → 子 agent 胶囊落回灰色 idle。台账 status 落盘即权威(live 内存实时),
+      // 仅在 agentStates 尚无值时填入(不覆盖流事件/实时状态;重连 resync 重复 seed 幂等)。
+      if (this.state.agentStates[key] === undefined && item.status) {
+        const mapped = mapAgentStatus(String(item.status))
+        if (mapped) {
+          this.state.agentStates[key] = mapped
+          changed = true
+        }
+      }
       const usage = readUsage(item.usage)
       const context = item.context
       if (this.mergeAgentMeta(key, {
@@ -990,9 +1000,11 @@ function sameAgentMeta(a: AgentMetaSnapshot | undefined, b: AgentMetaSnapshot): 
 }
 
 /**
- * worker agent.status 值 → n 前端 AgentStatus。
- * worker 侧枚举:running / waiting-user / done / failed / stopped
- * (见 Events.AgentStatus;主 agent 终态 done/failed/stopped 由 TaskManager.agentStatusOf 发出)。
+ * worker 状态值 → n 前端 AgentStatus。覆盖两张词表:
+ * - agent.status 事件(Events.AgentStatus):running / waiting-user / done / failed / stopped
+ *   (主 agent 终态 done/failed/stopped 由 TaskManager.agentStatusOf 发出);
+ * - task.agents 台账 status(SubAgentManager.effectiveStatus):completed / stopped / error /
+ *   running / waiting-user(工具契约词表,终态词与前端同名)。
  * n 前端枚举:idle / running / waiting-user / completed / stopped / error
  * (与 taskStore.mapWorkerStatus 的映射约定一致:done→completed、failed→error)。
  * 未知/非法值返回 null → 丢弃,不污染状态表。
@@ -1003,6 +1015,8 @@ function mapAgentStatus(value: string): AgentStatus | null {
     case 'running':
     case 'waiting-user':
     case 'stopped':
+    case 'completed':
+    case 'error':
       return value
     case 'done':
       return 'completed'
