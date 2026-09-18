@@ -169,7 +169,7 @@ function toInteractionRequest(payload: WorkerAskPayload): UserInteractionRequest
 
 /**
  * 把交互结果折成 ask.reply 的 answer 字符串(写回工具结果/模型上下文)。
- * 逐题输出「题干：答案」,答案含选中选项文案,选中「其他」时取自由输入文本。
+ * 逐题输出「题干：答案」,答案含选中选项文案,选中「其他」时以「其他：用户输入」格式回传。
  */
 function toAnswerText(
   result: Omit<UserInteractionResult, 'interactionId' | 'submittedAt'>,
@@ -190,7 +190,7 @@ function toAnswerText(
     return result.answers.map((answer) => {
       const prompt = promptById.get(answer.questionId) ?? answer.prompt ?? ''
       const value = answer.otherSelected
-        ? (answer.otherText ?? '')
+        ? `其他：${answer.otherText ?? ''}`
         : answer.selectedOptions.map((option) => option.label).join('、')
       return `${prompt}：${value}`
     }).filter((line) => {

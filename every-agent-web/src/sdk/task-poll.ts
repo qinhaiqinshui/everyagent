@@ -65,6 +65,51 @@ export async function fetchTaskRounds(
   return (await client.rpc(workerId, 'task.rounds', { taskId: params.taskId })) as TaskRoundsResult;
 }
 
+/** task.agents 参数。 */
+export interface TaskAgentsParams {
+  taskId: string;
+}
+
+/** task.agents 应答的子 agent 台账项（字段可选省略，与 worker AgentEntity.toSummary 同形）。 */
+export interface TaskAgentLedgerItem {
+  agentId: string;
+  kind?: string;
+  title?: string;
+  createdAt?: number;
+  /** 终态：running/waiting-user/completed/stopped/error。 */
+  status?: string;
+  /** 最近一次 AI 返回的活动快照。 */
+  latestActivity?: { reasoning?: string; content?: string; error?: string; createdAt?: number; updatedAt?: number } | null;
+  /** 累计用量。 */
+  usage?: { inputTokens?: number; outputTokens?: number; totalTokens?: number } | null;
+  lastText?: string;
+  /** 最近一轮上下文快照。 */
+  context?: { inputTokens?: number; contextWindowTokens?: number; model?: string } | null;
+}
+
+/** task.agents rpc.ok 应答（与 worker wire 严格对齐）。 */
+export interface TaskAgentsResult {
+  /** 子 agent 台账（主 agent 不进台账，每项 agentId 即前端 agentMeta 的子键）。 */
+  agents: TaskAgentLedgerItem[];
+  /** 主 agent 稳定 Id（前端主 agent 键归一为空串；用于防御性区分 legacy 台账项）。 */
+  mainAgentId: string;
+}
+
+/**
+ * 拉取子 agent 台账（task.agents）：一次应答携带全部子 agent 的元数据摘要
+ * （标题/状态/累计用量/最近一轮上下文快照），打开任务详情时灌入折叠器 agentMeta 建基线
+ * （胶囊列表/悬停卡片数据源），实时流事件（usage/agent.started/agent.done）随后覆盖。
+ * 与 fetchTaskRounds 同风格：任务不存在 → hub-client 以 RpcError（code='NOT_FOUND'）
+ * reject，由调用方捕获（失败 warn 不阻断）。
+ */
+export async function fetchTaskAgents(
+  client: HubClient,
+  workerId: string,
+  params: TaskAgentsParams,
+): Promise<TaskAgentsResult> {
+  return (await client.rpc(workerId, 'task.agents', { taskId: params.taskId })) as TaskAgentsResult;
+}
+
 /** task.fileChanges 参数。 */
 export interface TaskFileChangesParams {
   taskId: string;

@@ -1,0 +1,25 @@
+/* Markdown 渲染（react-markdown）的结构性修正。
+ * 基础样式走 buildMarkdownComponents 内联；此处仅处理内联样式难以表达的
+ * 后代选择器场景。根容器需带 .md-root 类名。 */
+
+/* 嵌套列表：li 内的 ul/ol 收紧上下间距 */
+.md-root li > ul,
+.md-root li > ol {
+  margin: 2px 0 0;
+}
+
+/* 列表项内段落：松散列表（项间空行）remark 会把 li 内容包进 <p>，
+ * 去掉段落 margin，避免与 li 自身间距叠加。 */
+.md-root li > p {
+  margin: 0;
+}
+
+/* 任务列表项（- [x] / - [ ]）：checkbox 悬挂到项目符号位置，
+ * 让任务项文本与普通列表项文本一样起始于 ul 内容边缘。
+ * 否则 checkbox 自身宽度会把文本右推、吃掉嵌套子项的相对缩进，
+ * 导致子项文本几乎与父项文本齐平。 */
+.md-root li.task-list-item > input[type='checkbox'],
+.md-root li.task-list-item > p > input[type='checkbox'] {
+  margin: 0 0.45em 0 -1.3em;
+  vertical-align: middle;
+}

@@ -12,9 +12,11 @@
  * - thinking / delta       → 当前流式 assistant 消息的 reasoning / content 追加(瞬态)
  * - message                → 一轮权威终结:完整 reasoning/content/toolCalls(真实 toolCall id)
  *                           定稿该 agent 的流式消息
- * - usage                  → 主 agent 上下文用量快照(contextUsage,不进线程)
+ * - usage                  → 主 agent 上下文用量快照(contextUsage,不进线程);主/子统一的
+ *                           累计用量/上下文快照同时维护 agentMeta(不进线程)
  * - tool.result            → role:'tool' 消息(TaskChat 按 callId 合并进下发块渲染)
- * - agent.started/done     → 子 agent trace(spawn 生命周期,必带 agentId)
+ * - agent.started/done     → 子 agent trace(spawn 生命周期,必带 agentId);同时合并 agentMeta
+ *                           (标题/创建时间/收口累计用量)
  * - error                  → trace(带 agentId = 子任务出错;缺省 = 任务出错)
  * - cancelled              → trace
  * - task.trace             → 统一纯显示 trace(重试生命周期/任务耗时等):按 payload.traceId
@@ -36,6 +38,7 @@ import type {
   TaskStatus,
   TaskTraceRecord,
 } from '@/types'
+import type { TaskAgentLedgerItem } from '@/sdk/task-poll'
 
 /**
  * 统一线程项(与 n 的 taskQueryService 同形,聊天页聚合展示单位)。
@@ -68,6 +71,12 @@ export interface TaskThreadState {
    * agent.started/done/error/cancelled/ask.* 兜底推导。驱动输入框上方 agent 圆列表。
    */
   agentStates: Record<string, AgentStatus>
+  /**
+   * 子 agent/主 agent 元数据快照表:键语义同 agentStates(主 agent = 空串 '',子 = 子 id)。
+   * 基线由 task.agents 台账(seedAgents,open 时一次)灌入,实时流事件
+   * (usage/agent.started/agent.done)字段级覆盖;驱动子 agent 胶囊列表/悬停卡片。
+   */
+  agentMeta: Record<string, AgentMetaSnapshot>
   /** 主 agent 上下文用量(usage 事件滚动更新,驱动上下文电池)。 */
   contextUsage?: ContextMonitorSnapshot | null
   /** 任务冻结的模型信息(当前不再由流事件填充,通常为空,见 TaskModelInfo)。 */
@@ -81,6 +90,24 @@ export interface FoldableTaskEvent {
   event: string
   agentId?: string | null
   payload: Record<string, unknown>
+}
+
+/**
+ * 子 agent/主 agent 元数据快照(task.agents 台账 + 流事件实时覆盖;键:主 agent='',子=子 id)。
+ * 基线由 {@link TaskEventFolder#seedAgents} 灌入(open 时一次),实时 usage/agent.started/
+ * agent.done 事件字段级覆盖;驱动子 agent 胶囊列表/悬停卡片(标题 + 累计用量 + 上下文占用)。
+ */
+export interface AgentMetaSnapshot {
+  agentId: string
+  title?: string
+  createdAt?: number
+  model?: string
+  inputTokens?: number      // 累计
+  outputTokens?: number
+  totalTokens?: number      // 累计
+  contextUsed?: number      // 最近一轮 prompt tokens
+  contextWindow?: number
+  updatedAt?: number
 }
 
 /** 折叠锚点(不序列化,重放时从 items 重建或留空)。 */
@@ -106,7 +133,11 @@ export class TaskEventFolder {
   /** traceId → 首次到达的 seq(固定该 trace 线程项的排序位置;后续同 traceId 事件原地 upsert 不移动)。 */
   private traceSeq = new Map<string, number | string>()
 
-  constructor(public state: TaskThreadState) {}
+  constructor(public state: TaskThreadState) {
+    // 防御:旧 state 形状可能缺 agentMeta(本项目前端不做持久化缓存,理论上无旧数据,
+    // 折叠器实例仍可能被灌入外部构造的旧形状 state,这里兜底补空表)。
+    if (!state.agentMeta) state.agentMeta = {}
+  }
 
   /**
    * 折叠一个事件。
@@ -182,6 +213,12 @@ export class TaskEventFolder {
         const subAgentId = agentKey
         const title = String(event.payload?.title ?? '')
         if (subAgentId) this.anchors.subTitles.set(subAgentId, title)
+        // agentMeta:登记子 agent 基线(id/标题/创建时间;流事件实时数据,晚于 task.agents seed 覆盖)。
+        this.mergeAgentMeta(agentKey, {
+          agentId: agentKey,
+          title: title !== '' ? title : undefined,
+          createdAt: ts,
+        })
         // 兜底:worker 已补发 agent.status(running);旧磁盘回放无该事件时由此推导
         if (subAgentId) this.state.agentStates[subAgentId] = 'running'
         return true
@@ -190,6 +227,14 @@ export class TaskEventFolder {
         if (this.bySeq.has(seqKey)) return false
         this.closeStreamingByAgent(agentKey)
         this.state.agentStates[agentKey] = 'completed' // 兜底(权威由 agent.status done 提供)
+        // agentMeta:收口合并累计用量(payload.usage 非空时)与更新时间。
+        const doneUsage = readUsage(event.payload?.usage)
+        this.mergeAgentMeta(agentKey, {
+          inputTokens: doneUsage?.inputTokens,
+          outputTokens: doneUsage?.outputTokens,
+          totalTokens: doneUsage?.totalTokens,
+          updatedAt: ts,
+        })
         return true
       }
       case 'agent.status': {
@@ -205,25 +250,33 @@ export class TaskEventFolder {
         return true
       }
       case 'usage': {
-        // 主 agent(agentId 空)的单轮实测用量驱动任务级上下文电池;子 agent 用量忽略。
-        if (!agentKey) {
-          const round = readUsage(event.payload?.round)
-          if (round) {
-            const total = readUsage(event.payload?.total)
-            const maxTokens = readNum(event.payload?.contextWindowTokens) ?? DEFAULT_CONTEXT_WINDOW_TOKENS
-            const model = readStr(event.payload?.model)
-            this.state.contextUsage = {
-              promptTokens: round.inputTokens,
-              completionTokens: round.outputTokens,
-              totalTokens: total?.totalTokens ?? round.totalTokens,
-              maxTokens,
-              usageRatio: maxTokens > 0 ? round.inputTokens / maxTokens : 0,
-              lastUpdatedAt: ts,
-              requestType: 'chatStream',
-              model: model ?? '',
-            }
+        // 主 agent(agentId 空)的单轮实测用量驱动任务级上下文电池(子 agent 不驱动电池);
+        // 主/子统一的累计用量与上下文快照同时维护 agentMeta(胶囊列表/悬停卡片数据源)。
+        const round = readUsage(event.payload?.round)
+        const total = readUsage(event.payload?.total)
+        if (!agentKey && round) {
+          const maxTokens = readNum(event.payload?.contextWindowTokens) ?? DEFAULT_CONTEXT_WINDOW_TOKENS
+          const model = readStr(event.payload?.model)
+          this.state.contextUsage = {
+            promptTokens: round.inputTokens,
+            completionTokens: round.outputTokens,
+            totalTokens: total?.totalTokens ?? round.totalTokens,
+            maxTokens,
+            usageRatio: maxTokens > 0 ? round.inputTokens / maxTokens : 0,
+            lastUpdatedAt: ts,
+            requestType: 'chatStream',
+            model: model ?? '',
           }
         }
+        this.mergeAgentMeta(agentKey, {
+          contextUsed: round?.inputTokens,
+          contextWindow: readNum(event.payload?.contextWindowTokens),
+          model: readStr(event.payload?.model),
+          inputTokens: total?.inputTokens,
+          outputTokens: total?.outputTokens,
+          totalTokens: total?.totalTokens,
+          updatedAt: ts,
+        })
         return true
       }
       case 'error': {
@@ -364,6 +417,39 @@ export class TaskEventFolder {
     return changed
   }
 
+  /**
+   * 灌入 task.agents 台账基线(open 建骨架时调用,实时事件后到可覆盖):
+   * 把应答 agents 幂等灌入 state.agentMeta。每项按 agentId 归键(worker 台账只含子
+   * agent,主 agent 键 = 空串;防御 legacy meta.agents 混入主 agent 项时归一到 '')。
+   * 合并策略 = 字段级(undefined 不覆盖已有值)、updatedAt 取较大者;同一 open 周期内
+   * 台账在尾段事件之后读取(天然不旧于已折入数据),实时事件随后仍可继续覆盖。
+   * 返回 true 表示状态有变化。
+   */
+  seedAgents(agents: TaskAgentLedgerItem[], mainAgentId: string): boolean {
+    let changed = false
+    for (const item of agents) {
+      if (!item || !item.agentId) continue
+      const key = item.agentId === mainAgentId ? '' : item.agentId
+      const usage = readUsage(item.usage)
+      const context = item.context
+      if (this.mergeAgentMeta(key, {
+        agentId: key,
+        title: item.title && item.title.length > 0 ? item.title : undefined,
+        createdAt: item.createdAt,
+        inputTokens: usage?.inputTokens,
+        outputTokens: usage?.outputTokens,
+        totalTokens: usage?.totalTokens,
+        contextUsed: typeof context?.inputTokens === 'number' ? context.inputTokens : undefined,
+        contextWindow: typeof context?.contextWindowTokens === 'number' ? context.contextWindowTokens : undefined,
+        model: context && typeof context.model === 'string' && context.model.length > 0 ? context.model : undefined,
+        updatedAt: item.latestActivity?.updatedAt,
+      })) {
+        changed = true
+      }
+    }
+    return changed
+  }
+
   /** 任务终态:定稿全部流式消息。 */
   finalize(): void {
     for (const seqKey of Array.from(this.anchors.streaming.keys())) {
@@ -424,9 +510,12 @@ export class TaskEventFolder {
     return ceiling
   }
 
-  /** 子 agent 标题查询(agent 列表展示用)。 */
+  /**
+   * 子 agent 标题查询(agent 列表展示用):优先流事件 anchors.subTitles(agent.started),
+   * 兜底 state.agentMeta 的 title(task.agents 台账 seed;历史任务无 started 重放时命中)。
+   */
   resolveAgentTitle(agentId: string): string | undefined {
-    return this.anchors.subTitles.get(agentId)
+    return this.anchors.subTitles.get(agentId) ?? this.state.agentMeta[agentId]?.title
   }
 
   /** agent 状态查询(agent 圆列表用)。key 语义同线程项:主 agent = 空串,子 agent = 子 id。 */
@@ -435,6 +524,32 @@ export class TaskEventFolder {
   }
 
   // ---- 内部 ----
+
+  /**
+   * agentMeta 幂等合并(字段级:undefined 不覆盖已有值;updatedAt 双方都有时取较大者,
+   * 保证 task.agents 台账 seed 不回退流事件已写入的更新时间)。键语义同 agentStates/
+   * 线程项:主 agent = 空串,子 agent = 子 id。返回 true 表示该键快照有变化。
+   */
+  private mergeAgentMeta(agentKey: string, patch: Partial<AgentMetaSnapshot>): boolean {
+    const prev = this.state.agentMeta[agentKey]
+    const next: AgentMetaSnapshot = {
+      agentId: patch.agentId ?? prev?.agentId ?? agentKey,
+      title: patch.title ?? prev?.title,
+      createdAt: patch.createdAt ?? prev?.createdAt,
+      model: patch.model ?? prev?.model,
+      inputTokens: patch.inputTokens ?? prev?.inputTokens,
+      outputTokens: patch.outputTokens ?? prev?.outputTokens,
+      totalTokens: patch.totalTokens ?? prev?.totalTokens,
+      contextUsed: patch.contextUsed ?? prev?.contextUsed,
+      contextWindow: patch.contextWindow ?? prev?.contextWindow,
+      updatedAt: prev?.updatedAt != null && patch.updatedAt != null
+        ? Math.max(prev.updatedAt, patch.updatedAt)
+        : (patch.updatedAt ?? prev?.updatedAt),
+    }
+    if (sameAgentMeta(prev, next)) return false
+    this.state.agentMeta[agentKey] = next
+    return true
+  }
 
   /**
    * 插入一条 agent_message 到 items(按原始 seq 精确升序定位;bySeq 键用调用方传入的
@@ -856,7 +971,22 @@ function readUsage(value: unknown): { inputTokens: number; outputTokens: number;
 
 /** 空状态。 */
 export function emptyThreadState(taskId: string): TaskThreadState {
-  return { taskId, items: [], agentStates: {} }
+  return { taskId, items: [], agentStates: {}, agentMeta: {} }
+}
+
+/** agentMeta 快照字段级相等判定(mergeAgentMeta 变更检测;undefined 与缺失视为同值)。 */
+function sameAgentMeta(a: AgentMetaSnapshot | undefined, b: AgentMetaSnapshot): boolean {
+  if (!a) return false
+  return a.agentId === b.agentId
+    && a.title === b.title
+    && a.createdAt === b.createdAt
+    && a.model === b.model
+    && a.inputTokens === b.inputTokens
+    && a.outputTokens === b.outputTokens
+    && a.totalTokens === b.totalTokens
+    && a.contextUsed === b.contextUsed
+    && a.contextWindow === b.contextWindow
+    && a.updatedAt === b.updatedAt
 }
 
 /**

@@ -109,21 +109,47 @@ public class ChatModelFactory {
      * 放行、流中/完成后记账与系数校准。池模型的每个成员同样经此包裹(各成员自己的限额)。
      * events 可空(无事件上下文时排队只记日志不发 trace)。
      */
+    /**
+     * 缓存:按 configId 复用 OpenAiChatModel 实例。openai-java SDK 每次构建
+     * OpenAIClient 都会创建新的 Timer("DefaultSleeper") + streamHandler 线程池
+     * + OkHttp 连接池,任务结束后不释放 → 线程泄漏(见线程分析)。缓存后同一配置
+     * 只创建一次,所有 agent 共用底层 OkHttp 客户端和线程资源。
+     */
+    private final java.util.concurrent.ConcurrentHashMap<String, OpenAiChatModel> modelCache =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
     public ChatModel build(ResolvedConfig cfg, OpenAiChatOptions options, String agentId,
             TaskEvents events) {
-        ChatModel raw = OpenAiChatModel.builder()
-                .options(options)
-                .httpClientBuilderCustomizer(b -> b
-                        // 打印真实请求体(含 skill 渐进式披露索引等 advisor 注入后的完整报文)
-                        .interceptor(new HttpRequestLoggingInterceptor(agentId))
-                        // 解除 okhttp callTimeout 总时长上限(§7.4.2):流式长思考不限总时长,
-                        // 静默由 readTimeout + ModelLengthGuardAdvisor stall 兜底。
-                        .interceptor(StreamTimeoutReleaseInterceptor.INSTANCE))
-                .build();
+        String cacheKey = cfg.snapshot().configId();
+        // 缓存 raw OpenAiChatModel:同一 configId 的所有 agent 复用同一 OkHttp 客户端、
+        // Timer 和 streamHandler 线程池,避免每次 build 创建新客户端导致线程泄漏。
+        // options 仅作为模型默认参数,实际每轮请求的 options 由 Prompt 携带(覆盖默认),
+        // 故缓存安全。HttpRequestLoggingInterceptor 改为共享实例(SHARED),生产 INFO 级为空操作。
+        OpenAiChatModel raw = modelCache.computeIfAbsent(cacheKey, k ->
+                OpenAiChatModel.builder()
+                        .options(options)
+                        .httpClientBuilderCustomizer(b -> b
+                                // 打印真实请求体(含 skill 渐进式披露索引等 advisor 注入后的完整报文)
+                                .interceptor(HttpRequestLoggingInterceptor.SHARED)
+                                // 解除 okhttp callTimeout 总时长上限(§7.4.2):流式长思考不限总时长,
+                                // 静默由 readTimeout + ModelLengthGuardAdvisor stall 兜底。
+                                .interceptor(StreamTimeoutReleaseInterceptor.INSTANCE))
+                        .build());
         Optional<ModelRateLimiter> limiter = rateLimiterRegistry.of(
                 cfg.snapshot().configId(), cfg.snapshot().params());
         return limiter.map(l -> (ChatModel) new RateLimitedChatModel(raw, l, events,
                 props.getLimits().getModelRate().getWaitTraceThresholdMs())).orElse(raw);
+    }
+
+    /**
+     * 停机清理:关闭缓存的 OpenAiChatModel,释放底层 OkHttp 客户端及其线程。
+     * Spring AI 的 OpenAiChatModel 不直接暴露 close(),但底层 SpringAiOpenAiHttpClient
+     * 实现了 close()——通过反射或_gc_ 释放。目前依赖 JVM 停机时线程自动销毁;
+     * 缓存化后线程数从无限增长变为固定(每个 configId 一组线程),已解决泄漏。
+     */
+    @jakarta.annotation.PreDestroy
+    void shutdown() {
+        modelCache.clear();
     }
 
     /** 已建限流器的运行态快照(config.get 透出排队/在飞/估算系数;P2)。 */

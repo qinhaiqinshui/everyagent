@@ -3,8 +3,8 @@
  *
  * 内置「任务聊天」标签类型定义（注册表 key `'task'`）。
  *
- * 把 `Layout` 里任务标签的渲染、激活时清空选中路径、关闭时「运行中不允许关闭」
- * 的守卫逻辑迁移到此处（原 `syncSelectionAfterTabFocus` / `closeTaskChatTab`）。
+ * 把 `Layout` 里任务标签的渲染、激活时清空选中路径迁移到此处。
+ * 任务标签随时可关闭（含运行中）:关闭标签 ≠ 停止任务,任务在 worker 上照常运行、照常落盘。
  */
 
 import type { ReactNode } from 'react'
@@ -49,18 +49,8 @@ export const taskChatTabType: UiWorkspaceTabTypeDefinition = {
       ctx.closeTab(taskTab.id)
       return
     }
-    void (async () => {
-      const summary = await taskQueryService.getTaskSummarySnapshot(taskTab.taskId)
-      if (!summary) {
-        throw new Error(`关闭 Task 标签失败：Task 不存在 ${taskTab.taskId}`)
-      }
-      if (summary.status === 'running') return
-      ctx.closeTab(taskTab.id)
-    })().catch((closeError) => {
-      ctx.showToast?.(
-        closeError instanceof Error ? closeError.message : '关闭 Task 标签失败',
-        'error',
-      )
-    })
+    // 任务进行中也可关闭标签:关闭标签 ≠ 停止任务,任务在 worker 上照常运行、照常落盘。
+    // 标签关闭 = 退订 stream 频道(不再收实时推送),重新打开时重新 sub + 拉取补齐。
+    ctx.closeTab(taskTab.id)
   },
 }

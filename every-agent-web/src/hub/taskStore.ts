@@ -206,6 +206,8 @@ class TaskStore {
   private started = false
   /** 已发起的列表刷新(防重入)。 */
   private refreshing: Promise<void> | null = null
+  /** 在途刷新期间有新的刷新请求到达(workspaceRegistry 变更等);当前刷新完成后重跑一次。 */
+  private refreshPending = false
   /** 各分页键(worker×workspace)的游标:同一 worker 的多个工作区各自独立分页,互不串联。 */
   private pageStates = new Map<string, PageState>()
   /** 正在续拉的分页键集合(逐键防重入)。 */
@@ -219,15 +221,10 @@ class TaskStore {
     hubSession.onFrame((frame) => {
       // worker 上线(presence 目录帧):若该 worker 的前端连接早已建立(连接先于 worker 就绪,
       // 如 desktop 启动时序竞态或 worker 重启后重连),初始 tasks.list 会落在 worker 尚未
-      // 订阅 cmd 频道的窗口而落空,且之后无 resync 补救——此处主动全量校准。若已有刷新在途
-      // (极可能是 worker 未就绪时的失败刷新),等它结束后再校准一次,避免命中去重返回旧 promise。
+      // 订阅 cmd 频道的窗口而落空,且之后无 onReconnect 补救——此处主动全量校准。
+      // refresh 内部已处理在途去重(refreshPending),直接调用即可。
       if (hubSession.isDirectoryFrame(frame) && frame.event === 'worker.online') {
-        const inflight = this.refreshing
-        if (inflight) {
-          void inflight.then(() => void this.refresh())
-        } else {
-          void this.refresh()
-        }
+        void this.refresh()
         return
       }
       // 帧来自哪台 worker:优先 payload.workerId,回退按 channel 匹配 worker 连接命名空间。
@@ -244,10 +241,10 @@ class TaskStore {
       if (frame.event !== 'task.created' && frame.event !== 'task.updated') return
       this.upsert(frame.payload as WorkerTaskSummary, workerId)
     })
-    hubSession.onResync(() => {
+    hubSession.onReconnect(() => {
       void this.refresh()
     })
-    // 首次:若已连接立即拉全量;未连接时由 ensureConnected 后的 resync 触发。
+    // 首次:若已连接立即拉全量;未连接时由 ensureConnected 后的 onReconnect 触发。
     if (hubSession.connected) {
       void this.refresh()
     }
@@ -266,7 +263,12 @@ class TaskStore {
    * 清掉本地多出的条目)。分页游标按 worker×workspace 各自独立记录,组间互不串联。
    */
   async refresh(): Promise<void> {
-    if (this.refreshing) return this.refreshing
+    if (this.refreshing) {
+      // 刷新进行中(workspaceRegistry 可能刚加载了更多工作区):
+      // 标记 pending,当前刷新完成后自动重跑,避免用陈旧的工作区列表丢掉新数据。
+      this.refreshPending = true
+      return this.refreshing
+    }
     this.refreshing = (async () => {
       try {
         this.pageStates.clear()
@@ -314,6 +316,12 @@ class TaskStore {
         console.warn('[taskStore] tasks.list 失败:', error)
       } finally {
         this.refreshing = null
+        // 在途刷新期间 workspaceRegistry 变更等触发了新请求:重跑一次,
+        // 用最新的工作区列表重新校准(否则只显示部分工作区/任务)。
+        if (this.refreshPending) {
+          this.refreshPending = false
+          void this.refresh()
+        }
       }
     })()
     return this.refreshing

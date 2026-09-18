@@ -18,6 +18,7 @@ import { hubSession } from '@/hub/session'
 import { loadThemeMode } from '@/settings/localSettings'
 import { domainEventBus, DOMAIN_EVENTS } from '@/events/eventBus'
 import { terminalGateway } from '@/platform/fs/terminalGateway'
+import { randomUUID } from '@/utils/uuid'
 import type { ITheme } from '@xterm/xterm'
 import type { ThemeMode, WorkspaceTerminalTab } from '@/types'
 
@@ -166,13 +167,13 @@ export default function TerminalPage({ tab }: TerminalPageProps) {
     const container = containerRef.current
     if (!container) return
 
-    const client = hubSession.clientFor(tab.workerId)
+    const client = hubSession.workerClient(tab.workerId)
     if (!client) {
       setErrorText('worker 未连接,无法打开终端(请检查 worker 在线状态与 apiKey 配置)')
       return
     }
 
-    const termId = crypto.randomUUID()
+    const termId = randomUUID()
     const channel = channels.termStream(client.k, termId)
 
     const term = new Terminal({

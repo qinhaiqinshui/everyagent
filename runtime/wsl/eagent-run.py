@@ -4,13 +4,15 @@
 
 两种模式(载荷 \"mode\" 区分):
   * wsl-bwrap(默认):worker(JVM, Windows) → wsl.exe -d <发行版> -e python3 eagent-run.py
-    → stdin 读 JSON 载荷 → setsid+登记 pgid → setrlimit → exec bwrap(挂载命名空间)
+    → stdin 读 JSON 载荷 → setsid+登记 pgid → 资源上限(内存=cgroup v2 memory.max,
+    CPU/文件=rlimit) → exec bwrap(挂载命名空间)
     → 子进程(bash -c <命令>)在沙箱内运行。命令经 stdin 传递不经 argv,绕开 wsl.exe
     引号/编码坑;stdout/stderr 原样回传。
   * wsl-direct(载荷 \"mode\": \"direct\"):wsl.exe -d <发行版> -u root -e python3 eagent-run.py
     → trusted 阶段:幂等挂载工作区(mount -t drvfs)→ 网络 deny 时 unshare -n
     → 装 seccomp 静态过滤器(deny mount 族 + 防绕过)→ no_new_privs
-    → setsid+登记 pgid → setrlimit → exec bash -lc <AI 命令>(继承 seccomp)。
+    → setsid+登记 pgid → 资源上限(内存=cgroup v2 memory.max,CPU/文件=rlimit)
+    → exec bash -lc <AI 命令>(继承 seccomp)。
     AI 在发行版内拥有 root 完整权限(可装软件/改配置/删系统文件),但 mount/umount/
     pivot_root/init_module 等被内核 EPERM 硬拒 —— 宿主盘 automount 关闭 + 手动挂载
     工作区,root 也无法主动挂载宿主,实现「发行版可丢弃、宿主不可达」的硬隔离。
@@ -36,6 +38,7 @@ import ctypes.util
 import errno
 import json
 import os
+import re
 import resource
 import select
 import signal
@@ -44,6 +47,11 @@ import subprocess
 import sys
 
 RUN_DIR = "/run/eagent"
+
+# cgroup v2 根与每命令内存限制组父目录(eagent.run 内无进程,no-internal-process
+# 合法;命令进程只进 <runId> 子组,见 apply_memory_cgroup)
+CGROUP_ROOT = "/sys/fs/cgroup"
+CGROUP_RUN_PARENT = CGROUP_ROOT + "/eagent.run"
 
 # 发行版基础层:只读白名单(merged-usr 布局下 /bin 等是 symlink,ro-bind-try 兼容两种)
 RO_BASE = ["/usr", "/etc", "/opt", "/var", "/bin", "/sbin", "/lib", "/lib64", "/libx32"]
@@ -307,7 +315,7 @@ def seccomp_main(payload):
                 f.write(str(os.getpgrp()))
         except OSError:
             pass
-        set_limits(payload.get("limits") or {})
+        set_limits(payload.get("limits") or {}, run_id)
         # stdin 接 /dev/null:载荷已由 supervisor 读毕;supervisor 自身的 stdin 承载
         # priv-ans 控制帧须保持,但沙箱内命令的 stdin 不得是打开的空管道(§7.10 契约)
         _stdin_null()
@@ -434,6 +442,12 @@ def seccomp_main(payload):
         except OSError:
             pass
     finally:
+        # supervisor 存活到子进程退出,主动回收本命令的 cgroup 组(组内进程已全部
+        # 退出,rmdir 必成;失败无害,sweep_stale/WSL 关机兜底)
+        try:
+            os.rmdir(os.path.join(CGROUP_RUN_PARENT, run_id))
+        except OSError:
+            pass
         try:
             os.close(out_r)
         except OSError:
@@ -618,8 +632,8 @@ def direct_main(payload):
     except OSError:
         pass
 
-    # ⑤ 资源上限
-    set_limits(payload.get("limits") or {})
+    # ⑤ 资源上限(内存=cgroup v2 memory.max;CPU/文件=rlimit)
+    set_limits(payload.get("limits") or {}, run_id)
 
     # ⑥ exec bash -lc(继承 seccomp + no_new_privs + netns);stdin 接 /dev/null:
     #    载荷已读毕,须切断 wsl.exe 桥接留下的打开空管道(rg 无路径参数静默空结果等)
@@ -641,11 +655,13 @@ def direct_main(payload):
 
 
 def sweep_stale():
-    """清理死会话遗留的 pgid 登记文件(进程组已不存在则删除;正常/被杀路径之外的兜底)。"""
+    """清理死会话遗留:pgid 登记文件 + 对应 cgroup 组(进程组已不存在则删;
+    正常/被杀路径之外的兜底)。"""
     try:
         names = os.listdir(RUN_DIR)
     except OSError:
-        return
+        names = []
+    dead = []
     for name in names:
         if not name.endswith(".pgid"):
             continue
@@ -659,12 +675,96 @@ def sweep_stale():
                 os.unlink(path)
             except OSError:
                 pass
+            dead.append(name[: -len(".pgid")])
         except OSError:
             pass  # PermissionError 等:保留,宁漏删不误删
+    # 死会话的 cgroup 组 best-effort 回收:组内仍有存活进程则 EBUSY 失败跳过
+    # (不会误删活命令的组——组建于 pgid 登记之后,活会话 killpg(0) 存活保留)
+    for run_id in dead:
+        try:
+            os.rmdir(os.path.join(CGROUP_RUN_PARENT, run_id))
+        except OSError:
+            pass  # 未建组/仍有进程/不可达:无害,WSL 关机后 cgroupfs 自然清空
+    # 无 .pgid 登记对应的遗留空组也回收(升级前旧 sweep 只删 pgid 文件不删组的
+    # 遗留;组建前必先登记 pgid,故「有组无文件」只可能是死组,rmdir 对含进程的
+    # 组 EBUSY 失败,天然防误删)
+    try:
+        groups = os.listdir(CGROUP_RUN_PARENT)
+    except OSError:
+        groups = []
+    for name in groups:
+        if not os.path.exists(os.path.join(RUN_DIR, name + ".pgid")):
+            try:
+                os.rmdir(os.path.join(CGROUP_RUN_PARENT, name))
+            except OSError:
+                pass
 
 
-def set_limits(lim):
-    """载荷 limits → setrlimit;0/缺省 = 不限。RLIMIT_NPROC/AS 粗粒度,细化走 cgroup(Phase 2)。"""
+def _enable_mem_controller(group_path):
+    """确保 group_path 组的 cgroup.subtree_control 已分发 memory 控制器(幂等)。
+
+    v2 语义:只有父组 subtree_control 启用的控制器才在子组实际生效——根组默认
+    已启用(Ubuntu WSL),自建的 eagent.run 须显式启用一次。根组豁免
+    no-internal-process 约束;eagent.run 自身不放进程,启用合法。失败向上抛,
+    由调用方统一降级。"""
+
+    sub = os.path.join(group_path, "cgroup.subtree_control")
+    with open(sub) as f:
+        enabled = f.read().split()
+    if "memory" not in enabled:
+        with open(sub, "w") as f:
+            f.write("+memory\n")
+
+
+def apply_memory_cgroup(run_id, mem_mb):
+    """把当前进程(即将 exec 的命令载体)迁入 cgroup v2 组并设真实内存上限。
+
+    组路径 /sys/fs/cgroup/eagent.run/<runId>:memory.max = mem_mb MiB,
+    memory.swap.max = 0(必须——WSL 默认带 swap,不关则超限页被换出而非 OOM,
+    上限形同虚设)。exec 后 bash/bwrap 及全部后代留在组内。任何一步失败
+    (无 root / cgroup 未挂载 / 无 memory 控制器,如 bwrap 非特权 runner)→
+    stderr 提示一行并放弃内存限制(超时 + pgid 击杀 + 发行版 OOM 兜底),
+    **绝不回退 RLIMIT_AS**:它限的是虚拟地址空间,V8 指针压缩 cage 保留 4GB、
+    每个 Wasm memory 带 GB 级 guard region,4GB as 下任何含 Wasm 的 Node
+    工作负载(undici llhttp/node fetch/vite build)一实例化即崩(§7.10)。"""
+
+    if not mem_mb or mem_mb <= 0:
+        return
+    # runId 作目录名:白名单防路径注入(载荷本只来自 worker,防御性编程)
+    run_id = str(run_id)
+    if not re.match(r"^[0-9A-Za-z][0-9A-Za-z._-]*$", run_id):
+        return
+    cg = os.path.join(CGROUP_RUN_PARENT, run_id)
+    try:
+        with open(os.path.join(CGROUP_ROOT, "cgroup.controllers")) as f:
+            if "memory" not in f.read().split():
+                sys.stderr.write("[sandbox] cgroup 无 memory 控制器,跳过内存限制\n")
+                return
+        os.makedirs(CGROUP_RUN_PARENT, exist_ok=True)
+        _enable_mem_controller(CGROUP_ROOT)       # 根组(默认已启用;幂等)
+        _enable_mem_controller(CGROUP_RUN_PARENT)  # 自建父组,须显式分发
+        try:
+            os.mkdir(cg)
+        except FileExistsError:
+            pass  # 极小概率 runId 撞号:沿用同组无害(空组或同命令重试)
+        with open(os.path.join(cg, "memory.max"), "w") as f:
+            f.write("%d\n" % (int(mem_mb) * 1024 * 1024))
+        with open(os.path.join(cg, "memory.swap.max"), "w") as f:
+            f.write("0\n")
+        # 迁移自身:此后 fork/exec 的一切(bash/bwrap/整棵命令树)都在组内
+        with open(os.path.join(cg, "cgroup.procs"), "w") as f:
+            f.write("%d\n" % os.getpid())
+    except OSError as e:
+        sys.stderr.write("[sandbox] cgroup 内存上限未生效(降级为不限,兜底=超时"
+                         "+pgid 击杀+发行版 OOM): %s\n" % e)
+
+
+def set_limits(lim, run_id):
+    """载荷 limits → 资源上限;0/缺省 = 不限。
+
+    内存 = cgroup v2 memory.max(apply_memory_cgroup,真实占用上限);**不再设
+    RLIMIT_AS**(虚拟地址空间限制,对 V8/Wasm 是毒药,见 apply_memory_cgroup
+    注释)。RLIMIT_NPROC/CPU/FSIZE 语义正确仍走 rlimit。"""
 
     def soft(res, value):
         if value and value > 0:
@@ -674,7 +774,9 @@ def set_limits(lim):
                 pass  # 超 hard limit 等:放弃该项,不阻断执行
 
     soft(resource.RLIMIT_NPROC, lim.get("nproc", 0))
-    soft(resource.RLIMIT_AS, lim.get("asMb", 0) * 1024 * 1024)
+    # memMb 为主;旧版 worker(升级过渡期)仍发 asMb 键,值语义同为「内存上限 MB」
+    # (RLIMIT_AS 是当时的错误实现,cgroup memory.max 恰是配置本意),兼容读取
+    apply_memory_cgroup(run_id, lim.get("memMb") or lim.get("asMb") or 0)
     soft(resource.RLIMIT_CPU, lim.get("cpuSec", 0))
     soft(resource.RLIMIT_FSIZE, lim.get("fsizeMb", 0) * 1024 * 1024)
 
@@ -753,7 +855,7 @@ def main():
     except OSError:
         pass  # 登记失败不阻断:仅损失显式击杀路径,die-with-parent 仍在
 
-    set_limits(payload.get("limits") or {})
+    set_limits(payload.get("limits") or {}, run_id)
 
     # stdin 接 /dev/null:载荷已读毕,切断 wsl.exe 桥接留下的打开空管道
     # (rg 无路径参数静默空结果/cat 挂起,§7.10 stdin 契约)

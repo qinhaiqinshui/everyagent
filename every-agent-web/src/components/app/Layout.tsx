@@ -38,6 +38,7 @@ import UserInteractionHost from './UserInteractionHost'
 import PendingUserInteractionIndicator from './PendingUserInteractionIndicator'
 import BrowserNotificationHost from './BrowserNotificationHost'
 import BrowserNotificationGuide from './BrowserNotificationGuide'
+import ReconnectionModal from './ReconnectionModal'
 import MissingWorkspaceRepairHost from './MissingWorkspaceRepairHost'
 import { WorkspaceShellProvider } from './WorkspaceShellContext'
 import { domainEventBus, DOMAIN_EVENTS } from '@/events/eventBus'
@@ -63,6 +64,7 @@ import { BrandMark } from '../shared/BrandLoadingBlock'
 import { createLazyRouteComponent, scheduleLazyRoutePreload } from '@/components/shared/LazyRouteView'
 import { useHub } from '@/hub/HubProvider'
 import { hubSession } from '@/hub/session'
+import { randomUUID } from '@/utils/uuid'
 import { taskStore } from '@/hub/taskStore'
 import { taskStreamManager } from '@/hub/taskStream'
 import { workspaceRegistry } from '@/hub/workspaceRegistry'
@@ -250,7 +252,7 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
       cancelled = true
       unsubRegistry()
     }
-  }, [connected, hasWorker, hub.resyncVersion])
+  }, [connected, hasWorker, hub.reconnectVersion])
 
   /** 首屏渲染后空闲预加载后续页面资源。 */
   React.useEffect(() => (
@@ -413,20 +415,23 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
     options?: OpenWorkspaceFileOptions,
   ) => {
     const fileTabId = buildFileTabId(target)
+    // 标签页已存在时，保留原 reloadKey（避免重新读盘导致编辑器卸载/重挂载闪烁），
+    // 仅更新行定位字段。仅新建标签页时才设 reloadKey。
+    const existingTab = workspaceTabs.find((item) => item.id === fileTabId && item.tabType === 'file') as import('@/types').WorkspaceFileTab | undefined
     const nextFileTab = createWorkspaceFileTab({
       id: fileTabId,
       workspaceRoot: target.workspaceRoot,
       filePath: target.filePath,
       fileName: getFileNameFromPath(target.filePath),
-      mode: options?.mode ?? 'readonly',
-      reloadKey: Date.now(),
+      mode: options?.mode ?? existingTab?.mode ?? 'readonly',
+      reloadKey: existingTab?.reloadKey ?? Date.now(),
       nameEditRequestedAt: options?.startNameEditing ? Date.now() : undefined,
       lineNumber: options?.lineNumber,
       lineLocateRequestedAt: options?.lineNumber !== undefined ? Date.now() : undefined,
     })
     openWorkspaceTab(nextFileTab)
     return fileTabId
-  }, [openWorkspaceTab])
+  }, [openWorkspaceTab, workspaceTabs])
 
   const openDiffTab = React.useCallback((
     input: {
@@ -525,7 +530,7 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
     workerId: string
   }): string => {
     const nextTab: WorkspaceTerminalTab = {
-      id: `term:${crypto.randomUUID()}`,
+      id: `term:${randomUUID()}`,
       tabType: 'terminal',
       workspaceRoot: input.workspaceRoot,
       workerId: input.workerId,
@@ -977,6 +982,7 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
         <PendingUserInteractionIndicator />
         <BrowserNotificationHost />
         <BrowserNotificationGuide />
+        <ReconnectionModal />
         <MissingWorkspaceRepairHost />
           </div>
         </WorkspaceShellProvider>

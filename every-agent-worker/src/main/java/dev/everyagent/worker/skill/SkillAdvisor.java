@@ -1,5 +1,6 @@
 package dev.everyagent.worker.skill;
 
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -11,6 +12,9 @@ import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.core.Ordered;
+
+import dev.everyagent.worker.os.OsSandbox;
+import dev.everyagent.worker.os.wsl.WslPathMapper;
 
 /**
  * 把激活的内置 skill 以<b>渐进式披露</b>形式注入 system prompt(对应 nagent 的
@@ -31,13 +35,15 @@ import org.springframework.core.Ordered;
 public class SkillAdvisor implements BaseAdvisor {
 
     private final List<Skill> skills;
+    private final OsSandbox osSandbox;
 
-    public SkillAdvisor(List<Skill> skills) {
+    public SkillAdvisor(List<Skill> skills, OsSandbox osSandbox) {
         this.skills = skills;
+        this.osSandbox = osSandbox;
     }
 
-    public SkillAdvisor(BuiltInSkills builtInSkills) {
-        this(builtInSkills.getActiveSkills());
+    public SkillAdvisor(BuiltInSkills builtInSkills, OsSandbox osSandbox) {
+        this(builtInSkills.getActiveSkills(), osSandbox);
     }
 
     @Override
@@ -59,7 +65,7 @@ public class SkillAdvisor implements BaseAdvisor {
         }
         StringBuilder sb = new StringBuilder("# 可用技能\n\n");
         for (Skill s : skills) {
-            sb.append(s.toSystemText()).append("\n");
+            sb.append(s.toSystemText(resolveKnowledgePath(s))).append("\n");
         }
         sb.append("\n使用规则:以上技能只需知道其存在与适用场景。实际要执行某个技能时,"
                 + "先按上面的路径用 read_file 读取对应知识包文件,再按其中的详细步骤与规则操作;"
@@ -80,5 +86,31 @@ public class SkillAdvisor implements BaseAdvisor {
     @Override
     public ChatClientResponse after(ChatClientResponse chatClientResponse, AdvisorChain advisorChain) {
         return chatClientResponse;
+    }
+
+    /**
+     * 将知识包 Windows 宿主路径解析为 AI 沙箱内可见的路径(§7.17)。
+     *
+     * <p>WSL 系列沙箱下 AI 以 Linux 视角运行,bash 工具 {@code cat}/{@code grep} 技能包
+     * 与 {@code read_file}(经 FsToolSupport 反向翻译)均需 {@code /} 开头的沙箱内路径:
+     * <ul>
+     *   <li>wsl-direct:{@code C:\Users\...\skills\x.md → /c/Users/.../skills/x.md}
+     *       ({@link WslPathMapper#toDirectMount},与 drvfs 挂载点一致);</li>
+     *   <li>wsl-bwrap:{@code → /mnt/c/Users/.../skills/x.md}
+     *       ({@link WslPathMapper#toWsl},与 --ro-bind 挂载点一致);</li>
+     *   <li>非 WSL 后端(windows-mic / direct / 非 Windows):原样返回宿主路径。</li>
+     * </ul>
+     */
+    private String resolveKnowledgePath(Skill skill) {
+        String raw = skill.knowledgePath();
+        if (osSandbox == null || !osSandbox.isWslBackend()) {
+            return raw;
+        }
+        Path winPath = Path.of(raw);
+        String sandboxPath = osSandbox.isWslDirect()
+                ? WslPathMapper.toDirectMount(winPath)
+                : WslPathMapper.toWsl(winPath);
+        // 映射失败(UNC 等)时回退原始路径,read_file 的 WSL 反向翻译同样处理兜底
+        return sandboxPath != null ? sandboxPath : raw;
     }
 }

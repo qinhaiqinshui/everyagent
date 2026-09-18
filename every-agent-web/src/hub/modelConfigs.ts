@@ -112,14 +112,14 @@ class ModelConfigsService {
         this.refreshAllConnected()
       }
     })
-    hubSession.onResync(() => {
+    hubSession.onReconnect(() => {
       this.refreshAllConnected()
     })
     hubSession.onWorkers(() => {
       this.refreshAllConnected()
     })
     // 连接就绪(含首次连接与每次重连)主动校准一次:避免初始 refresh 在 hub 未连时
-    // 静默失败、而 onResync/onWorkers 又因时序未触发导致的永久空列表。
+    // 静默失败、而 onReconnect/onWorkers 又因时序未触发导致的永久空列表。
     hubSession.onState((state) => {
       if (state === 'open') {
         this.refreshAllConnected()
@@ -139,7 +139,7 @@ class ModelConfigsService {
     if (inFlight) return inFlight
     const promise = (async () => {
       // 无论成败都必须清掉 in-flight 标志:否则首次失败后(如 hub 未连时的启动校准)
-      // 后续所有 refresh 都会命中去重直接返回旧 promise,onState('open')/onResync/
+      // 后续所有 refresh 都会命中去重直接返回旧 promise,onState('open')/onReconnect/
       // onWorkers 的再校准全部失效,列表被永久钉死为空。
       try {
         const MAX_RETRY = 3

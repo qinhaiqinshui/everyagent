@@ -39,20 +39,30 @@ public class HttpRequestLoggingInterceptor implements Interceptor {
 
     private static final Logger log = LoggerFactory.getLogger(HttpRequestLoggingInterceptor.class);
 
-    /** 本 agent 的请求(仅用于日志前缀标识)。 */
-    private final String agentId;
-    /** 本拦截器实例的请求序号(1-based,便于区分同一 agent 的多轮请求)。 */
+    /**
+     * 共享单例:ChatModelFactory 按 configId 缓存 OpenAiChatModel 后,多个 agent
+     * 共用同一 OkHttp 客户端(含同一拦截器),agentId 不再 per-agent 固定——
+     * 请求 URL 与 body 中 model 字段足以区分来源。生产环境(INFO 级别)本拦截器为空操作。
+     */
+    public static final HttpRequestLoggingInterceptor SHARED = new HttpRequestLoggingInterceptor();
+
+    /** 本拦截器实例的请求序号(1-based,便于区分多轮请求)。 */
     private final java.util.concurrent.atomic.AtomicLong seq = new java.util.concurrent.atomic.AtomicLong();
 
+    /** 共享实例构造(无固定 agentId,日志用 URL 标识来源)。 */
+    private HttpRequestLoggingInterceptor() {
+    }
+
+    /** Per-agent 构造(仅旧代码兼容,新代码应使用 {@link #SHARED})。 */
     public HttpRequestLoggingInterceptor(String agentId) {
-        this.agentId = agentId;
+        // agentId 仅用于日志前缀,共享模式下由 URL+model 替代标识
     }
 
     @Override
     public Response intercept(Chain chain) throws IOException {
         if (log.isDebugEnabled()) {
-            log.debug("==== HTTP REQUEST (agentId={}, #{}) ====\n{}",
-                    agentId, seq.incrementAndGet(), describe(chain.request()));
+            log.debug("==== HTTP REQUEST (#{}) ====\n{}",
+                    seq.incrementAndGet(), describe(chain.request()));
         }
         return chain.proceed(chain.request());
     }
