@@ -24,6 +24,7 @@ import java.util.concurrent.TimeUnit;
  * 与单个 hub 的 WS 连接(架构 §5.2;多 hub 时每 {url, apiKey, hubKey} 一条,由 HubPool 编排):
  * JDK HttpClient 单连接;出站帧经单线程串行发送(JDK WS 禁止并发 sendText);
  * 断线指数退避重连(1s→30s + 抖动);重连后重发 hello 与全部订阅;
+ * 空闲时应用层心跳保活(每 5s 探测一次,仅本周期无帧才发 ping;ping 后 15s 无任何帧判死主动断连,§4.2);
  * 事件日志才是事实源,断线期间的出站帧允许丢弃(Shipper 重连即跳尾,前端 sync 补齐)。
  */
 public class HubLink {
@@ -41,6 +42,11 @@ public class HubLink {
     }
 
     private static final Logger log = LoggerFactory.getLogger(HubLink.class);
+
+    /** 心跳探测间隔(§4.2:仅本周期无任何帧到达时才发 ping)。 */
+    private static final long HEARTBEAT_INTERVAL_MS = 5000;
+    /** 判死阈值:发出 ping 后该时长内无任何帧到达即判死(不是"距上帧超时",避免误杀合法空闲连接)。 */
+    private static final long HEARTBEAT_DEAD_MS = 15000;
 
     private final String name;
     private final String url;
@@ -62,6 +68,11 @@ public class HubLink {
     private volatile boolean stopped;
     private Thread connectThread;
     private Thread senderThread;
+    private Thread heartbeatThread;
+    /** 最近一次入站完整帧到达时间(任何帧——welcome/msg/error/pong——都算连接活着)。 */
+    private volatile long lastFrameAt = System.currentTimeMillis();
+    /** 未应答 ping 的发出时间;0 表示无在途 ping(收到任何帧即清零)。 */
+    private volatile long pingSentAt;
 
     public HubLink(String name, String url, String apiKey, String workerId, String hubKey,
             long initialBackoffMs, long maxBackoffMs) {
@@ -100,6 +111,7 @@ public class HubLink {
     public void start() {
         senderThread = Thread.ofVirtual().name("hub-out-" + name).start(this::senderLoop);
         connectThread = Thread.ofVirtual().name("hub-connect-" + name).start(this::connectLoop);
+        heartbeatThread = Thread.ofVirtual().name("hub-heartbeat-" + name).start(this::heartbeatLoop);
     }
 
     public void stop() {
@@ -110,6 +122,7 @@ public class HubLink {
         }
         connectThread.interrupt();
         senderThread.interrupt();
+        heartbeatThread.interrupt();
     }
 
     public boolean isConnected() {
@@ -209,6 +222,9 @@ public class HubLink {
                 if (last) {
                     String frame = partial.toString();
                     partial.setLength(0);
+                    // 任何完整帧到达都证明连接活着:刷新帧时间戳,在途 ping 视为已应答
+                    lastFrameAt = System.currentTimeMillis();
+                    pingSentAt = 0;
                     dispatch(frame, welcome);
                 }
                 webSocket.request(1);
@@ -242,6 +258,9 @@ public class HubLink {
             sendDirect(w, Frames.wireSub(channel));
         }
         connected = true;
+        // 新连接:重置心跳状态,避免上一条连接的旧时间戳误判本连接
+        lastFrameAt = System.currentTimeMillis();
+        pingSentAt = 0;
         log.info("[{}] 已连接 hub,workerId={},hubKey={}", name, workerId,
                 hubKey.isEmpty() ? "未配置" : "已配置");
         for (Listener l : listeners) {
@@ -294,7 +313,55 @@ public class HubLink {
                     log.warn("[{}] hub 错误帧: {}", name, node);
                 }
             }
+            case Frames.PONG -> { /* 心跳应答:lastFrameAt 已在 onText 更新,无需处理 */ }
             default -> log.debug("忽略帧 type={}", type);
+        }
+    }
+
+    // ---- 心跳保活(§4.2) ----
+
+    /**
+     * 心跳循环——唯一断开检测手段:本周期(最近 5s)内无任何帧到达才发 ping;
+     * 判死依据是「发出 ping 后 15s 无任何帧」,而非「距上帧超时」(空闲与死亡必须区分:
+     * 探测→秒答=活,探测→超时=死,不误杀合法空闲连接)。
+     */
+    private void heartbeatLoop() {
+        while (!stopped) {
+            try {
+                Thread.sleep(HEARTBEAT_INTERVAL_MS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+            if (stopped || !connected) {
+                pingSentAt = 0; // 未连接/已停止:重置探测状态
+                continue;
+            }
+            long now = System.currentTimeMillis();
+            if (now - lastFrameAt < HEARTBEAT_INTERVAL_MS) {
+                // 本周期内有帧到达,连接活跃:不发 ping,旧 ping 视为已应答
+                pingSentAt = 0;
+                continue;
+            }
+            if (pingSentAt == 0) {
+                // 首次空闲:发 ping 探测——经 send() 入 outbound 队列由 senderLoop 串行发送
+                send(Frames.wirePing(now));
+                pingSentAt = now;
+                continue;
+            }
+            if (now - pingSentAt >= HEARTBEAT_DEAD_MS) {
+                log.warn("[{}] 心跳判死:ping 后 {}ms 无任何帧,主动断开重连", name, now - pingSentAt);
+                pingSentAt = 0;
+                CompletableFuture<Void> lost = lostFuture;
+                if (lost != null) {
+                    lost.complete(null); // abort 不保证回调监听器,须手动唤醒 lost(同 forceReconnect)
+                }
+                WebSocket w = ws;
+                if (w != null) {
+                    w.abort(); // 触发 onClose/onError → runConnection 退出 → connectLoop 按既有退避重连
+                }
+            }
+            // 否则:等待 ping 应答中,下个周期再看
         }
     }
 
