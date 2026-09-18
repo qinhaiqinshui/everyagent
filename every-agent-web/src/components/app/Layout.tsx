@@ -252,7 +252,7 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
       cancelled = true
       unsubRegistry()
     }
-  }, [connected, hasWorker, hub.resyncVersion])
+  }, [connected, hasWorker, hub.reconnectVersion])
 
   /** 首屏渲染后空闲预加载后续页面资源。 */
   React.useEffect(() => (

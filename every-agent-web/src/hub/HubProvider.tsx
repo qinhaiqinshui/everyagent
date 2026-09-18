@@ -23,8 +23,8 @@ export interface HubContextValue {
   setWorkerApiKey: (workerId: string, apiKey: string) => Promise<WorkerConnectResult>
   /** 启用/禁用指定 worker;返回连接结果供设置页反馈。 */
   setWorkerEnabled: (workerId: string, enabled: boolean) => Promise<WorkerConnectResult>
-  /** resync 信号版本号:每次连接(含重连)建立后 +1,组件据此做全量校准。 */
-  resyncVersion: number
+  /** reconnect 信号版本号:每次连接(含重连)建立后 +1,组件据此做全量校准。 */
+  reconnectVersion: number
   /** 目录连接级致命错误,null 表示无;设置页据此展示明确提示。 */
   fatalError: { code: string; detail: string } | null
   /** 是否被 hub 限流(静默退避中)。 */
@@ -40,7 +40,7 @@ export function HubProvider({ children }: { children: React.ReactNode }) {
   const [workers, setWorkers] = React.useState(new Map(hubSession.workersOnline))
   const [directory, setDirectory] = React.useState<WorkerInfo[]>(hubSession.directory)
   const [config, setConfig] = React.useState(hubSession.config)
-  const [resyncVersion, setResyncVersion] = React.useState(0)
+  const [reconnectVersion, setReconnectVersion] = React.useState(0)
   const [fatalError, setFatalError] = React.useState(hubSession.fatalError)
   const [rateLimited, setRateLimited] = React.useState(hubSession.rateLimited)
   const [reconnecting, setReconnecting] = React.useState(hubSession.isReconnecting)
@@ -51,8 +51,8 @@ export function HubProvider({ children }: { children: React.ReactNode }) {
       setWorkers(next)
     })
     const unsubDirectory = hubSession.onDirectory(setDirectory)
-    const unsubResync = hubSession.onResync(() => {
-      setResyncVersion((v) => v + 1)
+    const unsubReconnect = hubSession.onReconnect(() => {
+      setReconnectVersion((v) => v + 1)
     })
     const unsubFatal = hubSession.onFatalError(setFatalError)
     const unsubRateLimited = hubSession.onRateLimited(setRateLimited)
@@ -62,7 +62,7 @@ export function HubProvider({ children }: { children: React.ReactNode }) {
       unsubState()
       unsubWorkers()
       unsubDirectory()
-      unsubResync()
+      unsubReconnect()
       unsubFatal()
       unsubRateLimited()
       unsubReconnecting()
@@ -93,11 +93,11 @@ export function HubProvider({ children }: { children: React.ReactNode }) {
       setDirectory(hubSession.directory)
       return result
     },
-    resyncVersion,
+    reconnectVersion,
     fatalError,
     rateLimited,
     reconnecting,
-  }), [state, workers, directory, config, resyncVersion, fatalError, rateLimited, reconnecting])
+  }), [state, workers, directory, config, reconnectVersion, fatalError, rateLimited, reconnecting])
 
   return <HubContext.Provider value={value}>{children}</HubContext.Provider>
 }

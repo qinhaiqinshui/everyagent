@@ -111,7 +111,7 @@ class WorkspaceRegistryService {
       this.mutation++
       this.applyFor(workerId, frame.payload as WorkspaceRegistry | null)
     })
-    hubSession.onResync(() => {
+    hubSession.onReconnect(() => {
       void this.refresh()
     })
     hubSession.onWorkers(() => {

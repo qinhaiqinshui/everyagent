@@ -17,7 +17,8 @@
  *
  * 实时信号链(同一折叠器状态):agentStates(agent 列表)/contextUsage(上下文电池)/
  * ask 登记(askStore)/taskModel;输入/控制:sendInput(task.input 入队)/cancel(task.cancel)/replyAsk。
- * 重连:hubSession.onResync → 对所有活跃句柄重建 view 并重新 open(重订阅 + 重拉 rounds/尾段)。
+ * 重连:hubSession.onReconnect → 对所有活跃句柄只重拉数据校准(rounds+尾段);瞬态重连
+ * HubClient 实例不变、view 监听器仍有效、desiredSubs 已自动重发,无需重建 view。
  * 渲染节流:折叠推进合并为 50ms 一拍,防止大任务历史回放时逐事件触发重渲染。
  */
 import {
@@ -115,7 +116,7 @@ export interface TaskStreamHandle {
 
 class ManagedStream {
   view: TaskPacketView | null = null
-  /** view 绑定的 HubClient(重连后 session.client 换新,view 需重建)。 */
+  /** view 绑定的 HubClient(仅致命错误替换实例时换新,ensureView 检测后自动重建 view)。 */
   boundClient: import('@every-agent/client').HubClient | null = null
   folder: TaskEventFolder
   listeners = new Set<() => void>()
@@ -427,7 +428,7 @@ function isTerminalEvent(eventName: string): boolean {
 
 class TaskStreamManager {
   private streams = new Map<string, ManagedStream>()
-  private resyncWired = false
+  private reconnectWired = false
 
   constructor() {
     registerAskReplySender((taskId, askId, answer) => {
@@ -446,7 +447,7 @@ class TaskStreamManager {
       // workerId 可暂缺:open() 首步经 taskStore.ensureLoaded 定向补齐后再订阅。
       stream = new ManagedStream(taskId, taskStore.get(taskId)?.workerId ?? '')
       this.streams.set(taskId, stream)
-      this.wireResync()
+      this.wireReconnect()
       void stream.open().catch((error) => {
         console.warn(`[taskStream] 打开任务流失败(${taskId}):`, error)
       })
@@ -499,14 +500,15 @@ class TaskStreamManager {
     this.streams.delete(taskId)
   }
 
-  private wireResync(): void {
-    if (this.resyncWired) return
-    this.resyncWired = true
-    hubSession.onResync(() => {
-      // 重连后 HubClient 是新实例:先关旧 view(摘干净监听器),再重建并重新 open(重拉尾段续轮询)。
+  private wireReconnect(): void {
+    if (this.reconnectWired) return
+    this.reconnectWired = true
+    hubSession.onReconnect(() => {
+      // 重连后实例不变,view 监听器仍有效,desiredSubs 已重发;此处只重拉 rounds+尾段
+      // 校准断连期间错过的数据(open 幂等:ensureView 复用既有 view,TaskPacketView.open
+      // 的 wired 守卫防重复订阅);仅致命错误替换实例时 ensureView 会因
+      // boundClient !== client 自动重建 view。
       for (const stream of this.streams.values()) {
-        stream.view?.close()
-        stream.view = null
         void stream.open().catch((error) => {
           console.warn(`[taskStream] 重连校准失败(${stream.taskId}):`, error)
         })

@@ -1,7 +1,9 @@
 /**
- * HubClient(架构 §6.1):connect/hello/sub/pub/自动重连(重连后自动重订阅 + 触发 resync)。
+ * HubClient(架构 §6.1):connect/hello/sub/pub/自动重连(重连后自动重订阅 + 触发 onReconnect)。
  * rpc():生成 reqId、按 reqId 匹配应答,支持 data/progress 流式回调与超时(默认 30s,纯客户端语义)。
  * 订阅次序约束:对任一 worker 先 sub 其 evt 频道,再发 cmd(§6.1/§7.2)。
+ * 连接生死唯一由应用层心跳判定:5s 空闲探测,ping 后 15s 无帧判死 → 自动重连;
+ * visibilitychange 仅用于订阅降载(hidden 退订 stream 频道),不参与连接管理(§4.2/§4.2.2)。
  */
 import { channels, ownerKey } from './channels';
 import {
@@ -55,13 +57,18 @@ export class HubClient {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private manualClose = false;
   private stateValue: HubState = 'idle';
-  /**
-   * 页面挂起(切后台/锁屏)标志:iOS Safari 会冻结 JS 定时器并把 WS 变成僵尸连接
-   * (TCP 已断但 onclose 不触发)。挂起时冻结在途 RPC 的超时计时并主动关闭 socket;
-   * 回前台后强制重建连接并重放挂起请求,调用方全程无感知。
-   */
-  private suspended = false;
-  private lifecycleWired = false;
+  /** 心跳间隔(§4.2):仅本周期无任何帧时才发 ping。 */
+  private static readonly HEARTBEAT_INTERVAL_MS = 5_000;
+  /** 判死阈值:发出 ping 后 15s 无任何帧到达(非「距上帧超时」,避免误杀合法空闲连接)。 */
+  private static readonly HEARTBEAT_DEAD_MS = 15_000;
+  /** 最近一次收到任何帧的时刻(收到任何帧即证明连接存活)。 */
+  private lastFrameAt = 0;
+  /** 已发出且未应答的 ping 的时刻;0 = 无未应答 ping。 */
+  private pingSentAt = 0;
+  private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  /** visibility 降载(§4.2.2 防线 3):hidden 时实际退订、desiredSubs 仍保留的频道。 */
+  private readonly hiddenShedSubs = new Set<string>();
+  private visibilityShedWired = false;
 
   /** ownerKey(sha256 hex),connect 后可用。 */
   k = '';
@@ -112,13 +119,13 @@ export class HubClient {
 
   onError: ((frame: ErrorFrame) => void) | null = null;
   /** 连接(含重连)建立且订阅恢复后触发 —— 调用方应在此重新订阅/校准(如重开任务流)。 */
-  onResync: (() => void) | null = null;
+  onReconnect: (() => void) | null = null;
   onStateChange: ((s: HubState) => void) | null = null;
 
   async connect(): Promise<void> {
     this.manualClose = false;
-    this.wireLifecycle();
-    this.setState(this.reconnectTimer || this.suspended ? 'reconnecting' : 'connecting');
+    this.wireVisibilityShedding();
+    this.setState(this.reconnectTimer ? 'reconnecting' : 'connecting');
     if (!this.k) {
       this.k = await ownerKey(this.opts.apiKey);
     }
@@ -150,6 +157,13 @@ export class HubClient {
         } catch {
           return;
         }
+        // 心跳:收到任何帧即证明连接存活(§4.2)。
+        this.lastFrameAt = Date.now();
+        if (frame.type === 'pong') {
+          // 心跳应答:清未应答 ping,不进 handleFrame、不路由 messageListeners。
+          this.pingSentAt = 0;
+          return;
+        }
         if (frame.type === 'welcome') {
           clearTimeout(failTimer);
           // 恢复全部期望订阅(重连场景)
@@ -157,17 +171,19 @@ export class HubClient {
             this.send({ type: 'sub', channel: ch });
           }
           this.setState('open');
+          // 连接已确立:启动应用层心跳(连接生死唯一判定,§4.2)。
+          this.startHeartbeat();
           // 重连成功:重放在途 RPC(瞬态断连期间挂起的请求),业务层全程无感知。
           this.replayPendingRpcs();
           resolve();
-          this.onResync?.();
+          this.onReconnect?.();
           return;
         }
         this.handleFrame(frame);
       };
       ws.onclose = () => {
         clearTimeout(failTimer);
-        // 旧 socket 的 onclose 延迟触发(suspend 关闭旧 socket 后 resume 已创建新 socket):
+        // 旧 socket 的 onclose 延迟触发(心跳判死主动关闭旧 socket 后,重连已创建新 socket):
         // 如果 this.ws 已不是本次 connect 创建的 ws,说明已有新一轮 connect 接管,
         // 旧 socket 的事件不应干扰当前连接——直接丢弃,不做 holdPendingRpcs / setState / reject。
         if (this.ws !== ws) {
@@ -175,17 +191,8 @@ export class HubClient {
           return;
         }
         this.ws = null;
-        // 页面挂起(pagehide 触发)期间,旧 socket 的 onclose 可能延迟到达。
-        // suspend() 已置 suspended=true 并把 this.ws 设为 null,所以这里的
-        // this.ws !== ws 守卫会丢弃它,不会走到下面的分支。
-        // 但如果 WS 是远端主动断开(服务端关闭、网络切换等),走正常断开流程。
-        if (this.suspended) {
-          this.suspended = true;
-          this.holdPendingRpcs();
-          this.setState('reconnecting');
-          reject(new Error('页面挂起,连接已冻结'));
-          return;
-        }
+        // 连接断开:停心跳并重置未应答 ping(welcome 后由 startHeartbeat 重新启动)。
+        this.stopHeartbeat();
         if (this.manualClose) {
           // 手动关闭:直接拒绝所有在途 RPC(用户意图断连)。
           this.failPending(new Error('客户端关闭'));
@@ -220,8 +227,8 @@ export class HubClient {
 
   close(): void {
     this.manualClose = true;
-    this.suspended = false;
     this.clearHoldTimer();
+    this.stopHeartbeat();
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -240,6 +247,8 @@ export class HubClient {
 
   unsub(channel: string): void {
     this.desiredSubs.delete(channel);
+    // 若该频道已因 hidden 降载退订,同步移出集合,避免 visible 时误重订已关闭的频道。
+    this.hiddenShedSubs.delete(channel);
     if (this.ws && this.stateValue === 'open') {
       this.send({ type: 'unsub', channel });
     }
@@ -410,113 +419,108 @@ export class HubClient {
   }
 
   /**
-   * 挂起:关闭当前 socket(iOS/Chrome freeze 后它已是僵尸连接),暂停重连退避。
-   * 不做 failPending——挂起是用户正常行为,在途 RPC 会在 onclose 的挂起分支
-   * 被保留(not rejected),恢复后连接重建、onResync 触发业务层重新拉取数据。
+   * 心跳探测(§4.2):每 HEARTBEAT_INTERVAL_MS 一次,仅当连接 open 且非手动关闭时生效。
+   * 本周期有帧到达 → 连接活跃,清未应答 ping,不发;首次空闲 → 发 ping 探测;
+   * ping 后 HEARTBEAT_DEAD_MS 无任何帧 → 判死:停心跳,ws.close() 触发 onclose 走
+   * 既有瞬态断连流程(holdPendingRpcs + scheduleReconnect 零退避首试)。不在此直接调
+   * scheduleReconnect——onclose 已处理;仅对 ws 已 null/非 OPEN 的边缘情况防御性直走断连流程。
    */
-  private suspend(): void {
-    if (this.manualClose || this.suspended) return;
-    if (this.stateValue === 'idle' || this.stateValue === 'closed') return;
-    this.suspended = true;
-    if (this.reconnectTimer) {
-      clearTimeout(this.reconnectTimer);
-      this.reconnectTimer = null;
-    }
-    // 挂起在途 RPC:暂停超时,等 resume 重连后重放,业务层无感知。
-    this.holdPendingRpcs();
-    const ws = this.ws;
-    this.ws = null;
-    if (ws) {
-      try {
-        ws.close();
-      } catch {
-        // close 在部分状态下可能抛错,忽略(我们已把引用摘掉)。
-      }
-    }
-    this.setState('reconnecting');
-  }
-
-  /**
-   * 恢复:强制重建全新连接(不信任任何残留 socket),welcome 后重放挂起请求。
-   *
-   * 无条件重连——不依赖 suspended 标志:电脑黑屏 freeze 期间 onclose 和 pageshow
-   * 的派发顺序不确定(可能 onclose 先 → suspended=true → pageshow → resume 正常;
-   * 也可能 pageshow 先 → suspended 仍 false → resume no-op → 连接永远不重建)。
-   * 只要页面回到前台(visible)且连接不在 open,就强制重连。
-   *
-   * 僵尸连接检测:仅关闭显示器(不锁屏/不睡眠)时 pagehide 不会触发,suspend()
-   * 未执行,state 仍为 'open' 但 WebSocket 实际已因网卡节能而断开(CLOSING/CLOSED)。
-   * 此时检查 readyState——非 OPEN 即视为僵尸,主动重建,避免等到 onclose 延迟
-   * 触发 failPending 风暴(多个在途 RPC 被拒绝 → UI 弹出多个错误提示)。
-   */
-  private resume(): void {
-    if (this.manualClose) return;
-    this.suspended = false;
-    // 已连接且 WebSocket 确实存活:无需重连。
-    // connecting:页面首次加载时 pageshow 事件(persisted=false)也会触发 resume,
-    // 此时初始连接正在进行,不应强制关闭在途 WebSocket 并重建。
-    // 真正的挂起恢复——页面曾切到后台时 suspend() 已把状态置为 'reconnecting',
-    // 不会停留在 'connecting'。
-    if (this.stateValue === 'idle' || this.stateValue === 'connecting') return;
-    if (this.stateValue === 'open') {
-      // 僵尸连接检测:仅关闭显示器时 pagehide 不触发,WS 可能已断但 onclose 尚未
-      // 到达(state 仍为 'open')。检查 readyState——非 OPEN 即主动重建,避免
-      // onclose 延迟到达后 failPending 拒绝全部在途 RPC 弹出多个错误提示。
-      if (this.ws && this.ws.readyState === WebSocket.OPEN) return;
-      // WS 已非 OPEN(CLOSING/CLOSED 或 null):标记为僵尸,走重连流程。
-      // 挂起在途 RPC,等重连后重放(不调用 failPending)。
-      this.holdPendingRpcs();
-      this.ws = null;
-      this.setState('reconnecting');
-      void this.connect().catch(() => {
-        if (!this.manualClose && this.stateValue !== 'open') {
-          this.scheduleReconnect();
-        }
-      });
+  private heartbeatTick(): void {
+    if (this.stateValue !== 'open' || this.manualClose) return;
+    const now = Date.now();
+    if (now - this.lastFrameAt < HubClient.HEARTBEAT_INTERVAL_MS) {
+      // 本周期有帧:连接活跃(任务流推送、pong、任何服务端帧都算)。
+      this.pingSentAt = 0;
       return;
     }
-    // 已有重连定时器在跑(正常网络断线重连):让它继续,不要打乱退避节奏。
-    // 但若连接已断且无定时器(freeze 后 onclose 没走 scheduleReconnect 的情况),
-    // 立即触发一次重连。
-    if (this.reconnectTimer) return;
-    // 清掉可能残留的僵尸 socket(挂起期间 onclose 可能没触发,ws 引用还在)
-    if (this.ws) {
-      try { this.ws.close() } catch {}
-      this.ws = null;
+    if (this.pingSentAt === 0) {
+      // 首次空闲:发 ping 探测。判死依据必须是「ping 后无应答」,不能是「距上帧超时」
+      // ——降载退订后连接合法空闲、JS 冻结期间无法发 ping,按距上帧判死会误杀健康连接。
+      this.send({ type: 'ping', ts: now });
+      this.pingSentAt = now;
+      return;
     }
-    void this.connect().catch(() => {
-      // 恢复瞬间网络可能尚未就绪(解锁后 Wi-Fi/蜂窝需要数百毫秒重连):
-      // 显式兜底重连,退避由 scheduleReconnect 负责(已有重连定时器时为空操作)。
-      if (!this.manualClose && this.stateValue !== 'open') {
-        this.scheduleReconnect();
+    if (now - this.pingSentAt < HubClient.HEARTBEAT_DEAD_MS) {
+      // 等待应答中,下个周期再看,不发重复 ping。
+      return;
+    }
+    // 判死:发出 ping 后 HEARTBEAT_DEAD_MS 无任何帧到达。
+    this.pingSentAt = 0;
+    this.stopHeartbeat();
+    const ws = this.ws;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      try {
+        // 主动关闭 → onclose → 既有瞬态断连流程。
+        ws.close();
+        return;
+      } catch {
+        // close 抛错则落入下方防御路径。
       }
-    });
+    }
+    // 防御:ws 已 null/非 OPEN,onclose 可能不再触发,直接走断连流程。
+    this.ws = null;
+    this.holdPendingRpcs();
+    this.scheduleReconnect();
+  }
+
+  /** 启动应用层心跳(welcome 后调用;先清旧定时器,防重复启动)。 */
+  private startHeartbeat(): void {
+    this.stopHeartbeat();
+    this.lastFrameAt = Date.now();
+    this.heartbeatTimer = setInterval(
+      () => this.heartbeatTick(),
+      HubClient.HEARTBEAT_INTERVAL_MS,
+    );
+  }
+
+  /** 停止心跳并重置未应答 ping(close / 每次连接断开时调用)。 */
+  private stopHeartbeat(): void {
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
+    this.pingSentAt = 0;
   }
 
   /**
-   * 生命周期监听:pagehide(挂起) / pageshow(恢复) / visibilitychange(恢复)。
+   * visibilitychange 订阅降载(§4.2.2 防线 3):只管订阅,不参与连接管理——
+   * 连接生死唯一由心跳判定,本事件发不出去也无害(防线 1+2 兜底)。
    *
-   * 挂起只由 pagehide 触发——它标志着页面即将被冻结/卸载(移动端切后台、bfcache、
-   * 电脑锁屏等),WS 连接即将失效。不由 visibilitychange(hidden) 触发挂起:
-   * 桌面浏览器切标签页时 visibilityState 也会变 hidden,但 JS 继续运行、WS 保持活跃,
-   * 此时挂起重连是多余且有害的。
-   *
-   * 恢复由 pageshow 和 visibilitychange(visible) 共同触发:覆盖 bfcache 恢复、
-   * 移动端回前台、电脑解锁等各种路径。
+   * hidden:若 ws open,退订 desiredSubs 中以 .stream 结尾的频道(hub 发
+   *   subscriber.leave → worker 销毁推送器,「没人看就别推」),记入 hiddenShedSubs;
+   *   不动 desiredSubs——重连后 welcome 重发 desiredSubs 语义保持。
+   *   连接不在 open(重连中)则无需处理。
+   * visible:若 ws open,重订 hiddenShedSubs 中每个频道并清空集合;确有恢复的频道时
+   *   调 onReconnect 触发上层重拉校准(worker 因 subscriber.join 重建推送器回扫尾段)。
+   *   不在 open 时仅清空集合(welcome 重发 desiredSubs 覆盖)。
    */
-  private wireLifecycle(): void {
-    if (this.lifecycleWired) return;
-    if (typeof document === 'undefined' || typeof window === 'undefined') return;
-    this.lifecycleWired = true;
-    // pagehide = 挂起(移动端切后台 / bfcache / 电脑锁屏):此时才需要断开 + 重连。
-    window.addEventListener('pagehide', () => this.suspend());
-    // pageshow = 恢复(bfcache 恢复等):强制重连。
-    window.addEventListener('pageshow', () => this.resume());
-    // visibilitychange(visible) = 恢复:覆盖从其他标签页切回、电脑解锁等场景。
-    // 不在 hidden 时挂起——桌面切标签页只是 hidden 但 WS 仍活跃。
+  private wireVisibilityShedding(): void {
+    if (this.visibilityShedWired) return;
+    if (typeof document === 'undefined') return;
+    this.visibilityShedWired = true;
     document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible') {
-        this.resume();
+      const open = this.ws !== null && this.stateValue === 'open';
+      if (document.visibilityState === 'hidden') {
+        if (!open) return;
+        for (const ch of this.desiredSubs) {
+          if (ch.endsWith('.stream')) {
+            this.send({ type: 'unsub', channel: ch });
+            this.hiddenShedSubs.add(ch);
+          }
+        }
+        return;
+      }
+      if (document.visibilityState !== 'visible') return;
+      const hadShed = this.hiddenShedSubs.size > 0;
+      if (open) {
+        for (const ch of this.hiddenShedSubs) {
+          this.send({ type: 'sub', channel: ch });
+        }
+      }
+      this.hiddenShedSubs.clear();
+      if (hadShed && open) {
+        // 确有恢复的频道:触发上层重拉校准。
+        this.onReconnect?.();
       }
     });
   }

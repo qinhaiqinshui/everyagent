@@ -221,7 +221,7 @@ class TaskStore {
     hubSession.onFrame((frame) => {
       // worker 上线(presence 目录帧):若该 worker 的前端连接早已建立(连接先于 worker 就绪,
       // 如 desktop 启动时序竞态或 worker 重启后重连),初始 tasks.list 会落在 worker 尚未
-      // 订阅 cmd 频道的窗口而落空,且之后无 resync 补救——此处主动全量校准。
+      // 订阅 cmd 频道的窗口而落空,且之后无 onReconnect 补救——此处主动全量校准。
       // refresh 内部已处理在途去重(refreshPending),直接调用即可。
       if (hubSession.isDirectoryFrame(frame) && frame.event === 'worker.online') {
         void this.refresh()
@@ -241,10 +241,10 @@ class TaskStore {
       if (frame.event !== 'task.created' && frame.event !== 'task.updated') return
       this.upsert(frame.payload as WorkerTaskSummary, workerId)
     })
-    hubSession.onResync(() => {
+    hubSession.onReconnect(() => {
       void this.refresh()
     })
-    // 首次:若已连接立即拉全量;未连接时由 ensureConnected 后的 resync 触发。
+    // 首次:若已连接立即拉全量;未连接时由 ensureConnected 后的 onReconnect 触发。
     if (hubSession.connected) {
       void this.refresh()
     }

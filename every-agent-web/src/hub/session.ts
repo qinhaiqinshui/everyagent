@@ -33,7 +33,7 @@ export type { HubConnectionConfig }
 type FrameListener = (frame: MsgFrame) => void
 type StateListener = (state: HubState) => void
 type WorkersListener = (workers: Map<string, boolean>) => void
-type ResyncListener = () => void
+type ReconnectListener = () => void
 type FatalErrorListener = (error: { code: string; detail: string } | null) => void
 type RateLimitedListener = (limited: boolean) => void
 type DirectoryListener = (infos: WorkerInfo[]) => void
@@ -111,7 +111,7 @@ class HubSession {
   private frameListeners = new Set<FrameListener>()
   private stateListeners = new Set<StateListener>()
   private workersListeners = new Set<WorkersListener>()
-  private resyncListeners = new Set<ResyncListener>()
+  private reconnectListeners = new Set<ReconnectListener>()
   private fatalErrorListeners = new Set<FatalErrorListener>()
   private rateLimitedListeners = new Set<RateLimitedListener>()
   private directoryListeners = new Set<DirectoryListener>()
@@ -140,9 +140,9 @@ class HubSession {
   }
 
   /** 任一连接(目录/worker)建立且订阅恢复后触发——调用方做全量校准。 */
-  onResync(fn: ResyncListener): () => void {
-    this.resyncListeners.add(fn)
-    return () => this.resyncListeners.delete(fn)
+  onReconnect(fn: ReconnectListener): () => void {
+    this.reconnectListeners.add(fn)
+    return () => this.reconnectListeners.delete(fn)
   }
 
   onFatalError(fn: FatalErrorListener): () => void {
@@ -249,30 +249,6 @@ class HubSession {
       return
     }
     await this.reconnect()
-  }
-
-  /**
-   * 前台恢复兜底(移动端切后台/锁屏场景):若目录连接恰在挂起窗口内失败被 teardown
-   * (client=null / state=closed),页面回前台时静默重建。已连接/连接中/限流退避中/
-   * 致命错误待用户修正时均为空操作(ensureConnected 自带守卫)。
-   */
-  private lifecycleResumeWired = false
-
-  private wireLifecycleResume(): void {
-    if (this.lifecycleResumeWired || typeof window === 'undefined') return
-    this.lifecycleResumeWired = true
-    const onShow = () => {
-      if (this.rateLimitTimer || this.fatalError) return
-      if (!this.configured) return
-      if (this.client && this.state !== 'closed') return
-      void this.ensureConnected().catch((error) => {
-        console.warn('[hub] 前台恢复重连失败(静默,下次回前台会再试):', error)
-      })
-    }
-    window.addEventListener('pageshow', onShow)
-    document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible') onShow()
-    })
   }
 
   /** 为指定 worker 保存 apiKey(加密)并(重)建其连接。 */
@@ -430,15 +406,15 @@ class HubSession {
       this.handleDirectoryFrame(frame)
       for (const fn of this.frameListeners) fn(frame)
     }
-    directory.onResync = () => {
+    directory.onReconnect = () => {
       // 目录重连后 hub 会重发 presence 快照(只发在线,不补发 offline):先清掉旧在线标记,
       // 避免目录断线期间已下线的 worker 残留「在线/已连接」状态;在线 worker 由随后的
       // worker.online 快照重建连接。
       this.workersOnline.clear()
       this.notifyWorkers()
       this.notifyDirectory()
-      // 不在此处 fire resyncListeners:目录连接恢复 ≠ worker 连接就绪。
-      // resyncListeners 由各 worker 连接的 onResync 逐个触发(worker welcome 后,
+      // 不在此处 fire reconnectListeners:目录连接恢复 ≠ worker 连接就绪。
+      // reconnectListeners 由各 worker 连接的 onReconnect 逐个触发(worker welcome 后,
       // 该 worker 的 RPC 通道已真正可用),避免业务层在 worker 尚未连接时发 RPC 报错。
       // 目录重连后重建全部在线 worker 连接(依赖即将到来的 presence 快照)。
       void this.connectConfiguredWorkers()
@@ -454,7 +430,6 @@ class HubSession {
     }
     try {
       await directory.connect()
-      this.wireLifecycleResume()
       this.clearRateLimited()
       this.workersOnline.clear()
       directory.sub(channels.workers(directory.k))
@@ -537,8 +512,8 @@ class HubSession {
     client.onMessage = (frame) => {
       for (const fn of this.frameListeners) fn(frame)
     }
-    client.onResync = () => {
-      for (const fn of this.resyncListeners) fn()
+    client.onReconnect = () => {
+      for (const fn of this.reconnectListeners) fn()
     }
     client.onError = (frame) => {
       if (!FATAL_HUB_ERRORS.has(frame.code)) return
@@ -607,9 +582,14 @@ class HubSession {
       this.notifyDirectory()
       void this.connectWorker(workerId, ownerFingerprint)
     } else if (frame.event === 'worker.offline') {
+      // 方案 B(保持连接):worker 离线仅 presence 变化,前端 worker 连接保持建立(WS 健康),
+      // RPC 向离线 worker 排队直到超时拒绝(holdTimer 兜底);worker.online 再来时
+      // connectWorker 已有幂等守卫(workerClients.has 检查),不会重复建连。
       this.workersOnline.set(workerId, false)
-      this.closeWorker(workerId)
       this.notifyWorkers()
+      // 目录 getter 的 connected 是 presence && wsOpen 双条件,presence 变化须通知目录刷新
+      // (与 worker.online 分支对称)。
+      this.notifyDirectory()
     }
   }
 
