@@ -50,6 +50,13 @@ public final class AgentEntity {
     private volatile Usage lastRound = Usage.zero();
     /** 最近一轮所用模型名(与 lastRound 同源;空 = 未知)。 */
     private volatile String lastModel = "";
+    /**
+     * 最近一轮上下文用量快照(台账 context 字段的供体,随 agents.json 独立落盘):
+     * 最近一轮 usage + 上下文窗口上限 + 模型名,recordLastRound 在 usage 事件时一并写入。
+     */
+    private volatile Usage lastContextUsage;
+    private volatile Long lastContextWindow;
+    private volatile String lastContextModel;
     public volatile String lastText = "";
     public volatile boolean finished;
     /**
@@ -94,13 +101,26 @@ public final class AgentEntity {
         return lastModel;
     }
 
-    /** 记录最近一轮实测用量(usage 事件发射时同步写,任务级 usageSummary 据此持久化)。 */
-    public void recordLastRound(Usage round, String model) {
+    /**
+     * 记录最近一轮实测用量与上下文快照(usage 事件发射时同步写):
+     * round → lastRound(任务级 usageSummary 与 ContextCompressionAdvisor 的供体)、
+     * total → 累计 usage(台账 usage 字段的供体),并保存上下文窗口/模型名(台账 context 字段的供体);
+     * 保持原语义:null/空/零值字段不覆盖。
+     */
+    public void recordLastRound(Usage round, Usage total, Long contextWindowTokens, String model) {
         if (round != null) {
             lastRound = round;
+            lastContextUsage = round;
+        }
+        if (total != null && (total.inputTokens() != 0 || total.outputTokens() != 0)) {
+            usage.set(total);
+        }
+        if (contextWindowTokens != null && contextWindowTokens > 0) {
+            lastContextWindow = contextWindowTokens;
         }
         if (model != null && !model.isEmpty()) {
             lastModel = model;
+            lastContextModel = model;
         }
     }
 
@@ -109,9 +129,9 @@ public final class AgentEntity {
     }
 
     /**
-     * 元数据摘要(meta.json agents 数组项 + 冷启动恢复台账):agentId/kind/title/createdAt/
-     * status/usage/latestActivity/lastText。契约字段与 SubAgentManager.summaryJson 同形,
-     * 额外携带 usage/lastText/kind 供持久化与诊断。
+     * 元数据摘要(agents.json 台账数组项 + 冷启动恢复台账):agentId/kind/title/createdAt/
+     * status/usage/latestActivity/lastText/context。契约字段与 SubAgentManager.summaryJson 同形,
+     * 额外携带 usage/lastText/kind/context 供持久化与诊断(usage 为累计值,context 为最近一轮上下文快照)。
      */
     public ObjectNode toSummary() {
         ObjectNode n = Json.obj();
@@ -145,6 +165,19 @@ public final class AgentEntity {
         Usage u = usage.get();
         if (u != null && (u.inputTokens() != 0 || u.outputTokens() != 0 || u.totalTokens() != 0)) {
             n.set("usage", Json.toJson(u));
+        }
+        // 最近一轮上下文用量快照(仅当有数据时写入;与累计 usage 字段并存,语义不同)
+        Usage ctx = lastContextUsage;
+        if (ctx != null && (ctx.inputTokens() != 0 || ctx.outputTokens() != 0)) {
+            ObjectNode c = Json.obj();
+            c.put("inputTokens", ctx.inputTokens());
+            if (lastContextWindow != null && lastContextWindow > 0) {
+                c.put("contextWindowTokens", lastContextWindow);
+            }
+            if (lastContextModel != null && !lastContextModel.isEmpty()) {
+                c.put("model", lastContextModel);
+            }
+            n.set("context", c);
         }
         if (lastText != null && !lastText.isEmpty()) {
             n.put("lastText", lastText);

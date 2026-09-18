@@ -77,7 +77,7 @@ public class SubAgentManager {
      * 同 agentId 仅在"运行中"时拒绝;已落定(完成/停止/失败)→ 复用原实体续跑
      * (原会话追加新指令,不重做已完成部分,§5.6/agent-dispatch 技能)。
      */
-    public String run(TaskEntry task, String input, String title, String agentId, boolean blocking)
+    public String run(TaskEntry task, String input, String title, String agentId)
             throws InterruptedException {
         if (task.stopRequested) {
             return "任务已停止,未启动子 agent";
@@ -126,30 +126,11 @@ public class SubAgentManager {
             task.events.agentStarted(id, sub.title, input);
             task.events.agentStatus(id, "running"); // 子 agent 开始运行(agent 列表状态机)
             vt.execute(ft);
-            log.debug("[sub] 启动子 agent id={} taskId={} blocking={} reuse={} thread={}",
-                    id, task.taskId, blocking, reuse, Thread.currentThread().getName());
+            log.debug("[sub] 启动子 agent id={} taskId={} reuse={} thread={}",
+                    id, task.taskId, reuse, Thread.currentThread().getName());
         }
 
-        if (!blocking) {
-            return "子 agent 已启动(异步): " + id;
-        }
-        try {
-            java.util.concurrent.Future<?> f = task.subFutures.get(id);
-            f.get();
-        } catch (java.util.concurrent.ExecutionException e) {
-            return "子 agent 执行异常: " + e.getCause();
-        } catch (java.util.concurrent.CancellationException e) {
-            // 任务取消级联先 cancel 子 future 再 interrupt 主线程(TaskManager.rpcTaskCancel),
-            // get() 可能先见 CancellationException——按停止收口,不得向模型泄漏异常
-            awaitSettle(sub);
-            return "子 agent 已停止: " + id;
-        }
-        awaitSettle(sub);
-        return switch (sub.status) {
-            case "stopped" -> "子 agent 已停止: " + id;
-            case "error" -> "子 agent 执行异常: " + sub.activity().error();
-            default -> sub.lastText == null || sub.lastText.isEmpty() ? "子 agent 无输出" : sub.lastText;
-        };
+        return "子 agent 已启动(异步): " + id;
     }
 
     /** 子 agent 运行体(vt 线程):任何收口路径都写工具契约终态 + error 快照,finally 置 finished。 */

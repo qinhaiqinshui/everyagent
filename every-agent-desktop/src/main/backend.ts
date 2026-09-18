@@ -185,7 +185,13 @@ function spawnJava(
   const outFd = openSync(logPath, 'a')
   // stdio:忽略 stdin,stdout/stderr 写入同一日志文件(主进程不持有其内容,文件即真相源)。
   // cwd 设为程序根:worker 以字面相对路径 ./runtime 按 user.dir 定位程序附属文件。
-  const child = spawn(exe, ['-jar', jar, ...args], {
+  // JVM 系统属性:限制 Reactor 线程池大小(默认 10×CPU 核 → 28 核机器创建 280 线程)。
+  const jvmProps = label === 'worker' ? [
+    '-Dreactor.schedulers.default.bounded-elastic.size=16',
+    '-Dreactor.schedulers.default.bounded-elastic.ttl=60s',
+    '-Dreactor.schedulers.default.poolSize=8',
+  ] : []
+  const child = spawn(exe, [...jvmProps, '-jar', jar, ...args], {
     windowsHide,
     env,
     cwd,

@@ -16,6 +16,10 @@ export interface SearchResultsTreeProps {
   onToggleFile: (filePath: string) => void
   /** 点击命中行：打开文件并定位到该行。 */
   onOpenHit: (filePath: string, hit: WorkspaceContentSearchHit) => void
+  /** 文件名搜索模式：每个命中即一个文件（无命中行），渲染为扁平文件行，点击直接打开文件。 */
+  nameMode?: boolean
+  /** 文件名模式下点击文件行：打开文件。 */
+  onOpenFile?: (filePath: string) => void
 }
 
 /** 命中行三段式拆分：前段 + 高亮段 + 后段。 */
@@ -84,18 +88,72 @@ export default function SearchResultsTree({
   collapsedFiles,
   onToggleFile,
   onOpenHit,
+  nameMode,
+  onOpenFile,
 }: SearchResultsTreeProps) {
   return (
     <div style={treeStyle}>
       {result.files.map((file) => (
-        <FileResultGroup
-          key={file.path}
-          file={file}
-          collapsed={collapsedFiles.has(file.path)}
-          onToggle={() => onToggleFile(file.path)}
-          onOpenHit={onOpenHit}
-        />
+        nameMode && onOpenFile ? (
+          <FileNameResultRow
+            key={file.path}
+            file={file}
+            onOpenFile={onOpenFile}
+          />
+        ) : (
+          <FileResultGroup
+            key={file.path}
+            file={file}
+            collapsed={collapsedFiles.has(file.path)}
+            onToggle={() => onToggleFile(file.path)}
+            onOpenHit={onOpenHit}
+          />
+        )
       ))}
+    </div>
+  )
+}
+
+/**
+ * 文件名搜索结果行：扁平单行（文件图标 + 文件名 + 目录），点击直接打开文件。
+ * 无折叠箭头与命中数徽章（每个命中即一个文件，无需展开子项）。
+ */
+function FileNameResultRow({
+  file,
+  onOpenFile,
+}: {
+  file: WorkspaceContentSearchFileResult
+  onOpenFile: (filePath: string) => void
+}) {
+  const [hovered, setHovered] = React.useState(false)
+  const slashIndex = file.path.lastIndexOf('/')
+  const fileName = slashIndex >= 0 ? file.path.slice(slashIndex + 1) : file.path
+  const dirPath = slashIndex > 0 ? file.path.slice(0, slashIndex) : ''
+
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      title={file.path}
+      style={{
+        ...fileNameRowStyle,
+        background: hovered ? 'var(--bg-hover)' : 'transparent',
+      }}
+      onClick={() => onOpenFile(file.path)}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter') {
+          event.preventDefault()
+          onOpenFile(file.path)
+        }
+      }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+    >
+      <span style={fileIconStyle}>
+        <FileTypeIcon fileName={fileName} size={14} />
+      </span>
+      <span style={fileNameStyle}>{fileName}</span>
+      {dirPath ? <span style={fileDirStyle}>{dirPath}</span> : null}
     </div>
   )
 }
@@ -219,6 +277,17 @@ const fileGroupStyle: React.CSSProperties = {
   flexDirection: 'column',
   gap: 2,
   minWidth: 0,
+}
+
+const fileNameRowStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 5,
+  minWidth: 0,
+  padding: '3px 6px',
+  borderRadius: 'var(--radius-sm)',
+  cursor: 'pointer',
+  userSelect: 'none',
 }
 
 const fileHeaderStyle: React.CSSProperties = {

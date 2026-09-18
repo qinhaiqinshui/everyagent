@@ -71,6 +71,8 @@ export default function SearchSidebarPanel() {
   const [caseSensitive, setCaseSensitive] = React.useState(false)
   const [wholeWord, setWholeWord] = React.useState(false)
   const [useRegex, setUseRegex] = React.useState(false)
+  /** 仅搜索文件名：开启后只匹配文件名不读文件内容（仅 files 模式生效）。 */
+  const [nameOnly, setNameOnly] = React.useState(false)
   const [includePatterns, setIncludePatterns] = React.useState('')
   const [excludePatterns, setExcludePatterns] = React.useState('')
   /** 包含过滤器输入区独立展开态。 */
@@ -238,8 +240,9 @@ export default function SearchSidebarPanel() {
       workspaceRoot,
       rootPath: rootPathOverride ?? scopeRootPath,
       target: 'files',
+      matchMode: nameOnly ? 'name' : 'content',
     })
-  }, [bindingReady, caseSensitive, currentWorkspaceId, excludePatterns, includePatterns, isTasks, query, scopeRootPath, search, useRegex, workerId, workspaceRoot])
+  }, [bindingReady, caseSensitive, currentWorkspaceId, excludePatterns, includePatterns, isTasks, nameOnly, query, scopeRootPath, search, useRegex, workerId, workspaceRoot])
 
   /** 是否存在已生效的非根范围（范围行据此展示，菜单项据此切换「添加/移除」）。 */
   const hasScope = Boolean(activeScope && scopeRootPath)
@@ -409,6 +412,15 @@ export default function SearchSidebarPanel() {
     )
   }, [openGlobalFileTab, workspaceRoot])
 
+  /** 文件名搜索命中点击：打开文件（不定位到行）。 */
+  const handleOpenFile = React.useCallback((filePath: string) => {
+    if (!workspaceRoot) return
+    openGlobalFileTab(
+      { workspaceRoot, filePath: toBusinessAbsolutePath(filePath) },
+      { mode: 'readwrite' },
+    )
+  }, [openGlobalFileTab, workspaceRoot])
+
   /** 任务命中点击：打开对应任务聊天页（基础版，暂不定位到具体消息）。 */
   const handleOpenTask = React.useCallback((task: TaskContentSearchTaskResult) => {
     openTaskChatTab({ taskId: task.taskId, title: task.title || `任务 ${task.taskId.slice(0, 8)}` })
@@ -475,6 +487,11 @@ export default function SearchSidebarPanel() {
         setUseRegex((current) => !current)
         return
       }
+      if (key === 'n' && !isTasks) {
+        event.preventDefault()
+        setNameOnly((current) => !current)
+        return
+      }
     }
     if (event.key === 'Enter') {
       event.preventDefault()
@@ -497,7 +514,9 @@ export default function SearchSidebarPanel() {
           : '暂无可搜索的工作区。')
     : isTasks
       ? '输入关键词搜索当前工作区的任务内容'
-      : '输入关键词搜索工作区文件内容'
+      : nameOnly
+        ? '输入关键词搜索工作区文件名'
+        : '输入关键词搜索工作区文件内容'
 
   return (
     <div style={panelStyle}>
@@ -533,7 +552,9 @@ export default function SearchSidebarPanel() {
               ? '请先选择 worker 与工作区'
               : isTasks
                 ? '搜索任务内容（支持正则）'
-                : '搜索（支持正则）'}
+                : nameOnly
+                  ? '搜索文件名（支持正则）'
+                  : '搜索（支持正则）'}
             status={search.regexInvalid ? 'error' : undefined}
             onChange={(event) => setQuery(event.target.value)}
             onKeyDown={handleSearchInputKeyDown}
@@ -558,6 +579,14 @@ export default function SearchSidebarPanel() {
                   active={useRegex}
                   onClick={() => setUseRegex((current) => !current)}
                 />
+                {!isTasks ? (
+                  <SearchToggleButton
+                    label="fn"
+                    title="仅搜索文件名 (Alt+N)"
+                    active={nameOnly}
+                    onClick={() => setNameOnly((current) => !current)}
+                  />
+                ) : null}
               </span>
             )}
           />
@@ -667,6 +696,8 @@ export default function SearchSidebarPanel() {
               collapsedFiles={collapsedKeys}
               onToggleFile={toggleGroupCollapsed}
               onOpenHit={handleOpenHit}
+              nameMode={nameOnly}
+              onOpenFile={handleOpenFile}
             />
           )
         ) : null}

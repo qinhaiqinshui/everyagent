@@ -4,7 +4,7 @@
  * 数据:taskStore 条目的 pendingInputs —— worker 侧 inputQueue 的镜像,
  * 入队/消费即 task.updated 广播实时刷新;刷新/重连经 tasks.list 内存行恢复
  * (运行时态不落盘)。队列在 worker,操作经 taskQueryService 的
- * queueMove / queueRemove RPC 下发:每条项支持 ↑ / ↓ / 编辑 / 删除;
+ * queueMove / queueRemove RPC 下发:每条项支持 ↑ / 编辑 / 删除;
  * 编辑 = 先回填输入框(onEditDraft)再移除该项。
  * 队列为空整个卸载(return null),挂在输入框上方(abovePanel 插槽)。
  */
@@ -63,10 +63,6 @@ export default function TaskQueuePanel({
     runAction(() => taskQueryService.moveQueuedInput(taskId, idx, idx - 1))
   }
 
-  const handleMoveDown = (idx: number) => {
-    runAction(() => taskQueryService.moveQueuedInput(taskId, idx, idx + 1))
-  }
-
   const handleInsert = (idx: number, text: string) => {
     // 插入到当前对话:worker 侧 advisor 会随下一轮工具结果以 role=user 提交给 AI,
     // 同时从 pendingInputs 移除该项(插入即消费,避免后续被正常循环重复消化)。
@@ -111,17 +107,6 @@ export default function TaskQueuePanel({
                 aria-label="上移"
               >
                 ↑
-              </button>
-              <button
-                type="button"
-                className="task-queue-panel__btn"
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => handleMoveDown(idx)}
-                disabled={busy || idx === items.length - 1}
-                title="下移"
-                aria-label="下移"
-              >
-                ↓
               </button>
               <button
                 type="button"

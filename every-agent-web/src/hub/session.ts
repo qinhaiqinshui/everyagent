@@ -33,10 +33,11 @@ export type { HubConnectionConfig }
 type FrameListener = (frame: MsgFrame) => void
 type StateListener = (state: HubState) => void
 type WorkersListener = (workers: Map<string, boolean>) => void
-type ResyncListener = () => void
+type ReconnectListener = () => void
 type FatalErrorListener = (error: { code: string; detail: string } | null) => void
 type RateLimitedListener = (limited: boolean) => void
 type DirectoryListener = (infos: WorkerInfo[]) => void
+type ReconnectingListener = (reconnecting: boolean) => void
 
 /** 前端可见的 worker 纳管信息(目录 + 本地开关 + 连接错误)。 */
 export interface WorkerInfo {
@@ -110,10 +111,14 @@ class HubSession {
   private frameListeners = new Set<FrameListener>()
   private stateListeners = new Set<StateListener>()
   private workersListeners = new Set<WorkersListener>()
-  private resyncListeners = new Set<ResyncListener>()
+  private reconnectListeners = new Set<ReconnectListener>()
   private fatalErrorListeners = new Set<FatalErrorListener>()
   private rateLimitedListeners = new Set<RateLimitedListener>()
   private directoryListeners = new Set<DirectoryListener>()
+  private reconnectingListeners = new Set<ReconnectingListener>()
+
+  /** 是否有任一连接(目录/worker)正在重连(瞬态断连,传输层自动重连中)。 */
+  private reconnecting = false
 
   // ---- 订阅 ----
 
@@ -135,9 +140,9 @@ class HubSession {
   }
 
   /** 任一连接(目录/worker)建立且订阅恢复后触发——调用方做全量校准。 */
-  onResync(fn: ResyncListener): () => void {
-    this.resyncListeners.add(fn)
-    return () => this.resyncListeners.delete(fn)
+  onReconnect(fn: ReconnectListener): () => void {
+    this.reconnectListeners.add(fn)
+    return () => this.reconnectListeners.delete(fn)
   }
 
   onFatalError(fn: FatalErrorListener): () => void {
@@ -156,10 +161,32 @@ class HubSession {
     return () => this.directoryListeners.delete(fn)
   }
 
+  /** 任一连接(目录/worker)正在重连时触发——UI 层弹重连模态框阻塞用户操作。 */
+  onReconnecting(fn: ReconnectingListener): () => void {
+    this.reconnectingListeners.add(fn)
+    return () => this.reconnectingListeners.delete(fn)
+  }
+
   // ---- 派生 ----
 
   get connected(): boolean {
     return this.state === 'open'
+  }
+
+  /** 是否有任一连接正在重连。 */
+  get isReconnecting(): boolean {
+    return this.reconnecting
+  }
+
+  /** 聚合所有连接的重连状态:目录连接或任一 worker 连接处于 'reconnecting'。 */
+  private updateReconnecting(): void {
+    const next =
+      this.state === 'reconnecting' ||
+      Array.from(this.workerClients.values()).some((c) => c.state === 'reconnecting')
+    if (this.reconnecting !== next) {
+      this.reconnecting = next
+      for (const fn of this.reconnectingListeners) fn(next)
+    }
   }
 
   /** 是否已配置 hub 连接(双道鉴权模型下 hubUrl 与 hubKey 都必填)。 */
@@ -195,6 +222,17 @@ class HubSession {
   clientFor(workerId: string): HubClient | null {
     const c = this.workerClients.get(workerId)
     return c && c.state === 'open' ? c : null
+  }
+
+  /**
+   * 指定 worker 的连接(已建立,不论连接态;重连中也可用于 RPC 排队)。
+   * 与 clientFor 的区别:不要求 state === 'open'——重连期间的 HubClient 仍可
+   * 接受 RPC(入 pendingRpc 队列,等 welcome 后重放),不向业务层抛错误。
+   * 仅排除 null(不存在)和 'closed'(已手动断开,无重连可能)。
+   */
+  workerClient(workerId: string): HubClient | null {
+    const c = this.workerClients.get(workerId)
+    return c && c.state !== 'closed' ? c : null
   }
 
   // ---- 配置 ----
@@ -286,14 +324,15 @@ class HubSession {
 
   // ---- RPC ----
 
-  /** 对指定 worker 发 RPC(RPC 一律显式指定目标 worker,任务流按任务归属 worker 定向)。 */
+  /** 对指定 worker 发 RPC(RPC 一律显式指定目标 worker,任务流按任务归属 worker 定向)。
+   *  重连期间:RPC 在 HubClient 层入队等待重放,不向业务层抛「未连接」错误。 */
   rpcTo(
     workerId: string,
     method: string,
     params?: Record<string, unknown>,
     opts?: { timeoutMs?: number; onData?: (batch: any[], hasMore: boolean) => void },
   ): Promise<any> {
-    const client = this.clientFor(workerId)
+    const client = this.workerClient(workerId)
     if (!client) {
       return Promise.reject(new Error('worker ' + workerId + ' 未连接'))
     }
@@ -360,20 +399,23 @@ class HubSession {
     this.client = directory
     directory.onStateChange = (s) => {
       this.state = s
+      this.updateReconnecting()
       for (const fn of this.stateListeners) fn(s)
     }
     directory.onMessage = (frame) => {
       this.handleDirectoryFrame(frame)
       for (const fn of this.frameListeners) fn(frame)
     }
-    directory.onResync = () => {
+    directory.onReconnect = () => {
       // 目录重连后 hub 会重发 presence 快照(只发在线,不补发 offline):先清掉旧在线标记,
       // 避免目录断线期间已下线的 worker 残留「在线/已连接」状态;在线 worker 由随后的
       // worker.online 快照重建连接。
       this.workersOnline.clear()
       this.notifyWorkers()
       this.notifyDirectory()
-      for (const fn of this.resyncListeners) fn()
+      // 不在此处 fire reconnectListeners:目录连接恢复 ≠ worker 连接就绪。
+      // reconnectListeners 由各 worker 连接的 onReconnect 逐个触发(worker welcome 后,
+      // 该 worker 的 RPC 通道已真正可用),避免业务层在 worker 尚未连接时发 RPC 报错。
       // 目录重连后重建全部在线 worker 连接(依赖即将到来的 presence 快照)。
       void this.connectConfiguredWorkers()
     }
@@ -464,13 +506,14 @@ class HubSession {
     })
     this.workerClients.set(workerId, client)
     client.onStateChange = () => {
+      this.updateReconnecting()
       this.notifyDirectory()
     }
     client.onMessage = (frame) => {
       for (const fn of this.frameListeners) fn(frame)
     }
-    client.onResync = () => {
-      for (const fn of this.resyncListeners) fn()
+    client.onReconnect = () => {
+      for (const fn of this.reconnectListeners) fn()
     }
     client.onError = (frame) => {
       if (!FATAL_HUB_ERRORS.has(frame.code)) return
@@ -539,9 +582,14 @@ class HubSession {
       this.notifyDirectory()
       void this.connectWorker(workerId, ownerFingerprint)
     } else if (frame.event === 'worker.offline') {
+      // 方案 B(保持连接):worker 离线仅 presence 变化,前端 worker 连接保持建立(WS 健康),
+      // RPC 向离线 worker 排队直到超时拒绝(holdTimer 兜底);worker.online 再来时
+      // connectWorker 已有幂等守卫(workerClients.has 检查),不会重复建连。
       this.workersOnline.set(workerId, false)
-      this.closeWorker(workerId)
       this.notifyWorkers()
+      // 目录 getter 的 connected 是 presence && wsOpen 双条件,presence 变化须通知目录刷新
+      // (与 worker.online 分支对称)。
+      this.notifyDirectory()
     }
   }
 

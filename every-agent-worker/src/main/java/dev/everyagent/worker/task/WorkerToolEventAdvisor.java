@@ -191,10 +191,20 @@ public class WorkerToolEventAdvisor extends ToolCallingAdvisor {
             if (in != 0 || outTok != 0) {
                 Usage roundUsage = new Usage(in, outTok,
                         round.getTotalTokens() == null ? in + outTok : round.getTotalTokens());
+                // 先把本轮累计进实体,再发射 usage:同一帧的 total 即含本轮的真实累计
+                // (usage 事件 total 载荷 / 台账 usage / agent.done 用量的共同供体)。
+                a.addUsage(round);
                 a.task.events.usage(agentId, a.options.getModel(), contextWindowTokens(), roundUsage,
                         a.usageRef().get());
-                // 最近一轮实测 usage 按 agent 记录(主/子都写;供 ContextCompressionAdvisor 读取 offset)
-                a.recordLastRound(roundUsage, a.options.getModel());
+                // 最近一轮实测 usage 按 agent 记录(主/子都写;供 ContextCompressionAdvisor 读取 offset),
+                // 同时保存累计 usage 与上下文快照(台账 usage/context 字段供体)。
+                a.recordLastRound(roundUsage, a.usageRef().get(), contextWindowTokens(), a.options.getModel());
+                // 子 agent:每轮 usage 后刷新内存台账(agents.json 承载最新用量/上下文,崩溃冷启动
+                // 与 list_agents/wait_agents 均以台账为准)并异步触发落盘;主 agent 不进台账。
+                if (a.kind == AgentEntity.Kind.SUB) {
+                    a.task.agentLedger.put(a.agentId, a.toSummary());
+                    a.task.persist();
+                }
                 // 主 agent:记录最近一轮上下文用量(任务列表/聊天页电池数据源,随 meta 持久化)
                 // → 触发任务列表用量实时广播(task.updated,每轮一次)。
                 if (a.kind == AgentEntity.Kind.MAIN) {

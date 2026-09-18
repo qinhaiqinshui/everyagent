@@ -339,7 +339,7 @@ function GitWorkspaceGroupPanel({
     if (connected && hasWorker) {
       void refresh()
     }
-  }, [connected, hasWorker, refresh, hub.resyncVersion])
+  }, [connected, hasWorker, refresh, hub.reconnectVersion])
 
   // 侧边栏切到本面板时主动刷新,确保状态反映最新落盘。
   React.useEffect(() => {

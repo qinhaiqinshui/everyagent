@@ -51,7 +51,7 @@ export default function CodeBlock({ code, language, variant = 'preview', style }
           {copied ? '已复制' : '复制'}
         </button>
       </div>
-      <pre className="code-block__pre" tabIndex={0}>
+      <pre className="code-block__pre prism-tokens" tabIndex={0}>
         {html
           ? <code className={`language-${lang}`} dangerouslySetInnerHTML={{ __html: html }} />
           : <code>{code}</code>}

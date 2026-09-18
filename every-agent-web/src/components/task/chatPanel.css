@@ -727,6 +727,7 @@
   border-radius: 14px 14px 4px 14px;
   background: color-mix(in srgb, var(--accent-blue) 12%, var(--bg-primary));
   border: none;
+  margin: 16px 0;
 }
 
 .nagent-msg__body--assistant {

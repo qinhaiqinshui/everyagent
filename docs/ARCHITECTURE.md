@@ -122,14 +122,15 @@ Every Agent 是一套「**公网可及、本机执行**」的 AI Agent 系统:AI
 
 ```
 wss://hub:6101/ws
-→ { "type":"hello", "ver":2, "role":"frontend"|"worker", "apiKey":"sk-...", "hubKey":"hub-secret", "clientId":"fe-1",
+→ { "type":"hello", "ver":3, "role":"frontend"|"worker", "apiKey":"sk-...", "hubKey":"hub-secret", "clientId":"fe-1",
     "meta": { "hostname":"home-pc", "version":"0.1.0" } }        // hubKey 必填;meta 可选,worker 上报
-← { "type":"welcome", "ver":2, "sessionId":"s-17", "serverTs":1755859200000 }
+← { "type":"welcome", "ver":3, "sessionId":"s-17", "serverTs":1755859200000 }
 ```
 
-- `ver` 为协议版本(当前 **2**),握手协商一次;无共同版本 → `VERSION_MISMATCH` 断开。不逐帧携带版本。
+- `ver` 为协议版本(当前 **3**),握手协商一次;无共同版本 → `VERSION_MISMATCH` 断开。不逐帧携带版本。
 - 未 hello 就 pub/sub → `NOT_AUTHENTICATED` 并断开。
-- 控制帧全集:`hello` `welcome` `sub` `unsub` `pub` `msg` `error`。
+- 控制帧全集:`hello` `welcome` `sub` `unsub` `pub` `msg` `error` `ping` `pong`。
+- **ping/pong(应用层心跳帧)**:`{"type":"ping","ts":…}` / `{"type":"pong","ts":…}`。前端与 worker 的应用层心跳:间隔 5s,**仅当本周期内无任何帧到达时才发 ping**;判死唯一依据 = **发出 ping 后 15s 无任何帧到达**(不是「距上帧超时」——主动退订降载后连接合法空闲,按距上帧判死会误杀;探测有应答=活,探测超时=死);hub 收到 ping 即回 pong(不路由、不记录)。协议 v3 全链端统一升级,不兼容 v2。
 
 ```jsonc
 // 订阅 / 退订(hub 无缓冲,sub 不带 since)
@@ -217,13 +218,14 @@ worker 端 `RpcDispatcher` 注册方法;应答回**请求来源连接**的 `evt`
 | `task.poll` | 任务流纯拉取:历史(磁盘)∪ 实时(内存尾部)按 seq 归并;支持 afterSeq/beforeSeq/区间/mode('events'/'rounds')/waitMs 长轮询 |
 | `task.rounds` | 轮次索引拉取(rounds.jsonl 全部行 + 运行中未闭合轮 open;旧任务首次惰性全量生成落盘) |
 | `task.roundTail` | 按轮起点(startSeq)取该轮末尾 limit 条事件,用于初始渲染 |
+| `task.agents` | 子 agent 台账一次性拉取(前端打开任务详情、建子 agent 胶囊列表的唯一取数口;live 任务取内存台账,磁盘路径 agents.json 优先、旧任务回退 meta.json 的 agents 数组只读;按 createdAt 升序;应答 `{agents:[台账项], mainAgentId}`) |
 | `task.fileChanges` | 单轮文件变更全文:`file-changes/<roundId>.json` 的 `{changes:[...]}` |
 | `task.search` | 任务内容搜索(内置 rg + worker 后处理):`workspaceId` 必填且必须是稳定 id 形态(`defaultworkspace` / `w_xxxxx`,拒绝路径穿越),按 `workspaces/<workspaceId>/tasks/<taskId>/` 枚举任务目录,复用 rg 搜索 `rounds.jsonl`(每行一轮,含 user/finalReply 正文);入参 `pattern` / `isRegex` / `caseSensitive` / `wholeWord` / `maxResults`(默认 500),pattern 语义与 `fs.search` 共用 `buildMatchArgs`;rg 命中 JSON 原始行后由 worker `parseRoundLine` 解析、对 user/finalReply 干净文本二次匹配(消除字段名/转义噪音,同时得到准确 `matchIndex`/`matchText`);结果项 `{taskId, title, workspace, workspaceId, status, matches:[{roundIndex, field:'user'|'finalReply', line, matchIndex, matchText}]}`,按任务聚合;大结果复用 `rpc.data` 分批 + 末帧 `ok` 汇总(§5.4) |
 | `task.queueRemove` / `task.queueMove` | 删除/重排某条队列输入 |
 | `config.get` | 模型配置只读(Spring 配置承载,见 §7.17) |
 | `workspaces.list` / `workspaces.add` / `workspaces.remove` | 工作区注册表 CRUD(多工作区并行) |
 | `workspaces.resolveMissing` | 启动自检缺失工作区落定:action=delete(删除注册并级联任务数据)/redirect(纠正到新目录并迁移任务归属) |
-| `fs.list` / `fs.reveal` / `fs.read` / `fs.write` / `fs.mkdir` / `fs.move` / `fs.delete` / `fs.browse` | 工作区文件操作,**必带 workspace 参数**,沙箱限定;文件树懒加载；`fs.browse`(不经沙箱)列盘符/逐层浏览目录,可选 `includeFiles`(boolean,缺省 false 仅目录,完全兼容现有行为):true 时目录条目同时列出文件,每条目带 `kind:"file"\|"directory"`,响应带 `supportsFiles:true` 能力标记(前端能力探测;老前端不传/老 worker 不带按 must-ignore 双向兼容,§5.6) |
+| `fs.list` / `fs.reveal` / `fs.read` / `fs.write` / `fs.mkdir` / `fs.move` / `fs.delete` / `fs.browse` | 工作区文件操作,**必带 workspace 参数**,沙箱限定;文件树懒加载;沙箱附加根按操作语义分流(§7.17):**只读操作**(`fs.list`/`fs.reveal`/`fs.read`/`fs.revealInOs`)并入工作区外部授权根(externalRoots,完全读写已授权)+ 系统技能目录只读根(skills 读免授权,§13.8)——使前端「打开文件」标签页能读取 AI 已读的 skill/外部授权文件;**写操作**(`fs.write`/`fs.mkdir`/`fs.move`/`fs.delete`)仅并入 externalRoots(完全读写),技能只读根**不并入**(写不开放,§13.8);`fs.browse`(不经沙箱)列盘符/逐层浏览目录,可选 `includeFiles`(boolean,缺省 false 仅目录,完全兼容现有行为):true 时目录条目同时列出文件,每条目带 `kind:"file"\|"directory"`,响应带 `supportsFiles:true` 能力标记(前端能力探测;老前端不传/老 worker 不带按 must-ignore 双向兼容,§5.6) |
 | `fs.revealInOs` | 在**运行 worker 的宿主机器**上打开系统文件管理器并选中目标(资源树右键「在系统文件管理器中显示」,对标 VSCode Reveal in File Explorer),**必带 workspace 参数**,路径经沙箱 `resolveExisting` 校验(防越界/符号链接逃逸);Windows `explorer.exe /select,<path>`(fire-and-forget,退出码不表征成败)、macOS `open -R`、Linux 优先 freedesktop FileManager1 `ShowItems` 选中目标、无 dbus/无注册实现退化 `xdg-open` 打开所在目录;argv 直传无 shell 解析;无桌面环境(无头 worker/无文件管理器)抛 IO 异常转 RPC 错误;远程访问场景窗口在 worker 所在电脑弹出;老前端不调用零影响 |
 | `term.open` / `term.input` / `term.resize` / `term.close` | Web 内嵌终端会话(§7.18，真 PTY)：`term.open` 必带 `workspace`+`termId`(前端生成,先 sub 频道再 open 防丢首帧)+`path`(目录,沙箱 `resolveExisting` 校验,非目录拒收)+`cols`/`rows`+可选 `shell`，返回 `{termId, pid}`；`term.input` 入参 `{termId, data(base64)}`；`term.resize` 入参 `{termId, cols, rows}`；`term.close` 入参 `{termId}`。输出经 `u.<K>.term.<termId>.stream` 定向推送；老前端不调用零影响，老 worker 无此方法时前端按 must-ignore 降级提示 |
 | `fs.search` | 工作区文本内容搜索(内置 rg,§5.10),**必带 workspace 参数**,沙箱 jailed 到工作区根;入参 `pattern` / `isRegex` / `caseSensitive` / `wholeWord` / `includeGlobs` / `excludeGlobs`(逗号分隔 glob,include 用 `-g '!*' -g glob` 放行、exclude 用 `-g !glob`) / `maxResults`(默认 1000,触顶 kill rg 置 `truncated`);rg 参数 `--hidden --json --crlf -e <pattern>`(固定串加 `--fixed-strings`),逐行解析 JSON lines(`type:match` 的 `submatches` → 命中片段);结果项 `{path, lineNumber, line, matchIndex, matchText}`,按文件聚合;大结果复用 `fs.read` 的 `rpc.data` 分批 + 末帧 `ok` 汇总(§5.4);老前端不调用零影响,老 worker 无此方法时前端按 must-ignore 降级纯前端搜索(§5.6) |
@@ -264,7 +266,7 @@ hub 只解析信封的 `type` / `channel`(及 hello 握手字段);`event` / `seq
 - **ChannelRegistry** — channel → 订阅者集合;pub 到来即遍历投递(带 `ext.target` 时只定向投给该 sessionId);前端 sub/unsub stream 频道时向该命名空间在线 worker 发 join/leave 通知。
 - **PresenceService** — worker 会话建立/断开时向 `u.<K>.workers` 发 worker.online/offline;订阅时补发全量快照。
 - **慢消费者保护** — 每连接出口队列上限 1000 条,溢出断开;前端自动重连 + 重新拉取,不丢数据。
-- **心跳** — WS ping 每 15s,45s 无 pong 判死。
+- **心跳** — WS protocol-level ping 每 15s,45s 无 pong 判死;同时响应应用层 ping 帧——收到即回 pong,不路由、不记录(§5.1)。
 
 ### 6.3 公网加固清单
 
@@ -293,7 +295,7 @@ wss 强制 + 证书;hello 失败限速(防 key 枚举);单 IP / 全局连接数�
 
 | 组件 | 职责 |
 |---|---|
-| **HubPool** | 多 hub 出站连接池:每连接独立 WS 客户端 + 重连循环 + 心跳;路由 API 按命名空间扇出 / 回源 |
+| **HubPool** | 多 hub 出站连接池:每连接(HubLink)独立 WS 客户端 + 重连循环;HubLink 应用层心跳——5s 周期仅空闲时(本周期无任何帧到达)才发 ping,ping 后 15s 无帧判死,主动关闭触发重连(§5.1);路由 API 按命名空间扇出 / 回源 |
 | **EventLog** | 每任务内存日志(运行中);append 即分配 seq;`seed(seqLastOf)` 供再运行接续;尾部只读供 task.poll 归并 |
 | **TaskStore** | 持久层:`workspaces/<workspaceId>/tasks/<taskId>/` 按 agent 分文件 `*.jsonl`;启动扫描建索引;**随机访问分块反向读取原语**(ReverseLineReader 从文件尾 64KB 块向前扫,不整文件重扫) |
 | **TaskManager** | 运行编排:创建/取消/再运行(冷启动)/删除;`finish()` 驱逐内存驻留 |
@@ -343,7 +345,7 @@ RoundIndexAdvisor(轮次索引+耗时,最外层) → SkillAdvisor(skill 渐进�
 **机制**(`ModelRateLimiter` + `RateLimitedChatModel` 装饰器,挂在 `ChatModelFactory.build` 产物外层;主/子/AI 审议/池成员全部自动生效,见 docs/design-model-rate-limit.md):
 
 - 每模型独立配置(`worker.models[].params`):`rpm`(每分钟发起数,滑动窗口)、`max-concurrency`(同时 in-flight 上限,**长思考重叠的核心闸门**)、`tpm`(可选参考线)、`token-est-factor`(估算系数初始值)。**缺省回退全局默认限流(rpm=60 / max-concurrency=4 / tpm=0),不是裸奔不限流**;某模型要关闭某维度,在其 params 显式设 0。
-- 请求起步经 `ModelRateLimiter.acquire` 排队等放行:rpm 窗口 / 并发信号量 / tpm 压力三关;超限进有界等待队列(默认队列 8、等 5 分钟),**正常排队不报错**,仅队列满 + 超时才抛 `ModelRateLimitException`(非重试,文案含「减少同步派发/调大配置」建议)。
+- 请求起步经 `ModelRateLimiter.acquire` 排队等放行:rpm 窗口 / 并发信号量 / tpm 压力三关;超限进有界等待队列(默认队列 8、等 5 分钟),**正常排队不报错**,仅队列满 + 超时才抛 `ModelRateLimitException`(非重试,文案含「减少并发派发/调大配置」建议)。
 - **tpm 记账**:流中无协议级 usage(OpenAI 兼容只在末帧带),故流中用自算文本 token 粗估(CJK≈1、其余≈4 字符 1 token)累计;请求完成后用厂商真实 usage 记账入 60s 窗口,并 EMA 反向校准估算系数(`token-est-factor`,每模型独立,持久化 `~/.everyagent/model-rate-state.json`,重启接续)。
 - 全局默认:`worker.limits.model-rate.{queue-capacity, wait-timeout-ms, est-window-sec, est-safety-ratio, est-ema-alpha, default-rpm, default-max-concurrency, default-tpm}`。
 - **观测(P2)**:排队等待发瞬态 `task.trace(kind=model_rate_wait)`(前端展示「模型正在排队」);`config.get` 响应带 `rateStatus` 数组(每模型 inFlight/waiters/factor 等运行态)。
@@ -485,6 +487,7 @@ ask 管道承载第二类阻塞请求:**危险操作授权**。`PermissionGate` 
 - **工作区外部授权根的沙箱消费**(§7.17):文件工具侧并入 `FsToolSupport` 的 Sandbox 附加根(read_file/create_file/update_file 直接放行);命令侧并入 `GrantRegistry.execRootsSandboxed` 安全过滤视图(过宽根同被拒收)——wsl-bwrap 随命令以 `rw --bind` 白名单挂载(挂载点 `/mnt/<盘>` 原生形态);windows-mic Medium IL 天然可写(无需标注/ACL,同工作区契约);wsl-direct 把**全部工作区**的 externalRoots 并入每条命令的 `WslDirectSandbox` 挂载列表(drvfs 读写挂载,runner trusted 阶段幂等 `_ensure_mount`;挂载长存,删除工作区时按 §7.17 级联 umount;bwrap 按次 bind 天然跟随,mic 零副作用天然跟随);Java 侧 `OsSandbox.wslDirectMountRoots()` 每次先经 `WorkspaceManager.pruneStaleAndListMountRoots()` 把宿主上已不存在的根(任务数据目录被清理、外部授权根失效)**从注册表剔除并落盘**(默认工作区除外,目录复活后仍可重新注册/纠正;仅注册表级清理,不级联删任务数据),避免失效条目反复进挂载载荷打 stderr 噪音;`mountPairs` 仅对不属于注册表的 cwd 保留存在性防御)。
 - **系统技能目录的沙箱只读挂载**(§7.17):系统目录 `skills/`(skill 知识包,AI 经 `read_file` 只读免授权访问)同时以**只读**形态挂入 wsl 系列沙箱,使 AI 的 bash 工具在沙箱内也能 `cat`/`grep` 知识包正文(与 `read_file` 走宿主 Java 侧读取并存)——wsl-direct 把 `resolveSkillsDir()` 作为只读挂载对加入 `WslDirectSandbox` 挂载载荷(`{src,dest,ro:true}`,runner trusted 阶段 `mount -t drvfs -o ro`,幂等,挂载点 = `WslPathMapper.toDirectMount` 原路径形态 `/c/...`,与工作区读写挂载分离);wsl-bwrap 以 `--ro-bind` 按原生 `/mnt/<盘>` 形态绑定(载荷 `roIslands`,与工作区 `--bind` 白名单同源、只读)。windows-mic 后端命令跑在宿主、Medium IL 进程读写用户文件本就放行,无需挂载。`skills/` 是系统目录中对 AI 文件工具唯一只读开放的子目录,沙箱侧同样只读:写操作经 PermissionGate `SkillsReadAllowCheck` 不放行、走授权决议链(§7.17),drvfs/bwrap 只读挂载构成 OS 级兜底。
 - **网络策略**:默认放行(`worker.sandbox.allow-network=true`,命令可访问网络,含回环 127.0.0.1);任务级 `/禁用网络` 或全局 `allow-network=false` 才断网——wsl-direct = `unshare -n`(新建无 eth0 的 netns)、wsl-bwrap = `--unshare-net`(新 netns 仅 down 的 lo,连回环也不通)、direct/mic = 剥代理 env(advisory)。
+- **内存上限语义**(跨后端统一为「真实内存占用」上限,防失控而非防虚拟地址空间):`worker.sandbox.memory-limit-mb` 在 windows-mic = Job Object `JobMemoryLimit`(commit 上限);wsl 系后端 = **cgroup v2** `memory.max` + `memory.swap.max=0`(eagent-run.py trusted 阶段建 `/sys/fs/cgroup/eagent.run/<runId>` 组、迁移自身后 exec,`memory.swap.max=0` 是必须的——WSL 默认带 swap,不关则超限页被换出而非 OOM,上限形同虚设;空组随下条命令 sweep_stale 或 supervisor 退出回收)。**明确弃用 RLIMIT_AS**:它限的是虚拟地址空间而非内存占用,而 V8/JVM/Go 等现代运行时保留远超实际占用的 VA——V8 指针压缩 cage 保留 4GB、每个 Wasm memory 带 GB 级 guard region,4GB as 上限下任何含 Wasm 的 Node 工作负载(undici llhttp/node fetch/vite build)一实例化 Wasm 即溢出崩溃(历史 bug:曾致 vite build 与 `node -e fetch` 全量失败,空脚本同位崩溃证实为环境问题)。RLIMIT_CPU/FSIZE 语义正确仍保留;bwrap 非特权 runner 写 cgroup 失败时降级为不限内存(超时 + pgid 击杀 + 发行版 OOM 兜底),绝不回退 RLIMIT_AS。
 - **PowerShell 方言可选开启**(wsl 系列后端):WSL 后端命令方言为 bash,AI 默认只有 `bash` 工具;用户对某任务选 `/启用powershell`(kind=`powershell.enable`,任务级开关 `TaskEntry.powershellEnabled`,随 meta 持久化)后,主/子 agent 工具集在 bash 之外**追加** `powershell` 工具——该命令**回宿主 Windows 原生沙箱执行**(windows-mic 语义:Restricted Token + Medium IL + Job Object(零文件系统副作用),经 `CommandExecutor` 的 powershell 分支强制 native,wsl 发行版内不要求安装 pwsh),与 bash 并存。windows-mic(Windows+ACL)后端命令工具本就是 PowerShellTool,**不注册**该斜杠条目(`PowerShellEnableSlashProvider` 仅 `sandbox.isWslBackend()` 时注册)。
 - **命令 stdin 契约**:AI 命令的 stdin 一律接 null 设备(`/dev/null`;windows-mic 后端为 NULL 句柄),不得是"打开的空管道"。wsl 系后端载荷经 stdin 传入,但 wsl.exe→发行版的 stdio 桥接会保持 Linux 侧管道写端打开(worker 侧关闭管道也不传播 EOF);若让 bash 继承它,`rg`/`grep` 无路径参数时据 stdin 可读判定改读 stdin(静默空结果,与"无匹配"不可区分),`cat` 等阻塞读则挂到超时。落地:eagent-run.py 在 exec bash/bwrap 前把 fd 0 重定向到 `/dev/null`(seccomp supervisor 除外——其 stdin 承载 priv-ans 控制帧);direct 后端 ProcessBuilder `redirectInput` null 设备。
 - **Windows 沙箱技术路线说明**:曾评估 AppContainer(Low IL 标注的继任者),因"capability 模型不适合开放式开发工作流+普通 ACE 全失效的读模型破坏面太大"(OpenAI 对 Windows 沙箱的弃用理由同源)而放弃,整体迁往 WSL2 生态(Claude Code 对 Windows 用户的官方推荐路径);windows-mic 保留为回退后端。windows-mic 后端已从 Low IL + ACL 标注改为 Medium IL(Restricted Token 不降级):Low IL 标注的 (OI)(CI) 继承会降低工作区整棵树的安全等级(用户正常新建文件也继承 Low),且无回收逻辑导致永久残留;动态工作区(用户可注册任意路径)放大此损害。Medium IL 牺牲了 MIC NO_WRITE_UP 的 OS 级写隔离兜底,但换来零文件系统副作用——在动态工作区场景下,确定性损害(Low IL 残留)大于概率性风险(PermissionGate 漏判)。
@@ -524,10 +527,11 @@ ask 管道承载第二类阻塞请求:**危险操作授权**。`PermissionGate` 
 
 **实时增量 = worker 定向推送**(DataPusher):前端 sub `u.K.task.<id>.stream` → hub 向 worker 发 `subscriber.join{sessionId,taskId}` → DataPusherManager 校验归属后按 (sessionId,taskId) 建推送器;推送器虚拟线程把运行中任务内存 EventLog 增量(含瞬态 delta/thinking)推到 stream 频道,`ext={target:sessionId, operate, initial}`。
 
-- **窗口式背压(credit + ack)**:DataPusher 维护 `nextPushIndex`(每推一帧 +1)与 `ackedIndex`;`nextPushIndex - ackedIndex >= CREDIT_WINDOW(512)` 且未超时(`ACK_TIMEOUT_MS=5000`)时阻塞等待前端 ack;每帧 ext 携带 `credit=true/creditIndex`;前端消费完一帧后经 worker 级 input 频道回 `stream.ack{taskId,creditIndex}`,worker 只路由释放窗口、不建推送器。老前端不识别 credit 则不 ack → 超时降级无背压,兼容。多前端窗口独立,慢端不拖累快端。
+- **窗口式背压(credit + ack)**:DataPusher 维护 `nextPushIndex`(每推一帧 +1)与 `ackedIndex`;`nextPushIndex - ackedIndex >= CREDIT_WINDOW(128)` 时**持续真阻塞**等待前端 ack——直到 ack / 连接断开 / 推送器销毁,无超时降级(全链端统一升级,无老前端兼容负担);每帧 ext 携带 `credit=true/creditIndex`;前端消费完一帧后经 worker 级 input 频道回 `stream.ack{taskId,creditIndex}`,worker 只路由释放窗口、不建推送器。多前端窗口独立,慢端不拖累快端。
 - **先订阅后首拉**:前端 `open()` 先 sub stream 再拉初始(rounds + roundTail),推送首扫与首拉重叠的部分前端按 seq 去重吸收。
 - **生命周期**:unsub/前端断连 → 销毁推送器;worker⇄hub 断链 → 清扫该连接推送器;任务再运行换新 EventLog → 换挂从头推;任务终态 → 收尾排水一次后空转。
-- **降级语义**:推送非阻塞,出站队列满丢帧 + WARN(事件日志是事实源);前端慢 → hub sink 溢出断连 → 重连 resync;漏帧由前端按需拉取补齐。
+- **降级语义**:推送非阻塞,出站队列满丢帧 + WARN(事件日志是事实源);前端慢 → hub sink 溢出断连 → 重连 reconnect;漏帧由前端按需拉取补齐。
+- **慢消费者三道防线**:① 真背压——窗口满即持续阻塞等待 ack,无超时降级;② `CREDIT_WINDOW(128)`——多任务同屏总积压 N×128 < hub 出口队列 1000;③ 前端 hidden 时对全部活跃 stream 频道主动 unsub 降载(hub 发 subscriber.leave → worker 销毁推送器,彻底不推),visible 时重 sub + 重拉校准——`visibilitychange` 只管订阅降载,不参与连接生死(连接生死唯一由心跳判定,§5.1)。
 
 **`task.poll { taskId, afterSeq?, beforeSeq?, limit?, mode?('events'|'rounds'), count?, waitMs? }`** 是任务流的**统一读取 RPC**:打开首拉、上滚分页、区间拉取、重连补齐、终局补拉、长轮询全部经它完成。
 
@@ -545,7 +549,7 @@ ask 管道承载第二类阻塞请求:**危险操作授权**。`PermissionGate` 
 
 | 工具 | 语义 |
 |---|---|
-| `run_agent(input, title, agentId?, blocking?)` | 派发子 agent;无 agentId 新建(title 必填,agentId 动态生成);传 agentId 即续跑(复用其上下文);blocking 等结果 |
+| `run_agent(input, title, agentId?)` | 异步派发子 agent;无 agentId 新建(title 必填,agentId 动态生成);传 agentId 即续跑(复用其上下文);立即返回 agentId,需用 wait_agents 等待结果 |
 | `list_agents()` | 列出本任务下全部子 agent(agentId/title/createdAt/status/latestActivity,不回灌完整历史) |
 | `wait_agents(agentId?, timeoutMs?)` | 等待子 agent 完成/超时 |
 | `stop_agent(agentId)` | 停止指定子 agent |
@@ -559,7 +563,7 @@ ask 管道承载第二类阻塞请求:**危险操作授权**。`PermissionGate` 
 - **收口前自动等待**:父任务结束前自动 wait 全部子 agent 聚合回灌;安全超时(默认 5 min)。
 - 并发守卫:运行中的 agentId 再次 run_agent 报错。
 
-**事件与持久化**:子 agent 不建独立 Task,事件与主 agent 同名、以 agentId 字段嵌套在父任务流(spawn 生命周期为 agent.started/agent.done);**每个子 agent 一个独立会话文件 `<subAgentId>.jsonl`**;冷启动重建、断线续播、ask(带 agentId)全部复用既有机制。
+**事件与持久化**:子 agent 不建独立 Task,事件与主 agent 同名、以 agentId 字段嵌套在父任务流(spawn 生命周期为 agent.started/agent.done);**每个子 agent 一个独立会话文件 `<subAgentId>.jsonl`**;冷启动重建、断线续播、ask(带 agentId)全部复用既有机制。子 agent 台账**独立落盘任务目录 `agents.json`**(形状 `{"agents":[...]}`,临时文件 + 原子 move 写入、空台账删文件)——从 meta.json 拆出,TaskSummary 不再携带 agents 数组,`tasks.list` 读 meta 的任务列表数据因此减负;台账项 = `AgentEntity.toSummary()`:agentId/kind/title/createdAt/status/latestActivity/**usage(累计)**/lastText/**context(最近一轮上下文快照 `{inputTokens, contextWindowTokens, model}`,有数据才写)**,前端经 `task.agents` 拉取。usage 事件语义:WorkerToolEventAdvisor 每轮模型调用 usage 发射前先 `addUsage` 累计进 AgentEntity——usage 事件 total 载荷 = 含本轮累计;子 agent 每轮 usage 后刷新内存台账并触发 agents.json 落盘(persistHook / 30s 定时 / 终态 finish 三路径)。
 
 ### 7.15 持久化与磁盘布局
 
@@ -570,7 +574,8 @@ ask 管道承载第二类阻塞请求:**危险操作授权**。`PermissionGate` 
 ├─ workspaces/
 │   ├─ workspaces.json               # 唯一工作区注册表 {id, root, addedTs, lastActivityTs?, externalRoots?}(默认工作区也在册)
 │   ├─ defaultworkspace/tasks/<taskId>/      # 默认工作区任务目录;永久保留
-│   │   ├─ meta.json                 # TaskSummary(含 workspaceId、最近一轮上下文用量、agents 子 agent 台账、任务级开关)+ mainAgentId
+│   │   ├─ meta.json                 # TaskSummary(含 workspaceId、最近一轮上下文用量、任务级开关)+ mainAgentId
+│   │   ├─ agents.json               # 子 agent 台账 {agents:[...]}(从 meta.json 拆出独立落盘,减轻任务列表数据;含累计 usage 与最近一轮 context 快照;临时文件 + 原子 move 写入,空台账删文件)
 │   │   ├─ grants.json               # task 档授权 {taskGrants, extraRoots}(§7.8,首次授权时原子写)
 │   │   ├─ <mainAgentId>.jsonl       # 主 agent 会话 + 任务级事件
 │   │   ├─ rounds.jsonl              # 轮次索引(§7.15.1)
@@ -698,6 +703,8 @@ Input:  queued → consumed | discarded(任务取消)
 
 **skill 只读例外**:系统目录 `skills/` 是 AI 文件工具对系统路径的**唯一只读免授权**例外——`read_file` 经权限责任链节点 `SkillsReadAllowCheck` 直接放行(realpath 前缀判定);**任何写操作不在此放行,仍走授权决议链**;其余系统路径(workspaces/、sandbox/、runtime/ 等)与普通工作区外目录同权,一律走授权决议(弹窗/AI 审议)。`skills/` 同时只读挂入 wsl 系列沙箱(§7.10:wsl-direct drvfs `-o ro`、wsl-bwrap `--ro-bind`),bash 工具在沙箱内同样只读可达,写经 OS 层拒;windows-mic 后端跑在宿主,Medium IL 读写用户文件本就放行,无需挂载。
 
+**skill 知识包路径的沙箱注入**:`SkillAdvisor` 注入 system prompt 的知识包路径按当前沙箱后端解析(§7.17):WSL 系列沙箱下 `Skill.knowledgePath`(宿主 Windows 绝对路径)经 `WslPathMapper` 翻译为 AI 沙箱内可见的 `/` 开头 Linux 路径(wsl-direct `/c/...`、wsl-bwrap `/mnt/c/...`),使 AI 的 `bash`(`cat`/`grep`)与 `read_file`(经 `FsToolSupport.resolveWslPath` 反向翻译回宿主路径)均能直接使用同一路径;非 WSL 后端原样注入宿主路径。`Skill` record 仍存宿主绝对路径(物化/沙箱挂载均以此为准),路径翻译仅发生在注入提示词时。
+
 ### 7.18 内嵌终端(term.*)
 
 文件树目录右键「在终端中打开」→ 前端主区开 xterm.js 内嵌终端标签页,worker 用**真 PTY** 拉起交互式 shell,cwd 为右键目录;输出经频道推送、输入走 RPC(§5.5)。
@@ -717,14 +724,14 @@ Input:  queued → consumed | discarded(任务取消)
 
 ### 8.1 SDK 面
 
-- **HubClient** — connect / hello / sub / pub / 自动重连(重连后自动重订阅 + onResync 重拉校准);`rpc(workerId, method, params)` 按 reqId 匹配 ok/err/data/progress,默认 30s 超时。
+- **HubClient** — connect / hello / sub / pub / 自动重连(重连后自动重订阅 desiredSubs + 广播 onReconnect 供上层重拉校准);应用层心跳——5s 周期仅空闲时(本周期无任何帧到达)发 ping 探测,ping 后 15s 无帧判死,判死后零退避首试重连(§5.1);`rpc(workerId, method, params)` 按 reqId 匹配 ok/err/data/progress,默认 30s 超时。
 - **订阅次序约束** — 对任一 worker:**先 sub 其 `evt` 频道,再发 `cmd`**(rpc 应答全部落在 evt 频道)。
-- **TaskPacketView** — 数据包模式:打开任务 = 先 sub stream 频道(worker 据 join 建推送器收到实时增量)→ `task.rounds` + `task.roundTail` 拉初始 → 之后仅靠定向推送收流式(帧与拉取帧同一路 seq 去重/排序聚合);帧消费后回 `stream.ack` 释放背压窗口(§7.13);上滚 `loadBefore(beforeSeq)` 拉更早轮次;`resync()` = 重订阅 + 重拉。
+- **TaskPacketView** — 数据包模式:打开任务 = 先 sub stream 频道(worker 据 join 建推送器收到实时增量)→ `task.rounds` + `task.roundTail` + `task.agents`(子 agent 台账,在 task.rounds 之后调用)拉初始 → 之后仅靠定向推送收流式(帧与拉取帧同一路 seq 去重/排序聚合);帧消费后回 `stream.ack` 释放背压窗口(§7.13);上滚 `loadBefore(beforeSeq)` 拉更早轮次;`resync()` = 重订阅 + 重拉。`task.agents` 应答灌入 eventFolder 新状态 `agentMeta`(键:主 agent=''、子 agent=子 id;流事件 usage/agent.started/agent.done 实时覆盖合并);AgentListPanel 胶囊列表数据源从「items 派生」扩展为 **items ∪ agentMeta**,悬停胶囊显示信息卡(标题/状态/创建时间/模型/累计 tokens/上下文用量),子 agent 胶囊底部边框内一条 2px 用量线(比例 = 最近一轮 prompt/上下文窗口,父级 overflow:hidden 裁剪不越圆角)。
 - **channels / ownerKey** — 频道名构造与 sha256 身份,与 Java 契约逐字对齐。
 
 ### 8.2 多 worker 聚合
 
-一个 hub 下可有多台 worker。前端以 1 条目录连接(hubKey)看全部在线 worker(presence),对每台已启用且在线(presence)的 worker 用其 apiKey 建数据连接(离线 worker 不建连——hub 对 apiKey 不做白名单校验,离线也建连会误报「已连接」),任务列表/工作区/git 按 worker 合并展示、按归属定向操作;任务归属 worker 由前端按帧来源动态标注(TaskSummary 后端不含 workerId)。凭证 AES-GCM 加密存 localStorage,presence 指纹(ownerFingerprint 前 16 hex)支持 worker 改名后自动复用凭证。
+一个 hub 下可有多台 worker。前端以 1 条目录连接(hubKey)看全部在线 worker(presence),对每台已启用的 worker 用其 apiKey 建数据连接;**worker 离线时连接保持建立**(WS 本身健康,仅 presence 变化;显示态 = `presence && wsOpen` 双条件,不靠断连表达离线),RPC 向离线 worker 排队直到超时拒绝(holdTimer 兜底),仅致命错误(鉴权失败等,凭证不修正重试永远失败)才替换连接实例,任务列表/工作区/git 按 worker 合并展示、按归属定向操作;任务归属 worker 由前端按帧来源动态标注(TaskSummary 后端不含 workerId)。凭证 AES-GCM 加密存 localStorage,presence 指纹(ownerFingerprint 前 16 hex)支持 worker 改名后自动复用凭证。
 
 ### 8.3 轮次浏览与懒加载
 
@@ -760,7 +767,7 @@ Electron 将 web + hub + worker **一体打包**为 Windows x64 便携(portable)
  │←─u.K.tasks: task.created{taskId}───────────────────│
  │─sub u.K.task.<id>.stream──────────────────────────→│(hub 定向通知 worker:join)
  │                                                      │ DataPusherManager 建定向推送器
- │─cmd: rpc{task.rounds + task.roundTail}────────────→│ 初始渲染(轮次 + 尾段)
+ │─cmd: rpc{task.rounds + task.roundTail + task.agents}→│ 初始渲染(轮次 + 尾段 + 子 agent 台账)
  │←─evt: rpc.data / rpc.ok────────────────────────────│
  │←─msg: stream 频道定向推送(delta/thinking/message)──│ 实时增量(ext.target=本会话)
  │           消费后回 stream.ack 释放背压窗口          │
@@ -808,12 +815,12 @@ worker                         hub                    前端(可能 0 个在线)
 
 | 场景 | 行为 |
 |---|---|
-| 前端断线 | hub cleanup 发 subscriber.leave → 推送器销毁,任务照跑落盘;重连后重订阅(join 重建推送器)+ resync 补齐 |
-| 单个 hub 宕机/重启 | 其余连接照常收发;受影响前端重连 + resync,零丢失 |
+| 前端断线 | hub cleanup 发 subscriber.leave → 推送器销毁,任务照跑落盘;重连恢复 = welcome 后重发 desiredSubs(含仍打开的 stream 频道,join 重建推送器)+ 重放在途 RPC + 广播 onReconnect——上层只重拉数据校准,不重建 view(HubClient 实例瞬态重连不替换) |
+| 单个 hub 宕机/重启 | 其余连接照常收发;受影响前端重连 + reconnect 补齐,零丢失 |
 | 全部 hub 宕机 | 任务继续跑完并落盘(输出无人消费,天然背压);恢复后重订阅 + 从磁盘拉取补齐 |
-| worker 断线(到 hub) | 指数退避重连;期间 hub 发 worker.offline,前端显示离线;恢复后 worker.online 触发 resync |
+| worker 断线(到 hub) | 指数退避重连;期间 hub 发 worker.offline,前端显示离线;恢复后 worker.online 触发 reconnect 重拉校准 |
 | 家中 PC 关机/worker 崩溃 | 运行中任务终止;**磁盘数据完整**:开机重启后索引重建、任务列表回归、非终态标 failed;发消息继续对话(冷启动) |
-| 慢消费者 | hub 出口队列(1000)溢出断开该前端;前端重连 + resync;worker 出站队列满丢帧 + WARN(事件日志为事实源) |
+| 慢消费者 | hub 出口队列(1000)溢出断开该前端;前端重连 + reconnect(三道防线,§7.13);worker 出站队列满丢帧 + WARN(事件日志为事实源) |
 
 ---
 

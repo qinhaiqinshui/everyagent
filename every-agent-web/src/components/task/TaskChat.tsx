@@ -599,6 +599,10 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
 
   // 从线程派生 agent 列表:主 agent(mainAgentId)恒在首位,子 agent 按首次出现顺序。
   // 线程内主 agent 消息 agentId 为空串(缺省=主线程),此处归一到 mainAgentId 供列表/过滤使用。
+  // 除 items 外还并入 agentMeta 的子 agent 键(task.agents 台账 seed):历史任务过程内容
+  // 未懒加载、items 尚无子 agent 消息时,胶囊列表也能显示全部子 agent(items 派生优先,
+  // meta 补齐追加在后;title 取 resolveAgentTitle 优先,兜底 meta.title)。
+  const agentMeta = stream?.state.agentMeta
   const agents = React.useMemo(() => {
     const seen = new Map<string, string>()
     if (mainAgentId) {
@@ -611,20 +615,44 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
         seen.set(agentKey, stream?.resolveAgentTitle(rawKey) ?? rawKey)
       }
     }
+    if (agentMeta) {
+      for (const [agentId, meta] of Object.entries(agentMeta)) {
+        // 键语义:主 agent = ''(已由 mainAgentId 占位,跳过);子 = 子 id。
+        if (!agentId || seen.has(agentId)) {
+          continue
+        }
+        seen.set(agentId, stream?.resolveAgentTitle(agentId) ?? meta.title ?? agentId)
+      }
+    }
     return [...seen.entries()].map(([agentId, title]) => ({ agentId, title }))
-  }, [items, stream, mainAgentId])
+  }, [items, stream, mainAgentId, agentMeta])
 
-  // agent 长条列表项:状态来自事件折叠器的 agentStates(主 agent 键为空串 '';子 agent 键 = 子 id)。
+  // agent 长条列表项:状态来自事件折叠器的 agentStates(主 agent 键为空串 '';子 agent 键 = 子 id);
+  // meta 同源(键:主 = '',子 = 子 id)→ 悬停信息卡数据 + 子 agent 胶囊底部上下文用量线
+  // (contextRatio = contextUsed / contextWindow,clamp 到 0~1;无数据 undefined)。
   const agentListItems = React.useMemo<AgentListItem[]>(() => {
     const states = stream?.state.agentStates ?? {}
-    return agents.map((agent) => ({
-      agentId: agent.agentId,
-      title: agent.title,
-      status: agent.agentId === mainAgentId
-        ? (states[''] ?? 'idle')
-        : (states[agent.agentId] ?? 'idle'),
-    }))
-  }, [agents, mainAgentId, stream])
+    const metas = agentMeta ?? {}
+    return agents.map((agent) => {
+      const isMain = agent.agentId === mainAgentId
+      const meta = metas[isMain ? '' : agent.agentId]
+      const contextUsed = meta?.contextUsed
+      const contextWindow = meta?.contextWindow
+      const contextRatio = contextUsed != null && contextWindow != null && contextWindow > 0
+        ? Math.min(1, Math.max(0, contextUsed / contextWindow))
+        : undefined
+      return {
+        agentId: agent.agentId,
+        title: agent.title,
+        status: isMain
+          ? (states[''] ?? 'idle')
+          : (states[agent.agentId] ?? 'idle'),
+        isMain,
+        meta,
+        contextRatio,
+      }
+    })
+  }, [agents, mainAgentId, stream, agentMeta])
 
   /** 点击 agent 长条:切换选中态(再点同一 agent 由面板回传 '' 恢复全部;轮次视图下仅高亮)。 */
   const handleSelectAgent = React.useCallback((agentId: string) => {

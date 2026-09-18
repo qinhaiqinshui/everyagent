@@ -51,10 +51,12 @@ public class DataPusher implements EventLog.Listener {
     private static final String EXT_INITIAL = "initial";
     private static final String OPERATE_REPLACE = "replace";
     private static final String OPERATE_APPEND = "append";
-    /** 背压窗口:未确认帧上限(小于 hub outbound-queue-limit=1000,留余量)。 */
-    private static final int CREDIT_WINDOW = 512;
-    /** ack 超时(无前端回报)→ 降级为无背压继续推,不卡死不推。 */
-    private static final long ACK_TIMEOUT_MS = 5000;
+    /**
+     * 背压窗口:未确认帧上限;保证 N 个同屏满速任务总积压 N×128 &lt; hub 前端连接出口队列
+     * 1000(§4.2.2 防线 2)——前端冻结时每路最多积压 128 帧即阻塞,不会塞爆队列强制断连;
+     * 前端活着时 ack 滚动,窗口不触顶,128 对正常吞吐无感。
+     */
+    private static final int CREDIT_WINDOW = 128;
     /** 阻塞轮询步长(ms)。 */
     private static final long ACK_WAIT_STEP_MS = 250;
 
@@ -70,8 +72,6 @@ public class DataPusher implements EventLog.Listener {
     private long nextPushIndex = 0;
     /** 前端已确认的最大 pushIndex(初始 -1)。 */
     private volatile long ackedIndex = -1;
-    /** 最近一次收到 ack 的时间戳(超时降级判断)。 */
-    private volatile long lastAckAt = System.currentTimeMillis();
     private volatile Thread thread;
     /** 内存日志已消费的记录位置游标(readFrom 位置口径:共享 seq 轮组内 seq 无法区分组内帧)。 */
     private volatile int cursor;
@@ -256,22 +256,18 @@ public class DataPusher implements EventLog.Listener {
 
     /**
      * 申请一帧推送额度:未确认窗口满({@code nextPushIndex - ackedIndex >= CREDIT_WINDOW})
-     * 且未超时则阻塞等待前端 ack;超过 {@link #ACK_TIMEOUT_MS} 降级为无背压继续推。
+     * 即持续阻塞,直到前端 ack / 推送器销毁(stop);全链端统一升级,无老前端兼容负担(§4.2.2 防线 1)。
      * 返回本帧 creditIndex(该帧推送后自增)。
      */
     private long acquireCredit() {
         synchronized (creditLock) {
-            long now = System.currentTimeMillis();
-            while (running.get()
-                    && nextPushIndex - ackedIndex >= CREDIT_WINDOW
-                    && now - lastAckAt < ACK_TIMEOUT_MS) {
+            while (running.get() && nextPushIndex - ackedIndex >= CREDIT_WINDOW) {
                 try {
                     creditLock.wait(ACK_WAIT_STEP_MS);
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                     break;
                 }
-                now = System.currentTimeMillis();
             }
             return nextPushIndex++;
         }
@@ -283,7 +279,6 @@ public class DataPusher implements EventLog.Listener {
             if (creditIndex > ackedIndex) {
                 ackedIndex = creditIndex;
             }
-            lastAckAt = System.currentTimeMillis();
             creditLock.notifyAll();
         }
     }

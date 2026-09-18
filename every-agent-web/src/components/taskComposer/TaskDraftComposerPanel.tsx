@@ -120,7 +120,7 @@ export default function TaskDraftComposerPanel({
         <div className="nagent-header">
           <span className="nagent-header__title" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
             <BrandMark size={14} animated={false} />
-            Agent
+            EveryAgent
           </span>
         </div>
       )}

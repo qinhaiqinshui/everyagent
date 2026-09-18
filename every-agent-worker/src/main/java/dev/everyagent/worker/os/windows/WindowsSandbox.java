@@ -67,7 +67,17 @@ public final class WindowsSandbox {
     public static ExecResult run(String command, Path cwd, Map<String, String> extraEnv,
             WorkerProperties.Sandbox cfg, ExecutorService exec, int maxOut, String shell,
             boolean allowNetwork, boolean allowPrivilege) {
-        return runWithCmdLine(buildCommandLine(shell, command), cwd, extraEnv, cfg, exec, maxOut,
+        return runWithCmdLine(buildCommandLine(shell, command), cwd, extraEnv, cfg, exec, exec, maxOut,
+                allowNetwork, allowPrivilege);
+    }
+
+    /**
+     * 带 drainExec 重载:管道读取走平台线程池(避免 JNA ReadFile 钉住虚拟线程 carrier)。
+     */
+    public static ExecResult run(String command, Path cwd, Map<String, String> extraEnv,
+            WorkerProperties.Sandbox cfg, ExecutorService exec, ExecutorService drainExec,
+            int maxOut, String shell, boolean allowNetwork, boolean allowPrivilege) {
+        return runWithCmdLine(buildCommandLine(shell, command), cwd, extraEnv, cfg, exec, drainExec, maxOut,
                 allowNetwork, allowPrivilege);
     }
 
@@ -77,6 +87,16 @@ public final class WindowsSandbox {
     private static ExecResult runWithCmdLine(String cmdLineStr, Path cwd, Map<String, String> extraEnv,
             WorkerProperties.Sandbox cfg, ExecutorService exec, int maxOut, boolean allowNetwork,
             boolean allowPrivilege) {
+        return runWithCmdLine(cmdLineStr, cwd, extraEnv, cfg, exec, exec, maxOut, allowNetwork, allowPrivilege);
+    }
+
+    /**
+     * 带 drainExec 重载:管道读取(drain)使用 drainExec,避免 JNA ReadFile 的 native
+     * 阻塞调用钉住虚拟线程 carrier(exec 为虚拟线程池时)。
+     */
+    private static ExecResult runWithCmdLine(String cmdLineStr, Path cwd, Map<String, String> extraEnv,
+            WorkerProperties.Sandbox cfg, ExecutorService exec, ExecutorService drainExec,
+            int maxOut, boolean allowNetwork, boolean allowPrivilege) {
         WinNT.HANDLE hJob = null;
         WinNT.HANDLE hRestricted = null;
         WinNT.HANDLE readOut = null;
@@ -174,8 +194,8 @@ public final class WindowsSandbox {
             // (readOut/readErr 非 effectively final,须经 final 局部变量转交 lambda)
             Win32HandleInputStream outIn = new Win32HandleInputStream(readOut);
             Win32HandleInputStream errIn = new Win32HandleInputStream(readErr);
-            Future<String> outTask = exec.submit(() -> drain(outIn));
-            Future<String> errTask = exec.submit(() -> drain(errIn));
+            Future<String> outTask = drainExec.submit(() -> drain(outIn));
+            Future<String> errTask = drainExec.submit(() -> drain(errIn));
 
             int waitMs = (int) Math.min(cfg.getTimeoutMs(), Integer.MAX_VALUE);
             int wr = K.WaitForSingleObject(hProc, waitMs);

@@ -1,6 +1,6 @@
 /** 线上帧类型(架构 §3)。与 every-agent-contract Frames.java 对齐。 */
 
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
 
 /** 前端流消费进度回报事件(worker 级输入频道,payload={taskId, creditIndex})。 */
 export const STREAM_ACK = 'stream.ack';
@@ -75,8 +75,20 @@ export interface ErrorFrame {
   message?: string;
 }
 
-export type ClientFrame = HelloFrame | SubFrame | UnsubFrame | PubFrame;
-export type ServerFrame = WelcomeFrame | MsgFrame | ErrorFrame;
+/** 应用层心跳帧(客户端→hub;仅空闲时探测,§5.1)。 */
+export interface PingFrame {
+  type: 'ping';
+  ts: number;
+}
+
+/** 应用层心跳应答(hub→客户端)。 */
+export interface PongFrame {
+  type: 'pong';
+  ts: number;
+}
+
+export type ClientFrame = HelloFrame | SubFrame | UnsubFrame | PubFrame | PingFrame;
+export type ServerFrame = WelcomeFrame | MsgFrame | ErrorFrame | PongFrame;
 
 /** rpc 载荷(worker cmd 频道上的 event="rpc")。 */
 export interface RpcRequest {

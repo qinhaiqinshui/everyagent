@@ -29,9 +29,8 @@ import type { UiFileSidebarPanelDefinition } from '@/plugin/types'
 import type { FileTabOpenMode } from '@/types'
 import type { FileContentHeaderAction, FileTabResource } from './file-tab-types'
 import { getFallbackFileContentEditor, listFileContentEditors, resolveFileContentEditorByPath } from './editors/registry'
-import FindInFileBar from './FindInFileBar'
-import { useContentFind } from './useContentFind'
-import { useHighlightMatches } from './useHighlightMatches'
+import { openSearchPanel } from '@codemirror/search'
+import { EditorView } from '@codemirror/view'
 
 export type FileTabPageLifecycle = {
   canUnmount: () => boolean
@@ -92,23 +91,16 @@ export default function FileTabPage({
   const isReadonlyEditor = Boolean(selectedEditorDescriptor.readonly)
   const canEditContent = Boolean(file && openMode === 'readwrite' && !isReadonlyEditor)
   const canRenameFile = Boolean(file && openMode === 'readwrite' && !isReadonlyEditor)
-  const [findOpen, setFindOpen] = React.useState(false)
   const editorContainerRef = React.useRef<HTMLDivElement | null>(null)
-  // 查找始终基于「当前可见可编辑」的源文本：编辑态搜草稿、其余态搜已读内容。
-  const findSourceContent = openMode === 'readwrite' ? draftContent : content
-  // 替换只写回可编辑草稿；只读态传 noop，替换按钮随之禁用。
-  const findContentChange = React.useCallback(
-    (next: string) => {
-      if (canEditContent) setDraftContent(next)
-    },
-    [canEditContent],
-  )
-  const find = useContentFind(findSourceContent, findContentChange)
-  useHighlightMatches(editorContainerRef, {
-    regex: find.regex,
-    activeIndex: find.activeIndex,
-    enabled: findOpen,
-  })
+
+  // 从编辑器容器 DOM 查找 CodeMirror EditorView 实例。
+  const getCmView = React.useCallback(() => {
+    const root = editorContainerRef.current
+    if (!root) return null
+    const cmDom = root.querySelector('.cm-editor')
+    if (!cmDom) return null
+    return EditorView.findFromDOM(cmDom as HTMLElement)
+  }, [])
   const isFallbackEditor = React.useMemo(() => {
     if (!file) return false
     const extension = getFileExtension(file.fileName || file.filePath).toLowerCase()
@@ -344,60 +336,26 @@ export default function FileTabPage({
   React.useEffect(() => {
     if (!file) return
     const handleFindKeyDown = (event: KeyboardEvent) => {
-      // 只读二进制编辑器（图片）没有文本可查找：不拦截浏览器原生查找，也不启用查找条。
+      // 只读二进制编辑器（图片）没有文本可查找：不拦截浏览器原生查找。
       if (isReadonlyEditor) return
       const key = event.key.toLowerCase()
       const isFindToggle = (event.ctrlKey || event.metaKey) && !event.shiftKey && key === 'f'
-      const isFindNext = (event.ctrlKey || event.metaKey) && !event.shiftKey && key === 'g'
-      const isFindPrev = (event.ctrlKey || event.metaKey) && event.shiftKey && key === 'g'
       if (isFindToggle) {
-        // 拦截浏览器原生查找，打开内置查找条。
+        // 拦截浏览器原生查找，触发 CodeMirror 内置搜索面板。
         event.preventDefault()
-        setFindOpen(true)
+        const view = getCmView()
+        if (view) {
+          view.focus()
+          openSearchPanel(view)
+        }
         return
-      }
-      if (!findOpen) return
-      if (event.key === 'F3') {
-        event.preventDefault()
-        if (event.shiftKey) find.prev()
-        else find.next()
-        return
-      }
-      if (isFindNext) {
-        event.preventDefault()
-        find.next()
-        return
-      }
-      if (isFindPrev) {
-        event.preventDefault()
-        find.prev()
-        return
-      }
-      if (event.key === 'Escape') {
-        setFindOpen(false)
       }
     }
     window.addEventListener('keydown', handleFindKeyDown)
     return () => {
       window.removeEventListener('keydown', handleFindKeyDown)
     }
-  }, [file, findOpen, find, isReadonlyEditor])
-
-  /**
-   * 编辑态（textarea）下没有可高亮的文本节点：查找条改由行级滚动定位当前命中。
-   * 只读 / 预览态由 useHighlightMatches 负责高亮 + 滚动，此处 querySelector 找不到 textarea 会直接跳过。
-   */
-  React.useLayoutEffect(() => {
-    if (!findOpen || !find.activeMatch) return
-    const root = editorContainerRef.current
-    if (!root) return
-    const textarea = root.querySelector('textarea')
-    if (!textarea) return
-    const computed = getComputedStyle(textarea)
-    const lineHeightPx = parseFloat(computed.lineHeight) || (parseFloat(computed.fontSize) * 1.8) || 25
-    const targetTop = Math.max(0, (find.activeMatch.line - 3) * lineHeightPx)
-    textarea.scrollTo({ top: targetTop, behavior: 'smooth' })
-  }, [findOpen, find.activeMatch])
+  }, [file, getCmView, isReadonlyEditor])
 
   const handleRefresh = React.useCallback(() => {
     if (!file) return
@@ -454,7 +412,7 @@ export default function FileTabPage({
       key: 'find-in-file',
       label: '查找',
       icon: <SearchIcon size={13} />,
-      onSelect: () => setFindOpen(true),
+      onSelect: () => { const v = getCmView(); if (v) { v.focus(); openSearchPanel(v); } },
       disabled: loading || Boolean(error) || isReadonlyEditor,
     })
 
@@ -497,6 +455,7 @@ export default function FileTabPage({
     defaultHeaderActions,
     editorProvidesViewMode,
     file,
+    getCmView,
     handleEnableEditing,
     handleRefresh,
     handleRequestProperties,
@@ -517,7 +476,7 @@ export default function FileTabPage({
         key: 'find-in-file',
         label: '查找',
         icon: <SearchIcon size={13} />,
-        onSelect: () => setFindOpen(true),
+        onSelect: () => { const v = getCmView(); if (v) { v.focus(); openSearchPanel(v); } },
         disabled: loading || Boolean(error) || isReadonlyEditor,
       },
       {
@@ -552,7 +511,7 @@ export default function FileTabPage({
     }
 
     return items
-  }, [activeFileSidebarPanelId, availableFileSidebarPanels, file, handleRefresh, handleRequestProperties, isMobile, isReadonlyEditor, loading, requestWorkspaceFileLocate, error, saving])
+  }, [activeFileSidebarPanelId, availableFileSidebarPanels, file, getCmView, handleRefresh, handleRequestProperties, isMobile, isReadonlyEditor, loading, requestWorkspaceFileLocate, error, saving])
 
   if (!file) {
     return (
@@ -672,9 +631,6 @@ export default function FileTabPage({
                     onDraftChange={setDraftContent}
                     onHeaderActionsChange={setEditorHeaderActions}
                     onRequestEditMode={handleEnableEditing}
-                    findRegex={findOpen ? find.regex : null}
-                    findActiveIndex={find.activeIndex}
-                    findEnabled={findOpen}
                   />
                 </div>
               )}
@@ -689,33 +645,12 @@ export default function FileTabPage({
             ) : null}
           </div>
         </WorkspacePageShell>
-        {findOpen && file && !loading && !error && !isReadonlyEditor ? (
-          <div style={findBarHostStyle}>
-            <FindInFileBar
-              query={find.query}
-              onQueryChange={find.setQuery}
-              caseSensitive={find.caseSensitive}
-              onToggleCaseSensitive={find.toggleCaseSensitive}
-              count={find.count}
-              activeIndex={find.activeIndex}
-              onNext={find.next}
-              onPrev={find.prev}
-              onClose={() => setFindOpen(false)}
-              replaceQuery={find.replaceQuery}
-              onReplaceQueryChange={find.setReplaceQuery}
-              onReplace={find.replace}
-              onReplaceAll={find.replaceAll}
-              canReplace={canEditContent}
-              isMobile={isMobile}
-            />
-          </div>
-        ) : null}
       </div>
       <PropertiesDialog
         open={propertiesOpen}
         title="属性"
         name={file?.fileName}
-        items={file ? buildFileTabPropertyItems(file, fileStat, findSourceContent) : []}
+        items={file ? buildFileTabPropertyItems(file, fileStat, openMode === "readwrite" ? draftContent : content) : []}
         onClose={() => setPropertiesOpen(false)}
       />
     </>
@@ -992,14 +927,6 @@ const editorScopeStyle: React.CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
   overflow: 'hidden',
-}
-
-const findBarHostStyle: React.CSSProperties = {
-  position: 'absolute',
-  top: 52,
-  right: 16,
-  zIndex: 30,
-  pointerEvents: 'auto',
 }
 
 const metaActionButtonStyle: React.CSSProperties = {

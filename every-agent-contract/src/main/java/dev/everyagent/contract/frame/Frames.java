@@ -9,7 +9,8 @@ import tools.jackson.databind.node.ObjectNode;
 import java.util.Map;
 
 /**
- * 控制帧(架构 §3.1)。接收侧 must-ignore:未知字段一律忽略。
+ * 控制帧(架构 §3.1):hello/welcome/sub/unsub/pub/msg/error + ping/pong 心跳帧。
+ * 接收侧 must-ignore:未知字段一律忽略。
  */
 public final class Frames {
 
@@ -21,6 +22,8 @@ public final class Frames {
     public static final String PUB = "pub";
     public static final String MSG = "msg";
     public static final String ERROR = "error";
+    public static final String PING = "ping";
+    public static final String PONG = "pong";
 
     // error codes(hub 连接级,架构 §13.4)
     public static final String E_NOT_AUTHENTICATED = "NOT_AUTHENTICATED";
@@ -34,8 +37,8 @@ public final class Frames {
     public static final String SUBSCRIBER_JOIN = "subscriber.join";
     public static final String SUBSCRIBER_LEAVE = "subscriber.leave";
 
-    /** v2:输入改走 worker 级频道(u.K.worker.<id>.input,弃 per-task input)+ 存储按用户隔离。 */
-    public static final int PROTOCOL_VERSION = 2;
+    /** v3:新增应用层 ping/pong 心跳帧。 */
+    public static final int PROTOCOL_VERSION = 3;
 
     private Frames() {
     }
@@ -76,6 +79,14 @@ public final class Frames {
     @JsonIgnoreProperties(ignoreUnknown = true)
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record ErrorFrame(String code, String detail) {
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record Ping(long ts) {
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record Pong(long ts) {
     }
 
     // ---- 发送帧构造 ----
@@ -141,6 +152,22 @@ public final class Frames {
         if (ext != null && !ext.isNull()) {
             o.set("ext", ext);
         }
+        return Json.write(o);
+    }
+
+    /** 应用层心跳帧(客户端→hub;仅空闲时探测,§4.2)。 */
+    public static String wirePing(long ts) {
+        ObjectNode o = Json.MAPPER.createObjectNode();
+        o.put("type", PING);
+        o.put("ts", ts);
+        return Json.write(o);
+    }
+
+    /** 应用层心跳应答(hub→客户端)。 */
+    public static String wirePong(long ts) {
+        ObjectNode o = Json.MAPPER.createObjectNode();
+        o.put("type", PONG);
+        o.put("ts", ts);
         return Json.write(o);
     }
 }

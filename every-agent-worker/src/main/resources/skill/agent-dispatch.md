@@ -14,15 +14,15 @@
 
 | 工具 | 关键参数 | 作用 |
 | --- | --- | --- |
-| `run_agent` | `input`（必需）、`title`（新建时必需）、`agentId`（续跑时填）、`blocking` | 派发或续跑一个子 Agent，返回 `{ agentId, status, result }` |
+| `run_agent` | `input`（必需）、`title`（新建时必需）、`agentId`（续跑时填） | 异步派发或续跑一个子 Agent，立即返回 `agentId` |
 | `wait_agents` | `agentId`（可选）、`timeoutMs`（默认 30000） | 等待子 Agent 完成；传 `agentId` 返回 `{ mode: "single", waitStatus, agent }`，不传则等待后返回 `{ mode: "list", waitStatus, agents }` |
 | `stop_agent` | `agentId`（必需） | 按 `agentId` 中止一个运行中的子 Agent |
 | `list_agents` | 无 | 列出当前任务下全部子 Agent（含 `agentId` / `title` / `status` / `latestActivity`），是 wait/stop 的 `agentId` 来源 |
 
 ## 三、派发方式
-- **阻塞派发**：`blocking: true`，等待子 Agent 结束并直接返回结果，适合必须拿到结果才能继续的步骤。
-- **异步派发**：`blocking: false`（默认），立即返回 `agentId`。彼此无依赖、不读写同一中间产物的多个子 Agent 可全部异步派发，再统一用 `wait_agents` 收集结果。
-- 你使用异步派发后，必须再用 `wait_agents` 等待完成，不可派发后不收口。
+- `run_agent` 始终异步派发，立即返回 `agentId`。
+- 彼此无依赖、不读写同一中间产物的多个子 Agent 可全部异步派发，再统一用 `wait_agents` 收集结果。
+- 你使用 `run_agent` 派发后，必须再用 `wait_agents` 等待完成，不可派发后不收口。
 
 ## 四、续跑 / 重启 / 重试
 - 你给 `run_agent` 传入已存在的 `agentId`，即在该 agent 上继续（复用其历史上下文，不重做已完成部分）；不传 `agentId` 则新建 agent 全新执行（此时 `title` 必填）。
@@ -39,4 +39,4 @@
 - `wait_agents` / `stop_agent` 的 `agentId` 应来自 `list_agents()` 返回结果，不要凭空捏造。
 - 你作为主Agent负责子Agent的管理、完成情况验收、最终任务完成情况总结，子 Agent 负责执行被明确界定的子任务。
 - 若子 Agent 有疑问你需要回答并让它继续。
-- 若想多个子Agent并行执行，则必须blocking: false，否则就算同时下发多个run_agent工具调用，也只会串行执行。
+- 多个子Agent可并行派发，同时下发多个run_agent工具调用即可并行执行。

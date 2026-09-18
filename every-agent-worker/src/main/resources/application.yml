@@ -44,15 +44,19 @@ worker:
       est-safety-ratio: 0.85     # tpm 压力触发延迟的保守余量(预到 85% 即延迟新起步)
       est-ema-alpha: 0.1         # 估算系数 EMA 学习率(越大越快贴近真实)
       wait-trace-threshold-ms: 1000   # 排队等待超过该时长(ms)发瞬态 model_rate_wait trace
-      default-rpm: 60            # 全局默认:每分钟最多发起请求数
-      default-max-concurrency: 4 # 全局默认:同时 in-flight 请求上限(长思考防重叠)
+      default-rpm: 120            # 全局默认:每分钟最多发起请求数
+      default-max-concurrency: 6 # 全局默认:同时 in-flight 请求上限(长思考防重叠)
       default-tpm: 0             # 全局默认 tpm(厂商套餐差异大,默认不启用;需者各模型显式配)
   # 危险操作授权(PermissionGate):危险命令正则/系统目录排除/授权弹窗超时;空缺用内置默认
   # 进程沙箱:单命令看门狗超时(ms);超时强杀子进程。30 分钟 = 1800000。
   # active-process-limit:Job Object 活动进程数上限(0=不限制)。默认 32。
   #   rgt 独立工具已移除,模型在沙箱 shell 内直接调 rg(子进程),此值必须 ≥2,
   #   否则 rg/cmd/where 等一切子进程都会被拒(ERROR_NOT_ENOUGH_QUOTA)。
-  # memory-limit-mb:Job Object 整棵进程树内存上限(MB);0 = 不限制。默认 512。
+  # memory-limit-mb:整棵进程树内存上限(MB);0 = 不限制。默认 512。
+  #   windows-mic = Job Object(commit 上限);WSL 后端 = cgroup v2 memory.max + swap.max=0
+  #   (真实内存占用上限;曾用 RLIMIT_AS 已弃用——它限的是虚拟地址空间,V8 指针压缩
+  #   cage 保留 4GB + 每个 Wasm memory GB 级 guard region,node fetch/vite build 等
+  #   一碰 Wasm 即崩,详见 docs/ARCHITECTURE.md §7.10)。
   #   mvn/gradle 等构建会启动 JVM,默认 JVM 堆(物理内存 1/4)很容易撞破 512MB
   #   上限报 ERROR_COMMITMENT_LIMIT(1455,『页面文件太小』)。构建任务建议调大
   #   到 4096+,并配合 MAVEN_OPTS=-Xmx 把 JVM 堆压在限内。

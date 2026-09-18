@@ -139,7 +139,11 @@ public final class WslDirectSandbox {
         payload.put("workspaces", mountPairs(allWorkspaces, cwd, props.resolveSkillsDir()));
         payload.put("network", allowNetwork ? "open" : "deny");
         payload.put("limits", Map.of(
-                "asMb", Math.max(0, cfg.getMemoryLimitMb()),
+                // memMb → cgroup v2 memory.max(runner trusted 阶段建组迁移自身,exec 后
+                // 整棵命令树在组内;真实内存占用上限)。不再用 RLIMIT_AS:它限虚拟地址
+                // 空间,V8 指针压缩 cage 保留 4GB + Wasm memory GB 级 guard region,
+                // undici/vite 等一碰 Wasm 即崩(§7.10)
+                "memMb", Math.max(0, cfg.getMemoryLimitMb()),
                 "cpuSec", timeoutSec));
 
         // runner 必须在发行版内可达:automount=false 下 /mnt/c 不存在、Windows 侧路径映射

@@ -6,5 +6,5 @@ export { TaskPacketBuffer, compareSeq } from './task-packet-buffer';
 export type { PacketFrame, PacketOperate, TaskPacket, TaskPacketUpdate } from './task-packet-buffer';
 export { TaskPacketView } from './task-packet-view';
 export type { TaskStreamEvent } from './task-packet-view';
-export type { TaskFileChangesParams, TaskPollEvent, TaskPollParams, TaskPollResult, TaskPollWireEvent, TaskRoundsParams, TaskRoundTailParams } from './task-poll';
-export { fetchTaskFileChanges, fetchTaskRounds, fetchTaskRoundTail } from './task-poll';
+export type { TaskAgentLedgerItem, TaskAgentsParams, TaskAgentsResult, TaskFileChangesParams, TaskPollEvent, TaskPollParams, TaskPollResult, TaskPollWireEvent, TaskRoundsParams, TaskRoundTailParams } from './task-poll';
+export { fetchTaskAgents, fetchTaskFileChanges, fetchTaskRounds, fetchTaskRoundTail } from './task-poll';

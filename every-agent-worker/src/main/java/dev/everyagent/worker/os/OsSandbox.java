@@ -76,9 +76,24 @@ public final class OsSandbox {
     private final WorkerProperties.Sandbox cfg;
     private final dev.everyagent.worker.modules.WorkspaceManager workspaces;
     private final boolean windows = System.getProperty("os.name").toLowerCase().contains("win");
+    /** 沙箱命令执行线程:虚拟线程,承载命令 spawn + WaitForSingleObject。管道 drain 不走此池,见 {@link #drainExec}。 */
     private final ExecutorService exec = Executors.newVirtualThreadPerTaskExecutor();
+    /**
+     * 管道读取专用平台线程池。WindowsSandbox 的 drain() 经 JNA 调用 ReadFile(native 阻塞 I/O),
+     * 虚拟线程在 native call 期间无法 unmount → 钉住 carrier → ForkJoinPool 创建新 carrier(线程膨胀)。
+     * 改用平台线程:阻塞只占一个固定线程,不触发 carrier 扩张。4 线程足够。
+     */
+    private final ExecutorService drainExec = Executors.newFixedThreadPool(4,
+            r -> { Thread t = new Thread(r, "sandbox-drain"); t.setDaemon(true); return t; });
     /** 后端解析结果(启动 @PostConstruct 即解析一次并打印,worker 生命周期内不重探;探测含冷启动 VM,代价不小)。 */
     private volatile Backend resolved;
+
+    /** 停机:关闭虚拟线程池与管道读取池。 */
+    @jakarta.annotation.PreDestroy
+    void shutdown() {
+        exec.shutdownNow();
+        drainExec.shutdownNow();
+    }
 
     public OsSandbox(WorkerProperties props,
             dev.everyagent.worker.modules.WorkspaceManager workspaces) {
@@ -361,7 +376,7 @@ public final class OsSandbox {
                     MAX_OUTPUT_CHARS, wslDirectMountRoots(), allowNetwork);
             return new ExecResult(r.stdout(), r.stderr(), r.exitCode(), r.aborted());
         }
-        return WindowsSandbox.run(command, cwd, extraEnv, cfg, exec, MAX_OUTPUT_CHARS, s,
+        return WindowsSandbox.run(command, cwd, extraEnv, cfg, exec, drainExec, MAX_OUTPUT_CHARS, s,
                 allowNetwork, allowPrivilege);
     }
 
@@ -379,7 +394,7 @@ public final class OsSandbox {
                     truncate(command, 120));
             return runDirect(command, cwd, extraEnv, s, allowNetwork);
         }
-        return WindowsSandbox.run(command, cwd, extraEnv, cfg, exec, MAX_OUTPUT_CHARS, s,
+        return WindowsSandbox.run(command, cwd, extraEnv, cfg, exec, drainExec, MAX_OUTPUT_CHARS, s,
                 allowNetwork, allowPrivilege);
     }
 

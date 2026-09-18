@@ -1,8 +1,16 @@
 import React from 'react'
-import LineNumberedSourceView from '@/components/shared/LineNumberedSourceView'
+import CodeMirrorEditor from '@/components/shared/CodeMirrorEditor'
+import { languageByPath } from '@/components/shared/codemirrorLanguages'
 import type { FileContentEditorDescriptor, FileContentEditorProps, FileContentHeaderAction } from './types'
 
-function TextFileEditor({
+/**
+ * 通用文件编辑器：CodeMirror + languageByPath 自动按扩展名加载语法。
+ *
+ * 覆盖所有代码/文本/JSON 文件类型，未匹配到语言包的扩展名以纯文本渲染（无高亮）。
+ * 查找替换由 CodeMirror 内置 @codemirror/search 承担，不使用外层 find props。
+ */
+function UniversalFileEditor({
+  file,
   mode,
   content,
   draftContent,
@@ -13,13 +21,15 @@ function TextFileEditor({
   onLineLocateApplied,
   onDraftChange,
   onHeaderActionsChange,
-  findRegex,
-  findActiveIndex,
-  findEnabled,
 }: FileContentEditorProps) {
   const [wrapLines, setWrapLines] = React.useState(true)
   const [copied, setCopied] = React.useState(false)
   const sourceContent = mode === 'readonly' ? content : draftContent
+
+  const language = React.useMemo(
+    () => languageByPath(file.filePath),
+    [file.filePath],
+  )
 
   const handleCopy = React.useCallback(async () => {
     try {
@@ -33,12 +43,12 @@ function TextFileEditor({
 
   const headerActions = React.useMemo<FileContentHeaderAction[]>(() => [
     {
-      id: 'text-copy-content',
+      id: 'universal-copy-content',
       label: copied ? '已复制' : '复制内容',
       onClick: () => { void handleCopy() },
     },
     {
-      id: 'text-wrap-lines',
+      id: 'universal-wrap-lines',
       label: wrapLines ? '自动换行' : '不换行',
       onClick: () => setWrapLines((current) => !current),
       active: wrapLines,
@@ -62,45 +72,48 @@ function TextFileEditor({
     return null
   }
 
-  if (mode === 'readonly') {
-    return (
-      <LineNumberedSourceView
-        content={content}
-        wrapLines={wrapLines}
-        lineNumber={lineNumber}
-        lineLocateRequestedAt={lineLocateRequestedAt}
-        onLineLocateApplied={onLineLocateApplied}
-        readonlyClassName="file-text-editor__source"
-        findRegex={findRegex}
-        findActiveIndex={findActiveIndex}
-        findEnabled={findEnabled}
-      />
-    )
-  }
+  const editable = mode !== 'readonly'
+  const value = editable ? draftContent : content
 
   return (
-    <LineNumberedSourceView
-      content={content}
-      editable
-      value={draftContent}
-      onChange={onDraftChange}
+    <CodeMirrorEditor
+      value={value}
+      onChange={editable ? onDraftChange : undefined}
+      editable={editable}
+      language={language}
       wrapLines={wrapLines}
       lineNumber={lineNumber}
       lineLocateRequestedAt={lineLocateRequestedAt}
       onLineLocateApplied={onLineLocateApplied}
-      findRegex={findRegex}
-      findActiveIndex={findActiveIndex}
-      findEnabled={findEnabled}
     />
   )
 }
 
 export const descriptor: FileContentEditorDescriptor = {
-  kind: 'text',
-  label: '纯文本',
-  extensions: ['.txt'],
+  kind: 'universal',
+  label: '文本',
+  /**
+   * 声明所有代码/文本/JSON 扩展名（不含 .md 和图片扩展名——它们有专用编辑器）。
+   * registry.ts 的 resolveFileContentEditorByPath 按顺序匹配，未匹配的扩展名
+   * 通过 isFallback 兜底到本编辑器（纯文本，无语法高亮）。
+   */
+  extensions: [
+    '.js', '.mjs', '.cjs',
+    '.jsx',
+    '.ts', '.tsx',
+    '.java',
+    '.go',
+    '.py',
+    '.sh', '.bash', '.zsh',
+    '.json',
+    '.sql',
+    '.yaml', '.yml',
+    '.html', '.htm', '.xml', '.vue',
+    '.css',
+    '.txt',
+  ],
   isFallback: true,
-  Component: TextFileEditor,
+  Component: UniversalFileEditor,
 }
 
-export default TextFileEditor
+export default UniversalFileEditor

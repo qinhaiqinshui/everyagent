@@ -16,6 +16,9 @@ public final class RpcMethods {
     public static final String TASK_ROUND_TAIL = "task.roundTail";
     /** 单轮文件变更全文拉取:参数 taskId+roundId,返回 file-changes/<roundId>.json 的 {changes:[...]}。 */
     public static final String TASK_FILE_CHANGES = "task.fileChanges";
+    /** 子 agent 台账一次性拉取:前端打开任务详情建子 agent 胶囊列表的唯一取数口;
+     * 台账 agents.json 独立落盘,meta.agents 仅旧任务回退。 */
+    public static final String TASK_AGENTS = "task.agents";
     public static final String TASK_CANCEL = "task.cancel";
     public static final String TASK_DELETE = "task.delete";
     /** 删除某条队列输入(参数 taskId, index)。 */

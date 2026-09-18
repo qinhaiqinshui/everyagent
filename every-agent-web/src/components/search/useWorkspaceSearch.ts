@@ -34,6 +34,8 @@ export interface WorkspaceSearchRunOptions {
   includeInternalFiles?: boolean
   /** 搜索目标：files = 工作区文件内容（默认），tasks = 任务内容。 */
   target?: 'files' | 'tasks'
+  /** 匹配维度：content = 逐行搜内容（默认），name = 仅按文件名匹配（不读内容）。仅 files 模式生效。 */
+  matchMode?: 'content' | 'name'
   /** 任务内容搜索目标 worker（仅 tasks 模式；files 模式忽略）。 */
   workerId?: string
   /** 任务所属工作区稳定 id（仅 tasks 模式；files 模式忽略）。 */
@@ -114,6 +116,8 @@ export function useWorkspaceSearch() {
   /** 结果镜像：cancel 回到「已有结果展示态」时需要读取最新结果，用 ref 旁路闭包。 */
   const resultRef = React.useRef<WorkspaceSearchResultShape | null>(result)
   resultRef.current = result
+  /** 最近完成搜索的匹配维度（摘要文案区分「结果/文件」）；与 setResult 同一轮更新，memo 以 result 变化触发重算。 */
+  const resultMatchModeRef = React.useRef<'content' | 'name'>('content')
 
   const run = React.useCallback(async (options: WorkspaceSearchRunOptions) => {
     const pattern = options.pattern.trim()
@@ -172,11 +176,13 @@ export function useWorkspaceSearch() {
         }
         return
       }
+      const matchMode = options.matchMode ?? 'content'
       let nextResult: WorkspaceContentSearchResult | null = null
       // 优先后端 fs.search：整工作区搜索且未确认该 worker 不支持时，走 worker 侧内置 rg。
       // 限定整工作区：fs.search 契约只搜工作区根（无子目录范围参数），带范围的搜索
       // （rootPath 非空）仍走纯前端 walk 路径，避免搜索范围语义漂移。
-      if (!backendSearchUnavailable && !options.rootPath) {
+      // 文件名搜索（matchMode=name）不走后端：fs.search 契约只搜内容，名称匹配由纯前端 walk + basename 完成。
+      if (matchMode !== 'name' && !backendSearchUnavailable && !options.rootPath) {
         try {
           // fs.search 路径不在前端编译正则：pattern 与开关原样透传，由 worker 侧 rg 语义
           // 解释（字面量 --fixed-strings / 全字 \b 包裹）；非法正则已在前面的预检拦下。
@@ -208,7 +214,7 @@ export function useWorkspaceSearch() {
           // glob 过滤（files to include/exclude）与结果展示都以工作区相对路径为基准（对标 VSCode）。
           rootPath: '',
           regex: built.regex,
-          matchMode: 'content',
+          matchMode,
           walkFiles: async () => {
             const paths = await walkWorkspaceFiles(
               options.workspaceRoot,
@@ -228,6 +234,7 @@ export function useWorkspaceSearch() {
         // 过期查询（已取消 / 已被新查询取代），丢弃结果。
         return
       }
+      resultMatchModeRef.current = matchMode
       setResult(nextResult)
       setStatus('done')
     } catch (runError) {
@@ -273,6 +280,10 @@ export function useWorkspaceSearch() {
       return ''
     }
     const truncatedSuffix = result.truncated ? '（已达上限，结果被截断）' : ''
+    // 文件名搜索：每个命中即一个文件，摘要以「N 个文件」表述。
+    if (resultMatchModeRef.current === 'name' && (result as WorkspaceContentSearchResult).files.every((file) => !file.matches)) {
+      return `${result.files.length} 个文件${truncatedSuffix}`
+    }
     return `${result.matchCount} 个结果 · ${result.files.length} 个文件${truncatedSuffix}`
   }, [result, status])
 

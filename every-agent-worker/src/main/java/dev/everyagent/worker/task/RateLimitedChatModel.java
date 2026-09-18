@@ -64,7 +64,14 @@ public final class RateLimitedChatModel implements ChatModel {
                 Thread.currentThread().interrupt();
                 return Flux.error(new AgentCancelledException("interrupted"));
             }
-            return delegate.stream(prompt)
+            Flux<ChatResponse> flux;
+            try {
+                flux = delegate.stream(prompt);
+            } catch (RuntimeException e) {
+                permit.cancel();
+                throw e;
+            }
+            return flux
                     .doOnNext(chunk -> {
                         // 流中:正文增量累计估算(thinking 由 reasoningContent 走 usage 记账,
                         // 正文 chunk 已能覆盖长思考时的输出方向;估算只需近似)。
@@ -83,6 +90,7 @@ public final class RateLimitedChatModel implements ChatModel {
                             permit.complete(usage.getCompletionTokens());
                         }
                     })
+                    .doOnCancel(permit::cancel)   // 下游取消(任务取消/工具打断/超时)— 修复泄漏
                     .doOnError(e -> permit.cancel())
                     .doOnComplete(() -> permit.complete(0)); // 无 usage 帧时兜底释放(不记账)
         });

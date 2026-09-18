@@ -78,9 +78,9 @@ export default function RoundFileChangesView({
   const openDiff = async (summary: RoundFileChangeSummary) => {
     let fullChanges = fullCacheRef.current.get(roundId)
     if (!fullChanges) {
-      // worker 连接与任务归属:taskStore 拿 workerId,hubSession.clientFor 拿已建立的连接。
+      // worker 连接与任务归属:taskStore 拿 workerId,hubSession.workerClient 拿已建立的连接(含重连中)。
       const workerId = taskStore.get(taskId)?.workerId
-      const client = workerId ? hubSession.clientFor(workerId) : null
+      const client = workerId ? hubSession.workerClient(workerId) : null
       if (!workerId || !client) {
         console.warn(`[RoundFileChangesView] worker 未连接,跳过拉取文件变更全文(${taskId}/round ${roundId})`)
         return

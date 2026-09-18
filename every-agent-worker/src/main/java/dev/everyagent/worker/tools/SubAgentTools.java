@@ -19,14 +19,13 @@ public class SubAgentTools {
     }
 
     @Tool(description = "派生一个子 agent 去完成一项独立子任务。子 agent 有独立上下文,看不到当前对话。"
-            + "默认阻塞等待其完成后返回结论;设 blocking=false 则异步运行。若想同时运行多个Agent，必须使用异步模式，否则多个run_agent工具将会串行运行。")
+            + "异步运行,立即返回 agentId;必须再用 wait_agents 等待完成并收集结果。若想同时运行多个Agent,可并行派发多个run_agent。")
     public String run_agent(
             @ToolParam(description = "交给子 agent 的完整任务描述(需自包含,不能引用本对话内容)") String input,
             @ToolParam(description = "简短标题", required = false) String title,
-            @ToolParam(description = "指定复用的 agentId", required = false) String agentId,
-            @ToolParam(description = "是否阻塞等待完成,默认 true", required = false) Boolean blocking) {
+            @ToolParam(description = "指定复用的 agentId", required = false) String agentId) {
         try {
-            return subs.run(task, input, title, agentId, blocking == null || blocking);
+            return subs.run(task, input, title, agentId);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new dev.everyagent.worker.task.AgentCancelledException("task cancelled");

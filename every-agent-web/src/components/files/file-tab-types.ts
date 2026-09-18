@@ -38,12 +38,6 @@ export type FileContentEditorProps = {
   onHeaderActionsChange?: (actions: FileContentHeaderAction[]) => void
   /** 编辑器在只读态请求进入可编辑态（由外壳处理文件标签模式切换）。 */
   onRequestEditMode?: () => void
-  /** 文件内查找正则（带 g 标志）；为空表示未启用查找。用于可编辑态（textarea）的高亮叠层。 */
-  findRegex?: RegExp | null
-  /** 当前命中序号（0-based），用于标亮「当前」匹配。 */
-  findActiveIndex?: number
-  /** 是否启用查找高亮（查找条打开为 true）。只读态由外层 useHighlightMatches 负责，这里仅驱动可编辑叠层。 */
-  findEnabled?: boolean
 }
 
 /**

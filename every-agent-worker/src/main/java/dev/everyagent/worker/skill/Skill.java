@@ -32,11 +32,16 @@ public record Skill(
         String description,
 
         /**
-         * 知识包路径,<b>绝对路径</b>(如 {@code C:\Users\...\.everyagent\skills\agent-dispatch.md})。
+         * 知识包路径,<b>宿主绝对路径</b>(如 {@code C:\Users\...\.everyagent\skills\agent-dispatch.md})。
          * 指向 {@code classpath:skill/<id>.md} 物化到系统技能目录后的位置,AI 按需用
          * {@code read_file} 读取,不随 system prompt 全量注入。系统技能目录是系统目录中
          * 对 AI 文件工具唯一只读开放的子目录(PermissionGate READ 窄例外 + Sandbox 只读附加根),
          * 写操作仍硬拒。
+         *
+         * <p>注入 system prompt 时由 {@link SkillAdvisor} 按当前沙箱后端解析为 AI 可见路径:
+         * WSL 系列沙箱下翻译为 {@code /} 开头的沙箱内路径(wsl-direct=/c/...、wsl-bwrap=/mnt/c/...),
+         * 使 AI 的 bash({@code cat}/{@code grep})与 {@code read_file}(经 FsToolSupport 反向翻译)
+         * 均可直接使用;非 WSL 后端原样注入宿主路径。
          */
         String knowledgePath,
 
@@ -50,7 +55,18 @@ public record Skill(
 
     /** 渐进式披露条目:标题 + 一句话描述 + 知识包路径,不含方法论正文。 */
     public String toSystemText() {
+        return toSystemText(knowledgePath);
+    }
+
+    /**
+     * 渐进式披露条目(指定知识包路径):用于 WSL 等沙箱环境下注入沙箱内可见路径,
+     * 使 AI 的 {@code bash}({@code cat}/{@code grep})与 {@code read_file} 均可直接使用。
+     *
+     * @param resolvedKnowledgePath 解析后的知识包路径(WSL 沙箱 = /mnt/c/... 或 /c/...;
+     *        非 WSL = 原始宿主路径)
+     */
+    public String toSystemText(String resolvedKnowledgePath) {
         return "- **" + title + "**(`" + id + "`):" + description
-                + " 完整方法论在: `" + knowledgePath;
+                + " 完整方法论在: `" + resolvedKnowledgePath + "`";
     }
 }

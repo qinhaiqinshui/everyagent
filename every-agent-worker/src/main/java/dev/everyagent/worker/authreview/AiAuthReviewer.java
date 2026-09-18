@@ -50,7 +50,7 @@ import java.util.concurrent.TimeoutException;
  *
  * <p>载体:内部构造一个轻量「审议 AgentEntity」(空 tools、conversation=[独立审议 system
  * prompt, 授权信息 user]、agentId=review-&lt;shortId&gt;、options=审议超时快照),<b>仅作
- * advisor 载体</b>:不进 {@code t.subs} / {@code t.agentLedger} / 不随 meta.json 序列化,
+ * advisor 载体</b>:不进 {@code t.subs} / {@code t.agentLedger} / 不随 agents.json 落盘,
  * 不新建 TaskEntry/EventLog。
  *
  * <p>时效双层控制:<ul>
@@ -195,7 +195,7 @@ public class AiAuthReviewer {
 
     /**
      * 构建轻量「审议 AgentEntity」:空 tools、独立 conversation,仅作 advisor 载体——
-     * 不进 t.subs / t.agentLedger / 不随 meta.json 序列化,不新建 TaskEntry/EventLog。
+     * 不进 t.subs / t.agentLedger / 不随 agents.json 落盘,不新建 TaskEntry/EventLog。
      * package-private 供单测断言「无任何工具」与独立 system prompt。
      */
     AgentEntity buildReviewEntity(TaskEntry t, String reviewAgentId, OpenAiChatOptions reviewOptions,

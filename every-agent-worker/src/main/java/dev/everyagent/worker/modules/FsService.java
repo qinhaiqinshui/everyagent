@@ -47,12 +47,15 @@ public class FsService {
     private final WorkspaceManager workspaces;
     private final HubPool pool;
     private final WorkerProperties props;
+    /** 系统技能目录只读附加根解析(skills 读免授权,§13.8;只读操作消费)。 */
+    private final SkillsReadonlyRoots skillsReadonlyRoots;
 
     public FsService(RpcDispatcher dispatcher, WorkspaceManager workspaces, HubPool pool,
             WorkerProperties props) {
         this.workspaces = workspaces;
         this.pool = pool;
         this.props = props;
+        this.skillsReadonlyRoots = new SkillsReadonlyRoots(props);
 
         dispatcher.register(RpcMethods.FS_LIST, this::list);
         dispatcher.register(RpcMethods.FS_REVEAL, this::reveal);
@@ -68,7 +71,7 @@ public class FsService {
     // ---- 方法实现 ----
 
     private void list(RpcContext ctx) throws IOException {
-        Sandbox sb = sandbox(ctx);
+        Sandbox sb = readSandbox(ctx);
         Path dir = sb.resolveExisting(ctx.optStrParam("path", "."));
         if (!Files.isDirectory(dir)) {
             throw new NotFoundException("不是目录: " + ctx.optStrParam("path", "."));
@@ -150,7 +153,7 @@ public class FsService {
      * 目标不存在抛 NotFoundException;路径畸形(中间段为文件)时链上如实标记。
      */
     private void reveal(RpcContext ctx) throws IOException {
-        Sandbox sb = sandbox(ctx);
+        Sandbox sb = readSandbox(ctx);
         String rel = ctx.strParam("path");
         Path target = sb.resolveExisting(rel); // 校验存在 + 沙箱(realpath 形式)
         Path root = sb.root();
@@ -173,14 +176,14 @@ public class FsService {
      * 远程访问场景窗口在 worker 所在电脑上弹出;无桌面环境时 IO 异常转 RPC 错误。
      */
     private void revealInOs(RpcContext ctx) throws IOException {
-        Sandbox sb = sandbox(ctx);
+        Sandbox sb = readSandbox(ctx);
         Path target = sb.resolveExisting(ctx.strParam("path"));
         OsReveal.reveal(target);
         ctx.ok(Json.obj().put("path", sb.display(target)));
     }
 
     private void read(RpcContext ctx) throws IOException {
-        Sandbox sb = sandbox(ctx);
+        Sandbox sb = readSandbox(ctx);
         Path file = sb.resolveExisting(ctx.strParam("path"));
         if (!Files.isRegularFile(file)) {
             throw new NotFoundException("不是文件: " + ctx.strParam("path"));
@@ -252,9 +255,26 @@ public class FsService {
 
     // ---- 内部 ----
 
-    /** 按调用的 workspace 参数(必填)绑定沙箱。 */
+    /**
+     * 只读操作(read/list/reveal)沙箱:工作区根 + 该工作区外部授权根(externalRoots,
+     * 用户显式选择=已授权,§7.17)+ 系统技能目录只读根(skills 读免授权,§13.8)。
+     * 前端「打开文件」标签页读取 AI 已读的 skill/外部授权文件时经此放行,与 read_file 同源。
+     */
+    private Sandbox readSandbox(RpcContext ctx) throws IOException {
+        WorkspaceManager.Root root = workspaces.resolve(ctx.strParam("workspace"));
+        List<Path> roots = new ArrayList<>(workspaces.externalRootsOf(root.path().toString()));
+        roots.addAll(skillsReadonlyRoots.get());
+        return new Sandbox(root, roots);
+    }
+
+    /**
+     * 写操作(write/mkdir/move/delete)沙箱:工作区根 + 外部授权根(externalRoots 语义 =
+     * 完全读写,§7.17)。系统技能目录只读根<b>不并入</b>——skills 只读免授权,写不开放(§13.8)。
+     */
     private Sandbox sandbox(RpcContext ctx) throws IOException {
-        return new Sandbox(workspaces.resolve(ctx.strParam("workspace")));
+        WorkspaceManager.Root root = workspaces.resolve(ctx.strParam("workspace"));
+        List<Path> roots = new ArrayList<>(workspaces.externalRootsOf(root.path().toString()));
+        return new Sandbox(root, roots);
     }
 
     private static byte[] decode(String base64) {

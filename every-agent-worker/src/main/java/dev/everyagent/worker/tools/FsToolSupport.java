@@ -4,6 +4,7 @@ import dev.everyagent.contract.json.Json;
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.hub.HubPool;
 import dev.everyagent.worker.modules.Sandbox;
+import dev.everyagent.worker.modules.SkillsReadonlyRoots;
 import dev.everyagent.worker.modules.WorkspaceManager;
 import dev.everyagent.worker.os.OsSandbox;
 import dev.everyagent.worker.os.wsl.WslBwrapSandbox;
@@ -51,8 +52,8 @@ public class FsToolSupport {
     private final PermissionGate gate;
     private final OsSandbox osSandbox;
 
-    /** 系统技能目录只读附加根缓存(skills 读免授权,§13.8;懒解析)。 */
-    private volatile List<Path> skillsReadonlyRoots;
+    /** 系统技能目录只读附加根解析(skills 读免授权,§13.8;懒解析、共享实现)。 */
+    private final SkillsReadonlyRoots skillsReadonlyRoots;
 
     public FsToolSupport(WorkspaceManager workspaces, WorkerProperties props, HubPool pool,
             PermissionGate gate) {
@@ -68,6 +69,7 @@ public class FsToolSupport {
         this.pool = pool;
         this.gate = gate;
         this.osSandbox = osSandbox;
+        this.skillsReadonlyRoots = new SkillsReadonlyRoots(props);
     }
 
     /** 目录列举条目(路径为相对工作区根、'/' 分隔的显示名)。 */
@@ -103,42 +105,8 @@ public class FsToolSupport {
                 roots.add(ext); // externalRoots 为 realpath 形态,与授权根重叠时去重
             }
         }
-        roots.addAll(skillsReadonlyRoots());
+        roots.addAll(skillsReadonlyRoots.get());
         return new Sandbox(workspaces.resolve(t.workspaceRoot), roots);
-    }
-
-    /**
-     * 系统技能目录只读附加根(realpath + 词法形态)。
-     *
-     * <p>解析成功后缓存(目录不会在运行期移动);<b>失败不缓存</b>——技能目录尚未物化
-     * (BuiltInSkills.materialize 失败/延迟)时返回空列表,但不写入缓存,下次调用重试,
-     * 使「物化晚于首次使用」能自愈(否则会永久缓存空根,直到 worker 重启)。
-     */
-    private List<Path> skillsReadonlyRoots() {
-        List<Path> cached = skillsReadonlyRoots;
-        if (cached != null) {
-            return cached;
-        }
-        synchronized (this) {
-            if (skillsReadonlyRoots != null) {
-                return skillsReadonlyRoots;
-            }
-            Path lexical = props.resolveSkillsDir();
-            try {
-                Path real = lexical.toRealPath();
-                List<Path> built = new ArrayList<>();
-                built.add(real);
-                if (!real.equals(lexical)) {
-                    built.add(lexical);
-                }
-                skillsReadonlyRoots = List.copyOf(built); // 仅成功才缓存
-                return skillsReadonlyRoots;
-            } catch (IOException e) {
-                // 技能目录尚未物化:不加根(其下路径本就按 NotFound 报错),不阻断;
-                // 不缓存空结果,使后续物化可自愈
-                return List.of();
-            }
-        }
     }
 
     /**
@@ -187,7 +155,7 @@ public class FsToolSupport {
         allRoots.add(wsRoot);
         allRoots.addAll(workspaces.externalRootsOf(t.workspaceRoot));
         allRoots.addAll(gate.extraRoots(t.taskId));
-        allRoots.addAll(skillsReadonlyRoots());
+        allRoots.addAll(skillsReadonlyRoots.get());
         allRoots.sort((a, b) -> b.toString().length() - a.toString().length());
 
         for (Path root : allRoots) {

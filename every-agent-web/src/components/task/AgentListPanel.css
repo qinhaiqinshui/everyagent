@@ -132,3 +132,208 @@
     animation: none;
   }
 }
+
+/* ===== 子 agent 胶囊底部上下文用量线 ===== */
+/* 绝对定位贴胶囊下边缘:父 .nagent-agent 已有 overflow:hidden + border-radius:999px,
+   绝对定位子元素天然被裁剪——线自身不做任何越出父边缘的偏移,100% 时 width:100%
+   铺满下边框、两端被父圆角裁掉形成贴合弧线(视觉上线长=下边框长度);自身也圆头
+   (border-radius:999px)避免 100% 时两端尖角感。档位色与 ContextBattery 一致。 */
+.nagent-agent__usage {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 2px;
+  min-width: 2px; /* 有用量时至少可见 */
+  border-radius: 999px;
+  pointer-events: none;
+}
+
+.nagent-agent__usage--ok {
+  background: var(--accent-green);
+}
+
+.nagent-agent__usage--warn {
+  background: var(--accent-amber);
+}
+
+.nagent-agent__usage--danger {
+  background: var(--accent-red);
+}
+
+/* ===== agent 悬停信息卡(portal 到 body,风格对齐 .ctx-battery__popover) ===== */
+.nagent-agent-card {
+  z-index: 50;
+  width: 260px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  background: var(--bg-elevated);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.3);
+  color: var(--text-primary);
+  font-size: var(--text-xs);
+}
+
+.nagent-agent-card__head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+  min-width: 0;
+}
+
+.nagent-agent-card__dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-muted);
+}
+
+.nagent-agent-card__dot--running {
+  background: var(--accent-blue);
+}
+
+.nagent-agent-card__dot--waiting-user {
+  background: var(--accent-amber);
+}
+
+.nagent-agent-card__dot--completed {
+  background: var(--accent-green);
+}
+
+.nagent-agent-card__dot--error {
+  background: var(--accent-red);
+}
+
+.nagent-agent-card__dot--stopped,
+.nagent-agent-card__dot--idle {
+  background: var(--text-muted);
+}
+
+.nagent-agent-card__id {
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.nagent-agent-card__badge {
+  flex: none;
+  padding: 1px 6px;
+  border: 1px solid var(--border-light);
+  border-radius: 999px;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.nagent-agent-card__title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-muted);
+}
+
+.nagent-agent-card__rows {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin: 0;
+}
+
+.nagent-agent-card__row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.nagent-agent-card__row dt {
+  flex: none;
+  margin: 0;
+  color: var(--text-muted);
+}
+
+.nagent-agent-card__row dd {
+  margin: 0;
+  min-width: 0;
+  text-align: right;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  word-break: break-word;
+}
+
+/* 完整 agentId:等宽字体、可折行(左对齐,超长换行不挤爆卡宽) */
+.nagent-agent-card__row--id dd {
+  flex: 1;
+  text-align: left;
+  font-family: var(--font-mono);
+  font-weight: 500;
+  word-break: break-all;
+}
+
+.nagent-agent-card__ellip {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nagent-agent-card__context {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-light);
+}
+
+.nagent-agent-card__context--empty {
+  color: var(--text-muted);
+}
+
+.nagent-agent-card__context-label {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.nagent-agent-card__context-label > span:first-child {
+  color: var(--text-muted);
+}
+
+.nagent-agent-card__context-label > span:last-child {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.nagent-agent-card__bar {
+  margin-top: 5px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--bg-tertiary);
+  overflow: hidden;
+}
+
+.nagent-agent-card__bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+}
+
+.nagent-agent-card__bar-fill--ok {
+  background: var(--accent-green);
+}
+
+.nagent-agent-card__bar-fill--warn {
+  background: var(--accent-amber);
+}
+
+.nagent-agent-card__bar-fill--danger {
+  background: var(--accent-red);
+}
+
+/* 窄屏收窄以免超出视口;定位由组件内联 fixed 负责,此处不声明位置属性 */
+@media (max-width: 768px) {
+  .nagent-agent-card {
+    max-width: calc(100vw - 16px);
+  }
+}

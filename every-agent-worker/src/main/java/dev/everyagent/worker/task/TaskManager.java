@@ -105,7 +105,7 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
     private final Map<String, IdemEntry> idem = new ConcurrentHashMap<>();
     private final AtomicInteger active = new AtomicInteger();
     private final java.util.concurrent.ExecutorService vt = Executors.newVirtualThreadPerTaskExecutor();
-    /** 运行中任务 agent 台账定时持久化(agent 元数据随 meta.json 落盘,崩溃不丢)。 */
+    /** 运行中任务 agent 台账定时持久化(台账随 agents.json 落盘,崩溃不丢)。 */
     private final java.util.concurrent.ScheduledExecutorService agentMetaScheduler =
             java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
     /** 再运行监听器(DataPusherManager 注册:新 TaskEntry 入表后唤醒该任务的定向推送器)。 */
@@ -271,6 +271,7 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
         dispatcher.register(RpcMethods.TASK_ROUNDS, this::rpcTaskRounds);
         dispatcher.register(RpcMethods.TASK_ROUND_TAIL, this::rpcTaskRoundTail);
         dispatcher.register(RpcMethods.TASK_FILE_CHANGES, this::rpcTaskFileChanges);
+        dispatcher.register(RpcMethods.TASK_AGENTS, this::rpcTaskAgents);
         dispatcher.register(RpcMethods.TASK_RUN, this::rpcTaskRun);
         dispatcher.register(RpcMethods.TASK_CANCEL, this::rpcTaskCancel);
         dispatcher.register(RpcMethods.TASK_DELETE, this::rpcTaskDelete);
@@ -658,6 +659,65 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
         JsonNode full = store.readRoundFileChanges(taskId, roundId);
         JsonNode changes = full == null ? Json.arr() : full.path("changes");
         ctx.ok(Json.obj().set("changes", changes));
+    }
+
+    /**
+     * task.agents:子 agent 台账一次性拉取(前端打开任务详情、建子 agent 胶囊列表的唯一取数口;
+     * 台账 agents.json 独立落盘,meta.agents 仅旧任务回退)。
+     * 参数:taskId 必填(缺失/空 → BAD_PARAMS,与 task.rounds 同口径)。应答 {agents, mainAgentId}:
+     * <ul>
+     * <li>agents = 子 agent 台账数组,每项即 AgentEntity.toSummary() 形状(agentId/kind/title/
+     *     createdAt/status/latestActivity/usage 累计/lastText/context 最近一轮上下文快照,字段可选省略);
+     *     live 任务(内存驻留,含终态 finish 窗口)取内存 ledger(活实体已实时刷新);
+     *     磁盘路径 agents.json 优先,无文件回退 meta.agents(旧任务兼容,只读),再无则空数组 []
+     *     (非 null);按 createdAt 升序稳定排序(与 SubAgentManager.agentsJson 同口径);</li>
+     * <li>mainAgentId:live 取内存字段,否则 meta.mainAgentId,缺失输出 "";</li>
+     * <li>组装前一律 deepCopy(磁盘缓存/meta 与内存 ledger 均为共享引用,严禁原地改;
+     *     内存台账还被 sub 线程实时改写,深拷贝同时消除序列化竞态),排序在拷贝后的列表上做;
+     *     readAgents/readMeta 内部已吞 IO 异常(null 容错),此处无抛 IO 路径。</li>
+     * </ul>
+     */
+    private void rpcTaskAgents(RpcContext ctx) {
+        String taskId = ctx.strParam("taskId");
+        // 存在性:与 task.poll / task.rounds 同口径(目录在盘 或 内存任务/磁盘索引可见任一即存在)
+        boolean known = store.taskDirExists(taskId) || tasks.containsKey(taskId) || diskTasks.containsKey(taskId);
+        if (!known) {
+            ctx.err(Rpc.ERR_NOT_FOUND, "task 不存在: " + taskId);
+            return;
+        }
+        String mainAgentId;
+        List<ObjectNode> agents = new ArrayList<>();
+        TaskEntry live = tasks.get(taskId);
+        if (live != null) {
+            mainAgentId = live.mainAgentId;
+            for (ObjectNode a : live.agentLedger.values()) {
+                agents.add(a.deepCopy()); // 内存台账被 sub 线程实时改写,深拷贝防序列化竞态
+            }
+        } else {
+            Path dir = store.dirOf(taskId); // known → 已登记或已 scan,dirOf 不抛
+            ObjectNode meta = store.readMeta(dir); // 自带容错(缺失/损坏返回 null)
+            mainAgentId = meta == null ? "" : meta.path("mainAgentId").asString("");
+            List<ObjectNode> disk = store.readAgents(dir); // null = 无文件/损坏 → 回退 meta.agents
+            if (disk == null) {
+                JsonNode legacy = meta == null ? null : meta.path("agents"); // 旧格式:台账随 meta.json 落盘
+                if (legacy != null && legacy.isArray()) {
+                    for (JsonNode a : legacy) {
+                        if (a.isObject()) {
+                            agents.add(((ObjectNode) a).deepCopy());
+                        }
+                    }
+                }
+            } else {
+                for (ObjectNode a : disk) {
+                    agents.add(a.deepCopy()); // 磁盘缓存共享引用,严禁原地修改
+                }
+            }
+        }
+        agents.sort(Comparator.comparingLong(a -> a.path("createdAt").asLong(0))); // 升序稳定排序(同 agentsJson 口径)
+        ArrayNode arr = Json.arr();
+        agents.forEach(arr::add);
+        ctx.ok(Json.obj().set("agents", arr)
+                .put("mainAgentId", mainAgentId == null ? "" : mainAgentId));
     }
 
     /**
@@ -1436,7 +1496,7 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
         t.networkBlocked = meta.path("networkBlocked").asBoolean(false); // 禁网开关任务级(/禁用网络)
         t.powershellEnabled = meta.path("powershellEnabled").asBoolean(false); // 启用 powershell 开关任务级(/启用powershell)
         t.seedUsageMeta(meta.path("usage")); // 恢复最近一轮上下文用量(续跑后列表/电池数据不丢)
-        restoreAgentLedger(t, meta); // 恢复子 agent 台账(冷启动后 list_agents/wait_agents 正常)
+        restoreAgentLedger(t, st.dir(), meta); // 恢复子 agent 台账(agents.json 优先,旧 meta 回退)
         // slash 任务级 token 回读(仅 slash 层存储、业务方不读;随 meta.json 落盘,冷启动续跑恢复)。
         // 在 store.track 之前完成 add,确保首落盘 meta 含 slashTaskTokens。
         JsonNode tt = meta.path("slashTaskTokens");
@@ -1702,6 +1762,7 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
                 log.warn("终态队列落盘失败 task={}(悬空队列丢弃)", t.taskId, e);
             }
             store.updateMeta(t.taskId);
+            store.writeAgents(t.taskId, t.agentLedger.values()); // 台账终态最终快照(空台账清残留文件)
             diskTasks.put(t.taskId, new TaskStore.StoredTask(t.taskId,
                     store.dirOf(t.taskId), t.summaryJson(), t.workspaceId));
             store.untrack(t.taskId);
@@ -1750,26 +1811,24 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
     }
 
     /**
-     * 注入 agent 台账持久化钩子:SubAgentManager 在子 agent 创建/终态收口时触发,
-     * 把最新 agent 元数据写盘(崩溃后冷启动可恢复台账)。终态后不再触发(finish 统一落盘)。
-     * fire-and-forget:失败不影响任务线程。
+     * 注入 agent 台账持久化钩子:SubAgentManager 在子 agent 创建/终态收口、
+     * WorkerToolEventAdvisor 在每轮 usage 后触发,把最新台账写 agents.json
+     * (独立于 meta.json 落盘,减轻任务列表数据;崩溃后冷启动可恢复台账)。
+     * 终态后不再触发(finish 统一落盘);fire-and-forget:失败不影响任务线程。
      */
     private void wireAgentPersist(TaskEntry t) {
         t.persistHook = () -> {
             if (t.status.terminal()) {
                 return;
             }
-            try {
-                store.updateMeta(t.taskId);
-            } catch (RuntimeException e) {
-                log.debug("agent 台账持久化失败 task={}", t.taskId, e);
-            }
+            store.writeAgents(t.taskId, t.agentLedger.values()); // 失败仅 warn,不抛
         };
     }
 
     /**
-     * 定时持久化运行中任务的 agent 台账(每 30s,见 init):agent 元数据随 meta.json 落盘,
-     * worker 崩溃/重启后可恢复,冷启动后 list_agents/wait_agents 仍能看到历史子 agent。
+     * 定时持久化运行中任务的 agent 台账(每 30s,见 init):台账写 agents.json
+     * (独立于 meta.json 落盘),worker 崩溃/重启后可恢复,
+     * 冷启动后 list_agents/wait_agents 仍能看到历史子 agent。
      */
     private void persistAgentLedgers() {
         for (TaskEntry t : tasks.values()) {
@@ -1779,33 +1838,37 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
             if (t.agentLedger.isEmpty()) {
                 continue; // 无子 agent,无需写
             }
-            try {
-                store.updateMeta(t.taskId);
-            } catch (RuntimeException e) {
-                log.debug("agent 台账定时持久化失败 task={}", t.taskId, e);
-            }
+            store.writeAgents(t.taskId, t.agentLedger.values()); // 失败仅 warn,不抛
         }
     }
 
     /**
-     * 冷启动续跑:从 meta.json 的 agents 数组恢复子 agent 台账。
+     * 冷启动续跑:恢复子 agent 台账——优先 agents.json(台账独立落盘),文件不存在时
+     * 回退 meta.json 的 agents 数组(旧任务兼容,只读、不回写 meta)。
      * 重启后内存无活实体,运行中/waiting-user 的 agent 统一视为 stopped(worker 重启中断),
      * 保持 list_agents/wait_agents 契约的终态语义。
+     * 包级可见:AgentLedgerTest 直接构造调用(仅依赖 store 与 TaskEntry,无 Spring 上下文)。
      */
-    private void restoreAgentLedger(TaskEntry t, JsonNode meta) {
-        JsonNode agents = meta.path("agents");
-        if (!agents.isArray()) {
-            return;
-        }
-        for (JsonNode a : agents) {
-            if (!a.isObject()) {
-                continue;
+    void restoreAgentLedger(TaskEntry t, Path dir, JsonNode meta) {
+        List<ObjectNode> agents = store.readAgents(dir);
+        if (agents == null) {
+            JsonNode legacy = meta.path("agents"); // 旧格式:台账随 meta.json 落盘
+            if (!legacy.isArray()) {
+                return;
             }
+            agents = new ArrayList<>();
+            for (JsonNode a : legacy) {
+                if (a.isObject()) {
+                    agents.add((ObjectNode) a);
+                }
+            }
+        }
+        for (ObjectNode a : agents) {
             String id = a.path("agentId").asString("");
             if (id.isEmpty()) {
                 continue;
             }
-            ObjectNode copy = ((ObjectNode) a).deepCopy(); // 共享引用,严禁原地修改
+            ObjectNode copy = a.deepCopy(); // 共享引用,严禁原地修改
             String st = copy.path("status").asString("");
             if ("running".equals(st) || "waiting-user".equals(st)) {
                 copy.put("status", "stopped");
