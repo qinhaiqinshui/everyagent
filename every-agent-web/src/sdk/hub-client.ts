@@ -259,6 +259,9 @@ export class HubClient {
   /**
    * 对指定 worker 发 RPC:先确保已 sub 其 evt 频道,再向 cmd 频道发 rpc。
    * 返回 rpc.ok 的 result;rpc.err 抛 RpcError;rpc.data 经 onData 流式回调。
+   *
+   * 重连期间:不拒绝,而是将 RPC 入 pendingRpc 队列(sub 加入 desiredSubs),
+   * 等 welcome 后 replayPendingRpcs 统一重放——业务层全程无感知。
    */
   rpc(
     workerId: string,
@@ -270,10 +273,11 @@ export class HubClient {
       onProgress?: (message: string, pct?: number) => void;
     },
   ): Promise<any> {
-    if (!this.ws || this.stateValue !== 'open') {
+    if (this.manualClose) {
       return Promise.reject(new Error('hub 未连接'));
     }
-    // §6.1 订阅次序约束:先 evt 再 cmd
+    // §6.1 订阅次序约束:先 evt 再 cmd。
+    // sub 在重连期间只加入 desiredSubs(不发),welcome 后统一重订阅,再重放 RPC。
     this.sub(channels.workerEvt(this.k, workerId));
     const reqId = `req-${++this.reqSeq}`;
     const timeoutMs = opts?.timeoutMs ?? this.opts.rpcTimeoutMs;
@@ -293,7 +297,10 @@ export class HubClient {
         params,
         timeoutMs,
       });
-      this.pub(channels.workerCmd(this.k, workerId), 'rpc', { reqId, method, params });
+      // 已连接:立即发送;重连中:入队等待 welcome 后 replayPendingRpcs 重放。
+      if (this.ws && this.stateValue === 'open') {
+        this.pub(channels.workerCmd(this.k, workerId), 'rpc', { reqId, method, params });
+      }
     });
   }
 

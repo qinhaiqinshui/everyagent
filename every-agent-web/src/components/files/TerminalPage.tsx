@@ -167,7 +167,7 @@ export default function TerminalPage({ tab }: TerminalPageProps) {
     const container = containerRef.current
     if (!container) return
 
-    const client = hubSession.clientFor(tab.workerId)
+    const client = hubSession.workerClient(tab.workerId)
     if (!client) {
       setErrorText('worker 未连接,无法打开终端(请检查 worker 在线状态与 apiKey 配置)')
       return

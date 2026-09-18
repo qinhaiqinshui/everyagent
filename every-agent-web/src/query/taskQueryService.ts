@@ -237,7 +237,7 @@ export const taskQueryService = {
       if (!ownerWorkerId) {
         throw new Error('无法确定任务所属 worker(任务数据不可用)')
       }
-      const client = hubSession.clientFor(ownerWorkerId)
+      const client = hubSession.workerClient(ownerWorkerId)
       if (!client) {
         throw new Error('worker ' + ownerWorkerId + ' 未连接')
       }

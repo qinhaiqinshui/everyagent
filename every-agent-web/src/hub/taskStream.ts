@@ -141,7 +141,7 @@ class ManagedStream {
   }
 
   ensureView(): TaskPacketView {
-    const client = hubSession.clientFor(this.workerId)
+    const client = hubSession.workerClient(this.workerId)
     if (!client) throw new Error('worker ' + this.workerId + ' 未连接')
     if (this.view && this.boundClient === client) {
       return this.view
@@ -312,7 +312,7 @@ class ManagedStream {
    * 拉,由 TaskRoundsPanel 常开视图懒加载。完成后 50ms 合并通知一次。
    */
   private async loadRoundsIntoFolder(): Promise<void> {
-    const client = hubSession.clientFor(this.workerId)
+    const client = hubSession.workerClient(this.workerId)
     if (!client) return
     const res = await fetchTaskRounds(client, this.workerId, { taskId: this.taskId })
     this.rounds = res

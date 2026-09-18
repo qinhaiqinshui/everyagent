@@ -224,6 +224,17 @@ class HubSession {
     return c && c.state === 'open' ? c : null
   }
 
+  /**
+   * 指定 worker 的连接(已建立,不论连接态;重连中也可用于 RPC 排队)。
+   * 与 clientFor 的区别:不要求 state === 'open'——重连期间的 HubClient 仍可
+   * 接受 RPC(入 pendingRpc 队列,等 welcome 后重放),不向业务层抛错误。
+   * 仅排除 null(不存在)和 'closed'(已手动断开,无重连可能)。
+   */
+  workerClient(workerId: string): HubClient | null {
+    const c = this.workerClients.get(workerId)
+    return c && c.state !== 'closed' ? c : null
+  }
+
   // ---- 配置 ----
 
   async applyConfig(config: HubConnectionConfig): Promise<void> {
@@ -337,14 +348,15 @@ class HubSession {
 
   // ---- RPC ----
 
-  /** 对指定 worker 发 RPC(RPC 一律显式指定目标 worker,任务流按任务归属 worker 定向)。 */
+  /** 对指定 worker 发 RPC(RPC 一律显式指定目标 worker,任务流按任务归属 worker 定向)。
+   *  重连期间:RPC 在 HubClient 层入队等待重放,不向业务层抛「未连接」错误。 */
   rpcTo(
     workerId: string,
     method: string,
     params?: Record<string, unknown>,
     opts?: { timeoutMs?: number; onData?: (batch: any[], hasMore: boolean) => void },
   ): Promise<any> {
-    const client = this.clientFor(workerId)
+    const client = this.workerClient(workerId)
     if (!client) {
       return Promise.reject(new Error('worker ' + workerId + ' 未连接'))
     }
