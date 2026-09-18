@@ -522,6 +522,11 @@ export class HubClient {
   }
 
   private backoffMs(attempt: number): number {
+    // attempt 0 = 首试零退避:心跳判死属于「主动检测发现」,此刻网络往往是好的
+    // (关屏/锁屏场景),立即重连可把重连模态框压到 ~1s。失败后才进入指数退避。
+    if (attempt <= 0) {
+      return 0;
+    }
     const { initial, max } = this.opts.backoff ?? { initial: 3000, max: 60_000 };
     const exp = Math.min(max, initial * 2 ** attempt);
     return Math.round(exp * (0.8 + Math.random() * 0.4)); // 抖动
