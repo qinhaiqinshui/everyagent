@@ -1,10 +1,10 @@
 import React from 'react'
-import { Tree, Tooltip, theme } from 'antd'
-import type { TreeDataNode } from 'antd'
+import { Dropdown, Tree, Tooltip, theme } from 'antd'
+import type { MenuProps, TreeDataNode } from 'antd'
+import type { AlignType } from '@rc-component/trigger'
 import { ChevronDownIcon, ChevronRightIcon, FolderIcon } from '../shared/AppGlyphs'
 import { FileTypeIcon } from '../shared/FileTypeGlyphs'
 import type { ListRowActionItem } from '../shared/ui/ListRowActions'
-import { MenuList, type MenuListAnchorPoint } from '../shared/ui/Menu'
 import { Checkbox } from '../shared/ui'
 import { useResponsiveViewport } from '@/hooks/useResponsiveViewport'
 import { useLongPress } from '@/hooks/useLongPress'
@@ -15,6 +15,10 @@ import type {
 } from '@/types/workspaceExplorer'
 
 const { useToken } = theme
+
+/** 菜单项行高(antd 默认) + 上下 padding,用于预估菜单高度。 */
+const MENU_ITEM_HEIGHT = 32
+const MENU_PADDING = 8
 
 export default function WorkspaceExplorerTree({
   workspaceRoot,
@@ -126,15 +130,15 @@ export default function WorkspaceExplorerTree({
           },
         ]
       : customItems
-    // 树行右键菜单改为项目自定义 MenuList(自带视口感知定位),不再走 antd Dropdown,
-    // 彻底避免 antd 自动翻转/对齐逻辑导致的位置不可预期问题。
-    const menuItems = allItems.map((item) => ({
+    // 树行右键菜单统一走 antd Dropdown(trigger=contextMenu)：把自定义动作项映射成 antd Menu items，
+    // 由 antd 负责弹层定位/关闭/键盘等，业务动作仍通过原 onSelect 回调触发(目标即当前行 target)。
+    const menuItems: MenuProps['items'] = allItems.map((item) => ({
       key: item.key,
       label: item.label,
       icon: item.icon,
       danger: item.danger,
       disabled: item.disabled,
-      onSelect: () => item.onSelect?.(),
+      onClick: () => item.onSelect?.(),
     }))
 
     return (
@@ -220,11 +224,11 @@ export default function WorkspaceExplorerTree({
 }
 
 /**
- * 单行树节点主体：每行独立持有 open(菜单开关)/长按状态，右键菜单用项目自定义 MenuList 实现。
+ * 单行树节点主体：每行独立持有 open(菜单开关)/长按状态，右键菜单用 antd Dropdown(trigger=contextMenu) 实现。
  *
- * 背景：此前右键菜单用 antd Dropdown(trigger=contextMenu)，但其 autoAdjustOverflow 翻转逻辑
- * 不可预期，导致菜单在视口中间节点上底部/顶部溢出。改为 MenuList 后，菜单以右键点为锚
- * 自动计算定位（下方优先，不够则上方），X/Y 均夹紧到视口内，行为完全确定。
+ * 背景：此前右键/长按菜单是组件级单个共享 actionsRef(ListRowActions)，所有 titleRender 行
+ * 都挂同一个 ref，React 会让它最终指向最后一个挂载的行 → 无论右键哪一行，菜单都绑定到
+ * 目录最后一个文件。改为每行独立组件后，动作项命中当前行 target，右键菜单由 antd 管理(定位/关闭/键盘)。
  */
 function TreeNodeRow({
   node,
@@ -242,7 +246,7 @@ function TreeNodeRow({
 }: {
   node: WorkspaceExplorerNode
   target: WorkspaceExplorerContextTarget
-  menuItems: ListRowActionItem[]
+  menuItems: MenuProps['items']
   /** 是否打开右键菜单(由父级统一控制：同一时刻只有一个右键菜单打开)。 */
   open: boolean
   onOpenChange: (next: boolean) => void
@@ -270,24 +274,40 @@ function TreeNodeRow({
     onLongPress: () => onOpenChange(true),
   })
 
-  // 右键菜单锚点:记录鼠标右键坐标,MenuList 以此定位弹层
-  const [menuAnchorPoint, setMenuAnchorPoint] = React.useState<MenuListAnchorPoint | null>(null)
-  // 行元素引用:MenuList 需要 anchor 做点击外部关闭判定
-  const rowRef = React.useRef<HTMLDivElement | null>(null)
+  // 右键菜单打开时的对齐偏移：关闭 antd autoAdjustOverflow(翻转不可预期),自己控制位置。
+  // 菜单始终从鼠标位置向下展开,当底部超出视口时通过 offset 上移,确保所有项可见。
+  // 剩余溢出(上下都不够)由 CSS max-height + overflow 滚动兜底。
+  const [menuAlign, setMenuAlign] = React.useState<AlignType | undefined>(undefined)
+  const mouseYRef = React.useRef(0)
+  const itemCount = menuItems?.length ?? 0
+  const menuEstimatedHeight = itemCount * MENU_ITEM_HEIGHT + MENU_PADDING
 
-  // 监听 contextmenu 事件记录鼠标坐标,并打开菜单
-  const handleContextMenu = React.useCallback((e: React.MouseEvent) => {
-    e.preventDefault()
-    e.stopPropagation()
-    setMenuAnchorPoint({ x: e.clientX, y: e.clientY })
-    onOpenChange(true)
-  }, [onOpenChange])
+  const handleOpenChange = React.useCallback((nextOpen: boolean) => {
+    if (nextOpen && mouseYRef.current > 0) {
+      const viewportH = window.innerHeight
+      const bottomEdge = mouseYRef.current + menuEstimatedHeight
+      // X 轴固定右移 6px,避免菜单左边缘紧贴右键点
+      const offsetX = 6
+      if (bottomEdge > viewportH) {
+        // 菜单底部超出视口:向上抬起超出部分,留 8px 边距;上移量受限确保顶部不出视口
+        const shiftUp = Math.min(bottomEdge - viewportH + 8, mouseYRef.current - 8)
+        setMenuAlign({ offset: [offsetX, -shiftUp] })
+      } else {
+        setMenuAlign({ offset: [offsetX, 0] })
+      }
+    } else if (!nextOpen) {
+      setMenuAlign(undefined)
+    }
+    onOpenChange(nextOpen)
+  }, [menuEstimatedHeight, onOpenChange])
 
-  const closeMenu = React.useCallback(() => onOpenChange(false), [onOpenChange])
+  // 监听 contextmenu 事件记录鼠标 Y 坐标(在 Dropdown 的 onOpenChange 之前触发)
+  const handleContextMenuCapture = React.useCallback((e: React.MouseEvent) => {
+    mouseYRef.current = e.clientY
+  }, [])
 
   const content = (
     <div
-      ref={rowRef}
       data-key={node.path}
       style={{
         display: 'flex',
@@ -327,7 +347,10 @@ function TreeNodeRow({
       onPointerMove={longPressHandlers.onPointerMove}
       onPointerUp={longPressHandlers.onPointerUp}
       onPointerLeave={longPressHandlers.onPointerLeave}
-      onContextMenu={handleContextMenu}
+      onContextMenu={(e) => {
+        handleContextMenuCapture(e)
+        longPressHandlers.onContextMenu(e)
+      }}
     >
       {isMultiSelect ? (
         <span
@@ -382,19 +405,20 @@ function TreeNodeRow({
     return content
   }
   return (
-    <>
+    <Dropdown
+      open={open}
+      onOpenChange={handleOpenChange}
+      trigger={['contextMenu']}
+      menu={{ items: menuItems }}
+      align={menuAlign}
+      // 关闭自动翻转:位置完全由 align offset 控制,行为确定性
+      autoAdjustOverflow={false}
+      // 自定义弹层类名:配合 ui-overlays.css 限制菜单最大高度并允许滚动,
+      // 防止右键菜单项过多时超出视口无法点击。
+      rootClassName="ws-context-menu"
+    >
       {content}
-      {open ? (
-        <MenuList
-          anchor={rowRef.current}
-          anchorPoint={menuAnchorPoint}
-          anchorPointMode="top-start"
-          items={menuItems}
-          onClose={closeMenu}
-          title="文件操作"
-        />
-      ) : null}
-    </>
+    </Dropdown>
   )
 }
 
