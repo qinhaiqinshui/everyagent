@@ -1,7 +1,6 @@
 import React from 'react'
 import { Dropdown, Tree, Tooltip, theme } from 'antd'
 import type { MenuProps, TreeDataNode } from 'antd'
-import type { AlignType } from '@rc-component/trigger'
 import { ChevronDownIcon, ChevronRightIcon, FolderIcon } from '../shared/AppGlyphs'
 import { FileTypeIcon } from '../shared/FileTypeGlyphs'
 import type { ListRowActionItem } from '../shared/ui/ListRowActions'
@@ -274,37 +273,14 @@ function TreeNodeRow({
     onLongPress: () => onOpenChange(true),
   })
 
-  // 右键菜单打开时的对齐偏移：关闭 antd autoAdjustOverflow(翻转不可预期),自己控制位置。
-  // 菜单始终从鼠标位置向下展开,当底部超出视口时通过 offset 上移,确保所有项可见。
-  // 剩余溢出(上下都不够)由 CSS max-height + overflow 滚动兜底。
-  const [menuAlign, setMenuAlign] = React.useState<AlignType | undefined>(undefined)
-  const mouseYRef = React.useRef(0)
-  const itemCount = menuItems?.length ?? 0
-  const menuEstimatedHeight = itemCount * MENU_ITEM_HEIGHT + MENU_PADDING
+  // 右键菜单锚点:记录鼠标右键坐标,用于计算弹层位置
+  const [mousePos, setMousePos] = React.useState<{ x: number; y: number } | null>(null)
 
-  const handleOpenChange = React.useCallback((nextOpen: boolean) => {
-    if (nextOpen && mouseYRef.current > 0) {
-      const viewportH = window.innerHeight
-      const bottomEdge = mouseYRef.current + menuEstimatedHeight
-      // X 轴固定右移 6px,避免菜单左边缘紧贴右键点
-      const offsetX = 6
-      if (bottomEdge > viewportH) {
-        // 菜单底部超出视口:向上抬起超出部分,留 8px 边距;上移量受限确保顶部不出视口
-        const shiftUp = Math.min(bottomEdge - viewportH + 8, mouseYRef.current - 8)
-        setMenuAlign({ offset: [offsetX, -shiftUp] })
-      } else {
-        setMenuAlign({ offset: [offsetX, 0] })
-      }
-    } else if (!nextOpen) {
-      setMenuAlign(undefined)
-    }
-    onOpenChange(nextOpen)
-  }, [menuEstimatedHeight, onOpenChange])
-
-  // 监听 contextmenu 事件记录鼠标 Y 坐标(在 Dropdown 的 onOpenChange 之前触发)
-  const handleContextMenuCapture = React.useCallback((e: React.MouseEvent) => {
-    mouseYRef.current = e.clientY
-  }, [])
+  // 监听 contextmenu 事件记录鼠标坐标(在 Dropdown 的 onOpenChange 之前触发)
+  const handleContextMenu = React.useCallback((e: React.MouseEvent) => {
+    setMousePos({ x: e.clientX, y: e.clientY })
+    longPressHandlers.onContextMenu(e)
+  }, [longPressHandlers])
 
   const content = (
     <div
@@ -347,10 +323,7 @@ function TreeNodeRow({
       onPointerMove={longPressHandlers.onPointerMove}
       onPointerUp={longPressHandlers.onPointerUp}
       onPointerLeave={longPressHandlers.onPointerLeave}
-      onContextMenu={(e) => {
-        handleContextMenuCapture(e)
-        longPressHandlers.onContextMenu(e)
-      }}
+      onContextMenu={handleContextMenu}
     >
       {isMultiSelect ? (
         <span
@@ -407,18 +380,100 @@ function TreeNodeRow({
   return (
     <Dropdown
       open={open}
-      onOpenChange={handleOpenChange}
+      onOpenChange={onOpenChange}
       trigger={['contextMenu']}
       menu={{ items: menuItems }}
-      align={menuAlign}
-      // 关闭自动翻转:位置完全由 align offset 控制,行为确定性
-      autoAdjustOverflow={false}
+      // 完全禁用 antd 自动翻转/位置调整,由 popupRender 手动控制弹层定位
+      autoAdjustOverflow={{ adjustX: 0, adjustY: 0 }}
       // 自定义弹层类名:配合 ui-overlays.css 限制菜单最大高度并允许滚动,
       // 防止右键菜单项过多时超出视口无法点击。
       rootClassName="ws-context-menu"
+      popupRender={(originNode) => (
+        <ContextMenuPopup
+          originNode={originNode}
+          mousePos={mousePos}
+          menuEstimatedHeight={(menuItems?.length ?? 0) * MENU_ITEM_HEIGHT + MENU_PADDING}
+        />
+      )}
     >
       {content}
     </Dropdown>
+  )
+}
+
+/**
+ * 右键菜单弹层容器:完全接管定位逻辑。
+ *
+ * antd Dropdown 的 contextMenu trigger 会把鼠标坐标作为 alignPoint 传给 rc-trigger,
+ * rc-trigger 以该点为 target(0×0 矩形)进行对齐。但 antd 的 autoAdjustOverflow 翻转逻辑
+ * 不可预期(会根据「翻转后可见面积是否更大」决定是否翻转),导致菜单位置时而上时而下。
+ *
+ * 本组件禁用 autoAdjustOverflow 后,antd 会把弹层按 bottomLeft(菜单左上角=鼠标点,向下展开)
+ * 放在 container div 里。我们用 container 的 fixed 定位手动指定 left/top,覆盖 antd 的定位:
+ * - 下方空间足够:top = mousePos.y + 4,向下展开
+ * - 下方不够但上方足够:top = mousePos.y - menuHeight - 4,向上展开
+ * - 上下都不够:选较大一侧,用 maxHeight 限制高度出滚动条
+ *
+ * 弹层 DOM 结构:rc-trigger 的 popup root > div(container) > antd Menu
+ * 我们给 container 设置 position:fixed + left/top,antd 内部的 left/top:0 会被覆盖。
+ */
+function ContextMenuPopup({
+  originNode,
+  mousePos,
+  menuEstimatedHeight,
+}: {
+  originNode: React.ReactNode
+  mousePos: { x: number; y: number } | null
+  menuEstimatedHeight: number
+}) {
+  const ref = React.useRef<HTMLDivElement | null>(null)
+  const [style, setStyle] = React.useState<React.CSSProperties | null>(null)
+
+  React.useLayoutEffect(() => {
+    if (!mousePos) {
+      setStyle(null)
+      return
+    }
+    const el = ref.current
+    if (!el) return
+    // 读取实际渲染的菜单高度(比预估值更准)
+    const actualHeight = el.offsetHeight || menuEstimatedHeight
+    const viewportH = window.innerHeight
+    const EDGE = 8
+    const GAP = 4
+    const spaceDown = viewportH - mousePos.y - EDGE
+    const spaceUp = mousePos.y - EDGE
+    let top: number
+    let maxHeight: number | undefined
+    if (spaceDown >= actualHeight) {
+      // 下方足够
+      top = mousePos.y + GAP
+    } else if (spaceUp >= actualHeight) {
+      // 上方足够
+      top = mousePos.y - actualHeight - GAP
+    } else {
+      // 上下都不够:选较大一侧
+      if (spaceDown >= spaceUp) {
+        top = mousePos.y + GAP
+        maxHeight = spaceDown - GAP
+      } else {
+        top = EDGE
+        maxHeight = spaceUp - GAP
+      }
+    }
+    // X 轴:左对齐鼠标点,右移 6px,夹紧到视口内
+    const elWidth = el.offsetWidth
+    let left = mousePos.x + 6
+    if (left + elWidth > window.innerWidth - EDGE) {
+      left = Math.max(EDGE, window.innerWidth - elWidth - EDGE)
+    }
+    setStyle({ position: 'fixed', top, left, maxHeight })
+  }, [mousePos, menuEstimatedHeight])
+
+  return (
+    <div ref={ref} style={style ?? { position: 'fixed', top: -9999, left: -9999 }}>
+      {originNode}
+    </div>
   )
 }
 
