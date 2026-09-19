@@ -286,12 +286,14 @@ function TreeNodeRow({
     if (nextOpen && mouseYRef.current > 0) {
       const viewportH = window.innerHeight
       const bottomEdge = mouseYRef.current + menuEstimatedHeight
+      // X 轴固定右移 6px,避免菜单左边缘紧贴右键点
+      const offsetX = 6
       if (bottomEdge > viewportH) {
         // 菜单底部超出视口:向上抬起超出部分,留 8px 边距
         const shiftUp = Math.min(bottomEdge - viewportH + 8, mouseYRef.current - 8)
-        setMenuAlign({ offset: [0, -shiftUp] })
+        setMenuAlign({ offset: [offsetX, -shiftUp] })
       } else {
-        setMenuAlign(undefined)
+        setMenuAlign({ offset: [offsetX, 0] })
       }
     } else if (!nextOpen) {
       setMenuAlign(undefined)
