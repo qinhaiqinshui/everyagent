@@ -1,6 +1,7 @@
 import React from 'react'
 import { Dropdown, Tree, Tooltip, theme } from 'antd'
 import type { MenuProps, TreeDataNode } from 'antd'
+import type { AlignType } from '@rc-component/trigger'
 import { ChevronDownIcon, ChevronRightIcon, FolderIcon } from '../shared/AppGlyphs'
 import { FileTypeIcon } from '../shared/FileTypeGlyphs'
 import type { ListRowActionItem } from '../shared/ui/ListRowActions'
@@ -14,6 +15,10 @@ import type {
 } from '@/types/workspaceExplorer'
 
 const { useToken } = theme
+
+/** 菜单项行高(antd 默认) + 上下 padding,用于预估菜单高度。 */
+const MENU_ITEM_HEIGHT = 32
+const MENU_PADDING = 8
 
 export default function WorkspaceExplorerTree({
   workspaceRoot,
@@ -269,6 +274,36 @@ function TreeNodeRow({
     onLongPress: () => onOpenChange(true),
   })
 
+  // 右键菜单打开时的对齐偏移：antd autoAdjustOverflow 只在下方空间不足时翻转(整个菜单翻到上方),
+  // 但节点在视口中间时菜单仍从鼠标位置单向向下展开,底部项会溢出视口。
+  // 这里在打开前根据鼠标 Y 和菜单预估高度计算 align offset,把菜单向上抬起,确保所有项可见。
+  const [menuAlign, setMenuAlign] = React.useState<AlignType | undefined>(undefined)
+  const mouseYRef = React.useRef(0)
+  const itemCount = menuItems?.length ?? 0
+  const menuEstimatedHeight = itemCount * MENU_ITEM_HEIGHT + MENU_PADDING
+
+  const handleOpenChange = React.useCallback((nextOpen: boolean) => {
+    if (nextOpen && mouseYRef.current > 0) {
+      const viewportH = window.innerHeight
+      const bottomEdge = mouseYRef.current + menuEstimatedHeight
+      if (bottomEdge > viewportH) {
+        // 菜单底部超出视口:向上抬起超出部分,留 8px 边距
+        const shiftUp = Math.min(bottomEdge - viewportH + 8, mouseYRef.current - 8)
+        setMenuAlign({ offset: [0, -shiftUp] })
+      } else {
+        setMenuAlign(undefined)
+      }
+    } else if (!nextOpen) {
+      setMenuAlign(undefined)
+    }
+    onOpenChange(nextOpen)
+  }, [menuEstimatedHeight, onOpenChange])
+
+  // 监听 contextmenu 事件记录鼠标 Y 坐标(在 Dropdown 的 onOpenChange 之前触发)
+  const handleContextMenuCapture = React.useCallback((e: React.MouseEvent) => {
+    mouseYRef.current = e.clientY
+  }, [])
+
   const content = (
     <div
       data-key={node.path}
@@ -310,7 +345,10 @@ function TreeNodeRow({
       onPointerMove={longPressHandlers.onPointerMove}
       onPointerUp={longPressHandlers.onPointerUp}
       onPointerLeave={longPressHandlers.onPointerLeave}
-      onContextMenu={longPressHandlers.onContextMenu}
+      onContextMenu={(e) => {
+        handleContextMenuCapture(e)
+        longPressHandlers.onContextMenu(e)
+      }}
     >
       {isMultiSelect ? (
         <span
@@ -367,9 +405,10 @@ function TreeNodeRow({
   return (
     <Dropdown
       open={open}
-      onOpenChange={onOpenChange}
+      onOpenChange={handleOpenChange}
       trigger={['contextMenu']}
       menu={{ items: menuItems }}
+      align={menuAlign}
       // 自定义弹层类名:配合 ui-overlays.css 限制菜单最大高度并允许滚动,
       // 防止右键菜单项过多时超出视口无法点击。
       rootClassName="ws-context-menu"
