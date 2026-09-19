@@ -153,7 +153,7 @@ export function MenuList({ items, anchor, anchorPoint, anchorPointMode = 'center
   const menuRef = React.useRef<HTMLDivElement | null>(null)
   const submenuTriggerRefs = React.useRef(new Map<string, HTMLButtonElement | null>())
   const submenuPanelRefs = React.useRef(new Map<string, HTMLDivElement | null>())
-  const [menuPosition, setMenuPosition] = React.useState<{ top: number; left: number } | null>(null)
+  const [menuPosition, setMenuPosition] = React.useState<{ top: number; left: number; maxHeight?: number } | null>(null)
   const [openPath, setOpenPath] = React.useState<string[]>([])
   const [submenuLayouts, setSubmenuLayouts] = React.useState<Record<string, SubmenuLayout>>({})
 
@@ -265,6 +265,7 @@ export function MenuList({ items, anchor, anchorPoint, anchorPointMode = 'center
 
       let nextLeft: number
       let nextTop: number
+      let nextMaxHeight: number | undefined
 
       if (anchorPoint) {
         if (anchorPointMode === 'top-start') {
@@ -282,9 +283,21 @@ export function MenuList({ items, anchor, anchorPoint, anchorPointMode = 'center
         }
         const preferBottomTop = anchorPoint.y + MENU_FLYOUT_GAP
         const preferTopTop = anchorPoint.y - menuRect.height - MENU_FLYOUT_GAP
-        nextTop = preferBottomTop + menuRect.height <= viewportHeight - MENU_EDGE_GAP
-          ? preferBottomTop
-          : Math.max(MENU_EDGE_GAP, preferTopTop)
+        const spaceDown = viewportHeight - preferBottomTop - MENU_EDGE_GAP
+        const spaceUp = preferTopTop - MENU_EDGE_GAP
+        if (spaceDown >= menuRect.height) {
+          // 下方空间足够:正常向下展开,不限制高度
+          nextTop = preferBottomTop
+          nextMaxHeight = undefined
+        } else if (spaceUp >= menuRect.height) {
+          // 上方空间足够:向上展开,不限制高度
+          nextTop = preferTopTop
+          nextMaxHeight = undefined
+        } else {
+          // 上下都不够:选较大一侧,限制高度出滚动条
+          nextTop = spaceDown >= spaceUp ? preferBottomTop : preferTopTop
+          nextMaxHeight = Math.max(spaceDown, spaceUp)
+        }
       } else {
         // 桌面端 / 按钮触发：以 anchor 元素 rect 定位
         const triggerRect = anchor.getBoundingClientRect()
@@ -294,12 +307,21 @@ export function MenuList({ items, anchor, anchorPoint, anchorPointMode = 'center
         )
         const preferBottomTop = triggerRect.bottom + MENU_FLYOUT_GAP
         const preferTopTop = triggerRect.top - menuRect.height - MENU_FLYOUT_GAP
-        nextTop = preferBottomTop + menuRect.height <= viewportHeight - MENU_EDGE_GAP
-          ? preferBottomTop
-          : Math.max(MENU_EDGE_GAP, preferTopTop)
+        const spaceDown = viewportHeight - preferBottomTop - MENU_EDGE_GAP
+        const spaceUp = preferTopTop - MENU_EDGE_GAP
+        if (spaceDown >= menuRect.height) {
+          nextTop = preferBottomTop
+          nextMaxHeight = undefined
+        } else if (spaceUp >= menuRect.height) {
+          nextTop = preferTopTop
+          nextMaxHeight = undefined
+        } else {
+          nextTop = spaceDown >= spaceUp ? preferBottomTop : preferTopTop
+          nextMaxHeight = Math.max(spaceDown, spaceUp)
+        }
       }
 
-      setMenuPosition({ top: nextTop, left: nextLeft })
+      setMenuPosition({ top: nextTop, left: nextLeft, maxHeight: nextMaxHeight })
     }
 
     const handlePointerDown = (event: PointerEvent) => {
@@ -461,6 +483,8 @@ export function MenuList({ items, anchor, anchorPoint, anchorPointMode = 'center
             position: 'fixed',
             top: menuPosition?.top ?? -9999,
             left: menuPosition?.left ?? -9999,
+            // 滚动条只在屏幕无法完全显示时才出现(下方/上方都不够时限制高度)
+            maxHeight: menuPosition?.maxHeight,
           }}
         >
           {renderMenuItems(items)}
