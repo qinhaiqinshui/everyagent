@@ -370,6 +370,9 @@ function TreeNodeRow({
       onOpenChange={onOpenChange}
       trigger={['contextMenu']}
       menu={{ items: menuItems }}
+      // 自定义弹层类名:配合 ui-overlays.css 限制菜单最大高度并允许滚动,
+      // 防止右键菜单项过多时超出视口无法点击。
+      rootClassName="ws-context-menu"
     >
       {content}
     </Dropdown>
