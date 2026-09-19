@@ -274,9 +274,9 @@ function TreeNodeRow({
     onLongPress: () => onOpenChange(true),
   })
 
-  // 右键菜单打开时的对齐偏移：antd autoAdjustOverflow 只在下方空间不足时翻转(整个菜单翻到上方),
-  // 但节点在视口中间时菜单仍从鼠标位置单向向下展开,底部项会溢出视口。
-  // 这里在打开前根据鼠标 Y 和菜单预估高度计算 align offset,把菜单向上抬起,确保所有项可见。
+  // 右键菜单打开时的对齐偏移：关闭 antd autoAdjustOverflow(翻转不可预期),自己控制位置。
+  // 菜单始终从鼠标位置向下展开,当底部超出视口时通过 offset 上移,确保所有项可见。
+  // 剩余溢出(上下都不够)由 CSS max-height + overflow 滚动兜底。
   const [menuAlign, setMenuAlign] = React.useState<AlignType | undefined>(undefined)
   const mouseYRef = React.useRef(0)
   const itemCount = menuItems?.length ?? 0
@@ -289,7 +289,7 @@ function TreeNodeRow({
       // X 轴固定右移 6px,避免菜单左边缘紧贴右键点
       const offsetX = 6
       if (bottomEdge > viewportH) {
-        // 菜单底部超出视口:向上抬起超出部分,留 8px 边距
+        // 菜单底部超出视口:向上抬起超出部分,留 8px 边距;上移量受限确保顶部不出视口
         const shiftUp = Math.min(bottomEdge - viewportH + 8, mouseYRef.current - 8)
         setMenuAlign({ offset: [offsetX, -shiftUp] })
       } else {
@@ -411,6 +411,8 @@ function TreeNodeRow({
       trigger={['contextMenu']}
       menu={{ items: menuItems }}
       align={menuAlign}
+      // 关闭自动翻转:位置完全由 align offset 控制,行为确定性
+      autoAdjustOverflow={false}
       // 自定义弹层类名:配合 ui-overlays.css 限制菜单最大高度并允许滚动,
       // 防止右键菜单项过多时超出视口无法点击。
       rootClassName="ws-context-menu"
