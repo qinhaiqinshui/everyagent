@@ -427,54 +427,65 @@ function ContextMenuPopup({
   menuEstimatedHeight: number
 }) {
   const ref = React.useRef<HTMLDivElement | null>(null)
-  const [style, setStyle] = React.useState<React.CSSProperties | null>(null)
+
+  // 初始 style 直接根据 mousePos 和预估高度同步计算,避免先渲染到 -9999 再跳转到正确位置的闪烁
+  const [style, setStyle] = React.useState<React.CSSProperties>(() => {
+    if (!mousePos) return { position: 'fixed', top: -9999, left: -9999 }
+    return calcPosition(mousePos, menuEstimatedHeight, 200)
+  })
 
   React.useLayoutEffect(() => {
     if (!mousePos) {
-      setStyle(null)
+      setStyle({ position: 'fixed', top: -9999, left: -9999 })
       return
     }
     const el = ref.current
     if (!el) return
-    // 读取实际渲染的菜单高度(比预估值更准)
+    // 用实际渲染尺寸精确修正位置(替代预估值)
     const actualHeight = el.offsetHeight || menuEstimatedHeight
-    const viewportH = window.innerHeight
-    const EDGE = 8
-    const GAP = 4
-    const spaceDown = viewportH - mousePos.y - EDGE
-    const spaceUp = mousePos.y - EDGE
-    let top: number
-    let maxHeight: number | undefined
-    if (spaceDown >= actualHeight) {
-      // 下方足够
-      top = mousePos.y + GAP
-    } else if (spaceUp >= actualHeight) {
-      // 上方足够
-      top = mousePos.y - actualHeight - GAP
-    } else {
-      // 上下都不够:选较大一侧
-      if (spaceDown >= spaceUp) {
-        top = mousePos.y + GAP
-        maxHeight = spaceDown - GAP
-      } else {
-        top = EDGE
-        maxHeight = spaceUp - GAP
-      }
-    }
-    // X 轴:左对齐鼠标点,右移 6px,夹紧到视口内
-    const elWidth = el.offsetWidth
-    let left = mousePos.x + 6
-    if (left + elWidth > window.innerWidth - EDGE) {
-      left = Math.max(EDGE, window.innerWidth - elWidth - EDGE)
-    }
-    setStyle({ position: 'fixed', top, left, maxHeight })
+    const actualWidth = el.offsetWidth || 200
+    setStyle(calcPosition(mousePos, actualHeight, actualWidth))
   }, [mousePos, menuEstimatedHeight])
 
   return (
-    <div ref={ref} style={style ?? { position: 'fixed', top: -9999, left: -9999 }}>
+    <div ref={ref} style={style}>
       {originNode}
     </div>
   )
+}
+
+/** 根据鼠标位置和菜单尺寸计算弹层定位样式。 */
+function calcPosition(
+  mousePos: { x: number; y: number },
+  menuHeight: number,
+  menuWidth: number,
+): React.CSSProperties {
+  const viewportH = window.innerHeight
+  const viewportW = window.innerWidth
+  const EDGE = 8
+  const GAP = 4
+  const spaceDown = viewportH - mousePos.y - EDGE
+  const spaceUp = mousePos.y - EDGE
+  let top: number
+  let maxHeight: number | undefined
+  if (spaceDown >= menuHeight) {
+    top = mousePos.y + GAP
+  } else if (spaceUp >= menuHeight) {
+    top = mousePos.y - menuHeight - GAP
+  } else {
+    if (spaceDown >= spaceUp) {
+      top = mousePos.y + GAP
+      maxHeight = spaceDown - GAP
+    } else {
+      top = EDGE
+      maxHeight = spaceUp - GAP
+    }
+  }
+  let left = mousePos.x + 6
+  if (left + menuWidth > viewportW - EDGE) {
+    left = Math.max(EDGE, viewportW - menuWidth - EDGE)
+  }
+  return { position: 'fixed', top, left, maxHeight }
 }
 
 /**
