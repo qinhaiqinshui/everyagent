@@ -730,6 +730,31 @@
   margin: 16px 0;
 }
 
+/* ─── 用户消息编辑按钮 ─────────────────────────────── */
+.nagent-msg__edit-btn {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin-top: 2px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-tertiary, #999);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s, background 0.15s;
+}
+.nagent-msg--user:hover .nagent-msg__edit-btn {
+  opacity: 1;
+}
+.nagent-msg__edit-btn:hover {
+  background: color-mix(in srgb, var(--accent-blue) 12%, transparent);
+  color: var(--accent-blue, #4a9eff);
+}
+
 .nagent-msg__body--assistant {
   display: flex;
   flex-direction: column;

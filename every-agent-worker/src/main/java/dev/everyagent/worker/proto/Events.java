@@ -49,6 +49,13 @@ public final class Events {
     public static final String ERROR = "error";
     public static final String CANCELLED = "cancelled";
     /**
+     * 消息编辑事件(stream 频道,同步所有端):用户编辑已发送的消息并重新发送时,
+     * worker 先截断 seq &gt; 该消息的所有事件(磁盘+内存),再发送此事件通知所有客户端
+     * 移除本地缓冲中 seq &gt; 该消息的事件并更新该消息内容。payload 含被编辑消息的 seq
+     * 及新内容;text 为 AI 可见明文,rawContent 为原始 opaque 串(回放胶囊用)。
+     */
+    public static final String MESSAGE_EDITED = "message.edited";
+    /**
      * 统一纯显示 trace 事件:无副作用的展示事件(重试生命周期、任务耗时等)全部收敛于此,
      * 替代旧 retry.attempt/progress/resolved/exhausted 与 task.duration 四个事件名。
      * payload 与前端 TaskTraceRecord 同形,前端按 {@code traceId} 原地 upsert:
@@ -207,6 +214,12 @@ public final class Events {
     @JsonIgnoreProperties(ignoreUnknown = true)
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record TaskDeleted(String taskId) {
+    }
+
+    /** 消息编辑同步事件 payload:seq 为被编辑消息的原 seq(不变),text/rawContent 为新内容。 */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public record MessageEdited(String seq, String text, String rawContent) {
     }
 
     // ---- evt 频道通知 payload ----

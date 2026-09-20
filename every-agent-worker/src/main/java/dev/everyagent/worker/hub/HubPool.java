@@ -151,4 +151,15 @@ public class HubPool {
             c.pub(Channels.workerEvt(c.k(), c.workerId()), event, null, payload, null);
         }
     }
+
+    /**
+     * 任务 stream 频道广播:发到每条连接各自命名空间下的 task stream 频道
+     * (所有已订阅该任务 stream 的前端都能收到;不设 ext.target = 非定向,全量投递)。
+     * 用于消息编辑等同步事件(任务非运行时无 DataPusher,直接 pub)。
+     */
+    public void pubTaskStream(String taskId, String event, JsonNode payload) {
+        for (HubLink c : conns) {
+            c.pub(Channels.taskStream(c.k(), taskId), event, null, payload, null);
+        }
+    }
 }

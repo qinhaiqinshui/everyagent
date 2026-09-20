@@ -49,6 +49,8 @@ export interface TaskRoundsPanelProps {
   filterAgentId?: string
   /** 主 agent 稳定 Id（线程内主 agent 消息 agentId 为空串，过滤前归一用）。 */
   mainAgentId?: string
+  /** 用户消息编辑回调(点击编辑按钮时触发)。 */
+  onEditUserMessage?: (seq: number | string, text: string, rawContent?: string) => void
 }
 
 export default function TaskRoundsPanel({
@@ -60,6 +62,7 @@ export default function TaskRoundsPanel({
   emptyText,
   filterAgentId = '',
   mainAgentId = '',
+  onEditUserMessage,
 }: TaskRoundsPanelProps): React.ReactNode {
   /** 已展开的轮 roundId 集合（多轮可同时展开）。 */
   const [expandedSet, setExpandedSet] = React.useState<ReadonlySet<string>>(() => new Set())
@@ -323,6 +326,7 @@ export default function TaskRoundsPanel({
               if (cur && cur.cursor) startBackward(tailStartSeq, cur.cursor)
             }}
             onLoadMoreForward={() => terminalTail && startForward(terminalTail)}
+            onEditUserMessage={onEditUserMessage}
           />
         ) : null}
       </div>
@@ -454,6 +458,7 @@ function TailRoundView({
   scrollRoot,
   onLoadMoreBackward,
   onLoadMoreForward,
+  onEditUserMessage,
 }: {
   taskId: string
   userItem?: TaskThreadItem
@@ -464,6 +469,7 @@ function TailRoundView({
   scrollRoot?: HTMLElement | null
   onLoadMoreBackward: () => void
   onLoadMoreForward: () => void
+  onEditUserMessage?: (seq: number | string, text: string, rawContent?: string) => void
 }): React.ReactNode {
   const afterUser =
     tailItems.length > 0 && tailItems[0].type === 'agent_message' && tailItems[0].message.role === 'user'
@@ -484,9 +490,9 @@ function TailRoundView({
         />
       ) : null}
       {afterUser.length > 0 ? (
-        <TaskThread taskId={taskId} items={afterUser} isGenerating={isGenerating} />
+        <TaskThread taskId={taskId} items={afterUser} isGenerating={isGenerating} onEditUserMessage={onEditUserMessage} />
       ) : isGenerating ? (
-        <TaskThread taskId={taskId} items={[]} isGenerating={isGenerating} />
+        <TaskThread taskId={taskId} items={[]} isGenerating={isGenerating} onEditUserMessage={onEditUserMessage} />
       ) : null}
       {!live && pageState && !pageState.done ? (
         <LazyLoadSentinel

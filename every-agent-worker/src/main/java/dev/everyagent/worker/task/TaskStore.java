@@ -197,6 +197,79 @@ public class TaskStore {
         }
     }
 
+    /**
+     * 截断并更新用户消息(消息编辑重发):对所有 *.jsonl 文件,保留 seq &le; target 的事件,
+     * 更新 target seq 处的 user.message 事件 payload 为新内容,丢弃 seq &gt; target 的所有事件;
+     * 原子重写每个 jsonl 文件(整读→过滤/修改→临时文件+ATOMIC_MOVE)。
+     * 同时清理 rounds.jsonl、file-changes/、agents.json(将被后续运行重新生成)。
+     *
+     * @return true 如果找到并更新了 user.message 事件;false 表示未找到(调用方应报错)
+     */
+    public boolean truncateAndUpdateUserMessage(Path dir, long targetSeq,
+            String newText, String rawContent) throws IOException {
+        boolean found = false;
+        for (Path f : agentFiles(dir)) {
+            List<String> kept = new ArrayList<>();
+            try (BufferedReader br = Files.newBufferedReader(f, StandardCharsets.UTF_8)) {
+                String line;
+                while ((line = br.readLine()) != null) {
+                    long s = seqOf(line);
+                    if (s <= 0) {
+                        continue; // 撕行/残行跳过
+                    }
+                    if (s > targetSeq) {
+                        continue; // 截断:丢弃 seq > target 的事件
+                    }
+                    if (s == targetSeq) {
+                        EventRecord r = parseLine(line);
+                        if (r != null && Events.USER_MESSAGE.equals(r.event())) {
+                            // 更新 user.message 的 payload
+                            ObjectNode newPayload = Json.obj().put("text", newText);
+                            if (rawContent != null && !rawContent.isEmpty()) {
+                                newPayload.put("rawContent", rawContent);
+                            }
+                            ObjectNode newLine = Json.obj()
+                                    .put("seq", r.seq())
+                                    .put("ts", r.ts())
+                                    .put("event", r.event())
+                                    .put("agentId", r.agentId() == null ? FALLBACK_AGENT_FILE : r.agentId());
+                            newLine.set("payload", newPayload);
+                            if (r.ext() != null) {
+                                newLine.set("ext", r.ext());
+                            }
+                            kept.add(Json.write(newLine));
+                            found = true;
+                            continue;
+                        }
+                    }
+                    kept.add(line); // 保留原行
+                }
+            }
+            // 原子重写文件
+            Path tmp = f.resolveSibling(f.getFileName() + ".tmp");
+            StringBuilder sb = new StringBuilder();
+            for (String l : kept) {
+                sb.append(l).append('\n');
+            }
+            Files.writeString(tmp, sb.toString(), StandardCharsets.UTF_8);
+            AtomicFiles.replace(tmp, f);
+        }
+        // 清理 rounds.jsonl(将重新生成)
+        Files.deleteIfExists(dir.resolve("rounds.jsonl"));
+        // 清理 file-changes/ 目录
+        Path fc = dir.resolve("file-changes");
+        if (Files.isDirectory(fc)) {
+            try {
+                deleteRecursively(fc);
+            } catch (IOException e) {
+                log.warn("file-changes 目录清理失败 {}", fc, e);
+            }
+        }
+        // 清理 agents.json(将重新生成)
+        Files.deleteIfExists(dir.resolve("agents.json"));
+        return found;
+    }
+
     // ---- 读路径(冷数据)----
 
     /** 扫描 workspaces/&lt;workspaceId&gt;/tasks/ 下全部任务目录(meta.json 存在即算);回填 taskWorkspace 映射。 */

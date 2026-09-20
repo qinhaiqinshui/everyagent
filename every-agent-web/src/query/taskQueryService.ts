@@ -250,6 +250,35 @@ export const taskQueryService = {
       throw new Error(e instanceof Error ? e.message : '队列插入失败')
     }
   },
+
+  /**
+   * 编辑已发送的用户消息并重新发送(task.message.edit RPC)。
+   * worker 会:截断 seq > 该消息的所有磁盘事件、更新该消息内容、
+   * 广播 message.edited 同步事件、冷启动重跑(不写新 user.message)。
+   * 成功返回 taskId;失败抛可读错误(任务运行中/消息不存在等)。
+   *
+   * @param taskId 任务 ID
+   * @param seq 被编辑消息的 seq(字符串雪花 ID)
+   * @param text 新消息文本(AI 可见明文)
+   * @param rawContent 原始输入(含 opaque token 串,供回放还原胶囊)
+   */
+  async editMessage(taskId: string, seq: string, text: string, rawContent?: string): Promise<string> {
+    try {
+      const ownerWorkerId = taskStore.get(taskId)?.workerId
+      if (!ownerWorkerId) {
+        throw new Error('无法确定任务所属 worker(任务数据不可用)')
+      }
+      const result = await hubSession.rpcTo(ownerWorkerId, 'task.message.edit', {
+        taskId,
+        seq,
+        text,
+        ...(rawContent ? { rawContent } : {}),
+      })
+      return String(result?.taskId ?? taskId)
+    } catch (e) {
+      throw new Error(e instanceof Error ? e.message : '消息编辑失败')
+    }
+  },
 }
 
 /**

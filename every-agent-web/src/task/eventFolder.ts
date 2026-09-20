@@ -334,6 +334,22 @@ export class TaskEventFolder {
         }
         return true
       }
+      case 'message.edited': {
+        // 消息编辑重发:截断 seq > editedSeq 的所有线程项,更新 editedSeq 处 user.message 内容。
+        const editedSeq = String(event.payload?.seq ?? event.seq)
+        this.truncateAfterSeq(editedSeq)
+        // 更新 editedSeq 处的 user.message 内容(bySeq 中的项可能已被上面的截断保留)
+        const existing = this.bySeq.get(editedSeq)
+        if (existing && existing.type === 'agent_message' && existing.message.role === 'user') {
+          existing.message.content = String(event.payload?.text ?? '')
+          existing.message.rawContent = typeof event.payload?.rawContent === 'string'
+            && (event.payload.rawContent as string).length
+            ? event.payload.rawContent as string
+            : existing.message.content
+          existing.message.updatedAt = ts
+        }
+        return true
+      }
       default:
         // ask.state 等其余事件由 askStore 驱动卡片,不进线程。
         return true
@@ -577,6 +593,33 @@ export class TaskEventFolder {
       foldRole: message.role === 'user' ? 'user' : undefined,
     }
     this.insertItemBySeq(item, seqKey, seqKey)
+  }
+
+  /**
+   * 截断:移除所有 seq > targetSeq 的线程项(消息编辑重发时,worker 已截断磁盘,
+   * 前端同步移除本地线程中后续的 AI 回复/工具调用/trace 等)。同时清理 bySeq/traceSeq 索引。
+   */
+  private truncateAfterSeq(targetSeq: string): void {
+    const items = this.state.items
+    let i = 0
+    while (i < items.length) {
+      const itemSeq = this.seqOfItem(items[i])
+      if (compareSeq(itemSeq, targetSeq) > 0) {
+        // 移除该项
+        const removed = items.splice(i, 1)[0]
+        // 清理 bySeq(该项的 seqKey)
+        const seqKey = String(itemSeq)
+        if (this.bySeq.get(seqKey) === removed) {
+          this.bySeq.delete(seqKey)
+        }
+        // 清理 traceSeq(trace 项)
+        if (removed.type === 'task_trace') {
+          this.traceSeq.delete(removed.trace.traceId)
+        }
+      } else {
+        i++
+      }
+    }
   }
 
   /** 插入一条 task_trace 到 items(按 seq 升序定位),并登记 traceId → 原始 seq(固定位置)。 */

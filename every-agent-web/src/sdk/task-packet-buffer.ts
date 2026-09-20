@@ -76,6 +76,24 @@ export class TaskPacketBuffer {
     this.list = []
   }
 
+  /**
+   * 截断:移除所有 seq > target 的数据包(消息编辑重发时,worker 截断磁盘后
+   * 发 message.edited 事件,前端同步移除本地缓冲中后续事件)。
+   */
+  truncateAfter(targetSeq: number | string): number {
+    const target = String(targetSeq)
+    const removed: TaskPacket[] = []
+    this.list = this.list.filter((p) => {
+      if (compareSeq(p.seq, target) > 0) {
+        this.index.delete(p.seq)
+        removed.push(p)
+        return false
+      }
+      return true
+    })
+    return removed.length
+  }
+
   /** 应用一帧;返回数据包更新信息(供调用方增量折叠)。 */
   apply(frame: PacketFrame): TaskPacketUpdate {
     const seq = String(frame.seq ?? '')

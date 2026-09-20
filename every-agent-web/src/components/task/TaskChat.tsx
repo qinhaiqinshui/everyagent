@@ -30,6 +30,7 @@ import TaskModelControls from '@/components/taskComposer/TaskModelControls'
 import HScrollArea from '@/components/shared/HScrollArea'
 import { ArrowDownIcon, ArrowRightIcon, StopIcon } from '../shared/AppGlyphs'
 import { Button, InlineSpinner } from '@/components/shared/ui'
+import ConfirmDialog from '@/components/shared/ConfirmDialog'
 import { useWorkspaceShell } from '@/components/app/WorkspaceShellContext'
 import { useResponsiveViewport } from '@/hooks/useResponsiveViewport'
 import { parseOpaqueTokenText, replaceComposerTokensForSubmission } from '@/composerToken/composerOpaqueToken'
@@ -232,6 +233,13 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
   // agent 选中态(点击输入框上方 agent 长条切换):非空时轮次视图按该 agent 过滤
   // (仅过滤已加载内容,不触发拉取,见 TaskRoundsPanel matches 谓词)。
   const [filterAgentId, setFilterAgentId] = React.useState('')
+  // 消息编辑确认弹窗状态
+  const [editTarget, setEditTarget] = React.useState<{
+    seq: string
+    text: string
+    rawContent?: string
+  } | null>(null)
+  const [editSubmitting, setEditSubmitting] = React.useState(false)
 
   // 实时信号链:订阅 taskStream(agentStates/contextUsage/taskModel/ask 等状态信号
   // 折叠推进即重渲染)。items 不再驱动线程渲染(旧首拉渲染路径已删除),只用于
@@ -597,6 +605,42 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
       })
   }, [isTaskRunning, stopping, stream])
 
+  /**
+   * 用户消息编辑:点击用户消息上的编辑按钮 → 弹出确认对话框。
+   * 确认后调 task.message.edit RPC(worker 截断后续事件+更新消息+冷启动重跑)。
+   */
+  const handleEditUserMessage = React.useCallback(
+    (seq: number | string, text: string, rawContent?: string) => {
+      if (isTaskRunning) {
+        setError('任务运行中,请先停止再编辑消息')
+        return
+      }
+      setError('')
+      setEditTarget({ seq: String(seq), text, rawContent })
+    },
+    [isTaskRunning],
+  )
+
+  const handleConfirmEdit = React.useCallback(() => {
+    if (!editTarget || !effectiveTaskId) return
+    setEditSubmitting(true)
+    void (async () => {
+      try {
+        await taskQueryService.editMessage(
+          effectiveTaskId,
+          editTarget.seq,
+          editTarget.text,
+          editTarget.rawContent,
+        )
+        setEditTarget(null)
+      } catch (editError) {
+        setError(editError instanceof Error ? editError.message : '消息编辑失败')
+      } finally {
+        setEditSubmitting(false)
+      }
+    })()
+  }, [editTarget, effectiveTaskId])
+
   // 从线程派生 agent 列表:主 agent(mainAgentId)恒在首位,子 agent 按首次出现顺序。
   // 线程内主 agent 消息 agentId 为空串(缺省=主线程),此处归一到 mainAgentId 供列表/过滤使用。
   // 除 items 外还并入 agentMeta 的子 agent 键(task.agents 台账 seed):历史任务过程内容
@@ -694,6 +738,7 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
   }
 
   return (
+    <>
     <ChatShell
       // 工作区 chip 已迁移至输入框底部(电池图标左侧),顶部不再重复展示。
       header={undefined}
@@ -718,6 +763,7 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
           scrollRoot={threadScrollRefNode.current}
           filterAgentId={filterAgentId}
           mainAgentId={mainAgentId}
+          onEditUserMessage={handleEditUserMessage}
         />
       )}
       composer={(
@@ -824,6 +870,17 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
         </div>
       )}
     />
+    <ConfirmDialog
+      open={editTarget != null}
+      title="编辑并重新发送"
+      message="此操作将删除该消息之后的所有 AI 回复和过程内容,并以编辑后的消息重新运行任务。"
+      confirmLabel={editSubmitting ? '发送中...' : '确认重新发送'}
+      cancelLabel="取消"
+      danger
+      onConfirm={handleConfirmEdit}
+      onCancel={() => { if (!editSubmitting) setEditTarget(null) }}
+    />
+    </>
   )
 }
 

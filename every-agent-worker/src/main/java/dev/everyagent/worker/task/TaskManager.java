@@ -277,6 +277,7 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
         dispatcher.register(RpcMethods.TASK_DELETE, this::rpcTaskDelete);
         dispatcher.register(RpcMethods.TASK_QUEUE_REMOVE, this::rpcTaskQueueRemove);
         dispatcher.register(RpcMethods.TASK_QUEUE_MOVE, this::rpcTaskQueueMove);
+        dispatcher.register(RpcMethods.TASK_MESSAGE_EDIT, this::rpcTaskMessageEdit);
         dispatcher.register(RpcMethods.CONFIG_GET, this::rpcConfigGet);
         dispatcher.register(RpcMethods.CONFIG_RELOAD, this::rpcConfigReload);
     }
@@ -1265,6 +1266,104 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
         ctx.ok(Json.obj().put("taskId", taskId).put("ok", true));
     }
 
+    /**
+     * task.message.edit:编辑已发送的用户消息并重新发送。
+     *
+     * 参数:taskId(必填)、seq(必填,被编辑消息的 seq,字符串雪花 ID)、text(必填,新内容)、
+     * rawContent(可选,原始 opaque 串)。
+     *
+     * 流程:
+     * 1. 校验任务不在运行中(运行中/waiting-user/cancelling 拒绝);
+     * 2. 磁盘截断:保留 seq ≤ target 的事件,更新 target 处 user.message 的 payload,丢弃其余;
+     * 3. 更新 meta.json:status→created,清 endedAt/error,seqLast→target;
+     * 4. 广播 message.edited 事件到 stream 频道(所有客户端移除 seq > target 的事件并更新消息内容);
+     * 5. 认领磁盘任务并启动冷启动重跑(不 consumeInput——user.message 已在磁盘对话历史中)。
+     */
+    private void rpcTaskMessageEdit(RpcContext ctx) {
+        String taskId = ctx.strParam("taskId");
+        long seq = ctx.optLongParam("seq", 0);
+        if (seq <= 0) {
+            ctx.err(Rpc.ERR_BAD_PARAMS, "缺少或无效的 seq");
+            return;
+        }
+        String text = ctx.strParam("text");
+        String rawContent = ctx.optStrParam("rawContent", null);
+
+        // 校验任务不在运行中
+        TaskEntry t = tasks.get(taskId);
+        if (t != null && !t.status.terminal()) {
+            ctx.err(Rpc.ERR_BAD_PARAMS, "任务运行中,请先停止再编辑");
+            return;
+        }
+        if (t != null && t.status.terminal()) {
+            synchronized (t) {
+            } // 等 finish 驱逐
+        }
+
+        // 原子认领(与 delete/并发 rerun 互斥)
+        TaskStore.StoredTask st = diskTasks.remove(taskId);
+        if (st == null) {
+            // 可能并发 rerun 刚重建,重查内存
+            TaskEntry again = tasks.get(taskId);
+            if (again != null && !again.status.terminal()) {
+                ctx.err(Rpc.ERR_BAD_PARAMS, "任务运行中,请先停止再编辑");
+                return;
+            }
+            ctx.err(Rpc.ERR_NOT_FOUND, "任务不存在");
+            return;
+        }
+
+        Path dir = st.dir();
+        try {
+            boolean found = store.truncateAndUpdateUserMessage(dir, seq, text, rawContent);
+            if (!found) {
+                diskTasks.putIfAbsent(taskId, st); // 放回索引
+                ctx.err(Rpc.ERR_BAD_PARAMS, "未找到 seq=" + seq + " 的用户消息");
+                return;
+            }
+        } catch (java.io.IOException e) {
+            diskTasks.putIfAbsent(taskId, st); // 放回索引
+            ctx.err(Rpc.ERR_INTERNAL, "消息编辑失败: " + e.getMessage());
+            return;
+        }
+
+        // 更新 meta.json:status→created,清 endedAt/error,seqLast→target
+        ObjectNode meta = st.summary().deepCopy();
+        meta.put("status", "created");
+        meta.remove("endedAt");
+        meta.remove("error");
+        meta.put("seqLast", seq);
+        try {
+            TaskStore.writeMeta(dir, meta);
+        } catch (java.io.IOException e) {
+            log.warn("meta 更新失败 task={}(继续重跑)", taskId, e);
+        }
+        // 更新内存索引镜像
+        st = new TaskStore.StoredTask(taskId, dir, meta, st.workspaceId());
+
+        // 广播 message.edited 事件到 stream 频道(所有客户端同步)
+        ObjectNode editPayload = Json.obj()
+                .put("seq", String.valueOf(seq))
+                .put("text", text);
+        if (rawContent != null && !rawContent.isEmpty()) {
+            editPayload.put("rawContent", rawContent);
+        }
+        pool.pubTaskStream(taskId, Events.MESSAGE_EDITED, editPayload);
+
+        // 启动冷启动重跑(不 consumeInput——user.message 已在磁盘对话历史中)
+        final TaskStore.StoredTask claimed = st;
+        vt.submit(() -> {
+            try {
+                startRerunFromEdit(claimed, seq, text, rawContent);
+            } catch (Throwable e) {
+                log.error("编辑重跑失败 task={}: {}", taskId, RootCause.summary(e));
+                log.debug("编辑重跑失败 task={} 完整堆栈", taskId, e);
+                diskTasks.putIfAbsent(taskId, claimed); // 放回索引,保留可重试
+            }
+        });
+        ctx.ok(Json.obj().put("taskId", taskId).put("status", "created"));
+    }
+
     /** 删除结果(区分运行中/不存在;workspaces.remove 级联共用)。 */
     private enum DeleteResult { OK, RUNNING, NOT_FOUND }
 
@@ -1554,9 +1653,108 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
         t.runFuture = vt.submit(() -> runTask(t, initialInput, prior));
     }
 
+    /**
+     * 消息编辑后的冷启动重跑:与 {@link #startRerun} 同构,但不传 initialInput——
+     * user.message 已在磁盘对话历史中(编辑时原地更新),ConversationLoader 会载入它;
+     * runTask 以 editRerunSeq > 0 标识编辑重跑,跳过 consumeInput(不写新 user.message),
+     * 仅做授权重置 + 开轮。
+     */
+    private void startRerunFromEdit(TaskStore.StoredTask st, long editSeq,
+            String text, String rawContent) throws java.io.IOException {
+        JsonNode meta = st.summary();
+        String taskId = st.taskId();
+        String mainAgentId = meta.path("mainAgentId").asString("");
+        if (mainAgentId.isEmpty() || !Files.isDirectory(st.dir())) {
+            log.warn("编辑重跑不可运行(旧格式或目录缺失): {}", taskId);
+            diskTasks.putIfAbsent(taskId, st);
+            return;
+        }
+        ResolvedConfig cfg;
+        String desiredConfigId = meta.path("configId").asString(null);
+        try {
+            cfg = configs.resolve(desiredConfigId);
+        } catch (NotFoundException e) {
+            try {
+                cfg = configs.resolve(null);
+            } catch (NotFoundException e2) {
+                cfg = configs.resolve(null);
+            }
+        }
+        String workspaceId = meta.path("workspaceId").asString(null);
+        if (workspaceId == null || workspaceId.isEmpty()) {
+            workspaceId = workspaces.idOfRoot(meta.path("workspace").asString(""));
+            if (workspaceId == null) {
+                workspaceId = WorkspaceManager.DEFAULT_WORKSPACE_ID;
+            }
+        }
+        TaskEntry t = new TaskEntry(taskId,
+                meta.path("title").asString("继续对话"), cfg.snapshot(), cfg.apiKey(),
+                meta.path("workspace").asString(null), workspaceId, mainAgentId,
+                props.getLimits().getMaxEventsPerTask());
+        t.createdAt(meta.path("createdAt").asLong(0));
+        t.aiReview = meta.path("aiReview").asBoolean(false);
+        t.unattended = meta.path("unattended").asBoolean(false);
+        t.networkBlocked = meta.path("networkBlocked").asBoolean(false);
+        t.powershellEnabled = meta.path("powershellEnabled").asBoolean(false);
+        t.seedUsageMeta(meta.path("usage"));
+        // slash 任务级 token 回读
+        JsonNode tt = meta.path("slashTaskTokens");
+        if (tt.isArray()) {
+            for (JsonNode e : tt) {
+                if (e.isTextual()) {
+                    t.addSlashTaskToken(e.asText());
+                }
+            }
+        }
+        t.log.seed(store.seqLastOf(st.dir()));
+        wireUsageBroadcast(t);
+        wireAgentPersist(t);
+        if (tasks.putIfAbsent(taskId, t) != null) {
+            diskTasks.putIfAbsent(taskId, st);
+            return;
+        }
+        for (TaskResumeListener l : resumeListeners) {
+            try {
+                l.onTaskResumed(taskId);
+            } catch (RuntimeException e) {
+                log.debug("再运行通知失败 task={}", taskId, e);
+            }
+        }
+        try {
+            store.track(taskId, workspaceId, t.log, t::summaryJson);
+        } catch (java.io.IOException e) {
+            log.error("编辑重跑落盘启动失败 task={}(继续内存运行)", taskId, e);
+        }
+        notifySlashCallbacks(t, taskId);
+        int now = active.incrementAndGet();
+        if (now > props.getLimits().getMaxConcurrentTasks()) {
+            log.warn("并发任务越限(编辑重跑放行): {} / {}", now, props.getLimits().getMaxConcurrentTasks());
+        }
+        List<Message> prior = ConversationLoader.load(store, st.dir(), mainAgentId);
+        final String editText = text;
+        final String editRaw = rawContent;
+        t.runFuture = vt.submit(() -> runTaskFromEdit(t, prior, editSeq, editText, editRaw));
+    }
+
     // ---- 任务主流程 ----
 
     private void runTask(TaskEntry t, UserInput initialInput, List<Message> priorConversation) {
+        runTaskImpl(t, initialInput, priorConversation, 0, null, null);
+    }
+
+    /** 编辑重跑入口:user.message 已在磁盘对话历史中,跳过 consumeInput。 */
+    private void runTaskFromEdit(TaskEntry t, List<Message> priorConversation,
+            long editSeq, String text, String rawContent) {
+        runTaskImpl(t, UserInput.of(text, rawContent), priorConversation, editSeq, text, rawContent);
+    }
+
+    /**
+     * runTask 的内部实现,支持普通运行(editRerunSeq=0)和编辑重跑(editRerunSeq>0):
+     * 普通运行调 consumeInput 写新 user.message;编辑重跑跳过 consumeInput,
+     * user.message 已在磁盘对话历史中,仅做授权重置 + 开轮。
+     */
+    private void runTaskImpl(TaskEntry t, UserInput initialInput, List<Message> priorConversation,
+            long editRerunSeq, String editText, String editRawContent) {
         AgentEntity main = null;
         try {
             log.debug("[run] runTask 开始 taskId={} thread={} interruptFlag={}",
@@ -1566,7 +1764,13 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
             t.events.agentStatus(t.mainAgentId, "running"); // 主 agent 开跑(agent 列表状态机)
             main = buildMainAgent(t, priorConversation);
             t.main = main; // 主 agent 引用(运行期状态供持久化/诊断)
-            consumeInput(t, main, initialInput);
+            if (editRerunSeq > 0) {
+                // 编辑重跑:user.message 已在磁盘对话历史中(编辑时原地更新),
+                // 不写新 user.message,仅做授权重置 + 开轮。
+                prepareForRerunFromEdit(t, main, editRerunSeq, editText, editRawContent);
+            } else {
+                consumeInput(t, main, initialInput);
+            }
             while (true) {
                 if (Thread.currentThread().isInterrupted()) {
                     log.debug("[cancel] runTask 循环顶检测到中断标记 taskId={} thread={}",
@@ -1651,6 +1855,24 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
             t.events.roundOpened(seq, text);
         }
         main.conversation.add(new UserMessage(text));
+        t.touch();
+    }
+
+    /**
+     * 编辑重跑的准备:与 {@link #consumeInput} 对应,但不写新 user.message
+     * (已在磁盘原地更新,ConversationLoader 载入对话历史时已包含)。
+     * 仅做:授权本轮失效 + 开轮(以编辑消息的原 seq 为轮起点)。
+     */
+    private void prepareForRerunFromEdit(TaskEntry t, AgentEntity main,
+            long userMsgSeq, String text, String rawContent) {
+        gate.beginRun(t.taskId); // 本轮(run)授权失效(任务级不受影响)
+        ObjectNode userPayload = Json.obj().put("text", text);
+        if (rawContent != null && !rawContent.isEmpty()) {
+            userPayload.put("rawContent", rawContent);
+        }
+        if (roundIndexStore.openRoundAtStart(store, t.taskId, userMsgSeq, text, userPayload)) {
+            t.events.roundOpened(userMsgSeq, text);
+        }
         t.touch();
     }
 

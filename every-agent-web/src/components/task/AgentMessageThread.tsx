@@ -35,6 +35,8 @@ export interface AgentMessageThreadProps {
   resolveToolCallPayload?: (toolCallId: string) => Record<string, unknown> | undefined
   /** 按工具调用 ID 解析匹配到的 tool 结果消息（live/历史共用，供下发块合并结果）。 */
   resolveToolResult?: (toolCallId: string) => AgentMessageRecord | undefined
+  /** 用户消息编辑回调(点击编辑按钮时触发;传入被编辑消息的 seq 与内容)。 */
+  onEditUserMessage?: (seq: number | string, text: string, rawContent?: string) => void
 }
 
 /**
@@ -85,6 +87,7 @@ export default function AgentMessageThread({
   resolveToolCallName,
   resolveToolCallPayload,
   resolveToolResult,
+  onEditUserMessage,
 }: AgentMessageThreadProps) {
   const meta = ROLE_META[message.role]
   const toolCalls = message.toolCalls ?? []
@@ -122,13 +125,32 @@ export default function AgentMessageThread({
 
   if (message.role === 'user') {
     const replaySegments = buildUserMessageReplaySegments(message)
+    const hasSeq = message.sequence != null && message.sequence > 0
     return (
       <div className={`nagent-msg nagent-msg--user${continuationClass}`}>
         <div className="nagent-msg__body nagent-msg__body--user">
           <div className="nagent-msg__bubble nagent-msg__bubble--user">
             <UserMessageReplay segments={replaySegments} />
           </div>
-          </div>
+          {onEditUserMessage && hasSeq ? (
+            <button
+              type="button"
+              className="nagent-msg__edit-btn"
+              title="编辑并重新发送"
+              aria-label="编辑并重新发送"
+              onClick={(e) => {
+                e.stopPropagation()
+                onEditUserMessage(
+                  String(message.sequence),
+                  message.content ?? '',
+                  message.rawContent,
+                )
+              }}
+            >
+              <EditIcon size={13} />
+            </button>
+          ) : null}
+        </div>
       </div>
     )
   }
@@ -350,8 +372,7 @@ function SystemPromptBlock({
   content: string
   taskId?: string
   messageId?: string
-}) {
-  const [open, setOpen] = React.useState(false)
+}) {  const [open, setOpen] = React.useState(false)
 
   // 折叠图标全设备默认隐藏（仅 AI 思考内容常显），故头部整行作为可点击折叠区：
   // 点文本或图标任意位置均可展开/收起，移动端（无 hover）也不会失去入口。
@@ -386,4 +407,16 @@ function SystemPromptBlock({
   )
 }
 
-
+/** 编辑图标(铅笔形 SVG)。 */
+function EditIcon({ size = 14 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path
+        d="M11.5 2.5l2 2L5.5 12.5l-2.5.5.5-2.5L11.5 2.5z"
+        stroke="currentColor"
+        strokeWidth="1.2"
+        strokeLinejoin="round"
+      />
+    </svg>
+  )
+}
