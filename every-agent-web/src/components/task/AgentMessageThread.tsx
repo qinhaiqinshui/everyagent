@@ -156,6 +156,9 @@ export default function AgentMessageThread({
               }}
             >
               {isEditing ? <CancelEditIcon size={13} /> : <EditIcon size={13} />}
+              {!isEditing && (
+                <span className="nagent-msg__edit-tooltip">重新发送会删除此消息之后的所有 AI 回复和过程内容</span>
+              )}
             </button>
           ) : null}
           <div

@@ -866,7 +866,7 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
                   </Button>
                 ) : (
                   <Button
-                    variant="primary"
+                    variant={editTarget ? 'danger' : 'primary'}
                     size="sm"
                     onClick={handleSubmit}
                     disabled={submitDisabled}
@@ -878,7 +878,7 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
                       <ArrowRightIcon size={14} />
                     )}
                     <span className="task-composer-footer__send-label">
-                      {submitting ? '发送中...' : '发送'}
+                      {submitting ? (editTarget ? '重新发送中...' : '发送中...') : (editTarget ? '重新发送' : '发送')}
                     </span>
                   </Button>
                 )}
