@@ -521,6 +521,7 @@ ask 管道承载第二类阻塞请求:**危险操作授权**。`PermissionGate` 
 - **加密存储**:每工作区一把密钥 `<workspaceRoot>/.everyagent/.git-credential.key`(首次启动自动生成 32B AES-256,与密文 `.git-credentials.enc` 同级);算法 AES/GCM/NoPadding,随机 IV,AAD=host 绑定条目;密文 JSON `{version, entries:{host:{iv,cipher,ts}}}` 存工作区 `.everyagent/.git-credentials.enc`,明文永不落盘。
 - 前端 Git 面板捕获 `AUTH_REQUIRED(host)` → 凭证 Modal(账号/密码/「保存凭证到工作区(加密)」复选框)→ 先带临时凭证重试(克隆时根仍为空),成功后再 `git.credential.save` 落盘。
 - 凭证仅存工作区加密文件与 worker 内存,不经 hub / 前端 localStorage;协议不提供"读取凭证"RPC(save 只进不出)。
+- **多远端推送**:`git.push` 与自动同步(`syncRemote`)均推送到<b>所有</b>已配置远端(`git remote -v` 列出的每个 remote),而非仅 origin;自动同步仅从 origin 拉取、推送全远端;推送逐个远端执行,部分失败时仍尝试其余远端,最终汇总错误。
 - 自动同步(git 自动提交)保持静默:只走本机凭证 + 加密凭证,不弹窗。
 
 ### 7.13 任务流传输(混合模型:定向推送 + 拉取)
