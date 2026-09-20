@@ -233,12 +233,10 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
   // agent 选中态(点击输入框上方 agent 长条切换):非空时轮次视图按该 agent 过滤
   // (仅过滤已加载内容,不触发拉取,见 TaskRoundsPanel matches 谓词)。
   const [filterAgentId, setFilterAgentId] = React.useState('')
-  // 消息编辑确认弹窗状态
-  const [editTarget, setEditTarget] = React.useState<{
-    seq: string
-    text: string
-    rawContent?: string
-  } | null>(null)
+  // 消息编辑:editTarget 非空=编辑模式(内容已回填输入框);
+  // editConfirmOpen=用户点发送后弹确认窗;确认后执行 task.message.edit。
+  const [editTarget, setEditTarget] = React.useState<{ seq: string } | null>(null)
+  const [editConfirmOpen, setEditConfirmOpen] = React.useState(false)
   const [editSubmitting, setEditSubmitting] = React.useState(false)
 
   // 实时信号链:订阅 taskStream(agentStates/contextUsage/taskModel/ask 等状态信号
@@ -524,6 +522,12 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
     if (!aiText) {
       return
     }
+    // 编辑模式:点编辑按钮后回填了输入框,用户修改完毕点发送 → 弹确认窗,
+    // 不走正常发送逻辑(确认后由 handleConfirmEdit 执行 task.message.edit)。
+    if (editTarget) {
+      setEditConfirmOpen(true)
+      return
+    }
     if (isDraft && !draftWorkerId) {
       setError('请先选择 worker')
       return
@@ -585,7 +589,7 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
         setSubmitting(false)
       }
     })()
-  }, [draft, isDraft, draftWorkerId, selectedLlmConfigId, submitting, stream, shell, effectiveDraftWorkspace, isTaskRunning, effectiveTaskId, selectedForTask, scopeTokens])
+  }, [draft, isDraft, draftWorkerId, selectedLlmConfigId, submitting, stream, shell, effectiveDraftWorkspace, isTaskRunning, effectiveTaskId, selectedForTask, scopeTokens, editTarget])
 
   /**
    * 停止当前 Task。
@@ -606,8 +610,8 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
   }, [isTaskRunning, stopping, stream])
 
   /**
-   * 用户消息编辑:点击用户消息上的编辑按钮 → 弹出确认对话框。
-   * 确认后调 task.message.edit RPC(worker 截断后续事件+更新消息+冷启动重跑)。
+   * 用户消息编辑:点击用户消息上的编辑按钮 → 把原消息内容回填到输入框,
+   * 记录编辑目标(seq);用户在输入框修改完毕后点发送按钮时弹确认窗。
    */
   const handleEditUserMessage = React.useCallback(
     (seq: number | string, text: string, rawContent?: string) => {
@@ -616,7 +620,11 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
         return
       }
       setError('')
-      setEditTarget({ seq: String(seq), text, rawContent })
+      // 回填输入框:rawContent 优先(保留胶囊),退化为纯文本
+      const rc = rawContent && rawContent.length ? rawContent : text
+      setDraft({ text: rc, rawContent: rc, tokens: [], activeTokenId: undefined })
+      // 记录编辑目标:发送时根据此值弹确认窗
+      setEditTarget({ seq: String(seq) })
     },
     [isTaskRunning],
   )
@@ -626,20 +634,25 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
     setEditSubmitting(true)
     void (async () => {
       try {
+        // 用输入框当前内容(AI 可见明文 + rawContent 胶囊串)作为编辑后的新消息
+        const aiText = replaceComposerTokensForSubmission(draft.rawContent, draft.tokens).trim()
         await taskQueryService.editMessage(
           effectiveTaskId,
           editTarget.seq,
-          editTarget.text,
-          editTarget.rawContent,
+          aiText,
+          draft.rawContent,
         )
+        setEditConfirmOpen(false)
         setEditTarget(null)
+        setDraft({ text: '', rawContent: '', tokens: [], activeTokenId: undefined })
       } catch (editError) {
         setError(editError instanceof Error ? editError.message : '消息编辑失败')
+        setEditConfirmOpen(false)
       } finally {
         setEditSubmitting(false)
       }
     })()
-  }, [editTarget, effectiveTaskId])
+  }, [editTarget, effectiveTaskId, draft])
 
   // 从线程派生 agent 列表:主 agent(mainAgentId)恒在首位,子 agent 按首次出现顺序。
   // 线程内主 agent 消息 agentId 为空串(缺省=主线程),此处归一到 mainAgentId 供列表/过滤使用。
@@ -845,7 +858,7 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
                   </Button>
                 ) : (
                   <Button
-                    variant="primary"
+                    variant={editTarget ? 'danger' : 'primary'}
                     size="sm"
                     onClick={handleSubmit}
                     disabled={submitDisabled}
@@ -857,7 +870,7 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
                       <ArrowRightIcon size={14} />
                     )}
                     <span className="task-composer-footer__send-label">
-                      {submitting ? '发送中...' : '发送'}
+                      {submitting ? '发送中...' : editTarget ? '编辑重发' : '发送'}
                     </span>
                   </Button>
                 )}
@@ -871,14 +884,14 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
       )}
     />
     <ConfirmDialog
-      open={editTarget != null}
+      open={editConfirmOpen}
       title="编辑并重新发送"
       message="此操作将删除该消息之后的所有 AI 回复和过程内容,并以编辑后的消息重新运行任务。"
       confirmLabel={editSubmitting ? '发送中...' : '确认重新发送'}
       cancelLabel="取消"
       danger
       onConfirm={handleConfirmEdit}
-      onCancel={() => { if (!editSubmitting) setEditTarget(null) }}
+      onCancel={() => { if (!editSubmitting) setEditConfirmOpen(false) }}
     />
     </>
   )
