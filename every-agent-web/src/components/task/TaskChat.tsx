@@ -30,7 +30,6 @@ import TaskModelControls from '@/components/taskComposer/TaskModelControls'
 import HScrollArea from '@/components/shared/HScrollArea'
 import { ArrowDownIcon, ArrowRightIcon, StopIcon } from '../shared/AppGlyphs'
 import { Button, InlineSpinner } from '@/components/shared/ui'
-import ConfirmDialog from '@/components/shared/ConfirmDialog'
 import { UserMessageEditContext, type UserMessageEditContextValue } from './userMessageEditContext'
 import { useWorkspaceShell } from '@/components/app/WorkspaceShellContext'
 import { useResponsiveViewport } from '@/hooks/useResponsiveViewport'
@@ -234,11 +233,9 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
   // agent 选中态(点击输入框上方 agent 长条切换):非空时轮次视图按该 agent 过滤
   // (仅过滤已加载内容,不触发拉取,见 TaskRoundsPanel matches 谓词)。
   const [filterAgentId, setFilterAgentId] = React.useState('')
-  // 消息编辑:editTarget 非空=编辑模式(内容已回填输入框);
-  // editConfirmOpen=用户点发送后弹确认窗;确认后执行 task.message.edit。
+  // 消息编辑:editTarget 非空=编辑模式(内容已追加到输入框);
+  // 点发送时直接走正常流程(携带 editSeq),不弹确认窗。
   const [editTarget, setEditTarget] = React.useState<{ seq: string } | null>(null)
-  const [editConfirmOpen, setEditConfirmOpen] = React.useState(false)
-  const [editSubmitting, setEditSubmitting] = React.useState(false)
 
   // 实时信号链:订阅 taskStream(agentStates/contextUsage/taskModel/ask 等状态信号
   // 折叠推进即重渲染)。items 不再驱动线程渲染(旧首拉渲染路径已删除),只用于
@@ -523,10 +520,33 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
     if (!aiText) {
       return
     }
-    // 编辑模式:点编辑按钮后回填了输入框,用户修改完毕点发送 → 弹确认窗,
-    // 不走正常发送逻辑(确认后由 handleConfirmEdit 执行 task.message.edit)。
+    // 编辑模式:点编辑按钮后内容已追加到输入框,用户修改完毕点发送 →
+    // 直接走正常 task.run/sendInput 流程(携带 editSeq 标记),不弹确认窗。
     if (editTarget) {
-      setEditConfirmOpen(true)
+      const editAiText = replaceComposerTokensForSubmission(draft.rawContent, draft.tokens).trim()
+      if (!editAiText) return
+      setSubmitting(true)
+      userControllRef.current = false
+      void (async () => {
+        try {
+          if (isTaskRunning) {
+            stream!.sendInput(editAiText, draft.rawContent, editTarget.seq)
+          } else {
+            await taskQueryService.runTask(editAiText, {
+              taskId: effectiveTaskId,
+              configId: selectedForTask || undefined,
+              rawContent: draft.rawContent,
+              editSeq: editTarget.seq,
+            })
+          }
+          setEditTarget(null)
+          setDraft({ text: '', rawContent: '', tokens: [], activeTokenId: undefined })
+        } catch (editError) {
+          setError(editError instanceof Error ? editError.message : '消息编辑失败')
+        } finally {
+          setSubmitting(false)
+        }
+      })()
       return
     }
     if (isDraft && !draftWorkerId) {
@@ -611,18 +631,12 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
   }, [isTaskRunning, stopping, stream])
 
   /**
-   * 用户消息编辑:点击编辑按钮 → 把原消息内容回填到输入框,记录编辑目标(seq)。
-   * 用户在输入框修改完毕后点发送按钮 → 走普通续跑逻辑(task.run{taskId}),
-   * 但因为 editTarget 非空,先弹确认窗;确认后执行 task.message.edit。
+   * 用户消息编辑:点击编辑按钮 → 把原消息内容追加到输入框已有内容末尾,记录编辑目标(seq)。
+   * 运行中也可编辑(入队时 worker 先截断再正常运行)。
    */
   const handleEditUserMessage = React.useCallback(
     (seq: number | string, text: string, rawContent?: string) => {
-      if (isTaskRunning) {
-        setError('任务运行中,请先停止再编辑消息')
-        return
-      }
       setError('')
-      // 把原消息内容追加到输入框已有内容末尾(不替换用户已有内容)
       const appendText = text && text.length ? text : ''
       const newRawContent = (draft.rawContent ?? '') + appendText
       setDraft({
@@ -633,38 +647,13 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
       })
       setEditTarget({ seq: String(seq) })
     },
-    [isTaskRunning, draft.rawContent],
+    [draft.rawContent],
   )
 
-  /** 取消编辑:清除编辑标记,不删除输入框内容(用户可继续作为普通续跑发送)。 */
+  /** 取消编辑:清除编辑标记,不删除输入框内容。 */
   const handleCancelEdit = React.useCallback(() => {
     setEditTarget(null)
   }, [])
-
-  const handleConfirmEdit = React.useCallback(() => {
-    if (!editTarget || !effectiveTaskId) return
-    setEditSubmitting(true)
-    void (async () => {
-      try {
-        // 用输入框当前内容(AI 可见明文 + rawContent 胶囊串)作为编辑后的新消息
-        const aiText = replaceComposerTokensForSubmission(draft.rawContent, draft.tokens).trim()
-        await taskQueryService.editMessage(
-          effectiveTaskId,
-          editTarget.seq,
-          aiText,
-          draft.rawContent,
-        )
-        setEditConfirmOpen(false)
-        setEditTarget(null)
-        setDraft({ text: '', rawContent: '', tokens: [], activeTokenId: undefined })
-      } catch (editError) {
-        setError(editError instanceof Error ? editError.message : '消息编辑失败')
-        setEditConfirmOpen(false)
-      } finally {
-        setEditSubmitting(false)
-      }
-    })()
-  }, [editTarget, effectiveTaskId, draft])
 
   // 从线程派生 agent 列表:主 agent(mainAgentId)恒在首位,子 agent 按首次出现顺序。
   // 线程内主 agent 消息 agentId 为空串(缺省=主线程),此处归一到 mainAgentId 供列表/过滤使用。
@@ -901,16 +890,6 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
           />
         </div>
       )}
-    />
-    <ConfirmDialog
-      open={editConfirmOpen}
-      title="编辑并重新发送"
-      message="此操作将删除该消息之后的所有 AI 回复和过程内容,并以编辑后的消息重新运行任务。"
-      confirmLabel={editSubmitting ? '发送中...' : '确认重新发送'}
-      cancelLabel="取消"
-      danger
-      onConfirm={handleConfirmEdit}
-      onCancel={() => { if (!editSubmitting) setEditConfirmOpen(false) }}
     />
     </>
     </UserMessageEditContext.Provider>

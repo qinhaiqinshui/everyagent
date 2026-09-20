@@ -77,8 +77,8 @@ export interface TaskStreamHandle {
   state: TaskThreadState
   /** 线程变更订阅(折叠推进/缓存回放)。 */
   subscribe(fn: () => void): () => void
-  /** 发送新一轮用户输入(task.input;rawContent 为原始输入,可选)。 */
-  sendInput(text: string, rawContent?: string): void
+  /** 发送新一轮用户输入(task.input;rawContent 为原始输入,editSeq 为编辑重发标记,均可选)。 */
+  sendInput(text: string, rawContent?: string, editSeq?: string): void
   /** 取消任务(task.cancel RPC)。 */
   cancel(): Promise<any>
   /** 手动触发校准:重拉尾段并续轮询。 */
@@ -538,8 +538,8 @@ class TaskStreamManager {
         stream.listeners.add(fn)
         return () => stream.listeners.delete(fn)
       },
-      sendInput: (text, rawContent) => {
-        stream.ensureView().sendInput(text, rawContent)
+      sendInput: (text, rawContent, editSeq) => {
+        stream.ensureView().sendInput(text, rawContent, editSeq)
       },
       cancel: () => stream.ensureView().cancel(),
       resync: () => stream.open(),

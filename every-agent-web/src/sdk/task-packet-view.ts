@@ -335,9 +335,9 @@ export class TaskPacketView {
   }
 
   /** 任务轮注入(worker 级输入频道,taskId 入 payload;终态任务 = 冷启动再运行)。 */
-  sendInput(text: string, rawContent?: string): void {
+  sendInput(text: string, rawContent?: string, editSeq?: string): void {
     this.client.pub(channels.workerInput(this.k, this.workerId), 'task.input',
-      { taskId: this.taskId, text, ...(rawContent ? { rawContent } : {}) })
+      { taskId: this.taskId, text, ...(rawContent ? { rawContent } : {}), ...(editSeq ? { editSeq } : {}) })
   }
 
   /** 抢答挂起中的 ask。 */
