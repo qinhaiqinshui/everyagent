@@ -744,11 +744,16 @@
   background: transparent;
   color: var(--text-tertiary, #999);
   cursor: pointer;
-  opacity: 0.45;
+  opacity: 0;
   transition: opacity 0.15s, background 0.15s;
 }
-.nagent-msg--user:hover .nagent-msg__edit-btn,
+/* 桌面端:hover 消息区域时显示 */
+.nagent-msg--user-editable:hover .nagent-msg__edit-btn,
 .nagent-msg__edit-btn:focus-visible {
+  opacity: 1;
+}
+/* 移动端:长按气泡后显示(revealed class 由 JS 添加) */
+.nagent-msg__bubble--revealed ~ .nagent-msg__edit-btn {
   opacity: 1;
 }
 .nagent-msg__edit-btn:hover {

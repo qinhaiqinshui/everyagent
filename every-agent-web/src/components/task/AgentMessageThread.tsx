@@ -92,6 +92,12 @@ export default function AgentMessageThread({
   const meta = ROLE_META[message.role]
   const toolCalls = message.toolCalls ?? []
 
+  // 用户消息编辑:长按(mobile)/hover(desktop) 显示编辑按钮
+  const canEditUserMsg = message.role === 'user'
+    && message.sequence != null && message.sequence > 0
+    && Boolean(onEditUserMessage)
+  const { bubbleClassName, touchHandlers } = useLongPressReveal(canEditUserMsg)
+
   const renderRich = message.role === 'assistant' || message.role === 'system'
   const isAgentSystemPrompt = message.role === 'system' && message.metadata?.source === 'agent_system_prompt'
   const hasAssistantReasoning = message.role === 'assistant' && Boolean(message.reasoning?.trim())
@@ -125,14 +131,16 @@ export default function AgentMessageThread({
 
   if (message.role === 'user') {
     const replaySegments = buildUserMessageReplaySegments(message)
-    const hasSeq = message.sequence != null && message.sequence > 0
     return (
-      <div className={`nagent-msg nagent-msg--user${continuationClass}`}>
+      <div className={`nagent-msg nagent-msg--user${continuationClass}${canEditUserMsg ? ' nagent-msg--user-editable' : ''}`}>
         <div className="nagent-msg__body nagent-msg__body--user">
-          <div className="nagent-msg__bubble nagent-msg__bubble--user">
+          <div
+            className={bubbleClassName}
+            {...touchHandlers}
+          >
             <UserMessageReplay segments={replaySegments} />
           </div>
-          {onEditUserMessage && hasSeq ? (
+          {canEditUserMsg ? (
             <button
               type="button"
               className="nagent-msg__edit-btn"
@@ -140,7 +148,7 @@ export default function AgentMessageThread({
               aria-label="编辑并重新发送"
               onClick={(e) => {
                 e.stopPropagation()
-                onEditUserMessage(
+                onEditUserMessage!(
                   String(message.sequence),
                   message.content ?? '',
                   message.rawContent,
@@ -405,6 +413,41 @@ function SystemPromptBlock({
       ) : null}
     </div>
   )
+}
+
+/**
+ * 长按显示编辑按钮(mobile)/hover 显示(desktop)。
+ * 长按 500ms 后给气泡元素打 `--revealed` class 显示编辑按钮。
+ * 触摸移动超过阈值取消长按(避免滚动误触发)。
+ * 返回 {bubbleClassName, touchHandlers}。
+ */
+function useLongPressReveal(enabled: boolean) {
+  const timerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [revealed, setRevealed] = React.useState(false)
+
+  const start = React.useCallback(() => {
+    if (!enabled) return
+    timerRef.current = setTimeout(() => setRevealed(true), 500)
+  }, [enabled])
+  const clear = React.useCallback(() => {
+    if (timerRef.current) {
+      clearTimeout(timerRef.current)
+      timerRef.current = null
+    }
+  }, [])
+
+  React.useEffect(() => () => clear(), [clear])
+
+  const touchHandlers = enabled ? {
+    onTouchStart: start,
+    onTouchEnd: clear,
+    onTouchMove: clear,
+    onContextMenu: (e: React.MouseEvent) => { e.preventDefault() },
+  } : {}
+
+  const bubbleClassName = `nagent-msg__bubble nagent-msg__bubble--user${revealed ? ' nagent-msg__bubble--revealed' : ''}`
+
+  return { bubbleClassName, touchHandlers }
 }
 
 /** 编辑图标(铅笔形 SVG)。 */
