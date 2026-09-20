@@ -134,12 +134,6 @@ export default function AgentMessageThread({
     return (
       <div className={`nagent-msg nagent-msg--user${continuationClass}${canEditUserMsg ? ' nagent-msg--user-editable' : ''}`}>
         <div className="nagent-msg__body nagent-msg__body--user">
-          <div
-            className={bubbleClassName}
-            {...touchHandlers}
-          >
-            <UserMessageReplay segments={replaySegments} />
-          </div>
           {canEditUserMsg ? (
             <button
               type="button"
@@ -158,6 +152,12 @@ export default function AgentMessageThread({
               <EditIcon size={13} />
             </button>
           ) : null}
+          <div
+            className={bubbleClassName}
+            {...touchHandlers}
+          >
+            <UserMessageReplay segments={replaySegments} />
+          </div>
         </div>
       </div>
     )

@@ -706,8 +706,8 @@
 
 .nagent-msg__body--user {
   display: flex;
-  flex-direction: column;
-  align-items: flex-end;
+  flex-direction: row;
+  align-items: center;
   margin-left: auto;
   /* 用户消息气泡保留最大宽度 94%（不随非用户消息铺满），靠右展示 */
   max-width: 94%;
@@ -738,7 +738,7 @@
   justify-content: center;
   width: 22px;
   height: 22px;
-  margin-top: 2px;
+  margin-right: 4px;
   border: none;
   border-radius: 4px;
   background: transparent;
@@ -752,8 +752,11 @@
 .nagent-msg__edit-btn:focus-visible {
   opacity: 1;
 }
-/* 移动端:长按气泡后显示(revealed class 由 JS 添加) */
-.nagent-msg__bubble--revealed ~ .nagent-msg__edit-btn {
+/* 移动端:长按气泡后显示(按钮在气泡前面,用 ~ 选择器反向匹配) */
+.nagent-msg__bubble--revealed {
+  opacity: 1;
+}
+.nagent-msg--user-editable:has(.nagent-msg__bubble--revealed) .nagent-msg__edit-btn {
   opacity: 1;
 }
 .nagent-msg__edit-btn:hover {
