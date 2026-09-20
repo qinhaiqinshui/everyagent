@@ -26,8 +26,9 @@ import dev.everyagent.worker.task.TaskManager;
  * 胶囊只复位 aiReview,无人值守仍在(开启时联动、事后可拆分)。
  *
  * <p>选中 /无人值守 即开启任务级「无人值守」开关并落盘——{@code UnattendedAskUserCallback}
- * 装饰器在 ask_user 工具执行瞬间拦截调用、直接回传合成结果,本次任务后续所有轮次(含再运行)
- * 持续生效。开关随任务 meta.json 持久化;胶囊底部渲染,可随时 ✕ 取消(取消后置 false 并落盘)。
+ * 装饰器在 ask_user 工具执行瞬间拦截调用、代替人工逐题选择第一个选项并以「题干：首选项」
+ * 格式回传作答文本,本次任务后续所有轮次(含再运行)持续生效。开关随任务 meta.json 持久化;
+ * 胶囊底部渲染,可随时 ✕ 取消(取消后置 false 并落盘)。
  */
 @Component
 public class UnattendedSlashProvider {

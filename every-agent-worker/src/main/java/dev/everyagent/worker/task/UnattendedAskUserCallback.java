@@ -1,16 +1,23 @@
 package dev.everyagent.worker.task;
 
+import java.util.ArrayList;
+import java.util.List;
+
 import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.definition.ToolDefinition;
 import org.springframework.ai.tool.metadata.ToolMetadata;
+import org.springframework.ai.util.JacksonUtils;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 
 /**
  * 无人值守 ask_user 拦截装饰器(任务级开关,实时生效)。
  *
  * <p>本装饰器包装 {@code AskUserTool} 的 {@link ToolCallback},在工具执行瞬间拦截
  * {@code ask_user} 调用:任务级 {@code TaskEntry.unattended}(volatile)为 true 时,
- * 直接返回合成文本「当前无人值守,请按你推荐的实现。」——不创建 ask、不挂起虚拟线程、
+ * 解析 toolInput 中的问题列表,逐题自动选择第一个选项,拼装为
+ * 「题干：首选项」格式的作答文本直接回传给 AI——不创建 ask、不挂起虚拟线程、
  * 不发 ask.create/ask.state/ask.resolved;为 false 时原样委托给真实
  * {@code AskUserTool}(正常挂起等待用户作答)。
  *
@@ -33,8 +40,7 @@ import org.springframework.ai.tool.metadata.ToolMetadata;
  */
 public class UnattendedAskUserCallback implements ToolCallback {
 
-    /** 无人值守时回传给 AI 的合成工具结果文本。 */
-    private static final String UNATTENDED_RESULT = "当前无人值守,请按你推荐的实现。";
+    private static final ObjectMapper MAPPER = JacksonUtils.getDefaultJsonMapper();
 
     private final ToolCallback delegate;
     private final TaskEntry task;
@@ -57,7 +63,7 @@ public class UnattendedAskUserCallback implements ToolCallback {
     @Override
     public String call(String toolInput) {
         if (task.unattended) {
-            return UNATTENDED_RESULT;
+            return autoAnswer(toolInput);
         }
         return delegate.call(toolInput);
     }
@@ -65,8 +71,58 @@ public class UnattendedAskUserCallback implements ToolCallback {
     @Override
     public String call(String toolInput, ToolContext toolContext) {
         if (task.unattended) {
-            return UNATTENDED_RESULT;
+            return autoAnswer(toolInput);
         }
         return delegate.call(toolInput, toolContext);
+    }
+
+    /**
+     * 代替人工作答:解析 toolInput 的 questions 数组,逐题取第一个选项,
+     * 拼装为「题干：首选项」格式(与前端 askStore.toAnswerText 的作答格式一致)。
+     * 解析失败/无有效问题时回退为通用提示文本。
+     */
+    private static String autoAnswer(String toolInput) {
+        try {
+            JsonNode root = MAPPER.readTree(toolInput);
+            JsonNode questions = root.path("questions");
+            if (!questions.isArray() || questions.isEmpty()) {
+                return "未提供任何问题,跳过提问。";
+            }
+            List<String> lines = new ArrayList<>();
+            for (JsonNode q : questions) {
+                String question = textOrEmpty(q.path("question"));
+                JsonNode options = q.path("options");
+                String firstOption = options.isArray() && !options.isEmpty()
+                        ? textOrEmpty(options.get(0)) : "";
+                if (!question.isEmpty() && !firstOption.isEmpty()) {
+                    lines.add(question + "：" + firstOption);
+                }
+            }
+            if (lines.isEmpty()) {
+                return "未提供任何有效问题,跳过提问。";
+            }
+            return String.join("\n", lines);
+        } catch (Exception e) {
+            return "问题解析失败,跳过提问。";
+        }
+    }
+
+    /** 容错提取文本节点(对标 AskUserTool 的 LenientCoercing):value 节点取 text,object 节点取 text/label/name/value 字段。 */
+    private static String textOrEmpty(JsonNode node) {
+        if (node == null || node.isNull()) {
+            return "";
+        }
+        if (node.isValueNode()) {
+            return node.asText("");
+        }
+        if (node.isObject()) {
+            for (String key : new String[]{"text", "label", "name", "value", "title", "option", "content"}) {
+                JsonNode v = node.get(key);
+                if (v != null && v.isValueNode()) {
+                    return v.asText("");
+                }
+            }
+        }
+        return node.toString();
     }
 }

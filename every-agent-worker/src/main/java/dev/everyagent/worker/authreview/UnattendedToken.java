@@ -18,8 +18,8 @@ import dev.everyagent.worker.slash.SlashTokenEncoder;
  *
  * <p>本 token 是任务级 bottom 开关的触发标记,不承载任何需 AI 理解的内容;提交解析
  * (从 AI 上下文剥离)由 {@code UnattendedSlashResolver} 接管:本 kind 解析为 {@code ""},
- * token 被清空、不注入模型上下文。真正的 ask_user 拦截由
- * {@code UnattendedAskUserCallback} 装饰器在工具执行瞬间按任务级
+ * token 被清空、不注入模型上下文。真正的 ask_user 拦截(代替人工逐题选第一个选项)
+ * 由 {@code UnattendedAskUserCallback} 装饰器在工具执行瞬间按任务级
  * {@code TaskEntry.unattended} 完成。
  *
  * <p>本次任务有效:选中 /无人值守 即开启任务级开关(写入任务 meta.json 落盘),

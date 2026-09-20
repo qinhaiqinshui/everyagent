@@ -9,7 +9,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * {@link UnattendedAskUserCallback} 单元测试:任务级无人值守开关实时生效,
- * 合成结果与真实执行按 {@code TaskEntry.unattended} 分流。
+ * 拦截后逐题自动选择第一个选项,与真实作答文本格式一致。
  */
 class UnattendedAskUserCallbackTest {
 
@@ -20,11 +20,10 @@ class UnattendedAskUserCallbackTest {
     }
 
     @Test
-    void interceptsWhenUnattendedTrue() {
+    void autoAnswerSelectsFirstOption() {
         TaskEntry t = task();
         t.unattended = true;
 
-        // delegate 若被调用则抛异常,证明短路未触达真实执行。
         ToolCallback delegate = new ToolCallback() {
             @Override
             public ToolDefinition getToolDefinition() {
@@ -38,9 +37,130 @@ class UnattendedAskUserCallbackTest {
         };
 
         UnattendedAskUserCallback wrapped = new UnattendedAskUserCallback(delegate, t);
-        String result = wrapped.call("{\"questions\":[{\"question\":\"选哪个?\",\"options\":[\"A\",\"B\"]}]}");
+        String result = wrapped.call(
+                "{\"questions\":[{\"question\":\"主角性别?\",\"options\":[\"男\",\"女\"]}]}");
 
-        assertEquals("当前无人值守,请按你推荐的实现。", result);
+        assertEquals("主角性别?：男", result);
+    }
+
+    @Test
+    void autoAnswerMultipleQuestions() {
+        TaskEntry t = task();
+        t.unattended = true;
+
+        ToolCallback delegate = new ToolCallback() {
+            @Override
+            public ToolDefinition getToolDefinition() {
+                return ToolDefinition.builder().name("ask_user").description("test").inputSchema("{}").build();
+            }
+
+            @Override
+            public String call(String toolInput) {
+                throw new IllegalStateException("delegate should not be called");
+            }
+        };
+
+        UnattendedAskUserCallback wrapped = new UnattendedAskUserCallback(delegate, t);
+        String result = wrapped.call(
+                "{\"questions\":[{\"question\":\"选语言?\",\"options\":[\"Java\",\"Python\"]},"
+                        + "{\"question\":\"选框架?\",\"options\":[\"Spring\",\"Quarkus\"]}]}");
+
+        assertEquals("选语言?：Java\n选框架?：Spring", result);
+    }
+
+    @Test
+    void autoAnswerSkipsEmptyQuestion() {
+        TaskEntry t = task();
+        t.unattended = true;
+
+        ToolCallback delegate = new ToolCallback() {
+            @Override
+            public ToolDefinition getToolDefinition() {
+                return ToolDefinition.builder().name("ask_user").description("test").inputSchema("{}").build();
+            }
+
+            @Override
+            public String call(String toolInput) {
+                throw new IllegalStateException("delegate should not be called");
+            }
+        };
+
+        UnattendedAskUserCallback wrapped = new UnattendedAskUserCallback(delegate, t);
+        String result = wrapped.call(
+                "{\"questions\":[{\"question\":\"\",\"options\":[\"A\"]},"
+                        + "{\"question\":\"有效问题?\",\"options\":[\"X\",\"Y\"]}]}");
+
+        assertEquals("有效问题?：X", result);
+    }
+
+    @Test
+    void autoAnswerSkipsQuestionWithNoOptions() {
+        TaskEntry t = task();
+        t.unattended = true;
+
+        ToolCallback delegate = new ToolCallback() {
+            @Override
+            public ToolDefinition getToolDefinition() {
+                return ToolDefinition.builder().name("ask_user").description("test").inputSchema("{}").build();
+            }
+
+            @Override
+            public String call(String toolInput) {
+                throw new IllegalStateException("delegate should not be called");
+            }
+        };
+
+        UnattendedAskUserCallback wrapped = new UnattendedAskUserCallback(delegate, t);
+        String result = wrapped.call(
+                "{\"questions\":[{\"question\":\"无选项问题?\",\"options\":[]}]}");
+
+        assertEquals("未提供任何有效问题,跳过提问。", result);
+    }
+
+    @Test
+    void autoAnswerInvalidJson() {
+        TaskEntry t = task();
+        t.unattended = true;
+
+        ToolCallback delegate = new ToolCallback() {
+            @Override
+            public ToolDefinition getToolDefinition() {
+                return ToolDefinition.builder().name("ask_user").description("test").inputSchema("{}").build();
+            }
+
+            @Override
+            public String call(String toolInput) {
+                throw new IllegalStateException("delegate should not be called");
+            }
+        };
+
+        UnattendedAskUserCallback wrapped = new UnattendedAskUserCallback(delegate, t);
+        String result = wrapped.call("not json");
+
+        assertEquals("问题解析失败,跳过提问。", result);
+    }
+
+    @Test
+    void autoAnswerNoQuestions() {
+        TaskEntry t = task();
+        t.unattended = true;
+
+        ToolCallback delegate = new ToolCallback() {
+            @Override
+            public ToolDefinition getToolDefinition() {
+                return ToolDefinition.builder().name("ask_user").description("test").inputSchema("{}").build();
+            }
+
+            @Override
+            public String call(String toolInput) {
+                throw new IllegalStateException("delegate should not be called");
+            }
+        };
+
+        UnattendedAskUserCallback wrapped = new UnattendedAskUserCallback(delegate, t);
+        String result = wrapped.call("{\"questions\":[]}");
+
+        assertEquals("未提供任何问题,跳过提问。", result);
     }
 
     @Test
@@ -87,17 +207,18 @@ class UnattendedAskUserCallbackTest {
 
         // 关闭:透传真实执行
         t.unattended = false;
-        assertEquals("真实回答", wrapped.call("{}"));
+        assertEquals("真实回答", wrapped.call("{\"questions\":[]}"));
         assertEquals(1, callCount[0]);
 
-        // 开启:拦截,不再触达 delegate
+        // 开启:拦截,自动选第一个
         t.unattended = true;
-        assertEquals("当前无人值守,请按你推荐的实现。", wrapped.call("{}"));
+        assertEquals("问题?：A", wrapped.call(
+                "{\"questions\":[{\"question\":\"问题?\",\"options\":[\"A\",\"B\"]}]}"));
         assertEquals(1, callCount[0]); // delegate 未被再调用
 
         // 再关闭:恢复透传
         t.unattended = false;
-        assertEquals("真实回答", wrapped.call("{}"));
+        assertEquals("真实回答", wrapped.call("{\"questions\":[]}"));
         assertEquals(2, callCount[0]);
     }
 
