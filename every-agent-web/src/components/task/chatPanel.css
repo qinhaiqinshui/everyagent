@@ -2069,6 +2069,12 @@
   cursor: not-allowed;
 }
 
+/* 编辑重发模式:警告色背景 */
+.nagent-composer__send.ant-btn-dangerous {
+  background: linear-gradient(135deg, #c0392b, #e74c3c) !important;
+  border: none !important;
+}
+
 /* ─── 输入区 footer：模型配置 / 思考强度 / 发送按钮同一行 ─────────── */
 
 /* 任务级 token 胶囊（slash 选中后底部回显）不进 contentEditable；
