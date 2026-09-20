@@ -622,11 +622,18 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
         return
       }
       setError('')
-      const rc = rawContent && rawContent.length ? rawContent : text
-      setDraft({ text: rc, rawContent: rc, tokens: [], activeTokenId: undefined })
+      // 把原消息内容追加到输入框已有内容末尾(不替换用户已有内容)
+      const appendText = text && text.length ? text : ''
+      const newRawContent = (draft.rawContent ?? '') + appendText
+      setDraft({
+        text: newRawContent,
+        rawContent: newRawContent,
+        tokens: [],
+        activeTokenId: undefined,
+      })
       setEditTarget({ seq: String(seq) })
     },
-    [isTaskRunning],
+    [isTaskRunning, draft.rawContent],
   )
 
   /** 取消编辑:清除编辑标记,不删除输入框内容(用户可继续作为普通续跑发送)。 */
