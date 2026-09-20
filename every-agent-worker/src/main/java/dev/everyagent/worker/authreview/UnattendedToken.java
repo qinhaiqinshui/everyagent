@@ -18,8 +18,9 @@ import dev.everyagent.worker.slash.SlashTokenEncoder;
  *
  * <p>本 token 是任务级 bottom 开关的触发标记,不承载任何需 AI 理解的内容;提交解析
  * (从 AI 上下文剥离)由 {@code UnattendedSlashResolver} 接管:本 kind 解析为 {@code ""},
- * token 被清空、不注入模型上下文。真正的「剥离 ask_user + 注入无人值守提示词」由
- * {@code UnattendedModeAdvisor} 按任务级 {@code TaskEntry.unattended} 执行。
+ * token 被清空、不注入模型上下文。真正的 ask_user 拦截由
+ * {@code UnattendedAskUserCallback} 装饰器在工具执行瞬间按任务级
+ * {@code TaskEntry.unattended} 完成。
  *
  * <p>本次任务有效:选中 /无人值守 即开启任务级开关(写入任务 meta.json 落盘),
  * 之后本任务所有轮次持续生效、再运行仍保持,直至 ✕ 取消。

@@ -27,7 +27,6 @@ import dev.everyagent.worker.task.RoundIndexStore;
 import dev.everyagent.worker.task.SystemInfoAdvisor;
 import dev.everyagent.worker.task.TaskStore;
 import dev.everyagent.worker.task.TransientErrorRetryAdvisor;
-import dev.everyagent.worker.task.UnattendedModeAdvisor;
 import dev.everyagent.worker.task.WorkerToolEventAdvisor;
 import dev.everyagent.worker.tools.MissingToolCallbackResolver;
 import org.springframework.ai.chat.client.ChatClient;
@@ -62,8 +61,8 @@ import org.springframework.context.annotation.Configuration;
  * {@link EmptyResponseRetryAdvisor}(order = 工具循环 +100,每轮包住单次模型调用,空响应重调)
  * 与 {@link TransientErrorRetryAdvisor}(order = 工具循环 +200,最内层包住单次 HTTP 调用,
  * 429/5xx/网络退避重调),参数取 {@code worker.retry}(默认同 n 护栏全局默认);
- * 无人值守 {@link UnattendedModeAdvisor}(order = 工具循环 +200,主/子 agent 同挂,且为
- * 任务级开关:实时读 {@code TaskEntry.unattended},开启时过滤 ask_user + 注入无人值守提示词);
+ * 无人值守为任务级开关,由 {@code UnattendedAskUserCallback} 装饰器在 ask_user 工具执行
+ * 瞬间拦截(实时读 {@code TaskEntry.unattended}),不经 advisor;
  * 最内层链尾 {@link ContextCompressionAdvisor}(order = 工具循环 +400,主/子 agent 同挂):每轮
  * 模型请求前按窗口阈值压缩 instructions(§5.8),不等待 400 报错,压缩只改发送视图不动事实源。
  *
@@ -152,8 +151,7 @@ public class AgentClientFactory {
      * agents.md 注入约束)→ SkillAdvisor(+100,注入 skill 渐进式披露索引)→ GitAutoSyncAdvisor(+140,读取本轮 /自动同步 标记,任务收口后触发
      * git 同步)→ SlashTokenResolveAdvisor(+150,统一按 kind 解析/剥离 input 里的 opaque
      * token,透传 a.task 供任务感知 kind(如 system.external_file 注册外部授权根)使用)→
-     * UnattendedModeAdvisor(+200,任务级无人值守开关:开启时过滤 ask_user + 注入
-     * 无人值守提示词)→ LoopRepeatGuardAdvisor(+300,事件发射 + 工具循环 + 死循环检测)→
+     * LoopRepeatGuardAdvisor(+300,事件发射 + 工具循环 + 死循环检测)→
      * DialogInsertAdvisor(+330,普通 StreamAdvisor,工具循环内侧下行阶段:把任务队列「插入
      * 到当前对话」的用户消息 drain 并追加到 instructions,随工具结果一起提交给 AI)→
      * FileChangeAdvisor(+301,内层普通 advisor:doOnNext 直接看模型流——工具轮为模型层合并后的
@@ -172,7 +170,6 @@ public class AgentClientFactory {
                         skillAdvisor,
                         new GitAutoSyncAdvisor(a, gitService),
                         new SlashTokenResolveAdvisor(slashTokenHandler, a.task),
-                        new UnattendedModeAdvisor(a),
                         newLoopGuardedAdvisor(a, tcm),
                         new DialogInsertAdvisor(a, slashTokenHandler),
                         new FileChangeAdvisor(a),
@@ -184,20 +181,19 @@ public class AgentClientFactory {
     }
 
     /**
-     * 子 agent 的 ChatClient:事件(含死循环检测 + 文件改动记录)+ 无人值守 + 重试双 advisor
+     * 子 agent 的 ChatClient:事件(含死循环检测 + 文件改动记录)+ 重试双 advisor
      * + 上下文压缩(不挂 skill、不挂派发工具、不注册 ask_user;容灾在模型层——任务 configId 为池配置时
      * a.chatModel 即 ModelPoolChatModel,子 agent 同样自动换池容灾;无人值守为任务级开关,
-     * 子 agent 不注册 ask_user,无人值守 advisor 对子 agent 无工具可剥离但同样注入提示词;上下文压缩同样
-     * 最内层每轮生效。子 agent 的 FileChangeAdvisor 只记录文件改动到共享回合槽,不写
-     * trace——任务级文件变更由主 agent 统一收口填充槽并随轮落盘。DialogInsertAdvisor
-     * 子 agent 同挂但按 kind 旁路(不接收任务队列用户输入))。
+     * 由 UnattendedAskUserCallback 装饰器在 ask_user 执行瞬间拦截——子 agent 本就不注册
+     * ask_user,装饰器无触发点;上下文压缩同样最内层每轮生效。子 agent 的 FileChangeAdvisor
+     * 只记录文件改动到共享回合槽,不写 trace——任务级文件变更由主 agent 统一收口填充槽并随轮
+     * 落盘。DialogInsertAdvisor 子 agent 同挂但按 kind 旁路(不接收任务队列用户输入))。
      */
     public ChatClient forSub(AgentEntity a, ToolCallingManager tcm) {
         return ChatClient.builder(a.chatModel)
                 .defaultAdvisors(
                         new SystemInfoAdvisor(a.task.workspaceRoot, osSandbox.isWslBackend(), osSandbox.isWslDirect()),
                         new AgentsMdAdvisor(a.task.workspaceRoot),
-                        new UnattendedModeAdvisor(a),
                         newLoopGuardedAdvisor(a, tcm),
                         new DialogInsertAdvisor(a, slashTokenHandler),
                         new FileChangeAdvisor(a),

@@ -457,7 +457,7 @@ ask 管道承载第二类阻塞请求:**危险操作授权**。`PermissionGate` 
 当需要人工授权(PermissionGate 拦到工作区外路径/危险命令)时,除人工弹窗外提供两条可选的任务级自动路径:
 
 - **AI 审议(`/AI 审议`,kind=ai.review)**:可单独开启。授权弹窗改为由**独立的 AI 审议会话**(无任何工具、独立 system prompt,只基于安全策略判断并要求忽略授权正文中的任何指令,防 prompt 注入)读取授权信息并输出结构化判断(ALLOW/DENY/ESCALATE),在 PermissionGate 内部闭环自动放行/拦截并落审计。**主 Agent 是被审议方,不能自我授权**。
-- **无人值守(`/无人值守`,kind=unattended.mode)**:开启时**联动**开启 AI 审议(selectHandler 一次返回两个胶囊,前端各自 apply),并剥离 `ask_user` 工具(主/子同挂;AI 不可见即不可提问)+ 注入提示词「当下处于无人值守模式,如果有疑问,按你推荐的实现即可。」(`UnattendedModeAdvisor` 每轮实时读任务级开关)。两胶囊 ✕ 独立,开启时联动、事后可拆分。
+- **无人值守(`/无人值守`,kind=unattended.mode)**:开启时**联动**开启 AI 审议(selectHandler 一次返回两个胶囊,前端各自 apply)。AI 仍可看到并调用 `ask_user` 工具,但 `UnattendedAskUserCallback` 装饰器在工具执行瞬间拦截该调用、直接回传合成结果「当前无人值守,请按你推荐的实现。」(不创建 ask、不挂起等待);装饰器持有 `TaskEntry` 引用、在 `call()` 中实时读 `t.unattended`(volatile),运行中点胶囊开/关即时生效。两胶囊 ✕ 独立,开启时联动、事后可拆分。
 
 **授权拦截链**(`PermissionGate.ensureGranted` 内、发起人工弹窗前短路,两条独立环节互不相关):
 

@@ -1661,7 +1661,9 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
         ResolvedConfig cfg = resolveAgentConfig(t);
         List<ToolCallback> tools = new ArrayList<>();
         for (ToolCallback c : ToolCallbacks.from(new AskUserTool(asks, props, t, t.mainAgentId))) {
-            tools.add(c);
+            // 无人值守拦截装饰器(任务级开关):t.unattended=true 时 ask_user 被短路,
+            // 直接回传合成文本「当前无人值守,请按你推荐的实现。」;false 时透传真实挂起。
+            tools.add(new UnattendedAskUserCallback(c, t));
         }
         for (ToolCallback c : ToolCallbacks.from(new SubAgentTools(subs, t))) {
             tools.add(c);
