@@ -25,8 +25,6 @@ public final class RpcMethods {
     public static final String TASK_QUEUE_REMOVE = "task.queueRemove";
     /** 移动(重排)某条队列输入(参数 taskId, fromIndex, toIndex)。 */
     public static final String TASK_QUEUE_MOVE = "task.queueMove";
-    /** 编辑已发送的用户消息:更新消息内容并截断后续事件,然后重新运行任务(参数 taskId, seq, text, rawContent?)。 */
-    public static final String TASK_MESSAGE_EDIT = "task.message.edit";
     public static final String CONFIG_GET = "config.get";
     /** 重新读取模型配置(重新解析 worker.models,应用用户在外部 YAML 中的修改)。 */
     public static final String CONFIG_RELOAD = "config.reload";
