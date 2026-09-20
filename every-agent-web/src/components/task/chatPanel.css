@@ -744,10 +744,11 @@
   background: transparent;
   color: var(--text-tertiary, #999);
   cursor: pointer;
-  opacity: 0;
+  opacity: 0.45;
   transition: opacity 0.15s, background 0.15s;
 }
-.nagent-msg--user:hover .nagent-msg__edit-btn {
+.nagent-msg--user:hover .nagent-msg__edit-btn,
+.nagent-msg__edit-btn:focus-visible {
   opacity: 1;
 }
 .nagent-msg__edit-btn:hover {
