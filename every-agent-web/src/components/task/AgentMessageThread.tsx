@@ -92,9 +92,11 @@ export default function AgentMessageThread({
   const toolCalls = message.toolCalls ?? []
 
   // 用户消息编辑:长按(mobile)/hover(desktop) 显示编辑按钮
-  const canEditUserMsg = message.role === 'user'
-    && message.sequence != null && message.sequence > 0
-    && Boolean(editCtx.onEditUserMessage)
+  // messageId 格式为 `m-${原始seq字符串}`,从中提取精确 seq(避免 Number 精度丢失)
+  const userMsgSeq = message.role === 'user' && message.messageId?.startsWith('m-')
+    ? message.messageId.slice(2)
+    : null
+  const canEditUserMsg = userMsgSeq != null && Boolean(editCtx.onEditUserMessage)
   const { bubbleClassName, touchHandlers } = useLongPressReveal(canEditUserMsg)
 
   const renderRich = message.role === 'assistant' || message.role === 'system'
@@ -130,7 +132,7 @@ export default function AgentMessageThread({
 
   if (message.role === 'user') {
     const replaySegments = buildUserMessageReplaySegments(message)
-    const isEditing = canEditUserMsg && editCtx.editingUserSeq === String(message.sequence)
+    const isEditing = canEditUserMsg && editCtx.editingUserSeq === userMsgSeq
     return (
       <div className={`nagent-msg nagent-msg--user${continuationClass}${canEditUserMsg ? ' nagent-msg--user-editable' : ''}`}>
         <div className="nagent-msg__body nagent-msg__body--user">
@@ -146,7 +148,7 @@ export default function AgentMessageThread({
                   editCtx.onCancelEditUserMessage()
                 } else {
                   editCtx.onEditUserMessage(
-                    String(message.sequence),
+                    userMsgSeq!,
                     message.content ?? '',
                     message.rawContent,
                   )
