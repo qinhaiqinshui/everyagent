@@ -309,6 +309,7 @@ export default function TaskRoundsPanel({
               matches={matches}
               onToggle={() => handleToggle(round)}
               onLoadMore={() => startForward(round)}
+              onEditUserMessage={onEditUserMessage}
             />
           )
         })}
@@ -358,6 +359,7 @@ function ClosedRoundView({
   matches,
   onToggle,
   onLoadMore,
+  onEditUserMessage,
 }: {
   round: RoundSummary
   expanded: boolean
@@ -370,6 +372,7 @@ function ClosedRoundView({
   matches: (item: TaskThreadItem) => boolean
   onToggle: () => void
   onLoadMore: () => void
+  onEditUserMessage?: (seq: number | string, text: string, rawContent?: string) => void
 }): React.ReactNode {
   // 折叠态恒用 rounds.jsonl 摘要(finalReply 只含正文,不含 thinking):
   // 旧版同款行为。懒加载虽然会把 endSeq 权威 message(含 thinking/toolCalls)折入 items,
@@ -382,7 +385,7 @@ function ClosedRoundView({
   // 展开态由 RoundDetail 从 items 切片渲染,即使无工具调用也能看到最终轮的思考内容。
   return (
     <>
-      <AgentMessageThread message={userMessage} taskId={taskId} />
+      <AgentMessageThread message={userMessage} taskId={taskId} onEditUserMessage={onEditUserMessage} />
       <div className="nagent-round-collapse">
         <button
           type="button"
