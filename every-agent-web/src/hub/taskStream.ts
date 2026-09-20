@@ -323,6 +323,9 @@ class ManagedStream {
     const res = await fetchTaskRounds(client, this.workerId, { taskId: this.taskId })
     this.rounds = res
     this.roundsError = null
+    // 重置 folder:resync/重连场景下旧 items(编辑前轮次,seq 已过期)必须清除,
+    // 否则新旧轮次按 seq 混排会顺序错乱(如编辑轮 3 后旧轮 3 seq 更大排在新轮 3 后面)。
+    this.folder.reset()
     // 全部轮折入骨架:user(foldRound 用 round.userMessage)+ 闭合轮合成 final(文本摘要);
     // 后续懒加载把过程事件 / 权威 message 折入同一 items,按 seq 去重且不重复 user/final 项。
     for (const round of res.rounds) {

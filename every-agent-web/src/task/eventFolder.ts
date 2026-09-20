@@ -140,6 +140,25 @@ export class TaskEventFolder {
   }
 
   /**
+   * 重置:清空全部状态(items/bySeq/traceSeq/anchors)。
+   * resync 时重新从 task.rounds 拉取并 foldRound 前调用,
+   * 避免旧 items(编辑前的轮次,seq 已过期)与新轮次混排。
+   * 保留 taskId,重置其余字段到空态。
+   */
+  reset(): void {
+    this.state.items = []
+    this.state.agentStates = {}
+    this.state.agentMeta = {}
+    this.state.contextUsage = null
+    this.state.taskModel = null
+    this.bySeq.clear()
+    this.traceSeq.clear()
+    this.anchors.streaming.clear()
+    this.anchors.toolNames.clear()
+    this.anchors.subTitles.clear()
+  }
+
+  /**
    * 折叠一个事件。
    *
    * 数据包协议:一轮 AI 回复 = 1 个 seq,同轮 thinking/delta/message 同 seq(占同一条线程项);
