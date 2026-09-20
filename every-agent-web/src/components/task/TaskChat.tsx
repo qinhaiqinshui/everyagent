@@ -31,6 +31,7 @@ import HScrollArea from '@/components/shared/HScrollArea'
 import { ArrowDownIcon, ArrowRightIcon, StopIcon } from '../shared/AppGlyphs'
 import { Button, InlineSpinner } from '@/components/shared/ui'
 import ConfirmDialog from '@/components/shared/ConfirmDialog'
+import { UserMessageEditContext, type UserMessageEditContextValue } from './userMessageEditContext'
 import { useWorkspaceShell } from '@/components/app/WorkspaceShellContext'
 import { useResponsiveViewport } from '@/hooks/useResponsiveViewport'
 import { parseOpaqueTokenText, replaceComposerTokensForSubmission } from '@/composerToken/composerOpaqueToken'
@@ -610,8 +611,9 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
   }, [isTaskRunning, stopping, stream])
 
   /**
-   * 用户消息编辑:点击用户消息上的编辑按钮 → 把原消息内容回填到输入框,
-   * 记录编辑目标(seq);用户在输入框修改完毕后点发送按钮时弹确认窗。
+   * 用户消息编辑:点击编辑按钮 → 把原消息内容回填到输入框,记录编辑目标(seq)。
+   * 用户在输入框修改完毕后点发送按钮 → 走普通续跑逻辑(task.run{taskId}),
+   * 但因为 editTarget 非空,先弹确认窗;确认后执行 task.message.edit。
    */
   const handleEditUserMessage = React.useCallback(
     (seq: number | string, text: string, rawContent?: string) => {
@@ -620,14 +622,17 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
         return
       }
       setError('')
-      // 回填输入框:rawContent 优先(保留胶囊),退化为纯文本
       const rc = rawContent && rawContent.length ? rawContent : text
       setDraft({ text: rc, rawContent: rc, tokens: [], activeTokenId: undefined })
-      // 记录编辑目标:发送时根据此值弹确认窗
       setEditTarget({ seq: String(seq) })
     },
     [isTaskRunning],
   )
+
+  /** 取消编辑:清除编辑标记,不删除输入框内容(用户可继续作为普通续跑发送)。 */
+  const handleCancelEdit = React.useCallback(() => {
+    setEditTarget(null)
+  }, [])
 
   const handleConfirmEdit = React.useCallback(() => {
     if (!editTarget || !effectiveTaskId) return
@@ -720,6 +725,13 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
 
   const submitDisabled = Boolean(!draft.text.trim() || submitting || (isDraft && !draftWorkerId) || (isDraft && !effectiveDraftWorkspace))
 
+  // 用户消息编辑 Context(非草稿态才有编辑能力)
+  const editContextValue: UserMessageEditContextValue = {
+    editingUserSeq: editTarget?.seq ?? null,
+    onEditUserMessage: handleEditUserMessage,
+    onCancelEditUserMessage: handleCancelEdit,
+  }
+
   // 草稿态：渲染与 n 版启动台一致的草稿面板（BrandMark 顶栏 + 空线程 + 输入区）。
   // 模型配置来自 worker(config.get),选中项经 task.create 的 configId 冻结进任务快照。
   if (isDraft) {
@@ -751,6 +763,7 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
   }
 
   return (
+    <UserMessageEditContext.Provider value={editContextValue}>
     <>
     <ChatShell
       // 工作区 chip 已迁移至输入框底部(电池图标左侧),顶部不再重复展示。
@@ -776,7 +789,6 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
           scrollRoot={threadScrollRefNode.current}
           filterAgentId={filterAgentId}
           mainAgentId={mainAgentId}
-          onEditUserMessage={handleEditUserMessage}
         />
       )}
       composer={(
@@ -858,7 +870,7 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
                   </Button>
                 ) : (
                   <Button
-                    variant={editTarget ? 'danger' : 'primary'}
+                    variant="primary"
                     size="sm"
                     onClick={handleSubmit}
                     disabled={submitDisabled}
@@ -870,7 +882,7 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
                       <ArrowRightIcon size={14} />
                     )}
                     <span className="task-composer-footer__send-label">
-                      {submitting ? '发送中...' : editTarget ? '编辑重发' : '发送'}
+                      {submitting ? '发送中...' : '发送'}
                     </span>
                   </Button>
                 )}
@@ -894,6 +906,7 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
       onCancel={() => { if (!editSubmitting) setEditConfirmOpen(false) }}
     />
     </>
+    </UserMessageEditContext.Provider>
   )
 }
 

@@ -49,8 +49,6 @@ export interface TaskRoundsPanelProps {
   filterAgentId?: string
   /** 主 agent 稳定 Id（线程内主 agent 消息 agentId 为空串，过滤前归一用）。 */
   mainAgentId?: string
-  /** 用户消息编辑回调(点击编辑按钮时触发)。 */
-  onEditUserMessage?: (seq: number | string, text: string, rawContent?: string) => void
 }
 
 export default function TaskRoundsPanel({
@@ -62,7 +60,6 @@ export default function TaskRoundsPanel({
   emptyText,
   filterAgentId = '',
   mainAgentId = '',
-  onEditUserMessage,
 }: TaskRoundsPanelProps): React.ReactNode {
   /** 已展开的轮 roundId 集合（多轮可同时展开）。 */
   const [expandedSet, setExpandedSet] = React.useState<ReadonlySet<string>>(() => new Set())
@@ -309,7 +306,6 @@ export default function TaskRoundsPanel({
               matches={matches}
               onToggle={() => handleToggle(round)}
               onLoadMore={() => startForward(round)}
-              onEditUserMessage={onEditUserMessage}
             />
           )
         })}
@@ -327,7 +323,6 @@ export default function TaskRoundsPanel({
               if (cur && cur.cursor) startBackward(tailStartSeq, cur.cursor)
             }}
             onLoadMoreForward={() => terminalTail && startForward(terminalTail)}
-            onEditUserMessage={onEditUserMessage}
           />
         ) : null}
       </div>
@@ -359,7 +354,6 @@ function ClosedRoundView({
   matches,
   onToggle,
   onLoadMore,
-  onEditUserMessage,
 }: {
   round: RoundSummary
   expanded: boolean
@@ -372,7 +366,6 @@ function ClosedRoundView({
   matches: (item: TaskThreadItem) => boolean
   onToggle: () => void
   onLoadMore: () => void
-  onEditUserMessage?: (seq: number | string, text: string, rawContent?: string) => void
 }): React.ReactNode {
   // 折叠态恒用 rounds.jsonl 摘要(finalReply 只含正文,不含 thinking):
   // 旧版同款行为。懒加载虽然会把 endSeq 权威 message(含 thinking/toolCalls)折入 items,
@@ -385,7 +378,7 @@ function ClosedRoundView({
   // 展开态由 RoundDetail 从 items 切片渲染,即使无工具调用也能看到最终轮的思考内容。
   return (
     <>
-      <AgentMessageThread message={userMessage} taskId={taskId} onEditUserMessage={onEditUserMessage} />
+      <AgentMessageThread message={userMessage} taskId={taskId} />
       <div className="nagent-round-collapse">
         <button
           type="button"
@@ -461,7 +454,6 @@ function TailRoundView({
   scrollRoot,
   onLoadMoreBackward,
   onLoadMoreForward,
-  onEditUserMessage,
 }: {
   taskId: string
   userItem?: TaskThreadItem
@@ -472,7 +464,6 @@ function TailRoundView({
   scrollRoot?: HTMLElement | null
   onLoadMoreBackward: () => void
   onLoadMoreForward: () => void
-  onEditUserMessage?: (seq: number | string, text: string, rawContent?: string) => void
 }): React.ReactNode {
   const afterUser =
     tailItems.length > 0 && tailItems[0].type === 'agent_message' && tailItems[0].message.role === 'user'
@@ -493,9 +484,9 @@ function TailRoundView({
         />
       ) : null}
       {afterUser.length > 0 ? (
-        <TaskThread taskId={taskId} items={afterUser} isGenerating={isGenerating} onEditUserMessage={onEditUserMessage} />
+        <TaskThread taskId={taskId} items={afterUser} isGenerating={isGenerating} />
       ) : isGenerating ? (
-        <TaskThread taskId={taskId} items={[]} isGenerating={isGenerating} onEditUserMessage={onEditUserMessage} />
+        <TaskThread taskId={taskId} items={[]} isGenerating={isGenerating} />
       ) : null}
       {!live && pageState && !pageState.done ? (
         <LazyLoadSentinel

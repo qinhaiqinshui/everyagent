@@ -26,8 +26,6 @@ export interface TaskThreadProps {
   topSlot?: React.ReactNode
   /** 线程项之后渲染（懒加载占位：闭合轮/终态尾轮的 forward sentinel 等）。 */
   bottomSlot?: React.ReactNode
-  /** 用户消息编辑回调(点击编辑按钮时触发)。 */
-  onEditUserMessage?: (seq: number | string, text: string, rawContent?: string) => void
 }
 
 /**
@@ -41,7 +39,6 @@ export default function TaskThread({
   isGenerating = false,
   topSlot,
   bottomSlot,
-  onEditUserMessage,
 }: TaskThreadProps) {
   if (loading) {
     return <div className="nagent-empty">正在线程加载中...</div>
@@ -56,8 +53,8 @@ export default function TaskThread({
     <div className="nagent-thread">
       {topSlot}
       {foldWindows.length > 0
-        ? renderThreadWithFoldWindows(items, taskId, foldWindows, onEditUserMessage)
-        : buildMessageGroups(items, taskId, onEditUserMessage)}
+        ? renderThreadWithFoldWindows(items, taskId, foldWindows)
+        : buildMessageGroups(items, taskId)}
       {bottomSlot}
       <ThreadStatusBanner running={isGenerating} />
     </div>
@@ -162,7 +159,6 @@ function renderMessageGroups(
   items: TaskThreadItem[],
   taskId: string,
   maps: TaskThreadToolMaps,
-  onEditUserMessage?: (seq: number | string, text: string, rawContent?: string) => void,
 ): React.ReactNode[] {
   const { toolCallNameById, toolCallPayloadById, toolResultById } = maps
   const result: React.ReactNode[] = []
@@ -231,7 +227,6 @@ function renderMessageGroups(
           taskId={taskId}
           resolveToolCallPayload={(toolCallId) => toolCallPayloadById.get(toolCallId)}
           resolveToolResult={resolveToolResult}
-          onEditUserMessage={onEditUserMessage}
         />,
       )
       continue
@@ -247,7 +242,6 @@ function renderMessageGroups(
             isContinuation={idx > 0}
             resolveToolCallPayload={(toolCallId) => toolCallPayloadById.get(toolCallId)}
             resolveToolResult={resolveToolResult}
-            onEditUserMessage={onEditUserMessage}
           />
         ))}
       </div>,
@@ -261,9 +255,8 @@ function renderMessageGroups(
 function buildMessageGroups(
   items: TaskThreadItem[],
   taskId: string,
-  onEditUserMessage?: (seq: number | string, text: string, rawContent?: string) => void,
 ): React.ReactNode[] {
-  return renderMessageGroups(items, taskId, buildToolMaps(items), onEditUserMessage)
+  return renderMessageGroups(items, taskId, buildToolMaps(items))
 }
 
 /** 过程性内容折叠窗口：一条用户消息到其后第一条 AI 最终回复之间构成一个窗口。 */
@@ -338,7 +331,6 @@ function renderThreadWithFoldWindows(
   items: TaskThreadItem[],
   taskId: string,
   windows: FoldWindow[],
-  onEditUserMessage?: (seq: number | string, text: string, rawContent?: string) => void,
 ): React.ReactNode[] {
   // 全线程共享同一份工具 join 索引：过程段、最终回复、窗口外片段各自渲染时，
   // 按 callId 合并工具结果都能命中同一张表。
@@ -348,7 +340,7 @@ function renderThreadWithFoldWindows(
   for (const window of windows) {
     // 窗口之前的内容（含该窗口的用户消息）照常渲染。
     if (cursor <= window.userIndex) {
-      result.push(...renderMessageGroups(items.slice(cursor, window.userIndex + 1), taskId, maps, onEditUserMessage))
+      result.push(...renderMessageGroups(items.slice(cursor, window.userIndex + 1), taskId, maps))
     }
     result.push(
       <CollapsibleRound
@@ -357,14 +349,13 @@ function renderThreadWithFoldWindows(
         finalItem={window.finalItem}
         processItems={window.processItems}
         maps={maps}
-        onEditUserMessage={onEditUserMessage}
       />,
     )
     cursor = window.finalReplyIndex + 1
   }
   // 最后一个窗口之后的内容照常渲染。
   if (cursor < items.length) {
-    result.push(...renderMessageGroups(items.slice(cursor), taskId, maps, onEditUserMessage))
+    result.push(...renderMessageGroups(items.slice(cursor), taskId, maps))
   }
   return result
 }
@@ -375,17 +366,15 @@ function CollapsibleRound({
   finalItem,
   processItems,
   maps,
-  onEditUserMessage,
 }: {
   taskId: string
   finalItem: Extract<TaskThreadItem, { type: 'agent_message' }>
   processItems: TaskThreadItem[]
   maps: TaskThreadToolMaps
-  onEditUserMessage?: (seq: number | string, text: string, rawContent?: string) => void
 }) {
   const [open, setOpen] = React.useState(false)
   if (processItems.length === 0) {
-    return <>{renderMessageGroups([finalItem], taskId, maps, onEditUserMessage)}</>
+    return <>{renderMessageGroups([finalItem], taskId, maps)}</>
   }
   return (
     <div className="nagent-round-collapse">
@@ -406,11 +395,11 @@ function CollapsibleRound({
       </button>
       {open ? (
         <div className="nagent-round-collapse__process">
-          {renderMessageGroups(processItems, taskId, maps, onEditUserMessage)}
+          {renderMessageGroups(processItems, taskId, maps)}
         </div>
       ) : null}
       <div className="nagent-round-collapse__final">
-        {renderMessageGroups([finalItem], taskId, maps, onEditUserMessage)}
+        {renderMessageGroups([finalItem], taskId, maps)}
       </div>
     </div>
   )

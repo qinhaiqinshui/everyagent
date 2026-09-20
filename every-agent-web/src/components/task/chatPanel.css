@@ -763,6 +763,11 @@
   background: color-mix(in srgb, var(--accent-blue) 12%, transparent);
   color: var(--accent-blue, #4a9eff);
 }
+/* 编辑模式:当前正在编辑的消息,按钮常显 */
+.nagent-msg__edit-btn--active {
+  opacity: 1 !important;
+  color: var(--accent-blue, #4a9eff);
+}
 
 .nagent-msg__body--assistant {
   display: flex;

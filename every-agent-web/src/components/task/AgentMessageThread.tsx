@@ -3,6 +3,7 @@ import type { AgentMessageRecord, ChatComposerToken } from '@/types'
 import { splitComposerRawContent } from '@/composerToken/composerOpaqueToken'
 import { getComposerChipView } from '@/composerToken/composerChipRenderer'
 import { openSlashItemDetail } from '@/components/taskComposer/SlashItemDetailPopover'
+import { UserMessageEditContext } from './userMessageEditContext'
 import {
   SparkIcon,
   WrenchIcon,
@@ -35,8 +36,6 @@ export interface AgentMessageThreadProps {
   resolveToolCallPayload?: (toolCallId: string) => Record<string, unknown> | undefined
   /** 按工具调用 ID 解析匹配到的 tool 结果消息（live/历史共用，供下发块合并结果）。 */
   resolveToolResult?: (toolCallId: string) => AgentMessageRecord | undefined
-  /** 用户消息编辑回调(点击编辑按钮时触发;传入被编辑消息的 seq 与内容)。 */
-  onEditUserMessage?: (seq: number | string, text: string, rawContent?: string) => void
 }
 
 /**
@@ -87,15 +86,15 @@ export default function AgentMessageThread({
   resolveToolCallName,
   resolveToolCallPayload,
   resolveToolResult,
-  onEditUserMessage,
 }: AgentMessageThreadProps) {
+  const editCtx = React.useContext(UserMessageEditContext)
   const meta = ROLE_META[message.role]
   const toolCalls = message.toolCalls ?? []
 
   // 用户消息编辑:长按(mobile)/hover(desktop) 显示编辑按钮
   const canEditUserMsg = message.role === 'user'
     && message.sequence != null && message.sequence > 0
-    && Boolean(onEditUserMessage)
+    && Boolean(editCtx.onEditUserMessage)
   const { bubbleClassName, touchHandlers } = useLongPressReveal(canEditUserMsg)
 
   const renderRich = message.role === 'assistant' || message.role === 'system'
@@ -131,25 +130,30 @@ export default function AgentMessageThread({
 
   if (message.role === 'user') {
     const replaySegments = buildUserMessageReplaySegments(message)
+    const isEditing = canEditUserMsg && editCtx.editingUserSeq === String(message.sequence)
     return (
       <div className={`nagent-msg nagent-msg--user${continuationClass}${canEditUserMsg ? ' nagent-msg--user-editable' : ''}`}>
         <div className="nagent-msg__body nagent-msg__body--user">
           {canEditUserMsg ? (
             <button
               type="button"
-              className="nagent-msg__edit-btn"
-              title="编辑并重新发送"
-              aria-label="编辑并重新发送"
+              className={`nagent-msg__edit-btn${isEditing ? ' nagent-msg__edit-btn--active' : ''}`}
+              title={isEditing ? '取消编辑' : '编辑并重新发送'}
+              aria-label={isEditing ? '取消编辑' : '编辑并重新发送'}
               onClick={(e) => {
                 e.stopPropagation()
-                onEditUserMessage!(
-                  String(message.sequence),
-                  message.content ?? '',
-                  message.rawContent,
-                )
+                if (isEditing) {
+                  editCtx.onCancelEditUserMessage()
+                } else {
+                  editCtx.onEditUserMessage(
+                    String(message.sequence),
+                    message.content ?? '',
+                    message.rawContent,
+                  )
+                }
               }}
             >
-              <EditIcon size={13} />
+              {isEditing ? <CancelEditIcon size={13} /> : <EditIcon size={13} />}
             </button>
           ) : null}
           <div
@@ -459,6 +463,20 @@ function EditIcon({ size = 14 }: { size?: number }) {
         stroke="currentColor"
         strokeWidth="1.2"
         strokeLinejoin="round"
+      />
+    </svg>
+  )
+}
+
+/** 取消编辑图标(叉形 SVG)。 */
+function CancelEditIcon({ size = 14 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path
+        d="M4 4l8 8M12 4l-8 8"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
       />
     </svg>
   )
