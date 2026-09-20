@@ -1693,13 +1693,16 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
 
     /**
      * 编辑重发·运行中热路径：截断磁盘+内存中 seq > editSeq 的事件，
-     * 广播 message.edited 同步事件，更新 meta。不清除输入框内容（正常入队）。
+     * 从磁盘重建主 agent 会话内存，广播 message.edited 同步事件，更新 meta。
+     * 不清除输入框内容（正常入队由 consumeInput 消费）。
      */
     private void truncateForEdit(String taskId, TaskEntry t, String editSeq, String text, String rawContent) {
         long seq = Long.parseLong(editSeq);
         Path dir = store.dirOf(taskId);
+        // 截断内存事件日志(先截断,再截断磁盘:truncateAndReset 用截断后的 EventLog 重建 cursor)
+        t.log.truncateAfter(seq);
         try {
-            boolean found = store.truncateAfterSeq(dir, seq);
+            boolean found = store.truncateAndReset(taskId, seq);
             if (!found) {
                 log.warn("编辑截断：未找到 seq={} 的用户消息 task={}", editSeq, taskId);
                 return;
@@ -1708,6 +1711,23 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
             log.error("编辑截断失败 task={}", taskId, e);
             return;
         }
+        // 从磁盘重建主 agent 会话内存(磁盘已截断,ConversationLoader 载入截断后的历史)
+        // 先停止子 agent(防止截断后旧子 agent 仍写事件/改文件)
+        subs.stopAll(t);
+        AgentEntity main = t.main;
+        if (main != null) {
+            List<Message> rebuilt = ConversationLoader.load(store, dir, t.mainAgentId);
+            main.conversation.clear();
+            main.conversation.addAll(rebuilt);
+        }
+        // 清理子 agent 运行态(截断后旧轮的子 agent 已无效)
+        t.subs.clear();
+        t.subFutures.clear();
+        t.agentLedger.clear();
+        // 清理本轮文件改动收集器(随截断失效,新轮重建)
+        t.fileChanges = null;
+        t.fileChangesLight = null;
+        t.fileChangesFull = null;
         // 更新 meta
         ObjectNode meta = store.readMeta(dir);
         if (meta != null) {

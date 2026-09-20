@@ -254,6 +254,34 @@ public class TaskStore {
         return found;
     }
 
+    /**
+     * 编辑重发热路径专用:截断磁盘 + 重置落盘游标 + 重开 writer。
+     * 先调用 {@link #truncateAfterSeq} 重写 jsonl 文件(删 seq &gt; targetSeq 的行),
+     * 然后关闭旧 writer(APPEND 句柄指向截断前的文件),按截断后磁盘内容重建游标:
+     * cursor = 磁盘保留的事件行数(即 EventLog 中 seq &lt;= targetSeq 的记录数)。
+     * 重开 writer(后续 append 从截断后的文件末尾续写)。
+     * <p>线程安全:持 Tracked 监视器,与 drain(读 cursor + 写 writer)互斥。
+     * sink 线程在 drain 循环中不会 concurrently 拿到旧 cursor / 旧 writer。
+     *
+     * @return true 如果找到 target seq 处的 user.message 事件
+     */
+    public synchronized boolean truncateAndReset(String taskId, long targetSeq) throws IOException {
+        Tracked t = tracked.get(taskId);
+        if (t == null) {
+            // 未 track(冷路径),直接截断磁盘即可
+            return truncateAfterSeq(t != null ? t.dir : dirOf(taskId), targetSeq);
+        }
+        // 1. 关闭旧 writer(截断会重写文件,旧 APPEND 句柄已失效)
+        closeQuietly(t);
+        t.writers.clear();
+        // 2. 截断磁盘 jsonl
+        boolean found = truncateAfterSeq(t.dir, targetSeq);
+        // 3. 重置 cursor:磁盘保留的事件数 = EventLog 中 seq <= targetSeq 的记录数
+        //    (内存已由 EventLog.truncateAfter 截断,readFrom(0) 返回的就是保留的全部记录)
+        t.cursor = t.log.readFrom(0, Integer.MAX_VALUE).size();
+        return found;
+    }
+
     // ---- 读路径(冷数据)----
 
     /** 扫描 workspaces/&lt;workspaceId&gt;/tasks/ 下全部任务目录(meta.json 存在即算);回填 taskWorkspace 映射。 */
