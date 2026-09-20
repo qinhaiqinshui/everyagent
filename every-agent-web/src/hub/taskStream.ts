@@ -270,7 +270,7 @@ class ManagedStream {
     }
     const { events, lastSeq, hasMore } = await view.loadForwardPage({ ...page, afterSeq })
     for (const item of events) {
-      this.folder.fold(this.toFoldableEvent(item))
+      this.foldWireEvent(item)
     }
     this.notify()
     return { lastSeq, hasMore, fromCache: false }
@@ -305,7 +305,7 @@ class ManagedStream {
     }
     const { events, firstSeq, reachedStart } = await view.loadBackwardPage({ startSeq: page.startSeq, beforeSeq, limit: page.limit })
     for (const item of events) {
-      this.folder.fold(this.toFoldableEvent(item))
+      this.foldWireEvent(item)
     }
     this.notify()
     return { firstSeq, reachedStart, fromCache: false }
@@ -360,10 +360,25 @@ class ManagedStream {
           limit: 200,
         })
         for (const item of events) {
-          this.folder.fold(this.toFoldableEvent(item))
+          this.foldWireEvent(item)
         }
       } catch (error) {
         console.warn(`[taskStream] 拉取未闭合尾轮尾部事件失败(${this.taskId}):`, error)
+      }
+    } else if (!res.live && lastRound?.startSeq) {
+      // 终态任务:hidden 期间 ask_user 超时的 ask.resolved 可能未被推送(DataPusher 已停),
+      // 拉最后一轮尾部事件补分发到 askStore,确保弹窗被 settle 关闭。
+      try {
+        const { events } = await fetchTaskRoundTail(client, this.workerId, {
+          taskId: this.taskId,
+          startSeq: lastRound.startSeq,
+          limit: 200,
+        })
+        for (const item of events) {
+          this.foldWireEvent(item)
+        }
+      } catch (error) {
+        console.warn(`[taskStream] 拉取终态任务尾轮尾部事件失败(${this.taskId}):`, error)
       }
     }
     this.notify()
@@ -387,7 +402,10 @@ class ManagedStream {
     }
   }
 
-  /** wire 事件 → 折叠器事件(seq/ts/event/agentId/payload,口径与推送/轮询路径一致)。 */
+  /**
+   * wire 事件 → 折叠器事件(seq/ts/event/agentId/payload,口径与推送/轮询路径一致)。
+   * 转为 FoldableTaskEvent(不含 initial,折叠器不区分来源)。
+   */
   private toFoldableEvent(item: TaskPollWireEvent): FoldableTaskEvent {
     return {
       seq: item.seq,
@@ -396,6 +414,26 @@ class ManagedStream {
       agentId: item.agentId ?? (item.payload?.agentId as string | undefined) ?? null,
       payload: item.payload ?? {},
     }
+  }
+
+  /**
+   * 折叠一条 wire 事件(历史/懒加载路径):
+   * 与实时推送 {@link #onEvent} 同口径处理——ask 事件分发到 askStore(卡片生命周期)、
+   * 终态事件清残留 ask;否则 hidden 期间错过的 ask.resolved(如 timeout)不会被 settle,
+   * 弹窗残留不关闭。标 initial=true:ask.create 静默注册(防已完成任务回放闪烁),
+   * agent.status 终态兜底跳过(历史加载已含 rounds)。
+   */
+  private foldWireEvent(item: TaskPollWireEvent): void {
+    const event = this.toFoldableEvent(item)
+    if (event.event === 'ask.create' || event.event === 'ask.state' || event.event === 'ask.resolved') {
+      this.dispatchAskEvent({ ...event, initial: true })
+    }
+    const changed = this.folder.fold(event)
+    if (isTerminalEvent(event.event)) {
+      this.folder.finalize()
+      clearAsksOfTask(this.taskId)
+    }
+    if (changed) this.notify()
   }
 
   async open(): Promise<void> {
