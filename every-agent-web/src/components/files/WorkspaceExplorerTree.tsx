@@ -1,6 +1,7 @@
 import React from 'react'
 import { Dropdown, Tree, Tooltip, theme } from 'antd'
 import type { MenuProps, TreeDataNode } from 'antd'
+import type { AlignType } from '@rc-component/trigger'
 import { ChevronDownIcon, ChevronRightIcon, FolderIcon } from '../shared/AppGlyphs'
 import { FileTypeIcon } from '../shared/FileTypeGlyphs'
 import type { ListRowActionItem } from '../shared/ui/ListRowActions'
@@ -15,7 +16,7 @@ import type {
 
 const { useToken } = theme
 
-/** 菜单项行高(antd 默认) + 上下 padding,用于预估菜单高度。 */
+/** 菜单项行高(antd Menu 默认 min-height) + 容器上下 padding,用于预估菜单高度。 */
 const MENU_ITEM_HEIGHT = 32
 const MENU_PADDING = 8
 
@@ -273,7 +274,7 @@ function TreeNodeRow({
     onLongPress: () => onOpenChange(true),
   })
 
-  // 右键菜单锚点:记录鼠标右键坐标,用于计算弹层位置
+  // 右键菜单锚点:记录鼠标右键坐标,用于计算弹层 offset 和 maxHeight
   const [mousePos, setMousePos] = React.useState<{ x: number; y: number } | null>(null)
 
   // 监听 contextmenu 事件记录鼠标坐标(在 Dropdown 的 onOpenChange 之前触发)
@@ -281,6 +282,53 @@ function TreeNodeRow({
     setMousePos({ x: e.clientX, y: e.clientY })
     longPressHandlers.onContextMenu(e)
   }, [longPressHandlers])
+
+  // 根据鼠标位置和预估菜单高度计算 align offset 和 maxHeight。
+  // autoAdjustOverflow=false 后,rc-trigger 不做翻转/shift,菜单始终从鼠标点向下展开(bottomLeft)。
+  // 我们通过 align.offset 上移菜单确保不溢出底部视口;
+  // 上下都不够时通过 styles.root.maxHeight 出滚动条。
+  const itemCount = menuItems?.length ?? 0
+  const menuEstimatedHeight = itemCount * MENU_ITEM_HEIGHT + MENU_PADDING
+
+  const menuAlign = React.useMemo<AlignType | undefined>(() => {
+    if (!mousePos) return undefined
+    const viewportH = window.innerHeight
+    const EDGE = 8
+    const GAP = 4
+    const spaceDown = viewportH - mousePos.y - EDGE
+    const spaceUp = mousePos.y - EDGE
+    const offsetX = 6
+    if (menuEstimatedHeight <= spaceDown) {
+      // 下方足够:正常向下展开(菜单顶部距鼠标点 GAP)
+      return { offset: [offsetX, GAP] }
+    }
+    if (menuEstimatedHeight <= spaceUp) {
+      // 上方足够:向上偏移使菜单整体在鼠标上方
+      return { offset: [offsetX, -(menuEstimatedHeight + GAP)] }
+    }
+    // 上下都不够:选较大一侧,偏移到不溢出
+    if (spaceDown >= spaceUp) {
+      // 下方较多:正常向下展开,maxHeight 限制高度出滚动条
+      return { offset: [offsetX, GAP] }
+    }
+    // 上方较多:偏移到视口顶部,maxHeight 限制高度
+    return { offset: [offsetX, -(mousePos.y - EDGE)] }
+  }, [mousePos, menuEstimatedHeight])
+
+  const menuRootStyle = React.useMemo<React.CSSProperties | undefined>(() => {
+    if (!mousePos) return undefined
+    const viewportH = window.innerHeight
+    const EDGE = 8
+    const GAP = 4
+    const spaceDown = viewportH - mousePos.y - EDGE - GAP
+    const spaceUp = mousePos.y - EDGE - GAP
+    if (menuEstimatedHeight <= spaceDown || menuEstimatedHeight <= spaceUp) {
+      // 能完全展开,不需要 maxHeight
+      return undefined
+    }
+    // 上下都不够:限制为较大一侧的空间
+    return { maxHeight: Math.max(spaceDown, spaceUp), overflowY: 'auto' }
+  }, [mousePos, menuEstimatedHeight])
 
   const content = (
     <div
@@ -383,109 +431,20 @@ function TreeNodeRow({
       onOpenChange={onOpenChange}
       trigger={['contextMenu']}
       menu={{ items: menuItems }}
-      // 完全禁用 antd 自动翻转/位置调整,由 popupRender 手动控制弹层定位
-      autoAdjustOverflow={{ adjustX: 0, adjustY: 0 }}
-      // 自定义弹层类名:配合 ui-overlays.css 限制菜单最大高度并允许滚动,
-      // 防止右键菜单项过多时超出视口无法点击。
+      // 完全禁用 antd 自动翻转/位置调整。
+      // rc-trigger 对齐逻辑(useAlign)中,adjustY=false → needAdjustY=false → 不翻转;
+      // shiftY=undefined → 不 shift。位置完全由 align.offset 控制,行为确定性。
+      // 注意:autoAdjustOverflow={{ adjustX:0, adjustY:0 }} 是错误的写法,
+      // 因为 useAlign 的 supportAdjust(val) 对 0 返回 0>=0=true(启用翻转),
+      // 必须用 false 才能真正禁用。
+      autoAdjustOverflow={false}
+      align={menuAlign}
+      styles={menuRootStyle ? { root: menuRootStyle } : undefined}
       rootClassName="ws-context-menu"
-      popupRender={(originNode) => (
-        <ContextMenuPopup
-          originNode={originNode}
-          mousePos={mousePos}
-          menuEstimatedHeight={(menuItems?.length ?? 0) * MENU_ITEM_HEIGHT + MENU_PADDING}
-        />
-      )}
     >
       {content}
     </Dropdown>
   )
-}
-
-/**
- * 右键菜单弹层容器:完全接管定位逻辑。
- *
- * antd Dropdown 的 contextMenu trigger 会把鼠标坐标作为 alignPoint 传给 rc-trigger,
- * rc-trigger 以该点为 target(0×0 矩形)进行对齐。但 antd 的 autoAdjustOverflow 翻转逻辑
- * 不可预期(会根据「翻转后可见面积是否更大」决定是否翻转),导致菜单位置时而上时而下。
- *
- * 本组件禁用 autoAdjustOverflow 后,antd 会把弹层按 bottomLeft(菜单左上角=鼠标点,向下展开)
- * 放在 container div 里。我们用 container 的 fixed 定位手动指定 left/top,覆盖 antd 的定位:
- * - 下方空间足够:top = mousePos.y + 4,向下展开
- * - 下方不够但上方足够:top = mousePos.y - menuHeight - 4,向上展开
- * - 上下都不够:选较大一侧,用 maxHeight 限制高度出滚动条
- *
- * 弹层 DOM 结构:rc-trigger 的 popup root > div(container) > antd Menu
- * 我们给 container 设置 position:fixed + left/top,antd 内部的 left/top:0 会被覆盖。
- */
-function ContextMenuPopup({
-  originNode,
-  mousePos,
-  menuEstimatedHeight,
-}: {
-  originNode: React.ReactNode
-  mousePos: { x: number; y: number } | null
-  menuEstimatedHeight: number
-}) {
-  const ref = React.useRef<HTMLDivElement | null>(null)
-
-  // 初始 style 直接根据 mousePos 和预估高度同步计算,避免先渲染到 -9999 再跳转到正确位置的闪烁
-  const [style, setStyle] = React.useState<React.CSSProperties>(() => {
-    if (!mousePos) return { position: 'fixed', top: -9999, left: -9999 }
-    return calcPosition(mousePos, menuEstimatedHeight, 200)
-  })
-
-  React.useLayoutEffect(() => {
-    if (!mousePos) {
-      setStyle({ position: 'fixed', top: -9999, left: -9999 })
-      return
-    }
-    const el = ref.current
-    if (!el) return
-    // 用实际渲染尺寸精确修正位置(替代预估值)
-    const actualHeight = el.offsetHeight || menuEstimatedHeight
-    const actualWidth = el.offsetWidth || 200
-    setStyle(calcPosition(mousePos, actualHeight, actualWidth))
-  }, [mousePos, menuEstimatedHeight])
-
-  return (
-    <div ref={ref} style={style}>
-      {originNode}
-    </div>
-  )
-}
-
-/** 根据鼠标位置和菜单尺寸计算弹层定位样式。 */
-function calcPosition(
-  mousePos: { x: number; y: number },
-  menuHeight: number,
-  menuWidth: number,
-): React.CSSProperties {
-  const viewportH = window.innerHeight
-  const viewportW = window.innerWidth
-  const EDGE = 8
-  const GAP = 4
-  const spaceDown = viewportH - mousePos.y - EDGE
-  const spaceUp = mousePos.y - EDGE
-  let top: number
-  let maxHeight: number | undefined
-  if (spaceDown >= menuHeight) {
-    top = mousePos.y + GAP
-  } else if (spaceUp >= menuHeight) {
-    top = mousePos.y - menuHeight - GAP
-  } else {
-    if (spaceDown >= spaceUp) {
-      top = mousePos.y + GAP
-      maxHeight = spaceDown - GAP
-    } else {
-      top = EDGE
-      maxHeight = spaceUp - GAP
-    }
-  }
-  let left = mousePos.x + 6
-  if (left + menuWidth > viewportW - EDGE) {
-    left = Math.max(EDGE, viewportW - menuWidth - EDGE)
-  }
-  return { position: 'fixed', top, left, maxHeight }
 }
 
 /**

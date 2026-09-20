@@ -301,8 +301,9 @@
 
 /* 文件树右键菜单弹层(antd Dropdown portal 挂 body,不在 .ws-tree 内):
    通过 rootClassName="ws-context-menu" 定位弹层根节点。
-   菜单项过多(目录 14 项/文件 11 项,~450px)时可能超出视口,
-   这里限制最大高度为视口 60% 并启用纵向滚动,确保所有项可点击。 */
+   桌面端右键的精确定位(maxHeight 按鼠标点上下空间动态计算)由组件内
+   styles.root 内联样式控制,不经过本规则;本规则仅兜底无鼠标坐标的场景
+   (如移动端长按,菜单锚定到行元素)。 */
 .ws-context-menu .ant-dropdown-menu {
   max-height: 90vh;
   overflow-y: auto;
