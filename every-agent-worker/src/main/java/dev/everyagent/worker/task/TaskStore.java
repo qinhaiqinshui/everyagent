@@ -198,15 +198,15 @@ public class TaskStore {
     }
 
     /**
-     * 截断并更新用户消息(消息编辑重发):对所有 *.jsonl 文件,保留 seq &le; target 的事件,
-     * 更新 target seq 处的 user.message 事件 payload 为新内容,丢弃 seq &gt; target 的所有事件;
-     * 原子重写每个 jsonl 文件(整读→过滤/修改→临时文件+ATOMIC_MOVE)。
+     * 截断后续事件(消息编辑重发):对所有 *.jsonl 文件,保留 seq ≤ target 的事件,
+     * 丢弃 seq > target 的所有事件;不修改 target 处的 user.message 内容
+     * (新内容由后续 consumeInput 写新的 user.message)。
+     * 原子重写每个 jsonl 文件(整读→过滤→临时文件+ATOMIC_MOVE)。
      * 同时清理 rounds.jsonl、file-changes/、agents.json(将被后续运行重新生成)。
      *
-     * @return true 如果找到并更新了 user.message 事件;false 表示未找到(调用方应报错)
+     * @return true 如果找到 target seq 处的 user.message 事件;false 表示未找到(调用方应报错)
      */
-    public boolean truncateAndUpdateUserMessage(Path dir, long targetSeq,
-            String newText, String rawContent) throws IOException {
+    public boolean truncateAfterSeq(Path dir, long targetSeq) throws IOException {
         boolean found = false;
         for (Path f : agentFiles(dir)) {
             List<String> kept = new ArrayList<>();
@@ -223,26 +223,10 @@ public class TaskStore {
                     if (s == targetSeq) {
                         EventRecord r = parseLine(line);
                         if (r != null && Events.USER_MESSAGE.equals(r.event())) {
-                            // 更新 user.message 的 payload
-                            ObjectNode newPayload = Json.obj().put("text", newText);
-                            if (rawContent != null && !rawContent.isEmpty()) {
-                                newPayload.put("rawContent", rawContent);
-                            }
-                            ObjectNode newLine = Json.obj()
-                                    .put("seq", r.seq())
-                                    .put("ts", r.ts())
-                                    .put("event", r.event())
-                                    .put("agentId", r.agentId() == null ? FALLBACK_AGENT_FILE : r.agentId());
-                            newLine.set("payload", newPayload);
-                            if (r.ext() != null) {
-                                newLine.set("ext", r.ext());
-                            }
-                            kept.add(Json.write(newLine));
-                            found = true;
-                            continue;
+                            found = true; // 验证 target 处存在 user.message
                         }
                     }
-                    kept.add(line); // 保留原行
+                    kept.add(line); // 保留原行(不修改内容)
                 }
             }
             // 原子重写文件

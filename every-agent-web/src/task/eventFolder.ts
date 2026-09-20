@@ -354,19 +354,11 @@ export class TaskEventFolder {
         return true
       }
       case 'message.edited': {
-        // 消息编辑重发:截断 seq > editedSeq 的所有线程项,更新 editedSeq 处 user.message 内容。
+        // 消息编辑重发:截断 seq > editedSeq 的所有线程项。
+        // 不更新 editedSeq 处的 user.message 内容(旧消息保持原样,
+        // 新内容由后续 consumeInput 写新的 user.message 推送)。
         const editedSeq = String(event.payload?.seq ?? event.seq)
         this.truncateAfterSeq(editedSeq)
-        // 更新 editedSeq 处的 user.message 内容(bySeq 中的项可能已被上面的截断保留)
-        const existing = this.bySeq.get(editedSeq)
-        if (existing && existing.type === 'agent_message' && existing.message.role === 'user') {
-          existing.message.content = String(event.payload?.text ?? '')
-          existing.message.rawContent = typeof event.payload?.rawContent === 'string'
-            && (event.payload.rawContent as string).length
-            ? event.payload.rawContent as string
-            : existing.message.content
-          existing.message.updatedAt = ts
-        }
         return true
       }
       default:

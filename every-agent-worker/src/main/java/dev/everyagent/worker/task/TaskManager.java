@@ -1699,7 +1699,7 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
         long seq = Long.parseLong(editSeq);
         Path dir = store.dirOf(taskId);
         try {
-            boolean found = store.truncateAndUpdateUserMessage(dir, seq, text, rawContent);
+            boolean found = store.truncateAfterSeq(dir, seq);
             if (!found) {
                 log.warn("编辑截断：未找到 seq={} 的用户消息 task={}", editSeq, taskId);
                 return;
@@ -1738,7 +1738,7 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
     private void truncateForColdEdit(String taskId, TaskStore.StoredTask st, String editSeq, String text, String rawContent) throws Exception {
         long seq = Long.parseLong(editSeq);
         Path dir = st.dir();
-        boolean found = store.truncateAndUpdateUserMessage(dir, seq, text, rawContent);
+        boolean found = store.truncateAfterSeq(dir, seq);
         if (!found) {
             throw new IllegalArgumentException("未找到 seq=" + editSeq + " 的用户消息");
         }

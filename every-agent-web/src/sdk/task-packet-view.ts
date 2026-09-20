@@ -382,28 +382,17 @@ export class TaskPacketView {
     if (frame.channel !== this.streamCh) return
 
     // 消息编辑同步事件:截断本地缓冲(seq > editedSeq 的数据包全部移除),
-    // 更新 editedSeq 处的 user.message 数据包内容,通知 handler 重渲染。
+    // 通知折叠器据此截断线程项。不更新 editedSeq 处的 user.message 内容
+    // (旧 user.message 保持原样,新内容由后续 consumeInput 写新的 user.message 推送)。
     if (frame.event === 'message.edited' && frame.payload) {
       const payload = frame.payload as Record<string, unknown>
       const editedSeq = String(payload.seq ?? frame.seq ?? '')
       if (!editedSeq) return
       // 截断缓冲
       this.buffer.truncateAfter(editedSeq)
-      // 更新 user.message 数据包(replace 语义)
-      const updatePayload: Record<string, unknown> = { text: payload.text ?? '' }
-      if (typeof payload.rawContent === 'string' && payload.rawContent.length) {
-        updatePayload.rawContent = payload.rawContent
-      }
-      this.buffer.apply({
-        seq: editedSeq,
-        ts: frame.ts ?? Date.now(),
-        event: 'user.message',
-        payload: updatePayload,
-        operate: 'replace',
-      })
       // 推进游标回退到编辑点(后续新事件从编辑点后续编)
       this.lastSeq = editedSeq
-      // 通知 handler:发 message.edited 事件,折叠器据此截断线程项并更新消息
+      // 通知 handler:发 message.edited 事件,折叠器据此截断线程项
       if (this.handler) {
         this.handler({
           seq: editedSeq,
