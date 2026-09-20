@@ -339,8 +339,12 @@ function TreeNodeRow({
         gap: token.paddingXXS,
         width: '100%',
         cursor: 'default',
-        // 名称文字允许鼠标选中复制(文件/文件夹名)
-        userSelect: 'text',
+        // 名称文字允许鼠标选中复制(文件/文件夹名)；
+        // 移动端禁用文字选择:避免长按触发系统选词/放大镜，与自定义长按右键菜单冲突。
+        userSelect: isMobile ? 'none' : 'text',
+        WebkitUserSelect: isMobile ? 'none' : 'text',
+        // iOS Safari:长按不再弹系统「拷贝/全选」呼出菜单。
+        WebkitTouchCallout: isMobile ? 'none' : undefined,
         ...(isSelected ? {
           background: 'color-mix(in srgb, var(--accent-blue-dim) 55%, transparent)',
           borderRadius: 'var(--radius-sm)',
