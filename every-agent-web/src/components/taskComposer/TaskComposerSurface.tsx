@@ -207,6 +207,10 @@ function detectSlashTrigger(
  * `/` 菜单内容来自独立注册中心 `slashCommandRegistry`（与 task 解耦），
  * 渲染时按 `group` 动态分组，渲染组件不感知条目是 skill 还是其它内容。
  */
+/** 输入框高度拖拽的下限/上限（px）。 */
+const COMPOSER_EDITOR_MIN_HEIGHT = 44
+const COMPOSER_EDITOR_MAX_HEIGHT = 480
+
 export default function TaskComposerSurface({
   header,
   abovePanel,
@@ -230,6 +234,10 @@ export default function TaskComposerSurface({
   const editorRef = React.useRef<InlineComposerHandle | null>(null)
   const editorTextRef = React.useRef(draft.text)
   const editorCaretRef = React.useRef(0)
+  /** 用户拖拽设定的高度（px）；null 表示未拖动过，用 CSS 默认高度。 */
+  const [editorHeight, setEditorHeight] = React.useState<number | null>(null)
+  /** 是否正在拖拽调高度（用于把手高亮态）。 */
+  const [resizing, setResizing] = React.useState(false)
   /** 打开「工作区外文件/文件夹」选择框前记录的光标偏移（删除 @query 后的位置）。 */
   const externalInsertOffsetRef = React.useRef(0)
   const [slashOpen, setSlashOpen] = React.useState(false)
@@ -629,6 +637,35 @@ export default function TaskComposerSurface({
     setAtBrowse(null)
   }, [])
 
+  /**
+   * 右上角把手按下 → 进入高度拖拽：跟踪 pointer 纵向位移，只改高度不改宽度。
+   * 起始高度读 DOM 实测值（兼容未拖动过时的 CSS 默认高度）。
+   */
+  const handleResizePointerDown = React.useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    const handle = event.currentTarget
+    const editor = handle.parentElement?.querySelector('.nagent-inline-editor') as HTMLElement | null
+    const startHeight = editor?.getBoundingClientRect().height ?? 66
+    const startY = event.clientY
+    setResizing(true)
+    const onMove = (move: PointerEvent) => {
+      const next = Math.min(
+        COMPOSER_EDITOR_MAX_HEIGHT,
+        Math.max(COMPOSER_EDITOR_MIN_HEIGHT, startHeight + (move.clientY - startY)),
+      )
+      setEditorHeight(Math.round(next))
+    }
+    const onEnd = () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onEnd)
+      window.removeEventListener('pointercancel', onEnd)
+      setResizing(false)
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onEnd)
+    window.addEventListener('pointercancel', onEnd)
+  }, [])
+
   return (
     <>
       {abovePanel ? (
@@ -638,7 +675,25 @@ export default function TaskComposerSurface({
         {header ? (
           <div>{header}</div>
         ) : null}
-        <div className="nagent-composer__input-wrap">
+        <div
+          className="nagent-composer__input-wrap"
+          style={editorHeight !== null
+            ? ({ '--composer-editor-height': `${editorHeight}px` } as React.CSSProperties)
+            : undefined}
+        >
+        <div
+          className={
+            'nagent-composer__resize-handle'
+            + (resizing ? ' nagent-composer__resize-handle--dragging' : '')
+          }
+          role="separator"
+          aria-orientation="horizontal"
+          aria-label="拖动调整输入框高度"
+          title="拖动调整输入框高度"
+          onPointerDown={handleResizePointerDown}
+        >
+          <i />
+        </div>
         {slashOpen && (slashMatches.length > 0 || slashLoading) ? (
           <div ref={slashPopRef} className="nagent-composer__slash-pop ui-menu ui-menu--popup" role="listbox">
             {slashLoading && slashMatches.length === 0 ? (
