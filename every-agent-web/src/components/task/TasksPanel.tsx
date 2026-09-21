@@ -11,7 +11,7 @@ import { useResponsiveViewport } from '@/hooks/useResponsiveViewport'
 import { useLongPress } from '@/hooks/useLongPress'
 import type { TaskListGroup } from '@/plugin/types'
 import ContextBattery from '@/components/task/ContextBattery'
-import { ChevronDownIcon, MoreHorizontalIcon, PlusIcon } from '@/components/shared/AppGlyphs'
+import { ChevronDownIcon, MagnifierCheckIcon, MoreHorizontalIcon, PlusIcon } from '@/components/shared/AppGlyphs'
 import { Button, IconButton } from '@/components/shared/ui'
 import ActionMenu from '@/components/shared/ui/ActionMenu'
 import ConfirmDialog from '@/components/shared/ConfirmDialog'
@@ -617,6 +617,7 @@ export default function TasksPanel({
                         {
                           key: 'search',
                           label: '搜索',
+                          icon: <MagnifierCheckIcon size={13} />,
                           disabled: !group.workspace.workerId,
                           onSelect: () => {
                             if (group.workspace) handleSearchWorkspace(group.workspace)
