@@ -217,16 +217,17 @@ public class TaskStore {
                     if (s <= 0) {
                         continue; // 撕行/残行跳过
                     }
-                    if (s > targetSeq) {
-                        continue; // 截断:丢弃 seq > target 的事件
-                    }
+                    // 验证 target 处存在 user.message(在截断前检查)
                     if (s == targetSeq) {
                         EventRecord r = parseLine(line);
                         if (r != null && Events.USER_MESSAGE.equals(r.event())) {
-                            found = true; // 验证 target 处存在 user.message
+                            found = true;
                         }
                     }
-                    kept.add(line); // 保留原行(不修改内容)
+                    if (s >= targetSeq) {
+                        continue; // 截断:丢弃 seq >= target 的事件(含被编辑的旧 user.message)
+                    }
+                    kept.add(line); // 保留原行(seq < target)
                 }
             }
             // 原子重写文件

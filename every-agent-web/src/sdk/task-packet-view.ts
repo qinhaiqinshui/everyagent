@@ -382,8 +382,8 @@ export class TaskPacketView {
     if (frame.channel !== this.streamCh) return
 
     // 消息编辑同步事件:截断本地缓冲(seq > editedSeq 的数据包全部移除),
-    // 通知折叠器据此截断线程项。不更新 editedSeq 处的 user.message 内容
-    // (旧 user.message 保持原样,新内容由后续 consumeInput 写新的 user.message 推送)。
+    // 通知折叠器据此截断线程项(移除 editedSeq 处的旧 user.message
+    
     if (frame.event === 'message.edited' && frame.payload) {
       const payload = frame.payload as Record<string, unknown>
       const editedSeq = String(payload.seq ?? frame.seq ?? '')

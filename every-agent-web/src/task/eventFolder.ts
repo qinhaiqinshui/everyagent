@@ -354,9 +354,9 @@ export class TaskEventFolder {
         return true
       }
       case 'message.edited': {
-        // 消息编辑重发:截断 seq > editedSeq 的所有线程项。
-        // 不更新 editedSeq 处的 user.message 内容(旧消息保持原样,
-        // 新内容由后续 consumeInput 写新的 user.message 推送)。
+        // 消息编辑重发:截断 seq >= editedSeq 的所有线程项(含旧 user.message)。
+        // 移除 editedSeq 处的旧 user.message,
+        // 新内容由后续 consumeInput 写新的 user.message 推送。
         const editedSeq = String(event.payload?.seq ?? event.seq)
         this.truncateAfterSeq(editedSeq)
         return true
@@ -607,7 +607,7 @@ export class TaskEventFolder {
   }
 
   /**
-   * 截断:移除所有 seq > targetSeq 的线程项(消息编辑重发时,worker 已截断磁盘,
+   * 截断:移除所有 seq >= targetSeq 的线程项(消息编辑重发时,worker 已截断磁盘,
    * 前端同步移除本地线程中后续的 AI 回复/工具调用/trace 等)。同时清理 bySeq/traceSeq 索引。
    */
   private truncateAfterSeq(targetSeq: string): void {
@@ -615,7 +615,7 @@ export class TaskEventFolder {
     let i = 0
     while (i < items.length) {
       const itemSeq = this.seqOfItem(items[i])
-      if (compareSeq(itemSeq, targetSeq) > 0) {
+      if (compareSeq(itemSeq, targetSeq) >= 0) {
         // 移除该项
         const removed = items.splice(i, 1)[0]
         // 清理 bySeq(该项的 seqKey)

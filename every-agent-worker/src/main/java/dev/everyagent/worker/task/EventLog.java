@@ -261,16 +261,17 @@ public final class EventLog {
     }
 
     /**
-     * 截断:移除所有 seq &gt; targetSeq 的记录,并将 lastSeq 回退到 targetSeq。
-     * 用于编辑重发热路径——磁盘已由 TaskStore.truncateAfterSeq 截断,内存日志同步截断,
-     * 防止 task.poll 从内存尾部返回已截断的旧事件。
+     * 截断:移除所有 seq &gt;= targetSeq 的记录(含被编辑的旧 user.message),
+     * 并将 lastSeq 回退到 targetSeq - 1。
+     * 用于编辑重发热路径——磁盘已由 TaskStore.truncateAfterSeq 截断(同样删 seq &gt;= target),
+     * 内存日志同步截断,防止 task.poll 从内存尾部返回已截断的旧事件。
      * persistentSize 不递减(保守策略:EventRecord 无 transient 标记,无法精确区分
      * 持久/瞬态;偏紧的护栏只会让极端长会话提早触顶,不会导致内存溢出)。
      */
     public synchronized void truncateAfter(long targetSeq) {
-        records.removeIf(r -> r.seq() > targetSeq);
-        if (lastSeq > targetSeq) {
-            lastSeq = targetSeq;
+        records.removeIf(r -> r.seq() >= targetSeq);
+        if (lastSeq >= targetSeq) {
+            lastSeq = targetSeq - 1;
         }
     }
 
