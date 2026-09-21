@@ -770,12 +770,12 @@
   color: var(--accent-blue, #4a9eff);
 }
 
-/* 编辑按钮 hover tooltip */
+/* 编辑按钮 hover tooltip(上方弹出:按钮紧贴右边界,向右弹出必超窗) */
 .nagent-msg__edit-tooltip {
   position: absolute;
-  left: 100%;
-  top: 50%;
-  transform: translateY(-50%) translateX(6px);
+  right: 0;
+  bottom: 100%;
+  transform: translateY(-6px);
   background: var(--bg-elevated, #1a1a2e);
   color: var(--text-secondary, #ccc);
   border: 1px solid var(--border-color, #333);
@@ -783,7 +783,6 @@
   padding: 6px 10px;
   font-size: 12px;
   line-height: 1.4;
-  white-space: nowrap;
   max-width: 240px;
   white-space: normal;
   width: max-content;
