@@ -202,7 +202,7 @@ public class TaskStore {
      * 丢弃 seq > target 的所有事件;不修改 target 处的 user.message 内容
      * (新内容由后续 consumeInput 写新的 user.message)。
      * 原子重写每个 jsonl 文件(整读→过滤→临时文件+ATOMIC_MOVE)。
-     * 同时清理 rounds.jsonl、file-changes/、agents.json(将被后续运行重新生成)。
+     * 截断 rounds.jsonl(保留 startSeq &lt; targetSeq 的轮次)、清理 file-changes/、agents.json。
      *
      * @return true 如果找到 target seq 处的 user.message 事件;false 表示未找到(调用方应报错)
      */
@@ -239,8 +239,35 @@ public class TaskStore {
             Files.writeString(tmp, sb.toString(), StandardCharsets.UTF_8);
             AtomicFiles.replace(tmp, f);
         }
-        // 清理 rounds.jsonl(将重新生成)
-        Files.deleteIfExists(dir.resolve("rounds.jsonl"));
+        // 截断 rounds.jsonl:只保留 startSeq < targetSeq 的轮次(编辑点之前的轮次)。
+        // 不能整个删除——那样会丢失编辑点之前的轮次,前端刷新后只显示新轮。
+        Path rf = dir.resolve("rounds.jsonl");
+        if (Files.isRegularFile(rf)) {
+            List<String> keptRounds = new ArrayList<>();
+            try (BufferedReader br = Files.newBufferedReader(rf, StandardCharsets.UTF_8)) {
+                String line;
+                while ((line = br.readLine()) != null) {
+                    if (line.isBlank()) continue;
+                    RoundIndex.Round round = parseRoundLine(line);
+                    if (round != null && round.startSeq() < targetSeq) {
+                        keptRounds.add(line);
+                    }
+                }
+            } catch (IOException e) {
+                log.warn("rounds 截断读取失败 {} {}", dir, e);
+            }
+            try {
+                Path tmp = rf.resolveSibling(rf.getFileName() + ".tmp");
+                StringBuilder sb = new StringBuilder();
+                for (String l : keptRounds) {
+                    sb.append(l).append('\n');
+                }
+                Files.writeString(tmp, sb.toString(), StandardCharsets.UTF_8);
+                AtomicFiles.replace(tmp, rf);
+            } catch (IOException e) {
+                log.warn("rounds 截断写入失败 {} {}", dir, e);
+            }
+        }
         // 清理 file-changes/ 目录
         Path fc = dir.resolve("file-changes");
         if (Files.isDirectory(fc)) {
