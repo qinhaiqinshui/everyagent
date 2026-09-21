@@ -209,6 +209,14 @@ public class TaskStore {
     public boolean truncateAfterSeq(Path dir, long targetSeq) throws IOException {
         boolean found = false;
         for (Path f : agentFiles(dir)) {
+            // 只重写 agent 事件日志(<agentId>.jsonl)。任务目录下另有非事件 jsonl:
+            // rounds.jsonl(轮次索引,无 seq 字段,走下方专门截断——误入本循环会被
+            // 「seq<=0 丢弃」整文件清空,编辑重发后历史轮次全丢、新轮 index 归 1,
+            // 前端刷新只剩编辑后一条)与 queue.jsonl(悬空输入队列,不属事件空间)。
+            String fname = f.getFileName().toString();
+            if ("rounds.jsonl".equals(fname) || "queue.jsonl".equals(fname)) {
+                continue;
+            }
             List<String> kept = new ArrayList<>();
             try (BufferedReader br = Files.newBufferedReader(f, StandardCharsets.UTF_8)) {
                 String line;
