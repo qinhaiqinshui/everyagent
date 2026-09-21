@@ -355,18 +355,27 @@ public class GitService {
 
     private void push(RpcContext ctx) throws IOException {
         Sandbox sb = sandbox(ctx);
-        String url = originUrl(sb);
-        NativeResult r = withAuth(ctx, sb, url, List.of("push", "--porcelain", "origin"));
-        if (r.exitCode() != 0) {
-            if (NativeGit.isNotRepo(r)) {
-                throw new NotFoundException("工作区不是 git 仓库");
-            }
-            throw new RuntimeException("git.push 失败: " + (r.stderr() == null ? "" : r.stderr()));
+        java.util.LinkedHashMap<String, String> remotes = remoteMap(sb);
+        if (remotes.isEmpty()) {
+            throw new RuntimeException("git.push 失败: 未配置任何远程仓库");
         }
         ArrayNode arr = Json.arr();
-        String remote = url == null ? "origin" : url;
-        for (NativeGit.PushUpdate u : NativeGit.parsePushUpdates(r.stdout())) {
-            arr.add(Json.obj().put("remote", remote).put("ref", u.ref()).put("status", u.status()));
+        List<String> errors = new ArrayList<>();
+        for (var entry : remotes.entrySet()) {
+            String name = entry.getKey();
+            String url = entry.getValue();
+            // withAuth 可能抛 AuthRequiredException → 透传给前端弹窗收集凭证后重试
+            NativeResult r = withAuth(ctx, sb, url, List.of("push", "--porcelain", name));
+            if (r.exitCode() != 0) {
+                errors.add(name + ": " + (r.stderr() == null ? "" : r.stderr()));
+                continue;
+            }
+            for (NativeGit.PushUpdate u : NativeGit.parsePushUpdates(r.stdout())) {
+                arr.add(Json.obj().put("remote", name).put("ref", u.ref()).put("status", u.status()));
+            }
+        }
+        if (!errors.isEmpty()) {
+            throw new RuntimeException("git.push 部分失败: " + String.join("; ", errors));
         }
         ctx.ok(Json.obj().set("updates", arr));
     }
@@ -479,27 +488,8 @@ public class GitService {
     /** 列出已关联远程(供前端判断是否需要引导关联)。 */
     private void remoteList(RpcContext ctx) throws IOException {
         Sandbox sb = sandbox(ctx);
-        NativeResult r = git.runRead(sb.root(), List.of("remote", "-v"), CredentialSpec.none());
-        if (r.exitCode() != 0) {
-            if (NativeGit.isNotRepo(r)) {
-                throw new NotFoundException("工作区不是 git 仓库");
-            }
-            throw new RuntimeException("git.remote.list 失败: " + (r.stderr() == null ? "" : r.stderr()));
-        }
         ArrayNode remotes = Json.arr();
-        java.util.LinkedHashMap<String, String> seen = new java.util.LinkedHashMap<>();
-        for (String line : r.stdout().split("\n")) {
-            int tab = line.indexOf('\t');
-            if (tab < 0) {
-                continue;
-            }
-            String name = line.substring(0, tab);
-            String rest = line.substring(tab + 1);
-            int sp = rest.lastIndexOf(' ');
-            String url = sp > 0 ? rest.substring(0, sp) : rest;
-            seen.putIfAbsent(name, url.trim());
-        }
-        seen.forEach((n, u) -> remotes.add(Json.obj().put("name", n).put("url", u)));
+        remoteMap(sb).forEach((n, u) -> remotes.add(Json.obj().put("name", n).put("url", u)));
         ctx.ok(Json.obj().set("remotes", remotes));
     }
 
@@ -614,6 +604,33 @@ public class GitService {
         int colon = hostPort.lastIndexOf(':');
         String host = colon >= 0 ? hostPort.substring(0, colon) : hostPort;
         return host.isEmpty() ? null : host;
+    }
+
+    /**
+     * 列出所有已配置远程(name → url,按 {@code git remote -v} 顺序)。
+     * 非 git 仓库抛 {@link NotFoundException};其他失败抛 {@link RuntimeException}。
+     */
+    private java.util.LinkedHashMap<String, String> remoteMap(Sandbox sb) throws IOException {
+        NativeResult r = git.runRead(sb.root(), List.of("remote", "-v"), CredentialSpec.none());
+        if (r.exitCode() != 0) {
+            if (NativeGit.isNotRepo(r)) {
+                throw new NotFoundException("工作区不是 git 仓库");
+            }
+            throw new RuntimeException("git remote -v 失败: " + (r.stderr() == null ? "" : r.stderr()));
+        }
+        java.util.LinkedHashMap<String, String> seen = new java.util.LinkedHashMap<>();
+        for (String line : r.stdout().split("\n")) {
+            int tab = line.indexOf('\t');
+            if (tab < 0) {
+                continue;
+            }
+            String name = line.substring(0, tab);
+            String rest = line.substring(tab + 1);
+            int sp = rest.lastIndexOf(' ');
+            String url = sp > 0 ? rest.substring(0, sp) : rest;
+            seen.putIfAbsent(name, url.trim());
+        }
+        return seen;
     }
 
     /** 当前仓库 origin 远程 URL(未关联远程返回 null)。 */
@@ -740,9 +757,9 @@ public class GitService {
      * <ol>
      *   <li>非 git 仓库 → {@link GitSyncStatus#NOT_INITIALIZED};</li>
      *   <li>有本地变更 → add -A 全部(含删除) + commit(自动消息);</li>
-     *   <li>未配置 origin → 仅本地提交返回({@code NO_REMOTE} / {@code SUCCESS});</li>
-     *   <li>有远端 → pull(--no-rebase;冲突则 {@code reset --hard} 中止合并、保留本地提交、
-     *       跳过推送)→ push。</li>
+     *   <li>未配置任何远端 → 仅本地提交返回({@code NO_REMOTE} / {@code SUCCESS});</li>
+     *   <li>有远端 → 从 origin 拉取(--no-rebase;冲突则 {@code reset --hard} 中止合并、
+     *       保留本地提交、跳过推送)→ 推送到<b>所有</b>已配置远端。</li>
      * </ol>
      * 凭证走静默档(本机默认 + 工作区加密凭证),无 UI 弹窗;任一异常兜为
      * {@link GitSyncStatus#ERROR},不影响调用方(任务终态)。
@@ -758,8 +775,8 @@ public class GitService {
             if (gitDir.exitCode() != 0) {
                 return new SyncResult(GitSyncStatus.NOT_INITIALIZED, "工作区不是 git 仓库");
             }
-            String origin = originUrl(sb);
-            boolean hasRemote = origin != null;
+            java.util.LinkedHashMap<String, String> remotes = remoteMap(sb);
+            boolean hasRemote = !remotes.isEmpty();
             StatusData st = statusData(sb);
             boolean dirty = !st.clean();
             if (dirty) {
@@ -779,22 +796,39 @@ public class GitService {
                         ? new SyncResult(GitSyncStatus.SUCCESS, "本地提交完成；当前仓库未配置远端")
                         : new SyncResult(GitSyncStatus.NOOP, "无本地未提交更改且未配置远端");
             }
-            CredentialSpec silent = silentCredential(sb, origin);
-            NativeResult pull = git.runWrite(sb.root(), List.of("pull", "--no-rebase"), silent);
-            if (pull.exitCode() != 0) {
-                boolean conflicted = hasConflicts(sb);
-                if (conflicted) {
-                    git.runWrite(sb.root(), List.of("reset", "--hard"), CredentialSpec.none());
-                    return new SyncResult(GitSyncStatus.CONFLICT,
-                            "拉取产生冲突,已中止合并并保留本地提交,未推送");
+            // 从 origin 拉取(若配置了 origin)
+            String origin = remotes.get("origin");
+            if (origin != null) {
+                CredentialSpec silent = silentCredential(sb, origin);
+                NativeResult pull = git.runWrite(sb.root(), List.of("pull", "--no-rebase"), silent);
+                if (pull.exitCode() != 0) {
+                    boolean conflicted = hasConflicts(sb);
+                    if (conflicted) {
+                        git.runWrite(sb.root(), List.of("reset", "--hard"), CredentialSpec.none());
+                        return new SyncResult(GitSyncStatus.CONFLICT,
+                                "拉取产生冲突,已中止合并并保留本地提交,未推送");
+                    }
+                    return new SyncResult(GitSyncStatus.ERROR, "拉取失败: " + pull.stderr());
                 }
-                return new SyncResult(GitSyncStatus.ERROR, "拉取失败: " + pull.stderr());
             }
-            NativeResult push = git.runWrite(sb.root(), List.of("push", "--porcelain", "origin"), silent);
-            if (!push.ok()) {
-                return new SyncResult(GitSyncStatus.ERROR, "推送失败: " + push.stderr());
+            // 推送到所有已配置远端
+            List<String> pushErrors = new ArrayList<>();
+            for (var entry : remotes.entrySet()) {
+                String name = entry.getKey();
+                String url = entry.getValue();
+                CredentialSpec silent = silentCredential(sb, url);
+                NativeResult push = git.runWrite(sb.root(), List.of("push", "--porcelain", name),
+                        silent);
+                if (!push.ok()) {
+                    pushErrors.add(name);
+                }
             }
-            return new SyncResult(GitSyncStatus.SUCCESS, "已提交并推送到远端");
+            if (!pushErrors.isEmpty()) {
+                return new SyncResult(GitSyncStatus.ERROR,
+                        "推送失败(远程: " + String.join(", ", pushErrors) + ")");
+            }
+            return new SyncResult(GitSyncStatus.SUCCESS,
+                    "已提交并推送到所有远端(" + String.join(", ", remotes.keySet()) + ")");
         } catch (Exception e) {
             return new SyncResult(GitSyncStatus.ERROR, "自动同步失败: " + e.getMessage());
         }

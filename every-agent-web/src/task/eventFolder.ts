@@ -140,6 +140,25 @@ export class TaskEventFolder {
   }
 
   /**
+   * 重置:清空全部状态(items/bySeq/traceSeq/anchors)。
+   * resync 时重新从 task.rounds 拉取并 foldRound 前调用,
+   * 避免旧 items(编辑前的轮次,seq 已过期)与新轮次混排。
+   * 保留 taskId,重置其余字段到空态。
+   */
+  reset(): void {
+    this.state.items = []
+    this.state.agentStates = {}
+    this.state.agentMeta = {}
+    this.state.contextUsage = null
+    this.state.taskModel = null
+    this.bySeq.clear()
+    this.traceSeq.clear()
+    this.anchors.streaming.clear()
+    this.anchors.toolNames.clear()
+    this.anchors.subTitles.clear()
+  }
+
+  /**
    * 折叠一个事件。
    *
    * 数据包协议:一轮 AI 回复 = 1 个 seq,同轮 thinking/delta/message 同 seq(占同一条线程项);
@@ -334,6 +353,14 @@ export class TaskEventFolder {
         }
         return true
       }
+      case 'message.edited': {
+        // 消息编辑重发:截断 seq >= editedSeq 的所有线程项(含旧 user.message)。
+        // 移除 editedSeq 处的旧 user.message,
+        // 新内容由后续 consumeInput 写新的 user.message 推送。
+        const editedSeq = String(event.payload?.seq ?? event.seq)
+        this.truncateAfterSeq(editedSeq)
+        return true
+      }
       default:
         // ask.state 等其余事件由 askStore 驱动卡片,不进线程。
         return true
@@ -430,6 +457,16 @@ export class TaskEventFolder {
     for (const item of agents) {
       if (!item || !item.agentId) continue
       const key = item.agentId === mainAgentId ? '' : item.agentId
+      // 状态兜底:历史任务打开时流事件(agent.status)不随 rounds 骨架折入,agentStates
+      // 无该键 → 子 agent 胶囊落回灰色 idle。台账 status 落盘即权威(live 内存实时),
+      // 仅在 agentStates 尚无值时填入(不覆盖流事件/实时状态;重连 resync 重复 seed 幂等)。
+      if (this.state.agentStates[key] === undefined && item.status) {
+        const mapped = mapAgentStatus(String(item.status))
+        if (mapped) {
+          this.state.agentStates[key] = mapped
+          changed = true
+        }
+      }
       const usage = readUsage(item.usage)
       const context = item.context
       if (this.mergeAgentMeta(key, {
@@ -567,6 +604,33 @@ export class TaskEventFolder {
       foldRole: message.role === 'user' ? 'user' : undefined,
     }
     this.insertItemBySeq(item, seqKey, seqKey)
+  }
+
+  /**
+   * 截断:移除所有 seq >= targetSeq 的线程项(消息编辑重发时,worker 已截断磁盘,
+   * 前端同步移除本地线程中后续的 AI 回复/工具调用/trace 等)。同时清理 bySeq/traceSeq 索引。
+   */
+  private truncateAfterSeq(targetSeq: string): void {
+    const items = this.state.items
+    let i = 0
+    while (i < items.length) {
+      const itemSeq = this.seqOfItem(items[i])
+      if (compareSeq(itemSeq, targetSeq) >= 0) {
+        // 移除该项
+        const removed = items.splice(i, 1)[0]
+        // 清理 bySeq(该项的 seqKey)
+        const seqKey = String(itemSeq)
+        if (this.bySeq.get(seqKey) === removed) {
+          this.bySeq.delete(seqKey)
+        }
+        // 清理 traceSeq(trace 项)
+        if (removed.type === 'task_trace') {
+          this.traceSeq.delete(removed.trace.traceId)
+        }
+      } else {
+        i++
+      }
+    }
   }
 
   /** 插入一条 task_trace 到 items(按 seq 升序定位),并登记 traceId → 原始 seq(固定位置)。 */
@@ -990,9 +1054,11 @@ function sameAgentMeta(a: AgentMetaSnapshot | undefined, b: AgentMetaSnapshot): 
 }
 
 /**
- * worker agent.status 值 → n 前端 AgentStatus。
- * worker 侧枚举:running / waiting-user / done / failed / stopped
- * (见 Events.AgentStatus;主 agent 终态 done/failed/stopped 由 TaskManager.agentStatusOf 发出)。
+ * worker 状态值 → n 前端 AgentStatus。覆盖两张词表:
+ * - agent.status 事件(Events.AgentStatus):running / waiting-user / done / failed / stopped
+ *   (主 agent 终态 done/failed/stopped 由 TaskManager.agentStatusOf 发出);
+ * - task.agents 台账 status(SubAgentManager.effectiveStatus):completed / stopped / error /
+ *   running / waiting-user(工具契约词表,终态词与前端同名)。
  * n 前端枚举:idle / running / waiting-user / completed / stopped / error
  * (与 taskStore.mapWorkerStatus 的映射约定一致:done→completed、failed→error)。
  * 未知/非法值返回 null → 丢弃,不污染状态表。
@@ -1003,6 +1069,8 @@ function mapAgentStatus(value: string): AgentStatus | null {
     case 'running':
     case 'waiting-user':
     case 'stopped':
+    case 'completed':
+    case 'error':
       return value
     case 'done':
       return 'completed'

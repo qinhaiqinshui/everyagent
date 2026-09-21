@@ -1,6 +1,7 @@
 import React from 'react'
 import { Dropdown, Tree, Tooltip, theme } from 'antd'
 import type { MenuProps, TreeDataNode } from 'antd'
+import type { AlignType } from '@rc-component/trigger'
 import { ChevronDownIcon, ChevronRightIcon, FolderIcon } from '../shared/AppGlyphs'
 import { FileTypeIcon } from '../shared/FileTypeGlyphs'
 import type { ListRowActionItem } from '../shared/ui/ListRowActions'
@@ -14,6 +15,10 @@ import type {
 } from '@/types/workspaceExplorer'
 
 const { useToken } = theme
+
+/** 菜单项行高(antd Menu 默认 min-height) + 容器上下 padding,用于预估菜单高度。 */
+const MENU_ITEM_HEIGHT = 32
+const MENU_PADDING = 8
 
 export default function WorkspaceExplorerTree({
   workspaceRoot,
@@ -269,6 +274,62 @@ function TreeNodeRow({
     onLongPress: () => onOpenChange(true),
   })
 
+  // 右键菜单锚点:记录鼠标右键坐标,用于计算弹层 offset 和 maxHeight
+  const [mousePos, setMousePos] = React.useState<{ x: number; y: number } | null>(null)
+
+  // 监听 contextmenu 事件记录鼠标坐标(在 Dropdown 的 onOpenChange 之前触发)
+  const handleContextMenu = React.useCallback((e: React.MouseEvent) => {
+    setMousePos({ x: e.clientX, y: e.clientY })
+    longPressHandlers.onContextMenu(e)
+  }, [longPressHandlers])
+
+  // 根据鼠标位置和预估菜单高度计算 align offset 和 maxHeight。
+  // autoAdjustOverflow=false 后,rc-trigger 不做翻转/shift,菜单始终从鼠标点向下展开(bottomLeft)。
+  // 我们通过 align.offset 上移菜单确保不溢出底部视口;
+  // 上下都不够时通过 styles.root.maxHeight 出滚动条。
+  const itemCount = menuItems?.length ?? 0
+  const menuEstimatedHeight = itemCount * MENU_ITEM_HEIGHT + MENU_PADDING
+
+  const menuAlign = React.useMemo<AlignType | undefined>(() => {
+    if (!mousePos) return undefined
+    const viewportH = window.innerHeight
+    const EDGE = 8
+    const GAP = 4
+    const spaceDown = viewportH - mousePos.y - EDGE
+    const spaceUp = mousePos.y - EDGE
+    const offsetX = 6
+    if (menuEstimatedHeight <= spaceDown) {
+      // 下方足够:正常向下展开(菜单顶部距鼠标点 GAP)
+      return { offset: [offsetX, GAP] }
+    }
+    if (menuEstimatedHeight <= spaceUp) {
+      // 上方足够:向上偏移使菜单整体在鼠标上方
+      return { offset: [offsetX, -(menuEstimatedHeight + GAP)] }
+    }
+    // 上下都不够:选较大一侧,偏移到不溢出
+    if (spaceDown >= spaceUp) {
+      // 下方较多:正常向下展开,maxHeight 限制高度出滚动条
+      return { offset: [offsetX, GAP] }
+    }
+    // 上方较多:偏移到视口顶部,maxHeight 限制高度
+    return { offset: [offsetX, -(mousePos.y - EDGE)] }
+  }, [mousePos, menuEstimatedHeight])
+
+  const menuRootStyle = React.useMemo<React.CSSProperties | undefined>(() => {
+    if (!mousePos) return undefined
+    const viewportH = window.innerHeight
+    const EDGE = 8
+    const GAP = 4
+    const spaceDown = viewportH - mousePos.y - EDGE - GAP
+    const spaceUp = mousePos.y - EDGE - GAP
+    if (menuEstimatedHeight <= spaceDown || menuEstimatedHeight <= spaceUp) {
+      // 能完全展开,不需要 maxHeight
+      return undefined
+    }
+    // 上下都不够:限制为较大一侧的空间
+    return { maxHeight: Math.max(spaceDown, spaceUp), overflowY: 'auto' }
+  }, [mousePos, menuEstimatedHeight])
+
   const content = (
     <div
       data-key={node.path}
@@ -278,8 +339,12 @@ function TreeNodeRow({
         gap: token.paddingXXS,
         width: '100%',
         cursor: 'default',
-        // 名称文字允许鼠标选中复制(文件/文件夹名)
-        userSelect: 'text',
+        // 名称文字允许鼠标选中复制(文件/文件夹名)；
+        // 移动端禁用文字选择:避免长按触发系统选词/放大镜，与自定义长按右键菜单冲突。
+        userSelect: isMobile ? 'none' : 'text',
+        WebkitUserSelect: isMobile ? 'none' : 'text',
+        // iOS Safari:长按不再弹系统「拷贝/全选」呼出菜单。
+        WebkitTouchCallout: isMobile ? 'none' : undefined,
         ...(isSelected ? {
           background: 'color-mix(in srgb, var(--accent-blue-dim) 55%, transparent)',
           borderRadius: 'var(--radius-sm)',
@@ -310,7 +375,7 @@ function TreeNodeRow({
       onPointerMove={longPressHandlers.onPointerMove}
       onPointerUp={longPressHandlers.onPointerUp}
       onPointerLeave={longPressHandlers.onPointerLeave}
-      onContextMenu={longPressHandlers.onContextMenu}
+      onContextMenu={handleContextMenu}
     >
       {isMultiSelect ? (
         <span
@@ -370,6 +435,16 @@ function TreeNodeRow({
       onOpenChange={onOpenChange}
       trigger={['contextMenu']}
       menu={{ items: menuItems }}
+      // 完全禁用 antd 自动翻转/位置调整。
+      // rc-trigger 对齐逻辑(useAlign)中,adjustY=false → needAdjustY=false → 不翻转;
+      // shiftY=undefined → 不 shift。位置完全由 align.offset 控制,行为确定性。
+      // 注意:autoAdjustOverflow={{ adjustX:0, adjustY:0 }} 是错误的写法,
+      // 因为 useAlign 的 supportAdjust(val) 对 0 返回 0>=0=true(启用翻转),
+      // 必须用 false 才能真正禁用。
+      autoAdjustOverflow={false}
+      align={menuAlign}
+      styles={menuRootStyle ? { root: menuRootStyle } : undefined}
+      rootClassName="ws-context-menu"
     >
       {content}
     </Dropdown>

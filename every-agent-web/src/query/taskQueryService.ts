@@ -154,6 +154,8 @@ export const taskQueryService = {
     taskTokens?: string[]
     /** 原始输入(含 opaque token 串,仅用于 user.message 回放还原胶囊;缺省=纯文本输入)。 */
     rawContent?: string
+    /** 编辑重发:被编辑消息的 seq(字符串雪花ID);worker 收到后先截断后续事件再正常运行。 */
+    editSeq?: string
   }): Promise<string> {
     if (opts?.taskId) {
       // 续跑/入队:透传当前选定的模型 configId(旧任务可切换模型);不传则 worker 沿用任务冻结模型。
@@ -167,6 +169,7 @@ export const taskQueryService = {
         input,
         configId: opts.configId || undefined,
         ...(opts.rawContent ? { rawContent: opts.rawContent } : {}),
+        ...(opts.editSeq ? { editSeq: opts.editSeq } : {}),
       })
       return opts.taskId
     }

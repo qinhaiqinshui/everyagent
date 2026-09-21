@@ -208,6 +208,11 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
                 }
                 TaskEntry t = tasks.get(taskId);
                 if (t != null && !t.status.terminal()) {
+                    // 编辑重发：截断清理后正常入队
+                    String editSeq = payload.path("editSeq").isTextual() ? payload.path("editSeq").asString() : null;
+                    if (editSeq != null && !editSeq.isEmpty()) {
+                        truncateForEdit(taskId, t, editSeq, text, rawContent);
+                    }
                     t.inputQueue.offer(text, rawContent); // 运行中:本轮运行的输入循环内消化
                     t.touch();
                     publishQueue(t); // 队列变化即广播(pendingInputs 快照,前端镜像实时)
@@ -216,7 +221,8 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
                 // 不在内存或已终态(finish 驱逐窗口内):统一走再运行认领。
                 // 热终态直接 return 会把输入无声丢弃——done 帧发布于 finish 持锁段头部,
                 // flush/meta/驱逐完成前到达的输入都落在这个窗口。
-                rerunTask(conn, taskId, text, rawContent);
+                String editSeq2 = payload.path("editSeq").isTextual() ? payload.path("editSeq").asString() : null;
+                rerunTask(conn, taskId, text, rawContent, editSeq2);
             }
             case Events.TASK_DIALOG_INSERT -> {
                 String taskId = payload.path("taskId").asString("");
@@ -1102,6 +1108,11 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
         TaskEntry t = tasks.get(taskId);
         if (t != null) {
             if (!t.status.terminal()) {
+                // task.run 续跑/入队时也检查 editSeq
+                String editSeq = ctx.optStrParam("editSeq", null);
+                if (editSeq != null && !editSeq.isEmpty() && t != null && !t.status.terminal()) {
+                    truncateForEdit(taskId, t, editSeq, input, rawContent);
+                }
                 t.inputQueue.offer(input, rawContent); // 运行中:与 task.input 同路径入队
                 t.touch();
                 publishQueue(t);
@@ -1126,6 +1137,18 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
             return;
         }
         final TaskStore.StoredTask claimed = st;
+        // 编辑重发：终态任务冷启动前先截断清理
+        String editSeq = ctx.optStrParam("editSeq", null);
+        if (editSeq != null && !editSeq.isEmpty()) {
+            try {
+                truncateForColdEdit(taskId, claimed, editSeq, input, rawContent);
+            } catch (Exception e) {
+                log.error("编辑截断失败 task={}", taskId, e);
+                diskTasks.putIfAbsent(taskId, claimed);
+                ctx.err(Rpc.ERR_INTERNAL, "消息编辑失败: " + e.getMessage());
+                return;
+            }
+        }
         vt.submit(() -> {
             try {
                 startRerun(claimed, UserInput.of(input, rawContent), ctx.optStrParam("configId", null));
@@ -1414,11 +1437,15 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
      * diskTasks.remove 认领(与 delete/并发 rerun 互斥,输家直接返回);
      * 热终态任务先等 finish 驱逐完成(空 synchronized 块)再走冷路径。
      */
-    private void rerunTask(HubLink conn, String taskId, String text, String rawContent) {
+    private void rerunTask(HubLink conn, String taskId, String text, String rawContent, String editSeq) {
         TaskEntry hot = tasks.get(taskId);
         if (hot != null) {
             if (!hot.status.terminal()) {
                 // finish 尚未开始(竞态窗口极小):直接入队
+                // 编辑重发：截断清理后正常入队
+                if (editSeq != null && !editSeq.isEmpty()) {
+                    truncateForEdit(taskId, hot, editSeq, text, rawContent);
+                }
                 hot.inputQueue.offer(text, rawContent);
                 hot.touch();
                 return;
@@ -1433,6 +1460,16 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
         if (st == null) {
             log.warn("再运行认领失败(任务不存在或已被并发操作): {}", taskId);
             return;
+        }
+        // 编辑重发：冷启动前先截断清理
+        if (editSeq != null && !editSeq.isEmpty()) {
+            try {
+                truncateForColdEdit(taskId, st, editSeq, text, rawContent);
+            } catch (Exception e) {
+                log.error("编辑截断失败 task={}", taskId, e);
+                diskTasks.putIfAbsent(taskId, st);
+                return;
+            }
         }
         vt.submit(() -> {
             try {
@@ -1654,6 +1691,94 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
         t.touch();
     }
 
+    /**
+     * 编辑重发·运行中热路径：截断磁盘+内存中 seq > editSeq 的事件，
+     * 从磁盘重建主 agent 会话内存，广播 message.edited 同步事件，更新 meta。
+     * 不清除输入框内容（正常入队由 consumeInput 消费）。
+     */
+    private void truncateForEdit(String taskId, TaskEntry t, String editSeq, String text, String rawContent) {
+        long seq = Long.parseLong(editSeq);
+        Path dir = store.dirOf(taskId);
+        // 截断内存事件日志(先截断,再截断磁盘:truncateAndReset 用截断后的 EventLog 重建 cursor)
+        t.log.truncateAfter(seq);
+        try {
+            boolean found = store.truncateAndReset(taskId, seq);
+            if (!found) {
+                log.warn("编辑截断：未找到 seq={} 的用户消息 task={}", editSeq, taskId);
+                return;
+            }
+        } catch (Exception e) {
+            log.error("编辑截断失败 task={}", taskId, e);
+            return;
+        }
+        // 从磁盘重建主 agent 会话内存(磁盘已截断,ConversationLoader 载入截断后的历史)
+        // 先停止子 agent(防止截断后旧子 agent 仍写事件/改文件)
+        subs.stopAll(t);
+        AgentEntity main = t.main;
+        if (main != null) {
+            List<Message> rebuilt = ConversationLoader.load(store, dir, t.mainAgentId);
+            main.conversation.clear();
+            main.conversation.addAll(rebuilt);
+        }
+        // 清理子 agent 运行态(截断后旧轮的子 agent 已无效)
+        t.subs.clear();
+        t.subFutures.clear();
+        t.agentLedger.clear();
+        // 清理本轮文件改动收集器(随截断失效,新轮重建)
+        t.fileChanges = null;
+        t.fileChangesLight = null;
+        t.fileChangesFull = null;
+        // 更新 meta
+        ObjectNode meta = store.readMeta(dir);
+        if (meta != null) {
+            meta.put("status", "running");
+            meta.remove("endedAt");
+            meta.remove("error");
+            meta.put("seqLast", seq);
+            try {
+                TaskStore.writeMeta(dir, meta);
+            } catch (Exception e) {
+                log.warn("meta 更新失败 task={}", taskId, e);
+            }
+        }
+        // 广播 message.edited 同步事件
+        ObjectNode editPayload = Json.obj()
+                .put("seq", String.valueOf(seq))
+                .put("text", text);
+        if (rawContent != null && !rawContent.isEmpty()) {
+            editPayload.put("rawContent", rawContent);
+        }
+        pool.pubTaskStream(taskId, Events.MESSAGE_EDITED, editPayload);
+    }
+
+    /**
+     * 编辑重发·冷启动路径：截断磁盘、广播 message.edited、更新 meta。
+     * 截断后正常走 startRerun 冷启动（ConversationLoader 载入截断后的历史）。
+     */
+    private void truncateForColdEdit(String taskId, TaskStore.StoredTask st, String editSeq, String text, String rawContent) throws Exception {
+        long seq = Long.parseLong(editSeq);
+        Path dir = st.dir();
+        boolean found = store.truncateAfterSeq(dir, seq);
+        if (!found) {
+            throw new IllegalArgumentException("未找到 seq=" + editSeq + " 的用户消息");
+        }
+        // 更新 meta
+        ObjectNode meta = st.summary().deepCopy();
+        meta.put("status", "created");
+        meta.remove("endedAt");
+        meta.remove("error");
+        meta.put("seqLast", seq);
+        TaskStore.writeMeta(dir, meta);
+        // 广播 message.edited 同步事件
+        ObjectNode editPayload = Json.obj()
+                .put("seq", String.valueOf(seq))
+                .put("text", text);
+        if (rawContent != null && !rawContent.isEmpty()) {
+            editPayload.put("rawContent", rawContent);
+        }
+        pool.pubTaskStream(taskId, Events.MESSAGE_EDITED, editPayload);
+    }
+
     /** 主 agent:agentId = 任务 mainAgentId(再运行沿用);priorConversation 为冷启动载入的历史。 */
     private AgentEntity buildMainAgent(TaskEntry t, List<Message> priorConversation) {
         // 渐进式披露:内置 skill 知识包由 BuiltInSkills 启动时物化到系统技能目录(§5.10),
@@ -1661,7 +1786,9 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
         ResolvedConfig cfg = resolveAgentConfig(t);
         List<ToolCallback> tools = new ArrayList<>();
         for (ToolCallback c : ToolCallbacks.from(new AskUserTool(asks, props, t, t.mainAgentId))) {
-            tools.add(c);
+            // 无人值守拦截装饰器(任务级开关):t.unattended=true 时 ask_user 被短路,
+            // 直接回传合成文本「当前无人值守,请按你推荐的实现。」;false 时透传真实挂起。
+            tools.add(new UnattendedAskUserCallback(c, t));
         }
         for (ToolCallback c : ToolCallbacks.from(new SubAgentTools(subs, t))) {
             tools.add(c);

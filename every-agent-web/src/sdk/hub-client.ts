@@ -292,6 +292,16 @@ export class HubClient {
     const timeoutMs = opts?.timeoutMs ?? this.opts.rpcTimeoutMs;
     return new Promise<any>((resolve, reject) => {
       const timer = setTimeout(() => {
+        // 冻结保护(§4.2):关屏/切后台时 JS 被暂停,setTimeout 不触发但墙钟在走,
+        // 开屏后早已过期的计时器立即执行。若 lastFrameAt 远早于超时窗口,说明整个
+        // 窗口期内无帧到达(连接已死或 JS 被冻结),此超时不可信——不 reject、不删
+        // pending:让心跳探活 → 判死 → onclose → holdPendingRpcs → 重连 →
+        // replayPendingRpcs 重放,业务层全程无感知。
+        // 反之,若窗口期内有帧到达(连接活着却唯独无应答),才是真超时。
+        if (Date.now() - this.lastFrameAt >= timeoutMs) {
+          this.heartbeatTick(); // 加速探活,不等下个心跳周期
+          return;
+        }
         this.pendingRpc.delete(reqId);
         reject(new Error(`rpc ${method} 超时(${timeoutMs}ms)`));
       }, timeoutMs);
@@ -411,6 +421,11 @@ export class HubClient {
     this.clearHoldTimer();
     for (const [reqId, p] of this.pendingRpc) {
       p.timer = setTimeout(() => {
+        // 同 rpc() 冻结保护:重放后再次经历冻结的场景。
+        if (Date.now() - this.lastFrameAt >= p.timeoutMs) {
+          this.heartbeatTick();
+          return;
+        }
         this.pendingRpc.delete(reqId);
         p.reject(new Error(`rpc ${p.method} 超时(${p.timeoutMs}ms)`));
       }, p.timeoutMs);

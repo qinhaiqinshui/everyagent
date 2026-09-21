@@ -85,11 +85,13 @@ public final class TaskEntry {
     public volatile boolean aiReview;
 
     /**
-     * 无人值守开关(任务级,plan-unattended-ai-auth §关键设计决策):开启后剥离 ask_user
-     * 工具 + 注入无人值守提示词,随 {@link #summaryJson()} 落盘 meta.json、再运行仍保持。
+     * 无人值守开关(任务级,plan-unattended-ai-auth §关键设计决策):开启后 AI 调用
+     * ask_user 时被 {@code UnattendedAskUserCallback} 装饰器拦截、代替人工逐题选择
+     * 第一个选项并以「题干：首选项」格式回传作答文本,不挂起等待;
+     * 随 {@link #summaryJson()} 落盘 meta.json、再运行仍保持。
      * 由 {@code UnattendedSlashProvider} 的 onSelect/onCancel 置位复位并落盘;
      * 开启无人值守时联动开启 AI 审议(由 selectHandler 一次返回两个胶囊,前端各自 apply)。
-     * {@code UnattendedModeAdvisor} 每轮 before 实时读本字段。
+     * 装饰器在 call() 中实时读本字段(volatile),运行中点胶囊开/关即时生效。
      */
     public volatile boolean unattended;
 

@@ -2,12 +2,14 @@ import React from 'react'
 import Markdown from "react-markdown"
 import remarkGfm from 'remark-gfm'
 import { buildMarkdownComponents } from './markdown/sharedMarkdownRenderer'
+import { remarkFourTildeStrikethrough } from './markdown/remarkFourTildeStrikethrough'
 
 /**
  * 聊天面板 Markdown 渲染（AI 输出）。
  *
- * 基于 react-markdown + remark-gfm，所有块级/内联语法（含 GFM 表格、删除线、任务列表、自动链接）
- * 由 react-markdown 统一解析；样式与表格列宽算法通过共享组件工厂注入。
+ * 基于 react-markdown + remark-gfm，所有块级/内联语法（含 GFM 表格、任务列表、自动链接）
+ * 由 react-markdown 统一解析；删除线语法经 remarkFourTildeStrikethrough 改写为
+ * 仅 `~~~~text~~~~` 生效（`~~`/`~` 按字面文本渲染）。样式与表格列宽算法通过共享组件工厂注入。
  *
  * 性能：组件以 React.memo 包裹，normalized 内容按 content 记忆；react-markdown 内部按整文档解析，
  * 对常见聊天消息（数 KB）开销可忽略。流式更新时整树重渲染，但 React 协调复用同位同类 DOM，成本与文档规模线性相关。
@@ -17,7 +19,7 @@ const MarkdownDisplay = React.memo(function MarkdownDisplay({ content }: { conte
   if (!normalized.trim()) return null
   return (
     <div className="md-root" style={rootStyle}>
-      <Markdown remarkPlugins={[remarkGfm]} components={displayComponents}>
+      <Markdown remarkPlugins={[remarkGfm, remarkFourTildeStrikethrough]} components={displayComponents}>
         {normalized}
       </Markdown>
     </div>

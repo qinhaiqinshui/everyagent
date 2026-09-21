@@ -2,6 +2,7 @@ import React from 'react'
 import Markdown from "react-markdown"
 import remarkGfm from 'remark-gfm'
 import { buildMarkdownComponents } from '@/components/shared/markdown/sharedMarkdownRenderer'
+import { remarkFourTildeStrikethrough } from '@/components/shared/markdown/remarkFourTildeStrikethrough'
 import { parseMarkdownHeadings, type MarkdownHeading } from './markdownOutline'
 import MarkdownImage from './MarkdownImage'
 
@@ -61,7 +62,7 @@ const MarkdownPreview = React.forwardRef<MarkdownPreviewHandle, MarkdownPreviewP
 
   return (
     <div className="md-root" style={rootStyle}>
-      <Markdown remarkPlugins={[remarkGfm]} components={components}>
+      <Markdown remarkPlugins={[remarkGfm, remarkFourTildeStrikethrough]} components={components}>
         {normalized}
       </Markdown>
     </div>
