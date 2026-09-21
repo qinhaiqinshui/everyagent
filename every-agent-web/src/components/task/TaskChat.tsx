@@ -30,6 +30,7 @@ import TaskModelControls from '@/components/taskComposer/TaskModelControls'
 import HScrollArea from '@/components/shared/HScrollArea'
 import { ArrowDownIcon, ArrowRightIcon, StopIcon } from '../shared/AppGlyphs'
 import { Button, InlineSpinner } from '@/components/shared/ui'
+import { UserMessageEditContext, type UserMessageEditContextValue } from './userMessageEditContext'
 import { useWorkspaceShell } from '@/components/app/WorkspaceShellContext'
 import { useResponsiveViewport } from '@/hooks/useResponsiveViewport'
 import { parseOpaqueTokenText, replaceComposerTokensForSubmission } from '@/composerToken/composerOpaqueToken'
@@ -232,6 +233,9 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
   // agent 选中态(点击输入框上方 agent 长条切换):非空时轮次视图按该 agent 过滤
   // (仅过滤已加载内容,不触发拉取,见 TaskRoundsPanel matches 谓词)。
   const [filterAgentId, setFilterAgentId] = React.useState('')
+  // 消息编辑:editTarget 非空=编辑模式(内容已追加到输入框);
+  // 点发送时直接走正常流程(携带 editSeq),不弹确认窗。
+  const [editTarget, setEditTarget] = React.useState<{ seq: string } | null>(null)
 
   // 实时信号链:订阅 taskStream(agentStates/contextUsage/taskModel/ask 等状态信号
   // 折叠推进即重渲染)。items 不再驱动线程渲染(旧首拉渲染路径已删除),只用于
@@ -516,6 +520,35 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
     if (!aiText) {
       return
     }
+    // 编辑模式:点编辑按钮后内容已追加到输入框,用户修改完毕点发送 →
+    // 直接走正常 task.run/sendInput 流程(携带 editSeq 标记),不弹确认窗。
+    if (editTarget) {
+      const editAiText = replaceComposerTokensForSubmission(draft.rawContent, draft.tokens).trim()
+      if (!editAiText) return
+      setSubmitting(true)
+      userControllRef.current = false
+      void (async () => {
+        try {
+          if (isTaskRunning) {
+            stream!.sendInput(editAiText, draft.rawContent, editTarget.seq)
+          } else {
+            await taskQueryService.runTask(editAiText, {
+              taskId: effectiveTaskId,
+              configId: selectedForTask || undefined,
+              rawContent: draft.rawContent,
+              editSeq: editTarget.seq,
+            })
+          }
+          setEditTarget(null)
+          setDraft({ text: '', rawContent: '', tokens: [], activeTokenId: undefined })
+        } catch (editError) {
+          setError(editError instanceof Error ? editError.message : '消息编辑失败')
+        } finally {
+          setSubmitting(false)
+        }
+      })()
+      return
+    }
     if (isDraft && !draftWorkerId) {
       setError('请先选择 worker')
       return
@@ -577,7 +610,7 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
         setSubmitting(false)
       }
     })()
-  }, [draft, isDraft, draftWorkerId, selectedLlmConfigId, submitting, stream, shell, effectiveDraftWorkspace, isTaskRunning, effectiveTaskId, selectedForTask, scopeTokens])
+  }, [draft, isDraft, draftWorkerId, selectedLlmConfigId, submitting, stream, shell, effectiveDraftWorkspace, isTaskRunning, effectiveTaskId, selectedForTask, scopeTokens, editTarget])
 
   /**
    * 停止当前 Task。
@@ -596,6 +629,31 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
         setStopping(false)
       })
   }, [isTaskRunning, stopping, stream])
+
+  /**
+   * 用户消息编辑:点击编辑按钮 → 把原消息内容追加到输入框已有内容末尾,记录编辑目标(seq)。
+   * 运行中也可编辑(入队时 worker 先截断再正常运行)。
+   */
+  const handleEditUserMessage = React.useCallback(
+    (seq: number | string, text: string, rawContent?: string) => {
+      setError('')
+      const appendText = text && text.length ? text : ''
+      const newRawContent = (draft.rawContent ?? '') + appendText
+      setDraft({
+        text: newRawContent,
+        rawContent: newRawContent,
+        tokens: [],
+        activeTokenId: undefined,
+      })
+      setEditTarget({ seq: String(seq) })
+    },
+    [draft.rawContent],
+  )
+
+  /** 取消编辑:清除编辑标记,不删除输入框内容。 */
+  const handleCancelEdit = React.useCallback(() => {
+    setEditTarget(null)
+  }, [])
 
   // 从线程派生 agent 列表:主 agent(mainAgentId)恒在首位,子 agent 按首次出现顺序。
   // 线程内主 agent 消息 agentId 为空串(缺省=主线程),此处归一到 mainAgentId 供列表/过滤使用。
@@ -645,14 +703,16 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
         agentId: agent.agentId,
         title: agent.title,
         status: isMain
-          ? (states[''] ?? 'idle')
+          // 主 agent:流事件状态优先;终态任务刷新后 agent.status 不随 rounds 骨架折入,
+          // 用任务状态兜底(词表同为 idle/running/completed/stopped/error),避免胶囊灰化。
+          ? (states[''] ?? (entry?.status ?? 'idle'))
           : (states[agent.agentId] ?? 'idle'),
         isMain,
         meta,
         contextRatio,
       }
     })
-  }, [agents, mainAgentId, stream, agentMeta])
+  }, [agents, mainAgentId, stream, agentMeta, entry?.status])
 
   /** 点击 agent 长条:切换选中态(再点同一 agent 由面板回传 '' 恢复全部;轮次视图下仅高亮)。 */
   const handleSelectAgent = React.useCallback((agentId: string) => {
@@ -660,6 +720,13 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
   }, [])
 
   const submitDisabled = Boolean(!draft.text.trim() || submitting || (isDraft && !draftWorkerId) || (isDraft && !effectiveDraftWorkspace))
+
+  // 用户消息编辑 Context(非草稿态才有编辑能力)
+  const editContextValue: UserMessageEditContextValue = {
+    editingUserSeq: editTarget?.seq ?? null,
+    onEditUserMessage: handleEditUserMessage,
+    onCancelEditUserMessage: handleCancelEdit,
+  }
 
   // 草稿态：渲染与 n 版启动台一致的草稿面板（BrandMark 顶栏 + 空线程 + 输入区）。
   // 模型配置来自 worker(config.get),选中项经 task.create 的 configId 冻结进任务快照。
@@ -692,6 +759,8 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
   }
 
   return (
+    <UserMessageEditContext.Provider value={editContextValue}>
+    <>
     <ChatShell
       // 工作区 chip 已迁移至输入框底部(电池图标左侧),顶部不再重复展示。
       header={undefined}
@@ -797,7 +866,7 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
                   </Button>
                 ) : (
                   <Button
-                    variant="primary"
+                    variant={editTarget ? 'danger' : 'primary'}
                     size="sm"
                     onClick={handleSubmit}
                     disabled={submitDisabled}
@@ -809,7 +878,7 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
                       <ArrowRightIcon size={14} />
                     )}
                     <span className="task-composer-footer__send-label">
-                      {submitting ? '发送中...' : '发送'}
+                      {submitting ? (editTarget ? '重新发送中...' : '发送中...') : (editTarget ? '重新发送' : '发送')}
                     </span>
                   </Button>
                 )}
@@ -822,6 +891,8 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
         </div>
       )}
     />
+    </>
+    </UserMessageEditContext.Provider>
   )
 }
 

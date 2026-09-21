@@ -706,8 +706,8 @@
 
 .nagent-msg__body--user {
   display: flex;
-  flex-direction: column;
-  align-items: flex-end;
+  flex-direction: row;
+  align-items: center;
   margin-left: auto;
   /* 用户消息气泡保留最大宽度 94%（不随非用户消息铺满），靠右展示 */
   max-width: 94%;
@@ -728,6 +728,72 @@
   background: color-mix(in srgb, var(--accent-blue) 12%, var(--bg-primary));
   border: none;
   margin: 16px 0;
+}
+
+/* ─── 用户消息编辑按钮 ─────────────────────────────── */
+.nagent-msg__edit-btn {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin-right: 4px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-tertiary, #999);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s, background 0.15s;
+  position: relative;
+}
+/* 桌面端:hover 消息区域时显示 */
+.nagent-msg--user-editable:hover .nagent-msg__edit-btn,
+.nagent-msg__edit-btn:focus-visible {
+  opacity: 1;
+}
+/* 移动端:长按气泡后显示(按钮在气泡前面,用 ~ 选择器反向匹配) */
+.nagent-msg__bubble--revealed {
+  opacity: 1;
+}
+.nagent-msg--user-editable:has(.nagent-msg__bubble--revealed) .nagent-msg__edit-btn {
+  opacity: 1;
+}
+.nagent-msg__edit-btn:hover {
+  background: color-mix(in srgb, var(--accent-blue) 12%, transparent);
+  color: var(--accent-blue, #4a9eff);
+}
+/* 编辑模式:当前正在编辑的消息,按钮常显 */
+.nagent-msg__edit-btn--active {
+  opacity: 1 !important;
+  color: var(--accent-blue, #4a9eff);
+}
+
+/* 编辑按钮 hover tooltip(上方弹出:按钮紧贴右边界,向右弹出必超窗) */
+.nagent-msg__edit-tooltip {
+  position: absolute;
+  right: 0;
+  bottom: 100%;
+  transform: translateY(-6px);
+  background: var(--bg-elevated, #1a1a2e);
+  color: var(--text-secondary, #ccc);
+  border: 1px solid var(--border-color, #333);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 12px;
+  line-height: 1.4;
+  max-width: 240px;
+  white-space: normal;
+  width: max-content;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.2s;
+  z-index: 100;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+.nagent-msg__edit-btn:hover .nagent-msg__edit-tooltip {
+  opacity: 1;
 }
 
 .nagent-msg__body--assistant {
@@ -2000,6 +2066,12 @@
 .nagent-composer__send:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* 编辑重发模式:警告色背景 */
+.nagent-composer__send.ant-btn-dangerous {
+  background: linear-gradient(135deg, #c0392b, #e74c3c) !important;
+  border: none !important;
 }
 
 /* ─── 输入区 footer：模型配置 / 思考强度 / 发送按钮同一行 ─────────── */

@@ -197,6 +197,127 @@ public class TaskStore {
         }
     }
 
+    /**
+     * 截断后续事件(消息编辑重发):对所有 *.jsonl 文件,保留 seq ≤ target 的事件,
+     * 丢弃 seq > target 的所有事件;不修改 target 处的 user.message 内容
+     * (新内容由后续 consumeInput 写新的 user.message)。
+     * 原子重写每个 jsonl 文件(整读→过滤→临时文件+ATOMIC_MOVE)。
+     * 截断 rounds.jsonl(保留 startSeq &lt; targetSeq 的轮次)、清理 file-changes/、agents.json。
+     *
+     * @return true 如果找到 target seq 处的 user.message 事件;false 表示未找到(调用方应报错)
+     */
+    public boolean truncateAfterSeq(Path dir, long targetSeq) throws IOException {
+        boolean found = false;
+        for (Path f : agentFiles(dir)) {
+            // 只重写 agent 事件日志(<agentId>.jsonl)。任务目录下另有非事件 jsonl:
+            // rounds.jsonl(轮次索引,无 seq 字段,走下方专门截断——误入本循环会被
+            // 「seq<=0 丢弃」整文件清空,编辑重发后历史轮次全丢、新轮 index 归 1,
+            // 前端刷新只剩编辑后一条)与 queue.jsonl(悬空输入队列,不属事件空间)。
+            String fname = f.getFileName().toString();
+            if ("rounds.jsonl".equals(fname) || "queue.jsonl".equals(fname)) {
+                continue;
+            }
+            List<String> kept = new ArrayList<>();
+            try (BufferedReader br = Files.newBufferedReader(f, StandardCharsets.UTF_8)) {
+                String line;
+                while ((line = br.readLine()) != null) {
+                    long s = seqOf(line);
+                    if (s <= 0) {
+                        continue; // 撕行/残行跳过
+                    }
+                    // 验证 target 处存在 user.message(在截断前检查)
+                    if (s == targetSeq) {
+                        EventRecord r = parseLine(line);
+                        if (r != null && Events.USER_MESSAGE.equals(r.event())) {
+                            found = true;
+                        }
+                    }
+                    if (s >= targetSeq) {
+                        continue; // 截断:丢弃 seq >= target 的事件(含被编辑的旧 user.message)
+                    }
+                    kept.add(line); // 保留原行(seq < target)
+                }
+            }
+            // 原子重写文件
+            Path tmp = f.resolveSibling(f.getFileName() + ".tmp");
+            StringBuilder sb = new StringBuilder();
+            for (String l : kept) {
+                sb.append(l).append('\n');
+            }
+            Files.writeString(tmp, sb.toString(), StandardCharsets.UTF_8);
+            AtomicFiles.replace(tmp, f);
+        }
+        // 截断 rounds.jsonl:只保留 startSeq < targetSeq 的轮次(编辑点之前的轮次)。
+        // 不能整个删除——那样会丢失编辑点之前的轮次,前端刷新后只显示新轮。
+        Path rf = dir.resolve("rounds.jsonl");
+        if (Files.isRegularFile(rf)) {
+            List<String> keptRounds = new ArrayList<>();
+            try (BufferedReader br = Files.newBufferedReader(rf, StandardCharsets.UTF_8)) {
+                String line;
+                while ((line = br.readLine()) != null) {
+                    if (line.isBlank()) continue;
+                    RoundIndex.Round round = parseRoundLine(line);
+                    if (round != null && round.startSeq() < targetSeq) {
+                        keptRounds.add(line);
+                    }
+                }
+            } catch (IOException e) {
+                log.warn("rounds 截断读取失败 {} {}", dir, e);
+            }
+            try {
+                Path tmp = rf.resolveSibling(rf.getFileName() + ".tmp");
+                StringBuilder sb = new StringBuilder();
+                for (String l : keptRounds) {
+                    sb.append(l).append('\n');
+                }
+                Files.writeString(tmp, sb.toString(), StandardCharsets.UTF_8);
+                AtomicFiles.replace(tmp, rf);
+            } catch (IOException e) {
+                log.warn("rounds 截断写入失败 {} {}", dir, e);
+            }
+        }
+        // 清理 file-changes/ 目录
+        Path fc = dir.resolve("file-changes");
+        if (Files.isDirectory(fc)) {
+            try {
+                deleteRecursively(fc);
+            } catch (IOException e) {
+                log.warn("file-changes 目录清理失败 {}", fc, e);
+            }
+        }
+        // 清理 agents.json(将重新生成)
+        Files.deleteIfExists(dir.resolve("agents.json"));
+        return found;
+    }
+
+    /**
+     * 编辑重发热路径专用:截断磁盘 + 重置落盘游标 + 重开 writer。
+     * 先调用 {@link #truncateAfterSeq} 重写 jsonl 文件(删 seq &gt; targetSeq 的行),
+     * 然后关闭旧 writer(APPEND 句柄指向截断前的文件),按截断后磁盘内容重建游标:
+     * cursor = 磁盘保留的事件行数(即 EventLog 中 seq &lt;= targetSeq 的记录数)。
+     * 重开 writer(后续 append 从截断后的文件末尾续写)。
+     * <p>线程安全:持 Tracked 监视器,与 drain(读 cursor + 写 writer)互斥。
+     * sink 线程在 drain 循环中不会 concurrently 拿到旧 cursor / 旧 writer。
+     *
+     * @return true 如果找到 target seq 处的 user.message 事件
+     */
+    public synchronized boolean truncateAndReset(String taskId, long targetSeq) throws IOException {
+        Tracked t = tracked.get(taskId);
+        if (t == null) {
+            // 未 track(冷路径),直接截断磁盘即可
+            return truncateAfterSeq(t != null ? t.dir : dirOf(taskId), targetSeq);
+        }
+        // 1. 关闭旧 writer(截断会重写文件,旧 APPEND 句柄已失效)
+        closeQuietly(t);
+        t.writers.clear();
+        // 2. 截断磁盘 jsonl
+        boolean found = truncateAfterSeq(t.dir, targetSeq);
+        // 3. 重置 cursor:磁盘保留的事件数 = EventLog 中 seq <= targetSeq 的记录数
+        //    (内存已由 EventLog.truncateAfter 截断,readFrom(0) 返回的就是保留的全部记录)
+        t.cursor = t.log.readFrom(0, Integer.MAX_VALUE).size();
+        return found;
+    }
+
     // ---- 读路径(冷数据)----
 
     /** 扫描 workspaces/&lt;workspaceId&gt;/tasks/ 下全部任务目录(meta.json 存在即算);回填 taskWorkspace 映射。 */

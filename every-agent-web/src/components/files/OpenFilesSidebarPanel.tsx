@@ -671,6 +671,11 @@ function WorkspaceGroupPanel({
   }, [handleRequestSearch, workspaceRoot])
 
   const handleRequestRefresh = React.useCallback(() => {
+    // 刷新:重置展开状态到初始(仅根),重新从磁盘拉取整树。
+    // 不走 keepExpanded=true,因为用户手动刷新期望完全重置,而非保留旧展开态。
+    const initialExpanded = new Set([WORKSPACE_EXPLORER_ROOT_LABEL])
+    expandedPathsRef.current = initialExpanded
+    setExpandedPaths(initialExpanded)
     void reloadTree(showInternalFiles)
   }, [reloadTree, showInternalFiles])
 

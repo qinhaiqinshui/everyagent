@@ -335,9 +335,9 @@ export class TaskPacketView {
   }
 
   /** 任务轮注入(worker 级输入频道,taskId 入 payload;终态任务 = 冷启动再运行)。 */
-  sendInput(text: string, rawContent?: string): void {
+  sendInput(text: string, rawContent?: string, editSeq?: string): void {
     this.client.pub(channels.workerInput(this.k, this.workerId), 'task.input',
-      { taskId: this.taskId, text, ...(rawContent ? { rawContent } : {}) })
+      { taskId: this.taskId, text, ...(rawContent ? { rawContent } : {}), ...(editSeq ? { editSeq } : {}) })
   }
 
   /** 抢答挂起中的 ask。 */
@@ -379,7 +379,32 @@ export class TaskPacketView {
    */
   private consumePushedFrame(frame: MsgFrame): void {
     if (this.closed || !this.wired) return
-    if (frame.channel !== this.streamCh || frame.seq == null) return
+    if (frame.channel !== this.streamCh) return
+
+    // 消息编辑同步事件:截断本地缓冲(seq > editedSeq 的数据包全部移除),
+    // 通知折叠器据此截断线程项(移除 editedSeq 处的旧 user.message
+    
+    if (frame.event === 'message.edited' && frame.payload) {
+      const payload = frame.payload as Record<string, unknown>
+      const editedSeq = String(payload.seq ?? frame.seq ?? '')
+      if (!editedSeq) return
+      // 截断缓冲
+      this.buffer.truncateAfter(editedSeq)
+      // 推进游标回退到编辑点(后续新事件从编辑点后续编)
+      this.lastSeq = editedSeq
+      // 通知 handler:发 message.edited 事件,折叠器据此截断线程项
+      if (this.handler) {
+        this.handler({
+          seq: editedSeq,
+          ts: frame.ts ?? Date.now(),
+          event: 'message.edited',
+          payload,
+        })
+      }
+      return
+    }
+
+    if (frame.seq == null) return
     const ext = (frame.ext ?? {}) as Record<string, unknown>
     const payload = (frame.payload ?? {}) as Record<string, unknown>
     const initial = ext.initial === true
