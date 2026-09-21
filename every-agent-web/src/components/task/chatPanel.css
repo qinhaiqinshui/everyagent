@@ -730,6 +730,52 @@
   margin: 16px 0;
 }
 
+/* ─── 用户消息气泡：超高折叠（无滚动条，溢出隐藏 + 渐变遮罩 + 展开按钮） ─── */
+.nagent-msg__bubble-content {
+  width: 100%;
+  min-width: 0;
+}
+
+/* 折叠态：内容限高 220px，溢出裁剪（不出滚动条），底部渐变淡出提示还有内容。 */
+.nagent-msg__bubble--collapsed .nagent-msg__bubble-content {
+  max-height: 220px;
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(to bottom, #000 62%, transparent 96%);
+  mask-image: linear-gradient(to bottom, #000 62%, transparent 96%);
+}
+
+/* 展开/收起按钮：气泡内底部居中胶囊，复用主题变量适配明暗主题。 */
+.nagent-msg__bubble-toggle {
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 9px;
+  border: 1px solid var(--border-light);
+  border-radius: 999px;
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  line-height: 1.6;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.nagent-msg__bubble-toggle:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  border-color: var(--border-strong);
+}
+
+.nagent-msg__bubble-toggle-icon {
+  display: inline-flex;
+  transition: transform 0.15s ease;
+}
+
+.nagent-msg__bubble-toggle-icon--up {
+  transform: rotate(180deg);
+}
+
 /* ─── 用户消息编辑按钮 ─────────────────────────────── */
 .nagent-msg__edit-btn {
   flex-shrink: 0;
