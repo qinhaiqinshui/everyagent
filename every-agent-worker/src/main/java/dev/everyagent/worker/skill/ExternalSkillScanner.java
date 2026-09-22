@@ -77,6 +77,18 @@ public class ExternalSkillScanner {
     }
 
     /**
+     * 重新扫描并更新缓存(热加载入口,由 {@code skill.reload} RPC 调用)。
+     * 线程安全:替换 {@code volatile} 引用,不影响正在读取的消费者(旧 List 不可变)。
+     *
+     * @return 本次扫描到的外部 skill 数量
+     */
+    public synchronized int reload() {
+        List<Skill> fresh = scanOnce();
+        this.cache = fresh;
+        return fresh.size();
+    }
+
+    /**
      * 执行一次扫描(可独立调用,如测试)。不修改缓存。
      */
     List<Skill> scanOnce() {

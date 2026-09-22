@@ -97,6 +97,8 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
     private final RoundIndexStore roundIndexStore;
     /** 工作区最后活动时间跟踪(任务收口时刷新,前端按最近活动倒序渲染)。 */
     private final dev.everyagent.worker.modules.WorkspaceActivityTracker activityTracker;
+    /** 外部 skill 扫描器(skill.reload RPC 热加载入口)。 */
+    private final dev.everyagent.worker.skill.ExternalSkillScanner externalSkillScanner;
 
     /** 热任务(运行中驻留内存;finish 即驱逐)。 */
     private final Map<String, TaskEntry> tasks = new ConcurrentHashMap<>();
@@ -125,7 +127,8 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
             RpcDispatcher dispatcher, dev.everyagent.worker.modules.WorkspaceManager workspaces,
             FsToolSupport fs, OsSandbox sandbox, TaskStore store, PermissionGate gate, RipgrepBinary rgbin,
             SlashCommandRegistry slashRegistry, RoundIndexStore roundIndexStore,
-            dev.everyagent.worker.modules.WorkspaceActivityTracker activityTracker) {
+            dev.everyagent.worker.modules.WorkspaceActivityTracker activityTracker,
+            dev.everyagent.worker.skill.ExternalSkillScanner externalSkillScanner) {
         this.pool = pool;
         this.configs = configs;
         this.modelFactory = modelFactory;
@@ -143,6 +146,7 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
         this.slashRegistry = slashRegistry;
         this.roundIndexStore = roundIndexStore;
         this.activityTracker = activityTracker;
+        this.externalSkillScanner = externalSkillScanner;
     }
 
     @PostConstruct
@@ -285,6 +289,7 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
         dispatcher.register(RpcMethods.TASK_QUEUE_MOVE, this::rpcTaskQueueMove);
         dispatcher.register(RpcMethods.CONFIG_GET, this::rpcConfigGet);
         dispatcher.register(RpcMethods.CONFIG_RELOAD, this::rpcConfigReload);
+        dispatcher.register(RpcMethods.SKILL_RELOAD, this::rpcSkillReload);
     }
 
     /**
@@ -1428,6 +1433,20 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
                 Json.toJson(new Events.ConfigChanged(List.of("models"))));
         log.info("config.reload 完成:模型配置已重新加载,共 {} 条", count);
         ctx.ok(Json.obj().put("models", count));
+    }
+
+    /**
+     * skill.reload:重新扫描外部 skill 列表(架构 §7.17)。
+     * 用户在系统技能目录下增删 skill 目录后,点击「重新读取」即可让 worker 热加载,
+     * 无需重启。广播 {@code config.changed{keys:["skills"]}} 通知前端刷新 `/` 菜单。
+     * 运行中任务不受影响(skill 列表只在新建任务的 `/` 菜单与 SkillAdvisor 注入时读取)。
+     */
+    private void rpcSkillReload(RpcContext ctx) {
+        int count = externalSkillScanner.reload();
+        pool.broadcastEvt(Events.CONFIG_CHANGED,
+                Json.toJson(new Events.ConfigChanged(List.of("skills"))));
+        log.info("skill.reload 完成:外部 skill 已重新扫描,共 {} 个", count);
+        ctx.ok(Json.obj().put("skills", count));
     }
 
     // ---- 终态任务再运行(冷启动;无"续跑"概念,对 agent 就是一次普通运行)----

@@ -225,6 +225,8 @@ worker 端 `RpcDispatcher` 注册方法;应答回**请求来源连接**的 `evt`
 | `task.queueRemove` / `task.queueMove` | 删除/重排某条队列输入 |
 | `task.message.edit` | 编辑已发送的用户消息:截断 seq > 该消息的所有磁盘事件、原地更新该消息内容、广播 `message.edited` 同步事件、冷启动重跑(不写新 user.message,对话历史已含编辑后的消息);任务运行中拒绝 |
 | `config.get` | 模型配置只读(Spring 配置承载,见 §7.17) |
+| `config.reload` | 重新读取模型配置(重新解析 worker.models,应用用户在外部 YAML 中的修改);广播 `config.changed{keys:["models"]}` |
+| `skill.reload` | 重新扫描外部 skill 列表(用户在系统技能目录下增删 skill 目录后热加载);广播 `config.changed{keys:["skills"]}`,前端 `/` 菜单下次打开即拉取最新列表 |
 | `workspaces.list` / `workspaces.add` / `workspaces.remove` | 工作区注册表 CRUD(多工作区并行) |
 | `workspaces.resolveMissing` | 启动自检缺失工作区落定:action=delete(删除注册并级联任务数据)/redirect(纠正到新目录并迁移任务归属) |
 | `fs.list` / `fs.reveal` / `fs.read` / `fs.write` / `fs.mkdir` / `fs.move` / `fs.delete` / `fs.browse` | 工作区文件操作,**必带 workspace 参数**,沙箱限定;文件树懒加载;沙箱附加根按操作语义分流(§7.17):**只读操作**(`fs.list`/`fs.reveal`/`fs.read`/`fs.revealInOs`)并入工作区外部授权根(externalRoots,完全读写已授权)+ 系统技能目录只读根(skills 读免授权,§13.8)——使前端「打开文件」标签页能读取 AI 已读的 skill/外部授权文件;**写操作**(`fs.write`/`fs.mkdir`/`fs.move`/`fs.delete`)仅并入 externalRoots(完全读写),技能只读根**不并入**(写不开放,§13.8);`fs.browse`(不经沙箱)列盘符/逐层浏览目录,可选 `includeFiles`(boolean,缺省 false 仅目录,完全兼容现有行为):true 时目录条目同时列出文件,每条目带 `kind:"file"\|"directory"`,响应带 `supportsFiles:true` 能力标记(前端能力探测;老前端不传/老 worker 不带按 must-ignore 双向兼容,§5.6) |
