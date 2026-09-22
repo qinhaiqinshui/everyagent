@@ -35,7 +35,7 @@ public class BuiltInSkills {
     /** 知识包在系统目录下的存放目录名(相对 homeDir)。 */
     public static final String KNOWLEDGE_DIR = "skills";
 
-    /** classpath 知识包位置模板:{@code skill/<id>.md}(与 knowledgePath 文件名一致)。 */
+    /** classpath 知识包位置模板:{@code skill/<id>.md}(物化后落盘为 {@code <id>/skill.md})。 */
     private static final String RESOURCE_PREFIX = "skill/";
 
     private final Path knowledgeRoot;
@@ -49,13 +49,13 @@ public class BuiltInSkills {
 "- 当某个任务可以并行执行来提高效率时，交给子 Agent 执行。\n"+
 "- 当你只需要一个结果，但是探索这个结果会读取大量无用历史上下文时，可以派发子Agent来帮你探索并得出你要的结论。\n"+
 "- 当需要等待、停止、重启子 Agent，或查看它们的运行状态与结果时，使用本技能。",
-                        knowledgeRoot.resolve("agent-dispatch.md").toString(),
+                        knowledgeRoot.resolve("agent-dispatch").resolve("skill.md").toString(),
                         List.of("run_agent", "list_agents", "wait_agents", "stop_agent")),
                 new Skill("plan", "计划模式",
                         "## 适用条件\n"+
 "- 当任务复杂需拆步骤执行时，使用本技能。\n"+
 "- 当用户要求做计划时，使用本技能。",
-                        knowledgeRoot.resolve("plan.md").toString(),
+                        knowledgeRoot.resolve("plan").resolve("skill.md").toString(),
                         List.of("run_agent", "list_agents", "wait_agents", "stop_agent")));
     }
 
@@ -78,7 +78,7 @@ public class BuiltInSkills {
     /**
      * 把内置知识包物化到系统技能目录(渐进式披露的「落盘」侧)。
      *
-     * <p>将 {@code classpath:skill/<id>.md} 复制为 {@code <系统目录>/skills/<id>.md},
+     * <p>将 {@code classpath:skill/<id>.md} 复制为 {@code <系统目录>/skills/<id>/skill.md},
      * 使 AI 能按 {@link Skill#knowledgePath()} 直接 {@code read_file} 读取(系统技能目录
      * 经 PermissionGate READ 窄例外 + Sandbox 只读附加根对工具放行,物化是知识包可被
      * 工具读到的唯一通道)。幂等:目标已存在且大小一致则跳过;
@@ -87,13 +87,20 @@ public class BuiltInSkills {
      */
     public void materialize() {
         for (Skill s : skills) {
+            // 清理旧的扁平担留:<id>.md(目录形态迁移前的残留),失败仅 WARN 不阻断
+            Path legacy = knowledgeRoot.resolve(s.id() + ".md").normalize();
+            try {
+                Files.deleteIfExists(legacy);
+            } catch (IOException e) {
+                log.warn("清理旧扁平 skill 担留失败 skill={} file={}", s.id(), legacy, e);
+            }
             try {
                 ClassPathResource res = new ClassPathResource(RESOURCE_PREFIX + s.id() + ".md");
                 if (!res.exists()) {
                     log.warn("内置 skill 知识包缺失(classpath): {}", RESOURCE_PREFIX + s.id() + ".md");
                     continue;
                 }
-                Path target = knowledgeRoot.resolve(s.id() + ".md").normalize();
+                Path target = knowledgeRoot.resolve(s.id()).resolve("skill.md").normalize();
                 if (!target.startsWith(knowledgeRoot)) {
                     // 防御:knowledgePath 被配置为越界路径时直接放弃,不得写出技能目录
                     log.warn("skill 知识包路径越界,已跳过: {}", target);

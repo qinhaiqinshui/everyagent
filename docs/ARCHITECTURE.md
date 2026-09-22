@@ -318,7 +318,7 @@ worker 的 agent 执行**复用 Spring AI 2 框架**,不手搓 agent 循环/工�
 主 agent advisor 链(每 run 新建实例,状态随实例隔离):
 
 ```
-RoundIndexAdvisor(轮次索引+耗时,最外层) → SkillAdvisor(skill 渐进式披露索引) → LoopRepeatGuardAdvisor(事件发射 + 工具循环 + 死循环检测)
+RoundIndexAdvisor(轮次索引+耗时,最外层) → SkillAdvisor(内置 skill 渐进式披露索引;外部 skill 不进提示词,仅经 `/` 菜单手动选用) → LoopRepeatGuardAdvisor(事件发射 + 工具循环 + 死循环检测)
 → DialogInsertAdvisor(队列项「插入到当前对话」,主 agent 专属) → EmptyResponseRetryAdvisor(空响应重调)
 → TransientErrorRetryAdvisor(瞬时错误退避) → ModelLengthGuardAdvisor(输出预算耗尽护栏,finish_reason=length)
 → ContextCompressionAdvisor(上下文压缩,最内层)
@@ -587,7 +587,10 @@ ask 管道承载第二类阻塞请求:**危险操作授权**。`PermissionGate` 
 │   └─ w_xxxxx/tasks/<taskId>/       # 其它工作区任务目录(结构同默认工作区)
 ├─ sandbox/                          # 沙箱持久状态(home/opt/usr-local/resolv.conf/env;worker.sandbox.persistent-root 可覆盖)
 │   └─ distro/                       # WSL 托管发行版 rootfs(原 wsl/distro 迁入;运行期状态,可整体重装)
-└─ skills/                           # 内置 skill 知识包(启动时从 classpath 物化)
+└─ skills/                           # skill 目录(一目录一 skill,目录下必有 skill.md)
+    ├─ agent-dispatch/skill.md       #   内置(启动时从 classpath 物化)
+    ├─ plan/skill.md                 #   内置
+    └─ <user-skill>/skill.md         #   外部(用户放置,可附带 scripts/ 等由 skill.md 引用)
 ```
 
 **旧布局迁移**:`data/` 与 `wsl/` 目录已彻底删除;存量旧数据由独立迁移脚本手动执行一次迁移——`python3 scripts/migrate-workspaces.py [--home <EVERYAGENT_HOME>]`(幂等、可重试,不随 worker 启动自动跑;迁移逻辑为 Python,不依赖 mvn 打包)。
@@ -690,7 +693,7 @@ Input:  queued → consumed | discarded(任务取消)
 | `application-worker.yaml` | 【可选】worker 用户配置覆盖(模型 `worker.models`、hub 连接、沙箱等;存在才生效) |
 | `application-hub.yaml` | 【可选】hub 用户配置覆盖 |
 | `application-dev.yaml` | 【可选】开发覆盖(IDEA 经 additional-location 显式指定) |
-| `skills/` | 内置 skill 知识包(启动时从 classpath 物化,AI 经 read_file 只读访问;同时只读挂入 wsl 沙箱供 bash 工具读取,§7.10) |
+| `skills/` | skill 目录(一目录一 skill,目录下必有 `skill.md`);内置 skill 启动时从 classpath 物化为 `<id>/skill.md`(并清理旧扁平 `<id>.md` 担留);外部 skill 由用户放置 `<目录名>/skill.md`(可附带 `scripts/` 等由正文引用、AI 经 bash 执行)。AI 经 read_file 只读访问;同时只读挂入 wsl 沙箱供 bash 工具读取,§7.10。详见下文「skill 目录结构与外部 skill」 |
 | `defaultworkspace/` | 默认工作区根(原 `workspace/` 改名,自动注册 id=defaultworkspace,始终在册;内含 `.everyagent/` 工作区级 git 凭证加密存储) |
 | `workspaces/` | 唯一工作区注册表 `workspaces.json` + 按工作区归类的任务数据 `workspaces/<workspaceId>/tasks/<taskId>/` |
 | `sandbox/` | 沙箱持久状态(home/opt/usr-local/resolv.conf/env;`worker.sandbox.persistent-root` 可覆盖);内含 `distro/` = WSL 托管发行版 rootfs(原 `wsl/distro` 迁入,运行期状态,可整体重装) |
@@ -705,9 +708,11 @@ Input:  queued → consumed | discarded(任务取消)
 
 **启动自检(工作区被移动/删除)**:worker 启动时校验 `workspaces/workspaces.json` 载入的已注册目录,缺失者(用户移动/删除目录后重启)在注册表快照标记 `missing`并广播,前端弹窗要求二选一——`workspaces.resolveMissing {action:"delete"}` 删除注册并**直接删 `workspaces/<wsId>/` 整个目录(任务数据随删)**,或 `{action:"redirect",newRoot}` 纠正到移动后的新目录——**保留 `id`、只改 `root` 并迁移挂靠任务的 `meta.workspace`,任务目录不搬**;默认工作区不可删除、只可纠正(纠正后的根直接写回 `workspaces.json` 中 id=defaultworkspace 条目的 `root`,重启读回,不再需要 `workspace-default.json` 覆盖文件)。未落定的缺失工作区 `resolve` 拒绝,避免沙箱挂载失败或静默新建空目录掩盖数据丢失。
 
-**skill 只读例外**:系统目录 `skills/` 是 AI 文件工具对系统路径的**唯一只读免授权**例外——`read_file` 经权限责任链节点 `SkillsReadAllowCheck` 直接放行(realpath 前缀判定);**任何写操作不在此放行,仍走授权决议链**;其余系统路径(workspaces/、sandbox/、runtime/ 等)与普通工作区外目录同权,一律走授权决议(弹窗/AI 审议)。`skills/` 同时只读挂入 wsl 系列沙箱(§7.10:wsl-direct drvfs `-o ro`、wsl-bwrap `--ro-bind`),bash 工具在沙箱内同样只读可达,写经 OS 层拒;windows-mic 后端跑在宿主,Medium IL 读写用户文件本就放行,无需挂载。
+**skill 只读例外**:系统目录 `skills/` 是 AI 文件工具对系统路径的**唯一只读免授权**例外——`read_file` 经权限责任链节点 `SkillsReadAllowCheck` 直接放行(realpath 前缀判定);**任何写操作不在此放行,仍走授权决议链**;其余系统路径(workspaces/、sandbox/、runtime/ 等)与普通工作区外目录同权,一律走授权决议(弹窗/AI 审议)。`skills/` 同时只读挂入 wsl 系列沙箱(§7.10:wsl-direct drvfs `-o ro`、wsl-bwrap `--ro-bind`),bash 工具在沙箱内同样只读可达,写经 OS 层拒;windows-mic 后端跑在宿主,Medium IL 读写用户文件本就放行,无需挂载。以上只读放行与沙箱只读挂载同时覆盖内置与外部 skill 目录;外部 skill 携带的脚本经 `bash <脚本路径>` 执行不受只读影响(执行不要求写权限)。
 
 **skill 知识包路径的沙箱注入**:`SkillAdvisor` 注入 system prompt 的知识包路径按当前沙箱后端解析(§7.17):WSL 系列沙箱下 `Skill.knowledgePath`(宿主 Windows 绝对路径)经 `WslPathMapper` 翻译为 AI 沙箱内可见的 `/` 开头 Linux 路径(wsl-direct `/c/...`、wsl-bwrap `/mnt/c/...`),使 AI 的 `bash`(`cat`/`grep`)与 `read_file`(经 `FsToolSupport.resolveWslPath` 反向翻译回宿主路径)均能直接使用同一路径;非 WSL 后端原样注入宿主路径。`Skill` record 仍存宿主绝对路径(物化/沙箱挂载均以此为准),路径翻译仅发生在注入提示词时。
+
+**skill 目录结构与外部 skill**:skill 统一为「一个目录一个 skill」,目录下必须有 `skill.md`。内置 skill(agent-dispatch、plan)启动时由 classpath `skill/<id>.md` 物化为 `<skillsDir>/<id>/skill.md`(幂等:目标已存在且大小一致则跳过;不一致则覆盖),同时清理旧扁平 `<id>.md` 担留(从扁平单文件迁移到目录形态的一次性清理)。外部 skill 由用户手工放置 `<目录名>/skill.md`(可附带 `scripts/`、配置等任意文件,由 `skill.md` 正文引用、AI 经 `bash` 执行)。**id 规则**:目录名即 skill id,仅允许 `[a-z0-9][a-z0-9-]*`;realpath 必须仍在 `skillsDir` 内(拒绝符号链接越界);与内置或其它外部 skill 同名冲突时跳过并 WARN(内置优先)。**描述提取**:无 frontmatter、不引入 YAML 依赖;描述 = `skill.md` 首个非空且非 `#` 标题行的正文行,截断至 200 字符;提取失败(不可读/全文仅标题)则描述为空串,仍注册。**披露通道分离**:内置 skill 由 `BuiltInSkills.getActiveSkills()` 返回 → `SkillAdvisor` 自动注入 system prompt(渐进式披露索引,现有行为不变);外部 skill **不进 system prompt**,只注册进 `/` 菜单(`SkillSlashProvider` 数据源 = 内置 + 外部合并列表),由用户手动选择后走现有 `SkillSlashTokenResolver` 链路(token 解析为「请使用技能:`<title>`。」,payload 含 `skillPath`),AI 按需 `read_file` 知识包——零新增组件。`/` 菜单条目 title = 目录名,副标题 = 描述提取结果。**扫描时机**:worker 启动时一次性扫描(`@PostConstruct`),不做热加载;只认 `skillsDir` 一级子目录,不递归。**明确不做**:热加载/目录监听、skill 开关 UI、脚本注册为独立 AI 工具(脚本一律由 AI 经 `bash` 执行,复用现有沙箱与 PermissionGate)、frontmatter/完整 YAML 语法支持。
 
 ### 7.18 内嵌终端(term.*)
 

@@ -7,6 +7,7 @@ import org.springframework.stereotype.Component;
 
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.worker.skill.BuiltInSkills;
+import dev.everyagent.worker.skill.ExternalSkillScanner;
 import dev.everyagent.worker.skill.Skill;
 
 /**
@@ -37,8 +38,24 @@ public class SkillSlashProvider {
                     + " stroke-width=\"1.6\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\">"
                     + "<path d=\"M3.2 4.1C3.2 3.5 3.7 3 4.3 3H7.6V13H4.5C3.8 13 3.2 12.4 3.2 11.7V4.1ZM12.8 4.1C12.8 3.5 12.3 3 11.7 3H8.4V13H11.5C12.2 13 12.8 12.4 12.8 11.7V4.1ZM8 5.8L8.7 7.1L10 7.8L8.7 8.5L8 9.8L7.3 8.5L6 7.8L7.3 7.1Z\" /></svg>";
 
-    public SkillSlashProvider(SlashCommandRegistry registry, BuiltInSkills builtInSkills) {
-        registry.registerProvider("skill", () -> toItems(builtInSkills.getActiveSkills()));
+    public SkillSlashProvider(SlashCommandRegistry registry,
+                              BuiltInSkills builtInSkills,
+                              ExternalSkillScanner externalSkillScanner) {
+        registry.registerProvider("skill", () -> toItems(
+                merge(builtInSkills.getActiveSkills(), externalSkillScanner.scan())));
+    }
+
+    /**
+     * 合并内置与外部 skill 列表(内置在前,外部在后)。
+     *
+     * <p>{@link ExternalSkillScanner} 已排除内置 id,理论上无重名;
+     * 这里不额外去重,保持内置优先顺序。
+     */
+    private static List<Skill> merge(List<Skill> builtIn, List<Skill> external) {
+        List<Skill> merged = new ArrayList<>(builtIn.size() + external.size());
+        merged.addAll(builtIn);
+        merged.addAll(external);
+        return merged;
     }
 
     /** 把运行时 skill 列表映射成 `/` 候选项(选中即构造自包含 opaque 串)。 */
