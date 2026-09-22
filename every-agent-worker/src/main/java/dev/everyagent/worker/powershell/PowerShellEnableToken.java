@@ -4,7 +4,7 @@ import dev.everyagent.contract.json.Json;
 import dev.everyagent.worker.slash.SlashTokenEncoder;
 
 /**
- * 「/启用powershell」斜杠能力 capsule token 的 worker 侧实现(仿
+ * 「/允许AI访问电脑」斜杠能力 capsule token 的 worker 侧实现(仿
  * {@code network.NetworkToken}:opaque token 三要素——固定 kind、构造、命中扫描)。
  *
  * <p>职责:
@@ -23,7 +23,7 @@ import dev.everyagent.worker.slash.SlashTokenEncoder;
  * 在构建 agent 工具集时生效(WSL 后端在 bash 之外追加 PowerShellTool,命令回宿主
  * Windows 原生沙箱执行,AI 同时拥有 powershell 与 bash 两个命令工具)。
  *
- * <p>本次任务有效:选中 /启用powershell 即开启任务级开关(写入任务 meta.json 落盘),
+ * <p>本次任务有效:选中 /允许AI访问电脑 即开启任务级开关(写入任务 meta.json 落盘),
  * 之后本任务所有轮次持续生效、再运行仍保持,直至 ✕ 取消。
  */
 public final class PowerShellEnableToken {
@@ -34,17 +34,17 @@ public final class PowerShellEnableToken {
     private PowerShellEnableToken() {
     }
 
-    /** 构造「启用powershell」opaque token(select 直接返回该串 → 底部渲染胶囊)。 */
+    /** 构造「允许AI访问电脑」opaque token(select 直接返回该串 → 底部渲染胶囊)。 */
     public static String buildToken() {
         return SlashTokenEncoder.buildToken(
                 KIND,
-                "启用powershell",
+                "允许AI访问电脑",
                 "为 WSL 沙箱追加 powershell 工具（本任务有效）",
                 Json.obj().put("enabled", true));
     }
 
     /**
-     * 判断文本是否包含「启用powershell」标记(命中 {@code powershell.enable} 且 enabled=true)。
+     * 判断文本是否包含「允许AI访问电脑」标记(命中 {@code powershell.enable} 且 enabled=true)。
      * 逐段扫描 opaque token,非本 kind / 解析失败跳过;与渲染解耦。
      */
     public static boolean enabledIn(String text) {

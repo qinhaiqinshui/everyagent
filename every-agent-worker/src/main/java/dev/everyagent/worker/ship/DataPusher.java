@@ -153,11 +153,20 @@ public class DataPusher implements EventLog.Listener {
     /**
      * 对账一次:任务在内存且非终态 → 确保挂在其日志上并推送增量;任务已终态但日志还挂着 →
      * 收尾排水一次(finish 先置终态、agent.status 等尾事件后追加,不排会丢尾);任务不在内存
-     * (终态已驱逐/尚未创建)→ 空转等待(历史与终态数据走 task.poll 拉取,本推送器不负责)。
+     * (终态已驱逐/尚未创建)→ 若 liveLog 仍挂着,做一次最终排水再 detach(防止子 agent 完成事件
+     * 在上一次 pushFrom 返回与 finish 驱逐之间追加、因 tasks.get 返回 null 而永不推送);
+     * 无 liveLog(尚未创建/已 detach)→ 空转等待(历史与终态数据走 task.poll 拉取,本推送器不负责)。
      */
     private void reconcileLive() {
         TaskEntry t = tasks.get(taskId);
         if (t == null) {
+            // 任务已被驱逐(finish 移除):liveLog 仍引用旧 EventLog(对象未 GC),
+            // 推一次尾排水把可能在上次 pushFrom 返回与驱逐之间追加的事件(子 agent done/status)
+            // 推给前端,然后 detach 防止后续空轮询反复读已空的旧日志。
+            if (liveLog != null) {
+                cursor = pushFrom(liveLog, cursor);
+                detach();
+            }
             return;
         }
         if (t.status.terminal()) {

@@ -4,12 +4,14 @@ import SidebarScrollArea from '@/components/shared/SidebarScrollArea'
 import { getDefaultRuntimeService } from '@/task'
 import { taskStore } from '@/hub/taskStore'
 import { workspaceRegistry } from '@/hub/workspaceRegistry'
+import { domainEventBus, DOMAIN_EVENTS } from '@/events/eventBus'
+import { useWorkspaceShell } from '@/components/app/WorkspaceShellContext'
 import ListRowActions, { type ListRowActionsHandle } from '@/components/shared/ui/ListRowActions'
 import { useResponsiveViewport } from '@/hooks/useResponsiveViewport'
 import { useLongPress } from '@/hooks/useLongPress'
 import type { TaskListGroup } from '@/plugin/types'
 import ContextBattery from '@/components/task/ContextBattery'
-import { ChevronDownIcon, MoreHorizontalIcon, PlusIcon } from '@/components/shared/AppGlyphs'
+import { ChevronDownIcon, MagnifierCheckIcon, MoreHorizontalIcon, PlusIcon } from '@/components/shared/AppGlyphs'
 import { Button, IconButton } from '@/components/shared/ui'
 import ActionMenu from '@/components/shared/ui/ActionMenu'
 import ConfirmDialog from '@/components/shared/ConfirmDialog'
@@ -167,10 +169,10 @@ export default function TasksPanel({
    * 任务合并于尾组「未挂靠工作区」。
    * pages 为组的分页口径(workerId+workspace 过滤;组内「加载更多」按此定向续拉)。
    */
-  const groups = React.useMemo<(TaskListGroup<TaskListItemSnapshot> & { pages: Array<{ workerId: string; workspace: string }> })[] | null>(() => {
+  const groups = React.useMemo<(TaskListGroup<TaskListItemSnapshot> & { pages: Array<{ workerId: string; workspace: string }>; workspace?: { workerId: string; root: string } })[] | null>(() => {
     if (!registry) return null
     const knownRoots = new Set(registry.workspaces.map((entry) => entry.root))
-    const out: Array<TaskListGroup<TaskListItemSnapshot> & { pages: Array<{ workerId: string; workspace: string }> }> = []
+    const out: Array<TaskListGroup<TaskListItemSnapshot> & { pages: Array<{ workerId: string; workspace: string }>; workspace?: { workerId: string; root: string } }> = []
     for (const entry of registry.workspaces) {
       const groupTasks = tasks.filter((task) => task.workspace === entry.root)
       if (groupTasks.length === 0) continue
@@ -180,6 +182,8 @@ export default function TasksPanel({
         title: entry.root,
         tasks: groupTasks,
         pages: entry.workerId ? [{ workerId: entry.workerId, workspace: entry.root }] : [],
+        /** 组对应的工作区定位(worker + 根),供组头「搜索」跳转到搜索侧边栏预填绑定。 */
+        workspace: { workerId: entry.workerId, root: entry.root },
         ...(onCreateNewTask
           ? {
               actions: [{
@@ -319,6 +323,23 @@ export default function TasksPanel({
       displayTitle: task.displayTitle,
     })
   }, [onSelect])
+
+  const { setActiveSidebarPanel } = useWorkspaceShell()
+
+  /**
+   * 工作区组「搜索」:切到搜索侧边栏(壳层统一跳转通道) + 发领域事件预填
+   * worker/工作区绑定与「搜索任务内容」目标,搜索面板订阅事件落定并聚焦输入框。
+   */
+  const handleSearchWorkspace = React.useCallback((workspace: { workerId: string; root: string }) => {
+    setActiveSidebarPanel('search')
+    domainEventBus.emit(DOMAIN_EVENTS.WORKSPACE_SEARCH_PANEL_REQUESTED, {
+      workerId: workspace.workerId,
+      workspaceRoot: workspace.root,
+      rootPath: '',
+      label: workspaceGroupLabel(workspace.root),
+      target: 'tasks',
+    })
+  }, [setActiveSidebarPanel])
 
   /** 已切换到「显示绝对时间」的任务集合(点击时间触发;再点切回相对时间)。 */
   const [absoluteTimeTaskIds, setAbsoluteTimeTaskIds] = React.useState<Set<string>>(new Set())
@@ -587,23 +608,34 @@ export default function TasksPanel({
                       </Button>
                     </span>
                   ) : null}
-                  {group.actions?.length ? (
+                  {group.workspace ? (
                     <ActionMenu
                       ariaLabel="更多操作"
                       align="end"
                       triggerIcon={<MoreHorizontalIcon size={13} />}
-                      items={[{
-                        key: 'batch-delete',
-                        label: '批量删除',
-                        danger: true,
-                        disabled: group.tasks.every((task) => task.status === 'running')
-                          || deleting
-                          || batchGroupKey !== null,
-                        onSelect: () => {
-                          setSelectedTaskIds([])
-                          setBatchGroupKey(group.key)
+                      items={[
+                        {
+                          key: 'search',
+                          label: '搜索',
+                          icon: <MagnifierCheckIcon size={13} />,
+                          disabled: !group.workspace.workerId,
+                          onSelect: () => {
+                            if (group.workspace) handleSearchWorkspace(group.workspace)
+                          },
                         },
-                      }]}
+                        {
+                          key: 'batch-delete',
+                          label: '批量删除',
+                          danger: true,
+                          disabled: group.tasks.every((task) => task.status === 'running')
+                            || deleting
+                            || batchGroupKey !== null,
+                          onSelect: () => {
+                            setSelectedTaskIds([])
+                            setBatchGroupKey(group.key)
+                          },
+                        },
+                      ]}
                     />
                   ) : null}
                 </div>

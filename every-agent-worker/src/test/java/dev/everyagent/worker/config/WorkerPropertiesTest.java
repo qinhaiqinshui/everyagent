@@ -272,4 +272,38 @@ class WorkerPropertiesTest {
         r.setStrategy("");
         assertEquals(15_000L, r.backoffMs(2));
     }
+
+    // ---- Sandbox.resolveMemoryLimitMb():-1 = 自动(总内存 <8GB 不限,≥8GB 限 70%) ----
+
+    @Test
+    void memoryLimitDefaultsToAuto() {
+        // 默认 -1 = 自动模式(不再是历史硬编码 512/4096)
+        assertEquals(-1, new WorkerProperties.Sandbox().getMemoryLimitMb());
+    }
+
+    @Test
+    void explicitMemoryLimitPassesThrough() {
+        WorkerProperties.Sandbox s = new WorkerProperties.Sandbox();
+        s.setMemoryLimitMb(0);
+        assertEquals(0, s.resolveMemoryLimitMb(), "0 = 显式不限制");
+        s.setMemoryLimitMb(4096);
+        assertEquals(4096, s.resolveMemoryLimitMb(), ">0 = 固定上限原样生效");
+    }
+
+    @Test
+    void autoMemoryLimitFollowsSystemMemory() {
+        long totalMb = ((com.sun.management.OperatingSystemMXBean)
+                java.lang.management.ManagementFactory.getOperatingSystemMXBean())
+                .getTotalMemorySize() / (1024 * 1024);
+        WorkerProperties.Sandbox s = new WorkerProperties.Sandbox(); // 默认 -1 = auto
+        long resolved = s.resolveMemoryLimitMb();
+        if (totalMb < 8L * 1024) {
+            assertEquals(0, resolved, "总内存 <8GB 应不限制,实际总内存 " + totalMb + " MB");
+        } else {
+            assertEquals(Math.round(totalMb * 0.70), resolved,
+                    "总内存 ≥8GB 应限 70%,实际总内存 " + totalMb + " MB");
+        }
+        // 解析结果缓存:二次调用同值
+        assertEquals(resolved, s.resolveMemoryLimitMb());
+    }
 }

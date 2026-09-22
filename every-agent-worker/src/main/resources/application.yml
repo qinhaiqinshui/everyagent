@@ -52,21 +52,23 @@ worker:
   # active-process-limit:Job Object 活动进程数上限(0=不限制)。默认 32。
   #   rgt 独立工具已移除,模型在沙箱 shell 内直接调 rg(子进程),此值必须 ≥2,
   #   否则 rg/cmd/where 等一切子进程都会被拒(ERROR_NOT_ENOUGH_QUOTA)。
-  # memory-limit-mb:整棵进程树内存上限(MB);0 = 不限制。默认 512。
+  # memory-limit-mb:整棵进程树内存上限(MB)。默认 -1 = 自动:启动时读取系统总物理内存,
+  #   < 8GB 不限制,≥ 8GB 限总内存的 70%(解析见 WorkerProperties.Sandbox.resolveMemoryLimitMb)。
+  #   0 = 不限制;>0 = 固定上限 MB。
   #   windows-mic = Job Object(commit 上限);WSL 后端 = cgroup v2 memory.max + swap.max=0
   #   (真实内存占用上限;曾用 RLIMIT_AS 已弃用——它限的是虚拟地址空间,V8 指针压缩
   #   cage 保留 4GB + 每个 Wasm memory GB 级 guard region,node fetch/vite build 等
   #   一碰 Wasm 即崩,详见 docs/ARCHITECTURE.md §7.10)。
-  #   mvn/gradle 等构建会启动 JVM,默认 JVM 堆(物理内存 1/4)很容易撞破 512MB
-  #   上限报 ERROR_COMMITMENT_LIMIT(1455,『页面文件太小』)。构建任务建议调大
-  #   到 4096+,并配合 MAVEN_OPTS=-Xmx 把 JVM 堆压在限内。
+  #   mvn/gradle 等构建会启动 JVM,固定上限过小(如 512)时默认 JVM 堆(物理内存 1/4)
+  #   很容易撞破上限报 ERROR_COMMITMENT_LIMIT(1455,『页面文件太小』);固定值场景
+  #   建议配合 MAVEN_OPTS=-Xmx 把 JVM 堆压在限内。
   # cpu-hard-cap-percent:Job 内所有进程合计 CPU 时间百分比上限(0-100;0=不限制)。
   #   注意代码按 Windows 内核单位(1/100 百分比)换算,这里直接填整百分比即可。
   #   沙箱防失控已默认 50;但 mvn 编译是 CPU 密集任务,28 核机器建议 100(全核)。
   sandbox:
     timeout-ms: 1800000
     active-process-limit: 32
-    memory-limit-mb: 4096
+    memory-limit-mb: -1
     cpu-hard-cap-percent: 100
     # 沙箱类型(docs/ARCHITECTURE.md §7.10):auto | wsl-direct(=direct)| wsl-bwrap(=wsl)| windows-mic(=acl)| none。
     #   auto(默认/不配)= Windows 平台默认 wsl-direct(发行版 root 完整权限、可丢弃,宿主靠

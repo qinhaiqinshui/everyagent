@@ -14,8 +14,8 @@ import dev.everyagent.worker.task.TaskEntry;
 import dev.everyagent.worker.task.TaskManager;
 
 /**
- * 「/启用powershell」命令来源(仿 {@code network.NetworkSlashProvider}):
- * 用户选择后把「启用powershell」胶囊(bottom 底部渲染)挂到本任务,业务 onSelect/onCancel
+ * 「/允许AI访问电脑」命令来源(仿 {@code network.NetworkSlashProvider}):
+ * 用户选择后把「允许AI访问电脑」胶囊(bottom 底部渲染)挂到本任务,业务 onSelect/onCancel
  * 用 taskId 读写任务级开关 {@code TaskEntry.powershellEnabled} 并随 meta.json 落盘。
  *
  * <p><b>仅 WSL+Linux 沙箱后端注册</b>({@link OsSandbox#isWslBackend()},即
@@ -57,9 +57,9 @@ public class PowerShellEnableSlashProvider {
         }
     }
 
-    /** 返回 `/启用powershell` 候选项(选中即构造自包含 opaque 串 → 底部胶囊渲染,可取消)。 */
+    /** 返回 `/允许AI访问电脑` 候选项(选中即构造自包含 opaque 串 → 底部胶囊渲染,可取消)。 */
     private List<SlashCommandItem> items() {
-        String subtitle = "为 WSL 沙箱追加 powershell 工具，与 bash 并存（本任务有效，底部可取消）";
+        String subtitle = "允许 AI 通过 powershell 访问宿主 Windows 电脑，与 bash 并存（本任务有效，底部可取消）";
         // 业务 onSelect:taskId 非空时用 runningTask 拿内存实体置位业务标记并落盘;
         // 返回 bottom token 供底部渲染(不写输入框),业务标记由注册方自行维护。
         SlashSelectHandler selectHandler = (item, taskId) -> {
@@ -84,7 +84,7 @@ public class PowerShellEnableSlashProvider {
         };
         return List.of(new SlashCommandItem(
                 "powershell-enable:on",
-                "启用powershell",
+                "允许AI访问电脑",
                 subtitle,
                 MENU_ICON,
                 GROUP,

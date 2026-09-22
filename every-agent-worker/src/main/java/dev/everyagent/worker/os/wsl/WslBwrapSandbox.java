@@ -902,7 +902,7 @@ public final class WslBwrapSandbox {
                 // RLIMIT_AS**:它限虚拟地址空间,V8 指针压缩 cage 保留 4GB + 每个
                 // Wasm memory GB 级 guard region,undici/node fetch/vite build 一碰
                 // Wasm 即溢出崩溃(§7.10)
-                "memMb", Math.max(0, cfg.getMemoryLimitMb()),
+                "memMb", Math.max(0, cfg.resolveMemoryLimitMb()),
                 "cpuSec", timeoutSec,
                 "fsizeMb", 0);
 

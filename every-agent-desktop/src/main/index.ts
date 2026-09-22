@@ -21,6 +21,13 @@ import { startStaticServer, type StaticServer } from './static-server'
 import { registerNotifyIpc } from './notify'
 import { webRoot } from './paths'
 
+// 必须在 app ready 之前:禁用「被遮挡窗口后台化」。
+// 窗口被其他窗口完全遮挡/最小化时,Windows 原生遮挡检测会让 Chromium 把页面转入后台并
+// 挂起渲染进程,WebSocket 随之被杀——每次窗口回到前台都必然断连重连、弹「正在重新连接」
+// 模态框。本应用连接生死唯一由前端应用层心跳判定(§5.1),渲染进程必须在窗口不可见时
+// 持续运行(心跳/任务流推送不中断),故禁用遮挡后台化(配合 webPreferences.backgroundThrottling=false)。
+app.commandLine.appendSwitch('disable-backgrounding-occluded-windows')
+
 // 必须在 app ready 之前、越早越好:禁用 GPU 硬件加速,用软件渲染。
 // 修复「双击打开一闪而过」:无独立显卡/远程桌面/虚拟机/受完整性级别限制的环境下,
 // Chromium GPU 进程启动失败(error_code=18)→ FATAL "GPU process isn't usable" → 整个应用退出。
@@ -341,6 +348,10 @@ function createWindow(html: string): void {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
+      // 窗口遮挡/最小化时不节流渲染进程:连接生死唯一由前端应用层心跳判定(§5.1),
+      // 若渲染进程被挂起,心跳停摆 + WebSocket 被杀,回到前台必然断连重连、弹「正在
+      // 重新连接」模态框。代价是窗口不可见时任务流推送与心跳照常运行(本地回环,可忽略)。
+      backgroundThrottling: false,
     },
   })
   mainWindow = win

@@ -55,6 +55,11 @@ export class HubClient {
   private reqSeq = 0;
   private midSeq = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  /** 是否处于重连周期(瞬态断连 → 重连成功/手动关闭):周期内 connect() 一律上报
+   *  'reconnecting' 而非 'connecting'——重试 tick 在调 connect() 前已清空 reconnectTimer,
+   *  若据此判定会让每次重试瞬间回摆 'connecting',上层聚合的重连状态随之抖动
+   *  (模态框闪烁、弹窗宽限期被反复重置)。 */
+  private reconnectEpisode = false;
   private manualClose = false;
   private stateValue: HubState = 'idle';
   /** 心跳间隔(§4.2):仅本周期无任何帧时才发 ping。 */
@@ -125,7 +130,7 @@ export class HubClient {
   async connect(): Promise<void> {
     this.manualClose = false;
     this.wireVisibilityShedding();
-    this.setState(this.reconnectTimer ? 'reconnecting' : 'connecting');
+    this.setState(this.reconnectEpisode ? 'reconnecting' : 'connecting');
     if (!this.k) {
       this.k = await ownerKey(this.opts.apiKey);
     }
@@ -166,6 +171,7 @@ export class HubClient {
         }
         if (frame.type === 'welcome') {
           clearTimeout(failTimer);
+          this.reconnectEpisode = false;
           // 恢复全部期望订阅(重连场景)
           for (const ch of this.desiredSubs) {
             this.send({ type: 'sub', channel: ch });
@@ -227,6 +233,7 @@ export class HubClient {
 
   close(): void {
     this.manualClose = true;
+    this.reconnectEpisode = false;
     this.clearHoldTimer();
     this.stopHeartbeat();
     if (this.reconnectTimer) {
@@ -555,6 +562,7 @@ export class HubClient {
     if (this.reconnectTimer || this.manualClose) {
       return;
     }
+    this.reconnectEpisode = true;
     this.setState('reconnecting');
     let attempt = 0;
     const tick = () => {

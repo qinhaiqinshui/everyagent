@@ -459,12 +459,16 @@ export class TaskEventFolder {
       const key = item.agentId === mainAgentId ? '' : item.agentId
       // 状态兜底:历史任务打开时流事件(agent.status)不随 rounds 骨架折入,agentStates
       // 无该键 → 子 agent 胶囊落回灰色 idle。台账 status 落盘即权威(live 内存实时),
-      // 仅在 agentStates 尚无值时填入(不覆盖流事件/实时状态;重连 resync 重复 seed 幂等)。
-      if (this.state.agentStates[key] === undefined && item.status) {
+      // 终态(completed/stopped/error)始终覆盖——流推送可能因 DataPusher 与 finish
+      // 驱逐的竞态丢失子 agent done 事件,台账是兜底权威;
+      // 非终态(running/waiting-user)仅在 agentStates 尚无值时填入(不覆盖流事件实时状态)。
+      if (item.status) {
         const mapped = mapAgentStatus(String(item.status))
-        if (mapped) {
-          this.state.agentStates[key] = mapped
-          changed = true
+        if (mapped && (isTerminalAgentStatus(mapped) || this.state.agentStates[key] === undefined)) {
+          if (this.state.agentStates[key] !== mapped) {
+            this.state.agentStates[key] = mapped
+            changed = true
+          }
         }
       }
       const usage = readUsage(item.usage)
@@ -1079,4 +1083,9 @@ function mapAgentStatus(value: string): AgentStatus | null {
     default:
       return null
   }
+}
+
+/** 判断 AgentStatus 是否为终态(completed/stopped/error)。供 seedAgents 决定是否覆盖。 */
+function isTerminalAgentStatus(s: AgentStatus): boolean {
+  return s === 'completed' || s === 'stopped' || s === 'error'
 }

@@ -377,11 +377,21 @@ export default function SearchSidebarPanel() {
     }
     const unsubscribeSearchRequested = domainEventBus.subscribe(
       DOMAIN_EVENTS.WORKSPACE_SEARCH_PANEL_REQUESTED,
-      ({ workerId: requestedWorkerId, workspaceRoot: requestedWorkspaceRoot, rootPath, label }) => {
+      ({ workerId: requestedWorkerId, workspaceRoot: requestedWorkspaceRoot, rootPath, label, target }) => {
         setWorkerId(requestedWorkerId)
         setWorkspaceRoot(requestedWorkspaceRoot)
-        setScope({ workspaceRoot: requestedWorkspaceRoot, rootPath, label })
-        setScopeOpen(false)
+        if (target === 'tasks') {
+          // 任务内容搜索目标:范围/包含/排除过滤器属文件语义,一并收起清空。
+          setSearchTarget('tasks')
+          setScope(null)
+          setScopeOpen(false)
+          setIncludeOpen(false)
+          setExcludeOpen(false)
+        } else {
+          setSearchTarget('files')
+          setScope({ workspaceRoot: requestedWorkspaceRoot, rootPath, label })
+          setScopeOpen(false)
+        }
         // 绑定随事件变化，旧工作区结果作废。
         searchReset()
         focusInput()
