@@ -89,7 +89,7 @@ public class CommandExecutor {
             return "execute: command 不能为空";
         }
         boolean powershell = "powershell".equalsIgnoreCase(shell);
-        // powershell 工具始终走宿主 Windows 原生沙箱:WSL 后端任务级 /启用powershell 动态注册
+        // powershell 工具始终走宿主 Windows 原生沙箱:WSL 后端任务级 /允许AI访问电脑 动态注册
         // 时也强制回 Windows 原生(wsl 发行版内不保证安装 pwsh),命令语义与 windows-mic 一致
         // (Restricted Token + Low IL + Job Object + 目录标注/ACL)。bash 等保持后端方言。
         boolean wsl = sandbox.isWslBackend() && !powershell;

@@ -170,11 +170,16 @@ class ManagedStream {
     // 主 agent 终态兜底:任务收口后再拉一次 rounds 快照,保证 durationMs/闭合行等最终落盘
     // 数据在前端最终一致——round.closed 触发的拉取可能早于耗时写入(旁路/兜底回填场景),
     // 终态是天然的最终一致校准点;历史回放(initial)时 open 已建齐骨架,跳过以免重复拉取。
+    // 同时重新拉取 task.agents 台账:DataPusher 与 finish 驱逐的竞态可能丢失子 agent
+    // done/status 事件的流推送,台账(agents.json)是兜底权威,终态时重拉确保子 agent
+    // 状态收敛(done → completed 等)。
     if (event.event === 'agent.status' && !event.initial) {
       const agentKey = event.agentId ?? (event.payload?.agentId as string | undefined) ?? ''
       const status = String(event.payload?.status ?? '')
       if (!agentKey && (status === 'done' || status === 'failed' || status === 'stopped')) {
         void this.refreshRounds()
+        this.agentsSeeded = false
+        void this.loadAgentsIntoFolder()
       }
     }
     // ask 事件单独走卡片,不进线程。

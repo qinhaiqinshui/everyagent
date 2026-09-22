@@ -333,9 +333,10 @@ public final class WindowsSandbox {
         } else {
             flags &= ~Win32Ex.JOB_OBJECT_LIMIT_ACTIVE_PROCESS; // 0 = 不限制进程数
         }
-        if (cfg.getMemoryLimitMb() > 0) {
+        long memMb = cfg.resolveMemoryLimitMb();
+        if (memMb > 0) {
             flags |= Win32Ex.JOB_OBJECT_LIMIT_JOB_MEMORY;
-            info.JobMemoryLimit = new BaseTSD.SIZE_T(cfg.getMemoryLimitMb() * 1024L * 1024L);
+            info.JobMemoryLimit = new BaseTSD.SIZE_T(memMb * 1024L * 1024L);
         }
         info.BasicLimitInformation.LimitFlags = new WinDef.DWORD(flags);
         return info;

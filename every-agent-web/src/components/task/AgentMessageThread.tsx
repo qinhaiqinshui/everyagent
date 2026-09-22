@@ -161,12 +161,11 @@ export default function AgentMessageThread({
               )}
             </button>
           ) : null}
-          <div
+          <CollapsibleUserBubble
             className={bubbleClassName}
-            {...touchHandlers}
-          >
-            <UserMessageReplay segments={replaySegments} />
-          </div>
+            touchHandlers={touchHandlers}
+            segments={replaySegments}
+          />
         </div>
       </div>
     )
@@ -323,6 +322,76 @@ function UserMessageReplay({
           </span>
         )
       })}
+    </div>
+  )
+}
+
+/** 用户消息气泡折叠阈值(px)：内容高度超过该值时折叠并显示展开按钮。 */
+const USER_BUBBLE_COLLAPSE_HEIGHT = 220
+
+/**
+ * 用户消息气泡：内容超过最大高度时折叠（隐藏溢出部分 + 底部渐变遮罩），
+ * 并显示居中的展开/收起按钮；气泡内不出现滚动条。
+ * 保留外层传入的长按/触摸 handlers（移动端长按显示编辑按钮）。
+ */
+function CollapsibleUserBubble({
+  className,
+  touchHandlers,
+  segments,
+}: {
+  className: string
+  touchHandlers: Record<string, unknown>
+  segments: Array<{
+    type: 'text' | 'token'
+    value: string
+    token?: ChatComposerToken
+  }>
+}) {
+  const contentRef = React.useRef<HTMLDivElement>(null)
+  const [overflowing, setOverflowing] = React.useState(false)
+  const [expanded, setExpanded] = React.useState(false)
+
+  React.useLayoutEffect(() => {
+    const el = contentRef.current
+    if (!el) return
+    const check = () => {
+      setOverflowing(el.scrollHeight > USER_BUBBLE_COLLAPSE_HEIGHT + 1)
+    }
+    check()
+    const observer = new ResizeObserver(check)
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [])
+
+  const collapsed = overflowing && !expanded
+
+  return (
+    <div
+      className={`${className}${collapsed ? ' nagent-msg__bubble--collapsed' : ''}`}
+      {...touchHandlers}
+    >
+      <div ref={contentRef} className="nagent-msg__bubble-content">
+        <UserMessageReplay segments={segments} />
+      </div>
+      {overflowing ? (
+        <button
+          type="button"
+          className="nagent-msg__bubble-toggle"
+          aria-expanded={expanded}
+          aria-label={expanded ? '收起消息' : '展开消息'}
+          title={expanded ? '收起' : '展开全部'}
+          onClick={(event) => {
+            event.stopPropagation()
+            setExpanded((value) => !value)
+          }}
+        >
+          <ChevronDownIcon
+            size={12}
+            className={`nagent-msg__bubble-toggle-icon${expanded ? ' nagent-msg__bubble-toggle-icon--up' : ''}`}
+          />
+          <span>{expanded ? '收起' : '展开全部'}</span>
+        </button>
+      ) : null}
     </div>
   )
 }

@@ -107,7 +107,7 @@ public final class TaskEntry {
      * 启用 powershell 开关(任务级):开启后主/子 agent 工具集在 bash 之外<b>追加</b>
      * {@code powershell} 工具(WSL 后端经发行版内 pwsh 执行),让 AI 同时拥有 powershell
      * 与 bash 两个命令工具;随 {@link #summaryJson()} 落盘 meta.json、再运行仍保持。
-     * 由 {@code PowerShellEnableSlashProvider}(/启用powershell)的 onSelect/onCancel
+     * 由 {@code PowerShellEnableSlashProvider}(/允许AI访问电脑)的 onSelect/onCancel
      * 置位复位并落盘;buildMainAgent/buildAgent 每次运行构建工具集时实时读本字段
      * (选中/取消从下一轮或再运行起生效)。
      * 仅 WSL+Linux 沙箱后端注册该斜杠条目;windows-mic(Windows+ACL)后端命令工具本就

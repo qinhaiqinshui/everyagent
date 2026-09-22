@@ -3,7 +3,7 @@ import { useWorkspaceShell } from '../app/WorkspaceShellContext'
 import { useAppUi } from '@/components/app/AppUiContext'
 import { domainEventBus, DOMAIN_EVENTS } from '@/events/eventBus'
 import { WORKSPACE_EXPLORER_ROOT_LABEL, workspaceExplorerQueryService } from '@/query/workspaceExplorerQueryService'
-import { findExplorerNode, upsertExplorerChildren } from '@/query/workspaceExplorerTreeUtils'
+import { findExplorerNode, mergeExplorerChildrenPreservingLoaded, upsertExplorerChildren } from '@/query/workspaceExplorerTreeUtils'
 import { workspaceRegistry, workspaceActivity, type WorkspaceEntry } from '@/hub/workspaceRegistry'
 import { antdConfirm } from '@/utils/appAntdBridge'
 import { normalizeWorkspaceRelativePath, toBusinessAbsolutePath } from '@/platform/fs/pathUtils'
@@ -224,7 +224,17 @@ function WorkspaceGroupPanel({
       if (!dirNode || dirNode.type !== 'directory' || !dirNode.loaded) continue
       try {
         const children = await workspaceExplorerQueryService.loadChildren(workspaceRoot, dirNode, { includeInternalFiles: showInternalFiles })
-        setTreeNodes((prev) => upsertExplorerChildren(prev, dirPath, children))
+        setTreeNodes((prev) => {
+          const currentDir = findExplorerNode(prev, dirPath)
+          // 保留仍存在且已加载的子目录子树:loadChildren 返回的子目录节点一律
+          // loaded:false、无 children,直接整体替换会把幸存兄弟目录已展开的子树
+          // 清空(其路径仍在 expandedPaths → 图标显示展开却无子节点)。
+          const merged = mergeExplorerChildrenPreservingLoaded(
+            currentDir && currentDir.type === 'directory' ? currentDir.children : undefined,
+            children,
+          )
+          return upsertExplorerChildren(prev, dirPath, merged)
+        })
       } catch {
         // 刷新失败静默:下次展开/整树刷新会带回最新状态
       }
@@ -369,6 +379,12 @@ function WorkspaceGroupPanel({
       for (const fileTab of tabsToClose) {
         closeGlobalFileTab(fileTab.id)
       }
+      // 删除目录后从展开集合清理该目录及其子孙的展开 key(同步 ref),避免失效 key 残留。
+      if (deleteTarget.type === 'directory') {
+        const nextExpanded = pruneExpandedPaths(expandedPathsRef.current, deleteTarget.path)
+        expandedPathsRef.current = nextExpanded
+        setExpandedPaths(nextExpanded)
+      }
       if (selectedExplorerPath === deleteTarget.path || (deleteTarget.type === 'directory' && selectedExplorerPath?.startsWith(`${deleteTarget.path}/`))) {
         setSelectedExplorerPath(null)
       }
@@ -500,6 +516,13 @@ function WorkspaceGroupPanel({
       for (const fileTab of tabsToClose) {
         closeGlobalFileTab(fileTab.id)
       }
+      // 批量删除后从展开集合清理被删目录及其子孙的展开 key(同步 ref),避免失效 key 残留。
+      let nextExpanded = expandedPathsRef.current
+      for (const path of paths) {
+        nextExpanded = pruneExpandedPaths(nextExpanded, path)
+      }
+      expandedPathsRef.current = nextExpanded
+      setExpandedPaths(nextExpanded)
       // 当前选中项若处于被删路径下,清除选中,避免指向失效路径。
       if (selectedExplorerPath && paths.some((path) => selectedExplorerPath === path || selectedExplorerPath.startsWith(`${path}/`))) {
         setSelectedExplorerPath(null)
@@ -1304,6 +1327,24 @@ function migrateExpandedPaths(expanded: Set<string>, oldPath: string, newPath: s
     } else {
       next.add(key)
     }
+  }
+  return changed ? next : expanded
+}
+
+/**
+ * 从展开集合中移除被删除目录及其所有子孙目录的展开 key(删除目录后保持语义)。
+ * 未命中时原样返回(避免无谓重渲染)。expandedPaths 存业务绝对路径。
+ */
+function pruneExpandedPaths(expanded: Set<string>, deletedPath: string): Set<string> {
+  if (!deletedPath) return expanded
+  let changed = false
+  const next = new Set<string>()
+  for (const key of expanded) {
+    if (key === deletedPath || key.startsWith(`${deletedPath}/`)) {
+      changed = true
+      continue
+    }
+    next.add(key)
   }
   return changed ? next : expanded
 }
