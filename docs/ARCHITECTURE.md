@@ -757,6 +757,7 @@ Electron 将 web + hub + worker **一体打包**为 Windows x64 便携(portable)
 - **运行时配置**:每次启动读 `<EVERYAGENT_HOME>/desktop-config.json`(hubKey/workerApiKey/workerId/端口),首次生成;日志统一落 `<EVERYAGENT_HOME>/logs/`。
 - **管理端点(仅 worker)**:worker 提供 `GET /admin/identify`(认证后返回 worker 身份)与 `POST /admin/shutdown`(认证后触发 Spring 优雅关闭);认证用 `X-Admin-Key` 请求头(与 hubs[0].apiKey 明文比对);仅监听 127.0.0.1,POST + 自定义头防 CSRF。hub 无 admin 端点(hub 可能公网部署,暴露 shutdown 接口会被持有 hubKey 的人关掉)。
 - **生命周期**:单实例锁、占位页/错误页(含日志目录)、托盘提供「退出桌面」(停 hub,worker 保留运行,下次启动自动复用)与「全部退出」(停 hub + 对所有 worker 发 `POST /admin/shutdown` 优雅关闭);`before-quit` 按 `quitScope` 决定停 hub 或停全部。
+- **窗口不可见不后台化**:主窗口 `backgroundThrottling: false` + 启动开关 `--disable-backgrounding-occluded-windows`——窗口被遮挡/最小化时 Chromium 默认会挂起渲染进程、杀掉 WebSocket,导致每次回到前台必断连重连、弹「正在重新连接」模态框;连接生死唯一由前端应用层心跳判定(§5.1),渲染进程须持续运行(心跳与任务流推送不中断,同时 §4.2.2 的 visibility 降载在桌面端不触发——本地回环,无降载需求)。
 - **构建流水线**:`build-backend.mjs`(mvn 打包)、`build-web.mjs`(前端 dist)、`build-jre.ps1`(jlink);electron-builder `extraResources(from: ../runtime → to: runtime)` 把程序附属文件打进安装包。
 
 ---
