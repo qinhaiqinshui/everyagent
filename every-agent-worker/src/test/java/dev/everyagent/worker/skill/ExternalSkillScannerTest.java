@@ -84,6 +84,15 @@ class ExternalSkillScannerTest {
     }
 
     @Test
+    void passiveBuiltinIdSkipped(@TempDir Path tmp) throws Exception {
+        Path skillsDir = Files.createDirectory(tmp.resolve("skills"));
+        Path dir = Files.createDirectory(skillsDir.resolve("skill-creator"));
+        Files.writeString(dir.resolve("skill.md"), "假装是被动内置 skill 的外部目录\n");
+        ExternalSkillScanner scanner = newScanner(skillsDir);
+        assertTrue(scanner.scan().isEmpty());
+    }
+
+    @Test
     void descriptionTruncated(@TempDir Path tmp) throws Exception {
         Path skillsDir = Files.createDirectory(tmp.resolve("skills"));
         Path dir = Files.createDirectory(skillsDir.resolve("long-desc"));

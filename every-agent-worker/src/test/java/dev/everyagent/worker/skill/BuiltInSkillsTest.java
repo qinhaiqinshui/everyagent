@@ -34,8 +34,8 @@ class BuiltInSkillsTest {
 
         bis.materialize();
 
-        // 内置 skill 有两个:agent-dispatch、plan,物化形态为 <skillsDir>/<id>/skill.md
-        for (Skill s : bis.getActiveSkills()) {
+        // 全部内置 skill(主动+被动)物化形态为 <skillsDir>/<id>/skill.md
+        for (Skill s : bis.getAllSkills()) {
             Path target = skillsDir.resolve(s.id()).resolve("skill.md");
             assertTrue(Files.isRegularFile(target),
                     "物化产物应为目录形态 <id>/skill.md: " + target);
@@ -100,6 +100,41 @@ class BuiltInSkillsTest {
         assertEquals(2, active.size());
         assertEquals("agent-dispatch", active.get(0).id());
         assertEquals("plan", active.get(1).id());
+    }
+
+    @Test
+    void passiveSkillsContainSkillCreator(@TempDir Path tmp) {
+        Path skillsDir = tmp.resolve("skills");
+        BuiltInSkills bis = newBuiltInSkills(skillsDir);
+
+        List<Skill> passive = bis.getPassiveSkills();
+        assertEquals(1, passive.size());
+        assertEquals("skill-creator", passive.get(0).id());
+        assertTrue(passive.get(0).toolIds().isEmpty(),
+                "被动 skill 不声明工具绑定");
+    }
+
+    @Test
+    void allSkillsContainsActiveAndPassive(@TempDir Path tmp) {
+        Path skillsDir = tmp.resolve("skills");
+        BuiltInSkills bis = newBuiltInSkills(skillsDir);
+
+        List<Skill> all = bis.getAllSkills();
+        assertEquals(3, all.size());
+        assertEquals("agent-dispatch", all.get(0).id());
+        assertEquals("plan", all.get(1).id());
+        assertEquals("skill-creator", all.get(2).id());
+    }
+
+    @Test
+    void passiveSkillNotInActive(@TempDir Path tmp) {
+        Path skillsDir = tmp.resolve("skills");
+        BuiltInSkills bis = newBuiltInSkills(skillsDir);
+
+        for (Skill s : bis.getActiveSkills()) {
+            assertFalse("skill-creator".equals(s.id()),
+                    "skill-creator 不应在 active 列表中");
+        }
     }
 
     @Test

@@ -82,7 +82,7 @@ public class ExternalSkillScanner {
     List<Skill> scanOnce() {
         Path knowledgeRoot = builtInSkills.getKnowledgeRoot();
         Set<String> builtinIds = new HashSet<>();
-        for (Skill s : builtInSkills.getActiveSkills()) {
+        for (Skill s : builtInSkills.getAllSkills()) {
             builtinIds.add(s.id());
         }
 

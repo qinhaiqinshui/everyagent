@@ -42,13 +42,13 @@ public class SkillSlashProvider {
                               BuiltInSkills builtInSkills,
                               ExternalSkillScanner externalSkillScanner) {
         registry.registerProvider("skill", () -> toItems(
-                merge(builtInSkills.getActiveSkills(), externalSkillScanner.scan())));
+                merge(builtInSkills.getAllSkills(), externalSkillScanner.scan())));
     }
 
     /**
-     * 合并内置与外部 skill 列表(内置在前,外部在后)。
+     * 合并内置(主动+被动)与外部 skill 列表(内置在前,外部在后)。
      *
-     * <p>{@link ExternalSkillScanner} 已排除内置 id,理论上无重名;
+     * <p>{@link ExternalSkillScanner} 已排除全部内置 id(含被动),理论上无重名;
      * 这里不额外去重,保持内置优先顺序。
      */
     private static List<Skill> merge(List<Skill> builtIn, List<Skill> external) {
