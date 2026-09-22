@@ -74,14 +74,14 @@ class PowerShellEnableSlashProviderTest {
     @Test
     void registersOnlyOnWslBackend() {
         new PowerShellEnableSlashProvider(registry, taskManager, sandbox(true));
-        assertFalse(registry.list().isEmpty(), "WSL+Linux 后端应注册 /启用powershell");
+        assertFalse(registry.list().isEmpty(), "WSL+Linux 后端应注册 /允许AI访问电脑");
         assertTrue(registry.list().stream().anyMatch(i -> "powershell-enable:on".equals(i.id())));
     }
 
     @Test
     void doesNotRegisterOnWindowsMicBackend() {
         new PowerShellEnableSlashProvider(registry, taskManager, sandbox(false));
-        assertTrue(registry.list().isEmpty(), "windows-mic(Windows+ACL)后端不应注册 /启用powershell");
+        assertTrue(registry.list().isEmpty(), "windows-mic(Windows+ACL)后端不应注册 /允许AI访问电脑");
     }
 
     // ---- 候选 ----
@@ -90,7 +90,7 @@ class PowerShellEnableSlashProviderTest {
     void itemsExposePowerShellEnableCandidate() {
         SlashCommandItem it = item();
         assertEquals("powershell-enable:on", it.id());
-        assertEquals("启用powershell", it.title());
+        assertEquals("允许AI访问电脑", it.title());
         assertTrue(PowerShellEnableToken.enabledIn(it.insertText()), "insertText 应为启用 powershell opaque token");
     }
 
