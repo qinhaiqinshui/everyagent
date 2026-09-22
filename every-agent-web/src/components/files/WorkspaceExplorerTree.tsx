@@ -19,6 +19,8 @@ const { useToken } = theme
 /** 菜单项行高(antd Menu 默认 min-height) + 容器上下 padding,用于预估菜单高度。 */
 const MENU_ITEM_HEIGHT = 32
 const MENU_PADDING = 8
+/** 菜单宽度估算值(antd 菜单按内容撑宽,无固定值),用于水平方向钳制避免溢出视口右缘。 */
+const MENU_WIDTH_ESTIMATE = 200
 
 export default function WorkspaceExplorerTree({
   workspaceRoot,
@@ -267,15 +269,20 @@ function TreeNodeRow({
       : metaMode === 'modified'
         ? formatMtime(node.mtimeMs)
         : ''
+  // 右键菜单锚点:记录鼠标右键坐标(桌面)或长按触摸点坐标(移动端),用于计算弹层 offset 和 maxHeight
+  const [mousePos, setMousePos] = React.useState<{ x: number; y: number } | null>(null)
+
   // 移动端长按弹出右键菜单：直接控制受控 Dropdown 的 open；桌面端处理器为空操作。
+  // 注意:长按由定时器触发,早于(或独立于)浏览器 contextmenu 事件,
+  // 必须用 useLongPress 回传的触摸点坐标设置 mousePos,否则 menuAlign 缺锚点、菜单按默认位置溢出视口。
   const { wasLongPressed, ...longPressHandlers } = useLongPress({
     isMobile,
     delay: 500,
-    onLongPress: () => onOpenChange(true),
+    onLongPress: (_target, point) => {
+      setMousePos(point)
+      onOpenChange(true)
+    },
   })
-
-  // 右键菜单锚点:记录鼠标右键坐标,用于计算弹层 offset 和 maxHeight
-  const [mousePos, setMousePos] = React.useState<{ x: number; y: number } | null>(null)
 
   // 监听 contextmenu 事件记录鼠标坐标(在 Dropdown 的 onOpenChange 之前触发)
   const handleContextMenu = React.useCallback((e: React.MouseEvent) => {
@@ -293,11 +300,17 @@ function TreeNodeRow({
   const menuAlign = React.useMemo<AlignType | undefined>(() => {
     if (!mousePos) return undefined
     const viewportH = window.innerHeight
+    const viewportW = window.innerWidth
     const EDGE = 8
     const GAP = 4
     const spaceDown = viewportH - mousePos.y - EDGE
     const spaceUp = mousePos.y - EDGE
-    const offsetX = 6
+    // 水平方向:默认向右偏移 6px;若右侧空间放不下估算的菜单宽度(移动端视口窄),
+    // 向左钳制使菜单右缘不超出视口;菜单宽于视口时贴左缘,避免左右都溢出。
+    const menuWidth = Math.min(MENU_WIDTH_ESTIMATE, viewportW - EDGE * 2)
+    const minOffsetX = EDGE - mousePos.x
+    const maxOffsetX = viewportW - EDGE - mousePos.x - menuWidth
+    const offsetX = Math.max(minOffsetX, Math.min(6, Math.max(minOffsetX, maxOffsetX)))
     if (menuEstimatedHeight <= spaceDown) {
       // 下方足够:正常向下展开(菜单顶部距鼠标点 GAP)
       return { offset: [offsetX, GAP] }
