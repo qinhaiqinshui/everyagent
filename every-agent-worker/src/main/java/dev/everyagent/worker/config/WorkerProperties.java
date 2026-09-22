@@ -1,9 +1,10 @@
 package dev.everyagent.worker.config;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
-import java.util.ArrayList;
-import java.util.LinkedHashMap;
+import java.util.ArrayList;import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -16,6 +17,8 @@ import java.util.Map;
  */
 @ConfigurationProperties("worker")
 public class WorkerProperties {
+
+    private static final Logger log = LoggerFactory.getLogger(WorkerProperties.class);
 
     private String workerId = "company-pc";
     /** 多 hub 注册列表(hubs 为唯一入口;空 = 不连任何 hub)。 */
@@ -780,8 +783,23 @@ public class WorkerProperties {
         private boolean enabled = true;
         /** 单命令看门狗超时(ms);超时中止子进程。 */
         private long timeoutMs = 1_800_000;
-        /** 作业对象内存上限(MB);0 = 不限制。Windows Job Object 生效。 */
-        private long memoryLimitMb = 512;
+        /**
+         * 作业对象内存上限(MB):
+         * <ul>
+         *   <li>{@code -1}(默认)= <b>自动</b>:读取系统总物理内存,&lt; 8GB 不限制(0),
+         *       ≥ 8GB 限总内存的 70%(见 {@link #resolveMemoryLimitMb()});</li>
+         *   <li>{@code 0} = 不限制;</li>
+         *   <li>{@code &gt;0} = 固定上限 MB。</li>
+         * </ul>
+         * windows-mic = Job Object(commit 上限);WSL 后端 = cgroup v2 memory.max。
+         */
+        private long memoryLimitMb = -1;
+        /** auto 模式解析缓存(Long.MIN_VALUE = 未解析;进程生命周期内系统总内存视作不变)。 */
+        private volatile long resolvedAutoMemoryLimitMb = Long.MIN_VALUE;
+        /** auto 模式阈值(MB):系统总内存低于该值不限制(小内存机器限了只会误杀构建)。 */
+        private static final long AUTO_MEM_THRESHOLD_MB = 8L * 1024;
+        /** auto 模式:内存 ≥ 阈值时,上限取总内存的 70%(给宿主/IDE/浏览器留余量)。 */
+        private static final double AUTO_MEM_RATIO = 0.70;
         /** CPU 硬上限百分比(0-100);0 = 不限制。Windows Job Object 生效。 */
         private int cpuHardCapPercent = 50;
         /**
@@ -975,6 +993,43 @@ public class WorkerProperties {
 
         public void setMemoryLimitMb(long memoryLimitMb) {
             this.memoryLimitMb = memoryLimitMb;
+        }
+
+        /**
+         * 生效的内存上限(MB):解析 {@code memory-limit-mb} 的 auto(-1)语义——
+         * 读取系统总物理内存,&lt; 8GB 返回 0(不限制),≥ 8GB 返回总内存的 70%;
+         * 显式值(含 0 = 不限制)原样返回。auto 结果解析一次即缓存。
+         * 沙箱实现(windows-mic Job Object / wsl 系 cgroup)应使用本方法而非
+         * {@link #getMemoryLimitMb()}(后者返回原始配置值,-1 对后端无意义)。
+         */
+        public long resolveMemoryLimitMb() {
+            long v = memoryLimitMb;
+            if (v >= 0) {
+                return v;
+            }
+            long r = resolvedAutoMemoryLimitMb;
+            if (r == Long.MIN_VALUE) {
+                r = computeAutoMemoryLimitMb();
+                resolvedAutoMemoryLimitMb = r;
+            }
+            return r;
+        }
+
+        /** auto 模式:读系统总物理内存计算上限;探测失败按不限制(0)兜底(防失控仍有超时/击杀护栏)。 */
+        private static long computeAutoMemoryLimitMb() {
+            try {
+                var osMx = (com.sun.management.OperatingSystemMXBean)
+                        java.lang.management.ManagementFactory.getOperatingSystemMXBean();
+                long totalMb = osMx.getTotalMemorySize() / (1024 * 1024);
+                long limit = totalMb < AUTO_MEM_THRESHOLD_MB ? 0 : Math.round(totalMb * AUTO_MEM_RATIO);
+                log.info("sandbox memory-limit-mb=auto: 系统总内存 {} MB → {}(阈值 {} MB / 比例 {})",
+                        totalMb, limit == 0 ? "不限制" : "上限 " + limit + " MB",
+                        AUTO_MEM_THRESHOLD_MB, AUTO_MEM_RATIO);
+                return limit;
+            } catch (Throwable t) {
+                log.warn("sandbox memory-limit-mb=auto: 读取系统内存失败,降级为不限制: {}", t.toString());
+                return 0;
+            }
         }
 
         public int getCpuHardCapPercent() {
