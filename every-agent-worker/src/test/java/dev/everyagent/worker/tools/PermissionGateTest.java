@@ -180,7 +180,8 @@ class PermissionGateTest {
     @Test
     void skillsReadAllowCheckAllowsReadOnlyInsideSkillsDir(@TempDir Path skills, @TempDir Path outside)
             throws IOException {
-        Path skillFile = skills.resolve("agent-dispatch.md");
+        Path skillFile = skills.resolve("agent-dispatch").resolve("skill.md");
+        Files.createDirectories(skillFile.getParent());
         Files.writeString(skillFile, "x");
         WorkerProperties props = new WorkerProperties();
         props.setSkillsDir(skills.toString());

@@ -1252,6 +1252,18 @@
   user-select: text;
 }
 
+/* 命令首行注释(意图说明):以 AI 正文样式(无衬线 + 正文色)呈现,
+   与后续命令文本(等宽 muted)形成层次。字号继承行内 --text-xs,
+   不改变 summary 的 baseline 对齐与行高;颜色走 token,明暗主题自动适配。
+   单条(CommandToolView)与聚合壳头部(ToolCallView)共用。 */
+.nagent-tool__inline-preview-comment,
+.nagent-tool-group__inline-preview-comment {
+  /* 脱离父级 --font-mono,回到正文 UI 无衬线字体(与 html/body 同一字体族)。 */
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI',
+    'PingFang SC', 'Microsoft YaHei', 'Helvetica Neue', Arial, sans-serif;
+  color: var(--text-primary);
+}
+
 .nagent-tool__detail {
   margin-top: 8px;
   margin-left: 21px;

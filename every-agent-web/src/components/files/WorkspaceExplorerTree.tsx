@@ -271,6 +271,8 @@ function TreeNodeRow({
         : ''
   // 右键菜单锚点:记录鼠标右键坐标(桌面)或长按触摸点坐标(移动端),用于计算弹层 offset 和 maxHeight
   const [mousePos, setMousePos] = React.useState<{ x: number; y: number } | null>(null)
+  // 长按打开菜单的时间戳,用于「关闭守卫」(见 handleMobileOpenChange)
+  const longPressOpenedAtRef = React.useRef(0)
 
   // 移动端长按弹出右键菜单：直接控制受控 Dropdown 的 open；桌面端处理器为空操作。
   // 注意:长按由定时器触发,早于(或独立于)浏览器 contextmenu 事件,
@@ -280,9 +282,24 @@ function TreeNodeRow({
     delay: 500,
     onLongPress: (_target, point) => {
       setMousePos(point)
+      longPressOpenedAtRef.current = Date.now()
       onOpenChange(true)
     },
   })
+
+  // 移动端 Dropdown 的 openChange 包装:长按打开后的短暂窗口内忽略 trigger 来源的关闭请求。
+  // 原因:部分移动端浏览器(Android Chrome)会在长按定时器触发之后再派发原生 contextmenu,
+  // rc-trigger 的 window 级监听(useWinClick)会把它当作「外部操作」立即关闭刚打开的菜单。
+  // 菜单项点击关闭(source='menu')不受影响,保证点了动作项菜单正常关闭。
+  const handleMobileOpenChange = React.useCallback(
+    (next: boolean, info?: { source?: string }) => {
+      if (!next && info?.source !== 'menu' && Date.now() - longPressOpenedAtRef.current < 250) {
+        return
+      }
+      onOpenChange(next)
+    },
+    [onOpenChange],
+  )
 
   // 监听 contextmenu 事件记录鼠标坐标(在 Dropdown 的 onOpenChange 之前触发)
   const handleContextMenu = React.useCallback((e: React.MouseEvent) => {
@@ -442,6 +459,47 @@ function TreeNodeRow({
   if (!menuItems?.length) {
     return content
   }
+
+  // 移动端:Dropdown 不包裹行,改为锚定到「触摸点处的 0×0 虚拟锚点」span。
+  // 原因:移动端长按由定时器打开菜单,浏览器不一定派发原生 contextmenu 事件
+  // (iOS Safari 在 -webkit-touch-callout:none 下不派发)。此时 rc-trigger 内部
+  // alignPoint 锚点(仅由其自身 onContextMenu 设置)为 null,对齐目标退化为
+  // targetEle——若 targetEle 是整行元素,偏移坐标系与「以触摸点为原点」的
+  // 防溢出计算错位,菜单会被甩出屏幕(右缘长按时整体溢出左缘)。
+  // 虚拟锚点永不收到 contextmenu(pointer-events:none),trigger 内部锚点恒为 null,
+  // 对齐目标恒定 = 锚点 span 的 0×0 rect(即触摸点),与桌面端右键的坐标系完全一致。
+  // trigger=['contextMenu'] 仅为让 clickToHide 生效(点击外部/别处长按可关闭菜单),
+  // 虚拟锚点自身不会收到该事件。
+  if (isMobile) {
+    return (
+      <>
+        {content}
+        <Dropdown
+          open={open}
+          onOpenChange={handleMobileOpenChange}
+          trigger={['contextMenu']}
+          menu={{ items: menuItems }}
+          autoAdjustOverflow={false}
+          align={menuAlign}
+          styles={menuRootStyle ? { root: menuRootStyle } : undefined}
+          rootClassName="ws-context-menu"
+        >
+          <span
+            aria-hidden
+            style={{
+              position: 'fixed',
+              left: mousePos?.x ?? 0,
+              top: mousePos?.y ?? 0,
+              width: 0,
+              height: 0,
+              pointerEvents: 'none',
+            }}
+          />
+        </Dropdown>
+      </>
+    )
+  }
+
   return (
     <Dropdown
       open={open}
