@@ -1,6 +1,6 @@
 # 设计方案：任务生命周期洋葱模型 + Agent 独立成层
 
-> 状态：**待评审**（用户确认后才实施）· v4（节点改为 Servlet Filter 风格参与式链：`result = next(ctx)`，下行=next 前代码、上行=next 后代码；收口序=进入序逆序，经节点划分与现状顺序逐项一致）
+> 状态：**待评审**（用户确认后才实施）· v5（新增 §6：工具执行链与审核授权链同样迁移为 filter 参与式链，独立 Phase 3，不在 Phase 1 实施）
 > 范围声明：本文覆盖整体架构（洋葱底座、agent 层独立、subagent 插件三件套、任务队列插件预留）；**本次只实施 Phase 1（洋葱底座）**，其余分期列出。
 
 ---
@@ -328,7 +328,7 @@ public interface AgentService {
 
 ---
 
-## 5. subagent 插件（Phase 3）
+## 5. subagent 插件（Phase 4）
 
 ### 5.1 职责边界（v2 调整核心）
 
@@ -398,18 +398,98 @@ public record PluginSkill(String id, String name, String description, List<Strin
 
 ---
 
-## 6. 实施计划
+## 6. 统一拦截链范式（工具执行 / 审核授权，后续阶段实施）
+
+worker 现有两条运行期责任链，语义与任务洋葱同构（有序节点 + 短路 + 链尾兜底），一并迁移为 §3.1 的 filter 形态（`result = next(ctx)`），**不在 Phase 1 实施**。
+
+### 6.1 现状契约
+
+**工具执行拦截链**（`plugin-api spi/ToolExecutionInterceptor` + `task/InterceptingToolCallingManager`）：
+
+```java
+public interface ToolExecutionInterceptor {
+    int order();
+    /** 下行拦截：非 null → 短路（合成结果）；null → 放行。只有下行，无上行钩子。 */
+    ToolExecutionResult beforeToolExecution(Prompt prompt, ChatResponse chatResponse,
+            List<AssistantMessage.ToolCall> toolCalls);
+}
+```
+
+`InterceptingToolCallingManager`（装饰共享 `ToolCallingManager`）在 `executeToolCalls` 入口 for 循环遍历：首个非 null 短路，否则委托真实 manager。现有使用者：auth-review 的 `UnattendedToolInterceptor`（无人值守拦截 ask_user 轮，合成自动回答）。
+
+**审核授权链**（两层）：
+
+- **SPI 决议链**（`permission/AuthorizationHandler`）：`{ order, applies(req), decide(req) → ALLOW/DENY/PASS }`，核心遍历排序节点，任一 ALLOW/DENY 短路，PASS 下传，全 PASS 兜底。使用者：`AuthorizeCheck`（弹窗）、auth-review 的 `AiReviewAuthHandler`（AI 审议）、`UnattendedAuthHandler`（无人值守 DENY）。
+- **PermissionGate 内部检查链**（worker 内部类，每条入口一条）：文件路径链 `WorkspaceAllowCheck → MissingPathCheck → SkillsReadAllowCheck → ExternalRootAllowCheck → OverBroadRootCheck → AuthorizeCheck`；命令链 `CommandCheck`；提权链 `PrivilegeCheck`。节点返回 `PermissionDecision`（ALLOW/DENY 短路，SKIP 继续），链尾兜底拒绝。
+
+### 6.2 目标契约（filter 形态，与 §3.1 同一范式）
+
+```java
+/** 工具执行拦截节点：下行=执行前检查，上行=执行后处理（现状没有的能力）。 */
+public interface ToolExecutionInterceptor {
+    String id();
+    float order();                       // float 与任务洋葱对齐
+    /**
+     * 下行段（next 前）：检查本轮工具调用；不调 next 直接 return = 短路（合成结果，
+     * 等价现 beforeToolExecution 非 null）。
+     * next() = 后续节点 + 真实工具执行（原 delegate.executeToolCalls）。
+     * 上行段（next 后）：结果后处理/审计/计时/异常翻译——本范式新增的能力。
+     */
+    ToolExecutionResult invoke(ToolExecutionContext ctx, ToolExecutionChain next) throws Exception;
+}
+
+/** 授权决议节点：ALLOW/DENY = 短路 return；不处理 = return next.proceed(req)。 */
+public interface AuthorizationHandler {
+    String id();
+    float order();
+    /**
+     * 下行段：前置判断（原 applies 的过滤语义并入「不处理即 next」）；
+     * 决议短路：return ALLOW/DENY（原 decide 短路）；
+     * 上行段：决议产生后的审计/升级/宽限期处理——本范式新增的能力。
+     */
+    AuthorizationDecision invoke(AuthorizationRequest req, AuthorizationChain next) throws Exception;
+}
+```
+
+`ToolExecutionContext` = 现 beforeToolExecution 三参数 + 显式任务上下文（替代 `InterceptingToolCallingManager.currentTask()` ThreadLocal——插件不再依赖 worker 内部类取任务，依赖注入化）。
+
+### 6.3 迁移映射（行为等价）
+
+| 现状 | filter 形态 |
+|---|---|
+| `beforeToolExecution(...)` 返回非 null（短路） | 下行段不调 `next`，直接 return 合成结果 |
+| `beforeToolExecution(...)` 返回 null（放行） | 下行段直接 `return next.proceed(ctx)` |
+| `decide()` 返回 ALLOW/DENY（短路） | 下行段 return 决议 |
+| `decide()` 返回 PASS / `applies()`=false | `return next.proceed(req)` |
+| `InterceptingToolCallingManager` for 循环 | 链组装器（同 TaskOnion 折叠方式，链尾 = 真实 manager 执行） |
+| `LoopRepeatGuardToolManager`（死循环守卫装饰器） | **保持装饰器形态不迁**：它是核心守卫不是插件扩展点，且需在 `executeToolCalls` 处合成工具结果回传模型（框架唯一允许点），与插件链职责不同 |
+| 内部检查链（WorkspaceAllowCheck 族，SKIP 继续） | 同范式迁移：SKIP = `next.proceed`，ALLOW/DENY = 短路（保持三链分离：文件/命令/提权入口不同，链尾兜底拒绝不变） |
+
+### 6.4 收益与代价
+
+**收益**：① 工具链获得上行钩子（执行后审计/耗时统计/结果改写，现状缺失）；② 授权链获得决议后包裹（审计、审批升级、宽限期）；③ 三条链（任务洋葱/工具/授权）一种心智模型与一种调试方式；④ ThreadLocal 上下文传递被显式化（`ToolExecutionContext` 注入）。
+
+**代价（破坏性）**：两个 SPI 签名变更，现有使用者须同步迁移——`UnattendedToolInterceptor`、`AiReviewAuthHandler`、`UnattendedAuthHandler`（auth-review 插件，**并发会话活跃区，迁移需协调**）；`PermissionGate` 内部三链约 9 个检查节点重构。兼容选项：过渡期提供旧接口适配器（`beforeToolExecution` 包成「下行段+透传」的 filter 节点）一次性弃用，或直接切换（repo 内使用者全量可枚举，建议直接切换少一层间接）。
+
+### 6.5 实施位置
+
+独立 **Phase 3「拦截链范式统一」**（在 agent 层收敛之后：工具链上下文显式化依赖 agent 层边界；subagent 插件顺延 Phase 4，队列插件 Phase 5）。Phase 1 明确不动这两条链。
+
+---
+
+## 7. 实施计划
 
 | Phase | 内容 | 交付 |
 |---|---|---|
 | **1（本次）洋葱底座** | plugin-api 节点契约（`TaskLifecycleNode`/`TaskLifecycleContext`/`TaskOutcome`/`TaskKernel`）+ `registerTaskLifecycleNode`；`TaskLifecycleRegistry`（float 排序）+ `TaskOnion`；17 个内置节点拆分（下行 4 + 上行 13，finish/runTask/rpcTaskRun 逻辑**逐字映射**，不改行为）；`runTask` 重写为洋葱执行；单测（下行顺序/否决短路/逆序收口/try-finally 必达/幂等/取消/停机中断收口/锁分段）；ARCHITECTURE.md 新 §7.x | worker 行为零变化（事件顺序、seq、落盘字节级兼容），可回归验证 |
 | **2 agent 层** | `dev.everyagent.worker.agent` 包收敛 + `AgentContext`/`AgentEventChannel` 解耦 + `AgentService` + `AgentDispatcher` 废止 + `SubAgentManager` 编排下沉 | agent 层边界成立（能力全部留在核心），其他插件可依赖 |
-| **3 subagent 插件** | 三件套迁移（工具 + SkillContributor + 前端面板）；plugin-api 新增 `SkillContributor` SPI + 注册表；BuiltInSkills 合并改造；web `ComposerPanelCtx` 扩展 `selectAgent`；app pom 挂载 + CI 一致性检查 | 删除插件 = 无子 agent 工具/skill/前端列表，agent 层完好 |
-| **4（未来）队列插件** | 形态三成对节点（下行段 enqueue 阻塞排队 / finally 出队广播）+ RPC 边缘预检扩展点 | 底座已就绪，不在本设计实施范围 |
+| **3 拦截链范式统一** | 工具执行链 + 授权决议链（含 PermissionGate 内部三链）迁移为 filter 形态（§6）；`ToolExecutionContext` 显式化替代 ThreadLocal；两个 SPI 使用者同步迁移 | 三链一种范式；工具链获得上行钩子、授权链获得决议后包裹 |
+| **4 subagent 插件** | 三件套迁移（工具 + SkillContributor + 前端面板）；plugin-api 新增 `SkillContributor` SPI + 注册表；BuiltInSkills 合并改造；web `ComposerPanelCtx` 扩展 `selectAgent`；app pom 挂载 + CI 一致性检查 | 删除插件 = 无子 agent 工具/skill/前端列表，agent 层完好 |
+| **5（未来）队列插件** | 形态三成对节点（下行段 enqueue 阻塞排队 / finally 出队广播）+ RPC 边缘预检扩展点 | 底座已就绪，不在本设计实施范围 |
 
 ---
 
-## 7. 风险与对策
+## 8. 风险与对策
 
 | 风险 | 对策 |
 |---|---|
@@ -424,14 +504,16 @@ public record PluginSkill(String id, String name, String description, List<Strin
 
 ---
 
-## 8. 已确认决策（v3 评审结论）
+## 9. 已确认决策（历次评审结论）
 
 1. **节点模型**：无层粒度；一节点一事；order 用 float（已落实到 §3）。
 2. **`AgentDispatcher` 废止**：plugin-api 预留 SPI（dispatch/waitFor/stop/list 的「子 agent 调度策略」扩展点），全仓零实现零消费——确认无用，Phase 2 删除，语义并入 `AgentService`。
 3. **消息流中 agent 生命周期事件渲染**：保留 web 核心（渲染事件流=agent 层契约，历史任务在插件删除后仍正确展示）。
 4. **原 L4（等子 agent/级联停）**：拆为 `spawned.await`（950）+ `cascade.stop`（900）两个上行节点，Phase 1 直接包含（收口动作仅为方法搬移，触碰 `SubAgentManager` 面极小——`awaitAllBeforeFinish`/`stopAll` 两个既有方法调用）。
+5. **节点为 Servlet Filter 参与式链**（v4）：`result = next(ctx)`；下行=next 前、上行=next 后；收口序=进入序逆序。
+6. **工具执行链与审核授权链同样迁移为 filter 形态**（v5）：写入 §6，独立 Phase 3 实施，Phase 1 不动。
 
-## 9. 遗留待确认
+## 10. 遗留待确认
 
 1. **skill 只随 subagent 插件走是否够用**：若未来别的插件也要贡献 skill，`SkillContributor` SPI 做成通用扩展点（设计已按通用写，subagent 是第一个使用者）。
 2. Phase 2 的 Maven 物理分模块（`every-agent-agent`）时机：与包内收敛同步做，还是包收敛稳定后再拆（我建议后者）。
