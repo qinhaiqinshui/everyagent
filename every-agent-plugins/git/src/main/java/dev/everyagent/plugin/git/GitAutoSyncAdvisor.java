@@ -1,7 +1,6 @@
-package dev.everyagent.worker.task;
+package dev.everyagent.plugin.git;
 
-import dev.everyagent.worker.git.GitAutoSyncToken;
-import dev.everyagent.worker.modules.GitService;
+import dev.everyagent.worker.task.AgentEntity;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClientRequest;

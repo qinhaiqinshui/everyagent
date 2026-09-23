@@ -1,4 +1,4 @@
-package dev.everyagent.worker.modules;
+package dev.everyagent.plugin.git;
 
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.worker.AtomicFiles;

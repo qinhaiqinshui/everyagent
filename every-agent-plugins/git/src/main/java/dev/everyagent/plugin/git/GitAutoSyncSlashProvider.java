@@ -1,4 +1,4 @@
-package dev.everyagent.worker.git;
+package dev.everyagent.plugin.git;
 
 import java.util.List;
 

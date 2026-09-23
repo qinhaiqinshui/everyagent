@@ -1,11 +1,11 @@
-package dev.everyagent.worker.modules;
+package dev.everyagent.plugin.git;
 
 import dev.everyagent.contract.json.Json;
-import dev.everyagent.worker.git.NativeGit;
-import dev.everyagent.worker.git.NativeGit.CredentialSpec;
-import dev.everyagent.worker.git.NativeGit.NativeResult;
-import dev.everyagent.worker.git.NativeGit.StatusData;
-import dev.everyagent.worker.proto.RpcMethods;
+import dev.everyagent.plugin.git.NativeGit.CredentialSpec;
+import dev.everyagent.plugin.git.NativeGit.NativeResult;
+import dev.everyagent.plugin.git.NativeGit.StatusData;
+import dev.everyagent.worker.modules.Sandbox;
+import dev.everyagent.worker.modules.WorkspaceManager;
 import dev.everyagent.worker.rpc.AuthRequiredException;
 import dev.everyagent.worker.rpc.BadParamsException;
 import dev.everyagent.worker.rpc.NotFoundException;
@@ -45,19 +45,19 @@ public class GitService {
         this.workspaces = workspaces;
         this.credentials = credentials;
         this.git = git;
-        dispatcher.register(RpcMethods.GIT_STATUS, this::status);
-        dispatcher.register(RpcMethods.GIT_LOG, this::log);
-        dispatcher.register(RpcMethods.GIT_DIFF, this::diff);
-        dispatcher.register(RpcMethods.GIT_SHOW, this::show);
-        dispatcher.register(RpcMethods.GIT_COMMIT, this::commit);
-        dispatcher.register(RpcMethods.GIT_PULL, this::pull);
-        dispatcher.register(RpcMethods.GIT_PUSH, this::push);
-        dispatcher.register(RpcMethods.GIT_DISCARD, this::discard);
-        dispatcher.register(RpcMethods.GIT_INIT, this::init);
-        dispatcher.register(RpcMethods.GIT_CLONE, this::clone);
-        dispatcher.register(RpcMethods.GIT_REMOTE_ADD, this::remoteAdd);
-        dispatcher.register(RpcMethods.GIT_REMOTE_LIST, this::remoteList);
-        dispatcher.register(RpcMethods.GIT_CREDENTIAL_SAVE, this::credentialSave);
+        dispatcher.register(GitRpcMethods.GIT_STATUS, this::status);
+        dispatcher.register(GitRpcMethods.GIT_LOG, this::log);
+        dispatcher.register(GitRpcMethods.GIT_DIFF, this::diff);
+        dispatcher.register(GitRpcMethods.GIT_SHOW, this::show);
+        dispatcher.register(GitRpcMethods.GIT_COMMIT, this::commit);
+        dispatcher.register(GitRpcMethods.GIT_PULL, this::pull);
+        dispatcher.register(GitRpcMethods.GIT_PUSH, this::push);
+        dispatcher.register(GitRpcMethods.GIT_DISCARD, this::discard);
+        dispatcher.register(GitRpcMethods.GIT_INIT, this::init);
+        dispatcher.register(GitRpcMethods.GIT_CLONE, this::clone);
+        dispatcher.register(GitRpcMethods.GIT_REMOTE_ADD, this::remoteAdd);
+        dispatcher.register(GitRpcMethods.GIT_REMOTE_LIST, this::remoteList);
+        dispatcher.register(GitRpcMethods.GIT_CREDENTIAL_SAVE, this::credentialSave);
     }
 
     private void status(RpcContext ctx) throws IOException {

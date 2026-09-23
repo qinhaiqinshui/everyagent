@@ -1,4 +1,4 @@
-package dev.everyagent.worker.git;
+package dev.everyagent.plugin.git;
 
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.os.OsSandbox;
@@ -274,7 +274,7 @@ public class NativeGit {
         argv.add("core.quotepath=false");
         argv.add("--no-pager");
         if (readOnly) {
-            argv.add("--no-optional-locks"); // 读命令防 index.lock 残留/竞争(VSCode 同款)
+            argv.add("--no-optional-locks"); // 读命令防 index.lock 梋留/竞争(VSCode 同款)
         }
         argv.addAll(args);
 

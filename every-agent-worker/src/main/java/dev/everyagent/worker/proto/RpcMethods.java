@@ -76,22 +76,6 @@ public final class RpcMethods {
     public static final String SLASH_TASK_TOKENS_APPLY = "slash.taskTokens.apply";
     /** @ 文件搜索(后端做子序列模糊匹配 + 隐藏规则 + 截断 10 条,前端零递归)。 */
     public static final String MENTION_QUERY = "mention.query";
-    public static final String GIT_STATUS = "git.status";
-    public static final String GIT_LOG = "git.log";
-    public static final String GIT_DIFF = "git.diff";
-    /** 读取某次提交的变更文件清单与全文(历史详情/恢复此版本;必带 commit)。 */
-    public static final String GIT_SHOW = "git.show";
-    public static final String GIT_COMMIT = "git.commit";
-    public static final String GIT_PULL = "git.pull";
-    public static final String GIT_PUSH = "git.push";
-    /** 放弃指定路径的更改(恢复为 HEAD 内容;未跟踪/已暂存新增跳过)。 */
-    public static final String GIT_DISCARD = "git.discard";
-    public static final String GIT_CLONE = "git.clone";
-    public static final String GIT_INIT = "git.init";
-    public static final String GIT_REMOTE_ADD = "git.remote.add";
-    public static final String GIT_REMOTE_LIST = "git.remote.list";
-    /** 保存 git 远端凭证(加密落盘工作区 .git-credentials.enc;仅写不读回)。 */
-    public static final String GIT_CREDENTIAL_SAVE = "git.credential.save";
     public static final String SYS_METHODS = "sys.methods";
     public static final String SYS_INFO = "sys.info";
 
