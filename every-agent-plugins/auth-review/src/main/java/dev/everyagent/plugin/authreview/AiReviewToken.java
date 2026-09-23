@@ -1,4 +1,4 @@
-package dev.everyagent.worker.authreview;
+package dev.everyagent.plugin.authreview;
 
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.worker.slash.SlashTokenEncoder;

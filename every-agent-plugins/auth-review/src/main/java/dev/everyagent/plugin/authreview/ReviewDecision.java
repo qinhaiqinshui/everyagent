@@ -1,4 +1,4 @@
-package dev.everyagent.worker.authreview;
+package dev.everyagent.plugin.authreview;
 
 /**
  * AI 安全审议的一次性结论(plan-unattended-ai-auth 步骤 5)。

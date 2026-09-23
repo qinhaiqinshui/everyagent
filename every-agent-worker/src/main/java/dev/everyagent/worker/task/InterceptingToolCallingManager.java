@@ -24,6 +24,17 @@ public class InterceptingToolCallingManager implements ToolCallingManager {
     private final ToolCallingManager delegate;
     private final List<ToolExecutionInterceptor> interceptors;
 
+    /**
+     * 当前线程绑定的任务上下文（per-run），由 {@code AgentRunner} 在执行前设置、
+     * 执行后清除。{@link ToolExecutionInterceptor} 单例通过 {@link #currentTask()} 获取
+     * 当前任务，读取 {@code taskFlags} 判断是否拦截。
+     */
+    private static final ThreadLocal<TaskEntry> CURRENT_TASK = new ThreadLocal<>();
+
+    public static void setCurrentTask(TaskEntry task) { CURRENT_TASK.set(task); }
+    public static void clearCurrentTask() { CURRENT_TASK.remove(); }
+    public static TaskEntry currentTask() { return CURRENT_TASK.get(); }
+
     public InterceptingToolCallingManager(ToolCallingManager delegate,
             List<ToolExecutionInterceptor> interceptors) {
         this.delegate = delegate;

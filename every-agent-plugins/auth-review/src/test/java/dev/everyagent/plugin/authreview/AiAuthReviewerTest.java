@@ -1,4 +1,4 @@
-package dev.everyagent.worker.authreview;
+package dev.everyagent.plugin.authreview;
 
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.modules.ConfigStore;

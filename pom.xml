@@ -21,6 +21,8 @@
         <module>every-agent-contract</module>
         <module>every-agent-hub</module>
         <module>every-agent-worker</module>
+        <module>every-agent-plugins</module>
+        <module>every-agent-app</module>
     </modules>
 
     <properties>

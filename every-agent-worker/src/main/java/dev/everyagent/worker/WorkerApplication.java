@@ -4,7 +4,7 @@ import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
 
-@SpringBootApplication
+@SpringBootApplication(scanBasePackages = {"dev.everyagent.worker", "dev.everyagent.plugin"})
 @ConfigurationPropertiesScan
 public class WorkerApplication {
 
