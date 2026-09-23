@@ -34,17 +34,17 @@ function workerStatusLabel(worker: WorkerInfo): string {
   if (worker.connecting) return '连接中…'
   if (!worker.online) return '离线'
   if (worker.connected) return '已连接'
-  if (!worker.hasApiKey) return '未配置'
-  if (!worker.enabled) return '已禁用'
-  return '未连接'
+  if (!worker.hasApiKey) return '在线 · 未配置'
+  if (!worker.enabled) return '在线 · 已禁用'
+  return '在线 · 未连接'
 }
 
 function workerStatusColor(worker: WorkerInfo): string {
   if (worker.error) return 'var(--accent-red)'
   if (worker.connecting) return 'var(--accent-amber)'
+  // 在线即绿:presence 是事实状态,未填 apiKey/已禁用等配置态并入文案(在线 · 未配置),不再灰显。
   if (!worker.online) return 'var(--text-muted)'
-  if (worker.connected) return 'var(--accent-green)'
-  return 'var(--text-muted)'
+  return 'var(--accent-green)'
 }
 
 export default function SettingsPanel() {
@@ -389,7 +389,16 @@ export default function SettingsPanel() {
               return (
                 <div key={worker.workerId} style={workerRowStyle}>
                   <span style={statusDotStyle(workerStatusColor(worker))} />
-                  <span style={workerIdStyle} title={worker.workerId}>{worker.workerId}</span>
+                  <span style={workerNameColStyle} title={worker.workerId}>
+                    {worker.hostname ? (
+                      <>
+                        <span style={workerNameStyle}>{worker.hostname}</span>
+                        <span style={workerIdStyle}>{worker.workerId}</span>
+                      </>
+                    ) : (
+                      <span style={workerNameStyle}>{worker.workerId}</span>
+                    )}
+                  </span>
                   <span
                     style={{ ...workerStatusStyle, color: workerStatusColor(worker) }}
                     title={worker.error ? (worker.error.detail || worker.error.code) : undefined}
@@ -701,14 +710,30 @@ const workerRowStyle: React.CSSProperties = {
   borderRadius: 'var(--radius-md)',
 }
 
-const workerIdStyle: React.CSSProperties = {
-  fontFamily: 'var(--font-mono, monospace)',
+const workerNameColStyle: React.CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 1,
+  minWidth: 0,
+  maxWidth: 200,
+  flexShrink: 0,
+}
+
+const workerNameStyle: React.CSSProperties = {
   fontSize: 'var(--text-xs)',
+  fontWeight: 700,
   overflow: 'hidden',
   textOverflow: 'ellipsis',
   whiteSpace: 'nowrap',
-  minWidth: 0,
-  maxWidth: 180,
+}
+
+const workerIdStyle: React.CSSProperties = {
+  fontFamily: 'var(--font-mono, monospace)',
+  fontSize: 'var(--text-2xs, 10px)',
+  color: 'var(--text-muted)',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
 }
 
 const workerKeyInputStyle: React.CSSProperties = {

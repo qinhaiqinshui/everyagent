@@ -44,6 +44,8 @@ export interface WorkerInfo {
   workerId: string
   /** presence 在线。 */
   online: boolean
+  /** worker hello meta.hostname(presence 帧携带);未上报/未见过的 worker 为 undefined。 */
+  hostname?: string
   /** 本地启用开关。 */
   enabled: boolean
   /** 是否已填 apiKey。 */
@@ -100,6 +102,8 @@ class HubSession {
 
   /** presence 目录:workerId → online。 */
   workersOnline = new Map<string, boolean>()
+  /** presence 帧 meta.hostname(目录展示名用);offline 保留,目录重连重发快照时刷新。 */
+  private workerHostnames = new Map<string, string>()
   /** worker 连接错误(workerId → 错误);与目录连接 fatalError 分离。 */
   private workerErrors = new Map<string, { code: string; detail: string }>()
   /** workerId → 是否正在建连。 */
@@ -208,6 +212,7 @@ class HubSession {
       out.push({
         workerId,
         online: this.workersOnline.get(workerId) ?? false,
+        hostname: this.workerHostnames.get(workerId) || undefined,
         enabled: cred?.enabled ?? false,
         hasApiKey: Boolean(cred?.apiKeyEnc),
         connecting: this.connectingWorkers.get(workerId) ?? false,
@@ -576,6 +581,8 @@ class HubSession {
     const ownerFingerprint = String(frame.payload?.ownerFingerprint ?? '')
     if (frame.event === 'worker.online') {
       this.workersOnline.set(workerId, true)
+      const hostname = String(frame.payload?.meta?.hostname ?? '').trim()
+      if (hostname) this.workerHostnames.set(workerId, hostname)
       this.notifyWorkers()
       // 目录列表(directory getter 含 online 状态)依赖 presence,须一并通知,
       // 否则设置页 Worker 列表(读 directory 而非 workers)不会刷新。
