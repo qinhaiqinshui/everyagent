@@ -21,6 +21,7 @@ import type {
   ToolCallDetailViewDefinition,
   TaskFileMoreAction,
 } from './types'
+import type { FileContentEditorDescriptor } from '@/components/files/file-tab-types'
 import { registerTraceType as registerToTraceRegistry } from './traceTypeRegistry'
 import { outputBlockRegistry } from './outputBlockRegistry'
 
@@ -35,6 +36,8 @@ const toolCallDetailViews: ToolCallDetailViewDefinition[] = []
 const taskFileMoreActions: TaskFileMoreAction[] = []
 const traceTypes: TraceTypeDefinition[] = []
 const outputBlocks = new Map<string, OutputBlockHandler>()
+/** 插件注册的文件内容编辑器（如 PDF 插件）。 */
+const fileContentEditors: FileContentEditorDescriptor[] = []
 
 // ── Disposable 工具 ──
 
@@ -84,6 +87,10 @@ export interface RealPluginDispatcher {
   registerTraceType: (def: TraceTypeDefinition) => Disposable
   /** 注册输出块渲染。 */
   registerOutputBlock: (tag: string, handler: OutputBlockHandler) => Disposable
+  /** 注册文件内容编辑器（插件扩展点）。 */
+  registerFileContentEditor: (def: FileContentEditorDescriptor) => Disposable
+  /** 同步获取插件注册的文件内容编辑器列表（供编辑器注册表合并）。 */
+  listRegisteredFileContentEditors: () => FileContentEditorDescriptor[]
 }
 
 export const pluginDispatcher: RealPluginDispatcher = {
@@ -104,6 +111,8 @@ export const pluginDispatcher: RealPluginDispatcher = {
         return toolCallDetailViews as T[]
       case 'ui.task_file_more_actions':
         return taskFileMoreActions as T[]
+      case 'ui.file_content_editors':
+        return fileContentEditors as T[]
       default:
         return []
     }
@@ -174,5 +183,12 @@ export const pluginDispatcher: RealPluginDispatcher = {
         outputBlocks.delete(tag.toLowerCase())
       },
     }
+  },
+  registerFileContentEditor(def) {
+    fileContentEditors.push(def)
+    return makeDisposable(fileContentEditors, def)
+  },
+  listRegisteredFileContentEditors() {
+    return [...fileContentEditors]
   },
 }

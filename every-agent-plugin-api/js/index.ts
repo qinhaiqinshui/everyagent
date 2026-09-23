@@ -387,6 +387,65 @@ export type OutputBlockHandler = (
   context: OutputBlockContext,
 ) => ReactNode
 
+// ─── 文件内容编辑器扩展点 ─────────────────────────────────────────────────
+
+/**
+ * 文件内容编辑器 props（插件版，对齐 web 内部 FileContentEditorProps）。
+ *
+ * 二进制只读编辑器（readonly=true）的 `content` 为 data URL；
+ * 其余为文本内容。
+ */
+export interface PluginFileContentEditorProps {
+  /** 当前文件资源。 */
+  file: PluginFileResource
+  /** 打开模式（'readonly' | 'readwrite'）。 */
+  mode: string
+  /** 文件内容（二进制只读编辑器为 data URL）。 */
+  content: string
+  /** 草稿内容（可编辑态）。 */
+  draftContent: string
+  /** 是否加载中。 */
+  loading: boolean
+  /** 加载错误信息。 */
+  error: string
+  /** 请求定位到的目标行号。 */
+  lineNumber?: number
+  /** 请求定位到目标行号的时间戳。 */
+  lineLocateRequestedAt?: number
+  /** 行定位已应用回调。 */
+  onLineLocateApplied?: () => void
+  /** 草稿变更回调。 */
+  onDraftChange: (nextValue: string) => void
+  /** 标题栏动作变更回调（结构对齐 web 内部 FileContentHeaderAction）。 */
+  onHeaderActionsChange?: (actions: unknown[]) => void
+  /** 只读态请求进入可编辑态。 */
+  onRequestEditMode?: () => void
+}
+
+/**
+ * 文件内容编辑器描述符（由 `ui.file_content_editors` 扩展点产出）。
+ *
+ * 插件注册后，核心编辑器注册表按扩展名匹配时同时查找插件编辑器；
+ * 插件编辑器优先于内置编辑器（同名扩展名可覆盖）。
+ */
+export interface PluginFileContentEditorDescriptor {
+  /** 编辑器类型 ID。 */
+  kind: string
+  /** 用户可见名称。 */
+  label: string
+  /** 支持的扩展名列表，全部小写，包含点（如 ['.pdf']）。 */
+  extensions: string[]
+  /** 是否作为未知扩展名兜底编辑器（插件编辑器不建议开启）。 */
+  isFallback?: boolean
+  /**
+   * 二进制只读类编辑器（图片/PDF 等）：不支持可编辑态。
+   * 外壳据此屏蔽「编辑/保存/查找」入口，并走二进制读取（data URL）而非文本解码。
+   */
+  readonly?: boolean
+  /** 编辑器组件。 */
+  Component: ComponentType<PluginFileContentEditorProps>
+}
+
 // ─── UI 注册表 ────────────────────────────────────────────────────────────
 
 export interface UiRegistry {
@@ -399,6 +458,7 @@ export interface UiRegistry {
   registerTaskFileMoreAction(action: TaskFileMoreAction): Disposable
   registerTraceType(def: TraceTypeDefinition): Disposable
   registerOutputBlock(tag: string, handler: OutputBlockHandler): Disposable
+  registerFileContentEditor(def: PluginFileContentEditorDescriptor): Disposable
 }
 
 // ─── PluginContext / PluginModule ─────────────────────────────────────────

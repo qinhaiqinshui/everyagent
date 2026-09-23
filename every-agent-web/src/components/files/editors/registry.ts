@@ -1,5 +1,6 @@
 import type { FileEditorKind } from '@/types'
 import type { FileContentEditorDescriptor } from './types'
+import { pluginDispatcher } from '@/plugin/PluginDispatcher'
 
 type FileContentEditorModule = {
   descriptor?: FileContentEditorDescriptor
@@ -16,6 +17,15 @@ const editorDescriptors = Object.values(editorModuleMap)
   .map((module) => module.descriptor)
   .filter((descriptor): descriptor is FileContentEditorDescriptor => Boolean(descriptor))
 
+/**
+ * 合并内置（glob 扫描）与插件注册（ui.file_content_editors 扩展点）的编辑器。
+ * 插件编辑器排在前面：同名扩展名匹配时插件优先，可覆盖内置编辑器。
+ * 每次调用实时合并，插件在 activate() 中注册后立即生效（无需重启）。
+ */
+function allEditorDescriptors(): FileContentEditorDescriptor[] {
+  return [...pluginDispatcher.listRegisteredFileContentEditors(), ...editorDescriptors]
+}
+
 function normalizeExtension(filePath: string): string {
   const normalized = filePath.trim().replace(/\\/g, '/').toLowerCase()
   const lastSlashIndex = normalized.lastIndexOf('/')
@@ -28,11 +38,11 @@ function normalizeExtension(filePath: string): string {
 }
 
 export function listFileContentEditors(): FileContentEditorDescriptor[] {
-  return [...editorDescriptors]
+  return allEditorDescriptors()
 }
 
 export function getFallbackFileContentEditor(): FileContentEditorDescriptor {
-  const fallback = editorDescriptors.find((item) => item.isFallback)
+  const fallback = allEditorDescriptors().find((item) => item.isFallback)
   if (!fallback) {
     throw new Error('缺少文件内容 fallback 编辑器')
   }
@@ -44,7 +54,7 @@ export function resolveFileContentEditorByPath(filePath: string): FileContentEdi
   if (!extension) {
     return getFallbackFileContentEditor()
   }
-  return editorDescriptors.find((item) => item.extensions.includes(extension)) ?? getFallbackFileContentEditor()
+  return allEditorDescriptors().find((item) => item.extensions.includes(extension)) ?? getFallbackFileContentEditor()
 }
 
 export function resolveFileEditorKindByPath(filePath: string): FileEditorKind {

@@ -1,6 +1,6 @@
 import { workspaceGateway } from '@/platform/fs/workspaceGateway'
 import type { FileTabResource } from '@/types/fileTabs'
-import { bytesToDataUrl, imageMimeOf } from '@/utils/imageAsset'
+import { bytesToDataUrl, mimeOf } from '@/utils/imageAsset'
 
 /**
  * 文件页查询服务。
@@ -18,21 +18,21 @@ export const fileTabQueryService = {
   },
 
   /**
-   * 读取文件页当前文件为 data URL（图片等二进制只读编辑器）。
+   * 读取文件页当前文件为 data URL（图片/PDF 等二进制只读编辑器）。
    * 经 fs.read 读原始字节（内联/分批自动合并）→ 按扩展名推断 MIME → data URL。
-   * 超出预览上限抛错，由外壳以 error 呈现，避免超大图拖垮前端。
+   * 超出预览上限抛错，由外壳以 error 呈现，避免超大文件拖垮前端。
    */
   async readBinaryDataUrl(file: FileTabResource): Promise<string> {
     const bytes = await workspaceGateway.readBinaryFile(file.workspaceRoot, file.filePath)
-    if (bytes.length > MAX_IMAGE_PREVIEW_BYTES) {
-      throw new Error(`图片过大（${formatBytes(bytes.length)}），超过预览上限 ${formatBytes(MAX_IMAGE_PREVIEW_BYTES)}`)
+    if (bytes.length > MAX_BINARY_PREVIEW_BYTES) {
+      throw new Error(`文件过大（${formatBytes(bytes.length)}），超过预览上限 ${formatBytes(MAX_BINARY_PREVIEW_BYTES)}`)
     }
-    return bytesToDataUrl(bytes, imageMimeOf(file.fileName))
+    return bytesToDataUrl(bytes, mimeOf(file.fileName))
   },
 }
 
-/** 图片预览大小上限（字节）。 */
-export const MAX_IMAGE_PREVIEW_BYTES = 20 * 1024 * 1024
+/** 二进制文件预览大小上限（字节）。 */
+export const MAX_BINARY_PREVIEW_BYTES = 20 * 1024 * 1024
 
 function formatBytes(value: number): string {
   if (value >= 1024 * 1024) {
