@@ -37,7 +37,7 @@
                     └───────────────────┬─────────────────────────┘
                                         ▼
   ┌───────────────────────── Task 洋葱（TaskOnion 执行器） ─────────────────────────┐
-  │  下行 onStart（外→内，可阻塞/可否决）          上行 onEnd（内→外，逆序、必达） │
+  │  下行 = next(ctx) 之前的代码（外→内）   上行 = next 返回后的代码（内→外）      │
   │                                                                                │
   │  …persistence.track(100) → task.wires(200) → status.start(300)                │
   │    → main.agent(400) →【内核 = 调用 AgentService（多轮 + 输入队列）】          │
@@ -45,7 +45,7 @@
   │    → …concurrency.release → log.flush → status.persist(650)… → 最外收口       │
   │                                                                                │
   │  节点 = 单一职责动作（一节点一事）；order 为 float，插件可任意插位。            │
-  │  未来任务队列插件 = 在 100~350 空隙插入排队节点（onStart 阻塞排队）。          │
+  │  未来任务队列插件 = 在 100~400 空隙插成对节点（enqueue 阻塞/finally 出队）。  │
   └──────────────────────────────────┬─────────────────────────────────────────────┘
                                      ▼
   ┌──────────────────────────── Agent 层（AgentService，核心） ────────────────────┐
@@ -211,7 +211,7 @@ filter 模型下收口序恒等于进入序的逆序（同一 order 决定两端
 
 **下行节点（invoke 的 next 之前，order 升序 = 执行序）**：
 
-| order | 节点 id | onStart 职责（一事） | 现状出处 |
+| order | 节点 id | 下行段职责（一事） | 现状出处 |
 |---|---|---|---|
 | 100 | `persistence.track` | `store.track`：建目录 + 首写 meta.json + 挂 EventLog 监听 | rpcTaskRun L1078 |
 | 200 | `task.wires` | 注入 `onUsageBroadcast` / `persistHook`（TaskEntry 钩子字段） | wireUsageBroadcast L1938 / wireAgentPersist L1957 |
@@ -222,7 +222,7 @@ filter 模型下收口序恒等于进入序的逆序（同一 order 决定两端
 
 **上行节点（invoke 的 next 之后，按执行先后排列 = order 降序；全部为形态二——下行段为空透传）**：
 
-| 执行序 | order | 节点 id | onEnd 职责（一事） | 锁 | 现状出处 |
+| 执行序 | order | 节点 id | 上行段职责（一事） | 锁 | 现状出处 |
 |---|---|---|---|---|---|
 | 1 | 950 | `spawned.await` | `awaitAllBeforeFinish`（等全部子 agent，超时级联停） | 锁外 | runTask L1672 |
 | 2 | 900 | `cascade.stop` | result≠DONE 时按 status 分支：`stopRequested` + `stopAll` + `asks.cancelTask`；CANCELLED 发 `cancelled` 事件 / FAILED 发 `error` 事件（现状两个 catch 分支的差异收敛为看 result） | 锁外 | runTask catch L1680-1705 |
