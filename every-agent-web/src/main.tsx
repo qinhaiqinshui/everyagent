@@ -21,7 +21,7 @@ import { loadThemeMode } from './settings/localSettings'
 import { installGlobalErrorHandlers } from './utils/globalErrorHandler'
 import { GlobalErrorBoundary } from './components/shared/GlobalErrorBoundary'
 import { initializeTraceTypes } from './plugin/traceTypeRegistry'
-import { registerAuthReviewTraceType } from './plugins/auth-review'
+import { loadBuiltInPlugins } from './plugin/builtInPlugins'
 import { bootWebPlugins } from './plugin/pluginBootstrap'
 import { wireFsChanged } from './platform/fs/workspaceGateway'
 import { workspaceRegistry } from './hub/workspaceRegistry'
@@ -43,8 +43,9 @@ if (isDesktop()) {
 
 // 核心 trace 类型注册(子任务/错误/系统提示;未注册 kind 走降级渲染)。
 initializeTraceTypes()
-// AI 安全审议 trace 渲染注册(worker 端每次审议结论发 kind='auth.review' 的 task.trace)。
-registerAuthReviewTraceType()
+// 内置插件自动发现：import.meta.glob 扫描 every-agent-plugins/*/web/index.ts。
+// 删除插件目录 = glob 无匹配 = 零报错。
+void loadBuiltInPlugins()
 
 // fs.changed(worker evt 频道)→ 前端文件刷新事件。进程内只接一次。
 wireFsChanged()

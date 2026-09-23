@@ -28,6 +28,7 @@ export default defineConfig({
     alias: {
       '@': resolve(__dirname, 'src'),
       '@every-agent/client': resolve(__dirname, 'src/sdk'),
+      '@plugins': resolve(__dirname, '../every-agent-plugins'),
     },
   },
   server: {
