@@ -259,7 +259,7 @@ filter 模型下收口序恒等于进入序的逆序（同一 order 决定两端
 
 - worker 内置节点经 `TaskLifecycleRegistry`（新，`plugin/registry/` 第 8 个注册表，CopyOnWriteArrayList + PluginStateStore 过滤 + **float order 稳定排序**——与 AdvisorProviderRegistry 同模式）注册。
 - `WorkerPluginContext` 新增 `registerTaskLifecycleNode(TaskLifecycleNode)`。
-- **任务队列插件（Phase 4 预留，本次不实施）**：在下行空隙（100~400 之间任意 float 位，如 250）插入**形态三成对节点**（§3.1 QueueAdmissionNode 示例）——下行段 `enqueue` 阻塞排队（虚拟线程下阻塞即挂起，零线程开销）、finally 出队广播；若需接管「并发上限即拒」语义，则替换 RPC 边缘预检（Phase 4 设计边缘扩展点）。filter 模型的 try/finally 局部状态正是为这类成对关注点准备。
+- **任务队列插件（Phase 5 预留，本次不实施）**：在下行空隙（100~400 之间任意 float 位，如 250）插入**形态三成对节点**（§3.1 QueueAdmissionNode 示例）——下行段 `enqueue` 阻塞排队（虚拟线程下阻塞即挂起，零线程开销）、finally 出队广播；若需接管「并发上限即拒」语义，则替换 RPC 边缘预检（Phase 5 设计边缘扩展点）。filter 模型的 try/finally 局部状态正是为这类成对关注点准备。
 
 ---
 
