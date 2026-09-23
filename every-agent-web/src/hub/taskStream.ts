@@ -216,12 +216,14 @@ class ManagedStream {
   }
 
   /**
-   * rounds 快照刷新(round.opened/round.closed 信号触发):重新拉取 task.rounds + 未闭合尾轮
-   * 尾部事件,全部幂等折入同一 folder;失败不阻断(记 warn)。
+   * rounds 快照刷新(round.opened/round.closed/agent.status 终态触发):重新拉取 task.rounds,
+   * **不重置 folder、不拉尾段**——仅增量 foldRound(幂等)更新轮次骨架。push stream 仍在
+   * 实时推送流式事件,reset 会清空 streaming anchors 导致后续 thinking 事件被丢弃(§偶现 bug:
+   * 继续提问时思考只吐几字后停止)。失败不阻断(记 warn)。
    */
   private async refreshRounds(): Promise<void> {
     try {
-      await this.loadRoundsIntoFolder()
+      await this.loadRoundsIntoFolder(true)
     } catch (error) {
       this.roundsError = error instanceof Error ? error.message : String(error)
       this.notify()
@@ -321,18 +323,28 @@ class ManagedStream {
    * final)折入 items,过程内容一律由懒加载按需拉取(不再一次性全量)。运行中任务额外拉
    * 未闭合尾轮「最后一页」(task.roundTail limit=200)与流式增量接上;终态未闭合尾轮不在此
    * 拉,由 TaskRoundsPanel 常开视图懒加载。完成后 50ms 合并通知一次。
+   *
+   * @param soft 软刷新模式(round.opened/closed 等信号触发):不 reset folder、不拉 live
+   *   尾段(push stream 仍在实时推送,reset 会清空 streaming anchors 导致 thinking 丢失)。
+   *   仅增量 foldRound(幂等)更新轮次骨架 + 终态任务 ask.settle 补拉。初始 open/resync
+   *   走 full(soft=false)。
    */
-  private async loadRoundsIntoFolder(): Promise<void> {
+  private async loadRoundsIntoFolder(soft = false): Promise<void> {
     const client = hubSession.workerClient(this.workerId)
     if (!client) return
     const res = await fetchTaskRounds(client, this.workerId, { taskId: this.taskId })
     this.rounds = res
     this.roundsError = null
-    // 重置 folder:resync/重连场景下旧 items(编辑前轮次,seq 已过期)必须清除,
-    // 否则新旧轮次按 seq 混排会顺序错乱(如编辑轮 3 后旧轮 3 seq 更大排在新轮 3 后面)。
-    this.folder.reset()
+    if (!soft) {
+      // 重置 folder:resync/重连场景下旧 items(编辑前轮次,seq 已过期)必须清除,
+      // 否则新旧轮次按 seq 混排会顺序错乱(如编辑轮 3 后旧轮 3 seq 更大排在新轮 3 后面)。
+      // 软刷新(soft=true)跳过:push stream 仍在实时推送流式事件,reset 会清空
+      // streaming anchors 导致后续 thinking 事件被丢弃。
+      this.folder.reset()
+    }
     // 全部轮折入骨架:user(foldRound 用 round.userMessage)+ 闭合轮合成 final(文本摘要);
     // 后续懒加载把过程事件 / 权威 message 折入同一 items,按 seq 去重且不重复 user/final 项。
+    // foldRound 按 seq 幂等:已有真实项(push stream 折入)则跳过,不产生重复。
     for (const round of res.rounds) {
       this.folder.foldRound(round)
     }
@@ -360,7 +372,10 @@ class ManagedStream {
         })
       }
     }
-    if (tailStartSeq && res.live) {
+    if (!soft && tailStartSeq && res.live) {
+      // 软刷新跳过 live 尾段拉取:push stream 仍在实时推送流式事件(thinking/delta),
+      // 拉尾段会通过 foldWireEvent 二次折入已 push 的同 seq 事件,导致文本重复 +
+      // delta 事件误设 reasoningDone=true(折叠按钮提前出现)。
       try {
         const { events } = await fetchTaskRoundTail(client, this.workerId, {
           taskId: this.taskId,
