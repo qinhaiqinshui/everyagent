@@ -29,6 +29,8 @@ public class WorkerProperties {
     private String workspaceRoot = "";
     /** 系统技能目录(skill 知识包;空 = <系统目录>/skills)。AI 工具只读访问,写一律拒绝。 */
     private String skillsDir = "";
+    /** 插件目录(外部 + 内置物化;空 = <系统目录>/plugins)。 */
+    private String pluginsDir = "";
     /**
      * 程序资源根(仅用于授权忽略前缀等,不再是程序附属文件的定位基础):
      * 程序附属文件(rg、eagent-run.py、WSL 托管镜像)统一随安装/解压分发到
@@ -236,6 +238,13 @@ public class WorkerProperties {
     public java.nio.file.Path resolveSkillsDir() {
         String s = skillsDir == null || skillsDir.isBlank() ? null : skillsDir.trim();
         return (s == null ? resolveHomeDir().resolve("skills") : java.nio.file.Path.of(s))
+                .toAbsolutePath().normalize();
+    }
+
+    /** 插件目录绝对路径;配置为空时取 <系统目录>/plugins。 */
+    public java.nio.file.Path resolvePluginsDir() {
+        String p = pluginsDir == null || pluginsDir.isBlank() ? null : pluginsDir.trim();
+        return (p == null ? resolveHomeDir().resolve("plugins") : java.nio.file.Path.of(p))
                 .toAbsolutePath().normalize();
     }
 
@@ -727,6 +736,14 @@ public class WorkerProperties {
 
     public void setSkillsDir(String skillsDir) {
         this.skillsDir = skillsDir;
+    }
+
+    public String getPluginsDir() {
+        return pluginsDir;
+    }
+
+    public void setPluginsDir(String pluginsDir) {
+        this.pluginsDir = pluginsDir;
     }
 
     public String getProgramDir() {

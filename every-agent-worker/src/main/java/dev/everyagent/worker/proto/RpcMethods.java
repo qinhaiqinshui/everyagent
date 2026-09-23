@@ -95,6 +95,18 @@ public final class RpcMethods {
     public static final String SYS_METHODS = "sys.methods";
     public static final String SYS_INFO = "sys.info";
 
+    // ── 插件管理 ──
+    /** 列出已加载的插件清单。 */
+    public static final String PLUGIN_LIST = "plugin.list";
+    /** 安装插件（从 .eap 文件解压到 plugins 目录）。 */
+    public static final String PLUGIN_INSTALL = "plugin.install";
+    /** 卸载插件（从 plugins 目录删除，内置插件不可卸载）。 */
+    public static final String PLUGIN_UNINSTALL = "plugin.uninstall";
+    /** 启用插件。 */
+    public static final String PLUGIN_ENABLE = "plugin.enable";
+    /** 禁用插件。 */
+    public static final String PLUGIN_DISABLE = "plugin.disable";
+
     private RpcMethods() {
     }
 }
