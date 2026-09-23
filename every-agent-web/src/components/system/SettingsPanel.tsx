@@ -52,7 +52,7 @@ export default function SettingsPanel() {
   const themeMode = useThemeMode(loadThemeMode())
   const { showToast } = useAppUi()
 
-  const [hubUrl, setHubUrl] = React.useState(hub.config?.hubUrl ?? 'ws://localhost:9100/ws')
+  const [hubUrl, setHubUrl] = React.useState(hub.config?.hubUrl ?? 'ws://localhost:6101/ws')
   const [hubKey, setHubKey] = React.useState(hub.config?.hubKey ?? '')
   const [workerKeys, setWorkerKeys] = React.useState<Map<string, string>>(new Map())
   const [savingWorker, setSavingWorker] = React.useState('')
@@ -320,7 +320,7 @@ export default function SettingsPanel() {
             style={inputStyle}
             value={hubUrl}
             onChange={(event) => setHubUrl(event.target.value)}
-            placeholder="ws://your-pc:9100/ws"
+            placeholder="ws://your-pc:6101/ws"
             spellCheck={false}
           />
         </div>
