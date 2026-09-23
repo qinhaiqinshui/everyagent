@@ -14,6 +14,7 @@
  */
 
 import type { ComponentType, ReactNode } from 'react'
+import type { ToolViewProps } from '@/components/task/toolViews/types'
 import type {
   ChatComposerDraftState,
   ChatComposerToken,
@@ -47,31 +48,6 @@ export interface ThreadItemViewEnhancement {
   badges?: string[]
   /** 附加说明文本。 */
   annotation?: string
-}
-
-/**
- * 工具调用详情增强（由 `ui.tool_call_detail_view` 扩展点产出）。
- *
- * 仅影响工具调用展开后的详情渲染；折叠摘要继续使用核心默认视图。
- */
-export interface ToolCallDetailEnhancement {
-  /** 工具展示名；默认回退为原工具名。 */
-  toolName?: string
-  /** 附加说明文本。 */
-  annotation?: string
-  /** 可点击的路径标签。 */
-  path?: {
-    /** 展示文本。 */
-    label: string
-    /** 完整路径。 */
-    fullPath: string
-  }
-  /**
-   * 插件自定义详情正文（如内嵌 diff 视图）。
-   * 存在时替代核心默认的参数块渲染（工具名/路径 chip 头部与错误块仍由核心渲染，
-   * 插件只接管正文）；错误场景应返回 null 回落默认渲染，保证错误信息可见。
-   */
-  content?: ReactNode
 }
 
 /**
@@ -223,27 +199,19 @@ export interface TaskFileMoreAction {
 }
 
 /**
- * 工具调用详情增强上下文（由 `ui.tool_call_detail_view` 扩展点传入）。
+ * 工具调用视图接管定义（由 `ui.tool_call_views` 扩展点产出）。
+ *
+ * 与核心内置 `toolViews/` 目录注册表的 `ToolViewDefinition` 同构同地位：
+ * 按工具名命中即**整体接管该工具调用的渲染**（折叠态 + 展开态），
+ * 组件完全自治。解析优先级：插件注册的视图 > 内置目录注册表 > DefaultToolView。
  */
-export interface ToolCallDetailViewContext {
-  /** 工具名。 */
-  toolName: string
-  /** 解析后的工具参数。 */
-  args: Record<string, unknown>
-  /** 原始工具调用 ID。 */
-  toolCallId?: string
-}
-
-/**
- * 工具调用详情增强条目（由 `ui.tool_call_detail_view` 扩展点产出）。
- */
-export interface ToolCallDetailViewDefinition {
+export interface ToolCallViewDefinition {
   /** 提供方插件 id。 */
   pluginId: string
-  /** 以工具名作为 key。 */
+  /** 以工具名作为 key（与核心 ToolViewDefinition.toolName 语义一致）。 */
   toolName: string
-  /** 渲染详情增强。 */
-  render: (ctx: ToolCallDetailViewContext) => ToolCallDetailEnhancement | null
+  /** 接管渲染的完整视图组件（折叠态 + 展开态）。 */
+  Component: ComponentType<ToolViewProps>
 }
 
 // ── 工作区相关契约（任务列表分组 / ui.composer_footer_controls）──

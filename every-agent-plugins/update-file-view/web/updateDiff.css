@@ -1,10 +1,28 @@
 /**
- * update_file 内嵌 diff 紧凑样式（file-diff-view 插件自带）。
+ * update-file-view 插件样式：折叠态变更统计徽章 + 内嵌 diff 紧凑表。
  *
- * 与文件页 FileDiffPanel 的差异：面向聊天气泡内的窄宽度场景，
- * 双行号列收窄（40px）、行高更紧（20px）、无外框阴影，
- * 配色沿用全局 design token，明暗主题自动适配。
+ * 徽章渲染在核心 inline-preview 分段之间（文件名后、完整路径前），
+ * 沿用 --font-mono，绿加红删着色提示变更方向；明暗主题自动适配。
  */
+
+.update-file-view__stat {
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--bg-primary) 92%, transparent);
+  font-variant-numeric: tabular-nums;
+}
+
+.update-file-view__stat-add {
+  color: var(--accent-green, #2ea043);
+}
+
+.update-file-view__stat-del {
+  margin-left: 3px;
+  color: var(--accent-red, #f85149);
+}
+
+/* ── 内嵌 diff 紧凑表 ── */
 
 .update-diff {
   display: flex;

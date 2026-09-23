@@ -1,10 +1,8 @@
 /**
- * update_file 内嵌 diff 视图——由 file-diff-view 插件经
- * `ui.tool_call_detail_view` 扩展点贡献给工具调用展开态。
+ * update_file 内嵌 diff 表（update-file-view 插件内部组件，展开态正文）。
  *
  * 用 worker 工具参数 oldcontent（替换前片段）与 content（替换后片段）生成
- * 行级 unified diff（复用 web 的 buildLineDiff 纯函数，LCS 行对齐），
- * 直接内嵌在工具展开详情里，无需再打开文件对比。
+ * 行级 unified diff（复用 web 的 buildLineDiff 纯函数，LCS 行对齐）。
  *
  * 样式走本插件自带 updateDiff.css（紧凑行高，适配聊天气泡内宽度），
  * 配色用全局 design token（--text-* / --bg-* / --border-*），明暗主题自动适配。
@@ -12,7 +10,6 @@
 
 import React from 'react'
 import { buildLineDiff } from '@/utils/textDiff'
-import type { ToolCallDetailEnhancement } from '@everyagent/plugin-api'
 import './updateDiff.css'
 
 export interface UpdateFileDiffProps {
@@ -80,19 +77,4 @@ export function UpdateFileDiff({ oldContent, newContent }: UpdateFileDiffProps) 
       <span className="update-diff__stat">{changedCount} 行变更</span>
     </div>
   )
-}
-
-/**
- * 从 update_file 工具参数构建详情增强（file-diff-view 插件的 render 实现）。
- * oldcontent / content 任一缺失或非字符串时返回 null，回落核心默认参数块渲染。
- */
-export function buildUpdateFileDiffEnhancement(
-  args: Record<string, unknown>,
-): ToolCallDetailEnhancement | null {
-  const oldContent = typeof args.oldcontent === 'string' ? args.oldcontent : null
-  const newContent = typeof args.content === 'string' ? args.content : null
-  if (oldContent === null || newContent === null) return null
-  return {
-    content: <UpdateFileDiff oldContent={oldContent} newContent={newContent} />,
-  }
 }

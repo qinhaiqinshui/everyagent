@@ -756,7 +756,7 @@ Input:  queued → consumed | discarded(任务取消)
 
 - **形态** — `every-agent-plugins/<name>/web/index.ts` 为插件入口(`PluginModule.activate(ctx)`),经 `builtInPlugins.ts` 的 `import.meta.glob('@plugins/*/web/index.ts')` 自动发现加载,删除目录即卸载;纯前端插件无需 pom(`pdf-viewer`),带 worker 端的插件(`auth-review`/`git`)另建 Maven 子模块并挂入 `every-agent-plugins/pom.xml`。
 - **契约** — 插件只依赖 `@everyagent/plugin-api`(纯类型包);引用 web 内部能力用 `@/` alias(与内置视图同源编译)。
-- **扩展点 `ui.tool_call_detail_view`** — 按工具名增强工具调用**展开态**:插件 `render(ctx)` 返回 `ToolCallDetailEnhancement`,其中 `content?: ReactNode` 为插件自定义详情正文(如内嵌 diff),**存在时替代核心默认的参数块**(头部工具名/路径 chip 与错误块仍由核心渲染,插件只接管正文);返回 null 则回落默认渲染。首个匹配工具名的插件生效。内置 `file-diff-view` 插件以此接管 `update_file`:用 `oldcontent`→`content` 生成行级 diff,展开即直接查看变更。
+- **扩展点 `ui.tool_call_views`** — 按工具名**整体接管工具调用视图**(折叠态 + 展开态):插件注册 `ToolCallViewDefinition{pluginId, toolName, Component}`,`Component` 与核心内置视图同契约(`ToolViewProps`,聚合后的 `details` 数组)。解析优先级:插件注册的视图 > 内置 `toolViews/` 目录注册表 > `DefaultToolView`。插件视图完全自治(折叠行、展开头部、参数/结果/错误块均由插件渲染),复用 `@/` alias 引核心共享件(helpers/图标/样式类)。内置 `update-file-view` 插件以此接管 `update_file`:折叠态显示文件名与变更统计徽章,展开态内嵌 oldcontent→content 行级 diff。
 
 ---
 

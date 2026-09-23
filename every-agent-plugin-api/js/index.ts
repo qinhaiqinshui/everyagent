@@ -233,42 +233,47 @@ export interface TaskFileMoreAction {
   ) => void | Promise<void | TaskFileMoreActionResult | null>
 }
 
-/** 工具调用详情增强上下文。 */
-export interface ToolCallDetailViewContext {
-  /** 工具名。 */
+// ─── 工具调用视图接管（ui.tool_call_views） ────────────────────────────────
+
+/**
+ * 最小化工具调用详情（替代 web 内部 `AggregatedToolDetail`）。
+ * 插件按需强转为具体形态；字段与核心契约逐字对齐。
+ */
+export interface PluginToolCallDetail {
+  /** 判别式，恒为 'tool_call'。 */
+  type: 'tool_call'
+  /** 工具展示名（已解析）。 */
   toolName: string
-  /** 解析后的工具参数。 */
-  args: Record<string, unknown>
   /** 原始工具调用 ID。 */
-  toolCallId?: string
+  toolCallId?: string | null
+  /** 状态（success / error / ...）。 */
+  status?: string
+  /** 下发参数；无参数时为 null。 */
+  arguments?: Record<string, unknown> | null
+  /** 调用结果（成功且可解析为 JSON 时为对象，否则为原始文本）。 */
+  result?: unknown
 }
 
-/** 工具调用详情增强条目。 */
-export interface ToolCallDetailEnhancement {
-  /** 工具展示名。 */
-  toolName?: string
-  /** 附加说明文本。 */
-  annotation?: string
-  /** 可点击的路径标签。 */
-  path?: {
-    label: string
-    fullPath: string
-  }
-  /**
-   * 插件自定义详情正文（如内嵌 diff 视图）。
-   * 存在时替代核心默认的参数块渲染（头部与错误块仍由核心渲染，插件只接管正文）。
-   */
-  content?: ReactNode
+/** 插件工具视图组件的 props（与核心 ToolViewProps 最小化对齐）。 */
+export interface PluginToolCallViewProps {
+  /** 聚合后的工具调用数组（每条 merged tool 消息一个元素）。 */
+  details: PluginToolCallDetail[]
 }
 
-/** 工具调用详情增强条目定义。 */
-export interface ToolCallDetailViewDefinition {
+/**
+ * 工具调用视图接管定义（由 `ui.tool_call_views` 扩展点产出）。
+ *
+ * 与核心内置 toolViews 目录注册表同构同地位：按工具名命中即**整体接管
+ * 该工具调用的渲染**（折叠态 + 展开态），组件完全自治。
+ * 解析优先级：插件注册的视图 > 内置目录注册表 > DefaultToolView。
+ */
+export interface ToolCallViewDefinition {
   /** 提供方插件 id。 */
   pluginId: string
   /** 以工具名作为 key。 */
   toolName: string
-  /** 渲染详情增强。 */
-  render: (ctx: ToolCallDetailViewContext) => ToolCallDetailEnhancement | null
+  /** 接管渲染的完整视图组件（折叠态 + 展开态）。 */
+  Component: ComponentType<PluginToolCallViewProps>
 }
 
 // ─── 任务列表分组 ─────────────────────────────────────────────────────────
@@ -492,7 +497,7 @@ export interface UiRegistry {
   registerFileSidebarPanel(def: UiFileSidebarPanelDefinition): Disposable
   registerComposerFooterControl(def: UiComposerFooterControlDefinition): Disposable
   registerComposerAbovePanel(def: UiComposerAbovePanelDefinition): Disposable
-  registerToolCallDetailView(def: ToolCallDetailViewDefinition): Disposable
+  registerToolCallView(def: ToolCallViewDefinition): Disposable
   registerTaskFileMoreAction(action: TaskFileMoreAction): Disposable
   registerTraceType(def: TraceTypeDefinition): Disposable
   registerOutputBlock(tag: string, handler: OutputBlockHandler): Disposable

@@ -19,7 +19,7 @@ import type {
   UiFileSidebarPanelDefinition,
   UiComposerFooterControlDefinition,
   UiComposerAbovePanelDefinition,
-  ToolCallDetailViewDefinition,
+  ToolCallViewDefinition,
   TaskFileMoreAction,
 } from './types'
 import type { FileContentEditorDescriptor } from '@/components/files/file-tab-types'
@@ -33,7 +33,7 @@ const workspaceTabTypes: UiWorkspaceTabTypeDefinition[] = []
 const fileSidebarPanels: UiFileSidebarPanelDefinition[] = []
 const composerFooterControls: UiComposerFooterControlDefinition[] = []
 const composerAbovePanels: UiComposerAbovePanelDefinition[] = []
-const toolCallDetailViews: ToolCallDetailViewDefinition[] = []
+const toolCallViews: ToolCallViewDefinition[] = []
 const taskFileMoreActions: TaskFileMoreAction[] = []
 const traceTypes: TraceTypeDefinition[] = []
 const outputBlocks = new Map<string, OutputBlockHandler>()
@@ -68,8 +68,8 @@ export interface RealPluginDispatcher {
   getComposerFooterControls: () => Promise<UiComposerFooterControlDefinition[]>
   /** 输入框上方面板。 */
   getComposerAbovePanels: () => Promise<UiComposerAbovePanelDefinition[]>
-  /** 工具调用详情增强。 */
-  getToolCallDetailViews: () => Promise<ToolCallDetailViewDefinition[]>
+  /** 已注册的工具调用视图接管（供 toolViews 注册表解析合并，同步）。 */
+  listRegisteredToolCallViews: () => ToolCallViewDefinition[]
   /** 任务文件更多操作。 */
   getTaskFileMoreActions: () => Promise<TaskFileMoreAction[]>
   /** 注册侧边栏项。 */
@@ -82,8 +82,8 @@ export interface RealPluginDispatcher {
   registerComposerFooterControl: (def: UiComposerFooterControlDefinition) => Disposable
   /** 注册输入框上方面板。 */
   registerComposerAbovePanel: (def: UiComposerAbovePanelDefinition) => Disposable
-  /** 注册工具调用详情增强。 */
-  registerToolCallDetailView: (def: ToolCallDetailViewDefinition) => Disposable
+  /** 注册工具调用视图接管。 */
+  registerToolCallView: (def: ToolCallViewDefinition) => Disposable
   /** 注册任务文件更多操作。 */
   registerTaskFileMoreAction: (action: TaskFileMoreAction) => Disposable
   /** 注册 trace 类型。 */
@@ -118,8 +118,8 @@ export const pluginDispatcher: RealPluginDispatcher = {
         return composerFooterControls as T[]
       case 'ui.composer_above_panel':
         return composerAbovePanels as T[]
-      case 'ui.tool_call_detail_view':
-        return toolCallDetailViews as T[]
+      case 'ui.tool_call_views':
+        return toolCallViews as unknown as T[]
       case 'ui.task_file_more_actions':
         return taskFileMoreActions as T[]
       case 'ui.file_content_editors':
@@ -146,8 +146,8 @@ export const pluginDispatcher: RealPluginDispatcher = {
   async getComposerAbovePanels() {
     return [...composerAbovePanels]
   },
-  async getToolCallDetailViews() {
-    return [...toolCallDetailViews]
+  listRegisteredToolCallViews() {
+    return [...toolCallViews]
   },
   async getTaskFileMoreActions() {
     return [...taskFileMoreActions]
@@ -173,9 +173,9 @@ export const pluginDispatcher: RealPluginDispatcher = {
     composerAbovePanels.push(def)
     return makeDisposable(composerAbovePanels, def)
   },
-  registerToolCallDetailView(def) {
-    toolCallDetailViews.push(def)
-    return makeDisposable(toolCallDetailViews, def)
+  registerToolCallView(def) {
+    toolCallViews.push(def)
+    return makeDisposable(toolCallViews, def)
   },
   registerTaskFileMoreAction(action) {
     taskFileMoreActions.push(action)
