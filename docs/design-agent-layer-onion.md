@@ -405,7 +405,7 @@ public record PluginSkill(String id, String name, String description, List<Strin
 | **1（本次）洋葱底座** | plugin-api 节点契约（`TaskLifecycleNode`/`TaskLifecycleContext`/`TaskOutcome`/`TaskKernel`）+ `registerTaskLifecycleNode`；`TaskLifecycleRegistry`（float 排序）+ `TaskOnion`；17 个内置节点拆分（下行 4 + 上行 13，finish/runTask/rpcTaskRun 逻辑**逐字映射**，不改行为）；`runTask` 重写为洋葱执行；单测（下行顺序/否决短路/逆序收口/try-finally 必达/幂等/取消/停机中断收口/锁分段）；ARCHITECTURE.md 新 §7.x | worker 行为零变化（事件顺序、seq、落盘字节级兼容），可回归验证 |
 | **2 agent 层** | `dev.everyagent.worker.agent` 包收敛 + `AgentContext`/`AgentEventChannel` 解耦 + `AgentService` + `AgentDispatcher` 废止 + `SubAgentManager` 编排下沉 | agent 层边界成立（能力全部留在核心），其他插件可依赖 |
 | **3 subagent 插件** | 三件套迁移（工具 + SkillContributor + 前端面板）；plugin-api 新增 `SkillContributor` SPI + 注册表；BuiltInSkills 合并改造；web `ComposerPanelCtx` 扩展 `selectAgent`；app pom 挂载 + CI 一致性检查 | 删除插件 = 无子 agent 工具/skill/前端列表，agent 层完好 |
-| **4（未来）队列插件** | 排队节点（onStart 阻塞排队 / onEnd 出队广播）+ RPC 边缘预检扩展点 | 底座已就绪，不在本设计实施范围 |
+| **4（未来）队列插件** | 形态三成对节点（下行段 enqueue 阻塞排队 / finally 出队广播）+ RPC 边缘预检扩展点 | 底座已就绪，不在本设计实施范围 |
 
 ---
 
@@ -414,8 +414,8 @@ public record PluginSkill(String id, String name, String description, List<Strin
 | 风险 | 对策 |
 |---|---|
 | finish 拆节点后收口顺序/竞态回归 | 逆序不变量逐条对照（§3.3：收口序=进入序逆序=现状顺序）；锁分段等价论证（§3.3 锁策略）；补 onion 单测 + 全量 worker 测试回归 |
-| 再运行（startRerun）路径绕过洋葱 | 再运行的 track/seed/wire 逻辑同样走 `persistence.track`/`task.wires` onStart（复用同一节点实现，不另写一份） |
-| DataPusher 换日志时机变化 | track 仍由 `persistence.track`.onStart 调用；执行线程从 RPC 线程移到任务线程开头（外部可见行为不变：meta 最终一致、ctx.ok 应答仍即时） |
+| 再运行（startRerun）路径绕过洋葱 | 再运行的 track/seed/wire 逻辑同样走 `persistence.track`/`task.wires` 下行段（复用同一节点实现，不另写一份） |
+| DataPusher 换日志时机变化 | track 仍在 `persistence.track` 下行段执行；执行线程从 RPC 线程移到任务线程开头（外部可见行为不变：meta 最终一致、ctx.ok 应答仍即时） |
 | AgentEntity 解耦破坏事件语义（roundSeqs 同轮共享 seq） | AgentEventChannel 由 TaskEvents 直接 implements，seq 逻辑不动，只换接口面 |
 | 洋葱≠手搓 agent 循环的红线 | 内核调 AgentService→AgentRunner→ChatClient（Spring AI 工具循环）；洋葱只编排任务生命周期层 |
 | 并发会话冲突（git 插件迁移进行中） | Phase 1 不碰 plugin 模块与 app pom；`SubAgentManager` 仅改调用点不动文件位置 |
