@@ -56,7 +56,7 @@ class ExternalFileTokenResolverTest {
                 new WslUmounter(p, (argv, timeoutMs) -> 0));
         wm.init();
         // 测试宿主非 Windows → OsSandbox 后端恒 DIRECT(isWslDirect/isWslBwrap 均 false)
-        handler = new SlashTokenHandler(List.of(new ExternalFileTokenResolver(wm, new OsSandbox(p, wm))));
+        handler = new SlashTokenHandler(List.of(new ExternalFileTokenResolver(wm, new OsSandbox(p, wm, null))));
     }
 
     private static WorkerProperties props(Path home, Path data, Path defaultWs) {

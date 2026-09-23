@@ -2,6 +2,7 @@ package dev.everyagent.worker.os;
 
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.modules.WorkspaceManager;
+import dev.everyagent.worker.plugin.registry.SandboxProviderRegistry;
 import org.junit.jupiter.api.Test;
 
 import java.nio.file.Path;
@@ -64,7 +65,7 @@ class OsSandboxBackendTest {
         WorkspaceManager wm = mock(WorkspaceManager.class);
         when(wm.pruneStaleAndListMountRoots()).thenReturn(List.of(wsA, wsB, extA));
 
-        OsSandbox sandbox = new OsSandbox(new WorkerProperties(), wm);
+        OsSandbox sandbox = new OsSandbox(new WorkerProperties(), wm, null);
         assertEquals(List.of(wsA, wsB, extA), sandbox.wslDirectMountRoots(),
                 "直接透传 WorkspaceManager 清理后的存活列表");
     }
@@ -72,17 +73,17 @@ class OsSandboxBackendTest {
     @Test
     void wslDirectMountRootsDegenerateWithoutRegistry() {
         // 未初始化(无 WorkspaceManager)或注册表空:回退空表,不抛异常
-        assertEquals(List.of(), new OsSandbox(new WorkerProperties(), null).wslDirectMountRoots());
+        assertEquals(List.of(), new OsSandbox(new WorkerProperties(), null, null).wslDirectMountRoots());
         WorkspaceManager wm = mock(WorkspaceManager.class);
         when(wm.pruneStaleAndListMountRoots()).thenReturn(List.of());
-        assertEquals(List.of(), new OsSandbox(new WorkerProperties(), wm).wslDirectMountRoots());
+        assertEquals(List.of(), new OsSandbox(new WorkerProperties(), wm, null).wslDirectMountRoots());
     }
 
     @Test
     void wslDirectMountRootsDegenerateOnPruneFailure() {
         WorkspaceManager wm = mock(WorkspaceManager.class);
         when(wm.pruneStaleAndListMountRoots()).thenThrow(new RuntimeException("disk error"));
-        OsSandbox sandbox = new OsSandbox(new WorkerProperties(), wm);
+        OsSandbox sandbox = new OsSandbox(new WorkerProperties(), wm, null);
         assertEquals(List.of(), sandbox.wslDirectMountRoots(),
                 "清理异常时回退空表,不阻塞命令执行");
     }
