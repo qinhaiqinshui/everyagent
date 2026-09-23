@@ -11,6 +11,7 @@ import type {
   Disposable,
   TraceTypeDefinition,
   OutputBlockHandler,
+  FileExplorerAction,
 } from '@everyagent/plugin-api'
 import type {
   UiSidebarItemDefinition,
@@ -38,6 +39,8 @@ const traceTypes: TraceTypeDefinition[] = []
 const outputBlocks = new Map<string, OutputBlockHandler>()
 /** 插件注册的文件内容编辑器（如 PDF 插件）。 */
 const fileContentEditors: FileContentEditorDescriptor[] = []
+/** 插件注册的文件树右键菜单动作（如 git 插件的「显示 Git 历史」）。 */
+const fileExplorerActions: FileExplorerAction[] = []
 
 // ── Disposable 工具 ──
 
@@ -91,6 +94,14 @@ export interface RealPluginDispatcher {
   registerFileContentEditor: (def: FileContentEditorDescriptor) => Disposable
   /** 同步获取插件注册的文件内容编辑器列表（供编辑器注册表合并）。 */
   listRegisteredFileContentEditors: () => FileContentEditorDescriptor[]
+  /** 同步获取插件注册的侧边栏项列表（供活动栏合并）。 */
+  listRegisteredSidebarItems: () => UiSidebarItemDefinition[]
+  /** 同步获取插件注册的工作区标签类型列表（供标签注册表合并）。 */
+  listRegisteredWorkspaceTabTypes: () => UiWorkspaceTabTypeDefinition[]
+  /** 同步获取插件注册的文件树右键菜单动作列表（供右键菜单合并）。 */
+  listRegisteredFileExplorerActions: () => FileExplorerAction[]
+  /** 注册文件树右键菜单动作。 */
+  registerFileExplorerAction: (action: FileExplorerAction) => Disposable
 }
 
 export const pluginDispatcher: RealPluginDispatcher = {
@@ -113,6 +124,8 @@ export const pluginDispatcher: RealPluginDispatcher = {
         return taskFileMoreActions as T[]
       case 'ui.file_content_editors':
         return fileContentEditors as T[]
+      case 'ui.file_explorer_actions':
+        return fileExplorerActions as T[]
       default:
         return []
     }
@@ -190,5 +203,18 @@ export const pluginDispatcher: RealPluginDispatcher = {
   },
   listRegisteredFileContentEditors() {
     return [...fileContentEditors]
+  },
+  listRegisteredSidebarItems() {
+    return [...sidebarItems]
+  },
+  listRegisteredWorkspaceTabTypes() {
+    return [...workspaceTabTypes]
+  },
+  listRegisteredFileExplorerActions() {
+    return [...fileExplorerActions]
+  },
+  registerFileExplorerAction(action) {
+    fileExplorerActions.push(action)
+    return makeDisposable(fileExplorerActions, action)
   },
 }

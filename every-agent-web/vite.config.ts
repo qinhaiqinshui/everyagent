@@ -30,6 +30,7 @@ export default defineConfig({
       '@every-agent/client': resolve(__dirname, 'src/sdk'),
       '@everyagent/plugin-api': resolve(__dirname, '../every-agent-plugin-api/js/index.ts'),
       '@plugins': resolve(__dirname, '../every-agent-plugins'),
+      'antd': resolve(__dirname, 'node_modules/antd'),
     },
   },
   server: {

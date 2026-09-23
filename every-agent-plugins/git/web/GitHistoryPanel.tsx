@@ -1,5 +1,5 @@
 import React from 'react'
-import { gitGateway, GitNotInitializedError, type GitCommitFileChange } from '@/platform/git/gitGateway'
+import { gitGateway, GitNotInitializedError, type GitCommitFileChange } from './gitGateway'
 import { InlineSpinner } from '@/components/shared/ui'
 import { GitIcon } from '@/components/icon'
 import { useWorkspaceShell } from '@/components/app/WorkspaceShellContext'

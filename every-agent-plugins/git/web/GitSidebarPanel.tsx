@@ -25,13 +25,14 @@ import { useHub } from '@/hub/HubProvider'
 import { workspaceRegistry, type WorkspaceEntry } from '@/hub/workspaceRegistry'
 // antdConfirm 已随「移除工作区」入口下线而移除
 import { useWorkspaceShell } from '@/components/app/WorkspaceShellContext'
+import { setOpenPluginTabRef } from './index'
 import {
   gitGateway,
   GitNotInitializedError,
   GitAuthRequiredError,
   type GitCredential,
   type GitRemote,
-} from '@/platform/git/gitGateway'
+} from './gitGateway'
 import { workspaceGateway } from '@/platform/fs/workspaceGateway'
 import { domainEventBus, DOMAIN_EVENTS } from '@/events/eventBus'
 import SidebarScrollArea from '@/components/shared/SidebarScrollArea'
@@ -245,7 +246,8 @@ function GitWorkspaceGroupPanel({
 }) {
   const workspaceRoot = entry.root
   const hub = useHub()
-  const { openDiffTab } = useWorkspaceShell()
+  const { openDiffTab, openPluginTab } = useWorkspaceShell()
+  React.useEffect(() => { setOpenPluginTabRef(openPluginTab); return () => setOpenPluginTabRef(null) }, [openPluginTab])
   const { message, modal } = App.useApp()
   const [initialized, setInitialized] = React.useState<boolean | null>(null)
   const [status, setStatus] = React.useState<GitStatusResult | null>(null)

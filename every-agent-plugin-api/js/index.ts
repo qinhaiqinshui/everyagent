@@ -133,6 +133,8 @@ export interface UiSidebarItemDefinition {
   Panel: ComponentType
   /** 可选徽标数量（>0 时在活动栏图标上显示角标）。 */
   badgeCount?: number
+  /** 可选：活动栏角标渲染组件（插件自管订阅与刷新）。缺省不渲染角标。 */
+  Badge?: ComponentType
 }
 
 /** 壳层传给标签渲染 / 生命周期的上下文。 */
@@ -451,6 +453,37 @@ export interface PluginFileContentEditorDescriptor {
   Component: ComponentType<PluginFileContentEditorProps>
 }
 
+// ─── 文件树右键菜单扩展点 ─────────────────────────────────────────────────
+
+/** 文件树右键菜单上下文（与核心 WorkspaceExplorerContextTarget 对齐）。 */
+export interface FileExplorerActionContext {
+  /** 所属工作区根(worker 机器绝对路径)。 */
+  workspaceRoot: string
+  /** 节点路径(工作区相对)。 */
+  path: string
+  /** 节点名称。 */
+  name: string
+  /** 节点类型。 */
+  type: 'file' | 'directory'
+}
+
+/**
+ * 文件树右键菜单动作（由 `ui.file_explorer_actions` 扩展点产出）。
+ * 核心在构建右键菜单时收集所有注册项，按 isVisible 过滤后追加到内置菜单项尾部。
+ */
+export interface FileExplorerAction {
+  /** 全局唯一动作 id。 */
+  id: string
+  /** 菜单展示文案。 */
+  label: string
+  /** 可选图标（React 节点）。 */
+  icon?: ReactNode
+  /** 当前上下文下是否显示；缺省恒显示。 */
+  isVisible?: (ctx: FileExplorerActionContext) => boolean
+  /** 点击回调。 */
+  invoke?: (ctx: FileExplorerActionContext) => void
+}
+
 // ─── UI 注册表 ────────────────────────────────────────────────────────────
 
 export interface UiRegistry {
@@ -464,6 +497,7 @@ export interface UiRegistry {
   registerTraceType(def: TraceTypeDefinition): Disposable
   registerOutputBlock(tag: string, handler: OutputBlockHandler): Disposable
   registerFileContentEditor(def: PluginFileContentEditorDescriptor): Disposable
+  registerFileExplorerAction(action: FileExplorerAction): Disposable
 }
 
 // ─── PluginContext / PluginModule ─────────────────────────────────────────

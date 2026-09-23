@@ -88,7 +88,6 @@ function WorkspaceGroupPanel({
     openGlobalFileTab,
     renameFileTabs,
     setActiveSidebarPanel,
-    openGitHistoryTab,
     openTerminalTab,
   } = useWorkspaceShell()
   const { showToast } = useAppUi()
@@ -702,15 +701,6 @@ function WorkspaceGroupPanel({
     void reloadTree(showInternalFiles)
   }, [reloadTree, showInternalFiles])
 
-  /** 打开 Git 历史标签页（按路径 git log -- <path>，文件/目录均支持）。 */
-  const handleRequestGitHistory = React.useCallback((target: WorkspaceExplorerContextTarget) => {
-    openGitHistoryTab({
-      workspaceRoot: target.workspaceRoot,
-      // 资源树 node.path 是带前导 / 的业务绝对路径,git log 需要无前导 / 的工作区相对路径。
-      path: normalizeWorkspaceRelativePath(target.path),
-      name: target.name,
-    })
-  }, [openGitHistoryTab])
 
   const toggleInternalFiles = React.useCallback(() => {
     setShowInternalFiles((current) => !current)
@@ -791,12 +781,6 @@ function WorkspaceGroupPanel({
       label: '显示大小',
       onSelect: () => setMetaMode('size'),
     })
-    // 显示 Git 历史:打开主区历史标签页,按路径调原生 git log -- <path>。
-    items.push({
-      key: 'git-history',
-      label: '显示 Git 历史',
-      onSelect: () => handleRequestGitHistory(target),
-    })
     items.push({
       key: 'properties',
       label: '属性',
@@ -837,7 +821,7 @@ function WorkspaceGroupPanel({
       onSelect: () => handleRequestRevealInOs(target),
     })
    return items
-  }, [handleOpenFile, handleRequestCreate, handleRequestDownload, handleRequestGitHistory, handleRequestMove, handleRequestOpenTerminal, handleRequestProperties, handleRequestRenameTarget, handleRequestRevealInOs, handleRequestSearch, handleRequestUpload])
+  }, [handleOpenFile, handleRequestCreate, handleRequestDownload, handleRequestMove, handleRequestOpenTerminal, handleRequestProperties, handleRequestRenameTarget, handleRequestRevealInOs, handleRequestSearch, handleRequestUpload])
 
   const rootMoreActionItems = React.useMemo<MoreActionItem[]>(() => [
     {

@@ -3,7 +3,7 @@
  *
  * 职责保持 n 的边界:维护壳层 UI 状态(标签/侧边栏/滚动保持),业务数据
  * 读取留给子组件。相比 n 的变化:
- * - 启动台/日志/扩展页移除(运行时已下沉 worker);顶层页只剩 设置/Git;
+ * - 启动台/日志/扩展页移除(运行时已下沉 worker);顶层页只剩 设置;
  * - 任务入口从「启动台聚焦」改为直接打开任务聊天标签;
  * - 新建任务 = 打开草稿标签(见 TaskChat 的草稿态);
  * - 启动引导从浏览器运行时初始化(zero-FS bootstrap)换成 hub 连接。
@@ -23,7 +23,7 @@ import type {
 import { getAntdTheme } from '@/theme/antdTheme'
 import {
   FilesIcon,
-  GitIcon,
+  
   SearchSidebarIcon,
   SettingsIcon,
   TaskChatIcon,
@@ -55,7 +55,6 @@ import {
   createWorkspacePluginTab,
   createWorkspaceDiffTab,
   createWorkspacePageTab,
-  createWorkspaceGitHistoryTab,
   filterWorkspaceTabs,
   removeWorkspaceTab,
   upsertWorkspaceTab,
@@ -68,12 +67,10 @@ import { randomUUID } from '@/utils/uuid'
 import { taskStore } from '@/hub/taskStore'
 import { taskStreamManager } from '@/hub/taskStream'
 import { workspaceRegistry } from '@/hub/workspaceRegistry'
-import { gitGateway } from '@/platform/git/gitGateway'
 import { DRAFT_TASK_ID, setDraftPreset } from '@/components/task/taskChatDraft'
 
 const LazyTasksPanel = createLazyRouteComponent(() => import('@/components/task/TasksPanel'))
 const LazyOpenFilesSidebarPanel = createLazyRouteComponent(() => import('@/components/files/OpenFilesSidebarPanel'))
-const LazyGitSidebarPanel = createLazyRouteComponent(() => import('@/components/git/GitSidebarPanel'))
 const LazySearchSidebarPanel = createLazyRouteComponent(() => import('@/components/search/SearchSidebarPanel'))
 
 /**
@@ -122,7 +119,6 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
 
   const [sidebarOpen, setSidebarOpen] = React.useState(false)
   const [activeSidebarPanelId, setActiveSidebarPanelId] = React.useState<SidebarPanelId>('tasks')
-  const [gitChangeCount, setGitChangeCount] = React.useState(0)
   const [desktopSidebarWidth, setDesktopSidebarWidth] = React.useState(264)
   const [mobileSidebarHeight, setMobileSidebarHeight] = React.useState(() => getMobileSidebarDefaultHeight())
   const [workspaceTabs, setWorkspaceTabs] = React.useState<WorkspaceTab[]>([])
@@ -216,50 +212,12 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
   }, [])
 
   /**
-   * 活动栏「源代码管理」徽标:全部注册工作区变更数之和(D16 无"当前工作区";
-   * 未初始化/未连 worker 归零,单根失败按 0)。面板自身持有完整 status,
-   * 此处只取计数供活动栏角标,不重复渲染 diff。
-   */
-  React.useEffect(() => {
-    let cancelled = false
-    const refreshGitBadge = async () => {
-      const roots = workspaceRegistry.current?.workspaces.map((entry) => entry.root) ?? []
-      if (roots.length === 0 || !connected || !hasWorker) {
-        if (!cancelled) setGitChangeCount(0)
-        return
-      }
-      try {
-        const counts = await Promise.all(roots.map(async (root) => {
-          try {
-            const status = await gitGateway.status(root)
-            return (['added', 'changed', 'modified', 'removed', 'missing', 'untracked', 'conflicting'] as const)
-              .reduce((sum, key) => sum + (status[key]?.length ?? 0), 0)
-          } catch {
-            return 0
-          }
-        }))
-        if (cancelled) return
-        setGitChangeCount(counts.reduce((sum, count) => sum + count, 0))
-      } catch {
-        if (!cancelled) setGitChangeCount(0)
-      }
-    }
-    void refreshGitBadge()
-    const unsubRegistry = domainEventBus.subscribe(DOMAIN_EVENTS.WORKSPACE_REGISTRY_CHANGED, () => {
-      void refreshGitBadge()
-    })
-    return () => {
-      cancelled = true
-      unsubRegistry()
-    }
-  }, [connected, hasWorker, hub.reconnectVersion])
 
   /** 首屏渲染后空闲预加载后续页面资源。 */
   React.useEffect(() => (
     scheduleLazyRoutePreload([
       LazyTasksPanel.preload,
       LazyOpenFilesSidebarPanel.preload,
-      LazyGitSidebarPanel.preload,
       LazySearchSidebarPanel.preload,
       () => import('@/components/system/SettingsPanel'),
       () => import('@/components/files/FileTabPage'),
@@ -268,7 +226,7 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
   ), [])
 
   React.useEffect(() => {
-    const validPanelIds = new Set<SidebarPanelId>(['tasks', 'files', 'git', 'search'])
+    const validPanelIds = new Set<SidebarPanelId>(['tasks', 'files', 'search'])
     if (!validPanelIds.has(activeSidebarPanelId)) {
       setActiveSidebarPanelId('tasks')
     }
@@ -504,24 +462,6 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
     return nextTab.id
   }, [openWorkspaceTab])
 
-  const openGitHistoryTab = React.useCallback((input: {
-    workspaceRoot: string
-    path: string
-    name: string
-    title?: string
-  }): string => {
-    const tabTitle = input.title && input.title.trim()
-      ? input.title.trim()
-      : `Git 历史：${input.name}`
-    const nextTab = createWorkspaceGitHistoryTab({
-      workspaceRoot: input.workspaceRoot,
-      path: input.path,
-      name: input.name,
-      title: tabTitle,
-    })
-    openWorkspaceTab(nextTab)
-    return nextTab.id
-  }, [openWorkspaceTab])
 
   const openTerminalTab = React.useCallback((input: {
     workspaceRoot: string
@@ -784,7 +724,6 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
     openTaskChatTab,
     openPluginTab,
     openDiffTab,
-    openGitHistoryTab,
     openTerminalTab,
   }), [
     activeSidebarPanelId,
@@ -796,7 +735,6 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
     openGlobalFileTab,
     openPluginTab,
     openDiffTab,
-    openGitHistoryTab,
     openTerminalTab,
     renameFileTabs,
     selectedFilePath,
@@ -815,7 +753,7 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
   ])
 
   const activeActivityItemIds = React.useMemo(() => {
-    const nextIds: Array<SidebarPanelId | 'git' | 'settings'> = []
+    const nextIds: Array<SidebarPanelId | 'settings'> = []
     if (sidebarOpen) {
       nextIds.push(activeSidebarPanelId)
     }
@@ -890,7 +828,6 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
                 openTopLevelPage('settings')
                 return
               }
-              // git 与 tasks/files 一样是侧边栏面板(源代码管理),点击切换面板而非开页面。
               const nextPanelId = itemId as SidebarPanelId
               if (activeSidebarPanelId === nextPanelId) {
                 setSidebarOpen(!sidebarOpen)
@@ -927,9 +864,6 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
               </SidebarPanelHost>
               <SidebarPanelHost panelId="search" visible={activeSidebarPanelId === 'search'}>
                 <LazySearchSidebarPanel />
-              </SidebarPanelHost>
-              <SidebarPanelHost panelId="git" visible={activeSidebarPanelId === 'git'}>
-                <LazyGitSidebarPanel embedded />
               </SidebarPanelHost>
             </div>
           </ResizableSidebarContainer>
@@ -1001,14 +935,13 @@ function renderWorkspaceTabContent(
 }
 
 /** 侧边栏各面板图标(id)的选中态必须互斥,只由当前展开的面板决定。 */
-const SIDEBAR_PANEL_ACTIVITY_IDS: ReadonlySet<string> = new Set(['tasks', 'files', 'git', 'search'])
+const SIDEBAR_PANEL_ACTIVITY_IDS: ReadonlySet<string> = new Set(['tasks', 'files', 'search'])
 
 function buildSidebarActivityItems(openTopLevelPageIds: TopLevelPageId[]) {
   return [
     { id: 'tasks', label: '任务', icon: <TaskChatIcon /> },
     { id: 'files', label: '文件', icon: <FilesIcon /> },
     { id: 'search', label: '搜索', icon: <SearchSidebarIcon /> },
-    { id: 'git', label: '源代码管理', icon: <GitIcon /> },
     { id: 'settings', label: '设置', icon: <SettingsIcon />, badgeCount: openTopLevelPageIds.includes('settings') ? 1 : undefined },
   ]
 }

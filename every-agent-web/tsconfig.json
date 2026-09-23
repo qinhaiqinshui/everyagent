@@ -22,6 +22,8 @@
       "@everyagent/plugin-api": ["../every-agent-plugin-api/js/index.ts"],
       "@plugins/*": ["../every-agent-plugins/*"],
       "react": ["./node_modules/@types/react"],
+      "antd": ["./node_modules/antd"],
+      "antd/*": ["./node_modules/antd/*"],
       "react/jsx-runtime": ["./node_modules/@types/react/jsx-runtime"]
     }
   },

@@ -230,7 +230,7 @@ export function replaceComposerTokensForSubmission(
  * 单个 token 的提交替换文本（解析 opaque → 交注册中心按 kind 解析）。
  * - 未知 kind（注册中心未登记）：保留原始 opaque 串作为兜底，避免泄漏半成品 token；
  * - 已知 kind：以 resolver 的返回为准——返回空串即「清空该 token」，不给 AI 任何文本
- *   （如 git.auto_sync 仅是节点侧触发标记，应当被清空而非注入提示文本）。
+ *   。
  */
 function resolveTokenReplacement(opaqueText: string): string {
   const parsed = parseOpaqueTokenText(opaqueText)
