@@ -1,41 +1,26 @@
 package dev.everyagent.worker;
 
-import dev.everyagent.worker.config.WorkerProperties;
-import dev.everyagent.worker.modules.GitService;
-import dev.everyagent.worker.modules.WorkspaceManager;
 import dev.everyagent.worker.os.OsSandbox;
+import dev.everyagent.worker.plugin.AdvisorContextImpl;
+import dev.everyagent.worker.plugin.registry.AdvisorProviderRegistry;
 import dev.everyagent.worker.skill.BuiltInSkills;
 import dev.everyagent.worker.skill.SkillAdvisor;
-import dev.everyagent.worker.skill.SlashTokenResolveAdvisor;
-import dev.everyagent.worker.slash.SlashTokenHandler;
 import dev.everyagent.worker.task.AgentCancelledException;
 import dev.everyagent.worker.task.AgentEntity;
-import dev.everyagent.worker.task.AgentsMdAdvisor;
 import dev.everyagent.worker.task.ChatModelFactory;
-import dev.everyagent.worker.task.ContextCompressionAdvisor;
-import dev.everyagent.worker.task.ContextSummarizer;
-import dev.everyagent.worker.task.DialogInsertAdvisor;
-import dev.everyagent.worker.task.EmptyResponseRetryAdvisor;
-import dev.everyagent.worker.task.FileChangeAdvisor;
-import dev.everyagent.worker.task.GitAutoSyncAdvisor;
-import dev.everyagent.worker.task.LlmContextSummarizer;
-import dev.everyagent.worker.task.LoopRepeatGuardAdvisor;
-import dev.everyagent.worker.task.ModelLengthGuardAdvisor;
 import dev.everyagent.worker.task.ModelPoolChatModel;
-import dev.everyagent.worker.task.RoundIndexAdvisor;
-import dev.everyagent.worker.task.RoundIndexStore;
-import dev.everyagent.worker.task.SystemInfoAdvisor;
-import dev.everyagent.worker.task.TaskStore;
-import dev.everyagent.worker.task.TransientErrorRetryAdvisor;
 import dev.everyagent.worker.task.WorkerToolEventAdvisor;
 import dev.everyagent.worker.tools.MissingToolCallbackResolver;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.client.advisor.api.Advisor;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.model.tool.ToolCallingManager;
 import org.springframework.ai.tool.execution.ToolExecutionException;
 import org.springframework.ai.tool.execution.ToolExecutionExceptionProcessor;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+
+import java.util.List;
 
 /**
  * worker 的 {@link ChatClient} 装配入口(架构 §5.2 + 红线:主/子 Agent 共用同一运行入口,
@@ -76,24 +61,12 @@ import org.springframework.context.annotation.Configuration;
 @Configuration
 public class AgentClientFactory {
 
-    private final WorkerProperties props;
-    private final GitService gitService;
-    private final WorkspaceManager workspaces;
-    private final SlashTokenHandler slashTokenHandler;
-    private final TaskStore taskStore;
-    private final RoundIndexStore roundIndexStore;
     private final OsSandbox osSandbox;
+    private final AdvisorProviderRegistry advisorRegistry;
 
-    public AgentClientFactory(WorkerProperties props, GitService gitService, WorkspaceManager workspaces,
-            SlashTokenHandler slashTokenHandler, TaskStore taskStore,
-            RoundIndexStore roundIndexStore, OsSandbox osSandbox) {
-        this.props = props;
-        this.gitService = gitService;
-        this.workspaces = workspaces;
-        this.slashTokenHandler = slashTokenHandler;
-        this.taskStore = taskStore;
-        this.roundIndexStore = roundIndexStore;
+    public AgentClientFactory(OsSandbox osSandbox, AdvisorProviderRegistry advisorRegistry) {
         this.osSandbox = osSandbox;
+        this.advisorRegistry = advisorRegistry;
     }
 
 
@@ -140,86 +113,46 @@ public class AgentClientFactory {
     }
 
     /**
-     * 主 agent 的 ChatClient:挂 轮次索引(含任务耗时) + 文件改动收集 + 环境信息 + skill + 事件
-     * (含死循环检测) + 重试双 advisor。容灾在模型层:任务 configId 为池配置时 a.chatModel 即
-     * ModelPoolChatModel。工具集走 {@code a.tools}(prompt options.toolCallbacks),不在此
-     * defaultTools 重复注册。
-     * <p>顺序(由 getOrder 决定,非列表序):RoundIndexAdvisor(HIGHEST_PRECEDENCE+10,最外层,
-     * 每轮用户任务流 doOnComplete 后增量补写 rounds.jsonl 轮次索引,<b>本轮耗时</b>由开轮时
-     * 随行落盘的 startedAt 从磁盘计算并随闭合行内联,不再内存计时,仅主 agent)→
-     * SystemInfoAdvisor(+50,注入工作区/OS 环境信息)→ AgentsMdAdvisor(+60,读取工作区
-     * agents.md 注入约束)→ SkillAdvisor(+100,注入 skill 渐进式披露索引)→ GitAutoSyncAdvisor(+140,读取本轮 /自动同步 标记,任务收口后触发
-     * git 同步)→ SlashTokenResolveAdvisor(+150,统一按 kind 解析/剥离 input 里的 opaque
-     * token,透传 a.task 供任务感知 kind(如 system.external_file 注册外部授权根)使用)→
-     * LoopRepeatGuardAdvisor(+300,事件发射 + 工具循环 + 死循环检测)→
-     * DialogInsertAdvisor(+330,普通 StreamAdvisor,工具循环内侧下行阶段:把任务队列「插入
-     * 到当前对话」的用户消息 drain 并追加到 instructions,随工具结果一起提交给 AI)→
-     * FileChangeAdvisor(+301,内层普通 advisor:doOnNext 直接看模型流——工具轮为模型层合并后的
-     * 完整消息,检查 update_file/create_file 记录文件改动,「本轮无工具调用」的最终回答轮收口把
-     * 轻量摘要/全文填充到 TaskEntry 槽,由 RoundIndexAdvisor 随轮落盘)→ EmptyResponseRetryAdvisor(循环内侧,空响应重调)→
-     * TransientErrorRetryAdvisor(瞬时错误退避)→ ContextCompressionAdvisor(最内层,每轮模型
-     * 请求前按窗口阈值压缩上下文;请求/响应日志均由 HTTP 层 {@link HttpRequestLoggingInterceptor}
-     * 打印,子 agent 不挂 skill 与耗时(见 {@link #forSub})。
+     * 主 agent 的 ChatClient:从 {@link AdvisorProviderRegistry#getForMain()} 聚合 Advisor
+     * (按 {@link dev.everyagent.worker.plugin.spi.AdvisorProvider#order()} 排序),
+     * 替代原硬编码的 13 个 Advisor 创建与顺序。Advisor 的创建逻辑、顺序、参数由各
+     * {@link dev.everyagent.worker.plugin.spi.AdvisorProvider} 适配器封装,行为零变化。
+     *
+     * <p>容灾在模型层:任务 configId 为池配置时 a.chatModel 即 ModelPoolChatModel。
+     * 工具集走 {@code a.tools}(prompt options.toolCallbacks),不在此 defaultTools 重复注册。
      */
-    public ChatClient forMain(AgentEntity a, SkillAdvisor skillAdvisor, ToolCallingManager tcm) {
+    public ChatClient forMain(AgentEntity a, ToolCallingManager tcm) {
+        AdvisorContextImpl ctx = new AdvisorContextImpl(a, tcm);
+        List<Advisor> advisors = advisorRegistry.getForMain().stream()
+                .filter(p -> p.appliesTo(ctx))
+                .map(p -> p.create(ctx))
+                .toList();
         return ChatClient.builder(a.chatModel)
-                .defaultAdvisors(
-                        new RoundIndexAdvisor(a, taskStore, roundIndexStore),
-                        new SystemInfoAdvisor(a.task.workspaceRoot, osSandbox.isWslBackend(), osSandbox.isWslDirect()),
-                        new AgentsMdAdvisor(a.task.workspaceRoot),
-                        skillAdvisor,
-                        new GitAutoSyncAdvisor(a, gitService),
-                        new SlashTokenResolveAdvisor(slashTokenHandler, a.task),
-                        newLoopGuardedAdvisor(a, tcm),
-                        new DialogInsertAdvisor(a, slashTokenHandler),
-                        new FileChangeAdvisor(a),
-                        new EmptyResponseRetryAdvisor(a, props.getRetry()),
-                        new TransientErrorRetryAdvisor(a, props.getRetry()),
-                        new ModelLengthGuardAdvisor(a, props),
-                        newContextCompressionAdvisor(a))
+                .defaultAdvisors(advisors)
                 .build();
     }
 
     /**
-     * 子 agent 的 ChatClient:事件(含死循环检测 + 文件改动记录)+ 重试双 advisor
-     * + 上下文压缩(不挂 skill、不挂派发工具、不注册 ask_user;容灾在模型层——任务 configId 为池配置时
-     * a.chatModel 即 ModelPoolChatModel,子 agent 同样自动换池容灾;无人值守为任务级开关,
-     * 由 UnattendedAskUserCallback 装饰器在 ask_user 执行瞬间拦截——子 agent 本就不注册
-     * ask_user,装饰器无触发点;上下文压缩同样最内层每轮生效。子 agent 的 FileChangeAdvisor
-     * 只记录文件改动到共享回合槽,不写 trace——任务级文件变更由主 agent 统一收口填充槽并随轮
-     * 落盘。DialogInsertAdvisor 子 agent 同挂但按 kind 旁路(不接收任务队列用户输入))。
+     * 子 agent 的 ChatClient:从 {@link AdvisorProviderRegistry#getForSub()} 聚合 Advisor
+     * (按 {@link dev.everyagent.worker.plugin.spi.AdvisorProvider#order()} 排序)。
+     *
+     * <p>子 agent 不挂 skill、不挂派发工具、不注册 ask_user;容灾在模型层——任务 configId
+     * 为池配置时 a.chatModel 即 ModelPoolChatModel,子 agent 同样自动换池容灾。子 agent 的
+     * FileChangeAdvisor 只记录文件改动到共享回合槽,DialogInsertAdvisor 按 kind 旁路。
      */
     public ChatClient forSub(AgentEntity a, ToolCallingManager tcm) {
+        AdvisorContextImpl ctx = new AdvisorContextImpl(a, tcm);
+        List<Advisor> advisors = advisorRegistry.getForSub().stream()
+                .filter(p -> p.appliesTo(ctx))
+                .map(p -> p.create(ctx))
+                .toList();
         return ChatClient.builder(a.chatModel)
-                .defaultAdvisors(
-                        new SystemInfoAdvisor(a.task.workspaceRoot, osSandbox.isWslBackend(), osSandbox.isWslDirect()),
-                        new AgentsMdAdvisor(a.task.workspaceRoot),
-                        newLoopGuardedAdvisor(a, tcm),
-                        new DialogInsertAdvisor(a, slashTokenHandler),
-                        new FileChangeAdvisor(a),
-                        new EmptyResponseRetryAdvisor(a, props.getRetry()),
-                        new TransientErrorRetryAdvisor(a, props.getRetry()),
-                        new ModelLengthGuardAdvisor(a, props),
-                        newContextCompressionAdvisor(a))
+                .defaultAdvisors(advisors)
                 .build();
     }
 
-    /** 工具循环 + 事件发射 + 死循环检测 advisor(每 run 新建,状态随实例物化隔离)。 */
-    private LoopRepeatGuardAdvisor newLoopGuardedAdvisor(AgentEntity a, ToolCallingManager tcm) {
-        return new LoopRepeatGuardAdvisor(tcm, a, props.getLimits().getMaxRepeatedToolRounds());
-    }
-
-    /** 上下文压缩 advisor(主/子 agent 同挂):开启摘要时注入 LLM 摘要器,否则传 null 走确定性降级。 */
-    private ContextCompressionAdvisor newContextCompressionAdvisor(AgentEntity a) {
-        WorkerProperties.Limits limits = props.getLimits();
-        ContextSummarizer summarizer = limits.isContextSummaryEnabled()
-                ? new LlmContextSummarizer(a.chatModel, limits.getContextSummaryMaxTokens())
-                : null;
-        return new ContextCompressionAdvisor(a, limits, summarizer);
-    }
-
     /** 按 Kind 分派:主挂 skill+事件,子仅事件(与 nagent 一致)。 */
-    public ChatClient forAgent(AgentEntity a, SkillAdvisor skillAdvisor, ToolCallingManager tcm) {
-        return a.kind == AgentEntity.Kind.SUB ? forSub(a, tcm) : forMain(a, skillAdvisor, tcm);
+    public ChatClient forAgent(AgentEntity a, ToolCallingManager tcm) {
+        return a.kind == AgentEntity.Kind.SUB ? forSub(a, tcm) : forMain(a, tcm);
     }
 }

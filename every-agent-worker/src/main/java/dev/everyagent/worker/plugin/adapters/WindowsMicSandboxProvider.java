@@ -1,0 +1,36 @@
+package dev.everyagent.worker.plugin.adapters;
+
+import dev.everyagent.worker.plugin.spi.SandboxBackend;
+import dev.everyagent.worker.plugin.spi.SandboxProvider;
+
+/**
+ * windows-mic 后端提供者。
+ *
+ * <p>id="windows-mic"，isAvailable 仅 Windows 返回 true，
+ * priority=5（auto 模式下最低优先级，作为 wsl 系列不可用时的兜底）。
+ */
+public final class WindowsMicSandboxProvider implements SandboxProvider {
+
+    private static final boolean WINDOWS =
+            System.getProperty("os.name").toLowerCase(java.util.Locale.ROOT).contains("win");
+
+    @Override
+    public String id() {
+        return "windows-mic";
+    }
+
+    @Override
+    public boolean isAvailable() {
+        return WINDOWS;
+    }
+
+    @Override
+    public int priority() {
+        return 5;
+    }
+
+    @Override
+    public SandboxBackend create(SandboxConfig config) {
+        return new WindowsMicSandboxBackend(config.props());
+    }
+}

@@ -12,6 +12,10 @@ import dev.everyagent.worker.tools.PermissionGate;
 import dev.everyagent.worker.tools.PowerShellTool;
 import dev.everyagent.worker.tools.RipgrepBinary;
 import dev.everyagent.worker.os.OsSandbox;
+import dev.everyagent.worker.modules.WorkspaceManager;
+import dev.everyagent.worker.plugin.ToolContextImpl;
+import dev.everyagent.worker.plugin.registry.ToolProviderRegistry;
+import dev.everyagent.worker.plugin.spi.ToolProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.messages.SystemMessage;
@@ -56,11 +60,13 @@ public class SubAgentManager {
     private final PermissionGate gate;
     private final RipgrepBinary rgbin;
     private final ConfigStore configStore;
+    private final WorkspaceManager workspaces;
+    private final ToolProviderRegistry toolProviderRegistry;
     private final java.util.concurrent.ExecutorService vt = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();
 
     public SubAgentManager(ChatModelFactory modelFactory, AgentRunner runner, WorkerProperties props,
             PendingAsks asks, FsToolSupport fs, OsSandbox sandbox, PermissionGate gate, RipgrepBinary rgbin,
-            ConfigStore configStore) {
+            ConfigStore configStore, WorkspaceManager workspaces, ToolProviderRegistry toolProviderRegistry) {
         this.modelFactory = modelFactory;
         this.runner = runner;
         this.props = props;
@@ -70,6 +76,8 @@ public class SubAgentManager {
         this.gate = gate;
         this.rgbin = rgbin;
         this.configStore = configStore;
+        this.workspaces = workspaces;
+        this.toolProviderRegistry = toolProviderRegistry;
     }
 
     /**
@@ -432,27 +440,15 @@ public class SubAgentManager {
         }
         // 子 agent 工具集不含 run_agent 等(结构上禁止递归);tool.result 事件由 AgentRunner 统一发射
         // 子 agent 不注册 ask_user:提问只能由主 agent 发起,子 agent 通过返回结果向上传递信息
+        // 工具装配改为从 ToolProviderRegistry 聚合(替代硬编码 new FileTools / new BashTool / ...)
+        // per-task 上下文封装:taskId、agentId、workspaceRoot、sandbox、gate、workspaces、rgBinary、TaskEntry
+        ToolContextImpl ctx = new ToolContextImpl(task.taskId, agentId,
+                java.nio.file.Path.of(task.workspaceRoot), sandbox, gate, workspaces,
+                rgbin.path(), task);
         List<ToolCallback> tools = new ArrayList<>();
-        // 文件工具(file,与主线一致;子 agent 不含 run_agent 等;授权按 taskId 与主 agent 共享)
-        for (ToolCallback c : ToolCallbacks.from(new FileTools(fs, task, agentId))) {
-            tools.add(c);
-        }
-        // 真实 OS 进程命令执行器(非工具):与主线一致,授权检查 + OsSandbox 隔离
-        // rg 二进制所在目录随 bash/powershell 子进程注入命令 PATH(缺失时传 null 不注入)
-        java.nio.file.Path rg = rgbin.path();
-        CommandExecutor exec = new CommandExecutor(sandbox, task, gate, agentId,
-                rg != null ? rg.getParent() : null);
-        // 平台化命令执行工具:与主线一致,按沙箱后端选方言(wsl-bwrap → bash,windows-mic → powershell)
-        if (isWindows() && !sandbox.registerBashTool()) {
-            tools.add(new PowerShellTool(exec).toolCallback());
-        } else {
-            for (ToolCallback c : ToolCallbacks.from(new BashTool(exec))) {
-                tools.add(c);
-            }
-            // 任务级「启用 powershell」(与主线一致):bash 之外追加 PowerShellTool,
-            // 命令回宿主 Windows 原生沙箱(windows-mic 语义)执行。
-            if (task.powershellEnabled) {
-                tools.add(new PowerShellTool(exec).toolCallback());
+        for (ToolProvider p : toolProviderRegistry.getForSub()) {
+            if (p.appliesTo(ctx)) {
+                tools.addAll(p.createTools(ctx));
             }
         }
         // 模型装配:普通模型 → OpenAiChatModel;provider=model-pool → ModelPoolChatModel(自动容灾)。

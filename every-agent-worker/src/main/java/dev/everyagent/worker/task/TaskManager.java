@@ -31,6 +31,9 @@ import dev.everyagent.worker.tools.PowerShellTool;
 import dev.everyagent.worker.tools.RipgrepBinary;
 import dev.everyagent.worker.tools.SubAgentTools;
 import dev.everyagent.worker.os.OsSandbox;
+import dev.everyagent.worker.plugin.ToolContextImpl;
+import dev.everyagent.worker.plugin.registry.ToolProviderRegistry;
+import dev.everyagent.worker.plugin.spi.ToolProvider;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
@@ -95,6 +98,7 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
     private final RipgrepBinary rgbin;
     private final SlashCommandRegistry slashRegistry;
     private final RoundIndexStore roundIndexStore;
+    private final ToolProviderRegistry toolProviderRegistry;
     /** 工作区最后活动时间跟踪(任务收口时刷新,前端按最近活动倒序渲染)。 */
     private final dev.everyagent.worker.modules.WorkspaceActivityTracker activityTracker;
     /** 外部 skill 扫描器(skill.reload RPC 热加载入口)。 */
@@ -128,7 +132,8 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
             FsToolSupport fs, OsSandbox sandbox, TaskStore store, PermissionGate gate, RipgrepBinary rgbin,
             SlashCommandRegistry slashRegistry, RoundIndexStore roundIndexStore,
             dev.everyagent.worker.modules.WorkspaceActivityTracker activityTracker,
-            dev.everyagent.worker.skill.ExternalSkillScanner externalSkillScanner) {
+            dev.everyagent.worker.skill.ExternalSkillScanner externalSkillScanner,
+            ToolProviderRegistry toolProviderRegistry) {
         this.pool = pool;
         this.configs = configs;
         this.modelFactory = modelFactory;
@@ -145,6 +150,7 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
         this.rgbin = rgbin;
         this.slashRegistry = slashRegistry;
         this.roundIndexStore = roundIndexStore;
+        this.toolProviderRegistry = toolProviderRegistry;
         this.activityTracker = activityTracker;
         this.externalSkillScanner = externalSkillScanner;
     }
@@ -1803,41 +1809,17 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
         // 渐进式披露:内置 skill 知识包由 BuiltInSkills 启动时物化到系统技能目录(§5.10),
         // 不在任务侧重复物化;AI 按需按绝对路径 read_file 读取(系统技能目录只读放行)。
         ResolvedConfig cfg = resolveAgentConfig(t);
+        // 工具装配改为从 ToolProviderRegistry 聚合(替代硬编码 new AskUserTool / new BashTool / ...)
+        // per-task 上下文封装:taskId、agentId、workspaceRoot、sandbox、gate、workspaces、rgBinary、TaskEntry
+        ToolContextImpl ctx = new ToolContextImpl(t.taskId, t.mainAgentId,
+                java.nio.file.Path.of(t.workspaceRoot), sandbox, gate, workspaces,
+                rgbin.path(), t);
         List<ToolCallback> tools = new ArrayList<>();
-        for (ToolCallback c : ToolCallbacks.from(new AskUserTool(asks, props, t, t.mainAgentId))) {
-            // 无人值守拦截装饰器(任务级开关):t.unattended=true 时 ask_user 被短路,
-            // 直接回传合成文本「当前无人值守,请按你推荐的实现。」;false 时透传真实挂起。
-            tools.add(new UnattendedAskUserCallback(c, t));
-        }
-        for (ToolCallback c : ToolCallbacks.from(new SubAgentTools(subs, t))) {
-            tools.add(c);
-        }
-        // 文件工具(file,移植自 novel_agent-n;工作区外访问经 PermissionGate 授权)
-        for (ToolCallback c : ToolCallbacks.from(new FileTools(fs, t, t.mainAgentId))) {
-            tools.add(c);
-        }
-        // 真实 OS 进程命令执行器(非工具):授权检查 + OsSandbox 降权隔离(Windows 套 Job Object + Restricted Token)
-        // rg 二进制所在目录随 bash/powershell 子进程注入命令 PATH(缺失时传 null 不注入)
-        java.nio.file.Path rg = rgbin.path();
-        CommandExecutor exec = new CommandExecutor(sandbox, t, gate, t.mainAgentId,
-                rg != null ? rg.getParent() : null);
-        // 平台化命令执行工具:按沙箱后端选方言——wsl-bwrap(命令进 WSL 发行版,bash)与
-        // Linux/macOS 注册 bash;windows-mic 回退后端注册 powershell(描述动态注入系统默认编码提示)
-        if (isWindows() && !sandbox.registerBashTool()) {
-            tools.add(new PowerShellTool(exec).toolCallback());
-        } else {
-            for (ToolCallback c : ToolCallbacks.from(new BashTool(exec))) {
-                tools.add(c);
-            }
-            // 任务级「启用 powershell」(仅 WSL+Linux 后端有该斜杠条目):bash 之外追加
-            // PowerShellTool——命令回宿主 Windows 原生沙箱(windows-mic 语义)执行,
-            // 让 AI 同时拥有 powershell 与 bash;windows-mic 后端无此开关,
-            // PowerShellTool 已在上方独占注册,不会重复。
-            if (t.powershellEnabled) {
-                tools.add(new PowerShellTool(exec).toolCallback());
+        for (ToolProvider p : toolProviderRegistry.getForMain()) {
+            if (p.appliesTo(ctx)) {
+                tools.addAll(p.createTools(ctx));
             }
         }
-        // M5:fs/git 模型工具在此追加;tool.result 事件由 AgentRunner 统一发射
         // 模型装配:普通模型 → OpenAiChatModel;provider=model-pool → ModelPoolChatModel(自动容灾)。
         // Agent 请求 options 基底:普通 = 自身快照,池 = 首成员(主模型)快照(上下文压缩等 advisor 据此读参数)。
         ChatModelFactory.AgentModel am = modelFactory.buildAgentModel(cfg, t.mainAgentId, t.events, null);

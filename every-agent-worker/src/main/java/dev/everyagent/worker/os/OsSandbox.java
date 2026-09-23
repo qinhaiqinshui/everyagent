@@ -4,6 +4,9 @@ import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.os.windows.WindowsSandbox;
 import dev.everyagent.worker.os.wsl.WslBwrapSandbox;
 import dev.everyagent.worker.os.wsl.WslDirectSandbox;
+import dev.everyagent.worker.plugin.registry.SandboxProviderRegistry;
+import dev.everyagent.worker.plugin.spi.SandboxBackend;
+import dev.everyagent.worker.plugin.spi.SandboxProvider.SandboxConfig;
 
 import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
@@ -48,7 +51,7 @@ import java.util.concurrent.TimeoutException;
  * 仅剥离代理 env,真网络隔离做不到——这是两后端的能力差异,与语言无关。
  */
 @Component
-public final class OsSandbox {
+public final class OsSandbox implements SandboxBackend {
 
     private static final Logger log = LoggerFactory.getLogger(OsSandbox.class);
 
@@ -88,6 +91,12 @@ public final class OsSandbox {
     /** 后端解析结果(启动 @PostConstruct 即解析一次并打印,worker 生命周期内不重探;探测含冷启动 VM,代价不小)。 */
     private volatile Backend resolved;
 
+    /** SPI 沙箱后端委托（从 SandboxProviderRegistry 选择；null = 无可用后端,退化为直接 spawn）。 */
+    private volatile SandboxBackend delegate;
+
+    /** SPI 沙箱提供者注册表。 */
+    private final SandboxProviderRegistry sandboxRegistry;
+
     /** 停机:关闭虚拟线程池与管道读取池。 */
     @jakarta.annotation.PreDestroy
     void shutdown() {
@@ -96,10 +105,12 @@ public final class OsSandbox {
     }
 
     public OsSandbox(WorkerProperties props,
-            dev.everyagent.worker.modules.WorkspaceManager workspaces) {
+            dev.everyagent.worker.modules.WorkspaceManager workspaces,
+            SandboxProviderRegistry sandboxRegistry) {
         this.props = props;
         this.cfg = props.getSandbox();
         this.workspaces = workspaces;
+        this.sandboxRegistry = sandboxRegistry;
     }
 
     /**
@@ -111,6 +122,25 @@ public final class OsSandbox {
     @PostConstruct
     void logBackendAtStartup() {
         Backend b = backend();
+        // 从 SPI 注册表选择后端委托（解析后的 type 确保与 backend() 一致）
+        if (b != Backend.DIRECT && cfg.isEnabled()) {
+            String backendType = switch (b) {
+                case WSL_BWRAP -> "wsl-bwrap";
+                case WSL_DIRECT -> "wsl-direct";
+                case WINDOWS_MIC -> "windows-mic";
+                default -> null;
+            };
+            if (backendType != null) {
+                SandboxConfig sboxConfig = new SandboxConfig(
+                        backendType, cfg.isEnabled(), cfg.networkDenied(),
+                        cfg.isAllowPrivilegeEscalation(), cfg.isInterceptPrivilege(),
+                        cfg.getTimeoutMs(), props.resolveSandboxPersistentRoot(), props);
+                this.delegate = sandboxRegistry.select(sboxConfig);
+                if (delegate != null) {
+                    log.info("[sandbox] SPI 后端委托 = {}", delegate.id());
+                }
+            }
+        }
         String configured = cfg.getType() == null || cfg.getType().isBlank()
                 ? "auto(平台默认)" : cfg.getType().trim();
         switch (b) {
@@ -168,6 +198,17 @@ public final class OsSandbox {
      */
     public boolean registerBashTool() {
         return !windows || isWslBackend();
+    }
+
+    @Override
+    public String id() {
+        Backend b = backend();
+        return switch (b) {
+            case WSL_BWRAP -> "wsl-bwrap";
+            case WSL_DIRECT -> "wsl-direct";
+            case WINDOWS_MIC -> "windows-mic";
+            case DIRECT -> "direct";
+        };
     }
 
     /** 后端解析(懒、缓存):auto/未配置 → 平台默认(Windows=wsl-direct,其余=direct);
@@ -365,6 +406,12 @@ public final class OsSandbox {
             log.warn("[sandbox] 沙箱已禁用,exec 直接 spawn(仅超时/输出护栏): {}", truncate(command, 120));
             return runDirect(command, cwd, extraEnv, s, allowNetwork);
         }
+        // 优先委托 SPI 后端（行为与原内联分发一致）
+        if (delegate != null) {
+            return delegate.spawnSandboxed(command, cwd, extraEnv, s, extraRoots, allowNetwork,
+                    allowPrivilege);
+        }
+        // 回退:无可用 SPI 后端时保持原内联分发
         if (backend() == Backend.WSL_BWRAP) {
             WslBwrapSandbox.OsResult r = WslBwrapSandbox.run(command, cwd, extraEnv, props, exec,
                     MAX_OUTPUT_CHARS, s, extraRoots == null ? List.of() : extraRoots, allowNetwork,
@@ -393,6 +440,11 @@ public final class OsSandbox {
             log.warn("[sandbox] 沙箱已禁用,powershell 直接 spawn(仅超时/输出护栏): {}",
                     truncate(command, 120));
             return runDirect(command, cwd, extraEnv, s, allowNetwork);
+        }
+        // 优先委托 SPI 后端
+        if (delegate != null) {
+            return delegate.spawnSandboxedWindows(command, cwd, extraEnv, s, extraRoots,
+                    allowNetwork, allowPrivilege);
         }
         return WindowsSandbox.run(command, cwd, extraEnv, cfg, exec, drainExec, MAX_OUTPUT_CHARS, s,
                 allowNetwork, allowPrivilege);

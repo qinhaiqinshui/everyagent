@@ -1,7 +1,6 @@
 package dev.everyagent.worker.task;
 
 import dev.everyagent.worker.AgentClientFactory;
-import dev.everyagent.worker.skill.SkillAdvisor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
@@ -23,7 +22,7 @@ import java.util.concurrent.TimeUnit;
  *
  * <p>纪律(AGENTS.md §13):agent 执行必须走 ChatClient + Advisor 生态,禁止手搓工具循环。
  * 具体链路:{@link AgentClientFactory#forAgent} 按 {@link AgentEntity.Kind} 装配
- * {@link SkillAdvisor}(仅主)+ {@link WorkerToolEventAdvisor}(事件发射),底层
+ * {@link dev.everyagent.worker.skill.SkillAdvisor}(仅主)+ {@link WorkerToolEventAdvisor}(事件发射),底层
  * {@link ToolCallingAdvisor} 递归工具循环由框架驱动;worker 事件协议({@code message}/
  * {@code toolCall}/{@code toolResult}/{@code delta}/...)由 {@link WorkerToolEventAdvisor}
  * 在循环 hook 内发射,本类不直接发事件。
@@ -34,13 +33,10 @@ public class AgentRunner {
     private static final Logger log = LoggerFactory.getLogger(AgentRunner.class);
 
     private final AgentClientFactory clientFactory;
-    private final SkillAdvisor skillAdvisor;
     private final ToolCallingManager toolCallingManager;
 
-    public AgentRunner(AgentClientFactory clientFactory, SkillAdvisor skillAdvisor,
-            ToolCallingManager toolCallingManager) {
+    public AgentRunner(AgentClientFactory clientFactory, ToolCallingManager toolCallingManager) {
         this.clientFactory = clientFactory;
-        this.skillAdvisor = skillAdvisor;
         this.toolCallingManager = toolCallingManager;
     }
 
@@ -62,7 +58,7 @@ public class AgentRunner {
         }
         Prompt prompt = new Prompt(new ArrayList<>(a.conversation), options.build());
 
-        ChatClient cc = clientFactory.forAgent(a, skillAdvisor, toolCallingManager);
+        ChatClient cc = clientFactory.forAgent(a, toolCallingManager);
         CountDownLatch done = new CountDownLatch(1);
         java.util.concurrent.atomic.AtomicReference<Throwable> error =
                 new java.util.concurrent.atomic.AtomicReference<>();

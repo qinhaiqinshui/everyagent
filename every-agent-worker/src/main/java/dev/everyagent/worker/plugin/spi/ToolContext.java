@@ -1,0 +1,39 @@
+package dev.everyagent.worker.plugin.spi;
+
+import dev.everyagent.worker.modules.WorkspaceManager;
+import dev.everyagent.worker.tools.PermissionGate;
+import dev.everyagent.worker.tools.RipgrepBinary;
+
+import java.nio.file.Path;
+
+/**
+ * 工具创建上下文 —— {@link ToolProvider#createTools} 的参数。
+ *
+ * <p>封装 per-task 信息（taskId、workspaceRoot）和核心只读服务
+ * （沙箱、权限门、工作区管理器等），工具提供者据此创建工具实例。
+ */
+public interface ToolContext {
+
+    /** 任务 ID。 */
+    String taskId();
+
+    /** Agent ID（主 agent 的 mainAgentId 或子 agent 的 agentId）。 */
+    String agentId();
+
+    /** 工作区根路径。 */
+    Path workspaceRoot();
+
+    /** 当前激活的沙箱后端（来自 SandboxProviderRegistry）。 */
+    SandboxBackend sandbox();
+
+    /** 权限门（PermissionGate，工具经此授权链）。 */
+    PermissionGate gate();
+
+    /** 工作区管理器（多工作区注册表）。 */
+    WorkspaceManager workspaces();
+
+    /** ripgrep 二进制路径（搜索工具用，可能为 null）。 */
+    default Path rgBinary() {
+        return null;
+    }
+}
