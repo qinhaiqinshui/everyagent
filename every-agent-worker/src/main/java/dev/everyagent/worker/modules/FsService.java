@@ -269,11 +269,12 @@ public class FsService {
 
     /**
      * 写操作(write/mkdir/move/delete)沙箱:工作区根 + 外部授权根(externalRoots 语义 =
-     * 完全读写,§7.17)。系统技能目录只读根<b>不并入</b>——skills 只读免授权,写不开放(§13.8)。
+     * 完全读写,§7.17)+ 系统技能目录(skills 读写放行,§13.8)。
      */
     private Sandbox sandbox(RpcContext ctx) throws IOException {
         WorkspaceManager.Root root = workspaces.resolve(ctx.strParam("workspace"));
         List<Path> roots = new ArrayList<>(workspaces.externalRootsOf(root.path().toString()));
+        roots.addAll(skillsReadonlyRoots.get());
         return new Sandbox(root, roots);
     }
 

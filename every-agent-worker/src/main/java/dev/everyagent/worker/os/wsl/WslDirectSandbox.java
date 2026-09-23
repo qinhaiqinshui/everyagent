@@ -308,15 +308,14 @@ public final class WslDirectSandbox {
                 pairs.add(Map.of("src", ws.toString(), "dest", dest));
             }
         }
-        // 系统技能目录:只读挂载对(ro:true),dest 与工作区根重叠时跳过(默认布局不重叠)
+        // 系统技能目录:读写挂载对,dest 与工作区根重叠时跳过(默认布局不重叠)
         if (skillsDir != null && Files.isDirectory(skillsDir)) {
             String dest = WslPathMapper.toDirectMount(skillsDir);
             if (dest != null && dests.add(dest)) {
-                Map<String, String> ro = new LinkedHashMap<>();
-                ro.put("src", skillsDir.toString());
-                ro.put("dest", dest);
-                ro.put("ro", "true");
-                pairs.add(ro);
+                Map<String, String> rw = new LinkedHashMap<>();
+                rw.put("src", skillsDir.toString());
+                rw.put("dest", dest);
+                pairs.add(rw);
             }
         }
         return pairs;

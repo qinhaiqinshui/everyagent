@@ -13,24 +13,15 @@
     run.sh            #   脚本不限语言：bash / python / node 等
 ```
 
-`<skillsDir>` 是 worker 的系统技能目录（通常是 `~/.everyagent/skills/`）。**注意：该目录对 AI 只读，AI 无法直接在其中创建文件。**
-
-## 关键约束
-
-- 系统技能目录对 AI 工具只读（沙箱只读挂载 + PermissionGate 写拦截），**不能直接用 `fs.write`、`fs.mkdir` 或 `bash` 在该目录下创建文件**
-- AI 应先在**当前工作区**内创建 skill 的全部文件，再告知用户将目录移动到系统技能目录
+`<skillsDir>` 是 worker 的系统技能目录（通常是 `~/.everyagent/skills/`）。该目录对 AI 读写开放，可直接在其中创建文件。
 
 ## 创建步骤
 
 1. 确认用户想要的 skill 功能和名称（id 只能包含小写字母、数字和连字符，首字符必须是字母或数字：`[a-z0-9][a-z0-9-]*`）
-2. 在当前工作区内创建临时目录（如 `.everyagent/<skill-id>/`），把 skill 的全部文件写入其中：
+2. 在系统技能目录下创建 `<id>/` 目录，写入全部文件：
    - `skill.md`（必须存在）
-   - 脚本文件（如 `scripts/run.sh`，可选，任意语言）
-3. 告知用户：
-   - 将 `<工作区>/.everyagent/<skill-id>/` 整个目录移动到系统技能目录 `<skillsDir>/` 下
-   - 系统技能目录路径：`~/.everyagent/skills/`（或自定义的 `skillsDir` 配置值）
-   - 移动完成后在设置页点击「重新读取 Skill 列表」热加载
-   - 之后即可在 `/` 菜单中看到新 skill
+   - 脚本文件（如 `scripts/run.sh`，可选，任意语言，加 shebang 如 `#!/usr/bin/env bash`、`#!/usr/bin/env python3` 等）
+3. 告知用户在设置页点击「重新读取 Skill 列表」后即可在 `/` 菜单中看到新 skill
 
 ## skill.md 写作规范
 

@@ -9,10 +9,10 @@ import java.io.IOException;
 import java.nio.file.Path;
 
 /**
- * 责任链节点:读取 skill 目录(system skills dir,§13.8)内容直接放行。
- * 仅对 READ 生效(realpath 前缀判定,符号链接逃逸自然失配);WRITE/EXEC 不在此放行,
- * 继续走授权决议链(弹窗 / AI 审议)。本轮判定只负责「放行」,沙箱侧由
- * FsToolSupport 把 skills 目录作为只读附加根加入,读写是否真的可行仍由 Sandbox 兜底。
+ * 责任链节点:skill 目录(system skills dir,§13.8)读写放行。
+ * READ + WRITE 均直接放行(realpath 前缀判定,符号链接逃逸自然失配);
+ * EXEC 不在此放行,继续走授权决议链。
+ * 沙箱侧由 FsToolSupport / FsService 把 skills 目录作为附加根加入。
  */
 @Component
 public class SkillsReadAllowCheck implements PermissionCheck {
@@ -25,7 +25,11 @@ public class SkillsReadAllowCheck implements PermissionCheck {
 
     @Override
     public PermissionDecision check(PermissionContext ctx) {
-        if (ctx.op() != Op.READ || ctx.realPath() == null) {
+        if (ctx.realPath() == null) {
+            return PermissionDecision.skip();
+        }
+        Op op = ctx.op();
+        if (op != Op.READ && op != Op.WRITE) {
             return PermissionDecision.skip();
         }
         Path skillsReal = skillsRealPath();
@@ -33,7 +37,7 @@ public class SkillsReadAllowCheck implements PermissionCheck {
             return PermissionDecision.skip(); // 技能目录未物化:交下一节点(NotFound/授权链)
         }
         if (ctx.realPath().startsWith(skillsReal)) {
-            return PermissionDecision.allow("skills 目录只读放行");
+            return PermissionDecision.allow("skills 目录读写放行");
         }
         return PermissionDecision.skip();
     }

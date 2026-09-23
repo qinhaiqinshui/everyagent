@@ -19,6 +19,7 @@
     "paths": {
       "@/*": ["src/*"],
       "@every-agent/client": ["src/sdk/index.ts"],
+      "@everyagent/plugin-api": ["../every-agent-plugin-api/js/index.ts"],
       "@plugins/*": ["../every-agent-plugins/*"],
       "react": ["./node_modules/@types/react"],
       "react/jsx-runtime": ["./node_modules/@types/react/jsx-runtime"]
