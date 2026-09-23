@@ -8,6 +8,11 @@
  */
 
 import type {
+  Disposable,
+  TraceTypeDefinition,
+  OutputBlockHandler,
+} from '@everyagent/plugin-api'
+import type {
   UiSidebarItemDefinition,
   UiWorkspaceTabTypeDefinition,
   UiFileSidebarPanelDefinition,
@@ -16,8 +21,6 @@ import type {
   ToolCallDetailViewDefinition,
   TaskFileMoreAction,
 } from './types'
-import type { TraceTypeDefinition } from './traceTypeRegistry'
-import type { OutputBlockHandler } from './outputBlockRegistry'
 import { registerTraceType as registerToTraceRegistry } from './traceTypeRegistry'
 import { outputBlockRegistry } from './outputBlockRegistry'
 
@@ -34,10 +37,6 @@ const traceTypes: TraceTypeDefinition[] = []
 const outputBlocks = new Map<string, OutputBlockHandler>()
 
 // ── Disposable 工具 ──
-
-export interface Disposable {
-  dispose(): void
-}
 
 function makeDisposable(array: unknown[], item: unknown): Disposable {
   return {

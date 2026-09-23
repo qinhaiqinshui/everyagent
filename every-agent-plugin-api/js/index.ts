@@ -26,7 +26,6 @@ export interface PluginWorkspaceTab {
   title?: string
   /** 业务私有数据（仅 plugin 类型标签有）。 */
   data?: Record<string, string>
-  [key: string]: unknown
 }
 
 /**
@@ -69,7 +68,6 @@ export interface PluginFileResource {
   fileName: string
   /** 关联任务 ID。 */
   taskId?: string
-  [key: string]: unknown
 }
 
 /**
@@ -82,7 +80,6 @@ export interface PluginComposerDraftState {
   rawContent: string
   /** 已插入的结构化 token 列表。 */
   tokens: unknown[]
-  [key: string]: unknown
 }
 
 /** 左侧活动栏面板 ID（替代 web 内部 `SidebarPanelId`）。 */

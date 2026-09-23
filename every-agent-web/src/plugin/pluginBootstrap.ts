@@ -9,7 +9,7 @@
 
 import { hubSession } from '@/hub/session'
 import { pluginDispatcher } from './PluginDispatcher'
-import type { PluginContext, PluginModule, PluginSdk, PluginStorage, CommandRegistry, Disposable } from './api'
+import type { PluginContext, PluginModule, PluginSdk, PluginStorage, CommandRegistry, Disposable } from '@everyagent/plugin-api'
 
 /** 已加载的 Web 插件（供调试与卸载）。 */
 const loadedWebPlugins: Map<string, { module: PluginModule; disposables: Disposable[] }> = new Map()
@@ -129,17 +129,10 @@ export async function bootWebPlugins(
         sdk: createPluginSdk(workerId, workspaceId, workspaceRoot),
         storage: createPluginStorage(plugin.id),
         commands: createCommandRegistry(),
-        ui: {
-          registerSidebarItem: (def) => pluginDispatcher.registerSidebarItem(def),
-          registerWorkspaceTabType: (def) => pluginDispatcher.registerWorkspaceTabType(def),
-          registerFileSidebarPanel: (def) => pluginDispatcher.registerFileSidebarPanel(def),
-          registerComposerFooterControl: (def) => pluginDispatcher.registerComposerFooterControl(def),
-          registerComposerAbovePanel: (def) => pluginDispatcher.registerComposerAbovePanel(def),
-          registerToolCallDetailView: (def) => pluginDispatcher.registerToolCallDetailView(def),
-          registerTaskFileMoreAction: (action) => pluginDispatcher.registerTaskFileMoreAction(action),
-          registerTraceType: (def) => pluginDispatcher.registerTraceType(def),
-          registerOutputBlock: (tag, handler) => pluginDispatcher.registerOutputBlock(tag, handler),
-        },
+        // pluginDispatcher 使用 web 内部强类型（WorkspaceTab/FileTabResource 等），
+        // 与 @everyagent/plugin-api 的最小化接口在 ComponentType 上因不变性不兼容，
+        // 运行时行为一致，此处安全强转。
+        ui: pluginDispatcher as unknown as PluginContext['ui'],
       }
 
       await pluginModule.activate(ctx)

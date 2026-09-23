@@ -3,7 +3,7 @@
  * 删除插件目录 = glob 无匹配 = 零报错。
  */
 import { pluginDispatcher } from './PluginDispatcher'
-import type { PluginContext, PluginModule } from './api'
+import type { PluginContext, PluginModule } from '@everyagent/plugin-api'
 
 const pluginModules = import.meta.glob('@plugins/*/web/index.ts')
 
@@ -37,7 +37,9 @@ export async function loadBuiltInPlugins(): Promise<void> {
           registerCommand: () => ({ dispose() {} }),
           executeCommand: async () => undefined,
         },
-        ui: pluginDispatcher,
+        // pluginDispatcher 使用 web 内部强类型，与 @everyagent/plugin-api 的最小化接口
+        // 在 ComponentType 上因不变性不兼容，运行时行为一致，此处安全强转。
+        ui: pluginDispatcher as unknown as PluginContext['ui'],
       }
       await pluginModule.activate(ctx)
       console.log(`[plugins] 内置插件已加载: ${path}`)

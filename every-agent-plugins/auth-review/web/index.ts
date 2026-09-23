@@ -7,8 +7,8 @@
 
 import React from 'react'
 import AuthReviewTraceView, { AUTH_REVIEW_DECISION_LABELS, readMetaString } from './AuthReviewTraceView'
-import type { PluginContext, PluginModule } from '@/plugin/api'
-import type { TraceTypeDefinition } from '@/plugin/traceTypeRegistry'
+import type { TaskTraceRecord } from '@/types'
+import type { PluginContext, PluginModule, TraceTypeDefinition } from '@everyagent/plugin-api'
 
 export const AUTH_REVIEW_TRACE_KIND = 'auth.review'
 export const AUTH_REVIEW_TRACE_ICON = 'shield'
@@ -29,7 +29,7 @@ const authReviewTraceDef: TraceTypeDefinition = {
     const prefix = label ? `AI 审议：${label}` : 'AI 审议'
     return reason ? `${prefix} · ${reason}` : prefix
   },
-  renderContent: (trace) => React.createElement(AuthReviewTraceView, { trace }),
+  renderContent: (trace) => React.createElement(AuthReviewTraceView, { trace: trace as TaskTraceRecord }),
 }
 
 const authReviewPlugin: PluginModule = {
