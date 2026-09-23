@@ -1,38 +1,50 @@
+/**
+ * AI 安全审议 trace 渲染插件——PluginModule 入口。
+ *
+ * 经 PluginDispatcher.registerTraceType 注册 kind='auth.review' 的 trace 渲染类型。
+ * worker 每次审议结束时发 kind='auth.review' 的 task.trace。
+ */
+
 import React from 'react'
-import { registerTraceType } from '@/plugin/traceTypeRegistry'
 import AuthReviewTraceView, { AUTH_REVIEW_DECISION_LABELS, readMetaString } from './AuthReviewTraceView'
+import { registerTraceType } from '@/plugin/traceTypeRegistry'
+import type { PluginContext, PluginModule } from '@/plugin/api'
+import type { TraceTypeDefinition } from '@/plugin/traceTypeRegistry'
 
-/** AI 安全审议 trace 类型。 */
 export const AUTH_REVIEW_TRACE_KIND = 'auth.review'
-
-/** AI 安全审议 trace 图标 key(traceTypeRegistry 的 TRACE_ICON_COMPONENTS 已登记 'shield')。 */
 export const AUTH_REVIEW_TRACE_ICON = 'shield'
 
+/** trace 类型定义（用于直接注册和 PluginModule 两种路径）。 */
+const authReviewTraceDef: TraceTypeDefinition = {
+  kind: AUTH_REVIEW_TRACE_KIND,
+  getIcon: () => AUTH_REVIEW_TRACE_ICON,
+  hideTitle: true,
+  canExpand: (trace) => Boolean(trace.metadata && Object.keys(trace.metadata).length > 0),
+  getSummary: (trace) => {
+    const decision = readMetaString(trace.metadata?.decision)
+    const reason = readMetaString(trace.metadata?.reason)
+    if (!decision && !reason) {
+      return trace.summary?.trim() || undefined
+    }
+    const label = decision ? (AUTH_REVIEW_DECISION_LABELS[decision.toUpperCase()] ?? decision) : ''
+    const prefix = label ? `AI 审议：${label}` : 'AI 审议'
+    return reason ? `${prefix} · ${reason}` : prefix
+  },
+  renderContent: (trace) => React.createElement(AuthReviewTraceView, { trace }),
+}
+
 /**
- * 注册 AI 安全审议 trace 渲染类型(plan-unattended-ai-auth 步骤 7):
- * worker 每次授权审议结束时发 kind='auth.review' 的 task.trace(payload 的 metadata 承载
- * decision/confidence/reason/scope/grantKey/prompt/taskId/agentId,content 为空)。
- * 收起态只展示派生 summary(「AI 审议：允许 · reason」),展开态渲染只读判断卡。
+ * 兼容旧调用方的直接注册函数（main.tsx 仍可直接调用）。
  */
 export function registerAuthReviewTraceType(): void {
-  registerTraceType({
-    kind: AUTH_REVIEW_TRACE_KIND,
-    getIcon: () => AUTH_REVIEW_TRACE_ICON,
-    // 标题「AI 安全审议」与 summary 的「AI 审议：…」语义重复,收起态只展示 summary。
-    hideTitle: true,
-    // 数据承载在 metadata、content 为空:显式声明可展开以显示判断卡。
-    canExpand: (trace) => Boolean(trace.metadata && Object.keys(trace.metadata).length > 0),
-    getSummary: (trace) => {
-      const decision = readMetaString(trace.metadata?.decision)
-      const reason = readMetaString(trace.metadata?.reason)
-      if (!decision && !reason) {
-        // 异常兜底:没有任何审议信息时退回 worker 下发的 summary。
-        return trace.summary?.trim() || undefined
-      }
-      const label = decision ? (AUTH_REVIEW_DECISION_LABELS[decision.toUpperCase()] ?? decision) : ''
-      const prefix = label ? `AI 审议：${label}` : 'AI 审议'
-      return reason ? `${prefix} · ${reason}` : prefix
-    },
-    renderContent: (trace) => React.createElement(AuthReviewTraceView, { trace }),
-  })
+  registerTraceType(authReviewTraceDef)
 }
+
+/** PluginModule 入口（经 PluginDispatcher 加载时使用）。 */
+const authReviewPlugin: PluginModule = {
+  activate(_ctx: PluginContext) {
+    registerAuthReviewTraceType()
+  },
+}
+
+export default authReviewPlugin
