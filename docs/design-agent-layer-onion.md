@@ -1,6 +1,6 @@
 # 设计方案：任务生命周期洋葱模型 + Agent 独立成层
 
-> 状态：**待评审**（用户确认后才实施）· v2（按评审意见调整 subagent 插件职责）
+> 状态：**待评审**（用户确认后才实施）· v3（按评审结论定稿节点模型：无层粒度、一节点一事、float 排序；AgentDispatcher 废止；消息流 agent 事件渲染保留核心）
 > 范围声明：本文覆盖整体架构（洋葱底座、agent 层独立、subagent 插件三件套、任务队列插件预留）；**本次只实施 Phase 1（洋葱底座）**，其余分期列出。
 
 ---
@@ -39,11 +39,13 @@
   ┌───────────────────────── Task 洋葱（TaskOnion 执行器） ─────────────────────────┐
   │  下行 onStart（外→内，可阻塞/可否决）          上行 onEnd（内→外，逆序、必达） │
   │                                                                                │
-  │  L1 准入层 AdmissionLayer      ←─ 未来任务队列插件替换/增强此层                 │
-  │  L2 存储层 PersistenceLayer                                                    │
-  │  L3 状态层 StatusLayer                                                         │
-  │  L4 派生层 SpawnedAgentLayer   (子 agent 等待/级联停止)                        │
-  │      └── 内核 TaskKernel = 调用 AgentService（对话式：多轮 + 输入队列）        │
+  │  …persistence.track(100) → task.wires(200) → status.start(300)                │
+  │    → main.agent(400) →【内核 = 调用 AgentService（多轮 + 输入队列）】          │
+  │    → spawned.await(950) → cascade.stop(900) → status.finalize(850)            │
+  │    → …concurrency.release → log.flush → status.persist(650)… → 最外收口       │
+  │                                                                                │
+  │  节点 = 单一职责动作（一节点一事）；order 为 float，插件可任意插位。            │
+  │  未来任务队列插件 = 在 100~350 空隙插入排队节点（onStart 阻塞排队）。          │
   └──────────────────────────────────┬─────────────────────────────────────────────┘
                                      ▼
   ┌──────────────────────────── Agent 层（AgentService，核心） ────────────────────┐
@@ -70,46 +72,57 @@
 
 ## 3. 洋葱模型设计（Phase 1 核心）
 
-### 3.1 契约（放 `every-agent-plugin-api`，让插件能贡献层）
+### 3.1 契约（放 `every-agent-plugin-api`，让插件能贡献节点）
+
+**没有预设「层」粒度**——洋葱 = **单一职责节点的有序列表**。每个节点只干一件事（如「状态收口写磁盘」= `status.persist` 节点只调 `store.updateMeta`）；一个动作一个节点，track 与 untrack 也是两个独立节点。排序用 **float**（任意两节点间可插 100.5、100.25…，插件无需协调改号）。
 
 ```java
-/** 任务生命周期层（洋葱的一层）。下行=开始，上行=结束。 */
-public interface TaskLifecycleLayer extends Ordered {
+/** 任务生命周期节点（洋葱的一环）。一节点一事；下行=开始，上行=结束。 */
+public interface TaskLifecycleNode {
     String id();
-    /** 下行（外→内）：任务开始。允许阻塞（虚拟线程廉价，如未来排队层）；抛异常=否决进入，任务 FAILED。 */
-    void onStart(TaskLifecycleContext ctx) throws Exception;
-    /** 上行（内→外）：任务结束（DONE/FAILED/CANCELLED 均必达）。实现不得抛异常（执行器兜底捕获记 WARN）。 */
-    void onEnd(TaskLifecycleContext ctx, TaskOutcome outcome);
+    /** 洋葱位置：升序 = 外→内。float 允许任意插位；同 order 按注册顺序（稳定排序）。 */
+    float order();
+    /** 下行（外→内）：任务开始。可阻塞（虚拟线程廉价，如未来排队节点）；抛异常=否决进入，任务 FAILED。 */
+    default void onStart(TaskLifecycleContext ctx) throws Exception {}
+    /** 上行（内→外）：任务结束（DONE/FAILED/CANCELLED 均必达）。不得抛异常（执行器兜底 WARN）。 */
+    default void onEnd(TaskLifecycleContext ctx, TaskOutcome outcome) {}
+    /** 上行时该节点是否在任务锁内执行（复现现状 finish 的 synchronized(t) 粒度，见 §3.4）。 */
+    default boolean holdsTaskLock() { return true; }
 }
 
-/** 洋葱上下文：层的读写面（窄接口，非 TaskEntry 本体）。 */
-public interface TaskLifecycleContext {
-    String taskId();
-    // …（见 §3.4）
-}
+/** 洋葱上下文：节点的读写面（窄接口，非 TaskEntry 本体，见 §3.4）。 */
+public interface TaskLifecycleContext { String taskId(); /* … */ }
 
 /** 任务结局。 */
 public record TaskOutcome(TaskEndStatus status, String error, long startedAt, long endedAt) {}
 ```
 
-执行器：
+执行器（两入口）：
 
 ```java
-/** 洋葱执行器：下行进入，内核执行，上行逆序收口。 */
 public final class TaskOnion {
-    public TaskOutcome execute(List<TaskLifecycleLayer> layers, TaskKernel kernel, TaskLifecycleContext ctx) {
+    /** 常规：下行 → 内核 → 上行 unwind（逆序，只收口已进入的节点）。 */
+    public TaskOutcome execute(List<TaskLifecycleNode> nodes, TaskKernel kernel, TaskLifecycleContext ctx) {
         int entered = 0;
         TaskOutcome outcome;
         try {
-            for (TaskLifecycleLayer layer : layers) { layer.onStart(ctx); entered++; }  // 下行
-            outcome = kernel.run(ctx);                                                   // 内核=调用 agent
-        } catch (InterruptedException e) { outcome = cancelled(e); }
-        catch (Throwable e)             { outcome = failed(e); }
-        for (int i = entered - 1; i >= 0; i--) {                                         // 上行：只收口已进入的层
-            try { layers.get(i).onEnd(ctx, outcome); }
-            catch (Throwable t) { log.warn("[onion] 层 {} 收口失败（继续外层）", layers.get(i).id(), t); }
-        }
+            for (TaskLifecycleNode n : nodes) { n.onStart(ctx); entered++; }   // 下行
+            outcome = kernel.run(ctx);                                        // 内核 = 调用 agent
+        } catch (InterruptedException e) { outcome = TaskOutcome.cancelled(e); Thread.currentThread().interrupt(); }
+        catch (Throwable e)             { outcome = TaskOutcome.failed(e); }
+        unwind(nodes.subList(0, entered), ctx, outcome);
         return outcome;
+    }
+
+    /** 外部注入结局的强制收口（停机旁路）：直接 unwind——status.finalize 的 CAS 保证幂等。 */
+    public void unwind(List<TaskLifecycleNode> nodes, TaskLifecycleContext ctx, TaskOutcome injected) {
+        for (int i = nodes.size() - 1; i >= 0; i--) {                         // 上行：内→外
+            TaskLifecycleNode n = nodes.get(i);
+            try {
+                if (n.holdsTaskLock()) synchronized (ctx.taskLock()) { n.onEnd(ctx, injected); }
+                else n.onEnd(ctx, injected);
+            } catch (Throwable t) { log.warn("[onion] 节点 {} 收口失败（继续外层）", n.id(), t); }
+        }
     }
 }
 ```
@@ -118,40 +131,66 @@ public final class TaskOnion {
 
 | 场景 | 行为 |
 |---|---|
-| 下行第 k 层 onStart 抛异常 | 任务 FAILED；**只**逆序收口 0..k-1 层（已进入的才收口）；第 k 层自身不收口 |
-| 内核异常/中断 | 全部层逆序 onEnd（outcome=FAILED/CANCELLED） |
-| 上行某层 onEnd 抛异常 | 捕获记 WARN，**继续外层**（收口永不因单层失败中断） |
-| 上行必达且仅达一次 | 现 `finish()` 的 `terminal()` 幂等守卫语义收进 StatusLayer.onEnd（CAS），洋葱执行器不重复 |
-| 取消 | `rpcTaskCancel` 仍走 `future.cancel(true)` → 内核中断 → 洋葱上行 CANCELLED（级联路径不变） |
+| 下行第 k 节点 onStart 抛异常 | 任务 FAILED；**只**逆序收口 0..k-1 节点（已进入的才收口）；第 k 节点自身不收口 |
+| 内核异常/中断 | 全部已进入节点逆序 onEnd（outcome=FAILED/CANCELLED；中断位由执行器恢复） |
+| 上行某节点 onEnd 抛异常 | 捕获记 WARN，**继续外层**（收口永不因单节点失败中断） |
+| 上行必达且仅达一次 | 现 `finish()` 的 `terminal()` 幂等守卫语义收进 `status.finalize` 节点（CAS），执行器不重复 |
+| 停机强制收口 | `TaskOnion.unwind(nodes, ctx, FAILED("worker 停机"))`（替代现状 shutdown 直接调 finish 的旁路） |
+| 取消 | `rpcTaskCancel` 仍走 `future.cancel(true)` → 内核中断 → 上行 CANCELLED（级联路径不变） |
 
-### 3.3 内置层清单（把 `rpcTaskRun`/`runTask`/`finish` 的散落收口归层）
+### 3.3 内置节点基线表（现状动作逐字映射，行为零变化）
 
-| 层（order） | 下行 onStart | 上行 onEnd | 现状代码出处 |
+**下行节点（onStart，order 升序 = 执行序）**：
+
+| order | 节点 id | onStart 职责（一事） | 现状出处 |
 |---|---|---|---|
-| **L1 AdmissionLayer** | `active.incrementAndGet()` + 上限检查（超限抛 → 任务拒绝，行内语义=ERR_BUSY 前移） | `active.decrementAndGet()` | rpcTaskRun L1033 / finish L1876 |
-| **L2 PersistenceLayer** | `store.track`（建目录 + 首写 meta.json）+ 挂 EventLog 监听 + DataPusher 唤醒挂钩 | `flush → writeQueue → updateMeta → writeAgents → untrack` + `diskTasks` 登记 | track L134 / finish L1877-1893 |
-| **L3 StatusLayer** | `startedAt` + `setStatus(RUNNING)` + `agentStatus("running")` + task.updated 广播 | 终态 CAS（原 terminal() 守卫）+ `endedAt/error/status` + agentStatus 终态 + 终态广播 + `tasks.remove` + `gate.untrack` + 工作区活动时间 | runTask L1635-1637 / finish L1866-1875, L1896-1899 |
-| **L4 SpawnedAgentLayer** | 空操作（预留：台账恢复、派生预算） | `awaitAllBeforeFinish`（等全部子 agent，超时级联停） | runTask L1672 |
-| **内核 TaskKernel** | — | — | `consumeInput` + `while(true){ runner.run(main); poll… }` 轮次循环，**改为调 `AgentService`** |
-| 内核异常处理 | — | `stopAll`（子 agent 级联停）/ `asks.cancelTask` / `events.cancelled` | runTask catch 区 L1680-1705 |
+| 100 | `persistence.track` | `store.track`：建目录 + 首写 meta.json + 挂 EventLog 监听 | rpcTaskRun L1078 |
+| 200 | `task.wires` | 注入 `onUsageBroadcast` / `persistHook`（TaskEntry 钩子字段） | wireUsageBroadcast L1938 / wireAgentPersist L1957 |
+| 300 | `status.start` | `startedAt` + `setStatus(RUNNING)` + task.updated 广播 + `agentStatus("running")` | runTask L1635-1637 |
+| 400 | `main.agent` | `buildMainAgent` + `consumeInput(首条输入)` | runTask L1638-1639 |
 
-> 兼容红线：`finish()` 现有**事件顺序**（agentStatus 终态 → task.updated 广播）与 **synchronized(t)** 粒度在层实现中逐字保留；`TASK_CREATED` 广播与幂等键去重仍留 RPC 边缘（属「创建」而非「开始」）。
+**内核**：轮次循环 `while(true){ agentService.run(main); inputQueue.poll… }`（对话式调用 agent）。
 
-### 3.4 TaskLifecycleContext（层的读写面）
+**上行节点（onEnd，按执行先后排列 = order 降序）**：
+
+| 执行序 | order | 节点 id | onEnd 职责（一事） | 锁 | 现状出处 |
+|---|---|---|---|---|---|
+| 1 | 950 | `spawned.await` | `awaitAllBeforeFinish`（等全部子 agent，超时级联停） | 锁外 | runTask L1672 |
+| 2 | 900 | `cascade.stop` | outcome≠DONE：`stopRequested` + `stopAll` + `asks.cancelTask` + `cancelled/error` 事件 | 锁外 | runTask catch L1680-1705 |
+| 3 | 850 | `status.finalize` | 终态 CAS（幂等门）+ `endedAt/error/status` + agentStatus 终态事件 + 终态广播 | 锁内 | finish L1866-1875 |
+| 4 | 800 | `concurrency.release` | `active.decrementAndGet()` | 锁内 | finish L1876 |
+| 5 | 750 | `log.flush` | `store.flush`（等落盘追平，30s 超时放行） | 锁内 | finish L1877 |
+| 6 | 700 | `queue.persist` | `store.writeQueue`（悬空输入队列落盘） | 锁内 | finish L1888 |
+| 7 | 650 | `status.persist` | `store.updateMeta`（**状态收口写磁盘**） | 锁内 | finish L1889 |
+| 8 | 600 | `ledger.persist` | `store.writeAgents`（agent 台账终态快照） | 锁内 | finish L1891 |
+| 9 | 550 | `disk.index` | `diskTasks.put`（终态任务转磁盘索引） | 锁内 | finish L1892 |
+| 10 | 500 | `persistence.untrack` | `store.untrack`（关闭全部 jsonl writer） | 锁内 | finish L1893 |
+| 11 | 450 | `gate.evict` | `gate.untrack`（授权内存驱逐） | 锁内 | finish L1894 |
+| 12 | 400 | `registry.remove` | `tasks.remove`（两参原子，再运行认据此判输赢） | 锁内 | finish L1895 |
+| 13 | 350 | `workspace.activity` | `activityTracker.onTaskFinished` | 锁外 | finish L1915 |
+
+**顺序不变量**（重构正确性的判据）：
+- 上行 1-13 的总顺序 = 现状 `runTask 尾部 → finish 内部` 的执行顺序**逐项对应**（await/cascade 在 finish 之前=锁外；3-12 对应 finish 持锁段；13 锁外）。
+- 下行 100→400 = 现状 `rpcTaskRun（track/wire）→ runTask 头部（RUNNING/build/consume）`。
+- **留在洋葱外（RPC 边缘）**：幂等键去重、并发上限检查 + `active.incrementAndGet()`（需同步应答 ERR_BUSY，TOCTOU 语义要求在 RPC 线程）、`TASK_CREATED` 广播、`ctx.ok` 应答——属「创建」而非「开始」。未来队列插件见 §3.5。
+- **锁策略**：现状 finish 全程持 `synchronized(t)`；新模型由 `holdsTaskLock()` 分段复现——锁外段（await/cascade/activity）+ 锁内段（3-12 顺序连续），与现状等价。
+
+### 3.4 TaskLifecycleContext（节点的读写面）
 
 不从 plugin-api 暴露 `TaskEntry`（避免外部插件强耦合核心，重复 git/auth-review 反向依赖的旧路）。窄接口起步：
 
 - 只读：`taskId / title / workspaceRoot / workspaceId / status / mainAgentId`
-- 可写（受控）：`taskFlags` / usage 广播钩子（`onUsageBroadcast` 由 wire 移入层）
-- 事件最小面：`agentStatus(agentId, status)`（StatusLayer 用）
+- 同步原语：`taskLock()`（执行器按 `holdsTaskLock()` 获取）
+- 可写（受控）：`taskFlags` / usage 广播钩子（`onUsageBroadcast` 由 `task.wires` 注入）
+- 事件最小面：`agentStatus(agentId, status)`（`status.start`/`status.finalize` 用）
 
-内置层在 worker 侧拿完整 `TaskEntry`（内部通道，同 `AdvisorContextImpl.agentEntity()` 惯例）；**外部插件只见窄接口**。
+内置节点在 worker 侧拿完整 `TaskEntry`（内部通道，同 `AdvisorContextImpl.agentEntity()` 惯例）；**外部插件只见窄接口**。
 
-### 3.5 层注册与插件贡献
+### 3.5 节点注册与插件贡献
 
-- worker 内置层经 `TaskLifecycleRegistry`（新，`plugin/registry/` 第 8 个注册表，CopyOnWriteArrayList + PluginStateStore 过滤 + order 排序——与 AdvisorProviderRegistry 同模式）注册。
-- `WorkerPluginContext` 新增 `registerTaskLifecycleLayer(TaskLifecycleLayer)`。
-- **任务队列插件（Phase 4 预留）**：贡献 order 最前的 `QueueLayer`，`onStart` 阻塞排队（虚拟线程下阻塞即挂起，零线程开销）或增强/替换 AdmissionLayer 语义；`onEnd` 出队广播。本次不动，仅保证接口表达力够。
+- worker 内置节点经 `TaskLifecycleRegistry`（新，`plugin/registry/` 第 8 个注册表，CopyOnWriteArrayList + PluginStateStore 过滤 + **float order 稳定排序**——与 AdvisorProviderRegistry 同模式）注册。
+- `WorkerPluginContext` 新增 `registerTaskLifecycleNode(TaskLifecycleNode)`。
+- **任务队列插件（Phase 4 预留，本次不实施）**：在下行空隙（100~400 之间任意 float 位，如 250）插入排队节点——`onStart` 阻塞排队（虚拟线程下阻塞即挂起，零线程开销）、`onEnd` 出队广播；若需接管「并发上限即拒」语义，则替换 RPC 边缘预检（Phase 4 设计边缘扩展点）。底座只保证节点接口表达力足够。
 
 ---
 
@@ -294,10 +333,10 @@ public record PluginSkill(String id, String name, String description, List<Strin
 
 | Phase | 内容 | 交付 |
 |---|---|---|
-| **1（本次）洋葱底座** | plugin-api 四契约 + `registerTaskLifecycleLayer`；`TaskLifecycleRegistry` + `TaskOnion`；L1-L4 内置层拆分（finish/runTask/rpcTaskRun 逻辑**逐字映射**，不改行为）；`runTask` 重写为洋葱执行；单测（下行顺序/否决/unwind 逆序/幂等/取消）；ARCHITECTURE.md 新 §7.x | worker 行为零变化（事件顺序、seq、落盘字节级兼容），可回归验证 |
+| **1（本次）洋葱底座** | plugin-api 节点契约（`TaskLifecycleNode`/`TaskLifecycleContext`/`TaskOutcome`/`TaskKernel`）+ `registerTaskLifecycleNode`；`TaskLifecycleRegistry`（float 排序）+ `TaskOnion`；17 个内置节点拆分（下行 4 + 上行 13，finish/runTask/rpcTaskRun 逻辑**逐字映射**，不改行为）；`runTask` 重写为洋葱执行；单测（下行顺序/否决/unwind 逆序/幂等/停机注入/取消/锁分段）；ARCHITECTURE.md 新 §7.x | worker 行为零变化（事件顺序、seq、落盘字节级兼容），可回归验证 |
 | **2 agent 层** | `dev.everyagent.worker.agent` 包收敛 + `AgentContext`/`AgentEventChannel` 解耦 + `AgentService` + `AgentDispatcher` 废止 + `SubAgentManager` 编排下沉 | agent 层边界成立（能力全部留在核心），其他插件可依赖 |
 | **3 subagent 插件** | 三件套迁移（工具 + SkillContributor + 前端面板）；plugin-api 新增 `SkillContributor` SPI + 注册表；BuiltInSkills 合并改造；web `ComposerPanelCtx` 扩展 `selectAgent`；app pom 挂载 + CI 一致性检查 | 删除插件 = 无子 agent 工具/skill/前端列表，agent 层完好 |
-| **4（未来）队列插件** | QueueLayer 贡献排队语义 | 底座已就绪，不在本设计实施范围 |
+| **4（未来）队列插件** | 排队节点（onStart 阻塞排队 / onEnd 出队广播）+ RPC 边缘预检扩展点 | 底座已就绪，不在本设计实施范围 |
 
 ---
 
@@ -305,9 +344,9 @@ public record PluginSkill(String id, String name, String description, List<Strin
 
 | 风险 | 对策 |
 |---|---|
-| finish 拆层后收口顺序/竞态回归 | 映射表逐条对照（§3.3）；`synchronized(t)` 粒度保留在层实现内；补 onion 单测 + 全量 worker 测试回归 |
-| 再运行（startRerun）路径绕过洋葱 | 再运行的 track/seed/wire 逻辑同样走 L2/L3 onStart（复用同一层实现，不另写一份） |
-| DataPusher 换日志时机变化 | track 仍由 L2.onStart 调用，时机不变（任务线程开头 vs RPC 线程的差异本就存在，本设计把它显式化并文档化） |
+| finish 拆节点后收口顺序/竞态回归 | 顺序不变量逐条对照（§3.3 表）；锁分段复现现状 synchronized(t)（§3.3 锁策略）；补 onion 单测 + 全量 worker 测试回归 |
+| 再运行（startRerun）路径绕过洋葱 | 再运行的 track/seed/wire 逻辑同样走 `persistence.track`/`task.wires` onStart（复用同一节点实现，不另写一份） |
+| DataPusher 换日志时机变化 | track 仍由 `persistence.track`.onStart 调用；执行线程从 RPC 线程移到任务线程开头（外部可见行为不变：meta 最终一致、ctx.ok 应答仍即时） |
 | AgentEntity 解耦破坏事件语义（roundSeqs 同轮共享 seq） | AgentEventChannel 由 TaskEvents 直接 implements，seq 逻辑不动，只换接口面 |
 | 洋葱≠手搓 agent 循环的红线 | 内核调 AgentService→AgentRunner→ChatClient（Spring AI 工具循环）；洋葱只编排任务生命周期层 |
 | 并发会话冲突（git 插件迁移进行中） | Phase 1 不碰 plugin 模块与 app pom；`SubAgentManager` 仅改调用点不动文件位置 |
@@ -316,10 +355,14 @@ public record PluginSkill(String id, String name, String description, List<Strin
 
 ---
 
-## 8. 待确认问题（开工前需拍板）
+## 8. 已确认决策（v3 评审结论）
 
-1. **洋葱层粒度**：§3.3 的 4 层（准入/存储/状态/派生）是否合适？是否要把「授权收口 gate.untrack」独立成层（现归 L3）？
-2. **`AgentDispatcher` 废止**：预留 SPI 直接删除，还是保留名字把 `AgentService` 命名为它？
-3. **Phase 1 是否包含 L4（SpawnedAgentLayer）**：子 agent 等待逻辑入层会触碰 `SubAgentManager`（并发会话敏感区）；可先留内核 catch 区（现状位置），Phase 2 随编排下沉再成层。
-4. **消息流中 agent 生命周期事件渲染的归属**：方案保留在 web 核心（渲染事件流=agent 层契约，历史数据依赖）；若要求也进插件（彻底无痕卸载），需把 AgentMessageThread 的 agent.* 分支一并抽成扩展点——工作量+1，联动面大，我建议保留核心。
-5. **skill 只随 subagent 插件走是否够用**：若未来别的插件也要贡献 skill，`SkillContributor` SPI 本次直接做成通用扩展点（设计已按通用写，subagent 是第一个使用者）。
+1. **节点模型**：无层粒度；一节点一事；order 用 float（已落实到 §3）。
+2. **`AgentDispatcher` 废止**：plugin-api 预留 SPI（dispatch/waitFor/stop/list 的「子 agent 调度策略」扩展点），全仓零实现零消费——确认无用，Phase 2 删除，语义并入 `AgentService`。
+3. **消息流中 agent 生命周期事件渲染**：保留 web 核心（渲染事件流=agent 层契约，历史任务在插件删除后仍正确展示）。
+4. **原 L4（等子 agent/级联停）**：拆为 `spawned.await`（950）+ `cascade.stop`（900）两个上行节点，Phase 1 直接包含（收口动作仅为方法搬移，触碰 `SubAgentManager` 面极小——`awaitAllBeforeFinish`/`stopAll` 两个既有方法调用）。
+
+## 9. 遗留待确认
+
+1. **skill 只随 subagent 插件走是否够用**：若未来别的插件也要贡献 skill，`SkillContributor` SPI 做成通用扩展点（设计已按通用写，subagent 是第一个使用者）。
+2. Phase 2 的 Maven 物理分模块（`every-agent-agent`）时机：与包内收敛同步做，还是包收敛稳定后再拆（我建议后者）。
