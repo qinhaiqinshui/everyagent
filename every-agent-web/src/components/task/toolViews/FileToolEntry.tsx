@@ -4,8 +4,8 @@
  * 三个工具的折叠态仅附加参数文本不同（read_file 多带 line_start/line_end 等参数），
  * 展开态结构完全一致，故抽出共享组件：
  *
- * 折叠态：工具图标 + 工具名 + inline-preview（文件名 + 间距 + 完整路径 + 可选附加
- * 参数；文件名由 args.path 提取，附加参数由调用方计算）+ 折叠箭头。
+ * 折叠态：工具图标 + 工具名 + inline-preview（文件名 + 可选附加文本 + 间距 + 完整路径；
+ * 文件名由 args.path 提取，附加文本由调用方计算，如 read_file 的 [1-80] 行号区间）+ 折叠箭头。
  * 展开态：result-item-head（图标 + 工具名 + 可点击文件路径 chip）→ 参数块（content 排末尾）
  *         → 结果块（read_file 即文件内容；create/update 为确认文本）→ 错误块。
  *
@@ -52,7 +52,7 @@ function flattenArgs(args: Record<string, unknown> | null): string[] {
 
 export interface FileToolEntryProps {
   detail: AggregatedToolDetail
-  /** 折叠行附加参数文本（如 read_file 的 line_start=1 line_end=80），由调用方按工具计算。 */
+  /** 折叠行附加文本（如 read_file 的 [1-80] 行号区间），渲染在文件名与完整路径之间。 */
   inlineExtras?: string
 }
 
@@ -96,12 +96,12 @@ export function FileToolEntry({ detail, inlineExtras }: FileToolEntryProps) {
           {fullPath ? (
             <>
               <span className="nagent-tool__inline-file-name">{extractFileName(fullPath)}</span>
+              {inlineExtras ? <span className="nagent-tool__inline-file-lines">{inlineExtras}</span> : null}
               <span className="nagent-tool__inline-file-path">{fullPath}</span>
             </>
           ) : (
             '（无路径）'
           )}
-          {inlineExtras ? <span className="nagent-tool__inline-file-extras">{inlineExtras}</span> : null}
         </span>
         {open ? (
           <ChevronDownIcon size={13} className="nagent-tool__chevron" />
