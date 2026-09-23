@@ -305,6 +305,17 @@ class HubSession {
     return enabled ? this.workerConnectResult(workerId) : { ok: true, error: null }
   }
 
+  /** 移除指定 worker 的本地配置(清除 apiKey/启用开关)并关闭其连接;不影响其他 worker。 */
+  removeWorker(workerId: string): void {
+    if (!this.config) return
+    this.closeWorker(workerId)
+    const workers = this.config.workers.filter((w) => w.workerId !== workerId)
+    this.config = { ...this.config, workers }
+    saveConnectionConfig(this.config)
+    this.notifyDirectory()
+    this.notifyWorkers()
+  }
+
   /** 汇总某 worker 的连接结果:error 优先;离线不算失败(未建连是预期),据 online 给出准确文案。 */
   private workerConnectResult(workerId: string): WorkerConnectResult {
     const error = this.workerErrors.get(workerId) ?? null
