@@ -1,6 +1,6 @@
 # 设计方案：任务生命周期洋葱模型 + Agent 独立成层
 
-> 状态：**待评审**（用户确认后才实施）· v3（按评审结论定稿节点模型：无层粒度、一节点一事、float 排序；AgentDispatcher 废止；消息流 agent 事件渲染保留核心）
+> 状态：**待评审**（用户确认后才实施）· v4（节点改为 Servlet Filter 风格参与式链：`result = next(ctx)`，下行=next 前代码、上行=next 后代码；收口序=进入序逆序，经节点划分与现状顺序逐项一致）
 > 范围声明：本文覆盖整体架构（洋葱底座、agent 层独立、subagent 插件三件套、任务队列插件预留）；**本次只实施 Phase 1（洋葱底座）**，其余分期列出。
 
 ---
@@ -72,75 +72,144 @@
 
 ## 3. 洋葱模型设计（Phase 1 核心）
 
-### 3.1 契约（放 `every-agent-plugin-api`，让插件能贡献节点）
+### 3.1 契约（放 `every-agent-plugin-api`，让插件能贡献节点）——Servlet Filter 风格参与式链
 
-**没有预设「层」粒度**——洋葱 = **单一职责节点的有序列表**。每个节点只干一件事（如「状态收口写磁盘」= `status.persist` 节点只调 `store.updateMeta`）；一个动作一个节点，track 与 untrack 也是两个独立节点。排序用 **float**（任意两节点间可插 100.5、100.25…，插件无需协调改号）。
+**没有预设「层」粒度**——洋葱 = **单一职责节点的有序列表**，但节点不是「两个回调」（onStart/onEnd），而是像 **Java Servlet Filter** 一样**参与执行**：节点拿到运行上下文，调用 `result = next(context)` 得到**后面全部节点 + 内核**的执行结果。`next()` 之前 = 下行（开始）阶段，之后 = 上行（结束）阶段。
 
 ```java
-/** 任务生命周期节点（洋葱的一环）。一节点一事；下行=开始，上行=结束。 */
+/**
+ * 任务生命周期节点（Servlet Filter 风格）。
+ * invoke() 内调用 next.proceed(ctx) 之前的代码 = 下行；之后的代码 = 上行。
+ */
 public interface TaskLifecycleNode {
     String id();
     /** 洋葱位置：升序 = 外→内。float 允许任意插位；同 order 按注册顺序（稳定排序）。 */
     float order();
-    /** 下行（外→内）：任务开始。可阻塞（虚拟线程廉价，如未来排队节点）；抛异常=否决进入，任务 FAILED。 */
-    default void onStart(TaskLifecycleContext ctx) throws Exception {}
-    /** 上行（内→外）：任务结束（DONE/FAILED/CANCELLED 均必达）。不得抛异常（执行器兜底 WARN）。 */
-    default void onEnd(TaskLifecycleContext ctx, TaskOutcome outcome) {}
-    /** 上行时该节点是否在任务锁内执行（复现现状 finish 的 synchronized(t) 粒度，见 §3.4）。 */
-    default boolean holdsTaskLock() { return true; }
+    /**
+     * 契约：
+     * - 下行段可否决：不调 next 直接 return TaskOutcome（短路，内层不执行）或抛异常（执行器译为 FAILED）。
+     * - 收口必达靠节点自己的 try/finally：推荐形态「下行动作在 try 外，next+收口包进 try/finally」——
+     *   下行抛异常时本节点不收口（未进入不收口），next 之后无论成败收口必达。
+     * - next() 拿到的一律是值（内核已把一切异常翻译成 TaskOutcome），上行段通常无需 catch。
+     * - 上行段可改写 result（如补 error 上下文）后返回，外层节点看到改写值。
+     * - next 恰好调用一次：不调=否决；重复调=状态未定义（执行器打 ERROR 日志防御）。
+     */
+    TaskOutcome invoke(TaskLifecycleContext ctx, TaskChain next) throws Exception;
 }
 
-/** 洋葱上下文：节点的读写面（窄接口，非 TaskEntry 本体，见 §3.4）。 */
-public interface TaskLifecycleContext { String taskId(); /* … */ }
+/** 链的下一环。 */
+@FunctionalInterface
+public interface TaskChain {
+    TaskOutcome proceed(TaskLifecycleContext ctx) throws Exception;
+}
 
-/** 任务结局。 */
-public record TaskOutcome(TaskEndStatus status, String error, long startedAt, long endedAt) {}
+/** 任务结局（值对象；异常只在内核翻译一次，链上只传值）。 */
+public record TaskOutcome(TaskEndStatus status, String error, long startedAt, long endedAt) {
+    public enum TaskEndStatus { DONE, FAILED, CANCELLED }
+    public static TaskOutcome failed(Throwable t) { /* … */ }
+    public static TaskOutcome cancelled() { /* … */ }
+}
+
+/** 任务内核：对话式调用 agent（轮次循环）。必须把一切异常翻译为 TaskOutcome（中断位恢复）。 */
+@FunctionalInterface
+public interface TaskKernel {
+    TaskOutcome run(TaskLifecycleContext ctx);
+}
 ```
 
-执行器（两入口）：
+执行器（组装即全部逻辑）：
 
 ```java
+/** 洋葱执行器：按 order 升序把节点组装为嵌套链，链尾接内核。 */
 public final class TaskOnion {
-    /** 常规：下行 → 内核 → 上行 unwind（逆序，只收口已进入的节点）。 */
-    public TaskOutcome execute(List<TaskLifecycleNode> nodes, TaskKernel kernel, TaskLifecycleContext ctx) {
-        int entered = 0;
-        TaskOutcome outcome;
+    public TaskOutcome run(List<TaskLifecycleNode> nodes, TaskKernel kernel, TaskLifecycleContext ctx) {
+        TaskChain chain = kernel::run;                    // 链尾 = 内核（异常已翻译）
+        for (int i = nodes.size() - 1; i >= 0; i--) {     // 由内向外包裹
+            TaskLifecycleNode node = nodes.get(i);
+            TaskChain inner = chain;
+            chain = c -> node.invoke(c, inner);
+        }
         try {
-            for (TaskLifecycleNode n : nodes) { n.onStart(ctx); entered++; }   // 下行
-            outcome = kernel.run(ctx);                                        // 内核 = 调用 agent
-        } catch (InterruptedException e) { outcome = TaskOutcome.cancelled(e); Thread.currentThread().interrupt(); }
-        catch (Throwable e)             { outcome = TaskOutcome.failed(e); }
-        unwind(nodes.subList(0, entered), ctx, outcome);
-        return outcome;
-    }
-
-    /** 外部注入结局的强制收口（停机旁路）：直接 unwind——status.finalize 的 CAS 保证幂等。 */
-    public void unwind(List<TaskLifecycleNode> nodes, TaskLifecycleContext ctx, TaskOutcome injected) {
-        for (int i = nodes.size() - 1; i >= 0; i--) {                         // 上行：内→外
-            TaskLifecycleNode n = nodes.get(i);
-            try {
-                if (n.holdsTaskLock()) synchronized (ctx.taskLock()) { n.onEnd(ctx, injected); }
-                else n.onEnd(ctx, injected);
-            } catch (Throwable t) { log.warn("[onion] 节点 {} 收口失败（继续外层）", n.id(), t); }
+            return chain.proceed(ctx);
+        } catch (Throwable t) {                           // 最外层之外的兜底（节点否决异常等）
+            return TaskOutcome.failed(t);
         }
     }
 }
 ```
 
-### 3.2 错误语义（对齐中间件/unwind 惯例）
+**节点三种形态**（17 个内置节点全部落在这三种形态内）：
+
+```java
+/** 形态一：纯下行节点（persistence.track, order=100）——上行无动作，直接透传。 */
+final class PersistenceTrackNode implements TaskLifecycleNode {
+    public String id() { return "persistence.track"; }
+    public float order() { return 100; }
+    public TaskOutcome invoke(TaskLifecycleContext ctx, TaskChain next) throws Exception {
+        store.track(ctx.taskId(), /* … */);               // 下行
+        return next.proceed(ctx);                         // 上行无（untrack 是独立节点 order=500）
+    }
+}
+
+/** 形态二：纯收口节点（status.persist, order=650）——下行段为空，先透传拿结果再收口。 */
+final class StatusPersistNode implements TaskLifecycleNode {
+    public String id() { return "status.persist"; }
+    public float order() { return 650; }
+    public TaskOutcome invoke(TaskLifecycleContext ctx, TaskChain next) throws Exception {
+        TaskOutcome result = next.proceed(ctx);           // 下行段为空
+        synchronized (ctx.taskLock()) {                   // 上行 = 状态收口写磁盘（一节点一事）
+            store.updateMeta(ctx.taskId());
+        }
+        return result;
+    }
+}
+
+/** 形态三：成对节点（未来队列插件形态，try/finally 状态局部——filter 模型的表达力所在）。 */
+final class QueueAdmissionNode implements TaskLifecycleNode {
+    public String id() { return "queue.admission"; }
+    public float order() { return 250; }
+    public TaskOutcome invoke(TaskLifecycleContext ctx, TaskChain next) throws Exception {
+        QueueTicket ticket = queue.enqueue(ctx.taskId()); // 下行：入队（阻塞=虚拟线程挂起）
+        try {
+            return next.proceed(ctx);                     // 内层执行
+        } finally {
+            queue.leave(ctx.taskId(), ticket);            // 上行：出队广播（必达）
+        }
+    }
+}
+
+/** 内核适配（TaskManager 侧）：现 runTask 的轮次循环整体搬入，异常一次性翻译。 */
+TaskKernel kernel = ctx -> {
+    try {
+        // consumeInput + while (true) { agentService.run(main); inputQueue.poll … }
+        return new TaskOutcome(TaskEndStatus.DONE, null, ctx.startedAt(), System.currentTimeMillis());
+    } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();               // 恢复中断位（后续节点仍可感知）
+        return TaskOutcome.cancelled();
+    } catch (Throwable t) {
+        return TaskOutcome.failed(t);
+    }
+};
+```
+
+### 3.2 错误语义（filter 模型）
 
 | 场景 | 行为 |
 |---|---|
-| 下行第 k 节点 onStart 抛异常 | 任务 FAILED；**只**逆序收口 0..k-1 节点（已进入的才收口）；第 k 节点自身不收口 |
-| 内核异常/中断 | 全部已进入节点逆序 onEnd（outcome=FAILED/CANCELLED；中断位由执行器恢复） |
-| 上行某节点 onEnd 抛异常 | 捕获记 WARN，**继续外层**（收口永不因单节点失败中断） |
-| 上行必达且仅达一次 | 现 `finish()` 的 `terminal()` 幂等守卫语义收进 `status.finalize` 节点（CAS），执行器不重复 |
-| 停机强制收口 | `TaskOnion.unwind(nodes, ctx, FAILED("worker 停机"))`（替代现状 shutdown 直接调 finish 的旁路） |
-| 取消 | `rpcTaskCancel` 仍走 `future.cancel(true)` → 内核中断 → 上行 CANCELLED（级联路径不变） |
+| 节点下行段抛异常 / 不调 next 直接 return | 否决：内层全部不执行；异常被外层节点 `next.proceed(ctx)` 之外的执行器兜底译为 FAILED（或 return 的短路值即结局）；外层节点照常走自己的上行段（它们已在 invoke 中） |
+| 内核异常/中断 | **内核内**翻译为 TaskOutcome（FAILED/CANCELLED + 中断位恢复），链上只传值——节点上行段拿到的永远是正常 result |
+| 某节点上行段抛异常 | 穿过更外层节点的 `next.proceed()` 调用点——**外层若未 try/finally 则收口中断**。约束：内置节点的上行段不允许抛（收口动作自带 try/catch 吞错记 WARN，如 flush 超时放行）；执行器对最外层兜底译 FAILED |
+| 收口必达 | 由节点 **try/finally** 保证（推荐形态：下行动作在 try 外）。「下行抛异常 ⇒ 本节点不收口」自动成立 |
+| 上行必达且仅达一次 | `status.finalize`（850）的终态 CAS 幂等门不变 |
+| 停机强制收口 | filter 无外部重放入口（栈在各节点 invoke 内）。停机 = `cancel(true)` 中断全部任务线程 → 各节点 finally/上行段沿链自然收口 + 有限等待；替代现状 shutdown 直接调 finish 的旁路（status.finalize CAS 保证不双收）。destroy 超时未退出的任务记 ERROR 放弃（应急语义，与现状 flush 30s 超时放行同档） |
+| 取消 | `rpcTaskCancel` 仍 `future.cancel(true)` → 内核中断 → result=CANCELLED 沿链上行（级联路径不变） |
+| result 改写 | 上行段可改写（如 cascade.stop 补 error 上下文）；改写值向外层传播 |
 
 ### 3.3 内置节点基线表（现状动作逐字映射，行为零变化）
 
-**下行节点（onStart，order 升序 = 执行序）**：
+filter 模型下收口序恒等于进入序的逆序（同一 order 决定两端位置）。**关键推论**：v3 的「一节点一事」划分（track/untrack 分离、纯收口动作独立成节点）恰好让逆序收口序与现状执行顺序**逐项一致**——不需要任何顺序变化。17 节点 = 4 个形态一（纯下行）+ 13 个形态二（空下行段纯收口）；形态三（成对 try/finally）是留给未来插件的。
+
+**下行节点（invoke 的 next 之前，order 升序 = 执行序）**：
 
 | order | 节点 id | onStart 职责（一事） | 现状出处 |
 |---|---|---|---|
@@ -151,12 +220,12 @@ public final class TaskOnion {
 
 **内核**：轮次循环 `while(true){ agentService.run(main); inputQueue.poll… }`（对话式调用 agent）。
 
-**上行节点（onEnd，按执行先后排列 = order 降序）**：
+**上行节点（invoke 的 next 之后，按执行先后排列 = order 降序；全部为形态二——下行段为空透传）**：
 
 | 执行序 | order | 节点 id | onEnd 职责（一事） | 锁 | 现状出处 |
 |---|---|---|---|---|---|
 | 1 | 950 | `spawned.await` | `awaitAllBeforeFinish`（等全部子 agent，超时级联停） | 锁外 | runTask L1672 |
-| 2 | 900 | `cascade.stop` | outcome≠DONE：`stopRequested` + `stopAll` + `asks.cancelTask` + `cancelled/error` 事件 | 锁外 | runTask catch L1680-1705 |
+| 2 | 900 | `cascade.stop` | result≠DONE 时按 status 分支：`stopRequested` + `stopAll` + `asks.cancelTask`；CANCELLED 发 `cancelled` 事件 / FAILED 发 `error` 事件（现状两个 catch 分支的差异收敛为看 result） | 锁外 | runTask catch L1680-1705 |
 | 3 | 850 | `status.finalize` | 终态 CAS（幂等门）+ `endedAt/error/status` + agentStatus 终态事件 + 终态广播 | 锁内 | finish L1866-1875 |
 | 4 | 800 | `concurrency.release` | `active.decrementAndGet()` | 锁内 | finish L1876 |
 | 5 | 750 | `log.flush` | `store.flush`（等落盘追平，30s 超时放行） | 锁内 | finish L1877 |
@@ -173,7 +242,7 @@ public final class TaskOnion {
 - 上行 1-13 的总顺序 = 现状 `runTask 尾部 → finish 内部` 的执行顺序**逐项对应**（await/cascade 在 finish 之前=锁外；3-12 对应 finish 持锁段；13 锁外）。
 - 下行 100→400 = 现状 `rpcTaskRun（track/wire）→ runTask 头部（RUNNING/build/consume）`。
 - **留在洋葱外（RPC 边缘）**：幂等键去重、并发上限检查 + `active.incrementAndGet()`（需同步应答 ERR_BUSY，TOCTOU 语义要求在 RPC 线程）、`TASK_CREATED` 广播、`ctx.ok` 应答——属「创建」而非「开始」。未来队列插件见 §3.5。
-- **锁策略**：现状 finish 全程持 `synchronized(t)`；新模型由 `holdsTaskLock()` 分段复现——锁外段（await/cascade/activity）+ 锁内段（3-12 顺序连续），与现状等价。
+- **锁策略（filter 模型下为节点实现细节）**：现状 finish 全程一个 `synchronized(t)` 大临界区；新模型由各锁内节点上行段**各自** `synchronized(ctx.taskLock())`。差异论证：终态 CAS 已在第一个临界区（status.finalize）完成，此后 cancel/runExisting 等并发方插进小临界区间隙时看到的是已终态任务，只做幂等动作（rpcTaskCancel 置 stopRequested/stopAll 无害；finish 重入被 CAS 拦截）——与整段等价。若实施期回归发现反例，兜底方案：850..400 连续锁内段用组合节点包一层（放弃一节点一事于该段）。
 
 ### 3.4 TaskLifecycleContext（节点的读写面）
 
@@ -190,7 +259,7 @@ public final class TaskOnion {
 
 - worker 内置节点经 `TaskLifecycleRegistry`（新，`plugin/registry/` 第 8 个注册表，CopyOnWriteArrayList + PluginStateStore 过滤 + **float order 稳定排序**——与 AdvisorProviderRegistry 同模式）注册。
 - `WorkerPluginContext` 新增 `registerTaskLifecycleNode(TaskLifecycleNode)`。
-- **任务队列插件（Phase 4 预留，本次不实施）**：在下行空隙（100~400 之间任意 float 位，如 250）插入排队节点——`onStart` 阻塞排队（虚拟线程下阻塞即挂起，零线程开销）、`onEnd` 出队广播；若需接管「并发上限即拒」语义，则替换 RPC 边缘预检（Phase 4 设计边缘扩展点）。底座只保证节点接口表达力足够。
+- **任务队列插件（Phase 4 预留，本次不实施）**：在下行空隙（100~400 之间任意 float 位，如 250）插入**形态三成对节点**（§3.1 QueueAdmissionNode 示例）——下行段 `enqueue` 阻塞排队（虚拟线程下阻塞即挂起，零线程开销）、finally 出队广播；若需接管「并发上限即拒」语义，则替换 RPC 边缘预检（Phase 4 设计边缘扩展点）。filter 模型的 try/finally 局部状态正是为这类成对关注点准备。
 
 ---
 
@@ -333,7 +402,7 @@ public record PluginSkill(String id, String name, String description, List<Strin
 
 | Phase | 内容 | 交付 |
 |---|---|---|
-| **1（本次）洋葱底座** | plugin-api 节点契约（`TaskLifecycleNode`/`TaskLifecycleContext`/`TaskOutcome`/`TaskKernel`）+ `registerTaskLifecycleNode`；`TaskLifecycleRegistry`（float 排序）+ `TaskOnion`；17 个内置节点拆分（下行 4 + 上行 13，finish/runTask/rpcTaskRun 逻辑**逐字映射**，不改行为）；`runTask` 重写为洋葱执行；单测（下行顺序/否决/unwind 逆序/幂等/停机注入/取消/锁分段）；ARCHITECTURE.md 新 §7.x | worker 行为零变化（事件顺序、seq、落盘字节级兼容），可回归验证 |
+| **1（本次）洋葱底座** | plugin-api 节点契约（`TaskLifecycleNode`/`TaskLifecycleContext`/`TaskOutcome`/`TaskKernel`）+ `registerTaskLifecycleNode`；`TaskLifecycleRegistry`（float 排序）+ `TaskOnion`；17 个内置节点拆分（下行 4 + 上行 13，finish/runTask/rpcTaskRun 逻辑**逐字映射**，不改行为）；`runTask` 重写为洋葱执行；单测（下行顺序/否决短路/逆序收口/try-finally 必达/幂等/取消/停机中断收口/锁分段）；ARCHITECTURE.md 新 §7.x | worker 行为零变化（事件顺序、seq、落盘字节级兼容），可回归验证 |
 | **2 agent 层** | `dev.everyagent.worker.agent` 包收敛 + `AgentContext`/`AgentEventChannel` 解耦 + `AgentService` + `AgentDispatcher` 废止 + `SubAgentManager` 编排下沉 | agent 层边界成立（能力全部留在核心），其他插件可依赖 |
 | **3 subagent 插件** | 三件套迁移（工具 + SkillContributor + 前端面板）；plugin-api 新增 `SkillContributor` SPI + 注册表；BuiltInSkills 合并改造；web `ComposerPanelCtx` 扩展 `selectAgent`；app pom 挂载 + CI 一致性检查 | 删除插件 = 无子 agent 工具/skill/前端列表，agent 层完好 |
 | **4（未来）队列插件** | 排队节点（onStart 阻塞排队 / onEnd 出队广播）+ RPC 边缘预检扩展点 | 底座已就绪，不在本设计实施范围 |
@@ -344,7 +413,7 @@ public record PluginSkill(String id, String name, String description, List<Strin
 
 | 风险 | 对策 |
 |---|---|
-| finish 拆节点后收口顺序/竞态回归 | 顺序不变量逐条对照（§3.3 表）；锁分段复现现状 synchronized(t)（§3.3 锁策略）；补 onion 单测 + 全量 worker 测试回归 |
+| finish 拆节点后收口顺序/竞态回归 | 逆序不变量逐条对照（§3.3：收口序=进入序逆序=现状顺序）；锁分段等价论证（§3.3 锁策略）；补 onion 单测 + 全量 worker 测试回归 |
 | 再运行（startRerun）路径绕过洋葱 | 再运行的 track/seed/wire 逻辑同样走 `persistence.track`/`task.wires` onStart（复用同一节点实现，不另写一份） |
 | DataPusher 换日志时机变化 | track 仍由 `persistence.track`.onStart 调用；执行线程从 RPC 线程移到任务线程开头（外部可见行为不变：meta 最终一致、ctx.ok 应答仍即时） |
 | AgentEntity 解耦破坏事件语义（roundSeqs 同轮共享 seq） | AgentEventChannel 由 TaskEvents 直接 implements，seq 逻辑不动，只换接口面 |
