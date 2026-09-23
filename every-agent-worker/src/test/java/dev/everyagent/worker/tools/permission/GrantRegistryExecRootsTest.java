@@ -3,6 +3,7 @@ package dev.everyagent.worker.tools.permission;
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.modules.WorkspaceManager;
 import dev.everyagent.worker.modules.WorkspaceManager.Root;
+import dev.everyagent.worker.plugin.registry.AuthorizationHandlerRegistry;
 import dev.everyagent.worker.proto.TaskDtos.ModelSnapshot;
 import dev.everyagent.worker.task.PendingAsks;
 import dev.everyagent.worker.task.TaskEntry;
@@ -57,7 +58,7 @@ class GrantRegistryExecRootsTest {
         GrantRegistry grants = new GrantRegistry(asksTaskScope(), new WorkerProperties(),
                 stubWorkspaceManager(wsReal,
                         List.of(extRoot.toRealPath(), wsParent, granted.toRealPath())),
-                mockStore(), List.of());
+                mockStore(), new AuthorizationHandlerRegistry());
         TaskEntry t = task(ws);
 
         // 用户对 granted 授权 EXEC(随附旧宽根 fsRoot 模拟历史 grants.json 载入的 C:\ 形态)
@@ -76,7 +77,7 @@ class GrantRegistryExecRootsTest {
         Path wsReal = ws.toRealPath();
         Path extRoot = Files.createDirectories(tempDir.resolve("only").resolve("ext"));
         GrantRegistry grants = new GrantRegistry(asksTaskScope(), new WorkerProperties(),
-                stubWorkspaceManager(wsReal, List.of(extRoot.toRealPath())), mockStore(), List.of());
+                stubWorkspaceManager(wsReal, List.of(extRoot.toRealPath())), mockStore(), new AuthorizationHandlerRegistry());
 
         // 无任何 EXEC 授权:视图仍含外部授权根(命令侧按 §7.17 直接生效)
         assertEquals(List.of(extRoot.toRealPath()), grants.execRootsSandboxed(task(ws)));
@@ -87,7 +88,7 @@ class GrantRegistryExecRootsTest {
         Path wsReal = ws.toRealPath();
         Path granted = Files.createDirectories(tempDir.resolve("legacy").resolve("g"));
         GrantRegistry grants = new GrantRegistry(asksTaskScope(), new WorkerProperties(),
-                stubWorkspaceManager(wsReal, List.of()), mockStore(), List.of());
+                stubWorkspaceManager(wsReal, List.of()), mockStore(), new AuthorizationHandlerRegistry());
         TaskEntry t = task(ws);
 
         grants.authorize(t, "main-agent", "p::exec::" + granted.toRealPath(), "读目录",

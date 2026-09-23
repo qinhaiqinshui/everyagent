@@ -1,5 +1,6 @@
 package dev.everyagent.plugin.authreview;
 
+import dev.everyagent.worker.plugin.registry.ToolExecutionInterceptorRegistry;
 import dev.everyagent.worker.plugin.spi.ToolExecutionInterceptor;
 import dev.everyagent.worker.task.InterceptingToolCallingManager;
 import dev.everyagent.worker.task.TaskEntry;
@@ -22,6 +23,10 @@ import java.util.List;
 public class UnattendedToolInterceptor implements ToolExecutionInterceptor {
 
     private static final ObjectMapper MAPPER = JacksonUtils.getDefaultJsonMapper();
+
+    public UnattendedToolInterceptor(ToolExecutionInterceptorRegistry registry) {
+        registry.register(this);
+    }
 
     @Override
     public int order() { return 100; }

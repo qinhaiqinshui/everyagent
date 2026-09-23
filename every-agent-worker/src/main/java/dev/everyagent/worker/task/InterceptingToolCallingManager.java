@@ -1,5 +1,6 @@
 package dev.everyagent.worker.task;
 
+import dev.everyagent.worker.plugin.registry.ToolExecutionInterceptorRegistry;
 import dev.everyagent.worker.plugin.spi.ToolExecutionInterceptor;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.model.ChatResponse;
@@ -18,11 +19,15 @@ import java.util.List;
  * 第一个返回非 null 的拦截器短路，否则委托真实 manager 执行。
  *
  * <p>与 {@link LoopRepeatGuardToolManager} 同构——装饰 + 入口拦截 + 合成结果短路。
+ *
+ * <p>持有 {@link ToolExecutionInterceptorRegistry} 引用而非快照列表，
+ * 每次 executeToolCalls 时从 registry.sorted() 获取最新拦截器列表，
+ * 外部插件随时注册/注销 interceptor 都能实时生效。
  */
 public class InterceptingToolCallingManager implements ToolCallingManager {
 
     private final ToolCallingManager delegate;
-    private final List<ToolExecutionInterceptor> interceptors;
+    private final ToolExecutionInterceptorRegistry interceptorRegistry;
 
     /**
      * 当前线程绑定的任务上下文（per-run），由 {@code AgentRunner} 在执行前设置、
@@ -36,9 +41,9 @@ public class InterceptingToolCallingManager implements ToolCallingManager {
     public static TaskEntry currentTask() { return CURRENT_TASK.get(); }
 
     public InterceptingToolCallingManager(ToolCallingManager delegate,
-            List<ToolExecutionInterceptor> interceptors) {
+            ToolExecutionInterceptorRegistry interceptorRegistry) {
         this.delegate = delegate;
-        this.interceptors = interceptors; // 已按 order 排序
+        this.interceptorRegistry = interceptorRegistry;
     }
 
     @Override
@@ -48,6 +53,7 @@ public class InterceptingToolCallingManager implements ToolCallingManager {
 
     @Override
     public ToolExecutionResult executeToolCalls(Prompt prompt, ChatResponse chatResponse) {
+        var interceptors = interceptorRegistry.sorted();
         if (interceptors.isEmpty()) {
             return delegate.executeToolCalls(prompt, chatResponse);
         }

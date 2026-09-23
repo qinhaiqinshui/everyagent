@@ -4,6 +4,7 @@ import dev.everyagent.contract.json.Json;
 import dev.everyagent.worker.AtomicFiles;
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.modules.WorkspaceManager;
+import dev.everyagent.worker.plugin.registry.AuthorizationHandlerRegistry;
 import dev.everyagent.worker.task.AgentCancelledException;
 import dev.everyagent.worker.task.PendingAsks;
 import dev.everyagent.worker.task.TaskEntry;
@@ -20,7 +21,6 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -49,20 +49,18 @@ public class GrantRegistry {
     private final WorkerProperties props;
     private final WorkspaceManager workspaces;
     private final TaskStore store;
-    /** 授权决议链节点(按 order 排序);零节点 → 直接放行。 */
-    private final List<AuthorizationHandler> authHandlers;
+    /** 授权决议链节点注册表(按 order 排序);零节点 → 直接放行。 */
+    private final AuthorizationHandlerRegistry authHandlerRegistry;
 
     private final Map<String, TaskGrants> byTask = new ConcurrentHashMap<>();
 
     public GrantRegistry(PendingAsks asks, WorkerProperties props, WorkspaceManager workspaces,
-            TaskStore store, List<AuthorizationHandler> authHandlers) {
+            TaskStore store, AuthorizationHandlerRegistry authHandlerRegistry) {
         this.asks = asks;
         this.props = props;
         this.workspaces = workspaces;
         this.store = store;
-        this.authHandlers = authHandlers.stream()
-                .sorted(Comparator.comparingInt(AuthorizationHandler::order))
-                .toList();
+        this.authHandlerRegistry = authHandlerRegistry;
     }
 
     // ---- 生命周期 ---- 
@@ -217,7 +215,7 @@ public class GrantRegistry {
      */
     private GrantScope resolveScope(TaskEntry t, String agentId, String prompt, String grantKey) {
         AuthorizationHandler.AuthorizationRequest req = new AuthorizationHandler.AuthorizationRequest(t, agentId, grantKey, prompt);
-        for (AuthorizationHandler handler : authHandlers) {
+        for (AuthorizationHandler handler : authHandlerRegistry.sorted()) {
             if (!handler.applies(req)) {
                 continue;
             }

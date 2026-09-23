@@ -5,17 +5,21 @@ import dev.everyagent.worker.modules.WorkspaceManager;
 import dev.everyagent.worker.os.OsSandbox;
 import dev.everyagent.worker.plugin.registry.AdvisorProviderRegistry;
 import dev.everyagent.worker.plugin.registry.AgentDispatcherRegistry;
+import dev.everyagent.worker.plugin.registry.AuthorizationHandlerRegistry;
 import dev.everyagent.worker.plugin.registry.SandboxProviderRegistry;
 import dev.everyagent.worker.plugin.registry.SearchProviderRegistry;
+import dev.everyagent.worker.plugin.registry.ToolExecutionInterceptorRegistry;
 import dev.everyagent.worker.plugin.registry.ToolProviderRegistry;
 import dev.everyagent.worker.plugin.spi.AdvisorProvider;
 import dev.everyagent.worker.plugin.spi.AgentDispatcher;
 import dev.everyagent.worker.plugin.spi.SandboxProvider;
 import dev.everyagent.worker.plugin.spi.SearchProvider;
+import dev.everyagent.worker.plugin.spi.ToolExecutionInterceptor;
 import dev.everyagent.worker.plugin.spi.ToolProvider;
 import dev.everyagent.worker.rpc.RpcDispatcher;
 import dev.everyagent.worker.slash.SlashCommandRegistry;
 import dev.everyagent.worker.tools.PermissionGate;
+import dev.everyagent.worker.tools.permission.AuthorizationHandler;
 
 import java.util.Map;
 
@@ -33,6 +37,8 @@ public class WorkerPluginContextImpl implements WorkerPluginContext {
     private final SandboxProviderRegistry sandboxRegistry;
     private final AgentDispatcherRegistry dispatcherRegistry;
     private final SearchProviderRegistry searchRegistry;
+    private final AuthorizationHandlerRegistry authHandlerRegistry;
+    private final ToolExecutionInterceptorRegistry toolInterceptorRegistry;
     private final RpcDispatcher rpcDispatcher;
     private final SlashCommandRegistry slashRegistry;
     private final WorkerServices services;
@@ -44,6 +50,8 @@ public class WorkerPluginContextImpl implements WorkerPluginContext {
             SandboxProviderRegistry sandboxRegistry,
             AgentDispatcherRegistry dispatcherRegistry,
             SearchProviderRegistry searchRegistry,
+            AuthorizationHandlerRegistry authHandlerRegistry,
+            ToolExecutionInterceptorRegistry toolInterceptorRegistry,
             RpcDispatcher rpcDispatcher,
             SlashCommandRegistry slashRegistry,
             WorkerServices services,
@@ -54,6 +62,8 @@ public class WorkerPluginContextImpl implements WorkerPluginContext {
         this.sandboxRegistry = sandboxRegistry;
         this.dispatcherRegistry = dispatcherRegistry;
         this.searchRegistry = searchRegistry;
+        this.authHandlerRegistry = authHandlerRegistry;
+        this.toolInterceptorRegistry = toolInterceptorRegistry;
         this.rpcDispatcher = rpcDispatcher;
         this.slashRegistry = slashRegistry;
         this.services = services;
@@ -88,6 +98,16 @@ public class WorkerPluginContextImpl implements WorkerPluginContext {
     @Override
     public void registerSearchProvider(SearchProvider provider) {
         searchRegistry.register(provider);
+    }
+
+    @Override
+    public void registerAuthorizationHandler(AuthorizationHandler handler) {
+        authHandlerRegistry.register(handler);
+    }
+
+    @Override
+    public void registerToolExecutionInterceptor(ToolExecutionInterceptor interceptor) {
+        toolInterceptorRegistry.register(interceptor);
     }
 
     @Override

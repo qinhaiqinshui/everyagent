@@ -1,5 +1,6 @@
 package dev.everyagent.plugin.authreview;
 
+import dev.everyagent.worker.plugin.registry.AuthorizationHandlerRegistry;
 import dev.everyagent.worker.tools.permission.AuthorizationHandler;
 import dev.everyagent.worker.tools.permission.AuthorizationHandler.AuthorizationRequest;
 import dev.everyagent.worker.tools.permission.AuthorizationHandler.AuthorizationDecision;
@@ -9,8 +10,9 @@ import org.springframework.stereotype.Component;
 public class AiReviewAuthHandler implements AuthorizationHandler {
     private final AiAuthReviewer reviewer;
 
-    public AiReviewAuthHandler(AiAuthReviewer reviewer) {
+    public AiReviewAuthHandler(AuthorizationHandlerRegistry registry, AiAuthReviewer reviewer) {
         this.reviewer = reviewer;
+        registry.register(this);
     }
 
     @Override

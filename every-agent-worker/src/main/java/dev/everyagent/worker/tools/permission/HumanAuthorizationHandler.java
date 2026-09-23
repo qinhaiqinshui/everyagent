@@ -1,9 +1,11 @@
 package dev.everyagent.worker.tools.permission;
 
 import dev.everyagent.worker.config.WorkerProperties;
+import dev.everyagent.worker.plugin.registry.AuthorizationHandlerRegistry;
 import dev.everyagent.worker.task.AgentCancelledException;
 import dev.everyagent.worker.task.PendingAsks;
 import dev.everyagent.worker.task.TaskEntry;
+import jakarta.annotation.PostConstruct;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
@@ -19,12 +21,19 @@ public class HumanAuthorizationHandler implements AuthorizationHandler {
 
     static final List<String> AUTHORIZE_OPTIONS = List.of("本轮运行内允许", "本任务全程允许", "拒绝");
 
+    private final AuthorizationHandlerRegistry registry;
     private final PendingAsks asks;
     private final WorkerProperties props;
 
-    public HumanAuthorizationHandler(PendingAsks asks, WorkerProperties props) {
+    public HumanAuthorizationHandler(AuthorizationHandlerRegistry registry, PendingAsks asks, WorkerProperties props) {
+        this.registry = registry;
         this.asks = asks;
         this.props = props;
+    }
+
+    @PostConstruct
+    void selfRegister() {
+        registry.register(this);
     }
 
     @Override

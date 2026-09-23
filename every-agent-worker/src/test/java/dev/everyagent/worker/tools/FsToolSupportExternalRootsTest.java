@@ -3,6 +3,7 @@ package dev.everyagent.worker.tools;
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.hub.HubPool;
 import dev.everyagent.worker.modules.WorkspaceManager;
+import dev.everyagent.worker.plugin.registry.AuthorizationHandlerRegistry;
 import java.util.List;
 import dev.everyagent.worker.os.wsl.WslUmounter;
 import dev.everyagent.worker.proto.TaskDtos.ModelSnapshot;
@@ -65,8 +66,10 @@ class FsToolSupportExternalRootsTest {
         java.lang.reflect.Method init = WorkspaceManager.class.getDeclaredMethod("init");
         init.setAccessible(true); // @PostConstruct init 为包私有,跨包测试经反射触发
         init.invoke(wm);
+        var authRegistry = new AuthorizationHandlerRegistry();
+        authRegistry.register(new HumanAuthorizationHandler(authRegistry, asks, p));
         GrantRegistry grants = new GrantRegistry(asks, p, wm, mock(TaskStore.class),
-                List.of(new HumanAuthorizationHandler(asks, p)));
+                authRegistry);
         PermissionGate gate = new PermissionGate(wm, grants,
                 new WorkspaceAllowCheck(),
                 new MissingPathCheck(),

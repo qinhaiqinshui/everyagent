@@ -5,6 +5,7 @@ import dev.everyagent.worker.hub.HubLink;
 import dev.everyagent.worker.hub.HubPool;
 import dev.everyagent.worker.modules.WorkspaceManager;
 import dev.everyagent.worker.os.wsl.WslUmounter;
+import dev.everyagent.worker.plugin.registry.AuthorizationHandlerRegistry;
 import dev.everyagent.worker.proto.TaskDtos.ModelSnapshot;
 import dev.everyagent.worker.rpc.RpcDispatcher;
 import dev.everyagent.worker.task.PendingAsks;
@@ -164,8 +165,10 @@ class ExternalRootAllowCheckTest {
 
     private PermissionGate gate(WorkspaceManager wm, PendingAsks asks) {
         WorkerProperties props = new WorkerProperties();
+        var authRegistry = new AuthorizationHandlerRegistry();
+        authRegistry.register(new HumanAuthorizationHandler(authRegistry, asks, props));
         GrantRegistry grants = new GrantRegistry(asks, props, wm,
-                mock(TaskStore.class), List.of(new HumanAuthorizationHandler(asks, props)));
+                mock(TaskStore.class), authRegistry);
         return new PermissionGate(wm, grants,
                 new WorkspaceAllowCheck(),
                 new MissingPathCheck(),

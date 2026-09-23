@@ -3,7 +3,7 @@ package dev.everyagent.worker;
 import dev.everyagent.worker.os.OsSandbox;
 import dev.everyagent.worker.plugin.AdvisorContextImpl;
 import dev.everyagent.worker.plugin.registry.AdvisorProviderRegistry;
-import dev.everyagent.worker.plugin.spi.ToolExecutionInterceptor;
+import dev.everyagent.worker.plugin.registry.ToolExecutionInterceptorRegistry;
 import dev.everyagent.worker.skill.BuiltInSkills;
 import dev.everyagent.worker.skill.SkillAdvisor;
 import dev.everyagent.worker.task.AgentCancelledException;
@@ -94,10 +94,7 @@ public class AgentClientFactory {
      * 经 {@link InterceptingToolCallingManager} 包装以支持 {@link ToolExecutionInterceptor} 责任链。
      */
     @Bean
-    public ToolCallingManager toolCallingManager(List<ToolExecutionInterceptor> interceptors) {
-        var sorted = interceptors.stream()
-                .sorted(java.util.Comparator.comparingInt(ToolExecutionInterceptor::order))
-                .toList();
+    public ToolCallingManager toolCallingManager(ToolExecutionInterceptorRegistry interceptorRegistry) {
         ToolCallingManager base = ToolCallingManager.builder()
                 .toolExecutionExceptionProcessor(CANCELLING_PROCESSOR)
                 // AI 可能下发本 agent 未注册的工具名(平台/模型幻觉等):框架默认抛
@@ -112,7 +109,7 @@ public class AgentClientFactory {
                 .maxCallsPerTool(200)
                 .maxTotalToolCalls(500)
                 .build();
-        return new InterceptingToolCallingManager(base, sorted);
+        return new InterceptingToolCallingManager(base, interceptorRegistry);
     }
 
     /** skill 渐进式披露索引注入 advisor(主 agent 专属,无状态可共享单例)。 */

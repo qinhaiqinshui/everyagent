@@ -10,8 +10,10 @@ import dev.everyagent.worker.plugin.WorkerPluginContextImpl;
 import dev.everyagent.worker.plugin.WorkerServices;
 import dev.everyagent.worker.plugin.registry.AdvisorProviderRegistry;
 import dev.everyagent.worker.plugin.registry.AgentDispatcherRegistry;
+import dev.everyagent.worker.plugin.registry.AuthorizationHandlerRegistry;
 import dev.everyagent.worker.plugin.registry.SandboxProviderRegistry;
 import dev.everyagent.worker.plugin.registry.SearchProviderRegistry;
+import dev.everyagent.worker.plugin.registry.ToolExecutionInterceptorRegistry;
 import dev.everyagent.worker.plugin.registry.ToolProviderRegistry;
 import dev.everyagent.worker.rpc.RpcDispatcher;
 import dev.everyagent.worker.slash.SlashCommandRegistry;
@@ -64,6 +66,8 @@ public class PluginLoader {
     private final SandboxProviderRegistry sandboxRegistry;
     private final AgentDispatcherRegistry dispatcherRegistry;
     private final SearchProviderRegistry searchRegistry;
+    private final AuthorizationHandlerRegistry authHandlerRegistry;
+    private final ToolExecutionInterceptorRegistry toolInterceptorRegistry;
     private final RpcDispatcher rpcDispatcher;
     private final SlashCommandRegistry slashRegistry;
     private final WorkerServices services;
@@ -77,6 +81,8 @@ public class PluginLoader {
             SandboxProviderRegistry sandboxRegistry,
             AgentDispatcherRegistry dispatcherRegistry,
             SearchProviderRegistry searchRegistry,
+            AuthorizationHandlerRegistry authHandlerRegistry,
+            ToolExecutionInterceptorRegistry toolInterceptorRegistry,
             RpcDispatcher rpcDispatcher,
             SlashCommandRegistry slashRegistry,
             WorkerServices services) {
@@ -87,6 +93,8 @@ public class PluginLoader {
         this.sandboxRegistry = sandboxRegistry;
         this.dispatcherRegistry = dispatcherRegistry;
         this.searchRegistry = searchRegistry;
+        this.authHandlerRegistry = authHandlerRegistry;
+        this.toolInterceptorRegistry = toolInterceptorRegistry;
         this.rpcDispatcher = rpcDispatcher;
         this.slashRegistry = slashRegistry;
         this.services = services;
@@ -249,6 +257,7 @@ public class PluginLoader {
             WorkerPluginContext ctx = new WorkerPluginContextImpl(id,
                     advisorRegistry, toolRegistry, sandboxRegistry,
                     dispatcherRegistry, searchRegistry,
+                    authHandlerRegistry, toolInterceptorRegistry,
                     rpcDispatcher, slashRegistry, services, config);
 
             // 调用 activate()

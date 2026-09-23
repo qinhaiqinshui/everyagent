@@ -4,8 +4,10 @@ import dev.everyagent.worker.plugin.spi.AdvisorProvider;
 import dev.everyagent.worker.plugin.spi.AgentDispatcher;
 import dev.everyagent.worker.plugin.spi.SandboxProvider;
 import dev.everyagent.worker.plugin.spi.SearchProvider;
+import dev.everyagent.worker.plugin.spi.ToolExecutionInterceptor;
 import dev.everyagent.worker.plugin.spi.ToolProvider;
 import dev.everyagent.worker.slash.SlashCommandRegistry;
+import dev.everyagent.worker.tools.permission.AuthorizationHandler;
 
 /**
  * Worker 插件上下文 —— 对标 VSCode 的 {@code ExtensionContext}。
@@ -34,6 +36,12 @@ public interface WorkerPluginContext {
 
     /** 注册 SearchProvider（搜索后端）。 */
     void registerSearchProvider(SearchProvider provider);
+
+    /** 注册 AuthorizationHandler（授权决议链节点）。 */
+    void registerAuthorizationHandler(AuthorizationHandler handler);
+
+    /** 注册 ToolExecutionInterceptor（工具执行拦截链节点）。 */
+    void registerToolExecutionInterceptor(ToolExecutionInterceptor interceptor);
 
     // ── 通用扩展注册 ──
 
