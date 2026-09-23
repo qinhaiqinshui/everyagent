@@ -94,6 +94,25 @@ export function truncateInlineText(text: string, maxLength = 160): string {
 }
 
 /**
+ * 拆分命令首行注释(意图说明)与命令体。
+ * bash / powershell 单行注释均以 `#` 起头;`#!` 开头是 shebang,不算语义注释。
+ *
+ * 命中返回 { comment: 剥掉 # 与前导空白后的注释文本, rest: 剩余行 trim 后的命令体 };
+ * 未命中(无注释 / 注释剥完为空 / shebang / 命令为空)返回 null,调用方回退原样渲染。
+ */
+export function splitLeadingComment(command: string): { comment: string; rest: string } | null {
+  if (!command) return null
+  const firstLine = command.split('\n', 1)[0] ?? ''
+  const head = firstLine.trimStart()
+  // `#!` 是 shebang,不是语义注释;空注释也不拆。
+  if (!head.startsWith('#') || head.startsWith('#!')) return null
+  const comment = head.slice(1).trim()
+  if (!comment) return null
+  const rest = command.slice(firstLine.length).trim()
+  return { comment, rest }
+}
+
+/**
  * 折叠行点击守卫：inline-preview 的参数文本已放开 user-select 可拖选复制，
  * 拖选结束会触发一次 click——若此刻选区非空则视为"选文字"而非"点行"，
  * 不切换折叠态，避免选中参数时误展开/收起。

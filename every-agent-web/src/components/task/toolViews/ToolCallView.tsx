@@ -19,7 +19,7 @@ import React from 'react'
 import { WrenchIcon, ChevronDownIcon, ChevronRightIcon } from '@/components/shared/AppGlyphs'
 import type { AgentMessageRecord } from '@/types'
 import { getToolView } from './registry'
-import { buildAggregatedToolDetail, hasActiveTextSelection, truncateInlineText } from './helpers'
+import { buildAggregatedToolDetail, hasActiveTextSelection, splitLeadingComment, truncateInlineText } from './helpers'
 import type { AggregatedToolDetail, ToolViewProps } from './types'
 
 interface ToolCallViewProps {
@@ -28,13 +28,32 @@ interface ToolCallViewProps {
   resolveToolCallPayload?: (toolCallId: string) => Record<string, unknown> | undefined
 }
 
-/** 聚合壳内联预览:取首条 detail 的 path / command / 文本参数摘要,无参时回退。 */
-function buildGroupInlinePreview(detail: AggregatedToolDetail): string {
+/** 聚合壳内联预览:文本(原样等宽)或「注释 + 命令」两段(注释走 AI 正文样式)。 */
+type GroupInlinePreview =
+  | { kind: 'comment'; comment: string; rest: string }
+  | { kind: 'text'; text: string }
+
+/** 聚合壳内联预览:取首条 detail 的 path / command / 文本参数摘要,无参时回退。
+ *  command 首行是注释(意图说明)时拆分为「正文样式注释 + 等宽命令」两段,
+ *  与单条 CommandToolView 折叠态一致。 */
+function buildGroupInlinePreview(detail: AggregatedToolDetail): GroupInlinePreview {
   const args = (detail.arguments ?? {}) as Record<string, unknown>
-  // 优先 path / command 这些"一眼就知道是哪个文件/哪个命令"的标量参数。
-  const preferred = args.path ?? args.command
-  if (typeof preferred === 'string' && preferred.trim()) {
-    return truncateInlineText(preferred, 160)
+  // 优先 path(非命令工具);其次 command(bash/powershell),命中首行注释则拆分高亮。
+  const path = typeof args.path === 'string' ? args.path : ''
+  if (path.trim()) {
+    return { kind: 'text', text: truncateInlineText(path, 160) }
+  }
+  const command = typeof args.command === 'string' ? args.command : ''
+  if (command.trim()) {
+    const split = splitLeadingComment(command.trim())
+    if (split) {
+      return {
+        kind: 'comment',
+        comment: truncateInlineText(split.comment, 160),
+        rest: truncateInlineText(split.rest, 160),
+      }
+    }
+    return { kind: 'text', text: truncateInlineText(command, 160) }
   }
   // 退化:把若干标量参数以 "k=v · k=v" 形式铺平(够短),完全无参时给个占位。
   const scalars = Object.entries(args)
@@ -42,7 +61,7 @@ function buildGroupInlinePreview(detail: AggregatedToolDetail): string {
     .slice(0, 3)
     .map(([k, v]) => `${k}=${typeof v === 'string' ? v : JSON.stringify(v)}`)
     .join(' · ')
-  return scalars ? truncateInlineText(scalars, 160) : ''
+  return { kind: 'text', text: scalars ? truncateInlineText(scalars, 160) : '' }
 }
 
 /**
@@ -142,7 +161,7 @@ function GroupedToolCallView({
   const [open, setOpen] = React.useState(false)
 
   const toolName = details[0]?.toolName ?? '工具'
-  const inlinePreview = buildGroupInlinePreview(details[0])
+  const preview = buildGroupInlinePreview(details[0])
   const count = details.length
   // 整组任一 entry 报错则图标转红,提示用户可能需要展开检查。
   const hasError = details.some((d) => d.status === 'error')
@@ -165,7 +184,16 @@ function GroupedToolCallView({
         <span className="nagent-tool-group__count" aria-label={`共 ${count} 次`}>
           ×{count}
         </span>
-        <span className="nagent-tool-group__inline-preview">{inlinePreview}</span>
+        <span className="nagent-tool-group__inline-preview">
+          {preview.kind === 'comment' ? (
+            <>
+              <span className="nagent-tool-group__inline-preview-comment">{preview.comment}</span>
+              {preview.rest ? ` ${preview.rest}` : null}
+            </>
+          ) : (
+            preview.text
+          )}
+        </span>
         {open ? (
           <ChevronDownIcon size={13} className="nagent-tool-group__chevron" />
         ) : (

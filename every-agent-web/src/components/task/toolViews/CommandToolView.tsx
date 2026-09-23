@@ -5,6 +5,8 @@
  * (运行时按平台只注册其一,前端视图表同时挂两个名字,命中即用)。
  *
  * 折叠态：工具图标 + 工具名 + 原样命令（command）。
+ *         若命令首行是注释（意图说明），内联预览拆分为「正文样式注释 + 等宽命令」两段，
+ *         注释以 AI 正文样式（无衬线 + 正文色）呈现，与等宽 muted 的命令体形成层次。
  * 展开态：先展示参数块（完整命令，折叠行内联预览被截断时可在此看全量），
  *         再显示工具返回结果（stdout/stderr 合并文本，按原始换行渲染）；
  *         若状态为失败或 stderr 非空，额外展示错误内容（标红）。
@@ -12,7 +14,7 @@
 
 import React from 'react'
 import { WrenchIcon, ChevronDownIcon, ChevronRightIcon } from '@/components/shared/AppGlyphs'
-import { hasActiveTextSelection } from './helpers'
+import { hasActiveTextSelection, splitLeadingComment } from './helpers'
 import type { AggregatedToolDetail, ToolViewDefinition, ToolViewProps } from './types'
 
 /** 从聚合结果中提取输出文本（兼容对象与字符串两种形态）。 */
@@ -48,6 +50,8 @@ function flattenArgs(args: Record<string, unknown> | null): string[] {
 function ExecEntry({ detail }: { detail: AggregatedToolDetail }) {
   const args = (detail.arguments ?? {}) as Record<string, unknown>
   const rawCommand = typeof args.command === 'string' ? args.command : ''
+  // 首行是注释(意图说明)时拆分为「正文样式注释 + 等宽命令」两段,否则整段原样等宽。
+  const preview = splitLeadingComment(rawCommand.trim())
   const inlineCommand = rawCommand.trim() || '（无命令）'
   const argLines = flattenArgs(args)
 
@@ -70,7 +74,16 @@ function ExecEntry({ detail }: { detail: AggregatedToolDetail }) {
       >
         <WrenchIcon size={13} className={`nagent-tool__icon${hasError ? ' nagent-tool__icon--error' : ''}`} />
         <span className="nagent-tool__name">{detail.toolName || '命令'}</span>
-        <span className="nagent-tool__inline-preview">{inlineCommand}</span>
+        <span className="nagent-tool__inline-preview">
+          {preview ? (
+            <>
+              <span className="nagent-tool__inline-preview-comment">{preview.comment}</span>
+              {preview.rest ? ` ${preview.rest}` : null}
+            </>
+          ) : (
+            inlineCommand
+          )}
+        </span>
         {open ? (
           <ChevronDownIcon size={13} className="nagent-tool__chevron" />
         ) : (

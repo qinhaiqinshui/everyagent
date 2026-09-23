@@ -649,9 +649,10 @@ export default function TaskComposerSurface({
     const startY = event.clientY
     setResizing(true)
     const onMove = (move: PointerEvent) => {
+      // 把手在输入框顶部：往下拖→上边缘下移→变矮；往上拖→上边缘上移→变高。
       const next = Math.min(
         COMPOSER_EDITOR_MAX_HEIGHT,
-        Math.max(COMPOSER_EDITOR_MIN_HEIGHT, startHeight + (move.clientY - startY)),
+        Math.max(COMPOSER_EDITOR_MIN_HEIGHT, startHeight - (move.clientY - startY)),
       )
       setEditorHeight(Math.round(next))
     }
