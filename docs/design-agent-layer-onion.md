@@ -1,7 +1,7 @@
 # 设计方案：任务生命周期洋葱模型 + Agent 独立成层
 
-> 状态：**待评审**（用户确认后才实施）
-> 范围声明：本文覆盖整体架构（洋葱底座、agent 层独立、子 agent 插件化、任务队列插件预留）；**本次只实施 Phase 1（洋葱底座）**，其余分期列出。
+> 状态：**待评审**（用户确认后才实施）· v2（按评审意见调整 subagent 插件职责）
+> 范围声明：本文覆盖整体架构（洋葱底座、agent 层独立、subagent 插件三件套、任务队列插件预留）；**本次只实施 Phase 1（洋葱底座）**，其余分期列出。
 
 ---
 
@@ -24,8 +24,8 @@
 2. 洋葱的**终态（内核）是调用起一个 Agent**——就像 runagent 工具调用起子 agent 一样。
 3. **runagent 和 task 层都是 agent 的上层**（平级调用者）。
 4. 本次先实现**洋葱模型底座**；任务队列后续做成插件（底座需为其预留挂载位）。
-5. 子 agent 运行功能**变成一个插件**。
-6. **agent 单独成层**，以后别的插件也能调用 agent。
+5. **subagent 插件**职责（v2 调整）：提供 ① 现有四个子 agent 工具（run_agent/list_agents/wait_agents/stop_agent）② 一个 skill（「子 Agent」使用方法论）③ 前端子 agent 列表与状态 UI（胶囊列表/信息卡/用量线）。
+6. **删除该插件** = 没有子 agent 工具和 skill（AI 不再会派子 agent），**但 agent 层还在**（AgentService/事件/`task.agents` RPC 均为核心，历史任务的子 agent 数据仍可渲染）。
 
 ---
 
@@ -46,22 +46,24 @@
   │      └── 内核 TaskKernel = 调用 AgentService（对话式：多轮 + 输入队列）        │
   └──────────────────────────────────┬─────────────────────────────────────────────┘
                                      ▼
-  ┌──────────────────────────── Agent 层（AgentService）──────────────────────────┐
+  ┌──────────────────────────── Agent 层（AgentService，核心） ────────────────────┐
   │  run(agent)          同步运行单个 agent 至最终回答（现 AgentRunner，薄）        │
   │  spawn/waitFor/stop/list   子 agent 异步编排（现 SubAgentManager 核心逻辑）    │
   │  AgentEventChannel   事件出口接口（task 层实现 → 写任务流 EventLog）           │
+  │  task.agents RPC / 台账 agents.json（agent 元数据，不随插件卸载）              │
   │  ChatClient + Advisor 生态（复用 Spring AI，红线不动）                          │
   └──────────────────────────────────┬─────────────────────────────────────────────┘
                                      ▲ 调用者（平级上层）
             ┌────────────────────────┼────────────────────────┐
             │                        │                        │
       Task 层（内核调用）      subagent 插件              其他插件
-      （洋葱 + 轮次循环）      （run_agent 工具薄壳）    （如 auth-review 的
-                                                       AiAuthReviewer 正规化）
+      （洋葱 + 轮次循环）      （工具 + skill + 前端 UI   （如 auth-review 的
+                                三件套，薄壳）            AiAuthReviewer 正规化）
 ```
 
 **核心原则**：
-- **洋葱内核不直接 `runner.run`，而是调 `AgentService`**——从第一天起「任务 = 调用一个 agent（对话式）」的语义就成立；runagent 插件 = 调用一个 agent（一次性）。两种调用模式平级。
+- **洋葱内核不直接 `runner.run`，而是调 `AgentService`**——从第一天起「任务 = 调用一个 agent（对话式）」的语义就成立；subagent 插件 = 调用一个 agent（一次性）+ 交互面（skill/UI）。两种调用模式平级。
+- **agent 层是核心，不随 subagent 插件卸载**：删除插件只失去「AI 使用子 agent 的入口与方法论」和「列表 UI」，agent 层能力（spawn/事件/台账）保留——历史任务子 agent 数据仍可渲染，其他上层仍可编程调用。
 - 洋葱是**任务生命周期层**的编排，**不是** agent 执行循环；agent 执行循环仍由 Spring AI `ToolCallingAdvisor` 递归驱动（红线：不手搓）。
 
 ---
@@ -213,34 +215,78 @@ public interface AgentService {
 | 调用者 | 用法 |
 |---|---|
 | **Task 层**（洋葱内核） | `agentService.run(main)` × 轮次循环（对话式：多轮 + 输入队列 + waiting-user） |
-| **subagent 插件** | `spawn/waitFor/stop/list`（一次性：单任务跑完即止） |
+| **subagent 插件** | `spawn/waitFor/stop/list`（一次性：单任务跑完即止）+ skill + 前端列表 UI（§5） |
 | **其他插件** | 如 auth-review 的 `AiAuthReviewer` 从自建 AgentEntity 旁路改为正规调 agent 层（收编现存的「agent 层被旁路使用」先例） |
 
 ---
 
-## 5. 子 agent 插件化（Phase 3）
+## 5. subagent 插件（Phase 3）
 
-### 5.1 拆分原则
+### 5.1 职责边界（v2 调整核心）
 
-「子 agent 运行」= **能力**（agent 层）+ **入口**（插件）。能力进 agent 层（§4.3 spawn 族），入口进插件：
+「子 agent」拆成**能力（核心）**与**入口/交互（插件）**两部分：
+
+| 归属 | 内容 | 删除插件后 |
+|---|---|---|
+| **agent 层（核心）** | `AgentService.spawn/waitFor/stop/list`、`run`、agent 生命周期事件（agent.started/done/status）、台账 `agents.json`、`task.agents` RPC、消息流中的 agent 事件渲染（历史数据） | **保留**——其他上层仍可编程调用；历史任务子 agent 数据仍可渲染 |
+| **subagent 插件** | ① 4 个工具（run_agent/list_agents/wait_agents/stop_agent）② 1 个 skill（「子 Agent」方法论）③ 前端列表 UI（胶囊列表/信息卡/用量线） | 全部消失——AI 不再有派子 agent 的入口与方法论，前端无列表 |
+
+插件是**纯薄壳**：工具方法体 = `agentService.spawn(...)` 等一行委托；skill 文案 = 使用方法论；前端组件 = 订阅 agent 层数据渲染。**不含任何执行逻辑。**
+
+### 5.2 插件结构（worker 端 + web 端）
 
 ```
-every-agent-plugins/subagent/                     # 新插件模块（Maven，worker 端）
+every-agent-plugins/subagent/
+  pom.xml                                  # Maven：依赖 every-agent-plugin-api（+ agent 层 API，见 §4）
   src/main/java/dev/everyagent/plugin/subagent/
-    SubAgentTools.java        # 4 个 @Tool：run_agent/list_agents/wait_agents/stop_agent（从 worker tools/ 迁出）
-    SubAgentToolsProvider.java# scope=MAIN（从 worker plugin/adapters/ 迁出）
-    SubAgentPrompt.java       # SUB_SYSTEM_PROMPT + 子 agent 装配差异（提示词、scope 过滤）
+    SubAgentTools.java                      # 4 个 @Tool（从 worker tools/ 迁出，改调 AgentService）
+    SubAgentToolsProvider.java              # ToolProvider：scope=MAIN（从 worker plugin/adapters/ 迁出）
+    SubAgentSkillContributor.java           # SkillContributor：贡献「子 Agent」skill（见 §5.3）
+  web/
+    index.ts                                # 前端插件入口（builtInPlugins.ts 自动发现）
+    SubAgentListPanel.tsx                   # 从 web src/components/task/AgentListPanel.tsx 迁出
+    subagent.css                            # 胶囊列表/信息卡/用量线样式（从 AgentListPanel.css 抽取）
 ```
 
-worker 核心删除：`tools/SubAgentTools.java`、`plugin/adapters/SubAgentToolsProvider.java`、`BuiltInToolProviders` 中的注册行。`SubAgentManager` 的编排逻辑已在 Phase 2 下沉 `AgentServiceImpl`，task 层保留冷启动台账恢复（`restoreAgentLedger`）。
+worker 核心删除：`tools/SubAgentTools.java`、`plugin/adapters/SubAgentToolsProvider.java`、`BuiltInToolProviders` 注册行、`BuiltInSkills` 中的 `agent-dispatch` 条目（迁插件）。web 核心删除：`AgentListPanel.tsx/.css` 及 `TaskChat` 中的直接引用（改为扩展点渲染）。
 
-### 5.2 依赖方向
+### 5.3 新增扩展点：skill 贡献（worker 端）
 
-`subagent 插件 → every-agent-plugin-api + agent 层（AgentService）`，不再触 `SubAgentManager`/`TaskEvents` 等 worker 内部类。打包：`every-agent-app` pom 增加模块依赖（**吸取 git 插件漏挂教训**：迁移必须同步 app pom，加 CI 检查插件模块 ↔ app pom 一致性）。
+现状：`skill/BuiltInSkills` 构造器**硬编码** `activeSkills = List.of(new Skill("agent-dispatch", "子 Agent", ...))`，plugin-api 无 skill SPI。新增：
 
-### 5.3 删除子 agent 功能的降级
+```java
+// every-agent-plugin-api
+public interface SkillContributor {
+    String pluginId();
+    /** 贡献的 skill 描述（主动披露：进 system prompt + / 菜单）。 */
+    List<PluginSkill> skills();
+}
+public record PluginSkill(String id, String name, String description, List<String> tools) {}
+```
 
-插件被 disable（`plugin.enable/disable`）后主 agent 无 `run_agent` 工具——可接受（ToolProviderRegistry 已按 PluginStateStore 过滤，天然支持）。
+- `WorkerPluginContext.registerSkillContributor(SkillContributor)`；`SkillContributorRegistry`（第 9 个注册表，同模式）。
+- `BuiltInSkills` 改为「核心内置 skill + 注册表插件贡献」合并供给 `SkillAdvisor`（渐进式披露索引）与 slash `/` 菜单。
+- 插件禁用（`plugin.enable/disable`）→ SkillContributorRegistry 按 PluginStateStore 过滤 → skill 从 system prompt/菜单即时消失（与工具消失同拍）。
+
+### 5.4 前端：复用 `ui.composer_above_panel` 扩展点
+
+现状：`AgentListPanel` 挂在 `TaskComposerSurface.abovePanel`（`TaskChat.tsx` L809-814），数据 = `task.agents` RPC + 流事件（usage/agent.started/agent.done/agentStatus）实时合并进 `agentMeta`。web 已有 `ui.composer_above_panel` 扩展点（`ComposerPanelCtx{taskId, draft, isRunning}`）正是该槽位。
+
+- 插件 `web/index.ts` 经 `ctx.ui.registerComposerAbovePanel({ id, Component: SubAgentListPanel })` 注册。
+- 组件**自管数据**：订阅 `task.agents` RPC + 流事件（与现 TaskChat 相同逻辑迁入）；无子 agent（agents 空）时渲染 null（不占位）。
+- 「选中子 agent → 过滤主线程显示」（现 `filterAgentId`/`handleSelectAgent` 是 TaskChat 内部状态）→ 扩展 `ComposerPanelCtx` 增加 `selectAgent(agentId | null)` 回调，核心实现联动；插件只调回调不持状态。
+- **消息流中的 agent 生命周期事件渲染（agent.started/done 卡片）保留 web 核心**：它渲染的是事件流本身（agent 层契约），非交互入口；历史任务在插件删除后仍需正确展示。
+
+### 5.5 删除插件的降级语义
+
+| 面 | 表现 |
+|---|---|
+| 主 agent 工具集 | 无 run_agent 族（ToolProviderRegistry 已按 PluginStateStore 过滤，天然支持） |
+| system prompt / `/` 菜单 | 无「子 Agent」skill 条目（SkillContributorRegistry 过滤） |
+| 前端 | composer 上方无胶囊列表；消息流中历史 agent.started/done 事件仍渲染（核心）；`task.agents` RPC 仍可用 |
+| worker 运行中任务的子 agent | 不受影响（已在跑的由 agent 层管理至终态） |
+
+打包：`every-agent-app` pom 增加模块依赖；**吸取 git 插件漏挂教训**——迁移必须同步 app pom，加 CI 一致性检查（插件模块 ↔ app pom）。
 
 ---
 
@@ -249,8 +295,8 @@ worker 核心删除：`tools/SubAgentTools.java`、`plugin/adapters/SubAgentTool
 | Phase | 内容 | 交付 |
 |---|---|---|
 | **1（本次）洋葱底座** | plugin-api 四契约 + `registerTaskLifecycleLayer`；`TaskLifecycleRegistry` + `TaskOnion`；L1-L4 内置层拆分（finish/runTask/rpcTaskRun 逻辑**逐字映射**，不改行为）；`runTask` 重写为洋葱执行；单测（下行顺序/否决/unwind 逆序/幂等/取消）；ARCHITECTURE.md 新 §7.x | worker 行为零变化（事件顺序、seq、落盘字节级兼容），可回归验证 |
-| **2 agent 层** | `dev.everyagent.worker.agent` 包收敛 + `AgentContext`/`AgentEventChannel` 解耦 + `AgentService` + `AgentDispatcher` 废止 + `SubAgentManager` 编排下沉 | agent 层边界成立，其他插件可依赖 |
-| **3 subagent 插件** | 插件模块迁移 + app pom 挂载 + CI 一致性检查 | worker 核心不再含子 agent 代码 |
+| **2 agent 层** | `dev.everyagent.worker.agent` 包收敛 + `AgentContext`/`AgentEventChannel` 解耦 + `AgentService` + `AgentDispatcher` 废止 + `SubAgentManager` 编排下沉 | agent 层边界成立（能力全部留在核心），其他插件可依赖 |
+| **3 subagent 插件** | 三件套迁移（工具 + SkillContributor + 前端面板）；plugin-api 新增 `SkillContributor` SPI + 注册表；BuiltInSkills 合并改造；web `ComposerPanelCtx` 扩展 `selectAgent`；app pom 挂载 + CI 一致性检查 | 删除插件 = 无子 agent 工具/skill/前端列表，agent 层完好 |
 | **4（未来）队列插件** | QueueLayer 贡献排队语义 | 底座已就绪，不在本设计实施范围 |
 
 ---
@@ -265,6 +311,8 @@ worker 核心删除：`tools/SubAgentTools.java`、`plugin/adapters/SubAgentTool
 | AgentEntity 解耦破坏事件语义（roundSeqs 同轮共享 seq） | AgentEventChannel 由 TaskEvents 直接 implements，seq 逻辑不动，只换接口面 |
 | 洋葱≠手搓 agent 循环的红线 | 内核调 AgentService→AgentRunner→ChatClient（Spring AI 工具循环）；洋葱只编排任务生命周期层 |
 | 并发会话冲突（git 插件迁移进行中） | Phase 1 不碰 plugin 模块与 app pom；`SubAgentManager` 仅改调用点不动文件位置 |
+| AgentListPanel 前端迁移破坏选中联动/数据流 | 组件数据订阅逻辑原样迁（task.agents + 流事件）；选中联动经 `selectAgent` 回调由核心实现，插件不持跨插件状态；迁移期与核心实现并跑对照 |
+| skill 双源合并的顺序/去重（内置 vs 插件贡献） | SkillContributorRegistry 输出按 pluginId+skillId 去重，插件 id 冲突沿用 BuiltInPlugins 冲突检查惯例 |
 
 ---
 
@@ -272,5 +320,6 @@ worker 核心删除：`tools/SubAgentTools.java`、`plugin/adapters/SubAgentTool
 
 1. **洋葱层粒度**：§3.3 的 4 层（准入/存储/状态/派生）是否合适？是否要把「授权收口 gate.untrack」独立成层（现归 L3）？
 2. **`AgentDispatcher` 废止**：预留 SPI 直接删除，还是保留名字把 `AgentService` 命名为它？
-3. **SubAgentManager 归属**：编排下沉 agent 层（§5 方案，插件只持工具薄壳）——还是整体搬进插件（插件反向依赖 worker，同 git/auth-review 旧路）？我推荐前者。
-4. **Phase 1 是否包含 L4（SpawnedAgentLayer）**：子 agent 等待逻辑入层会触碰 `SubAgentManager`（并发会话敏感区）；可先留内核 catch 区（现状位置），Phase 2 随编排下沉再成层。
+3. **Phase 1 是否包含 L4（SpawnedAgentLayer）**：子 agent 等待逻辑入层会触碰 `SubAgentManager`（并发会话敏感区）；可先留内核 catch 区（现状位置），Phase 2 随编排下沉再成层。
+4. **消息流中 agent 生命周期事件渲染的归属**：方案保留在 web 核心（渲染事件流=agent 层契约，历史数据依赖）；若要求也进插件（彻底无痕卸载），需把 AgentMessageThread 的 agent.* 分支一并抽成扩展点——工作量+1，联动面大，我建议保留核心。
+5. **skill 只随 subagent 插件走是否够用**：若未来别的插件也要贡献 skill，`SkillContributor` SPI 本次直接做成通用扩展点（设计已按通用写，subagent 是第一个使用者）。
