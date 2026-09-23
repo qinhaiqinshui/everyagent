@@ -1,4 +1,5 @@
 import React from 'react'
+import { createPortal } from 'react-dom'
 import { Dropdown, Tree, Tooltip, theme } from 'antd'
 import type { MenuProps, TreeDataNode } from 'antd'
 import type { AlignType } from '@rc-component/trigger'
@@ -465,37 +466,45 @@ function TreeNodeRow({
   // (iOS Safari 在 -webkit-touch-callout:none 下不派发)。此时 rc-trigger 内部
   // alignPoint 锚点(仅由其自身 onContextMenu 设置)为 null,对齐目标退化为
   // targetEle——若 targetEle 是整行元素,偏移坐标系与「以触摸点为原点」的
-  // 防溢出计算错位,菜单会被甩出屏幕(右缘长按时整体溢出左缘)。
+  // 防溢出计算错位,菜单会被甩出屏幕。
   // 虚拟锚点永不收到 contextmenu(pointer-events:none),trigger 内部锚点恒为 null,
   // 对齐目标恒定 = 锚点 span 的 0×0 rect(即触摸点),与桌面端右键的坐标系完全一致。
   // trigger=['contextMenu'] 仅为让 clickToHide 生效(点击外部/别处长按可关闭菜单),
   // 虚拟锚点自身不会收到该事件。
+  //
+  // 整个 Dropdown 经 Portal 渲染到 document.body:移动端侧边栏外壳(ResizableSidebarContainer)
+  // 设了 will-change:transform,会为后代创建变换包含块,导致行内的 position:fixed 锚点
+  // 相对该外壳而非视口定位,getBoundingClientRect 失真、菜单被甩到屏幕底部。渲染到 body
+  // 后脱离变换祖先,fixed 坐标即视口坐标,rc-trigger 对齐正确。
   if (isMobile) {
     return (
       <>
         {content}
-        <Dropdown
-          open={open}
-          onOpenChange={handleMobileOpenChange}
-          trigger={['contextMenu']}
-          menu={{ items: menuItems }}
-          autoAdjustOverflow={false}
-          align={menuAlign}
-          styles={menuRootStyle ? { root: menuRootStyle } : undefined}
-          rootClassName="ws-context-menu"
-        >
-          <span
-            aria-hidden
-            style={{
-              position: 'fixed',
-              left: mousePos?.x ?? 0,
-              top: mousePos?.y ?? 0,
-              width: 0,
-              height: 0,
-              pointerEvents: 'none',
-            }}
-          />
-        </Dropdown>
+        {createPortal(
+          <Dropdown
+            open={open}
+            onOpenChange={handleMobileOpenChange}
+            trigger={['contextMenu']}
+            menu={{ items: menuItems }}
+            autoAdjustOverflow={false}
+            align={menuAlign}
+            styles={menuRootStyle ? { root: menuRootStyle } : undefined}
+            rootClassName="ws-context-menu"
+          >
+            <span
+              aria-hidden
+              style={{
+                position: 'fixed',
+                left: mousePos?.x ?? 0,
+                top: mousePos?.y ?? 0,
+                width: 0,
+                height: 0,
+                pointerEvents: 'none',
+              }}
+            />
+          </Dropdown>,
+          document.body,
+        )}
       </>
     )
   }
