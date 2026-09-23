@@ -1,0 +1,96 @@
+/**
+ * update_file 内嵌 diff 紧凑样式（file-diff-view 插件自带）。
+ *
+ * 与文件页 FileDiffPanel 的差异：面向聊天气泡内的窄宽度场景，
+ * 双行号列收窄（40px）、行高更紧（20px）、无外框阴影，
+ * 配色沿用全局 design token，明暗主题自动适配。
+ */
+
+.update-diff {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 2px 0;
+}
+
+.update-diff__toggle {
+  align-self: flex-start;
+  padding: 1px 8px;
+  border: 1px solid var(--border-light);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  cursor: pointer;
+  user-select: none;
+}
+
+.update-diff__toggle:hover {
+  color: var(--text-primary);
+  border-color: var(--border-primary, var(--border-light));
+}
+
+.update-diff__table {
+  border: 1px solid color-mix(in srgb, var(--border-light) 80%, transparent);
+  border-radius: 6px;
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  color: var(--text-primary);
+  overflow-x: auto;
+}
+
+.update-diff__line {
+  display: grid;
+  grid-template-columns: 40px 40px 14px minmax(0, 1fr);
+  align-items: stretch;
+  min-width: 0;
+  white-space: pre;
+}
+
+.update-diff__ln {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  padding: 0 6px;
+  color: var(--text-muted);
+  background: color-mix(in srgb, var(--bg-primary) 92%, transparent);
+  user-select: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.update-diff__marker {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  color: var(--text-muted);
+  user-select: none;
+}
+
+.update-diff__content {
+  padding: 0 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.update-diff__line--context .update-diff__content {
+  color: var(--text-secondary);
+}
+
+.update-diff__line--added .update-diff__content,
+.update-diff__line--added .update-diff__marker {
+  background: color-mix(in srgb, var(--accent-green, #2ea043) 14%, transparent);
+  color: var(--text-primary);
+}
+
+.update-diff__line--removed .update-diff__content,
+.update-diff__line--removed .update-diff__marker {
+  background: color-mix(in srgb, var(--accent-red, #f85149) 14%, transparent);
+  color: var(--text-primary);
+}
+
+.update-diff__stat {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}

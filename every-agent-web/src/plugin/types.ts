@@ -66,6 +66,12 @@ export interface ToolCallDetailEnhancement {
     /** 完整路径。 */
     fullPath: string
   }
+  /**
+   * 插件自定义详情正文（如内嵌 diff 视图）。
+   * 存在时替代核心默认的参数块渲染（工具名/路径 chip 头部与错误块仍由核心渲染，
+   * 插件只接管正文）；错误场景应返回 null 回落默认渲染，保证错误信息可见。
+   */
+  content?: ReactNode
 }
 
 /**

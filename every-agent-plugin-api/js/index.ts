@@ -252,6 +252,11 @@ export interface ToolCallDetailEnhancement {
     label: string
     fullPath: string
   }
+  /**
+   * 插件自定义详情正文（如内嵌 diff 视图）。
+   * 存在时替代核心默认的参数块渲染（头部与错误块仍由核心渲染，插件只接管正文）。
+   */
+  content?: ReactNode
 }
 
 /** 工具调用详情增强条目定义。 */

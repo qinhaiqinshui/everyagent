@@ -6,8 +6,10 @@
  *
  * 折叠态：工具图标 + 工具名 + inline-preview（文件名 + 可选附加文本 + 间距 + 完整路径；
  * 文件名由 args.path 提取，附加文本由调用方计算，如 read_file 的 [1-80] 行号区间）+ 折叠箭头。
- * 展开态：result-item-head（图标 + 工具名 + 可点击文件路径 chip）→ 参数块（content 排末尾）
- *         → 结果块（read_file 即文件内容；create/update 为确认文本）→ 错误块。
+ * 展开态：result-item-head（图标 + 工具名 + 可点击文件路径 chip）→ 详情正文 → 结果块
+ *         （read_file 即文件内容；create/update 为确认文本）→ 错误块。详情正文优先取
+ *         ui.tool_call_detail_view 插件扩展点贡献的 content（如 update_file 的内嵌 diff，
+ *         插件存在时替代参数块），无插件时回落默认参数块（content 排末尾）。
  *
  * 展开态工具名后的文件路径为可点击 chip，点击经 useWorkspaceShell().openGlobalFileTab
  * 打开文件标签页（readwrite 模式，方便用户直接改 AI 写的文件）；workspaceRoot 缺失时
@@ -20,6 +22,8 @@ import { useWorkspaceShell } from '@/components/app/WorkspaceShellContext'
 import { toBusinessAbsolutePath } from '@/platform/fs/pathUtils'
 import { useTaskWorkspaceRoot } from '../TaskWorkspaceContext'
 import { extractFileName, hasActiveTextSelection } from './helpers'
+import { pluginDispatcher } from '@/plugin/PluginDispatcher'
+import type { ToolCallDetailViewDefinition } from '@/plugin/types'
 import type { AggregatedToolDetail } from './types'
 
 /** content 字段始终排在参数列表最后，避免开头被巨量正文占据。 */
@@ -70,6 +74,33 @@ export function FileToolEntry({ detail, inlineExtras }: FileToolEntryProps) {
 
   const argLines = flattenArgs(args)
   const [open, setOpen] = React.useState(false)
+
+  // 插件详情增强（ui.tool_call_detail_view 扩展点）：按工具名匹配首个插件；
+  // content 存在时替代默认参数块渲染（diff 等富正文），头部与错误块仍由核心渲染。
+  // 注册表在插件 activate 后即稳定，一次性拉取即可；错误态回落 null 保错误可见。
+  const [detailViews, setDetailViews] = React.useState<ToolCallDetailViewDefinition[]>([])
+  React.useEffect(() => {
+    let disposed = false
+    pluginDispatcher.getToolCallDetailViews().then((views) => {
+      if (!disposed) setDetailViews(views)
+    })
+    return () => {
+      disposed = true
+    }
+  }, [])
+  const enhancement = React.useMemo(() => {
+    if (hasError || !detail.toolName) return null
+    for (const view of detailViews) {
+      if (view.toolName !== detail.toolName) continue
+      const result = view.render({
+        toolName: detail.toolName,
+        args,
+        toolCallId: detail.toolCallId ?? undefined,
+      })
+      if (result) return result
+    }
+    return null
+  }, [detailViews, detail.toolName, detail.toolCallId, args, hasError])
 
   const handleOpenFile = React.useCallback(() => {
     if (!businessPath || !workspaceRoot || !openGlobalFileTab) return
@@ -133,7 +164,9 @@ export function FileToolEntry({ detail, inlineExtras }: FileToolEntryProps) {
                 )
               ) : null}
             </div>
-            {argLines.length ? (
+            {enhancement?.content != null ? (
+              enhancement.content
+            ) : argLines.length ? (
               <div className="nagent-tool__result-block">
                 <div className="nagent-tool__result-head">
                   <span className="nagent-tool__result-title">参数</span>
