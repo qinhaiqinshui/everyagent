@@ -1,6 +1,6 @@
 package dev.everyagent.worker.plugin.adapters;
 
-import dev.everyagent.worker.os.OsSandbox.ExecResult;
+import dev.everyagent.plugin.api.spi.ExecResult;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;

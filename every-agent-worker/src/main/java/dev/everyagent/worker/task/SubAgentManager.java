@@ -15,7 +15,7 @@ import dev.everyagent.worker.os.OsSandbox;
 import dev.everyagent.worker.modules.WorkspaceManager;
 import dev.everyagent.worker.plugin.ToolContextImpl;
 import dev.everyagent.worker.plugin.registry.ToolProviderRegistry;
-import dev.everyagent.worker.plugin.spi.ToolProvider;
+import dev.everyagent.plugin.api.spi.ToolProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.messages.SystemMessage;

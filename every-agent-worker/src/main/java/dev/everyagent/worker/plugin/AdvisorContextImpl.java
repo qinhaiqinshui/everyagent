@@ -1,6 +1,6 @@
 package dev.everyagent.worker.plugin;
 
-import dev.everyagent.worker.plugin.spi.AdvisorContext;
+import dev.everyagent.plugin.api.spi.AdvisorContext;
 import dev.everyagent.worker.task.AgentEntity;
 import org.springframework.ai.model.tool.ToolCallingManager;
 

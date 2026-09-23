@@ -1,8 +1,8 @@
 package dev.everyagent.worker.plugin.adapters;
 
 import dev.everyagent.worker.plugin.ToolContextImpl;
-import dev.everyagent.worker.plugin.spi.ToolContext;
-import dev.everyagent.worker.plugin.spi.ToolProvider;
+import dev.everyagent.plugin.api.spi.ToolContext;
+import dev.everyagent.plugin.api.spi.ToolProvider;
 import dev.everyagent.worker.tools.FsToolSupport;
 import dev.everyagent.worker.tools.FileTools;
 import org.springframework.ai.support.ToolCallbacks;

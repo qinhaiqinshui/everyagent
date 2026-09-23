@@ -1,6 +1,7 @@
 package dev.everyagent.worker.tools.permission;
 
 import dev.everyagent.contract.json.Json;
+import dev.everyagent.plugin.api.permission.AuthorizationHandler;
 import dev.everyagent.worker.AtomicFiles;
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.modules.WorkspaceManager;

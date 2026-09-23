@@ -1,6 +1,4 @@
-package dev.everyagent.worker.tools.permission;
-
-import dev.everyagent.worker.task.TaskEntry;
+package dev.everyagent.plugin.api.permission;
 
 /**
  * 授权决议链节点 SPI。
@@ -18,7 +16,7 @@ public interface AuthorizationHandler {
     AuthorizationDecision decide(AuthorizationRequest req);
 
     record AuthorizationRequest(
-            TaskEntry task, String agentId, String grantKey, String prompt) {}
+            TaskInfo task, String agentId, String grantKey, String prompt) {}
 
     record AuthorizationDecision(Type type, String reason) {
         public enum Type { ALLOW, DENY, PASS }

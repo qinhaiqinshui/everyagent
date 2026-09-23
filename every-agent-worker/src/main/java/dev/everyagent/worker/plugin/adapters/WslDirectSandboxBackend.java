@@ -2,11 +2,11 @@ package dev.everyagent.worker.plugin.adapters;
 
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.modules.WorkspaceManager;
-import dev.everyagent.worker.os.OsSandbox.ExecResult;
+import dev.everyagent.plugin.api.spi.ExecResult;
 import dev.everyagent.worker.os.windows.WindowsSandbox;
 import dev.everyagent.worker.os.wsl.WslBwrapSandbox;
 import dev.everyagent.worker.os.wsl.WslDirectSandbox;
-import dev.everyagent.worker.plugin.spi.SandboxBackend;
+import dev.everyagent.plugin.api.spi.SandboxBackend;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

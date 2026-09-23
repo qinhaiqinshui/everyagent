@@ -1,11 +1,12 @@
 package dev.everyagent.worker.plugin.adapters;
 
+import dev.everyagent.plugin.api.spi.SandboxBackend;
+import dev.everyagent.plugin.api.spi.SandboxProvider;
+import dev.everyagent.plugin.api.spi.SandboxProvider.SandboxConfig;
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.modules.WorkspaceManager;
 import dev.everyagent.worker.os.wsl.WslBwrapSandbox;
 import dev.everyagent.worker.os.wsl.WslDirectSandbox;
-import dev.everyagent.worker.plugin.spi.SandboxBackend;
-import dev.everyagent.worker.plugin.spi.SandboxProvider;
 
 /**
  * wsl-direct 后端提供者。
@@ -50,6 +51,6 @@ public final class WslDirectSandboxProvider implements SandboxProvider {
 
     @Override
     public SandboxBackend create(SandboxConfig config) {
-        return new WslDirectSandboxBackend(config.props(), workspaces);
+        return new WslDirectSandboxBackend((WorkerProperties) config.props(), workspaces);
     }
 }

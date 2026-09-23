@@ -1,4 +1,4 @@
-package dev.everyagent.worker.plugin.spi;
+package dev.everyagent.plugin.api.spi;
 
 /**
  * 子 agent 调度策略 SPI —— 插件实现此接口提供不同调度方案。
@@ -6,11 +6,6 @@ package dev.everyagent.worker.plugin.spi;
  * <p>现有进程内虚拟线程方案变为默认插件（dispatcher-in-process）。
  * 社区可开发 dispatcher-docker（每子 agent 一个容器）、
  * dispatcher-remote（跨机分工，走 cmd 频道）。
- *
- * <p>改造前：SubAgentManager + SubAgentTools 硬编码为进程内方案。
- * 改造后：SubAgentManager 从 {@link dev.everyagent.worker.plugin.registry.AgentDispatcherRegistry} 选择调度策略。
- *
- * <p>注意：此 SPI 在阶段一仅定义接口，实际改造在阶段三（内置功能拆分时）。
  */
 public interface AgentDispatcher {
 

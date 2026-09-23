@@ -1,9 +1,9 @@
 package dev.everyagent.plugin.authreview;
 
 import dev.everyagent.worker.plugin.registry.AuthorizationHandlerRegistry;
-import dev.everyagent.worker.tools.permission.AuthorizationHandler;
-import dev.everyagent.worker.tools.permission.AuthorizationHandler.AuthorizationRequest;
-import dev.everyagent.worker.tools.permission.AuthorizationHandler.AuthorizationDecision;
+import dev.everyagent.plugin.api.permission.AuthorizationHandler;
+import dev.everyagent.plugin.api.permission.AuthorizationHandler.AuthorizationRequest;
+import dev.everyagent.plugin.api.permission.AuthorizationHandler.AuthorizationDecision;
 import org.springframework.stereotype.Component;
 
 @Component
@@ -20,12 +20,12 @@ public class AiReviewAuthHandler implements AuthorizationHandler {
 
     @Override
     public boolean applies(AuthorizationRequest req) {
-        return req.task().taskFlags.getOrDefault("ai-review", false);
+        return req.task().taskFlags().getOrDefault("ai-review", false);
     }
 
     @Override
     public AuthorizationDecision decide(AuthorizationRequest req) {
-        ReviewDecision d = reviewer.review(req.task(), req.grantKey(), req.prompt());
+        ReviewDecision d = reviewer.review((dev.everyagent.worker.task.TaskEntry) req.task(), req.grantKey(), req.prompt());
         if (d.fallback()) return new AuthorizationDecision(AuthorizationDecision.Type.PASS, d.reason());
         return switch (d.verdict()) {
             case ALLOW    -> new AuthorizationDecision(AuthorizationDecision.Type.ALLOW, d.reason());

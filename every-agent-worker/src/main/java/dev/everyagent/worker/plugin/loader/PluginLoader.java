@@ -2,12 +2,12 @@ package dev.everyagent.worker.plugin.loader;
 
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.worker.config.WorkerProperties;
-import dev.everyagent.worker.plugin.EveryAgentPlugin;
-import dev.everyagent.worker.plugin.PluginConfig;
+import dev.everyagent.plugin.api.EveryAgentPlugin;
+import dev.everyagent.plugin.api.PluginConfig;
 import dev.everyagent.worker.plugin.PluginConfigImpl;
-import dev.everyagent.worker.plugin.WorkerPluginContext;
+import dev.everyagent.plugin.api.WorkerPluginContext;
 import dev.everyagent.worker.plugin.WorkerPluginContextImpl;
-import dev.everyagent.worker.plugin.WorkerServices;
+import dev.everyagent.plugin.api.WorkerServices;
 import dev.everyagent.worker.plugin.registry.AdvisorProviderRegistry;
 import dev.everyagent.worker.plugin.registry.AgentDispatcherRegistry;
 import dev.everyagent.worker.plugin.registry.AuthorizationHandlerRegistry;

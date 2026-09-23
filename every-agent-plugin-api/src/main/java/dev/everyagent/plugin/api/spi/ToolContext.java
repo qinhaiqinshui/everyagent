@@ -1,8 +1,4 @@
-package dev.everyagent.worker.plugin.spi;
-
-import dev.everyagent.worker.modules.WorkspaceManager;
-import dev.everyagent.worker.tools.PermissionGate;
-import dev.everyagent.worker.tools.RipgrepBinary;
+package dev.everyagent.plugin.api.spi;
 
 import java.nio.file.Path;
 

@@ -33,7 +33,7 @@ import dev.everyagent.worker.tools.SubAgentTools;
 import dev.everyagent.worker.os.OsSandbox;
 import dev.everyagent.worker.plugin.ToolContextImpl;
 import dev.everyagent.worker.plugin.registry.ToolProviderRegistry;
-import dev.everyagent.worker.plugin.spi.ToolProvider;
+import dev.everyagent.plugin.api.spi.ToolProvider;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;

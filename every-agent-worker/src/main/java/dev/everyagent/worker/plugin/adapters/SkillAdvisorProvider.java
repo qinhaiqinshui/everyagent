@@ -1,7 +1,7 @@
 package dev.everyagent.worker.plugin.adapters;
 
-import dev.everyagent.worker.plugin.spi.AdvisorContext;
-import dev.everyagent.worker.plugin.spi.AdvisorProvider;
+import dev.everyagent.plugin.api.spi.AdvisorContext;
+import dev.everyagent.plugin.api.spi.AdvisorProvider;
 import dev.everyagent.worker.skill.SkillAdvisor;
 import org.springframework.ai.chat.client.advisor.api.Advisor;
 import org.springframework.core.Ordered;

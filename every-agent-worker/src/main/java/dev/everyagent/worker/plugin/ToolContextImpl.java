@@ -1,8 +1,8 @@
 package dev.everyagent.worker.plugin;
 
 import dev.everyagent.worker.modules.WorkspaceManager;
-import dev.everyagent.worker.plugin.spi.SandboxBackend;
-import dev.everyagent.worker.plugin.spi.ToolContext;
+import dev.everyagent.plugin.api.spi.SandboxBackend;
+import dev.everyagent.plugin.api.spi.ToolContext;
 import dev.everyagent.worker.task.TaskEntry;
 import dev.everyagent.worker.tools.PermissionGate;
 
@@ -63,12 +63,12 @@ public class ToolContextImpl implements ToolContext {
     }
 
     @Override
-    public PermissionGate gate() {
+    public dev.everyagent.plugin.api.spi.PermissionGate gate() {
         return gate;
     }
 
     @Override
-    public WorkspaceManager workspaces() {
+    public dev.everyagent.plugin.api.spi.WorkspaceManager workspaces() {
         return workspaces;
     }
 
@@ -80,5 +80,10 @@ public class ToolContextImpl implements ToolContext {
     /** 额外暴露：任务条目（含 powershellEnabled 等任务级开关），供内置适配器使用。 */
     public TaskEntry taskEntry() {
         return taskEntry;
+    }
+
+    /** 内置适配器专用：权限门具体实现（接口方法返回 SPI 接口类型）。 */
+    public PermissionGate gateImpl() {
+        return gate;
     }
 }

@@ -1,6 +1,6 @@
 package dev.everyagent.worker.plugin.registry;
 
-import dev.everyagent.worker.plugin.spi.AdvisorProvider;
+import dev.everyagent.plugin.api.spi.AdvisorProvider;
 import org.springframework.stereotype.Component;
 
 import java.util.Comparator;

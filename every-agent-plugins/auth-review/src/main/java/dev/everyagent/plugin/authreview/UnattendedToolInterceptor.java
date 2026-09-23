@@ -1,7 +1,7 @@
 package dev.everyagent.plugin.authreview;
 
 import dev.everyagent.worker.plugin.registry.ToolExecutionInterceptorRegistry;
-import dev.everyagent.worker.plugin.spi.ToolExecutionInterceptor;
+import dev.everyagent.plugin.api.spi.ToolExecutionInterceptor;
 import dev.everyagent.worker.task.InterceptingToolCallingManager;
 import dev.everyagent.worker.task.TaskEntry;
 import org.springframework.ai.chat.messages.AssistantMessage;

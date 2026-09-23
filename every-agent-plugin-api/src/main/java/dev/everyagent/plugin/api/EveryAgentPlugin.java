@@ -1,4 +1,4 @@
-package dev.everyagent.worker.plugin;
+package dev.everyagent.plugin.api;
 
 /**
  * 插件入口接口 —— 对标 VSCode 的 {@code activate(context)} / {@code deactivate()}。

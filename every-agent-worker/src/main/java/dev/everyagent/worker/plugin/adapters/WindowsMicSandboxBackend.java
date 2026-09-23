@@ -1,9 +1,9 @@
 package dev.everyagent.worker.plugin.adapters;
 
 import dev.everyagent.worker.config.WorkerProperties;
-import dev.everyagent.worker.os.OsSandbox.ExecResult;
+import dev.everyagent.plugin.api.spi.ExecResult;
 import dev.everyagent.worker.os.windows.WindowsSandbox;
-import dev.everyagent.worker.plugin.spi.SandboxBackend;
+import dev.everyagent.plugin.api.spi.SandboxBackend;
 
 import java.nio.file.Path;
 import java.util.List;

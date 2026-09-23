@@ -1,8 +1,17 @@
 package dev.everyagent.worker.plugin;
 
-import dev.everyagent.worker.config.WorkerProperties;
-import dev.everyagent.worker.modules.WorkspaceManager;
-import dev.everyagent.worker.os.OsSandbox;
+import dev.everyagent.plugin.api.WorkerPluginContext;
+import dev.everyagent.plugin.api.WorkerServices;
+import dev.everyagent.plugin.api.PluginConfig;
+import dev.everyagent.plugin.api.permission.AuthorizationHandler;
+import dev.everyagent.plugin.api.rpc.RpcMethod;
+import dev.everyagent.plugin.api.slash.SlashProvider;
+import dev.everyagent.plugin.api.spi.AdvisorProvider;
+import dev.everyagent.plugin.api.spi.AgentDispatcher;
+import dev.everyagent.plugin.api.spi.SandboxProvider;
+import dev.everyagent.plugin.api.spi.SearchProvider;
+import dev.everyagent.plugin.api.spi.ToolExecutionInterceptor;
+import dev.everyagent.plugin.api.spi.ToolProvider;
 import dev.everyagent.worker.plugin.registry.AdvisorProviderRegistry;
 import dev.everyagent.worker.plugin.registry.AgentDispatcherRegistry;
 import dev.everyagent.worker.plugin.registry.AuthorizationHandlerRegistry;
@@ -10,17 +19,12 @@ import dev.everyagent.worker.plugin.registry.SandboxProviderRegistry;
 import dev.everyagent.worker.plugin.registry.SearchProviderRegistry;
 import dev.everyagent.worker.plugin.registry.ToolExecutionInterceptorRegistry;
 import dev.everyagent.worker.plugin.registry.ToolProviderRegistry;
-import dev.everyagent.worker.plugin.spi.AdvisorProvider;
-import dev.everyagent.worker.plugin.spi.AgentDispatcher;
-import dev.everyagent.worker.plugin.spi.SandboxProvider;
-import dev.everyagent.worker.plugin.spi.SearchProvider;
-import dev.everyagent.worker.plugin.spi.ToolExecutionInterceptor;
-import dev.everyagent.worker.plugin.spi.ToolProvider;
 import dev.everyagent.worker.rpc.RpcDispatcher;
 import dev.everyagent.worker.slash.SlashCommandRegistry;
-import dev.everyagent.worker.tools.PermissionGate;
-import dev.everyagent.worker.tools.permission.AuthorizationHandler;
+import dev.everyagent.worker.slash.SlashCommandItem;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -111,13 +115,21 @@ public class WorkerPluginContextImpl implements WorkerPluginContext {
     }
 
     @Override
-    public void registerRpcMethod(String method, RpcDispatcher.Method handler) {
-        rpcDispatcher.register(method, handler);
+    public void registerRpcMethod(String method, RpcMethod handler) {
+        rpcDispatcher.register(method, ctx -> handler.handle(ctx));
     }
 
     @Override
-    public void registerSlashProvider(String id, SlashCommandRegistry.SlashProvider provider) {
-        slashRegistry.registerProvider(id, provider);
+    @SuppressWarnings("unchecked")
+    public void registerSlashProvider(String id, SlashProvider provider) {
+        slashRegistry.registerProvider(id, () -> {
+            List<?> items = provider.load();
+            List<SlashCommandItem> result = new ArrayList<>(items.size());
+            for (Object item : items) {
+                result.add((SlashCommandItem) item);
+            }
+            return result;
+        });
     }
 
     @Override

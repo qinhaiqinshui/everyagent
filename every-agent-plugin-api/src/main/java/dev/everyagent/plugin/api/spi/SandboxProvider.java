@@ -1,20 +1,12 @@
-package dev.everyagent.worker.plugin.spi;
-
-import dev.everyagent.worker.config.WorkerProperties;
+package dev.everyagent.plugin.api.spi;
 
 import java.nio.file.Path;
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.ExecutorService;
 
 /**
  * 沙箱后端提供者 SPI —— 插件实现此接口提供不同隔离策略。
  *
- * <p>对标 VSCode 的 terminal profile provider：不同插件提供不同沙箱后端
- * （wsl-direct / wsl-bwrap / windows-mic / docker / none），核心只做选择与聚合。
- *
- * <p>改造前：{@code OsSandbox} 硬编码 {@code if (backend == WSL_BWRAP) ... else if (WSL_DIRECT) ... else WindowsSandbox.run(...)}。
- * 改造后：{@code OsSandbox} 从 {@link dev.everyagent.worker.plugin.registry.SandboxProviderRegistry} 选择后端。
+ * <p>不同插件提供不同沙箱后端（wsl-direct / wsl-bwrap / windows-mic / docker / none），
+ * 核心只做选择与聚合。
  */
 public interface SandboxProvider {
 
@@ -42,10 +34,10 @@ public interface SandboxProvider {
      * @param interceptPrivilege 是否拦截提权
      * @param timeoutMs 命令超时（毫秒）
      * @param persistentRoot 持久状态根目录（wsl-bwrap 用）
-     * @param props WorkerProperties 原始配置（后端可能需要读取额外参数）
+     * @param props 原始配置对象（后端可能需要读取额外参数；类型为 worker 的 WorkerProperties，使用时强转）
      */
     record SandboxConfig(String type, boolean enabled, boolean networkDenied,
             boolean allowPrivilegeEscalation, boolean interceptPrivilege,
-            long timeoutMs, Path persistentRoot, WorkerProperties props) {
+            long timeoutMs, Path persistentRoot, Object props) {
     }
 }

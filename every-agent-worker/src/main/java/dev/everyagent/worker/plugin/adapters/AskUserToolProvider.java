@@ -2,8 +2,8 @@ package dev.everyagent.worker.plugin.adapters;
 
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.plugin.ToolContextImpl;
-import dev.everyagent.worker.plugin.spi.ToolContext;
-import dev.everyagent.worker.plugin.spi.ToolProvider;
+import dev.everyagent.plugin.api.spi.ToolContext;
+import dev.everyagent.plugin.api.spi.ToolProvider;
 import dev.everyagent.worker.task.PendingAsks;
 import dev.everyagent.worker.task.TaskEntry;
 import dev.everyagent.worker.tools.AskUserTool;

@@ -2,8 +2,8 @@ package dev.everyagent.worker.plugin.adapters;
 
 import dev.everyagent.worker.os.OsSandbox;
 import dev.everyagent.worker.plugin.ToolContextImpl;
-import dev.everyagent.worker.plugin.spi.ToolContext;
-import dev.everyagent.worker.plugin.spi.ToolProvider;
+import dev.everyagent.plugin.api.spi.ToolContext;
+import dev.everyagent.plugin.api.spi.ToolProvider;
 import dev.everyagent.worker.tools.BashTool;
 import dev.everyagent.worker.tools.CommandExecutor;
 import org.springframework.ai.support.ToolCallbacks;
@@ -48,7 +48,7 @@ public class BashToolProvider implements ToolProvider {
     public List<ToolCallback> createTools(ToolContext ctx) {
         ToolContextImpl impl = (ToolContextImpl) ctx;
         Path rg = ctx.rgBinary();
-        CommandExecutor exec = new CommandExecutor(sandbox, impl.taskEntry(), ctx.gate(),
+        CommandExecutor exec = new CommandExecutor(sandbox, impl.taskEntry(), impl.gateImpl(),
                 ctx.agentId(), rg != null ? rg.getParent() : null);
         return List.of(ToolCallbacks.from(new BashTool(exec)));
     }

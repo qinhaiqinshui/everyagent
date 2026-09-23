@@ -1,4 +1,4 @@
-package dev.everyagent.worker.plugin.spi;
+package dev.everyagent.plugin.api.spi;
 
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.model.ChatResponse;

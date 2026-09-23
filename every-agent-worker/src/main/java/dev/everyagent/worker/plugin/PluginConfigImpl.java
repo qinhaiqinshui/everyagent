@@ -1,5 +1,7 @@
 package dev.everyagent.worker.plugin;
 
+import dev.everyagent.plugin.api.PluginConfig;
+
 import java.util.Map;
 
 /**

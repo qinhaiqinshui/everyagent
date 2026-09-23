@@ -1,4 +1,4 @@
-package dev.everyagent.worker.plugin;
+package dev.everyagent.plugin.api;
 
 /**
  * 插件配置 —— 从 plugin.json 的 contributes.config 解析。

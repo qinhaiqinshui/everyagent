@@ -2,7 +2,7 @@ package dev.everyagent.worker.git;
 
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.os.OsSandbox;
-import dev.everyagent.worker.os.OsSandbox.ExecResult;
+import dev.everyagent.plugin.api.spi.ExecResult;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;

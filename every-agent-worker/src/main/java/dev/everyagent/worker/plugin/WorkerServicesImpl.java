@@ -1,5 +1,7 @@
 package dev.everyagent.worker.plugin;
 
+import dev.everyagent.plugin.api.WorkerServices;
+import dev.everyagent.plugin.api.spi.SandboxBackend;
 import dev.everyagent.worker.modules.WorkspaceManager;
 import dev.everyagent.worker.os.OsSandbox;
 import dev.everyagent.worker.tools.PermissionGate;
@@ -22,17 +24,17 @@ public class WorkerServicesImpl implements WorkerServices {
     }
 
     @Override
-    public OsSandbox sandbox() {
+    public SandboxBackend sandbox() {
         return sandbox;
     }
 
     @Override
-    public PermissionGate gate() {
+    public dev.everyagent.plugin.api.spi.PermissionGate gate() {
         return gate;
     }
 
     @Override
-    public WorkspaceManager workspaces() {
+    public dev.everyagent.plugin.api.spi.WorkspaceManager workspaces() {
         return workspaces;
     }
 }

@@ -1,6 +1,6 @@
 package dev.everyagent.worker.plugin.registry;
 
-import dev.everyagent.worker.plugin.spi.ToolExecutionInterceptor;
+import dev.everyagent.plugin.api.spi.ToolExecutionInterceptor;
 import org.springframework.stereotype.Component;
 
 import java.util.Comparator;

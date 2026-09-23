@@ -1,6 +1,6 @@
 package dev.everyagent.worker.plugin.registry;
 
-import dev.everyagent.worker.tools.permission.AuthorizationHandler;
+import dev.everyagent.plugin.api.permission.AuthorizationHandler;
 import org.springframework.stereotype.Component;
 
 import java.util.Comparator;

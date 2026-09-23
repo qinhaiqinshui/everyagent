@@ -1,7 +1,4 @@
-package dev.everyagent.worker.plugin.spi;
-
-import dev.everyagent.worker.os.OsSandbox;
-import dev.everyagent.worker.os.OsSandbox.ExecResult;
+package dev.everyagent.plugin.api.spi;
 
 import java.nio.file.Path;
 import java.util.List;
@@ -10,7 +7,7 @@ import java.util.Map;
 /**
  * 沙箱执行接口 —— {@link SandboxProvider#create} 的产物。
  *
- * <p>从 {@link dev.everyagent.worker.os.OsSandbox} 的公共方法抽取。
+ * <p>从 {@code OsSandbox} 的公共方法抽取。
  * OsSandbox 改造后变为薄选择器，实际执行委托给此接口的当前实现。
  */
 public interface SandboxBackend {

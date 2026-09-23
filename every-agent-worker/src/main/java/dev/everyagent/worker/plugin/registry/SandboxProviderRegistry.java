@@ -1,8 +1,8 @@
 package dev.everyagent.worker.plugin.registry;
 
-import dev.everyagent.worker.plugin.spi.SandboxBackend;
-import dev.everyagent.worker.plugin.spi.SandboxProvider;
-import dev.everyagent.worker.plugin.spi.SandboxProvider.SandboxConfig;
+import dev.everyagent.plugin.api.spi.SandboxBackend;
+import dev.everyagent.plugin.api.spi.SandboxProvider;
+import dev.everyagent.plugin.api.spi.SandboxProvider.SandboxConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;

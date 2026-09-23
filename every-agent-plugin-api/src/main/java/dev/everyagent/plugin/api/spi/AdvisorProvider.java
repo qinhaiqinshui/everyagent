@@ -1,20 +1,12 @@
-package dev.everyagent.worker.plugin.spi;
+package dev.everyagent.plugin.api.spi;
 
 import org.springframework.ai.chat.client.advisor.api.Advisor;
-import org.springframework.ai.model.tool.ToolCallingManager;
-
-import java.nio.file.Path;
 
 /**
  * Advisor 提供者 SPI —— 插件实现此接口向 agent 链注入 Advisor。
  *
- * <p>对标 VSCode 的 extension contribution point：
- * 不同插件提供不同 Advisor（skill 注入、git 自动同步、重试护栏、上下文压缩等），
- * 核心只做聚合——{@link dev.everyagent.worker.AgentClientFactory#forMain}
- * 从注册表按 scope 筛选 + 按 order 排序装配。
- *
- * <p>改造前：AgentClientFactory 硬编码 12 个 Advisor 的创建与顺序。
- * 改造后：AgentClientFactory 从 {@link dev.everyagent.worker.plugin.registry.AdvisorProviderRegistry} 聚合。
+ * <p>不同插件提供不同 Advisor（skill 注入、git 自动同步、重试护栏、上下文压缩等），
+ * 核心只做聚合——从注册表按 scope 筛选 + 按 order 排序装配。
  *
  * <p>Advisor 顺序分段（预留插件挂载区间）：
  * <pre>

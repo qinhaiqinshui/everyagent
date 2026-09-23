@@ -1,7 +1,7 @@
 package dev.everyagent.worker.tools;
 
 import dev.everyagent.worker.os.OsSandbox;
-import dev.everyagent.worker.os.OsSandbox.ExecResult;
+import dev.everyagent.plugin.api.spi.ExecResult;
 import dev.everyagent.worker.os.wsl.WslPathMapper;
 import dev.everyagent.worker.task.TaskEntry;
 

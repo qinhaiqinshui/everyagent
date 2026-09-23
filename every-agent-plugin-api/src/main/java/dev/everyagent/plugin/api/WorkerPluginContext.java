@@ -1,13 +1,14 @@
-package dev.everyagent.worker.plugin;
+package dev.everyagent.plugin.api;
 
-import dev.everyagent.worker.plugin.spi.AdvisorProvider;
-import dev.everyagent.worker.plugin.spi.AgentDispatcher;
-import dev.everyagent.worker.plugin.spi.SandboxProvider;
-import dev.everyagent.worker.plugin.spi.SearchProvider;
-import dev.everyagent.worker.plugin.spi.ToolExecutionInterceptor;
-import dev.everyagent.worker.plugin.spi.ToolProvider;
-import dev.everyagent.worker.slash.SlashCommandRegistry;
-import dev.everyagent.worker.tools.permission.AuthorizationHandler;
+import dev.everyagent.plugin.api.permission.AuthorizationHandler;
+import dev.everyagent.plugin.api.rpc.RpcMethod;
+import dev.everyagent.plugin.api.slash.SlashProvider;
+import dev.everyagent.plugin.api.spi.AdvisorProvider;
+import dev.everyagent.plugin.api.spi.AgentDispatcher;
+import dev.everyagent.plugin.api.spi.SandboxProvider;
+import dev.everyagent.plugin.api.spi.SearchProvider;
+import dev.everyagent.plugin.api.spi.ToolExecutionInterceptor;
+import dev.everyagent.plugin.api.spi.ToolProvider;
 
 /**
  * Worker 插件上下文 —— 对标 VSCode 的 {@code ExtensionContext}。
@@ -51,7 +52,7 @@ public interface WorkerPluginContext {
      * @param method 方法名（域.动作，如 "git.status"）
      * @param handler 处理器
      */
-    void registerRpcMethod(String method, dev.everyagent.worker.rpc.RpcDispatcher.Method handler);
+    void registerRpcMethod(String method, RpcMethod handler);
 
     /**
      * 注册 Slash 命令提供者。
@@ -59,7 +60,7 @@ public interface WorkerPluginContext {
      * @param id 来源 id
      * @param provider 命令提供者
      */
-    void registerSlashProvider(String id, SlashCommandRegistry.SlashProvider provider);
+    void registerSlashProvider(String id, SlashProvider provider);
 
     // ── 只读服务 ──
 

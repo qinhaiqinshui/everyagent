@@ -1,4 +1,4 @@
-package dev.everyagent.worker.plugin.spi;
+package dev.everyagent.plugin.api.spi;
 
 import java.nio.file.Path;
 import java.util.List;
@@ -8,11 +8,6 @@ import java.util.List;
  *
  * <p>现有 ripgrep 后端变为默认插件（search-ripgrep）。
  * 可新增 search-es（ElasticSearch 后端）、search-vector（向量搜索）。
- *
- * <p>改造前：FsSearchService + TaskSearchService 硬编码为 ripgrep。
- * 改造后：搜索 RPC 从 {@link dev.everyagent.worker.plugin.registry.SearchProviderRegistry} 选择引擎。
- *
- * <p>注意：此 SPI 在阶段一仅定义接口，实际改造在阶段三。
  */
 public interface SearchProvider {
 

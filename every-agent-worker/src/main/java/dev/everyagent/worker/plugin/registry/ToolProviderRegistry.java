@@ -1,6 +1,6 @@
 package dev.everyagent.worker.plugin.registry;
 
-import dev.everyagent.worker.plugin.spi.ToolProvider;
+import dev.everyagent.plugin.api.spi.ToolProvider;
 import org.springframework.stereotype.Component;
 
 import java.util.List;

@@ -1,7 +1,7 @@
 package dev.everyagent.worker.tools;
 
 import dev.everyagent.worker.os.OsSandbox;
-import dev.everyagent.worker.os.OsSandbox.ExecResult;
+import dev.everyagent.plugin.api.spi.ExecResult;
 import dev.everyagent.worker.proto.TaskDtos.ModelSnapshot;
 import dev.everyagent.worker.task.TaskEntry;
 import org.junit.jupiter.api.Test;

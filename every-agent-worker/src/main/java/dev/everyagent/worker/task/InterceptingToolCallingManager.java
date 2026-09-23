@@ -1,7 +1,7 @@
 package dev.everyagent.worker.task;
 
 import dev.everyagent.worker.plugin.registry.ToolExecutionInterceptorRegistry;
-import dev.everyagent.worker.plugin.spi.ToolExecutionInterceptor;
+import dev.everyagent.plugin.api.spi.ToolExecutionInterceptor;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;

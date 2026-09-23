@@ -1,9 +1,9 @@
 package dev.everyagent.plugin.authreview;
 
 import dev.everyagent.worker.plugin.registry.AuthorizationHandlerRegistry;
-import dev.everyagent.worker.tools.permission.AuthorizationHandler;
-import dev.everyagent.worker.tools.permission.AuthorizationHandler.AuthorizationRequest;
-import dev.everyagent.worker.tools.permission.AuthorizationHandler.AuthorizationDecision;
+import dev.everyagent.plugin.api.permission.AuthorizationHandler;
+import dev.everyagent.plugin.api.permission.AuthorizationHandler.AuthorizationRequest;
+import dev.everyagent.plugin.api.permission.AuthorizationHandler.AuthorizationDecision;
 import org.springframework.stereotype.Component;
 
 @Component
@@ -17,7 +17,7 @@ public class UnattendedAuthHandler implements AuthorizationHandler {
 
     @Override
     public boolean applies(AuthorizationRequest req) {
-        return req.task().taskFlags.getOrDefault("unattended", false);
+        return req.task().taskFlags().getOrDefault("unattended", false);
     }
 
     @Override

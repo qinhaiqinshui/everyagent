@@ -1,8 +1,8 @@
-package dev.everyagent.worker.plugin;
+package dev.everyagent.plugin.api;
 
-import dev.everyagent.worker.modules.WorkspaceManager;
-import dev.everyagent.worker.os.OsSandbox;
-import dev.everyagent.worker.tools.PermissionGate;
+import dev.everyagent.plugin.api.spi.SandboxBackend;
+import dev.everyagent.plugin.api.spi.PermissionGate;
+import dev.everyagent.plugin.api.spi.WorkspaceManager;
 
 /**
  * Worker 核心只读服务 —— 插件经此访问 worker 的公共能力。
@@ -12,8 +12,8 @@ import dev.everyagent.worker.tools.PermissionGate;
  */
 public interface WorkerServices {
 
-    /** 沙箱门面（OsSandbox，插件可委托命令执行）。 */
-    OsSandbox sandbox();
+    /** 沙箱门面（SandboxBackend，插件可委托命令执行）。 */
+    SandboxBackend sandbox();
 
     /** 权限门（PermissionGate，工具经此授权链）。 */
     PermissionGate gate();

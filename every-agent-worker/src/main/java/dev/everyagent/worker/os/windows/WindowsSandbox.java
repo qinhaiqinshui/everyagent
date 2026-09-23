@@ -1,7 +1,7 @@
 package dev.everyagent.worker.os.windows;
 
 import dev.everyagent.worker.config.WorkerProperties;
-import dev.everyagent.worker.os.OsSandbox.ExecResult;
+import dev.everyagent.plugin.api.spi.ExecResult;
 
 import com.sun.jna.Memory;
 import com.sun.jna.Pointer;

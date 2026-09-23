@@ -1,6 +1,6 @@
 package dev.everyagent.worker.plugin.registry;
 
-import dev.everyagent.worker.plugin.spi.SearchProvider;
+import dev.everyagent.plugin.api.spi.SearchProvider;
 import org.springframework.stereotype.Component;
 
 import java.util.List;

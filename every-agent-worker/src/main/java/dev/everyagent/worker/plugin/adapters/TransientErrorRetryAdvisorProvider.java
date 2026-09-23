@@ -2,8 +2,8 @@ package dev.everyagent.worker.plugin.adapters;
 
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.plugin.AdvisorContextImpl;
-import dev.everyagent.worker.plugin.spi.AdvisorContext;
-import dev.everyagent.worker.plugin.spi.AdvisorProvider;
+import dev.everyagent.plugin.api.spi.AdvisorContext;
+import dev.everyagent.plugin.api.spi.AdvisorProvider;
 import dev.everyagent.worker.task.AgentEntity;
 import dev.everyagent.worker.task.TransientErrorRetryAdvisor;
 import org.springframework.ai.chat.client.advisor.ToolCallingAdvisor;

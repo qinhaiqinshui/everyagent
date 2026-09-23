@@ -50,7 +50,7 @@ import java.util.List;
  * 主/子 agent 按 taskId 共享授权。
  */
 @Component
-public class PermissionGate {
+public class PermissionGate implements dev.everyagent.plugin.api.spi.PermissionGate {
 
     /** 文件操作类别(命令串中的路径引用按 EXEC 独立计,不与文件工具的读/写互认)。 */
     public enum Op {

@@ -48,6 +48,10 @@
             <groupId>dev.everyagent</groupId>
             <artifactId>every-agent-contract</artifactId>
         </dependency>
+        <dependency>
+            <groupId>dev.everyagent</groupId>
+            <artifactId>every-agent-plugin-api</artifactId>
+        </dependency>
 
         <dependency>
             <groupId>org.springframework.boot</groupId>

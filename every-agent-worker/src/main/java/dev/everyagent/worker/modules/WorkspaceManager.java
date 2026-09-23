@@ -49,7 +49,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * (任务/fs/git 无法在其上运行,避免沙箱挂载失败或新建空目录掩盖数据丢失)。
  */
 @Component
-public class WorkspaceManager {
+public class WorkspaceManager implements dev.everyagent.plugin.api.spi.WorkspaceManager {
 
     private static final Logger log = LoggerFactory.getLogger(WorkspaceManager.class);
 

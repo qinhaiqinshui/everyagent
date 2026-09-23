@@ -1,7 +1,9 @@
 package dev.everyagent.worker.plugin.adapters;
 
-import dev.everyagent.worker.plugin.spi.SandboxBackend;
-import dev.everyagent.worker.plugin.spi.SandboxProvider;
+import dev.everyagent.plugin.api.spi.SandboxBackend;
+import dev.everyagent.plugin.api.spi.SandboxProvider;
+import dev.everyagent.plugin.api.spi.SandboxProvider.SandboxConfig;
+import dev.everyagent.worker.config.WorkerProperties;
 
 /**
  * windows-mic 后端提供者。
@@ -31,6 +33,6 @@ public final class WindowsMicSandboxProvider implements SandboxProvider {
 
     @Override
     public SandboxBackend create(SandboxConfig config) {
-        return new WindowsMicSandboxBackend(config.props());
+        return new WindowsMicSandboxBackend((WorkerProperties) config.props());
     }
 }

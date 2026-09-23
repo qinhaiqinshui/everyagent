@@ -20,6 +20,7 @@
     <modules>
         <module>every-agent-contract</module>
         <module>every-agent-hub</module>
+        <module>every-agent-plugin-api</module>
         <module>every-agent-worker</module>
         <module>every-agent-plugins</module>
         <module>every-agent-app</module>
@@ -45,6 +46,11 @@
                 <groupId>dev.everyagent</groupId>
                 <artifactId>every-agent-contract</artifactId>
                 <version>${every-agent-contract.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>dev.everyagent</groupId>
+                <artifactId>every-agent-plugin-api</artifactId>
+                <version>${project.version}</version>
             </dependency>
         </dependencies>
     </dependencyManagement>

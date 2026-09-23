@@ -1,5 +1,8 @@
 package dev.everyagent.worker.tools.permission;
 
+import dev.everyagent.plugin.api.permission.AuthorizationHandler;
+import dev.everyagent.plugin.api.permission.AuthorizationHandler.AuthorizationRequest;
+import dev.everyagent.plugin.api.permission.AuthorizationHandler.AuthorizationDecision;
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.plugin.registry.AuthorizationHandlerRegistry;
 import dev.everyagent.worker.task.AgentCancelledException;
@@ -44,7 +47,7 @@ public class HumanAuthorizationHandler implements AuthorizationHandler {
 
     @Override
     public AuthorizationDecision decide(AuthorizationRequest req) {
-        TaskEntry t = req.task();
+        TaskEntry t = (TaskEntry) req.task();
         List<PendingAsks.AskQuestion> questions = List.of(
                 new PendingAsks.AskQuestion("", req.prompt(), AUTHORIZE_OPTIONS));
         PendingAsks.AskAnswer ans;

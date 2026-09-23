@@ -5,8 +5,9 @@ import dev.everyagent.worker.os.windows.WindowsSandbox;
 import dev.everyagent.worker.os.wsl.WslBwrapSandbox;
 import dev.everyagent.worker.os.wsl.WslDirectSandbox;
 import dev.everyagent.worker.plugin.registry.SandboxProviderRegistry;
-import dev.everyagent.worker.plugin.spi.SandboxBackend;
-import dev.everyagent.worker.plugin.spi.SandboxProvider.SandboxConfig;
+import dev.everyagent.plugin.api.spi.ExecResult;
+import dev.everyagent.plugin.api.spi.SandboxBackend;
+import dev.everyagent.plugin.api.spi.SandboxProvider.SandboxConfig;
 
 import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
@@ -620,7 +621,4 @@ public final class OsSandbox implements SandboxBackend {
         return s == null ? "" : (s.length() <= n ? s : s.substring(0, n) + "...");
     }
 
-    /** 执行结果。 */
-    public record ExecResult(String stdout, String stderr, int exitCode, boolean aborted) {
-    }
 }
