@@ -1252,6 +1252,17 @@
   user-select: text;
 }
 
+/* 文件类工具折叠态预览分段：文件名在前，若干间距后跟完整路径（再后为可选附加参数）。
+   间距用 margin 控制而非文本空格，保证不同渲染环境下宽度稳定；
+   整体仍受父级 inline-preview 的 nowrap + ellipsis 约束，超宽时统一收缩省略。 */
+.nagent-tool__inline-file-path {
+  margin-left: 8px;
+}
+
+.nagent-tool__inline-file-extras {
+  margin-left: 6px;
+}
+
 /* 命令首行注释(意图说明):以 AI 正文样式(无衬线 + 正文色)呈现,
    与后续命令文本(等宽 muted)形成层次。字号继承行内 --text-xs,
    不改变 summary 的 baseline 对齐与行高;颜色走 token,明暗主题自动适配。

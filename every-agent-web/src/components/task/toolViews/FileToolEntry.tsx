@@ -1,10 +1,11 @@
 /**
  * 文件类工具（create_file / update_file / read_file）共享的 entry 渲染组件。
  *
- * 三个工具的折叠态仅 inline-preview 文本不同（read_file 多带 line_start/line_end 等
- * 参数），展开态结构完全一致，故抽出共享组件：
+ * 三个工具的折叠态仅附加参数文本不同（read_file 多带 line_start/line_end 等参数），
+ * 展开态结构完全一致，故抽出共享组件：
  *
- * 折叠态：工具图标 + 工具名 + inline-preview（由调用方计算）+ 折叠箭头。
+ * 折叠态：工具图标 + 工具名 + inline-preview（文件名 + 间距 + 完整路径 + 可选附加
+ * 参数；文件名由 args.path 提取，附加参数由调用方计算）+ 折叠箭头。
  * 展开态：result-item-head（图标 + 工具名 + 可点击文件路径 chip）→ 参数块（content 排末尾）
  *         → 结果块（read_file 即文件内容；create/update 为确认文本）→ 错误块。
  *
@@ -18,7 +19,7 @@ import { WrenchIcon, ChevronDownIcon, ChevronRightIcon } from '@/components/shar
 import { useWorkspaceShell } from '@/components/app/WorkspaceShellContext'
 import { toBusinessAbsolutePath } from '@/platform/fs/pathUtils'
 import { useTaskWorkspaceRoot } from '../TaskWorkspaceContext'
-import { hasActiveTextSelection } from './helpers'
+import { extractFileName, hasActiveTextSelection } from './helpers'
 import type { AggregatedToolDetail } from './types'
 
 /** content 字段始终排在参数列表最后，避免开头被巨量正文占据。 */
@@ -51,11 +52,11 @@ function flattenArgs(args: Record<string, unknown> | null): string[] {
 
 export interface FileToolEntryProps {
   detail: AggregatedToolDetail
-  /** 折叠行内联预览文本（路径 + 可选附加参数），由调用方按工具计算。 */
-  inlinePreview: string
+  /** 折叠行附加参数文本（如 read_file 的 line_start=1 line_end=80），由调用方按工具计算。 */
+  inlineExtras?: string
 }
 
-export function FileToolEntry({ detail, inlinePreview }: FileToolEntryProps) {
+export function FileToolEntry({ detail, inlineExtras }: FileToolEntryProps) {
   const args = (detail.arguments ?? {}) as Record<string, unknown>
   const fullPath = typeof args.path === 'string' ? args.path : ''
   const businessPath = fullPath ? toBusinessAbsolutePath(fullPath) : ''
@@ -91,7 +92,17 @@ export function FileToolEntry({ detail, inlinePreview }: FileToolEntryProps) {
       >
         <WrenchIcon size={13} className={`nagent-tool__icon${hasError ? ' nagent-tool__icon--error' : ''}`} />
         <span className="nagent-tool__name">{detail.toolName || '文件工具'}</span>
-        <span className="nagent-tool__inline-preview">{inlinePreview || '（无路径）'}</span>
+        <span className="nagent-tool__inline-preview">
+          {fullPath ? (
+            <>
+              <span className="nagent-tool__inline-file-name">{extractFileName(fullPath)}</span>
+              <span className="nagent-tool__inline-file-path">{fullPath}</span>
+            </>
+          ) : (
+            '（无路径）'
+          )}
+          {inlineExtras ? <span className="nagent-tool__inline-file-extras">{inlineExtras}</span> : null}
+        </span>
         {open ? (
           <ChevronDownIcon size={13} className="nagent-tool__chevron" />
         ) : (
