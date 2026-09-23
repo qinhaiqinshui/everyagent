@@ -77,23 +77,11 @@ public final class TaskEntry {
     public volatile boolean stopRequested;
 
     /**
-     * AI 审议开关(任务级,plan-unattended-ai-auth §关键设计决策):开启后授权弹窗改
-     * AI 安全审议(拦截弹窗),随 {@link #summaryJson()} 落盘 meta.json、再运行仍保持。
-     * 由 {@code AiReviewSlashProvider} 的 onSelect/onCancel 置位复位并落盘;可单独开启
-     * (不依赖无人值守)。真正的授权分派由 {@code PermissionGate} 读本字段(步骤 6)。
+     * 通用任务级标记存储（替代原 aiReview/unattended 布尔字段）。
+     * 插件用字符串 key 存取（如 "ai-review"、"unattended"），核心不感知具体 key。
+     * 随 {@link #summaryJson()} 落盘 meta.json、再运行仍保持。旧格式自动迁移（见 TaskManager）。
      */
-    public volatile boolean aiReview;
-
-    /**
-     * 无人值守开关(任务级,plan-unattended-ai-auth §关键设计决策):开启后 AI 调用
-     * ask_user 时被 {@code UnattendedAskUserCallback} 装饰器拦截、代替人工逐题选择
-     * 第一个选项并以「题干：首选项」格式回传作答文本,不挂起等待;
-     * 随 {@link #summaryJson()} 落盘 meta.json、再运行仍保持。
-     * 由 {@code UnattendedSlashProvider} 的 onSelect/onCancel 置位复位并落盘;
-     * 开启无人值守时联动开启 AI 审议(由 selectHandler 一次返回两个胶囊,前端各自 apply)。
-     * 装饰器在 call() 中实时读本字段(volatile),运行中点胶囊开/关即时生效。
-     */
-    public volatile boolean unattended;
+    public final java.util.Map<String, Boolean> taskFlags = new java.util.concurrent.ConcurrentHashMap<>();
 
     /**
      * 禁网开关(任务级):开启后本任务后续所有命令禁止访问网络(覆盖 worker 级
@@ -303,12 +291,10 @@ public final class TaskEntry {
         ObjectNode n = (ObjectNode) Json.toJson(s);
         // 稳定工作区 id(磁盘存储维度;TaskSummary record 保持不动,wire/meta 上额外携带)。
         n.put("workspaceId", workspaceId);
-        // 任务级开关随 meta 落盘:缺失 = false,再运行据此保持开启(磁盘是唯一真相源)。
-        if (aiReview) {
-            n.put("aiReview", true);
-        }
-        if (unattended) {
-            n.put("unattended", true);
+        // 任务级标记随 meta 落盘:taskFlags Map 序列化(缺失 = 空 map,再运行据此保持)。
+        if (!taskFlags.isEmpty()) {
+            var flags = n.putObject("taskFlags");
+            taskFlags.forEach(flags::put);
         }
         if (networkBlocked) {
             n.put("networkBlocked", true);

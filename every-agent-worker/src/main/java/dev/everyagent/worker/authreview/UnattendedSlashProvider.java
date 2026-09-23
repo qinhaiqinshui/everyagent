@@ -58,7 +58,7 @@ public class UnattendedSlashProvider {
             if (taskId != null && !taskId.isEmpty()) {
                 TaskEntry t = taskManager.runningTask(taskId);
                 if (t != null) {
-                    t.unattended = true; // 注册方写自己的业务标记
+                    t.taskFlags.put("unattended", true); // 注册方写自己的业务标记
                     t.persist();         // 落盘 meta(persistHook → updateMeta)
                 }
             }
@@ -79,10 +79,10 @@ public class UnattendedSlashProvider {
             SlashTokenEncoder.ParsedToken parsed = SlashTokenEncoder.parseToken(token);
             String kind = parsed == null ? null : parsed.kind();
             if (UnattendedToken.KIND.equals(kind)) {
-                t.unattended = false;
+                t.taskFlags.put("unattended", false);
                 t.persist();
             } else if (AiReviewToken.KIND.equals(kind)) {
-                t.aiReview = false;
+                t.taskFlags.put("ai-review", false);
                 t.persist();
             }
         };

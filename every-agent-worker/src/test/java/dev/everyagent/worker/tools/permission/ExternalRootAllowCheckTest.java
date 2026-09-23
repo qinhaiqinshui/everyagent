@@ -163,8 +163,9 @@ class ExternalRootAllowCheckTest {
     }
 
     private PermissionGate gate(WorkspaceManager wm, PendingAsks asks) {
-        GrantRegistry grants = new GrantRegistry(asks, new WorkerProperties(), wm,
-                mock(TaskStore.class), null);
+        WorkerProperties props = new WorkerProperties();
+        GrantRegistry grants = new GrantRegistry(asks, props, wm,
+                mock(TaskStore.class), List.of(new HumanAuthorizationHandler(asks, props)));
         return new PermissionGate(wm, grants,
                 new WorkspaceAllowCheck(),
                 new MissingPathCheck(),

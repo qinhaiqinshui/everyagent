@@ -88,7 +88,7 @@ class AiReviewSlashProviderTest {
         assertEquals(AiReviewToken.KIND, tok.kind(), "token kind=ai.review");
 
         verify(taskManager).runningTask("t-1");
-        assertTrue(task.aiReview, "业务标记 aiReview 应置位");
+        assertTrue(task.taskFlags.getOrDefault("ai-review", false), "业务标记 ai-review 应置位");
         assertTrue(persisted.get() >= 1, "置位后应落盘 meta");
     }
 
@@ -102,7 +102,7 @@ class AiReviewSlashProviderTest {
         assertEquals(1, results.size(), "空 taskId(草稿态)仍返回胶囊");
         assertEquals("ai-review:on", results.get(0).id());
         verify(taskManager, never()).runningTask(any());
-        assertFalse(task.aiReview, "空 taskId 不写业务标记");
+        assertFalse(task.taskFlags.getOrDefault("ai-review", false), "空 taskId 不写业务标记");
         assertEquals(0, persisted.get(), "空 taskId 不落盘");
     }
 
@@ -110,10 +110,10 @@ class AiReviewSlashProviderTest {
 
     @Test
     void cancelTurnsAiReviewOff() {
-        task.aiReview = true;
+        task.taskFlags.put("ai-review", true);
         SlashCommandItem it = item();
         it.cancelHandler().onCancel(it, AiReviewToken.buildToken(), "t-1");
-        assertFalse(task.aiReview, "取消 AI 审议胶囊应复位 aiReview");
+        assertFalse(task.taskFlags.getOrDefault("ai-review", false), "取消 AI 审议胶囊应复位 aiReview");
         assertTrue(persisted.get() >= 1, "取消后应落盘 meta");
     }
 }

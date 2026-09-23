@@ -1553,8 +1553,18 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
                 meta.path("workspace").asString(null), workspaceId, mainAgentId,
                 props.getLimits().getMaxEventsPerTask());
         t.createdAt(meta.path("createdAt").asLong(0));
-        t.aiReview = meta.path("aiReview").asBoolean(false);      // AI 审议任务级开关(plan-unattended-ai-auth 步骤3)
-        t.unattended = meta.path("unattended").asBoolean(false);  // 无人值守任务级开关(plan-unattended-ai-auth 步骤3)
+        // 兼容旧格式:aiReview/unattended 布尔字段自动迁移到 taskFlags
+        if (meta.path("aiReview").asBoolean(false)) t.taskFlags.put("ai-review", true);
+        if (meta.path("unattended").asBoolean(false)) t.taskFlags.put("unattended", true);
+        // 新格式:taskFlags Map
+        var flagsNode = meta.path("taskFlags");
+        if (flagsNode.isObject()) {
+            flagsNode.properties().forEach(e -> {
+                if (e.getValue().isBoolean()) {
+                    t.taskFlags.put(e.getKey(), e.getValue().asBoolean());
+                }
+            });
+        }
         t.networkBlocked = meta.path("networkBlocked").asBoolean(false); // 禁网开关任务级(/禁用网络)
         t.powershellEnabled = meta.path("powershellEnabled").asBoolean(false); // 启用 powershell 开关任务级(/允许AI访问电脑)
         t.seedUsageMeta(meta.path("usage")); // 恢复最近一轮上下文用量(续跑后列表/电池数据不丢)

@@ -3,11 +3,13 @@ package dev.everyagent.worker;
 import dev.everyagent.worker.os.OsSandbox;
 import dev.everyagent.worker.plugin.AdvisorContextImpl;
 import dev.everyagent.worker.plugin.registry.AdvisorProviderRegistry;
+import dev.everyagent.worker.plugin.spi.ToolExecutionInterceptor;
 import dev.everyagent.worker.skill.BuiltInSkills;
 import dev.everyagent.worker.skill.SkillAdvisor;
 import dev.everyagent.worker.task.AgentCancelledException;
 import dev.everyagent.worker.task.AgentEntity;
 import dev.everyagent.worker.task.ChatModelFactory;
+import dev.everyagent.worker.task.InterceptingToolCallingManager;
 import dev.everyagent.worker.task.ModelPoolChatModel;
 import dev.everyagent.worker.task.WorkerToolEventAdvisor;
 import dev.everyagent.worker.tools.MissingToolCallbackResolver;
@@ -46,8 +48,8 @@ import java.util.List;
  * {@link EmptyResponseRetryAdvisor}(order = 工具循环 +100,每轮包住单次模型调用,空响应重调)
  * 与 {@link TransientErrorRetryAdvisor}(order = 工具循环 +200,最内层包住单次 HTTP 调用,
  * 429/5xx/网络退避重调),参数取 {@code worker.retry}(默认同 n 护栏全局默认);
- * 无人值守为任务级开关,由 {@code UnattendedAskUserCallback} 装饰器在 ask_user 工具执行
- * 瞬间拦截(实时读 {@code TaskEntry.unattended}),不经 advisor;
+ * 无人值守为任务级开关,由 {@code ToolExecutionInterceptor} 责任链在 ask_user 工具执行
+ * 入口拦截(实时读 {@code TaskEntry.taskFlags}),不经 advisor;
  * 最内层链尾 {@link ContextCompressionAdvisor}(order = 工具循环 +400,主/子 agent 同挂):每轮
  * 模型请求前按窗口阈值压缩 instructions(§5.8),不等待 400 报错,压缩只改发送视图不动事实源。
  *
@@ -87,10 +89,16 @@ public class AgentClientFactory {
         return "[工具执行失败] " + (msg == null ? cause.getClass().getSimpleName() : msg);
     };
 
-    /** 共享无状态工具调用管理器(取消穿透处理器为单一事实源)。 */
+    /**
+     * 共享无状态工具调用管理器(取消穿透处理器为单一事实源)，
+     * 经 {@link InterceptingToolCallingManager} 包装以支持 {@link ToolExecutionInterceptor} 责任链。
+     */
     @Bean
-    public ToolCallingManager toolCallingManager() {
-        return ToolCallingManager.builder()
+    public ToolCallingManager toolCallingManager(List<ToolExecutionInterceptor> interceptors) {
+        var sorted = interceptors.stream()
+                .sorted(java.util.Comparator.comparingInt(ToolExecutionInterceptor::order))
+                .toList();
+        ToolCallingManager base = ToolCallingManager.builder()
                 .toolExecutionExceptionProcessor(CANCELLING_PROCESSOR)
                 // AI 可能下发本 agent 未注册的工具名(平台/模型幻觉等):框架默认抛
                 // IllegalStateException("No ToolCallback found for tool name: X") 中断任务,
@@ -104,6 +112,7 @@ public class AgentClientFactory {
                 .maxCallsPerTool(200)
                 .maxTotalToolCalls(500)
                 .build();
+        return new InterceptingToolCallingManager(base, sorted);
     }
 
     /** skill 渐进式披露索引注入 advisor(主 agent 专属,无状态可共享单例)。 */

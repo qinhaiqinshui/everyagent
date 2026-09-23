@@ -6,7 +6,6 @@ import dev.everyagent.worker.plugin.spi.ToolContext;
 import dev.everyagent.worker.plugin.spi.ToolProvider;
 import dev.everyagent.worker.task.PendingAsks;
 import dev.everyagent.worker.task.TaskEntry;
-import dev.everyagent.worker.task.UnattendedAskUserCallback;
 import dev.everyagent.worker.tools.AskUserTool;
 import org.springframework.ai.support.ToolCallbacks;
 import org.springframework.ai.tool.ToolCallback;
@@ -20,8 +19,8 @@ import java.util.List;
  * <p>子 agent 不注册 ask_user（提问只能由主 agent 发起，§5.6），故 scope=MAIN。
  *
  * <p>createTools: {@code ToolCallbacks.from(new AskUserTool(asks, props, task, agentId))}，
- * 每个回调经 {@link UnattendedAskUserCallback} 装饰（无人值守拦截逻辑保留），
- * 与改造前 buildMainAgent 中的装配方式完全一致。
+ * 直接添加裸 ToolCallback——无人值守拦截逻辑已上移到 ToolExecutionInterceptor 责任链
+ * （{@link dev.everyagent.worker.plugin.spi.ToolExecutionInterceptor}），核心不再硬编码装饰器。
  */
 public class AskUserToolProvider implements ToolProvider {
 
@@ -49,8 +48,7 @@ public class AskUserToolProvider implements ToolProvider {
         TaskEntry task = impl.taskEntry();
         List<ToolCallback> tools = new ArrayList<>();
         for (ToolCallback c : ToolCallbacks.from(new AskUserTool(asks, props, task, ctx.agentId()))) {
-            // 无人值守拦截装饰器（任务级开关）：t.unattended=true 时 ask_user 被短路
-            tools.add(new UnattendedAskUserCallback(c, task));
+            tools.add(c);
         }
         return tools;
     }

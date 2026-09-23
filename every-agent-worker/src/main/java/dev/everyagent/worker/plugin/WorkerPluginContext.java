@@ -2,7 +2,6 @@ package dev.everyagent.worker.plugin;
 
 import dev.everyagent.worker.plugin.spi.AdvisorProvider;
 import dev.everyagent.worker.plugin.spi.AgentDispatcher;
-import dev.everyagent.worker.plugin.spi.ReviewProvider;
 import dev.everyagent.worker.plugin.spi.SandboxProvider;
 import dev.everyagent.worker.plugin.spi.SearchProvider;
 import dev.everyagent.worker.plugin.spi.ToolProvider;
@@ -32,9 +31,6 @@ public interface WorkerPluginContext {
 
     /** 注册 AgentDispatcher（子 agent 调度策略）。 */
     void registerAgentDispatcher(AgentDispatcher dispatcher);
-
-    /** 注册 ReviewProvider（授权审议策略）。 */
-    void registerReviewProvider(ReviewProvider provider);
 
     /** 注册 SearchProvider（搜索后端）。 */
     void registerSearchProvider(SearchProvider provider);

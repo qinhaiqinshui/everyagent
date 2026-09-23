@@ -55,7 +55,7 @@ public class AiReviewSlashProvider {
             if (taskId != null && !taskId.isEmpty()) {
                 TaskEntry t = taskManager.runningTask(taskId);
                 if (t != null) {
-                    t.aiReview = true; // 注册方写自己的业务标记
+                    t.taskFlags.put("ai-review", true); // 注册方写自己的业务标记
                     t.persist();       // 落盘 meta(persistHook → updateMeta)
                 }
             }
@@ -66,7 +66,7 @@ public class AiReviewSlashProvider {
             if (taskId != null && !taskId.isEmpty()) {
                 TaskEntry t = taskManager.runningTask(taskId);
                 if (t != null) {
-                    t.aiReview = false; // 注册方删自己的业务标记
+                    t.taskFlags.put("ai-review", false); // 注册方删自己的业务标记
                     t.persist();
                 }
             }

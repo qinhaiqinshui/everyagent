@@ -3,6 +3,7 @@ package dev.everyagent.worker.tools;
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.hub.HubPool;
 import dev.everyagent.worker.modules.WorkspaceManager;
+import java.util.List;
 import dev.everyagent.worker.os.OsSandbox;
 import dev.everyagent.worker.os.wsl.WslUmounter;
 import dev.everyagent.worker.proto.TaskDtos.ModelSnapshot;
@@ -12,6 +13,7 @@ import dev.everyagent.worker.task.TaskEntry;
 import dev.everyagent.worker.task.TaskManager;
 import dev.everyagent.worker.task.TaskStore;
 import dev.everyagent.worker.tools.permission.AuthorizeCheck;
+import dev.everyagent.worker.tools.permission.HumanAuthorizationHandler;
 import dev.everyagent.worker.tools.permission.CommandCheck;
 import dev.everyagent.worker.tools.permission.ExternalRootAllowCheck;
 import dev.everyagent.worker.tools.permission.GrantRegistry;
@@ -73,7 +75,8 @@ class FsToolSupportWslPathTest {
         PendingAsks asks = mock(PendingAsks.class);
         when(asks.ask(any(), anyString(), anyString(), any(), anyList(), anyLong()))
                 .thenReturn(new PendingAsks.AskAnswer("answered", "nope"));
-        GrantRegistry grants = new GrantRegistry(asks, p, wm, mock(TaskStore.class), null);
+        GrantRegistry grants = new GrantRegistry(asks, p, wm, mock(TaskStore.class),
+                List.of(new HumanAuthorizationHandler(asks, p)));
         PermissionGate gate = new PermissionGate(wm, grants,
                 new WorkspaceAllowCheck(),
                 new MissingPathCheck(),
@@ -194,7 +197,8 @@ class FsToolSupportWslPathTest {
         PendingAsks asks = mock(PendingAsks.class);
         when(asks.ask(any(), anyString(), anyString(), any(), anyList(), anyLong()))
                 .thenReturn(new PendingAsks.AskAnswer("answered", "nope"));
-        GrantRegistry grants = new GrantRegistry(asks, p, wm, mock(TaskStore.class), null);
+        GrantRegistry grants = new GrantRegistry(asks, p, wm, mock(TaskStore.class),
+                List.of(new HumanAuthorizationHandler(asks, p)));
         PermissionGate gate = new PermissionGate(wm, grants,
                 new WorkspaceAllowCheck(), new MissingPathCheck(),
                 new SkillsReadAllowCheck(p), new ExternalRootAllowCheck(wm),

@@ -5,13 +5,11 @@ import dev.everyagent.worker.modules.WorkspaceManager;
 import dev.everyagent.worker.os.OsSandbox;
 import dev.everyagent.worker.plugin.registry.AdvisorProviderRegistry;
 import dev.everyagent.worker.plugin.registry.AgentDispatcherRegistry;
-import dev.everyagent.worker.plugin.registry.ReviewProviderRegistry;
 import dev.everyagent.worker.plugin.registry.SandboxProviderRegistry;
 import dev.everyagent.worker.plugin.registry.SearchProviderRegistry;
 import dev.everyagent.worker.plugin.registry.ToolProviderRegistry;
 import dev.everyagent.worker.plugin.spi.AdvisorProvider;
 import dev.everyagent.worker.plugin.spi.AgentDispatcher;
-import dev.everyagent.worker.plugin.spi.ReviewProvider;
 import dev.everyagent.worker.plugin.spi.SandboxProvider;
 import dev.everyagent.worker.plugin.spi.SearchProvider;
 import dev.everyagent.worker.plugin.spi.ToolProvider;
@@ -34,7 +32,6 @@ public class WorkerPluginContextImpl implements WorkerPluginContext {
     private final ToolProviderRegistry toolRegistry;
     private final SandboxProviderRegistry sandboxRegistry;
     private final AgentDispatcherRegistry dispatcherRegistry;
-    private final ReviewProviderRegistry reviewRegistry;
     private final SearchProviderRegistry searchRegistry;
     private final RpcDispatcher rpcDispatcher;
     private final SlashCommandRegistry slashRegistry;
@@ -46,7 +43,6 @@ public class WorkerPluginContextImpl implements WorkerPluginContext {
             ToolProviderRegistry toolRegistry,
             SandboxProviderRegistry sandboxRegistry,
             AgentDispatcherRegistry dispatcherRegistry,
-            ReviewProviderRegistry reviewRegistry,
             SearchProviderRegistry searchRegistry,
             RpcDispatcher rpcDispatcher,
             SlashCommandRegistry slashRegistry,
@@ -57,7 +53,6 @@ public class WorkerPluginContextImpl implements WorkerPluginContext {
         this.toolRegistry = toolRegistry;
         this.sandboxRegistry = sandboxRegistry;
         this.dispatcherRegistry = dispatcherRegistry;
-        this.reviewRegistry = reviewRegistry;
         this.searchRegistry = searchRegistry;
         this.rpcDispatcher = rpcDispatcher;
         this.slashRegistry = slashRegistry;
@@ -88,11 +83,6 @@ public class WorkerPluginContextImpl implements WorkerPluginContext {
     @Override
     public void registerAgentDispatcher(AgentDispatcher dispatcher) {
         dispatcherRegistry.register(dispatcher);
-    }
-
-    @Override
-    public void registerReviewProvider(ReviewProvider provider) {
-        reviewRegistry.register(provider);
     }
 
     @Override

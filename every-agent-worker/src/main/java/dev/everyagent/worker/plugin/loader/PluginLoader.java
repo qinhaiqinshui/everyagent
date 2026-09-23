@@ -10,7 +10,6 @@ import dev.everyagent.worker.plugin.WorkerPluginContextImpl;
 import dev.everyagent.worker.plugin.WorkerServices;
 import dev.everyagent.worker.plugin.registry.AdvisorProviderRegistry;
 import dev.everyagent.worker.plugin.registry.AgentDispatcherRegistry;
-import dev.everyagent.worker.plugin.registry.ReviewProviderRegistry;
 import dev.everyagent.worker.plugin.registry.SandboxProviderRegistry;
 import dev.everyagent.worker.plugin.registry.SearchProviderRegistry;
 import dev.everyagent.worker.plugin.registry.ToolProviderRegistry;
@@ -64,7 +63,6 @@ public class PluginLoader {
     private final ToolProviderRegistry toolRegistry;
     private final SandboxProviderRegistry sandboxRegistry;
     private final AgentDispatcherRegistry dispatcherRegistry;
-    private final ReviewProviderRegistry reviewRegistry;
     private final SearchProviderRegistry searchRegistry;
     private final RpcDispatcher rpcDispatcher;
     private final SlashCommandRegistry slashRegistry;
@@ -78,7 +76,6 @@ public class PluginLoader {
             ToolProviderRegistry toolRegistry,
             SandboxProviderRegistry sandboxRegistry,
             AgentDispatcherRegistry dispatcherRegistry,
-            ReviewProviderRegistry reviewRegistry,
             SearchProviderRegistry searchRegistry,
             RpcDispatcher rpcDispatcher,
             SlashCommandRegistry slashRegistry,
@@ -89,7 +86,6 @@ public class PluginLoader {
         this.toolRegistry = toolRegistry;
         this.sandboxRegistry = sandboxRegistry;
         this.dispatcherRegistry = dispatcherRegistry;
-        this.reviewRegistry = reviewRegistry;
         this.searchRegistry = searchRegistry;
         this.rpcDispatcher = rpcDispatcher;
         this.slashRegistry = slashRegistry;
@@ -252,7 +248,7 @@ public class PluginLoader {
             // 构造 WorkerPluginContext
             WorkerPluginContext ctx = new WorkerPluginContextImpl(id,
                     advisorRegistry, toolRegistry, sandboxRegistry,
-                    dispatcherRegistry, reviewRegistry, searchRegistry,
+                    dispatcherRegistry, searchRegistry,
                     rpcDispatcher, slashRegistry, services, config);
 
             // 调用 activate()

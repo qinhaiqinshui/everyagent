@@ -96,7 +96,7 @@ class UnattendedSlashProviderTest {
         assertEquals(AiReviewToken.KIND, aiReviewTok.kind(), "token kind=ai.review");
 
         verify(taskManager).runningTask("t-1");
-        assertTrue(task.unattended, "业务标记 unattended 应置位");
+        assertTrue(task.taskFlags.getOrDefault("unattended", false), "业务标记 unattended 应置位");
         assertTrue(persisted.get() >= 1, "置位后应落盘 meta");
     }
 
@@ -109,7 +109,7 @@ class UnattendedSlashProviderTest {
         assertEquals("unattended:on", results.get(0).id());
         assertEquals("ai-review:on", results.get(1).id());
         verify(taskManager, never()).runningTask(any());
-        assertFalse(task.unattended, "空 taskId 不写业务标记");
+        assertFalse(task.taskFlags.getOrDefault("unattended", false), "空 taskId 不写业务标记");
         assertEquals(0, persisted.get(), "空 taskId 不落盘");
     }
 
@@ -117,20 +117,20 @@ class UnattendedSlashProviderTest {
 
     @Test
     void cancelUnattendedTokenTurnsUnattendedOff() {
-        task.unattended = true;
+        task.taskFlags.put("unattended", true);
         SlashCommandItem it = item();
         it.cancelHandler().onCancel(it, UnattendedToken.buildToken(), "t-1");
-        assertFalse(task.unattended, "取消无人值守胶囊应复位 unattended");
+        assertFalse(task.taskFlags.getOrDefault("unattended", false), "取消无人值守胶囊应复位 unattended");
         assertTrue(persisted.get() >= 1, "取消后应落盘 meta");
     }
 
     @Test
     void cancelAiReviewTokenOnlyTurnsAiReviewOff() {
-        task.unattended = true;
-        task.aiReview = true;
+        task.taskFlags.put("unattended", true);
+        task.taskFlags.put("ai-review", true);
         SlashCommandItem it = item();
         it.cancelHandler().onCancel(it, AiReviewToken.buildToken(), "t-1");
-        assertFalse(task.aiReview, "取消 AI 审议胶囊应复位 aiReview");
-        assertTrue(task.unattended, "取消 AI 审议胶囊不影响无人值守开关");
+        assertFalse(task.taskFlags.getOrDefault("ai-review", false), "取消 AI 审议胶囊应复位 aiReview");
+        assertTrue(task.taskFlags.getOrDefault("unattended", false), "取消 AI 审议胶囊不影响无人值守开关");
     }
 }

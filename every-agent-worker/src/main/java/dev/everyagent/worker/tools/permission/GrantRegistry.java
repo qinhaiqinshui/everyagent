@@ -2,8 +2,6 @@ package dev.everyagent.worker.tools.permission;
 
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.worker.AtomicFiles;
-import dev.everyagent.worker.authreview.AiAuthReviewer;
-import dev.everyagent.worker.authreview.ReviewDecision;
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.modules.WorkspaceManager;
 import dev.everyagent.worker.task.AgentCancelledException;
@@ -22,6 +20,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -30,19 +29,19 @@ import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 授权状态 + 授权决议链宿主(架构 §5.5,自 PermissionGate 拆分):
- * 维护 per-task 授权状态(run/task 两档、inFlight 去重、grants.json 持久化),
- * 并提供「授权决议链」——同一请求沿 AI 审议 → 无人值守 → 人工弹窗 三条独立环节
- * 顺序判定,任一环节给出 ALLOW/DENY 即收口,全部无法处理(SKIP)才落到下一环节;
- * 拒绝/超时抛 {@link PermissionDeniedException} 回灌模型(agent 循环不中断)。
+ * 维护 per-task 授权状态(run/task 两档、inFlight 去重、grants.json 持久化),授权决议
+ * 沿 AuthorizationHandler 责任链遍历(按 order 排序),任一环节给出 ALLOW/DENY 即收口,
+ * 全部 PASS 则直接放行;拒绝/超时抛 {@link PermissionDeniedException} 回灌模型
+ * (agent 循环不中断)。
  *
  * <p>主/子 agent 按 taskId 共享授权;并发同 grantKey 只弹一张卡(inFlight future 去重,
  * 后来者 join 共享结论)。授权两档:run(内存,下一条用户输入清)/ task(grants.json,随任务删除)。
+ *
+ * <p>核心不感知任何具体 handler 节点(如 AI 审议、无人值守等),只遍历 handler 列表。
+ * handler 的注册与排序由 Spring 自动收集 + {@link AuthorizationHandler#order()} 完成。
  */
 @Component
 public class GrantRegistry {
-
-    /** 授权弹窗三选项文案(前端按文案/稳定 token 均可回传,见 parseScope)。 */
-    static final List<String> AUTHORIZE_OPTIONS = List.of("本轮运行内允许", "本任务全程允许", "拒绝");
 
     private static final Logger log = LoggerFactory.getLogger(GrantRegistry.class);
 
@@ -50,18 +49,20 @@ public class GrantRegistry {
     private final WorkerProperties props;
     private final WorkspaceManager workspaces;
     private final TaskStore store;
-    /** AI 安全审议器;判空兜底:未注入时回退人工弹窗。 */
-    private final AiAuthReviewer aiReviewer;
+    /** 授权决议链节点(按 order 排序);零节点 → 直接放行。 */
+    private final List<AuthorizationHandler> authHandlers;
 
     private final Map<String, TaskGrants> byTask = new ConcurrentHashMap<>();
 
     public GrantRegistry(PendingAsks asks, WorkerProperties props, WorkspaceManager workspaces,
-            TaskStore store, AiAuthReviewer aiReviewer) {
+            TaskStore store, List<AuthorizationHandler> authHandlers) {
         this.asks = asks;
         this.props = props;
         this.workspaces = workspaces;
         this.store = store;
-        this.aiReviewer = aiReviewer;
+        this.authHandlers = authHandlers.stream()
+                .sorted(Comparator.comparingInt(AuthorizationHandler::order))
+                .toList();
     }
 
     // ---- 生命周期 ---- 
@@ -149,12 +150,12 @@ public class GrantRegistry {
         return out;
     }
 
-    // ---- 授权决议链(责任链一环:AI 审议 → 无人值守 → 人工弹窗) ----
+    // ---- 授权决议链(AuthorizationHandler 责任链遍历) ----
 
     /**
-     * 授权决议入口:grant 已存在直接放行;否则沿决议链分派(阻塞虚拟线程):
-     * {@code aiReview=false}(或审议器未注入)→ 人工弹窗;{@code aiReview=true} →
-     * AiAuthReviewer 审议短路(不弹窗)。拒绝/超时抛 {@link PermissionDeniedException}。
+     * 授权决议入口:grant 已存在直接放行;否则沿决议链遍历 authHandlers(阻塞虚拟线程):
+     * 第一个 applies 的 handler 返回 ALLOW → 自动授权(RUN 档);DENY → 抛
+     * {@link PermissionDeniedException};全部 PASS 或零节点 → 直接放行(RUN 档)。
      * rootsOnGrant 为该授权随附的 Sandbox 附加根;execRootsOnGrant 为命令 EXEC 授权随附的
      * Low 完整性标注根。
      */
@@ -209,74 +210,32 @@ public class GrantRegistry {
     }
 
     /**
-     * 授权决议链(责任链一环):三条独立环节顺序生效、互不相关——
-     * ① AI 安全审议(只看任务级 {@code t.aiReview}):ALLOW → 自动授权(RUN 档)、DENY →
-     * 拒绝、ESCALATE(不确定)→ 不直接拒绝、落到下一环节弹窗人工授权;审议失败且
-     * review-deny-on-error=false(fallback=true)→ 同样落到下一环节(绝不因审议失败放行)。
-     * ② 无人值守拦截(只看任务级 {@code t.unattended}):无人值守开启时无人工可弹,直接拒绝;
-     * 未开 → ③ 人工弹窗 askUser。本方法只出「授权范围」结论;future.complete 与 record
-     * 由 {@link #authorize} owner 路径统一执行,后来者 join 共享同一结论。
+     * 授权决议链(责任链遍历):遍历 authHandlers 列表(按 order 排序),
+     * 第一个 applies 且返回 ALLOW/DENY 的节点即收口;全部 PASS 或零节点 → 直接放行(RUN 档)。
+     * 核心不感知任何具体节点(AI 审议、无人值守、人工弹窗等均由各 handler 自行判断 applies)。
+     * future.complete 与 record 由 {@link #authorize} owner 路径统一执行,后来者 join 共享同一结论。
      */
     private GrantScope resolveScope(TaskEntry t, String agentId, String prompt, String grantKey) {
-        // 环节 1:AI 安全审议(独立功能,只看 t.aiReview;未开/无审议器则跳过)
-        if (usesAiReview(t)) {
-            ReviewDecision d;
-            try {
-                d = aiReviewer.review(t, grantKey, prompt);
-            } catch (RuntimeException e) {
-                // 审议组件本身崩溃(不应发生):绝不静默放行,按 deny-on-error 语义对待
-                log.warn("AI 审议异常 task={}(按 deny-on-error 处理)", t.taskId, e);
-                d = props.getPermissions().isReviewDenyOnError()
-                        ? ReviewDecision.deny("error: " + e)
-                        : ReviewDecision.fallback("error: " + e);
+        AuthorizationHandler.AuthorizationRequest req = new AuthorizationHandler.AuthorizationRequest(t, agentId, grantKey, prompt);
+        for (AuthorizationHandler handler : authHandlers) {
+            if (!handler.applies(req)) {
+                continue;
             }
-            if (!d.fallback()) {
-                log.info("AI 审议结论 task={} grantKey={} verdict={} confidence={} reason={}",
-                        t.taskId, grantKey, d.verdict(), d.confidence(), d.reason());
-                switch (d.verdict()) {
-                    case ALLOW -> {
-                        return GrantScope.RUN; // 审议放行,按 RUN 档自动授权(不弹窗)
-                    }
-                    case DENY -> {
-                        throw denyException(); // 审议拒绝:错误文本回灌模型,与人工拒绝一致
-                    }
-                    case ESCALATE -> {
-                        // 不确定:不直接拒绝,落到下一环节弹窗人工授权(不在此拦截)
-                    }
+            AuthorizationHandler.AuthorizationDecision d = handler.decide(req);
+            switch (d.type()) {
+                case ALLOW -> {
+                    return GrantScope.RUN;
+                }
+                case DENY -> {
+                    throw denyException();
+                }
+                case PASS -> {
+                    // 继续下一个节点
                 }
             }
-            // fallback=true(审议失败且 deny-on-error=false)或 ESCALATE:继续向下
         }
-        // 环节 2:无人值守拦截(独立功能,只看 t.unattended)
-        if (t.unattended) {
-            throw denyException(); // 无人值守:无人工可弹,授权请求直接拒绝
-        }
-        // 环节 3:正常人工弹窗
-        return askUser(t, agentId, prompt);
-    }
-
-    /** aiReview 开关开启且审议器在位才走 AI 审议;否则(含未注入兜底)维持人工弹窗。 */
-    private boolean usesAiReview(TaskEntry t) {
-        return t.aiReview && aiReviewer != null;
-    }
-
-    /** 发起 authorization ask 并解析答案(阻塞;timeout/cancelled 视为拒绝)。 */
-    private GrantScope askUser(TaskEntry t, String agentId, String prompt) {
-        // 题目 id 由 PendingAsks.ask 以真实 askId 派生,占位即可
-        List<PendingAsks.AskQuestion> questions = List.of(
-                new PendingAsks.AskQuestion("", prompt, AUTHORIZE_OPTIONS));
-        PendingAsks.AskAnswer ans;
-        try {
-            ans = asks.ask(t.events, t.taskId, agentId, "authorization", questions,
-                    props.getPermissions().getAuthTimeoutMs());
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new AgentCancelledException("task cancelled");
-        }
-        if (!"answered".equals(ans.status())) {
-            throw denyException();
-        }
-        return parseScope(ans.text());
+        // 零节点或全部 PASS → 直接放行
+        return GrantScope.RUN;
     }
 
     /** 宽容解析:稳定 token 优先,退文案关键词;未识别按拒绝(安全缺省,兼容任意回传文本)。 */
