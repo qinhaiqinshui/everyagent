@@ -19,5 +19,6 @@
     <modules>
         <module>auth-review</module>
         <module>git</module>
+        <module>task-queue</module>
     </modules>
 </project>
