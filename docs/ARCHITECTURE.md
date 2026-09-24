@@ -600,6 +600,21 @@ TaskManager 构造参数从 23 降至 15（SubAgentManager 从 11 降至 4），
 
 **分层与核心边界**：工作区 → task 层/工作流层（平级编排）→ agent 层 → 基础设施层；**下层不知道上层**。`PendingAsks` 归基础设施层（askuser 交互能力），洋葱 CascadeStopNode 直持。留在 TaskManager 的 `workspaces`（任务创建注册工作区）与 `gate`（每轮授权失效 beginRun）是 task 编排活依赖。事件三条出路（落盘=TaskStore 监听 EventLog、实时推送=DataPusher 经 StreamSourceRegistry 取 EventLog 定向推、历史拉取=task.poll 磁盘窗口∪内存尾部归并）与广播（EventSink.fanout → hub 只投已订阅连接）对 task 层与未来工作流层完全同构。
 
+### 7.14.3 拦截链范式统一（Phase 3）
+
+worker 的两条运行期责任链迁移为与任务洋葱同一的 filter 形态（`result = next(ctx)`）：
+
+| 链 | 旧 | 新 | 收益 |
+|---|---|---|---|
+| 工具执行拦截链 | `beforeToolExecution(...)` 返回 null/非null（仅下行） | `invoke(ctx, next)`：下行=检查/短路，上行=执行后审计 | 获得上行钩子 |
+| 授权决议链 | `applies() + decide()` 两步 | `invoke(req, next)`：不处理=proceed，决议=短路 | 获得决议后包裹 |
+| PermissionGate 内部三链 | `check(ctx)` 返回 ALLOW/DENY/SKIP | `invoke(ctx, next)`：SKIP=proceed，短路=ALLOW/DENY | 与洋葱同构 |
+
+- **链组装器**：`ToolExecutionChainExecutor` / `AuthorizationChainExecutor` / `PermissionChainImpl`，均按 order 升序折叠为嵌套链，与 `TaskLifecycleExecutor` 同构。
+- **ThreadLocal 消除**：`InterceptingToolCallingManager.CURRENT_TASK` 的值类型从 `TaskEntry` 改为 `AgentContext`；插件经 `ToolExecutionContext.agentContext()` 取任务，不再直接依赖 worker 内部类。
+- **`LoopRepeatGuardToolManager` 保持装饰器**：核心守卫不是插件扩展点，且需在 `executeToolCalls` 处合成工具结果回传模型，与插件链职责不同。
+- **行为零变化**：短路/放行/兜底语义逐项等价（§6.3 迁移映射表）。
+
 ### 7.15 持久化与磁盘布局
 
 ```
