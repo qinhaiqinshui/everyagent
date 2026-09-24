@@ -9,6 +9,7 @@ import dev.everyagent.plugin.api.spi.SandboxProvider;
 import dev.everyagent.plugin.api.spi.SearchProvider;
 import dev.everyagent.plugin.api.spi.ToolExecutionInterceptor;
 import dev.everyagent.plugin.api.spi.ToolProvider;
+import dev.everyagent.plugin.api.task.TaskLifecycleNode;
 
 /**
  * Worker 插件上下文 —— 对标 VSCode 的 {@code ExtensionContext}。
@@ -43,6 +44,9 @@ public interface WorkerPluginContext {
 
     /** 注册 ToolExecutionInterceptor（工具执行拦截链节点）。 */
     void registerToolExecutionInterceptor(ToolExecutionInterceptor interceptor);
+
+    /** 注册 TaskLifecycleNode（任务生命周期链节点）。 */
+    void registerTaskLifecycleNode(TaskLifecycleNode node);
 
     // ── 通用扩展注册 ──
 
