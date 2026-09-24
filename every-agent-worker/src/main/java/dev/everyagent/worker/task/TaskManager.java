@@ -32,8 +32,13 @@ import dev.everyagent.worker.tools.RipgrepBinary;
 import dev.everyagent.worker.tools.SubAgentTools;
 import dev.everyagent.worker.os.OsSandbox;
 import dev.everyagent.worker.plugin.ToolContextImpl;
+import dev.everyagent.worker.plugin.registry.TaskLifecycleRegistry;
 import dev.everyagent.worker.plugin.registry.ToolProviderRegistry;
 import dev.everyagent.plugin.api.spi.ToolProvider;
+import dev.everyagent.plugin.api.task.TaskKernel;
+import dev.everyagent.plugin.api.task.TaskOutcome;
+import dev.everyagent.worker.task.lifecycle.TaskLifecycleContextImpl;
+import dev.everyagent.worker.task.lifecycle.TaskLifecycleExecutor;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
@@ -99,6 +104,8 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
     private final SlashCommandRegistry slashRegistry;
     private final RoundIndexStore roundIndexStore;
     private final ToolProviderRegistry toolProviderRegistry;
+    private final TaskLifecycleExecutor lifecycleExecutor;
+    private final TaskLifecycleRegistry lifecycleRegistry;
     /** 工作区最后活动时间跟踪(任务收口时刷新,前端按最近活动倒序渲染)。 */
     private final dev.everyagent.worker.modules.WorkspaceActivityTracker activityTracker;
     /** 外部 skill 扫描器(skill.reload RPC 热加载入口)。 */
@@ -133,7 +140,8 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
             SlashCommandRegistry slashRegistry, RoundIndexStore roundIndexStore,
             dev.everyagent.worker.modules.WorkspaceActivityTracker activityTracker,
             dev.everyagent.worker.skill.ExternalSkillScanner externalSkillScanner,
-            ToolProviderRegistry toolProviderRegistry) {
+            ToolProviderRegistry toolProviderRegistry,
+            TaskLifecycleExecutor lifecycleExecutor, TaskLifecycleRegistry lifecycleRegistry) {
         this.pool = pool;
         this.configs = configs;
         this.modelFactory = modelFactory;
@@ -153,6 +161,8 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
         this.toolProviderRegistry = toolProviderRegistry;
         this.activityTracker = activityTracker;
         this.externalSkillScanner = externalSkillScanner;
+        this.lifecycleExecutor = lifecycleExecutor;
+        this.lifecycleRegistry = lifecycleRegistry;
     }
 
     @PostConstruct
@@ -1066,17 +1076,12 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
                 }
             }
         }
-        wireUsageBroadcast(t);
-        wireAgentPersist(t);
         active.incrementAndGet();
         if (idemKey != null && !idemKey.isEmpty()) {
             idem.put(idemKey, new IdemEntry(taskId, System.currentTimeMillis()));
         }
-        try {
-            store.track(taskId, workspaceId, t.log, t::summaryJson);
-        } catch (java.io.IOException e) {
-            log.error("任务落盘启动失败 task={}(继续内存运行,重启后丢失)", taskId, e);
-        }
+        // store.track / wireUsageBroadcast / wireAgentPersist 已移入洋葱下行节点
+        // （PersistenceTrackNode order=100 / TaskWiresNode order=200），在任务线程开头执行。
         pool.pubAllTasks(Events.TASK_CREATED, null, t.runtimeSummaryJson(), null);
         ctx.ok(Json.obj().put("taskId", taskId).put("status", t.status.wire()));
         // slash 建后回调:对每个已写入 token 调业务 onSelect(taskId)(实现见 notifySlashCallbacks)。
@@ -1580,8 +1585,6 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
             }
         }
         t.log.seed(store.seqLastOf(st.dir())); // 新事件从 meta.seqLast 水位续号(含瞬态占位水位,磁盘不再写占位行)
-        wireUsageBroadcast(t);
-        wireAgentPersist(t);
         if (tasks.putIfAbsent(taskId, t) != null) {
             diskTasks.putIfAbsent(taskId, st);
             return; // 并发兜底(不应发生:认领已互斥)
@@ -1601,11 +1604,8 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
             t.inputQueue.offer(q.text(), q.rawContent());
         }
         // 再运行启动:恢复悬空队列后即开始;实时增量由上方通知唤醒的定向推送器换挂推送,历史/补齐由前端拉取
-        try {
-            store.track(taskId, workspaceId, t.log, t::summaryJson);
-        } catch (java.io.IOException e) {
-            log.error("再运行落盘启动失败 task={}(继续内存运行)", taskId, e);
-        }
+        // store.track / wireUsageBroadcast / wireAgentPersist 已移入洋葱下行节点
+        // （PersistenceTrackNode order=100 / TaskWiresNode order=200），在任务线程开头执行。
         // slash 任务级 token 建后回调:终态任务 meta 已含 slashTaskTokens,再运行冷启动需对每个
         // 已存在 token 补调业务 onSelect(taskId)——注册方据此用 taskId 把业务标记重新写入内存并落盘
         // (如 AI 审议/无人值守/网络开关),保证「已有任务在终态时 apply bottom token,再运行后业务标记生效」。
@@ -1629,79 +1629,61 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
     // ---- 任务主流程 ----
 
     private void runTask(TaskEntry t, UserInput initialInput, List<Message> priorConversation) {
-        AgentEntity main = null;
-        try {
-            log.debug("[run] runTask 开始 taskId={} thread={} interruptFlag={}",
-                    t.taskId, Thread.currentThread().getName(), Thread.currentThread().isInterrupted());
-            t.startedAt = System.currentTimeMillis();
-            setStatus(t, TaskStatus.RUNNING);
-            t.events.agentStatus(t.mainAgentId, "running"); // 主 agent 开跑(agent 列表状态机)
-            main = buildMainAgent(t, priorConversation);
-            t.main = main; // 主 agent 引用(运行期状态供持久化/诊断)
-            consumeInput(t, main, initialInput);
-            while (true) {
-                if (Thread.currentThread().isInterrupted()) {
-                    log.debug("[cancel] runTask 循环顶检测到中断标记 taskId={} thread={}",
-                            t.taskId, Thread.currentThread().getName());
-                    throw new InterruptedException("cancelled");
-                }
-                // 文件改动收集与收口由 FileChangeAdvisor 承担(每轮 run 前建收集器、流完成时填充
-                // light/full 槽);RoundIndexAdvisor 在流完成时把摘要/全文随轮落盘,并把本轮耗时
-                // (开轮时随行落盘的 startedAt → 当前时间)一并与闭合行内联——经 doOnComplete
-                // 嵌套顺序保证「文件变更先、轮次(含耗时)后」同一次写入。
-                runner.run(main);
-                log.debug("[run] runner.run 正常返回(本轮 agent 完成) taskId={} thread={} interruptFlag={}",
-                        t.taskId, Thread.currentThread().getName(), Thread.currentThread().isInterrupted());
-                UserInput next = t.inputQueue.poll();
-                if (next == null) {
-                    // 队列插入兜底:插入事件在收尾轮模型调用期间(advisor 的 before 已过)到达时,
-                    // 本轮 advisor 未能注入;这里把残留插入消费为普通用户输入,保证不丢
-                    // (该输入仍会在下一轮进入模型上下文)。
-                    next = main.pendingDialogInserts.poll();
-                    if (next == null) {
-                        break;
+        log.debug("[run] runTask 开始 taskId={} thread={} interruptFlag={}",
+                t.taskId, Thread.currentThread().getName(), Thread.currentThread().isInterrupted());
+
+        TaskLifecycleContextImpl ctx = new TaskLifecycleContextImpl(t);
+        ctx.initialInput(initialInput);
+        ctx.priorConversation(priorConversation);
+        ctx.mainAgentBuilder(prior -> buildMainAgent(t, prior));
+        ctx.inputConsumer((main, input) -> consumeInput(t, main, input));
+        ctx.concurrencyReleaser(() -> active.decrementAndGet());
+        ctx.diskIndexer(st -> diskTasks.put(st.taskId(), st));
+        ctx.registryRemover(() -> tasks.remove(t.taskId, t));
+
+        TaskKernel kernel = c -> {
+            try {
+                TaskEntry te = ((TaskLifecycleContextImpl) c).taskEntry();
+                AgentEntity main = te.main;
+                while (true) {
+                    if (Thread.currentThread().isInterrupted()) {
+                        log.debug("[cancel] runTask 循环顶检测到中断标记 taskId={} thread={}",
+                                te.taskId, Thread.currentThread().getName());
+                        throw new InterruptedException("cancelled");
                     }
-                    consumeInput(t, main, next);
-                    continue;
+                    runner.run(main);
+                    log.debug("[run] runner.run 正常返回(本轮 agent 完成) taskId={} thread={} interruptFlag={}",
+                            te.taskId, Thread.currentThread().getName(), Thread.currentThread().isInterrupted());
+                    UserInput next = te.inputQueue.poll();
+                    if (next == null) {
+                        next = main.pendingDialogInserts.poll();
+                        if (next == null) {
+                            break;
+                        }
+                        consumeInput(te, main, next);
+                        continue;
+                    }
+                    consumeInput(te, main, next);
+                    publishQueue(te);
                 }
-                consumeInput(t, main, next);
-                publishQueue(t); // 消费一条少一条(与 user.message 同拍广播)
+                long startedAt = te.startedAt != null ? te.startedAt : 0;
+                return new TaskOutcome(TaskOutcome.TaskEndStatus.DONE, null,
+                        startedAt, System.currentTimeMillis());
+            } catch (InterruptedException e) {
+                log.debug("[cancel] 内核捕获 InterruptedException → CANCELLED taskId={} thread={}",
+                        t.taskId, Thread.currentThread().getName());
+                Thread.currentThread().interrupt();
+                return TaskOutcome.cancelled();
+            } catch (EventLog.LogOverflowException loe) {
+                return TaskOutcome.failed("LOG_OVERFLOW: " + loe.getMessage());
+            } catch (Throwable e) {
+                log.error("任务 {} 失败: {}", t.taskId, RootCause.summary(e));
+                log.debug("任务 {} 失败完整堆栈", t.taskId, e);
+                return TaskOutcome.failed(RootCause.summary(e));
             }
-            log.debug("[run] 所有轮次完成,进入收口等待子 agent taskId={} thread={} interruptFlag={}",
-                    t.taskId, Thread.currentThread().getName(), Thread.currentThread().isInterrupted());
-            subs.awaitAllBeforeFinish(t); // 收口:自动等待全部子 agent(§5.6)
-            if (Thread.currentThread().isInterrupted()) {
-                log.debug("[cancel] awaitAll 后检测到中断标记,转 CANCELLED taskId={}", t.taskId);
-                throw new InterruptedException("cancelled");
-            }
-            log.debug("[run] 进入 finish(DONE) taskId={} thread={}", t.taskId, Thread.currentThread().getName());
-            finish(t, TaskStatus.DONE, null);
-        } catch (InterruptedException e) {
-            log.debug("[cancel] runTask 捕获 InterruptedException → CANCELLED taskId={} thread={} interruptFlag={}",
-                    t.taskId, Thread.currentThread().getName(), Thread.currentThread().isInterrupted());
-            // 先收口再恢复中断标记:finish 内 flush / updateMeta 需要文件 I/O,
-            // 若带着中断标记进入会立即抛 ClosedByInterruptException,导致终态收口不完整。
-            t.stopRequested = true; // 与 rpcTaskCancel 同语义:停止后不再启动新子 agent
-            subs.stopAll(t);
-            asks.cancelTask(t.taskId, "user");
-            emitQuietly(() -> t.events.cancelled("user"));
-            finish(t, TaskStatus.CANCELLED, null);
-            Thread.currentThread().interrupt();
-        } catch (EventLog.LogOverflowException loe) {
-            subs.stopAll(t);
-            asks.cancelTask(t.taskId, "worker");
-            finish(t, TaskStatus.FAILED, "LOG_OVERFLOW: " + loe.getMessage()); // 日志已满,无法再写事件
-        } catch (Throwable e) {
-            // 收口:ERROR 打一行根因摘要(BaseAdvisor 多层 "Stream processing failed" 包装
-            // 把真实错误埋在最里层,完整堆栈降 DEBUG,避免数百行 reactor 帧刷屏)。
-            log.error("任务 {} 失败: {}", t.taskId, RootCause.summary(e));
-            log.debug("任务 {} 失败完整堆栈", t.taskId, e);
-            subs.stopAll(t);
-            asks.cancelTask(t.taskId, "worker");
-            String msg = RootCause.summary(e);
-            emitQuietly(() -> t.events.error(t.mainAgentId, msg));
-            finish(t, TaskStatus.FAILED, msg);
-        }
+        };
+
+        lifecycleExecutor.run(lifecycleRegistry.getNodes(), kernel, ctx);
     }
 
     /** 消费一条用户输入:授权本轮失效 + 记 user.message + 开轮落盘 + 入会话内存。 */
@@ -1855,65 +1837,8 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
         return System.getProperty("os.name").toLowerCase().contains("win");
     }
 
-    /**
-     * 终态收口(全程持任务监视器,与再运行/删除的空 synchronized(t){} 互斥):
-     * flush → updateMeta → 写磁盘索引 → untrack 双件套 → tasks.remove(两参原子)
-     * → TaskEntry 连同 EventLog 丢弃(销毁,不占内存)。磁盘是唯一真相源。
-     */
-    private void finish(TaskEntry t, TaskStatus status, String error) {
-        if (t.status.terminal()) {
-            log.debug("[finish] 已是终态,跳过 taskId={} 当前status={} 目标status={} thread={}",
-                    t.taskId, t.status, status, Thread.currentThread().getName());
-            return;
-        }
-        log.debug("[finish] 进入 finish taskId={} status={} error={} thread={}",
-                t.taskId, status, error, Thread.currentThread().getName());
-        String workspaceRootToTouch = null;
-        synchronized (t) {
-            if (t.status.terminal()) {
-                return;
-            }
-            t.endedAt = System.currentTimeMillis();
-            t.error = error;
-            t.status = status;
-            emitQuietly(() -> t.events.agentStatus(t.mainAgentId, agentStatusOf(status))); // 主 agent 终态(落盘)
-            pool.pubAllTasks(Events.TASK_UPDATED, null, t.runtimeSummaryJson(), null);
-            active.decrementAndGet();
-            try {
-                store.flush(t.taskId); // 全量落盘(无 trim:磁盘永久保留)
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-            }
-            // 轮次索引不在此补写:未闭合尾轮已由开轮路径(consumeInput→openRoundAtStart)持久化为
-            // endSeq="" 行,已闭合轮由 RoundIndexAdvisor 增量闭合;终态无需对账/补写(不做自愈)。
-            // 终态「悬空保留」:未消费队列落盘 queue.jsonl(冷启动续跑时恢复逐条消费);
-            // 队列已空则清掉可能残留的旧文件。写盘失败只记日志,不让 finish 崩溃。
-            List<UserInput> pending = t.inputQueue.snapshotItems();
-            Path qdir = store.dirOf(t.taskId);
-            try {
-                if (pending.isEmpty()) {
-                    store.deleteQueue(qdir);
-                } else {
-                    store.writeQueue(qdir, pending);
-                }
-            } catch (java.io.IOException e) {
-                log.warn("终态队列落盘失败 task={}(悬空队列丢弃)", t.taskId, e);
-            }
-            store.updateMeta(t.taskId);
-            store.writeAgents(t.taskId, t.agentLedger.values()); // 台账终态最终快照(空台账清残留文件)
-            diskTasks.put(t.taskId, new TaskStore.StoredTask(t.taskId,
-                    store.dirOf(t.taskId), t.summaryJson(), t.workspaceId));
-            store.untrack(t.taskId);
-            gate.untrack(t.taskId); // 授权内存驱逐(任务级已在 grants.json,再运行 lazy 重载)
-            tasks.remove(t.taskId, t); // 两参原子:认领者(并发 rerun/delete)以此判断输赢
-            log.debug("[finish] 任务已移除出内存追踪 taskId={} status={} thread={}",
-                    t.taskId, status, Thread.currentThread().getName());
-            workspaceRootToTouch = t.workspaceRoot; // 收口附带:工作区最后活动时间在锁外交给跟踪器
-        }
-        // 收口附带:刷新该任务挂靠工作区的最后活动时间。放在 synchronized(t) 块之外,
-        // 避免与 workspaces.remove 的锁序(t→wm)构成倒置(后者持有 wm 锁再取任务锁)。
-        activityTracker.onTaskFinished(workspaceRootToTouch);
-    }
+    // finish() 已删除——终态收口逻辑分散进 13 个上行节点（TaskLifecycleExecutor 驱动）。
+    // setStatus 仍保留：askPendingChanged 切换 WAITING_USER/RUNNING 用。
 
     private void setStatus(TaskEntry t, TaskStatus s) {
         synchronized (t) {
@@ -1928,39 +1853,6 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
     /** 队列变化广播:task.updated 携带最新 pendingInputs 快照(§3.3,运行时态不落盘)。 */
     private void publishQueue(TaskEntry t) {
         pool.pubAllTasks(Events.TASK_UPDATED, null, t.runtimeSummaryJson(), null);
-    }
-
-    /**
-     * 注入任务级 usage 实时广播:WorkerToolEventAdvisor 在主 agent 每轮实测 usage 后触发,
-     * 广播 task.updated(携带最新 usage 快照,前端列表电池实时刷新)。终态后不再触发。
-     * fire-and-forget:广播失败不影响任务线程。
-     */
-    private void wireUsageBroadcast(TaskEntry t) {
-        t.onUsageBroadcast = () -> {
-            if (t.status.terminal()) {
-                return;
-            }
-            try {
-                pool.pubAllTasks(Events.TASK_UPDATED, null, t.runtimeSummaryJson(), null);
-            } catch (RuntimeException e) {
-                log.debug("任务用量广播失败 task={}", t.taskId, e);
-            }
-        };
-    }
-
-    /**
-     * 注入 agent 台账持久化钩子:SubAgentManager 在子 agent 创建/终态收口、
-     * WorkerToolEventAdvisor 在每轮 usage 后触发,把最新台账写 agents.json
-     * (独立于 meta.json 落盘,减轻任务列表数据;崩溃后冷启动可恢复台账)。
-     * 终态后不再触发(finish 统一落盘);fire-and-forget:失败不影响任务线程。
-     */
-    private void wireAgentPersist(TaskEntry t) {
-        t.persistHook = () -> {
-            if (t.status.terminal()) {
-                return;
-            }
-            store.writeAgents(t.taskId, t.agentLedger.values()); // 失败仅 warn,不抛
-        };
     }
 
     /**
@@ -2035,7 +1927,7 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
     @PreDestroy
     void shutdown() {
         agentMetaScheduler.shutdownNow();
-        vt.shutdownNow();
+        // 中断全部运行中任务线程，让洋葱上行段自然收口
         for (TaskEntry t : tasks.values()) {
             if (!t.status.terminal()) {
                 t.stopRequested = true;
@@ -2045,9 +1937,28 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
                 if (f != null) {
                     f.cancel(true);
                 }
-                finish(t, TaskStatus.FAILED, "worker 停机");
             }
         }
+        // 有限等待任务收口（与现状 flush 30s 超时放行同档）
+        long deadline = System.currentTimeMillis() + 30_000;
+        while (System.currentTimeMillis() < deadline) {
+            boolean anyRunning = false;
+            for (TaskEntry t : tasks.values()) {
+                if (!t.status.terminal()) {
+                    anyRunning = true;
+                    break;
+                }
+            }
+            if (!anyRunning) break;
+            try { Thread.sleep(100); } catch (InterruptedException e) { break; }
+        }
+        // 超时未退出的任务记 ERROR 放弃（应急语义）
+        for (TaskEntry t : tasks.values()) {
+            if (!t.status.terminal()) {
+                log.error("停机超时：任务 {} 未完成收口，放弃", t.taskId);
+            }
+        }
+        vt.shutdownNow();
     }
 
     private void emitQuietly(Runnable emitter) {
@@ -2056,16 +1967,6 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
         } catch (RuntimeException e) {
             log.debug("终态事件写入失败(日志可能已满)", e);
         }
-    }
-
-    /** 任务终态 → 主 agent 状态(agent.status)。 */
-    private static String agentStatusOf(TaskStatus s) {
-        return switch (s) {
-            case DONE -> "done";
-            case FAILED -> "failed";
-            case CANCELLED -> "stopped";
-            default -> "running";
-        };
     }
 
     private void purgeStaleIdem() {

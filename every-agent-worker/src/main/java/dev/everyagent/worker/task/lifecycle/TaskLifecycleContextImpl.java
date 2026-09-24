@@ -14,11 +14,11 @@ import java.util.function.Consumer;
 import java.util.function.Function;
 
 /**
- * 任务生命周期上下文实现（包私有：仅 lifecycle 包内节点可访问内部通道）。
- * <p>外部插件只见 {@link TaskLifecycleContext} 窄接口；
+ * 任务生命周期上下文实现。
+ * <p>public 但仅在 worker 模块内部使用（非 plugin-api），外部插件只见 {@link TaskLifecycleContext} 窄接口。
  * 内置节点通过此类访问完整 {@link TaskEntry} 和回调。
  */
-class TaskLifecycleContextImpl implements TaskLifecycleContext {
+public class TaskLifecycleContextImpl implements TaskLifecycleContext {
 
     private final TaskEntry taskEntry;
     private UserInput initialInput;
@@ -31,30 +31,30 @@ class TaskLifecycleContextImpl implements TaskLifecycleContext {
     private Consumer<TaskStore.StoredTask> diskIndexer;
     private Runnable registryRemover;
 
-    TaskLifecycleContextImpl(TaskEntry taskEntry) {
+    public TaskLifecycleContextImpl(TaskEntry taskEntry) {
         this.taskEntry = taskEntry;
     }
 
     // ---- 设置器（由 TaskManager 调用）----
 
-    void initialInput(UserInput input) { this.initialInput = input; }
-    void priorConversation(List<Message> conv) { this.priorConversation = conv; }
-    void mainAgentBuilder(Function<List<Message>, AgentEntity> fn) { this.mainAgentBuilder = fn; }
-    void inputConsumer(BiConsumer<AgentEntity, UserInput> fn) { this.inputConsumer = fn; }
-    void concurrencyReleaser(Runnable r) { this.concurrencyReleaser = r; }
-    void diskIndexer(Consumer<TaskStore.StoredTask> c) { this.diskIndexer = c; }
-    void registryRemover(Runnable r) { this.registryRemover = r; }
+    public void initialInput(UserInput input) { this.initialInput = input; }
+    public void priorConversation(List<Message> conv) { this.priorConversation = conv; }
+    public void mainAgentBuilder(Function<List<Message>, AgentEntity> fn) { this.mainAgentBuilder = fn; }
+    public void inputConsumer(BiConsumer<AgentEntity, UserInput> fn) { this.inputConsumer = fn; }
+    public void concurrencyReleaser(Runnable r) { this.concurrencyReleaser = r; }
+    public void diskIndexer(Consumer<TaskStore.StoredTask> c) { this.diskIndexer = c; }
+    public void registryRemover(Runnable r) { this.registryRemover = r; }
 
-    // ---- 包内访问器（节点用）----
+    // ---- 访问器（节点用，worker 模块内部）----
 
-    TaskEntry taskEntry() { return taskEntry; }
-    UserInput initialInput() { return initialInput; }
-    List<Message> priorConversation() { return priorConversation; }
-    Function<List<Message>, AgentEntity> mainAgentBuilder() { return mainAgentBuilder; }
-    BiConsumer<AgentEntity, UserInput> inputConsumer() { return inputConsumer; }
-    Runnable concurrencyReleaser() { return concurrencyReleaser; }
-    Consumer<TaskStore.StoredTask> diskIndexer() { return diskIndexer; }
-    Runnable registryRemover() { return registryRemover; }
+    public TaskEntry taskEntry() { return taskEntry; }
+    public UserInput initialInput() { return initialInput; }
+    public List<Message> priorConversation() { return priorConversation; }
+    public Function<List<Message>, AgentEntity> mainAgentBuilder() { return mainAgentBuilder; }
+    public BiConsumer<AgentEntity, UserInput> inputConsumer() { return inputConsumer; }
+    public Runnable concurrencyReleaser() { return concurrencyReleaser; }
+    public Consumer<TaskStore.StoredTask> diskIndexer() { return diskIndexer; }
+    public Runnable registryRemover() { return registryRemover; }
 
     // ---- TaskLifecycleContext 接口实现 ----
 
