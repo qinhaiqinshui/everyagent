@@ -1,6 +1,6 @@
 # 设计方案：任务生命周期洋葱模型 + Agent 独立成层
 
-> 状态：**待评审**（用户确认后才实施）· v7（子 agent 台账整体归 subagent 插件域：agents.json 是插件维护的事件投影，删除插件 = 台账概念消失、无读无写，磁盘数据不删；agent 层只留运行期 spawn 注册表——waitFor/stop/list 的执行态）
+> 状态：**待评审**（用户确认后才实施）· v8（agent 层零持久化职责、只管内存态：执行态/事件发射端口/会话内存对象；一切落盘——事件 jsonl、轮次索引、meta、台账投影——都在 task 层或插件域；AgentContext 去掉台账方法，与 v7 台账归插件自洽）
 > 范围声明：本文覆盖整体架构（洋葱底座、agent 层独立、subagent 插件三件套、任务队列插件预留）；**本次只实施 Phase 1（洋葱底座）**，其余分期列出。
 
 ---
@@ -52,7 +52,7 @@
   │  run(agent)          同步运行单个 agent 至最终回答（现 AgentRunner，薄）        │
   │  spawn/waitFor/stop/list   子 agent 异步编排（现 SubAgentManager 核心逻辑）    │
   │  AgentEventChannel   事件出口接口（task 层实现 → 写任务流 EventLog）           │
-  │  运行期 spawn 注册表（实体/状态/futures——waitFor/stop/list 执行态）        │
+  │  运行期 spawn 注册表（纯内存：实体/futures/终态——waitFor/stop/list 执行态）  │
   │  ChatClient + Advisor 生态（复用 Spring AI，红线不动）                          │
   └──────────────────────────────────┬─────────────────────────────────────────────┘
                                      ▲ 调用者（平级上层）
@@ -273,6 +273,18 @@ filter 模型下收口序恒等于进入序的逆序（同一 order 决定两端
 
 **不迁**（任务流职责）：`TaskEvents`、`EventLog`、`TaskStore`、`RoundIndex*`、`FileChange*`、`InputQueue`——它们留在 task 层，经接口面向 agent 层。
 
+**持久化边界（零持久化原则）**：agent 层不管任何落盘，只管内存态——
+
+| 持久化物 | 归属（都不在 agent 层） |
+|---|---|
+| 事件流 jsonl（含子 agent 消息按 agentId 落盘） | task 层 TaskStore（EventLog→sink 虚拟线程） |
+| 会话历史磁盘重建（ConversationLoader，再运行） | task 层（load 后把 List\<Message\> 传给 buildMainAgent；agent 层无 from-disk 恢复 API） |
+| 轮次索引 rounds.jsonl / 悬空队列 queue.jsonl / meta.json | task 层（RoundIndexStore / TaskStore） |
+| 子 agent 台账 agents.json | subagent 插件域（事件投影，v7） |
+| 模型配置快照/密钥 | task 层（TaskEntry 冻结快照） |
+
+agent 层的内存态清单：AgentEntity（conversation/options/tools/usage 累计/终态）、spawn 注册表（实体表/futures）、AgentActivity 活跃快照——任务终态即随洋葱收口释放，不提供恢复。子 agent 会话"一次性不重建"为既有语义（事件流已完整落盘，重建属读路径=插件/前端的事）。
+
 ### 4.2 解耦关键：AgentEntity 去 TaskEntry 化
 
 ```java
@@ -281,10 +293,9 @@ filter 模型下收口序恒等于进入序的逆序（同一 order 决定两端
 public interface AgentContext {                  // agent 层需要的任务面（窄接口）
     String taskId();
     String workspaceRoot();
-    AgentEventChannel events();                  // 见下
+    AgentEventChannel events();                  // 发射端口：内存 EventLog append；落盘由 task 层 TaskStore 承接
     boolean taskTerminal();                      // status.terminal()（事件泄漏防御用）
-    void recordMainUsage(Usage u, …);            // 主 agent 电池（原 task.recordUsage + onUsageBroadcast）
-    void updateSpawnedLedger(String agentId, ObjectNode summary);  // 子 agent 台账（原 agentLedger.put + persist）
+    void recordMainUsage(Usage u, …);            // 主 agent 电池（原 task.recordUsage + onUsageBroadcast；内存记录，meta 落盘在 task 层）
 }
 public interface AgentEventChannel {             // 事件出口（TaskEvents 实现/适配）
     void delta(String agentId, String piece);
@@ -307,12 +318,12 @@ public interface AgentEventChannel {             // 事件出口（TaskEvents �
 public interface AgentService {
     /** 同步运行单个 agent 至最终回答（现 AgentRunner.run，主/子共用同一入口不变）。 */
     void run(AgentEntity a) throws InterruptedException;
-    /** 异步派生子 agent（现 SubAgentManager.run 核心逻辑下沉）。 */
-    String spawn(TaskEntry task, String input, String title, String reuseAgentId);  // Phase 2 后签名见 §5
-    AgentWaitResult waitFor(TaskEntry task, String agentId, long timeoutMs);
-    void stop(TaskEntry task, String agentId);
-    void stopAll(TaskEntry task);
-    List<AgentSummary> list(TaskEntry task);
+    /** 异步派生子 agent（现 SubAgentManager.run 核心逻辑下沉）。入参为 AgentContext/装配参数，不触 TaskEntry。 */
+    String spawn(AgentContext ctx, String input, String title, String reuseAgentId);
+    AgentWaitResult waitFor(AgentContext ctx, String agentId, long timeoutMs);
+    void stop(AgentContext ctx, String agentId);
+    void stopAll(AgentContext ctx);
+    List<AgentSummary> list(AgentContext ctx);   // 返回内存执行态摘要（AgentActivity/usage/终态）
 }
 ```
 
@@ -350,6 +361,7 @@ every-agent-plugins/subagent/
     SubAgentTools.java                      # 4 个 @Tool（从 worker tools/ 迁出，改调 AgentService）
     SubAgentToolsProvider.java              # ToolProvider：scope=MAIN（从 worker plugin/adapters/ 迁出）
     SubAgentSkillContributor.java           # SkillContributor：贡献「子 Agent」skill（见 §5.3）
+    SubAgentLedger.java                     # 台账事件投影（订阅 agent.*/usage 维护内存台账 + 快照落盘 agents.json，v7/§5.1）
   web/
     index.ts                                # 前端插件入口（builtInPlugins.ts 自动发现）
     SubAgentListPanel.tsx                   # 从 web src/components/task/AgentListPanel.tsx 迁出
@@ -514,7 +526,8 @@ public interface AuthorizationHandler {
 5. **节点为 Servlet Filter 参与式链**（v4）：`result = next(ctx)`；下行=next 前、上行=next 后；收口序=进入序逆序。
 6. **工具执行链与审核授权链同样迁移为 filter 形态**（v5）：写入 §6，独立 Phase 3 实施，Phase 1 不动。
 7. **task.agents RPC 归 subagent 插件**（v6）：其唯一消费闭环是子 agent 列表（TaskPacketView 拉取 → seedAgents 灌 agentMeta 基线 → AgentListPanel）；消息流 agent 卡片靠事件 payload 自足不依赖它。
-8. **子 agent 台账整体归插件域**（v7）：agents.json 是插件维护的事件投影而非 agent 层真相源——删除插件 = 台账概念消失（无读无写），磁盘数据不删。agent 层只保留运行期 spawn 注册表（waitFor/stop/list 执行态）。`ledger.persist` 洋葱节点 Phase 4 改由插件贡献；插件经新增的任务事件观测 SPI 订阅 agent.*/usage 维护投影（具体 SPI 形态 Phase 4 定）。
+8. **子 agent 台账整体归插件域**（v7）：agents.json 是插件维护的事件投影而非 agent 层真相源——删除插件 = 台账概念消失（无读无写），磁盘数据不删。`ledger.persist` 洋葱节点 Phase 4 改由插件贡献；插件经新增的任务事件观测 SPI 订阅 agent.*/usage 维护投影（具体 SPI 形态 Phase 4 定）。
+9. **agent 层零持久化、只管内存态**（v8）：执行态（AgentEntity/spawn 注册表/usage 累计）+ 事件发射端口 + 会话内存对象；事件 jsonl/轮次索引/meta/台账/会话重建全在 task 层或插件域（§4.1 持久化边界表）。AgentContext 去掉 updateSpawnedLedger（advisor 的 SUB 台账刷新随之取消，台账由插件事件订阅承接）。
 
 ## 10. 遗留待确认
 
