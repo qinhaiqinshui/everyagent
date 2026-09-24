@@ -1,28 +1,27 @@
 package dev.everyagent.plugin.api.spi;
 
-import org.springframework.ai.chat.messages.AssistantMessage;
-import org.springframework.ai.chat.model.ChatResponse;
-import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.model.tool.ToolExecutionResult;
 
-import java.util.List;
-
 /**
- * 工具执行拦截链节点 SPI（洋葱模型，下行阶段）。
- *
- * 核心在 ToolCallingManager.executeToolCalls() 入口遍历所有拦截器。
- * 每个拦截器可检查本轮工具调用列表，返回合成结果短路，或返回 null 放行。
- * 零拦截器或全部放行 → 委托真实 ToolCallingManager 执行。
+ * 工具执行拦截链节点 SPI（filter 形态，与任务洋葱 §3.1 同一范式）。
+ * <p>invoke() 内调用 next.proceed(ctx) 之前 = 下行（执行前检查）；之后 = 上行（结果后处理）。
+ * <ul>
+ *   <li>下行段不调 next 直接 return = 短路（合成结果，等价原 beforeToolExecution 非 null）；</li>
+ *   <li>下行段 {@code return next.proceed(ctx)} = 放行（等价原 beforeToolExecution 返回 null）；</li>
+ *   <li>上行段（next 返回后）可做结果后处理/审计/计时——本范式新增的能力。</li>
+ * </ul>
  */
 public interface ToolExecutionInterceptor {
 
-    int order();
+    String id();
+
+    /** 链上位置：升序 = 执行序。float 允许任意插位；同 order 按注册顺序。 */
+    float order();
 
     /**
-     * 下行拦截：在真实工具执行前调用。
-     * @return 非 null → 短路，用合成结果；null → 放行到下一节点 / 真实执行
+     * @param ctx 执行上下文（prompt/chatResponse/toolCalls + 显式任务上下文，替代 ThreadLocal）
+     * @param next 链的下一环
+     * @return 工具执行结果（短路=合成结果；放行=真实执行结果）
      */
-    ToolExecutionResult beforeToolExecution(
-            Prompt prompt, ChatResponse chatResponse,
-            List<AssistantMessage.ToolCall> toolCalls);
+    ToolExecutionResult invoke(ToolExecutionContext ctx, ToolExecutionChain next) throws Exception;
 }
