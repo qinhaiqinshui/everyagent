@@ -39,6 +39,7 @@ import dev.everyagent.plugin.api.task.TaskKernel;
 import dev.everyagent.plugin.api.task.TaskOutcome;
 import dev.everyagent.worker.task.lifecycle.TaskLifecycleContextImpl;
 import dev.everyagent.worker.task.lifecycle.TaskLifecycleExecutor;
+import dev.everyagent.worker.agent.AgentService;
 import dev.everyagent.worker.ship.StreamSourceRegistry;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
@@ -92,6 +93,7 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
     private final ConfigStore configs;
     private final ChatModelFactory modelFactory;
     private final AgentRunner runner;
+    private final AgentService agentService;
     private final SubAgentManager subs;
     private final PendingAsks asks;
     private final WorkerProperties props;
@@ -137,7 +139,7 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
     }
 
     public TaskManager(HubPool pool, ConfigStore configs, ChatModelFactory modelFactory,
-            AgentRunner runner, SubAgentManager subs, PendingAsks asks, WorkerProperties props,
+            AgentRunner runner, AgentService agentService, SubAgentManager subs, PendingAsks asks, WorkerProperties props,
             RpcDispatcher dispatcher, dev.everyagent.worker.modules.WorkspaceManager workspaces,
             FsToolSupport fs, OsSandbox sandbox, TaskStore store, PermissionGate gate, RipgrepBinary rgbin,
             SlashCommandRegistry slashRegistry, RoundIndexStore roundIndexStore,
@@ -150,6 +152,7 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
         this.configs = configs;
         this.modelFactory = modelFactory;
         this.runner = runner;
+        this.agentService = agentService;
         this.subs = subs;
         this.asks = asks;
         this.props = props;
@@ -1658,7 +1661,7 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
                                 te.taskId, Thread.currentThread().getName());
                         throw new InterruptedException("cancelled");
                     }
-                    runner.run(main);
+                    agentService.run(main);
                     log.debug("[run] runner.run 正常返回(本轮 agent 完成) taskId={} thread={} interruptFlag={}",
                             te.taskId, Thread.currentThread().getName(), Thread.currentThread().isInterrupted());
                     UserInput next = te.inputQueue.poll();
