@@ -188,10 +188,6 @@ const taskCheckedStyle: React.CSSProperties = {
   marginTop: 1,
 }
 
-const taskUncheckedStyle: React.CSSProperties = {
-  ...taskCheckedStyle,
-}
-
 const previewHeadingStyles: Record<number, React.CSSProperties> = {
   1: { margin: '24px 0 12px', fontSize: 'var(--text-2xl)', fontWeight: 600, lineHeight: 1.3, color: 'var(--text-primary)', borderBottom: '1px solid var(--border)', paddingBottom: 8 },
   2: { margin: '20px 0 10px', fontSize: 'var(--text-xl)', fontWeight: 600, lineHeight: 1.35, color: 'var(--text-primary)' },
@@ -382,14 +378,9 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
           </li>
         )
       }
-      // GFM 任务列表项：react-markdown 渲染成 <input type="checkbox" disabled checked>，
-      // 替换为 ⬜/✅ 图标，过滤掉原生 checkbox。
-      const childArray = React.Children.toArray(children)
-      const checkboxEl = childArray.find(
-        (child) => React.isValidElement(child) && (child as React.ReactElement<{ type?: string }>).props?.type === 'checkbox',
-      ) as React.ReactElement<{ checked?: boolean }> | undefined
-      const isChecked = checkboxEl?.props?.checked === true
-      const contentNodes = childArray.filter((child) => child !== checkboxEl)
+      // GFM 任务列表项：checkbox 由 input 渲染器统一替换为 ⬜/✅，
+      // 此处只负责去掉项目符号并按 flex 排列（紧凑列表时 checkbox 是 li 直接子节点，
+      // 松散列表时 checkbox 包在 li > p 内，两种情况都成立）。
       return (
         <li
           {...rest}
@@ -403,14 +394,18 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
             gap: 6,
           }}
         >
-          <span style={isChecked ? taskCheckedStyle : taskUncheckedStyle}>
-            {isChecked ? '✅' : '⬜'}
-          </span>
-          <span style={{ flex: 1, minWidth: 0 }}>
-            {contentNodes}
-          </span>
+          {children}
         </li>
       )
+    },
+    input: (props: IntrinsicProps<'input'>) => {
+      const { type, checked } = props
+      const rest = stripNode(props)
+      // GFM 任务列表 checkbox：原生 disabled 样式是灰框灰勾，替换为 ⬜/✅ emoji。
+      if (type === 'checkbox') {
+        return <span style={taskCheckedStyle}>{checked ? '✅' : '⬜'}</span>
+      }
+      return <input {...rest} />
     },
     pre: PreBlock,
     code: (props: IntrinsicProps<'code'>) => {
