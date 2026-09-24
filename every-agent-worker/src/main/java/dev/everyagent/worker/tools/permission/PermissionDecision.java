@@ -10,7 +10,7 @@ package dev.everyagent.worker.tools.permission;
  *       交由沙箱越界拦截兜底,与旧 PermissionGate 的 log.warn + return 语义一致);</li>
  *   <li>{@code SKIP}:本节点无法处理,交链上下一个节点继续;</li>
  * </ul>
- * 全链 SKIP 时由 {@link PermissionChain} 返回 SKIP。
+
  */
 public final class PermissionDecision {
 

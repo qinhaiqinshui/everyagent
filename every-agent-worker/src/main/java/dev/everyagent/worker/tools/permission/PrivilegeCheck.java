@@ -29,10 +29,10 @@ public class PrivilegeCheck implements PermissionCheck {
     }
 
     @Override
-    public PermissionDecision check(PermissionContext ctx) {
+    public PermissionDecision invoke(PermissionContext ctx, PermissionChain next) {
         try {
             if (ctx.kind() == PermissionContext.Kind.PRIVILEGE_EXEC) {
-                return checkExec(ctx);
+                return checkExec(ctx, next);
             }
             return checkCommand(ctx);
         } catch (PermissionDeniedException e) {
@@ -59,14 +59,14 @@ public class PrivilegeCheck implements PermissionCheck {
     }
 
     /** seccomp 内核级提权(requirePrivilegeExec 场景):由 exec 路径提取 basename 作为 grant key。 */
-    private PermissionDecision checkExec(PermissionContext ctx) {
+    private PermissionDecision checkExec(PermissionContext ctx, PermissionChain next) {
         String execPath = ctx.execPath();
         if (execPath == null || execPath.isBlank()) {
-            return PermissionDecision.skip();
+            return next.proceed(ctx);
         }
         String name = baseName(execPath);
         if (name.isEmpty()) {
-            return PermissionDecision.skip();
+            return next.proceed(ctx);
         }
         String prompt = "AI 请求以管理员/root 权限执行 setuid 程序: " + execPath + "\n"
                 + "提权类别: " + name + "(setuid 提权)。"

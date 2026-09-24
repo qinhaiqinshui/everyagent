@@ -10,11 +10,11 @@ import org.springframework.stereotype.Component;
 public class WorkspaceAllowCheck implements PermissionCheck {
 
     @Override
-    public PermissionDecision check(PermissionContext ctx) {
+    public PermissionDecision invoke(PermissionContext ctx, PermissionChain next) {
         if (ctx.realPath() != null && ctx.wsReal() != null
                 && ctx.realPath().startsWith(ctx.wsReal())) {
             return PermissionDecision.allow("工作区内");
         }
-        return PermissionDecision.skip();
+        return next.proceed(ctx);
     }
 }

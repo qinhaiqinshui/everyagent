@@ -19,9 +19,9 @@ public class AuthorizeCheck implements PermissionCheck {
     }
 
     @Override
-    public PermissionDecision check(PermissionContext ctx) {
+    public PermissionDecision invoke(PermissionContext ctx, PermissionChain next) {
         if (ctx.grantKey() == null || ctx.grantKey().isBlank()) {
-            return PermissionDecision.skip();
+            return next.proceed(ctx);
         }
         try {
             grants.authorize(ctx.task(), ctx.agentId(), ctx.grantKey(), ctx.prompt(),

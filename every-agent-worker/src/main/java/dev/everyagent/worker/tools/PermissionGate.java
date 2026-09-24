@@ -10,7 +10,7 @@ import dev.everyagent.worker.tools.permission.GrantRegistry;
 import dev.everyagent.worker.tools.permission.MissingPathCheck;
 import dev.everyagent.worker.tools.permission.OverBroadRootCheck;
 import dev.everyagent.worker.tools.permission.PathSupport;
-import dev.everyagent.worker.tools.permission.PermissionChain;
+import dev.everyagent.worker.tools.permission.PermissionChainImpl;
 import dev.everyagent.worker.tools.permission.PermissionContext;
 import dev.everyagent.worker.tools.permission.PermissionDecision;
 import dev.everyagent.worker.tools.permission.PrivilegeCheck;
@@ -60,9 +60,9 @@ public class PermissionGate implements dev.everyagent.plugin.api.spi.PermissionG
     private final WorkspaceManager workspaces;
     private final GrantRegistry grants;
 
-    private final PermissionChain pathChain;
-    private final PermissionChain cmdChain;
-    private final PermissionChain privChain;
+    private final PermissionChainImpl pathChain;
+    private final PermissionChainImpl cmdChain;
+    private final PermissionChainImpl privChain;
 
     public PermissionGate(WorkspaceManager workspaces, GrantRegistry grants,
             WorkspaceAllowCheck workspaceAllow, MissingPathCheck missing,
@@ -72,10 +72,10 @@ public class PermissionGate implements dev.everyagent.plugin.api.spi.PermissionG
             CommandCheck commandCheck, PrivilegeCheck privilegeCheck) {
         this.workspaces = workspaces;
         this.grants = grants;
-        this.pathChain = new PermissionChain(
+        this.pathChain = new PermissionChainImpl(
                 List.of(workspaceAllow, missing, skillsRead, externalRoots, overBroad, authorize));
-        this.cmdChain = new PermissionChain(List.of(commandCheck));
-        this.privChain = new PermissionChain(List.of(privilegeCheck));
+        this.cmdChain = new PermissionChainImpl(List.of(commandCheck));
+        this.privChain = new PermissionChainImpl(List.of(privilegeCheck));
     }
 
     // ---- 判定入口 ----
@@ -114,7 +114,7 @@ public class PermissionGate implements dev.everyagent.plugin.api.spi.PermissionG
                 .rootsOnGrant(roots)
                 .execRootsOnGrant(List.of())
                 .build();
-        handle(pathChain.evaluate(ctx));
+        handle(pathChain.proceed(ctx));
     }
 
     /**
@@ -128,7 +128,7 @@ public class PermissionGate implements dev.everyagent.plugin.api.spi.PermissionG
                 .agentId(agentId)
                 .command(command)
                 .build();
-        handle(cmdChain.evaluate(ctx));
+        handle(cmdChain.proceed(ctx));
     }
 
     /** 命令含提权动词时授权(默认拒、按命令弹窗;worker 全局放行时不走到这里)。 */
@@ -139,7 +139,7 @@ public class PermissionGate implements dev.everyagent.plugin.api.spi.PermissionG
                 .agentId(agentId)
                 .command(command)
                 .build();
-        handle(privChain.evaluate(ctx));
+        handle(privChain.proceed(ctx));
     }
 
     /** seccomp 内核级提权(setuid exec):与 {@link #requirePrivilege} 同一授权链。 */
@@ -150,7 +150,7 @@ public class PermissionGate implements dev.everyagent.plugin.api.spi.PermissionG
                 .agentId(agentId)
                 .execPath(execPath)
                 .build();
-        handle(privChain.evaluate(ctx));
+        handle(privChain.proceed(ctx));
     }
 
     /** 命令是否含提权动词(词边界;g 供给 CommandExecutor 决定是否走 requirePrivilege)。 */

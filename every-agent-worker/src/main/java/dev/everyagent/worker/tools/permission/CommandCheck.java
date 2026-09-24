@@ -67,7 +67,7 @@ public class CommandCheck implements PermissionCheck {
     }
 
     @Override
-    public PermissionDecision check(PermissionContext ctx) {
+    public PermissionDecision invoke(PermissionContext ctx, PermissionChain next) {
         String command = ctx.command();
         if (command == null || command.isBlank()) {
             return PermissionDecision.allow("空命令无需授权");

@@ -24,22 +24,22 @@ public class SkillsReadAllowCheck implements PermissionCheck {
     }
 
     @Override
-    public PermissionDecision check(PermissionContext ctx) {
+    public PermissionDecision invoke(PermissionContext ctx, PermissionChain next) {
         if (ctx.realPath() == null) {
-            return PermissionDecision.skip();
+            return next.proceed(ctx);
         }
         Op op = ctx.op();
         if (op != Op.READ && op != Op.WRITE) {
-            return PermissionDecision.skip();
+            return next.proceed(ctx);
         }
         Path skillsReal = skillsRealPath();
         if (skillsReal == null) {
-            return PermissionDecision.skip(); // 技能目录未物化:交下一节点(NotFound/授权链)
+            return next.proceed(ctx); // 技能目录未物化:交下一节点(NotFound/授权链)
         }
         if (ctx.realPath().startsWith(skillsReal)) {
             return PermissionDecision.allow("skills 目录读写放行");
         }
-        return PermissionDecision.skip();
+        return next.proceed(ctx);
     }
 
     /** skills 目录 realpath;未物化(目录不存在)返回 null。 */
