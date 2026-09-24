@@ -7,6 +7,7 @@ import dev.everyagent.plugin.api.task.TaskLifecycleNode;
 import dev.everyagent.plugin.api.task.TaskOutcome;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -23,6 +24,7 @@ import java.util.List;
  *   <li>段外节点按 invoke 语义</li>
  * </ol>
  */
+@Component
 public final class TaskLifecycleExecutor {
 
     private static final Logger log = LoggerFactory.getLogger(TaskLifecycleExecutor.class);

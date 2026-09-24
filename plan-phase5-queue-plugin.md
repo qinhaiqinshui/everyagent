@@ -71,8 +71,8 @@
     - 依赖：步骤 10
     - 验收标准：`docs/ARCHITECTURE.md` 新增 `### 7.14.4 任务队列插件（Phase 5）` 小节，描述 QueueAdmissionNode/order=250/Semaphore 机制/准入策略扩展点/`task.queued` 事件/`task.queueList` RPC；§14.5 并发红线补充「队列插件启用时超限任务排队等待而非 BUSY 拒绝」
 
-- [ ] 步骤 12：git 提交
-    - 状态：待执行
+- [x] 步骤 12：git 提交
+    - 状态：已完成
     - agent：主 Agent
     - 依赖：步骤 11
     - 验收标准：提交信息 `feat: 实现任务队列插件（Phase 5）——洋葱模型形态三成对节点 + RPC 边缘准入扩展点`

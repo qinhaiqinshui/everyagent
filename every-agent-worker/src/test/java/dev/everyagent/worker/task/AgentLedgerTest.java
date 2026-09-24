@@ -60,9 +60,9 @@ class AgentLedgerTest {
     private static TaskManager manager(TaskStore store, WorkerProperties props) {
         // (eventSink, agentService, agentFactory, slashCallbacks, taskBootstrap, subs, asks,
         //  props, dispatcher, store, roundIndexStore, lifecycleContextFactory,
-        //  lifecycleExecutor, lifecycleRegistry)
+        //  lifecycleExecutor, lifecycleRegistry, admissionPolicyRegistry)
         return new TaskManager(null, null, null, null, null, null, null, props, null,
-                store, null, null, null, null);
+                store, null, null, null, null, null);
     }
 
     @Test

@@ -1,7 +1,7 @@
-package dev.everyagent.worker.git;
+package dev.everyagent.plugin.git;
 
-import dev.everyagent.worker.git.NativeGit.NativeResult;
-import dev.everyagent.worker.git.NativeGit.StatusData;
+import dev.everyagent.plugin.git.NativeGit.NativeResult;
+import dev.everyagent.plugin.git.NativeGit.StatusData;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;

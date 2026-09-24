@@ -62,10 +62,10 @@ class ExternalRootAllowCheckTest {
         ExternalRootAllowCheck check = new ExternalRootAllowCheck(wm);
         TaskEntry t = task(ws);
 
-        assertTrue(check.check(pathCtx(t, PermissionGate.Op.READ, f)).isAllow(), "根内读 ALLOW");
-        assertTrue(check.check(pathCtx(t, PermissionGate.Op.WRITE, f)).isAllow(), "根内写 ALLOW(完全读写)");
-        assertTrue(check.check(pathCtx(t, PermissionGate.Op.READ, extReal)).isAllow(), "根自身 ALLOW");
-        assertTrue(check.check(pathCtx(t, PermissionGate.Op.WRITE, extReal.resolve("new.txt"))).isAllow(),
+        assertTrue(check.invoke(pathCtx(t, PermissionGate.Op.READ, f), ctx -> PermissionDecision.skip()).isAllow(), "根内读 ALLOW");
+        assertTrue(check.invoke(pathCtx(t, PermissionGate.Op.WRITE, f), ctx -> PermissionDecision.skip()).isAllow(), "根内写 ALLOW(完全读写)");
+        assertTrue(check.invoke(pathCtx(t, PermissionGate.Op.READ, extReal), ctx -> PermissionDecision.skip()).isAllow(), "根自身 ALLOW");
+        assertTrue(check.invoke(pathCtx(t, PermissionGate.Op.WRITE, extReal.resolve("new.txt")), ctx -> PermissionDecision.skip()).isAllow(),
                 "根内不存在目标同样 ALLOW(write 目标由沙箱 resolveTarget 落地)");
     }
 
@@ -77,11 +77,11 @@ class ExternalRootAllowCheckTest {
         when(wm.externalRootsOf(anyString())).thenReturn(List.of(ext.toRealPath()));
         ExternalRootAllowCheck check = new ExternalRootAllowCheck(wm);
 
-        assertTrue(check.check(pathCtx(task(ws), PermissionGate.Op.READ, f)).isSkip(), "根外 SKIP");
+        assertTrue(check.invoke(pathCtx(task(ws), PermissionGate.Op.READ, f), ctx -> PermissionDecision.skip()).isSkip(), "根外 SKIP");
         // 兄弟目录(仅前缀字符串相似)不得误放:startsWith 是路径元素级判定
         Path sibling = ext.toRealPath().resolveSibling(ext.getFileName() + "-x");
         Files.createDirectories(sibling);
-        assertTrue(check.check(pathCtx(task(ws), PermissionGate.Op.READ, sibling)).isSkip(),
+        assertTrue(check.invoke(pathCtx(task(ws), PermissionGate.Op.READ, sibling), ctx -> PermissionDecision.skip()).isSkip(),
                 "根的兄弟目录 SKIP");
     }
 
@@ -100,7 +100,7 @@ class ExternalRootAllowCheckTest {
         when(wm.externalRootsOf(anyString())).thenReturn(List.of(ext.toRealPath()));
         ExternalRootAllowCheck check = new ExternalRootAllowCheck(wm);
 
-        assertTrue(check.check(pathCtx(task(ws), PermissionGate.Op.READ, real)).isSkip(),
+        assertTrue(check.invoke(pathCtx(task(ws), PermissionGate.Op.READ, real), ctx -> PermissionDecision.skip()).isSkip(),
                 "符号链接逃逸不误放");
     }
 
@@ -111,9 +111,9 @@ class ExternalRootAllowCheckTest {
         when(wm.externalRootsOf(anyString())).thenReturn(List.of()); // 未注册/无根:空列表
         ExternalRootAllowCheck check = new ExternalRootAllowCheck(wm);
 
-        assertTrue(check.check(pathCtx(task(ws), PermissionGate.Op.READ, f)).isSkip(), "无外部根 SKIP");
-        assertTrue(check.check(pathCtx(null, PermissionGate.Op.READ, f)).isSkip(), "无 task 上下文 SKIP");
-        assertTrue(check.check(pathCtx(task(ws), PermissionGate.Op.READ, null)).isSkip(), "无 realPath SKIP");
+        assertTrue(check.invoke(pathCtx(task(ws), PermissionGate.Op.READ, f), ctx -> PermissionDecision.skip()).isSkip(), "无外部根 SKIP");
+        assertTrue(check.invoke(pathCtx(null, PermissionGate.Op.READ, f), ctx -> PermissionDecision.skip()).isSkip(), "无 task 上下文 SKIP");
+        assertTrue(check.invoke(pathCtx(task(ws), PermissionGate.Op.READ, null), ctx -> PermissionDecision.skip()).isSkip(), "无 realPath SKIP");
     }
 
     // ---- 完整 gate 链装配:外部根内不弹窗、未注册根照常走授权决议链 ----
