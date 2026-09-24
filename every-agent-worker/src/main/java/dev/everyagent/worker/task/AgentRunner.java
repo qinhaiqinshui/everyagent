@@ -45,8 +45,8 @@ public class AgentRunner {
      * 工具循环由 ChatClient 的 advisor 链递归完成;本方法订阅流式响应,支持线程中断取消。
      */
     public void run(AgentEntity a) throws InterruptedException {
-        // 设置当前任务上下文（供 ToolExecutionInterceptor 单例通过 ThreadLocal 获取 task）
-        InterceptingToolCallingManager.setCurrentTask(a.task);
+        // 设置当前 agent 上下文（供 ToolExecutionInterceptor 单例通过 ThreadLocal 获取）
+        InterceptingToolCallingManager.setCurrentAgentContext(a.task);
         try {
         // 2.0.1:prompt options 原样透传并强转 OpenAiChatOptions(且不与默认 options 合并),
         // 必须用完整快照 mutate()(复制 baseUrl/apiKey/model/采样参数),不能用泛型
@@ -142,7 +142,7 @@ public class AgentRunner {
         // 工具循环已自然终止(无 tool call 的终轮)→ agent 跑完
         a.finished = true;
         } finally {
-            InterceptingToolCallingManager.clearCurrentTask();
+            InterceptingToolCallingManager.clearCurrentAgentContext();
         }
     }
 }

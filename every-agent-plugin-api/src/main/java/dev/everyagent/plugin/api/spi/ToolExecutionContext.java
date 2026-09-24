@@ -8,7 +8,7 @@ import org.springframework.ai.chat.prompt.Prompt;
 import java.util.List;
 
 /**
- * 工具执行拦截上下文（替代 InterceptingToolCallingManager.currentTask() ThreadLocal）。
+ * 工具执行拦截上下文（替代 InterceptingToolCallingManager.currentAgentContext() ThreadLocal）。
  * <p>显式注入任务上下文，插件不再依赖 worker 内部类取任务。
  */
 public interface ToolExecutionContext {

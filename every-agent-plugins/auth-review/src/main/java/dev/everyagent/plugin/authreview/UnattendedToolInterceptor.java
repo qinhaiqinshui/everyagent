@@ -1,6 +1,7 @@
 package dev.everyagent.plugin.authreview;
 
 import dev.everyagent.worker.plugin.registry.ToolExecutionInterceptorRegistry;
+import dev.everyagent.plugin.api.agent.AgentContext;
 import dev.everyagent.plugin.api.spi.ToolExecutionInterceptor;
 import dev.everyagent.worker.task.InterceptingToolCallingManager;
 import dev.everyagent.worker.task.TaskEntry;
@@ -35,8 +36,8 @@ public class UnattendedToolInterceptor implements ToolExecutionInterceptor {
     public ToolExecutionResult beforeToolExecution(
             Prompt prompt, ChatResponse chatResponse,
             List<AssistantMessage.ToolCall> toolCalls) {
-        TaskEntry task = InterceptingToolCallingManager.currentTask();
-        if (task == null || !task.taskFlags.getOrDefault("unattended", false)) {
+        AgentContext agentCtx = InterceptingToolCallingManager.currentAgentContext();
+        if (!(agentCtx instanceof TaskEntry task) || !task.taskFlags.getOrDefault("unattended", false)) {
             return null; // 不是无人值守模式，放行
         }
         // 检查本轮是否含 ask_user 调用

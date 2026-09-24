@@ -30,15 +30,15 @@ public class InterceptingToolCallingManager implements ToolCallingManager {
     private final ToolExecutionChainExecutor chainExecutor = new ToolExecutionChainExecutor();
 
     /**
-     * 当前线程绑定的任务上下文（per-run），由 {@code AgentRunner} 在执行前设置、
-     * 执行后清除。{@link dev.everyagent.plugin.api.spi.ToolExecutionInterceptor} 单例通过 {@link #currentTask()} 获取
-     * 当前任务，读取 {@code taskFlags} 判断是否拦截。
+     * 当前线程绑定的 agent 上下文（per-run），由 {@code AgentRunner} 在执行前设置、
+     * 执行后清除。ThreadLocal 值类型为窄接口 {@link AgentContext}，
+     * 插件经 {@link ToolExecutionContext#agentContext()} 取而非直接依赖 worker 内部类。
      */
-    private static final ThreadLocal<TaskEntry> CURRENT_TASK = new ThreadLocal<>();
+    private static final ThreadLocal<AgentContext> CURRENT_AGENT_CONTEXT = new ThreadLocal<>();
 
-    public static void setCurrentTask(TaskEntry task) { CURRENT_TASK.set(task); }
-    public static void clearCurrentTask() { CURRENT_TASK.remove(); }
-    public static TaskEntry currentTask() { return CURRENT_TASK.get(); }
+    public static void setCurrentAgentContext(AgentContext ctx) { CURRENT_AGENT_CONTEXT.set(ctx); }
+    public static void clearCurrentAgentContext() { CURRENT_AGENT_CONTEXT.remove(); }
+    public static AgentContext currentAgentContext() { return CURRENT_AGENT_CONTEXT.get(); }
 
     public InterceptingToolCallingManager(ToolCallingManager delegate,
             ToolExecutionInterceptorRegistry interceptorRegistry) {
@@ -66,12 +66,12 @@ public class InterceptingToolCallingManager implements ToolCallingManager {
             return delegate.executeToolCalls(prompt, chatResponse);
         }
         List<AssistantMessage.ToolCall> toolCalls = assistant.getToolCalls();
-        TaskEntry task = CURRENT_TASK.get();
-        ToolExecutionContext ctx = new ToolExecutionContextImpl(prompt, chatResponse, toolCalls, task);
+        AgentContext agentCtx = currentAgentContext();
+        ToolExecutionContext ctx = new ToolExecutionContextImpl(prompt, chatResponse, toolCalls, agentCtx);
         return chainExecutor.run(interceptors, delegate, ctx);
     }
 
-    /** 简易 ToolExecutionContext 实现，将当前调用参数 + 线程绑定的 TaskEntry 封装为上下文。 */
+    /** 简易 ToolExecutionContext 实现，将当前调用参数 + 线程绑定的 AgentContext 封装为上下文。 */
     private record ToolExecutionContextImpl(
             Prompt prompt, ChatResponse chatResponse,
             List<AssistantMessage.ToolCall> toolCalls,
