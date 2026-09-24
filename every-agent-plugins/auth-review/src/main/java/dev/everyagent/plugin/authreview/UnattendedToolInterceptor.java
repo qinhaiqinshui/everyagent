@@ -2,9 +2,10 @@ package dev.everyagent.plugin.authreview;
 
 import dev.everyagent.worker.plugin.registry.ToolExecutionInterceptorRegistry;
 import dev.everyagent.plugin.api.agent.AgentContext;
+import dev.everyagent.plugin.api.permission.TaskInfo;
+import dev.everyagent.plugin.api.spi.ToolExecutionChain;
+import dev.everyagent.plugin.api.spi.ToolExecutionContext;
 import dev.everyagent.plugin.api.spi.ToolExecutionInterceptor;
-import dev.everyagent.worker.task.InterceptingToolCallingManager;
-import dev.everyagent.worker.task.TaskEntry;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.ToolResponseMessage;
@@ -30,22 +31,26 @@ public class UnattendedToolInterceptor implements ToolExecutionInterceptor {
     }
 
     @Override
-    public int order() { return 100; }
+    public String id() { return "unattended-tool-interceptor"; }
 
     @Override
-    public ToolExecutionResult beforeToolExecution(
-            Prompt prompt, ChatResponse chatResponse,
-            List<AssistantMessage.ToolCall> toolCalls) {
-        AgentContext agentCtx = InterceptingToolCallingManager.currentAgentContext();
-        if (!(agentCtx instanceof TaskEntry task) || !task.taskFlags.getOrDefault("unattended", false)) {
-            return null; // 不是无人值守模式，放行
+    public float order() { return 100f; }
+
+    @Override
+    public ToolExecutionResult invoke(ToolExecutionContext ctx, ToolExecutionChain next) throws Exception {
+        AgentContext agentCtx = ctx.agentContext();
+        if (!(agentCtx instanceof TaskInfo task) || !task.taskFlags().getOrDefault("unattended", false)) {
+            return next.proceed(ctx); // 不是无人值守模式，放行
         }
+        Prompt prompt = ctx.prompt();
+        ChatResponse chatResponse = ctx.chatResponse();
+        List<AssistantMessage.ToolCall> toolCalls = ctx.toolCalls();
         // 检查本轮是否含 ask_user 调用
         List<AssistantMessage.ToolCall> askUserCalls = toolCalls.stream()
                 .filter(tc -> "ask_user".equals(tc.name()))
                 .toList();
         if (askUserCalls.isEmpty()) {
-            return null; // 本轮无 ask_user 调用，放行
+            return next.proceed(ctx); // 本轮无 ask_user 调用，放行
         }
         // 找到 assistant 消息
         AssistantMessage assistant = chatResponse.getResults().stream()
@@ -54,7 +59,7 @@ public class UnattendedToolInterceptor implements ToolExecutionInterceptor {
                 .findFirst()
                 .orElse(null);
         if (assistant == null) {
-            return null;
+            return next.proceed(ctx);
         }
         // 为每个 ask_user 调用合成自动回答
         List<ToolResponseMessage.ToolResponse> responses = new ArrayList<>();
@@ -80,7 +85,7 @@ public class UnattendedToolInterceptor implements ToolExecutionInterceptor {
                     .build();
         }
         // 混合轮（ask_user + 其他工具）：放行让真实执行
-        return null;
+        return next.proceed(ctx);
     }
 
     private static String autoAnswer(String toolInput) {

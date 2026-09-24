@@ -1,6 +1,7 @@
 package dev.everyagent.plugin.authreview;
 
 import dev.everyagent.worker.plugin.registry.AuthorizationHandlerRegistry;
+import dev.everyagent.plugin.api.permission.AuthorizationChain;
 import dev.everyagent.plugin.api.permission.AuthorizationHandler;
 import dev.everyagent.plugin.api.permission.AuthorizationHandler.AuthorizationRequest;
 import dev.everyagent.plugin.api.permission.AuthorizationHandler.AuthorizationDecision;
@@ -13,15 +14,16 @@ public class UnattendedAuthHandler implements AuthorizationHandler {
         registry.register(this);
     }
     @Override
-    public int order() { return 200; }
+    public String id() { return "unattended-auth"; }
 
     @Override
-    public boolean applies(AuthorizationRequest req) {
-        return req.task().taskFlags().getOrDefault("unattended", false);
-    }
+    public float order() { return 200f; }
 
     @Override
-    public AuthorizationDecision decide(AuthorizationRequest req) {
+    public AuthorizationDecision invoke(AuthorizationRequest req, AuthorizationChain next) throws Exception {
+        if (!req.task().taskFlags().getOrDefault("unattended", false)) {
+            return next.proceed(req);
+        }
         return new AuthorizationDecision(AuthorizationDecision.Type.DENY, "无人值守模式拒绝授权");
     }
 }

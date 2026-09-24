@@ -1,6 +1,7 @@
 package dev.everyagent.plugin.authreview;
 
 import dev.everyagent.worker.plugin.registry.AuthorizationHandlerRegistry;
+import dev.everyagent.plugin.api.permission.AuthorizationChain;
 import dev.everyagent.plugin.api.permission.AuthorizationHandler;
 import dev.everyagent.plugin.api.permission.AuthorizationHandler.AuthorizationRequest;
 import dev.everyagent.plugin.api.permission.AuthorizationHandler.AuthorizationDecision;
@@ -16,21 +17,24 @@ public class AiReviewAuthHandler implements AuthorizationHandler {
     }
 
     @Override
-    public int order() { return 100; }
+    public String id() { return "ai-review-auth"; }
 
     @Override
-    public boolean applies(AuthorizationRequest req) {
-        return req.task().taskFlags().getOrDefault("ai-review", false);
-    }
+    public float order() { return 100f; }
 
     @Override
-    public AuthorizationDecision decide(AuthorizationRequest req) {
+    public AuthorizationDecision invoke(AuthorizationRequest req, AuthorizationChain next) throws Exception {
+        if (!req.task().taskFlags().getOrDefault("ai-review", false)) {
+            return next.proceed(req); // 不适用，放行
+        }
         ReviewDecision d = reviewer.review((dev.everyagent.worker.task.TaskEntry) req.task(), req.grantKey(), req.prompt());
-        if (d.fallback()) return new AuthorizationDecision(AuthorizationDecision.Type.PASS, d.reason());
+        if (d.fallback()) {
+            return next.proceed(req); // PASS
+        }
         return switch (d.verdict()) {
             case ALLOW    -> new AuthorizationDecision(AuthorizationDecision.Type.ALLOW, d.reason());
             case DENY     -> new AuthorizationDecision(AuthorizationDecision.Type.DENY, d.reason());
-            case ESCALATE -> new AuthorizationDecision(AuthorizationDecision.Type.PASS, d.reason());
+            case ESCALATE -> next.proceed(req); // ESCALATE → PASS → 放行链
         };
     }
 }
