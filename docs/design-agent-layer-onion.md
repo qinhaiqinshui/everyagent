@@ -1,7 +1,7 @@
 # 设计方案：任务生命周期洋葱模型 + Agent 独立成层
 
 > 状态：**已评审认可，待实施** · v11（全量自查修订：架构图修正洋葱归属 Task 编排层；锁策略补 runExistingTask 再运行认领反例→850..420 连续段临界区组合器为默认设计；§1.2 目标对齐 v6/v7；EventLog 归属修正；order 撞号错开 390/420；执行器中断译 CANCELLED；LOG_OVERFLOW 不发 error 逐字保留；前端插件取数通道补齐）
-> 范围声明：本文覆盖整体架构（洋葱底座、agent 层独立、subagent 插件三件套、任务队列插件预留）；**本次只实施 Phase 1（洋葱底座）**，其余分期列出。
+> 范围声明：本文覆盖整体架构（生命周期链底座、agent 层独立、subagent 插件三件套、任务队列插件预留）；**本次只实施 Phase 1（生命周期链底座）**，其余分期列出。命名约定：洋葱模型只是设计隐喻（下行/上行的同心结构），**不进任何 Java 类名/包名**——代码一律用职责命名（TaskLifecycleExecutor/TaskLifecycleNode/`task.lifecycle` 包）。
 
 ---
 
@@ -39,7 +39,7 @@
 │                                                                                │
 │  ┌─ Task 编排层（现状核心：task.* RPC + 轮次循环 + 前端展示；未来可能插件化） ──┐ │
 │  │                                                                           │ │
-│  │   ┌─ Task 洋葱（TaskOnion，Task 编排层的生命周期机制） ─────────────────┐  │ │
+│  │   ┌─ Task 生命周期链（TaskLifecycleExecutor，Task 编排层内部机制） ─────┐  │ │
 │  │   │ 下行 = next(ctx) 前（外→内）      上行 = next 返回后（内→外）      │  │ │
 │  │   │ track(100)→wires(200)→status.start(300)→main.agent(390)            │  │ │
 │  │   │   →【内核 = 调用 AgentService（多轮+输入队列）】                    │  │ │
@@ -87,7 +87,7 @@
 
 ### 3.1 契约（放 `every-agent-plugin-api`，让插件能贡献节点）——Servlet Filter 风格参与式链
 
-**没有预设「层」粒度**——洋葱 = **单一职责节点的有序列表**，但节点不是「两个回调」（onStart/onEnd），而是像 **Java Servlet Filter** 一样**参与执行**：节点拿到运行上下文，调用 `result = next(context)` 得到**后面全部节点 + 内核**的执行结果。`next()` 之前 = 下行（开始）阶段，之后 = 上行（结束）阶段。
+**没有预设「层」粒度**——生命周期链（洋葱模型）= **单一职责节点的有序列表**，但节点不是「两个回调」（onStart/onEnd），而是像 **Java Servlet Filter** 一样**参与执行**：节点拿到运行上下文，调用 `result = next(context)` 得到**后面全部节点 + 内核**的执行结果。`next()` 之前 = 下行（开始）阶段，之后 = 上行（结束）阶段。
 
 ```java
 /**
@@ -96,7 +96,7 @@
  */
 public interface TaskLifecycleNode {
     String id();
-    /** 洋葱位置：升序 = 外→内。float 允许任意插位；同 order 按注册顺序（稳定排序）。 */
+    /** 链上位置：升序 = 外→内（洋葱下行序）。float 允许任意插位；同 order 按注册顺序（稳定排序）。 */
     float order();
     /**
      * 契约：
@@ -133,8 +133,8 @@ public interface TaskKernel {
 执行器（组装即全部逻辑）：
 
 ```java
-/** 洋葱执行器：按 order 升序把节点组装为嵌套链，链尾接内核。 */
-public final class TaskOnion {
+/** 任务生命周期执行器：按 order 升序把节点组装为嵌套链，链尾接内核（洋葱模型实现）。 */
+public final class TaskLifecycleExecutor {
     public TaskOutcome run(List<TaskLifecycleNode> nodes, TaskKernel kernel, TaskLifecycleContext ctx) {
         TaskChain chain = kernel::run;                    // 链尾 = 内核（异常已翻译）
         for (int i = nodes.size() - 1; i >= 0; i--) {     // 由内向外包裹
@@ -503,7 +503,7 @@ public interface AuthorizationHandler {
 | `beforeToolExecution(...)` 返回 null（放行） | 下行段直接 `return next.proceed(ctx)` |
 | `decide()` 返回 ALLOW/DENY（短路） | 下行段 return 决议 |
 | `decide()` 返回 PASS / `applies()`=false | `return next.proceed(req)` |
-| `InterceptingToolCallingManager` for 循环 | 链组装器（同 TaskOnion 折叠方式，链尾 = 真实 manager 执行） |
+| `InterceptingToolCallingManager` for 循环 | 链组装器（同 TaskLifecycleExecutor 折叠方式，链尾 = 真实 manager 执行） |
 | `LoopRepeatGuardToolManager`（死循环守卫装饰器） | **保持装饰器形态不迁**：它是核心守卫不是插件扩展点，且需在 `executeToolCalls` 处合成工具结果回传模型（框架唯一允许点），与插件链职责不同 |
 | 内部检查链（WorkspaceAllowCheck 族，SKIP 继续） | 同范式迁移：SKIP = `next.proceed`，ALLOW/DENY = 短路（保持三链分离：文件/命令/提权入口不同，链尾兜底拒绝不变） |
 
@@ -523,7 +523,7 @@ public interface AuthorizationHandler {
 
 | Phase | 内容 | 交付 |
 |---|---|---|
-| **1（本次）洋葱底座** | plugin-api 节点契约（`TaskLifecycleNode`/`TaskLifecycleContext`/`TaskOutcome`/`TaskKernel`）+ `registerTaskLifecycleNode`；`TaskLifecycleRegistry`（float 排序）+ `TaskOnion`；17 个内置节点拆分（下行 4 + 上行 13，finish/runTask/rpcTaskRun 逻辑**逐字映射**，不改行为）；`runTask` 重写为洋葱执行；单测（下行顺序/否决短路/逆序收口/try-finally 必达/幂等/取消/停机中断收口/锁分段）；ARCHITECTURE.md 新 §7.x | worker 行为零变化（事件顺序、seq、落盘字节级兼容），可回归验证 |
+| **1（本次）生命周期链底座** | plugin-api 节点契约（`TaskLifecycleNode`/`TaskLifecycleContext`/`TaskOutcome`/`TaskKernel`）+ `registerTaskLifecycleNode`；`TaskLifecycleRegistry`（float 排序）+ `TaskLifecycleExecutor`；17 个内置节点拆分（下行 4 + 上行 13，finish/runTask/rpcTaskRun 逻辑**逐字映射**，不改行为）；`runTask` 重写为生命周期链执行；单测（下行顺序/否决短路/逆序收口/try-finally 必达/幂等/取消/停机中断收口/锁分段）；ARCHITECTURE.md 新 §7.x | worker 行为零变化（事件顺序、seq、落盘字节级兼容），可回归验证 |
 | **2 agent 层** | `dev.everyagent.worker.agent` 包收敛 + `AgentContext`/`AgentEventChannel` 解耦 + `AgentService` + `AgentDispatcher` 废止 + `SubAgentManager` 编排下沉 + **基础设施层确立**（模型与配置域；RPC/EventLog/DataPusher 定位声明 + `StreamSourceRegistry` 解耦 DataPusherManager→TaskManager 反向依赖） | agent 层边界成立（纯内存执行引擎）+ 基础设施三子域可被平级上层复用 |
 | **3 拦截链范式统一** | 工具执行链 + 授权决议链（含 PermissionGate 内部三链）迁移为 filter 形态（§6）；`ToolExecutionContext` 显式化替代 ThreadLocal；两个 SPI 使用者同步迁移 | 三链一种范式；工具链获得上行钩子、授权链获得决议后包裹 |
 | **4 subagent 插件** | 三件套迁移（工具 + SkillContributor + 前端面板**及取数链**：task.agents RPC 迁插件注册、taskStream 的 fetchTaskAgents 调用点条件化、agentMeta 基线灌入随面板走）+ **台账迁移**（agentLedger/writeAgents/restoreAgentLedger/30s 定时快照/persistHook→插件的事件投影：worker 侧新增任务事件观测 SPI 供插件订阅 agent.*/usage；`ledger.persist` 洋葱节点改插件贡献）；plugin-api 新增 `SkillContributor` SPI + 注册表；BuiltInSkills 合并改造；web `ComposerPanelCtx` 扩展 `selectAgent`；app pom 挂载 + CI 一致性检查 | 删除插件 = 无子 agent 工具/skill/前端列表/task.agents RPC/**台账读写**，agent 层（spawn 执行态/事件）完好 |
@@ -550,13 +550,12 @@ public interface AuthorizationHandler {
 | `TaskKernel.java` | §3.1 契约原样 |
 | `WorkerPluginContext.java`（修改） | 新增 `registerTaskLifecycleNode(TaskLifecycleNode)` |
 
-**新建（worker，新包 `dev.everyagent.worker.task.onion`）**：
+**新建（worker，新包 `dev.everyagent.worker.task.lifecycle`）**：
 
 | 文件 | 内容 |
 |---|---|
-| `TaskOnion.java` | §3.1 执行器 + §7.3 临界段组装 |
-| `TaskLifecycleRegistry.java` | `plugin/registry/` 模式：CopyOnWriteArrayList + PluginStateStore 过滤 + float 稳定排序（同 order 注册序） |
-| `UpstreamNode.java` | §7.3 基类 |
+| `TaskLifecycleExecutor.java` | §3.1 执行器 + §7.3 临界段组装 |
+| `TaskLifecycleRegistry.java` | `plugin/registry/` 模式：CopyOnWriteArrayList + PluginStateStore 过滤 + float 稳定排序（同 order 注册序） || `UpstreamNode.java` | §7.3 基类 |
 | `nodes/` 下 17 个节点类 | 类名=节点 id 驼峰（如 `PersistenceTrackNode`/`StatusFinalizeNode`/`SpawnedAwaitNode`…），职责=§3.3 表逐字映射；构造注入所需协作者（store/props/asks/subs/pool/gate/activityTracker…），由 `BuiltInTaskLifecycleNodes`（同包配置类）装配注册 |
 
 **修改（TaskManager.java）**：
@@ -571,7 +570,7 @@ public interface AuthorizationHandler {
 
 **Phase 1 验收（DoD）**：
 1. `mvn test` 全绿（全仓 Java 测试无回归）。
-2. 新增单测（`task/onion/TaskOnionTest`）：下行顺序=order 升序；否决短路（下行抛异常→内层不执行、已进入层收口）；必达（内核抛错/中断→全部上行段执行且仅一次）；幂等（outcome 重复消费 CAS 拦截）；取消（中断→CANCELLED 非 FAILED）；停机注入；临界段（850..420 单次持锁——用可重入锁计数断言）；LOG_OVERFLOW 不发 error。
+2. 新增单测（`task/lifecycle/TaskLifecycleExecutorTest`）：下行顺序=order 升序；否决短路（下行抛异常→内层不执行、已进入层收口）；必达（内核抛错/中断→全部上行段执行且仅一次）；幂等（outcome 重复消费 CAS 拦截）；取消（中断→CANCELLED 非 FAILED）；停机注入；临界段（850..420 单次持锁——用可重入锁计数断言）；LOG_OVERFLOW 不发 error。
 3. 手动冒烟：新建任务/取消/再运行/停机四路径事件顺序与磁盘产物对照现状。
 4. ARCHITECTURE.md 新增 §7.x（洋葱小节，引用本文档）。
 
@@ -591,7 +590,7 @@ public abstract class UpstreamNode implements TaskLifecycleNode {
 }
 ```
 
-`TaskOnion.assemble(nodes, ctx)` 折叠规则：
+`TaskLifecycleExecutor.assemble(nodes, ctx)` 折叠规则：
 1. 按 order 升序折叠为嵌套链（§3.1）。
 2. **临界段识别**：连续且 order ∈ [850,420] 的 `UpstreamNode` 连续序列 → 段边界包一次 `synchronized(ctx.taskLock())`，段内节点**直接调 `up(ctx, result)`**（绕过 invoke 的透传样板，否则每节点各自拿锁退化回分段）；段对外表现为 order=850 的单一链位置。
 3. 段内上行执行序 = order 降序（850 最先）——与现状 finish 持锁段逐项一致。
@@ -614,7 +613,7 @@ public abstract class UpstreamNode implements TaskLifecycleNode {
 
 | 风险 | 对策 |
 |---|---|
-| finish 拆节点后收口顺序/竞态回归 | 逆序不变量逐条对照（§3.3：收口序=进入序逆序=现状顺序）；锁分段等价论证（§3.3 锁策略）；补 onion 单测 + 全量 worker 测试回归 |
+| finish 拆节点后收口顺序/竞态回归 | 逆序不变量逐条对照（§3.3：收口序=进入序逆序=现状顺序）；锁分段等价论证（§3.3 锁策略）；补 lifecycle 单测 + 全量 worker 测试回归 |
 | 再运行（startRerun）路径绕过洋葱 | 再运行的 track/seed/wire 逻辑同样走 `persistence.track`/`task.wires` 下行段（复用同一节点实现，不另写一份） |
 | DataPusher 换日志时机变化 | track 仍在 `persistence.track` 下行段执行；执行线程从 RPC 线程移到任务线程开头（外部可见行为不变：meta 最终一致、ctx.ok 应答仍即时） |
 | AgentEntity 解耦破坏事件语义（roundSeqs 同轮共享 seq） | AgentEventChannel 由 TaskEvents 直接 implements，seq 逻辑不动，只换接口面 |
