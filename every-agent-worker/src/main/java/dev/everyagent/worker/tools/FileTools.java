@@ -23,6 +23,9 @@ import java.util.List;
  */
 public class FileTools {
 
+    /** 无参全量读取时的字符上限(约 30k 字符);超过则截断到完整行并附带提示。 */
+    static final int READ_FILE_AUTO_TRUNCATE_CHARS = 30_000;
+
     private final FsToolSupport fs;
     private final TaskEntry task;
     private final String agentId;
@@ -144,7 +147,8 @@ public class FileTools {
     }
 
     @Tool(description = "读取文件的内容。支持可选 line_start / line_end 按 1-based 行区间读取(省略则全量返回),"
-            + "直接返回文件文本内容(纯文本),不附加行号等元信息包装。")
+            + "直接返回文件文本内容(纯文本),不附加行号等元信息包装。"
+            + "当未指定 line_start/line_end 且文件内容超过阈值时,自动截断到完整行并返回提示。")
     public String read_file(
             @ToolParam(description = "文件路径(相对任务工作区根)") String path,
             @ToolParam(description = "1-based 起始行(含);省略从首行开始", required = false) Integer line_start,
@@ -162,6 +166,28 @@ public class FileTools {
         if (total == 0) {
             return "";
         }
+
+        // 模型未指定行区间且内容过长时,自动截断到完整行(保证不截断半行)并附带提示
+        if (line_start == null && line_end == null
+                && content.length() > READ_FILE_AUTO_TRUNCATE_CHARS) {
+            int acc = 0;   // 已累积字符数(含换行)
+            int cutLine = 0; // 已纳入的行数
+            for (int i = 0; i < total; i++) {
+                int lineLen = lines.get(i).length() + 1; // +1 for \n
+                if (acc + lineLen > READ_FILE_AUTO_TRUNCATE_CHARS && i > 0) {
+                    break; // 加入本行会超限,且已有至少 1 行 → 停
+                }
+                acc += lineLen;
+                cutLine = i + 1;
+            }
+            if (cutLine < total) {
+                String truncated = String.join("\n", lines.subList(0, cutLine));
+                return "[警告] 内容过长，当前只返回前 " + cutLine + " 行，总行数 " + total
+                        + "。如果确认需要读取全部行数，请明确传入 line_start、line_end 参数。\n\n"
+                        + truncated;
+            }
+        }
+
         int start = line_start != null ? line_start : 1;
         if (start < 1) {
             start = 1;
