@@ -366,14 +366,9 @@ export default function TaskComposerSurface({
         query,
       })
         .then((list) => {
-          const merged = [...list]
-          merged.sort((left, right) => {
-            if (left.kind !== right.kind) {
-              return left.kind === 'directory' ? -1 : 1
-            }
-            return left.name.localeCompare(right.name, 'zh-CN')
-          })
-          setAtResults(merged)
+          // 排序全部交给 worker(mention.query):浏览模式目录优先+按名,搜索模式按
+          // 匹配质量打分;前端不再重排,避免目录优先打乱搜索时的匹配分顺序。
+          setAtResults(list)
           setAtLoading(false)
         })
         .catch((error) => {
