@@ -570,6 +570,21 @@ ask 管道承载第二类阻塞请求:**危险操作授权**。`PermissionGate` 
 
 **事件与持久化**:子 agent 不建独立 Task,事件与主 agent 同名、以 agentId 字段嵌套在父任务流(spawn 生命周期为 agent.started/agent.done);**每个子 agent 一个独立会话文件 `<subAgentId>.jsonl`**;冷启动重建、断线续播、ask(带 agentId)全部复用既有机制。子 agent 台账**独立落盘任务目录 `agents.json`**(形状 `{"agents":[...]}`,临时文件 + 原子 move 写入、空台账删文件)——从 meta.json 拆出,TaskSummary 不再携带 agents 数组,`tasks.list` 读 meta 的任务列表数据因此减负;台账项 = `AgentEntity.toSummary()`:agentId/kind/title/createdAt/status/latestActivity/**usage(累计)**/lastText/**context(最近一轮上下文快照 `{inputTokens, contextWindowTokens, model}`,有数据才写)**,前端经 `task.agents` 拉取。usage 事件语义:WorkerToolEventAdvisor 每轮模型调用 usage 发射前先 `addUsage` 累计进 AgentEntity——usage 事件 total 载荷 = 含本轮累计;子 agent 每轮 usage 后刷新内存台账并触发 agents.json 落盘(persistHook / 30s 定时 / 终态 finish 三路径)。
 
+### 7.14.1 任务生命周期洋葱模型（Phase 1）
+
+任务开始/结束收口采用 **洋葱模型**（Servlet Filter 风格参与式链）：节点拿到运行上下文，调用 `result = next(context)` 得到后面全部节点+内核的执行结果。`next()` 之前 = 下行（开始）阶段，之后 = 上行（结束）阶段。
+
+- **契约**：`TaskLifecycleNode`（plugin-api）、`TaskLifecycleContext`、`TaskOutcome`、`TaskKernel`——放 plugin-api `dev.everyagent.plugin.api.task` 包，插件可贡献节点。
+- **执行器**：`TaskLifecycleExecutor`（worker `task.lifecycle` 包）——按 order 升序稳定排序折叠为嵌套链，链尾接内核；`InterruptedException`→CANCELLED 兜底。
+- **临界段**：order ∈ [420, 850] 的连续 `UpstreamNode` 段共享一次 `synchronized(taskLock)`，对外表现为 order=850 的单一链位置。段内上行执行序 = order 降序（与现状 finish 持锁段逐项一致）。
+- **注册表**：`TaskLifecycleRegistry`（`plugin/registry/` 第 8 个注册表）——CopyOnWriteArrayList + PluginStateStore 过滤 + float 稳定排序。850..420 区间拒绝插件节点插入。
+- **内置节点（17 个）**：
+  - 下行 4：`persistence.track`(100) → `task.wires`(200) → `status.start`(300) → `main.agent`(390)
+  - 内核：轮次循环 `while(true){ runner.run(main); inputQueue.poll… }`
+  - 上行 13：`spawned.await`(950) → `cascade.stop`(900) → **[临界段]** `status.finalize`(850) → `concurrency.release`(800) → `log.flush`(750) → `queue.persist`(700) → `status.persist`(650) → `ledger.persist`(600) → `disk.index`(550) → `persistence.untrack`(500) → `gate.evict`(450) → `registry.remove`(420) **[/临界段]** → `workspace.activity`(350)
+- **行为零变化**：事件发射顺序、seq 语义、落盘内容与重构前逐项一致（§3.3 基线表逐字映射）。
+- **后续 Phase**：agent 层独立(Phase 2)、拦截链范式统一(Phase 3)、subagent 插件(Phase 4)、队列插件(Phase 5)。详见 `docs/design-agent-layer-onion.md`。
+
 ### 7.15 持久化与磁盘布局
 
 ```
