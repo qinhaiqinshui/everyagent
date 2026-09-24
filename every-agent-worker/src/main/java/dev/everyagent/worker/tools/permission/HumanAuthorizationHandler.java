@@ -1,5 +1,6 @@
 package dev.everyagent.worker.tools.permission;
 
+import dev.everyagent.plugin.api.permission.AuthorizationChain;
 import dev.everyagent.plugin.api.permission.AuthorizationHandler;
 import dev.everyagent.plugin.api.permission.AuthorizationHandler.AuthorizationRequest;
 import dev.everyagent.plugin.api.permission.AuthorizationHandler.AuthorizationDecision;
@@ -40,13 +41,13 @@ public class HumanAuthorizationHandler implements AuthorizationHandler {
     }
 
     @Override
-    public int order() { return 300; }
+    public String id() { return "human-authorization"; }
 
     @Override
-    public boolean applies(AuthorizationRequest req) { return true; }
+    public float order() { return 300f; }
 
     @Override
-    public AuthorizationDecision decide(AuthorizationRequest req) {
+    public AuthorizationDecision invoke(AuthorizationRequest req, AuthorizationChain next) throws Exception {
         TaskEntry t = (TaskEntry) req.task();
         List<PendingAsks.AskQuestion> questions = List.of(
                 new PendingAsks.AskQuestion("", req.prompt(), AUTHORIZE_OPTIONS));

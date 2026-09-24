@@ -30,7 +30,7 @@ public class AuthorizationHandlerRegistry {
 
     public List<AuthorizationHandler> sorted() {
         return handlers.stream()
-                .sorted(Comparator.comparingInt(AuthorizationHandler::order))
+                .sorted(Comparator.comparingDouble(AuthorizationHandler::order))
                 .toList();
     }
 }

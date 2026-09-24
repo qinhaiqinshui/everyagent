@@ -209,32 +209,20 @@ public class GrantRegistry {
     }
 
     /**
-     * 授权决议链(责任链遍历):遍历 authHandlers 列表(按 order 排序),
-     * 第一个 applies 且返回 ALLOW/DENY 的节点即收口;全部 PASS 或零节点 → 直接放行(RUN 档)。
-     * 核心不感知任何具体节点(AI 审议、无人值守、人工弹窗等均由各 handler 自行判断 applies)。
+     * 授权决议链(责任链遍历):通过 {@link AuthorizationChainExecutor} 折叠 authHandlers
+     * (按 order 排序)为嵌套链;任一节点返回 ALLOW → 放行(RUN 档);DENY → 抛
+     * {@link PermissionDeniedException};全部 PASS 或零节点 → 链尾兜底放行(RUN 档)。
+     * 核心不感知任何具体节点(AI 审议、无人值守、人工弹窗等均由各 handler 自行判断)。
      * future.complete 与 record 由 {@link #authorize} owner 路径统一执行,后来者 join 共享同一结论。
      */
     private GrantScope resolveScope(TaskEntry t, String agentId, String prompt, String grantKey) {
         AuthorizationHandler.AuthorizationRequest req = new AuthorizationHandler.AuthorizationRequest(t, agentId, grantKey, prompt);
-        for (AuthorizationHandler handler : authHandlerRegistry.sorted()) {
-            if (!handler.applies(req)) {
-                continue;
-            }
-            AuthorizationHandler.AuthorizationDecision d = handler.decide(req);
-            switch (d.type()) {
-                case ALLOW -> {
-                    return GrantScope.RUN;
-                }
-                case DENY -> {
-                    throw denyException();
-                }
-                case PASS -> {
-                    // 继续下一个节点
-                }
-            }
-        }
-        // 零节点或全部 PASS → 直接放行
-        return GrantScope.RUN;
+        AuthorizationHandler.AuthorizationDecision d = new AuthorizationChainExecutor()
+                .run(authHandlerRegistry.sorted(), req);
+        return switch (d.type()) {
+            case ALLOW, PASS -> GrantScope.RUN;
+            case DENY -> throw denyException();
+        };
     }
 
     /** 宽容解析:稳定 token 优先,退文案关键词;未识别按拒绝(安全缺省,兼容任意回传文本)。 */

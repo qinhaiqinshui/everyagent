@@ -29,7 +29,7 @@ public class ToolExecutionInterceptorRegistry {
 
     public List<ToolExecutionInterceptor> sorted() {
         return interceptors.stream()
-                .sorted(Comparator.comparingInt(ToolExecutionInterceptor::order))
+                .sorted(Comparator.comparingDouble(ToolExecutionInterceptor::order))
                 .toList();
     }
 }

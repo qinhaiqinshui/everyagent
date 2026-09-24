@@ -1,7 +1,8 @@
 package dev.everyagent.worker.task;
 
+import dev.everyagent.plugin.api.agent.AgentContext;
+import dev.everyagent.plugin.api.spi.ToolExecutionContext;
 import dev.everyagent.worker.plugin.registry.ToolExecutionInterceptorRegistry;
-import dev.everyagent.plugin.api.spi.ToolExecutionInterceptor;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
@@ -15,10 +16,8 @@ import java.util.List;
 
 /**
  * 拦截型工具调用管理器：装饰共享 ToolCallingManager，
- * 在 executeToolCalls 入口遍历 ToolExecutionInterceptor 链。
- * 第一个返回非 null 的拦截器短路，否则委托真实 manager 执行。
- *
- * <p>与 {@link LoopRepeatGuardToolManager} 同构——装饰 + 入口拦截 + 合成结果短路。
+ * 在 executeToolCalls 入口通过 {@link ToolExecutionChainExecutor} 遍历拦截链。
+ * 拦截器下行段不调 next = 短路（合成结果）；调 next = 放行到真实执行。
  *
  * <p>持有 {@link ToolExecutionInterceptorRegistry} 引用而非快照列表，
  * 每次 executeToolCalls 时从 registry.sorted() 获取最新拦截器列表，
@@ -28,10 +27,11 @@ public class InterceptingToolCallingManager implements ToolCallingManager {
 
     private final ToolCallingManager delegate;
     private final ToolExecutionInterceptorRegistry interceptorRegistry;
+    private final ToolExecutionChainExecutor chainExecutor = new ToolExecutionChainExecutor();
 
     /**
      * 当前线程绑定的任务上下文（per-run），由 {@code AgentRunner} 在执行前设置、
-     * 执行后清除。{@link ToolExecutionInterceptor} 单例通过 {@link #currentTask()} 获取
+     * 执行后清除。{@link dev.everyagent.plugin.api.spi.ToolExecutionInterceptor} 单例通过 {@link #currentTask()} 获取
      * 当前任务，读取 {@code taskFlags} 判断是否拦截。
      */
     private static final ThreadLocal<TaskEntry> CURRENT_TASK = new ThreadLocal<>();
@@ -66,12 +66,14 @@ public class InterceptingToolCallingManager implements ToolCallingManager {
             return delegate.executeToolCalls(prompt, chatResponse);
         }
         List<AssistantMessage.ToolCall> toolCalls = assistant.getToolCalls();
-        for (ToolExecutionInterceptor interceptor : interceptors) {
-            ToolExecutionResult result = interceptor.beforeToolExecution(prompt, chatResponse, toolCalls);
-            if (result != null) {
-                return result;
-            }
-        }
-        return delegate.executeToolCalls(prompt, chatResponse);
+        TaskEntry task = CURRENT_TASK.get();
+        ToolExecutionContext ctx = new ToolExecutionContextImpl(prompt, chatResponse, toolCalls, task);
+        return chainExecutor.run(interceptors, delegate, ctx);
     }
+
+    /** 简易 ToolExecutionContext 实现，将当前调用参数 + 线程绑定的 TaskEntry 封装为上下文。 */
+    private record ToolExecutionContextImpl(
+            Prompt prompt, ChatResponse chatResponse,
+            List<AssistantMessage.ToolCall> toolCalls,
+            AgentContext agentContext) implements ToolExecutionContext {}
 }
