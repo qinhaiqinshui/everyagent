@@ -21,6 +21,7 @@ import org.springframework.stereotype.Component;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.AccessDeniedException;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -414,6 +415,25 @@ public class FsToolSupport {
                 }
             }
         }
-        Files.deleteIfExists(p);
+        deleteOne(p);
+    }
+
+    /**
+     * 删除单个文件/空目录。Windows 上带只读属性的文件(典型如 git pack 的 .idx/.pack/.rev,
+     * git 默认置只读)DeleteFile 会抛 AccessDeniedException,导致整棵含 .git 的目录无法删除;
+     * 此处捕获后清掉只读属性重试一次,仍失败则抛回原异常。非 DOS 文件系统无 dos:readonly 视图,
+     * 清属性抛 UnsupportedOperationException/IOException 时同样回退抛原异常。
+     */
+    private static void deleteOne(Path p) throws IOException {
+        try {
+            Files.deleteIfExists(p);
+        } catch (AccessDeniedException e) {
+            try {
+                Files.setAttribute(p, "dos:readonly", false);
+            } catch (UnsupportedOperationException | IOException ignored) {
+                throw e;
+            }
+            Files.deleteIfExists(p);
+        }
     }
 }
