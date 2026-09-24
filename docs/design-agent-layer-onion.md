@@ -1,6 +1,6 @@
 # 设计方案：任务生命周期洋葱模型 + Agent 独立成层
 
-> 状态：**待评审**（用户确认后才实施）· v5（新增 §6：工具执行链与审核授权链同样迁移为 filter 参与式链，独立 Phase 3，不在 Phase 1 实施）
+> 状态：**待评审**（用户确认后才实施）· v6（task.agents RPC 划归 subagent 插件：其唯一消费闭环是子 agent 列表（拉取→seedAgents→agentMeta→AgentListPanel），删除插件即无使用者；agent 层只保留台账写入/恢复作为 spawn 持久化真相源）
 > 范围声明：本文覆盖整体架构（洋葱底座、agent 层独立、subagent 插件三件套、任务队列插件预留）；**本次只实施 Phase 1（洋葱底座）**，其余分期列出。
 
 ---
@@ -52,7 +52,7 @@
   │  run(agent)          同步运行单个 agent 至最终回答（现 AgentRunner，薄）        │
   │  spawn/waitFor/stop/list   子 agent 异步编排（现 SubAgentManager 核心逻辑）    │
   │  AgentEventChannel   事件出口接口（task 层实现 → 写任务流 EventLog）           │
-  │  task.agents RPC / 台账 agents.json（agent 元数据，不随插件卸载）              │
+  │  台账 agents.json 写入/恢复（spawn 持久化真相源，不随插件卸载）              │
   │  ChatClient + Advisor 生态（复用 Spring AI，红线不动）                          │
   └──────────────────────────────────┬─────────────────────────────────────────────┘
                                      ▲ 调用者（平级上层）
@@ -65,7 +65,7 @@
 
 **核心原则**：
 - **洋葱内核不直接 `runner.run`，而是调 `AgentService`**——从第一天起「任务 = 调用一个 agent（对话式）」的语义就成立；subagent 插件 = 调用一个 agent（一次性）+ 交互面（skill/UI）。两种调用模式平级。
-- **agent 层是核心，不随 subagent 插件卸载**：删除插件只失去「AI 使用子 agent 的入口与方法论」和「列表 UI」，agent 层能力（spawn/事件/台账）保留——历史任务子 agent 数据仍可渲染，其他上层仍可编程调用。
+- **agent 层是核心，不随 subagent 插件卸载**：删除插件失去「AI 使用子 agent 的入口与方法论」「列表 UI」与 **task.agents RPC（唯一消费闭环是列表，随之消失、无孤儿）**；agent 层能力（spawn/事件/**台账写入与恢复**）保留——历史任务子 agent 的消息流靠事件 payload 自足渲染（title/input/usage 都在事件里，不依赖台账 RPC），其他上层仍可编程调用。
 - 洋葱是**任务生命周期层**的编排，**不是** agent 执行循环；agent 执行循环仍由 Spring AI `ToolCallingAdvisor` 递归驱动（红线：不手搓）。
 
 ---
@@ -336,8 +336,8 @@ public interface AgentService {
 
 | 归属 | 内容 | 删除插件后 |
 |---|---|---|
-| **agent 层（核心）** | `AgentService.spawn/waitFor/stop/list`、`run`、agent 生命周期事件（agent.started/done/status）、台账 `agents.json`、`task.agents` RPC、消息流中的 agent 事件渲染（历史数据） | **保留**——其他上层仍可编程调用；历史任务子 agent 数据仍可渲染 |
-| **subagent 插件** | ① 4 个工具（run_agent/list_agents/wait_agents/stop_agent）② 1 个 skill（「子 Agent」方法论）③ 前端列表 UI（胶囊列表/信息卡/用量线） | 全部消失——AI 不再有派子 agent 的入口与方法论，前端无列表 |
+| **agent 层（核心）** | `AgentService.spawn/waitFor/stop/list`、`run`、agent 生命周期事件（agent.started/done/status）、**台账 `agents.json` 的写入与恢复**（agentLedger/writeAgents/restoreAgentLedger）、消息流中的 agent 事件渲染（历史数据，事件 payload 自足：title/input/usage 都在事件里） | **保留**——spawn 的持久化真相源与事件流渲染；其他上层仍可编程调用 |
+| **subagent 插件** | ① 4 个工具（run_agent/list_agents/wait_agents/stop_agent）② 1 个 skill（「子 Agent」方法论）③ **`task.agents` RPC**（唯一取数口，经 registerRpcMethod 注册——git 插件先例；方法名保留）④ 前端列表 UI 及其取数链（fetchTaskAgents/seedAgents 基线/agentMeta 列表消费 + AgentListPanel） | 全部消失——AI 无派子 agent 入口与方法论、前端无列表、**task.agents 无提供者也无使用者（无孤儿 RPC）** |
 
 插件是**纯薄壳**：工具方法体 = `agentService.spawn(...)` 等一行委托；skill 文案 = 使用方法论；前端组件 = 订阅 agent 层数据渲染。**不含任何执行逻辑。**
 
@@ -391,7 +391,7 @@ public record PluginSkill(String id, String name, String description, List<Strin
 |---|---|
 | 主 agent 工具集 | 无 run_agent 族（ToolProviderRegistry 已按 PluginStateStore 过滤，天然支持） |
 | system prompt / `/` 菜单 | 无「子 Agent」skill 条目（SkillContributorRegistry 过滤） |
-| 前端 | composer 上方无胶囊列表；消息流中历史 agent.started/done 事件仍渲染（核心）；`task.agents` RPC 仍可用 |
+| 前端 | composer 上方无胶囊列表（agentMeta 列表消费随之无意义，保持空置无害）；消息流中历史 agent.started/done 事件仍渲染（核心，事件 payload 自足）；`task.agents` RPC 无提供者（打开任务的拉取调用点已条件化跳过，失败仅 warn 不阻断） |
 | worker 运行中任务的子 agent | 不受影响（已在跑的由 agent 层管理至终态） |
 
 打包：`every-agent-app` pom 增加模块依赖；**吸取 git 插件漏挂教训**——迁移必须同步 app pom，加 CI 一致性检查（插件模块 ↔ app pom）。
@@ -484,7 +484,7 @@ public interface AuthorizationHandler {
 | **1（本次）洋葱底座** | plugin-api 节点契约（`TaskLifecycleNode`/`TaskLifecycleContext`/`TaskOutcome`/`TaskKernel`）+ `registerTaskLifecycleNode`；`TaskLifecycleRegistry`（float 排序）+ `TaskOnion`；17 个内置节点拆分（下行 4 + 上行 13，finish/runTask/rpcTaskRun 逻辑**逐字映射**，不改行为）；`runTask` 重写为洋葱执行；单测（下行顺序/否决短路/逆序收口/try-finally 必达/幂等/取消/停机中断收口/锁分段）；ARCHITECTURE.md 新 §7.x | worker 行为零变化（事件顺序、seq、落盘字节级兼容），可回归验证 |
 | **2 agent 层** | `dev.everyagent.worker.agent` 包收敛 + `AgentContext`/`AgentEventChannel` 解耦 + `AgentService` + `AgentDispatcher` 废止 + `SubAgentManager` 编排下沉 | agent 层边界成立（能力全部留在核心），其他插件可依赖 |
 | **3 拦截链范式统一** | 工具执行链 + 授权决议链（含 PermissionGate 内部三链）迁移为 filter 形态（§6）；`ToolExecutionContext` 显式化替代 ThreadLocal；两个 SPI 使用者同步迁移 | 三链一种范式；工具链获得上行钩子、授权链获得决议后包裹 |
-| **4 subagent 插件** | 三件套迁移（工具 + SkillContributor + 前端面板）；plugin-api 新增 `SkillContributor` SPI + 注册表；BuiltInSkills 合并改造；web `ComposerPanelCtx` 扩展 `selectAgent`；app pom 挂载 + CI 一致性检查 | 删除插件 = 无子 agent 工具/skill/前端列表，agent 层完好 |
+| **4 subagent 插件** | 三件套迁移（工具 + SkillContributor + 前端面板**及取数链**：task.agents RPC 迁插件注册、taskStream 的 fetchTaskAgents 调用点条件化、agentMeta 基线灌入随面板走）；plugin-api 新增 `SkillContributor` SPI + 注册表；BuiltInSkills 合并改造；web `ComposerPanelCtx` 扩展 `selectAgent`；app pom 挂载 + CI 一致性检查 | 删除插件 = 无子 agent 工具/skill/前端列表/**task.agents RPC**，agent 层（台账写入/恢复/事件）完好 |
 | **5（未来）队列插件** | 形态三成对节点（下行段 enqueue 阻塞排队 / finally 出队广播）+ RPC 边缘预检扩展点 | 底座已就绪，不在本设计实施范围 |
 
 ---
@@ -512,6 +512,7 @@ public interface AuthorizationHandler {
 4. **原 L4（等子 agent/级联停）**：拆为 `spawned.await`（950）+ `cascade.stop`（900）两个上行节点，Phase 1 直接包含（收口动作仅为方法搬移，触碰 `SubAgentManager` 面极小——`awaitAllBeforeFinish`/`stopAll` 两个既有方法调用）。
 5. **节点为 Servlet Filter 参与式链**（v4）：`result = next(ctx)`；下行=next 前、上行=next 后；收口序=进入序逆序。
 6. **工具执行链与审核授权链同样迁移为 filter 形态**（v5）：写入 §6，独立 Phase 3 实施，Phase 1 不动。
+7. **task.agents RPC 归 subagent 插件**（v6）：其唯一消费闭环是子 agent 列表（TaskPacketView 拉取 → seedAgents 灌 agentMeta 基线 → AgentListPanel）；消息流 agent 卡片靠事件 payload 自足不依赖它。删除插件 = RPC 无提供者也无使用者。agent 层保留台账写入/恢复（spawn 持久化真相源）。
 
 ## 10. 遗留待确认
 
