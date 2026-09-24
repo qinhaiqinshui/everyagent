@@ -65,11 +65,7 @@ public class BuiltInSkills {
                         "## 适用条件\n"+
 "- 当某个任务可以并行执行来提高效率时，交给子 Agent 执行。\n"+
 "- 当你只需要一个结果，但是探索这个结果会读取大量无用历史上下文时，可以派发子Agent来帮你探索并得出你要的结论。\n"+
-"- 当需要等待、停止、重启子 Agent，或查看它们的运行状态与结果时，使用本技能。\n"+
-"## 错误处理\n"+
-"- 如果子 Agent 出错，为了利用子 Agent 已积累的上下文，尽量先解决问题后复用该子 Agent（传入同一 agentId 续跑）；否则即使重新派发新子 Agent 也会遇到同样问题。\n"+
-"- 如果你无法解决该问题，可以让子 Agent 重试一次（以同一 agentId 续跑重试）。\n"+
-"- 如果子 Agent 重试后仍然失败，你要报告给用户，由用户决定下一步。",
+"- 当需要等待、停止、重启子 Agent，或查看它们的运行状态与结果时，使用本技能。",
                         knowledgeRoot.resolve("agent-dispatch").resolve("skill.md").toString(),
                         List.of("run_agent", "list_agents", "wait_agents", "stop_agent")),
                 new Skill("plan", "计划模式",
