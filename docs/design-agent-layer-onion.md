@@ -1,6 +1,6 @@
 # 设计方案：任务生命周期洋葱模型 + Agent 独立成层
 
-> 状态：**待评审**（用户确认后才实施）· v8（agent 层零持久化职责、只管内存态：执行态/事件发射端口/会话内存对象；一切落盘——事件 jsonl、轮次索引、meta、台账投影——都在 task 层或插件域；AgentContext 去掉台账方法，与 v7 台账归插件自洽）
+> 状态：**待评审**（用户确认后才实施）· v9（模型配置/密钥沉为「模型与配置域」基础层：与调用者无关的底层功能，task 层只在创建时冻结快照并持有引用；task 层定性为 agent 的一种编排+前端展示，未来可能插件化、与 workflow 等平级编排共存）
 > 范围声明：本文覆盖整体架构（洋葱底座、agent 层独立、subagent 插件三件套、任务队列插件预留）；**本次只实施 Phase 1（洋葱底座）**，其余分期列出。
 
 ---
@@ -47,26 +47,36 @@
   │  节点 = 单一职责动作（一节点一事）；order 为 float，插件可任意插位。            │
   │  未来任务队列插件 = 在 100~400 空隙插成对节点（enqueue 阻塞/finally 出队）。  │
   └──────────────────────────────────┬─────────────────────────────────────────────┘
+                                     ▼ 都调用（平级上层）
+  ┌─ 调用者层（agent 层的编排/入口形态，互相平级） ─────────────────────────────────┐
+  │  Task 编排层（现状核心：洋葱 + 轮次循环 + task.* RPC + 前端展示；               │
+  │               未来可能插件化——定位是 agent 的一种编排，非唯一形态）             │
+  │  subagent 插件（工具 + skill + task.agents RPC + 前端列表 + 台账投影）         │
+  │  workflow 层（未来：插件接入的另一种编排形态，与 task 平级，复用同一底座）      │
+  │  其他插件（如 auth-review 的 AiAuthReviewer 正规化）                           │
+  └──────────────────────────────────┬─────────────────────────────────────────────┘
                                      ▼
-  ┌──────────────────────────── Agent 层（AgentService，核心） ────────────────────┐
+  ┌──────────────────────── Agent 层（纯内存执行引擎，零持久化） ───────────────────┐
   │  run(agent)          同步运行单个 agent 至最终回答（现 AgentRunner，薄）        │
   │  spawn/waitFor/stop/list   子 agent 异步编排（现 SubAgentManager 核心逻辑）    │
-  │  AgentEventChannel   事件出口接口（task 层实现 → 写任务流 EventLog）           │
+  │  AgentEventChannel   事件发射端口（内存 append；落盘由调用者层承接）           │
   │  运行期 spawn 注册表（纯内存：实体/futures/终态——waitFor/stop/list 执行态）  │
   │  ChatClient + Advisor 生态（复用 Spring AI，红线不动）                          │
   └──────────────────────────────────┬─────────────────────────────────────────────┘
-                                     ▲ 调用者（平级上层）
-            ┌────────────────────────┼────────────────────────┐
-            │                        │                        │
-      Task 层（内核调用）      subagent 插件              其他插件
-      （洋葱 + 轮次循环）      （工具 + skill + 前端 UI   （如 auth-review 的
-                                三件套，薄壳）            AiAuthReviewer 正规化）
+                                     ▼ 依赖
+  ┌──────────── 模型与配置域（基础层：与调用者无关的底层功能） ──────────────────────┐
+  │  ModelSnapshot（配置快照类型）· ConfigStore（配置解析 + 密钥管理）              │
+  │  ChatModelFactory（快照 → ChatModel/options）· 模型池容灾 + 限流               │
+  │  任何上层（task / workflow / 插件）要跑 agent 都从这里取模型与密钥              │
+  └───────────────────────────────────────────────────────────────────────────────┘
 ```
 
 **核心原则**：
 - **洋葱内核不直接 `runner.run`，而是调 `AgentService`**——从第一天起「任务 = 调用一个 agent（对话式）」的语义就成立；subagent 插件 = 调用一个 agent（一次性）+ 交互面（skill/UI）。两种调用模式平级。
 - **agent 层是核心，不随 subagent 插件卸载**：删除插件失去「AI 使用子 agent 的入口与方法论」「列表 UI」「task.agents RPC」与**整个子 agent 台账概念（agents.json 的读写全部停止——它是插件维护的事件投影，磁盘数据原地保留不删）**；agent 层能力（spawn/事件/运行期 spawn 注册表）保留——历史任务子 agent 的消息流靠事件 payload 自足渲染（title/input/usage 都在事件里），其他上层仍可编程调用。
 - 洋葱是**任务生命周期层**的编排，**不是** agent 执行循环；agent 执行循环仍由 Spring AI `ToolCallingAdvisor` 递归驱动（红线：不手搓）。
+- **task 层 = agent 的一种编排**（洋葱 + 轮次循环 + RPC + 前端展示），不是 agent 层的宿主；未来可能插件化，届时 workflow 等平级编排形态共用 agent 层与模型与配置域。
+- **模型与配置域是基础层**（与调用者无关）：类型定义（ModelSnapshot）、解析与密钥（ConfigStore）、实例化（ChatModelFactory）、容灾限流都沉在此；task 层只在**任务创建时**经它解析并冻结快照、持有引用（任务运行期模型不变的任务语义），不拥有这些能力。
 
 ---
 
@@ -269,7 +279,9 @@ filter 模型下收口序恒等于进入序的逆序（同一 order 决定两端
 
 **本 Phase 在 worker 内建包 `dev.everyagent.worker.agent`**（物理分包、清晰边界），Maven 独立模块化（`every-agent-agent`）作为后续可选步骤——先解逻辑依赖，再解物理依赖，避免一次迁移面过大。
 
-迁入 agent 包：`AgentRunner`、`AgentClientFactory`、`AgentEntity`、`ChatModelFactory`、`WorkerToolEventAdvisor`、`LoopRepeatGuard*`、`AgentCancelledException`、`AgentActivity`。
+迁入 agent 包：`AgentRunner`、`AgentClientFactory`、`AgentEntity`、`WorkerToolEventAdvisor`、`LoopRepeatGuard*`、`AgentCancelledException`、`AgentActivity`。
+
+**归模型与配置域（基础层，不进 agent 包——agent 层依赖它、不拥有它）**：`ChatModelFactory`（快照→ChatModel 实例化）、`ModelPoolChatModel`/`RateLimitedChatModel`（池容灾/限流）、`ConfigStore` 的解析与密钥部分、`ModelSnapshot` 类型。`SubAgentManager`/`TaskManager` 现对它们的调用改为经基础层接口（依赖方向：调用者层/agent 层 → 基础层）。
 
 **不迁**（任务流职责）：`TaskEvents`、`EventLog`、`TaskStore`、`RoundIndex*`、`FileChange*`、`InputQueue`——它们留在 task 层，经接口面向 agent 层。
 
@@ -281,7 +293,7 @@ filter 模型下收口序恒等于进入序的逆序（同一 order 决定两端
 | 会话历史磁盘重建（ConversationLoader，再运行） | task 层（load 后把 List\<Message\> 传给 buildMainAgent；agent 层无 from-disk 恢复 API） |
 | 轮次索引 rounds.jsonl / 悬空队列 queue.jsonl / meta.json | task 层（RoundIndexStore / TaskStore） |
 | 子 agent 台账 agents.json | subagent 插件域（事件投影，v7） |
-| 模型配置快照/密钥 | task 层（TaskEntry 冻结快照） |
+| 模型配置快照/密钥 | **模型与配置域（基础层）**：类型/解析/密钥/实例化/容灾都在此；task 层仅创建时冻结快照并持有引用（TaskEntry 字段，内存+meta 落盘），workflow 等未来上层同样从基础层获取 |
 
 agent 层的内存态清单：AgentEntity（conversation/options/tools/usage 累计/终态）、spawn 注册表（实体表/futures）、AgentActivity 活跃快照——任务终态即随洋葱收口释放，不提供恢复。子 agent 会话"一次性不重建"为既有语义（事件流已完整落盘，重建属读路径=插件/前端的事）。
 
@@ -336,6 +348,7 @@ public interface AgentService {
 | **Task 层**（洋葱内核） | `agentService.run(main)` × 轮次循环（对话式：多轮 + 输入队列 + waiting-user） |
 | **subagent 插件** | `spawn/waitFor/stop/list`（一次性：单任务跑完即止）+ skill + 前端列表 UI（§5） |
 | **其他插件** | 如 auth-review 的 `AiAuthReviewer` 从自建 AgentEntity 旁路改为正规调 agent 层（收编现存的「agent 层被旁路使用」先例） |
+| **workflow 层（未来）** | 插件接入的另一种编排形态：从模型与配置域取配置，按自己的编排语义（DAG/步骤/审批流…）调 `AgentService`，与 task 层平级共用底座——本设计通过「agent 层不含编排、模型与配置域不含调用者语义」为它留位 |
 
 ---
 
@@ -495,7 +508,7 @@ public interface AuthorizationHandler {
 | Phase | 内容 | 交付 |
 |---|---|---|
 | **1（本次）洋葱底座** | plugin-api 节点契约（`TaskLifecycleNode`/`TaskLifecycleContext`/`TaskOutcome`/`TaskKernel`）+ `registerTaskLifecycleNode`；`TaskLifecycleRegistry`（float 排序）+ `TaskOnion`；17 个内置节点拆分（下行 4 + 上行 13，finish/runTask/rpcTaskRun 逻辑**逐字映射**，不改行为）；`runTask` 重写为洋葱执行；单测（下行顺序/否决短路/逆序收口/try-finally 必达/幂等/取消/停机中断收口/锁分段）；ARCHITECTURE.md 新 §7.x | worker 行为零变化（事件顺序、seq、落盘字节级兼容），可回归验证 |
-| **2 agent 层** | `dev.everyagent.worker.agent` 包收敛 + `AgentContext`/`AgentEventChannel` 解耦 + `AgentService` + `AgentDispatcher` 废止 + `SubAgentManager` 编排下沉 | agent 层边界成立（能力全部留在核心），其他插件可依赖 |
+| **2 agent 层** | `dev.everyagent.worker.agent` 包收敛 + `AgentContext`/`AgentEventChannel` 解耦 + `AgentService` + `AgentDispatcher` 废止 + `SubAgentManager` 编排下沉 + **模型与配置域确立**（ChatModelFactory/ConfigStore 解析与密钥/模型池归基础层，agent 包与 task 层依赖之） | agent 层边界成立（纯内存执行引擎）+ 模型与配置基础层可被平级上层复用 |
 | **3 拦截链范式统一** | 工具执行链 + 授权决议链（含 PermissionGate 内部三链）迁移为 filter 形态（§6）；`ToolExecutionContext` 显式化替代 ThreadLocal；两个 SPI 使用者同步迁移 | 三链一种范式；工具链获得上行钩子、授权链获得决议后包裹 |
 | **4 subagent 插件** | 三件套迁移（工具 + SkillContributor + 前端面板**及取数链**：task.agents RPC 迁插件注册、taskStream 的 fetchTaskAgents 调用点条件化、agentMeta 基线灌入随面板走）+ **台账迁移**（agentLedger/writeAgents/restoreAgentLedger/30s 定时快照/persistHook→插件的事件投影：worker 侧新增任务事件观测 SPI 供插件订阅 agent.*/usage；`ledger.persist` 洋葱节点改插件贡献）；plugin-api 新增 `SkillContributor` SPI + 注册表；BuiltInSkills 合并改造；web `ComposerPanelCtx` 扩展 `selectAgent`；app pom 挂载 + CI 一致性检查 | 删除插件 = 无子 agent 工具/skill/前端列表/task.agents RPC/**台账读写**，agent 层（spawn 执行态/事件）完好 |
 | **5（未来）队列插件** | 形态三成对节点（下行段 enqueue 阻塞排队 / finally 出队广播）+ RPC 边缘预检扩展点 | 底座已就绪，不在本设计实施范围 |
@@ -528,6 +541,7 @@ public interface AuthorizationHandler {
 7. **task.agents RPC 归 subagent 插件**（v6）：其唯一消费闭环是子 agent 列表（TaskPacketView 拉取 → seedAgents 灌 agentMeta 基线 → AgentListPanel）；消息流 agent 卡片靠事件 payload 自足不依赖它。
 8. **子 agent 台账整体归插件域**（v7）：agents.json 是插件维护的事件投影而非 agent 层真相源——删除插件 = 台账概念消失（无读无写），磁盘数据不删。`ledger.persist` 洋葱节点 Phase 4 改由插件贡献；插件经新增的任务事件观测 SPI 订阅 agent.*/usage 维护投影（具体 SPI 形态 Phase 4 定）。
 9. **agent 层零持久化、只管内存态**（v8）：执行态（AgentEntity/spawn 注册表/usage 累计）+ 事件发射端口 + 会话内存对象；事件 jsonl/轮次索引/meta/台账/会话重建全在 task 层或插件域（§4.1 持久化边界表）。AgentContext 去掉 updateSpawnedLedger（advisor 的 SUB 台账刷新随之取消，台账由插件事件订阅承接）。
+10. **模型配置/密钥归模型与配置域（基础层）**（v9）：ModelSnapshot 类型/ConfigStore 解析与密钥/ChatModelFactory/模型池容灾限流沉为基础层，与调用者无关；task 层只在创建时冻结快照并持有引用（任务运行期模型不变）。**task 层定性**：agent 的一种编排（洋葱+轮次+RPC+前端展示），未来可能插件化，与 workflow 等平级编排形态共用 agent 层与基础层——本次不实施 task 层插件化，仅以分层边界为其留位。
 
 ## 10. 遗留待确认
 
