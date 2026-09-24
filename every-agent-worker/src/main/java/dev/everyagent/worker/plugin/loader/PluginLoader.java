@@ -9,6 +9,7 @@ import dev.everyagent.plugin.api.WorkerPluginContext;
 import dev.everyagent.worker.plugin.WorkerPluginContextImpl;
 import dev.everyagent.plugin.api.WorkerServices;
 import dev.everyagent.worker.plugin.registry.AdvisorProviderRegistry;
+import dev.everyagent.worker.plugin.registry.AgentDispatcherRegistry;
 import dev.everyagent.worker.plugin.registry.AuthorizationHandlerRegistry;
 import dev.everyagent.worker.plugin.registry.SandboxProviderRegistry;
 import dev.everyagent.worker.plugin.registry.SearchProviderRegistry;
@@ -64,6 +65,7 @@ public class PluginLoader {
     private final AdvisorProviderRegistry advisorRegistry;
     private final ToolProviderRegistry toolRegistry;
     private final SandboxProviderRegistry sandboxRegistry;
+    private final AgentDispatcherRegistry dispatcherRegistry;
     private final SearchProviderRegistry searchRegistry;
     private final AuthorizationHandlerRegistry authHandlerRegistry;
     private final ToolExecutionInterceptorRegistry toolInterceptorRegistry;
@@ -79,6 +81,7 @@ public class PluginLoader {
             AdvisorProviderRegistry advisorRegistry,
             ToolProviderRegistry toolRegistry,
             SandboxProviderRegistry sandboxRegistry,
+            AgentDispatcherRegistry dispatcherRegistry,
             SearchProviderRegistry searchRegistry,
             AuthorizationHandlerRegistry authHandlerRegistry,
             ToolExecutionInterceptorRegistry toolInterceptorRegistry,
@@ -91,6 +94,7 @@ public class PluginLoader {
         this.advisorRegistry = advisorRegistry;
         this.toolRegistry = toolRegistry;
         this.sandboxRegistry = sandboxRegistry;
+        this.dispatcherRegistry = dispatcherRegistry;
         this.searchRegistry = searchRegistry;
         this.authHandlerRegistry = authHandlerRegistry;
         this.toolInterceptorRegistry = toolInterceptorRegistry;
@@ -256,7 +260,7 @@ public class PluginLoader {
             // 构造 WorkerPluginContext
             WorkerPluginContext ctx = new WorkerPluginContextImpl(id,
                     advisorRegistry, toolRegistry, sandboxRegistry,
-                    searchRegistry,
+                    dispatcherRegistry, searchRegistry,
                     authHandlerRegistry, toolInterceptorRegistry,
                     lifecycleRegistry, rpcDispatcher, slashRegistry, services, config);
 

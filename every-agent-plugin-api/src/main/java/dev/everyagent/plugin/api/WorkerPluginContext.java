@@ -4,6 +4,7 @@ import dev.everyagent.plugin.api.permission.AuthorizationHandler;
 import dev.everyagent.plugin.api.rpc.RpcMethod;
 import dev.everyagent.plugin.api.slash.SlashProvider;
 import dev.everyagent.plugin.api.spi.AdvisorProvider;
+import dev.everyagent.plugin.api.spi.AgentDispatcher;
 import dev.everyagent.plugin.api.spi.SandboxProvider;
 import dev.everyagent.plugin.api.spi.SearchProvider;
 import dev.everyagent.plugin.api.spi.ToolExecutionInterceptor;
@@ -31,6 +32,9 @@ public interface WorkerPluginContext {
 
     /** 注册 SandboxProvider（沙箱后端提供者）。 */
     void registerSandboxProvider(SandboxProvider provider);
+
+    /** 注册 AgentDispatcher（子 agent 调度策略）。 */
+    void registerAgentDispatcher(AgentDispatcher dispatcher);
 
     /** 注册 SearchProvider（搜索后端）。 */
     void registerSearchProvider(SearchProvider provider);
