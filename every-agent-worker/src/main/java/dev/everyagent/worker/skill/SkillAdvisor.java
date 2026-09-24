@@ -13,19 +13,21 @@ import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.core.Ordered;
 
+import dev.everyagent.plugin.api.skill.PluginSkill;
 import dev.everyagent.worker.os.OsSandbox;
 import dev.everyagent.worker.os.wsl.WslPathMapper;
+import dev.everyagent.worker.plugin.registry.SkillContributorRegistry;
 
 /**
- * 把激活的内置 skill 以<b>渐进式披露</b>形式注入 system prompt(对应 nagent 的
+ * 把激活的 skill 以<b>渐进式披露</b>形式注入 system prompt(对应 nagent 的
  * skill 知识 seed 到 /skills;披露方式改为「索引进提示词、正文按需 read_file」)。
  *
  * <p>Spring AI 2.0 没有内置 Skill 抽象;本 advisor 在 {@link #before} 阶段把
- * {@link BuiltInSkills#getActiveSkills()} 的「标题 + 一句话描述 + 知识包路径」清单以
- * 额外 {@link SystemMessage} 插入到首部系统指令区之后(不落会话末位),不改动会话中
- * 既有的 system message——完全复用 Spring AI 的 prompt / advisor
- * 原语,不手搓 prompt 拼接。知识包正文不在此注入:文件已由 {@code BuiltInSkills#materialize}
- * 物化到系统技能目录 {@code <系统目录>/skills/}(§13.8,对 AI 工具只读放行),
+ * {@link BuiltInSkills#getActiveSkills()} + {@link SkillContributorRegistry#getSkills()}
+ * 的「标题 + 一句话描述 + 知识包路径」清单以额外 {@link SystemMessage} 插入到首部
+ * 系统指令区之后(不落会话末位),不改动会话中既有的 system message——完全复用
+ * Spring AI 的 prompt / advisor 原语,不手搓 prompt 拼接。知识包正文不在此注入:
+ * 文件已物化到系统技能目录 {@code <系统目录>/skills/}(§13.8,对 AI 工具只读放行),
  * AI 需要执行某技能时自行 {@code read_file} 按知识包绝对路径读取,
  * 避免完整方法论每轮全量占用上下文。
  *
@@ -34,16 +36,59 @@ import dev.everyagent.worker.os.wsl.WslPathMapper;
  */
 public class SkillAdvisor implements BaseAdvisor {
 
-    private final List<Skill> skills;
+    private final BuiltInSkills builtInSkills;
+    private final SkillContributorRegistry skillContributorRegistry;
     private final OsSandbox osSandbox;
 
-    public SkillAdvisor(List<Skill> skills, OsSandbox osSandbox) {
-        this.skills = skills;
+    public SkillAdvisor(BuiltInSkills builtInSkills, SkillContributorRegistry skillContributorRegistry,
+            OsSandbox osSandbox) {
+        this.builtInSkills = builtInSkills;
+        this.skillContributorRegistry = skillContributorRegistry;
         this.osSandbox = osSandbox;
     }
 
-    public SkillAdvisor(BuiltInSkills builtInSkills, OsSandbox osSandbox) {
-        this(builtInSkills.getActiveSkills(), osSandbox);
+    /**
+     * 兼容旧构造器（无 SkillContributorRegistry，不合并插件贡献的 skill）。
+     * 仅用于测试或无插件场景。
+     */
+    public SkillAdvisor(List<Skill> skills, OsSandbox osSandbox) {
+        this.builtInSkills = null;
+        this.skillContributorRegistry = null;
+        this.osSandbox = osSandbox;
+        this.cachedSkills = skills;
+    }
+
+    /** 缓存的 skill 列表（仅旧构造器路径使用；新路径每次 before() 合并）。 */
+    private List<Skill> cachedSkills;
+
+    /**
+     * 合并内置 skill + 插件贡献的 skill。
+     * 内置优先；按 pluginId + skillId 去重（内置 skill 的 id 与插件贡献的同 id 时内置优先）。
+     */
+    private List<Skill> mergedSkills() {
+        if (cachedSkills != null) {
+            return cachedSkills;
+        }
+        List<Skill> merged = new ArrayList<>();
+        java.util.Set<String> seen = new java.util.HashSet<>();
+        // 内置 active skill 优先
+        if (builtInSkills != null) {
+            for (Skill s : builtInSkills.getActiveSkills()) {
+                if (seen.add(s.id())) {
+                    merged.add(s);
+                }
+            }
+        }
+        // 插件贡献的 skill
+        if (skillContributorRegistry != null) {
+            for (PluginSkill ps : skillContributorRegistry.getSkills()) {
+                if (seen.add(ps.id())) {
+                    merged.add(new Skill(ps.id(), ps.title(), ps.description(),
+                            ps.knowledgePath(), ps.toolIds()));
+                }
+            }
+        }
+        return merged;
     }
 
     @Override
@@ -60,6 +105,7 @@ public class SkillAdvisor implements BaseAdvisor {
 
     @Override
     public ChatClientRequest before(ChatClientRequest chatClientRequest, AdvisorChain advisorChain) {
+        List<Skill> skills = mergedSkills();
         if (skills.isEmpty()) {
             return chatClientRequest;
         }

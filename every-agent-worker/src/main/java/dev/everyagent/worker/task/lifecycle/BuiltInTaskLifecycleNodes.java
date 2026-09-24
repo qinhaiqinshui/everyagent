@@ -50,7 +50,7 @@ public class BuiltInTaskLifecycleNodes {
     void registerAll() {
         // 下行节点
         registry.register(new PersistenceTrackNode(store, streamSources), "worker");
-        registry.register(new TaskWiresNode(store, pool), "worker");
+        registry.register(new TaskWiresNode(pool), "worker");
         registry.register(new StatusStartNode(pool), "worker");
         registry.register(new MainAgentNode(), "worker");
         // 上行节点（按 order 从高到低注册，仅影响同 order 的稳定排序兜底）
@@ -61,7 +61,6 @@ public class BuiltInTaskLifecycleNodes {
         registry.register(new LogFlushNode(store), "worker");
         registry.register(new QueuePersistNode(store), "worker");
         registry.register(new StatusPersistNode(store), "worker");
-        registry.register(new LedgerPersistNode(store), "worker");
         registry.register(new DiskIndexNode(store), "worker");
         registry.register(new PersistenceUntrackNode(store, streamSources), "worker");
         registry.register(new GateEvictNode(gate), "worker");

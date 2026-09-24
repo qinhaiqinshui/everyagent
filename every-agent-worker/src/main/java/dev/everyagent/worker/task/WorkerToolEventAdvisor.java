@@ -201,10 +201,8 @@ public class WorkerToolEventAdvisor extends ToolCallingAdvisor {
                 a.recordLastRound(roundUsage, a.usageRef().get(), contextWindowTokens(), a.options.getModel());
                 // 子 agent:每轮 usage 后刷新内存台账(agents.json 承载最新用量/上下文,崩溃冷启动
                 // 与 list_agents/wait_agents 均以台账为准)并异步触发落盘;主 agent 不进台账。
-                if (a.kind == AgentEntity.Kind.SUB) {
-                    a.task.agentLedger.put(a.agentId, a.toSummary());
-                    a.task.persist();
-                }
+                // Phase 4: 台账已迁 subagent 插件(事件投影),usage 事件已由上文 events.usage() 发射,
+                // 插件经 EventLog.Listener 订阅维护台账,此处不再直接写 agentLedger。
                 // 主 agent:记录最近一轮上下文用量(任务列表/聊天页电池数据源,随 meta 持久化)
                 // → 触发任务列表用量实时广播(task.updated,每轮一次)。
                 if (a.kind == AgentEntity.Kind.MAIN) {

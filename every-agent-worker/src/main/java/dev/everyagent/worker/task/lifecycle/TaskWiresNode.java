@@ -7,22 +7,19 @@ import dev.everyagent.plugin.api.task.TaskOutcome;
 import dev.everyagent.worker.hub.EventSink;
 import dev.everyagent.worker.proto.Channels;
 import dev.everyagent.worker.proto.Events;
-import dev.everyagent.worker.task.TaskStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * 下行节点(order=200)：注入 onUsageBroadcast / persistHook 钩子。
+ * 下行节点(order=200)：注入 onUsageBroadcast 钩子。
  */
 public final class TaskWiresNode implements TaskLifecycleNode {
 
     private static final Logger log = LoggerFactory.getLogger(TaskWiresNode.class);
 
-    private final TaskStore store;
     private final EventSink eventSink;
 
-    public TaskWiresNode(TaskStore store, EventSink eventSink) {
-        this.store = store;
+    public TaskWiresNode(EventSink eventSink) {
         this.eventSink = eventSink;
     }
 
@@ -43,11 +40,6 @@ public final class TaskWiresNode implements TaskLifecycleNode {
             } catch (RuntimeException e) {
                 log.debug("任务用量广播失败 task={}", t.taskId, e);
             }
-        });
-        // wireAgentPersist
-        ctx.onPersistHook(() -> {
-            if (t.status.terminal()) return;
-            store.writeAgents(t.taskId, t.agentLedger.values());
         });
         return next.proceed(ctx);
     }

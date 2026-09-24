@@ -243,31 +243,6 @@ public final class TaskEntry implements TaskInfo, AgentContext {
     public volatile AgentEntity main;
 
     /**
-     * 子 agent 元数据台账(agentId → AgentEntity.toSummary 序列化):
-     * 创建/复用/终态收口/每轮 usage 时同步刷新,由 TaskStore.writeAgents 独立落盘 agents.json
-     * (从 meta.json 拆出,减轻 tasks.list 任务列表数据);
-     * 冷启动续跑时恢复,list_agents/wait_agents 据此在无运行实体时仍返回历史摘要。
-     * ConcurrentHashMap:子 agent 线程收口写、主 agent 线程遍历读(并发安全,弱一致)。
-     * 展示顺序由 list_agents 按 createdAt 稳定排序,不依赖遍历序。
-     */
-    public final Map<String, ObjectNode> agentLedger = new ConcurrentHashMap<>();
-
-    /** agent 台账变化后的持久化钩子(TaskManager 注入 store.writeAgents;失败不阻塞任务)。 */
-    public volatile Runnable persistHook;
-
-    /** 触发 agent 台账持久化(收口/定时轮询共用;终态由 finish 统一落盘)。 */
-    public void persist() {
-        Runnable h = persistHook;
-        if (h != null) {
-            try {
-                h.run();
-            } catch (RuntimeException ignored) {
-                // 持久化失败不阻塞 agent 执行
-            }
-        }
-    }
-
-    /**
      * 记录最近一轮主 agent 实测 usage(上下文窗口占用口径)。
      * 由 WorkerToolEventAdvisor 在主 agent 模型调用末帧调用;子 agent 用量忽略。
      */
@@ -339,8 +314,6 @@ public final class TaskEntry implements TaskInfo, AgentContext {
         if (powershellEnabled) {
             n.put("powershellEnabled", true);
         }
-        // 子 agent 台账不随 meta 落盘:独立写 agents.json(TaskStore.writeAgents),
-        // 避免任务列表(tasks.list 读 meta)携带全量子 agent 摘要导致数据膨胀。
         // slash 任务级 token(仅 slash 层存储、业务方不读;随 meta 落盘,冷启动续跑回读)。
         List<String> slashTokens = slashTaskTokens();
         if (!slashTokens.isEmpty()) {

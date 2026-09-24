@@ -12,6 +12,7 @@ import dev.everyagent.worker.plugin.registry.AdvisorProviderRegistry;
 import dev.everyagent.worker.plugin.registry.AuthorizationHandlerRegistry;
 import dev.everyagent.worker.plugin.registry.SandboxProviderRegistry;
 import dev.everyagent.worker.plugin.registry.SearchProviderRegistry;
+import dev.everyagent.worker.plugin.registry.SkillContributorRegistry;
 import dev.everyagent.worker.plugin.registry.ToolExecutionInterceptorRegistry;
 import dev.everyagent.worker.plugin.registry.ToolProviderRegistry;
 import dev.everyagent.worker.plugin.registry.TaskLifecycleRegistry;
@@ -70,6 +71,7 @@ public class PluginLoader {
     private final ToolExecutionInterceptorRegistry toolInterceptorRegistry;
     private final TaskLifecycleRegistry lifecycleRegistry;
     private final TaskAdmissionPolicyRegistry admissionPolicyRegistry;
+    private final SkillContributorRegistry skillContributorRegistry;
     private final RpcDispatcher rpcDispatcher;
     private final SlashCommandRegistry slashRegistry;
     private final WorkerServices services;
@@ -86,6 +88,7 @@ public class PluginLoader {
             ToolExecutionInterceptorRegistry toolInterceptorRegistry,
             TaskLifecycleRegistry lifecycleRegistry,
             TaskAdmissionPolicyRegistry admissionPolicyRegistry,
+            SkillContributorRegistry skillContributorRegistry,
             RpcDispatcher rpcDispatcher,
             SlashCommandRegistry slashRegistry,
             WorkerServices services) {
@@ -99,6 +102,7 @@ public class PluginLoader {
         this.toolInterceptorRegistry = toolInterceptorRegistry;
         this.lifecycleRegistry = lifecycleRegistry;
         this.admissionPolicyRegistry = admissionPolicyRegistry;
+        this.skillContributorRegistry = skillContributorRegistry;
         this.rpcDispatcher = rpcDispatcher;
         this.slashRegistry = slashRegistry;
         this.services = services;
@@ -263,6 +267,7 @@ public class PluginLoader {
                     searchRegistry,
                     authHandlerRegistry, toolInterceptorRegistry,
                     lifecycleRegistry, admissionPolicyRegistry,
+                    skillContributorRegistry,
                     rpcDispatcher, slashRegistry, services, config);
 
             // 调用 activate()

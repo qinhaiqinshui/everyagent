@@ -5,6 +5,7 @@ import dev.everyagent.plugin.api.WorkerServices;
 import dev.everyagent.plugin.api.PluginConfig;
 import dev.everyagent.plugin.api.permission.AuthorizationHandler;
 import dev.everyagent.plugin.api.rpc.RpcMethod;
+import dev.everyagent.plugin.api.skill.SkillContributor;
 import dev.everyagent.plugin.api.slash.SlashProvider;
 import dev.everyagent.plugin.api.spi.AdvisorProvider;
 import dev.everyagent.plugin.api.spi.SandboxProvider;
@@ -17,6 +18,7 @@ import dev.everyagent.worker.plugin.registry.AdvisorProviderRegistry;
 import dev.everyagent.worker.plugin.registry.AuthorizationHandlerRegistry;
 import dev.everyagent.worker.plugin.registry.SandboxProviderRegistry;
 import dev.everyagent.worker.plugin.registry.SearchProviderRegistry;
+import dev.everyagent.worker.plugin.registry.SkillContributorRegistry;
 import dev.everyagent.worker.plugin.registry.TaskAdmissionPolicyRegistry;
 import dev.everyagent.worker.plugin.registry.TaskLifecycleRegistry;
 import dev.everyagent.worker.plugin.registry.ToolExecutionInterceptorRegistry;
@@ -46,6 +48,7 @@ public class WorkerPluginContextImpl implements WorkerPluginContext {
     private final ToolExecutionInterceptorRegistry toolInterceptorRegistry;
     private final TaskLifecycleRegistry lifecycleRegistry;
     private final TaskAdmissionPolicyRegistry admissionPolicyRegistry;
+    private final SkillContributorRegistry skillContributorRegistry;
     private final RpcDispatcher rpcDispatcher;
     private final SlashCommandRegistry slashRegistry;
     private final WorkerServices services;
@@ -60,6 +63,7 @@ public class WorkerPluginContextImpl implements WorkerPluginContext {
             ToolExecutionInterceptorRegistry toolInterceptorRegistry,
             TaskLifecycleRegistry lifecycleRegistry,
             TaskAdmissionPolicyRegistry admissionPolicyRegistry,
+            SkillContributorRegistry skillContributorRegistry,
             RpcDispatcher rpcDispatcher,
             SlashCommandRegistry slashRegistry,
             WorkerServices services,
@@ -73,6 +77,7 @@ public class WorkerPluginContextImpl implements WorkerPluginContext {
         this.toolInterceptorRegistry = toolInterceptorRegistry;
         this.lifecycleRegistry = lifecycleRegistry;
         this.admissionPolicyRegistry = admissionPolicyRegistry;
+        this.skillContributorRegistry = skillContributorRegistry;
         this.rpcDispatcher = rpcDispatcher;
         this.slashRegistry = slashRegistry;
         this.services = services;
@@ -122,6 +127,11 @@ public class WorkerPluginContextImpl implements WorkerPluginContext {
     @Override
     public void registerTaskAdmissionPolicy(TaskAdmissionPolicy policy) {
         admissionPolicyRegistry.register(policy);
+    }
+
+    @Override
+    public void registerSkillContributor(SkillContributor contributor) {
+        skillContributorRegistry.register(contributor);
     }
 
     @Override

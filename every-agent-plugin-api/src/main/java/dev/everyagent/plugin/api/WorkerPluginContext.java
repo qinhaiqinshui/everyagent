@@ -2,6 +2,7 @@ package dev.everyagent.plugin.api;
 
 import dev.everyagent.plugin.api.permission.AuthorizationHandler;
 import dev.everyagent.plugin.api.rpc.RpcMethod;
+import dev.everyagent.plugin.api.skill.SkillContributor;
 import dev.everyagent.plugin.api.slash.SlashProvider;
 import dev.everyagent.plugin.api.spi.AdvisorProvider;
 import dev.everyagent.plugin.api.spi.SandboxProvider;
@@ -44,6 +45,9 @@ public interface WorkerPluginContext {
 
     /** 注册 TaskLifecycleNode（任务生命周期链节点）。 */
     void registerTaskLifecycleNode(TaskLifecycleNode node);
+
+    /** 注册 SkillContributor（skill 贡献者，向 system prompt 与 / 菜单贡献 skill）。 */
+    void registerSkillContributor(SkillContributor contributor);
 
     /** 注册任务准入策略（队列插件用）。 */
     void registerTaskAdmissionPolicy(TaskAdmissionPolicy policy);

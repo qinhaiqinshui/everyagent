@@ -6,10 +6,8 @@ import dev.everyagent.worker.plugin.adapters.AskUserToolProvider;
 import dev.everyagent.worker.plugin.adapters.BashToolProvider;
 import dev.everyagent.worker.plugin.adapters.FileToolsProvider;
 import dev.everyagent.worker.plugin.adapters.PowerShellToolProvider;
-import dev.everyagent.worker.plugin.adapters.SubAgentToolsProvider;
 import dev.everyagent.worker.plugin.registry.ToolProviderRegistry;
 import dev.everyagent.worker.task.PendingAsks;
-import dev.everyagent.worker.task.SubAgentManager;
 import dev.everyagent.worker.tools.FsToolSupport;
 import jakarta.annotation.PostConstruct;
 import org.springframework.stereotype.Component;
@@ -31,16 +29,14 @@ public class BuiltInToolProviders {
     private final OsSandbox sandbox;
     private final PendingAsks asks;
     private final WorkerProperties props;
-    private final SubAgentManager subs;
 
     public BuiltInToolProviders(ToolProviderRegistry registry, FsToolSupport fs,
-            OsSandbox sandbox, PendingAsks asks, WorkerProperties props, SubAgentManager subs) {
+            OsSandbox sandbox, PendingAsks asks, WorkerProperties props) {
         this.registry = registry;
         this.fs = fs;
         this.sandbox = sandbox;
         this.asks = asks;
         this.props = props;
-        this.subs = subs;
     }
 
     @PostConstruct
@@ -49,6 +45,5 @@ public class BuiltInToolProviders {
         registry.register(new BashToolProvider(sandbox));
         registry.register(new PowerShellToolProvider(sandbox));
         registry.register(new AskUserToolProvider(asks, props));
-        registry.register(new SubAgentToolsProvider(subs));
     }
 }

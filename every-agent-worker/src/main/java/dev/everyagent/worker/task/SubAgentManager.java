@@ -10,7 +10,6 @@ import org.springframework.stereotype.Component;
 import tools.jackson.databind.node.ArrayNode;
 import tools.jackson.databind.node.ObjectNode;
 
-import java.util.Map;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
@@ -94,8 +93,6 @@ public class SubAgentManager {
                 return null;
             });
             task.subs.put(id, sub);
-            // 台账同步:创建/复用即登记(冷启动恢复 + list_agents 的数据源)。
-            task.agentLedger.put(id, sub.toSummary());
             task.subFutures.put(id, ft);
             task.events.agentStarted(id, sub.title, input);
             task.events.agentStatus(id, "running"); // 子 agent 开始运行(agent 列表状态机)
@@ -139,9 +136,6 @@ public class SubAgentManager {
             }
         } finally {
             sub.finished = true;
-            // 收口:台账刷新为终态 + 触发持久化(崩溃后冷启动可恢复台账)。
-            task.agentLedger.put(id, sub.toSummary());
-            task.persist();
             log.debug("[sub] runSub 收口退出 id={} subStatus={} finished=true thread={}",
                     id, sub.status, Thread.currentThread().getName());
         }
@@ -161,8 +155,6 @@ public class SubAgentManager {
         sub.updateActivity(null, null, "已取消");
         task.events.error(sub.agentId, "已取消");
         task.events.agentStatus(sub.agentId, "stopped");
-        task.agentLedger.put(sub.agentId, sub.toSummary());
-        task.persist();
     }
 
     /**
@@ -186,16 +178,13 @@ public class SubAgentManager {
         return Json.write(r);
     }
 
-    /** 合并台账 + 活实体的 agents 摘要数组:台账优先(含历史终态 + 冷启动恢复项),活实体实时覆盖。 */
+    /** 活实体的 agents 摘要数组:遍历 task.subs.values(),按 createdAt 稳定排序。 */
     private ArrayNode agentsJson(TaskEntry task) {
         java.util.LinkedHashMap<String, ObjectNode> merged = new java.util.LinkedHashMap<>();
-        for (Map.Entry<String, ObjectNode> e : task.agentLedger.entrySet()) {
-            merged.put(e.getKey(), e.getValue());
-        }
         for (AgentEntity s : task.subs.values()) {
             merged.put(s.agentId, summaryJson(task, s));
         }
-        // 按 createdAt 稳定排序(ConcurrentHashMap 台账无遍历序保证)。
+        // 按 createdAt 稳定排序。
         java.util.List<ObjectNode> ordered = new java.util.ArrayList<>(merged.values());
         ordered.sort(java.util.Comparator.comparingLong(a -> a.path("createdAt").asLong(0)));
         ArrayNode agents = Json.arr();
@@ -217,14 +206,7 @@ public class SubAgentManager {
             AgentEntity sub = task.subs.get(agentId);
             Future<?> f = task.subFutures.get(agentId);
             if (sub == null) {
-                ObjectNode hist = task.agentLedger.get(agentId);
-                if (hist != null) {
-                    // 台账历史 agent(已完成/停止/冷启动恢复):直接返回终态摘要,无需等待。
-                    r.put("waitStatus", "completed");
-                    r.set("agent", hist);
-                    return Json.write(r);
-                }
-                // 台账无该 agent(凭空 id):最小摘要 + 说明,waitStatus=timeout
+                // agentId 不存在(凭空 id):最小摘要 + 说明,waitStatus=timeout
                 log.warn("wait_agents 未找到 agentId,返回最小摘要: {}", agentId);
                 ObjectNode a = Json.obj();
                 a.put("agentId", agentId);

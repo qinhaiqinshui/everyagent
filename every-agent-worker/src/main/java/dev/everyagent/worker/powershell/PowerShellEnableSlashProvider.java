@@ -67,7 +67,6 @@ public class PowerShellEnableSlashProvider {
                 TaskEntry t = taskManager.runningTask(taskId);
                 if (t != null) {
                     t.powershellEnabled = true; // 注册方写自己的业务标记
-                    t.persist();                // 落盘 meta(persistHook → updateMeta)
                 }
             }
             return List.of(SlashSelectionResult.bottom(PowerShellEnableToken.buildToken()));
@@ -78,7 +77,6 @@ public class PowerShellEnableSlashProvider {
                 TaskEntry t = taskManager.runningTask(taskId);
                 if (t != null) {
                     t.powershellEnabled = false; // 注册方删自己的业务标记
-                    t.persist();
                 }
             }
         };

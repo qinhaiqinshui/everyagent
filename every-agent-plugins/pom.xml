@@ -20,5 +20,6 @@
         <module>auth-review</module>
         <module>git</module>
         <module>task-queue</module>
+        <module>subagent</module>
     </modules>
 </project>

@@ -61,13 +61,6 @@ public class BuiltInSkills {
     public BuiltInSkills(WorkerProperties props) {
         this.knowledgeRoot = props.resolveSkillsDir();
         this.activeSkills = List.of(
-                new Skill("agent-dispatch", "子 Agent",
-                        "## 适用条件\n"+
-"- 当某个任务可以并行执行来提高效率时，交给子 Agent 执行。\n"+
-"- 当你只需要一个结果，但是探索这个结果会读取大量无用历史上下文时，可以派发子Agent来帮你探索并得出你要的结论。\n"+
-"- 当需要等待、停止、重启子 Agent，或查看它们的运行状态与结果时，使用本技能。",
-                        knowledgeRoot.resolve("agent-dispatch").resolve("skill.md").toString(),
-                        List.of("run_agent", "list_agents", "wait_agents", "stop_agent")),
                 new Skill("plan", "计划模式",
                         "## 适用条件\n"+
 "- 当任务复杂需拆步骤执行时，使用本技能。\n"+

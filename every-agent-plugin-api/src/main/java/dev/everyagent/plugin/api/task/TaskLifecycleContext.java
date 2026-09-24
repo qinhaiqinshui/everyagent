@@ -46,11 +46,6 @@ public interface TaskLifecycleContext {
     void onUsageBroadcast(Runnable hook);
 
     /**
-     * 注入 agent 台账持久化钩子（由 task.wires 节点调用）。
-     */
-    void onPersistHook(Runnable hook);
-
-    /**
      * 发射 agent 状态事件（status.start/status.finalize 节点用）。
      * @param agentId agent ID
      * @param status 状态字符串（如 "running"/"done"/"failed"/"stopped"）

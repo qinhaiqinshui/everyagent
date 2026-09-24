@@ -114,8 +114,9 @@ public class AgentClientFactory {
 
     /** skill 渐进式披露索引注入 advisor(主 agent 专属,无状态可共享单例)。 */
     @Bean
-    public SkillAdvisor skillAdvisor(BuiltInSkills builtInSkills) {
-        return new SkillAdvisor(builtInSkills, osSandbox);
+    public SkillAdvisor skillAdvisor(BuiltInSkills builtInSkills,
+            dev.everyagent.worker.plugin.registry.SkillContributorRegistry skillContributorRegistry) {
+        return new SkillAdvisor(builtInSkills, skillContributorRegistry, osSandbox);
     }
 
     /**

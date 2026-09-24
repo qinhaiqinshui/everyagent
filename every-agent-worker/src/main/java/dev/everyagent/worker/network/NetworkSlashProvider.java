@@ -52,7 +52,6 @@ public class NetworkSlashProvider {
                 TaskEntry t = taskManager.runningTask(taskId);
                 if (t != null) {
                     t.networkBlocked = true; // 注册方写自己的业务标记
-                    t.persist();             // 落盘 meta(persistHook → updateMeta)
                 }
             }
             return List.of(SlashSelectionResult.bottom(NetworkToken.buildToken()));
@@ -63,7 +62,6 @@ public class NetworkSlashProvider {
                 TaskEntry t = taskManager.runningTask(taskId);
                 if (t != null) {
                     t.networkBlocked = false; // 注册方删自己的业务标记
-                    t.persist();
                 }
             }
         };
