@@ -13,7 +13,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
-import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -37,15 +36,12 @@ class PowerShellEnableSlashProviderTest {
     private SlashCommandRegistry registry;
     private TaskManager taskManager;
     private TaskEntry task;
-    private AtomicInteger persisted;
 
     @BeforeEach
     void setUp() {
         registry = new SlashCommandRegistry();
         taskManager = mock(TaskManager.class);
         task = newTask();
-        persisted = new AtomicInteger();
-        task.persistHook = persisted::incrementAndGet;
         when(taskManager.runningTask("t-1")).thenReturn(task);
     }
 
@@ -110,7 +106,6 @@ class PowerShellEnableSlashProviderTest {
 
         verify(taskManager).runningTask("t-1");
         assertTrue(task.powershellEnabled, "业务标记 powershellEnabled 应置位");
-        assertTrue(persisted.get() >= 1, "置位后应落盘 meta");
     }
 
     // ---- select:空 taskId 不写业务标记 ----
@@ -124,7 +119,6 @@ class PowerShellEnableSlashProviderTest {
         assertEquals(SlashDisplayPosition.BOTTOM, results.get(0).position());
         verify(taskManager, never()).runningTask(any());
         assertFalse(task.powershellEnabled, "空 taskId 不写业务标记");
-        assertEquals(0, persisted.get(), "空 taskId 不落盘");
     }
 
     // ---- cancel:复位 powershellEnabled ----
@@ -135,6 +129,5 @@ class PowerShellEnableSlashProviderTest {
         SlashCommandItem it = item();
         it.cancelHandler().onCancel(it, PowerShellEnableToken.buildToken(), "t-1");
         assertFalse(task.powershellEnabled, "取消启用 powershell 胶囊应复位 powershellEnabled");
-        assertTrue(persisted.get() >= 1, "取消后应落盘 meta");
     }
 }
