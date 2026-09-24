@@ -1,6 +1,6 @@
 # 设计方案：任务生命周期洋葱模型 + Agent 独立成层
 
-> 状态：**待评审**（用户确认后才实施）· v9（模型配置/密钥沉为「模型与配置域」基础层：与调用者无关的底层功能，task 层只在创建时冻结快照并持有引用；task 层定性为 agent 的一种编排+前端展示，未来可能插件化、与 workflow 等平级编排共存）
+> 状态：**待评审**（用户确认后才实施）· v10（RPC 分发与 DataPusher 实时推送沉入基础设施层：模型与配置、RPC 通信（hub 连接+RpcDispatcher）、流式推送（EventLog+DataPusher）三个子域都是与调用者无关的底层能力；task 层经基础设施注册 task.* 方法与流源（与 git 插件同位），workflow 同样可用；DataPusherManager→TaskManager 的反向耦合反转为流源注册接口）
 > 范围声明：本文覆盖整体架构（洋葱底座、agent 层独立、subagent 插件三件套、任务队列插件预留）；**本次只实施 Phase 1（洋葱底座）**，其余分期列出。
 
 ---
@@ -33,7 +33,8 @@
 
 ```
                     ┌─────────────────────────────────────────────┐
-  RPC 层            │ task.run / task.cancel / task.poll …        │  (不变)
+  外部帧(hub cmd)    │ task.run / task.cancel / task.poll …        │
+                    │ (task.* 方法由 task 层注册于基础设施 RpcDispatcher)│
                     └───────────────────┬─────────────────────────┘
                                         ▼
   ┌───────────────────────── Task 洋葱（TaskOnion 执行器） ─────────────────────────┐
@@ -64,10 +65,14 @@
   │  ChatClient + Advisor 生态（复用 Spring AI，红线不动）                          │
   └──────────────────────────────────┬─────────────────────────────────────────────┘
                                      ▼ 依赖
-  ┌──────────── 模型与配置域（基础层：与调用者无关的底层功能） ──────────────────────┐
-  │  ModelSnapshot（配置快照类型）· ConfigStore（配置解析 + 密钥管理）              │
-  │  ChatModelFactory（快照 → ChatModel/options）· 模型池容灾 + 限流               │
-  │  任何上层（task / workflow / 插件）要跑 agent 都从这里取模型与密钥              │
+  ┌────────────── 基础设施层（与调用者无关的底层功能，三个子域） ───────────────────┐
+  │  ① 模型与配置：ModelSnapshot · ConfigStore（解析+密钥）· ChatModelFactory       │
+  │     · 模型池容灾 + 限流——上层要跑 agent 从这里取模型与密钥                      │
+  │  ② RPC 通信：hub 连接（HubPool/conn）· RpcDispatcher（方法注册表+分发）         │
+  │     ——task 层注册 task.*、git 插件注册 git.*、workflow 注册 flow.*，同位平权    │
+  │  ③ 流式推送：EventLog（通用内存事件日志：seq 分配/append/listener）             │
+  │     · DataPusher/Manager（stream 频道订阅定向推送、credit 背压）                │
+  │     · StreamSourceRegistry（流源注册：编排层把「流键→EventLog」挂进推送器）     │
   └───────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -76,7 +81,7 @@
 - **agent 层是核心，不随 subagent 插件卸载**：删除插件失去「AI 使用子 agent 的入口与方法论」「列表 UI」「task.agents RPC」与**整个子 agent 台账概念（agents.json 的读写全部停止——它是插件维护的事件投影，磁盘数据原地保留不删）**；agent 层能力（spawn/事件/运行期 spawn 注册表）保留——历史任务子 agent 的消息流靠事件 payload 自足渲染（title/input/usage 都在事件里），其他上层仍可编程调用。
 - 洋葱是**任务生命周期层**的编排，**不是** agent 执行循环；agent 执行循环仍由 Spring AI `ToolCallingAdvisor` 递归驱动（红线：不手搓）。
 - **task 层 = agent 的一种编排**（洋葱 + 轮次循环 + RPC + 前端展示），不是 agent 层的宿主；未来可能插件化，届时 workflow 等平级编排形态共用 agent 层与模型与配置域。
-- **模型与配置域是基础层**（与调用者无关）：类型定义（ModelSnapshot）、解析与密钥（ConfigStore）、实例化（ChatModelFactory）、容灾限流都沉在此；task 层只在**任务创建时**经它解析并冻结快照、持有引用（任务运行期模型不变的任务语义），不拥有这些能力。
+- **基础设施层与调用者无关**（三个子域）：① 模型与配置（类型/解析/密钥/实例化/容灾限流）——task 层只在**任务创建时**冻结快照并持有引用（任务运行期模型不变的任务语义）；② RPC 通信（hub 连接+RpcDispatcher 方法注册分发）——task 层注册 task.*、git 插件注册 git.*、未来 workflow 注册 flow.*，**同位平权**；③ 流式推送（通用 EventLog seq 事件日志 + DataPusher 订阅推送 + StreamSourceRegistry 流源注册）——task 层在 track/再运行时把「taskId→EventLog」挂进流源注册表，推送器不再反向感知 TaskManager（现状 `DataPusherManager` 经 `TaskResumeListener` 够进 TaskManager 的耦合反转）；workflow 的流同样经此推送。
 
 ---
 
@@ -281,7 +286,15 @@ filter 模型下收口序恒等于进入序的逆序（同一 order 决定两端
 
 迁入 agent 包：`AgentRunner`、`AgentClientFactory`、`AgentEntity`、`WorkerToolEventAdvisor`、`LoopRepeatGuard*`、`AgentCancelledException`、`AgentActivity`。
 
-**归模型与配置域（基础层，不进 agent 包——agent 层依赖它、不拥有它）**：`ChatModelFactory`（快照→ChatModel 实例化）、`ModelPoolChatModel`/`RateLimitedChatModel`（池容灾/限流）、`ConfigStore` 的解析与密钥部分、`ModelSnapshot` 类型。`SubAgentManager`/`TaskManager` 现对它们的调用改为经基础层接口（依赖方向：调用者层/agent 层 → 基础层）。
+**归基础设施层（三个子域，不进 agent 包——agent 层与编排层都依赖它、不拥有它）**：
+
+| 子域 | 内容 | 现状耦合需反转/收敛点 |
+|---|---|---|
+| 模型与配置 | `ChatModelFactory`（快照→ChatModel）、`ModelPoolChatModel`/`RateLimitedChatModel`（池容灾/限流）、`ConfigStore` 解析与密钥、`ModelSnapshot` 类型 | `SubAgentManager`/`TaskManager` 改经基础层接口调用 |
+| RPC 通信 | `RpcDispatcher`（注册表+分发）、`HubPool`/hub 连接管理、`RpcContext` | task.* 方法注册已是 dispatcher 模式，无需反转——只需**定位声明**：dispatcher 属基础设施，task 层/git 插件/workflow 是平权注册方 |
+| 流式推送 | `EventLog`（通用内存事件日志：seq 分配/append/listener/readFrom）、`DataPusher`/`DataPusherManager`（stream 频道订阅推送、credit 背压）、新增 `StreamSourceRegistry` | **反转**：现状 `DataPusherManager` 经 `TaskManager.TaskResumeListener` 反向取 task 的 EventLog——改为编排层调 `streamSources.attach(streamKey, log)/detach(...)`（task 层挂接点=洋葱 `persistence.track` 与 startRerun），推送器零 task 感知 |
+
+依赖方向：调用者层（task/workflow/插件）与 agent 层 → 基础设施层；基础设施层不知道任何调用者。`task.poll` 的历史读取（TaskStore 磁盘窗口归并）仍属 task 域——它读的是任务数据格式；推送器只管内存日志增量。
 
 **不迁**（任务流职责）：`TaskEvents`、`EventLog`、`TaskStore`、`RoundIndex*`、`FileChange*`、`InputQueue`——它们留在 task 层，经接口面向 agent 层。
 
@@ -289,7 +302,7 @@ filter 模型下收口序恒等于进入序的逆序（同一 order 决定两端
 
 | 持久化物 | 归属（都不在 agent 层） |
 |---|---|
-| 事件流 jsonl（含子 agent 消息按 agentId 落盘） | task 层 TaskStore（EventLog→sink 虚拟线程） |
+| 事件流 jsonl（含子 agent 消息按 agentId 落盘） | task 层 TaskStore（订阅基础设施 EventLog→sink 虚拟线程；EventLog 本身是基础设施内存态，不落盘） |
 | 会话历史磁盘重建（ConversationLoader，再运行） | task 层（load 后把 List\<Message\> 传给 buildMainAgent；agent 层无 from-disk 恢复 API） |
 | 轮次索引 rounds.jsonl / 悬空队列 queue.jsonl / meta.json | task 层（RoundIndexStore / TaskStore） |
 | 子 agent 台账 agents.json | subagent 插件域（事件投影，v7） |
@@ -508,7 +521,7 @@ public interface AuthorizationHandler {
 | Phase | 内容 | 交付 |
 |---|---|---|
 | **1（本次）洋葱底座** | plugin-api 节点契约（`TaskLifecycleNode`/`TaskLifecycleContext`/`TaskOutcome`/`TaskKernel`）+ `registerTaskLifecycleNode`；`TaskLifecycleRegistry`（float 排序）+ `TaskOnion`；17 个内置节点拆分（下行 4 + 上行 13，finish/runTask/rpcTaskRun 逻辑**逐字映射**，不改行为）；`runTask` 重写为洋葱执行；单测（下行顺序/否决短路/逆序收口/try-finally 必达/幂等/取消/停机中断收口/锁分段）；ARCHITECTURE.md 新 §7.x | worker 行为零变化（事件顺序、seq、落盘字节级兼容），可回归验证 |
-| **2 agent 层** | `dev.everyagent.worker.agent` 包收敛 + `AgentContext`/`AgentEventChannel` 解耦 + `AgentService` + `AgentDispatcher` 废止 + `SubAgentManager` 编排下沉 + **模型与配置域确立**（ChatModelFactory/ConfigStore 解析与密钥/模型池归基础层，agent 包与 task 层依赖之） | agent 层边界成立（纯内存执行引擎）+ 模型与配置基础层可被平级上层复用 |
+| **2 agent 层** | `dev.everyagent.worker.agent` 包收敛 + `AgentContext`/`AgentEventChannel` 解耦 + `AgentService` + `AgentDispatcher` 废止 + `SubAgentManager` 编排下沉 + **基础设施层确立**（模型与配置域；RPC/EventLog/DataPusher 定位声明 + `StreamSourceRegistry` 解耦 DataPusherManager→TaskManager 反向依赖） | agent 层边界成立（纯内存执行引擎）+ 基础设施三子域可被平级上层复用 |
 | **3 拦截链范式统一** | 工具执行链 + 授权决议链（含 PermissionGate 内部三链）迁移为 filter 形态（§6）；`ToolExecutionContext` 显式化替代 ThreadLocal；两个 SPI 使用者同步迁移 | 三链一种范式；工具链获得上行钩子、授权链获得决议后包裹 |
 | **4 subagent 插件** | 三件套迁移（工具 + SkillContributor + 前端面板**及取数链**：task.agents RPC 迁插件注册、taskStream 的 fetchTaskAgents 调用点条件化、agentMeta 基线灌入随面板走）+ **台账迁移**（agentLedger/writeAgents/restoreAgentLedger/30s 定时快照/persistHook→插件的事件投影：worker 侧新增任务事件观测 SPI 供插件订阅 agent.*/usage；`ledger.persist` 洋葱节点改插件贡献）；plugin-api 新增 `SkillContributor` SPI + 注册表；BuiltInSkills 合并改造；web `ComposerPanelCtx` 扩展 `selectAgent`；app pom 挂载 + CI 一致性检查 | 删除插件 = 无子 agent 工具/skill/前端列表/task.agents RPC/**台账读写**，agent 层（spawn 执行态/事件）完好 |
 | **5（未来）队列插件** | 形态三成对节点（下行段 enqueue 阻塞排队 / finally 出队广播）+ RPC 边缘预检扩展点 | 底座已就绪，不在本设计实施范围 |
@@ -541,7 +554,8 @@ public interface AuthorizationHandler {
 7. **task.agents RPC 归 subagent 插件**（v6）：其唯一消费闭环是子 agent 列表（TaskPacketView 拉取 → seedAgents 灌 agentMeta 基线 → AgentListPanel）；消息流 agent 卡片靠事件 payload 自足不依赖它。
 8. **子 agent 台账整体归插件域**（v7）：agents.json 是插件维护的事件投影而非 agent 层真相源——删除插件 = 台账概念消失（无读无写），磁盘数据不删。`ledger.persist` 洋葱节点 Phase 4 改由插件贡献；插件经新增的任务事件观测 SPI 订阅 agent.*/usage 维护投影（具体 SPI 形态 Phase 4 定）。
 9. **agent 层零持久化、只管内存态**（v8）：执行态（AgentEntity/spawn 注册表/usage 累计）+ 事件发射端口 + 会话内存对象；事件 jsonl/轮次索引/meta/台账/会话重建全在 task 层或插件域（§4.1 持久化边界表）。AgentContext 去掉 updateSpawnedLedger（advisor 的 SUB 台账刷新随之取消，台账由插件事件订阅承接）。
-10. **模型配置/密钥归模型与配置域（基础层）**（v9）：ModelSnapshot 类型/ConfigStore 解析与密钥/ChatModelFactory/模型池容灾限流沉为基础层，与调用者无关；task 层只在创建时冻结快照并持有引用（任务运行期模型不变）。**task 层定性**：agent 的一种编排（洋葱+轮次+RPC+前端展示），未来可能插件化，与 workflow 等平级编排形态共用 agent 层与基础层——本次不实施 task 层插件化，仅以分层边界为其留位。
+10. **模型配置/密钥归基础层**（v9）：与调用者无关；task 层只在创建时冻结快照并持有引用。**task 层定性**：agent 的一种编排，未来可能插件化，与 workflow 平级共用底座（本次仅留位）。
+11. **RPC 与 DataPusher 归基础设施层**（v10）：RPC 通信（hub 连接+RpcDispatcher）与流式推送（EventLog+DataPusher）是通用通信能力——task 层经注册使用（与 git 插件同位平权），workflow 同样可用。`DataPusherManager` 对 `TaskManager` 的反向依赖（TaskResumeListener 取 EventLog）反转为 `StreamSourceRegistry` 流源注册（task 挂接点=洋葱 persistence.track 与 startRerun）。`task.poll` 历史读取（磁盘窗口）仍属 task 域（任务数据格式）。
 
 ## 10. 遗留待确认
 
