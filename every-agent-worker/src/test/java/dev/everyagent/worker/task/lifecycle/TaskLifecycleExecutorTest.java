@@ -220,7 +220,6 @@ class TaskLifecycleExecutorTest {
         @Override public long startedAt() { return 0; }
         @Override public void startedAt(long ms) { }
         @Override public void onUsageBroadcast(Runnable hook) { }
-        @Override public void onPersistHook(Runnable hook) { }
         @Override public void agentStatus(String agentId, String status) { }
     }
 }

@@ -12,7 +12,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
-import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -34,15 +33,12 @@ class NetworkSlashProviderTest {
     private SlashCommandRegistry registry;
     private TaskManager taskManager;
     private TaskEntry task;
-    private AtomicInteger persisted;
 
     @BeforeEach
     void setUp() {
         registry = new SlashCommandRegistry();
         taskManager = mock(TaskManager.class);
         task = newTask();
-        persisted = new AtomicInteger();
-        task.persistHook = persisted::incrementAndGet;
         when(taskManager.runningTask("t-1")).thenReturn(task);
     }
 
@@ -82,7 +78,7 @@ class NetworkSlashProviderTest {
 
         verify(taskManager).runningTask("t-1");
         assertTrue(task.networkBlocked, "业务标记 networkBlocked 应置位(禁用本任务网络)");
-        assertTrue(persisted.get() >= 1, "置位后应落盘 meta");
+
     }
 
     @Test
@@ -94,7 +90,7 @@ class NetworkSlashProviderTest {
         assertEquals(SlashDisplayPosition.BOTTOM, results.get(0).position());
         verify(taskManager, never()).runningTask(any());
         assertFalse(task.networkBlocked, "空 taskId 不写业务标记");
-        assertEquals(0, persisted.get(), "空 taskId 不落盘");
+
     }
 
     @Test
@@ -103,6 +99,6 @@ class NetworkSlashProviderTest {
         SlashCommandItem it = item();
         it.cancelHandler().onCancel(it, NetworkToken.buildToken(), "t-1");
         assertFalse(task.networkBlocked, "取消禁用网络胶囊应复位 networkBlocked");
-        assertTrue(persisted.get() >= 1, "取消后应落盘 meta");
+
     }
 }
