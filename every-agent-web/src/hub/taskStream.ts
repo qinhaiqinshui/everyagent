@@ -487,7 +487,11 @@ class ManagedStream {
         console.warn(`[taskStream] 加载任务轮次失败(${this.taskId}):`, error)
       }
       // task.agents 拉子 agent 台账建 agentMeta(胶囊列表/悬停卡片数据源);失败 warn 不阻断。
-      await this.loadAgentsIntoFolder()
+      try {
+        await this.loadAgentsIntoFolder()
+      } catch (error) {
+        console.warn(`[taskStream] 拉取子 agent 台账失败(${this.taskId}):`, error)
+      }
     })()
     this.opening = opening
     try {

@@ -346,6 +346,12 @@ export interface ComposerPanelCtx {
   draft: PluginComposerDraftState
   /** 当前任务是否处于 running。 */
   isRunning: boolean
+  /** 选中某个 agent（传 null 恢复全部）。核心实现联动过滤，插件只调回调。 */
+  selectAgent: (agentId: string | null) => void
+  /** 调用 RPC 方法（如 task.agents）。 */
+  rpc: (method: string, params: Record<string, unknown>) => Promise<unknown>
+  /** 订阅任务流事件（agent.*、usage 等），返回取消订阅函数。 */
+  subscribeTaskEvents: (handler: (event: string, agentId: string | null, payload: unknown) => void) => () => void
 }
 
 /** 输入框上方 UI 定义。 */
