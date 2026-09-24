@@ -7,14 +7,12 @@ import dev.everyagent.plugin.api.permission.AuthorizationHandler;
 import dev.everyagent.plugin.api.rpc.RpcMethod;
 import dev.everyagent.plugin.api.slash.SlashProvider;
 import dev.everyagent.plugin.api.spi.AdvisorProvider;
-import dev.everyagent.plugin.api.spi.AgentDispatcher;
 import dev.everyagent.plugin.api.spi.SandboxProvider;
 import dev.everyagent.plugin.api.spi.SearchProvider;
 import dev.everyagent.plugin.api.spi.ToolExecutionInterceptor;
 import dev.everyagent.plugin.api.spi.ToolProvider;
 import dev.everyagent.plugin.api.task.TaskLifecycleNode;
 import dev.everyagent.worker.plugin.registry.AdvisorProviderRegistry;
-import dev.everyagent.worker.plugin.registry.AgentDispatcherRegistry;
 import dev.everyagent.worker.plugin.registry.AuthorizationHandlerRegistry;
 import dev.everyagent.worker.plugin.registry.SandboxProviderRegistry;
 import dev.everyagent.worker.plugin.registry.SearchProviderRegistry;
@@ -41,7 +39,6 @@ public class WorkerPluginContextImpl implements WorkerPluginContext {
     private final AdvisorProviderRegistry advisorRegistry;
     private final ToolProviderRegistry toolRegistry;
     private final SandboxProviderRegistry sandboxRegistry;
-    private final AgentDispatcherRegistry dispatcherRegistry;
     private final SearchProviderRegistry searchRegistry;
     private final AuthorizationHandlerRegistry authHandlerRegistry;
     private final ToolExecutionInterceptorRegistry toolInterceptorRegistry;
@@ -55,7 +52,6 @@ public class WorkerPluginContextImpl implements WorkerPluginContext {
             AdvisorProviderRegistry advisorRegistry,
             ToolProviderRegistry toolRegistry,
             SandboxProviderRegistry sandboxRegistry,
-            AgentDispatcherRegistry dispatcherRegistry,
             SearchProviderRegistry searchRegistry,
             AuthorizationHandlerRegistry authHandlerRegistry,
             ToolExecutionInterceptorRegistry toolInterceptorRegistry,
@@ -68,7 +64,6 @@ public class WorkerPluginContextImpl implements WorkerPluginContext {
         this.advisorRegistry = advisorRegistry;
         this.toolRegistry = toolRegistry;
         this.sandboxRegistry = sandboxRegistry;
-        this.dispatcherRegistry = dispatcherRegistry;
         this.searchRegistry = searchRegistry;
         this.authHandlerRegistry = authHandlerRegistry;
         this.toolInterceptorRegistry = toolInterceptorRegistry;
@@ -97,11 +92,6 @@ public class WorkerPluginContextImpl implements WorkerPluginContext {
     @Override
     public void registerSandboxProvider(SandboxProvider provider) {
         sandboxRegistry.register(provider);
-    }
-
-    @Override
-    public void registerAgentDispatcher(AgentDispatcher dispatcher) {
-        dispatcherRegistry.register(dispatcher);
     }
 
     @Override
