@@ -28,6 +28,9 @@
 - 你给 `run_agent` 传入已存在的 `agentId`，即在该 agent 上继续（复用其历史上下文，不重做已完成部分）；不传 `agentId` 则新建 agent 全新执行（此时 `title` 必填）。
 - 子 Agent 卡住时：先 `stop_agent` 停止它，再以同一 `agentId` 调 `run_agent` 重启续跑。
 - 子 Agent 失败（`run_agent` 报错或 `wait_agents` 的 `agent.status` 为 `error`）时：修复 `input` 后以同一 `agentId` 重试（续跑），或不传 `agentId` 来以新的子Agent重跑该工作。
+- **错误处理优先级**：如果子 Agent 出错，为了利用子 Agent 已积累的上下文，尽量先解决问题后复用该子 Agent（传入同一 `agentId` 续跑）；否则即使重新派发新子 Agent 也会遇到同样问题。
+- 如果你无法解决该问题，可以让子 Agent 重试一次（以同一 `agentId` 续跑重试）。
+- 如果子 Agent 重试后仍然失败，你要报告给用户，由用户决定下一步。
 
 ## 五、状态语义
 - `agent.status` 的 `completed` / `stopped` / `error` 为终态（已完成或终止）；`running` 为仍在运行；`waiting-user` 表示该子 agent 挂起等待用户回答（回答后自动恢复 `running`）。
