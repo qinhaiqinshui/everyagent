@@ -27,11 +27,21 @@ public final class PersistenceUntrackNode extends UpstreamNode {
 
     @Override
     protected TaskOutcome up(TaskLifecycleContext ctx, TaskOutcome result) {
-        var t = ((TaskLifecycleContextImpl) ctx).taskEntry();
+        var impl = (TaskLifecycleContextImpl) ctx;
+        var t = impl.taskEntry();
         try {
             store.untrack(t.taskId);
         } catch (RuntimeException e) {
             log.warn("untrack 异常 task={}", t.taskId, e);
+        }
+        // 摘除流源：StreamSourceRegistry.detach（推送器据此感知任务已驱逐，排水后 detach）
+        try {
+            Runnable detacher = impl.streamSourceDetacher();
+            if (detacher != null) {
+                detacher.run();
+            }
+        } catch (RuntimeException e) {
+            log.warn("流源摘除失败 task={}", t.taskId, e);
         }
         return result;
     }

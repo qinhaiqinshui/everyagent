@@ -32,11 +32,21 @@ public final class PersistenceTrackNode implements TaskLifecycleNode {
 
     @Override
     public TaskOutcome invoke(TaskLifecycleContext ctx, TaskChain next) throws Exception {
-        var t = ((TaskLifecycleContextImpl) ctx).taskEntry();
+        var impl = (TaskLifecycleContextImpl) ctx;
+        var t = impl.taskEntry();
         try {
             store.track(t.taskId, t.workspaceId, t.log, t::summaryJson);
         } catch (IOException e) {
             log.error("任务落盘启动失败 task={}(继续内存运行,重启后丢失)", t.taskId, e);
+        }
+        // 挂接流源：StreamSourceRegistry.attach（推送器经此取日志，反转后正向依赖）
+        try {
+            Runnable attacher = impl.streamSourceAttacher();
+            if (attacher != null) {
+                attacher.run();
+            }
+        } catch (RuntimeException e) {
+            log.warn("流源挂接失败 task={}", t.taskId, e);
         }
         return next.proceed(ctx);
     }

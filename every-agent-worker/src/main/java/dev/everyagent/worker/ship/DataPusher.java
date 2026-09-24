@@ -64,6 +64,8 @@ public class DataPusher implements EventLog.Listener {
     private final String taskId;
     private final HubLink conn;
     private final TaskManager tasks;
+    /** 流源注册表:优先经此取 EventLog（反转后正向依赖基础设施层）。 */
+    private final StreamSourceRegistry streamSources;
 
     private final AtomicBoolean running = new AtomicBoolean(true);
     private final Semaphore wake = new Semaphore(0);
@@ -82,11 +84,13 @@ public class DataPusher implements EventLog.Listener {
     /** 挂接时记主 agentId(payload 组装用,wireEvent 同 task.poll 口径)。 */
     private volatile String mainAgentId;
 
-    public DataPusher(String sessionId, String taskId, HubLink conn, TaskManager tasks) {
+    public DataPusher(String sessionId, String taskId, HubLink conn, TaskManager tasks,
+                      StreamSourceRegistry streamSources) {
         this.sessionId = sessionId;
         this.taskId = taskId;
         this.conn = conn;
         this.tasks = tasks;
+        this.streamSources = streamSources;
     }
 
     public void start() {
@@ -157,7 +161,24 @@ public class DataPusher implements EventLog.Listener {
      * 在上一次 pushFrom 返回与 finish 驱逐之间追加、因 tasks.get 返回 null 而永不推送);
      * 无 liveLog(尚未创建/已 detach)→ 空转等待(历史与终态数据走 task.poll 拉取,本推送器不负责)。
      */
+    /**
+     * 对账一次:优先从 StreamSourceRegistry 取日志(反转后正向依赖);流源注册表无此任务
+     * (尚未 track/已 detach)→ 回退到 TaskManager(过渡期兜底,保持行为不变)。
+     *
+     * <p>流源路径:streamLog 非空 → 确保挂在其上推送增量(换挂=再运行,从头推,seq 去重无害)。
+     * 回退路径:任务在内存且非终态 → 挂日志推送;终态 → 排尾水;不在内存 → 排尾水后 detach。
+     */
     private void reconcileLive() {
+        // 优先从 StreamSourceRegistry 取日志（反转后正向依赖基础设施层）
+        EventLog streamLog = streamSources.getEventLog(taskId);
+        if (streamLog != null) {
+            if (liveLog != streamLog) {
+                attachLog(streamLog);
+            }
+            cursor = pushFrom(streamLog, cursor);
+            return;
+        }
+        // 流源注册表无此任务（尚未 track/已 detach）：回退到 TaskManager（过渡期兜底）
         TaskEntry t = tasks.get(taskId);
         if (t == null) {
             // 任务已被驱逐(finish 移除):liveLog 仍引用旧 EventLog(对象未 GC),
@@ -182,7 +203,38 @@ public class DataPusher implements EventLog.Listener {
     }
 
     /**
-     * 挂接到指定 TaskEntry 的日志:首次挂接回扫尾部存量(上限 {@link #FIRST_SWEEP_MAX},
+     * 挂接到指定 EventLog(经 StreamSourceRegistry 取得):首次挂接回扫尾部存量(上限
+     * {@link #FIRST_SWEEP_MAX},标 initial 回放);换挂(再运行)从头推——新日志本推送器从未
+     * 消费过,已落盘部分前端按 seq 去重,重复推送无害,不从头推则会漏掉本推送器未推送的记录。
+     * mainAgentId:过渡期从 TaskEntry 获取(同 taskId mainAgentId 不变,已缓存则沿用)。
+     */
+    private void attachLog(EventLog elog) {
+        EventLog old = liveLog;
+        if (old != null) {
+            old.removeListener(this);
+            log.debug("换挂任务日志 task={} (再运行续跑)", taskId);
+        }
+        liveLog = elog;
+        // 过渡期:首次挂接时从 TaskEntry 获取 mainAgentId;换挂时沿用缓存值（同 taskId 不变）
+        if (mainAgentId == null) {
+            TaskEntry t = tasks.get(taskId);
+            if (t != null) {
+                mainAgentId = t.mainAgentId;
+            }
+        }
+        elog.addListener(this);
+        if (old == null) {
+            // 首挂:回扫订阅时已在内存的尾部存量(与前端首拉重叠,seq 去重吸收)
+            int size = elog.size();
+            replayEnd = size;
+            cursor = Math.max(0, size - FIRST_SWEEP_MAX);
+        } else {
+            replayEnd = 0;
+            cursor = 0;
+        }
+    }
+
+    /** 挂接到指定 TaskEntry 的日志:首次挂接回扫尾部存量(上限 {@link #FIRST_SWEEP_MAX},
      * 标 initial 回放);换挂(再运行)从头推——新日志本推送器从未消费过,已落盘部分前端
      * 按 seq 去重,重复推送无害,不从头推则会漏掉本推送器未推送的记录。
      */

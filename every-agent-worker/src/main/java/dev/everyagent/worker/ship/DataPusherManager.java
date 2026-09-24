@@ -4,6 +4,7 @@ import dev.everyagent.contract.frame.Frames;
 import dev.everyagent.worker.hub.HubLink;
 import dev.everyagent.worker.hub.HubPool;
 import dev.everyagent.worker.proto.Events;
+import dev.everyagent.worker.task.EventLog;
 import dev.everyagent.worker.task.TaskManager;
 import dev.everyagent.worker.task.TaskStore;
 import jakarta.annotation.PostConstruct;
@@ -28,25 +29,54 @@ import java.util.concurrent.ConcurrentHashMap;
  * subscriber.join 同源幂等(sessionId 由 hub 在转发帧的 from.sessionId 附上)。
  */
 @Component
-public class DataPusherManager implements HubPool.Listener, TaskManager.TaskResumeListener {
+public class DataPusherManager implements HubPool.Listener, TaskManager.TaskResumeListener, StreamSourceRegistry.Listener {
 
     private static final Logger log = LoggerFactory.getLogger(DataPusherManager.class);
 
     private final HubPool pool;
     private final TaskManager tasks;
     private final TaskStore store;
+    private final StreamSourceRegistry streamSources;
     private final Map<String, DataPusher> pushers = new ConcurrentHashMap<>();
 
-    public DataPusherManager(HubPool pool, TaskManager tasks, TaskStore store) {
+    public DataPusherManager(HubPool pool, TaskManager tasks, TaskStore store,
+                             StreamSourceRegistry streamSources) {
         this.pool = pool;
         this.tasks = tasks;
         this.store = store;
+        this.streamSources = streamSources;
     }
 
     @PostConstruct
     void init() {
         pool.addListener(this);
         tasks.addResumeListener(this);
+        streamSources.addListener(this);
+    }
+
+    /**
+     * 流源挂接（新任务 track 或再运行）：唤醒该任务的全部定向推送器立即对账挂接新日志。
+     * 替代 onTaskResumed 的正向通知路径（经 StreamSourceRegistry，不再反向感知 TaskManager）。
+     */
+    @Override
+    public void onAttach(String streamKey, EventLog log) {
+        for (DataPusher p : pushers.values()) {
+            if (streamKey.equals(p.taskId())) {
+                p.wake();
+            }
+        }
+    }
+
+    /**
+     * 流源摘除（终态 untrack）：唤醒该任务的推送器排水并 detach。
+     */
+    @Override
+    public void onDetach(String streamKey) {
+        for (DataPusher p : pushers.values()) {
+            if (streamKey.equals(p.taskId())) {
+                p.wake();
+            }
+        }
     }
 
     /**
@@ -94,7 +124,7 @@ public class DataPusherManager implements HubPool.Listener, TaskManager.TaskResu
                 return;
             }
             pushers.computeIfAbsent(key, k -> {
-                DataPusher p = new DataPusher(sessionId, taskId, conn, tasks);
+                DataPusher p = new DataPusher(sessionId, taskId, conn, tasks, streamSources);
                 p.start();
                 log.debug("定向推送器已建立 session={} task={}", sessionId, taskId);
                 return p;
@@ -149,7 +179,7 @@ public class DataPusherManager implements HubPool.Listener, TaskManager.TaskResu
         }
         String key = sessionId + "|" + taskId;
         pushers.computeIfAbsent(key, k -> {
-            DataPusher p = new DataPusher(sessionId, taskId, conn, tasks);
+            DataPusher p = new DataPusher(sessionId, taskId, conn, tasks, streamSources);
             p.start();
             log.debug("定向推送器已建立(任务输入兜底:worker 重启后前端未刷新) session={} task={}",
                     sessionId, taskId);

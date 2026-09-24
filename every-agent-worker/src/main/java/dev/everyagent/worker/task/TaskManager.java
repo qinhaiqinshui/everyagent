@@ -39,6 +39,7 @@ import dev.everyagent.plugin.api.task.TaskKernel;
 import dev.everyagent.plugin.api.task.TaskOutcome;
 import dev.everyagent.worker.task.lifecycle.TaskLifecycleContextImpl;
 import dev.everyagent.worker.task.lifecycle.TaskLifecycleExecutor;
+import dev.everyagent.worker.ship.StreamSourceRegistry;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
@@ -106,6 +107,8 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
     private final ToolProviderRegistry toolProviderRegistry;
     private final TaskLifecycleExecutor lifecycleExecutor;
     private final TaskLifecycleRegistry lifecycleRegistry;
+    /** 流源注册表:track 时 attach(taskId, log),untrack 时 detach(推送器经此取日志)。 */
+    private final StreamSourceRegistry streamSources;
     /** 工作区最后活动时间跟踪(任务收口时刷新,前端按最近活动倒序渲染)。 */
     private final dev.everyagent.worker.modules.WorkspaceActivityTracker activityTracker;
     /** 外部 skill 扫描器(skill.reload RPC 热加载入口)。 */
@@ -141,7 +144,8 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
             dev.everyagent.worker.modules.WorkspaceActivityTracker activityTracker,
             dev.everyagent.worker.skill.ExternalSkillScanner externalSkillScanner,
             ToolProviderRegistry toolProviderRegistry,
-            TaskLifecycleExecutor lifecycleExecutor, TaskLifecycleRegistry lifecycleRegistry) {
+            TaskLifecycleExecutor lifecycleExecutor, TaskLifecycleRegistry lifecycleRegistry,
+            StreamSourceRegistry streamSources) {
         this.pool = pool;
         this.configs = configs;
         this.modelFactory = modelFactory;
@@ -163,6 +167,7 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
         this.externalSkillScanner = externalSkillScanner;
         this.lifecycleExecutor = lifecycleExecutor;
         this.lifecycleRegistry = lifecycleRegistry;
+        this.streamSources = streamSources;
     }
 
     @PostConstruct
@@ -1640,6 +1645,8 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
         ctx.concurrencyReleaser(() -> active.decrementAndGet());
         ctx.diskIndexer(st -> diskTasks.put(st.taskId(), st));
         ctx.registryRemover(() -> tasks.remove(t.taskId, t));
+        ctx.streamSourceAttacher(() -> streamSources.attach(t.taskId, t.log));
+        ctx.streamSourceDetacher(() -> streamSources.detach(t.taskId));
 
         TaskKernel kernel = c -> {
             try {

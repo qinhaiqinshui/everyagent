@@ -30,6 +30,10 @@ public class TaskLifecycleContextImpl implements TaskLifecycleContext {
     private Runnable concurrencyReleaser;
     private Consumer<TaskStore.StoredTask> diskIndexer;
     private Runnable registryRemover;
+    /** 流源挂接回调：PersistenceTrackNode 下行段调用（streamSources.attach）。 */
+    private Runnable streamSourceAttacher;
+    /** 流源摘除回调：PersistenceUntrackNode 上行段调用（streamSources.detach）。 */
+    private Runnable streamSourceDetacher;
 
     public TaskLifecycleContextImpl(TaskEntry taskEntry) {
         this.taskEntry = taskEntry;
@@ -44,6 +48,8 @@ public class TaskLifecycleContextImpl implements TaskLifecycleContext {
     public void concurrencyReleaser(Runnable r) { this.concurrencyReleaser = r; }
     public void diskIndexer(Consumer<TaskStore.StoredTask> c) { this.diskIndexer = c; }
     public void registryRemover(Runnable r) { this.registryRemover = r; }
+    public void streamSourceAttacher(Runnable r) { this.streamSourceAttacher = r; }
+    public void streamSourceDetacher(Runnable r) { this.streamSourceDetacher = r; }
 
     // ---- 访问器（节点用，worker 模块内部）----
 
@@ -55,6 +61,8 @@ public class TaskLifecycleContextImpl implements TaskLifecycleContext {
     public Runnable concurrencyReleaser() { return concurrencyReleaser; }
     public Consumer<TaskStore.StoredTask> diskIndexer() { return diskIndexer; }
     public Runnable registryRemover() { return registryRemover; }
+    public Runnable streamSourceAttacher() { return streamSourceAttacher; }
+    public Runnable streamSourceDetacher() { return streamSourceDetacher; }
 
     // ---- TaskLifecycleContext 接口实现 ----
 
