@@ -189,16 +189,7 @@ const taskCheckedStyle: React.CSSProperties = {
 }
 
 const taskUncheckedStyle: React.CSSProperties = {
-  flexShrink: 0,
-  display: 'inline-flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  width: '1.2em',
-  height: '1.2em',
-  marginTop: 2,
-  borderRadius: 3,
-  border: '1.5px solid var(--border-strong, #888)',
-  boxSizing: 'border-box',
+  ...taskCheckedStyle,
 }
 
 const previewHeadingStyles: Record<number, React.CSSProperties> = {
@@ -392,7 +383,7 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
         )
       }
       // GFM 任务列表项：react-markdown 渲染成 <input type="checkbox" disabled checked>，
-      // 替换为彩色 ✓/◻ 图标，过滤掉原生 checkbox。
+      // 替换为 ⬜/✅ 图标，过滤掉原生 checkbox。
       const childArray = React.Children.toArray(children)
       const checkboxEl = childArray.find(
         (child) => React.isValidElement(child) && (child as React.ReactElement<{ type?: string }>).props?.type === 'checkbox',
@@ -413,7 +404,7 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
           }}
         >
           <span style={isChecked ? taskCheckedStyle : taskUncheckedStyle}>
-            {isChecked ? '✅' : ''}
+            {isChecked ? '✅' : '⬜'}
           </span>
           <span style={{ flex: 1, minWidth: 0 }}>
             {contentNodes}
