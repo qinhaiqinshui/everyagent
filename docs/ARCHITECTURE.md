@@ -615,6 +615,17 @@ worker 的两条运行期责任链迁移为与任务洋葱同一的 filter 形�
 - **`LoopRepeatGuardToolManager` 保持装饰器**：核心守卫不是插件扩展点，且需在 `executeToolCalls` 处合成工具结果回传模型，与插件链职责不同。
 - **行为零变化**：短路/放行/兜底语义逐项等价（§6.3 迁移映射表）。
 
+### 7.14.4 任务队列插件（Phase 5）
+
+任务队列插件将「并发上限即拒 ERR_BUSY」语义替换为「排队等待」语义。插件以 `@Component` + 构造器注入 worker 注册表的模式注册（同 git 插件 `GitPluginRegistrar` 先例）。
+
+- **`QueueAdmissionNode`**（order=250，形态三 try/finally 成对节点）：落在洋葱下行空隙 100~400 之间（`persistence.track`=100 之后、`status.start`=300 之前）。下行段 `acquire(taskId)` 获取运行许可（`Semaphore` fair 模式，permits=maxConcurrentTasks），并发满时虚拟线程 park 阻塞（零线程开销）；finally 段 `release(taskId)` 释放许可并唤醒下一个等待者。下行抛异常时 release 不执行（未进入不收口语义）。
+- **`TaskAdmissionPolicy` SPI**（plugin-api）：RPC 边缘预检扩展点。队列插件注册 `TaskQueueAdmissionPolicy`（always-admit）后，`TaskManager.rpcTaskRun` 不再硬拒绝 ERR_BUSY，而是放任务进入洋葱由 `QueueAdmissionNode` 排队处理。无注册策略时保持原有行为。
+- **`task.queued` 事件**（tasks 频道）：任务因并发满而排队等待时广播队列状态（payload: `{queueLength, queue:[taskId...]}`），前端据此渲染排队状态。
+- **`task.queueList` RPC**：返回当前队列快照 `{availablePermits, queueLength, queue:[...]}`。
+- **`TaskQueue`**（@Component）：`Semaphore`(permits=maxConcurrentTasks, fair) + `ConcurrentLinkedQueue<String>` 跟踪排队任务；acquire/release 管理 Semaphore 许可并广播队列状态变化。
+- **app pom 挂载**：`every-agent-app/pom.xml` 依赖 `task-queue` 模块（吸取 git 插件漏挂教训）。
+
 ### 7.15 持久化与磁盘布局
 
 ```
@@ -979,7 +990,7 @@ docker-compose 一键:`HUB_KEY=你的密钥 docker-compose up --build`;数据落
 2. **频道与信封(hub 红线)**:频道名字符集 `[a-z0-9._-]` 长度 ≤160,必须以 `u.<ownerKey>.` 开头;hub 只解析 `type`/`channel`(及 hello 握手字段),`event`/`seq`/`payload`/`ext` 原样转发;不存在角色×频道权限矩阵;seq 只属于任务流事件空间,由 task.poll/stream 携带;error 分级(断开 vs 拒单帧);连接抢占(worker 同 clientId 新连关旧连)。
 3. **RPC 生命周期**:reqId 连接内唯一,ok/err 已出则后续同 reqId 帧忽略;未知 method → UNKNOWN_METHOD;参数不合法 → BAD_PARAMS;超时是纯客户端语义(SDK 默认 30s),要中断须显式 rpc.cancel;task.run 新建支持 idempotencyKey(10 分钟窗口去重);task.delete 是任务唯一删除路径,无任何自动清理。
 4. **错误码两个命名空间,勿混用**:hub `error` = NOT_AUTHENTICATED/VERSION_MISMATCH(断开)、ACL_DENIED/FRAME_TOO_LARGE/RATE_LIMITED(单帧拒绝);`rpc.err` = UNKNOWN_METHOD/BAD_PARAMS/NOT_FOUND/SANDBOX_DENIED/BUSY/INTERNAL/AUTH_REQUIRED。
-5. **并发与上限**:maxConcurrentTasks(20)超限 task.run 新建 → BUSY(不排队);maxConcurrentSubs 超限 run_agent 返回错误文本由模型自决;maxEventsPerTask(50 万)超限抛 LogOverflow(磁盘 jsonl 全量不受影响);续跑放行不查并发上限。
+5. **并发与上限**:maxConcurrentTasks(20)超限 task.run 新建 → BUSY(不排队);maxConcurrentSubs 超限 run_agent 返回错误文本由模型自决;maxEventsPerTask(50 万)超限抛 LogOverflow(磁盘 jsonl 全量不受影响);续跑放行不查并发上限。队列插件启用时超限任务排队等待（QueueAdmissionNode order=250, Semaphore fair）而非 BUSY 拒绝；无队列插件时保持 ERR_BUSY 硬拒绝。
 6. **沙箱**:路径必须先规范化(realpath)再校验 workspace 根前缀,拒绝 `..`、绝对路径逃逸与符号链接逃逸;字符串前缀匹配不够;授权护的是「工作区外」,不是删除动作本身;不得绕过 PermissionGate 直接放行越界 IO;windows-mic 后端沙箱进程运行在 Medium IL,不对文件系统做标注或 ACL 修改;git 凭证只存 worker 本机加密文件,不经协议传输,注入走 env(askpass) 不经 shell 参数;
 7. **生命周期**:终态任务收到 task.run{taskId} = 冷启动一次普通运行;worker 优雅停机(SIGTERM)受影响任务标 failed 再关连接;6102 仅绑定 127.0.0.1;worker 每条 hub 连接建立即 sub 该命名空间 cmd + input 两个频道,从不订阅 per-task 频道。
 8. **复用 Spring AI,禁止重复造轮子**:agent 执行必须走 ChatClient + Advisor 生态,不得手搓 agent 循环、工具循环、响应聚合、system 拼接;执行链只能是很薄一层;新增 agent 能力优先做成 Advisor;一个 Advisor 只负责一个功能;事件发射等需挂钩工具循环的增强通过继承 ToolCallingAdvisor 并重写受保护 hook 实现;主/子 agent 共用同一运行入口与 Advisor 链,仅 agentId 不同。

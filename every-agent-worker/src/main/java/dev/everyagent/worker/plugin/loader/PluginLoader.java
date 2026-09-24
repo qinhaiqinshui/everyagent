@@ -15,6 +15,7 @@ import dev.everyagent.worker.plugin.registry.SearchProviderRegistry;
 import dev.everyagent.worker.plugin.registry.ToolExecutionInterceptorRegistry;
 import dev.everyagent.worker.plugin.registry.ToolProviderRegistry;
 import dev.everyagent.worker.plugin.registry.TaskLifecycleRegistry;
+import dev.everyagent.worker.plugin.registry.TaskAdmissionPolicyRegistry;
 import dev.everyagent.worker.rpc.RpcDispatcher;
 import dev.everyagent.worker.slash.SlashCommandRegistry;
 import jakarta.annotation.PostConstruct;
@@ -68,6 +69,7 @@ public class PluginLoader {
     private final AuthorizationHandlerRegistry authHandlerRegistry;
     private final ToolExecutionInterceptorRegistry toolInterceptorRegistry;
     private final TaskLifecycleRegistry lifecycleRegistry;
+    private final TaskAdmissionPolicyRegistry admissionPolicyRegistry;
     private final RpcDispatcher rpcDispatcher;
     private final SlashCommandRegistry slashRegistry;
     private final WorkerServices services;
@@ -83,6 +85,7 @@ public class PluginLoader {
             AuthorizationHandlerRegistry authHandlerRegistry,
             ToolExecutionInterceptorRegistry toolInterceptorRegistry,
             TaskLifecycleRegistry lifecycleRegistry,
+            TaskAdmissionPolicyRegistry admissionPolicyRegistry,
             RpcDispatcher rpcDispatcher,
             SlashCommandRegistry slashRegistry,
             WorkerServices services) {
@@ -95,6 +98,7 @@ public class PluginLoader {
         this.authHandlerRegistry = authHandlerRegistry;
         this.toolInterceptorRegistry = toolInterceptorRegistry;
         this.lifecycleRegistry = lifecycleRegistry;
+        this.admissionPolicyRegistry = admissionPolicyRegistry;
         this.rpcDispatcher = rpcDispatcher;
         this.slashRegistry = slashRegistry;
         this.services = services;
@@ -258,7 +262,8 @@ public class PluginLoader {
                     advisorRegistry, toolRegistry, sandboxRegistry,
                     searchRegistry,
                     authHandlerRegistry, toolInterceptorRegistry,
-                    lifecycleRegistry, rpcDispatcher, slashRegistry, services, config);
+                    lifecycleRegistry, admissionPolicyRegistry,
+                    rpcDispatcher, slashRegistry, services, config);
 
             // 调用 activate()
             plugin.activate(ctx);

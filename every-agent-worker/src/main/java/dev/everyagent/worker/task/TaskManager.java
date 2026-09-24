@@ -25,7 +25,7 @@ import dev.everyagent.worker.plugin.registry.TaskLifecycleRegistry;
 import dev.everyagent.worker.task.lifecycle.TaskLifecycleContextFactory;
 import dev.everyagent.worker.task.lifecycle.TaskLifecycleContextImpl;
 import dev.everyagent.worker.task.lifecycle.TaskLifecycleExecutor;
-import dev.everyagent.plugin.api.task.TaskAdmissionPolicy.AdmissionResult;
+import dev.everyagent.plugin.api.task.AdmissionResult;
 import dev.everyagent.plugin.api.task.TaskKernel;
 import dev.everyagent.plugin.api.task.TaskOutcome;
 import jakarta.annotation.PostConstruct;

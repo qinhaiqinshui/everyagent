@@ -25,6 +25,11 @@
             <artifactId>auth-review</artifactId>
             <version>${project.version}</version>
         </dependency>
+        <dependency>
+            <groupId>dev.everyagent</groupId>
+            <artifactId>task-queue</artifactId>
+            <version>${project.version}</version>
+        </dependency>
     </dependencies>
 
     <build>
