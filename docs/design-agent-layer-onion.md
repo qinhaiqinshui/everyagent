@@ -1,6 +1,6 @@
 # 设计方案：任务生命周期洋葱模型 + Agent 独立成层
 
-> 状态：**待评审**（用户确认后才实施）· v6（task.agents RPC 划归 subagent 插件：其唯一消费闭环是子 agent 列表（拉取→seedAgents→agentMeta→AgentListPanel），删除插件即无使用者；agent 层只保留台账写入/恢复作为 spawn 持久化真相源）
+> 状态：**待评审**（用户确认后才实施）· v7（子 agent 台账整体归 subagent 插件域：agents.json 是插件维护的事件投影，删除插件 = 台账概念消失、无读无写，磁盘数据不删；agent 层只留运行期 spawn 注册表——waitFor/stop/list 的执行态）
 > 范围声明：本文覆盖整体架构（洋葱底座、agent 层独立、subagent 插件三件套、任务队列插件预留）；**本次只实施 Phase 1（洋葱底座）**，其余分期列出。
 
 ---
@@ -52,7 +52,7 @@
   │  run(agent)          同步运行单个 agent 至最终回答（现 AgentRunner，薄）        │
   │  spawn/waitFor/stop/list   子 agent 异步编排（现 SubAgentManager 核心逻辑）    │
   │  AgentEventChannel   事件出口接口（task 层实现 → 写任务流 EventLog）           │
-  │  台账 agents.json 写入/恢复（spawn 持久化真相源，不随插件卸载）              │
+  │  运行期 spawn 注册表（实体/状态/futures——waitFor/stop/list 执行态）        │
   │  ChatClient + Advisor 生态（复用 Spring AI，红线不动）                          │
   └──────────────────────────────────┬─────────────────────────────────────────────┘
                                      ▲ 调用者（平级上层）
@@ -65,7 +65,7 @@
 
 **核心原则**：
 - **洋葱内核不直接 `runner.run`，而是调 `AgentService`**——从第一天起「任务 = 调用一个 agent（对话式）」的语义就成立；subagent 插件 = 调用一个 agent（一次性）+ 交互面（skill/UI）。两种调用模式平级。
-- **agent 层是核心，不随 subagent 插件卸载**：删除插件失去「AI 使用子 agent 的入口与方法论」「列表 UI」与 **task.agents RPC（唯一消费闭环是列表，随之消失、无孤儿）**；agent 层能力（spawn/事件/**台账写入与恢复**）保留——历史任务子 agent 的消息流靠事件 payload 自足渲染（title/input/usage 都在事件里，不依赖台账 RPC），其他上层仍可编程调用。
+- **agent 层是核心，不随 subagent 插件卸载**：删除插件失去「AI 使用子 agent 的入口与方法论」「列表 UI」「task.agents RPC」与**整个子 agent 台账概念（agents.json 的读写全部停止——它是插件维护的事件投影，磁盘数据原地保留不删）**；agent 层能力（spawn/事件/运行期 spawn 注册表）保留——历史任务子 agent 的消息流靠事件 payload 自足渲染（title/input/usage 都在事件里），其他上层仍可编程调用。
 - 洋葱是**任务生命周期层**的编排，**不是** agent 执行循环；agent 执行循环仍由 Spring AI `ToolCallingAdvisor` 递归驱动（红线：不手搓）。
 
 ---
@@ -214,7 +214,7 @@ filter 模型下收口序恒等于进入序的逆序（同一 order 决定两端
 | order | 节点 id | 下行段职责（一事） | 现状出处 |
 |---|---|---|---|
 | 100 | `persistence.track` | `store.track`：建目录 + 首写 meta.json + 挂 EventLog 监听 | rpcTaskRun L1078 |
-| 200 | `task.wires` | 注入 `onUsageBroadcast` / `persistHook`（TaskEntry 钩子字段） | wireUsageBroadcast L1938 / wireAgentPersist L1957 |
+| 200 | `task.wires` | 注入 `onUsageBroadcast` / `persistHook`（TaskEntry 钩子字段；persistHook 属台账，Phase 4 随插件迁出） | wireUsageBroadcast L1938 / wireAgentPersist L1957 |
 | 300 | `status.start` | `startedAt` + `setStatus(RUNNING)` + task.updated 广播 + `agentStatus("running")` | runTask L1635-1637 |
 | 400 | `main.agent` | `buildMainAgent` + `consumeInput(首条输入)` | runTask L1638-1639 |
 
@@ -231,7 +231,7 @@ filter 模型下收口序恒等于进入序的逆序（同一 order 决定两端
 | 5 | 750 | `log.flush` | `store.flush`（等落盘追平，30s 超时放行） | 锁内 | finish L1877 |
 | 6 | 700 | `queue.persist` | `store.writeQueue`（悬空输入队列落盘） | 锁内 | finish L1888 |
 | 7 | 650 | `status.persist` | `store.updateMeta`（**状态收口写磁盘**） | 锁内 | finish L1889 |
-| 8 | 600 | `ledger.persist` | `store.writeAgents`（agent 台账终态快照） | 锁内 | finish L1891 |
+| 8 | 600 | `ledger.persist` | `store.writeAgents`（agent 台账终态快照；Phase 4 改由 subagent 插件经 registerTaskLifecycleNode 贡献，删插件即无此节点） | 锁内 | finish L1891 |
 | 9 | 550 | `disk.index` | `diskTasks.put`（终态任务转磁盘索引） | 锁内 | finish L1892 |
 | 10 | 500 | `persistence.untrack` | `store.untrack`（关闭全部 jsonl writer） | 锁内 | finish L1893 |
 | 11 | 450 | `gate.evict` | `gate.untrack`（授权内存驱逐） | 锁内 | finish L1894 |
@@ -336,8 +336,8 @@ public interface AgentService {
 
 | 归属 | 内容 | 删除插件后 |
 |---|---|---|
-| **agent 层（核心）** | `AgentService.spawn/waitFor/stop/list`、`run`、agent 生命周期事件（agent.started/done/status）、**台账 `agents.json` 的写入与恢复**（agentLedger/writeAgents/restoreAgentLedger）、消息流中的 agent 事件渲染（历史数据，事件 payload 自足：title/input/usage 都在事件里） | **保留**——spawn 的持久化真相源与事件流渲染；其他上层仍可编程调用 |
-| **subagent 插件** | ① 4 个工具（run_agent/list_agents/wait_agents/stop_agent）② 1 个 skill（「子 Agent」方法论）③ **`task.agents` RPC**（唯一取数口，经 registerRpcMethod 注册——git 插件先例；方法名保留）④ 前端列表 UI 及其取数链（fetchTaskAgents/seedAgents 基线/agentMeta 列表消费 + AgentListPanel） | 全部消失——AI 无派子 agent 入口与方法论、前端无列表、**task.agents 无提供者也无使用者（无孤儿 RPC）** |
+| **agent 层（核心）** | `AgentService.spawn/waitFor/stop/list`、`run`、agent 生命周期事件（agent.started/done/status）、**运行期 spawn 注册表**（AgentEntity 表/futures/终态——waitFor/stop/list 的执行态，实现这三方法本身所需）、消息流中的 agent 事件渲染（历史数据，事件 payload 自足：title/input/usage 都在事件里） | **保留**——spawn 执行能力与事件流渲染；其他上层仍可编程调用 |
+| **subagent 插件** | ① 4 个工具（run_agent/list_agents/wait_agents/stop_agent）② 1 个 skill（「子 Agent」方法论）③ **`task.agents` RPC**（唯一取数口，经 registerRpcMethod 注册——git 插件先例；方法名保留）④ 前端列表 UI 及其取数链（fetchTaskAgents/seedAgents 基线/agentMeta 列表消费 + AgentListPanel）⑤ **子 agent 台账 `agents.json`**：插件维护的事件投影（订阅 agent.*/usage 事件更新内存台账，洋葱节点 `ledger.persist` + 定时快照落盘；读侧 disk 优先、读时把陈旧 running 归一为 stopped——现 restoreAgentLedger 语义前移到读路径） | 全部消失——AI 无派子 agent 入口与方法论、前端无列表、task.agents 无提供者无使用者、**台账无读无写（磁盘文件原地保留，重装插件即可继续读）** |
 
 插件是**纯薄壳**：工具方法体 = `agentService.spawn(...)` 等一行委托；skill 文案 = 使用方法论；前端组件 = 订阅 agent 层数据渲染。**不含任何执行逻辑。**
 
@@ -392,6 +392,7 @@ public record PluginSkill(String id, String name, String description, List<Strin
 | 主 agent 工具集 | 无 run_agent 族（ToolProviderRegistry 已按 PluginStateStore 过滤，天然支持） |
 | system prompt / `/` 菜单 | 无「子 Agent」skill 条目（SkillContributorRegistry 过滤） |
 | 前端 | composer 上方无胶囊列表（agentMeta 列表消费随之无意义，保持空置无害）；消息流中历史 agent.started/done 事件仍渲染（核心，事件 payload 自足）；`task.agents` RPC 无提供者（打开任务的拉取调用点已条件化跳过，失败仅 warn 不阻断） |
+| 台账 | 无读无写：agents.json 不再更新（磁盘文件保留）；重装插件后恢复读写（disk 优先读旧数据） |
 | worker 运行中任务的子 agent | 不受影响（已在跑的由 agent 层管理至终态） |
 
 打包：`every-agent-app` pom 增加模块依赖；**吸取 git 插件漏挂教训**——迁移必须同步 app pom，加 CI 一致性检查（插件模块 ↔ app pom）。
@@ -484,7 +485,7 @@ public interface AuthorizationHandler {
 | **1（本次）洋葱底座** | plugin-api 节点契约（`TaskLifecycleNode`/`TaskLifecycleContext`/`TaskOutcome`/`TaskKernel`）+ `registerTaskLifecycleNode`；`TaskLifecycleRegistry`（float 排序）+ `TaskOnion`；17 个内置节点拆分（下行 4 + 上行 13，finish/runTask/rpcTaskRun 逻辑**逐字映射**，不改行为）；`runTask` 重写为洋葱执行；单测（下行顺序/否决短路/逆序收口/try-finally 必达/幂等/取消/停机中断收口/锁分段）；ARCHITECTURE.md 新 §7.x | worker 行为零变化（事件顺序、seq、落盘字节级兼容），可回归验证 |
 | **2 agent 层** | `dev.everyagent.worker.agent` 包收敛 + `AgentContext`/`AgentEventChannel` 解耦 + `AgentService` + `AgentDispatcher` 废止 + `SubAgentManager` 编排下沉 | agent 层边界成立（能力全部留在核心），其他插件可依赖 |
 | **3 拦截链范式统一** | 工具执行链 + 授权决议链（含 PermissionGate 内部三链）迁移为 filter 形态（§6）；`ToolExecutionContext` 显式化替代 ThreadLocal；两个 SPI 使用者同步迁移 | 三链一种范式；工具链获得上行钩子、授权链获得决议后包裹 |
-| **4 subagent 插件** | 三件套迁移（工具 + SkillContributor + 前端面板**及取数链**：task.agents RPC 迁插件注册、taskStream 的 fetchTaskAgents 调用点条件化、agentMeta 基线灌入随面板走）；plugin-api 新增 `SkillContributor` SPI + 注册表；BuiltInSkills 合并改造；web `ComposerPanelCtx` 扩展 `selectAgent`；app pom 挂载 + CI 一致性检查 | 删除插件 = 无子 agent 工具/skill/前端列表/**task.agents RPC**，agent 层（台账写入/恢复/事件）完好 |
+| **4 subagent 插件** | 三件套迁移（工具 + SkillContributor + 前端面板**及取数链**：task.agents RPC 迁插件注册、taskStream 的 fetchTaskAgents 调用点条件化、agentMeta 基线灌入随面板走）+ **台账迁移**（agentLedger/writeAgents/restoreAgentLedger/30s 定时快照/persistHook→插件的事件投影：worker 侧新增任务事件观测 SPI 供插件订阅 agent.*/usage；`ledger.persist` 洋葱节点改插件贡献）；plugin-api 新增 `SkillContributor` SPI + 注册表；BuiltInSkills 合并改造；web `ComposerPanelCtx` 扩展 `selectAgent`；app pom 挂载 + CI 一致性检查 | 删除插件 = 无子 agent 工具/skill/前端列表/task.agents RPC/**台账读写**，agent 层（spawn 执行态/事件）完好 |
 | **5（未来）队列插件** | 形态三成对节点（下行段 enqueue 阻塞排队 / finally 出队广播）+ RPC 边缘预检扩展点 | 底座已就绪，不在本设计实施范围 |
 
 ---
@@ -512,7 +513,8 @@ public interface AuthorizationHandler {
 4. **原 L4（等子 agent/级联停）**：拆为 `spawned.await`（950）+ `cascade.stop`（900）两个上行节点，Phase 1 直接包含（收口动作仅为方法搬移，触碰 `SubAgentManager` 面极小——`awaitAllBeforeFinish`/`stopAll` 两个既有方法调用）。
 5. **节点为 Servlet Filter 参与式链**（v4）：`result = next(ctx)`；下行=next 前、上行=next 后；收口序=进入序逆序。
 6. **工具执行链与审核授权链同样迁移为 filter 形态**（v5）：写入 §6，独立 Phase 3 实施，Phase 1 不动。
-7. **task.agents RPC 归 subagent 插件**（v6）：其唯一消费闭环是子 agent 列表（TaskPacketView 拉取 → seedAgents 灌 agentMeta 基线 → AgentListPanel）；消息流 agent 卡片靠事件 payload 自足不依赖它。删除插件 = RPC 无提供者也无使用者。agent 层保留台账写入/恢复（spawn 持久化真相源）。
+7. **task.agents RPC 归 subagent 插件**（v6）：其唯一消费闭环是子 agent 列表（TaskPacketView 拉取 → seedAgents 灌 agentMeta 基线 → AgentListPanel）；消息流 agent 卡片靠事件 payload 自足不依赖它。
+8. **子 agent 台账整体归插件域**（v7）：agents.json 是插件维护的事件投影而非 agent 层真相源——删除插件 = 台账概念消失（无读无写），磁盘数据不删。agent 层只保留运行期 spawn 注册表（waitFor/stop/list 执行态）。`ledger.persist` 洋葱节点 Phase 4 改由插件贡献；插件经新增的任务事件观测 SPI 订阅 agent.*/usage 维护投影（具体 SPI 形态 Phase 4 定）。
 
 ## 10. 遗留待确认
 
