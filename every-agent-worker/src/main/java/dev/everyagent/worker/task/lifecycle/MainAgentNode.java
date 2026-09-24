@@ -7,7 +7,7 @@ import dev.everyagent.plugin.api.task.TaskOutcome;
 
 /**
  * 下行节点(order=390)：buildMainAgent + consumeInput(首条输入)。
- * 通过上下文回调委托给 TaskManager 的 buildMainAgent/consumeInput（行为零变化）。
+ * buildMainAgent 经上下文回调委托给 TaskManager，consumeInput 调上下文自身方法（行为零变化）。
  */
 public final class MainAgentNode implements TaskLifecycleNode {
 
@@ -23,7 +23,7 @@ public final class MainAgentNode implements TaskLifecycleNode {
         var t = impl.taskEntry();
         var main = impl.mainAgentBuilder().apply(impl.priorConversation());
         t.main = main;
-        impl.inputConsumer().accept(main, impl.initialInput());
+        impl.consumeInput(main, impl.initialInput());
         return next.proceed(ctx);
     }
 }

@@ -22,8 +22,8 @@ import dev.everyagent.worker.rpc.RpcDispatcher;
 import dev.everyagent.worker.ship.TaskInputHandler;
 import dev.everyagent.worker.slash.SlashTaskCallbacks;
 import dev.everyagent.worker.slash.SlashTokenEncoder;
-import dev.everyagent.worker.tools.PermissionGate;
 import dev.everyagent.worker.plugin.registry.TaskLifecycleRegistry;
+import dev.everyagent.worker.task.lifecycle.TaskLifecycleContextFactory;
 import dev.everyagent.worker.task.lifecycle.TaskLifecycleContextImpl;
 import dev.everyagent.worker.task.lifecycle.TaskLifecycleExecutor;
 import dev.everyagent.plugin.api.task.TaskKernel;
@@ -33,7 +33,6 @@ import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.messages.Message;
-import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.support.ToolCallbacks;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.stereotype.Component;
@@ -91,9 +90,9 @@ public class TaskManager implements TaskInputHandler, PendingAsks.StatusHook {
     private final RpcDispatcher dispatcher;
     private final WorkspaceManager workspaces;
     private final TaskStore store;
-    /** 授权门:consumeInput 每条新输入 beginRun(本轮 run 授权失效,任务级不受影响)。 */
-    private final PermissionGate gate;
     private final RoundIndexStore roundIndexStore;
+    /** 任务生命周期上下文工厂:聚合 gate/roundIndexStore/store 组装上下文(gate 不再由本类持有)。 */
+    private final TaskLifecycleContextFactory lifecycleContextFactory;
     private final TaskLifecycleExecutor lifecycleExecutor;
     private final TaskLifecycleRegistry lifecycleRegistry;
 
@@ -122,7 +121,8 @@ public class TaskManager implements TaskInputHandler, PendingAsks.StatusHook {
     public TaskManager(EventSink eventSink, AgentService agentService, AgentFactory agentFactory,
             SlashTaskCallbacks slashCallbacks, ConfigStore configs, SubAgentManager subs, PendingAsks asks,
             WorkerProperties props, RpcDispatcher dispatcher, WorkspaceManager workspaces,
-            PermissionGate gate, TaskStore store, RoundIndexStore roundIndexStore,
+            TaskStore store, RoundIndexStore roundIndexStore,
+            TaskLifecycleContextFactory lifecycleContextFactory,
             TaskLifecycleExecutor lifecycleExecutor, TaskLifecycleRegistry lifecycleRegistry) {
         this.eventSink = eventSink;
         this.agentService = agentService;
@@ -134,9 +134,9 @@ public class TaskManager implements TaskInputHandler, PendingAsks.StatusHook {
         this.props = props;
         this.dispatcher = dispatcher;
         this.workspaces = workspaces;
-        this.gate = gate;
         this.store = store;
         this.roundIndexStore = roundIndexStore;
+        this.lifecycleContextFactory = lifecycleContextFactory;
         this.lifecycleExecutor = lifecycleExecutor;
         this.lifecycleRegistry = lifecycleRegistry;
     }
@@ -1517,11 +1517,10 @@ public class TaskManager implements TaskInputHandler, PendingAsks.StatusHook {
         log.debug("[run] runTask 开始 taskId={} thread={} interruptFlag={}",
                 t.taskId, Thread.currentThread().getName(), Thread.currentThread().isInterrupted());
 
-        TaskLifecycleContextImpl ctx = new TaskLifecycleContextImpl(t);
+        TaskLifecycleContextImpl ctx = lifecycleContextFactory.create(t);
         ctx.initialInput(initialInput);
         ctx.priorConversation(priorConversation);
         ctx.mainAgentBuilder(prior -> agentFactory.buildMainAgent(t, prior));
-        ctx.inputConsumer((main, input) -> consumeInput(t, main, input));
         ctx.concurrencyReleaser(() -> active.decrementAndGet());
         ctx.diskIndexer(st -> diskTasks.put(st.taskId(), st));
         ctx.registryRemover(() -> tasks.remove(t.taskId, t));
@@ -1545,10 +1544,10 @@ public class TaskManager implements TaskInputHandler, PendingAsks.StatusHook {
                         if (next == null) {
                             break;
                         }
-                        consumeInput(te, main, next);
+                        ctx.consumeInput(main, next);
                         continue;
                     }
-                    consumeInput(te, main, next);
+                    ctx.consumeInput(main, next);
                     publishQueue(te);
                 }
                 long startedAt = te.startedAt != null ? te.startedAt : 0;
@@ -1571,27 +1570,7 @@ public class TaskManager implements TaskInputHandler, PendingAsks.StatusHook {
         lifecycleExecutor.run(lifecycleRegistry.getNodes(), kernel, ctx);
     }
 
-    /** 消费一条用户输入:授权本轮失效 + 记 user.message + 开轮落盘 + 入会话内存。 */
-    private void consumeInput(TaskEntry t, AgentEntity main, UserInput input) {
-        String text = input.text();
-        String rawContent = input.rawContent();
-        gate.beginRun(t.taskId); // 新一条用户输入:本轮(run)授权失效(任务级不受影响)
-        // user.message 落盘后以它的 seq 为轮起点开轮:最后一行未闭合则沿用(中间输入/续跑不开新轮);
-        // 已闭合/无行则追加一条 endSeq="" 的未闭合轮。中断/取消/失败不再于终态补写,轮行随开轮即持久化。
-        long seq = t.events.userMessage(text, rawContent);
-        // 开轮落盘带完整 user.message payload(懒加载骨架起点;与 userMessage 事件 payload 同源):
-        // text 供展示/AI 摘要,rawContent 供前端回放还原胶囊。
-        ObjectNode userPayload = Json.obj().put("text", text);
-        if (rawContent != null && !rawContent.isEmpty()) {
-            userPayload.put("rawContent", rawContent);
-        }
-        if (roundIndexStore.openRoundAtStart(store, t.taskId, seq, text, userPayload)) {
-            // 真的新开一轮(非中间输入/续跑沿用)才推 round.opened;瞬态不落盘。
-            t.events.roundOpened(seq, text);
-        }
-        main.conversation.add(new UserMessage(text));
-        t.touch();
-    }
+    // consumeInput 已迁 TaskLifecycleContextImpl(授权门 beginRun/开轮/入会话内存随任务上下文走)。
 
     /**
      * 编辑重发·运行中热路径：截断磁盘+内存中 seq > editSeq 的事件，
