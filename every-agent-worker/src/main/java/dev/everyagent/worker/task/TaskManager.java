@@ -7,7 +7,6 @@ import dev.everyagent.worker.agent.AgentService;
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.hub.EventSink;
 import dev.everyagent.worker.hub.HubLink;
-import dev.everyagent.worker.modules.ConfigStore;
 import dev.everyagent.worker.modules.ConfigStore.ResolvedConfig;
 import dev.everyagent.worker.modules.WorkspaceManager;
 import dev.everyagent.worker.proto.Channels;
@@ -16,7 +15,6 @@ import dev.everyagent.worker.proto.RpcMethods;
 import dev.everyagent.worker.proto.ShortIds;
 import dev.everyagent.worker.proto.TaskDtos.ModelSnapshot;
 import dev.everyagent.worker.proto.TaskDtos.TaskStatus;
-import dev.everyagent.worker.rpc.NotFoundException;
 import dev.everyagent.worker.rpc.RpcContext;
 import dev.everyagent.worker.rpc.RpcDispatcher;
 import dev.everyagent.worker.ship.TaskInputHandler;
@@ -82,13 +80,12 @@ public class TaskManager implements TaskInputHandler, PendingAsks.StatusHook {
     private final AgentFactory agentFactory;
     /** slash 建后回调(slash 基础设施):任务级 token 反查 onSelect 已迁出。 */
     private final SlashTaskCallbacks slashCallbacks;
-    /** 模型配置:task.run 创建时冻结快照、startRerun 切换模型时解析(任务编排语义,保留)。 */
-    private final ConfigStore configs;
+    /** 创建/再运行准备路径:workspace 解析与模型配置解析已迁 TaskBootstrap(TaskEntry 构造前的动作)。 */
+    private final TaskBootstrap taskBootstrap;
     private final SubAgentManager subs;
     private final PendingAsks asks;
     private final WorkerProperties props;
     private final RpcDispatcher dispatcher;
-    private final WorkspaceManager workspaces;
     private final TaskStore store;
     private final RoundIndexStore roundIndexStore;
     /** 任务生命周期上下文工厂:聚合 gate/roundIndexStore/store 组装上下文(gate 不再由本类持有)。 */
@@ -119,8 +116,8 @@ public class TaskManager implements TaskInputHandler, PendingAsks.StatusHook {
     }
 
     public TaskManager(EventSink eventSink, AgentService agentService, AgentFactory agentFactory,
-            SlashTaskCallbacks slashCallbacks, ConfigStore configs, SubAgentManager subs, PendingAsks asks,
-            WorkerProperties props, RpcDispatcher dispatcher, WorkspaceManager workspaces,
+            SlashTaskCallbacks slashCallbacks, TaskBootstrap taskBootstrap, SubAgentManager subs, PendingAsks asks,
+            WorkerProperties props, RpcDispatcher dispatcher,
             TaskStore store, RoundIndexStore roundIndexStore,
             TaskLifecycleContextFactory lifecycleContextFactory,
             TaskLifecycleExecutor lifecycleExecutor, TaskLifecycleRegistry lifecycleRegistry) {
@@ -128,12 +125,11 @@ public class TaskManager implements TaskInputHandler, PendingAsks.StatusHook {
         this.agentService = agentService;
         this.agentFactory = agentFactory;
         this.slashCallbacks = slashCallbacks;
-        this.configs = configs;
+        this.taskBootstrap = taskBootstrap;
         this.subs = subs;
         this.asks = asks;
         this.props = props;
         this.dispatcher = dispatcher;
-        this.workspaces = workspaces;
         this.store = store;
         this.roundIndexStore = roundIndexStore;
         this.lifecycleContextFactory = lifecycleContextFactory;
@@ -1008,19 +1004,16 @@ public class TaskManager implements TaskInputHandler, PendingAsks.StatusHook {
         }
         WorkspaceManager.Root root;
         try {
-            root = workspaces.resolveAndRegister(ctx.strParam("workspace")); // 注册 + 校验(必填)
+            root = taskBootstrap.resolveWorkspace(ctx.strParam("workspace")); // 注册 + 校验(必填)
         } catch (java.io.IOException e) {
             ctx.err(Rpc.ERR_INTERNAL, "工作区目录不可用: " + e.getMessage());
             return;
         }
         // 稳定 workspaceId(注册后必在册;防御兜底回退默认 id,任务目录据此归类)。
-        String workspaceId = workspaces.idOfRoot(root.path().toString());
-        if (workspaceId == null) {
-            workspaceId = WorkspaceManager.DEFAULT_WORKSPACE_ID;
-        }
+        String workspaceId = taskBootstrap.workspaceIdOf(root.path().toString());
         String taskId = uniqueTaskId(workspaceId);
         String mainAgentId = ShortIds.mainAgentId();
-        ResolvedConfig cfg = configs.resolve(ctx.optStrParam("configId", null));
+        ResolvedConfig cfg = taskBootstrap.resolveConfig(ctx.optStrParam("configId", null));
         TaskEntry t = new TaskEntry(taskId, title, cfg.snapshot(),
                 cfg.apiKey(), root.path().toString(), workspaceId, mainAgentId,
                 props.getLimits().getMaxEventsPerTask());
@@ -1416,27 +1409,15 @@ public class TaskManager implements TaskInputHandler, PendingAsks.StatusHook {
             return;
         }
         // 模型:输入箱切换时以 overrideConfigId 优先;否则沿用任务最后运行的 configId
-        // (配置已删回退默认)。override 非法时回退任务原始 configId,再不行回退默认。
-        ResolvedConfig cfg;
-        String desiredConfigId = (overrideConfigId != null && !overrideConfigId.isEmpty())
-                ? overrideConfigId
-                : meta.path("configId").asString(null);
-        try {
-            cfg = configs.resolve(desiredConfigId);
-        } catch (NotFoundException e) {
-            try {
-                cfg = configs.resolve(meta.path("configId").asString(null));
-            } catch (NotFoundException e2) {
-                cfg = configs.resolve(null);
-            }
-        }
-        // 稳定工作区 id:新 meta 直读;旧 meta 无该字段时按 workspace 反查注册表,仍无回退默认。
+        // (配置已删回退默认)。override 非法时回退任务原始 configId,再不行回退默认
+        // (三级回退链已迁 TaskBootstrap.resolveRerunConfig,逐字保留)。
+        ResolvedConfig cfg = taskBootstrap.resolveRerunConfig(overrideConfigId,
+                meta.path("configId").asString(null));
+        // 稳定工作区 id:新 meta 直读;旧 meta 无该字段时按 workspace 反查注册表,仍无回退默认
+        // (反查+兜底已迁 TaskBootstrap.workspaceIdOf)。
         String workspaceId = meta.path("workspaceId").asString(null);
         if (workspaceId == null || workspaceId.isEmpty()) {
-            workspaceId = workspaces.idOfRoot(meta.path("workspace").asString(""));
-            if (workspaceId == null) {
-                workspaceId = WorkspaceManager.DEFAULT_WORKSPACE_ID;
-            }
+            workspaceId = taskBootstrap.workspaceIdOf(meta.path("workspace").asString(""));
         }
         TaskEntry t = new TaskEntry(taskId,
                 meta.path("title").asString("继续对话"), cfg.snapshot(), cfg.apiKey(),

@@ -58,10 +58,10 @@ class AgentLedgerTest {
 
     /** TaskManager 只在 restoreAgentLedger 路径用到 store(其余依赖传 null,不触发生命周期)。 */
     private static TaskManager manager(TaskStore store, WorkerProperties props) {
-        // (eventSink, agentService, agentFactory, slashCallbacks, configs, subs, asks,
-        //  props, dispatcher, workspaces, store, roundIndexStore, lifecycleContextFactory,
+        // (eventSink, agentService, agentFactory, slashCallbacks, taskBootstrap, subs, asks,
+        //  props, dispatcher, store, roundIndexStore, lifecycleContextFactory,
         //  lifecycleExecutor, lifecycleRegistry)
-        return new TaskManager(null, null, null, null, null, null, null, props, null, null,
+        return new TaskManager(null, null, null, null, null, null, null, props, null,
                 store, null, null, null, null);
     }
 

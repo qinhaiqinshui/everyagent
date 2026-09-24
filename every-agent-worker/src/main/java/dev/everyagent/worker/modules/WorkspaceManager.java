@@ -82,8 +82,9 @@ public class WorkspaceManager implements dev.everyagent.plugin.api.spi.Workspace
     private final RpcDispatcher dispatcher;
     private final HubPool pool;
     /**
-     * TaskManager 依赖本类(TaskManager 构造器注入 WorkspaceManager),若本类构造器直接注入
-     * TaskManager 会构成构造器循环。用 ObjectProvider 懒解析,仅 workspaces.remove 级联删除时取用。
+     * TaskManager 传递依赖本类(经 TaskBootstrap 构造器注入 WorkspaceManager),若本类构造器
+     * 直接注入 TaskManager 会构成构造器循环。用 ObjectProvider 懒解析,仅 workspaces.remove
+     * 级联删除时取用。
      */
     private final ObjectProvider<TaskManager> taskManagers;
     /**
