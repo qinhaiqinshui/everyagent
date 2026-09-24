@@ -2,14 +2,15 @@ package dev.everyagent.worker.task;
 
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.contract.rpc.Rpc;
+import dev.everyagent.worker.agent.AgentFactory;
+import dev.everyagent.worker.agent.AgentService;
 import dev.everyagent.worker.config.WorkerProperties;
+import dev.everyagent.worker.hub.EventSink;
 import dev.everyagent.worker.hub.HubLink;
-import dev.everyagent.worker.hub.HubPool;
 import dev.everyagent.worker.modules.ConfigStore;
 import dev.everyagent.worker.modules.ConfigStore.ResolvedConfig;
 import dev.everyagent.worker.modules.WorkspaceManager;
 import dev.everyagent.worker.proto.Channels;
-import dev.everyagent.worker.proto.ConfigDtos.ModelConfig;
 import dev.everyagent.worker.proto.Events;
 import dev.everyagent.worker.proto.RpcMethods;
 import dev.everyagent.worker.proto.ShortIds;
@@ -17,30 +18,16 @@ import dev.everyagent.worker.proto.TaskDtos.ModelSnapshot;
 import dev.everyagent.worker.proto.TaskDtos.TaskStatus;
 import dev.everyagent.worker.rpc.NotFoundException;
 import dev.everyagent.worker.rpc.RpcContext;
-import dev.everyagent.worker.slash.SlashCommandItem;
-import dev.everyagent.worker.slash.SlashCommandRegistry;
-import dev.everyagent.worker.slash.SlashTokenEncoder;
 import dev.everyagent.worker.rpc.RpcDispatcher;
-import dev.everyagent.worker.tools.AskUserTool;
-import dev.everyagent.worker.tools.BashTool;
-import dev.everyagent.worker.tools.CommandExecutor;
-import dev.everyagent.worker.tools.FileTools;
-import dev.everyagent.worker.tools.FsToolSupport;
+import dev.everyagent.worker.ship.TaskInputHandler;
+import dev.everyagent.worker.slash.SlashTaskCallbacks;
+import dev.everyagent.worker.slash.SlashTokenEncoder;
 import dev.everyagent.worker.tools.PermissionGate;
-import dev.everyagent.worker.tools.PowerShellTool;
-import dev.everyagent.worker.tools.RipgrepBinary;
-import dev.everyagent.worker.tools.SubAgentTools;
-import dev.everyagent.worker.os.OsSandbox;
-import dev.everyagent.worker.plugin.ToolContextImpl;
 import dev.everyagent.worker.plugin.registry.TaskLifecycleRegistry;
-import dev.everyagent.worker.plugin.registry.ToolProviderRegistry;
-import dev.everyagent.plugin.api.spi.ToolProvider;
-import dev.everyagent.plugin.api.task.TaskKernel;
-import dev.everyagent.plugin.api.task.TaskOutcome;
 import dev.everyagent.worker.task.lifecycle.TaskLifecycleContextImpl;
 import dev.everyagent.worker.task.lifecycle.TaskLifecycleExecutor;
-import dev.everyagent.worker.agent.AgentService;
-import dev.everyagent.worker.ship.StreamSourceRegistry;
+import dev.everyagent.plugin.api.task.TaskKernel;
+import dev.everyagent.plugin.api.task.TaskOutcome;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
@@ -75,10 +62,10 @@ import java.util.concurrent.atomic.AtomicInteger;
  * flush→updateMeta→写索引→untrack 双件套→tasks.remove,TaskEntry 连同 EventLog 丢弃;
  * 内存仅留磁盘路由索引(diskTasks,~150B/任务)。任务永久保留,用户主动 delete 是唯一删除路径。
  * 终态任务收到 task.input = 冷启动再运行(ConversationLoader 从磁盘重建上下文,一次普通运行)。
- * 多 hub:任务不做 owner 隔离;任务事件经 HubPool.pubAllTasks 扇出到全部连接的 tasks 频道。
+ * 多 hub:任务不做 owner 隔离;任务事件经 EventSink.fanout 扇出到全部连接的 tasks 频道。
  */
 @Component
-public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
+public class TaskManager implements TaskInputHandler, PendingAsks.StatusHook {
 
     private static final Logger log = LoggerFactory.getLogger(TaskManager.class);
     private static final long IDEM_WINDOW_MS = 600_000;
@@ -89,32 +76,26 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
     /** taskId 查重重生成的最大尝试次数(连续冲突即失败,防御死循环)。 */
     private static final int MAX_TASKID_ATTEMPTS = 10_000;
 
-    private final HubPool pool;
-    private final ConfigStore configs;
-    private final ChatModelFactory modelFactory;
-    private final AgentRunner runner;
+    /** 事件出口(基础设施·通信):任务事件扇出已收敛到 fanout(替代 HubPool.pubAllTasks/pubTaskStream)。 */
+    private final EventSink eventSink;
     private final AgentService agentService;
+    /** Agent 装配工厂(agent 层):主 agent 的模型/工具装配已迁出(buildMainAgent)。 */
+    private final AgentFactory agentFactory;
+    /** slash 建后回调(slash 基础设施):任务级 token 反查 onSelect 已迁出。 */
+    private final SlashTaskCallbacks slashCallbacks;
+    /** 模型配置:task.run 创建时冻结快照、startRerun 切换模型时解析(任务编排语义,保留)。 */
+    private final ConfigStore configs;
     private final SubAgentManager subs;
     private final PendingAsks asks;
     private final WorkerProperties props;
     private final RpcDispatcher dispatcher;
-    private final dev.everyagent.worker.modules.WorkspaceManager workspaces;
-    private final FsToolSupport fs;
-    private final OsSandbox sandbox;
+    private final WorkspaceManager workspaces;
     private final TaskStore store;
+    /** 授权门:consumeInput 每条新输入 beginRun(本轮 run 授权失效,任务级不受影响)。 */
     private final PermissionGate gate;
-    private final RipgrepBinary rgbin;
-    private final SlashCommandRegistry slashRegistry;
     private final RoundIndexStore roundIndexStore;
-    private final ToolProviderRegistry toolProviderRegistry;
     private final TaskLifecycleExecutor lifecycleExecutor;
     private final TaskLifecycleRegistry lifecycleRegistry;
-    /** 流源注册表:track 时 attach(taskId, log),untrack 时 detach(推送器经此取日志)。 */
-    private final StreamSourceRegistry streamSources;
-    /** 工作区最后活动时间跟踪(任务收口时刷新,前端按最近活动倒序渲染)。 */
-    private final dev.everyagent.worker.modules.WorkspaceActivityTracker activityTracker;
-    /** 外部 skill 扫描器(skill.reload RPC 热加载入口)。 */
-    private final dev.everyagent.worker.skill.ExternalSkillScanner externalSkillScanner;
 
     /** 热任务(运行中驻留内存;finish 即驱逐)。 */
     private final Map<String, TaskEntry> tasks = new ConcurrentHashMap<>();
@@ -138,49 +119,33 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
         void onTaskResumed(String taskId);
     }
 
-    public TaskManager(HubPool pool, ConfigStore configs, ChatModelFactory modelFactory,
-            AgentRunner runner, AgentService agentService, SubAgentManager subs, PendingAsks asks, WorkerProperties props,
-            RpcDispatcher dispatcher, dev.everyagent.worker.modules.WorkspaceManager workspaces,
-            FsToolSupport fs, OsSandbox sandbox, TaskStore store, PermissionGate gate, RipgrepBinary rgbin,
-            SlashCommandRegistry slashRegistry, RoundIndexStore roundIndexStore,
-            dev.everyagent.worker.modules.WorkspaceActivityTracker activityTracker,
-            dev.everyagent.worker.skill.ExternalSkillScanner externalSkillScanner,
-            ToolProviderRegistry toolProviderRegistry,
-            TaskLifecycleExecutor lifecycleExecutor, TaskLifecycleRegistry lifecycleRegistry,
-            StreamSourceRegistry streamSources) {
-        this.pool = pool;
-        this.configs = configs;
-        this.modelFactory = modelFactory;
-        this.runner = runner;
+    public TaskManager(EventSink eventSink, AgentService agentService, AgentFactory agentFactory,
+            SlashTaskCallbacks slashCallbacks, ConfigStore configs, SubAgentManager subs, PendingAsks asks,
+            WorkerProperties props, RpcDispatcher dispatcher, WorkspaceManager workspaces,
+            PermissionGate gate, TaskStore store, RoundIndexStore roundIndexStore,
+            TaskLifecycleExecutor lifecycleExecutor, TaskLifecycleRegistry lifecycleRegistry) {
+        this.eventSink = eventSink;
         this.agentService = agentService;
+        this.agentFactory = agentFactory;
+        this.slashCallbacks = slashCallbacks;
+        this.configs = configs;
         this.subs = subs;
         this.asks = asks;
         this.props = props;
         this.dispatcher = dispatcher;
         this.workspaces = workspaces;
-        this.fs = fs;
-        this.sandbox = sandbox;
-        this.store = store;
         this.gate = gate;
-        this.rgbin = rgbin;
-        this.slashRegistry = slashRegistry;
+        this.store = store;
         this.roundIndexStore = roundIndexStore;
-        this.toolProviderRegistry = toolProviderRegistry;
-        this.activityTracker = activityTracker;
-        this.externalSkillScanner = externalSkillScanner;
         this.lifecycleExecutor = lifecycleExecutor;
         this.lifecycleRegistry = lifecycleRegistry;
-        this.streamSources = streamSources;
     }
 
     @PostConstruct
     void init() {
-        pool.addListener(this);
         asks.setHook(this);
-        // worker 级输入频道常订阅:每条连接各自的命名空间(连接建立/重连时由 HubLink 重放)
-        for (HubLink conn : pool.conns()) {
-            conn.sub(Channels.workerInput(conn.k(), props.getWorkerId()));
-        }
+        // 输入路由已迁 TaskMessageRouter(HubPool.Listener → TaskInputHandler 三方法,本类实现之);
+        // 任务事件广播经 EventSink.fanout(见 eventSink 字段),本类不再挂 HubPool 监听。
         registerMethods(dispatcher);
         recoverFromDisk();
         // 运行中任务 agent 台账定时持久化:每 30s 落盘(子 agent 终态收口另有即时持久化)。
@@ -214,87 +179,81 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
         }
     }
 
-    // ---- 输入路由(worker 级频道;task.input / ask.reply)----
+    // ---- TaskInputHandler:worker 输入频道消息(TaskMessageRouter 路由进来;task.input / ask.reply)----
 
     @Override
-    public void onHubMessage(HubLink conn, JsonNode frame) {
-        String channel = frame.path("channel").asString("");
-        if (!channel.equals(Channels.workerInput(conn.k(), props.getWorkerId()))) {
+    public void onTaskInput(HubLink conn, JsonNode payload) {
+        String taskId = payload.path("taskId").asString("");
+        String text = payload.path("text").asString("");
+        String rawContent = payload.path("rawContent").isTextual()
+                ? payload.path("rawContent").asString()
+                : null;
+        if (taskId.isEmpty() || text.isEmpty()) {
             return;
         }
-        String event = frame.path("event").asString("");
-        JsonNode payload = frame.path("payload");
-        switch (event) {
-            case Events.TASK_INPUT -> {
-                String taskId = payload.path("taskId").asString("");
-                String text = payload.path("text").asString("");
-                String rawContent = payload.path("rawContent").isTextual()
-                        ? payload.path("rawContent").asString()
-                        : null;
-                if (taskId.isEmpty() || text.isEmpty()) {
-                    return;
-                }
-                TaskEntry t = tasks.get(taskId);
-                if (t != null && !t.status.terminal()) {
-                    // 编辑重发：截断清理后正常入队
-                    String editSeq = payload.path("editSeq").isTextual() ? payload.path("editSeq").asString() : null;
-                    if (editSeq != null && !editSeq.isEmpty()) {
-                        truncateForEdit(taskId, t, editSeq, text, rawContent);
-                    }
-                    t.inputQueue.offer(text, rawContent); // 运行中:本轮运行的输入循环内消化
-                    t.touch();
-                    publishQueue(t); // 队列变化即广播(pendingInputs 快照,前端镜像实时)
-                    return;
-                }
-                // 不在内存或已终态(finish 驱逐窗口内):统一走再运行认领。
-                // 热终态直接 return 会把输入无声丢弃——done 帧发布于 finish 持锁段头部,
-                // flush/meta/驱逐完成前到达的输入都落在这个窗口。
-                String editSeq2 = payload.path("editSeq").isTextual() ? payload.path("editSeq").asString() : null;
-                rerunTask(conn, taskId, text, rawContent, editSeq2);
+        TaskEntry t = tasks.get(taskId);
+        if (t != null && !t.status.terminal()) {
+            // 编辑重发：截断清理后正常入队
+            String editSeq = payload.path("editSeq").isTextual() ? payload.path("editSeq").asString() : null;
+            if (editSeq != null && !editSeq.isEmpty()) {
+                truncateForEdit(taskId, t, editSeq, text, rawContent);
             }
-            case Events.TASK_DIALOG_INSERT -> {
-                String taskId = payload.path("taskId").asString("");
-                String text = payload.path("text").asString("");
-                if (taskId.isEmpty() || text.isEmpty()) {
-                    return;
-                }
-                // 只对运行中热任务生效:队列项插入到正在进行的 AI 对话循环,终态/不存在静默忽略
-                TaskEntry t = tasks.get(taskId);
-                if (t == null || t.status.terminal()) {
-                    return;
-                }
-                // 插入只对本轮主 agent 生效:run 尚未建立主 agent(创建→开跑的极短窗口)时忽略,
-                // 队列项保留;用户停止/任务终态后 t.main 已换新实体,旧积压随之作废。
-                AgentEntity main = t.main;
-                if (main == null) {
-                    return;
-                }
-                // 把该条队列项从 pendingInputs 移除(插入即消费,避免后续被正常循环重复消化)。
-                // 优先按前端下标删除;下标缺失/越界(并发消费导致漂移)时回退按正文删除第一条匹配。
-                // 从被删队列项拿到原始内容(rawContent),随插入一起带进 user.message 回放。
-                int index = payload.path("index").asInt(-1);
-                UserInput removedInput = null;
-                if (index >= 0) {
-                    try {
-                        removedInput = t.inputQueue.removeAt(index);
-                    } catch (IndexOutOfBoundsException e) {
-                        log.warn("task.dialogInsert 队列下标越界 task={} index={}(回退按正文删除)", taskId, index);
-                    }
-                }
-                if (removedInput == null) {
-                    removedInput = t.inputQueue.removeFirst(text);
-                }
-                // 加入本轮主 agent 的插入队列:DialogInsertAdvisor 在工具循环下行阶段随工具结果
-                // 一起以 role=user 提交给 AI(停止即随 AgentEntity 作废,不跨 run 共享)
-                main.pendingDialogInserts.offer(removedInput != null ? removedInput : UserInput.of(text));
-                t.touch();
-                publishQueue(t); // 队列移除后广播最新 pendingInputs(未移除则空广播无副作用)
-            }
-            case Events.ASK_REPLY -> asks.resolve(payload.path("askId").asString(""),
-                    payload.path("answer").asString(""), "user");
-            default -> {
+            t.inputQueue.offer(text, rawContent); // 运行中:本轮运行的输入循环内消化
+            t.touch();
+            publishQueue(t); // 队列变化即广播(pendingInputs 快照,前端镜像实时)
+            return;
+        }
+        // 不在内存或已终态(finish 驱逐窗口内):统一走再运行认领。
+        // 热终态直接 return 会把输入无声丢弃——done 帧发布于 finish 持锁段头部,
+        // flush/meta/驱逐完成前到达的输入都落在这个窗口。
+        String editSeq2 = payload.path("editSeq").isTextual() ? payload.path("editSeq").asString() : null;
+        rerunTask(conn, taskId, text, rawContent, editSeq2);
+    }
+
+    @Override
+    public void onDialogInsert(JsonNode payload) {
+        String taskId = payload.path("taskId").asString("");
+        String text = payload.path("text").asString("");
+        if (taskId.isEmpty() || text.isEmpty()) {
+            return;
+        }
+        // 只对运行中热任务生效:队列项插入到正在进行的 AI 对话循环,终态/不存在静默忽略
+        TaskEntry t = tasks.get(taskId);
+        if (t == null || t.status.terminal()) {
+            return;
+        }
+        // 插入只对本轮主 agent 生效:run 尚未建立主 agent(创建→开跑的极短窗口)时忽略,
+        // 队列项保留;用户停止/任务终态后 t.main 已换新实体,旧积压随之作废。
+        AgentEntity main = t.main;
+        if (main == null) {
+            return;
+        }
+        // 把该条队列项从 pendingInputs 移除(插入即消费,避免后续被正常循环重复消化)。
+        // 优先按前端下标删除;下标缺失/越界(并发消费导致漂移)时回退按正文删除第一条匹配。
+        // 从被删队列项拿到原始内容(rawContent),随插入一起带进 user.message 回放。
+        int index = payload.path("index").asInt(-1);
+        UserInput removedInput = null;
+        if (index >= 0) {
+            try {
+                removedInput = t.inputQueue.removeAt(index);
+            } catch (IndexOutOfBoundsException e) {
+                log.warn("task.dialogInsert 队列下标越界 task={} index={}(回退按正文删除)", taskId, index);
             }
         }
+        if (removedInput == null) {
+            removedInput = t.inputQueue.removeFirst(text);
+        }
+        // 加入本轮主 agent 的插入队列:DialogInsertAdvisor 在工具循环下行阶段随工具结果
+        // 一起以 role=user 提交给 AI(停止即随 AgentEntity 作废,不跨 run 共享)
+        main.pendingDialogInserts.offer(removedInput != null ? removedInput : UserInput.of(text));
+        t.touch();
+        publishQueue(t); // 队列移除后广播最新 pendingInputs(未移除则空广播无副作用)
+    }
+
+    @Override
+    public void onAskReply(JsonNode payload) {
+        asks.resolve(payload.path("askId").asString(""),
+                payload.path("answer").asString(""), "user");
     }
 
     // ---- RPC 方法注册 ----
@@ -311,9 +270,7 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
         dispatcher.register(RpcMethods.TASK_DELETE, this::rpcTaskDelete);
         dispatcher.register(RpcMethods.TASK_QUEUE_REMOVE, this::rpcTaskQueueRemove);
         dispatcher.register(RpcMethods.TASK_QUEUE_MOVE, this::rpcTaskQueueMove);
-        dispatcher.register(RpcMethods.CONFIG_GET, this::rpcConfigGet);
-        dispatcher.register(RpcMethods.CONFIG_RELOAD, this::rpcConfigReload);
-        dispatcher.register(RpcMethods.SKILL_RELOAD, this::rpcSkillReload);
+        // config.get / config.reload / skill.reload 已迁 ConfigRpcHandler(基础设施·配置面,自行注册)。
     }
 
     /**
@@ -1090,36 +1047,11 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
         }
         // store.track / wireUsageBroadcast / wireAgentPersist 已移入洋葱下行节点
         // （PersistenceTrackNode order=100 / TaskWiresNode order=200），在任务线程开头执行。
-        pool.pubAllTasks(Events.TASK_CREATED, null, t.runtimeSummaryJson(), null);
+        eventSink.fanout(k -> Channels.tasks(k), Events.TASK_CREATED, null, t.runtimeSummaryJson(), null);
         ctx.ok(Json.obj().put("taskId", taskId).put("status", t.status.wire()));
-        // slash 建后回调:对每个已写入 token 调业务 onSelect(taskId)(实现见 notifySlashCallbacks)。
-        notifySlashCallbacks(t, taskId);
+        // slash 建后回调:对每个已写入 token 调业务 onSelect(taskId)(实现见 SlashTaskCallbacks)。
+        slashCallbacks.notifySlashCallbacks(t, taskId);
         t.runFuture = vt.submit(() -> runTask(t, UserInput.of(input, rawContent), List.of()));
-    }
-
-    /**
-     * slash 任务级 token 建后回调:对每个已写入 token 解析 payload.slashId 反查 slash 条目并调业务
-     * onSelect(taskId)——注册方用 taskId 把业务标记写入内存并落盘 meta(自身实现)。整段
-     * try/catch(RuntimeException) 兜底,反查 NotFound 与 onSelect 异常仅记日志,
-     * 绝不影响任务创建/运行/续跑。新建任务与冷启动续跑(startRerun)共用。
-     */
-    private void notifySlashCallbacks(TaskEntry t, String taskId) {
-        try {
-            for (String opaque : t.slashTaskTokens()) {
-                SlashTokenEncoder.ParsedToken parsed = SlashTokenEncoder.parseToken(opaque);
-                if (parsed == null) {
-                    continue;
-                }
-                String slashId = parsed.payload().path("slashId").asString(null);
-                if (slashId == null || slashId.isEmpty()) {
-                    continue;
-                }
-                SlashCommandItem item = slashRegistry.itemById(slashId);
-                item.selectHandler().onSelect(item, taskId);
-            }
-        } catch (RuntimeException e) {
-            log.warn("slash 任务令牌建后回调失败 task={}", taskId, e);
-        }
     }
 
     /**
@@ -1308,7 +1240,7 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
             arr.add(item.text());
         }
         summary.set("pendingInputs", arr);
-        pool.pubAllTasks(Events.TASK_UPDATED, null, summary, null);
+        eventSink.fanout(k -> Channels.tasks(k), Events.TASK_UPDATED, null, summary, null);
         ctx.ok(Json.obj().put("taskId", taskId).put("ok", true));
     }
 
@@ -1334,7 +1266,7 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
         }
         store.delete(st.dir());
         store.forgetTask(taskId); // 忘记 workspaceId 映射(幂等:已删除/未登记均无害)
-        pool.pubAllTasks(Events.TASK_DELETED, null,
+        eventSink.fanout(k -> Channels.tasks(k), Events.TASK_DELETED, null,
                 Json.obj().put("taskId", taskId), null);
         return DeleteResult.OK;
     }
@@ -1411,62 +1343,7 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
         return moved;
     }
 
-    private void rpcConfigGet(RpcContext ctx) {
-        ArrayNode arr = Json.arr();
-        for (ModelConfig c : configs.list()) {
-            ModelConfig safe = new ModelConfig(c.configId(), c.provider(), c.baseUrl(),
-                    c.model(), c.apiKey() == null || c.apiKey().isEmpty() ? null : "******",
-                    c.params(), c.isDefault(), c.members());
-            arr.add(Json.toJson(safe));
-        }
-        ObjectNode out = Json.obj().set("models", arr);
-        // 限流运行态(P2):排队/在飞/估算系数,前端据此展示模型当前负载。
-        ArrayNode rates = Json.arr();
-        for (ModelRateLimiter.Snapshot s : modelFactory.rateLimitSnapshots()) {
-            ObjectNode o = Json.obj();
-            o.put("configId", s.configId());
-            o.put("enabled", s.enabled());
-            o.put("rpm", s.rpm());
-            o.put("maxConcurrency", s.maxConcurrency());
-            o.put("tpm", s.tpm());
-            o.put("inFlight", s.inFlight());
-            o.put("waiters", s.waiters());
-            o.put("factor", Math.round(s.factor() * 1000.0) / 1000.0);
-            o.put("sampleCount", s.sampleCount());
-            rates.add(o);
-        }
-        out.set("rateStatus", rates);
-        ctx.ok(out);
-    }
-
-    /**
-     * config.reload:重新读取模型配置(架构 §5.10)。
-     * 从 {@code <系统目录>/application-worker.yaml} 重新解析 worker.models,
-     * 成功后广播 config.changed{keys:["models"]} 通知前端刷新。
-     * 仅影响后续新建任务的模型解析;运行中任务使用创建时冻结的快照,不受影响。
-     */
-    private void rpcConfigReload(RpcContext ctx) {
-        int count = configs.reload();
-        // 广播 config.changed 通知前端 modelConfigs 服务自动刷新模型列表。
-        pool.broadcastEvt(Events.CONFIG_CHANGED,
-                Json.toJson(new Events.ConfigChanged(List.of("models"))));
-        log.info("config.reload 完成:模型配置已重新加载,共 {} 条", count);
-        ctx.ok(Json.obj().put("models", count));
-    }
-
-    /**
-     * skill.reload:重新扫描外部 skill 列表(架构 §7.17)。
-     * 用户在系统技能目录下增删 skill 目录后,点击「重新读取」即可让 worker 热加载,
-     * 无需重启。广播 {@code config.changed{keys:["skills"]}} 通知前端刷新 `/` 菜单。
-     * 运行中任务不受影响(skill 列表只在新建任务的 `/` 菜单与 SkillAdvisor 注入时读取)。
-     */
-    private void rpcSkillReload(RpcContext ctx) {
-        int count = externalSkillScanner.reload();
-        pool.broadcastEvt(Events.CONFIG_CHANGED,
-                Json.toJson(new Events.ConfigChanged(List.of("skills"))));
-        log.info("skill.reload 完成:外部 skill 已重新扫描,共 {} 个", count);
-        ctx.ok(Json.obj().put("skills", count));
-    }
+    // config.get / config.reload / skill.reload 已迁 ConfigRpcHandler(方法体原样搬移)。
 
     // ---- 终态任务再运行(冷启动;无"续跑"概念,对 agent 就是一次普通运行)----
 
@@ -1617,7 +1494,7 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
         // slash 任务级 token 建后回调:终态任务 meta 已含 slashTaskTokens,再运行冷启动需对每个
         // 已存在 token 补调业务 onSelect(taskId)——注册方据此用 taskId 把业务标记重新写入内存并落盘
         // (如 AI 审议/无人值守/网络开关),保证「已有任务在终态时 apply bottom token,再运行后业务标记生效」。
-        notifySlashCallbacks(t, taskId);
+        slashCallbacks.notifySlashCallbacks(t, taskId);
         // 模型切换 trace:用户从输入框切到其它模型后续跑,在主线显式标注本轮所用模型,
         // 否则用户看不到"本轮用了哪个模型"(旧任务冻结模型被覆盖,且 worker 已按 override 解析新模型)。
         final ModelSnapshot effectiveSnapshot = cfg.snapshot();
@@ -1643,7 +1520,7 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
         TaskLifecycleContextImpl ctx = new TaskLifecycleContextImpl(t);
         ctx.initialInput(initialInput);
         ctx.priorConversation(priorConversation);
-        ctx.mainAgentBuilder(prior -> buildMainAgent(t, prior));
+        ctx.mainAgentBuilder(prior -> agentFactory.buildMainAgent(t, prior));
         ctx.inputConsumer((main, input) -> consumeInput(t, main, input));
         ctx.concurrencyReleaser(() -> active.decrementAndGet());
         ctx.diskIndexer(st -> diskTasks.put(st.taskId(), st));
@@ -1773,7 +1650,7 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
         if (rawContent != null && !rawContent.isEmpty()) {
             editPayload.put("rawContent", rawContent);
         }
-        pool.pubTaskStream(taskId, Events.MESSAGE_EDITED, editPayload);
+        eventSink.fanout(k -> Channels.taskStream(k, taskId), Events.MESSAGE_EDITED, null, editPayload, null);
     }
 
     /**
@@ -1801,49 +1678,11 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
         if (rawContent != null && !rawContent.isEmpty()) {
             editPayload.put("rawContent", rawContent);
         }
-        pool.pubTaskStream(taskId, Events.MESSAGE_EDITED, editPayload);
+        eventSink.fanout(k -> Channels.taskStream(k, taskId), Events.MESSAGE_EDITED, null, editPayload, null);
     }
 
-    /** 主 agent:agentId = 任务 mainAgentId(再运行沿用);priorConversation 为冷启动载入的历史。 */
-    private AgentEntity buildMainAgent(TaskEntry t, List<Message> priorConversation) {
-        // 渐进式披露:内置 skill 知识包由 BuiltInSkills 启动时物化到系统技能目录(§5.10),
-        // 不在任务侧重复物化;AI 按需按绝对路径 read_file 读取(系统技能目录只读放行)。
-        ResolvedConfig cfg = resolveAgentConfig(t);
-        // 工具装配改为从 ToolProviderRegistry 聚合(替代硬编码 new AskUserTool / new BashTool / ...)
-        // per-task 上下文封装:taskId、agentId、workspaceRoot、sandbox、gate、workspaces、rgBinary、TaskEntry
-        ToolContextImpl ctx = new ToolContextImpl(t.taskId, t.mainAgentId,
-                java.nio.file.Path.of(t.workspaceRoot), sandbox, gate, workspaces,
-                rgbin.path(), t);
-        List<ToolCallback> tools = new ArrayList<>();
-        for (ToolProvider p : toolProviderRegistry.getForMain()) {
-            if (p.appliesTo(ctx)) {
-                tools.addAll(p.createTools(ctx));
-            }
-        }
-        // 模型装配:普通模型 → OpenAiChatModel;provider=model-pool → ModelPoolChatModel(自动容灾)。
-        // Agent 请求 options 基底:普通 = 自身快照,池 = 首成员(主模型)快照(上下文压缩等 advisor 据此读参数)。
-        ChatModelFactory.AgentModel am = modelFactory.buildAgentModel(cfg, t.mainAgentId, t.events, null);
-        AgentEntity main = new AgentEntity(t, t.mainAgentId, AgentEntity.Kind.MAIN, "主 agent",
-                am.chatModel(), am.options(), tools);
-        main.conversation.addAll(priorConversation);
-        return main;
-    }
-
-    /**
-     * 任务运行配置:普通模型用冻结快照(t.snapshot/t.apiKey);池配置(configId 指向 provider=model-pool)
-     * 重新经 ConfigStore 解析以获得池成员列表——冻结快照不含成员信息,必须回查
-     * (运行期 worker.models 启动即物化、无热更新,与创建时解析一致)。
-     */
-    private ResolvedConfig resolveAgentConfig(TaskEntry t) {
-        if (ConfigStore.POOL_PROVIDER.equals(t.snapshot.provider())) {
-            return configs.resolve(t.snapshot.configId());
-        }
-        return new ResolvedConfig(t.snapshot, t.apiKey);
-    }
-
-    private static boolean isWindows() {
-        return System.getProperty("os.name").toLowerCase().contains("win");
-    }
+    // buildMainAgent / resolveAgentConfig 已迁 AgentFactory(agent 层,方法体原样搬移);
+    // isWindows 随装配代码一并清理。
 
     // finish() 已删除——终态收口逻辑分散进 13 个上行节点（TaskLifecycleExecutor 驱动）。
     // setStatus 仍保留：askPendingChanged 切换 WAITING_USER/RUNNING 用。
@@ -1855,12 +1694,12 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
             }
             t.status = s;
         }
-        pool.pubAllTasks(Events.TASK_UPDATED, null, t.runtimeSummaryJson(), null);
+        eventSink.fanout(k -> Channels.tasks(k), Events.TASK_UPDATED, null, t.runtimeSummaryJson(), null);
     }
 
     /** 队列变化广播:task.updated 携带最新 pendingInputs 快照(§3.3,运行时态不落盘)。 */
     private void publishQueue(TaskEntry t) {
-        pool.pubAllTasks(Events.TASK_UPDATED, null, t.runtimeSummaryJson(), null);
+        eventSink.fanout(k -> Channels.tasks(k), Events.TASK_UPDATED, null, t.runtimeSummaryJson(), null);
     }
 
     /**
@@ -2033,12 +1872,12 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
     public void publishTaskUpdated(String taskId) {
         TaskEntry t = tasks.get(taskId);
         if (t != null) {
-            pool.pubAllTasks(Events.TASK_UPDATED, null, t.runtimeSummaryJson(), null);
+            eventSink.fanout(k -> Channels.tasks(k), Events.TASK_UPDATED, null, t.runtimeSummaryJson(), null);
             return;
         }
         TaskStore.StoredTask st = diskTasks.get(taskId);
         if (st != null) {
-            pool.pubAllTasks(Events.TASK_UPDATED, null, st.summary(), null);
+            eventSink.fanout(k -> Channels.tasks(k), Events.TASK_UPDATED, null, st.summary(), null);
         }
     }
 

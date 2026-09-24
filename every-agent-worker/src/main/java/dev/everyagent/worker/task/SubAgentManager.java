@@ -1,33 +1,15 @@
 package dev.everyagent.worker.task;
 
 import dev.everyagent.contract.json.Json;
+import dev.everyagent.worker.agent.AgentFactory;
 import dev.everyagent.worker.config.WorkerProperties;
-import dev.everyagent.worker.modules.ConfigStore;
-import dev.everyagent.worker.modules.ConfigStore.ResolvedConfig;
-import dev.everyagent.worker.tools.BashTool;
-import dev.everyagent.worker.tools.CommandExecutor;
-import dev.everyagent.worker.tools.FileTools;
-import dev.everyagent.worker.tools.FsToolSupport;
-import dev.everyagent.worker.tools.PermissionGate;
-import dev.everyagent.worker.tools.PowerShellTool;
-import dev.everyagent.worker.tools.RipgrepBinary;
-import dev.everyagent.worker.os.OsSandbox;
-import dev.everyagent.worker.modules.WorkspaceManager;
-import dev.everyagent.worker.plugin.ToolContextImpl;
-import dev.everyagent.worker.plugin.registry.ToolProviderRegistry;
-import dev.everyagent.plugin.api.spi.ToolProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
-import org.springframework.ai.support.ToolCallbacks;
-import org.springframework.ai.tool.ToolCallback;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.node.ArrayNode;
 import tools.jackson.databind.node.ObjectNode;
 
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
@@ -36,12 +18,10 @@ import java.util.concurrent.TimeUnit;
  * 子 agent 管理(架构 §5.6):
  * 子 agent 独立会话(不继承父上下文)、工具集不含 agent 工具(结构上禁递归);
  * 级联停止;任务收口前自动等待全部子 agent。
+ * 装配已迁 AgentFactory(agent 层);本类只负责编排(启动/等待/停止/台账)。
  */
 @Component
 public class SubAgentManager {
-
-    public static final String SUB_SYSTEM_PROMPT =
-            "你是任务中派生的子 agent。专注完成交给你的单一目标,善用工具,给出简明的最终结论。";
 
     /** wait_agents 未显式传 timeoutMs 时的默认等待上限(毫秒),防长时间挂起主 agent(任务收口等待另用系统限额)。 */
     private static final long DEFAULT_WAIT_TIMEOUT_MS = 30_000;
@@ -51,33 +31,19 @@ public class SubAgentManager {
 
     private static final Logger log = LoggerFactory.getLogger(SubAgentManager.class);
 
-    private final ChatModelFactory modelFactory;
     private final AgentRunner runner;
     private final WorkerProperties props;
     private final PendingAsks asks;
-    private final FsToolSupport fs;
-    private final OsSandbox sandbox;
-    private final PermissionGate gate;
-    private final RipgrepBinary rgbin;
-    private final ConfigStore configStore;
-    private final WorkspaceManager workspaces;
-    private final ToolProviderRegistry toolProviderRegistry;
+    /** Agent 装配工厂(agent 层):子 agent 的模型/工具/SUB_SYSTEM_PROMPT 装配已迁出。 */
+    private final AgentFactory agentFactory;
     private final java.util.concurrent.ExecutorService vt = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();
 
-    public SubAgentManager(ChatModelFactory modelFactory, AgentRunner runner, WorkerProperties props,
-            PendingAsks asks, FsToolSupport fs, OsSandbox sandbox, PermissionGate gate, RipgrepBinary rgbin,
-            ConfigStore configStore, WorkspaceManager workspaces, ToolProviderRegistry toolProviderRegistry) {
-        this.modelFactory = modelFactory;
+    public SubAgentManager(AgentRunner runner, WorkerProperties props, PendingAsks asks,
+            AgentFactory agentFactory) {
         this.runner = runner;
         this.props = props;
         this.asks = asks;
-        this.fs = fs;
-        this.sandbox = sandbox;
-        this.gate = gate;
-        this.rgbin = rgbin;
-        this.configStore = configStore;
-        this.workspaces = workspaces;
-        this.toolProviderRegistry = toolProviderRegistry;
+        this.agentFactory = agentFactory;
     }
 
     /**
@@ -117,7 +83,7 @@ public class SubAgentManager {
                 sub.resetForRerun();
                 sub.conversation.add(new UserMessage(input)); // 续跑:原会话历史 + 新指令
             } else {
-                sub = buildAgent(task, id, title == null || title.isEmpty() ? "子任务" : title, input);
+                sub = agentFactory.buildAgent(task, id, title == null || title.isEmpty() ? "子任务" : title, input);
             }
 
             // FutureTask 先入册再执行:waitFor/stop/run 守卫看到的永远是当前运行,
@@ -430,37 +396,6 @@ public class SubAgentManager {
         vt.shutdownNow();
     }
 
-    private AgentEntity buildAgent(TaskEntry task, String agentId, String title, String input) {
-        // 普通模型用冻结快照;池配置(configId 指向 provider=model-pool)回查 ConfigStore 以取成员列表。
-        ResolvedConfig cfg;
-        if (ConfigStore.POOL_PROVIDER.equals(task.snapshot.provider())) {
-            cfg = configStore.resolve(task.snapshot.configId());
-        } else {
-            cfg = new ResolvedConfig(task.snapshot, task.apiKey);
-        }
-        // 子 agent 工具集不含 run_agent 等(结构上禁止递归);tool.result 事件由 AgentRunner 统一发射
-        // 子 agent 不注册 ask_user:提问只能由主 agent 发起,子 agent 通过返回结果向上传递信息
-        // 工具装配改为从 ToolProviderRegistry 聚合(替代硬编码 new FileTools / new BashTool / ...)
-        // per-task 上下文封装:taskId、agentId、workspaceRoot、sandbox、gate、workspaces、rgBinary、TaskEntry
-        ToolContextImpl ctx = new ToolContextImpl(task.taskId, agentId,
-                java.nio.file.Path.of(task.workspaceRoot), sandbox, gate, workspaces,
-                rgbin.path(), task);
-        List<ToolCallback> tools = new ArrayList<>();
-        for (ToolProvider p : toolProviderRegistry.getForSub()) {
-            if (p.appliesTo(ctx)) {
-                tools.addAll(p.createTools(ctx));
-            }
-        }
-        // 模型装配:普通模型 → OpenAiChatModel;provider=model-pool → ModelPoolChatModel(自动容灾)。
-        ChatModelFactory.AgentModel am = modelFactory.buildAgentModel(cfg, agentId, task.events, null);
-        AgentEntity agent = new AgentEntity(task, agentId, AgentEntity.Kind.SUB, title,
-                am.chatModel(), am.options(), tools);
-        agent.conversation.add(new SystemMessage(SUB_SYSTEM_PROMPT));
-        agent.conversation.add(new UserMessage(input));
-        return agent;
-    }
-
-    private static boolean isWindows() {
-        return System.getProperty("os.name").toLowerCase().contains("win");
-    }
+    // buildAgent / SUB_SYSTEM_PROMPT 已迁 AgentFactory(agent 层,方法体原样搬移);
+    // isWindows 随装配代码一并清理。
 }
