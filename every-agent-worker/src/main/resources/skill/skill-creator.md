@@ -13,7 +13,7 @@
     run.sh            #   脚本不限语言：bash / python / node 等
 ```
 
-`<skillsDir>` 是 worker 的系统技能目录（通常是 `~/.everyagent/skills/`）。该目录对 AI 读写开放，可直接在其中创建文件。
+`<skillsDir>` 是 EveryAgent 的系统技能目录（通常是 `~/.everyagent/skills/`）。该目录对你（EveryAgent）读写开放，可直接在其中创建文件。
 
 ## 创建步骤
 
@@ -36,6 +36,6 @@
 1. skill id（目录名）只能包含小写字母、数字和连字符，首字符必须是字母或数字：`[a-z0-9][a-z0-9-]*`
 2. 目录下必须有 `skill.md` 文件
 3. `skill.md` 的第一个非空且非 `#` 标题行的正文行会作为 skill 的描述（显示在 `/` 菜单中），截断至 200 字符
-4. `skill.md` 其余内容是方法论正文，AI 被选中该 skill 后按需 read_file 读取
+4. `skill.md` 其余内容是方法论正文，AI 选中该 skill 后按需用 read_file工具 读取
 5. 可执行脚本放在目录下任意位置（如 `scripts/`），在 skill.md 正文中以相对路径引用，由 AI 用对应解释器执行——不限于 bash，也可以是 Python、Node 等任意语言
-6. 新 skill 创建后需在设置页点击「重新读取 Skill 列表」热加载，无需重启 worker
+6. 新 skill 创建后需用户在设置页点击「重新读取 Skill 列表」热加载，即可使用
