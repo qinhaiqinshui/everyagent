@@ -4,6 +4,7 @@ import dev.everyagent.plugin.api.task.TaskChain;
 import dev.everyagent.plugin.api.task.TaskLifecycleContext;
 import dev.everyagent.plugin.api.task.TaskLifecycleNode;
 import dev.everyagent.plugin.api.task.TaskOutcome;
+import dev.everyagent.worker.ship.StreamSourceRegistry;
 import dev.everyagent.worker.task.TaskStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -19,9 +20,11 @@ public final class PersistenceTrackNode implements TaskLifecycleNode {
     private static final Logger log = LoggerFactory.getLogger(PersistenceTrackNode.class);
 
     private final TaskStore store;
+    private final StreamSourceRegistry streamSources;
 
-    public PersistenceTrackNode(TaskStore store) {
+    public PersistenceTrackNode(TaskStore store, StreamSourceRegistry streamSources) {
         this.store = store;
+        this.streamSources = streamSources;
     }
 
     @Override
@@ -41,10 +44,7 @@ public final class PersistenceTrackNode implements TaskLifecycleNode {
         }
         // 挂接流源：StreamSourceRegistry.attach（推送器经此取日志，反转后正向依赖）
         try {
-            Runnable attacher = impl.streamSourceAttacher();
-            if (attacher != null) {
-                attacher.run();
-            }
+            streamSources.attach(t.taskId, t.log);
         } catch (RuntimeException e) {
             log.warn("流源挂接失败 task={}", t.taskId, e);
         }

@@ -2,7 +2,8 @@ package dev.everyagent.worker.task.lifecycle;
 
 import dev.everyagent.plugin.api.task.TaskLifecycleContext;
 import dev.everyagent.plugin.api.task.TaskOutcome;
-import dev.everyagent.worker.hub.HubPool;
+import dev.everyagent.worker.hub.EventSink;
+import dev.everyagent.worker.proto.Channels;
 import dev.everyagent.worker.proto.Events;
 import dev.everyagent.worker.proto.TaskDtos.TaskStatus;
 import org.slf4j.Logger;
@@ -16,10 +17,10 @@ public final class StatusFinalizeNode extends UpstreamNode {
 
     private static final Logger log = LoggerFactory.getLogger(StatusFinalizeNode.class);
 
-    private final HubPool pool;
+    private final EventSink eventSink;
 
-    public StatusFinalizeNode(HubPool pool) {
-        this.pool = pool;
+    public StatusFinalizeNode(EventSink eventSink) {
+        this.eventSink = eventSink;
     }
 
     @Override
@@ -46,7 +47,7 @@ public final class StatusFinalizeNode extends UpstreamNode {
             log.debug("终态事件写入失败(日志可能已满)", e);
         }
         try {
-            pool.pubAllTasks(Events.TASK_UPDATED, null, t.runtimeSummaryJson(), null);
+            eventSink.fanout(k -> Channels.tasks(k), Events.TASK_UPDATED, null, t.runtimeSummaryJson(), null);
         } catch (RuntimeException e) {
             log.debug("终态广播失败 task={}", t.taskId, e);
         }

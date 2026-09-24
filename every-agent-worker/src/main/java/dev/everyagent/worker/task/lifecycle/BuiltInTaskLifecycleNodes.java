@@ -3,6 +3,7 @@ package dev.everyagent.worker.task.lifecycle;
 import dev.everyagent.worker.hub.HubPool;
 import dev.everyagent.worker.modules.WorkspaceActivityTracker;
 import dev.everyagent.worker.plugin.registry.TaskLifecycleRegistry;
+import dev.everyagent.worker.ship.StreamSourceRegistry;
 import dev.everyagent.worker.task.PendingAsks;
 import dev.everyagent.worker.task.SubAgentManager;
 import dev.everyagent.worker.task.TaskStore;
@@ -20,6 +21,7 @@ public class BuiltInTaskLifecycleNodes {
     private final TaskLifecycleRegistry registry;
     private final TaskStore store;
     private final HubPool pool;
+    private final StreamSourceRegistry streamSources;
     private final PermissionGate gate;
     private final SubAgentManager subs;
     private final PendingAsks asks;
@@ -29,6 +31,7 @@ public class BuiltInTaskLifecycleNodes {
             TaskLifecycleRegistry registry,
             TaskStore store,
             HubPool pool,
+            StreamSourceRegistry streamSources,
             PermissionGate gate,
             SubAgentManager subs,
             PendingAsks asks,
@@ -36,6 +39,7 @@ public class BuiltInTaskLifecycleNodes {
         this.registry = registry;
         this.store = store;
         this.pool = pool;
+        this.streamSources = streamSources;
         this.gate = gate;
         this.subs = subs;
         this.asks = asks;
@@ -45,7 +49,7 @@ public class BuiltInTaskLifecycleNodes {
     @PostConstruct
     void registerAll() {
         // 下行节点
-        registry.register(new PersistenceTrackNode(store), "worker");
+        registry.register(new PersistenceTrackNode(store, streamSources), "worker");
         registry.register(new TaskWiresNode(store, pool), "worker");
         registry.register(new StatusStartNode(pool), "worker");
         registry.register(new MainAgentNode(), "worker");
@@ -59,7 +63,7 @@ public class BuiltInTaskLifecycleNodes {
         registry.register(new StatusPersistNode(store), "worker");
         registry.register(new LedgerPersistNode(store), "worker");
         registry.register(new DiskIndexNode(store), "worker");
-        registry.register(new PersistenceUntrackNode(store), "worker");
+        registry.register(new PersistenceUntrackNode(store, streamSources), "worker");
         registry.register(new GateEvictNode(gate), "worker");
         registry.register(new RegistryRemoveNode(), "worker");
         registry.register(new WorkspaceActivityNode(activityTracker), "worker");

@@ -4,7 +4,8 @@ import dev.everyagent.plugin.api.task.TaskChain;
 import dev.everyagent.plugin.api.task.TaskLifecycleContext;
 import dev.everyagent.plugin.api.task.TaskLifecycleNode;
 import dev.everyagent.plugin.api.task.TaskOutcome;
-import dev.everyagent.worker.hub.HubPool;
+import dev.everyagent.worker.hub.EventSink;
+import dev.everyagent.worker.proto.Channels;
 import dev.everyagent.worker.proto.Events;
 import dev.everyagent.worker.proto.TaskDtos.TaskStatus;
 import org.slf4j.Logger;
@@ -17,10 +18,10 @@ public final class StatusStartNode implements TaskLifecycleNode {
 
     private static final Logger log = LoggerFactory.getLogger(StatusStartNode.class);
 
-    private final HubPool pool;
+    private final EventSink eventSink;
 
-    public StatusStartNode(HubPool pool) {
-        this.pool = pool;
+    public StatusStartNode(EventSink eventSink) {
+        this.eventSink = eventSink;
     }
 
     @Override
@@ -36,7 +37,7 @@ public final class StatusStartNode implements TaskLifecycleNode {
         synchronized (t) {
             t.status = TaskStatus.RUNNING;
         }
-        pool.pubAllTasks(Events.TASK_UPDATED, null, t.runtimeSummaryJson(), null);
+        eventSink.fanout(k -> Channels.tasks(k), Events.TASK_UPDATED, null, t.runtimeSummaryJson(), null);
         t.events.agentStatus(t.mainAgentId, "running");
         return next.proceed(ctx);
     }

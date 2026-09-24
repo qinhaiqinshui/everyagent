@@ -2,6 +2,7 @@ package dev.everyagent.worker.task.lifecycle;
 
 import dev.everyagent.plugin.api.task.TaskLifecycleContext;
 import dev.everyagent.plugin.api.task.TaskOutcome;
+import dev.everyagent.worker.ship.StreamSourceRegistry;
 import dev.everyagent.worker.task.TaskStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -14,9 +15,11 @@ public final class PersistenceUntrackNode extends UpstreamNode {
     private static final Logger log = LoggerFactory.getLogger(PersistenceUntrackNode.class);
 
     private final TaskStore store;
+    private final StreamSourceRegistry streamSources;
 
-    public PersistenceUntrackNode(TaskStore store) {
+    public PersistenceUntrackNode(TaskStore store, StreamSourceRegistry streamSources) {
         this.store = store;
+        this.streamSources = streamSources;
     }
 
     @Override
@@ -36,10 +39,7 @@ public final class PersistenceUntrackNode extends UpstreamNode {
         }
         // 摘除流源：StreamSourceRegistry.detach（推送器据此感知任务已驱逐，排水后 detach）
         try {
-            Runnable detacher = impl.streamSourceDetacher();
-            if (detacher != null) {
-                detacher.run();
-            }
+            streamSources.detach(t.taskId);
         } catch (RuntimeException e) {
             log.warn("流源摘除失败 task={}", t.taskId, e);
         }

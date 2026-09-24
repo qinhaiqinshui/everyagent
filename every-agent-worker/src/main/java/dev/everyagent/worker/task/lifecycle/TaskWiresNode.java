@@ -4,7 +4,8 @@ import dev.everyagent.plugin.api.task.TaskChain;
 import dev.everyagent.plugin.api.task.TaskLifecycleContext;
 import dev.everyagent.plugin.api.task.TaskLifecycleNode;
 import dev.everyagent.plugin.api.task.TaskOutcome;
-import dev.everyagent.worker.hub.HubPool;
+import dev.everyagent.worker.hub.EventSink;
+import dev.everyagent.worker.proto.Channels;
 import dev.everyagent.worker.proto.Events;
 import dev.everyagent.worker.task.TaskStore;
 import org.slf4j.Logger;
@@ -18,11 +19,11 @@ public final class TaskWiresNode implements TaskLifecycleNode {
     private static final Logger log = LoggerFactory.getLogger(TaskWiresNode.class);
 
     private final TaskStore store;
-    private final HubPool pool;
+    private final EventSink eventSink;
 
-    public TaskWiresNode(TaskStore store, HubPool pool) {
+    public TaskWiresNode(TaskStore store, EventSink eventSink) {
         this.store = store;
-        this.pool = pool;
+        this.eventSink = eventSink;
     }
 
     @Override
@@ -38,7 +39,7 @@ public final class TaskWiresNode implements TaskLifecycleNode {
         ctx.onUsageBroadcast(() -> {
             if (t.status.terminal()) return;
             try {
-                pool.pubAllTasks(Events.TASK_UPDATED, null, t.runtimeSummaryJson(), null);
+                eventSink.fanout(k -> Channels.tasks(k), Events.TASK_UPDATED, null, t.runtimeSummaryJson(), null);
             } catch (RuntimeException e) {
                 log.debug("任务用量广播失败 task={}", t.taskId, e);
             }

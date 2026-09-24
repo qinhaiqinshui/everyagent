@@ -1648,8 +1648,6 @@ public class TaskManager implements HubPool.Listener, PendingAsks.StatusHook {
         ctx.concurrencyReleaser(() -> active.decrementAndGet());
         ctx.diskIndexer(st -> diskTasks.put(st.taskId(), st));
         ctx.registryRemover(() -> tasks.remove(t.taskId, t));
-        ctx.streamSourceAttacher(() -> streamSources.attach(t.taskId, t.log));
-        ctx.streamSourceDetacher(() -> streamSources.detach(t.taskId));
 
         TaskKernel kernel = c -> {
             try {
