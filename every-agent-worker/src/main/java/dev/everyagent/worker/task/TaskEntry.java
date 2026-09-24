@@ -1,5 +1,7 @@
 package dev.everyagent.worker.task;
 
+import dev.everyagent.plugin.api.agent.AgentContext;
+import dev.everyagent.plugin.api.agent.AgentEventChannel;
 import dev.everyagent.plugin.api.permission.TaskInfo;
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.worker.proto.TaskDtos.ModelSnapshot;
@@ -21,7 +23,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * 运行完成即销毁(finish 里 untrack + tasks.remove),磁盘是唯一真相源;
  * 再运行 = 同 taskId 新建本对象(冷启动,mainAgentId 沿用 → 同一 jsonl 文件续写)。
  */
-public final class TaskEntry implements TaskInfo {
+public final class TaskEntry implements TaskInfo, AgentContext {
 
     public final String taskId;
     public final String title;
@@ -147,6 +149,28 @@ public final class TaskEntry implements TaskInfo {
     @Override
     public Map<String, Boolean> taskFlags() {
         return taskFlags;
+    }
+
+    // ---- AgentContext 接口实现 ----
+
+    @Override
+    public String workspaceRoot() {
+        return workspaceRoot;
+    }
+
+    @Override
+    public AgentEventChannel events() {
+        return events;
+    }
+
+    @Override
+    public boolean taskTerminal() {
+        return status.terminal();
+    }
+
+    @Override
+    public void recordMainUsage(Object round, Long contextWindowTokens, String model) {
+        recordUsage((Usage) round, contextWindowTokens, model);
     }
 
     public final Map<String, AgentEntity> subs = new ConcurrentHashMap<>();

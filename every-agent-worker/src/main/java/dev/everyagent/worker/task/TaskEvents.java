@@ -1,6 +1,7 @@
 package dev.everyagent.worker.task;
 
 import dev.everyagent.contract.json.Json;
+import dev.everyagent.plugin.api.agent.AgentEventChannel;
 import dev.everyagent.worker.proto.Events;
 import dev.everyagent.worker.proto.Events.ToolCallPart;
 import dev.everyagent.worker.proto.ShortIds;
@@ -25,7 +26,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * (带 traceId,前端按 id 原地 upsert——同一波重试的 attempt/progress/resolved 共用一条 trace)。
  * 瞬态实例(每秒倒计时的 progress 等)经 {@code ext.persist=false} 标记,不落盘。
  */
-public final class TaskEvents {
+public final class TaskEvents implements AgentEventChannel {
 
     private final EventLog log;
     private final String mainAgentId;
@@ -578,6 +579,49 @@ public final class TaskEvents {
         long minutes = totalSeconds / 60;
         long seconds = totalSeconds % 60;
         return seconds == 0 ? (minutes + "m") : (minutes + "m" + seconds + "s");
+    }
+
+    // ---- AgentEventChannel 桥接方法(Object 参数版本,强转后委托原方法)----
+
+    @Override
+    public long message(String agentId, String thinking, String text, Object toolCalls) {
+        @SuppressWarnings("unchecked")
+        List<ToolCallPart> cast = (List<ToolCallPart>) toolCalls;
+        return message(agentId, thinking, text, cast);
+    }
+
+    @Override
+    public long usage(String agentId, String model, Long contextWindowTokens, Object round, Object total) {
+        return usage(agentId, model, contextWindowTokens, (Usage) round, (Usage) total);
+    }
+
+    @Override
+    public long agentDone(String agentId, String result, Object usage) {
+        return agentDone(agentId, result, (Usage) usage);
+    }
+
+    @Override
+    public long askCreate(String askId, String kind, Object questions, Long timeoutMs, String agentId) {
+        @SuppressWarnings("unchecked")
+        List<PendingAsks.AskQuestion> cast = (List<PendingAsks.AskQuestion>) questions;
+        return askCreate(askId, kind, cast, timeoutMs, agentId);
+    }
+
+    @Override
+    public long askState(String askId, String kind, String status, Object questions, String agentId) {
+        @SuppressWarnings("unchecked")
+        List<PendingAsks.AskQuestion> cast = (List<PendingAsks.AskQuestion>) questions;
+        return askState(askId, kind, status, cast, agentId);
+    }
+
+    @Override
+    public long modelSwitch(Object snapshot, String oldConfigId) {
+        return modelSwitch((ModelSnapshot) snapshot, oldConfigId);
+    }
+
+    @Override
+    public String modelFailoverSwitch(String traceId, Object snapshot) {
+        return modelFailoverSwitch(traceId, (ModelSnapshot) snapshot);
     }
 
     /**
