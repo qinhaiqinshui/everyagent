@@ -585,6 +585,21 @@ ask 管道承载第二类阻塞请求:**危险操作授权**。`PermissionGate` 
 - **行为零变化**：事件发射顺序、seq 语义、落盘内容与重构前逐项一致（§3.3 基线表逐字映射）。
 - **后续 Phase**：agent 层独立(Phase 2)、拦截链范式统一(Phase 3)、subagent 插件(Phase 4)、队列插件(Phase 5)。详见 `docs/design-agent-layer-onion.md`。
 
+### 7.14.2 TaskManager 职责拆分与通信解耦（Phase 2.5）
+
+TaskManager 构造参数从 23 降至 15（SubAgentManager 从 11 降至 4），迁出的职责与承接组件：
+
+| 承接组件 | 层 | 职责 |
+|---|---|---|
+| `AgentFactory`（agent 层） | agent 层 | 主/子 agent 装配（模型/工具/沙箱/权限聚合） |
+| `ConfigRpcHandler` | 基础设施 | config.get / config.reload / skill.reload RPC（自注册） |
+| `SlashTaskCallbacks` | 基础设施 | slash 任务 token 建后回调 |
+| `EventSink`（接口） | 基础设施 | `fanout(channelNamer, event, ...)` 扇出发布——无调用者语义，HubPool 实现；task 层广播任务状态、未来工作流层广播流状态共用 |
+| `TaskMessageRouter` + `TaskInputHandler` | 基础设施 | worker 输入频道订阅与消息路由（TASK_INPUT/DIALOG_INSERT/ASK_REPLY）；接口在基础设施层定义、TaskManager 实现——依赖方向与 AgentContext 相同 |
+| `StreamSourceRegistry`（洋葱节点直持） | 基础设施 | PersistenceTrack/UntrackNode 直接 attach/detach 流源 |
+
+**分层与核心边界**：工作区 → task 层/工作流层（平级编排）→ agent 层 → 基础设施层；**下层不知道上层**。`PendingAsks` 归基础设施层（askuser 交互能力），洋葱 CascadeStopNode 直持。留在 TaskManager 的 `workspaces`（任务创建注册工作区）与 `gate`（每轮授权失效 beginRun）是 task 编排活依赖。事件三条出路（落盘=TaskStore 监听 EventLog、实时推送=DataPusher 经 StreamSourceRegistry 取 EventLog 定向推、历史拉取=task.poll 磁盘窗口∪内存尾部归并）与广播（EventSink.fanout → hub 只投已订阅连接）对 task 层与未来工作流层完全同构。
+
 ### 7.15 持久化与磁盘布局
 
 ```
