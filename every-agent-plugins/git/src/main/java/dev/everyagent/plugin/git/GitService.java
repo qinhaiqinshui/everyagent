@@ -359,17 +359,32 @@ public class GitService {
         if (remotes.isEmpty()) {
             throw new RuntimeException("git.push 失败: 未配置任何远程仓库");
         }
+        String branch = branch(sb);
+        if (branch.isEmpty()) {
+            throw new RuntimeException("git.push 失败: 当前处于 detached HEAD,无法推送");
+        }
         ArrayNode arr = Json.arr();
         List<String> errors = new ArrayList<>();
+        // 无 upstream 时首个远端加 --set-upstream 建立跟踪,后续远端仅推送
+        boolean needsSetUpstream = !hasUpstream(sb);
         for (var entry : remotes.entrySet()) {
             String name = entry.getKey();
             String url = entry.getValue();
+            List<String> args = new ArrayList<>();
+            args.add("push");
+            args.add("--porcelain");
+            if (needsSetUpstream) {
+                args.add("--set-upstream");
+            }
+            args.add(name);
+            args.add(branch);
             // withAuth 可能抛 AuthRequiredException → 透传给前端弹窗收集凭证后重试
-            NativeResult r = withAuth(ctx, sb, url, List.of("push", "--porcelain", name));
+            NativeResult r = withAuth(ctx, sb, url, args);
             if (r.exitCode() != 0) {
                 errors.add(name + ": " + (r.stderr() == null ? "" : r.stderr()));
                 continue;
             }
+            needsSetUpstream = false; // 首个远端已设置 upstream,后续不再重复
             for (NativeGit.PushUpdate u : NativeGit.parsePushUpdates(r.stdout())) {
                 arr.add(Json.obj().put("remote", name).put("ref", u.ref()).put("status", u.status()));
             }
@@ -675,6 +690,17 @@ public class GitService {
         return NativeGit.parseStatus(r.stdout());
     }
 
+    /** 当前分支是否有上游跟踪分支(纯本地,不触网)。 */
+    private boolean hasUpstream(Sandbox sb) {
+        try {
+            NativeResult r = git.runRead(sb.root(), List.of(
+                    "rev-parse", "--abbrev-ref", "@{upstream}"), CredentialSpec.none());
+            return r.ok() && !r.stdout().trim().isEmpty();
+        } catch (IOException e) {
+            return false;
+        }
+    }
+
     /**
      * 当前分支相对上游跟踪分支的 ahead/behind 提交数(纯本地,不触网)。
      * 未配置上游(如刚 init + remote add 尚未 push)或 detached 返回 0/0——
@@ -812,16 +838,28 @@ public class GitService {
                 }
             }
             // 推送到所有已配置远端
+            String branch = branch(sb);
+            boolean needsSetUpstream = branch.isEmpty() ? false : !hasUpstream(sb);
             List<String> pushErrors = new ArrayList<>();
             for (var entry : remotes.entrySet()) {
                 String name = entry.getKey();
                 String url = entry.getValue();
                 CredentialSpec silent = silentCredential(sb, url);
-                NativeResult push = git.runWrite(sb.root(), List.of("push", "--porcelain", name),
-                        silent);
+                List<String> pushArgs = new ArrayList<>();
+                pushArgs.add("push");
+                pushArgs.add("--porcelain");
+                if (needsSetUpstream) {
+                    pushArgs.add("--set-upstream");
+                }
+                pushArgs.add(name);
+                if (!branch.isEmpty()) {
+                    pushArgs.add(branch);
+                }
+                NativeResult push = git.runWrite(sb.root(), pushArgs, silent);
                 if (!push.ok()) {
                     pushErrors.add(name);
                 }
+                needsSetUpstream = false;
             }
             if (!pushErrors.isEmpty()) {
                 return new SyncResult(GitSyncStatus.ERROR,
