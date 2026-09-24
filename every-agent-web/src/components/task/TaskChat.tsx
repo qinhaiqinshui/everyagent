@@ -714,6 +714,13 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
     })
   }, [agents, mainAgentId, stream, agentMeta, entry?.status])
 
+  // 主 agent 列表项(供电池详情卡使用):从 agentListItems 取 isMain 项;
+  // entry 未就绪时为 null,电池内部由 monitor 快照兜底构造。
+  const mainAgentItem = React.useMemo(
+    () => agentListItems.find((item) => item.isMain) ?? null,
+    [agentListItems],
+  )
+
   /** 点击 agent 长条:切换选中态(再点同一 agent 由面板回传 '' 恢复全部;轮次视图下仅高亮)。 */
   const handleSelectAgent = React.useCallback((agentId: string) => {
     setFilterAgentId(agentId)
@@ -838,8 +845,13 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
                     ))}
                     {/* 实时流折叠到 usage 事件优先;老任务/终态任务无尾段事件可折入时,
                         回退到 taskStore 的 TaskSummary.usage 持久化快照(与 taskQueryService
-                        listTaskListItems 的电池兜底口径一致),保证打开老任务电池也显示最近一轮用量。 */}
-                    <ContextBattery taskId={effectiveTaskId} monitor={stream?.state.contextUsage ?? entry?.contextUsage ?? null} />
+                        listTaskListItems 的电池兜底口径一致),保证打开老任务电池也显示最近一轮用量。
+                        详情卡数据 = 主 agent 列表项(与子 agent 悬停卡同构)。 */}
+                    <ContextBattery
+                      taskId={effectiveTaskId}
+                      monitor={stream?.state.contextUsage ?? entry?.contextUsage ?? null}
+                      agentItem={mainAgentItem}
+                    />
                   </div>
                   <div className="task-composer-footer__controls">
                     <TaskModelControls

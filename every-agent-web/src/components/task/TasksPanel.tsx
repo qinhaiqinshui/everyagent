@@ -11,6 +11,7 @@ import { useResponsiveViewport } from '@/hooks/useResponsiveViewport'
 import { useLongPress } from '@/hooks/useLongPress'
 import type { TaskListGroup } from '@/plugin/types'
 import ContextBattery from '@/components/task/ContextBattery'
+import type { AgentListItem } from '@/components/task/AgentListPanel'
 import { ChevronDownIcon, MagnifierCheckIcon, MoreHorizontalIcon, PlusIcon } from '@/components/shared/AppGlyphs'
 import { Button, IconButton } from '@/components/shared/ui'
 import ActionMenu from '@/components/shared/ui/ActionMenu'
@@ -73,6 +74,34 @@ interface TaskListSelection {
   taskId: string
   /** 展示标题。 */
   displayTitle: string
+}
+
+/**
+ * 任务列表行电池详情卡数据:把 TaskListItemSnapshot 整形为主 agent 列表项
+ * (与聊天页主 agent 胶囊/悬停卡同构,卡片信息与样式完全复用 AgentInfoHoverCard)。
+ * 列表行无 agentMeta 台账,创建时间/累计 tokens 缺失,由卡片显示「—」。
+ */
+function toBatteryAgentItem(task: TaskListItemSnapshot): AgentListItem | null {
+  const usage = task.contextUsage
+  if (!usage) {
+    return null
+  }
+  const used = usage.promptTokens ?? usage.totalTokens ?? 0
+  const windowTokens = usage.maxTokens
+  return {
+    agentId: task.mainAgentId ?? '',
+    title: '主 agent',
+    status: task.status,
+    isMain: true,
+    meta: {
+      agentId: task.mainAgentId ?? '',
+      model: usage.model,
+      contextUsed: used,
+      contextWindow: windowTokens > 0 ? windowTokens : undefined,
+      updatedAt: usage.lastUpdatedAt,
+    },
+    contextRatio: windowTokens > 0 ? Math.min(1, Math.max(0, used / windowTokens)) : undefined,
+  }
 }
 
 /**
@@ -491,7 +520,11 @@ export default function TasksPanel({
         </span>
         {task.contextUsage ? (
           <span style={ctxIndicatorStyle}>
-            <ContextBattery taskId={task.taskId} monitor={task.contextUsage} />
+            <ContextBattery
+              taskId={task.taskId}
+              monitor={task.contextUsage}
+              agentItem={toBatteryAgentItem(task)}
+            />
           </span>
         ) : null}
       </div>
