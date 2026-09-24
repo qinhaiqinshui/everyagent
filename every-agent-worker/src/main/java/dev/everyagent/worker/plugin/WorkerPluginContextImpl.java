@@ -11,11 +11,13 @@ import dev.everyagent.plugin.api.spi.SandboxProvider;
 import dev.everyagent.plugin.api.spi.SearchProvider;
 import dev.everyagent.plugin.api.spi.ToolExecutionInterceptor;
 import dev.everyagent.plugin.api.spi.ToolProvider;
+import dev.everyagent.plugin.api.task.TaskAdmissionPolicy;
 import dev.everyagent.plugin.api.task.TaskLifecycleNode;
 import dev.everyagent.worker.plugin.registry.AdvisorProviderRegistry;
 import dev.everyagent.worker.plugin.registry.AuthorizationHandlerRegistry;
 import dev.everyagent.worker.plugin.registry.SandboxProviderRegistry;
 import dev.everyagent.worker.plugin.registry.SearchProviderRegistry;
+import dev.everyagent.worker.plugin.registry.TaskAdmissionPolicyRegistry;
 import dev.everyagent.worker.plugin.registry.TaskLifecycleRegistry;
 import dev.everyagent.worker.plugin.registry.ToolExecutionInterceptorRegistry;
 import dev.everyagent.worker.plugin.registry.ToolProviderRegistry;
@@ -43,6 +45,7 @@ public class WorkerPluginContextImpl implements WorkerPluginContext {
     private final AuthorizationHandlerRegistry authHandlerRegistry;
     private final ToolExecutionInterceptorRegistry toolInterceptorRegistry;
     private final TaskLifecycleRegistry lifecycleRegistry;
+    private final TaskAdmissionPolicyRegistry admissionPolicyRegistry;
     private final RpcDispatcher rpcDispatcher;
     private final SlashCommandRegistry slashRegistry;
     private final WorkerServices services;
@@ -56,6 +59,7 @@ public class WorkerPluginContextImpl implements WorkerPluginContext {
             AuthorizationHandlerRegistry authHandlerRegistry,
             ToolExecutionInterceptorRegistry toolInterceptorRegistry,
             TaskLifecycleRegistry lifecycleRegistry,
+            TaskAdmissionPolicyRegistry admissionPolicyRegistry,
             RpcDispatcher rpcDispatcher,
             SlashCommandRegistry slashRegistry,
             WorkerServices services,
@@ -68,6 +72,7 @@ public class WorkerPluginContextImpl implements WorkerPluginContext {
         this.authHandlerRegistry = authHandlerRegistry;
         this.toolInterceptorRegistry = toolInterceptorRegistry;
         this.lifecycleRegistry = lifecycleRegistry;
+        this.admissionPolicyRegistry = admissionPolicyRegistry;
         this.rpcDispatcher = rpcDispatcher;
         this.slashRegistry = slashRegistry;
         this.services = services;
@@ -112,6 +117,11 @@ public class WorkerPluginContextImpl implements WorkerPluginContext {
     @Override
     public void registerTaskLifecycleNode(TaskLifecycleNode node) {
         lifecycleRegistry.register(node, pluginId);
+    }
+
+    @Override
+    public void registerTaskAdmissionPolicy(TaskAdmissionPolicy policy) {
+        admissionPolicyRegistry.register(policy);
     }
 
     @Override

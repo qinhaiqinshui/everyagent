@@ -20,10 +20,12 @@ import dev.everyagent.worker.rpc.RpcDispatcher;
 import dev.everyagent.worker.ship.TaskInputHandler;
 import dev.everyagent.worker.slash.SlashTaskCallbacks;
 import dev.everyagent.worker.slash.SlashTokenEncoder;
+import dev.everyagent.worker.plugin.registry.TaskAdmissionPolicyRegistry;
 import dev.everyagent.worker.plugin.registry.TaskLifecycleRegistry;
 import dev.everyagent.worker.task.lifecycle.TaskLifecycleContextFactory;
 import dev.everyagent.worker.task.lifecycle.TaskLifecycleContextImpl;
 import dev.everyagent.worker.task.lifecycle.TaskLifecycleExecutor;
+import dev.everyagent.plugin.api.task.TaskAdmissionPolicy.AdmissionResult;
 import dev.everyagent.plugin.api.task.TaskKernel;
 import dev.everyagent.plugin.api.task.TaskOutcome;
 import jakarta.annotation.PostConstruct;
@@ -92,6 +94,8 @@ public class TaskManager implements TaskInputHandler, PendingAsks.StatusHook {
     private final TaskLifecycleContextFactory lifecycleContextFactory;
     private final TaskLifecycleExecutor lifecycleExecutor;
     private final TaskLifecycleRegistry lifecycleRegistry;
+    /** 任务准入策略注册表：队列插件注册后接管并发上限检查（always-admit → 排队）。 */
+    private final TaskAdmissionPolicyRegistry admissionPolicyRegistry;
 
     /** 热任务(运行中驻留内存;finish 即驱逐)。 */
     private final Map<String, TaskEntry> tasks = new ConcurrentHashMap<>();
@@ -120,7 +124,8 @@ public class TaskManager implements TaskInputHandler, PendingAsks.StatusHook {
             WorkerProperties props, RpcDispatcher dispatcher,
             TaskStore store, RoundIndexStore roundIndexStore,
             TaskLifecycleContextFactory lifecycleContextFactory,
-            TaskLifecycleExecutor lifecycleExecutor, TaskLifecycleRegistry lifecycleRegistry) {
+            TaskLifecycleExecutor lifecycleExecutor, TaskLifecycleRegistry lifecycleRegistry,
+            TaskAdmissionPolicyRegistry admissionPolicyRegistry) {
         this.eventSink = eventSink;
         this.agentService = agentService;
         this.agentFactory = agentFactory;
@@ -135,6 +140,7 @@ public class TaskManager implements TaskInputHandler, PendingAsks.StatusHook {
         this.lifecycleContextFactory = lifecycleContextFactory;
         this.lifecycleExecutor = lifecycleExecutor;
         this.lifecycleRegistry = lifecycleRegistry;
+        this.admissionPolicyRegistry = admissionPolicyRegistry;
     }
 
     @PostConstruct
@@ -998,10 +1004,6 @@ public class TaskManager implements TaskInputHandler, PendingAsks.StatusHook {
                 return;
             }
         }
-        if (active.get() >= props.getLimits().getMaxConcurrentTasks()) {
-            ctx.err(Rpc.ERR_BUSY, "并发任务已达上限 " + props.getLimits().getMaxConcurrentTasks());
-            return;
-        }
         WorkspaceManager.Root root;
         try {
             root = taskBootstrap.resolveWorkspace(ctx.strParam("workspace")); // 注册 + 校验(必填)
@@ -1012,6 +1014,20 @@ public class TaskManager implements TaskInputHandler, PendingAsks.StatusHook {
         // 稳定 workspaceId(注册后必在册;防御兜底回退默认 id,任务目录据此归类)。
         String workspaceId = taskBootstrap.workspaceIdOf(root.path().toString());
         String taskId = uniqueTaskId(workspaceId);
+        if (!admissionPolicyRegistry.isRegistered()) {
+            // 默认行为：无队列插件时保持硬拒绝
+            if (active.get() >= props.getLimits().getMaxConcurrentTasks()) {
+                ctx.err(Rpc.ERR_BUSY, "并发任务已达上限 " + props.getLimits().getMaxConcurrentTasks());
+                return;
+            }
+        } else {
+            // 队列插件已注册：准入策略 always-admit（排队在洋葱 QueueAdmissionNode 中处理）
+            AdmissionResult ar = admissionPolicyRegistry.get().check(taskId, props.getLimits().getMaxConcurrentTasks());
+            if (!ar.admitted()) {
+                ctx.err(Rpc.ERR_BUSY, ar.rejectReason());
+                return;
+            }
+        }
         String mainAgentId = ShortIds.mainAgentId();
         ResolvedConfig cfg = taskBootstrap.resolveConfig(ctx.optStrParam("configId", null));
         TaskEntry t = new TaskEntry(taskId, title, cfg.snapshot(),

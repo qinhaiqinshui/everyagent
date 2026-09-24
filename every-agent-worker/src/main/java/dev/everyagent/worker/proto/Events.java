@@ -68,6 +68,8 @@ public final class Events {
     public static final String TASK_CREATED = "task.created";
     public static final String TASK_UPDATED = "task.updated";
     public static final String TASK_DELETED = "task.deleted";
+    /** 任务排队事件（tasks 频道）：任务因并发满而排队等待时推送。 */
+    public static final String TASK_QUEUED = "task.queued";
 
     // worker 级 input 频道(taskId 入 payload)
     public static final String TASK_INPUT = "task.input";

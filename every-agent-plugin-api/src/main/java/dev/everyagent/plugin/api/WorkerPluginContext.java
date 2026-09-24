@@ -8,6 +8,7 @@ import dev.everyagent.plugin.api.spi.SandboxProvider;
 import dev.everyagent.plugin.api.spi.SearchProvider;
 import dev.everyagent.plugin.api.spi.ToolExecutionInterceptor;
 import dev.everyagent.plugin.api.spi.ToolProvider;
+import dev.everyagent.plugin.api.task.TaskAdmissionPolicy;
 import dev.everyagent.plugin.api.task.TaskLifecycleNode;
 
 /**
@@ -43,6 +44,9 @@ public interface WorkerPluginContext {
 
     /** 注册 TaskLifecycleNode（任务生命周期链节点）。 */
     void registerTaskLifecycleNode(TaskLifecycleNode node);
+
+    /** 注册任务准入策略（队列插件用）。 */
+    void registerTaskAdmissionPolicy(TaskAdmissionPolicy policy);
 
     // ── 通用扩展注册 ──
 

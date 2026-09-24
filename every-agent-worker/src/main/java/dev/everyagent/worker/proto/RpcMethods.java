@@ -21,6 +21,8 @@ public final class RpcMethods {
     public static final String TASK_AGENTS = "task.agents";
     public static final String TASK_CANCEL = "task.cancel";
     public static final String TASK_DELETE = "task.delete";
+    /** 队列快照拉取：返回当前排队中的任务列表及位置。 */
+    public static final String TASK_QUEUE_LIST = "task.queueList";
     /** 删除某条队列输入(参数 taskId, index)。 */
     public static final String TASK_QUEUE_REMOVE = "task.queueRemove";
     /** 移动(重排)某条队列输入(参数 taskId, fromIndex, toIndex)。 */
