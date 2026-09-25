@@ -223,6 +223,8 @@ TaskKernel kernel = ctx -> {
 
 ### 3.3 内置节点基线表（现状动作逐字映射，行为零变化）
 
+> **后继修订**：本表为 Phase 1 落地基线（16 节点）。底座稳定后按「一节点一职责、对称动作收一个节点」收敛为 18 节点（status/queue 合并为成对节点、新增 rerun.restore/slash.notify/model.switch.trace），见 §11 与 [design-task-lifecycle-convergence.md](design-task-lifecycle-convergence.md)。下文表格保留 Phase 1 原貌作为历史对照。
+
 filter 模型下收口序恒等于进入序的逆序（同一 order 决定两端位置）。**关键推论**：v3 的「一节点一事」划分（track/untrack 分离、纯收口动作独立成节点）恰好让逆序收口序与现状执行顺序**逐项一致**——不需要任何顺序变化。17 节点 = 4 个形态一（纯下行）+ 13 个形态二（空下行段纯收口）；形态三（成对 try/finally）是留给未来插件的。order 值各不相同（390/420 错开，避免同 order 靠注册序消歧的脆弱性）。
 
 **下行节点（invoke 的 next 之前，order 升序 = 执行序）**：
@@ -591,13 +593,13 @@ public abstract class UpstreamNode implements TaskLifecycleNode {
 }
 ```
 
-`TaskLifecycleExecutor.assemble(nodes, ctx)` 折叠规则：
+`TaskLifecycleExecutor.assemble(nodes, ctx)` 折叠规则（**§11 收敛修订：段识别由 `UpstreamNode` 改为 `SectionNode`**）：
 1. 按 order 升序折叠为嵌套链（§3.1）。
-2. **临界段识别**：连续且 order ∈ [850,420] 的 `UpstreamNode` 连续序列 → 段边界包一次 `synchronized(ctx.taskLock())`，段内节点**直接调 `up(ctx, result)`**（绕过 invoke 的透传样板，否则每节点各自拿锁退化回分段）；段对外表现为 order=850 的单一链位置。
-3. 段内上行执行序 = order 降序（850 最先）——与现状 finish 持锁段逐项一致。
+2. **临界段识别**：连续且 order ∈ [850,420] 的 `SectionNode` 连续序列 → 段边界包一次 `synchronized(ctx.taskLock())`；段内节点的**下行段 `down(ctx)` 在段边界外按 order 升序先执行（无锁）**，随后进入内层链；内层返回后共享临界区内按 order 降序**直接调 `up(ctx, result)`**（绕过 invoke 的透传样板，否则每节点各自拿锁退化回分段）；段对外表现为段首 order 的单一链位置。
+3. 段内上行执行序 = order 降序（段首最先）——与现状 finish 持锁段逐项一致。
 4. 段外节点（spawned.await 950/cascade.stop 900 在段内边界之外先执行；workspace.activity 350 在段外最后）各自按 §3.1 invoke 语义。
 
-实现提示：组装器返回 `TaskChain`，不引入新公开类型；`UpstreamNode.up` 为 protected，仅组装器（同包）直接调用——包内约定即机制边界，插件节点（非 UpstreamNode）永远走 invoke，自行持锁需遵 §3.3 锁策略（850..420 区间不允许插件节点插入，注册表按 order 区间拒绝并在注册时打 WARN）。
+实现提示：组装器返回 `TaskChain`，不引入新公开类型；`SectionNode.down/up` 为 protected，仅组装器（同包）直接调用——包内约定即机制边界，插件节点（非 SectionNode）永远走 invoke，自行持锁需遵 §3.3 锁策略（850..420 区间不允许插件节点插入，注册表按 order 区间拒绝并在注册时打 WARN）。`UpstreamNode` 保留为 `SectionNode` 的特化（down 为空），纯上行节点零改动。
 
 ### 7.4 后续 Phase 边界与验收要点（简）
 
@@ -646,3 +648,32 @@ public abstract class UpstreamNode implements TaskLifecycleNode {
 
 1. **skill 只随 subagent 插件走是否够用**：若未来别的插件也要贡献 skill，`SkillContributor` SPI 做成通用扩展点（设计已按通用写，subagent 是第一个使用者）。
 2. Phase 2 的 Maven 物理分模块（`every-agent-agent`）时机：与包内收敛同步做，还是包收敛稳定后再拆（我建议后者）。
+
+---
+
+## 11. 收敛修订：对称节点合并 + 再运行恢复入链
+
+> 详细方案与论证：[design-task-lifecycle-convergence.md](design-task-lifecycle-convergence.md)。本节为基线表修订要点。
+
+**原则**：一节点一职责；对称动作（同一资源的开始/结束）收一个节点——合并判据为「存在单一 order 使两端时序约束同时成立」（filter 模型下上行序 = 进入序逆序，一个节点的下行位与上行位被同一 order 锁定）。
+
+**合并（2 对）**：
+
+| 合并后节点 | order | 下行段 | 上行段 |
+|---|---|---|---|
+| `status`（原 status.start 300 + status.finalize 850） | 840 | startedAt + RUNNING + task.updated 广播 + agentStatus("running") | 终态 CAS + endedAt/error + agentStatus 终态事件 + 终态广播 |
+| `queue`（新增下行恢复 + 原 queue.persist 700） | 700 | `store.readQueue` → 逐条 offer 悬空队列（新建任务天然空转） | 悬空队列落盘 queue.jsonl / 空则删除 |
+
+**新增（3 个，消解 startRerun/rpcTaskRun 准备段重复）**：
+
+| order | 节点 id | 职责 |
+|---|---|---|
+| 50 | `rerun.restore` | meta→TaskEntry 全量恢复（createdAt/taskFlags 含旧字段迁移/networkBlocked/powershellEnabled/seedUsageMeta/slashTaskTokens）+ `log.seed` 水位续号；新建任务空转 |
+| 90 | `slash.notify` | `slashCallbacks.notifySlashCallbacks`（新建/再运行统一） |
+| 310 | `model.switch.trace` | overrideConfigId ≠ meta.configId 时发 `modelSwitch` 事件（仅再运行切模型时生效） |
+
+**不可合并（保持拆分）**：`persistence`（track 100 必须在一切事件落盘前 / untrack 500 必须在临界段内 remove 前，两端被整条链锁死）；`concurrency`（acquire 与上限检查在 RPC 线程做 TOCTOU，队列插件接管准入后由 QueueAdmissionNode 成对形态自然覆盖）。
+
+**机制变更**：新增 `SectionNode` 基类（down/up，§7.3 折叠规则随之修订）；`UpstreamNode` = SectionNode 特化。临界段识别改为 `instanceof SectionNode && order ∈ [420,850]`。
+
+**行为差异（仅 4 项，其余逐项不变）**：① agentStatus("running") 与 RUNNING 广播移到 user.message/round.opened 之后；② slash 建后回调执行线程从 RPC 线程移到任务线程（track 前，时序不变）；③ 新建任务多一次 readQueue 空调用；④ model.switch.trace 发射点从 track 前移到 track 后（落盘时序由隐性变显式）。
