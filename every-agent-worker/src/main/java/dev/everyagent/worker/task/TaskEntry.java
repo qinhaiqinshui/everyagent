@@ -137,7 +137,6 @@ public final class TaskEntry implements TaskInfo, AgentContext {
         return List.copyOf(slashTaskTokens);
     }
 
-    public final InputQueue inputQueue = new InputQueue();
 
     // ---- TaskInfo 接口实现 ----
 
@@ -326,22 +325,12 @@ public final class TaskEntry implements TaskInfo, AgentContext {
         return n;
     }
 
-    /** 待消费输入快照(弱一致只读;运行时态,不落盘不进 TaskSummary)。 */
-    public List<String> pendingInputs() {
-        return inputQueue.snapshot();
-    }
-
     /**
-     * wire 专用组装:summary + pendingInputs 快照(架构 §3.3)。
-     * 仅用于发布/tasks.list 内存行等线上组装点;meta.json 供体保持 {@link #summaryJson()},
-     * 磁盘与运行时队列零污染。
+     * wire 专用组装:summary（无 pendingInputs —— 队列概念已插件化，核心不持有）。
+     * 队列插件经 task.updated 广播时自行在 payload 中补充 pendingInputs。
      */
     public ObjectNode runtimeSummaryJson() {
-        ObjectNode n = summaryJson();
-        ArrayNode q = Json.arr();
-        pendingInputs().forEach(q::add);
-        n.set("pendingInputs", q);
-        return n;
+        return summaryJson();
     }
 
     /** 当前挂起的 ask 数(worker 内部状态推算 waiting-user)。 */

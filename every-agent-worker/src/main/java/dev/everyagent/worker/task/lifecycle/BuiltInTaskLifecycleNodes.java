@@ -18,7 +18,7 @@ import org.springframework.stereotype.Component;
  * <p>收敛后基线（§11）：
  * 下行: rerun.restore(50) → slash.notify(90) → persistence.track(100)
  *   → task.wires(200) → model.switch.trace(310) → main.agent(390)
- *   → queue.down(700) → status.down(840)
+ *   → status.down(840)
  * 内核: 轮次循环
  * 上行: spawned.await(950) → cascade.stop(900)
  *   → [临界段: status(840) → concurrency.release(800) → log.flush(750)
@@ -70,7 +70,6 @@ public class BuiltInTaskLifecycleNodes {
         registry.register(new ModelSwitchTraceNode(), "worker");
         registry.register(new MainAgentNode(), "worker");
         // 成对节点（下行在段边界外、上行在临界段内）
-        registry.register(new QueueNode(store), "worker");       // order=700
         registry.register(new StatusNode(pool), "worker");       // order=840
         // 上行节点（段外，按 order 从高到低注册，仅影响同 order 的稳定排序兜底）
         registry.register(new SpawnedAwaitNode(subs), "worker");

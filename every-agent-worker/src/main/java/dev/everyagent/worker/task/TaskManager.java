@@ -19,6 +19,7 @@ import dev.everyagent.worker.rpc.RpcDispatcher;
 import dev.everyagent.worker.ship.TaskInputHandler;
 import dev.everyagent.worker.slash.SlashTokenEncoder;
 import dev.everyagent.worker.plugin.registry.TaskAdmissionPolicyRegistry;
+import dev.everyagent.worker.plugin.registry.TaskInputInterceptorRegistry;
 import dev.everyagent.worker.plugin.registry.TaskLifecycleRegistry;
 import dev.everyagent.worker.task.lifecycle.TaskLifecycleContextFactory;
 import dev.everyagent.worker.task.lifecycle.TaskLifecycleContextImpl;
@@ -91,6 +92,8 @@ public class TaskManager implements TaskInputHandler, PendingAsks.StatusHook {
     private final TaskLifecycleRegistry lifecycleRegistry;
     /** 任务准入策略注册表：队列插件注册后接管并发上限检查（always-admit → 排队）。 */
     private final TaskAdmissionPolicyRegistry admissionPolicyRegistry;
+    /** 任务输入拦截器注册表：队列插件注册后接管运行中 task.input / task.dialogInsert。 */
+    private final TaskInputInterceptorRegistry inputInterceptorRegistry;
 
     /** 热任务(运行中驻留内存;finish 即驱逐)。 */
     private final Map<String, TaskEntry> tasks = new ConcurrentHashMap<>();
@@ -117,7 +120,8 @@ public class TaskManager implements TaskInputHandler, PendingAsks.StatusHook {
             TaskStore store, RoundIndexStore roundIndexStore,
             TaskLifecycleContextFactory lifecycleContextFactory,
             TaskLifecycleExecutor lifecycleExecutor, TaskLifecycleRegistry lifecycleRegistry,
-            TaskAdmissionPolicyRegistry admissionPolicyRegistry) {
+            TaskAdmissionPolicyRegistry admissionPolicyRegistry,
+            TaskInputInterceptorRegistry inputInterceptorRegistry) {
         this.eventSink = eventSink;
         this.agentService = agentService;
         this.agentFactory = agentFactory;
@@ -132,6 +136,7 @@ public class TaskManager implements TaskInputHandler, PendingAsks.StatusHook {
         this.lifecycleExecutor = lifecycleExecutor;
         this.lifecycleRegistry = lifecycleRegistry;
         this.admissionPolicyRegistry = admissionPolicyRegistry;
+        this.inputInterceptorRegistry = inputInterceptorRegistry;
     }
 
     @PostConstruct
@@ -182,19 +187,20 @@ public class TaskManager implements TaskInputHandler, PendingAsks.StatusHook {
         }
         TaskEntry t = tasks.get(taskId);
         if (t != null && !t.status.terminal()) {
-            // 编辑重发：截断清理后正常入队
+            // 运行中：核心拒绝（单轮语义）。队列插件注册拦截器后接管（offer 到内部队列）。
             String editSeq = payload.path("editSeq").isTextual() ? payload.path("editSeq").asString() : null;
             if (editSeq != null && !editSeq.isEmpty()) {
                 truncateForEdit(taskId, t, editSeq, text, rawContent);
             }
-            t.inputQueue.offer(text, rawContent); // 运行中:本轮运行的输入循环内消化
-            t.touch();
-            publishQueue(t); // 队列变化即广播(pendingInputs 快照,前端镜像实时)
+            for (var interceptor : inputInterceptorRegistry.getInterceptors()) {
+                if (interceptor.onRunningTaskInput(taskId, text, rawContent)) {
+                    return; // 插件已处理（如 offer 到队列）
+                }
+            }
+            // 无拦截器 → 拒绝（核心无队列概念，运行中不接收新输入）
             return;
         }
-        // 不在内存或已终态(finish 驱逐窗口内):统一走再运行认领。
-        // 热终态直接 return 会把输入无声丢弃——done 帧发布于 finish 持锁段头部,
-        // flush/meta/驱逐完成前到达的输入都落在这个窗口。
+        // 不在内存或已终态:统一走再运行认领。
         String editSeq2 = payload.path("editSeq").isTextual() ? payload.path("editSeq").asString() : null;
         rerunTask(conn, taskId, text, rawContent, editSeq2);
     }
@@ -206,37 +212,11 @@ public class TaskManager implements TaskInputHandler, PendingAsks.StatusHook {
         if (taskId.isEmpty() || text.isEmpty()) {
             return;
         }
-        // 只对运行中热任务生效:队列项插入到正在进行的 AI 对话循环,终态/不存在静默忽略
-        TaskEntry t = tasks.get(taskId);
-        if (t == null || t.status.terminal()) {
-            return;
-        }
-        // 插入只对本轮主 agent 生效:run 尚未建立主 agent(创建→开跑的极短窗口)时忽略,
-        // 队列项保留;用户停止/任务终态后 t.main 已换新实体,旧积压随之作废。
-        AgentEntity main = t.main;
-        if (main == null) {
-            return;
-        }
-        // 把该条队列项从 pendingInputs 移除(插入即消费,避免后续被正常循环重复消化)。
-        // 优先按前端下标删除;下标缺失/越界(并发消费导致漂移)时回退按正文删除第一条匹配。
-        // 从被删队列项拿到原始内容(rawContent),随插入一起带进 user.message 回放。
+        // 核心无队列概念；队列插件注册拦截器后处理（从队列移除 + 加入插入队列）。
         int index = payload.path("index").asInt(-1);
-        UserInput removedInput = null;
-        if (index >= 0) {
-            try {
-                removedInput = t.inputQueue.removeAt(index);
-            } catch (IndexOutOfBoundsException e) {
-                log.warn("task.dialogInsert 队列下标越界 task={} index={}(回退按正文删除)", taskId, index);
-            }
+        for (var interceptor : inputInterceptorRegistry.getInterceptors()) {
+            interceptor.onDialogInsert(taskId, index, text);
         }
-        if (removedInput == null) {
-            removedInput = t.inputQueue.removeFirst(text);
-        }
-        // 加入本轮主 agent 的插入队列:DialogInsertAdvisor 在工具循环下行阶段随工具结果
-        // 一起以 role=user 提交给 AI(停止即随 AgentEntity 作废,不跨 run 共享)
-        main.pendingDialogInserts.offer(removedInput != null ? removedInput : UserInput.of(text));
-        t.touch();
-        publishQueue(t); // 队列移除后广播最新 pendingInputs(未移除则空广播无副作用)
     }
 
     @Override
@@ -256,8 +236,6 @@ public class TaskManager implements TaskInputHandler, PendingAsks.StatusHook {
         dispatcher.register(RpcMethods.TASK_RUN, this::rpcTaskRun);
         dispatcher.register(RpcMethods.TASK_CANCEL, this::rpcTaskCancel);
         dispatcher.register(RpcMethods.TASK_DELETE, this::rpcTaskDelete);
-        dispatcher.register(RpcMethods.TASK_QUEUE_REMOVE, this::rpcTaskQueueRemove);
-        dispatcher.register(RpcMethods.TASK_QUEUE_MOVE, this::rpcTaskQueueMove);
         // config.get / config.reload / skill.reload 已迁 ConfigRpcHandler(基础设施·配置面,自行注册)。
     }
 
@@ -303,7 +281,7 @@ public class TaskManager implements TaskInputHandler, PendingAsks.StatusHook {
             if (!wsFilter.isEmpty() && !wsFilter.equals(t.workspaceRoot)) {
                 continue;
             }
-            merged.put(t.taskId, t.runtimeSummaryJson()); // 内存行带 pendingInputs(队列外显)
+            merged.put(t.taskId, t.runtimeSummaryJson()); // 内存行(队列概念已插件化)
         }
         for (TaskStore.StoredTask s : disk) {
             if (merged.containsKey(s.taskId())) {
@@ -315,18 +293,7 @@ public class TaskManager implements TaskInputHandler, PendingAsks.StatusHook {
             if (!wsFilter.isEmpty() && !wsFilter.equals(s.summary().path("workspace").asString(""))) {
                 continue;
             }
-            List<UserInput> queued = store.readQueue(s.dir());
-            if (queued.isEmpty()) {
-                merged.put(s.taskId(), s.summary()); // 无悬空队列:原样放行(共享引用,只读)
-                continue;
-            }
-            ObjectNode copy = s.summary().deepCopy(); // 磁盘 summary 是共享引用,严禁原地修改
-            ArrayNode pendingArr = Json.arr();
-            for (UserInput item : queued) {
-                pendingArr.add(item.text());
-            }
-            copy.set("pendingInputs", pendingArr);
-            merged.put(s.taskId(), copy);
+            merged.put(s.taskId(), s.summary()); // 原样放行(共享引用,只读)
         }
         List<JsonNode> all = new ArrayList<>(merged.values());
         all.sort((a, b) -> {
@@ -1003,9 +970,6 @@ public class TaskManager implements TaskInputHandler, PendingAsks.StatusHook {
                 if (editSeq != null && !editSeq.isEmpty() && t != null && !t.status.terminal()) {
                     truncateForEdit(taskId, t, editSeq, input, rawContent);
                 }
-                t.inputQueue.offer(input, rawContent); // 运行中:与 task.input 同路径入队
-                t.touch();
-                publishQueue(t);
                 ctx.ok(Json.obj().put("taskId", taskId).put("status", t.status.wire()).put("queued", true));
                 return;
             }
@@ -1017,9 +981,6 @@ public class TaskManager implements TaskInputHandler, PendingAsks.StatusHook {
             // 认领输家:并发再运行可能刚重建热任务,重查内存按运行中入队兜底
             TaskEntry again = tasks.get(taskId);
             if (again != null && !again.status.terminal()) {
-                again.inputQueue.offer(input, rawContent);
-                again.touch();
-                publishQueue(again);
                 ctx.ok(Json.obj().put("taskId", taskId).put("status", again.status.wire()).put("queued", true));
                 return;
             }
@@ -1083,100 +1044,7 @@ public class TaskManager implements TaskInputHandler, PendingAsks.StatusHook {
         }
     }
 
-    /** task.queueRemove:删除某条队列输入(参数 taskId, index)。 */
-    private void rpcTaskQueueRemove(RpcContext ctx) {
-        String taskId = ctx.strParam("taskId");
-        int index = ctx.params().path("index").asInt(-1);
-        mutateQueue(ctx, taskId, QueueOp.REMOVE, index, -1, -1);
-    }
 
-    /** task.queueMove:移动(重排)某条队列输入(参数 taskId, fromIndex, toIndex)。 */
-    private void rpcTaskQueueMove(RpcContext ctx) {
-        String taskId = ctx.strParam("taskId");
-        int fromIndex = ctx.params().path("fromIndex").asInt(-1);
-        int toIndex = ctx.params().path("toIndex").asInt(-1);
-        mutateQueue(ctx, taskId, QueueOp.MOVE, fromIndex, fromIndex, toIndex);
-    }
-
-    /** 队列修改操作(remove 用 index;move 用 fromIndex/toIndex)。 */
-    private enum QueueOp { REMOVE, MOVE }
-
-    /**
-     * queueRemove / queueMove 共用骨架(定位 + 分热/冷执行):
-     * 运行中热任务直接改内存 InputQueue(removeAt/move,越界抛 IOOBE → BAD_PARAMS)
-     * 并 touch + publishQueue(task.updated 携带 pendingInputs 快照,前端镜像实时);
-     * 终态任务改磁盘悬空队列 queue.jsonl(整读改写,失败 INTERNAL)并广播 task.updated
-     * (deepCopy 后再 set pendingInputs,严禁原地改共享 summary)。
-     * 参数缺失(BadParamsException)/越界 BAD_PARAMS;不存在 NOT_FOUND。
-     */
-    private void mutateQueue(RpcContext ctx, String taskId, QueueOp op, int index, int fromIndex, int toIndex) {
-        TaskEntry t = tasks.get(taskId);
-        if (t != null) {
-            if (!t.status.terminal()) {
-                // 热任务:直接在内存队列上操作(越界抛 IndexOutOfBoundsException)
-                try {
-                    if (op == QueueOp.REMOVE) {
-                        t.inputQueue.removeAt(index);
-                    } else {
-                        if (fromIndex == toIndex) {
-                            ctx.ok(Json.obj().put("taskId", taskId).put("ok", true)); // 无操作
-                            return;
-                        }
-                        t.inputQueue.move(fromIndex, toIndex);
-                    }
-                } catch (IndexOutOfBoundsException e) {
-                    ctx.err(Rpc.ERR_BAD_PARAMS, "队列索引越界");
-                    return;
-                }
-                t.touch();
-                publishQueue(t);
-                ctx.ok(Json.obj().put("taskId", taskId).put("ok", true));
-                return;
-            }
-            synchronized (t) {
-            } // 等 finish 驱逐完成(flush 后任务必在 diskTasks),随后走冷路径
-        }
-        // 冷路径:终态任务的磁盘悬空队列(queue.jsonl)整读改写
-        TaskStore.StoredTask st = diskTasks.get(taskId);
-        if (st == null) {
-            ctx.err(Rpc.ERR_NOT_FOUND, "任务不存在");
-            return;
-        }
-        Path dir = st.dir();
-        List<UserInput> list = new ArrayList<>(store.readQueue(dir));
-        if (op == QueueOp.REMOVE) {
-            if (index < 0 || index >= list.size()) {
-                ctx.err(Rpc.ERR_BAD_PARAMS, "队列索引越界");
-                return;
-            }
-            list.remove(index);
-        } else {
-            if (fromIndex == toIndex) {
-                ctx.ok(Json.obj().put("taskId", taskId).put("ok", true)); // 无操作
-                return;
-            }
-            if (fromIndex < 0 || fromIndex >= list.size() || toIndex < 0 || toIndex >= list.size()) {
-                ctx.err(Rpc.ERR_BAD_PARAMS, "队列索引越界");
-                return;
-            }
-            UserInput item = list.remove(fromIndex);
-            list.add(toIndex, item);
-        }
-        try {
-            store.writeQueue(dir, list);
-        } catch (java.io.IOException e) {
-            ctx.err(Rpc.ERR_INTERNAL, "队列写入失败");
-            return;
-        }
-        ObjectNode summary = st.summary().deepCopy(); // 共享引用,严禁原地修改
-        ArrayNode arr = Json.arr();
-        for (UserInput item : list) {
-            arr.add(item.text());
-        }
-        summary.set("pendingInputs", arr);
-        eventSink.fanout(k -> Channels.tasks(k), Events.TASK_UPDATED, null, summary, null);
-        ctx.ok(Json.obj().put("taskId", taskId).put("ok", true));
-    }
 
     /** 删除结果(区分运行中/不存在;workspaces.remove 级联共用)。 */
     private enum DeleteResult { OK, RUNNING, NOT_FOUND }
@@ -1290,14 +1158,16 @@ public class TaskManager implements TaskInputHandler, PendingAsks.StatusHook {
         TaskEntry hot = tasks.get(taskId);
         if (hot != null) {
             if (!hot.status.terminal()) {
-                // finish 尚未开始(竞态窗口极小):直接入队
-                // 编辑重发：截断清理后正常入队
+                // 运行中：核心无队列概念，交给拦截器（插件 offer 到队列）；无插件则忽略
                 if (editSeq != null && !editSeq.isEmpty()) {
                     truncateForEdit(taskId, hot, editSeq, text, rawContent);
                 }
-                hot.inputQueue.offer(text, rawContent);
-                hot.touch();
-                return;
+                for (var interceptor : inputInterceptorRegistry.getInterceptors()) {
+                    if (interceptor.onRunningTaskInput(taskId, text, rawContent)) {
+                        return;
+                    }
+                }
+                return; // 无拦截器 → 忽略（单轮语义）
             }
             synchronized (hot) {
             } // 等 finish 驱逐(flush 后 tasks.remove)
@@ -1366,7 +1236,7 @@ public class TaskManager implements TaskInputHandler, PendingAsks.StatusHook {
                 props.getLimits().getMaxEventsPerTask());
         // 再运行状态恢复(createdAt/taskFlags/开关/usage/slashTaskTokens/log.seed)、悬空队列恢复、
         // slash 建后回调、模型切换 trace 均已入洋葱下行节点
-        // （RerunRestoreNode order=50 / QueueNode order=700 / SlashNotifyNode order=90 /
+        // （RerunRestoreNode order=50 / SlashNotifyNode order=90 /
         //   ModelSwitchTraceNode order=310），在任务线程开头执行。
         if (tasks.putIfAbsent(taskId, t) != null) {
             diskTasks.putIfAbsent(taskId, st);
@@ -1421,27 +1291,14 @@ public class TaskManager implements TaskInputHandler, PendingAsks.StatusHook {
             try {
                 TaskEntry te = ((TaskLifecycleContextImpl) c).taskEntry();
                 AgentEntity main = te.main;
-                while (true) {
-                    if (Thread.currentThread().isInterrupted()) {
-                        log.debug("[cancel] runTask 循环顶检测到中断标记 taskId={} thread={}",
-                                te.taskId, Thread.currentThread().getName());
-                        throw new InterruptedException("cancelled");
-                    }
-                    agentService.run(main);
-                    log.debug("[run] runner.run 正常返回(本轮 agent 完成) taskId={} thread={} interruptFlag={}",
-                            te.taskId, Thread.currentThread().getName(), Thread.currentThread().isInterrupted());
-                    UserInput next = te.inputQueue.poll();
-                    if (next == null) {
-                        next = main.pendingDialogInserts.poll();
-                        if (next == null) {
-                            break;
-                        }
-                        ctx.consumeInput(main, next);
-                        continue;
-                    }
-                    ctx.consumeInput(main, next);
-                    publishQueue(te);
+                if (Thread.currentThread().isInterrupted()) {
+                    log.debug("[cancel] 内核检测到中断标记 taskId={} thread={}",
+                            te.taskId, Thread.currentThread().getName());
+                    throw new InterruptedException("cancelled");
                 }
+                agentService.run(main);
+                log.debug("[run] runner.run 正常返回(本轮 agent 完成) taskId={} thread={}",
+                        te.taskId, Thread.currentThread().getName());
                 long startedAt = te.startedAt != null ? te.startedAt : 0;
                 return new TaskOutcome(TaskOutcome.TaskEndStatus.DONE, null,
                         startedAt, System.currentTimeMillis());
@@ -1567,12 +1424,7 @@ public class TaskManager implements TaskInputHandler, PendingAsks.StatusHook {
         eventSink.fanout(k -> Channels.tasks(k), Events.TASK_UPDATED, null, t.runtimeSummaryJson(), null);
     }
 
-    /** 队列变化广播:task.updated 携带最新 pendingInputs 快照(§3.3,运行时态不落盘)。 */
-    private void publishQueue(TaskEntry t) {
-        eventSink.fanout(k -> Channels.tasks(k), Events.TASK_UPDATED, null, t.runtimeSummaryJson(), null);
-    }
-
-    // ---- PendingAsks.StatusHook:waiting-user ⇄ running ----
+// ---- PendingAsks.StatusHook:waiting-user ⇄ running ----
 
     @Override
     public void askPendingChanged(String taskId, boolean nowPending) {
@@ -1675,7 +1527,7 @@ public class TaskManager implements TaskInputHandler, PendingAsks.StatusHook {
     }
 
     /**
-     * 广播 task.updated 到全部连接:运行中任务用内存 runtimeSummaryJson(带 pendingInputs 快照),
+     * 广播 task.updated 到全部连接:运行中任务用内存 runtimeSummaryJson,
      * 磁盘终态任务用磁盘 summary(共享引用,只读广播);任务都不存在则不广播。
      */
     public void publishTaskUpdated(String taskId) {

@@ -22,7 +22,12 @@
         </dependency>
         <dependency>
             <groupId>dev.everyagent</groupId>
-            <artifactId>auth-review</artifactId>
+            <artifactId>ai-review</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>dev.everyagent</groupId>
+            <artifactId>unattended</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>

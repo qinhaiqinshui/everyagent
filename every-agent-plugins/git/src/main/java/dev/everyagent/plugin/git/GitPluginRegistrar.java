@@ -8,7 +8,7 @@ import org.springframework.stereotype.Component;
  *
  * <p>从 worker 核心 {@code BuiltInAdvisorProviders} 迁出后,由插件模块自行注册
  * {@link GitAutoSyncAdvisorProvider} 到 {@link AdvisorProviderRegistry}。
- * 与 auth-review 模块的 {@code AiReviewAuthHandler} 同模式:构造器注入 registry 后立即登记。
+ * 与 ai-review 模块的 {@code AiReviewAuthHandler} 同模式:构造器注入 registry 后立即登记。
  */
 @Component
 public class GitPluginRegistrar {

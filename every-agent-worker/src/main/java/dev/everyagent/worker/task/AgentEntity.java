@@ -34,16 +34,6 @@ public final class AgentEntity {
     /** 仅由本 agent 的执行线程读写(任务线程 / 子 agent 线程)。 */
     public final List<Message> conversation = new ArrayList<>();
 
-    /**
-     * 任务队列「插入到当前对话」缓冲(本轮有效,不跨 run 共享):用户点击队列项「插入」按钮时,
-     * TaskManager 把正文 offer 到主 agent 实体的此队列;{@link DialogInsertAdvisor} 在工具循环
-     * 把工具结果交回 AI 时的下行阶段(before) drain 并以 role=user 消息随工具结果一并提交给模型,
-     * 同时发射 {@code user.message} 事件。队列本体挂在主 agent 实体上——用户停止/任务终态时
-     * AgentEntity 随本轮 run 销毁,积压的插入用户消息随之作废,不会带进下一轮/再运行。
-     * 线程安全:入队来自 hub 消息线程,出队来自 agent 工具循环线程(main。子 agent 不接收,恒空)。
-     */
-    public final java.util.concurrent.ConcurrentLinkedQueue<UserInput> pendingDialogInserts =
-            new java.util.concurrent.ConcurrentLinkedQueue<>();
 
     private final AtomicReference<Usage> usage = new AtomicReference<>(Usage.zero());
     /** 最近一轮实测 usage(WorkerToolEventAdvisor 每轮 usage 事件时写;任务级 usageSummary 的供体)。 */

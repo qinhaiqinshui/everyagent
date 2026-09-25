@@ -65,7 +65,6 @@ public class BuiltInAdvisorProviders {
         // 守卫 / 文件跟踪（200─399）
         registry.register(new LoopRepeatGuardAdvisorProvider(props));
         registry.register(new FileChangeAdvisorProvider());
-        registry.register(new DialogInsertAdvisorProvider(slashTokenHandler));
 
         // 重试 / 护栏（400─599）
         registry.register(new EmptyResponseRetryAdvisorProvider(props));

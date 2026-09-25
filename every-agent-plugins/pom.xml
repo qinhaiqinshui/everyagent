@@ -17,7 +17,8 @@
     <description>内置插件父模块</description>
 
     <modules>
-        <module>auth-review</module>
+        <module>ai-review</module>
+        <module>unattended</module>
         <module>git</module>
         <module>task-queue</module>
         <module>subagent</module>

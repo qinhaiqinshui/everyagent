@@ -170,14 +170,14 @@ every-agent-plugins/task-input-queue/
 
 ---
 
-## 5. 待评审决策点
+## 5. 已确认决策
 
-| # | 决策点 | 选项 | 倾向 |
-|---|---|---|---|
-| 1 | 无队列插件时运行中 task.input 回复 | A) 静默忽略 B) 返回 ERR_BUSY | A：单轮语义下运行中窗口极短，静默忽略更简洁；前端可做"任务运行中"禁用输入框兜底 |
-| 2 | queue.jsonl 读写方法归属 | A) TaskStore 保留方法、插件调用 B) 插件自管文件 IO | A：TaskStore 已有方法且经目录体系 |
-| 3 | AgentEntity.pendingDialogInserts 去留 | A) 移除，插件经 AgentContext 扩展暴露 B) 保留为通用字段 | A：彻底去核心概念 |
-| 4 | queue(700) 进临界段 | A) "worker"标识注册(subagent 先例) B) 放宽信任 | A |
+| # | 决策点 | 选择 |
+|---|---|---|
+| 1 | 无队列插件时运行中 task.input 回复 | **B) 返回 ERR_BUSY** |
+| 2 | queue.jsonl 读写方法归属 | **A) TaskStore 保留方法、插件调用** |
+| 3 | AgentEntity.pendingDialogInserts 去留 | **A) 移除，插件经 AgentContext 扩展暴露** |
+| 4 | queue 持久化节点临界段 | **B) 移出临界段**：order 调到 420 以下（如 410），不进 [420,850]，插件节点以自身 pluginId 注册，不伪装。queue.jsonl 读写失败只是 warn（悬空队列丢弃），不涉及终态内存态原子性，无需共享临界区锁 |
 
 ---
 

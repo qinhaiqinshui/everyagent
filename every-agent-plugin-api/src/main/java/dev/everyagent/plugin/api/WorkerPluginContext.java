@@ -10,6 +10,7 @@ import dev.everyagent.plugin.api.spi.SearchProvider;
 import dev.everyagent.plugin.api.spi.ToolExecutionInterceptor;
 import dev.everyagent.plugin.api.spi.ToolProvider;
 import dev.everyagent.plugin.api.task.TaskAdmissionPolicy;
+import dev.everyagent.plugin.api.task.TaskInputInterceptor;
 import dev.everyagent.plugin.api.task.TaskLifecycleNode;
 
 /**
@@ -45,6 +46,9 @@ public interface WorkerPluginContext {
 
     /** 注册 TaskLifecycleNode（任务生命周期链节点）。 */
     void registerTaskLifecycleNode(TaskLifecycleNode node);
+
+    /** 注册 TaskInputInterceptor（任务输入拦截器，接管运行中 task.input / task.dialogInsert）。 */
+    void registerTaskInputInterceptor(TaskInputInterceptor interceptor);
 
     /** 注册 SkillContributor（skill 贡献者，向 system prompt 与 / 菜单贡献 skill）。 */
     void registerSkillContributor(SkillContributor contributor);
