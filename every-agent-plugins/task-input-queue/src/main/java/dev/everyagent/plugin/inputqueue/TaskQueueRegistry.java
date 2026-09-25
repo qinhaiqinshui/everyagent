@@ -29,6 +29,10 @@ public class TaskQueueRegistry {
         return inputQueues.get(taskId);
     }
 
+    public InputQueue getOrCreateInputQueue(String taskId) {
+        return inputQueues.computeIfAbsent(taskId, k -> new InputQueue());
+    }
+
     public ConcurrentLinkedQueue<UserInput> getOrCreateDialogInsertQueue(String taskId) {
         return dialogInsertQueues.computeIfAbsent(taskId, k -> new ConcurrentLinkedQueue<>());
     }

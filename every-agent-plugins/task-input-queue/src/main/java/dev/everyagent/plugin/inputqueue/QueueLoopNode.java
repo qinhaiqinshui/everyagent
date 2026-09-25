@@ -38,7 +38,9 @@ public final class QueueLoopNode implements TaskLifecycleNode {
     @Override
     public Object invoke(TaskLifecycleContext ctx, TaskChain next) throws Exception {
         String taskId = ctx.taskId();
-        InputQueue queue = new InputQueue();
+        // 注册 per-task 队列（queue.dispatch 节点在 RPC 线程入队用）
+        // 用 getOrCreateInputQueue：若 queue.dispatch 已先行创建队列（极窄竞态窗口），复用之
+        InputQueue queue = registry.getOrCreateInputQueue(taskId);
 
         // 下行：恢复悬空队列（新建任务 readQueue 返回空）
         try {
@@ -48,9 +50,6 @@ public final class QueueLoopNode implements TaskLifecycleNode {
         } catch (Exception e) {
             log.warn("恢复悬空队列失败 task={}", taskId, e);
         }
-
-        // 注册 per-task 队列（拦截器据此 offer）
-        registry.register(taskId, queue);
 
         try {
             // 内核循环：跑一轮 → 队列取下一条 → 有就再跑
