@@ -18,7 +18,7 @@
  *
  * 实时信号链(同一折叠器状态):agentStates(agent 列表)/agentMeta(子 agent 台账+用量快照)/
  * contextUsage(上下文电池)/
- * ask 登记(askStore)/taskModel;输入/控制:sendInput(task.input 入队)/cancel(task.cancel)/replyAsk。
+ * ask 登记(askStore)/taskModel;输入/控制:cancel(task.cancel)/replyAsk。
  * 重连:hubSession.onReconnect → 对所有活跃句柄只重拉数据校准(rounds+尾段+子 agent 台账);瞬态重连
  * HubClient 实例不变、view 监听器仍有效、desiredSubs 已自动重发,无需重建 view。
  * 渲染节流:折叠推进合并为 50ms 一拍,防止大任务历史回放时逐事件触发重渲染。
@@ -77,8 +77,6 @@ export interface TaskStreamHandle {
   state: TaskThreadState
   /** 线程变更订阅(折叠推进/缓存回放)。 */
   subscribe(fn: () => void): () => void
-  /** 发送新一轮用户输入(task.input;rawContent 为原始输入,editSeq 为编辑重发标记,均可选)。 */
-  sendInput(text: string, rawContent?: string, editSeq?: string): void
   /** 取消任务(task.cancel RPC)。 */
   cancel(): Promise<any>
   /** 手动触发校准:重拉尾段并续轮询。 */
@@ -561,9 +559,6 @@ class TaskStreamManager {
       subscribe: (fn) => {
         stream.listeners.add(fn)
         return () => stream.listeners.delete(fn)
-      },
-      sendInput: (text, rawContent, editSeq) => {
-        stream.ensureView().sendInput(text, rawContent, editSeq)
       },
       cancel: () => stream.ensureView().cancel(),
       resync: () => stream.open(),

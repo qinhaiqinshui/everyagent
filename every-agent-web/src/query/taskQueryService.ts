@@ -13,7 +13,6 @@ import { taskStore, type TaskListEntry } from '@/hub/taskStore'
 import { taskStreamManager } from '@/hub/taskStream'
 import { hubSession } from '@/hub/session'
 import { workspaceRegistry } from '@/hub/workspaceRegistry'
-import { channels } from '@every-agent/client'
 
 export type { TaskThreadItem }
 
@@ -159,6 +158,8 @@ export const taskQueryService = {
     rawContent?: string
     /** 编辑重发:被编辑消息的 seq(字符串雪花ID);worker 收到后先截断后续事件再正常运行。 */
     editSeq?: string
+    /** 通用 metadata(透传到 task.run RPC params;如 { insert: true } 表示插入当前对话)。 */
+    metadata?: Record<string, unknown>
   }): Promise<string> {
     if (opts?.taskId) {
       // 续跑/入队:透传当前选定的模型 configId(旧任务可切换模型);不传则 worker 沿用任务冻结模型。
@@ -173,6 +174,7 @@ export const taskQueryService = {
         configId: opts.configId || undefined,
         ...(opts.rawContent ? { rawContent: opts.rawContent } : {}),
         ...(opts.editSeq ? { editSeq: opts.editSeq } : {}),
+        ...(opts.metadata ? { metadata: opts.metadata } : {}),
       })
       return opts.taskId
     }
@@ -190,6 +192,7 @@ export const taskQueryService = {
       // 仅新建分支携带;为空不传,保持与现状一致。
       ...(taskTokens.length > 0 ? { taskTokens } : {}),
       ...(opts.rawContent ? { rawContent: opts.rawContent } : {}),
+      ...(opts.metadata ? { metadata: opts.metadata } : {}),
     })
     const taskId = String(result?.taskId ?? '')
     if (!taskId) throw new Error('worker 未返回 taskId')
@@ -229,33 +232,6 @@ export const taskQueryService = {
     }
   },
 
-  /**
-   * 把任务队列第 index 条用户输入立即插入到正在进行的 AI 对话循环
-   * (worker 级 input 频道 `task.dialogInsert` 事件,fire-and-forget)。
-   * worker 侧 DialogInsertAdvisor 收到后,会在工具循环把工具结果交回 AI 时
-   * 把该输入以 role=user 随工具结果一并提交给模型,并发射 user.message 事件
-   * (前端右侧用户消息区可见、落盘回放完整);worker 同时按 index 从 pendingInputs 移除该项。
-   * 成功无返回值;失败抛可读错误。
-   */
-  async insertQueuedInput(taskId: string, index: number, text: string): Promise<void> {
-    try {
-      const ownerWorkerId = taskStore.get(taskId)?.workerId
-      if (!ownerWorkerId) {
-        throw new Error('无法确定任务所属 worker(任务数据不可用)')
-      }
-      const client = hubSession.workerClient(ownerWorkerId)
-      if (!client) {
-        throw new Error('worker ' + ownerWorkerId + ' 未连接')
-      }
-      client.pub(
-        channels.workerInput(client.k, ownerWorkerId),
-        'task.dialogInsert',
-        { taskId, index, text },
-      )
-    } catch (e) {
-      throw new Error(e instanceof Error ? e.message : '队列插入失败')
-    }
-  },
 }
 
 /**

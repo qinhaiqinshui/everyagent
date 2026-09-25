@@ -35,7 +35,7 @@ export default function TaskInputQueuePanel(ctx: ComposerPanelCtx): React.ReactN
   if (!taskId || items.length === 0) return null
 
   /** 统一异步外壳:忙态守卫 + 错误收口(面板内可读错误 + console.warn)。 */
-  const runAction = (action: () => Promise<void>) => {
+  const runAction = (action: () => Promise<unknown>) => {
     if (busy) return
     setBusy(true)
     setError('')
@@ -54,9 +54,9 @@ export default function TaskInputQueuePanel(ctx: ComposerPanelCtx): React.ReactN
   }
 
   const handleInsert = (idx: number, text: string) => {
-    // 插入到当前对话:worker 侧 advisor 会随下一轮工具结果以 role=user 提交给 AI,
-    // 同时从 pendingInputs 移除该项(插入即消费,避免后续被正常循环重复消化)。
-    runAction(() => ctx.rpc('task.dialogInsert', { taskId, index: idx, text }))
+    // 插入到当前对话:通过 task.run 携带 metadata.insert=true,worker 侧在工具循环
+    // 把该输入以 role=user 随工具结果一并提交给模型,同时从 pendingInputs 移除该项。
+    runAction(() => ctx.rpc('task.run', { taskId, input: text, metadata: { insert: true, index: idx } }))
   }
 
   const handleEdit = (idx: number, text: string) => {

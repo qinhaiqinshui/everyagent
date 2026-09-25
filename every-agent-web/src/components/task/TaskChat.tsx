@@ -10,7 +10,7 @@
  * 懒加载折入的事件共用同一份 items 并按 seq 去重排序。
  * taskStream 同时承担实时信号链:ask 卡片(全局 UserInteractionHost)、
  * agent 列表状态(agentStates)、上下文电池(usage)、taskModel、输入入队
- * (sendInput)/停止(cancel)与重连校准。
+ * (cancel)与重连校准。
  * 输入 = 纯文本(task.run 新建 / 运行中 task.input 入队 / 终态 task.run 续跑)。
  *
  * 草稿态:taskId 为 DRAFT_TASK_ID 时渲染 TaskDraftComposerPanel(与 n 版
@@ -522,7 +522,7 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
       return
     }
     // 编辑模式:点编辑按钮后内容已追加到输入框,用户修改完毕点发送 →
-    // 直接走正常 task.run/sendInput 流程(携带 editSeq 标记),不弹确认窗。
+    // 直接走正常 task.run 流程(携带 editSeq 标记),不弹确认窗。
     if (editTarget) {
       const editAiText = replaceComposerTokensForSubmission(draft.rawContent, draft.tokens).trim()
       if (!editAiText) return
@@ -530,16 +530,12 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
       userControllRef.current = false
       void (async () => {
         try {
-          if (isTaskRunning) {
-            stream!.sendInput(editAiText, draft.rawContent, editTarget.seq)
-          } else {
-            await taskQueryService.runTask(editAiText, {
-              taskId: effectiveTaskId,
-              configId: selectedForTask || undefined,
-              rawContent: draft.rawContent,
-              editSeq: editTarget.seq,
-            })
-          }
+          await taskQueryService.runTask(editAiText, {
+            taskId: effectiveTaskId,
+            configId: selectedForTask || undefined,
+            rawContent: draft.rawContent,
+            editSeq: editTarget.seq,
+          })
           setEditTarget(null)
           setDraft({ text: '', rawContent: '', tokens: [], activeTokenId: undefined })
         } catch (editError) {
@@ -593,8 +589,12 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
           return
         }
         if (isTaskRunning) {
-          // 运行中:task.input 入队(输入框上方队列面板实时可见,轮次间消费)。
-          stream!.sendInput(aiText, rawContent)
+          // 运行中:task.run{taskId} 入队(输入框上方队列面板实时可见,轮次间消费)。
+          await taskQueryService.runTask(aiText, {
+            taskId: effectiveTaskId,
+            configId: selectedForTask || undefined,
+            rawContent,
+          })
         } else {
           // 终态:task.run{taskId} 冷启动续跑(载入历史,状态翻回 running)。
           // 带上当前输入框选定的模型,使旧任务也能切换到其他模型。
@@ -912,7 +912,7 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
  * 订阅任务实时流(折叠推进触发重渲染)。
  *
  * 返回 [stream, items]:stream 是共享句柄(含可变 state,供 taskModel/contextUsage/
- * agentStates/resolveAgentTitle/sendInput/cancel 等消费);items 是**每次折叠推进都
+ * agentStates/resolveAgentTitle/cancel 等消费);items 是**每次折叠推进都
  * 换引用的线程项副本**——既供 TaskRoundsPanel 消息区,也供派生 agent 列表(agents)。
  *
  * 关键:hub 的 TaskEventFolder.fold 对 state.items 做原地 push / 原地 mutate
