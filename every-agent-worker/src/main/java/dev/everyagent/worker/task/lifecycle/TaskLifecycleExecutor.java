@@ -18,9 +18,11 @@ import java.util.List;
  * <p>组装规则：
  * <ol>
  *   <li>按 order 升序折叠为嵌套链</li>
- *   <li>临界段识别：连续且 order ∈ [420,850] 的 UpstreamNode 序列 →
- *       段边界包一次 synchronized(ctx.taskLock())，段内节点直接调 up(ctx, result)</li>
- *   <li>段内上行执行序 = order 降序（850 最先）</li>
+ *   <li>临界段识别：连续且 order ∈ [420,850] 的 SectionNode 序列 →
+ *       段内节点的下行段 {@code down(ctx)} 在段边界外按 order 升序先执行（无锁），
+ *       随后进入内层链；内层返回后段边界包一次 synchronized(ctx.taskLock())，
+ *       段内节点的上行段 {@code up(ctx, result)} 按 order 降序直接调用</li>
+ *   <li>段内上行执行序 = order 降序（段首最先）</li>
  *   <li>段外节点按 invoke 语义</li>
  * </ol>
  */
@@ -29,7 +31,7 @@ public final class TaskLifecycleExecutor {
 
     private static final Logger log = LoggerFactory.getLogger(TaskLifecycleExecutor.class);
 
-    /** 临界段 order 范围：[420, 850]，此区间内连续的 UpstreamNode 共享一次 synchronized。 */
+    /** 临界段 order 范围：[420, 850]，此区间内连续的 SectionNode 共享一次 synchronized。 */
     private static final float CRITICAL_SECTION_MIN = 420f;
     private static final float CRITICAL_SECTION_MAX = 850f;
 
@@ -54,19 +56,27 @@ public final class TaskLifecycleExecutor {
             if (isInCriticalSection(node)) {
                 // 收集连续的临界段节点（从高 order 到低 order）
                 int end = i;
-                List<UpstreamNode> critNodes = new ArrayList<>();
+                List<SectionNode> critNodes = new ArrayList<>();
                 while (i >= 0 && isInCriticalSection(sorted.get(i))) {
-                    critNodes.add((UpstreamNode) sorted.get(i));
+                    critNodes.add((SectionNode) sorted.get(i));
                     i--;
                 }
-                // critNodes 按 order 降序排列（高 order 先），即执行序
-                final List<UpstreamNode> finalCritNodes = critNodes;
+                // critNodes 按 order 降序排列（高 order 先），即上行执行序；
+                // 下行段需按 order 升序执行，反转之
+                final List<SectionNode> downNodes = new ArrayList<>(critNodes);
+                java.util.Collections.reverse(downNodes);
+                final List<SectionNode> upNodes = critNodes;
                 final TaskChain inner = chain;
                 chain = c -> {
+                    // 下行段：段边界外、无锁、order 升序；异常向外传播（否决：内层不执行）
+                    for (SectionNode sn : downNodes) {
+                        sn.down(c);
+                    }
                     TaskOutcome result = inner.proceed(c);
+                    // 上行段：共享一次临界区、order 降序
                     synchronized (c.taskLock()) {
-                        for (UpstreamNode un : finalCritNodes) {
-                            result = un.up(c, result);
+                        for (SectionNode sn : upNodes) {
+                            result = sn.up(c, result);
                         }
                     }
                     return result;
@@ -94,10 +104,10 @@ public final class TaskLifecycleExecutor {
     }
 
     /**
-     * 判断节点是否属于临界段：UpstreamNode 实例且 order ∈ [420, 850]。
+     * 判断节点是否属于临界段：SectionNode 实例且 order ∈ [420, 850]。
      */
     private static boolean isInCriticalSection(TaskLifecycleNode node) {
-        return node instanceof UpstreamNode
+        return node instanceof SectionNode
                 && node.order() >= CRITICAL_SECTION_MIN
                 && node.order() <= CRITICAL_SECTION_MAX;
     }

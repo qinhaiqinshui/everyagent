@@ -183,6 +183,62 @@ class TaskLifecycleExecutorTest {
         // 这个测试主要验证不抛异常
     }
 
+    // ===== 8. SectionNode 下行在段边界外执行（无锁） =====
+    @Test
+    void sectionNode_downRunsOutsideCriticalSection() {
+        AtomicInteger lockEnterCount = new AtomicInteger();
+        List<String> downOrder = new ArrayList<>();
+        List<TaskLifecycleNode> nodes = List.of(
+            new SectionNode() {
+                @Override public String id() { return "queue"; }
+                @Override public float order() { return 700; }
+                @Override protected void down(TaskLifecycleContext c) { downOrder.add("queue.down"); }
+                @Override protected TaskOutcome up(TaskLifecycleContext c, TaskOutcome r) { return r; }
+            },
+            new SectionNode() {
+                @Override public String id() { return "status"; }
+                @Override public float order() { return 840; }
+                @Override protected void down(TaskLifecycleContext c) { downOrder.add("status.down"); }
+                @Override protected TaskOutcome up(TaskLifecycleContext c, TaskOutcome r) { return r; }
+            }
+        );
+        TaskLifecycleContext lockCtx = new TestContext() {
+            @Override
+            public Object taskLock() {
+                lockEnterCount.incrementAndGet();
+                return this;
+            }
+        };
+        TaskKernel kernel = c -> TaskOutcome.done(0, 0);
+        executor.run(nodes, kernel, lockCtx);
+        assertEquals(List.of("queue.down", "status.down"), downOrder,
+                "SectionNode 下行段应在段边界外按 order 升序执行");
+        assertEquals(1, lockEnterCount.get(), "临界段应只持锁一次（上行段共享）");
+    }
+
+    // ===== 9. SectionNode 下行段否决（抛异常→内层不执行） =====
+    @Test
+    void sectionNode_downThrows_vetoesInner() {
+        AtomicInteger innerExecuted = new AtomicInteger();
+        List<TaskLifecycleNode> nodes = List.of(
+            new SectionNode() {
+                @Override public String id() { return "veto"; }
+                @Override public float order() { return 500; }
+                @Override protected void down(TaskLifecycleContext c) throws Exception {
+                    throw new IllegalStateException("veto");
+                }
+                @Override protected TaskOutcome up(TaskLifecycleContext c, TaskOutcome r) { return r; }
+            }
+        );
+        TaskKernel kernel = c -> {
+            innerExecuted.incrementAndGet();
+            return TaskOutcome.done(0, 0);
+        };
+        TaskOutcome result = executor.run(nodes, kernel, ctx);
+        assertEquals(0, innerExecuted.get(), "下行段否决后内核不应执行");
+        assertEquals(TaskOutcome.TaskEndStatus.FAILED, result.status());
+    }
+
     // ===== 辅助类 =====
 
     /** 追踪下行调用顺序的节点。 */

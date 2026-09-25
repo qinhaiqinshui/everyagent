@@ -13,12 +13,10 @@ import dev.everyagent.worker.proto.Channels;
 import dev.everyagent.worker.proto.Events;
 import dev.everyagent.worker.proto.RpcMethods;
 import dev.everyagent.worker.proto.ShortIds;
-import dev.everyagent.worker.proto.TaskDtos.ModelSnapshot;
 import dev.everyagent.worker.proto.TaskDtos.TaskStatus;
 import dev.everyagent.worker.rpc.RpcContext;
 import dev.everyagent.worker.rpc.RpcDispatcher;
 import dev.everyagent.worker.ship.TaskInputHandler;
-import dev.everyagent.worker.slash.SlashTaskCallbacks;
 import dev.everyagent.worker.slash.SlashTokenEncoder;
 import dev.everyagent.worker.plugin.registry.TaskAdmissionPolicyRegistry;
 import dev.everyagent.worker.plugin.registry.TaskLifecycleRegistry;
@@ -78,8 +76,7 @@ public class TaskManager implements TaskInputHandler, PendingAsks.StatusHook {
     private final AgentService agentService;
     /** Agent 装配工厂(agent 层):主 agent 的模型/工具装配已迁出(buildMainAgent)。 */
     private final AgentFactory agentFactory;
-    /** slash 建后回调(slash 基础设施):任务级 token 反查 onSelect 已迁出。 */
-    private final SlashTaskCallbacks slashCallbacks;
+    /** slash 建后回调已移入洋葱下行节点 SlashNotifyNode(order=90)。 */
     /** 创建/再运行准备路径:workspace 解析与模型配置解析已迁 TaskBootstrap(TaskEntry 构造前的动作)。 */
     private final TaskBootstrap taskBootstrap;
     private final SubAgentManager subs;
@@ -115,7 +112,7 @@ public class TaskManager implements TaskInputHandler, PendingAsks.StatusHook {
     }
 
     public TaskManager(EventSink eventSink, AgentService agentService, AgentFactory agentFactory,
-            SlashTaskCallbacks slashCallbacks, TaskBootstrap taskBootstrap, SubAgentManager subs, PendingAsks asks,
+            TaskBootstrap taskBootstrap, SubAgentManager subs, PendingAsks asks,
             WorkerProperties props, RpcDispatcher dispatcher,
             TaskStore store, RoundIndexStore roundIndexStore,
             TaskLifecycleContextFactory lifecycleContextFactory,
@@ -124,7 +121,6 @@ public class TaskManager implements TaskInputHandler, PendingAsks.StatusHook {
         this.eventSink = eventSink;
         this.agentService = agentService;
         this.agentFactory = agentFactory;
-        this.slashCallbacks = slashCallbacks;
         this.taskBootstrap = taskBootstrap;
         this.subs = subs;
         this.asks = asks;
@@ -985,12 +981,10 @@ public class TaskManager implements TaskInputHandler, PendingAsks.StatusHook {
         if (idemKey != null && !idemKey.isEmpty()) {
             idem.put(idemKey, new IdemEntry(taskId, System.currentTimeMillis()));
         }
-        // store.track / wireUsageBroadcast / wireAgentPersist 已移入洋葱下行节点
-        // （PersistenceTrackNode order=100 / TaskWiresNode order=200），在任务线程开头执行。
+        // store.track / wireUsageBroadcast / slash 建后回调已移入洋葱下行节点
+        // （PersistenceTrackNode order=100 / TaskWiresNode order=200 / SlashNotifyNode order=90），在任务线程开头执行。
         eventSink.fanout(k -> Channels.tasks(k), Events.TASK_CREATED, null, t.runtimeSummaryJson(), null);
         ctx.ok(Json.obj().put("taskId", taskId).put("status", t.status.wire()));
-        // slash 建后回调:对每个已写入 token 调业务 onSelect(taskId)(实现见 SlashTaskCallbacks)。
-        slashCallbacks.notifySlashCallbacks(t, taskId);
         t.runFuture = vt.submit(() -> runTask(t, UserInput.of(input, rawContent), List.of()));
     }
 
@@ -1370,33 +1364,10 @@ public class TaskManager implements TaskInputHandler, PendingAsks.StatusHook {
                 meta.path("title").asString("继续对话"), cfg.snapshot(), cfg.apiKey(),
                 meta.path("workspace").asString(null), workspaceId, mainAgentId,
                 props.getLimits().getMaxEventsPerTask());
-        t.createdAt(meta.path("createdAt").asLong(0));
-        // 兼容旧格式:aiReview/unattended 布尔字段自动迁移到 taskFlags
-        if (meta.path("aiReview").asBoolean(false)) t.taskFlags.put("ai-review", true);
-        if (meta.path("unattended").asBoolean(false)) t.taskFlags.put("unattended", true);
-        // 新格式:taskFlags Map
-        var flagsNode = meta.path("taskFlags");
-        if (flagsNode.isObject()) {
-            flagsNode.properties().forEach(e -> {
-                if (e.getValue().isBoolean()) {
-                    t.taskFlags.put(e.getKey(), e.getValue().asBoolean());
-                }
-            });
-        }
-        t.networkBlocked = meta.path("networkBlocked").asBoolean(false); // 禁网开关任务级(/禁用网络)
-        t.powershellEnabled = meta.path("powershellEnabled").asBoolean(false); // 启用 powershell 开关任务级(/允许AI访问电脑)
-        t.seedUsageMeta(meta.path("usage")); // 恢复最近一轮上下文用量(续跑后列表/电池数据不丢)
-        // slash 任务级 token 回读(仅 slash 层存储、业务方不读;随 meta.json 落盘,冷启动续跑恢复)。
-        // 在 store.track 之前完成 add,确保首落盘 meta 含 slashTaskTokens。
-        JsonNode tt = meta.path("slashTaskTokens");
-        if (tt.isArray()) {
-            for (JsonNode e : tt) {
-                if (e.isTextual()) {
-                    t.addSlashTaskToken(e.asText());
-                }
-            }
-        }
-        t.log.seed(store.seqLastOf(st.dir())); // 新事件从 meta.seqLast 水位续号(含瞬态占位水位,磁盘不再写占位行)
+        // 再运行状态恢复(createdAt/taskFlags/开关/usage/slashTaskTokens/log.seed)、悬空队列恢复、
+        // slash 建后回调、模型切换 trace 均已入洋葱下行节点
+        // （RerunRestoreNode order=50 / QueueNode order=700 / SlashNotifyNode order=90 /
+        //   ModelSwitchTraceNode order=310），在任务线程开头执行。
         if (tasks.putIfAbsent(taskId, t) != null) {
             diskTasks.putIfAbsent(taskId, st);
             return; // 并发兜底(不应发生:认领已互斥)
@@ -1410,41 +1381,35 @@ public class TaskManager implements TaskInputHandler, PendingAsks.StatusHook {
                 log.debug("再运行通知失败 task={}", taskId, e);
             }
         }
-        // 恢复悬空队列(上轮终态落盘的 queue.jsonl):先跑本轮新输入,自然完成后逐条 poll 消费;
-        // 必须在 runFuture 提交前 offer 完毕,避免 runTask 线程先 poll 到空队列而错过。
-        for (UserInput q : store.readQueue(st.dir())) {
-            t.inputQueue.offer(q.text(), q.rawContent());
-        }
-        // 再运行启动:恢复悬空队列后即开始;实时增量由上方通知唤醒的定向推送器换挂推送,历史/补齐由前端拉取
-        // store.track / wireUsageBroadcast / wireAgentPersist 已移入洋葱下行节点
-        // （PersistenceTrackNode order=100 / TaskWiresNode order=200），在任务线程开头执行。
-        // slash 任务级 token 建后回调:终态任务 meta 已含 slashTaskTokens,再运行冷启动需对每个
-        // 已存在 token 补调业务 onSelect(taskId)——注册方据此用 taskId 把业务标记重新写入内存并落盘
-        // (如 AI 审议/无人值守/网络开关),保证「已有任务在终态时 apply bottom token,再运行后业务标记生效」。
-        slashCallbacks.notifySlashCallbacks(t, taskId);
-        // 模型切换 trace:用户从输入框切到其它模型后续跑,在主线显式标注本轮所用模型,
-        // 否则用户看不到"本轮用了哪个模型"(旧任务冻结模型被覆盖,且 worker 已按 override 解析新模型)。
-        final ModelSnapshot effectiveSnapshot = cfg.snapshot();
-        String storedConfigId = meta.path("configId").asString(null);
-        if (overrideConfigId != null && !overrideConfigId.isEmpty()
-                && (storedConfigId == null || !storedConfigId.equals(overrideConfigId))) {
-            emitQuietly(() -> t.events.modelSwitch(effectiveSnapshot, storedConfigId));
-        }
+        // 再运行启动:实时增量由上方通知唤醒的定向推送器换挂推送,历史/补齐由前端拉取
         int now = active.incrementAndGet(); // 再运行放行不查上限(用户单发驱动);越限记日志
         if (now > props.getLimits().getMaxConcurrentTasks()) {
             log.warn("并发任务越限(再运行放行): {} / {}", now, props.getLimits().getMaxConcurrentTasks());
         }
         List<Message> prior = ConversationLoader.load(store, st.dir(), mainAgentId); // 冷启动:磁盘重建上下文
-        t.runFuture = vt.submit(() -> runTask(t, initialInput, prior));
+        // track 前读盘取 seq 水位（track 挂监听后 readSince 会经 sink 追平，续号须读纯磁盘水位）
+        long seqLast = store.seqLastOf(st.dir());
+        t.runFuture = vt.submit(() -> {
+            TaskLifecycleContextImpl ctx = lifecycleContextFactory.create(t);
+            ctx.rerunMeta(meta);
+            ctx.overrideConfigId(overrideConfigId);
+            ctx.rerunSeqLast(seqLast);
+            runTask(t, initialInput, prior, ctx);
+        });
     }
 
     // ---- 任务主流程 ----
 
     private void runTask(TaskEntry t, UserInput initialInput, List<Message> priorConversation) {
+        TaskLifecycleContextImpl ctx = lifecycleContextFactory.create(t);
+        runTask(t, initialInput, priorConversation, ctx);
+    }
+
+    private void runTask(TaskEntry t, UserInput initialInput, List<Message> priorConversation,
+            TaskLifecycleContextImpl ctx) {
         log.debug("[run] runTask 开始 taskId={} thread={} interruptFlag={}",
                 t.taskId, Thread.currentThread().getName(), Thread.currentThread().isInterrupted());
 
-        TaskLifecycleContextImpl ctx = lifecycleContextFactory.create(t);
         ctx.initialInput(initialInput);
         ctx.priorConversation(priorConversation);
         ctx.mainAgentBuilder(prior -> agentFactory.buildMainAgent(t, prior));
@@ -1658,14 +1623,6 @@ public class TaskManager implements TaskInputHandler, PendingAsks.StatusHook {
             }
         }
         vt.shutdownNow();
-    }
-
-    private void emitQuietly(Runnable emitter) {
-        try {
-            emitter.run();
-        } catch (RuntimeException e) {
-            log.debug("终态事件写入失败(日志可能已满)", e);
-        }
     }
 
     private void purgeStaleIdem() {

@@ -10,6 +10,7 @@ import dev.everyagent.worker.task.UserInput;
 import dev.everyagent.worker.tools.PermissionGate;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.UserMessage;
+import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.node.ObjectNode;
 
 import java.util.List;
@@ -31,6 +32,12 @@ public class TaskLifecycleContextImpl implements TaskLifecycleContext {
     private final TaskStore store;
     private UserInput initialInput;
     private List<Message> priorConversation;
+    /** 再运行来源 meta（冷启动续跑时非空；rerun.restore/model.switch.trace 据此恢复与标注）。 */
+    private JsonNode rerunMeta;
+    /** 再运行时输入箱切换模型透传的 configId（model.switch.trace 判异用）。 */
+    private String overrideConfigId;
+    /** 再运行 seq 水位（meta.seqLast，含瞬态占位水位；track 前由 startRerun 读盘注入）。 */
+    private long rerunSeqLast;
 
     // 回调：由 TaskManager 在创建上下文时设置
     private Function<List<Message>, AgentEntity> mainAgentBuilder;
@@ -50,6 +57,9 @@ public class TaskLifecycleContextImpl implements TaskLifecycleContext {
 
     public void initialInput(UserInput input) { this.initialInput = input; }
     public void priorConversation(List<Message> conv) { this.priorConversation = conv; }
+    public void rerunMeta(JsonNode meta) { this.rerunMeta = meta; }
+    public void overrideConfigId(String configId) { this.overrideConfigId = configId; }
+    public void rerunSeqLast(long seqLast) { this.rerunSeqLast = seqLast; }
     public void mainAgentBuilder(Function<List<Message>, AgentEntity> fn) { this.mainAgentBuilder = fn; }
     public void concurrencyReleaser(Runnable r) { this.concurrencyReleaser = r; }
     public void diskIndexer(Consumer<TaskStore.StoredTask> c) { this.diskIndexer = c; }
@@ -60,6 +70,9 @@ public class TaskLifecycleContextImpl implements TaskLifecycleContext {
     public TaskEntry taskEntry() { return taskEntry; }
     public UserInput initialInput() { return initialInput; }
     public List<Message> priorConversation() { return priorConversation; }
+    public JsonNode rerunMeta() { return rerunMeta; }
+    public String overrideConfigId() { return overrideConfigId; }
+    public long rerunSeqLast() { return rerunSeqLast; }
     public Function<List<Message>, AgentEntity> mainAgentBuilder() { return mainAgentBuilder; }
     public Runnable concurrencyReleaser() { return concurrencyReleaser; }
     public Consumer<TaskStore.StoredTask> diskIndexer() { return diskIndexer; }

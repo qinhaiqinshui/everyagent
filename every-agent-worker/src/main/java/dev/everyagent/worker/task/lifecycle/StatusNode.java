@@ -10,24 +10,38 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * 上行节点(order=850)：终态 CAS（幂等门）+ endedAt/error/status + agentStatus 终态事件 + 终态广播。
- * 临界段起点：850..420 连续 UpstreamNode 段共享一次 synchronized。
+ * 成对节点(order=840)：任务状态（一事）。
+ * <p>下行段：startedAt + setStatus(RUNNING) + task.updated 广播 + agentStatus("running")
+ * ——在 main.agent(390) 之后、内核之前执行（临界段节点下行段在段边界外运行）。
+ * <p>上行段（临界段首环，共享临界区）：终态 CAS（幂等门）+ endedAt/error/status +
+ * agentStatus 终态事件 + 终态广播。
  */
-public final class StatusFinalizeNode extends UpstreamNode {
+public final class StatusNode extends SectionNode {
 
-    private static final Logger log = LoggerFactory.getLogger(StatusFinalizeNode.class);
+    private static final Logger log = LoggerFactory.getLogger(StatusNode.class);
 
     private final EventSink eventSink;
 
-    public StatusFinalizeNode(EventSink eventSink) {
+    public StatusNode(EventSink eventSink) {
         this.eventSink = eventSink;
     }
 
     @Override
-    public String id() { return "status.finalize"; }
+    public String id() { return "status"; }
 
     @Override
-    public float order() { return 850; }
+    public float order() { return 840; }
+
+    @Override
+    protected void down(TaskLifecycleContext ctx) {
+        var t = ((TaskLifecycleContextImpl) ctx).taskEntry();
+        ctx.startedAt(System.currentTimeMillis());
+        synchronized (t) {
+            t.status = TaskStatus.RUNNING;
+        }
+        eventSink.fanout(k -> Channels.tasks(k), Events.TASK_UPDATED, null, t.runtimeSummaryJson(), null);
+        t.events.agentStatus(t.mainAgentId, "running");
+    }
 
     @Override
     protected TaskOutcome up(TaskLifecycleContext ctx, TaskOutcome result) {
