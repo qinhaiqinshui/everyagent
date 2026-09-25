@@ -1,8 +1,6 @@
 package dev.everyagent.plugin.inputqueue;
 
-import dev.everyagent.worker.task.AgentEntity;
-import dev.everyagent.worker.task.UserInput;
-import dev.everyagent.worker.slash.SlashTokenHandler;
+import dev.everyagent.plugin.api.task.TaskLifecycleContext;
 import org.springframework.ai.chat.client.ChatClientRequest;
 import org.springframework.ai.chat.client.ChatClientResponse;
 import org.springframework.ai.chat.client.advisor.api.StreamAdvisor;
@@ -24,10 +22,10 @@ import java.util.concurrent.ConcurrentLinkedQueue;
  */
 public class DialogInsertAdvisor implements StreamAdvisor {
 
-    private final ConcurrentLinkedQueue<UserInput> dialogInsertQueue;
+    private final ConcurrentLinkedQueue<TaskLifecycleContext> dialogInsertQueue;
     private final String taskId;
 
-    public DialogInsertAdvisor(ConcurrentLinkedQueue<UserInput> dialogInsertQueue, String taskId) {
+    public DialogInsertAdvisor(ConcurrentLinkedQueue<TaskLifecycleContext> dialogInsertQueue, String taskId) {
         this.dialogInsertQueue = dialogInsertQueue;
         this.taskId = taskId;
     }
@@ -57,9 +55,10 @@ public class DialogInsertAdvisor implements StreamAdvisor {
         }
         List<Message> instructions = new ArrayList<>(chatClientRequest.prompt().getInstructions());
         boolean changed = false;
-        UserInput input;
-        while ((input = dialogInsertQueue.poll()) != null) {
-            String text = input.text();
+        // 队列项为 ctx 引用：取 input 构造 UserMessage（rawContent 仅供前端回放，不进 AI 上下文）
+        TaskLifecycleContext queued;
+        while ((queued = dialogInsertQueue.poll()) != null) {
+            String text = queued.input();
             instructions.add(new UserMessage(text));
             changed = true;
         }

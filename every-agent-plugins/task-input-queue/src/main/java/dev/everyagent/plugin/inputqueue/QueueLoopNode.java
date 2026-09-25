@@ -6,13 +6,16 @@ import dev.everyagent.plugin.api.task.TaskLifecycleNode;
 import dev.everyagent.plugin.api.task.TaskOutcome;
 import dev.everyagent.worker.task.TaskStore;
 import dev.everyagent.worker.task.UserInput;
+import dev.everyagent.worker.task.lifecycle.TaskLifecycleContextImpl;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
  * 队列循环节点（紧贴内核，order=395）。
- * <p>下行段：注册 per-task InputQueue + 恢复悬空队列（readQueue → offer）。
- * <p>invoke 体内：next.proceed(ctx)（= 内核，agent.run 一次）→ queue.poll() → 有就 consumeInput + 再跑，空就返回。
+ * <p>下行段：注册 per-task InputQueue + 恢复悬空队列（readQueue → 包装为 ctx → offer）。
+ * <p>invoke 体内：next.proceed(ctx)（= 后续节点直至内核，agent.run 一次）→ queue.poll()
+ * → 有则把 polledCtx 的 input/rawContent/metadata 设到当前 ctx 再 next.proceed，空就返回。
+ * consumeInput 不由本节点执行——交给后续的 consume.input(396) 核心节点。
  * <p>上行段（return 后）：落盘悬空队列 queue.jsonl / 空则删除。
  * <p>finally：从注册表注销队列。
  * <p>非临界段节点（order=395 < 420），不经临界段共享锁。queue.jsonl 读写失败仅 warn。
@@ -43,9 +46,10 @@ public final class QueueLoopNode implements TaskLifecycleNode {
         InputQueue queue = registry.getOrCreateInputQueue(taskId);
 
         // 下行：恢复悬空队列（新建任务 readQueue 返回空）
+        // 磁盘项只含 text/rawContent，包装为轻量 ctx 入队（metadata 不落盘，恢复为 null）
         try {
             for (UserInput q : store.readQueue(store.dirOf(taskId))) {
-                queue.offer(q.text(), q.rawContent());
+                queue.offer(new RestoredQueueContext(q.text(), q.rawContent()));
             }
         } catch (Exception e) {
             log.warn("恢复悬空队列失败 task={}", taskId, e);
@@ -55,23 +59,27 @@ public final class QueueLoopNode implements TaskLifecycleNode {
             // 内核循环：跑一轮 → 队列取下一条 → 有就再跑
             Object result = next.proceed(ctx);
             while (result instanceof TaskOutcome to && to.status() == TaskOutcome.TaskEndStatus.DONE) {
-                UserInput nextInput = queue.poll();
-                if (nextInput == null) {
+                TaskLifecycleContext polledCtx = queue.poll();
+                if (polledCtx == null) {
                     break;
                 }
-                // consumeInput 经上下文（授权门/user.message/开轮/入会话内存）
-                var impl = (dev.everyagent.worker.task.lifecycle.TaskLifecycleContextImpl) ctx;
-                impl.consumeInput(impl.taskEntry().main, nextInput);
+                // 把 polledCtx 的数据设到当前 ctx，后续节点（edit.resend / consume.input）能读到
+                var impl = (TaskLifecycleContextImpl) ctx;
+                impl.input(polledCtx.input());
+                impl.rawContent(polledCtx.rawContent());
+                impl.metadata(polledCtx.metadata());
                 result = next.proceed(ctx);
             }
 
-            // 上行：落盘悬空队列
+            // 上行：落盘悬空队列（queue.jsonl 只持久化 text/rawContent，metadata 不落盘）
             var pending = queue.snapshotItems();
             try {
                 if (pending.isEmpty()) {
                     store.deleteQueue(store.dirOf(taskId));
                 } else {
-                    store.writeQueue(store.dirOf(taskId), pending);
+                    store.writeQueue(store.dirOf(taskId), pending.stream()
+                            .map(c -> UserInput.of(c.input(), c.rawContent()))
+                            .toList());
                 }
             } catch (Exception e) {
                 log.warn("终态队列落盘失败 task={}(悬空队列丢弃)", taskId, e);

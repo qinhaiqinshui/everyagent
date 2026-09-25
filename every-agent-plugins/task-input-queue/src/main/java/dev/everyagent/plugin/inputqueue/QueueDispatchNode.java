@@ -6,7 +6,6 @@ import dev.everyagent.plugin.api.task.TaskLifecycleContext;
 import dev.everyagent.plugin.api.task.TaskLifecycleNode;
 import dev.everyagent.worker.task.TaskEntry;
 import dev.everyagent.worker.task.TaskManager;
-import dev.everyagent.worker.task.UserInput;
 import dev.everyagent.worker.rpc.RpcContext;
 
 import java.util.Map;
@@ -48,13 +47,11 @@ public final class QueueDispatchNode implements TaskLifecycleNode {
             // 运行中
             Map<String, Object> metadata = ctx.metadata();
             if (metadata != null && Boolean.TRUE.equals(metadata.get("insert"))) {
-                // 插入到当前对话：加入插入队列
-                registry.getOrCreateDialogInsertQueue(taskId)
-                        .offer(UserInput.of(ctx.input(), ctx.rawContent()));
+                // 插入到当前对话：入队整个 ctx（DialogInsertAdvisor 从 ctx 取 input/rawContent drain）
+                registry.getOrCreateDialogInsertQueue(taskId).offer(ctx);
             } else {
-                // 入队
-                registry.getOrCreateInputQueue(taskId)
-                        .offer(ctx.input(), ctx.rawContent());
+                // 入队整个 ctx（含 metadata，后续节点自行消费）
+                registry.getOrCreateInputQueue(taskId).offer(ctx);
             }
 
             // 短路：ctx.ok + 返回 null
