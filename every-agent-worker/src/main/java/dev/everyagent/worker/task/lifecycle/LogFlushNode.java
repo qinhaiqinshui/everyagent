@@ -26,7 +26,7 @@ public final class LogFlushNode extends UpstreamNode {
     public float order() { return 750; }
 
     @Override
-    protected TaskOutcome up(TaskLifecycleContext ctx, TaskOutcome result) {
+    protected Object up(TaskLifecycleContext ctx, Object result) {
         var t = ((TaskLifecycleContextImpl) ctx).taskEntry();
         try {
             store.flush(t.taskId);

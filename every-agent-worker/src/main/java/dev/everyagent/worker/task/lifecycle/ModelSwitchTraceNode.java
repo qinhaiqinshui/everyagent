@@ -25,7 +25,7 @@ public final class ModelSwitchTraceNode implements TaskLifecycleNode {
     public float order() { return 310; }
 
     @Override
-    public TaskOutcome invoke(TaskLifecycleContext ctx, TaskChain next) throws Exception {
+    public Object invoke(TaskLifecycleContext ctx, TaskChain next) throws Exception {
         var impl = (TaskLifecycleContextImpl) ctx;
         var meta = impl.rerunMeta();
         var overrideConfigId = impl.overrideConfigId();

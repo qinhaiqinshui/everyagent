@@ -44,17 +44,18 @@ public final class StatusNode extends SectionNode {
     }
 
     @Override
-    protected TaskOutcome up(TaskLifecycleContext ctx, TaskOutcome result) {
+    protected Object up(TaskLifecycleContext ctx, Object result) {
         var t = ((TaskLifecycleContextImpl) ctx).taskEntry();
         // 终态 CAS（幂等门）
         if (t.status.terminal()) {
             log.debug("[finalize] 已是终态,跳过 taskId={} thread={}", t.taskId, Thread.currentThread().getName());
             return result;
         }
-        log.debug("[finalize] 进入终态收口 taskId={} status={} thread={}", t.taskId, result.status(), Thread.currentThread().getName());
+        TaskOutcome to = (TaskOutcome) result;
+        log.debug("[finalize] 进入终态收口 taskId={} status={} thread={}", t.taskId, to.status(), Thread.currentThread().getName());
         t.endedAt = System.currentTimeMillis();
-        t.error = result.error();
-        t.status = mapStatus(result.status());
+        t.error = to.error();
+        t.status = mapStatus(to.status());
         try {
             t.events.agentStatus(t.mainAgentId, agentStatusOf(t.status));
         } catch (RuntimeException e) {

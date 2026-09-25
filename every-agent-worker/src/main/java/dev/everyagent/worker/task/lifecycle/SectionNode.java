@@ -16,7 +16,7 @@ import dev.everyagent.plugin.api.task.TaskOutcome;
 public abstract class SectionNode implements TaskLifecycleNode {
 
     @Override
-    public final TaskOutcome invoke(TaskLifecycleContext ctx, TaskChain next) throws Exception {
+    public final Object invoke(TaskLifecycleContext ctx, TaskChain next) throws Exception {
         down(ctx);
         return up(ctx, next.proceed(ctx));
     }
@@ -31,5 +31,5 @@ public abstract class SectionNode implements TaskLifecycleNode {
      * @param result 内层（next）返回的结局（已是值，内核已翻译异常）
      * @return 本节点的结局（可改写 result 或原样返回）
      */
-    protected abstract TaskOutcome up(TaskLifecycleContext ctx, TaskOutcome result);
+    protected abstract Object up(TaskLifecycleContext ctx, Object result);
 }

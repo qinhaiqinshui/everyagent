@@ -35,7 +35,7 @@ public final class SubAgentLedgerPersistNode extends UpstreamNode {
     public float order() { return 600; }
 
     @Override
-    protected TaskOutcome up(TaskLifecycleContext ctx, TaskOutcome result) {
+    protected Object up(TaskLifecycleContext ctx, Object result) {
         try {
             ledger.persistFinal(ctx.taskId());
         } catch (RuntimeException e) {

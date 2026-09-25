@@ -26,7 +26,7 @@ public final class StatusPersistNode extends UpstreamNode {
     public float order() { return 650; }
 
     @Override
-    protected TaskOutcome up(TaskLifecycleContext ctx, TaskOutcome result) {
+    protected Object up(TaskLifecycleContext ctx, Object result) {
         var t = ((TaskLifecycleContextImpl) ctx).taskEntry();
         try {
             store.updateMeta(t.taskId);

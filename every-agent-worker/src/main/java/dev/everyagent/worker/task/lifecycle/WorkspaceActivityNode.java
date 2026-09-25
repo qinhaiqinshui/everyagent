@@ -26,7 +26,7 @@ public final class WorkspaceActivityNode extends UpstreamNode {
     public float order() { return 350; }
 
     @Override
-    protected TaskOutcome up(TaskLifecycleContext ctx, TaskOutcome result) {
+    protected Object up(TaskLifecycleContext ctx, Object result) {
         var t = ((TaskLifecycleContextImpl) ctx).taskEntry();
         try {
             activityTracker.onTaskFinished(t.workspaceRoot);

@@ -34,7 +34,7 @@ public final class PersistenceTrackNode implements TaskLifecycleNode {
     public float order() { return 100; }
 
     @Override
-    public TaskOutcome invoke(TaskLifecycleContext ctx, TaskChain next) throws Exception {
+    public Object invoke(TaskLifecycleContext ctx, TaskChain next) throws Exception {
         var impl = (TaskLifecycleContextImpl) ctx;
         var t = impl.taskEntry();
         try {

@@ -33,7 +33,7 @@ public final class SubAgentLedgerTrackNode implements TaskLifecycleNode {
     public float order() { return 150; }
 
     @Override
-    public TaskOutcome invoke(TaskLifecycleContext ctx, TaskChain next) throws Exception {
+    public Object invoke(TaskLifecycleContext ctx, TaskChain next) throws Exception {
         try {
             var impl = (TaskLifecycleContextImpl) ctx;
             var t = impl.taskEntry();

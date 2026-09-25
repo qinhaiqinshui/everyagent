@@ -19,7 +19,7 @@ public final class ConcurrencyReleaseNode extends UpstreamNode {
     public float order() { return 800; }
 
     @Override
-    protected TaskOutcome up(TaskLifecycleContext ctx, TaskOutcome result) {
+    protected Object up(TaskLifecycleContext ctx, Object result) {
         try {
             ((TaskLifecycleContextImpl) ctx).concurrencyReleaser().run();
         } catch (RuntimeException e) {

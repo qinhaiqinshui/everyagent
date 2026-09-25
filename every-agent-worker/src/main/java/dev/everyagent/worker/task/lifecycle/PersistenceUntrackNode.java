@@ -29,7 +29,7 @@ public final class PersistenceUntrackNode extends UpstreamNode {
     public float order() { return 500; }
 
     @Override
-    protected TaskOutcome up(TaskLifecycleContext ctx, TaskOutcome result) {
+    protected Object up(TaskLifecycleContext ctx, Object result) {
         var impl = (TaskLifecycleContextImpl) ctx;
         var t = impl.taskEntry();
         try {

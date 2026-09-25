@@ -26,7 +26,7 @@ public final class DiskIndexNode extends UpstreamNode {
     public float order() { return 550; }
 
     @Override
-    protected TaskOutcome up(TaskLifecycleContext ctx, TaskOutcome result) {
+    protected Object up(TaskLifecycleContext ctx, Object result) {
         var t = ((TaskLifecycleContextImpl) ctx).taskEntry();
         try {
             ((TaskLifecycleContextImpl) ctx).diskIndexer().accept(new TaskStore.StoredTask(

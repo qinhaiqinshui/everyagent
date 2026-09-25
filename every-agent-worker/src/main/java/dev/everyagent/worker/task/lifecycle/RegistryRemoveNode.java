@@ -20,7 +20,7 @@ public final class RegistryRemoveNode extends UpstreamNode {
     public float order() { return 420; }
 
     @Override
-    protected TaskOutcome up(TaskLifecycleContext ctx, TaskOutcome result) {
+    protected Object up(TaskLifecycleContext ctx, Object result) {
         try {
             ((TaskLifecycleContextImpl) ctx).registryRemover().run();
         } catch (RuntimeException e) {

@@ -18,7 +18,7 @@ public final class MainAgentNode implements TaskLifecycleNode {
     public float order() { return 390; }
 
     @Override
-    public TaskOutcome invoke(TaskLifecycleContext ctx, TaskChain next) throws Exception {
+    public Object invoke(TaskLifecycleContext ctx, TaskChain next) throws Exception {
         var impl = (TaskLifecycleContextImpl) ctx;
         var t = impl.taskEntry();
         var main = impl.mainAgentBuilder().apply(impl.priorConversation());

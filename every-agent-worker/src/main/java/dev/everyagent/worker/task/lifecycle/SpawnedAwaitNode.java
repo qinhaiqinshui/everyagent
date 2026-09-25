@@ -27,7 +27,7 @@ public final class SpawnedAwaitNode extends UpstreamNode {
     public float order() { return 950; }
 
     @Override
-    protected TaskOutcome up(TaskLifecycleContext ctx, TaskOutcome result) {
+    protected Object up(TaskLifecycleContext ctx, Object result) {
         var t = ((TaskLifecycleContextImpl) ctx).taskEntry();
         try {
             subs.awaitAllBeforeFinish(t);
@@ -35,9 +35,10 @@ public final class SpawnedAwaitNode extends UpstreamNode {
             log.warn("awaitAllBeforeFinish 异常 task={}", t.taskId, e);
         }
         if (Thread.currentThread().isInterrupted()) {
+            TaskOutcome to = (TaskOutcome) result;
             return new TaskOutcome(
                 TaskOutcome.TaskEndStatus.CANCELLED, null,
-                result.startedAt(), System.currentTimeMillis());
+                to.startedAt(), System.currentTimeMillis());
         }
         return result;
     }

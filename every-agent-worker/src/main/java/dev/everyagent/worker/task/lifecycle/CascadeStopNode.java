@@ -31,12 +31,13 @@ public final class CascadeStopNode extends UpstreamNode {
     public float order() { return 900; }
 
     @Override
-    protected TaskOutcome up(TaskLifecycleContext ctx, TaskOutcome result) {
+    protected Object up(TaskLifecycleContext ctx, Object result) {
         var t = ((TaskLifecycleContextImpl) ctx).taskEntry();
-        if (result.status() == TaskOutcome.TaskEndStatus.DONE) {
+        TaskOutcome to = (TaskOutcome) result;
+        if (to.status() == TaskOutcome.TaskEndStatus.DONE) {
             return result;
         }
-        if (result.status() == TaskOutcome.TaskEndStatus.CANCELLED) {
+        if (to.status() == TaskOutcome.TaskEndStatus.CANCELLED) {
             t.stopRequested = true;
             try { subs.stopAll(t); } catch (RuntimeException e) { log.warn("stopAll 异常 task={}", t.taskId, e); }
             try { asks.cancelTask(t.taskId, "user"); } catch (RuntimeException e) { log.warn("cancelTask 异常 task={}", t.taskId, e); }
@@ -45,7 +46,7 @@ public final class CascadeStopNode extends UpstreamNode {
             try { subs.stopAll(t); } catch (RuntimeException e) { log.warn("stopAll 异常 task={}", t.taskId, e); }
             try { asks.cancelTask(t.taskId, "worker"); } catch (RuntimeException e) { log.warn("cancelTask 异常 task={}", t.taskId, e); }
             // LOG_OVERFLOW 不发 error 事件（现状该分支即无）
-            String err = result.error();
+            String err = to.error();
             if (err == null || !err.startsWith("LOG_OVERFLOW")) {
                 String msg = err != null ? err : "unknown error";
                 try { t.events.error(t.mainAgentId, msg); } catch (RuntimeException e) { log.debug("终态事件写入失败(日志可能已满)", e); }

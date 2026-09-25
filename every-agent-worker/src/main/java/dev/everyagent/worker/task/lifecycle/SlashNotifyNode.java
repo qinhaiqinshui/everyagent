@@ -27,7 +27,7 @@ public final class SlashNotifyNode implements TaskLifecycleNode {
     public float order() { return 90; }
 
     @Override
-    public TaskOutcome invoke(TaskLifecycleContext ctx, TaskChain next) throws Exception {
+    public Object invoke(TaskLifecycleContext ctx, TaskChain next) throws Exception {
         var t = ((TaskLifecycleContextImpl) ctx).taskEntry();
         slashCallbacks.notifySlashCallbacks(t, t.taskId);
         return next.proceed(ctx);

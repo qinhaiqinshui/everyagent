@@ -31,8 +31,8 @@ public final class SubAgentLedgerUntrackNode implements TaskLifecycleNode {
     public float order() { return 340; }
 
     @Override
-    public TaskOutcome invoke(TaskLifecycleContext ctx, TaskChain next) throws Exception {
-        TaskOutcome result = next.proceed(ctx);
+    public Object invoke(TaskLifecycleContext ctx, TaskChain next) throws Exception {
+        Object result = next.proceed(ctx);
         try {
             var impl = (TaskLifecycleContextImpl) ctx;
             var t = impl.taskEntry();

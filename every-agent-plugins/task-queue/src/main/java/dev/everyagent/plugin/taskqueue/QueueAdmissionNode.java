@@ -31,7 +31,7 @@ public final class QueueAdmissionNode implements TaskLifecycleNode {
     public float order() { return 250; }
 
     @Override
-    public TaskOutcome invoke(TaskLifecycleContext ctx, TaskChain next) throws Exception {
+    public Object invoke(TaskLifecycleContext ctx, TaskChain next) throws Exception {
         // 下行：获取运行许可（可能阻塞）
         taskQueue.acquire(ctx.taskId());
         try {

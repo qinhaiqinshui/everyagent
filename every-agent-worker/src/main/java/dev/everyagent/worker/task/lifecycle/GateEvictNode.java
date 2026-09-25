@@ -26,7 +26,7 @@ public final class GateEvictNode extends UpstreamNode {
     public float order() { return 450; }
 
     @Override
-    protected TaskOutcome up(TaskLifecycleContext ctx, TaskOutcome result) {
+    protected Object up(TaskLifecycleContext ctx, Object result) {
         try {
             gate.untrack(ctx.taskId());
         } catch (RuntimeException e) {

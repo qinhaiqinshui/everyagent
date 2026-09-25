@@ -36,7 +36,7 @@ public final class QueueLoopNode implements TaskLifecycleNode {
     public float order() { return 395; }
 
     @Override
-    public TaskOutcome invoke(TaskLifecycleContext ctx, TaskChain next) throws Exception {
+    public Object invoke(TaskLifecycleContext ctx, TaskChain next) throws Exception {
         String taskId = ctx.taskId();
         InputQueue queue = new InputQueue();
 
@@ -54,8 +54,8 @@ public final class QueueLoopNode implements TaskLifecycleNode {
 
         try {
             // 内核循环：跑一轮 → 队列取下一条 → 有就再跑
-            TaskOutcome result = next.proceed(ctx);
-            while (result.status() == TaskOutcome.TaskEndStatus.DONE) {
+            Object result = next.proceed(ctx);
+            while (result instanceof TaskOutcome to && to.status() == TaskOutcome.TaskEndStatus.DONE) {
                 UserInput nextInput = queue.poll();
                 if (nextInput == null) {
                     break;

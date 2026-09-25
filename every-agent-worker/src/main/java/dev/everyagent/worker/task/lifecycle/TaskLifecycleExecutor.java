@@ -42,7 +42,7 @@ public final class TaskLifecycleExecutor {
      * @param ctx 生命周期上下文
      * @return 任务结局
      */
-    public TaskOutcome run(List<TaskLifecycleNode> nodes, TaskKernel kernel, TaskLifecycleContext ctx) {
+    public Object run(List<TaskLifecycleNode> nodes, TaskKernel kernel, TaskLifecycleContext ctx) {
         // 稳定排序：同 order 按注册顺序
         List<TaskLifecycleNode> sorted = new ArrayList<>(nodes);
         sorted.sort(Comparator.comparingDouble(TaskLifecycleNode::order));
@@ -72,7 +72,7 @@ public final class TaskLifecycleExecutor {
                     for (SectionNode sn : downNodes) {
                         sn.down(c);
                     }
-                    TaskOutcome result = inner.proceed(c);
+                    Object result = inner.proceed(c);
                     // 上行段：共享一次临界区、order 降序
                     synchronized (c.taskLock()) {
                         for (SectionNode sn : upNodes) {

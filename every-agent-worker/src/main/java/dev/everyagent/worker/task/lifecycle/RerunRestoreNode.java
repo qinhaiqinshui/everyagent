@@ -22,7 +22,7 @@ public final class RerunRestoreNode implements TaskLifecycleNode {
     public float order() { return 50; }
 
     @Override
-    public TaskOutcome invoke(TaskLifecycleContext ctx, TaskChain next) throws Exception {
+    public Object invoke(TaskLifecycleContext ctx, TaskChain next) throws Exception {
         var impl = (TaskLifecycleContextImpl) ctx;
         JsonNode meta = impl.rerunMeta();
         if (meta != null) {
