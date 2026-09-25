@@ -7,6 +7,7 @@ import dev.everyagent.plugin.api.slash.SlashProvider;
 import dev.everyagent.plugin.api.spi.AdvisorProvider;
 import dev.everyagent.plugin.api.spi.SandboxProvider;
 import dev.everyagent.plugin.api.spi.SearchProvider;
+import dev.everyagent.plugin.api.spi.TokenEstimator;
 import dev.everyagent.plugin.api.spi.ToolExecutionInterceptor;
 import dev.everyagent.plugin.api.spi.ToolProvider;
 import dev.everyagent.plugin.api.task.TaskAdmissionPolicy;
@@ -55,6 +56,9 @@ public interface WorkerPluginContext {
 
     /** 注册任务准入策略（队列插件用）。 */
     void registerTaskAdmissionPolicy(TaskAdmissionPolicy policy);
+
+    /** 注册 TokenEstimator（Token 估算器，替换内置实现）。 */
+    void registerTokenEstimator(TokenEstimator estimator);
 
     // ── 通用扩展注册 ──
 

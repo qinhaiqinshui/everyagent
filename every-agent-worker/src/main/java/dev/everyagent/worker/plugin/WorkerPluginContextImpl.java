@@ -10,6 +10,7 @@ import dev.everyagent.plugin.api.slash.SlashProvider;
 import dev.everyagent.plugin.api.spi.AdvisorProvider;
 import dev.everyagent.plugin.api.spi.SandboxProvider;
 import dev.everyagent.plugin.api.spi.SearchProvider;
+import dev.everyagent.plugin.api.spi.TokenEstimator;
 import dev.everyagent.plugin.api.spi.ToolExecutionInterceptor;
 import dev.everyagent.plugin.api.spi.ToolProvider;
 import dev.everyagent.plugin.api.task.TaskAdmissionPolicy;
@@ -32,6 +33,7 @@ import dev.everyagent.worker.slash.SlashCommandItem;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * WorkerPluginContext 实现 —— 对标 VSCode 的 ExtensionContext。
@@ -137,6 +139,12 @@ public class WorkerPluginContextImpl implements WorkerPluginContext {
     @Override
     public void registerTaskAdmissionPolicy(TaskAdmissionPolicy policy) {
         admissionPolicyRegistry.register(policy);
+    }
+
+    @Override
+    public void registerTokenEstimator(TokenEstimator estimator) {
+        // 外部插件注册的自定义 TokenEstimator 替换内置实现。
+        ((WorkerServicesImpl) services).replaceTokenEstimator(estimator);
     }
 
     @Override

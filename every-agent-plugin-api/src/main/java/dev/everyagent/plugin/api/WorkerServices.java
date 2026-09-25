@@ -2,6 +2,7 @@ package dev.everyagent.plugin.api;
 
 import dev.everyagent.plugin.api.spi.SandboxBackend;
 import dev.everyagent.plugin.api.spi.PermissionGate;
+import dev.everyagent.plugin.api.spi.TokenEstimator;
 import dev.everyagent.plugin.api.spi.WorkspaceManager;
 
 /**
@@ -20,4 +21,7 @@ public interface WorkerServices {
 
     /** 工作区管理器（多工作区注册表）。 */
     WorkspaceManager workspaces();
+
+    /** Token 估算器（内置或插件注册的自定义实现）。 */
+    TokenEstimator tokenEstimator();
 }

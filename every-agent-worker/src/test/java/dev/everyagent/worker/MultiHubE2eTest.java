@@ -4,6 +4,7 @@ import dev.everyagent.contract.frame.Frames;
 import dev.everyagent.contract.ids.Ids;
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.hub.HubApplication;
+import dev.everyagent.plugin.api.spi.TokenEstimator;
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.task.ModelRateLimiterRegistry;
 import dev.everyagent.worker.hub.HubPool;
@@ -44,6 +45,30 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
 class MultiHubE2eTest {
+
+    /** 测试用 TokenEstimator 桩:与原 ModelRateLimiter.estimateTokens 同口径,factor 恒 1.0。 */
+    private static final TokenEstimator STUB_ESTIMATOR = new TokenEstimator() {
+        @Override public long estimate(String text, String configId) { return rawTokens(text); }
+        @Override public void calibrate(String configId, long estimatedTokens, long actualTokens) { }
+        @Override public double factorOf(String configId) { return 1.0; }
+        @Override public long sampleCountOf(String configId) { return 0; }
+        private static long rawTokens(String s) {
+            if (s == null || s.isEmpty()) { return 0; }
+            long cjk = 0, other = 0;
+            for (int i = 0; i < s.length(); ) {
+                int cp = s.codePointAt(i);
+                i += Character.charCount(cp);
+                Character.UnicodeScript sc = Character.UnicodeScript.of(cp);
+                boolean isCjk = sc == Character.UnicodeScript.HAN
+                        || sc == Character.UnicodeScript.HIRAGANA
+                        || sc == Character.UnicodeScript.KATAKANA
+                        || sc == Character.UnicodeScript.HANGUL;
+                if (isCjk) { cjk++; }
+                else if (!Character.isWhitespace(cp) && !Character.isISOControl(cp)) { other++; }
+            }
+            return cjk + (other + 3) / 4;
+        }
+    };
 
     private static final String KEY_A = "multi-key-a";
     private static final String KEY_B = "multi-key-b";
@@ -100,7 +125,7 @@ class MultiHubE2eTest {
         @Bean
         @Primary
         ChatModelFactory fakeModelFactory(WorkerProperties props) {
-            return new ChatModelFactory(props, new ModelRateLimiterRegistry(props)) {
+            return new ChatModelFactory(props, new ModelRateLimiterRegistry(props, STUB_ESTIMATOR)) {
                 @Override
                 public org.springframework.ai.chat.model.ChatModel build(ResolvedConfig cfg,
                         org.springframework.ai.openai.OpenAiChatOptions options, String agentId) {

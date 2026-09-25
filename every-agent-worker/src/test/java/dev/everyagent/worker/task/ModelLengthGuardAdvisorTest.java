@@ -1,6 +1,7 @@
 package dev.everyagent.worker.task;
 
 import com.openai.errors.OpenAIIoException;
+import dev.everyagent.plugin.api.spi.TokenEstimator;
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.proto.TaskDtos.ModelSnapshot;
 import org.junit.jupiter.api.Test;
@@ -34,6 +35,52 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * 重新整段长思考再次占满预算的循环。
  */
 class ModelLengthGuardAdvisorTest {
+
+    /** 测试桩:使用与原静态方法完全相同的 CJK 粗估公式,factor 恒 1.0。 */
+    private static final TokenEstimator STUB_ESTIMATOR = new TokenEstimator() {
+        @Override
+        public long estimate(String text, String configId) {
+            return rawEstimate(text);
+        }
+
+        @Override
+        public void calibrate(String configId, long estimatedTokens, long actualTokens) {
+            // 测试不校准
+        }
+
+        @Override
+        public double factorOf(String configId) {
+            return 1.0;
+        }
+
+        @Override
+        public long sampleCountOf(String configId) {
+            return 0;
+        }
+
+        private long rawEstimate(String s) {
+            if (s == null || s.isEmpty()) {
+                return 0;
+            }
+            long cjk = 0;
+            long other = 0;
+            for (int i = 0; i < s.length(); ) {
+                int cp = s.codePointAt(i);
+                i += Character.charCount(cp);
+                Character.UnicodeScript sc = Character.UnicodeScript.of(cp);
+                boolean isCjk = sc == Character.UnicodeScript.HAN
+                        || sc == Character.UnicodeScript.HIRAGANA
+                        || sc == Character.UnicodeScript.KATAKANA
+                        || sc == Character.UnicodeScript.HANGUL;
+                if (isCjk) {
+                    cjk++;
+                } else if (!Character.isWhitespace(cp) && !Character.isISOControl(cp)) {
+                    other++;
+                }
+            }
+            return cjk + (other + 3) / 4;
+        }
+    };
 
     @Test
     void nearMaxBounds() {
@@ -155,7 +202,7 @@ class ModelLengthGuardAdvisorTest {
                 "key", "/tmp", "w_1", "a_test", 1000);
         AgentEntity a = new AgentEntity(task, "a_test", AgentEntity.Kind.MAIN, "test", null,
                 OpenAiChatOptions.builder().build(), List.of());
-        return new ModelLengthGuardAdvisor(a, new WorkerProperties());
+        return new ModelLengthGuardAdvisor(a, new WorkerProperties(), STUB_ESTIMATOR);
     }
 
     /** 手写桩链(免 Mockito,受限环境可跑)。 */
@@ -199,4 +246,3 @@ class ModelLengthGuardAdvisorTest {
         return new ChatClientResponse(new ChatResponse(List.of(gen)), Map.of());
     }
 }
-

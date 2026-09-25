@@ -1,9 +1,10 @@
 package dev.everyagent.worker.plugin.adapters;
 
-import dev.everyagent.worker.config.WorkerProperties;
-import dev.everyagent.worker.plugin.AdvisorContextImpl;
 import dev.everyagent.plugin.api.spi.AdvisorContext;
 import dev.everyagent.plugin.api.spi.AdvisorProvider;
+import dev.everyagent.plugin.api.spi.TokenEstimator;
+import dev.everyagent.worker.config.WorkerProperties;
+import dev.everyagent.worker.plugin.AdvisorContextImpl;
 import dev.everyagent.worker.task.AgentEntity;
 import dev.everyagent.worker.task.ModelLengthGuardAdvisor;
 import org.springframework.ai.chat.client.advisor.ToolCallingAdvisor;
@@ -18,9 +19,11 @@ import org.springframework.ai.chat.client.advisor.api.Advisor;
 public class ModelLengthGuardAdvisorProvider implements AdvisorProvider {
 
     private final WorkerProperties props;
+    private final TokenEstimator estimator;
 
-    public ModelLengthGuardAdvisorProvider(WorkerProperties props) {
+    public ModelLengthGuardAdvisorProvider(WorkerProperties props, TokenEstimator estimator) {
         this.props = props;
+        this.estimator = estimator;
     }
 
     @Override
@@ -41,6 +44,6 @@ public class ModelLengthGuardAdvisorProvider implements AdvisorProvider {
     @Override
     public Advisor create(AdvisorContext ctx) {
         AgentEntity a = ((AdvisorContextImpl) ctx).agentEntity();
-        return new ModelLengthGuardAdvisor(a, props);
+        return new ModelLengthGuardAdvisor(a, props, estimator);
     }
 }

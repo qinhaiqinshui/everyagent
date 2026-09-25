@@ -1,5 +1,6 @@
 package dev.everyagent.worker.task;
 
+import dev.everyagent.plugin.api.spi.TokenEstimator;
 import dev.everyagent.worker.config.WorkerProperties;
 import org.junit.jupiter.api.Test;
 
@@ -23,20 +24,63 @@ class ModelRateLimiterTest {
         return d;
     }
 
+    /** 测试用 TokenEstimator 桩:CJK 估算同口径,带简单 EMA 校准(α=0.1,无收敛/漂移逻辑)。 */
+    private static final TokenEstimator STUB_ESTIMATOR = new TokenEstimator() {
+        private final java.util.Map<String, double[]> states = new java.util.concurrent.ConcurrentHashMap<>();
+        @Override public long estimate(String text, String configId) {
+            if (text == null || text.isEmpty()) { return 0; }
+            return Math.max(0, Math.round(rawTokens(text) * factorOf(configId)));
+        }
+        @Override public void calibrate(String configId, long estimatedTokens, long actualTokens) {
+            if (actualTokens <= 0 || estimatedTokens <= 0) { return; }
+            states.compute(configId, (k, v) -> {
+                double oldFactor = (v == null) ? 1.0 : v[0];
+                long samples = (v == null) ? 0 : (long) v[1];
+                double ratio = (double) actualTokens / (double) estimatedTokens;
+                double nextFactor = 0.9 * oldFactor + 0.1 * ratio;
+                return new double[]{nextFactor, samples + 1};
+            });
+        }
+        @Override public double factorOf(String configId) {
+            double[] v = states.get(configId);
+            return (v == null) ? 1.0 : v[0];
+        }
+        @Override public long sampleCountOf(String configId) {
+            double[] v = states.get(configId);
+            return (v == null) ? 0 : (long) v[1];
+        }
+        private static long rawTokens(String s) {
+            if (s == null || s.isEmpty()) { return 0; }
+            long cjk = 0, other = 0;
+            for (int i = 0; i < s.length(); ) {
+                int cp = s.codePointAt(i);
+                i += Character.charCount(cp);
+                Character.UnicodeScript sc = Character.UnicodeScript.of(cp);
+                boolean isCjk = sc == Character.UnicodeScript.HAN
+                        || sc == Character.UnicodeScript.HIRAGANA
+                        || sc == Character.UnicodeScript.KATAKANA
+                        || sc == Character.UnicodeScript.HANGUL;
+                if (isCjk) { cjk++; }
+                else if (!Character.isWhitespace(cp) && !Character.isISOControl(cp)) { other++; }
+            }
+            return cjk + (other + 3) / 4;
+        }
+    };
+
     @Test
     void estimateTokensCjkAndOther() {
-        assertEquals(4, ModelRateLimiter.estimateTokens("你好世界"), "4 个 CJK ≈ 4 token");
-        assertEquals(1, ModelRateLimiter.estimateTokens("abcd"), "4 个非 CJK ≈ 1 token");
-        assertEquals(0, ModelRateLimiter.estimateTokens("   "), "空白不计");
-        assertEquals(0, ModelRateLimiter.estimateTokens(null), "null 为 0");
-        assertTrue(ModelRateLimiter.estimateTokens("你好 abcd") >= 2, "混合估算下限");
-        assertEquals(3, ModelRateLimiter.estimateTokens("你好 abcd"), "2 CJK + 4 字符非 CJK → 2+1=3");
+        assertEquals(4, STUB_ESTIMATOR.estimate("你好世界", "est"), "4 个 CJK ≈ 4 token");
+        assertEquals(1, STUB_ESTIMATOR.estimate("abcd", "est"), "4 个非 CJK ≈ 1 token");
+        assertEquals(0, STUB_ESTIMATOR.estimate("   ", "est"), "空白不计");
+        assertEquals(0, STUB_ESTIMATOR.estimate(null, "est"), "null 为 0");
+        assertTrue(STUB_ESTIMATOR.estimate("你好 abcd", "est") >= 2, "混合估算下限");
+        assertEquals(3, STUB_ESTIMATOR.estimate("你好 abcd", "est"), "2 CJK + 4 字符非 CJK → 2+1=3");
     }
 
     @Test
     void rpmBurstTimesOut() throws Exception {
         ModelRateLimitConfig cfg = new ModelRateLimitConfig(2, 0, 0, 1.0);
-        ModelRateLimiter limiter = new ModelRateLimiter("m", cfg, defaults(200), -1, null);
+        ModelRateLimiter limiter = new ModelRateLimiter("m", cfg, defaults(200), STUB_ESTIMATOR);
         ModelRateLimiter.Permit p1 = limiter.acquire();
         ModelRateLimiter.Permit p2 = limiter.acquire();
         try {
@@ -51,7 +95,7 @@ class ModelRateLimiterTest {
     @Test
     void concurrencyGatesAndReleases() throws Exception {
         ModelRateLimitConfig cfg = new ModelRateLimitConfig(0, 1, 0, 1.0);
-        ModelRateLimiter limiter = new ModelRateLimiter("m", cfg, defaults(3000), -1, null);
+        ModelRateLimiter limiter = new ModelRateLimiter("m", cfg, defaults(3000), STUB_ESTIMATOR);
         ModelRateLimiter.Permit p1 = limiter.acquire();
         AtomicReference<ModelRateLimiter.Permit> p2 = new AtomicReference<>();
         Thread t = new Thread(() -> {
@@ -75,7 +119,7 @@ class ModelRateLimiterTest {
         WorkerProperties.ModelRate d = defaults(5000);
         d.setQueueCapacity(1);
         ModelRateLimitConfig cfg = new ModelRateLimitConfig(0, 1, 0, 1.0);
-        ModelRateLimiter limiter = new ModelRateLimiter("m", cfg, d, -1, null);
+        ModelRateLimiter limiter = new ModelRateLimiter("m", cfg, d, STUB_ESTIMATOR);
         ModelRateLimiter.Permit p1 = limiter.acquire();
         AtomicReference<ModelRateLimiter.Permit> waiter = new AtomicReference<>();
         Thread t = new Thread(() -> {
@@ -99,32 +143,25 @@ class ModelRateLimiterTest {
     @Test
     void emaCalibrationConvergesAndNotifies() throws Exception {
         ModelRateLimitConfig cfg = new ModelRateLimitConfig(0, 0, 1_000_000, 1.0);
-        AtomicReference<Double> notifiedFactor = new AtomicReference<>();
-        AtomicReference<Long> notifiedSamples = new AtomicReference<>();
-        ModelRateLimiter limiter = new ModelRateLimiter("m", cfg, defaults(1000), -1,
-                (f, s) -> {
-                    notifiedFactor.set(f);
-                    notifiedSamples.set(s);
-                });
+        ModelRateLimiter limiter = new ModelRateLimiter("m", cfg, defaults(1000), STUB_ESTIMATOR);
         ModelRateLimiter.Permit p1 = limiter.acquire();
         p1.onChunk("你好世界"); // est=4
         p1.complete(8);          // actual=8 → ratio=2.0 → factor=0.9*1.0+0.1*2.0=1.1
-        assertEquals(1.1, limiter.currentFactor(), 1e-9);
-        assertNotNull(notifiedFactor.get(), "校准后回调通知持久化");
-        assertEquals(1L, notifiedSamples.get());
+        assertEquals(1.1, STUB_ESTIMATOR.factorOf("m"), 1e-9);
+        assertEquals(1L, STUB_ESTIMATOR.sampleCountOf("m"));
 
         ModelRateLimiter.Permit p2 = limiter.acquire();
         p2.onChunk("你好世界"); // est=4
         p2.complete(8);          // ratio=2.0 → factor=0.9*1.1+0.1*2.0=1.19
-        assertEquals(1.19, limiter.currentFactor(), 1e-9);
-        assertEquals(2L, notifiedSamples.get());
+        assertEquals(1.19, STUB_ESTIMATOR.factorOf("m"), 1e-9);
+        assertEquals(2L, STUB_ESTIMATOR.sampleCountOf("m"));
         p2.complete(0); // 幂等
     }
 
     @Test
     void timeoutMessageContainsAdvice() {
         ModelRateLimitConfig cfg = new ModelRateLimitConfig(1, 1, 100_000, 1.0);
-        ModelRateLimiter limiter = new ModelRateLimiter("m", cfg, defaults(200), -1, null);
+        ModelRateLimiter limiter = new ModelRateLimiter("m", cfg, defaults(200), STUB_ESTIMATOR);
         try {
             limiter.acquire();
             limiter.acquire(); // 应超时
@@ -140,7 +177,7 @@ class ModelRateLimiterTest {
     @Test
     void waitObserverNotifiedWhileQueued() throws Exception {
         ModelRateLimitConfig cfg = new ModelRateLimitConfig(0, 1, 0, 1.0);
-        ModelRateLimiter limiter = new ModelRateLimiter("m", cfg, defaults(5000), -1, null);
+        ModelRateLimiter limiter = new ModelRateLimiter("m", cfg, defaults(5000), STUB_ESTIMATOR);
         ModelRateLimiter.Permit p1 = limiter.acquire();
         AtomicReference<ModelRateLimiter.WaitInfo> observed = new AtomicReference<>();
         AtomicReference<Long> observedWaitMs = new AtomicReference<>();
@@ -168,7 +205,7 @@ class ModelRateLimiterTest {
     @Test
     void snapshotReflectsRuntimeState() throws Exception {
         ModelRateLimitConfig cfg = new ModelRateLimitConfig(2, 1, 100_000, 1.0);
-        ModelRateLimiter limiter = new ModelRateLimiter("m", cfg, defaults(5000), -1, null);
+        ModelRateLimiter limiter = new ModelRateLimiter("m", cfg, defaults(5000), STUB_ESTIMATOR);
         ModelRateLimiter.Permit p1 = limiter.acquire();
         ModelRateLimiter.Snapshot s = limiter.snapshot();
         assertTrue(s.enabled());

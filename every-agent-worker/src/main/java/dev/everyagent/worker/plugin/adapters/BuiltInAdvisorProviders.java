@@ -33,6 +33,7 @@ public class BuiltInAdvisorProviders {
     private final SlashTokenHandler slashTokenHandler;
     private final WorkerProperties props;
     private final SkillAdvisor skillAdvisor;
+    private final dev.everyagent.plugin.api.spi.TokenEstimator tokenEstimator;
 
     public BuiltInAdvisorProviders(
             AdvisorProviderRegistry registry,
@@ -41,7 +42,8 @@ public class BuiltInAdvisorProviders {
             OsSandbox osSandbox,
             SlashTokenHandler slashTokenHandler,
             WorkerProperties props,
-            SkillAdvisor skillAdvisor) {
+            SkillAdvisor skillAdvisor,
+            dev.everyagent.plugin.api.spi.TokenEstimator tokenEstimator) {
         this.registry = registry;
         this.taskStore = taskStore;
         this.roundIndexStore = roundIndexStore;
@@ -49,11 +51,13 @@ public class BuiltInAdvisorProviders {
         this.slashTokenHandler = slashTokenHandler;
         this.props = props;
         this.skillAdvisor = skillAdvisor;
+        this.tokenEstimator = tokenEstimator;
     }
 
     @PostConstruct
     public void registerBuiltin() {
         // 核心基础设施（0─99）
+        registry.register(new TokenCalibrationAdvisor.Provider(tokenEstimator));
         registry.register(new RoundIndexAdvisorProvider(taskStore, roundIndexStore));
         registry.register(new SystemInfoAdvisorProvider(osSandbox));
         registry.register(new AgentsMdAdvisorProvider());
@@ -69,7 +73,7 @@ public class BuiltInAdvisorProviders {
         // 重试 / 护栏（400─599）
         registry.register(new EmptyResponseRetryAdvisorProvider(props));
         registry.register(new TransientErrorRetryAdvisorProvider(props));
-        registry.register(new ModelLengthGuardAdvisorProvider(props));
+        registry.register(new ModelLengthGuardAdvisorProvider(props, tokenEstimator));
 
         // 终层（800─999）
         registry.register(new ContextCompressionAdvisorProvider(props));

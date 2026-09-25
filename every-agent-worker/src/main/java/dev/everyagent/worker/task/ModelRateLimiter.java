@@ -1,11 +1,11 @@
 package dev.everyagent.worker.task;
 
+import dev.everyagent.plugin.api.spi.TokenEstimator;
 import dev.everyagent.worker.config.WorkerProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayDeque;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BiConsumer;
 
 /**
@@ -15,9 +15,9 @@ import java.util.function.BiConsumer;
  * <p>四层机制:<ol>
  *   <li><b>rpm 滑动窗口</b>(精确):60s 内发起请求数封顶;</li>
  *   <li><b>maxConcurrency 信号量</b>(精确):同时 in-flight 上限,长思考流重叠的核心闸门;</li>
- *   <li><b>输出侧流中估算</b>(近似):活跃流按自算文本 token 累计,接近 tpm 时延迟新起步;</li>
+ *   <li><b>输出侧流中估算</b>(近似):活跃流按 {@link TokenEstimator} 累计估算 token,接近 tpm 时延迟新起步;</li>
  *   <li><b>事后 usage 精确记账</b>(精确):请求完成后用真实 outputTokens 记入 60s tpm 窗口,
- *       并反向校准估算系数(EMA,持久化)。</li>
+ *       并经 {@link TokenEstimator#calibrate} 反向校准估算系数(EMA,持久化)。</li>
  * </ol>
  *
  * <p>超限不报错:请求进入有界等待队列(monitor wait + waiters 计数),等 rpm 窗口滚出 /
@@ -25,8 +25,8 @@ import java.util.function.BiConsumer;
  * {@link ModelRateLimitException}(非重试,错误信息给足操作建议)。
  * 等待可被线程中断(任务取消)即时打断,不悬挂。
  *
- * <p>token 估算为粗估(无 tokenizer):CJK≈1 token、其余≈4 字符 1 token,与
- * {@link ModelLengthGuardAdvisor} 同口径;系数经真实 usage 在线校准逐步收敛,误差长期可控。
+ * <p>token 估算委托 {@link TokenEstimator}(经真实 usage 在线校准的 CJK 粗估),
+ * 与 {@link ModelLengthGuardAdvisor} 共享同一校准系数,误差长期可控。
  */
 public final class ModelRateLimiter {
 
@@ -39,8 +39,7 @@ public final class ModelRateLimiter {
     private final ModelRateLimitConfig cfg;
     private final WorkerProperties.ModelRate defaults;
     private final long windowMs;
-    /** 校准回调(factor, sampleCount):由 Registry 接持久化。 */
-    private final BiConsumer<Double, Long> onCalibrated;
+    private final TokenEstimator estimator;
 
     /** 并发与窗口的统一监视器(串行化 acquire/complete/cancel)。 */
     private final Object monitor = new Object();
@@ -54,42 +53,28 @@ public final class ModelRateLimiter {
     private int waiters = 0;
     /** 活跃流估算输出 token 累计(③;所有 in-flight 流的贡献之和)。 */
     private long estActiveOutput = 0;
-    /** 估算系数(在线校准,EMA)。 */
-    private volatile double factor;
-    private final AtomicLong sampleCount = new AtomicLong();
 
     private record TokenSample(long ts, long outputTokens) {
     }
 
     public ModelRateLimiter(String configId, ModelRateLimitConfig cfg,
-            WorkerProperties.ModelRate defaults, double persistedFactor,
-            BiConsumer<Double, Long> onCalibrated) {
+            WorkerProperties.ModelRate defaults, TokenEstimator estimator) {
         this.configId = configId;
         this.cfg = cfg;
         this.defaults = defaults;
         this.windowMs = Math.max(1_000, defaults.getEstWindowSec() * 1000);
-        this.onCalibrated = onCalibrated;
-        // 系数优先级:持久化校准结果 > 配置初始值 > 1.0。
-        this.factor = persistedFactor > 0 ? persistedFactor : cfg.tokenEstFactor();
-        if (persistedFactor > 0) {
-            log.info("[model-rate] {} 估算系数从持久化恢复: {}", configId, factor);
-        }
+        this.estimator = estimator;
     }
 
     public String configId() {
         return configId;
     }
 
-    /** 当前估算系数(观测用)。 */
-    public double currentFactor() {
-        return factor;
-    }
-
     /** 运行时状态快照(config.get 透出 P2)。 */
     public Snapshot snapshot() {
         synchronized (monitor) {
             return new Snapshot(configId, cfg.enabled(), cfg.rpm(), cfg.maxConcurrency(), cfg.tpm(),
-                    inFlight, waiters, factor, sampleCount.get());
+                    inFlight, waiters, estimator.factorOf(configId), estimator.sampleCountOf(configId));
         }
     }
 
@@ -218,28 +203,6 @@ public final class ModelRateLimiter {
         }
     }
 
-    /** 用一次完成的真实 outputTokens 校准估算系数(EMA)。 */
-    private void calibrate(long actualOutputTokens, long estimatedTokens) {
-        if (actualOutputTokens <= 0 || estimatedTokens <= 0) {
-            return;
-        }
-        double ratio = (double) actualOutputTokens / (double) estimatedTokens;
-        double alpha = defaults.getEstEmaAlpha();
-        double next = (1 - alpha) * factor + alpha * ratio;
-        next = Math.max(defaults.getEstFactorMin(), Math.min(defaults.getEstFactorMax(), next));
-        if (Math.abs(next - factor) > 1e-4) {
-            factor = next;
-            long samples = sampleCount.incrementAndGet();
-            if (onCalibrated != null) {
-                try {
-                    onCalibrated.accept(factor, samples);
-                } catch (RuntimeException e) {
-                    log.debug("[model-rate] {} 校准持久化回调失败: {}", configId, e.toString());
-                }
-            }
-        }
-    }
-
     private ModelRateLimitException timeout() {
         return new ModelRateLimitException(
                 "模型「" + configId + "」请求拥堵:等待 " + defaults.getWaitTimeoutMs()
@@ -256,28 +219,6 @@ public final class ModelRateLimiter {
                         + ")。建议减少同时派发的子 agent 数量,或稍后重试。");
     }
 
-    /** 估算一段文本的 token 数(CJK≈1、其余≈4 字符 1 token;与 ModelLengthGuardAdvisor 同口径)。 */
-    static long estimateTokens(String s) {
-        if (s == null || s.isEmpty()) {
-            return 0;
-        }
-        long cjk = 0;
-        long other = 0;
-        for (int i = 0; i < s.length(); ) {
-            int cp = s.codePointAt(i);
-            i += Character.charCount(cp);
-            Character.UnicodeScript sc = Character.UnicodeScript.of(cp);
-            boolean isCjk = sc == Character.UnicodeScript.HAN || sc == Character.UnicodeScript.HIRAGANA
-                    || sc == Character.UnicodeScript.KATAKANA || sc == Character.UnicodeScript.HANGUL;
-            if (isCjk) {
-                cjk++;
-            } else if (!Character.isWhitespace(cp) && !Character.isISOControl(cp)) {
-                other++;
-            }
-        }
-        return cjk + (other + 3) / 4;
-    }
-
     /** 请求生命周期句柄:流中累计估算、完成记账/校准/释放、取消释放。 */
     public final class Permit {
         private boolean done = false;
@@ -291,7 +232,7 @@ public final class ModelRateLimiter {
             if (text == null || text.isEmpty()) {
                 return;
             }
-            long e = estimateTokens(text);
+            long e = estimator.estimate(text, configId);
             if (e <= 0) {
                 return;
             }
@@ -317,9 +258,12 @@ public final class ModelRateLimiter {
                 inFlight = Math.max(0, inFlight - 1);
                 if (cfg.tpm() > 0) {
                     tpmWindow.addLast(new TokenSample(System.currentTimeMillis(), actualOutputTokens));
-                    calibrate(actualOutputTokens, est);
                 }
                 monitor.notifyAll();
+            }
+            // 校准委托 TokenEstimator（在锁外执行，避免持久化 IO 阻塞限流）。
+            if (actualOutputTokens > 0 && est > 0) {
+                estimator.calibrate(configId, est, actualOutputTokens);
             }
         }
 

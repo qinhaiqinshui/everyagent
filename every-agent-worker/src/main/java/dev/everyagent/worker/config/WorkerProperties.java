@@ -348,6 +348,15 @@ public class WorkerProperties {
          */
         private int contextMaxToolResultChars = 40000;
 
+        // ---- Token 估算器校准参数 ----
+
+        /** 收敛阈值:误差 < 该值视为收敛。默认 0.02(2%)。 */
+        private double tokenEstimatorConvergenceThreshold = 0.02;
+        /** 收敛所需连续达标次数。默认 3。 */
+        private int tokenEstimatorConvergenceSamples = 3;
+        /** 漂移重置阈值:converged 后误差 > 该值重置继续校准。默认 0.05(5%)。 */
+        private double tokenEstimatorDriftThreshold = 0.05;
+
         public int getMaxConcurrentTasks() {
             return maxConcurrentTasks;
         }
@@ -490,6 +499,30 @@ public class WorkerProperties {
 
         public void setContextMaxToolResultChars(int contextMaxToolResultChars) {
             this.contextMaxToolResultChars = contextMaxToolResultChars;
+        }
+
+        public double getTokenEstimatorConvergenceThreshold() {
+            return tokenEstimatorConvergenceThreshold;
+        }
+
+        public void setTokenEstimatorConvergenceThreshold(double v) {
+            this.tokenEstimatorConvergenceThreshold = v;
+        }
+
+        public int getTokenEstimatorConvergenceSamples() {
+            return tokenEstimatorConvergenceSamples;
+        }
+
+        public void setTokenEstimatorConvergenceSamples(int v) {
+            this.tokenEstimatorConvergenceSamples = v;
+        }
+
+        public double getTokenEstimatorDriftThreshold() {
+            return tokenEstimatorDriftThreshold;
+        }
+
+        public void setTokenEstimatorDriftThreshold(double v) {
+            this.tokenEstimatorDriftThreshold = v;
         }
 
         public ModelRate getModelRate() {
