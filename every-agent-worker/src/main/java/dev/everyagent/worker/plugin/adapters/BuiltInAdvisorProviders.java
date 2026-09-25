@@ -1,5 +1,6 @@
 package dev.everyagent.worker.plugin.adapters;
 
+import dev.everyagent.plugin.api.spi.TokenEstimator;
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.os.OsSandbox;
 import dev.everyagent.worker.plugin.registry.AdvisorProviderRegistry;
@@ -7,6 +8,7 @@ import dev.everyagent.worker.skill.SkillAdvisor;
 import dev.everyagent.worker.slash.SlashTokenHandler;
 import dev.everyagent.worker.task.RoundIndexStore;
 import dev.everyagent.worker.task.TaskStore;
+import dev.everyagent.worker.task.TokenCalibrationAdvisor;
 import jakarta.annotation.PostConstruct;
 import org.springframework.stereotype.Component;
 

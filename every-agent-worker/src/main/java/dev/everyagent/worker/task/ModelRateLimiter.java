@@ -247,12 +247,13 @@ public final class ModelRateLimiter {
 
         /** 完成:记账 tpm、校准系数、释放并发与估算。 */
         public void complete(long actualOutputTokens) {
+            long est;
             synchronized (monitor) {
                 if (done) {
                     return;
                 }
                 done = true;
-                long est = estAcc;
+                est = estAcc;
                 estActiveOutput -= est;
                 estAcc = 0;
                 inFlight = Math.max(0, inFlight - 1);
