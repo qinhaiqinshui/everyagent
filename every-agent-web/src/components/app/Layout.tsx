@@ -72,6 +72,7 @@ import { DRAFT_TASK_ID, setDraftPreset } from '@/components/task/taskChatDraft'
 const LazyTasksPanel = createLazyRouteComponent(() => import('@/components/task/TasksPanel'))
 const LazyOpenFilesSidebarPanel = createLazyRouteComponent(() => import('@/components/files/OpenFilesSidebarPanel'))
 const LazySearchSidebarPanel = createLazyRouteComponent(() => import('@/components/search/SearchSidebarPanel'))
+const LazySearchModal = createLazyRouteComponent(() => import('@/components/search/SearchModal'))
 
 /**
  * 计算移动端侧边栏允许的最大高度。
@@ -125,6 +126,8 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
   const [activeWorkspaceTabId, setActiveWorkspaceTabId] = React.useState<WorkspaceTab['id'] | null>(null)
   const [selectedFilePath, setSelectedFilePath] = React.useState<string | null>(null)
   const [workspaceFileLocateRequest, setWorkspaceFileLocateRequest] = React.useState<{ filePath: string; workspaceRoot: string | null; requestedAt: number } | null>(null)
+  /** 双击 Shift 呼出的全局搜索弹窗开关。 */
+  const [searchModalOpen, setSearchModalOpen] = React.useState(false)
   const prevIsMobileRef = React.useRef(isMobile)
 
   /**
@@ -212,6 +215,38 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
   }, [])
 
   /**
+   * 双击 Shift(两次 keydown 间隔 ≤400ms)呼出/关闭全局搜索弹窗。
+   * - 仅 Shift 单键生效:按住产生的 repeat、附带其他修饰键(Ctrl/Alt/Meta)、
+   *   或两次之间按下其他键,均不触发(避免与 Shift+字母快捷键冲突);
+   * - toggle 语义:已打开时再次双击则关闭。
+   */
+  React.useEffect(() => {
+    let lastShiftAt = 0
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Shift') {
+        if (event.repeat || event.ctrlKey || event.altKey || event.metaKey) {
+          lastShiftAt = 0
+          return
+        }
+        const now = Date.now()
+        if (now - lastShiftAt <= 400) {
+          lastShiftAt = 0
+          setSearchModalOpen((current) => !current)
+        } else {
+          lastShiftAt = now
+        }
+        return
+      }
+      // 两次 Shift 之间按下了其他键:重置计时,打断双击序列。
+      lastShiftAt = 0
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [])
+
+  /**
 
   /** 首屏渲染后空闲预加载后续页面资源。 */
   React.useEffect(() => (
@@ -219,6 +254,7 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
       LazyTasksPanel.preload,
       LazyOpenFilesSidebarPanel.preload,
       LazySearchSidebarPanel.preload,
+      LazySearchModal.preload,
       () => import('@/components/system/SettingsPanel'),
       () => import('@/components/files/FileTabPage'),
       () => import('@/components/task/TaskChat'),
@@ -918,6 +954,7 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
         <BrowserNotificationGuide />
         <ReconnectionModal />
         <MissingWorkspaceRepairHost />
+        <LazySearchModal open={searchModalOpen} onClose={() => setSearchModalOpen(false)} />
           </div>
         </WorkspaceShellProvider>
       </AntApp>
