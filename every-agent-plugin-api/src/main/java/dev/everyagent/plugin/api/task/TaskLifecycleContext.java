@@ -51,4 +51,16 @@ public interface TaskLifecycleContext {
      * @param status 状态字符串（如 "running"/"done"/"failed"/"stopped"）
      */
     void agentStatus(String agentId, String status);
+
+    /** task.run 的用户输入文本（首条输入，main.agent 节点消费）。 */
+    String input();
+
+    /** task.run 的原始内容（含 opaque token，供前端回放还原）。 */
+    String rawContent();
+
+    /** task.run 的通用插件参数容器（核心不解释，插件自行消费）。 */
+    java.util.Map<String, Object> metadata();
+
+    /** RPC 应答器（链节点直接调 ctx.ok 返回前端；仅 RPC 线程阶段有效，虚拟线程阶段为 null）。 */
+    Object rpcContext();
 }

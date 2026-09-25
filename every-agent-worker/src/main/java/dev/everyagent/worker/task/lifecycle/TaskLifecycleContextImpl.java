@@ -39,6 +39,12 @@ public class TaskLifecycleContextImpl implements TaskLifecycleContext {
     /** 再运行 seq 水位（meta.seqLast，含瞬态占位水位；track 前由 startRerun 读盘注入）。 */
     private long rerunSeqLast;
 
+    // ---- task.run 注入字段（TaskLifecycleContext 新接口方法）----
+    private String input;
+    private String rawContent;
+    private java.util.Map<String, Object> metadata;
+    private Object rpcContext;
+
     // 回调：由 TaskManager 在创建上下文时设置
     private Function<List<Message>, AgentEntity> mainAgentBuilder;
     private Runnable concurrencyReleaser;
@@ -64,6 +70,11 @@ public class TaskLifecycleContextImpl implements TaskLifecycleContext {
     public void concurrencyReleaser(Runnable r) { this.concurrencyReleaser = r; }
     public void diskIndexer(Consumer<TaskStore.StoredTask> c) { this.diskIndexer = c; }
     public void registryRemover(Runnable r) { this.registryRemover = r; }
+
+    public void input(String input) { this.input = input; }
+    public void rawContent(String rawContent) { this.rawContent = rawContent; }
+    public void metadata(java.util.Map<String, Object> metadata) { this.metadata = metadata; }
+    public void rpcContext(Object rpcContext) { this.rpcContext = rpcContext; }
 
     // ---- 访问器（节点用，worker 模块内部）----
 
@@ -116,4 +127,8 @@ public class TaskLifecycleContextImpl implements TaskLifecycleContext {
     @Override public void startedAt(long ms) { taskEntry.startedAt = ms; }
     @Override public void onUsageBroadcast(Runnable hook) { taskEntry.onUsageBroadcast = hook; }
     @Override public void agentStatus(String agentId, String status) { taskEntry.events.agentStatus(agentId, status); }
+    @Override public String input() { return input; }
+    @Override public String rawContent() { return rawContent; }
+    @Override public java.util.Map<String, Object> metadata() { return metadata; }
+    @Override public Object rpcContext() { return rpcContext; }
 }
