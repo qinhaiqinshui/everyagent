@@ -326,15 +326,91 @@ async runTask(input: string, opts?: {
 
 ---
 
-## 6. 待确认决策点
+## 6. 已确认决策
 
-| # | 决策点 | 选项 | 倾向 |
-|---|---|---|---|
-| 1 | 短路时 ctx.ok 由谁调 | A) 入队节点自己调 B) 短路标记经 response.ack 调 | A：短路节点自治 |
-| 2 | 再运行认领逻辑位置 | A) order 50 taskentry.create 节点内分支 B) 独立节点 | A：新建和认领都是"TaskEntry 入表" |
-| 3 | QueueLoopNode 循环调 next.proceed 只重调内核 | 确认：下行/上行不重跑，每轮共用 AgentEntity/EventLog | 与现状一致 |
-| 4 | thread.submit 跨线程 | 节点把 next 打包提交虚拟线程，自己返回 null | 确认可行 |
-| 5 | editSeq（编辑重发）位置 | A) 核心节点（order ~45，在 queue.dispatch 之前） B) 插件 | A：编辑重发是核心任务语义，不是队列概念 |
+| # | 决策点 | 结论 |
+|---|---|---|
+| 1 | 短路时 ctx.ok | 短路节点只返回入队信号（null），不管前面节点怎么处理。response.ack(70) 等后续节点不执行 |
+| 2 | 再运行认领逻辑位置 | A) order 50 taskentry.create 节点内分支（新建 vs 认领） |
+| 3 | QueueLoopNode 循环调 next.proceed | 节点只负责调 next，是否重跑由后面节点决定 |
+| 4 | thread.submit 跨线程 | 确认：节点把 next 打包提交虚拟线程，返回 null |
+| 5 | editSeq（编辑重发） | 独立功能，后面也会抽成插件；它也受队列管（也要排队）。本次不处理，保持现状 |
+
+## 7. 插入对话实现
+
+### 7.1 机制
+
+插入对话 = per-task 的 `ConcurrentLinkedQueue<UserInput>`（线程安全），RPC 线程写、虚拟线程读：
+
+```
+RPC 线程:                              虚拟线程（agent 工具循环）:
+  task.run{metadata:{insert:true}}       DialogInsertAdvisor.adviseStream()
+    → queue.dispatch(65)                   → poll 插入队列
+    → offer 到插入队列                     → 有 → 追加为 role=user 消息
+    → 返回入队信号(null)                    → 无 → 透传
+```
+
+### 7.2 三个组件
+
+**1. 插入队列注册表**（task-input-queue 插件，per-task）：
+```java
+// TaskQueueRegistry（插件维护）
+ConcurrentLinkedQueue<UserInput> getDialogInsertQueue(String taskId);
+ConcurrentLinkedQueue<UserInput> getOrCreateDialogInsertQueue(String taskId);
+```
+
+**2. queue.dispatch 节点**（order 65，RPC 线程）：
+```java
+if (metadata != null && Boolean.TRUE.equals(metadata.get("insert"))) {
+    registry.getOrCreateDialogInsertQueue(taskId)
+            .offer(UserInput.of(ctx.input(), ctx.rawContent()));
+    return null;  // 短路
+}
+```
+
+**3. DialogInsertAdvisor**（插件贡献的 AdvisorProvider，scope=MAIN）：
+```java
+// 工具循环下行阶段（每次工具迭代把请求交给内层链前）
+private ChatClientRequest inject(ChatClientRequest request) {
+    if (dialogInsertQueue == null || dialogInsertQueue.isEmpty()) {
+        return request;  // 无插入消息，透传
+    }
+    List<Message> instructions = new ArrayList<>(request.prompt().getInstructions());
+    UserInput input;
+    while ((input = dialogInsertQueue.poll()) != null) {
+        instructions.add(new UserMessage(input.text()));  // 以 role=user 注入
+    }
+    return request.mutate().prompt(new Prompt(instructions, ...)).build();
+}
+```
+
+### 7.3 与队列续跑的关系
+
+```
+用户消息流转:
+  task.run{taskId, 无 insert 标记}
+    → queue.dispatch(65): 运行中 → offer 到输入队列 → 短路(null)
+
+  task.run{taskId, metadata:{insert:true}}
+    → queue.dispatch(65): 运行中 → offer 到插入队列 → 短路(null)
+
+虚拟线程（任务运行中）:
+  工具循环内部:
+    → DialogInsertAdvisor: poll 插入队列 → 注入 role=user（轮次内部）
+
+  一轮 agent 跑完:
+    → queue.loop(395): poll 输入队列 → 有就 consumeInput → 再跑一轮（轮次之间）
+```
+
+两个队列、两个消费点、互不干扰：插入队列在工具循环内被 drain（轮次内部），输入队列在轮次间被 poll（轮次之间）。
+
+### 7.4 插入队列的注册时机
+
+`queue.loop` 节点（虚拟线程阶段 order 395）下行段注册 per-task 队列时一起注册插入队列；`queue.dispatch`（RPC 线程）通过 registry 查找。
+
+### 7.5 DialogInsertAdvisor 的 order
+
+`ToolCallingAdvisor.DEFAULT_ORDER + 30`，在工具循环**内侧**——每次工具迭代都穿过它，所以插入消息会在工具结果之后、下一轮模型调用之前被注入。
 
 ---
 
