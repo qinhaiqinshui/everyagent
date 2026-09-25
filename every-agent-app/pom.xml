@@ -40,6 +40,11 @@
             <artifactId>subagent</artifactId>
             <version>${project.version}</version>
         </dependency>
+        <dependency>
+            <groupId>dev.everyagent</groupId>
+            <artifactId>task-input-queue</artifactId>
+            <version>${project.version}</version>
+        </dependency>
     </dependencies>
 
     <build>

@@ -52,7 +52,7 @@ public class AiReviewSlashProvider {
                 TaskEntry t = taskManager.runningTask(taskId);
                 if (t != null) {
                     t.taskFlags.put("ai-review", true); // 注册方写自己的业务标记
-                    t.persist();       // 落盘 meta(persistHook → updateMeta)
+                    taskManager.publishTaskUpdated(taskId);
                 }
             }
             return List.of(SlashSelectionResult.bottom(AiReviewToken.buildToken(), "ai-review:on"));
@@ -63,7 +63,7 @@ public class AiReviewSlashProvider {
                 TaskEntry t = taskManager.runningTask(taskId);
                 if (t != null) {
                     t.taskFlags.put("ai-review", false); // 注册方删自己的业务标记
-                    t.persist();
+                    taskManager.publishTaskUpdated(taskId);
                 }
             }
         };

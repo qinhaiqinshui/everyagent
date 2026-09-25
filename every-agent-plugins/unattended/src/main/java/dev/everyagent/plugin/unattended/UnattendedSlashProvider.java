@@ -50,7 +50,7 @@ public class UnattendedSlashProvider {
                 TaskEntry t = taskManager.runningTask(taskId);
                 if (t != null) {
                     t.taskFlags.put("unattended", true);
-                    t.persist();
+                    taskManager.publishTaskUpdated(taskId);
                 }
             }
             return List.of(SlashSelectionResult.bottom(UnattendedToken.buildToken(), "unattended:on"));
@@ -60,7 +60,7 @@ public class UnattendedSlashProvider {
                 TaskEntry t = taskManager.runningTask(taskId);
                 if (t != null) {
                     t.taskFlags.put("unattended", false);
-                    t.persist();
+                    taskManager.publishTaskUpdated(taskId);
                 }
             }
         };

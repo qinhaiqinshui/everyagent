@@ -22,5 +22,6 @@
         <module>git</module>
         <module>task-queue</module>
         <module>subagent</module>
+        <module>task-input-queue</module>
     </modules>
 </project>

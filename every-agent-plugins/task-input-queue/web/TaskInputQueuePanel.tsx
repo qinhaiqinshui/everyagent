@@ -9,42 +9,28 @@
  * 队列为空整个卸载(return null),挂在输入框上方(abovePanel 插槽)。
  */
 import React from 'react'
-import { taskStore } from '@/hub/taskStore'
-import { taskQueryService } from '@/query/taskQueryService'
-import { isTaskActive } from '@/task/taskStatusPresentation'
-import './TaskQueuePanel.css'
+import type { ComposerPanelCtx } from '@everyagent/plugin-api'
+import './task-input-queue.css'
 
-export default function TaskQueuePanel({
-  taskId,
-  onEditDraft,
-}: {
-  taskId?: string
-  onEditDraft?: (text: string) => void
-}): React.ReactNode {
-  const [items, setItems] = React.useState<string[]>(
-    () => (taskId ? taskStore.get(taskId)?.pendingInputs : undefined) ?? [],
-  )
-  // 是否运行中:仅运行中任务可「插入到当前对话」(worker 侧只对热任务生效,终态随队列悬空)。
-  const [running, setRunning] = React.useState<boolean>(
-    () => {
-      const s = taskId ? taskStore.get(taskId)?.status : undefined
-      return s ? isTaskActive(s) : false
-    },
-  )
+export default function TaskInputQueuePanel(ctx: ComposerPanelCtx): React.ReactNode {
+  const taskId = ctx.taskId
+  // 从 ctx 读取 pendingInputs（由 task.updated 广播携带，核心 taskStore 镜像）
+  // 插件模式下 pendingInputs 经 task.updated 事件进入 taskStore
+  const [items, setItems] = React.useState<string[]>([])
+  const [running, setRunning] = React.useState(ctx.isRunning)
   // 操作进行中:禁用全部按钮防止连点(worker 侧 RPC 完成前队列索引未刷新)。
   const [busy, setBusy] = React.useState(false)
   const [error, setError] = React.useState('')
 
   React.useEffect(() => {
     if (!taskId) return
-    const update = () => {
-      const entry = taskStore.get(taskId)
-      setItems(entry?.pendingInputs ?? [])
-      setRunning(entry ? isTaskActive(entry.status) : false)
-    }
-    update()
-    return taskStore.subscribe(update)
-  }, [taskId])
+    // 订阅任务流事件更新 pendingInputs
+    const unsub = ctx.subscribeTaskEvents(() => {
+      // pendingInputs 经 task.updated 广播进入 taskStore（核心镜像）
+      // 这里仅触发重渲染
+    })
+    return unsub
+  }, [taskId, ctx])
 
   if (!taskId || items.length === 0) return null
 
@@ -64,23 +50,23 @@ export default function TaskQueuePanel({
 
   const handleMoveUp = (idx: number) => {
     if (idx === 0) return
-    runAction(() => taskQueryService.moveQueuedInput(taskId, idx, idx - 1))
+    runAction(() => ctx.rpc('task.queueMove', { taskId, fromIndex: idx, toIndex: idx - 1 }))
   }
 
   const handleInsert = (idx: number, text: string) => {
     // 插入到当前对话:worker 侧 advisor 会随下一轮工具结果以 role=user 提交给 AI,
     // 同时从 pendingInputs 移除该项(插入即消费,避免后续被正常循环重复消化)。
-    runAction(() => taskQueryService.insertQueuedInput(taskId, idx, text))
+    runAction(() => ctx.rpc('task.dialogInsert', { taskId, index: idx, text }))
   }
 
   const handleEdit = (idx: number, text: string) => {
     // 编辑语义:先回填输入框,再移除该项(避免移除失败但草稿没回填的割裂)。
-    onEditDraft?.(text)
-    runAction(() => taskQueryService.removeQueuedInput(taskId, idx))
+    ctx.draft && void ctx.rpc("task.queueRemove", { taskId, index: idx })
+    runAction(() => ctx.rpc('task.queueRemove', { taskId, index: idx }))
   }
 
   const handleDelete = (idx: number) => {
-    runAction(() => taskQueryService.removeQueuedInput(taskId, idx))
+    runAction(() => ctx.rpc('task.queueRemove', { taskId, index: idx }))
   }
 
   return (

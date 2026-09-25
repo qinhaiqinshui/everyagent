@@ -22,7 +22,6 @@ import type { ChatComposerDraftState, ChatComposerToken, LLMConfigProfile } from
 import ChatShell from './ChatShell'
 import TaskRoundsPanel from './TaskRoundsPanel'
 import ContextBattery from './ContextBattery'
-import TaskQueuePanel from './TaskQueuePanel'
 import AgentListPanel, { type AgentListItem } from './AgentListPanel'
 import TaskDraftComposerPanel from '@/components/taskComposer/TaskDraftComposerPanel'
 import TaskComposerSurface, { applyComposerDraftChange, type ComposerDraftChange } from '@/components/taskComposer/TaskComposerSurface'
@@ -820,7 +819,6 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
                   filterAgentId={filterAgentId}
                   onSelect={handleSelectAgent}
                 />
-                <TaskQueuePanel taskId={effectiveTaskId} onEditDraft={handleEditQueuedDraft} />
               </div>
             )}
             submitLabel={submitting ? '发送中...' : '发送'}
