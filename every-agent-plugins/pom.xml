@@ -23,5 +23,6 @@
         <module>task-queue</module>
         <module>subagent</module>
         <module>task-input-queue</module>
+        <module>task-edit-resend</module>
     </modules>
 </project>
