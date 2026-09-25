@@ -267,7 +267,6 @@ class AiAuthReviewerTest {
         reviewer(preset("{\"decision\":\"ALLOW\"}")).review(task, "c::del", "AI 请求");
         verify(taskStore, never()).track(any(), any(), any(), any());
         assertTrue(task.subs.isEmpty(), "审议不复用/新建子 agent 集合");
-        assertTrue(task.agentLedger.isEmpty(), "审议不进 agent 台账");
         // 事件只落原任务 EventLog(不新建);task.trace auth.review persist=true(ext 为 null)
         assertNotNull(authTracePayload(), "原任务应有 auth.review trace");
         assertNull(authTraceEvent().ext(), "persist=true 的 trace 无 ext.persist=false 瞬态标记");

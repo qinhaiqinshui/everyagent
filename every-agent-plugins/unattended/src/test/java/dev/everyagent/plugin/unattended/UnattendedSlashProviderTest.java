@@ -12,7 +12,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
-import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -35,15 +34,12 @@ class UnattendedSlashProviderTest {
     private SlashCommandRegistry registry;
     private TaskManager taskManager;
     private TaskEntry task;
-    private AtomicInteger persisted;
 
     @BeforeEach
     void setUp() {
         registry = new SlashCommandRegistry();
         taskManager = mock(TaskManager.class);
         task = newTask();
-        persisted = new AtomicInteger();
-        task.persistHook = persisted::incrementAndGet;
         when(taskManager.runningTask("t-1")).thenReturn(task);
     }
 
@@ -88,7 +84,7 @@ class UnattendedSlashProviderTest {
 
         verify(taskManager).runningTask("t-1");
         assertTrue(task.taskFlags.getOrDefault("unattended", false), "业务标记 unattended 应置位");
-        assertTrue(persisted.get() >= 1, "置位后应落盘 meta");
+        verify(taskManager).publishTaskUpdated("t-1");
     }
 
     @Test
@@ -100,7 +96,7 @@ class UnattendedSlashProviderTest {
         assertEquals("unattended:on", results.get(0).id());
         verify(taskManager, never()).runningTask(any());
         assertFalse(task.taskFlags.getOrDefault("unattended", false), "空 taskId 不写业务标记");
-        assertEquals(0, persisted.get(), "空 taskId 不落盘");
+        verify(taskManager, never()).publishTaskUpdated(any());
     }
 
     // ---- cancel:复位 unattended ----
@@ -111,6 +107,6 @@ class UnattendedSlashProviderTest {
         SlashCommandItem it = item();
         it.cancelHandler().onCancel(it, UnattendedToken.buildToken(), "t-1");
         assertFalse(task.taskFlags.getOrDefault("unattended", false), "取消无人值守胶囊应复位 unattended");
-        assertTrue(persisted.get() >= 1, "取消后应落盘 meta");
+        verify(taskManager).publishTaskUpdated("t-1");
     }
 }
