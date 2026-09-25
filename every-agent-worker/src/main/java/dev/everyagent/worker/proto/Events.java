@@ -72,9 +72,6 @@ public final class Events {
     public static final String TASK_QUEUED = "task.queued";
 
     // worker 级 input 频道(taskId 入 payload)
-    public static final String TASK_INPUT = "task.input";
-    /** 任务队列「插入到当前对话」事件:把队列里某条用户输入立即注入正在进行的 AI 对话循环。 */
-    public static final String TASK_DIALOG_INSERT = "task.dialogInsert";
     public static final String ASK_REPLY = "ask.reply";
     /** 前端流消费进度回报(worker 级输入频道):携带 creditIndex 释放 DataPusher 背压窗口。 */
     public static final String STREAM_ACK = "stream.ack";
@@ -195,17 +192,6 @@ public final class Events {
     }
 
     // ---- input 频道 payload(taskId 入 payload)----
-
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    @JsonInclude(JsonInclude.Include.NON_NULL)
-    public record TaskInput(String taskId, String text) {
-    }
-
-    /** 队列插入对话事件 payload:index 供 worker 移除该条队列项;text 为用户输入正文。 */
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    @JsonInclude(JsonInclude.Include.NON_NULL)
-    public record TaskDialogInsert(String taskId, Integer index, String text) {
-    }
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     @JsonInclude(JsonInclude.Include.NON_NULL)

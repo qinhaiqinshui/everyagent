@@ -2,6 +2,10 @@ package dev.everyagent.plugin.inputqueue;
 
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.contract.rpc.Rpc;
+import dev.everyagent.worker.hub.EventSink;
+import dev.everyagent.worker.proto.Channels;
+import dev.everyagent.worker.proto.Events;
+import dev.everyagent.worker.task.TaskEntry;
 import dev.everyagent.worker.task.TaskManager;
 import dev.everyagent.worker.task.TaskStore;
 import dev.everyagent.worker.task.UserInput;
@@ -28,12 +32,14 @@ public class QueueRpcHandler {
     private final TaskQueueRegistry registry;
     private final TaskManager taskManager;
     private final TaskStore store;
+    private final EventSink eventSink;
 
     public QueueRpcHandler(RpcDispatcher dispatcher, TaskQueueRegistry registry,
-            TaskManager taskManager, TaskStore store) {
+            TaskManager taskManager, TaskStore store, EventSink eventSink) {
         this.registry = registry;
         this.taskManager = taskManager;
         this.store = store;
+        this.eventSink = eventSink;
         dispatcher.register("task.queueRemove", this::rpcQueueRemove);
         dispatcher.register("task.queueMove", this::rpcQueueMove);
     }
@@ -111,14 +117,21 @@ public class QueueRpcHandler {
             arr.add(item.text());
         }
         summary.set("pendingInputs", arr);
-        taskManager.publishTaskUpdated(taskId);
+        eventSink.fanout(k -> Channels.tasks(k), Events.TASK_UPDATED, null, summary, null);
         ctx.ok(Json.obj().put("taskId", taskId).put("ok", true));
     }
 
     private void broadcastQueueUpdate(String taskId, InputQueue queue) {
-        // 复用 QueueInputInterceptor 的广播逻辑（经 task.updated 携带 pendingInputs）
-        // 简化：直接调 publishTaskUpdated（核心广播 summary，不含 pendingInputs）
-        // 完整实现需要拼装 pendingInputs —— 由 QueueInputInterceptor 统一处理
-        taskManager.publishTaskUpdated(taskId);
+        // 广播 task.updated 携带 pendingInputs（直接拼装 summary + pendingInputs）
+        TaskEntry t = taskManager.get(taskId);
+        if (t == null) return;
+        t.touch();
+        var summary = t.runtimeSummaryJson();
+        var arr = tools.jackson.databind.node.JsonNodeFactory.instance.arrayNode();
+        for (String text : queue.snapshot()) {
+            arr.add(text);
+        }
+        summary.set("pendingInputs", arr);
+        eventSink.fanout(k -> Channels.tasks(k), Events.TASK_UPDATED, null, summary, null);
     }
 }

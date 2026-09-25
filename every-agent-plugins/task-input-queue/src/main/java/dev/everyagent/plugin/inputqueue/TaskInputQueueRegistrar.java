@@ -1,31 +1,24 @@
 package dev.everyagent.plugin.inputqueue;
 
 import dev.everyagent.worker.plugin.registry.TaskLifecycleRegistry;
-import dev.everyagent.worker.plugin.registry.TaskInputInterceptorRegistry;
 import dev.everyagent.worker.plugin.registry.AdvisorProviderRegistry;
 import dev.everyagent.worker.task.TaskStore;
 import dev.everyagent.worker.hub.EventSink;
-import dev.everyagent.worker.task.TaskManager;
 import org.springframework.stereotype.Component;
 
 /**
  * task-input-queue 插件装配入口。
- * 注册 QueueLoopNode（生命周期节点）、QueueInputInterceptor（输入拦截）、
- * DialogInsertAdvisorProvider（advisor）。
+ * 注册 QueueLoopNode（生命周期节点）、DialogInsertAdvisorProvider（advisor）。
  */
 @Component
 public class TaskInputQueueRegistrar {
 
     public TaskInputQueueRegistrar(
             TaskLifecycleRegistry lifecycleRegistry,
-            TaskInputInterceptorRegistry inputInterceptorRegistry,
             AdvisorProviderRegistry advisorRegistry,
             TaskQueueRegistry queueRegistry,
-            TaskStore store,
-            TaskManager taskManager,
-            EventSink eventSink) {
+            TaskStore store) {
         lifecycleRegistry.register(new QueueLoopNode(queueRegistry, store), "task-input-queue");
-        inputInterceptorRegistry.register(new QueueInputInterceptor(queueRegistry, taskManager, eventSink));
         advisorRegistry.register(new DialogInsertAdvisorProvider(queueRegistry));
     }
 }

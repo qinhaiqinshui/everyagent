@@ -18,7 +18,7 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 
 /**
  * 任务队列「插入到当前对话」advisor（从 worker 核心迁入插件）。
- * <p>用户点击队列项「插入」按钮后，正文经 QueueInputInterceptor 写入插入对话队列；
+ * <p>用户点击队列项「插入」按钮后，正文写入插入对话队列；
  * 本 advisor 在工具循环下行阶段 drain 该队列，把每条用户输入追加为 role=user 消息
  * 随工具结果一起提交给 AI，同时发射 user.message 事件。
  */

@@ -14,7 +14,6 @@ import dev.everyagent.plugin.api.spi.TokenEstimator;
 import dev.everyagent.plugin.api.spi.ToolExecutionInterceptor;
 import dev.everyagent.plugin.api.spi.ToolProvider;
 import dev.everyagent.plugin.api.task.TaskAdmissionPolicy;
-import dev.everyagent.plugin.api.task.TaskInputInterceptor;
 import dev.everyagent.plugin.api.task.TaskLifecycleNode;
 import dev.everyagent.worker.plugin.registry.AdvisorProviderRegistry;
 import dev.everyagent.worker.plugin.registry.AuthorizationHandlerRegistry;
@@ -22,7 +21,6 @@ import dev.everyagent.worker.plugin.registry.SandboxProviderRegistry;
 import dev.everyagent.worker.plugin.registry.SearchProviderRegistry;
 import dev.everyagent.worker.plugin.registry.SkillContributorRegistry;
 import dev.everyagent.worker.plugin.registry.TaskAdmissionPolicyRegistry;
-import dev.everyagent.worker.plugin.registry.TaskInputInterceptorRegistry;
 import dev.everyagent.worker.plugin.registry.TaskLifecycleRegistry;
 import dev.everyagent.worker.plugin.registry.ToolExecutionInterceptorRegistry;
 import dev.everyagent.worker.plugin.registry.ToolProviderRegistry;
@@ -52,7 +50,6 @@ public class WorkerPluginContextImpl implements WorkerPluginContext {
     private final ToolExecutionInterceptorRegistry toolInterceptorRegistry;
     private final TaskLifecycleRegistry lifecycleRegistry;
     private final TaskAdmissionPolicyRegistry admissionPolicyRegistry;
-    private final TaskInputInterceptorRegistry inputInterceptorRegistry;
     private final SkillContributorRegistry skillContributorRegistry;
     private final RpcDispatcher rpcDispatcher;
     private final SlashCommandRegistry slashRegistry;
@@ -68,7 +65,6 @@ public class WorkerPluginContextImpl implements WorkerPluginContext {
             ToolExecutionInterceptorRegistry toolInterceptorRegistry,
             TaskLifecycleRegistry lifecycleRegistry,
             TaskAdmissionPolicyRegistry admissionPolicyRegistry,
-            TaskInputInterceptorRegistry inputInterceptorRegistry,
             SkillContributorRegistry skillContributorRegistry,
             RpcDispatcher rpcDispatcher,
             SlashCommandRegistry slashRegistry,
@@ -83,7 +79,6 @@ public class WorkerPluginContextImpl implements WorkerPluginContext {
         this.toolInterceptorRegistry = toolInterceptorRegistry;
         this.lifecycleRegistry = lifecycleRegistry;
         this.admissionPolicyRegistry = admissionPolicyRegistry;
-        this.inputInterceptorRegistry = inputInterceptorRegistry;
         this.skillContributorRegistry = skillContributorRegistry;
         this.rpcDispatcher = rpcDispatcher;
         this.slashRegistry = slashRegistry;
@@ -129,11 +124,6 @@ public class WorkerPluginContextImpl implements WorkerPluginContext {
     @Override
     public void registerTaskLifecycleNode(TaskLifecycleNode node) {
         lifecycleRegistry.register(node, pluginId);
-    }
-
-    @Override
-    public void registerTaskInputInterceptor(TaskInputInterceptor interceptor) {
-        inputInterceptorRegistry.register(interceptor);
     }
 
     @Override

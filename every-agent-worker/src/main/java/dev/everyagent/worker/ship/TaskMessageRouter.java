@@ -14,12 +14,8 @@ import tools.jackson.databind.JsonNode;
 
 /**
  * 任务消息路由器（基础设施·通信）：注册为 HubPool.Listener，
- * 订阅 worker 输入频道，把 TASK_INPUT / TASK_DIALOG_INSERT / ASK_REPLY
- * 三类消息路由到 {@link TaskInputHandler}。
+ * 订阅 worker 输入频道，把 ASK_REPLY 消息路由到 {@link TaskInputHandler}。
  * 从 TaskManager 迁出——消息解析与路由属通信基础设施，非任务编排。
- * <p><b>过渡期说明</b>：当前 TaskManager 仍 implements HubPool.Listener 且
- * pool.addListener(this) 未删——本路由与 TaskManager 侧双注册，两条路径都会
- * 收到同一消息。此为迁移过渡态，步骤 7 删除 TaskManager 侧旧路径后收敛。
  * <p>handler 经 ObjectProvider 延迟解析：TaskManager（未来 implements
  * TaskInputHandler）若被直接注入可能构造循环依赖——TaskManager 依赖的组件
  * 反过来依赖本路由。onHubConnected / onHubDisconnected 走 Listener 接口
@@ -64,8 +60,6 @@ public class TaskMessageRouter implements HubPool.Listener {
         String event = frame.path("event").asString("");
         JsonNode payload = frame.path("payload");
         switch (event) {
-            case Events.TASK_INPUT -> handler.onTaskInput(conn, payload);
-            case Events.TASK_DIALOG_INSERT -> handler.onDialogInsert(payload);
             case Events.ASK_REPLY -> handler.onAskReply(payload);
             default -> {
             }

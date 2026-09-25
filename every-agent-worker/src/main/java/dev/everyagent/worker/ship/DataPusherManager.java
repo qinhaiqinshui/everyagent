@@ -102,12 +102,6 @@ public class DataPusherManager implements HubPool.Listener, TaskManager.TaskResu
             routeAck(frame);
             return;
         }
-        // 兜底建推送器:worker 重启后前端不刷新,内存推送器表为空且不会再收到 subscriber.join;
-        // 前端继续发 task.input 时以「消息到达」为触发器补建,否则任务照跑但该前端永远收不到增量。
-        if (Events.TASK_INPUT.equals(event)) {
-            ensurePusherForTaskInput(conn, frame);
-            return;
-        }
         String taskId = taskIdOf(channel);
         if (taskId == null) {
             return; // 非 stream 频道通知,与本管理器无关
@@ -155,36 +149,6 @@ public class DataPusherManager implements HubPool.Listener, TaskManager.TaskResu
         } else {
             log.debug("stream.ack 无对应推送器 session={} task={}", sessionId, taskId);
         }
-    }
-
-    /**
-     * 前端在某任务页发送输入(task.input)时兜底补建推送器:worker 重启后前端未刷新、不再有
-     * subscriber.join,但任务增量仍须推到该前端。sessionId 由 hub 在转发帧的 from.sessionId
-     * 附上(前端 pub 原帧无 sessionId,否则无法定向)。与 subscriber.join 同源幂等去重
-     * (key=sessionId|taskId);任务不在本 worker(内存/磁盘均无)则忽略。
-     */
-    private void ensurePusherForTaskInput(HubLink conn, JsonNode frame) {
-        JsonNode from = frame.path("from");
-        if (!"frontend".equals(from.path("role").asString(""))) {
-            return; // 只对前端消息兜底(worker 自身不会发 task.input 到自己的输入频道)
-        }
-        String sessionId = from.path("sessionId").asString("");
-        String taskId = frame.path("payload").path("taskId").asString("");
-        if (sessionId.isEmpty() || taskId.isEmpty()) {
-            return;
-        }
-        if (tasks.get(taskId) == null && !store.taskDirExists(taskId)) {
-            log.debug("忽略非本 worker 任务的任务输入通知 task={}", taskId);
-            return;
-        }
-        String key = sessionId + "|" + taskId;
-        pushers.computeIfAbsent(key, k -> {
-            DataPusher p = new DataPusher(sessionId, taskId, conn, tasks, streamSources);
-            p.start();
-            log.debug("定向推送器已建立(任务输入兜底:worker 重启后前端未刷新) session={} task={}",
-                    sessionId, taskId);
-            return p;
-        });
     }
 
     /** 来源连接断开:其订阅通知(leave)不会再到达,就地清理该连接上的推送器防泄漏。 */

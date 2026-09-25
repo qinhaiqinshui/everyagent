@@ -17,7 +17,6 @@ import dev.everyagent.worker.plugin.registry.ToolExecutionInterceptorRegistry;
 import dev.everyagent.worker.plugin.registry.ToolProviderRegistry;
 import dev.everyagent.worker.plugin.registry.TaskLifecycleRegistry;
 import dev.everyagent.worker.plugin.registry.TaskAdmissionPolicyRegistry;
-import dev.everyagent.worker.plugin.registry.TaskInputInterceptorRegistry;
 import dev.everyagent.worker.rpc.RpcDispatcher;
 import dev.everyagent.worker.slash.SlashCommandRegistry;
 import jakarta.annotation.PostConstruct;
@@ -72,7 +71,6 @@ public class PluginLoader {
     private final ToolExecutionInterceptorRegistry toolInterceptorRegistry;
     private final TaskLifecycleRegistry lifecycleRegistry;
     private final TaskAdmissionPolicyRegistry admissionPolicyRegistry;
-    private final TaskInputInterceptorRegistry inputInterceptorRegistry;
     private final SkillContributorRegistry skillContributorRegistry;
     private final RpcDispatcher rpcDispatcher;
     private final SlashCommandRegistry slashRegistry;
@@ -90,7 +88,6 @@ public class PluginLoader {
             ToolExecutionInterceptorRegistry toolInterceptorRegistry,
             TaskLifecycleRegistry lifecycleRegistry,
             TaskAdmissionPolicyRegistry admissionPolicyRegistry,
-            TaskInputInterceptorRegistry inputInterceptorRegistry,
             SkillContributorRegistry skillContributorRegistry,
             RpcDispatcher rpcDispatcher,
             SlashCommandRegistry slashRegistry,
@@ -105,7 +102,6 @@ public class PluginLoader {
         this.toolInterceptorRegistry = toolInterceptorRegistry;
         this.lifecycleRegistry = lifecycleRegistry;
         this.admissionPolicyRegistry = admissionPolicyRegistry;
-        this.inputInterceptorRegistry = inputInterceptorRegistry;
         this.skillContributorRegistry = skillContributorRegistry;
         this.rpcDispatcher = rpcDispatcher;
         this.slashRegistry = slashRegistry;
@@ -271,7 +267,6 @@ public class PluginLoader {
                     searchRegistry,
                     authHandlerRegistry, toolInterceptorRegistry,
                     lifecycleRegistry, admissionPolicyRegistry,
-                    inputInterceptorRegistry,
                     skillContributorRegistry,
                     rpcDispatcher, slashRegistry, services, config);
 

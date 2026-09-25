@@ -8,8 +8,7 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 
 /**
  * 任务队列注册表：per-task 的输入队列 + 插入对话队列。
- * <p>QueueLoopNode 下行段注册（任务线程），TaskInputInterceptor 从 hub 消息线程查找。
- * DialogInsertAdvisor 从插入队列 drain（agent 工具循环线程）。
+ * <p>QueueLoopNode 下行段注册（任务线程）。DialogInsertAdvisor 从插入队列 drain（agent 工具循环线程）。
  */
 @Component
 public class TaskQueueRegistry {

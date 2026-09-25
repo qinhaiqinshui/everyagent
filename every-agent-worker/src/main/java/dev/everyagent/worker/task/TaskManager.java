@@ -6,7 +6,6 @@ import dev.everyagent.worker.agent.AgentFactory;
 import dev.everyagent.worker.agent.AgentService;
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.hub.EventSink;
-import dev.everyagent.worker.hub.HubLink;
 import dev.everyagent.worker.modules.ConfigStore.ResolvedConfig;
 import dev.everyagent.worker.modules.WorkspaceManager;
 import dev.everyagent.worker.proto.Channels;
@@ -19,7 +18,6 @@ import dev.everyagent.worker.rpc.RpcDispatcher;
 import dev.everyagent.worker.ship.TaskInputHandler;
 import dev.everyagent.worker.slash.SlashTokenEncoder;
 import dev.everyagent.worker.plugin.registry.TaskAdmissionPolicyRegistry;
-import dev.everyagent.worker.plugin.registry.TaskInputInterceptorRegistry;
 import dev.everyagent.worker.plugin.registry.TaskLifecycleRegistry;
 import dev.everyagent.worker.task.lifecycle.IdempotencyCheckNode;
 import dev.everyagent.worker.task.lifecycle.ResponseAckNode;
@@ -98,8 +96,6 @@ public class TaskManager implements TaskInputHandler, PendingAsks.StatusHook {
     private final TaskLifecycleRegistry lifecycleRegistry;
     /** 任务准入策略注册表：队列插件注册后接管并发上限检查（always-admit → 排队）。 */
     private final TaskAdmissionPolicyRegistry admissionPolicyRegistry;
-    /** 任务输入拦截器注册表：队列插件注册后接管运行中 task.input / task.dialogInsert。 */
-    private final TaskInputInterceptorRegistry inputInterceptorRegistry;
 
     /** 热任务(运行中驻留内存;finish 即驱逐)。 */
     private final Map<String, TaskEntry> tasks = new ConcurrentHashMap<>();
@@ -127,8 +123,7 @@ public class TaskManager implements TaskInputHandler, PendingAsks.StatusHook {
             TaskStore store, RoundIndexStore roundIndexStore,
             TaskLifecycleContextFactory lifecycleContextFactory,
             TaskLifecycleExecutor lifecycleExecutor, TaskLifecycleRegistry lifecycleRegistry,
-            TaskAdmissionPolicyRegistry admissionPolicyRegistry,
-            TaskInputInterceptorRegistry inputInterceptorRegistry) {
+            TaskAdmissionPolicyRegistry admissionPolicyRegistry) {
         this.eventSink = eventSink;
         this.agentService = agentService;
         this.agentFactory = agentFactory;
@@ -143,7 +138,6 @@ public class TaskManager implements TaskInputHandler, PendingAsks.StatusHook {
         this.lifecycleExecutor = lifecycleExecutor;
         this.lifecycleRegistry = lifecycleRegistry;
         this.admissionPolicyRegistry = admissionPolicyRegistry;
-        this.inputInterceptorRegistry = inputInterceptorRegistry;
     }
 
     @PostConstruct
@@ -200,51 +194,7 @@ public class TaskManager implements TaskInputHandler, PendingAsks.StatusHook {
         }
     }
 
-    // ---- TaskInputHandler:worker 输入频道消息(TaskMessageRouter 路由进来;task.input / ask.reply)----
-
-    @Override
-    public void onTaskInput(HubLink conn, JsonNode payload) {
-        String taskId = payload.path("taskId").asString("");
-        String text = payload.path("text").asString("");
-        String rawContent = payload.path("rawContent").isTextual()
-                ? payload.path("rawContent").asString()
-                : null;
-        if (taskId.isEmpty() || text.isEmpty()) {
-            return;
-        }
-        TaskEntry t = tasks.get(taskId);
-        if (t != null && !t.status.terminal()) {
-            // 运行中：核心拒绝（单轮语义）。队列插件注册拦截器后接管（offer 到内部队列）。
-            String editSeq = payload.path("editSeq").isTextual() ? payload.path("editSeq").asString() : null;
-            if (editSeq != null && !editSeq.isEmpty()) {
-                truncateForEdit(taskId, t, editSeq, text, rawContent);
-            }
-            for (var interceptor : inputInterceptorRegistry.getInterceptors()) {
-                if (interceptor.onRunningTaskInput(taskId, text, rawContent)) {
-                    return; // 插件已处理（如 offer 到队列）
-                }
-            }
-            // 无拦截器 → 拒绝（核心无队列概念，运行中不接收新输入）
-            return;
-        }
-        // 不在内存或已终态:统一走再运行认领。
-        String editSeq2 = payload.path("editSeq").isTextual() ? payload.path("editSeq").asString() : null;
-        rerunTask(conn, taskId, text, rawContent, editSeq2);
-    }
-
-    @Override
-    public void onDialogInsert(JsonNode payload) {
-        String taskId = payload.path("taskId").asString("");
-        String text = payload.path("text").asString("");
-        if (taskId.isEmpty() || text.isEmpty()) {
-            return;
-        }
-        // 核心无队列概念；队列插件注册拦截器后处理（从队列移除 + 加入插入队列）。
-        int index = payload.path("index").asInt(-1);
-        for (var interceptor : inputInterceptorRegistry.getInterceptors()) {
-            interceptor.onDialogInsert(taskId, index, text);
-        }
-    }
+    // ---- TaskInputHandler:worker 输入频道消息(TaskMessageRouter 路由进来;ask.reply)----
 
     @Override
     public void onAskReply(JsonNode payload) {
@@ -1105,56 +1055,6 @@ public class TaskManager implements TaskInputHandler, PendingAsks.StatusHook {
     }
 
     // config.get / config.reload / skill.reload 已迁 ConfigRpcHandler(方法体原样搬移)。
-
-    // ---- 终态任务再运行(冷启动;无"续跑"概念,对 agent 就是一次普通运行)----
-
-    /**
-     * task.input 触发的再运行（无 RPC 应答）：运行中→交给拦截器；
-     * 终态→创建上下文启动洋葱链（同 rpcTaskRun 的再运行路径，但 rpcContext=null）。
-     */
-    private void rerunTask(HubLink conn, String taskId, String text, String rawContent, String editSeq) {
-        TaskEntry hot = tasks.get(taskId);
-        if (hot != null) {
-            if (!hot.status.terminal()) {
-                // 运行中：核心无队列概念，交给拦截器（插件 offer 到队列）；无插件则忽略
-                if (editSeq != null && !editSeq.isEmpty()) {
-                    truncateForEdit(taskId, hot, editSeq, text, rawContent);
-                }
-                for (var interceptor : inputInterceptorRegistry.getInterceptors()) {
-                    if (interceptor.onRunningTaskInput(taskId, text, rawContent)) {
-                        return;
-                    }
-                }
-                return; // 无拦截器 → 忽略（单轮语义）
-            }
-            synchronized (hot) {
-            } // 等 finish 驱逐(flush 后 tasks.remove)
-            if (tasks.get(taskId) != null) {
-                return; // 已被并发 rerun 重建,交给它
-            }
-        }
-        // 终态任务：编辑重发前置处理（原子认领 → 截断 → 放回让链节点认领）
-        if (editSeq != null && !editSeq.isEmpty()) {
-            TaskStore.StoredTask st = diskTasks.remove(taskId);
-            if (st == null) {
-                log.warn("再运行认领失败(任务不存在或已被并发操作): {}", taskId);
-                return;
-            }
-            try {
-                truncateForColdEdit(taskId, st, editSeq, text, rawContent);
-                diskTasks.putIfAbsent(taskId, st);
-            } catch (Exception e) {
-                log.error("编辑截断失败 task={}", taskId, e);
-                diskTasks.putIfAbsent(taskId, st);
-                return;
-            }
-        }
-        // 创建上下文启动洋葱链（rpcContext=null：节点检查 instanceof RpcContext 时空转）
-        TaskLifecycleContextImpl lifecycleCtx = lifecycleContextFactory.createForRpc(
-                text, rawContent, null, null);
-        lifecycleCtx.taskId(taskId);
-        lifecycleExecutor.run(lifecycleRegistry.getNodes(), taskKernel(), lifecycleCtx);
-    }
 
     // ---- 任务内核 ----
 

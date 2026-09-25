@@ -1,6 +1,5 @@
 package dev.everyagent.worker.ship;
 
-import dev.everyagent.worker.hub.HubLink;
 import tools.jackson.databind.JsonNode;
 
 /**
@@ -11,12 +10,6 @@ import tools.jackson.databind.JsonNode;
  * <p>入参统一为消息 payload（taskId 等字段在其中读取）。
  */
 public interface TaskInputHandler {
-
-    /** task.input：用户输入（运行中入队 / 终态再运行认领）。 */
-    void onTaskInput(HubLink conn, JsonNode payload);
-
-    /** task.dialogInsert：队列项插入当前对话。 */
-    void onDialogInsert(JsonNode payload);
 
     /** ask.reply：ask 回复。 */
     void onAskReply(JsonNode payload);
