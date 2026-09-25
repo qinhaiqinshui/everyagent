@@ -156,9 +156,7 @@ export const taskQueryService = {
     taskTokens?: string[]
     /** 原始输入(含 opaque token 串,仅用于 user.message 回放还原胶囊;缺省=纯文本输入)。 */
     rawContent?: string
-    /** 编辑重发:被编辑消息的 seq(字符串雪花ID);worker 收到后先截断后续事件再正常运行。 */
-    editSeq?: string
-    /** 通用 metadata(透传到 task.run RPC params;如 { insert: true } 表示插入当前对话)。 */
+    /** 通用 metadata(透传到 task.run RPC params;如 { insert: true } 表示插入当前对话、{ editSeq } 表示编辑重发)。 */
     metadata?: Record<string, unknown>
   }): Promise<string> {
     if (opts?.taskId) {
@@ -173,7 +171,6 @@ export const taskQueryService = {
         input,
         configId: opts.configId || undefined,
         ...(opts.rawContent ? { rawContent: opts.rawContent } : {}),
-        ...(opts.editSeq ? { editSeq: opts.editSeq } : {}),
         ...(opts.metadata ? { metadata: opts.metadata } : {}),
       })
       return opts.taskId

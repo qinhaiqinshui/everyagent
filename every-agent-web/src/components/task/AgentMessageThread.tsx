@@ -3,7 +3,7 @@ import type { AgentMessageRecord, ChatComposerToken } from '@/types'
 import { splitComposerRawContent } from '@/composerToken/composerOpaqueToken'
 import { getComposerChipView } from '@/composerToken/composerChipRenderer'
 import { openSlashItemDetail } from '@/components/taskComposer/SlashItemDetailPopover'
-import { UserMessageEditContext } from './userMessageEditContext'
+import { pluginDispatcher } from '@/plugin/PluginDispatcher'
 import {
   SparkIcon,
   WrenchIcon,
@@ -87,17 +87,8 @@ export default function AgentMessageThread({
   resolveToolCallPayload,
   resolveToolResult,
 }: AgentMessageThreadProps) {
-  const editCtx = React.useContext(UserMessageEditContext)
   const meta = ROLE_META[message.role]
   const toolCalls = message.toolCalls ?? []
-
-  // 用户消息编辑:长按(mobile)/hover(desktop) 显示编辑按钮
-  // messageId 格式为 `m-${原始seq字符串}`,从中提取精确 seq(避免 Number 精度丢失)
-  const userMsgSeq = message.role === 'user' && message.messageId?.startsWith('m-')
-    ? message.messageId.slice(2)
-    : null
-  const canEditUserMsg = userMsgSeq != null && Boolean(editCtx.onEditUserMessage)
-  const { bubbleClassName, touchHandlers } = useLongPressReveal(canEditUserMsg)
 
   const renderRich = message.role === 'assistant' || message.role === 'system'
   const isAgentSystemPrompt = message.role === 'system' && message.metadata?.source === 'agent_system_prompt'
@@ -132,38 +123,24 @@ export default function AgentMessageThread({
 
   if (message.role === 'user') {
     const replaySegments = buildUserMessageReplaySegments(message)
-    const isEditing = canEditUserMsg && editCtx.editingUserSeq === userMsgSeq
+    // 用户消息动作（扩展点 ui.user_message_actions，如编辑重发按钮）：
+    // messageId 格式为 `m-${原始seq字符串}`,从中提取精确 seq(避免 Number 精度丢失)。
+    const userMsgSeq = message.messageId?.startsWith('m-') ? message.messageId.slice(2) : null
+    const userMessageActions = userMsgSeq != null ? pluginDispatcher.listRegisteredUserMessageActions() : []
     return (
-      <div className={`nagent-msg nagent-msg--user${continuationClass}${canEditUserMsg ? ' nagent-msg--user-editable' : ''}`}>
+      <div className={`nagent-msg nagent-msg--user${continuationClass}`}>
         <div className="nagent-msg__body nagent-msg__body--user">
-          {canEditUserMsg ? (
-            <button
-              type="button"
-              className={`nagent-msg__edit-btn${isEditing ? ' nagent-msg__edit-btn--active' : ''}`}
-              title={isEditing ? '取消编辑' : '编辑并重新发送'}
-              aria-label={isEditing ? '取消编辑' : '编辑并重新发送'}
-              onClick={(e) => {
-                e.stopPropagation()
-                if (isEditing) {
-                  editCtx.onCancelEditUserMessage()
-                } else {
-                  editCtx.onEditUserMessage(
-                    userMsgSeq!,
-                    message.content ?? '',
-                    message.rawContent,
-                  )
-                }
-              }}
-            >
-              {isEditing ? <CancelEditIcon size={13} /> : <EditIcon size={13} />}
-              {!isEditing && (
-                <span className="nagent-msg__edit-tooltip">重新发送会删除此消息之后的所有 AI 回复和过程内容</span>
-              )}
-            </button>
-          ) : null}
+          {userMessageActions.map((action) => (
+            <action.Component
+              key={action.id}
+              taskId={taskId}
+              seq={userMsgSeq!}
+              content={message.content ?? ''}
+              rawContent={message.rawContent}
+            />
+          ))}
           <CollapsibleUserBubble
-            className={bubbleClassName}
-            touchHandlers={touchHandlers}
+            className="nagent-msg__bubble nagent-msg__bubble--user"
             segments={replaySegments}
           />
         </div>
@@ -332,15 +309,12 @@ const USER_BUBBLE_COLLAPSE_HEIGHT = 220
 /**
  * 用户消息气泡：内容超过最大高度时折叠（隐藏溢出部分 + 底部渐变遮罩），
  * 并显示居中的展开/收起按钮；气泡内不出现滚动条。
- * 保留外层传入的长按/触摸 handlers（移动端长按显示编辑按钮）。
  */
 function CollapsibleUserBubble({
   className,
-  touchHandlers,
   segments,
 }: {
   className: string
-  touchHandlers: Record<string, unknown>
   segments: Array<{
     type: 'text' | 'token'
     value: string
@@ -368,7 +342,6 @@ function CollapsibleUserBubble({
   return (
     <div
       className={`${className}${collapsed ? ' nagent-msg__bubble--collapsed' : ''}`}
-      {...touchHandlers}
     >
       <div ref={contentRef} className="nagent-msg__bubble-content">
         <UserMessageReplay segments={segments} />
@@ -493,65 +466,3 @@ function SystemPromptBlock({
   )
 }
 
-/**
- * 长按显示编辑按钮(mobile)/hover 显示(desktop)。
- * 长按 500ms 后给气泡元素打 `--revealed` class 显示编辑按钮。
- * 触摸移动超过阈值取消长按(避免滚动误触发)。
- * 返回 {bubbleClassName, touchHandlers}。
- */
-function useLongPressReveal(enabled: boolean) {
-  const timerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
-  const [revealed, setRevealed] = React.useState(false)
-
-  const start = React.useCallback(() => {
-    if (!enabled) return
-    timerRef.current = setTimeout(() => setRevealed(true), 500)
-  }, [enabled])
-  const clear = React.useCallback(() => {
-    if (timerRef.current) {
-      clearTimeout(timerRef.current)
-      timerRef.current = null
-    }
-  }, [])
-
-  React.useEffect(() => () => clear(), [clear])
-
-  const touchHandlers = enabled ? {
-    onTouchStart: start,
-    onTouchEnd: clear,
-    onTouchMove: clear,
-    onContextMenu: (e: React.MouseEvent) => { e.preventDefault() },
-  } : {}
-
-  const bubbleClassName = `nagent-msg__bubble nagent-msg__bubble--user${revealed ? ' nagent-msg__bubble--revealed' : ''}`
-
-  return { bubbleClassName, touchHandlers }
-}
-
-/** 编辑图标(铅笔形 SVG)。 */
-function EditIcon({ size = 14 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" aria-hidden="true">
-      <path
-        d="M11.5 2.5l2 2L5.5 12.5l-2.5.5.5-2.5L11.5 2.5z"
-        stroke="currentColor"
-        strokeWidth="1.2"
-        strokeLinejoin="round"
-      />
-    </svg>
-  )
-}
-
-/** 取消编辑图标(叉形 SVG)。 */
-function CancelEditIcon({ size = 14 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" aria-hidden="true">
-      <path
-        d="M4 4l8 8M12 4l-8 8"
-        stroke="currentColor"
-        strokeWidth="1.4"
-        strokeLinecap="round"
-      />
-    </svg>
-  )
-}

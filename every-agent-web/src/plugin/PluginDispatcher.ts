@@ -21,6 +21,8 @@ import type {
   UiComposerAbovePanelDefinition,
   ToolCallViewDefinition,
   TaskFileMoreAction,
+  UiUserMessageActionDefinition,
+  TaskRunSubmitContributionProvider,
 } from './types'
 import type { FileContentEditorDescriptor } from '@/components/files/file-tab-types'
 import { registerTraceType as registerToTraceRegistry } from './traceTypeRegistry'
@@ -35,6 +37,10 @@ const composerFooterControls: UiComposerFooterControlDefinition[] = []
 const composerAbovePanels: UiComposerAbovePanelDefinition[] = []
 const toolCallViews: ToolCallViewDefinition[] = []
 const taskFileMoreActions: TaskFileMoreAction[] = []
+/** 用户消息动作（如编辑重发按钮）。 */
+const userMessageActions: UiUserMessageActionDefinition[] = []
+/** task.run 提交贡献 provider（如编辑重发的 editSeq metadata）。 */
+const taskRunSubmitContributionProviders: TaskRunSubmitContributionProvider[] = []
 const traceTypes: TraceTypeDefinition[] = []
 const outputBlocks = new Map<string, OutputBlockHandler>()
 /** 插件注册的文件内容编辑器（如 PDF 插件）。 */
@@ -86,6 +92,14 @@ export interface RealPluginDispatcher {
   registerToolCallView: (def: ToolCallViewDefinition) => Disposable
   /** 注册任务文件更多操作。 */
   registerTaskFileMoreAction: (action: TaskFileMoreAction) => Disposable
+  /** 注册用户消息动作。 */
+  registerUserMessageAction: (def: UiUserMessageActionDefinition) => Disposable
+  /** 同步获取插件注册的用户消息动作列表（供消息线程渲染合并）。 */
+  listRegisteredUserMessageActions: () => UiUserMessageActionDefinition[]
+  /** 注册 task.run 提交贡献 provider。 */
+  registerTaskRunSubmitContributionProvider: (provider: TaskRunSubmitContributionProvider) => Disposable
+  /** 同步获取已注册的 task.run 提交贡献 provider 列表（供提交流程收集）。 */
+  listRegisteredTaskRunSubmitContributionProviders: () => TaskRunSubmitContributionProvider[]
   /** 注册 trace 类型。 */
   registerTraceType: (def: TraceTypeDefinition) => Disposable
   /** 注册输出块渲染。 */
@@ -122,6 +136,10 @@ export const pluginDispatcher: RealPluginDispatcher = {
         return toolCallViews as unknown as T[]
       case 'ui.task_file_more_actions':
         return taskFileMoreActions as T[]
+      case 'ui.user_message_actions':
+        return userMessageActions as unknown as T[]
+      case 'task.submit_contributions':
+        return taskRunSubmitContributionProviders as unknown as T[]
       case 'ui.file_content_editors':
         return fileContentEditors as T[]
       case 'ui.file_explorer_actions':
@@ -180,6 +198,20 @@ export const pluginDispatcher: RealPluginDispatcher = {
   registerTaskFileMoreAction(action) {
     taskFileMoreActions.push(action)
     return makeDisposable(taskFileMoreActions, action)
+  },
+  registerUserMessageAction(def) {
+    userMessageActions.push(def)
+    return makeDisposable(userMessageActions, def)
+  },
+  listRegisteredUserMessageActions() {
+    return [...userMessageActions]
+  },
+  registerTaskRunSubmitContributionProvider(provider) {
+    taskRunSubmitContributionProviders.push(provider)
+    return makeDisposable(taskRunSubmitContributionProviders, provider)
+  },
+  listRegisteredTaskRunSubmitContributionProviders() {
+    return [...taskRunSubmitContributionProviders]
   },
   registerTraceType(def) {
     traceTypes.push(def)

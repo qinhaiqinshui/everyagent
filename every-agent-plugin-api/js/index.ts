@@ -362,6 +362,68 @@ export interface UiComposerAbovePanelDefinition {
   Component: ComponentType<ComposerPanelCtx>
 }
 
+// ─── 用户消息动作 / 提交贡献 ─────────────────────────────────────────────
+
+/** 用户消息动作按钮的 props（由核心在渲染用户消息时传入）。 */
+export interface UserMessageActionProps {
+  /** 当前任务 ID。 */
+  taskId?: string
+  /** 用户消息 seq（字符串雪花 ID，从 messageId `m-<seq>` 提取）。 */
+  seq: string
+  /** 消息纯文本内容。 */
+  content: string
+  /** 原始内容（含 opaque token 串）。 */
+  rawContent?: string
+}
+
+/**
+ * 用户消息动作定义（由 `ui.user_message_actions` 扩展点产出）。
+ *
+ * 核心在每条用户消息气泡旁渲染所有已注册的动作组件（如编辑重发按钮），
+ * 不感知动作业务语义。
+ */
+export interface UiUserMessageActionDefinition {
+  /** 全局唯一动作 id。 */
+  id: string
+  /** 渲染动作按钮的组件。 */
+  Component: ComponentType<UserMessageActionProps>
+}
+
+/**
+ * task.run 提交贡献（由 `task.submit_contributions` 扩展点产出）。
+ *
+ * 插件在提交前向 task.run 追加 metadata（核心透传不解释），
+ * 并可覆盖提交按钮的展示（如编辑重发的「重新发送」）。
+ */
+export interface TaskRunSubmitContribution {
+  /** 追加到 task.run 的 metadata（如 { editSeq }）。 */
+  metadata?: Record<string, unknown>
+  /** 覆盖提交按钮文案（如「重新发送」）。 */
+  submitLabel?: string
+  /** 提交中按钮文案（如「重新发送中...」）。 */
+  submittingLabel?: string
+  /** 提交按钮使用 danger 样式。 */
+  submitDanger?: boolean
+}
+
+/**
+ * task.run 提交贡献 provider。
+ *
+ * 核心在提交前调用 `getContribution` 收集贡献（提交时实时读取），
+ * 提交成功后回调 `onSubmitted`；`subscribe` 用于贡献变化时通知核心重渲染
+ * （如进入/退出编辑模式影响提交按钮文案）。
+ */
+export interface TaskRunSubmitContributionProvider {
+  /** 全局唯一 provider id。 */
+  id: string
+  /** 提交前取贡献；返回 null 表示无贡献。 */
+  getContribution: (taskId: string) => TaskRunSubmitContribution | null
+  /** 贡献变化时通知核心重渲染；返回取消订阅函数。 */
+  subscribe: (listener: () => void) => () => void
+  /** 提交成功后回调（插件清理自身状态，如清除编辑目标）。 */
+  onSubmitted?: (taskId: string) => void
+}
+
 // ─── Trace 类型 ──────────────────────────────────────────────────────────
 
 /** trace 详情渲染上下文。 */
@@ -505,6 +567,8 @@ export interface UiRegistry {
   registerComposerAbovePanel(def: UiComposerAbovePanelDefinition): Disposable
   registerToolCallView(def: ToolCallViewDefinition): Disposable
   registerTaskFileMoreAction(action: TaskFileMoreAction): Disposable
+  registerUserMessageAction(def: UiUserMessageActionDefinition): Disposable
+  registerTaskRunSubmitContributionProvider(provider: TaskRunSubmitContributionProvider): Disposable
   registerTraceType(def: TraceTypeDefinition): Disposable
   registerOutputBlock(tag: string, handler: OutputBlockHandler): Disposable
   registerFileContentEditor(def: PluginFileContentEditorDescriptor): Disposable

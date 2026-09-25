@@ -1,6 +1,11 @@
 import React from 'react'
 
-/** 用户消息编辑上下文:跨组件层级传递编辑状态与回调,避免 prop drilling。 */
+/**
+ * 用户消息编辑上下文（从 every-agent-web 核心迁入 task-edit-resend 插件）。
+ *
+ * 缺省值为 null：宿主（旧挂载方式）显式提供时优先于插件自身的 store 实现；
+ * 未提供时插件组件回退到 useEditResend 的模块级 store。
+ */
 export interface UserMessageEditContextValue {
   /** 当前正在编辑的消息 seq(字符串);为 null 表示未进入编辑模式。 */
   editingUserSeq: string | null
@@ -10,10 +15,4 @@ export interface UserMessageEditContextValue {
   onCancelEditUserMessage: () => void
 }
 
-const defaultValue: UserMessageEditContextValue = {
-  editingUserSeq: null,
-  onEditUserMessage: () => {},
-  onCancelEditUserMessage: () => {},
-}
-
-export const UserMessageEditContext = React.createContext<UserMessageEditContextValue>(defaultValue)
+export const UserMessageEditContext = React.createContext<UserMessageEditContextValue | null>(null)

@@ -2,7 +2,7 @@
   "id": "task-edit-resend",
   "name": "编辑重发",
   "version": "0.1.0",
-  "description": "编辑重发：edit.resend 节点（395.5）从 ctx.metadata 取 editSeq，截断磁盘/内存/会话后放行 consume.input（插件缺失时 395→396 直连，不截断）",
+  "description": "编辑重发：edit.resend 节点（395.5）从 ctx.metadata 取 editSeq，截断磁盘/内存/会话后放行 consume.input（插件缺失时 395→396 直连，不截断）；前端用户消息编辑按钮 + metadata.editSeq 提交贡献",
   "author": "everyagent",
   "entry": "dev.everyagent.plugin.editresend.TaskEditResendPlugin"
 }
