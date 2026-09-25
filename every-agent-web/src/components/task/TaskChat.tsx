@@ -38,6 +38,7 @@ import { parseTaskScopeTokens, upsertTaskToken, removeTaskToken, applyTaskToken,
 import { slashCommandRegistry } from '@/slash/slashCommandRegistry'
 import { createSnowflakeId } from '@/utils/snowflakeId'
 import { taskQueryService } from '@/query/taskQueryService'
+import { isTaskActive } from '@/task/taskStatusPresentation'
 import type { TaskThreadItem } from '@/task/eventFolder'
 import { taskStore } from '@/hub/taskStore'
 import { taskStreamManager, type TaskStreamHandle } from '@/hub/taskStream'
@@ -390,22 +391,23 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
   // 主 agent 稳定 Id(taskStore 透传 worker TaskSummary.mainAgentId):agent 列表首项标识、
   // 归一线程内主 agent 消息的映射键(线程内主 agent 消息 agentId 为空串,见 agents 派生)。
   const mainAgentId = entry?.mainAgentId ?? ''
-  // 当前任务是否处于运行中：决定右下角按钮是「停止」还是「发送」（两者合并为同一按钮位）。
+  // 当前任务是否处于活动态(running/waiting-user)：决定右下角按钮是「停止」还是「发送」（两者合并为同一按钮位）。
   // 终态任务直接发送即可继续对话(worker 冷启动再运行,状态自动翻回 running)。
-  const isTaskRunning = status === 'running'
+  const isTaskRunning = isTaskActive(status)
 
   // ── 单一真相源消息区 ────────────────────────────────────────────────
   // 线程渲染数据只来自 useTaskStream 返回的 items(store.state.items 实时快照),
   // 已闭合轮的合成 user/final、未闭合尾轮尾段事件、worker 定向推送的流式事件
   // 全部由 taskStream 折入同一份 items 并按 seq 去重排序。
 
-  // 续跑校准:任务状态从非 running 翻回 running(发送续跑 / 他端续跑)时——
+  // 续跑校准:任务状态从非活动态翻回活动态(发送续跑 / 他端续跑)时——
   // 实时信号链重开(stream.resync:重拉 rounds + 重新订阅推送,续喂
   // agentStates/usage/ask 等状态信号,并按 live 续轮询)。消息区只消费
   // useTaskStream 返回的 items 单一真相源,resync 会让 store 重新建齐 items。
+  // running ⇄ waiting-user 属于活动态内部翻转(ask 挂起/回答),不触发 resync。
   const prevStatusRef = React.useRef(status)
   React.useEffect(() => {
-    if (prevStatusRef.current !== 'running' && status === 'running') {
+    if (!isTaskActive(prevStatusRef.current) && isTaskActive(status)) {
       void stream?.resync().catch(() => {
         // 校准失败不打断界面:后续事件驱动刷新会自然收敛。
       })

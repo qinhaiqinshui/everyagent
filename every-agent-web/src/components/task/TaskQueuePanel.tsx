@@ -11,6 +11,7 @@
 import React from 'react'
 import { taskStore } from '@/hub/taskStore'
 import { taskQueryService } from '@/query/taskQueryService'
+import { isTaskActive } from '@/task/taskStatusPresentation'
 import './TaskQueuePanel.css'
 
 export default function TaskQueuePanel({
@@ -25,7 +26,10 @@ export default function TaskQueuePanel({
   )
   // 是否运行中:仅运行中任务可「插入到当前对话」(worker 侧只对热任务生效,终态随队列悬空)。
   const [running, setRunning] = React.useState<boolean>(
-    () => (taskId ? taskStore.get(taskId)?.status === 'running' : false),
+    () => {
+      const s = taskId ? taskStore.get(taskId)?.status : undefined
+      return s ? isTaskActive(s) : false
+    },
   )
   // 操作进行中:禁用全部按钮防止连点(worker 侧 RPC 完成前队列索引未刷新)。
   const [busy, setBusy] = React.useState(false)
@@ -36,7 +40,7 @@ export default function TaskQueuePanel({
     const update = () => {
       const entry = taskStore.get(taskId)
       setItems(entry?.pendingInputs ?? [])
-      setRunning(entry?.status === 'running')
+      setRunning(entry ? isTaskActive(entry.status) : false)
     }
     update()
     return taskStore.subscribe(update)

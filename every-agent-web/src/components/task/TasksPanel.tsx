@@ -1,5 +1,6 @@
 import React from 'react'
 import { taskQueryService, type TaskListItemSnapshot } from '@/query/taskQueryService'
+import { isTaskActive } from '@/task/taskStatusPresentation'
 import SidebarScrollArea from '@/components/shared/SidebarScrollArea'
 import { getDefaultRuntimeService } from '@/task'
 import { taskStore } from '@/hub/taskStore'
@@ -184,7 +185,7 @@ export default function TasksPanel({
   React.useEffect(() => {
     setSelectedTaskIds((current) => current.filter((taskId) => {
       const task = tasks.find((item) => item.taskId === taskId)
-      return Boolean(task && task.status !== 'running')
+      return Boolean(task && !isTaskActive(task.status))
     }))
   }, [tasks])
 
@@ -257,7 +258,7 @@ export default function TasksPanel({
 
   /** 当前批删组内可删除（非 running）的任务。 */
   const batchGroupSelectableTasks = React.useMemo(
-    () => batchGroup?.tasks.filter((task) => task.status !== 'running') ?? [],
+    () => batchGroup?.tasks.filter((task) => !isTaskActive(task.status)) ?? [],
     [batchGroup],
   )
 
@@ -290,7 +291,7 @@ export default function TasksPanel({
   }, [batchGroupSelectableTasks])
 
   const handleToggleTask = React.useCallback((task: TaskListItemSnapshot) => {
-    if (task.status === 'running') {
+    if (isTaskActive(task.status)) {
       return
     }
     setSelectedTaskIds((current) => (
@@ -438,15 +439,15 @@ export default function TasksPanel({
           <label
             style={{
               ...taskCheckboxLabelStyle,
-              ...(task.status === 'running' ? disabledCheckboxLabelStyle : null),
+              ...(isTaskActive(task.status) ? disabledCheckboxLabelStyle : null),
             }}
           >
             <Checkbox
               checked={selectedTaskIds.includes(task.taskId)}
-              disabled={task.status === 'running' || deleting}
+              disabled={isTaskActive(task.status) || deleting}
               onChange={() => handleToggleTask(task)}
             />
-            <span>{task.status === 'running' ? '进行中不可删除' : '选择删除'}</span>
+            <span>{isTaskActive(task.status) ? '进行中不可删除' : '选择删除'}</span>
           </label>
           <Button
             variant="ghost"
@@ -475,7 +476,7 @@ export default function TasksPanel({
                   key: 'delete',
                   label: '删除',
                   danger: true,
-                  disabled: task.status === 'running' || deleting,
+                  disabled: isTaskActive(task.status) || deleting,
                   onSelect: () => setSingleDeleteTarget(task),
                 },
               ]}
@@ -507,13 +508,15 @@ export default function TasksPanel({
             ...statusPillStyle,
             ...(task.statusTone === 'active'
               ? activeStatusPillStyle
-              : task.statusTone === 'completed'
-                ? completedStatusPillStyle
-                : task.statusTone === 'stopped'
-                ? stoppedStatusPillStyle
-                : task.statusTone === 'error'
-                ? errorStatusPillStyle
-                : idleStatusPillStyle),
+              : task.statusTone === 'waiting'
+                ? waitingStatusPillStyle
+                : task.statusTone === 'completed'
+                  ? completedStatusPillStyle
+                  : task.statusTone === 'stopped'
+                    ? stoppedStatusPillStyle
+                    : task.statusTone === 'error'
+                      ? errorStatusPillStyle
+                      : idleStatusPillStyle),
           }}
         >
           {task.statusLabel}
@@ -660,7 +663,7 @@ export default function TasksPanel({
                           key: 'batch-delete',
                           label: '批量删除',
                           danger: true,
-                          disabled: group.tasks.every((task) => task.status === 'running')
+                          disabled: group.tasks.every((task) => isTaskActive(task.status))
                             || deleting
                             || batchGroupKey !== null,
                           onSelect: () => {
@@ -969,6 +972,10 @@ const statusPillStyle: React.CSSProperties = {
 
 const activeStatusPillStyle: React.CSSProperties = {
   color: 'var(--accent-blue)',
+}
+
+const waitingStatusPillStyle: React.CSSProperties = {
+  color: 'var(--accent-amber)',
 }
 
 const idleStatusPillStyle: React.CSSProperties = {

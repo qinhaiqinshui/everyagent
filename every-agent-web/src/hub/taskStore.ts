@@ -9,7 +9,7 @@
  * 前端缓存会造成多端视图漂移;断线时列表为空,重连即校准。
  *
  * worker 状态(created/running/waiting-user/done/failed/cancelled)在这里映射为
- * n 前端的 TaskStatus(idle/running/completed/stopped/error),UI 层不再感知 worker 枚举。
+ * n 前端的 TaskStatus(idle/running/waiting-user/completed/stopped/error),UI 层不再感知 worker 枚举。
  */
 import type { ContextMonitorSnapshot, TaskStatus } from '@/types'
 import { hubSession } from './session'
@@ -93,9 +93,10 @@ export function mapWorkerStatus(raw: string | undefined): TaskStatus {
     case 'created':
       return 'idle'
     case 'running':
-    case 'waiting-user':
     case 'cancelling':
       return 'running'
+    case 'waiting-user':
+      return 'waiting-user'
     case 'done':
       return 'completed'
     case 'failed':

@@ -80,6 +80,8 @@ function statusLabel(status: string): string {
       return '完成'
     case 'running':
       return '运行中'
+    case 'waiting-user':
+      return '等待用户'
     case 'failed':
       return '失败'
     case 'cancelled':

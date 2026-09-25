@@ -137,7 +137,7 @@ export type ThemeMode = 'dark' | 'light'
 // ─── 任务运行状态类型 ─────────────────────────────────────────────────────────
 
 /** 任务状态。 */
-export type TaskStatus = 'idle' | 'running' | 'completed' | 'stopped' | 'error'
+export type TaskStatus = 'idle' | 'running' | 'waiting-user' | 'completed' | 'stopped' | 'error'
 
 /** 文件差异展示数据。 */
 export interface TaskFileChange {
