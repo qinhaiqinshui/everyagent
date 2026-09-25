@@ -21,9 +21,15 @@ import dev.everyagent.worker.slash.SlashTokenEncoder;
 import dev.everyagent.worker.plugin.registry.TaskAdmissionPolicyRegistry;
 import dev.everyagent.worker.plugin.registry.TaskInputInterceptorRegistry;
 import dev.everyagent.worker.plugin.registry.TaskLifecycleRegistry;
+import dev.everyagent.worker.task.lifecycle.IdempotencyCheckNode;
+import dev.everyagent.worker.task.lifecycle.ResponseAckNode;
+import dev.everyagent.worker.task.lifecycle.TaskEntryCreateNode;
+import dev.everyagent.worker.task.lifecycle.TaskIdGenerateNode;
 import dev.everyagent.worker.task.lifecycle.TaskLifecycleContextFactory;
 import dev.everyagent.worker.task.lifecycle.TaskLifecycleContextImpl;
 import dev.everyagent.worker.task.lifecycle.TaskLifecycleExecutor;
+import dev.everyagent.worker.task.lifecycle.ThreadSubmitNode;
+import dev.everyagent.worker.task.lifecycle.WorkspaceResolveNode;
 import dev.everyagent.plugin.api.task.AdmissionResult;
 import dev.everyagent.plugin.api.task.TaskKernel;
 import dev.everyagent.plugin.api.task.TaskOutcome;
@@ -106,7 +112,8 @@ public class TaskManager implements TaskInputHandler, PendingAsks.StatusHook {
     private final java.util.concurrent.CopyOnWriteArrayList<TaskResumeListener> resumeListeners =
             new java.util.concurrent.CopyOnWriteArrayList<>();
 
-    private record IdemEntry(String taskId, long ts) {
+    /** 幂等键条目（public 供 RPC 阶段节点引用）。 */
+    public record IdemEntry(String taskId, long ts) {
     }
 
     /** 任务被再运行(新 TaskEntry 已入表)时回调:定向推送器立即换挂新日志(§5.6 实时推送)。 */
@@ -146,6 +153,26 @@ public class TaskManager implements TaskInputHandler, PendingAsks.StatusHook {
         // 任务事件广播经 EventSink.fanout(见 eventSink 字段),本类不再挂 HubPool 监听。
         registerMethods(dispatcher);
         recoverFromDisk();
+        registerLifecycleNodes();
+    }
+
+    /**
+     * 注册 RPC 阶段生命周期节点（order 10~80）。
+     * 这些节点需要 TaskManager 的内部 Map/Counter 引用，故在此注册而非 BuiltInTaskLifecycleNodes。
+     */
+    private void registerLifecycleNodes() {
+        lifecycleRegistry.register(
+                new IdempotencyCheckNode(idem, tasks), "worker");
+        lifecycleRegistry.register(
+                new WorkspaceResolveNode(taskBootstrap), "worker");
+        lifecycleRegistry.register(
+                new TaskIdGenerateNode(tasks, diskTasks, store), "worker");
+        lifecycleRegistry.register(
+                new TaskEntryCreateNode(taskBootstrap, props, tasks, diskTasks, active, store, idem, admissionPolicyRegistry), "worker");
+        lifecycleRegistry.register(
+                new ResponseAckNode(eventSink), "worker");
+        lifecycleRegistry.register(
+                new ThreadSubmitNode(vt, agentFactory, tasks, diskTasks, active, store, resumeListeners), "worker");
     }
 
     /**
@@ -876,140 +903,72 @@ public class TaskManager implements TaskInputHandler, PendingAsks.StatusHook {
         throw new IllegalStateException("无法生成唯一 taskId(连续 " + MAX_TASKID_ATTEMPTS + " 次冲突)");
     }
 
-    /** task.run:创建/续跑合一——无 taskId=新建(workspace 必填),有 taskId=运行中入队/终态冷启动续跑。 */
+    /**
+     * task.run:创建/续跑合一——无 taskId=新建(workspace 必填),有 taskId=运行中入队/终态冷启动续跑。
+     * RPC 线程启动洋葱链（order 10~80），ThreadSubmitNode 切换到虚拟线程执行后续节点。
+     */
     private void rpcTaskRun(RpcContext ctx) {
         String input = ctx.strParam("input");
         String rawContent = ctx.optStrParam("rawContent", null);
         String existingId = ctx.optStrParam("taskId", "");
-        if (!existingId.isEmpty()) {
-            runExistingTask(ctx, existingId, input, rawContent);
-            return;
-        }
-        String title = ctx.optStrParam("title", null);
-        if (title == null || title.isEmpty()) {
-            title = input.length() > 40 ? input.substring(0, 40) + "…" : input;
-        }
-        String idemKey = ctx.optStrParam("idempotencyKey", null);
-        if (idemKey != null && !idemKey.isEmpty()) {
-            purgeStaleIdem();
-            IdemEntry e = idem.get(idemKey);
-            if (e != null && System.currentTimeMillis() - e.ts() < IDEM_WINDOW_MS && tasks.containsKey(e.taskId())) {
-                ctx.ok(Json.obj().put("taskId", e.taskId()).put("deduplicated", true));
-                return;
-            }
-        }
-        WorkspaceManager.Root root;
-        try {
-            root = taskBootstrap.resolveWorkspace(ctx.strParam("workspace")); // 注册 + 校验(必填)
-        } catch (java.io.IOException e) {
-            ctx.err(Rpc.ERR_INTERNAL, "工作区目录不可用: " + e.getMessage());
-            return;
-        }
-        // 稳定 workspaceId(注册后必在册;防御兜底回退默认 id,任务目录据此归类)。
-        String workspaceId = taskBootstrap.workspaceIdOf(root.path().toString());
-        String taskId = uniqueTaskId(workspaceId);
-        if (!admissionPolicyRegistry.isRegistered()) {
-            // 默认行为：无队列插件时保持硬拒绝
-            if (active.get() >= props.getLimits().getMaxConcurrentTasks()) {
-                ctx.err(Rpc.ERR_BUSY, "并发任务已达上限 " + props.getLimits().getMaxConcurrentTasks());
-                return;
-            }
-        } else {
-            // 队列插件已注册：准入策略 always-admit（排队在洋葱 QueueAdmissionNode 中处理）
-            AdmissionResult ar = admissionPolicyRegistry.get().check(taskId, props.getLimits().getMaxConcurrentTasks());
-            if (!ar.admitted()) {
-                ctx.err(Rpc.ERR_BUSY, ar.rejectReason());
-                return;
-            }
-        }
-        String mainAgentId = ShortIds.mainAgentId();
-        ResolvedConfig cfg = taskBootstrap.resolveConfig(ctx.optStrParam("configId", null));
-        TaskEntry t = new TaskEntry(taskId, title, cfg.snapshot(),
-                cfg.apiKey(), root.path().toString(), workspaceId, mainAgentId,
-                props.getLimits().getMaxEventsPerTask());
-        tasks.put(taskId, t);
-        // slash 任务级 token(task.run 可选入参 taskTokens):仅采纳合法 opaque(parseToken 非空);
-        // 非法条目记日志跳过,不阻塞任务创建。add 先于 store.track,确保首落盘 meta 含 slashTaskTokens。
-        JsonNode tt = ctx.params().path("taskTokens");
-        if (tt.isArray()) {
-            for (JsonNode e : tt) {
-                if (!e.isTextual()) {
-                    continue;
-                }
-                String opaque = e.asText();
-                if (SlashTokenEncoder.parseToken(opaque) != null) {
-                    t.addSlashTaskToken(opaque);
-                } else {
-                    log.warn("slash 任务 token 非法跳过 task={} token={}", taskId, opaque);
-                }
-            }
-        }
-        active.incrementAndGet();
-        if (idemKey != null && !idemKey.isEmpty()) {
-            idem.put(idemKey, new IdemEntry(taskId, System.currentTimeMillis()));
-        }
-        // store.track / wireUsageBroadcast / slash 建后回调已移入洋葱下行节点
-        // （PersistenceTrackNode order=100 / TaskWiresNode order=200 / SlashNotifyNode order=90），在任务线程开头执行。
-        eventSink.fanout(k -> Channels.tasks(k), Events.TASK_CREATED, null, t.runtimeSummaryJson(), null);
-        ctx.ok(Json.obj().put("taskId", taskId).put("status", t.status.wire()));
-        t.runFuture = vt.submit(() -> runTask(t, UserInput.of(input, rawContent), List.of()));
-    }
 
-    /**
-     * 有 taskId 的 task.run:运行中(waiting-user 含)→入队并广播队列快照;
-     * 内存终态/磁盘任务→认领后冷启动续跑(与 task.input 触发的再运行同一套认领纪律:
-     * diskTasks.remove 原子互斥、不存在→NOT_FOUND、绕并发上限)。
-     * 认领同步完成即应答,重活(载历史/运行)在虚拟线程。
-     */
-    private void runExistingTask(RpcContext ctx, String taskId, String input, String rawContent) {
-        TaskEntry t = tasks.get(taskId);
-        if (t != null) {
-            if (!t.status.terminal()) {
-                // task.run 续跑/入队时也检查 editSeq
-                String editSeq = ctx.optStrParam("editSeq", null);
-                if (editSeq != null && !editSeq.isEmpty() && t != null && !t.status.terminal()) {
-                    truncateForEdit(taskId, t, editSeq, input, rawContent);
+        // 读取 metadata（通用插件参数容器）
+        java.util.Map<String, Object> metadata;
+        JsonNode metaNode = ctx.params().path("metadata");
+        if (metaNode.isObject()) {
+            metadata = new java.util.HashMap<>();
+            metaNode.properties().forEach(e -> metadata.put(e.getKey(), e.getValue()));
+        } else {
+            metadata = java.util.Collections.emptyMap();
+        }
+
+        // 编辑重发前置处理（editSeq 逻辑暂保留在 rpcTaskRun）
+        if (!existingId.isEmpty()) {
+            String editSeq = ctx.optStrParam("editSeq", null);
+            if (editSeq != null && !editSeq.isEmpty()) {
+                // 运行中任务热路径截断
+                TaskEntry hot = tasks.get(existingId);
+                if (hot != null && !hot.status.terminal()) {
+                    truncateForEdit(existingId, hot, editSeq, input, rawContent);
+                } else {
+                    // 终态任务冷启动前截断：原子认领 → 截断 → 放回（让链节点认领）
+                    TaskStore.StoredTask st = diskTasks.remove(existingId);
+                    if (st != null) {
+                        try {
+                            truncateForColdEdit(existingId, st, editSeq, input, rawContent);
+                            diskTasks.putIfAbsent(existingId, st);
+                        } catch (Exception e) {
+                            log.error("编辑截断失败 task={}", existingId, e);
+                            diskTasks.putIfAbsent(existingId, st);
+                            ctx.err(Rpc.ERR_INTERNAL, "消息编辑失败: " + e.getMessage());
+                            return;
+                        }
+                    }
                 }
-                ctx.ok(Json.obj().put("taskId", taskId).put("status", t.status.wire()).put("queued", true));
-                return;
-            }
-            synchronized (t) {
-            } // 等 finish 驱逐(flush 后 tasks.remove;随后必在 diskTasks)
-        }
-        TaskStore.StoredTask st = diskTasks.remove(taskId); // 原子认领(与 delete/并发再运行互斥)
-        if (st == null) {
-            // 认领输家:并发再运行可能刚重建热任务,重查内存按运行中入队兜底
-            TaskEntry again = tasks.get(taskId);
-            if (again != null && !again.status.terminal()) {
-                ctx.ok(Json.obj().put("taskId", taskId).put("status", again.status.wire()).put("queued", true));
-                return;
-            }
-            ctx.err(Rpc.ERR_NOT_FOUND, "任务不存在");
-            return;
-        }
-        final TaskStore.StoredTask claimed = st;
-        // 编辑重发：终态任务冷启动前先截断清理
-        String editSeq = ctx.optStrParam("editSeq", null);
-        if (editSeq != null && !editSeq.isEmpty()) {
-            try {
-                truncateForColdEdit(taskId, claimed, editSeq, input, rawContent);
-            } catch (Exception e) {
-                log.error("编辑截断失败 task={}", taskId, e);
-                diskTasks.putIfAbsent(taskId, claimed);
-                ctx.err(Rpc.ERR_INTERNAL, "消息编辑失败: " + e.getMessage());
-                return;
             }
         }
-        vt.submit(() -> {
-            try {
-                startRerun(claimed, UserInput.of(input, rawContent), ctx.optStrParam("configId", null));
-            } catch (Throwable e) {
-                log.error("再运行失败 task={}: {}", taskId, RootCause.summary(e));
-                log.debug("再运行失败 task={} 完整堆栈", taskId, e);
-                diskTasks.putIfAbsent(taskId, claimed); // 放回索引,保留可重试
-            }
-        });
-        ctx.ok(Json.obj().put("taskId", taskId).put("status", "created"));
+
+        // 创建上下文（带 RPC 参数，无 TaskEntry）
+        TaskLifecycleContextImpl lifecycleCtx = lifecycleContextFactory.createForRpc(
+                input, rawContent, metadata, ctx);
+
+        // 有 taskId → 再运行路径
+        if (!existingId.isEmpty()) {
+            lifecycleCtx.taskId(existingId);
+        }
+
+        // 定义内核
+        TaskKernel kernel = taskKernel();
+
+        // 启动链
+        Object result = lifecycleExecutor.run(lifecycleRegistry.getNodes(), kernel, lifecycleCtx);
+
+        // 处理结果：非 null 且非 DONE → 检查是否已应答
+        if (result instanceof TaskOutcome to && to.status() != TaskOutcome.TaskEndStatus.DONE) {
+            // 链异常退出（非短路），ctx 可能未被回答
+            // ResponseAckNode 已在 RPC 线程 ok 过；VT 中异常由 ThreadSubmitNode catch
+            // 此分支仅在链同步段异常时到达
+        }
     }
 
     private void rpcTaskCancel(RpcContext ctx) {
@@ -1150,9 +1109,8 @@ public class TaskManager implements TaskInputHandler, PendingAsks.StatusHook {
     // ---- 终态任务再运行(冷启动;无"续跑"概念,对 agent 就是一次普通运行)----
 
     /**
-     * 轻认领在消息线程(原子),重活进虚拟线程:
-     * diskTasks.remove 认领(与 delete/并发 rerun 互斥,输家直接返回);
-     * 热终态任务先等 finish 驱逐完成(空 synchronized 块)再走冷路径。
+     * task.input 触发的再运行（无 RPC 应答）：运行中→交给拦截器；
+     * 终态→创建上下文启动洋葱链（同 rpcTaskRun 的再运行路径，但 rpcContext=null）。
      */
     private void rerunTask(HubLink conn, String taskId, String text, String rawContent, String editSeq) {
         TaskEntry hot = tasks.get(taskId);
@@ -1175,119 +1133,37 @@ public class TaskManager implements TaskInputHandler, PendingAsks.StatusHook {
                 return; // 已被并发 rerun 重建,交给它
             }
         }
-        TaskStore.StoredTask st = diskTasks.remove(taskId);
-        if (st == null) {
-            log.warn("再运行认领失败(任务不存在或已被并发操作): {}", taskId);
-            return;
-        }
-        // 编辑重发：冷启动前先截断清理
+        // 终态任务：编辑重发前置处理（原子认领 → 截断 → 放回让链节点认领）
         if (editSeq != null && !editSeq.isEmpty()) {
+            TaskStore.StoredTask st = diskTasks.remove(taskId);
+            if (st == null) {
+                log.warn("再运行认领失败(任务不存在或已被并发操作): {}", taskId);
+                return;
+            }
             try {
                 truncateForColdEdit(taskId, st, editSeq, text, rawContent);
+                diskTasks.putIfAbsent(taskId, st);
             } catch (Exception e) {
                 log.error("编辑截断失败 task={}", taskId, e);
                 diskTasks.putIfAbsent(taskId, st);
                 return;
             }
         }
-        vt.submit(() -> {
-            try {
-                startRerun(st, UserInput.of(text, rawContent), null);
-            } catch (Throwable e) {
-                log.error("再运行失败 task={}: {}", taskId, RootCause.summary(e));
-                log.debug("再运行失败 task={} 完整堆栈", taskId, e);
-                diskTasks.putIfAbsent(taskId, st); // 放回索引,保留可重试
-            }
-        });
+        // 创建上下文启动洋葱链（rpcContext=null：节点检查 instanceof RpcContext 时空转）
+        TaskLifecycleContextImpl lifecycleCtx = lifecycleContextFactory.createForRpc(
+                text, rawContent, null, null);
+        lifecycleCtx.taskId(taskId);
+        lifecycleExecutor.run(lifecycleRegistry.getNodes(), taskKernel(), lifecycleCtx);
     }
 
-    private void startRerun(TaskStore.StoredTask st, String text) throws java.io.IOException {
-        startRerun(st, UserInput.of(text), null);
-    }
+    // ---- 任务内核 ----
 
     /**
-     * 冷启动续跑(载入磁盘历史,一次普通运行)。
-     * @param overrideConfigId 输入箱切换模型时透传的 configId;为空则沿用任务最后运行的
-     *                         configId(配置已删回退默认),与历史续跑语义一致。
+     * 任务内核：agentService.run(main) 一次 → TaskOutcome。
+     * 异常翻译为 TaskOutcome（值对象），链上只传值。
      */
-    private void startRerun(TaskStore.StoredTask st, UserInput initialInput, String overrideConfigId) throws java.io.IOException {
-        JsonNode meta = st.summary();
-        String taskId = st.taskId();
-        String mainAgentId = meta.path("mainAgentId").asString("");
-        if (mainAgentId.isEmpty() || !Files.isDirectory(st.dir())) {
-            log.warn("任务不可再运行(旧格式或目录缺失): {}", taskId);
-            diskTasks.putIfAbsent(taskId, st);
-            return;
-        }
-        // 模型:输入箱切换时以 overrideConfigId 优先;否则沿用任务最后运行的 configId
-        // (配置已删回退默认)。override 非法时回退任务原始 configId,再不行回退默认
-        // (三级回退链已迁 TaskBootstrap.resolveRerunConfig,逐字保留)。
-        ResolvedConfig cfg = taskBootstrap.resolveRerunConfig(overrideConfigId,
-                meta.path("configId").asString(null));
-        // 稳定工作区 id:新 meta 直读;旧 meta 无该字段时按 workspace 反查注册表,仍无回退默认
-        // (反查+兜底已迁 TaskBootstrap.workspaceIdOf)。
-        String workspaceId = meta.path("workspaceId").asString(null);
-        if (workspaceId == null || workspaceId.isEmpty()) {
-            workspaceId = taskBootstrap.workspaceIdOf(meta.path("workspace").asString(""));
-        }
-        TaskEntry t = new TaskEntry(taskId,
-                meta.path("title").asString("继续对话"), cfg.snapshot(), cfg.apiKey(),
-                meta.path("workspace").asString(null), workspaceId, mainAgentId,
-                props.getLimits().getMaxEventsPerTask());
-        // 再运行状态恢复(createdAt/taskFlags/开关/usage/slashTaskTokens/log.seed)、悬空队列恢复、
-        // slash 建后回调、模型切换 trace 均已入洋葱下行节点
-        // （RerunRestoreNode order=50 / SlashNotifyNode order=90 /
-        //   ModelSwitchTraceNode order=310），在任务线程开头执行。
-        if (tasks.putIfAbsent(taskId, t) != null) {
-            diskTasks.putIfAbsent(taskId, st);
-            return; // 并发兜底(不应发生:认领已互斥)
-        }
-        // 再运行通知:唤醒该任务的定向推送器立即对账换挂新日志——纯 1s 对账在极快续跑
-        // (两次对账间完成并驱逐)时会漏推整轮,即「终态任务再运行后前端看不到新输出」的根因。
-        for (TaskResumeListener l : resumeListeners) {
-            try {
-                l.onTaskResumed(taskId);
-            } catch (RuntimeException e) {
-                log.debug("再运行通知失败 task={}", taskId, e);
-            }
-        }
-        // 再运行启动:实时增量由上方通知唤醒的定向推送器换挂推送,历史/补齐由前端拉取
-        int now = active.incrementAndGet(); // 再运行放行不查上限(用户单发驱动);越限记日志
-        if (now > props.getLimits().getMaxConcurrentTasks()) {
-            log.warn("并发任务越限(再运行放行): {} / {}", now, props.getLimits().getMaxConcurrentTasks());
-        }
-        List<Message> prior = ConversationLoader.load(store, st.dir(), mainAgentId); // 冷启动:磁盘重建上下文
-        // track 前读盘取 seq 水位（track 挂监听后 readSince 会经 sink 追平，续号须读纯磁盘水位）
-        long seqLast = store.seqLastOf(st.dir());
-        t.runFuture = vt.submit(() -> {
-            TaskLifecycleContextImpl ctx = lifecycleContextFactory.create(t);
-            ctx.rerunMeta(meta);
-            ctx.overrideConfigId(overrideConfigId);
-            ctx.rerunSeqLast(seqLast);
-            runTask(t, initialInput, prior, ctx);
-        });
-    }
-
-    // ---- 任务主流程 ----
-
-    private void runTask(TaskEntry t, UserInput initialInput, List<Message> priorConversation) {
-        TaskLifecycleContextImpl ctx = lifecycleContextFactory.create(t);
-        runTask(t, initialInput, priorConversation, ctx);
-    }
-
-    private void runTask(TaskEntry t, UserInput initialInput, List<Message> priorConversation,
-            TaskLifecycleContextImpl ctx) {
-        log.debug("[run] runTask 开始 taskId={} thread={} interruptFlag={}",
-                t.taskId, Thread.currentThread().getName(), Thread.currentThread().isInterrupted());
-
-        ctx.initialInput(initialInput);
-        ctx.priorConversation(priorConversation);
-        ctx.mainAgentBuilder(prior -> agentFactory.buildMainAgent(t, prior));
-        ctx.concurrencyReleaser(() -> active.decrementAndGet());
-        ctx.diskIndexer(st -> diskTasks.put(st.taskId(), st));
-        ctx.registryRemover(() -> tasks.remove(t.taskId, t));
-
-        TaskKernel kernel = c -> {
+    private TaskKernel taskKernel() {
+        return c -> {
             try {
                 TaskEntry te = ((TaskLifecycleContextImpl) c).taskEntry();
                 AgentEntity main = te.main;
@@ -1303,20 +1179,18 @@ public class TaskManager implements TaskInputHandler, PendingAsks.StatusHook {
                 return new TaskOutcome(TaskOutcome.TaskEndStatus.DONE, null,
                         startedAt, System.currentTimeMillis());
             } catch (InterruptedException e) {
-                log.debug("[cancel] 内核捕获 InterruptedException → CANCELLED taskId={} thread={}",
-                        t.taskId, Thread.currentThread().getName());
+                log.debug("[cancel] 内核捕获 InterruptedException → CANCELLED thread={}",
+                        Thread.currentThread().getName());
                 Thread.currentThread().interrupt();
                 return TaskOutcome.cancelled();
             } catch (EventLog.LogOverflowException loe) {
                 return TaskOutcome.failed("LOG_OVERFLOW: " + loe.getMessage());
             } catch (Throwable e) {
-                log.error("任务 {} 失败: {}", t.taskId, RootCause.summary(e));
-                log.debug("任务 {} 失败完整堆栈", t.taskId, e);
+                log.error("任务失败: {}", RootCause.summary(e));
+                log.debug("任务失败完整堆栈", e);
                 return TaskOutcome.failed(RootCause.summary(e));
             }
         };
-
-        lifecycleExecutor.run(lifecycleRegistry.getNodes(), kernel, ctx);
     }
 
     // consumeInput 已迁 TaskLifecycleContextImpl(授权门 beginRun/开轮/入会话内存随任务上下文走)。

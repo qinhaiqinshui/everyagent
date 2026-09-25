@@ -19,7 +19,7 @@ public final class RerunRestoreNode implements TaskLifecycleNode {
     public String id() { return "rerun.restore"; }
 
     @Override
-    public float order() { return 50; }
+    public float order() { return 55; }
 
     @Override
     public Object invoke(TaskLifecycleContext ctx, TaskChain next) throws Exception {

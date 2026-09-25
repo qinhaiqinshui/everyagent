@@ -25,7 +25,12 @@ import java.util.function.Function;
  */
 public class TaskLifecycleContextImpl implements TaskLifecycleContext {
 
-    private final TaskEntry taskEntry;
+    private TaskEntry taskEntry;
+    /** RPC 阶段可变字段（taskEntry 尚未创建时由节点逐字段填充）。 */
+    private String taskId;
+    private String workspaceRoot;
+    private String workspaceId;
+    private String title;
     /** 任务级协作者（consumeInput 从 TaskManager 迁入，授权门/轮索引/存储随任务上下文走）。 */
     private final PermissionGate gate;
     private final RoundIndexStore roundIndexStore;
@@ -75,6 +80,11 @@ public class TaskLifecycleContextImpl implements TaskLifecycleContext {
     public void rawContent(String rawContent) { this.rawContent = rawContent; }
     public void metadata(java.util.Map<String, Object> metadata) { this.metadata = metadata; }
     public void rpcContext(Object rpcContext) { this.rpcContext = rpcContext; }
+    public void taskId(String v) { this.taskId = v; }
+    public void workspaceRoot(String v) { this.workspaceRoot = v; }
+    public void workspaceId(String v) { this.workspaceId = v; }
+    public void title(String v) { this.title = v; }
+    public void taskEntry(TaskEntry t) { this.taskEntry = t; }
 
     // ---- 访问器（节点用，worker 模块内部）----
 
@@ -115,10 +125,10 @@ public class TaskLifecycleContextImpl implements TaskLifecycleContext {
 
     // ---- TaskLifecycleContext 接口实现 ----
 
-    @Override public String taskId() { return taskEntry.taskId; }
-    @Override public String title() { return taskEntry.title; }
-    @Override public String workspaceRoot() { return taskEntry.workspaceRoot; }
-    @Override public String workspaceId() { return taskEntry.workspaceId; }
+    @Override public String taskId() { return taskEntry != null ? taskEntry.taskId : taskId; }
+    @Override public String title() { return taskEntry != null ? taskEntry.title : title; }
+    @Override public String workspaceRoot() { return taskEntry != null ? taskEntry.workspaceRoot : workspaceRoot; }
+    @Override public String workspaceId() { return taskEntry != null ? taskEntry.workspaceId : workspaceId; }
     @Override public String mainAgentId() { return taskEntry.mainAgentId; }
     @Override public String status() { return taskEntry.status.wire(); }
     @Override public Object taskLock() { return taskEntry; }

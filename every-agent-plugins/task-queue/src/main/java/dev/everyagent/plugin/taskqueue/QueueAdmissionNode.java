@@ -28,7 +28,7 @@ public final class QueueAdmissionNode implements TaskLifecycleNode {
     public String id() { return "queue.admission"; }
 
     @Override
-    public float order() { return 250; }
+    public float order() { return 40; }
 
     @Override
     public Object invoke(TaskLifecycleContext ctx, TaskChain next) throws Exception {

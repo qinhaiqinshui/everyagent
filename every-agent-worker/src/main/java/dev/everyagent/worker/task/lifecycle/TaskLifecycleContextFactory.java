@@ -27,4 +27,18 @@ public class TaskLifecycleContextFactory {
     public TaskLifecycleContextImpl create(TaskEntry taskEntry) {
         return new TaskLifecycleContextImpl(taskEntry, gate, roundIndexStore, store);
     }
+
+    /**
+     * RPC 阶段创建上下文（无 TaskEntry）：input/rawContent/metadata/rpcContext 由节点逐字段填充，
+     * taskId/workspaceRoot 等由 RPC 阶段节点（idempotency.check/workspace.resolve/taskid.generate 等）设置。
+     */
+    public TaskLifecycleContextImpl createForRpc(String input, String rawContent,
+            java.util.Map<String, Object> metadata, Object rpcContext) {
+        TaskLifecycleContextImpl ctx = new TaskLifecycleContextImpl(null, gate, roundIndexStore, store);
+        ctx.input(input);
+        ctx.rawContent(rawContent);
+        ctx.metadata(metadata);
+        ctx.rpcContext(rpcContext);
+        return ctx;
+    }
 }

@@ -16,9 +16,11 @@ import org.springframework.stereotype.Component;
  * 内置任务生命周期节点装配：Spring 启动时实例化全部节点并注册到 TaskLifecycleRegistry。
  * 节点顺序由各自的 order() 决定，注册顺序仅影响同 order 的稳定排序。
  * <p>收敛后基线（§11）：
- * 下行: rerun.restore(50) → slash.notify(90) → persistence.track(100)
- *   → task.wires(200) → model.switch.trace(310) → main.agent(390)
- *   → status.down(840)
+ * 下行: idempotency.check(10) → workspace.resolve(20) → taskid.generate(30)
+ *   → queue.admission(40) → taskentry.create(50) → rerun.restore(55)
+ *   → slash.notify(60) → response.ack(70) → thread.submit(80)
+ *   → persistence.track(100) → task.wires(200) → model.switch.trace(310)
+ *   → main.agent(390) → status.down(840)
  * 内核: 轮次循环
  * 上行: spawned.await(950) → cascade.stop(900)
  *   → [临界段: status(840) → concurrency.release(800) → log.flush(750)

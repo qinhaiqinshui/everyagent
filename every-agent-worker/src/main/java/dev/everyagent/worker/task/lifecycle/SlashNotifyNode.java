@@ -24,7 +24,7 @@ public final class SlashNotifyNode implements TaskLifecycleNode {
     public String id() { return "slash.notify"; }
 
     @Override
-    public float order() { return 90; }
+    public float order() { return 60; }
 
     @Override
     public Object invoke(TaskLifecycleContext ctx, TaskChain next) throws Exception {
