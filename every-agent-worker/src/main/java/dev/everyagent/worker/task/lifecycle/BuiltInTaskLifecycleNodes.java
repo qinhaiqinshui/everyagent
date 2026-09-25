@@ -71,6 +71,7 @@ public class BuiltInTaskLifecycleNodes {
         registry.register(new TaskWiresNode(pool), "worker");
         registry.register(new ModelSwitchTraceNode(), "worker");
         registry.register(new MainAgentNode(), "worker");
+        registry.register(new ConsumeInputNode(), "worker");
         // 成对节点（下行在段边界外、上行在临界段内）
         registry.register(new StatusNode(pool), "worker");       // order=840
         // 上行节点（段外，按 order 从高到低注册，仅影响同 order 的稳定排序兜底）
