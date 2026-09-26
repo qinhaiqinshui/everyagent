@@ -63,8 +63,9 @@ public class SubAgentManager {
         }
         long liveCount = task.subFutures.values().stream().filter(f -> !f.isDone()).count();
         if (liveCount >= props.getLimits().getMaxConcurrentSubs()) {
-            return "[无法启动] 运行中的子 agent 数已达上限 " + props.getLimits().getMaxConcurrentSubs()
-                    + ",请先用 wait_agents 等待现有子 agent 完成。";
+            return "[无法启动] 本任务运行中的子 agent 已达 " + liveCount + "/" + props.getLimits().getMaxConcurrentSubs()
+                    + "(上限),请先用 wait_agents 等待现有子 agent 完成。"
+                    + "注:前端「正在排队(在飞 N / 排队 M)」是模型 API 级限流(跨任务统计模型请求数),与此处子 agent 并发上限(单任务)是两套独立计数,数值不对应。";
         }
         boolean reuse = agentId != null && !agentId.isEmpty() && task.subs.containsKey(agentId);
         String id = agentId == null || agentId.isEmpty() ? dev.everyagent.worker.proto.ShortIds.subAgentId() : agentId;
