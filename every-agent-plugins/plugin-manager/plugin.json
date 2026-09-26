@@ -1,0 +1,8 @@
+{
+  "id": "plugin-manager",
+  "name": "插件管理",
+  "version": "0.1.0",
+  "description": "VSCode 风格的插件管理面板：查看/启用/禁用插件",
+  "author": "everyagent",
+  "webMain": "web/index.ts"
+}
