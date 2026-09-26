@@ -1,0 +1,8 @@
+{
+  "id": "update-file-view",
+  "name": "文件更新视图",
+  "version": "0.1.0",
+  "description": "update_file 工具调用完整视图接管：折叠态与展开态行级 diff（纯 Web 插件，无 worker 端）",
+  "author": "everyagent",
+  "webMain": "web/index.ts"
+}

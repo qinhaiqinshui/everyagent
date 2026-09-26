@@ -4,5 +4,6 @@
   "version": "0.1.0",
   "description": "任务内输入队列：多轮续跑（队列插件节点包裹内核循环）、插入到当前对话、队列项上移/删除/编辑、前端输入框上方队列面板",
   "author": "everyagent",
-  "entry": "dev.everyagent.plugin.inputqueue.TaskInputQueuePlugin"
+  "main": "dev.everyagent.plugin.inputqueue.TaskInputQueuePlugin",
+  "webMain": "web/index.ts"
 }

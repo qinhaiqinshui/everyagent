@@ -1,0 +1,8 @@
+{
+  "id": "pdf-viewer",
+  "name": "PDF 预览",
+  "version": "0.1.0",
+  "description": "PDF 预览插件：通过文件内容编辑器注册 .pdf 文件渲染（纯 Web 插件，无 worker 端）",
+  "author": "everyagent",
+  "webMain": "web/index.ts"
+}
