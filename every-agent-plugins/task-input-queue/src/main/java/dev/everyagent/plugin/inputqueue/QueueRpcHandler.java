@@ -10,10 +10,8 @@ import dev.everyagent.worker.task.TaskManager;
 import dev.everyagent.worker.task.TaskStore;
 import dev.everyagent.worker.task.UserInput;
 import dev.everyagent.worker.rpc.RpcContext;
-import dev.everyagent.worker.rpc.RpcDispatcher;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.stereotype.Component;
 import tools.jackson.databind.node.ArrayNode;
 import tools.jackson.databind.node.ObjectNode;
 
@@ -24,7 +22,6 @@ import java.util.List;
  * task.queueRemove / task.queueMove RPC 处理器（从 TaskManager 迁入插件）。
  * 运行中热任务直接改内存 InputQueue；终态任务改磁盘悬空队列 queue.jsonl。
  */
-@Component
 public class QueueRpcHandler {
 
     private static final Logger log = LoggerFactory.getLogger(QueueRpcHandler.class);
@@ -34,23 +31,21 @@ public class QueueRpcHandler {
     private final TaskStore store;
     private final EventSink eventSink;
 
-    public QueueRpcHandler(RpcDispatcher dispatcher, TaskQueueRegistry registry,
-            TaskManager taskManager, TaskStore store, EventSink eventSink) {
+    public QueueRpcHandler(TaskQueueRegistry registry, TaskManager taskManager,
+            TaskStore store, EventSink eventSink) {
         this.registry = registry;
         this.taskManager = taskManager;
         this.store = store;
         this.eventSink = eventSink;
-        dispatcher.register("task.queueRemove", this::rpcQueueRemove);
-        dispatcher.register("task.queueMove", this::rpcQueueMove);
     }
 
-    private void rpcQueueRemove(RpcContext ctx) {
+    void rpcQueueRemove(RpcContext ctx) {
         String taskId = ctx.strParam("taskId");
         int index = ctx.params().path("index").asInt(-1);
         mutateQueue(ctx, taskId, "remove", index, -1, -1);
     }
 
-    private void rpcQueueMove(RpcContext ctx) {
+    void rpcQueueMove(RpcContext ctx) {
         String taskId = ctx.strParam("taskId");
         int fromIndex = ctx.params().path("fromIndex").asInt(-1);
         int toIndex = ctx.params().path("toIndex").asInt(-1);

@@ -50,7 +50,7 @@ class QueueAdmissionNodeTest {
             return expected;
         };
 
-        TaskOutcome result = node.invoke(ctx, next);
+        TaskOutcome result = (TaskOutcome) node.invoke(ctx, next);
 
         assertSame(expected, result, "应原样返回 next 的结果");
         assertEquals(1, nextCalled.get(), "next 应被调用一次");

@@ -2,11 +2,14 @@ package dev.everyagent.plugin.editresend;
 
 import dev.everyagent.plugin.api.EveryAgentPlugin;
 import dev.everyagent.plugin.api.WorkerPluginContext;
+import dev.everyagent.worker.task.TaskStore;
+import dev.everyagent.worker.task.SubAgentManager;
+import dev.everyagent.worker.hub.EventSink;
+import dev.everyagent.worker.task.TaskManager;
 
 /**
  * task-edit-resend 插件入口。
- * <p>核心装配经 Spring @Component（TaskEditResendRegistrar）自动完成；
- * 此类仅供 plugin.json 声明入口（外部插件加载路径），activate 为空操作。
+ * <p>activate() 中注册 EditResendNode（虚拟线程阶段 order=395.5）。
  */
 public class TaskEditResendPlugin implements EveryAgentPlugin {
 
@@ -15,6 +18,12 @@ public class TaskEditResendPlugin implements EveryAgentPlugin {
 
     @Override
     public void activate(WorkerPluginContext ctx) {
-        // 装配经 Spring @Component 自动完成，无需手动注册
+        TaskStore store = ctx.getService(TaskStore.class);
+        SubAgentManager subs = ctx.getService(SubAgentManager.class);
+        EventSink eventSink = ctx.getService(EventSink.class);
+        TaskManager taskManager = ctx.getService(TaskManager.class);
+
+        EditTruncateProcessor truncateProcessor = new EditTruncateProcessor(store, subs, eventSink, taskManager);
+        ctx.registerTaskLifecycleNode(new EditResendNode(truncateProcessor));
     }
 }

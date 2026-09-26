@@ -1,6 +1,5 @@
 package dev.everyagent.plugin.unattended;
 
-import dev.everyagent.worker.plugin.registry.ToolExecutionInterceptorRegistry;
 import dev.everyagent.plugin.api.agent.AgentContext;
 import dev.everyagent.plugin.api.permission.TaskInfo;
 import dev.everyagent.plugin.api.spi.ToolExecutionChain;
@@ -14,20 +13,17 @@ import org.springframework.ai.chat.model.Generation;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.model.tool.ToolExecutionResult;
 import org.springframework.ai.util.JacksonUtils;
-import org.springframework.stereotype.Component;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
 import java.util.ArrayList;
 import java.util.List;
 
-@Component
 public class UnattendedToolInterceptor implements ToolExecutionInterceptor {
 
     private static final ObjectMapper MAPPER = JacksonUtils.getDefaultJsonMapper();
 
-    public UnattendedToolInterceptor(ToolExecutionInterceptorRegistry registry) {
-        registry.register(this);
+    public UnattendedToolInterceptor() {
     }
 
     @Override
@@ -39,7 +35,7 @@ public class UnattendedToolInterceptor implements ToolExecutionInterceptor {
     @Override
     public ToolExecutionResult invoke(ToolExecutionContext ctx, ToolExecutionChain next) throws Exception {
         AgentContext agentCtx = ctx.agentContext();
-        if (!(agentCtx instanceof TaskInfo task) || !task.taskFlags().getOrDefault("unattended", false)) {
+        if (!(agentCtx instanceof TaskInfo task) || !Boolean.TRUE.equals(task.metadata().getOrDefault("unattended", false))) {
             return next.proceed(ctx); // 不是无人值守模式，放行
         }
         Prompt prompt = ctx.prompt();

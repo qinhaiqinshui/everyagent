@@ -6,9 +6,7 @@ import dev.everyagent.worker.config.WorkerProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.core.io.ClassPathResource;
-import org.springframework.stereotype.Component;
 
-import jakarta.annotation.PostConstruct;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
@@ -22,7 +20,6 @@ import java.util.List;
  * <p>从 worker BuiltInSkills 迁出。知识包 classpath:skill/agent-dispatch.md
  * 物化到系统技能目录（与 BuiltInSkills.materialize 同模式）。
  */
-@Component
 public class SubAgentSkillContributor implements SkillContributor {
 
     private static final Logger log = LoggerFactory.getLogger(SubAgentSkillContributor.class);
@@ -30,13 +27,10 @@ public class SubAgentSkillContributor implements SkillContributor {
     private final Path knowledgeRoot;
     private PluginSkill cachedSkill;
 
-    public SubAgentSkillContributor(WorkerProperties props,
-            dev.everyagent.worker.plugin.registry.SkillContributorRegistry registry) {
+    public SubAgentSkillContributor(WorkerProperties props) {
         this.knowledgeRoot = props.resolveSkillsDir();
-        registry.register(this);
     }
 
-    @PostConstruct
     void init() {
         materialize();
     }

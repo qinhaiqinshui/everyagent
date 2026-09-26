@@ -5,7 +5,6 @@ import dev.everyagent.worker.os.OsSandbox;
 import dev.everyagent.plugin.api.spi.ExecResult;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.stereotype.Component;
 
 import java.io.File;
 import java.io.IOException;
@@ -39,7 +38,6 @@ import java.util.regex.Pattern;
  *   <li>统一执行入口(OsSandbox.spawnNative,argv 直传无 shell 解析)。</li>
  * </ul>
  */
-@Component
 public class NativeGit {
 
     private static final Logger log = LoggerFactory.getLogger(NativeGit.class);

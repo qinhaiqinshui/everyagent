@@ -1,19 +1,13 @@
 package dev.everyagent.plugin.aireview;
 
-import dev.everyagent.worker.plugin.registry.AuthorizationHandlerRegistry;
 import dev.everyagent.plugin.api.permission.AuthorizationChain;
 import dev.everyagent.plugin.api.permission.AuthorizationHandler;
-import dev.everyagent.plugin.api.permission.AuthorizationHandler.AuthorizationRequest;
-import dev.everyagent.plugin.api.permission.AuthorizationHandler.AuthorizationDecision;
-import org.springframework.stereotype.Component;
 
-@Component
 public class AiReviewAuthHandler implements AuthorizationHandler {
     private final AiAuthReviewer reviewer;
 
-    public AiReviewAuthHandler(AuthorizationHandlerRegistry registry, AiAuthReviewer reviewer) {
+    public AiReviewAuthHandler(AiAuthReviewer reviewer) {
         this.reviewer = reviewer;
-        registry.register(this);
     }
 
     @Override
@@ -24,7 +18,7 @@ public class AiReviewAuthHandler implements AuthorizationHandler {
 
     @Override
     public AuthorizationDecision invoke(AuthorizationRequest req, AuthorizationChain next) throws Exception {
-        if (!req.task().taskFlags().getOrDefault("ai-review", false)) {
+        if (!Boolean.TRUE.equals(req.task().metadata().getOrDefault("ai-review", false))) {
             return next.proceed(req); // 不适用，放行
         }
         ReviewDecision d = reviewer.review((dev.everyagent.worker.task.TaskEntry) req.task(), req.grantKey(), req.prompt());

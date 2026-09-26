@@ -4,7 +4,6 @@ import dev.everyagent.contract.json.Json;
 import dev.everyagent.worker.AtomicFiles;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.stereotype.Component;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.node.ObjectNode;
 
@@ -32,7 +31,6 @@ import java.util.concurrent.ConcurrentHashMap;
  * <p>明文账号密码仅存在于 worker 进程内存;磁盘上只有密文。文件按 workspace 隔离
  * (各工作区各自的 .everyagent/.git-credentials.enc),同一工作区内按 host 索引多账号。
  */
-@Component
 public class GitCredentialStore {
 
     private static final Logger log = LoggerFactory.getLogger(GitCredentialStore.class);

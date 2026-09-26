@@ -1,5 +1,7 @@
 package dev.everyagent.plugin.aireview;
 
+import dev.everyagent.plugin.api.WorkerServices;
+import dev.everyagent.plugin.api.task.TaskService;
 import dev.everyagent.worker.proto.TaskDtos.ModelSnapshot;
 import dev.everyagent.worker.slash.SlashCommandItem;
 import dev.everyagent.worker.slash.SlashCommandRegistry;
@@ -7,7 +9,6 @@ import dev.everyagent.worker.slash.SlashDisplayPosition;
 import dev.everyagent.worker.slash.SlashSelectionResult;
 import dev.everyagent.worker.slash.SlashTokenEncoder;
 import dev.everyagent.worker.task.TaskEntry;
-import dev.everyagent.worker.task.TaskManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -24,33 +25,35 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * AiReviewSlashProvider 单测(plan-unattended-ai-auth 步骤 8):`/` 候选 id=ai-review:on;
- * select 返回 <b>1 个</b> bottom 结果,id=ai-review:on 且 token 可 parse 为 kind=ai.review;
- * taskId 非空时置 {@code TaskEntry.aiReview=true} 并落盘,为空时不写业务标记仍返回胶囊;
- * cancel 复位 aiReview 并落盘。
+ * AiReviewSlashProvider 单测:`/` 候选 id=ai-review:on;
+ * select 返回单个 bottom 结果;taskId 非空时置 metadata["ai-review"]=true 并落盘,
+ * 为空时不写业务标记仍返回胶囊;cancel 复位并落盘。
  */
 class AiReviewSlashProviderTest {
 
     private SlashCommandRegistry registry;
-    private TaskManager taskManager;
+    private WorkerServices services;
+    private TaskService taskService;
     private TaskEntry task;
 
     @BeforeEach
     void setUp() {
         registry = new SlashCommandRegistry();
-        taskManager = mock(TaskManager.class);
+        services = mock(WorkerServices.class);
+        taskService = mock(TaskService.class);
         task = newTask();
-        when(taskManager.runningTask("t-1")).thenReturn(task);
+        when(services.task()).thenReturn(taskService);
+        when(taskService.get("t-1")).thenReturn(task);
     }
 
     private static TaskEntry newTask() {
         ModelSnapshot snap = new ModelSnapshot("cfg", "openai-compat",
                 "http://localhost:9999/v1", "m", null);
-        return new TaskEntry("t-1", "任务", snap, "k", "ws", "defaultworkspace", "main-agent", 10_000);
+        return new TaskEntry("t-1", "任务", snap, "ws", "defaultworkspace", "main-agent", 10_000);
     }
 
     private SlashCommandItem item() {
-        new AiReviewSlashProvider(registry, taskManager);
+        registry.registerProvider("ai-review", () -> AiReviewSlashProvider.items(services));
         return registry.list().stream()
                 .filter(i -> "ai-review:on".equals(i.id()))
                 .findFirst()
@@ -83,9 +86,9 @@ class AiReviewSlashProviderTest {
         assertNotNull(tok, "token 可 parse");
         assertEquals(AiReviewToken.KIND, tok.kind(), "token kind=ai.review");
 
-        verify(taskManager).runningTask("t-1");
-        assertTrue(task.taskFlags.getOrDefault("ai-review", false), "业务标记 ai-review 应置位");
-        verify(taskManager).publishTaskUpdated("t-1");
+        verify(taskService).get("t-1");
+        assertTrue(Boolean.TRUE.equals(task.metadata().getOrDefault("ai-review", false)), "业务标记 ai-review 应置位");
+        verify(taskService).publishUpdated("t-1");
     }
 
     // ---- select:空 taskId 不写业务标记 ----
@@ -97,19 +100,19 @@ class AiReviewSlashProviderTest {
 
         assertEquals(1, results.size(), "空 taskId(草稿态)仍返回胶囊");
         assertEquals("ai-review:on", results.get(0).id());
-        verify(taskManager, never()).runningTask(any());
-        assertFalse(task.taskFlags.getOrDefault("ai-review", false), "空 taskId 不写业务标记");
-        verify(taskManager, never()).publishTaskUpdated(any());
+        verify(taskService, never()).get(any());
+        assertFalse(Boolean.TRUE.equals(task.metadata().getOrDefault("ai-review", false)), "空 taskId 不写业务标记");
+        verify(taskService, never()).publishUpdated(any());
     }
 
     // ---- cancel:复位 aiReview ----
 
     @Test
     void cancelTurnsAiReviewOff() {
-        task.taskFlags.put("ai-review", true);
+        task.metadata().put("ai-review", true);
         SlashCommandItem it = item();
         it.cancelHandler().onCancel(it, AiReviewToken.buildToken(), "t-1");
-        assertFalse(task.taskFlags.getOrDefault("ai-review", false), "取消 AI 审议胶囊应复位 aiReview");
-        verify(taskManager).publishTaskUpdated("t-1");
+        assertFalse(Boolean.TRUE.equals(task.metadata().getOrDefault("ai-review", false)), "取消 AI 审议胶囊应复位 aiReview");
+        verify(taskService).publishUpdated("t-1");
     }
 }

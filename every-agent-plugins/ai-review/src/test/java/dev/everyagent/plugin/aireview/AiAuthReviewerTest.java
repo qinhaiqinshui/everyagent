@@ -66,7 +66,7 @@ class AiAuthReviewerTest {
     private TaskEntry newTask(String cfgId, String apiKey) {
         ModelSnapshot snap = new ModelSnapshot(cfgId, "openai-compat",
                 "http://localhost:9999/v1", "task-model", null);
-        return new TaskEntry("t-1", "任务", snap, apiKey, "ws", "defaultworkspace", "main-agent", 10_000);
+        return new TaskEntry("t-1", "任务", snap, "ws", "defaultworkspace", "main-agent", 10_000);
     }
 
     private OpenAiChatOptions baseOptions() {

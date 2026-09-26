@@ -1,5 +1,6 @@
 package dev.everyagent.plugin.inputqueue;
 
+import dev.everyagent.plugin.api.permission.TaskInfo;
 import dev.everyagent.plugin.api.task.TaskLifecycleContext;
 
 import java.util.Map;
@@ -22,7 +23,6 @@ final class RestoredQueueContext implements TaskLifecycleContext {
 
     @Override public String input() { return input; }
     @Override public String rawContent() { return rawContent; }
-    @Override public Map<String, Object> metadata() { return null; }
 
     // ---- 以下方法对恢复项无意义（QueueLoopNode 不读取）----
 
@@ -32,11 +32,12 @@ final class RestoredQueueContext implements TaskLifecycleContext {
     @Override public String workspaceId() { return null; }
     @Override public String mainAgentId() { return null; }
     @Override public String status() { return null; }
+    @Override public TaskInfo taskInfo() { return null; }
     @Override public Object taskLock() { return null; }
-    @Override public Map<String, Boolean> taskFlags() { return Map.of(); }
     @Override public long startedAt() { return 0; }
     @Override public void startedAt(long ms) { }
     @Override public void onUsageBroadcast(Runnable hook) { }
     @Override public void agentStatus(String agentId, String status) { }
+    @Override public Map<String, Object> runParams() { return Map.of(); }
     @Override public Object rpcContext() { return null; }
 }

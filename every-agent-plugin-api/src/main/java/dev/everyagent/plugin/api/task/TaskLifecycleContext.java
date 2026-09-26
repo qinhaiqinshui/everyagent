@@ -61,6 +61,15 @@ public interface TaskLifecycleContext {
     /** task.run 的通用插件参数容器（核心不解释，插件自行消费）。 */
     java.util.Map<String, Object> runParams();
 
+    /**
+     * 任务级持久化数据（便捷方法，委托给 {@link #taskInfo()}).
+     * @return TaskInfo 的 metadata Map，或 taskInfo() 为 null 时返回 null
+     */
+    default java.util.Map<String, Object> metadata() {
+        dev.everyagent.plugin.api.permission.TaskInfo info = taskInfo();
+        return info != null ? info.metadata() : null;
+    }
+
     /** RPC 应答器（链节点直接调 ctx.ok 返回前端；仅 RPC 线程阶段有效，虚拟线程阶段为 null）。 */
     Object rpcContext();
 }

@@ -7,6 +7,7 @@ import dev.everyagent.plugin.api.permission.AuthorizationHandler;
 import dev.everyagent.plugin.api.rpc.RpcMethod;
 import dev.everyagent.plugin.api.skill.SkillContributor;
 import dev.everyagent.plugin.api.slash.SlashProvider;
+import dev.everyagent.plugin.api.slash.SlashTokenResolver;
 import dev.everyagent.plugin.api.spi.AdvisorProvider;
 import dev.everyagent.plugin.api.spi.SandboxProvider;
 import dev.everyagent.plugin.api.spi.SearchProvider;
@@ -27,6 +28,11 @@ import dev.everyagent.worker.plugin.registry.ToolProviderRegistry;
 import dev.everyagent.worker.rpc.RpcDispatcher;
 import dev.everyagent.worker.slash.SlashCommandRegistry;
 import dev.everyagent.worker.slash.SlashCommandItem;
+import dev.everyagent.worker.slash.SlashTokenHandler;
+
+import org.springframework.context.ApplicationContext;
+
+import tools.jackson.databind.JsonNode;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -53,8 +59,10 @@ public class WorkerPluginContextImpl implements WorkerPluginContext {
     private final SkillContributorRegistry skillContributorRegistry;
     private final RpcDispatcher rpcDispatcher;
     private final SlashCommandRegistry slashRegistry;
+    private final SlashTokenHandler slashTokenHandler;
     private final WorkerServices services;
     private final PluginConfig config;
+    private final ApplicationContext applicationContext;
 
     public WorkerPluginContextImpl(String pluginId,
             AdvisorProviderRegistry advisorRegistry,
@@ -68,8 +76,10 @@ public class WorkerPluginContextImpl implements WorkerPluginContext {
             SkillContributorRegistry skillContributorRegistry,
             RpcDispatcher rpcDispatcher,
             SlashCommandRegistry slashRegistry,
+            SlashTokenHandler slashTokenHandler,
             WorkerServices services,
-            PluginConfig config) {
+            PluginConfig config,
+            ApplicationContext applicationContext) {
         this.pluginId = pluginId;
         this.advisorRegistry = advisorRegistry;
         this.toolRegistry = toolRegistry;
@@ -82,8 +92,10 @@ public class WorkerPluginContextImpl implements WorkerPluginContext {
         this.skillContributorRegistry = skillContributorRegistry;
         this.rpcDispatcher = rpcDispatcher;
         this.slashRegistry = slashRegistry;
+        this.slashTokenHandler = slashTokenHandler;
         this.services = services;
         this.config = config;
+        this.applicationContext = applicationContext;
     }
 
     @Override
@@ -161,6 +173,21 @@ public class WorkerPluginContextImpl implements WorkerPluginContext {
     }
 
     @Override
+    public void registerSlashTokenResolver(SlashTokenResolver resolver) {
+        slashTokenHandler.registerResolver(new SlashTokenHandler.SlashTokenResolver() {
+            @Override
+            public String kind() {
+                return resolver.kind();
+            }
+
+            @Override
+            public String resolveSubmissionText(JsonNode payload) {
+                return resolver.resolveSubmissionText(payload);
+            }
+        });
+    }
+
+    @Override
     public WorkerServices services() {
         return services;
     }
@@ -168,5 +195,10 @@ public class WorkerPluginContextImpl implements WorkerPluginContext {
     @Override
     public PluginConfig config() {
         return config;
+    }
+
+    @Override
+    public <T> T getService(Class<T> type) {
+        return applicationContext.getBean(type);
     }
 }

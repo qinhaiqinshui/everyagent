@@ -19,7 +19,6 @@ import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.openai.OpenAiChatOptions;
-import org.springframework.stereotype.Component;
 import tools.jackson.databind.JsonNode;
 
 import java.time.Duration;
@@ -70,7 +69,6 @@ import java.util.concurrent.TimeoutException;
  *     =true),审计 trace 照发(decision=DENY),调用方应回退人工弹窗 askUser——<b>绝不因审议失败放行</b>。</li>
  * </ul>
  */
-@Component
 public class AiAuthReviewer {
 
     /**
@@ -227,7 +225,7 @@ public class AiAuthReviewer {
         if (ConfigStore.POOL_PROVIDER.equals(t.snapshot.provider())) {
             return configStore.resolve(t.snapshot.configId());
         }
-        return new ResolvedConfig(t.snapshot, t.apiKey);
+        return configStore.resolve(t.snapshot.configId());
     }
 
     /** 授权信息 user 消息(审议输入原文)。 */

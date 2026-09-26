@@ -4,5 +4,6 @@
   "version": "0.1.0",
   "description": "子 Agent 插件（工具 + Skill + task.agents RPC + 前端列表 + 台账投影）",
   "author": "everyagent",
+  "main": "dev.everyagent.plugin.subagent.SubAgentPlugin",
   "webMain": "web/index.ts"
 }

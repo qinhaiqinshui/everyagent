@@ -4,6 +4,7 @@ import dev.everyagent.plugin.api.permission.AuthorizationHandler;
 import dev.everyagent.plugin.api.rpc.RpcMethod;
 import dev.everyagent.plugin.api.skill.SkillContributor;
 import dev.everyagent.plugin.api.slash.SlashProvider;
+import dev.everyagent.plugin.api.slash.SlashTokenResolver;
 import dev.everyagent.plugin.api.spi.AdvisorProvider;
 import dev.everyagent.plugin.api.spi.SandboxProvider;
 import dev.everyagent.plugin.api.spi.SearchProvider;
@@ -74,6 +75,13 @@ public interface WorkerPluginContext {
      */
     void registerSlashProvider(String id, SlashProvider provider);
 
+    /**
+     * 注册 Slash token 提交解析器。
+     *
+     * @param resolver token 解析器
+     */
+    void registerSlashTokenResolver(SlashTokenResolver resolver);
+
     // ── 只读服务 ──
 
     /** 访问 worker 核心服务（沙箱、权限门、工作区管理器等，只读）。 */
@@ -81,4 +89,16 @@ public interface WorkerPluginContext {
 
     /** 插件配置（从 plugin.json contributes.config 解析）。 */
     PluginConfig config();
+
+    /**
+     * 按 Class 获取 worker 核心服务（Spring bean）。
+     *
+     * <p>内置插件可经此获取未在 {@link WorkerServices} 中暴露的 worker 内部服务
+     * （如 {@code WorkerProperties}、{@code TaskStore}、{@code AgentService} 等）。
+     * 外部插件不应依赖此方法获取未公开的服务。
+     *
+     * @param type 服务 Class
+     * @return Spring bean（不存在时抛异常）
+     */
+    <T> T getService(Class<T> type);
 }

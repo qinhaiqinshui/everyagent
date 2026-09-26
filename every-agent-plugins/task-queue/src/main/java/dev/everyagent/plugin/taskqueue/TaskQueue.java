@@ -7,7 +7,6 @@ import dev.everyagent.worker.proto.Channels;
 import dev.everyagent.worker.proto.Events;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.stereotype.Component;
 import tools.jackson.databind.node.ArrayNode;
 import tools.jackson.databind.node.ObjectNode;
 
@@ -20,7 +19,6 @@ import java.util.concurrent.atomic.AtomicInteger;
  * <p>acquire 阻塞 = 虚拟线程 park（零线程开销）；release 唤醒下一个等待者。
  * 队列状态变化时广播 task.queued 事件到 tasks 频道（前端据此渲染排队状态）。
  */
-@Component
 public class TaskQueue {
 
     private static final Logger log = LoggerFactory.getLogger(TaskQueue.class);

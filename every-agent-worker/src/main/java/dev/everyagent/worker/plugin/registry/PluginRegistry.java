@@ -2,7 +2,9 @@ package dev.everyagent.worker.plugin.registry;
 
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.worker.config.WorkerProperties;
+import dev.everyagent.plugin.api.PluginConfig;
 import dev.everyagent.worker.plugin.loader.PluginLoader;
+import dev.everyagent.worker.plugin.PluginConfigImpl;
 import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -14,6 +16,7 @@ import tools.jackson.databind.JsonNode;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -60,6 +63,25 @@ public class PluginRegistry {
     void init() {
         scanCatalog();
         loadDisabled();
+        activateBuiltInPlugins();
+    }
+
+    /** 激活未禁用的内置插件（有 main 入口类的）。 */
+    private void activateBuiltInPlugins() {
+        for (PluginManifest m : catalog.values()) {
+            if (!"builtin".equals(m.source())) {
+                continue;
+            }
+            if (m.main() == null || m.main().isBlank()) {
+                continue;
+            }
+            if (disabledIds.contains(m.id())) {
+                log.info("[plugins] 内置插件 {} 已禁用,跳过激活", m.id());
+                continue;
+            }
+            PluginConfig config = new PluginConfigImpl(new HashMap<>());
+            pluginLoader.activateBuiltInPlugin(m.id(), m.main(), config);
+        }
     }
 
     /** 扫描 classpath + 外部插件目录，建立完整目录。 */

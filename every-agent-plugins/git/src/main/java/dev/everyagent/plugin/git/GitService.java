@@ -9,9 +9,7 @@ import dev.everyagent.worker.modules.WorkspaceManager;
 import dev.everyagent.worker.rpc.AuthRequiredException;
 import dev.everyagent.worker.rpc.BadParamsException;
 import dev.everyagent.worker.rpc.NotFoundException;
-import dev.everyagent.worker.rpc.RpcDispatcher;
 import dev.everyagent.worker.rpc.RpcContext;
-import org.springframework.stereotype.Component;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.node.ArrayNode;
 import tools.jackson.databind.node.ObjectNode;
@@ -31,7 +29,6 @@ import java.util.List;
  * clone/大型迁移按文档建为 Task,不在本模块;push/pull 凭证走原生 git 全套凭证体系
  * (本机 credential.helper / ssh-agent / ~/.ssh + 工作区加密凭证,不经协议)。
  */
-@Component
 public class GitService {
 
     private static final int LOG_MAX = 200;
@@ -40,27 +37,14 @@ public class GitService {
     private final GitCredentialStore credentials;
     private final NativeGit git;
 
-    public GitService(RpcDispatcher dispatcher, WorkspaceManager workspaces,
+    public GitService(WorkspaceManager workspaces,
             GitCredentialStore credentials, NativeGit git) {
         this.workspaces = workspaces;
         this.credentials = credentials;
         this.git = git;
-        dispatcher.register(GitRpcMethods.GIT_STATUS, this::status);
-        dispatcher.register(GitRpcMethods.GIT_LOG, this::log);
-        dispatcher.register(GitRpcMethods.GIT_DIFF, this::diff);
-        dispatcher.register(GitRpcMethods.GIT_SHOW, this::show);
-        dispatcher.register(GitRpcMethods.GIT_COMMIT, this::commit);
-        dispatcher.register(GitRpcMethods.GIT_PULL, this::pull);
-        dispatcher.register(GitRpcMethods.GIT_PUSH, this::push);
-        dispatcher.register(GitRpcMethods.GIT_DISCARD, this::discard);
-        dispatcher.register(GitRpcMethods.GIT_INIT, this::init);
-        dispatcher.register(GitRpcMethods.GIT_CLONE, this::clone);
-        dispatcher.register(GitRpcMethods.GIT_REMOTE_ADD, this::remoteAdd);
-        dispatcher.register(GitRpcMethods.GIT_REMOTE_LIST, this::remoteList);
-        dispatcher.register(GitRpcMethods.GIT_CREDENTIAL_SAVE, this::credentialSave);
     }
 
-    private void status(RpcContext ctx) throws IOException {
+    void status(RpcContext ctx) throws IOException {
         Sandbox sb = sandbox(ctx);
         StatusData s = statusData(sb);
         ObjectNode o = Json.obj();
@@ -78,7 +62,7 @@ public class GitService {
         ctx.ok(o);
     }
 
-    private void log(RpcContext ctx) throws IOException {
+    void log(RpcContext ctx) throws IOException {
         int max = (int) Math.min(ctx.optLongParam("max", 50), LOG_MAX);
         Sandbox sb = sandbox(ctx);
         List<String> args = new ArrayList<>(List.of(
@@ -132,7 +116,7 @@ public class GitService {
      * 必带 commit(commitId 或 shortId);路径为提交内相对路径,用 resolveLoose 校验沙箱不越界
      * (历史路径可能已删除,不要求文件真实存在)。
      */
-    private void show(RpcContext ctx) throws IOException {
+    void show(RpcContext ctx) throws IOException {
         Sandbox sb = sandbox(ctx);
         String commit = ctx.strParam("commit");
         if (commit == null || commit.isEmpty()) {
@@ -260,7 +244,7 @@ public class GitService {
      * 读取某文件相对 HEAD 的完整变更内容(before = HEAD blob 文本,after = 工作区文件文本)。
      * 对齐 old 链路:直接读两份全文,`git show HEAD:<path>` 拿 before(新文件 = HEAD 无 blob → created)。
      */
-    private void diff(RpcContext ctx) throws IOException {
+    void diff(RpcContext ctx) throws IOException {
         Sandbox sb = sandbox(ctx);
         String path = ctx.optStrParam("path", null);
         if (path == null || path.isEmpty()) {
@@ -287,7 +271,7 @@ public class GitService {
                 .put("empty", before.equals(after)));
     }
 
-    private void commit(RpcContext ctx) throws IOException {
+    void commit(RpcContext ctx) throws IOException {
         Sandbox sb = sandbox(ctx);
         String message = ctx.strParam("message");
         JsonNode pathsNode = ctx.params().path("paths");
@@ -337,7 +321,7 @@ public class GitService {
                 .put("message", message));
     }
 
-    private void pull(RpcContext ctx) throws IOException {
+    void pull(RpcContext ctx) throws IOException {
         Sandbox sb = sandbox(ctx);
         String url = originUrl(sb);
         NativeResult r = withAuth(ctx, sb, url, List.of("pull", "--no-rebase"));
@@ -353,7 +337,7 @@ public class GitService {
         ctx.ok(o);
     }
 
-    private void push(RpcContext ctx) throws IOException {
+    void push(RpcContext ctx) throws IOException {
         Sandbox sb = sandbox(ctx);
         java.util.LinkedHashMap<String, String> remotes = remoteMap(sb);
         if (remotes.isEmpty()) {
@@ -400,7 +384,7 @@ public class GitService {
      * {@code git restore --source=HEAD --staged --worktree}),未跟踪(untracked)与
      * 已暂存新增(added)跳过——对齐 VS Code:未跟踪文件没有「放弃更改」,只有删除。
      */
-    private void discard(RpcContext ctx) throws IOException {
+    void discard(RpcContext ctx) throws IOException {
         Sandbox sb = sandbox(ctx);
         JsonNode pathsNode = ctx.params().path("paths");
         List<String> paths = new ArrayList<>();
@@ -430,7 +414,7 @@ public class GitService {
     }
 
     /** 在工作区根初始化本地仓库(可指定初始分支名;git init + symbolic-ref 全版本兼容)。 */
-    private void init(RpcContext ctx) throws IOException {
+    void init(RpcContext ctx) throws IOException {
         Sandbox sb = sandbox(ctx);
         String initialBranch = ctx.optStrParam("initialBranch", null);
         String branch = initialBranch == null || initialBranch.isEmpty() ? "main" : initialBranch;
@@ -454,7 +438,7 @@ public class GitService {
      * 克隆远程仓库到工作区内指定目录(默认工作区根)。dir 必须是工作区内的空目录,
      * 否则拒绝(对齐 VS Code:克隆到非空目录不允许)。凭证走完整解析链。
      */
-    private void clone(RpcContext ctx) throws IOException {
+    void clone(RpcContext ctx) throws IOException {
         Sandbox sb = sandbox(ctx);
         String url = ctx.strParam("url");
         if (url == null || url.trim().isEmpty()) {
@@ -485,7 +469,7 @@ public class GitService {
     }
 
     /** 关联远程仓库(推送前若无远程,前端引导填入)。 */
-    private void remoteAdd(RpcContext ctx) throws IOException {
+    void remoteAdd(RpcContext ctx) throws IOException {
         Sandbox sb = sandbox(ctx);
         String name = ctx.optStrParam("name", "origin");
         String url = ctx.strParam("url");
@@ -501,7 +485,7 @@ public class GitService {
     }
 
     /** 列出已关联远程(供前端判断是否需要引导关联)。 */
-    private void remoteList(RpcContext ctx) throws IOException {
+    void remoteList(RpcContext ctx) throws IOException {
         Sandbox sb = sandbox(ctx);
         ArrayNode remotes = Json.arr();
         remoteMap(sb).forEach((n, u) -> remotes.add(Json.obj().put("name", n).put("url", u)));
@@ -513,7 +497,7 @@ public class GitService {
      * docs/ARCHITECTURE.md §7.12)。前端在 AUTH_REQUIRED 弹窗里勾选保存后调用,
      * 后续 clone/pull/push 由凭证解析链自动复用(经 askpass env 注入,不经协议)。
      */
-    private void credentialSave(RpcContext ctx) throws IOException {
+    void credentialSave(RpcContext ctx) throws IOException {
         Sandbox sb = sandbox(ctx);
         String username = ctx.strParam("username");
         String password = ctx.strParam("password");

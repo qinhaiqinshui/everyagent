@@ -27,17 +27,20 @@ import tools.jackson.databind.JsonNode;
 @Component
 public class SlashTokenHandler {
 
-    private final Map<String, SlashTokenResolver> resolvers;
+    private final Map<String, SlashTokenResolver> resolvers = new java.util.HashMap<>();
 
     /** 构造期从 Spring 收集的全部 resolver 构建 kind→resolver 表。 */
     public SlashTokenHandler(List<SlashTokenResolver> resolverList) {
-        Map<String, SlashTokenResolver> map = new java.util.HashMap<>();
         if (resolverList != null) {
             for (SlashTokenResolver r : resolverList) {
-                map.put(r.kind(), r);
+                resolvers.put(r.kind(), r);
             }
         }
-        this.resolvers = java.util.Collections.unmodifiableMap(map);
+    }
+
+    /** 动态注册一个 resolver（同 kind 覆盖；供内置插件 activate() 调用）。 */
+    public synchronized void registerResolver(SlashTokenResolver resolver) {
+        resolvers.put(resolver.kind(), resolver);
     }
 
     /** 是否已注册该 kind 的解析器。 */

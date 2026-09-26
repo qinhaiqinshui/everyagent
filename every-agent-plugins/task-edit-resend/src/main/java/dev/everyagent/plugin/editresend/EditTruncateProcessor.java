@@ -15,7 +15,6 @@ import dev.everyagent.worker.task.lifecycle.TaskLifecycleContextImpl;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.messages.Message;
-import org.springframework.stereotype.Component;
 import tools.jackson.databind.node.ObjectNode;
 
 import java.nio.file.Path;
@@ -28,7 +27,6 @@ import java.util.List;
  * <p>EditResendNode 在 VT 阶段执行（queue.loop 内层），此时任务一定运行中（ctx.taskEntry()
  * 非 null 且非终态），实际只走热路径；冷路径保留以承载方法完整语义。
  */
-@Component
 public final class EditTruncateProcessor {
 
     private static final Logger log = LoggerFactory.getLogger(EditTruncateProcessor.class);

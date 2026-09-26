@@ -78,6 +78,12 @@ public class TaskLifecycleContextImpl implements TaskLifecycleContext {
 
     public void input(String input) { this.input = input; }
     public void rawContent(String rawContent) { this.rawContent = rawContent; }
+    public void metadata(java.util.Map<String, Object> metadata) {
+        if (metadata != null && taskEntry != null) {
+            taskEntry.metadata.clear();
+            taskEntry.metadata.putAll(metadata);
+        }
+    }
     public void runParams(java.util.Map<String, Object> runParams) { this.runParams = runParams; }
     public void rpcContext(Object rpcContext) { this.rpcContext = rpcContext; }
     public void taskId(String v) { this.taskId = v; }

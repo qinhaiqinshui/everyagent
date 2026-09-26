@@ -19,9 +19,11 @@ import dev.everyagent.worker.plugin.registry.TaskLifecycleRegistry;
 import dev.everyagent.worker.plugin.registry.TaskAdmissionPolicyRegistry;
 import dev.everyagent.worker.rpc.RpcDispatcher;
 import dev.everyagent.worker.slash.SlashCommandRegistry;
+import dev.everyagent.worker.slash.SlashTokenHandler;
 import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.ApplicationContext;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.JsonNode;
 
@@ -74,7 +76,9 @@ public class PluginLoader {
     private final SkillContributorRegistry skillContributorRegistry;
     private final RpcDispatcher rpcDispatcher;
     private final SlashCommandRegistry slashRegistry;
+    private final SlashTokenHandler slashTokenHandler;
     private final WorkerServices services;
+    private final ApplicationContext applicationContext;
 
     /** 已加载的插件清单（供 plugin.list RPC 查询）。 */
     private final List<LoadedPlugin> loadedPlugins = new ArrayList<>();
@@ -91,7 +95,9 @@ public class PluginLoader {
             SkillContributorRegistry skillContributorRegistry,
             RpcDispatcher rpcDispatcher,
             SlashCommandRegistry slashRegistry,
-            WorkerServices services) {
+            SlashTokenHandler slashTokenHandler,
+            WorkerServices services,
+            ApplicationContext applicationContext) {
         this.props = props;
         this.builtInPlugins = builtInPlugins;
         this.advisorRegistry = advisorRegistry;
@@ -105,7 +111,9 @@ public class PluginLoader {
         this.skillContributorRegistry = skillContributorRegistry;
         this.rpcDispatcher = rpcDispatcher;
         this.slashRegistry = slashRegistry;
+        this.slashTokenHandler = slashTokenHandler;
         this.services = services;
+        this.applicationContext = applicationContext;
     }
 
     @PostConstruct
@@ -268,7 +276,7 @@ public class PluginLoader {
                     authHandlerRegistry, toolInterceptorRegistry,
                     lifecycleRegistry, admissionPolicyRegistry,
                     skillContributorRegistry,
-                    rpcDispatcher, slashRegistry, services, config);
+                    rpcDispatcher, slashRegistry, slashTokenHandler, services, config, applicationContext);
 
             // 调用 activate()
             plugin.activate(ctx);
@@ -287,6 +295,47 @@ public class PluginLoader {
     /** 获取已加载插件清单（供 plugin.list RPC）。 */
     public List<LoadedPlugin> getLoadedPlugins() {
         return List.copyOf(loadedPlugins);
+    }
+
+    /**
+     * 激活内置插件（从 classpath 反射实例化 EveryAgentPlugin 入口类）。
+     *
+     * <p>内置插件随主 jar 编译打包，不走外部插件目录加载流程。
+     * 由 {@link dev.everyagent.worker.plugin.registry.PluginRegistry} 在扫描目录后调用。
+     *
+     * @param id        插件 id
+     * @param mainClass 入口类全限定名
+     * @param config    插件配置
+     * @return true 激活成功
+     */
+    public boolean activateBuiltInPlugin(String id, String mainClass, PluginConfig config) {
+        try {
+            Class<?> clazz = getClass().getClassLoader().loadClass(mainClass);
+            if (!EveryAgentPlugin.class.isAssignableFrom(clazz)) {
+                log.warn("[plugins] 内置插件 {} 入口类 {} 未实现 EveryAgentPlugin", id, mainClass);
+                return false;
+            }
+            EveryAgentPlugin plugin = (EveryAgentPlugin) clazz.getDeclaredConstructor().newInstance();
+
+            WorkerPluginContext ctx = new WorkerPluginContextImpl(id,
+                    advisorRegistry, toolRegistry, sandboxRegistry,
+                    searchRegistry,
+                    authHandlerRegistry, toolInterceptorRegistry,
+                    lifecycleRegistry, admissionPolicyRegistry,
+                    skillContributorRegistry,
+                    rpcDispatcher, slashRegistry, slashTokenHandler, services, config, applicationContext);
+
+            plugin.activate(ctx);
+            loadedPlugins.add(new LoadedPlugin(id, id, "builtin", "", "everyagent",
+                    null, true, "已激活(内置)"));
+            log.info("[plugins] 内置插件已激活: id={} entry={}", id, mainClass);
+            return true;
+        } catch (Exception e) {
+            log.warn("[plugins] 内置插件 {} 激活失败: {}", id, e.getMessage(), e);
+            loadedPlugins.add(new LoadedPlugin(id, id, "builtin", "", "everyagent",
+                    null, false, "激活失败: " + e.getMessage()));
+            return false;
+        }
     }
 
     /**

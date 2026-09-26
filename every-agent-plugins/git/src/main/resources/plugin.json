@@ -4,5 +4,6 @@
   "version": "0.1.0",
   "description": "Git 操作插件（原生 git RPC + 自动同步）",
   "author": "everyagent",
+  "main": "dev.everyagent.plugin.git.GitPlugin",
   "webMain": "web/index.ts"
 }

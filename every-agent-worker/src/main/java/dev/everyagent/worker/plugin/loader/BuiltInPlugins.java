@@ -43,8 +43,16 @@ public class BuiltInPlugins {
         return pluginsRoot;
     }
 
-    /** 内置插件 id 列表（保留供冲突检查用，当前为空）。 */
+    /** 内置插件 id 列表（与 plugin.json 中的 id 一致，防止外部同名插件重复加载）。 */
     public List<String> builtInIds() {
-        return List.of();
+        return List.of(
+                "git",
+                "subagent",
+                "task-input-queue",
+                "task-edit-resend",
+                "task-queue",
+                "ai-review",
+                "unattended"
+        );
     }
 }

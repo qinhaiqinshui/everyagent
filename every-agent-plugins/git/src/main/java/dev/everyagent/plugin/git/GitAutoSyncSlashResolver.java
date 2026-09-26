@@ -1,8 +1,6 @@
 package dev.everyagent.plugin.git;
 
-import org.springframework.stereotype.Component;
-
-import dev.everyagent.worker.slash.SlashTokenHandler;
+import dev.everyagent.plugin.api.slash.SlashTokenResolver;
 import tools.jackson.databind.JsonNode;
 
 /**
@@ -14,8 +12,7 @@ import tools.jackson.databind.JsonNode;
  * 提交前的 token 被清空、不注入模型上下文(与老项目 {@code resolveSubmissionText = ''} 一致);
  * 真正的 commit+push 由 {@code GitAutoSyncAdvisor} 在本轮任务完成后执行。
  */
-@Component
-public class GitAutoSyncSlashResolver implements SlashTokenHandler.SlashTokenResolver {
+public class GitAutoSyncSlashResolver implements SlashTokenResolver {
 
     @Override
     public String kind() {

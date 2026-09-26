@@ -1,17 +1,11 @@
 package dev.everyagent.plugin.unattended;
 
-import dev.everyagent.worker.plugin.registry.AuthorizationHandlerRegistry;
 import dev.everyagent.plugin.api.permission.AuthorizationChain;
 import dev.everyagent.plugin.api.permission.AuthorizationHandler;
-import dev.everyagent.plugin.api.permission.AuthorizationHandler.AuthorizationRequest;
-import dev.everyagent.plugin.api.permission.AuthorizationHandler.AuthorizationDecision;
-import org.springframework.stereotype.Component;
 
-@Component
 public class UnattendedAuthHandler implements AuthorizationHandler {
 
-    public UnattendedAuthHandler(AuthorizationHandlerRegistry registry) {
-        registry.register(this);
+    public UnattendedAuthHandler() {
     }
     @Override
     public String id() { return "unattended-auth"; }
@@ -21,7 +15,7 @@ public class UnattendedAuthHandler implements AuthorizationHandler {
 
     @Override
     public AuthorizationDecision invoke(AuthorizationRequest req, AuthorizationChain next) throws Exception {
-        if (!req.task().taskFlags().getOrDefault("unattended", false)) {
+        if (!Boolean.TRUE.equals(req.task().metadata().getOrDefault("unattended", false))) {
             return next.proceed(req);
         }
         return new AuthorizationDecision(AuthorizationDecision.Type.DENY, "无人值守模式拒绝授权");
