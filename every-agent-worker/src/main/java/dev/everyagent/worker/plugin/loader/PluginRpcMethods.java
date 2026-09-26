@@ -32,14 +32,12 @@ public class PluginRpcMethods {
 
     private final RpcDispatcher dispatcher;
     private final PluginLoader pluginLoader;
-    private final BuiltInPlugins builtInPlugins;
     private final PluginRegistry pluginRegistry;
 
     public PluginRpcMethods(RpcDispatcher dispatcher, PluginLoader pluginLoader,
-            BuiltInPlugins builtInPlugins, PluginRegistry pluginRegistry) {
+            PluginRegistry pluginRegistry) {
         this.dispatcher = dispatcher;
         this.pluginLoader = pluginLoader;
-        this.builtInPlugins = builtInPlugins;
         this.pluginRegistry = pluginRegistry;
     }
 
@@ -94,7 +92,7 @@ public class PluginRpcMethods {
             ctx.err("NOT_FOUND", "插件文件不存在: " + zipPath);
             return;
         }
-        Path pluginsRoot = builtInPlugins.getPluginsRoot();
+        Path pluginsRoot = pluginRegistry.getPluginsRoot();
         String pluginId;
         try {
             pluginId = extractEap(zip, pluginsRoot);
@@ -116,7 +114,7 @@ public class PluginRpcMethods {
             ctx.err("BAD_PARAMS", "缺少参数 pluginId");
             return;
         }
-        Path pluginsRoot = builtInPlugins.getPluginsRoot();
+        Path pluginsRoot = pluginRegistry.getPluginsRoot();
         Path pluginDir = pluginsRoot.resolve(pluginId).normalize();
         if (!pluginDir.startsWith(pluginsRoot) || !Files.isDirectory(pluginDir)) {
             ctx.err("NOT_FOUND", "插件目录不存在: " + pluginId);

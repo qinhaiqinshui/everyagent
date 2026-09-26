@@ -1,9 +1,9 @@
 import React from 'react'
 import { gitGateway, GitNotInitializedError, type GitCommitFileChange } from './gitGateway'
-import { InlineSpinner } from '@/components/shared/ui'
-import { GitIcon } from '@/components/icon'
-import { useWorkspaceShell } from '@/components/app/WorkspaceShellContext'
-import { normalizeWorkspaceRelativePath } from '@/platform/fs/pathUtils'
+import InlineSpinner from './InlineSpinner'
+import { GitIcon } from './icons'
+import { getPluginContext } from './pluginRuntime'
+import { normalizeWorkspaceRelativePath } from './pathUtils'
 
 export interface GitHistoryCommit {
   id: string
@@ -36,7 +36,7 @@ const CHANGE_BADGE: Record<GitCommitFileChange['changeType'], { letter: string; 
  * 单文件历史(path 指向文件)展开后把当前文件置顶高亮。
  */
 export default function GitHistoryPanel({ workspaceRoot, path, name }: GitHistoryPanelProps) {
-  const { openDiffTab } = useWorkspaceShell()
+  const ctx = getPluginContext()
   const [commits, setCommits] = React.useState<GitHistoryCommit[]>([])
   const [loading, setLoading] = React.useState(true)
   const [error, setError] = React.useState('')
@@ -113,7 +113,7 @@ export default function GitHistoryPanel({ workspaceRoot, path, name }: GitHistor
     if (file.binary) return
     const slashIndex = file.path.lastIndexOf('/')
     const fileName = slashIndex >= 0 ? file.path.slice(slashIndex + 1) : file.path
-    openDiffTab({
+    ctx.ui.openDiffTab({
       filePath: file.path,
       fileName,
       changeType: file.changeType,
@@ -124,7 +124,7 @@ export default function GitHistoryPanel({ workspaceRoot, path, name }: GitHistor
       binary: file.binary,
       allowRestore: true,
     })
-  }, [openDiffTab, workspaceRoot])
+  }, [ctx, workspaceRoot])
 
   /** 当前查看的文件(单文件历史):path 非空时把该文件的变更项置顶高亮。 */
   const focusRelPath = path ? normalizeWorkspaceRelativePath(path) : ''

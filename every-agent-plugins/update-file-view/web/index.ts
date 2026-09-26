@@ -12,9 +12,11 @@
 
 import type { PluginContext, PluginModule, ToolCallViewDefinition } from '@everyagent/plugin-api'
 import { UpdateFileToolView } from './UpdateFileToolView'
+import { setPluginContext } from './pluginRuntime'
 
 const updateFileViewPlugin: PluginModule = {
   activate(ctx: PluginContext) {
+    setPluginContext(ctx)
     const def: ToolCallViewDefinition = {
       pluginId: 'update-file-view',
       toolName: 'update_file',

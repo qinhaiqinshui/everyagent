@@ -5,11 +5,21 @@
  *
  * 多工作区并行:所有方法第一参数 workspace 指定沙箱根(必填)。
  * 仅暴露 worker 已实现的 git.* 能力;未开放的(分支管理/stash/merge 编辑器)即能力门控项。
+ *
+ * 本文件不再引用宿主 web 模块：RPC 经 ctx.sdk.rpc 定向，工作区归属经
+ * ctx.sdk.workspace.workerIdOfRoot 反查；AUTH_REQUIRED 用结构化判定，不依赖 @every-agent/client。
  */
-import { hubSession } from '@/hub/session'
-import { workspaceRegistry } from '@/hub/workspaceRegistry'
-import { RpcError } from '@every-agent/client'
-import type { TaskFileChange } from '@/types'
+import { getPluginContext } from './pluginRuntime'
+
+/** git.diff 返回的变更文件项（自宿主 @/types 的 TaskFileChange 复制为插件本地类型）。 */
+export interface TaskFileChange {
+  filePath: string
+  changeType: 'created' | 'updated' | 'deleted'
+  beforeContent?: string
+  afterContent?: string
+  binary?: boolean
+  allowRestore?: boolean
+}
 
 export interface GitRemote {
   name: string
@@ -53,9 +63,15 @@ function parseAuthHost(message: string): string {
 }
 
 function normalizeError(err: unknown): never {
-  // worker 业务错误码 AUTH_REQUIRED → 弹窗凭证收集信号
-  if (err instanceof RpcError && err.code === 'AUTH_REQUIRED') {
-    throw new GitAuthRequiredError(parseAuthHost(err.message))
+  // worker 业务错误码 AUTH_REQUIRED → 弹窗凭证收集信号（结构化判定，不依赖 @every-agent/client）。
+  if (
+    err
+    && typeof err === 'object'
+    && 'code' in err
+    && (err as { code?: unknown }).code === 'AUTH_REQUIRED'
+    && 'message' in err
+  ) {
+    throw new GitAuthRequiredError(parseAuthHost(String((err as { message?: unknown }).message ?? '')))
   }
   const message = err instanceof Error ? err.message : String(err)
   if (/不是 git 仓库|not a git repository|repository not found/i.test(message)) {
@@ -66,13 +82,13 @@ function normalizeError(err: unknown): never {
 
 /**
  * 按工作区归属的 worker 定向 RPC(多 worker 合并后,工作区可能属于非选中 worker)。
- * 注册表能反查到 workerId → rpcTo 定向;归属缺失(工作区未注册或 worker 离线)直接抛错,
- * 不再回退默认 RPC( hubSession.rpc 已删除,错误路由到非归属 worker 是静默错误源)。
+ * 注册表能反查到 workerId → ctx.sdk.rpc 定向;归属缺失(工作区未注册或 worker 离线)直接抛错。
  */
-function rpcForWorkspace(workspace: string, method: string, params: Record<string, unknown>): Promise<any> {
-  const workerId = workspaceRegistry.workerIdOfRoot(workspace)
+function rpcForWorkspace(workspace: string, method: string, params: Record<string, unknown>): Promise<unknown> {
+  const sdk = getPluginContext().sdk
+  const workerId = sdk.workspace.workerIdOfRoot(workspace)
   if (workerId) {
-    return hubSession.rpcTo(workerId, method, params)
+    return sdk.rpc(workerId, method, params)
   }
   throw new Error('无法确定该工作区所属 worker(工作区未注册或 worker 离线)')
 }

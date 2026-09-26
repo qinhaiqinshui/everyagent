@@ -9,10 +9,12 @@
 import type { PluginModule } from '@everyagent/plugin-api'
 import EditMessageButton from './EditMessageButton'
 import { createEditResendContributionProvider } from './useEditResend'
+import { setPluginContext } from './pluginRuntime'
 import './task-edit-resend.css'
 
 const taskEditResendPlugin: PluginModule = {
   activate(ctx) {
+    setPluginContext(ctx)
     ctx.ui.registerUserMessageAction({
       id: 'task-edit-resend.edit-button',
       Component: EditMessageButton,

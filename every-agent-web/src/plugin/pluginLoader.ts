@@ -16,12 +16,17 @@
  */
 
 import { hubSession } from '@/hub/session'
+import { workspaceRegistry } from '@/hub/workspaceRegistry'
+import { domainEventBus } from '@/events/eventBus'
+import { workspaceGateway } from '@/platform/fs/workspaceGateway'
 import { pluginDispatcher } from './PluginDispatcher'
 import type {
   PluginContext,
   PluginModule,
   PluginSdk,
   PluginStorage,
+  PluginEvents,
+  PluginFs,
   CommandRegistry,
   Disposable,
 } from '@everyagent/plugin-api'
@@ -100,8 +105,55 @@ function createPluginSdk(workerId: string, workspaceId: string, workspaceRoot: s
     workspace: {
       id: workspaceId,
       rootPath: workspaceRoot,
+      list: async () =>
+        (workspaceRegistry.current?.workspaces ?? []).map((entry) => ({
+          root: entry.root,
+          workerId: entry.workerId,
+          id: entry.id,
+          addedAt: entry.addedAt,
+          lastActivityAt: entry.lastActivityAt,
+          missing: entry.missing,
+        })),
+      workerIdOfRoot: (root: string) => workspaceRegistry.workerIdOfRoot(root) ?? undefined,
     },
     workerId,
+  }
+}
+
+/** 领域事件总线实现（委托宿主 domainEventBus）。 */
+function createPluginEvents(): PluginEvents {
+  return {
+    on(eventName, handler) {
+      const unsubscribe = domainEventBus.subscribe(
+        eventName as Parameters<typeof domainEventBus.subscribe>[0],
+        handler as (payload: unknown) => void,
+      )
+      return { dispose: unsubscribe }
+    },
+    emit(eventName, payload) {
+      domainEventBus.emit(
+        eventName as Parameters<typeof domainEventBus.emit>[0],
+        payload as Parameters<typeof domainEventBus.emit>[1],
+      )
+    },
+  }
+}
+
+/** 文件系统网关实现（委托宿主 workspaceGateway）。 */
+function createPluginFs(): PluginFs {
+  return {
+    listDir: (workspaceRoot, dir) =>
+      workspaceGateway.listDir(workspaceRoot, dir).then((rows) =>
+        rows.map((row) => ({
+          path: row.path,
+          name: row.name,
+          isDirectory: row.isDirectory,
+          size: row.size,
+          mtimeMs: row.mtimeMs,
+          createdTs: row.createdTs,
+        })),
+      ),
+    delete: (workspaceRoot, path) => workspaceGateway.deletePath(workspaceRoot, path),
   }
 }
 
@@ -198,6 +250,8 @@ export async function loadPlugins(): Promise<void> {
         sdk: createPluginSdk(workerId, workspaceId, workspaceRoot),
         storage: createPluginStorage(plugin.id),
         commands: createCommandRegistry(),
+        events: createPluginEvents(),
+        fs: createPluginFs(),
         // pluginDispatcher 使用 web 内部强类型（WorkspaceTab/FileTabResource 等），
         // 与 @everyagent/plugin-api 的最小化接口在 ComponentType 上因不变性不兼容，
         // 运行时行为一致，此处安全强转。

@@ -5,22 +5,37 @@
  */
 
 import React from 'react'
-import { workspaceRegistry } from '@/hub/workspaceRegistry'
-import { useHub } from '@/hub/HubProvider'
-import { domainEventBus, DOMAIN_EVENTS } from '@/events/eventBus'
+import type { PluginWorkspaceEntry } from '@everyagent/plugin-api'
+import { getPluginContext } from './pluginRuntime'
 import { gitGateway } from './gitGateway'
 
 export default function GitChangeBadge() {
-  const hub = useHub()
-  const connected = hub.state === 'open'
-  const hasWorker = hub.directory.some((w) => w.online && w.enabled && w.hasApiKey && !w.error && !w.connecting)
+  const ctx = getPluginContext()
+  const [roots, setRoots] = React.useState<string[]>([])
+  const [ready, setReady] = React.useState(false)
   const [count, setCount] = React.useState(0)
+
+  React.useEffect(() => {
+    const refreshRoots = () => {
+      void ctx.sdk.workspace.list()
+        .then((entries: PluginWorkspaceEntry[]) => {
+          setRoots(entries.map((entry) => entry.root))
+          setReady(entries.length > 0)
+        })
+        .catch(() => {
+          setRoots([])
+          setReady(false)
+        })
+    }
+    refreshRoots()
+    const disposable = ctx.events.on('workspace-registry-changed', () => refreshRoots())
+    return () => disposable.dispose()
+  }, [ctx])
 
   React.useEffect(() => {
     let cancelled = false
     const refresh = async () => {
-      const roots = workspaceRegistry.current?.workspaces.map((entry) => entry.root) ?? []
-      if (roots.length === 0 || !connected || !hasWorker) {
+      if (roots.length === 0 || !ready) {
         if (!cancelled) setCount(0)
         return
       }
@@ -41,14 +56,10 @@ export default function GitChangeBadge() {
       }
     }
     void refresh()
-    const unsub = domainEventBus.subscribe(DOMAIN_EVENTS.WORKSPACE_REGISTRY_CHANGED, () => {
-      void refresh()
-    })
     return () => {
       cancelled = true
-      unsub()
     }
-  }, [connected, hasWorker, hub.reconnectVersion])
+  }, [roots, ready])
 
   if (count === 0) return null
   return (
@@ -76,3 +87,4 @@ export default function GitChangeBadge() {
     </span>
   )
 }
+

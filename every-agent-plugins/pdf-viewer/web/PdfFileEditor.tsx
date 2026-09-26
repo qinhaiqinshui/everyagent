@@ -4,10 +4,10 @@
 // (Chromium 内置 PDF Viewer,零依赖);data URL 先转 Blob URL 以保证 iframe 兼容。
 import React from 'react'
 import type {
-  FileContentEditorDescriptor,
-  FileContentHeaderAction,
-  FileContentEditorProps,
-} from '@/components/files/editors/types'
+  PluginFileContentEditorDescriptor,
+  PluginFileContentHeaderAction,
+  PluginFileContentEditorProps,
+} from '@everyagent/plugin-api'
 
 function PdfFileEditor({
   file,
@@ -15,7 +15,7 @@ function PdfFileEditor({
   loading,
   error,
   onHeaderActionsChange,
-}: FileContentEditorProps) {
+}: PluginFileContentEditorProps) {
   const [blobUrl, setBlobUrl] = React.useState<string | null>(null)
   const [convertError, setConvertError] = React.useState('')
 
@@ -65,7 +65,7 @@ function PdfFileEditor({
     anchor.click()
   }, [blobUrl, file.fileName])
 
-  const headerActions = React.useMemo<FileContentHeaderAction[]>(() => [
+  const headerActions = React.useMemo<PluginFileContentHeaderAction[]>(() => [
     {
       id: 'pdf-download',
       label: '下载',
@@ -102,7 +102,7 @@ function PdfFileEditor({
   )
 }
 
-export const descriptor: FileContentEditorDescriptor = {
+export const descriptor: PluginFileContentEditorDescriptor = {
   kind: 'pdf',
   label: 'PDF',
   extensions: ['.pdf'],

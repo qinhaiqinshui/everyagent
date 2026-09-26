@@ -32,6 +32,7 @@ import { Button, InlineSpinner } from '@/components/shared/ui'
 import { pluginDispatcher } from '@/plugin/PluginDispatcher'
 import type { TaskRunSubmitContribution, TaskRunSubmitContributionProvider } from '@/plugin/types'
 import { ComposerDraftBridgeContext, type ComposerDraftBridgeValue } from '@/plugin/composerDraftBridge'
+import { setComposerBridge } from '@/plugin/pluginRuntimeBridge'
 import { useWorkspaceShell } from '@/components/app/WorkspaceShellContext'
 import { useResponsiveViewport } from '@/hooks/useResponsiveViewport'
 import { parseOpaqueTokenText, replaceComposerTokensForSubmission } from '@/composerToken/composerOpaqueToken'
@@ -654,6 +655,13 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
       })
     },
   }), [])
+
+  // 插件草稿桥接：把输入框草稿写能力注入非 React 模块 holder，
+  // 供插件 ctx.ui.appendComposerText 同步调用（替代 ComposerDraftBridgeContext 直接读取）。
+  React.useEffect(() => {
+    setComposerBridge(composerDraftBridge)
+    return () => setComposerBridge(null)
+  }, [composerDraftBridge])
 
   // 从线程派生 agent 列表:主 agent(mainAgentId)恒在首位,子 agent 按首次出现顺序。
   // 线程内主 agent 消息 agentId 为空串(缺省=主线程),此处归一到 mainAgentId 供列表/过滤使用。

@@ -17,15 +17,12 @@
 import React from 'react'
 import { Tree, Input, Button, Badge, Modal, Form, Checkbox, App } from 'antd'
 import type { TreeDataNode } from 'antd'
-import { InlineSpinner } from '@/components/shared/ui'
-import { GitIcon } from '@/components/icon'
-import { ChevronDownIcon, ChevronRightIcon, FolderIcon } from '@/components/shared/AppGlyphs'
-import { FileTypeIcon } from '@/components/shared/FileTypeGlyphs'
-import { useHub } from '@/hub/HubProvider'
-import { workspaceRegistry, type WorkspaceEntry } from '@/hub/workspaceRegistry'
-// antdConfirm 已随「移除工作区」入口下线而移除
-import { useWorkspaceShell } from '@/components/app/WorkspaceShellContext'
-import { setOpenPluginTabRef } from './index'
+import type { PluginWorkspaceEntry } from '@everyagent/plugin-api'
+import InlineSpinner from './InlineSpinner'
+import { GitIcon, ChevronDownIcon, ChevronRightIcon, FolderIcon } from './icons'
+import { FileTypeIcon } from './FileTypeGlyphs'
+import { usePluginWorkspaces } from './usePluginWorkspaces'
+import { getPluginContext } from './pluginRuntime'
 import {
   gitGateway,
   GitNotInitializedError,
@@ -33,11 +30,8 @@ import {
   type GitCredential,
   type GitRemote,
 } from './gitGateway'
-import { workspaceGateway } from '@/platform/fs/workspaceGateway'
-import { domainEventBus, DOMAIN_EVENTS } from '@/events/eventBus'
-import SidebarScrollArea from '@/components/shared/SidebarScrollArea'
-import MoreActionsButton, { type MoreActionItem } from '@/components/shared/MoreActionsButton'
-import { MenuList, type MenuListItem } from '@/components/shared/ui/Menu'
+import SidebarScrollArea from './SidebarScrollArea'
+import MoreActionsButton, { MenuList, type MoreActionItem, type MenuListItem } from './Menu'
 
 interface GitStatusResult {
   branch?: string
@@ -201,30 +195,23 @@ function buildTreeData(leaves: ChangeLeaf[]): TreeDataNode[] {
  * Git 侧边栏面板:与资源管理器同布局,列出注册表全部工作区,每个工作区一张分组卡片。
  */
 export default function GitSidebarPanel(_props: { embedded?: boolean }) {
-  const hub = useHub()
-  const [registry, setRegistry] = React.useState(workspaceRegistry.current)
-
-  React.useEffect(() => workspaceRegistry.subscribe(setRegistry), [])
-
-  const connected = hub.state === 'open'
-  const hasWorker = hub.directory.some((w) => w.online && w.enabled && w.hasApiKey && !w.error && !w.connecting)
-  const entries = registry?.workspaces ?? []
+  const { entries, defaultRoot, ready } = usePluginWorkspaces()
 
   return (
     <div style={panelStyle}>
       <SidebarScrollArea style={bodyStyle}>
         <div style={sectionStyle}>
-          {!connected || !hasWorker ? (
+          {!ready ? (
             <div style={emptyStyle}>
               <GitIcon size={32} />
               <p style={emptyTextStyle}>未连接 worker——在设置页配置 hub 连接后使用 Git。</p>
             </div>
-          ) : registry ? null : <div style={emptyStyle}>连接后可查看工作区注册表。</div>}
-          {entries.map((entry) => (
+          ) : null}
+          {(entries ?? []).map((entry) => (
             <GitWorkspaceGroupPanel
               key={entry.root}
               entry={entry}
-              isDefault={entry.root === registry?.defaultRoot}
+              isDefault={entry.root === defaultRoot}
             />
           ))}
         </div>
@@ -241,13 +228,12 @@ function GitWorkspaceGroupPanel({
   entry,
   isDefault,
 }: {
-  entry: WorkspaceEntry
+  entry: PluginWorkspaceEntry
   isDefault: boolean
 }) {
   const workspaceRoot = entry.root
-  const hub = useHub()
-  const { openDiffTab, openPluginTab } = useWorkspaceShell()
-  React.useEffect(() => { setOpenPluginTabRef(openPluginTab); return () => setOpenPluginTabRef(null) }, [openPluginTab])
+  const { ready } = usePluginWorkspaces()
+  const ctx = getPluginContext()
   const { message, modal } = App.useApp()
   const [initialized, setInitialized] = React.useState<boolean | null>(null)
   const [status, setStatus] = React.useState<GitStatusResult | null>(null)
@@ -282,8 +268,8 @@ function GitWorkspaceGroupPanel({
   /** 首次展开缓存标记:已成功加载过则折叠/再展开不再重复请求,除非手动刷新。 */
   const [historyLoaded, setHistoryLoaded] = React.useState(false)
 
-  const connected = hub.state === 'open'
-  const hasWorker = hub.directory.some((w) => w.online && w.enabled && w.hasApiKey && !w.error && !w.connecting)
+  const connected = ready
+  const hasWorker = ready
 
   const refresh = React.useCallback(async () => {
     if (!workspaceRoot) return
@@ -341,18 +327,18 @@ function GitWorkspaceGroupPanel({
     if (connected && hasWorker) {
       void refresh()
     }
-  }, [connected, hasWorker, refresh, hub.reconnectVersion])
+  }, [connected, hasWorker, refresh])
 
   // 侧边栏切到本面板时主动刷新,确保状态反映最新落盘。
   React.useEffect(() => {
-    const unsubscribe = domainEventBus.subscribe(DOMAIN_EVENTS.SIDEBAR_PANEL_SHOWN, (payload) => {
-      if (payload.panelId !== 'git') return
+    const disposable = ctx.events.on('sidebar-panel-shown', (payload) => {
+      if ((payload as { panelId?: string } | undefined)?.panelId !== 'git') return
       if (connected && hasWorker) {
         void refresh()
       }
     })
-    return unsubscribe
-  }, [refresh, connected, hasWorker])
+    return () => disposable.dispose()
+  }, [refresh, connected, hasWorker, ctx])
 
   const leaves = React.useMemo(() => (status ? collectLeaves(status) : []), [status])
   const treeData = React.useMemo(() => buildTreeData(leaves), [leaves])
@@ -411,7 +397,7 @@ function GitWorkspaceGroupPanel({
       const change = await gitGateway.diff(workspaceRoot, path)
       // 防御:filePath 已由 gitGateway 校验为 string;changeType 归一避免旧 worker 缺字段时污染 diff 标签。
       const slashIndex = change.filePath.lastIndexOf('/')
-      openDiffTab({
+      ctx.ui.openDiffTab({
         filePath: change.filePath,
         changeType: change.changeType === 'created' ? 'created' : 'updated',
         beforeContent: change.beforeContent ?? '',
@@ -425,7 +411,7 @@ function GitWorkspaceGroupPanel({
     } finally {
       setDiffLoadingPath(null)
     }
-  }, [openDiffTab, workspaceRoot, message])
+  }, [ctx, workspaceRoot, message])
 
   const handleInit = React.useCallback(async () => {
     setBusy('init')
@@ -444,7 +430,7 @@ function GitWorkspaceGroupPanel({
     setBusy('clone')
     try {
       if (dir) {
-        const rows = await workspaceGateway.listDir(workspaceRoot, dir).catch(() => [])
+        const rows = await ctx.fs.listDir(workspaceRoot, dir).catch(() => [])
         if (rows.length > 0) {
           throw new Error('目标子目录非空:请选择工作区内的空目录,或留空克隆到根,或改用「初始化本地仓库」')
         }
@@ -585,7 +571,7 @@ function GitWorkspaceGroupPanel({
     if (!confirmed) return
     setBusy('delete')
     try {
-      await workspaceGateway.deletePath(workspaceRoot, path)
+      await ctx.fs.delete(workspaceRoot, path)
       message.success(`已删除 ${path}`)
       setSelectedPaths((current) => {
         if (!current.has(path)) return current

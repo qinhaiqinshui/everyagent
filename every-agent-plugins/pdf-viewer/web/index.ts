@@ -13,10 +13,9 @@ import { descriptor } from './PdfFileEditor'
 
 const pdfViewerPlugin: PluginModule = {
   activate(ctx: PluginContext) {
-    // descriptor 使用 web 内部强类型 FileContentEditorDescriptor,
-    // 与 plugin-api 的最小化接口在 ComponentType 上因不变性不兼容,
-    // 运行时行为一致,此处安全强转(与 builtInPlugins 的 ui 强转同一模式)。
-    ctx.ui.registerFileContentEditor(descriptor as unknown as PluginFileContentEditorDescriptor)
+    // descriptor 直接使用 plugin-api 的 PluginFileContentEditorDescriptor 类型，
+    // 与 ctx.ui.registerFileContentEditor 签名一致，无需强转。
+    ctx.ui.registerFileContentEditor(descriptor)
   },
 }
 

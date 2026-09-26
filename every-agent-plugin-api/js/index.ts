@@ -94,17 +94,105 @@ export interface Disposable {
 
 // ─── SDK / 存储 / 命令 ────────────────────────────────────────────────────
 
+/** 工作区注册表条目（最小化，替代 web 内部 WorkspaceEntry 的必要字段子集）。 */
+export interface PluginWorkspaceEntry {
+  /** 工作区根（worker 机器上的绝对路径，即身份键）。 */
+  root: string
+  /** 来源 worker id。 */
+  workerId: string
+  /** 稳定工作区 id（defaultworkspace 或 w_xxxxx）。 */
+  id?: string
+  /** 注册时间（ms）。 */
+  addedAt?: number
+  /** 最后活动时间（ms）。 */
+  lastActivityAt?: number
+  /** 目录已被移动/删除标记。 */
+  missing?: boolean
+}
+
+/** 文件条目统计信息（最小化，替代 web 内部 WorkspaceFileStat 的必要字段子集）。 */
+export interface PluginFileStat {
+  /** 业务绝对路径（带前导 /）。 */
+  path: string
+  /** 节点名称。 */
+  name: string
+  /** 是否为目录。 */
+  isDirectory: boolean
+  /** 文件大小（字节）。 */
+  size: number
+  /** 修改时间（ms）。 */
+  mtimeMs: number
+  /** 创建时间（ms）。 */
+  createdTs?: number
+}
+
 /** 与 worker 通信的 SDK（经 hub RPC 管道）。 */
 export interface PluginSdk {
   /** 调用 worker RPC（对标 vscode.commands.executeCommand）。 */
   rpc(workerId: string, method: string, params?: unknown): Promise<unknown>
-  /** 当前工作区信息。 */
+  /** 当前工作区信息与多工作区注册表能力。 */
   readonly workspace: {
+    /** 插件加载时所归属工作区的稳定 id。 */
     readonly id: string
+    /** 插件加载时所归属工作区的根路径（worker 机器绝对路径）。 */
     readonly rootPath: string
+    /** 列出全部已注册工作区（多 worker 合并；无连接时返回空数组）。 */
+    list(): Promise<PluginWorkspaceEntry[]>
+    /** 按工作区根反查所属 worker id；未找到返回 undefined。 */
+    workerIdOfRoot(root: string): string | undefined
   }
   /** 当前 worker id。 */
   readonly workerId: string
+}
+
+/** 领域事件名（与宿主 DOMAIN_EVENTS 同名值，字符串字面量联合）。 */
+export type PluginDomainEvent =
+  | 'workspace-file-changed'
+  | 'workspace-registry-changed'
+  | 'sidebar-panel-shown'
+  | 'file-content-saved'
+  | 'task-created'
+  | 'task-deleted'
+  | 'task-status-changed'
+  | 'task-trace-changed'
+  | (string & {})
+
+/** 领域事件总线（对标 vscode.event；委托宿主 domainEventBus）。 */
+export interface PluginEvents {
+  /** 订阅领域事件，返回可释放资源。 */
+  on(eventName: PluginDomainEvent, handler: (payload: unknown) => void): Disposable
+  /** 发布领域事件（payload 形状由事件名决定，插件按需强转）。 */
+  emit(eventName: PluginDomainEvent, payload: unknown): void
+}
+
+/** 工作区文件系统网关（对标宿主 platform/fs/workspaceGateway 的最小子集）。 */
+export interface PluginFs {
+  /** 列出指定目录下的文件/目录条目（dir 为工作区相对路径，空串 = 工作区根）。 */
+  listDir(workspaceRoot: string, dir: string): Promise<PluginFileStat[]>
+  /** 删除指定文件或目录（工作区相对路径）。 */
+  delete(workspaceRoot: string, path: string): Promise<void>
+}
+
+/** diff 标签页输入（对齐宿主 WorkspaceShellActions.openDiffTab 入参）。 */
+export interface PluginDiffTabInput {
+  /** 文件路径。 */
+  filePath: string
+  /** 文件名。 */
+  fileName: string
+  /** 变更类型（含 deleted）。 */
+  changeType: 'created' | 'updated' | 'deleted'
+  /** 变更前内容。 */
+  beforeContent: string
+  /** 变更后内容。 */
+  afterContent: string
+  /** 差异所属的工作区根；缺省时回退注册表首项。 */
+  workspaceRoot?: string
+  /** 标签标题。 */
+  title?: string
+  /** 是否为二进制文件。 */
+  binary?: boolean
+  /** 是否允许「恢复此版本」（仅 Git 历史提交详情）。 */
+  allowRestore?: boolean
 }
 
 /** per-plugin 本地存储（对标 VSCode globalState）。 */
@@ -470,6 +558,21 @@ export type OutputBlockHandler = (
 // ─── 文件内容编辑器扩展点 ─────────────────────────────────────────────────
 
 /**
+ * 文件内容编辑器标题栏动作（插件版，对齐 web 内部 FileContentHeaderAction）。
+ */
+export interface PluginFileContentHeaderAction {
+  id: string
+  label: string
+  onClick: () => void
+  title?: string
+  disabled?: boolean
+  active?: boolean
+  groupId?: string
+  /** 标题栏动作展示位置；默认进入编辑器动作区，`save-adjacent` 固定靠近保存按钮。 */
+  placement?: 'default' | 'save-adjacent'
+}
+
+/**
  * 文件内容编辑器 props（插件版，对齐 web 内部 FileContentEditorProps）。
  *
  * 二进制只读编辑器（readonly=true）的 `content` 为 data URL；
@@ -497,7 +600,7 @@ export interface PluginFileContentEditorProps {
   /** 草稿变更回调。 */
   onDraftChange: (nextValue: string) => void
   /** 标题栏动作变更回调（结构对齐 web 内部 FileContentHeaderAction）。 */
-  onHeaderActionsChange?: (actions: unknown[]) => void
+  onHeaderActionsChange?: (actions: PluginFileContentHeaderAction[]) => void
   /** 只读态请求进入可编辑态。 */
   onRequestEditMode?: () => void
 }
@@ -573,6 +676,14 @@ export interface UiRegistry {
   registerOutputBlock(tag: string, handler: OutputBlockHandler): Disposable
   registerFileContentEditor(def: PluginFileContentEditorDescriptor): Disposable
   registerFileExplorerAction(action: FileExplorerAction): Disposable
+  /** 打开插件自定义标签（替代宿主 useWorkspaceShell().openPluginTab）。 */
+  openPluginTab(type: string, data: Record<string, string>, title?: string): void
+  /** 打开顶层文件标签（替代宿主 useWorkspaceShell().openGlobalFileTab）。 */
+  openFileTab(workspaceRoot: string, filePath: string, options?: { mode?: string }): void
+  /** 打开顶层 diff 对比标签（替代宿主 useWorkspaceShell().openDiffTab）。 */
+  openDiffTab(input: PluginDiffTabInput): void
+  /** 向当前输入框草稿末尾追加纯文本（替代宿主 composerDraftBridge）。 */
+  appendComposerText(text: string): void
 }
 
 // ─── PluginContext / PluginModule ─────────────────────────────────────────
@@ -585,6 +696,10 @@ export interface PluginContext {
   readonly storage: PluginStorage
   readonly commands: CommandRegistry
   readonly ui: UiRegistry
+  /** 领域事件总线（委托宿主 domainEventBus）。 */
+  readonly events: PluginEvents
+  /** 工作区文件系统网关（委托宿主 workspaceGateway）。 */
+  readonly fs: PluginFs
 }
 
 /** 插件入口函数签名（对标 VSCode activate/deactivate）。 */

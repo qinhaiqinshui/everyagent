@@ -23,7 +23,6 @@
         <module>every-agent-plugin-api</module>
         <module>every-agent-worker</module>
         <module>every-agent-plugins</module>
-        <module>every-agent-app</module>
     </modules>
 
     <properties>

@@ -1,4 +1,4 @@
-import type { TaskTraceRecord } from '@/types'
+import type { PluginTraceRecord } from '@everyagent/plugin-api'
 import './authReview.css'
 
 /** AI 审议结论英文枚举 -> 中文标签。 */
@@ -98,7 +98,7 @@ function BlockRow({ label, value, mono = false }: { label: string; value: string
  * 展示 decision（决议徽标）/ confidence（置信度）/ reason / scope / grantKey / prompt / taskId / agentId，
  * 数据来自 trace.metadata（taskId/agentId 缺省回退到 trace 顶层字段）。
  */
-export default function AuthReviewTraceView({ trace }: { trace: TaskTraceRecord }) {
+export default function AuthReviewTraceView({ trace }: { trace: PluginTraceRecord }) {
   const meta = trace.metadata ?? {}
   const rawDecision = readMetaString(meta.decision)
   const decisionLabel = (AUTH_REVIEW_DECISION_LABELS[rawDecision.toUpperCase()] ?? rawDecision) || '未知'

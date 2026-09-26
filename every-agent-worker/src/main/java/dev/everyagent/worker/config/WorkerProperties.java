@@ -31,6 +31,8 @@ public class WorkerProperties {
     private String skillsDir = "";
     /** 插件目录(外部 + 内置物化;空 = <系统目录>/plugins)。 */
     private String pluginsDir = "";
+    /** 内置插件源码根目录(空 = 工作目录下 every-agent-plugins/;支持 ~ 开头)。 */
+    private String builtinPluginsDir = "";
     /**
      * 程序资源根(仅用于授权忽略前缀等,不再是程序附属文件的定位基础):
      * 程序附属文件(rg、eagent-run.py、WSL 托管镜像)统一随安装/解压分发到
@@ -246,6 +248,21 @@ public class WorkerProperties {
         String p = pluginsDir == null || pluginsDir.isBlank() ? null : pluginsDir.trim();
         return (p == null ? resolveHomeDir().resolve("plugins") : java.nio.file.Path.of(p))
                 .toAbsolutePath().normalize();
+    }
+
+    /**
+     * 内置插件源码根目录绝对路径;配置为空时取工作目录(user.dir)下 every-agent-plugins/。
+     * 配置值支持 ~ 开头(展开为 user.home);非空时按字面路径解析后取绝对路径。
+     */
+    public java.nio.file.Path resolveBuiltinPluginsDir() {
+        String p = builtinPluginsDir == null || builtinPluginsDir.isBlank() ? null : builtinPluginsDir.trim();
+        if (p == null) {
+            return java.nio.file.Path.of("every-agent-plugins").toAbsolutePath().normalize();
+        }
+        if (p.startsWith("~")) {
+            p = System.getProperty("user.home") + p.substring(1);
+        }
+        return java.nio.file.Path.of(p).toAbsolutePath().normalize();
     }
 
     /**
@@ -777,6 +794,14 @@ public class WorkerProperties {
 
     public void setPluginsDir(String pluginsDir) {
         this.pluginsDir = pluginsDir;
+    }
+
+    public String getBuiltinPluginsDir() {
+        return builtinPluginsDir;
+    }
+
+    public void setBuiltinPluginsDir(String builtinPluginsDir) {
+        this.builtinPluginsDir = builtinPluginsDir;
     }
 
     public String getProgramDir() {

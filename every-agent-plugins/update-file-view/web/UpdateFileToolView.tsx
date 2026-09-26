@@ -17,12 +17,9 @@
  */
 
 import React from 'react'
-import { WrenchIcon, ChevronDownIcon, ChevronRightIcon } from '@/components/shared/AppGlyphs'
-import { useWorkspaceShell } from '@/components/app/WorkspaceShellContext'
-import { toBusinessAbsolutePath } from '@/platform/fs/pathUtils'
-import { useTaskWorkspaceRoot } from '@/components/task/TaskWorkspaceContext'
-import { extractFileName, hasActiveTextSelection } from '@/components/task/toolViews/helpers'
-import { buildLineDiff } from '@/utils/textDiff'
+import { WrenchIcon, ChevronDownIcon, ChevronRightIcon } from './icons'
+import { getPluginContext } from './pluginRuntime'
+import { toBusinessAbsolutePath, extractFileName, hasActiveTextSelection, buildLineDiff } from './utils'
 import { UpdateFileDiff } from './UpdateFileDiff'
 
 /** 从 update_file 参数提取可 diff 的 (oldcontent, content) 二元组；不完整返回 null。 */
@@ -41,8 +38,8 @@ function UpdateFileEntry({ detail }: { detail: import('@everyagent/plugin-api').
   const businessPath = fullPath ? toBusinessAbsolutePath(fullPath) : ''
   const diffArgs = extractDiffArgs(args)
 
-  const workspaceRoot = useTaskWorkspaceRoot()
-  const { openGlobalFileTab } = useWorkspaceShell()
+  const ctx = getPluginContext()
+  const workspaceRoot = ctx.sdk.workspace.rootPath
 
   const hasError = detail.status === 'error'
   const result = detail.result
@@ -66,11 +63,11 @@ function UpdateFileEntry({ detail }: { detail: import('@everyagent/plugin-api').
   }, [diffLines])
 
   const handleOpenFile = React.useCallback(() => {
-    if (!businessPath || !workspaceRoot || !openGlobalFileTab) return
-    openGlobalFileTab({ workspaceRoot, filePath: businessPath }, { mode: 'readwrite' })
-  }, [businessPath, workspaceRoot, openGlobalFileTab])
+    if (!businessPath || !workspaceRoot) return
+    ctx.ui.openFileTab(workspaceRoot, businessPath, { mode: 'readwrite' })
+  }, [ctx, businessPath, workspaceRoot])
 
-  const canOpen = Boolean(businessPath && workspaceRoot && openGlobalFileTab)
+  const canOpen = Boolean(businessPath && workspaceRoot)
 
   return (
     <div className={`nagent-tool nagent-tool--filewrite${open ? ' is-open' : ''}`}>

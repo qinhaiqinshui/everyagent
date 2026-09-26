@@ -9,12 +9,12 @@
  */
 import React from 'react'
 import type { UserMessageActionProps } from '@everyagent/plugin-api'
-import { ComposerDraftBridgeContext } from '@/plugin/composerDraftBridge'
+import { getPluginContext } from './pluginRuntime'
 import { UserMessageEditContext } from './userMessageEditContext'
 import { useEditResend } from './useEditResend'
 
 export default function EditMessageButton({ taskId, seq, content, rawContent }: UserMessageActionProps): React.ReactNode {
-  const bridge = React.useContext(ComposerDraftBridgeContext)
+  const ctx = getPluginContext()
   // 宿主显式提供编辑上下文（旧挂载方式）时优先；缺省(null)走插件自身 store。
   const override = React.useContext(UserMessageEditContext)
   const { editTarget, startEdit, cancelEdit } = useEditResend(taskId)
@@ -50,7 +50,7 @@ export default function EditMessageButton({ taskId, seq, content, rawContent }: 
     }
   }, [])
 
-  if (!taskId || !bridge) return null
+  if (!taskId) return null
 
   const isEditing = override ? override.editingUserSeq === seq : editTarget?.seq === seq
 
@@ -67,7 +67,7 @@ export default function EditMessageButton({ taskId, seq, content, rawContent }: 
     if (isEditing) {
       cancelEdit()
     } else {
-      bridge.appendText(content ?? '')
+      ctx.ui.appendComposerText(content ?? '')
       startEdit(seq)
     }
   }

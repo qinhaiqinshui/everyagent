@@ -9,7 +9,7 @@
  */
 
 import React from 'react'
-import { buildLineDiff } from '@/utils/textDiff'
+import { buildLineDiff } from './utils'
 import './updateDiff.css'
 
 export interface UpdateFileDiffProps {

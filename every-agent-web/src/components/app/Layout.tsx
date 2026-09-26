@@ -41,6 +41,7 @@ import BrowserNotificationGuide from './BrowserNotificationGuide'
 import ReconnectionModal from './ReconnectionModal'
 import MissingWorkspaceRepairHost from './MissingWorkspaceRepairHost'
 import { WorkspaceShellProvider } from './WorkspaceShellContext'
+import { setShellBridge } from '@/plugin/pluginRuntimeBridge'
 import { domainEventBus, DOMAIN_EVENTS } from '@/events/eventBus'
 import { AppUiProvider, useAppUi } from './AppUiContext'
 import { useThemeMode } from '@/hooks/useThemeMode'
@@ -738,6 +739,22 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
       updateSelectedFilePath(null)
     }
   }, [activeWorkspaceTabId, updateSelectedFilePath])
+
+  // 插件壳层桥接：把 WorkspaceShellContext 的导航能力注入非 React 模块 holder，
+  // 供插件 ctx.ui.openPluginTab / openFileTab / openDiffTab 同步调用。
+  React.useEffect(() => {
+    setShellBridge({
+      openPluginTab: openPluginTab,
+      openFileTab: (workspaceRoot, filePath, options) => {
+        openGlobalFileTab(
+          { workspaceRoot, filePath },
+          options?.mode ? { mode: options.mode as 'readwrite' | 'readonly' } : undefined,
+        )
+      },
+      openDiffTab: (input) => openDiffTab(input),
+    })
+    return () => setShellBridge(null)
+  }, [openGlobalFileTab, openDiffTab, openPluginTab])
 
   const shellValue = React.useMemo(() => ({
     sidebarOpen,

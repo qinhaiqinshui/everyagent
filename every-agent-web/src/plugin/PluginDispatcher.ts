@@ -12,7 +12,9 @@ import type {
   TraceTypeDefinition,
   OutputBlockHandler,
   FileExplorerAction,
+  PluginDiffTabInput,
 } from '@everyagent/plugin-api'
+import { getComposerBridge, getShellBridge } from './pluginRuntimeBridge'
 import type {
   UiSidebarItemDefinition,
   UiWorkspaceTabTypeDefinition,
@@ -128,6 +130,14 @@ export interface RealPluginDispatcher {
   listRegisteredFileExplorerActions: () => FileExplorerAction[]
   /** 注册文件树右键菜单动作。 */
   registerFileExplorerAction: (action: FileExplorerAction) => Disposable
+  /** 打开插件自定义标签（委托宿主 WorkspaceShellContext）。 */
+  openPluginTab: (type: string, data: Record<string, string>, title?: string) => void
+  /** 打开顶层文件标签（委托宿主 WorkspaceShellContext）。 */
+  openFileTab: (workspaceRoot: string, filePath: string, options?: { mode?: string }) => void
+  /** 打开顶层 diff 对比标签（委托宿主 WorkspaceShellContext）。 */
+  openDiffTab: (input: PluginDiffTabInput) => void
+  /** 向当前输入框草稿末尾追加纯文本（委托宿主 ComposerDraftBridge）。 */
+  appendComposerText: (text: string) => void
 }
 
 export const pluginDispatcher: RealPluginDispatcher = {
@@ -258,5 +268,17 @@ export const pluginDispatcher: RealPluginDispatcher = {
   },
   registerFileExplorerAction(action) {
     return getRegistry<FileExplorerAction>(EXT_UI_FILE_EXPLORER_ACTIONS).register('', action)
+  },
+  openPluginTab(type, data, title) {
+    getShellBridge()?.openPluginTab(type, data, title)
+  },
+  openFileTab(workspaceRoot, filePath, options) {
+    getShellBridge()?.openFileTab(workspaceRoot, filePath, options)
+  },
+  openDiffTab(input) {
+    getShellBridge()?.openDiffTab(input)
+  },
+  appendComposerText(text) {
+    getComposerBridge()?.appendText(text)
   },
 }
