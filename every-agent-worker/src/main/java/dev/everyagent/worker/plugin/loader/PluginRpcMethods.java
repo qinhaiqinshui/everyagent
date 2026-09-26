@@ -163,7 +163,7 @@ public class PluginRpcMethods {
         ctx.ok(result);
     }
 
-    /** plugin.webSource — 从外部插件目录读取文件返回源码文本。 */
+    /** plugin.webSource — 从插件目录读取文件返回源码文本（支持内置和外部插件）。 */
     private void webSource(dev.everyagent.worker.rpc.RpcContext ctx) {
         String pluginId = ctx.params().path("pluginId").asString("");
         if (pluginId.isEmpty()) {
@@ -176,9 +176,14 @@ public class PluginRpcMethods {
             return;
         }
 
-        Path pluginsRoot = pluginRegistry.getPluginsRoot();
-        Path pluginDir = pluginsRoot.resolve(pluginId).normalize();
-        if (!pluginDir.startsWith(pluginsRoot) || !Files.isDirectory(pluginDir)) {
+        // 统一从 PluginManifest 获取插件目录（内置插件源码目录或外部插件安装目录）。
+        PluginManifest manifest = pluginRegistry.get(pluginId);
+        if (manifest == null || manifest.pluginDir() == null) {
+            ctx.err("NOT_FOUND", "插件不存在: " + pluginId);
+            return;
+        }
+        Path pluginDir = manifest.pluginDir().normalize();
+        if (!Files.isDirectory(pluginDir)) {
             ctx.err("NOT_FOUND", "插件目录不存在: " + pluginId);
             return;
         }

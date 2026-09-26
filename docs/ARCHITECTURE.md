@@ -624,7 +624,7 @@ worker 的两条运行期责任链迁移为与任务洋葱同一的 filter 形�
 - **`task.queued` 事件**（tasks 频道）：任务因并发满而排队等待时广播队列状态（payload: `{queueLength, queue:[taskId...]}`），前端据此渲染排队状态。
 - **`task.queueList` RPC**：返回当前队列快照 `{availablePermits, queueLength, queue:[...]}`。
 - **`TaskQueue`**（@Component）：`Semaphore`(permits=maxConcurrentTasks, fair) + `ConcurrentLinkedQueue<String>` 跟踪排队任务；acquire/release 管理 Semaphore 许可并广播队列状态变化。
-- **app pom 挂载**：`every-agent-app/pom.xml` 依赖 `task-queue` 模块（吸取 git 插件漏挂教训）。
+- **worker pom 挂载**：`every-agent-worker/pom.xml` 依赖 `task-queue` 模块（worker 自行 repackage 可执行 jar,mainClass=`WorkerApplication`）。
 
 ### 7.15 持久化与磁盘布局
 
@@ -808,11 +808,17 @@ Input:  queued → consumed | discarded(任务取消)
 
 浏览器(Web Notification)与桌面(Electron 系统通知)经统一通知适配器抽象(依赖注入 + 适配器注册表,web 模块零 electron 依赖)。触发场景:授权请求、任务完成/错误、ask_user 提问;不在前台才弹;桌面同 tag 2s 去重,点击回带到前台。
 
-### 8.5 前端插件系统(内置插件)
+### 8.5 插件系统（统一加载架构）
 
-- **形态** — `every-agent-plugins/<name>/web/index.ts` 为插件入口(`PluginModule.activate(ctx)`),经 `builtInPlugins.ts` 的 `import.meta.glob('@plugins/*/web/index.ts')` 自动发现加载,删除目录即卸载;纯前端插件无需 pom(`pdf-viewer`),带 worker 端的插件(`auth-review`/`git`)另建 Maven 子模块并挂入 `every-agent-plugins/pom.xml`。
-- **契约** — 插件只依赖 `@everyagent/plugin-api`(纯类型包);引用 web 内部能力用 `@/` alias(与内置视图同源编译)。
-- **扩展点 `ui.tool_call_views`** — 按工具名**整体接管工具调用视图**(折叠态 + 展开态):插件注册 `ToolCallViewDefinition{pluginId, toolName, Component}`,`Component` 与核心内置视图同契约(`ToolViewProps`,聚合后的 `details` 数组)。解析优先级:插件注册的视图 > 内置 `toolViews/` 目录注册表 > `DefaultToolView`。插件视图完全自治(折叠行、展开头部、参数/结果/错误块均由插件渲染),复用 `@/` alias 引核心共享件(helpers/图标/样式类)。内置 `update-file-view` 插件以此接管 `update_file`:折叠态显示文件名与变更统计徽章,展开态内嵌 oldcontent→content 行级 diff。
+插件系统采用**多扫描器 + 统一加载**架构,内置与外部插件经同一链路发现、加载、激活。
+
+- **后端扫描器** — `PluginScanner` 接口(`List<ScannedPlugin> scan()`;`ScannedPlugin = record(Path pluginDir, String source)`)有两个实现,由 `PluginLoader` 注入 `List<PluginScanner>` 统一遍历,按 source 排序(builtin 优先)逐个 `loadPlugin`(建 `URLClassLoader` → 解析 `plugin.json` → `activate`):
+  - `BuiltInPluginScanner`(source=`"builtin"`)扫描 `every-agent-plugins/<id>/` 目录;Java 插件从 `target/` 找 jar + `target/classes/plugin.json` 定位产物;纯 web 插件从插件根目录读 `plugin.json`。
+  - `ExternalPluginScanner`(source=`"external"`)扫描 `~/.everyagent/plugins/<id>/`,逻辑与内置一致但目录不同。
+- **LoadedPlugin** record 含 `source`/`main`/`webMain` 字段;`PluginRegistry` 不再扫 `classpath*:plugin.json`,改为从 `PluginLoader.getLoadedPlugins()` 统一聚合(`@DependsOn("pluginLoader")`);`PluginManifest` record 新增 `pluginDir` 字段供 `webSource` RPC 统一获取插件目录(不再区分内外)。
+- **前端加载统一** — 所有插件(builtin/external)经 `plugin.webSource` RPC 获取 JS 源码 → `rewriteBareImports`(bare import 改写为 `window.__EA_REACT__` 等全局变量引用)→ blob URL → `import()` 动态加载 → `PluginModule.activate(ctx)`。不再有 `import.meta.glob` / Vite glob 映射 / `builtInPlugins.ts` / `internalLoaders`。内置插件需先用 esbuild 预编译(`npm run build:plugins` → `every-agent-web/scripts/build-plugins.mjs`),每个插件 `web/index.ts` → `web/index.js`(ESM,external: react/react-dom/antd/@ant-design/icons,带 sourcemap;产物被 `.gitignore` 排除)。
+- **公共 API 边界（VSCode 模式）** — 插件只引用 `@everyagent/plugin-api`(纯类型包)+ 运行时 `ctx`(`PluginContext`),**禁止 `@/` 引用宿主 web 模块**;UI 组件(SVG/antd)一律插件自实现。`ctx` 字段:`ui`(`UiRegistry`:`openPluginTab`/`openFileTab`/`openDiffTab`/`appendComposerText`)、`sdk`(`PluginSdk` rpc + `workspace.list()`/`workerIdOfRoot()`)、`events`(`PluginEvents` 事件总线,`PluginDomainEvent`)、`fs`(`PluginFs` 文件系统)、`storage`、`commands`。
+- **扩展点 `ui.tool_call_views`** — 按工具名**整体接管工具调用视图**(折叠态 + 展开态):插件注册 `ToolCallViewDefinition{pluginId, toolName, Component}`,`Component` 与核心内置视图同契约(`ToolViewProps`,聚合后的 `details` 数组)。解析优先级:插件注册的视图 > 内置 `toolViews/` 目录注册表 > `DefaultToolView`。插件视图完全自治(折叠行、展开头部、参数/结果/错误块均由插件渲染),但只能用 plugin-api 类型 + ctx 能力,不引宿主组件。内置 `update-file-view` 插件以此接管 `update_file`:折叠态显示文件名与变更统计徽章,展开态内嵌 oldcontent→content 行级 diff。
 
 ---
 

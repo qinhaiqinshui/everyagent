@@ -20,3 +20,9 @@ runtime/wsl/eagent-rootfs.tar.gz.sha256
 runtime/wsl/__pycache__/
 outputs/
 .claude/
+
+# 内置插件 web/ 预编译产物（esbuild 生成，不入库）
+every-agent-plugins/*/web/index.js
+every-agent-plugins/*/web/index.js.map
+every-agent-plugins/*/web/index.css
+every-agent-plugins/*/web/index.css.map
