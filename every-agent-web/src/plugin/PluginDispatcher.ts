@@ -27,41 +27,53 @@ import type {
 import type { FileContentEditorDescriptor } from '@/components/files/file-tab-types'
 import { registerTraceType as registerToTraceRegistry } from './traceTypeRegistry'
 import { outputBlockRegistry } from './outputBlockRegistry'
+import {
+  ExtensionRegistry,
+  ExtensionRegistryFactory,
+  DefaultExtensionRegistryFactory,
+} from './ExtensionRegistry'
 
-// ── 扩展点注册表 ──
+// ── 扩展点名常量 ──
 
-const sidebarItems: UiSidebarItemDefinition[] = []
-const workspaceTabTypes: UiWorkspaceTabTypeDefinition[] = []
-const fileSidebarPanels: UiFileSidebarPanelDefinition[] = []
-const composerFooterControls: UiComposerFooterControlDefinition[] = []
-const composerAbovePanels: UiComposerAbovePanelDefinition[] = []
-const toolCallViews: ToolCallViewDefinition[] = []
-const taskFileMoreActions: TaskFileMoreAction[] = []
-/** 用户消息动作（如编辑重发按钮）。 */
-const userMessageActions: UiUserMessageActionDefinition[] = []
-/** task.run 提交贡献 provider（如编辑重发的 editSeq metadata）。 */
-const taskRunSubmitContributionProviders: TaskRunSubmitContributionProvider[] = []
-const traceTypes: TraceTypeDefinition[] = []
-const outputBlocks = new Map<string, OutputBlockHandler>()
-/** 插件注册的文件内容编辑器（如 PDF 插件）。 */
-const fileContentEditors: FileContentEditorDescriptor[] = []
-/** 插件注册的文件树右键菜单动作（如 git 插件的「显示 Git 历史」）。 */
-const fileExplorerActions: FileExplorerAction[] = []
+const EXT_UI_SIDEBAR_ITEMS = 'ui.sidebar_items'
+const EXT_UI_WORKSPACE_TAB_TYPES = 'ui.workspace_tab_types'
+const EXT_UI_FILE_SIDEBAR_PANELS = 'ui.file_sidebar_panels'
+const EXT_UI_COMPOSER_FOOTER_CONTROLS = 'ui.composer_footer_controls'
+const EXT_UI_COMPOSER_ABOVE_PANEL = 'ui.composer_above_panel'
+const EXT_UI_TOOL_CALL_VIEWS = 'ui.tool_call_views'
+const EXT_UI_TASK_FILE_MORE_ACTIONS = 'ui.task_file_more_actions'
+const EXT_UI_USER_MESSAGE_ACTIONS = 'ui.user_message_actions'
+const EXT_TASK_SUBMIT_CONTRIBUTIONS = 'task.submit_contributions'
+const EXT_UI_FILE_CONTENT_EDITORS = 'ui.file_content_editors'
+const EXT_UI_FILE_EXPLORER_ACTIONS = 'ui.file_explorer_actions'
+const EXT_UI_TRACE_TYPES = 'ui.trace_types'
+const EXT_UI_OUTPUT_BLOCKS = 'ui.output_blocks'
 
-// ── Disposable 工具 ──
+// ── 扩展点注册表管理 ──
 
-function makeDisposable(array: unknown[], item: unknown): Disposable {
-  return {
-    dispose() {
-      const i = array.indexOf(item)
-      if (i >= 0) array.splice(i, 1)
-    },
+let registryFactory: ExtensionRegistryFactory = new DefaultExtensionRegistryFactory()
+let factoryLocked = false
+
+const registries = new Map<string, ExtensionRegistry<any>>()
+
+function getRegistry<T>(extensionPoint: string): ExtensionRegistry<T> {
+  let reg = registries.get(extensionPoint)
+  if (!reg) {
+    reg = registryFactory.create<T>(extensionPoint)
+    registries.set(extensionPoint, reg)
   }
+  return reg as ExtensionRegistry<T>
 }
+
+// 特殊处理：traceTypes 和 outputBlocks 除了走 ExtensionRegistry 外，
+// 还需要同步到 traceTypeRegistry / outputBlockRegistry
+const outputBlocksMap = new Map<string, OutputBlockHandler>()
 
 // ── PluginDispatcher 真实实现 ──
 
 export interface RealPluginDispatcher {
+  /** 设置扩展点注册表工厂（仅允许插件激活前调用一次）。 */
+  setExtensionRegistryFactory: (factory: ExtensionRegistryFactory) => void
   /** 通用扩展点分发（按扩展点名查询）。 */
   dispatch: <T>(extensionPoint: string) => Promise<T[]>
   /** 侧边栏项。 */
@@ -119,134 +131,132 @@ export interface RealPluginDispatcher {
 }
 
 export const pluginDispatcher: RealPluginDispatcher = {
+  setExtensionRegistryFactory(factory: ExtensionRegistryFactory) {
+    if (factoryLocked) {
+      throw new Error('ExtensionRegistryFactory has already been set and locked')
+    }
+    registryFactory = factory
+    factoryLocked = true
+  },
+
   async dispatch<T>(extensionPoint: string): Promise<T[]> {
     // 按扩展点名分发到对应注册表
     switch (extensionPoint) {
-      case 'ui.sidebar_items':
-        return sidebarItems as T[]
-      case 'ui.workspace_tab_types':
-        return workspaceTabTypes as T[]
-      case 'ui.file_sidebar_panels':
-        return fileSidebarPanels as T[]
-      case 'ui.composer_footer_controls':
-        return composerFooterControls as T[]
-      case 'ui.composer_above_panel':
-        return composerAbovePanels as T[]
-      case 'ui.tool_call_views':
-        return toolCallViews as unknown as T[]
-      case 'ui.task_file_more_actions':
-        return taskFileMoreActions as T[]
-      case 'ui.user_message_actions':
-        return userMessageActions as unknown as T[]
-      case 'task.submit_contributions':
-        return taskRunSubmitContributionProviders as unknown as T[]
-      case 'ui.file_content_editors':
-        return fileContentEditors as T[]
-      case 'ui.file_explorer_actions':
-        return fileExplorerActions as T[]
+      case EXT_UI_SIDEBAR_ITEMS:
+        return getRegistry<T>(extensionPoint).getAll()
+      case EXT_UI_WORKSPACE_TAB_TYPES:
+        return getRegistry<T>(extensionPoint).getAll()
+      case EXT_UI_FILE_SIDEBAR_PANELS:
+        return getRegistry<T>(extensionPoint).getAll()
+      case EXT_UI_COMPOSER_FOOTER_CONTROLS:
+        return getRegistry<T>(extensionPoint).getAll()
+      case EXT_UI_COMPOSER_ABOVE_PANEL:
+        return getRegistry<T>(extensionPoint).getAll()
+      case EXT_UI_TOOL_CALL_VIEWS:
+        return getRegistry<T>(extensionPoint).getAll()
+      case EXT_UI_TASK_FILE_MORE_ACTIONS:
+        return getRegistry<T>(extensionPoint).getAll()
+      case EXT_UI_USER_MESSAGE_ACTIONS:
+        return getRegistry<T>(extensionPoint).getAll()
+      case EXT_TASK_SUBMIT_CONTRIBUTIONS:
+        return getRegistry<T>(extensionPoint).getAll()
+      case EXT_UI_FILE_CONTENT_EDITORS:
+        return getRegistry<T>(extensionPoint).getAll()
+      case EXT_UI_FILE_EXPLORER_ACTIONS:
+        return getRegistry<T>(extensionPoint).getAll()
       default:
         return []
     }
   },
 
   async getSidebarItems() {
-    return [...sidebarItems]
+    return getRegistry<UiSidebarItemDefinition>(EXT_UI_SIDEBAR_ITEMS).getAll()
   },
   async getWorkspaceTabTypes() {
-    return [...workspaceTabTypes]
+    return getRegistry<UiWorkspaceTabTypeDefinition>(EXT_UI_WORKSPACE_TAB_TYPES).getAll()
   },
   async getFileSidebarPanels() {
-    return [...fileSidebarPanels]
+    return getRegistry<UiFileSidebarPanelDefinition>(EXT_UI_FILE_SIDEBAR_PANELS).getAll()
   },
   async getComposerFooterControls() {
-    return [...composerFooterControls]
+    return getRegistry<UiComposerFooterControlDefinition>(EXT_UI_COMPOSER_FOOTER_CONTROLS).getAll()
   },
   async getComposerAbovePanels() {
-    return [...composerAbovePanels]
+    return getRegistry<UiComposerAbovePanelDefinition>(EXT_UI_COMPOSER_ABOVE_PANEL).getAll()
   },
   listRegisteredToolCallViews() {
-    return [...toolCallViews]
+    return getRegistry<ToolCallViewDefinition>(EXT_UI_TOOL_CALL_VIEWS).getAll()
   },
   async getTaskFileMoreActions() {
-    return [...taskFileMoreActions]
+    return getRegistry<TaskFileMoreAction>(EXT_UI_TASK_FILE_MORE_ACTIONS).getAll()
   },
 
   registerSidebarItem(def) {
-    sidebarItems.push(def)
-    return makeDisposable(sidebarItems, def)
+    return getRegistry<UiSidebarItemDefinition>(EXT_UI_SIDEBAR_ITEMS).register('', def)
   },
   registerWorkspaceTabType(def) {
-    workspaceTabTypes.push(def)
-    return makeDisposable(workspaceTabTypes, def)
+    return getRegistry<UiWorkspaceTabTypeDefinition>(EXT_UI_WORKSPACE_TAB_TYPES).register('', def)
   },
   registerFileSidebarPanel(def) {
-    fileSidebarPanels.push(def)
-    return makeDisposable(fileSidebarPanels, def)
+    return getRegistry<UiFileSidebarPanelDefinition>(EXT_UI_FILE_SIDEBAR_PANELS).register('', def)
   },
   registerComposerFooterControl(def) {
-    composerFooterControls.push(def)
-    return makeDisposable(composerFooterControls, def)
+    return getRegistry<UiComposerFooterControlDefinition>(EXT_UI_COMPOSER_FOOTER_CONTROLS).register('', def)
   },
   registerComposerAbovePanel(def) {
-    composerAbovePanels.push(def)
-    return makeDisposable(composerAbovePanels, def)
+    return getRegistry<UiComposerAbovePanelDefinition>(EXT_UI_COMPOSER_ABOVE_PANEL).register('', def)
   },
   registerToolCallView(def) {
-    toolCallViews.push(def)
-    return makeDisposable(toolCallViews, def)
+    return getRegistry<ToolCallViewDefinition>(EXT_UI_TOOL_CALL_VIEWS).register('', def)
   },
   registerTaskFileMoreAction(action) {
-    taskFileMoreActions.push(action)
-    return makeDisposable(taskFileMoreActions, action)
+    return getRegistry<TaskFileMoreAction>(EXT_UI_TASK_FILE_MORE_ACTIONS).register('', action)
   },
   registerUserMessageAction(def) {
-    userMessageActions.push(def)
-    return makeDisposable(userMessageActions, def)
+    return getRegistry<UiUserMessageActionDefinition>(EXT_UI_USER_MESSAGE_ACTIONS).register('', def)
   },
   listRegisteredUserMessageActions() {
-    return [...userMessageActions]
+    return getRegistry<UiUserMessageActionDefinition>(EXT_UI_USER_MESSAGE_ACTIONS).getAll()
   },
   registerTaskRunSubmitContributionProvider(provider) {
-    taskRunSubmitContributionProviders.push(provider)
-    return makeDisposable(taskRunSubmitContributionProviders, provider)
+    return getRegistry<TaskRunSubmitContributionProvider>(EXT_TASK_SUBMIT_CONTRIBUTIONS).register('', provider)
   },
   listRegisteredTaskRunSubmitContributionProviders() {
-    return [...taskRunSubmitContributionProviders]
+    return getRegistry<TaskRunSubmitContributionProvider>(EXT_TASK_SUBMIT_CONTRIBUTIONS).getAll()
   },
   registerTraceType(def) {
-    traceTypes.push(def)
+    const disposable = getRegistry<TraceTypeDefinition>(EXT_UI_TRACE_TYPES).register('', def)
     // 同时注册到 traceTypeRegistry（保持向后兼容）
     registerToTraceRegistry(def)
-    return makeDisposable(traceTypes, def)
+    return disposable
   },
   registerOutputBlock(tag, handler) {
-    outputBlocks.set(tag.toLowerCase(), handler)
+    const key = tag.toLowerCase()
+    outputBlocksMap.set(key, handler)
     // 同时注册到 outputBlockRegistry（保持向后兼容）
     outputBlockRegistry.register(tag, handler)
     return {
       dispose() {
-        outputBlocks.delete(tag.toLowerCase())
+        outputBlocksMap.delete(key)
       },
     }
   },
   registerFileContentEditor(def) {
-    fileContentEditors.push(def)
-    return makeDisposable(fileContentEditors, def)
+    return getRegistry<FileContentEditorDescriptor>(EXT_UI_FILE_CONTENT_EDITORS).register('', def)
   },
   listRegisteredFileContentEditors() {
-    return [...fileContentEditors]
+    return getRegistry<FileContentEditorDescriptor>(EXT_UI_FILE_CONTENT_EDITORS).getAll()
   },
   listRegisteredSidebarItems() {
-    return [...sidebarItems]
+    return getRegistry<UiSidebarItemDefinition>(EXT_UI_SIDEBAR_ITEMS).getAll()
   },
   listRegisteredWorkspaceTabTypes() {
-    return [...workspaceTabTypes]
+    return getRegistry<UiWorkspaceTabTypeDefinition>(EXT_UI_WORKSPACE_TAB_TYPES).getAll()
   },
   listRegisteredFileExplorerActions() {
-    return [...fileExplorerActions]
+    return getRegistry<FileExplorerAction>(EXT_UI_FILE_EXPLORER_ACTIONS).getAll()
   },
   registerFileExplorerAction(action) {
-    fileExplorerActions.push(action)
-    return makeDisposable(fileExplorerActions, action)
+    return getRegistry<FileExplorerAction>(EXT_UI_FILE_EXPLORER_ACTIONS).register('', action)
   },
 }
