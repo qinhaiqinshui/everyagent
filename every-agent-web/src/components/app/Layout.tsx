@@ -28,7 +28,7 @@ import {
   SettingsIcon,
   TaskChatIcon,
 } from '@/components/icon'
-import SidebarActivityBar from './SidebarActivityBar'
+import SidebarActivityBar, { type SidebarActivityItem } from './SidebarActivityBar'
 import ResizableSidebarContainer from './ResizableSidebarContainer'
 import TitleBar from './TitleBar'
 import AntdAppBridge from './AntdAppBridge'
@@ -46,6 +46,7 @@ import { AppUiProvider, useAppUi } from './AppUiContext'
 import { useThemeMode } from '@/hooks/useThemeMode'
 import { useResponsiveViewport } from '@/hooks/useResponsiveViewport'
 import type { WorkspaceTabRenderContext } from '@/plugin/types'
+import { pluginDispatcher } from '@/plugin/PluginDispatcher'
 import { getTabDefinition, getWorkspaceTabTypeDefinition, loadWorkspaceTabTypeDefinitions } from '@/plugin/workspaceTabTypes'
 import {
   setWorkspaceFileTabMode,
@@ -263,6 +264,9 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
 
   React.useEffect(() => {
     const validPanelIds = new Set<SidebarPanelId>(['tasks', 'files', 'search'])
+    for (const def of pluginDispatcher.listRegisteredSidebarItems()) {
+      validPanelIds.add(def.id as SidebarPanelId)
+    }
     if (!validPanelIds.has(activeSidebarPanelId)) {
       setActiveSidebarPanelId('tasks')
     }
@@ -796,18 +800,56 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
     // 各面板图标(任务/文件/搜索/源代码管理)的选中态必须互斥,只跟随当前展开的面板。
     // 激活标签映射的活动项仅对非面板项(如设置页)生效,避免任务聊天页激活时
     // 把「任务」面板图标也点亮,破坏面板图标的互斥。
+    const panelActivityIds = new Set<string>(['tasks', 'files', 'search'])
+    for (const def of pluginDispatcher.listRegisteredSidebarItems()) {
+      panelActivityIds.add(def.id)
+    }
     const workspaceActivityItemId = activeWorkspaceTab
       ? getTabDefinition(activeWorkspaceTab)?.getSidebarActivityId?.(activeWorkspaceTab) ?? null
       : null
     if (
       workspaceActivityItemId
-      && !SIDEBAR_PANEL_ACTIVITY_IDS.has(workspaceActivityItemId)
+      && !panelActivityIds.has(workspaceActivityItemId)
       && !nextIds.includes(workspaceActivityItemId)
     ) {
       nextIds.push(workspaceActivityItemId)
     }
     return nextIds
   }, [activeSidebarPanelId, activeWorkspaceTab, sidebarOpen])
+
+  /**
+   * 侧边栏面板描述符：合并内置面板与插件注册的面板。
+   * 内置面板用 children（现有懒加载组件），插件面板用 Panel 组件。
+   * 所有面板常驻 DOM，仅通过 visible 控制显隐（保留滚动/草稿等内部状态）。
+   */
+  const sidebarPanels: Array<{
+    id: string
+    children?: React.ReactNode
+    Panel?: React.ComponentType
+  }> = [
+    {
+      id: 'tasks',
+      children: (
+        <LazyTasksPanel
+          embedded
+          activeTaskId={activeTaskId ?? undefined}
+          onCreateNewTask={(preset) => {
+            openDraftTaskTab(preset)
+          }}
+          onSelect={(task) => {
+            openTaskChatTab({ taskId: task.taskId, title: task.displayTitle })
+          }}
+          onDeletedTasks={closeDeletedTaskTabs}
+        />
+      ),
+    },
+    { id: 'files', children: <LazyOpenFilesSidebarPanel /> },
+    { id: 'search', children: <LazySearchSidebarPanel /> },
+    ...pluginDispatcher.listRegisteredSidebarItems().map((def) => ({
+      id: def.id,
+      Panel: def.Panel,
+    })),
+  ]
 
   return (
     <ConfigProvider theme={getAntdTheme(themeMode)}>
@@ -882,25 +924,16 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
             onMobileSizeChange={setMobileSidebarHeight}
           >
             <div style={sidebarPanelSlotStyle}>
-              <SidebarPanelHost panelId="tasks" visible={activeSidebarPanelId === 'tasks'}>
-                <LazyTasksPanel
-                  embedded
-                  activeTaskId={activeTaskId ?? undefined}
-                  onCreateNewTask={(preset) => {
-                    openDraftTaskTab(preset)
-                  }}
-                  onSelect={(task) => {
-                    openTaskChatTab({ taskId: task.taskId, title: task.displayTitle })
-                  }}
-                  onDeletedTasks={closeDeletedTaskTabs}
-                />
-              </SidebarPanelHost>
-              <SidebarPanelHost panelId="files" visible={activeSidebarPanelId === 'files'}>
-                <LazyOpenFilesSidebarPanel />
-              </SidebarPanelHost>
-              <SidebarPanelHost panelId="search" visible={activeSidebarPanelId === 'search'}>
-                <LazySearchSidebarPanel />
-              </SidebarPanelHost>
+              {sidebarPanels.map((panel) => (
+                <SidebarPanelHost
+                  key={panel.id}
+                  panelId={panel.id}
+                  visible={activeSidebarPanelId === panel.id}
+                  Panel={panel.Panel}
+                >
+                  {panel.children}
+                </SidebarPanelHost>
+              ))}
             </div>
           </ResizableSidebarContainer>
         </div>
@@ -971,16 +1004,24 @@ function renderWorkspaceTabContent(
   return def.renderTab(tab, ctx)
 }
 
-/** 侧边栏各面板图标(id)的选中态必须互斥,只由当前展开的面板决定。 */
-const SIDEBAR_PANEL_ACTIVITY_IDS: ReadonlySet<string> = new Set(['tasks', 'files', 'search'])
-
-function buildSidebarActivityItems(openTopLevelPageIds: TopLevelPageId[]) {
-  return [
+/**
+ * 构建活动栏条目：内置项在前，插件注册的侧边栏项在后。
+ * 内置项含 tasks/files/search/settings；插件项来自 pluginDispatcher.listRegisteredSidebarItems()。
+ */
+function buildSidebarActivityItems(openTopLevelPageIds: TopLevelPageId[]): SidebarActivityItem[] {
+  const builtinItems: SidebarActivityItem[] = [
     { id: 'tasks', label: '任务', icon: <TaskChatIcon /> },
     { id: 'files', label: '文件', icon: <FilesIcon /> },
     { id: 'search', label: '搜索', icon: <SearchSidebarIcon /> },
     { id: 'settings', label: '设置', icon: <SettingsIcon />, badgeCount: openTopLevelPageIds.includes('settings') ? 1 : undefined },
   ]
+  const pluginItems: SidebarActivityItem[] = pluginDispatcher.listRegisteredSidebarItems().map((def) => ({
+    id: def.id,
+    label: def.title,
+    icon: def.icon,
+    badgeCount: def.badgeCount,
+  }))
+  return [...builtinItems, ...pluginItems]
 }
 
 /**
@@ -992,10 +1033,12 @@ function SidebarPanelHost({
   panelId,
   visible,
   children,
+  Panel,
 }: {
   panelId: string
   visible: boolean
-  children: React.ReactNode
+  children?: React.ReactNode
+  Panel?: React.ComponentType
 }) {
   const prevVisibleRef = React.useRef(visible)
 
@@ -1019,7 +1062,7 @@ function SidebarPanelHost({
         overflow: 'hidden',
       }}
     >
-      {children}
+      {children ?? (Panel ? <Panel /> : null)}
     </div>
   )
 }
