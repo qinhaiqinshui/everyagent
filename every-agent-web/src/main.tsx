@@ -21,8 +21,7 @@ import { loadThemeMode } from './settings/localSettings'
 import { installGlobalErrorHandlers } from './utils/globalErrorHandler'
 import { GlobalErrorBoundary } from './components/shared/GlobalErrorBoundary'
 import { initializeTraceTypes } from './plugin/traceTypeRegistry'
-import { loadBuiltInPlugins } from './plugin/builtInPlugins'
-import { bootWebPlugins } from './plugin/pluginBootstrap'
+import { loadPlugins } from './plugin/pluginLoader'
 import { wireFsChanged } from './platform/fs/workspaceGateway'
 import { workspaceRegistry } from './hub/workspaceRegistry'
 import { modelConfigs } from './hub/modelConfigs'
@@ -43,9 +42,8 @@ if (isDesktop()) {
 
 // 核心 trace 类型注册(子任务/错误/系统提示;未注册 kind 走降级渲染)。
 initializeTraceTypes()
-// 内置插件自动发现：import.meta.glob 扫描 every-agent-plugins/*/web/index.ts。
-// 删除插件目录 = glob 无匹配 = 零报错。
-void loadBuiltInPlugins()
+// 统一插件加载：plugin.list RPC 驱动发现，worker 不可达时静默降级。
+void loadPlugins()
 
 // fs.changed(worker evt 频道)→ 前端文件刷新事件。进程内只接一次。
 wireFsChanged()
@@ -60,27 +58,10 @@ modelConfigs.wire()
 registerRemoteSlashProvider()
 
 // Web 插件启动：worker 连接就绪后从 worker 拉取已激活插件清单并动态加载。
-// onReconnect 在每次 worker 连接（含重连）时触发，插件 bootstrap 幂等（重复调用安全）。
+// onReconnect 在每次 worker 连接（含重连）时触发，loadPlugins 幂等（重复调用安全）。
 hubSession.onReconnect(() => {
-  void bootWebPluginsForFirstWorker()
+  void loadPlugins()
 })
-
-/** 找到第一个已连接 worker，触发 web 插件加载。 */
-async function bootWebPluginsForFirstWorker(): Promise<void> {
-  let workerId: string | null = null
-  hubSession.forEachConnectedWorker((wid: string) => {
-    if (!workerId) workerId = wid
-  })
-  if (!workerId) return
-  // 获取默认工作区信息
-  try {
-    const info = await hubSession.rpcTo(workerId, 'sys.info') as { workspaceRoot?: string }
-    await bootWebPlugins(workerId, 'defaultworkspace', info?.workspaceRoot ?? '')
-  } catch {
-    // sys.info 失败不阻塞插件加载
-    await bootWebPlugins(workerId, 'defaultworkspace', '')
-  }
-}
 
 const initialThemeMode: ThemeMode = loadThemeMode()
 document.documentElement.setAttribute('data-theme', initialThemeMode)
