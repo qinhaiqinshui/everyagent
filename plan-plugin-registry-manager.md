@@ -269,9 +269,9 @@ interface ExtensionRegistryFactory {
     - 依赖：依赖步骤 1
     - 验收标准：worker 认识全部 9 个插件；禁用插件不调 activate；.disabled-plugins 持久化生效；plugin.list 含 disabledIds；TaskInfo 含 status/terminal/metadata/taskDir；TaskService 含 get/publishUpdated；TaskLifecycleContext 新增 taskInfo()/runParams()；ctx.services().task().get() 可用；TaskEntry 无 apiKey 字段；AgentFactory 从 ResolvedConfig 拿 apiKey；taskFlags 字段删除；metadata 落盘、runParams 不落盘
 
-- [ ] 步骤 3：内置插件统一改造（去掉所有 @Component 自注册；activate() 含全注册逻辑；消除 TaskManager/TaskStore/EventSink 依赖）
-    - 状态：待执行
-    - agent：-
+- [x] 步骤 3：内置插件统一改造（去掉所有 @Component 自注册；activate() 含全注册逻辑；消除 TaskManager/TaskStore/EventSink 依赖）
+    - 状态：已完成
+    - agent：sub_hkl2t
     - 依赖：依赖步骤 2
     - 验收标准：7 个插件的 activate() 非空且含全注册；不再 import TaskManager/TaskStore/EventSink；worker 编译通过；各注册表无 isDisabled 过滤残留
 
@@ -281,9 +281,9 @@ interface ExtensionRegistryFactory {
     - 依赖：无
     - 验收标准：web 构建通过；所有既有调用方零改动；现有插件功能无损
 
-- [ ] 步骤 5：web 加载重构（plugin.list 驱动发现 + Vite glob 降级为 lazy import 映射 + 外部插件 blob URL 加载）
-    - 状态：待执行
-    - agent：-
+- [x] 步骤 5：web 加载重构（plugin.list 驱动发现 + Vite glob 降级为 lazy import 映射 + 外部插件 blob URL 加载）
+    - 状态：已完成
+    - agent：sub_hkl2v
     - 依赖：依赖步骤 2、4
     - 验收标准：web 从 worker 获取插件目录；enabled 插件被加载；disabled 插件不加载；内置插件 web 功能无损
 
@@ -293,9 +293,9 @@ interface ExtensionRegistryFactory {
     - 依赖：依赖步骤 4
     - 验收标准：git 插件「源代码管理」入口出现且面板可用；内置项行为不变
 
-- [ ] 步骤 7：plugin-manager 插件（ManagedExtensionRegistry + 管理面板 UI + 启停/重载流程）
-    - 状态：待执行
-    - agent：-
+- [x] 步骤 7：plugin-manager 插件（ManagedExtensionRegistry + 管理面板 UI + 启停/重载流程）
+    - 状态：已完成
+    - agent：sub_hkl2w
     - 依赖：依赖步骤 5、6
     - 验收标准：活动栏「扩展」面板可见；列表完整；禁用/启用经 RPC 生效并提示重载；worker 不可达报错；plugin-manager 自身不可禁用
 
