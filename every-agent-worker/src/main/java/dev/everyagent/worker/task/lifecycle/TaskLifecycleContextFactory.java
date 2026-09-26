@@ -37,7 +37,7 @@ public class TaskLifecycleContextFactory {
         TaskLifecycleContextImpl ctx = new TaskLifecycleContextImpl(null, gate, roundIndexStore, store);
         ctx.input(input);
         ctx.rawContent(rawContent);
-        ctx.metadata(metadata);
+        ctx.runParams(metadata);
         ctx.rpcContext(rpcContext);
         return ctx;
     }

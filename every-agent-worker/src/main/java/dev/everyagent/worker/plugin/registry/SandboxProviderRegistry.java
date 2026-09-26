@@ -15,7 +15,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
  * SandboxProvider SPI 注册表。
  *
  * <p>核心改造点 C3：OsSandbox 从此注册表选择沙箱后端。
- * 禁用过滤：select 时跳过被禁用的 provider。
+ * 注册进来的都有效，查询直接返回全量。
  */
 @Component
 public class SandboxProviderRegistry {
@@ -23,11 +23,6 @@ public class SandboxProviderRegistry {
     private static final Logger log = LoggerFactory.getLogger(SandboxProviderRegistry.class);
 
     private final List<SandboxProvider> providers = new CopyOnWriteArrayList<>();
-    private final PluginStateStore stateStore;
-
-    public SandboxProviderRegistry(PluginStateStore stateStore) {
-        this.stateStore = stateStore;
-    }
 
     public void register(SandboxProvider provider) {
         providers.add(provider);
@@ -38,9 +33,7 @@ public class SandboxProviderRegistry {
     }
 
     public List<SandboxProvider> getProviders() {
-        return providers.stream()
-                .filter(p -> !stateStore.isDisabled(p.id()))
-                .toList();
+        return List.copyOf(providers);
     }
 
     public SandboxBackend select(SandboxConfig config) {
@@ -51,8 +44,7 @@ public class SandboxProviderRegistry {
         if (config.type() != null && !config.type().isBlank()
                 && !"auto".equalsIgnoreCase(config.type())) {
             for (SandboxProvider p : providers) {
-                if (!stateStore.isDisabled(p.id())
-                        && p.id().equalsIgnoreCase(config.type()) && p.isAvailable()) {
+                if (p.id().equalsIgnoreCase(config.type()) && p.isAvailable()) {
                     return p.create(config);
                 }
             }
@@ -60,7 +52,6 @@ public class SandboxProviderRegistry {
         }
 
         return providers.stream()
-                .filter(p -> !stateStore.isDisabled(p.id()))
                 .filter(SandboxProvider::isAvailable)
                 .max(Comparator.comparingInt(SandboxProvider::priority))
                 .map(p -> p.create(config))

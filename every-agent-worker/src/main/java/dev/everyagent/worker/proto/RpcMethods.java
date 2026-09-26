@@ -92,6 +92,8 @@ public final class RpcMethods {
     public static final String PLUGIN_ENABLE = "plugin.enable";
     /** 禁用插件。 */
     public static final String PLUGIN_DISABLE = "plugin.disable";
+    /** 读取外部插件源码文件（参数 pluginId + path）。 */
+    public static final String PLUGIN_WEB_SOURCE = "plugin.webSource";
 
     private RpcMethods() {
     }

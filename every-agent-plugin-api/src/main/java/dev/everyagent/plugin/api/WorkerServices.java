@@ -4,6 +4,7 @@ import dev.everyagent.plugin.api.spi.SandboxBackend;
 import dev.everyagent.plugin.api.spi.PermissionGate;
 import dev.everyagent.plugin.api.spi.TokenEstimator;
 import dev.everyagent.plugin.api.spi.WorkspaceManager;
+import dev.everyagent.plugin.api.task.TaskService;
 
 /**
  * Worker 核心只读服务 —— 插件经此访问 worker 的公共能力。
@@ -24,4 +25,7 @@ public interface WorkerServices {
 
     /** Token 估算器（内置或插件注册的自定义实现）。 */
     TokenEstimator tokenEstimator();
+
+    /** 任务服务（查询任务信息、广播 task.updated）。 */
+    TaskService task();
 }

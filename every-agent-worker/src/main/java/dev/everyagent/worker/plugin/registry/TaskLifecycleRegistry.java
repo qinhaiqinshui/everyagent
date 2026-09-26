@@ -14,10 +14,10 @@ import java.util.concurrent.CopyOnWriteArrayList;
  * TaskLifecycleNode SPI 注册表（第 8 个注册表）。
  *
  * <p>模式同 ToolProviderRegistry / AdvisorProviderRegistry：
- * CopyOnWriteArrayList + PluginStateStore 过滤 + float 稳定排序。
+ * CopyOnWriteArrayList + float 稳定排序。
  * 注册时机：内置节点在 Spring 启动时由 BuiltInTaskLifecycleNodes 注册；
  * 外部插件在 activate() 时注册。
- * 禁用过滤：查询时经 PluginStateStore 过滤掉被禁用的节点所属插件。
+ * 注册进来的都有效，查询直接返回全量。
  *
  * <p>顺序约束：850..420 区间不允许插件节点插入（§7.3 锁策略），
  * 注册时检测并打 WARN 拒绝。
@@ -32,11 +32,6 @@ public class TaskLifecycleRegistry {
     private static final float CRITICAL_SECTION_MAX = 850f;
 
     private final List<TaskLifecycleNode> nodes = new CopyOnWriteArrayList<>();
-    private final PluginStateStore stateStore;
-
-    public TaskLifecycleRegistry(PluginStateStore stateStore) {
-        this.stateStore = stateStore;
-    }
 
     /**
      * 注册一个生命周期节点。
@@ -61,32 +56,12 @@ public class TaskLifecycleRegistry {
     }
 
     /**
-     * 获取全部有效节点（经 PluginStateStore 过滤 + float 稳定排序）。
+     * 获取全部有效节点（float 稳定排序）。
      * 稳定排序：同 order 按注册顺序（CopyOnWriteArrayList 自然保持插入序）。
      */
     public List<TaskLifecycleNode> getNodes() {
-        List<TaskLifecycleNode> filtered = new ArrayList<>();
-        for (TaskLifecycleNode n : nodes) {
-            // 内置节点（pluginId 为 null 或 "worker"）不过滤
-            String pluginId = nodePluginId(n);
-            if (pluginId != null && !"worker".equals(pluginId) && stateStore.isDisabled(pluginId)) {
-                continue;
-            }
-            filtered.add(n);
-        }
-        // 稳定排序：同 order 保持注册顺序
-        filtered.sort(Comparator.comparingDouble(TaskLifecycleNode::order));
-        return filtered;
-    }
-
-    /**
-     * 获取节点关联的 pluginId。
-     * 内置节点没有 pluginId 关联（返回 null）；外部插件节点需要自行携带。
-     * 当前 Phase 1 只有内置节点，此方法返回 null。
-     */
-    private String nodePluginId(TaskLifecycleNode node) {
-        // Phase 1 只有内置节点，无 pluginId 关联
-        // Phase 4+ 外部插件节点可通过额外接口或注册时关联
-        return null;
+        List<TaskLifecycleNode> sorted = new ArrayList<>(nodes);
+        sorted.sort(Comparator.comparingDouble(TaskLifecycleNode::order));
+        return sorted;
     }
 }

@@ -27,11 +27,11 @@ public interface TaskLifecycleContext {
     /** 当前任务状态（wire 字符串："created"/"running"/"waiting-user"/"done"/"failed"/"cancelled"）。 */
     String status();
 
+    /** 任务信息（向上转型的 TaskInfo，可访问任务级持久化 metadata）。 */
+    dev.everyagent.plugin.api.permission.TaskInfo taskInfo();
+
     /** 任务同步原语（锁内节点上行段自行 synchronized）。 */
     Object taskLock();
-
-    /** 通用任务级标记存储（与 TaskInfo.taskFlags() 同源）。 */
-    Map<String, Boolean> taskFlags();
 
     /** 任务开始时间戳（由 status.start 节点写入）。 */
     long startedAt();
@@ -59,7 +59,7 @@ public interface TaskLifecycleContext {
     String rawContent();
 
     /** task.run 的通用插件参数容器（核心不解释，插件自行消费）。 */
-    java.util.Map<String, Object> metadata();
+    java.util.Map<String, Object> runParams();
 
     /** RPC 应答器（链节点直接调 ctx.ok 返回前端；仅 RPC 线程阶段有效，虚拟线程阶段为 null）。 */
     Object rpcContext();

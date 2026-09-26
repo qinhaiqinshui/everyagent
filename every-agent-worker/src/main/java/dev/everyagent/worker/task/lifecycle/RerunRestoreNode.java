@@ -8,7 +8,7 @@ import tools.jackson.databind.JsonNode;
 
 /**
  * 下行节点(order=50)：再运行状态恢复（一事）。
- * meta → TaskEntry 全量恢复：createdAt / taskFlags（含 aiReview、unattended 旧字段兼容迁移）/
+ * meta → TaskEntry 全量恢复：createdAt / metadata（含 aiReview、unattended 旧字段兼容迁移）/
  * networkBlocked / powershellEnabled / seedUsageMeta / slashTaskTokens 回读 + log.seed 水位续号。
  * 新建任务无 rerunMeta，整体空转。
  * 必须在 persistence.track(100) 之前执行（首落盘 meta 须含恢复后的 slashTaskTokens 等字段）。
@@ -28,15 +28,33 @@ public final class RerunRestoreNode implements TaskLifecycleNode {
         if (meta != null) {
             var t = impl.taskEntry();
             t.createdAt(meta.path("createdAt").asLong(0));
-            // 兼容旧格式:aiReview/unattended 布尔字段自动迁移到 taskFlags
-            if (meta.path("aiReview").asBoolean(false)) t.taskFlags.put("ai-review", true);
-            if (meta.path("unattended").asBoolean(false)) t.taskFlags.put("unattended", true);
-            // 新格式:taskFlags Map
+            // 兼容旧格式:aiReview/unattended 布尔字段自动迁移到 metadata
+            if (meta.path("aiReview").asBoolean(false)) t.metadata.put("ai-review", true);
+            if (meta.path("unattended").asBoolean(false)) t.metadata.put("unattended", true);
+            // 旧格式 taskFlags（Map<String, Boolean>）→ 迁移到 metadata
             var flagsNode = meta.path("taskFlags");
             if (flagsNode.isObject()) {
                 flagsNode.properties().forEach(e -> {
                     if (e.getValue().isBoolean()) {
-                        t.taskFlags.put(e.getKey(), e.getValue().asBoolean());
+                        t.metadata.put(e.getKey(), e.getValue().asBoolean());
+                    }
+                });
+            }
+            // 新格式 metadata（Map<String, Object>）
+            var metaNode = meta.path("metadata");
+            if (metaNode.isObject()) {
+                metaNode.properties().forEach(e -> {
+                    JsonNode v = e.getValue();
+                    if (v.isBoolean()) {
+                        t.metadata.put(e.getKey(), v.asBoolean());
+                    } else if (v.isIntegralNumber()) {
+                        t.metadata.put(e.getKey(), v.asLong());
+                    } else if (v.isNumber()) {
+                        t.metadata.put(e.getKey(), v.asDouble());
+                    } else if (v.isTextual()) {
+                        t.metadata.put(e.getKey(), v.asText());
+                    } else {
+                        t.metadata.put(e.getKey(), v);
                     }
                 });
             }

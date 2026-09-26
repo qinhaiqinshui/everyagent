@@ -13,6 +13,7 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.node.ArrayNode;
 import tools.jackson.databind.node.ObjectNode;
 
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -28,8 +29,6 @@ public final class TaskEntry implements TaskInfo, AgentContext {
     public final String taskId;
     public final String title;
     public final ModelSnapshot snapshot;
-    /** 内存持有,永不写入事件日志或频段。 */
-    public final String apiKey;
     /**
      * 工作区根(meta.workspace;挂靠关系,任务数据存 workspaces/&lt;workspaceId&gt;/tasks 不随之迁移)。
      * 非 final:workspaces.resolveMissing 纠正路径时整体改挂到新目录(见
@@ -80,11 +79,12 @@ public final class TaskEntry implements TaskInfo, AgentContext {
     public volatile boolean stopRequested;
 
     /**
-     * 通用任务级标记存储（替代原 aiReview/unattended 布尔字段）。
-     * 插件用字符串 key 存取（如 "ai-review"、"unattended"），核心不感知具体 key。
+     * 通用任务级持久化数据（替代原 taskFlags，Map<String, Boolean>）。
+     * 插件用字符串 key 存取任意类型值（如 "ai-review"→Boolean、"unattended"→Boolean），
+     * 核心不感知具体 key/value 类型。
      * 随 {@link #summaryJson()} 落盘 meta.json、再运行仍保持。旧格式自动迁移（见 TaskManager）。
      */
-    public final java.util.Map<String, Boolean> taskFlags = new java.util.concurrent.ConcurrentHashMap<>();
+    public final java.util.Map<String, Object> metadata = new java.util.concurrent.ConcurrentHashMap<>();
 
     /**
      * 禁网开关(任务级):开启后本任务后续所有命令禁止访问网络(覆盖 worker 级
@@ -146,8 +146,31 @@ public final class TaskEntry implements TaskInfo, AgentContext {
     }
 
     @Override
-    public Map<String, Boolean> taskFlags() {
-        return taskFlags;
+    public String status() {
+        return status.wire();
+    }
+
+    @Override
+    public boolean terminal() {
+        return status.terminal();
+    }
+
+    @Override
+    public Map<String, Object> metadata() {
+        return metadata;
+    }
+
+    /** 任务数据目录路径（由 TaskStore 定位，创建时注入）。 */
+    private volatile Path taskDir;
+
+    /** 注入任务数据目录路径（TaskEntryCreateNode 创建后调用）。 */
+    public void taskDir(Path dir) {
+        this.taskDir = dir;
+    }
+
+    @Override
+    public Path taskDir() {
+        return taskDir;
     }
 
     // ---- AgentContext 接口实现 ----
@@ -198,12 +221,11 @@ public final class TaskEntry implements TaskInfo, AgentContext {
     private final AtomicLong lastActivityMs = new AtomicLong(createdAt);
 
     public TaskEntry(String taskId, String title,
-            ModelSnapshot snapshot, String apiKey, String workspaceRoot, String workspaceId, String mainAgentId,
+            ModelSnapshot snapshot, String workspaceRoot, String workspaceId, String mainAgentId,
             long maxEvents) {
         this.taskId = taskId;
         this.title = title;
         this.snapshot = snapshot;
-        this.apiKey = apiKey;
         this.workspaceRoot = workspaceRoot;
         this.workspaceId = workspaceId;
         this.mainAgentId = mainAgentId;
@@ -302,10 +324,10 @@ public final class TaskEntry implements TaskInfo, AgentContext {
         ObjectNode n = (ObjectNode) Json.toJson(s);
         // 稳定工作区 id(磁盘存储维度;TaskSummary record 保持不动,wire/meta 上额外携带)。
         n.put("workspaceId", workspaceId);
-        // 任务级标记随 meta 落盘:taskFlags Map 序列化(缺失 = 空 map,再运行据此保持)。
-        if (!taskFlags.isEmpty()) {
-            var flags = n.putObject("taskFlags");
-            taskFlags.forEach(flags::put);
+        // 任务级持久化数据随 meta 落盘:metadata Map 序列化(缺失 = 空 map,再运行据此保持)。
+        if (!metadata.isEmpty()) {
+            var metaObj = n.putObject("metadata");
+            metadata.forEach((k, v) -> metaObj.set(k, Json.toJson(v)));
         }
         if (networkBlocked) {
             n.put("networkBlocked", true);

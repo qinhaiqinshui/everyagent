@@ -166,8 +166,9 @@ public final class TaskEntryCreateNode implements TaskLifecycleNode {
         ResolvedConfig cfg = taskBootstrap.resolveConfig(configId);
         String mainAgentId = ShortIds.mainAgentId();
         TaskEntry t = new TaskEntry(taskId, title, cfg.snapshot(),
-                cfg.apiKey(), impl.workspaceRoot(), impl.workspaceId(),
+                impl.workspaceRoot(), impl.workspaceId(),
                 mainAgentId, props.getLimits().getMaxEventsPerTask());
+        t.taskDir(store.dirOf(taskId, impl.workspaceId()));
         tasks.put(taskId, t);
 
         // slash 任务级 token
@@ -222,9 +223,10 @@ public final class TaskEntryCreateNode implements TaskLifecycleNode {
             workspaceId = taskBootstrap.workspaceIdOf(meta.path("workspace").asString(""));
         }
         TaskEntry t = new TaskEntry(taskId,
-                meta.path("title").asString("继续对话"), cfg.snapshot(), cfg.apiKey(),
+                meta.path("title").asString("继续对话"), cfg.snapshot(),
                 meta.path("workspace").asString(null), workspaceId, mainAgentId,
                 props.getLimits().getMaxEventsPerTask());
+        t.taskDir(st.dir());
         return t;
     }
 }

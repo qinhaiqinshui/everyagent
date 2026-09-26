@@ -1,10 +1,8 @@
 package dev.everyagent.worker.plugin.loader;
 
 import dev.everyagent.contract.json.Json;
-import dev.everyagent.worker.plugin.registry.AdvisorProviderRegistry;
-import dev.everyagent.worker.plugin.registry.PluginStateStore;
-import dev.everyagent.worker.plugin.registry.SandboxProviderRegistry;
-import dev.everyagent.worker.plugin.registry.ToolProviderRegistry;
+import dev.everyagent.worker.plugin.registry.PluginManifest;
+import dev.everyagent.worker.plugin.registry.PluginRegistry;
 import dev.everyagent.worker.proto.RpcMethods;
 import dev.everyagent.worker.rpc.RpcDispatcher;
 import jakarta.annotation.PostConstruct;
@@ -24,7 +22,7 @@ import java.util.zip.ZipInputStream;
 /**
  * plugin.* RPC 方法：插件管理。
  *
- * <p>内置插件随主包打包（Spring @Component），不能卸载但可以禁用（经 PluginStateStore 运行时生效）。
+ * <p>内置插件随主包打包（Spring @Component），不能卸载但可以禁用（经 PluginRegistry 运行时生效）。
  * 外部插件在 ~/.everyagent/plugins/ 目录，可以安装/卸载/启用/禁用。
  */
 @Component
@@ -35,22 +33,14 @@ public class PluginRpcMethods {
     private final RpcDispatcher dispatcher;
     private final PluginLoader pluginLoader;
     private final BuiltInPlugins builtInPlugins;
-    private final PluginStateStore stateStore;
-    private final ToolProviderRegistry toolRegistry;
-    private final AdvisorProviderRegistry advisorRegistry;
-    private final SandboxProviderRegistry sandboxRegistry;
+    private final PluginRegistry pluginRegistry;
 
     public PluginRpcMethods(RpcDispatcher dispatcher, PluginLoader pluginLoader,
-            BuiltInPlugins builtInPlugins, PluginStateStore stateStore,
-            ToolProviderRegistry toolRegistry, AdvisorProviderRegistry advisorRegistry,
-            SandboxProviderRegistry sandboxRegistry) {
+            BuiltInPlugins builtInPlugins, PluginRegistry pluginRegistry) {
         this.dispatcher = dispatcher;
         this.pluginLoader = pluginLoader;
         this.builtInPlugins = builtInPlugins;
-        this.stateStore = stateStore;
-        this.toolRegistry = toolRegistry;
-        this.advisorRegistry = advisorRegistry;
-        this.sandboxRegistry = sandboxRegistry;
+        this.pluginRegistry = pluginRegistry;
     }
 
     @PostConstruct
@@ -60,63 +50,35 @@ public class PluginRpcMethods {
         dispatcher.register(RpcMethods.PLUGIN_UNINSTALL, this::uninstall);
         dispatcher.register(RpcMethods.PLUGIN_ENABLE, this::enable);
         dispatcher.register(RpcMethods.PLUGIN_DISABLE, this::disable);
+        dispatcher.register(RpcMethods.PLUGIN_WEB_SOURCE, this::webSource);
     }
 
-    /** plugin.list — 列出全部插件（内置 + 外部，含禁用状态）。 */
+    /** plugin.list — 列出全部插件（内置 + 外部，含 web-only），附带 disabledIds。 */
     private void list(dev.everyagent.worker.rpc.RpcContext ctx) {
         ArrayNode arr = Json.arr();
 
-        // 内置 ToolProvider
-        for (var p : toolRegistry.getProviders()) {
+        for (PluginManifest m : pluginRegistry.catalog()) {
             ObjectNode o = Json.obj();
-            o.put("id", p.pluginId());
-            o.put("name", p.pluginId());
-            o.put("type", "tool");
-            o.put("scope", p.scope().name());
-            o.put("source", "builtin");
-            o.put("active", !stateStore.isDisabled(p.pluginId()));
-            arr.add(o);
-        }
-        // 内置 AdvisorProvider
-        for (var p : advisorRegistry.getProviders()) {
-            ObjectNode o = Json.obj();
-            o.put("id", p.pluginId());
-            o.put("name", p.pluginId());
-            o.put("type", "advisor");
-            o.put("scope", p.scope().name());
-            o.put("order", p.order());
-            o.put("source", "builtin");
-            o.put("active", !stateStore.isDisabled(p.pluginId()));
-            arr.add(o);
-        }
-        // 内置 SandboxProvider
-        for (var p : sandboxRegistry.getProviders()) {
-            ObjectNode o = Json.obj();
-            o.put("id", p.id());
-            o.put("name", p.id());
-            o.put("type", "sandbox");
-            o.put("available", p.isAvailable());
-            o.put("source", "builtin");
-            o.put("active", !stateStore.isDisabled(p.id()));
-            arr.add(o);
-        }
-        // 外部插件
-        for (PluginLoader.LoadedPlugin p : pluginLoader.getLoadedPlugins()) {
-            ObjectNode o = Json.obj();
-            o.put("id", p.id());
-            o.put("name", p.name());
-            o.put("version", p.version());
-            o.put("description", p.description());
-            o.put("author", p.author());
-            o.put("source", "external");
-            o.put("active", p.active());
-            o.put("status", p.status());
-            o.put("path", p.pluginDir().toString());
+            o.put("id", m.id());
+            o.put("name", m.name());
+            o.put("version", m.version());
+            o.put("description", m.description());
+            o.put("author", m.author());
+            o.put("source", m.source());
+            o.put("active", !pluginRegistry.isDisabled(m.id()));
+            o.put("hasMain", !m.main().isEmpty());
+            o.put("hasWebMain", !m.webMain().isEmpty());
             arr.add(o);
         }
 
         ObjectNode result = Json.obj();
         result.set("plugins", arr);
+        // 附带禁用列表
+        ArrayNode disabledArr = Json.arr();
+        for (String id : pluginRegistry.disabledIds()) {
+            disabledArr.add(id);
+        }
+        result.set("disabledIds", disabledArr);
         ctx.ok(result);
     }
 
@@ -173,20 +135,14 @@ public class PluginRpcMethods {
         ctx.ok(result);
     }
 
-    /** plugin.enable — 启用插件（运行时生效，经 PluginStateStore）。 */
+    /** plugin.enable — 启用插件（运行时生效，经 PluginRegistry）。 */
     private void enable(dev.everyagent.worker.rpc.RpcContext ctx) {
         String pluginId = ctx.params().path("pluginId").asString("");
         if (pluginId.isEmpty()) {
             ctx.err("BAD_PARAMS", "缺少参数 pluginId");
             return;
         }
-        stateStore.enable(pluginId);
-        // 外部插件也移除 .disabled 标记
-        Path pluginsRoot = builtInPlugins.getPluginsRoot();
-        Path disabledMarker = pluginsRoot.resolve(pluginId).resolve(".disabled").normalize();
-        if (disabledMarker.startsWith(pluginsRoot)) {
-            try { Files.deleteIfExists(disabledMarker); } catch (IOException e) { /* 忽略 */ }
-        }
+        pluginRegistry.enable(pluginId);
         ObjectNode result = Json.obj();
         result.put("enabled", true);
         result.put("pluginId", pluginId);
@@ -194,19 +150,58 @@ public class PluginRpcMethods {
         ctx.ok(result);
     }
 
-    /** plugin.disable — 禁用插件（运行时生效，经 PluginStateStore）。 */
+    /** plugin.disable — 禁用插件（运行时生效，经 PluginRegistry）。 */
     private void disable(dev.everyagent.worker.rpc.RpcContext ctx) {
         String pluginId = ctx.params().path("pluginId").asString("");
         if (pluginId.isEmpty()) {
             ctx.err("BAD_PARAMS", "缺少参数 pluginId");
             return;
         }
-        stateStore.disable(pluginId);
+        pluginRegistry.disable(pluginId);
         ObjectNode result = Json.obj();
         result.put("disabled", true);
         result.put("pluginId", pluginId);
         result.put("message", "插件已禁用");
         ctx.ok(result);
+    }
+
+    /** plugin.webSource — 从外部插件目录读取文件返回源码文本。 */
+    private void webSource(dev.everyagent.worker.rpc.RpcContext ctx) {
+        String pluginId = ctx.params().path("pluginId").asString("");
+        if (pluginId.isEmpty()) {
+            ctx.err("BAD_PARAMS", "缺少参数 pluginId");
+            return;
+        }
+        String filePath = ctx.params().path("path").asString("");
+        if (filePath.isEmpty()) {
+            ctx.err("BAD_PARAMS", "缺少参数 path");
+            return;
+        }
+
+        Path pluginsRoot = pluginRegistry.getPluginsRoot();
+        Path pluginDir = pluginsRoot.resolve(pluginId).normalize();
+        if (!pluginDir.startsWith(pluginsRoot) || !Files.isDirectory(pluginDir)) {
+            ctx.err("NOT_FOUND", "插件目录不存在: " + pluginId);
+            return;
+        }
+
+        // 安全：路径必须在插件目录内
+        Path target = pluginDir.resolve(filePath).normalize();
+        if (!target.startsWith(pluginDir) || !Files.isRegularFile(target)) {
+            ctx.err("NOT_FOUND", "文件不存在或越界: " + filePath);
+            return;
+        }
+
+        try {
+            String content = Files.readString(target);
+            ObjectNode result = Json.obj();
+            result.put("pluginId", pluginId);
+            result.put("path", filePath);
+            result.put("content", content);
+            ctx.ok(result);
+        } catch (IOException e) {
+            ctx.err("INTERNAL", "读取文件失败: " + e.getMessage());
+        }
     }
 
     private String extractEap(Path zip, Path pluginsRoot) throws IOException {

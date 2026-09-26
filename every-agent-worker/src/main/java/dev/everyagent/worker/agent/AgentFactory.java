@@ -89,12 +89,7 @@ public class AgentFactory {
      */
     public AgentEntity buildAgent(TaskEntry task, String agentId, String title, String input) {
         // 普通模型用冻结快照;池配置(configId 指向 provider=model-pool)回查 ConfigStore 以取成员列表。
-        ResolvedConfig cfg;
-        if (ConfigStore.POOL_PROVIDER.equals(task.snapshot.provider())) {
-            cfg = configs.resolve(task.snapshot.configId());
-        } else {
-            cfg = new ResolvedConfig(task.snapshot, task.apiKey);
-        }
+        ResolvedConfig cfg = resolveAgentConfig(task);
         // 子 agent 工具集不含 run_agent 等(结构上禁止递归);tool.result 事件由 AgentRunner 统一发射
         // 子 agent 不注册 ask_user:提问只能由主 agent 发起,子 agent 通过返回结果向上传递信息
         // 工具装配改为从 ToolProviderRegistry 聚合(替代硬编码 new FileTools / new BashTool / ...)
@@ -119,14 +114,11 @@ public class AgentFactory {
 
     /**
      * 任务运行配置解析（方法体从 TaskManager.resolveAgentConfig 原样搬移）。
-     * 任务运行配置:普通模型用冻结快照(t.snapshot/t.apiKey);池配置(configId 指向 provider=model-pool)
-     * 重新经 ConfigStore 解析以获得池成员列表——冻结快照不含成员信息,必须回查
+     * 任务运行配置:apiKey 取自 ConfigStore 解析结果(ResolvedConfig),不再从 TaskEntry 持有。
+     * 池配置(configId 指向 provider=model-pool)经 ConfigStore 解析获得池成员列表。
      * (运行期 worker.models 启动即物化、无热更新,与创建时解析一致)。
      */
     public ResolvedConfig resolveAgentConfig(TaskEntry t) {
-        if (ConfigStore.POOL_PROVIDER.equals(t.snapshot.provider())) {
-            return configs.resolve(t.snapshot.configId());
-        }
-        return new ResolvedConfig(t.snapshot, t.apiKey);
+        return configs.resolve(t.snapshot.configId());
     }
 }

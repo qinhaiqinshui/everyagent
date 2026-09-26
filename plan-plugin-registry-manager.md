@@ -257,15 +257,15 @@ interface ExtensionRegistryFactory {
 
 ## 步骤
 
-- [ ] 步骤 1：统一清单（9 个插件各补 plugin.json；统一字段 main + webMain；废弃旧字段）
-    - 状态：进行中
+- [x] 步骤 1：统一清单（9 个插件各补 plugin.json；统一字段 main + webMain；废弃旧字段）
+    - 状态：已完成
     - agent：sub_hkl2q
     - 依赖：无
     - 验收标准：每个插件目录有 plugin.json；字段格式统一
 
 - [ ] 步骤 2：worker PluginStateStore → PluginRegistry（完整目录 + 加载时拦截 + 持久化 + plugin.list 全量 + plugin.webSource RPC + TaskService.get() + TaskInfo 扩展 + TaskEntry 去 apiKey + taskFlags→metadata 统一）
-    - 状态：待执行
-    - agent：-
+    - 状态：进行中
+    - agent：sub_hkl2s
     - 依赖：依赖步骤 1
     - 验收标准：worker 认识全部 9 个插件；禁用插件不调 activate；.disabled-plugins 持久化生效；plugin.list 含 disabledIds；TaskInfo 含 status/terminal/metadata/taskDir；TaskService 含 get/publishUpdated；TaskLifecycleContext 新增 taskInfo()/runParams()；ctx.services().task().get() 可用；TaskEntry 无 apiKey 字段；AgentFactory 从 ResolvedConfig 拿 apiKey；taskFlags 字段删除；metadata 落盘、runParams 不落盘
 
@@ -275,10 +275,10 @@ interface ExtensionRegistryFactory {
     - 依赖：依赖步骤 2
     - 验收标准：7 个插件的 activate() 非空且含全注册；不再 import TaskManager/TaskStore/EventSink；worker 编译通过；各注册表无 isDisabled 过滤残留
 
-- [ ] 步骤 4：web 注册表接口抽象（ExtensionRegistry / ListExtensionRegistry / Factory，PluginDispatcher 重构，行为不变）
-    - 状态：进行中
+- [x] 步骤 4：web 注册表接口抽象（ExtensionRegistry / ListExtensionRegistry / Factory，PluginDispatcher 重构，行为不变）
+    - 状态：已完成
     - agent：sub_hkl2r
-    - 依赖：无（可与 1-3 并行）
+    - 依赖：无
     - 验收标准：web 构建通过；所有既有调用方零改动；现有插件功能无损
 
 - [ ] 步骤 5：web 加载重构（plugin.list 驱动发现 + Vite glob 降级为 lazy import 映射 + 外部插件 blob URL 加载）

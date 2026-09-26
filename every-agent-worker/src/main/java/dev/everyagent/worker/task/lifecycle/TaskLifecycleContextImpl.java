@@ -47,7 +47,7 @@ public class TaskLifecycleContextImpl implements TaskLifecycleContext {
     // ---- task.run 注入字段（TaskLifecycleContext 新接口方法）----
     private String input;
     private String rawContent;
-    private java.util.Map<String, Object> metadata;
+    private java.util.Map<String, Object> runParams;
     private Object rpcContext;
 
     // 回调：由 TaskManager 在创建上下文时设置
@@ -78,7 +78,7 @@ public class TaskLifecycleContextImpl implements TaskLifecycleContext {
 
     public void input(String input) { this.input = input; }
     public void rawContent(String rawContent) { this.rawContent = rawContent; }
-    public void metadata(java.util.Map<String, Object> metadata) { this.metadata = metadata; }
+    public void runParams(java.util.Map<String, Object> runParams) { this.runParams = runParams; }
     public void rpcContext(Object rpcContext) { this.rpcContext = rpcContext; }
     public void taskId(String v) { this.taskId = v; }
     public void workspaceRoot(String v) { this.workspaceRoot = v; }
@@ -131,14 +131,14 @@ public class TaskLifecycleContextImpl implements TaskLifecycleContext {
     @Override public String workspaceId() { return taskEntry != null ? taskEntry.workspaceId : workspaceId; }
     @Override public String mainAgentId() { return taskEntry.mainAgentId; }
     @Override public String status() { return taskEntry.status.wire(); }
+    @Override public dev.everyagent.plugin.api.permission.TaskInfo taskInfo() { return taskEntry; }
     @Override public Object taskLock() { return taskEntry; }
-    @Override public Map<String, Boolean> taskFlags() { return taskEntry.taskFlags; }
     @Override public long startedAt() { return taskEntry.startedAt != null ? taskEntry.startedAt : 0; }
     @Override public void startedAt(long ms) { taskEntry.startedAt = ms; }
     @Override public void onUsageBroadcast(Runnable hook) { taskEntry.onUsageBroadcast = hook; }
     @Override public void agentStatus(String agentId, String status) { taskEntry.events.agentStatus(agentId, status); }
     @Override public String input() { return input; }
     @Override public String rawContent() { return rawContent; }
-    @Override public java.util.Map<String, Object> metadata() { return metadata; }
+    @Override public java.util.Map<String, Object> runParams() { return runParams; }
     @Override public Object rpcContext() { return rpcContext; }
 }
