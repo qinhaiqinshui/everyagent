@@ -7,7 +7,6 @@ import dev.everyagent.hub.HubApplication;
 import dev.everyagent.plugin.api.spi.TokenEstimator;
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.plugin.registry.ModelRequestNodeRegistry;
-import dev.everyagent.worker.task.ModelRateLimiterRegistry;
 import dev.everyagent.worker.hub.HubPool;
 import dev.everyagent.worker.modules.ConfigStore.ResolvedConfig;
 import dev.everyagent.worker.proto.Channels;
@@ -126,7 +125,7 @@ class MultiHubE2eTest {
         @Bean
         @Primary
         ChatModelFactory fakeModelFactory(WorkerProperties props, ModelRequestNodeRegistry nodeRegistry) {
-            return new ChatModelFactory(props, new ModelRateLimiterRegistry(props, STUB_ESTIMATOR), nodeRegistry) {
+            return new ChatModelFactory(props, nodeRegistry) {
                 @Override
                 public org.springframework.ai.chat.model.ChatModel build(ResolvedConfig cfg,
                         org.springframework.ai.openai.OpenAiChatOptions options, String agentId) {

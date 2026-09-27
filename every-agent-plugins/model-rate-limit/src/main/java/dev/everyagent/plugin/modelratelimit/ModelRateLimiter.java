@@ -1,4 +1,4 @@
-package dev.everyagent.worker.task;
+package dev.everyagent.plugin.modelratelimit;
 
 import dev.everyagent.plugin.api.spi.TokenEstimator;
 import dev.everyagent.worker.config.WorkerProperties;
@@ -26,7 +26,7 @@ import java.util.function.BiConsumer;
  * 等待可被线程中断(任务取消)即时打断,不悬挂。
  *
  * <p>token 估算委托 {@link TokenEstimator}(经真实 usage 在线校准的 CJK 粗估),
- * 与 {@link ModelLengthGuardAdvisor} 共享同一校准系数,误差长期可控。
+ * 与 {@code ModelLengthGuardAdvisor} 共享同一校准系数,误差长期可控。
  */
 public final class ModelRateLimiter {
 

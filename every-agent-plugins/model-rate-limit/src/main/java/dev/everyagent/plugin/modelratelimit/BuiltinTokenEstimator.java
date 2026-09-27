@@ -1,4 +1,4 @@
-package dev.everyagent.worker.plugin.adapters;
+package dev.everyagent.plugin.modelratelimit;
 
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.plugin.api.spi.TokenEstimator;
@@ -6,7 +6,6 @@ import dev.everyagent.worker.AtomicFiles;
 import dev.everyagent.worker.config.WorkerProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.stereotype.Component;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.node.ObjectNode;
 
@@ -36,11 +35,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * dirty 标记 + 原子替换）；重启后接续，避免冷启动系数回退默认。读写失败静默降级，
  * 绝不阻塞模型调用。
  *
- * <p>去重：同一轮模型调用可能被 {@code RateLimitedChatModel}（限流路径）和
+ * <p>去重：同一轮模型调用可能被 {@code RateLimitNode}（限流路径）和
  * {@code TokenCalibrationAdvisor}（advisor 路径）同时观察到 usage，{@link #calibrate}
  * 内部用最近样本指纹去重，同一 (configId, estimated, actual) 三元组短时间不重复校准。
  */
-@Component
 public class BuiltinTokenEstimator implements TokenEstimator {
 
     private static final Logger log = LoggerFactory.getLogger(BuiltinTokenEstimator.class);

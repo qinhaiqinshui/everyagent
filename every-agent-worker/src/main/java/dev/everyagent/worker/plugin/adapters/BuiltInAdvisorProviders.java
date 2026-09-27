@@ -8,7 +8,6 @@ import dev.everyagent.worker.skill.SkillAdvisor;
 import dev.everyagent.worker.slash.SlashTokenHandler;
 import dev.everyagent.worker.task.RoundIndexStore;
 import dev.everyagent.worker.task.TaskStore;
-import dev.everyagent.worker.task.TokenCalibrationAdvisor;
 import jakarta.annotation.PostConstruct;
 import org.springframework.stereotype.Component;
 
@@ -59,7 +58,7 @@ public class BuiltInAdvisorProviders {
     @PostConstruct
     public void registerBuiltin() {
         // 核心基础设施（0─99）
-        registry.register(new TokenCalibrationAdvisor.Provider(tokenEstimator));
+        // TokenCalibrationAdvisor 已迁至 model-rate-limit 插件（步骤 4），不再在此注册。
         registry.register(new RoundIndexAdvisorProvider(taskStore, roundIndexStore));
         registry.register(new SystemInfoAdvisorProvider(osSandbox));
         registry.register(new AgentsMdAdvisorProvider());

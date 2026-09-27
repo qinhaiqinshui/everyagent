@@ -8,8 +8,6 @@ import dev.everyagent.worker.proto.RpcMethods;
 import dev.everyagent.worker.rpc.RpcContext;
 import dev.everyagent.worker.rpc.RpcDispatcher;
 import dev.everyagent.worker.skill.ExternalSkillScanner;
-import dev.everyagent.worker.task.ChatModelFactory;
-import dev.everyagent.worker.task.ModelRateLimiter;
 import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -35,18 +33,15 @@ public class ConfigRpcHandler {
 
     private final ConfigStore configs;
     private final ExternalSkillScanner externalSkillScanner;
-    private final ChatModelFactory modelFactory;
     private final HubPool pool;
     private final RpcDispatcher dispatcher;
 
     public ConfigRpcHandler(ConfigStore configs,
                             ExternalSkillScanner externalSkillScanner,
-                            ChatModelFactory modelFactory,
                             HubPool pool,
                             RpcDispatcher dispatcher) {
         this.configs = configs;
         this.externalSkillScanner = externalSkillScanner;
-        this.modelFactory = modelFactory;
         this.pool = pool;
         this.dispatcher = dispatcher;
     }
@@ -67,22 +62,10 @@ public class ConfigRpcHandler {
             arr.add(Json.toJson(safe));
         }
         ObjectNode out = Json.obj().set("models", arr);
-        // 限流运行态(P2):排队/在飞/估算系数,前端据此展示模型当前负载。
-        ArrayNode rates = Json.arr();
-        for (ModelRateLimiter.Snapshot s : modelFactory.rateLimitSnapshots()) {
-            ObjectNode o = Json.obj();
-            o.put("configId", s.configId());
-            o.put("enabled", s.enabled());
-            o.put("rpm", s.rpm());
-            o.put("maxConcurrency", s.maxConcurrency());
-            o.put("tpm", s.tpm());
-            o.put("inFlight", s.inFlight());
-            o.put("waiters", s.waiters());
-            o.put("factor", Math.round(s.factor() * 1000.0) / 1000.0);
-            o.put("sampleCount", s.sampleCount());
-            rates.add(o);
-        }
-        out.set("rateStatus", rates);
+        // 限流运行态已由 model-rate-limit 插件管理（步骤 4 搬迁）。
+        // worker 核心不再持有 ModelRateLimiterRegistry，rateStatus 暂返回空数组。
+        // 遗留项：插件后续自行注册 RPC 透出限流快照（步骤 5）。
+        out.set("rateStatus", Json.arr());
         ctx.ok(out);
     }
 

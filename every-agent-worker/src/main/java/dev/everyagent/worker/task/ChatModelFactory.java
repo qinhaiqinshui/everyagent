@@ -17,6 +17,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.function.UnaryOperator;
 
+
+
 /**
  * 按配置快照构建 ChatModel(OpenAI 兼容协议,覆盖 deepseek/qwen/glm 等)。
  * 每任务/每 agent 一个实例;streamUsage 开启以便流式最后一帧带 usage。
@@ -36,7 +38,6 @@ public class ChatModelFactory {
     }
 
     private final WorkerProperties props;
-    private final ModelRateLimiterRegistry rateLimiterRegistry;
     private final ModelRequestNodeRegistry nodeRegistry;
     /**
      * 缓存:按 configId 复用 OpenAiChatModel 实例。openai-java SDK 每次构建
@@ -47,10 +48,9 @@ public class ChatModelFactory {
     private final java.util.concurrent.ConcurrentHashMap<String, OpenAiChatModel> modelCache =
             new java.util.concurrent.ConcurrentHashMap<>();
 
-    public ChatModelFactory(WorkerProperties props, ModelRateLimiterRegistry rateLimiterRegistry,
+    public ChatModelFactory(WorkerProperties props,
             ModelRequestNodeRegistry nodeRegistry) {
         this.props = props;
-        this.rateLimiterRegistry = rateLimiterRegistry;
         this.nodeRegistry = nodeRegistry;
     }
 
@@ -154,11 +154,6 @@ public class ChatModelFactory {
     @jakarta.annotation.PreDestroy
     void shutdown() {
         modelCache.clear();
-    }
-
-    /** 已建限流器的运行态快照(config.get 透出排队/在飞/估算系数;P2)。 */
-    public List<ModelRateLimiter.Snapshot> rateLimitSnapshots() {
-        return rateLimiterRegistry.snapshots();
     }
 
     /** 完整请求参数快照:baseUrl/apiKey/model/流式与采样参数,随 prompt 逐轮透传。 */

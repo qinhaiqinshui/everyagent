@@ -1,4 +1,4 @@
-package dev.everyagent.worker.task;
+package dev.everyagent.plugin.modelratelimit;
 
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.worker.config.WorkerProperties;

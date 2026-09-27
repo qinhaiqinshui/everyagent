@@ -1,7 +1,6 @@
-package dev.everyagent.worker.task;
+package dev.everyagent.plugin.modelratelimit;
 
 import dev.everyagent.plugin.api.spi.TokenEstimator;
-import dev.everyagent.worker.plugin.AdvisorContextImpl;
 import dev.everyagent.plugin.api.spi.AdvisorContext;
 import dev.everyagent.plugin.api.spi.AdvisorProvider;
 import org.slf4j.Logger;
@@ -31,23 +30,21 @@ import java.util.concurrent.atomic.AtomicReference;
  * chunk（包括工具循环递归各轮），不受下游 advisor 的 filter/聚合影响。
  *
  * <p>思考差分：Spring AI 2.0.1 的 OpenAiChatModel 在每个 chunk 的 metadata 里带
- * reasoningContent 累积值，需做前缀差分取增量（与 {@link WorkerToolEventAdvisor} 同纪律）。
+ * reasoningContent 累积值，需做前缀差分取增量（与 {@code WorkerToolEventAdvisor} 同纪律）。
  *
  * <p>去重：{@link TokenEstimator#calibrate} 内部用样本指纹去重，同一轮若
- * {@code RateLimitedChatModel}（限流路径）也调了 calibrate 不会重复校准。
+ * {@code RateLimitNode}（限流路径）也调了 calibrate 不会重复校准。
  */
 public class TokenCalibrationAdvisor implements CallAdvisor, StreamAdvisor {
 
     private static final Logger log = LoggerFactory.getLogger(TokenCalibrationAdvisor.class);
 
-    private final AgentEntity a;
     private final TokenEstimator estimator;
     private final String configId;
 
-    public TokenCalibrationAdvisor(AgentEntity a, TokenEstimator estimator) {
-        this.a = a;
+    public TokenCalibrationAdvisor(String configId, TokenEstimator estimator) {
+        this.configId = configId;
         this.estimator = estimator;
-        this.configId = a.task.snapshot.configId();
     }
 
     @Override
@@ -164,7 +161,8 @@ public class TokenCalibrationAdvisor implements CallAdvisor, StreamAdvisor {
      * Provider 适配器。
      *
      * <p>order = 0（核心基础设施层），scope = BOTH（主/子 agent 同挂）。
-     * 每 run 新建实例。
+     * 每 run 新建实例。经 {@link AdvisorContext#configId()} 获取 configId，
+     * 不再依赖 worker 内部类型（{@code AgentEntity} / {@code AdvisorContextImpl}）。
      */
     public static class Provider implements AdvisorProvider {
 
@@ -191,8 +189,7 @@ public class TokenCalibrationAdvisor implements CallAdvisor, StreamAdvisor {
 
         @Override
         public org.springframework.ai.chat.client.advisor.api.Advisor create(AdvisorContext ctx) {
-            AgentEntity a = ((AdvisorContextImpl) ctx).agentEntity();
-            return new TokenCalibrationAdvisor(a, estimator);
+            return new TokenCalibrationAdvisor(ctx.configId(), estimator);
         }
     }
 }

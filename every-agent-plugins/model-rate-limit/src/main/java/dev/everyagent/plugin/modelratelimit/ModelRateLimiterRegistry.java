@@ -1,8 +1,7 @@
-package dev.everyagent.worker.task;
+package dev.everyagent.plugin.modelratelimit;
 
 import dev.everyagent.plugin.api.spi.TokenEstimator;
 import dev.everyagent.worker.config.WorkerProperties;
-import org.springframework.stereotype.Component;
 import tools.jackson.databind.JsonNode;
 
 import java.util.ArrayList;
@@ -22,7 +21,6 @@ import java.util.concurrent.ConcurrentHashMap;
  * <p>token 估算系数的持久化由 {@link TokenEstimator} 实现自行管理,
  * 本注册表不再持有 {@code ModelRateStateStore}。
  */
-@Component
 public class ModelRateLimiterRegistry {
 
     private final WorkerProperties props;
