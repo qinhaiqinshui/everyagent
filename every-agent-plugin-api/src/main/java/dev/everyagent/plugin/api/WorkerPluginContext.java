@@ -12,7 +12,6 @@ import dev.everyagent.plugin.api.spi.TokenEstimator;
 import dev.everyagent.plugin.api.spi.ToolExecutionInterceptor;
 import dev.everyagent.plugin.api.spi.ToolProvider;
 import dev.everyagent.plugin.api.model.ChatModelEnhancer;
-import dev.everyagent.plugin.api.model.ModelRequestNode;
 import dev.everyagent.plugin.api.task.TaskAdmissionPolicy;
 import dev.everyagent.plugin.api.task.TaskLifecycleNode;
 
@@ -58,9 +57,6 @@ public interface WorkerPluginContext {
 
     /** 注册 TokenEstimator（Token 估算器，替换内置实现）。 */
     void registerTokenEstimator(TokenEstimator estimator);
-
-    /** 注册 ModelRequestNode（模型请求洋葱链节点）。 */
-    void registerModelRequestNode(ModelRequestNode node);
 
     /** 注册 ChatModelEnhancer（模型构建增强器，如模型池容灾）。 */
     void registerChatModelEnhancer(ChatModelEnhancer enhancer);

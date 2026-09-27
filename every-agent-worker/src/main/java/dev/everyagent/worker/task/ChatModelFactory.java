@@ -3,15 +3,12 @@ package dev.everyagent.worker.task;
 import dev.everyagent.plugin.api.model.ChatModelEnhancer;
 import dev.everyagent.plugin.api.model.EnhancedChatModel;
 import dev.everyagent.plugin.api.model.EnhancerContext;
-import dev.everyagent.plugin.api.model.EmitEvent;
 import dev.everyagent.plugin.api.model.EventEmitter;
 import dev.everyagent.plugin.api.model.MemberSpec;
 import dev.everyagent.plugin.api.model.ModelConfig;
-import dev.everyagent.plugin.api.model.ModelRequestNode;
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.modules.ConfigStore.ResolvedConfig;
 import dev.everyagent.worker.plugin.registry.ChatModelEnhancerRegistry;
-import dev.everyagent.worker.plugin.registry.ModelRequestNodeRegistry;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.openai.OpenAiChatModel;
 import org.springframework.ai.openai.OpenAiChatOptions;
@@ -44,7 +41,6 @@ public class ChatModelFactory {
     }
 
     private final WorkerProperties props;
-    private final ModelRequestNodeRegistry nodeRegistry;
     private final ChatModelEnhancerRegistry enhancerRegistry;
     /**
      * 缓存:按 configId 复用 OpenAiChatModel 实例。openai-java SDK 每次构建
@@ -56,10 +52,8 @@ public class ChatModelFactory {
             new java.util.concurrent.ConcurrentHashMap<>();
 
     public ChatModelFactory(WorkerProperties props,
-            ModelRequestNodeRegistry nodeRegistry,
             ChatModelEnhancerRegistry enhancerRegistry) {
         this.props = props;
-        this.nodeRegistry = nodeRegistry;
         this.enhancerRegistry = enhancerRegistry;
     }
 
@@ -148,11 +142,9 @@ public class ChatModelFactory {
      * 打印真实请求体(含 skill 渐进式披露索引等 advisor 注入后的完整报文);
      * agentId 仅用于日志前缀标识。
      *
-     * <p>构建模型请求洋葱链({@link ModelRequestChainChatModel} 薄壳):
-     * 从 {@link ModelRequestNodeRegistry} 取有序 nodes,构造 {@link EventEmitter}
-     * 闭包(转发到 {@link TaskEvents#emit})。若无节点则返回 raw model(直通)。
-     * 限流逻辑由插件经 {@link ModelRequestNode} 注入(步骤 4 搬迁)。
-     * events 可空(无事件上下文时用 no-op emitter)。
+     * <p>限流、重试等逻辑由 advisor 层(RateLimitAdvisor、TransientErrorRetryAdvisor 等)
+     * 负责,模型构建层只产出 raw {@link OpenAiChatModel}。
+     * events 参数保留供池模型增强器使用。
      */
     public ChatModel build(ResolvedConfig cfg, OpenAiChatOptions options, String agentId,
             TaskEvents events) {
@@ -169,17 +161,7 @@ public class ChatModelFactory {
                                 // 静默由 readTimeout + ModelLengthGuardAdvisor stall 兜底。
                                 .interceptor(StreamTimeoutReleaseInterceptor.INSTANCE))
                         .build());
-        // 构造模型请求洋葱链
-        List<ModelRequestNode> nodes = nodeRegistry.getNodes();
-        if (nodes.isEmpty()) {
-            // 无节点 → 直通 raw model(现状兼容)
-            return raw;
-        }
-        ModelConfig config = cfg.snapshot();
-        EventEmitter emitter = events == null
-                ? (event) -> {} // no-op
-                : (event) -> events.emit(event);
-        return new ModelRequestChainChatModel(raw, nodes, emitter, config);
+        return raw;
     }
 
     /**

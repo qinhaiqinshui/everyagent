@@ -19,8 +19,7 @@ import java.util.List;
  * 组装为 ModelPoolChatModel（按序容灾切换），返回 EnhancedChatModel。
  *
  * <p>成员的 OpenAiChatOptions 从 buildMember() 返回的 ChatModel.getOptions() 获取：
- * ModelRequestChainChatModel.getOptions() 委托给内部 delegate（OpenAiChatModel），
- * 返回构建时使用的 OpenAiChatOptions。
+ * OpenAiChatModel.getOptions() 返回构建时使用的 OpenAiChatOptions。
  */
 public class ModelPoolEnhancer implements ChatModelEnhancer {
 

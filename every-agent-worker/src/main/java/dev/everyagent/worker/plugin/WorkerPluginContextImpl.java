@@ -15,13 +15,11 @@ import dev.everyagent.plugin.api.spi.TokenEstimator;
 import dev.everyagent.plugin.api.spi.ToolExecutionInterceptor;
 import dev.everyagent.plugin.api.spi.ToolProvider;
 import dev.everyagent.plugin.api.model.ChatModelEnhancer;
-import dev.everyagent.plugin.api.model.ModelRequestNode;
 import dev.everyagent.plugin.api.task.TaskAdmissionPolicy;
 import dev.everyagent.plugin.api.task.TaskLifecycleNode;
 import dev.everyagent.worker.plugin.registry.AdvisorProviderRegistry;
 import dev.everyagent.worker.plugin.registry.AuthorizationHandlerRegistry;
 import dev.everyagent.worker.plugin.registry.ChatModelEnhancerRegistry;
-import dev.everyagent.worker.plugin.registry.ModelRequestNodeRegistry;
 import dev.everyagent.worker.plugin.registry.SandboxProviderRegistry;
 import dev.everyagent.worker.plugin.registry.SearchProviderRegistry;
 import dev.everyagent.worker.plugin.registry.SkillContributorRegistry;
@@ -59,7 +57,6 @@ public class WorkerPluginContextImpl implements WorkerPluginContext {
     private final AuthorizationHandlerRegistry authHandlerRegistry;
     private final ToolExecutionInterceptorRegistry toolInterceptorRegistry;
     private final TaskLifecycleRegistry lifecycleRegistry;
-    private final ModelRequestNodeRegistry modelRequestNodeRegistry;
     private final ChatModelEnhancerRegistry chatModelEnhancerRegistry;
     private final TaskAdmissionPolicyRegistry admissionPolicyRegistry;
     private final SkillContributorRegistry skillContributorRegistry;
@@ -78,7 +75,6 @@ public class WorkerPluginContextImpl implements WorkerPluginContext {
             AuthorizationHandlerRegistry authHandlerRegistry,
             ToolExecutionInterceptorRegistry toolInterceptorRegistry,
             TaskLifecycleRegistry lifecycleRegistry,
-            ModelRequestNodeRegistry modelRequestNodeRegistry,
             ChatModelEnhancerRegistry chatModelEnhancerRegistry,
             TaskAdmissionPolicyRegistry admissionPolicyRegistry,
             SkillContributorRegistry skillContributorRegistry,
@@ -96,7 +92,6 @@ public class WorkerPluginContextImpl implements WorkerPluginContext {
         this.authHandlerRegistry = authHandlerRegistry;
         this.toolInterceptorRegistry = toolInterceptorRegistry;
         this.lifecycleRegistry = lifecycleRegistry;
-        this.modelRequestNodeRegistry = modelRequestNodeRegistry;
         this.chatModelEnhancerRegistry = chatModelEnhancerRegistry;
         this.admissionPolicyRegistry = admissionPolicyRegistry;
         this.skillContributorRegistry = skillContributorRegistry;
@@ -146,11 +141,6 @@ public class WorkerPluginContextImpl implements WorkerPluginContext {
     @Override
     public void registerTaskLifecycleNode(TaskLifecycleNode node) {
         lifecycleRegistry.register(node, pluginId);
-    }
-
-    @Override
-    public void registerModelRequestNode(ModelRequestNode node) {
-        modelRequestNodeRegistry.register(node);
     }
 
     @Override

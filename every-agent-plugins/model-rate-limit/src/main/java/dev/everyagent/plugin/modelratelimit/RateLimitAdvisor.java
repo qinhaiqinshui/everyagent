@@ -20,7 +20,7 @@ import java.util.Optional;
 /**
  * 限流 Advisor（红线：一个 advisor 只负责一个功能）。
  *
- * <p>原 {@code RateLimitNode}（ModelRequestNode 洋葱链）改造为 Advisor 体系。
+ * <p>原 {@code RateLimitNode}（洋葱链）改造为 Advisor 体系。
  * 按 configId 从 {@link ModelRateLimiterRegistry} 获取限流器;无限流配置则直通。
  *
  * <p>call 路径：{@code limiter.acquire()} 排队等待放行，成功后调

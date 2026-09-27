@@ -11,7 +11,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 /**
  * ChatModelEnhancer SPI 注册表。
  *
- * <p>模式同 {@link ModelRequestNodeRegistry}：CopyOnWriteArrayList 存储。
+ * <p>CopyOnWriteArrayList 存储。
  * 注册时机：内置/外部插件在 {@code activate()} 时经
  * {@code WorkerPluginContext.registerChatModelEnhancer} 注册。
  *
