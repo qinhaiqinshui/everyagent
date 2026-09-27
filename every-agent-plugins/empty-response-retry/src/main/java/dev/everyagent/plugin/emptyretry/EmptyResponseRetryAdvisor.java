@@ -1,6 +1,9 @@
-package dev.everyagent.worker.task;
+package dev.everyagent.plugin.emptyretry;
 
 import dev.everyagent.worker.config.WorkerProperties;
+import dev.everyagent.worker.task.AgentCancelledException;
+import dev.everyagent.worker.task.AgentEntity;
+import dev.everyagent.worker.task.ModelCallException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClientRequest;
@@ -36,7 +39,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * 把空尝试(零文本)与成功尝试无缝合并,轮末权威 {@code message} 只含成功尝试的内容;
  * 空尝试对前端不可见(无 delta)。
  *
- * <p>设计纪律:与 {@link WorkerToolEventAdvisor} 同构——per-run 物化(持 {@link AgentEntity}
+ * <p>设计纪律:与 {@code WorkerToolEventAdvisor} 同构——per-run 物化(持 {@link AgentEntity}
  * 引用仅用于日志归属);重试计数与"已见信号"标记是 per-subscription 状态({@code Flux.defer}
  * 闭包捕获,每轮/每次订阅全新),不持有跨轮可变状态,多任务并发安全。
  *

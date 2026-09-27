@@ -15,6 +15,7 @@ public class TransientErrorRetryPlugin implements EveryAgentPlugin {
     @Override
     public void activate(WorkerPluginContext ctx) throws Exception {
         WorkerProperties props = ctx.getService(WorkerProperties.class);
-        log.info("[transient-error-retry] 插件已激活");
+        ctx.registerAdvisorProvider(new TransientErrorRetryAdvisorProvider(props));
+        log.info("[transient-error-retry] 已注册 TransientErrorRetryAdvisorProvider");
     }
 }

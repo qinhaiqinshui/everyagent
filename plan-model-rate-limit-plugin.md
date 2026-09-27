@@ -306,20 +306,20 @@ public class RateLimitNode implements ModelRequestNode {
     - 依赖：步骤 3
     - 验收标准：6 个文件迁到插件包（ModelRateLimiter / RateLimitedChatModel→RateLimitNode / ModelRateLimitConfig / ModelRateLimiterRegistry / BuiltinTokenEstimator / TokenCalibrationAdvisor + Provider）；测试一并搬迁；`WorkerProperties.ModelRate` 留 worker；插件发语义事件名（如 `model_rate_wait`），task 层映射为 wire 格式（如 `task.trace` + kind）；`RateLimitNode` 从 `ctx.config().configId()` 和 `ctx.config().params()` 获取限流参数
 
-- [~] 步骤 5：worker 核心清理残留
-    - 状态：进行中（已派发）
-    - agent：`sub_hkl3j`
+- [x] 步骤 5：worker 核心清理残留
+    - 状态：已完成（commit 34a0a45）
+    - agent：`sub_hkl3p`
     - 依赖：步骤 4
     - 验收标准：worker 无限流器引用；`ConfigRpcHandler` 不再调 `rateLimitSnapshots()`；fallback `SimpleTokenEstimator` 就位；编译通过
 
-- [ ] 步骤 6：ARCHITECTURE.md 文档更新
-    - 状态：待执行
-    - agent：-
+- [x] 步骤 6：ARCHITECTURE.md 文档更新
+    - 状态：已完成（commit e244a5f）
+    - agent：`sub_hkl3q`
     - 依赖：步骤 5
 
-- [ ] 步骤 7：验证编译与测试
-    - 状态：待执行
-    - agent：-
+- [x] 步骤 7：验证编译与测试
+    - 状态：已完成（commit cacfeb5）
+    - agent：`sub_hkl3r`
     - 依赖：步骤 6
 
 ## 备注

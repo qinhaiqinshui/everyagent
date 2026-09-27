@@ -15,6 +15,7 @@ public class EmptyResponseRetryPlugin implements EveryAgentPlugin {
     @Override
     public void activate(WorkerPluginContext ctx) throws Exception {
         WorkerProperties props = ctx.getService(WorkerProperties.class);
-        log.info("[empty-response-retry] 插件已激活");
+        ctx.registerAdvisorProvider(new EmptyResponseRetryAdvisorProvider(props));
+        log.info("[empty-response-retry] 已注册 EmptyResponseRetryAdvisorProvider");
     }
 }

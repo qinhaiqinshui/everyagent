@@ -15,6 +15,7 @@ public class ContextCompressionPlugin implements EveryAgentPlugin {
     @Override
     public void activate(WorkerPluginContext ctx) throws Exception {
         WorkerProperties props = ctx.getService(WorkerProperties.class);
-        log.info("[context-compression] 插件已激活");
+        ctx.registerAdvisorProvider(new ContextCompressionAdvisorProvider(props));
+        log.info("[context-compression] 已注册 ContextCompressionAdvisorProvider");
     }
 }

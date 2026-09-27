@@ -1,4 +1,4 @@
-package dev.everyagent.worker.task;
+package dev.everyagent.plugin.contextcompression;
 
 /**
  * 上下文压缩用的「历史/工具过程 → 要点摘要」协作对象(红线:一个 advisor 只负责一个功能,

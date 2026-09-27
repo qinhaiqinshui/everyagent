@@ -1,6 +1,9 @@
-package dev.everyagent.worker.task;
+package dev.everyagent.plugin.contextcompression;
 
 import dev.everyagent.worker.config.WorkerProperties;
+import dev.everyagent.worker.proto.TaskDtos.Usage;
+import dev.everyagent.worker.task.AgentEntity;
+import dev.everyagent.worker.task.ContextOverflow;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClientRequest;
@@ -10,7 +13,6 @@ import org.springframework.ai.chat.client.advisor.api.CallAdvisor;
 import org.springframework.ai.chat.client.advisor.api.CallAdvisorChain;
 import org.springframework.ai.chat.client.advisor.api.StreamAdvisor;
 import org.springframework.ai.chat.client.advisor.api.StreamAdvisorChain;
-import dev.everyagent.worker.proto.TaskDtos.Usage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.prompt.Prompt;

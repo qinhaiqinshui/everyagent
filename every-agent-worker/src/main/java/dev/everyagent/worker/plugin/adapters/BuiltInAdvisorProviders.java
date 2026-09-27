@@ -72,11 +72,11 @@ public class BuiltInAdvisorProviders {
         registry.register(new FileChangeAdvisorProvider());
 
         // 重试 / 护栏（400─599）
-        registry.register(new EmptyResponseRetryAdvisorProvider(props));
-        registry.register(new TransientErrorRetryAdvisorProvider(props));
+        // EmptyResponseRetryAdvisor / TransientErrorRetryAdvisor 已迁入独立插件模块（步骤 3），
+        // 由各插件自行注册，不再在此注册。
         registry.register(new ModelLengthGuardAdvisorProvider(props, tokenEstimator));
 
         // 终层（800─999）
-        registry.register(new ContextCompressionAdvisorProvider(props));
+        // ContextCompressionAdvisor 已迁入 context-compression 插件模块（步骤 3），不再在此注册。
     }
 }

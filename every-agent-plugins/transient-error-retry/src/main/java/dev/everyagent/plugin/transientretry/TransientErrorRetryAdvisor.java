@@ -1,9 +1,11 @@
-package dev.everyagent.worker.task;
+package dev.everyagent.plugin.transientretry;
 
 import com.openai.errors.OpenAIIoException;
 import com.openai.errors.OpenAIRetryableException;
 import com.openai.errors.OpenAIServiceException;
 import dev.everyagent.worker.config.WorkerProperties;
+import dev.everyagent.worker.task.AgentCancelledException;
+import dev.everyagent.worker.task.AgentEntity;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClientRequest;
@@ -54,7 +56,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * 退避等待期间 dispose(任务取消)会取消 {@link Mono#delay},不再触发重订(与 n 的
  * 中止感知 delayWithProgress 等效)。
  *
- * <p>设计纪律:与 {@link WorkerToolEventAdvisor} 同构——per-run 物化(持 {@link AgentEntity}
+ * <p>设计纪律:与 {@code WorkerToolEventAdvisor} 同构——per-run 物化(持 {@link AgentEntity}
  * 引用仅用于日志归属);重试计数与"已下发信号"标记是 per-subscription 状态
  * ({@code Flux.defer} 闭包捕获),多任务并发安全。
  *

@@ -1,4 +1,4 @@
-package dev.everyagent.worker.task;
+package dev.everyagent.plugin.contextcompression;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.messages.AssistantMessage;
@@ -297,7 +297,7 @@ class ContextCompressorTest {
         msgs.add(user("本轮" + txt(150)));
         msgs.add(assistant("本轮最终" + txt(150)));
         // 构造「低于 trigger」:不触发。单独验证 findToolPairs 语义由阶段A隐含:
-        // 触发压缩后不得出现 toolResult 而无其 assistant 配对(反之亦然)。
+        // 触发压缩后不得出现 toolResponse 而无其 assistant 配对(反之亦然)。
         ContextCompressor.Result r = ContextCompressor.compress(msgs, 100, 50, 0);
         // 若触发了(必然触发),检查任何保留的 toolResponse 前面紧跟 assistant(toolCall)
         if (r.compressed()) {
