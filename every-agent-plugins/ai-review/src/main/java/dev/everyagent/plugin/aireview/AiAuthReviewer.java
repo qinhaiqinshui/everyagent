@@ -1,16 +1,15 @@
 package dev.everyagent.plugin.aireview;
 
 import dev.everyagent.contract.json.Json;
+import dev.everyagent.worker.AgentClientFactory;
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.modules.ConfigStore;
 import dev.everyagent.worker.modules.ConfigStore.ResolvedConfig;
 import dev.everyagent.worker.proto.ShortIds;
 import dev.everyagent.worker.task.AgentEntity;
 import dev.everyagent.worker.task.ChatModelFactory;
-import dev.everyagent.plugin.emptyretry.EmptyResponseRetryAdvisor;
 import dev.everyagent.worker.task.RootCause;
 import dev.everyagent.worker.task.TaskEntry;
-import dev.everyagent.plugin.transientretry.TransientErrorRetryAdvisor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
@@ -18,6 +17,7 @@ import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.ai.model.tool.ToolCallingManager;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import tools.jackson.databind.JsonNode;
 
@@ -40,8 +40,8 @@ import java.util.concurrent.TimeoutException;
  * 单测,不接入 PermissionGate(那是步骤 6)。主 Agent 是「被审议方」,不能自我授权,
  * 故审议会话与主/子 agent 完全隔离——新 agentId、无工具、独立提示词、fail-closed。
  *
- * <p>审议请求链路:复用两个依赖 {@link AgentEntity} 的重试 advisor
- * (EmptyResponseRetryAdvisor + TransientErrorRetryAdvisor),<b>不挂</b>工具循环 /
+ * <p>审议请求链路:走 {@link AgentClientFactory#forAgent} 自动获得全套 Advisor 链
+ * (重试/压缩/限流等),<b>不挂</b>工具循环 /
  * 技能 / 系统信息 / 无人值守 / 事件发射 advisor——审议无工具,且不发
  * delta/message/usage/tool 事件(正文不污染主对话流);事件全部经 {@code t.events} 落原任务 jsonl。
  * <b>容灾在模型层</b>:审议模型经 {@code ChatModelFactory.buildAgentModel} 构建,若为
@@ -49,7 +49,7 @@ import java.util.concurrent.TimeoutException;
  *
  * <p>载体:内部构造一个轻量「审议 AgentEntity」(空 tools、conversation=[独立审议 system
  * prompt, 授权信息 user]、agentId=review-&lt;shortId&gt;、options=审议超时快照),<b>仅作
- * advisor 载体</b>:不进 {@code t.subs} / {@code t.agentLedger} / 不随 agents.json 落盘,
+ * {@link AgentClientFactory#forAgent} 载体</b>:不进 {@code t.subs} / {@code t.agentLedger} / 不随 agents.json 落盘,
  * 不新建 TaskEntry/EventLog。
  *
  * <p>时效双层控制:<ul>
@@ -107,12 +107,17 @@ public class AiAuthReviewer {
     private final WorkerProperties props;
     private final ConfigStore configStore;
     private final ChatModelFactory chatModelFactory;
+    private final AgentClientFactory agentClientFactory;
+    private final ToolCallingManager toolCallingManager;
 
     public AiAuthReviewer(WorkerProperties props, ConfigStore configStore,
-            ChatModelFactory chatModelFactory) {
+            ChatModelFactory chatModelFactory, AgentClientFactory agentClientFactory,
+            ToolCallingManager toolCallingManager) {
         this.props = props;
         this.configStore = configStore;
         this.chatModelFactory = chatModelFactory;
+        this.agentClientFactory = agentClientFactory;
+        this.toolCallingManager = toolCallingManager;
     }
 
     /**
@@ -156,8 +161,9 @@ public class AiAuthReviewer {
 
     /**
      * 实际审议调用(在独立 executor 线程内执行):模型选择 → 装配轻量审议 AgentEntity →
-     * ChatClient(重试双 advisor)一次性调用 → 宽容解析。容灾在模型层:若审议模型是
-     * provider=model-pool 池配置,chatModel 本身即 ModelPoolChatModel(自动换池容灾)。
+     * ChatClient(经 AgentClientFactory.forAgent 获得全套 Advisor 链)一次性调用 → 宽容解析。
+     * 容灾在模型层:若审议模型是 provider=model-pool 池配置,chatModel 本身即
+     * ModelPoolChatModel(自动换池容灾)。
      */
     private ReviewDecision doReview(TaskEntry t, String reviewAgentId, String grantKey, String prompt) {
         ResolvedConfig cfg = resolveConfig(t);
@@ -170,35 +176,21 @@ public class AiAuthReviewer {
         ChatModel chatModel = am.chatModel();
         AgentEntity reviewEntity = buildReviewEntity(t, reviewAgentId, reviewOptions, chatModel, grantKey, prompt);
 
-        // 收敛的重试参数:审议总预算窗口短(默认 60s),任务默认 retry(fixed 3s、
-        // maxRequestRetries=30)瞬时错误退避最坏 ~90s 会空耗预算;此处压缩为 1 次空响应
-        // 重试 + 1 次瞬时重试、指数退避 1s 起(factor 2),让窗口内真正跑完
-        // 1 次尝试 + 有限重试/容灾切换。
-        WorkerProperties.Retry reviewRetry = new WorkerProperties.Retry();
-        reviewRetry.setStrategy(WorkerProperties.Retry.STRATEGY_EXPONENTIAL);
-        reviewRetry.setMaxEmptyResponseRetries(1);
-        reviewRetry.setMaxRequestRetries(1);
-        reviewRetry.setBackoffBaseMs(1_000);
-        reviewRetry.setBackoffFactor(2);
-
-        ChatClient client = ChatClient.builder(chatModel)
-                .defaultAdvisors(
-                        new EmptyResponseRetryAdvisor(reviewEntity, reviewRetry),
-                        new TransientErrorRetryAdvisor(reviewEntity, reviewRetry))
-                .build();
+        // 走正常 agent 创建路径,自动获得全套 Advisor 链(重试/压缩/限流等)
+        ChatClient client = agentClientFactory.forAgent(reviewEntity, toolCallingManager);
         String content = client.prompt(new Prompt(new ArrayList<>(reviewEntity.conversation)))
                 .call().content();
         return parse(content);
     }
 
     /**
-     * 构建轻量「审议 AgentEntity」:空 tools、独立 conversation,仅作 advisor 载体——
-     * 不进 t.subs / t.agentLedger / 不随 agents.json 落盘,不新建 TaskEntry/EventLog。
-     * package-private 供单测断言「无任何工具」与独立 system prompt。
+     * 构建轻量「审议 AgentEntity」:空 tools、独立 conversation,仅作
+     * {@link AgentClientFactory#forAgent} 载体——不进 t.subs / t.agentLedger / 不随 agents.json 落盘,
+     * 不新建 TaskEntry/EventLog。package-private 供单测断言「无任何工具」与独立 system prompt。
      */
     AgentEntity buildReviewEntity(TaskEntry t, String reviewAgentId, OpenAiChatOptions reviewOptions,
             ChatModel chatModel, String grantKey, String prompt) {
-        AgentEntity reviewEntity = new AgentEntity(t, reviewAgentId, AgentEntity.Kind.MAIN,
+        AgentEntity reviewEntity = new AgentEntity(t, reviewAgentId, AgentEntity.Kind.SUB,
                 "AI 安全审议", chatModel, reviewOptions, List.of());
         reviewEntity.conversation.add(new SystemMessage(reviewSystemPrompt(t)));
         reviewEntity.conversation.add(new UserMessage(userPrompt(grantKey, prompt)));

@@ -1,8 +1,10 @@
 package dev.everyagent.plugin.aireview;
 
+import dev.everyagent.worker.AgentClientFactory;
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.modules.ConfigStore;
 import dev.everyagent.worker.modules.ConfigStore.ResolvedConfig;
+import dev.everyagent.worker.task.AgentEntity;
 import dev.everyagent.worker.task.ChatModelFactory;
 import dev.everyagent.worker.task.EventRecord;
 import dev.everyagent.worker.task.TaskEntry;
@@ -11,6 +13,7 @@ import dev.everyagent.plugin.api.model.ModelConfig;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.SystemMessage;
@@ -20,6 +23,7 @@ import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
 import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.ai.model.tool.ToolCallingManager;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import reactor.core.publisher.Flux;
 import tools.jackson.databind.JsonNode;
@@ -50,6 +54,8 @@ class AiAuthReviewerTest {
     private WorkerProperties props;
     private ConfigStore configStore;
     private ChatModelFactory chatModelFactory;
+    private AgentClientFactory agentClientFactory;
+    private ToolCallingManager toolCallingManager;
     private TaskStore taskStore;
     private TaskEntry task;
 
@@ -59,6 +65,8 @@ class AiAuthReviewerTest {
         configStore = mock(ConfigStore.class);
         taskStore = mock(TaskStore.class);
         chatModelFactory = mock(ChatModelFactory.class);
+        agentClientFactory = mock(AgentClientFactory.class);
+        toolCallingManager = mock(ToolCallingManager.class);
         when(chatModelFactory.options(any())).thenAnswer(inv -> baseOptions());
         task = newTask("task-cfg", "task-key");
     }
@@ -80,7 +88,13 @@ class AiAuthReviewerTest {
     private AiAuthReviewer reviewer(ChatModel model) {
         when(chatModelFactory.buildAgentModel(any(), anyString(), any(), any()))
                 .thenReturn(new ChatModelFactory.AgentModel(model, baseOptions()));
-        return new AiAuthReviewer(props, configStore, chatModelFactory);
+        // 模拟 AgentClientFactory.forAgent:返回包装脚本化模型的简单 ChatClient(无 advisor)
+        when(agentClientFactory.forAgent(any(), any())).thenAnswer(inv -> {
+            AgentEntity a = inv.getArgument(0);
+            return ChatClient.builder(a.chatModel).build();
+        });
+        return new AiAuthReviewer(props, configStore, chatModelFactory,
+                agentClientFactory, toolCallingManager);
     }
 
     // ---- 三态解析 ----
@@ -166,12 +180,17 @@ class AiAuthReviewerTest {
     @Test
     void reviewModelEmptyUsesTaskCurrentConfig() {
         props.getPermissions().setReviewModel("");
+        ResolvedConfig taskCfg = new ResolvedConfig(
+                new ModelConfig("task-cfg", "openai-compat",
+                        "http://localhost:9999/v1", "task-model", null),
+                "task-key");
+        when(configStore.resolve("task-cfg")).thenReturn(taskCfg);
         reviewer(preset("{\"decision\":\"ALLOW\"}")).review(task, "c::del", "AI 请求");
         ArgumentCaptor<ResolvedConfig> cap = ArgumentCaptor.forClass(ResolvedConfig.class);
         verify(chatModelFactory, times(1)).buildAgentModel(cap.capture(), anyString(), any(), any());
         assertEquals("task-cfg", cap.getValue().snapshot().configId());
         assertEquals("task-key", cap.getValue().apiKey());
-        verify(configStore, never()).resolve(anyString());
+        verify(configStore, times(1)).resolve("task-cfg");
     }
 
     @Test
@@ -242,7 +261,8 @@ class AiAuthReviewerTest {
 
     @Test
     void reviewEntityHasNoToolsAndIndependentPrompt() {
-        AiAuthReviewer reviewer = new AiAuthReviewer(props, configStore, chatModelFactory);
+        AiAuthReviewer reviewer = new AiAuthReviewer(props, configStore, chatModelFactory,
+                agentClientFactory, toolCallingManager);
         var entity = reviewer.buildReviewEntity(task, "review-ab1",
                 baseOptions(), preset("{}"), "c::del", "AI 请求删除文件");
         assertTrue(entity.tools.isEmpty(), "审议 AgentEntity 不得注册任何工具");
