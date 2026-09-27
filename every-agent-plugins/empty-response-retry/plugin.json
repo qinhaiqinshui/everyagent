@@ -1,0 +1,8 @@
+{
+  "id": "empty-response-retry",
+  "name": "空响应重试",
+  "version": "0.1.0",
+  "description": "模型返回空响应时自动重试",
+  "author": "everyagent",
+  "main": "dev.everyagent.plugin.emptyretry.EmptyResponseRetryPlugin"
+}

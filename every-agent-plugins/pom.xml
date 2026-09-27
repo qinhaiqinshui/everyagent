@@ -25,6 +25,9 @@
         <module>task-input-queue</module>
         <module>task-edit-resend</module>
         <module>model-rate-limit</module>
+        <module>empty-response-retry</module>
+        <module>transient-error-retry</module>
+        <module>context-compression</module>
         <module>model-pool</module>
     </modules>
 

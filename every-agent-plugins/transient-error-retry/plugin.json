@@ -1,0 +1,8 @@
+{
+  "id": "transient-error-retry",
+  "name": "瞬时错误退避重试",
+  "version": "0.1.0",
+  "description": "模型请求遇 429/5xx/网络抖动时退避重试",
+  "author": "everyagent",
+  "main": "dev.everyagent.plugin.transientretry.TransientErrorRetryPlugin"
+}
