@@ -537,6 +537,62 @@ public final class TaskEvents implements AgentEventChannel {
         return log.append(Events.TASK_TRACE, p, mainAgentId, ext, !persist).seq();
     }
 
+    /**
+     * 通用事件发射入口（EventEmitter 语义→wire 映射在 task 层）：
+     * 插件发语义事件名 + payload（不知道 wire 格式），本方法包装成 wire 格式写 EventLog。
+     * 推送仍由 DataPusher 的 onAppend → readFrom → push 链处理，本方法不直接调 WebSocketEmitter。
+     *
+     * <p>语义→wire 映射：
+     * <ul>
+     *   <li>{@code "model_rate_wait"} → wire {@code task.trace}（payload 加 traceId/kind/title/
+     *       summary/status/createdAt，原始 payload 作为 metadata）。</li>
+     *   <li>其它语义事件名 → 直接透传（wire 事件名 = 语义事件名，payload 原样）。</li>
+     * </ul>
+     *
+     * @param eventName 语义事件名（如 {@code "model_rate_wait"}）
+     * @param payload   事件载荷（Jackson JsonNode）
+     * @param persist   是否落盘。{@code false} = 瞬态不落盘（ext 标记 persist=false）
+     */
+    public void emit(String eventName, JsonNode payload, boolean persist) {
+        switch (eventName) {
+            case "model_rate_wait" -> emitModelRateWait(payload, persist);
+            default -> {
+                // 未知语义事件：直接透传（wire 事件名 = 语义事件名）
+                ObjectNode ext = persist ? null : Json.obj().put("persist", false);
+                log.append(eventName, payload, mainAgentId, ext, !persist);
+            }
+        }
+    }
+
+    /**
+     * 语义事件 {@code model_rate_wait} → wire {@code task.trace} 映射：
+     * payload 加 traceId/kind/title/summary/status/createdAt，原始 payload 作为 metadata。
+     * 与 {@link #appendTrace} 格式一致。traceId 从 payload 中取（插件管理稳定 id），
+     * 缺省时现场分配。
+     */
+    private void emitModelRateWait(JsonNode payload, boolean persist) {
+        String traceId = null;
+        String configId = "";
+        int inFlight = 0;
+        int waiters = 0;
+        if (payload != null && payload.isObject()) {
+            traceId = payload.path("traceId").asString(null);
+            configId = payload.path("configId").asString("");
+            inFlight = payload.path("inFlight").asInt(0);
+            waiters = payload.path("waiters").asInt(0);
+        }
+        String id = (traceId == null || traceId.isEmpty()) ? ShortIds.next("trace") : traceId;
+        // 原始 payload 作为 metadata（去除 traceId 防重复）
+        ObjectNode meta = null;
+        if (payload != null && payload.isObject()) {
+            meta = ((ObjectNode) payload).deepCopy();
+            meta.remove("traceId");
+        }
+        appendTrace(id, "model_rate_wait", "模型限流排队",
+                "模型「" + configId + "」正在排队(在飞 " + inFlight + " / 排队 " + waiters + ")",
+                null, "waiting", meta, persist);
+    }
+
     /** 收起态摘要:重试进行中的「第 x/总 次 · y 秒后重试」文案。 */
     private static String retrySummary(int attempt, int maxAttempts, long remainingMs, String error) {
         String countdown = remainingMs > 0 ? formatDurationShort(remainingMs) + " 后重试" : "即将重试";

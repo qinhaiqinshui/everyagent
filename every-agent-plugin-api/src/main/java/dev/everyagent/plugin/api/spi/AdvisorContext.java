@@ -23,4 +23,7 @@ public interface AdvisorContext {
 
     /** 工具调用管理器（共享单例，LoopRepeatGuard 等需要）。 */
     ToolCallingManager toolCallingManager();
+
+    /** 模型配置 ID（TokenCalibrationAdvisor 等据此校准估算系数）。 */
+    String configId();
 }

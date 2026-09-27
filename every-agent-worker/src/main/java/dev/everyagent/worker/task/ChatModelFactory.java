@@ -2,7 +2,10 @@ package dev.everyagent.worker.task;
 
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.modules.ConfigStore.ResolvedConfig;
+import dev.everyagent.plugin.api.model.EventEmitter;
 import dev.everyagent.plugin.api.model.ModelConfig;
+import dev.everyagent.plugin.api.model.ModelRequestNode;
+import dev.everyagent.worker.plugin.registry.ModelRequestNodeRegistry;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.openai.OpenAiChatModel;
 import org.springframework.ai.openai.OpenAiChatOptions;
@@ -12,7 +15,6 @@ import tools.jackson.databind.JsonNode;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Optional;
 import java.util.function.UnaryOperator;
 
 /**
@@ -35,10 +37,21 @@ public class ChatModelFactory {
 
     private final WorkerProperties props;
     private final ModelRateLimiterRegistry rateLimiterRegistry;
+    private final ModelRequestNodeRegistry nodeRegistry;
+    /**
+     * 缓存:按 configId 复用 OpenAiChatModel 实例。openai-java SDK 每次构建
+     * OpenAIClient 都会创建新的 Timer("DefaultSleeper") + streamHandler 线程池
+     * + OkHttp 连接池,任务结束后不释放 → 线程泄漏(见线程分析)。缓存后同一配置
+     * 只创建一次,所有 agent 共用底层 OkHttp 客户端和线程资源。
+     */
+    private final java.util.concurrent.ConcurrentHashMap<String, OpenAiChatModel> modelCache =
+            new java.util.concurrent.ConcurrentHashMap<>();
 
-    public ChatModelFactory(WorkerProperties props, ModelRateLimiterRegistry rateLimiterRegistry) {
+    public ChatModelFactory(WorkerProperties props, ModelRateLimiterRegistry rateLimiterRegistry,
+            ModelRequestNodeRegistry nodeRegistry) {
         this.props = props;
         this.rateLimiterRegistry = rateLimiterRegistry;
+        this.nodeRegistry = nodeRegistry;
     }
 
     /**
@@ -87,13 +100,7 @@ public class ChatModelFactory {
     }
 
     /**
-     * 构建 ChatModel(OpenAI 兼容协议)。HTTP 层挂 {@link HttpRequestLoggingInterceptor}
-     * 打印真实请求体(含 skill 渐进式披露索引等 advisor 注入后的完整报文);
-     * agentId 仅用于日志前缀标识。
-     *
-     * <p>若该模型配置了限流参数(rpm/max-concurrency/tpm),外层再包
-     * {@link RateLimitedChatModel}(docs/design-model-rate-limit.md §8):请求起步排队等
-     * 放行、流中/完成后记账与系数校准。池模型的每个成员同样经此包裹(各成员自己的限额)。
+     * 构建 ChatModel(OpenAI 兼容协议;无事件上下文,events=null)。
      */
     public ChatModel build(ResolvedConfig cfg, OpenAiChatOptions options, String agentId) {
         return build(cfg, options, agentId, null);
@@ -104,27 +111,17 @@ public class ChatModelFactory {
      * 打印真实请求体(含 skill 渐进式披露索引等 advisor 注入后的完整报文);
      * agentId 仅用于日志前缀标识。
      *
-     * <p>若该模型配置了限流参数(rpm/max-concurrency/tpm),外层再包
-     * {@link RateLimitedChatModel}(docs/design-model-rate-limit.md §8):请求起步排队等
-     * 放行、流中/完成后记账与系数校准。池模型的每个成员同样经此包裹(各成员自己的限额)。
-     * events 可空(无事件上下文时排队只记日志不发 trace)。
+     * <p>构建模型请求洋葱链({@link ModelRequestChainChatModel} 薄壳):
+     * 从 {@link ModelRequestNodeRegistry} 取有序 nodes,构造 {@link EventEmitter}
+     * 闭包(转发到 {@link TaskEvents#emit})。若无节点则返回 raw model(直通)。
+     * 限流逻辑由插件经 {@link ModelRequestNode} 注入(步骤 4 搬迁)。
+     * events 可空(无事件上下文时用 no-op emitter)。
      */
-    /**
-     * 缓存:按 configId 复用 OpenAiChatModel 实例。openai-java SDK 每次构建
-     * OpenAIClient 都会创建新的 Timer("DefaultSleeper") + streamHandler 线程池
-     * + OkHttp 连接池,任务结束后不释放 → 线程泄漏(见线程分析)。缓存后同一配置
-     * 只创建一次,所有 agent 共用底层 OkHttp 客户端和线程资源。
-     */
-    private final java.util.concurrent.ConcurrentHashMap<String, OpenAiChatModel> modelCache =
-            new java.util.concurrent.ConcurrentHashMap<>();
-
     public ChatModel build(ResolvedConfig cfg, OpenAiChatOptions options, String agentId,
             TaskEvents events) {
         String cacheKey = cfg.snapshot().configId();
         // 缓存 raw OpenAiChatModel:同一 configId 的所有 agent 复用同一 OkHttp 客户端、
         // Timer 和 streamHandler 线程池,避免每次 build 创建新客户端导致线程泄漏。
-        // options 仅作为模型默认参数,实际每轮请求的 options 由 Prompt 携带(覆盖默认),
-        // 故缓存安全。HttpRequestLoggingInterceptor 改为共享实例(SHARED),生产 INFO 级为空操作。
         OpenAiChatModel raw = modelCache.computeIfAbsent(cacheKey, k ->
                 OpenAiChatModel.builder()
                         .options(options)
@@ -135,10 +132,17 @@ public class ChatModelFactory {
                                 // 静默由 readTimeout + ModelLengthGuardAdvisor stall 兜底。
                                 .interceptor(StreamTimeoutReleaseInterceptor.INSTANCE))
                         .build());
-        Optional<ModelRateLimiter> limiter = rateLimiterRegistry.of(
-                cfg.snapshot().configId(), cfg.snapshot().params());
-        return limiter.map(l -> (ChatModel) new RateLimitedChatModel(raw, l, events,
-                props.getLimits().getModelRate().getWaitTraceThresholdMs())).orElse(raw);
+        // 构造模型请求洋葱链
+        List<ModelRequestNode> nodes = nodeRegistry.getNodes();
+        if (nodes.isEmpty()) {
+            // 无节点 → 直通 raw model(现状兼容)
+            return raw;
+        }
+        ModelConfig config = cfg.snapshot();
+        EventEmitter emitter = events == null
+                ? (eventName, payload, persist) -> {} // no-op
+                : (eventName, payload, persist) -> events.emit(eventName, payload, persist);
+        return new ModelRequestChainChatModel(raw, nodes, emitter, config);
     }
 
     /**

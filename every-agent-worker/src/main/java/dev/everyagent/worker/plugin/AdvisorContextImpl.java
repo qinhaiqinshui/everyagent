@@ -53,6 +53,11 @@ public class AdvisorContextImpl implements AdvisorContext {
         return toolCallingManager;
     }
 
+    @Override
+    public String configId() {
+        return agentEntity.task.snapshot.configId();
+    }
+
     /**
      * 完整 AgentEntity（仅供内置适配器使用，非 SPI 契约）。
      */

@@ -145,7 +145,7 @@ public class DataPusherManager implements HubPool.Listener, TaskManager.TaskResu
         }
         DataPusher p = pushers.get(sessionId + "|" + taskId);
         if (p != null) {
-            p.onAck(creditIndex);
+            p.wsEmitter().onAck(creditIndex);
         } else {
             log.debug("stream.ack 无对应推送器 session={} task={}", sessionId, taskId);
         }

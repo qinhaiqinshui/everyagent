@@ -5,6 +5,7 @@ import dev.everyagent.contract.ids.Ids;
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.plugin.api.spi.TokenEstimator;
 import dev.everyagent.worker.config.WorkerProperties;
+import dev.everyagent.worker.plugin.registry.ModelRequestNodeRegistry;
 import dev.everyagent.worker.task.ModelRateLimiterRegistry;
 import dev.everyagent.worker.hub.HubPool;
 import dev.everyagent.worker.modules.ConfigStore.ResolvedConfig;
@@ -100,8 +101,8 @@ class WorkerDataPusherTest {
 
         @Bean
         @Primary
-        ChatModelFactory fakeModelFactory(WorkerProperties props) {
-            return new ChatModelFactory(props, new ModelRateLimiterRegistry(props, STUB_ESTIMATOR)) {
+        ChatModelFactory fakeModelFactory(WorkerProperties props, ModelRequestNodeRegistry nodeRegistry) {
+            return new ChatModelFactory(props, new ModelRateLimiterRegistry(props, STUB_ESTIMATOR), nodeRegistry) {
                 @Override
                 public org.springframework.ai.chat.model.ChatModel build(ResolvedConfig cfg,
                         org.springframework.ai.openai.OpenAiChatOptions options, String agentId) {

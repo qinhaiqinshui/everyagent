@@ -51,14 +51,6 @@ public class DataPusher implements EventLog.Listener {
     private static final String EXT_INITIAL = "initial";
     private static final String OPERATE_REPLACE = "replace";
     private static final String OPERATE_APPEND = "append";
-    /**
-     * 背压窗口:未确认帧上限;保证 N 个同屏满速任务总积压 N×128 &lt; hub 前端连接出口队列
-     * 1000(§4.2.2 防线 2)——前端冻结时每路最多积压 128 帧即阻塞,不会塞爆队列强制断连;
-     * 前端活着时 ack 滚动,窗口不触顶,128 对正常吞吐无感。
-     */
-    private static final int CREDIT_WINDOW = 128;
-    /** 阻塞轮询步长(ms)。 */
-    private static final long ACK_WAIT_STEP_MS = 250;
 
     private final String sessionId;
     private final String taskId;
@@ -66,14 +58,11 @@ public class DataPusher implements EventLog.Listener {
     private final TaskManager tasks;
     /** 流源注册表:优先经此取 EventLog（反转后正向依赖基础设施层）。 */
     private final StreamSourceRegistry streamSources;
+    /** 被动推送管道：背压控制 + 定向推送（替代原 acquireCredit/onAck/conn.pub 内联逻辑）。 */
+    private final WebSocketEmitter wsEmitter;
 
     private final AtomicBoolean running = new AtomicBoolean(true);
     private final Semaphore wake = new Semaphore(0);
-    private final Object creditLock = new Object();
-    /** 已推送帧序号(每推一帧 +1;credit 语义自增,不用 seq——同轮流式帧共享 seq 无法逐帧计数)。 */
-    private long nextPushIndex = 0;
-    /** 前端已确认的最大 pushIndex(初始 -1)。 */
-    private volatile long ackedIndex = -1;
     private volatile Thread thread;
     /** 内存日志已消费的记录位置游标(readFrom 位置口径:共享 seq 轮组内 seq 无法区分组内帧)。 */
     private volatile int cursor;
@@ -91,6 +80,7 @@ public class DataPusher implements EventLog.Listener {
         this.conn = conn;
         this.tasks = tasks;
         this.streamSources = streamSources;
+        this.wsEmitter = new WebSocketEmitter(sessionId, taskId, conn);
     }
 
     public void start() {
@@ -107,6 +97,11 @@ public class DataPusher implements EventLog.Listener {
         return taskId;
     }
 
+    /** 被动推送管道(DataPusherManager 路由 stream.ack)。 */
+    WebSocketEmitter wsEmitter() {
+        return wsEmitter;
+    }
+
     /** 立即唤醒对账循环(任务被再运行时由 DataPusherManager 调用,不等 1s 轮询)。 */
     void wake() {
         wake.release();
@@ -119,9 +114,7 @@ public class DataPusher implements EventLog.Listener {
         }
         detach();
         wake.release();
-        synchronized (creditLock) {
-            creditLock.notifyAll(); // 唤醒可能阻塞在 acquireCredit 的推送线程
-        }
+        wsEmitter.stop(); // 唤醒可能阻塞在 acquireCredit 的推送线程
         Thread th = thread;
         if (th != null) {
             th.interrupt();
@@ -137,9 +130,7 @@ public class DataPusher implements EventLog.Listener {
             log.warn("定向推送异常 task={} session={}: {}", taskId, sessionId, e.toString());
         } finally {
             detach();
-            synchronized (creditLock) {
-                creditLock.notifyAll(); // 收口/异常退出时释放阻塞线程
-            }
+            wsEmitter.stop(); // 收口/异常退出时释放阻塞线程
         }
     }
 
@@ -309,39 +300,8 @@ public class DataPusher implements EventLog.Listener {
             }
         }
         JsonNode payload = TaskEvents.wireEvent(r, mainAgentId).path("payload");
-        long creditIndex = acquireCredit();
-        ext.put("credit", true);
-        ext.put("creditIndex", creditIndex);
-        conn.pub(Channels.taskStream(conn.k(), taskId), r.event(), r.seq(), r.ts(), payload, ext);
-    }
-
-    /**
-     * 申请一帧推送额度:未确认窗口满({@code nextPushIndex - ackedIndex >= CREDIT_WINDOW})
-     * 即持续阻塞,直到前端 ack / 推送器销毁(stop);全链端统一升级,无老前端兼容负担(§4.2.2 防线 1)。
-     * 返回本帧 creditIndex(该帧推送后自增)。
-     */
-    private long acquireCredit() {
-        synchronized (creditLock) {
-            while (running.get() && nextPushIndex - ackedIndex >= CREDIT_WINDOW) {
-                try {
-                    creditLock.wait(ACK_WAIT_STEP_MS);
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    break;
-                }
-            }
-            return nextPushIndex++;
-        }
-    }
-
-    /** 前端回报消费进度:推进已确认游标并唤醒等待中的推送线程。 */
-    public void onAck(long creditIndex) {
-        synchronized (creditLock) {
-            if (creditIndex > ackedIndex) {
-                ackedIndex = creditIndex;
-            }
-            creditLock.notifyAll();
-        }
+        wsEmitter.push(Channels.taskStream(conn.k(), taskId), r.event(), r.seq(), r.ts(),
+                payload, ext);
     }
 
     @Override

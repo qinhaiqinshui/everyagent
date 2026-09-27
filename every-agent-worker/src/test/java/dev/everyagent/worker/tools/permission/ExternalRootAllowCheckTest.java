@@ -183,7 +183,7 @@ class ExternalRootAllowCheckTest {
     private TaskEntry task(Path ws) {
         ModelConfig snap = new ModelConfig("cfg", "openai-compat",
                 "http://localhost:9999/v1", "m", null);
-        return new TaskEntry("t-1", "任务", snap, "k", ws.toString(), "defaultworkspace", "main-agent", 10_000);
+        return new TaskEntry("t-1", "任务", snap, ws.toString(), "defaultworkspace", "main-agent", 10_000);
     }
 
     @Test
