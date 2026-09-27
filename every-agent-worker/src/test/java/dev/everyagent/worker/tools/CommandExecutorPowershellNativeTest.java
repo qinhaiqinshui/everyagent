@@ -2,7 +2,7 @@ package dev.everyagent.worker.tools;
 
 import dev.everyagent.worker.os.OsSandbox;
 import dev.everyagent.plugin.api.spi.ExecResult;
-import dev.everyagent.worker.proto.TaskDtos.ModelSnapshot;
+import dev.everyagent.plugin.api.model.ModelConfig;
 import dev.everyagent.worker.task.TaskEntry;
 import org.junit.jupiter.api.Test;
 
@@ -27,7 +27,7 @@ class CommandExecutorPowershellNativeTest {
     private static final String AGENT = "agent";
 
     private static TaskEntry newTask() {
-        ModelSnapshot snap = new ModelSnapshot("cfg", "openai-compat",
+        ModelConfig snap = new ModelConfig("cfg", "openai-compat",
                 "http://localhost:9999/v1", "m", null);
         return new TaskEntry("t-1", "任务", snap, "k", WS, "defaultworkspace", "main-agent", 10_000);
     }

@@ -2,7 +2,7 @@ package dev.everyagent.worker.task;
 
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.modules.ConfigStore.ResolvedConfig;
-import dev.everyagent.worker.proto.TaskDtos.ModelSnapshot;
+import dev.everyagent.plugin.api.model.ModelConfig;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.openai.OpenAiChatModel;
 import org.springframework.ai.openai.OpenAiChatOptions;
@@ -71,7 +71,7 @@ public class ChatModelFactory {
             UnaryOperator<OpenAiChatOptions> optionsCustomizer) {
         List<ChatModel> members = new ArrayList<>(cfg.poolMembers().size());
         List<OpenAiChatOptions> memberOptions = new ArrayList<>(cfg.poolMembers().size());
-        List<ModelSnapshot> memberSnapshots = new ArrayList<>(cfg.poolMembers().size());
+        List<ModelConfig> memberSnapshots = new ArrayList<>(cfg.poolMembers().size());
         for (ResolvedConfig m : cfg.poolMembers()) {
             OpenAiChatOptions o = apply(options(m), optionsCustomizer);
             members.add(build(m, o, agentId, events));

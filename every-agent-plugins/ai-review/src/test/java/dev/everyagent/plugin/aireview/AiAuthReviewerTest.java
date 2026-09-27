@@ -7,7 +7,7 @@ import dev.everyagent.worker.task.ChatModelFactory;
 import dev.everyagent.worker.task.EventRecord;
 import dev.everyagent.worker.task.TaskEntry;
 import dev.everyagent.worker.task.TaskStore;
-import dev.everyagent.worker.proto.TaskDtos.ModelSnapshot;
+import dev.everyagent.plugin.api.model.ModelConfig;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -64,7 +64,7 @@ class AiAuthReviewerTest {
     }
 
     private TaskEntry newTask(String cfgId, String apiKey) {
-        ModelSnapshot snap = new ModelSnapshot(cfgId, "openai-compat",
+        ModelConfig snap = new ModelConfig(cfgId, "openai-compat",
                 "http://localhost:9999/v1", "task-model", null);
         return new TaskEntry("t-1", "任务", snap, "ws", "defaultworkspace", "main-agent", 10_000);
     }
@@ -178,7 +178,7 @@ class AiAuthReviewerTest {
     void reviewModelConfiguredUsesConfigStore() {
         props.getPermissions().setReviewModel("review-cfg");
         ResolvedConfig rv = new ResolvedConfig(
-                new ModelSnapshot("review-cfg", "openai-compat",
+                new ModelConfig("review-cfg", "openai-compat",
                         "http://rv/v1", "rv-model", null),
                 "rv-key");
         when(configStore.resolve("review-cfg")).thenReturn(rv);

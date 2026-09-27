@@ -5,7 +5,7 @@ package dev.everyagent.plugin.api.agent;
  * <p>agent 层通过此端口发射事件，不直接引用 TaskEvents。
  * 方法签名与 TaskEvents 的 public 方法一致。
  *
- * <p>proto 专属类型（{@code Usage}、{@code ModelSnapshot}、{@code List<ToolCallPart>}、
+ * <p>proto 专属类型（{@code Usage}、{@code List<ToolCallPart>}、
  * {@code List<PendingAsks.AskQuestion>}）在此接口中以 {@link Object} 呈现，
  * 因为 plugin-api 不依赖 worker proto；worker 侧实现时强转。
  */

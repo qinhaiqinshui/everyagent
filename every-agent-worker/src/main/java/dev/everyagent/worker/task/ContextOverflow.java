@@ -1,6 +1,6 @@
 package dev.everyagent.worker.task;
 
-import dev.everyagent.worker.proto.TaskDtos.ModelSnapshot;
+import dev.everyagent.plugin.api.model.ModelConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.messages.AssistantMessage;
@@ -99,7 +99,7 @@ public final class ContextOverflow {
                 .append(" temperature=").append(a.options.getTemperature() == null
                         ? "-" : a.options.getTemperature())
                 .append(" reasoningEffort=").append(nz(a.options.getReasoningEffort()));
-        ModelSnapshot snap = a.task.snapshot;
+        ModelConfig snap = a.task.snapshot;
         sb.append(" | configId=").append(nz(snap.configId()))
                 .append(" provider=").append(nz(snap.provider()))
                 .append(" params.maxTokens=").append(paramLong(snap.params(), "maxTokens"))

@@ -4,7 +4,6 @@ import dev.everyagent.contract.json.Json;
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.hub.HubPool;
 import dev.everyagent.worker.proto.ConfigDtos.ModelConfig;
-import dev.everyagent.worker.proto.TaskDtos.ModelSnapshot;
 import dev.everyagent.worker.rpc.NotFoundException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -38,8 +37,9 @@ public class ConfigStore {
     /** 容灾池专用 provider 取值。 */
     public static final String POOL_PROVIDER = "model-pool";
 
-    public record ResolvedConfig(ModelSnapshot snapshot, String apiKey, List<ResolvedConfig> poolMembers) {
-        public ResolvedConfig(ModelSnapshot snapshot, String apiKey) {
+    public record ResolvedConfig(dev.everyagent.plugin.api.model.ModelConfig snapshot,
+            String apiKey, List<ResolvedConfig> poolMembers) {
+        public ResolvedConfig(dev.everyagent.plugin.api.model.ModelConfig snapshot, String apiKey) {
             this(snapshot, apiKey, List.of());
         }
 
@@ -281,7 +281,8 @@ public class ConfigStore {
     private ResolvedConfig resolveConfig(ModelConfig c) {
         // 池配置(provider=model-pool)的 params 已在 toConfig 继承主模型(首成员)的
         // 有效参数(contextWindowTokens 等),此处直接用 ModelConfig.params() 即可。
-        ModelSnapshot snap = new ModelSnapshot(c.configId(), c.provider(),
+        dev.everyagent.plugin.api.model.ModelConfig snap =
+                new dev.everyagent.plugin.api.model.ModelConfig(c.configId(), c.provider(),
                 c.baseUrl(), c.model(), c.params());
         if (c.members() != null && !c.members().isEmpty()) {
             List<ResolvedConfig> members = new ArrayList<>(c.members().size());

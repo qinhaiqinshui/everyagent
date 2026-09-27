@@ -3,7 +3,7 @@ package dev.everyagent.worker.task;
 import com.openai.errors.OpenAIIoException;
 import dev.everyagent.plugin.api.spi.TokenEstimator;
 import dev.everyagent.worker.config.WorkerProperties;
-import dev.everyagent.worker.proto.TaskDtos.ModelSnapshot;
+import dev.everyagent.plugin.api.model.ModelConfig;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.client.ChatClientRequest;
 import org.springframework.ai.chat.client.ChatClientResponse;
@@ -198,7 +198,7 @@ class ModelLengthGuardAdvisorTest {
     /** 构造 advisor(nextStream 返回 source 的桩链 + 轻量 AgentEntity;advisor 不发事件)。 */
     private static ModelLengthGuardAdvisor advisor(Flux<ChatClientResponse> source) {
         TaskEntry task = new TaskEntry("t_test", "测试",
-                new ModelSnapshot("cfg", "openai", "http://localhost", "test-model", null),
+                new ModelConfig("cfg", "openai", "http://localhost", "test-model", null),
                 "key", "/tmp", "w_1", "a_test", 1000);
         AgentEntity a = new AgentEntity(task, "a_test", AgentEntity.Kind.MAIN, "test", null,
                 OpenAiChatOptions.builder().build(), List.of());

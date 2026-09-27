@@ -2,7 +2,7 @@ package dev.everyagent.plugin.aireview;
 
 import dev.everyagent.plugin.api.WorkerServices;
 import dev.everyagent.plugin.api.task.TaskService;
-import dev.everyagent.worker.proto.TaskDtos.ModelSnapshot;
+import dev.everyagent.plugin.api.model.ModelConfig;
 import dev.everyagent.worker.slash.SlashCommandItem;
 import dev.everyagent.worker.slash.SlashCommandRegistry;
 import dev.everyagent.worker.slash.SlashDisplayPosition;
@@ -47,7 +47,7 @@ class AiReviewSlashProviderTest {
     }
 
     private static TaskEntry newTask() {
-        ModelSnapshot snap = new ModelSnapshot("cfg", "openai-compat",
+        ModelConfig snap = new ModelConfig("cfg", "openai-compat",
                 "http://localhost:9999/v1", "m", null);
         return new TaskEntry("t-1", "任务", snap, "ws", "defaultworkspace", "main-agent", 10_000);
     }

@@ -29,12 +29,7 @@ public final class TaskDtos {
         }
     }
 
-    /** 模型配置快照:任务创建时定死,配置后续变更不影响运行中任务。 */
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    @JsonInclude(JsonInclude.Include.NON_NULL)
-    public record ModelSnapshot(String configId, String provider, String baseUrl,
-            String model, JsonNode params) {
-    }
+    /** 模型配置快照已搬至 plugin-api（{@code dev.everyagent.plugin.api.model.ModelConfig}），此处不再定义。 */
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     @JsonInclude(JsonInclude.Include.NON_NULL)

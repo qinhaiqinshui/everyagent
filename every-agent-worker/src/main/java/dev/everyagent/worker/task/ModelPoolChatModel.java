@@ -1,7 +1,7 @@
 package dev.everyagent.worker.task;
 
 import com.openai.errors.OpenAIIoException;
-import dev.everyagent.worker.proto.TaskDtos.ModelSnapshot;
+import dev.everyagent.plugin.api.model.ModelConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.messages.AssistantMessage;
@@ -59,7 +59,7 @@ public class ModelPoolChatModel implements ChatModel {
 
     private final List<ChatModel> members;
     private final List<OpenAiChatOptions> memberOptions;
-    private final List<ModelSnapshot> memberSnapshots;
+    private final List<ModelConfig> memberSnapshots;
     /** 任务事件发射器(发容灾切换 trace);可为 null = 不发 trace 仅记日志。 */
     private final TaskEvents events;
     /** 日志归属 agent(仅日志前缀,不发事件)。 */
@@ -68,7 +68,7 @@ public class ModelPoolChatModel implements ChatModel {
     private final OpenAiChatOptions defaultOptions;
 
     public ModelPoolChatModel(List<ChatModel> members, List<OpenAiChatOptions> memberOptions,
-            List<ModelSnapshot> memberSnapshots, TaskEvents events, String agentId) {
+            List<ModelConfig> memberSnapshots, TaskEvents events, String agentId) {
         this.members = List.copyOf(members);
         this.memberOptions = List.copyOf(memberOptions);
         this.memberSnapshots = List.copyOf(memberSnapshots);
@@ -167,7 +167,7 @@ public class ModelPoolChatModel implements ChatModel {
 
     /** 换成员日志 + 容灾切换 trace(唯一归属点;同一波连续失败切换共用一条 trace,逐次追加模型)。 */
     private String logSwitch(Throwable error, int nextIndex, String failoverTraceId) {
-        ModelSnapshot snap = memberSnapshots.get(nextIndex);
+        ModelConfig snap = memberSnapshots.get(nextIndex);
         log.warn("池模型 {} 请求异常({}: {}), 切换成员 {}({}) 重试({}/{})",
                 agentId, error.getClass().getSimpleName(), error.getMessage(),
                 snap.configId(), snap.model(), nextIndex + 1, members.size());

@@ -7,7 +7,7 @@ import dev.everyagent.worker.plugin.registry.AuthorizationHandlerRegistry;
 import java.util.List;
 import dev.everyagent.worker.os.OsSandbox;
 import dev.everyagent.worker.os.wsl.WslUmounter;
-import dev.everyagent.worker.proto.TaskDtos.ModelSnapshot;
+import dev.everyagent.plugin.api.model.ModelConfig;
 import dev.everyagent.worker.rpc.RpcDispatcher;
 import dev.everyagent.worker.task.PendingAsks;
 import dev.everyagent.worker.task.TaskEntry;
@@ -94,7 +94,7 @@ class FsToolSupportWslPathTest {
     }
 
     private TaskEntry task(Path ws) {
-        ModelSnapshot snap = new ModelSnapshot("cfg", "openai-compat",
+        ModelConfig snap = new ModelConfig("cfg", "openai-compat",
                 "http://localhost:9999/v1", "m", null);
         return new TaskEntry("t-wsl", "WSL测试", snap, "k", ws.toString(), "defaultworkspace", "main-agent", 10_000);
     }

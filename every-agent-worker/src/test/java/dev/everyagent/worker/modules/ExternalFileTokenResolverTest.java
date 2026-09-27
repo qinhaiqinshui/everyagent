@@ -5,7 +5,7 @@ import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.hub.HubPool;
 import dev.everyagent.worker.os.OsSandbox;
 import dev.everyagent.worker.os.wsl.WslUmounter;
-import dev.everyagent.worker.proto.TaskDtos.ModelSnapshot;
+import dev.everyagent.plugin.api.model.ModelConfig;
 import dev.everyagent.worker.rpc.RpcDispatcher;
 import dev.everyagent.worker.slash.SlashTokenEncoder;
 import dev.everyagent.worker.slash.SlashTokenHandler;
@@ -68,7 +68,7 @@ class ExternalFileTokenResolverTest {
     }
 
     private static TaskEntry task(String workspaceRoot) {
-        ModelSnapshot snap = new ModelSnapshot("cfg", "openai-compat",
+        ModelConfig snap = new ModelConfig("cfg", "openai-compat",
                 "http://localhost:9999/v1", "m", null);
         return new TaskEntry("t-1", "任务", snap, "k", workspaceRoot, "defaultworkspace", "main-agent", 10_000);
     }

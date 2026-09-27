@@ -1,6 +1,6 @@
 package dev.everyagent.worker.task;
 
-import dev.everyagent.worker.proto.TaskDtos.ModelSnapshot;
+import dev.everyagent.plugin.api.model.ModelConfig;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.model.ChatModel;
@@ -128,8 +128,8 @@ class ModelPoolChatModelTest {
 
     // ---- 辅助 ----
 
-    private static ModelSnapshot snap(String configId, String model) {
-        return new ModelSnapshot(configId, "openai-compat", "http://x", model, null);
+    private static ModelConfig snap(String configId, String model) {
+        return new ModelConfig(configId, "openai-compat", "http://x", model, null);
     }
 
     private static OpenAiChatOptions opt(String model) {

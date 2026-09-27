@@ -4,7 +4,7 @@ import dev.everyagent.plugin.api.agent.AgentContext;
 import dev.everyagent.plugin.api.agent.AgentEventChannel;
 import dev.everyagent.plugin.api.permission.TaskInfo;
 import dev.everyagent.contract.json.Json;
-import dev.everyagent.worker.proto.TaskDtos.ModelSnapshot;
+import dev.everyagent.plugin.api.model.ModelConfig;
 import dev.everyagent.worker.proto.TaskDtos.TaskStatus;
 import dev.everyagent.worker.proto.TaskDtos.TaskSummary;
 import dev.everyagent.worker.proto.TaskDtos.Usage;
@@ -28,7 +28,7 @@ public final class TaskEntry implements TaskInfo, AgentContext {
 
     public final String taskId;
     public final String title;
-    public final ModelSnapshot snapshot;
+    public final ModelConfig snapshot;
     /**
      * 工作区根(meta.workspace;挂靠关系,任务数据存 workspaces/&lt;workspaceId&gt;/tasks 不随之迁移)。
      * 非 final:workspaces.resolveMissing 纠正路径时整体改挂到新目录(见
@@ -221,7 +221,7 @@ public final class TaskEntry implements TaskInfo, AgentContext {
     private final AtomicLong lastActivityMs = new AtomicLong(createdAt);
 
     public TaskEntry(String taskId, String title,
-            ModelSnapshot snapshot, String workspaceRoot, String workspaceId, String mainAgentId,
+            ModelConfig snapshot, String workspaceRoot, String workspaceId, String mainAgentId,
             long maxEvents) {
         this.taskId = taskId;
         this.title = title;

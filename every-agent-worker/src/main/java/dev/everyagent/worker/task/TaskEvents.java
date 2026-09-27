@@ -6,7 +6,7 @@ import dev.everyagent.worker.proto.Events;
 import dev.everyagent.worker.proto.Events.ToolCallPart;
 import dev.everyagent.worker.proto.ShortIds;
 import dev.everyagent.worker.proto.SnowflakeId;
-import dev.everyagent.worker.proto.TaskDtos.ModelSnapshot;
+import dev.everyagent.plugin.api.model.ModelConfig;
 import dev.everyagent.worker.proto.TaskDtos.Usage;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.node.ObjectNode;
@@ -393,7 +393,7 @@ public final class TaskEvents implements AgentEventChannel {
      * @param snapshot     本轮实际生效的模型快照(已解析)
      * @param oldConfigId  任务此前冻结的 configId(空=旧任务无冻结模型)
      */
-    public long modelSwitch(ModelSnapshot snapshot, String oldConfigId) {
+    public long modelSwitch(ModelConfig snapshot, String oldConfigId) {
         ObjectNode meta = Json.obj();
         meta.put("newConfigId", snapshot.configId());
         if (oldConfigId != null && !oldConfigId.isEmpty()) {
@@ -414,7 +414,7 @@ public final class TaskEvents implements AgentEventChannel {
      * @param traceId  同波已建 traceId(连续切换传入);null/空或已收口则新建
      * @param snapshot 切到的池内模型快照(已解析)
      */
-    public String modelFailoverSwitch(String traceId, ModelSnapshot snapshot) {
+    public String modelFailoverSwitch(String traceId, ModelConfig snapshot) {
         String modelDesc = snapshot.configId() + " " + snapshot.model();
         String id;
         String chain;
@@ -473,7 +473,7 @@ public final class TaskEvents implements AgentEventChannel {
     }
 
     /** 模型可读标签(厂商 · 模型;缺模型用 configId 兜底)。 */
-    private static String modelLabel(ModelSnapshot s) {
+    private static String modelLabel(ModelConfig s) {
         if (s == null) {
             return "(未知模型)";
         }
@@ -616,12 +616,12 @@ public final class TaskEvents implements AgentEventChannel {
 
     @Override
     public long modelSwitch(Object snapshot, String oldConfigId) {
-        return modelSwitch((ModelSnapshot) snapshot, oldConfigId);
+        return modelSwitch((ModelConfig) snapshot, oldConfigId);
     }
 
     @Override
     public String modelFailoverSwitch(String traceId, Object snapshot) {
-        return modelFailoverSwitch(traceId, (ModelSnapshot) snapshot);
+        return modelFailoverSwitch(traceId, (ModelConfig) snapshot);
     }
 
     /**
