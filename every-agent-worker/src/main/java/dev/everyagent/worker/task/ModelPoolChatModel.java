@@ -1,7 +1,9 @@
 package dev.everyagent.worker.task;
 
 import com.openai.errors.OpenAIIoException;
+import dev.everyagent.plugin.api.model.EmitEvent;
 import dev.everyagent.plugin.api.model.ModelConfig;
+import dev.everyagent.worker.proto.ShortIds;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.messages.AssistantMessage;
@@ -14,7 +16,9 @@ import reactor.core.publisher.Flux;
 
 import java.io.IOException;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CancellationException;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -48,9 +52,9 @@ import java.util.concurrent.atomic.AtomicReference;
  * ({@link #withOptions}),并补原 prompt options 的工具集(toolCallbacks)。
  * 成功返回的是成员模型的真实响应——usage/模型名随响应自然落到事件与 usage trace。
  *
- * <p>trace:每次切换经 {@code TaskEvents.modelFailoverSwitch} 发
- * {@code task.trace(kind=model_failover)},同一波连续失败切换共用一条 trace,
- * 波收口 {@code modelFailoverClose};events 可为 null(无事件上下文时仅记日志不发 trace)。
+ * <p>trace:每次切换经 {@code events.emit(EmitEvent.TraceData.of("model_failover", ...))} 发
+ * {@code task.trace(kind=model_failover)},同一波连续失败切换共用一条 trace(链状态自管理),
+ * 波收口移除链状态;events 可为 null(无事件上下文时仅记日志不发 trace)。
  * 实例内无跨请求共享状态:轮询游标/防重标记 per-subscription(Flux.defer 闭包捕获)。
  */
 public class ModelPoolChatModel implements ChatModel {
@@ -64,6 +68,11 @@ public class ModelPoolChatModel implements ChatModel {
     private final TaskEvents events;
     /** 日志归属 agent(仅日志前缀,不发事件)。 */
     private final String agentId;
+    /**
+     * traceId → 当前容灾切换链已累积的完整模型链(同一波连续失败切换共用一条 trace,
+     * 逐次追加「 -> 模型」,作为 trace 的 content 展示;波收口 {@link #closeFailover} 移除)。
+     */
+    private final Map<String, String> failoverTraceChains = new ConcurrentHashMap<>();
     /** getOptions() 返回项(OpenAiChatOptions 保证 ToolCallingAdvisor 正常透传工具集)。 */
     private final OpenAiChatOptions defaultOptions;
 
@@ -172,15 +181,30 @@ public class ModelPoolChatModel implements ChatModel {
                 agentId, error.getClass().getSimpleName(), error.getMessage(),
                 snap.configId(), snap.model(), nextIndex + 1, members.size());
         if (events != null) {
-            return events.modelFailoverSwitch(failoverTraceId, snap);
+            String modelDesc = snap.configId() + " " + snap.model();
+            String id;
+            String chain;
+            String prev = failoverTraceId == null ? null : failoverTraceChains.get(failoverTraceId);
+            if (prev == null) {
+                id = (failoverTraceId == null || failoverTraceId.isEmpty())
+                        ? ShortIds.next("trace") : failoverTraceId;
+                chain = modelDesc;
+            } else {
+                id = failoverTraceId;
+                chain = prev + " -> " + modelDesc;
+            }
+            failoverTraceChains.put(id, chain);
+            events.emit(EmitEvent.TraceData.of("model_failover", id,
+                    "容灾切换模型：" + modelDesc, chain, "done"));
+            return id;
         }
         return failoverTraceId;
     }
 
     /** 容灾切换波收口:移除 traceId 对应链状态,之后新波重新新建 trace。 */
     private void closeFailover(String failoverTraceId) {
-        if (events != null && failoverTraceId != null) {
-            events.modelFailoverClose(failoverTraceId);
+        if (failoverTraceId != null) {
+            failoverTraceChains.remove(failoverTraceId);
         }
     }
 

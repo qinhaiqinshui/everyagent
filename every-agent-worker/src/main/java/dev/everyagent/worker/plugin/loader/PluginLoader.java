@@ -9,6 +9,7 @@ import dev.everyagent.worker.plugin.WorkerPluginContextImpl;
 import dev.everyagent.plugin.api.WorkerServices;
 import dev.everyagent.worker.plugin.registry.AdvisorProviderRegistry;
 import dev.everyagent.worker.plugin.registry.AuthorizationHandlerRegistry;
+import dev.everyagent.worker.plugin.registry.ChatModelEnhancerRegistry;
 import dev.everyagent.worker.plugin.registry.ModelRequestNodeRegistry;
 import dev.everyagent.worker.plugin.registry.SandboxProviderRegistry;
 import dev.everyagent.worker.plugin.registry.SearchProviderRegistry;
@@ -92,6 +93,7 @@ public class PluginLoader {
     private final ToolExecutionInterceptorRegistry toolInterceptorRegistry;
     private final TaskLifecycleRegistry lifecycleRegistry;
     private final ModelRequestNodeRegistry modelRequestNodeRegistry;
+    private final ChatModelEnhancerRegistry chatModelEnhancerRegistry;
     private final TaskAdmissionPolicyRegistry admissionPolicyRegistry;
     private final SkillContributorRegistry skillContributorRegistry;
     private final RpcDispatcher rpcDispatcher;
@@ -113,6 +115,7 @@ public class PluginLoader {
             ToolExecutionInterceptorRegistry toolInterceptorRegistry,
             TaskLifecycleRegistry lifecycleRegistry,
             ModelRequestNodeRegistry modelRequestNodeRegistry,
+            ChatModelEnhancerRegistry chatModelEnhancerRegistry,
             TaskAdmissionPolicyRegistry admissionPolicyRegistry,
             SkillContributorRegistry skillContributorRegistry,
             RpcDispatcher rpcDispatcher,
@@ -130,6 +133,7 @@ public class PluginLoader {
         this.toolInterceptorRegistry = toolInterceptorRegistry;
         this.lifecycleRegistry = lifecycleRegistry;
         this.modelRequestNodeRegistry = modelRequestNodeRegistry;
+        this.chatModelEnhancerRegistry = chatModelEnhancerRegistry;
         this.admissionPolicyRegistry = admissionPolicyRegistry;
         this.skillContributorRegistry = skillContributorRegistry;
         this.rpcDispatcher = rpcDispatcher;
@@ -302,7 +306,8 @@ public class PluginLoader {
                     advisorRegistry, toolRegistry, sandboxRegistry,
                     searchRegistry,
                     authHandlerRegistry, toolInterceptorRegistry,
-                    lifecycleRegistry, modelRequestNodeRegistry, admissionPolicyRegistry,
+                    lifecycleRegistry, modelRequestNodeRegistry, chatModelEnhancerRegistry,
+                    admissionPolicyRegistry,
                     skillContributorRegistry,
                     rpcDispatcher, slashRegistry, slashTokenHandler, services, config, applicationContext);
 

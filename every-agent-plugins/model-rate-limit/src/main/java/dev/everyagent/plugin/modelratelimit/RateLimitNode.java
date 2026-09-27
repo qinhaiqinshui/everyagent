@@ -1,10 +1,9 @@
 package dev.everyagent.plugin.modelratelimit;
 
-import dev.everyagent.contract.json.Json;
+import dev.everyagent.plugin.api.model.EmitEvent;
 import dev.everyagent.plugin.api.model.ModelRequestChain;
 import dev.everyagent.plugin.api.model.ModelRequestContext;
 import dev.everyagent.plugin.api.model.ModelRequestNode;
-import tools.jackson.databind.node.ObjectNode;
 
 import java.util.Optional;
 
@@ -54,13 +53,10 @@ public class RateLimitNode implements ModelRequestNode {
 
         // 下行：限流排队（阻塞等待放行，虚拟线程 park）
         ModelRateLimiter.Permit permit = limiter.get().acquire((waitInfo, waitMs) -> {
-            // 经 EventEmitter 发语义事件（不知道 wire 格式/task.trace/wf.trace）
-            ObjectNode payload = Json.obj()
-                    .put("configId", waitInfo.configId())
-                    .put("waiters", waitInfo.waiters())
-                    .put("inFlight", waitInfo.inFlight())
-                    .put("tpmPressure", waitInfo.tpmPressure());
-            ctx.events().emit("model_rate_wait", payload, false); // false = 瞬态不落盘
+            // 经 EventEmitter 发强类型 TraceData 事件（task 层映射为 wire task.trace）
+            ctx.events().emit(EmitEvent.TraceData.transientOf("model_rate_wait", null,
+                "模型「" + configId + "」正在排队(在飞 " + waitInfo.inFlight() + " / 排队 " + waitInfo.waiters() + ")",
+                null, "waiting"));
         });
 
         // 注册回调：绑定 Permit 生命周期到 Flux 实际执行

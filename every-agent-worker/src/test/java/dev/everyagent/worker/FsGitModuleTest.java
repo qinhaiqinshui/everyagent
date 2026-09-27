@@ -5,6 +5,7 @@ import dev.everyagent.contract.ids.Ids;
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.plugin.api.spi.TokenEstimator;
 import dev.everyagent.worker.config.WorkerProperties;
+import dev.everyagent.worker.plugin.registry.ChatModelEnhancerRegistry;
 import dev.everyagent.worker.plugin.registry.ModelRequestNodeRegistry;
 import dev.everyagent.worker.hub.HubPool;
 import dev.everyagent.worker.modules.ConfigStore.ResolvedConfig;
@@ -109,8 +110,9 @@ class FsGitModuleTest {
 
         @Bean
         @Primary
-        ChatModelFactory fakeModelFactory(WorkerProperties props, ModelRequestNodeRegistry nodeRegistry) {
-            return new ChatModelFactory(props, nodeRegistry) {
+        ChatModelFactory fakeModelFactory(WorkerProperties props, ModelRequestNodeRegistry nodeRegistry,
+                ChatModelEnhancerRegistry enhancerRegistry) {
+            return new ChatModelFactory(props, nodeRegistry, enhancerRegistry) {
                 @Override
                 public org.springframework.ai.chat.model.ChatModel build(ResolvedConfig cfg,
                         org.springframework.ai.openai.OpenAiChatOptions options, String agentId) {

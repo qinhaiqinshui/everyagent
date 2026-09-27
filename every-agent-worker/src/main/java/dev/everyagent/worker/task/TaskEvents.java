@@ -2,6 +2,7 @@ package dev.everyagent.worker.task;
 
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.plugin.api.agent.AgentEventChannel;
+import dev.everyagent.plugin.api.model.EmitEvent;
 import dev.everyagent.worker.proto.Events;
 import dev.everyagent.worker.proto.Events.ToolCallPart;
 import dev.everyagent.worker.proto.ShortIds;
@@ -34,11 +35,6 @@ public final class TaskEvents implements AgentEventChannel {
     private final Map<String, String> retryTraceIds = new ConcurrentHashMap<>();
     /** agentId → 当前上下文压缩 traceId(压缩开始建、完成/兜底收尾移除,同 traceId upsert)。 */
     private final Map<String, String> compressionTraceIds = new ConcurrentHashMap<>();
-    /**
-     * traceId → 当前容灾切换链已累积的完整模型链(同一波连续失败切换共用一条 trace,
-     * 逐次追加「 -> 模型」,作为 trace 的 content 展示;波收口 {@link #modelFailoverClose} 移除)。
-     */
-    private final Map<String, String> failoverTraceChains = new ConcurrentHashMap<>();
     /**
      * agentId → 当前轮共享 seq(雪花 ID):一轮 = 一次模型响应回合。流式 chunk(delta/thinking)
      * 到来时若该 agent 尚无当前轮 seq 则现场分配一个,之后该轮全部 delta/thinking 与定型
@@ -404,44 +400,6 @@ public final class TaskEvents implements AgentEventChannel {
     }
 
     /**
-     * 模型池自动切换 trace(持久化;kind='model_failover'):池模型({@code ModelPoolChatModel},
-     * provider=model-pool 配置)当前成员请求异常切换到下一成员时,在主线显式标注这次容灾切换。
-     * 同一波连续失败切换(同一次请求内逐个换成员)共用一条 trace:traceId 非空且已建时
-     * 把完整切换链「模型1 -> 模型2 -> 模型3」写入 content,summary 为「容灾切换模型:」
-     * + 最终成功配置名 + 模型;首次切换(traceId 为空/未建)新建 trace。
-     * 不填 title。返回实际使用的 traceId,供同波后续切换复用。
-     *
-     * @param traceId  同波已建 traceId(连续切换传入);null/空或已收口则新建
-     * @param snapshot 切到的池内模型快照(已解析)
-     */
-    public String modelFailoverSwitch(String traceId, ModelConfig snapshot) {
-        String modelDesc = snapshot.configId() + " " + snapshot.model();
-        String id;
-        String chain;
-        String prev = traceId == null ? null : failoverTraceChains.get(traceId);
-        if (prev == null) {
-            id = (traceId == null || traceId.isEmpty()) ? ShortIds.next("trace") : traceId;
-            chain = modelDesc;
-        } else {
-            id = traceId;
-            chain = prev + " -> " + modelDesc;
-        }
-        failoverTraceChains.put(id, chain);
-        appendTrace(id, "model_failover", null, "容灾切换模型：" + modelDesc, chain, "done", null, true);
-        return id;
-    }
-
-    /**
-     * 容灾切换波收口:移除该 traceId 的链状态。一次模型调用链(同一波连续切换)结束后调用,
-     * 之后新的容灾切换重新新建 trace,不误追加到旧链。
-     */
-    public void modelFailoverClose(String traceId) {
-        if (traceId != null) {
-            failoverTraceChains.remove(traceId);
-        }
-    }
-
-    /**
      * AI 安全审议结论 trace(持久化;kind='auth.review',plan-unattended-ai-auth 步骤 4/5)。
      * 授权走 {@code AiAuthReviewer} 时由审议组件在一次审议结束后调用:每次授权请求一条,
      * 落盘主 agent jsonl 供事后审计追溯;审议链路经重试 advisor 与池模型自然发出的
@@ -485,36 +443,6 @@ public final class TaskEvents implements AgentEventChannel {
         return s.configId() == null ? "" : s.configId();
     }
 
-    /**
-     * 模型限流排队 trace(瞬态,不落盘;kind='model_rate_wait'):请求进入排队等待时发,
-     * 前端据此展示「模型「X」正在排队(N/M)」。traceId 稳定(每个请求排队一段用同一 id
-     * 原地 upsert)。
-     * <p>新路径：model-rate-limit 插件经 {@link #emit(String, JsonNode, boolean)} 发语义事件
-     * {@code "model_rate_wait"}，task 层映射为 wire 格式。本方法为直接调用入口（保留兼容）。
-     *
-     * @param traceId    同一次请求排队的稳定 id(空则新建;由调用方跨轮询复用)
-     * @param configId   模型 configId
-     * @param waiters    当前排队的请求数(含本请求)
-     * @param inFlight   当前 in-flight 请求数
-     * @param tpmPressure 当前 tpm 压力(估算,仅展示)
-     * @param waitMs     本次预计等待时长
-     */
-    public String modelRateWait(String traceId, String configId, int waiters, int inFlight,
-            long tpmPressure, long waitMs) {
-        String id = (traceId == null || traceId.isEmpty()) ? ShortIds.next("trace") : traceId;
-        ObjectNode meta = Json.obj();
-        meta.put("configId", configId == null ? "" : configId);
-        meta.put("waiters", waiters);
-        meta.put("inFlight", inFlight);
-        meta.put("tpmPressure", tpmPressure);
-        meta.put("waitMs", waitMs);
-        appendTrace(id, "model_rate_wait", "模型限流排队",
-                "模型「" + (configId == null ? "" : configId) + "」正在排队(在飞 " + inFlight
-                        + " / 排队 " + waiters + ")",
-                null, "waiting", meta, false);
-        return id;
-    }
-
     /** 统一 trace 事件出口:payload 与前端 TaskTraceRecord 同形;persist=false 经 ext 标记为瞬态。 */
     private long appendTrace(String traceId, String kind, String title, String summary,
             String content, String status, JsonNode metadata, boolean persist) {
@@ -541,58 +469,21 @@ public final class TaskEvents implements AgentEventChannel {
 
     /**
      * 通用事件发射入口（EventEmitter 语义→wire 映射在 task 层）：
-     * 插件发语义事件名 + payload（不知道 wire 格式），本方法包装成 wire 格式写 EventLog。
+     * 插件发 {@link EmitEvent} 强类型载荷（不知道 wire 格式），本方法包装成 wire 格式写 EventLog。
      * 推送仍由 DataPusher 的 onAppend → readFrom → push 链处理，本方法不直接调 WebSocketEmitter。
      *
-     * <p>语义→wire 映射：
-     * <ul>
-     *   <li>{@code "model_rate_wait"} → wire {@code task.trace}（payload 加 traceId/kind/title/
-     *       summary/status/createdAt，原始 payload 作为 metadata）。</li>
-     *   <li>其它语义事件名 → 直接透传（wire 事件名 = 语义事件名，payload 原样）。</li>
-     * </ul>
-     *
-     * @param eventName 语义事件名（如 {@code "model_rate_wait"}）
-     * @param payload   事件载荷（Jackson JsonNode）
-     * @param persist   是否落盘。{@code false} = 瞬态不落盘（ext 标记 persist=false）
+     * <p>零 case 映射：用 {@code instanceof} 判断载荷类型，
+     * {@link EmitEvent.TraceData} → wire {@code task.trace}（kind = trace.kind），
+     * 其它 EmitEvent 实现抛异常（未知类型）。
      */
-    public void emit(String eventName, JsonNode payload, boolean persist) {
-        switch (eventName) {
-            case "model_rate_wait" -> emitModelRateWait(payload, persist);
-            default -> {
-                // 未知语义事件：直接透传（wire 事件名 = 语义事件名）
-                ObjectNode ext = persist ? null : Json.obj().put("persist", false);
-                log.append(eventName, payload, mainAgentId, ext, !persist);
-            }
+    public void emit(EmitEvent event) {
+        if (event instanceof EmitEvent.TraceData t) {
+            String id = (t.id() == null || t.id().isEmpty()) ? ShortIds.next("trace") : t.id();
+            String status = t.status() != null ? t.status() : "done";
+            appendTrace(id, t.kind(), t.title(), t.summary(), t.content(), status, null, t.persist());
+        } else {
+            throw new IllegalStateException("未知 EmitEvent 类型: " + event.getClass());
         }
-    }
-
-    /**
-     * 语义事件 {@code model_rate_wait} → wire {@code task.trace} 映射：
-     * payload 加 traceId/kind/title/summary/status/createdAt，原始 payload 作为 metadata。
-     * 与 {@link #appendTrace} 格式一致。traceId 从 payload 中取（插件管理稳定 id），
-     * 缺省时现场分配。
-     */
-    private void emitModelRateWait(JsonNode payload, boolean persist) {
-        String traceId = null;
-        String configId = "";
-        int inFlight = 0;
-        int waiters = 0;
-        if (payload != null && payload.isObject()) {
-            traceId = payload.path("traceId").asString(null);
-            configId = payload.path("configId").asString("");
-            inFlight = payload.path("inFlight").asInt(0);
-            waiters = payload.path("waiters").asInt(0);
-        }
-        String id = (traceId == null || traceId.isEmpty()) ? ShortIds.next("trace") : traceId;
-        // 原始 payload 作为 metadata（去除 traceId 防重复）
-        ObjectNode meta = null;
-        if (payload != null && payload.isObject()) {
-            meta = ((ObjectNode) payload).deepCopy();
-            meta.remove("traceId");
-        }
-        appendTrace(id, "model_rate_wait", "模型限流排队",
-                "模型「" + configId + "」正在排队(在飞 " + inFlight + " / 排队 " + waiters + ")",
-                null, "waiting", meta, persist);
     }
 
     /** 收起态摘要:重试进行中的「第 x/总 次 · y 秒后重试」文案。 */
@@ -675,11 +566,6 @@ public final class TaskEvents implements AgentEventChannel {
     @Override
     public long modelSwitch(Object snapshot, String oldConfigId) {
         return modelSwitch((ModelConfig) snapshot, oldConfigId);
-    }
-
-    @Override
-    public String modelFailoverSwitch(String traceId, Object snapshot) {
-        return modelFailoverSwitch(traceId, (ModelConfig) snapshot);
     }
 
     /**

@@ -1,5 +1,6 @@
 package dev.everyagent.worker.task;
 
+import dev.everyagent.plugin.api.model.EmitEvent;
 import dev.everyagent.plugin.api.model.ModelConfig;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.messages.AssistantMessage;
@@ -17,7 +18,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -56,7 +57,7 @@ class ModelPoolChatModelTest {
         assertSame(ok, result, "切到成员2 后应返回其响应");
         verify(m1, times(1)).call(any(Prompt.class));
         verify(m2, times(1)).call(any(Prompt.class));
-        verify(events, times(1)).modelFailoverSwitch(eq(null), eq(snap("cfg-2", "m2")));
+        verify(events, times(1)).emit(argThat(this::isFailoverToCfg2));
     }
 
     @Test
@@ -80,7 +81,7 @@ class ModelPoolChatModelTest {
         assertNotNull(e);
         verify(m1, times(1)).call(any(Prompt.class));
         verify(m2, never()).call(any(Prompt.class));               // 网络异常不切换
-        verify(events, never()).modelFailoverSwitch(any(), any());
+        verify(events, never()).emit(any());
     }
 
     // ---- 流式 ----
@@ -98,7 +99,7 @@ class ModelPoolChatModelTest {
         assertSame(ok, result.get(0), "切到成员2 后应透传其 chunk");
         verify(m1, times(1)).stream(any(Prompt.class));
         verify(m2, times(1)).stream(any(Prompt.class));
-        verify(events, times(1)).modelFailoverSwitch(eq(null), eq(snap("cfg-2", "m2")));
+        verify(events, times(1)).emit(argThat(this::isFailoverToCfg2));
     }
 
     @Test
@@ -112,7 +113,7 @@ class ModelPoolChatModelTest {
         assertThrows(RuntimeException.class, () -> pool.stream(new Prompt("hi")).collectList().block());
         verify(m1, times(1)).stream(any(Prompt.class));
         verify(m2, never()).stream(any(Prompt.class));               // 已下发信号不切换
-        verify(events, never()).modelFailoverSwitch(any(), any());
+        verify(events, never()).emit(any());
     }
 
     @Test
@@ -123,10 +124,19 @@ class ModelPoolChatModelTest {
         assertThrows(RuntimeException.class, () -> pool.stream(new Prompt("hi")).collectList().block());
         verify(m1, times(1)).stream(any(Prompt.class));
         verify(m2, never()).stream(any(Prompt.class));
-        verify(events, never()).modelFailoverSwitch(any(), any());
+        verify(events, never()).emit(any());
     }
 
     // ---- 辅助 ----
+
+    /** 匹配容灾切换到 cfg-2 的 TraceData 事件。 */
+    private boolean isFailoverToCfg2(dev.everyagent.plugin.api.model.EmitEvent e) {
+        if (!(e instanceof EmitEvent.TraceData t)) {
+            return false;
+        }
+        return "model_failover".equals(t.kind())
+                && t.summary() != null && t.summary().contains("cfg-2");
+    }
 
     private static ModelConfig snap(String configId, String model) {
         return new ModelConfig(configId, "openai-compat", "http://x", model, null);

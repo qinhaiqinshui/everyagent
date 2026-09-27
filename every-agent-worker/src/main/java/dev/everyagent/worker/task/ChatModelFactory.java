@@ -1,10 +1,16 @@
 package dev.everyagent.worker.task;
 
-import dev.everyagent.worker.config.WorkerProperties;
-import dev.everyagent.worker.modules.ConfigStore.ResolvedConfig;
+import dev.everyagent.plugin.api.model.ChatModelEnhancer;
+import dev.everyagent.plugin.api.model.EnhancedChatModel;
+import dev.everyagent.plugin.api.model.EnhancerContext;
+import dev.everyagent.plugin.api.model.EmitEvent;
 import dev.everyagent.plugin.api.model.EventEmitter;
+import dev.everyagent.plugin.api.model.MemberSpec;
 import dev.everyagent.plugin.api.model.ModelConfig;
 import dev.everyagent.plugin.api.model.ModelRequestNode;
+import dev.everyagent.worker.config.WorkerProperties;
+import dev.everyagent.worker.modules.ConfigStore.ResolvedConfig;
+import dev.everyagent.worker.plugin.registry.ChatModelEnhancerRegistry;
 import dev.everyagent.worker.plugin.registry.ModelRequestNodeRegistry;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.openai.OpenAiChatModel;
@@ -26,19 +32,20 @@ import java.util.function.UnaryOperator;
  * (buildRequestPrompt 原样透传并强转 OpenAiChatOptions),故每轮请求必须复用
  * options() 产出的完整快照,仅在其上追加工具集。
  *
- * <p>{@code provider: model-pool} 池配置经 {@link #buildAgentModel} 产出
- * {@link ModelPoolChatModel}(组合各成员模型按序容灾切换),普通配置照旧产出
- * {@link OpenAiChatModel}。
+ * <p>{@code provider: model-pool} 池配置经 {@link #buildAgentModel} 委托给
+ * {@link ChatModelEnhancer} 插件构建(产出组合 ChatModel,按序容灾切换),
+ * 普通配置照旧产出 {@link OpenAiChatModel}。
  */
 @Component
 public class ChatModelFactory {
 
-    /** agent 装配结果:chatModel + 每轮 prompt 的 options 基底(池配置取首成员快照)。 */
+    /** agent 装配结果:chatModel + 每轮 prompt 的 options 基底(池配置取主成员快照)。 */
     public record AgentModel(ChatModel chatModel, OpenAiChatOptions options) {
     }
 
     private final WorkerProperties props;
     private final ModelRequestNodeRegistry nodeRegistry;
+    private final ChatModelEnhancerRegistry enhancerRegistry;
     /**
      * 缓存:按 configId 复用 OpenAiChatModel 实例。openai-java SDK 每次构建
      * OpenAIClient 都会创建新的 Timer("DefaultSleeper") + streamHandler 线程池
@@ -49,17 +56,19 @@ public class ChatModelFactory {
             new java.util.concurrent.ConcurrentHashMap<>();
 
     public ChatModelFactory(WorkerProperties props,
-            ModelRequestNodeRegistry nodeRegistry) {
+            ModelRequestNodeRegistry nodeRegistry,
+            ChatModelEnhancerRegistry enhancerRegistry) {
         this.props = props;
         this.nodeRegistry = nodeRegistry;
+        this.enhancerRegistry = enhancerRegistry;
     }
 
     /**
      * 构建 agent 模型 + 请求 options。
      * <ul>
      *   <li>普通配置:chatModel = {@link OpenAiChatModel},options = {@link #options} 完整快照;</li>
-     *   <li>池配置({@link ResolvedConfig#isPool()}):chatModel = {@link ModelPoolChatModel},
-     *       options = 首成员(主模型)完整快照——上下文压缩等 advisor 读 prompt.options 拿到主模型参数。</li>
+     *   <li>池配置({@link ResolvedConfig#isPool()}):chatModel = 模型池插件产出的组合 ChatModel,
+     *       options = 主成员完整快照——上下文压缩等 advisor 读 prompt.options 拿到主模型参数。</li>
      * </ul>
      *
      * @param cfg               任务/审议解析出的配置(池配置需已填充 poolMembers)
@@ -73,25 +82,53 @@ public class ChatModelFactory {
             OpenAiChatOptions options = apply(options(cfg), optionsCustomizer);
             return new AgentModel(build(cfg, options, agentId, events), options);
         }
-        ResolvedConfig primary = cfg.poolMembers().get(0);
-        OpenAiChatOptions primaryOptions = apply(options(primary), optionsCustomizer);
-        ChatModel pool = buildPool(cfg, agentId, events, optionsCustomizer);
-        return new AgentModel(pool, primaryOptions);
-    }
-
-    /** 构建池模型:逐成员用各自完整快照构建 OpenAiChatModel(成员非池,不递归)。 */
-    private ChatModel buildPool(ResolvedConfig cfg, String agentId, TaskEvents events,
-            UnaryOperator<OpenAiChatOptions> optionsCustomizer) {
-        List<ChatModel> members = new ArrayList<>(cfg.poolMembers().size());
-        List<OpenAiChatOptions> memberOptions = new ArrayList<>(cfg.poolMembers().size());
-        List<ModelConfig> memberSnapshots = new ArrayList<>(cfg.poolMembers().size());
-        for (ResolvedConfig m : cfg.poolMembers()) {
-            OpenAiChatOptions o = apply(options(m), optionsCustomizer);
-            members.add(build(m, o, agentId, events));
-            memberOptions.add(o);
-            memberSnapshots.add(m.snapshot());
+        // 池配置 → 委托给 ChatModelEnhancer 插件构建(组合 ChatModel + 主成员 options)
+        ChatModelEnhancer enhancer = enhancerRegistry.find(cfg.snapshot().provider());
+        if (enhancer == null) {
+            throw new IllegalStateException(
+                    "provider '" + cfg.snapshot().provider() + "' 需要插件支持，但当前未注册 ChatModelEnhancer");
         }
-        return new ModelPoolChatModel(members, memberOptions, memberSnapshots, events, agentId);
+        // buildMember 回调委托到 ChatModelFactory.build()(复用工厂的成员构建逻辑)。
+        UnaryOperator<OpenAiChatOptions> memberCustomizer = optionsCustomizer;
+        EnhancerContext ctx = new EnhancerContext() {
+            @Override
+            public ModelConfig poolConfig() {
+                return cfg.snapshot();
+            }
+
+            @Override
+            public List<MemberSpec> members() {
+                List<MemberSpec> specs = new ArrayList<>(cfg.poolMembers().size());
+                for (ResolvedConfig m : cfg.poolMembers()) {
+                    specs.add(new MemberSpec(m.snapshot(), m.apiKey()));
+                }
+                return specs;
+            }
+
+            @Override
+            public String agentId() {
+                return agentId;
+            }
+
+            @Override
+            public EventEmitter events() {
+                return event -> {
+                    if (events != null) {
+                        events.emit(event);
+                    }
+                };
+            }
+
+            @Override
+            public ChatModel buildMember(MemberSpec member) {
+                ResolvedConfig resolvedCfg = new ResolvedConfig(member.config(), member.apiKey());
+                OpenAiChatOptions o = apply(options(resolvedCfg), memberCustomizer);
+                return build(resolvedCfg, o, agentId, events);
+            }
+        };
+        EnhancedChatModel enhanced = enhancer.enhance(ctx);
+        OpenAiChatOptions primaryOptions = (OpenAiChatOptions) enhanced.primaryOptions();
+        return new AgentModel(enhanced.chatModel(), primaryOptions);
     }
 
     private static OpenAiChatOptions apply(OpenAiChatOptions base,
@@ -140,8 +177,8 @@ public class ChatModelFactory {
         }
         ModelConfig config = cfg.snapshot();
         EventEmitter emitter = events == null
-                ? (eventName, payload, persist) -> {} // no-op
-                : (eventName, payload, persist) -> events.emit(eventName, payload, persist);
+                ? (event) -> {} // no-op
+                : (event) -> events.emit(event);
         return new ModelRequestChainChatModel(raw, nodes, emitter, config);
     }
 

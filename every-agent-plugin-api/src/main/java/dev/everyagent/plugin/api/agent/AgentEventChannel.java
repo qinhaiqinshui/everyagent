@@ -82,13 +82,6 @@ public interface AgentEventChannel {
 
     long modelSwitch(Object snapshot, String oldConfigId);
 
-    String modelFailoverSwitch(String traceId, Object snapshot);
-
-    void modelFailoverClose(String traceId);
-
-    String modelRateWait(String traceId, String configId, int waiters, int inFlight,
-            long tpmPressure, long waitMs);
-
     // ---- AI 安全审议 ----
 
     long authReview(String agentId, String decision, String confidence, String reason,
