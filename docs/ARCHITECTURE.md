@@ -10,7 +10,7 @@
 
 Every Agent 是一套「**公网可及、本机执行**」的 AI Agent 系统:AI 任务(agent 循环)跑在你自己电脑上的执行器(worker)里,而你可以从任何地方的浏览器通过一个公网消息中心(hub)查看进度、发指令、处理需要确认的问题。不需要公网 IP、不需要端口映射、不需要把代码和数据上传到第三方服务器。
 
-系统由四个可独立部署的模块 + 一个桌面打包组成:
+系统由四个可独立部署的模块 + 插件 API + 内置插件集 + 一个桌面打包组成:
 
 | 模块 | 职责 | 端口 |
 |---|---|---|
@@ -18,11 +18,13 @@ Every Agent 是一套「**公网可及、本机执行**」的 AI Agent 系统:AI
 | `every-agent-worker` | 执行器:Spring Boot + Spring AI 2,托管任务运行时、模型调用、workspace、沙箱进程 | 6102(仅本地健康检查) |
 | `every-agent-web` | 前端:React + TS,内置 TS 客户端 SDK,经 hub 遥控 worker | 5174(dev) |
 | `every-agent-contract` | 纯协议契约:帧信封 / RPC 信封 / 通用错误码 / 身份哈希(Java DTO + TS 类型) | — |
+| `every-agent-plugin-api` | 插件 API 契约:EventEmitter / ModelRequestNode 链 / ModelConfig / TaskLifecycleNode 等接口(纯类型,插件与 worker 共用) | — |
+| `every-agent-plugins` | 内置插件集:model-rate-limit(模型限流)、task-queue(任务队列)、subagent、git、ai-review 等 | — |
 | `every-agent-desktop` | Electron 桌面版:web + hub + worker 一体打包(Windows x64 便携/安装包) | 本地 6101/6102 |
 
 ### 1.1 设计理念
 
-1. **三层完全解耦**：hub / worker / 前端是独立程序、独立部署、独立演进,互相只认消息协议,不认实现;三者只依赖 `every-agent-contract`,互相零依赖。
+1. **三层完全解耦**：hub / worker / 前端是独立程序、独立部署、独立演进,互相只认消息协议,不认实现;三者只依赖 `every-agent-contract`,互相零依赖。插件层依赖 `every-agent-plugin-api`(纯接口包),插件与 worker 经此解耦。
 2. **hub 不理解业务(红线)**：hub 是 RPC 转发中心——不校验事件语义、不认识"任务"、不维护业务规则。它唯一保留的校验是**连接级命名空间鉴权**(频道前缀是否匹配连接身份),这是身份边界,不是业务理解。
 3. **磁盘是唯一事实源**：任务数据(事件日志 + 元数据)永久落盘;worker 内存只是运行期驻留,任务结束即销毁。重启、崩溃、换机后一切从磁盘重建。
 4. **任务永久保留**：无自动清理;用户主动删除是唯一移除路径。
@@ -303,7 +305,9 @@ wss 强制 + 证书;hello 失败限速(防 key 枚举);单 IP / 全局连接数�
 | **EventLog** | 每任务内存日志(运行中);append 即分配 seq;`seed(seqLastOf)` 供再运行接续;尾部只读供 task.poll 归并 |
 | **TaskStore** | 持久层:`workspaces/<workspaceId>/tasks/<taskId>/` 按 agent 分文件 `*.jsonl`;启动扫描建索引;**随机访问分块反向读取原语**(ReverseLineReader 从文件尾 64KB 块向前扫,不整文件重扫) |
 | **TaskManager** | 运行编排:创建/取消/再运行(冷启动)/删除;`finish()` 驱逐内存驻留 |
-| **DataPusher / DataPusherManager** | 定向推送器(§7.13):每 (sessionId,taskId) 一个虚拟线程,把运行中任务 EventLog 增量(含瞬态)推到 stream 频道;含**窗口式 credit 背压**(stream.ack) |
+| **DataPusher / DataPusherManager** | 定向推送器(§7.13):每 (sessionId,taskId) 一个虚拟线程,把运行中任务 EventLog 增量(含瞬态)推到 stream 频道;`push()` 组装 ext/payload 后委托 `WebSocketEmitter.push()` 做背压 + conn.pub(§7.19) |
+| **WebSocketEmitter** | 被动推送管道(§7.19):只做背压控制 + `conn.pub`,不读 EventLog、不回扫、不对账;DataPusher 回扫路径与 EventEmitter 实时路径共用同一背压窗口;`DataPusherManager.onAck` 路由到此 |
+| **ModelRequestChainChatModel** | 模型请求洋葱链薄壳(§7.19):`ChatModelFactory.build()` 产物,`stream()`/`call()` 把请求经 `ModelRequestNode` 链(如限流插件)送达内核缓存的 `OpenAiChatModel`;内核经 `ModelRequestContext` 回调注入 chunk/complete/error 信号 |
 | **ConversationLoader** | 冷启动:从磁盘 jsonl 重建 conversation |
 | **PendingAsks** | askId → CompletableFuture;ask 工具在此挂起(§7.8) |
 | **TaskPoll** | 应答 `task.poll` RPC:磁盘反向窗口 ∪ 内存尾部按 seq 归并,rpc.data 分批 |
@@ -346,13 +350,14 @@ RoundIndexAdvisor(轮次索引+耗时,最外层) → SkillAdvisor(内置 skill �
 
 **背景**:厂商限的是 rpm/tpm(不是 rps);一次事故即「主 agent 同时派发 8 个子 agent → 8 个长思考流同时全速吐 token → 瞬时叠加撞 429 → 退避重试放大瞬态事件风暴 → LogOverflow」。调用端需要**前置主动限流**,而不是只靠后置 429 重试。
 
-**机制**(`ModelRateLimiter` + `RateLimitedChatModel` 装饰器,挂在 `ChatModelFactory.build` 产物外层;主/子/AI 审议/池成员全部自动生效,见 docs/design-model-rate-limit.md):
+**机制**(`model-rate-limit` 插件的 `RateLimitNode` 实现 `ModelRequestNode`,经模型请求洋葱链(§7.19)插入;主/子/AI 审议/池成员全部自动生效):
 
 - 每模型独立配置(`worker.models[].params`):`rpm`(每分钟发起数,滑动窗口)、`max-concurrency`(同时 in-flight 上限,**长思考重叠的核心闸门**)、`tpm`(可选参考线)、`token-est-factor`(估算系数初始值)。**缺省回退全局默认限流(rpm=60 / max-concurrency=4 / tpm=0),不是裸奔不限流**;某模型要关闭某维度,在其 params 显式设 0。
-- 请求起步经 `ModelRateLimiter.acquire` 排队等放行:rpm 窗口 / 并发信号量 / tpm 压力三关;超限进有界等待队列(默认队列 8、等 5 分钟),**正常排队不报错**,仅队列满 + 超时才抛 `ModelRateLimitException`(非重试,文案含「减少并发派发/调大配置」建议)。
-- **tpm 记账**:流中无协议级 usage(OpenAI 兼容只在末帧带),故流中用自算文本 token 粗估(CJK≈1、其余≈4 字符 1 token)累计;请求完成后用厂商真实 usage 记账入 60s 窗口,并 EMA 反向校准估算系数(`token-est-factor`,每模型独立,持久化 `~/.everyagent/model-rate-state.json`,重启接续)。
+- 请求起步经 `ModelRateLimiter.acquire` 排队等放行:rpm 窗口 / 并发信号量 / tpm 压力三关;超限进有界等待队列(默认队列 8、等 5 分钟),**正常排队不报错**,仅队列满 + 超时才抛 `ModelRateLimitException`(非重试,文案含「减少并发派发/调大配置」建议)。阻塞等待发生在虚拟线程上(park,零线程开销)。
+- **tpm 记账**:流中无协议级 usage(OpenAI 兼容只在末帧带),故流中用自算文本 token 粗估(CJK≈1、其余≈4 字符 1 token)累计;请求完成后用厂商真实 usage 记账入 60s 窗口,并 EMA 反向校准估算系数(`token-est-factor`,每模型独立,持久化 `~/.everyagent/model-rate-state.json`,重启接续)。token 估算经 `ctx.onChunk`/`ctx.onComplete`/`ctx.onError` 回调驱动(§7.19 回调注册模式)。
 - 全局默认:`worker.limits.model-rate.{queue-capacity, wait-timeout-ms, est-window-sec, est-safety-ratio, est-ema-alpha, default-rpm, default-max-concurrency, default-tpm}`。
-- **观测(P2)**:排队等待发瞬态 `task.trace(kind=model_rate_wait)`(前端展示「模型正在排队」);`config.get` 响应带 `rateStatus` 数组(每模型 inFlight/waiters/factor 等运行态)。
+- **观测**:排队等待经 `EventEmitter.emit("model_rate_wait", {configId, waiters, inFlight, tpmPressure}, false)` 发语义事件,task 层映射为瞬态 `task.trace(kind=model_rate_wait)`(前端展示「模型正在排队」,§7.19);插件未加载时无 `ModelRequestNode` → 直通 raw model → 不限流,worker 保留 fallback `SimpleTokenEstimator` 供 `ModelLengthGuardAdvisor`(§7.3)使用。
+- **插件不耦合内核**:`RateLimitNode` 只依赖 `ModelRequestContext`(`ModelConfig` + `EventEmitter`),不耦合 `ChatModel`/`Prompt`/`ChatResponse`/`Flux`/`TaskEvents`/`agentId`/`taskId`/`DataPusher`。`ConfigRpcHandler.rateStatus` 返回空数组(插件后续自行注册 RPC 上报限流运行态)。
 
 ### 7.4.2 模型 HTTP 超时语义(callTimeout 解除,流式长思考不限总时长)
 
@@ -783,6 +788,126 @@ Input:  queued → consumed | discarded(任务取消)
 - **前端契约**:termId 由前端生成,**先 sub 频道再 `term.open`** 避免丢首帧;xterm `onData` → `term.input`(base64);ResizeObserver/FitAddon → `term.resize`;标签关闭 → `term.close`。
 - **平台降级**:无 PTY 能力/无桌面环境的平台抛 IO 异常转 RPC 错误,前端 toast 提示,不影响其他功能。
 
+### 7.19 通用事件发射器与模型请求洋葱链
+
+本节记录「通用事件发射器(EventEmitter)+ 模型请求洋葱链(ModelRequestNode)+ 限流插件抽离」的完整架构(§14.0 红线的展开说明)。
+
+#### 7.19.1 EventEmitter 通用事件发射器(plugin-api)
+
+```java
+// plugin-api: dev.everyagent.plugin.api.model
+public interface EventEmitter {
+    void emit(String eventName, JsonNode payload, boolean persist);
+}
+```
+
+插件/底层组件经此接口发射**语义事件**:只知道事件名 + payload + persist 标志,不知道 agentId/taskId/seq/wire 格式/前端展示方式。
+
+**分层管道**(语义→wire 映射在 task 层,§14.0):
+
+```
+插件（限流器）
+  │  emitter.emit("model_rate_wait", {configId, waiters, inFlight, tpmPressure}, false)
+  │  语义事件名,不是 wire 格式;不知道 task.trace / wf.trace
+  ▼
+agent 层（ChatModelFactory.build() 内部 lambda）
+  │  填上 agentId,转发给 task 层
+  ▼
+task 层（TaskEvents.emit）
+  │  语义事件→wire 事件映射:
+  │  "model_rate_wait" → task.trace（payload 加 traceId/kind/title/summary/status/createdAt,原始 payload 作为 metadata）
+  │  "delta" → delta（直接透传）
+  │  "error" → error（直接透传）
+  │  然后 log.append(wireEventName, wirePayload, agentId, ext, !persist)
+  ▼
+EventLog → DataPusher.readFrom → WebSocketEmitter.push → conn.pub → 前端
+```
+
+> `TaskEvents.emit()` 只写 EventLog(包装 + log.append),不直接调 WebSocketEmitter。推送仍由 DataPusher 的 `onAppend → readFrom → push` 链处理(push 委托 wsEmitter)。与改造前行为完全一致。以后工作流层实现自己的映射(`model_rate_wait` → `wf.trace`,自己的包装格式),自己的推送管道,前端按工作流 wire 格式解析。
+
+#### 7.19.2 WebSocketEmitter 被动推送管道(worker)
+
+只做:**背压控制 + 定向推送到前端 websocket**。不读 EventLog、不回扫、不对账。
+
+- 从 `DataPusher` 原样搬来背压逻辑:`CREDIT_WINDOW`(128)、`nextPushIndex`、`ackedIndex`、`acquireCredit()`(synchronized 保护)。
+- `DataPusher.push()` 组装 ext/payload 后委托 `wsEmitter.push(channel, event, seq, ts, payload, ext)`;DataPusher 删除 `acquireCredit`/`onAck`/背压字段。
+- `DataPusherManager.onAck` 路由到 `WebSocketEmitter.onAck`。
+- DataPusher 回扫路径和 EventEmitter 实时路径共用同一背压窗口,并发调 `push()` 需线程安全(`acquireCredit` 已有 synchronized 保护)。
+- **前端零改动**:收到的帧格式完全不变。
+
+#### 7.19.3 ModelRequestNode 模型请求洋葱链(plugin-api)
+
+仿任务洋葱链 `TaskLifecycleNode`(§7.14.1),为模型请求定义参与式洋葱链——插件可贡献节点,节点在请求到达真实模型前/后插入逻辑(限流、观测、重试等)。
+
+```java
+// plugin-api: dev.everyagent.plugin.api.model
+public interface ModelRequestNode {
+    String id();
+    float order();
+    Object invoke(ModelRequestContext ctx, ModelRequestChain next) throws Exception;
+}
+
+@FunctionalInterface
+public interface ModelRequestChain {
+    Object proceed(ModelRequestContext ctx) throws Exception;
+}
+
+public interface ModelRequestContext {
+    ModelConfig config();         // 模型配置快照(只读参考)
+    EventEmitter events();        // 事件发射器
+    void onChunk(Consumer<String> callback);     // 注册 chunk 回调
+    void onComplete(LongConsumer callback);       // 注册完成回调
+    void onError(Consumer<Throwable> callback);   // 注册错误/取消回调
+}
+```
+
+**ModelConfig**(plugin-api,原 worker `ModelSnapshot` 搬迁改名):纯 record(`configId / provider / baseUrl / model / params`),依赖只有 `JsonNode`。插件可据此做限流参数解析、日志、自适应决策等。
+
+> **内核不消费 ModelConfig**:当前内核使用缓存的 `OpenAiChatModel`(按 configId 缓存,所有 agent 共用同一 OkHttp 客户端和线程资源;openai-java SDK 每次 build() 会创建新的 ConnectionPool + Dispatcher 线程池,不缓存会导致线程泄漏)。context 里的 `ModelConfig` 是只读参考,不影响实际 HTTP 请求。未来支持动态配置时,内核改为从 context 取模型(版本化缓存:configId + configVersion → 实例,配置变了才新建 + 旧实例显式 close),接口不变。本次不做。
+
+**回调注册模式**:节点在 `next.proceed()` 之前注册回调;`proceed` 对于 stream 路径返回 `Flux`(deferred,尚未订阅)。节点的阻塞等待(如 `limiter.acquire`)发生在 `Flux.defer` 内(订阅时执行,虚拟线程上可安全阻塞),注册回调在 acquire 返回后、proceed 之前——顺序正确。
+
+#### 7.19.4 worker 侧组装:ModelRequestChainChatModel 薄壳
+
+`ChatModelFactory.build()` 构造 `ModelRequestChainChatModel`(实现 `ChatModel`):
+
+- `delegate` = 缓存的 `OpenAiChatModel`(按 configId 复用,不消费 context)。
+- `nodes` = 经 `ModelRequestNodeRegistry`(@Component,CopyOnWriteArrayList + float 稳定排序,同 `ToolProviderRegistry`/`TaskLifecycleRegistry` 模式)收集的插件节点。
+- `emitter` = EventEmitter lambda(填 agentId 后转发 `TaskEvents.emit`)。
+- `config` = ModelConfig 只读参考,传给插件节点。
+- `stream(prompt)`: `Flux.defer(() -> { ctx = new ModelRequestContextImpl(config, emitter); return executeChain(nodes, 0, ctx, prompt); })`——订阅时执行(虚拟线程上)。
+- `call(prompt)`: 同步执行,call 完成后触发 `ctx.invokeOnComplete`。
+- `executeChain`:链尾接内核——`delegate.stream(prompt)` 经 `doOnNext`/`doOnError`/`doOnCancel`/`doOnComplete` 调 `ctx.invokeOnChunk`/`invokeOnError`/`invokeOnComplete`,驱动注册的回调。
+- `ModelRequestContextImpl`:CopyOnWriteArrayList 收集回调,`invokeOnChunk`/`invokeOnComplete`/`invokeOnError` 逐个调用。
+
+**AdvisorContext 新增 `configId()`**:从 `agentEntity.task.snapshot.configId()` 填充,供 `TokenCalibrationAdvisor`(已搬入插件)获取 configId。
+
+#### 7.19.5 model-rate-limit 插件(every-agent-plugins/model-rate-limit)
+
+限流插件是 EventEmitter + ModelRequestNode 的第一个使用者:
+
+- **`RateLimitNode` implements `ModelRequestNode`**:`invoke(ctx, next)` 中经 `ModelRateLimiterRegistry` 查限流配置(`ctx.config().configId()` + `ctx.config().params()`),无限流配置 → 直通 `next.proceed(ctx)`;有配置 → `limiter.acquire()` 排队等待(虚拟线程 park),等待期间经 `ctx.events().emit("model_rate_wait", {...}, false)` 发语义事件;放行后注册回调(`ctx.onChunk(permit::onChunk)` / `ctx.onComplete(permit::complete)` / `ctx.onError(permit::cancel)`),最后 `next.proceed(ctx)`。
+- **6 个限流类搬到插件包**:`ModelRateLimiter` / `RateLimitNode`(原 `RateLimitedChatModel`) / `ModelRateLimitConfig` / `ModelRateLimiterRegistry` / `BuiltinTokenEstimator` / `TokenCalibrationAdvisor`(+ Provider);测试一并搬迁。
+- **不耦合内核**:插件只知道 `ModelRequestContext`(`ModelConfig` + `EventEmitter`),不耦合 `ChatModel`/`Prompt`/`ChatResponse`/`Flux`/`TaskEvents`/`agentId`/`taskId`/`DataPusher`。
+- **worker 核心清理**:无限流器引用;`ConfigRpcHandler.rateStatus` 返回空数组(插件后续自行注册 RPC);fallback `SimpleTokenEstimator` 就位(供 `ModelLengthGuardAdvisor` 使用)。
+- **回退**:插件未加载时无 `ModelRequestNode` → `ModelRequestChainChatModel` 链为空 → 直通 raw model → 不限流;WebSocketEmitter 未建立时(无前端订阅)`emit` 仍写 EventLog,不推前端。
+- `WorkerProperties.ModelRate` 配置类留 worker(全局配置项);`TokenEstimator` SPI 接口留 plugin-api(`ModelLengthGuardAdvisor` 也依赖);`WorkerPluginContext.registerModelRequestNode()` 供插件注册节点。
+
+#### 7.19.6 后续迁移路径
+
+EventEmitter 是通用出口,后续把 `AgentEventChannel` 的 30 个具体方法逐步迁移到 `emit`:
+
+| Phase | 内容 | 状态 |
+|---|---|---|
+| Phase 1(本次) | EventEmitter 接口 + WebSocketEmitter + 限流插件第一个使用 | ✅ 已完成 |
+| Phase 2 | `ModelPoolChatModel.modelFailoverSwitch` → emit | 待执行 |
+| Phase 3 | Advisor 层事件(delta/thinking/usage/retry)→ emit | 待执行 |
+| Phase 4 | 生命周期事件(agent_started/done/status/error)→ emit | 待执行 |
+| Phase 5 | `AgentEventChannel` 瘦身为仅含 emit 的接口(30 方法胖接口消解) | 待执行 |
+| Phase 6 | 内核消费 ModelConfig(版本化缓存,支持动态配置热更新) | 待执行 |
+
+> `AgentEventChannel` 当前不动(30 方法胖接口是独立架构债,§14.0 改造纪律约束迁移过程)。每次迁移一个方法:插件/底层只发语义事件名,task 层做映射,推送层和前端不变。
+
 ---
 
 ## 8. 前端接入层(every-agent-web)
@@ -915,6 +1040,8 @@ worker                         hub                    前端(可能 0 个在线)
 │   └─ src/main/java/.../proto/    # 业务常量住 worker:事件名 / DTO / RPC 方法名 / 频道构造 / 短 ID
 ├── every-agent-web/               # React 前端(内置 TS 客户端 SDK src/sdk/)
 ├── every-agent-contract/          # 纯协议契约:帧信封 / RPC 信封 / 错误码 / 身份哈希(Java DTO + TS 类型)
+├── every-agent-plugin-api/        # 插件 API 契约:EventEmitter / ModelRequestNode 链 / ModelConfig / TaskLifecycleNode 等接口
+├── every-agent-plugins/           # 内置插件:model-rate-limit(限流) / task-queue(队列) / subagent / git / ai-review / ...
 ├── every-agent-desktop/           # Electron 桌面打包
 ├── runtime/                       # 程序附属文件(rg 二进制、eagent-run.py、WSL 托管镜像)
 └── docs/ARCHITECTURE.md           # 本文档(唯一架构事实源)
