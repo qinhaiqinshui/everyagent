@@ -199,7 +199,7 @@ class ModelLengthGuardAdvisorTest {
     private static ModelLengthGuardAdvisor advisor(Flux<ChatClientResponse> source) {
         TaskEntry task = new TaskEntry("t_test", "测试",
                 new ModelConfig("cfg", "openai", "http://localhost", "test-model", null),
-                "key", "/tmp", "w_1", "a_test", 1000);
+                "/tmp", "w_1", "a_test", 1000);
         AgentEntity a = new AgentEntity(task, "a_test", AgentEntity.Kind.MAIN, "test", null,
                 OpenAiChatOptions.builder().build(), List.of());
         return new ModelLengthGuardAdvisor(a, new WorkerProperties(), STUB_ESTIMATOR);

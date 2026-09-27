@@ -45,7 +45,7 @@ class NetworkSlashProviderTest {
     private static TaskEntry newTask() {
         ModelConfig snap = new ModelConfig("cfg", "openai-compat",
                 "http://localhost:9999/v1", "m", null);
-        return new TaskEntry("t-1", "任务", snap, "k", "ws", "defaultworkspace", "main-agent", 10_000);
+        return new TaskEntry("t-1", "任务", snap, "ws", "defaultworkspace", "main-agent", 10_000);
     }
 
     private SlashCommandItem item() {

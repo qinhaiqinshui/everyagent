@@ -70,7 +70,7 @@ class ExternalFileTokenResolverTest {
     private static TaskEntry task(String workspaceRoot) {
         ModelConfig snap = new ModelConfig("cfg", "openai-compat",
                 "http://localhost:9999/v1", "m", null);
-        return new TaskEntry("t-1", "任务", snap, "k", workspaceRoot, "defaultworkspace", "main-agent", 10_000);
+        return new TaskEntry("t-1", "任务", snap, workspaceRoot, "defaultworkspace", "main-agent", 10_000);
     }
 
     /** 构造 external_file opaque token(absolutePath 传 null = payload 缺该字段)。 */
