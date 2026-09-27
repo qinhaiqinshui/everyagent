@@ -488,7 +488,9 @@ public final class TaskEvents implements AgentEventChannel {
     /**
      * 模型限流排队 trace(瞬态,不落盘;kind='model_rate_wait'):请求进入排队等待时发,
      * 前端据此展示「模型「X」正在排队(N/M)」。traceId 稳定(每个请求排队一段用同一 id
-     * 原地 upsert),由 {@code RateLimitedChatModel} 在等待轮询中调用。
+     * 原地 upsert)。
+     * <p>新路径：model-rate-limit 插件经 {@link #emit(String, JsonNode, boolean)} 发语义事件
+     * {@code "model_rate_wait"}，task 层映射为 wire 格式。本方法为直接调用入口（保留兼容）。
      *
      * @param traceId    同一次请求排队的稳定 id(空则新建;由调用方跨轮询复用)
      * @param configId   模型 configId

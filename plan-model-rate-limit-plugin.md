@@ -300,15 +300,15 @@ public class RateLimitNode implements ModelRequestNode {
     - 依赖：步骤 1、2
     - 验收标准：目录/pom/plugin.json/Plugin 入口类建立；`every-agent-plugins/pom.xml` 加入 module
 
-- [~] 步骤 4：搬迁限流逻辑到插件
-    - 状态：进行中（已派发）
+- [x] 步骤 4：搬迁限流逻辑到插件
+    - 状态：已完成（commit 7675152）
     - agent：`sub_hkl3i`
     - 依赖：步骤 3
     - 验收标准：6 个文件迁到插件包（ModelRateLimiter / RateLimitedChatModel→RateLimitNode / ModelRateLimitConfig / ModelRateLimiterRegistry / BuiltinTokenEstimator / TokenCalibrationAdvisor + Provider）；测试一并搬迁；`WorkerProperties.ModelRate` 留 worker；插件发语义事件名（如 `model_rate_wait`），task 层映射为 wire 格式（如 `task.trace` + kind）；`RateLimitNode` 从 `ctx.config().configId()` 和 `ctx.config().params()` 获取限流参数
 
-- [ ] 步骤 5：worker 核心清理残留
-    - 状态：待执行
-    - agent：-
+- [~] 步骤 5：worker 核心清理残留
+    - 状态：进行中（已派发）
+    - agent：`sub_hkl3j`
     - 依赖：步骤 4
     - 验收标准：worker 无限流器引用；`ConfigRpcHandler` 不再调 `rateLimitSnapshots()`；fallback `SimpleTokenEstimator` 就位；编译通过
 
