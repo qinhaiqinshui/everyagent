@@ -210,7 +210,7 @@ tryAcquire(model): // 起步前
   2. inFlight.tryAcquire(timeout) 失败 → 排队等释放
   3. tpmPressure() + estActiveTokens × safetyRatio 预估 > tpm → 排队等下降
   4. 通过 → rpmWindow 记录时间戳、inFlight.acquire()、返回放行句柄(含 tpm 释放回调)
-onChunk(text):     // 流中,由 RateLimitedChatModel 流式 tap 调用
+onChunk(text):     // 流中,由 RateLimitAdvisor 流式 tap 调用
   estActiveTokens += estTokens(text) × estFactor
 onComplete(usage): // 流完成
   tpmWindow 追加真实 (ts, in, out);inFlight.release();estActiveTokens 清零
@@ -266,17 +266,17 @@ onComplete(usage): // 流完成
 
 ## 8. 集成点
 
-### 8.1 `RateLimitedChatModel implements ChatModel`(装饰器,不动执行链)
+### 8.1 `RateLimitAdvisor implements CallAdvisor, StreamAdvisor`(Advisor 链注入,不动执行链)
 
-包住真实 ChatModel,注入同 configId 的 `ModelRateLimiter`:
+作为最内层 Advisor 注入,经 Reactor 操作符绑定 `ModelRateLimiter` 的 Permit 生命周期:
 
 - `call(prompt)`:起步 `tryAcquire` → 转调 → 完成 `onComplete(usage)`。
-- `stream(prompt)`:起步 `tryAcquire`(同步,在订阅前完成阻塞;虚拟线程可阻塞)→ 转调内层 stream → 对原始 chunk `doOnNext(onChunk)` 累计估算 → 完成/取消 `onComplete` 释放;中途取消走 `doFinally` 释放,防泄漏。
-- **不重写工具循环 / 响应聚合**,只是包了一层限流,红线合规。
+- `stream(prompt)`:起步 `tryAcquire`(同步,在订阅前完成阻塞;虚拟线程可阻塞)→ 转调内层 stream → 对原始 chunk `doOnNext(onChunk)` 累计估算 → 完成/取消 `doOnComplete`/`doOnCancel` 释放;中途取消走 `doOnError` 释放,防泄漏。
+- **不重写工具循环 / 响应聚合**,只是在 Advisor 链中包了一层限流,红线合规。
 
 ### 8.2 挂载位置
 
-- 普通模型:`ChatModelFactory.buildAgentModel` 里用 `RateLimitedChatModel` 包裹 `OpenAiChatModel`,并按 `cfg.snapshot().params()` 解析 rpm/并发/tpm(取 configId 限流器)。
+- 普通模型:`ChatModelFactory.buildAgentModel` 返回 `OpenAiChatModel`,限流经 `RateLimitAdvisor`(order=工具循环+500)在 Advisor 链最内层注入,按 `cfg.snapshot().params()` 解析 rpm/并发/tpm(取 configId 限流器)。
 - 池模型:`ModelPoolChatModel` 构建时对**每个成员**分别用成员自己的限流器包裹(成员自己 configId 的限额);池外壳配置了整池限额时,可再套一层池级限流器。
 - 主 agent / 子 agent / AI 审议生成的 ChatModel 全部经过 `ChatModelFactory`,**只需在工厂一处包裹,所有调用路径自动生效**。
 
@@ -294,7 +294,7 @@ onComplete(usage): // 流完成
 ## 9. 可选增强(第二期)
 
 已实现(P2):
-1. **排队 trace**:请求进入排队等待时,`RateLimitedChatModel` 经 `ModelRateLimiter` 的
+1. **排队 trace**:请求进入排队等待时,`RateLimitAdvisor` 经 `ModelRateLimiter` 的
    `onWait` 观察者发瞬态 `task.trace(kind=model_rate_wait)`,前端据此展示
    「模型「X」正在排队(在飞 N / 排队 M)」;按 `worker.limits.model-rate.wait-trace-threshold-ms`
    (默认 1000ms)节流,同一请求复用 traceId 原地 upsert。
@@ -326,7 +326,7 @@ onComplete(usage): // 流完成
 
 ## 11. 实施路线
 
-1. **P0 · 前置节流**:`ModelRateLimiter`(rpm 滑动窗口 + maxConcurrency 信号量 + 有界队列 + 超时异常)+ `RateLimitedChatModel` 装饰器 + `ChatModelFactory` 挂载 + 配置解析/校验。单测覆盖 §10 单元部分。
+1. **P0 · 前置节流**:`ModelRateLimiter`(rpm 滑动窗口 + maxConcurrency 信号量 + 有界队列 + 超时异常)+ `RateLimitAdvisor`(CallAdvisor/StreamAdvisor)+ `AdvisorProvider` 注册 + 配置解析/校验。单测覆盖 §10 单元部分。
 2. **P1 · tpm 记账与校准**:tpmWindow 实时记账 + 估算系数 EMA + `model-rate-state.json` 持久化(原子写/降级)。
 3. **P2 · 观测与提示**:`model_rate_wait` trace + config.get 透出排队信息 + 前端展示(可选)。
 4. 每个 P 完成后提交,中文一次一事。
