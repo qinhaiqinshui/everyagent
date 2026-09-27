@@ -24,6 +24,7 @@
         <module>subagent</module>
         <module>task-input-queue</module>
         <module>task-edit-resend</module>
+        <module>model-rate-limit</module>
     </modules>
 
     <build>
