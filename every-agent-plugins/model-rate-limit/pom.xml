@@ -11,7 +11,7 @@
 
     <artifactId>model-rate-limit</artifactId>
     <name>model-rate-limit</name>
-    <description>模型限流插件:经 ModelRequestNode 洋葱链注入限流逻辑</description>
+    <description>模型限流插件:经 Advisor 注入限流逻辑</description>
 
     <dependencies>
         <dependency>
