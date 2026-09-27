@@ -29,7 +29,7 @@ import java.util.Map;
  * <p>{@code provider: model-pool} 是「容灾池」配置:其 {@code model} 字段为逗号分隔的
  * 池成员 configId 列表(首个 = 主模型),{@link #resolve} 时解析出各成员的
  * {@link ResolvedConfig} 填入 {@link ResolvedConfig#poolMembers()},供
- * {@code ChatModelFactory} 构建 {@code ModelPoolChatModel}。池成员必须是普通模型(禁池套池)。
+ * {@code ChatModelFactory} 构建模型池插件产出的组合 ChatModel。池成员必须是普通模型(禁池套池)。
  */
 @Component
 public class ConfigStore {

@@ -1,0 +1,8 @@
+{
+  "id": "model-pool",
+  "name": "模型池容灾",
+  "version": "0.1.0",
+  "description": "模型池容灾插件:经 ChatModelEnhancer SPI 注入组合 ChatModel 构建",
+  "author": "everyagent",
+  "main": "dev.everyagent.plugin.modelpool.ModelPoolPlugin"
+}

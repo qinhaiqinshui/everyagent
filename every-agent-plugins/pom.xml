@@ -25,6 +25,7 @@
         <module>task-input-queue</module>
         <module>task-edit-resend</module>
         <module>model-rate-limit</module>
+        <module>model-pool</module>
     </modules>
 
     <build>

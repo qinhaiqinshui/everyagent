@@ -1,6 +1,7 @@
-package dev.everyagent.worker.task;
+package dev.everyagent.plugin.modelpool;
 
 import dev.everyagent.plugin.api.model.EmitEvent;
+import dev.everyagent.plugin.api.model.EventEmitter;
 import dev.everyagent.plugin.api.model.ModelConfig;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.messages.AssistantMessage;
@@ -26,14 +27,14 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * ModelPoolChatModel 单测(演进记录第 18 轮):池模型「请求异常换下一成员」的容灾逻辑。
- * 全部用 mock 成员 ChatModel / mock TaskEvents,不触网。
+ * ModelPoolChatModel 单测:池模型「请求异常换下一成员」的容灾逻辑。
+ * 全部用 mock 成员 ChatModel / mock EventEmitter,不触网。
  */
 class ModelPoolChatModelTest {
 
     private final ChatModel m1 = mock(ChatModel.class);
     private final ChatModel m2 = mock(ChatModel.class);
-    private final TaskEvents events = mock(TaskEvents.class);
+    private final EventEmitter events = mock(EventEmitter.class);
 
     private ModelPoolChatModel newPool() {
         return new ModelPoolChatModel(
@@ -130,7 +131,7 @@ class ModelPoolChatModelTest {
     // ---- 辅助 ----
 
     /** 匹配容灾切换到 cfg-2 的 TraceData 事件。 */
-    private boolean isFailoverToCfg2(dev.everyagent.plugin.api.model.EmitEvent e) {
+    private boolean isFailoverToCfg2(EmitEvent e) {
         if (!(e instanceof EmitEvent.TraceData t)) {
             return false;
         }

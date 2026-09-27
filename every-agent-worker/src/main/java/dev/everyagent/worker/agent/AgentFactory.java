@@ -73,7 +73,7 @@ public class AgentFactory {
                 tools.addAll(p.createTools(ctx));
             }
         }
-        // 模型装配:普通模型 → OpenAiChatModel;provider=model-pool → ModelPoolChatModel(自动容灾)。
+        // 模型装配:普通模型 → OpenAiChatModel;provider=model-pool → model-pool 插件(自动容灾)。
         // Agent 请求 options 基底:普通 = 自身快照,池 = 首成员(主模型)快照(上下文压缩等 advisor 据此读参数)。
         ChatModelFactory.AgentModel am = modelFactory.buildAgentModel(cfg, t.mainAgentId, t.events, null);
         AgentEntity main = new AgentEntity(t, t.mainAgentId, AgentEntity.Kind.MAIN, "主 agent",
@@ -103,7 +103,7 @@ public class AgentFactory {
                 tools.addAll(p.createTools(ctx));
             }
         }
-        // 模型装配:普通模型 → OpenAiChatModel;provider=model-pool → ModelPoolChatModel(自动容灾)。
+        // 模型装配:普通模型 → OpenAiChatModel;provider=model-pool → model-pool 插件(自动容灾)。
         ChatModelFactory.AgentModel am = modelFactory.buildAgentModel(cfg, agentId, task.events, null);
         AgentEntity agent = new AgentEntity(task, agentId, AgentEntity.Kind.SUB, title,
                 am.chatModel(), am.options(), tools);

@@ -10,7 +10,6 @@ import dev.everyagent.worker.task.AgentCancelledException;
 import dev.everyagent.worker.task.AgentEntity;
 import dev.everyagent.worker.task.ChatModelFactory;
 import dev.everyagent.worker.task.InterceptingToolCallingManager;
-import dev.everyagent.worker.task.ModelPoolChatModel;
 import dev.everyagent.worker.task.WorkerToolEventAdvisor;
 import dev.everyagent.worker.tools.MissingToolCallbackResolver;
 import org.springframework.ai.chat.client.ChatClient;
@@ -54,7 +53,7 @@ import java.util.List;
  * 模型请求前按窗口阈值压缩 instructions(§5.8),不等待 400 报错,压缩只改发送视图不动事实源。
  *
  * <p>容灾在<b>模型层</b>而非 advisor:任务 configId 指向 {@code provider: model-pool} 池配置时,
- * {@link ChatModelFactory#buildAgentModel} 产出的 chatModel 是 {@link ModelPoolChatModel}(组合
+ * {@link ChatModelFactory#buildAgentModel} 产出的 chatModel 是模型池插件产出的组合 ChatModel(组合
  * 各成员模型、按序容灾切换),主/子 agent 自动具备容灾;无需 slash、无需任务级开关、无需额外 advisor。
  *
  * <p>底层 {@link ChatModel} 仍 per-agent 独立(在 {@code TaskManager}/{@code SubAgentManager}
@@ -125,7 +124,7 @@ public class AgentClientFactory {
      * 替代原硬编码的 13 个 Advisor 创建与顺序。Advisor 的创建逻辑、顺序、参数由各
      * {@link dev.everyagent.worker.plugin.spi.AdvisorProvider} 适配器封装,行为零变化。
      *
-     * <p>容灾在模型层:任务 configId 为池配置时 a.chatModel 即 ModelPoolChatModel。
+     * <p>容灾在模型层:任务 configId 为池配置时 a.chatModel 即模型池插件产出的组合 ChatModel。
      * 工具集走 {@code a.tools}(prompt options.toolCallbacks),不在此 defaultTools 重复注册。
      */
     public ChatClient forMain(AgentEntity a, ToolCallingManager tcm) {
@@ -144,7 +143,7 @@ public class AgentClientFactory {
      * (按 {@link dev.everyagent.worker.plugin.spi.AdvisorProvider#order()} 排序)。
      *
      * <p>子 agent 不挂 skill、不挂派发工具、不注册 ask_user;容灾在模型层——任务 configId
-     * 为池配置时 a.chatModel 即 ModelPoolChatModel,子 agent 同样自动换池容灾。子 agent 的
+     * 为池配置时 a.chatModel 即模型池插件产出的组合 ChatModel,子 agent 同样自动换池容灾。子 agent 的
      * FileChangeAdvisor 只记录文件改动到共享回合槽,DialogInsertAdvisor 按 kind 旁路。
      */
     public ChatClient forSub(AgentEntity a, ToolCallingManager tcm) {

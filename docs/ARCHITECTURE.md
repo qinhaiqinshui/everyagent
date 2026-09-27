@@ -18,7 +18,7 @@ Every Agent 是一套「**公网可及、本机执行**」的 AI Agent 系统:AI
 | `every-agent-worker` | 执行器:Spring Boot + Spring AI 2,托管任务运行时、模型调用、workspace、沙箱进程 | 6102(仅本地健康检查) |
 | `every-agent-web` | 前端:React + TS,内置 TS 客户端 SDK,经 hub 遥控 worker | 5174(dev) |
 | `every-agent-contract` | 纯协议契约:帧信封 / RPC 信封 / 通用错误码 / 身份哈希(Java DTO + TS 类型) | — |
-| `every-agent-plugin-api` | 插件 API 契约:EventEmitter / ModelRequestNode 链 / ModelConfig / TaskLifecycleNode 等接口(纯类型,插件与 worker 共用) | — |
+| `every-agent-plugin-api` | 插件 API 契约:EventEmitter / EmitEvent / ModelRequestNode 链 / ChatModelEnhancer / ModelConfig / TaskLifecycleNode 等接口(纯类型,插件与 worker 共用) | — |
 | `every-agent-plugins` | 内置插件集:model-rate-limit(模型限流)、task-queue(任务队列)、subagent、git、ai-review 等 | — |
 | `every-agent-desktop` | Electron 桌面版:web + hub + worker 一体打包(Windows x64 便携/安装包) | 本地 6101/6102 |
 
@@ -339,11 +339,11 @@ RoundIndexAdvisor(轮次索引+耗时,最外层) → SkillAdvisor(内置 skill �
 
 ### 7.4 模型池容灾
 
-**模型池 = 一个模型 provider**(`provider: model-pool`,产出 `ModelPoolChatModel`),主/子 agent 与 AI 审议共用同一入口:
+**模型池 = 一个模型 provider**(`provider: model-pool`,经 `ChatModelEnhancer` SPI 委托给 `model-pool` 插件产出 `ModelPoolChatModel`),主/子 agent 与 AI 审议共用同一入口:
 
 - `worker.models` 里新增一种特殊配置项:`model` 字段用逗号分隔的池成员 configId 列表(`model: "deepseek,qwen"`,首个 = 主模型),configId 指向它即「任务默认带容灾」。
 - 池成员 config-id 不存在(笔误/漏配)为**非致命**配置错误:`ConfigStore` 启动解析时跳过该成员并 error 告警(容灾池本意即「单成员不可用不影响整体」),仅当池因此无任何有效成员时才拒绝启动;避免一个成员笔误崩掉整个 worker、连配置修复界面都进不去的死循环。
-- `ChatModelFactory.buildAgentModel` 遇到该 provider 产出 `ModelPoolChatModel`(组合各成员的 OpenAiChatModel,按序逐个尝试):请求异常(非网络、非终态)时切下一个成员重试——每个成员用**自己的完整 options 快照**(baseUrl/apiKey/model 在构建时固定),成功即返回该成员真实响应;网络异常、空响应耗尽、取消类原样上抛;流式带防重护栏(已下发 chunk 后流中断不切换)。容灾切换发 `task.trace(kind=model_failover)`。
+- `ChatModelFactory.buildAgentModel` 遇到该 provider 时经 `ChatModelEnhancerRegistry` 查找匹配的 enhancer（`model-pool` 插件注册的 `ModelPoolEnhancer`），委托其 `enhance(ctx)` 构建组合 `ModelPoolChatModel`(组合各成员的 OpenAiChatModel,按序逐个尝试):请求异常(非网络、非终态)时切下一个成员重试——每个成员用**自己的完整 options 快照**(baseUrl/apiKey/model 在构建时固定),成功即返回该成员真实响应;网络异常、空响应耗尽、取消类原样上抛;流式带防重护栏(已下发 chunk 后流中断不切换)。容灾切换经 `EventEmitter.emit(EmitEvent.TraceData.of("model_failover", ...))` 发 `task.trace(kind=model_failover)`。
 - 待池耗尽不做包络,最后异常原样上抛,交给外层瞬时错误重试 advisor 退避重跑。
 
 ### 7.4.1 模型请求限流(调用端 rpm/并发/tpm 闸门)
@@ -356,7 +356,7 @@ RoundIndexAdvisor(轮次索引+耗时,最外层) → SkillAdvisor(内置 skill �
 - 请求起步经 `ModelRateLimiter.acquire` 排队等放行:rpm 窗口 / 并发信号量 / tpm 压力三关;超限进有界等待队列(默认队列 8、等 5 分钟),**正常排队不报错**,仅队列满 + 超时才抛 `ModelRateLimitException`(非重试,文案含「减少并发派发/调大配置」建议)。阻塞等待发生在虚拟线程上(park,零线程开销)。
 - **tpm 记账**:流中无协议级 usage(OpenAI 兼容只在末帧带),故流中用自算文本 token 粗估(CJK≈1、其余≈4 字符 1 token)累计;请求完成后用厂商真实 usage 记账入 60s 窗口,并 EMA 反向校准估算系数(`token-est-factor`,每模型独立,持久化 `~/.everyagent/model-rate-state.json`,重启接续)。token 估算经 `ctx.onChunk`/`ctx.onComplete`/`ctx.onError` 回调驱动(§7.19 回调注册模式)。
 - 全局默认:`worker.limits.model-rate.{queue-capacity, wait-timeout-ms, est-window-sec, est-safety-ratio, est-ema-alpha, default-rpm, default-max-concurrency, default-tpm}`。
-- **观测**:排队等待经 `EventEmitter.emit("model_rate_wait", {configId, waiters, inFlight, tpmPressure}, false)` 发语义事件,task 层映射为瞬态 `task.trace(kind=model_rate_wait)`(前端展示「模型正在排队」,§7.19);插件未加载时无 `ModelRequestNode` → 直通 raw model → 不限流,worker 保留 fallback `SimpleTokenEstimator` 供 `ModelLengthGuardAdvisor`(§7.3)使用。
+- **观测**:排队等待经 `EventEmitter.emit(EmitEvent.TraceData.transientOf("model_rate_wait", null, "模型排队中", null, "waiting"))` 发语义事件,task 层映射为瞬态 `task.trace(kind=model_rate_wait)`(前端展示「模型正在排队」,§7.19);插件未加载时无 `ModelRequestNode` → 直通 raw model → 不限流,worker 保留 fallback `SimpleTokenEstimator` 供 `ModelLengthGuardAdvisor`(§7.3)使用。
 - **插件不耦合内核**:`RateLimitNode` 只依赖 `ModelRequestContext`(`ModelConfig` + `EventEmitter`),不耦合 `ChatModel`/`Prompt`/`ChatResponse`/`Flux`/`TaskEvents`/`agentId`/`taskId`/`DataPusher`。`ConfigRpcHandler.rateStatus` 返回空数组(插件后续自行注册 RPC 上报限流运行态)。
 
 ### 7.4.2 模型 HTTP 超时语义(callTimeout 解除,流式长思考不限总时长)
@@ -797,17 +797,17 @@ Input:  queued → consumed | discarded(任务取消)
 ```java
 // plugin-api: dev.everyagent.plugin.api.model
 public interface EventEmitter {
-    void emit(String eventName, JsonNode payload, boolean persist);
+    void emit(EmitEvent event);
 }
 ```
 
-插件/底层组件经此接口发射**语义事件**:只知道事件名 + payload + persist 标志,不知道 agentId/taskId/seq/wire 格式/前端展示方式。
+插件/底层组件经此接口发射**强类型事件载荷**(`EmitEvent`):当前唯一实现 `TraceData`(id/kind/title/summary/content/status/persist),不暴露 JsonNode,不知道 agentId/taskId/seq/wire 格式/前端展示方式。
 
 **分层管道**(语义→wire 映射在 task 层,§14.0):
 
 ```
 插件（限流器）
-  │  emitter.emit("model_rate_wait", {configId, waiters, inFlight, tpmPressure}, false)
+  │  emitter.emit(EmitEvent.TraceData.transientOf("model_rate_wait", null, "模型排队中", null, "waiting"))
   │  语义事件名,不是 wire 格式;不知道 task.trace / wf.trace
   ▼
 agent 层（ChatModelFactory.build() 内部 lambda）
@@ -815,7 +815,7 @@ agent 层（ChatModelFactory.build() 内部 lambda）
   ▼
 task 层（TaskEvents.emit）
   │  语义事件→wire 事件映射:
-  │  "model_rate_wait" → task.trace（payload 加 traceId/kind/title/summary/status/createdAt,原始 payload 作为 metadata）
+  │  instanceof TraceData → task.trace（kind=trace.kind, traceId=trace.id, title/summary/content/status/createdAt）
   │  "delta" → delta（直接透传）
   │  "error" → error（直接透传）
   │  然后 log.append(wireEventName, wirePayload, agentId, ext, !persist)
@@ -873,7 +873,7 @@ public interface ModelRequestContext {
 
 - `delegate` = 缓存的 `OpenAiChatModel`(按 configId 复用,不消费 context)。
 - `nodes` = 经 `ModelRequestNodeRegistry`(@Component,CopyOnWriteArrayList + float 稳定排序,同 `ToolProviderRegistry`/`TaskLifecycleRegistry` 模式)收集的插件节点。
-- `emitter` = EventEmitter lambda(填 agentId 后转发 `TaskEvents.emit`)。
+- `emitter` = EventEmitter lambda(转发 `TaskEvents.emit(EmitEvent)`)。
 - `config` = ModelConfig 只读参考,传给插件节点。
 - `stream(prompt)`: `Flux.defer(() -> { ctx = new ModelRequestContextImpl(config, emitter); return executeChain(nodes, 0, ctx, prompt); })`——订阅时执行(虚拟线程上)。
 - `call(prompt)`: 同步执行,call 完成后触发 `ctx.invokeOnComplete`。
@@ -886,7 +886,7 @@ public interface ModelRequestContext {
 
 限流插件是 EventEmitter + ModelRequestNode 的第一个使用者:
 
-- **`RateLimitNode` implements `ModelRequestNode`**:`invoke(ctx, next)` 中经 `ModelRateLimiterRegistry` 查限流配置(`ctx.config().configId()` + `ctx.config().params()`),无限流配置 → 直通 `next.proceed(ctx)`;有配置 → `limiter.acquire()` 排队等待(虚拟线程 park),等待期间经 `ctx.events().emit("model_rate_wait", {...}, false)` 发语义事件;放行后注册回调(`ctx.onChunk(permit::onChunk)` / `ctx.onComplete(permit::complete)` / `ctx.onError(permit::cancel)`),最后 `next.proceed(ctx)`。
+- **`RateLimitNode` implements `ModelRequestNode`**:`invoke(ctx, next)` 中经 `ModelRateLimiterRegistry` 查限流配置(`ctx.config().configId()` + `ctx.config().params()`),无限流配置 → 直通 `next.proceed(ctx)`;有配置 → `limiter.acquire()` 排队等待(虚拟线程 park),等待期间经 `ctx.events().emit(EmitEvent.TraceData.transientOf("model_rate_wait", ...))` 发语义事件;放行后注册回调(`ctx.onChunk(permit::onChunk)` / `ctx.onComplete(permit::complete)` / `ctx.onError(permit::cancel)`),最后 `next.proceed(ctx)`。
 - **6 个限流类搬到插件包**:`ModelRateLimiter` / `RateLimitNode`(原 `RateLimitedChatModel`) / `ModelRateLimitConfig` / `ModelRateLimiterRegistry` / `BuiltinTokenEstimator` / `TokenCalibrationAdvisor`(+ Provider);测试一并搬迁。
 - **不耦合内核**:插件只知道 `ModelRequestContext`(`ModelConfig` + `EventEmitter`),不耦合 `ChatModel`/`Prompt`/`ChatResponse`/`Flux`/`TaskEvents`/`agentId`/`taskId`/`DataPusher`。
 - **worker 核心清理**:无限流器引用;`ConfigRpcHandler.rateStatus` 返回空数组(插件后续自行注册 RPC);fallback `SimpleTokenEstimator` 就位(供 `ModelLengthGuardAdvisor` 使用)。
@@ -900,13 +900,32 @@ EventEmitter 是通用出口,后续把 `AgentEventChannel` 的 30 个具体方�
 | Phase | 内容 | 状态 |
 |---|---|---|
 | Phase 1(本次) | EventEmitter 接口 + WebSocketEmitter + 限流插件第一个使用 | ✅ 已完成 |
-| Phase 2 | `ModelPoolChatModel.modelFailoverSwitch` → emit | 待执行 |
+| Phase 2 | `ModelPoolChatModel` 容灾切换 → `emit(TraceData)` + `ChatModelEnhancer` SPI + `model-pool` 插件抽离 | ✅ 已完成 |
 | Phase 3 | Advisor 层事件(delta/thinking/usage/retry)→ emit | 待执行 |
 | Phase 4 | 生命周期事件(agent_started/done/status/error)→ emit | 待执行 |
 | Phase 5 | `AgentEventChannel` 瘦身为仅含 emit 的接口(30 方法胖接口消解) | 待执行 |
 | Phase 6 | 内核消费 ModelConfig(版本化缓存,支持动态配置热更新) | 待执行 |
 
-> `AgentEventChannel` 当前不动(30 方法胖接口是独立架构债,§14.0 改造纪律约束迁移过程)。每次迁移一个方法:插件/底层只发语义事件名,task 层做映射,推送层和前端不变。
+> `AgentEventChannel` 当前不动(30 方法胖接口是独立架构债,§14.0 改造纪律约束迁移过程)。每次迁移一个方法:插件/底层只发强类型 `EmitEvent` 载荷,task 层用 `instanceof` 判断类型做映射,推送层和前端不变。
+
+#### 7.19.7 ChatModelEnhancer SPI(plugin-api)
+
+与 `ModelRequestNode`（请求层增强）不同,`ChatModelEnhancer` 用于**模型构建层替换**——插件在 `ChatModelFactory` 构建阶段介入,组合多个成员模型。
+
+```java
+// plugin-api: dev.everyagent.plugin.api.model
+public interface ChatModelEnhancer {
+    String id();
+    boolean supports(String provider);
+    EnhancedChatModel enhance(EnhancerContext ctx);
+}
+```
+
+- `ChatModelFactory` 通过 `ChatModelEnhancerRegistry` 查找匹配的 enhancer(`find(provider)`),委托构建。
+- `EnhancerContext` 提供 `buildMember(MemberSpec)` 回调,让插件复用 `ChatModelFactory.build()` 构建单个成员模型(含洋葱链包装)。
+- `EnhancedChatModel` 返回组合 `ChatModel` + 主成员 `ChatOptions`。
+
+**`model-pool` 插件**(`every-agent-plugins/model-pool`):第一个 `ChatModelEnhancer` 使用者。检测 `provider=model-pool` → 用 `ctx.buildMember()` 逐成员构建 `ChatModel`,组装为 `ModelPoolChatModel`(按序容灾切换),返回 `EnhancedChatModel(pool, primaryOptions)`。容灾切换经 `EventEmitter.emit(EmitEvent.TraceData.of("model_failover", ...))` 发 trace,链状态 per-request 管理(`Flux.defer` 闭包内 `AtomicReference`)。
 
 ---
 
@@ -1040,7 +1059,7 @@ worker                         hub                    前端(可能 0 个在线)
 │   └─ src/main/java/.../proto/    # 业务常量住 worker:事件名 / DTO / RPC 方法名 / 频道构造 / 短 ID
 ├── every-agent-web/               # React 前端(内置 TS 客户端 SDK src/sdk/)
 ├── every-agent-contract/          # 纯协议契约:帧信封 / RPC 信封 / 错误码 / 身份哈希(Java DTO + TS 类型)
-├── every-agent-plugin-api/        # 插件 API 契约:EventEmitter / ModelRequestNode 链 / ModelConfig / TaskLifecycleNode 等接口
+├── every-agent-plugin-api/        # 插件 API 契约:EventEmitter / EmitEvent / ModelRequestNode 链 / ChatModelEnhancer / ModelConfig / TaskLifecycleNode 等接口(纯类型,插件与 worker 共用)
 ├── every-agent-plugins/           # 内置插件:model-rate-limit(限流) / task-queue(队列) / subagent / git / ai-review / ...
 ├── every-agent-desktop/           # Electron 桌面打包
 ├── runtime/                       # 程序附属文件(rg 二进制、eagent-run.py、WSL 托管镜像)
@@ -1120,12 +1139,12 @@ docker-compose 一键:`HUB_KEY=你的密钥 docker-compose up --build`;数据落
 本章是给实现者的红线清单:以下行为已定死,不按个人偏好变更。与其余章节冲突时,先改文档再改代码。
 
 0. **事件管道分层(类 OSI 七层)**:事件从产生到前端展示,经多层逐层包装/解包,每层只负责自己层的数据,不感知上下层语义:
-   - **插件/底层(最内层)**:发语义事件(`EventEmitter.emit("model_rate_wait", {configId, waiters, ...}, false)`),只知道事件名 + payload + persist 标志,不知道 agentId/taskId/seq/wire 格式/前端展示方式。
+   - **插件/底层(最内层)**:发语义事件(`EventEmitter.emit(EmitEvent.TraceData.transientOf("model_rate_wait", ...))`),只知道事件名 + payload + persist 标志,不知道 agentId/taskId/seq/wire 格式/前端展示方式。
    - **agent 层**:填 agentId(包装 payload 或附加参数),不知道 taskId/seq/wire 格式。
    - **task 层**(或以后的工作流层):语义事件→wire 事件映射(如 `model_rate_wait` → `task.trace` + kind/tile/summary/status/createdAt;`delta` → `delta`;`error` → `error`)、分配 seq、按 persist 落盘 jsonl。
    - **推送层(WebSocketEmitter)**:背压 + 定向推送到前端 websocket,不感知事件语义。
    - **前端(最外层)**:按 wire 事件名 + payload 字段映射为 trace/消息/状态等展示组件。
-   - **改造纪律**:后续把 `AgentEventChannel` 的 30 个具体方法逐步迁移到 `EventEmitter.emit()` 时,每迁一个方法:插件/底层只发语义事件名,task 层做映射,推送层和前端不变。以后工作流层实现自己的映射(task.trace → wf.trace,自己的包装格式),自己的推送管道,前端按工作流 wire 格式解析。**插件永远不感知 task 层语义(wire 事件名、traceId、seq 等)。**
+   - **改造纪律**:后续把 `AgentEventChannel` 的 30 个具体方法逐步迁移到 `EventEmitter.emit(EmitEvent)` 时,每迁一个方法:插件/底层只发强类型 `EmitEvent` 载荷,task 层用 `instanceof` 判断类型做映射,推送层和前端不变。以后工作流层实现自己的映射(task.trace → wf.trace,自己的包装格式),自己的推送管道,前端按工作流 wire 格式解析。**插件永远不感知 task 层语义(wire 事件名、traceId、seq 等)。**
 1. **编码、时间与 ID**:帧为 UTF-8 JSON;ts 一律 epoch 毫秒(UTC);短 ID 规则 `{前缀}_{3位盐}{base36 序号}`,全局唯一从不复用;ownerKey = sha256(apiKey) 64 位小写 hex。
 2. **频道与信封(hub 红线)**:频道名字符集 `[a-z0-9._-]` 长度 ≤160,必须以 `u.<ownerKey>.` 开头;hub 只解析 `type`/`channel`(及 hello 握手字段),`event`/`seq`/`payload`/`ext` 原样转发;不存在角色×频道权限矩阵;seq 只属于任务流事件空间,由 task.poll/stream 携带;error 分级(断开 vs 拒单帧);连接抢占(worker 同 clientId 新连关旧连)。
 3. **RPC 生命周期**:reqId 连接内唯一,ok/err 已出则后续同 reqId 帧忽略;未知 method → UNKNOWN_METHOD;参数不合法 → BAD_PARAMS;超时是纯客户端语义(SDK 默认 30s),要中断须显式 rpc.cancel;task.run 新建支持 idempotencyKey(10 分钟窗口去重);task.delete 是任务唯一删除路径,无任何自动清理。

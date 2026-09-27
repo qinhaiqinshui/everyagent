@@ -1,9 +1,12 @@
-package dev.everyagent.worker.task;
+package dev.everyagent.plugin.modelpool;
 
 import com.openai.errors.OpenAIIoException;
 import dev.everyagent.plugin.api.model.EmitEvent;
+import dev.everyagent.plugin.api.model.EventEmitter;
 import dev.everyagent.plugin.api.model.ModelConfig;
 import dev.everyagent.worker.proto.ShortIds;
+import dev.everyagent.worker.task.AgentCancelledException;
+import dev.everyagent.worker.task.ModelCallException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.messages.AssistantMessage;
@@ -27,6 +30,7 @@ import java.util.concurrent.atomic.AtomicReference;
 /**
  * 模型池 ChatModel(架构 §5.2 + 演进记录第 18 轮):`worker.models` 里
  * {@code provider: model-pool} 配置产出的组合模型。
+
  *
  * <p>职责:把「请求异常时换池内下一模型重试」的容灾做成 <b>ChatModel 层能力</b>——
  * 普通模型 / 主 agent / 子 agent / AI 审议只要 configId 指向池配置,构建出的 chatModel
@@ -44,7 +48,7 @@ import java.util.concurrent.atomic.AtomicReference;
  * 退避重跑(用户决策:容灾耗尽不代表上游重试也应放弃,429/5xx 仍按既有退避策略重试)。
  *
  * <p>流式防重复护栏:已下发任何正文/推理/工具调用 chunk 后流中断的不切换(重放会造成
- * 前端 delta 重复),原错误上抛——与 {@link TransientErrorRetryAdvisor} 的护栏同语义。
+ * 前端 delta 重复),原错误上抛——与 {@code TransientErrorRetryAdvisor} 的护栏同语义。
  *
  * <p>options 处理(Spring AI 2.0.1:OpenAiChatModel 把 baseUrl/apiKey 固定在建模型时,
  * prompt 携带 options 不再与模型默认 options 合并):每个成员在 {@code ChatModelFactory}
@@ -65,7 +69,7 @@ public class ModelPoolChatModel implements ChatModel {
     private final List<OpenAiChatOptions> memberOptions;
     private final List<ModelConfig> memberSnapshots;
     /** 任务事件发射器(发容灾切换 trace);可为 null = 不发 trace 仅记日志。 */
-    private final TaskEvents events;
+    private final EventEmitter events;
     /** 日志归属 agent(仅日志前缀,不发事件)。 */
     private final String agentId;
     /**
@@ -77,7 +81,7 @@ public class ModelPoolChatModel implements ChatModel {
     private final OpenAiChatOptions defaultOptions;
 
     public ModelPoolChatModel(List<ChatModel> members, List<OpenAiChatOptions> memberOptions,
-            List<ModelConfig> memberSnapshots, TaskEvents events, String agentId) {
+            List<ModelConfig> memberSnapshots, EventEmitter events, String agentId) {
         this.members = List.copyOf(members);
         this.memberOptions = List.copyOf(memberOptions);
         this.memberSnapshots = List.copyOf(memberSnapshots);
@@ -259,7 +263,7 @@ public class ModelPoolChatModel implements ChatModel {
     /**
      * 响应/单 chunk 是否携带有效信号(正文/reasoning/工具调用任一非空):
      * 流式防重复护栏用——已有信号下发后的流中断不换模型,避免重放重复
-     * (判定口径与 {@link TransientErrorRetryAdvisor#hasSignal} 一致)。
+     * (判定口径与 {@code TransientErrorRetryAdvisor#hasSignal} 一致)。
      */
     private static boolean hasSignal(ChatResponse response) {
         if (response == null || response.getResult() == null || response.getResult().getOutput() == null) {

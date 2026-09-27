@@ -90,6 +90,7 @@
         </resources>
         <plugins>
             <!-- worker 自身即启动模块:repackage 产出可执行 boot jar(合并原 every-agent-app 职责) -->
+            <!-- classifier=exec:覆盖 parent 默认 repackage,可执行 jar 单独命名,原始 jar 保留供插件模块依赖 -->
             <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
@@ -98,9 +99,13 @@
                 </configuration>
                 <executions>
                     <execution>
+                        <id>repackage</id>
                         <goals>
                             <goal>repackage</goal>
                         </goals>
+                        <configuration>
+                            <classifier>exec</classifier>
+                        </configuration>
                     </execution>
                 </executions>
             </plugin>
