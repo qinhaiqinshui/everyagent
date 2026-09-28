@@ -1,6 +1,10 @@
 package dev.everyagent.worker.task;
 
+import dev.everyagent.contract.json.Json;
+import dev.everyagent.plugin.api.model.EmitEvent;
+import dev.everyagent.worker.proto.Events;
 import dev.everyagent.worker.proto.Events.ToolCallPart;
+import dev.everyagent.worker.proto.SnowflakeId;
 import dev.everyagent.worker.proto.TaskDtos.Usage;
 import org.springframework.ai.chat.client.ChatClientRequest;
 import org.springframework.ai.chat.client.ChatClientResponse;
@@ -14,11 +18,13 @@ import org.springframework.ai.model.tool.ToolCallingManager;
 import org.springframework.ai.model.tool.ToolExecutionResult;
 import reactor.core.publisher.Flux;
 import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.node.ObjectNode;
 
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -63,6 +69,8 @@ public class WorkerToolEventAdvisor extends ToolCallingAdvisor {
     private final AgentEntity a;
     /** 思考累积值追踪(跨轮差分,防串轮;adviseStream tap 与 doAfterStream 共用)。 */
     private final AtomicReference<String> thinkingAcc = new AtomicReference<>("");
+    /** 本轮事件 id(雪花):每轮模型响应首 chunk 分配,delta/thinking/message 共用;message 后清零。 */
+    private final AtomicLong roundId = new AtomicLong(0);
 
     public WorkerToolEventAdvisor(ToolCallingManager toolCallingManager, AgentEntity a) {
         super(toolCallingManager, DEFAULT_TOOL_EXECUTION_ELIGIBILITY_CHECKER, DEFAULT_ORDER, true);
@@ -106,15 +114,18 @@ public class WorkerToolEventAdvisor extends ToolCallingAdvisor {
             return;
         }
         AssistantMessage out = cr.getResult().getOutput();
+        long rid = ensureRoundId();
         String piece = out.getText();
         if (piece != null && !piece.isEmpty()) {
-            a.task.events.delta(a.agentId, piece);
+            a.agentEmitter.emit(EmitEvent.transientOf(rid, Events.DELTA,
+                    null, null, null, piece, null, null, EmitEvent.Mode.APPEND));
         }
         String thinking = thinkingOf(out);
         if (!thinking.isEmpty()) {
             String diff = diffThinking(thinking);
             if (!diff.isEmpty()) {
-                a.task.events.thinking(a.agentId, diff);
+                a.agentEmitter.emit(EmitEvent.transientOf(rid, Events.THINKING,
+                        null, null, null, diff, null, null, EmitEvent.Mode.APPEND));
             }
         }
     }
@@ -141,7 +152,7 @@ public class WorkerToolEventAdvisor extends ToolCallingAdvisor {
                 a.agentId, a.task.taskId,
                 out.getToolCalls() != null && !out.getToolCalls().isEmpty(),
                 Thread.currentThread().getName());
-        String agentId = a.agentId;
+        long rid = ensureRoundId();
         // 文本(逐字 delta 已在 adviseStream tap 逐 chunk 发出;此处只记终值供收口/子 agent 结果用)
         String text = out.getText() == null ? "" : out.getText();
         if (!text.isEmpty()) {
@@ -153,7 +164,8 @@ public class WorkerToolEventAdvisor extends ToolCallingAdvisor {
         if (!thinking.isEmpty()) {
             String diff = diffThinking(thinking);
             if (!diff.isEmpty()) {
-                a.task.events.thinking(agentId, diff);
+                a.agentEmitter.emit(EmitEvent.transientOf(rid, Events.THINKING,
+                        null, null, null, diff, null, null, EmitEvent.Mode.APPEND));
             }
         }
         // 最近活动快照(§5.6,list_agents/wait_agents 契约的 latestActivity):
@@ -172,7 +184,14 @@ public class WorkerToolEventAdvisor extends ToolCallingAdvisor {
         // 顺序纪律:message 必须最先于 usage 发——本轮 delta/thinking/message 共享
         // 同一轮 seq,若 usage 的独立雪花 seq 先到,前端折叠器(同轮同 seq,其余按 seq 递增)
         // 会把随后到达的 message(seq 较小)判为旧轮丢弃,权威定型帧丢失。
-        a.task.events.message(agentId, thinking, text, parts);
+        ObjectNode messageData = Json.obj();
+        if (!thinking.isEmpty()) {
+            messageData.put("thinking", thinking);
+        }
+        messageData.set("toolCalls", EventPayloads.toolCallsToJson(parts));
+        a.agentEmitter.emit(EmitEvent.of(rid, Events.MESSAGE,
+                null, null, null, text, null, messageData, EmitEvent.Mode.REPLACE));
+        roundId.set(0);
         // 队列续跑修复:把「最终回答轮」(无工具调用的收口轮)回写会话内存。
         // 同一次运行内,下一条排队输入会被 consumeInput 直接 append 到 conversation;
         // 若本轮 assistant 回复不回写,模型将看到两条连续 user 消息(a、b)而重复回答上一轮。
@@ -194,8 +213,16 @@ public class WorkerToolEventAdvisor extends ToolCallingAdvisor {
                 // 先把本轮累计进实体,再发射 usage:同一帧的 total 即含本轮的真实累计
                 // (usage 事件 total 载荷 / 台账 usage / agent.done 用量的共同供体)。
                 a.addUsage(round);
-                a.task.events.usage(agentId, a.options.getModel(), contextWindowTokens(), roundUsage,
-                        a.usageRef().get());
+                ObjectNode usageData = Json.obj();
+                usageData.put("model", a.options.getModel());
+                Long cwt = contextWindowTokens();
+                if (cwt != null) {
+                    usageData.put("contextWindowTokens", cwt);
+                }
+                usageData.set("round", Json.toJson(roundUsage));
+                usageData.set("total", Json.toJson(a.usageRef().get()));
+                a.agentEmitter.emit(EmitEvent.of(SnowflakeId.next(), Events.USAGE,
+                        null, null, null, null, null, usageData, EmitEvent.Mode.REPLACE));
                 // 最近一轮实测 usage 按 agent 记录(主/子都写;供 ContextCompressionAdvisor 读取 offset),
                 // 同时保存累计 usage 与上下文快照(台账 usage/context 字段供体)。
                 a.recordLastRound(roundUsage, a.usageRef().get(), contextWindowTokens(), a.options.getModel());
@@ -230,7 +257,6 @@ public class WorkerToolEventAdvisor extends ToolCallingAdvisor {
         // 表现为「工具 ×N」的重复孤儿块)。这里以本轮 assistant 消息下发的 toolCall id 为
         // 白名单,只发射匹配项,历史结果一律跳过。白名单为空(拿不到本轮 id 的异常形态)时
         // 保守跳过发射,绝不重放历史,避免再次污染事件流。
-        String agentId = a.agentId;
         Set<String> currentCallIds = currentRoundToolCallIds(chatClientResponse);
         if (currentCallIds.isEmpty()) {
             return super.doGetNextInstructionsForToolCallStream(chatClientRequest, chatClientResponse,
@@ -252,7 +278,13 @@ public class WorkerToolEventAdvisor extends ToolCallingAdvisor {
                         if (truncated) {
                             summary = summary.substring(0, MAX_TOOL_EVENT_CHARS) + "…(截断)";
                         }
-                        a.task.events.toolResult(r.id(), r.name(), summary, truncated, agentId);
+                        ObjectNode toolResultData = Json.obj();
+                        toolResultData.put("callId", r.id());
+                        toolResultData.put("name", r.name());
+                        toolResultData.put("truncated", truncated);
+                        a.agentEmitter.emit(EmitEvent.of(SnowflakeId.next(), Events.TOOL_RESULT,
+                                null, null, summary, null, null, toolResultData,
+                                EmitEvent.Mode.REPLACE));
                     }
                 }
             }
@@ -320,5 +352,15 @@ public class WorkerToolEventAdvisor extends ToolCallingAdvisor {
         }
         thinkingAcc.set(accumulated);
         return accumulated;
+    }
+
+    /** 确保本轮已分配雪花 id(轮首 delta/thinking 到来时分配,message 后清零)。 */
+    private long ensureRoundId() {
+        long rid = roundId.get();
+        if (rid == 0) {
+            rid = SnowflakeId.next();
+            roundId.set(rid);
+        }
+        return rid;
     }
 }
