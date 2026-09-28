@@ -312,7 +312,7 @@ public class WorkerProperties {
         private long shipStallMs = 60_000;
         /**
          * 模型流「无输出」判定窗口(ms):流在超过该时长无任何 chunk(思考/正文)时触发
-         * {@code ModelLengthGuardAdvisor} 的 finish_reason=length 判定(若自估输出 token
+         * {@code model-length-guard 插件} 的 finish_reason=length 判定(若自估输出 token
          * 已≈maxTokens)。须短于 model-timeout-ms(默认 10 分钟)才能避免空等读超时。默认 120s。
          */
         private long modelLengthStallMs = 120_000;
@@ -627,6 +627,14 @@ public class WorkerProperties {
             public void setFallbackRounds(int fallbackRounds) {
                 this.fallbackRounds = fallbackRounds;
             }
+        }
+
+        public ModelRate getModelRate() {
+            return modelRate;
+        }
+
+        public void setModelRate(ModelRate modelRate) {
+            this.modelRate = modelRate == null ? new ModelRate() : modelRate;
         }
     }
 
