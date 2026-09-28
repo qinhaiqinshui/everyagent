@@ -34,22 +34,6 @@ export interface ComposerTokenResolution {
   agentMetadataPatch?: Record<string, unknown>
 }
 
-/** 任务阻塞状态（由 `task.get_blocking_state` 扩展点产出）。 */
-export interface TaskBlockingState {
-  /** 当前是否处于阻塞（如等待用户确认）。 */
-  blocked: boolean
-  /** 阻塞原因说明。 */
-  reason?: string
-}
-
-/** 线程条目视图增强（由 `ui.thread_item_view` 扩展点产出）。 */
-export interface ThreadItemViewEnhancement {
-  /** 在条目上展示的徽标文本（如来源 skill / 命令）。 */
-  badges?: string[]
-  /** 附加说明文本。 */
-  annotation?: string
-}
-
 /**
  * 侧边栏入口定义（由 `ui.sidebar_items` 扩展点产出）。
  *
@@ -155,48 +139,6 @@ export interface UiFileSidebarPanelDefinition {
   }>
 }
 
-/**
- * 任务文件列表“更多”菜单操作上下文（核心在调用动作时传入）。
- * 不含任何业务语义，仅描述被操作文件的位置与名称。
- */
-export interface TaskFileMoreActionContext {
-  /** 当前任务 ID。 */
-  taskId: string
-  /** 文件相对任务文件根目录的路径（如 `chapter1.md` 或 `sub/x.md`）。 */
-  fileRelativePath: string
-  /** 文件名（用于展示与提示）。 */
-  fileName: string
-}
-
-/**
- * 任务文件列表“更多”菜单动作的执行结果。
- * 动作通过返回值上报结果，由核心统一做 toast 反馈。
- */
-export interface TaskFileMoreActionResult {
-  /** 是否成功。 */
-  ok: boolean
-  /** 反馈文案（成功或失败提示）。 */
-  message: string
-}
-
-/**
- * 任务文件列表“更多”菜单的可扩展操作项（由 `ui.task_file_more_actions` 扩展点产出）。
- * 动作携带运行期回调 `invoke`，核心不感知具体业务（如复制到小说空间）。
- */
-export interface TaskFileMoreAction {
-  /** 全局唯一动作 id。 */
-  id: string
-  /** 菜单展示文案。 */
-  label: string
-  /** 可选图标（React 节点）。 */
-  icon?: ReactNode
-  /** 可选说明。 */
-  description?: string
-  /** 点击后的执行回调；返回结果对象用于 toast，返回 null 表示静默（如用户取消）。 */
-  invoke?: (
-    ctx: TaskFileMoreActionContext,
-  ) => void | Promise<void | TaskFileMoreActionResult | null>
-}
 
 /**
  * 工具调用视图接管定义（由 `ui.tool_call_views` 扩展点产出）。
@@ -248,23 +190,6 @@ export interface TaskListGroup<T = TaskListGroupItem> {
   defaultCollapsed?: boolean
 }
 
-/**
- * 输入框下方、模型选择行的插件控件（由 `ui.composer_footer_controls` 扩展点产出）。
- * 核心在模型选择行收集并渲染；插件自管草稿态，经 onChange 上报。
- */
-export interface UiComposerFooterControlDefinition {
-  /** 全局唯一控件 id（同时作为草稿值存储 key）。 */
-  id: string
-  /** 渲染控件。 */
-  render: (ctx: {
-    /** 当前草稿值。 */
-    value: unknown
-    /** 草稿值变化时上报（由核心桥接到提交流程）。 */
-    onChange: (next: unknown) => void
-    /** 是否移动端。 */
-    isMobile: boolean
-  }) => ReactNode
-}
 
 /**
  * 输入框上方 UI 槽位的上下文（由核心在 dispatch 时传入）。

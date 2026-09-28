@@ -19,10 +19,8 @@ import type {
   UiSidebarItemDefinition,
   UiWorkspaceTabTypeDefinition,
   UiFileSidebarPanelDefinition,
-  UiComposerFooterControlDefinition,
   UiComposerAbovePanelDefinition,
   ToolCallViewDefinition,
-  TaskFileMoreAction,
   UiUserMessageActionDefinition,
   TaskRunSubmitContributionProvider,
 } from './types'
@@ -40,10 +38,8 @@ import {
 const EXT_UI_SIDEBAR_ITEMS = 'ui.sidebar_items'
 const EXT_UI_WORKSPACE_TAB_TYPES = 'ui.workspace_tab_types'
 const EXT_UI_FILE_SIDEBAR_PANELS = 'ui.file_sidebar_panels'
-const EXT_UI_COMPOSER_FOOTER_CONTROLS = 'ui.composer_footer_controls'
 const EXT_UI_COMPOSER_ABOVE_PANEL = 'ui.composer_above_panel'
 const EXT_UI_TOOL_CALL_VIEWS = 'ui.tool_call_views'
-const EXT_UI_TASK_FILE_MORE_ACTIONS = 'ui.task_file_more_actions'
 const EXT_UI_USER_MESSAGE_ACTIONS = 'ui.user_message_actions'
 const EXT_TASK_SUBMIT_CONTRIBUTIONS = 'task.submit_contributions'
 const EXT_UI_FILE_CONTENT_EDITORS = 'ui.file_content_editors'
@@ -84,28 +80,20 @@ export interface RealPluginDispatcher {
   getWorkspaceTabTypes: () => Promise<UiWorkspaceTabTypeDefinition[]>
   /** 文件页侧栏面板。 */
   getFileSidebarPanels: () => Promise<UiFileSidebarPanelDefinition[]>
-  /** 输入框下方控件。 */
-  getComposerFooterControls: () => Promise<UiComposerFooterControlDefinition[]>
   /** 输入框上方面板。 */
   getComposerAbovePanels: () => Promise<UiComposerAbovePanelDefinition[]>
   /** 已注册的工具调用视图接管（供 toolViews 注册表解析合并，同步）。 */
   listRegisteredToolCallViews: () => ToolCallViewDefinition[]
-  /** 任务文件更多操作。 */
-  getTaskFileMoreActions: () => Promise<TaskFileMoreAction[]>
   /** 注册侧边栏项。 */
   registerSidebarItem: (def: UiSidebarItemDefinition) => Disposable
   /** 注册工作区标签类型。 */
   registerWorkspaceTabType: (def: UiWorkspaceTabTypeDefinition) => Disposable
   /** 注册文件页侧栏面板。 */
   registerFileSidebarPanel: (def: UiFileSidebarPanelDefinition) => Disposable
-  /** 注册输入框下方控件。 */
-  registerComposerFooterControl: (def: UiComposerFooterControlDefinition) => Disposable
   /** 注册输入框上方面板。 */
   registerComposerAbovePanel: (def: UiComposerAbovePanelDefinition) => Disposable
   /** 注册工具调用视图接管。 */
   registerToolCallView: (def: ToolCallViewDefinition) => Disposable
-  /** 注册任务文件更多操作。 */
-  registerTaskFileMoreAction: (action: TaskFileMoreAction) => Disposable
   /** 注册用户消息动作。 */
   registerUserMessageAction: (def: UiUserMessageActionDefinition) => Disposable
   /** 同步获取插件注册的用户消息动作列表（供消息线程渲染合并）。 */
@@ -158,13 +146,9 @@ export const pluginDispatcher: RealPluginDispatcher = {
         return getRegistry<T>(extensionPoint).getAll()
       case EXT_UI_FILE_SIDEBAR_PANELS:
         return getRegistry<T>(extensionPoint).getAll()
-      case EXT_UI_COMPOSER_FOOTER_CONTROLS:
-        return getRegistry<T>(extensionPoint).getAll()
       case EXT_UI_COMPOSER_ABOVE_PANEL:
         return getRegistry<T>(extensionPoint).getAll()
       case EXT_UI_TOOL_CALL_VIEWS:
-        return getRegistry<T>(extensionPoint).getAll()
-      case EXT_UI_TASK_FILE_MORE_ACTIONS:
         return getRegistry<T>(extensionPoint).getAll()
       case EXT_UI_USER_MESSAGE_ACTIONS:
         return getRegistry<T>(extensionPoint).getAll()
@@ -188,17 +172,11 @@ export const pluginDispatcher: RealPluginDispatcher = {
   async getFileSidebarPanels() {
     return getRegistry<UiFileSidebarPanelDefinition>(EXT_UI_FILE_SIDEBAR_PANELS).getAll()
   },
-  async getComposerFooterControls() {
-    return getRegistry<UiComposerFooterControlDefinition>(EXT_UI_COMPOSER_FOOTER_CONTROLS).getAll()
-  },
   async getComposerAbovePanels() {
     return getRegistry<UiComposerAbovePanelDefinition>(EXT_UI_COMPOSER_ABOVE_PANEL).getAll()
   },
   listRegisteredToolCallViews() {
     return getRegistry<ToolCallViewDefinition>(EXT_UI_TOOL_CALL_VIEWS).getAll()
-  },
-  async getTaskFileMoreActions() {
-    return getRegistry<TaskFileMoreAction>(EXT_UI_TASK_FILE_MORE_ACTIONS).getAll()
   },
 
   registerSidebarItem(def) {
@@ -210,17 +188,11 @@ export const pluginDispatcher: RealPluginDispatcher = {
   registerFileSidebarPanel(def) {
     return getRegistry<UiFileSidebarPanelDefinition>(EXT_UI_FILE_SIDEBAR_PANELS).register('', def)
   },
-  registerComposerFooterControl(def) {
-    return getRegistry<UiComposerFooterControlDefinition>(EXT_UI_COMPOSER_FOOTER_CONTROLS).register('', def)
-  },
   registerComposerAbovePanel(def) {
     return getRegistry<UiComposerAbovePanelDefinition>(EXT_UI_COMPOSER_ABOVE_PANEL).register('', def)
   },
   registerToolCallView(def) {
     return getRegistry<ToolCallViewDefinition>(EXT_UI_TOOL_CALL_VIEWS).register('', def)
-  },
-  registerTaskFileMoreAction(action) {
-    return getRegistry<TaskFileMoreAction>(EXT_UI_TASK_FILE_MORE_ACTIONS).register('', action)
   },
   registerUserMessageAction(def) {
     return getRegistry<UiUserMessageActionDefinition>(EXT_UI_USER_MESSAGE_ACTIONS).register('', def)

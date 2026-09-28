@@ -287,40 +287,6 @@ export interface UiFileSidebarPanelDefinition<F extends PluginFileResource = Plu
   }>
 }
 
-/** 任务文件列表"更多"菜单操作上下文。 */
-export interface TaskFileMoreActionContext {
-  /** 当前任务 ID。 */
-  taskId: string
-  /** 文件相对任务文件根目录的路径。 */
-  fileRelativePath: string
-  /** 文件名。 */
-  fileName: string
-}
-
-/** 任务文件列表"更多"菜单动作的执行结果。 */
-export interface TaskFileMoreActionResult {
-  /** 是否成功。 */
-  ok: boolean
-  /** 反馈文案。 */
-  message: string
-}
-
-/** 任务文件列表"更多"菜单的可扩展操作项。 */
-export interface TaskFileMoreAction {
-  /** 全局唯一动作 id。 */
-  id: string
-  /** 菜单展示文案。 */
-  label: string
-  /** 可选图标。 */
-  icon?: ReactNode
-  /** 可选说明。 */
-  description?: string
-  /** 点击后的执行回调。 */
-  invoke?: (
-    ctx: TaskFileMoreActionContext,
-  ) => void | Promise<void | TaskFileMoreActionResult | null>
-}
-
 // ─── 工具调用视图接管（ui.tool_call_views） ────────────────────────────────
 
 /**
@@ -400,33 +366,9 @@ export interface TaskListGroup<T = TaskListGroupItem> {
 
 // ─── 任务阻塞状态 / 线程条目增强 ──────────────────────────────────────────
 
-/** 任务阻塞状态。 */
-export interface TaskBlockingState {
-  blocked: boolean
-  reason?: string
-}
-
-/** 线程条目视图增强。 */
-export interface ThreadItemViewEnhancement {
-  badges?: string[]
-  annotation?: string
-}
-
 // ─── 输入框扩展点 ─────────────────────────────────────────────────────────
 
-/** 输入框下方、模型选择行的插件控件定义。 */
-export interface UiComposerFooterControlDefinition {
-  /** 全局唯一控件 id。 */
-  id: string
-  /** 渲染控件。 */
-  render: (ctx: {
-    value: unknown
-    onChange: (next: unknown) => void
-    isMobile: boolean
-  }) => ReactNode
-}
-
-/** 输入框上方 UI 槽位的上下文。 */
+// ─── 输入框上方面板 ─────────────────────────────────────────────────────
 export interface ComposerPanelCtx {
   /** 当前任务 ID（草稿态为 undefined）。 */
   taskId: string | undefined
@@ -666,10 +608,8 @@ export interface UiRegistry {
   registerSidebarItem(def: UiSidebarItemDefinition): Disposable
   registerWorkspaceTabType(def: UiWorkspaceTabTypeDefinition): Disposable
   registerFileSidebarPanel(def: UiFileSidebarPanelDefinition): Disposable
-  registerComposerFooterControl(def: UiComposerFooterControlDefinition): Disposable
   registerComposerAbovePanel(def: UiComposerAbovePanelDefinition): Disposable
   registerToolCallView(def: ToolCallViewDefinition): Disposable
-  registerTaskFileMoreAction(action: TaskFileMoreAction): Disposable
   registerUserMessageAction(def: UiUserMessageActionDefinition): Disposable
   registerTaskRunSubmitContributionProvider(provider: TaskRunSubmitContributionProvider): Disposable
   registerTraceType(def: TraceTypeDefinition): Disposable
