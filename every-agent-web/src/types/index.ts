@@ -159,13 +159,15 @@ export interface TaskFileChange {
 
 /**
  * 完整 user.message 事件 payload（rounds.jsonl 每轮 userMessage 项，懒加载骨架起点）。
- * worker 写 text（AI 可见明文）；rawContent 为原始输入（含 opaque token 串，仅用于前端
- * 回放还原胶囊），旧 worker / 纯文本输入缺失。预留宽松索引兼容未来扩展。
+ * 统一事件模型：worker 写 content（AI 可见明文）；rawContent 在 data.rawContent 中
+ * （原始输入含 opaque token 串，仅用于前端回放还原胶囊），旧 worker / 纯文本输入缺失。
+ * 预留宽松索引兼容未来扩展。
  */
 export interface UserMessagePayload {
-  text: string
-  /** 原始输入（含 opaque token 串，仅用于前端回放还原胶囊；可选）。 */
-  rawContent?: string
+  /** AI 可见明文（统一事件模型：原 text → content）。 */
+  content: string
+  /** kind 专属数据（rawContent 等在此）。 */
+  data?: { rawContent?: string; [key: string]: unknown }
   [key: string]: unknown
 }
 

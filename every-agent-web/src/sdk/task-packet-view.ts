@@ -380,7 +380,9 @@ export class TaskPacketView {
     
     if (frame.event === 'message.edited' && frame.payload) {
       const payload = frame.payload as Record<string, unknown>
-      const editedSeq = String(payload.seq ?? frame.seq ?? '')
+      const data = (payload.data != null && typeof payload.data === 'object' && !Array.isArray(payload.data))
+        ? (payload.data as Record<string, unknown>) : undefined
+      const editedSeq = String(data?.seq ?? payload.seq ?? frame.seq ?? '')
       if (!editedSeq) return
       // 截断缓冲
       this.buffer.truncateAfter(editedSeq)
@@ -514,7 +516,7 @@ export class TaskPacketView {
         event: eventName,
         agentId: packet.agentId,
         initial,
-        payload: { text: appended.text },
+        payload: { content: appended.text },
       })
       return true
     }

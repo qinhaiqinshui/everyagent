@@ -4,7 +4,7 @@
  * 新协议:每轮 AI 回复 = 1 个 seq(round id,后端 Snowflake 64 位 long),同轮多帧
  * 用 operate 字段区分语义——
  * - replace(缺省):无该 seq → 新建数据包;有该 seq → 用新帧整体替换;
- * - append:取出旧包,把 payload.text 追加到对应字段:thinking→payload.thinking,
+ * - append:取出旧包,把 payload.content 追加到对应字段:thinking→payload.thinking,
  *   delta→payload.content,其他 event→payload.content(兜底)。
  *
  * 数组按键 seq 去重(key 统一转 string:Snowflake 超过 Number.MAX_SAFE_INTEGER,
@@ -117,7 +117,7 @@ export class TaskPacketBuffer {
       if (operate === 'append') {
         // 首帧即 append(订阅中途进入的流式中):按 append 语义落字段
         const field = appendFieldFor(frame.event)
-        const text = String(payload.text ?? '')
+        const text = String(payload.content ?? '')
         packet.payload = { ...(packet.payload ?? {}), [field]: (packet.payload?.[field] ?? '') + text }
         return { packet, changed: text.length > 0, appended: { field, text } }
       }
@@ -133,9 +133,9 @@ export class TaskPacketBuffer {
       return { packet: existing, changed: true }
     }
 
-    // 有该 seq + append → 按 event 把 payload.text 追加到旧包对应字段
+    // 有该 seq + append → 按 event 把 payload.content 追加到旧包对应字段
     const field = appendFieldFor(frame.event)
-    const text = String(payload.text ?? '')
+    const text = String(payload.content ?? '')
     const current = existing.payload?.[field] ?? ''
     existing.payload = { ...(existing.payload ?? {}), [field]: current + text }
     existing.version++

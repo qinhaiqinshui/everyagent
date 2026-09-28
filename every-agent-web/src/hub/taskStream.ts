@@ -196,13 +196,17 @@ class ManagedStream {
 
   private dispatchAskEvent(event: { event: string; payload: any; initial?: boolean }): void {
     const payload = event.payload ?? {}
-    const askId = String(payload.askId ?? '')
+    // 新 wire 形状：ask 专属数据在 payload.data 中，agentId 在 payload 顶层。
+    const data = (payload.data != null && typeof payload.data === 'object' && !Array.isArray(payload.data))
+      ? (payload.data as Record<string, unknown>) : {}
+    const askId = String(data.askId ?? payload.askId ?? '')
     if (!askId) return
     if (event.event === 'ask.resolved') {
       settleAsk(askId)
       return
     }
-    if (event.event === 'ask.state' && payload.status !== 'pending') {
+    const askStatus = String(data.status ?? payload.status ?? '')
+    if (event.event === 'ask.state' && askStatus !== 'pending') {
       settleAsk(askId)
       return
     }
@@ -210,7 +214,16 @@ class ManagedStream {
     // 已完成任务回放时 ask.resolved 紧随其后,flush 前 ask 被 settle → 跳过 emit,悬浮窗不闪;
     // 运行中任务刷新页面时 50ms 内无新帧 → flush 统一 emit,立即弹出弹窗/悬浮窗。
     // 实时(非 initial)ask.create 走完整弹出路径。
-    upsertPendingAsk(this.taskId, payload as WorkerAskPayload, { initial: event.initial ?? false })
+    const askPayload: WorkerAskPayload = {
+      askId,
+      kind: data.kind as string | undefined,
+      question: data.question as string | undefined,
+      options: data.options as string[] | undefined,
+      questions: data.questions as any,
+      status: askStatus || undefined,
+      agentId: payload.agentId as string | undefined,
+    }
+    upsertPendingAsk(this.taskId, askPayload, { initial: event.initial ?? false })
   }
 
   /**

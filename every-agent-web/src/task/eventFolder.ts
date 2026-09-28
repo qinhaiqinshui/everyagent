@@ -8,9 +8,9 @@
  *
  * 折叠规则(与 n 的写入语义对齐):
  * 事件名不分主/子 agent——同一名事件,归属由 agentId 字段决定(空 = 主线程);
- * - user.message           → role:'user' 消息
- * - thinking / delta       → 当前流式 assistant 消息的 reasoning / content 追加(瞬态)
- * - message                → 一轮权威终结:完整 reasoning/content/toolCalls(真实 toolCall id)
+ * - user.message           → role:'user' 消息(payload.content + payload.data.rawContent)
+ * - thinking / delta       → 当前流式 assistant 消息的 reasoning / content 追加(瞬态,payload.content)
+ * - message                → 一轮权威终结:完整 content/data.thinking/data.toolCalls(真实 toolCall id)
  *                           定稿该 agent 的流式消息
  * - usage                  → 主 agent 上下文用量快照(contextUsage,不进线程);主/子统一的
  *                           累计用量/上下文快照同时维护 agentMeta(不进线程)
@@ -19,8 +19,9 @@
  *                           (标题/创建时间/收口累计用量)
  * - error                  → trace(带 agentId = 子任务出错;缺省 = 任务出错)
  * - cancelled              → trace
- * - task.trace             → 统一纯显示 trace(重试生命周期/任务耗时等):按 payload.traceId
- *                           原地 upsert(有则覆盖内容、无则新增),见 {@link #upsertTrace}
+ * - retry / context.compression / model.failover / model.switch / auth.review / system.notice
+ *                           → 统一纯显示 trace:按 seq 原地 upsert(有则覆盖内容、无则新增),
+ *                           见 {@link #upsertTraceBySeq}
  * - ask.*                  → 不进线程(卡片由 askStore 单独驱动)
  *
  * 数据包协议:一轮 AI 回复 = 1 个 seq,同轮 thinking/delta/message 同 seq 连续到达(占同一位置),
@@ -39,6 +40,7 @@ import type {
   TaskTraceRecord,
 } from '@/types'
 import type { TaskAgentLedgerItem } from '@/sdk/task-poll'
+import { getHandler, defaultHandler } from './eventRegistry'
 
 /**
  * 统一线程项(与 n 的 taskQueryService 同形,聊天页聚合展示单位)。
@@ -126,12 +128,11 @@ export class TaskEventFolder {
    * seq 键控索引(键 = String(event.seq)) → 线程项:
    * - 去重/定位主键:items 保持按 seq 升序,新 seq 插入按序定位;同 seq 更新原地、不移动位置。
    * - 轮事件(thinking/delta/message)同 seq 共享同一条 agent_message item,只能更新不可重复插入;
-   *   非轮 item 事件同 seq 已存在 → 忽略(重连重放去重);task.trace 事件自身 seq 也登记于此。
+   *   非轮 item 事件同 seq 已存在 → 忽略(重连重放去重);trace 族事件自身 seq 也登记于此。
    * - 值随 wrapper 替换(如 foldRole 打标、trace 原地 upsert)同步刷新为 items 中的当前对象。
    */
   private bySeq = new Map<string, TaskThreadItem>()
-  /** traceId → 首次到达的 seq(固定该 trace 线程项的排序位置;后续同 traceId 事件原地 upsert 不移动)。 */
-  private traceSeq = new Map<string, number | string>()
+
 
   constructor(public state: TaskThreadState) {
     // 防御:旧 state 形状可能缺 agentMeta(本项目前端不做持久化缓存,理论上无旧数据,
@@ -140,7 +141,7 @@ export class TaskEventFolder {
   }
 
   /**
-   * 重置:清空全部状态(items/bySeq/traceSeq/anchors)。
+   * 重置:清空全部状态(items/bySeq/anchors)。
    * resync 时重新从 task.rounds 拉取并 foldRound 前调用,
    * 避免旧 items(编辑前的轮次,seq 已过期)与新轮次混排。
    * 保留 taskId,重置其余字段到空态。
@@ -152,14 +153,13 @@ export class TaskEventFolder {
     this.state.contextUsage = null
     this.state.taskModel = null
     this.bySeq.clear()
-    this.traceSeq.clear()
     this.anchors.streaming.clear()
     this.anchors.toolNames.clear()
     this.anchors.subTitles.clear()
   }
 
   /**
-   * 折叠一个事件。
+   * 折叠一个事件：查表分发到注册 handler，未注册 kind 走 defaultHandler。
    *
    * 数据包协议:一轮 AI 回复 = 1 个 seq,同轮 thinking/delta/message 同 seq(占同一条线程项);
    * 其余事件各占独立 seq。折叠器按 seq 键控增量 upsert:
@@ -167,204 +167,16 @@ export class TaskEventFolder {
    *   assistant 消息并按 seq 插入。message 是该轮权威整轮(定稿 content/reasoning/toolCalls)。
    * - 非轮 item 事件(user.message/tool.result/agent.started/agent.done/error/cancelled):
    *   同 seq 已存在 → 忽略(重连重放去重);不存在 → 新建并按 seq 插入。
-   * - task.trace:按 traceId 原地 upsert(同 traceId 覆盖内容、不新增线程项);事件自身 seq 去重。
+   * - trace 族(retry/context.compression/model.failover/model.switch/auth.review/system.notice):
+   *   按 seq upsert(同 seq 覆盖内容、不新增线程项)。
    * - usage/agent.status/ask.* 等非 item 事件幂等处理,不参与 seq 去重。
    *
    * 返回 true 表示状态有变化(UI 需重渲染)。
    */
   fold(event: FoldableTaskEvent): boolean {
-    const agentKey = event.agentId ?? (event.payload?.agentId as string | undefined) ?? ''
-    const ts = event.ts || Date.now()
-    const seqKey = String(event.seq)
-    switch (event.event) {
-      case 'user.message': {
-        if (this.bySeq.has(seqKey)) return false
-        // content 用 AI 可见明文（payload.text）；rawContent 优先用 payload.rawContent
-        // （前端提交时随输入一并持久化的原始 opaque 串），缺失时退化为 text（纯文本输入/旧 worker）。
-        // 回放只消费 rawContent 里的 opaque token 来还原胶囊，composerTokens 数组在此不带
-        // （自包含解析，见 AgentMessageThread）。
-        const text = String(event.payload?.text ?? '')
-        const rawContent = typeof event.payload?.rawContent === 'string' && event.payload.rawContent.length
-          ? event.payload.rawContent
-          : text
-        this.insertMessage(agentKey, {
-          messageId: `m-${event.seq}`,
-          agentId: agentKey,
-          role: 'user',
-          content: text,
-          rawContent,
-          historyMode: 'thread_only',
-          createdAt: ts,
-          updatedAt: ts,
-          sequence: Number(event.seq),
-        }, seqKey)
-        return true
-      }
-      case 'thinking':
-      case 'delta':
-        this.appendRoundText(event.event, agentKey, ts, event.seq, String(event.payload?.text ?? ''))
-        return true
-      case 'message':
-        this.completeMessage(agentKey, event.payload, ts, event.seq)
-        return true
-      case 'tool.result': {
-        if (this.bySeq.has(seqKey)) return false
-        const callId = String(event.payload?.callId ?? '')
-        this.closeStreamingByAgent(agentKey)
-        this.insertMessage(agentKey, {
-          messageId: `m-${event.seq}`,
-          agentId: agentKey,
-          role: 'tool',
-          content: String(event.payload?.summary ?? ''),
-          historyMode: 'thread_only',
-          createdAt: ts,
-          updatedAt: ts,
-          sequence: Number(event.seq),
-          toolCallId: callId,
-          toolName: this.anchors.toolNames.get(callId) ?? '',
-          status: 'success',
-          metadata: event.payload?.truncated ? { truncated: true } : undefined,
-        }, seqKey)
-        return true
-      }
-      case 'agent.started': {
-        if (this.bySeq.has(seqKey)) return false
-        const subAgentId = agentKey
-        const title = String(event.payload?.title ?? '')
-        if (subAgentId) this.anchors.subTitles.set(subAgentId, title)
-        // agentMeta:登记子 agent 基线(id/标题/创建时间;流事件实时数据,晚于 task.agents seed 覆盖)。
-        this.mergeAgentMeta(agentKey, {
-          agentId: agentKey,
-          title: title !== '' ? title : undefined,
-          createdAt: ts,
-        })
-        // 兜底:worker 已补发 agent.status(running);旧磁盘回放无该事件时由此推导
-        if (subAgentId) this.state.agentStates[subAgentId] = 'running'
-        return true
-      }
-      case 'agent.done': {
-        if (this.bySeq.has(seqKey)) return false
-        this.closeStreamingByAgent(agentKey)
-        this.state.agentStates[agentKey] = 'completed' // 兜底(权威由 agent.status done 提供)
-        // agentMeta:收口合并累计用量(payload.usage 非空时)与更新时间。
-        const doneUsage = readUsage(event.payload?.usage)
-        this.mergeAgentMeta(agentKey, {
-          inputTokens: doneUsage?.inputTokens,
-          outputTokens: doneUsage?.outputTokens,
-          totalTokens: doneUsage?.totalTokens,
-          updatedAt: ts,
-        })
-        return true
-      }
-      case 'agent.status': {
-        // 主/子统一状态事件(权威):归属同 delta/message——主 agent payload 无 agentId(缺省=主线程),
-        // 子 agent 由 wireEvent 注入 agentId。纯状态更新,不进线程 items。
-        // worker 侧枚举是 running/waiting-user/done/failed/stopped(见 Events.AgentStatus),
-        // 其中 done/failed 需映射到前端 vocabulary(completed/error),否则主 agent 终态
-        // 会被丢弃、永远停在 running(子 agent 靠 agent.done 兜底才有 completed)。
-        const mapped = mapAgentStatus(String(event.payload?.status ?? ''))
-        if (mapped) {
-          this.state.agentStates[agentKey] = mapped
-        }
-        return true
-      }
-      case 'usage': {
-        // 主 agent(agentId 空)的单轮实测用量驱动任务级上下文电池(子 agent 不驱动电池);
-        // 主/子统一的累计用量与上下文快照同时维护 agentMeta(胶囊列表/悬停卡片数据源)。
-        const round = readUsage(event.payload?.round)
-        const total = readUsage(event.payload?.total)
-        if (!agentKey && round) {
-          const maxTokens = readNum(event.payload?.contextWindowTokens) ?? DEFAULT_CONTEXT_WINDOW_TOKENS
-          const model = readStr(event.payload?.model)
-          this.state.contextUsage = {
-            promptTokens: round.inputTokens,
-            completionTokens: round.outputTokens,
-            totalTokens: total?.totalTokens ?? round.totalTokens,
-            maxTokens,
-            usageRatio: maxTokens > 0 ? round.inputTokens / maxTokens : 0,
-            lastUpdatedAt: ts,
-            requestType: 'chatStream',
-            model: model ?? '',
-          }
-        }
-        this.mergeAgentMeta(agentKey, {
-          contextUsed: round?.inputTokens,
-          contextWindow: readNum(event.payload?.contextWindowTokens),
-          model: readStr(event.payload?.model),
-          inputTokens: total?.inputTokens,
-          outputTokens: total?.outputTokens,
-          totalTokens: total?.totalTokens,
-          updatedAt: ts,
-        })
-        return true
-      }
-      case 'error': {
-        if (this.bySeq.has(seqKey)) return false
-        // 同名事件,归属由 agentId 决定:带 agentId = 子 agent 失败,缺省 = 任务失败。
-        const message = String(event.payload?.message ?? '')
-        this.closeStreamingByAgent(agentKey)
-        this.state.agentStates[agentKey] = 'error' // 兜底(权威由 agent.status failed 提供)
-        this.insertTrace(ts, {
-          traceId: `t-${event.seq}`,
-          taskId: this.state.taskId,
-          agentId: agentKey || undefined,
-          kind: 'run_error',
-          title: agentKey ? '子任务出错' : '任务出错',
-          summary: message,
-          content: message,
-          createdAt: ts,
-        }, event.seq)
-        return true
-      }
-      case 'cancelled': {
-        if (this.bySeq.has(seqKey)) return false
-        this.closeStreamingByAgent('')
-        this.state.agentStates[''] = 'stopped' // 兜底:任务取消 = 主 agent 停止
-        this.insertTrace(ts, {
-          traceId: `t-${event.seq}`,
-          taskId: this.state.taskId,
-          kind: 'system_notice',
-          title: '任务已取消',
-          summary: `由 ${String(event.payload?.by ?? '用户')} 取消`,
-          createdAt: ts,
-        }, event.seq)
-        return true
-      }
-      case 'task.trace':
-        // 统一纯显示 trace(重试生命周期/任务耗时等):按 traceId 原地 upsert——
-        // 已有同 id 则覆盖内容(同一波重试的 attempt/progress/resolved 共用一条),无则新增。
-        // 同时该事件自身的 seq 也去重:同一 seq 重复到达不重复 upsert。
-        if (this.bySeq.has(seqKey)) return false
-        {
-          const item = this.upsertTrace(agentKey, event.payload, ts, event.seq)
-          if (item) this.bySeq.set(seqKey, item)
-        }
-        return true
-      case 'ask.create':
-        // 兜底:该 agent(主/子)挂起等待用户(权威由 agent.status waiting-user 提供;ask 事件不进线程)
-        this.state.agentStates[agentKey] = 'waiting-user'
-        return true
-      case 'ask.resolved': {
-        // 兜底:回答/超时后该 agent 恢复执行(权威由 agent.status running 提供);
-        // cancelled 不动——随后任务 cancelled 事件会把主 agent 置 stopped。
-        const resolvedStatus = String(event.payload?.status ?? '')
-        if (resolvedStatus !== 'cancelled') {
-          this.state.agentStates[agentKey] = 'running'
-        }
-        return true
-      }
-      case 'message.edited': {
-        // 消息编辑重发:截断 seq >= editedSeq 的所有线程项(含旧 user.message)。
-        // 移除 editedSeq 处的旧 user.message,
-        // 新内容由后续 consumeInput 写新的 user.message 推送。
-        const editedSeq = String(event.payload?.seq ?? event.seq)
-        this.truncateAfterSeq(editedSeq)
-        return true
-      }
-      default:
-        // ask.state 等其余事件由 askStore 驱动卡片,不进线程。
-        return true
-    }
+    const handler = getHandler(event.event)
+    if (handler) return handler.handle(event, this.state, this)
+    return defaultHandler(event, this.state, this)
   }
 
   /** 折叠一批事件,返回是否有变化。 */
@@ -393,9 +205,9 @@ export class TaskEventFolder {
     let changed = false
     if (!this.bySeq.has(startSeqKey)) {
       // 完整 userMessage payload 优先(懒加载骨架起点);旧行缺失回退 user 文本摘要。
-      const userText = round.userMessage?.text ?? round.user
-      const userRaw = (round.userMessage?.rawContent && round.userMessage.rawContent.length)
-        ? round.userMessage.rawContent
+      const userText = round.userMessage?.content ?? round.user
+      const userRaw = (round.userMessage?.data?.rawContent && round.userMessage.data.rawContent.length)
+        ? round.userMessage.data.rawContent
         : userText
       const userMessage: AgentMessageRecord = {
         messageId: `m-${round.startSeq}`,
@@ -564,6 +376,23 @@ export class TaskEventFolder {
     return this.state.agentStates[agentId] ?? 'idle'
   }
 
+  // ---- 公共 helper（供 eventRegistry handler 调用） ----
+
+  /** 检查某 seq 是否已折入（去重判定）。 */
+  hasSeq(seqKey: string): boolean {
+    return this.bySeq.has(seqKey)
+  }
+
+  /** 获取工具名（callId → name，由 message 事件的 toolCalls 注册）。 */
+  getToolName(callId: string): string {
+    return this.anchors.toolNames.get(callId) ?? ''
+  }
+
+  /** 设置子 agent 标题（agent.started 事件注入）。 */
+  setSubTitle(agentId: string, title: string): void {
+    if (agentId) this.anchors.subTitles.set(agentId, title)
+  }
+
   // ---- 内部 ----
 
   /**
@@ -571,7 +400,7 @@ export class TaskEventFolder {
    * 保证 task.agents 台账 seed 不回退流事件已写入的更新时间)。键语义同 agentStates/
    * 线程项:主 agent = 空串,子 agent = 子 id。返回 true 表示该键快照有变化。
    */
-  private mergeAgentMeta(agentKey: string, patch: Partial<AgentMetaSnapshot>): boolean {
+  mergeAgentMeta(agentKey: string, patch: Partial<AgentMetaSnapshot>): boolean {
     const prev = this.state.agentMeta[agentKey]
     const next: AgentMetaSnapshot = {
       agentId: patch.agentId ?? prev?.agentId ?? agentKey,
@@ -597,7 +426,7 @@ export class TaskEventFolder {
    * 原始 seq 字符串 seqKey——Snowflake 大数转 Number 有精度损失,去重键与排序键都必须用原始串)。
    * 用户回合边界关闭该 agent 的流式锚点;折叠扫描:用户消息标 foldRole='user'(折叠窗口起点,右侧一条)。
    */
-  private insertMessage(agentKey: string, message: AgentMessageRecord, seqKey: string): void {
+  insertMessage(agentKey: string, message: AgentMessageRecord, seqKey: string): void {
     if (message.role === 'user') {
       this.closeStreamingByAgent(agentKey)
     }
@@ -612,9 +441,9 @@ export class TaskEventFolder {
 
   /**
    * 截断:移除所有 seq >= targetSeq 的线程项(消息编辑重发时,worker 已截断磁盘,
-   * 前端同步移除本地线程中后续的 AI 回复/工具调用/trace 等)。同时清理 bySeq/traceSeq 索引。
+   * 前端同步移除本地线程中后续的 AI 回复/工具调用/trace 等)。同时清理 bySeq 索引。
    */
-  private truncateAfterSeq(targetSeq: string): void {
+  truncateAfterSeq(targetSeq: string): void {
     const items = this.state.items
     let i = 0
     while (i < items.length) {
@@ -627,20 +456,15 @@ export class TaskEventFolder {
         if (this.bySeq.get(seqKey) === removed) {
           this.bySeq.delete(seqKey)
         }
-        // 清理 traceSeq(trace 项)
-        if (removed.type === 'task_trace') {
-          this.traceSeq.delete(removed.trace.traceId)
-        }
       } else {
         i++
       }
     }
   }
 
-  /** 插入一条 task_trace 到 items(按 seq 升序定位),并登记 traceId → 原始 seq(固定位置)。 */
-  private insertTrace(ts: number, trace: TaskTraceRecord, seq: number | string): TaskThreadItem {
+  /** 插入一条 task_trace 到 items(按 seq 升序定位)。 */
+  insertTrace(ts: number, trace: TaskTraceRecord, seq: number | string): TaskThreadItem {
     const item: TaskThreadItem = { type: 'task_trace', createdAt: ts, trace }
-    this.traceSeq.set(trace.traceId, seq)
     this.insertItemBySeq(item, seq, String(seq))
     return item
   }
@@ -666,21 +490,22 @@ export class TaskEventFolder {
 
   /**
    * 线程项的精确排序 seq:agent_message 优先从 messageId(`m-` 前缀 + 原始 seq 串)反推,
-   * 保留 Snowflake 大数精度(message.sequence 只是 Number 近似值);task_trace 用首达 seq
-   * (traceSeq 表,按原始 number|string 保存)。返回类型为 number | string,比较用 compareSeq。
+   * 保留 Snowflake 大数精度(message.sequence 只是 Number 近似值);task_trace 从 traceId
+   * (`t-` 前缀 + 原始 seq 串)反推。返回类型为 number | string,比较用 compareSeq。
    */
-  private seqOfItem(item: TaskThreadItem): number | string {
+  seqOfItem(item: TaskThreadItem): number | string {
     if (item.type === 'agent_message') {
       const mid = item.message.messageId
       if (mid && mid.startsWith('m-')) return mid.slice(2)
       return item.message.sequence ?? 0
     }
-    const seq = this.traceSeq.get(item.trace.traceId)
-    return seq == null ? 0 : seq
+    const tid = item.trace.traceId
+    if (tid && tid.startsWith('t-')) return tid.slice(2)
+    return 0
   }
 
   /** wrapper 被替换(如 foldRole 打标、trace 原地 upsert)后,把 bySeq 同步到 items 中的当前对象。 */
-  private syncBySeqItem(item: TaskThreadItem): void {
+  syncBySeqItem(item: TaskThreadItem): void {
     if (item.type === 'agent_message') {
       // messageId 恒为 `m-${原始 seq}`:从 messageId 反推,保留 Snowflake 大数字符串精度;
       // message.sequence 只是 Number 近似值(仅展示),去重键与排序键都走原始串(见 seqOfItem)。
@@ -690,50 +515,63 @@ export class TaskEventFolder {
       this.bySeq.set(seqKey, item)
       return
     }
-    const seq = this.traceSeq.get(item.trace.traceId)
-    if (seq != null) this.bySeq.set(String(seq), item)
+    // task_trace:从 traceId(`t-${seq}`)反推 seqKey
+    const tid = item.trace.traceId
+    if (tid && tid.startsWith('t-')) {
+      this.bySeq.set(tid.slice(2), item)
+    }
   }
 
   /**
-   * task.trace 事件折叠:按 payload.traceId 原地 upsert(仿 node 侧 append/updateTaskTrace)。
-   * 同一 traceId 的后续事件(如 retry.progress 每秒刷新)只覆盖内容,不新增线程项,
-   * 位置由首达 seq 固定(traceSeq 表)不变;status/title/summary 由 worker 逐阶段更新。
-   * 事件自身 seq 的去重由调用方(fold 的 task.trace 分支)完成。
-   * 返回当前线程项(新建或原地更新的同一对象),供调用方登记 bySeq。
+   * trace 事件折叠:按 seq 原地 upsert。
+   * 同一 seq 的后续事件(如 retry.progress 每秒刷新)只覆盖内容,不新增线程项,
+   * 位置由首达 seq 固定不变;title/summary/content/status/data 由 worker 逐阶段更新。
+   * kind 现在直接用 event.event(不再从 payload.kind 读取);metadata → data(payload.data)。
+   * 返回当前线程项(新建或原地更新的同一对象)。
    */
-  private upsertTrace(
+  upsertTraceBySeq(
     agentKey: string,
+    eventKind: string,
     payload: Record<string, unknown>,
     ts: number,
     seq: number | string,
   ): TaskThreadItem | undefined {
-    const traceId = String(payload?.traceId ?? '')
-    if (!traceId) {
-      return undefined
-    }
+    const seqKey = String(seq)
+    const traceId = `t-${seq}`
+    const data = (payload?.data != null && typeof payload.data === 'object' && !Array.isArray(payload.data))
+      ? (payload.data as Record<string, unknown>)
+      : undefined
     const rawContent = payload?.content
     const trace: TaskTraceRecord = {
       traceId,
       taskId: this.state.taskId,
       agentId: agentKey || undefined,
-      kind: String(payload?.kind ?? 'system_notice'),
+      kind: eventKind,
       title: readStr(payload?.title) ?? '',
       summary: readStr(payload?.summary),
       content: rawContent != null ? String(rawContent) : undefined,
-      createdAt: Number(payload?.createdAt ?? ts),
-      metadata:
-        payload?.metadata && typeof payload.metadata === 'object'
-          ? (payload.metadata as Record<string, unknown>)
-          : undefined,
+      createdAt: ts,
+      metadata: data,
     }
-    const idx = this.state.items.findIndex(
+    // 按 seq upsert:同 seq 已有 trace → 原地更新;新 seq → 插入。
+    const existing = this.bySeq.get(seqKey)
+    if (existing && existing.type === 'task_trace') {
+      const idx = this.state.items.indexOf(existing)
+      if (idx >= 0) {
+        const updated: TaskThreadItem = { type: 'task_trace', createdAt: ts, trace }
+        this.state.items[idx] = updated
+        this.bySeq.set(seqKey, updated)
+        return updated
+      }
+    }
+    // 也检查 items 中是否有同 traceId 的 trace（防御:bySeq 可能因外部操作未同步）
+    const traceIdx = this.state.items.findIndex(
       (it) => it.type === 'task_trace' && it.trace.traceId === traceId,
     )
-    if (idx >= 0) {
-      // 原地替换同 id trace(位置不动,TaskThread 按 items 顺序渲染即跟随更新)。
-      const updated: TaskThreadItem = { type: 'task_trace', createdAt: trace.createdAt ?? ts, trace }
-      this.state.items[idx] = updated
-      this.syncBySeqItem(updated) // 该 trace 首达 seq 的索引同步到新 wrapper
+    if (traceIdx >= 0) {
+      const updated: TaskThreadItem = { type: 'task_trace', createdAt: ts, trace }
+      this.state.items[traceIdx] = updated
+      this.syncBySeqItem(updated)
       return updated
     }
     return this.insertTrace(ts, trace, seq)
@@ -746,7 +584,7 @@ export class TaskEventFolder {
    *   避免把权威整轮内容叠坏;
    * - 该 seq 尚无线程项 → 新建流式 assistant 消息按 seq 插入,并登记 seq 锚点。
    */
-  private appendRoundText(
+  appendRoundText(
     kind: 'thinking' | 'delta',
     agentKey: string,
     ts: number,
@@ -827,7 +665,7 @@ export class TaskEventFolder {
    * 锚点按 seq 键控后同一 agent 平时至多一条在飞;即便提前关闭锚点,线程项与 bySeq 索引仍保留,
    * 后续迟到的同 seq message 会经 bySeq 复用同一条,不会重复插入。
    */
-  private closeStreamingByAgent(agentKey: string): void {
+  closeStreamingByAgent(agentKey: string): void {
     for (const seqKey of Array.from(this.anchors.streaming.keys())) {
       const message = this.anchors.streaming.get(seqKey)
       if (message && (message.agentId ?? '') === agentKey) {
@@ -847,11 +685,13 @@ export class TaskEventFolder {
    * 完成后关闭该轮流式锚点;主 agent 无工具调用且有正文 → foldRole='final_reply' 打标。
    * thinking 是完整整轮文本(替换式),toolCalls 为模型真实 id,与 tool.result 按 callId 配对。
    */
-  private completeMessage(agentKey: string, payload: Record<string, unknown>, ts: number, seq: number | string): void {
+  completeMessage(agentKey: string, payload: Record<string, unknown>, ts: number, seq: number | string): void {
     const seqKey = String(seq)
-    const thinking = typeof payload?.thinking === 'string' ? payload.thinking : ''
-    const text = typeof payload?.text === 'string' ? payload.text : ''
-    const toolCalls = readToolCalls(payload?.toolCalls)
+    const data = (payload?.data != null && typeof payload.data === 'object' && !Array.isArray(payload.data))
+      ? (payload.data as Record<string, unknown>) : undefined
+    const thinking = typeof data?.thinking === 'string' ? data.thinking : ''
+    const text = typeof payload?.content === 'string' ? payload.content : ''
+    const toolCalls = readToolCalls(data?.toolCalls)
     let message: AgentMessageRecord
     let isNew = false
     const streaming = this.anchors.streaming.get(seqKey)
@@ -956,7 +796,7 @@ export class TaskEventFolder {
  * Number() 在 2^53 之上会丢失整数精度(相邻两个大数坍缩为同一 double),
  * 因此这里把 seq 统一按十进制大整数字符串比较:先比符号/位数,再比字典序。
  */
-function compareSeq(a: number | string, b: number | string): number {
+export function compareSeq(a: number | string, b: number | string): number {
   const sa = typeof a === 'number' ? String(a) : a
   const sb = typeof b === 'number' ? String(b) : b
   const na = sa[0] === '-'
@@ -979,7 +819,7 @@ function seqFromMessageId(messageId: string): string | null {
 }
 
 /** message.toolCalls 数组 → LLMToolCall[](模型真实 id;name 缺省补登记表)。 */
-function readToolCalls(value: unknown): LLMToolCall[] {
+export function readToolCalls(value: unknown): LLMToolCall[] {
   if (!Array.isArray(value)) return []
   const out: LLMToolCall[] = []
   for (const item of value) {
@@ -1001,7 +841,7 @@ function readToolCalls(value: unknown): LLMToolCall[] {
   return out
 }
 
-function safeJsonStringify(value: unknown): string {
+export function safeJsonStringify(value: unknown): string {
   if (value == null) return ''
   if (typeof value === 'string') return value
   try {
@@ -1011,19 +851,19 @@ function safeJsonStringify(value: unknown): string {
   }
 }
 
-function readStr(value: unknown): string | undefined {
+export function readStr(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() !== '' ? value : undefined
 }
 
 /** 窗口上限缺省值(与 worker ContextOverflow.DEFAULT_CONTEXT_WINDOW_TOKENS 一致):数据源未配置时兜底,避免显示 0。 */
-const DEFAULT_CONTEXT_WINDOW_TOKENS = 256_000
+export const DEFAULT_CONTEXT_WINDOW_TOKENS = 256_000
 
-function readNum(value: unknown): number | undefined {
+export function readNum(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined
 }
 
 /** worker Usage DTO:{inputTokens,outputTokens,totalTokens}(零值视为缺失)。 */
-function readUsage(value: unknown): { inputTokens: number; outputTokens: number; totalTokens: number } | null {
+export function readUsage(value: unknown): { inputTokens: number; outputTokens: number; totalTokens: number } | null {
   if (!value || typeof value !== 'object') {
     return null
   }
@@ -1067,7 +907,7 @@ function sameAgentMeta(a: AgentMetaSnapshot | undefined, b: AgentMetaSnapshot): 
  * (与 taskStore.mapWorkerStatus 的映射约定一致:done→completed、failed→error)。
  * 未知/非法值返回 null → 丢弃,不污染状态表。
  */
-function mapAgentStatus(value: string): AgentStatus | null {
+export function mapAgentStatus(value: string): AgentStatus | null {
   switch (value) {
     case 'idle':
     case 'running':
@@ -1086,6 +926,6 @@ function mapAgentStatus(value: string): AgentStatus | null {
 }
 
 /** 判断 AgentStatus 是否为终态(completed/stopped/error)。供 seedAgents 决定是否覆盖。 */
-function isTerminalAgentStatus(s: AgentStatus): boolean {
+export function isTerminalAgentStatus(s: AgentStatus): boolean {
   return s === 'completed' || s === 'stopped' || s === 'error'
 }

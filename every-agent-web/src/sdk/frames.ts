@@ -57,7 +57,7 @@ export interface MsgFrame {
   /**
    * 数据包协议操作语义(架构 §6.2 新协议,缺省按 "replace" 处理):
    * - "replace":无该 seq → 新建数据包;有该 seq → 用新帧整体替换;
-   * - "append":取出旧包,把 payload.text 追加到对应字段(thinking→payload.thinking,
+   * - "append":取出旧包,把 payload.content 追加到对应字段(thinking→payload.thinking,
    *   delta→payload.content,其他 event→payload.content)。
    *
    * 后端(DataPusher)把 operate 放在 ext.operate(与 ext.persist 同层,经 hub 原样透传);
