@@ -5,28 +5,30 @@
 
 ## 设计决策（已定稿，实施时不再讨论）
 
-### 交互模型：纯协议信号 + order 位置，无编译依赖
+### 交互模型：Adaptive 在 Guard 外侧（+250），消费 Guard 判定出的耗尽异常 + 协议信号，无编译依赖
 ```
-链外→内: TransientErrorRetry(+200) → ModelLengthGuard(+300) → Adaptive(+350,新增) → ContextCompression(+400) → RateLimit(+500)
+链外→内: TransientErrorRetry(+200) → Adaptive(+250,新增) → ModelLengthGuard(+300) → ContextCompression(+400) → RateLimit(+500)
 ```
-- Adaptive 在 Guard **内侧**（+350），先于 Guard 看到原始模型帧：`finish_reason=length` 帧到达时**拦截**（吞掉该帧），按升级预算改写 prompt options 后重发（重调 `chain.nextStream`，与瞬时重试同模式）。
-- Adaptive 放弃（达重试次数上限或预算到 ceiling）→ 抛**自己的**非重试异常 `AdaptiveBudgetExhaustedException`（信息含已放大至多少、建议精简输入/降 reasoningEffort）——不引用 Guard 的异常类。
-- Guard 保持三条路径不变；与 Adaptive 并存时 Guard 实际兜的是 ②stall/③断流 两条路径（①finish_reason 帧已被 Adaptive 消费），互补不重叠。
+- Adaptive 放在 Guard **外侧**（+250，瞬时重试内侧）：先包装后放行，内层 Guard 的三条路径（①finish_reason 帧 / ②stall / ③断流，均收口为 `ModelLengthExhaustedException`）抛出的异常**穿透压缩/限流到达 Adaptive 的 onErrorResume**。
+- 触发识别用**字符串特征匹配**（`instanceof` Guard 的异常类会造成插件间编译依赖，违反零依赖原则）：Guard 的错误文案前缀固定为「模型输出已达上限」三种成因表述（见 `lengthExhausted`），Adaptive 以此为信号；同时兜底协议级 `finish_reason=length` 帧（无 Guard 时自适应仍独立工作）。
+- 命中 → 升级 `budget = min(base × multiplier^attempt, ceiling)` → 改写 prompt options（`mutate().maxTokens(budget)`）重发（重调 `chain.nextStream`，与瞬时重试同模式）；预算状态存 advisor 实例字段，**本次任务全程沿用**（per-run 创建，主/子 agent 各自隔离；升过的值持续生效，回落见下）。
+- 放弃（预算已达 ceiling 或重试次数上限）→ 抛**自己的**非重试异常 `AdaptiveBudgetExhaustedException`（信息含已放大至 ceiling 多少、建议精简输入/降 reasoningEffort/任务拆分）——不引用 Guard 的任何类型。
+- Guard 行为零变化（三条路径原样）；并存时 Guard 判定「耗尽」→ Adaptive 自动升预算重试 → 多次触顶才最终报错，形成「Guard 硬判定 + Adaptive 软恢复」接力。
 
 ### 缺谁都照样运行（四象限验收口径）
 | Guard | Adaptive | 行为 |
 |---|---|---|
-| 有 | 有 | length 帧 → Adaptive 升预算重试 N 次 → 放弃抛自己的错；stall/断流 → Guard 判定收口 |
+| 有 | 有 | Guard 判定耗尽（length/stall/断流）→ Adaptive 升预算重试，任务内持续生效 → 触顶 ceiling 放弃才报错 |
 | 有 | 无 | 现状行为，零变化 |
-| 无 | 有 | length 帧 → Adaptive 升预算重试 → 放弃抛错；stall/断流退回瞬时重试语义（无 length 判定） |
+| 无 | 有 | 协议 length 帧兜底触发 Adaptive 升预算重试 → 放弃抛错；stall/断流退回瞬时重试语义（无 length 判定） |
 | 无 | 无 | length 帧当正常完成（guard 出现前的旧行为），不崩 |
 
 ### Adaptive 预算策略
-- 触发：确定性信号 only——`finish_reason=length` 帧 / usage 末帧 `completionTokens >= maxTokens`（不做"思考很长"的启发式，避免鼓励烧 token）。
-- 升级：`budget = min(base × multiplier^attempt, ceiling)`；重试立即重订阅（**不加人工退避延迟**，防触发外层 Guard 的 stall 计时）。
-- 回落：连续 N 轮实际输出 < 当前预算 × 低水位 → 衰减回 base（防预算单调膨胀）。
-- 上限 ceiling 来源：`worker.models[].params.maxTokensCeiling`（模型级，任务快照 params 读）> `worker.limits.adaptive-max-tokens.default-ceiling`（全局默认）；参数（multiplier/maxRetries/回落阈值）走 `worker.limits.adaptive-max-tokens.*` 全局配置。**不配 ceiling（=0）= 插件直通不启用**（缺省安全）。
-- 预算状态是 advisor 实例字段（per-run 经 AdvisorProvider 创建，主/子 agent 天然隔离）；改写只动 prompt options（`mutate().maxTokens(budget)`），不动 `a.options`、不动任务快照——与"请求级参数走请求通道"的定稿口径一致。
+- 触发：①Guard 判定的耗尽异常（字符串特征「模型输出已达上限」）；②协议级 `finish_reason=length` 帧（无 Guard 插件时兜底，两者命中任一即触发）。
+- 升级：`budget = min(base × multiplier^attempt, ceiling)`；重试零延迟重订阅（不加人工退避，避免无谓等待）。
+- **任务级持续生效**：升级后的 budget 保存在 advisor 实例字段（per-run，主/子 agent 各自隔离），**本次任务后续所有轮次均用增大后的值**；回落：连续 N 轮实际输出（usage `completionTokens`）< 当前预算 × 低水位 → 衰减回 base（防预算单调膨胀）。
+- **ceiling 硬上限 = 262144（256K tokens）**：当前主流模型最大输出上限——GPT-5.2 / o3 系列 256K、Claude 4.5 Sonnet 128K、Gemini 3 Pro 128K、GLM-5.3 128K、DeepSeek-V3.2 64K——256K 是 2025 年公开商用模型输出上限的包络值，只防失控不追求贴合各家；超出模型真实上限时厂商返回 400，由 Adaptive 捕获 400 类错误**一次性回退到触发升级前的上一个 budget**并停止继续上调（简单收敛，不反复试探）。
+- 配置：`worker.limits.adaptive-max-tokens.{enabled, ceiling(默认 262144), multiplier(默认 2.0), max-retries(默认 2), fallback-ratio(默认 0.5), fallback-rounds(默认 3)}`；模型级可用 `params.maxTokensCeiling` 覆盖 ceiling（厂商真实上限，如 Claude 系填 131072）。**enabled=false 或模型未配 base maxTokens 时直通**（无基线无从升级）。
 
 ### Guard 插件化的依赖解法（迁移不改行为）
 - `WorkerProperties`：activate() 时 `ctx.getService(WorkerProperties.class)`（ModelPoolPlugin 先例）。
@@ -59,7 +61,7 @@
     - 状态：待执行
     - agent：-
     - 依赖：依赖步骤 3
-    - 验收标准：`AdaptiveMaxTokensAdvisor`（Call+Stream，order=+350）+ Provider + `AdaptiveBudgetExhaustedException` + WorkerProperties 新增 `worker.limits.adaptive-max-tokens.*`；单测覆盖：length 帧拦截升级重试、达 ceiling 放弃抛错、回落衰减、无 ceiling 直通、finish 信号不误触发
+    - 验收标准：`AdaptiveMaxTokensAdvisor`（Call+Stream，order=+250，在 Guard +300 外侧）+ Provider + `AdaptiveBudgetExhaustedException` + WorkerProperties 新增 `worker.limits.adaptive-max-tokens.*`（ceiling 默认 262144）；单测覆盖：Guard 耗尽异常触发升级重试、协议 length 帧兜底触发、budget 任务内持续生效（第二轮直接用升值）、达 ceiling 放弃抛错、400 回退上一档、低水位回落、未配 base maxTokens/enabled=false 直通
 - [ ] 步骤 6：核心清理与文档校准
     - 状态：待执行
     - agent：-
@@ -73,6 +75,8 @@
 
 ## 备注
 - 步骤 2/3 与步骤 1 无依赖可并行；步骤 4/5 分别依赖 2/3，**彼此可并行**（互不读写对方模块）；6 依赖 4+5；7 收口。
-- 已知风险：Adaptive 内部重试的静默期计入外层 Guard 的 stall 计时（+300 包 +350）——缓解：重试零延迟重订阅 + 验收用例覆盖；若实测误判，调大 `length-stall-ms` 或把 Adaptive 移到 Guard 外侧（放弃时改抛自身异常仍无耦合，备选方案不引入依赖）。
+- Adaptive(+250) 在 Guard(+300) 外侧：包装视角 Adaptive 先执行、内层 Guard 先收到请求；Guard 的耗尽异常在响应/错误回传路径上先到达 Adaptive 的 onErrorResume，被其消费升级重试——**位置即协议**，无需类型耦合（识别用 Guard 错误文案固定前缀「模型输出已达上限」）。
+- 旧风险消除：原方案 Adaptive 在 Guard 内侧重发会与 stall 计时相互干扰；新位置 Adaptive 重发的是完整新请求（外层重新过 Guard），无静默期问题。
+- 字符串匹配的脆弱性：Guard 错误文案前缀是该协议信号的契约，两插件任一方改动文案需同步——已在计划中标注为「跨插件协议信号」，Guard javadoc/文档需注明该文案前缀是对外契约不可随意改动。
 - 配置新增走"模型级 params 优先、全局 limits 兜底"既有口径，与去池化方案（plan-core-depooling.md §5.1）及 Phase 6 热更新正交，互不牵扯。
 - 红线自检：两 advisor 均薄实现（Call/StreamAdvisor，不自建工具循环/聚合）；一个插件一个功能；复用 ChatClient/Advisor 生态。
