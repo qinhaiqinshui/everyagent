@@ -1,6 +1,8 @@
 package dev.everyagent.worker.task;
 
 import dev.everyagent.contract.json.Json;
+import dev.everyagent.plugin.api.model.EventEmitter;
+import dev.everyagent.plugin.api.model.EmitEvent;
 import dev.everyagent.worker.proto.TaskDtos.Usage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.model.ChatModel;
@@ -63,6 +65,12 @@ public final class AgentEntity {
      * 与 UI 事件态(agentStatus 的 done/failed/...)分属两套词汇,互不干扰。
      */
     public volatile String status = "running";
+    /**
+     * agent 层包装 emitter:在 emit 时把 EmitEvent.agentId 填入本 agent 的 agentId
+     * (低层产生方留 null → TaskEvents 兜底 mainAgentId)。步骤 6-8 的调用方通过
+     * 此 emitter 发射事件,无需手动填 agentId。
+     */
+    public final EventEmitter agentEmitter;
     /** 最近活动快照(list_agents/wait_agents 契约;WorkerToolEventAdvisor 每轮合并写)。 */
     private final AtomicReference<AgentActivity> activity =
             new AtomicReference<>(new AgentActivity(null, null, null, null, null));
@@ -76,6 +84,11 @@ public final class AgentEntity {
         this.chatModel = chatModel;
         this.options = options;
         this.tools = tools;
+        this.agentEmitter = e -> {
+            EmitEvent filled = (e.agentId() == null || e.agentId().isEmpty())
+                    ? e.withAgentId(this.agentId) : e;
+            return task.events.emit(filled);
+        };
         this.createdAt = System.currentTimeMillis();
     }
 
