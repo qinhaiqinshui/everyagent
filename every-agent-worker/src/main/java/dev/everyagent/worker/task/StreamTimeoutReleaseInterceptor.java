@@ -15,7 +15,7 @@ import java.io.IOException;
  * per-request 四分量每次覆盖 client 级配置。reasoning 模型(reasoningEffort=high)单轮
  * 长思考可达数十分钟,callTimeout 到点 okhttp 强制断流(IOException)——表象与 provider
  * 粗暴断流一致,且断流时输出量=思考速度×上限时长,常低于 maxTokens 的 80%,
- * {@code ModelLengthGuardAdvisor} 比例判定不命中,落入瞬时重试死循环(每次重试重放整段
+ * {@code model-length-guard 插件} 比例判定不命中,落入瞬时重试死循环(每次重试重放整段
  * 长思考,再次到点断流,循环几十分钟)。
  *
  * <p>职责(单一):对每个 call 解除 call 级总时长,流式响应只要持续有 chunk 即不限总时长;
@@ -30,7 +30,7 @@ import java.io.IOException;
  * 只清时长字段、不撤销已调度计时(实测到点仍断),不可用。
  *
  * <p>兜底仍在:静默挂起由 okhttp readTimeout(读间隔上限,openai-java 默认 10 分钟)与
- * {@code ModelLengthGuardAdvisor} 的 stall(120s)先后兜住;真网络断连照常抛 IOException
+ * {@code model-length-guard 插件} 的 stall(120s)先后兜住;真网络断连照常抛 IOException
  * 交瞬时重试。无状态线程安全,单例复用。
  */
 public final class StreamTimeoutReleaseInterceptor implements Interceptor {

@@ -29,6 +29,7 @@
         <module>transient-error-retry</module>
         <module>context-compression</module>
         <module>model-pool</module>
+        <module>model-length-guard</module>
         <module>adaptive-max-tokens</module>
         <module>system-info</module>
         <module>agents-md</module>

@@ -68,7 +68,7 @@ public class BuiltInAdvisorProviders {
         // 重试 / 护栏（400─599）
         // EmptyResponseRetryAdvisor / TransientErrorRetryAdvisor 已迁入独立插件模块（步骤 3），
         // 由各插件自行注册，不再在此注册。
-        // ModelLengthGuardAdvisor 已迁入 model-length-guard 插件模块，由插件自行注册，不再在此注册。
+        // model-length-guard 插件 已迁入 model-length-guard 插件模块，由插件自行注册，不再在此注册。
 
         // 终层（800─999）
         // ContextCompressionAdvisor 已迁入 context-compression 插件模块（步骤 3），不再在此注册。

@@ -159,7 +159,7 @@ public class ChatModelFactory {
                                 // 打印真实请求体(含 skill 渐进式披露索引等 advisor 注入后的完整报文)
                                 .interceptor(HttpRequestLoggingInterceptor.SHARED)
                                 // 解除 okhttp callTimeout 总时长上限(§7.4.2):流式长思考不限总时长,
-                                // 静默由 readTimeout + ModelLengthGuardAdvisor stall 兜底。
+                                // 静默由 readTimeout + model-length-guard 插件 stall 兜底。
                                 .interceptor(StreamTimeoutReleaseInterceptor.INSTANCE))
                         .build());
         return raw;
