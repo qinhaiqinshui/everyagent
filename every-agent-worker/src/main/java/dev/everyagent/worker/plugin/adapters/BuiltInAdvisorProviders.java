@@ -63,7 +63,7 @@ public class BuiltInAdvisorProviders {
 
         // 守卫 / 文件跟踪（200─399）
         registry.register(new LoopRepeatGuardAdvisorProvider(props));
-        registry.register(new FileChangeAdvisorProvider());
+        // FileChangeAdvisorProvider 已迁入 file-change 插件模块，由插件自行注册。
 
         // 重试 / 护栏（400─599）
         // EmptyResponseRetryAdvisor / TransientErrorRetryAdvisor 已迁入独立插件模块（步骤 3），
