@@ -41,7 +41,7 @@
     - 状态：待执行
     - agent：-
     - 依赖：无
-    - 验收标准：§7.4.1 及 §7.3 交叉引用改为 guard 插件归属；新增 AdaptiveMaxTokens 小节（order=+350、协议信号交互模型、四象限矩阵、params/limits 配置项）；演进记录（§7.19.4 表或 Phase 列表）补一行
+    - 验收标准：§7.4.1 及 §7.3 交叉引用改为 guard 插件归属；新增 AdaptiveMaxTokens 小节（order=+250 在 Guard 外侧、字符串特征信号交互模型、四象限矩阵、params/limits 配置项、ceiling=262144）；演进记录（§7.19.4 表或 Phase 列表）补一行；标注 Guard 错误文案前缀「模型输出已达上限」为跨插件协议契约
 - [ ] 步骤 2：创建 model-length-guard 插件模块骨架
     - 状态：待执行
     - agent：-
