@@ -356,6 +356,30 @@ export interface UiComposerAbovePanelDefinition {
   Component: ComponentType<ComposerPanelCtx>
 }
 
+// ─── 轮末展示区（ui.round_tail_panels） ─────────────────────────────────
+
+/** 轮末展示区组件的 props（通用轮次上下文，不含任何文件变更专属字段）。 */
+export interface RoundTailPanelProps {
+  /** 当前任务 ID。 */
+  taskId: string
+  /** 当前轮次 ID。 */
+  roundId: string
+  /** 任务挂靠的 worker ID。 */
+  workerId?: string
+  /** 任务挂靠的工作区根路径。 */
+  workspaceRoot?: string
+  /** 当前轮次数据（核心不感知具体结构，插件按需强转提取字段）。 */
+  round: unknown
+}
+
+/** 轮末展示区定义（由 `ui.round_tail_panels` 扩展点产出）。 */
+export interface UiRoundTailPanelDefinition {
+  /** 提供方插件 ID。 */
+  pluginId: string
+  /** 渲染组件（接收 RoundTailPanelProps 作为 props）。 */
+  Component: ComponentType<RoundTailPanelProps>
+}
+
 // ─── 用户消息动作 / 提交贡献 ─────────────────────────────────────────────
 
 /** 用户消息动作按钮的 props（由核心在渲染用户消息时传入）。 */
@@ -580,6 +604,8 @@ export interface UiRegistry {
   registerOutputBlock(tag: string, handler: OutputBlockHandler): Disposable
   registerFileContentEditor(def: PluginFileContentEditorDescriptor): Disposable
   registerFileExplorerAction(action: FileExplorerAction): Disposable
+  /** 注册轮末展示区组件（由 `ui.round_tail_panels` 扩展点产出）。 */
+  registerRoundTailPanel(def: UiRoundTailPanelDefinition): Disposable
   /** 打开插件自定义标签（替代宿主 useWorkspaceShell().openPluginTab）。 */
   openPluginTab(type: string, data: Record<string, string>, title?: string): void
   /** 打开顶层文件标签（替代宿主 useWorkspaceShell().openGlobalFileTab）。 */

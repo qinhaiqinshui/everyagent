@@ -1,6 +1,7 @@
 package dev.everyagent.plugin.filechange;
 
 import dev.everyagent.contract.json.Json;
+import dev.everyagent.worker.task.FileChangesCollector;
 import org.junit.jupiter.api.Test;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.node.ArrayNode;

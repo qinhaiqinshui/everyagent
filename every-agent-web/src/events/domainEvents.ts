@@ -242,7 +242,7 @@ export type DomainEventMap = {
     /**
      * 调用方原样透传的不透明业务袋（如 AI 工具的 TaskToolExecutionContext）。
      * 下层（fs / 网关）不解释其中键名；需要 taskId / agentId 等字段的上层订阅方
-     * （task-file-changes 插件）自行从袋里取出。新增 workflowId 等业务字段时，
+     * （文件变更轮末展示区插件）自行从袋里取出。新增 workflowId 等业务字段时，
      * 无需改动事件契约与底层。
      */
     metadata?: Record<string, unknown>

@@ -9,7 +9,7 @@ import AgentMessageThread from './AgentMessageThread'
 import TaskThread from './TaskThread'
 import RoundDetail from './RoundDetail'
 import LazyLoadSentinel from './LazyLoadSentinel'
-import { RoundFileChangesView } from '@/plugins/task-file-changes'
+import { pluginDispatcher } from '@/plugin/PluginDispatcher'
 import { taskStore } from '@/hub/taskStore'
 import { TaskWorkspaceProvider } from './TaskWorkspaceContext'
 import './TaskRoundsPanel.css'
@@ -24,10 +24,10 @@ import './TaskRoundsPanel.css'
  * - 终态未闭合尾轮：常开视图，从 startSeq 起前向懒加载（底部 forward sentinel）；
  * - 运行中未闭合尾轮：原样订阅实时流 + 自动滚底，初始为「最后一页」（roundTail 200）与
  *   流式增量接上，顶部（user 之后）backward sentinel 支持往上翻历史（到达 startSeq 停）；
- * - 轮末文件变更：rounds.jsonl 每轮携带轻量 fileChanges（无变更时缺失），折叠/展开态均在
- *   当前轮最后渲染轮末文件变更视图，点击行按 roundId 拉全文再开 diff（见 plugins/task-file-changes）。
+ * - 轮末展示区：rounds.jsonl 每轮携带轻量 fileChanges 等数据，折叠/展开态均在
+ *   当前轮最后渲染轮末展示区视图（通用扩展点，插件自行注册）。
  * - agent 过滤（「只看该 agent」，filterAgentId 非空）：闭合轮展开态（RoundDetail）与尾轮
- *   过程流仅显示归属该 agent 的项；轮骨架（user 气泡/折叠条/final 摘要/文件变更）不过滤，
+ *   过程流仅显示归属该 agent 的项；轮骨架（user 气泡/折叠条/final 摘要/轮末展示区）不过滤，
  *   避免未加载轮被误判「消失」。纯渲染派生——只过滤已加载内容，不新增任何拉取触发；
  *   用户展开/滚动加载折入的新内容经 items 引用变化自动纳入过滤，其他 agent 的流式增量
  *   被挡在视图外（DOM 不变 → MutationObserver 不触发 → 不会误贴底）。
@@ -75,6 +75,7 @@ export default function TaskRoundsPanel({
   const live = roundsResult?.live ?? false
   const openStartSeq = open?.startSeq ?? ''
   const workspaceRoot = taskStore.get(taskId)?.workspace || undefined
+  const workerId = taskStore.get(taskId)?.workerId || undefined
 
   // 切换任务：清空展开/分页状态。
   React.useEffect(() => {
@@ -300,6 +301,7 @@ export default function TaskRoundsPanel({
               expanded={expanded}
               items={items}
               taskId={taskId}
+              workerId={workerId}
               workspaceRoot={workspaceRoot}
               pageState={pageState}
               scrollRoot={scrollRoot}
@@ -348,6 +350,7 @@ function ClosedRoundView({
   expanded,
   items,
   taskId,
+  workerId,
   workspaceRoot,
   pageState,
   scrollRoot,
@@ -359,6 +362,7 @@ function ClosedRoundView({
   expanded: boolean
   items: TaskThreadItem[]
   taskId: string
+  workerId?: string
   workspaceRoot?: string
   pageState?: RoundPageState
   scrollRoot?: HTMLElement | null
@@ -373,7 +377,7 @@ function ClosedRoundView({
   // 权威 message(完整 thinking + toolCalls)。
   const userMessage = syntheticUserRecord(round)
   const finalMessage = syntheticFinalRecord(round)
-  const hasFileChanges = (round.fileChanges?.length ?? 0) > 0
+  const roundTailPanels = pluginDispatcher.listRegisteredRoundTailPanels()
   // 折叠条对「已闭合轮」恒显(与旧版一致,决策 1「user+折叠条+final 常显」);
   // 展开态由 RoundDetail 从 items 切片渲染,即使无工具调用也能看到最终轮的思考内容。
   return (
@@ -425,15 +429,22 @@ function ClosedRoundView({
             <AgentMessageThread message={finalMessage} taskId={taskId} />
           </div>
         )}
-        {/* 轮末文件变更视图：折叠/展开两态共用，恒在该轮最后展示（rounds.jsonl 轻量摘要）。 */}
-        {hasFileChanges ? (
-          <RoundFileChangesView
-            taskId={taskId}
-            roundId={round.roundId}
-            changes={round.fileChanges ?? []}
-            workspaceRoot={workspaceRoot}
-          />
-        ) : null}
+        {/* 轮末展示区：折叠/展开两态共用，恒在该轮最后展示（通用扩展点，插件自行注册）。 */}
+        {roundTailPanels.length > 0
+          ? roundTailPanels.map((panel) => {
+              const Component = panel.Component
+              return (
+                <Component
+                  key={panel.pluginId}
+                  taskId={taskId}
+                  roundId={round.roundId}
+                  workerId={workerId}
+                  workspaceRoot={workspaceRoot}
+                  round={round}
+                />
+              )
+            })
+          : null}
       </div>
     </>
   )

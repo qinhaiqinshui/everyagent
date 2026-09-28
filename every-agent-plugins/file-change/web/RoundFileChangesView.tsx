@@ -1,32 +1,40 @@
 import { useRef, useState } from 'react'
-import type { RoundFileChangeSummary, TaskFileChangeFull } from '@/types'
-import { fetchTaskFileChanges } from '@/sdk'
-import { hubSession } from '@/hub/session'
-import { taskStore } from '@/hub/taskStore'
-import { useWorkspaceShell } from '@/components/app/WorkspaceShellContext'
-import { ChevronDownIcon, ChevronRightIcon } from '@/components/shared/AppGlyphs'
-import './taskFileChanges.css'
+import type { RoundTailPanelProps } from '@everyagent/plugin-api'
+import { CaretDownOutlined, CaretRightOutlined } from '@ant-design/icons'
+import { getPluginContext } from './pluginRuntime'
+import './roundFileChanges.css'
+
+/** 文件变更摘要（rounds.jsonl 每轮 fileChanges 项，轻量级）。 */
+interface RoundFileChangeSummary {
+  filePath: string
+  fileName: string
+  changeType: 'created' | 'updated' | 'deleted'
+  saveCount: number
+}
+
+/** 文件变更全文项。 */
+interface TaskFileChangeFull {
+  filePath: string
+  fileName: string
+  changeType: 'created' | 'updated' | 'deleted'
+  saveCount: number
+  beforeContent: string
+  afterContent: string
+}
+
+/** task.fileChanges rpc.ok 应答。 */
+interface TaskFileChangesResult {
+  changes: TaskFileChangeFull[]
+}
 
 /** changeType 与 git 状态字母、中文含义的映射(A=Added/新建,M=Modified/修改,D=Deleted/删除)。 */
-export const CHANGE_GIT_LETTER: Record<
+const CHANGE_GIT_LETTER: Record<
   RoundFileChangeSummary['changeType'],
   { letter: string; title: string }
 > = {
   created: { letter: 'A', title: '新建 (Added)' },
   updated: { letter: 'M', title: '修改 (Modified)' },
   deleted: { letter: 'D', title: '删除 (Deleted)' },
-}
-
-/** 轮末文件变更视图属性。 */
-export interface RoundFileChangesViewProps {
-  /** 当前任务 ID。 */
-  taskId: string
-  /** 目标轮次 ID(rounds.jsonl 每行 roundId;点击行后按此拉全文)。 */
-  roundId: string
-  /** 该轮文件变更轻量摘要(rounds.jsonl 携带;无变更时外层不渲染本视图)。 */
-  changes: RoundFileChangeSummary[]
-  /** 任务挂靠的工作区根(diff 标签「打开文件」定位用)。 */
-  workspaceRoot?: string
 }
 
 /**
@@ -61,32 +69,34 @@ function toDisplayPath(filePath: string): string {
  * 轮末文件变更视图:渲染该轮文件变更轻量摘要行(文件名 + 完整路径 + A/M/D 标签),
  * 点击某行时按 roundId 经 task.fileChanges 拉取全文(含 beforeContent/afterContent),
  * 再开 diff 标签对比。同一轮的全文按 roundId 缓存,同轮多次点击不重复 RPC;
- * 拉取失败/worker 未连接时仅记 warn 忽略(轻提示即可,不阻断线程浏览)。
+ * 拉取失败时仅记 warn 忽略(轻提示即可,不阻断线程浏览)。
  */
 export default function RoundFileChangesView({
   taskId,
   roundId,
-  changes,
+  workerId,
   workspaceRoot,
-}: RoundFileChangesViewProps) {
-  const { openDiffTab } = useWorkspaceShell()
+  round,
+}: RoundTailPanelProps) {
+  const changes = ((round as { fileChanges?: RoundFileChangeSummary[] })?.fileChanges) ?? []
+
   /** 默认折叠:只显示「文件变更」汇总头,点击展开文件行列表。 */
   const [open, setOpen] = useState(false)
   /** roundId → 该轮已拉取的全文变更列表(避免同轮多次点击重复 RPC)。 */
   const fullCacheRef = useRef<Map<string, TaskFileChangeFull[]>>(new Map())
 
+  if (changes.length === 0) return null
+
   const openDiff = async (summary: RoundFileChangeSummary) => {
     let fullChanges = fullCacheRef.current.get(roundId)
     if (!fullChanges) {
-      // worker 连接与任务归属:taskStore 拿 workerId,hubSession.workerClient 拿已建立的连接(含重连中)。
-      const workerId = taskStore.get(taskId)?.workerId
-      const client = workerId ? hubSession.workerClient(workerId) : null
-      if (!workerId || !client) {
-        console.warn(`[RoundFileChangesView] worker 未连接,跳过拉取文件变更全文(${taskId}/round ${roundId})`)
-        return
-      }
+      const ctx = getPluginContext()
       try {
-        const result = await fetchTaskFileChanges(client, workerId, { taskId, roundId })
+        const result = await ctx.sdk.rpc(
+          workerId ?? ctx.sdk.workerId,
+          'task.fileChanges',
+          { taskId, roundId },
+        ) as TaskFileChangesResult
         fullChanges = result.changes ?? []
         fullCacheRef.current.set(roundId, fullChanges)
       } catch (error) {
@@ -97,10 +107,10 @@ export default function RoundFileChangesView({
     const full = fullChanges.find((c) => c.filePath === summary.filePath)
     if (!full) return
     const displayPath = toDisplayPath(full.filePath)
-    openDiffTab({
+    const ctx = getPluginContext()
+    ctx.ui.openDiffTab({
       filePath: displayPath,
       fileName: full.fileName,
-      // diff 标签只区分 created/updated:deleted 归入 updated(与旧 trace 展开视图口径一致)。
       changeType: full.changeType === 'created' ? 'created' : 'updated',
       beforeContent: full.beforeContent,
       afterContent: full.afterContent,
@@ -119,7 +129,7 @@ export default function RoundFileChangesView({
         title={open ? '收起文件变更' : '展开文件变更'}
       >
         <span className="task-file-changes__toggle-icon">
-          {open ? <ChevronDownIcon size={13} /> : <ChevronRightIcon size={13} />}
+          {open ? <CaretDownOutlined /> : <CaretRightOutlined />}
         </span>
         <span className="task-file-changes__toggle-label">文件变更</span>
         <span className="task-file-changes__toggle-count">{changes.length}</span>

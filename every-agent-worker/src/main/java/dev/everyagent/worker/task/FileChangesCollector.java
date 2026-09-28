@@ -1,4 +1,4 @@
-package dev.everyagent.plugin.filechange;
+package dev.everyagent.worker.task;
 
 import dev.everyagent.contract.json.Json;
 import tools.jackson.databind.node.ArrayNode;

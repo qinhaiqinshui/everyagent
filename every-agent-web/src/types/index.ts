@@ -218,7 +218,7 @@ export interface RoundSummary {
    * 该轮文件变更摘要（轻量数组，仅 filePath/fileName/changeType/saveCount；rounds.jsonl 每行
    * 携带，无变更时字段缺失/undefined）。全文需通过 task.fileChanges 按 roundId 拉取。
    */
-  fileChanges?: RoundFileChangeSummary[]
+  fileChanges?: unknown[]
 }
 
 /**

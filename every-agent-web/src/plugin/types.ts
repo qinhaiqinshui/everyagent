@@ -18,6 +18,7 @@ import type { ToolViewProps } from '@/components/task/toolViews/types'
 import type {
   ChatComposerDraftState,
   ChatComposerToken,
+  RoundSummary,
   SidebarPanelId,
   WorkspaceTab,
 } from '@/types'
@@ -251,4 +252,26 @@ export interface TaskRunSubmitContributionProvider {
   subscribe: (listener: () => void) => () => void
   /** 提交成功后回调（插件清理自身状态，如清除编辑目标）。 */
   onSubmitted?: (taskId: string) => void
+}
+
+/** 轮末展示区组件的 props 契约。 */
+export interface RoundTailPanelProps {
+  /** 当前任务 ID。 */
+  taskId: string
+  /** 当前轮次 ID。 */
+  roundId: string
+  /** 任务所属 worker ID（可选，运行期动态标注，可能为 undefined）。 */
+  workerId?: string
+  /** 工作区根路径（可选）。 */
+  workspaceRoot?: string
+  /** 当前轮次摘要（核心不感知其中业务语义，插件自行解释）。 */
+  round: RoundSummary
+}
+
+/** 轮末展示区定义（web 内部类型，对齐 plugin-api 的 UiRoundTailPanelDefinition）。 */
+export interface UiRoundTailPanelDefinition {
+  /** 提供方插件 ID。 */
+  pluginId: string
+  /** 渲染组件。 */
+  Component: ComponentType<RoundTailPanelProps>
 }

@@ -2,6 +2,7 @@ package dev.everyagent.plugin.filechange;
 
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.worker.task.AgentEntity;
+import dev.everyagent.worker.task.FileChangesCollector;
 import org.springframework.ai.chat.client.ChatClientRequest;
 import org.springframework.ai.chat.client.ChatClientResponse;
 import org.springframework.ai.chat.client.advisor.api.StreamAdvisor;

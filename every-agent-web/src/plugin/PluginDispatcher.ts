@@ -23,6 +23,7 @@ import type {
   ToolCallViewDefinition,
   UiUserMessageActionDefinition,
   TaskRunSubmitContributionProvider,
+  UiRoundTailPanelDefinition,
 } from './types'
 import type { FileContentEditorDescriptor } from '@/components/files/file-tab-types'
 import { registerTraceType as registerToTraceRegistry } from './traceTypeRegistry'
@@ -44,6 +45,7 @@ const EXT_UI_USER_MESSAGE_ACTIONS = 'ui.user_message_actions'
 const EXT_TASK_SUBMIT_CONTRIBUTIONS = 'task.submit_contributions'
 const EXT_UI_FILE_CONTENT_EDITORS = 'ui.file_content_editors'
 const EXT_UI_FILE_EXPLORER_ACTIONS = 'ui.file_explorer_actions'
+const EXT_UI_ROUND_TAIL_PANELS = 'ui.round_tail_panels'
 const EXT_UI_TRACE_TYPES = 'ui.trace_types'
 const EXT_UI_OUTPUT_BLOCKS = 'ui.output_blocks'
 
@@ -118,6 +120,10 @@ export interface RealPluginDispatcher {
   listRegisteredFileExplorerActions: () => FileExplorerAction[]
   /** 注册文件树右键菜单动作。 */
   registerFileExplorerAction: (action: FileExplorerAction) => Disposable
+  /** 注册轮末展示区组件。 */
+  registerRoundTailPanel: (def: UiRoundTailPanelDefinition) => Disposable
+  /** 同步获取已注册的轮末展示区组件列表。 */
+  listRegisteredRoundTailPanels: () => UiRoundTailPanelDefinition[]
   /** 打开插件自定义标签（委托宿主 WorkspaceShellContext）。 */
   openPluginTab: (type: string, data: Record<string, string>, title?: string) => void
   /** 打开顶层文件标签（委托宿主 WorkspaceShellContext）。 */
@@ -157,6 +163,8 @@ export const pluginDispatcher: RealPluginDispatcher = {
       case EXT_UI_FILE_CONTENT_EDITORS:
         return getRegistry<T>(extensionPoint).getAll()
       case EXT_UI_FILE_EXPLORER_ACTIONS:
+        return getRegistry<T>(extensionPoint).getAll()
+      case EXT_UI_ROUND_TAIL_PANELS:
         return getRegistry<T>(extensionPoint).getAll()
       default:
         return []
@@ -240,6 +248,12 @@ export const pluginDispatcher: RealPluginDispatcher = {
   },
   registerFileExplorerAction(action) {
     return getRegistry<FileExplorerAction>(EXT_UI_FILE_EXPLORER_ACTIONS).register('', action)
+  },
+  listRegisteredRoundTailPanels() {
+    return getRegistry<UiRoundTailPanelDefinition>(EXT_UI_ROUND_TAIL_PANELS).getAll()
+  },
+  registerRoundTailPanel(def) {
+    return getRegistry<UiRoundTailPanelDefinition>(EXT_UI_ROUND_TAIL_PANELS).register('', def)
   },
   openPluginTab(type, data, title) {
     getShellBridge()?.openPluginTab(type, data, title)
