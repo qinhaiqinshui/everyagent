@@ -1,8 +1,10 @@
 package dev.everyagent.worker.task;
 
 import dev.everyagent.contract.json.Json;
+import dev.everyagent.plugin.api.model.EmitEvent;
 import dev.everyagent.worker.agent.AgentFactory;
 import dev.everyagent.worker.config.WorkerProperties;
+import dev.everyagent.worker.proto.SnowflakeId;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.messages.UserMessage;
@@ -95,8 +97,18 @@ public class SubAgentManager {
             });
             task.subs.put(id, sub);
             task.subFutures.put(id, ft);
-            task.events.agentStarted(id, sub.title, input);
-            task.events.agentStatus(id, "running"); // 子 agent 开始运行(agent 列表状态机)
+            {
+                ObjectNode startedData = Json.obj();
+                startedData.put("agentId", id);
+                if (sub.title != null) {
+                    startedData.put("title", sub.title);
+                }
+                startedData.put("input", input);
+                task.events.emit(EmitEvent.of(SnowflakeId.next(), "agent.started", id,
+                        null, null, null, null, startedData, EmitEvent.Mode.REPLACE));
+                task.events.emit(EmitEvent.of(SnowflakeId.next(), "agent.status", id,
+                        null, null, null, "running", null, EmitEvent.Mode.REPLACE));
+            }
             vt.execute(ft);
             log.debug("[sub] 启动子 agent id={} taskId={} reuse={} thread={}",
                     id, task.taskId, reuse, Thread.currentThread().getName());
@@ -115,8 +127,13 @@ public class SubAgentManager {
             if (sub.claimTerminal("completed")) {
                 log.debug("[sub] 正常完成 claimTerminal(completed)=true id={} thread={}",
                         id, Thread.currentThread().getName());
-                task.events.agentDone(id, sub.lastText, sub.usage());
-                task.events.agentStatus(id, "done");
+                ObjectNode doneData = Json.obj();
+                doneData.put("agentId", id);
+                doneData.set("usage", Json.toJson(sub.usage()));
+                task.events.emit(EmitEvent.of(SnowflakeId.next(), "agent.done", id,
+                        null, null, sub.lastText, null, doneData, EmitEvent.Mode.REPLACE));
+                task.events.emit(EmitEvent.of(SnowflakeId.next(), "agent.status", id,
+                        null, null, null, "done", null, EmitEvent.Mode.REPLACE));
             } else {
                 log.debug("[sub] 正常完成但 claimTerminal=false(已被停止侧抢先) id={} subStatus={} thread={}",
                         id, sub.status, Thread.currentThread().getName());
@@ -132,8 +149,10 @@ public class SubAgentManager {
             if (sub.claimTerminal("error")) {
                 String msg = RootCause.summary(t);
                 sub.updateActivity(null, null, msg);
-                task.events.error(id, msg);
-                task.events.agentStatus(id, "failed");
+                task.events.emit(EmitEvent.of(SnowflakeId.next(), "error", id,
+                        null, null, msg, null, null, EmitEvent.Mode.REPLACE));
+                task.events.emit(EmitEvent.of(SnowflakeId.next(), "agent.status", id,
+                        null, null, null, "failed", null, EmitEvent.Mode.REPLACE));
             }
         } finally {
             sub.finished = true;
@@ -154,8 +173,10 @@ public class SubAgentManager {
             return;
         }
         sub.updateActivity(null, null, "已取消");
-        task.events.error(sub.agentId, "已取消");
-        task.events.agentStatus(sub.agentId, "stopped");
+        task.events.emit(EmitEvent.of(SnowflakeId.next(), "error", sub.agentId,
+                null, null, "已取消", null, null, EmitEvent.Mode.REPLACE));
+        task.events.emit(EmitEvent.of(SnowflakeId.next(), "agent.status", sub.agentId,
+                null, null, null, "stopped", null, EmitEvent.Mode.REPLACE));
     }
 
     /**

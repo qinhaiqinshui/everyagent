@@ -1,7 +1,9 @@
 package dev.everyagent.worker.task.lifecycle;
 
 import dev.everyagent.contract.json.Json;
+import dev.everyagent.plugin.api.model.EmitEvent;
 import dev.everyagent.plugin.api.task.TaskLifecycleContext;
+import dev.everyagent.worker.proto.SnowflakeId;
 import dev.everyagent.worker.task.AgentEntity;
 import dev.everyagent.worker.task.RoundIndexStore;
 import dev.everyagent.worker.task.TaskEntry;
@@ -114,7 +116,11 @@ public class TaskLifecycleContextImpl implements TaskLifecycleContext {
         gate.beginRun(taskEntry.taskId); // 新一条用户输入:本轮(run)授权失效(任务级不受影响)
         // user.message 落盘后以它的 seq 为轮起点开轮:最后一行未闭合则沿用(中间输入/续跑不开新轮);
         // 已闭合/无行则追加一条 endSeq="" 的未闭合轮。中断/取消/失败不再于终态补写,轮行随开轮即持久化。
-        long seq = taskEntry.events.userMessage(text, rawContent);
+        long seq = taskEntry.events.emit(EmitEvent.of(SnowflakeId.next(), "user.message", null,
+                null, null, text, null,
+                rawContent != null && !rawContent.isEmpty()
+                        ? Json.obj().put("rawContent", rawContent) : null,
+                EmitEvent.Mode.REPLACE));
         // 开轮落盘带完整 user.message payload(懒加载骨架起点;与 userMessage 事件 payload 同源):
         // text 供展示/AI 摘要,rawContent 供前端回放还原胶囊。
         ObjectNode userPayload = Json.obj().put("text", text);
@@ -123,7 +129,11 @@ public class TaskLifecycleContextImpl implements TaskLifecycleContext {
         }
         if (roundIndexStore.openRoundAtStart(store, taskEntry.taskId, seq, text, userPayload)) {
             // 真的新开一轮(非中间输入/续跑沿用)才推 round.opened;瞬态不落盘。
-            taskEntry.events.roundOpened(seq, text);
+            ObjectNode roundData = Json.obj();
+            roundData.put("startSeq", String.valueOf(seq));
+            roundData.put("user", text);
+            taskEntry.events.emit(EmitEvent.transientOf(SnowflakeId.next(), "round.opened", null,
+                    null, null, null, null, roundData, EmitEvent.Mode.REPLACE));
         }
         main.conversation.add(new UserMessage(text));
         taskEntry.touch();
@@ -142,7 +152,10 @@ public class TaskLifecycleContextImpl implements TaskLifecycleContext {
     @Override public long startedAt() { return taskEntry.startedAt != null ? taskEntry.startedAt : 0; }
     @Override public void startedAt(long ms) { taskEntry.startedAt = ms; }
     @Override public void onUsageBroadcast(Runnable hook) { taskEntry.onUsageBroadcast = hook; }
-    @Override public void agentStatus(String agentId, String status) { taskEntry.events.agentStatus(agentId, status); }
+    @Override public void agentStatus(String agentId, String status) {
+        taskEntry.events.emit(EmitEvent.of(SnowflakeId.next(), "agent.status", agentId,
+                null, null, null, status, null, EmitEvent.Mode.REPLACE));
+    }
     @Override public String input() { return input; }
     @Override public String rawContent() { return rawContent; }
     @Override public java.util.Map<String, Object> runParams() { return runParams; }

@@ -111,6 +111,7 @@ public class ChatModelFactory {
                     if (events != null) {
                         events.emit(event);
                     }
+                    return 0L;
                 };
             }
 

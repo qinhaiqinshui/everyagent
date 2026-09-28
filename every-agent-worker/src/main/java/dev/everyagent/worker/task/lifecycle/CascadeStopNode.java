@@ -1,11 +1,15 @@
 package dev.everyagent.worker.task.lifecycle;
 
+import dev.everyagent.contract.json.Json;
+import dev.everyagent.plugin.api.model.EmitEvent;
 import dev.everyagent.plugin.api.task.TaskLifecycleContext;
 import dev.everyagent.plugin.api.task.TaskOutcome;
+import dev.everyagent.worker.proto.SnowflakeId;
 import dev.everyagent.worker.task.PendingAsks;
 import dev.everyagent.worker.task.SubAgentManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import tools.jackson.databind.node.ObjectNode;
 
 /**
  * 上行节点(order=900)：result≠DONE 时按 status 分支级联停。
@@ -41,7 +45,11 @@ public final class CascadeStopNode extends UpstreamNode {
             t.stopRequested = true;
             try { subs.stopAll(t); } catch (RuntimeException e) { log.warn("stopAll 异常 task={}", t.taskId, e); }
             try { asks.cancelTask(t.taskId, "user"); } catch (RuntimeException e) { log.warn("cancelTask 异常 task={}", t.taskId, e); }
-            try { t.events.cancelled("user"); } catch (RuntimeException e) { log.debug("终态事件写入失败(日志可能已满)", e); }
+            try {
+                ObjectNode cancelledData = Json.obj().put("by", "user");
+                t.events.emit(EmitEvent.of(SnowflakeId.next(), "cancelled", t.mainAgentId,
+                        null, null, null, null, cancelledData, EmitEvent.Mode.REPLACE));
+            } catch (RuntimeException e) { log.debug("终态事件写入失败(日志可能已满)", e); }
         } else { // FAILED
             try { subs.stopAll(t); } catch (RuntimeException e) { log.warn("stopAll 异常 task={}", t.taskId, e); }
             try { asks.cancelTask(t.taskId, "worker"); } catch (RuntimeException e) { log.warn("cancelTask 异常 task={}", t.taskId, e); }
@@ -49,7 +57,10 @@ public final class CascadeStopNode extends UpstreamNode {
             String err = to.error();
             if (err == null || !err.startsWith("LOG_OVERFLOW")) {
                 String msg = err != null ? err : "unknown error";
-                try { t.events.error(t.mainAgentId, msg); } catch (RuntimeException e) { log.debug("终态事件写入失败(日志可能已满)", e); }
+                try {
+                    t.events.emit(EmitEvent.of(SnowflakeId.next(), "error", t.mainAgentId,
+                            null, null, msg, null, null, EmitEvent.Mode.REPLACE));
+                } catch (RuntimeException e) { log.debug("终态事件写入失败(日志可能已满)", e); }
             }
         }
         return result;

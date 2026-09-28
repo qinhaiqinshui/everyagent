@@ -1,11 +1,16 @@
 package dev.everyagent.worker.task.lifecycle;
 
+import dev.everyagent.contract.json.Json;
+import dev.everyagent.plugin.api.model.EmitEvent;
 import dev.everyagent.plugin.api.task.TaskChain;
 import dev.everyagent.plugin.api.task.TaskLifecycleContext;
 import dev.everyagent.plugin.api.task.TaskLifecycleNode;
 import dev.everyagent.plugin.api.task.TaskOutcome;
+import dev.everyagent.worker.proto.SnowflakeId;
+import dev.everyagent.worker.task.EventPayloads;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import tools.jackson.databind.node.ObjectNode;
 
 /**
  * 下行节点(order=310)：模型切换 trace（一事）。
@@ -34,7 +39,14 @@ public final class ModelSwitchTraceNode implements TaskLifecycleNode {
             if (storedConfigId == null || !storedConfigId.equals(overrideConfigId)) {
                 var t = impl.taskEntry();
                 try {
-                    t.events.modelSwitch(t.snapshot, storedConfigId);
+                    ObjectNode switchData = Json.obj();
+                    switchData.put("newConfigId", t.snapshot.configId());
+                    if (storedConfigId != null) {
+                        switchData.put("oldConfigId", storedConfigId);
+                    }
+                    t.events.emit(EmitEvent.of(SnowflakeId.next(), "model.switch", null,
+                            "模型切换", "已切换至 " + EventPayloads.modelLabel(t.snapshot),
+                            null, "done", switchData, EmitEvent.Mode.REPLACE));
                 } catch (RuntimeException e) {
                     log.debug("模型切换标注事件写入失败(日志可能已满)", e);
                 }

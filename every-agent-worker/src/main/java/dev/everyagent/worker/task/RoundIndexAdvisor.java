@@ -1,5 +1,8 @@
 package dev.everyagent.worker.task;
 
+import dev.everyagent.contract.json.Json;
+import dev.everyagent.plugin.api.model.EmitEvent;
+import dev.everyagent.worker.proto.SnowflakeId;
 import org.springframework.ai.chat.client.ChatClientRequest;
 import org.springframework.ai.chat.client.ChatClientResponse;
 import org.springframework.ai.chat.client.advisor.api.StreamAdvisor;
@@ -7,6 +10,7 @@ import org.springframework.ai.chat.client.advisor.api.StreamAdvisorChain;
 import org.springframework.core.Ordered;
 import reactor.core.publisher.Flux;
 import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.node.ObjectNode;
 
 import java.util.List;
 
@@ -82,7 +86,14 @@ public class RoundIndexAdvisor implements StreamAdvisor {
         for (RoundIndex.Round r : closed) {
             if (r.endSeq() != null) {
                 // round.closed 与 rounds.jsonl 闭合行同源;瞬态不落盘,仅推 stream 频道。
-                a.task.events.roundClosed(r.startSeq(), r.endSeq(), r.finalReply());
+                ObjectNode roundClosedData = Json.obj();
+                roundClosedData.put("startSeq", String.valueOf(r.startSeq()));
+                roundClosedData.put("endSeq", String.valueOf(r.endSeq()));
+                if (r.finalReply() != null) {
+                    roundClosedData.put("finalReply", r.finalReply());
+                }
+                a.task.events.emit(EmitEvent.transientOf(SnowflakeId.next(), "round.closed", null,
+                        null, null, null, null, roundClosedData, EmitEvent.Mode.REPLACE));
             }
         }
     }

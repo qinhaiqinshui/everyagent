@@ -1,8 +1,12 @@
 package dev.everyagent.worker.task;
 
+import dev.everyagent.plugin.api.model.EmitEvent;
+import dev.everyagent.contract.json.Json;
+import dev.everyagent.worker.proto.SnowflakeId;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
+import tools.jackson.databind.node.ObjectNode;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -87,20 +91,41 @@ public class PendingAsks {
         }
         Ask ask = new Ask(askId, taskId, agentId, kind, withIds, events);
         asks.put(askId, ask);
-        events.askCreate(askId, kind, withIds, timeoutMs, agentId);
-        events.agentStatus(agentId, "waiting-user"); // 该 agent 挂起等待用户(主/子统一)
+        ObjectNode askData = Json.obj();
+        askData.put("askId", askId);
+        askData.put("kind", kind);
+        askData.set("questions", EventPayloads.questionsToJson(withIds));
+        if (timeoutMs > 0) {
+            askData.put("timeoutMs", timeoutMs);
+        }
+        events.emit(EmitEvent.of(SnowflakeId.next(), "ask.create", agentId,
+                null, null, null, null, askData, EmitEvent.Mode.REPLACE));
+        events.emit(EmitEvent.of(SnowflakeId.next(), "agent.status", agentId,
+                null, null, null, "waiting-user", null, EmitEvent.Mode.REPLACE));
         pendingChanged(taskId, +1);
         ask.refresher = scheduler.scheduleAtFixedRate(() -> {
             try {
-                events.askState(askId, kind, "pending", withIds, agentId);
+                ObjectNode stateData = Json.obj();
+                stateData.put("askId", askId);
+                stateData.put("kind", kind);
+                stateData.put("status", "pending");
+                stateData.set("questions", EventPayloads.questionsToJson(withIds));
+                events.emit(EmitEvent.of(SnowflakeId.next(), "ask.state", agentId,
+                        null, null, null, null, stateData, EmitEvent.Mode.REPLACE));
             } catch (RuntimeException e) {
                 log.warn("ask.state 刷新失败", e);
             }
         }, 30, 30, TimeUnit.SECONDS);
         ask.timeout = scheduler.schedule(() -> {
             if (ask.future.complete(new AskAnswer("timeout", null))) {
-                events.askResolved(askId, "timeout", "timeout", agentId);
-                events.agentStatus(agentId, "running"); // 超时恢复执行(工具返回模型继续)
+                ObjectNode resolvedData = Json.obj();
+                resolvedData.put("askId", askId);
+                resolvedData.put("by", "timeout");
+                resolvedData.put("status", "timeout");
+                events.emit(EmitEvent.of(SnowflakeId.next(), "ask.resolved", agentId,
+                        null, null, null, null, resolvedData, EmitEvent.Mode.REPLACE));
+                events.emit(EmitEvent.of(SnowflakeId.next(), "agent.status", agentId,
+                        null, null, null, "running", null, EmitEvent.Mode.REPLACE));
             }
         }, timeoutMs, TimeUnit.MILLISECONDS);
         try {
@@ -124,8 +149,14 @@ public class PendingAsks {
         }
         boolean first = a.future.complete(new AskAnswer("answered", answer));
         if (first) {
-            a.events.askResolved(askId, by, "answered", a.agentId);
-            a.events.agentStatus(a.agentId, "running"); // 回答到达,该 agent 恢复执行
+            ObjectNode resolvedData = Json.obj();
+            resolvedData.put("askId", askId);
+            resolvedData.put("by", by);
+            resolvedData.put("status", "answered");
+            a.events.emit(EmitEvent.of(SnowflakeId.next(), "ask.resolved", a.agentId,
+                    null, null, null, null, resolvedData, EmitEvent.Mode.REPLACE));
+            a.events.emit(EmitEvent.of(SnowflakeId.next(), "agent.status", a.agentId,
+                    null, null, null, "running", null, EmitEvent.Mode.REPLACE));
         }
         return first;
     }
@@ -134,7 +165,12 @@ public class PendingAsks {
     public void cancelTask(String taskId, String by) {
         for (Ask a : asks.values()) {
             if (a.taskId.equals(taskId) && a.future.complete(new AskAnswer("cancelled", null))) {
-                a.events.askResolved(a.askId, by, "cancelled", a.agentId);
+                ObjectNode resolvedData = Json.obj();
+                resolvedData.put("askId", a.askId);
+                resolvedData.put("by", by);
+                resolvedData.put("status", "cancelled");
+                a.events.emit(EmitEvent.of(SnowflakeId.next(), "ask.resolved", a.agentId,
+                        null, null, null, null, resolvedData, EmitEvent.Mode.REPLACE));
             }
         }
     }

@@ -1,10 +1,12 @@
 package dev.everyagent.worker.task.lifecycle;
 
+import dev.everyagent.plugin.api.model.EmitEvent;
 import dev.everyagent.plugin.api.task.TaskLifecycleContext;
 import dev.everyagent.plugin.api.task.TaskOutcome;
 import dev.everyagent.worker.hub.EventSink;
 import dev.everyagent.worker.proto.Channels;
 import dev.everyagent.worker.proto.Events;
+import dev.everyagent.worker.proto.SnowflakeId;
 import dev.everyagent.worker.proto.TaskDtos.TaskStatus;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -40,7 +42,8 @@ public final class StatusNode extends SectionNode {
             t.status = TaskStatus.RUNNING;
         }
         eventSink.fanout(k -> Channels.tasks(k), Events.TASK_UPDATED, null, t.runtimeSummaryJson(), null);
-        t.events.agentStatus(t.mainAgentId, "running");
+        t.events.emit(EmitEvent.of(SnowflakeId.next(), "agent.status", t.mainAgentId,
+                null, null, null, "running", null, EmitEvent.Mode.REPLACE));
     }
 
     @Override
@@ -57,7 +60,8 @@ public final class StatusNode extends SectionNode {
         t.error = to.error();
         t.status = mapStatus(to.status());
         try {
-            t.events.agentStatus(t.mainAgentId, agentStatusOf(t.status));
+            t.events.emit(EmitEvent.of(SnowflakeId.next(), "agent.status", t.mainAgentId,
+                    null, null, null, agentStatusOf(t.status), null, EmitEvent.Mode.REPLACE));
         } catch (RuntimeException e) {
             log.debug("终态事件写入失败(日志可能已满)", e);
         }
