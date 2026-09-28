@@ -3,7 +3,6 @@ package dev.everyagent.worker.ship;
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.worker.hub.HubLink;
 import dev.everyagent.worker.proto.Channels;
-import dev.everyagent.worker.proto.Events;
 import dev.everyagent.worker.task.EventLog;
 import dev.everyagent.worker.task.EventRecord;
 import dev.everyagent.worker.task.TaskEntry;
@@ -50,7 +49,6 @@ public class DataPusher implements EventLog.Listener {
     private static final String EXT_OPERATE = "operate";
     private static final String EXT_INITIAL = "initial";
     private static final String OPERATE_REPLACE = "replace";
-    private static final String OPERATE_APPEND = "append";
 
     private final String sessionId;
     private final String taskId;
@@ -285,8 +283,13 @@ public class DataPusher implements EventLog.Listener {
      * agentId 注入 payload,前端折叠器据以分流主/子线程)。
      */
     private void push(EventRecord r, boolean replay) {
-        String operate = Events.DELTA.equals(r.event()) || Events.THINKING.equals(r.event())
-                ? OPERATE_APPEND : OPERATE_REPLACE;
+        String operate = OPERATE_REPLACE; // 缺省
+        if (r.ext() != null && r.ext().isObject()) {
+            JsonNode opNode = r.ext().path("operate");
+            if (opNode.isTextual()) {
+                operate = opNode.asText();
+            }
+        }
         ObjectNode ext = Json.obj();
         ext.put(EXT_TARGET, sessionId);
         ext.put(EXT_OPERATE, operate);

@@ -54,18 +54,18 @@ public final class ConversationLoader {
                 case Events.USER_MESSAGE -> {
                     flushTools(out, pending, collected);
                     pending = null;
-                    out.add(new UserMessage(p.path("text").asString("")));
+                    out.add(new UserMessage(p.path("content").asString("")));
                 }
                 case Events.MESSAGE -> {
                     flushTools(out, pending, collected);
                     pending = null;
                     List<ToolCall> calls = new ArrayList<>();
-                    for (JsonNode tc : p.path("toolCalls")) {
+                    for (JsonNode tc : p.path("data").path("toolCalls")) {
                         calls.add(new ToolCall(tc.path("id").asString(""),
                                 "function", tc.path("name").asString(""),
                                 tc.path("arguments").asString("")));
                     }
-                    String text = p.path("text").asString("");
+                    String text = p.path("content").asString("");
                     out.add(AssistantMessage.builder()
                             .content(text)
                             .toolCalls(calls)
@@ -76,8 +76,9 @@ public final class ConversationLoader {
                 }
                 case Events.TOOL_RESULT -> {
                     if (pending != null) {
-                        collected.add(new ToolResponse(p.path("callId").asString(""),
-                                p.path("name").asString(""), p.path("summary").asString("")));
+                        JsonNode data = p.path("data");
+                        collected.add(new ToolResponse(data.path("callId").asString(""),
+                                data.path("name").asString(""), p.path("content").asString("")));
                     }
                 }
                 default -> {

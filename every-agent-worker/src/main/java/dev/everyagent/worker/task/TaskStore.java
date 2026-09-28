@@ -31,7 +31,6 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
@@ -65,9 +64,6 @@ public class TaskStore {
     /** flush(taskId) 最长等待(超时放行,meta 仍非终态 → 重启自愈)。 */
     private static final long FLUSH_TIMEOUT_MS = 30_000;
     private static final int DRAIN_BATCH = 1000;
-    /** 瞬态事件(只发前端不落盘;占 seq → 磁盘 seq 有洞;主/子同名,按名跳过即可)。 */
-    private static final Set<String> PERSIST_SKIP = Set.of(
-            Events.DELTA, Events.THINKING);
     /** 事件帧 ext 标记:task.trace 的瞬态实例(如每秒倒计时的重试进度)由该标记识别,不落盘。 */
     private static final String EXT_PERSIST = "persist";
     /** agentId 缺失时的兜底文件名(旧运行时数据防御;新数据恒非空)。 */
@@ -1218,7 +1214,7 @@ public class TaskStore {
                 break;
             }
             for (EventRecord r : batch) {
-                if (PERSIST_SKIP.contains(r.event()) || isTransientExt(r)) {
+                if (isTransientExt(r)) {
                     // 瞬态事件不落盘也不写占位行,只推进游标:含瞬态的最高 seq 水位由
                     // updateMeta 持久化到 meta.json 的 seqLast,重启续号从该水位起步;
                     // 磁盘 lastSeq 可能落后于内存 lastSeq,读侧按 seq 归并 + 前端

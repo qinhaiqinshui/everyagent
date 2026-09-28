@@ -320,27 +320,27 @@ public class RoundIndexStore {
         window.sort(Comparator.comparingLong(EventRecord::seq));
         return window;
     }
-    /** 最终回复判定:主 agent message 且 toolCalls 缺失/空数组 且 text 非空。 */
+    /** 最终回复判定:主 agent message 且 data.toolCalls 缺失/空数组 且 content 非空。 */
     private static boolean isFinalReply(JsonNode payload) {
         if (payload == null || !payload.isObject()) {
             return false;
         }
-        JsonNode tc = payload.path("toolCalls");
+        JsonNode tc = payload.path("data").path("toolCalls");
         boolean noToolCalls = tc.isMissingNode() || tc.isNull() || (tc.isArray() && tc.isEmpty());
         if (!noToolCalls) {
             return false;
         }
         // 与前端 fold 口径一致:content.trim() 非空才算有正文(纯空白不算)。
-        JsonNode text = payload.path("text");
+        JsonNode text = payload.path("content");
         return text.isTextual() && !text.asString().isBlank();
     }
 
-    /** payload.text(缺省空串)。 */
+    /** payload.content(缺省空串)。 */
     private static String textOf(JsonNode payload) {
         if (payload == null) {
             return "";
         }
-        JsonNode t = payload.path("text");
+        JsonNode t = payload.path("content");
         return t.isTextual() ? t.asString() : "";
     }
 
