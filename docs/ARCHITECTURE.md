@@ -325,16 +325,43 @@ worker 的 agent 执行**复用 Spring AI 2 框架**,不手搓 agent 循环/工�
 ```
 RoundIndexAdvisor(轮次索引+耗时,最外层) → SkillAdvisor(内置 skill 渐进式披露索引;外部 skill 不进提示词,仅经 `/` 菜单手动选用) → LoopRepeatGuardAdvisor(事件发射 + 工具循环 + 死循环检测)
 → DialogInsertAdvisor(队列项「插入到当前对话」,主 agent 专属) → EmptyResponseRetryAdvisor(空响应重调,独立插件)
-→ TransientErrorRetryAdvisor(瞬时错误退避,独立插件) → ModelLengthGuardAdvisor(输出预算耗尽护栏,finish_reason=length)
+→ TransientErrorRetryAdvisor(瞬时错误退避,独立插件) → AdaptiveMaxTokensAdvisor(自适应输出预算,独立插件,order=工具循环+250,Guard 外侧)
+→ ModelLengthGuardAdvisor(输出预算耗尽护栏,独立插件 model-length-guard,finish_reason=length,order=工具循环+300)
 → ContextCompressionAdvisor(上下文压缩,独立插件,最内层重试/压缩侧) → RateLimitAdvisor(模型请求限流,独立插件,order=工具循环+500,最内层)
 ```
 
 - 核心事件发射由 `WorkerToolEventAdvisor` 完成(继承 Spring AI `ToolCallingAdvisor`,重写受保护 hook 发射 delta/message/usage/tool 等事件,**不另起一层重复实现递归循环**)。
 - 重试退避算法由 `worker.retry.strategy` 选择,空响应重试与瞬时错误重试共享:`fixed`(默认,固定 `backoff-base-ms` 间隔、`max-request-retries` 默认 30 次,适合网络抖动场景的稳定节奏恢复)或 `exponential`(`base × factor^(n-1)` 递增退避);未知取值回落 `exponential`(旧行为)。
-- `ModelLengthGuardAdvisor`(order=工具循环+300,瞬时重试内侧、上下文压缩外侧):识别「输出预算耗尽」这一确定性失败,三条路径殊途同归报同一错误——①实际收到 `finish_reason=length` 即报错;②流超 `worker.limits.length-stall-ms`(默认 120s,须短于 model-timeout-ms 的 10 分钟)无任何 chunk;③provider 在预算耗尽处**粗暴断流**(不发 length 帧、也不静默挂起,客户端表现为 IOException)。②③的「输出已达上限」判定(无 tokenizer,CJK≈1 token、其余≈4 字符 1 token):模型配置了 maxTokens 时用 20%~40% 容差的 ≈maxTokens 比例判定;**未配置 maxTokens 时**(provider 用服务端默认预算,客户端不可见)用绝对阈值兜底——自估输出 ≥ `worker.limits.length-disconnect-min-tokens`(默认 32768)即判定,「断流+已输出数万 token」是预算耗尽强信号,重试代价极高(每次重放整段长思考,长思考模型一轮可耗数万 token、循环几十分钟)。错误为自定义非重试异常(穿透瞬时重试,避免放大瞬态事件风暴),信息含「精简输入/拆分任务/降低 reasoningEffort/调大 maxTokens」建议,经任务层 error 收口呈现给用户。
+- `ModelLengthGuardAdvisor`(独立 `model-length-guard` 插件,order=工具循环+300,瞬时重试内侧、上下文压缩外侧):识别「输出预算耗尽」这一确定性失败,三条路径殊途同归报同一错误。**帧+异常双信号改造**:检测到耗尽时先向下游下发合成 `finish_reason=length` 帧,再抛非重试异常 `ModelLengthExhaustedException`。①真实 length 帧:不在 doOnNext 就地抛(会把元素转成 error,帧到不了外层)——改为透传帧 + 记 flag,流 complete 时若 flag 置位再抛;②stall/③断流:onErrorResume 里先 concatWith 下发合成帧(`ChatGenerationMetadata.builder().finishReason("length")`)再 Flux.error(原判定异常),Reactor 保证 onNext 先于 onError 到达外层。三条路径的「输出已达上限」判定(无 tokenizer,CJK≈1 token、其余≈4 字符 1 token):模型配置了 maxTokens 时用 20%~40% 容差的 ≈maxTokens 比例判定;**未配置 maxTokens 时**(provider 用服务端默认预算,客户端不可见)用绝对阈值兜底——自估输出 ≥ `worker.limits.length-disconnect-min-tokens`(默认 32768)即判定,「断流+已输出数万 token」是预算耗尽强信号,重试代价极高(每次重放整段长思考,长思考模型一轮可耗数万 token、循环几十分钟)。错误为自定义非重试异常(穿透瞬时重试,避免放大瞬态事件风暴),信息含「精简输入/拆分任务/降低 reasoningEffort/调大 maxTokens」建议,经任务层 error 收口呈现给用户。**合成帧语义不可移除**——这是跨插件协议契约:AdaptiveMaxTokensAdvisor(§7.3.1)只认帧,不认异常类型/文案。
 - `LoopRepeatGuardAdvisor` 叠加**死循环检测**:比较本轮与上一轮工具调用签名(名称+参数集合,顺序无关),连续重复达 `worker.limits.max-repeated-tool-rounds`(默认 3)**不再直接中断**——而是把一条提醒文本作为该轮工具执行结果回传 AI,留一次纠正机会(本轮不真正执行工具,与 `MissingToolCallbackResolver` 同构:错误信息作为工具结果回传由 AI 自纠);若提醒后下一轮仍下发完全相同的工具调用,才中断任务(error 收口)。守卫逻辑不在 advisor 体内,而在装饰 `ToolCallingManager` 的 `LoopRepeatGuardToolManager` 中(框架唯一允许「既阻止真实工具执行、又能注入合成工具结果回传模型」的扩展点是 `executeToolCalls`),advisor 仅负责把守卫装饰器装配到工具循环入口,事件逻辑全部继承 `WorkerToolEventAdvisor`。
 - `DialogInsertAdvisor`(普通 StreamAdvisor,在主 agent 的工具循环下行阶段)把任务队列「插入到当前对话」的用户消息 drain 并追加给 AI + 发射 `user.message` 事件;子 agent 按 kind==MAIN 旁路(对话是一次性嵌套,不接收任务队列输入)。
 - 主 Agent 与子 Agent **共用同一执行入口与 Advisor 链**,仅 agentId 不同;子 agent 不挂计时与 skill,但同挂上下文压缩。
+
+### 7.3.1 自适应输出预算（adaptive-max-tokens 插件）
+
+**背景**:reasoning 模型在长思考任务中常把 maxTokens 输出预算全部耗在 thinking 上、finish_reason=length 截断。如果用户配置了较小的 maxTokens(如 8192),虽然 Guard 会检测到并报错,但任务直接失败——用户体验差。理想行为是:检测到 length 截断时自动放大 maxTokens 重试,直到产出有效结果或触及 ceiling。
+
+**机制**(`adaptive-max-tokens` 插件的 `AdaptiveMaxTokensAdvisor` 实现 `StreamAdvisor`,order=工具循环+250,位于 Guard(+300)外侧;call 路径直通,仅 stream 路径生效):
+
+- **触发信号**:per-subscription 在 `doOnNext` 检测 `finish_reason=length` 帧(真实 provider 帧或 Guard 合成帧,不区分来源)——记 flag 后 `filter` 吞掉该帧不上抛(防止帧泄漏到外层聚合器与前端)。流结束(doOnComplete 或 onErrorResume)时 flag 置位 → 升级预算重试。
+- **交互模型**:Guard 补帧(数据面触发器)→ Adaptive 消费帧升预算重试;Guard 抛异常(控制面兜底)→ Adaptive 不在场时错误收口不丢。Adaptive 只认帧,不认异常类型/文案。异常不会使 Adaptive 失效:Adaptive(+250)在 Guard(+300)外层,Guard 异常必经 Adaptive 的 onErrorResume;Reactor 保证 onNext(帧)先于 onError(异常),flag 必已置位。
+- **升级**:`budget = min(base × multiplier^attempt, ceiling)`;重试零延迟重订阅(不加人工退避)。升级后的 budget 保存在 advisor 实例字段(per-run,主/子 agent 各自隔离),本次任务后续所有轮次均用增大后的值。
+- **回落**:连续 N 轮实际输出(usage completionTokens)< 当前预算 × 低水位 → 衰减回 base(防预算单调膨胀)。
+- **ceiling 硬上限 = 262144(256K tokens)**:2025 年主流商用模型输出上限包络值(GPT-5.2/o3 256K、Claude 4.5 128K、Gemini 3 Pro 128K 等)。超出模型真实上限时厂商返回 400,Adaptive 捕获后一次性回退到触发升级前的上一个 budget 并停止继续上调。
+- **放弃**:预算已达 ceiling 或重试次数上限 → 抛非重试异常 `AdaptiveBudgetExhaustedException`(信息含已放大至 ceiling 多少、建议精简输入/降 reasoningEffort/任务拆分)。
+- **直通条件**:`enabled=false` 或模型未配 base maxTokens 时直通(无基线无从升级)。
+
+**缺谁都照样运行(四象限)**:
+| Guard | Adaptive | 行为 |
+|---|---|---|
+| 有 | 有 | Guard 补帧+抛异常 → Adaptive 消费帧升预算重试,任务内持续生效 → 触顶 ceiling 放弃才报错 |
+| 有 | 无 | 异常直达任务层收口,现状不变 ✅ |
+| 无 | 有 | 真实 length 帧 + 流正常 complete → Adaptive 在 doOnComplete 检测帧触发升级 |
+| 无 | 无 | length 帧当正常完成(guard 出现前的旧行为),不崩 |
+
+**配置**:`worker.limits.adaptive-max-tokens.{enabled, ceiling(默认 262144), multiplier(默认 2.0), max-retries(默认 2), fallback-ratio(默认 0.5), fallback-rounds(默认 3)}`;模型级可用 `params.maxTokensCeiling` 覆盖 ceiling(厂商真实上限,如 Claude 系填 131072)。
+
+**跨插件协议契约**:「模型输出耗尽 = finish_reason=length 帧 + 非重试异常」组合信号。帧来自协议本身(比错误文案稳定),Guard 侧合成帧语义不可移除。
 
 ### 7.4 组合模型容灾（model-pool 插件）
 
@@ -355,7 +382,7 @@ RoundIndexAdvisor(轮次索引+耗时,最外层) → SkillAdvisor(内置 skill �
 - 请求起步经 `ModelRateLimiter.acquire` 排队等放行:rpm 窗口 / 并发信号量 / tpm 压力三关;超限进有界等待队列(默认队列 8、等 5 分钟),**正常排队不报错**,仅队列满 + 超时才抛 `ModelRateLimitException`(非重试,文案含「减少并发派发/调大配置」建议)。阻塞等待发生在虚拟线程上(park,零线程开销)。
 - **tpm 记账**:流中无协议级 usage(OpenAI 兼容只在末帧带),故流中用自算文本 token 粗估(CJK≈1、其余≈4 字符 1 token)累计;请求完成后用厂商真实 usage 记账入 60s 窗口,并 EMA 反向校准估算系数(`token-est-factor`,每模型独立,持久化 `~/.everyagent/model-rate-state.json`,重启接续)。token 估算经 Advisor 的 `doOnNext`/`doOnComplete` 回调驱动。
 - 全局默认:`worker.limits.model-rate.{queue-capacity, wait-timeout-ms, est-window-sec, est-safety-ratio, est-ema-alpha, default-rpm, default-max-concurrency, default-tpm}`。
-- **观测**:排队等待经 `EventEmitter.emit(EmitEvent.TraceData.transientOf("model_rate_wait", null, "模型排队中", null, "waiting"))` 发语义事件,task 层映射为瞬态 `task.trace(kind=model_rate_wait)`(前端展示「模型正在排队」,§7.19);插件未加载时无限流 Advisor → 直通 → 不限流,worker 保留 fallback `SimpleTokenEstimator` 供 `ModelLengthGuardAdvisor`(§7.3)使用。
+- **观测**:排队等待经 `EventEmitter.emit(EmitEvent.TraceData.transientOf("model_rate_wait", null, "模型排队中", null, "waiting"))` 发语义事件,task 层映射为瞬态 `task.trace(kind=model_rate_wait)`(前端展示「模型正在排队」,§7.19);插件未加载时无限流 Advisor → 直通 → 不限流,worker 保留 fallback `SimpleTokenEstimator` 供 `model-length-guard` 插件(§7.3)使用。
 - **插件不耦合内核**:`RateLimitAdvisor` 只依赖 `ModelConfig` + `EventEmitter`,不耦合 `ChatModel`/`Prompt`/`ChatResponse`/`Flux`/`TaskEvents`/`agentId`/`taskId`/`DataPusher`。`ConfigRpcHandler.rateStatus` 返回空数组(插件后续自行注册 RPC 上报限流运行态)。
 
 ### 7.4.2 模型 HTTP 超时语义(callTimeout 解除,流式长思考不限总时长)
@@ -843,9 +870,9 @@ EventLog → DataPusher.readFrom → WebSocketEmitter.push → conn.pub → 前�
 - 通过 Reactor 操作符(`doOnNext`/`doOnCancel`/`doOnError`/`doOnComplete`)绑定 Permit 生命周期:`doOnNext` 驱动流中 token 估算(`permit::onChunk`),`doOnComplete` 驱动事后精确记账与信号量释放(`permit::complete`),`doOnError`/`doOnCancel` 驱动取消与释放(`permit::cancel`)。不再经 `ModelRequestContext` 回调,直接在 Advisor 链操作。
 - **限流类驻插件包**:`ModelRateLimiter` / `RateLimitAdvisor` / `RateLimitAdvisorProvider` / `ModelRateLimitConfig` / `ModelRateLimiterRegistry` / `BuiltinTokenEstimator` / `TokenCalibrationAdvisor`(+ Provider);测试一并随插件。
 - **不耦合内核**:插件只依赖 `ModelConfig` + `EventEmitter`,不耦合 `ChatModel`/`Prompt`/`ChatResponse`/`Flux`/`TaskEvents`/`agentId`/`taskId`/`DataPusher`。
-- **worker 核心清理**:无限流器引用;`ConfigRpcHandler.rateStatus` 返回空数组(插件后续自行注册 RPC);fallback `SimpleTokenEstimator` 就位(供 `ModelLengthGuardAdvisor` 使用)。
+- **worker 核心清理**:无限流器引用;`ConfigRpcHandler.rateStatus` 返回空数组(插件后续自行注册 RPC);fallback `SimpleTokenEstimator` 就位(供 `model-length-guard` 插件使用)。
 - **回退**:插件未加载时无限流 Advisor → 直通 → 不限流;WebSocketEmitter 未建立时(无前端订阅)`emit` 仍写 EventLog,不推前端。
-- `WorkerProperties.ModelRate` 配置类留 worker(全局配置项);`TokenEstimator` SPI 接口留 plugin-api(`ModelLengthGuardAdvisor` 也依赖);插件经 `AdvisorProvider` 注册 Advisor。
+- `WorkerProperties.ModelRate` 配置类留 worker(全局配置项);`TokenEstimator` SPI 接口留 plugin-api(`model-length-guard` 插件也依赖);插件经 `AdvisorProvider` 注册 Advisor。
 
 #### 7.19.4 后续迁移路径
 
@@ -855,6 +882,7 @@ EventEmitter 是通用出口,后续把 `AgentEventChannel` 的 30 个具体方�
 |---|---|---|
 | Phase 1(本次) | EventEmitter 接口 + WebSocketEmitter + 限流/重试/压缩统一为 Advisor 插件 | ✅ 已完成 |
 | Phase 2 | `ModelPoolChatModel` 容灾切换 → `emit(TraceData)` + `ChatModelEnhancer` SPI + `model-pool` 插件抽离 | ✅ 已完成 |
+| Phase 2.5 | ModelLengthGuardAdvisor → model-length-guard 插件抽离 + AdaptiveMaxTokensAdvisor 新增 | ✅ 已完成 |
 | Phase 3 | Advisor 层事件(delta/thinking/usage/retry)→ emit | 待执行 |
 | Phase 4 | 生命周期事件(agent_started/done/status/error)→ emit | 待执行 |
 | Phase 5 | `AgentEventChannel` 瘦身为仅含 emit 的接口(30 方法胖接口消解) | 待执行 |
