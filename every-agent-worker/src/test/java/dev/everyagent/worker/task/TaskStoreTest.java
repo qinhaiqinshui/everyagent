@@ -1,8 +1,11 @@
 package dev.everyagent.worker.task;
 
 import dev.everyagent.contract.json.Json;
+import dev.everyagent.plugin.api.model.EmitEvent;
 import dev.everyagent.worker.config.WorkerProperties;
+import dev.everyagent.worker.proto.Events;
 import dev.everyagent.worker.proto.Events.ToolCallPart;
+import dev.everyagent.worker.proto.SnowflakeId;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -69,14 +72,37 @@ class TaskStoreTest {
         store.track("tb", "defaultworkspace", logB, () -> summary("tb", "running"));
 
         TaskEvents evA = new TaskEvents(logA, MAIN);
-        long seqUser = evA.userMessage("你好"); // 落盘
-        long seqDelta = evA.delta(MAIN, "d1");  // 瞬态(主);轮 seq
-        long seqThinking = evA.thinking(MAIN, "思"); // 瞬态(主);同轮 seq
-        long seqMsg = evA.message(MAIN, "思考全文", "正文",
-                List.of(new ToolCallPart("call-1", "ask_user", "{}"))); // 落盘;同轮 seq
-        long seqToolResult = evA.toolResult("call-1", "ask_user", "答案", false, MAIN); // 落盘
-        long seqSubDelta = evA.delta(SUB, "sd");  // 瞬态(子,同名事件);子轮 seq
-        long seqSubMsg = evA.message(SUB, "子思考", "子回答", List.of()); // 落盘(子);同子轮 seq
+        long seqUser = evA.emit(EmitEvent.of(SnowflakeId.next(),
+                Events.USER_MESSAGE, null, null, null, "你好", null, null,
+                EmitEvent.Mode.REPLACE)); // 落盘
+        long rid = SnowflakeId.next();
+        long seqDelta = evA.emit(EmitEvent.transientOf(rid, Events.DELTA, MAIN,
+                null, null, "d1", null, null, EmitEvent.Mode.APPEND));  // 瞬态(主);轮 seq
+        long seqThinking = evA.emit(EmitEvent.transientOf(rid, Events.THINKING, MAIN,
+                null, null, "思", null, null, EmitEvent.Mode.APPEND)); // 瞬态(主);同轮 seq
+        ObjectNode messageData = Json.obj();
+        messageData.put("thinking", "思考全文");
+        messageData.set("toolCalls", EventPayloads.toolCallsToJson(
+                List.of(new ToolCallPart("call-1", "ask_user", "{}"))));
+        long seqMsg = evA.emit(EmitEvent.of(rid, Events.MESSAGE, MAIN,
+                null, null, "正文", null, messageData,
+                EmitEvent.Mode.REPLACE)); // 落盘;同轮 seq
+        ObjectNode toolResultData = Json.obj();
+        toolResultData.put("callId", "call-1");
+        toolResultData.put("name", "ask_user");
+        toolResultData.put("truncated", false);
+        long seqToolResult = evA.emit(EmitEvent.of(SnowflakeId.next(),
+                Events.TOOL_RESULT, MAIN, null, "答案", null, null,
+                toolResultData, EmitEvent.Mode.REPLACE)); // 落盘
+        long subRid = SnowflakeId.next();
+        long seqSubDelta = evA.emit(EmitEvent.transientOf(subRid, Events.DELTA, SUB,
+                null, null, "sd", null, null, EmitEvent.Mode.APPEND));  // 瞬态(子,同名事件);子轮 seq
+        ObjectNode subMsgData = Json.obj();
+        subMsgData.put("thinking", "子思考");
+        subMsgData.set("toolCalls", EventPayloads.toolCallsToJson(List.of()));
+        long seqSubMsg = evA.emit(EmitEvent.of(subRid, Events.MESSAGE, SUB,
+                null, null, "子回答", null, subMsgData,
+                EmitEvent.Mode.REPLACE)); // 落盘(子);同子轮 seq
         long seqUsage = logA.append("usage", Json.obj(), MAIN, Json.obj().put("trace", "x")).seq(); // 落盘(ext 非 null)
         logB.append("message", Json.obj().put("text", "b"), MAIN, null); // tb 主文件
         store.flush("ta");
@@ -91,7 +117,7 @@ class TaskStoreTest {
         assertTrue(Files.isRegularFile(dirA.resolve("meta.json")), "任务布局 data/tasks/<taskId>/");
         assertTrue(Files.isRegularFile(dirB.resolve("meta.json")), "每任务独立目录");
 
-        // 按 agent 分文件:主文件 seq 1,4,6,9;子文件 seq 8
+        // 按 agent 分文件:主文件 user.message/message/tool.result/usage;子文件 message
         List<String> mainLines = Files.readAllLines(dirA.resolve(MAIN + ".jsonl"));
         List<String> subLines = Files.readAllLines(dirA.resolve(SUB + ".jsonl"));
         assertEquals(4, mainLines.size(), "瞬态(delta/thinking 主/子同名)不落盘: " + mainLines);
@@ -101,12 +127,9 @@ class TaskStoreTest {
             assertFalse(line.contains("\"event\":\"delta\"") || line.contains("\"event\":\"thinking\""), line);
             assertTrue(line.contains("\"agentId\":\"" + MAIN + "\""), "每行必记 agentId: " + line);
         }
-        // ext:usage 行携带,其余行不写字段(null 缺省)
-        assertTrue(mainLines.get(3).contains("\"ext\""), "ext 非 null 才写: " + mainLines.get(3));
-        for (int i = 0; i < mainLines.size(); i++) {
-            if (i != 3) {
-                assertFalse(mainLines.get(i).contains("\"ext\""), "ext null 不写行: " + mainLines.get(i));
-            }
+        // 统一事件模型:所有经 emit 发射的事件均携带 ext(persist + operate)
+        for (String line : mainLines) {
+            assertTrue(line.contains("\"ext\""), "ext 字段始终写入: " + line);
         }
         assertEquals(seqUsage, store.diskLastSeq(dirA), "瞬态占 seq:磁盘 seq 有洞但 lastSeq 覆盖");
 
@@ -118,11 +141,11 @@ class TaskStoreTest {
         assertEquals(SUB, events.get(3).path("payload").path("agentId").asString(), "子事件并入 payload.agentId");
         assertEquals(3, store.readEvents(dirA, MAIN, seqMsg, 100).size(), "afterSeq=message 只回其后持久事件");
         JsonNode msg = Json.parse(mainLines.get(1));
-        assertEquals("思考全文", msg.path("payload").path("thinking").asString(), "message 行含完整 thinking");
-        assertEquals("call-1", msg.path("payload").path("toolCalls").get(0).path("id").asString(),
+        assertEquals("思考全文", msg.path("payload").path("data").path("thinking").asString(), "message 行含完整 thinking");
+        assertEquals("call-1", msg.path("payload").path("data").path("toolCalls").get(0).path("id").asString(),
                 "message 行含真实 toolCall id");
         JsonNode tr = Json.parse(mainLines.get(2));
-        assertEquals("ask_user", tr.path("payload").path("name").asString(), "tool.result 带 name(冷启动重建用)");
+        assertEquals("ask_user", tr.path("payload").path("data").path("name").asString(), "tool.result 带 name(冷启动重建用)");
 
         // 单 agent 读(ConversationLoader 视角):只看主文件
         List<EventRecord> agentEvents = store.readAgentEvents(dirA, MAIN, 0, 100);

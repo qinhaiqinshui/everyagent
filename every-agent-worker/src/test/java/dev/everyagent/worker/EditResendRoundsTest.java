@@ -326,7 +326,7 @@ class EditResendRoundsTest {
         List<String> out = new ArrayList<>();
         for (JsonNode e : r.data()) {
             if ("user.message".equals(e.path("event").asString())) {
-                out.add(e.path("payload").path("text").asString());
+                out.add(e.path("payload").path("content").asString());
             }
         }
         return out;
@@ -339,7 +339,7 @@ class EditResendRoundsTest {
         String seq = "";
         for (JsonNode e : r.data()) {
             if ("user.message".equals(e.path("event").asString())
-                    && text.equals(e.path("payload").path("text").asString())) {
+                    && text.equals(e.path("payload").path("content").asString())) {
                 seq = e.path("seq").asString();
             }
         }

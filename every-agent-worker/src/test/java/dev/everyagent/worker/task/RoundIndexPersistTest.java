@@ -1,8 +1,11 @@
 package dev.everyagent.worker.task;
 
 import dev.everyagent.contract.json.Json;
+import dev.everyagent.plugin.api.model.EmitEvent;
 import dev.everyagent.worker.config.WorkerProperties;
+import dev.everyagent.worker.proto.Events;
 import dev.everyagent.worker.proto.Events.ToolCallPart;
+import dev.everyagent.worker.proto.SnowflakeId;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -23,7 +26,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * RoundIndexStore 开轮/闭合单测(@TempDir,无 Spring):
  * openRoundAtStart(开轮路径:空/已闭合尾行时追加未闭合轮,未闭合尾行时沿用不写)、
  * persistClosedRounds(advisor 路径:只把已落盘未闭合行改判闭合、幂等去重、续跑闭合)。
- * 事件经真实 TaskEvents 发射(同轮 delta/thinking/message 共享 seq,贴近线上形态)。
+ * 事件经真实 TaskEvents emit 入口发射(同轮 delta/thinking/message 共享 id=seq,贴近线上形态)。
  */
 class RoundIndexPersistTest {
 
@@ -56,9 +59,65 @@ class RoundIndexPersistTest {
         return dataDir.resolve("workspaces").resolve("defaultworkspace").resolve("tasks").resolve("t1");
     }
 
+    /** message 事件的 data:thinking + toolCalls。 */
+    private static ObjectNode msgData(String thinking, List<ToolCallPart> toolCalls) {
+        ObjectNode d = Json.obj();
+        if (thinking != null && !thinking.isEmpty()) {
+            d.put("thinking", thinking);
+        }
+        d.set("toolCalls", EventPayloads.toolCallsToJson(toolCalls));
+        return d;
+    }
+
+    /** tool.result 事件的 data。 */
+    private static ObjectNode toolResultData(String callId, String name, boolean truncated) {
+        ObjectNode d = Json.obj();
+        d.put("callId", callId);
+        d.put("name", name);
+        d.put("truncated", truncated);
+        return d;
+    }
+
+    /** 发射 user.message 并返回 seq。 */
+    private long emitUserMessage(String text) {
+        return events.emit(EmitEvent.of(SnowflakeId.next(),
+                Events.USER_MESSAGE, null, null, null, text, null, null,
+                EmitEvent.Mode.REPLACE));
+    }
+
+    /** 发射 message(持久)。 */
+    private void emitMessage(String agentId, String thinking, String text,
+                             List<ToolCallPart> toolCalls) {
+        events.emit(EmitEvent.of(SnowflakeId.next(), Events.MESSAGE, agentId,
+                null, null, text, null, msgData(thinking, toolCalls),
+                EmitEvent.Mode.REPLACE));
+    }
+
+    /** 发射 tool.result(持久)。 */
+    private void emitToolResult(String callId, String name, String summary,
+                                boolean truncated, String agentId) {
+        events.emit(EmitEvent.of(SnowflakeId.next(), Events.TOOL_RESULT, agentId,
+                null, summary, null, null,
+                toolResultData(callId, name, truncated), EmitEvent.Mode.REPLACE));
+    }
+
+    /** 发射 delta(瞬态)。 */
+    private void emitDelta(String agentId, String text) {
+        events.emit(EmitEvent.transientOf(SnowflakeId.next(),
+                Events.DELTA, agentId, null, null, text, null, null,
+                EmitEvent.Mode.APPEND));
+    }
+
+    /** 发射 thinking(瞬态)。 */
+    private void emitThinking(String agentId, String text) {
+        events.emit(EmitEvent.transientOf(SnowflakeId.next(),
+                Events.THINKING, agentId, null, null, text, null, null,
+                EmitEvent.Mode.APPEND));
+    }
+
     /** 开一轮:user.message 落盘后调用 openRoundAtStart(与 consumeInput 同路径)。 */
     private long openRound(String question) {
-        long seq = events.userMessage(question);
+        long seq = emitUserMessage(question);
         rounds.openRoundAtStart(store, "t1", seq, question, null);
         return seq;
     }
@@ -66,13 +125,13 @@ class RoundIndexPersistTest {
     /** 模拟一轮正常任务:开轮 → 工具轮(message 带 toolCalls + tool.result)→ 最终回复。 */
     private void emitNormalRound(String question, String answer) {
         openRound(question);
-        events.delta(MAIN, "想");
-        events.thinking(MAIN, "思考");
-        events.message(MAIN, "思考全文", "调工具",
+        emitDelta(MAIN, "想");
+        emitThinking(MAIN, "思考");
+        emitMessage(MAIN, "思考全文", "调工具",
                 List.of(new ToolCallPart("c1", "bash", "{}")));
-        events.toolResult("c1", "bash", "ok", false, MAIN);
-        events.delta(MAIN, "答");
-        events.message(MAIN, "", answer, List.of());
+        emitToolResult("c1", "bash", "ok", false, MAIN);
+        emitDelta(MAIN, "答");
+        emitMessage(MAIN, "", answer, List.of());
     }
 
     @Test
@@ -92,7 +151,7 @@ class RoundIndexPersistTest {
         assertEquals(1, store.readRounds(dir()).size(), "未闭合尾行沿用,不新增行");
 
         // 闭合第一轮后,再开新轮应追加
-        events.message(MAIN, "", "第一答", List.of());
+        emitMessage(MAIN, "", "第一答", List.of());
         rounds.persistClosedRounds(store, log, "t1", MAIN, null, null);
         long s3 = openRound("第三问");
         List<RoundIndex.Round> r3 = store.readRounds(dir());
@@ -132,9 +191,9 @@ class RoundIndexPersistTest {
     @Test
     void persistClosedRoundsDoesNotCreateMissingOpenRow() {
         // 未走开轮路径(用户输入后未落盘行):增量闭合不做自愈/对账,保持不写
-        events.userMessage("未开轮之问");
-        events.delta(MAIN, "流");
-        events.message(MAIN, "", "已答", List.of());
+        emitUserMessage("未开轮之问");
+        emitDelta(MAIN, "流");
+        emitMessage(MAIN, "", "已答", List.of());
         rounds.persistClosedRounds(store, log, "t1", MAIN, null, null);
         assertTrue(store.readRounds(dir()).isEmpty(), "缺失开轮行的已闭合轮不补写");
     }
@@ -142,7 +201,7 @@ class RoundIndexPersistTest {
     @Test
     void persistIgnoresForeignMainId() {
         // 事件 agentId 归属另一主 id:扫描不产轮(防御)
-        log.append(Events_USER_MESSAGE(), Json.obj().put("text", "别人的"), "other_main", null);
+        log.append(Events.USER_MESSAGE, Json.obj().put("content", "别人的"), "other_main", null);
         rounds.persistClosedRounds(store, log, "t1", MAIN, null, null);
         assertTrue(store.readRounds(dir()).isEmpty());
     }
@@ -154,9 +213,9 @@ class RoundIndexPersistTest {
         emitNormalRound("第一问", "第一答");
         rounds.persistClosedRounds(store, log, "t1", MAIN, null, null); // 第 1 轮闭合落盘
         // 中断:新输入无最终回复 → 开轮路径即落未闭合行(endSeq="")
-        long interruptedSeq = events.userMessage("被中断之问");
+        long interruptedSeq = emitUserMessage("被中断之问");
         rounds.openRoundAtStart(store, "t1", interruptedSeq, "被中断之问", null);
-        events.delta(MAIN, "半截");
+        emitDelta(MAIN, "半截");
         List<RoundIndex.Round> before = store.readRounds(dir());
         assertEquals(2, before.size());
         assertNull(before.get(1).endSeq());
@@ -164,11 +223,11 @@ class RoundIndexPersistTest {
         assertEquals(openStart, store.lastRoundStartSeq(dir()));
 
         // 续跑:同一日志无新输入,补出工具轮 + 最终回复
-        events.message(MAIN, "续跑思考", "先调工具",
+        emitMessage(MAIN, "续跑思考", "先调工具",
                 List.of(new ToolCallPart("c9", "bash", "{}")));
-        events.toolResult("c9", "bash", "ok", false, MAIN);
-        events.delta(MAIN, "续答");
-        events.message(MAIN, "", "补完之答", List.of());
+        emitToolResult("c9", "bash", "ok", false, MAIN);
+        emitDelta(MAIN, "续答");
+        emitMessage(MAIN, "", "补完之答", List.of());
         rounds.persistClosedRounds(store, log, "t1", MAIN, null, null); // 增量路径改判闭合
 
         List<RoundIndex.Round> after = store.readRounds(dir());
@@ -203,11 +262,11 @@ class RoundIndexPersistTest {
     void persistClosedRoundsComputesDurationFromPersistedStartTime() throws Exception {
         // 模拟「出错停止后继续」:中断轮由前一次运行开轮落盘(带 startedAt),本次续跑补出最终回复,
         // 耗时 = 当前时间 − 磁盘 startedAt(跨运行延续,而不是续跑重新打点)
-        long s1 = events.userMessage("被中断之问");
+        long s1 = emitUserMessage("被中断之问");
         long startedAt = System.currentTimeMillis() - 5000; // 5 秒前开轮(跨运行)
         store.appendRound("t1", new RoundIndex.Round("round_old", 1L, s1, null, "被中断之问", "",
                 List.of(), 0L, startedAt, null, null));
-        events.message(MAIN, "", "补完之答", List.of());
+        emitMessage(MAIN, "", "补完之答", List.of());
         rounds.persistClosedRounds(store, log, "t1", MAIN, null, null);
 
         RoundIndex.Round closed = store.readRounds(dir()).get(0);
@@ -223,10 +282,10 @@ class RoundIndexPersistTest {
     @Test
     void persistClosedRoundsSkipsDurationWhenStartedAtUnknown() throws Exception {
         // 旧行/scan 行无 startedAt(0):闭合时不据此计耗时,保持 0(优雅降级,不产生负值/假耗时)
-        long s1 = events.userMessage("旧数据之问");
+        long s1 = emitUserMessage("旧数据之问");
         store.appendRound("t1", new RoundIndex.Round("round_old", 1L, s1, null, "旧数据之问", "",
                 List.of(), 0L, 0L, null, null));
-        events.message(MAIN, "", "旧答", List.of());
+        emitMessage(MAIN, "", "旧答", List.of());
         rounds.persistClosedRounds(store, log, "t1", MAIN, null, null);
 
         RoundIndex.Round closed = store.readRounds(dir()).get(0);
@@ -241,16 +300,16 @@ class RoundIndexPersistTest {
         emitNormalRound("第一问", "第一答");
         rounds.persistClosedRounds(store, log, "t1", MAIN, null, null);
 
-        long secondSeq = events.userMessage("第二问");
+        long secondSeq = emitUserMessage("第二问");
         rounds.openRoundAtStart(store, "t1", secondSeq, "第二问", null);
-        events.message(MAIN, "想", "先调工具",
+        emitMessage(MAIN, "想", "先调工具",
                 List.of(new ToolCallPart("c2", "bash", "{}")));
-        events.toolResult("c2", "bash", "ok", false, MAIN);
+        emitToolResult("c2", "bash", "ok", false, MAIN);
         // 开着的轮内第二条用户输入:openRoundAtStart 沿用当前未闭合轮,不写新行
-        long midSeq = events.userMessage("中间补充输入");
+        long midSeq = emitUserMessage("中间补充输入");
         rounds.openRoundAtStart(store, "t1", midSeq, "中间补充输入", null);
-        events.delta(MAIN, "答");
-        events.message(MAIN, "", "第二答", List.of());
+        emitDelta(MAIN, "答");
+        emitMessage(MAIN, "", "第二答", List.of());
         rounds.persistClosedRounds(store, log, "t1", MAIN, null, null);
 
         List<RoundIndex.Round> all = store.readRounds(dir());
@@ -271,14 +330,14 @@ class RoundIndexPersistTest {
         assertFalse(first.roundId().isBlank());
 
         // 再次 open(尾行未闭合)→ 沿用当前轮,不重新生成(roundId 不变、行数不变)
-        long s2 = events.userMessage("中间补充");
+        long s2 = emitUserMessage("中间补充");
         assertFalse(rounds.openRoundAtStart(store, "t1", s2, "中间补充", null), "未闭合尾行沿用返回 false");
         List<RoundIndex.Round> afterReuse = store.readRounds(dir());
         assertEquals(1, afterReuse.size(), "沿用不追加新行");
         assertEquals(first.roundId(), afterReuse.get(0).roundId(), "沿用轮 roundId 不重新生成");
 
         // 闭合该轮(增量改写路径)→ roundId 沿用不变化
-        events.message(MAIN, "", "第一答", List.of());
+        emitMessage(MAIN, "", "第一答", List.of());
         rounds.persistClosedRounds(store, log, "t1", MAIN, null, null);
         List<RoundIndex.Round> closed = store.readRounds(dir());
         assertEquals(1, closed.size());
