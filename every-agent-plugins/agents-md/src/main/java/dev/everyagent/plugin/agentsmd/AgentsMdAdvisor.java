@@ -1,4 +1,4 @@
-package dev.everyagent.worker.task;
+package dev.everyagent.plugin.agentsmd;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -32,16 +32,16 @@ import org.springframework.core.Ordered;
  * 的第一个普通文件读取(UTF-8)。文件不存在 / 工作区缺失 / 目录不可读时静默跳过,不打断 agent。
  *
  * <p>读取时机:每次 {@link #before} 实时重读(任务运行中修改 agents.md 下一轮即生效),
- * 与 {@link SystemInfoAdvisor} 的静态注入不同。读取路径使用宿主机工作区根
+ * 与 {@code SystemInfoAdvisor} 的静态注入不同。读取路径使用宿主机工作区根
  * {@code workspaceRoot}(与 fs/git RPC 同源),不随 wsl-bwrap 后端做 /workspace 翻译——
  * 本 advisor 运行在 worker 宿主机 JVM 上,按宿主机真实路径读文件。
  *
- * <p>插入方式与 {@link SystemInfoAdvisor}/{@link SkillAdvisor} 一致:以额外
+ * <p>插入方式与 {@code SystemInfoAdvisor}/{@code SkillAdvisor} 一致:以额外
  * {@link SystemMessage} 插入到首部连续 SystemMessage 区之后(不落会话末位——末位必须是
  * user/ToolResponse 消息,追加系统消息会破坏模型侧消息序语义)。
  *
- * <p>顺序:order = {@code HIGHEST_PRECEDENCE + 60},介于 {@link SystemInfoAdvisor}
- * ({@code +50})与 {@link SkillAdvisor}({@code +100})之间,使约束位于环境信息之后、技能索引之前。
+ * <p>顺序:order = {@code HIGHEST_PRECEDENCE + 60},介于 {@code SystemInfoAdvisor}
+ * ({@code +50})与 {@code SkillAdvisor}({@code +100})之间,使约束位于环境信息之后、技能索引之前。
  */
 public class AgentsMdAdvisor implements BaseAdvisor {
 

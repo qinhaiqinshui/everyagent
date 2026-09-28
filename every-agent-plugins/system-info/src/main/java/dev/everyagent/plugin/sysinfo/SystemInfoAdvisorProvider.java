@@ -1,11 +1,11 @@
-package dev.everyagent.worker.plugin.adapters;
+package dev.everyagent.plugin.sysinfo;
 
-import dev.everyagent.worker.os.OsSandbox;
-import dev.everyagent.worker.plugin.AdvisorContextImpl;
+import dev.everyagent.plugin.api.WorkerServices;
 import dev.everyagent.plugin.api.spi.AdvisorContext;
 import dev.everyagent.plugin.api.spi.AdvisorProvider;
+import dev.everyagent.plugin.api.spi.SandboxBackend;
+import dev.everyagent.worker.plugin.AdvisorContextImpl;
 import dev.everyagent.worker.task.AgentEntity;
-import dev.everyagent.worker.task.SystemInfoAdvisor;
 import org.springframework.ai.chat.client.advisor.api.Advisor;
 import org.springframework.core.Ordered;
 
@@ -14,13 +14,16 @@ import org.springframework.core.Ordered;
  *
  * <p>order = {@link Ordered#HIGHEST_PRECEDENCE} + 50，scope = BOTH（主/子 agent 同挂）。
  * 每 run 新建实例。
+ *
+ * <p>沙箱信息通过 {@link WorkerServices#sandbox()} 获取 {@link SandboxBackend} 接口
+ * （已有 {@code isWslBackend()} / {@code isWslDirect()}），不直接依赖 worker 的 {@code OsSandbox} 具体类。
  */
 public class SystemInfoAdvisorProvider implements AdvisorProvider {
 
-    private final OsSandbox osSandbox;
+    private final WorkerServices services;
 
-    public SystemInfoAdvisorProvider(OsSandbox osSandbox) {
-        this.osSandbox = osSandbox;
+    public SystemInfoAdvisorProvider(WorkerServices services) {
+        this.services = services;
     }
 
     @Override
@@ -41,9 +44,10 @@ public class SystemInfoAdvisorProvider implements AdvisorProvider {
     @Override
     public Advisor create(AdvisorContext ctx) {
         AgentEntity a = ((AdvisorContextImpl) ctx).agentEntity();
+        SandboxBackend sandbox = services.sandbox();
         return new SystemInfoAdvisor(
                 a.task.workspaceRoot,
-                osSandbox.isWslBackend(),
-                osSandbox.isWslDirect());
+                sandbox.isWslBackend(),
+                sandbox.isWslDirect());
     }
 }

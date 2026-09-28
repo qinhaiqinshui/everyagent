@@ -1,7 +1,6 @@
 package dev.everyagent.worker.plugin.adapters;
 
 import dev.everyagent.worker.config.WorkerProperties;
-import dev.everyagent.worker.os.OsSandbox;
 import dev.everyagent.worker.plugin.registry.AdvisorProviderRegistry;
 import dev.everyagent.worker.skill.SkillAdvisor;
 import dev.everyagent.worker.slash.SlashTokenHandler;
@@ -13,12 +12,14 @@ import org.springframework.stereotype.Component;
 /**
  * 内置 Advisor 的 AdvisorProvider 注册入口。
  *
- * <p>在 {@link PostConstruct} 中将 12 个内置 Advisor 的适配器注册到
+ * <p>在 {@link PostConstruct} 中将内置 Advisor 的适配器注册到
  * {@link AdvisorProviderRegistry}，替代 {@code AgentClientFactory} 原硬编码的
- * Advisor 创建与顺序。适配器持有的共享依赖（TaskStore、RoundIndexStore、OsSandbox、
+ * Advisor 创建与顺序。适配器持有的共享依赖（TaskStore、RoundIndexStore、
  * SlashTokenHandler、WorkerProperties、SkillAdvisor）由 Spring 注入；
  * per-run 的 AgentEntity / ToolCallingManager 通过 {@link dev.everyagent.worker.plugin.AdvisorContextImpl}
  * 在 create() 时传递。Git 自动同步 Advisor 由 git 插件模块自行注册。
+ * SystemInfoAdvisor 由 system-info 插件模块自行注册。
+ * AgentsMdAdvisor 由 agents-md 插件模块自行注册。
  *
  * <p>注册顺序不影响最终 Advisor 链顺序——{@link AdvisorProviderRegistry} 按
  * {@link dev.everyagent.worker.plugin.spi.AdvisorProvider#order()} 排序输出。
@@ -29,7 +30,6 @@ public class BuiltInAdvisorProviders {
     private final AdvisorProviderRegistry registry;
     private final TaskStore taskStore;
     private final RoundIndexStore roundIndexStore;
-    private final OsSandbox osSandbox;
     private final SlashTokenHandler slashTokenHandler;
     private final WorkerProperties props;
     private final SkillAdvisor skillAdvisor;
@@ -38,14 +38,12 @@ public class BuiltInAdvisorProviders {
             AdvisorProviderRegistry registry,
             TaskStore taskStore,
             RoundIndexStore roundIndexStore,
-            OsSandbox osSandbox,
             SlashTokenHandler slashTokenHandler,
             WorkerProperties props,
             SkillAdvisor skillAdvisor) {
         this.registry = registry;
         this.taskStore = taskStore;
         this.roundIndexStore = roundIndexStore;
-        this.osSandbox = osSandbox;
         this.slashTokenHandler = slashTokenHandler;
         this.props = props;
         this.skillAdvisor = skillAdvisor;
@@ -55,9 +53,9 @@ public class BuiltInAdvisorProviders {
     public void registerBuiltin() {
         // 核心基础设施（0─99）
         // TokenCalibrationAdvisor 已迁至 model-rate-limit 插件（步骤 4），不再在此注册。
+        // SystemInfoAdvisor 已迁入 system-info 插件模块，由插件自行注册。
+        // AgentsMdAdvisor 已迁入 agents-md 插件模块，由插件自行注册。
         registry.register(new RoundIndexAdvisorProvider(taskStore, roundIndexStore));
-        registry.register(new SystemInfoAdvisorProvider(osSandbox));
-        registry.register(new AgentsMdAdvisorProvider());
 
         // 功能 Advisor（100─199）
         registry.register(new SkillAdvisorProvider(skillAdvisor));

@@ -50,7 +50,7 @@ public class RoundIndexAdvisor implements StreamAdvisor {
 
     @Override
     public int getOrder() {
-        // 主链最外层、SystemInfoAdvisor(+50)外层:
+        // 主链最外层、system-info advisor(+50)外层:
         // doOnComplete 晚于全部内层 advisor(最终回复 message 事件已入日志)即可。
         return Ordered.HIGHEST_PRECEDENCE + 10;
     }

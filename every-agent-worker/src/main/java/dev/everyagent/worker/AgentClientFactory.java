@@ -33,12 +33,12 @@ import java.util.List;
  *
  * <p>角色分档(对应 nagent:子 agent 不挂派发工具、不挂 skill):
  * <ul>
- *   <li>主 agent:挂 {@link SystemInfoAdvisor}(工作区/OS 环境信息) + {@link AgentsMdAdvisor}
- *       (工作区 agents.md 约束) + {@link SkillAdvisor}(注入内置 skill 渐进式披露索引)
+ *   <li>主 agent:挂 system-info 插件注入的环境信息 Advisor + agents-md 插件注入的
+ *       agents.md 约束 Advisor + {@link SkillAdvisor}(注入内置 skill 渐进式披露索引)
  *       + {@link WorkerToolEventAdvisor};
  *       工具集含 {@code SubAgentTools}(可派生子 agent),由 {@link AgentEntity#tools} 携带。</li>
- *   <li>子 agent:挂 {@link SystemInfoAdvisor}(同样需要知道工作区与系统) + {@link AgentsMdAdvisor}
- *       (工作区 agents.md 约束) + {@link WorkerToolEventAdvisor}
+ *   <li>子 agent:挂 system-info 插件注入的环境信息 Advisor + agents-md 插件注入的
+ *       agents.md 约束 Advisor + {@link WorkerToolEventAdvisor}
  *       (不挂 skill、不挂派发工具、不注册 ask_user——其 {@code tools} 本就不含 {@code SubAgentTools} 与
  *       {@code AskUserTool},结构上禁递归且不可向用户提问)。</li>
  * </ul>

@@ -1,0 +1,8 @@
+{
+  "id": "agents-md",
+  "name": "agents.md 约束注入",
+  "version": "0.1.0",
+  "description": "读取工作区根目录 agents.md 并注入 system prompt",
+  "author": "everyagent",
+  "main": "dev.everyagent.plugin.agentsmd.AgentsMdPlugin"
+}

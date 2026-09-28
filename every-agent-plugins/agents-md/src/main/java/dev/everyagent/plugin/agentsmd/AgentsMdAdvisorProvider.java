@@ -1,10 +1,9 @@
-package dev.everyagent.worker.plugin.adapters;
+package dev.everyagent.plugin.agentsmd;
 
-import dev.everyagent.worker.plugin.AdvisorContextImpl;
 import dev.everyagent.plugin.api.spi.AdvisorContext;
 import dev.everyagent.plugin.api.spi.AdvisorProvider;
+import dev.everyagent.worker.plugin.AdvisorContextImpl;
 import dev.everyagent.worker.task.AgentEntity;
-import dev.everyagent.worker.task.AgentsMdAdvisor;
 import org.springframework.ai.chat.client.advisor.api.Advisor;
 import org.springframework.core.Ordered;
 

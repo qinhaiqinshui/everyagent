@@ -372,6 +372,20 @@ public class WorkerProperties {
         /** 漂移重置阈值:converged 后误差 > 该值重置继续校准。默认 0.05(5%)。 */
         private double tokenEstimatorDriftThreshold = 0.05;
 
+        /**
+         * 自适应输出预算配置(adaptive-max-tokens 插件):
+         * 检测 finish_reason=length 帧后自动放大 maxTokens 重试。
+         */
+        private AdaptiveMaxTokens adaptiveMaxTokens = new AdaptiveMaxTokens();
+
+        public AdaptiveMaxTokens getAdaptiveMaxTokens() {
+            return adaptiveMaxTokens;
+        }
+
+        public void setAdaptiveMaxTokens(AdaptiveMaxTokens v) {
+            this.adaptiveMaxTokens = v == null ? new AdaptiveMaxTokens() : v;
+        }
+
         public int getMaxConcurrentTasks() {
             return maxConcurrentTasks;
         }
@@ -540,12 +554,79 @@ public class WorkerProperties {
             this.tokenEstimatorDriftThreshold = v;
         }
 
-        public ModelRate getModelRate() {
-            return modelRate;
-        }
+        /**
+         * 自适应输出预算配置(adaptive-max-tokens 插件):
+         * 检测 finish_reason=length 帧后自动放大 maxTokens 重试,达 ceiling 放弃。
+         *
+         * <p>配置键 {@code worker.limits.adaptive-max-tokens.*};
+         * 模型级可用 {@code params.maxTokensCeiling} 覆盖 ceiling(厂商真实上限)。
+         */
+        public static class AdaptiveMaxTokens {
+            /** 是否启用自适应输出预算。false = 直通。默认 true。 */
+            private boolean enabled = true;
+            /**
+             * ceiling 硬上限(tokens):2025 年主流商用模型输出上限包络值
+             * (GPT-5.2/o3 256K、Claude 4.5 128K、Gemini 3 Pro 128K 等)。
+             * 超出模型真实上限时厂商返回 400,由插件捕获后一次性回退。
+             * 默认 262144(256K)。
+             */
+            private long ceiling = 262144;
+            /** 升级倍率:budget = min(base × multiplier^attempt, ceiling)。默认 2.0。 */
+            private double multiplier = 2.0;
+            /** 最大重试次数。默认 2。 */
+            private int maxRetries = 2;
+            /** 低水位回落比例:连续 N 轮输出 < budget × ratio → 衰减回 base。默认 0.5。 */
+            private double fallbackRatio = 0.5;
+            /** 低水位回落所需连续轮次。默认 3。 */
+            private int fallbackRounds = 3;
 
-        public void setModelRate(ModelRate modelRate) {
-            this.modelRate = modelRate == null ? new ModelRate() : modelRate;
+            public boolean isEnabled() {
+                return enabled;
+            }
+
+            public void setEnabled(boolean enabled) {
+                this.enabled = enabled;
+            }
+
+            public long getCeiling() {
+                return ceiling;
+            }
+
+            public void setCeiling(long ceiling) {
+                this.ceiling = ceiling;
+            }
+
+            public double getMultiplier() {
+                return multiplier;
+            }
+
+            public void setMultiplier(double multiplier) {
+                this.multiplier = multiplier;
+            }
+
+            public int getMaxRetries() {
+                return maxRetries;
+            }
+
+            public void setMaxRetries(int maxRetries) {
+                this.maxRetries = maxRetries;
+            }
+
+            public double getFallbackRatio() {
+                return fallbackRatio;
+            }
+
+            public void setFallbackRatio(double fallbackRatio) {
+                this.fallbackRatio = fallbackRatio;
+            }
+
+            public int getFallbackRounds() {
+                return fallbackRounds;
+            }
+
+            public void setFallbackRounds(int fallbackRounds) {
+                this.fallbackRounds = fallbackRounds;
+            }
         }
     }
 

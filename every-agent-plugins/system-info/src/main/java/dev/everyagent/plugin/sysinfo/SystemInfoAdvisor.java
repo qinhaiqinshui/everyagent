@@ -1,4 +1,4 @@
-package dev.everyagent.worker.task;
+package dev.everyagent.plugin.sysinfo;
 
 import dev.everyagent.worker.os.wsl.WslPathMapper;
 
@@ -22,7 +22,7 @@ import org.springframework.core.Ordered;
  * <pre>
  * # 工作区
  * - 当前工作区位置： &lt;workspaceRoot&gt;(wsl-bwrap 后端为 /workspace,wsl-direct 为原路径挂载点 /c/a/foo)
- * - 当前操作系统：Windows 11(wsl 系列后端为 Linux（WSL沙箱环境，宿主机为Windows 11）)
+ * - 当前操作系统：Windows 11(wsl 系列后端为 Linux（WSL沙箱环境，宿主机为Windows 11））
  * </pre>
  * 让模型知道自己在哪个工作区、跑在什么系统上(Windows 注册 powershell、Linux/macOS
  * 注册 bash,命令选择与路径语义依赖该信息);wsl 系列后端时 AI 实际运行在 Linux
@@ -30,11 +30,11 @@ import org.springframework.core.Ordered;
  * {@code /c/a/foo} 挂载,故均按 Linux 视角注入。工作区位置缺失(旧格式冷启动
  * {@code workspaceRoot == null})时省略该行,不伪造路径。
  *
- * <p>插入方式与 {@link SkillAdvisor} 一致:以额外 {@link SystemMessage} 插入到首部
+ * <p>插入方式与 {@code SkillAdvisor} 一致:以额外 {@link SystemMessage} 插入到首部
  * 连续 SystemMessage 区之后(不落会话末位——末位必须是 user/ToolResponse 消息,
  * 追加系统消息会破坏模型侧消息序语义),完全复用 Spring AI 的 prompt / advisor 原语。
  *
- * <p>顺序:order = {@code HIGHEST_PRECEDENCE + 50},早于 {@link SkillAdvisor}
+ * <p>顺序:order = {@code HIGHEST_PRECEDENCE + 50},早于 {@code SkillAdvisor}
  * ({@code +100}),让环境信息紧贴基础 system 指令区、skill 索引随后。
  */
 public class SystemInfoAdvisor implements BaseAdvisor {

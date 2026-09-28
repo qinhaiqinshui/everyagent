@@ -1,4 +1,4 @@
-package dev.everyagent.worker.task;
+package dev.everyagent.plugin.agentsmd;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
