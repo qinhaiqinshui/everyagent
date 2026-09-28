@@ -1,8 +1,9 @@
-package dev.everyagent.worker.task;
+package dev.everyagent.plugin.modellengthguard;
 
 import com.openai.errors.OpenAIIoException;
 import dev.everyagent.plugin.api.spi.TokenEstimator;
 import dev.everyagent.worker.config.WorkerProperties;
+import dev.everyagent.worker.task.AgentEntity;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClientRequest;
@@ -13,19 +14,24 @@ import org.springframework.ai.chat.client.advisor.api.CallAdvisorChain;
 import org.springframework.ai.chat.client.advisor.api.StreamAdvisor;
 import org.springframework.ai.chat.client.advisor.api.StreamAdvisorChain;
 import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.metadata.ChatGenerationMetadata;
 import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.chat.model.Generation;
 import org.springframework.ai.chat.prompt.ChatOptions;
 import reactor.core.publisher.Flux;
 
 import java.io.IOException;
 import java.time.Duration;
+import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * 模型「输出预算耗尽」护栏 advisor(红线:一个 advisor 只负责一个功能)。
+ * 模型「输出预算耗尽」护栏 advisor（红线:一个 advisor 只负责一个功能）。
  *
  * <p>背景:reasoning 模型(如 glm-5.3)在长思考任务里会把整个 maxTokens 输出预算
  * 全部耗在 thinking 上、始终不产出正文/工具调用;某些 provider 此时<b>不优雅断开</b>——
@@ -36,13 +42,16 @@ import java.util.concurrent.atomic.AtomicReference;
  *
  * <p>职责(单一):识别「输出量已达上限但未完成」这一<b>确定性</b>失败——
  * <ol>
- *   <li>实际收到 {@code finish_reason=length} → 报 {@link ModelLengthExhaustedException};</li>
+ *   <li>实际收到 {@code finish_reason=length} → 透传该帧到外层,流结束时抛
+ *       {@link ModelLengthExhaustedException};</li>
  *   <li>流长时间无输出(超 {@code worker.limits.length-stall-ms})且自估累计输出已达上限
- *       → 判定等价于 finish_reason=length,报同一错误,避免空等 10 分钟读超时;</li>
+ *       → 判定等价于 finish_reason=length,先下发合成 {@code finish_reason=length} 帧再抛
+ *       同一错误,避免空等 10 分钟读超时;</li>
  *   <li>provider 在预算耗尽处<b>粗暴断流</b>(不发 length 帧、也不静默挂起,长思考 chunk
  *       持续到达后以 IOException 瞬时中断)——流被网络级错误中断且自估输出已达上限时同样
- *       判定等价 length,报同一错误;否则该错误会被外层瞬时重试当作普通网络抖动退避重跑,
- *       每次重试重新整段长思考再次占满预算、再次断流,循环几十分钟。</li>
+ *       判定等价 length,先下发合成 {@code finish_reason=length} 帧再抛同一错误;否则该错误会被
+ *       外层瞬时重试当作普通网络抖动退避重跑,每次重试重新整段长思考再次占满预算、再次断流,
+ *       循环几十分钟。</li>
  * </ol>
  * ②③的「输出已达上限」判定:配置了 maxTokens 时用比例(80%~140% 容差);<b>未配置
  * maxTokens</b>(provider 按服务端默认预算截断,客户端不可见)时用绝对阈值
@@ -50,6 +59,15 @@ import java.util.concurrent.atomic.AtomicReference;
  * token」是预算耗尽的强信号,快速收口优于高代价重放。
  * 错误为自定义非重试异常(非 OpenAIServiceException/IO/超时),外层瞬时错误重试不会
  * 重复退避;错误信息给足调整建议(精简输入/拆分任务/降低 reasoningEffort/调大 maxTokens)。
+ *
+ * <p><b>补帧信号设计（跨插件协议契约，语义不可移除）</b>:在 stall/断流路径上,
+ * 本 advisor 在抛出 {@link ModelLengthExhaustedException} 之前,会先向下游下发一个合成的
+ * {@code finish_reason=length} 帧。合成帧是给 Adaptive（adaptive-max-tokens 插件）的
+ * <b>数据面触发器</b>——Adaptive 只认 {@code finish_reason=length} 帧作为"模型输出预算
+ * 不足"的信号来触发自适应调整策略;异常是给任务层的<b>控制面兜底</b>——任务层捕获后
+ * 统一 error 收口。Reactor 保证 onNext 先于 onError 到达外层,因此 Adaptive 先收到合成帧
+ * 再收到异常。对于真实 {@code finish_reason=length} 帧(路径①),帧天然已透传到外层,
+ * 不需要额外合成——流 complete 时再抛异常即可。
  *
  * <p>位置:order = {@link ToolCallingAdvisor#DEFAULT_ORDER} + 300,位于瞬时错误重试
  * (+200)内侧、上下文压缩(+400)外侧——紧贴模型流,能逐 chunk 看到原始输出;其抛出的
@@ -116,11 +134,20 @@ public class ModelLengthGuardAdvisor implements CallAdvisor, StreamAdvisor {
             AtomicReference<String> thinkingAcc = new AtomicReference<>("");
             AtomicLong thinkTokens = new AtomicLong();
             AtomicLong textTokens = new AtomicLong();
+            // 路径①flag:doOnNext 检测到真实 finish_reason=length 帧时置位,
+            // 流 complete 时若 flag 置位再抛异常——不在 doOnNext 就地抛(会把该帧转成 error,
+            // 帧到不了外层)。帧先透传,异常后发,Reactor 保证 onNext 先于 onComplete/onError。
+            AtomicBoolean lengthFlag = new AtomicBoolean(false);
             Flux<ChatClientResponse> flux = chain.nextStream(request)
                     .doOnNext(chunk -> {
                         accumulate(chunk, thinkingAcc, thinkTokens, textTokens);
                         ChatResponse cr = chunk.chatResponse();
                         if (cr != null && cr.hasFinishReasons(LENGTH)) {
+                            lengthFlag.set(true);
+                        }
+                    })
+                    .doOnComplete(() -> {
+                        if (lengthFlag.get()) {
                             throw lengthExhausted(thinkTokens.get(),
                                     textTokens.get(), maxTokens, Cause.FINISH_REASON);
                         }
@@ -133,6 +160,9 @@ public class ModelLengthGuardAdvisor implements CallAdvisor, StreamAdvisor {
             // length 帧、也不静默挂起,长思考 chunk 持续到达后以 IOException 瞬时中断):若不在此
             // 收口,该错误会被外层瞬时重试当作普通网络抖动退避重跑——每次重试重新整段长思考
             // 再次占满预算、再次断流,循环几十分钟。转换出的非重试异常穿透瞬时重试直达任务层。
+            //
+            // 补帧:在抛异常之前先 concatWith 合成 finish_reason=length 帧(给 Adaptive 数据面
+            // 触发器),再 Flux.error(异常)(给任务层控制面兜底)。Reactor 保证 onNext 先于 onError。
             return flux.onErrorResume(e -> {
                 boolean stall = e instanceof TimeoutException;
                 if (!stall && !isNetworkError(e)) {
@@ -152,13 +182,33 @@ public class ModelLengthGuardAdvisor implements CallAdvisor, StreamAdvisor {
                                 a.task.taskId, a.agentId, e.getClass().getSimpleName(),
                                 e.getMessage(), think + text, basis);
                     }
-                    return Flux.error(lengthExhausted(think, text, maxTokens,
-                            stall ? Cause.STALL : Cause.DISCONNECTED));
+                    // 先下发合成 finish_reason=length 帧(Adaptive 数据面触发器),
+                    // 再抛异常(任务层控制面兜底)。Reactor 保证 onNext 先于 onError 到达外层。
+                    return Flux.just(syntheticLengthFrame())
+                            .concatWith(Flux.error(lengthExhausted(think, text, maxTokens,
+                                    stall ? Cause.STALL : Cause.DISCONNECTED)));
                 }
                 // 输出远未达上限:真·网络/服务端停顿,原样上抛交瞬时重试。
                 return Flux.error(e);
             });
         });
+    }
+
+    /**
+     * 构造合成 {@code finish_reason=length} 帧（跨插件协议契约，语义不可移除）。
+     *
+     * <p>合成帧是给 Adaptive（adaptive-max-tokens 插件）的<b>数据面触发器</b>——
+     * Adaptive 只认 {@code finish_reason=length} 帧作为"模型输出预算不足"的信号来
+     * 触发自适应调整策略。在 stall/断流路径上,provider 没有发送 length 帧,因此需要
+     * advisor 合成一个,确保 Adaptive 能收到触发信号。帧内容为空,仅携带
+     * {@code finishReason="length"} 元数据。
+     */
+    private static ChatClientResponse syntheticLengthFrame() {
+        AssistantMessage msg = AssistantMessage.builder().content("").build();
+        Generation gen = new Generation(msg,
+                ChatGenerationMetadata.builder().finishReason("length").build());
+        ChatResponse cr = new ChatResponse(List.of(gen));
+        return new ChatClientResponse(cr, Map.of());
     }
 
     /** 逐 chunk 累加思考/正文 token 估算(思考为累积值差分,正文为增量)。 */
@@ -287,7 +337,7 @@ public class ModelLengthGuardAdvisor implements CallAdvisor, StreamAdvisor {
      * 网络级错误判定(沿 cause 链下沉,深度封顶防环):SDK IO 信封/IO/超时。
      * provider 在输出预算耗尽处粗暴断开 SSE(不发 finish_reason=length、也不静默挂起)时,
      * 客户端表现为 IO 异常——配合自估输出 ≈ maxTokens 即等价 length 耗尽(见 adviseStream 收口)。
-     * 判定口径与 {@link TransientErrorRetryAdvisor} 的网络级瞬时判定一致。
+     * 判定口径与 {@code TransientErrorRetryAdvisor} 的网络级瞬时判定一致。
      */
     static boolean isNetworkError(Throwable error) {
         int depth = 0;
@@ -307,12 +357,5 @@ public class ModelLengthGuardAdvisor implements CallAdvisor, StreamAdvisor {
         STALL,
         /** 流被网络级错误中断且自估输出 ≈ maxTokens(provider 粗暴断流)。 */
         DISCONNECTED
-    }
-
-    /** 输出预算耗尽(等价 finish_reason=length)。非重试,由任务层统一 error 收口。 */
-    public static final class ModelLengthExhaustedException extends RuntimeException {
-        public ModelLengthExhaustedException(String message) {
-            super(message);
-        }
     }
 }

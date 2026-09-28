@@ -1,12 +1,14 @@
-package dev.everyagent.worker.task;
+package dev.everyagent.plugin.modellengthguard;
 
-import com.openai.errors.OpenAIIoException;
 import dev.everyagent.plugin.api.spi.TokenEstimator;
 import dev.everyagent.worker.config.WorkerProperties;
+import dev.everyagent.worker.task.AgentEntity;
+import dev.everyagent.worker.task.TaskEntry;
 import dev.everyagent.plugin.api.model.ModelConfig;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.client.ChatClientRequest;
 import org.springframework.ai.chat.client.ChatClientResponse;
+import org.springframework.ai.chat.client.advisor.api.StreamAdvisor;
 import org.springframework.ai.chat.client.advisor.api.StreamAdvisorChain;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.metadata.ChatGenerationMetadata;
@@ -21,6 +23,7 @@ import java.io.IOException;
 import java.net.SocketException;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.TimeoutException;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -30,8 +33,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * {@link ModelLengthGuardAdvisor} 单测:
  * 「输出≈maxTokens」粗估判定(nearMax)、网络级错误判定(isNetworkError)的纯函数验证;
  * 以及流式收口路径(断流/远未满额断流)的 StepVerifier 验证——provider 在输出预算
- * 耗尽处粗暴断开 SSE(不发 finish_reason=length)时应转换为非重试的
- * {@link ModelLengthGuardAdvisor.ModelLengthExhaustedException},避免外层瞬时重试
+ * 耗尽处粗暴断开 SSE(不发 finish_reason=length)时应先下发合成 finish_reason=length 帧,
+ * 再转换为非重试的 {@link ModelLengthExhaustedException},避免外层瞬时重试
  * 重新整段长思考再次占满预算的循环。
  */
 class ModelLengthGuardAdvisorTest {
@@ -121,7 +124,8 @@ class ModelLengthGuardAdvisorTest {
 
     /**
      * 场景:长思考持续输出后流被网络级错误粗暴中断(无 finish_reason=length 帧),
-     * 且累计输出已≈maxTokens → 应转换为 ModelLengthExhaustedException(非重试,快速收口)。
+     * 且累计输出已≈maxTokens → 应先收到合成 finish_reason=length 帧,再收到
+     * ModelLengthExhaustedException(非重试,快速收口)。
      */
     @Test
     void abruptDisconnectNearMaxConvertsToLengthExhausted() {
@@ -131,8 +135,8 @@ class ModelLengthGuardAdvisorTest {
         ModelLengthGuardAdvisor advisor = advisor(source);
 
         StepVerifier.create(advisor.adviseStream(request(maxTokens(10_000)), chain(source)))
-                .expectNextCount(1)
-                .expectError(ModelLengthGuardAdvisor.ModelLengthExhaustedException.class)
+                .expectNextCount(2)   // 原始思考 chunk + 合成 length 帧
+                .expectError(ModelLengthExhaustedException.class)
                 .verify();
     }
 
@@ -151,8 +155,8 @@ class ModelLengthGuardAdvisorTest {
         OpenAiChatOptions noMaxTokens = OpenAiChatOptions.builder().build(); // 未设置 maxTokens
 
         StepVerifier.create(advisor.adviseStream(request(noMaxTokens), chain(source)))
-                .expectNextCount(1)
-                .expectError(ModelLengthGuardAdvisor.ModelLengthExhaustedException.class)
+                .expectNextCount(2)   // 原始思考 chunk + 合成 length 帧
+                .expectError(ModelLengthExhaustedException.class)
                 .verify();
     }
 
@@ -171,7 +175,7 @@ class ModelLengthGuardAdvisorTest {
         StepVerifier.create(advisor.adviseStream(request(noMaxTokens), chain(source)))
                 .expectNextCount(1)
                 .expectErrorMatches(e -> e instanceof IOException
-                        && !(e instanceof ModelLengthGuardAdvisor.ModelLengthExhaustedException))
+                        && !(e instanceof ModelLengthExhaustedException))
                 .verify();
     }
 
@@ -189,7 +193,50 @@ class ModelLengthGuardAdvisorTest {
         StepVerifier.create(advisor.adviseStream(request(maxTokens(100_000)), chain(source)))
                 .expectNextCount(1)
                 .expectErrorMatches(e -> e instanceof IOException
-                        && !(e instanceof ModelLengthGuardAdvisor.ModelLengthExhaustedException))
+                        && !(e instanceof ModelLengthExhaustedException))
+                .verify();
+    }
+
+    /**
+     * 场景:收到真实 finish_reason=length 帧时,帧先透传到外层(expectNext),
+     * 然后流 complete 时抛 ModelLengthExhaustedException。
+     */
+    @Test
+    void realLengthFramePassesThroughThenCompleteThrows() {
+        // 构造带 finish_reason=length 的帧
+        ChatClientResponse lengthFrame = lengthFinishChunk("思".repeat(8000));
+        Flux<ChatClientResponse> source = Flux.just(lengthFrame);
+        ModelLengthGuardAdvisor advisor = advisor(source);
+
+        StepVerifier.create(advisor.adviseStream(request(maxTokens(10_000)), chain(source)))
+                .expectNextCount(1)   // 真实 length 帧透传
+                .expectError(ModelLengthExhaustedException.class)
+                .verify();
+    }
+
+    /**
+     * 场景:合成帧先于异常到达外层——stall/断流路径触发时,
+     * 先收到合成 finish_reason=length 帧,再收到 ModelLengthExhaustedException。
+     * 验证合成帧确实携带 finish_reason=length 元数据。
+     */
+    @Test
+    void syntheticFrameArrivesBeforeException() {
+        Flux<ChatClientResponse> source = Flux.<ChatClientResponse>just(
+                        thinkingChunk("思".repeat(8000), null))
+                .concatWith(Flux.error(new IOException("Stream was closed")));
+        ModelLengthGuardAdvisor advisor = advisor(source);
+
+        StepVerifier.create(advisor.adviseStream(request(maxTokens(10_000)), chain(source)))
+                .expectNextMatches(chunk -> {
+                    // 第一个帧是原始思考 chunk
+                    return chunk.chatResponse() != null;
+                })
+                .expectNextMatches(chunk -> {
+                    // 第二个帧是合成 length 帧
+                    ChatResponse cr = chunk.chatResponse();
+                    return cr != null && cr.hasFinishReasons(Set.of("length"));
+                })
+                .expectError(ModelLengthExhaustedException.class)
                 .verify();
     }
 
@@ -243,6 +290,18 @@ class ModelLengthGuardAdvisorTest {
         AssistantMessage msg = builder.build();
         Generation gen = new Generation(msg,
                 ChatGenerationMetadata.builder().finishReason("STOP").build());
+        return new ChatClientResponse(new ChatResponse(List.of(gen)), Map.of());
+    }
+
+    /** 构造带 finish_reason=length 的帧(模拟 provider 真实返回的 length 帧)。 */
+    private static ChatClientResponse lengthFinishChunk(String thinking) {
+        AssistantMessage.Builder<?> builder = AssistantMessage.builder().content("");
+        if (thinking != null) {
+            builder.properties(Map.of("reasoningContent", thinking));
+        }
+        AssistantMessage msg = builder.build();
+        Generation gen = new Generation(msg,
+                ChatGenerationMetadata.builder().finishReason("length").build());
         return new ChatClientResponse(new ChatResponse(List.of(gen)), Map.of());
     }
 }

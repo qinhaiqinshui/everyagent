@@ -1,0 +1,8 @@
+{
+  "id": "model-length-guard",
+  "name": "模型输出预算耗尽护栏",
+  "version": "0.1.0",
+  "description": "检测模型输出预算耗尽(finish_reason=length/stall/断流),先补帧再抛异常",
+  "author": "everyagent",
+  "main": "dev.everyagent.plugin.modellengthguard.ModelLengthGuardPlugin"
+}

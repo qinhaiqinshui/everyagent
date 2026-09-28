@@ -1,6 +1,5 @@
 package dev.everyagent.worker.plugin.adapters;
 
-import dev.everyagent.plugin.api.spi.TokenEstimator;
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.os.OsSandbox;
 import dev.everyagent.worker.plugin.registry.AdvisorProviderRegistry;
@@ -34,7 +33,6 @@ public class BuiltInAdvisorProviders {
     private final SlashTokenHandler slashTokenHandler;
     private final WorkerProperties props;
     private final SkillAdvisor skillAdvisor;
-    private final dev.everyagent.plugin.api.spi.TokenEstimator tokenEstimator;
 
     public BuiltInAdvisorProviders(
             AdvisorProviderRegistry registry,
@@ -43,8 +41,7 @@ public class BuiltInAdvisorProviders {
             OsSandbox osSandbox,
             SlashTokenHandler slashTokenHandler,
             WorkerProperties props,
-            SkillAdvisor skillAdvisor,
-            dev.everyagent.plugin.api.spi.TokenEstimator tokenEstimator) {
+            SkillAdvisor skillAdvisor) {
         this.registry = registry;
         this.taskStore = taskStore;
         this.roundIndexStore = roundIndexStore;
@@ -52,7 +49,6 @@ public class BuiltInAdvisorProviders {
         this.slashTokenHandler = slashTokenHandler;
         this.props = props;
         this.skillAdvisor = skillAdvisor;
-        this.tokenEstimator = tokenEstimator;
     }
 
     @PostConstruct
@@ -74,7 +70,7 @@ public class BuiltInAdvisorProviders {
         // 重试 / 护栏（400─599）
         // EmptyResponseRetryAdvisor / TransientErrorRetryAdvisor 已迁入独立插件模块（步骤 3），
         // 由各插件自行注册，不再在此注册。
-        registry.register(new ModelLengthGuardAdvisorProvider(props, tokenEstimator));
+        // ModelLengthGuardAdvisor 已迁入 model-length-guard 插件模块，由插件自行注册，不再在此注册。
 
         // 终层（800─999）
         // ContextCompressionAdvisor 已迁入 context-compression 插件模块（步骤 3），不再在此注册。
