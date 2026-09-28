@@ -12,7 +12,8 @@
 - **Guard 的耗尽表达 = 先补帧、再抛异常**：检测到耗尽（①真实 length 帧 / ②stall / ③断流）时，先向下游下发**合成 `finish_reason=length` 帧**（`ChatGenerationMetadata.builder().finishReason("length")`，与 OpenAiChatModel 内部构造同款 API），随后仍抛非重试异常 `ModelLengthExhaustedException`（现状不变的部分——异常是错误收口的载体，直达任务层、穿透瞬时重试防风暴）。
   - ①真实 length 帧：Guard **不在 doOnNext 里就地抛**（doOnNext 抛出会把该元素转成 error，帧到不了外层）——改为透传帧 + 记 flag，流 complete 时若 flag 置位再抛；
   - ②stall/③断流：`onErrorResume` 里先 `concatWith` 下发合成帧、再 `Flux.error(原判定异常)`。Reactor 保证 onNext 先于 onError 到达外层。
-- **Adaptive 只认帧，不认异常**：per-subscription 在 `doOnNext` 记录「见过 finish_reason=length 帧」flag；流结束（`doOnComplete` **或** `onErrorResume`）时 flag 置位 → 升级 `budget = min(base × multiplier^attempt, ceiling)` → 改写 prompt options（`mutate().maxTokens(budget)`）重发（重调 `chain.nextStream`，吞掉错误信号）；未置位 → 原样透传。判定只有一条规则，complete/error 两路对称，无字符串匹配、无类型耦合。
+- **Adaptive 只认帧，不认异常，且是 length 帧的终点**：per-subscription 在 `doOnNext` 检测 `finish_reason=length` 帧——记 flag 后 **`filter` 吞掉该帧不上抛**（防止 Guard 合成帧/真实帧泄漏到外层聚合器与前端造成语义混乱）；流结束（`doOnComplete` **或** `onErrorResume`）时 flag 置位 → 升级 `budget = min(base × multiplier^attempt, ceiling)` → 改写 prompt options（`mutate().maxTokens(budget)`）重发（重调 `chain.nextStream`，吞掉错误信号）；未置位 → 原样透传。判定只有一条规则，complete/error 两路对称，无字符串匹配、无类型耦合。**异常不会使 Adaptive 失效**：Adaptive(+250) 在 Guard(+300) 外层，Guard 异常必经 Adaptive 的 onErrorResume；Reactor 保证 onNext(帧)先于 onError(异常)，flag 必已置位；onErrorResume 拦截后错误不再外传（外层工具循环只看到重试轮的流）；TransientErrorRetry(+200) 更外层且只重试瞬时错误，不抢信号。
+- **call 路径第一版不启用**：Guard 的 adviseCall 抛异常时原始响应已被吞，Adaptive 无帧信号可查；worker agent 执行全走 stream（AgentRunner），call 仅 ai-review 等单轮场景，异常原样透传（现状收口不变）。
 - 放弃（预算已达 ceiling 或重试次数上限）→ 抛**自己的**非重试异常 `AdaptiveBudgetExhaustedException`（信息含已放大至 ceiling 多少、建议精简输入/降 reasoningEffort/任务拆分）。
 - 预算状态存 advisor 实例字段，**本次任务全程沿用**（per-run 创建，主/子 agent 各自隔离；升过的值持续生效，回落见下）。
 - **跨插件协议契约**：「模型输出耗尽 = finish_reason=length 帧 + 非重试异常」组合信号。帧来自协议本身（比错误文案稳定），Guard 侧 javadoc 注明合成帧语义不可移除。
@@ -63,7 +64,7 @@
     - 状态：待执行
     - agent：-
     - 依赖：依赖步骤 3
-    - 验收标准：`AdaptiveMaxTokensAdvisor`（Call+Stream，order=+250，在 Guard +300 外侧）+ Provider + `AdaptiveBudgetExhaustedException` + WorkerProperties 新增 `worker.limits.adaptive-max-tokens.*`（ceiling 默认 262144）；单测覆盖：error 路径（Guard 帧+异常）触发升级重试、complete 路径（无 Guard 真实帧）触发升级、budget 任务内持续生效（第二轮直接用升值）、达 ceiling 放弃抛错、400 回退上一档、低水位回落、未配 base maxTokens/enabled=false 直通、非 length 错误原样透传
+    - 验收标准：`AdaptiveMaxTokensAdvisor`（Stream，order=+250，在 Guard +300 外侧；call 路径直通）+ Provider + `AdaptiveBudgetExhaustedException` + WorkerProperties 新增 `worker.limits.adaptive-max-tokens.*`（ceiling 默认 262144）；单测覆盖：error 路径（Guard 帧+异常）触发升级重试、complete 路径（无 Guard 真实帧）触发升级、**length 帧被吞不上抛**（外层聚合器视角看不到帧）、budget 任务内持续生效（第二轮直接用升值）、达 ceiling 放弃抛错、400 回退上一档、低水位回落、未配 base maxTokens/enabled=false 直通、非 length 错误原样透传
 - [ ] 步骤 6：核心清理与文档校准
     - 状态：待执行
     - agent：-
@@ -77,7 +78,7 @@
 
 ## 备注
 - 步骤 2/3 与步骤 1 无依赖可并行；步骤 4/5 分别依赖 2/3，**彼此可并行**（互不读写对方模块）；6 依赖 4+5；7 收口。
-- 交互协议（帧+异常双信号）：Guard 补帧是给 Adaptive 的**数据面触发器**（Adaptive 只认 finish_reason=length 帧，不认异常类型/文案）；Guard 抛异常是给任务层的**控制面兜底**（Adaptive 不在场时错误收口不丢）。实现要点：Guard 不得在 doOnNext 就地抛（帧会被转成 error 到不了外层），真实帧透传+complete 时抛、stall/断流先补帧再 error。
+- 交互协议（帧+异常双信号）：Guard 补帧是给 Adaptive 的**数据面触发器**（Adaptive 只认 finish_reason=length 帧，不认异常类型/文案）；Guard 抛异常是给任务层的**控制面兜底**（Adaptive 不在场时错误收口不丢）。实现要点：Guard 不得在 doOnNext 就地抛（帧会被转成 error 到不了外层），真实帧透传+complete 时抛、stall/断流先补帧再 error；Adaptive 记 flag 后 filter 吞帧（帧不得泄漏到外层聚合器/前端）；call 路径无帧信号，Adaptive 不启用（直通）。
 - Adaptive 重试重放的输出（length 耗尽发生在流末期，已下发内容多）会造成前端 delta 重复一轮——与瞬时重试的既有行为同构，第一版接受（前端按轮聚合可辨）；若体验不佳，二期可在重试轮发 `model_retry` 瞬态 trace 标记前端替换渲染。
 - 配置新增走"模型级 params 优先、全局 limits 兜底"既有口径，与去池化方案（plan-core-depooling.md §5.1）及 Phase 6 热更新正交，互不牵扯。
 - 红线自检：两 advisor 均薄实现（Call/StreamAdvisor，不自建工具循环/聚合）；一个插件一个功能；复用 ChatClient/Advisor 生态。
