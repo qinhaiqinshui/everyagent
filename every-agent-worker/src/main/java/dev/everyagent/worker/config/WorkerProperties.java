@@ -67,8 +67,6 @@ public class WorkerProperties {
     /**
      * 模型配置项(Spring 配置绑定用可变 POJO;ConfigStore 启动时转为不可变快照)。
      * 字段对应 ConfigDtos.ModelConfig;params 为自由 JSON 结构(temperature 等)。
-     * provider = model-pool 时该条是「容灾池」:model 字段用逗号分隔的池成员 configId
-     * 列表(首个 = 主模型),无 baseUrl/apiKey/模型名,实际请求由各成员模型发出。
      */
     public static class Model {
         private String configId;

@@ -7,6 +7,7 @@ import dev.everyagent.plugin.api.model.EventEmitter;
 import dev.everyagent.plugin.api.model.MemberSpec;
 import dev.everyagent.plugin.api.model.ModelConfig;
 import dev.everyagent.worker.config.WorkerProperties;
+import dev.everyagent.worker.modules.ConfigStore;
 import dev.everyagent.worker.modules.ConfigStore.ResolvedConfig;
 import dev.everyagent.worker.plugin.registry.ChatModelEnhancerRegistry;
 import org.springframework.ai.chat.model.ChatModel;
@@ -16,8 +17,6 @@ import org.springframework.stereotype.Component;
 import tools.jackson.databind.JsonNode;
 
 import java.time.Duration;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.function.UnaryOperator;
 
 
@@ -29,19 +28,21 @@ import java.util.function.UnaryOperator;
  * (buildRequestPrompt 原样透传并强转 OpenAiChatOptions),故每轮请求必须复用
  * options() 产出的完整快照,仅在其上追加工具集。
  *
- * <p>{@code provider: model-pool} 池配置经 {@link #buildAgentModel} 委托给
+ * <p>组合 provider 配置(如 model-pool)经 {@link #buildAgentModel} 委托给
  * {@link ChatModelEnhancer} 插件构建(产出组合 ChatModel,按序容灾切换),
- * 普通配置照旧产出 {@link OpenAiChatModel}。
+ * 普通配置照旧产出 {@link OpenAiChatModel}。路由判据:该 provider 有 enhancer 认领 → 委托;
+ * 无 enhancer → 走普通 OpenAI 兼容路径。
  */
 @Component
 public class ChatModelFactory {
 
-    /** agent 装配结果:chatModel + 每轮 prompt 的 options 基底(池配置取主成员快照)。 */
+    /** agent 装配结果:chatModel + 每轮 prompt 的 options 基底(组合 provider 取主成员快照)。 */
     public record AgentModel(ChatModel chatModel, OpenAiChatOptions options) {
     }
 
     private final WorkerProperties props;
     private final ChatModelEnhancerRegistry enhancerRegistry;
+    private final ConfigStore configStore;
     /**
      * 缓存:按 configId 复用 OpenAiChatModel 实例。openai-java SDK 每次构建
      * OpenAIClient 都会创建新的 Timer("DefaultSleeper") + streamHandler 线程池
@@ -52,31 +53,34 @@ public class ChatModelFactory {
             new java.util.concurrent.ConcurrentHashMap<>();
 
     public ChatModelFactory(WorkerProperties props,
-            ChatModelEnhancerRegistry enhancerRegistry) {
+            ChatModelEnhancerRegistry enhancerRegistry,
+            ConfigStore configStore) {
         this.props = props;
         this.enhancerRegistry = enhancerRegistry;
+        this.configStore = configStore;
     }
 
     /**
      * 构建 agent 模型 + 请求 options。
      * <ul>
-     *   <li>普通配置:chatModel = {@link OpenAiChatModel},options = {@link #options} 完整快照;</li>
-     *   <li>池配置({@link ResolvedConfig#isPool()}):chatModel = 模型池插件产出的组合 ChatModel,
+     *   <li>普通配置(无 enhancer 认领该 provider):chatModel = {@link OpenAiChatModel},
+     *       options = {@link #options} 完整快照;</li>
+     *   <li>组合 provider 配置(有 enhancer 认领):chatModel = 插件产出的组合 ChatModel,
      *       options = 主成员完整快照——上下文压缩等 advisor 读 prompt.options 拿到主模型参数。</li>
      * </ul>
      *
-     * @param cfg               任务/审议解析出的配置(池配置需已填充 poolMembers)
+     * @param cfg               任务/审议解析出的配置
      * @param agentId           日志归属 agent id
-     * @param events            任务事件发射器(池模型发 model_failover trace;普通模型忽略)
+     * @param events            任务事件发射器(组合模型发 model_failover trace;普通模型忽略)
      * @param optionsCustomizer 可选:对每个成员/普通模型的 options 统一定制(如审议 timeout 覆盖);null 不覆盖
      */
     public AgentModel buildAgentModel(ResolvedConfig cfg, String agentId, TaskEvents events,
             UnaryOperator<OpenAiChatOptions> optionsCustomizer) {
-        if (!cfg.isPool()) {
+        if (enhancerRegistry.find(cfg.snapshot().provider()) == null) {
             OpenAiChatOptions options = apply(options(cfg), optionsCustomizer);
             return new AgentModel(build(cfg, options, agentId, events), options);
         }
-        // 池配置 → 委托给 ChatModelEnhancer 插件构建(组合 ChatModel + 主成员 options)
+        // 组合 provider → 委托给 ChatModelEnhancer 插件构建(组合 ChatModel + 主成员 options)
         ChatModelEnhancer enhancer = enhancerRegistry.find(cfg.snapshot().provider());
         if (enhancer == null) {
             throw new IllegalStateException(
@@ -91,12 +95,9 @@ public class ChatModelFactory {
             }
 
             @Override
-            public List<MemberSpec> members() {
-                List<MemberSpec> specs = new ArrayList<>(cfg.poolMembers().size());
-                for (ResolvedConfig m : cfg.poolMembers()) {
-                    specs.add(new MemberSpec(m.snapshot(), m.apiKey()));
-                }
-                return specs;
+            public MemberSpec resolveMember(String configId) {
+                ResolvedConfig rc = configStore.resolveOrNull(configId);
+                return rc == null ? null : new MemberSpec(rc.snapshot(), rc.apiKey());
             }
 
             @Override

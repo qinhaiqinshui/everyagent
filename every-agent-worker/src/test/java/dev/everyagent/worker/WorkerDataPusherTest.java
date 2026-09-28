@@ -7,6 +7,7 @@ import dev.everyagent.plugin.api.spi.TokenEstimator;
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.plugin.registry.ChatModelEnhancerRegistry;
 import dev.everyagent.worker.hub.HubPool;
+import dev.everyagent.worker.modules.ConfigStore;
 import dev.everyagent.worker.modules.ConfigStore.ResolvedConfig;
 import dev.everyagent.worker.proto.Channels;
 import dev.everyagent.worker.ship.DataPusherManager;
@@ -101,8 +102,9 @@ class WorkerDataPusherTest {
         @Bean
         @Primary
         ChatModelFactory fakeModelFactory(WorkerProperties props,
-                ChatModelEnhancerRegistry enhancerRegistry) {
-            return new ChatModelFactory(props, enhancerRegistry) {
+                ChatModelEnhancerRegistry enhancerRegistry,
+                ConfigStore configStore) {
+            return new ChatModelFactory(props, enhancerRegistry, configStore) {
                 @Override
                 public org.springframework.ai.chat.model.ChatModel build(ResolvedConfig cfg,
                         org.springframework.ai.openai.OpenAiChatOptions options, String agentId) {

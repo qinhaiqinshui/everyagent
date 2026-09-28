@@ -7,6 +7,7 @@ import dev.everyagent.plugin.api.spi.TokenEstimator;
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.plugin.registry.ChatModelEnhancerRegistry;
 import dev.everyagent.worker.hub.HubPool;
+import dev.everyagent.worker.modules.ConfigStore;
 import dev.everyagent.worker.modules.ConfigStore.ResolvedConfig;
 import dev.everyagent.worker.proto.Channels;
 import dev.everyagent.worker.task.ChatModelFactory;
@@ -111,8 +112,9 @@ class TaskAgentsRpcTest {
         @Bean
         @Primary
         ChatModelFactory fakeModelFactory(WorkerProperties props,
-                ChatModelEnhancerRegistry enhancerRegistry) {
-            return new ChatModelFactory(props, enhancerRegistry) {
+                ChatModelEnhancerRegistry enhancerRegistry,
+                ConfigStore configStore) {
+            return new ChatModelFactory(props, enhancerRegistry, configStore) {
                 // 覆写带 events 的 4 参重载:buildAgentModel 普通模型路径实际分派到这里
                 // (3 参重载只是兼容入口,拦不到 agent 装配)。
                 @Override

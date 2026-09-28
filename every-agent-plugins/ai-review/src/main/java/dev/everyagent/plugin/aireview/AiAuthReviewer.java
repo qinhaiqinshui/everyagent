@@ -206,16 +206,12 @@ public class AiAuthReviewer {
 
     /**
      * 模型选择:review-model 配置非空 → ConfigStore 解析(configId 与任务 configId 同域);
-     * 空 → 用任务当前 ResolvedConfig。任务模型为池配置(provider=model-pool)时回查
-     * ConfigStore 以取得池成员列表(冻结快照不含成员信息)。
+     * 空 → 用任务当前 configId 解析。
      */
     private ResolvedConfig resolveConfig(TaskEntry t) {
         String reviewModel = props.getPermissions().getReviewModel();
         if (reviewModel != null && !reviewModel.isBlank()) {
             return configStore.resolve(reviewModel);
-        }
-        if (ConfigStore.POOL_PROVIDER.equals(t.snapshot.provider())) {
-            return configStore.resolve(t.snapshot.configId());
         }
         return configStore.resolve(t.snapshot.configId());
     }

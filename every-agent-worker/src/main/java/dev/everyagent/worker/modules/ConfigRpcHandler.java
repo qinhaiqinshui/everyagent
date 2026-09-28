@@ -58,7 +58,7 @@ public class ConfigRpcHandler {
         for (ModelConfig c : configs.list()) {
             ModelConfig safe = new ModelConfig(c.configId(), c.provider(), c.baseUrl(),
                     c.model(), c.apiKey() == null || c.apiKey().isEmpty() ? null : "******",
-                    c.params(), c.isDefault(), c.members());
+                    c.params(), c.isDefault());
             arr.add(Json.toJson(safe));
         }
         ObjectNode out = Json.obj().set("models", arr);
