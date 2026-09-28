@@ -156,40 +156,6 @@ export interface ToolCallViewDefinition {
   Component: ComponentType<ToolViewProps>
 }
 
-// ── 工作区相关契约（任务列表分组 / ui.composer_footer_controls）──
-
-/** 分组函数接收的任务条目最小契约（避免 plugin/types 反向依赖 query 层导致循环）。 */
-export interface TaskListGroupItem {
-  taskId: string
-  metadata?: Record<string, unknown>
-}
-
-/** 任务列表组级动作（如"在此工作区新建任务"），由分组定义贡献。 */
-export interface TaskListGroupAction {
-  /** 全局唯一动作 id。 */
-  id: string
-  /** 动作文案。 */
-  label: string
-  /** 点击回调。 */
-  onSelect: () => void
-}
-
-/** 任务列表分组（D16 按 workspace 分组，由 TasksPanel 内置分组器产出）。 */
-export interface TaskListGroup<T = TaskListGroupItem> {
-  /** 稳定 key（组内折叠态记忆用）。 */
-  key: string
-  /** 组标题。 */
-  label: string
-  /** 组标题悬浮完整名（如工作区完整根路径），缺省用 label。 */
-  title?: string
-  /** 组内任务。 */
-  tasks: T[]
-  /** 组级动作（如"在此新建任务"）。 */
-  actions?: TaskListGroupAction[]
-  /** 是否默认折叠。 */
-  defaultCollapsed?: boolean
-}
-
 
 /**
  * 输入框上方 UI 槽位的上下文（由核心在 dispatch 时传入）。

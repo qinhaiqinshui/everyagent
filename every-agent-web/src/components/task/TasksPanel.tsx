@@ -10,7 +10,6 @@ import { useWorkspaceShell } from '@/components/app/WorkspaceShellContext'
 import ListRowActions, { type ListRowActionsHandle } from '@/components/shared/ui/ListRowActions'
 import { useResponsiveViewport } from '@/hooks/useResponsiveViewport'
 import { useLongPress } from '@/hooks/useLongPress'
-import type { TaskListGroup } from '@/plugin/types'
 import ContextBattery from '@/components/task/ContextBattery'
 import type { AgentListItem } from '@/components/task/AgentListPanel'
 import { ChevronDownIcon, MagnifierCheckIcon, MoreHorizontalIcon, PlusIcon } from '@/components/shared/AppGlyphs'
@@ -20,6 +19,23 @@ import ConfirmDialog from '@/components/shared/ConfirmDialog'
 import { Checkbox } from 'antd'
 
 const runtimeService = getDefaultRuntimeService()
+
+/** 任务列表组级动作（如"在此工作区新建任务"）。 */
+interface TaskListGroupAction {
+  id: string
+  label: string
+  onSelect: () => void
+}
+
+/** 任务列表分组（按 workspace 分组，由 TasksPanel 内置分组器产出）。 */
+interface TaskListGroup<T> {
+  key: string
+  label: string
+  title?: string
+  tasks: T[]
+  actions?: TaskListGroupAction[]
+  defaultCollapsed?: boolean
+}
 
 
 

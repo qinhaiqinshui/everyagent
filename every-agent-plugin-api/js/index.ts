@@ -330,42 +330,6 @@ export interface ToolCallViewDefinition {
   Component: ComponentType<PluginToolCallViewProps>
 }
 
-// ─── 任务列表分组 ─────────────────────────────────────────────────────────
-
-/** 分组函数接收的任务条目最小契约。 */
-export interface TaskListGroupItem {
-  taskId: string
-  metadata?: Record<string, unknown>
-}
-
-/** 任务列表组级动作。 */
-export interface TaskListGroupAction {
-  /** 全局唯一动作 id。 */
-  id: string
-  /** 动作文案。 */
-  label: string
-  /** 点击回调。 */
-  onSelect: () => void
-}
-
-/** 任务列表分组。 */
-export interface TaskListGroup<T = TaskListGroupItem> {
-  /** 稳定 key。 */
-  key: string
-  /** 组标题。 */
-  label: string
-  /** 组标题悬浮完整名。 */
-  title?: string
-  /** 组内任务。 */
-  tasks: T[]
-  /** 组级动作。 */
-  actions?: TaskListGroupAction[]
-  /** 是否默认折叠。 */
-  defaultCollapsed?: boolean
-}
-
-// ─── 任务阻塞状态 / 线程条目增强 ──────────────────────────────────────────
-
 // ─── 输入框扩展点 ─────────────────────────────────────────────────────────
 
 // ─── 输入框上方面板 ─────────────────────────────────────────────────────
