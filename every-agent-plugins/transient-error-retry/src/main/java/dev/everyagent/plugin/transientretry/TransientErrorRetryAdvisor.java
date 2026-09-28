@@ -3,9 +3,12 @@ package dev.everyagent.plugin.transientretry;
 import com.openai.errors.OpenAIIoException;
 import com.openai.errors.OpenAIRetryableException;
 import com.openai.errors.OpenAIServiceException;
+import dev.everyagent.plugin.api.model.EmitEvent;
 import dev.everyagent.worker.config.WorkerProperties;
+import dev.everyagent.worker.proto.SnowflakeId;
 import dev.everyagent.worker.task.AgentCancelledException;
 import dev.everyagent.worker.task.AgentEntity;
+import dev.everyagent.worker.task.EventPayloads;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClientRequest;
@@ -98,26 +101,44 @@ public class TransientErrorRetryAdvisor implements CallAdvisor, StreamAdvisor {
         CallAdvisorChain current = chain;
         int attempt = 0;
         long totalDelayMs = 0;
+        long waveId = 0; // 0 = 未分配;波首分配 SnowflakeId.next()
         while (true) {
             try {
                 ChatClientResponse response = current.nextCall(request);
                 if (attempt > 0) {
                     // 整波重试成功:仅此一条落盘(瞬态 attempt/progress 不落盘)。
-                    a.task.events.retryResolved(a.agentId, attempt, totalDelayMs);
+                    a.agentEmitter.emit(EmitEvent.of(waveId, "retry", null, null,
+                            "重试 " + attempt + " 次后已恢复", null, "resolved",
+                            EventPayloads.retryResolvedMeta(attempt, totalDelayMs),
+                            EmitEvent.Mode.REPLACE));
                 }
                 return response;
             } catch (RuntimeException e) {
                 if (!isRetryable(e) || ++attempt > cfg.getMaxRequestRetries()) {
                     if (attempt > 0) {
                         // 整波重试耗尽失败:仅此一条落盘。
-                        a.task.events.retryExhausted(a.agentId, attempt - 1,
-                                cfg.getMaxRequestRetries(), e.getMessage());
+                        a.agentEmitter.emit(EmitEvent.of(waveId, "retry", null, null,
+                                "重试 " + (attempt - 1) + " 次后仍失败", e.getMessage(), "exhausted",
+                                EventPayloads.retryExhaustedMeta(attempt - 1,
+                                        cfg.getMaxRequestRetries(), e.getMessage()),
+                                EmitEvent.Mode.REPLACE));
                     }
                     throw e;
                 }
                 long ms = cfg.backoffMs(attempt);
                 totalDelayMs += ms;
-                a.task.events.retryAttempt(a.agentId, attempt, cfg.getMaxRequestRetries(), ms, e.getMessage());
+                if (waveId == 0) {
+                    waveId = SnowflakeId.next();
+                }
+                a.agentEmitter.emit(EmitEvent.transientOf(waveId, "retry", null, null,
+                        EventPayloads.retrySummary(attempt, cfg.getMaxRequestRetries(), ms,
+                                e.getMessage()),
+                        EventPayloads.retryDetail(attempt, cfg.getMaxRequestRetries(),
+                                ms, 0, ms, e.getMessage()),
+                        "retrying",
+                        EventPayloads.retryMeta(attempt, cfg.getMaxRequestRetries(),
+                                ms, 0, ms, e.getMessage()),
+                        EmitEvent.Mode.REPLACE));
                 sleepBackoff(e, attempt);
                 // 重试 = 从原始链 copy 出「本 advisor 之后」的新链(fresh Deque,规避一次性消费)。
                 current = original.copy(this);
@@ -132,7 +153,8 @@ public class TransientErrorRetryAdvisor implements CallAdvisor, StreamAdvisor {
             AtomicBoolean emittedSignal = new AtomicBoolean(false);
             AtomicInteger retries = new AtomicInteger(0);
             AtomicLong totalDelayMs = new AtomicLong(0);
-            return attemptStream(request, original, original, emittedSignal, retries, totalDelayMs);
+            AtomicLong waveId = new AtomicLong(0); // 0 = 未分配;波首分配 SnowflakeId.next()
+            return attemptStream(request, original, original, emittedSignal, retries, totalDelayMs, waveId);
         });
     }
 
@@ -152,17 +174,18 @@ public class TransientErrorRetryAdvisor implements CallAdvisor, StreamAdvisor {
      * {@code IllegalArgumentException};② 每次重试都必须 fresh copy,不可复用上次的 tail
      * (其 Deque 同样会被消费空)。
      *
-     * <p>事件与落盘纪律:重试开始发 {@code retry.attempt}(瞬态),退避期间每秒
-     * {@code retry.progress}(瞬态,不落盘——每秒写盘会爆磁盘);整波重试<b>成功</b>后
-     * {@code retry.resolved} 落盘一条,<b>耗尽</b>后 {@code retry.exhausted} 落盘一条。
+     * <p>事件与落盘纪律:重试开始发瞬态 retry(不落盘),退避期间每秒
+     * 瞬态 retry(不落盘——每秒写盘会爆磁盘);整波重试<b>成功</b>后
+     * 持久 retry 落盘一条,<b>耗尽</b>后持久 retry 落盘一条。
      *
      * @param chain    本次要执行的链(首次 = {@code original},其后 = 每次 copy 出的 fresh tail)
      * @param original copy 的基底,始终为 advisor 收到的原始链
-     * @param totalDelayMs 累计退避总耗时(供 retry.resolved 一条落盘)
+     * @param totalDelayMs 累计退避总耗时(供 resolved 一条落盘)
+     * @param waveId 重试波 id(同一波 attempt/progress/resolved/exhausted 共用)
      */
     private Flux<ChatClientResponse> attemptStream(ChatClientRequest request, StreamAdvisorChain chain,
             StreamAdvisorChain original, AtomicBoolean emittedSignal, AtomicInteger retries,
-            AtomicLong totalDelayMs) {
+            AtomicLong totalDelayMs, AtomicLong waveId) {
         return chain.nextStream(request)
                 .doOnNext(chunk -> {
                     if (hasSignal(chunk)) {
@@ -172,7 +195,10 @@ public class TransientErrorRetryAdvisor implements CallAdvisor, StreamAdvisor {
                 .doOnComplete(() -> {
                     // 重试过且最终成功:整波仅此一条落盘。
                     if (retries.get() > 0) {
-                        a.task.events.retryResolved(a.agentId, retries.get(), totalDelayMs.get());
+                        a.agentEmitter.emit(EmitEvent.of(waveId.get(), "retry", null, null,
+                                "重试 " + retries.get() + " 次后已恢复", null, "resolved",
+                                EventPayloads.retryResolvedMeta(retries.get(), totalDelayMs.get()),
+                                EmitEvent.Mode.REPLACE));
                     }
                 })
                 .onErrorResume(error -> {
@@ -185,41 +211,61 @@ public class TransientErrorRetryAdvisor implements CallAdvisor, StreamAdvisor {
                     int attempt = retries.incrementAndGet();
                     if (attempt > cfg.getMaxRequestRetries()) {
                         // 整波重试耗尽失败:仅此一条落盘。
-                        a.task.events.retryExhausted(a.agentId, attempt - 1,
-                                cfg.getMaxRequestRetries(), error.getMessage());
+                        a.agentEmitter.emit(EmitEvent.of(waveId.get(), "retry", null, null,
+                                "重试 " + (attempt - 1) + " 次后仍失败", error.getMessage(), "exhausted",
+                                EventPayloads.retryExhaustedMeta(attempt - 1,
+                                        cfg.getMaxRequestRetries(), error.getMessage()),
+                                EmitEvent.Mode.REPLACE));
                         return Flux.error(error);
                     }
                     long ms = cfg.backoffMs(attempt);
                     totalDelayMs.addAndGet(ms);
                     String errMsg = error.getMessage();
-                    a.task.events.retryAttempt(a.agentId, attempt, cfg.getMaxRequestRetries(), ms, errMsg);
+                    if (waveId.get() == 0) {
+                        waveId.set(SnowflakeId.next());
+                    }
+                    a.agentEmitter.emit(EmitEvent.transientOf(waveId.get(), "retry", null, null,
+                            EventPayloads.retrySummary(attempt, cfg.getMaxRequestRetries(), ms, errMsg),
+                            EventPayloads.retryDetail(attempt, cfg.getMaxRequestRetries(),
+                                    ms, 0, ms, errMsg),
+                            "retrying",
+                            EventPayloads.retryMeta(attempt, cfg.getMaxRequestRetries(),
+                                    ms, 0, ms, errMsg),
+                            EmitEvent.Mode.REPLACE));
                     log.warn("任务 {} agent {} 模型瞬时错误({}: {}),{}ms 后重试({}/{})",
                             a.task.taskId, a.agentId, error.getClass().getSimpleName(),
                             errMsg, ms, attempt, cfg.getMaxRequestRetries());
                     return backoffAndRetry(ms, attempt, errMsg, request, original,
-                            emittedSignal, retries, totalDelayMs);
+                            emittedSignal, retries, totalDelayMs, waveId);
                 });
     }
 
     /**
-     * 退避 + 倒计时:每秒一条 {@code retry.progress}(瞬态不落盘),最后一秒结束后触发重试。
+     * 退避 + 倒计时:每秒一条瞬态 retry(不落盘),最后一秒结束后触发重试。
      * 中止(dispose)会取消 interval,不再触发重试(与 n 的中止感知 delayWithProgress 等效);
      * 实际等待 = 向上取整到秒,略大于 {@code delayMs},可接受。
      */
     private Flux<ChatClientResponse> backoffAndRetry(long delayMs, int attempt, String error,
             ChatClientRequest request, StreamAdvisorChain original,
-            AtomicBoolean emittedSignal, AtomicInteger retries, AtomicLong totalDelayMs) {
+            AtomicBoolean emittedSignal, AtomicInteger retries, AtomicLong totalDelayMs,
+            AtomicLong waveId) {
         long ticks = Math.max(1, (delayMs + 999) / 1000);
         return Flux.interval(Duration.ZERO, Duration.ofSeconds(1))
                 .take(ticks)
                 .concatMap(i -> {
                     long remaining = Math.max(0, delayMs - (i + 1) * 1000);
                     long elapsed = delayMs - remaining;
-                    a.task.events.retryProgress(a.agentId, attempt, cfg.getMaxRequestRetries(),
-                            delayMs, elapsed, remaining, error);
+                    a.agentEmitter.emit(EmitEvent.transientOf(waveId.get(), "retry", null, null,
+                            EventPayloads.retrySummary(attempt, cfg.getMaxRequestRetries(), remaining, error),
+                            EventPayloads.retryDetail(attempt, cfg.getMaxRequestRetries(),
+                                    delayMs, elapsed, remaining, error),
+                            "retrying",
+                            EventPayloads.retryMeta(attempt, cfg.getMaxRequestRetries(),
+                                    delayMs, elapsed, remaining, error),
+                            EmitEvent.Mode.REPLACE));
                     if (i == ticks - 1) {
                         return attemptStream(request, original.copy(this), original,
-                                emittedSignal, retries, totalDelayMs);
+                                emittedSignal, retries, totalDelayMs, waveId);
                     }
                     return Flux.empty();
                 });

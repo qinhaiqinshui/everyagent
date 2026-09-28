@@ -1,11 +1,13 @@
 package dev.everyagent.plugin.aireview;
 
 import dev.everyagent.contract.json.Json;
+import dev.everyagent.plugin.api.model.EmitEvent;
 import dev.everyagent.worker.AgentClientFactory;
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.modules.ConfigStore;
 import dev.everyagent.worker.modules.ConfigStore.ResolvedConfig;
 import dev.everyagent.worker.proto.ShortIds;
+import dev.everyagent.worker.proto.SnowflakeId;
 import dev.everyagent.worker.task.AgentEntity;
 import dev.everyagent.worker.task.ChatModelFactory;
 import dev.everyagent.worker.task.RootCause;
@@ -292,17 +294,27 @@ public class AiAuthReviewer {
         }
     }
 
-    /** 审议结论一律发射 kind=auth.review(task.trace,persist=true 落盘),并记审计 debug 日志(独立文件)。 */
+    /** 审议结论一律发射 kind=auth.review(persist=true 落盘),并记审计 debug 日志(独立文件)。 */
     private void emitAuthTrace(TaskEntry t, String reviewAgentId, ReviewDecision d,
             String grantKey, String prompt) {
-        // 审计数据独立 debug 日志:每次审议一条,记录全部审计字段(与 auth.review trace 同字段集)。
+        // 审计数据独立 debug 日志:每次审议一条,记录全部审计字段(与 auth.review 事件同字段集)。
         auditLog.debug("auth.review taskId={} reviewAgentId={} decision={} confidence={} scope={} grantKey={} reason={} prompt={}",
                 t.taskId, reviewAgentId, d.verdict().name(), d.confidence(), d.scope(),
                 grantKey == null ? "" : grantKey, d.reason(), prompt == null ? "" : prompt);
         try {
-            t.events.authReview(reviewAgentId, d.verdict().name(),
-                    String.valueOf(d.confidence()), d.reason(), d.scope(), grantKey, prompt, t.taskId);
-
+            String summary = d.verdict().name()
+                    + (d.reason() != null && !d.reason().isEmpty() ? " — " + d.reason() : "");
+            var authData = Json.obj();
+            authData.put("decision", d.verdict().name());
+            authData.put("confidence", String.valueOf(d.confidence()));
+            authData.put("reason", d.reason() == null ? "" : d.reason());
+            authData.put("scope", d.scope() == null ? "" : d.scope());
+            authData.put("grantKey", grantKey == null ? "" : grantKey);
+            authData.put("prompt", prompt == null ? "" : prompt);
+            authData.put("taskId", t.taskId);
+            authData.put("agentId", reviewAgentId);
+            t.events.emit(EmitEvent.of(SnowflakeId.next(), "auth.review", reviewAgentId,
+                    "AI 安全审议", summary, null, "done", authData, EmitEvent.Mode.REPLACE));
         } catch (RuntimeException e) {
             // 审计落盘失败不阻塞授权分派(事件日志已有护栏;失败仅丢一条审计展示)
             auditLog.warn("任务 {} AI 审议审计 trace 发射失败: {}", t.taskId, RootCause.summary(e));

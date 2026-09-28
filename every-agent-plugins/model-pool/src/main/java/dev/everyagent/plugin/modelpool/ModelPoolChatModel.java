@@ -4,7 +4,7 @@ import com.openai.errors.OpenAIIoException;
 import dev.everyagent.plugin.api.model.EmitEvent;
 import dev.everyagent.plugin.api.model.EventEmitter;
 import dev.everyagent.plugin.api.model.ModelConfig;
-import dev.everyagent.worker.proto.ShortIds;
+import dev.everyagent.worker.proto.SnowflakeId;
 import dev.everyagent.worker.task.AgentCancelledException;
 import dev.everyagent.worker.task.ModelCallException;
 import org.slf4j.Logger;
@@ -25,7 +25,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * 模型池 ChatModel(架构 §5.2 + 演进记录第 18 轮):`worker.models` 里
@@ -56,8 +56,8 @@ import java.util.concurrent.atomic.AtomicReference;
  * ({@link #withOptions}),并补原 prompt options 的工具集(toolCallbacks)。
  * 成功返回的是成员模型的真实响应——usage/模型名随响应自然落到事件与 usage trace。
  *
- * <p>trace:每次切换经 {@code events.emit(EmitEvent.TraceData.of("model_failover", ...))} 发
- * {@code task.trace(kind=model_failover)},同一波连续失败切换共用一条 trace(链状态自管理),
+ * <p>trace:每次切换经 {@code events.emit(EmitEvent.of(..., "model.failover", ...))} 发
+ * {@code model.failover} 事件,同一波连续失败切换共用一条 trace(链状态自管理),
  * 波收口移除链状态;events 可为 null(无事件上下文时仅记日志不发 trace)。
  * 实例内无跨请求共享状态:轮询游标/防重标记 per-subscription(Flux.defer 闭包捕获)。
  */
@@ -76,7 +76,7 @@ public class ModelPoolChatModel implements ChatModel {
      * traceId → 当前容灾切换链已累积的完整模型链(同一波连续失败切换共用一条 trace,
      * 逐次追加「 -> 模型」,作为 trace 的 content 展示;波收口 {@link #closeFailover} 移除)。
      */
-    private final Map<String, String> failoverTraceChains = new ConcurrentHashMap<>();
+    private final Map<Long, String> failoverTraceChains = new ConcurrentHashMap<>();
     /** getOptions() 返回项(OpenAiChatOptions 保证 ToolCallingAdvisor 正常透传工具集)。 */
     private final OpenAiChatOptions defaultOptions;
 
@@ -101,7 +101,7 @@ public class ModelPoolChatModel implements ChatModel {
 
     @Override
     public ChatResponse call(Prompt prompt) {
-        String failoverTraceId = null;
+        long failoverTraceId = 0;
         for (int i = 0; ; i++) {
             if (i >= members.size()) {
                 // 不可达:循环早退见下
@@ -136,8 +136,8 @@ public class ModelPoolChatModel implements ChatModel {
         return Flux.defer(() -> {
             AtomicBoolean emitted = new AtomicBoolean(false);
             AtomicInteger cursor = new AtomicInteger(0);
-            // 同一波连续失败切换共用一条容灾 trace(traceId 由首次切换创建,后续切换追加模型)。
-            AtomicReference<String> failoverTraceId = new AtomicReference<>();
+            // 同一波连续失败切换共用一条容灾 trace(id 由首次切换创建,后续切换追加模型)。
+            AtomicLong failoverTraceId = new AtomicLong(0);
             return attemptStream(prompt, emitted, cursor, failoverTraceId);
         });
     }
@@ -147,7 +147,7 @@ public class ModelPoolChatModel implements ChatModel {
      * 错误时若可换成员则递归换下一个,否则(网络/终态/已下发信号/成员耗尽)原样上抛。
      */
     private Flux<ChatResponse> attemptStream(Prompt prompt, AtomicBoolean emitted,
-            AtomicInteger cursor, AtomicReference<String> failoverTraceId) {
+            AtomicInteger cursor, AtomicLong failoverTraceId) {
         int i = cursor.get();
         Flux<ChatResponse> attempt = members.get(i).stream(withOptions(prompt, memberOptions.get(i)));
         return attempt
@@ -179,35 +179,34 @@ public class ModelPoolChatModel implements ChatModel {
     // ---- 换成员日志 + trace ----
 
     /** 换成员日志 + 容灾切换 trace(唯一归属点;同一波连续失败切换共用一条 trace,逐次追加模型)。 */
-    private String logSwitch(Throwable error, int nextIndex, String failoverTraceId) {
+    private long logSwitch(Throwable error, int nextIndex, long failoverTraceId) {
         ModelConfig snap = memberSnapshots.get(nextIndex);
         log.warn("池模型 {} 请求异常({}: {}), 切换成员 {}({}) 重试({}/{})",
                 agentId, error.getClass().getSimpleName(), error.getMessage(),
                 snap.configId(), snap.model(), nextIndex + 1, members.size());
         if (events != null) {
             String modelDesc = snap.configId() + " " + snap.model();
-            String id;
+            long id;
             String chain;
-            String prev = failoverTraceId == null ? null : failoverTraceChains.get(failoverTraceId);
+            String prev = failoverTraceId == 0 ? null : failoverTraceChains.get(failoverTraceId);
             if (prev == null) {
-                id = (failoverTraceId == null || failoverTraceId.isEmpty())
-                        ? ShortIds.next("trace") : failoverTraceId;
+                id = failoverTraceId == 0 ? SnowflakeId.next() : failoverTraceId;
                 chain = modelDesc;
             } else {
                 id = failoverTraceId;
                 chain = prev + " -> " + modelDesc;
             }
             failoverTraceChains.put(id, chain);
-            events.emit(EmitEvent.TraceData.of("model_failover", id,
-                    "容灾切换模型：" + modelDesc, chain, "done"));
+            events.emit(EmitEvent.of(id, "model.failover", agentId, null,
+                    "容灾切换模型：" + modelDesc, chain, "done", null, EmitEvent.Mode.REPLACE));
             return id;
         }
         return failoverTraceId;
     }
 
-    /** 容灾切换波收口:移除 traceId 对应链状态,之后新波重新新建 trace。 */
-    private void closeFailover(String failoverTraceId) {
-        if (failoverTraceId != null) {
+    /** 容灾切换波收口:移除 id 对应链状态,之后新波重新新建 trace。 */
+    private void closeFailover(long failoverTraceId) {
+        if (failoverTraceId != 0) {
             failoverTraceChains.remove(failoverTraceId);
         }
     }

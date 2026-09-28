@@ -1,6 +1,8 @@
 package dev.everyagent.plugin.contextcompression;
 
+import dev.everyagent.plugin.api.model.EmitEvent;
 import dev.everyagent.worker.config.WorkerProperties;
+import dev.everyagent.worker.proto.SnowflakeId;
 import dev.everyagent.worker.proto.TaskDtos.Usage;
 import dev.everyagent.worker.task.AgentEntity;
 import dev.everyagent.worker.task.ContextOverflow;
@@ -140,23 +142,27 @@ public class ContextCompressionAdvisor implements CallAdvisor, StreamAdvisor {
         if (used <= trigger) {
             toSend = working;
         } else {
-            // 压缩中 trace(只含 summary;进行中瞬态,完成后同 traceId 更新为持久)
-            a.task.events.contextCompressStarted(a.agentId,
-                    "正在自动压缩上下文…(当前约 " + used + " token)");
+            // 压缩中 trace(只含 summary;进行中瞬态,完成后同 id 更新为持久)
+            long compId = SnowflakeId.next();
+            a.agentEmitter.emit(EmitEvent.transientOf(compId, "context.compression", null, null,
+                    "正在自动压缩上下文…(当前约 " + used + " token)", null, null, null,
+                    EmitEvent.Mode.REPLACE));
 
             ContextSummarizer sum = limits.isContextSummaryEnabled() ? summarizer : null;
             ContextCompressor.Result r = ContextCompressor.compress(working, trigger, target, overhead, sum);
             if (!r.compressed()) {
                 toSend = working;
-                a.task.events.contextCompressDone(a.agentId, "已自动压缩上下文(无需改写)");
+                a.agentEmitter.emit(EmitEvent.of(compId, "context.compression", null, null,
+                        "已自动压缩上下文(无需改写)", null, null, null, EmitEvent.Mode.REPLACE));
             } else {
                 toSend = r.messages();
                 baseline = new ArrayList<>(r.messages());
                 absorbed = full.size();
                 long after = ContextCompressor.estimateTokens(toSend) + overhead;
-                a.task.events.contextCompressDone(a.agentId,
+                a.agentEmitter.emit(EmitEvent.of(compId, "context.compression", null, null,
                         "已自动压缩上下文(" + stageName(r.stage()) + ", 消息 " + working.size() + "→"
-                                + toSend.size() + ", 约 " + used + "→" + after + " token 估算)");
+                                + toSend.size() + ", 约 " + used + "→" + after + " token 估算)",
+                        null, null, null, EmitEvent.Mode.REPLACE));
                 log.info("任务 {} agent {} 上下文压缩: used={} trigger={} target={} messages {}→{} 阶段={} "
                                 + "丢历史轮={} 丢本轮工具对={}",
                         a.task.taskId, a.agentId, used, trigger, target, working.size(), toSend.size(),

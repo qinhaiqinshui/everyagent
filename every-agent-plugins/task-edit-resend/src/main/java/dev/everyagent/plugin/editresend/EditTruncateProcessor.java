@@ -1,7 +1,9 @@
 package dev.everyagent.plugin.editresend;
 
 import dev.everyagent.contract.json.Json;
+import dev.everyagent.plugin.api.model.EmitEvent;
 import dev.everyagent.plugin.api.task.TaskLifecycleContext;
+import dev.everyagent.worker.proto.SnowflakeId;
 import dev.everyagent.worker.hub.EventSink;
 import dev.everyagent.worker.proto.Channels;
 import dev.everyagent.worker.proto.Events;
@@ -117,14 +119,14 @@ public final class EditTruncateProcessor {
                 log.warn("meta 更新失败 task={}", taskId, e);
             }
         }
-        // 广播 message.edited 同步事件
-        ObjectNode editPayload = Json.obj()
-                .put("seq", String.valueOf(seq))
-                .put("text", text);
+        // 发射 message.edited 同步事件(经 TaskEvents emit,统一形状)
+        ObjectNode editData = Json.obj()
+                .put("seq", String.valueOf(seq));
         if (rawContent != null && !rawContent.isEmpty()) {
-            editPayload.put("rawContent", rawContent);
+            editData.put("rawContent", rawContent);
         }
-        eventSink.fanout(k -> Channels.taskStream(k, taskId), Events.MESSAGE_EDITED, null, editPayload, null);
+        t.events.emit(EmitEvent.of(SnowflakeId.next(), "message.edited", null, null, null,
+                text, null, editData, EmitEvent.Mode.REPLACE));
     }
 
     /**
@@ -145,13 +147,15 @@ public final class EditTruncateProcessor {
         meta.remove("error");
         meta.put("seqLast", seq);
         TaskStore.writeMeta(dir, meta);
-        // 广播 message.edited 同步事件
-        ObjectNode editPayload = Json.obj()
-                .put("seq", String.valueOf(seq))
-                .put("text", text);
+        // 广播 message.edited 同步事件(冷路径无 TaskEvents,payload 用新形状)
+        ObjectNode editData = Json.obj()
+                .put("seq", String.valueOf(seq));
         if (rawContent != null && !rawContent.isEmpty()) {
-            editPayload.put("rawContent", rawContent);
+            editData.put("rawContent", rawContent);
         }
+        ObjectNode editPayload = Json.obj()
+                .put("content", text);
+        editPayload.set("data", editData);
         eventSink.fanout(k -> Channels.taskStream(k, taskId), Events.MESSAGE_EDITED, null, editPayload, null);
     }
 }

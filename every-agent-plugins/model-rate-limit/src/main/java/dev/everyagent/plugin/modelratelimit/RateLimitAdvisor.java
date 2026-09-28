@@ -1,6 +1,7 @@
 package dev.everyagent.plugin.modelratelimit;
 
 import dev.everyagent.plugin.api.model.EmitEvent;
+import dev.everyagent.worker.proto.SnowflakeId;
 import dev.everyagent.worker.task.AgentEntity;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -32,9 +33,8 @@ import java.util.Optional;
  * {@code doOnCancel}（cancel permit）、{@code doOnError}（cancel permit）、
  * {@code doOnComplete}（complete permit 以 0 兜底）。
  *
- * <p>等待期间经 {@code a.task.events.emit(EmitEvent.TraceData.transientOf(...))}
- * 发射 {@code model_rate_wait} 瞬态 trace 事件（不落盘），task 层映射为 wire
- * {@code task.trace} + kind。
+ * <p>等待期间经 {@code a.agentEmitter.emit(EmitEvent.transientOf(...))}
+ * 发射 {@code system.notice} 瞬态事件（不落盘）。
  *
  * <p>位置：{@code getOrder()} = {@link ToolCallingAdvisor#DEFAULT_ORDER} + 500
  * （最内层，在 ContextCompression +400 之后）。
@@ -70,14 +70,19 @@ public class RateLimitAdvisor implements CallAdvisor, StreamAdvisor {
             return chain.nextCall(request);
         }
 
+        long[] noticeId = {0};
         ModelRateLimiter.Permit permit;
         try {
-            permit = limiter.get().acquire((waitInfo, waitMs) ->
-                    a.task.events.emit(EmitEvent.TraceData.transientOf(
-                            "model_rate_wait", null,
+            permit = limiter.get().acquire((waitInfo, waitMs) -> {
+                    if (noticeId[0] == 0) {
+                        noticeId[0] = SnowflakeId.next();
+                    }
+                    a.agentEmitter.emit(EmitEvent.transientOf(noticeId[0], "system.notice", null, null,
+                            null,
                             "模型「" + configId + "」正在排队(在飞 " + waitInfo.inFlight()
                                     + " / 排队 " + waitInfo.waiters() + ")",
-                            null, "waiting")));
+                            "waiting", null, EmitEvent.Mode.REPLACE));
+            });
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new RuntimeException(e);
@@ -106,14 +111,19 @@ public class RateLimitAdvisor implements CallAdvisor, StreamAdvisor {
 
         ModelRateLimiter l = limiter.get();
         return Flux.defer(() -> {
+            long[] noticeId = {0};
             ModelRateLimiter.Permit permit;
             try {
-                permit = l.acquire((waitInfo, waitMs) ->
-                        a.task.events.emit(EmitEvent.TraceData.transientOf(
-                                "model_rate_wait", null,
+                permit = l.acquire((waitInfo, waitMs) -> {
+                        if (noticeId[0] == 0) {
+                            noticeId[0] = SnowflakeId.next();
+                        }
+                        a.agentEmitter.emit(EmitEvent.transientOf(noticeId[0], "system.notice", null, null,
+                                null,
                                 "模型「" + configId + "」正在排队(在飞 " + waitInfo.inFlight()
                                         + " / 排队 " + waitInfo.waiters() + ")",
-                                null, "waiting")));
+                                "waiting", null, EmitEvent.Mode.REPLACE));
+                });
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 return Flux.error(new RuntimeException(e));
