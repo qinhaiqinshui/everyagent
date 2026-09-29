@@ -35,6 +35,7 @@
         <module>agents-md</module>
         <module>file-change</module>
         <module>sandbox-wsl-ubuntu</module>
+        <module>sandbox-windows-mic</module>
     </modules>
 
     <build>
