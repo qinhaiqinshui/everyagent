@@ -3,6 +3,7 @@ package dev.everyagent.plugin.adaptivemaxtokens;
 import com.openai.errors.OpenAIServiceException;
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.agent.AgentEntity;
+import dev.everyagent.worker.task.TaskEntry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClientRequest;
@@ -182,6 +183,7 @@ public class AdaptiveMaxTokensAdvisor implements StreamAdvisor {
      */
     private Flux<ChatClientResponse> upgradeAndRetry(ChatClientRequest request,
             StreamAdvisorChain chain, Throwable error) {
+        TaskEntry t = (TaskEntry) a.properties.get("taskEntry");
         // 400 回退:重试轮收到 400 类错误(provider 拒绝超出模型真实上限),
         // 一次性回退到触发升级前的上一个 budget 并停止继续上调。
         if (error != null && is400Error(error) && attempt > 0) {
@@ -190,7 +192,7 @@ public class AdaptiveMaxTokensAdvisor implements StreamAdvisor {
             currentBudget = prevBudget;
             rolledBack400 = true;
             log.warn("任务 {} agent {} 升级后收到 400 错误({}),回退 budget 至 {} 并停止上调",
-                    a.task.taskId, a.agentId, error.getMessage(), currentBudget);
+                    t.taskId, a.agentId, error.getMessage(), currentBudget);
             // 用回退后的 budget 重试一次。
             ChatClientRequest newRequest = rewriteMaxTokens(request, currentBudget);
             return doRetry(newRequest, chain);
@@ -210,7 +212,7 @@ public class AdaptiveMaxTokensAdvisor implements StreamAdvisor {
 
         if (attempt > cfg.getMaxRetries() || (newBudget >= effectiveCeiling && currentBudget >= effectiveCeiling)) {
             log.warn("任务 {} agent {} 自适应预算耗尽:attempt={}, currentBudget={}, ceiling={}",
-                    a.task.taskId, a.agentId, attempt, currentBudget, effectiveCeiling);
+                    t.taskId, a.agentId, attempt, currentBudget, effectiveCeiling);
             return Flux.error(new AdaptiveBudgetExhaustedException(
                     "自适应输出预算已放大至 ceiling=" + effectiveCeiling
                             + " 仍未获得有效结果(attempt=" + attempt + ")。"
@@ -221,7 +223,7 @@ public class AdaptiveMaxTokensAdvisor implements StreamAdvisor {
 
         currentBudget = newBudget;
         log.warn("任务 {} agent {} finish_reason=length,升级 maxTokens 至 {}(attempt={}/{})",
-                a.task.taskId, a.agentId, currentBudget, attempt, cfg.getMaxRetries());
+                t.taskId, a.agentId, currentBudget, attempt, cfg.getMaxRetries());
 
         ChatClientRequest newRequest = rewriteMaxTokens(request, currentBudget);
         // 自包装重试:doRetry 自带完整 doOnNext / filter / switchIfEmpty / onErrorResume 链,
@@ -234,6 +236,7 @@ public class AdaptiveMaxTokensAdvisor implements StreamAdvisor {
      * → currentBudget 衰减回 base。在每轮流结束时检查 usage。
      */
     private void checkLowWatermark(long completionTokens) {
+        TaskEntry t = (TaskEntry) a.properties.get("taskEntry");
         if (currentBudget <= 0 || attempt <= 0) {
             // 未升级过,无需回落。
             return;
@@ -243,7 +246,7 @@ public class AdaptiveMaxTokensAdvisor implements StreamAdvisor {
             lowWaterRounds++;
             if (lowWaterRounds >= cfg.getFallbackRounds()) {
                 log.info("任务 {} agent {} 连续 {} 轮低输出({} < {}×{}={}),budget 衰减回 base",
-                        a.task.taskId, a.agentId, lowWaterRounds, completionTokens,
+                        t.taskId, a.agentId, lowWaterRounds, completionTokens,
                         currentBudget, cfg.getFallbackRatio(), threshold);
                 // 衰减回 base(通过重置 attempt 和 currentBudget 实现)。
                 attempt = 0;

@@ -1,6 +1,7 @@
 package dev.everyagent.plugin.git;
 
 import dev.everyagent.worker.agent.AgentEntity;
+import dev.everyagent.worker.task.TaskEntry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClientRequest;
@@ -93,9 +94,10 @@ public class GitAutoSyncAdvisor implements BaseAdvisor {
 
     /** 执行「完成后同步」:完整同步(同 Git 面板同步按钮),静默模式,全部异常兜底为日志。 */
     private void runAutoSync() {
+        TaskEntry t = (TaskEntry) a.properties.get("taskEntry");
         try {
             GitService.SyncResult result = gitService.syncRemote(
-                    a.task.workspaceRoot, GitAutoSyncToken.buildCommitMessage(a.task.taskId));
+                    t.workspaceRoot, GitAutoSyncToken.buildCommitMessage(t.taskId));
             switch (result.status()) {
                 case SUCCESS -> log.info("自动同步完成: {}", result.message());
                 case NOT_INITIALIZED, NO_REMOTE, NOOP ->

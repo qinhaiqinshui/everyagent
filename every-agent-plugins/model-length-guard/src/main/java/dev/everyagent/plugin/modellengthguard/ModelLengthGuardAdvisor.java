@@ -4,6 +4,7 @@ import com.openai.errors.OpenAIIoException;
 import dev.everyagent.plugin.api.spi.TokenEstimator;
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.agent.AgentEntity;
+import dev.everyagent.worker.task.TaskEntry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClientRequest;
@@ -99,7 +100,8 @@ public class ModelLengthGuardAdvisor implements CallAdvisor, StreamAdvisor {
         this.a = a;
         this.props = props;
         this.estimator = estimator;
-        this.configId = a.task.snapshot.configId();
+        TaskEntry t = (TaskEntry) a.properties.get("taskEntry");
+        this.configId = t.snapshot.configId();
     }
 
     @Override
@@ -127,6 +129,7 @@ public class ModelLengthGuardAdvisor implements CallAdvisor, StreamAdvisor {
 
     @Override
     public Flux<ChatClientResponse> adviseStream(ChatClientRequest request, StreamAdvisorChain chain) {
+        TaskEntry t = (TaskEntry) a.properties.get("taskEntry");
         return Flux.defer(() -> {
             Integer maxTokens = maxTokensOf(request);
             long stallMs = props.getLimits().getModelLengthStallMs();
@@ -175,11 +178,11 @@ public class ModelLengthGuardAdvisor implements CallAdvisor, StreamAdvisor {
                     if (stall) {
                         log.warn("任务 {} agent {} 流 {}ms 无输出且自估输出 {} tokens已达上限({}),"
                                         + "判定 finish_reason=length",
-                                a.task.taskId, a.agentId, stallMs, think + text, basis);
+                                t.taskId, a.agentId, stallMs, think + text, basis);
                     } else {
                         log.warn("任务 {} agent {} 流被网络级错误中断({}: {})且自估输出 {} tokens已达上限({}),"
                                         + "判定 finish_reason=length",
-                                a.task.taskId, a.agentId, e.getClass().getSimpleName(),
+                                t.taskId, a.agentId, e.getClass().getSimpleName(),
                                 e.getMessage(), think + text, basis);
                     }
                     // 先下发合成 finish_reason=length 帧(Adaptive 数据面触发器),

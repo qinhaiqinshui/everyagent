@@ -3,6 +3,7 @@ package dev.everyagent.plugin.modelratelimit;
 import dev.everyagent.plugin.api.model.EmitEvent;
 import dev.everyagent.worker.proto.SnowflakeId;
 import dev.everyagent.worker.agent.AgentEntity;
+import dev.everyagent.worker.task.TaskEntry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClientRequest;
@@ -64,8 +65,9 @@ public class RateLimitAdvisor implements CallAdvisor, StreamAdvisor {
 
     @Override
     public ChatClientResponse adviseCall(ChatClientRequest request, CallAdvisorChain chain) {
-        String configId = a.task.snapshot.configId();
-        Optional<ModelRateLimiter> limiter = registry.of(configId, a.task.snapshot.params());
+        TaskEntry t = (TaskEntry) a.properties.get("taskEntry");
+        String configId = t.snapshot.configId();
+        Optional<ModelRateLimiter> limiter = registry.of(configId, t.snapshot.params());
         if (limiter.isEmpty()) {
             return chain.nextCall(request);
         }
@@ -103,8 +105,9 @@ public class RateLimitAdvisor implements CallAdvisor, StreamAdvisor {
 
     @Override
     public Flux<ChatClientResponse> adviseStream(ChatClientRequest request, StreamAdvisorChain chain) {
-        String configId = a.task.snapshot.configId();
-        Optional<ModelRateLimiter> limiter = registry.of(configId, a.task.snapshot.params());
+        TaskEntry t = (TaskEntry) a.properties.get("taskEntry");
+        String configId = t.snapshot.configId();
+        Optional<ModelRateLimiter> limiter = registry.of(configId, t.snapshot.params());
         if (limiter.isEmpty()) {
             return chain.nextStream(request);
         }

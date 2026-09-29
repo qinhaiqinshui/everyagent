@@ -8,6 +8,7 @@ import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.proto.SnowflakeId;
 import dev.everyagent.worker.task.AgentCancelledException;
 import dev.everyagent.worker.agent.AgentEntity;
+import dev.everyagent.worker.task.TaskEntry;
 import dev.everyagent.worker.task.EventPayloads;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -186,6 +187,7 @@ public class TransientErrorRetryAdvisor implements CallAdvisor, StreamAdvisor {
     private Flux<ChatClientResponse> attemptStream(ChatClientRequest request, StreamAdvisorChain chain,
             StreamAdvisorChain original, AtomicBoolean emittedSignal, AtomicInteger retries,
             AtomicLong totalDelayMs, AtomicLong waveId) {
+        TaskEntry t = (TaskEntry) a.properties.get("taskEntry");
         return chain.nextStream(request)
                 .doOnNext(chunk -> {
                     if (hasSignal(chunk)) {
@@ -233,7 +235,7 @@ public class TransientErrorRetryAdvisor implements CallAdvisor, StreamAdvisor {
                                     ms, 0, ms, errMsg),
                             EmitEvent.Mode.REPLACE));
                     log.warn("任务 {} agent {} 模型瞬时错误({}: {}),{}ms 后重试({}/{})",
-                            a.task.taskId, a.agentId, error.getClass().getSimpleName(),
+                            t.taskId, a.agentId, error.getClass().getSimpleName(),
                             errMsg, ms, attempt, cfg.getMaxRequestRetries());
                     return backoffAndRetry(ms, attempt, errMsg, request, original,
                             emittedSignal, retries, totalDelayMs, waveId);
@@ -273,9 +275,10 @@ public class TransientErrorRetryAdvisor implements CallAdvisor, StreamAdvisor {
 
     /** 阻塞退避(仅非流式路径);中断 → 取消类异常穿透,交任务层收口为 cancelled。 */
     private void sleepBackoff(Throwable error, int attempt) {
+        TaskEntry t = (TaskEntry) a.properties.get("taskEntry");
         long ms = cfg.backoffMs(attempt);
         log.warn("任务 {} agent {} 模型瞬时错误({}: {}),{}ms 后重试({}/{})",
-                a.task.taskId, a.agentId, error.getClass().getSimpleName(), error.getMessage(),
+                t.taskId, a.agentId, error.getClass().getSimpleName(), error.getMessage(),
                 ms, attempt, cfg.getMaxRequestRetries());
         try {
             Thread.sleep(ms);

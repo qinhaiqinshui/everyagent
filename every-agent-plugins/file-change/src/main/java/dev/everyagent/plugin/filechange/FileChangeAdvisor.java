@@ -2,6 +2,7 @@ package dev.everyagent.plugin.filechange;
 
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.worker.agent.AgentEntity;
+import dev.everyagent.worker.task.TaskEntry;
 import dev.everyagent.worker.task.FileChangesCollector;
 import dev.everyagent.worker.task.WorkerToolEventAdvisor;
 import org.springframework.ai.chat.client.ChatClientRequest;
@@ -82,8 +83,9 @@ public class FileChangeAdvisor implements StreamAdvisor {
     @Override
     public Flux<ChatClientResponse> adviseStream(ChatClientRequest chatClientRequest,
             StreamAdvisorChain streamAdvisorChain) {
+        TaskEntry t = (TaskEntry) a.properties.get("taskEntry");
         if (!collectorInitialized) {
-            a.task.fileChanges = new FileChangesCollector();
+            t.fileChanges = new FileChangesCollector();
             collectorInitialized = true;
         }
         turnHasToolCalls = false; // 每轮(每次内层链进入)重置
@@ -94,6 +96,7 @@ public class FileChangeAdvisor implements StreamAdvisor {
 
     /** 逐条检查模型流:工具轮已是完整消息(含 toolCalls),命中 update_file/create_file 则记录。 */
     private void record(ChatClientResponse chunk) {
+        TaskEntry t = (TaskEntry) a.properties.get("taskEntry");
         ChatResponse cr = chunk.chatResponse();
         if (cr == null || cr.getResult() == null) {
             return;
@@ -107,7 +110,7 @@ public class FileChangeAdvisor implements StreamAdvisor {
             return;
         }
         turnHasToolCalls = true;
-        FileChangesCollector c = a.task.fileChanges;
+        FileChangesCollector c = t.fileChanges;
         if (c == null) {
             return;
         }
@@ -118,19 +121,20 @@ public class FileChangeAdvisor implements StreamAdvisor {
 
     /** 「本轮无工具调用」= 工具循环最后一轮 = 整次 run 完成;主 agent 收口填充 light/full 槽,由 RoundIndexAdvisor 落盘。 */
     private void finalizeIfLastTurn() {
+        TaskEntry t = (TaskEntry) a.properties.get("taskEntry");
         if (turnHasToolCalls) {
             return; // 工具轮:ToolCallingAdvisor 将继续递归,收口延后到最终回答轮
         }
-        FileChangesCollector c = a.task.fileChanges;
+        FileChangesCollector c = t.fileChanges;
         if (c == null || c.isEmpty()) {
             return;
         }
         try {
             // 不再发 file_changes trace:轻量摘要内联进 rounds.jsonl 每轮行,全文由 RoundIndexStore 单独落盘。
-            a.task.fileChangesLight = c.buildLightSummary();
-            a.task.fileChangesFull = c.buildContent();
+            t.fileChangesLight = c.buildLightSummary();
+            t.fileChangesFull = c.buildContent();
         } finally {
-            a.task.fileChanges = null;
+            t.fileChanges = null;
         }
     }
 
