@@ -9,7 +9,6 @@ import dev.everyagent.worker.proto.Channels;
 import dev.everyagent.worker.proto.Events;
 import dev.everyagent.worker.agent.AgentEntity;
 import dev.everyagent.worker.task.ConversationLoader;
-import dev.everyagent.worker.task.SubAgentManager;
 import dev.everyagent.worker.task.TaskEntry;
 import dev.everyagent.worker.task.TaskManager;
 import dev.everyagent.worker.task.TaskStore;
@@ -34,14 +33,12 @@ public final class EditTruncateProcessor {
     private static final Logger log = LoggerFactory.getLogger(EditTruncateProcessor.class);
 
     private final TaskStore store;
-    private final SubAgentManager subs;
     private final EventSink eventSink;
     private final TaskManager taskManager;
 
-    public EditTruncateProcessor(TaskStore store, SubAgentManager subs, EventSink eventSink,
+    public EditTruncateProcessor(TaskStore store, EventSink eventSink,
             TaskManager taskManager) {
         this.store = store;
-        this.subs = subs;
         this.eventSink = eventSink;
         this.taskManager = taskManager;
     }
@@ -92,7 +89,7 @@ public final class EditTruncateProcessor {
         }
         // 从磁盘重建主 agent 会话内存(磁盘已截断,ConversationLoader 载入截断后的历史)
         // 先停止子 agent(防止截断后旧子 agent 仍写事件/改文件)
-        subs.stopAll(t);
+        // SubAgent stopAll 由 subagent 插件负责
         AgentEntity main = t.main;
         if (main != null) {
             List<Message> rebuilt = ConversationLoader.load(store, dir, t.mainAgentId);
@@ -100,8 +97,8 @@ public final class EditTruncateProcessor {
             main.conversation.addAll(rebuilt);
         }
         // 清理子 agent 运行态(截断后旧轮的子 agent 已无效)
-        t.subs.clear();
-        t.subFutures.clear();
+        t.agents.clear();
+        // 子 agent Future 清理由 subagent 插件负责
         // 清理本轮文件改动收集器(随截断失效,新轮重建)
         t.fileChanges = null;
         t.fileChangesLight = null;

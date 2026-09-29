@@ -3,7 +3,6 @@ package dev.everyagent.plugin.editresend;
 import dev.everyagent.plugin.api.EveryAgentPlugin;
 import dev.everyagent.plugin.api.WorkerPluginContext;
 import dev.everyagent.worker.task.TaskStore;
-import dev.everyagent.worker.task.SubAgentManager;
 import dev.everyagent.worker.hub.EventSink;
 import dev.everyagent.worker.task.TaskManager;
 
@@ -19,11 +18,10 @@ public class TaskEditResendPlugin implements EveryAgentPlugin {
     @Override
     public void activate(WorkerPluginContext ctx) {
         TaskStore store = ctx.getService(TaskStore.class);
-        SubAgentManager subs = ctx.getService(SubAgentManager.class);
         EventSink eventSink = ctx.getService(EventSink.class);
         TaskManager taskManager = ctx.getService(TaskManager.class);
 
-        EditTruncateProcessor truncateProcessor = new EditTruncateProcessor(store, subs, eventSink, taskManager);
+        EditTruncateProcessor truncateProcessor = new EditTruncateProcessor(store, eventSink, taskManager);
         ctx.registerTaskLifecycleNode(new EditResendNode(truncateProcessor));
     }
 }
