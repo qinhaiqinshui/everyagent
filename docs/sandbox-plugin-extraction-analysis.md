@@ -130,24 +130,18 @@ public interface SandboxBackend {
     default String toHostPath(String sandboxPath, List<Path> knownRoots) { return null; }
     
     /**
-     * 命令路径翻译（供 PermissionGate 授权扫描用;真实命令不翻译）。
+     * 沙箱后端是否需要核心做命令授权检查（PermissionGate.requireCommand）。
      * 
-     * 背景：沙箱后端（如 wsl-ubuntu）在 Linux 环境中运行 bash，AI 写的命令
-     * 中的路径是 Linux 形态（/c/Users/...、/workspace/...）。核心的 PermissionGate
-     * 在宿主路径域做判定（正则匹配 C:\... + realpath 检查越界），无法理解 Linux 路径。
-     * 本方法把命令文本中的沙箱内路径前缀替换为宿主路径形态，产出一份**仅供 PermissionGate
-     * 扫描的命令副本**——真实执行的命令保持原文不动。
+     * 设计理由：是否弹窗授权由沙箱决定。
+     * - 隔离型后端（wsl-ubuntu：发行版整体隔离，root 完整权限，automount 关闭，
+     *   手动挂载工作区）不需要命令级授权检查——隔离本身保证了安全。
+     * - 宿主型后端（windows-mic、DIRECT）需要命令级授权检查——命令跑在宿主上，
+     *   危险命令和越界路径必须经用户授权。
      * 
-     * 翻译规则由各后端按自己的挂载约定实现：
-     * - wsl-ubuntu: /c/Users/... → C:/Users/...（原路径形态挂载）
-     * - wsl-bwrap: /workspace → 工作区根, /mnt/c/... → C:/...（规范挂载点）
-     * - docker: /workspace → C:/...（或按容器挂载约定）
-     * - windows-mic/direct: 不翻译（命令路径本就是宿主路径）
-     * 
-     * 无法翻译的部分（如 /etc、/tmp 等发行版内部路径）原样保留。
-     * 默认原样返回（非翻译型后端）。
+     * 默认 true（保守安全）：windows-mic、DIRECT 不 override。
+     * wsl-ubuntu override 为 false。
      */
-    default String translateCommandForGate(String command, Path workspaceRoot) { return command; }
+    default boolean requiresCommandGate() { return true; }
 
     // ===== 新增：工作区生命周期钩子（核心消除 WslUmounter 依赖）=====
     
@@ -193,18 +187,19 @@ private String resolveSandboxPath(TaskEntry t, String rel) {
 }
 ```
 
-#### CommandExecutor.java（命令翻译 + 权限门）
+#### CommandExecutor.java（命令授权检查）
 ```java
 // 删除 import WslPathMapper
 // 删除 isWslBackend()/isWslDirect()/isWslBwrap()/useSeccompInterception() 分支
 
-// 命令路径翻译（授权扫描用）：
-String gateCmd = sandbox.translateCommandForGate(command, Path.of(task.workspaceRoot));
-// 真实执行的命令保持原文
+// 是否做命令授权检查，由沙箱后端决定：
+if (sandbox.requiresCommandGate()) {
+    // 后端跑在宿主上（windows-mic、DIRECT），命令路径本就是宿主路径，直接喂给 PermissionGate
+    gate.requireCommand(task, agentId, command);
+}
+// 真实执行的命令保持原文，不翻译
 
 // extraRoots：由 sandbox 的 spawnSandboxed 参数携带，不再在 CommandExecutor 里按后端类型分发
-List<Path> extraRoots = sandbox.needsExecRoots() ? gate.execRootsSandboxed(task) : List.of();
-
 // powershell 始终走 spawnSandboxedWindows（已有逻辑）
 ```
 
@@ -300,7 +295,7 @@ public final class OsSandbox implements SandboxBackend {
     // - SandboxProviderRegistry.select() → delegate
     // - DIRECT 回退：runDirect() / runDirectCommand()
     // - spawnNative()
-    // - 新增 SPI 方法默认实现（toSandboxPath/toHostPath/translateCommandForGate/onWorkspaceRemoved）
+    // - 新增 SPI 方法默认实现（toSandboxPath/toHostPath/requiresCommandGate/onWorkspaceRemoved）
     //   → OsSandbox 作为 DIRECT 后端，路径翻译方法返回 null
     //   → delegate 不为 null 时，转发到 delegate 的对应方法
 }
@@ -330,7 +325,7 @@ every-agent-plugins/
 │   └── src/main/java/dev/everyagent/plugin/sandbox/wslubuntu/
 │       ├── WslUbuntuSandboxPlugin.java
 │       ├── WslUbuntuSandboxProvider.java       (id="wsl-ubuntu", priority=10)
-│       ├── WslUbuntuSandboxBackend.java         (实现 toSandboxPath/toHostPath/translateCommandForGate/onWorkspaceRemoved)
+│       ├── WslUbuntuSandboxBackend.java         (实现 toSandboxPath/toHostPath/requiresCommandGate/onWorkspaceRemoved)
 │       ├── WslUbuntuSandbox.java                 (原 WslDirectSandbox)
 │       ├── WslPathMapper.java                   (原 worker/os/wsl/WslPathMapper，搬入插件)
 │       ├── WslUmounter.java                     (原 worker/os/wsl/WslUmounter，搬入插件)
@@ -360,9 +355,8 @@ public final class WslUbuntuSandboxBackend implements SandboxBackend {
     }
     
     @Override
-    public String translateCommandForGate(String command, Path workspaceRoot) {
-        // wsl-ubuntu 不做命令翻译（发行版整体隔离单元，路径已是原生形态）
-        return command;
+    public boolean requiresCommandGate() {
+        return false;  // 发行版整体隔离，命令级授权检查由隔离承担
     }
     
     @Override
@@ -492,9 +486,8 @@ public final class DockerSandboxBackend implements SandboxBackend {
     }
     
     @Override
-    public String translateCommandForGate(String command, Path workspaceRoot) {
-        // 容器内路径 → 宿主路径（供 PermissionGate 扫描）
-        return command;  // 或做翻译
+    public boolean requiresCommandGate() {
+        return false;  // 容器隔离，命令级授权检查由容器隔离承担
     }
     
     @Override
@@ -549,13 +542,13 @@ auto 模式下，Docker 可用时优先级最高 (priority=30)，自动选择。
 ## 四、迁移步骤（执行顺序）
 
 ### Step 1: SandboxBackend SPI 接口改造（plugin-api）
-- 新增 4 个 default 方法：`toSandboxPath()`、`toHostPath()`、`translateCommandForGate()`、`onWorkspaceRemoved()`
+- 新增 4 个 default 方法：`toSandboxPath()`、`toHostPath()`、`requiresCommandGate()`、`onWorkspaceRemoved()`
 - 删除 3 个 WSL 专属方法：`isWslBackend()`、`isWslBwrap()`、`isWslDirect()`
 - `DirectSpawnSupport` 移到 plugin-api 的 `spi` 包，改为 public
 
 ### Step 2: Worker 核心去 WSL 化
 - **FsToolSupport**：删除 `WslPathMapper`/`WslBwrapSandbox` 引用，`resolveWslPath()` 改为调 `sandbox.toHostPath(rel, knownRoots)`
-- **CommandExecutor**：删除 `WslPathMapper`/`isWslBackend()`/`isWslDirect()`/`isWslBwrap()`/`useSeccompInterception()` 分支，命令翻译改用 `sandbox.translateCommandForGate()`，extraRoots 改用通用逻辑
+- **CommandExecutor**：删除 `WslPathMapper`/`isWslBackend()`/`isWslDirect()`/`isWslBwrap()`/`useSeccompInterception()` 分支，命令授权检查改由 `sandbox.requiresCommandGate()` 决定是否执行
 - **SkillAdvisor**：删除 `WslPathMapper`/`isWslBackend()`/`isWslDirect()` 引用，知识包路径翻译改用 `sandbox.toSandboxPath()`
 - **ExternalFileTokenResolver**：删除 `WslPathMapper`/`isWslDirect()`/`isWslBwrap()` 引用，沙箱内路径改用 `sandbox.toSandboxPath()`
 - **WorkspaceManager**：删除 `WslUmounter` 注入，删除工作区时改调 `sandbox.onWorkspaceRemoved(root)`
@@ -578,7 +571,7 @@ auto 模式下，Docker 可用时优先级最高 (priority=30)，自动选择。
 - 创建模块、`pom.xml`、`plugin.json`
 - 移入 `WslDirectSandbox`（改名 `WslUbuntuSandbox`）、`WslPathMapper`、`WslUmounter` + Provider + Backend + 入口类
 - 从删除的 `WslBwrapSandbox` 中提取共享类型到 `WslCommon.java`
-- Backend 实现 `toSandboxPath()`/`toHostPath()`/`translateCommandForGate()`/`onWorkspaceRemoved()`
+- Backend 实现 `toSandboxPath()`/`toHostPath()`/`requiresCommandGate()`/`onWorkspaceRemoved()`
 - 后端 id = `wsl-ubuntu`
 
 ### Step 6: 更新 ARCHITECTURE.md
