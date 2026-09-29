@@ -52,13 +52,12 @@ function fireTaskNotification(entry: TaskListEntry, previous: TaskStatus): void 
 
 function fireInteractionNotification(request: UserInteractionRequest): void {
   if (!shouldNotify()) return
-  const isAuthorization = request.responseMode === 'authorization'
   const body = request.prompt
     || request.details
     || request.questions?.[0]?.prompt
     || ''
   showSystemNotification({
-    title: isAuthorization ? 'AI 请求授权' : 'AI 等待你的回答',
+    title: 'AI 等待你的回答',
     body,
     tag: `ask-${request.id}`,
     onClick: () => {

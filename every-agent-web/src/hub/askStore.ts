@@ -37,8 +37,11 @@ interface PendingAskEntry {
 /** worker ask.create / ask.state 的 payload 形状(架构 §5.4)。 */
 export interface WorkerAskPayload {
   askId: string
+  /** 保留类型定义但不再用于分支（旧数据兼容）。 */
   kind?: string
+  /** 旧字段保留（磁盘回放兼容）。 */
   question?: string
+  /** 旧字段保留（磁盘回放兼容）。 */
   options?: string[]
   /** 多问题选择题(ask_user 工具主路径);存在时优先于 question/options 渲染。 */
   questions?: WorkerAskQuestion[]
@@ -50,7 +53,14 @@ export interface WorkerAskPayload {
 export interface WorkerAskQuestion {
   id?: string
   prompt?: string
-  options?: string[]
+  options?: WorkerAskOption[]
+}
+
+/** worker ask 选项形状（新协议：对象数组，含 label/value/type）。 */
+export interface WorkerAskOption {
+  label: string
+  value: string
+  type: string  // "radio" | "input"
 }
 
 const pendingAsks = new Map<string, PendingAskEntry>()
@@ -96,92 +106,60 @@ export function registerAskReplySender(sender: ReplySender | null): void {
   replySender = sender
 }
 
-/** 给选项列表追加固定的「其他」兜底选项(不可关闭,选中后自由输入)。 */
+/** 给旧格式选项列表追加固定的「其他」兜底选项(旧格式兼容：磁盘回放的 string[] options)。 */
 function withOtherOption(options: string[]): UserInteractionOption[] {
-  const opts = options.map((label) => ({ id: label, label }))
-  opts.push({ id: USER_INTERACTION_OTHER_OPTION_ID, label: '其他' })
+  const opts = options.map((label) => ({ id: label, label, value: label, type: 'radio' }))
+  opts.push({ id: USER_INTERACTION_OTHER_OPTION_ID, label: '其他', value: '', type: 'input' })
   return opts
 }
 
 function toInteractionRequest(payload: WorkerAskPayload): UserInteractionRequest {
-  const question = payload.question ?? ''
-  const options = payload.options ?? []
-  // 危险操作授权(worker PermissionGate):三选一(run/task/deny),不追加「其他」,
-  // 答案以稳定 token 回传(worker 端宽容解析,兼容文案)。
-  if (payload.kind === 'authorization') {
-    const fullPrompt = payload.questions?.[0]?.prompt ?? question
-    const firstLine = fullPrompt.split('\n')[0] || 'AI 请求授权'
-    const workerOptions = payload.questions?.[0]?.options ?? options
-    const authOptions = workerOptions.length > 0
-      ? workerOptions.map((label) => ({
-        id: label.includes('本任务') ? 'task' : label.includes('本轮') ? 'run' : 'deny',
-        label,
-      }))
-      : [
-        { id: 'run', label: '本轮运行内允许' },
-        { id: 'task', label: '本任务全程允许' },
-        { id: 'deny', label: '拒绝' },
-      ]
-    return {
-      id: payload.askId,
-      prompt: firstLine,
-      details: fullPrompt,
-      responseMode: 'authorization',
-      options: authOptions,
-      createdAt: Date.now(),
-    }
-  }
-  // 多问题选择题(ask_user 主路径):每题自动追加「其他」选项。
+  // 新格式：questions 数组（每题 options 为对象数组，含 label/value/type）
   if (payload.questions && payload.questions.length > 0) {
     return {
       id: payload.askId,
-      prompt: question || (payload.questions.length === 1 ? payload.questions[0].prompt ?? '' : ''),
+      prompt: payload.questions.length === 1 ? (payload.questions[0].prompt ?? '') : '',
       questions: payload.questions.map((q, idx) => ({
         id: q.id ?? `${payload.askId}_${idx}`,
         prompt: q.prompt ?? '',
-        options: withOtherOption(q.options ?? []),
+        options: (q.options ?? []).map((o) => ({
+          id: o.label,  // label 即 ID（回传用）
+          label: o.label,
+          value: o.value,
+          type: o.type ?? 'radio',
+        })),
       })),
       createdAt: Date.now(),
     }
   }
-  // 单问题选择题:自动追加「其他」选项(ask_user 单问题交互等价形态)。
-  if (options.length > 0) {
+  // 旧格式兼容（磁盘回放）：question + options(string[])
+  if (payload.options && payload.options.length > 0) {
+    const options = withOtherOption(payload.options)
     return {
       id: payload.askId,
-      prompt: question,
-      responseMode: 'single_choice',
-      options: withOtherOption(options),
+      prompt: payload.question ?? '',
+      questions: [{ id: payload.askId, prompt: payload.question ?? '', options }],
       createdAt: Date.now(),
     }
   }
-  // 自由文本:走多问题模式的「其他」输入(无选项时仅一个「其他」)。
+  // 兜底：自由文本
   return {
     id: payload.askId,
-    prompt: question,
-    questions: [{
-      id: payload.askId,
-      prompt: question,
-      options: [{ id: USER_INTERACTION_OTHER_OPTION_ID, label: '其他' }],
-    }],
+    prompt: payload.question ?? '',
+    questions: [{ id: payload.askId, prompt: payload.question ?? '', options: [{ id: USER_INTERACTION_OTHER_OPTION_ID, label: '其他', value: '', type: 'input' }] }],
     createdAt: Date.now(),
   }
 }
 
 /**
  * 把交互结果折成 ask.reply 的 answer 字符串(写回工具结果/模型上下文)。
- * 逐题输出「题干：答案」,答案含选中选项文案,选中「其他」时以「其他：用户输入」格式回传。
+ * 逐题输出「题干：答案」，radio 选中返回 value，input 选中返回「其他：用户输入」。
  */
 function toAnswerText(
   result: Omit<UserInteractionResult, 'interactionId' | 'submittedAt'>,
   request: UserInteractionRequest,
 ): string {
-  // 授权:直接回传稳定 token(run/task/deny),worker 端精确匹配
-  if (request.responseMode === 'authorization') {
-    return result.selectedOptionIds?.[0] ?? 'deny'
-  }
-  if (typeof result.confirmed === 'boolean') {
-    return result.confirmed ? 'yes' : 'no'
-  }
+  // 多问题选择题
   if (result.answers && result.answers.length > 0) {
     const promptById = new Map<string, string>()
     for (const q of request.questions ?? []) {
@@ -189,22 +167,24 @@ function toAnswerText(
     }
     return result.answers.map((answer) => {
       const prompt = promptById.get(answer.questionId) ?? answer.prompt ?? ''
+      // radio 选中 → value；input → 用户输入文本
       const value = answer.otherSelected
         ? `其他：${answer.otherText ?? ''}`
-        : answer.selectedOptions.map((option) => option.label).join('、')
+        : answer.selectedOptions.map((option) => option.value ?? option.label).join('、')
       return `${prompt}：${value}`
     }).filter((line) => {
       const sep = line.indexOf('：')
       return sep >= 0 && line.substring(sep + 1).trim().length > 0
     }).join('\n')
   }
+  // 单问题选择题（旧兼容）
   if (result.selectedOptionIds && result.selectedOptionIds.length > 0) {
     const prompt = request.prompt
-    const labels = request.options
+    const selected = request.options
       ?.filter((o) => result.selectedOptionIds!.includes(o.id))
-      .map((o) => o.label)
+      .map((o) => o.value ?? o.label)
       .join('、') ?? result.selectedOptionIds.join('、')
-    return `${prompt}：${labels}`
+    return `${prompt}：${selected}`
   }
   return ''
 }
@@ -213,7 +193,7 @@ function notifyAsk(entry: PendingAskEntry): void {
   removeAppNotification(entry.notificationId)
   notifyApp({
     id: entry.notificationId,
-    title: entry.request.responseMode === 'authorization' ? 'AI 请求授权' : 'AI 等待你的回答',
+    title: 'AI 等待你的回答',
     message: entry.request.prompt,
     tone: 'warning',
     onClick: () => {

@@ -642,27 +642,22 @@ export interface AppNotification {
 }
 
 /**
- * 用户交互回答模式。
- * 仅保留单选题（single_choice）、确认（confirm）与授权（authorization,危险操作三选一）；
- * open_text / multi_choice / structured_form 已随 ask_user 工具「只支持单选选择题」改造移除。
- */
-export type UserInteractionResponseMode =
-  | 'single_choice'
-  | 'confirm'
-  | 'authorization'
-
-/**
- * 「其他」选项的固定 ID：ask_user 选择题自动追加的兜底选项，
+ * 「其他」选项的固定 ID：旧格式兼容路径自动追加的兜底选项，
  * 用户选中后可在输入框填写自定义内容（结果经 otherText 回传）。
+ * 新格式由 worker 侧 AskUserTool 自行追加 type="input" 选项，不再使用此常量。
  */
 export const USER_INTERACTION_OTHER_OPTION_ID = '__other__'
 
 /** 用户交互选项。 */
 export interface UserInteractionOption {
-  /** 选项 ID。 */
+  /** 选项 ID（label 即 ID，回传用）。 */
   id: string
   /** 选项标题。 */
   label: string
+  /** 回传值。 */
+  value: string
+  /** 选项类型："radio" | "input"。 */
+  type: string
   /** 选项补充说明。 */
   description?: string
 }
@@ -675,11 +670,11 @@ export interface UserInteractionQuestion {
   prompt: string
   /** 补充说明。 */
   details?: string
-  /** 可选项列表（始终含自动追加的「其他」选项，不可关闭）。 */
+  /** 可选项列表（每项含 type："radio" 单选 / "input" 自由输入）。 */
   options: UserInteractionOption[]
-  /** 「其他」选项文案（缺省「其他」）。 */
+  /** 「其他」选项文案（旧格式兼容，缺省「其他」）。 */
   otherLabel?: string
-  /** 「其他」输入框占位提示。 */
+  /** 「其他」输入框占位提示（旧格式兼容）。 */
   otherPlaceholder?: string
 }
 
@@ -689,13 +684,13 @@ export interface UserInteractionQuestionAnswer {
   questionId: string
   /** 问题文本。 */
   prompt: string
-  /** 选中的选项 ID 列表（含「其他」的固定 ID）。 */
+  /** 选中的选项 ID 列表。 */
   selectedOptionIds: string[]
   /** 选中的选项明细。 */
-  selectedOptions: { id: string; label: string; description?: string }[]
-  /** 是否选中「其他」。 */
+  selectedOptions: { id: string; label: string; value?: string; description?: string }[]
+  /** 是否选中了 input 类型选项。 */
   otherSelected: boolean
-  /** 「其他」输入的自定义内容（选中「其他」时存在）。 */
+  /** input 类型选项的自定义输入内容。 */
   otherText?: string
 }
 
@@ -703,17 +698,15 @@ export interface UserInteractionQuestionAnswer {
 export interface UserInteractionRequest {
   /** 交互请求 ID。 */
   id: string
-  /** 主问题（多问题选择题经 questions 提供；此处用于标题展示与内部单问题调用）。 */
+  /** 主问题（多问题选择题经 questions 提供；此处用于标题展示）。 */
   prompt: string
-  /** 回答模式（多问题选择题 questions 交互时缺省）。 */
-  responseMode?: UserInteractionResponseMode
   /** 补充说明。 */
   details?: string
   /** 回答约束列表。 */
   constraints?: string[]
-  /** 可选项列表（单问题选择题用，内部「继续/中止」等确认场景使用）。 */
+  /** 可选项列表（旧格式兼容：单问题选择题用）。 */
   options?: UserInteractionOption[]
-  /** 多问题选择题列表（ask_user 工具主路径；存在时优先于 responseMode/options 渲染）。 */
+  /** 多问题选择题列表（ask_user 工具主路径；存在时优先渲染）。 */
   questions?: UserInteractionQuestion[]
   /** 提交按钮文案。 */
   submitLabel?: string
@@ -725,20 +718,12 @@ export interface UserInteractionRequest {
 export interface UserInteractionResult {
   /** 对应的交互请求 ID。 */
   interactionId: string
-  /** 回答模式（多问题选择题 answers 交互时缺省）。 */
-  responseMode?: UserInteractionResponseMode
-  /** 确认结果。 */
-  confirmed?: boolean
   /** 选中的选项 ID 列表（单问题选择题，兼容内部调用方）。 */
   selectedOptionIds?: string[]
   /** 多问题选择题回答列表。 */
   answers?: UserInteractionQuestionAnswer[]
   /** 原始结构化结果。 */
   raw: {
-    /** 确认结果。 */
-    confirmed?: boolean
-    /** 授权选择（deny / run / task）。 */
-    authorizeOption?: string
     /** 选中的选项 ID 列表。 */
     selectedOptionIds?: string[]
     /** 多问题选择题回答列表。 */
