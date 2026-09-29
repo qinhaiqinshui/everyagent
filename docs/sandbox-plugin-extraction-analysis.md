@@ -127,12 +127,9 @@ OsSandbox (@Component, @PostConstruct)
 
 ```java
 public interface SandboxBackend {
-    /** 在沙箱中执行命令。 */
+    /** 在沙箱中执行命令（shell 命令字符串，经 shell 解析，有隔离）。 */
     ExecResult spawnSandboxed(String command, Path cwd, Map<String,String> extraEnv,
             String shell, List<Path> extraRoots, boolean allowNetwork, boolean allowPrivilege);
-
-    /** 宿主原生进程 argv 直传（供 NativeGit 等平台受控操作使用）。 */
-    ExecResult spawnNative(String[] argv, Path cwd, Map<String,String> env, long timeoutMs);
 
     /** 后端 id。 */
     String id();
@@ -157,12 +154,21 @@ public interface SandboxBackend {
 
 **删除的 SPI 方法：**
 - `spawnSandboxedWindows()` — WSL 专属 hack，让 powershell 命令回宿主执行。删除后核心的宿主访问工具直接用自己的 CommandExecutor 在宿主执行，不需要 WSL 后端提供此方法。
+- `spawnNative()` — 执行 argv 数组（无 shell 解析、无隔离），只被 NativeGit（git 插件）调用。git 操作不走沙箱隔离——它就是宿主原生进程 + 超时 + 输出截断，跟沙箱后端是什么完全无关。不是沙箱能力，是通用的"宿主进程执行"能力，移出 SandboxBackend SPI（见 §2.3.1）。
 - `isWslBackend()` / `isWslBwrap()` / `isWslDirect()` — WSL 专属判定，核心不需要知道后端是不是 WSL。
 - `registerBashTool()` — 工具注册策略不属于沙箱 SPI。核心的宿主访问工具按系统决定（Windows→PowerShell, Linux→Bash），沙箱插件自己注册自己的 ToolProvider。
 - `requiresCommandGate()` — 授权策略不属于沙箱 SPI。沙箱自己决定是否做授权检查。
 - `translateCommandForGate()` — 路径翻译不属于沙箱 SPI。沙箱自己做自己的路径扫描。
 
-**SandboxBackend 纯粹是：执行器 + 路径翻译 + 工作区生命周期。不涉及命令工具、不涉及授权策略、不涉及工具注册。**
+**SandboxBackend 纯粹是：沙箱执行 + 路径翻译 + 工作区生命周期。不涉及命令工具、不涉及授权策略、不涉及工具注册、不涉及宿主原生执行。**
+
+#### 2.3.1 spawnNative 从 SandboxBackend 移出
+
+`spawnNative` 的作用是"在宿主上直接执行 argv 数组"（无 shell 解析、无降权隔离、只有超时和输出截断）。它只被 `NativeGit`（git 插件）调用，用于执行 `git --no-pager status` 等受控命令。
+
+这不是沙箱能力——不管是 wsl-ubuntu、windows-mic 还是 docker，`spawnNative` 的实现都是 `DirectSpawnSupport.runDirect()`（宿主 ProcessBuilder），完全一样。它是一个通用的"宿主进程执行"服务，与沙箱后端无关。
+
+**方案**：将 `spawnNative` 的逻辑（`DirectSpawnSupport`）作为 worker 核心的通用服务保留，git 插件通过 `ctx.getService(OsSandbox.class).spawnNative()` 或单独的服务接口调用。`SandboxBackend` SPI 不再包含此方法。
 
 ### 2.4 InteractionService 通用化
 
@@ -319,7 +325,7 @@ sandbox.onWorkspaceRemoved(root);
 // 保留：
 // - SandboxProviderRegistry.select() → delegate
 // - DIRECT 回退：runDirect() / runDirectCommand()
-// - spawnNative()
+// - spawnNative()（移出 SPI，见 §2.3.1，逻辑保留在 worker 核心供 git 插件调）
 // - SPI 方法默认实现（toSandboxPath/toHostPath 返回 null，onWorkspaceRemoved no-op）
 // - delegate 不为 null 时转发到 delegate
 ```
@@ -352,7 +358,7 @@ sandbox.onWorkspaceRemoved(root);
 | `plugin/adapters/WslBwrapSandboxBackend.java` | 删除 |
 | `plugin/adapters/WslDirectSandboxProvider.java` | 移到插件（改名） |
 | `plugin/adapters/WslDirectSandboxBackend.java` | 移到插件（改名） |
-| `plugin/adapters/DirectSpawnSupport.java` | 移到 plugin-api，改 public |
+| `plugin/adapters/DirectSpawnSupport.java` | 逻辑保留在 worker 核心作为通用宿主进程执行服务，不再属于 SandboxBackend SPI |
 | `plugin-api/.../spi/PermissionGate.java` | 从 plugin-api 移除 |
 | 测试文件（多个） | 随对应源文件删除/迁移 |
 
@@ -434,9 +440,7 @@ public final class WslUbuntuSandboxBackend implements SandboxBackend {
 
     @Override
     public ExecResult spawnSandboxed(...) { ... }
-
-    @Override
-    public ExecResult spawnNative(...) { ... }
+    // spawnNative 不在 SandboxBackend SPI 上（见 §2.3.1）
 }
 ```
 
@@ -527,7 +531,7 @@ Docker 插件自己提供 `DockerBashToolProvider`（implements `ToolProvider`�
 ## 四、迁移步骤
 
 ### Step 1: SandboxBackend SPI 改造（plugin-api）
-- 删除 `spawnSandboxedWindows()`、`isWslBackend()`、`isWslBwrap()`、`isWslDirect()`、`registerBashTool()`
+- 删除 `spawnSandboxedWindows()`、`isWslBackend()`、`isWslBwrap()`、`isWslDirect()`、`registerBashTool()`、`spawnNative()`
 - 新增 `toSandboxPath()`、`toHostPath()`、`onWorkspaceRemoved()` 三个 default 方法
 - `DirectSpawnSupport` 移到 plugin-api，改 public
 - `PermissionGate` 从 plugin-api 移除
@@ -544,7 +548,7 @@ Docker 插件自己提供 `DockerBashToolProvider`（implements `ToolProvider`�
 - **BashToolProvider / PowerShellToolProvider**：删除 `registerBashTool()` 判定，改为按系统 + "允许AI访问电脑"开关
 - **PowerShellEnableSlashProvider**：删除 `isWslBackend()` 条件，始终注册
 - **WorkerProperties**：删除 `Wsl` 嵌套类、`interceptPrivilege`；`type` 取值更新
-- **OsSandbox**：删除 Backend 枚举、WSL/windows 分发逻辑、`isWsl*()` 方法、`spawnSandboxedWindows()`；新增 SPI 方法转发 delegate
+- **OsSandbox**：删除 Backend 枚举、WSL/windows 分发逻辑、`isWsl*()` 方法、`spawnSandboxedWindows()`、`spawnNative()`（移出 SPI，逻辑保留为核心通用服务）；新增 SPI 方法转发 delegate
 
 ### Step 3: 删除 worker 中的沙箱实现文件
 - 删除 `os/wsl/` 整个目录
