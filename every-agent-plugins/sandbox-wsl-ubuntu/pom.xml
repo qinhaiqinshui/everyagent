@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>dev.everyagent</groupId>
+        <artifactId>every-agent-plugins</artifactId>
+        <version>0.11.0</version>
+    </parent>
+
+    <artifactId>sandbox-wsl-ubuntu</artifactId>
+    <name>sandbox-wsl-ubuntu</name>
+    <description>WSL2 Ubuntu 发行版 root 直连沙箱（工作区手动挂载）</description>
+
+    <dependencies>
+        <dependency>
+            <groupId>dev.everyagent</groupId>
+            <artifactId>every-agent-worker</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+</project>

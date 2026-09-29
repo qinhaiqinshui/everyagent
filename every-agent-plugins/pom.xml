@@ -34,6 +34,7 @@
         <module>system-info</module>
         <module>agents-md</module>
         <module>file-change</module>
+        <module>sandbox-wsl-ubuntu</module>
     </modules>
 
     <build>
