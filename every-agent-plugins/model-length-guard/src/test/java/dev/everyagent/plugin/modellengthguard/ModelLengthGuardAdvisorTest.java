@@ -21,6 +21,7 @@ import reactor.test.StepVerifier;
 
 import java.io.IOException;
 import java.net.SocketException;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -247,8 +248,12 @@ class ModelLengthGuardAdvisorTest {
         TaskEntry task = new TaskEntry("t_test", "测试",
                 new ModelConfig("cfg", "openai", "http://localhost", "test-model", null),
                 "/tmp", "w_1", "a_test", 1000);
-        AgentEntity a = new AgentEntity(task, "a_test", AgentEntity.Kind.MAIN, "test", null,
-                OpenAiChatOptions.builder().build(), List.of());
+        Map<String, Object> props = new HashMap<>();
+        props.put("taskEntry", task);
+        props.put("taskId", task.taskId);
+        props.put("workspaceRoot", task.workspaceRoot);
+        AgentEntity a = new AgentEntity("a_test", "test", null,
+                OpenAiChatOptions.builder().build(), List.of(), null, props);
         return new ModelLengthGuardAdvisor(a, new WorkerProperties(), STUB_ESTIMATOR);
     }
 

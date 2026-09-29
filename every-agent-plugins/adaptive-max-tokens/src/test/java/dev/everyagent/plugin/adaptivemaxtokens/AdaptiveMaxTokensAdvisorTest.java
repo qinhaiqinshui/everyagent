@@ -21,6 +21,7 @@ import reactor.core.publisher.Flux;
 import reactor.test.StepVerifier;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -315,8 +316,12 @@ class AdaptiveMaxTokensAdvisorTest {
         TaskEntry task = new TaskEntry("t_test", "测试",
                 new ModelConfig("cfg", "openai", "http://localhost", "test-model", null),
                 "/tmp", "w_1", "a_test", 1000);
-        return new AgentEntity(task, "a_test", AgentEntity.Kind.MAIN, "test", null,
-                OpenAiChatOptions.builder().build(), List.of());
+        Map<String, Object> props = new HashMap<>();
+        props.put("taskEntry", task);
+        props.put("taskId", task.taskId);
+        props.put("workspaceRoot", task.workspaceRoot);
+        return new AgentEntity("a_test", "test", null,
+                OpenAiChatOptions.builder().build(), List.of(), null, props);
     }
 
     private static ChatClientRequest request(int maxTokens) {
