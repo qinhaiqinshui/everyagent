@@ -1,5 +1,6 @@
 package dev.everyagent.worker;
 
+import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.os.OsSandbox;
 import dev.everyagent.worker.plugin.AdvisorContextImpl;
 import dev.everyagent.worker.plugin.registry.AdvisorProviderRegistry;
@@ -28,18 +29,21 @@ import java.util.List;
  * 按 {@link AgentEntity.Kind} 分档挂 advisor,仅配置不同)。
  *
  * <p>纪律(AGENTS.md §13):agent 执行必须走 ChatClient + Advisor 生态,禁止手搓工具循环。
- * 本工厂复用 Spring AI 原生 {@code ToolCallingAdvisor}(经 {@link WorkerToolEventAdvisor} 继承扩展,
- * 仅追加 worker 事件发射,不改动循环逻辑),底层 {@link ToolCallingManager} 共享单例。
+ * 本工厂复用 Spring AI 原生 {@code ToolCallingAdvisor}(由 builtin.worker-tool-event Provider
+ * 提供 {@link WorkerToolEventAdvisor},仅追加 worker 事件发射,不改动循环逻辑;死循环守卫改由
+ * 工厂在组装入口装饰 TCM 承担),底层 {@link ToolCallingManager} 共享单例。
  *
  * <p>角色分档(对应 nagent:子 agent 不挂派发工具、不挂 skill):
  * <ul>
  *   <li>主 agent:挂 system-info 插件注入的环境信息 Advisor + agents-md 插件注入的
  *       agents.md 约束 Advisor + {@link SkillAdvisor}(注入内置 skill 渐进式披露索引)
- *       + {@link WorkerToolEventAdvisor};
+ *       + {@link WorkerToolEventAdvisor}(由 builtin.worker-tool-event Provider 提供,
+ *       scope=BOTH;死循环守卫改由工厂 TCM 装饰承担);
  *       工具集含 {@code SubAgentTools}(可派生子 agent),由 {@link AgentEntity#tools} 携带。</li>
  *   <li>子 agent:挂 system-info 插件注入的环境信息 Advisor + agents-md 插件注入的
  *       agents.md 约束 Advisor + {@link WorkerToolEventAdvisor}
- *       (不挂 skill、不挂派发工具、不注册 ask_user——其 {@code tools} 本就不含 {@code SubAgentTools} 与
+ *       (由 builtin.worker-tool-event Provider 提供,scope=BOTH;死循环守卫改由工厂 TCM 装饰承担;
+ *       不挂 skill、不挂派发工具、不注册 ask_user——其 {@code tools} 本就不含 {@code SubAgentTools} 与
  *       {@code AskUserTool},结构上禁递归且不可向用户提问)。</li>
  * </ul>
  *
@@ -64,10 +68,13 @@ public class AgentClientFactory {
 
     private final OsSandbox osSandbox;
     private final AdvisorProviderRegistry advisorRegistry;
+    private final WorkerProperties props;
 
-    public AgentClientFactory(OsSandbox osSandbox, AdvisorProviderRegistry advisorRegistry) {
+    public AgentClientFactory(OsSandbox osSandbox, AdvisorProviderRegistry advisorRegistry,
+            WorkerProperties props) {
         this.osSandbox = osSandbox;
         this.advisorRegistry = advisorRegistry;
+        this.props = props;
     }
 
 
@@ -157,8 +164,25 @@ public class AgentClientFactory {
                 .build();
     }
 
+    /**
+     * 死循环守卫：{@code maxRepeated > 0} 时用 {@link LoopRepeatGuardToolManager} 装饰 TCM，
+     * 否则原样返回。守卫状态随装饰器实例 per-run 隔离。
+     *
+     * <p>解耦前守卫经 {@code LoopRepeatGuardAdvisor extends WorkerToolEventAdvisor} 的构造器
+     * 传入；解耦后改由工厂在组装入口装饰 TCM，{@link WorkerToolEventAdvisorProvider}
+     * 直接用装饰后的 TCM 创建 advisor，继承不再必要。
+     */
+    private ToolCallingManager wrapWithGuardIfNeeded(ToolCallingManager tcm) {
+        int maxRepeated = props.getLimits().getMaxRepeatedToolRounds();
+        if (maxRepeated <= 0) {
+            return tcm;
+        }
+        return new dev.everyagent.worker.task.LoopRepeatGuardToolManager(tcm, maxRepeated);
+    }
+
     /** 按 Kind 分派:主挂 skill+事件,子仅事件(与 nagent 一致)。 */
     public ChatClient forAgent(AgentEntity a, ToolCallingManager tcm) {
-        return a.kind == AgentEntity.Kind.SUB ? forSub(a, tcm) : forMain(a, tcm);
+        ToolCallingManager wrapped = wrapWithGuardIfNeeded(tcm);
+        return a.kind == AgentEntity.Kind.SUB ? forSub(a, wrapped) : forMain(a, wrapped);
     }
 }
