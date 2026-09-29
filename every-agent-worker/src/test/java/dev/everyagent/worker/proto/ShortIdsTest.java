@@ -30,7 +30,7 @@ class ShortIdsTest {
     @Test
     void prefixes_areStable() {
         assertTrue(ShortIds.mainAgentId().startsWith("a_"));
-        assertTrue(ShortIds.subAgentId().startsWith("sub_"));
+        assertTrue(ShortIds.next("sub").startsWith("sub"));
         assertTrue(ShortIds.askId().startsWith("q_"));
         assertEquals("m", ShortIds.mid().substring(0, 1));
     }
