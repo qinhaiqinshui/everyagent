@@ -234,13 +234,12 @@ public class SandboxPathRegistry {
    → 沙箱返回沙箱内路径（如 /c/Users/.../workspace）
    → 核心保存映射表
 
-2. 文件消费方调 SandboxPathRegistry 翻译:
-   - FsToolSupport: toHostPath("/c/Users/.../file.txt") → "C:\Users\...\file.txt" → Java NIO
-   - SkillAdvisor: toSandboxPath("C:\Users\...\skills\x") → "/c/Users/.../skills/x" → 注入 prompt
-   - ExternalFileTokenResolver: toSandboxPath(real) → 沙箱内路径 → 附在引用文本后
+2. 路径翻译分两条路径:
+   - **工具参数翻译**：PathTranslationInterceptor 拦截器在工具执行前统一处理，对所有 toolCall 的字符串参数调 toHostPath 翻译。覆盖所有工具（不只核心的 read_file/write_file/update_file）。FsToolSupport 收到的参数已是宿主路径。
+   - **非工具路径翻译**：SkillAdvisor（注入 system prompt 的知识包路径）和 ExternalFileTokenResolver（@ 引用解析）不是工具执行链上的，直接调 SandboxPathRegistry.toSandboxPath()。
 
-3. 翻译不了（注册表外路径）:
-   - toHostPath 返回 null → 文件工具返回错误 "无法在宿主侧访问该路径"
+3. 翻译不了的路径（注册表外路径）:
+   - toHostPath 返回 null → 参数原样保留 → Java NIO 访问失败 → 工具返回错误
    - AI 改用沙箱自己的命令工具（如 cat）读文件
 ```
 
@@ -339,17 +338,16 @@ public class WslUbuntuBashToolProvider implements ToolProvider {
 
 ### 2.10 核心组件改造
 
-#### FsToolSupport.java（路径翻译）
+#### FsToolSupport.java
 ```java
 // 删除 import WslPathMapper、WslBwrapSandbox
+// 删除 resolveWslPath() 方法
 // 注入 SandboxPathRegistry
-// resolveWslPath() 改为：
+// 路径翻译调注册表：
 private String resolveSandboxPath(String rel) {
     String host = pathRegistry.toHostPath(rel);
-    return host != null ? host : null;  // null = 路径在注册表外，调用方返回错误
+    return host != null ? host : rel;  // null = 注册表外路径，原样保留，Java NIO 自然报错
 }
-// 调用方处理 null：
-//   read_file → 返回错误 "无法在宿主侧访问该路径，请使用 bash 工具（如 cat）"
 ```
 
 #### SkillAdvisor.java（知识包路径翻译）
@@ -358,16 +356,17 @@ private String resolveSandboxPath(String rel) {
 // 改为：
 String sandboxPath = pathRegistry.toSandboxPath(Path.of(skill.knowledgePath()));
 // toSandboxPath 无映射时原样返回（DIRECT 场景）
+// 这个路径注入 system prompt，供 AI 用 bash 工具访问（不是文件工具）
 ```
 
-#### ExternalFileTokenResolver.java（外部文件引用文本）
+#### ExternalFileTokenResolver.java（外部文件引用）
 ```java
 // 删除 import WslPathMapper、OsSandbox.isWslDirect()/isWslBwrap()
-// 改为：
-String sandboxPath = pathRegistry.toSandboxPath(real);
-if (!sandboxPath.equals(real.toString())) {
-    sb.append("（沙箱内: ").append(sandboxPath).append("）");
-}
+// 向注册表拿回 AI 可见路径，直接使用：
+String aiPath = pathRegistry.toSandboxPath(real);
+// 有沙箱 → /c/Users/.../external（沙箱内路径）
+// 无沙箱 → C:\Users\...\external（原路径）
+// 不管哪种，直接用这个路径，不提示"沙箱内"
 ```
 
 #### WorkspaceManager.java（工作区删除时清理）
@@ -637,9 +636,9 @@ Docker 场景下，AI 传容器内独有路径（如 `/tmp/output.txt`）给 `re
 - ExternalFileTokenResolver 注册 @ 引用根
 
 ### Step 3: Worker 核心去 WSL 化
-- **FsToolSupport**：`resolveWslPath()` 改为调 `pathRegistry.toHostPath(rel)`，null 时返回错误
+- **FsToolSupport**：删除 `resolveWslPath()` 方法，改为调 `pathRegistry.toHostPath(rel)`，null 时原样保留让 Java NIO 自然报错
 - **SkillAdvisor**：知识包路径翻译改用 `pathRegistry.toSandboxPath()`
-- **ExternalFileTokenResolver**：沙箱内路径改用 `pathRegistry.toSandboxPath()`
+- **ExternalFileTokenResolver**：向注册表注册拿回 AI 可见路径，保持原样使用，不提示"沙箱内"
 - **WorkspaceManager**：删除 `WslUmounter` 注入，改调 `pathRegistry.onWorkspaceRemoved(root)`
 - **CommandExecutor**：删除所有 WSL 分支，不再调 `sandbox.spawnSandboxed()`，直接 ProcessBuilder
 - **BashToolProvider / PowerShellToolProvider**：删除 `registerBashTool()` 判定，改为按系统 + "允许AI访问电脑"开关
