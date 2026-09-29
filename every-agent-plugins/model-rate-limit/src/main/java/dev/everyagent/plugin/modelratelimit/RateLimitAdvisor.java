@@ -34,7 +34,7 @@ import java.util.Optional;
  * {@code doOnCancel}（cancel permit）、{@code doOnError}（cancel permit）、
  * {@code doOnComplete}（complete permit 以 0 兜底）。
  *
- * <p>等待期间经 {@code a.agentEmitter.emit(EmitEvent.transientOf(...))}
+ * <p>等待期间经 {@code a.emitter.emit(EmitEvent.transientOf(...))}
  * 发射 {@code system.notice} 瞬态事件（不落盘）。
  *
  * <p>位置：{@code getOrder()} = {@link ToolCallingAdvisor#DEFAULT_ORDER} + 500
@@ -79,7 +79,7 @@ public class RateLimitAdvisor implements CallAdvisor, StreamAdvisor {
                     if (noticeId[0] == 0) {
                         noticeId[0] = SnowflakeId.next();
                     }
-                    a.agentEmitter.emit(EmitEvent.transientOf(noticeId[0], "system.notice", null, null,
+                    a.emitter.emit(EmitEvent.transientOf(noticeId[0], "system.notice", null, null,
                             null,
                             "模型「" + configId + "」正在排队(在飞 " + waitInfo.inFlight()
                                     + " / 排队 " + waitInfo.waiters() + ")",
@@ -121,7 +121,7 @@ public class RateLimitAdvisor implements CallAdvisor, StreamAdvisor {
                         if (noticeId[0] == 0) {
                             noticeId[0] = SnowflakeId.next();
                         }
-                        a.agentEmitter.emit(EmitEvent.transientOf(noticeId[0], "system.notice", null, null,
+                        a.emitter.emit(EmitEvent.transientOf(noticeId[0], "system.notice", null, null,
                                 null,
                                 "模型「" + configId + "」正在排队(在飞 " + waitInfo.inFlight()
                                         + " / 排队 " + waitInfo.waiters() + ")",

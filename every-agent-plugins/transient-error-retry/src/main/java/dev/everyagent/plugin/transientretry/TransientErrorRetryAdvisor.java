@@ -108,7 +108,7 @@ public class TransientErrorRetryAdvisor implements CallAdvisor, StreamAdvisor {
                 ChatClientResponse response = current.nextCall(request);
                 if (attempt > 0) {
                     // 整波重试成功:仅此一条落盘(瞬态 attempt/progress 不落盘)。
-                    a.agentEmitter.emit(EmitEvent.of(waveId, "retry", null, null,
+                    a.emitter.emit(EmitEvent.of(waveId, "retry", null, null,
                             "重试 " + attempt + " 次后已恢复", null, "resolved",
                             EventPayloads.retryResolvedMeta(attempt, totalDelayMs),
                             EmitEvent.Mode.REPLACE));
@@ -118,7 +118,7 @@ public class TransientErrorRetryAdvisor implements CallAdvisor, StreamAdvisor {
                 if (!isRetryable(e) || ++attempt > cfg.getMaxRequestRetries()) {
                     if (attempt > 0) {
                         // 整波重试耗尽失败:仅此一条落盘。
-                        a.agentEmitter.emit(EmitEvent.of(waveId, "retry", null, null,
+                        a.emitter.emit(EmitEvent.of(waveId, "retry", null, null,
                                 "重试 " + (attempt - 1) + " 次后仍失败", e.getMessage(), "exhausted",
                                 EventPayloads.retryExhaustedMeta(attempt - 1,
                                         cfg.getMaxRequestRetries(), e.getMessage()),
@@ -131,7 +131,7 @@ public class TransientErrorRetryAdvisor implements CallAdvisor, StreamAdvisor {
                 if (waveId == 0) {
                     waveId = SnowflakeId.next();
                 }
-                a.agentEmitter.emit(EmitEvent.transientOf(waveId, "retry", null, null,
+                a.emitter.emit(EmitEvent.transientOf(waveId, "retry", null, null,
                         EventPayloads.retrySummary(attempt, cfg.getMaxRequestRetries(), ms,
                                 e.getMessage()),
                         EventPayloads.retryDetail(attempt, cfg.getMaxRequestRetries(),
@@ -197,7 +197,7 @@ public class TransientErrorRetryAdvisor implements CallAdvisor, StreamAdvisor {
                 .doOnComplete(() -> {
                     // 重试过且最终成功:整波仅此一条落盘。
                     if (retries.get() > 0) {
-                        a.agentEmitter.emit(EmitEvent.of(waveId.get(), "retry", null, null,
+                        a.emitter.emit(EmitEvent.of(waveId.get(), "retry", null, null,
                                 "重试 " + retries.get() + " 次后已恢复", null, "resolved",
                                 EventPayloads.retryResolvedMeta(retries.get(), totalDelayMs.get()),
                                 EmitEvent.Mode.REPLACE));
@@ -213,7 +213,7 @@ public class TransientErrorRetryAdvisor implements CallAdvisor, StreamAdvisor {
                     int attempt = retries.incrementAndGet();
                     if (attempt > cfg.getMaxRequestRetries()) {
                         // 整波重试耗尽失败:仅此一条落盘。
-                        a.agentEmitter.emit(EmitEvent.of(waveId.get(), "retry", null, null,
+                        a.emitter.emit(EmitEvent.of(waveId.get(), "retry", null, null,
                                 "重试 " + (attempt - 1) + " 次后仍失败", error.getMessage(), "exhausted",
                                 EventPayloads.retryExhaustedMeta(attempt - 1,
                                         cfg.getMaxRequestRetries(), error.getMessage()),
@@ -226,7 +226,7 @@ public class TransientErrorRetryAdvisor implements CallAdvisor, StreamAdvisor {
                     if (waveId.get() == 0) {
                         waveId.set(SnowflakeId.next());
                     }
-                    a.agentEmitter.emit(EmitEvent.transientOf(waveId.get(), "retry", null, null,
+                    a.emitter.emit(EmitEvent.transientOf(waveId.get(), "retry", null, null,
                             EventPayloads.retrySummary(attempt, cfg.getMaxRequestRetries(), ms, errMsg),
                             EventPayloads.retryDetail(attempt, cfg.getMaxRequestRetries(),
                                     ms, 0, ms, errMsg),
@@ -257,7 +257,7 @@ public class TransientErrorRetryAdvisor implements CallAdvisor, StreamAdvisor {
                 .concatMap(i -> {
                     long remaining = Math.max(0, delayMs - (i + 1) * 1000);
                     long elapsed = delayMs - remaining;
-                    a.agentEmitter.emit(EmitEvent.transientOf(waveId.get(), "retry", null, null,
+                    a.emitter.emit(EmitEvent.transientOf(waveId.get(), "retry", null, null,
                             EventPayloads.retrySummary(attempt, cfg.getMaxRequestRetries(), remaining, error),
                             EventPayloads.retryDetail(attempt, cfg.getMaxRequestRetries(),
                                     delayMs, elapsed, remaining, error),

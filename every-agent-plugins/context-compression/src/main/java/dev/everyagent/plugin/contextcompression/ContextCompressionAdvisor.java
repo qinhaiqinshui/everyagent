@@ -146,7 +146,7 @@ public class ContextCompressionAdvisor implements CallAdvisor, StreamAdvisor {
         } else {
             // 压缩中 trace(只含 summary;进行中瞬态,完成后同 id 更新为持久)
             long compId = SnowflakeId.next();
-            a.agentEmitter.emit(EmitEvent.transientOf(compId, "context.compression", null, null,
+            a.emitter.emit(EmitEvent.transientOf(compId, "context.compression", null, null,
                     "正在自动压缩上下文…(当前约 " + used + " token)", null, null, null,
                     EmitEvent.Mode.REPLACE));
 
@@ -154,14 +154,14 @@ public class ContextCompressionAdvisor implements CallAdvisor, StreamAdvisor {
             ContextCompressor.Result r = ContextCompressor.compress(working, trigger, target, overhead, sum);
             if (!r.compressed()) {
                 toSend = working;
-                a.agentEmitter.emit(EmitEvent.of(compId, "context.compression", null, null,
+                a.emitter.emit(EmitEvent.of(compId, "context.compression", null, null,
                         "已自动压缩上下文(无需改写)", null, null, null, EmitEvent.Mode.REPLACE));
             } else {
                 toSend = r.messages();
                 baseline = new ArrayList<>(r.messages());
                 absorbed = full.size();
                 long after = ContextCompressor.estimateTokens(toSend) + overhead;
-                a.agentEmitter.emit(EmitEvent.of(compId, "context.compression", null, null,
+                a.emitter.emit(EmitEvent.of(compId, "context.compression", null, null,
                         "已自动压缩上下文(" + stageName(r.stage()) + ", 消息 " + working.size() + "→"
                                 + toSend.size() + ", 约 " + used + "→" + after + " token 估算)",
                         null, null, null, EmitEvent.Mode.REPLACE));

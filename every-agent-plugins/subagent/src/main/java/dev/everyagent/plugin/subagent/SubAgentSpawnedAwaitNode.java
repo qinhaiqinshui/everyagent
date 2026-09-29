@@ -2,7 +2,8 @@ package dev.everyagent.plugin.subagent;
 
 import dev.everyagent.plugin.api.task.TaskLifecycleContext;
 import dev.everyagent.plugin.api.task.TaskOutcome;
-import dev.everyagent.worker.task.SubAgentManager;
+import dev.everyagent.worker.task.lifecycle.TaskLifecycleContextImpl;
+import dev.everyagent.worker.task.lifecycle.UpstreamNode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

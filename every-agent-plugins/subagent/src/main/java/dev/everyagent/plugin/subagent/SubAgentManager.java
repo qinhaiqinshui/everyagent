@@ -113,7 +113,7 @@ public class SubAgentManager {
                     + "注:前端「正在排队(在飞 N / 排队 M)」是模型 API 级限流(跨任务统计模型请求数),与此处子 agent 并发上限(单任务)是两套独立计数,数值不对应。";
         }
         boolean reuse = agentId != null && !agentId.isEmpty() && task.agents.containsKey(agentId);
-        String id = agentId == null || agentId.isEmpty() ? dev.everyagent.worker.proto.ShortIds.subAgentId() : agentId;
+        String id = agentId == null || agentId.isEmpty() ? dev.everyagent.worker.proto.ShortIds.next("sub") : agentId;
         AgentEntity sub;
 
         // 注册/启动放在 task 监视器内,与 stopAll 互斥:

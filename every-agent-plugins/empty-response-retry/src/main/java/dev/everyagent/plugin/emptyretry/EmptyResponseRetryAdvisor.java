@@ -97,7 +97,7 @@ public class EmptyResponseRetryAdvisor implements CallAdvisor, StreamAdvisor {
             if (waveId == 0) {
                 waveId = SnowflakeId.next();
             }
-            a.agentEmitter.emit(EmitEvent.transientOf(waveId, "retry", null, null,
+            a.emitter.emit(EmitEvent.transientOf(waveId, "retry", null, null,
                     EventPayloads.retrySummary(attempt, maxAttempts, ms, "empty_response"),
                     EventPayloads.retryDetail(attempt, maxAttempts, ms, 0, ms, "empty_response"),
                     "retrying",
@@ -111,7 +111,7 @@ public class EmptyResponseRetryAdvisor implements CallAdvisor, StreamAdvisor {
         }
         if (!hasSignal(response)) {
             // 空响应重试耗尽:整波仅此一条落盘。
-            a.agentEmitter.emit(EmitEvent.of(waveId, "retry", null, null,
+            a.emitter.emit(EmitEvent.of(waveId, "retry", null, null,
                     "重试 " + (attempt - 1) + " 次后仍失败", "empty_response", "exhausted",
                     EventPayloads.retryExhaustedMeta(attempt - 1, maxAttempts, "empty_response"),
                     EmitEvent.Mode.REPLACE));
@@ -119,7 +119,7 @@ public class EmptyResponseRetryAdvisor implements CallAdvisor, StreamAdvisor {
         }
         if (attempt > 1) {
             // 重试后拿到非空响应:整波仅此一条落盘。
-            a.agentEmitter.emit(EmitEvent.of(waveId, "retry", null, null,
+            a.emitter.emit(EmitEvent.of(waveId, "retry", null, null,
                     "重试 " + (attempt - 1) + " 次后已恢复", null, "resolved",
                     EventPayloads.retryResolvedMeta(attempt - 1, totalDelayMs),
                     EmitEvent.Mode.REPLACE));
@@ -176,7 +176,7 @@ public class EmptyResponseRetryAdvisor implements CallAdvisor, StreamAdvisor {
                     if (sawSignal.get()) {
                         // 重试过且最终拿到非空信号:整波仅此一条落盘。
                         if (emptyAttempts.get() > 0) {
-                            a.agentEmitter.emit(EmitEvent.of(waveId.get(), "retry", null, null,
+                            a.emitter.emit(EmitEvent.of(waveId.get(), "retry", null, null,
                                     "重试 " + emptyAttempts.get() + " 次后已恢复", null, "resolved",
                                     EventPayloads.retryResolvedMeta(emptyAttempts.get(), totalDelayMs.get()),
                                     EmitEvent.Mode.REPLACE));
@@ -186,7 +186,7 @@ public class EmptyResponseRetryAdvisor implements CallAdvisor, StreamAdvisor {
                     int attempt = emptyAttempts.incrementAndGet();
                     if (attempt >= maxAttempts) {
                         // 空响应重试耗尽:整波仅此一条落盘。
-                        a.agentEmitter.emit(EmitEvent.of(waveId.get(), "retry", null, null,
+                        a.emitter.emit(EmitEvent.of(waveId.get(), "retry", null, null,
                                 "重试 " + attempt + " 次后仍失败", "empty_response", "exhausted",
                                 EventPayloads.retryExhaustedMeta(attempt, maxAttempts, "empty_response"),
                                 EmitEvent.Mode.REPLACE));
@@ -198,7 +198,7 @@ public class EmptyResponseRetryAdvisor implements CallAdvisor, StreamAdvisor {
                     if (waveId.get() == 0) {
                         waveId.set(SnowflakeId.next());
                     }
-                    a.agentEmitter.emit(EmitEvent.transientOf(waveId.get(), "retry", null, null,
+                    a.emitter.emit(EmitEvent.transientOf(waveId.get(), "retry", null, null,
                             EventPayloads.retrySummary(attempt, maxAttempts, ms, "empty_response"),
                             EventPayloads.retryDetail(attempt, maxAttempts, ms, 0, ms, "empty_response"),
                             "retrying",
@@ -225,7 +225,7 @@ public class EmptyResponseRetryAdvisor implements CallAdvisor, StreamAdvisor {
                 .concatMap(i -> {
                     long remaining = Math.max(0, delayMs - (i + 1) * 1000);
                     long elapsed = delayMs - remaining;
-                    a.agentEmitter.emit(EmitEvent.transientOf(waveId.get(), "retry", null, null,
+                    a.emitter.emit(EmitEvent.transientOf(waveId.get(), "retry", null, null,
                             EventPayloads.retrySummary(attempt, maxAttempts, remaining, "empty_response"),
                             EventPayloads.retryDetail(attempt, maxAttempts,
                                     delayMs, elapsed, remaining, "empty_response"),
