@@ -132,22 +132,31 @@ public interface SandboxBackend {
     String id();
 
     /**
-     * 挂载一个宿主路径到沙箱内，返回沙箱内路径。
-     * 核心调此方法，沙箱按自己的方式挂载（drvfs / bind mount / 不挂载）。
+     * 批量挂载宿主路径到沙箱内，返回映射表。
+     * 核心一次性传入所有需要挂载的路径（工作区根 + 外部授权根 + skills 根等），
+     * 沙箱返回每个路径的沙箱内路径。
      * 
-     * - DIRECT: 不挂载，返回原宿主路径。
-     * - wsl-ubuntu: mount -t drvfs，返回 /c/Users/...（原路径形态）。
-     * - docker: -v bind mount，返回 /workspace（或自定义挂载点）。
-     * - windows-mic: 不挂载（命令跑在宿主上），返回原路径。
+     * - DIRECT / windows-mic: 不挂载，返回原路径。
+     * - wsl-ubuntu: 批量 drvfs 挂载，返回 /c/Users/... 形态。
+     * - docker: 批量 bind mount，返回 /workspace 等挂载点。
      * 
-     * 核心保存 {宿主路径 → 返回值} 映射表，路径翻译时查表，不调沙箱。
+     * 幂等：重复调用相同路径不重复挂载。
      */
-    default String mount(Path hostPath, Access access) { return hostPath.toString(); }
+    default Map<Path, String> mount(List<MountRequest> requests) {
+        Map<Path, String> result = new LinkedHashMap<>();
+        for (MountRequest req : requests) {
+            result.put(req.hostPath(), req.hostPath().toString());
+        }
+        return result;
+    }
 
     /**
      * 工作区被删除时调用;后端 best-effort 清理挂载等;默认 no-op。
      */
     default void onWorkspaceRemoved(Path root) {}
+
+    /** 单个挂载请求。 */
+    record MountRequest(Path hostPath, Access access) {}
 
     /** 挂载访问语义。 */
     enum Access { READ_ONLY, READ_WRITE }
@@ -180,11 +189,16 @@ public class SandboxPathRegistry {
     // 沙箱内路径 → 宿主路径
     private final Map<String, Path> sandboxToHost = new ConcurrentHashMap<>();
     
-    /** 路径提供方注册需要被沙箱访问的宿主路径。 */
+    /** 批量注册需要被沙箱访问的宿主路径。 */
+    public void register(List<MountRequest> requests) {
+        Map<Path, String> mounted = sandbox.mount(requests);
+        hostToSandbox.putAll(mounted);
+        mounted.forEach((host, sandboxPath) -> sandboxToHost.put(sandboxPath, host));
+    }
+    
+    /** 单个注册（方便调用方）。 */
     public void register(Path hostPath, Access access) {
-        String sandboxPath = sandbox.mount(hostPath, access);
-        hostToSandbox.put(hostPath, sandboxPath);
-        sandboxToHost.put(sandboxPath, hostPath);
+        register(List.of(new MountRequest(hostPath, access)));
     }
     
     /** 宿主路径 → AI 可见路径;无映射则原样返回。 */
@@ -194,17 +208,16 @@ public class SandboxPathRegistry {
     
     /** AI 视角路径 → 宿主路径;无映射则返回 null（核心返回错误，AI 换工具）。 */
     public String toHostPath(String sandboxPath) {
-        // 精确匹配或前缀匹配
-        for (Map.Entry<String, Path> e : sandboxToHost.entrySet()) {
-            String mount = e.getKey();
+        for (var entry : sandboxToHost.entrySet()) {
+            String mount = entry.getKey();
             if (sandboxPath.equals(mount) || sandboxPath.startsWith(mount + "/")) {
-                return e.getValue().toString() + sandboxPath.substring(mount.length());
+                return entry.getValue().toString() + sandboxPath.substring(mount.length());
             }
         }
         return null;
     }
     
-    /** 工作区删除时通知沙箱清理。 */
+    /** 工作区删除时通知沙箱清理 + 清理映射表。 */
     public void onWorkspaceRemoved(Path root) {
         sandbox.onWorkspaceRemoved(root);
         hostToSandbox.remove(root);
@@ -240,7 +253,18 @@ public class SandboxPathRegistry {
 | `SkillsReadonlyRoots` | skills 目录 | 读写 |
 | `ExternalFileTokenResolver` | @ 引用根 | 读写 |
 
-注册时机：工作区创建时、用户授权时、skills 目录初始化时。核心在适当时机调 `SandboxPathRegistry.register()`。
+注册时机：工作区创建时、用户授权时、skills 目录初始化时。核心在适当时机调 `SandboxPathRegistry.register()`，可批量传入：
+
+```java
+// 工作区注册时一次挂载全部路径
+List<MountRequest> requests = List.of(
+    new MountRequest(workspaceRoot, READ_WRITE),
+    new MountRequest(skillsDir, READ_WRITE),
+    new MountRequest(externalRoot1, READ_WRITE),
+    new MountRequest(externalRoot2, READ_WRITE)
+);
+pathRegistry.register(requests);
+```
 
 ### 2.7 InteractionService 通用化
 
@@ -397,7 +421,6 @@ pathRegistry.onWorkspaceRemoved(root);  // 核心通知沙箱清理 + 清理映�
 // 保留：
 // - SandboxProviderRegistry.select() → delegate
 // - 实现 SandboxBackend：mount() 返回原路径（DIRECT 不挂载），onWorkspaceRemoved() no-op
-// - delegate 不为 null 时转发到 delegate
 ```
 
 #### PermissionGate 从 plugin-api 移除
@@ -490,13 +513,16 @@ public final class WslUbuntuSandboxBackend implements SandboxBackend {
     public String id() { return "wsl-ubuntu"; }
 
     @Override
-    public String mount(Path hostPath, Access access) {
-        // wsl-ubuntu: drvfs 挂载 C:\a\b → /c/a/b
-        String mountPoint = WslPathMapper.toDirectMount(hostPath);
-        if (mountPoint == null) return hostPath.toString(); // UNC/相对路径不挂载
-        // 执行 wsl -d xxx -u root mount -t drvfs "C:\a\b" /c/a/b
-        ensureMount(hostPath, mountPoint);
-        return mountPoint;
+    public Map<Path, String> mount(List<MountRequest> requests) {
+        Map<Path, String> result = new LinkedHashMap<>();
+        for (MountRequest req : requests) {
+            String mountPoint = WslPathMapper.toDirectMount(req.hostPath());
+            if (mountPoint != null) {
+                ensureMount(req.hostPath(), mountPoint, req.access());
+            }
+            result.put(req.hostPath(), mountPoint != null ? mountPoint : req.hostPath().toString());
+        }
+        return result;
     }
 
     @Override
@@ -511,7 +537,7 @@ public final class WslUbuntuSandboxBackend implements SandboxBackend {
 
 | 后端 | id | priority | mount 行为 | 说明 |
 |------|-----|----------|-----------|------|
-| WSL Ubuntu | `wsl-ubuntu` | 10 | drvfs 挂载 → /c/... | 原 wsl-direct 改名 |
+| WSL Ubuntu | `wsl-ubuntu` | 10 | 批量 drvfs 挂载 → /c/... | 原 wsl-direct 改名 |
 | Windows MIC | `windows-mic` | 5 | 返回原路径 | 命令跑在宿主上 |
 | DIRECT（默认沙箱） | — | — | 返回原路径 | OsSandbox 自身，无 Provider |
 
@@ -569,11 +595,14 @@ public final class DockerSandboxBackend implements SandboxBackend {
     public String id() { return "docker"; }
 
     @Override
-    public String mount(Path hostPath, Access access) {
-        // docker: -v C:\workspace:/workspace
-        String mountPoint = "/workspace"; // 或按路径计算
-        // docker run -v hostPath:mountPoint ...
-        return mountPoint;
+    public Map<Path, String> mount(List<MountRequest> requests) {
+        Map<Path, String> result = new LinkedHashMap<>();
+        for (MountRequest req : requests) {
+            // docker: -v C:\workspace:/workspace
+            String mountPoint = "/workspace"; // 或按路径计算
+            result.put(req.hostPath(), mountPoint);
+        }
+        return result;
     }
 
     @Override
@@ -593,7 +622,7 @@ Docker 场景下，AI 传容器内独有路径（如 `/tmp/output.txt`）给 `re
 ### Step 1: SandboxBackend SPI 改造（plugin-api）
 - 删除 `spawnSandboxed()`、`spawnSandboxedWindows()`、`spawnNative()`、`isWslBackend()`、`isWslBwrap()`、`isWslDirect()`、`registerBashTool()`
 - 删除 `toSandboxPath()`、`toHostPath()`（如果之前已加则删除）
-- 新增 `mount(Path, Access)` 和 `onWorkspaceRemoved()` 两个 default 方法
+- 新增 `mount(List<MountRequest>)` 和 `onWorkspaceRemoved()` 两个 default 方法，含 `MountRequest` record 和 `Access` enum
 - `ExecResult` 保留在 plugin-api（沙箱插件 CommandExecutor 可能需要）
 - `PermissionGate` 从 plugin-api 移除
 - `ToolContext.gate()` 移除
@@ -627,12 +656,11 @@ Docker 场景下，AI 传容器内独有路径（如 `/tmp/output.txt`）给 `re
 ### Step 5: 创建 sandbox-windows-mic 插件
 - 移入 `WindowsSandbox` + `Win32Ex` + `WindowsAcl` + `WindowsIntegrity` + Provider + Backend + 入口类
 - Backend 的 `mount()` 返回原路径（windows-mic 命令跑在宿主上）
-- 可选：提供自己的 ToolProvider，或依赖核心的宿主访问工具
 
 ### Step 6: 创建 sandbox-wsl-ubuntu 插件
 - 移入 `WslDirectSandbox`（改名）、`WslPathMapper`、`WslUmounter` + Provider + Backend + 入口类
 - 从 `WslBwrapSandbox` 提取共享类型到 `WslCommon.java`
-- Backend 实现 `mount()`（drvfs 挂载，返回 /c/... 形态）+ `onWorkspaceRemoved()`（umount）
+- Backend 实现 `mount()`（批量 drvfs 挂载，返回 /c/... 形态）+ `onWorkspaceRemoved()`（umount）
 - 提供自己的 `WslUbuntuBashToolProvider`（ToolProvider）+ `WslUbuntuCommandExecutor`
 - 后端 id = `wsl-ubuntu`
 
@@ -660,7 +688,7 @@ Docker 场景下，AI 传容器内独有路径（如 `/tmp/output.txt`）给 `re
 | `SandboxBackend` SPI 大幅删减 | 删除的方法均有替代：命令执行→沙箱自己 CommandExecutor；路径翻译→核心 SandboxPathRegistry 查表；工具注册→沙箱自己注册 ToolProvider |
 | `PermissionGate` 从 plugin-api 移除 | 沙箱用 `InteractionService` + `AuthorizationHandler` 替代；核心内部保留 PermissionGate |
 | `InteractionService.ask()` 签名变更 | 去掉 taskId/agentId，改为 context 透传；调用方需适配 |
-| 核心做挂载的时机 | 工作区注册时 / 用户授权时 / skills 初始化时调 `SandboxPathRegistry.register()`；沙箱的 `mount()` 须幂等（多次注册同一路径不重复挂载） |
+| 核心做挂载的时机 | 工作区注册时 / 用户授权时 / skills 初始化时调 `SandboxPathRegistry.register(List<MountRequest>)`；沙箱的 `mount()` 须幂等（多次注册同一路径不重复挂载） |
 | wsl-ubuntu 挂载是动态的（当前每次命令前 ensureMount） | 改为核心注册时调 `mount()`，沙箱内部幂等挂载；`wsl --shutdown` 后挂载丢失，下次 `mount()` 自愈重挂 |
 | OsSandbox 被多个核心组件直接引用 | 保留为 `@Component` + `SandboxBackend`，方法签名兼容（mount 返回原路径） |
 | 核心宿主访问工具与沙箱命令工具共存 | 通过 `ToolProvider.appliesTo()` 各自控制生效条件，不冲突 |
