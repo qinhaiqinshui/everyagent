@@ -3,6 +3,7 @@ package dev.everyagent.plugin.filechange;
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.worker.task.AgentEntity;
 import dev.everyagent.worker.task.FileChangesCollector;
+import dev.everyagent.worker.task.WorkerToolEventAdvisor;
 import org.springframework.ai.chat.client.ChatClientRequest;
 import org.springframework.ai.chat.client.ChatClientResponse;
 import org.springframework.ai.chat.client.advisor.api.StreamAdvisor;
@@ -16,14 +17,14 @@ import tools.jackson.databind.JsonNode;
 /**
  * 本轮文件改动收集 advisor(独立普通 advisor,<b>不继承</b> {@link ToolCallingAdvisor})。
  *
- * <p>位置:order = {@link Ordered#HIGHEST_PRECEDENCE} + 301,位于 {@link LoopRepeatGuardAdvisor}
+ * <p>位置:order = {@link Ordered#HIGHEST_PRECEDENCE} + 301,位于 {@link WorkerToolEventAdvisor}
  * ({@code ToolCallingAdvisor},HIGHEST+300)的<b>内层</b>、模型侧({@code ChatModelStreamAdvisor} 最内层)
  * 的<b>外层</b>。这样它通过 {@link #adviseStream} 的 {@code doOnNext} <b>直接看到模型流</b>——
  * 关键事实:OpenAiChatModel 流式内部已用 {@code bufferUntil}+{@code ChunkMerger} 把工具调用分片
  * <b>合并成一条完整消息</b>(含完整 toolCalls/思考/正文)输出,{@code ChatModelStreamAdvisor} 原样透传
  * 不过滤。因此本 advisor 无需继承 ToolCallingAdvisor,也无需聚合——工具轮就是流里一条
- * {@code hasToolCalls()==true} 的完整 AI 消息,直接检查即可。工具循环/事件发射/死循环检测仍由
- * {@link LoopRepeatGuardAdvisor} 承担,本 advisor 纯旁观,对其他 advisor 零影响。
+ * {@code hasToolCalls()==true} 的完整 AI 消息,直接检查即可。工具循环/事件发射由
+ * {@link WorkerToolEventAdvisor} 承担,死循环检测由工厂装饰的 TCM 承担,本 advisor 纯旁观,对其他 advisor 零影响。
  *
  * <p>职责(替代原 {@code FileTools.notifySaved} 与 {@code TaskManager.persistTurnFileChanges}):
  * <ul>
@@ -72,7 +73,7 @@ public class FileChangeAdvisor implements StreamAdvisor {
 
     @Override
     public int getOrder() {
-        // 位于 LoopRepeatGuardAdvisor(ToolCallingAdvisor,HIGHEST+300)内层、模型(ChatModelStreamAdvisor)外层:
+        // 位于 WorkerToolEventAdvisor(ToolCallingAdvisor,HIGHEST+300)内层、模型(ChatModelStreamAdvisor)外层:
         // doOnNext 直接看到模型流,工具轮为模型层合并后的完整消息(含 toolCalls)。
         // doOnComplete 先于最外层 RoundIndexAdvisor 触发 → file_changes 与轮次索引(含耗时)同一轮落盘。
         return Ordered.HIGHEST_PRECEDENCE + 301;
