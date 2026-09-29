@@ -1,6 +1,7 @@
 package dev.everyagent.worker.task;
 
 import dev.everyagent.plugin.api.model.ModelConfig;
+import dev.everyagent.worker.agent.AgentEntity;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.messages.AssistantMessage;
@@ -87,9 +88,8 @@ public final class ContextOverflow {
     /** 组装单行诊断文本(字段缺省以 - / (未配置) / (默认) 标记,不含 apiKey)。 */
     private static String describe(AgentEntity a, Throwable t) {
         StringBuilder sb = new StringBuilder(256);
-        sb.append("task=").append(a.task.taskId)
-                .append(" agent=").append(a.agentId)
-                .append(" kind=").append(a.kind);
+        sb.append("task=").append(a.properties.get("taskId"))
+                .append(" agent=").append(a.agentId);
 
         // 超限的模型配置(请求 options 是实际发往服务商的值)
         sb.append(" | model=").append(nz(a.options.getModel()))
@@ -99,7 +99,7 @@ public final class ContextOverflow {
                 .append(" temperature=").append(a.options.getTemperature() == null
                         ? "-" : a.options.getTemperature())
                 .append(" reasoningEffort=").append(nz(a.options.getReasoningEffort()));
-        ModelConfig snap = a.task.snapshot;
+        ModelConfig snap = ((dev.everyagent.worker.task.TaskEntry) a.properties.get("taskEntry")).snapshot;
         sb.append(" | configId=").append(nz(snap.configId()))
                 .append(" provider=").append(nz(snap.provider()))
                 .append(" params.maxTokens=").append(paramLong(snap.params(), "maxTokens"))

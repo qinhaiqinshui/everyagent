@@ -4,7 +4,7 @@ import dev.everyagent.contract.json.Json;
 import dev.everyagent.plugin.api.model.EmitEvent;
 import dev.everyagent.plugin.api.task.TaskLifecycleContext;
 import dev.everyagent.worker.proto.SnowflakeId;
-import dev.everyagent.worker.task.AgentEntity;
+import dev.everyagent.worker.agent.AgentEntity;
 import dev.everyagent.worker.task.RoundIndexStore;
 import dev.everyagent.worker.task.TaskEntry;
 import dev.everyagent.worker.task.TaskStore;
