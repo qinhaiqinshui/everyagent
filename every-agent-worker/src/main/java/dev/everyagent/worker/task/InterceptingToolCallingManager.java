@@ -1,6 +1,5 @@
 package dev.everyagent.worker.task;
 
-import dev.everyagent.plugin.api.agent.AgentContext;
 import dev.everyagent.plugin.api.spi.ToolExecutionContext;
 import dev.everyagent.worker.plugin.registry.ToolExecutionInterceptorRegistry;
 import org.springframework.ai.chat.messages.AssistantMessage;
@@ -13,32 +12,19 @@ import org.springframework.ai.model.tool.ToolExecutionResult;
 import org.springframework.ai.tool.definition.ToolDefinition;
 
 import java.util.List;
+import java.util.Map;
 
-/**
- * 拦截型工具调用管理器：装饰共享 ToolCallingManager，
- * 在 executeToolCalls 入口通过 {@link ToolExecutionChainExecutor} 遍历拦截链。
- * 拦截器下行段不调 next = 短路（合成结果）；调 next = 放行到真实执行。
- *
- * <p>持有 {@link ToolExecutionInterceptorRegistry} 引用而非快照列表，
- * 每次 executeToolCalls 时从 registry.sorted() 获取最新拦截器列表，
- * 外部插件随时注册/注销 interceptor 都能实时生效。
- */
 public class InterceptingToolCallingManager implements ToolCallingManager {
 
     private final ToolCallingManager delegate;
     private final ToolExecutionInterceptorRegistry interceptorRegistry;
     private final ToolExecutionChainExecutor chainExecutor = new ToolExecutionChainExecutor();
 
-    /**
-     * 当前线程绑定的 agent 上下文（per-run），由 {@code AgentRunner} 在执行前设置、
-     * 执行后清除。ThreadLocal 值类型为窄接口 {@link AgentContext}，
-     * 插件经 {@link ToolExecutionContext#agentContext()} 取而非直接依赖 worker 内部类。
-     */
-    private static final ThreadLocal<AgentContext> CURRENT_AGENT_CONTEXT = new ThreadLocal<>();
+    private static final ThreadLocal<Map<String, Object>> CURRENT_PROPERTIES = new ThreadLocal<>();
 
-    public static void setCurrentAgentContext(AgentContext ctx) { CURRENT_AGENT_CONTEXT.set(ctx); }
-    public static void clearCurrentAgentContext() { CURRENT_AGENT_CONTEXT.remove(); }
-    public static AgentContext currentAgentContext() { return CURRENT_AGENT_CONTEXT.get(); }
+    public static void setCurrentProperties(Map<String, Object> props) { CURRENT_PROPERTIES.set(props); }
+    public static void clearCurrentProperties() { CURRENT_PROPERTIES.remove(); }
+    public static Map<String, Object> currentProperties() { return CURRENT_PROPERTIES.get(); }
 
     public InterceptingToolCallingManager(ToolCallingManager delegate,
             ToolExecutionInterceptorRegistry interceptorRegistry) {
@@ -66,14 +52,13 @@ public class InterceptingToolCallingManager implements ToolCallingManager {
             return delegate.executeToolCalls(prompt, chatResponse);
         }
         List<AssistantMessage.ToolCall> toolCalls = assistant.getToolCalls();
-        AgentContext agentCtx = currentAgentContext();
-        ToolExecutionContext ctx = new ToolExecutionContextImpl(prompt, chatResponse, toolCalls, agentCtx);
+        Map<String, Object> props = currentProperties();
+        ToolExecutionContext ctx = new ToolExecutionContextImpl(prompt, chatResponse, toolCalls, props);
         return chainExecutor.run(interceptors, delegate, ctx);
     }
 
-    /** 简易 ToolExecutionContext 实现，将当前调用参数 + 线程绑定的 AgentContext 封装为上下文。 */
     private record ToolExecutionContextImpl(
             Prompt prompt, ChatResponse chatResponse,
             List<AssistantMessage.ToolCall> toolCalls,
-            AgentContext agentContext) implements ToolExecutionContext {}
+            Map<String, Object> properties) implements ToolExecutionContext {}
 }
