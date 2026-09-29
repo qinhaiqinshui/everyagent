@@ -4,7 +4,7 @@ import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.plugin.ToolContextImpl;
 import dev.everyagent.plugin.api.spi.ToolContext;
 import dev.everyagent.plugin.api.spi.ToolProvider;
-import dev.everyagent.worker.task.PendingAsks;
+import dev.everyagent.plugin.api.interaction.InteractionService;
 import dev.everyagent.worker.task.TaskEntry;
 import dev.everyagent.worker.tools.AskUserTool;
 import org.springframework.ai.support.ToolCallbacks;
@@ -24,11 +24,11 @@ import java.util.List;
  */
 public class AskUserToolProvider implements ToolProvider {
 
-    private final PendingAsks asks;
+    private final InteractionService interaction;
     private final WorkerProperties props;
 
-    public AskUserToolProvider(PendingAsks asks, WorkerProperties props) {
-        this.asks = asks;
+    public AskUserToolProvider(InteractionService interaction, WorkerProperties props) {
+        this.interaction = interaction;
         this.props = props;
     }
 
@@ -42,7 +42,7 @@ public class AskUserToolProvider implements ToolProvider {
         ToolContextImpl impl = (ToolContextImpl) ctx;
         TaskEntry task = impl.taskEntry();
         List<ToolCallback> tools = new ArrayList<>();
-        for (ToolCallback c : ToolCallbacks.from(new AskUserTool(asks, props, task, ctx.agentId()))) {
+        for (ToolCallback c : ToolCallbacks.from(new AskUserTool(interaction, props, task, ctx.agentId()))) {
             tools.add(c);
         }
         return tools;

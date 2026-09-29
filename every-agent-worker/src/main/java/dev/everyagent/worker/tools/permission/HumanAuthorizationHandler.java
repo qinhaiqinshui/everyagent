@@ -7,7 +7,10 @@ import dev.everyagent.plugin.api.permission.AuthorizationHandler.AuthorizationDe
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.plugin.registry.AuthorizationHandlerRegistry;
 import dev.everyagent.worker.task.AgentCancelledException;
-import dev.everyagent.worker.task.PendingAsks;
+import dev.everyagent.plugin.api.interaction.AskOption;
+import dev.everyagent.plugin.api.interaction.AskQuestion;
+import dev.everyagent.plugin.api.interaction.AskResult;
+import dev.everyagent.plugin.api.interaction.InteractionService;
 import dev.everyagent.worker.task.TaskEntry;
 import jakarta.annotation.PostConstruct;
 import org.springframework.stereotype.Component;
@@ -23,15 +26,18 @@ import java.util.List;
 @Component
 public class HumanAuthorizationHandler implements AuthorizationHandler {
 
-    static final List<String> AUTHORIZE_OPTIONS = List.of("本轮运行内允许", "本任务全程允许", "拒绝");
+    static final List<AskOption> AUTHORIZE_OPTIONS = List.of(
+            new AskOption("本轮运行内允许", "run", AskOption.TYPE_RADIO),
+            new AskOption("本任务全程允许", "task", AskOption.TYPE_RADIO),
+            new AskOption("拒绝", "deny", AskOption.TYPE_RADIO));
 
     private final AuthorizationHandlerRegistry registry;
-    private final PendingAsks asks;
+    private final InteractionService interaction;
     private final WorkerProperties props;
 
-    public HumanAuthorizationHandler(AuthorizationHandlerRegistry registry, PendingAsks asks, WorkerProperties props) {
+    public HumanAuthorizationHandler(AuthorizationHandlerRegistry registry, InteractionService interaction, WorkerProperties props) {
         this.registry = registry;
-        this.asks = asks;
+        this.interaction = interaction;
         this.props = props;
     }
 
@@ -49,11 +55,11 @@ public class HumanAuthorizationHandler implements AuthorizationHandler {
     @Override
     public AuthorizationDecision invoke(AuthorizationRequest req, AuthorizationChain next) throws Exception {
         TaskEntry t = (TaskEntry) req.task();
-        List<PendingAsks.AskQuestion> questions = List.of(
-                new PendingAsks.AskQuestion("", req.prompt(), AUTHORIZE_OPTIONS));
-        PendingAsks.AskAnswer ans;
+        List<AskQuestion> questions = List.of(
+                new AskQuestion("", req.prompt(), AUTHORIZE_OPTIONS));
+        AskResult ans;
         try {
-            ans = asks.ask(t.events, t.taskId, req.agentId(), "authorization", questions,
+            ans = interaction.ask(t.taskId, req.agentId(), questions,
                     props.getPermissions().getAuthTimeoutMs());
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();

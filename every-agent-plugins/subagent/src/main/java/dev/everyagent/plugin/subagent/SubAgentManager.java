@@ -11,7 +11,7 @@ import dev.everyagent.worker.modules.ConfigStore.ResolvedConfig;
 import dev.everyagent.worker.proto.SnowflakeId;
 import dev.everyagent.worker.task.AgentActivity;
 import dev.everyagent.worker.task.ChatModelFactory;
-import dev.everyagent.worker.task.PendingAsks;
+import dev.everyagent.worker.interaction.InteractionServiceImpl;
 import dev.everyagent.worker.task.RootCause;
 import dev.everyagent.worker.task.TaskEntry;
 import dev.everyagent.worker.tools.AskUserTool;
@@ -64,7 +64,7 @@ public class SubAgentManager {
     private final AgentBuilder agentBuilder;
     private final ConfigStore configStore;
     private final ChatModelFactory modelFactory;
-    private final PendingAsks asks;
+    private final InteractionServiceImpl asks;
     private final java.util.concurrent.ExecutorService vt = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();
 
     /** per-task 子 agent 状态(subFutures + stopRequested,TaskEntry 不再持有这些)。 */
@@ -81,7 +81,7 @@ public class SubAgentManager {
     }
 
     public SubAgentManager(AgentRunner runner, AgentBuilder agentBuilder,
-            ConfigStore configStore, ChatModelFactory modelFactory, PendingAsks asks) {
+            ConfigStore configStore, ChatModelFactory modelFactory, InteractionServiceImpl asks) {
         this.runner = runner;
         this.agentBuilder = agentBuilder;
         this.configStore = configStore;

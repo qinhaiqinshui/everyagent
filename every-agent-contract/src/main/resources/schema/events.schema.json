@@ -62,10 +62,9 @@
       },
       "askCreate": {
         "type": "object",
-        "required": ["askId", "kind"],
+        "required": ["askId"],
         "properties": {
           "askId": { "type": "string" },
-          "kind": { "type": "string", "enum": ["question", "authorization"] },
           "questions": {
             "type": "array",
             "items": {
@@ -74,7 +73,18 @@
               "properties": {
                 "id": { "type": "string" },
                 "prompt": { "type": "string" },
-                "options": { "type": "array", "items": { "type": "string" } }
+                "options": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": ["label", "value", "type"],
+                    "properties": {
+                      "label": { "type": "string" },
+                      "value": { "type": "string" },
+                      "type": { "enum": ["radio", "input"] }
+                    }
+                  }
+                }
               }
             }
           },

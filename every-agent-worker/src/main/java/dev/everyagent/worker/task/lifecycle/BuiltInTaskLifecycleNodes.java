@@ -5,7 +5,7 @@ import dev.everyagent.worker.modules.WorkspaceActivityTracker;
 import dev.everyagent.worker.plugin.registry.TaskLifecycleRegistry;
 import dev.everyagent.worker.ship.StreamSourceRegistry;
 import dev.everyagent.worker.slash.SlashTaskCallbacks;
-import dev.everyagent.worker.task.PendingAsks;
+import dev.everyagent.worker.interaction.InteractionServiceImpl;
 import dev.everyagent.worker.task.TaskStore;
 import dev.everyagent.worker.tools.PermissionGate;
 import jakarta.annotation.PostConstruct;
@@ -35,7 +35,7 @@ public class BuiltInTaskLifecycleNodes {
     private final HubPool pool;
     private final StreamSourceRegistry streamSources;
     private final PermissionGate gate;
-    private final PendingAsks asks;
+    private final InteractionServiceImpl asks;
     private final WorkspaceActivityTracker activityTracker;
     private final SlashTaskCallbacks slashCallbacks;
 
@@ -45,7 +45,7 @@ public class BuiltInTaskLifecycleNodes {
             HubPool pool,
             StreamSourceRegistry streamSources,
             PermissionGate gate,
-            PendingAsks asks,
+            InteractionServiceImpl asks,
             WorkspaceActivityTracker activityTracker,
             SlashTaskCallbacks slashCallbacks) {
         this.registry = registry;

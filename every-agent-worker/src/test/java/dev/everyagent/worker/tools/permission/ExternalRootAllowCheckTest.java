@@ -8,7 +8,8 @@ import dev.everyagent.worker.os.wsl.WslUmounter;
 import dev.everyagent.worker.plugin.registry.AuthorizationHandlerRegistry;
 import dev.everyagent.plugin.api.model.ModelConfig;
 import dev.everyagent.worker.rpc.RpcDispatcher;
-import dev.everyagent.worker.task.PendingAsks;
+import dev.everyagent.plugin.api.interaction.AskResult;
+import dev.everyagent.plugin.api.interaction.InteractionService;
 import dev.everyagent.worker.task.TaskEntry;
 import dev.everyagent.worker.task.TaskManager;
 import dev.everyagent.worker.task.TaskStore;
@@ -24,7 +25,6 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -147,23 +147,23 @@ class ExternalRootAllowCheckTest {
         }
     }
 
-    /** PendingAsks 打桩:ask 一旦被调用即视为测试失败(外部根内不应弹授权窗)。 */
-    private PendingAsks asksFailing() throws InterruptedException {
-        PendingAsks asks = mock(PendingAsks.class);
-        when(asks.ask(any(), anyString(), anyString(), any(), anyList(), anyLong()))
+    /** InteractionService 打桩:ask 一旦被调用即视为测试失败(外部根内不应弹授权窗)。 */
+    private InteractionService asksFailing() throws InterruptedException {
+        InteractionService asks = mock(InteractionService.class);
+        when(asks.ask(anyString(), anyString(), anyList(), anyLong()))
                 .thenThrow(new AssertionError("外部授权根内访问不应触发授权弹窗"));
         return asks;
     }
 
-    /** PendingAsks 打桩:回传未识别答案 → parseScope DENY(模拟用户拒绝,负例用)。 */
-    private PendingAsks asksDenying() throws InterruptedException {
-        PendingAsks asks = mock(PendingAsks.class);
-        when(asks.ask(any(), anyString(), anyString(), any(), anyList(), anyLong()))
-                .thenReturn(new PendingAsks.AskAnswer("answered", "nope"));
+    /** InteractionService 打桩:回传未识别答案 → parseScope DENY(模拟用户拒绝,负例用)。 */
+    private InteractionService asksDenying() throws InterruptedException {
+        InteractionService asks = mock(InteractionService.class);
+        when(asks.ask(anyString(), anyString(), anyList(), anyLong()))
+                .thenReturn(new AskResult("answered", "nope"));
         return asks;
     }
 
-    private PermissionGate gate(WorkspaceManager wm, PendingAsks asks) {
+    private PermissionGate gate(WorkspaceManager wm, InteractionService asks) {
         WorkerProperties props = new WorkerProperties();
         var authRegistry = new AuthorizationHandlerRegistry();
         authRegistry.register(new HumanAuthorizationHandler(authRegistry, asks, props));

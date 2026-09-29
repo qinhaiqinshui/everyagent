@@ -5,7 +5,8 @@ import dev.everyagent.worker.modules.WorkspaceManager;
 import dev.everyagent.worker.modules.WorkspaceManager.Root;
 import dev.everyagent.worker.plugin.registry.AuthorizationHandlerRegistry;
 import dev.everyagent.plugin.api.model.ModelConfig;
-import dev.everyagent.worker.task.PendingAsks;
+import dev.everyagent.plugin.api.interaction.AskResult;
+import dev.everyagent.plugin.api.interaction.InteractionService;
 import dev.everyagent.worker.task.TaskEntry;
 import dev.everyagent.worker.task.TaskStore;
 import org.junit.jupiter.api.Test;
@@ -16,7 +17,6 @@ import java.nio.file.Path;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -41,10 +41,10 @@ class GrantRegistryExecRootsTest {
     }
 
     /** 弹窗打桩:答「本任务全程允许」(TASK 档,EXEC 根随授权落档)。 */
-    private PendingAsks asksTaskScope() throws InterruptedException {
-        PendingAsks asks = mock(PendingAsks.class);
-        when(asks.ask(any(), anyString(), anyString(), any(), anyList(), anyLong()))
-                .thenReturn(new PendingAsks.AskAnswer("answered", "本任务全程允许"));
+    private InteractionService asksTaskScope() throws InterruptedException {
+        InteractionService asks = mock(InteractionService.class);
+        when(asks.ask(anyString(), anyString(), anyList(), anyLong()))
+                .thenReturn(new AskResult("answered", "本任务全程允许"));
         return asks;
     }
 

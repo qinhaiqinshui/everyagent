@@ -1,5 +1,6 @@
 package dev.everyagent.plugin.api;
 
+import dev.everyagent.plugin.api.interaction.InteractionService;
 import dev.everyagent.plugin.api.spi.SandboxBackend;
 import dev.everyagent.plugin.api.spi.PermissionGate;
 import dev.everyagent.plugin.api.spi.TokenEstimator;
@@ -28,4 +29,7 @@ public interface WorkerServices {
 
     /** 任务服务（查询任务信息、广播 task.updated）。 */
     TaskService task();
+
+    /** 用户交互服务（向用户发起提问/授权，同步或异步）。 */
+    InteractionService interaction();
 }

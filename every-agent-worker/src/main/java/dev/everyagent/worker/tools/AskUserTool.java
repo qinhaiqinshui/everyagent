@@ -5,9 +5,12 @@ import com.fasterxml.jackson.databind.DeserializationContext;
 import com.fasterxml.jackson.databind.JsonDeserializer;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
+import dev.everyagent.plugin.api.interaction.AskOption;
+import dev.everyagent.plugin.api.interaction.AskQuestion;
+import dev.everyagent.plugin.api.interaction.AskResult;
+import dev.everyagent.plugin.api.interaction.InteractionService;
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.task.AgentCancelledException;
-import dev.everyagent.worker.task.PendingAsks;
 import dev.everyagent.worker.task.TaskEntry;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
@@ -94,13 +97,13 @@ public class AskUserTool {
         }
     }
 
-    private final PendingAsks asks;
+    private final InteractionService interaction;
     private final WorkerProperties props;
     private final TaskEntry task;
     private final String agentId;
 
-    public AskUserTool(PendingAsks asks, WorkerProperties props, TaskEntry task, String agentId) {
-        this.asks = asks;
+    public AskUserTool(InteractionService interaction, WorkerProperties props, TaskEntry task, String agentId) {
+        this.interaction = interaction;
         this.props = props;
         this.task = task;
         this.agentId = agentId;
@@ -114,15 +117,27 @@ public class AskUserTool {
             if (questions == null || questions.isEmpty()) {
                 return "未提供任何问题,跳过提问。";
             }
-            // 题目 id 由 PendingAsks.ask 以真实 askId 派生(askId_i),此处传占位 id。
-            List<PendingAsks.AskQuestion> built = new ArrayList<>();
+            // 题目 id 由 InteractionServiceImpl.ask 以真实 askId 派生(askId_i),此处传占位 id。
+            List<AskQuestion> built = new ArrayList<>();
             for (AskQuestionInput q : questions) {
                 String prompt = q.question() == null ? "" : q.question();
                 List<String> opts = q.options() == null ? List.of() : q.options();
-                built.add(new PendingAsks.AskQuestion("", prompt, opts));
+                List<AskOption> askOpts = new ArrayList<>();
+                for (String o : opts) {
+                    askOpts.add(new AskOption(o, o, AskOption.TYPE_RADIO));
+                }
+                // 扫描是否已有 type=input 的选项,没有则追加一个「其他」输入框
+                boolean hasInput = false;
+                for (AskOption o : askOpts) {
+                    if (AskOption.TYPE_INPUT.equals(o.type())) { hasInput = true; break; }
+                }
+                if (!hasInput) {
+                    askOpts.add(new AskOption("其他", "", AskOption.TYPE_INPUT));
+                }
+                built.add(new AskQuestion("", prompt, askOpts));
             }
-            PendingAsks.AskAnswer ans = asks.ask(task.events, task.taskId, agentId,
-                    "question", built, props.getLimits().getAskTimeoutMs());
+            AskResult ans = interaction.ask(task.taskId, agentId, built,
+                    props.getLimits().getAskTimeoutMs());
             return switch (ans.status()) {
                 case "answered" -> ans.text();
                 case "timeout" -> "用户未在规定时间内回答(已超时)。请基于现有信息继续,并明确告知用户未获得答复。";

@@ -1,5 +1,6 @@
 package dev.everyagent.plugin.api.spi;
 
+import dev.everyagent.plugin.api.interaction.InteractionService;
 import java.nio.file.Path;
 
 /**
@@ -30,6 +31,11 @@ public interface ToolContext {
 
     /** ripgrep 二进制路径（搜索工具用，可能为 null）。 */
     default Path rgBinary() {
+        return null;
+    }
+
+    /** 用户交互服务（向用户发起提问，同步阻塞或异步回调）。 */
+    default InteractionService interaction() {
         return null;
     }
 }

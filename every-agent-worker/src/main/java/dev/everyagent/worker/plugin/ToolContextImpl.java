@@ -1,6 +1,7 @@
 package dev.everyagent.worker.plugin;
 
 import dev.everyagent.worker.modules.WorkspaceManager;
+import dev.everyagent.plugin.api.interaction.InteractionService;
 import dev.everyagent.plugin.api.spi.SandboxBackend;
 import dev.everyagent.plugin.api.spi.ToolContext;
 import dev.everyagent.worker.task.TaskEntry;
@@ -27,11 +28,12 @@ public class ToolContextImpl implements ToolContext {
     private final PermissionGate gate;
     private final WorkspaceManager workspaces;
     private final Path rgBinary;
+    private final InteractionService interaction;
     private final TaskEntry taskEntry;
 
     public ToolContextImpl(String taskId, String agentId, Path workspaceRoot,
             SandboxBackend sandbox, PermissionGate gate, WorkspaceManager workspaces,
-            Path rgBinary, TaskEntry taskEntry) {
+            Path rgBinary, InteractionService interaction, TaskEntry taskEntry) {
         this.taskId = taskId;
         this.agentId = agentId;
         this.workspaceRoot = workspaceRoot;
@@ -39,6 +41,7 @@ public class ToolContextImpl implements ToolContext {
         this.gate = gate;
         this.workspaces = workspaces;
         this.rgBinary = rgBinary;
+        this.interaction = interaction;
         this.taskEntry = taskEntry;
     }
 
@@ -75,6 +78,11 @@ public class ToolContextImpl implements ToolContext {
     @Override
     public Path rgBinary() {
         return rgBinary;
+    }
+
+    @Override
+    public InteractionService interaction() {
+        return interaction;
     }
 
     /** 额外暴露：任务条目（含 powershellEnabled 等任务级开关），供内置适配器使用。 */

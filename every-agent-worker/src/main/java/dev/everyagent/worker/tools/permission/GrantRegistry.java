@@ -7,7 +7,7 @@ import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.modules.WorkspaceManager;
 import dev.everyagent.worker.plugin.registry.AuthorizationHandlerRegistry;
 import dev.everyagent.worker.task.AgentCancelledException;
-import dev.everyagent.worker.task.PendingAsks;
+import dev.everyagent.plugin.api.interaction.InteractionService;
 import dev.everyagent.worker.task.TaskEntry;
 import dev.everyagent.worker.task.TaskStore;
 import dev.everyagent.worker.tools.PermissionDeniedException;
@@ -46,7 +46,7 @@ public class GrantRegistry {
 
     private static final Logger log = LoggerFactory.getLogger(GrantRegistry.class);
 
-    private final PendingAsks asks;
+    private final InteractionService asks;
     private final WorkerProperties props;
     private final WorkspaceManager workspaces;
     private final TaskStore store;
@@ -55,7 +55,7 @@ public class GrantRegistry {
 
     private final Map<String, TaskGrants> byTask = new ConcurrentHashMap<>();
 
-    public GrantRegistry(PendingAsks asks, WorkerProperties props, WorkspaceManager workspaces,
+    public GrantRegistry(InteractionService asks, WorkerProperties props, WorkspaceManager workspaces,
             TaskStore store, AuthorizationHandlerRegistry authHandlerRegistry) {
         this.asks = asks;
         this.props = props;

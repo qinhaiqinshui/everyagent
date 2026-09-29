@@ -1,8 +1,11 @@
 package dev.everyagent.worker.task;
 
 import dev.everyagent.contract.json.Json;
+import dev.everyagent.plugin.api.interaction.AskOption;
+import dev.everyagent.plugin.api.interaction.AskQuestion;
 import dev.everyagent.plugin.api.model.ModelConfig;
 import dev.everyagent.worker.proto.Events.ToolCallPart;
+import tools.jackson.databind.node.ArrayNode;
 import tools.jackson.databind.node.ObjectNode;
 
 import java.util.List;
@@ -105,15 +108,23 @@ public final class EventPayloads {
     // ---- ask questions ----
 
     /** 多问题选择题 → 前端 ask.create/ask.state 的 questions 数组(含 id/prompt/options)。 */
-    public static tools.jackson.databind.node.ArrayNode questionsToJson(
-            List<PendingAsks.AskQuestion> questions) {
+    public static ArrayNode questionsToJson(
+            List<AskQuestion> questions) {
         var arr = Json.arr();
         if (questions != null) {
-            for (PendingAsks.AskQuestion q : questions) {
+            for (AskQuestion q : questions) {
                 ObjectNode o = Json.obj();
                 o.put("id", q.id());
                 o.put("prompt", q.prompt());
-                o.set("options", Json.toJson(q.options()));
+                ArrayNode opts = o.putArray("options");
+                if (q.options() != null) {
+                    for (AskOption opt : q.options()) {
+                        ObjectNode oo = opts.addObject();
+                        oo.put("label", opt.label());
+                        oo.put("value", opt.value());
+                        oo.put("type", opt.type());
+                    }
+                }
                 arr.add(o);
             }
         }

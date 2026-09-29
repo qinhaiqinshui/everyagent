@@ -1,13 +1,23 @@
-package dev.everyagent.worker.task;
+package dev.everyagent.worker.interaction;
 
+import dev.everyagent.plugin.api.interaction.AskOption;
+import dev.everyagent.plugin.api.interaction.AskQuestion;
+import dev.everyagent.plugin.api.interaction.AskResult;
+import dev.everyagent.plugin.api.interaction.InteractionService;
 import dev.everyagent.plugin.api.model.EmitEvent;
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.worker.proto.SnowflakeId;
+import dev.everyagent.worker.task.EventPayloads;
+import dev.everyagent.worker.task.TaskEntry;
+import dev.everyagent.worker.task.TaskEvents;
+import dev.everyagent.worker.task.TaskManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.node.ObjectNode;
 
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
@@ -15,49 +25,41 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Consumer;
 
 /**
- * 挂起提问登记表(架构 §5.6 / G4):
+ * 用户交互服务实现(架构 §5.6 / G4):
  * ask 阻塞在虚拟线程上等 future;挂起期间每 30s 重发 ask.state;
  * 超时/回答/取消均走 ask.resolved;同 taskId 全部 ask 结束 → 任务回到 running。
+ *
+ * <p>由原 {@code PendingAsks} 迁移而来,删除 kind 参数,options 从 string[] 升级为
+ * {@link AskOption} 对象数组。
  */
 @Component
-public class PendingAsks {
-
-    public record AskAnswer(String status, String text) {
-    }
-
-    /**
-     * 单个选择题(ask_user 多问题形态)。id 由 worker 在工具侧分配(与 askId 关联),
-     * 前端据此把答案回传配对;options 为选项文案,「其他」由前端渲染时自动追加,不入此列表。
-     */
-    public record AskQuestion(String id, String prompt, java.util.List<String> options) {
-    }
+public class InteractionServiceImpl implements InteractionService {
 
     /** 任务状态联动:有挂起 → waiting-user;全部解决 → running。 */
     public interface StatusHook {
         void askPendingChanged(String taskId, boolean nowPending);
     }
 
-    private static final Logger log = LoggerFactory.getLogger(PendingAsks.class);
+    private static final Logger log = LoggerFactory.getLogger(InteractionServiceImpl.class);
 
     private static final class Ask {
         final String askId;
         final String taskId;
         final String agentId;
-        final String kind;
-        final java.util.List<AskQuestion> questions;
+        final List<AskQuestion> questions;
         final TaskEvents events;
-        final CompletableFuture<AskAnswer> future = new CompletableFuture<>();
+        final CompletableFuture<AskResult> future = new CompletableFuture<>();
         volatile ScheduledFuture<?> refresher;
         volatile ScheduledFuture<?> timeout;
 
-        Ask(String askId, String taskId, String agentId, String kind,
-                java.util.List<AskQuestion> questions, TaskEvents events) {
+        Ask(String askId, String taskId, String agentId,
+                List<AskQuestion> questions, TaskEvents events) {
             this.askId = askId;
             this.taskId = taskId;
             this.agentId = agentId;
-            this.kind = kind;
             this.questions = questions;
             this.events = events;
         }
@@ -73,27 +75,38 @@ public class PendingAsks {
             });
     private volatile StatusHook hook;
 
+    /** @Lazy 断环:TaskManager 注入本类,本类反向查 TaskEntry.events。 */
+    private final TaskManager taskManager;
+
+    public InteractionServiceImpl(@Lazy TaskManager taskManager) {
+        this.taskManager = taskManager;
+    }
+
     public void setHook(StatusHook hook) {
         this.hook = hook;
     }
 
-    /** 阻塞等待用户回答(运行在 agent 的工具调用线程=任务虚拟线程上,挂起廉价)。 */
-    public AskAnswer ask(TaskEvents events, String taskId, String agentId, String kind,
-            java.util.List<AskQuestion> questions, long timeoutMs)
+    @Override
+    public AskResult ask(String taskId, String agentId,
+            List<AskQuestion> questions, long timeoutMs)
             throws InterruptedException {
+        TaskEntry entry = taskManager.get(taskId);
+        TaskEvents events = entry != null ? entry.events : null;
+        if (events == null) {
+            return new AskResult("cancelled", null);
+        }
         String askId = dev.everyagent.worker.proto.ShortIds.askId();
         // 题目 id 统一由真实 askId 派生(askId_i):调用方无法预知 askId,传入的 id 仅占位,
         // 前端据此与 ask.create 载荷稳定配对回传。
-        java.util.List<AskQuestion> withIds = new java.util.ArrayList<>(questions.size());
+        List<AskQuestion> withIds = new java.util.ArrayList<>(questions.size());
         for (int i = 0; i < questions.size(); i++) {
             AskQuestion q = questions.get(i);
             withIds.add(new AskQuestion(askId + "_" + i, q.prompt(), q.options()));
         }
-        Ask ask = new Ask(askId, taskId, agentId, kind, withIds, events);
+        Ask ask = new Ask(askId, taskId, agentId, withIds, events);
         asks.put(askId, ask);
         ObjectNode askData = Json.obj();
         askData.put("askId", askId);
-        askData.put("kind", kind);
         askData.set("questions", EventPayloads.questionsToJson(withIds));
         if (timeoutMs > 0) {
             askData.put("timeoutMs", timeoutMs);
@@ -107,7 +120,6 @@ public class PendingAsks {
             try {
                 ObjectNode stateData = Json.obj();
                 stateData.put("askId", askId);
-                stateData.put("kind", kind);
                 stateData.put("status", "pending");
                 stateData.set("questions", EventPayloads.questionsToJson(withIds));
                 events.emit(EmitEvent.of(SnowflakeId.next(), "ask.state", agentId,
@@ -117,7 +129,7 @@ public class PendingAsks {
             }
         }, 30, 30, TimeUnit.SECONDS);
         ask.timeout = scheduler.schedule(() -> {
-            if (ask.future.complete(new AskAnswer("timeout", null))) {
+            if (ask.future.complete(new AskResult("timeout", null))) {
                 ObjectNode resolvedData = Json.obj();
                 resolvedData.put("askId", askId);
                 resolvedData.put("by", "timeout");
@@ -141,13 +153,28 @@ public class PendingAsks {
         }
     }
 
+    @Override
+    public void askAsync(String taskId, String agentId,
+            List<AskQuestion> questions, long timeoutMs,
+            Consumer<AskResult> callback) {
+        Thread.startVirtualThread(() -> {
+            try {
+                AskResult result = ask(taskId, agentId, questions, timeoutMs);
+                callback.accept(result);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                callback.accept(new AskResult("cancelled", null));
+            }
+        });
+    }
+
     /** 前端 ask.reply → resolve;首个结果生效,幂等。 */
     public boolean resolve(String askId, String answer, String by) {
         Ask a = asks.get(askId);
         if (a == null) {
             return false;
         }
-        boolean first = a.future.complete(new AskAnswer("answered", answer));
+        boolean first = a.future.complete(new AskResult("answered", answer));
         if (first) {
             ObjectNode resolvedData = Json.obj();
             resolvedData.put("askId", askId);
@@ -164,7 +191,7 @@ public class PendingAsks {
     /** 任务取消:全部挂起 ask 立即作废(工具线程随即被中断)。 */
     public void cancelTask(String taskId, String by) {
         for (Ask a : asks.values()) {
-            if (a.taskId.equals(taskId) && a.future.complete(new AskAnswer("cancelled", null))) {
+            if (a.taskId.equals(taskId) && a.future.complete(new AskResult("cancelled", null))) {
                 ObjectNode resolvedData = Json.obj();
                 resolvedData.put("askId", a.askId);
                 resolvedData.put("by", by);

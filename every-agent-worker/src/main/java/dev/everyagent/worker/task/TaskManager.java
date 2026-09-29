@@ -19,7 +19,7 @@ import dev.everyagent.worker.rpc.RpcContext;
 import dev.everyagent.worker.rpc.RpcDispatcher;
 import dev.everyagent.worker.ship.TaskInputHandler;
 import dev.everyagent.worker.slash.SlashTokenEncoder;
-import dev.everyagent.worker.task.ChatModelFactory;
+import dev.everyagent.worker.interaction.InteractionServiceImpl;
 import dev.everyagent.worker.plugin.registry.TaskAdmissionPolicyRegistry;
 import dev.everyagent.worker.plugin.registry.TaskLifecycleRegistry;
 import dev.everyagent.worker.task.lifecycle.IdempotencyCheckNode;
@@ -70,7 +70,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  * 多 hub:任务不做 owner 隔离;任务事件经 EventSink.fanout 扇出到全部连接的 tasks 频道。
  */
 @Component
-public class TaskManager implements TaskInputHandler, PendingAsks.StatusHook {
+public class TaskManager implements TaskInputHandler, InteractionServiceImpl.StatusHook {
 
     private static final Logger log = LoggerFactory.getLogger(TaskManager.class);
     private static final long IDEM_WINDOW_MS = 600_000;
@@ -89,7 +89,7 @@ public class TaskManager implements TaskInputHandler, PendingAsks.StatusHook {
     /** slash 建后回调已移入洋葱下行节点 SlashNotifyNode(order=90)。 */
     /** 创建/再运行准备路径:workspace 解析与模型配置解析已迁 TaskBootstrap(TaskEntry 构造前的动作)。 */
     private final TaskBootstrap taskBootstrap;
-    private final PendingAsks asks;
+    private final InteractionServiceImpl asks;
     private final WorkerProperties props;
     private final RpcDispatcher dispatcher;
     private final TaskStore store;
@@ -123,7 +123,7 @@ public class TaskManager implements TaskInputHandler, PendingAsks.StatusHook {
 
     public TaskManager(EventSink eventSink, AgentBuilder agentBuilder, AgentRunner runner,
             ConfigStore configs, ChatModelFactory modelFactory,
-            TaskBootstrap taskBootstrap, PendingAsks asks,
+            TaskBootstrap taskBootstrap, InteractionServiceImpl asks,
             WorkerProperties props, RpcDispatcher dispatcher,
             TaskStore store, RoundIndexStore roundIndexStore,
             TaskLifecycleContextFactory lifecycleContextFactory,
@@ -1092,7 +1092,7 @@ public class TaskManager implements TaskInputHandler, PendingAsks.StatusHook {
         eventSink.fanout(k -> Channels.tasks(k), Events.TASK_UPDATED, null, t.runtimeSummaryJson(), null);
     }
 
-// ---- PendingAsks.StatusHook:waiting-user ⇄ running ----
+// ---- InteractionServiceImpl.StatusHook:waiting-user ⇄ running ----
 
     @Override
     public void askPendingChanged(String taskId, boolean nowPending) {

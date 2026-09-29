@@ -9,7 +9,8 @@ import dev.everyagent.worker.os.OsSandbox;
 import dev.everyagent.worker.os.wsl.WslUmounter;
 import dev.everyagent.plugin.api.model.ModelConfig;
 import dev.everyagent.worker.rpc.RpcDispatcher;
-import dev.everyagent.worker.task.PendingAsks;
+import dev.everyagent.plugin.api.interaction.AskResult;
+import dev.everyagent.plugin.api.interaction.InteractionService;
 import dev.everyagent.worker.task.TaskEntry;
 import dev.everyagent.worker.task.TaskManager;
 import dev.everyagent.worker.task.TaskStore;
@@ -33,7 +34,6 @@ import java.nio.file.Path;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -73,9 +73,9 @@ class FsToolSupportWslPathTest {
         when(sandbox.isWslBackend()).thenReturn(true);
         when(sandbox.isWslDirect()).thenReturn(wslDirect);
         when(sandbox.isWslBwrap()).thenReturn(!wslDirect);
-        PendingAsks asks = mock(PendingAsks.class);
-        when(asks.ask(any(), anyString(), anyString(), any(), anyList(), anyLong()))
-                .thenReturn(new PendingAsks.AskAnswer("answered", "nope"));
+        InteractionService asks = mock(InteractionService.class);
+        when(asks.ask(anyString(), anyString(), anyList(), anyLong()))
+                .thenReturn(new AskResult("answered", "nope"));
         var authRegistry = new AuthorizationHandlerRegistry();
         authRegistry.register(new HumanAuthorizationHandler(authRegistry, asks, p));
         GrantRegistry grants = new GrantRegistry(asks, p, wm, mock(TaskStore.class),
@@ -197,9 +197,9 @@ class FsToolSupportWslPathTest {
         java.lang.reflect.Method init = WorkspaceManager.class.getDeclaredMethod("init");
         init.setAccessible(true);
         init.invoke(wm);
-        PendingAsks asks = mock(PendingAsks.class);
-        when(asks.ask(any(), anyString(), anyString(), any(), anyList(), anyLong()))
-                .thenReturn(new PendingAsks.AskAnswer("answered", "nope"));
+        InteractionService asks = mock(InteractionService.class);
+        when(asks.ask(anyString(), anyString(), anyList(), anyLong()))
+                .thenReturn(new AskResult("answered", "nope"));
         var authRegistry = new AuthorizationHandlerRegistry();
         authRegistry.register(new HumanAuthorizationHandler(authRegistry, asks, p));
         GrantRegistry grants = new GrantRegistry(asks, p, wm, mock(TaskStore.class),

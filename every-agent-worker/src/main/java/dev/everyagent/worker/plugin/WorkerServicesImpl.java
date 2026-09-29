@@ -1,11 +1,13 @@
 package dev.everyagent.worker.plugin;
 
 import dev.everyagent.plugin.api.WorkerServices;
+import dev.everyagent.plugin.api.interaction.InteractionService;
 import dev.everyagent.plugin.api.spi.SandboxBackend;
 import dev.everyagent.plugin.api.spi.TokenEstimator;
 import dev.everyagent.plugin.api.permission.TaskInfo;
 import dev.everyagent.plugin.api.task.TaskService;
 import dev.everyagent.worker.modules.WorkspaceManager;
+import dev.everyagent.worker.interaction.InteractionServiceImpl;
 import dev.everyagent.worker.os.OsSandbox;
 import dev.everyagent.worker.task.TaskManager;
 import dev.everyagent.worker.tools.PermissionGate;
@@ -25,14 +27,16 @@ public class WorkerServicesImpl implements WorkerServices {
     private final WorkspaceManager workspaces;
     private final AtomicReference<TokenEstimator> tokenEstimator;
     private final TaskManager taskManager;
+    private final InteractionServiceImpl interaction;
 
     public WorkerServicesImpl(OsSandbox sandbox, PermissionGate gate, WorkspaceManager workspaces,
-            TokenEstimator tokenEstimator, @Lazy TaskManager taskManager) {
+            TokenEstimator tokenEstimator, @Lazy TaskManager taskManager, InteractionServiceImpl interaction) {
         this.sandbox = sandbox;
         this.gate = gate;
         this.workspaces = workspaces;
         this.tokenEstimator = new AtomicReference<>(tokenEstimator);
         this.taskManager = taskManager;
+        this.interaction = interaction;
     }
 
     /** 外部插件注册自定义 TokenEstimator 时替换内置实现。 */
@@ -73,5 +77,10 @@ public class WorkerServicesImpl implements WorkerServices {
                 taskManager.publishTaskUpdated(taskId);
             }
         };
+    }
+
+    @Override
+    public InteractionService interaction() {
+        return interaction;
     }
 }

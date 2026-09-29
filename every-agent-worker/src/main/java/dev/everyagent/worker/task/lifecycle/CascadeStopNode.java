@@ -5,7 +5,7 @@ import dev.everyagent.plugin.api.model.EmitEvent;
 import dev.everyagent.plugin.api.task.TaskLifecycleContext;
 import dev.everyagent.plugin.api.task.TaskOutcome;
 import dev.everyagent.worker.proto.SnowflakeId;
-import dev.everyagent.worker.task.PendingAsks;
+import dev.everyagent.worker.interaction.InteractionServiceImpl;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import tools.jackson.databind.node.ObjectNode;
@@ -19,9 +19,9 @@ public final class CascadeStopNode extends UpstreamNode {
 
     private static final Logger log = LoggerFactory.getLogger(CascadeStopNode.class);
 
-    private final PendingAsks asks;
+    private final InteractionServiceImpl asks;
 
-    public CascadeStopNode(PendingAsks asks) {
+    public CascadeStopNode(InteractionServiceImpl asks) {
         this.asks = asks;
     }
 

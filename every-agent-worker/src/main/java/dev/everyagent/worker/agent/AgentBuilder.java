@@ -4,6 +4,7 @@ import dev.everyagent.plugin.api.model.EventEmitter;
 import dev.everyagent.plugin.api.spi.AdvisorProvider;
 import dev.everyagent.plugin.api.spi.ToolProvider;
 import dev.everyagent.worker.config.WorkerProperties;
+import dev.everyagent.worker.interaction.InteractionServiceImpl;
 import dev.everyagent.worker.modules.WorkspaceManager;
 import dev.everyagent.worker.os.OsSandbox;
 import dev.everyagent.worker.plugin.AdvisorContextImpl;
@@ -60,6 +61,7 @@ public class AgentBuilder {
     private final PermissionGate gate;
     private final WorkspaceManager workspaces;
     private final RipgrepBinary rgBinary;
+    private final InteractionServiceImpl interaction;
 
     public AgentBuilder(ToolProviderRegistry toolRegistry,
             AdvisorProviderRegistry advisorRegistry,
@@ -68,7 +70,8 @@ public class AgentBuilder {
             OsSandbox sandbox,
             PermissionGate gate,
             WorkspaceManager workspaces,
-            RipgrepBinary rgBinary) {
+            RipgrepBinary rgBinary,
+            InteractionServiceImpl interaction) {
         this.toolRegistry = toolRegistry;
         this.advisorRegistry = advisorRegistry;
         this.defaultTcm = defaultTcm;
@@ -77,6 +80,7 @@ public class AgentBuilder {
         this.gate = gate;
         this.workspaces = workspaces;
         this.rgBinary = rgBinary;
+        this.interaction = interaction;
     }
 
     /**
@@ -109,7 +113,7 @@ public class AgentBuilder {
         Path workspaceRoot = wsRoot == null ? null : Paths.get(wsRoot.toString());
         TaskEntry taskEntry = (TaskEntry) properties.get("taskEntry");
         return new ToolContextImpl(taskId, agentId, workspaceRoot,
-                sandbox, gate, workspaces, rgBinary != null ? rgBinary.path() : null, taskEntry);
+                sandbox, gate, workspaces, rgBinary != null ? rgBinary.path() : null, interaction, taskEntry);
     }
 
     /**

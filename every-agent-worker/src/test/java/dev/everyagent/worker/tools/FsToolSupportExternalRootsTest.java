@@ -8,7 +8,8 @@ import java.util.List;
 import dev.everyagent.worker.os.wsl.WslUmounter;
 import dev.everyagent.plugin.api.model.ModelConfig;
 import dev.everyagent.worker.rpc.RpcDispatcher;
-import dev.everyagent.worker.task.PendingAsks;
+import dev.everyagent.plugin.api.interaction.AskResult;
+import dev.everyagent.plugin.api.interaction.InteractionService;
 import dev.everyagent.worker.tools.permission.HumanAuthorizationHandler;
 import dev.everyagent.worker.task.TaskEntry;
 import dev.everyagent.worker.task.TaskManager;
@@ -31,7 +32,6 @@ import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -49,11 +49,11 @@ class FsToolSupportExternalRootsTest {
     @TempDir
     Path tempDir;
 
-    /** 真实 WorkspaceManager + 真实 gate 链(HubPool/RpcDispatcher/TaskManager/PendingAsks 打桩)。 */
+    /** 真实 WorkspaceManager + 真实 gate 链(HubPool/RpcDispatcher/TaskManager/InteractionService 打桩)。 */
     private record Stack(WorkspaceManager wm, PermissionGate gate, FsToolSupport fs) {
     }
 
-    private Stack stack(Path ws, PendingAsks asks) throws Exception {
+    private Stack stack(Path ws, InteractionService asks) throws Exception {
         WorkerProperties p = new WorkerProperties();
         p.setHomeDir(tempDir.resolve("home").toString());
         p.setHomeDir(tempDir.resolve("data").toString());
@@ -84,18 +84,18 @@ class FsToolSupportExternalRootsTest {
     }
 
     /** 弹窗打桩:一旦发起授权 ask 即测试失败(外部根内不应弹窗)。 */
-    private PendingAsks asksFailing() throws InterruptedException {
-        PendingAsks asks = mock(PendingAsks.class);
-        when(asks.ask(any(), anyString(), anyString(), any(), anyList(), anyLong()))
+    private InteractionService asksFailing() throws InterruptedException {
+        InteractionService asks = mock(InteractionService.class);
+        when(asks.ask(anyString(), anyString(), anyList(), anyLong()))
                 .thenThrow(new AssertionError("外部授权根内文件操作不应触发授权弹窗"));
         return asks;
     }
 
     /** 弹窗打桩:未识别答案 → DENY(负例:未注册路径走授权决议链被拒)。 */
-    private PendingAsks asksDenying() throws InterruptedException {
-        PendingAsks asks = mock(PendingAsks.class);
-        when(asks.ask(any(), anyString(), anyString(), any(), anyList(), anyLong()))
-                .thenReturn(new PendingAsks.AskAnswer("answered", "nope"));
+    private InteractionService asksDenying() throws InterruptedException {
+        InteractionService asks = mock(InteractionService.class);
+        when(asks.ask(anyString(), anyString(), anyList(), anyLong()))
+                .thenReturn(new AskResult("answered", "nope"));
         return asks;
     }
 
