@@ -15,6 +15,8 @@ import dev.everyagent.plugin.api.model.ChatModelEnhancer;
 import dev.everyagent.plugin.api.task.TaskAdmissionPolicy;
 import dev.everyagent.plugin.api.task.TaskLifecycleNode;
 
+import java.nio.file.Path;
+
 /**
  * Worker 插件上下文 —— 对标 VSCode 的 {@code ExtensionContext}。
  *
@@ -25,6 +27,14 @@ public interface WorkerPluginContext {
 
     /** 插件 id。 */
     String pluginId();
+
+    /**
+     * 插件根目录绝对路径（内置插件源码目录或外部插件安装目录）。
+     *
+     * <p>对标 VSCode 的 {@code ExtensionContext.extensionPath}。
+     * 插件可经此定位自带资源（如 rootfs 镜像、脚本等）。
+     */
+    Path pluginDir();
 
     // ── SPI 注册方法 ──
 

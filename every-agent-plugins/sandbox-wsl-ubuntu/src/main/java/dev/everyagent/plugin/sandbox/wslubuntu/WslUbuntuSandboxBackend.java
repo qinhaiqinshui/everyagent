@@ -25,8 +25,6 @@ import java.util.concurrent.TimeUnit;
  *   <li>{@link #onWorkspaceRemoved}：best-effort umount 清理挂载。</li>
  * </ul>
  * 不执行命令、不翻译路径、不涉及工具注册、不涉及授权策略。
- *
- * <p>参考方案文档 §2.12 中的 Backend 实现代码。
  */
 public final class WslUbuntuSandboxBackend implements SandboxBackend {
 
@@ -34,12 +32,15 @@ public final class WslUbuntuSandboxBackend implements SandboxBackend {
 
     private final WorkerProperties props;
     private final WorkspaceManager workspaces;
+    private final Path pluginDir;
     private final WslUmounter umounter;
 
-    public WslUbuntuSandboxBackend(WorkerProperties props, WorkspaceManager workspaces) {
+    public WslUbuntuSandboxBackend(WorkerProperties props, WorkspaceManager workspaces,
+            Path pluginDir) {
         this.props = props;
         this.workspaces = workspaces;
-        this.umounter = new WslUmounter(props);
+        this.pluginDir = pluginDir;
+        this.umounter = new WslUmounter(props, pluginDir);
     }
 
     @Override
@@ -50,7 +51,7 @@ public final class WslUbuntuSandboxBackend implements SandboxBackend {
     @Override
     public Map<Path, String> mount(List<MountRequest> requests) {
         Map<Path, String> result = new LinkedHashMap<>();
-        String distro = WslCommon.effectiveDistro(props);
+        String distro = WslCommon.effectiveDistro(props, pluginDir);
         for (MountRequest req : requests) {
             Path hostPath = req.hostPath();
             String mountPoint = WslPathMapper.toDirectMount(hostPath);

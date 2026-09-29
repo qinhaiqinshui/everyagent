@@ -15,9 +15,9 @@ __pycache__/
 every-agent-web/node_modules.old/
 .everyagent/
 # 绋嬪簭闄勫睘鏂囦欢 runtime/:rg 浜岃繘鍒朵笌 eagent-run.py 闅忔簮鐮佸叆 git;澶т綋绉暅鍍忎笉鍏?git
-runtime/wsl/eagent-rootfs.tar.gz
-runtime/wsl/eagent-rootfs.tar.gz.sha256
-runtime/wsl/__pycache__/
+every-agent-plugins/sandbox-wsl-ubuntu/wsl/eagent-rootfs.tar.gz
+every-agent-plugins/sandbox-wsl-ubuntu/wsl/eagent-rootfs.tar.gz.sha256
+every-agent-plugins/sandbox-wsl-ubuntu/wsl/__pycache__/
 outputs/
 .claude/
 

@@ -19,17 +19,18 @@ import java.util.List;
  * <p>appliesTo：只在当前沙箱是 wsl-ubuntu 时生效。
  * createTools：创建 {@link WslUbuntuBashTool}（使用 {@link WslUbuntuCommandExecutor}），
  * 返回 {@code List.of(ToolCallbacks.from(...))}。
- *
- * <p>参考 worker 中的 {@code BashToolProvider.java}。
  */
 public class WslUbuntuBashToolProvider implements ToolProvider {
 
     private final WorkerProperties props;
     private final WorkspaceManager workspaces;
+    private final Path pluginDir;
 
-    public WslUbuntuBashToolProvider(WorkerProperties props, WorkspaceManager workspaces) {
+    public WslUbuntuBashToolProvider(WorkerProperties props, WorkspaceManager workspaces,
+            Path pluginDir) {
         this.props = props;
         this.workspaces = workspaces;
+        this.pluginDir = pluginDir;
     }
 
     @Override
@@ -45,7 +46,7 @@ public class WslUbuntuBashToolProvider implements ToolProvider {
     @Override
     public List<ToolCallback> createTools(ToolContext ctx) {
         Path workspaceRoot = ctx.workspaceRoot();
-        WslUbuntuCommandExecutor exec = new WslUbuntuCommandExecutor(props, workspaceRoot, workspaces);
+        WslUbuntuCommandExecutor exec = new WslUbuntuCommandExecutor(props, workspaceRoot, workspaces, pluginDir);
         return List.of(ToolCallbacks.from(new WslUbuntuBashTool(exec)));
     }
 

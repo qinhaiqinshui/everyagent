@@ -299,6 +299,7 @@ public class PluginLoader {
 
             // 构造 WorkerPluginContext
             WorkerPluginContext ctx = new WorkerPluginContextImpl(id,
+                    pluginDir,
                     advisorRegistry, toolRegistry, sandboxRegistry,
                     searchRegistry,
                     authHandlerRegistry, toolInterceptorRegistry,

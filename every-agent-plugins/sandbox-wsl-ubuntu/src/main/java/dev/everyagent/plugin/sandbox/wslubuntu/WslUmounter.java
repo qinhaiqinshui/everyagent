@@ -29,9 +29,11 @@ public class WslUmounter {
     static final long UMOUNT_TIMEOUT_MS = 5_000;
 
     private final WorkerProperties props;
+    private final Path pluginDir;
 
-    public WslUmounter(WorkerProperties props) {
+    public WslUmounter(WorkerProperties props, Path pluginDir) {
         this.props = props;
+        this.pluginDir = pluginDir;
     }
 
     /**
@@ -49,7 +51,7 @@ public class WslUmounter {
                 log.debug("[umount] 外部授权根非本地盘路径,跳过卸载: {}", externalRoot);
                 return;
             }
-            String distro = WslCommon.effectiveDistro(props);
+            String distro = WslCommon.effectiveDistro(props, pluginDir);
             int rc = runProcess(
                     WslCommon.wslCmd(distro, "-u", "root", "-e", "umount", mount), UMOUNT_TIMEOUT_MS);
             if (rc == 0) {

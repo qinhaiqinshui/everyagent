@@ -36,6 +36,7 @@ import org.springframework.context.ApplicationContext;
 
 import tools.jackson.databind.JsonNode;
 
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -50,6 +51,7 @@ import java.util.concurrent.atomic.AtomicReference;
 public class WorkerPluginContextImpl implements WorkerPluginContext {
 
     private final String pluginId;
+    private final Path pluginDir;
     private final AdvisorProviderRegistry advisorRegistry;
     private final ToolProviderRegistry toolRegistry;
     private final SandboxProviderRegistry sandboxRegistry;
@@ -68,6 +70,7 @@ public class WorkerPluginContextImpl implements WorkerPluginContext {
     private final ApplicationContext applicationContext;
 
     public WorkerPluginContextImpl(String pluginId,
+            Path pluginDir,
             AdvisorProviderRegistry advisorRegistry,
             ToolProviderRegistry toolRegistry,
             SandboxProviderRegistry sandboxRegistry,
@@ -85,6 +88,7 @@ public class WorkerPluginContextImpl implements WorkerPluginContext {
             PluginConfig config,
             ApplicationContext applicationContext) {
         this.pluginId = pluginId;
+        this.pluginDir = pluginDir;
         this.advisorRegistry = advisorRegistry;
         this.toolRegistry = toolRegistry;
         this.sandboxRegistry = sandboxRegistry;
@@ -106,6 +110,11 @@ public class WorkerPluginContextImpl implements WorkerPluginContext {
     @Override
     public String pluginId() {
         return pluginId;
+    }
+
+    @Override
+    public Path pluginDir() {
+        return pluginDir;
     }
 
     @Override

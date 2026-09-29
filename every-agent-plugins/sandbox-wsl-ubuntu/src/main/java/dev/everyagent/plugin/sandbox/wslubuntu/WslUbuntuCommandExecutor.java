@@ -16,16 +16,6 @@ import java.util.concurrent.Executors;
  *
  * <p>直接通过 {@code wsl -d xxx} 构造进程执行命令，委托 {@link WslUbuntuSandbox#run}
  * 完成实际执行（发行版内 root 直连、runner 脚本 trusted 阶段挂载 + seccomp + exec bash）。
- *
- * <p>简化设计（只服务 WSL Ubuntu 场景）：
- * <ul>
- *   <li>命令在 WSL 发行版内以 root 执行；</li>
- *   <li>路径形态是 Linux（/c/Users/...），沙箱自己做路径扫描；</li>
- *   <li>超时控制由 {@link WorkerProperties.Sandbox#getTimeoutMs} 承担；</li>
- *   <li>输出截断由 {@link #MAX_OUTPUT_CHARS} 上限承担。</li>
- * </ul>
- *
- * <p>参考 worker 中的 {@code CommandExecutor.java} 了解整体结构，但简化为只服务 WSL Ubuntu。
  */
 public class WslUbuntuCommandExecutor {
 
@@ -37,22 +27,20 @@ public class WslUbuntuCommandExecutor {
     private final WorkerProperties props;
     private final Path workspaceRoot;
     private final WorkspaceManager workspaces;
+    private final Path pluginDir;
     private final ExecutorService exec = Executors.newVirtualThreadPerTaskExecutor();
 
     public WslUbuntuCommandExecutor(WorkerProperties props, Path workspaceRoot,
-            WorkspaceManager workspaces) {
+            WorkspaceManager workspaces, Path pluginDir) {
         this.props = props;
         this.workspaceRoot = workspaceRoot;
         this.workspaces = workspaces;
+        this.pluginDir = pluginDir;
     }
 
     /**
      * 执行命令：经 {@link WslUbuntuSandbox#run} 在发行版内以 root 直连执行，
      * 结果格式化为 stdout + [stderr] + exit code 尾注。
-     *
-     * @param command 要执行的 bash 命令
-     * @param shell   shell 类型（wsl-ubuntu 恒为 bash，忽略其他值）
-     * @return 结果文本
      */
     public String execute(String command, String shell) {
         if (command == null || command.trim().isEmpty()) {
@@ -62,8 +50,8 @@ public class WslUbuntuCommandExecutor {
         List<Path> allWorkspaces = wslDirectMountRoots();
         boolean allowNetwork = props.getSandbox().isAllowNetwork();
 
-        WslCommon.OsResult r = WslUbuntuSandbox.run(command, workspaceRoot, props, exec,
-                MAX_OUTPUT_CHARS, allWorkspaces, allowNetwork);
+        WslCommon.OsResult r = WslUbuntuSandbox.run(command, workspaceRoot, props, pluginDir,
+                exec, MAX_OUTPUT_CHARS, allWorkspaces, allowNetwork);
 
         log.info("[exec] wsl-ubuntu rc={} aborted={} cmd={}", r.exitCode(), r.aborted(),
                 truncate(command, 200));

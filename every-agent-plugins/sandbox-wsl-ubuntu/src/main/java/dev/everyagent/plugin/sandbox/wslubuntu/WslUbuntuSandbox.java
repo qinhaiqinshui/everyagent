@@ -36,8 +36,7 @@ import java.util.concurrent.TimeoutException;
  *
  * <p>执行形态：{@code wsl.exe -d <发行版> -u root -e bash -lc "<ensureMount> && cd <挂载点> && <命令>"}。
  *
- * <p>原 {@code WslDirectSandbox} 迁入改名，包名改为 {@code dev.everyagent.plugin.sandbox.wslubuntu}。
- * 共享类型（{@link WslCommon.OsResult}、{@link WslCommon.ProbeResult} 等）从 {@link WslCommon} 获取。
+ * <p>镜像与启动器脚本由插件自己管理（{@code <pluginDir>/wsl/}），自动导入也由插件承担。
  */
 public final class WslUbuntuSandbox {
 
@@ -65,8 +64,8 @@ public final class WslUbuntuSandbox {
      * 不要求 bwrap（直连模式不建隔离命名空间）。发行版缺失 → DISTRO_NOT_FOUND，
      * 供上层触发托管镜像自动导入（autoImport）。
      */
-    public static WslCommon.ProbeResult probe(WorkerProperties props) {
-        String distro = WslCommon.effectiveDistro(props);
+    public static WslCommon.ProbeResult probe(WorkerProperties props, Path pluginDir) {
+        String distro = WslCommon.effectiveDistro(props, pluginDir);
         String cmd = "command -v bash >/dev/null && command -v mount >/dev/null"
                 + " && command -v findmnt >/dev/null && id -u";
         Capture c = runCapture(WslCommon.wslCmd(distro, "-u", "root", "-e", "/bin/sh", "-c", cmd),
@@ -103,9 +102,10 @@ public final class WslUbuntuSandbox {
      * @param allWorkspaces 全部已注册工作区（Windows 宿主路径），由 runner trusted 阶段幂等挂载
      */
     public static WslCommon.OsResult run(String command, Path cwd, WorkerProperties props,
-            ExecutorService exec, int maxOut, List<Path> allWorkspaces, boolean allowNetwork) {
+            Path pluginDir, ExecutorService exec, int maxOut, List<Path> allWorkspaces,
+            boolean allowNetwork) {
         WorkerProperties.Sandbox cfg = props.getSandbox();
-        String distro = WslCommon.effectiveDistro(props);
+        String distro = WslCommon.effectiveDistro(props, pluginDir);
 
         String cwdMount = WslPathMapper.toDirectMount(cwd);
         if (cwdMount == null) {
@@ -126,7 +126,7 @@ public final class WslUbuntuSandbox {
                 "memMb", Math.max(0, cfg.resolveMemoryLimitMb()),
                 "cpuSec", timeoutSec));
 
-        String runnerInDistro = ensureRunnerInDistro(distro, props, exec);
+        String runnerInDistro = ensureRunnerInDistro(distro, props, pluginDir, exec);
         if (runnerInDistro == null) {
             return new WslCommon.OsResult("", "[sandbox] eagent-run 无法落地进发行版"
                     + "(automount 关闭下 /mnt/c 不可达,且发行版内 /root 不可写):"
@@ -181,10 +181,10 @@ public final class WslUbuntuSandbox {
      * 确保 eagent-run.py 已落地到发行版内，返回发行版内执行路径；失败返回 null。
      */
     private static String ensureRunnerInDistro(String distro, WorkerProperties props,
-            ExecutorService exec) {
+            Path pluginDir, ExecutorService exec) {
         byte[] bytes;
         try {
-            bytes = WslCommon.runnerBytes(props);
+            bytes = WslCommon.runnerBytes(props, pluginDir);
         } catch (IOException e) {
             log.warn("[sandbox] 读取 eagent-run 失败: {}", e.getMessage());
             return null;
