@@ -119,14 +119,14 @@ public class WorkerToolEventAdvisor extends ToolCallingAdvisor {
         long rid = ensureRoundId();
         String piece = out.getText();
         if (piece != null && !piece.isEmpty()) {
-            a.agentEmitter.emit(EmitEvent.transientOf(rid, Events.DELTA,
+            a.emitter.emit(EmitEvent.transientOf(rid, Events.DELTA,
                     null, null, null, piece, null, null, EmitEvent.Mode.APPEND));
         }
         String thinking = thinkingOf(out);
         if (!thinking.isEmpty()) {
             String diff = diffThinking(thinking);
             if (!diff.isEmpty()) {
-                a.agentEmitter.emit(EmitEvent.transientOf(rid, Events.THINKING,
+                a.emitter.emit(EmitEvent.transientOf(rid, Events.THINKING,
                         null, null, null, diff, null, null, EmitEvent.Mode.APPEND));
             }
         }
@@ -167,7 +167,7 @@ public class WorkerToolEventAdvisor extends ToolCallingAdvisor {
         if (!thinking.isEmpty()) {
             String diff = diffThinking(thinking);
             if (!diff.isEmpty()) {
-                a.agentEmitter.emit(EmitEvent.transientOf(rid, Events.THINKING,
+                a.emitter.emit(EmitEvent.transientOf(rid, Events.THINKING,
                         null, null, null, diff, null, null, EmitEvent.Mode.APPEND));
             }
         }
@@ -192,7 +192,7 @@ public class WorkerToolEventAdvisor extends ToolCallingAdvisor {
             messageData.put("thinking", thinking);
         }
         messageData.set("toolCalls", EventPayloads.toolCallsToJson(parts));
-        a.agentEmitter.emit(EmitEvent.of(rid, Events.MESSAGE,
+        a.emitter.emit(EmitEvent.of(rid, Events.MESSAGE,
                 null, null, null, text, null, messageData, EmitEvent.Mode.REPLACE));
         roundId.set(0);
         // 队列续跑修复:把「最终回答轮」(无工具调用的收口轮)回写会话内存。
@@ -224,7 +224,7 @@ public class WorkerToolEventAdvisor extends ToolCallingAdvisor {
                 }
                 usageData.set("round", Json.toJson(roundUsage));
                 usageData.set("total", Json.toJson(a.usageRef().get()));
-                a.agentEmitter.emit(EmitEvent.of(SnowflakeId.next(), Events.USAGE,
+                a.emitter.emit(EmitEvent.of(SnowflakeId.next(), Events.USAGE,
                         null, null, null, null, null, usageData, EmitEvent.Mode.REPLACE));
                 // 最近一轮实测 usage 按 agent 记录(主/子都写;供 ContextCompressionAdvisor 读取 offset),
                 // 同时保存累计 usage 与上下文快照(台账 usage/context 字段供体)。
@@ -281,7 +281,7 @@ public class WorkerToolEventAdvisor extends ToolCallingAdvisor {
                         toolResultData.put("callId", r.id());
                         toolResultData.put("name", r.name());
                         toolResultData.put("truncated", truncated);
-                        a.agentEmitter.emit(EmitEvent.of(SnowflakeId.next(), Events.TOOL_RESULT,
+                        a.emitter.emit(EmitEvent.of(SnowflakeId.next(), Events.TOOL_RESULT,
                                 null, null, summary, null, null, toolResultData,
                                 EmitEvent.Mode.REPLACE));
                     }

@@ -1,8 +1,8 @@
 package dev.everyagent.worker.task;
 
 import dev.everyagent.contract.json.Json;
-import dev.everyagent.plugin.api.agent.AgentEventChannel;
 import dev.everyagent.plugin.api.model.EmitEvent;
+import dev.everyagent.plugin.api.model.EventEmitter;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.node.ObjectNode;
 
@@ -15,7 +15,7 @@ import tools.jackson.databind.node.ObjectNode;
  * 子 agent 事件必带(wireEvent 按 mainAgentId 注入)。
  * seq 序列化为字符串(64 位 Snowflake &gt; JS Number.MAX_SAFE_INTEGER,wire 传输必须字符串)。
  */
-public final class TaskEvents implements AgentEventChannel {
+public final class TaskEvents implements EventEmitter {
 
     private final EventLog log;
     private final String mainAgentId;

@@ -39,7 +39,6 @@ public final class CascadeStopNode extends UpstreamNode {
             return result;
         }
         if (to.status() == TaskOutcome.TaskEndStatus.CANCELLED) {
-            t.stopRequested = true;
             try { asks.cancelTask(t.taskId, "user"); } catch (RuntimeException e) { log.warn("cancelTask 异常 task={}", t.taskId, e); }
             try {
                 ObjectNode cancelledData = Json.obj().put("by", "user");

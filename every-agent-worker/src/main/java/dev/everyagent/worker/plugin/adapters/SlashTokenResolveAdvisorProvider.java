@@ -6,6 +6,7 @@ import dev.everyagent.plugin.api.spi.AdvisorProvider;
 import dev.everyagent.worker.skill.SlashTokenResolveAdvisor;
 import dev.everyagent.worker.slash.SlashTokenHandler;
 import dev.everyagent.worker.agent.AgentEntity;
+import dev.everyagent.worker.task.TaskEntry;
 import org.springframework.ai.chat.client.advisor.api.Advisor;
 import org.springframework.core.Ordered;
 
@@ -36,6 +37,7 @@ public class SlashTokenResolveAdvisorProvider implements AdvisorProvider {
     @Override
     public Advisor create(AdvisorContext ctx) {
         AgentEntity a = ((AdvisorContextImpl) ctx).agentEntity();
-        return new SlashTokenResolveAdvisor(slashTokenHandler, a.task);
+        TaskEntry t = (TaskEntry) a.properties.get("taskEntry");
+        return new SlashTokenResolveAdvisor(slashTokenHandler, t);
     }
 }
