@@ -305,9 +305,7 @@ public class WorkerProperties {
     /** 任务永久保留(用户删除是唯一出口),无 retention/trim 概念。 */
     public static class Limits {
         private int maxConcurrentTasks = 20;
-        private int maxConcurrentSubs = 8;
         private long askTimeoutMs = 1_800_000;
-        private long subWaitTimeoutMs = 300_000;
         private long maxEventsPerTask = 500_000;
         private long shipStallMs = 60_000;
         /**
@@ -394,28 +392,12 @@ public class WorkerProperties {
             this.maxConcurrentTasks = maxConcurrentTasks;
         }
 
-        public int getMaxConcurrentSubs() {
-            return maxConcurrentSubs;
-        }
-
-        public void setMaxConcurrentSubs(int maxConcurrentSubs) {
-            this.maxConcurrentSubs = maxConcurrentSubs;
-        }
-
         public long getAskTimeoutMs() {
             return askTimeoutMs;
         }
 
         public void setAskTimeoutMs(long askTimeoutMs) {
             this.askTimeoutMs = askTimeoutMs;
-        }
-
-        public long getSubWaitTimeoutMs() {
-            return subWaitTimeoutMs;
-        }
-
-        public void setSubWaitTimeoutMs(long subWaitTimeoutMs) {
-            this.subWaitTimeoutMs = subWaitTimeoutMs;
         }
 
         public long getMaxEventsPerTask() {

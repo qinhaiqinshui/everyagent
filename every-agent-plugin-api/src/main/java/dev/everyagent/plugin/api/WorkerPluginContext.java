@@ -98,7 +98,7 @@ public interface WorkerPluginContext {
      * 按 Class 获取 worker 核心服务（Spring bean）。
      *
      * <p>内置插件可经此获取未在 {@link WorkerServices} 中暴露的 worker 内部服务
-     * （如 {@code WorkerProperties}、{@code TaskStore}、{@code AgentService} 等）。
+     * （如 {@code WorkerProperties}、{@code TaskStore} 等）。
      * 外部插件不应依赖此方法获取未公开的服务。
      *
      * @param type 服务 Class

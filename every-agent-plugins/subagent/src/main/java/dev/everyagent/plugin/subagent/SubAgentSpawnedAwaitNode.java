@@ -1,4 +1,4 @@
-package dev.everyagent.worker.task.lifecycle;
+package dev.everyagent.plugin.subagent;
 
 import dev.everyagent.plugin.api.task.TaskLifecycleContext;
 import dev.everyagent.plugin.api.task.TaskOutcome;
@@ -10,13 +10,13 @@ import org.slf4j.LoggerFactory;
  * 上行节点(order=950)：awaitAllBeforeFinish（等全部子 agent，超时级联停）。
  * 中断检测：await 后若线程被中断，改写 result 为 CANCELLED。
  */
-public final class SpawnedAwaitNode extends UpstreamNode {
+public final class SubAgentSpawnedAwaitNode extends UpstreamNode {
 
-    private static final Logger log = LoggerFactory.getLogger(SpawnedAwaitNode.class);
+    private static final Logger log = LoggerFactory.getLogger(SubAgentSpawnedAwaitNode.class);
 
     private final SubAgentManager subs;
 
-    public SpawnedAwaitNode(SubAgentManager subs) {
+    public SubAgentSpawnedAwaitNode(SubAgentManager subs) {
         this.subs = subs;
     }
 

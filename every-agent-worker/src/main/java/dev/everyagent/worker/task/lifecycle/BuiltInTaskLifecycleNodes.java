@@ -6,7 +6,6 @@ import dev.everyagent.worker.plugin.registry.TaskLifecycleRegistry;
 import dev.everyagent.worker.ship.StreamSourceRegistry;
 import dev.everyagent.worker.slash.SlashTaskCallbacks;
 import dev.everyagent.worker.task.PendingAsks;
-import dev.everyagent.worker.task.SubAgentManager;
 import dev.everyagent.worker.task.TaskStore;
 import dev.everyagent.worker.tools.PermissionGate;
 import jakarta.annotation.PostConstruct;
@@ -36,7 +35,6 @@ public class BuiltInTaskLifecycleNodes {
     private final HubPool pool;
     private final StreamSourceRegistry streamSources;
     private final PermissionGate gate;
-    private final SubAgentManager subs;
     private final PendingAsks asks;
     private final WorkspaceActivityTracker activityTracker;
     private final SlashTaskCallbacks slashCallbacks;
@@ -47,7 +45,6 @@ public class BuiltInTaskLifecycleNodes {
             HubPool pool,
             StreamSourceRegistry streamSources,
             PermissionGate gate,
-            SubAgentManager subs,
             PendingAsks asks,
             WorkspaceActivityTracker activityTracker,
             SlashTaskCallbacks slashCallbacks) {
@@ -56,7 +53,6 @@ public class BuiltInTaskLifecycleNodes {
         this.pool = pool;
         this.streamSources = streamSources;
         this.gate = gate;
-        this.subs = subs;
         this.asks = asks;
         this.activityTracker = activityTracker;
         this.slashCallbacks = slashCallbacks;
@@ -75,8 +71,7 @@ public class BuiltInTaskLifecycleNodes {
         // 成对节点（下行在段边界外、上行在临界段内）
         registry.register(new StatusNode(pool), "worker");       // order=840
         // 上行节点（段外，按 order 从高到低注册，仅影响同 order 的稳定排序兜底）
-        registry.register(new SpawnedAwaitNode(subs), "worker");
-        registry.register(new CascadeStopNode(subs, asks), "worker");
+        registry.register(new CascadeStopNode(asks), "worker");
         // 临界段内纯上行节点（UpstreamNode，order ∈ [420,850]）
         registry.register(new ConcurrencyReleaseNode(), "worker");
         registry.register(new LogFlushNode(store), "worker");

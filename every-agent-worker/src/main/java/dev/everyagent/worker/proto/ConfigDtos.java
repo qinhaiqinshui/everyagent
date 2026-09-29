@@ -33,8 +33,6 @@ public final class ConfigDtos {
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record WorkerLimits(
             Integer maxConcurrentTasks,
-            Integer maxConcurrentSubs,
-            Long askTimeoutMs,
-            Long subWaitTimeoutMs) {
+            Long askTimeoutMs) {
     }
 }

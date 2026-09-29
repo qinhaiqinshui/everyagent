@@ -30,10 +30,6 @@ public final class ShortIds {
         return next("a");
     }
 
-    public static String subAgentId() {
-        return next("sub");
-    }
-
     public static String askId() {
         return next("q");
     }

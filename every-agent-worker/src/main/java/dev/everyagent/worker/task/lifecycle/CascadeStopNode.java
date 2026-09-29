@@ -6,7 +6,6 @@ import dev.everyagent.plugin.api.task.TaskLifecycleContext;
 import dev.everyagent.plugin.api.task.TaskOutcome;
 import dev.everyagent.worker.proto.SnowflakeId;
 import dev.everyagent.worker.task.PendingAsks;
-import dev.everyagent.worker.task.SubAgentManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import tools.jackson.databind.node.ObjectNode;
@@ -20,11 +19,9 @@ public final class CascadeStopNode extends UpstreamNode {
 
     private static final Logger log = LoggerFactory.getLogger(CascadeStopNode.class);
 
-    private final SubAgentManager subs;
     private final PendingAsks asks;
 
-    public CascadeStopNode(SubAgentManager subs, PendingAsks asks) {
-        this.subs = subs;
+    public CascadeStopNode(PendingAsks asks) {
         this.asks = asks;
     }
 
@@ -43,7 +40,6 @@ public final class CascadeStopNode extends UpstreamNode {
         }
         if (to.status() == TaskOutcome.TaskEndStatus.CANCELLED) {
             t.stopRequested = true;
-            try { subs.stopAll(t); } catch (RuntimeException e) { log.warn("stopAll 异常 task={}", t.taskId, e); }
             try { asks.cancelTask(t.taskId, "user"); } catch (RuntimeException e) { log.warn("cancelTask 异常 task={}", t.taskId, e); }
             try {
                 ObjectNode cancelledData = Json.obj().put("by", "user");
@@ -51,7 +47,6 @@ public final class CascadeStopNode extends UpstreamNode {
                         null, null, null, null, cancelledData, EmitEvent.Mode.REPLACE));
             } catch (RuntimeException e) { log.debug("终态事件写入失败(日志可能已满)", e); }
         } else { // FAILED
-            try { subs.stopAll(t); } catch (RuntimeException e) { log.warn("stopAll 异常 task={}", t.taskId, e); }
             try { asks.cancelTask(t.taskId, "worker"); } catch (RuntimeException e) { log.warn("cancelTask 异常 task={}", t.taskId, e); }
             // LOG_OVERFLOW 不发 error 事件（现状该分支即无）
             String err = to.error();
