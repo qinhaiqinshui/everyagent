@@ -2,10 +2,12 @@ package dev.everyagent.worker.task;
 
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.contract.rpc.Rpc;
-import dev.everyagent.worker.agent.AgentFactory;
-import dev.everyagent.worker.agent.AgentService;
+import dev.everyagent.worker.agent.AgentBuilder;
+import dev.everyagent.worker.agent.AgentEntity;
+import dev.everyagent.worker.agent.AgentRunner;
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.hub.EventSink;
+import dev.everyagent.worker.modules.ConfigStore;
 import dev.everyagent.worker.modules.ConfigStore.ResolvedConfig;
 import dev.everyagent.worker.modules.WorkspaceManager;
 import dev.everyagent.worker.proto.Channels;
@@ -17,6 +19,7 @@ import dev.everyagent.worker.rpc.RpcContext;
 import dev.everyagent.worker.rpc.RpcDispatcher;
 import dev.everyagent.worker.ship.TaskInputHandler;
 import dev.everyagent.worker.slash.SlashTokenEncoder;
+import dev.everyagent.worker.task.ChatModelFactory;
 import dev.everyagent.worker.plugin.registry.TaskAdmissionPolicyRegistry;
 import dev.everyagent.worker.plugin.registry.TaskLifecycleRegistry;
 import dev.everyagent.worker.task.lifecycle.IdempotencyCheckNode;
@@ -46,6 +49,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CancellationException;
@@ -77,13 +81,14 @@ public class TaskManager implements TaskInputHandler, PendingAsks.StatusHook {
 
     /** 事件出口(基础设施·通信):任务事件扇出已收敛到 fanout(替代 HubPool.pubAllTasks/pubTaskStream)。 */
     private final EventSink eventSink;
-    private final AgentService agentService;
-    /** Agent 装配工厂(agent 层):主 agent 的模型/工具装配已迁出(buildMainAgent)。 */
-    private final AgentFactory agentFactory;
+    private final AgentBuilder agentBuilder;
+    private final AgentRunner runner;
+    /** 模型配置解析(configs + modelFactory 用于主 agent 装配时解析模型)。 */
+    private final ConfigStore configs;
+    private final ChatModelFactory modelFactory;
     /** slash 建后回调已移入洋葱下行节点 SlashNotifyNode(order=90)。 */
     /** 创建/再运行准备路径:workspace 解析与模型配置解析已迁 TaskBootstrap(TaskEntry 构造前的动作)。 */
     private final TaskBootstrap taskBootstrap;
-    private final SubAgentManager subs;
     private final PendingAsks asks;
     private final WorkerProperties props;
     private final RpcDispatcher dispatcher;
@@ -116,18 +121,20 @@ public class TaskManager implements TaskInputHandler, PendingAsks.StatusHook {
         void onTaskResumed(String taskId);
     }
 
-    public TaskManager(EventSink eventSink, AgentService agentService, AgentFactory agentFactory,
-            TaskBootstrap taskBootstrap, SubAgentManager subs, PendingAsks asks,
+    public TaskManager(EventSink eventSink, AgentBuilder agentBuilder, AgentRunner runner,
+            ConfigStore configs, ChatModelFactory modelFactory,
+            TaskBootstrap taskBootstrap, PendingAsks asks,
             WorkerProperties props, RpcDispatcher dispatcher,
             TaskStore store, RoundIndexStore roundIndexStore,
             TaskLifecycleContextFactory lifecycleContextFactory,
             TaskLifecycleExecutor lifecycleExecutor, TaskLifecycleRegistry lifecycleRegistry,
             TaskAdmissionPolicyRegistry admissionPolicyRegistry) {
         this.eventSink = eventSink;
-        this.agentService = agentService;
-        this.agentFactory = agentFactory;
+        this.agentBuilder = agentBuilder;
+        this.runner = runner;
+        this.configs = configs;
+        this.modelFactory = modelFactory;
         this.taskBootstrap = taskBootstrap;
-        this.subs = subs;
         this.asks = asks;
         this.props = props;
         this.dispatcher = dispatcher;
@@ -165,7 +172,7 @@ public class TaskManager implements TaskInputHandler, PendingAsks.StatusHook {
         lifecycleRegistry.register(
                 new ResponseAckNode(eventSink), "worker");
         lifecycleRegistry.register(
-                new ThreadSubmitNode(vt, agentFactory, tasks, diskTasks, active, store, resumeListeners), "worker");
+                new ThreadSubmitNode(vt, agentBuilder, tasks, diskTasks, active, store, resumeListeners), "worker");
     }
 
     /**
@@ -906,9 +913,7 @@ public class TaskManager implements TaskInputHandler, PendingAsks.StatusHook {
             ctx.ok(Json.obj().put("taskId", t.taskId).put("status", t.status.wire()).put("alreadyTerminal", true));
             return;
         }
-        t.stopRequested = true; // 阻止取消竞态窗口内再启动新子 agent
         asks.cancelTask(t.taskId, "user");
-        subs.stopAll(t);
         Future<?> f = t.runFuture;
         boolean cancelled = f != null && f.cancel(true);
         log.debug("[cancel] rpcTaskCancel taskId={} runFutureNull={} cancelled={} futureDone={} interruptFlagNow={} callerThread={}",
@@ -1034,7 +1039,7 @@ public class TaskManager implements TaskInputHandler, PendingAsks.StatusHook {
     // ---- 任务内核 ----
 
     /**
-     * 任务内核：agentService.run(main) 一次 → TaskOutcome。
+     * 任务内核：runner.run(main) 一次 → TaskOutcome。
      * 异常翻译为 TaskOutcome（值对象），链上只传值。
      */
     private TaskKernel taskKernel() {
@@ -1047,7 +1052,7 @@ public class TaskManager implements TaskInputHandler, PendingAsks.StatusHook {
                             te.taskId, Thread.currentThread().getName());
                     throw new InterruptedException("cancelled");
                 }
-                agentService.run(main);
+                runner.run(main);
                 log.debug("[run] runner.run 正常返回(本轮 agent 完成) taskId={} thread={}",
                         te.taskId, Thread.currentThread().getName());
                 long startedAt = te.startedAt != null ? te.startedAt : 0;
@@ -1071,7 +1076,7 @@ public class TaskManager implements TaskInputHandler, PendingAsks.StatusHook {
     // consumeInput 已迁 TaskLifecycleContextImpl(授权门 beginRun/开轮/入会话内存随任务上下文走)。
 
     // truncateForEdit / truncateForColdEdit 已迁入 task-edit-resend 插件（EditTruncateProcessor）。
-    // buildMainAgent / resolveAgentConfig 已迁 AgentFactory(agent 层,方法体原样搬移);
+    // buildMainAgent / resolveAgentConfig 已迁 AgentBuilder(agent 层);
     // isWindows 随装配代码一并清理。
 
     // finish() 已删除——终态收口逻辑分散进 13 个上行节点（TaskLifecycleExecutor 驱动）。
@@ -1109,9 +1114,7 @@ public class TaskManager implements TaskInputHandler, PendingAsks.StatusHook {
         // 中断全部运行中任务线程，让洋葱上行段自然收口
         for (TaskEntry t : tasks.values()) {
             if (!t.status.terminal()) {
-                t.stopRequested = true;
                 asks.cancelTask(t.taskId, "worker");
-                subs.stopAll(t);
                 Future<?> f = t.runFuture;
                 if (f != null) {
                     f.cancel(true);
