@@ -8,7 +8,7 @@ import dev.everyagent.worker.modules.ConfigStore;
 import dev.everyagent.worker.modules.ConfigStore.ResolvedConfig;
 import dev.everyagent.worker.proto.ShortIds;
 import dev.everyagent.worker.proto.SnowflakeId;
-import dev.everyagent.worker.task.AgentEntity;
+import dev.everyagent.worker.agent.AgentEntity;
 import dev.everyagent.worker.task.ChatModelFactory;
 import dev.everyagent.worker.task.RootCause;
 import dev.everyagent.worker.task.TaskEntry;

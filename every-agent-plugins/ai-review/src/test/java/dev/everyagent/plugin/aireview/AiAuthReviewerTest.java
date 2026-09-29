@@ -4,7 +4,7 @@ import dev.everyagent.worker.AgentClientFactory;
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.modules.ConfigStore;
 import dev.everyagent.worker.modules.ConfigStore.ResolvedConfig;
-import dev.everyagent.worker.task.AgentEntity;
+import dev.everyagent.worker.agent.AgentEntity;
 import dev.everyagent.worker.task.ChatModelFactory;
 import dev.everyagent.worker.task.EventRecord;
 import dev.everyagent.worker.task.TaskEntry;

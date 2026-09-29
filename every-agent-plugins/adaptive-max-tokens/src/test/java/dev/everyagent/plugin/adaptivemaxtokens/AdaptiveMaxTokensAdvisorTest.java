@@ -2,7 +2,7 @@ package dev.everyagent.plugin.adaptivemaxtokens;
 
 import dev.everyagent.plugin.api.model.ModelConfig;
 import dev.everyagent.worker.config.WorkerProperties;
-import dev.everyagent.worker.task.AgentEntity;
+import dev.everyagent.worker.agent.AgentEntity;
 import dev.everyagent.worker.task.TaskEntry;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.client.ChatClientRequest;

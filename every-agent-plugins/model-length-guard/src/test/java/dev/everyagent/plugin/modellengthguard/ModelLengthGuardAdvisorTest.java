@@ -2,7 +2,7 @@ package dev.everyagent.plugin.modellengthguard;
 
 import dev.everyagent.plugin.api.spi.TokenEstimator;
 import dev.everyagent.worker.config.WorkerProperties;
-import dev.everyagent.worker.task.AgentEntity;
+import dev.everyagent.worker.agent.AgentEntity;
 import dev.everyagent.worker.task.TaskEntry;
 import dev.everyagent.plugin.api.model.ModelConfig;
 import org.junit.jupiter.api.Test;

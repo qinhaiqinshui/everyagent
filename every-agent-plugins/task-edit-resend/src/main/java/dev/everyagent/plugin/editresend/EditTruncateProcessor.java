@@ -7,7 +7,7 @@ import dev.everyagent.worker.proto.SnowflakeId;
 import dev.everyagent.worker.hub.EventSink;
 import dev.everyagent.worker.proto.Channels;
 import dev.everyagent.worker.proto.Events;
-import dev.everyagent.worker.task.AgentEntity;
+import dev.everyagent.worker.agent.AgentEntity;
 import dev.everyagent.worker.task.ConversationLoader;
 import dev.everyagent.worker.task.SubAgentManager;
 import dev.everyagent.worker.task.TaskEntry;

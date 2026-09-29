@@ -172,7 +172,7 @@ public class TaskManager implements TaskInputHandler, PendingAsks.StatusHook {
         lifecycleRegistry.register(
                 new ResponseAckNode(eventSink), "worker");
         lifecycleRegistry.register(
-                new ThreadSubmitNode(vt, agentBuilder, tasks, diskTasks, active, store, resumeListeners), "worker");
+                new ThreadSubmitNode(vt, agentBuilder, configs, modelFactory, tasks, diskTasks, active, store, resumeListeners), "worker");
     }
 
     /**

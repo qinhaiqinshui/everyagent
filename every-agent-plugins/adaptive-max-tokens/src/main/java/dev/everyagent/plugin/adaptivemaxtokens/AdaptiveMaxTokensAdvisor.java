@@ -2,7 +2,7 @@ package dev.everyagent.plugin.adaptivemaxtokens;
 
 import com.openai.errors.OpenAIServiceException;
 import dev.everyagent.worker.config.WorkerProperties;
-import dev.everyagent.worker.task.AgentEntity;
+import dev.everyagent.worker.agent.AgentEntity;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClientRequest;

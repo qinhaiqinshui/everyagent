@@ -4,7 +4,7 @@ import dev.everyagent.plugin.api.model.EmitEvent;
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.proto.SnowflakeId;
 import dev.everyagent.worker.proto.TaskDtos.Usage;
-import dev.everyagent.worker.task.AgentEntity;
+import dev.everyagent.worker.agent.AgentEntity;
 import dev.everyagent.worker.task.ContextOverflow;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

@@ -5,7 +5,7 @@ import dev.everyagent.plugin.api.spi.AdvisorContext;
 import dev.everyagent.plugin.api.spi.AdvisorProvider;
 import dev.everyagent.worker.skill.SlashTokenResolveAdvisor;
 import dev.everyagent.worker.slash.SlashTokenHandler;
-import dev.everyagent.worker.task.AgentEntity;
+import dev.everyagent.worker.agent.AgentEntity;
 import org.springframework.ai.chat.client.advisor.api.Advisor;
 import org.springframework.core.Ordered;
 

@@ -5,7 +5,7 @@ import dev.everyagent.plugin.api.spi.AdvisorContext;
 import dev.everyagent.plugin.api.spi.AdvisorProvider;
 import dev.everyagent.plugin.api.spi.SandboxBackend;
 import dev.everyagent.worker.plugin.AdvisorContextImpl;
-import dev.everyagent.worker.task.AgentEntity;
+import dev.everyagent.worker.agent.AgentEntity;
 import org.springframework.ai.chat.client.advisor.api.Advisor;
 import org.springframework.core.Ordered;
 

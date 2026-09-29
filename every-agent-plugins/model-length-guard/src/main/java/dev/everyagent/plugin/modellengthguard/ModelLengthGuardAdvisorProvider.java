@@ -6,7 +6,7 @@ import dev.everyagent.plugin.api.spi.AdvisorProvider;
 import dev.everyagent.plugin.api.spi.TokenEstimator;
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.plugin.AdvisorContextImpl;
-import dev.everyagent.worker.task.AgentEntity;
+import dev.everyagent.worker.agent.AgentEntity;
 import org.springframework.ai.chat.client.advisor.ToolCallingAdvisor;
 import org.springframework.ai.chat.client.advisor.api.Advisor;
 

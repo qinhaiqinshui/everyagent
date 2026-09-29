@@ -3,7 +3,10 @@ package dev.everyagent.worker.task.lifecycle;
 import dev.everyagent.plugin.api.task.TaskChain;
 import dev.everyagent.plugin.api.task.TaskLifecycleContext;
 import dev.everyagent.plugin.api.task.TaskLifecycleNode;
-import dev.everyagent.worker.agent.AgentFactory;
+import dev.everyagent.worker.agent.AgentBuilder;
+import dev.everyagent.worker.modules.ConfigStore;
+import dev.everyagent.worker.modules.ConfigStore.ResolvedConfig;
+import dev.everyagent.worker.task.ChatModelFactory;
 import dev.everyagent.worker.task.ConversationLoader;
 import dev.everyagent.worker.task.RootCause;
 import dev.everyagent.worker.task.TaskEntry;
@@ -15,6 +18,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import tools.jackson.databind.JsonNode;
 
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
@@ -32,19 +36,24 @@ public final class ThreadSubmitNode implements TaskLifecycleNode {
     private static final Logger log = LoggerFactory.getLogger(ThreadSubmitNode.class);
 
     private final ExecutorService vt;
-    private final AgentFactory agentFactory;
+    private final AgentBuilder agentBuilder;
+    private final ConfigStore configs;
+    private final ChatModelFactory modelFactory;
     private final Map<String, TaskEntry> tasks;
     private final Map<String, TaskStore.StoredTask> diskTasks;
     private final AtomicInteger active;
     private final TaskStore store;
     private final List<TaskManager.TaskResumeListener> resumeListeners;
 
-    public ThreadSubmitNode(ExecutorService vt, AgentFactory agentFactory,
+    public ThreadSubmitNode(ExecutorService vt, AgentBuilder agentBuilder,
+            ConfigStore configs, ChatModelFactory modelFactory,
             Map<String, TaskEntry> tasks, Map<String, TaskStore.StoredTask> diskTasks,
             AtomicInteger active, TaskStore store,
             List<TaskManager.TaskResumeListener> resumeListeners) {
         this.vt = vt;
-        this.agentFactory = agentFactory;
+        this.agentBuilder = agentBuilder;
+        this.configs = configs;
+        this.modelFactory = modelFactory;
         this.tasks = tasks;
         this.diskTasks = diskTasks;
         this.active = active;
@@ -73,7 +82,19 @@ public final class ThreadSubmitNode implements TaskLifecycleNode {
 
         // ---- 设置 VT 阶段 context 回调 ----
         impl.initialInput(UserInput.of(impl.input(), impl.rawContent()));
-        impl.mainAgentBuilder(prior -> agentFactory.buildMainAgent(t, prior));
+        impl.mainAgentBuilder(prior -> {
+            Map<String, Object> props = new HashMap<>();
+            props.put("taskEntry", t);
+            props.put("taskId", t.taskId);
+            props.put("workspaceRoot", t.workspaceRoot);
+            props.put("configId", t.snapshot.configId());
+            ResolvedConfig cfg = configs.resolve(t.snapshot.configId());
+            ChatModelFactory.AgentModel am = modelFactory.buildAgentModel(cfg, t.mainAgentId, t.events, null);
+            return agentBuilder.create(t.mainAgentId, am.chatModel(), am.options(), t.events, props)
+                    .title("主 agent")
+                    .conversation(prior)
+                    .build();
+        });
         impl.concurrencyReleaser(() -> active.decrementAndGet());
         impl.diskIndexer(st -> diskTasks.put(st.taskId(), st));
         impl.registryRemover(() -> tasks.remove(t.taskId, t));
