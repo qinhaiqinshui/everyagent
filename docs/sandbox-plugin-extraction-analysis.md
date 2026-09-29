@@ -140,21 +140,43 @@ public interface SandboxBackend {
     /** 工作区被删除时调用;后端 best-effort 清理挂载等;默认 no-op */
     default void onWorkspaceRemoved(Path root) {}
 
-    // ===== 新增：工具注册策略（核心消除 isWslBackend 依赖）=====
+    // ===== 新增：追加宿主命令工具（替代 supportsHostCommandOptIn）=====
     
     /**
-     * 当前后端是否以 bash 为主、可追加 powershell 工具（用户任务级 opt-in）。
-     * windows-mic 返回 false（命令工具本就是 PowerShell）。
-     * wsl-ubuntu 返回 true（bash 为主，powershell 走宿主 Windows 原生）。
+     * 当前后端是否运行在隔离环境中、可追加一个"宿主原生命令工具"供 AI opt-in 使用。
+     * 
+     * 语义：沙箱后端（如 wsl-ubuntu）在隔离的 Linux 环境中运行 bash，
+     * 但宿主 OS（Windows）上另有原生命令能力（如 powershell）。
+     * 返回 true 时，核心注册斜杠命令让用户选择是否追加宿主原生命令工具；
+     * 追加的工具由 {@link #hostCommandToolProvider()} 提供。
+     * 
+     * windows-mic 返回 false（命令工具本就是宿主原生的，无追加需求）。
+     * wsl-ubuntu 返回 true（bash 在发行版内，powershell 在宿主 Windows）。
+     * docker 返回 false 或 true（取决于是否支持 docker exec 回宿主）。
+     * direct 返回 false。
      */
-    default boolean needsPowerShellOptIn() { return false; }
+    default boolean supportsHostCommandOptIn() { return false; }
+    
+    /**
+     * 追加的宿主原生命令工具提供者（仅在 supportsHostCommandOptIn()=true 时调用）。
+     * 
+     * 返回一个 ToolProvider，核心将其注册为内置工具提供者。
+     * ToolProvider 内部自行决定 appliesTo 条件（如任务级开关）和 createTools 逻辑。
+     * 后端通过此方法将"powershell 工具"或"宿主 bash 工具"等注入核心，
+     * 核心不需要知道具体是什么命令工具。
+     * 
+     * 默认返回 null（不支持）。
+     */
+    default java.util.function.Supplier<ToolProvider> hostCommandToolProvider() { return null; }
 
     // ===== 删除的 WSL 专属方法 =====
-    // boolean isWslBackend();       → 删除，由 needsPowerShellOptIn() 等替代
+    // boolean isWslBackend();       → 删除
     // default boolean isWslBwrap(); → 删除
     // default boolean isWslDirect(); → 删除
 }
 ```
+
+**为什么不用 `supportsHostCommandOptIn()`**：powershell 是 Windows 专属概念。在 Linux/Mac 上不存在 powershell，但同样可能有"沙箱内 bash + 宿主追加工具"的需求（如 Docker 沙箱追加宿主 zsh）。`supportsHostCommandOptIn()` + `hostCommandToolProvider()` 是通用抽象：后端声明是否支持追加宿主工具，并通过 ToolProvider SPI 提供具体实现，核心不关心它叫 powershell 还是别的。
 
 ### 2.3 核心组件改造
 
@@ -217,10 +239,13 @@ sandbox.onWorkspaceRemoved(root);  // 后端自己处理 umount，默认 no-op
 ```java
 // 删除 import OsSandbox.isWslBackend()
 // 改为：
-if (sandbox.needsPowerShellOptIn()) {
+if (sandbox.supportsHostCommandOptIn()) {
     // 注册 /允许AI访问电脑 斜杠命令
+    // 斜杠命令的名称/描述/图标由 Provider 自行定义（仍是"允许AI访问电脑"）
 }
 ```
+
+PowerShellEnableSlashProvider、PowerShellEnableToken、PowerShellEnableSlashResolver 这三个 powershell 相关类**留在 worker 核心**——它们是斜杠命令实现，不是 WSL 概念。改变的是注册条件：从 `isWslBackend()` 改为 `supportsHostCommandOptIn()`。具体注册的"追加工具"（PowerShellToolProvider）由 `sandbox.hostCommandToolProvider()` 提供，核心只负责注册。
 
 #### BashToolProvider / PowerShellToolProvider
 ```java
@@ -276,8 +301,8 @@ public final class OsSandbox implements SandboxBackend {
     // - SandboxProviderRegistry.select() → delegate
     // - DIRECT 回退：runDirect() / runDirectCommand()
     // - spawnNative()
-    // - 新增 SPI 方法默认实现（toSandboxPath/toHostPath/translateCommandForGate/onWorkspaceRemoved/needsPowerShellOptIn）
-    //   → OsSandbox 作为 DIRECT 后端，路径翻译方法返回 null，needsPowerShellOptIn 返回 false
+    // - 新增 SPI 方法默认实现（toSandboxPath/toHostPath/translateCommandForGate/onWorkspaceRemoved/supportsHostCommandOptIn）
+    //   → OsSandbox 作为 DIRECT 后端，路径翻译方法返回 null，supportsHostCommandOptIn 返回 false
     //   → delegate 不为 null 时，转发到 delegate 的对应方法
 }
 ```
@@ -306,7 +331,7 @@ every-agent-plugins/
 │   └── src/main/java/dev/everyagent/plugin/sandbox/wslubuntu/
 │       ├── WslUbuntuSandboxPlugin.java
 │       ├── WslUbuntuSandboxProvider.java       (id="wsl-ubuntu", priority=10)
-│       ├── WslUbuntuSandboxBackend.java         (实现 toSandboxPath/toHostPath/translateCommandForGate/onWorkspaceRemoved/needsPowerShellOptIn)
+│       ├── WslUbuntuSandboxBackend.java         (实现 toSandboxPath/toHostPath/translateCommandForGate/onWorkspaceRemoved/supportsHostCommandOptIn)
 │       ├── WslUbuntuSandbox.java                 (原 WslDirectSandbox)
 │       ├── WslPathMapper.java                   (原 worker/os/wsl/WslPathMapper，搬入插件)
 │       ├── WslUmounter.java                     (原 worker/os/wsl/WslUmounter，搬入插件)
@@ -347,7 +372,7 @@ public final class WslUbuntuSandboxBackend implements SandboxBackend {
     }
     
     @Override
-    public boolean needsPowerShellOptIn() {
+    public boolean supportsHostCommandOptIn() {
         return true;  // bash 为主，可追加 powershell
     }
     
@@ -386,7 +411,7 @@ public void activate(WorkerPluginContext ctx) {
 }
 ```
 
-sandbox-wsl-ubuntu 插件还需注册 PowerShellEnableSlashProvider（从 worker 移出，因为这是 WSL 后端专属的）。或者 PowerShellEnableSlashProvider 留在 worker 但改用 `sandbox.needsPowerShellOptIn()` 判定——**后者更简洁**，不移动。
+sandbox-wsl-ubuntu 插件还需注册 PowerShellEnableSlashProvider（从 worker 移出，因为这是 WSL 后端专属的）。或者 PowerShellEnableSlashProvider 留在 worker 但改用 `sandbox.supportsHostCommandOptIn()` 判定——**后者更简洁**，不移动。
 
 ### 2.9 plugin.json
 
@@ -482,7 +507,7 @@ public final class DockerSandboxBackend implements SandboxBackend {
     }
     
     @Override
-    public boolean needsPowerShellOptIn() { return false; }  // 容器内无 powershell
+    public boolean supportsHostCommandOptIn() { return false; }  // 容器内无 powershell
     
     @Override
     public boolean registerBashTool() { return true; }  // 容器内 bash
@@ -530,7 +555,7 @@ auto 模式下，Docker 可用时优先级最高 (priority=30)，自动选择。
 ## 四、迁移步骤（执行顺序）
 
 ### Step 1: SandboxBackend SPI 接口改造（plugin-api）
-- 新增 5 个 default 方法：`toSandboxPath()`、`toHostPath()`、`translateCommandForGate()`、`onWorkspaceRemoved()`、`needsPowerShellOptIn()`
+- 新增 5 个 default 方法：`toSandboxPath()`、`toHostPath()`、`translateCommandForGate()`、`onWorkspaceRemoved()`、`supportsHostCommandOptIn()`
 - 删除 3 个 WSL 专属方法：`isWslBackend()`、`isWslBwrap()`、`isWslDirect()`
 - `DirectSpawnSupport` 移到 plugin-api 的 `spi` 包，改为 public
 
@@ -540,7 +565,7 @@ auto 模式下，Docker 可用时优先级最高 (priority=30)，自动选择。
 - **SkillAdvisor**：删除 `WslPathMapper`/`isWslBackend()`/`isWslDirect()` 引用，知识包路径翻译改用 `sandbox.toSandboxPath()`
 - **ExternalFileTokenResolver**：删除 `WslPathMapper`/`isWslDirect()`/`isWslBwrap()` 引用，沙箱内路径改用 `sandbox.toSandboxPath()`
 - **WorkspaceManager**：删除 `WslUmounter` 注入，删除工作区时改调 `sandbox.onWorkspaceRemoved(root)`
-- **PowerShellEnableSlashProvider**：删除 `isWslBackend()` 条件，改用 `sandbox.needsPowerShellOptIn()`
+- **PowerShellEnableSlashProvider**：删除 `isWslBackend()` 条件，改用 `sandbox.supportsHostCommandOptIn()`
 - **WorkerProperties**：删除 `Wsl` 嵌套类、`interceptPrivilege` 字段；`type` 取值更新
 - **OsSandbox**：删除 `Backend` 枚举、所有 WSL/windows 分发逻辑、`isWsl*()` 方法；新增 SPI 方法转发到 delegate
 
@@ -559,7 +584,7 @@ auto 模式下，Docker 可用时优先级最高 (priority=30)，自动选择。
 - 创建模块、`pom.xml`、`plugin.json`
 - 移入 `WslDirectSandbox`（改名 `WslUbuntuSandbox`）、`WslPathMapper`、`WslUmounter` + Provider + Backend + 入口类
 - 从删除的 `WslBwrapSandbox` 中提取共享类型到 `WslCommon.java`
-- Backend 实现 `toSandboxPath()`/`toHostPath()`/`translateCommandForGate()`/`onWorkspaceRemoved()`/`needsPowerShellOptIn()`
+- Backend 实现 `toSandboxPath()`/`toHostPath()`/`translateCommandForGate()`/`onWorkspaceRemoved()`/`supportsHostCommandOptIn()`
 - 后端 id = `wsl-ubuntu`
 
 ### Step 6: 更新 ARCHITECTURE.md
@@ -574,13 +599,13 @@ auto 模式下，Docker 可用时优先级最高 (priority=30)，自动选择。
 - 验证路径翻译：FsToolSupport 读 AI 产生的 Linux 路径正确翻译回 Windows 路径
 - 验证 SkillAdvisor 知识包路径正确翻译为沙箱内路径
 - 验证工作区删除时 onWorkspaceRemoved 被调用
-- 验证 needsPowerShellOptIn 控制斜杠命令注册
+- 验证 supportsHostCommandOptIn 控制斜杠命令注册
 
 ## 五、风险与注意事项
 
 | 风险 | 缓解 |
 |------|------|
-| `SandboxBackend` SPI 删除 `isWslBackend()` 等方法 | 已用 `needsPowerShellOptIn()` 等通用方法替代；外部插件如有引用需迁移 |
+| `SandboxBackend` SPI 删除 `isWslBackend()` 等方法 | 已用 `supportsHostCommandOptIn()` 等通用方法替代；外部插件如有引用需迁移 |
 | `toHostPath()` 翻译逻辑复杂（多种前缀匹配） | 完整逻辑搬入 wsl-ubuntu 插件 Backend；核心只调接口，不关心实现 |
 | OsSandbox 被多个核心组件直接引用 | 保留为 `@Component` + `SandboxBackend`，所有方法签名兼容（SPI 方法转发 delegate） |
 | wsl-ubuntu 插件依赖 worker | 与 git 插件同模式，内置插件允许依赖 worker |
