@@ -2,6 +2,7 @@ package dev.everyagent.worker.task;
 
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.plugin.api.model.EmitEvent;
+import dev.everyagent.worker.agent.AgentEntity;
 import dev.everyagent.worker.proto.Events;
 import dev.everyagent.worker.proto.Events.ToolCallPart;
 import dev.everyagent.worker.proto.SnowflakeId;
@@ -110,7 +111,8 @@ public class WorkerToolEventAdvisor extends ToolCallingAdvisor {
         }
         // 防御:任务已终态(用户取消/finish 完成)时不再发射瞬态事件。
         // 即使 reactive 链的 dispose 有微秒级竞态窗口,残留 chunk 也不会泄漏到前端。
-        if (a.task.status.terminal()) {
+        TaskEntry t = (TaskEntry) a.properties.get("taskEntry");
+        if (t.status.terminal()) {
             return;
         }
         AssistantMessage out = cr.getResult().getOutput();
@@ -143,13 +145,14 @@ public class WorkerToolEventAdvisor extends ToolCallingAdvisor {
         }
         // 防御:任务已终态时不再发射任何事件(取消后 dispose 与 reactor 线程间有竞态窗口,
         // 残留轮次在此直接丢弃,不再产生 message/usage 等落盘事件,也不写入 lastText)。
-        if (a.task.status.terminal()) {
+        TaskEntry t = (TaskEntry) a.properties.get("taskEntry");
+        if (t.status.terminal()) {
             log.warn("[leak-guard] 任务已终态({}),拦截轮次事件发射 agentId={} thread={}",
-                    a.task.status, a.agentId, Thread.currentThread().getName());
+                    t.status, a.agentId, Thread.currentThread().getName());
             return chatClientResponse;
         }
         log.debug("[advisor] doAfterStream 发射轮次 agentId={} taskId={} hasToolCalls={} thread={}",
-                a.agentId, a.task.taskId,
+                a.agentId, t.taskId,
                 out.getToolCalls() != null && !out.getToolCalls().isEmpty(),
                 Thread.currentThread().getName());
         long rid = ensureRoundId();
@@ -226,21 +229,16 @@ public class WorkerToolEventAdvisor extends ToolCallingAdvisor {
                 // 最近一轮实测 usage 按 agent 记录(主/子都写;供 ContextCompressionAdvisor 读取 offset),
                 // 同时保存累计 usage 与上下文快照(台账 usage/context 字段供体)。
                 a.recordLastRound(roundUsage, a.usageRef().get(), contextWindowTokens(), a.options.getModel());
-                // 子 agent:每轮 usage 后刷新内存台账(agents.json 承载最新用量/上下文,崩溃冷启动
-                // 与 list_agents/wait_agents 均以台账为准)并异步触发落盘;主 agent 不进台账。
-                // Phase 4: 台账已迁 subagent 插件(事件投影),usage 事件已由上文 events.usage() 发射,
-                // 插件经 EventLog.Listener 订阅维护台账,此处不再直接写 agentLedger。
-                // 主 agent:记录最近一轮上下文用量(任务列表/聊天页电池数据源,随 meta 持久化)
+                // 记录最近一轮上下文用量(任务列表/聊天页电池数据源,随 meta 持久化)
                 // → 触发任务列表用量实时广播(task.updated,每轮一次)。
-                if (a.kind == AgentEntity.Kind.MAIN) {
-                    a.task.recordUsage(roundUsage, contextWindowTokens(), a.options.getModel());
-                    Runnable broadcast = a.task.onUsageBroadcast;
-                    if (broadcast != null) {
-                        try {
-                            broadcast.run();
-                        } catch (RuntimeException e) {
-                            // 广播失败不阻塞模型流
-                        }
+                // 所有 agent 均记录 usage + 触发广播(Phase 6: 去除 kind 判断)。
+                t.recordUsage(roundUsage, contextWindowTokens(), a.options.getModel());
+                Runnable broadcast = t.onUsageBroadcast;
+                if (broadcast != null) {
+                    try {
+                        broadcast.run();
+                    } catch (RuntimeException e) {
+                        // 广播失败不阻塞模型流
                     }
                 }
             }
@@ -251,6 +249,7 @@ public class WorkerToolEventAdvisor extends ToolCallingAdvisor {
     @Override
     protected List<Message> doGetNextInstructionsForToolCallStream(ChatClientRequest chatClientRequest,
             ChatClientResponse chatClientResponse, ToolExecutionResult toolExecutionResult) {
+        TaskEntry t = (TaskEntry) a.properties.get("taskEntry");
         // 工具已执行:只发「本轮刚下发」的工具结果(callId 与 message.toolCalls[].id 配对)。
         // 此前遍历整个 conversationHistory 会把历史所有 ToolResponseMessage 逐条重发,
         // 导致同一 callId 的 tool.result 在每轮工具执行后都被再次落盘(前端按 seq 无法去重,
@@ -270,7 +269,7 @@ public class WorkerToolEventAdvisor extends ToolCallingAdvisor {
                             continue; // 历史轮次的工具结果:本轮未下发,不重复发射
                         }
                         // 防御:任务已终态时不再发射 tool.result(与 doAfterStream 同语义)
-                        if (a.task.status.terminal()) {
+                        if (t.status.terminal()) {
                             continue;
                         }
                         String summary = r.responseData() == null ? "(无返回)" : r.responseData();
@@ -320,7 +319,8 @@ public class WorkerToolEventAdvisor extends ToolCallingAdvisor {
 
     /** 任务快照 params 里的上下文窗口大小(未配置/非法回退默认窗口,与压缩/超限诊断口径一致)。 */
     private Long contextWindowTokens() {
-        JsonNode params = a.task.snapshot.params();
+        TaskEntry t = (TaskEntry) a.properties.get("taskEntry");
+        JsonNode params = t.snapshot.params();
         if (params != null && params.isObject() && params.has("contextWindowTokens")) {
             long v = params.path("contextWindowTokens").asLong(0);
             if (v > 0) {

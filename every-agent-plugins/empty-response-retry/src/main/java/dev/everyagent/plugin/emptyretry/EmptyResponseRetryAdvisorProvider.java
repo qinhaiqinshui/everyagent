@@ -11,8 +11,8 @@ import org.springframework.ai.chat.client.advisor.api.Advisor;
 /**
  * {@link EmptyResponseRetryAdvisor} 适配器。
  *
- * <p>order = {@link ToolCallingAdvisor#DEFAULT_ORDER} + 100（工具循环内侧第一圈），
- * scope = BOTH（主/子 agent 同挂）。每 run 新建实例。
+ * <p>order = {@link ToolCallingAdvisor#DEFAULT_ORDER} + 100（工具循环内侧第一圈）。
+ * 每 run 新建实例。
  */
 public class EmptyResponseRetryAdvisorProvider implements AdvisorProvider {
 
@@ -25,11 +25,6 @@ public class EmptyResponseRetryAdvisorProvider implements AdvisorProvider {
     @Override
     public String pluginId() {
         return "builtin.empty-response-retry";
-    }
-
-    @Override
-    public Scope scope() {
-        return Scope.BOTH;
     }
 
     @Override

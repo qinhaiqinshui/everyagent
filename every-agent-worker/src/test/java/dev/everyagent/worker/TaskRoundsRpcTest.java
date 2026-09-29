@@ -229,13 +229,13 @@ class TaskRoundsRpcTest {
         assertTrue(r0.path("finalReply").asString().contains("回声"),
                 "finalReply 应为 AI 最终回复: " + r0.path("finalReply").asString());
         assertTrue(r0.path("finalReply").asString().contains("你好"));
-        // wire:seq 一律字符串;闭合轮 endSeq 为非空字符串且 > startSeq;subs 恒数组
+        // wire:seq 一律字符串;闭合轮 endSeq 为非空字符串且 > startSeq;agentRanges 恒数组
         assertTrue(r0.path("startSeq").isString(), "startSeq 应为字符串(wire 口径)");
         long startSeq = Long.parseLong(r0.path("startSeq").asString());
         long endSeq = Long.parseLong(r0.path("endSeq").asString());
         assertTrue(startSeq > 0 && endSeq > startSeq, "闭合轮 endSeq > startSeq");
-        assertTrue(r0.path("subs").isArray());
-        assertTrue(r0.path("subs").isEmpty(), "无子 agent: " + r0.path("subs"));
+        assertTrue(r0.path("agentRanges").isArray());
+        assertTrue(r0.path("agentRanges").isEmpty(), "无子 agent: " + r0.path("agentRanges"));
         assertEquals("done", first.result().path("status").asString());
         assertFalse(first.result().path("live").asBoolean(false));
         assertTrue(first.result().path("open").isNull(), "终态 open=null");

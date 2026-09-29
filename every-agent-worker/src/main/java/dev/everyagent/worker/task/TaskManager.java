@@ -756,7 +756,7 @@ public class TaskManager implements TaskInputHandler, PendingAsks.StatusHook {
             lastIndex++;
             store.appendRound(taskId, new RoundIndex.Round(ShortIds.next("round"), lastIndex,
                     r.startSeq(), r.endSeq(), r.user(), r.finalReply(),
-                    r.subs(), 0L, 0L, null, r.userMessage()));
+                    r.agentRanges(), 0L, 0L, null, r.userMessage()));
             existingStarts.add(r.startSeq());
         }
     }
@@ -819,15 +819,15 @@ public class TaskManager implements TaskInputHandler, PendingAsks.StatusHook {
         if (r.userMessage() != null) {
             n.set("userMessage", r.userMessage()); // 完整 user.message payload:懒加载骨架起点(旧行缺失不写)
         }
-        ArrayNode subs = Json.arr();
-        for (RoundIndex.SubRange s : r.subs()) {
-            subs.add(Json.obj()
+        ArrayNode agentRanges = Json.arr();
+        for (RoundIndex.AgentRange s : r.agentRanges()) {
+            agentRanges.add(Json.obj()
                     .put("agentId", s.agentId())
                     .put("title", s.title())
                     .put("startSeq", s.startSeq() == null ? "" : String.valueOf(s.startSeq()))
                     .put("endSeq", s.endSeq() == null ? "" : String.valueOf(s.endSeq())));
         }
-        n.set("subs", subs);
+        n.set("agentRanges", agentRanges);
         return n;
     }
 

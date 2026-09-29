@@ -10,19 +10,13 @@ import org.springframework.core.Ordered;
 /**
  * {@link AgentsMdAdvisor} 适配器。
  *
- * <p>order = {@link Ordered#HIGHEST_PRECEDENCE} + 60，scope = BOTH（主/子 agent 同挂）。
- * 每 run 新建实例。
+ * <p>order = {@link Ordered#HIGHEST_PRECEDENCE} + 60。每 run 新建实例。
  */
 public class AgentsMdAdvisorProvider implements AdvisorProvider {
 
     @Override
     public String pluginId() {
         return "builtin.agents-md";
-    }
-
-    @Override
-    public Scope scope() {
-        return Scope.BOTH;
     }
 
     @Override

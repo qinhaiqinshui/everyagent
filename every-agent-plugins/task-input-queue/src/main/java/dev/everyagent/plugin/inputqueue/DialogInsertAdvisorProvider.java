@@ -27,9 +27,6 @@ public class DialogInsertAdvisorProvider implements AdvisorProvider {
     public String pluginId() { return "task-input-queue"; }
 
     @Override
-    public Scope scope() { return Scope.BOTH; }
-
-    @Override
     public int order() { return ToolCallingAdvisor.DEFAULT_ORDER + 30; }
 
     @Override

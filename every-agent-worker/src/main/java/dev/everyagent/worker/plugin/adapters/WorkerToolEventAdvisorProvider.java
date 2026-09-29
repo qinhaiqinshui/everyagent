@@ -11,7 +11,7 @@ import org.springframework.ai.chat.client.advisor.api.Advisor;
 /**
  * {@link WorkerToolEventAdvisor} 适配器（worker 事件发射）。
  *
- * <p>order = {@link ToolCallingAdvisor#DEFAULT_ORDER}，scope = BOTH（主/子 agent 同挂）。
+ * <p>order = {@link ToolCallingAdvisor#DEFAULT_ORDER}（主/子 agent 同挂）。
  * 每 run 新建实例（持有 per-run {@link AgentEntity}）。
  * 从 {@link AdvisorContext#toolCallingManager()} 获取（可能已被工厂装饰了
  * {@code LoopRepeatGuardToolManager} 的）ToolCallingManager。
@@ -25,11 +25,6 @@ public class WorkerToolEventAdvisorProvider implements AdvisorProvider {
     @Override
     public String pluginId() {
         return "builtin.worker-tool-event";
-    }
-
-    @Override
-    public Scope scope() {
-        return Scope.BOTH;
     }
 
     @Override

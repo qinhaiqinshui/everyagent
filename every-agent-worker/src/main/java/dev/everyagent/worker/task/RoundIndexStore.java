@@ -29,9 +29,9 @@ import java.util.TreeMap;
  *     (该行已在开轮时以 endSeq="" 落盘,续跑补出最终回复后由增量路径原位改写闭合);</li>
  * <li>中间过程事件(delta/thinking/message 带 toolCalls/tool.result/agent.status/task.trace/usage/
  *     ask 系列/error/cancelled 等)不单独成轮、不进轮记录正文,只用于子 agent 区间判断;</li>
- * <li>子 agent 归入「它 started 时所在」的当前轮:agent.started 开始一条 SubRange,
+ * <li>子 agent 归入「它 started 时所在」的当前轮:agent.started 开始一条 AgentRange,
  *     同 id 的 agent.done 关闭;到扫描窗口末尾仍未 done 则 endSeq 为 null;</li>
- * <li>一轮内可有多个子 agent,subs 按出现顺序;尚无主 agent 轮时的子 agent 事件忽略;
+ * <li>一轮内可有多个子 agent,agentRanges 按出现顺序;尚无主 agent 轮时的子 agent 事件忽略;
  *     agentId 缺失的旧 events.jsonl 行视为主线程(wireEvent 同口径)。</li>
  * </ul>
  */
@@ -54,7 +54,7 @@ public class RoundIndexStore {
         Long endSeq;
         String user;
         String finalReply = "";
-        final List<SubBuilder> subs = new ArrayList<>();
+        final List<AgentRangeBuilder> agentRanges = new ArrayList<>();
 
         RoundBuilder(long index, long startSeq, String user, JsonNode userMessage) {
             this.index = index;
@@ -67,26 +67,26 @@ public class RoundIndexStore {
             // durationMs/startedAt 扫描阶段均未知为 0(闭合行耗时由 applyRounds 从磁盘 prior.startedAt 算);
             // fileChanges 扫描阶段未知为 null(由 applyRounds 按轻量摘要写入闭合行)。
             return new RoundIndex.Round(roundId, index, startSeq, endSeq, user, finalReply,
-                    subs.stream().map(SubBuilder::toSubRange).toList(), 0L, 0L, null,
+                    agentRanges.stream().map(AgentRangeBuilder::toAgentRange).toList(), 0L, 0L, null,
                     userMessage);
         }
     }
 
     /** 一轮内单个子 agent 区间(未 done 时 endSeq 为 null)。 */
-    private static final class SubBuilder {
+    private static final class AgentRangeBuilder {
         final String agentId;
         final String title;
         final Long startSeq;
         Long endSeq;
 
-        SubBuilder(String agentId, String title, Long startSeq) {
+        AgentRangeBuilder(String agentId, String title, Long startSeq) {
             this.agentId = agentId == null ? "" : agentId;
             this.title = title == null ? "" : title;
             this.startSeq = startSeq;
         }
 
-        RoundIndex.SubRange toSubRange() {
-            return new RoundIndex.SubRange(agentId, title, startSeq, endSeq);
+        RoundIndex.AgentRange toAgentRange() {
+            return new RoundIndex.AgentRange(agentId, title, startSeq, endSeq);
         }
     }
 
@@ -104,7 +104,7 @@ public class RoundIndexStore {
         List<RoundBuilder> builders = new ArrayList<>();
         RoundBuilder current = null;
         // sub agentId → 当前轮内子区间(跨轮保留:done 可能在 started 所在轮之后才到达)
-        Map<String, SubBuilder> openSubs = new LinkedHashMap<>();
+        Map<String, AgentRangeBuilder> openAgentRanges = new LinkedHashMap<>();
 
         for (EventRecord r : events) {
             String event = r.event() == null ? "" : r.event();
@@ -128,13 +128,13 @@ public class RoundIndexStore {
                 if (current == null) {
                     continue; // 尚无主 agent 轮:异常,忽略
                 }
-                SubBuilder sub = new SubBuilder(subAgentId(r), subTitle(r), r.seq());
-                current.subs.add(sub);
-                openSubs.put(sub.agentId, sub);
+                AgentRangeBuilder agentRange = new AgentRangeBuilder(subAgentId(r), subTitle(r), r.seq());
+                current.agentRanges.add(agentRange);
+                openAgentRanges.put(agentRange.agentId, agentRange);
             } else if (subLifecycle && Events.AGENT_DONE.equals(event)) {
-                SubBuilder sub = openSubs.remove(subAgentId(r));
-                if (sub != null) {
-                    sub.endSeq = r.seq();
+                AgentRangeBuilder agentRange = openAgentRanges.remove(subAgentId(r));
+                if (agentRange != null) {
+                    agentRange.endSeq = r.seq();
                 }
             }
             // 其余过程事件(delta/thinking/带 toolCalls 的 message/tool.result/trace/usage/ask/error 等)
@@ -145,7 +145,7 @@ public class RoundIndexStore {
 
     /**
      * 整体重排 index:把每轮 index 加 baseIndex(例如磁盘已有 N 行,新轮从 N+1 起)。
-     * 轮内容(roundId/startSeq/endSeq/user/finalReply/subs/fileChanges)原样保留。
+     * 轮内容(roundId/startSeq/endSeq/user/finalReply/agentRanges/fileChanges)原样保留。
      */
     public List<RoundIndex.Round> reindex(List<RoundIndex.Round> rounds, long baseIndex) {
         if (rounds == null || rounds.isEmpty()) {
@@ -154,7 +154,7 @@ public class RoundIndexStore {
         List<RoundIndex.Round> out = new ArrayList<>(rounds.size());
         for (RoundIndex.Round r : rounds) {
             out.add(new RoundIndex.Round(r.roundId(), r.index() + baseIndex, r.startSeq(),
-                    r.endSeq(), r.user(), r.finalReply(), r.subs(),
+                    r.endSeq(), r.user(), r.finalReply(), r.agentRanges(),
                     r.durationMs(), r.startedAt(), r.fileChanges(), r.userMessage()));
         }
         return out;
@@ -248,7 +248,7 @@ public class RoundIndexStore {
      * <ul>
      * <li>磁盘已存在且已闭合 → 跳过(幂等);</li>
      * <li>磁盘已存在且未闭合(开轮路径已落盘)→ 扫描为闭合轮时<b>原地改写该行</b>为闭合
-     *     (endSeq/finalReply/subs 更新,index 沿用原行;续跑补出最终回复即闭合),
+     *     (endSeq/finalReply/agentRanges 更新,index 沿用原行;续跑补出最终回复即闭合),
      *     扫描仍未闭合则跳过(行已在,不重复);</li>
      * <li>磁盘不存在 → 跳过,不补写(开轮路径负责落盘,不做自愈/对账)。</li>
      * </ul>
@@ -288,7 +288,7 @@ public class RoundIndexStore {
                                 : 0L);
                 RoundIndex.Round closed = new RoundIndex.Round(prior.roundId(), prior.index(),
                         r.startSeq(), r.endSeq(), r.user(), r.finalReply(),
-                        r.subs(), dur, prior.startedAt(), fileChangesLight,
+                        r.agentRanges(), dur, prior.startedAt(), fileChangesLight,
                         r.userMessage() != null ? r.userMessage() : prior.userMessage());
                 if (store.rewriteRound(taskId, closed)) {
                     newlyClosed.add(closed); // 磁盘闭合成功才算「本轮新闭合」(带正确 roundId,供全文落盘)

@@ -9,7 +9,7 @@ import org.springframework.core.Ordered;
 /**
  * {@link SkillAdvisor} 适配器。
  *
- * <p>order = {@link Ordered#HIGHEST_PRECEDENCE} + 100，scope = MAIN（仅主 agent）。
+ * <p>order = {@link Ordered#HIGHEST_PRECEDENCE} + 100。
  * SkillAdvisor 是共享无状态单例（@Bean），create() 返回同一实例。
  */
 public class SkillAdvisorProvider implements AdvisorProvider {
@@ -23,11 +23,6 @@ public class SkillAdvisorProvider implements AdvisorProvider {
     @Override
     public String pluginId() {
         return "builtin.skill";
-    }
-
-    @Override
-    public Scope scope() {
-        return Scope.MAIN;
     }
 
     @Override

@@ -14,9 +14,9 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * ask_user 工具提供者（scope=MAIN）—— 包装 {@link AskUserTool}。
+ * ask_user 工具提供者 —— 包装 {@link AskUserTool}。
  *
- * <p>子 agent 不注册 ask_user（提问只能由主 agent 发起，§5.6），故 scope=MAIN。
+ * <p>子 agent 不注册 ask_user（提问只能由主 agent 发起，§5.6）。
  *
  * <p>createTools: {@code ToolCallbacks.from(new AskUserTool(asks, props, task, agentId))}，
  * 直接添加裸 ToolCallback——无人值守拦截逻辑已上移到 ToolExecutionInterceptor 责任链
@@ -35,11 +35,6 @@ public class AskUserToolProvider implements ToolProvider {
     @Override
     public String pluginId() {
         return "builtin-ask-user-tool";
-    }
-
-    @Override
-    public Scope scope() {
-        return Scope.MAIN;
     }
 
     @Override

@@ -1,6 +1,5 @@
 package dev.everyagent.plugin.unattended;
 
-import dev.everyagent.plugin.api.agent.AgentContext;
 import dev.everyagent.plugin.api.permission.TaskInfo;
 import dev.everyagent.plugin.api.spi.ToolExecutionChain;
 import dev.everyagent.plugin.api.spi.ToolExecutionContext;
@@ -18,6 +17,7 @@ import tools.jackson.databind.ObjectMapper;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 public class UnattendedToolInterceptor implements ToolExecutionInterceptor {
 
@@ -34,8 +34,8 @@ public class UnattendedToolInterceptor implements ToolExecutionInterceptor {
 
     @Override
     public ToolExecutionResult invoke(ToolExecutionContext ctx, ToolExecutionChain next) throws Exception {
-        AgentContext agentCtx = ctx.agentContext();
-        if (!(agentCtx instanceof TaskInfo task) || !Boolean.TRUE.equals(task.metadata().getOrDefault("unattended", false))) {
+        Map<String, Object> props = ctx.properties();
+        if (!(props.get("taskEntry") instanceof TaskInfo task) || !Boolean.TRUE.equals(task.metadata().getOrDefault("unattended", false))) {
             return next.proceed(ctx); // 不是无人值守模式，放行
         }
         Prompt prompt = ctx.prompt();

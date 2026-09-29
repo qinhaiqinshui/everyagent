@@ -2,6 +2,7 @@ package dev.everyagent.worker.task;
 
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.plugin.api.model.EmitEvent;
+import dev.everyagent.worker.agent.AgentEntity;
 import dev.everyagent.worker.proto.SnowflakeId;
 import org.springframework.ai.chat.client.ChatClientRequest;
 import org.springframework.ai.chat.client.ChatClientResponse;
@@ -15,7 +16,7 @@ import tools.jackson.databind.node.ObjectNode;
 import java.util.List;
 
 /**
- * 轮次索引 advisor(架构 §5.2 + 红线:一个 advisor 只负责一个功能;仅主 agent 挂载)。
+ * 轮次索引 advisor(架构 §5.2 + 红线:一个 advisor 只负责一个功能)。
  *
  * <p>职责:每次 {@code runner.run}(= 一条用户输入的完整模型流,含工具循环递归)
  * 正常完成时,把本轮「已闭合轮」增量补写进任务目录的 rounds.jsonl(每行一轮:
@@ -33,7 +34,7 @@ import java.util.List;
  *
  * <p>设计纪律:per-run 物化(每 run 新建实例,状态随实例隔离),多任务并发安全;
  * 落盘失败被 {@link RoundIndexStore} 吞掉,绝不阻断流的 doOnComplete 向 AgentRunner 传播。
- * 子 agent 不挂本 advisor({@code AgentClientFactory.forSub});防御性再校验 kind。
+ * 所有 agent 均挂载本 advisor。
  */
 public class RoundIndexAdvisor implements StreamAdvisor {
 
@@ -68,20 +69,18 @@ public class RoundIndexAdvisor implements StreamAdvisor {
 
     /** 一轮用户任务流完成:增量补写已闭合轮(耗时由 RoundIndexStore 从磁盘 startedAt 计算并随行内联),并对本次新闭合的轮推 round.closed(异常自吞,不阻断 onComplete)。 */
     private void persistRounds() {
-        if (a.kind != AgentEntity.Kind.MAIN) {
-            return; // 防御:仅主 agent(工厂只给主链挂载)
-        }
+        TaskEntry t = (TaskEntry) a.properties.get("taskEntry");
         // 取出本轮文件变更槽并清空(FileChangeAdvisor 收口填充;无变更时两槽均为 null)
-        JsonNode light = a.task.fileChangesLight;
-        JsonNode full = a.task.fileChangesFull;
-        a.task.fileChangesLight = null;
-        a.task.fileChangesFull = null;
+        JsonNode light = t.fileChangesLight;
+        JsonNode full = t.fileChangesFull;
+        t.fileChangesLight = null;
+        t.fileChangesFull = null;
         // 本轮端到端耗时:由 persistClosedRounds/applyRounds 取当前时间减去开轮时随行落盘的
         // startedAt 计算,随闭合行同一次落盘内联,保证下方 round.closed 推送时耗时已在磁盘
         // (消除「前端收到通知即拉快照、却拉在耗时写入之前」的竞态,见 §7.15.1);耗时不再依赖
         // 内存计时槽,任务出错停止后继续(续跑改判闭合)同样以磁盘 startedAt 计耗时。
         List<RoundIndex.Round> closed =
-                rounds.persistClosedRounds(store, a.task.log, a.task.taskId, a.task.mainAgentId,
+                rounds.persistClosedRounds(store, t.log, t.taskId, t.mainAgentId,
                         light, full);
         for (RoundIndex.Round r : closed) {
             if (r.endSeq() != null) {
@@ -92,7 +91,7 @@ public class RoundIndexAdvisor implements StreamAdvisor {
                 if (r.finalReply() != null) {
                     roundClosedData.put("finalReply", r.finalReply());
                 }
-                a.task.events.emit(EmitEvent.transientOf(SnowflakeId.next(), "round.closed", null,
+                t.events.emit(EmitEvent.transientOf(SnowflakeId.next(), "round.closed", null,
                         null, null, null, null, roundClosedData, EmitEvent.Mode.REPLACE));
             }
         }

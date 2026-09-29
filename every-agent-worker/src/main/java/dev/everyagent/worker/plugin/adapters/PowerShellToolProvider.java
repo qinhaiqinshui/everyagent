@@ -12,7 +12,7 @@ import java.nio.file.Path;
 import java.util.List;
 
 /**
- * PowerShell 命令工具提供者（scope=BOTH）—— 包装 {@link PowerShellTool}。
+ * PowerShell 命令工具提供者 —— 包装 {@link PowerShellTool}。
  *
  * <p>appliesTo: 当 Windows 且沙箱不注册 bash 工具时返回 true（PowerShell 为唯一命令工具），
  * 或任务级 powershellEnabled 开启时返回 true（bash 之外追加 PowerShell）。
@@ -32,11 +32,6 @@ public class PowerShellToolProvider implements ToolProvider {
     @Override
     public String pluginId() {
         return "builtin-powershell-tool";
-    }
-
-    @Override
-    public Scope scope() {
-        return Scope.BOTH;
     }
 
     @Override

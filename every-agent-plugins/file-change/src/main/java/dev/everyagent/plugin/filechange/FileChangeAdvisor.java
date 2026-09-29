@@ -82,7 +82,7 @@ public class FileChangeAdvisor implements StreamAdvisor {
     @Override
     public Flux<ChatClientResponse> adviseStream(ChatClientRequest chatClientRequest,
             StreamAdvisorChain streamAdvisorChain) {
-        if (a.kind == AgentEntity.Kind.MAIN && !collectorInitialized) {
+        if (!collectorInitialized) {
             a.task.fileChanges = new FileChangesCollector();
             collectorInitialized = true;
         }
@@ -120,9 +120,6 @@ public class FileChangeAdvisor implements StreamAdvisor {
     private void finalizeIfLastTurn() {
         if (turnHasToolCalls) {
             return; // 工具轮:ToolCallingAdvisor 将继续递归,收口延后到最终回答轮
-        }
-        if (a.kind != AgentEntity.Kind.MAIN) {
-            return; // 子 agent 只记录不写槽,任务级文件变更由主 agent 统一收口
         }
         FileChangesCollector c = a.task.fileChanges;
         if (c == null || c.isEmpty()) {

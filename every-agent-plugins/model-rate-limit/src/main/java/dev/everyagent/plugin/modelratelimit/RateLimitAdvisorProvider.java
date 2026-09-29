@@ -11,8 +11,7 @@ import org.springframework.ai.chat.client.advisor.api.Advisor;
  * {@link RateLimitAdvisor} 的提供者。
  *
  * <p>order = {@link ToolCallingAdvisor#DEFAULT_ORDER} + 500（最内层，
- * 在 ContextCompression +400 之后）。scope = BOTH（主/子 agent 同挂）。
- * 每 run 新建实例，经 {@link AdvisorContextImpl#agentEntity()} 获取
+ * 在 ContextCompression +400 之后）。每 run 新建实例，经 {@link AdvisorContextImpl#agentEntity()} 获取
  * {@link AgentEntity}（含 task/events/snapshot），与
  * {@link ModelRateLimiterRegistry} 一起构造 {@link RateLimitAdvisor}。
  */
@@ -27,11 +26,6 @@ public class RateLimitAdvisorProvider implements AdvisorProvider {
     @Override
     public String pluginId() {
         return "builtin.rate-limit";
-    }
-
-    @Override
-    public Scope scope() {
-        return Scope.BOTH;
     }
 
     @Override

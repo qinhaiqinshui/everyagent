@@ -11,7 +11,7 @@ import org.springframework.ai.tool.ToolCallback;
 import java.util.List;
 
 /**
- * 文件工具提供者（scope=BOTH）—— 包装 {@link FileTools}。
+ * 文件工具提供者 —— 包装 {@link FileTools}。
  *
  * <p>createTools: {@code ToolCallbacks.from(new FileTools(fs, task, agentId))}，
  * 与改造前 TaskManager/SubAgentManager 中的装配方式完全一致。
@@ -27,11 +27,6 @@ public class FileToolsProvider implements ToolProvider {
     @Override
     public String pluginId() {
         return "builtin-file-tools";
-    }
-
-    @Override
-    public Scope scope() {
-        return Scope.BOTH;
     }
 
     @Override

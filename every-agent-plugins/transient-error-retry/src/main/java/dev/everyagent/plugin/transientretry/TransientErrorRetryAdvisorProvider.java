@@ -11,8 +11,8 @@ import org.springframework.ai.chat.client.advisor.api.Advisor;
 /**
  * {@link TransientErrorRetryAdvisor} 适配器。
  *
- * <p>order = {@link ToolCallingAdvisor#DEFAULT_ORDER} + 200（工具循环最内层，紧贴模型 HTTP 调用），
- * scope = BOTH（主/子 agent 同挂）。每 run 新建实例。
+ * <p>order = {@link ToolCallingAdvisor#DEFAULT_ORDER} + 200（工具循环最内层，紧贴模型 HTTP 调用）。
+ * 每 run 新建实例。
  */
 public class TransientErrorRetryAdvisorProvider implements AdvisorProvider {
 
@@ -25,11 +25,6 @@ public class TransientErrorRetryAdvisorProvider implements AdvisorProvider {
     @Override
     public String pluginId() {
         return "builtin.transient-error-retry";
-    }
-
-    @Override
-    public Scope scope() {
-        return Scope.BOTH;
     }
 
     @Override

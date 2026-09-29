@@ -843,7 +843,7 @@ public class TaskStore {
     }
 
     // ---- 轮次索引 rounds.jsonl(与 meta.json、<agentId>.jsonl 同级;seq 一律字符串防 JS 精度)----
-    // 每行一轮:{index,startSeq,endSeq,user,finalReply,durationMs,startedAt,subs:[{agentId,title,startSeq,endSeq}],userMessage?};
+    // 每行一轮:{index,startSeq,endSeq,user,finalReply,durationMs,startedAt,agentRanges:[{agentId,title,startSeq,endSeq}],userMessage?};
     // endSeq 为 "" 表示未闭合;
     // startedAt = 开轮落盘时刻(epoch 毫秒;旧行缺失=0 未知,闭合时不据此计耗时);
     // userMessage = 完整 user.message payload(懒加载骨架起点;旧行缺失不写);
@@ -1003,7 +1003,7 @@ public class TaskStore {
         }
     }
 
-    /** 一行 Round → jsonl 行(seq 全字符串;endSeq null → "";subs 恒为数组)。 */
+    /** 一行 Round → jsonl 行(seq 全字符串;endSeq null → "";agentRanges 恒为数组)。 */
     private static String roundLine(RoundIndex.Round round) {
         ObjectNode line = Json.obj()
                 .put("index", round.index())
@@ -1022,16 +1022,16 @@ public class TaskStore {
         if (round.userMessage() != null) {
             line.set("userMessage", round.userMessage()); // 完整 user.message payload(懒加载骨架起点;旧行缺失=null)
         }
-        ArrayNode subs = Json.arr();
-        for (RoundIndex.SubRange sub : round.subs()) {
+        ArrayNode agentRanges = Json.arr();
+        for (RoundIndex.AgentRange agentRange : round.agentRanges()) {
             ObjectNode s = Json.obj()
-                    .put("agentId", safeText(sub.agentId()))
-                    .put("title", safeText(sub.title()))
-                    .put("startSeq", sub.startSeq() == null ? "" : String.valueOf(sub.startSeq()));
-            s.put("endSeq", sub.endSeq() == null ? "" : String.valueOf(sub.endSeq()));
-            subs.add(s);
+                    .put("agentId", safeText(agentRange.agentId()))
+                    .put("title", safeText(agentRange.title()))
+                    .put("startSeq", agentRange.startSeq() == null ? "" : String.valueOf(agentRange.startSeq()));
+            s.put("endSeq", agentRange.endSeq() == null ? "" : String.valueOf(agentRange.endSeq()));
+            agentRanges.add(s);
         }
-        line.set("subs", subs);
+        line.set("agentRanges", agentRanges);
         return Json.write(line);
     }
 
@@ -1061,21 +1061,25 @@ public class TaskStore {
             if (userMessage.isMissingNode() || userMessage.isNull()) {
                 userMessage = null;
             }
-            List<RoundIndex.SubRange> subs = new ArrayList<>();
-            JsonNode subsNode = n.path("subs");
-            if (subsNode.isArray()) {
-                for (JsonNode sn : subsNode) {
+            List<RoundIndex.AgentRange> agentRanges = new ArrayList<>();
+            // 兼容旧名:agentRanges 不存在时尝试读 subs
+            JsonNode agentRangesNode = n.path("agentRanges");
+            if (agentRangesNode.isMissingNode()) {
+                agentRangesNode = n.path("subs");
+            }
+            if (agentRangesNode.isArray()) {
+                for (JsonNode sn : agentRangesNode) {
                     Long subStart = parseSeqFieldOrNull(sn, "startSeq");
                     if (subStart == null) {
                         return null; // 子区间关键字段缺失:整行弃
                     }
                     Long subEnd = parseSeqFieldOrNull(sn, "endSeq");
-                    subs.add(new RoundIndex.SubRange(sn.path("agentId").asString(""),
+                    agentRanges.add(new RoundIndex.AgentRange(sn.path("agentId").asString(""),
                             sn.path("title").asString(""), subStart, subEnd));
                 }
             }
             return new RoundIndex.Round(roundId, index, startSeq, endSeq, user, finalReply,
-                    subs, durationMs, startedAt, fileChanges, userMessage);
+                    agentRanges, durationMs, startedAt, fileChanges, userMessage);
         } catch (RuntimeException e) {
             return null; // 撕行
         }

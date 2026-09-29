@@ -12,8 +12,7 @@ import org.springframework.core.Ordered;
 /**
  * {@link SystemInfoAdvisor} 适配器。
  *
- * <p>order = {@link Ordered#HIGHEST_PRECEDENCE} + 50，scope = BOTH（主/子 agent 同挂）。
- * 每 run 新建实例。
+ * <p>order = {@link Ordered#HIGHEST_PRECEDENCE} + 50。每 run 新建实例。
  *
  * <p>沙箱信息通过 {@link WorkerServices#sandbox()} 获取 {@link SandboxBackend} 接口
  * （已有 {@code isWslBackend()} / {@code isWslDirect()}），不直接依赖 worker 的 {@code OsSandbox} 具体类。
@@ -29,11 +28,6 @@ public class SystemInfoAdvisorProvider implements AdvisorProvider {
     @Override
     public String pluginId() {
         return "builtin.system-info";
-    }
-
-    @Override
-    public Scope scope() {
-        return Scope.BOTH;
     }
 
     @Override

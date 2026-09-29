@@ -11,9 +11,8 @@ import org.springframework.ai.chat.client.advisor.api.Advisor;
 /**
  * {@link ContextCompressionAdvisor} 适配器。
  *
- * <p>order = {@link ToolCallingAdvisor#DEFAULT_ORDER} + 400（工具循环最内层，每轮模型请求前压缩），
- * scope = BOTH（主/子 agent 同挂）。每 run 新建实例。
- * 开启摘要时注入 LLM 摘要器（需 a.chatModel），否则传 null 走确定性降级。
+ * <p>order = {@link ToolCallingAdvisor#DEFAULT_ORDER} + 400（工具循环最内层，每轮模型请求前压缩）。
+ * 每 run 新建实例。开启摘要时注入 LLM 摘要器（需 a.chatModel），否则传 null 走确定性降级。
  */
 public class ContextCompressionAdvisorProvider implements AdvisorProvider {
 
@@ -26,11 +25,6 @@ public class ContextCompressionAdvisorProvider implements AdvisorProvider {
     @Override
     public String pluginId() {
         return "builtin.context-compression";
-    }
-
-    @Override
-    public Scope scope() {
-        return Scope.BOTH;
     }
 
     @Override

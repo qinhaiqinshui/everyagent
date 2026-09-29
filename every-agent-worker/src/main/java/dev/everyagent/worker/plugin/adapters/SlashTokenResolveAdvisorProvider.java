@@ -12,7 +12,7 @@ import org.springframework.core.Ordered;
 /**
  * {@link SlashTokenResolveAdvisor} 适配器。
  *
- * <p>order = {@link Ordered#HIGHEST_PRECEDENCE} + 150，scope = MAIN（仅主 agent）。
+ * <p>order = {@link Ordered#HIGHEST_PRECEDENCE} + 150。
  * 每 run 新建实例。
  */
 public class SlashTokenResolveAdvisorProvider implements AdvisorProvider {
@@ -26,11 +26,6 @@ public class SlashTokenResolveAdvisorProvider implements AdvisorProvider {
     @Override
     public String pluginId() {
         return "builtin.slash-token-resolve";
-    }
-
-    @Override
-    public Scope scope() {
-        return Scope.MAIN;
     }
 
     @Override

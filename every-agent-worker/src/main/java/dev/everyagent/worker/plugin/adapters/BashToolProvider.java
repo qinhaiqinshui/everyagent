@@ -13,7 +13,7 @@ import java.nio.file.Path;
 import java.util.List;
 
 /**
- * Bash 命令工具提供者（scope=BOTH）—— 包装 {@link BashTool} + {@link CommandExecutor}。
+ * Bash 命令工具提供者 —— 包装 {@link BashTool} + {@link CommandExecutor}。
  *
  * <p>appliesTo: 当 bash 工具应注册时返回 true（非 Windows，或 WSL 系列后端）。
  * 与改造前 {@code if (isWindows() && !sandbox.registerBashTool()) } 的 else 分支一致。
@@ -31,11 +31,6 @@ public class BashToolProvider implements ToolProvider {
     @Override
     public String pluginId() {
         return "builtin-bash-tool";
-    }
-
-    @Override
-    public Scope scope() {
-        return Scope.BOTH;
     }
 
     @Override

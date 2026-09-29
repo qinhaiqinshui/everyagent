@@ -13,8 +13,8 @@ import tools.jackson.databind.JsonNode;
 /**
  * {@link AdaptiveMaxTokensAdvisor} 适配器。
  *
- * <p>order = {@link ToolCallingAdvisor#DEFAULT_ORDER} + 250(Guard +300 外侧),
- * scope = BOTH(主/子 agent 同挂)。每 run 新建实例。
+ * <p>order = {@link ToolCallingAdvisor#DEFAULT_ORDER} + 250(Guard +300 外侧)。
+ * 每 run 新建实例。
  *
  * <p>配置从 {@link WorkerProperties.Limits.AdaptiveMaxTokens} 读取;
  * 模型级 ceiling 覆盖:从 {@code agentEntity.task.snapshot.params} 中的
@@ -31,11 +31,6 @@ public class AdaptiveMaxTokensAdvisorProvider implements AdvisorProvider {
     @Override
     public String pluginId() {
         return "builtin.adaptive-max-tokens";
-    }
-
-    @Override
-    public Scope scope() {
-        return Scope.BOTH;
     }
 
     @Override

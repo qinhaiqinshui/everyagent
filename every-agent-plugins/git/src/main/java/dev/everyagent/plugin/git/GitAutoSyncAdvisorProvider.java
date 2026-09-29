@@ -10,8 +10,7 @@ import org.springframework.core.Ordered;
 /**
  * {@link GitAutoSyncAdvisor} 适配器。
  *
- * <p>order = {@link Ordered#HIGHEST_PRECEDENCE} + 140，scope = MAIN（仅主 agent）。
- * 每 run 新建实例（per-request 状态：本轮是否自动同步随实例物化隔离）。
+ * <p>order = {@link Ordered#HIGHEST_PRECEDENCE} + 140。每 run 新建实例（per-request 状态：本轮是否自动同步随实例物化隔离）。
  */
 public class GitAutoSyncAdvisorProvider implements AdvisorProvider {
 
@@ -24,11 +23,6 @@ public class GitAutoSyncAdvisorProvider implements AdvisorProvider {
     @Override
     public String pluginId() {
         return "builtin.git-auto-sync";
-    }
-
-    @Override
-    public Scope scope() {
-        return Scope.MAIN;
     }
 
     @Override

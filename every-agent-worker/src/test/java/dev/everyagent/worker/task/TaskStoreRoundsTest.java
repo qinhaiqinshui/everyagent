@@ -41,12 +41,12 @@ class TaskStoreRoundsTest {
 
     private static RoundIndex.Round closedRound() {
         return new RoundIndex.Round("round_test", 1L, 10L, 20L, "第一问", "第一答",
-                List.of(new RoundIndex.SubRange(SUB, "子任务", 12L, 18L)), 0L, 1234567890L, null, null);
+                List.of(new RoundIndex.AgentRange(SUB, "子任务", 12L, 18L)), 0L, 1234567890L, null, null);
     }
 
     private static RoundIndex.Round openRound() {
         return new RoundIndex.Round("round_test", 2L, 30L, null, "第二问", "",
-                List.of(new RoundIndex.SubRange(SUB, "未收尾子任务", 32L, null)), 0L, 1234567900L, null, null);
+                List.of(new RoundIndex.AgentRange(SUB, "未收尾子任务", 32L, null)), 0L, 1234567900L, null, null);
     }
 
     @Test
@@ -67,14 +67,14 @@ class TaskStoreRoundsTest {
         assertNull(open.endSeq(), "endSeq 空串 → null");
         assertEquals("第二问", open.user());
         assertEquals("", open.finalReply());
-        assertEquals(1, open.subs().size());
-        assertNull(open.subs().get(0).endSeq(), "subs 内未闭合 endSeq 空串 → null");
+        assertEquals(1, open.agentRanges().size());
+        assertNull(open.agentRanges().get(0).endSeq(), "agentRanges 内未闭合 endSeq 空串 → null");
 
         String line1 = Files.readAllLines(dir.resolve("rounds.jsonl")).get(0);
         assertTrue(line1.contains("\"startSeq\":\"10\""), "startSeq 序列化为字符串: " + line1);
         assertTrue(line1.contains("\"endSeq\":\"20\""), line1);
         assertTrue(line1.contains("\"startedAt\":1234567890"), line1);
-        assertTrue(line1.contains("\"subs\":[{\"agentId\":\"sub_x9\",\"title\":\"子任务\","
+        assertTrue(line1.contains("\"agentRanges\":[{\"agentId\":\"sub_x9\",\"title\":\"子任务\","
                 + "\"startSeq\":\"12\",\"endSeq\":\"18\"}]"), line1);
 
         assertEquals(30, store.lastRoundStartSeq(dir), "最后一行 startSeq");
@@ -128,7 +128,7 @@ class TaskStoreRoundsTest {
 
         // 续跑补完:startSeq 匹配的未闭合行被闭合版原位替换(index 沿用磁盘行)
         RoundIndex.Round closedSeed = new RoundIndex.Round("round_test", 2L, 30L, 44L, "第二问", "补完之答",
-                List.of(new RoundIndex.SubRange(SUB, "未收尾子任务", 32L, 40L)), 0L, 0L, null, null);
+                List.of(new RoundIndex.AgentRange(SUB, "未收尾子任务", 32L, 40L)), 0L, 0L, null, null);
         assertTrue(store.rewriteRound("t1", closedSeed), "命中目标行应返回 true");
 
         List<RoundIndex.Round> rounds = store.readRounds(dir);
@@ -138,7 +138,7 @@ class TaskStoreRoundsTest {
         assertEquals(2, second.index(), "index 不变");
         assertEquals(44, second.endSeq().longValue(), "未闭合行被闭合版原位替换");
         assertEquals("补完之答", second.finalReply());
-        assertEquals(40, second.subs().get(0).endSeq().longValue());
+        assertEquals(40, second.agentRanges().get(0).endSeq().longValue());
         assertEquals(30, store.lastRoundStartSeq(dir), "锚点不受改写影响");
         assertTrue(!Files.exists(dir.resolve("rounds.jsonl.tmp")), "临时文件已清理");
     }

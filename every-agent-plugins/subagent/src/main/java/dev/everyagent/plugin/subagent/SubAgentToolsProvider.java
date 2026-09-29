@@ -7,6 +7,7 @@ import org.springframework.ai.support.ToolCallbacks;
 import org.springframework.ai.tool.ToolCallback;
 
 import java.util.List;
+import java.util.Map;
 
 public class SubAgentToolsProvider implements ToolProvider {
 
@@ -22,15 +23,9 @@ public class SubAgentToolsProvider implements ToolProvider {
     }
 
     @Override
-    public Scope scope() {
-        return Scope.MAIN;
-    }
-
-    @Override
     public List<ToolCallback> createTools(ToolContext ctx) {
-        // ToolContextImpl 实现 ToolContext，其 taskEntry() 返回 TaskEntry，
-        // 而 TaskEntry implements AgentContext —— 强转安全。
         var impl = (dev.everyagent.worker.plugin.ToolContextImpl) ctx;
-        return List.of(ToolCallbacks.from(new SubAgentTools(agentService, impl.taskEntry())));
+        Map<String, Object> properties = Map.of("taskEntry", impl.taskEntry());
+        return List.of(ToolCallbacks.from(new SubAgentTools(agentService, properties)));
     }
 }

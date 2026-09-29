@@ -192,7 +192,7 @@ public class AiAuthReviewer {
      */
     AgentEntity buildReviewEntity(TaskEntry t, String reviewAgentId, OpenAiChatOptions reviewOptions,
             ChatModel chatModel, String grantKey, String prompt) {
-        AgentEntity reviewEntity = new AgentEntity(t, reviewAgentId, AgentEntity.Kind.SUB,
+        AgentEntity reviewEntity = new AgentEntity(t, reviewAgentId,
                 "AI 安全审议", chatModel, reviewOptions, List.of());
         reviewEntity.conversation.add(new SystemMessage(reviewSystemPrompt(t)));
         reviewEntity.conversation.add(new UserMessage(userPrompt(grantKey, prompt)));

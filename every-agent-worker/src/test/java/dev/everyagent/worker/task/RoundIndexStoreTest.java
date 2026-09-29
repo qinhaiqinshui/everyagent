@@ -62,7 +62,7 @@ class RoundIndexStoreTest {
         assertEquals(3, r.endSeq());
         assertEquals("你好", r.user());
         assertEquals("回复正文", r.finalReply());
-        assertTrue(r.subs().isEmpty());
+        assertTrue(r.agentRanges().isEmpty());
     }
 
     @Test
@@ -115,8 +115,8 @@ class RoundIndexStoreTest {
         List<RoundIndex.Round> rounds = store.scan(events, MAIN);
         assertEquals(1, rounds.size());
         RoundIndex.Round r = rounds.get(0);
-        assertEquals(1, r.subs().size());
-        RoundIndex.SubRange sub = r.subs().get(0);
+        assertEquals(1, r.agentRanges().size());
+        RoundIndex.AgentRange sub = r.agentRanges().get(0);
         assertEquals(SUB, sub.agentId());
         assertEquals("子任务·代码", sub.title());
         assertEquals(2, sub.startSeq());
@@ -133,7 +133,7 @@ class RoundIndexStoreTest {
                 rec(3, Events.MESSAGE, MAIN, payload("text", "主 agent 先回")));
         List<RoundIndex.Round> rounds = store.scan(events, MAIN);
         assertEquals(1, rounds.size());
-        RoundIndex.SubRange sub = rounds.get(0).subs().get(0);
+        RoundIndex.AgentRange sub = rounds.get(0).agentRanges().get(0);
         assertEquals(2, sub.startSeq());
         assertNull(sub.endSeq(), "扫描窗口末尾仍未 done → endSeq null");
     }
@@ -198,7 +198,7 @@ class RoundIndexStoreTest {
                 rec(4, Events.MESSAGE, MAIN, payload("text", "答")));
         List<RoundIndex.Round> rounds = store.scan(events, MAIN);
         assertEquals(1, rounds.size(), "主 agent 轮之前的子事件被忽略");
-        assertTrue(rounds.get(0).subs().isEmpty());
+        assertTrue(rounds.get(0).agentRanges().isEmpty());
     }
 
     @Test
@@ -246,7 +246,7 @@ class RoundIndexStoreTest {
                 rec(5, Events.MESSAGE, MAIN, payload("text", "答"))), MAIN);
         assertEquals(1, rounds.size());
         assertEquals("主问", rounds.get(0).user());
-        assertEquals(1, rounds.get(0).subs().size());
+        assertEquals(1, rounds.get(0).agentRanges().size());
     }
 
     @Test

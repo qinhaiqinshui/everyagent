@@ -13,8 +13,8 @@ import org.springframework.ai.chat.client.advisor.api.Advisor;
 /**
  * {@link ModelLengthGuardAdvisor} 适配器。
  *
- * <p>order = {@link ToolCallingAdvisor#DEFAULT_ORDER} + 300（瞬时错误重试内侧、上下文压缩外侧），
- * scope = BOTH（主/子 agent 同挂）。每 run 新建实例。
+ * <p>order = {@link ToolCallingAdvisor#DEFAULT_ORDER} + 300（瞬时错误重试内侧、上下文压缩外侧）。
+ * 每 run 新建实例。
  *
  * <p><b>TokenEstimator 延迟解析</b>:不在构造时固化引用,而是在 {@link #create(AdvisorContext)}
  * 时从 {@link WorkerServices#tokenEstimator()} 获取当前生效的估算器。WorkerServicesImpl 内部
@@ -33,11 +33,6 @@ public class ModelLengthGuardAdvisorProvider implements AdvisorProvider {
     @Override
     public String pluginId() {
         return "builtin.model-length-guard";
-    }
-
-    @Override
-    public Scope scope() {
-        return Scope.BOTH;
     }
 
     @Override

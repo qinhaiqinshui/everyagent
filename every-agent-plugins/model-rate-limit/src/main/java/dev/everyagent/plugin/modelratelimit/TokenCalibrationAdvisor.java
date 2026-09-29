@@ -160,8 +160,7 @@ public class TokenCalibrationAdvisor implements CallAdvisor, StreamAdvisor {
     /**
      * Provider 适配器。
      *
-     * <p>order = 0（核心基础设施层），scope = BOTH（主/子 agent 同挂）。
-     * 每 run 新建实例。经 {@link AdvisorContext#configId()} 获取 configId，
+     * <p>order = 0（核心基础设施层），每 run 新建实例。经 {@link AdvisorContext#configId()} 获取 configId，
      * 不再依赖 worker 内部类型（{@code AgentEntity} / {@code AdvisorContextImpl}）。
      */
     public static class Provider implements AdvisorProvider {
@@ -175,11 +174,6 @@ public class TokenCalibrationAdvisor implements CallAdvisor, StreamAdvisor {
         @Override
         public String pluginId() {
             return "builtin.token-calibration";
-        }
-
-        @Override
-        public Scope scope() {
-            return Scope.BOTH;
         }
 
         @Override
