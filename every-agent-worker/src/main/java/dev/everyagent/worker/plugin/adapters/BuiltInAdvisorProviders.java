@@ -1,6 +1,5 @@
 package dev.everyagent.worker.plugin.adapters;
 
-import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.plugin.registry.AdvisorProviderRegistry;
 import dev.everyagent.worker.skill.SkillAdvisor;
 import dev.everyagent.worker.slash.SlashTokenHandler;
@@ -15,7 +14,7 @@ import org.springframework.stereotype.Component;
  * <p>在 {@link PostConstruct} 中将内置 Advisor 的适配器注册到
  * {@link AdvisorProviderRegistry}，替代 {@code AgentClientFactory} 原硬编码的
  * Advisor 创建与顺序。适配器持有的共享依赖（TaskStore、RoundIndexStore、
- * SlashTokenHandler、WorkerProperties、SkillAdvisor）由 Spring 注入；
+ * SlashTokenHandler、SkillAdvisor）由 Spring 注入；
  * per-run 的 AgentEntity / ToolCallingManager 通过 {@link dev.everyagent.worker.plugin.AdvisorContextImpl}
  * 在 create() 时传递。Git 自动同步 Advisor 由 git 插件模块自行注册。
  * SystemInfoAdvisor 由 system-info 插件模块自行注册。
@@ -31,7 +30,6 @@ public class BuiltInAdvisorProviders {
     private final TaskStore taskStore;
     private final RoundIndexStore roundIndexStore;
     private final SlashTokenHandler slashTokenHandler;
-    private final WorkerProperties props;
     private final SkillAdvisor skillAdvisor;
 
     public BuiltInAdvisorProviders(
@@ -39,13 +37,11 @@ public class BuiltInAdvisorProviders {
             TaskStore taskStore,
             RoundIndexStore roundIndexStore,
             SlashTokenHandler slashTokenHandler,
-            WorkerProperties props,
             SkillAdvisor skillAdvisor) {
         this.registry = registry;
         this.taskStore = taskStore;
         this.roundIndexStore = roundIndexStore;
         this.slashTokenHandler = slashTokenHandler;
-        this.props = props;
         this.skillAdvisor = skillAdvisor;
     }
 
@@ -61,8 +57,10 @@ public class BuiltInAdvisorProviders {
         registry.register(new SkillAdvisorProvider(skillAdvisor));
         registry.register(new SlashTokenResolveAdvisorProvider(slashTokenHandler));
 
-        // 守卫 / 文件跟踪（200─399）
-        registry.register(new LoopRepeatGuardAdvisorProvider(props));
+        // 事件发射 / 文件跟踪（200─399）
+        // LoopRepeatGuardAdvisorProvider 已移除，死循环守卫改由 AgentClientFactory 在组装入口装饰 TCM 承担；
+        // 事件发射由 WorkerToolEventAdvisorProvider 提供。
+        registry.register(new WorkerToolEventAdvisorProvider());
         // FileChangeAdvisorProvider 已迁入 file-change 插件模块，由插件自行注册。
 
         // 重试 / 护栏（400─599）
