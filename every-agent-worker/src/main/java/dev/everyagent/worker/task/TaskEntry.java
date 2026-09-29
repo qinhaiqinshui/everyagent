@@ -1,10 +1,9 @@
 package dev.everyagent.worker.task;
 
-import dev.everyagent.plugin.api.agent.AgentContext;
-import dev.everyagent.plugin.api.agent.AgentEventChannel;
 import dev.everyagent.plugin.api.permission.TaskInfo;
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.plugin.api.model.ModelConfig;
+import dev.everyagent.worker.agent.AgentEntity;
 import dev.everyagent.worker.proto.TaskDtos.TaskStatus;
 import dev.everyagent.worker.proto.TaskDtos.TaskSummary;
 import dev.everyagent.worker.proto.TaskDtos.Usage;
@@ -24,7 +23,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * 运行完成即销毁(finish 里 untrack + tasks.remove),磁盘是唯一真相源;
  * 再运行 = 同 taskId 新建本对象(冷启动,mainAgentId 沿用 → 同一 jsonl 文件续写)。
  */
-public final class TaskEntry implements TaskInfo, AgentContext {
+public final class TaskEntry implements TaskInfo {
 
     public final String taskId;
     public final String title;
@@ -71,12 +70,6 @@ public final class TaskEntry implements TaskInfo, AgentContext {
 
     /** 终态后的收尾工作是否已执行(finish 全程持本对象监视器,与再运行互斥)。 */
     public volatile boolean finalized;
-
-    /**
-     * 用户请求停止后置位:阻止主 agent 在取消竞态窗口内再启动新的子 agent。
-     * 由 rpcTaskCancel 在取消子 future 前置位;任务终态/再运行重建 TaskEntry 后自然复位。
-     */
-    public volatile boolean stopRequested;
 
     /**
      * 通用任务级持久化数据（替代原 taskFlags，Map<String, Boolean>）。
@@ -173,30 +166,14 @@ public final class TaskEntry implements TaskInfo, AgentContext {
         return taskDir;
     }
 
-    // ---- AgentContext 接口实现 ----
+    // ---- AgentContext 接口已删除，以下为 TaskEntry 自身方法 ----
 
-    @Override
+    /** 工作区根路径。 */
     public String workspaceRoot() {
         return workspaceRoot;
     }
 
-    @Override
-    public AgentEventChannel events() {
-        return events;
-    }
-
-    @Override
-    public boolean taskTerminal() {
-        return status.terminal();
-    }
-
-    @Override
-    public void recordMainUsage(Object round, Long contextWindowTokens, String model) {
-        recordUsage((Usage) round, contextWindowTokens, model);
-    }
-
-    public final Map<String, AgentEntity> subs = new ConcurrentHashMap<>();
-    public final Map<String, java.util.concurrent.Future<?>> subFutures = new ConcurrentHashMap<>();
+    public final Map<String, AgentEntity> agents = new ConcurrentHashMap<>();
     public volatile java.util.concurrent.Future<?> runFuture;
     /**
      * 当前回合文件改动收集器:FileChangeAdvisor 在主 agent 首次 adviseStream 时新建、
@@ -249,13 +226,13 @@ public final class TaskEntry implements TaskInfo, AgentContext {
     }
 
     /** 主 + 子 agent 的 usage 合计。 */
-    public Usage totalUsage(AgentEntity main) {
+    public Usage totalUsage() {
         Usage total = Usage.zero();
         if (main != null) {
             total = total.plus(main.usage());
         }
-        for (AgentEntity sub : subs.values()) {
-            total = total.plus(sub.usage());
+        for (AgentEntity a : agents.values()) {
+            total = total.plus(a.usage());
         }
         return total;
     }
@@ -355,8 +332,8 @@ public final class TaskEntry implements TaskInfo, AgentContext {
         return summaryJson();
     }
 
-    /** 当前挂起的 ask 数(worker 内部状态推算 waiting-user)。 */
-    public List<AgentEntity> subList() {
-        return List.copyOf(subs.values());
+    /** 当前挂起的所有 agent 实体列表。 */
+    public List<AgentEntity> agentList() {
+        return List.copyOf(agents.values());
     }
 }
