@@ -131,6 +131,20 @@ public interface SandboxBackend {
     
     /**
      * 命令路径翻译（供 PermissionGate 授权扫描用;真实命令不翻译）。
+     * 
+     * 背景：沙箱后端（如 wsl-ubuntu）在 Linux 环境中运行 bash，AI 写的命令
+     * 中的路径是 Linux 形态（/c/Users/...、/workspace/...）。核心的 PermissionGate
+     * 在宿主路径域做判定（正则匹配 C:\... + realpath 检查越界），无法理解 Linux 路径。
+     * 本方法把命令文本中的沙箱内路径前缀替换为宿主路径形态，产出一份**仅供 PermissionGate
+     * 扫描的命令副本**——真实执行的命令保持原文不动。
+     * 
+     * 翻译规则由各后端按自己的挂载约定实现：
+     * - wsl-ubuntu: /c/Users/... → C:/Users/...（原路径形态挂载）
+     * - wsl-bwrap: /workspace → 工作区根, /mnt/c/... → C:/...（规范挂载点）
+     * - docker: /workspace → C:/...（或按容器挂载约定）
+     * - windows-mic/direct: 不翻译（命令路径本就是宿主路径）
+     * 
+     * 无法翻译的部分（如 /etc、/tmp 等发行版内部路径）原样保留。
      * 默认原样返回（非翻译型后端）。
      */
     default String translateCommandForGate(String command, Path workspaceRoot) { return command; }
