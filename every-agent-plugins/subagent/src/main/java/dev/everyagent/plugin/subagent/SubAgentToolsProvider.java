@@ -2,7 +2,6 @@ package dev.everyagent.plugin.subagent;
 
 import dev.everyagent.plugin.api.spi.ToolContext;
 import dev.everyagent.plugin.api.spi.ToolProvider;
-import dev.everyagent.worker.agent.AgentService;
 import org.springframework.ai.support.ToolCallbacks;
 import org.springframework.ai.tool.ToolCallback;
 
@@ -11,10 +10,10 @@ import java.util.Map;
 
 public class SubAgentToolsProvider implements ToolProvider {
 
-    private final AgentService agentService;
+    private final SubAgentManager subAgentManager;
 
-    public SubAgentToolsProvider(AgentService agentService) {
-        this.agentService = agentService;
+    public SubAgentToolsProvider(SubAgentManager subAgentManager) {
+        this.subAgentManager = subAgentManager;
     }
 
     @Override
@@ -26,6 +25,6 @@ public class SubAgentToolsProvider implements ToolProvider {
     public List<ToolCallback> createTools(ToolContext ctx) {
         var impl = (dev.everyagent.worker.plugin.ToolContextImpl) ctx;
         Map<String, Object> properties = Map.of("taskEntry", impl.taskEntry());
-        return List.of(ToolCallbacks.from(new SubAgentTools(agentService, properties)));
+        return List.of(ToolCallbacks.from(new SubAgentTools(subAgentManager, properties)));
     }
 }

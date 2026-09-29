@@ -2,7 +2,7 @@ package dev.everyagent.plugin.aireview;
 
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.plugin.api.model.EmitEvent;
-import dev.everyagent.worker.AgentClientFactory;
+import dev.everyagent.worker.agent.AgentBuilder;
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.modules.ConfigStore;
 import dev.everyagent.worker.modules.ConfigStore.ResolvedConfig;
@@ -15,11 +15,8 @@ import dev.everyagent.worker.task.TaskEntry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.chat.messages.SystemMessage;
-import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.prompt.Prompt;
-import org.springframework.ai.model.tool.ToolCallingManager;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import tools.jackson.databind.JsonNode;
 
@@ -42,7 +39,7 @@ import java.util.concurrent.TimeoutException;
  * 单测,不接入 PermissionGate(那是步骤 6)。主 Agent 是「被审议方」,不能自我授权,
  * 故审议会话与主/子 agent 完全隔离——新 agentId、无工具、独立提示词、fail-closed。
  *
- * <p>审议请求链路:走 {@link AgentClientFactory#forAgent} 自动获得全套 Advisor 链
+ * <p>审议请求链路:走 {@link AgentBuilder#create} 自动获得全套 Advisor 链
  * (重试/压缩/限流等),<b>不挂</b>工具循环 /
  * 技能 / 系统信息 / 无人值守 / 事件发射 advisor——审议无工具,且不发
  * delta/message/usage/tool 事件(正文不污染主对话流);事件全部经 {@code t.events} 落原任务 jsonl。
@@ -51,7 +48,7 @@ import java.util.concurrent.TimeoutException;
  *
  * <p>载体:内部构造一个轻量「审议 AgentEntity」(空 tools、conversation=[独立审议 system
  * prompt, 授权信息 user]、agentId=review-&lt;shortId&gt;、options=审议超时快照),<b>仅作
- * {@link AgentClientFactory#forAgent} 载体</b>:不进 {@code t.subs} / {@code t.agentLedger} / 不随 agents.json 落盘,
+ * AgentBuilder 装配载体</b>:不进 {@code task.agents} / 不随 agents.json 落盘,
  * 不新建 TaskEntry/EventLog。
  *
  * <p>时效双层控制:<ul>
@@ -109,17 +106,14 @@ public class AiAuthReviewer {
     private final WorkerProperties props;
     private final ConfigStore configStore;
     private final ChatModelFactory chatModelFactory;
-    private final AgentClientFactory agentClientFactory;
-    private final ToolCallingManager toolCallingManager;
+    private final AgentBuilder agentBuilder;
 
     public AiAuthReviewer(WorkerProperties props, ConfigStore configStore,
-            ChatModelFactory chatModelFactory, AgentClientFactory agentClientFactory,
-            ToolCallingManager toolCallingManager) {
+            ChatModelFactory chatModelFactory, AgentBuilder agentBuilder) {
         this.props = props;
         this.configStore = configStore;
         this.chatModelFactory = chatModelFactory;
-        this.agentClientFactory = agentClientFactory;
-        this.toolCallingManager = toolCallingManager;
+        this.agentBuilder = agentBuilder;
     }
 
     /**
@@ -163,7 +157,7 @@ public class AiAuthReviewer {
 
     /**
      * 实际审议调用(在独立 executor 线程内执行):模型选择 → 装配轻量审议 AgentEntity →
-     * ChatClient(经 AgentClientFactory.forAgent 获得全套 Advisor 链)一次性调用 → 宽容解析。
+     * ChatClient(由 AgentBuilder.build() 装配注入,自动获得全套 Advisor 链)一次性调用 → 宽容解析。
      * 容灾在模型层:若审议模型是 provider=model-pool 池配置,chatModel 本身即
      * ModelPoolChatModel(自动换池容灾)。
      */
@@ -179,7 +173,7 @@ public class AiAuthReviewer {
         AgentEntity reviewEntity = buildReviewEntity(t, reviewAgentId, reviewOptions, chatModel, grantKey, prompt);
 
         // 走正常 agent 创建路径,自动获得全套 Advisor 链(重试/压缩/限流等)
-        ChatClient client = agentClientFactory.forAgent(reviewEntity, toolCallingManager);
+        ChatClient client = reviewEntity.chatClient;
         String content = client.prompt(new Prompt(new ArrayList<>(reviewEntity.conversation)))
                 .call().content();
         return parse(content);
@@ -187,16 +181,22 @@ public class AiAuthReviewer {
 
     /**
      * 构建轻量「审议 AgentEntity」:空 tools、独立 conversation,仅作
-     * {@link AgentClientFactory#forAgent} 载体——不进 t.subs / t.agentLedger / 不随 agents.json 落盘,
+     * AgentBuilder 装配载体——不进 task.agents / 不随 agents.json 落盘,
      * 不新建 TaskEntry/EventLog。package-private 供单测断言「无任何工具」与独立 system prompt。
      */
     AgentEntity buildReviewEntity(TaskEntry t, String reviewAgentId, OpenAiChatOptions reviewOptions,
             ChatModel chatModel, String grantKey, String prompt) {
-        AgentEntity reviewEntity = new AgentEntity(t, reviewAgentId,
-                "AI 安全审议", chatModel, reviewOptions, List.of());
-        reviewEntity.conversation.add(new SystemMessage(reviewSystemPrompt(t)));
-        reviewEntity.conversation.add(new UserMessage(userPrompt(grantKey, prompt)));
-        return reviewEntity;
+        java.util.Map<String, Object> props = new java.util.HashMap<>();
+        props.put("taskEntry", t);
+        props.put("taskId", t.taskId);
+        props.put("workspaceRoot", t.workspaceRoot);
+        props.put("configId", t.snapshot.configId());
+        return agentBuilder.create(reviewAgentId, chatModel, reviewOptions, t.events, props)
+                .title("AI 安全审议")
+                .tools(java.util.List.of(), AgentBuilder.ModifyMode.REPLACE)
+                .systemPrompt(reviewSystemPrompt(t))
+                .userInput(userPrompt(grantKey, prompt))
+                .build();
     }
 
     /** 生成独立审议 system prompt:注入任务当前工作区目录(占位符 %s)。 */

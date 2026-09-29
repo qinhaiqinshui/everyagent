@@ -1,6 +1,6 @@
 package dev.everyagent.plugin.aireview;
 
-import dev.everyagent.worker.AgentClientFactory;
+import dev.everyagent.worker.agent.AgentBuilder;
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.modules.ConfigStore;
 import dev.everyagent.worker.modules.ConfigStore.ResolvedConfig;
@@ -23,7 +23,6 @@ import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
 import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.chat.prompt.Prompt;
-import org.springframework.ai.model.tool.ToolCallingManager;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import reactor.core.publisher.Flux;
 import tools.jackson.databind.JsonNode;
@@ -54,8 +53,7 @@ class AiAuthReviewerTest {
     private WorkerProperties props;
     private ConfigStore configStore;
     private ChatModelFactory chatModelFactory;
-    private AgentClientFactory agentClientFactory;
-    private ToolCallingManager toolCallingManager;
+    private AgentBuilder agentBuilder;
     private TaskStore taskStore;
     private TaskEntry task;
 
@@ -65,10 +63,55 @@ class AiAuthReviewerTest {
         configStore = mock(ConfigStore.class);
         taskStore = mock(TaskStore.class);
         chatModelFactory = mock(ChatModelFactory.class);
-        agentClientFactory = mock(AgentClientFactory.class);
-        toolCallingManager = mock(ToolCallingManager.class);
+        agentBuilder = mock(AgentBuilder.class);
         when(chatModelFactory.options(any())).thenAnswer(inv -> baseOptions());
         task = newTask("task-cfg", "task-key");
+        setupAgentBuilderMock();
+    }
+
+    /** 通用 AgentBuilder mock:create → Build(fluent) → build() 返回真实 AgentEntity + ChatClient。 */
+    @SuppressWarnings("unchecked")
+    private void setupAgentBuilderMock() {
+        AgentBuilder.Build mockBuild = mock(AgentBuilder.Build.class);
+        java.util.Map<String, Object> ctx = new java.util.HashMap<>();
+        when(mockBuild.title(anyString())).thenReturn(mockBuild);
+        when(mockBuild.tools(any(), any())).thenReturn(mockBuild);
+        when(mockBuild.systemPrompt(anyString())).thenAnswer(inv -> {
+            ctx.put("systemPrompt", inv.getArgument(0));
+            return mockBuild;
+        });
+        when(mockBuild.userInput(anyString())).thenAnswer(inv -> {
+            ctx.put("userInput", inv.getArgument(0));
+            return mockBuild;
+        });
+        when(mockBuild.build()).thenAnswer(inv -> {
+            String agentId = (String) ctx.get("agentId");
+            ChatModel chatModel = (ChatModel) ctx.get("chatModel");
+            OpenAiChatOptions options = (OpenAiChatOptions) ctx.get("options");
+            dev.everyagent.plugin.api.model.EventEmitter emitter =
+                    (dev.everyagent.plugin.api.model.EventEmitter) ctx.get("emitter");
+            java.util.Map<String, Object> props =
+                    (java.util.Map<String, Object>) ctx.get("properties");
+            AgentEntity entity = new AgentEntity(agentId, "AI 安全审议",
+                    chatModel, options, java.util.List.of(), emitter, props);
+            entity.chatClient = ChatClient.builder(chatModel).build();
+            if (ctx.get("systemPrompt") != null) {
+                entity.conversation.add(new SystemMessage((String) ctx.get("systemPrompt")));
+            }
+            if (ctx.get("userInput") != null) {
+                entity.conversation.add(new UserMessage((String) ctx.get("userInput")));
+            }
+            return entity;
+        });
+        when(agentBuilder.create(anyString(), any(), any(), any(), any())).thenAnswer(inv -> {
+            ctx.clear();
+            ctx.put("agentId", inv.getArgument(0));
+            ctx.put("chatModel", inv.getArgument(1));
+            ctx.put("options", inv.getArgument(2));
+            ctx.put("emitter", inv.getArgument(3));
+            ctx.put("properties", inv.getArgument(4));
+            return mockBuild;
+        });
     }
 
     private TaskEntry newTask(String cfgId, String apiKey) {
@@ -88,13 +131,10 @@ class AiAuthReviewerTest {
     private AiAuthReviewer reviewer(ChatModel model) {
         when(chatModelFactory.buildAgentModel(any(), anyString(), any(), any()))
                 .thenReturn(new ChatModelFactory.AgentModel(model, baseOptions()));
-        // 模拟 AgentClientFactory.forAgent:返回包装脚本化模型的简单 ChatClient(无 advisor)
-        when(agentClientFactory.forAgent(any(), any())).thenAnswer(inv -> {
-            AgentEntity a = inv.getArgument(0);
-            return ChatClient.builder(a.chatModel).build();
-        });
+        // setupAgentBuilderMock 在 setUp() 中已配置好通用 mock;
+        // 此处确保 agentBuilder 使用脚本化模型(model 从 create() 参数传入)
         return new AiAuthReviewer(props, configStore, chatModelFactory,
-                agentClientFactory, toolCallingManager);
+                agentBuilder);
     }
 
     // ---- 三态解析 ----
@@ -262,7 +302,7 @@ class AiAuthReviewerTest {
     @Test
     void reviewEntityHasNoToolsAndIndependentPrompt() {
         AiAuthReviewer reviewer = new AiAuthReviewer(props, configStore, chatModelFactory,
-                agentClientFactory, toolCallingManager);
+                agentBuilder);
         var entity = reviewer.buildReviewEntity(task, "review-ab1",
                 baseOptions(), preset("{}"), "c::del", "AI 请求删除文件");
         assertTrue(entity.tools.isEmpty(), "审议 AgentEntity 不得注册任何工具");
@@ -286,7 +326,7 @@ class AiAuthReviewerTest {
     void doesNotCreateNewTaskEntryOrEventLog() throws Exception {
         reviewer(preset("{\"decision\":\"ALLOW\"}")).review(task, "c::del", "AI 请求");
         verify(taskStore, never()).track(any(), any(), any(), any());
-        assertTrue(task.subs.isEmpty(), "审议不复用/新建子 agent 集合");
+        assertTrue(task.agents.isEmpty(), "审议不复用/新建子 agent 集合");
         // 事件只落原任务 EventLog(不新建);task.trace auth.review persist=true(ext 为 null)
         assertNotNull(authTracePayload(), "原任务应有 auth.review trace");
         assertNull(authTraceEvent().ext(), "persist=true 的 trace 无 ext.persist=false 瞬态标记");

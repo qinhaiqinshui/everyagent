@@ -2,7 +2,6 @@ package dev.everyagent.plugin.subagent;
 
 import dev.everyagent.plugin.api.EveryAgentPlugin;
 import dev.everyagent.plugin.api.WorkerPluginContext;
-import dev.everyagent.worker.agent.AgentService;
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.task.TaskStore;
 
@@ -24,12 +23,12 @@ public class SubAgentPlugin implements EveryAgentPlugin {
 
     @Override
     public void activate(WorkerPluginContext ctx) {
-        AgentService agentService = ctx.getService(AgentService.class);
+        SubAgentManager subAgentManager = ctx.getService(SubAgentManager.class);
         TaskStore store = ctx.getService(TaskStore.class);
         WorkerProperties props = ctx.getService(WorkerProperties.class);
 
         // 1. 注册工具提供者
-        ctx.registerToolProvider(new SubAgentToolsProvider(agentService));
+        ctx.registerToolProvider(new SubAgentToolsProvider(subAgentManager));
 
         // 2. 台账实例（per-task 事件投影 + agents.json 读写）
         SubAgentLedger ledger = new SubAgentLedger(store);

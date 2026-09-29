@@ -33,7 +33,7 @@ import org.springframework.core.Ordered;
  * 任务终态与队列串行循环(同 old autoSyncOnCompleteNode 吞错)。同步走静默模式(复用本机已存
  * 凭证:credential.helper / ssh-agent / 工作区加密凭证),不弹凭证补全窗。
  *
- * <p>装配:仅挂主 agent({@code AgentClientFactory#forMain}),与 {@code SkillAdvisor} 同档——
+ * <p>装配:仅挂主 agent({@code AgentBuilder}),与 {@code SkillAdvisor} 同档——
  * 子 agent 在主 agent 工具循环内递归执行,其收口已包含在主 agent 整轮内,无需重复同步。
  */
 public class GitAutoSyncAdvisor implements BaseAdvisor {
