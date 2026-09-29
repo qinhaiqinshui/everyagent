@@ -87,9 +87,10 @@ public class InteractionServiceImpl implements InteractionService {
     }
 
     @Override
-    public AskResult ask(String taskId, String agentId,
-            List<AskQuestion> questions, long timeoutMs)
+    public AskResult ask(List<AskQuestion> questions, long timeoutMs, Map<String, String> context)
             throws InterruptedException {
+        String taskId = context != null ? context.getOrDefault("taskId", "") : "";
+        String agentId = context != null ? context.getOrDefault("agentId", "") : "";
         TaskEntry entry = taskManager.get(taskId);
         TaskEvents events = entry != null ? entry.events : null;
         if (events == null) {
@@ -154,12 +155,11 @@ public class InteractionServiceImpl implements InteractionService {
     }
 
     @Override
-    public void askAsync(String taskId, String agentId,
-            List<AskQuestion> questions, long timeoutMs,
+    public void askAsync(List<AskQuestion> questions, long timeoutMs, Map<String, String> context,
             Consumer<AskResult> callback) {
         Thread.startVirtualThread(() -> {
             try {
-                AskResult result = ask(taskId, agentId, questions, timeoutMs);
+                AskResult result = ask(questions, timeoutMs, context);
                 callback.accept(result);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();

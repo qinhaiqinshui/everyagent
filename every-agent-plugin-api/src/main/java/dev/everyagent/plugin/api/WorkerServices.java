@@ -2,7 +2,6 @@ package dev.everyagent.plugin.api;
 
 import dev.everyagent.plugin.api.interaction.InteractionService;
 import dev.everyagent.plugin.api.spi.SandboxBackend;
-import dev.everyagent.plugin.api.spi.PermissionGate;
 import dev.everyagent.plugin.api.spi.TokenEstimator;
 import dev.everyagent.plugin.api.spi.WorkspaceManager;
 import dev.everyagent.plugin.api.task.TaskService;
@@ -15,11 +14,8 @@ import dev.everyagent.plugin.api.task.TaskService;
  */
 public interface WorkerServices {
 
-    /** 沙箱门面（SandboxBackend，插件可委托命令执行）。 */
+    /** 沙箱门面（SandboxBackend，插件可委托挂载与生命周期管理）。 */
     SandboxBackend sandbox();
-
-    /** 权限门（PermissionGate，工具经此授权链）。 */
-    PermissionGate gate();
 
     /** 工作区管理器（多工作区注册表）。 */
     WorkspaceManager workspaces();

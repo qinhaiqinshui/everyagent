@@ -1,6 +1,7 @@
 package dev.everyagent.worker.plugin;
 
 import dev.everyagent.worker.modules.WorkspaceManager;
+import dev.everyagent.worker.os.SandboxPathRegistry;
 import dev.everyagent.plugin.api.interaction.InteractionService;
 import dev.everyagent.plugin.api.spi.SandboxBackend;
 import dev.everyagent.plugin.api.spi.ToolContext;
@@ -30,10 +31,12 @@ public class ToolContextImpl implements ToolContext {
     private final Path rgBinary;
     private final InteractionService interaction;
     private final TaskEntry taskEntry;
+    private final SandboxPathRegistry pathRegistry;
 
     public ToolContextImpl(String taskId, String agentId, Path workspaceRoot,
             SandboxBackend sandbox, PermissionGate gate, WorkspaceManager workspaces,
-            Path rgBinary, InteractionService interaction, TaskEntry taskEntry) {
+            Path rgBinary, InteractionService interaction, TaskEntry taskEntry,
+            SandboxPathRegistry pathRegistry) {
         this.taskId = taskId;
         this.agentId = agentId;
         this.workspaceRoot = workspaceRoot;
@@ -43,6 +46,7 @@ public class ToolContextImpl implements ToolContext {
         this.rgBinary = rgBinary;
         this.interaction = interaction;
         this.taskEntry = taskEntry;
+        this.pathRegistry = pathRegistry;
     }
 
     @Override
@@ -63,11 +67,6 @@ public class ToolContextImpl implements ToolContext {
     @Override
     public SandboxBackend sandbox() {
         return sandbox;
-    }
-
-    @Override
-    public dev.everyagent.plugin.api.spi.PermissionGate gate() {
-        return gate;
     }
 
     @Override
@@ -93,5 +92,10 @@ public class ToolContextImpl implements ToolContext {
     /** 内置适配器专用：权限门具体实现（接口方法返回 SPI 接口类型）。 */
     public PermissionGate gateImpl() {
         return gate;
+    }
+
+    /** 路径翻译中间人（宿主路径 ↔ 沙箱内路径）。 */
+    public SandboxPathRegistry pathRegistry() {
+        return pathRegistry;
     }
 }

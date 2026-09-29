@@ -14,8 +14,7 @@ import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.core.Ordered;
 
 import dev.everyagent.plugin.api.skill.PluginSkill;
-import dev.everyagent.worker.os.OsSandbox;
-import dev.everyagent.worker.os.wsl.WslPathMapper;
+import dev.everyagent.worker.os.SandboxPathRegistry;
 import dev.everyagent.worker.plugin.registry.SkillContributorRegistry;
 
 /**
@@ -38,23 +37,23 @@ public class SkillAdvisor implements BaseAdvisor {
 
     private final BuiltInSkills builtInSkills;
     private final SkillContributorRegistry skillContributorRegistry;
-    private final OsSandbox osSandbox;
+    private final SandboxPathRegistry pathRegistry;
 
     public SkillAdvisor(BuiltInSkills builtInSkills, SkillContributorRegistry skillContributorRegistry,
-            OsSandbox osSandbox) {
+            SandboxPathRegistry pathRegistry) {
         this.builtInSkills = builtInSkills;
         this.skillContributorRegistry = skillContributorRegistry;
-        this.osSandbox = osSandbox;
+        this.pathRegistry = pathRegistry;
     }
 
     /**
      * 兼容旧构造器（无 SkillContributorRegistry，不合并插件贡献的 skill）。
      * 仅用于测试或无插件场景。
      */
-    public SkillAdvisor(List<Skill> skills, OsSandbox osSandbox) {
+    public SkillAdvisor(List<Skill> skills, SandboxPathRegistry pathRegistry) {
         this.builtInSkills = null;
         this.skillContributorRegistry = null;
-        this.osSandbox = osSandbox;
+        this.pathRegistry = pathRegistry;
         this.cachedSkills = skills;
     }
 
@@ -135,28 +134,16 @@ public class SkillAdvisor implements BaseAdvisor {
     }
 
     /**
-     * 将知识包 Windows 宿主路径解析为 AI 沙箱内可见的路径(§7.17)。
+     * 将知识包宿主路径解析为 AI 沙箱内可见的路径。
      *
-     * <p>WSL 系列沙箱下 AI 以 Linux 视角运行,bash 工具 {@code cat}/{@code grep} 技能包
-     * 与 {@code read_file}(经 FsToolSupport 反向翻译)均需 {@code /} 开头的沙箱内路径:
-     * <ul>
-     *   <li>wsl-direct:{@code C:\Users\...\skills\x.md → /c/Users/.../skills/x.md}
-     *       ({@link WslPathMapper#toDirectMount},与 drvfs 挂载点一致);</li>
-     *   <li>wsl-bwrap:{@code → /mnt/c/Users/.../skills/x.md}
-     *       ({@link WslPathMapper#toWsl},与 --ro-bind 挂载点一致);</li>
-     *   <li>非 WSL 后端(windows-mic / direct / 非 Windows):原样返回宿主路径。</li>
-     * </ul>
+     * <p>经 {@link SandboxPathRegistry#toSandboxPath} 翻译;无映射时原样返回（DIRECT 场景）。
+     * 这个路径注入 system prompt,供 AI 用 bash 工具访问（不是文件工具）。
      */
     private String resolveKnowledgePath(Skill skill) {
         String raw = skill.knowledgePath();
-        if (osSandbox == null || !osSandbox.isWslBackend()) {
+        if (pathRegistry == null) {
             return raw;
         }
-        Path winPath = Path.of(raw);
-        String sandboxPath = osSandbox.isWslDirect()
-                ? WslPathMapper.toDirectMount(winPath)
-                : WslPathMapper.toWsl(winPath);
-        // 映射失败(UNC 等)时回退原始路径,read_file 的 WSL 反向翻译同样处理兜底
-        return sandboxPath != null ? sandboxPath : raw;
+        return pathRegistry.toSandboxPath(Path.of(raw));
     }
 }

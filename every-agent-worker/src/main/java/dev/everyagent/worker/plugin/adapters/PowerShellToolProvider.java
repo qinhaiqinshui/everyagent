@@ -36,12 +36,11 @@ public class PowerShellToolProvider implements ToolProvider {
 
     @Override
     public boolean appliesTo(ToolContext ctx) {
-        // 与改造前一致：
-        // ① Windows 且沙箱不注册 bash → PowerShell 为唯一命令工具
-        // ② 任务级 powershellEnabled → bash 之外追加 PowerShell
-        boolean windowsNoBash = isWindows() && !ctx.sandbox().registerBashTool();
+        // Windows 平台注册 PowerShellTool（核心宿主访问工具）;
+        // 任务级 powershellEnabled 开启时也追加（bash 之外并存）。
+        boolean windows = isWindows();
         boolean powershellEnabled = ((ToolContextImpl) ctx).taskEntry().powershellEnabled;
-        return windowsNoBash || powershellEnabled;
+        return windows || powershellEnabled;
     }
 
     @Override

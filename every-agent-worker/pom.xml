@@ -27,17 +27,6 @@
             <groupId>org.springframework.ai</groupId>
             <artifactId>spring-ai-starter-model-openai</artifactId>
         </dependency>
-        <!-- Windows 原生进程沙箱与 ACL/完整性授权(jna-platform + Win32Ex 补充原语),跨平台编译安全降级 -->
-        <dependency>
-            <groupId>net.java.dev.jna</groupId>
-            <artifactId>jna</artifactId>
-            <version>5.16.0</version>
-        </dependency>
-        <dependency>
-            <groupId>net.java.dev.jna</groupId>
-            <artifactId>jna-platform</artifactId>
-            <version>5.16.0</version>
-        </dependency>
         <!-- 内嵌终端 PTY 引擎(§7.18):JetBrains pty4j,自带全部平台原生库(Linux .so / macOS .dylib / Windows .dll) -->
         <dependency>
             <groupId>org.jetbrains.pty4j</groupId>

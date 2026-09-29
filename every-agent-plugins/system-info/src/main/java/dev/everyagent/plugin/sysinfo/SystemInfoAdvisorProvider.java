@@ -16,7 +16,7 @@ import org.springframework.core.Ordered;
  * <p>order = {@link Ordered#HIGHEST_PRECEDENCE} + 50。每 run 新建实例。
  *
  * <p>沙箱信息通过 {@link WorkerServices#sandbox()} 获取 {@link SandboxBackend} 接口
- * （已有 {@code isWslBackend()} / {@code isWslDirect()}），不直接依赖 worker 的 {@code OsSandbox} 具体类。
+ * （通过 {@code sandbox.id()} 判断后端类型）,不直接依赖 worker 的 {@code OsSandbox} 具体类。
  */
 public class SystemInfoAdvisorProvider implements AdvisorProvider {
 
@@ -43,7 +43,6 @@ public class SystemInfoAdvisorProvider implements AdvisorProvider {
         SandboxBackend sandbox = services.sandbox();
         return new SystemInfoAdvisor(
                 t.workspaceRoot,
-                sandbox.isWslBackend(),
-                sandbox.isWslDirect());
+                sandbox.id());
     }
 }

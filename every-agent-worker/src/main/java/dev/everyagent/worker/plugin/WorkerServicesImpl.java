@@ -10,7 +10,6 @@ import dev.everyagent.worker.modules.WorkspaceManager;
 import dev.everyagent.worker.interaction.InteractionServiceImpl;
 import dev.everyagent.worker.os.OsSandbox;
 import dev.everyagent.worker.task.TaskManager;
-import dev.everyagent.worker.tools.PermissionGate;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Component;
 
@@ -23,16 +22,14 @@ import java.util.concurrent.atomic.AtomicReference;
 public class WorkerServicesImpl implements WorkerServices {
 
     private final OsSandbox sandbox;
-    private final PermissionGate gate;
     private final WorkspaceManager workspaces;
     private final AtomicReference<TokenEstimator> tokenEstimator;
     private final TaskManager taskManager;
     private final InteractionServiceImpl interaction;
 
-    public WorkerServicesImpl(OsSandbox sandbox, PermissionGate gate, WorkspaceManager workspaces,
+    public WorkerServicesImpl(OsSandbox sandbox, WorkspaceManager workspaces,
             TokenEstimator tokenEstimator, @Lazy TaskManager taskManager, InteractionServiceImpl interaction) {
         this.sandbox = sandbox;
-        this.gate = gate;
         this.workspaces = workspaces;
         this.tokenEstimator = new AtomicReference<>(tokenEstimator);
         this.taskManager = taskManager;
@@ -47,11 +44,6 @@ public class WorkerServicesImpl implements WorkerServices {
     @Override
     public SandboxBackend sandbox() {
         return sandbox;
-    }
-
-    @Override
-    public dev.everyagent.plugin.api.spi.PermissionGate gate() {
-        return gate;
     }
 
     @Override

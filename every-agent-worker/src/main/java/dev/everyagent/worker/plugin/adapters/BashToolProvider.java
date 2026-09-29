@@ -35,8 +35,9 @@ public class BashToolProvider implements ToolProvider {
 
     @Override
     public boolean appliesTo(ToolContext ctx) {
-        // 与改造前一致：isWindows() && !sandbox.registerBashTool() 时注册 PowerShell 而非 bash
-        return !(isWindows() && !ctx.sandbox().registerBashTool());
+        // 非注册 PowerShellTool 的平台注册 BashTool（Linux/macOS）;
+        // Windows 平台的 BashTool 由沙箱插件提供（如 wsl-ubuntu）,核心不注册。
+        return !isWindows();
     }
 
     @Override

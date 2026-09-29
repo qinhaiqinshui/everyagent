@@ -9,6 +9,7 @@ import dev.everyagent.worker.modules.WorkspaceManager;
 import dev.everyagent.worker.os.OsSandbox;
 import dev.everyagent.worker.plugin.AdvisorContextImpl;
 import dev.everyagent.worker.plugin.ToolContextImpl;
+import dev.everyagent.worker.os.SandboxPathRegistry;
 import dev.everyagent.worker.plugin.registry.AdvisorProviderRegistry;
 import dev.everyagent.worker.plugin.registry.ToolProviderRegistry;
 import dev.everyagent.worker.task.InterceptingToolCallingManager;
@@ -62,6 +63,7 @@ public class AgentBuilder {
     private final WorkspaceManager workspaces;
     private final RipgrepBinary rgBinary;
     private final InteractionServiceImpl interaction;
+    private final SandboxPathRegistry pathRegistry;
 
     public AgentBuilder(ToolProviderRegistry toolRegistry,
             AdvisorProviderRegistry advisorRegistry,
@@ -71,7 +73,8 @@ public class AgentBuilder {
             PermissionGate gate,
             WorkspaceManager workspaces,
             RipgrepBinary rgBinary,
-            InteractionServiceImpl interaction) {
+            InteractionServiceImpl interaction,
+            SandboxPathRegistry pathRegistry) {
         this.toolRegistry = toolRegistry;
         this.advisorRegistry = advisorRegistry;
         this.defaultTcm = defaultTcm;
@@ -81,6 +84,7 @@ public class AgentBuilder {
         this.workspaces = workspaces;
         this.rgBinary = rgBinary;
         this.interaction = interaction;
+        this.pathRegistry = pathRegistry;
     }
 
     /**
@@ -113,7 +117,8 @@ public class AgentBuilder {
         Path workspaceRoot = wsRoot == null ? null : Paths.get(wsRoot.toString());
         TaskEntry taskEntry = (TaskEntry) properties.get("taskEntry");
         return new ToolContextImpl(taskId, agentId, workspaceRoot,
-                sandbox, gate, workspaces, rgBinary != null ? rgBinary.path() : null, interaction, taskEntry);
+                sandbox, gate, workspaces, rgBinary != null ? rgBinary.path() : null, interaction, taskEntry,
+                pathRegistry);
     }
 
     /**

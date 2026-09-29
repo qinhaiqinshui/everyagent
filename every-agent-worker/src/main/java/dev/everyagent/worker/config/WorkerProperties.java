@@ -977,14 +977,6 @@ public class WorkerProperties {
          */
         private boolean allowPrivilegeEscalation = false;
         /**
-         * 是否启用 seccomp 内核级提权拦截(仅 wsl-bwrap 后端生效,见
-         * docs/ARCHITECTURE.md §7.11):true 时命令内 exec setuid 二进制
-         * (sudo/su 等)会先经 PermissionGate 授权(AI 审议优先 → 无人值守拒绝 → 人工弹窗),
-         * 拒绝则该次 exec 返回 EPERM。默认 true;seccomp 不可用(旧内核/权限不足)时
-         * 由 eagent-run.py 探测并退化为无拦截 + 日志告警。
-         */
-        private boolean interceptPrivilege = true;
-        /**
          * 是否允许沙箱内命令访问网络。默认 true = 放行(含回环 127.0.0.1 与出站;
          * wsl-bwrap 不加 {@code --unshare-net} / wsl-direct 不 unshare / direct/mic 不剥代理 env)。
          * false 回落到 networkPolicy(deny-all 硬/软拒,audit-only 放行)。
@@ -1020,83 +1012,27 @@ public class WorkerProperties {
          * 非 Windows 平台任何取值都退化为直接 spawn(本版无内核级沙箱,配置无意义)。
          */
         private String type = "auto";
-        /** WSL 后端专属配置。 */
+        /** WSL 后端专属配置（由 sandbox-wsl-ubuntu 插件消费）。 */
         private Wsl wsl = new Wsl();
 
-        /** WSL(wsl-bwrap)后端配置:发行版/只读岛/pwsh。 */
+        /** WSL(wsl-ubuntu)后端配置:发行版/只读岛/pwsh。 */
         public static class Wsl {
-            /**
-             * 发行版名:空(默认)= WSL 默认发行版(wsl -l -v 带 * 者,开发机通常即 Ubuntu)
-             * ——机器无关的「已有可用」,免配置即可探测通过。生产托管路径:wsl --import
-             * 导入 {@code EveryAgent} 后显式配置(零污染基础层、interop 关闭)。
-             * 须已安装 python3 与 bwrap(探测把关,失败断因见 {@code WslBwrapSandbox.probe})。
-             */
             private String distro = "";
-            /**
-             * 托管发行版镜像路径(tar.gz,相对 worker 系统目录或绝对):仅作<b>兜底</b>——
-             * 优先使用程序根 {@code ./runtime/wsl/eagent-rootfs.tar.gz}(随安装包
-             * 分发、只读引用,见 {@code WslBwrapSandbox.tarballFor});此处配置在程序根
-             * 无镜像时生效(兼容旧/手动放置)。文件在位且发行版缺失时,启动探测自动
-             * {@code wsl --import EveryAgent}(免管理员、离线;sha256 以同目录 {@code <镜像名>.sha256}
-             * 把关,缺失/不符拒绝导入)。默认指向打包含义下的旧约定位置——开发机无此文件即
-             * 自动关闭,零打扰;置空串显式关闭。
-             */
             private String tarball = "wsl/eagent-rootfs.tar.gz";
-            /**
-             * 工作区内只读岛(工作区相对路径列表):可写区内的 ro 子路径(后挂载遮蔽先挂载)。
-             * 默认空——agent 需要正常提交,.git 不默认保护(设计文档 §4.3 的修正)。
-             */
             private List<String> roIslands = new ArrayList<>();
-            /** 发行版内提供 pwsh(powershell 方言);默认 false,bash 为唯一方言。 */
             private boolean pwshEnabled = false;
-            /**
-             * bash 命令以登录 shell 执行(bash -lc):true 时每条命令自动加载 /etc/profile
-             * 与 ~/.profile(即 ~/.bash_profile / ~/.profile),使 profile 里 export 的环境变量
-             * 对每条命令持久生效。默认 true(自动加载 profile,环境变量持久生效);白名单环境
-             * 重建仍保留,profile 里的 export 允许覆盖部分白名单变量。置 false 恢复
-             * 纯白名单确定性(bash -c,不加载 profile)。
-             */
             private boolean loginShell = true;
 
-            public String getDistro() {
-                return distro;
-            }
-
-            public void setDistro(String distro) {
-                this.distro = distro;
-            }
-
-            public String getTarball() {
-                return tarball;
-            }
-
-            public void setTarball(String tarball) {
-                this.tarball = tarball;
-            }
-
-            public List<String> getRoIslands() {
-                return roIslands;
-            }
-
-            public void setRoIslands(List<String> roIslands) {
-                this.roIslands = roIslands;
-            }
-
-            public boolean isPwshEnabled() {
-                return pwshEnabled;
-            }
-
-            public void setPwshEnabled(boolean pwshEnabled) {
-                this.pwshEnabled = pwshEnabled;
-            }
-
-            public boolean isLoginShell() {
-                return loginShell;
-            }
-
-            public void setLoginShell(boolean loginShell) {
-                this.loginShell = loginShell;
-            }
+            public String getDistro() { return distro; }
+            public void setDistro(String distro) { this.distro = distro; }
+            public String getTarball() { return tarball; }
+            public void setTarball(String tarball) { this.tarball = tarball; }
+            public List<String> getRoIslands() { return roIslands; }
+            public void setRoIslands(List<String> roIslands) { this.roIslands = roIslands; }
+            public boolean isPwshEnabled() { return pwshEnabled; }
+            public void setPwshEnabled(boolean pwshEnabled) { this.pwshEnabled = pwshEnabled; }
+            public boolean isLoginShell() { return loginShell; }
+            public void setLoginShell(boolean loginShell) { this.loginShell = loginShell; }
         }
 
         public String getType() {
@@ -1206,14 +1142,6 @@ public class WorkerProperties {
 
         public void setAllowPrivilegeEscalation(boolean allowPrivilegeEscalation) {
             this.allowPrivilegeEscalation = allowPrivilegeEscalation;
-        }
-
-        public boolean isInterceptPrivilege() {
-            return interceptPrivilege;
-        }
-
-        public void setInterceptPrivilege(boolean interceptPrivilege) {
-            this.interceptPrivilege = interceptPrivilege;
         }
 
         public boolean isAllowNetwork() {

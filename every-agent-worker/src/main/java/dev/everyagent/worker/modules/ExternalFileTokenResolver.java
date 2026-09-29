@@ -8,8 +8,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
-import dev.everyagent.worker.os.OsSandbox;
-import dev.everyagent.worker.os.wsl.WslPathMapper;
+import dev.everyagent.worker.os.SandboxPathRegistry;
+
 import dev.everyagent.worker.rpc.BadParamsException;
 import dev.everyagent.worker.slash.SlashTokenHandler;
 import dev.everyagent.worker.task.TaskEntry;
@@ -44,12 +44,12 @@ public class ExternalFileTokenResolver implements SlashTokenHandler.SlashTokenRe
     private static final Logger log = LoggerFactory.getLogger(ExternalFileTokenResolver.class);
 
     private final WorkspaceManager workspaces;
-    /** 只读后端判定(isWslDirect/isWslBwrap),决定是否附沙箱内路径后缀。 */
-    private final OsSandbox osSandbox;
+    /** 路径翻译中间人,把宿主路径翻译为 AI 可见的沙箱内路径。 */
+    private final SandboxPathRegistry pathRegistry;
 
-    public ExternalFileTokenResolver(WorkspaceManager workspaces, OsSandbox osSandbox) {
+    public ExternalFileTokenResolver(WorkspaceManager workspaces, SandboxPathRegistry pathRegistry) {
         this.workspaces = workspaces;
-        this.osSandbox = osSandbox;
+        this.pathRegistry = pathRegistry;
     }
 
     @Override
@@ -104,7 +104,7 @@ public class ExternalFileTokenResolver implements SlashTokenHandler.SlashTokenRe
             log.warn("外部授权根注册失败: ws={} path={} - {}", task.workspaceRoot, absolutePath, e.getMessage());
             return "（外部引用注册失败：" + absolutePath + "）";
         }
-        return externalRefText(real, osSandbox.isWslDirect(), osSandbox.isWslBwrap());
+        return externalRefText(real, pathRegistry);
     }
 
     /** 工作区相对路径(`/` 分隔、无前导 `/`,根自身为 `.`),与前端 system.workspace_file 逐字一致。 */
@@ -115,15 +115,15 @@ public class ExternalFileTokenResolver implements SlashTokenHandler.SlashTokenRe
 
     /**
      * 工作区外引用的替换文本(前后各一空格防粘连):{@code [外部引用] <原生绝对路径>}
-     * (realpath 形态)+ wsl 系后端附沙箱内路径(wsl-direct=toDirectMount / wsl-bwrap=toWsl;
-     * 映射不出(UNC 等)或其余后端不附)。纯函数,便于单测钉住文本形态。
+     * (realpath 形态) + 沙箱内路径（如有映射）。纯函数,便于单测钉住文本形态。
      */
-    static String externalRefText(Path real, boolean wslDirect, boolean wslBwrap) {
-        String sandboxPath = wslDirect ? WslPathMapper.toDirectMount(real)
-                : wslBwrap ? WslPathMapper.toWsl(real) : null;
+    static String externalRefText(Path real, SandboxPathRegistry pathRegistry) {
         StringBuilder sb = new StringBuilder(" [外部引用] ").append(real);
-        if (sandboxPath != null) {
-            sb.append("（wsl 沙箱内: ").append(sandboxPath).append("）");
+        if (pathRegistry != null) {
+            String sandboxPath = pathRegistry.toSandboxPath(real);
+            if (sandboxPath != null && !sandboxPath.equals(real.toString())) {
+                sb.append("（沙箱内: ").append(sandboxPath).append("）");
+            }
         }
         return sb.append(' ').toString();
     }

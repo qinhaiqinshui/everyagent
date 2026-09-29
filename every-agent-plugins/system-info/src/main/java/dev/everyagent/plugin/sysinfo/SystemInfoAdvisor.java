@@ -1,6 +1,5 @@
 package dev.everyagent.plugin.sysinfo;
 
-import dev.everyagent.worker.os.wsl.WslPathMapper;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -45,17 +44,17 @@ public class SystemInfoAdvisor implements BaseAdvisor {
     private final String hostOs;
     /** AI 实际运行的操作系统描述(wsl 系列后端为 Linux,其余取宿主机 os.name)。 */
     private final String execOs;
-    /** 是否 wsl 系列沙箱后端:是则以 Linux 视角注入(当前操作系统:Linux)。 */
+    /** 沙箱后端 id（如 "wsl-ubuntu"/"windows-mic"/"direct"）。 */
+    private final String sandboxId;
+    /** 是否 wsl-ubuntu 后端。 */
     private final boolean wslBackend;
-    /** 是否 wsl-direct 后端:工作区以原路径挂载点 /c/a/foo 注入(而非 /workspace)。 */
-    private final boolean wslDirect;
 
-    public SystemInfoAdvisor(String workspaceRoot, boolean wslBackend, boolean wslDirect) {
+    public SystemInfoAdvisor(String workspaceRoot, String sandboxId) {
         this.workspaceRoot = workspaceRoot;
-        this.wslBackend = wslBackend;
-        this.wslDirect = wslDirect;
+        this.sandboxId = sandboxId != null ? sandboxId : "direct";
+        this.wslBackend = "wsl-ubuntu".equals(this.sandboxId);
         this.hostOs = System.getProperty("os.name", "unknown");
-        this.execOs = wslBackend ? "Linux" : this.hostOs;
+        this.execOs = "wsl-ubuntu".equals(this.sandboxId) ? "Linux" : this.hostOs;
     }
 
     @Override
@@ -76,13 +75,8 @@ public class SystemInfoAdvisor implements BaseAdvisor {
             // wsl 系列后端:AI 看到的路径是沙箱内 Linux 挂载点(wsl-bwrap 为 /workspace、
             // wsl-direct 为原路径挂载点 /c/a/foo),命令也在其中执行;宿主机 Windows 路径
             // 只存在于外部,注入反而会误导命令路径语义。
-            String shownWorkspace;
-            if (wslDirect) {
-                String m = WslPathMapper.toDirectMount(java.nio.file.Path.of(workspaceRoot));
-                shownWorkspace = m != null ? m : workspaceRoot;
-            } else {
-                shownWorkspace = wslBackend ? WslPathMapper.WORKSPACE_MOUNT : workspaceRoot;
-            }
+            String shownWorkspace = workspaceRoot;
+            // wslBackend declared at class level for use outside this block
             String shellHint = wslBackend ? "bash" : "powershell";
             sb.append("# 工作区\n");
             sb.append("- 当前工作区位置： ").append(shownWorkspace).append('\n')
@@ -92,7 +86,7 @@ public class SystemInfoAdvisor implements BaseAdvisor {
         }
         sb.append("\n- 当前操作系统：").append(execOs);
         if (wslBackend) {
-            // wsl 系列后端:AI 实际运行在 Linux 沙箱内,但宿主机为 Windows,
+            // wsl-ubuntu 后端:AI 实际运行在 Linux 沙箱内,但宿主机为 Windows,
             // 同时注入宿主机信息,避免与 agents.md 中用户书写的宿主机描述矛盾
             sb.append("（WSL沙箱环境，宿主机为").append(hostOs).append("）");
         }

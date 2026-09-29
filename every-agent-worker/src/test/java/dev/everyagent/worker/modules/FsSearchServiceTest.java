@@ -4,7 +4,6 @@ import dev.everyagent.contract.json.Json;
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.hub.HubLink;
 import dev.everyagent.worker.hub.HubPool;
-import dev.everyagent.worker.os.wsl.WslUmounter;
 import dev.everyagent.worker.proto.Channels;
 import dev.everyagent.worker.proto.RpcMethods;
 import dev.everyagent.worker.rpc.RpcDispatcher;
@@ -76,7 +75,7 @@ class FsSearchServiceTest {
         @SuppressWarnings("unchecked")
         ObjectProvider<TaskManager> provider = mock(ObjectProvider.class);
         workspaces = new WorkspaceManager(props, mock(RpcDispatcher.class), mock(HubPool.class),
-                provider, new WslUmounter(props, (argv, timeoutMs) -> 0));
+                provider, new dev.everyagent.worker.os.SandboxPathRegistry(new dev.everyagent.worker.os.OsSandbox(props, null, null)));
         workspaces.init();
         new FsSearchService(dispatcher, workspaces, new RipgrepBinary(props));
     }

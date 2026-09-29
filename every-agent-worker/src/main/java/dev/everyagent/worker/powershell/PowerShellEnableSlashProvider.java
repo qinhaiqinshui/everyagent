@@ -4,7 +4,6 @@ import java.util.List;
 
 import org.springframework.stereotype.Component;
 
-import dev.everyagent.worker.os.OsSandbox;
 import dev.everyagent.worker.slash.SlashCancelHandler;
 import dev.everyagent.worker.slash.SlashCommandItem;
 import dev.everyagent.worker.slash.SlashCommandRegistry;
@@ -18,13 +17,13 @@ import dev.everyagent.worker.task.TaskManager;
  * 用户选择后把「允许AI访问电脑」胶囊(bottom 底部渲染)挂到本任务,业务 onSelect/onCancel
  * 用 taskId 读写任务级开关 {@code TaskEntry.powershellEnabled} 并随 meta.json 落盘。
  *
- * <p><b>仅 WSL+Linux 沙箱后端注册</b>({@link OsSandbox#isWslBackend()},即
- * wsl-bwrap / wsl-direct):WSL 后端命令方言是 bash,AI 默认只有 bash 工具;选中本条目后
+ * <p><b>始终注册</b>(核心的宿主访问工具开关,与沙箱无关)。
+ * Linux 沙箱后端命令方言是 bash,AI 默认只有 bash 工具;选中本条目后
  * 主/子 agent 工具集在 bash 之外<b>追加</b>{@code powershell} 工具——命令<b>回宿主
  * Windows 原生沙箱执行</b>(windows-mic 语义:Restricted Token + Low IL + Job Object +
  * 目录标注/ACL,经 {@code CommandExecutor} 的 powershell 分支强制 native;wsl 发行版内
  * 不要求安装 pwsh),让 AI 同时拥有 powershell 与 bash。
- * <b>windows-mic(Windows+ACL)后端不注册</b>:该后端命令工具本就是 PowerShellTool,
+ * Windows 平台也注册:该后端命令工具本就是 PowerShellTool,
  * 无「追加 powershell」需求,故 `/` 菜单不出现本条目。
  *
  * <p>开关随任务 meta.json 持久化;胶囊底部渲染,可随时 ✕ 取消(取消后置 false 并落盘,
@@ -47,14 +46,10 @@ public class PowerShellEnableSlashProvider {
 
     private final TaskManager taskManager;
 
-    public PowerShellEnableSlashProvider(SlashCommandRegistry registry, TaskManager taskManager,
-            OsSandbox sandbox) {
+    public PowerShellEnableSlashProvider(SlashCommandRegistry registry, TaskManager taskManager) {
         this.taskManager = taskManager;
-        // 仅 WSL+Linux 后端注册;windows-mic(Windows+ACL)后端不注册
-        // (该后端命令工具本就是 PowerShellTool,无「追加 powershell」需求)。
-        if (sandbox.isWslBackend()) {
-            registry.registerProvider("powershell-enable", this::items);
-        }
+        // 始终注册:核心的宿主访问工具开关,与沙箱无关
+        registry.registerProvider("powershell-enable", this::items);
     }
 
     /** 返回 `/允许AI访问电脑` 候选项(选中即构造自包含 opaque 串 → 底部胶囊渲染,可取消)。 */

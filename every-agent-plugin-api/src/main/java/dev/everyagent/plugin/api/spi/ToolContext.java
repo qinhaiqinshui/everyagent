@@ -7,7 +7,7 @@ import java.nio.file.Path;
  * 工具创建上下文 —— {@link ToolProvider#createTools} 的参数。
  *
  * <p>封装 per-task 信息（taskId、workspaceRoot）和核心只读服务
- * （沙箱、权限门、工作区管理器等），工具提供者据此创建工具实例。
+ * （沙箱、工作区管理器等），工具提供者据此创建工具实例。
  */
 public interface ToolContext {
 
@@ -22,9 +22,6 @@ public interface ToolContext {
 
     /** 当前激活的沙箱后端（来自 SandboxProviderRegistry）。 */
     SandboxBackend sandbox();
-
-    /** 权限门（PermissionGate，工具经此授权链）。 */
-    PermissionGate gate();
 
     /** 工作区管理器（多工作区注册表）。 */
     WorkspaceManager workspaces();

@@ -4,7 +4,7 @@ import dev.everyagent.contract.json.Json;
 import dev.everyagent.worker.AtomicFiles;
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.hub.HubPool;
-import dev.everyagent.worker.os.wsl.WslUmounter;
+import dev.everyagent.worker.os.SandboxPathRegistry;
 import dev.everyagent.worker.proto.RpcMethods;
 import dev.everyagent.worker.proto.ShortIds;
 import dev.everyagent.worker.tools.permission.OverBroadRootCheck;
@@ -88,10 +88,9 @@ public class WorkspaceManager implements dev.everyagent.plugin.api.spi.Workspace
      */
     private final ObjectProvider<TaskManager> taskManagers;
     /**
-     * 外部授权根级联 umount 收口(独立组件,不注入 OsSandbox——后者构造注入了本类,
-     * 反向依赖会构成构造循环);仅删除工作区时 best-effort 调用,失败不阻塞删除流程。
+     * 路径翻译中间人,工作区删除时通知沙箱清理挂载 + 清理映射表。
      */
-    private final WslUmounter umounter;
+    private final SandboxPathRegistry pathRegistry;
 
     private Path systemDir;
     private Path defaultRoot;
@@ -107,12 +106,12 @@ public class WorkspaceManager implements dev.everyagent.plugin.api.spi.Workspace
     private final Set<String> missing = ConcurrentHashMap.newKeySet();
 
     public WorkspaceManager(WorkerProperties props, RpcDispatcher dispatcher, HubPool pool,
-            ObjectProvider<TaskManager> taskManagers, WslUmounter umounter) {
+            ObjectProvider<TaskManager> taskManagers, SandboxPathRegistry pathRegistry) {
         this.props = props;
         this.dispatcher = dispatcher;
         this.pool = pool;
         this.taskManagers = taskManagers;
-        this.umounter = umounter;
+        this.pathRegistry = pathRegistry;
         dispatcher.register(RpcMethods.WORKSPACES_LIST, this::rpcList);
         dispatcher.register(RpcMethods.WORKSPACES_ADD, this::rpcAdd);
         dispatcher.register(RpcMethods.WORKSPACES_ADD_EXTERNAL_ROOT, this::rpcAddExternalRoot);
@@ -536,7 +535,7 @@ public class WorkspaceManager implements dev.everyagent.plugin.api.spi.Workspace
     /**
      * 删除工作区后级联 umount 其「独有」外部授权根:收集其余在册工作区仍引用的根
      * (realpath 对比;后代也算引用——候选根之下还有别人的挂载点时一并保留,防孤儿
-     * 挂载),无人引用的交 {@link WslUmounter} best-effort 卸载(wsl 系后端才实际
+     * 挂载),无人引用的交 {@link SandboxPathRegistry} best-effort 清理(沙箱后端才实际
      * 执行)。失败仅告警,绝不阻塞删除流程。
      */
     private void unmountExclusiveExternalRoots(Registered removed) {
@@ -554,7 +553,7 @@ public class WorkspaceManager implements dev.everyagent.plugin.api.spi.Workspace
             boolean shared = stillUsed.stream().anyMatch(p -> covers(root, p));
             if (!shared) {
                 try {
-                    umounter.umountQuietly(root);
+                    pathRegistry.onWorkspaceRemoved(root);
                 } catch (RuntimeException e) {
                     log.warn("外部授权根级联卸载异常(不影响工作区删除): {} - {}", root, e.getMessage());
                 }

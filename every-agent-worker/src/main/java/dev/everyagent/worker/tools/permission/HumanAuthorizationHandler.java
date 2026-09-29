@@ -59,8 +59,9 @@ public class HumanAuthorizationHandler implements AuthorizationHandler {
                 new AskQuestion("", req.prompt(), AUTHORIZE_OPTIONS));
         AskResult ans;
         try {
-            ans = interaction.ask(t.taskId, req.agentId(), questions,
-                    props.getPermissions().getAuthTimeoutMs());
+            ans = interaction.ask(questions,
+                    props.getPermissions().getAuthTimeoutMs(),
+                    java.util.Map.of("taskId", t.taskId, "agentId", req.agentId()));
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new AgentCancelledException("task cancelled");

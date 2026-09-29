@@ -506,34 +506,48 @@ ask 管道承载第二类阻塞请求:**危险操作授权**。`PermissionGate` 
 - 审计:`task.trace(kind=auth.review)` 持久落盘,metadata 含 decision/confidence/reason/scope/grantKey/prompt/taskId/审议 agentId;审议链的重试/容灾 trace 同入审计。
 - 配置:`worker.permissions.review-timeout-ms`(默认 60s,总预算硬闸)、`review-deny-on-error`(默认 true)、`review-model`(可选,审议专用模型 configId,空则用任务当前模型)。
 
-### 7.10 命令沙箱(多后端)
+### 7.10 命令沙箱(插件化,多后端)
 
-命令执行(命令行工具、脚本、git 等)统一经 `OsSandbox` 门面按**后端**分发:
+沙箱后端已从 worker 核心抽离为独立插件(`every-agent-plugins/sandbox-windows-mic/`、`every-agent-plugins/sandbox-wsl-ubuntu/`)。`SandboxBackend` SPI 极简化为**挂载 + 工作区生命周期 + 标识**三个方法,不执行命令、不翻译路径、不涉及工具注册、不涉及授权策略。
 
-| 后端 | 语义 | 何时启用 |
-|---|---|---|
-| **wsl-direct**(Windows 默认) | 命令在托管的 WSL2 发行版(`EveryAgent`,可丢弃系统)内以 root 运行;宿主盘隔离 = 关闭 automount + 每命令手动挂载工作区 + seccomp deny-mount 过滤器;网络默认放行,任务级 `/禁用网络` 时 unshare -n | `auto`(Windows 默认)/ 显式 `wsl-direct`;发行版缺失自动导入(rootfs 随包,sha256 校验) |
-| **wsl-bwrap** | 命令经 bwrap 挂载命名空间运行:授权根 = `--bind` 白名单(授权=绑定,撤销=下次不绑,宿主零残留),网络默认放行,任务级 `/禁用网络` 时 `--unshare-net` 硬拒(新 netns 仅 down 的 lo,连回环也不通),工作区外宿主盘**不可见**(读白名单) | 显式 `wsl-bwrap`(更强隔离的用户知情选择) |
-| **windows-mic** | Restricted Token + Medium IL + Job Object(Windows 原生路径,零文件系统副作用) | `windows-mic` / WSL 探测失败回退 |
-| **none/direct** | 直接 spawn(仅超时/输出护栏/网络代理 env 剥离) | 显式 `none` / 非 Windows |
+**SandboxBackend SPI(极简):**
+- `id()` — 后端标识。
+- `mount(List<MountRequest>)` — 批量挂载宿主路径到沙箱内,返回 {宿主路径 → 沙箱内路径} 映射表。DIRECT/windows-mic 返回原路径(不挂载);wsl-ubuntu 做 drvfs 挂载返回 `/c/...` 形态。幂等:重复调用相同路径不重复挂载。
+- `onWorkspaceRemoved(Path)` — 工作区删除时 best-effort 清理挂载等。DIRECT/windows-mic no-op;wsl-ubuntu 做 umount。
 
-- `worker.sandbox.type`: `auto`(默认)| `wsl-direct` | `wsl-bwrap` | `windows-mic` | `none`(别名 acl/wsl/direct 兼容)。
-- **Windows Medium IL 契约**(对 windows-mic 后端):沙箱进程运行在 Medium IL(Restricted Token 去特权但不降级),天然可写工作区与已授权目录,不对文件系统做任何标注或 ACL 修改——零副作用、零残留。代价是失去 MIC NO_WRITE_UP 的 OS 级写隔离兜底,越界写拦截完全由 PermissionGate 责任链承担(L1 CommandCheck 扫描 → L2 execRootsSandboxed 过滤 → OverBroadRootCheck 拒收过宽根)。Job Object(进程数/内存/CPU/超时)与 Restricted Token(去特权)仍保留。详见 docs/design-windows-mic-medium-il.md
-- **工作区外部授权根的沙箱消费**(§7.17):文件工具侧并入 `FsToolSupport` 的 Sandbox 附加根(read_file/create_file/update_file 直接放行);命令侧并入 `GrantRegistry.execRootsSandboxed` 安全过滤视图(过宽根同被拒收)——wsl-bwrap 随命令以 `rw --bind` 白名单挂载(挂载点 `/mnt/<盘>` 原生形态);windows-mic Medium IL 天然可写(无需标注/ACL,同工作区契约);wsl-direct 把**全部工作区**的 externalRoots 并入每条命令的 `WslDirectSandbox` 挂载列表(drvfs 读写挂载,runner trusted 阶段幂等 `_ensure_mount`;挂载长存,删除工作区时按 §7.17 级联 umount;bwrap 按次 bind 天然跟随,mic 零副作用天然跟随);Java 侧 `OsSandbox.wslDirectMountRoots()` 每次先经 `WorkspaceManager.pruneStaleAndListMountRoots()` 把宿主上已不存在的根(任务数据目录被清理、外部授权根失效)**从注册表剔除并落盘**(默认工作区除外,目录复活后仍可重新注册/纠正;仅注册表级清理,不级联删任务数据),避免失效条目反复进挂载载荷打 stderr 噪音;`mountPairs` 仅对不属于注册表的 cwd 保留存在性防御)。
-- **系统技能目录的沙箱读写挂载**(§7.17):系统目录 `skills/`(skill 知识包,AI 经 `read_file` 读写免授权访问)同时以**读写**形态挂入 wsl 系列沙箱,使 AI 的 bash 工具在沙箱内也能 `cat`/`grep`/创建/编辑 skill 文件(与 `read_file` 走宿主 Java 侧读写并存)——wsl-direct 把 `resolveSkillsDir()` 作为读写挂载对加入 `WslDirectSandbox` 挂载载荷(`{src,dest}`,runner trusted 阶段 `mount -t drvfs`,幂等,挂载点 = `WslPathMapper.toDirectMount` 原路径形态 `/c/...`,与工作区读写挂载同语义);wsl-bwrap 以 `--bind` 按原生 `/mnt/<盘>` 形态绑定(载荷 `binds`,与工作区白名单同源、读写)。windows-mic 后端命令跑在宿主、Medium IL 进程读写用户文件本就放行,无需挂载。`skills/` 是系统目录中对 AI 文件工具唯一读写免授权开放的子目录,沙箱侧同样读写放行;EXEC 仍走授权决议链(§7.17)。
-- **网络策略**:默认放行(`worker.sandbox.allow-network=true`,命令可访问网络,含回环 127.0.0.1);任务级 `/禁用网络` 或全局 `allow-network=false` 才断网——wsl-direct = `unshare -n`(新建无 eth0 的 netns)、wsl-bwrap = `--unshare-net`(新 netns 仅 down 的 lo,连回环也不通)、direct/mic = 剥代理 env(advisory)。
-- **内存上限语义**(跨后端统一为「真实内存占用」上限,防失控而非防虚拟地址空间):`worker.sandbox.memory-limit-mb` 在 windows-mic = Job Object `JobMemoryLimit`(commit 上限);wsl 系后端 = **cgroup v2** `memory.max` + `memory.swap.max=0`(eagent-run.py trusted 阶段建 `/sys/fs/cgroup/eagent.run/<runId>` 组、迁移自身后 exec,`memory.swap.max=0` 是必须的——WSL 默认带 swap,不关则超限页被换出而非 OOM,上限形同虚设;空组随下条命令 sweep_stale 或 supervisor 退出回收)。取值语义:**`-1`(默认)= 自动**——worker 读取系统总物理内存,< 8GB 不限制(0),≥ 8GB 限总内存的 70%(`WorkerProperties.Sandbox.resolveMemoryLimitMb()`,解析一次缓存);`0` = 不限制;`>0` = 固定 MB。**明确弃用 RLIMIT_AS**:它限的是虚拟地址空间而非内存占用,而 V8/JVM/Go 等现代运行时保留远超实际占用的 VA——V8 指针压缩 cage 保留 4GB、每个 Wasm memory 带 GB 级 guard region,4GB as 上限下任何含 Wasm 的 Node 工作负载(undici llhttp/node fetch/vite build)一实例化 Wasm 即溢出崩溃(历史 bug:曾致 vite build 与 `node -e fetch` 全量失败,空脚本同位崩溃证实为环境问题)。RLIMIT_CPU/FSIZE 语义正确仍保留;bwrap 非特权 runner 写 cgroup 失败时降级为不限内存(超时 + pgid 击杀 + 发行版 OOM 兜底),绝不回退 RLIMIT_AS。
-- **PowerShell 方言可选开启**(wsl 系列后端):WSL 后端命令方言为 bash,AI 默认只有 `bash` 工具;用户对某任务选 `/允许AI访问电脑`(kind=`powershell.enable`,任务级开关 `TaskEntry.powershellEnabled`,随 meta 持久化)后,主/子 agent 工具集在 bash 之外**追加** `powershell` 工具——该命令**回宿主 Windows 原生沙箱执行**(windows-mic 语义:Restricted Token + Medium IL + Job Object(零文件系统副作用),经 `CommandExecutor` 的 powershell 分支强制 native,wsl 发行版内不要求安装 pwsh),与 bash 并存。windows-mic(Windows+ACL)后端命令工具本就是 PowerShellTool,**不注册**该斜杠条目(`PowerShellEnableSlashProvider` 仅 `sandbox.isWslBackend()` 时注册)。
-- **命令 stdin 契约**:AI 命令的 stdin 一律接 null 设备(`/dev/null`;windows-mic 后端为 NULL 句柄),不得是"打开的空管道"。wsl 系后端载荷经 stdin 传入,但 wsl.exe→发行版的 stdio 桥接会保持 Linux 侧管道写端打开(worker 侧关闭管道也不传播 EOF);若让 bash 继承它,`rg`/`grep` 无路径参数时据 stdin 可读判定改读 stdin(静默空结果,与"无匹配"不可区分),`cat` 等阻塞读则挂到超时。落地:eagent-run.py 在 exec bash/bwrap 前把 fd 0 重定向到 `/dev/null`(seccomp supervisor 除外——其 stdin 承载 priv-ans 控制帧);direct 后端 ProcessBuilder `redirectInput` null 设备。
-- **Windows 沙箱技术路线说明**:曾评估 AppContainer(Low IL 标注的继任者),因"capability 模型不适合开放式开发工作流+普通 ACE 全失效的读模型破坏面太大"(OpenAI 对 Windows 沙箱的弃用理由同源)而放弃,整体迁往 WSL2 生态(Claude Code 对 Windows 用户的官方推荐路径);windows-mic 保留为回退后端。windows-mic 后端已从 Low IL + ACL 标注改为 Medium IL(Restricted Token 不降级):Low IL 标注的 (OI)(CI) 继承会降低工作区整棵树的安全等级(用户正常新建文件也继承 Low),且无回收逻辑导致永久残留;动态工作区(用户可注册任意路径)放大此损害。Medium IL 牺牲了 MIC NO_WRITE_UP 的 OS 级写隔离兜底,但换来零文件系统副作用——在动态工作区场景下,确定性损害(Low IL 残留)大于概率性风险(PermissionGate 漏判)。
+| 后端 | id | priority | mount 行为 | 说明 |
+|---|---|---|---|---|
+| **WSL Ubuntu** | `wsl-ubuntu` | 10 | 批量 drvfs 挂载 → `/c/...` | 原 wsl-direct 改名,独立插件 |
+| **Windows MIC** | `windows-mic` | 5 | 返回原路径 | 命令跑在宿主上,独立插件 |
+| **DIRECT(默认沙箱)** | `direct` | — | 返回原路径 | OsSandbox 自身,无 Provider |
 
-### 7.11 提权拦截(seccomp,LINUX 侧)
+**核心路径翻译中间人(SandboxPathRegistry):** worker 核心内部 `@Component`,管理 {宿主路径 → 沙箱内路径} 映射表。核心调 `sandbox.mount()` 拿到映射关系后自己查表翻译,不依赖沙箱。
+- `register(List<MountRequest>)` — 批量注册(工作区根 + 外部授权根 + skills 根等)。
+- `toSandboxPath(Path)` — 宿主路径 → AI 可见路径;无映射原样返回(DIRECT 场景)。
+- `toHostPath(String)` — AI 视角路径 → 宿主路径;无映射返回 null(注册表外路径,Java NIO 自然报错,AI 改用沙箱命令工具)。
+- `onWorkspaceRemoved(Path)` — 通知沙箱清理 + 清理映射表。
 
-文本扫描拦不住别名/脚本内/静态链接等形态的提权;`wsl-direct`/`wsl-bwrap` 后端在发行版内安装 **seccomp 用户通知**过滤器(内核 ≥5.0 的 `SECCOMP_RET_USER_NOTIF`):只要最终要执行 setuid 二进制(如 sudo)必经 execve 系统调用,内核在该点拦截。
+**注册时机:** 工作区创建时、用户授权时、skills 目录初始化时。
 
-- 非 setuid 的 exec(ls/git/java)由监听者快路径放行;setuid(如 `/usr/bin/sudo`)经 stdout 控制帧 → worker `PermissionGate.requirePrivilegeExec`(AI 审议 → 无人值守拒 → 人工弹窗,与文本扫描共用 grant key)。
-- **授权语义(真机验证后定案)**:非特权 supervisor 架构下"拦截 → 授权 → 沙箱内真实提权"物理不可行(NNP 标志 + user namespace 不映射 uid 0 + 基座只读)。因此——**授权 = WSL 原生 root 重跑**:沙箱内该次 exec 以 EPERM 终止(沙箱内 sudo 永远失败),worker 另起 `wsl -d <distro> -u root -e bash -c "<原命令原样>"`,stdout/stderr/exit 合并回传该次工具调用(标注 root-rerun)。root 进程只出现在这一条受控路径,supervisor/worker 均不提权;`wsl -u root` 是 WSL 既有安全模型,不新增权限面。
-- 读内存失败/解析失败/worker 崩溃/stdin 断开 → 一律按拒绝(EPERM),fail-closed。
+**核心宿主访问工具与沙箱命令工具共存:**
+- **核心的宿主访问工具**(DIRECT 默认沙箱):核心自带,不管有没有沙箱插件都存在。默认关闭,用户通过"允许AI访问电脑"开关打开。直接 ProcessBuilder 执行,走自己的授权链。Windows → PowerShellTool,Linux → BashTool。
+- **沙箱插件的命令工具**:沙箱插件不只提供 `SandboxBackend`(挂载+清理),还提供 `ToolProvider`(命令工具)。沙箱完全自由:自己实现 CommandExecutor、自己扫描路径、自己决定授权策略。通过 `appliesTo(ToolContext)` 控制生效条件(如 `ctx.sandbox().id().equals("wsl-ubuntu")`)。
+- 两者通过 `ToolProvider.appliesTo()` 各自控制生效条件,不冲突。
+
+**路径翻译流程:**
+1. 路径提供方注册 → `SandboxPathRegistry.register()` → 核心调 `sandbox.mount()` → 沙箱返回沙箱内路径 → 核心保存映射表。
+2. 工具参数翻译:`FsToolSupport` 收到 AI 传的路径后调 `pathRegistry.toHostPath()` 翻译为宿主路径;无映射原样保留让 Java NIO 自然报错。
+3. 非工具路径翻译:`SkillAdvisor`(知识包路径)和 `ExternalFileTokenResolver`(@ 引用)直接调 `pathRegistry.toSandboxPath()`。
+
+- `worker.sandbox.type`: `auto`(默认)| `wsl-ubuntu` | `windows-mic` | `none`。旧值 `wsl-direct` → 归一为 `wsl-ubuntu`(静默兼容);旧值 `wsl-bwrap`/`bwrap`/`wsl` → 归一为 `auto` 并 WARN。WSL 专属配置(distro/tarball 等)由插件通过 `plugin.json contributes.config` 自管。
+- **Windows Medium IL 契约**(对 windows-mic 后端):沙箱进程运行在 Medium IL(Restricted Token 去特权但不降级),天然可写工作区与已授权目录,不对文件系统做任何标注或 ACL 修改——零副作用、零残留。越界写拦截由 PermissionGate 责任链承担。
+- **网络策略**:默认放行;任务级 `/禁用网络` 或全局 `allow-network=false` 才断网。沙箱插件自己的 CommandExecutor 负责落地(wsl-ubuntu = `unshare -n`;direct/mic = 剥代理 env)。
+- **命令 stdin 契约**:AI 命令的 stdin 一律接 null 设备(`/dev/null`/`NUL`)。
+- **PowerShell 方言可选开启**:用户对某任务选 `/允许AI访问电脑` 后,主/子 agent 工具集追加 `powershell` 工具——命令直接 ProcessBuilder 执行(DIRECT 语义),与 bash 并存。`PowerShellEnableSlashProvider` 始终注册(核心的宿主访问工具开关,与沙箱无关)。
+
+### 7.11 提权拦截
+
+wsl-bwrap 后端的 seccomp 内核级提权拦截已随 bwrap 后端删除而移除。wsl-ubuntu 后端以 root 完整权限直连,无提权授权概念。windows-mic/DIRECT 后端通过 Restricted Token / PermissionGate 文本扫描拦截危险命令。
 
 ### 7.12 原生 git 执行与凭证
 
@@ -1132,7 +1146,7 @@ docker-compose 一键:`HUB_KEY=你的密钥 docker-compose up --build`;数据落
 3. **RPC 生命周期**:reqId 连接内唯一,ok/err 已出则后续同 reqId 帧忽略;未知 method → UNKNOWN_METHOD;参数不合法 → BAD_PARAMS;超时是纯客户端语义(SDK 默认 30s),要中断须显式 rpc.cancel;task.run 新建支持 idempotencyKey(10 分钟窗口去重);task.delete 是任务唯一删除路径,无任何自动清理。
 4. **错误码两个命名空间,勿混用**:hub `error` = NOT_AUTHENTICATED/VERSION_MISMATCH(断开)、ACL_DENIED/FRAME_TOO_LARGE/RATE_LIMITED(单帧拒绝);`rpc.err` = UNKNOWN_METHOD/BAD_PARAMS/NOT_FOUND/SANDBOX_DENIED/BUSY/INTERNAL/AUTH_REQUIRED。
 5. **并发与上限**:maxConcurrentTasks(20)超限 task.run 新建 → BUSY(不排队);maxConcurrentSubs 超限 run_agent 返回错误文本由模型自决;maxEventsPerTask(50 万)超限抛 LogOverflow(磁盘 jsonl 全量不受影响);续跑放行不查并发上限。队列插件启用时超限任务排队等待（QueueAdmissionNode order=250, Semaphore fair）而非 BUSY 拒绝；无队列插件时保持 ERR_BUSY 硬拒绝。
-6. **沙箱**:路径必须先规范化(realpath)再校验 workspace 根前缀,拒绝 `..`、绝对路径逃逸与符号链接逃逸;字符串前缀匹配不够;授权护的是「工作区外」,不是删除动作本身;不得绕过 PermissionGate 直接放行越界 IO;windows-mic 后端沙箱进程运行在 Medium IL,不对文件系统做标注或 ACL 修改;git 凭证只存 worker 本机加密文件,不经协议传输,注入走 env(askpass) 不经 shell 参数;
+6. **沙箱(插件化)**:SandboxBackend SPI 极简化为 mount + onWorkspaceRemoved + id;路径翻译由核心 SandboxPathRegistry 中间人承担;沙箱插件提供自己的 CommandExecutor 和 ToolProvider;PermissionGate 不暴露到 plugin-api(核心内部保留);路径必须先规范化(realpath)再校验 workspace 根前缀,拒绝 `..`、绝对路径逃逸与符号链接逃逸;授权护的是「工作区外」,不是删除动作本身;不得绕过 PermissionGate 直接放行越界 IO;windows-mic 后端沙箱进程运行在 Medium IL,不对文件系统做标注或 ACL 修改;git 凭证只存 worker 本机加密文件,不经协议传输,注入走 env(askpass) 不经 shell 参数;
 7. **生命周期**:终态任务收到 task.run{taskId} = 冷启动一次普通运行;worker 优雅停机(SIGTERM)受影响任务标 failed 再关连接;6102 仅绑定 127.0.0.1;worker 每条 hub 连接建立即 sub 该命名空间 cmd + input 两个频道,从不订阅 per-task 频道。
 8. **复用 Spring AI,禁止重复造轮子**:agent 执行必须走 ChatClient + Advisor 生态,不得手搓 agent 循环、工具循环、响应聚合、system 拼接;执行链只能是很薄一层;新增 agent 能力优先做成 Advisor;一个 Advisor 只负责一个功能;事件发射等需挂钩工具循环的增强通过继承 ToolCallingAdvisor 并重写受保护 hook 实现;主/子 agent 共用同一运行入口与 Advisor 链,仅 agentId 不同。
 9. **文档**:本文档是唯一架构事实源;根目录 AGENTS.md 只写核心约束(每会话加载,保持精简),细节一律进 docs/。

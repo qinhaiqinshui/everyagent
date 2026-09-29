@@ -1,6 +1,6 @@
 package dev.everyagent.worker.config;
 
-import dev.everyagent.worker.os.OsSandbox;
+import dev.everyagent.worker.os.SandboxPathRegistry;
 import dev.everyagent.worker.plugin.registry.SkillContributorRegistry;
 import dev.everyagent.worker.plugin.registry.ToolExecutionInterceptorRegistry;
 import dev.everyagent.worker.skill.BuiltInSkills;
@@ -56,7 +56,7 @@ public class WorkerBeanConfiguration {
     /** skill 渐进式披露索引注入 advisor（无状态可共享单例）。 */
     @Bean
     public SkillAdvisor skillAdvisor(BuiltInSkills builtInSkills,
-            SkillContributorRegistry skillContributorRegistry, OsSandbox osSandbox) {
-        return new SkillAdvisor(builtInSkills, skillContributorRegistry, osSandbox);
+            SkillContributorRegistry skillContributorRegistry, SandboxPathRegistry pathRegistry) {
+        return new SkillAdvisor(builtInSkills, skillContributorRegistry, pathRegistry);
     }
 }

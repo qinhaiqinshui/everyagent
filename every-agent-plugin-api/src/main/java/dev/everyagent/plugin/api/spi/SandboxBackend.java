@@ -1,66 +1,65 @@
 package dev.everyagent.plugin.api.spi;
 
 import java.nio.file.Path;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
 /**
- * 沙箱执行接口 —— {@link SandboxProvider#create} 的产物。
+ * 沙箱后端接口 —— {@link SandboxProvider#create} 的产物。
  *
- * <p>从 {@code OsSandbox} 的公共方法抽取。
- * OsSandbox 改造后变为薄选择器，实际执行委托给此接口的当前实现。
+ * <p>极简化设计：沙箱后端只负责<strong>挂载</strong>和<strong>工作区生命周期</strong>，
+ * 不执行命令、不翻译路径、不涉及工具注册、不涉及授权策略。
+ *
+ * <p>核心通过 {@code SandboxPathRegistry} 做路径翻译中间人：
+ * 核心调 {@link #mount} 拿到映射关系后自己查表翻译，不依赖沙箱。
+ * 命令执行由沙箱插件自己的 CommandExecutor 直接构造进程执行。
  */
 public interface SandboxBackend {
 
     /**
-     * 在沙箱中执行命令（指定 shell + 附加授权根 + 网络/提权许可）。
+     * 批量挂载宿主路径到沙箱内，返回映射表。
      *
-     * @param command 待执行命令（交由 OS shell 解析）
-     * @param cwd 工作目录（绝对路径，应等于 task.workspaceRoot）
-     * @param extraEnv 额外注入的环境变量
-     * @param shell auto/cmd/bash/powershell
-     * @param extraRoots PermissionGate 已授权的命令 EXEC 根
-     * @param allowNetwork 是否放行网络
-     * @param allowPrivilege 是否允许提权运行
-     * @return 执行结果
+     * <p>核心一次性传入所有需要挂载的路径（工作区根 + 外部授权根 + skills 根等），
+     * 沙箱返回每个路径的沙箱内路径。
+     *
+     * <ul>
+     *   <li>DIRECT / windows-mic: 不挂载，返回原路径。</li>
+     *   <li>wsl-ubuntu: 批量 drvfs 挂载，返回 /c/Users/... 形态。</li>
+     *   <li>docker: 批量 bind mount，返回 /workspace 等挂载点。</li>
+     * </ul>
+     *
+     * <p>幂等：重复调用相同路径不重复挂载。
+     *
+     * @param requests 挂载请求列表
+     * @return 宿主路径 → 沙箱内路径 的映射表
      */
-    ExecResult spawnSandboxed(String command, Path cwd, Map<String, String> extraEnv,
-            String shell, List<Path> extraRoots, boolean allowNetwork, boolean allowPrivilege);
-
-    /**
-     * 强制以 Windows 原生沙箱执行（不按解析后端分发）。
-     * 供 WSL 后端下动态启用的 powershell 工具使用。
-     */
-    default ExecResult spawnSandboxedWindows(String command, Path cwd, Map<String, String> extraEnv,
-            String shell, List<Path> extraRoots, boolean allowNetwork, boolean allowPrivilege) {
-        // 非 Windows 后端默认退化为普通执行
-        return spawnSandboxed(command, cwd, extraEnv, shell, extraRoots, allowNetwork, allowPrivilege);
+    default Map<Path, String> mount(List<MountRequest> requests) {
+        Map<Path, String> result = new LinkedHashMap<>();
+        for (MountRequest req : requests) {
+            result.put(req.hostPath(), req.hostPath().toString());
+        }
+        return result;
     }
 
     /**
-     * 宿主原生进程 argv 直传（不做 wsl/mic 降权;供 NativeGit 等平台受控操作使用）。
+     * 工作区被删除时调用;后端 best-effort 清理挂载等;默认 no-op。
+     *
+     * @param root 被删除的工作区根路径
      */
-    ExecResult spawnNative(String[] argv, Path cwd, Map<String, String> env, long timeoutMs);
-
-    /** 当前后端是否为 wsl 系列（bwrap 或 direct）。 */
-    boolean isWslBackend();
-
-    /** 当前后端是否为 wsl-bwrap（隔离挂载命名空间）。 */
-    default boolean isWslBwrap() {
-        return false;
+    default void onWorkspaceRemoved(Path root) {
     }
-
-    /** 当前后端是否为 wsl-direct（root 完整权限直连）。 */
-    default boolean isWslDirect() {
-        return false;
-    }
-
-    /**
-     * 命令工具注册方言：true = 注册 BashTool（wsl 系列后端，或非 Windows）；
-     * false = Windows mic 后端注册 PowerShellTool。
-     */
-    boolean registerBashTool();
 
     /** 后端 id（与 {@link SandboxProvider#id()} 一致）。 */
     String id();
+
+    /** 单个挂载请求。 */
+    record MountRequest(Path hostPath, Access access) {
+    }
+
+    /** 挂载访问语义。 */
+    enum Access {
+        READ_ONLY,
+        READ_WRITE
+    }
 }

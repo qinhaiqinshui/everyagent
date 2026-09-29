@@ -136,8 +136,9 @@ public class AskUserTool {
                 }
                 built.add(new AskQuestion("", prompt, askOpts));
             }
-            AskResult ans = interaction.ask(task.taskId, agentId, built,
-                    props.getLimits().getAskTimeoutMs());
+                        AskResult ans = interaction.ask(built,
+                    props.getLimits().getAskTimeoutMs(),
+                    java.util.Map.of("taskId", task.taskId, "agentId", agentId));
             return switch (ans.status()) {
                 case "answered" -> ans.text();
                 case "timeout" -> "用户未在规定时间内回答(已超时)。请基于现有信息继续,并明确告知用户未获得答复。";

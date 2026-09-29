@@ -2,7 +2,7 @@ package dev.everyagent.worker.tools;
 
 import dev.everyagent.worker.os.OsSandbox;
 import dev.everyagent.plugin.api.spi.ExecResult;
-import dev.everyagent.worker.os.wsl.WslPathMapper;
+
 import dev.everyagent.worker.task.TaskEntry;
 
 import java.nio.file.Path;
@@ -92,16 +92,15 @@ public class CommandExecutor {
         // powershell 工具始终走宿主 Windows 原生沙箱:WSL 后端任务级 /允许AI访问电脑 动态注册
         // 时也强制回 Windows 原生(wsl 发行版内不保证安装 pwsh),命令语义与 windows-mic 一致
         // (Restricted Token + Low IL + Job Object + 目录标注/ACL)。bash 等保持后端方言。
-        boolean wsl = sandbox.isWslBackend() && !powershell;
+        boolean wsl = false; // WSL branches removed — direct execution only
         // wsl-bwrap 后端:模型命令是 bash/POSIX 方言(/workspace、/mnt/<盘>),授权判定仍在
         // Windows 路径域进行——喂给门禁的是翻译副本(真实执行的命令保持原文)。
         // wsl-direct 后端:发行版整体为可丢弃隔离单元(宿主 automount 关闭 + 只手动挂载
         // 工作区),命令危险动词/越界路径授权无需 worker 层门禁,gating 交由发行版隔离承担。
-        boolean wslDirect = wsl && sandbox.isWslDirect();
+        boolean wslDirect = false;
         String gateCmd = null;
         if (!wslDirect) {
-            gateCmd = wsl ? WslPathMapper.translateCommand(command, Path.of(task.workspaceRoot))
-                    : command;
+            gateCmd = command;
             try {
                 gate.requireCommand(task, agentId, gateCmd);
             } catch (java.io.IOException e) {
@@ -131,8 +130,7 @@ public class CommandExecutor {
         // 否则整个 /mnt/c 会被读写挂进沙箱,读隔离被击穿。wsl-direct 不建 bwrap 命名空间,
         // 授权根由动态 ensureMount 承担,此参数为空。powershell 走 Windows 原生,
         // 附加根 prepareWritableRoots 已空体(Medium IL 无需标注);不参与 bwrap 挂载。
-        java.util.List<Path> extraRoots = !wsl && sandbox.isWslBwrap() ? gate.execRootsSandboxed(task)
-                : java.util.List.of();
+        java.util.List<Path> extraRoots = java.util.List.of(); // WSL branches removed
         // 网络许可:任务级 /禁用网络 开关未开 且 worker 全局默认放行 → 本次命令放行网络;
         // 否则按 deny 断网(三个后端各自落地:wsl --unshare-net / unshare -n / 剥代理 env)
         boolean allowNetwork = !task.networkBlocked && sandbox.networkAllowedByDefault();
@@ -146,37 +144,21 @@ public class CommandExecutor {
             allowPrivilege = true;
         }
         ExecResult r;
-        if (powershell) {
-            // WSL 后端下 powershell 工具也强制回宿主 Windows 原生沙箱(windows-mic 语义),
-            // 不走 wsl 发行版 pwsh(bash 方言才进 WSL)。
-            r = sandbox.spawnSandboxedWindows(spawnCmd, cwd, env, shell, extraRoots, allowNetwork,
-                    allowPrivilege);
-        } else if (sandbox.useSeccompInterception()) {
-            r = sandbox.spawnSandboxedSeccomp(spawnCmd, cwd, env, shell, extraRoots, allowNetwork,
-                    (execPath, pid, syscall) -> {
-                        try {
-                            // 复用 PermissionGate 授权链:AI 审议优先 → 无人值守拒绝 → 人工弹窗
-                            // (授权 = worker 以 WSL root 重跑原始命令,沙箱内不提权 §6A.2)
-                            log.info("[seccomp] 提权请求 task={} path={} pid={} syscall={}",
-                                    task.taskId, execPath, pid, syscall);
-                            gate.requirePrivilegeExec(task, agentId, execPath);
-                            return true;
-                        } catch (RuntimeException e) {
-                            log.warn("[seccomp] 提权被拒 task={} path={} 原因: {}",
-                                    task.taskId, execPath, e.getMessage());
-                            return false; // 拒绝/超时 → seccomp 桥接转 EPERM
-                        }
-                    });
-        } else {
-            r = sandbox.spawnSandboxed(spawnCmd, cwd, env, shell, extraRoots, allowNetwork,
-                    allowPrivilege);
-        }
+        // 直接 ProcessBuilder 执行（核心宿主访问工具,DIRECT 模式）
+        boolean win = System.getProperty("os.name").toLowerCase().contains("win");
+        String[] shellPrefix = powershell
+                ? (win ? new String[]{"powershell.exe", "-NoProfile", "-Command"}
+                       : new String[]{"pwsh", "-NoProfile", "-Command"})
+                : (win ? new String[]{"cmd.exe", "/c"} : new String[]{"bash", "-c"});
+        java.util.List<String> fullCmd = new java.util.ArrayList<>(java.util.List.of(shellPrefix));
+        fullCmd.add(spawnCmd);
+        r = sandbox.spawnNative(fullCmd.toArray(new String[0]), cwd, env);
         // powershell 专属:输出层剥除 CLIXML 流记录噪声(兜底,覆盖 Preference 未能抑制的残余)
         if (powershell) {
             r = stripClixml(r);
         }
         log.info("[exec] task={} backend={} rc={} aborted={} cmd={}", task.taskId,
-                wslDirect ? "wsl-direct" : (wsl ? "wsl-bwrap" : "windows"),
+                "direct",
                 r.exitCode(), r.aborted(), truncate(command, 200));
         return format(r);
     }

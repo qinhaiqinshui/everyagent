@@ -7,8 +7,7 @@ import dev.everyagent.worker.modules.Sandbox;
 import dev.everyagent.worker.modules.SkillsReadonlyRoots;
 import dev.everyagent.worker.modules.WorkspaceManager;
 import dev.everyagent.worker.os.OsSandbox;
-import dev.everyagent.worker.os.wsl.WslBwrapSandbox;
-import dev.everyagent.worker.os.wsl.WslPathMapper;
+import dev.everyagent.worker.os.SandboxPathRegistry;
 
 import dev.everyagent.worker.rpc.NotFoundException;
 import dev.everyagent.worker.rpc.SandboxViolationException;
@@ -41,8 +40,11 @@ import java.util.List;
  * 其余系统目录/程序目录与普通工作区外目录同权走授权决议链。agentId 用于授权弹窗的
  * 事件路由(主/子 agent 各自真实 Id)。
  *
+ * <p>路径翻译:AI 在沙箱内可能使用沙箱内路径（如 /c/Users/.../file）,经
+ * {@link SandboxPathRegistry#toHostPath} 翻译为宿主路径;无映射则原样保留,
+ * 让 Java NIO 自然报错,AI 改用沙箱命令工具。DIRECT/无沙箱场景原样返回。
+ *
  * <p>写/建/移/删操作后广播 {@code fs.changed}(带 kind 与 workspace),前端资源管理器据此刷新。
- * 这是 agent 文件工具的统一 IO 底座,FileTools 复用它,不各自造轮子。
  */
 @Component
 public class FsToolSupport {
@@ -52,24 +54,26 @@ public class FsToolSupport {
     private final HubPool pool;
     private final PermissionGate gate;
     private final OsSandbox osSandbox;
+    private final SandboxPathRegistry pathRegistry;
 
     /** 系统技能目录只读附加根解析(skills 读免授权,§13.8;懒解析、共享实现)。 */
     private final SkillsReadonlyRoots skillsReadonlyRoots;
 
     public FsToolSupport(WorkspaceManager workspaces, WorkerProperties props, HubPool pool,
             PermissionGate gate) {
-        this(workspaces, props, pool, gate, null);
+        this(workspaces, props, pool, gate, null, null);
     }
 
     // 双构造器须显式指定注入用哪个,否则 Spring 无法抉择回退找无参构造(测试用 4 参重载)
     @Autowired
     public FsToolSupport(WorkspaceManager workspaces, WorkerProperties props, HubPool pool,
-            PermissionGate gate, OsSandbox osSandbox) {
+            PermissionGate gate, OsSandbox osSandbox, SandboxPathRegistry pathRegistry) {
         this.workspaces = workspaces;
         this.props = props;
         this.pool = pool;
         this.gate = gate;
         this.osSandbox = osSandbox;
+        this.pathRegistry = pathRegistry;
         this.skillsReadonlyRoots = new SkillsReadonlyRoots(props);
     }
 
@@ -103,7 +107,7 @@ public class FsToolSupport {
         List<Path> roots = new ArrayList<>(gate.extraRoots(t.taskId));
         for (Path ext : workspaces.externalRootsOf(t.workspaceRoot)) {
             if (!roots.contains(ext)) {
-                roots.add(ext); // externalRoots 为 realpath 形态,与授权根重叠时去重
+                roots.add(ext);
             }
         }
         roots.addAll(skillsReadonlyRoots.get());
@@ -111,98 +115,23 @@ public class FsToolSupport {
     }
 
     /**
-     * WSL 沙箱后端的 Linux 路径翻译(wsl-direct / wsl-bwrap)。
-     *
-     * <p>WSL 后端下 AI 在 Linux 沙箱内运行,产生的路径是 Linux 形态(如
-     * {@code /c/Users/.../file}、{@code /workspace/src/main.java}、{@code /tmp/output.txt}),
-     * 而文件工具经 Java NIO 在 Windows 宿主侧操作,须先把 Linux 路径翻译为 Windows 路径。
-     *
-     * <p>翻译规则:
-     * <ol>
-     *   <li>非 WSL 后端 / 相对路径 / 已是 Windows 绝对路径 → 原样返回;</li>
-     *   <li>工作区挂载点前缀(wsl-direct 为 {@code /c/Users/.../eagent},wsl-bwrap 为
-     *       {@code /workspace})→ 剥离前缀转为工作区相对路径;</li>
-     *   <li>已挂载的外部根前缀(externalRoots / gate extraRoots / skillsReadonlyRoots)
-     *       → 翻译为对应 Windows 绝对路径;</li>
-     *   <li>wsl-bwrap 的 {@code /mnt/<drive>/...} 前缀(不属于任何已知挂载根)
-     *       → 翻译为 Windows 盘符路径;</li>
-     *   <li>其余 WSL 发行版内部路径({@code /tmp/}、{@code /root/} 等)
-     *       → 翻译为 UNC 路径 {@code \\wsl$\<distro>\...}。</li>
-     * </ol>
-     *
-     * <p>翻译后的路径仍经 {@link PermissionGate} 授权和 {@link Sandbox} 越界校验,
-     * 安全模型不变。非 WSL 后端时本方法原样返回 {@code rel},零行为变化。
+     * AI 视角路径 → 宿主路径翻译。
+     * 沙箱内路径（如 /c/Users/.../file）经 SandboxPathRegistry 翻译为宿主路径;
+     * 无映射则原样返回（注册表外路径,Java NIO 自然报错）。
+     * DIRECT/无沙箱场景原样返回。
      */
-    private String resolveWslPath(TaskEntry t, String rel) {
-        if (osSandbox == null || !osSandbox.isWslBackend() || rel == null || rel.isBlank()) {
+    private String resolveSandboxPath(String rel) {
+        if (pathRegistry == null || rel == null || rel.isBlank()) {
             return rel;
         }
-        String trimmed = rel.trim();
-        // 相对路径:原样返回(workspace-relative)
-        if (!trimmed.startsWith("/")) {
-            return trimmed;
-        }
-        // 已是 Windows 绝对路径(drive letter 或 UNC):原样返回
-        if (trimmed.length() >= 2 && Character.isLetter(trimmed.charAt(0))
-                && trimmed.charAt(1) == ':') {
-            return trimmed;
-        }
-        Path wsRoot = Path.of(t.workspaceRoot);
-        boolean wslDirect = osSandbox.isWslDirect();
-
-        // 收集全部已知挂载根(工作区 + 外部授权根 + gate 授权根 + skills 只读根)
-        // 按路径长度降序,保证最长(最具体)的根优先匹配
-        List<Path> allRoots = new ArrayList<>();
-        allRoots.add(wsRoot);
-        allRoots.addAll(workspaces.externalRootsOf(t.workspaceRoot));
-        allRoots.addAll(gate.extraRoots(t.taskId));
-        allRoots.addAll(skillsReadonlyRoots.get());
-        allRoots.sort((a, b) -> b.toString().length() - a.toString().length());
-
-        for (Path root : allRoots) {
-            String mount = wslDirect ? WslPathMapper.toDirectMount(root) : WslPathMapper.toWsl(root);
-            if (mount == null) {
-                continue;
-            }
-            if (trimmed.equals(mount)) {
-                return root.equals(wsRoot) ? "." : root.toString().replace('\\', '/');
-            }
-            if (trimmed.startsWith(mount + "/")) {
-                String suffix = trimmed.substring(mount.length()); // includes leading /
-                if (root.equals(wsRoot)) {
-                    return suffix.substring(1); // 剥离前导 / 转为相对路径
-                }
-                return root.toString().replace('\\', '/') + suffix;
-            }
-        }
-
-        // wsl-bwrap: /mnt/<drive>/... 形式(不属于任何已知挂载根)
-        if (!wslDirect) {
-            String winPath = WslPathMapper.toWindowsToken(trimmed, wsRoot);
-            if (winPath != null) {
-                // 翻译结果是否落在工作区下 → 转为相对路径
-                Path win = Path.of(winPath).toAbsolutePath().normalize();
-                Path wsNorm = wsRoot.toAbsolutePath().normalize();
-                if (win.startsWith(wsNorm)) {
-                    String suffix = wsNorm.relativize(win).toString().replace('\\', '/');
-                    return suffix.isEmpty() ? "." : suffix;
-                }
-                return winPath;
-            }
-        }
-
-        // WSL 发行版内部路径(/tmp/、/root/ 等)→ UNC 路径 \\wsl$\<distro>\...
-        String distro = WslBwrapSandbox.effectiveDistro(props);
-        if (distro == null || distro.isBlank()) {
-            return trimmed; // 无法确定发行版名,原样返回让 IO 层报错
-        }
-        return "\\\\wsl$\\" + distro + trimmed.replace("/", "\\");
+        String host = pathRegistry.toHostPath(rel);
+        return host != null ? host : rel;
     }
 
     /** 授权解析已存在路径:工作区内/已授权为无感直通,越界则先经授权门(阻塞)。 */
     private Path resolveExistingAuthorized(TaskEntry t, String agentId, String rel,
             PermissionGate.Op op) throws IOException {
-        String resolved = resolveWslPath(t, rel);
+        String resolved = resolveSandboxPath(rel);
         gate.requirePath(t, agentId, resolved, op);
         return sandbox(t).resolveExisting(resolved);
     }
@@ -210,27 +139,21 @@ public class FsToolSupport {
     /** 授权解析写入目标(可不存在):同 {@link #resolveExistingAuthorized}。 */
     private Path resolveTargetAuthorized(TaskEntry t, String agentId, String rel,
             PermissionGate.Op op) throws IOException {
-        String resolved = resolveWslPath(t, rel);
+        String resolved = resolveSandboxPath(rel);
         gate.requirePath(t, agentId, resolved, op);
         return sandbox(t).resolveTarget(resolved);
     }
 
-    /**
-     * 读取文本(UTF-8)。op 指定授权档:纯读 READ;「写前读」(update_file 回读、append 拼接)
-     * 传 WRITE,随写授权一并覆盖,避免一次写操作弹两次窗。
-     */
     public String readText(TaskEntry t, String agentId, String rel, PermissionGate.Op op)
             throws IOException {
         Path f = resolveExistingAuthorized(t, agentId, rel, op);
         return Files.readString(f, StandardCharsets.UTF_8);
     }
 
-    /** 读取文本(UTF-8,读授权档)。 */
     public String readText(TaskEntry t, String agentId, String rel) throws IOException {
         return readText(t, agentId, rel, PermissionGate.Op.READ);
     }
 
-    /** 读取文本(UTF-8),最多 maxBytes 字节;超过则截断并标记 truncated,避免整文件进内存。 */
     public ReadResult readCapped(TaskEntry t, String agentId, String rel, long maxBytes)
             throws IOException {
         Path f = resolveExistingAuthorized(t, agentId, rel, PermissionGate.Op.READ);
@@ -248,14 +171,10 @@ public class FsToolSupport {
         return new ReadResult(new String(buf, 0, off, StandardCharsets.UTF_8), truncated);
     }
 
-    /**
-     * 路径是否存在(不弹窗)。越界路径按文件系统实况返回存在性(访问仍须授权,
-     * 但保证 create_file「文件已存在」覆盖守卫对工作区外路径同样诚实)。
-     */
     public boolean exists(TaskEntry t, String rel) {
         try {
             Sandbox sb = sandbox(t);
-            String resolved = resolveWslPath(t, rel);
+            String resolved = resolveSandboxPath(rel);
             try {
                 sb.resolveExisting(resolved);
                 return true;
@@ -269,18 +188,15 @@ public class FsToolSupport {
         }
     }
 
-    /** 写入文本;append=true 时拼接已有内容。写后广播 fs.changed(write)。 */
     public void writeText(TaskEntry t, String agentId, String rel, String content, boolean append)
             throws IOException {
         Sandbox sb = sandbox(t);
         String finalText = content == null ? "" : content;
         if (append) {
             try {
-                // 写前读:按写授权档,避免读/写双弹窗
                 Path existing = resolveExistingAuthorized(t, agentId, rel, PermissionGate.Op.WRITE);
                 finalText = Files.readString(existing, StandardCharsets.UTF_8) + finalText;
             } catch (NotFoundException | SandboxViolationException ignore) {
-                // 原文件不存在则直接写入
             }
         }
         Path target = resolveTargetAuthorized(t, agentId, rel, PermissionGate.Op.WRITE);
@@ -289,7 +205,6 @@ public class FsToolSupport {
         changed(t, sb.display(target), "write");
     }
 
-    /** 创建目录;recursive=true 时递归创建父目录(已存在幂等)。 */
     public void mkdir(TaskEntry t, String agentId, String rel, boolean recursive) throws IOException {
         Sandbox sb = sandbox(t);
         Path target = resolveTargetAuthorized(t, agentId, rel, PermissionGate.Op.WRITE);
@@ -301,7 +216,6 @@ public class FsToolSupport {
         changed(t, sb.display(target), "mkdir");
     }
 
-    /** 重命名 / 移动;源不可为工作区根/授权根。源与目标分别按写授权(移动即删源)。 */
     public void move(TaskEntry t, String agentId, String from, String to) throws IOException {
         Sandbox sb = sandbox(t);
         Path src = resolveExistingAuthorized(t, agentId, from, PermissionGate.Op.WRITE);
@@ -313,11 +227,10 @@ public class FsToolSupport {
         changed(t, sb.display(dst), "write");
     }
 
-    /** 删除文件或目录;recursive 递归;force 忽略不存在的路径(不报错)。 */
     public void remove(TaskEntry t, String agentId, String rel, boolean recursive, boolean force)
             throws IOException {
         Sandbox sb = sandbox(t);
-        String resolved = resolveWslPath(t, rel);
+        String resolved = resolveSandboxPath(rel);
         Path target;
         try {
             gate.requirePath(t, agentId, resolved, PermissionGate.Op.WRITE);
@@ -333,7 +246,6 @@ public class FsToolSupport {
         changed(t, sb.display(target), "delete");
     }
 
-    /** 单层列举目录(目录在前、名称升序;隐藏项按调用方决定是否过滤)。 */
     public List<Entry> list(TaskEntry t, String agentId, String rel) throws IOException {
         Sandbox sb = sandbox(t);
         Path dir = resolveExistingAuthorized(t, agentId, rel, PermissionGate.Op.READ);
@@ -357,14 +269,12 @@ public class FsToolSupport {
         return out;
     }
 
-    /** 单文件 / 目录元信息。 */
     public Stat stat(TaskEntry t, String agentId, String rel) throws IOException {
         Path p = resolveExistingAuthorized(t, agentId, rel, PermissionGate.Op.READ);
         boolean isDir = Files.isDirectory(p);
         return new Stat(isDir, isDir ? 0 : Files.size(p), Files.getLastModifiedTime(p).toMillis());
     }
 
-    /** 递归列举目录下全部文件(跳过 .git);单文件直接返回其自身。返回相对显示路径。 */
     public List<String> walk(TaskEntry t, String agentId, String rel) throws IOException {
         Sandbox sb = sandbox(t);
         Path dir = resolveExistingAuthorized(t, agentId, rel, PermissionGate.Op.READ);
@@ -397,7 +307,6 @@ public class FsToolSupport {
         }
     }
 
-    /** 广播 fs.changed:path=相对显示路径(工作区外为绝对路径), kind=write/mkdir/delete, workspace=工作区根。 */
     public void changed(TaskEntry t, String displayRel, String kind) {
         ObjectNode payload = Json.obj()
                 .put("path", displayRel)
@@ -406,7 +315,6 @@ public class FsToolSupport {
         pool.broadcastEvt("fs.changed", payload);
     }
 
-    /** 递归删除(目录则先删子项);不跨符号链接。 */
     private static void deleteRecursively(Path p) throws IOException {
         if (Files.isDirectory(p)) {
             try (DirectoryStream<Path> ds = Files.newDirectoryStream(p)) {
@@ -418,12 +326,6 @@ public class FsToolSupport {
         deleteOne(p);
     }
 
-    /**
-     * 删除单个文件/空目录。Windows 上带只读属性的文件(典型如 git pack 的 .idx/.pack/.rev,
-     * git 默认置只读)DeleteFile 会抛 AccessDeniedException,导致整棵含 .git 的目录无法删除;
-     * 此处捕获后清掉只读属性重试一次,仍失败则抛回原异常。非 DOS 文件系统无 dos:readonly 视图,
-     * 清属性抛 UnsupportedOperationException/IOException 时同样回退抛原异常。
-     */
     private static void deleteOne(Path p) throws IOException {
         try {
             Files.deleteIfExists(p);
