@@ -4,7 +4,7 @@ import dev.everyagent.contract.json.Json;
 import dev.everyagent.plugin.api.model.EmitEvent;
 import dev.everyagent.plugin.api.task.TaskLifecycleContext;
 import dev.everyagent.plugin.api.task.TaskOutcome;
-import dev.everyagent.worker.proto.SnowflakeId;
+import dev.everyagent.plugin.api.proto.SnowflakeId;
 import dev.everyagent.worker.interaction.InteractionServiceImpl;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

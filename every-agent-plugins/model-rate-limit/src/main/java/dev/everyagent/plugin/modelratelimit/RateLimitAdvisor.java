@@ -1,7 +1,7 @@
 package dev.everyagent.plugin.modelratelimit;
 
 import dev.everyagent.plugin.api.model.EmitEvent;
-import dev.everyagent.worker.proto.SnowflakeId;
+import dev.everyagent.plugin.api.proto.SnowflakeId;
 import dev.everyagent.worker.agent.AgentEntity;
 import dev.everyagent.worker.task.TaskEntry;
 import org.slf4j.Logger;

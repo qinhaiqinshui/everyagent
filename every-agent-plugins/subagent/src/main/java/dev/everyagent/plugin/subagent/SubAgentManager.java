@@ -12,7 +12,7 @@ import dev.everyagent.plugin.api.proto.SnowflakeId;
 import dev.everyagent.plugin.api.agent.AgentActivity;
 import dev.everyagent.worker.task.ChatModelFactory;
 import dev.everyagent.worker.interaction.InteractionServiceImpl;
-import dev.everyagent.worker.task.RootCause;
+import dev.everyagent.plugin.api.util.RootCause;
 import dev.everyagent.worker.task.TaskEntry;
 import dev.everyagent.worker.tools.AskUserTool;
 import org.slf4j.Logger;

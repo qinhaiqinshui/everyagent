@@ -2,8 +2,8 @@ package dev.everyagent.plugin.contextcompression;
 
 import dev.everyagent.plugin.api.model.EmitEvent;
 import dev.everyagent.worker.config.WorkerProperties;
-import dev.everyagent.worker.proto.SnowflakeId;
-import dev.everyagent.worker.proto.TaskDtos.Usage;
+import dev.everyagent.plugin.api.proto.SnowflakeId;
+import dev.everyagent.plugin.api.event.Usage;
 import dev.everyagent.worker.agent.AgentEntity;
 import dev.everyagent.worker.task.TaskEntry;
 import dev.everyagent.worker.task.ContextOverflow;

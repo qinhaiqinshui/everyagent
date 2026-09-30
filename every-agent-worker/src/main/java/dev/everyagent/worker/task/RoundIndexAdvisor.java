@@ -3,7 +3,7 @@ package dev.everyagent.worker.task;
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.plugin.api.model.EmitEvent;
 import dev.everyagent.worker.agent.AgentEntity;
-import dev.everyagent.worker.proto.SnowflakeId;
+import dev.everyagent.plugin.api.proto.SnowflakeId;
 import org.springframework.ai.chat.client.ChatClientRequest;
 import org.springframework.ai.chat.client.ChatClientResponse;
 import org.springframework.ai.chat.client.advisor.api.StreamAdvisor;

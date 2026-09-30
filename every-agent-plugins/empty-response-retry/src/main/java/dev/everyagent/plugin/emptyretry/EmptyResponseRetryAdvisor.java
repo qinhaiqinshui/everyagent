@@ -2,12 +2,12 @@ package dev.everyagent.plugin.emptyretry;
 
 import dev.everyagent.plugin.api.model.EmitEvent;
 import dev.everyagent.worker.config.WorkerProperties;
-import dev.everyagent.worker.proto.SnowflakeId;
-import dev.everyagent.worker.task.AgentCancelledException;
+import dev.everyagent.plugin.api.proto.SnowflakeId;
+import dev.everyagent.plugin.api.exception.AgentCancelledException;
 import dev.everyagent.worker.agent.AgentEntity;
 import dev.everyagent.worker.task.TaskEntry;
-import dev.everyagent.worker.task.EventPayloads;
-import dev.everyagent.worker.task.ModelCallException;
+import dev.everyagent.plugin.api.event.EventPayloads;
+import dev.everyagent.plugin.api.exception.ModelCallException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClientRequest;

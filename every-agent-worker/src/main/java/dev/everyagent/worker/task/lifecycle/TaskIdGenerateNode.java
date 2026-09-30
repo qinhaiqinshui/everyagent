@@ -3,7 +3,7 @@ package dev.everyagent.worker.task.lifecycle;
 import dev.everyagent.plugin.api.task.TaskChain;
 import dev.everyagent.plugin.api.task.TaskLifecycleContext;
 import dev.everyagent.plugin.api.task.TaskLifecycleNode;
-import dev.everyagent.worker.proto.ShortIds;
+import dev.everyagent.plugin.api.proto.ShortIds;
 import dev.everyagent.worker.task.TaskEntry;
 import dev.everyagent.worker.task.TaskStore;
 import org.slf4j.Logger;

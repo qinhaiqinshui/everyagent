@@ -1,4 +1,4 @@
-package dev.everyagent.worker.proto;
+package dev.everyagent.plugin.api.proto;
 
 import java.security.SecureRandom;
 import java.util.Map;

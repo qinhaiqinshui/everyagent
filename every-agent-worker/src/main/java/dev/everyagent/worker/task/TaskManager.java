@@ -2,6 +2,7 @@ package dev.everyagent.worker.task;
 
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.contract.rpc.Rpc;
+import dev.everyagent.plugin.api.event.EventLogReader;
 import dev.everyagent.worker.agent.AgentBuilder;
 import dev.everyagent.worker.agent.AgentEntity;
 import dev.everyagent.worker.agent.AgentRunner;
@@ -10,15 +11,15 @@ import dev.everyagent.worker.hub.EventSink;
 import dev.everyagent.worker.modules.ConfigStore;
 import dev.everyagent.worker.modules.ConfigStore.ResolvedConfig;
 import dev.everyagent.worker.modules.WorkspaceManager;
-import dev.everyagent.worker.proto.Channels;
-import dev.everyagent.worker.proto.Events;
+import dev.everyagent.plugin.api.event.Channels;
+import dev.everyagent.plugin.api.event.Events;
 import dev.everyagent.worker.proto.RpcMethods;
-import dev.everyagent.worker.proto.ShortIds;
+import dev.everyagent.plugin.api.proto.ShortIds;
 import dev.everyagent.worker.proto.TaskDtos.TaskStatus;
 import dev.everyagent.worker.rpc.RpcContext;
 import dev.everyagent.worker.rpc.RpcDispatcher;
 import dev.everyagent.worker.ship.TaskInputHandler;
-import dev.everyagent.worker.slash.SlashTokenEncoder;
+import dev.everyagent.plugin.api.slash.SlashTokenEncoder;
 import dev.everyagent.worker.interaction.InteractionServiceImpl;
 import dev.everyagent.worker.plugin.registry.TaskAdmissionPolicyRegistry;
 import dev.everyagent.worker.plugin.registry.TaskLifecycleRegistry;
@@ -394,7 +395,7 @@ public class TaskManager implements TaskInputHandler, InteractionServiceImpl.Sta
                     && live != null && !live.status.terminal();
             if (canWait) {
                 CompletableFuture<Void> done = new CompletableFuture<>();
-                EventLog.Listener l = () -> done.complete(null);
+                EventLogReader.Listener l = () -> done.complete(null);
                 live.log.addListener(l);
                 try {
                     try {

@@ -1,14 +1,14 @@
 package dev.everyagent.worker.modules;
 
 import dev.everyagent.contract.json.Json;
-import dev.everyagent.worker.AtomicFiles;
+import dev.everyagent.plugin.api.util.AtomicFiles;
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.hub.HubPool;
 import dev.everyagent.worker.os.SandboxPathRegistry;
 import dev.everyagent.worker.proto.RpcMethods;
-import dev.everyagent.worker.proto.ShortIds;
+import dev.everyagent.plugin.api.proto.ShortIds;
 import dev.everyagent.worker.tools.permission.OverBroadRootCheck;
-import dev.everyagent.worker.rpc.BadParamsException;
+import dev.everyagent.plugin.api.exception.BadParamsException;
 import dev.everyagent.worker.rpc.RpcDispatcher;
 import dev.everyagent.worker.rpc.RpcContext;
 import dev.everyagent.worker.rpc.SandboxViolationException;

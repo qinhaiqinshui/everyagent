@@ -1,7 +1,7 @@
 package dev.everyagent.worker.task;
 
-import dev.everyagent.worker.proto.Events;
-import dev.everyagent.worker.proto.ShortIds;
+import dev.everyagent.plugin.api.event.Events;
+import dev.everyagent.plugin.api.proto.ShortIds;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;

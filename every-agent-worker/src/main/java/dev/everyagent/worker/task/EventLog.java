@@ -1,6 +1,8 @@
 package dev.everyagent.worker.task;
 
-import dev.everyagent.worker.proto.SnowflakeId;
+import dev.everyagent.plugin.api.event.EventLogReader;
+import dev.everyagent.plugin.api.event.EventRecord;
+import dev.everyagent.plugin.api.proto.SnowflakeId;
 import tools.jackson.databind.JsonNode;
 
 import java.util.ArrayDeque;

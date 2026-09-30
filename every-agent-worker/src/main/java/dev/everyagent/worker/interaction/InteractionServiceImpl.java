@@ -6,8 +6,8 @@ import dev.everyagent.plugin.api.interaction.AskResult;
 import dev.everyagent.plugin.api.interaction.InteractionService;
 import dev.everyagent.plugin.api.model.EmitEvent;
 import dev.everyagent.contract.json.Json;
-import dev.everyagent.worker.proto.SnowflakeId;
-import dev.everyagent.worker.task.EventPayloads;
+import dev.everyagent.plugin.api.proto.SnowflakeId;
+import dev.everyagent.plugin.api.event.EventPayloads;
 import dev.everyagent.worker.task.TaskEntry;
 import dev.everyagent.worker.task.TaskEvents;
 import dev.everyagent.worker.task.TaskManager;
@@ -96,7 +96,7 @@ public class InteractionServiceImpl implements InteractionService {
         if (events == null) {
             return new AskResult("cancelled", null);
         }
-        String askId = dev.everyagent.worker.proto.ShortIds.askId();
+        String askId = dev.everyagent.plugin.api.proto.ShortIds.askId();
         // 题目 id 统一由真实 askId 派生(askId_i):调用方无法预知 askId,传入的 id 仅占位,
         // 前端据此与 ask.create 载荷稳定配对回传。
         List<AskQuestion> withIds = new java.util.ArrayList<>(questions.size());

@@ -14,6 +14,11 @@
     <description>插件 API 面（纯接口与契约，零业务逻辑，仅依赖 spring-ai 核心类型）</description>
 
     <dependencies>
+        <!-- 契约层 JSON 工具（EventPayloads / SlashTokenEncoder / FileChangesCollector 等引用） -->
+        <dependency>
+            <groupId>dev.everyagent</groupId>
+            <artifactId>every-agent-contract</artifactId>
+        </dependency>
         <!-- Spring AI 核心模型抽象（ToolCallback / ToolCallingManager / Prompt / ChatResponse 等） -->
         <dependency>
             <groupId>org.springframework.ai</groupId>

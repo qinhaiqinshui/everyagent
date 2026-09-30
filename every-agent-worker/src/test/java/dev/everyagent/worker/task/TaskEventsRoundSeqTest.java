@@ -2,9 +2,9 @@ package dev.everyagent.worker.task;
 
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.plugin.api.model.EmitEvent;
-import dev.everyagent.worker.proto.Events;
+import dev.everyagent.plugin.api.event.Events;
 import dev.everyagent.worker.proto.Events.ToolCallPart;
-import dev.everyagent.worker.proto.SnowflakeId;
+import dev.everyagent.plugin.api.proto.SnowflakeId;
 import org.junit.jupiter.api.Test;
 import tools.jackson.databind.node.ObjectNode;
 
@@ -109,9 +109,9 @@ class TaskEventsRoundSeqTest {
         usageData.put("model", "gpt");
         usageData.put("contextWindowTokens", 100_000L);
         usageData.set("round", Json.toJson(
-                new dev.everyagent.worker.proto.TaskDtos.Usage(10, 20, 30)));
+                new dev.everyagent.plugin.api.event.Usage(10, 20, 30)));
         usageData.set("total", Json.toJson(
-                new dev.everyagent.worker.proto.TaskDtos.Usage(10, 20, 30)));
+                new dev.everyagent.plugin.api.event.Usage(10, 20, 30)));
         long u = e.emit(EmitEvent.of(SnowflakeId.next(), Events.USAGE, "agent-a",
                 null, null, null, null, usageData, EmitEvent.Mode.REPLACE));
         assertTrue(u > m, "usage 独立雪花 seq 不与 message 共享");
