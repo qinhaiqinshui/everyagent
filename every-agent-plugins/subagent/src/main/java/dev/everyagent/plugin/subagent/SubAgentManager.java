@@ -75,6 +75,26 @@ public class SubAgentManager {
         return taskStates.computeIfAbsent(task.taskId(), k -> new TaskSubState());
     }
 
+    /**
+     * 每轮任务执行前重置 per-task 状态:清除上一轮的 stopRequested 标志,
+     * 并清理已完成的子 agent futures(防止跨轮无限增长)。
+     * <p>由 SubAgentSpawnedAwaitNode 下行段调用,确保新一轮任务执行时
+     * run_agent 不会因上一轮 stopAll 设置的 stopRequested 而被误拒。
+     * <p>下行阶段 TaskEntry 可能尚未创建(由 order=50 的 TaskEntryCreateNode 在
+     * 内层创建),因此接受 taskId 而非 TaskRuntime。下行阶段不会有并发的 run/stopAll
+     * (上一轮已收口、本轮 agent 尚未启动),无需 synchronized。
+     */
+    public void resetForRun(String taskId) {
+        TaskSubState st = taskStates.get(taskId);
+        if (st == null) {
+            return; // 首次运行,无历史状态需重置
+        }
+        st.stopRequested = false;
+        // 清理上一轮已完成的子 agent futures(未完成的保留:极端情况下
+        // 上一轮的子 agent 可能尚未收口,不应在此丢弃)
+        st.subFutures.entrySet().removeIf(e -> e.getValue().isDone());
+    }
+
     public SubAgentManager(AgentFactory agentFactory, InteractionService asks,
             TaskService taskService) {
         this.agentFactory = agentFactory;
@@ -94,9 +114,11 @@ public class SubAgentManager {
             return "任务不存在: " + taskId;
         }
         TaskSubState st = state(task);
-        if (st.stopRequested) {
-            return "任务已停止,未启动子 agent";
-        }
+        // 注意:不在同步块外做 stopRequested 硬拒。
+        // stopRequested 由 stopAll 设置,stopAll 与 run 共用 synchronized(task) 互斥。
+        // 若 run 拿到锁,stopAll 一定不在运行——此时 stopRequested=true 只能是上一轮
+        // 生命周期 stopAll 遗留的陈旧标志(见 SubAgentSpawnedAwaitNode 上行段)。
+        // 陈旧标志在同步块内自愈清除,不再拦截 run_agent。
         if (agentId != null && !agentId.isEmpty()) {
             Future<?> live = st.subFutures.get(agentId);
             if (live != null && !live.isDone()) {
@@ -114,11 +136,14 @@ public class SubAgentManager {
         Agent sub;
 
         // 注册/启动放在 task 监视器内,与 stopAll 互斥:
-        // 要么 stopAll 先拿到锁(任务停止,这里看到 stopRequested 后放弃启动),
-        // 要么这里先注册完,stopAll 随后一定能 cancel 到该 future 并立即收口。
+        // 要么 stopAll 先拿到锁(任务停止,run 被阻塞),要么这里先注册完,
+        // stopAll 随后一定能 cancel 到该 future 并立即收口。
         synchronized (task) {
             if (st.stopRequested) {
-                return "任务已停止,未启动子 agent";
+                // 同步块内看到 stopRequested=true:stopAll 不可能在并发运行(我们持锁),
+                // 此标志来自上一轮生命周期的 stopAll(上行段)。清除并继续启动子 agent。
+                log.debug("[sub] 清除陈旧 stopRequested 标志 taskId={} agentId={}", taskId, id);
+                st.stopRequested = false;
             }
             if (reuse) {
                 sub = (Agent) task.agents().get(id);
