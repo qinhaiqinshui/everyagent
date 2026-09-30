@@ -52,6 +52,7 @@ public final class TaskIdGenerateNode implements TaskLifecycleNode {
         }
         String taskId = uniqueTaskId(workspaceId);
         impl.taskId(taskId);
+        log.debug("[idgen] taskid.generate 新任务 id={} workspace={}", taskId, workspaceId);
         return next.proceed(ctx);
     }
 

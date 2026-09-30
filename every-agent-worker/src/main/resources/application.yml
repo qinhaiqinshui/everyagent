@@ -14,8 +14,9 @@ worker:
       # 原始密钥须与目标 hub 的 hub.hub-key(存其 sha256)对应,缺失该条目 worker 拒绝启动
       hub-key: ${HUB_KEY:sljlw23948LKS}
   # 系统目录(架构 §5.9):默认工作区 defaultworkspace/、workspaces/(注册表+任务数据)、
-  # sandbox/ 顶级(沙箱持久状态);空 = ~/.everyagent
-  home-dir: ${EVERYAGENT_HOME:}
+  # sandbox/ 顶级(沙箱持久状态);默认 ~/.everyagent(EVERYAGENT_HOME 优先)。
+  # 默认值保持非空——logback 的日志目录经 springProperty 读本配置,空串会破坏回退链。
+  home-dir: ${EVERYAGENT_HOME:${user.home}/.everyagent}
   # 模型配置(只读,config.get 的唯一数据源):默认用 OpenAI 兼容占位符,真实 provider/apiKey
   # 由 ~/.everyagent/application-worker.yaml(或开发环境 application-dev.yaml)覆盖,不进 jar/git。
   # 注意:列表属性整表替换——覆盖文件里写 worker.models 会完整替换本默认表。

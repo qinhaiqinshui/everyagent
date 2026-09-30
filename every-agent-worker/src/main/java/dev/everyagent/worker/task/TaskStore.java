@@ -136,14 +136,17 @@ public class TaskStore implements TaskStoreService {
     public synchronized void track(String taskId, String workspaceId, EventLog log,
             Supplier<ObjectNode> meta) throws IOException {
         if (tracked.containsKey(taskId)) {
+            TaskStore.log.debug("[store] track 跳过(已跟踪) task={} workspace={}", taskId, workspaceId);
             return;
         }
         Path dir = dirOf(taskId, workspaceId);
+        TaskStore.log.debug("[store] track 开始 task={} workspace={} dir={}", taskId, workspaceId, dir);
         Files.createDirectories(dir);
         writeMeta(dir, meta.get());
         Tracked t = new Tracked(taskId, log, meta, dir);
         tracked.put(taskId, t);
         taskWorkspace.put(taskId, workspaceId);
+        TaskStore.log.debug("[store] track 完成 task={} dir={} (目录已建,taskWorkspace 已登记)", taskId, dir);
         log.addListener(() -> wake.release());
         wake.release();
     }
@@ -810,10 +813,12 @@ public class TaskStore implements TaskStoreService {
             workspaceId = discoverWorkspace(taskId);
             if (workspaceId != null) {
                 taskWorkspace.put(taskId, workspaceId);
+                log.debug("[store] dirOf 懒发现命中 task={} workspace={}", taskId, workspaceId);
                 return dirOf(taskId, workspaceId);
             }
             throw new IllegalStateException(
-                    "任务未登记 workspaceId 且磁盘未发现对应目录,无法定位: " + taskId);
+                    "任务未登记 workspaceId 且磁盘未发现对应目录,无法定位: " + taskId
+                            + " (已扫描 workspaces 根: " + props.resolveWorkspacesDir() + ")");
         }
         return dirOf(taskId, workspaceId);
     }

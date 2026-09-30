@@ -69,23 +69,54 @@ public final class TaskLifecycleExecutor {
                 final TaskChain inner = chain;
                 chain = c -> {
                     // 下行段：段边界外、无锁、order 升序；异常向外传播（否决：内层不执行）
+                    final boolean trace = log.isDebugEnabled();
                     for (SectionNode sn : downNodes) {
+                        if (trace) {
+                            log.debug("[chain] ↓ {}.down thread={}", sn.id(),
+                                    Thread.currentThread().getName());
+                        }
                         sn.down(c);
                     }
                     Object result = inner.proceed(c);
                     // 上行段：共享一次临界区、order 降序
                     synchronized (c.taskLock()) {
                         for (SectionNode sn : upNodes) {
+                            if (trace) {
+                                log.debug("[chain] ↑ {}.up thread={}", sn.id(),
+                                        Thread.currentThread().getName());
+                            }
                             result = sn.up(c, result);
                         }
                     }
                     return result;
                 };
             } else {
-                // 段外节点：正常 invoke 语义
+                // 段外节点：正常 invoke 语义（debug 级链路追踪：进入/返回/异常，
+                // 排查"节点未执行/静默短路/链中断"类问题——logger 关 debug 时零开销）
                 final TaskLifecycleNode n = node;
                 final TaskChain inner = chain;
-                chain = c -> n.invoke(c, inner);
+                final boolean trace = log.isDebugEnabled();
+                chain = c -> {
+                    if (trace) {
+                        log.debug("[chain] ↓ {} (order={}) thread={}", n.id(), n.order(),
+                                Thread.currentThread().getName());
+                    }
+                    try {
+                        Object r = n.invoke(c, inner);
+                        if (trace) {
+                            log.debug("[chain] ↑ {} 返回={} thread={}", n.id(),
+                                    r == null ? "null(短路)" : r.getClass().getSimpleName(),
+                                    Thread.currentThread().getName());
+                        }
+                        return r;
+                    } catch (Throwable ex) {
+                        if (trace) {
+                            log.debug("[chain] ✗ {} 异常 thread={}", n.id(),
+                                    Thread.currentThread().getName(), ex);
+                        }
+                        throw ex;
+                    }
+                };
                 i--;
             }
         }

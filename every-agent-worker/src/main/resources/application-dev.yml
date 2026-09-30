@@ -18,12 +18,14 @@ spring:
   config:
     import: optional:file:${worker.home-dir}/application-worker.yaml
 
-# 取消/停止链路诊断日志(临时排查"停止后不立即停止、后台继续运行"问题):
-# 观察 AgentRunner 的 flux 生命周期(dispose 是否生效)、TaskManager 的 cancel/runTask/finish
-# 收口、SubAgentManager 的子 agent 级联停止。排查完成后可调回 INFO。
+# 任务生命周期链路诊断日志(排查"新任务不落盘/节点未执行/链中断"类问题):
+# TaskLifecycleExecutor 输出每个节点的进入/返回/异常([chain] 前缀),TaskStore 输出 track/dirOf,
+# 生命周期节点输出各分支([entry]/[vt]/[track]/[ws]/[idgen] 前缀)。排查完成后可调回 INFO。
 logging:
   level:
     dev.everyagent.worker.task.AgentRunner: debug
     dev.everyagent.worker.task.TaskManager: debug
     dev.everyagent.worker.task.SubAgentManager: debug
     dev.everyagent.worker.task.WorkerToolEventAdvisor: debug
+    dev.everyagent.worker.task.TaskStore: debug
+    dev.everyagent.worker.task.lifecycle: debug

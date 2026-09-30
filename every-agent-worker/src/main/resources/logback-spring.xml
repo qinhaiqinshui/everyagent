@@ -4,11 +4,15 @@
     <include resource="org/springframework/boot/logging/logback/console-appender.xml"/>
 
     <!--
-      日志目录:EVERYAGENT_HOME/logs(桌面版 worker 数据目录),环境变量缺失时回退 ~/.everyagent/logs。
-      - 桌面版主进程以 EVERYAGENT_HOME 启动 worker,日志即落 <EVERYAGENT_HOME>/logs。
-      - 命令行/docker 未设 EVERYAGENT_HOME 时,worker 系统目录默认 ~/.everyagent,日志落 ~/.everyagent/logs。
+      日志目录解析链(优先级从高到低):
+        1. EVERYAGENT_HOME 环境变量(桌面版主进程注入);
+        2. worker.home-dir 配置(dev profile = ~/.everyagent-dev;IDE 直接运行不再误落正式目录);
+        3. ~/.everyagent 兜底。
+      注意 worker.home-dir 须非空(application.yml 默认值已收敛为 ${EVERYAGENT_HOME:${user.home}/.everyagent},
+      与 resolveHomeDir 的空值回退语义一致)。
     -->
-    <property name="EA_LOG_DIR" value="${EVERYAGENT_HOME:-${user.home}/.everyagent}/logs"/>
+    <springProperty name="EA_HOME_FROM_CONFIG" source="worker.home-dir" defaultValue="${user.home}/.everyagent"/>
+    <property name="EA_LOG_DIR" value="${EVERYAGENT_HOME:-${EA_HOME_FROM_CONFIG}}/logs"/>
 
     <!-- 主日志:worker 运行日志(含 INFO/DEBUG),每日滚动,保留 7 天 -->
     <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">

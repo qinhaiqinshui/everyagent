@@ -87,6 +87,7 @@ public final class TaskEntryCreateNode implements TaskLifecycleNode {
         if (existing != null) {
             if (!existing.status.terminal()) {
                 // 运行中：空转，让 queue.dispatch 处理
+                log.debug("[entry] taskentry.create 运行中任务空转 task={}", taskId);
                 impl.taskEntry(existing);
                 return next.proceed(ctx);
             }
@@ -116,6 +117,8 @@ public final class TaskEntryCreateNode implements TaskLifecycleNode {
             impl.taskEntry(t);
             // 设置 rerunMeta 供后续 RerunRestoreNode 使用
             impl.rerunMeta(st.summary());
+            log.debug("[entry] taskentry.create 再运行认领 task={} workspace={} dir={}",
+                    taskId, t.workspaceId, t.taskDir());
             return next.proceed(ctx);
         }
 
@@ -170,6 +173,9 @@ public final class TaskEntryCreateNode implements TaskLifecycleNode {
                 mainAgentId, props.getLimits().getMaxEventsPerTask());
         t.taskDir(store.dirOf(taskId, impl.workspaceId()));
         tasks.put(taskId, t);
+        log.debug("[entry] taskentry.create 新建 task={} workspaceId={} workspaceRoot={} dir={} thread={}",
+                taskId, impl.workspaceId(), impl.workspaceRoot(), t.taskDir(),
+                Thread.currentThread().getName());
 
         // slash 任务级 token
         if (rc != null) {

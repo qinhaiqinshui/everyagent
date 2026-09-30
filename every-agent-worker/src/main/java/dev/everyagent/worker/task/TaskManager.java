@@ -354,6 +354,11 @@ public class TaskManager implements TaskInputHandler, InteractionServiceImpl.Sta
         // 存在性:目录在盘 或 内存任务/磁盘索引可见任一即存在(热任务 track 前目录可能未建,
         // 终态 finish 窗口内 tasks 仍驻留;三者全缺才算不存在/已删)
         boolean known = store.taskDirExists(taskId) || tasks.containsKey(taskId) || diskTasks.containsKey(taskId);
+        if (log.isDebugEnabled()) {
+            log.debug("[poll] task.poll known 判定 task={} dirExists={} inTasks={} inDiskTasks={}",
+                    taskId, store.taskDirExists(taskId), tasks.containsKey(taskId),
+                    diskTasks.containsKey(taskId));
+        }
         if (!known) {
             ctx.err(Rpc.ERR_NOT_FOUND, "task 不存在: " + taskId);
             return;
@@ -539,6 +544,11 @@ public class TaskManager implements TaskInputHandler, InteractionServiceImpl.Sta
         String taskId = ctx.strParam("taskId");
         // 存在性:与 task.poll 同口径(目录在盘 或 内存任务/磁盘索引可见任一即存在)
         boolean known = store.taskDirExists(taskId) || tasks.containsKey(taskId) || diskTasks.containsKey(taskId);
+        if (log.isDebugEnabled()) {
+            log.debug("[rounds] task.rounds known 判定 task={} dirExists={} inTasks={} inDiskTasks={}",
+                    taskId, store.taskDirExists(taskId), tasks.containsKey(taskId),
+                    diskTasks.containsKey(taskId));
+        }
         if (!known) {
             ctx.err(Rpc.ERR_NOT_FOUND, "task 不存在: " + taskId);
             return;
@@ -622,6 +632,11 @@ public class TaskManager implements TaskInputHandler, InteractionServiceImpl.Sta
         int limit = (int) Math.max(1, Math.min(500, ctx.optLongParam("limit", 50)));
         // 存在性:与 task.poll / task.rounds 同口径(目录在盘 或 内存任务/磁盘索引可见任一即存在)
         boolean known = store.taskDirExists(taskId) || tasks.containsKey(taskId) || diskTasks.containsKey(taskId);
+        if (log.isDebugEnabled()) {
+            log.debug("[roundTail] known 判定 task={} dirExists={} inTasks={} inDiskTasks={}",
+                    taskId, store.taskDirExists(taskId), tasks.containsKey(taskId),
+                    diskTasks.containsKey(taskId));
+        }
         if (!known) {
             ctx.err(Rpc.ERR_NOT_FOUND, "task 不存在: " + taskId);
             return;
@@ -870,13 +885,18 @@ public class TaskManager implements TaskInputHandler, InteractionServiceImpl.Sta
         String input = ctx.strParam("input");
         String rawContent = ctx.optStrParam("rawContent", null);
         String existingId = ctx.optStrParam("taskId", "");
+        log.debug("[run] task.run 进入 existingId={} input={} metadataKeys={} thread={}",
+                existingId.isEmpty() ? "(新建)" : existingId,
+                input != null && input.length() > 60 ? input.substring(0, 60) + "…" : input,
+                ctx.params().path("metadata").size(),
+                Thread.currentThread().getName());
 
-        // 读取 metadata（通用插件参数容器）
+        // 读取 metadata（通用插件参数容器）；JsonNode 解包为 Java 标量，插件按类型直取
         java.util.Map<String, Object> metadata;
         JsonNode metaNode = ctx.params().path("metadata");
         if (metaNode.isObject()) {
             metadata = new java.util.HashMap<>();
-            metaNode.properties().forEach(e -> metadata.put(e.getKey(), e.getValue()));
+            metaNode.properties().forEach(e -> metadata.put(e.getKey(), unwrap(e.getValue())));
         } else {
             metadata = java.util.Collections.emptyMap();
         }
@@ -897,6 +917,8 @@ public class TaskManager implements TaskInputHandler, InteractionServiceImpl.Sta
 
         // 启动链
         Object result = lifecycleExecutor.run(lifecycleRegistry.getNodes(), kernel, lifecycleCtx);
+        log.debug("[run] task.run 链返回 task={} result={}",
+                lifecycleCtx.taskId(), String.valueOf(result));
 
         // 处理结果：非 null 且非 DONE → 检查是否已应答
         if (result instanceof TaskOutcome to && to.status() != TaskOutcome.TaskEndStatus.DONE) {

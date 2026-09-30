@@ -136,6 +136,8 @@ public final class ThreadSubmitNode implements TaskLifecycleNode {
         // ---- 提交虚拟线程 ----
         final TaskEntry taskRef = t;
         Future<?> f = vt.submit(() -> {
+            log.debug("[vt] 虚拟线程链启动 task={} thread={}", taskRef.taskId,
+                    Thread.currentThread().getName());
             try {
                 next.proceed(ctx);
             } catch (Throwable ex) {
@@ -144,6 +146,8 @@ public final class ThreadSubmitNode implements TaskLifecycleNode {
             }
         });
         t.runFuture = f;
+        log.debug("[vt] 虚拟线程已提交 task={} (RPC 线程={})", taskRef.taskId,
+                Thread.currentThread().getName());
 
         return null;
     }

@@ -37,6 +37,8 @@ public final class PersistenceTrackNode implements TaskLifecycleNode {
     public Object invoke(TaskLifecycleContext ctx, TaskChain next) throws Exception {
         var impl = (TaskLifecycleContextImpl) ctx;
         var t = impl.taskEntryImpl();
+        log.debug("[track] persistence.track 进入 task={} workspace={} thread={}",
+                t.taskId, t.workspaceId, Thread.currentThread().getName());
         try {
             store.track(t.taskId, t.workspaceId, t.log, t::summaryJson);
         } catch (IOException e) {
@@ -45,6 +47,7 @@ public final class PersistenceTrackNode implements TaskLifecycleNode {
         // 挂接流源：StreamSourceRegistry.attach（推送器经此取日志，反转后正向依赖）
         try {
             streamSources.attach(t.taskId, t.log);
+            log.debug("[track] 流源挂接完成 task={}", t.taskId);
         } catch (RuntimeException e) {
             log.warn("流源挂接失败 task={}", t.taskId, e);
         }
