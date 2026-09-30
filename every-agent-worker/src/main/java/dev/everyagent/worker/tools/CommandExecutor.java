@@ -45,15 +45,22 @@ public class CommandExecutor {
     private static final Logger log = LoggerFactory.getLogger(CommandExecutor.class);
 
     /**
-     * PowerShell 非成功流静默化前缀。CLIXML 噪声的根治在 spawn 层:WindowsSandbox 用
-     * {@code -Command} + MSVCRT quoteArg(非 {@code -EncodedCommand})执行,该模式下
-     * Write-Host / Write-Output / 2>&1 / 原生 stderr 均以纯文本输出、不产生 CLIXML。
-     * 此前缀仅作工具层额外防御:静默 progress/information/warning/verbose/debug 流,
+     * PowerShell 脚本预置前缀。两项职责:
+     *
+     * <p><b>1. UTF-8 输出编码(PS-001 修复)</b>:
+     * {@code [Console]::OutputEncoding=UTF8} 使 PowerShell 向管道输出时按 UTF-8 编码
+     * (简体中文系统默认 GBK/936,Java 端统一按 UTF-8 解码会导致乱码);
+     * {@code $OutputEncoding=UTF8} 使 PowerShell 管道数据传给原生子进程时也用 UTF-8。
+     * 前缀先于用户命令执行,用户若显式覆盖则后写生效。
+     *
+     * <p><b>2. 非成功流静默化</b>:静默 progress/information/warning/verbose/debug 流,
      * 避免个别 cmdlet / 模块显式 Write-Progress 等刷屏(不影响真实 stdout 数据与真实 stderr 错误)。
-     * 残余噪声由 {@link #stripClixml} 兜底剥除。不改变、也不要求改变 AI 的命令写法。
+     * 残余 CLIXML 噪声由 {@link #stripClixml} 兜底剥除。不改变、也不要求改变 AI 的命令写法。
      */
     private static final String POWERSHELL_PREFIX =
-            "$ProgressPreference='SilentlyContinue'; $InformationPreference='SilentlyContinue'; "
+            "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; "
+            + "$OutputEncoding=[System.Text.Encoding]::UTF8; "
+            + "$ProgressPreference='SilentlyContinue'; $InformationPreference='SilentlyContinue'; "
             + "$WarningPreference='SilentlyContinue'; $VerbosePreference='SilentlyContinue'; "
             + "$DebugPreference='SilentlyContinue'; ";
 
@@ -121,9 +128,9 @@ public class CommandExecutor {
             String sysPath = System.getenv("PATH");
             env.put("PATH", rgBinDir + java.io.File.pathSeparator + (sysPath == null ? "" : sysPath));
         }
-        // powershell 专属(Windows 原生域):授权检查之后给命令串预置非成功流抑制(progress +
-        // information,权限检查与审计日志始终是用户原始命令)。WindowsSandbox 两条 spawn 路径均把
-        // 该串作为整段脚本执行,前缀同时生效;用户命令自身若显式设置该偏好,后写覆盖本前缀。
+        // powershell 专属(Windows 原生域):授权检查之后给命令串预置 UTF-8 编码设置 +
+        // 非成功流抑制(权限检查与审计日志始终是用户原始命令)。前缀先于用户命令执行,
+        // 用户若显式设置该偏好,后写覆盖本前缀。
         String spawnCmd = powershell ? POWERSHELL_PREFIX + command : command;
         // wsl-bwrap 后端:已授权 EXEC 根随调用挂载进沙箱(授权=绑定,撤销=下次不绑,零宿主状态);
         // 走 execRootsSandboxed(§13.3 L2 过滤)——过度宽泛根(如历史 C:\\)不得进 --bind 白名单,
@@ -146,13 +153,24 @@ public class CommandExecutor {
         ExecResult r;
         // 直接 ProcessBuilder 执行（核心宿主访问工具,DIRECT 模式）
         boolean win = System.getProperty("os.name").toLowerCase().contains("win");
-        String[] shellPrefix = powershell
-                ? (win ? new String[]{"powershell.exe", "-NoProfile", "-Command"}
-                       : new String[]{"pwsh", "-NoProfile", "-Command"})
-                : (win ? new String[]{"cmd.exe", "/c"} : new String[]{"bash", "-c"});
-        java.util.List<String> fullCmd = new java.util.ArrayList<>(java.util.List.of(shellPrefix));
-        fullCmd.add(spawnCmd);
-        r = sandbox.spawnNative(fullCmd.toArray(new String[0]), cwd, env);
+        if (powershell) {
+            // PS-002 修复:含双引号的命令经临时 .ps1 文件 + -File 执行,
+            // 绕开 ProcessBuilder 的 MSVCRT 引号转义对 PowerShell 引号的截断/吞掉。
+            // 不含双引号的简单命令仍走 -Command,省去临时文件 IO。
+            boolean hasDoubleQuote = spawnCmd.indexOf('"') >= 0;
+            if (hasDoubleQuote) {
+                r = executePowerShellViaTempScript(spawnCmd, win, cwd, env);
+            } else {
+                String psExe = win ? "powershell.exe" : "pwsh";
+                String[] fullCmd = {psExe, "-NoProfile", "-Command", spawnCmd};
+                r = sandbox.spawnNative(fullCmd, cwd, env);
+            }
+        } else {
+            String[] shellPrefix = win ? new String[]{"cmd.exe", "/c"} : new String[]{"bash", "-c"};
+            java.util.List<String> fullCmd = new java.util.ArrayList<>(java.util.List.of(shellPrefix));
+            fullCmd.add(spawnCmd);
+            r = sandbox.spawnNative(fullCmd.toArray(new String[0]), cwd, env);
+        }
         // powershell 专属:输出层剥除 CLIXML 流记录噪声(兜底,覆盖 Preference 未能抑制的残余)
         if (powershell) {
             r = stripClixml(r);
@@ -161,6 +179,59 @@ public class CommandExecutor {
                 "direct",
                 r.exitCode(), r.aborted(), truncate(command, 200));
         return format(r);
+    }
+
+    /**
+     * PowerShell 脚本经临时 .ps1 文件 + -File 执行（PS-002 修复）。
+     *
+     * <p><b>问题</b>:ProcessBuilder 在 Windows 上按 MSVCRT 规则转义参数中的双引号
+     *（{@code "} → {@code \"}）。但 PowerShell 的 {@code -Command} 参数接收命令行文本时,
+     * 其引号解析规则与 MSVCRT 不完全一致,导致 PowerShell 原生 {@code ""} 嵌套引号语法
+     *（双引号字符串内 {@code ""} 表示一个字面双引号）在经 MSVCRT 转义后被截断或吞掉。
+     *
+     * <p><b>修复</b>:仅当命令串含双引号时,将脚本内容写入临时 {@code .ps1} 文件,
+     * 以 {@code -File} 参数执行。脚本内容经 Java 文件 IO 写入,不经过命令行引号转义;
+     * 文件路径不含 {@code "} 字符,ProcessBuilder 对路径的引号包裹不会引入歧义。
+     * 不含双引号的简单命令仍走 {@code -Command},省去临时文件 IO。
+     *
+     * <p><b>编码</b>:临时文件以 UTF-8 BOM 写入。PowerShell 5.1 无 BOM 时按系统 ACP
+     *（如 GBK）解码脚本文件,含中文的脚本会乱码;BOM 强制 UTF-8 解码。
+     * UTF-8 输出编码已由 {@link #POWERSHELL_PREFIX} 设置,无需额外处理。
+     *
+     * <p><b>CLIXML</b>:{@code -File} 模式与 {@code -Command} 模式行为一致——
+     * Write-Host / Write-Output / 2>&1 / 原生 stderr 均以纯文本输出,不产生 CLIXML。
+     * {@link #stripClixml} 仍作兜底。
+     */
+    private ExecResult executePowerShellViaTempScript(String script, boolean win,
+            Path cwd, Map<String, String> env) {
+        java.nio.file.Path tempScript = null;
+        try {
+            tempScript = java.nio.file.Files.createTempFile("ea-ps-", ".ps1");
+            // UTF-8 BOM: PowerShell 5.1 需要它来正确识别 UTF-8 编码的脚本文件
+            byte[] bom = {(byte) 0xEF, (byte) 0xBB, (byte) 0xBF};
+            byte[] content = script.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            byte[] full = new byte[bom.length + content.length];
+            System.arraycopy(bom, 0, full, 0, bom.length);
+            System.arraycopy(content, 0, full, bom.length, content.length);
+            java.nio.file.Files.write(tempScript, full);
+
+            String psExe = win ? "powershell.exe" : "pwsh";
+            String[] fullCmd = {psExe, "-NoProfile", "-ExecutionPolicy", "Bypass",
+                    "-File", tempScript.toString()};
+            return sandbox.spawnNative(fullCmd, cwd, env);
+        } catch (java.io.IOException e) {
+            return new ExecResult("", "execute: 无法创建临时脚本文件 " + e.getMessage(), 1, false);
+        } catch (Exception e) {
+            return new ExecResult("", "execute: 临时脚本执行异常 " + e.getMessage(), 1, false);
+        } finally {
+            if (tempScript != null) {
+                try {
+                    java.nio.file.Files.deleteIfExists(tempScript);
+                } catch (Exception ignored) {
+                    // 临时文件清理失败不影响结果
+                }
+            }
+        }
     }
 
     /**
