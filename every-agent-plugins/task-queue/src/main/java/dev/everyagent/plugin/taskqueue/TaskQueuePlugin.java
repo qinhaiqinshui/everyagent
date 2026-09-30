@@ -2,9 +2,8 @@ package dev.everyagent.plugin.taskqueue;
 
 import dev.everyagent.plugin.api.EveryAgentPlugin;
 import dev.everyagent.plugin.api.WorkerPluginContext;
-import dev.everyagent.worker.config.WorkerProperties;
-import dev.everyagent.worker.hub.EventSink;
-import dev.everyagent.worker.proto.RpcMethods;
+import dev.everyagent.plugin.api.config.WorkerConfig;
+import dev.everyagent.plugin.api.event.StreamEmitter;
 
 /**
  * task-queue 插件入口。
@@ -17,16 +16,16 @@ public class TaskQueuePlugin implements EveryAgentPlugin {
 
     @Override
     public void activate(WorkerPluginContext ctx) {
-        WorkerProperties props = ctx.getService(WorkerProperties.class);
-        EventSink eventSink = ctx.getService(EventSink.class);
+        WorkerConfig config = ctx.services().config();
+        StreamEmitter stream = ctx.services().stream();
 
-        TaskQueue taskQueue = new TaskQueue(props, eventSink);
+        TaskQueue taskQueue = new TaskQueue(config, stream);
 
         ctx.registerTaskLifecycleNode(new QueueAdmissionNode(taskQueue));
         ctx.registerTaskAdmissionPolicy(new TaskQueueAdmissionPolicy());
 
         // 注册 task.queueList RPC
         TaskQueueRpcHandler rpcHandler = new TaskQueueRpcHandler(taskQueue);
-        ctx.registerRpcMethod(RpcMethods.TASK_QUEUE_LIST, rpcHandler::rpcTaskQueueList);
+        ctx.registerRpcMethod("task.queueList", rpcHandler::rpcTaskQueueList);
     }
 }

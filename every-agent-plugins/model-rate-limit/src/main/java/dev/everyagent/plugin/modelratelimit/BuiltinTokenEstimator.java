@@ -3,7 +3,7 @@ package dev.everyagent.plugin.modelratelimit;
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.plugin.api.spi.TokenEstimator;
 import dev.everyagent.plugin.api.util.AtomicFiles;
-import dev.everyagent.worker.config.WorkerProperties;
+import dev.everyagent.plugin.api.config.WorkerConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import tools.jackson.databind.JsonNode;
@@ -53,14 +53,14 @@ public class BuiltinTokenEstimator implements TokenEstimator {
     private final Map<String, EstState> states = new ConcurrentHashMap<>();
     private final AtomicBoolean dirty = new AtomicBoolean(false);
     private final ExecutorService writer;
-    private final WorkerProperties props;
+    private final WorkerConfig config;
 
     /** 去重：最近一次校准样本指纹（configId → "estimated:actual"）。 */
     private final Map<String, String> lastSampleKey = new ConcurrentHashMap<>();
 
-    public BuiltinTokenEstimator(WorkerProperties props) {
-        this.props = props;
-        this.file = props.resolveHomeDir().resolve(FILE_NAME);
+    public BuiltinTokenEstimator(WorkerConfig config) {
+        this.config = config;
+        this.file = config.resolveHomeDir().resolve(FILE_NAME);
         this.writer = Executors.newSingleThreadExecutor(r -> {
             Thread t = new Thread(r, "token-estimator-writer");
             t.setDaemon(true);
@@ -100,13 +100,13 @@ public class BuiltinTokenEstimator implements TokenEstimator {
             return;
         }
 
-        WorkerProperties.ModelRate rateDefaults = props.getLimits().getModelRate();
-        double alpha = rateDefaults.getEstEmaAlpha();
-        double factorMin = rateDefaults.getEstFactorMin();
-        double factorMax = rateDefaults.getEstFactorMax();
-        double convergenceThreshold = props.getLimits().getTokenEstimatorConvergenceThreshold();
-        int convergenceSamples = props.getLimits().getTokenEstimatorConvergenceSamples();
-        double driftThreshold = props.getLimits().getTokenEstimatorDriftThreshold();
+        WorkerConfig.Limits.ModelRate rateDefaults = config.limits().modelRate();
+        double alpha = rateDefaults.estEmaAlpha();
+        double factorMin = rateDefaults.estFactorMin();
+        double factorMax = rateDefaults.estFactorMax();
+        double convergenceThreshold = config.limits().tokenEstimatorConvergenceThreshold();
+        int convergenceSamples = config.limits().tokenEstimatorConvergenceSamples();
+        double driftThreshold = config.limits().tokenEstimatorDriftThreshold();
 
         states.compute(configId, (id, cur) -> {
             double oldFactor = (cur == null) ? 1.0 : cur.factor;

@@ -1,7 +1,7 @@
 package dev.everyagent.plugin.modelratelimit;
 
 import dev.everyagent.plugin.api.spi.TokenEstimator;
-import dev.everyagent.worker.config.WorkerProperties;
+import dev.everyagent.plugin.api.config.WorkerConfig;
 import tools.jackson.databind.JsonNode;
 
 import java.util.ArrayList;
@@ -23,12 +23,12 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public class ModelRateLimiterRegistry {
 
-    private final WorkerProperties props;
+    private final WorkerConfig config;
     private final TokenEstimator estimator;
     private final Map<String, ModelRateLimiter> limiters = new ConcurrentHashMap<>();
 
-    public ModelRateLimiterRegistry(WorkerProperties props, TokenEstimator estimator) {
-        this.props = props;
+    public ModelRateLimiterRegistry(WorkerConfig config, TokenEstimator estimator) {
+        this.config = config;
         this.estimator = estimator;
     }
 
@@ -36,11 +36,11 @@ public class ModelRateLimiterRegistry {
     public Optional<ModelRateLimiter> of(String configId, JsonNode params) {
         return Optional.ofNullable(limiters.computeIfAbsent(configId, id -> {
             ModelRateLimitConfig cfg = ModelRateLimitConfig.from(params,
-                    props.getLimits().getModelRate());
+                    config.limits().modelRate());
             if (!cfg.enabled()) {
                 return null;
             }
-            return new ModelRateLimiter(id, cfg, props.getLimits().getModelRate(), estimator);
+            return new ModelRateLimiter(id, cfg, config.limits().modelRate(), estimator);
         }));
     }
 

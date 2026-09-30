@@ -1,8 +1,8 @@
 package dev.everyagent.plugin.taskqueue;
 
 import dev.everyagent.contract.json.Json;
-import dev.everyagent.worker.config.WorkerProperties;
-import dev.everyagent.worker.hub.EventSink;
+import dev.everyagent.plugin.api.config.WorkerConfig;
+import dev.everyagent.plugin.api.event.StreamEmitter;
 import dev.everyagent.plugin.api.event.Channels;
 import dev.everyagent.plugin.api.event.Events;
 import org.slf4j.Logger;
@@ -24,13 +24,13 @@ public class TaskQueue {
     private static final Logger log = LoggerFactory.getLogger(TaskQueue.class);
 
     private final Semaphore semaphore;
-    private final EventSink eventSink;
+    private final StreamEmitter eventSink;
     private final ConcurrentLinkedQueue<String> waitingQueue = new ConcurrentLinkedQueue<>();
     /** 用于生成排队序号（1-based）。 */
     private final AtomicInteger positionCounter = new AtomicInteger(0);
 
-    public TaskQueue(WorkerProperties props, EventSink eventSink) {
-        this.semaphore = new Semaphore(props.getLimits().getMaxConcurrentTasks(), true); // 公平模式：FIFO
+    public TaskQueue(WorkerConfig config, StreamEmitter eventSink) {
+        this.semaphore = new Semaphore(config.limits().maxConcurrentTasks(), true); // 公平模式：FIFO
         this.eventSink = eventSink;
     }
 

@@ -1,7 +1,7 @@
 package dev.everyagent.plugin.modelratelimit;
 
 import dev.everyagent.contract.json.Json;
-import dev.everyagent.worker.config.WorkerProperties;
+import dev.everyagent.plugin.api.config.WorkerConfig;
 import org.junit.jupiter.api.Test;
 import tools.jackson.databind.JsonNode;
 
@@ -14,12 +14,19 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class ModelRateLimitConfigTest {
 
-    private static WorkerProperties.ModelRate defaults() {
-        WorkerProperties.ModelRate d = new WorkerProperties.ModelRate();
-        d.setDefaultRpm(60);
-        d.setDefaultMaxConcurrency(4);
-        d.setDefaultTpm(0);
-        return d;
+    private static WorkerConfig.Limits.ModelRate defaults() {
+        return new WorkerConfig.Limits.ModelRate() {
+            @Override public int queueCapacity() { return 10; }
+            @Override public long waitTimeoutMs() { return 30000; }
+            @Override public long estWindowSec() { return 60; }
+            @Override public double estSafetyRatio() { return 1.1; }
+            @Override public double estEmaAlpha() { return 0.1; }
+            @Override public double estFactorMin() { return 0.3; }
+            @Override public double estFactorMax() { return 3.0; }
+            @Override public int defaultRpm() { return 60; }
+            @Override public int defaultMaxConcurrency() { return 4; }
+            @Override public long defaultTpm() { return 0; }
+        };
     }
 
     @Test

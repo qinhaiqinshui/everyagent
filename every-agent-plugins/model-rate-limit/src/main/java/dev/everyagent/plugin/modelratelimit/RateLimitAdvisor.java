@@ -1,9 +1,9 @@
 package dev.everyagent.plugin.modelratelimit;
 
 import dev.everyagent.plugin.api.model.EmitEvent;
+import dev.everyagent.plugin.api.agent.AgentContext;
+import dev.everyagent.plugin.api.task.TaskRuntime;
 import dev.everyagent.plugin.api.proto.SnowflakeId;
-import dev.everyagent.worker.agent.AgentEntity;
-import dev.everyagent.worker.task.TaskEntry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClientRequest;
@@ -44,10 +44,10 @@ public class RateLimitAdvisor implements CallAdvisor, StreamAdvisor {
 
     private static final Logger log = LoggerFactory.getLogger(RateLimitAdvisor.class);
 
-    private final AgentEntity a;
+    private final AgentContext a;
     private final ModelRateLimiterRegistry registry;
 
-    public RateLimitAdvisor(AgentEntity a, ModelRateLimiterRegistry registry) {
+    public RateLimitAdvisor(AgentContext a, ModelRateLimiterRegistry registry) {
         this.a = a;
         this.registry = registry;
     }
@@ -65,9 +65,9 @@ public class RateLimitAdvisor implements CallAdvisor, StreamAdvisor {
 
     @Override
     public ChatClientResponse adviseCall(ChatClientRequest request, CallAdvisorChain chain) {
-        TaskEntry t = (TaskEntry) a.properties.get("taskEntry");
-        String configId = t.snapshot.configId();
-        Optional<ModelRateLimiter> limiter = registry.of(configId, t.snapshot.params());
+        TaskRuntime t = (TaskRuntime) a.properties().get("taskEntry");
+        String configId = t.snapshot().configId();
+        Optional<ModelRateLimiter> limiter = registry.of(configId, t.snapshot().params());
         if (limiter.isEmpty()) {
             return chain.nextCall(request);
         }
@@ -79,7 +79,7 @@ public class RateLimitAdvisor implements CallAdvisor, StreamAdvisor {
                     if (noticeId[0] == 0) {
                         noticeId[0] = SnowflakeId.next();
                     }
-                    a.emitter.emit(EmitEvent.transientOf(noticeId[0], "system.notice", null, null,
+                    a.emitter().emit(EmitEvent.transientOf(noticeId[0], "system.notice", null, null,
                             null,
                             "模型「" + configId + "」正在排队(在飞 " + waitInfo.inFlight()
                                     + " / 排队 " + waitInfo.waiters() + ")",
@@ -105,9 +105,9 @@ public class RateLimitAdvisor implements CallAdvisor, StreamAdvisor {
 
     @Override
     public Flux<ChatClientResponse> adviseStream(ChatClientRequest request, StreamAdvisorChain chain) {
-        TaskEntry t = (TaskEntry) a.properties.get("taskEntry");
-        String configId = t.snapshot.configId();
-        Optional<ModelRateLimiter> limiter = registry.of(configId, t.snapshot.params());
+        TaskRuntime t = (TaskRuntime) a.properties().get("taskEntry");
+        String configId = t.snapshot().configId();
+        Optional<ModelRateLimiter> limiter = registry.of(configId, t.snapshot().params());
         if (limiter.isEmpty()) {
             return chain.nextStream(request);
         }
@@ -121,7 +121,7 @@ public class RateLimitAdvisor implements CallAdvisor, StreamAdvisor {
                         if (noticeId[0] == 0) {
                             noticeId[0] = SnowflakeId.next();
                         }
-                        a.emitter.emit(EmitEvent.transientOf(noticeId[0], "system.notice", null, null,
+                        a.emitter().emit(EmitEvent.transientOf(noticeId[0], "system.notice", null, null,
                                 null,
                                 "模型「" + configId + "」正在排队(在飞 " + waitInfo.inFlight()
                                         + " / 排队 " + waitInfo.waiters() + ")",

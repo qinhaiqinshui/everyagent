@@ -1,6 +1,6 @@
 package dev.everyagent.plugin.modelratelimit;
 
-import dev.everyagent.worker.config.WorkerProperties;
+import dev.everyagent.plugin.api.config.WorkerConfig;
 import tools.jackson.databind.JsonNode;
 
 /**
@@ -37,11 +37,11 @@ public final class ModelRateLimitConfig {
         this.tokenEstFactor = tokenEstFactor;
     }
 
-    public static ModelRateLimitConfig from(JsonNode params, WorkerProperties.ModelRate defaults) {
+    public static ModelRateLimitConfig from(JsonNode params, WorkerConfig.Limits.ModelRate defaults) {
         // 起点 = 全局默认(非 0);params 显式值覆盖,显式 0 关闭该维度。
-        int rpm = defaults == null ? 0 : defaults.getDefaultRpm();
-        int concurrency = defaults == null ? 0 : defaults.getDefaultMaxConcurrency();
-        long tpm = defaults == null ? 0 : defaults.getDefaultTpm();
+        int rpm = defaults == null ? 0 : defaults.defaultRpm();
+        int concurrency = defaults == null ? 0 : defaults.defaultMaxConcurrency();
+        long tpm = defaults == null ? 0 : defaults.defaultTpm();
         double factor = 1.0;
         if (params != null && params.isObject()) {
             if (params.has("rpm")) {

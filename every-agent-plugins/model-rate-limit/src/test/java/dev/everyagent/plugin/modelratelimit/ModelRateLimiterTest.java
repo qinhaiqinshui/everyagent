@@ -1,7 +1,7 @@
 package dev.everyagent.plugin.modelratelimit;
 
+import dev.everyagent.plugin.api.config.WorkerConfig;
 import dev.everyagent.plugin.api.spi.TokenEstimator;
-import dev.everyagent.worker.config.WorkerProperties;
 import org.junit.jupiter.api.Test;
 
 import java.util.concurrent.atomic.AtomicReference;
@@ -18,10 +18,23 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class ModelRateLimiterTest {
 
-    private static WorkerProperties.ModelRate defaults(long waitMs) {
-        WorkerProperties.ModelRate d = new WorkerProperties.ModelRate();
-        d.setWaitTimeoutMs(waitMs);
-        return d;
+    private static WorkerConfig.Limits.ModelRate defaults(long waitMs) {
+        return defaults(waitMs, 10);
+    }
+
+    private static WorkerConfig.Limits.ModelRate defaults(long waitMs, int queueCap) {
+        return new WorkerConfig.Limits.ModelRate() {
+            @Override public int queueCapacity() { return queueCap; }
+            @Override public long waitTimeoutMs() { return waitMs; }
+            @Override public long estWindowSec() { return 60; }
+            @Override public double estSafetyRatio() { return 1.1; }
+            @Override public double estEmaAlpha() { return 0.1; }
+            @Override public double estFactorMin() { return 0.3; }
+            @Override public double estFactorMax() { return 3.0; }
+            @Override public int defaultRpm() { return 0; }
+            @Override public int defaultMaxConcurrency() { return 0; }
+            @Override public long defaultTpm() { return 0; }
+        };
     }
 
     /** 测试用 TokenEstimator 桩:CJK 估算同口径,带简单 EMA 校准(α=0.1,无收敛/漂移逻辑)。 */
@@ -116,8 +129,7 @@ class ModelRateLimiterTest {
 
     @Test
     void queueFullImmediatelyFails() throws Exception {
-        WorkerProperties.ModelRate d = defaults(5000);
-        d.setQueueCapacity(1);
+        WorkerConfig.Limits.ModelRate d = defaults(5000, 1);
         ModelRateLimitConfig cfg = new ModelRateLimitConfig(0, 1, 0, 1.0);
         ModelRateLimiter limiter = new ModelRateLimiter("m", cfg, d, STUB_ESTIMATOR);
         ModelRateLimiter.Permit p1 = limiter.acquire();

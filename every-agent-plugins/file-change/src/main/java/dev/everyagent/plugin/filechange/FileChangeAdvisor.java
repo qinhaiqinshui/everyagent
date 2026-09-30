@@ -1,10 +1,9 @@
 package dev.everyagent.plugin.filechange;
 
 import dev.everyagent.contract.json.Json;
-import dev.everyagent.worker.agent.AgentEntity;
-import dev.everyagent.worker.task.TaskEntry;
+import dev.everyagent.plugin.api.agent.AgentContext;
 import dev.everyagent.plugin.api.task.FileChangesCollector;
-import dev.everyagent.worker.task.WorkerToolEventAdvisor;
+import dev.everyagent.plugin.api.task.TaskRuntime;
 import org.springframework.ai.chat.client.ChatClientRequest;
 import org.springframework.ai.chat.client.ChatClientResponse;
 import org.springframework.ai.chat.client.advisor.api.StreamAdvisor;
@@ -18,23 +17,23 @@ import tools.jackson.databind.JsonNode;
 /**
  * 本轮文件改动收集 advisor(独立普通 advisor,<b>不继承</b> {@link ToolCallingAdvisor})。
  *
- * <p>位置:order = {@link Ordered#HIGHEST_PRECEDENCE} + 301,位于 {@link WorkerToolEventAdvisor}
- * ({@code ToolCallingAdvisor},HIGHEST+300)的<b>内层</b>、模型侧({@code ChatModelStreamAdvisor} 最内层)
+ * <p>位置:order = {@link Ordered#HIGHEST_PRECEDENCE} + 301,位于工具调用 advisor
+ * (ToolCallingAdvisor,HIGHEST+300)的<b>内层</b>、模型侧({@code ChatModelStreamAdvisor} 最内层)
  * 的<b>外层</b>。这样它通过 {@link #adviseStream} 的 {@code doOnNext} <b>直接看到模型流</b>——
  * 关键事实:OpenAiChatModel 流式内部已用 {@code bufferUntil}+{@code ChunkMerger} 把工具调用分片
  * <b>合并成一条完整消息</b>(含完整 toolCalls/思考/正文)输出,{@code ChatModelStreamAdvisor} 原样透传
  * 不过滤。因此本 advisor 无需继承 ToolCallingAdvisor,也无需聚合——工具轮就是流里一条
  * {@code hasToolCalls()==true} 的完整 AI 消息,直接检查即可。工具循环/事件发射由
- * {@link WorkerToolEventAdvisor} 承担,死循环检测由工厂装饰的 TCM 承担,本 advisor 纯旁观,对其他 advisor 零影响。
+ * 工具调用 advisor 承担,死循环检测由工厂装饰的 TCM 承担,本 advisor 纯旁观,对其他 advisor 零影响。
  *
  * <p>职责(替代原 {@code FileTools.notifySaved} 与 {@code TaskManager.persistTurnFileChanges}):
  * <ul>
  *   <li><b>检测记录</b>:每轮 {@code doOnNext} 检查 AI 回复的工具调用,命中
  *       {@code update_file} / {@code create_file} 则解析 path 并记录到 {@link FileChangesCollector}
- *       (主/子 agent 共享的 {@link TaskEntry#fileChanges} 回合槽,子 agent 递归记录归入当前回合)。</li>
+ *       (主/子 agent 共享的 {@link TaskRuntime#fileChanges()} 回合槽,子 agent 递归记录归入当前回合)。</li>
  *   <li><b>收口保存</b>:<b>「本轮无工具调用」= 工具循环最后一轮 = 整次 run 完成</b>,在该轮
  *       {@code doOnComplete} 由主 agent 把本轮文件变更的<b>轻量摘要</b>与<b>全文</b>分别填充到
- *       {@link TaskEntry#fileChangesLight} / {@link TaskEntry#fileChangesFull}(此后由
+ *       {@link TaskRuntime#fileChangesLight()} / {@link TaskRuntime#fileChangesFull()}(此后由
  *       {@link RoundIndexAdvisor} 落盘:摘要内联进 rounds.jsonl 每轮行、全文写
  *       {@code file-changes/<roundId>.json}),并清空回合槽。不再发 kind='file_changes' 的 task.trace。</li>
  * </ul>
@@ -56,14 +55,14 @@ public class FileChangeAdvisor implements StreamAdvisor {
     private static final String CREATE_FILE = "create_file";
 
     /** 目标 agent(主 agent 建收集器+收口;子 agent 只记录到共享槽)。 */
-    private final AgentEntity a;
+    private final AgentContext a;
 
     /** 主 agent 首次 adviseStream 建回合收集器(per-run 实例标志)。 */
     private boolean collectorInitialized = false;
     /** 当前轮(本次 adviseStream 调用)是否含工具调用:有=工具轮(将继续递归,延后收口)。 */
     private boolean turnHasToolCalls = false;
 
-    public FileChangeAdvisor(AgentEntity a) {
+    public FileChangeAdvisor(AgentContext a) {
         this.a = a;
     }
 
@@ -83,9 +82,9 @@ public class FileChangeAdvisor implements StreamAdvisor {
     @Override
     public Flux<ChatClientResponse> adviseStream(ChatClientRequest chatClientRequest,
             StreamAdvisorChain streamAdvisorChain) {
-        TaskEntry t = (TaskEntry) a.properties.get("taskEntry");
+        TaskRuntime t = (TaskRuntime) a.properties().get("taskEntry");
         if (!collectorInitialized) {
-            t.fileChanges = new FileChangesCollector();
+            t.fileChanges(new FileChangesCollector());
             collectorInitialized = true;
         }
         turnHasToolCalls = false; // 每轮(每次内层链进入)重置
@@ -96,7 +95,7 @@ public class FileChangeAdvisor implements StreamAdvisor {
 
     /** 逐条检查模型流:工具轮已是完整消息(含 toolCalls),命中 update_file/create_file 则记录。 */
     private void record(ChatClientResponse chunk) {
-        TaskEntry t = (TaskEntry) a.properties.get("taskEntry");
+        TaskRuntime t = (TaskRuntime) a.properties().get("taskEntry");
         ChatResponse cr = chunk.chatResponse();
         if (cr == null || cr.getResult() == null) {
             return;
@@ -110,7 +109,7 @@ public class FileChangeAdvisor implements StreamAdvisor {
             return;
         }
         turnHasToolCalls = true;
-        FileChangesCollector c = t.fileChanges;
+        FileChangesCollector c = t.fileChanges();
         if (c == null) {
             return;
         }
@@ -121,20 +120,20 @@ public class FileChangeAdvisor implements StreamAdvisor {
 
     /** 「本轮无工具调用」= 工具循环最后一轮 = 整次 run 完成;主 agent 收口填充 light/full 槽,由 RoundIndexAdvisor 落盘。 */
     private void finalizeIfLastTurn() {
-        TaskEntry t = (TaskEntry) a.properties.get("taskEntry");
+        TaskRuntime t = (TaskRuntime) a.properties().get("taskEntry");
         if (turnHasToolCalls) {
             return; // 工具轮:ToolCallingAdvisor 将继续递归,收口延后到最终回答轮
         }
-        FileChangesCollector c = t.fileChanges;
+        FileChangesCollector c = t.fileChanges();
         if (c == null || c.isEmpty()) {
             return;
         }
         try {
             // 不再发 file_changes trace:轻量摘要内联进 rounds.jsonl 每轮行,全文由 RoundIndexStore 单独落盘。
-            t.fileChangesLight = c.buildLightSummary();
-            t.fileChangesFull = c.buildContent();
+            t.fileChangesLight(c.buildLightSummary());
+            t.fileChangesFull(c.buildContent());
         } finally {
-            t.fileChanges = null;
+            t.fileChanges(null);
         }
     }
 
@@ -152,13 +151,13 @@ public class FileChangeAdvisor implements StreamAdvisor {
         if (UPDATE_FILE.equals(name)) {
             String oldcontent = args.path("oldcontent").asString(null);
             String content = args.path("content").asString(null);
-            c.onFileSaved(a.agentId, path,
+            c.onFileSaved(a.agentId(), path,
                     oldcontent == null ? "" : oldcontent,
                     content == null ? "" : content,
                     "modified");
         } else {
             String content = args.path("content").asString(null);
-            c.onFileSaved(a.agentId, path, "", content == null ? "" : content, "created");
+            c.onFileSaved(a.agentId(), path, "", content == null ? "" : content, "created");
         }
     }
 

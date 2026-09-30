@@ -1,7 +1,7 @@
 package dev.everyagent.plugin.modelratelimit;
 
 import dev.everyagent.plugin.api.spi.TokenEstimator;
-import dev.everyagent.worker.config.WorkerProperties;
+import dev.everyagent.plugin.api.config.WorkerConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -37,7 +37,7 @@ public final class ModelRateLimiter {
 
     private final String configId;
     private final ModelRateLimitConfig cfg;
-    private final WorkerProperties.ModelRate defaults;
+    private final WorkerConfig.Limits.ModelRate defaults;
     private final long windowMs;
     private final TokenEstimator estimator;
 
@@ -58,11 +58,11 @@ public final class ModelRateLimiter {
     }
 
     public ModelRateLimiter(String configId, ModelRateLimitConfig cfg,
-            WorkerProperties.ModelRate defaults, TokenEstimator estimator) {
+            WorkerConfig.Limits.ModelRate defaults, TokenEstimator estimator) {
         this.configId = configId;
         this.cfg = cfg;
         this.defaults = defaults;
-        this.windowMs = Math.max(1_000, defaults.getEstWindowSec() * 1000);
+        this.windowMs = Math.max(1_000, defaults.estWindowSec() * 1000);
         this.estimator = estimator;
     }
 
@@ -97,8 +97,8 @@ public final class ModelRateLimiter {
     public Permit acquire(BiConsumer<WaitInfo, Long> onWait)
             throws InterruptedException, ModelRateLimitException {
         synchronized (monitor) {
-            long deadline = System.currentTimeMillis() + Math.max(1, defaults.getWaitTimeoutMs());
-            if (waiters >= Math.max(1, defaults.getQueueCapacity())) {
+            long deadline = System.currentTimeMillis() + Math.max(1, defaults.waitTimeoutMs());
+            if (waiters >= Math.max(1, defaults.queueCapacity())) {
                 throw queueFull();
             }
             waiters++;
@@ -187,7 +187,7 @@ public final class ModelRateLimiter {
         for (TokenSample s : tpmWindow) {
             completed += s.outputTokens();
         }
-        long projected = completed + (long) (estActiveOutput * defaults.getEstSafetyRatio());
+        long projected = completed + (long) (estActiveOutput * defaults.estSafetyRatio());
         return projected >= cfg.tpm();
     }
 
@@ -205,7 +205,7 @@ public final class ModelRateLimiter {
 
     private ModelRateLimitException timeout() {
         return new ModelRateLimitException(
-                "模型「" + configId + "」请求拥堵:等待 " + defaults.getWaitTimeoutMs()
+                "模型「" + configId + "」请求拥堵:等待 " + defaults.waitTimeoutMs()
                         + "ms 仍未获得放行(并发=" + (cfg.maxConcurrency() > 0 ? cfg.maxConcurrency() : "不限")
                         + " / rpm=" + (cfg.rpm() > 0 ? cfg.rpm() : "不限")
                         + (cfg.tpm() > 0 ? " / tpm=" + cfg.tpm() : "") + ")。"
@@ -215,7 +215,7 @@ public final class ModelRateLimiter {
 
     private ModelRateLimitException queueFull() {
         return new ModelRateLimitException(
-                "模型「" + configId + "」请求排队已满(队列上限 " + defaults.getQueueCapacity()
+                "模型「" + configId + "」请求排队已满(队列上限 " + defaults.queueCapacity()
                         + ")。建议减少同时派发的子 agent 数量,或稍后重试。");
     }
 

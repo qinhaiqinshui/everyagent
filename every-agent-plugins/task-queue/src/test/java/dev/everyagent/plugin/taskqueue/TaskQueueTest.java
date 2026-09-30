@@ -1,7 +1,7 @@
 package dev.everyagent.plugin.taskqueue;
 
-import dev.everyagent.worker.config.WorkerProperties;
-import dev.everyagent.worker.hub.EventSink;
+import dev.everyagent.plugin.api.config.WorkerConfig;
+import dev.everyagent.plugin.api.event.StreamEmitter;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -14,19 +14,22 @@ import static org.mockito.Mockito.*;
  */
 class TaskQueueTest {
 
-    private WorkerProperties props;
-    private EventSink eventSink;
+    private WorkerConfig config;
+    private WorkerConfig.Limits limits;
+    private StreamEmitter eventSink;
 
     @BeforeEach
     void setUp() {
-        props = new WorkerProperties();
-        eventSink = mock(EventSink.class);
+        config = mock(WorkerConfig.class);
+        limits = mock(WorkerConfig.Limits.class);
+        when(config.limits()).thenReturn(limits);
+        eventSink = mock(StreamEmitter.class);
     }
 
     @Test
     void acquireDecrementsAndReleaseRestoresPermits() throws InterruptedException {
-        props.getLimits().setMaxConcurrentTasks(3);
-        TaskQueue queue = new TaskQueue(props, eventSink);
+        when(limits.maxConcurrentTasks()).thenReturn(3);
+        TaskQueue queue = new TaskQueue(config, eventSink);
 
         assertEquals(3, queue.availablePermits());
 
@@ -45,8 +48,8 @@ class TaskQueueTest {
 
     @Test
     void queueLengthAndWaitingTaskIdsTrackBlockedTasks() throws InterruptedException {
-        props.getLimits().setMaxConcurrentTasks(1);
-        TaskQueue queue = new TaskQueue(props, eventSink);
+        when(limits.maxConcurrentTasks()).thenReturn(1);
+        TaskQueue queue = new TaskQueue(config, eventSink);
 
         queue.acquire("t1"); // occupy
         assertEquals(0, queue.queueLength());
@@ -69,8 +72,8 @@ class TaskQueueTest {
 
     @Test
     void broadcastsTaskQueuedWhenWaiting() throws InterruptedException {
-        props.getLimits().setMaxConcurrentTasks(1);
-        TaskQueue queue = new TaskQueue(props, eventSink);
+        when(limits.maxConcurrentTasks()).thenReturn(1);
+        TaskQueue queue = new TaskQueue(config, eventSink);
 
         queue.acquire("t1"); // occupy
 
@@ -91,8 +94,8 @@ class TaskQueueTest {
 
     @Test
     void noBroadcastWhenNoWait() throws InterruptedException {
-        props.getLimits().setMaxConcurrentTasks(2);
-        TaskQueue queue = new TaskQueue(props, eventSink);
+        when(limits.maxConcurrentTasks()).thenReturn(2);
+        TaskQueue queue = new TaskQueue(config, eventSink);
 
         queue.acquire("t1"); // 仍有剩余许可，无需排队
         verifyNoInteractions(eventSink);

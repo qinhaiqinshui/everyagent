@@ -1,10 +1,10 @@
 package dev.everyagent.plugin.taskqueue;
 
+import dev.everyagent.plugin.api.config.WorkerConfig;
+import dev.everyagent.plugin.api.event.StreamEmitter;
 import dev.everyagent.plugin.api.task.TaskChain;
 import dev.everyagent.plugin.api.task.TaskLifecycleContext;
 import dev.everyagent.plugin.api.task.TaskOutcome;
-import dev.everyagent.worker.config.WorkerProperties;
-import dev.everyagent.worker.hub.EventSink;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -20,13 +20,16 @@ import static org.mockito.Mockito.*;
  */
 class QueueAdmissionNodeTest {
 
-    private WorkerProperties props;
-    private EventSink eventSink;
+    private WorkerConfig config;
+    private WorkerConfig.Limits limits;
+    private StreamEmitter eventSink;
 
     @BeforeEach
     void setUp() {
-        props = new WorkerProperties();
-        eventSink = mock(EventSink.class);
+        config = mock(WorkerConfig.class);
+        limits = mock(WorkerConfig.Limits.class);
+        when(config.limits()).thenReturn(limits);
+        eventSink = mock(StreamEmitter.class);
     }
 
     private TaskLifecycleContext ctx(String taskId) {
@@ -38,8 +41,8 @@ class QueueAdmissionNodeTest {
     // ── 1. 无排队时直接通过 ──────────────────────────────────
     @Test
     void noQueueing_passesThrough() throws Exception {
-        props.getLimits().setMaxConcurrentTasks(2);
-        TaskQueue queue = new TaskQueue(props, eventSink);
+        when(limits.maxConcurrentTasks()).thenReturn(2);
+        TaskQueue queue = new TaskQueue(config, eventSink);
         QueueAdmissionNode node = new QueueAdmissionNode(queue);
 
         TaskLifecycleContext ctx = ctx("task-1");
@@ -60,8 +63,8 @@ class QueueAdmissionNodeTest {
     // ── 2. 并发满时阻塞 ──────────────────────────────────────
     @Test
     void blocksWhenPermitsExhausted() throws Exception {
-        props.getLimits().setMaxConcurrentTasks(1);
-        TaskQueue queue = new TaskQueue(props, eventSink);
+        when(limits.maxConcurrentTasks()).thenReturn(1);
+        TaskQueue queue = new TaskQueue(config, eventSink);
         QueueAdmissionNode node = new QueueAdmissionNode(queue);
 
         // 先占用唯一的许可
@@ -96,8 +99,8 @@ class QueueAdmissionNodeTest {
     // ── 3. 任务完成后释放并唤醒等待者 ────────────────────────
     @Test
     void releaseWakesWaitingTask() throws Exception {
-        props.getLimits().setMaxConcurrentTasks(1);
-        TaskQueue queue = new TaskQueue(props, eventSink);
+        when(limits.maxConcurrentTasks()).thenReturn(1);
+        TaskQueue queue = new TaskQueue(config, eventSink);
         QueueAdmissionNode node = new QueueAdmissionNode(queue);
 
         // 任务 A 占用许可
@@ -148,8 +151,8 @@ class QueueAdmissionNodeTest {
     // ── 5. 队列事件广播 ─────────────────────────────────────
     @Test
     void acquireBroadcastsQueueEvent() throws Exception {
-        props.getLimits().setMaxConcurrentTasks(1);
-        TaskQueue queue = new TaskQueue(props, eventSink);
+        when(limits.maxConcurrentTasks()).thenReturn(1);
+        TaskQueue queue = new TaskQueue(config, eventSink);
         QueueAdmissionNode node = new QueueAdmissionNode(queue);
 
         // 占用唯一许可
