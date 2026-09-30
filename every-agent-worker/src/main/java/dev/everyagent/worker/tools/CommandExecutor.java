@@ -47,11 +47,13 @@ public class CommandExecutor {
     /**
      * PowerShell 脚本预置前缀。两项职责:
      *
-     * <p><b>1. UTF-8 输出编码(PS-001 修复)</b>:
+     * <p><b>1. UTF-8 编码(PS-001 修复)</b>:
      * {@code [Console]::OutputEncoding=UTF8} 使 PowerShell 向管道输出时按 UTF-8 编码
      * (简体中文系统默认 GBK/936,Java 端统一按 UTF-8 解码会导致乱码);
-     * {@code $OutputEncoding=UTF8} 使 PowerShell 管道数据传给原生子进程时也用 UTF-8。
-     * 前缀先于用户命令执行,用户若显式覆盖则后写生效。
+     * {@code $OutputEncoding=UTF8} 使 PowerShell 管道数据传给原生子进程时也用 UTF-8;
+     * {@code $PSDefaultParameterValues} 让 Get-Content / Set-Content / Out-File
+     * 不带 {@code -Encoding} 时默认用 UTF-8 读写文件(PS 5.1 默认按系统 ACP 如 GBK 读,
+     * UTF-8 中文文件会乱码)。前缀先于用户命令执行,用户显式指定 {@code -Encoding} 则覆盖。
      *
      * <p><b>2. 非成功流静默化</b>:静默 progress/information/warning/verbose/debug 流,
      * 避免个别 cmdlet / 模块显式 Write-Progress 等刷屏(不影响真实 stdout 数据与真实 stderr 错误)。
@@ -60,6 +62,9 @@ public class CommandExecutor {
     private static final String POWERSHELL_PREFIX =
             "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; "
             + "$OutputEncoding=[System.Text.Encoding]::UTF8; "
+            + "$PSDefaultParameterValues['Get-Content:Encoding']='UTF8'; "
+            + "$PSDefaultParameterValues['Set-Content:Encoding']='UTF8'; "
+            + "$PSDefaultParameterValues['Out-File:Encoding']='UTF8'; "
             + "$ProgressPreference='SilentlyContinue'; $InformationPreference='SilentlyContinue'; "
             + "$WarningPreference='SilentlyContinue'; $VerbosePreference='SilentlyContinue'; "
             + "$DebugPreference='SilentlyContinue'; ";
