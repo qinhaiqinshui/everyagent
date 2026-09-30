@@ -35,7 +35,9 @@ public class UnattendedToolInterceptor implements ToolExecutionInterceptor {
     @Override
     public ToolExecutionResult invoke(ToolExecutionContext ctx, ToolExecutionChain next) throws Exception {
         Map<String, Object> props = ctx.properties();
-        if (!(props.get("taskEntry") instanceof TaskInfo task) || !Boolean.TRUE.equals(task.metadata().getOrDefault("unattended", false))) {
+        if (props == null
+                || !(props.get("taskEntry") instanceof TaskInfo task)
+                || !Boolean.TRUE.equals(task.metadata().getOrDefault("unattended", false))) {
             return next.proceed(ctx); // 不是无人值守模式，放行
         }
         Prompt prompt = ctx.prompt();
