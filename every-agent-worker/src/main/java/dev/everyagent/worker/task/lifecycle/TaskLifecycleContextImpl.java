@@ -11,8 +11,6 @@ import dev.everyagent.worker.task.TaskEntry;
 import dev.everyagent.worker.task.TaskStore;
 import dev.everyagent.plugin.api.task.UserInput;
 import dev.everyagent.worker.tools.PermissionGate;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.UserMessage;
 import tools.jackson.databind.JsonNode;
@@ -29,8 +27,6 @@ import java.util.function.Function;
  * 内置节点通过此类访问完整 {@link TaskEntry} 和回调。
  */
 public class TaskLifecycleContextImpl implements TaskLifecycleContext {
-
-    private static final Logger log = LoggerFactory.getLogger(TaskLifecycleContextImpl.class);
 
     private TaskEntry taskEntry;
     /** RPC 阶段可变字段（taskEntry 尚未创建时由节点逐字段填充）。 */
@@ -125,14 +121,6 @@ public class TaskLifecycleContextImpl implements TaskLifecycleContext {
     public void consumeInput(AgentEntity main, UserInput input) {
         String text = input.text();
         String rawContent = input.rawContent();
-        // [DEBUG-DEDUP] 追踪 consumeInput 调用源:打印调用栈前 3 帧
-        var caller = StackWalker.getInstance(StackWalker.Option.RETAIN_CLASS_REFERENCE)
-                .walk(s -> s.skip(1).limit(3)
-                        .map(f -> f.getDeclaringClass().getSimpleName() + "." + f.getMethodName()
-                                + ":" + f.getLineNumber())
-                        .toList());
-        log.warn("[DEDUP] consumeInput 调用 taskId={} text='{}' caller={}",
-                taskEntry.taskId, text, caller);
         gate.beginRun(taskEntry.taskId); // 新一条用户输入:本轮(run)授权失效(任务级不受影响)
         // user.message 落盘后以它的 seq 为轮起点开轮:最后一行未闭合则沿用(中间输入/续跑不开新轮);
         // 已闭合/无行则追加一条 endSeq="" 的未闭合轮。中断/取消/失败不再于终态补写,轮行随开轮即持久化。

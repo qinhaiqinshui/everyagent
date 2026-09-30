@@ -266,7 +266,7 @@ class EditResendRoundsTest {
                 "task.rounds 应答应含 3 轮: " + rounds.result().path("rounds"));
 
         // 断言 3:事件日志保留前 2 轮 user.message;被编辑旧消息删除、新消息在场
-        // (MainAgentNode+ConsumeInputNode 各消费一次 → user.message 重复,但截断语义正确)
+        // (ConsumeInputNode 统一消费 → user.message 不重复)
         List<String> userTexts = pollUserMessageTexts(taskId);
         assertTrue(userTexts.contains("1+1=？"), "轮1 保留: " + userTexts);
         assertTrue(userTexts.contains("2+2=？"), "轮2 保留: " + userTexts);

@@ -56,9 +56,7 @@ public final class QueueLoopNode implements TaskLifecycleNode {
 
         try {
             // 内核循环：跑一轮 → 队列取下一条 → 有就再跑
-            log.warn("[DEDUP] QueueLoopNode 首轮 proceed taskId={} queueSize={}", taskId, queue.size());
             Object result = next.proceed(ctx);
-            int round = 1;
             while (result instanceof TaskOutcome to && to.status() == TaskOutcome.TaskEndStatus.DONE) {
                 TaskLifecycleContext polledCtx = queue.poll();
                 if (polledCtx == null) {
@@ -69,9 +67,6 @@ public final class QueueLoopNode implements TaskLifecycleNode {
                 ctx.rawContent(polledCtx.rawContent());
                 ctx.runParams(polledCtx.runParams());
                 ctx.metadata(polledCtx.metadata());
-                round++;
-                log.warn("[DEDUP] QueueLoopNode 第{}轮 proceed(队列 poll) taskId={} text='{}'",
-                        round, taskId, polledCtx.input());
                 result = next.proceed(ctx);
             }
 
