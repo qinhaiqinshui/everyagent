@@ -20,7 +20,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.support.ToolCallbacks;
 import org.springframework.ai.tool.ToolCallback;
-import org.springframework.stereotype.Component;
 import tools.jackson.databind.node.ArrayNode;
 import tools.jackson.databind.node.ObjectNode;
 
@@ -39,7 +38,6 @@ import java.util.concurrent.TimeUnit;
  *
  * <p>重构后:TaskEntry 不再持有 subs/subFutures/stopRequested,本类内部维护 per-task 状态。
  */
-@Component
 public class SubAgentManager {
 
     /** wait_agents 未显式传 timeoutMs 时的默认等待上限(毫秒),防长时间挂起主 agent。 */

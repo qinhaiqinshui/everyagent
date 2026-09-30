@@ -2,7 +2,12 @@ package dev.everyagent.plugin.subagent;
 
 import dev.everyagent.plugin.api.EveryAgentPlugin;
 import dev.everyagent.plugin.api.WorkerPluginContext;
+import dev.everyagent.worker.agent.AgentBuilder;
+import dev.everyagent.worker.agent.AgentRunner;
 import dev.everyagent.worker.config.WorkerProperties;
+import dev.everyagent.worker.interaction.InteractionServiceImpl;
+import dev.everyagent.worker.modules.ConfigStore;
+import dev.everyagent.worker.task.ChatModelFactory;
 import dev.everyagent.worker.task.TaskStore;
 
 /**
@@ -23,7 +28,16 @@ public class SubAgentPlugin implements EveryAgentPlugin {
 
     @Override
     public void activate(WorkerPluginContext ctx) {
-        SubAgentManager subAgentManager = ctx.getService(SubAgentManager.class);
+        // SubAgentManager 是插件内部类,不在 Spring 容器中(插件经 URLClassLoader 加载,
+        // Spring 组件扫描不可见)。在此手动构造,依赖从 worker 容器获取。
+        AgentRunner runner = ctx.getService(AgentRunner.class);
+        AgentBuilder agentBuilder = ctx.getService(AgentBuilder.class);
+        ConfigStore configStore = ctx.getService(ConfigStore.class);
+        ChatModelFactory modelFactory = ctx.getService(ChatModelFactory.class);
+        InteractionServiceImpl asks = ctx.getService(InteractionServiceImpl.class);
+        SubAgentManager subAgentManager = new SubAgentManager(runner, agentBuilder,
+                configStore, modelFactory, asks);
+
         TaskStore store = ctx.getService(TaskStore.class);
         WorkerProperties props = ctx.getService(WorkerProperties.class);
 
@@ -45,6 +59,8 @@ public class SubAgentPlugin implements EveryAgentPlugin {
         // 注意：registerTaskLifecycleNode 用 pluginId 注册，这里需要保持 "worker" 标签
         ctx.getService(dev.everyagent.worker.plugin.registry.TaskLifecycleRegistry.class)
                 .register(new SubAgentLedgerPersistNode(ledger), "worker");
+        // 任务收口前等待全部子 agent（超时级联停）
+        ctx.registerTaskLifecycleNode(new SubAgentSpawnedAwaitNode(subAgentManager));
 
         // 5. 注册 Skill 贡献者
         SubAgentSkillContributor skillContributor = new SubAgentSkillContributor(props);
