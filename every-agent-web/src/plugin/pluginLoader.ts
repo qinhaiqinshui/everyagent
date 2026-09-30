@@ -345,6 +345,13 @@ export async function loadPlugins(): Promise<void> {
         ui: pluginDispatcher as unknown as PluginContext['ui'],
       }
 
+      // 加载插件 CSS（esbuild 将 CSS 提取到 web/index.css，需单独注入）
+      try {
+        await loadPluginCss(workerId, plugin.id)
+      } catch {
+        // 插件无 CSS 或加载失败，不阻塞
+      }
+
       await pluginModule.activate(ctx)
       loadedPlugins.set(plugin.id, { module: pluginModule, disposables: [] })
       console.log(`[plugins] 插件已激活: ${plugin.id} (${plugin.name})`)
@@ -385,15 +392,27 @@ async function loadPluginModule(
   }
 }
 
-/** 卸载所有已加载插件（页面卸载时调用）。 */
-export async function shutdownPlugins(): Promise<void> {
-  for (const [id, { module }] of loadedPlugins) {
-    try {
-      await module.deactivate?.()
-    } catch {
-      // 忽略
-    }
-    console.log(`[plugins] 插件已卸载: ${id}`)
-  }
-  loadedPlugins.clear()
+/**
+ * 加载插件 CSS：经 plugin.webSource RPC 获取 web/index.css，
+ * 注入为带 data-plugin 属性的 <style> 元素（幂等，不重复注入）。
+ */
+async function loadPluginCss(workerId: string, pluginId: string): Promise<void> {
+  const styleId = `plugin-css:${pluginId}`
+  if (document.getElementById(styleId)) return // 幂等
+
+  const result = await hubSession.rpcTo(workerId, 'plugin.webSource', {
+    pluginId,
+    path: 'web/index.css',
+  }) as { content?: string }
+
+  const css = result?.content
+  if (!css || !css.trim()) return
+
+  const style = document.createElement('style')
+  style.id = styleId
+  style.setAttribute('data-plugin', pluginId)
+  style.textContent = css
+  document.head.appendChild(style)
 }
+
+

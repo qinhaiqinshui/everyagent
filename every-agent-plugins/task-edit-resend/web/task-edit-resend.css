@@ -26,7 +26,6 @@
   opacity: 1;
 }
 .nagent-msg__edit-btn:hover {
-  background: color-mix(in srgb, var(--accent-blue) 12%, transparent);
   color: var(--accent-blue, #4a9eff);
 }
 /* 编辑模式:当前正在编辑的消息,按钮常显 */
