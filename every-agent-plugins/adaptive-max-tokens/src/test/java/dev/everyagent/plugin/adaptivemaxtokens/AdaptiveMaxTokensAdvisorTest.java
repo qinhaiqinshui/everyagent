@@ -1,25 +1,33 @@
 package dev.everyagent.plugin.adaptivemaxtokens;
 
+import dev.everyagent.plugin.api.agent.AgentActivity;
+import dev.everyagent.plugin.api.agent.AgentContext;
+import dev.everyagent.plugin.api.config.WorkerConfig;
+import dev.everyagent.plugin.api.event.EventLogReader;
+import dev.everyagent.plugin.api.event.EventRecord;
+import dev.everyagent.plugin.api.event.Usage;
+import dev.everyagent.plugin.api.model.EventEmitter;
 import dev.everyagent.plugin.api.model.ModelConfig;
-import dev.everyagent.worker.config.WorkerProperties;
-import dev.everyagent.worker.agent.AgentEntity;
-import dev.everyagent.worker.task.TaskEntry;
+import dev.everyagent.plugin.api.task.FileChangesCollector;
+import dev.everyagent.plugin.api.task.TaskRuntime;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.client.ChatClientRequest;
 import org.springframework.ai.chat.client.ChatClientResponse;
 import org.springframework.ai.chat.client.advisor.api.StreamAdvisor;
 import org.springframework.ai.chat.client.advisor.api.StreamAdvisorChain;
 import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.metadata.ChatGenerationMetadata;
-import org.springframework.ai.chat.metadata.ChatResponseMetadata;
-import org.springframework.ai.chat.metadata.DefaultUsage;
+import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import reactor.core.publisher.Flux;
 import reactor.test.StepVerifier;
+import tools.jackson.databind.JsonNode;
 
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -35,6 +43,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *
  * <p>测试脚手架风格参考 {@code ModelLengthGuardAdvisorTest}:手写桩链(免 Mockito),
  * 用计数器控制每次 nextStream 返回不同的 Flux。
+ *
+ * <p>约束(§14.9):插件对 worker 任何 scope 零依赖,测试桩在本类内自建
+ * (实现 plugin-api 接口的等价类),不引用 worker 的 AgentEntity/TaskEntry/WorkerProperties。
  */
 class AdaptiveMaxTokensAdvisorTest {
 
@@ -251,7 +262,7 @@ class AdaptiveMaxTokensAdvisorTest {
                 .verify();
     }
 
-    // ---- 测试脚手架 ----
+    // ---- 测试脚手架(§14.9:自建桩,不依赖 worker) ----
 
     /**
      * 计数桩链:每次 nextStream 返回 sources 列表中下一个 Flux。
@@ -293,35 +304,24 @@ class AdaptiveMaxTokensAdvisorTest {
 
     private static AdaptiveMaxTokensAdvisor advisor(int base, int ceiling, double multiplier,
             int maxRetries, double fallbackRatio, int fallbackRounds) {
-        WorkerProperties.Limits.AdaptiveMaxTokens cfg = new WorkerProperties.Limits.AdaptiveMaxTokens();
-        cfg.setEnabled(true);
-        cfg.setCeiling(ceiling);
-        cfg.setMultiplier(multiplier);
-        cfg.setMaxRetries(maxRetries);
-        cfg.setFallbackRatio(fallbackRatio);
-        cfg.setFallbackRounds(fallbackRounds);
+        WorkerConfig.Limits.AdaptiveMaxTokens cfg =
+                new StubAdaptiveCfg(true, ceiling, multiplier, maxRetries, fallbackRatio, fallbackRounds);
         return new AdaptiveMaxTokensAdvisor(testAgent(), cfg, ceiling);
     }
 
     private static AdaptiveMaxTokensAdvisor advisorDisabled(int base, int ceiling, double multiplier, int maxRetries) {
-        WorkerProperties.Limits.AdaptiveMaxTokens cfg = new WorkerProperties.Limits.AdaptiveMaxTokens();
-        cfg.setEnabled(false);
-        cfg.setCeiling(ceiling);
-        cfg.setMultiplier(multiplier);
-        cfg.setMaxRetries(maxRetries);
+        WorkerConfig.Limits.AdaptiveMaxTokens cfg =
+                new StubAdaptiveCfg(false, ceiling, multiplier, maxRetries, 0.5, 3);
         return new AdaptiveMaxTokensAdvisor(testAgent(), cfg, ceiling);
     }
 
-    private static AgentEntity testAgent() {
-        TaskEntry task = new TaskEntry("t_test", "测试",
-                new ModelConfig("cfg", "openai", "http://localhost", "test-model", null),
-                "/tmp", "w_1", "a_test", 1000);
+    private static AgentContext testAgent() {
+        TaskRuntime task = new StubTaskRuntime("t_test", "a_test");
         Map<String, Object> props = new HashMap<>();
         props.put("taskEntry", task);
-        props.put("taskId", task.taskId);
-        props.put("workspaceRoot", task.workspaceRoot);
-        return new AgentEntity("a_test", "test", null,
-                OpenAiChatOptions.builder().build(), List.of(), null, props);
+        props.put("taskId", task.taskId());
+        props.put("workspaceRoot", task.workspaceRoot());
+        return new StubAgentContext("a_test", "test", props);
     }
 
     private static ChatClientRequest request(int maxTokens) {
@@ -348,19 +348,6 @@ class AdaptiveMaxTokensAdvisorTest {
         return new ChatClientResponse(new ChatResponse(List.of(gen)), Map.of());
     }
 
-    /** 构造正常完成的 chunk,带低 completionTokens 的 usage(低水位回落用)。 */
-    private static Flux<ChatClientResponse> lowUsageNormalChunk(String text, int completionTokens) {
-        AssistantMessage msg = AssistantMessage.builder().content(text).build();
-        Generation gen = new Generation(msg,
-                ChatGenerationMetadata.builder().finishReason("stop").build());
-        int total = 100 + completionTokens;
-        ChatResponse cr = new ChatResponse(List.of(gen),
-                ChatResponseMetadata.builder()
-                        .usage(new DefaultUsage(100, completionTokens, total))
-                        .build());
-        return Flux.<ChatClientResponse>just(new ChatClientResponse(cr, Map.of())).concatWith(Flux.empty());
-    }
-
     /**
      * 模拟 OpenAIServiceException 400(provider 拒绝超出模型真实上限)。
      * 直接构造匿名子类,避免依赖 openai-java SDK 的具体构造器。
@@ -376,5 +363,91 @@ class AdaptiveMaxTokensAdvisorTest {
         public int statusCode() {
             return statusCode;
         }
+    }
+
+    // ---- 自建等价桩(实现 plugin-api 接口;§14.9) ----
+
+    /** WorkerConfig.Limits.AdaptiveMaxTokens 等价桩(原借 worker WorkerProperties 实现)。 */
+    private record StubAdaptiveCfg(boolean enabled, long ceiling, double multiplier,
+            int maxRetries, double fallbackRatio, int fallbackRounds)
+            implements WorkerConfig.Limits.AdaptiveMaxTokens {
+    }
+
+    /** TaskRuntime 最小桩(原借 worker TaskEntry):advisor 只读 taskId。 */
+    private static final class StubTaskRuntime implements TaskRuntime {
+        private final String taskId;
+        private final String mainAgentId;
+
+        StubTaskRuntime(String taskId, String mainAgentId) {
+            this.taskId = taskId;
+            this.mainAgentId = mainAgentId;
+        }
+
+        @Override public String taskId() { return taskId; }
+        @Override public String status() { return "running"; }
+        @Override public boolean terminal() { return false; }
+        @Override public Map<String, Object> metadata() { return new HashMap<>(); }
+        @Override public Path taskDir() { return Path.of("/tmp", taskId); }
+        @Override public String workspaceRoot() { return "/tmp"; }
+        @Override public String workspaceId() { return "w_1"; }
+        @Override public String mainAgentId() { return mainAgentId; }
+        @Override public ModelConfig snapshot() {
+            return new ModelConfig("cfg", "openai", "http://localhost", "test-model", null);
+        }
+        @Override public EventEmitter events() { return e -> e.id(); }
+        @Override public Map<String, AgentContext> agents() { return new HashMap<>(); }
+        @Override public AgentContext main() { return null; }
+        @Override public EventLogReader log() {
+            return new EventLogReader() {
+                @Override public List<EventRecord> readFrom(int from, int max) { return List.of(); }
+                @Override public List<EventRecord> readAfterSeq(long afterSeq, int max) { return List.of(); }
+                @Override public void addListener(Listener listener) { }
+                @Override public void removeListener(Listener listener) { }
+            };
+        }
+        @Override public FileChangesCollector fileChanges() { return null; }
+        @Override public void fileChanges(FileChangesCollector collector) { }
+        @Override public JsonNode fileChangesLight() { return null; }
+        @Override public void fileChangesLight(JsonNode light) { }
+        @Override public JsonNode fileChangesFull() { return null; }
+        @Override public void fileChangesFull(JsonNode full) { }
+        @Override public long startedAt() { return 0; }
+        @Override public long endedAt() { return 0; }
+        @Override public void touch() { }
+        @Override public tools.jackson.databind.node.ObjectNode summaryJson() { return null; }
+        @Override public void truncateLogAfter(long targetSeq) { }
+    }
+
+    /** AgentContext 最小桩(原借 worker AgentEntity):advisor 只读 agentId/properties。 */
+    private static final class StubAgentContext implements AgentContext {
+        private final String agentId;
+        private final String title;
+        private final Map<String, Object> props;
+
+        StubAgentContext(String agentId, String title, Map<String, Object> props) {
+            this.agentId = agentId;
+            this.title = title;
+            this.props = props;
+        }
+
+        @Override public String agentId() { return agentId; }
+        @Override public String title() { return title; }
+        @Override public long createdAt() { return 0; }
+        @Override public Map<String, Object> properties() { return props; }
+        @Override public EventEmitter emitter() { return e -> e.id(); }
+        @Override public String status() { return "running"; }
+        @Override public boolean finished() { return false; }
+        @Override public void finished(boolean finished) { }
+        @Override public String lastText() { return ""; }
+        @Override public List<Message> conversation() { return new ArrayList<>(); }
+        @Override public ChatModel chatModel() { return null; }
+        @Override public String currentModel() { return null; }
+        @Override public Usage lastRound() { return null; }
+        @Override public String lastModel() { return ""; }
+        @Override public Usage usage() { return null; }
+        @Override public AgentActivity activity() { return null; }
+        @Override public void updateActivity(String reasoning, String content, String error) { }
+        @Override public void resetForRerun() { }
+        @Override public boolean claimTerminal(String status) { return true; }
     }
 }

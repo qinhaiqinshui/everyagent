@@ -1,26 +1,37 @@
 package dev.everyagent.plugin.modellengthguard;
 
-import dev.everyagent.plugin.api.spi.TokenEstimator;
-import dev.everyagent.worker.config.WorkerProperties;
-import dev.everyagent.worker.agent.AgentEntity;
-import dev.everyagent.worker.task.TaskEntry;
+import dev.everyagent.plugin.api.agent.AgentActivity;
+import dev.everyagent.plugin.api.agent.AgentContext;
+import dev.everyagent.plugin.api.config.WorkerConfig;
+import dev.everyagent.plugin.api.event.EventLogReader;
+import dev.everyagent.plugin.api.event.EventRecord;
+import dev.everyagent.plugin.api.event.Usage;
+import dev.everyagent.plugin.api.model.EventEmitter;
 import dev.everyagent.plugin.api.model.ModelConfig;
+import dev.everyagent.plugin.api.spi.TokenEstimator;
+import dev.everyagent.plugin.api.task.FileChangesCollector;
+import dev.everyagent.plugin.api.task.TaskRuntime;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.client.ChatClientRequest;
 import org.springframework.ai.chat.client.ChatClientResponse;
 import org.springframework.ai.chat.client.advisor.api.StreamAdvisor;
 import org.springframework.ai.chat.client.advisor.api.StreamAdvisorChain;
 import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.metadata.ChatGenerationMetadata;
+import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import reactor.core.publisher.Flux;
 import reactor.test.StepVerifier;
+import tools.jackson.databind.JsonNode;
 
 import java.io.IOException;
 import java.net.SocketException;
+import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -37,6 +48,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * 耗尽处粗暴断开 SSE(不发 finish_reason=length)时应先下发合成 finish_reason=length 帧,
  * 再转换为非重试的 {@link ModelLengthExhaustedException},避免外层瞬时重试
  * 重新整段长思考再次占满预算的循环。
+ *
+ * <p>约束(§14.9):插件对 worker 任何 scope 零依赖,测试桩在本类内自建
+ * (实现 plugin-api 接口的等价类),不引用 worker 的 AgentEntity/TaskEntry/WorkerProperties。
  */
 class ModelLengthGuardAdvisorTest {
 
@@ -241,20 +255,17 @@ class ModelLengthGuardAdvisorTest {
                 .verify();
     }
 
-    // ---- 测试脚手架 ----
+    // ---- 测试脚手架(§14.9:自建桩,不依赖 worker) ----
 
-    /** 构造 advisor(nextStream 返回 source 的桩链 + 轻量 AgentEntity;advisor 不发事件)。 */
+    /** 构造 advisor(nextStream 返回 source 的桩链 + 轻量 AgentContext 桩;advisor 不发事件)。 */
     private static ModelLengthGuardAdvisor advisor(Flux<ChatClientResponse> source) {
-        TaskEntry task = new TaskEntry("t_test", "测试",
-                new ModelConfig("cfg", "openai", "http://localhost", "test-model", null),
-                "/tmp", "w_1", "a_test", 1000);
+        TaskRuntime task = new StubTaskRuntime("t_test");
         Map<String, Object> props = new HashMap<>();
         props.put("taskEntry", task);
-        props.put("taskId", task.taskId);
-        props.put("workspaceRoot", task.workspaceRoot);
-        AgentEntity a = new AgentEntity("a_test", "test", null,
-                OpenAiChatOptions.builder().build(), List.of(), null, props);
-        return new ModelLengthGuardAdvisor(a, new WorkerProperties(), STUB_ESTIMATOR);
+        props.put("taskId", task.taskId());
+        props.put("workspaceRoot", task.workspaceRoot());
+        AgentContext a = new StubAgentContext("a_test", "test", props);
+        return new ModelLengthGuardAdvisor(a, new StubWorkerConfig(), STUB_ESTIMATOR);
     }
 
     /** 手写桩链(免 Mockito,受限环境可跑)。 */
@@ -266,12 +277,12 @@ class ModelLengthGuardAdvisorTest {
             }
 
             @Override
-            public java.util.List<org.springframework.ai.chat.client.advisor.api.StreamAdvisor> getStreamAdvisors() {
+            public List<StreamAdvisor> getStreamAdvisors() {
                 return List.of(); // 桩:本 advisor 不读链成员
             }
 
             @Override
-            public StreamAdvisorChain copy(org.springframework.ai.chat.client.advisor.api.StreamAdvisor advisor) {
+            public StreamAdvisorChain copy(StreamAdvisor advisor) {
                 return this; // 桩:本 advisor 不走重试 copy 路径
             }
         };
@@ -308,5 +319,120 @@ class ModelLengthGuardAdvisorTest {
         Generation gen = new Generation(msg,
                 ChatGenerationMetadata.builder().finishReason("length").build());
         return new ChatClientResponse(new ChatResponse(List.of(gen)), Map.of());
+    }
+
+    // ---- 自建等价桩(实现 plugin-api 接口;§14.9) ----
+
+    /**
+     * WorkerConfig 等价桩(原借 worker WorkerProperties 默认值):
+     * Guard 只读 limits().modelLengthStallMs()(默认 120_000)与
+     * limits().lengthDisconnectMinTokens()(默认 32_768),其余域不触达。
+     */
+    private static final class StubWorkerConfig implements WorkerConfig {
+        @Override public Limits limits() { return new StubLimits(); }
+        @Override public Retry retry() { return null; }
+        @Override public Sandbox sandbox() { return null; }
+        @Override public Permissions permissions() { return null; }
+        @Override public Git git() { return null; }
+        @Override public Path resolveHomeDir() { return null; }
+        @Override public Path resolveSandboxPersistentRoot() { return null; }
+        @Override public Path resolveSkillsDir() { return null; }
+    }
+
+    /** Limits 桩:关键两项取 worker WorkerProperties 默认值。 */
+    private static final class StubLimits implements WorkerConfig.Limits {
+        @Override public AdaptiveMaxTokens adaptiveMaxTokens() { return null; }
+        @Override public int maxConcurrentTasks() { return 20; }
+        @Override public long modelLengthStallMs() { return 120_000; }
+        @Override public long lengthDisconnectMinTokens() { return 32_768; }
+        @Override public ModelRate modelRate() { return null; }
+        @Override public boolean contextCompressionEnabled() { return true; }
+        @Override public double contextTriggerRatio() { return 0.9; }
+        @Override public double contextTargetRatio() { return 0.6; }
+        @Override public double contextSafetyRatio() { return 0.1; }
+        @Override public long contextToolReserveTokens() { return 16_384; }
+        @Override public int contextMaxToolResultChars() { return 20_000; }
+        @Override public boolean contextOffsetEnabled() { return true; }
+        @Override public boolean contextSummaryEnabled() { return true; }
+        @Override public int contextSummaryMaxTokens() { return 8_192; }
+        @Override public double tokenEstimatorConvergenceThreshold() { return 0.05; }
+        @Override public int tokenEstimatorConvergenceSamples() { return 20; }
+        @Override public double tokenEstimatorDriftThreshold() { return 0.3; }
+    }
+
+    /** TaskRuntime 最小桩(原借 worker TaskEntry):Guard 构造时只读 snapshot().configId()。 */
+    private static final class StubTaskRuntime implements TaskRuntime {
+        private final String taskId;
+
+        StubTaskRuntime(String taskId) {
+            this.taskId = taskId;
+        }
+
+        @Override public String taskId() { return taskId; }
+        @Override public String status() { return "running"; }
+        @Override public boolean terminal() { return false; }
+        @Override public Map<String, Object> metadata() { return new HashMap<>(); }
+        @Override public Path taskDir() { return Path.of("/tmp", taskId); }
+        @Override public String workspaceRoot() { return "/tmp"; }
+        @Override public String workspaceId() { return "w_1"; }
+        @Override public String mainAgentId() { return "main-agent"; }
+        @Override public ModelConfig snapshot() {
+            return new ModelConfig("cfg", "openai", "http://localhost", "test-model", null);
+        }
+        @Override public EventEmitter events() { return e -> e.id(); }
+        @Override public Map<String, AgentContext> agents() { return new HashMap<>(); }
+        @Override public AgentContext main() { return null; }
+        @Override public EventLogReader log() {
+            return new EventLogReader() {
+                @Override public List<EventRecord> readFrom(int from, int max) { return List.of(); }
+                @Override public List<EventRecord> readAfterSeq(long afterSeq, int max) { return List.of(); }
+                @Override public void addListener(Listener listener) { }
+                @Override public void removeListener(Listener listener) { }
+            };
+        }
+        @Override public FileChangesCollector fileChanges() { return null; }
+        @Override public void fileChanges(FileChangesCollector collector) { }
+        @Override public JsonNode fileChangesLight() { return null; }
+        @Override public void fileChangesLight(JsonNode light) { }
+        @Override public JsonNode fileChangesFull() { return null; }
+        @Override public void fileChangesFull(JsonNode full) { }
+        @Override public long startedAt() { return 0; }
+        @Override public long endedAt() { return 0; }
+        @Override public void touch() { }
+        @Override public tools.jackson.databind.node.ObjectNode summaryJson() { return null; }
+        @Override public void truncateLogAfter(long targetSeq) { }
+    }
+
+    /** AgentContext 最小桩(原借 worker AgentEntity):Guard 只读 agentId/properties。 */
+    private static final class StubAgentContext implements AgentContext {
+        private final String agentId;
+        private final String title;
+        private final Map<String, Object> props;
+
+        StubAgentContext(String agentId, String title, Map<String, Object> props) {
+            this.agentId = agentId;
+            this.title = title;
+            this.props = props;
+        }
+
+        @Override public String agentId() { return agentId; }
+        @Override public String title() { return title; }
+        @Override public long createdAt() { return 0; }
+        @Override public Map<String, Object> properties() { return props; }
+        @Override public EventEmitter emitter() { return e -> e.id(); }
+        @Override public String status() { return "running"; }
+        @Override public boolean finished() { return false; }
+        @Override public void finished(boolean finished) { }
+        @Override public String lastText() { return ""; }
+        @Override public List<Message> conversation() { return new ArrayList<>(); }
+        @Override public ChatModel chatModel() { return null; }
+        @Override public String currentModel() { return null; }
+        @Override public Usage lastRound() { return null; }
+        @Override public String lastModel() { return ""; }
+        @Override public Usage usage() { return null; }
+        @Override public AgentActivity activity() { return null; }
+        @Override public void updateActivity(String reasoning, String content, String error) { }
+        @Override public void resetForRerun() { }
+        @Override public boolean claimTerminal(String status) { return true; }
     }
 }
