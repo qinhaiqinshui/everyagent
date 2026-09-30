@@ -34,6 +34,9 @@ public class SubAgentPlugin implements EveryAgentPlugin {
 
         // 2. 台账实例（per-task 事件投影 + agents.json 读写）
         SubAgentLedger ledger = new SubAgentLedger(ctx.services().store());
+        // 注入 ledger 到 SubAgentManager,使 list_agents 工具能读取台账
+        // (含从磁盘 agents.json 恢复的历史已完成子 agent)
+        subAgentManager.setLedger(ledger);
 
         // 3. 注册 task.agents RPC
         SubAgentRpcHandler rpcHandler = new SubAgentRpcHandler(ledger, ctx.services().store());

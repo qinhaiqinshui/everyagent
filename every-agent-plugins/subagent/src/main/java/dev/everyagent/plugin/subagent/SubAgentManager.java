@@ -62,6 +62,9 @@ public class SubAgentManager {
     private final TaskService taskService;
     private final java.util.concurrent.ExecutorService vt = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();
 
+    /** 台账引用(setter 注入,因为 SubAgentLedger 在本类之后创建)。 */
+    private SubAgentLedger ledger;
+
     /** per-task 子 agent 状态(subFutures + stopRequested,TaskEntry 不再持有这些)。 */
     private final Map<String, TaskSubState> taskStates = new ConcurrentHashMap<>();
 
@@ -103,6 +106,11 @@ public class SubAgentManager {
         this.agentFactory = agentFactory;
         this.asks = asks;
         this.taskService = taskService;
+    }
+
+    /** 注入 ledger 引用(SubAgentLedger 在本类之后创建,故用 setter)。 */
+    public void setLedger(SubAgentLedger ledger) {
+        this.ledger = ledger;
     }
 
     /**
@@ -285,6 +293,17 @@ public class SubAgentManager {
     public String list(String taskId) throws InterruptedException {
         TaskRuntime task = (TaskRuntime) taskService.get(taskId);
         if (task == null) {
+            // 任务不在内存(冷任务):从 ledger 台账或磁盘 agents.json 读取
+            if (ledger != null) {
+                java.util.List<ObjectNode> live = ledger.getLiveAgents(taskId);
+                if (live != null) {
+                    ObjectNode r = Json.obj();
+                    ArrayNode arr = Json.arr();
+                    live.forEach(arr::add);
+                    r.set("agents", arr);
+                    return Json.write(r);
+                }
+            }
             return Json.write(Json.obj().set("agents", Json.arr()));
         }
         TaskSubState st = state(task);
@@ -298,13 +317,31 @@ public class SubAgentManager {
             }
         }
         ObjectNode r = Json.obj();
-        r.set("agents", agentsJson(task));
+        r.set("agents", agentsJsonMerged(task));
         return Json.write(r);
     }
 
-    /** 活实体的 agents 摘要数组:遍历 task.agents().values(),按 createdAt 稳定排序。 */
-    private ArrayNode agentsJson(TaskRuntime task) {
+    /**
+     * 合并台账 + 运行中实体的 agents 摘要数组。
+     * 台账(ledger)包含从磁盘 agents.json 恢复的历史已完成子 agent +
+     * 运行中事件投影;task.agents() 包含当前轮次运行中的实时实体。
+     * 同一 agentId 以 task.agents() 的实时状态为准(更准确)。
+     */
+    private ArrayNode agentsJsonMerged(TaskRuntime task) {
         java.util.LinkedHashMap<String, ObjectNode> merged = new java.util.LinkedHashMap<>();
+        // 1. 台账基底(含历史已完成子 agent,冷启动从磁盘恢复)
+        if (ledger != null) {
+            java.util.List<ObjectNode> live = ledger.getLiveAgents(task.taskId());
+            if (live != null) {
+                for (ObjectNode a : live) {
+                    String id = a.path("agentId").asString("");
+                    if (!id.isEmpty()) {
+                        merged.put(id, a);
+                    }
+                }
+            }
+        }
+        // 2. 用 task.agents() 运行中实体的实时状态覆盖(更准确)
         for (AgentContext s : task.agents().values()) {
             merged.put(s.agentId(), summaryJson(task, s));
         }
@@ -315,6 +352,7 @@ public class SubAgentManager {
         ordered.forEach(agents::add);
         return agents;
     }
+
 
     /**
      * wait_agents 工具入口(对标 old wait_agent 契约):
@@ -397,7 +435,7 @@ public class SubAgentManager {
         ObjectNode r = Json.obj();
         r.put("mode", "list");
         r.put("waitStatus", allSettled ? "completed" : "timeout");
-        r.set("agents", agentsJson(task));
+        r.set("agents", agentsJsonMerged(task));
         return Json.write(r);
     }
 
