@@ -117,7 +117,7 @@ class TaskRoundsRpcTest {
                 @Override
                 public org.springframework.ai.chat.model.ChatModel build(ResolvedConfig cfg,
                         org.springframework.ai.openai.OpenAiChatOptions options, String agentId,
-                        dev.everyagent.worker.task.TaskEvents events) {
+                        dev.everyagent.plugin.api.model.EventEmitter events) {
                     return new FakeChatModel();
                 }
 

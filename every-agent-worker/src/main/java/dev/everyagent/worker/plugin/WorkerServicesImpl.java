@@ -14,6 +14,7 @@ import dev.everyagent.plugin.api.proto.SnowflakeId;
 import dev.everyagent.plugin.api.task.TaskService;
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.modules.WorkspaceManager;
+import dev.everyagent.worker.agent.AgentFactoryImpl;
 import dev.everyagent.worker.hub.EventSink;
 import dev.everyagent.worker.interaction.InteractionServiceImpl;
 import dev.everyagent.worker.os.OsSandbox;
@@ -37,11 +38,13 @@ public class WorkerServicesImpl implements WorkerServices {
     private final WorkerProperties workerProperties;
     private final EventSink eventSink;
     private final IdGenerator idGenerator;
+    private final AgentFactoryImpl agentFactory;
 
     public WorkerServicesImpl(OsSandbox sandbox, WorkspaceManager workspaces,
             TokenEstimator tokenEstimator, @Lazy TaskManager taskManager,
             InteractionServiceImpl interaction,
-            WorkerProperties workerProperties, EventSink eventSink) {
+            WorkerProperties workerProperties, EventSink eventSink,
+            AgentFactoryImpl agentFactory) {
         this.sandbox = sandbox;
         this.workspaces = workspaces;
         this.tokenEstimator = new AtomicReference<>(tokenEstimator);
@@ -49,6 +52,7 @@ public class WorkerServicesImpl implements WorkerServices {
         this.interaction = interaction;
         this.workerProperties = workerProperties;
         this.eventSink = eventSink;
+        this.agentFactory = agentFactory;
         this.idGenerator = new IdGenerator() {
             @Override
             public long next() {
@@ -119,6 +123,6 @@ public class WorkerServicesImpl implements WorkerServices {
 
     @Override
     public AgentFactory agentFactory() {
-        throw new UnsupportedOperationException("AgentFactory will be implemented in step 17");
+        return agentFactory;
     }
 }

@@ -71,10 +71,10 @@ public class ChatModelFactory {
      *
      * @param cfg               任务/审议解析出的配置
      * @param agentId           日志归属 agent id
-     * @param events            任务事件发射器(组合模型发 model_failover trace;普通模型忽略)
+     * @param events            事件发射器(组合模型发 model_failover trace;普通模型忽略)
      * @param optionsCustomizer 可选:对每个成员/普通模型的 options 统一定制(如审议 timeout 覆盖);null 不覆盖
      */
-    public AgentModel buildAgentModel(ResolvedConfig cfg, String agentId, TaskEvents events,
+    public AgentModel buildAgentModel(ResolvedConfig cfg, String agentId, EventEmitter events,
             UnaryOperator<OpenAiChatOptions> optionsCustomizer) {
         if (enhancerRegistry.find(cfg.snapshot().provider()) == null) {
             OpenAiChatOptions options = apply(options(cfg), optionsCustomizer);
@@ -149,7 +149,7 @@ public class ChatModelFactory {
      * events 参数保留供池模型增强器使用。
      */
     public ChatModel build(ResolvedConfig cfg, OpenAiChatOptions options, String agentId,
-            TaskEvents events) {
+            EventEmitter events) {
         String cacheKey = cfg.snapshot().configId();
         // 缓存 raw OpenAiChatModel:同一 configId 的所有 agent 复用同一 OkHttp 客户端、
         // Timer 和 streamHandler 线程池,避免每次 build 创建新客户端导致线程泄漏。
