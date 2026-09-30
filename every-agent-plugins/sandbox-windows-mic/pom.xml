@@ -14,10 +14,9 @@
     <description>Windows MIC 沙箱插件（Restricted Token + Medium IL + Job Object）</description>
 
     <dependencies>
-        <!-- 内置插件允许依赖 worker（与 git 插件同模式） -->
         <dependency>
             <groupId>dev.everyagent</groupId>
-            <artifactId>every-agent-worker</artifactId>
+            <artifactId>every-agent-plugin-api</artifactId>
             <version>${project.version}</version>
         </dependency>
         <!-- Windows 原生进程沙箱:JNA Win32 API + Win32Ex 补充原语 -->

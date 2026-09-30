@@ -2,8 +2,8 @@ package dev.everyagent.plugin.sandbox.wslubuntu;
 
 import dev.everyagent.plugin.api.spi.ToolContext;
 import dev.everyagent.plugin.api.spi.ToolProvider;
-import dev.everyagent.worker.config.WorkerProperties;
-import dev.everyagent.worker.modules.WorkspaceManager;
+import dev.everyagent.plugin.api.config.WorkerConfig;
+import dev.everyagent.plugin.api.spi.WorkspaceManager;
 
 import org.springframework.ai.support.ToolCallbacks;
 import org.springframework.ai.tool.ToolCallback;
@@ -22,11 +22,11 @@ import java.util.List;
  */
 public class WslUbuntuBashToolProvider implements ToolProvider {
 
-    private final WorkerProperties props;
+    private final WorkerConfig props;
     private final WorkspaceManager workspaces;
     private final Path pluginDir;
 
-    public WslUbuntuBashToolProvider(WorkerProperties props, WorkspaceManager workspaces,
+    public WslUbuntuBashToolProvider(WorkerConfig props, WorkspaceManager workspaces,
             Path pluginDir) {
         this.props = props;
         this.workspaces = workspaces;

@@ -341,6 +341,7 @@ public class WorkspaceManager implements dev.everyagent.plugin.api.spi.Workspace
      * 不触发级联 umount——任务数据保留在系统目录,目录复活后仍可重新注册/纠正;
      * umount 由 runner 幂等 _ensure_mount 兜底,无需主动卸载已失效挂载点。
      */
+    @Override
     public synchronized List<Path> pruneStaleAndListMountRoots() {
         boolean changed = false;
 

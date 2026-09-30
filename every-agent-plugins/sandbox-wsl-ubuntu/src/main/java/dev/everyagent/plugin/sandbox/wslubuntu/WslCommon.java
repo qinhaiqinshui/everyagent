@@ -1,6 +1,6 @@
 package dev.everyagent.plugin.sandbox.wslubuntu;
 
-import dev.everyagent.worker.config.WorkerProperties;
+import dev.everyagent.plugin.api.config.WorkerConfig;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -67,14 +67,14 @@ public final class WslCommon {
      * 其次配置 {@code worker.sandbox.wsl.tarball}（相对系统目录解析，兼容手动场景）。
      * 均不存在返回 null（= 自动导入关闭）。
      */
-    public static Path tarballFor(WorkerProperties props, Path pluginDir) {
+    public static Path tarballFor(WorkerConfig props, Path pluginDir) {
         if (pluginDir != null) {
             Path bundled = pluginDir.resolve("wsl").resolve("eagent-rootfs.tar.gz");
             if (Files.isRegularFile(bundled)) {
                 return bundled;
             }
         }
-        String t = props.getSandbox().getWsl().getTarball();
+        String t = props.sandbox().wsl().tarball();
         if (t == null || t.isBlank()) {
             return null;
         }
@@ -86,8 +86,8 @@ public final class WslCommon {
     /**
      * 运行期目标发行版：显式配置 > (镜像在位 ? 托管 {@link #MANAGED_DISTRO} : WSL 默认)。
      */
-    public static String effectiveDistro(WorkerProperties props, Path pluginDir) {
-        String d = props.getSandbox().getWsl().getDistro();
+    public static String effectiveDistro(WorkerConfig props, Path pluginDir) {
+        String d = props.sandbox().wsl().distro();
         if (d != null && !d.isBlank()) {
             return d.trim();
         }
@@ -127,7 +127,7 @@ public final class WslCommon {
     /**
      * eagent-run.py 定位（插件目录 {@code <pluginDir>/wsl/eagent-run.py}）。
      */
-    public static Path resolveRunner(WorkerProperties props, Path pluginDir) throws IOException {
+    public static Path resolveRunner(WorkerConfig props, Path pluginDir) throws IOException {
         if (pluginDir == null) {
             throw new IOException("插件目录未知，无法定位 eagent-run.py");
         }
@@ -140,7 +140,7 @@ public final class WslCommon {
     }
 
     /** 读 eagent-run.py 字节。 */
-    public static byte[] runnerBytes(WorkerProperties props, Path pluginDir) throws IOException {
+    public static byte[] runnerBytes(WorkerConfig props, Path pluginDir) throws IOException {
         return Files.readAllBytes(resolveRunner(props, pluginDir));
     }
 
@@ -159,7 +159,7 @@ public final class WslCommon {
      *
      * @param reprobe 导入成功后由调用方提供的重探（通常为该后端的 probe 方法引用）
      */
-    public static ProbeResult autoImport(WorkerProperties props, Path pluginDir,
+    public static ProbeResult autoImport(WorkerConfig props, Path pluginDir,
             ProbeResult prior, Supplier<ProbeResult> reprobe) {
         Path tar = tarballFor(props, pluginDir);
         if (tar == null || !MANAGED_DISTRO.equals(effectiveDistro(props, pluginDir))) {

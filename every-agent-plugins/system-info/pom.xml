@@ -16,7 +16,7 @@
     <dependencies>
         <dependency>
             <groupId>dev.everyagent</groupId>
-            <artifactId>every-agent-worker</artifactId>
+            <artifactId>every-agent-plugin-api</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>

@@ -1,5 +1,6 @@
 package dev.everyagent.plugin.api.spi;
 
+import dev.everyagent.plugin.api.agent.AgentContext;
 import org.springframework.ai.model.tool.ToolCallingManager;
 
 import java.nio.file.Path;
@@ -26,4 +27,14 @@ public interface AdvisorContext {
 
     /** 模型配置 ID（TokenCalibrationAdvisor 等据此校准估算系数）。 */
     String configId();
+
+    /**
+     * 当前 agent 的上下文（plugin-api 契约接口，隐藏 worker 实现细节）。
+     *
+     * <p>插件经此获取 {@link AgentContext} 来读取 agent properties（如 taskEntry）
+     * 或会话内存，无需依赖 worker 的 {@code AgentEntity} 具体类。
+     *
+     * @return 当前 agent 上下文
+     */
+    AgentContext agentEntity();
 }

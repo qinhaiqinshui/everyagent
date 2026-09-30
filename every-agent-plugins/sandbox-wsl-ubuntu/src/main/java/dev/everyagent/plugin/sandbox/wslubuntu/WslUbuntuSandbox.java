@@ -1,6 +1,6 @@
 package dev.everyagent.plugin.sandbox.wslubuntu;
 
-import dev.everyagent.worker.config.WorkerProperties;
+import dev.everyagent.plugin.api.config.WorkerConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -64,7 +64,7 @@ public final class WslUbuntuSandbox {
      * 不要求 bwrap（直连模式不建隔离命名空间）。发行版缺失 → DISTRO_NOT_FOUND，
      * 供上层触发托管镜像自动导入（autoImport）。
      */
-    public static WslCommon.ProbeResult probe(WorkerProperties props, Path pluginDir) {
+    public static WslCommon.ProbeResult probe(WorkerConfig props, Path pluginDir) {
         String distro = WslCommon.effectiveDistro(props, pluginDir);
         String cmd = "command -v bash >/dev/null && command -v mount >/dev/null"
                 + " && command -v findmnt >/dev/null && id -u";
@@ -101,10 +101,10 @@ public final class WslUbuntuSandbox {
      *
      * @param allWorkspaces 全部已注册工作区（Windows 宿主路径），由 runner trusted 阶段幂等挂载
      */
-    public static WslCommon.OsResult run(String command, Path cwd, WorkerProperties props,
+    public static WslCommon.OsResult run(String command, Path cwd, WorkerConfig props,
             Path pluginDir, ExecutorService exec, int maxOut, List<Path> allWorkspaces,
             boolean allowNetwork) {
-        WorkerProperties.Sandbox cfg = props.getSandbox();
+        WorkerConfig.Sandbox cfg = props.sandbox();
         String distro = WslCommon.effectiveDistro(props, pluginDir);
 
         String cwdMount = WslPathMapper.toDirectMount(cwd);
@@ -114,7 +114,7 @@ public final class WslUbuntuSandbox {
         }
 
         String runId = "d" + Long.toUnsignedString(System.nanoTime(), 36);
-        long timeoutSec = cfg.getTimeoutMs() / 1000 + 60;
+        long timeoutSec = cfg.timeoutMs() / 1000 + 60;
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("mode", "direct");
         payload.put("runId", runId);
@@ -153,14 +153,14 @@ public final class WslUbuntuSandbox {
             String outText;
             String errText;
             try {
-                outText = out.get(cfg.getTimeoutMs(), TimeUnit.MILLISECONDS);
+                outText = out.get(cfg.timeoutMs(), TimeUnit.MILLISECONDS);
                 errText = awaitQuiet(err);
             } catch (TimeoutException e) {
                 aborted = true;
                 p.destroyForcibly();
                 killGroup(distro, runId, exec);
                 outText = awaitQuiet(out);
-                errText = awaitQuiet(err) + "\n[exec 超时中止: >" + cfg.getTimeoutMs() + "ms]";
+                errText = awaitQuiet(err) + "\n[exec 超时中止: >" + cfg.timeoutMs() + "ms]";
             } catch (ExecutionException e) {
                 outText = "";
                 errText = awaitQuiet(err);
@@ -180,7 +180,7 @@ public final class WslUbuntuSandbox {
     /**
      * 确保 eagent-run.py 已落地到发行版内，返回发行版内执行路径；失败返回 null。
      */
-    private static String ensureRunnerInDistro(String distro, WorkerProperties props,
+    private static String ensureRunnerInDistro(String distro, WorkerConfig props,
             Path pluginDir, ExecutorService exec) {
         byte[] bytes;
         try {

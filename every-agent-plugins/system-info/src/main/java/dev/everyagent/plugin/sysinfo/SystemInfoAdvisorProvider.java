@@ -1,12 +1,11 @@
 package dev.everyagent.plugin.sysinfo;
 
 import dev.everyagent.plugin.api.WorkerServices;
+import dev.everyagent.plugin.api.agent.AgentContext;
 import dev.everyagent.plugin.api.spi.AdvisorContext;
 import dev.everyagent.plugin.api.spi.AdvisorProvider;
 import dev.everyagent.plugin.api.spi.SandboxBackend;
-import dev.everyagent.worker.plugin.AdvisorContextImpl;
-import dev.everyagent.worker.agent.AgentEntity;
-import dev.everyagent.worker.task.TaskEntry;
+import dev.everyagent.plugin.api.task.TaskRuntime;
 import org.springframework.ai.chat.client.advisor.api.Advisor;
 import org.springframework.core.Ordered;
 
@@ -38,11 +37,11 @@ public class SystemInfoAdvisorProvider implements AdvisorProvider {
 
     @Override
     public Advisor create(AdvisorContext ctx) {
-        AgentEntity a = (AgentEntity) ((AdvisorContextImpl) ctx).agentEntity();
-        TaskEntry t = (TaskEntry) a.properties.get("taskEntry");
+        AgentContext a = ctx.agentEntity();
+        TaskRuntime t = (TaskRuntime) a.properties().get("taskEntry");
         SandboxBackend sandbox = services.sandbox();
         return new SystemInfoAdvisor(
-                t.workspaceRoot,
+                t.workspaceRoot(),
                 sandbox.id());
     }
 }

@@ -1,8 +1,8 @@
 package dev.everyagent.plugin.sandbox.wslubuntu;
 
 import dev.everyagent.plugin.api.spi.SandboxBackend;
-import dev.everyagent.worker.config.WorkerProperties;
-import dev.everyagent.worker.modules.WorkspaceManager;
+import dev.everyagent.plugin.api.config.WorkerConfig;
+import dev.everyagent.plugin.api.spi.WorkspaceManager;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -30,12 +30,12 @@ public final class WslUbuntuSandboxBackend implements SandboxBackend {
 
     private static final Logger log = LoggerFactory.getLogger(WslUbuntuSandboxBackend.class);
 
-    private final WorkerProperties props;
+    private final WorkerConfig props;
     private final WorkspaceManager workspaces;
     private final Path pluginDir;
     private final WslUmounter umounter;
 
-    public WslUbuntuSandboxBackend(WorkerProperties props, WorkspaceManager workspaces,
+    public WslUbuntuSandboxBackend(WorkerConfig props, WorkspaceManager workspaces,
             Path pluginDir) {
         this.props = props;
         this.workspaces = workspaces;

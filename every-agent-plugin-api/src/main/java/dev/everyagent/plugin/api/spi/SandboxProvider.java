@@ -33,7 +33,7 @@ public interface SandboxProvider {
      * @param allowPrivilegeEscalation 是否允许提权
      * @param timeoutMs 命令超时（毫秒）
      * @param persistentRoot 持久状态根目录
-     * @param props 原始配置对象（后端可能需要读取额外参数；类型为 worker 的 WorkerProperties，使用时强转）
+     * @param props 原始配置对象（后端可能需要读取额外参数；类型为 {@code WorkerConfig}，使用时强转）
      */
     record SandboxConfig(String type, boolean enabled, boolean networkDenied,
             boolean allowPrivilegeEscalation,

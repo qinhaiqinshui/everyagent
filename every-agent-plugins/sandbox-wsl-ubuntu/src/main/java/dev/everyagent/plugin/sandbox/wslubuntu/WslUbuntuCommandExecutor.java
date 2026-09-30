@@ -1,7 +1,7 @@
 package dev.everyagent.plugin.sandbox.wslubuntu;
 
-import dev.everyagent.worker.config.WorkerProperties;
-import dev.everyagent.worker.modules.WorkspaceManager;
+import dev.everyagent.plugin.api.config.WorkerConfig;
+import dev.everyagent.plugin.api.spi.WorkspaceManager;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -24,13 +24,13 @@ public class WslUbuntuCommandExecutor {
     /** 单流输出字符上限（与 DirectSpawnSupport.MAX_OUTPUT_CHARS 一致）。 */
     static final int MAX_OUTPUT_CHARS = 1_000_000;
 
-    private final WorkerProperties props;
+    private final WorkerConfig props;
     private final Path workspaceRoot;
     private final WorkspaceManager workspaces;
     private final Path pluginDir;
     private final ExecutorService exec = Executors.newVirtualThreadPerTaskExecutor();
 
-    public WslUbuntuCommandExecutor(WorkerProperties props, Path workspaceRoot,
+    public WslUbuntuCommandExecutor(WorkerConfig props, Path workspaceRoot,
             WorkspaceManager workspaces, Path pluginDir) {
         this.props = props;
         this.workspaceRoot = workspaceRoot;
@@ -48,7 +48,7 @@ public class WslUbuntuCommandExecutor {
         }
 
         List<Path> allWorkspaces = wslDirectMountRoots();
-        boolean allowNetwork = props.getSandbox().isAllowNetwork();
+        boolean allowNetwork = props.sandbox().allowNetwork();
 
         WslCommon.OsResult r = WslUbuntuSandbox.run(command, workspaceRoot, props, pluginDir,
                 exec, MAX_OUTPUT_CHARS, allWorkspaces, allowNetwork);

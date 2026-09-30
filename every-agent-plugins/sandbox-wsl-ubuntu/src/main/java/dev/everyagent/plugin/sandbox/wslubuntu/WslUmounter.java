@@ -1,6 +1,6 @@
 package dev.everyagent.plugin.sandbox.wslubuntu;
 
-import dev.everyagent.worker.config.WorkerProperties;
+import dev.everyagent.plugin.api.config.WorkerConfig;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -28,10 +28,10 @@ public class WslUmounter {
     /** 单命令短超时：umount 应亚秒完成,5s 兜底防 wsl.exe 卡死阻塞删除流程。 */
     static final long UMOUNT_TIMEOUT_MS = 5_000;
 
-    private final WorkerProperties props;
+    private final WorkerConfig props;
     private final Path pluginDir;
 
-    public WslUmounter(WorkerProperties props, Path pluginDir) {
+    public WslUmounter(WorkerConfig props, Path pluginDir) {
         this.props = props;
         this.pluginDir = pluginDir;
     }
@@ -76,11 +76,11 @@ public class WslUmounter {
      * 配置层后端判定：沙箱启用且 type 归一后为 wsl 系即需要级联 umount。
      */
     boolean wslConfigured() {
-        WorkerProperties.Sandbox cfg = props.getSandbox();
-        if (!cfg.isEnabled()) {
+        WorkerConfig.Sandbox cfg = props.sandbox();
+        if (!cfg.enabled()) {
             return false;
         }
-        return switch (normalizeType(cfg.getType())) {
+        return switch (normalizeType(cfg.type())) {
             case "wsl-ubuntu", "wsl-direct", "wsl-bwrap", "auto" -> true;
             default -> false;
         };

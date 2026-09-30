@@ -16,8 +16,13 @@
     <dependencies>
         <dependency>
             <groupId>dev.everyagent</groupId>
-            <artifactId>every-agent-worker</artifactId>
+            <artifactId>every-agent-plugin-api</artifactId>
             <version>${project.version}</version>
+        </dependency>
+        <!-- Spring AI OpenAI: ModelPoolChatModel/Enhancer 用 OpenAiChatOptions -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-openai</artifactId>
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>

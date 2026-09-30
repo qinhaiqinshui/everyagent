@@ -1,7 +1,7 @@
 package dev.everyagent.plugin.sandbox.mic;
 
+import dev.everyagent.plugin.api.config.WorkerConfig;
 import dev.everyagent.plugin.api.spi.SandboxBackend;
-import dev.everyagent.worker.config.WorkerProperties;
 
 /**
  * windows-mic 沙箱后端（新 SPI）。
@@ -14,12 +14,12 @@ import dev.everyagent.worker.config.WorkerProperties;
  */
 public final class WindowsMicSandboxBackend implements SandboxBackend {
 
-    private final WorkerProperties props;
-    private final WorkerProperties.Sandbox cfg;
+    private final WorkerConfig props;
+    private final WorkerConfig.Sandbox cfg;
 
-    WindowsMicSandboxBackend(WorkerProperties props) {
+    WindowsMicSandboxBackend(WorkerConfig props) {
         this.props = props;
-        this.cfg = props.getSandbox();
+        this.cfg = props.sandbox();
     }
 
     @Override

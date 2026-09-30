@@ -61,11 +61,7 @@ public class AdvisorContextImpl implements AdvisorContext {
         return configId;
     }
 
-    /**
-     * 完整 agent 上下文（仅供内置适配器使用，非 SPI 契约）。
-     * 返回 {@link AgentContext} 接口，隐藏 {@code run()} 方法；
-     * 内置适配器如需完整 {@link AgentEntity} 可自行强转。
-     */
+    @Override
     public AgentContext agentEntity() {
         return agentEntity;
     }

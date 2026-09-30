@@ -1,10 +1,9 @@
 package dev.everyagent.plugin.agentsmd;
 
+import dev.everyagent.plugin.api.agent.AgentContext;
 import dev.everyagent.plugin.api.spi.AdvisorContext;
 import dev.everyagent.plugin.api.spi.AdvisorProvider;
-import dev.everyagent.worker.plugin.AdvisorContextImpl;
-import dev.everyagent.worker.agent.AgentEntity;
-import dev.everyagent.worker.task.TaskEntry;
+import dev.everyagent.plugin.api.task.TaskRuntime;
 import org.springframework.ai.chat.client.advisor.api.Advisor;
 import org.springframework.core.Ordered;
 
@@ -27,8 +26,8 @@ public class AgentsMdAdvisorProvider implements AdvisorProvider {
 
     @Override
     public Advisor create(AdvisorContext ctx) {
-        AgentEntity a = (AgentEntity) ((AdvisorContextImpl) ctx).agentEntity();
-        TaskEntry t = (TaskEntry) a.properties.get("taskEntry");
-        return new AgentsMdAdvisor(t.workspaceRoot);
+        AgentContext a = ctx.agentEntity();
+        TaskRuntime t = (TaskRuntime) a.properties().get("taskEntry");
+        return new AgentsMdAdvisor(t.workspaceRoot());
     }
 }

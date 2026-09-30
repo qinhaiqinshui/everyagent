@@ -2,7 +2,7 @@ package dev.everyagent.plugin.sandbox.mic;
 
 import dev.everyagent.plugin.api.EveryAgentPlugin;
 import dev.everyagent.plugin.api.WorkerPluginContext;
-import dev.everyagent.worker.config.WorkerProperties;
+import dev.everyagent.plugin.api.config.WorkerConfig;
 
 /**
  * Windows MIC 沙箱插件入口。
@@ -18,7 +18,7 @@ public class WindowsMicSandboxPlugin implements EveryAgentPlugin {
 
     @Override
     public void activate(WorkerPluginContext ctx) throws Exception {
-        WorkerProperties props = ctx.getService(WorkerProperties.class);
+        WorkerConfig props = ctx.getService(WorkerConfig.class);
         ctx.registerSandboxProvider(new WindowsMicSandboxProvider(props));
     }
 }

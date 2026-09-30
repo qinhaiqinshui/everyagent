@@ -1,6 +1,6 @@
 package dev.everyagent.plugin.sandbox.mic;
 
-import dev.everyagent.worker.config.WorkerProperties;
+import dev.everyagent.plugin.api.config.WorkerConfig;
 import dev.everyagent.plugin.api.spi.ExecResult;
 
 import com.sun.jna.Memory;
@@ -65,7 +65,7 @@ public final class WindowsSandbox {
     }
 
     public static ExecResult run(String command, Path cwd, Map<String, String> extraEnv,
-            WorkerProperties.Sandbox cfg, ExecutorService exec, int maxOut, String shell,
+            WorkerConfig.Sandbox cfg, ExecutorService exec, int maxOut, String shell,
             boolean allowNetwork, boolean allowPrivilege) {
         return runWithCmdLine(buildCommandLine(shell, command), cwd, extraEnv, cfg, exec, exec, maxOut,
                 allowNetwork, allowPrivilege);
@@ -75,7 +75,7 @@ public final class WindowsSandbox {
      * 带 drainExec 重载:管道读取走平台线程池(避免 JNA ReadFile 钉住虚拟线程 carrier)。
      */
     public static ExecResult run(String command, Path cwd, Map<String, String> extraEnv,
-            WorkerProperties.Sandbox cfg, ExecutorService exec, ExecutorService drainExec,
+            WorkerConfig.Sandbox cfg, ExecutorService exec, ExecutorService drainExec,
             int maxOut, String shell, boolean allowNetwork, boolean allowPrivilege) {
         return runWithCmdLine(buildCommandLine(shell, command), cwd, extraEnv, cfg, exec, drainExec, maxOut,
                 allowNetwork, allowPrivilege);
@@ -85,7 +85,7 @@ public final class WindowsSandbox {
      * String 命令入口的公共实现:直接以给定命令行启动沙箱进程并收集输出。
      */
     private static ExecResult runWithCmdLine(String cmdLineStr, Path cwd, Map<String, String> extraEnv,
-            WorkerProperties.Sandbox cfg, ExecutorService exec, int maxOut, boolean allowNetwork,
+            WorkerConfig.Sandbox cfg, ExecutorService exec, int maxOut, boolean allowNetwork,
             boolean allowPrivilege) {
         return runWithCmdLine(cmdLineStr, cwd, extraEnv, cfg, exec, exec, maxOut, allowNetwork, allowPrivilege);
     }
@@ -95,7 +95,7 @@ public final class WindowsSandbox {
      * 阻塞调用钉住虚拟线程 carrier(exec 为虚拟线程池时)。
      */
     private static ExecResult runWithCmdLine(String cmdLineStr, Path cwd, Map<String, String> extraEnv,
-            WorkerProperties.Sandbox cfg, ExecutorService exec, ExecutorService drainExec,
+            WorkerConfig.Sandbox cfg, ExecutorService exec, ExecutorService drainExec,
             int maxOut, boolean allowNetwork, boolean allowPrivilege) {
         WinNT.HANDLE hJob = null;
         WinNT.HANDLE hRestricted = null;
@@ -126,9 +126,9 @@ public final class WindowsSandbox {
                 log.warn("[sandbox] SetInformationJobObject(ExtendedLimit) 失败 err={}", K.GetLastError());
             }
             // CPU 硬上限:真实生效,避免失控进程占满核
-            if (cfg.getCpuHardCapPercent() > 0) {
+            if (cfg.cpuHardCapPercent() > 0) {
                 Win32Ex.JOBOBJECT_CPU_RATE_HARD_CAP_INFORMATION cpu =
-                        new Win32Ex.JOBOBJECT_CPU_RATE_HARD_CAP_INFORMATION(cfg.getCpuHardCapPercent());
+                        new Win32Ex.JOBOBJECT_CPU_RATE_HARD_CAP_INFORMATION(cfg.cpuHardCapPercent());
                 if (!K.SetInformationJobObject(hJob, Win32Ex.JobObjectCpuRateHardCapInformation,
                         cpu, cpu.size())) {
                     log.warn("[sandbox] SetInformationJobObject(CpuRateHardCap) 失败 err={}", K.GetLastError());
@@ -197,7 +197,7 @@ public final class WindowsSandbox {
             Future<String> outTask = drainExec.submit(() -> drain(outIn));
             Future<String> errTask = drainExec.submit(() -> drain(errIn));
 
-            int waitMs = (int) Math.min(cfg.getTimeoutMs(), Integer.MAX_VALUE);
+            int waitMs = (int) Math.min(cfg.timeoutMs(), Integer.MAX_VALUE);
             int wr = K.WaitForSingleObject(hProc, waitMs);
             boolean aborted = (wr == Win32Ex.WAIT_TIMEOUT);
             String outText = awaitQuiet(outTask, aborted ? 2 : 5);
@@ -205,7 +205,7 @@ public final class WindowsSandbox {
             int code;
             if (aborted) {
                 K.TerminateJobObject(hJob, 1);
-                errText += "\n[exec 超时中止: >" + cfg.getTimeoutMs() + "ms,已强杀 job]";
+                errText += "\n[exec 超时中止: >" + cfg.timeoutMs() + "ms,已强杀 job]";
                 code = -1;
             } else {
                 IntByReference ec = new IntByReference(0);
@@ -322,10 +322,10 @@ public final class WindowsSandbox {
         return ok;
     }
 
-    private static Win32Ex.JOBOBJECT_EXTENDED_LIMIT_INFORMATION buildJobLimits(WorkerProperties.Sandbox cfg) {
+    private static Win32Ex.JOBOBJECT_EXTENDED_LIMIT_INFORMATION buildJobLimits(WorkerConfig.Sandbox cfg) {
         Win32Ex.JOBOBJECT_EXTENDED_LIMIT_INFORMATION info = new Win32Ex.JOBOBJECT_EXTENDED_LIMIT_INFORMATION();
         int flags = Win32Ex.JOB_OBJECT_LIMIT_ACTIVE_PROCESS | Win32Ex.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-        int activeLimit = cfg.getActiveProcessLimit();
+        int activeLimit = cfg.activeProcessLimit();
         if (activeLimit > 0) {
             // 注意:不能固定为 1。沙箱 shell 需要在内部再启 rg/git 等有限子进程
             // (rgt 已移除,模型直接在 shell 中调 rg);这里放行有限进程树,防失控。
@@ -353,7 +353,7 @@ public final class WindowsSandbox {
      * 合并后为空才返回 {@link Pointer#NULL}(CreateProcess* 视作继承父环境);
      * 返回 UTF-16 块时调用方必须带 CREATE_UNICODE_ENVIRONMENT(见类注释)。
      */
-    private static Pointer buildEnvBlock(Map<String, String> extra, WorkerProperties.Sandbox cfg,
+    private static Pointer buildEnvBlock(Map<String, String> extra, WorkerConfig.Sandbox cfg,
             boolean allowNetwork) {
         Map<String, String> env = new HashMap<>(System.getenv());
         if (extra != null) {
