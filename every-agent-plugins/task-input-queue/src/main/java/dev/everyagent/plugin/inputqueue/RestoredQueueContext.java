@@ -24,6 +24,12 @@ final class RestoredQueueContext implements TaskLifecycleContext {
     @Override public String input() { return input; }
     @Override public String rawContent() { return rawContent; }
 
+    // ---- setter（恢复项不应被调用）----
+
+    @Override public void input(String input) { }
+    @Override public void rawContent(String rawContent) { }
+    @Override public void metadata(Map<String, Object> metadata) { }
+
     // ---- 以下方法对恢复项无意义（QueueLoopNode 不读取）----
 
     @Override public String taskId() { return null; }

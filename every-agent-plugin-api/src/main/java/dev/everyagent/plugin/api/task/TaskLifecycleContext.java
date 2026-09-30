@@ -72,4 +72,28 @@ public interface TaskLifecycleContext {
 
     /** RPC 应答器（链节点直接调 ctx.ok 返回前端；仅 RPC 线程阶段有效，虚拟线程阶段为 null）。 */
     Object rpcContext();
+
+    // ---- 可写 setter（队列循环节点在 poll 后把队列项数据设到当前 ctx）----
+
+    /** 设置用户输入文本（队列项 poll 后覆盖当前 ctx 的 input）。 */
+    void input(String input);
+
+    /** 设置原始内容（队列项 poll 后覆盖当前 ctx 的 rawContent）。 */
+    void rawContent(String rawContent);
+
+    /** 设置 metadata（队列项 poll 后覆盖当前 ctx 的 metadata；null 或 taskEntry 为 null 时忽略）。 */
+    void metadata(java.util.Map<String, Object> metadata);
+
+    // ---- 运行时访问 ----
+
+    /**
+     * 获取任务运行时（TaskRuntime，向上转型的 TaskInfo）。
+     * <p>与 {@link #taskInfo()} 的区别：返回 {@link TaskRuntime}（继承 TaskInfo），
+     * 插件可访问 agents / events / log / fileChanges 等运行时能力。
+     * taskEntry 尚未创建时返回 null（RPC 阶段早期节点）。
+     */
+    default TaskRuntime taskRuntime() {
+        dev.everyagent.plugin.api.permission.TaskInfo info = taskInfo();
+        return info instanceof TaskRuntime ? (TaskRuntime) info : null;
+    }
 }

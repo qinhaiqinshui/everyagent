@@ -2,17 +2,16 @@ package dev.everyagent.plugin.editresend;
 
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.plugin.api.model.EmitEvent;
+import dev.everyagent.plugin.api.task.StoredTaskInfo;
 import dev.everyagent.plugin.api.task.TaskLifecycleContext;
+import dev.everyagent.plugin.api.task.TaskRuntime;
+import dev.everyagent.plugin.api.task.TaskService;
+import dev.everyagent.plugin.api.task.TaskStoreService;
 import dev.everyagent.plugin.api.proto.SnowflakeId;
-import dev.everyagent.worker.hub.EventSink;
 import dev.everyagent.plugin.api.event.Channels;
 import dev.everyagent.plugin.api.event.Events;
-import dev.everyagent.worker.agent.AgentEntity;
-import dev.everyagent.worker.task.ConversationLoader;
-import dev.everyagent.worker.task.TaskEntry;
-import dev.everyagent.worker.task.TaskManager;
-import dev.everyagent.worker.task.TaskStore;
-import dev.everyagent.worker.task.lifecycle.TaskLifecycleContextImpl;
+import dev.everyagent.plugin.api.event.StreamEmitter;
+import dev.everyagent.plugin.api.agent.AgentContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.messages.Message;
@@ -25,22 +24,22 @@ import java.util.List;
  * 编辑重发截断处理器（从 TaskManager.truncateForEdit / truncateForColdEdit 原样迁入）。
  * <p>运行中热路径：截断内存 EventLog + 磁盘 + 重建会话内存 + 清理子 agent + 更新 meta + 广播；
  * 终态冷路径：截断磁盘 + 更新 meta + 广播。
- * <p>EditResendNode 在 VT 阶段执行（queue.loop 内层），此时任务一定运行中（ctx.taskEntry()
+ * <p>EditResendNode 在 VT 阶段执行（queue.loop 内层），此时任务一定运行中（ctx.taskRuntime()
  * 非 null 且非终态），实际只走热路径；冷路径保留以承载方法完整语义。
  */
 public final class EditTruncateProcessor {
 
     private static final Logger log = LoggerFactory.getLogger(EditTruncateProcessor.class);
 
-    private final TaskStore store;
-    private final EventSink eventSink;
-    private final TaskManager taskManager;
+    private final TaskStoreService store;
+    private final StreamEmitter eventSink;
+    private final TaskService taskService;
 
-    public EditTruncateProcessor(TaskStore store, EventSink eventSink,
-            TaskManager taskManager) {
+    public EditTruncateProcessor(TaskStoreService store, StreamEmitter eventSink,
+            TaskService taskService) {
         this.store = store;
         this.eventSink = eventSink;
-        this.taskManager = taskManager;
+        this.taskService = taskService;
     }
 
     /**
@@ -49,13 +48,13 @@ public final class EditTruncateProcessor {
      */
     public void truncate(String taskId, String editSeq, String text, String rawContent,
             TaskLifecycleContext ctx) {
-        TaskEntry t = ((TaskLifecycleContextImpl) ctx).taskEntryImpl();
-        if (t != null && !t.status.terminal()) {
+        TaskRuntime t = ctx.taskRuntime();
+        if (t != null && !t.terminal()) {
             truncateForEdit(taskId, t, editSeq, text, rawContent);
             return;
         }
         // 兜底冷路径（edit.resend 在 queue.loop 内层执行，理论上不会走到）
-        TaskStore.StoredTask st = taskManager.diskEntry(taskId);
+        StoredTaskInfo st = taskService.diskEntry(taskId);
         if (st == null) {
             log.warn("编辑截断：任务不存在 task={} editSeq={}", taskId, editSeq);
             return;
@@ -72,11 +71,11 @@ public final class EditTruncateProcessor {
      * 从磁盘重建主 agent 会话内存，广播 message.edited 同步事件，更新 meta。
      * 不清除输入框内容（正常入队由 consumeInput 消费）。
      */
-    public void truncateForEdit(String taskId, TaskEntry t, String editSeq, String text, String rawContent) {
+    public void truncateForEdit(String taskId, TaskRuntime t, String editSeq, String text, String rawContent) {
         long seq = Long.parseLong(editSeq);
         Path dir = store.dirOf(taskId);
         // 截断内存事件日志(先截断,再截断磁盘:truncateAndReset 用截断后的 EventLog 重建 cursor)
-        t.log.truncateAfter(seq);
+        t.truncateLogAfter(seq);
         try {
             boolean found = store.truncateAndReset(taskId, seq);
             if (!found) {
@@ -90,19 +89,19 @@ public final class EditTruncateProcessor {
         // 从磁盘重建主 agent 会话内存(磁盘已截断,ConversationLoader 载入截断后的历史)
         // 先停止子 agent(防止截断后旧子 agent 仍写事件/改文件)
         // SubAgent stopAll 由 subagent 插件负责
-        AgentEntity main = t.main;
+        AgentContext main = t.main();
         if (main != null) {
-            List<Message> rebuilt = ConversationLoader.load(store, dir, t.mainAgentId);
-            main.conversation.clear();
-            main.conversation.addAll(rebuilt);
+            List<Message> rebuilt = store.loadConversation(dir, t.mainAgentId());
+            main.conversation().clear();
+            main.conversation().addAll(rebuilt);
         }
         // 清理子 agent 运行态(截断后旧轮的子 agent 已无效)
-        t.agents.clear();
+        t.agents().clear();
         // 子 agent Future 清理由 subagent 插件负责
         // 清理本轮文件改动收集器(随截断失效,新轮重建)
-        t.fileChanges = null;
-        t.fileChangesLight = null;
-        t.fileChangesFull = null;
+        t.fileChanges(null);
+        t.fileChangesLight(null);
+        t.fileChangesFull(null);
         // 更新 meta
         ObjectNode meta = store.readMeta(dir);
         if (meta != null) {
@@ -111,7 +110,7 @@ public final class EditTruncateProcessor {
             meta.remove("error");
             meta.put("seqLast", seq);
             try {
-                TaskStore.writeMeta(dir, meta);
+                store.writeMeta(dir, meta);
             } catch (Exception e) {
                 log.warn("meta 更新失败 task={}", taskId, e);
             }
@@ -122,7 +121,7 @@ public final class EditTruncateProcessor {
         if (rawContent != null && !rawContent.isEmpty()) {
             editData.put("rawContent", rawContent);
         }
-        t.events.emit(EmitEvent.of(SnowflakeId.next(), "message.edited", null, null, null,
+        t.events().emit(EmitEvent.of(SnowflakeId.next(), "message.edited", null, null, null,
                 text, null, editData, EmitEvent.Mode.REPLACE));
     }
 
@@ -130,7 +129,7 @@ public final class EditTruncateProcessor {
      * 编辑重发·冷启动路径：截断磁盘、广播 message.edited、更新 meta。
      * 截断后正常走 startRerun 冷启动（ConversationLoader 载入截断后的历史）。
      */
-    public void truncateForColdEdit(String taskId, TaskStore.StoredTask st, String editSeq, String text, String rawContent) throws Exception {
+    public void truncateForColdEdit(String taskId, StoredTaskInfo st, String editSeq, String text, String rawContent) throws Exception {
         long seq = Long.parseLong(editSeq);
         Path dir = st.dir();
         boolean found = store.truncateAfterSeq(dir, seq);
@@ -143,7 +142,7 @@ public final class EditTruncateProcessor {
         meta.remove("endedAt");
         meta.remove("error");
         meta.put("seqLast", seq);
-        TaskStore.writeMeta(dir, meta);
+        store.writeMeta(dir, meta);
         // 广播 message.edited 同步事件(冷路径无 TaskEvents,payload 用新形状)
         ObjectNode editData = Json.obj()
                 .put("seq", String.valueOf(seq));

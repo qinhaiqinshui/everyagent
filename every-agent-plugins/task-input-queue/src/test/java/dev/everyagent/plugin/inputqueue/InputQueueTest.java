@@ -37,6 +37,9 @@ class InputQueueTest {
             @Override public String rawContent() { return null; }
             @Override public Map<String, Object> runParams() { return Map.of(); }
             @Override public Object rpcContext() { return null; }
+            @Override public void input(String i) { }
+            @Override public void rawContent(String r) { }
+            @Override public void metadata(Map<String, Object> m) { }
         };
     }
 
@@ -62,7 +65,7 @@ class InputQueueTest {
         InputQueue q = new InputQueue();
         q.offer(ctx("a"));
         q.offer(ctx("b"));
-        q.clear();
+        while (q.poll() != null) { } // drain
         assertTrue(q.isEmpty());
         assertNull(q.poll());
         assertEquals(List.of(), q.snapshot());

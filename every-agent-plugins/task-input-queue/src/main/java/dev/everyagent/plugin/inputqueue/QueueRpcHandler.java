@@ -2,12 +2,13 @@ package dev.everyagent.plugin.inputqueue;
 
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.contract.rpc.Rpc;
-import dev.everyagent.worker.hub.EventSink;
 import dev.everyagent.plugin.api.event.Channels;
 import dev.everyagent.plugin.api.event.Events;
-import dev.everyagent.worker.task.TaskEntry;
-import dev.everyagent.worker.task.TaskManager;
-import dev.everyagent.worker.task.TaskStore;
+import dev.everyagent.plugin.api.event.StreamEmitter;
+import dev.everyagent.plugin.api.task.StoredTaskInfo;
+import dev.everyagent.plugin.api.task.TaskRuntime;
+import dev.everyagent.plugin.api.task.TaskService;
+import dev.everyagent.plugin.api.task.TaskStoreService;
 import dev.everyagent.plugin.api.task.UserInput;
 import dev.everyagent.plugin.api.rpc.RpcContext;
 import org.slf4j.Logger;
@@ -27,14 +28,14 @@ public class QueueRpcHandler {
     private static final Logger log = LoggerFactory.getLogger(QueueRpcHandler.class);
 
     private final TaskQueueRegistry registry;
-    private final TaskManager taskManager;
-    private final TaskStore store;
-    private final EventSink eventSink;
+    private final TaskService taskService;
+    private final TaskStoreService store;
+    private final StreamEmitter eventSink;
 
-    public QueueRpcHandler(TaskQueueRegistry registry, TaskManager taskManager,
-            TaskStore store, EventSink eventSink) {
+    public QueueRpcHandler(TaskQueueRegistry registry, TaskService taskService,
+            TaskStoreService store, StreamEmitter eventSink) {
         this.registry = registry;
-        this.taskManager = taskManager;
+        this.taskService = taskService;
         this.store = store;
         this.eventSink = eventSink;
     }
@@ -76,7 +77,7 @@ public class QueueRpcHandler {
         }
 
         // 冷路径：终态任务的磁盘悬空队列
-        TaskStore.StoredTask st = taskManager.diskEntry(taskId);
+        StoredTaskInfo st = taskService.diskEntry(taskId);
         if (st == null) {
             ctx.err(Rpc.ERR_NOT_FOUND, "任务不存在");
             return;
@@ -118,10 +119,10 @@ public class QueueRpcHandler {
 
     private void broadcastQueueUpdate(String taskId, InputQueue queue) {
         // 广播 task.updated 携带 pendingInputs（直接拼装 summary + pendingInputs）
-        TaskEntry t = taskManager.get(taskId);
+        TaskRuntime t = taskService.get(taskId);
         if (t == null) return;
         t.touch();
-        var summary = t.runtimeSummaryJson();
+        var summary = t.summaryJson();
         var arr = tools.jackson.databind.node.JsonNodeFactory.instance.arrayNode();
         for (String text : queue.snapshot()) {
             arr.add(text);

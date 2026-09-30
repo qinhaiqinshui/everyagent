@@ -1010,7 +1010,7 @@ public class TaskManager implements TaskInputHandler, InteractionServiceImpl.Sta
             ObjectNode copy = st.summary().deepCopy();
             copy.put("workspace", newRoot);
             try {
-                TaskStore.writeMeta(st.dir(), copy);
+                store.writeMeta(st.dir(), copy);
             } catch (java.io.IOException e) {
                 log.warn("任务 workspace 迁移写盘失败 task={}", st.taskId(), e);
                 continue;

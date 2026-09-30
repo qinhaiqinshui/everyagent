@@ -78,4 +78,22 @@ public interface TaskRuntime extends TaskInfo {
 
     /** 任务结束时间戳(未结束返回 0)。 */
     long endedAt();
+
+    // ---- 运行时操作（编辑重发 / 队列插件用）----
+
+    /** 更新最近活跃时间戳（队列 RPC 改动后调用）。 */
+    void touch();
+
+    /**
+     * 任务运行时摘要 JSON（供 task.updated 广播 payload）。
+     * 与磁盘 meta.json 的 summary 同形（队列插件用此拼装 pendingInputs 广播）。
+     */
+    tools.jackson.databind.node.ObjectNode summaryJson();
+
+    /**
+     * 截断内存事件日志：移除所有 seq &gt;= targetSeq 的记录，lastSeq 回退到 targetSeq - 1。
+     * 用于编辑重发热路径——磁盘已由 TaskStoreService.truncateAfterSeq 截断，
+     * 内存日志同步截断，防止 task.poll 从内存尾部返回已截断的旧事件。
+     */
+    void truncateLogAfter(long targetSeq);
 }

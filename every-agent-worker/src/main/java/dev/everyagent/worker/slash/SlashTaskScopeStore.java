@@ -147,7 +147,7 @@ public class SlashTaskScopeStore {
     /** 磁盘路径终态改写:落盘 meta → 回写磁盘索引 → 广播 task.updated。 */
     private void rewriteDisk(String taskId, TaskStore.StoredTask st, ObjectNode meta) {
         try {
-            TaskStore.writeMeta(st.dir(), meta);
+            store.writeMeta(st.dir(), meta);
         } catch (IOException e) {
             log.error("slash 任务 token 落盘失败 task={}", taskId, e);
             return; // 落盘失败:不更新索引、不广播(磁盘仍是真相源);调用方按幂等成功应答

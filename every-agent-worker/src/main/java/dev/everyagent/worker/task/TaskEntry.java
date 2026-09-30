@@ -258,6 +258,18 @@ public final class TaskEntry implements TaskRuntime {
         return v != null ? v : 0;
     }
 
+    @Override
+    public void touch() {
+        lastActivityMs.set(System.currentTimeMillis());
+    }
+
+    // summaryJson() 已存在，自然满足 TaskRuntime.summaryJson() 接口方法
+
+    @Override
+    public void truncateLogAfter(long targetSeq) {
+        log.truncateAfter(targetSeq);
+    }
+
     public final Map<String, AgentEntity> agents = new ConcurrentHashMap<>();
     public volatile java.util.concurrent.Future<?> runFuture;
     /**
@@ -293,10 +305,6 @@ public final class TaskEntry implements TaskRuntime {
         this.mainAgentId = mainAgentId;
         this.log = new EventLog(maxEvents);
         this.events = new TaskEvents(log, mainAgentId);
-    }
-
-    public void touch() {
-        lastActivityMs.set(System.currentTimeMillis());
     }
 
     /** 再运行时保留原创建时间。 */

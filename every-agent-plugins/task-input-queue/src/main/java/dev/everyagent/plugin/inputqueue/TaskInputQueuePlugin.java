@@ -2,9 +2,9 @@ package dev.everyagent.plugin.inputqueue;
 
 import dev.everyagent.plugin.api.EveryAgentPlugin;
 import dev.everyagent.plugin.api.WorkerPluginContext;
-import dev.everyagent.worker.hub.EventSink;
-import dev.everyagent.worker.task.TaskManager;
-import dev.everyagent.worker.task.TaskStore;
+import dev.everyagent.plugin.api.event.StreamEmitter;
+import dev.everyagent.plugin.api.task.TaskService;
+import dev.everyagent.plugin.api.task.TaskStoreService;
 
 /**
  * task-input-queue 插件入口。
@@ -17,18 +17,18 @@ public class TaskInputQueuePlugin implements EveryAgentPlugin {
 
     @Override
     public void activate(WorkerPluginContext ctx) {
-        TaskManager taskManager = ctx.getService(TaskManager.class);
-        TaskStore store = ctx.getService(TaskStore.class);
-        EventSink eventSink = ctx.getService(EventSink.class);
+        TaskService taskService = ctx.services().task();
+        TaskStoreService store = ctx.services().store();
+        StreamEmitter eventSink = ctx.services().stream();
 
         TaskQueueRegistry queueRegistry = new TaskQueueRegistry();
 
-        ctx.registerTaskLifecycleNode(new QueueDispatchNode(queueRegistry, taskManager));
+        ctx.registerTaskLifecycleNode(new QueueDispatchNode(queueRegistry, taskService));
         ctx.registerTaskLifecycleNode(new QueueLoopNode(queueRegistry, store));
         ctx.registerAdvisorProvider(new DialogInsertAdvisorProvider(queueRegistry));
 
         // 注册 task.queueRemove / task.queueMove RPC
-        QueueRpcHandler rpcHandler = new QueueRpcHandler(queueRegistry, taskManager, store, eventSink);
+        QueueRpcHandler rpcHandler = new QueueRpcHandler(queueRegistry, taskService, store, eventSink);
         ctx.registerRpcMethod("task.queueRemove", rpcHandler::rpcQueueRemove);
         ctx.registerRpcMethod("task.queueMove", rpcHandler::rpcQueueMove);
     }

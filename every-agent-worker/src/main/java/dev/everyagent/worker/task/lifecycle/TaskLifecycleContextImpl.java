@@ -79,8 +79,11 @@ public class TaskLifecycleContextImpl implements TaskLifecycleContext {
     public void diskIndexer(Consumer<TaskStore.StoredTask> c) { this.diskIndexer = c; }
     public void registryRemover(Runnable r) { this.registryRemover = r; }
 
+    @Override
     public void input(String input) { this.input = input; }
+    @Override
     public void rawContent(String rawContent) { this.rawContent = rawContent; }
+    @Override
     public void metadata(java.util.Map<String, Object> metadata) {
         if (metadata != null && taskEntry != null) {
             taskEntry.metadata.clear();
@@ -164,4 +167,6 @@ public class TaskLifecycleContextImpl implements TaskLifecycleContext {
     @Override public String rawContent() { return rawContent; }
     @Override public java.util.Map<String, Object> runParams() { return runParams; }
     @Override public Object rpcContext() { return rpcContext; }
+
+    // ---- TaskLifecycleContext setter（队列循环节点 poll 后覆盖）已由上方 input()/rawContent()/metadata() 实现 ----
 }

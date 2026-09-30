@@ -2,6 +2,8 @@ package dev.everyagent.worker.task;
 
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.plugin.api.event.EventRecord;
+import dev.everyagent.plugin.api.task.StoredTaskInfo;
+import dev.everyagent.plugin.api.task.TaskStoreService;
 import dev.everyagent.plugin.api.task.UserInput;
 import dev.everyagent.plugin.api.util.AtomicFiles;
 import dev.everyagent.worker.config.WorkerProperties;
@@ -10,6 +12,7 @@ import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.ai.chat.messages.Message;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.node.ArrayNode;
@@ -52,10 +55,11 @@ import java.util.function.Supplier;
  * workspaces/&lt;workspaceId&gt;/tasks/&lt;taskId&gt;/，不做旧布局迁移。
  */
 @Component
-public class TaskStore {
+public class TaskStore implements TaskStoreService {
 
     /** 磁盘上的一个任务目录(scan/恢复/索引的单位)。 */
-    public record StoredTask(String taskId, Path dir, ObjectNode summary, String workspaceId) {
+    public record StoredTask(String taskId, Path dir, ObjectNode summary, String workspaceId)
+            implements StoredTaskInfo {
         /** 兼容旧 3 参构造(无 workspaceId;从 summary.workspaceId 提取,缺失为 null;新代码请用 4 参)。 */
         public StoredTask(String taskId, Path dir, ObjectNode summary) {
             this(taskId, dir, summary,
@@ -513,6 +517,11 @@ public class TaskStore {
             out.add(e.wire);
         }
         return out;
+    }
+
+    @Override
+    public List<Message> loadConversation(Path dir, String mainAgentId) {
+        return ConversationLoader.load(this, dir, mainAgentId);
     }
 
     // ---- 高效读路径(反向随机访问分块扫描;只加能力,不动既有 readEvents/推流链路)----
@@ -1296,7 +1305,8 @@ public class TaskStore {
     }
 
     /** 原子写 meta(临时文件 + ATOMIC_MOVE)。公开:slash 层在终态任务(未运行)路径改写磁盘 meta.json。 */
-    public static void writeMeta(Path dir, ObjectNode summary) throws IOException {
+    @Override
+    public void writeMeta(Path dir, ObjectNode summary) throws IOException {
         Path f = dir.resolve("meta.json");
         Path tmp = dir.resolve("meta.json.tmp");
         Files.writeString(tmp, Json.write(summary));

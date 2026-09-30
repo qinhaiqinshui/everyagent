@@ -4,8 +4,8 @@ import dev.everyagent.contract.json.Json;
 import dev.everyagent.plugin.api.task.TaskChain;
 import dev.everyagent.plugin.api.task.TaskLifecycleContext;
 import dev.everyagent.plugin.api.task.TaskLifecycleNode;
-import dev.everyagent.worker.task.TaskEntry;
-import dev.everyagent.worker.task.TaskManager;
+import dev.everyagent.plugin.api.task.TaskService;
+import dev.everyagent.plugin.api.task.TaskRuntime;
 import dev.everyagent.plugin.api.rpc.RpcContext;
 
 import java.util.Map;
@@ -22,11 +22,11 @@ import java.util.Map;
 public final class QueueDispatchNode implements TaskLifecycleNode {
 
     private final TaskQueueRegistry registry;
-    private final TaskManager taskManager;
+    private final TaskService taskService;
 
-    public QueueDispatchNode(TaskQueueRegistry registry, TaskManager taskManager) {
+    public QueueDispatchNode(TaskQueueRegistry registry, TaskService taskService) {
         this.registry = registry;
-        this.taskManager = taskManager;
+        this.taskService = taskService;
     }
 
     @Override
@@ -42,8 +42,8 @@ public final class QueueDispatchNode implements TaskLifecycleNode {
             return next.proceed(ctx);  // 新建任务，继续往下
         }
 
-        TaskEntry t = taskManager.get(taskId);
-        if (t != null && !t.status.terminal()) {
+        TaskRuntime t = taskService.get(taskId);
+        if (t != null && !t.terminal()) {
             // 运行中
             Map<String, Object> metadata = ctx.metadata();
             if (metadata != null && Boolean.TRUE.equals(metadata.get("insert"))) {
@@ -59,7 +59,7 @@ public final class QueueDispatchNode implements TaskLifecycleNode {
             if (rpcCtx instanceof RpcContext rc) {
                 rc.ok(Json.obj()
                         .put("taskId", taskId)
-                        .put("status", t.status.wire())
+                        .put("status", t.status())
                         .put("queued", true));
             }
             return null;  // 短路，后续节点不执行

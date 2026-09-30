@@ -4,9 +4,8 @@ import dev.everyagent.plugin.api.task.TaskChain;
 import dev.everyagent.plugin.api.task.TaskLifecycleContext;
 import dev.everyagent.plugin.api.task.TaskLifecycleNode;
 import dev.everyagent.plugin.api.task.TaskOutcome;
-import dev.everyagent.worker.task.TaskStore;
+import dev.everyagent.plugin.api.task.TaskStoreService;
 import dev.everyagent.plugin.api.task.UserInput;
-import dev.everyagent.worker.task.lifecycle.TaskLifecycleContextImpl;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -25,9 +24,9 @@ public final class QueueLoopNode implements TaskLifecycleNode {
     private static final Logger log = LoggerFactory.getLogger(QueueLoopNode.class);
 
     private final TaskQueueRegistry registry;
-    private final TaskStore store;
+    private final TaskStoreService store;
 
-    public QueueLoopNode(TaskQueueRegistry registry, TaskStore store) {
+    public QueueLoopNode(TaskQueueRegistry registry, TaskStoreService store) {
         this.registry = registry;
         this.store = store;
     }
@@ -64,10 +63,9 @@ public final class QueueLoopNode implements TaskLifecycleNode {
                     break;
                 }
                 // 把 polledCtx 的数据设到当前 ctx，后续节点（edit.resend / consume.input）能读到
-                var impl = (TaskLifecycleContextImpl) ctx;
-                impl.input(polledCtx.input());
-                impl.rawContent(polledCtx.rawContent());
-                impl.metadata(polledCtx.metadata());
+                ctx.input(polledCtx.input());
+                ctx.rawContent(polledCtx.rawContent());
+                ctx.metadata(polledCtx.metadata());
                 result = next.proceed(ctx);
             }
 
