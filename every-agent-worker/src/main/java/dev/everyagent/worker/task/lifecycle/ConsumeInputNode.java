@@ -4,6 +4,8 @@ import dev.everyagent.plugin.api.task.TaskChain;
 import dev.everyagent.plugin.api.task.TaskLifecycleContext;
 import dev.everyagent.plugin.api.task.TaskLifecycleNode;
 import dev.everyagent.plugin.api.task.UserInput;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * 消费输入节点（order=396）。
@@ -12,6 +14,8 @@ import dev.everyagent.plugin.api.task.UserInput;
  * MainAgentNode(390) 的首条 consumeInput 不变（它消费 initialInput，不走队列循环）。
  */
 public final class ConsumeInputNode implements TaskLifecycleNode {
+
+    private static final Logger log = LoggerFactory.getLogger(ConsumeInputNode.class);
 
     @Override
     public String id() { return "consume.input"; }
@@ -22,6 +26,8 @@ public final class ConsumeInputNode implements TaskLifecycleNode {
     @Override
     public Object invoke(TaskLifecycleContext ctx, TaskChain next) throws Exception {
         var impl = (TaskLifecycleContextImpl) ctx;
+        log.warn("[DEDUP] ConsumeInputNode 消费 ctx.input taskId={} text='{}'",
+                ctx.taskId(), ctx.input());
         // consumeInput：授权门失效 + 记 user.message + 开轮落盘 + 入会话内存
         impl.consumeInput(impl.taskEntryImpl().main,
                 UserInput.of(ctx.input(), ctx.rawContent()));
