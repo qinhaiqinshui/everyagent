@@ -1,7 +1,7 @@
 package dev.everyagent.plugin.taskqueue;
 
 import dev.everyagent.contract.json.Json;
-import dev.everyagent.worker.rpc.RpcContext;
+import dev.everyagent.plugin.api.rpc.RpcContext;
 import tools.jackson.databind.node.ObjectNode;
 
 /**

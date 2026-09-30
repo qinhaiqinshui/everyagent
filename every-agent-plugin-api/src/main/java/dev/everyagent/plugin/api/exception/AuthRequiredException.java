@@ -1,4 +1,4 @@
-package dev.everyagent.worker.rpc;
+package dev.everyagent.plugin.api.exception;
 
 /**
  * 业务方需要用户补充凭证(如 git 远端认证失败且无可用凭证)。

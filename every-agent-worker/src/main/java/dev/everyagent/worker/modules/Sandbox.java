@@ -1,6 +1,6 @@
 package dev.everyagent.worker.modules;
 
-import dev.everyagent.worker.rpc.NotFoundException;
+import dev.everyagent.plugin.api.exception.NotFoundException;
 import dev.everyagent.worker.rpc.SandboxViolationException;
 
 import java.io.IOException;

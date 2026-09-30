@@ -1,6 +1,9 @@
 package dev.everyagent.worker.slash;
 
 import java.io.IOException;
+import dev.everyagent.plugin.api.slash.SlashCommandItem;
+import dev.everyagent.plugin.api.slash.SlashSelectionResult;
+import dev.everyagent.plugin.api.slash.SlashTokenEncoder;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -21,7 +24,7 @@ import dev.everyagent.contract.rpc.Rpc;
 import dev.everyagent.worker.modules.Sandbox;
 import dev.everyagent.worker.modules.WorkspaceManager;
 import dev.everyagent.worker.proto.RpcMethods;
-import dev.everyagent.worker.rpc.NotFoundException;
+import dev.everyagent.plugin.api.exception.NotFoundException;
 import dev.everyagent.worker.rpc.RpcContext;
 import dev.everyagent.worker.rpc.RpcDispatcher;
 import tools.jackson.databind.JsonNode;

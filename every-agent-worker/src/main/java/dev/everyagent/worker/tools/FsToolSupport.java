@@ -9,7 +9,7 @@ import dev.everyagent.worker.modules.WorkspaceManager;
 import dev.everyagent.worker.os.OsSandbox;
 import dev.everyagent.worker.os.SandboxPathRegistry;
 
-import dev.everyagent.worker.rpc.NotFoundException;
+import dev.everyagent.plugin.api.exception.NotFoundException;
 import dev.everyagent.worker.rpc.SandboxViolationException;
 import dev.everyagent.worker.task.TaskEntry;
 import tools.jackson.databind.node.ObjectNode;

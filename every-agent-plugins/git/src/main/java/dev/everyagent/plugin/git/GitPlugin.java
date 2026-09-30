@@ -5,7 +5,6 @@ import dev.everyagent.plugin.api.WorkerPluginContext;
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.modules.WorkspaceManager;
 import dev.everyagent.worker.os.OsSandbox;
-import dev.everyagent.worker.rpc.RpcContext;
 
 /**
  * Git 插件入口。
@@ -40,18 +39,18 @@ public class GitPlugin implements EveryAgentPlugin {
         ctx.registerSlashTokenResolver(new GitAutoSyncSlashResolver());
 
         // 5. 注册 git.* RPC 方法
-        ctx.registerRpcMethod(GitRpcMethods.GIT_STATUS, rpcCtx -> gitService.status((RpcContext) rpcCtx));
-        ctx.registerRpcMethod(GitRpcMethods.GIT_LOG, rpcCtx -> gitService.log((RpcContext) rpcCtx));
-        ctx.registerRpcMethod(GitRpcMethods.GIT_DIFF, rpcCtx -> gitService.diff((RpcContext) rpcCtx));
-        ctx.registerRpcMethod(GitRpcMethods.GIT_SHOW, rpcCtx -> gitService.show((RpcContext) rpcCtx));
-        ctx.registerRpcMethod(GitRpcMethods.GIT_COMMIT, rpcCtx -> gitService.commit((RpcContext) rpcCtx));
-        ctx.registerRpcMethod(GitRpcMethods.GIT_PULL, rpcCtx -> gitService.pull((RpcContext) rpcCtx));
-        ctx.registerRpcMethod(GitRpcMethods.GIT_PUSH, rpcCtx -> gitService.push((RpcContext) rpcCtx));
-        ctx.registerRpcMethod(GitRpcMethods.GIT_DISCARD, rpcCtx -> gitService.discard((RpcContext) rpcCtx));
-        ctx.registerRpcMethod(GitRpcMethods.GIT_INIT, rpcCtx -> gitService.init((RpcContext) rpcCtx));
-        ctx.registerRpcMethod(GitRpcMethods.GIT_CLONE, rpcCtx -> gitService.clone((RpcContext) rpcCtx));
-        ctx.registerRpcMethod(GitRpcMethods.GIT_REMOTE_ADD, rpcCtx -> gitService.remoteAdd((RpcContext) rpcCtx));
-        ctx.registerRpcMethod(GitRpcMethods.GIT_REMOTE_LIST, rpcCtx -> gitService.remoteList((RpcContext) rpcCtx));
-        ctx.registerRpcMethod(GitRpcMethods.GIT_CREDENTIAL_SAVE, rpcCtx -> gitService.credentialSave((RpcContext) rpcCtx));
+        ctx.registerRpcMethod(GitRpcMethods.GIT_STATUS, gitService::status);
+        ctx.registerRpcMethod(GitRpcMethods.GIT_LOG, gitService::log);
+        ctx.registerRpcMethod(GitRpcMethods.GIT_DIFF, gitService::diff);
+        ctx.registerRpcMethod(GitRpcMethods.GIT_SHOW, gitService::show);
+        ctx.registerRpcMethod(GitRpcMethods.GIT_COMMIT, gitService::commit);
+        ctx.registerRpcMethod(GitRpcMethods.GIT_PULL, gitService::pull);
+        ctx.registerRpcMethod(GitRpcMethods.GIT_PUSH, gitService::push);
+        ctx.registerRpcMethod(GitRpcMethods.GIT_DISCARD, gitService::discard);
+        ctx.registerRpcMethod(GitRpcMethods.GIT_INIT, gitService::init);
+        ctx.registerRpcMethod(GitRpcMethods.GIT_CLONE, gitService::clone);
+        ctx.registerRpcMethod(GitRpcMethods.GIT_REMOTE_ADD, gitService::remoteAdd);
+        ctx.registerRpcMethod(GitRpcMethods.GIT_REMOTE_LIST, gitService::remoteList);
+        ctx.registerRpcMethod(GitRpcMethods.GIT_CREDENTIAL_SAVE, gitService::credentialSave);
     }
 }

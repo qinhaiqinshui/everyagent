@@ -8,7 +8,9 @@ import java.util.concurrent.ConcurrentHashMap;
 
 import org.springframework.stereotype.Component;
 
-import dev.everyagent.worker.rpc.NotFoundException;
+import dev.everyagent.plugin.api.slash.SlashCommandItem;
+import dev.everyagent.plugin.api.slash.SlashProvider;
+import dev.everyagent.plugin.api.exception.NotFoundException;
 
 /**
  * `/` 斜杠命令的动态注册中心(worker 侧,对应老项目前端 {@code slashCommandRegistry})。
@@ -22,11 +24,6 @@ import dev.everyagent.worker.rpc.NotFoundException;
  */
 @Component
 public class SlashCommandRegistry {
-
-    /** provider loader:返回该来源的全部条目。 */
-    public interface SlashProvider {
-        List<SlashCommandItem> load();
-    }
 
     private final Map<String, SlashProvider> providers = new ConcurrentHashMap<>();
 

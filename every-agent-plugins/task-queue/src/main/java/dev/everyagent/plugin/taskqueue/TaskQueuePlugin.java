@@ -27,7 +27,6 @@ public class TaskQueuePlugin implements EveryAgentPlugin {
 
         // 注册 task.queueList RPC
         TaskQueueRpcHandler rpcHandler = new TaskQueueRpcHandler(taskQueue);
-        ctx.registerRpcMethod(RpcMethods.TASK_QUEUE_LIST, rpcCtx -> rpcHandler.rpcTaskQueueList(
-                (dev.everyagent.worker.rpc.RpcContext) rpcCtx));
+        ctx.registerRpcMethod(RpcMethods.TASK_QUEUE_LIST, rpcHandler::rpcTaskQueueList);
     }
 }

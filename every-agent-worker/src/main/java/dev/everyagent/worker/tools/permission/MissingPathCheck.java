@@ -1,6 +1,6 @@
 package dev.everyagent.worker.tools.permission;
 
-import dev.everyagent.worker.rpc.NotFoundException;
+import dev.everyagent.plugin.api.exception.NotFoundException;
 import dev.everyagent.worker.tools.PermissionGate.Op;
 
 import java.nio.file.Files;

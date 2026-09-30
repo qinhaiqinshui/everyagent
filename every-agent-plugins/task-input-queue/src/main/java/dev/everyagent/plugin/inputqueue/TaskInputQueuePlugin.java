@@ -29,10 +29,8 @@ public class TaskInputQueuePlugin implements EveryAgentPlugin {
 
         // 注册 task.queueRemove / task.queueMove RPC
         QueueRpcHandler rpcHandler = new QueueRpcHandler(queueRegistry, taskManager, store, eventSink);
-        ctx.registerRpcMethod("task.queueRemove", rpcCtx -> rpcHandler.rpcQueueRemove(
-                (dev.everyagent.worker.rpc.RpcContext) rpcCtx));
-        ctx.registerRpcMethod("task.queueMove", rpcCtx -> rpcHandler.rpcQueueMove(
-                (dev.everyagent.worker.rpc.RpcContext) rpcCtx));
+        ctx.registerRpcMethod("task.queueRemove", rpcHandler::rpcQueueRemove);
+        ctx.registerRpcMethod("task.queueMove", rpcHandler::rpcQueueMove);
     }
 }
 

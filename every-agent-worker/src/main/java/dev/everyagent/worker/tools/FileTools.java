@@ -2,7 +2,7 @@ package dev.everyagent.worker.tools;
 
 import dev.everyagent.worker.task.TaskEntry;
 
-import dev.everyagent.worker.rpc.NotFoundException;
+import dev.everyagent.plugin.api.exception.NotFoundException;
 
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;

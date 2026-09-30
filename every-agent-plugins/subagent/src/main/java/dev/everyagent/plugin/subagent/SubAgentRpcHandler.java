@@ -2,7 +2,7 @@ package dev.everyagent.plugin.subagent;
 
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.contract.rpc.Rpc;
-import dev.everyagent.worker.rpc.RpcContext;
+import dev.everyagent.plugin.api.rpc.RpcContext;
 import dev.everyagent.worker.task.TaskStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

@@ -6,7 +6,7 @@ import dev.everyagent.plugin.api.task.TaskLifecycleContext;
 import dev.everyagent.plugin.api.task.TaskLifecycleNode;
 import dev.everyagent.worker.task.TaskEntry;
 import dev.everyagent.worker.task.TaskManager;
-import dev.everyagent.worker.rpc.RpcContext;
+import dev.everyagent.plugin.api.rpc.RpcContext;
 
 import java.util.Map;
 

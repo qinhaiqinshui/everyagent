@@ -2,7 +2,7 @@ package dev.everyagent.worker.modules;
 
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.worker.proto.RpcMethods;
-import dev.everyagent.worker.rpc.BadParamsException;
+import dev.everyagent.plugin.api.exception.BadParamsException;
 import dev.everyagent.worker.rpc.RpcContext;
 import dev.everyagent.worker.rpc.RpcDispatcher;
 import dev.everyagent.worker.task.RoundIndex;

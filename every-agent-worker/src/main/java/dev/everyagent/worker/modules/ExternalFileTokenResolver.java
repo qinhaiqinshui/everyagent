@@ -10,7 +10,7 @@ import org.springframework.stereotype.Component;
 
 import dev.everyagent.worker.os.SandboxPathRegistry;
 
-import dev.everyagent.worker.rpc.BadParamsException;
+import dev.everyagent.plugin.api.exception.BadParamsException;
 import dev.everyagent.worker.slash.SlashTokenHandler;
 import dev.everyagent.worker.task.TaskEntry;
 import dev.everyagent.worker.tools.permission.OverBroadRootCheck;

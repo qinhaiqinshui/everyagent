@@ -49,8 +49,7 @@ public class SubAgentPlugin implements EveryAgentPlugin {
 
         // 3. 注册 task.agents RPC
         SubAgentRpcHandler rpcHandler = new SubAgentRpcHandler(ledger, store);
-        ctx.registerRpcMethod("task.agents", rpcCtx -> rpcHandler.handleTaskAgents(
-                (dev.everyagent.worker.rpc.RpcContext) rpcCtx));
+        ctx.registerRpcMethod("task.agents", rpcHandler::handleTaskAgents);
 
         // 4. 注册生命周期节点
         ctx.registerTaskLifecycleNode(new SubAgentLedgerTrackNode(ledger));
