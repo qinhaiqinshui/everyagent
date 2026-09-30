@@ -42,7 +42,7 @@ public class ModelLengthGuardAdvisorProvider implements AdvisorProvider {
 
     @Override
     public Advisor create(AdvisorContext ctx) {
-        AgentEntity a = ((AdvisorContextImpl) ctx).agentEntity();
+        AgentEntity a = (AgentEntity) ((AdvisorContextImpl) ctx).agentEntity();
         // 延迟解析:每次 create 时从 WorkerServices 取当前生效的 TokenEstimator
         TokenEstimator estimator = services.tokenEstimator();
         return new ModelLengthGuardAdvisor(a, props, estimator);

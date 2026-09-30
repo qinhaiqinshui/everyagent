@@ -1,5 +1,6 @@
 package dev.everyagent.plugin.api.agent;
 
+import dev.everyagent.plugin.api.event.Usage;
 import dev.everyagent.plugin.api.model.EventEmitter;
 import org.springframework.ai.chat.messages.Message;
 

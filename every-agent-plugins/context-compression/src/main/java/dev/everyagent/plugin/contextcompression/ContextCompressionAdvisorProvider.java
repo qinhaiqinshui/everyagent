@@ -34,7 +34,7 @@ public class ContextCompressionAdvisorProvider implements AdvisorProvider {
 
     @Override
     public Advisor create(AdvisorContext ctx) {
-        AgentEntity a = ((AdvisorContextImpl) ctx).agentEntity();
+        AgentEntity a = (AgentEntity) ((AdvisorContextImpl) ctx).agentEntity();
         WorkerProperties.Limits limits = props.getLimits();
         ContextSummarizer summarizer = limits.isContextSummaryEnabled()
                 ? new LlmContextSummarizer(a.chatModel, limits.getContextSummaryMaxTokens())

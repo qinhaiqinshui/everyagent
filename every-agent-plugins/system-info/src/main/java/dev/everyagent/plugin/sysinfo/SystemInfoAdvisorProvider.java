@@ -38,7 +38,7 @@ public class SystemInfoAdvisorProvider implements AdvisorProvider {
 
     @Override
     public Advisor create(AdvisorContext ctx) {
-        AgentEntity a = ((AdvisorContextImpl) ctx).agentEntity();
+        AgentEntity a = (AgentEntity) ((AdvisorContextImpl) ctx).agentEntity();
         TaskEntry t = (TaskEntry) a.properties.get("taskEntry");
         SandboxBackend sandbox = services.sandbox();
         return new SystemInfoAdvisor(

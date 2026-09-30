@@ -34,7 +34,7 @@ public class TransientErrorRetryAdvisorProvider implements AdvisorProvider {
 
     @Override
     public Advisor create(AdvisorContext ctx) {
-        AgentEntity a = ((AdvisorContextImpl) ctx).agentEntity();
+        AgentEntity a = (AgentEntity) ((AdvisorContextImpl) ctx).agentEntity();
         return new TransientErrorRetryAdvisor(a, props.getRetry());
     }
 }

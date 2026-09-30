@@ -4,6 +4,7 @@ import dev.everyagent.contract.json.Json;
 import dev.everyagent.plugin.api.model.EventEmitter;
 import dev.everyagent.plugin.api.model.EmitEvent;
 import dev.everyagent.plugin.api.event.Usage;
+import dev.everyagent.plugin.api.agent.Agent;
 import dev.everyagent.plugin.api.agent.AgentActivity;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.Message;
@@ -25,7 +26,7 @@ import java.util.concurrent.atomic.AtomicReference;
  * (构造时包装：填 agentId → 委托上游)和 {@link #properties}（上层黑盒数据，agent 层核心不读）。
  * {@link #chatClient} 由 {@link AgentBuilder} 装配注入。
  */
-public final class AgentEntity {
+public final class AgentEntity implements Agent {
 
     public final String agentId;
     public final String title;
@@ -88,6 +89,77 @@ public final class AgentEntity {
         this.createdAt = System.currentTimeMillis();
     }
 
+    // ── AgentContext / Agent 接口实现 ──
+
+    /** AgentRunner 引用(由 AgentBuilder.build() 注入),供 {@link #run()} 委托调用。 */
+    private AgentRunner runner;
+
+    /** 注入 AgentRunner(包级可见,AgentBuilder.build() 调用)。 */
+    void runner(AgentRunner runner) {
+        this.runner = runner;
+    }
+
+    @Override
+    public String agentId() {
+        return agentId;
+    }
+
+    @Override
+    public String title() {
+        return title;
+    }
+
+    @Override
+    public long createdAt() {
+        return createdAt;
+    }
+
+    @Override
+    public Map<String, Object> properties() {
+        return properties;
+    }
+
+    @Override
+    public EventEmitter emitter() {
+        return emitter;
+    }
+
+    @Override
+    public String status() {
+        return status;
+    }
+
+    @Override
+    public boolean finished() {
+        return finished;
+    }
+
+    @Override
+    public void finished(boolean finished) {
+        this.finished = finished;
+    }
+
+    @Override
+    public String lastText() {
+        return lastText;
+    }
+
+    @Override
+    public List<Message> conversation() {
+        return conversation;
+    }
+
+    @Override
+    public void run() throws InterruptedException {
+        if (runner == null) {
+            throw new IllegalStateException("AgentRunner 未注入,无法执行 run()");
+        }
+        runner.run(this);
+    }
+
+    // ── 以下为 worker 内部方法(非 AgentContext 契约) ──
+
+    @Override
     public Usage usage() {
         return usage.get();
     }
@@ -117,6 +189,7 @@ public final class AgentEntity {
         }
     }
 
+    @Override
     public AgentActivity activity() {
         return activity.get();
     }
@@ -174,6 +247,7 @@ public final class AgentEntity {
         return n;
     }
 
+    @Override
     public void updateActivity(String reasoning, String content, String error) {
         long now = System.currentTimeMillis();
         activity.updateAndGet(old -> new AgentActivity(
@@ -184,6 +258,7 @@ public final class AgentEntity {
                 now));
     }
 
+    @Override
     public void resetForRerun() {
         status = "running";
         finished = false;
@@ -194,6 +269,7 @@ public final class AgentEntity {
         }
     }
 
+    @Override
     public boolean claimTerminal(String status) {
         if (terminalClaimed.compareAndSet(false, true)) {
             this.status = status;

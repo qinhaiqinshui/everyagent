@@ -1,5 +1,6 @@
 package dev.everyagent.worker.plugin;
 
+import dev.everyagent.plugin.api.agent.AgentContext;
 import dev.everyagent.plugin.api.spi.AdvisorContext;
 import dev.everyagent.worker.agent.AgentEntity;
 import org.springframework.ai.model.tool.ToolCallingManager;
@@ -61,9 +62,11 @@ public class AdvisorContextImpl implements AdvisorContext {
     }
 
     /**
-     * 完整 AgentEntity（仅供内置适配器使用，非 SPI 契约）。
+     * 完整 agent 上下文（仅供内置适配器使用，非 SPI 契约）。
+     * 返回 {@link AgentContext} 接口，隐藏 {@code run()} 方法；
+     * 内置适配器如需完整 {@link AgentEntity} 可自行强转。
      */
-    public AgentEntity agentEntity() {
+    public AgentContext agentEntity() {
         return agentEntity;
     }
 }

@@ -41,7 +41,7 @@ public class AdaptiveMaxTokensAdvisorProvider implements AdvisorProvider {
 
     @Override
     public Advisor create(AdvisorContext ctx) {
-        AgentEntity a = ((AdvisorContextImpl) ctx).agentEntity();
+        AgentEntity a = (AgentEntity) ((AdvisorContextImpl) ctx).agentEntity();
         TaskEntry t = (TaskEntry) a.properties.get("taskEntry");
         WorkerProperties.Limits.AdaptiveMaxTokens cfg = props.getLimits().getAdaptiveMaxTokens();
 

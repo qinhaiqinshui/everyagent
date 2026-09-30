@@ -36,7 +36,7 @@ public class SlashTokenResolveAdvisorProvider implements AdvisorProvider {
 
     @Override
     public Advisor create(AdvisorContext ctx) {
-        AgentEntity a = ((AdvisorContextImpl) ctx).agentEntity();
+        AgentEntity a = (AgentEntity) ((AdvisorContextImpl) ctx).agentEntity();
         TaskEntry t = (TaskEntry) a.properties.get("taskEntry");
         return new SlashTokenResolveAdvisor(slashTokenHandler, t);
     }

@@ -38,7 +38,7 @@ public class RoundIndexAdvisorProvider implements AdvisorProvider {
 
     @Override
     public Advisor create(AdvisorContext ctx) {
-        AgentEntity a = ((AdvisorContextImpl) ctx).agentEntity();
+        AgentEntity a = (AgentEntity) ((AdvisorContextImpl) ctx).agentEntity();
         return new RoundIndexAdvisor(a, taskStore, roundIndexStore);
     }
 }

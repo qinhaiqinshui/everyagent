@@ -34,7 +34,7 @@ public class EmptyResponseRetryAdvisorProvider implements AdvisorProvider {
 
     @Override
     public Advisor create(AdvisorContext ctx) {
-        AgentEntity a = ((AdvisorContextImpl) ctx).agentEntity();
+        AgentEntity a = (AgentEntity) ((AdvisorContextImpl) ctx).agentEntity();
         return new EmptyResponseRetryAdvisor(a, props.getRetry());
     }
 }

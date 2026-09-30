@@ -64,6 +64,7 @@ public class AgentBuilder {
     private final RipgrepBinary rgBinary;
     private final InteractionServiceImpl interaction;
     private final SandboxPathRegistry pathRegistry;
+    private final AgentRunner runner;
 
     public AgentBuilder(ToolProviderRegistry toolRegistry,
             AdvisorProviderRegistry advisorRegistry,
@@ -74,7 +75,8 @@ public class AgentBuilder {
             WorkspaceManager workspaces,
             RipgrepBinary rgBinary,
             InteractionServiceImpl interaction,
-            SandboxPathRegistry pathRegistry) {
+            SandboxPathRegistry pathRegistry,
+            AgentRunner runner) {
         this.toolRegistry = toolRegistry;
         this.advisorRegistry = advisorRegistry;
         this.defaultTcm = defaultTcm;
@@ -85,6 +87,7 @@ public class AgentBuilder {
         this.rgBinary = rgBinary;
         this.interaction = interaction;
         this.pathRegistry = pathRegistry;
+        this.runner = runner;
     }
 
     /**
@@ -251,6 +254,9 @@ public class AgentBuilder {
 
             // 6. 设置 chatClient 到 entity
             entity.chatClient = chatClient;
+
+            // 7. 注入 AgentRunner(供 AgentEntity.run() 委托调用)
+            entity.runner(AgentBuilder.this.runner);
 
             return entity;
         }
