@@ -1,6 +1,10 @@
 package dev.everyagent.plugin.api;
 
+import dev.everyagent.plugin.api.agent.AgentFactory;
+import dev.everyagent.plugin.api.config.WorkerConfig;
+import dev.everyagent.plugin.api.event.StreamEmitter;
 import dev.everyagent.plugin.api.interaction.InteractionService;
+import dev.everyagent.plugin.api.spi.IdGenerator;
 import dev.everyagent.plugin.api.spi.SandboxBackend;
 import dev.everyagent.plugin.api.spi.TokenEstimator;
 import dev.everyagent.plugin.api.spi.WorkspaceManager;
@@ -28,4 +32,16 @@ public interface WorkerServices {
 
     /** 用户交互服务（向用户发起提问/授权，同步或异步）。 */
     InteractionService interaction();
+
+    /** Worker 配置只读视图（插件面向 WorkerConfig 接口编程）。 */
+    WorkerConfig config();
+
+    /** ID 生成器（单调递增 long ID + 短 ID）。 */
+    IdGenerator ids();
+
+    /** 事件扇出口（向 hub 连接广播事件）。 */
+    StreamEmitter stream();
+
+    /** Agent 工厂（创建 agent 装配会话）。 */
+    AgentFactory agentFactory();
 }

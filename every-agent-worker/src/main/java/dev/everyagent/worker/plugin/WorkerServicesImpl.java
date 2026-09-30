@@ -1,12 +1,20 @@
 package dev.everyagent.worker.plugin;
 
 import dev.everyagent.plugin.api.WorkerServices;
+import dev.everyagent.plugin.api.agent.AgentFactory;
+import dev.everyagent.plugin.api.config.WorkerConfig;
+import dev.everyagent.plugin.api.event.StreamEmitter;
 import dev.everyagent.plugin.api.interaction.InteractionService;
+import dev.everyagent.plugin.api.spi.IdGenerator;
 import dev.everyagent.plugin.api.spi.SandboxBackend;
 import dev.everyagent.plugin.api.spi.TokenEstimator;
 import dev.everyagent.plugin.api.permission.TaskInfo;
+import dev.everyagent.plugin.api.proto.ShortIds;
+import dev.everyagent.plugin.api.proto.SnowflakeId;
 import dev.everyagent.plugin.api.task.TaskService;
+import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.modules.WorkspaceManager;
+import dev.everyagent.worker.hub.EventSink;
 import dev.everyagent.worker.interaction.InteractionServiceImpl;
 import dev.everyagent.worker.os.OsSandbox;
 import dev.everyagent.worker.task.TaskManager;
@@ -26,14 +34,32 @@ public class WorkerServicesImpl implements WorkerServices {
     private final AtomicReference<TokenEstimator> tokenEstimator;
     private final TaskManager taskManager;
     private final InteractionServiceImpl interaction;
+    private final WorkerProperties workerProperties;
+    private final EventSink eventSink;
+    private final IdGenerator idGenerator;
 
     public WorkerServicesImpl(OsSandbox sandbox, WorkspaceManager workspaces,
-            TokenEstimator tokenEstimator, @Lazy TaskManager taskManager, InteractionServiceImpl interaction) {
+            TokenEstimator tokenEstimator, @Lazy TaskManager taskManager,
+            InteractionServiceImpl interaction,
+            WorkerProperties workerProperties, EventSink eventSink) {
         this.sandbox = sandbox;
         this.workspaces = workspaces;
         this.tokenEstimator = new AtomicReference<>(tokenEstimator);
         this.taskManager = taskManager;
         this.interaction = interaction;
+        this.workerProperties = workerProperties;
+        this.eventSink = eventSink;
+        this.idGenerator = new IdGenerator() {
+            @Override
+            public long next() {
+                return SnowflakeId.next();
+            }
+
+            @Override
+            public String shortId(String prefix) {
+                return ShortIds.next(prefix);
+            }
+        };
     }
 
     /** 外部插件注册自定义 TokenEstimator 时替换内置实现。 */
@@ -74,5 +100,25 @@ public class WorkerServicesImpl implements WorkerServices {
     @Override
     public InteractionService interaction() {
         return interaction;
+    }
+
+    @Override
+    public WorkerConfig config() {
+        return workerProperties;
+    }
+
+    @Override
+    public IdGenerator ids() {
+        return idGenerator;
+    }
+
+    @Override
+    public StreamEmitter stream() {
+        return eventSink;
+    }
+
+    @Override
+    public AgentFactory agentFactory() {
+        throw new UnsupportedOperationException("AgentFactory will be implemented in step 17");
     }
 }

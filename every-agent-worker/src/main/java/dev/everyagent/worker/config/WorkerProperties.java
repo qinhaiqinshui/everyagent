@@ -4,6 +4,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
+import dev.everyagent.plugin.api.config.WorkerConfig;
+
 import java.util.ArrayList;import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -16,7 +18,7 @@ import java.util.Map;
  * 工作区注册表与任务数据统一存 workspaces/(不存在顶层 worker.api-key——apiKey 按 hub 条目各自配置)。
  */
 @ConfigurationProperties("worker")
-public class WorkerProperties {
+public class WorkerProperties implements WorkerConfig {
 
     private static final Logger log = LoggerFactory.getLogger(WorkerProperties.class);
 
@@ -303,7 +305,7 @@ public class WorkerProperties {
     }
 
     /** 任务永久保留(用户删除是唯一出口),无 retention/trim 概念。 */
-    public static class Limits {
+    public static class Limits implements WorkerConfig.Limits {
         private int maxConcurrentTasks = 20;
         private long askTimeoutMs = 1_800_000;
         private long maxEventsPerTask = 500_000;
@@ -345,7 +347,7 @@ public class WorkerProperties {
          * 模型请求限流全局默认(per-model 的 rpm/max-concurrency/tpm 在 worker.models[].params 配置;
          * 这里统一排队与估算参数,见 docs/design-model-rate-limit.md)。
          */
-        private ModelRate modelRate = new ModelRate();
+        private ModelRate modelRate = new WorkerProperties.ModelRate();
         /**
          * 是否启用「上轮实测 offset 校准」:true = 用上一轮实测用量校准上下文估算,
          * false = 回退纯 reserve 估算。默认 true。
@@ -536,6 +538,59 @@ public class WorkerProperties {
             this.tokenEstimatorDriftThreshold = v;
         }
 
+        // ---- WorkerConfig.Limits delegate methods ----
+
+        @Override
+        public WorkerConfig.Limits.AdaptiveMaxTokens adaptiveMaxTokens() { return getAdaptiveMaxTokens(); }
+
+        @Override
+        public int maxConcurrentTasks() { return getMaxConcurrentTasks(); }
+
+        @Override
+        public long modelLengthStallMs() { return getModelLengthStallMs(); }
+
+        @Override
+        public long lengthDisconnectMinTokens() { return getLengthDisconnectMinTokens(); }
+
+        @Override
+        public WorkerConfig.Limits.ModelRate modelRate() { return getModelRate(); }
+
+        @Override
+        public boolean contextCompressionEnabled() { return isContextCompressionEnabled(); }
+
+        @Override
+        public double contextTriggerRatio() { return getContextTriggerRatio(); }
+
+        @Override
+        public double contextTargetRatio() { return getContextTargetRatio(); }
+
+        @Override
+        public double contextSafetyRatio() { return getContextSafetyRatio(); }
+
+        @Override
+        public long contextToolReserveTokens() { return getContextToolReserveTokens(); }
+
+        @Override
+        public int contextMaxToolResultChars() { return getContextMaxToolResultChars(); }
+
+        @Override
+        public boolean contextOffsetEnabled() { return isContextOffsetEnabled(); }
+
+        @Override
+        public boolean contextSummaryEnabled() { return isContextSummaryEnabled(); }
+
+        @Override
+        public int contextSummaryMaxTokens() { return getContextSummaryMaxTokens(); }
+
+        @Override
+        public double tokenEstimatorConvergenceThreshold() { return getTokenEstimatorConvergenceThreshold(); }
+
+        @Override
+        public int tokenEstimatorConvergenceSamples() { return getTokenEstimatorConvergenceSamples(); }
+
+        @Override
+        public double tokenEstimatorDriftThreshold() { return getTokenEstimatorDriftThreshold(); }
+
         /**
          * 自适应输出预算配置(adaptive-max-tokens 插件):
          * 检测 finish_reason=length 帧后自动放大 maxTokens 重试,达 ceiling 放弃。
@@ -543,7 +598,7 @@ public class WorkerProperties {
          * <p>配置键 {@code worker.limits.adaptive-max-tokens.*};
          * 模型级可用 {@code params.maxTokensCeiling} 覆盖 ceiling(厂商真实上限)。
          */
-        public static class AdaptiveMaxTokens {
+        public static class AdaptiveMaxTokens implements WorkerConfig.Limits.AdaptiveMaxTokens {
             /** 是否启用自适应输出预算。false = 直通。默认 true。 */
             private boolean enabled = true;
             /**
@@ -609,6 +664,26 @@ public class WorkerProperties {
             public void setFallbackRounds(int fallbackRounds) {
                 this.fallbackRounds = fallbackRounds;
             }
+
+            // ---- WorkerConfig.Limits.AdaptiveMaxTokens delegate methods ----
+
+            @Override
+            public boolean enabled() { return isEnabled(); }
+
+            @Override
+            public long ceiling() { return getCeiling(); }
+
+            @Override
+            public double multiplier() { return getMultiplier(); }
+
+            @Override
+            public int maxRetries() { return getMaxRetries(); }
+
+            @Override
+            public double fallbackRatio() { return getFallbackRatio(); }
+
+            @Override
+            public int fallbackRounds() { return getFallbackRounds(); }
         }
 
         public ModelRate getModelRate() {
@@ -616,7 +691,7 @@ public class WorkerProperties {
         }
 
         public void setModelRate(ModelRate modelRate) {
-            this.modelRate = modelRate == null ? new ModelRate() : modelRate;
+            this.modelRate = modelRate == null ? new WorkerProperties.ModelRate() : modelRate;
         }
     }
 
@@ -625,7 +700,7 @@ public class WorkerProperties {
      * per-model 的 rpm / max-concurrency / tpm 在 {@code worker.models[].params} 各自配置;
      * 这里统一排队、tpm 估算与 EMA 校准的全局参数。
      */
-    public static class ModelRate {
+    public static class ModelRate implements WorkerConfig.Limits.ModelRate {
         /** 每模型等待队列容量:同时在等的请求超过该值 → 立即转 ModelRateLimitException(不再排队)。 */
         private int queueCapacity = 8;
         /** 排队最长等待时间(ms);超时仍未放行 → ModelRateLimitException。 */
@@ -736,13 +811,45 @@ public class WorkerProperties {
         public void setDefaultTpm(long defaultTpm) {
             this.defaultTpm = defaultTpm;
         }
+
+        // ---- WorkerConfig.Limits.ModelRate delegate methods ----
+
+        @Override
+        public int queueCapacity() { return getQueueCapacity(); }
+
+        @Override
+        public long waitTimeoutMs() { return getWaitTimeoutMs(); }
+
+        @Override
+        public long estWindowSec() { return getEstWindowSec(); }
+
+        @Override
+        public double estSafetyRatio() { return getEstSafetyRatio(); }
+
+        @Override
+        public double estEmaAlpha() { return getEstEmaAlpha(); }
+
+        @Override
+        public double estFactorMin() { return getEstFactorMin(); }
+
+        @Override
+        public double estFactorMax() { return getEstFactorMax(); }
+
+        @Override
+        public int defaultRpm() { return getDefaultRpm(); }
+
+        @Override
+        public int defaultMaxConcurrency() { return getDefaultMaxConcurrency(); }
+
+        @Override
+        public long defaultTpm() { return getDefaultTpm(); }
     }
 
     /**
      * 模型调用重试(空响应重试 + 瞬时错误退避重试,分别由两个 advisor 消费;
      * 退避算法由 {@link #strategy} 选择,两类重试共享同一算法)。
      */
-    public static class Retry {
+    public static class Retry implements WorkerConfig.Retry {
         /** 策略常量:固定间隔退避(默认)——每次重试恒等 {@code backoffBaseMs}。 */
         public static final String STRATEGY_FIXED = "fixed";
         /** 策略常量:指数退避——base * factor^(attempt-1)(与 n 的 computeRetryDelayMs 同式)。 */
@@ -815,6 +922,14 @@ public class WorkerProperties {
         public void setStrategy(String strategy) {
             this.strategy = strategy;
         }
+
+        // ---- WorkerConfig.Retry delegate methods ----
+
+        @Override
+        public int maxEmptyResponseRetries() { return getMaxEmptyResponseRetries(); }
+
+        @Override
+        public int maxRequestRetries() { return getMaxRequestRetries(); }
     }
 
     public String getWorkerId() {
@@ -922,7 +1037,7 @@ public class WorkerProperties {
     }
 
     /** 进程沙箱配置。 */
-    public static class Sandbox {
+    public static class Sandbox implements WorkerConfig.Sandbox {
         /** 是否启用 OS 级沙箱;关闭则 exec 直接 spawn(仅超时/输出上限护栏)。 */
         private boolean enabled = true;
         /** 单命令看门狗超时(ms);超时中止子进程。 */
@@ -1016,7 +1131,7 @@ public class WorkerProperties {
         private Wsl wsl = new Wsl();
 
         /** WSL(wsl-ubuntu)后端配置:发行版/只读岛/pwsh。 */
-        public static class Wsl {
+        public static class Wsl implements WorkerConfig.Sandbox.Wsl {
             private String distro = "";
             private String tarball = "wsl/eagent-rootfs.tar.gz";
             private List<String> roIslands = new ArrayList<>();
@@ -1033,6 +1148,14 @@ public class WorkerProperties {
             public void setPwshEnabled(boolean pwshEnabled) { this.pwshEnabled = pwshEnabled; }
             public boolean isLoginShell() { return loginShell; }
             public void setLoginShell(boolean loginShell) { this.loginShell = loginShell; }
+
+            // ---- WorkerConfig.Sandbox.Wsl delegate methods ----
+
+            @Override
+            public String distro() { return getDistro(); }
+
+            @Override
+            public String tarball() { return getTarball(); }
         }
 
         public String getType() {
@@ -1168,6 +1291,31 @@ public class WorkerProperties {
             this.persistentRoot = persistentRoot;
         }
 
+        // ---- WorkerConfig.Sandbox delegate methods ----
+
+        @Override
+        public boolean enabled() { return isEnabled(); }
+
+        @Override
+        public long timeoutMs() { return getTimeoutMs(); }
+
+        // resolveMemoryLimitMb() already matches WorkerConfig.Sandbox.resolveMemoryLimitMb()
+
+        @Override
+        public int cpuHardCapPercent() { return getCpuHardCapPercent(); }
+
+        @Override
+        public int activeProcessLimit() { return getActiveProcessLimit(); }
+
+        @Override
+        public boolean allowNetwork() { return isAllowNetwork(); }
+
+        @Override
+        public String type() { return getType(); }
+
+        @Override
+        public WorkerConfig.Sandbox.Wsl wsl() { return getWsl(); }
+
         /**
          * 统一网络判定:allowNetwork(默认 true = 放行)显式放行;否则回落 networkPolicy,
          * 仅 deny-all 视为拒网(direct/mic 剥代理 env,wsl-bwrap 加 --unshare-net)。
@@ -1182,7 +1330,7 @@ public class WorkerProperties {
      * 不经 wsl/mic 沙箱后端——git 是前端按钮触发的平台受控操作,见
      * docs/GIT_NATIVE_MIGRATION.md §2)。本配置承载可执行文件定位与命令超时。
      */
-    public static class Git {
+    public static class Git implements WorkerConfig.Git {
         /** git 可执行文件绝对路径(如 C:\\Program Files\\Git\\bin\\git.exe);空 = 自动探测(常见安装路径 + PATH)。 */
         private String executable = "";
         /** 单个 git 命令超时(ms);clone/pull/push 大仓库可能较慢,默认 5 分钟。 */
@@ -1203,6 +1351,14 @@ public class WorkerProperties {
         public void setTimeoutMs(long timeoutMs) {
             this.timeoutMs = timeoutMs;
         }
+
+        // ---- WorkerConfig.Git delegate methods ----
+
+        @Override
+        public String executable() { return getExecutable(); }
+
+        @Override
+        public long timeoutMs() { return getTimeoutMs(); }
     }
 
     public Sandbox getSandbox() {
@@ -1228,6 +1384,23 @@ public class WorkerProperties {
     public void setPermissions(Permissions permissions) {
         this.permissions = permissions;
     }
+
+    // ---- WorkerConfig delegate methods (no-prefix, plugin-api 契约) ----
+
+    @Override
+    public WorkerConfig.Limits limits() { return getLimits(); }
+
+    @Override
+    public WorkerConfig.Retry retry() { return getRetry(); }
+
+    @Override
+    public WorkerConfig.Sandbox sandbox() { return getSandbox(); }
+
+    @Override
+    public WorkerConfig.Permissions permissions() { return getPermissions(); }
+
+    @Override
+    public WorkerConfig.Git git() { return getGit(); }
 
     public Tools getTools() {
         return tools;
@@ -1267,7 +1440,7 @@ public class WorkerProperties {
      * AI 工具的工作区外文件访问与危险命令(删除类等)须用户弹窗授权,
      * 拒绝/超时以错误文本回灌模型(循环不中断)。授权两档:本轮运行(内存)/本任务(grants.json)。
      */
-    public static class Permissions {
+    public static class Permissions implements WorkerConfig.Permissions {
         /**
          * 危险命令正则(大小写不敏感,在剥除引号段后的命令文本上匹配任意位置);命中即需授权。
          * 覆盖 cmd / PowerShell / POSIX 的删除类与磁盘破坏类动词。
@@ -1342,5 +1515,16 @@ public class WorkerProperties {
         public void setReviewModel(String reviewModel) {
             this.reviewModel = reviewModel;
         }
+
+        // ---- WorkerConfig.Permissions delegate methods ----
+
+        @Override
+        public long reviewTimeoutMs() { return getReviewTimeoutMs(); }
+
+        @Override
+        public String reviewModel() { return getReviewModel(); }
+
+        @Override
+        public boolean reviewDenyOnError() { return isReviewDenyOnError(); }
     }
 }
