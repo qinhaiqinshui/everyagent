@@ -1,9 +1,9 @@
-package dev.everyagent.worker.task;
+package dev.everyagent.plugin.api.agent;
 
 /**
  * 子 agent 最近一次 AI 返回的快照(架构 §5.6,list_agents/wait_agents 工具契约的
  * latestActivity 字段):思考 / 正文 / 错误 + 首末时间戳。不可变记录,经
- * {@link AgentEntity#updateActivity} 合并写入,读侧靠 volatile 引用无锁可见。
+ * {@code AgentEntity#updateActivity} 合并写入,读侧靠 volatile 引用无锁可见。
  */
 public record AgentActivity(
         /** 思考内容(reasoning 累积值)。 */

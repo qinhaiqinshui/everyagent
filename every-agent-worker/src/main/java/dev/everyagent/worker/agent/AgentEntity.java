@@ -4,7 +4,7 @@ import dev.everyagent.contract.json.Json;
 import dev.everyagent.plugin.api.model.EventEmitter;
 import dev.everyagent.plugin.api.model.EmitEvent;
 import dev.everyagent.worker.proto.TaskDtos.Usage;
-import dev.everyagent.worker.task.AgentActivity;
+import dev.everyagent.plugin.api.agent.AgentActivity;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.model.ChatModel;

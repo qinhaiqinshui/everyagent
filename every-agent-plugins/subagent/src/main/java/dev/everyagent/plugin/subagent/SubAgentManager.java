@@ -8,8 +8,8 @@ import dev.everyagent.worker.agent.AgentEntity;
 import dev.everyagent.worker.agent.AgentRunner;
 import dev.everyagent.worker.modules.ConfigStore;
 import dev.everyagent.worker.modules.ConfigStore.ResolvedConfig;
-import dev.everyagent.worker.proto.SnowflakeId;
-import dev.everyagent.worker.task.AgentActivity;
+import dev.everyagent.plugin.api.proto.SnowflakeId;
+import dev.everyagent.plugin.api.agent.AgentActivity;
 import dev.everyagent.worker.task.ChatModelFactory;
 import dev.everyagent.worker.interaction.InteractionServiceImpl;
 import dev.everyagent.worker.task.RootCause;
@@ -111,7 +111,7 @@ public class SubAgentManager {
                     + "注:前端「正在排队(在飞 N / 排队 M)」是模型 API 级限流(跨任务统计模型请求数),与此处子 agent 并发上限(单任务)是两套独立计数,数值不对应。";
         }
         boolean reuse = agentId != null && !agentId.isEmpty() && task.agents.containsKey(agentId);
-        String id = agentId == null || agentId.isEmpty() ? dev.everyagent.worker.proto.ShortIds.next("sub") : agentId;
+        String id = agentId == null || agentId.isEmpty() ? dev.everyagent.plugin.api.proto.ShortIds.next("sub") : agentId;
         AgentEntity sub;
 
         // 注册/启动放在 task 监视器内,与 stopAll 互斥:
