@@ -36,4 +36,13 @@ public interface InteractionService {
      */
     void askAsync(List<AskQuestion> questions, long timeoutMs, Map<String, String> context,
             Consumer<AskResult> callback);
+
+    /**
+     * 指定 agent 是否有挂起 ask（list_agents/wait_agents 的 waiting-user 判定，主/子统一）。
+     *
+     * @param taskId  任务 ID
+     * @param agentId agent ID
+     * @return true = 该 agent 有未决的 ask
+     */
+    boolean hasPendingFor(String taskId, String agentId);
 }

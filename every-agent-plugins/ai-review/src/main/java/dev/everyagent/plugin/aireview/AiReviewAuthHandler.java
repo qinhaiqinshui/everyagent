@@ -2,6 +2,7 @@ package dev.everyagent.plugin.aireview;
 
 import dev.everyagent.plugin.api.permission.AuthorizationChain;
 import dev.everyagent.plugin.api.permission.AuthorizationHandler;
+import dev.everyagent.plugin.api.task.TaskRuntime;
 
 public class AiReviewAuthHandler implements AuthorizationHandler {
     private final AiAuthReviewer reviewer;
@@ -21,7 +22,7 @@ public class AiReviewAuthHandler implements AuthorizationHandler {
         if (!Boolean.TRUE.equals(req.task().metadata().getOrDefault("ai-review", false))) {
             return next.proceed(req); // 不适用，放行
         }
-        ReviewDecision d = reviewer.review((dev.everyagent.worker.task.TaskEntry) req.task(), req.grantKey(), req.prompt());
+        ReviewDecision d = reviewer.review((TaskRuntime) req.task(), req.grantKey(), req.prompt());
         if (d.fallback()) {
             return next.proceed(req); // PASS
         }

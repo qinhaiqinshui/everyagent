@@ -1,20 +1,18 @@
 package dev.everyagent.plugin.subagent;
 
 import dev.everyagent.contract.json.Json;
-import dev.everyagent.plugin.api.model.EmitEvent;
-import dev.everyagent.plugin.api.model.EventEmitter;
-import dev.everyagent.worker.agent.AgentBuilder;
-import dev.everyagent.worker.agent.AgentEntity;
-import dev.everyagent.worker.agent.AgentRunner;
-import dev.everyagent.worker.modules.ConfigStore;
-import dev.everyagent.worker.modules.ConfigStore.ResolvedConfig;
-import dev.everyagent.plugin.api.proto.SnowflakeId;
+import dev.everyagent.plugin.api.agent.Agent;
+import dev.everyagent.plugin.api.agent.AgentBuilder;
+import dev.everyagent.plugin.api.agent.AgentContext;
+import dev.everyagent.plugin.api.agent.AgentFactory;
 import dev.everyagent.plugin.api.agent.AgentActivity;
-import dev.everyagent.worker.task.ChatModelFactory;
-import dev.everyagent.worker.interaction.InteractionServiceImpl;
+import dev.everyagent.plugin.api.config.WorkerConfig;
+import dev.everyagent.plugin.api.interaction.InteractionService;
+import dev.everyagent.plugin.api.model.EmitEvent;
+import dev.everyagent.plugin.api.proto.SnowflakeId;
+import dev.everyagent.plugin.api.task.TaskRuntime;
+import dev.everyagent.plugin.api.task.TaskService;
 import dev.everyagent.plugin.api.util.RootCause;
-import dev.everyagent.worker.task.TaskEntry;
-import dev.everyagent.worker.tools.AskUserTool;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.messages.UserMessage;
@@ -24,6 +22,7 @@ import tools.jackson.databind.node.ArrayNode;
 import tools.jackson.databind.node.ObjectNode;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -34,7 +33,7 @@ import java.util.concurrent.TimeUnit;
  * 子 agent 管理(架构 §5.6):
  * 子 agent 独立会话(不继承父上下文)、工具集不含 agent 工具(结构上禁递归);
  * 级联停止;任务收口前自动等待全部子 agent。
- * 装配用 AgentBuilder(agent 层);本类只负责编排(启动/等待/停止/台账)。
+ * 装配用 AgentFactory(plugin-api);本类只负责编排(启动/等待/停止/台账)。
  *
  * <p>重构后:TaskEntry 不再持有 subs/subFutures/stopRequested,本类内部维护 per-task 状态。
  */
@@ -58,11 +57,9 @@ public class SubAgentManager {
 
     private static final Logger log = LoggerFactory.getLogger(SubAgentManager.class);
 
-    private final AgentRunner runner;
-    private final AgentBuilder agentBuilder;
-    private final ConfigStore configStore;
-    private final ChatModelFactory modelFactory;
-    private final InteractionServiceImpl asks;
+    private final AgentFactory agentFactory;
+    private final InteractionService asks;
+    private final TaskService taskService;
     private final java.util.concurrent.ExecutorService vt = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();
 
     /** per-task 子 agent 状态(subFutures + stopRequested,TaskEntry 不再持有这些)。 */
@@ -74,17 +71,15 @@ public class SubAgentManager {
         volatile boolean stopRequested;
     }
 
-    private TaskSubState state(TaskEntry task) {
-        return taskStates.computeIfAbsent(task.taskId, k -> new TaskSubState());
+    private TaskSubState state(TaskRuntime task) {
+        return taskStates.computeIfAbsent(task.taskId(), k -> new TaskSubState());
     }
 
-    public SubAgentManager(AgentRunner runner, AgentBuilder agentBuilder,
-            ConfigStore configStore, ChatModelFactory modelFactory, InteractionServiceImpl asks) {
-        this.runner = runner;
-        this.agentBuilder = agentBuilder;
-        this.configStore = configStore;
-        this.modelFactory = modelFactory;
+    public SubAgentManager(AgentFactory agentFactory, InteractionService asks,
+            TaskService taskService) {
+        this.agentFactory = agentFactory;
         this.asks = asks;
+        this.taskService = taskService;
     }
 
     /**
@@ -92,8 +87,12 @@ public class SubAgentManager {
      * 同 agentId 仅在"运行中"时拒绝;已落定(完成/停止/失败)→ 复用原实体续跑
      * (原会话追加新指令,不重做已完成部分,§5.6/agent-dispatch 技能)。
      */
-    public String run(TaskEntry task, String input, String title, String agentId)
+    public String run(String taskId, String input, String title, String agentId)
             throws InterruptedException {
+        TaskRuntime task = (TaskRuntime) taskService.get(taskId);
+        if (task == null) {
+            return "任务不存在: " + taskId;
+        }
         TaskSubState st = state(task);
         if (st.stopRequested) {
             return "任务已停止,未启动子 agent";
@@ -110,9 +109,9 @@ public class SubAgentManager {
                     + "(上限),请先用 wait_agents 等待现有子 agent 完成。"
                     + "注:前端「正在排队(在飞 N / 排队 M)」是模型 API 级限流(跨任务统计模型请求数),与此处子 agent 并发上限(单任务)是两套独立计数,数值不对应。";
         }
-        boolean reuse = agentId != null && !agentId.isEmpty() && task.agents.containsKey(agentId);
+        boolean reuse = agentId != null && !agentId.isEmpty() && task.agents().containsKey(agentId);
         String id = agentId == null || agentId.isEmpty() ? dev.everyagent.plugin.api.proto.ShortIds.next("sub") : agentId;
-        AgentEntity sub;
+        Agent sub;
 
         // 注册/启动放在 task 监视器内,与 stopAll 互斥:
         // 要么 stopAll 先拿到锁(任务停止,这里看到 stopRequested 后放弃启动),
@@ -122,9 +121,9 @@ public class SubAgentManager {
                 return "任务已停止,未启动子 agent";
             }
             if (reuse) {
-                sub = task.agents.get(id);
+                sub = (Agent) task.agents().get(id);
                 sub.resetForRerun();
-                sub.conversation.add(new UserMessage(input)); // 续跑:原会话历史 + 新指令
+                sub.conversation().add(new UserMessage(input)); // 续跑:原会话历史 + 新指令
             } else {
                 sub = buildSubAgent(task, id, title == null || title.isEmpty() ? "子任务" : title, input);
             }
@@ -136,49 +135,46 @@ public class SubAgentManager {
                 runSub(task, id, sub);
                 return null;
             });
-            task.agents.put(id, sub);
+            task.agents().put(id, sub);
             st.subFutures.put(id, ft);
             {
                 ObjectNode startedData = Json.obj();
                 startedData.put("agentId", id);
-                if (sub.title != null) {
-                    startedData.put("title", sub.title);
+                if (sub.title() != null) {
+                    startedData.put("title", sub.title());
                 }
                 startedData.put("input", input);
-                task.events.emit(EmitEvent.of(SnowflakeId.next(), "agent.started", id,
+                task.events().emit(EmitEvent.of(SnowflakeId.next(), "agent.started", id,
                         null, null, null, null, startedData, EmitEvent.Mode.REPLACE));
-                task.events.emit(EmitEvent.of(SnowflakeId.next(), "agent.status", id,
+                task.events().emit(EmitEvent.of(SnowflakeId.next(), "agent.status", id,
                         null, null, null, "running", null, EmitEvent.Mode.REPLACE));
             }
             vt.execute(ft);
             log.debug("[sub] 启动子 agent id={} taskId={} reuse={} thread={}",
-                    id, task.taskId, reuse, Thread.currentThread().getName());
+                    id, task.taskId(), reuse, Thread.currentThread().getName());
         }
 
         return "子 agent 已启动(异步): " + id;
     }
 
     /**
-     * 用 AgentBuilder 装配子 agent:模型经 ChatModelFactory 解析,工具集用 REMOVE 模式
+     * 用 AgentFactory 装配子 agent:模型经工厂内部解析,工具集用 REMOVE 模式
      * 移除派发工具(run_agent/list_agents/wait_agents/stop_agent)和 ask_user(结构上禁递归 +
      * 提问只能由主 agent 发起)。
      */
-    private AgentEntity buildSubAgent(TaskEntry task, String agentId, String title, String input) {
-        ResolvedConfig cfg = configStore.resolve(task.snapshot.configId());
-        ChatModelFactory.AgentModel am = modelFactory.buildAgentModel(cfg, agentId, task.events, null);
+    private Agent buildSubAgent(TaskRuntime task, String agentId, String title, String input) {
+        String configId = task.snapshot().configId();
 
-        java.util.Map<String, Object> props = new java.util.HashMap<>();
+        Map<String, Object> props = new HashMap<>();
         props.put("taskEntry", task);
-        props.put("taskId", task.taskId);
-        props.put("workspaceRoot", task.workspaceRoot);
-        props.put("configId", task.snapshot.configId());
+        props.put("taskId", task.taskId());
+        props.put("workspaceRoot", task.workspaceRoot());
+        props.put("configId", configId);
 
         // REMOVE 模式移除派发工具和 ask_user
-        List<ToolCallback> toRemove = new ArrayList<>();
-        toRemove.addAll(List.of(ToolCallbacks.from(new SubAgentTools(this, Map.of()))));
-        toRemove.addAll(List.of(ToolCallbacks.from(new AskUserTool(null, null, null, ""))));
+        List<ToolCallback> toRemove = new ArrayList<>(List.of(ToolCallbacks.from(new SubAgentToolNames())));
 
-        return agentBuilder.create(agentId, am.chatModel(), am.options(), task.events, props)
+        return agentFactory.create(agentId, configId, task.events(), props)
                 .title(title)
                 .tools(toRemove, AgentBuilder.ModifyMode.REMOVE)
                 .systemPrompt(SUB_SYSTEM_PROMPT)
@@ -187,11 +183,11 @@ public class SubAgentManager {
     }
 
     /** 子 agent 运行体(vt 线程):任何收口路径都写工具契约终态 + error 快照,finally 置 finished。 */
-    private void runSub(TaskEntry task, String id, AgentEntity sub) {
+    private void runSub(TaskRuntime task, String id, Agent sub) {
         log.debug("[sub] runSub 进入 id={} taskId={} thread={} interruptFlag={}",
-                id, task.taskId, Thread.currentThread().getName(), Thread.currentThread().isInterrupted());
+                id, task.taskId(), Thread.currentThread().getName(), Thread.currentThread().isInterrupted());
         try {
-            runner.run(sub);
+            sub.run();
             // 正常完成:只有未被 stop 侧抢先置为 stopped 时才发 done(终态唯一声明)。
             if (sub.claimTerminal("completed")) {
                 log.debug("[sub] 正常完成 claimTerminal(completed)=true id={} thread={}",
@@ -199,13 +195,13 @@ public class SubAgentManager {
                 ObjectNode doneData = Json.obj();
                 doneData.put("agentId", id);
                 doneData.set("usage", Json.toJson(sub.usage()));
-                task.events.emit(EmitEvent.of(SnowflakeId.next(), "agent.done", id,
-                        null, null, sub.lastText, null, doneData, EmitEvent.Mode.REPLACE));
-                task.events.emit(EmitEvent.of(SnowflakeId.next(), "agent.status", id,
+                task.events().emit(EmitEvent.of(SnowflakeId.next(), "agent.done", id,
+                        null, null, sub.lastText(), null, doneData, EmitEvent.Mode.REPLACE));
+                task.events().emit(EmitEvent.of(SnowflakeId.next(), "agent.status", id,
                         null, null, null, "done", null, EmitEvent.Mode.REPLACE));
             } else {
                 log.debug("[sub] 正常完成但 claimTerminal=false(已被停止侧抢先) id={} subStatus={} thread={}",
-                        id, sub.status, Thread.currentThread().getName());
+                        id, sub.status(), Thread.currentThread().getName());
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -218,15 +214,15 @@ public class SubAgentManager {
             if (sub.claimTerminal("error")) {
                 String msg = RootCause.summary(t);
                 sub.updateActivity(null, null, msg);
-                task.events.emit(EmitEvent.of(SnowflakeId.next(), "error", id,
+                task.events().emit(EmitEvent.of(SnowflakeId.next(), "error", id,
                         null, null, msg, null, null, EmitEvent.Mode.REPLACE));
-                task.events.emit(EmitEvent.of(SnowflakeId.next(), "agent.status", id,
+                task.events().emit(EmitEvent.of(SnowflakeId.next(), "agent.status", id,
                         null, null, null, "failed", null, EmitEvent.Mode.REPLACE));
             }
         } finally {
-            sub.finished = true;
+            sub.finished(true);
             log.debug("[sub] runSub 收口退出 id={} subStatus={} finished=true thread={}",
-                    id, sub.status, Thread.currentThread().getName());
+                    id, sub.status(), Thread.currentThread().getName());
         }
     }
 
@@ -234,17 +230,17 @@ public class SubAgentManager {
      * 把子 agent 立即置为 stopped 并发终态事件(幂等)。
      * stop_agent / 任务取消级联调用;如果子线程已抢先收口(completed/error),此处不覆盖。
      */
-    private void emitStopped(TaskEntry task, AgentEntity sub) {
+    private void emitStopped(TaskRuntime task, Agent sub) {
         boolean claimed = sub.claimTerminal("stopped");
         log.debug("[sub] emitStopped id={} claimed={} 现status={} thread={}",
-                sub.agentId, claimed, sub.status, Thread.currentThread().getName());
+                sub.agentId(), claimed, sub.status(), Thread.currentThread().getName());
         if (!claimed) {
             return;
         }
         sub.updateActivity(null, null, "已取消");
-        task.events.emit(EmitEvent.of(SnowflakeId.next(), "error", sub.agentId,
+        task.events().emit(EmitEvent.of(SnowflakeId.next(), "error", sub.agentId(),
                 null, null, "已取消", null, null, EmitEvent.Mode.REPLACE));
-        task.events.emit(EmitEvent.of(SnowflakeId.next(), "agent.status", sub.agentId,
+        task.events().emit(EmitEvent.of(SnowflakeId.next(), "agent.status", sub.agentId(),
                 null, null, null, "stopped", null, EmitEvent.Mode.REPLACE));
     }
 
@@ -254,12 +250,16 @@ public class SubAgentManager {
      * completed/stopped/error,running 运行中,waiting-user 挂起等用户回答;
      * latestActivity 为最近一次 AI 返回的快照,不回灌完整历史。
      */
-    public String list(TaskEntry task) throws InterruptedException {
+    public String list(String taskId) throws InterruptedException {
+        TaskRuntime task = (TaskRuntime) taskService.get(taskId);
+        if (task == null) {
+            return Json.write(Json.obj().set("agents", Json.arr()));
+        }
         TaskSubState st = state(task);
         // 取消竞态收口:future 已取消但子线程尚未写终态的,有界等定稿,避免把已停止的报成 running
-        for (AgentEntity s : task.agents.values()) {
-            if (!s.finished) {
-                Future<?> f = st.subFutures.get(s.agentId);
+        for (AgentContext s : task.agents().values()) {
+            if (!s.finished()) {
+                Future<?> f = st.subFutures.get(s.agentId());
                 if (f != null && f.isDone()) {
                     awaitSettle(s);
                 }
@@ -270,11 +270,11 @@ public class SubAgentManager {
         return Json.write(r);
     }
 
-    /** 活实体的 agents 摘要数组:遍历 task.agents.values(),按 createdAt 稳定排序。 */
-    private ArrayNode agentsJson(TaskEntry task) {
+    /** 活实体的 agents 摘要数组:遍历 task.agents().values(),按 createdAt 稳定排序。 */
+    private ArrayNode agentsJson(TaskRuntime task) {
         java.util.LinkedHashMap<String, ObjectNode> merged = new java.util.LinkedHashMap<>();
-        for (AgentEntity s : task.agents.values()) {
-            merged.put(s.agentId, summaryJson(task, s));
+        for (AgentContext s : task.agents().values()) {
+            merged.put(s.agentId(), summaryJson(task, s));
         }
         // 按 createdAt 稳定排序。
         java.util.List<ObjectNode> ordered = new java.util.ArrayList<>(merged.values());
@@ -290,13 +290,21 @@ public class SubAgentManager {
      * 超时 waitStatus="timeout" 且仍返回最新摘要供判断进度);
      * 不传 → {@code {mode:"list",waitStatus,agents}}(共享 deadline 等待全部未落定)。
      */
-    public String waitFor(TaskEntry task, String agentId, Long timeoutMs) throws InterruptedException {
+    public String waitFor(String taskId, String agentId, Long timeoutMs) throws InterruptedException {
+        TaskRuntime task = (TaskRuntime) taskService.get(taskId);
+        if (task == null) {
+            ObjectNode r = Json.obj();
+            r.put("mode", "list");
+            r.put("waitStatus", "timeout");
+            r.set("agents", Json.arr());
+            return Json.write(r);
+        }
         TaskSubState st = state(task);
         long timeout = timeoutMs != null && timeoutMs > 0 ? timeoutMs : DEFAULT_WAIT_TIMEOUT_MS;
         if (agentId != null && !agentId.isEmpty()) {
             ObjectNode r = Json.obj();
             r.put("mode", "single");
-            AgentEntity sub = task.agents.get(agentId);
+            AgentContext sub = task.agents().get(agentId);
             Future<?> f = st.subFutures.get(agentId);
             if (sub == null) {
                 // agentId 不存在(凭空 id):最小摘要 + 说明,waitStatus=timeout
@@ -312,7 +320,7 @@ public class SubAgentManager {
                 r.set("agent", a);
                 return Json.write(r);
             }
-            if (f == null || isTerminal(sub.status)) {
+            if (f == null || isTerminal(sub.status())) {
                 // 已落定(完成/停止/失败):直接返回最新摘要
                 r.put("waitStatus", "completed");
                 r.set("agent", summaryJson(task, sub));
@@ -361,15 +369,19 @@ public class SubAgentManager {
         return Json.write(r);
     }
 
-    public String stop(TaskEntry task, String agentId) {
+    public String stop(String taskId, String agentId) {
+        TaskRuntime task = (TaskRuntime) taskService.get(taskId);
+        if (task == null) {
+            return "任务不存在: " + taskId;
+        }
         TaskSubState st = state(task);
-        AgentEntity sub = task.agents.get(agentId);
+        AgentContext sub = task.agents().get(agentId);
         Future<?> f = st.subFutures.get(agentId);
         if (f == null) {
             return "子 agent 不存在: " + agentId;
         }
-        if (sub != null && isTerminal(sub.status)) {
-            return "子 agent 已结束(" + sub.status + "),无需停止: " + agentId;
+        if (sub != null && isTerminal(sub.status())) {
+            return "子 agent 已结束(" + sub.status() + "),无需停止: " + agentId;
         }
         boolean cancelled = f.cancel(true);
         log.debug("[sub] stop 请求 id={} cancel(true)={} futureDone={} thread={}",
@@ -377,19 +389,19 @@ public class SubAgentManager {
         // 不能只 cancel future:FutureTask 尚未开始执行(cancel 只置 CANCELLED 不跑 runSub)、
         // 或子线程未能立刻响应中断时,前端会一直看到 running。这里同步声明终态并发事件。
         if (sub != null) {
-            emitStopped(task, sub);
+            emitStopped(task, (Agent) sub);
         }
         return "已请求停止: " + agentId;
     }
 
     /** 子 agent 摘要(list_agents/wait_agents 共用契约,对标 old AgentSummary):字段 null 省略。 */
-    private ObjectNode summaryJson(TaskEntry task, AgentEntity s) {
+    private ObjectNode summaryJson(TaskRuntime task, AgentContext s) {
         ObjectNode n = Json.obj();
-        n.put("agentId", s.agentId);
-        if (s.title != null) {
-            n.put("title", s.title);
+        n.put("agentId", s.agentId());
+        if (s.title() != null) {
+            n.put("title", s.title());
         }
-        n.put("createdAt", s.createdAt);
+        n.put("createdAt", s.createdAt());
         n.put("status", effectiveStatus(task, s));
         AgentActivity act = s.activity();
         ObjectNode la = Json.obj();
@@ -413,11 +425,11 @@ public class SubAgentManager {
     }
 
     /** 工具契约有效状态:运行中且挂起 ask → waiting-user(与 UI 事件态同词),否则实体状态。 */
-    private String effectiveStatus(TaskEntry task, AgentEntity s) {
-        if ("running".equals(s.status) && asks.hasPendingFor(task.taskId, s.agentId)) {
+    private String effectiveStatus(TaskRuntime task, AgentContext s) {
+        if ("running".equals(s.status()) && asks.hasPendingFor(task.taskId(), s.agentId())) {
             return "waiting-user";
         }
-        return s.status;
+        return s.status();
     }
 
     /** 工具契约终态判定。 */
@@ -429,32 +441,32 @@ public class SubAgentManager {
      * 有界等待子 agent 收口定稿(finished 置位)。
      * 取消竞态下 future.get() 会先于子线程写终态返回,不等待会把已停止的报成 running。
      */
-    private static void awaitSettle(AgentEntity sub) throws InterruptedException {
-        if (sub.finished) {
+    private static void awaitSettle(AgentContext sub) throws InterruptedException {
+        if (sub.finished()) {
             return;
         }
         long deadline = System.currentTimeMillis() + SETTLE_NUDGE_MS;
-        while (!sub.finished && System.currentTimeMillis() < deadline) {
+        while (!sub.finished() && System.currentTimeMillis() < deadline) {
             Thread.sleep(20);
         }
     }
 
     /** 任务收口前调用:等待全部子 agent(超时则级联停止,§5.6)。 */
-    public void awaitAllBeforeFinish(TaskEntry task) {
+    public void awaitAllBeforeFinish(TaskRuntime task) {
         try {
-            waitFor(task, null, AWAIT_ALL_TIMEOUT_MS);
+            waitFor(task.taskId(), null, AWAIT_ALL_TIMEOUT_MS);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
         stopAll(task);
     }
 
-    public void stopAll(TaskEntry task) {
+    public void stopAll(TaskRuntime task) {
         TaskSubState st = state(task);
         synchronized (task) {
             st.stopRequested = true; // 统一入口置位:任何全停路径都不允许再启动新子 agent
             log.debug("[sub] stopAll 进入 taskId={} 子数={} thread={}",
-                    task.taskId, st.subFutures.size(), Thread.currentThread().getName());
+                    task.taskId(), st.subFutures.size(), Thread.currentThread().getName());
             for (Future<?> f : st.subFutures.values()) {
                 boolean c = f.cancel(true);
                 log.debug("[sub] stopAll cancel id={} cancel(true)={} done={} thread={}",
@@ -462,8 +474,8 @@ public class SubAgentManager {
             }
             // 见 stop():cancel 不保证 runSub 会执行收口(未启动/未及时响应中断的 future 永远停在 running),
             // 这里对全部未终态实体同步声明 stopped,确保任务取消/失败/停机路径下前端状态能收口。
-            for (AgentEntity sub : task.agents.values()) {
-                emitStopped(task, sub);
+            for (AgentContext sub : task.agents().values()) {
+                emitStopped(task, (Agent) sub);
             }
         }
     }

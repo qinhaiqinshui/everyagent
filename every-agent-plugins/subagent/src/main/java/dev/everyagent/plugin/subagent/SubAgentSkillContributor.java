@@ -2,7 +2,7 @@ package dev.everyagent.plugin.subagent;
 
 import dev.everyagent.plugin.api.skill.PluginSkill;
 import dev.everyagent.plugin.api.skill.SkillContributor;
-import dev.everyagent.worker.config.WorkerProperties;
+import dev.everyagent.plugin.api.config.WorkerConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.core.io.ClassPathResource;
@@ -27,7 +27,7 @@ public class SubAgentSkillContributor implements SkillContributor {
     private final Path knowledgeRoot;
     private PluginSkill cachedSkill;
 
-    public SubAgentSkillContributor(WorkerProperties props) {
+    public SubAgentSkillContributor(WorkerConfig props) {
         this.knowledgeRoot = props.resolveSkillsDir();
     }
 

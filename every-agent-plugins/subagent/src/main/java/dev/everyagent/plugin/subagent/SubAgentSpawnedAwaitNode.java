@@ -1,9 +1,10 @@
 package dev.everyagent.plugin.subagent;
 
+import dev.everyagent.plugin.api.task.TaskChain;
 import dev.everyagent.plugin.api.task.TaskLifecycleContext;
+import dev.everyagent.plugin.api.task.TaskLifecycleNode;
 import dev.everyagent.plugin.api.task.TaskOutcome;
-import dev.everyagent.worker.task.lifecycle.TaskLifecycleContextImpl;
-import dev.everyagent.worker.task.lifecycle.UpstreamNode;
+import dev.everyagent.plugin.api.task.TaskRuntime;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -11,7 +12,7 @@ import org.slf4j.LoggerFactory;
  * 上行节点(order=950)：awaitAllBeforeFinish（等全部子 agent，超时级联停）。
  * 中断检测：await 后若线程被中断，改写 result 为 CANCELLED。
  */
-public final class SubAgentSpawnedAwaitNode extends UpstreamNode {
+public final class SubAgentSpawnedAwaitNode implements TaskLifecycleNode {
 
     private static final Logger log = LoggerFactory.getLogger(SubAgentSpawnedAwaitNode.class);
 
@@ -28,12 +29,13 @@ public final class SubAgentSpawnedAwaitNode extends UpstreamNode {
     public float order() { return 950; }
 
     @Override
-    protected Object up(TaskLifecycleContext ctx, Object result) {
-        var t = ((TaskLifecycleContextImpl) ctx).taskEntryImpl();
+    public Object invoke(TaskLifecycleContext ctx, TaskChain next) throws Exception {
+        Object result = next.proceed(ctx);
+        TaskRuntime t = (TaskRuntime) ctx.taskInfo();
         try {
             subs.awaitAllBeforeFinish(t);
         } catch (RuntimeException e) {
-            log.warn("awaitAllBeforeFinish 异常 task={}", t.taskId, e);
+            log.warn("awaitAllBeforeFinish 异常 task={}", ctx.taskId(), e);
         }
         if (Thread.currentThread().isInterrupted()) {
             TaskOutcome to = (TaskOutcome) result;

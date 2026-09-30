@@ -3,7 +3,7 @@ package dev.everyagent.plugin.subagent;
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.contract.rpc.Rpc;
 import dev.everyagent.plugin.api.rpc.RpcContext;
-import dev.everyagent.worker.task.TaskStore;
+import dev.everyagent.plugin.api.task.TaskStoreService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import tools.jackson.databind.JsonNode;
@@ -25,9 +25,9 @@ public class SubAgentRpcHandler {
     private static final Logger log = LoggerFactory.getLogger(SubAgentRpcHandler.class);
 
     private final SubAgentLedger ledger;
-    private final TaskStore store;
+    private final TaskStoreService store;
 
-    public SubAgentRpcHandler(SubAgentLedger ledger, TaskStore store) {
+    public SubAgentRpcHandler(SubAgentLedger ledger, TaskStoreService store) {
         this.ledger = ledger;
         this.store = store;
     }

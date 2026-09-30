@@ -3,7 +3,7 @@ package dev.everyagent.plugin.subagent;
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.plugin.api.event.EventLogReader;
 import dev.everyagent.plugin.api.event.EventRecord;
-import dev.everyagent.worker.task.TaskStore;
+import dev.everyagent.plugin.api.task.TaskStoreService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import tools.jackson.databind.JsonNode;
@@ -39,7 +39,7 @@ public class SubAgentLedger {
 
     private static final long PERSIST_INTERVAL_MS = 30_000;
 
-    private final TaskStore store;
+    private final TaskStoreService store;
     /** per-task 内存台账：taskId → (agentId → 摘要 ObjectNode) */
     private final Map<String, Map<String, ObjectNode>> taskLedgers = new ConcurrentHashMap<>();
     /** per-task EventLog 游标：taskId → 最后处理的 EventLog 位置（按记录数） */
@@ -50,7 +50,7 @@ public class SubAgentLedger {
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(
             r -> Thread.ofVirtual().name("subagent-ledger-timer").unstarted(r));
 
-    public SubAgentLedger(TaskStore store) {
+    public SubAgentLedger(TaskStoreService store) {
         this.store = store;
         scheduler.scheduleAtFixedRate(this::persistAll, PERSIST_INTERVAL_MS, PERSIST_INTERVAL_MS,
                 TimeUnit.MILLISECONDS);
@@ -62,9 +62,10 @@ public class SubAgentLedger {
      * 任务 track 时调用：注册 EventLogReader.Listener，开始订阅事件维护台账。
      * 同时从磁盘恢复已有台账（冷启动续跑场景）。
      */
-    public void onTrack(String taskId, EventLogReader log, Path dir, JsonNode meta) {
+    public void onTrack(String taskId, EventLogReader log, JsonNode meta) {
         // 冷启动恢复：优先 agents.json，回退 meta.agents
         Map<String, ObjectNode> ledger = taskLedgers.computeIfAbsent(taskId, k -> new ConcurrentHashMap<>());
+        Path dir = store.dirOf(taskId);
         List<ObjectNode> disk = store.readAgents(dir);
         if (disk != null) {
             for (ObjectNode a : disk) {
