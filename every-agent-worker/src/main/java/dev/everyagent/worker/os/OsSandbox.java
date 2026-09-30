@@ -48,7 +48,6 @@ public final class OsSandbox implements SandboxBackend {
 
     private final WorkerProperties props;
     private final WorkerProperties.Sandbox cfg;
-    private final dev.everyagent.worker.modules.WorkspaceManager workspaces;
     /** 沙箱命令执行线程:虚拟线程。 */
     private final ExecutorService exec = Executors.newVirtualThreadPerTaskExecutor();
     /** SPI 沙箱提供者注册表。 */
@@ -62,11 +61,9 @@ public final class OsSandbox implements SandboxBackend {
     }
 
     public OsSandbox(WorkerProperties props,
-            dev.everyagent.worker.modules.WorkspaceManager workspaces,
             SandboxProviderRegistry sandboxRegistry) {
         this.props = props;
         this.cfg = props.getSandbox();
-        this.workspaces = workspaces;
         this.sandboxRegistry = sandboxRegistry;
     }
 

@@ -75,7 +75,7 @@ class FsSearchServiceTest {
         @SuppressWarnings("unchecked")
         ObjectProvider<TaskManager> provider = mock(ObjectProvider.class);
         workspaces = new WorkspaceManager(props, mock(RpcDispatcher.class), mock(HubPool.class),
-                provider, new dev.everyagent.worker.os.SandboxPathRegistry(new dev.everyagent.worker.os.OsSandbox(props, null, null)));
+                provider, new dev.everyagent.worker.os.SandboxPathRegistry(new dev.everyagent.worker.os.OsSandbox(props, null)));
         workspaces.init();
         new FsSearchService(dispatcher, workspaces, new RipgrepBinary(props));
     }
