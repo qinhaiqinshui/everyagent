@@ -2,9 +2,11 @@
  * 用户消息编辑按钮（从核心 AgentMessageThread.tsx 迁入 task-edit-resend 插件）。
  *
  * 经 `ui.user_message_actions` 扩展点渲染在每条用户消息气泡旁：
- * - hover(desktop) / 长按消息区域 500ms(mobile) 显示；
- * - 点击 → 经核心草稿桥（ComposerDraftBridgeContext）把原消息内容追加到输入框末尾，
+ * - 桌面端：hover 消息区域时显示（CSS 控制）；
+ * - 移动端：点击用户消息时显示（JS 切换 revealed 态）；
+ * - 点击编辑按钮 → 经核心草稿桥（ComposerDraftBridgeContext）把原消息内容追加到输入框末尾，
  *   并记录编辑目标 seq（useEditResend store）；再点 → 取消编辑（不清输入框）；
+ * - "重新发送会删除此消息之后的所有 AI 回复和过程内容"提示仅在进入编辑模式后才显示；
  * - 缺草稿桥（非任务页宿主）或缺 taskId 时不渲染。
  */
 import React from 'react'
@@ -18,34 +20,19 @@ export default function EditMessageButton({ taskId, seq, content, rawContent }: 
   // 宿主显式提供编辑上下文（旧挂载方式）时优先；缺省(null)走插件自身 store。
   const override = React.useContext(UserMessageEditContext)
   const { editTarget, startEdit, cancelEdit } = useEditResend(taskId)
-  // 长按(mobile)显示：监听所在消息容器的触摸事件，500ms 后打 revealed 态。
-  // 触摸移动/结束取消长按（避免滚动误触发）。
+  // 移动端：点击用户消息时切换 revealed 态来显示/隐藏编辑按钮。
   const [revealed, setRevealed] = React.useState(false)
   const buttonRef = React.useRef<HTMLButtonElement | null>(null)
   React.useEffect(() => {
     const button = buttonRef.current
     const container = button?.closest('.nagent-msg--user')
     if (!button || !container) return
-    let timer: ReturnType<typeof setTimeout> | null = null
-    const start = () => {
-      timer = setTimeout(() => setRevealed(true), 500)
-    }
-    const clear = () => {
-      if (timer) {
-        clearTimeout(timer)
-        timer = null
-      }
-    }
+    const onContainerClick = () => setRevealed((prev) => !prev)
     const onContextMenu = (e: Event) => e.preventDefault()
-    container.addEventListener('touchstart', start, { passive: true })
-    container.addEventListener('touchend', clear)
-    container.addEventListener('touchmove', clear)
+    container.addEventListener('click', onContainerClick)
     container.addEventListener('contextmenu', onContextMenu)
     return () => {
-      clear()
-      container.removeEventListener('touchstart', start)
-      container.removeEventListener('touchend', clear)
-      container.removeEventListener('touchmove', clear)
+      container.removeEventListener('click', onContainerClick)
       container.removeEventListener('contextmenu', onContextMenu)
     }
   }, [])
@@ -82,7 +69,7 @@ export default function EditMessageButton({ taskId, seq, content, rawContent }: 
       onClick={handleClick}
     >
       {isEditing ? <CancelEditIcon size={13} /> : <EditIcon size={13} />}
-      {!isEditing && (
+      {isEditing && (
         <span className="nagent-msg__edit-tooltip">重新发送会删除此消息之后的所有 AI 回复和过程内容</span>
       )}
     </button>

@@ -21,7 +21,7 @@
 .nagent-msg__edit-btn:focus-visible {
   opacity: 1;
 }
-/* 移动端:长按消息区域后显示（插件组件打 --revealed 态） */
+/* 移动端:点击用户消息后显示（插件组件打 --revealed 态） */
 .nagent-msg__edit-btn--revealed {
   opacity: 1;
 }
@@ -57,6 +57,7 @@
   z-index: 100;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
 }
-.nagent-msg__edit-btn:hover .nagent-msg__edit-tooltip {
+/* 进入编辑模式后（点击编辑按钮）才显示提示 */
+.nagent-msg__edit-btn--active .nagent-msg__edit-tooltip {
   opacity: 1;
 }
