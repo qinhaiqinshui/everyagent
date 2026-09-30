@@ -26,6 +26,7 @@ import React from 'react'
 import * as ReactDOMNS from 'react-dom'
 import * as antd from 'antd'
 import * as Icons from '@ant-design/icons'
+import * as ReactJSXRuntime from 'react/jsx-runtime'
 import { hubSession } from '@/hub/session'
 import { workspaceRegistry } from '@/hub/workspaceRegistry'
 import { domainEventBus } from '@/events/eventBus'
@@ -54,6 +55,7 @@ _g.__EA_REACT__ = React
 _g.__EA_REACT_DOM__ = ReactDOMNS
 _g.__EA_antd__ = antd
 _g.__EA_ICONS__ = Icons
+_g.__EA_REACT_JSX__ = ReactJSXRuntime
 
 // ── bare import → window 全局引用重写 ─────────────────────────────────────
 
@@ -67,6 +69,7 @@ _g.__EA_ICONS__ = Icons
 const BARE_IMPORT_MAP: Record<string, string> = {
   'react': 'window.__EA_REACT__',
   'react-dom': 'window.__EA_REACT_DOM__',
+  'react/jsx-runtime': 'window.__EA_REACT_JSX__',
   'antd': 'window.__EA_antd__',
   '@ant-design/icons': 'window.__EA_ICONS__',
 }

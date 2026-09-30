@@ -78,6 +78,11 @@ async function main() {
       platform: 'browser',
       sourcemap: true,
       external,
+      // 使用 automatic JSX runtime（与宿主 tsconfig.json 的 "jsx": "react-jsx" 一致），
+      // 产出 import { jsx } from "react/jsx-runtime" 而非 React.createElement。
+      // 前端 pluginLoader 的 rewriteBareImports 会将 react/jsx-runtime 重写为
+      // window.__EA_REACT_JSX__ 全局引用。
+      jsx: 'automatic',
       outfile: join(entry.outDir, 'index.js'),
       logLevel: 'info',
     })
