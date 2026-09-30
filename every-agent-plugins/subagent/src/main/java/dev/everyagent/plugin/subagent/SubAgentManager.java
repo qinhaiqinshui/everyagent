@@ -87,8 +87,11 @@ public class SubAgentManager {
     public void resetForRun(String taskId) {
         TaskSubState st = taskStates.get(taskId);
         if (st == null) {
+            log.info("[sub] resetForRun:无历史状态(首次运行) taskId={}", taskId);
             return; // 首次运行,无历史状态需重置
         }
+        log.info("[sub] resetForRun:清除 stopRequested={} 清理已完成 futures taskId={}",
+                st.stopRequested, taskId);
         st.stopRequested = false;
         // 清理上一轮已完成的子 agent futures(未完成的保留:极端情况下
         // 上一轮的子 agent 可能尚未收口,不应在此丢弃)
@@ -111,9 +114,13 @@ public class SubAgentManager {
             throws InterruptedException {
         TaskRuntime task = (TaskRuntime) taskService.get(taskId);
         if (task == null) {
+            log.warn("[sub] run_agent 失败:任务不存在 taskId={}", taskId);
             return "任务不存在: " + taskId;
         }
         TaskSubState st = state(task);
+        log.info("[sub] run_agent 进入 taskId={} agentId={} stopRequested={} liveCount={}",
+                taskId, agentId, st.stopRequested,
+                st.subFutures.values().stream().filter(f -> !f.isDone()).count());
         // 注意:不在同步块外做 stopRequested 硬拒。
         // stopRequested 由 stopAll 设置,stopAll 与 run 共用 synchronized(task) 互斥。
         // 若 run 拿到锁,stopAll 一定不在运行——此时 stopRequested=true 只能是上一轮
@@ -142,7 +149,7 @@ public class SubAgentManager {
             if (st.stopRequested) {
                 // 同步块内看到 stopRequested=true:stopAll 不可能在并发运行(我们持锁),
                 // 此标志来自上一轮生命周期的 stopAll(上行段)。清除并继续启动子 agent。
-                log.debug("[sub] 清除陈旧 stopRequested 标志 taskId={} agentId={}", taskId, id);
+                log.info("[sub] 清除陈旧 stopRequested 标志 taskId={} agentId={}", taskId, id);
                 st.stopRequested = false;
             }
             if (reuse) {
@@ -490,7 +497,7 @@ public class SubAgentManager {
         TaskSubState st = state(task);
         synchronized (task) {
             st.stopRequested = true; // 统一入口置位:任何全停路径都不允许再启动新子 agent
-            log.debug("[sub] stopAll 进入 taskId={} 子数={} thread={}",
+            log.info("[sub] stopAll 设置 stopRequested=true taskId={} 子数={} thread={}",
                     task.taskId(), st.subFutures.size(), Thread.currentThread().getName());
             for (Future<?> f : st.subFutures.values()) {
                 boolean c = f.cancel(true);

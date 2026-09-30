@@ -25,7 +25,7 @@ logging:
   level:
     dev.everyagent.worker.task.AgentRunner: debug
     dev.everyagent.worker.task.TaskManager: debug
-    dev.everyagent.worker.task.SubAgentManager: debug
+    dev.everyagent.plugin.subagent: debug
     dev.everyagent.worker.task.WorkerToolEventAdvisor: debug
     dev.everyagent.worker.task.TaskStore: debug
     dev.everyagent.worker.task.lifecycle: debug

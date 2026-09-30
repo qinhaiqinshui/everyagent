@@ -36,12 +36,15 @@ public final class SubAgentSpawnedAwaitNode implements TaskLifecycleNode {
         // 的 TaskEntryCreateNode 在内层创建)。对于再运行(rerun)场景,taskId 在
         // 生命周期启动前已由 TaskManager 设置,此时即可安全重置上一轮的 stopRequested。
         String tid = ctx.taskId();
+        log.info("[sub] spawned.await 下行: resetForRun taskId={} taskInfo={}",
+                tid, ctx.taskInfo() != null ? "exists" : "null");
         if (tid != null && !tid.isEmpty()) {
             subs.resetForRun(tid);
         }
 
         Object result = next.proceed(ctx);
         TaskRuntime t = (TaskRuntime) ctx.taskInfo();
+        log.info("[sub] spawned.await 上行: awaitAllBeforeFinish taskId={}", ctx.taskId());
         try {
             subs.awaitAllBeforeFinish(t);
         } catch (RuntimeException e) {
