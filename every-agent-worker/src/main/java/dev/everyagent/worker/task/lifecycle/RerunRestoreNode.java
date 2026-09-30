@@ -26,7 +26,7 @@ public final class RerunRestoreNode implements TaskLifecycleNode {
         var impl = (TaskLifecycleContextImpl) ctx;
         JsonNode meta = impl.rerunMeta();
         if (meta != null) {
-            var t = impl.taskEntry();
+            var t = impl.taskEntryImpl();
             t.createdAt(meta.path("createdAt").asLong(0));
             // 兼容旧格式:aiReview/unattended 布尔字段自动迁移到 metadata
             if (meta.path("aiReview").asBoolean(false)) t.metadata.put("ai-review", true);

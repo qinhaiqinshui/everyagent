@@ -23,7 +23,7 @@ public final class ConsumeInputNode implements TaskLifecycleNode {
     public Object invoke(TaskLifecycleContext ctx, TaskChain next) throws Exception {
         var impl = (TaskLifecycleContextImpl) ctx;
         // consumeInput：授权门失效 + 记 user.message + 开轮落盘 + 入会话内存
-        impl.consumeInput(impl.taskEntry().main,
+        impl.consumeInput(impl.taskEntryImpl().main,
                 UserInput.of(ctx.input(), ctx.rawContent()));
         return next.proceed(ctx);  // → kernel
     }

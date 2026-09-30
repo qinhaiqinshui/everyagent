@@ -36,7 +36,7 @@ public final class SubAgentLedgerUntrackNode implements TaskLifecycleNode {
         Object result = next.proceed(ctx);
         try {
             var impl = (TaskLifecycleContextImpl) ctx;
-            var t = impl.taskEntry();
+            var t = impl.taskEntryImpl();
             ledger.onUntrack(t.taskId, t.log);
         } catch (Exception e) {
             log.warn("subagent 台账 untrack 失败 task={}", ctx.taskId(), e);

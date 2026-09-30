@@ -70,7 +70,7 @@ public final class ThreadSubmitNode implements TaskLifecycleNode {
     @Override
     public Object invoke(TaskLifecycleContext ctx, TaskChain next) throws Exception {
         var impl = (TaskLifecycleContextImpl) ctx;
-        var t = impl.taskEntry();
+        var t = impl.taskEntryImpl();
         if (t == null) {
             // 短路场景（幂等命中、认领失败、运行中入队），不应到此
             return null;

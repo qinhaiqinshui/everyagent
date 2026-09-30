@@ -37,7 +37,7 @@ public final class SubAgentLedgerTrackNode implements TaskLifecycleNode {
     public Object invoke(TaskLifecycleContext ctx, TaskChain next) throws Exception {
         try {
             var impl = (TaskLifecycleContextImpl) ctx;
-            var t = impl.taskEntry();
+            var t = impl.taskEntryImpl();
             Path dir = t.log != null ? null : null; // 目录由 TaskStore 管理
             // 从 TaskStore 获取目录——通过 store.readMeta 读 meta（已在 track 节点完成）
             // 实际：track 已在 PersistenceTrackNode 完成，这里只需注册 listener

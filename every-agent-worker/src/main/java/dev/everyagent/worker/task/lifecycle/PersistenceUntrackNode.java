@@ -31,7 +31,7 @@ public final class PersistenceUntrackNode extends UpstreamNode {
     @Override
     protected Object up(TaskLifecycleContext ctx, Object result) {
         var impl = (TaskLifecycleContextImpl) ctx;
-        var t = impl.taskEntry();
+        var t = impl.taskEntryImpl();
         try {
             store.untrack(t.taskId);
         } catch (RuntimeException e) {

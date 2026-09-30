@@ -70,7 +70,7 @@ public final class TaskEntryCreateNode implements TaskLifecycleNode {
     public Object invoke(TaskLifecycleContext ctx, TaskChain next) throws Exception {
         var impl = (TaskLifecycleContextImpl) ctx;
         // 已有 TaskEntry（不应到此，防御）
-        if (impl.taskEntry() != null) return next.proceed(ctx);
+        if (impl.taskEntryImpl() != null) return next.proceed(ctx);
 
         String taskId = impl.taskId();
         if (taskId == null || taskId.isEmpty()) {

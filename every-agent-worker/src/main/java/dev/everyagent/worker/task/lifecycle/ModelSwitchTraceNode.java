@@ -37,7 +37,7 @@ public final class ModelSwitchTraceNode implements TaskLifecycleNode {
         if (meta != null && overrideConfigId != null && !overrideConfigId.isEmpty()) {
             String storedConfigId = meta.path("configId").asString(null);
             if (storedConfigId == null || !storedConfigId.equals(overrideConfigId)) {
-                var t = impl.taskEntry();
+                var t = impl.taskEntryImpl();
                 try {
                     ObjectNode switchData = Json.obj();
                     switchData.put("newConfigId", t.snapshot.configId());

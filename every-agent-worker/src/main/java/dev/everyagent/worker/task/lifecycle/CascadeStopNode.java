@@ -33,7 +33,7 @@ public final class CascadeStopNode extends UpstreamNode {
 
     @Override
     protected Object up(TaskLifecycleContext ctx, Object result) {
-        var t = ((TaskLifecycleContextImpl) ctx).taskEntry();
+        var t = ((TaskLifecycleContextImpl) ctx).taskEntryImpl();
         TaskOutcome to = (TaskOutcome) result;
         if (to.status() == TaskOutcome.TaskEndStatus.DONE) {
             return result;

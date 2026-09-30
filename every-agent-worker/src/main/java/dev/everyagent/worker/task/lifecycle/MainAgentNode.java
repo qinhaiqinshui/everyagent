@@ -20,7 +20,7 @@ public final class MainAgentNode implements TaskLifecycleNode {
     @Override
     public Object invoke(TaskLifecycleContext ctx, TaskChain next) throws Exception {
         var impl = (TaskLifecycleContextImpl) ctx;
-        var t = impl.taskEntry();
+        var t = impl.taskEntryImpl();
         var main = impl.mainAgentBuilder().apply(impl.priorConversation());
         t.main = main;
         impl.consumeInput(main, impl.initialInput());

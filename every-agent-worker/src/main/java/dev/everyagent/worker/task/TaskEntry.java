@@ -1,8 +1,12 @@
 package dev.everyagent.worker.task;
 
+import dev.everyagent.plugin.api.agent.AgentContext;
+import dev.everyagent.plugin.api.event.EventLogReader;
 import dev.everyagent.plugin.api.permission.TaskInfo;
 import dev.everyagent.plugin.api.task.FileChangesCollector;
+import dev.everyagent.plugin.api.task.TaskRuntime;
 import dev.everyagent.contract.json.Json;
+import dev.everyagent.plugin.api.model.EventEmitter;
 import dev.everyagent.plugin.api.model.ModelConfig;
 import dev.everyagent.worker.agent.AgentEntity;
 import dev.everyagent.worker.proto.TaskDtos.TaskStatus;
@@ -24,7 +28,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * 运行完成即销毁(finish 里 untrack + tasks.remove),磁盘是唯一真相源;
  * 再运行 = 同 taskId 新建本对象(冷启动,mainAgentId 沿用 → 同一 jsonl 文件续写)。
  */
-public final class TaskEntry implements TaskInfo {
+public final class TaskEntry implements TaskRuntime {
 
     public final String taskId;
     public final String title;
@@ -172,6 +176,86 @@ public final class TaskEntry implements TaskInfo {
     /** 工作区根路径。 */
     public String workspaceRoot() {
         return workspaceRoot;
+    }
+
+    // ---- TaskRuntime 接口方法 ----
+
+    @Override
+    public String workspaceId() {
+        return workspaceId;
+    }
+
+    @Override
+    public String mainAgentId() {
+        return mainAgentId;
+    }
+
+    @Override
+    public ModelConfig snapshot() {
+        return snapshot;
+    }
+
+    @Override
+    public EventEmitter events() {
+        return events;
+    }
+
+    @Override
+    @SuppressWarnings("unchecked")
+    public Map<String, AgentContext> agents() {
+        return (Map<String, AgentContext>) (Map) agents;
+    }
+
+    @Override
+    public AgentContext main() {
+        return main;
+    }
+
+    @Override
+    public EventLogReader log() {
+        return log;
+    }
+
+    @Override
+    public FileChangesCollector fileChanges() {
+        return fileChanges;
+    }
+
+    @Override
+    public void fileChanges(FileChangesCollector collector) {
+        fileChanges = collector;
+    }
+
+    @Override
+    public JsonNode fileChangesLight() {
+        return fileChangesLight;
+    }
+
+    @Override
+    public void fileChangesLight(JsonNode light) {
+        fileChangesLight = light;
+    }
+
+    @Override
+    public JsonNode fileChangesFull() {
+        return fileChangesFull;
+    }
+
+    @Override
+    public void fileChangesFull(JsonNode full) {
+        fileChangesFull = full;
+    }
+
+    @Override
+    public long startedAt() {
+        Long v = startedAt;
+        return v != null ? v : 0;
+    }
+
+    @Override
+    public long endedAt() {
+        Long v = endedAt;
+        return v != null ? v : 0;
     }
 
     public final Map<String, AgentEntity> agents = new ConcurrentHashMap<>();

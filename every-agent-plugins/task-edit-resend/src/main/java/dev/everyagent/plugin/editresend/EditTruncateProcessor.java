@@ -49,7 +49,7 @@ public final class EditTruncateProcessor {
      */
     public void truncate(String taskId, String editSeq, String text, String rawContent,
             TaskLifecycleContext ctx) {
-        TaskEntry t = ((TaskLifecycleContextImpl) ctx).taskEntry();
+        TaskEntry t = ((TaskLifecycleContextImpl) ctx).taskEntryImpl();
         if (t != null && !t.status.terminal()) {
             truncateForEdit(taskId, t, editSeq, text, rawContent);
             return;

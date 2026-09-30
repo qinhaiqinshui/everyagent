@@ -27,7 +27,7 @@ public final class StatusPersistNode extends UpstreamNode {
 
     @Override
     protected Object up(TaskLifecycleContext ctx, Object result) {
-        var t = ((TaskLifecycleContextImpl) ctx).taskEntry();
+        var t = ((TaskLifecycleContextImpl) ctx).taskEntryImpl();
         try {
             store.updateMeta(t.taskId);
         } catch (RuntimeException e) {

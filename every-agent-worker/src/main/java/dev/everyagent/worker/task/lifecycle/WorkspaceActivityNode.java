@@ -27,7 +27,7 @@ public final class WorkspaceActivityNode extends UpstreamNode {
 
     @Override
     protected Object up(TaskLifecycleContext ctx, Object result) {
-        var t = ((TaskLifecycleContextImpl) ctx).taskEntry();
+        var t = ((TaskLifecycleContextImpl) ctx).taskEntryImpl();
         try {
             activityTracker.onTaskFinished(t.workspaceRoot);
         } catch (RuntimeException e) {

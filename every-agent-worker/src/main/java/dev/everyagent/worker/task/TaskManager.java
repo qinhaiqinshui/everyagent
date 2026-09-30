@@ -1048,7 +1048,7 @@ public class TaskManager implements TaskInputHandler, InteractionServiceImpl.Sta
     private TaskKernel taskKernel() {
         return c -> {
             try {
-                TaskEntry te = ((TaskLifecycleContextImpl) c).taskEntry();
+                TaskEntry te = ((TaskLifecycleContextImpl) c).taskEntryImpl();
                 AgentEntity main = te.main;
                 if (Thread.currentThread().isInterrupted()) {
                     log.debug("[cancel] 内核检测到中断标记 taskId={} thread={}",

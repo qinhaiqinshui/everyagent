@@ -36,7 +36,7 @@ public final class StatusNode extends SectionNode {
 
     @Override
     protected void down(TaskLifecycleContext ctx) {
-        var t = ((TaskLifecycleContextImpl) ctx).taskEntry();
+        var t = ((TaskLifecycleContextImpl) ctx).taskEntryImpl();
         ctx.startedAt(System.currentTimeMillis());
         synchronized (t) {
             t.status = TaskStatus.RUNNING;
@@ -48,7 +48,7 @@ public final class StatusNode extends SectionNode {
 
     @Override
     protected Object up(TaskLifecycleContext ctx, Object result) {
-        var t = ((TaskLifecycleContextImpl) ctx).taskEntry();
+        var t = ((TaskLifecycleContextImpl) ctx).taskEntryImpl();
         // 终态 CAS（幂等门）
         if (t.status.terminal()) {
             log.debug("[finalize] 已是终态,跳过 taskId={} thread={}", t.taskId, Thread.currentThread().getName());

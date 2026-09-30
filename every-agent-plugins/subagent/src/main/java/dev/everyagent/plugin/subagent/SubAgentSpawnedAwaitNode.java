@@ -29,7 +29,7 @@ public final class SubAgentSpawnedAwaitNode extends UpstreamNode {
 
     @Override
     protected Object up(TaskLifecycleContext ctx, Object result) {
-        var t = ((TaskLifecycleContextImpl) ctx).taskEntry();
+        var t = ((TaskLifecycleContextImpl) ctx).taskEntryImpl();
         try {
             subs.awaitAllBeforeFinish(t);
         } catch (RuntimeException e) {

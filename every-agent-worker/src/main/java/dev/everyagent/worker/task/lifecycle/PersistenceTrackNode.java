@@ -36,7 +36,7 @@ public final class PersistenceTrackNode implements TaskLifecycleNode {
     @Override
     public Object invoke(TaskLifecycleContext ctx, TaskChain next) throws Exception {
         var impl = (TaskLifecycleContextImpl) ctx;
-        var t = impl.taskEntry();
+        var t = impl.taskEntryImpl();
         try {
             store.track(t.taskId, t.workspaceId, t.log, t::summaryJson);
         } catch (IOException e) {

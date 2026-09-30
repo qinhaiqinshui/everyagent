@@ -2,6 +2,7 @@ package dev.everyagent.worker.task.lifecycle;
 
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.plugin.api.model.EmitEvent;
+import dev.everyagent.plugin.api.task.TaskRuntime;
 import dev.everyagent.plugin.api.task.TaskLifecycleContext;
 import dev.everyagent.plugin.api.proto.SnowflakeId;
 import dev.everyagent.worker.agent.AgentEntity;
@@ -96,7 +97,10 @@ public class TaskLifecycleContextImpl implements TaskLifecycleContext {
 
     // ---- 访问器（节点用，worker 模块内部）----
 
-    public TaskEntry taskEntry() { return taskEntry; }
+    /** 插件面向接口：返回 TaskRuntime（TaskEntry implements TaskRuntime）。 */
+    public TaskRuntime taskEntry() { return taskEntry; }
+    /** worker 内部节点需要 TaskEntry 具体类型时调用。 */
+    public TaskEntry taskEntryImpl() { return taskEntry; }
     public UserInput initialInput() { return initialInput; }
     public List<Message> priorConversation() { return priorConversation; }
     public JsonNode rerunMeta() { return rerunMeta; }

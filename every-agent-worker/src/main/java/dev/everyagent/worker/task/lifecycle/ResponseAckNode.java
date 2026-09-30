@@ -32,7 +32,7 @@ public final class ResponseAckNode implements TaskLifecycleNode {
     @Override
     public Object invoke(TaskLifecycleContext ctx, TaskChain next) throws Exception {
         var impl = (TaskLifecycleContextImpl) ctx;
-        var t = impl.taskEntry();
+        var t = impl.taskEntryImpl();
         if (t == null) {
             // 短路场景（幂等命中已 ok、认领失败已 err），不应到此
             return next.proceed(ctx);

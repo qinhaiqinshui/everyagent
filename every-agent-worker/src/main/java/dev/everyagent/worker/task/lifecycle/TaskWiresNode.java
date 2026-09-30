@@ -31,7 +31,7 @@ public final class TaskWiresNode implements TaskLifecycleNode {
 
     @Override
     public Object invoke(TaskLifecycleContext ctx, TaskChain next) throws Exception {
-        var t = ((TaskLifecycleContextImpl) ctx).taskEntry();
+        var t = ((TaskLifecycleContextImpl) ctx).taskEntryImpl();
         // wireUsageBroadcast
         ctx.onUsageBroadcast(() -> {
             if (t.status.terminal()) return;
