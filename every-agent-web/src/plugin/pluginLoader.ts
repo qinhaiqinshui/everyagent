@@ -75,11 +75,28 @@ const BARE_IMPORT_MAP: Record<string, string> = {
 }
 
 /**
+ * 将 import 命名子句转换为解构子句。
+ *
+ * esbuild 在命名冲突时产出重命名形式 `import { jsx as jsx2, jsxs } from ...`，
+ * 直接内插到 `const { ... }` 会因 JS 解构没有 `as` 语法而抛
+ * SyntaxError，须转换为解构重命名 `jsx: jsx2`。
+ */
+function toDestructureClause(names: string): string {
+  return names
+    .split(',')
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => part.replace(/\s+as\s+/, ': '))
+    .join(', ')
+}
+
+/**
  * 将插件 JS 中的 bare import 重写为 const 引用 window 全局。
  *
  * 处理 esbuild 产出的标准 ESM import 语句：
  * - `import React2 from "react"` → `const React2 = window.__EA_REACT__`
  * - `import { Tree, Input } from "antd"` → `const { Tree, Input } = window.__EA_antd__`
+ * - `import { jsx as jsx2 } from "react/jsx-runtime"` → `const { jsx: jsx2 } = window.__EA_REACT_JSX__`
  * - `import * as React from "react"` → `const React = window.__EA_REACT__`
  * - `import React, { useState } from "react"` → 拆分为两条 const
  */
@@ -92,7 +109,8 @@ function rewriteBareImports(source: string): string {
     // 混合：import X, { Y, Z } from "spec"
     result = result.replace(
       new RegExp(`import\\s+(\\w+)\\s*,\\s*\\{([^}]+)\\}\\s+from\\s+${q}${esc}${q}`, 'g'),
-      `const $1 = ${globalExpr}; const { $2 } = ${globalExpr}`,
+      (_m, def: string, names: string) =>
+        `const ${def} = ${globalExpr}; const { ${toDestructureClause(names)} } = ${globalExpr}`,
     )
     // 命名空间：import * as X from "spec"
     result = result.replace(
@@ -104,10 +122,10 @@ function rewriteBareImports(source: string): string {
       new RegExp(`import\\s+(\\w+)\\s+from\\s+${q}${esc}${q}`, 'g'),
       `const $1 = ${globalExpr}`,
     )
-    // 命名：import { X, Y } from "spec"
+    // 命名：import { X, Y as Z } from "spec"
     result = result.replace(
       new RegExp(`import\\s+\\{([^}]+)\\}\\s+from\\s+${q}${esc}${q}`, 'g'),
-      `const { $1 } = ${globalExpr}`,
+      (_m, names: string) => `const { ${toDestructureClause(names)} } = ${globalExpr}`,
     )
     // 副作用：import "spec"（移除）
     result = result.replace(
