@@ -52,6 +52,14 @@
         <appender-ref ref="AUTH_REVIEW"/>
     </logger>
 
+    <!--
+      Spring AI MessageAggregator 在 reactive 链每层 onErrorResume 包装处都打印
+      ERROR + 完整堆栈，导致同一根因被重复打印 5-6 次（日志污染）。
+      我们的 TaskManager + AgentRunner 已通过 RootCause.summary(e) 做了正确的
+      一行摘要(error) + 完整堆栈(debug) 日志，此处压制框架重复日志。
+    -->
+    <logger name="org.springframework.ai.chat.model.MessageAggregator" level="OFF"/>
+
     <root level="INFO">
         <appender-ref ref="CONSOLE"/>
         <appender-ref ref="FILE"/>

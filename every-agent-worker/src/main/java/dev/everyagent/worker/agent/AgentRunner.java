@@ -24,8 +24,8 @@ import java.util.concurrent.TimeUnit;
  * 本类只负责"订阅流式 + 中断/dispose + 终态标记"，不再手写 while 循环/聚合。
  *
  * <p>解耦后：不依赖 {@code AgentClientFactory}，直接使用 {@link AgentEntity#chatClient}
- * （由 {@link AgentBuilder} 装配注入）。{@link AgentEntity#properties} 设置到
- * {@link InterceptingToolCallingManager} ThreadLocal 供工具执行拦截器使用。
+ * （由 {@link AgentBuilder} 装配注入）。per-run 的 {@code properties} 通过
+ * {@link InterceptingToolCallingManager} 构造参数传递（不再使用 ThreadLocal）。
  *
  * <p>纪律(AGENTS.md §13):agent 执行必须走 ChatClient + Advisor 生态,禁止手搓工具循环。
  */
@@ -39,10 +39,7 @@ public class AgentRunner {
      * 工具循环由 ChatClient 的 advisor 链递归完成;本方法订阅流式响应,支持线程中断取消。
      */
     public void run(AgentEntity a) throws InterruptedException {
-        // 设置当前 agent 上下文（供 ToolExecutionInterceptor 单例通过 ThreadLocal 获取）
-        InterceptingToolCallingManager.setCurrentProperties(a.properties);
-        try {
-            // 2.0.1:prompt options 原样透传并强转 OpenAiChatOptions(且不与默认 options 合并),
+        // 2.0.1:prompt options 原样透传并强转 OpenAiChatOptions(且不与默认 options 合并),
             OpenAiChatOptions.Builder options = a.options.mutate();
             if (!a.tools.isEmpty()) {
                 options.toolCallbacks(a.tools.stream()
@@ -118,8 +115,5 @@ public class AgentRunner {
                 throw new ModelCallException("模型调用失败: " + t.getMessage(), t);
             }
             a.finished = true;
-        } finally {
-            InterceptingToolCallingManager.clearCurrentProperties();
-        }
     }
 }

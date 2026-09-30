@@ -6,7 +6,6 @@ import dev.everyagent.worker.plugin.registry.ToolExecutionInterceptorRegistry;
 import dev.everyagent.worker.skill.BuiltInSkills;
 import dev.everyagent.worker.skill.SkillAdvisor;
 import dev.everyagent.plugin.api.exception.AgentCancelledException;
-import dev.everyagent.worker.task.InterceptingToolCallingManager;
 import dev.everyagent.worker.tools.MissingToolCallbackResolver;
 import org.springframework.ai.model.tool.ToolCallingManager;
 import org.springframework.ai.tool.execution.ToolExecutionException;
@@ -39,18 +38,19 @@ public class WorkerBeanConfiguration {
     };
 
     /**
-     * 共享无状态工具调用管理器，经 InterceptingToolCallingManager 包装以支持 ToolExecutionInterceptor 责任链。
+     * 基础工具调用管理器（无拦截器包装）。
+     * <p>per-run 的 InterceptingToolCallingManager 由 AgentBuilder 在
+     * {@code build()} 时新建，持 interceptorRegistry + properties，状态隔离。
      */
     @Bean
-    public ToolCallingManager toolCallingManager(ToolExecutionInterceptorRegistry interceptorRegistry) {
-        ToolCallingManager base = ToolCallingManager.builder()
+    public ToolCallingManager toolCallingManager() {
+        return ToolCallingManager.builder()
                 .toolExecutionExceptionProcessor(CANCELLING_PROCESSOR)
                 .toolCallbackResolver(new MissingToolCallbackResolver())
                 .resolutionFallbackEnabled(true)
                 .maxCallsPerTool(200)
                 .maxTotalToolCalls(500)
                 .build();
-        return new InterceptingToolCallingManager(base, interceptorRegistry);
     }
 
     /** skill 渐进式披露索引注入 advisor（无状态可共享单例）。 */

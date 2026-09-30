@@ -17,6 +17,7 @@ import dev.everyagent.worker.task.LoopRepeatGuardToolManager;
 import dev.everyagent.worker.task.TaskEntry;
 import dev.everyagent.worker.tools.PermissionGate;
 import dev.everyagent.worker.tools.RipgrepBinary;
+import dev.everyagent.worker.plugin.registry.ToolExecutionInterceptorRegistry;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.advisor.api.Advisor;
 import org.springframework.ai.chat.messages.Message;
@@ -57,6 +58,7 @@ public class AgentBuilder {
     private final ToolProviderRegistry toolRegistry;
     private final AdvisorProviderRegistry advisorRegistry;
     private final ToolCallingManager defaultTcm;
+    private final ToolExecutionInterceptorRegistry interceptorRegistry;
     private final WorkerProperties props;
     private final OsSandbox sandbox;
     private final PermissionGate gate;
@@ -69,6 +71,7 @@ public class AgentBuilder {
     public AgentBuilder(ToolProviderRegistry toolRegistry,
             AdvisorProviderRegistry advisorRegistry,
             ToolCallingManager defaultTcm,
+            ToolExecutionInterceptorRegistry interceptorRegistry,
             WorkerProperties props,
             OsSandbox sandbox,
             PermissionGate gate,
@@ -80,6 +83,7 @@ public class AgentBuilder {
         this.toolRegistry = toolRegistry;
         this.advisorRegistry = advisorRegistry;
         this.defaultTcm = defaultTcm;
+        this.interceptorRegistry = interceptorRegistry;
         this.props = props;
         this.sandbox = sandbox;
         this.gate = gate;
@@ -226,8 +230,11 @@ public class AgentBuilder {
                     List.copyOf(tools), emitter, properties);
             entity.conversation.addAll(conversation);
 
-            // 2. 装配 TCM（死循环守卫装饰）
-            ToolCallingManager tcm = wrapWithGuardIfNeeded(defaultTcm);
+            // 2. 装配 TCM：per-run InterceptingToolCallingManager（持 properties，替代 ThreadLocal）
+            //    → 可选 LoopRepeatGuardToolManager 装饰
+            ToolCallingManager interceptingTcm = new InterceptingToolCallingManager(
+                    defaultTcm, interceptorRegistry, properties);
+            ToolCallingManager tcm = wrapWithGuardIfNeeded(interceptingTcm);
 
             // 3. 聚合 advisor：创建 AdvisorContext → 遍历 registry → appliesTo → create → 排序
             AdvisorContextImpl advCtx = createAdvisorContext(entity, tcm);

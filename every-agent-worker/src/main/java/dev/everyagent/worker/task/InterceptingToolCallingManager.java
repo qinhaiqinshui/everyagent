@@ -14,22 +14,25 @@ import org.springframework.ai.tool.definition.ToolDefinition;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * per-run 拦截工具调用管理器（非单例）。
+ *
+ * <p>properties 作为构造参数直接持有，不依赖 ThreadLocal——reactive 流的工具执行
+ * 可能切换到 boundedElastic 线程，ThreadLocal 不可靠。每 run 新建实例，状态隔离。
+ */
 public class InterceptingToolCallingManager implements ToolCallingManager {
 
     private final ToolCallingManager delegate;
     private final ToolExecutionInterceptorRegistry interceptorRegistry;
     private final ToolExecutionChainExecutor chainExecutor = new ToolExecutionChainExecutor();
-
-    private static final ThreadLocal<Map<String, Object>> CURRENT_PROPERTIES = new ThreadLocal<>();
-
-    public static void setCurrentProperties(Map<String, Object> props) { CURRENT_PROPERTIES.set(props); }
-    public static void clearCurrentProperties() { CURRENT_PROPERTIES.remove(); }
-    public static Map<String, Object> currentProperties() { return CURRENT_PROPERTIES.get(); }
+    private final Map<String, Object> properties;
 
     public InterceptingToolCallingManager(ToolCallingManager delegate,
-            ToolExecutionInterceptorRegistry interceptorRegistry) {
+            ToolExecutionInterceptorRegistry interceptorRegistry,
+            Map<String, Object> properties) {
         this.delegate = delegate;
         this.interceptorRegistry = interceptorRegistry;
+        this.properties = properties;
     }
 
     @Override
@@ -52,8 +55,7 @@ public class InterceptingToolCallingManager implements ToolCallingManager {
             return delegate.executeToolCalls(prompt, chatResponse);
         }
         List<AssistantMessage.ToolCall> toolCalls = assistant.getToolCalls();
-        Map<String, Object> props = currentProperties();
-        ToolExecutionContext ctx = new ToolExecutionContextImpl(prompt, chatResponse, toolCalls, props);
+        ToolExecutionContext ctx = new ToolExecutionContextImpl(prompt, chatResponse, toolCalls, properties);
         return chainExecutor.run(interceptors, delegate, ctx);
     }
 
