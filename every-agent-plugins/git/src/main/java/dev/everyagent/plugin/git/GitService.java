@@ -4,12 +4,12 @@ import dev.everyagent.contract.json.Json;
 import dev.everyagent.plugin.git.NativeGit.CredentialSpec;
 import dev.everyagent.plugin.git.NativeGit.NativeResult;
 import dev.everyagent.plugin.git.NativeGit.StatusData;
-import dev.everyagent.worker.modules.Sandbox;
-import dev.everyagent.worker.modules.WorkspaceManager;
 import dev.everyagent.plugin.api.exception.AuthRequiredException;
 import dev.everyagent.plugin.api.exception.BadParamsException;
 import dev.everyagent.plugin.api.exception.NotFoundException;
 import dev.everyagent.plugin.api.rpc.RpcContext;
+import dev.everyagent.plugin.api.spi.WorkspaceManager;
+import dev.everyagent.plugin.api.spi.WorkspaceSandbox;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.node.ArrayNode;
 import tools.jackson.databind.node.ObjectNode;
@@ -45,7 +45,7 @@ public class GitService {
     }
 
     void status(RpcContext ctx) throws IOException {
-        Sandbox sb = sandbox(ctx);
+        WorkspaceSandbox sb = sandbox(ctx);
         StatusData s = statusData(sb);
         ObjectNode o = Json.obj();
         o.put("branch", branch(sb));
@@ -64,7 +64,7 @@ public class GitService {
 
     void log(RpcContext ctx) throws IOException {
         int max = (int) Math.min(ctx.optLongParam("max", 50), LOG_MAX);
-        Sandbox sb = sandbox(ctx);
+        WorkspaceSandbox sb = sandbox(ctx);
         List<String> args = new ArrayList<>(List.of(
                 "log", "-n", String.valueOf(max), "-z",
                 "--format=%H%x1f%h%x1f%an%x1f%ae%x1f%ct%x1f%s"));
@@ -117,7 +117,7 @@ public class GitService {
      * (历史路径可能已删除,不要求文件真实存在)。
      */
     void show(RpcContext ctx) throws IOException {
-        Sandbox sb = sandbox(ctx);
+        WorkspaceSandbox sb = sandbox(ctx);
         String commit = ctx.strParam("commit");
         if (commit == null || commit.isEmpty()) {
             throw new BadParamsException("git.show 需要 commit 参数");
@@ -245,7 +245,7 @@ public class GitService {
      * 对齐 old 链路:直接读两份全文,`git show HEAD:<path>` 拿 before(新文件 = HEAD 无 blob → created)。
      */
     void diff(RpcContext ctx) throws IOException {
-        Sandbox sb = sandbox(ctx);
+        WorkspaceSandbox sb = sandbox(ctx);
         String path = ctx.optStrParam("path", null);
         if (path == null || path.isEmpty()) {
             throw new BadParamsException("git.diff 需要 path 参数");
@@ -272,7 +272,7 @@ public class GitService {
     }
 
     void commit(RpcContext ctx) throws IOException {
-        Sandbox sb = sandbox(ctx);
+        WorkspaceSandbox sb = sandbox(ctx);
         String message = ctx.strParam("message");
         JsonNode pathsNode = ctx.params().path("paths");
         List<String> paths = new ArrayList<>();
@@ -322,7 +322,7 @@ public class GitService {
     }
 
     void pull(RpcContext ctx) throws IOException {
-        Sandbox sb = sandbox(ctx);
+        WorkspaceSandbox sb = sandbox(ctx);
         String url = originUrl(sb);
         NativeResult r = withAuth(ctx, sb, url, List.of("pull", "--no-rebase"));
         if (r.exitCode() != 0 && NativeGit.isNotRepo(r)) {
@@ -338,7 +338,7 @@ public class GitService {
     }
 
     void push(RpcContext ctx) throws IOException {
-        Sandbox sb = sandbox(ctx);
+        WorkspaceSandbox sb = sandbox(ctx);
         java.util.LinkedHashMap<String, String> remotes = remoteMap(sb);
         if (remotes.isEmpty()) {
             throw new RuntimeException("git.push 失败: 未配置任何远程仓库");
@@ -385,7 +385,7 @@ public class GitService {
      * 已暂存新增(added)跳过——对齐 VS Code:未跟踪文件没有「放弃更改」,只有删除。
      */
     void discard(RpcContext ctx) throws IOException {
-        Sandbox sb = sandbox(ctx);
+        WorkspaceSandbox sb = sandbox(ctx);
         JsonNode pathsNode = ctx.params().path("paths");
         List<String> paths = new ArrayList<>();
         if (pathsNode.isArray()) {
@@ -415,7 +415,7 @@ public class GitService {
 
     /** 在工作区根初始化本地仓库(可指定初始分支名;git init + symbolic-ref 全版本兼容)。 */
     void init(RpcContext ctx) throws IOException {
-        Sandbox sb = sandbox(ctx);
+        WorkspaceSandbox sb = sandbox(ctx);
         String initialBranch = ctx.optStrParam("initialBranch", null);
         String branch = initialBranch == null || initialBranch.isEmpty() ? "main" : initialBranch;
         Path root = sb.root();
@@ -439,7 +439,7 @@ public class GitService {
      * 否则拒绝(对齐 VS Code:克隆到非空目录不允许)。凭证走完整解析链。
      */
     void clone(RpcContext ctx) throws IOException {
-        Sandbox sb = sandbox(ctx);
+        WorkspaceSandbox sb = sandbox(ctx);
         String url = ctx.strParam("url");
         if (url == null || url.trim().isEmpty()) {
             throw new BadParamsException("克隆需要远端 URL");
@@ -470,7 +470,7 @@ public class GitService {
 
     /** 关联远程仓库(推送前若无远程,前端引导填入)。 */
     void remoteAdd(RpcContext ctx) throws IOException {
-        Sandbox sb = sandbox(ctx);
+        WorkspaceSandbox sb = sandbox(ctx);
         String name = ctx.optStrParam("name", "origin");
         String url = ctx.strParam("url");
         if (url == null || url.trim().isEmpty()) {
@@ -486,7 +486,7 @@ public class GitService {
 
     /** 列出已关联远程(供前端判断是否需要引导关联)。 */
     void remoteList(RpcContext ctx) throws IOException {
-        Sandbox sb = sandbox(ctx);
+        WorkspaceSandbox sb = sandbox(ctx);
         ArrayNode remotes = Json.arr();
         remoteMap(sb).forEach((n, u) -> remotes.add(Json.obj().put("name", n).put("url", u)));
         ctx.ok(Json.obj().set("remotes", remotes));
@@ -498,7 +498,7 @@ public class GitService {
      * 后续 clone/pull/push 由凭证解析链自动复用(经 askpass env 注入,不经协议)。
      */
     void credentialSave(RpcContext ctx) throws IOException {
-        Sandbox sb = sandbox(ctx);
+        WorkspaceSandbox sb = sandbox(ctx);
         String username = ctx.strParam("username");
         String password = ctx.strParam("password");
         String host = ctx.optStrParam("host", null);
@@ -527,7 +527,7 @@ public class GitService {
      * ④ 仍失败/无凭证 → 抛 {@link AuthRequiredException} → rpc.err code=AUTH_REQUIRED
      *    (消息带 host),前端据此弹窗收集账号密码。
      */
-    private NativeResult withAuth(RpcContext ctx, Sandbox sb, String url, List<String> args)
+    private NativeResult withAuth(RpcContext ctx, WorkspaceSandbox sb, String url, List<String> args)
             throws IOException {
         String username = ctx.optStrParam("username", null);
         String password = ctx.optStrParam("password", null);
@@ -561,7 +561,7 @@ public class GitService {
     }
 
     /** 自动同步静默档凭证:本机默认(credential.helper/ssh-agent)优先,工作区加密凭证兜底。不弹窗。 */
-    private CredentialSpec silentCredential(Sandbox sb, String url) {
+    private CredentialSpec silentCredential(WorkspaceSandbox sb, String url) {
         if (url != null) {
             String host = hostOf(url);
             if (host != null) {
@@ -609,7 +609,7 @@ public class GitService {
      * 列出所有已配置远程(name → url,按 {@code git remote -v} 顺序)。
      * 非 git 仓库抛 {@link NotFoundException};其他失败抛 {@link RuntimeException}。
      */
-    private java.util.LinkedHashMap<String, String> remoteMap(Sandbox sb) throws IOException {
+    private java.util.LinkedHashMap<String, String> remoteMap(WorkspaceSandbox sb) throws IOException {
         NativeResult r = git.runRead(sb.root(), List.of("remote", "-v"), CredentialSpec.none());
         if (r.exitCode() != 0) {
             if (NativeGit.isNotRepo(r)) {
@@ -633,7 +633,7 @@ public class GitService {
     }
 
     /** 当前仓库 origin 远程 URL(未关联远程返回 null)。 */
-    private String originUrl(Sandbox sb) {
+    private String originUrl(WorkspaceSandbox sb) {
         try {
             NativeResult r = git.runRead(sb.root(), List.of("remote", "get-url", "origin"),
                     CredentialSpec.none());
@@ -646,12 +646,12 @@ public class GitService {
     // ---- 内部 ----
 
     /** 按调用的 workspace 参数(必填)绑定沙箱。 */
-    private Sandbox sandbox(RpcContext ctx) throws IOException {
-        return new Sandbox(workspaces.resolve(ctx.strParam("workspace")));
+    private WorkspaceSandbox sandbox(RpcContext ctx) throws IOException {
+        return workspaces.sandboxFor(ctx.strParam("workspace"));
     }
 
     /** 当前分支名(非 git 仓库 / detached 返回空串;不因分支获取失败使 status 失败)。 */
-    private String branch(Sandbox sb) {
+    private String branch(WorkspaceSandbox sb) {
         try {
             NativeResult r = git.runRead(sb.root(), List.of("symbolic-ref", "--short", "-q", "HEAD"),
                     CredentialSpec.none());
@@ -662,7 +662,7 @@ public class GitService {
     }
 
     /** status 数据(非 git 仓库抛 NotFoundException)。 */
-    private StatusData statusData(Sandbox sb) throws IOException {
+    private StatusData statusData(WorkspaceSandbox sb) throws IOException {
         NativeResult r = git.runRead(sb.root(), List.of(
                 "status", "--porcelain=v1", "-z", "--untracked-files=all"), CredentialSpec.none());
         if (r.exitCode() != 0) {
@@ -675,7 +675,7 @@ public class GitService {
     }
 
     /** 当前分支是否有上游跟踪分支(纯本地,不触网)。 */
-    private boolean hasUpstream(Sandbox sb) {
+    private boolean hasUpstream(WorkspaceSandbox sb) {
         try {
             NativeResult r = git.runRead(sb.root(), List.of(
                     "rev-parse", "--abbrev-ref", "@{upstream}"), CredentialSpec.none());
@@ -691,7 +691,7 @@ public class GitService {
      * 角标只表达「有已提交未推送到远端」,无上游时无法判定,不猜测。
      * 实现:git rev-list --left-right --count @{upstream}...HEAD → 输出「behind ahead」。
      */
-    private int[] aheadBehind(Sandbox sb) {
+    private int[] aheadBehind(WorkspaceSandbox sb) {
         try {
             NativeResult r = git.runRead(sb.root(), List.of(
                     "rev-list", "--left-right", "--count", "@{upstream}...HEAD"), CredentialSpec.none());
@@ -716,7 +716,7 @@ public class GitService {
     }
 
     /** 是否有未合并冲突(porcelain 存在 unmerged 状态码)。 */
-    private boolean hasConflicts(Sandbox sb) throws IOException {
+    private boolean hasConflicts(WorkspaceSandbox sb) throws IOException {
         NativeResult r = git.runRead(sb.root(), List.of("status", "--porcelain=v1", "-z"),
                 CredentialSpec.none());
         return !NativeGit.parseStatus(r.stdout()).conflicting().isEmpty();
@@ -779,7 +779,7 @@ public class GitService {
      */
     public SyncResult syncRemote(String workspaceRoot, String commitMessage) {
         try {
-            Sandbox sb = new Sandbox(workspaces.resolve(workspaceRoot));
+            WorkspaceSandbox sb = workspaces.sandboxFor(workspaceRoot);
             NativeResult gitDir = git.runRead(sb.root(), List.of("rev-parse", "--git-dir"),
                     CredentialSpec.none());
             if (gitDir.exitCode() != 0) {

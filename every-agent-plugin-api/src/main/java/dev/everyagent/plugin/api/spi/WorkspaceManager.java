@@ -21,6 +21,18 @@ public interface WorkspaceManager {
     Path defaultRoot();
 
     /**
+     * 解析工作区根（校验 + 缓存）并返回绑定该工作区的路径沙箱。
+     *
+     * <p>fs.* / git.* 等 RPC 经此获取 {@link WorkspaceSandbox}，按调用的 {@code workspace}
+     * 参数（worker 机器绝对路径）绑定工作区根，后续相对路径经沙箱校验不越界。
+     * 不写注册表（浏览任意合法目录不改变注册表，工作区因任务而注册）。
+     *
+     * @param raw 工作区根绝对路径
+     * @return 绑定该工作区根的路径沙箱
+     */
+    WorkspaceSandbox sandboxFor(String raw) throws java.io.IOException;
+
+    /**
      * 清理注册表中已失效的工作区根（目录不存在），返回当前全部存活挂载根路径列表。
      *
      * <p>沙箱插件（如 wsl-ubuntu）经此获取全部工作区的宿主路径，用于批量挂载进发行版。

@@ -6,12 +6,16 @@ import dev.everyagent.plugin.api.config.WorkerConfig;
 import dev.everyagent.plugin.api.event.StreamEmitter;
 import dev.everyagent.plugin.api.interaction.InteractionService;
 import dev.everyagent.plugin.api.spi.IdGenerator;
+import dev.everyagent.plugin.api.spi.NativeExec;
 import dev.everyagent.plugin.api.spi.SandboxBackend;
 import dev.everyagent.plugin.api.spi.TokenEstimator;
 import dev.everyagent.plugin.api.permission.TaskInfo;
 import dev.everyagent.plugin.api.proto.ShortIds;
 import dev.everyagent.plugin.api.proto.SnowflakeId;
+import dev.everyagent.plugin.api.task.StoredTaskInfo;
+import dev.everyagent.plugin.api.task.TaskRuntime;
 import dev.everyagent.plugin.api.task.TaskService;
+import dev.everyagent.plugin.api.task.TaskStoreService;
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.modules.WorkspaceManager;
 import dev.everyagent.worker.agent.AgentFactoryImpl;
@@ -19,6 +23,7 @@ import dev.everyagent.worker.hub.EventSink;
 import dev.everyagent.worker.interaction.InteractionServiceImpl;
 import dev.everyagent.worker.os.OsSandbox;
 import dev.everyagent.worker.task.TaskManager;
+import dev.everyagent.worker.task.TaskStore;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Component;
 
@@ -34,6 +39,7 @@ public class WorkerServicesImpl implements WorkerServices {
     private final WorkspaceManager workspaces;
     private final AtomicReference<TokenEstimator> tokenEstimator;
     private final TaskManager taskManager;
+    private final TaskStore taskStore;
     private final InteractionServiceImpl interaction;
     private final WorkerProperties workerProperties;
     private final EventSink eventSink;
@@ -42,6 +48,7 @@ public class WorkerServicesImpl implements WorkerServices {
 
     public WorkerServicesImpl(OsSandbox sandbox, WorkspaceManager workspaces,
             TokenEstimator tokenEstimator, @Lazy TaskManager taskManager,
+            TaskStore taskStore,
             InteractionServiceImpl interaction,
             WorkerProperties workerProperties, EventSink eventSink,
             AgentFactoryImpl agentFactory) {
@@ -49,6 +56,7 @@ public class WorkerServicesImpl implements WorkerServices {
         this.workspaces = workspaces;
         this.tokenEstimator = new AtomicReference<>(tokenEstimator);
         this.taskManager = taskManager;
+        this.taskStore = taskStore;
         this.interaction = interaction;
         this.workerProperties = workerProperties;
         this.eventSink = eventSink;
@@ -77,6 +85,11 @@ public class WorkerServicesImpl implements WorkerServices {
     }
 
     @Override
+    public NativeExec nativeExec() {
+        return sandbox;
+    }
+
+    @Override
     public dev.everyagent.plugin.api.spi.WorkspaceManager workspaces() {
         return workspaces;
     }
@@ -90,8 +103,13 @@ public class WorkerServicesImpl implements WorkerServices {
     public TaskService task() {
         return new TaskService() {
             @Override
-            public TaskInfo get(String taskId) {
+            public TaskRuntime get(String taskId) {
                 return taskManager.get(taskId);
+            }
+
+            @Override
+            public StoredTaskInfo diskEntry(String taskId) {
+                return taskManager.diskEntry(taskId);
             }
 
             @Override
@@ -99,6 +117,11 @@ public class WorkerServicesImpl implements WorkerServices {
                 taskManager.publishTaskUpdated(taskId);
             }
         };
+    }
+
+    @Override
+    public TaskStoreService store() {
+        return taskStore;
     }
 
     @Override

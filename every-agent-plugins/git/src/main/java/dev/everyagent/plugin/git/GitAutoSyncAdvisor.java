@@ -1,7 +1,7 @@
 package dev.everyagent.plugin.git;
 
-import dev.everyagent.worker.agent.AgentEntity;
-import dev.everyagent.worker.task.TaskEntry;
+import dev.everyagent.plugin.api.agent.AgentContext;
+import dev.everyagent.plugin.api.task.TaskRuntime;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClientRequest;
@@ -43,12 +43,12 @@ public class GitAutoSyncAdvisor implements BaseAdvisor {
     /** 位于 SlashTokenResolveAdvisor(+150) 之前、ToolCallingAdvisor(+300) 之外。 */
     private static final int ORDER = Ordered.HIGHEST_PRECEDENCE + 140;
 
-    private final AgentEntity a;
+    private final AgentContext a;
     private final GitService gitService;
     /** 本轮是否自动同步(per-request 状态,advisor 实例随 forMain 新建而物化)。 */
     private volatile boolean autoSync = false;
 
-    public GitAutoSyncAdvisor(AgentEntity a, GitService gitService) {
+    public GitAutoSyncAdvisor(AgentContext a, GitService gitService) {
         this.a = a;
         this.gitService = gitService;
     }
@@ -94,10 +94,10 @@ public class GitAutoSyncAdvisor implements BaseAdvisor {
 
     /** 执行「完成后同步」:完整同步(同 Git 面板同步按钮),静默模式,全部异常兜底为日志。 */
     private void runAutoSync() {
-        TaskEntry t = (TaskEntry) a.properties.get("taskEntry");
+        TaskRuntime t = (TaskRuntime) a.properties().get("taskEntry");
         try {
             GitService.SyncResult result = gitService.syncRemote(
-                    t.workspaceRoot, GitAutoSyncToken.buildCommitMessage(t.taskId));
+                    t.workspaceRoot(), GitAutoSyncToken.buildCommitMessage(t.taskId()));
             switch (result.status()) {
                 case SUCCESS -> log.info("自动同步完成: {}", result.message());
                 case NOT_INITIALIZED, NO_REMOTE, NOOP ->

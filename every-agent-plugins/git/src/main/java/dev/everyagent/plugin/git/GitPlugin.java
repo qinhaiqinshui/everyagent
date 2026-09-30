@@ -2,9 +2,9 @@ package dev.everyagent.plugin.git;
 
 import dev.everyagent.plugin.api.EveryAgentPlugin;
 import dev.everyagent.plugin.api.WorkerPluginContext;
-import dev.everyagent.worker.config.WorkerProperties;
-import dev.everyagent.worker.modules.WorkspaceManager;
-import dev.everyagent.worker.os.OsSandbox;
+import dev.everyagent.plugin.api.config.WorkerConfig;
+import dev.everyagent.plugin.api.spi.NativeExec;
+import dev.everyagent.plugin.api.spi.WorkspaceManager;
 
 /**
  * Git 插件入口。
@@ -20,9 +20,9 @@ public class GitPlugin implements EveryAgentPlugin {
 
     @Override
     public void activate(WorkerPluginContext ctx) {
-        WorkerProperties props = ctx.getService(WorkerProperties.class);
-        OsSandbox sandbox = (OsSandbox) ctx.services().sandbox();
-        WorkspaceManager workspaces = ctx.getService(WorkspaceManager.class);
+        WorkerConfig props = ctx.services().config();
+        NativeExec sandbox = ctx.services().nativeExec();
+        WorkspaceManager workspaces = ctx.services().workspaces();
 
         // 1. 实例化业务类
         NativeGit git = new NativeGit(props, sandbox);

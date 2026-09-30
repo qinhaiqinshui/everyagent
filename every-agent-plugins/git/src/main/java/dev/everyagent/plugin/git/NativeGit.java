@@ -1,8 +1,8 @@
 package dev.everyagent.plugin.git;
 
-import dev.everyagent.worker.config.WorkerProperties;
-import dev.everyagent.worker.os.OsSandbox;
+import dev.everyagent.plugin.api.config.WorkerConfig;
 import dev.everyagent.plugin.api.spi.ExecResult;
+import dev.everyagent.plugin.api.spi.NativeExec;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -42,8 +42,8 @@ public class NativeGit {
 
     private static final Logger log = LoggerFactory.getLogger(NativeGit.class);
 
-    private final WorkerProperties props;
-    private final OsSandbox sandbox;
+    private final WorkerConfig props;
+    private final NativeExec sandbox;
     private final boolean windows = System.getProperty("os.name").toLowerCase(Locale.ROOT).contains("win");
 
     /** git 可执行文件定位缓存(null = 未探测;定位失败置 probeFailed,不再重试)。 */
@@ -90,7 +90,7 @@ public class NativeGit {
             "git 不可用: 未找到 git 可执行文件(请安装 Git for Windows / git,"
                     + "或在 worker.git.executable 配置其路径)";
 
-    public NativeGit(WorkerProperties props, OsSandbox sandbox) {
+    public NativeGit(WorkerConfig props, NativeExec sandbox) {
         this.props = props;
         this.sandbox = sandbox;
     }
@@ -100,13 +100,13 @@ public class NativeGit {
     /** 执行 git 读命令:加 --no-optional-locks,不进写锁(并发安全)。 */
     public NativeResult runRead(Path workspace, List<String> args, CredentialSpec credential)
             throws IOException {
-        return run(workspace, args, true, credential, props.getGit().getTimeoutMs());
+        return run(workspace, args, true, credential, props.git().timeoutMs());
     }
 
     /** 执行 git 写命令:per-workspace 串行锁,不加 --no-optional-locks。 */
     public NativeResult runWrite(Path workspace, List<String> args, CredentialSpec credential)
             throws IOException {
-        return run(workspace, args, false, credential, props.getGit().getTimeoutMs());
+        return run(workspace, args, false, credential, props.git().timeoutMs());
     }
 
     /** 执行 git 写命令 + 自定义超时(clone 大仓库等)。 */
@@ -341,7 +341,7 @@ public class NativeGit {
 
     /** 探测顺序:配置 → 常见安装路径(Windows)/标准路径(POSIX) → PATH 兜底。 */
     private String discover() {
-        String configured = props.getGit().getExecutable();
+        String configured = props.git().executable();
         if (configured != null && !configured.isBlank()) {
             Path p = Path.of(configured.trim());
             if (Files.isRegularFile(p)) {

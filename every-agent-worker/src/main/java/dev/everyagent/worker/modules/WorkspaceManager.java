@@ -179,6 +179,12 @@ public class WorkspaceManager implements dev.everyagent.plugin.api.spi.Workspace
         return root;
     }
 
+    /** plugin-api {@link dev.everyagent.plugin.api.spi.WorkspaceManager#sandboxFor}:解析工作区根并绑定路径沙箱。 */
+    @Override
+    public dev.everyagent.plugin.api.spi.WorkspaceSandbox sandboxFor(String raw) throws IOException {
+        return new Sandbox(resolve(raw));
+    }
+
     /** 注册表快照(按注册时间升序)。 */
     public List<Registered> list() {
         List<Registered> out = new ArrayList<>(registry.values());

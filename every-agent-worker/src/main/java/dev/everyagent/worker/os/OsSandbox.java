@@ -3,6 +3,7 @@ package dev.everyagent.worker.os;
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.plugin.registry.SandboxProviderRegistry;
 import dev.everyagent.plugin.api.spi.ExecResult;
+import dev.everyagent.plugin.api.spi.NativeExec;
 import dev.everyagent.plugin.api.spi.SandboxBackend;
 import dev.everyagent.plugin.api.spi.SandboxProvider.SandboxConfig;
 
@@ -34,7 +35,7 @@ import java.util.concurrent.TimeoutException;
  * 不经本类 delegate。
  */
 @Component
-public final class OsSandbox implements SandboxBackend {
+public final class OsSandbox implements SandboxBackend, NativeExec {
 
     private static final Logger log = LoggerFactory.getLogger(OsSandbox.class);
 
