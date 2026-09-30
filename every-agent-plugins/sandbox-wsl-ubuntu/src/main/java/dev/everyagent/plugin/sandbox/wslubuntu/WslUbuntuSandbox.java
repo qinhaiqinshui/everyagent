@@ -134,21 +134,25 @@ public final class WslUbuntuSandbox {
         }
 
         List<String> cmd = WslCommon.wslCmd(distro, "-u", "root", "-e", "python3", runnerInDistro);
+        // p 提升到 try 外声明:InterruptedException 收尾路径(catch 块)需引用它收割进程;
+        // pb.start() 尚未执行就被中断时为 null,收割前判空
+        Process p = null;
         try {
             ProcessBuilder pb = new ProcessBuilder(cmd);
             pb.environment().remove("WSLENV");
             pb.environment().put("WSL_UTF8", "1");
-            Process p = pb.start();
+            Process proc = pb.start();
+            p = proc;
             exec.submit(() -> {
-                try (OutputStream os = p.getOutputStream()) {
+                try (OutputStream os = proc.getOutputStream()) {
                     os.write(JSON.writeValueAsBytes(payload));
                     os.flush();
                 } catch (IOException e) {
                     // 子进程先退/管道断:写入失败无害,读取侧自然收尾
                 }
             });
-            Future<String> out = exec.submit(() -> drain(p.getInputStream()));
-            Future<String> err = exec.submit(() -> drain(p.getErrorStream()));
+            Future<String> out = exec.submit(() -> drain(proc.getInputStream()));
+            Future<String> err = exec.submit(() -> drain(proc.getErrorStream()));
             boolean aborted = false;
             String outText;
             String errText;
@@ -157,22 +161,36 @@ public final class WslUbuntuSandbox {
                 errText = awaitQuiet(err);
             } catch (TimeoutException e) {
                 aborted = true;
-                p.destroyForcibly();
+                proc.destroyForcibly();
                 killGroup(distro, runId, exec);
                 outText = awaitQuiet(out);
                 errText = awaitQuiet(err) + "\n[exec 超时中止: >" + cfg.timeoutMs() + "ms]";
             } catch (ExecutionException e) {
+                // 读流任务异常(罕见):wsl.exe 可能仍在运行,防御性收割,
+                // 防止发行版内进程组(bash/mvn 等)泄漏为孤儿
                 outText = "";
                 errText = awaitQuiet(err);
+                proc.destroyForcibly();
+                killGroup(distro, runId, exec);
             }
-            int code = aborted ? -1 : p.waitFor();
+            int code = aborted ? -1 : proc.waitFor();
             return new WslCommon.OsResult(WslCommon.capOutput(outText, maxOut),
                     WslCommon.capOutput(errText, maxOut), code, aborted);
         } catch (IOException e) {
             return new WslCommon.OsResult("", "exec 启动失败(wsl.exe / 发行版 "
                     + WslCommon.distroLabel(distro) + "): " + e.getMessage(), 1, false);
         } catch (InterruptedException e) {
+            // 任务停止/取消(TaskManager 对运行 future 调 cancel(true))会中断工具执行线程,
+            // 阻塞在 out.get() 的等待抛 InterruptedException 到达这里:必须与超时路径对齐收割
+            // wsl.exe + 发行版内进程组(killGroup 按 runner 登记的 pgid pkill -9),
+            // 否则发行版内 bash/mvn 等前台命令全部泄漏为孤儿——
+            // 实测孤儿 mvn 持续占用 CPU 并锁住 target 目录,还会破坏后续构建(clean 删一半)。
+            // killGroup 幂等无害:若命令已自然结束/pgid 未登记,pkill 找不到目标即空操作。
             Thread.currentThread().interrupt();
+            if (p != null) {
+                p.destroyForcibly();
+            }
+            killGroup(distro, runId, exec);
             return new WslCommon.OsResult("", "exec 被中断", 1, false);
         }
     }
@@ -357,6 +375,11 @@ public final class WslUbuntuSandbox {
     private static String awaitQuiet(Future<String> task) {
         try {
             return task.get(5, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            // 恢复中断位:任务停止信号不得在收尾等待中被吞——
+            // 丢失后 p.waitFor() 感知不到停止,泄漏运行中的 wsl.exe 与发行版内进程
+            Thread.currentThread().interrupt();
+            return "";
         } catch (Exception e) {
             return "";
         }
