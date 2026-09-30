@@ -38,7 +38,7 @@ import java.util.Set;
  * 与「offset 校准」两种含义(四参入口的 overhead 仍只表示固定预留,等价于原 reserve)。
  *
  * <p>token 估算:无 tokenizer,用 UTF-8 bytes/3 保守粗估(中文 1 字 ≈ 1 token,英文略高估),
- * 与 {@code ContextOverflow} 同口径。
+ * 与 {@code WorkerConfig.DEFAULT_CONTEXT_WINDOW_TOKENS} 同口径。
  */
 public final class ContextCompressor {
 

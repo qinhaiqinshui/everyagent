@@ -1,9 +1,9 @@
 package dev.everyagent.plugin.adaptivemaxtokens;
 
 import com.openai.errors.OpenAIServiceException;
-import dev.everyagent.worker.config.WorkerProperties;
-import dev.everyagent.worker.agent.AgentEntity;
-import dev.everyagent.worker.task.TaskEntry;
+import dev.everyagent.plugin.api.config.WorkerConfig;
+import dev.everyagent.plugin.api.agent.AgentContext;
+import dev.everyagent.plugin.api.task.TaskRuntime;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClientRequest;
@@ -49,8 +49,8 @@ public class AdaptiveMaxTokensAdvisor implements StreamAdvisor {
     /** finish_reason=length 语义:输出量达上限但未完成。 */
     private static final Set<String> LENGTH = Set.of("length");
 
-    private final AgentEntity a;
-    private final WorkerProperties.Limits.AdaptiveMaxTokens cfg;
+    private final AgentContext a;
+    private final WorkerConfig.Limits.AdaptiveMaxTokens cfg;
     private final long effectiveCeiling;
 
     // ---- per-run 实例字段(任务级持续生效) ----
@@ -66,7 +66,7 @@ public class AdaptiveMaxTokensAdvisor implements StreamAdvisor {
     /** 是否已因 400 回退(回退后停止继续上调)。 */
     private boolean rolledBack400 = false;
 
-    public AdaptiveMaxTokensAdvisor(AgentEntity a, WorkerProperties.Limits.AdaptiveMaxTokens cfg,
+    public AdaptiveMaxTokensAdvisor(AgentContext a, WorkerConfig.Limits.AdaptiveMaxTokens cfg,
             long effectiveCeiling) {
         this.a = a;
         this.cfg = cfg;
@@ -87,7 +87,7 @@ public class AdaptiveMaxTokensAdvisor implements StreamAdvisor {
     @Override
     public Flux<ChatClientResponse> adviseStream(ChatClientRequest request, StreamAdvisorChain chain) {
         Integer baseMt = maxTokensOf(request);
-        if (!cfg.isEnabled() || baseMt == null || baseMt <= 0) {
+        if (!cfg.enabled() || baseMt == null || baseMt <= 0) {
             // 未配置 base maxTokens 或 disabled → 直通,不干预。
             return chain.nextStream(request);
         }
@@ -183,16 +183,16 @@ public class AdaptiveMaxTokensAdvisor implements StreamAdvisor {
      */
     private Flux<ChatClientResponse> upgradeAndRetry(ChatClientRequest request,
             StreamAdvisorChain chain, Throwable error) {
-        TaskEntry t = (TaskEntry) a.properties.get("taskEntry");
+        TaskRuntime t = (TaskRuntime) a.properties().get("taskEntry");
         // 400 回退:重试轮收到 400 类错误(provider 拒绝超出模型真实上限),
         // 一次性回退到触发升级前的上一个 budget 并停止继续上调。
         if (error != null && is400Error(error) && attempt > 0) {
-            long prevBudget = (long) (baseMaxTokens * Math.pow(cfg.getMultiplier(), attempt - 1));
+            long prevBudget = (long) (baseMaxTokens * Math.pow(cfg.multiplier(), attempt - 1));
             prevBudget = Math.min(prevBudget, effectiveCeiling);
             currentBudget = prevBudget;
             rolledBack400 = true;
             log.warn("任务 {} agent {} 升级后收到 400 错误({}),回退 budget 至 {} 并停止上调",
-                    t.taskId, a.agentId, error.getMessage(), currentBudget);
+                    t.taskId(), a.agentId(), error.getMessage(), currentBudget);
             // 用回退后的 budget 重试一次。
             ChatClientRequest newRequest = rewriteMaxTokens(request, currentBudget);
             return doRetry(newRequest, chain);
@@ -207,12 +207,12 @@ public class AdaptiveMaxTokensAdvisor implements StreamAdvisor {
         }
 
         attempt++;
-        long newBudget = (long) (baseMaxTokens * Math.pow(cfg.getMultiplier(), attempt));
+        long newBudget = (long) (baseMaxTokens * Math.pow(cfg.multiplier(), attempt));
         newBudget = Math.min(newBudget, effectiveCeiling);
 
-        if (attempt > cfg.getMaxRetries() || (newBudget >= effectiveCeiling && currentBudget >= effectiveCeiling)) {
+        if (attempt > cfg.maxRetries() || (newBudget >= effectiveCeiling && currentBudget >= effectiveCeiling)) {
             log.warn("任务 {} agent {} 自适应预算耗尽:attempt={}, currentBudget={}, ceiling={}",
-                    t.taskId, a.agentId, attempt, currentBudget, effectiveCeiling);
+                    t.taskId(), a.agentId(), attempt, currentBudget, effectiveCeiling);
             return Flux.error(new AdaptiveBudgetExhaustedException(
                     "自适应输出预算已放大至 ceiling=" + effectiveCeiling
                             + " 仍未获得有效结果(attempt=" + attempt + ")。"
@@ -223,7 +223,7 @@ public class AdaptiveMaxTokensAdvisor implements StreamAdvisor {
 
         currentBudget = newBudget;
         log.warn("任务 {} agent {} finish_reason=length,升级 maxTokens 至 {}(attempt={}/{})",
-                t.taskId, a.agentId, currentBudget, attempt, cfg.getMaxRetries());
+                t.taskId(), a.agentId(), currentBudget, attempt, cfg.maxRetries());
 
         ChatClientRequest newRequest = rewriteMaxTokens(request, currentBudget);
         // 自包装重试:doRetry 自带完整 doOnNext / filter / switchIfEmpty / onErrorResume 链,
@@ -236,18 +236,18 @@ public class AdaptiveMaxTokensAdvisor implements StreamAdvisor {
      * → currentBudget 衰减回 base。在每轮流结束时检查 usage。
      */
     private void checkLowWatermark(long completionTokens) {
-        TaskEntry t = (TaskEntry) a.properties.get("taskEntry");
+        TaskRuntime t = (TaskRuntime) a.properties().get("taskEntry");
         if (currentBudget <= 0 || attempt <= 0) {
             // 未升级过,无需回落。
             return;
         }
-        long threshold = (long) (currentBudget * cfg.getFallbackRatio());
+        long threshold = (long) (currentBudget * cfg.fallbackRatio());
         if (completionTokens < threshold) {
             lowWaterRounds++;
-            if (lowWaterRounds >= cfg.getFallbackRounds()) {
+            if (lowWaterRounds >= cfg.fallbackRounds()) {
                 log.info("任务 {} agent {} 连续 {} 轮低输出({} < {}×{}={}),budget 衰减回 base",
-                        t.taskId, a.agentId, lowWaterRounds, completionTokens,
-                        currentBudget, cfg.getFallbackRatio(), threshold);
+                        t.taskId(), a.agentId(), lowWaterRounds, completionTokens,
+                        currentBudget, cfg.fallbackRatio(), threshold);
                 // 衰减回 base(通过重置 attempt 和 currentBudget 实现)。
                 attempt = 0;
                 currentBudget = baseMaxTokens;

@@ -2,7 +2,7 @@ package dev.everyagent.plugin.adaptivemaxtokens;
 
 import dev.everyagent.plugin.api.EveryAgentPlugin;
 import dev.everyagent.plugin.api.WorkerPluginContext;
-import dev.everyagent.worker.config.WorkerProperties;
+import dev.everyagent.plugin.api.config.WorkerConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -14,8 +14,8 @@ public class AdaptiveMaxTokensPlugin implements EveryAgentPlugin {
 
     @Override
     public void activate(WorkerPluginContext ctx) throws Exception {
-        WorkerProperties props = ctx.getService(WorkerProperties.class);
-        ctx.registerAdvisorProvider(new AdaptiveMaxTokensAdvisorProvider(props));
+        WorkerConfig config = ctx.services().config();
+        ctx.registerAdvisorProvider(new AdaptiveMaxTokensAdvisorProvider(config));
         log.info("[adaptive-max-tokens] 已注册 AdaptiveMaxTokensAdvisorProvider");
     }
 }

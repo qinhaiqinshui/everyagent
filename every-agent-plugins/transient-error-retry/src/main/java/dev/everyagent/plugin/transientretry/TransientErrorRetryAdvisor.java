@@ -4,11 +4,11 @@ import com.openai.errors.OpenAIIoException;
 import com.openai.errors.OpenAIRetryableException;
 import com.openai.errors.OpenAIServiceException;
 import dev.everyagent.plugin.api.model.EmitEvent;
-import dev.everyagent.worker.config.WorkerProperties;
+import dev.everyagent.plugin.api.config.WorkerConfig;
 import dev.everyagent.plugin.api.proto.SnowflakeId;
 import dev.everyagent.plugin.api.exception.AgentCancelledException;
-import dev.everyagent.worker.agent.AgentEntity;
-import dev.everyagent.worker.task.TaskEntry;
+import dev.everyagent.plugin.api.agent.AgentContext;
+import dev.everyagent.plugin.api.task.TaskRuntime;
 import dev.everyagent.plugin.api.event.EventPayloads;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -60,7 +60,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * 退避等待期间 dispose(任务取消)会取消 {@link Mono#delay},不再触发重订(与 n 的
  * 中止感知 delayWithProgress 等效)。
  *
- * <p>设计纪律:与 {@code WorkerToolEventAdvisor} 同构——per-run 物化(持 {@link AgentEntity}
+ * <p>设计纪律:与 {@code WorkerToolEventAdvisor} 同构——per-run 物化(持 {@link AgentContext}
  * 引用仅用于日志归属);重试计数与"已下发信号"标记是 per-subscription 状态
  * ({@code Flux.defer} 闭包捕获),多任务并发安全。
  *
@@ -76,11 +76,11 @@ public class TransientErrorRetryAdvisor implements CallAdvisor, StreamAdvisor {
     private static final Logger log = LoggerFactory.getLogger(TransientErrorRetryAdvisor.class);
 
     /** 日志归属 agent(只读 taskId/agentId,不发事件)。 */
-    private final AgentEntity a;
+    private final AgentContext a;
     /** 重试参数(worker.retry,默认与 n 护栏全局默认一致)。 */
-    private final WorkerProperties.Retry cfg;
+    private final WorkerConfig.Retry cfg;
 
-    public TransientErrorRetryAdvisor(AgentEntity a, WorkerProperties.Retry cfg) {
+    public TransientErrorRetryAdvisor(AgentContext a, WorkerConfig.Retry cfg) {
         this.a = a;
         this.cfg = cfg;
     }
@@ -108,20 +108,20 @@ public class TransientErrorRetryAdvisor implements CallAdvisor, StreamAdvisor {
                 ChatClientResponse response = current.nextCall(request);
                 if (attempt > 0) {
                     // 整波重试成功:仅此一条落盘(瞬态 attempt/progress 不落盘)。
-                    a.emitter.emit(EmitEvent.of(waveId, "retry", null, null,
+                    a.emitter().emit(EmitEvent.of(waveId, "retry", null, null,
                             "重试 " + attempt + " 次后已恢复", null, "resolved",
                             EventPayloads.retryResolvedMeta(attempt, totalDelayMs),
                             EmitEvent.Mode.REPLACE));
                 }
                 return response;
             } catch (RuntimeException e) {
-                if (!isRetryable(e) || ++attempt > cfg.getMaxRequestRetries()) {
+                if (!isRetryable(e) || ++attempt > cfg.maxRequestRetries()) {
                     if (attempt > 0) {
                         // 整波重试耗尽失败:仅此一条落盘。
-                        a.emitter.emit(EmitEvent.of(waveId, "retry", null, null,
+                        a.emitter().emit(EmitEvent.of(waveId, "retry", null, null,
                                 "重试 " + (attempt - 1) + " 次后仍失败", e.getMessage(), "exhausted",
                                 EventPayloads.retryExhaustedMeta(attempt - 1,
-                                        cfg.getMaxRequestRetries(), e.getMessage()),
+                                        cfg.maxRequestRetries(), e.getMessage()),
                                 EmitEvent.Mode.REPLACE));
                     }
                     throw e;
@@ -131,13 +131,13 @@ public class TransientErrorRetryAdvisor implements CallAdvisor, StreamAdvisor {
                 if (waveId == 0) {
                     waveId = SnowflakeId.next();
                 }
-                a.emitter.emit(EmitEvent.transientOf(waveId, "retry", null, null,
-                        EventPayloads.retrySummary(attempt, cfg.getMaxRequestRetries(), ms,
+                a.emitter().emit(EmitEvent.transientOf(waveId, "retry", null, null,
+                        EventPayloads.retrySummary(attempt, cfg.maxRequestRetries(), ms,
                                 e.getMessage()),
-                        EventPayloads.retryDetail(attempt, cfg.getMaxRequestRetries(),
+                        EventPayloads.retryDetail(attempt, cfg.maxRequestRetries(),
                                 ms, 0, ms, e.getMessage()),
                         "retrying",
-                        EventPayloads.retryMeta(attempt, cfg.getMaxRequestRetries(),
+                        EventPayloads.retryMeta(attempt, cfg.maxRequestRetries(),
                                 ms, 0, ms, e.getMessage()),
                         EmitEvent.Mode.REPLACE));
                 sleepBackoff(e, attempt);
@@ -187,7 +187,7 @@ public class TransientErrorRetryAdvisor implements CallAdvisor, StreamAdvisor {
     private Flux<ChatClientResponse> attemptStream(ChatClientRequest request, StreamAdvisorChain chain,
             StreamAdvisorChain original, AtomicBoolean emittedSignal, AtomicInteger retries,
             AtomicLong totalDelayMs, AtomicLong waveId) {
-        TaskEntry t = (TaskEntry) a.properties.get("taskEntry");
+        TaskRuntime t = (TaskRuntime) a.properties().get("taskEntry");
         return chain.nextStream(request)
                 .doOnNext(chunk -> {
                     if (hasSignal(chunk)) {
@@ -197,7 +197,7 @@ public class TransientErrorRetryAdvisor implements CallAdvisor, StreamAdvisor {
                 .doOnComplete(() -> {
                     // 重试过且最终成功:整波仅此一条落盘。
                     if (retries.get() > 0) {
-                        a.emitter.emit(EmitEvent.of(waveId.get(), "retry", null, null,
+                        a.emitter().emit(EmitEvent.of(waveId.get(), "retry", null, null,
                                 "重试 " + retries.get() + " 次后已恢复", null, "resolved",
                                 EventPayloads.retryResolvedMeta(retries.get(), totalDelayMs.get()),
                                 EmitEvent.Mode.REPLACE));
@@ -211,12 +211,12 @@ public class TransientErrorRetryAdvisor implements CallAdvisor, StreamAdvisor {
                         return Flux.error(error);
                     }
                     int attempt = retries.incrementAndGet();
-                    if (attempt > cfg.getMaxRequestRetries()) {
+                    if (attempt > cfg.maxRequestRetries()) {
                         // 整波重试耗尽失败:仅此一条落盘。
-                        a.emitter.emit(EmitEvent.of(waveId.get(), "retry", null, null,
+                        a.emitter().emit(EmitEvent.of(waveId.get(), "retry", null, null,
                                 "重试 " + (attempt - 1) + " 次后仍失败", error.getMessage(), "exhausted",
                                 EventPayloads.retryExhaustedMeta(attempt - 1,
-                                        cfg.getMaxRequestRetries(), error.getMessage()),
+                                        cfg.maxRequestRetries(), error.getMessage()),
                                 EmitEvent.Mode.REPLACE));
                         return Flux.error(error);
                     }
@@ -226,17 +226,17 @@ public class TransientErrorRetryAdvisor implements CallAdvisor, StreamAdvisor {
                     if (waveId.get() == 0) {
                         waveId.set(SnowflakeId.next());
                     }
-                    a.emitter.emit(EmitEvent.transientOf(waveId.get(), "retry", null, null,
-                            EventPayloads.retrySummary(attempt, cfg.getMaxRequestRetries(), ms, errMsg),
-                            EventPayloads.retryDetail(attempt, cfg.getMaxRequestRetries(),
+                    a.emitter().emit(EmitEvent.transientOf(waveId.get(), "retry", null, null,
+                            EventPayloads.retrySummary(attempt, cfg.maxRequestRetries(), ms, errMsg),
+                            EventPayloads.retryDetail(attempt, cfg.maxRequestRetries(),
                                     ms, 0, ms, errMsg),
                             "retrying",
-                            EventPayloads.retryMeta(attempt, cfg.getMaxRequestRetries(),
+                            EventPayloads.retryMeta(attempt, cfg.maxRequestRetries(),
                                     ms, 0, ms, errMsg),
                             EmitEvent.Mode.REPLACE));
                     log.warn("任务 {} agent {} 模型瞬时错误({}: {}),{}ms 后重试({}/{})",
-                            t.taskId, a.agentId, error.getClass().getSimpleName(),
-                            errMsg, ms, attempt, cfg.getMaxRequestRetries());
+                            t.taskId(), a.agentId(), error.getClass().getSimpleName(),
+                            errMsg, ms, attempt, cfg.maxRequestRetries());
                     return backoffAndRetry(ms, attempt, errMsg, request, original,
                             emittedSignal, retries, totalDelayMs, waveId);
                 });
@@ -257,12 +257,12 @@ public class TransientErrorRetryAdvisor implements CallAdvisor, StreamAdvisor {
                 .concatMap(i -> {
                     long remaining = Math.max(0, delayMs - (i + 1) * 1000);
                     long elapsed = delayMs - remaining;
-                    a.emitter.emit(EmitEvent.transientOf(waveId.get(), "retry", null, null,
-                            EventPayloads.retrySummary(attempt, cfg.getMaxRequestRetries(), remaining, error),
-                            EventPayloads.retryDetail(attempt, cfg.getMaxRequestRetries(),
+                    a.emitter().emit(EmitEvent.transientOf(waveId.get(), "retry", null, null,
+                            EventPayloads.retrySummary(attempt, cfg.maxRequestRetries(), remaining, error),
+                            EventPayloads.retryDetail(attempt, cfg.maxRequestRetries(),
                                     delayMs, elapsed, remaining, error),
                             "retrying",
-                            EventPayloads.retryMeta(attempt, cfg.getMaxRequestRetries(),
+                            EventPayloads.retryMeta(attempt, cfg.maxRequestRetries(),
                                     delayMs, elapsed, remaining, error),
                             EmitEvent.Mode.REPLACE));
                     if (i == ticks - 1) {
@@ -275,11 +275,11 @@ public class TransientErrorRetryAdvisor implements CallAdvisor, StreamAdvisor {
 
     /** 阻塞退避(仅非流式路径);中断 → 取消类异常穿透,交任务层收口为 cancelled。 */
     private void sleepBackoff(Throwable error, int attempt) {
-        TaskEntry t = (TaskEntry) a.properties.get("taskEntry");
+        TaskRuntime t = (TaskRuntime) a.properties().get("taskEntry");
         long ms = cfg.backoffMs(attempt);
         log.warn("任务 {} agent {} 模型瞬时错误({}: {}),{}ms 后重试({}/{})",
-                t.taskId, a.agentId, error.getClass().getSimpleName(), error.getMessage(),
-                ms, attempt, cfg.getMaxRequestRetries());
+                t.taskId(), a.agentId(), error.getClass().getSimpleName(), error.getMessage(),
+                ms, attempt, cfg.maxRequestRetries());
         try {
             Thread.sleep(ms);
         } catch (InterruptedException ie) {

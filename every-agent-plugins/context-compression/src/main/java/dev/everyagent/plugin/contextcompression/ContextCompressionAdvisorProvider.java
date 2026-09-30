@@ -1,10 +1,9 @@
 package dev.everyagent.plugin.contextcompression;
 
-import dev.everyagent.worker.config.WorkerProperties;
-import dev.everyagent.worker.plugin.AdvisorContextImpl;
+import dev.everyagent.plugin.api.config.WorkerConfig;
+import dev.everyagent.plugin.api.agent.AgentContext;
 import dev.everyagent.plugin.api.spi.AdvisorContext;
 import dev.everyagent.plugin.api.spi.AdvisorProvider;
-import dev.everyagent.worker.agent.AgentEntity;
 import org.springframework.ai.chat.client.advisor.ToolCallingAdvisor;
 import org.springframework.ai.chat.client.advisor.api.Advisor;
 
@@ -16,10 +15,10 @@ import org.springframework.ai.chat.client.advisor.api.Advisor;
  */
 public class ContextCompressionAdvisorProvider implements AdvisorProvider {
 
-    private final WorkerProperties props;
+    private final WorkerConfig config;
 
-    public ContextCompressionAdvisorProvider(WorkerProperties props) {
-        this.props = props;
+    public ContextCompressionAdvisorProvider(WorkerConfig config) {
+        this.config = config;
     }
 
     @Override
@@ -34,10 +33,10 @@ public class ContextCompressionAdvisorProvider implements AdvisorProvider {
 
     @Override
     public Advisor create(AdvisorContext ctx) {
-        AgentEntity a = (AgentEntity) ((AdvisorContextImpl) ctx).agentEntity();
-        WorkerProperties.Limits limits = props.getLimits();
-        ContextSummarizer summarizer = limits.isContextSummaryEnabled()
-                ? new LlmContextSummarizer(a.chatModel, limits.getContextSummaryMaxTokens())
+        AgentContext a = ctx.agentEntity();
+        WorkerConfig.Limits limits = config.limits();
+        ContextSummarizer summarizer = limits.contextSummaryEnabled()
+                ? new LlmContextSummarizer(a.chatModel(), limits.contextSummaryMaxTokens())
                 : null;
         return new ContextCompressionAdvisor(a, limits, summarizer);
     }

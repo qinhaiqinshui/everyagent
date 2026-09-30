@@ -1,12 +1,11 @@
 package dev.everyagent.plugin.contextcompression;
 
 import dev.everyagent.plugin.api.model.EmitEvent;
-import dev.everyagent.worker.config.WorkerProperties;
+import dev.everyagent.plugin.api.config.WorkerConfig;
 import dev.everyagent.plugin.api.proto.SnowflakeId;
 import dev.everyagent.plugin.api.event.Usage;
-import dev.everyagent.worker.agent.AgentEntity;
-import dev.everyagent.worker.task.TaskEntry;
-import dev.everyagent.worker.task.ContextOverflow;
+import dev.everyagent.plugin.api.agent.AgentContext;
+import dev.everyagent.plugin.api.task.TaskRuntime;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClientRequest;
@@ -42,15 +41,15 @@ import java.util.List;
  * 天然满足「每次工具结果提交前都计算一次上下文用量」;风暴压缩只改写发给模型的 instructions,
  * 工具循环、事件发射、工具执行(用完整 fullTurnHistory)均不受影响。
  *
- * <p>设计纪律:per-run 物化(持 {@link AgentEntity} 仅读快照与日志归属),无跨轮可变状态,
- * 多任务并发安全。阈值与配置取自 {@link WorkerProperties.Limits}(缺省已给出合理默认)。
+ * <p>设计纪律:per-run 物化(持 {@link AgentContext} 仅读快照与日志归属),无跨轮可变状态,
+ * 多任务并发安全。阈值与配置取自 {@link WorkerConfig.Limits}(缺省已给出合理默认)。
  */
 public class ContextCompressionAdvisor implements CallAdvisor, StreamAdvisor {
 
     private static final Logger log = LoggerFactory.getLogger(ContextCompressionAdvisor.class);
 
-    private final AgentEntity a;
-    private final WorkerProperties.Limits limits;
+    private final AgentContext a;
+    private final WorkerConfig.Limits limits;
     private final ContextSummarizer summarizer;
 
     /** 上轮实际发给模型的指令视图(含注入的提示),供下一轮 offset 校准。 */
@@ -60,7 +59,7 @@ public class ContextCompressionAdvisor implements CallAdvisor, StreamAdvisor {
     /** 已吸收进 baseline 的「完整历史」源消息条数(下标)。 */
     private int absorbed;
 
-    public ContextCompressionAdvisor(AgentEntity a, WorkerProperties.Limits limits, ContextSummarizer summarizer) {
+    public ContextCompressionAdvisor(AgentContext a, WorkerConfig.Limits limits, ContextSummarizer summarizer) {
         this.a = a;
         this.limits = limits;
         this.summarizer = summarizer;
@@ -89,11 +88,11 @@ public class ContextCompressionAdvisor implements CallAdvisor, StreamAdvisor {
 
     /** 检查并压缩;未触发/无需改写时也统一走「状态化发送视图」构造,保证 lastSent 口径一致。 */
     private ChatClientRequest maybeCompress(ChatClientRequest request) {
-        TaskEntry t = (TaskEntry) a.properties.get("taskEntry");
+        TaskRuntime t = (TaskRuntime) a.properties().get("taskEntry");
         if (request == null || request.prompt() == null) {
             return request;
         }
-        if (!limits.isContextCompressionEnabled()) {
+        if (!limits.contextCompressionEnabled()) {
             return request;
         }
         List<Message> messages = request.prompt().getInstructions();
@@ -103,18 +102,18 @@ public class ContextCompressionAdvisor implements CallAdvisor, StreamAdvisor {
 
         List<Message> full = request.prompt().getInstructions();
         long window = contextWindowTokens();
-        long trigger = ratio(window, limits.getContextTriggerRatio(), limits.getContextSafetyRatio());
-        long target = ratio(window, limits.getContextTargetRatio(), limits.getContextSafetyRatio());
-        long reserve = limits.getContextToolReserveTokens();
-        int maxToolChars = limits.getContextMaxToolResultChars();
+        long trigger = ratio(window, limits.contextTriggerRatio(), limits.contextSafetyRatio());
+        long target = ratio(window, limits.contextTargetRatio(), limits.contextSafetyRatio());
+        long reserve = limits.contextToolReserveTokens();
+        int maxToolChars = limits.contextMaxToolResultChars();
 
         // offset 校准:用「上轮实测 inputTokens - 上轮估算 lastSent」作为隐藏开销,校正
         // tokenizer 差异/注入提示/服务商计数误差;首轮、无实测或换模型时回退为固定 reserve。
         long overhead = reserve;
-        if (limits.isContextOffsetEnabled()) {
+        if (limits.contextOffsetEnabled()) {
             Usage last = a.lastRound();
             String lastModel = a.lastModel();
-            String currentModel = a.options == null ? null : a.options.getModel();
+            String currentModel = a.currentModel();
             if (last != null && last.inputTokens() > 0
                     && lastSent != null && !lastSent.isEmpty()
                     && lastModel != null && !lastModel.isEmpty()
@@ -146,32 +145,32 @@ public class ContextCompressionAdvisor implements CallAdvisor, StreamAdvisor {
         } else {
             // 压缩中 trace(只含 summary;进行中瞬态,完成后同 id 更新为持久)
             long compId = SnowflakeId.next();
-            a.emitter.emit(EmitEvent.transientOf(compId, "context.compression", null, null,
+            a.emitter().emit(EmitEvent.transientOf(compId, "context.compression", null, null,
                     "正在自动压缩上下文…(当前约 " + used + " token)", null, null, null,
                     EmitEvent.Mode.REPLACE));
 
-            ContextSummarizer sum = limits.isContextSummaryEnabled() ? summarizer : null;
+            ContextSummarizer sum = limits.contextSummaryEnabled() ? summarizer : null;
             ContextCompressor.Result r = ContextCompressor.compress(working, trigger, target, overhead, sum);
             if (!r.compressed()) {
                 toSend = working;
-                a.emitter.emit(EmitEvent.of(compId, "context.compression", null, null,
+                a.emitter().emit(EmitEvent.of(compId, "context.compression", null, null,
                         "已自动压缩上下文(无需改写)", null, null, null, EmitEvent.Mode.REPLACE));
             } else {
                 toSend = r.messages();
                 baseline = new ArrayList<>(r.messages());
                 absorbed = full.size();
                 long after = ContextCompressor.estimateTokens(toSend) + overhead;
-                a.emitter.emit(EmitEvent.of(compId, "context.compression", null, null,
+                a.emitter().emit(EmitEvent.of(compId, "context.compression", null, null,
                         "已自动压缩上下文(" + stageName(r.stage()) + ", 消息 " + working.size() + "→"
                                 + toSend.size() + ", 约 " + used + "→" + after + " token 估算)",
                         null, null, null, EmitEvent.Mode.REPLACE));
                 log.info("任务 {} agent {} 上下文压缩: used={} trigger={} target={} messages {}→{} 阶段={} "
                                 + "丢历史轮={} 丢本轮工具对={}",
-                        t.taskId, a.agentId, used, trigger, target, working.size(), toSend.size(),
+                        t.taskId(), a.agentId(), used, trigger, target, working.size(), toSend.size(),
                         stageName(r.stage()), r.droppedHistoryTurns(), r.droppedCurrentToolPairs());
                 if (after > target) {
                     log.warn("任务 {} agent {} 上下文压缩后仍 > 目标阈值(本轮单 turn 过大),交由模型上限兜底",
-                            t.taskId, a.agentId);
+                            t.taskId(), a.agentId());
                 }
             }
         }
@@ -198,15 +197,15 @@ public class ContextCompressionAdvisor implements CallAdvisor, StreamAdvisor {
     }
 
     private long contextWindowTokens() {
-        TaskEntry t = (TaskEntry) a.properties.get("taskEntry");
-        JsonNode params = t.snapshot == null ? null : t.snapshot.params();
+        TaskRuntime t = (TaskRuntime) a.properties().get("taskEntry");
+        JsonNode params = t.snapshot() == null ? null : t.snapshot().params();
         if (params != null && params.isObject() && params.has("contextWindowTokens")) {
             long v = params.path("contextWindowTokens").asLong(0);
             if (v > 0) {
                 return v;
             }
         }
-        return ContextOverflow.DEFAULT_CONTEXT_WINDOW_TOKENS;
+        return WorkerConfig.DEFAULT_CONTEXT_WINDOW_TOKENS;
     }
 
     /** floor(window × ratio × safetyRatio)。 */

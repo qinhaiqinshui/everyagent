@@ -1,10 +1,9 @@
 package dev.everyagent.plugin.emptyretry;
 
-import dev.everyagent.worker.config.WorkerProperties;
-import dev.everyagent.worker.plugin.AdvisorContextImpl;
+import dev.everyagent.plugin.api.config.WorkerConfig;
+import dev.everyagent.plugin.api.agent.AgentContext;
 import dev.everyagent.plugin.api.spi.AdvisorContext;
 import dev.everyagent.plugin.api.spi.AdvisorProvider;
-import dev.everyagent.worker.agent.AgentEntity;
 import org.springframework.ai.chat.client.advisor.ToolCallingAdvisor;
 import org.springframework.ai.chat.client.advisor.api.Advisor;
 
@@ -16,10 +15,10 @@ import org.springframework.ai.chat.client.advisor.api.Advisor;
  */
 public class EmptyResponseRetryAdvisorProvider implements AdvisorProvider {
 
-    private final WorkerProperties props;
+    private final WorkerConfig config;
 
-    public EmptyResponseRetryAdvisorProvider(WorkerProperties props) {
-        this.props = props;
+    public EmptyResponseRetryAdvisorProvider(WorkerConfig config) {
+        this.config = config;
     }
 
     @Override
@@ -34,7 +33,7 @@ public class EmptyResponseRetryAdvisorProvider implements AdvisorProvider {
 
     @Override
     public Advisor create(AdvisorContext ctx) {
-        AgentEntity a = (AgentEntity) ((AdvisorContextImpl) ctx).agentEntity();
-        return new EmptyResponseRetryAdvisor(a, props.getRetry());
+        AgentContext a = ctx.agentEntity();
+        return new EmptyResponseRetryAdvisor(a, config.retry());
     }
 }

@@ -1,10 +1,9 @@
 package dev.everyagent.plugin.transientretry;
 
-import dev.everyagent.worker.config.WorkerProperties;
-import dev.everyagent.worker.plugin.AdvisorContextImpl;
+import dev.everyagent.plugin.api.config.WorkerConfig;
+import dev.everyagent.plugin.api.agent.AgentContext;
 import dev.everyagent.plugin.api.spi.AdvisorContext;
 import dev.everyagent.plugin.api.spi.AdvisorProvider;
-import dev.everyagent.worker.agent.AgentEntity;
 import org.springframework.ai.chat.client.advisor.ToolCallingAdvisor;
 import org.springframework.ai.chat.client.advisor.api.Advisor;
 
@@ -16,10 +15,10 @@ import org.springframework.ai.chat.client.advisor.api.Advisor;
  */
 public class TransientErrorRetryAdvisorProvider implements AdvisorProvider {
 
-    private final WorkerProperties props;
+    private final WorkerConfig config;
 
-    public TransientErrorRetryAdvisorProvider(WorkerProperties props) {
-        this.props = props;
+    public TransientErrorRetryAdvisorProvider(WorkerConfig config) {
+        this.config = config;
     }
 
     @Override
@@ -34,7 +33,7 @@ public class TransientErrorRetryAdvisorProvider implements AdvisorProvider {
 
     @Override
     public Advisor create(AdvisorContext ctx) {
-        AgentEntity a = (AgentEntity) ((AdvisorContextImpl) ctx).agentEntity();
-        return new TransientErrorRetryAdvisor(a, props.getRetry());
+        AgentContext a = ctx.agentEntity();
+        return new TransientErrorRetryAdvisor(a, config.retry());
     }
 }

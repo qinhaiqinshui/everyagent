@@ -160,14 +160,26 @@ public final class AgentEntity implements Agent {
     // ── 以下为 worker 内部方法(非 AgentContext 契约) ──
 
     @Override
+    public ChatModel chatModel() {
+        return chatModel;
+    }
+
+    @Override
+    public String currentModel() {
+        return options == null ? null : options.getModel();
+    }
+
+    @Override
     public Usage usage() {
         return usage.get();
     }
 
+    @Override
     public Usage lastRound() {
         return lastRound;
     }
 
+    @Override
     public String lastModel() {
         return lastModel;
     }

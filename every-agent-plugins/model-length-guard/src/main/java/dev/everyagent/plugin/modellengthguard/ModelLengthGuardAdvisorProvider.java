@@ -1,12 +1,11 @@
 package dev.everyagent.plugin.modellengthguard;
 
 import dev.everyagent.plugin.api.WorkerServices;
+import dev.everyagent.plugin.api.config.WorkerConfig;
+import dev.everyagent.plugin.api.agent.AgentContext;
 import dev.everyagent.plugin.api.spi.AdvisorContext;
 import dev.everyagent.plugin.api.spi.AdvisorProvider;
 import dev.everyagent.plugin.api.spi.TokenEstimator;
-import dev.everyagent.worker.config.WorkerProperties;
-import dev.everyagent.worker.plugin.AdvisorContextImpl;
-import dev.everyagent.worker.agent.AgentEntity;
 import org.springframework.ai.chat.client.advisor.ToolCallingAdvisor;
 import org.springframework.ai.chat.client.advisor.api.Advisor;
 
@@ -22,11 +21,11 @@ import org.springframework.ai.chat.client.advisor.api.Advisor;
  */
 public class ModelLengthGuardAdvisorProvider implements AdvisorProvider {
 
-    private final WorkerProperties props;
+    private final WorkerConfig config;
     private final WorkerServices services;
 
-    public ModelLengthGuardAdvisorProvider(WorkerProperties props, WorkerServices services) {
-        this.props = props;
+    public ModelLengthGuardAdvisorProvider(WorkerConfig config, WorkerServices services) {
+        this.config = config;
         this.services = services; // 延迟解析的关键:不存 TokenEstimator 引用,存 WorkerServices
     }
 
@@ -42,9 +41,9 @@ public class ModelLengthGuardAdvisorProvider implements AdvisorProvider {
 
     @Override
     public Advisor create(AdvisorContext ctx) {
-        AgentEntity a = (AgentEntity) ((AdvisorContextImpl) ctx).agentEntity();
+        AgentContext a = ctx.agentEntity();
         // 延迟解析:每次 create 时从 WorkerServices 取当前生效的 TokenEstimator
         TokenEstimator estimator = services.tokenEstimator();
-        return new ModelLengthGuardAdvisor(a, props, estimator);
+        return new ModelLengthGuardAdvisor(a, config, estimator);
     }
 }

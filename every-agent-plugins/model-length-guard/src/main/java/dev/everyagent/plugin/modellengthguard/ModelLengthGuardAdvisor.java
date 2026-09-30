@@ -2,9 +2,9 @@ package dev.everyagent.plugin.modellengthguard;
 
 import com.openai.errors.OpenAIIoException;
 import dev.everyagent.plugin.api.spi.TokenEstimator;
-import dev.everyagent.worker.config.WorkerProperties;
-import dev.everyagent.worker.agent.AgentEntity;
-import dev.everyagent.worker.task.TaskEntry;
+import dev.everyagent.plugin.api.config.WorkerConfig;
+import dev.everyagent.plugin.api.agent.AgentContext;
+import dev.everyagent.plugin.api.task.TaskRuntime;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClientRequest;
@@ -91,17 +91,17 @@ public class ModelLengthGuardAdvisor implements CallAdvisor, StreamAdvisor {
     private static final long NEAR_MAX_HIGH_DEN = 5;
 
     /** 日志归属 agent(只读 taskId/agentId,不发事件)。 */
-    private final AgentEntity a;
-    private final WorkerProperties props;
+    private final AgentContext a;
+    private final WorkerConfig props;
     private final TokenEstimator estimator;
     private final String configId;
 
-    public ModelLengthGuardAdvisor(AgentEntity a, WorkerProperties props, TokenEstimator estimator) {
+    public ModelLengthGuardAdvisor(AgentContext a, WorkerConfig props, TokenEstimator estimator) {
         this.a = a;
         this.props = props;
         this.estimator = estimator;
-        TaskEntry t = (TaskEntry) a.properties.get("taskEntry");
-        this.configId = t.snapshot.configId();
+        TaskRuntime t = (TaskRuntime) a.properties().get("taskEntry");
+        this.configId = t.snapshot().configId();
     }
 
     @Override
@@ -129,10 +129,10 @@ public class ModelLengthGuardAdvisor implements CallAdvisor, StreamAdvisor {
 
     @Override
     public Flux<ChatClientResponse> adviseStream(ChatClientRequest request, StreamAdvisorChain chain) {
-        TaskEntry t = (TaskEntry) a.properties.get("taskEntry");
+        TaskRuntime t = (TaskRuntime) a.properties().get("taskEntry");
         return Flux.defer(() -> {
             Integer maxTokens = maxTokensOf(request);
-            long stallMs = props.getLimits().getModelLengthStallMs();
+            long stallMs = props.limits().modelLengthStallMs();
             // 每订阅(每次模型调用尝试)独立状态,多任务/多重试并发安全。
             AtomicReference<String> thinkingAcc = new AtomicReference<>("");
             AtomicLong thinkTokens = new AtomicLong();
@@ -178,11 +178,11 @@ public class ModelLengthGuardAdvisor implements CallAdvisor, StreamAdvisor {
                     if (stall) {
                         log.warn("任务 {} agent {} 流 {}ms 无输出且自估输出 {} tokens已达上限({}),"
                                         + "判定 finish_reason=length",
-                                t.taskId, a.agentId, stallMs, think + text, basis);
+                                t.taskId(), a.agentId(), stallMs, think + text, basis);
                     } else {
                         log.warn("任务 {} agent {} 流被网络级错误中断({}: {})且自估输出 {} tokens已达上限({}),"
                                         + "判定 finish_reason=length",
-                                t.taskId, a.agentId, e.getClass().getSimpleName(),
+                                t.taskId(), a.agentId(), e.getClass().getSimpleName(),
                                 e.getMessage(), think + text, basis);
                     }
                     // 先下发合成 finish_reason=length 帧(Adaptive 数据面触发器),
@@ -273,7 +273,7 @@ public class ModelLengthGuardAdvisor implements CallAdvisor, StreamAdvisor {
         if (maxTokens != null && maxTokens > 0) {
             return nearMax(tokens, maxTokens);
         }
-        long min = props.getLimits().getLengthDisconnectMinTokens();
+        long min = props.limits().lengthDisconnectMinTokens();
         return min > 0 && tokens >= min;
     }
 
@@ -282,7 +282,7 @@ public class ModelLengthGuardAdvisor implements CallAdvisor, StreamAdvisor {
         if (maxTokens != null && maxTokens > 0) {
             return "≈maxTokens " + maxTokens;
         }
-        return "未配置 maxTokens,≥兜底阈值 " + props.getLimits().getLengthDisconnectMinTokens();
+        return "未配置 maxTokens,≥兜底阈值 " + props.limits().lengthDisconnectMinTokens();
     }
 
     private static Integer maxTokensOf(ChatClientRequest request) {

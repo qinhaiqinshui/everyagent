@@ -3,6 +3,7 @@ package dev.everyagent.plugin.api.agent;
 import dev.everyagent.plugin.api.event.Usage;
 import dev.everyagent.plugin.api.model.EventEmitter;
 import org.springframework.ai.chat.messages.Message;
+import org.springframework.ai.chat.model.ChatModel;
 
 import java.util.List;
 import java.util.Map;
@@ -52,6 +53,20 @@ public interface AgentContext {
 
     /** 会话内存(可被压缩重写的载体;插件直接 {@code conversation().add(...)} 追加)。 */
     List<Message> conversation();
+
+    // ── 模型与上下文校准 ──
+
+    /** 当前 agent 的 ChatModel(摘要器等需要同步调模型时使用)。 */
+    ChatModel chatModel();
+
+    /** 当前请求的模型名(从 options.getModel() 取;null = 未知)。 */
+    String currentModel();
+
+    /** 最近一轮实测 usage(offset 校准等用;空 = 未知)。 */
+    Usage lastRound();
+
+    /** 最近一轮所用模型名(空 = 未知)。 */
+    String lastModel();
 
     // ── 运行时方法 ──
 
