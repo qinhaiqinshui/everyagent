@@ -58,7 +58,7 @@ class TaskLifecycleExecutorTest {
             innerExecuted.incrementAndGet();
             return TaskOutcome.done(0, 0);
         };
-        TaskOutcome result = executor.run(nodes, kernel, ctx);
+        TaskOutcome result = (TaskOutcome) executor.run(nodes, kernel, ctx);
         assertEquals(0, innerExecuted.get(), "内核不应执行");
         assertEquals(TaskOutcome.TaskEndStatus.FAILED, result.status());
     }
@@ -71,7 +71,7 @@ class TaskLifecycleExecutorTest {
             new UpstreamNode() {
                 @Override public String id() { return "low"; }
                 @Override public float order() { return 300; }
-                @Override protected TaskOutcome up(TaskLifecycleContext c, TaskOutcome r) {
+                @Override protected Object up(TaskLifecycleContext c, Object r) {
                     upOrder.add("low");
                     return r;
                 }
@@ -79,7 +79,7 @@ class TaskLifecycleExecutorTest {
             new UpstreamNode() {
                 @Override public String id() { return "high"; }
                 @Override public float order() { return 500; }
-                @Override protected TaskOutcome up(TaskLifecycleContext c, TaskOutcome r) {
+                @Override protected Object up(TaskLifecycleContext c, Object r) {
                     upOrder.add("high");
                     return r;
                 }
@@ -98,7 +98,7 @@ class TaskLifecycleExecutorTest {
             new UpstreamNode() {
                 @Override public String id() { return "guard"; }
                 @Override public float order() { return 950; }
-                @Override protected TaskOutcome up(TaskLifecycleContext c, TaskOutcome r) {
+                @Override protected Object up(TaskLifecycleContext c, Object r) {
                     upCount.incrementAndGet();
                     return r;
                 }
@@ -124,7 +124,7 @@ class TaskLifecycleExecutorTest {
             }
         );
         TaskKernel kernel = c -> TaskOutcome.done(0, 0);
-        TaskOutcome result = executor.run(nodes, kernel, ctx);
+        TaskOutcome result = (TaskOutcome) executor.run(nodes, kernel, ctx);
         assertEquals(TaskOutcome.TaskEndStatus.CANCELLED, result.status());
     }
 
@@ -136,12 +136,12 @@ class TaskLifecycleExecutorTest {
             new UpstreamNode() {
                 @Override public String id() { return "a"; }
                 @Override public float order() { return 850; }
-                @Override protected TaskOutcome up(TaskLifecycleContext c, TaskOutcome r) { return r; }
+                @Override protected Object up(TaskLifecycleContext c, Object r) { return r; }
             },
             new UpstreamNode() {
                 @Override public String id() { return "b"; }
                 @Override public float order() { return 420; }
-                @Override protected TaskOutcome up(TaskLifecycleContext c, TaskOutcome r) { return r; }
+                @Override protected Object up(TaskLifecycleContext c, Object r) { return r; }
             }
         );
         // 用自定义 context，taskLock 返回一个可计数的锁对象
@@ -165,12 +165,12 @@ class TaskLifecycleExecutorTest {
             new UpstreamNode() {
                 @Override public String id() { return "spawned.await"; }
                 @Override public float order() { return 950; }
-                @Override protected TaskOutcome up(TaskLifecycleContext c, TaskOutcome r) { return r; }
+                @Override protected Object up(TaskLifecycleContext c, Object r) { return r; }
             },
             new UpstreamNode() {
                 @Override public String id() { return "workspace.activity"; }
                 @Override public float order() { return 350; }
-                @Override protected TaskOutcome up(TaskLifecycleContext c, TaskOutcome r) { return r; }
+                @Override protected Object up(TaskLifecycleContext c, Object r) { return r; }
             }
         );
         TaskLifecycleContext lockCtx = new TestContext() {
@@ -193,13 +193,13 @@ class TaskLifecycleExecutorTest {
                 @Override public String id() { return "queue"; }
                 @Override public float order() { return 700; }
                 @Override protected void down(TaskLifecycleContext c) { downOrder.add("queue.down"); }
-                @Override protected TaskOutcome up(TaskLifecycleContext c, TaskOutcome r) { return r; }
+                @Override protected Object up(TaskLifecycleContext c, Object r) { return r; }
             },
             new SectionNode() {
                 @Override public String id() { return "status"; }
                 @Override public float order() { return 840; }
                 @Override protected void down(TaskLifecycleContext c) { downOrder.add("status.down"); }
-                @Override protected TaskOutcome up(TaskLifecycleContext c, TaskOutcome r) { return r; }
+                @Override protected Object up(TaskLifecycleContext c, Object r) { return r; }
             }
         );
         TaskLifecycleContext lockCtx = new TestContext() {
@@ -227,14 +227,14 @@ class TaskLifecycleExecutorTest {
                 @Override protected void down(TaskLifecycleContext c) throws Exception {
                     throw new IllegalStateException("veto");
                 }
-                @Override protected TaskOutcome up(TaskLifecycleContext c, TaskOutcome r) { return r; }
+                @Override protected Object up(TaskLifecycleContext c, Object r) { return r; }
             }
         );
         TaskKernel kernel = c -> {
             innerExecuted.incrementAndGet();
             return TaskOutcome.done(0, 0);
         };
-        TaskOutcome result = executor.run(nodes, kernel, ctx);
+        TaskOutcome result = (TaskOutcome) executor.run(nodes, kernel, ctx);
         assertEquals(0, innerExecuted.get(), "下行段否决后内核不应执行");
         assertEquals(TaskOutcome.TaskEndStatus.FAILED, result.status());
     }
@@ -257,7 +257,7 @@ class TaskLifecycleExecutorTest {
         @Override public float order() { return order; }
 
         @Override
-        public TaskOutcome invoke(TaskLifecycleContext ctx, TaskChain next) throws Exception {
+        public Object invoke(TaskLifecycleContext ctx, TaskChain next) throws Exception {
             callOrder.add(name);
             return next.proceed(ctx);
         }
@@ -271,11 +271,20 @@ class TaskLifecycleExecutorTest {
         @Override public String workspaceId() { return "ws"; }
         @Override public String mainAgentId() { return "main"; }
         @Override public String status() { return "running"; }
+        @Override public dev.everyagent.plugin.api.permission.TaskInfo taskInfo() { return null; }
         @Override public Object taskLock() { return this; }
-        @Override public Map<String, Boolean> taskFlags() { return Map.of(); }
         @Override public long startedAt() { return 0; }
         @Override public void startedAt(long ms) { }
         @Override public void onUsageBroadcast(Runnable hook) { }
         @Override public void agentStatus(String agentId, String status) { }
+        @Override public String input() { return ""; }
+        @Override public void input(String input) { }
+        @Override public String rawContent() { return ""; }
+        @Override public void rawContent(String rawContent) { }
+        @Override public Map<String, Object> runParams() { return Map.of(); }
+        @Override public void runParams(Map<String, Object> runParams) { }
+        @Override public Map<String, Object> metadata() { return Map.of(); }
+        @Override public void metadata(Map<String, Object> metadata) { }
+        @Override public Object rpcContext() { return null; }
     }
 }

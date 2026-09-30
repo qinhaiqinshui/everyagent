@@ -39,6 +39,7 @@ class InputQueueTest {
             @Override public Object rpcContext() { return null; }
             @Override public void input(String i) { }
             @Override public void rawContent(String r) { }
+            @Override public void runParams(Map<String, Object> r) { }
             @Override public void metadata(Map<String, Object> m) { }
         };
     }

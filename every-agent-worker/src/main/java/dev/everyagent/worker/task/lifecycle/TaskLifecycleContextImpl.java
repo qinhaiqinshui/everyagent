@@ -90,6 +90,7 @@ public class TaskLifecycleContextImpl implements TaskLifecycleContext {
             taskEntry.metadata.putAll(metadata);
         }
     }
+    @Override
     public void runParams(java.util.Map<String, Object> runParams) { this.runParams = runParams; }
     public void rpcContext(Object rpcContext) { this.rpcContext = rpcContext; }
     public void taskId(String v) { this.taskId = v; }

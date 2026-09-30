@@ -130,13 +130,10 @@ class ModelPoolChatModelTest {
 
     // ---- 辅助 ----
 
-    /** 匹配容灾切换到 cfg-2 的 TraceData 事件。 */
+    /** 匹配容灾切换到 cfg-2 的 model.failover 事件。 */
     private boolean isFailoverToCfg2(EmitEvent e) {
-        if (!(e instanceof EmitEvent.TraceData t)) {
-            return false;
-        }
-        return "model_failover".equals(t.kind())
-                && t.summary() != null && t.summary().contains("cfg-2");
+        return "model.failover".equals(e.kind())
+                && e.summary() != null && e.summary().contains("cfg-2");
     }
 
     private static ModelConfig snap(String configId, String model) {

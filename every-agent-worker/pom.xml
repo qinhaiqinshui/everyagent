@@ -58,6 +58,13 @@
             <version>${project.version}</version>
             <scope>test</scope>
         </dependency>
+        <!-- EditResendRoundsTest 集成验证编辑重发(功能已迁入 task-edit-resend 插件,测试内等价注册其节点) -->
+        <dependency>
+            <groupId>dev.everyagent</groupId>
+            <artifactId>task-edit-resend</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>io.projectreactor</groupId>
             <artifactId>reactor-test</artifactId>

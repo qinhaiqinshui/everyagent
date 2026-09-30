@@ -19,6 +19,7 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -43,7 +44,7 @@ class GrantRegistryExecRootsTest {
     /** 弹窗打桩:答「本任务全程允许」(TASK 档,EXEC 根随授权落档)。 */
     private InteractionService asksTaskScope() throws InterruptedException {
         InteractionService asks = mock(InteractionService.class);
-        when(asks.ask(anyString(), anyString(), anyList(), anyLong()))
+        when(asks.ask(anyList(), anyLong(), anyMap()))
                 .thenReturn(new AskResult("answered", "本任务全程允许"));
         return asks;
     }

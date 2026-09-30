@@ -45,8 +45,9 @@ public final class QueueDispatchNode implements TaskLifecycleNode {
         TaskRuntime t = taskService.get(taskId);
         if (t != null && !t.terminal()) {
             // 运行中
-            Map<String, Object> metadata = ctx.metadata();
-            if (metadata != null && Boolean.TRUE.equals(metadata.get("insert"))) {
+            // insert/task.run 插件参数走 runParams(一次性容器,不落盘),非任务级持久化 metadata
+            Map<String, Object> runParams = ctx.runParams();
+            if (runParams != null && Boolean.TRUE.equals(runParams.get("insert"))) {
                 // 插入到当前对话：入队整个 ctx（DialogInsertAdvisor 从 ctx 取 input/rawContent drain）
                 registry.getOrCreateDialogInsertQueue(taskId).offer(ctx);
             } else {

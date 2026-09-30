@@ -928,6 +928,16 @@ public class TaskManager implements TaskInputHandler, InteractionServiceImpl.Sta
         }
     }
 
+    /** JsonNode → Java 标量（布尔/整型/浮点/文本），复杂结构原样保留。 */
+    private static Object unwrap(JsonNode v) {
+        if (v.isBoolean()) return v.asBoolean();
+        if (v.isNumber()) {
+            return v.isIntegralNumber() ? (Object) v.asLong() : (Object) v.asDouble();
+        }
+        if (v.isTextual()) return v.asString();
+        return v;
+    }
+
     private void rpcTaskCancel(RpcContext ctx) {
         TaskEntry t = tasks.get(ctx.strParam("taskId"));
         if (t == null) {

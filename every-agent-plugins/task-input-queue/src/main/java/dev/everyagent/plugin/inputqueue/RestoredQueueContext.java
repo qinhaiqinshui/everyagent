@@ -28,6 +28,7 @@ final class RestoredQueueContext implements TaskLifecycleContext {
 
     @Override public void input(String input) { }
     @Override public void rawContent(String rawContent) { }
+    @Override public void runParams(Map<String, Object> runParams) { }
     @Override public void metadata(Map<String, Object> metadata) { }
 
     // ---- 以下方法对恢复项无意义（QueueLoopNode 不读取）----

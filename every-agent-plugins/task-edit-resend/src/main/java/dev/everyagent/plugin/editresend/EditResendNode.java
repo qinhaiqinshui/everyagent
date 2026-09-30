@@ -10,7 +10,7 @@ import java.util.Map;
 
 /**
  * 编辑重发节点（order=395.5，虚拟线程阶段，位于 queue.loop(395) 与 consume.input(396) 之间）。
- * 从 ctx.metadata() 取 editSeq，有就截断，然后放行到 consume.input(396)。
+ * 从 ctx.runParams() 取 editSeq，有就截断，然后放行到 consume.input(396)。
  * 插件不存在时此节点不存在，queue.loop(395) → consume.input(396) 直连。
  */
 public final class EditResendNode implements TaskLifecycleNode {
@@ -31,9 +31,11 @@ public final class EditResendNode implements TaskLifecycleNode {
 
     @Override
     public Object invoke(TaskLifecycleContext ctx, TaskChain next) throws Exception {
-        Map<String, Object> metadata = ctx.metadata();
-        if (metadata != null) {
-            String editSeq = (String) metadata.get("editSeq");
+        // task.run 的 metadata 参数(含 editSeq)是一次性插件参数,走 runParams(不落盘);
+        // ctx.metadata() 是任务级持久化数据,与此无关
+        Map<String, Object> runParams = ctx.runParams();
+        if (runParams != null) {
+            String editSeq = (String) runParams.get("editSeq");
             if (editSeq != null && !editSeq.isEmpty()) {
                 try {
                     truncateProcessor.truncate(ctx.taskId(), editSeq, ctx.input(), ctx.rawContent(), ctx);

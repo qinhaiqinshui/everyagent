@@ -65,6 +65,7 @@ public final class QueueLoopNode implements TaskLifecycleNode {
                 // 把 polledCtx 的数据设到当前 ctx，后续节点（edit.resend / consume.input）能读到
                 ctx.input(polledCtx.input());
                 ctx.rawContent(polledCtx.rawContent());
+                ctx.runParams(polledCtx.runParams());
                 ctx.metadata(polledCtx.metadata());
                 result = next.proceed(ctx);
             }

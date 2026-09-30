@@ -27,12 +27,12 @@ class SystemInfoAdvisorTest {
     @Test
     void orderIsHighestPlus50() {
         assertEquals(Ordered.HIGHEST_PRECEDENCE + 50,
-                new SystemInfoAdvisor("ws", false, false).getOrder());
+                new SystemInfoAdvisor("ws", null).getOrder());
     }
 
     @Test
     void beforeInjectsSystemMessageAfterLeadingSystemArea() {
-        ChatClientRequest out = new SystemInfoAdvisor("/c/test", false, false)
+        ChatClientRequest out = new SystemInfoAdvisor("/c/test", null)
                 .before(requestWith("你是助手", "你好"), mock(AdvisorChain.class));
 
         List<Message> instructions = out.prompt().getInstructions();
@@ -48,7 +48,7 @@ class SystemInfoAdvisorTest {
 
     @Test
     void beforeWithNullWorkspaceStillInjectsIdentity() {
-        ChatClientRequest out = new SystemInfoAdvisor(null, false, false)
+        ChatClientRequest out = new SystemInfoAdvisor(null, null)
                 .before(requestWith("你是助手", "你好"), mock(AdvisorChain.class));
 
         List<Message> instructions = out.prompt().getInstructions();
@@ -62,7 +62,7 @@ class SystemInfoAdvisorTest {
 
     @Test
     void beforeInjectsWorkspaceWhenProvided() {
-        ChatClientRequest out = new SystemInfoAdvisor("/c/myproject", false, false)
+        ChatClientRequest out = new SystemInfoAdvisor("/c/myproject", null)
                 .before(requestWith("你是助手", "你好"), mock(AdvisorChain.class));
 
         List<Message> instructions = out.prompt().getInstructions();
@@ -75,7 +75,7 @@ class SystemInfoAdvisorTest {
 
     @Test
     void beforeInjectsWslLinuxOsWhenWslBackend() {
-        ChatClientRequest out = new SystemInfoAdvisor("/c/myproject", true, false)
+        ChatClientRequest out = new SystemInfoAdvisor("/c/myproject", "wsl-ubuntu")
                 .before(requestWith("你是助手", "你好"), mock(AdvisorChain.class));
 
         List<Message> instructions = out.prompt().getInstructions();

@@ -81,6 +81,12 @@ public interface TaskLifecycleContext {
     /** 设置原始内容（队列项 poll 后覆盖当前 ctx 的 rawContent）。 */
     void rawContent(String rawContent);
 
+    /**
+     * 设置通用插件参数容器（队列项 poll 后覆盖当前 ctx 的 runParams；null 忽略）。
+     * task.run 的 metadata 参数是一次性插件参数（如 editSeq/insert），经此传递，不落盘。
+     */
+    void runParams(java.util.Map<String, Object> runParams);
+
     /** 设置 metadata（队列项 poll 后覆盖当前 ctx 的 metadata；null 或 taskEntry 为 null 时忽略）。 */
     void metadata(java.util.Map<String, Object> metadata);
 
