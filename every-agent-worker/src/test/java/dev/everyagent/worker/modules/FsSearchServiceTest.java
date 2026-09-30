@@ -4,7 +4,7 @@ import dev.everyagent.contract.json.Json;
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.hub.HubLink;
 import dev.everyagent.worker.hub.HubPool;
-import dev.everyagent.worker.proto.Channels;
+import dev.everyagent.plugin.api.event.Channels;
 import dev.everyagent.worker.proto.RpcMethods;
 import dev.everyagent.worker.rpc.RpcDispatcher;
 import dev.everyagent.worker.task.TaskManager;

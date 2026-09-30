@@ -4,10 +4,10 @@ import java.util.List;
 
 import dev.everyagent.plugin.api.WorkerServices;
 import dev.everyagent.plugin.api.permission.TaskInfo;
-import dev.everyagent.worker.slash.SlashCancelHandler;
-import dev.everyagent.worker.slash.SlashCommandItem;
-import dev.everyagent.worker.slash.SlashSelectHandler;
-import dev.everyagent.worker.slash.SlashSelectionResult;
+import dev.everyagent.plugin.api.slash.SlashCancelHandler;
+import dev.everyagent.plugin.api.slash.SlashCommandItem;
+import dev.everyagent.plugin.api.slash.SlashSelectHandler;
+import dev.everyagent.plugin.api.slash.SlashSelectionResult;
 
 /**
  * 「/无人值守」命令来源(仿 {@code modelpool.ModelPoolSlashProvider}):

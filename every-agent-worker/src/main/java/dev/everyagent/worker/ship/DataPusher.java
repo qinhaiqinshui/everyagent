@@ -1,10 +1,11 @@
 package dev.everyagent.worker.ship;
 
 import dev.everyagent.contract.json.Json;
+import dev.everyagent.plugin.api.event.EventLogReader;
 import dev.everyagent.worker.hub.HubLink;
-import dev.everyagent.worker.proto.Channels;
+import dev.everyagent.plugin.api.event.Channels;
 import dev.everyagent.worker.task.EventLog;
-import dev.everyagent.worker.task.EventRecord;
+import dev.everyagent.plugin.api.event.EventRecord;
 import dev.everyagent.worker.task.TaskEntry;
 import dev.everyagent.worker.task.TaskManager;
 import dev.everyagent.worker.task.TaskEvents;
@@ -34,7 +35,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * 到该 hub);pub 非阻塞,出站队列满即丢帧(事件日志是事实源,前端 3s 兜底轮询/重连 resync
  * 自愈)。前端 unsub/断线(leave)时销毁。
  */
-public class DataPusher implements EventLog.Listener {
+public class DataPusher implements EventLogReader.Listener {
 
     private static final Logger log = LoggerFactory.getLogger(DataPusher.class);
     /** 单批推送记录数(与 task.poll 批上限同量级)。 */

@@ -1,6 +1,8 @@
 package dev.everyagent.worker.task;
 
 import dev.everyagent.contract.json.Json;
+import dev.everyagent.plugin.api.event.EventPayloads;
+import dev.everyagent.plugin.api.event.EventRecord;
 import dev.everyagent.plugin.api.model.EmitEvent;
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.plugin.api.event.Events;

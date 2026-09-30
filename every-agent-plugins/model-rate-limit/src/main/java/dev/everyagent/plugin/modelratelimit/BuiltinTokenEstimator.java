@@ -2,7 +2,7 @@ package dev.everyagent.plugin.modelratelimit;
 
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.plugin.api.spi.TokenEstimator;
-import dev.everyagent.worker.AtomicFiles;
+import dev.everyagent.plugin.api.util.AtomicFiles;
 import dev.everyagent.worker.config.WorkerProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

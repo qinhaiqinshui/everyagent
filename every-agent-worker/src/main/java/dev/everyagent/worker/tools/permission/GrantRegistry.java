@@ -2,11 +2,11 @@ package dev.everyagent.worker.tools.permission;
 
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.plugin.api.permission.AuthorizationHandler;
-import dev.everyagent.worker.AtomicFiles;
+import dev.everyagent.plugin.api.util.AtomicFiles;
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.modules.WorkspaceManager;
 import dev.everyagent.worker.plugin.registry.AuthorizationHandlerRegistry;
-import dev.everyagent.worker.task.AgentCancelledException;
+import dev.everyagent.plugin.api.exception.AgentCancelledException;
 import dev.everyagent.plugin.api.interaction.InteractionService;
 import dev.everyagent.worker.task.TaskEntry;
 import dev.everyagent.worker.task.TaskStore;

@@ -1,6 +1,7 @@
 package dev.everyagent.worker.slash;
 
 import java.util.List;
+import dev.everyagent.plugin.api.slash.SlashTokenEncoder;
 import java.util.Map;
 
 import org.springframework.stereotype.Component;

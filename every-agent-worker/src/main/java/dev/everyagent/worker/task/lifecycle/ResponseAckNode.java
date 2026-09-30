@@ -5,8 +5,8 @@ import dev.everyagent.plugin.api.task.TaskChain;
 import dev.everyagent.plugin.api.task.TaskLifecycleContext;
 import dev.everyagent.plugin.api.task.TaskLifecycleNode;
 import dev.everyagent.worker.hub.EventSink;
-import dev.everyagent.worker.proto.Channels;
-import dev.everyagent.worker.proto.Events;
+import dev.everyagent.plugin.api.event.Channels;
+import dev.everyagent.plugin.api.event.Events;
 import dev.everyagent.worker.rpc.RpcContext;
 import dev.everyagent.worker.task.TaskEntry;
 

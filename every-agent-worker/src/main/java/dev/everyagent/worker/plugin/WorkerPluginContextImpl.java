@@ -29,7 +29,7 @@ import dev.everyagent.worker.plugin.registry.ToolExecutionInterceptorRegistry;
 import dev.everyagent.worker.plugin.registry.ToolProviderRegistry;
 import dev.everyagent.worker.rpc.RpcDispatcher;
 import dev.everyagent.worker.slash.SlashCommandRegistry;
-import dev.everyagent.worker.slash.SlashCommandItem;
+import dev.everyagent.plugin.api.slash.SlashCommandItem;
 import dev.everyagent.worker.slash.SlashTokenHandler;
 
 import org.springframework.context.ApplicationContext;

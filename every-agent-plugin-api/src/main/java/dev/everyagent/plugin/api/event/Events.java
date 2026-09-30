@@ -1,4 +1,4 @@
-package dev.everyagent.worker.proto;
+package dev.everyagent.plugin.api.event;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;
@@ -7,7 +7,7 @@ import tools.jackson.databind.JsonNode;
 import java.util.List;
 
 /**
- * 事件清单(架构 §3.3 任务域)与各事件 payload。归 worker 所有;hub 不感知。
+ * 事件清单(架构 §3.3 任务域)与各事件 payload。
  *
  * <p>事件名不做主/子 agent 区分——同一名事件(delta/message/error/...),
  * 是否子 agent 由 agentId 字段决定(主 agent = mainAgentId,wire 形剥离开;子 agent 必带)。
@@ -124,7 +124,7 @@ public final class Events {
     @JsonIgnoreProperties(ignoreUnknown = true)
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record UsageEvent(String agentId, String model, Long contextWindowTokens,
-            TaskDtos.Usage round, TaskDtos.Usage total) {
+            Usage round, Usage total) {
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)
@@ -159,7 +159,7 @@ public final class Events {
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     @JsonInclude(JsonInclude.Include.NON_NULL)
-    public record AgentDone(String agentId, JsonNode result, TaskDtos.Usage usage) {
+    public record AgentDone(String agentId, JsonNode result, Usage usage) {
     }
 
     /** agent.status payload(主/子统一;agentId 必带,status ∈ running/waiting-user/done/failed/stopped)。 */

@@ -1,7 +1,7 @@
 package dev.everyagent.worker.hub;
 
 import dev.everyagent.worker.config.WorkerProperties;
-import dev.everyagent.worker.proto.Channels;
+import dev.everyagent.plugin.api.event.Channels;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;

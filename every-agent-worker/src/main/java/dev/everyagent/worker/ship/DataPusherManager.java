@@ -3,7 +3,7 @@ package dev.everyagent.worker.ship;
 import dev.everyagent.contract.frame.Frames;
 import dev.everyagent.worker.hub.HubLink;
 import dev.everyagent.worker.hub.HubPool;
-import dev.everyagent.worker.proto.Events;
+import dev.everyagent.plugin.api.event.Events;
 import dev.everyagent.worker.task.EventLog;
 import dev.everyagent.worker.task.TaskManager;
 import dev.everyagent.worker.task.TaskStore;

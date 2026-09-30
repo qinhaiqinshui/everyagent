@@ -1,4 +1,4 @@
-package dev.everyagent.worker.task;
+package dev.everyagent.plugin.api.event;
 
 import tools.jackson.databind.JsonNode;
 

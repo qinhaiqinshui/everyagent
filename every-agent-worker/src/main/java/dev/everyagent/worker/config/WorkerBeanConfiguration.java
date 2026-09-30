@@ -5,7 +5,7 @@ import dev.everyagent.worker.plugin.registry.SkillContributorRegistry;
 import dev.everyagent.worker.plugin.registry.ToolExecutionInterceptorRegistry;
 import dev.everyagent.worker.skill.BuiltInSkills;
 import dev.everyagent.worker.skill.SkillAdvisor;
-import dev.everyagent.worker.task.AgentCancelledException;
+import dev.everyagent.plugin.api.exception.AgentCancelledException;
 import dev.everyagent.worker.task.InterceptingToolCallingManager;
 import dev.everyagent.worker.tools.MissingToolCallbackResolver;
 import org.springframework.ai.model.tool.ToolCallingManager;

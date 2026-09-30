@@ -1,4 +1,4 @@
-package dev.everyagent.worker.task;
+package dev.everyagent.plugin.api.task;
 
 import dev.everyagent.contract.json.Json;
 import tools.jackson.databind.node.ArrayNode;
@@ -17,9 +17,9 @@ import java.util.concurrent.ConcurrentHashMap;
  * (old/plugins/task-file-changes/extensions.ts)。
  *
  * <p>职责:收集本回合内所有文件保存记录(create_file / update_file),聚合为文件级净状态
- * (created / updated / deleted),回合收口时由 {@link FileChangeAdvisor} 把轻量摘要与全文
- * 分别填充到 {@link TaskEntry#fileChangesLight} / {@link TaskEntry#fileChangesFull},
- * 由 {@link RoundIndexStore} 落盘(摘要内联进 rounds.jsonl 每轮行、全文写
+ * (created / updated / deleted),回合收口时由 {@code FileChangeAdvisor} 把轻量摘要与全文
+ * 分别填充到 {@code TaskEntry#fileChangesLight} / {@code TaskEntry#fileChangesFull},
+ * 由 {@code RoundIndexStore} 落盘(摘要内联进 rounds.jsonl 每轮行、全文写
  * {@code file-changes/<roundId>.json})。不再发 kind='file_changes' 的 task.trace。
  * 与 node 侧一致:删除是终态(本版文件工具无 delete 工具,保留分支防御)。
  *

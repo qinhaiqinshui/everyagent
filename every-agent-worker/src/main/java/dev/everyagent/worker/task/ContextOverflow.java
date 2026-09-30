@@ -1,6 +1,7 @@
 package dev.everyagent.worker.task;
 
 import dev.everyagent.plugin.api.model.ModelConfig;
+import dev.everyagent.plugin.api.util.RootCause;
 import dev.everyagent.worker.agent.AgentEntity;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

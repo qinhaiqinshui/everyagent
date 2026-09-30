@@ -1,4 +1,4 @@
-package dev.everyagent.worker;
+package dev.everyagent.plugin.api.util;
 
 import java.io.IOException;
 import java.nio.file.AtomicMoveNotSupportedException;

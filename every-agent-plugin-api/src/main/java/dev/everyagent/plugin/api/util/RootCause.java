@@ -1,4 +1,4 @@
-package dev.everyagent.worker.task;
+package dev.everyagent.plugin.api.util;
 
 /**
  * 异常根因提取(沿 cause 链到底),用于任务失败日志/事件收口。

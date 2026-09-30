@@ -1,7 +1,7 @@
 package dev.everyagent.plugin.unattended;
 
 import dev.everyagent.contract.json.Json;
-import dev.everyagent.worker.slash.SlashTokenEncoder;
+import dev.everyagent.plugin.api.slash.SlashTokenEncoder;
 
 /**
  * 「/无人值守」斜杠能力 capsule token 的 worker 侧实现(仿

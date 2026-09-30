@@ -1,6 +1,7 @@
 package dev.everyagent.worker.task;
 
 import dev.everyagent.contract.json.Json;
+import dev.everyagent.plugin.api.event.EventRecord;
 import dev.everyagent.worker.config.WorkerProperties;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;

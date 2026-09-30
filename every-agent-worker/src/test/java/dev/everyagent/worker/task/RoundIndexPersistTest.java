@@ -1,10 +1,12 @@
 package dev.everyagent.worker.task;
 
 import dev.everyagent.contract.json.Json;
+import dev.everyagent.plugin.api.task.UserInput;
+import dev.everyagent.plugin.api.event.EventPayloads;
 import dev.everyagent.plugin.api.model.EmitEvent;
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.plugin.api.event.Events;
-import dev.everyagent.worker.proto.Events.ToolCallPart;
+import dev.everyagent.plugin.api.event.Events.ToolCallPart;
 import dev.everyagent.plugin.api.proto.SnowflakeId;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -406,6 +408,6 @@ class RoundIndexPersistTest {
     }
 
     private static String Events_USER_MESSAGE() {
-        return dev.everyagent.worker.proto.Events.USER_MESSAGE;
+        return dev.everyagent.plugin.api.event.Events.USER_MESSAGE;
     }
 }

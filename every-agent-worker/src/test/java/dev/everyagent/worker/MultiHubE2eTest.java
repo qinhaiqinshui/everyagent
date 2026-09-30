@@ -1,6 +1,7 @@
 package dev.everyagent.worker;
 
 import dev.everyagent.contract.frame.Frames;
+import dev.everyagent.plugin.api.task.UserInput;
 import dev.everyagent.contract.ids.Ids;
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.hub.HubApplication;
@@ -10,7 +11,7 @@ import dev.everyagent.worker.plugin.registry.ChatModelEnhancerRegistry;
 import dev.everyagent.worker.hub.HubPool;
 import dev.everyagent.worker.modules.ConfigStore;
 import dev.everyagent.worker.modules.ConfigStore.ResolvedConfig;
-import dev.everyagent.worker.proto.Channels;
+import dev.everyagent.plugin.api.event.Channels;
 import dev.everyagent.worker.task.ChatModelFactory;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;

@@ -1,6 +1,8 @@
 package dev.everyagent.worker.slash;
 
 import dev.everyagent.worker.task.TaskEntry;
+import dev.everyagent.plugin.api.slash.SlashCommandItem;
+import dev.everyagent.plugin.api.slash.SlashTokenEncoder;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

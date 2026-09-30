@@ -10,7 +10,7 @@ import dev.everyagent.plugin.api.interaction.AskQuestion;
 import dev.everyagent.plugin.api.interaction.AskResult;
 import dev.everyagent.plugin.api.interaction.InteractionService;
 import dev.everyagent.worker.config.WorkerProperties;
-import dev.everyagent.worker.task.AgentCancelledException;
+import dev.everyagent.plugin.api.exception.AgentCancelledException;
 import dev.everyagent.worker.task.TaskEntry;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;

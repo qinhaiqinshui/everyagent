@@ -1,6 +1,7 @@
 package dev.everyagent.worker.proto;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import dev.everyagent.plugin.api.proto.ShortIds;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 

@@ -1,4 +1,4 @@
-package dev.everyagent.worker.task;
+package dev.everyagent.plugin.api.exception;
 
 /** 模型调用失败(网络/鉴权/限流等)→ 任务失败。 */
 public class ModelCallException extends RuntimeException {

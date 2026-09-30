@@ -1,10 +1,13 @@
 package dev.everyagent.worker.task;
 
 import dev.everyagent.contract.json.Json;
+import dev.everyagent.plugin.api.task.UserInput;
+import dev.everyagent.plugin.api.event.EventPayloads;
+import dev.everyagent.plugin.api.event.EventRecord;
 import dev.everyagent.plugin.api.model.EmitEvent;
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.plugin.api.event.Events;
-import dev.everyagent.worker.proto.Events.ToolCallPart;
+import dev.everyagent.plugin.api.event.Events.ToolCallPart;
 import dev.everyagent.plugin.api.proto.SnowflakeId;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;

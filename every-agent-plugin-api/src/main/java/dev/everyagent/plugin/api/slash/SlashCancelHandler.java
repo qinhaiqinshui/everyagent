@@ -1,4 +1,4 @@
-package dev.everyagent.worker.slash;
+package dev.everyagent.plugin.api.slash;
 
 /**
  * 斜杠命令「取消」业务回调:胶囊/⌧(内联✕)被移除时触发,用于回滚选中时产生的副作用。

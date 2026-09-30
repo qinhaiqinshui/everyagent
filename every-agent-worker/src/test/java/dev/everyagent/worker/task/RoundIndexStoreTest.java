@@ -1,7 +1,8 @@
 package dev.everyagent.worker.task;
 
 import dev.everyagent.contract.json.Json;
-import dev.everyagent.worker.proto.Events;
+import dev.everyagent.plugin.api.event.EventRecord;
+import dev.everyagent.plugin.api.event.Events;
 import org.junit.jupiter.api.Test;
 import tools.jackson.databind.JsonNode;
 

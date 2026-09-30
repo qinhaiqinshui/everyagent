@@ -1,4 +1,4 @@
-package dev.everyagent.worker.slash;
+package dev.everyagent.plugin.api.slash;
 
 /**
  * 斜杠命令选中后的「展示位置」:决定回调结果插入输入框的形态。

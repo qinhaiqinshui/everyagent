@@ -1,10 +1,11 @@
 package dev.everyagent.worker.task;
 
 import dev.everyagent.contract.json.Json;
+import dev.everyagent.plugin.api.event.EventPayloads;
 import dev.everyagent.plugin.api.model.EmitEvent;
 import dev.everyagent.worker.agent.AgentEntity;
 import dev.everyagent.plugin.api.event.Events;
-import dev.everyagent.worker.proto.Events.ToolCallPart;
+import dev.everyagent.plugin.api.event.Events.ToolCallPart;
 import dev.everyagent.plugin.api.proto.SnowflakeId;
 import dev.everyagent.plugin.api.event.Usage;
 import org.springframework.ai.chat.client.ChatClientRequest;

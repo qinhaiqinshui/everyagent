@@ -3,7 +3,7 @@ package dev.everyagent.worker.modules;
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.worker.hub.HubPool;
 import dev.everyagent.worker.proto.ConfigDtos.ModelConfig;
-import dev.everyagent.worker.proto.Events;
+import dev.everyagent.plugin.api.event.Events;
 import dev.everyagent.worker.proto.RpcMethods;
 import dev.everyagent.worker.rpc.RpcContext;
 import dev.everyagent.worker.rpc.RpcDispatcher;

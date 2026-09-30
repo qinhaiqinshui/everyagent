@@ -1,6 +1,7 @@
 package dev.everyagent.plugin.subagent;
 
 import dev.everyagent.plugin.api.task.TaskChain;
+import dev.everyagent.plugin.api.event.EventLogReader;
 import dev.everyagent.plugin.api.task.TaskLifecycleContext;
 import dev.everyagent.plugin.api.task.TaskLifecycleNode;
 import dev.everyagent.plugin.api.task.TaskOutcome;
@@ -13,7 +14,7 @@ import org.slf4j.LoggerFactory;
 import java.nio.file.Path;
 
 /**
- * 下行节点（order=150）：任务 track 时注册 EventLog.Listener 到 SubAgentLedger。
+ * 下行节点（order=150）：任务 track 时注册 EventLogReader.Listener 到 SubAgentLedger。
  * 在 persistence.track(100) 之后、task.wires(200) 之前执行。
  */
 public final class SubAgentLedgerTrackNode implements TaskLifecycleNode {

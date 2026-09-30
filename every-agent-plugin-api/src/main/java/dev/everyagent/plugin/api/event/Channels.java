@@ -1,7 +1,7 @@
-package dev.everyagent.worker.proto;
+package dev.everyagent.plugin.api.event;
 
 /**
- * 任务端业务频道名构造(架构 §3.2 的任务域部分,归 worker 所有)。
+ * 任务端业务频道名构造(架构 §3.2 的任务域部分)。
  * K 即 ownerKey = sha256(apiKey);hub 不感知这些名字,只校验命名空间。
  */
 public final class Channels {

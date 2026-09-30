@@ -1,7 +1,7 @@
 package dev.everyagent.worker.network;
 
 import dev.everyagent.contract.json.Json;
-import dev.everyagent.worker.slash.SlashTokenEncoder;
+import dev.everyagent.plugin.api.slash.SlashTokenEncoder;
 
 /**
  * 「/禁用网络」斜杠能力 capsule token 的 worker 侧实现(仿 {@code modelpool.ModelPoolToken}:

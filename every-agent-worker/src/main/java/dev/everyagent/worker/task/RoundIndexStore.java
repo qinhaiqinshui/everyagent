@@ -1,6 +1,7 @@
 package dev.everyagent.worker.task;
 
 import dev.everyagent.plugin.api.event.Events;
+import dev.everyagent.plugin.api.event.EventRecord;
 import dev.everyagent.plugin.api.proto.ShortIds;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

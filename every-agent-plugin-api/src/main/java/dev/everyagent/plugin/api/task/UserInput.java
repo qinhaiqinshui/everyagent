@@ -1,4 +1,4 @@
-package dev.everyagent.worker.task;
+package dev.everyagent.plugin.api.task;
 
 /**
  * 一条用户输入。

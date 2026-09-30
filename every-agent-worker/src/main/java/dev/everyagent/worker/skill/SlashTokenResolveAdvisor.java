@@ -1,6 +1,7 @@
 package dev.everyagent.worker.skill;
 
 import java.util.ArrayList;
+import dev.everyagent.plugin.api.slash.SlashTokenEncoder;
 import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;

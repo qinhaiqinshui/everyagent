@@ -1,6 +1,7 @@
 package dev.everyagent.worker.slash;
 
 import java.io.IOException;
+import dev.everyagent.plugin.api.slash.SlashTokenEncoder;
 import java.util.List;
 
 import org.slf4j.Logger;

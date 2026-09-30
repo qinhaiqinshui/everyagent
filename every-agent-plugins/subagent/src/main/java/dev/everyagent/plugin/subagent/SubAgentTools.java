@@ -1,6 +1,6 @@
 package dev.everyagent.plugin.subagent;
 
-import dev.everyagent.worker.task.AgentCancelledException;
+import dev.everyagent.plugin.api.exception.AgentCancelledException;
 import dev.everyagent.worker.task.TaskEntry;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;

@@ -1,8 +1,8 @@
 package dev.everyagent.plugin.subagent;
 
 import dev.everyagent.contract.json.Json;
-import dev.everyagent.worker.task.EventLog;
-import dev.everyagent.worker.task.EventRecord;
+import dev.everyagent.plugin.api.event.EventLogReader;
+import dev.everyagent.plugin.api.event.EventRecord;
 import dev.everyagent.worker.task.TaskStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -44,8 +44,8 @@ public class SubAgentLedger {
     private final Map<String, Map<String, ObjectNode>> taskLedgers = new ConcurrentHashMap<>();
     /** per-task EventLog 游标：taskId → 最后处理的 EventLog 位置（按记录数） */
     private final Map<String, Integer> taskCursors = new ConcurrentHashMap<>();
-    /** per-task EventLog.Listener 引用（用于 untrack 时移除） */
-    private final Map<String, EventLog.Listener> taskListeners = new ConcurrentHashMap<>();
+    /** per-task EventLogReader.Listener 引用（用于 untrack 时移除） */
+    private final Map<String, EventLogReader.Listener> taskListeners = new ConcurrentHashMap<>();
 
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(
             r -> Thread.ofVirtual().name("subagent-ledger-timer").unstarted(r));
@@ -59,10 +59,10 @@ public class SubAgentLedger {
     // ── 任务生命周期回调 ──
 
     /**
-     * 任务 track 时调用：注册 EventLog.Listener，开始订阅事件维护台账。
+     * 任务 track 时调用：注册 EventLogReader.Listener，开始订阅事件维护台账。
      * 同时从磁盘恢复已有台账（冷启动续跑场景）。
      */
-    public void onTrack(String taskId, EventLog log, Path dir, JsonNode meta) {
+    public void onTrack(String taskId, EventLogReader log, Path dir, JsonNode meta) {
         // 冷启动恢复：优先 agents.json，回退 meta.agents
         Map<String, ObjectNode> ledger = taskLedgers.computeIfAbsent(taskId, k -> new ConcurrentHashMap<>());
         List<ObjectNode> disk = store.readAgents(dir);
@@ -98,8 +98,8 @@ public class SubAgentLedger {
             }
         }
 
-        // 注册 EventLog.Listener
-        EventLog.Listener listener = new EventLog.Listener() {
+        // 注册 EventLogReader.Listener
+        EventLogReader.Listener listener = new EventLogReader.Listener() {
             @Override
             public void onAppend() {
                 processNewEvents(taskId, log);
@@ -110,11 +110,11 @@ public class SubAgentLedger {
     }
 
     /**
-     * 任务 untrack 时调用：移除 EventLog.Listener，清理内存台账。
+     * 任务 untrack 时调用：移除 EventLogReader.Listener，清理内存台账。
      * 终态快照已由 ledger.persist 节点写入磁盘。
      */
-    public void onUntrack(String taskId, EventLog log) {
-        EventLog.Listener listener = taskListeners.remove(taskId);
+    public void onUntrack(String taskId, EventLogReader log) {
+        EventLogReader.Listener listener = taskListeners.remove(taskId);
         if (listener != null) {
             log.removeListener(listener);
         }
@@ -127,7 +127,7 @@ public class SubAgentLedger {
     /**
      * 处理 EventLog 中新增的事件，过滤 agent.started / agent.done / agent.status / usage / message / error 更新台账。
      */
-    private void processNewEvents(String taskId, EventLog log) {
+    private void processNewEvents(String taskId, EventLogReader log) {
         Map<String, ObjectNode> ledger = taskLedgers.get(taskId);
         if (ledger == null) return;
 

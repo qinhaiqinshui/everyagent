@@ -4,11 +4,11 @@ import java.util.List;
 
 import org.springframework.stereotype.Component;
 
-import dev.everyagent.worker.slash.SlashCancelHandler;
-import dev.everyagent.worker.slash.SlashCommandItem;
+import dev.everyagent.plugin.api.slash.SlashCancelHandler;
+import dev.everyagent.plugin.api.slash.SlashCommandItem;
 import dev.everyagent.worker.slash.SlashCommandRegistry;
-import dev.everyagent.worker.slash.SlashSelectHandler;
-import dev.everyagent.worker.slash.SlashSelectionResult;
+import dev.everyagent.plugin.api.slash.SlashSelectHandler;
+import dev.everyagent.plugin.api.slash.SlashSelectionResult;
 import dev.everyagent.worker.task.TaskEntry;
 import dev.everyagent.worker.task.TaskManager;
 

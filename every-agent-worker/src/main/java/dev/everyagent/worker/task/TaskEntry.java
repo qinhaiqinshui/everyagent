@@ -1,12 +1,13 @@
 package dev.everyagent.worker.task;
 
 import dev.everyagent.plugin.api.permission.TaskInfo;
+import dev.everyagent.plugin.api.task.FileChangesCollector;
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.plugin.api.model.ModelConfig;
 import dev.everyagent.worker.agent.AgentEntity;
 import dev.everyagent.worker.proto.TaskDtos.TaskStatus;
 import dev.everyagent.worker.proto.TaskDtos.TaskSummary;
-import dev.everyagent.worker.proto.TaskDtos.Usage;
+import dev.everyagent.plugin.api.event.Usage;
 import dev.everyagent.worker.proto.TaskDtos.UsageSummary;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.node.ArrayNode;

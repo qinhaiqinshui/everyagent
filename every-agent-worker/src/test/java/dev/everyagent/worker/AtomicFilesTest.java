@@ -1,6 +1,7 @@
 package dev.everyagent.worker;
 
 import org.junit.jupiter.api.Test;
+import dev.everyagent.plugin.api.util.AtomicFiles;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;

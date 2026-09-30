@@ -6,7 +6,7 @@ import dev.everyagent.plugin.api.permission.AuthorizationHandler.AuthorizationRe
 import dev.everyagent.plugin.api.permission.AuthorizationHandler.AuthorizationDecision;
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.plugin.registry.AuthorizationHandlerRegistry;
-import dev.everyagent.worker.task.AgentCancelledException;
+import dev.everyagent.plugin.api.exception.AgentCancelledException;
 import dev.everyagent.plugin.api.interaction.AskOption;
 import dev.everyagent.plugin.api.interaction.AskQuestion;
 import dev.everyagent.plugin.api.interaction.AskResult;

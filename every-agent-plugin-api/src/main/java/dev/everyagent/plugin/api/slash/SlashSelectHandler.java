@@ -1,4 +1,4 @@
-package dev.everyagent.worker.slash;
+package dev.everyagent.plugin.api.slash;
 
 import java.util.List;
 

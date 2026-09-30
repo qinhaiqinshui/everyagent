@@ -2,6 +2,7 @@ package dev.everyagent.worker.proto;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;
+import dev.everyagent.plugin.api.event.Usage;
 import tools.jackson.databind.JsonNode;
 
 /**
@@ -31,19 +32,9 @@ public final class TaskDtos {
 
     /** 模型配置快照已搬至 plugin-api（{@code dev.everyagent.plugin.api.model.ModelConfig}），此处不再定义。 */
 
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    @JsonInclude(JsonInclude.Include.NON_NULL)
-    public record Usage(long inputTokens, long outputTokens, long totalTokens) {
-
-        public static Usage zero() {
-            return new Usage(0, 0, 0);
-        }
-
-        public Usage plus(Usage other) {
-            return new Usage(inputTokens + other.inputTokens, outputTokens + other.outputTokens,
-                    totalTokens + other.totalTokens);
-        }
-    }
+    /**
+     * Usage 已搬至 plugin-api（{@code dev.everyagent.plugin.api.event.Usage}），此处不再定义。
+     */
 
     /**
      * 任务摘要里的上下文用量快照(最近一轮主 agent 实测 usage + 窗口上限 + 模型)。

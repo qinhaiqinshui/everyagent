@@ -3,7 +3,7 @@ package dev.everyagent.worker.task.lifecycle;
 import dev.everyagent.plugin.api.task.TaskChain;
 import dev.everyagent.plugin.api.task.TaskLifecycleContext;
 import dev.everyagent.plugin.api.task.TaskLifecycleNode;
-import dev.everyagent.worker.task.UserInput;
+import dev.everyagent.plugin.api.task.UserInput;
 
 /**
  * 消费输入节点（order=396）。

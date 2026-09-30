@@ -1,6 +1,7 @@
 package dev.everyagent.worker.slash;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import dev.everyagent.plugin.api.slash.SlashCommandItem;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 

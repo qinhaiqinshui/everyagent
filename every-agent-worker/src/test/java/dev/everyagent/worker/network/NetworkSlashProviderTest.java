@@ -1,11 +1,11 @@
 package dev.everyagent.worker.network;
 
 import dev.everyagent.plugin.api.model.ModelConfig;
-import dev.everyagent.worker.slash.SlashCommandItem;
+import dev.everyagent.plugin.api.slash.SlashCommandItem;
 import dev.everyagent.worker.slash.SlashCommandRegistry;
-import dev.everyagent.worker.slash.SlashDisplayPosition;
-import dev.everyagent.worker.slash.SlashSelectionResult;
-import dev.everyagent.worker.slash.SlashTokenEncoder;
+import dev.everyagent.plugin.api.slash.SlashDisplayPosition;
+import dev.everyagent.plugin.api.slash.SlashSelectionResult;
+import dev.everyagent.plugin.api.slash.SlashTokenEncoder;
 import dev.everyagent.worker.task.TaskEntry;
 import dev.everyagent.worker.task.TaskManager;
 import org.junit.jupiter.api.BeforeEach;

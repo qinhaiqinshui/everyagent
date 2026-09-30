@@ -1,9 +1,11 @@
 package dev.everyagent.worker.task;
 
 import dev.everyagent.contract.json.Json;
-import dev.everyagent.worker.AtomicFiles;
+import dev.everyagent.plugin.api.event.EventRecord;
+import dev.everyagent.plugin.api.task.UserInput;
+import dev.everyagent.plugin.api.util.AtomicFiles;
 import dev.everyagent.worker.config.WorkerProperties;
-import dev.everyagent.worker.proto.Events;
+import dev.everyagent.plugin.api.event.Events;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;

@@ -5,7 +5,7 @@ import dev.everyagent.plugin.api.task.TaskLifecycleContext;
 import dev.everyagent.plugin.api.task.TaskLifecycleNode;
 import dev.everyagent.plugin.api.task.TaskOutcome;
 import dev.everyagent.worker.task.TaskStore;
-import dev.everyagent.worker.task.UserInput;
+import dev.everyagent.plugin.api.task.UserInput;
 import dev.everyagent.worker.task.lifecycle.TaskLifecycleContextImpl;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

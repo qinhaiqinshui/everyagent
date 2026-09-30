@@ -1,10 +1,9 @@
-package dev.everyagent.worker.task;
+package dev.everyagent.plugin.api.event;
 
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.plugin.api.interaction.AskOption;
 import dev.everyagent.plugin.api.interaction.AskQuestion;
 import dev.everyagent.plugin.api.model.ModelConfig;
-import dev.everyagent.worker.proto.Events.ToolCallPart;
 import tools.jackson.databind.node.ArrayNode;
 import tools.jackson.databind.node.ObjectNode;
 
@@ -135,10 +134,10 @@ public final class EventPayloads {
 
     /** message 事件的 toolCalls 数组构建。 */
     public static tools.jackson.databind.node.ArrayNode toolCallsToJson(
-            List<ToolCallPart> toolCalls) {
+            List<Events.ToolCallPart> toolCalls) {
         var arr = Json.arr();
         if (toolCalls != null) {
-            for (ToolCallPart tc : toolCalls) {
+            for (Events.ToolCallPart tc : toolCalls) {
                 ObjectNode o = arr.addObject();
                 o.put("id", tc.id());
                 o.put("name", tc.name());

@@ -1,4 +1,4 @@
-package dev.everyagent.worker.slash;
+package dev.everyagent.plugin.api.slash;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
@@ -17,7 +17,7 @@ import tools.jackson.databind.JsonNode;
  * <ul>
  *   <li>编码:后端 {@code slash.list} 直接把完整 opaque 串作为 {@code insertText} 下发,
  *       前端选中即插胶囊,零 token 构造逻辑;</li>
- *   <li>解析:{@link SlashTokenResolveAdvisor} 在用户消息进入模型前,按 kind 解析 payload
+ *   <li>解析:{@code SlashTokenResolveAdvisor} 在用户消息进入模型前,按 kind 解析 payload
  *       并替换为可读文本(与老项目 {@code composerTokenRegistry.resolve} 语义一致)。</li>
  * </ul>
  */

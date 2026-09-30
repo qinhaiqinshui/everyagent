@@ -1,7 +1,7 @@
 package dev.everyagent.worker.powershell;
 
 import dev.everyagent.contract.json.Json;
-import dev.everyagent.worker.slash.SlashTokenEncoder;
+import dev.everyagent.plugin.api.slash.SlashTokenEncoder;
 
 /**
  * 「/允许AI访问电脑」斜杠能力 capsule token 的 worker 侧实现(仿

@@ -6,7 +6,7 @@ import dev.everyagent.worker.modules.ConfigStore;
 import dev.everyagent.worker.modules.ConfigStore.ResolvedConfig;
 import dev.everyagent.worker.agent.AgentEntity;
 import dev.everyagent.worker.task.ChatModelFactory;
-import dev.everyagent.worker.task.EventRecord;
+import dev.everyagent.plugin.api.event.EventRecord;
 import dev.everyagent.worker.task.TaskEntry;
 import dev.everyagent.worker.task.TaskStore;
 import dev.everyagent.plugin.api.model.ModelConfig;

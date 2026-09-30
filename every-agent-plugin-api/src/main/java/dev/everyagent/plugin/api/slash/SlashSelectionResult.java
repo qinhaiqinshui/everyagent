@@ -1,4 +1,4 @@
-package dev.everyagent.worker.slash;
+package dev.everyagent.plugin.api.slash;
 
 /**
  * 选中回调的返回结果:告诉前端「插什么、插到哪」。

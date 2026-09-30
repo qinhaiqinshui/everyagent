@@ -1,7 +1,7 @@
 package dev.everyagent.plugin.git;
 
 import dev.everyagent.contract.json.Json;
-import dev.everyagent.worker.slash.SlashTokenEncoder;
+import dev.everyagent.plugin.api.slash.SlashTokenEncoder;
 
 /**
  * 「/自动同步」斜杠能力 capsule token 的 worker 侧实现(对齐 old

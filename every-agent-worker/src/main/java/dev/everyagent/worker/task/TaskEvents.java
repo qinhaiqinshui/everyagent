@@ -1,6 +1,7 @@
 package dev.everyagent.worker.task;
 
 import dev.everyagent.contract.json.Json;
+import dev.everyagent.plugin.api.event.EventRecord;
 import dev.everyagent.plugin.api.model.EmitEvent;
 import dev.everyagent.plugin.api.model.EventEmitter;
 import tools.jackson.databind.JsonNode;

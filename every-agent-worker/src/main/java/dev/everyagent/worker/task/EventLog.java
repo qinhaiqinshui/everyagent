@@ -21,7 +21,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
  * {@code ext.persist=false} 的 trace)虽仍进内存缓冲供实时推送,但不占用 maxEvents 护栏——
  * 护栏只保护落盘事件;瞬态风暴由流护栏({@code model-length-guard 插件})治理(§13.5)。
  */
-public final class EventLog {
+public final class EventLog implements EventLogReader {
 
     /** 事件日志超过上限(§13.5)。 */
     public static final class LogOverflowException extends RuntimeException {
@@ -30,13 +30,10 @@ public final class EventLog {
         }
     }
 
-    public interface Listener {
-        void onAppend();
-    }
 
     private final long maxEvents;
     private final ArrayDeque<EventRecord> records = new ArrayDeque<>();
-    private final CopyOnWriteArrayList<Listener> listeners = new CopyOnWriteArrayList<>();
+    private final CopyOnWriteArrayList<EventLogReader.Listener> listeners = new CopyOnWriteArrayList<>();
     /** 已追加的持久(落盘)事件数——maxEvents 护栏只按此计数,瞬态事件不计入。 */
     private long persistentSize = 0;
 
@@ -88,7 +85,7 @@ public final class EventLog {
                 persistentSize++;
             }
         }
-        for (Listener l : listeners) {
+        for (EventLogReader.Listener l : listeners) {
             l.onAppend(); // 仅信号,微秒级,不阻塞任务线程
         }
         return record;
@@ -127,7 +124,7 @@ public final class EventLog {
                 persistentSize++;
             }
         }
-        for (Listener l : listeners) {
+        for (EventLogReader.Listener l : listeners) {
             l.onAppend(); // 仅信号,微秒级,不阻塞任务线程
         }
         return record;
@@ -277,11 +274,11 @@ public final class EventLog {
         }
     }
 
-    public void addListener(Listener l) {
+    public void addListener(EventLogReader.Listener l) {
         listeners.add(l);
     }
 
-    public void removeListener(Listener l) {
+    public void removeListener(EventLogReader.Listener l) {
         listeners.remove(l);
     }
 }

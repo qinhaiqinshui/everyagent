@@ -2,7 +2,7 @@ package dev.everyagent.plugin.git;
 
 import java.util.List;
 
-import dev.everyagent.worker.slash.SlashCommandItem;
+import dev.everyagent.plugin.api.slash.SlashCommandItem;
 
 /**
  * 「/自动同步」命令来源(对齐 old {@code plugins/git/gitAutoSyncSlashProvider.ts}):
