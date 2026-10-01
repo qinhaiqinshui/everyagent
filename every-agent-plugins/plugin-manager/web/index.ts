@@ -20,6 +20,8 @@ const pluginManagerPlugin: PluginModule = {
       title: '扩展',
       icon: React.createElement(ExtensionIcon),
       Panel: PluginManagerPanel,
+      // 活动栏排序：排在源代码管理 (5) 之后、内置「设置」(10) 之前。
+      order: 9,
     })
   },
 }

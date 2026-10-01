@@ -1032,24 +1032,34 @@ function renderWorkspaceTabContent(
 }
 
 /**
- * 构建活动栏条目：内置项在前，插件注册的侧边栏项在后。
+ * 侧边栏入口排序字段缺省值：未声明 `order` 的贡献排在所有已声明项之后
+ * （内置项 order 均 < 100），同 order 之间保持贡献先后。与 plugin-api
+ * `UiSidebarItemDefinition.order` 的文档约定一致。
+ */
+const DEFAULT_SIDEBAR_ORDER = 100
+
+/**
+ * 构建活动栏条目：内置项与插件注册的侧边栏项**统一按 order 升序混排**（不再依赖注册顺序）。
  * 内置项含 tasks/files/search/settings；插件项来自 pluginDispatcher.listRegisteredSidebarItems()。
+ * order 为 float，内置项占 1(任务)/2(文件)/3(搜索)/10(设置)，中间空位（如 git 5、扩展 9）留给插件插队。
  * 在渲染期读取快照，由调用方（LayoutContent）订阅 `pluginExtensionsVersion` 保证注册后立刻重算。
+ * 排序稳定：order 相同者按「内置项在前、插件按注册顺序」排列（Array.prototype.sort 自 ES2019 起保证稳定）。
  */
 function buildSidebarActivityItems(openTopLevelPageIds: TopLevelPageId[]): SidebarActivityItem[] {
-  const builtinItems: SidebarActivityItem[] = [
-    { id: 'tasks', label: '任务', icon: <TaskChatIcon /> },
-    { id: 'files', label: '文件', icon: <FilesIcon /> },
-    { id: 'search', label: '搜索', icon: <SearchSidebarIcon /> },
-    { id: 'settings', label: '设置', icon: <SettingsIcon />, badgeCount: openTopLevelPageIds.includes('settings') ? 1 : undefined },
+  const builtinItems: Array<SidebarActivityItem & { order: number }> = [
+    { id: 'tasks', label: '任务', icon: <TaskChatIcon />, order: 1 },
+    { id: 'files', label: '文件', icon: <FilesIcon />, order: 2 },
+    { id: 'search', label: '搜索', icon: <SearchSidebarIcon />, order: 3 },
+    { id: 'settings', label: '设置', icon: <SettingsIcon />, order: 10, badgeCount: openTopLevelPageIds.includes('settings') ? 1 : undefined },
   ]
-  const pluginItems: SidebarActivityItem[] = pluginDispatcher.listRegisteredSidebarItems().map((def) => ({
+  const pluginItems: Array<SidebarActivityItem & { order: number }> = pluginDispatcher.listRegisteredSidebarItems().map((def) => ({
     id: def.id,
     label: def.title,
     icon: def.icon,
     badgeCount: def.badgeCount,
+    order: def.order ?? DEFAULT_SIDEBAR_ORDER,
   }))
-  return [...builtinItems, ...pluginItems]
+  return [...builtinItems, ...pluginItems].sort((a, b) => a.order - b.order)
 }
 
 /**

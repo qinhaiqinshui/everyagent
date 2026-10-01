@@ -31,6 +31,8 @@ const gitPlugin: PluginModule = {
       icon: React.createElement(GitIcon),
       Panel: GitSidebarPanel,
       Badge: GitChangeBadge,
+      // 活动栏排序：落在内置「搜索」(3) 之后、「扩展」(9) 与「设置」(10) 之前。
+      order: 5,
     })
 
     // 注册 git-history 标签类型

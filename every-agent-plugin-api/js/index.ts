@@ -209,7 +209,12 @@ export interface CommandRegistry {
 
 // ─── UI 扩展点定义 ────────────────────────────────────────────────────────
 
-/** 侧边栏入口定义（由 `ui.sidebar_items` 扩展点产出）。 */
+/**
+ * 侧边栏入口定义（由 `ui.sidebar_items` 扩展点产出）。
+ *
+ * 活动栏条目由内置项与所有插件贡献**统一按 `order` 升序混排**（见 §8.5），
+ * 贡献方不再隐含「内置在前、插件在后」的注册顺序假设。
+ */
 export interface UiSidebarItemDefinition {
   /** 唯一稳定 id（同时作为 SidebarPanelId 使用）。 */
   id: string
@@ -223,6 +228,12 @@ export interface UiSidebarItemDefinition {
   badgeCount?: number
   /** 可选：活动栏角标渲染组件（插件自管订阅与刷新）。缺省不渲染角标。 */
   Badge?: ComponentType
+  /**
+   * 活动栏排序字段（float，越小越靠前，同值按贡献先后稳定排列）。
+   * 支持小数（如 4.5），便于在既有两项之间插入而不必整体重排。
+   * 缺省视为 `DEFAULT_SIDEBAR_ORDER`（100），即未声明顺序的插件项落在内置项之后。
+   */
+  order?: number
 }
 
 /** 壳层传给标签渲染 / 生命周期的上下文。 */
