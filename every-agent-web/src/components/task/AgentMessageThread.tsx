@@ -1,9 +1,13 @@
 import React from 'react'
 import type { AgentMessageRecord, ChatComposerToken } from '@/types'
 import { splitComposerRawContent } from '@/composerToken/composerOpaqueToken'
+import { buildWorkspaceFileTabTarget, readWorkspaceFileToken } from '@/composerToken/workspaceFileToken'
 import { getComposerChipView } from '@/composerToken/composerChipRenderer'
 import { openSlashItemDetail } from '@/components/taskComposer/SlashItemDetailPopover'
 import { pluginDispatcher } from '@/plugin/PluginDispatcher'
+import { useWorkspaceShell } from '@/components/app/WorkspaceShellContext'
+import { taskStore } from '@/hub/taskStore'
+import { workspaceRegistry } from '@/hub/workspaceRegistry'
 import {
   SparkIcon,
   WrenchIcon,
@@ -142,6 +146,7 @@ export default function AgentMessageThread({
           <CollapsibleUserBubble
             className="nagent-msg__bubble nagent-msg__bubble--user"
             segments={replaySegments}
+            taskId={taskId}
           />
         </div>
       </div>
@@ -251,15 +256,37 @@ function buildUserMessageReplaySegments(message: AgentMessageRecord): Array<{
 
 function UserMessageReplay({
   segments,
+  taskId,
 }: {
   segments: Array<{
     type: 'text' | 'token'
     value: string
     token?: ChatComposerToken
   }>
+  /** 当前 Task ID（点击 workspace_file 胶囊打开文件标签页时反查任务工作区根）。 */
+  taskId?: string
 }) {
+  const { openGlobalFileTab } = useWorkspaceShell()
   if (segments.length === 0) {
     return null
+  }
+
+  /**
+   * 胶囊激活（点击/Enter/空格）：`system.workspace_file` → 打开文件标签页预览
+   * （对接 buildWorkspaceFileTabTarget 现有语义）；其它 kind（含 external_file）保持弹详情。
+   */
+  const handleChipActivate = (el: HTMLElement, token: ChatComposerToken) => {
+    const payload = readWorkspaceFileToken(token)
+    if (payload) {
+      // 工作区根：任务自身工作区优先，缺省回退注册表首选根（与 `@` 列举兜底口径一致）。
+      const workspaceRoot = (taskId ? taskStore.get(taskId)?.workspace : undefined) || workspaceRegistry.primaryRoot() || ''
+      if (workspaceRoot) {
+        const target = buildWorkspaceFileTabTarget(payload)
+        openGlobalFileTab({ workspaceRoot, filePath: target.filePath })
+        return
+      }
+    }
+    openSlashItemDetail(el, { token })
   }
 
   return (
@@ -284,14 +311,14 @@ function UserMessageReplay({
               event.stopPropagation()
               if (segment.token) {
                 const el = event.currentTarget as HTMLElement
-                openSlashItemDetail(el, { token: segment.token })
+                handleChipActivate(el, segment.token)
               }
             }}
             onKeyDown={(event) => {
               if (segment.token && (event.key === 'Enter' || event.key === ' ')) {
                 event.preventDefault()
                 const el = event.currentTarget as HTMLElement
-                openSlashItemDetail(el, { token: segment.token })
+                handleChipActivate(el, segment.token)
               }
             }}
           >
@@ -313,6 +340,7 @@ const USER_BUBBLE_COLLAPSE_HEIGHT = 220
 function CollapsibleUserBubble({
   className,
   segments,
+  taskId,
 }: {
   className: string
   segments: Array<{
@@ -320,6 +348,8 @@ function CollapsibleUserBubble({
     value: string
     token?: ChatComposerToken
   }>
+  /** 当前 Task ID（透传给 UserMessageReplay，点击 workspace_file 胶囊时反查工作区根）。 */
+  taskId?: string
 }) {
   const contentRef = React.useRef<HTMLDivElement>(null)
   const [overflowing, setOverflowing] = React.useState(false)
@@ -344,7 +374,7 @@ function CollapsibleUserBubble({
       className={`${className}${collapsed ? ' nagent-msg__bubble--collapsed' : ''}`}
     >
       <div ref={contentRef} className="nagent-msg__bubble-content">
-        <UserMessageReplay segments={segments} />
+        <UserMessageReplay segments={segments} taskId={taskId} />
       </div>
       {overflowing ? (
         <button

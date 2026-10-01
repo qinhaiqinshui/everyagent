@@ -1,6 +1,12 @@
 import React from 'react'
 import type { ChatComposerToken } from '@/types'
 import { splitComposerRawContent, parseOpaqueTokenText } from '@/composerToken/composerOpaqueToken'
+import {
+  WORKSPACE_FILE_TOKEN_KIND,
+  buildWorkspaceFileTabTarget,
+  readWorkspaceFileToken,
+} from '@/composerToken/workspaceFileToken'
+import { buildTokenForPastedFile } from '@/services/pastedFileService'
 import { createSnowflakeId } from '@/utils/snowflakeId'
 import { openSlashItemDetail } from './SlashItemDetailPopover'
 
@@ -105,6 +111,12 @@ export interface InlineComposerProps {
   onBlur?: () => void
   /** 移除胶囊（点击 ✕）时上报被删的 token 对象（宿主据此触发 cancelTaskToken 等外部动作）。 */
   onRemoveToken?: (token: ChatComposerToken) => void
+  /** 工作区根（worker 机器绝对路径）：粘贴文件落盘与文件胶囊打开用；空 = 不支持文件粘贴。 */
+  workspaceRoot?: string
+  /** 点击 `system.workspace_file` 胶囊时打开文件标签页（对接 buildWorkspaceFileTabTarget 语义）。 */
+  onOpenWorkspaceFile?: (target: { workspaceRoot: string; filePath: string }) => void
+  /** 粘贴文件处理失败上报（宿主据此 toast；单个失败不阻断其余文件与文本粘贴）。 */
+  onFilePasteError?: (message: string) => void
 }
 
 /** 命令式句柄（宿主通过 ref 直接插入胶囊或纯文本）。 */
@@ -213,6 +225,20 @@ function serializeEditor(root: HTMLElement): string {
   }
   walk(root)
   return result
+}
+
+/** 从剪贴板收集文件项（截图/图片/文档等 `kind === 'file'` 项；items 为空时回退 files 列表）。 */
+function collectClipboardFiles(data: DataTransfer): File[] {
+  const files: File[] = []
+  for (const item of Array.from(data.items ?? [])) {
+    if (item.kind !== 'file') continue
+    const file = item.getAsFile()
+    if (file) files.push(file)
+  }
+  if (files.length === 0) {
+    for (const file of Array.from(data.files ?? [])) files.push(file)
+  }
+  return files
 }
 
 /** 子节点下标。 */
@@ -462,6 +488,9 @@ const InlineComposer = React.forwardRef<InlineComposerHandle, InlineComposerProp
     onKeyDown,
     onBlur,
     onRemoveToken,
+    workspaceRoot,
+    onOpenWorkspaceFile,
+    onFilePasteError,
   } = props
 
   const editorRef = React.useRef<HTMLDivElement | null>(null)
@@ -481,6 +510,14 @@ const InlineComposer = React.forwardRef<InlineComposerHandle, InlineComposerProp
   onKeyDownRef.current = onKeyDown
   onBlurRef.current = onBlur
   onRemoveTokenRef.current = onRemoveToken
+
+  // 文件粘贴/胶囊点击所需的宿主上下文（ref 持有最新值，供异步粘贴流程与点击回调读取）。
+  const workspaceRootRef = React.useRef(workspaceRoot)
+  const onOpenWorkspaceFileRef = React.useRef(onOpenWorkspaceFile)
+  const onFilePasteErrorRef = React.useRef(onFilePasteError)
+  workspaceRootRef.current = workspaceRoot
+  onOpenWorkspaceFileRef.current = onOpenWorkspaceFile
+  onFilePasteErrorRef.current = onFilePasteError
 
   // tokens 引用同步（序列化主要靠 data-opaque，这里仅用于点击文件胶囊定位 token 对象）。
   React.useEffect(() => {
@@ -561,45 +598,95 @@ const InlineComposer = React.forwardRef<InlineComposerHandle, InlineComposerProp
   }, [])
 
   /**
-   * 粘贴处理：识别剪贴板文本中的 `[[[[...]]]]` opaque 串并还原成胶囊，
-   * 而不是让浏览器当成纯文本插入（否则输入框里会显示字面 `[[[[...]]]]`，
-   * 且因 rawContent===lastEmittedRef 守卫，DOM 不会被重建成胶囊）。
-   * 这样从用户消息复制按钮复制出的 rawContent 粘贴回来能继续识别 token。
+   * 异步把粘贴的文件逐个落成 `@` 引用胶囊（读文件/写 rpc 是异步的，与同步文本分支并存）。
+   * 以粘贴时刻（文本插入后）的光标偏移为锚点逐个插入：异步写盘期间用户继续输入时，
+   * 胶囊仍落在粘贴位置之后，不跟随用户新输入漂移。
    */
-  const handlePaste = React.useCallback((event: React.ClipboardEvent<HTMLDivElement>) => {
+  const insertPastedFiles = React.useCallback(async (files: File[]) => {
     const root = editorRef.current
     if (!root) return
-    event.preventDefault()
-    const text = event.clipboardData.getData('text/plain') ?? ''
-    if (!text) return
-    root.focus()
-    const segments = splitComposerRawContent(text, [])
+    const workspaceRoot = workspaceRootRef.current?.trim() ?? ''
+    if (!workspaceRoot) {
+      onFilePasteErrorRef.current?.('工作区未就绪，暂时无法粘贴文件')
+      return
+    }
+    let offset = getCaretTextOffset(root)
     const inserted: ChatComposerToken[] = []
-    for (const segment of segments) {
-      if (segment.type === 'text') {
-        if (segment.value) {
-          insertTextAtCaret(root, segment.value)
-        }
-      } else if (segment.token) {
-        // 粘贴进来的 token 重新生成 id，避免与已有 token 冲突。
-        const token: ChatComposerToken = {
-          id: createSnowflakeId('composer_token'),
-          kind: segment.token.kind,
-          label: segment.token.label,
-          summary: segment.token.summary,
-          opaqueText: segment.token.opaqueText,
-        }
+    for (const file of files) {
+      try {
+        const token = await buildTokenForPastedFile(file, workspaceRoot)
+        setCaretAtTextOffset(root, offset)
         insertChipAtCaret(root, token)
+        offset += token.opaqueText.length
         inserted.push(token)
+      } catch (error) {
+        const name = file.name || '未命名文件'
+        onFilePasteErrorRef.current?.(
+          `粘贴文件失败（${name}）：${error instanceof Error ? error.message : String(error)}`,
+        )
       }
     }
-    // 单个 token 走 insertedToken（与命令式句柄同路径）；多个走 insertedTokens 批量上报。
+    if (inserted.length === 0) return
     emitFromDom(
       inserted.length === 1
         ? { insertedToken: inserted[0] }
         : { insertedTokens: inserted },
     )
     reportCaret()
+  }, [emitFromDom, reportCaret])
+
+  /**
+   * 粘贴处理：
+   * - 文本分支（保持原行为）：识别剪贴板文本中的 `[[[[...]]]]` opaque 串并还原成胶囊，
+   *   而不是让浏览器当成纯文本插入（否则输入框里会显示字面 `[[[[...]]]]`，
+   *   且因 rawContent===lastEmittedRef 守卫，DOM 不会被重建成胶囊）。
+   *   这样从用户消息复制按钮复制出的 rawContent 粘贴回来能继续识别 token。
+   * - 文件分支（统一文件粘贴，image-vision 步骤 1）：遍历 `clipboardData.items` 收集
+   *   `kind === 'file'` 项（截图/图片/文档统一处理），异步转为 `@` 引用胶囊插入——
+   *   工作区内文件直接引用、工作区外文件走 external_file、无路径文件（截图/浏览器）
+   *   写入工作区 `.everyagent/attachments/` 后引用（见 pastedFileService）。
+   *   单文件失败 toast 跳过，不阻断其余文件与文本粘贴。
+   */
+  const handlePaste = React.useCallback((event: React.ClipboardEvent<HTMLDivElement>) => {
+    const root = editorRef.current
+    if (!root) return
+    event.preventDefault()
+    const files = collectClipboardFiles(event.clipboardData)
+    const text = event.clipboardData.getData('text/plain') ?? ''
+    if (!text && files.length === 0) return
+    root.focus()
+    if (text) {
+      const segments = splitComposerRawContent(text, [])
+      const inserted: ChatComposerToken[] = []
+      for (const segment of segments) {
+        if (segment.type === 'text') {
+          if (segment.value) {
+            insertTextAtCaret(root, segment.value)
+          }
+        } else if (segment.token) {
+          // 粘贴进来的 token 重新生成 id，避免与已有 token 冲突。
+          const token: ChatComposerToken = {
+            id: createSnowflakeId('composer_token'),
+            kind: segment.token.kind,
+            label: segment.token.label,
+            summary: segment.token.summary,
+            opaqueText: segment.token.opaqueText,
+          }
+          insertChipAtCaret(root, token)
+          inserted.push(token)
+        }
+      }
+      // 单个 token 走 insertedToken（与命令式句柄同路径）；多个走 insertedTokens 批量上报。
+      emitFromDom(
+        inserted.length === 1
+          ? { insertedToken: inserted[0] }
+          : { insertedTokens: inserted },
+      )
+      reportCaret()
+    }
+    if (files.length > 0) {
+      void insertPastedFiles(files)
+    }
   }, [emitFromDom, reportCaret])
 
   const handleRootClick = React.useCallback((event: React.MouseEvent<HTMLDivElement>) => {
@@ -632,7 +719,7 @@ const InlineComposer = React.forwardRef<InlineComposerHandle, InlineComposerProp
     }
     const chip = targetEl.closest('.nagent-inline-chip') as HTMLElement | null
     if (chip) {
-      // 点击胶囊 → 弹详情（纯展示）。从 opaque 串自包含解析，无需外部 token 数组。
+      // 点击胶囊：从 opaque 串自包含解析，无需外部 token 数组。
       const opaque = chip.dataset.opaque
       const parsed = opaque ? parseOpaqueTokenText(opaque) : null
       if (parsed) {
@@ -643,6 +730,20 @@ const InlineComposer = React.forwardRef<InlineComposerHandle, InlineComposerProp
           summary: parsed.summary,
           opaqueText: opaque ?? '',
         }
+        // `system.workspace_file` 胶囊：点击打开文件标签页（对接 buildWorkspaceFileTabTarget
+        // 现有语义，fullPath 仅用于展示与点击打开）；其它 kind（含 external_file）保持弹详情。
+        if (parsed.kind === WORKSPACE_FILE_TOKEN_KIND) {
+          const payload = readWorkspaceFileToken(token)
+          const workspaceRoot = workspaceRootRef.current?.trim() ?? ''
+          const openFile = onOpenWorkspaceFileRef.current
+          if (payload && workspaceRoot && openFile) {
+            const target = buildWorkspaceFileTabTarget(payload)
+            openFile({ workspaceRoot, filePath: target.filePath })
+            reportCaret()
+            return
+          }
+        }
+        // 其它胶囊 → 弹详情（纯展示）。
         openSlashItemDetail(chip, { token })
       }
     }

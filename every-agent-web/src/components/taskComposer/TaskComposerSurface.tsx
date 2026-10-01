@@ -23,6 +23,9 @@ import {
   slashCommandRegistry,
   type SlashCommandItem,
 } from '@/slash/slashCommandRegistry'
+import { useWorkspaceShell } from '@/components/app/WorkspaceShellContext'
+import { useAppUi } from '@/components/app/AppUiContext'
+import { workspaceRegistry } from '@/hub/workspaceRegistry'
 
 /** 当前草稿变更（由内联编辑器上报，与 InlineComposer 同源）。 */
 export type ComposerDraftChange = InlineComposerChange
@@ -234,6 +237,21 @@ export default function TaskComposerSurface({
   const editorRef = React.useRef<InlineComposerHandle | null>(null)
   const editorTextRef = React.useRef(draft.text)
   const editorCaretRef = React.useRef(0)
+  const { openGlobalFileTab } = useWorkspaceShell()
+  const { showToast } = useAppUi()
+  /**
+   * 粘贴文件落盘/文件胶囊打开用的工作区根：显式传入值优先（任务态=任务自身工作区、
+   * 草稿态=草稿选择值），缺省回退注册表首选根（与 `@` 文件列举的兜底口径一致）。
+   */
+  const effectiveWorkspaceRoot = workspace || workspaceRegistry.primaryRoot() || ''
+  /** 点击 `system.workspace_file` 胶囊 → 打开文件标签页预览。 */
+  const handleOpenWorkspaceFile = React.useCallback((target: { workspaceRoot: string; filePath: string }) => {
+    openGlobalFileTab({ workspaceRoot: target.workspaceRoot, filePath: target.filePath })
+  }, [openGlobalFileTab])
+  /** 粘贴文件失败 → toast（单个失败不阻断其余文件与文本粘贴）。 */
+  const handleFilePasteError = React.useCallback((message: string) => {
+    showToast(message, 'error')
+  }, [showToast])
   /** 用户拖拽设定的高度（px）；null 表示未拖动过，用 CSS 默认高度。 */
   const [editorHeight, setEditorHeight] = React.useState<number | null>(null)
   /** 是否正在拖拽调高度（用于把手高亮态）。 */
@@ -802,6 +820,9 @@ export default function TaskComposerSurface({
           onKeyDown={handleKeyDown}
           onBlur={handleBlur}
           onRemoveToken={handleRemoveInlineToken}
+          workspaceRoot={effectiveWorkspaceRoot || undefined}
+          onOpenWorkspaceFile={handleOpenWorkspaceFile}
+          onFilePasteError={handleFilePasteError}
         />
       </div>
       {footerControls ? (
