@@ -14,7 +14,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * {@link CodexBashToolProvider}：appliesTo 只认 codex 后端；createTools 产出
- * cmd 工具（@Tool 注解形态，对照 wsl-ubuntu 惯例）。
+ * powershell 工具（@Tool 注解形态，对照 wsl-ubuntu 惯例）。
  */
 class CodexBashToolProviderTest {
 
@@ -42,10 +42,10 @@ class CodexBashToolProviderTest {
     }
 
     @Test
-    void createsSingleCmdTool() {
+    void createsSinglePowerShellTool() {
         List<ToolCallback> tools = provider().createTools(TestFixtures.ctx("codex", tempDir, null));
         assertEquals(1, tools.size());
-        assertEquals("cmd", tools.get(0).getToolDefinition().name());
+        assertEquals("powershell", tools.get(0).getToolDefinition().name());
         assertTrue(tools.get(0).getToolDefinition()
                 .description().contains("codex 沙箱"), "描述注明 codex 隔离语境");
     }

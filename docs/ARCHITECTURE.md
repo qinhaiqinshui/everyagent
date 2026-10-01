@@ -530,9 +530,9 @@ ask 管道承载第二类阻塞请求:**危险操作授权**。`PermissionGate` 
 **注册时机:** 工作区创建时、用户授权时、skills 目录初始化时。
 
 **核心宿主访问工具与沙箱命令工具共存:**
-- **核心的宿主访问工具**(DIRECT 默认沙箱):核心自带,不管有没有沙箱插件都存在。默认关闭,用户通过"允许AI访问电脑"开关打开。直接 ProcessBuilder 执行,走自己的授权链。Windows → PowerShellTool,Linux → BashTool。
+- **核心的命令工具**(windows-mic / DIRECT 后端):核心自带,Windows 上 PowerShellTool 以 `powershell` 工具名注册;Linux 上 BashTool 以 `bash` 工具名注册。直接 ProcessBuilder 执行,走自己的授权链。
 - **沙箱插件的命令工具**:沙箱插件不只提供 `SandboxBackend`(挂载+清理),还提供 `ToolProvider`(命令工具)。沙箱完全自由:自己实现 CommandExecutor、自己扫描路径、自己决定授权策略。通过 `appliesTo(ToolContext)` 控制生效条件(如 `ctx.sandbox().id().equals("wsl-ubuntu")`)。
-- 两者通过 `ToolProvider.appliesTo()` 各自控制生效条件,不冲突。
+- 两者通过 `ToolProvider.appliesTo()` 各自控制生效条件,不冲突。`PowerShellToolProvider`（核心）appliesTo = Windows ∧ (sandbox id == direct ∨ windows-mic),提供 `powershell` 工具;wsl-ubuntu 提供 `bash` 工具;codex 提供 `powershell` 工具。
 
 **路径翻译流程:**
 1. 路径提供方注册 → `SandboxPathRegistry.register()` → 核心调 `sandbox.mount()` → 沙箱返回沙箱内路径 → 核心保存映射表。
@@ -543,7 +543,6 @@ ask 管道承载第二类阻塞请求:**危险操作授权**。`PermissionGate` 
 - **Windows Medium IL 契约**(对 windows-mic 后端):沙箱进程运行在 Medium IL(Restricted Token 去特权但不降级),天然可写工作区与已授权目录,不对文件系统做任何标注或 ACL 修改——零副作用、零残留。越界写拦截由 PermissionGate 责任链承担。
 - **网络策略**:默认放行;任务级 `/禁用网络` 或全局 `allow-network=false` 才断网。沙箱插件自己的 CommandExecutor 负责落地(wsl-ubuntu = `unshare -n`;direct/mic = 剥代理 env)。
 - **命令 stdin 契约**:AI 命令的 stdin 一律接 null 设备(`/dev/null`/`NUL`)。
-- **PowerShell 方言可选开启**:用户对某任务选 `/允许AI访问电脑` 后,主/子 agent 工具集追加 `powershell` 工具——命令直接 ProcessBuilder 执行(DIRECT 语义),与 bash 并存。`PowerShellEnableSlashProvider` 始终注册(核心的宿主访问工具开关,与沙箱无关)。
 
 ### 7.11 提权拦截
 
@@ -758,7 +757,7 @@ worker(进程)
 | **Ask** | askId(短 ID `q_…`)、taskId、agentId、kind、question、options?、status、answer?、answeredBy?、timeoutAt | 运行时的 CompletableFuture 不入模型 |
 | **Input** | taskId、text、rawContent?、ts、from(sessionId) | 状态:queued → consumed(取消时 discarded);`rawContent` 为原始输入(含 opaque token 串) |
 
-**斜杠命令与任务级开关**:斜杠命令由 worker 动态注册(`slash.list`/`slash.select`/`slash.cancel`);任选中可返回多个结果(如 `/无人值守` 一次返回「无人值守」+「AI 审议」两个胶囊);任务级 token(模型池、AI 审议、无人值守、禁用网络、启用 powershell 等)随 meta 持久化、再运行保持,`slash.taskTokens.apply` 用于落地 token 携带的数据。其中 `/允许AI访问电脑` 仅 WSL+Linux 沙箱后端注册(windows-mic 后端命令工具本就是 PowerShellTool,无追加需求),开启后主/子 agent 工具集在 bash 之外追加 `powershell` 工具。
+**斜杠命令与任务级开关**:斜杠命令由 worker 动态注册(`slash.list`/`slash.select`/`slash.cancel`);任选中可返回多个结果(如 `/无人值守` 一次返回「无人值守」+「AI 审议」两个胶囊);任务级 token(模型池、AI 审议、无人值守、禁用网络等)随 meta 持久化、再运行保持,`slash.taskTokens.apply` 用于落地 token 携带的数据。
 
 **composer token(opaque token)双轨与 worker 解析**:输入框胶囊(斜杠命令、`@` 文件引用等)由前端构造为 inline opaque token(`[[[[agent-token::::<kind>||||label/summary/payload…]]]]`,4 连符号定界零转义);提交走**双轨**——`text` 为人类可读明文,原始 token 串随 `Input.rawContent` 上行(重开/回放按 rawContent 还原胶囊)。worker 侧 `SlashTokenResolveAdvisor` 在 user 消息进入模型前扫描正文、交 `SlashTokenHandler` 按 kind 分发解析为提交文本(未知 kind/解析失败保留原串);已注册 kind:技能命令 → 技能名、`git.auto_sync` → 空串、`system.workspace_file` → 工作区相对路径明文。
 

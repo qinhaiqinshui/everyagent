@@ -49,6 +49,20 @@ public final class CodexCommandExecutor {
     /** 父侧看门狗在 SandboxConfig.timeoutMs 之外的收尾宽限（runner 终止 + Exit 帧）。 */
     static final long TEARDOWN_GRACE_MS = 15_000;
 
+    /**
+     * PowerShell 脚本预置前缀（对齐宿主 CommandExecutor）。
+     * UTF-8 编码设置 + 非成功流静默化，确保中文输出不乱码、progress 等不刷屏。
+     */
+    static final String POWERSHELL_PREFIX =
+            "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; "
+            + "$OutputEncoding=[System.Text.Encoding]::UTF8; "
+            + "$PSDefaultParameterValues['Get-Content:Encoding']='UTF8'; "
+            + "$PSDefaultParameterValues['Set-Content:Encoding']='UTF8'; "
+            + "$PSDefaultParameterValues['Out-File:Encoding']='UTF8'; "
+            + "$ProgressPreference='SilentlyContinue'; $InformationPreference='SilentlyContinue'; "
+            + "$WarningPreference='SilentlyContinue'; $VerbosePreference='SilentlyContinue'; "
+            + "$DebugPreference='SilentlyContinue'; ";
+
     private static final boolean WINDOWS =
             System.getProperty("os.name").toLowerCase(Locale.ROOT).contains("win");
     private static final System.Logger LOG =
@@ -243,9 +257,10 @@ public final class CodexCommandExecutor {
 
     // ---- 纯函数（跨平台单测） ----
 
-    /** shell 命令 → 子进程 argv：cmd.exe /d /c（/d 跳过 AutoRun，对齐宿主 DIRECT 惯例）。 */
+    /** shell 命令 → 子进程 argv：PowerShell -NoProfile -Command（UTF-8 编码前缀 + 用户命令）。 */
     static List<String> commandArgv(String command) {
-        return List.of("cmd.exe", "/d", "/c", command);
+        return List.of("powershell.exe", "-NoProfile", "-Command",
+                POWERSHELL_PREFIX + command);
     }
 
     /** 继承当前环境；rgBinary 非空时其所在目录前置进 Path（Windows 键名优先）。 */

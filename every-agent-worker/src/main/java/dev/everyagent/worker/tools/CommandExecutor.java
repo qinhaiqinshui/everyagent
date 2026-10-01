@@ -101,9 +101,8 @@ public class CommandExecutor {
             return "execute: command 不能为空";
         }
         boolean powershell = "powershell".equalsIgnoreCase(shell);
-        // powershell 工具始终走宿主 Windows 原生沙箱:WSL 后端任务级 /允许AI访问电脑 动态注册
-        // 时也强制回 Windows 原生(wsl 发行版内不保证安装 pwsh),命令语义与 windows-mic 一致
-        // (Restricted Token + Low IL + Job Object + 目录标注/ACL)。bash 等保持后端方言。
+        // powershell shell 走宿主 Windows 原生 ProcessBuilder 执行(wsl 发行版内不保证安装 pwsh);
+        // bash 等保持后端方言。
         boolean wsl = false; // WSL branches removed — direct execution only
         // wsl-bwrap 后端:模型命令是 bash/POSIX 方言(/workspace、/mnt/<盘>),授权判定仍在
         // Windows 路径域进行——喂给门禁的是翻译副本(真实执行的命令保持原文)。

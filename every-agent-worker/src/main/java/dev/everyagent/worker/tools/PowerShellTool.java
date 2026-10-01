@@ -6,12 +6,11 @@ import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.ai.tool.function.FunctionToolCallback;
 
 /**
- * 真实 OS 命令执行工具 powershell(仅 Windows 注册,Linux/macOS 注册 {@link BashTool})。
+ * 真实 OS 命令执行工具 powershell(Windows 后端:windows-mic / DIRECT)。
  *
- * <p>取代旧 execute_command 的 Windows 侧:接收完整 PowerShell 命令字符串,
- * 委托 {@link CommandExecutor} 以 shell=powershell 经 OsSandbox 降权隔离执行
- * (Job Object + Restricted Token)。不重复造轮子:只做参数透传,授权/沙箱/格式化
- * 全部复用 CommandExecutor。
+ * <p>接收完整 PowerShell 命令字符串,委托 {@link CommandExecutor} 以 shell=powershell
+ * 经 OsSandbox 降权隔离执行(Restricted Token + Job Object)。不重复造轮子:只做参数透传,
+ * 授权/沙箱/格式化全部复用 CommandExecutor。
  *
  * <p><b>UTF-8 编码(PS-001 已修复)</b>:{@link CommandExecutor} 的 PowerShell 前缀
  * 自动设置 {@code [Console]::OutputEncoding=UTF8} 与 {@code $OutputEncoding=UTF8},
@@ -41,9 +40,9 @@ public class PowerShellTool {
      * 注册点直接 {@code tools.add(new PowerShellTool(exec).toolCallback())}。
      */
     public ToolCallback toolCallback() {
-        String desc = "在 Windows 上用 PowerShell 执行真实 OS 命令。"
+        String desc = "在系统上用 PowerShell 执行真实 OS 命令。"
                 + "rg 已加入 PATH,可直接执行 rg 命令，内容搜索尽量使用rg命令，性能更好;"
-                + "命令工作目录固定为任务工作区根;"
+                + "命令工作目录默认为任务工作区根;"
                 + "stdin 为 null 设备,命令无法从 stdin 读入输入;"
                 + "输出编码已自动设为 UTF-8,无需手动切换。";
         return FunctionToolCallback.builder("powershell",

@@ -2,6 +2,7 @@ package dev.everyagent.worker.plugin.adapters;
 
 import dev.everyagent.worker.os.OsSandbox;
 import dev.everyagent.worker.plugin.ToolContextImpl;
+import dev.everyagent.plugin.api.spi.SandboxBackend;
 import dev.everyagent.plugin.api.spi.ToolContext;
 import dev.everyagent.plugin.api.spi.ToolProvider;
 import dev.everyagent.worker.tools.CommandExecutor;
@@ -12,12 +13,10 @@ import java.nio.file.Path;
 import java.util.List;
 
 /**
- * PowerShell 命令工具提供者 —— 包装 {@link PowerShellTool}。
+ * bash 命令工具提供者（Windows 原生后端）—— 包装 {@link PowerShellTool}。
  *
- * <p>appliesTo: 当 Windows 且沙箱不注册 bash 工具时返回 true（PowerShell 为唯一命令工具），
- * 或任务级 powershellEnabled 开启时返回 true（bash 之外追加 PowerShell）。
- * 与改造前 {@code if (isWindows() && !sandbox.registerBashTool()) } 的 then 分支
- * + {@code if (t.powershellEnabled) } 追加分支一致。
+ * <p>appliesTo: Windows 平台且当前沙箱后端为 windows-mic 或 direct（无沙箱插件）
+ * 时返回 true。wsl-ubuntu / codex 后端各自提供自己的 bash 工具,不在此注册。
  *
  * <p>createTools: 创建 CommandExecutor，然后 {@code new PowerShellTool(exec).toolCallback()}。
  */
@@ -36,11 +35,16 @@ public class PowerShellToolProvider implements ToolProvider {
 
     @Override
     public boolean appliesTo(ToolContext ctx) {
-        // Windows 平台注册 PowerShellTool（核心宿主访问工具）;
-        // 任务级 powershellEnabled 开启时也追加（bash 之外并存）。
-        boolean windows = isWindows();
-        boolean powershellEnabled = ((ToolContextImpl) ctx).taskEntry().powershellEnabled;
-        return windows || powershellEnabled;
+        // 仅 Windows 平台;wsl-ubuntu / codex 后端各自提供自己的 bash 工具
+        if (!isWindows()) {
+            return false;
+        }
+        SandboxBackend sb = ctx.sandbox();
+        if (sb == null) {
+            return true; // 无沙箱（DIRECT）
+        }
+        String id = sb.id();
+        return "direct".equals(id) || "windows-mic".equals(id);
     }
 
     @Override

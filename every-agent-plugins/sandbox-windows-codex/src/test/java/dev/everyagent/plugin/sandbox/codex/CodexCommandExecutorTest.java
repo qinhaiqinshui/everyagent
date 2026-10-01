@@ -110,8 +110,8 @@ class CodexCommandExecutorTest {
     // ---- 纯函数 ----
 
     @Test
-    void commandArgvIsCmdExeWithAutoRunDisabled() {
-        assertEquals(List.of("cmd.exe", "/d", "/c", "echo hi"),
+    void commandArgvIsPowerShellNoProfile() {
+        assertEquals(List.of("powershell.exe", "-NoProfile", "-Command", CodexCommandExecutor.POWERSHELL_PREFIX + "echo hi"),
                 CodexCommandExecutor.commandArgv("echo hi"));
     }
 
@@ -164,12 +164,12 @@ class CodexCommandExecutorTest {
         FakeSession session = new FakeSession(out("hello", Stream.STDOUT),
                 out("boom", Stream.STDERR), new FramedMessage(6, new Exit(3, false)));
         Capture capture = new Capture(session);
-        String result = executor(capture, session, 30_000).execute("echo hi", "cmd");
+        String result = executor(capture, session, 30_000).execute("echo hi", "powershell");
         assertEquals("hello\n[stderr]\nboom\n[exit code: 3]", result);
         assertTrue(session.closed, "会话在 finally 中关闭");
         assertFalse(session.terminated, "正常退出不发 terminate");
 
-        assertEquals(List.of("cmd.exe", "/d", "/c", "echo hi"), capture.spec.command());
+        assertEquals(List.of("powershell.exe", "-NoProfile", "-Command", CodexCommandExecutor.POWERSHELL_PREFIX + "echo hi"), capture.spec.command());
         assertEquals(tempDir.resolve("ws").toString(), capture.spec.cwd(), "cwd=工作区根");
         assertEquals(30_000L, capture.spec.timeoutMs(), "timeout=SandboxConfig/manager 值");
         assertFalse(capture.spec.stdinOpen(), "worker 契约 stdin 关闭");
@@ -181,7 +181,7 @@ class CodexCommandExecutorTest {
     void specCarriesWorkspaceCapAndWriteRoots() {
         FakeSession session = new FakeSession(new FramedMessage(6, new Exit(0, false)));
         Capture capture = new Capture(session);
-        executor(capture, session, 30_000).execute("dir", "cmd");
+        executor(capture, session, 30_000).execute("dir", "powershell");
         assertFalse(capture.spec.writeRoots().isEmpty(), "至少含工作区根");
         assertTrue(capture.spec.workspaceCapSid().startsWith("S-1-5-21-"),
                 "workspace cap SID 惰性创建");
@@ -194,14 +194,14 @@ class CodexCommandExecutorTest {
     void executeRejectsBlankCommand() {
         FakeSession session = new FakeSession();
         assertEquals("execute: command 不能为空",
-                executor(new Capture(session), session, 30_000).execute("   ", "cmd"));
+                executor(new Capture(session), session, 30_000).execute("   ", "powershell"));
     }
 
     @Test
     void pipeEofBeforeExitMarksInterrupted() {
         FakeSession session = new FakeSession(out("partial", Stream.STDOUT));
         String result = executor(new Capture(session), session, 30_000)
-                .execute("hang", "cmd");
+                .execute("hang", "powershell");
         assertTrue(result.contains("partial"));
         assertTrue(result.endsWith("[runner 管道在 exit 帧前关闭]"));
     }
@@ -211,7 +211,7 @@ class CodexCommandExecutorTest {
         FakeSession session = new FakeSession();
         session.endlessOutput = true;
         Capture capture = new Capture(session);
-        String result = executor(capture, session, 20).execute("spin", "cmd");
+        String result = executor(capture, session, 20).execute("spin", "powershell");
         assertTrue(session.terminated, "超时后发出 terminate 帧");
         assertTrue(result.contains("[命令被沙箱超时中止]"));
         assertTrue(result.contains("[exit code: 192]"));
@@ -223,7 +223,7 @@ class CodexCommandExecutorTest {
         FakeSession session = new FakeSession(out(chunk, Stream.STDOUT),
                 out(chunk, Stream.STDOUT), new FramedMessage(6, new Exit(0, false)));
         String result = executor(new Capture(session), session, 30_000)
-                .execute("big", "cmd");
+                .execute("big", "powershell");
         int cut = result.indexOf("\n[输出已截断至");
         assertTrue(cut > 0, "含截断尾注: " + result.substring(Math.max(0, result.length() - 60)));
         assertEquals(CodexCommandExecutor.MAX_OUTPUT_CHARS, cut, "stdout 精确截断到上限");
@@ -240,7 +240,7 @@ class CodexCommandExecutorTest {
                 new CodexSandboxOptions(tempDir, null, null, null, false, null), 30_000);
         CodexCommandExecutor exec = new CodexCommandExecutor(manager,
                 tempDir.resolve("ws"), null);
-        String result = exec.execute("echo hi", "cmd");
+        String result = exec.execute("echo hi", "powershell");
         assertTrue(result.startsWith("[codex sandbox 仅在 Windows 上可用"),
                 "非 Windows 给可读错误: " + result);
     }
@@ -253,7 +253,7 @@ class CodexCommandExecutorTest {
                 new CodexSandboxOptions(tempDir, null, null, null, false, null), 30_000);
         CodexCommandExecutor exec = new CodexCommandExecutor(manager,
                 tempDir.resolve("ws"), null);
-        String result = exec.execute("echo hi", "cmd");
+        String result = exec.execute("echo hi", "powershell");
         assertTrue(result.startsWith("[codex sandbox 未完成 setup"));
         assertTrue(result.contains("codex_sandbox_setup"), "错误里给出显式 setup 指引");
     }
@@ -271,6 +271,6 @@ class CodexCommandExecutorTest {
                 },
                 (options, username) -> new RunnerClient.RunnerConfig(
                         options.codexHome(), username, "pw", "cp", "jh", "cwd"));
-        assertEquals("[codex sandbox 执行失败] pipe broken", exec.execute("x", "cmd"));
+        assertEquals("[codex sandbox 执行失败] pipe broken", exec.execute("x", "powershell"));
     }
 }

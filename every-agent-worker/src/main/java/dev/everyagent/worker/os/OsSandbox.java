@@ -93,7 +93,7 @@ public final class OsSandbox implements SandboxBackend, NativeExec {
 
     @Override
     public String id() {
-        return "direct";
+        return delegate != null ? delegate.id() : "direct";
     }
 
     /**

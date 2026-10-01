@@ -16,7 +16,7 @@ import java.lang.System.Logger.Level;
  *   <li>注册 {@link CodexSandboxProvider}（后端 id=codex；isAvailable 只探测、
  *       绝不触发 setup/UAC，priority 就绪 8 / 未 setup 0）；</li>
  *   <li>注册 {@link CodexBashToolProvider}（appliesTo：当前后端 id==codex 时
- *       提供 cmd 工具，经 {@link CodexCommandExecutor} 走 runner 会话）；</li>
+ *       提供 bash 工具，经 {@link CodexCommandExecutor} 走 runner 会话）；</li>
  *   <li>注册 {@link CodexSandboxSetupToolProvider}（codex_sandbox_setup——显式
  *       用户动作允许 UAC；codex_sandbox_status——只读状态摘要）。</li>
  * </ol>
