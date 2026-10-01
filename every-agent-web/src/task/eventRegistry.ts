@@ -78,16 +78,29 @@ export function defaultHandler(event: FoldableTaskEvent, state: TaskThreadState,
 registerEventKind('user.message', {
   handle(event, state, folder) {
     const seqKey = String(event.seq)
-    if (folder.hasSeq(seqKey)) {
-      console.debug('[uref] user.message handler 跳过(同 seq 已折入) seq=', seqKey)
-      return false
-    }
-    const agentKey = agentKeyOf(event)
-    const ts = tsOf(event)
     const content = String(event.payload?.content ?? '')
     const data = dataOf(event)
     const rawContent = typeof data?.rawContent === 'string' && data.rawContent.length
       ? data.rawContent : content
+    if (folder.hasSeq(seqKey)) {
+      // 真实事件后到但骨架先入(reset 竞态):合成骨架可被权威 payload 原地升级
+      // (骨架可能缺 data.rawContent → @文件胶囊丢失,真实事件是唯一权威)。
+      const upgraded = folder.upgradeSyntheticUser(seqKey, {
+        content,
+        rawContent,
+        agentId: agentKeyOf(event),
+        ts: tsOf(event),
+      })
+      if (upgraded) {
+        console.debug('[uref] user.message handler 升级合成骨架 seq=', seqKey,
+          'rawLen=', rawContent.length, 'rawHasToken=', rawContent.includes('[[[['))
+        return true
+      }
+      console.debug('[uref] user.message handler 跳过(同 seq 已折入且非骨架) seq=', seqKey)
+      return false
+    }
+    const agentKey = agentKeyOf(event)
+    const ts = tsOf(event)
     // [uref] @文件引用胶囊丢失排查:折入线程时的 rawContent 解析结果(缺失/为空回退 content → 胶囊丢失)。
     console.debug(
       '[uref] user.message handler 折入 seq=', seqKey,

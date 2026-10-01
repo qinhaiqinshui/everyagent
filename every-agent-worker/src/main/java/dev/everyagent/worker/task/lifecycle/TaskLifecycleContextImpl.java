@@ -148,9 +148,12 @@ public class TaskLifecycleContextImpl implements TaskLifecycleContext {
         }
         // 开轮落盘带完整 user.message payload(懒加载骨架起点;与 userMessage 事件 payload 同源):
         // text 供展示/AI 摘要,rawContent 供前端回放还原胶囊。
-        ObjectNode userPayload = Json.obj().put("text", text);
+        // ⚠️ 形状必须镜像事件 payload({content, data:{rawContent}}),与 scan/scanOpenRound 路径
+        // 及前端 UserMessagePayload 契约一致——曾误写顶层 {text, rawContent},前端 foldRound 读
+        // userMessage.data.rawContent 落空回退纯文本,@文件胶囊丢失(2026-10 排查实锤)。
+        ObjectNode userPayload = Json.obj().put("content", text);
         if (rawContent != null && !rawContent.isEmpty()) {
-            userPayload.put("rawContent", rawContent);
+            userPayload.set("data", Json.obj().put("rawContent", rawContent));
         }
         if (roundIndexStore.openRoundAtStart(store, taskEntry.taskId, seq, text, userPayload)) {
             // 真的新开一轮(非中间输入/续跑沿用)才推 round.opened;瞬态不落盘。

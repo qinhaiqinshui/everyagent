@@ -393,6 +393,33 @@ export class TaskEventFolder {
     return this.bySeq.has(seqKey)
   }
 
+  /**
+   * 真实 user.message 事件到达但同 seq 已有项时,尝试把「rounds.jsonl 合成骨架」
+   * (metadata.synthetic=true 的 user 消息)原地升级为真实 payload(content/rawContent 权威)。
+   * <p>背景:loadRoundsIntoFolder(full) 的 reset() 可能清掉订阅后已实时折入的真实事件,
+   * 骨架随后重插;若无升级路径,后续权威数据会被 seq 去重永远挡在门外(拉取层 foldWireEvent
+   * 对同 seq 一律跳过),坏骨架永久占据该 seq——@文件胶囊即在此丢失(2026-10 排查实锤)。
+   * 与 completeMessage 对合成 final 的覆盖口径一致:真实事件清除 synthetic 标记。
+   * @return true 表示已升级(状态有变化);false = 无骨架可升级(真重复帧/非 user 项)。
+   */
+  upgradeSyntheticUser(seqKey: string, message: {
+    content: string
+    rawContent: string
+    agentId: string
+    ts: number
+  }): boolean {
+    const item = this.bySeq.get(seqKey)
+    if (!item || item.type !== 'agent_message') return false
+    const msg = item.message
+    if (msg.role !== 'user' || msg.metadata?.synthetic !== true) return false
+    msg.content = message.content
+    msg.rawContent = message.rawContent
+    msg.createdAt = msg.createdAt || message.ts
+    msg.updatedAt = message.ts
+    msg.metadata = { ...(msg.metadata ?? {}), synthetic: false }
+    return true
+  }
+
   /** 获取工具名（callId → name，由 message 事件的 toolCalls 注册）。 */
   getToolName(callId: string): string {
     return this.anchors.toolNames.get(callId) ?? ''
