@@ -13,6 +13,8 @@ import dev.everyagent.plugin.api.task.UserInput;
 import dev.everyagent.worker.tools.PermissionGate;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.UserMessage;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.node.ObjectNode;
 
@@ -27,6 +29,8 @@ import java.util.function.Function;
  * 内置节点通过此类访问完整 {@link TaskEntry} 和回调。
  */
 public class TaskLifecycleContextImpl implements TaskLifecycleContext {
+
+    private static final Logger log = LoggerFactory.getLogger(TaskLifecycleContextImpl.class);
 
     private TaskEntry taskEntry;
     /** RPC 阶段可变字段（taskEntry 尚未创建时由节点逐字段填充）。 */
@@ -121,6 +125,15 @@ public class TaskLifecycleContextImpl implements TaskLifecycleContext {
     public void consumeInput(AgentEntity main, UserInput input) {
         String text = input.text();
         String rawContent = input.rawContent();
+        // [uref] @文件引用胶囊丢失排查:输入消费入口 text/rawContent 原样性(此处丢失 → user.message 无胶囊数据)。
+        if (log.isDebugEnabled()) {
+            log.debug("[uref] consumeInput 进入 task={} textLen={} rawPresent={} rawLen={} rawHasToken={} textPreview={}",
+                    taskEntry != null ? taskEntry.taskId : taskId,
+                    text == null ? -1 : text.length(),
+                    rawContent != null, rawContent == null ? -1 : rawContent.length(),
+                    rawContent != null && rawContent.contains("[[[["),
+                    text == null ? "(null)" : (text.length() > 80 ? text.substring(0, 80) + "…" : text));
+        }
         gate.beginRun(taskEntry.taskId); // 新一条用户输入:本轮(run)授权失效(任务级不受影响)
         // user.message 落盘后以它的 seq 为轮起点开轮:最后一行未闭合则沿用(中间输入/续跑不开新轮);
         // 已闭合/无行则追加一条 endSeq="" 的未闭合轮。中断/取消/失败不再于终态补写,轮行随开轮即持久化。
@@ -129,6 +142,10 @@ public class TaskLifecycleContextImpl implements TaskLifecycleContext {
                 rawContent != null && !rawContent.isEmpty()
                         ? Json.obj().put("rawContent", rawContent) : null,
                 EmitEvent.Mode.REPLACE));
+        if (log.isDebugEnabled()) {
+            log.debug("[uref] user.message 已发射 seq={} 附带dataRaw={} (rawContent 非空才附带)",
+                    seq, rawContent != null && !rawContent.isEmpty());
+        }
         // 开轮落盘带完整 user.message payload(懒加载骨架起点;与 userMessage 事件 payload 同源):
         // text 供展示/AI 摘要,rawContent 供前端回放还原胶囊。
         ObjectNode userPayload = Json.obj().put("text", text);

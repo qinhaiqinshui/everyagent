@@ -82,6 +82,13 @@ public final class ThreadSubmitNode implements TaskLifecycleNode {
 
         // ---- 设置 VT 阶段 context 回调 ----
         impl.initialInput(UserInput.of(impl.input(), impl.rawContent()));
+        if (log.isDebugEnabled()) {
+            String rc = impl.rawContent();
+            log.debug("[uref] ThreadSubmitNode initialInput 设置 task={} inputLen={} rawPresent={} rawLen={} rawHasToken={}",
+                    t.taskId, impl.input() == null ? -1 : impl.input().length(),
+                    rc != null, rc == null ? -1 : rc.length(),
+                    rc != null && rc.contains("[[[["));
+        }
         impl.mainAgentBuilder(prior -> {
             Map<String, Object> props = new HashMap<>();
             props.put("taskEntry", t);

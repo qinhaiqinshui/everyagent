@@ -304,6 +304,15 @@ public class DataPusher implements EventLogReader.Listener {
             }
         }
         JsonNode payload = TaskEvents.wireEvent(r, mainAgentId).path("payload");
+        // [uref] @文件引用胶囊丢失排查:定向推送出口处 user.message 的 payload 原样性
+        // (前端实时胶囊回放的最后一环:emit → EventLog → DataPusher → hub → 前端)。
+        if ("user.message".equals(r.event()) && log.isDebugEnabled()) {
+            JsonNode d = payload == null ? null : payload.path("data");
+            String raw = d != null && d.path("rawContent").isTextual() ? d.path("rawContent").asString() : null;
+            log.debug("[uref] DataPusher.push user.message seq={} replay={} dataRawPresent={} rawLen={} rawHasToken={}",
+                    r.seq(), replay, raw != null, raw == null ? -1 : raw.length(),
+                    raw != null && raw.contains("[[[["));
+        }
         wsEmitter.push(Channels.taskStream(conn.k(), taskId), r.event(), r.seq(), r.ts(),
                 payload, ext);
     }

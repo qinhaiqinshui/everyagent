@@ -78,13 +78,25 @@ export function defaultHandler(event: FoldableTaskEvent, state: TaskThreadState,
 registerEventKind('user.message', {
   handle(event, state, folder) {
     const seqKey = String(event.seq)
-    if (folder.hasSeq(seqKey)) return false
+    if (folder.hasSeq(seqKey)) {
+      console.debug('[uref] user.message handler 跳过(同 seq 已折入) seq=', seqKey)
+      return false
+    }
     const agentKey = agentKeyOf(event)
     const ts = tsOf(event)
     const content = String(event.payload?.content ?? '')
     const data = dataOf(event)
     const rawContent = typeof data?.rawContent === 'string' && data.rawContent.length
       ? data.rawContent : content
+    // [uref] @文件引用胶囊丢失排查:折入线程时的 rawContent 解析结果(缺失/为空回退 content → 胶囊丢失)。
+    console.debug(
+      '[uref] user.message handler 折入 seq=', seqKey,
+      'content=', JSON.stringify(content.slice(0, 80)),
+      'dataType=', data === undefined ? 'undefined' : 'object',
+      'dataRawGiven=', typeof data?.rawContent === 'string' && data.rawContent.length > 0,
+      'resolvedRawLen=', rawContent.length,
+      'resolvedRawHasToken=', rawContent.includes('[[[['),
+    )
     folder.insertMessage(agentKey, {
       messageId: `m-${event.seq}`,
       agentId: agentKey,

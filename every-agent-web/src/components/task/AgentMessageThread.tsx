@@ -239,19 +239,37 @@ function buildUserMessageReplaySegments(message: AgentMessageRecord): Array<{
   // 只需 rawContent 即可回放胶囊：hub 事件流不带 composerTokens 数组，
   // token 段由 opaque 串自包含解析（见下方注释），tokens 仅作 id 反查可选项。
   if (!rawContent) {
+    urefDebugOnce(message, 'rawContent 与 content 均为空,返回空段')
     return message.content?.length
       ? [{ type: 'text', value: message.content }]
       : []
   }
+  // [uref] @文件引用胶囊丢失排查:渲染入口的决策快照(rawContent 缺失/无 opaque token → 只出文本段)。
   // 自包含切分：token 段由 opaque 串直接解析，不依赖外部 tokens 数组做反查，
   // 也不用 readXToken / 注册组件渲染（见方案 §4.7.1 / §4.7.2）。
-  return splitComposerRawContent(rawContent, tokens).map((segment) => ({
+  const segments = splitComposerRawContent(rawContent, tokens)
+  urefDebugOnce(
+    message,
+    `rawGiven=${message.rawContent?.length ? 'yes' : 'no(fallback content)'} `
+    + `rawLen=${rawContent.length} rawHasToken=${rawContent.includes('[[[[')} `
+    + `segments=${JSON.stringify(segments.map((s) => s.type === 'token' ? `token:${s.token?.kind ?? '?'}` : `text:${s.value.slice(0, 24)}`))}`,
+  )
+  return segments.map((segment) => ({
     type: segment.type,
     value: segment.type === 'text'
       ? segment.value
       : (segment.token?.label || segment.value),
     token: segment.type === 'token' ? segment.token : undefined,
   }))
+}
+
+/** [uref] 调试日志按 messageId 去重(渲染函数每帧重跑,避免刷屏;同一条消息只记第一次决策)。 */
+const urefLoggedMessageIds = new Set<string>()
+function urefDebugOnce(message: AgentMessageRecord, detail: string): void {
+  const key = message.messageId ?? `seq:${message.sequence ?? '?'}:${(message.content ?? '').slice(0, 16)}`
+  if (urefLoggedMessageIds.has(key)) return
+  urefLoggedMessageIds.add(key)
+  console.debug('[uref] replay 渲染 messageId=', message.messageId, detail)
 }
 
 function UserMessageReplay({
@@ -277,15 +295,26 @@ function UserMessageReplay({
    */
   const handleChipActivate = (el: HTMLElement, token: ChatComposerToken) => {
     const payload = readWorkspaceFileToken(token)
+    // [uref] @文件引用胶囊丢失排查:胶囊点击动作链(payload 解析 → 工作区根 → 打开文件标签页)。
+    console.debug(
+      '[uref] chip 点击激活 kind=', token.kind,
+      'label=', token.label,
+      'payloadParsed=', payload != null,
+      'payload=', payload ? JSON.stringify(payload) : '(null)',
+    )
     if (payload) {
       // 工作区根：任务自身工作区优先，缺省回退注册表首选根（与 `@` 列举兜底口径一致）。
       const workspaceRoot = (taskId ? taskStore.get(taskId)?.workspace : undefined) || workspaceRegistry.primaryRoot() || ''
+      console.debug('[uref] chip 点击 taskId=', taskId ?? '(无)', 'workspaceRoot=', JSON.stringify(workspaceRoot))
       if (workspaceRoot) {
         const target = buildWorkspaceFileTabTarget(payload)
+        console.debug('[uref] chip 点击 → openGlobalFileTab filePath=', JSON.stringify(target.filePath))
         openGlobalFileTab({ workspaceRoot, filePath: target.filePath })
         return
       }
+      console.debug('[uref] chip 点击 workspaceRoot 为空,回退弹详情')
     }
+    console.debug('[uref] chip 点击 → 回退弹详情(openSlashItemDetail)')
     openSlashItemDetail(el, { token })
   }
 

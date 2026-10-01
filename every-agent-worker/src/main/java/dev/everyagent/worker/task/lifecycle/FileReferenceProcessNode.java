@@ -77,12 +77,19 @@ public final class FileReferenceProcessNode implements TaskLifecycleNode {
     /** 下行段：解析 rawContent 文件引用 → 分发 handler → 改写 input + 合并 attachments。 */
     private void processReferences(TaskLifecycleContext ctx) {
         if (handlers.isEmpty()) {
+            log.debug("[uref] FileReferenceProcessNode 无已注册 handler,直接跳过(不改 input/rawContent) task={}", ctx.taskId());
             return;
         }
         String raw = ctx.rawContent();
         String input = ctx.input();
         if (raw == null || raw.isEmpty() || input == null) {
+            log.debug("[uref] FileReferenceProcessNode 跳过: rawPresent={} rawLen={} inputPresent={} task={}",
+                    raw != null, raw == null ? -1 : raw.length(), input != null, ctx.taskId());
             return;
+        }
+        if (log.isDebugEnabled()) {
+            log.debug("[uref] FileReferenceProcessNode 进入 task={} rawLen={} rawHasToken={} inputLen={}",
+                    ctx.taskId(), raw.length(), raw.contains("[[[["), input.length());
         }
         Matcher matcher = TOKEN_RE.matcher(raw);
         List<Map<String, Object>> collected = null;
@@ -90,14 +97,17 @@ public final class FileReferenceProcessNode implements TaskLifecycleNode {
             String opaque = matcher.group();
             SlashTokenEncoder.ParsedToken token = SlashTokenEncoder.parseToken(opaque);
             if (token == null) {
+                log.debug("[uref] FileReferenceProcessNode opaque 解析失败,跳过: {}", preview(opaque));
                 continue;
             }
             FileReference ref = toReference(token);
             if (ref == null) {
+                log.debug("[uref] FileReferenceProcessNode 非文件引用 kind={},跳过", token.kind());
                 continue;
             }
             FileReferenceHandler handler = handlers.find(extensionOf(ref.fileName()));
             if (handler == null) {
+                log.debug("[uref] FileReferenceProcessNode 无 {} 扩展名 handler,跳过: {}", extensionOf(ref.fileName()), ref.fullPath());
                 continue;
             }
             FileReferenceResult result;
@@ -109,10 +119,14 @@ public final class FileReferenceProcessNode implements TaskLifecycleNode {
                 continue;
             }
             if (result == null) {
+                log.debug("[uref] FileReferenceProcessNode handler {} 返回 null,跳过: {}", handler.pluginId(), ref.fullPath());
                 continue;
             }
             if (result.replacementText() != null) {
+                String before = input;
                 input = replaceReferenceText(input, opaque, ref, result.replacementText());
+                log.debug("[uref] FileReferenceProcessNode input 改写 {} → {} (changed={})",
+                        preview(before), preview(input), !before.equals(input));
             }
             if (!result.attachments().isEmpty()) {
                 if (collected == null) {
@@ -126,7 +140,18 @@ public final class FileReferenceProcessNode implements TaskLifecycleNode {
         }
         if (!input.equals(ctx.input())) {
             ctx.input(input);
+            log.debug("[uref] FileReferenceProcessNode 最终 input 已改写 task={} (rawContent 保持原样,未改写)", ctx.taskId());
+        } else {
+            log.debug("[uref] FileReferenceProcessNode input 未变化 task={} (rawContent 保持原样,未改写)", ctx.taskId());
         }
+    }
+
+    /** [uref] 调试用:长串截断预览。 */
+    private static String preview(String s) {
+        if (s == null) {
+            return "(null)";
+        }
+        return s.length() > 80 ? s.substring(0, 80) + "…" : s;
     }
 
     /**

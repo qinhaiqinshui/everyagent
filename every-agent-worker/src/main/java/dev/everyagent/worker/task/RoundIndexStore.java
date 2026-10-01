@@ -117,6 +117,16 @@ public class RoundIndexStore {
             if (main && Events.USER_MESSAGE.equals(event)) {
                 if (current == null) {
                     // 仅当前无开着的轮时开轮
+                    // [uref] @文件引用胶囊丢失排查:scan 重建轮次时取事件原文 payload,验证 data.rawContent 保留。
+                    if (LOG.isDebugEnabled()) {
+                        JsonNode d = r.payload() == null ? null : r.payload().path("data");
+                        String raw = d != null && d.path("rawContent").isTextual()
+                                ? d.path("rawContent").asString() : null;
+                        LOG.debug("[uref] scan 开轮 seq={} userLen={} payloadPresent={} dataRawPresent={} rawLen={} rawHasToken={}",
+                                r.seq(), textOf(r.payload()) == null ? -1 : textOf(r.payload()).length(),
+                                r.payload() != null, raw != null, raw == null ? -1 : raw.length(),
+                                raw != null && raw.contains("[[[["));
+                    }
                     current = new RoundBuilder(builders.size() + 1L, r.seq(), textOf(r.payload()), r.payload());
                     builders.add(current);
                 }
@@ -183,11 +193,25 @@ public class RoundIndexStore {
             List<RoundIndex.Round> existing = store.readRounds(dir);
             RoundIndex.Round last = existing.isEmpty() ? null : existing.get(existing.size() - 1);
             if (last != null && !last.closed()) {
+                if (LOG.isDebugEnabled()) {
+                    LOG.debug("[uref] openRoundAtStart 沿用未闭合尾轮不写盘 task={} lastStartSeq={} 本次startSeq={}",
+                            taskId, last.startSeq(), startSeq);
+                }
                 return false; // 沿用当前未闭合轮(roundId 已存在,不重生成)
             }
             long index = last == null ? 1 : last.index() + 1;
             String roundId = ShortIds.next("round");
             long startedAt = System.currentTimeMillis(); // 开始时间随开轮落盘,耗时从磁盘计算
+            // [uref] @文件引用胶囊丢失排查:开轮落盘的 userMessage payload 是否带 data.rawContent
+            // (前端 task.rounds 骨架据此回放用户消息胶囊)。
+            if (LOG.isDebugEnabled()) {
+                JsonNode d = userMessage == null ? null : userMessage.path("data");
+                String raw = d != null && d.path("rawContent").isTextual() ? d.path("rawContent").asString() : null;
+                LOG.debug("[uref] openRoundAtStart 追加未闭合轮 task={} index={} startSeq={} userLen={} userMessagePresent={} dataRawPresent={} rawLen={} rawHasToken={}",
+                        taskId, index, startSeq, user == null ? -1 : user.length(),
+                        userMessage != null, raw != null, raw == null ? -1 : raw.length(),
+                        raw != null && raw.contains("[[[["));
+            }
             store.appendRound(taskId, new RoundIndex.Round(roundId, index, startSeq, null, user, "",
                     List.of(), 0L, startedAt, null, userMessage));
             return true;

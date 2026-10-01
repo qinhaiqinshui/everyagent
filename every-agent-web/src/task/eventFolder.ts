@@ -209,6 +209,16 @@ export class TaskEventFolder {
       const userRaw = (round.userMessage?.data?.rawContent && round.userMessage.data.rawContent.length)
         ? round.userMessage.data.rawContent
         : userText
+      // [uref] @文件引用胶囊丢失排查:rounds.jsonl 骨架折入 user 消息的 rawContent 解析
+      // (userMessage.data.rawContent 缺失 → 回退 userText 纯文本 → 胶囊丢失)。
+      console.debug(
+        '[uref] foldRound user 骨架 startSeq=', startSeqKey,
+        'userLen=', userText?.length ?? -1,
+        'userMessagePresent=', round.userMessage != null,
+        'userMessageDataRawGiven=', Boolean(round.userMessage?.data?.rawContent?.length),
+        'resolvedRawLen=', userRaw?.length ?? -1,
+        'resolvedRawHasToken=', userRaw?.includes('[[[[') ?? false,
+      )
       const userMessage: AgentMessageRecord = {
         messageId: `m-${round.startSeq}`,
         agentId: '',

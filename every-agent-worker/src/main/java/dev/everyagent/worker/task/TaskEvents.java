@@ -4,6 +4,8 @@ import dev.everyagent.contract.json.Json;
 import dev.everyagent.plugin.api.event.EventRecord;
 import dev.everyagent.plugin.api.model.EmitEvent;
 import dev.everyagent.plugin.api.model.EventEmitter;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.node.ObjectNode;
 
@@ -17,6 +19,8 @@ import tools.jackson.databind.node.ObjectNode;
  * seq 序列化为字符串(64 位 Snowflake &gt; JS Number.MAX_SAFE_INTEGER,wire 传输必须字符串)。
  */
 public final class TaskEvents implements EventEmitter {
+
+    private static final Logger LOG = LoggerFactory.getLogger(TaskEvents.class);
 
     private final EventLog log;
     private final String mainAgentId;
@@ -59,6 +63,18 @@ public final class TaskEvents implements EventEmitter {
         ObjectNode ext = Json.obj();
         ext.put("persist", e.persist());
         ext.put("operate", e.mode() == EmitEvent.Mode.APPEND ? "append" : "replace");
+
+        // [uref] @文件引用胶囊丢失排查:事件出口处 user.message 的最终 wire payload 原样性。
+        if ("user.message".equals(e.kind()) && LOG.isDebugEnabled()) {
+            JsonNode data = payload.get("data");
+            String raw = data != null && data.path("rawContent").isTextual()
+                    ? data.path("rawContent").asString() : null;
+            LOG.debug("[uref] TaskEvents.emit user.message id(=seq)={} contentLen={} dataRawPresent={} rawLen={} rawHasToken={}",
+                    e.id(),
+                    e.content() == null ? -1 : e.content().length(),
+                    raw != null, raw == null ? -1 : raw.length(),
+                    raw != null && raw.contains("[[[["));
+        }
 
         return log.append(e.id(), e.kind(), payload, agentId, ext, !e.persist()).seq();
     }
