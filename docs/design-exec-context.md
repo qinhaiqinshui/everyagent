@@ -400,10 +400,13 @@ subagent 能力（spawn/wait/stop 子 agent）是**执行域能力**，不是任
 **SubAgentPlugin.activate()**：`services().task()` 删除；`services().store()` 仅供
 RpcHandler（task 壳）；Ledger 不再需要 store。
 
-**任务域插件分类明确**（file-change、edit-resend、git）：它们的本职就是任务域功能，
-经 `TaskService`/`TaskLifecycleContext.taskRuntime()` 取 `TaskRuntime` 是合法依赖——
-本方案解耦目标是横切基础设施与执行域能力插件（subagent），不是消灭任务域插件对
-任务域接口的正常使用。
+**任务域插件分类明确**（file-change、edit-resend）：它们的本职就是任务域功能
+（本任务本回合的改动收集/会话截断重发），经 `TaskService`/
+`TaskLifecycleContext.taskRuntime()` 取 `TaskRuntime` 是合法依赖——本方案解耦目标是
+横切基础设施与执行域能力插件（subagent），不是消灭任务域插件对任务域接口的正常使用。
+**git 是工作区域能力插件**：RPC/面板/凭证/斜杠全部域中性；唯一耦合
+GitAutoSyncAdvisor（“本轮执行完成后同步工作区”——执行域横切，非任务域）在 §8.1
+S4 表内两行迁完，此后 git 插件整体域中性（无 task 只有 workflow 亦可用自动同步）。
 
 ### 8.3 AiAuthReviewer
 
