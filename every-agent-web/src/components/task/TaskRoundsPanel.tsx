@@ -528,12 +528,16 @@ function firstTailEventSeq(items: TaskThreadItem[], startSeq: string): string | 
 
 /** 合成轮 user 消息（rounds.jsonl 的 user 文本 → AgentMessageRecord）。 */
 function syntheticUserRecord(round: RoundSummary): AgentMessageRecord {
+  // rawContent 优先取 userMessage.data.rawContent(含 opaque token 串,回放还原 @文件胶囊);
+  // 缺失(旧行/纯文本输入)回退 round.user 纯文本摘要——与 eventFolder.foldRound 口径一致。
+  // 曾直接用 round.user,闭合轮折叠态渲染丢胶囊(2026-10 排查)。
+  const raw = round.userMessage?.data?.rawContent
   return {
     messageId: `m-${round.startSeq}`,
     agentId: '',
     role: 'user',
     content: round.user,
-    rawContent: round.user,
+    rawContent: raw && raw.length ? raw : round.user,
     historyMode: 'thread_only',
     createdAt: 0,
     updatedAt: 0,
