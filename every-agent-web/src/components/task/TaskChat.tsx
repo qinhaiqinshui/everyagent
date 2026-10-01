@@ -654,6 +654,10 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
         return { text: next, rawContent: next, tokens: [], activeTokenId: undefined }
       })
     },
+    setRawContent: (rawContent: string) => {
+      setError('')
+      setDraft({ text: rawContent, rawContent, tokens: [], activeTokenId: undefined })
+    },
   }), [])
 
   // 插件草稿桥接：把输入框草稿写能力注入非 React 模块 holder，

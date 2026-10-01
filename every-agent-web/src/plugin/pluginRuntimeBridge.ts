@@ -20,6 +20,7 @@ export interface ShellBridge {
 /** 输入框草稿桥接能力子集（来自 ComposerDraftBridgeContext）。 */
 export interface ComposerBridge {
   appendText(text: string): void
+  setRawContent(rawContent: string): void
 }
 
 let shellBridge: ShellBridge | null = null

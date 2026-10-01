@@ -54,7 +54,13 @@ export default function EditMessageButton({ taskId, seq, content, rawContent }: 
     if (isEditing) {
       cancelEdit()
     } else {
-      ctx.ui.appendComposerText(content ?? '')
+      // 优先用 rawContent（含 [[[[...]]]] opaque token 串）回填，InlineComposer 重建
+      // DOM 时会自动解析还原胶囊；缺 rawContent 时降级为纯文本 content。
+      if (rawContent && rawContent.length > 0) {
+        ctx.ui.setComposerRawContent(rawContent)
+      } else {
+        ctx.ui.appendComposerText(content ?? '')
+      }
       startEdit(seq)
     }
   }

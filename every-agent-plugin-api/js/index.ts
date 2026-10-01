@@ -614,6 +614,8 @@ export interface UiRegistry {
   openDiffTab(input: PluginDiffTabInput): void
   /** 向当前输入框草稿末尾追加纯文本（替代宿主 composerDraftBridge）。 */
   appendComposerText(text: string): void
+  /** 用 rawContent（可能含 opaque token 串）替换整个草稿（编辑重发回填用）。 */
+  setComposerRawContent(rawContent: string): void
 }
 
 // ─── PluginContext / PluginModule ─────────────────────────────────────────

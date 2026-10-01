@@ -9,6 +9,9 @@ import React from 'react'
 export interface ComposerDraftBridgeValue {
   /** 把纯文本追加到当前草稿末尾（清空胶囊 token，回到普通输入态）。 */
   appendText: (text: string) => void
+  /** 用 rawContent（可能含 [[[[...]]]] opaque token 串）替换整个草稿，
+   *  InlineComposer 重建 DOM 时会自动解析 opaque token 还原胶囊。 */
+  setRawContent: (rawContent: string) => void
 }
 
 export const ComposerDraftBridgeContext = React.createContext<ComposerDraftBridgeValue | null>(null)

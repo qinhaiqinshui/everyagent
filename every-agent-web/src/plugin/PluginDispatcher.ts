@@ -132,6 +132,8 @@ export interface RealPluginDispatcher {
   openDiffTab: (input: PluginDiffTabInput) => void
   /** 向当前输入框草稿末尾追加纯文本（委托宿主 ComposerDraftBridge）。 */
   appendComposerText: (text: string) => void
+  /** 用 rawContent（可能含 opaque token 串）替换整个草稿（编辑重发回填用）。 */
+  setComposerRawContent: (rawContent: string) => void
 }
 
 export const pluginDispatcher: RealPluginDispatcher = {
@@ -266,5 +268,8 @@ export const pluginDispatcher: RealPluginDispatcher = {
   },
   appendComposerText(text) {
     getComposerBridge()?.appendText(text)
+  },
+  setComposerRawContent(rawContent) {
+    getComposerBridge()?.setRawContent(rawContent)
   },
 }
