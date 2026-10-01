@@ -1,6 +1,7 @@
 package dev.everyagent.plugin.api.agent;
 
 import dev.everyagent.plugin.api.event.Usage;
+import dev.everyagent.plugin.api.execution.ExecContext;
 import dev.everyagent.plugin.api.model.EventEmitter;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.model.ChatModel;
@@ -31,8 +32,23 @@ public interface AgentContext {
     /** 创建时刻(毫秒时间戳)。 */
     long createdAt();
 
-    /** 上层黑盒数据(agent 核心不读;task 层 advisor 从中取 TaskEntry 等)。 */
+    /**
+     * 上层黑盒数据(agent 核心不读;task 层 advisor 从中取 TaskEntry 等)。
+     *
+     * @deprecated 过渡保留,S4 随 advisor 链全面迁移 {@link #execution()} 后删除;
+     *             消费者请改用 {@code execution()} 的类型化槽位取数。
+     */
+    @Deprecated
     Map<String, Object> properties();
+
+    /**
+     * 本 agent 所属的执行上下文(task 或未来 workflow)。
+     * <p>worker {@code AgentEntity} 在 S2 实现注入;过渡返回 null,
+     * 消费者此期间继续经 {@link #properties()} 取数。
+     */
+    default ExecContext execution() {
+        return null;
+    }
 
     /** agent 层包装的 emitter(发射时自动填 agentId)。 */
     EventEmitter emitter();

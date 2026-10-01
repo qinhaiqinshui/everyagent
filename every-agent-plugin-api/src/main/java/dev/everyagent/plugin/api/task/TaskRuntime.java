@@ -2,27 +2,68 @@ package dev.everyagent.plugin.api.task;
 
 import dev.everyagent.plugin.api.agent.AgentContext;
 import dev.everyagent.plugin.api.event.EventLogReader;
+import dev.everyagent.plugin.api.execution.ExecContext;
 import dev.everyagent.plugin.api.model.EventEmitter;
 import dev.everyagent.plugin.api.model.ModelConfig;
-import dev.everyagent.plugin.api.permission.TaskInfo;
 import tools.jackson.databind.JsonNode;
 
+import java.nio.file.Path;
 import java.util.Map;
 
 /**
  * 任务运行时接口 —— 插件用此替代对 worker {@code TaskEntry} 的直接引用。
  *
- * <p>继承 {@link TaskInfo} 的基础只读方法(taskId / status / terminal / metadata / taskDir)，
- * 额外暴露插件运行时实际需要的读写成员。worker 的 {@code TaskEntry} 实现此接口；
+ * <p>实现 {@link ExecContext} 统一执行上下文：{@code subjectId()} / {@code emitter()}
+ * / {@code dataDir()} 槽位以 default 桥接方法映射到任务域成员（taskId / events /
+ * taskDir）；{@code workspaceRoot()} / {@code workspaceId()} / {@code snapshot()} /
+ * {@code agents()} / {@code metadata()} / {@code terminal()} 与 {@code ExecContext}
+ * 抽象签名重合，由实现类提供。worker 的 {@code TaskEntry} 实现此接口；
  * 需要完整任务运行时数据的内置组件可直接依赖 {@code TaskEntry} 具体类。
+ *
+ * <p>任务域私有成员保留在本接口：taskId / status / taskDir（原 {@code TaskInfo}
+ * 声明显式吸收，S3 退役该接口）、mainAgentId / log、fileChanges 系列槽位、
+ * 时间戳与运行时操作。{@code fileChanges} 系列是任务域私有槽位，
+ * 不进 {@code ExecContext}。
  *
  * <p>读写混合接口：subagent 插件需要写 {@link #agents()} Map(put / get / values / containsKey)，
  * file-change 插件需要读写 fileChanges 系列槽位，task-edit-resend 插件需要清空这些槽位。
  * 只暴露插件实际调用的方法，不做过度设计。
  */
-public interface TaskRuntime extends TaskInfo {
+public interface TaskRuntime extends ExecContext {
 
-    // ---- 只读字段(构造时确定或任务级定死) ----
+    // ---- 任务域只读成员(原 TaskInfo 吸收声明;构造时确定或任务级定死) ----
+
+    /** 任务 ID。 */
+    String taskId();
+
+    /**
+     * 任务状态（wire 字符串：{@code "created"}/{@code "running"}/{@code "waiting-user"}
+     * /{@code "done"}/{@code "failed"}/{@code "cancelled"}）。
+     */
+    String status();
+
+    /** 任务数据目录路径（workspaces/&lt;workspaceId&gt;/tasks/&lt;taskId&gt;/）。 */
+    Path taskDir();
+
+    // ---- ExecContext 槽位桥接(映射任务域成员) ----
+
+    /** 执行主体 ID：任务域即 {@link #taskId()}（未来 workflow 域映射 workflowId）。 */
+    @Override
+    default String subjectId() {
+        return taskId();
+    }
+
+    /** 任务级事件口：桥接 {@link #events()}。 */
+    @Override
+    default EventEmitter emitter() {
+        return events();
+    }
+
+    /** 数据目录：桥接 {@link #taskDir()}。 */
+    @Override
+    default Path dataDir() {
+        return taskDir();
+    }
 
     /** 工作区根路径(挂靠关系，任务数据存 workspaces/&lt;workspaceId&gt;/tasks 不随之迁移)。 */
     String workspaceRoot();

@@ -1,5 +1,6 @@
 package dev.everyagent.plugin.api.spi;
 
+import dev.everyagent.plugin.api.execution.ExecContext;
 import dev.everyagent.plugin.api.interaction.InteractionService;
 import dev.everyagent.plugin.api.shell.ShellExecutor;
 import java.nio.file.Path;
@@ -39,6 +40,15 @@ public interface ToolContext {
 
     /** 已组装好的 shell 执行器（授权 + 沙箱已内建），插件用它注册 ShellTool。 */
     default ShellExecutor shellExecutor() {
+        return null;
+    }
+
+    /**
+     * 统一执行上下文（taskId / workspaceRoot / snapshot / emitter 等类型化槽位）。
+     * <p>worker {@code ToolContextImpl} 实现注入;过渡返回 null,
+     * 消费者此期间继续经 {@link #taskId()} / {@link #workspaceRoot()} 取数。
+     */
+    default ExecContext execution() {
         return null;
     }
 }

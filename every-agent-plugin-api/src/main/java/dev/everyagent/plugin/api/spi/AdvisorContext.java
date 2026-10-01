@@ -1,6 +1,7 @@
 package dev.everyagent.plugin.api.spi;
 
 import dev.everyagent.plugin.api.agent.AgentContext;
+import dev.everyagent.plugin.api.execution.ExecContext;
 import org.springframework.ai.model.tool.ToolCallingManager;
 
 import java.nio.file.Path;
@@ -37,4 +38,13 @@ public interface AdvisorContext {
      * @return 当前 agent 上下文
      */
     AgentContext agentEntity();
+
+    /**
+     * 统一执行上下文（taskId / workspaceRoot / snapshot / emitter 等类型化槽位）。
+     * <p>worker 实现注入（Impl 构造时传入）;过渡返回 null,
+     * 消费者此期间继续经 {@link #agentEntity()}.properties() 取数。
+     */
+    default ExecContext execution() {
+        return null;
+    }
 }
