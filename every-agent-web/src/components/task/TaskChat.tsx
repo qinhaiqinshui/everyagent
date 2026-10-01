@@ -541,14 +541,6 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
     // 供 worker 在 user.message 事件/轮次摘要里带回，前端回放据此还原文件胶囊。
     const aiText = replaceComposerTokensForSubmission(draft.rawContent, draft.tokens).trim()
     const rawContent = draft.rawContent
-    // [uref] @文件引用胶囊丢失排查:提交入口的草稿三元组(rawContent/tokens/aiText)快照。
-    console.debug(
-      '[uref] submit 草稿快照:',
-      'rawContent=', JSON.stringify(rawContent),
-      'tokens=', draft.tokens.map((t) => `${t.kind}:${t.label}`),
-      'aiText=', JSON.stringify(aiText),
-      'isDraft=', isDraft,
-    )
     if (!aiText) {
       return
     }
@@ -591,7 +583,6 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
             taskTokens: scopeTokens.map((t) => t.opaqueText).filter((token) => token.length > 0),
             rawContent,
           })
-          console.debug('[uref] runTask(新建) 已发送 rawContentLen=', rawContent.length, 'hasToken=', rawContent.includes('[[[['))
           setDraft({ text: '', rawContent: '', tokens: [], activeTokenId: undefined })
           // 新任务页回显由其任务页 entry 负责（task.updated 广播镜像 slashTaskTokens）。
           setScopeTokens([])
@@ -610,7 +601,6 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
             rawContent,
             metadata: contributionMetadata,
           })
-          console.debug('[uref] runTask(运行中入队) 已发送 rawContentLen=', rawContent.length, 'hasToken=', rawContent.includes('[[[['))
         } else {
           // 终态:task.run{taskId} 冷启动续跑(载入历史,状态翻回 running)。
           // 带上当前输入框选定的模型,使旧任务也能切换到其他模型。
@@ -620,7 +610,6 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
             rawContent,
             metadata: contributionMetadata,
           })
-          console.debug('[uref] runTask(终态续跑) 已发送 rawContentLen=', rawContent.length, 'hasToken=', rawContent.includes('[[[['))
         }
         // 提交成功：通知各贡献 provider（如编辑重发清除编辑目标）。
         for (const { provider } of submitContributions) {

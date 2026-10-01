@@ -29,8 +29,3 @@ logging:
     dev.everyagent.worker.task.WorkerToolEventAdvisor: debug
     dev.everyagent.worker.task.TaskStore: debug
     dev.everyagent.worker.task.lifecycle: debug
-    # [uref] @文件引用胶囊丢失排查(DataPusher 推送出口 + 队列/编辑重发插件节点);
-    # 排查完成后可删。
-    dev.everyagent.worker.ship: debug
-    dev.everyagent.plugin.inputqueue: debug
-    dev.everyagent.plugin.editresend: debug

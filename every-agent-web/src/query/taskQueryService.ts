@@ -166,9 +166,6 @@ export const taskQueryService = {
       if (!ownerWorkerId) {
         throw new Error('无法确定任务所属 worker(任务数据不可用)')
       }
-      // [uref] @文件引用胶囊丢失排查:RPC params 组装(续跑/入队分支)。
-      console.debug('[uref] rpcTo task.run(续跑/入队) params.rawContent 携带=', Boolean(opts.rawContent),
-        'len=', opts.rawContent?.length ?? -1, 'hasToken=', opts.rawContent?.includes('[[[[') ?? false)
       await hubSession.rpcTo(ownerWorkerId, 'task.run', {
         taskId: opts.taskId,
         input,
@@ -183,9 +180,6 @@ export const taskQueryService = {
     }
     const workspace = opts?.workspace?.trim() || await resolveWorkspaceRoot()
     const taskTokens = opts?.taskTokens?.filter((token) => token?.length > 0) ?? []
-    // [uref] @文件引用胶囊丢失排查:RPC params 组装(新建分支)。
-    console.debug('[uref] rpcTo task.run(新建) params.rawContent 携带=', Boolean(opts.rawContent),
-      'len=', opts.rawContent?.length ?? -1, 'hasToken=', opts.rawContent?.includes('[[[[') ?? false)
     const result = await hubSession.rpcTo(opts.workerId, 'task.run', {
       input,
       title: opts?.title,

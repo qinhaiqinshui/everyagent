@@ -4,8 +4,6 @@ import dev.everyagent.worker.task.RoundIndexStore;
 import dev.everyagent.worker.task.TaskEntry;
 import dev.everyagent.worker.task.TaskStore;
 import dev.everyagent.worker.tools.PermissionGate;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 /**
@@ -15,8 +13,6 @@ import org.springframework.stereotype.Component;
  */
 @Component
 public class TaskLifecycleContextFactory {
-
-    private static final Logger log = LoggerFactory.getLogger(TaskLifecycleContextFactory.class);
 
     private final PermissionGate gate;
     private final RoundIndexStore roundIndexStore;
@@ -43,13 +39,6 @@ public class TaskLifecycleContextFactory {
         ctx.rawContent(rawContent);
         ctx.runParams(metadata);
         ctx.rpcContext(rpcContext);
-        // [uref] @文件引用胶囊丢失排查:RPC → 生命周期上下文字段搬运(此处丢失 → 后续全链路无 rawContent)。
-        if (log.isDebugEnabled()) {
-            log.debug("[uref] createForRpc inputLen={} rawPresent={} rawLen={} rawHasToken={}",
-                    input == null ? -1 : input.length(),
-                    rawContent != null, rawContent == null ? -1 : rawContent.length(),
-                    rawContent != null && rawContent.contains("[[[["));
-        }
         return ctx;
     }
 }

@@ -53,14 +53,6 @@ public final class QueueDispatchNode implements TaskLifecycleNode {
         TaskRuntime t = taskService.get(taskId);
         if (t != null && !t.terminal()) {
             // 运行中
-            // [uref] @文件引用胶囊丢失排查:运行中入队路径的 input/rawContent 原样性(队列经 ctx 整体传递)。
-            if (log.isDebugEnabled()) {
-                String rc = ctx.rawContent();
-                log.debug("[uref] queue.dispatch 运行中入队 task={} inputLen={} rawPresent={} rawLen={} rawHasToken={}",
-                        taskId, ctx.input() == null ? -1 : ctx.input().length(),
-                        rc != null, rc == null ? -1 : rc.length(),
-                        rc != null && rc.contains("[[[["));
-            }
             // insert/task.run 插件参数走 runParams(一次性容器,不落盘),非任务级持久化 metadata
             Map<String, Object> runParams = ctx.runParams();
             if (runParams != null && Boolean.TRUE.equals(runParams.get("insert"))) {
@@ -86,12 +78,6 @@ public final class QueueDispatchNode implements TaskLifecycleNode {
 
         log.debug("[queue] dispatch 终态/不存在继续下行 task={} terminal={}",
                 taskId, t != null && t.terminal());
-        if (log.isDebugEnabled()) {
-            String rc = ctx.rawContent();
-            log.debug("[uref] queue.dispatch 续跑/新建下行 task={} rawPresent={} rawLen={} rawHasToken={}",
-                    taskId, rc != null, rc == null ? -1 : rc.length(),
-                    rc != null && rc.contains("[[[["));
-        }
         return next.proceed(ctx);  // 终态或不存在，继续往下
     }
 }

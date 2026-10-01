@@ -160,20 +160,6 @@ class ManagedStream {
   }
 
   private onEvent(event: TaskStreamEvent): void {
-    // [uref] @文件引用胶囊丢失排查:前端收到 user.message 事件的第一现场(推送/回放都经此)。
-    if (event.event === 'user.message') {
-      const payload = event.payload ?? {}
-      const data = payload.data as Record<string, unknown> | undefined
-      const raw = data?.rawContent
-      console.debug(
-        '[uref] onEvent user.message seq=', event.seq,
-        'initial=', (event as { initial?: boolean }).initial ?? false,
-        'content=', JSON.stringify(String(payload.content ?? '').slice(0, 80)),
-        'dataRawPresent=', typeof raw === 'string' && raw.length > 0,
-        'rawLen=', typeof raw === 'string' ? raw.length : -1,
-        'rawHasToken=', typeof raw === 'string' && raw.includes('[[[['),
-      )
-    }
     // round.opened / round.closed 是信号事件,不折入 items;仅触发 rounds 快照刷新(重新 task.rounds + 幂等 foldRound)。
     if (event.event === 'round.opened' || event.event === 'round.closed') {
       void this.refreshRounds()
@@ -473,18 +459,6 @@ class ManagedStream {
    */
   private foldWireEvent(item: TaskPollWireEvent): void {
     const event = this.toFoldableEvent(item)
-    // [uref] @文件引用胶囊丢失排查:懒加载/回放路径(task.poll/roundTail)收到 user.message 的第一现场。
-    if (event.event === 'user.message') {
-      const data = event.payload?.data as Record<string, unknown> | undefined
-      const raw = data?.rawContent
-      console.debug(
-        '[uref] foldWireEvent user.message seq=', event.seq,
-        'content=', JSON.stringify(String(event.payload?.content ?? '').slice(0, 80)),
-        'dataRawPresent=', typeof raw === 'string' && raw.length > 0,
-        'rawLen=', typeof raw === 'string' ? raw.length : -1,
-        'rawHasToken=', typeof raw === 'string' && raw.includes('[[[['),
-      )
-    }
     if (event.event === 'ask.create' || event.event === 'ask.state' || event.event === 'ask.resolved') {
       this.dispatchAskEvent({ ...event, initial: true })
     }

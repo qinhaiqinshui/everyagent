@@ -48,11 +48,6 @@ public final class QueueLoopNode implements TaskLifecycleNode {
         // 磁盘项只含 text/rawContent，包装为轻量 ctx 入队（metadata 不落盘，恢复为 null）
         try {
             for (UserInput q : store.readQueue(store.dirOf(taskId))) {
-                // [uref] @文件引用胶囊丢失排查:重启后悬空队列恢复项的 rawContent 原样性。
-                log.debug("[uref] queue.loop 恢复悬空队列项 task={} textLen={} rawPresent={} rawLen={} rawHasToken={}",
-                        taskId, q.text() == null ? -1 : q.text().length(),
-                        q.rawContent() != null, q.rawContent() == null ? -1 : q.rawContent().length(),
-                        q.rawContent() != null && q.rawContent().contains("[[[["));
                 queue.offer(new RestoredQueueContext(q.text(), q.rawContent()));
             }
         } catch (Exception e) {
@@ -72,14 +67,6 @@ public final class QueueLoopNode implements TaskLifecycleNode {
                 ctx.rawContent(polledCtx.rawContent());
                 ctx.runParams(polledCtx.runParams());
                 ctx.metadata(polledCtx.metadata());
-                // [uref] @文件引用胶囊丢失排查:队列出队消费项的 rawContent 原样性。
-                if (log.isDebugEnabled()) {
-                    String rc = polledCtx.rawContent();
-                    log.debug("[uref] queue.loop 出队消费 task={} inputLen={} rawPresent={} rawLen={} rawHasToken={}",
-                            taskId, polledCtx.input() == null ? -1 : polledCtx.input().length(),
-                            rc != null, rc == null ? -1 : rc.length(),
-                            rc != null && rc.contains("[[[["));
-                }
                 result = next.proceed(ctx);
             }
 
@@ -89,14 +76,6 @@ public final class QueueLoopNode implements TaskLifecycleNode {
                 if (pending.isEmpty()) {
                     store.deleteQueue(store.dirOf(taskId));
                 } else {
-                    if (log.isDebugEnabled()) {
-                        for (var c : pending) {
-                            String rc = c.rawContent();
-                            log.debug("[uref] queue.loop 悬空队列落盘 task={} textLen={} rawPresent={} rawLen={}",
-                                    taskId, c.input() == null ? -1 : c.input().length(),
-                                    rc != null, rc == null ? -1 : rc.length());
-                        }
-                    }
                     store.writeQueue(store.dirOf(taskId), pending.stream()
                             .map(c -> UserInput.of(c.input(), c.rawContent()))
                             .toList());

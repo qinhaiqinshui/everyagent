@@ -426,21 +426,6 @@ public class TaskManager implements TaskInputHandler, InteractionServiceImpl.Sta
         for (EventRecord r : m.events) {
             batch.add(TaskEvents.wireEvent(r, mainAgentId));
         }
-        // [uref] @文件引用胶囊丢失排查:task.poll 应答里 user.message 的 data.rawContent 原样性。
-        if (log.isDebugEnabled()) {
-            for (EventRecord r : m.events) {
-                if ("user.message".equals(r.event())) {
-                    JsonNode d = r.payload() == null ? null : r.payload().path("data");
-                    String raw = d != null && d.path("rawContent").isTextual() ? d.path("rawContent").asString() : null;
-                    log.debug("[uref] task.poll 应答 user.message seq={} contentLen={} dataRawPresent={} rawLen={} rawHasToken={}",
-                            r.seq(),
-                            r.payload() != null && r.payload().path("content").isTextual()
-                                    ? r.payload().path("content").asString().length() : -1,
-                            raw != null, raw == null ? -1 : raw.length(),
-                            raw != null && raw.contains("[[[["));
-                }
-            }
-        }
         boolean isLive = live != null && !live.status.terminal();
         String status = taskStatusOf(taskId, live, meta);
         ObjectNode result = Json.obj()
@@ -587,27 +572,6 @@ public class TaskManager implements TaskInputHandler, InteractionServiceImpl.Sta
             if (isLive) {
                 open = scanOpenRound(taskId, live, mainAgentId); // 运行中:当前未闭合轮起点(不落盘)
             }
-            // [uref] @文件引用胶囊丢失排查:task.rounds 应答里每轮 userMessage.data.rawContent 原样性
-            // (前端 foldRound 骨架用 userMessage.payload 回放用户消息胶囊;缺失则回退纯文本)。
-            if (log.isDebugEnabled()) {
-                for (RoundIndex.Round r : roundList) {
-                    JsonNode um = r.userMessage();
-                    JsonNode d = um != null ? um.path("data") : null;
-                    String raw = d != null && d.path("rawContent").isTextual() ? d.path("rawContent").asString() : null;
-                    log.debug("[uref] task.rounds 应答轮次 index={} startSeq={} userLen={} userMessagePresent={} dataRawPresent={} rawLen={} rawHasToken={}",
-                            r.index(), r.startSeq(), r.user() == null ? -1 : r.user().length(),
-                            um != null, raw != null, raw == null ? -1 : raw.length(),
-                            raw != null && raw.contains("[[[["));
-                }
-                if (open != null) {
-                    JsonNode d = open.path("userMessage").path("data");
-                    String raw = d.path("rawContent").isTextual() ? d.path("rawContent").asString() : null;
-                    log.debug("[uref] task.rounds 应答 open 轮 startSeq={} userLen={} userMessagePresent={} dataRawPresent={} rawLen={} rawHasToken={}",
-                            open.path("startSeq").asString(""), open.path("user").asString("").length(),
-                            open.has("userMessage"), raw != null, raw == null ? -1 : raw.length(),
-                            raw != null && raw.contains("[[[["));
-                }
-            }
             ObjectNode result = Json.obj()
                     .set("rounds", rounds)
                     .put("status", taskStatusOf(taskId, live, meta))
@@ -699,18 +663,6 @@ public class TaskManager implements TaskInputHandler, InteractionServiceImpl.Sta
         List<JsonNode> batch = new ArrayList<>(tail.size());
         for (EventRecord r : tail) {
             batch.add(TaskEvents.wireEvent(r, mainAgentId));
-        }
-        // [uref] @文件引用胶囊丢失排查:roundTail 应答里 user.message 的 data.rawContent 原样性。
-        if (log.isDebugEnabled()) {
-            for (EventRecord r : tail) {
-                if ("user.message".equals(r.event())) {
-                    JsonNode d = r.payload() == null ? null : r.payload().path("data");
-                    String raw = d != null && d.path("rawContent").isTextual() ? d.path("rawContent").asString() : null;
-                    log.debug("[uref] task.roundTail 应答 user.message seq={} dataRawPresent={} rawLen={} rawHasToken={}",
-                            r.seq(), raw != null, raw == null ? -1 : raw.length(),
-                            raw != null && raw.contains("[[[["));
-                }
-            }
         }
         boolean isLive = live != null && !live.status.terminal();
         String status = taskStatusOf(taskId, live, meta);
@@ -939,15 +891,6 @@ public class TaskManager implements TaskInputHandler, InteractionServiceImpl.Sta
                 input != null && input.length() > 60 ? input.substring(0, 60) + "…" : input,
                 ctx.params().path("metadata").size(),
                 Thread.currentThread().getName());
-        // [uref] @文件引用胶囊丢失排查:RPC 入口 rawContent 原样性(含 opaque token 则前端可回放胶囊)。
-        if (log.isDebugEnabled()) {
-            log.debug("[uref] task.run 入口 rawContent: present={} len={} hasToken={} preview={}",
-                    rawContent != null,
-                    rawContent == null ? -1 : rawContent.length(),
-                    rawContent != null && rawContent.contains("[[[["),
-                    rawContent == null ? "(null)"
-                            : (rawContent.length() > 100 ? rawContent.substring(0, 100) + "…" : rawContent));
-        }
 
         // 读取 metadata（通用插件参数容器）；JsonNode 解包为 Java 标量，插件按类型直取
         java.util.Map<String, Object> metadata;

@@ -37,14 +37,6 @@ public final class EditResendNode implements TaskLifecycleNode {
         if (runParams != null) {
             String editSeq = (String) runParams.get("editSeq");
             if (editSeq != null && !editSeq.isEmpty()) {
-                // [uref] @文件引用胶囊丢失排查:编辑重发路径的 input/rawContent 原样性。
-                if (log.isDebugEnabled()) {
-                    String rc = ctx.rawContent();
-                    log.debug("[uref] edit.resend 截断 task={} editSeq={} inputLen={} rawPresent={} rawLen={} rawHasToken={}",
-                            ctx.taskId(), editSeq, ctx.input() == null ? -1 : ctx.input().length(),
-                            rc != null, rc == null ? -1 : rc.length(),
-                            rc != null && rc.contains("[[[["));
-                }
                 try {
                     truncateProcessor.truncate(ctx.taskId(), editSeq, ctx.input(), ctx.rawContent(), ctx);
                 } catch (Exception e) {
