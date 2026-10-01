@@ -23,7 +23,8 @@ class CodexBashToolProviderTest {
 
     private CodexBashToolProvider provider() {
         return new CodexBashToolProvider(new CodexSandboxManager(
-                new CodexSandboxOptions(tempDir, null, null, null, false, null), 30_000));
+                new CodexSandboxOptions(tempDir, null, null, null, false, null), 30_000),
+                null);
     }
 
     @Test
@@ -47,6 +48,6 @@ class CodexBashToolProviderTest {
         assertEquals(1, tools.size());
         assertEquals("powershell", tools.get(0).getToolDefinition().name());
         assertTrue(tools.get(0).getToolDefinition()
-                .description().contains("codex 沙箱"), "描述注明 codex 隔离语境");
+                .description().contains("rg 已加入 PATH"), "描述追加 rg/UTF-8 提示");
     }
 }

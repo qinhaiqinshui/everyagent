@@ -1,5 +1,6 @@
 package dev.everyagent.plugin.sandbox.codex;
 
+import dev.everyagent.plugin.api.shell.ExecResults;
 import dev.everyagent.plugin.sandbox.codex.CodexCommandExecutor.ExecSession;
 import dev.everyagent.plugin.sandbox.codex.accounts.SandboxAccounts.NetworkIdentity;
 import dev.everyagent.plugin.sandbox.codex.runner.FrameCodec.FramedMessage;
@@ -111,7 +112,7 @@ class CodexCommandExecutorTest {
 
     @Test
     void commandArgvIsPowerShellNoProfile() {
-        assertEquals(List.of("powershell.exe", "-NoProfile", "-Command", CodexCommandExecutor.POWERSHELL_PREFIX + "echo hi"),
+        assertEquals(List.of("powershell.exe", "-NoProfile", "-Command", ExecResults.POWERSHELL_PREFIX + "echo hi"),
                 CodexCommandExecutor.commandArgv("echo hi"));
     }
 
@@ -131,9 +132,9 @@ class CodexCommandExecutorTest {
         StringBuilder sb = new StringBuilder();
         assertFalse(CodexCommandExecutor.appendCapped(sb, "abc"));
         assertEquals(3, sb.length());
-        sb.setLength(CodexCommandExecutor.MAX_OUTPUT_CHARS - 2);
+        sb.setLength(ExecResults.MAX_OUTPUT_CHARS - 2);
         assertTrue(CodexCommandExecutor.appendCapped(sb, "abcdef"));
-        assertEquals(CodexCommandExecutor.MAX_OUTPUT_CHARS, sb.length());
+        assertEquals(ExecResults.MAX_OUTPUT_CHARS, sb.length());
     }
 
     @Test
@@ -169,7 +170,7 @@ class CodexCommandExecutorTest {
         assertTrue(session.closed, "会话在 finally 中关闭");
         assertFalse(session.terminated, "正常退出不发 terminate");
 
-        assertEquals(List.of("powershell.exe", "-NoProfile", "-Command", CodexCommandExecutor.POWERSHELL_PREFIX + "echo hi"), capture.spec.command());
+        assertEquals(List.of("powershell.exe", "-NoProfile", "-Command", ExecResults.POWERSHELL_PREFIX + "echo hi"), capture.spec.command());
         assertEquals(tempDir.resolve("ws").toString(), capture.spec.cwd(), "cwd=工作区根");
         assertEquals(30_000L, capture.spec.timeoutMs(), "timeout=SandboxConfig/manager 值");
         assertFalse(capture.spec.stdinOpen(), "worker 契约 stdin 关闭");
@@ -226,7 +227,7 @@ class CodexCommandExecutorTest {
                 .execute("big", "powershell");
         int cut = result.indexOf("\n[输出已截断至");
         assertTrue(cut > 0, "含截断尾注: " + result.substring(Math.max(0, result.length() - 60)));
-        assertEquals(CodexCommandExecutor.MAX_OUTPUT_CHARS, cut, "stdout 精确截断到上限");
+        assertEquals(ExecResults.MAX_OUTPUT_CHARS, cut, "stdout 精确截断到上限");
         assertTrue(result.endsWith("[输出已截断至 1000000 字符]"));
     }
 

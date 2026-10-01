@@ -5,6 +5,7 @@ import dev.everyagent.plugin.api.WorkerPluginContext;
 import dev.everyagent.plugin.api.config.WorkerConfig;
 
 import java.lang.System.Logger.Level;
+import java.nio.file.Path;
 
 /**
  * Windows Codex 沙箱插件入口（设计文档 §2.8/§5，形态对照 WslUbuntuSandboxPlugin）。
@@ -45,8 +46,9 @@ public class CodexSandboxPlugin implements EveryAgentPlugin {
         // 1. 沙箱后端提供者（id=codex；isAvailable=Windows 平台探测，priority=8）
         ctx.registerSandboxProvider(new CodexSandboxProvider(manager));
 
-        // 2. 沙箱自己的命令工具（appliesTo=codex 后端选中时）
-        ctx.registerToolProvider(new CodexBashToolProvider(manager));
+        // 2. 沙箱自己的命令工具（appliesTo=codex 后端选中时）；rg 由插件自带，激活时解析一次
+        Path rgPath = CodexRg.resolve(ctx.pluginDir());
+        ctx.registerToolProvider(new CodexBashToolProvider(manager, rgPath));
 
         LOG.log(Level.INFO,
                 "sandbox-windows-codex 已激活（codexHome={0},账户前缀={1},网络策略={2}；"

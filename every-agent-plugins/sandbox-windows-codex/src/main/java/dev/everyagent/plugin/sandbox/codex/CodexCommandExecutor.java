@@ -1,5 +1,6 @@
 package dev.everyagent.plugin.sandbox.codex;
 
+import dev.everyagent.plugin.api.shell.ExecResults;
 import dev.everyagent.plugin.sandbox.codex.accounts.CapSids;
 import dev.everyagent.plugin.sandbox.codex.accounts.SandboxAccounts;
 import dev.everyagent.plugin.sandbox.codex.accounts.SandboxAccounts.NetworkIdentity;
@@ -44,25 +45,8 @@ import java.util.Map;
  */
 public final class CodexCommandExecutor {
 
-    /** 单流输出字符上限（对齐 wsl-ubuntu / DirectSpawnSupport.MAX_OUTPUT_CHARS）。 */
-    static final int MAX_OUTPUT_CHARS = 1_000_000;
-
     /** 父侧看门狗在 SandboxConfig.timeoutMs 之外的收尾宽限（runner 终止 + Exit 帧）。 */
     static final long TEARDOWN_GRACE_MS = 15_000;
-
-    /**
-     * PowerShell 脚本预置前缀（对齐宿主 CommandExecutor）。
-     * UTF-8 编码设置 + 非成功流静默化，确保中文输出不乱码、progress 等不刷屏。
-     */
-    static final String POWERSHELL_PREFIX =
-            "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; "
-            + "$OutputEncoding=[System.Text.Encoding]::UTF8; "
-            + "$PSDefaultParameterValues['Get-Content:Encoding']='UTF8'; "
-            + "$PSDefaultParameterValues['Set-Content:Encoding']='UTF8'; "
-            + "$PSDefaultParameterValues['Out-File:Encoding']='UTF8'; "
-            + "$ProgressPreference='SilentlyContinue'; $InformationPreference='SilentlyContinue'; "
-            + "$WarningPreference='SilentlyContinue'; $VerbosePreference='SilentlyContinue'; "
-            + "$DebugPreference='SilentlyContinue'; ";
 
     private static final boolean WINDOWS =
             System.getProperty("os.name").toLowerCase(Locale.ROOT).contains("win");
@@ -160,12 +144,12 @@ public final class CodexCommandExecutor {
             run = runInSession(command, options);
         } catch (IOException | RuntimeException e) {
             LOG.log(System.Logger.Level.WARNING, "[exec] codex 会话失败 cmd={0}",
-                    truncate(command, 200) + " | " + e);
+                    ExecResults.truncate(command, 200) + " | " + e);
             return "[codex sandbox 执行失败] "
                     + (e.getMessage() == null ? e.toString() : e.getMessage());
         }
         LOG.log(System.Logger.Level.INFO, "[exec] codex rc={0} timedOut={1} cmd={2}",
-                new Object[] { run.exitCode(), run.timedOut(), truncate(command, 200) });
+                new Object[] { run.exitCode(), run.timedOut(), ExecResults.truncate(command, 200) });
         return format(run);
     }
 
@@ -261,7 +245,7 @@ public final class CodexCommandExecutor {
     /** shell 命令 → 子进程 argv：PowerShell -NoProfile -Command（UTF-8 编码前缀 + 用户命令）。 */
     static List<String> commandArgv(String command) {
         return List.of("powershell.exe", "-NoProfile", "-Command",
-                POWERSHELL_PREFIX + command);
+                ExecResults.POWERSHELL_PREFIX + command);
     }
 
     /** 继承当前环境；rgBinary 非空时其所在目录前置进 Path（Windows 键名优先）。 */
@@ -289,7 +273,7 @@ public final class CodexCommandExecutor {
         if (text == null || text.isEmpty()) {
             return false;
         }
-        int room = MAX_OUTPUT_CHARS - sb.length();
+        int room = ExecResults.MAX_OUTPUT_CHARS - sb.length();
         if (room <= 0) {
             return true;
         }
@@ -297,30 +281,10 @@ public final class CodexCommandExecutor {
         return text.length() > room;
     }
 
-    /** stdout / [stderr] / 超时 / 中断 / 截断 / exit code 尾注（wsl 同款格式）。 */
+    /** stdout / [stderr] / 超时 / 中断 / 截断 / exit code 尾注（委托 {@link ExecResults}）。 */
     static String format(SessionRun run) {
-        StringBuilder sb = new StringBuilder();
-        if (!run.stdout().isEmpty()) {
-            sb.append(run.stdout());
-        }
-        if (!run.stderr().isEmpty()) {
-            sb.append(sb.isEmpty() ? "" : "\n").append("[stderr]\n").append(run.stderr());
-        }
-        if (run.timedOut()) {
-            sb.append(sb.isEmpty() ? "" : "\n").append("[命令被沙箱超时中止]");
-        }
-        if (run.interrupted()) {
-            sb.append(sb.isEmpty() ? "" : "\n").append("[runner 管道在 exit 帧前关闭]");
-        }
-        if (run.truncated()) {
-            sb.append(sb.isEmpty() ? "" : "\n")
-                    .append("[输出已截断至 ").append(MAX_OUTPUT_CHARS).append(" 字符]");
-        }
-        if (run.exitCode() != 0) {
-            sb.append(sb.isEmpty() ? "" : "\n")
-                    .append("[exit code: ").append(run.exitCode()).append("]");
-        }
-        return sb.toString();
+        return ExecResults.format(run.stdout(), run.stderr(), run.exitCode(),
+                run.timedOut(), run.interrupted(), run.truncated());
     }
 
     /** 工作区根不在登记表时补为首根（防御：mount 晚于首次执行）。 */
@@ -397,7 +361,4 @@ public final class CodexCommandExecutor {
                 SandboxDirs.sandboxDir(options.codexHome()).toString());
     }
 
-    private static String truncate(String s, int n) {
-        return s == null ? "" : (s.length() <= n ? s : s.substring(0, n) + "...");
-    }
 }
