@@ -101,6 +101,16 @@ public class ToolContextImpl implements ToolContext {
         return exec::execute;
     }
 
+    @Override
+    public ShellExecutor shellExecutor(Path extraBinDir) {
+        // 带插件自带工具目录(如 rg)的执行器,把 extraBinDir 注入子进程 PATH
+        if (osSandbox == null) {
+            return null;
+        }
+        CommandExecutor exec = new CommandExecutor(osSandbox, taskEntry, gate, agentId, extraBinDir);
+        return exec::execute;
+    }
+
     /** 额外暴露：任务条目（含 metadata 等任务级开关），供内置适配器使用。 */
     public TaskEntry taskEntry() {
         return taskEntry;
