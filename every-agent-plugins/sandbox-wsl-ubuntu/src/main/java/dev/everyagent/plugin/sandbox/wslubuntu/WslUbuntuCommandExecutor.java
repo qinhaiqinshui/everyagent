@@ -1,6 +1,8 @@
 package dev.everyagent.plugin.sandbox.wslubuntu;
 
 import dev.everyagent.plugin.api.config.WorkerConfig;
+import dev.everyagent.plugin.api.shell.ExecResults;
+import dev.everyagent.plugin.api.spi.ExecResult;
 import dev.everyagent.plugin.api.spi.WorkspaceManager;
 
 import org.slf4j.Logger;
@@ -25,9 +27,6 @@ import java.util.function.BooleanSupplier;
 public class WslUbuntuCommandExecutor {
 
     private static final Logger log = LoggerFactory.getLogger(WslUbuntuCommandExecutor.class);
-
-    /** 单流输出字符上限（与 DirectSpawnSupport.MAX_OUTPUT_CHARS 一致）。 */
-    static final int MAX_OUTPUT_CHARS = 1_000_000;
 
     private final WorkerConfig props;
     private final Path workspaceRoot;
@@ -61,10 +60,10 @@ public class WslUbuntuCommandExecutor {
                 && (networkBlocked == null || !networkBlocked.getAsBoolean());
 
         WslCommon.OsResult r = WslUbuntuSandbox.run(command, workspaceRoot, props, pluginDir,
-                exec, MAX_OUTPUT_CHARS, allWorkspaces, allowNetwork);
+                exec, ExecResults.MAX_OUTPUT_CHARS, allWorkspaces, allowNetwork);
 
         log.info("[exec] wsl-ubuntu rc={} aborted={} cmd={}", r.exitCode(), r.aborted(),
-                truncate(command, 200));
+                ExecResults.truncate(command, 200));
         return format(r);
     }
 
@@ -81,25 +80,8 @@ public class WslUbuntuCommandExecutor {
         }
     }
 
-    /** stdout / [stderr] / 超时 / exit code 尾注的格式化。 */
+    /** stdout / [stderr] / 超时 / exit code 尾注的格式化（委托 {@link ExecResults}）。 */
     private static String format(WslCommon.OsResult r) {
-        StringBuilder sb = new StringBuilder();
-        if (r.stdout() != null && !r.stdout().isEmpty()) {
-            sb.append(r.stdout());
-        }
-        if (r.stderr() != null && !r.stderr().isEmpty()) {
-            sb.append(sb.isEmpty() ? "" : "\n").append("[stderr]\n").append(r.stderr());
-        }
-        if (r.aborted()) {
-            sb.append(sb.isEmpty() ? "" : "\n").append("[命令被沙箱超时中止]");
-        }
-        if (r.exitCode() != 0) {
-            sb.append(sb.isEmpty() ? "" : "\n").append("[exit code: ").append(r.exitCode()).append("]");
-        }
-        return sb.toString();
-    }
-
-    private static String truncate(String s, int n) {
-        return s == null ? "" : (s.length() <= n ? s : s.substring(0, n) + "...");
+        return ExecResults.format(new ExecResult(r.stdout(), r.stderr(), r.exitCode(), r.aborted()));
     }
 }
