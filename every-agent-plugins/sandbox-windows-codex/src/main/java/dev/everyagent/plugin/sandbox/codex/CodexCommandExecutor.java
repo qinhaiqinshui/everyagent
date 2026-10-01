@@ -150,7 +150,7 @@ public final class CodexCommandExecutor {
                         + System.getProperty("os.name") + "]";
             }
             if (!SetupMarker.isComplete(options.codexHome(), SetupPayload.SETUP_VERSION)) {
-                return "[codex sandbox 未完成 setup;请先调用 codex_sandbox_setup 工具"
+                return "[codex sandbox 未完成 setup;请重新激活/重启 worker 以触发 setup"
                         + "(会弹出 UAC 提权确认)完成账户/ACL/防火墙供给]";
             }
         }

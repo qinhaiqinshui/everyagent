@@ -12,8 +12,9 @@ import java.util.Locale;
  * codex 后端提供者（设计文档 §2.8/§5）。
  *
  * <p>id="codex"；isAvailable = Windows 平台 ∧ setup marker + 凭据双闸门就绪——
- * <b>绝不自动触发 setup / UAC</b>（首次供给只能经显式的 codex_sandbox_setup 工具
- * 或人工运行 helper，避免 auto 探测时静默弹提权窗）。
+ * setup 在 {@link CodexSandboxPlugin#activate} 中同步完成（幂等：已完成则短路），
+ * <b>绝不在此自动触发 setup / UAC</b>（activate 是用户安装/启用插件的显式动作，
+ * setup 的 UAC 在此时发生是预期行为；isAvailable 只做只读探测）。
  *
  * <p>priority：就绪 8、未 setup 0。取值依据（对照既有后端：wsl-ubuntu=10、
  * windows-mic=5）：

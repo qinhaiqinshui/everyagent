@@ -141,8 +141,8 @@ Maven 模块 `every-agent-plugins/sandbox-windows-codex`,包根 `dev.everyagent.
 
 | 类 | 职责 |
 |---|---|
-| `CodexSandboxPlugin` | 入口:读 WorkerConfig/pluginDir,注册 Provider + ToolProvider(对照 WslUbuntuSandboxPlugin) |
-| `CodexSandboxProvider` | id=`codex`;isAvailable=Windows ∧ marker+凭据就绪(**绝不自动触发 setup/UAC**);priority:就绪 8(明显低于 wsl-ubuntu 的 10,auto 不抢既有默认后端;高于 windows-mic 兜底 5——setup 完成即显式选用)、未 setup 0 |
+| `CodexSandboxPlugin` | 入口:读 WorkerConfig/pluginDir,注册 Provider + ToolProvider(对照 WslUbuntuSandboxPlugin);Windows 平台 + marker 未就绪时同步执行 setup(幂等,会弹 UAC;失败则插件激活失败) |
+| `CodexSandboxProvider` | id=`codex`;isAvailable=Windows ∧ marker+凭据就绪(setup 在 activate() 中同步完成,幂等;isAvailable 只读探测,不触发 setup/UAC);priority:就绪 8(明显低于 wsl-ubuntu 的 10,auto 不抢既有默认后端;高于 windows-mic 兜底 5——setup 完成即显式选用)、未 setup 0 |
 | `CodexSandboxBackend` | mount=恒等映射 + 把根登记进 `CodexSandboxManager`(供 CommandExecutor 组 RootPolicy);onWorkspaceRemoved=no-op(ACL 持久、由 state 文件对账,不在此清理;过期根 preflight 幂等跳过) |
 | `RootPolicy` | 读根/写根/deny-write 计算:RW 根=工作区根+externalRoots+skills;deny-write=codexHome 与 USERPROFILE 敏感子集 |
 | `CodexCommandExecutor` | 执行入口:readiness→preflight 刷 ACL→组 SpawnRequest→RunnerClient 会话→聚合 stdout/stderr(每流上限)→格式化(对照 WslUbuntuCommandExecutor) |
@@ -232,7 +232,7 @@ SpawnRequest 不搬 codex 的 permission_profile 结构,改为自有 `writeRoots
 | `codex.network-policy` | `auto` | auto(随 allow-network)/`offline`/`online` 强制 |
 | `codex.proxy-ports` | 空 | offline 放行的环回 TCP 端口列表(代理) |
 | `codex.allow-local-binding` | false | true=移除环回 block 规则 |
-| `codex.setup.auto-uac` | true | 首次未就绪时自动弹 UAC setup;false=报错引导 |
+| `codex.setup.auto-uac` | ~~true~~ 已移除 | setup 已移入 activate() 同步执行,此键不再需要 |
 | `codex.extra-read-roots` / `codex.extra-deny-write-paths` | 空 | 追加读根 / deny-write 路径 |
 | `codex.java-home` | 当前 JVM | runner 启动用 java.exe 路径 |
 | `codex.setup-timeout-ms` / `codex.exec-timeout-ms` | 120000 / 沙箱默认 | setup 与单命令看门狗 |

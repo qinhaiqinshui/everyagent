@@ -53,7 +53,7 @@ child 进程（WRITE_RESTRICTED 令牌 + Job + 句柄白名单 + 私有桌面）
 
 setup 是**显式用户动作**——`Provider.isAvailable` 只做只读探测，绝不自动弹 UAC。
 
-1. 对话中让 AI 调用 `codex_sandbox_setup` 工具（描述中已注明会弹 UAC），或人工运行同 jar 的 helper（见 §8）。
+1. 插件激活时（`CodexSandboxPlugin.activate()`），若 Windows 平台且 setup marker 未就绪，自动同步执行完整 setup（会弹 UAC 提权确认窗，用户需当场同意）。幂等：已完成时 marker 双闸门短路返回；账户/凭据失配（错误码 1326/1331/1387 等）时重跑 setup 修复。
 2. UAC 弹窗 → 用户同意 → 提权 helper 依次完成：
    - 建组 `EveryAgentCodexSandboxUsers`（`NetLocalGroupAdd`）；
    - 建账户 `EveryAgentCodexOffline`/`EveryAgentCodexOnline`（`NetUserAdd`，24 字符随机密码，先禁用、网络限制就绪后才解禁——修复路径不变量④）；
@@ -91,7 +91,7 @@ setup 是**显式用户动作**——`Provider.isAvailable` 只做只读探测�
 | `codex.java-home` | 当前 JVM | ✅ | runner 启动用 java.exe 根目录 |
 | `codex.extra-read-roots` | 空 | ⏳ 未接线 | 追加读根（见 §7 TODO） |
 | `codex.extra-deny-write-paths` | 空 | ⏳ 未接线 | 追加 deny-write 路径 |
-| `codex.setup.auto-uac` | `true` | ⏳ 未接线 | 首次未就绪时自动弹 UAC（当前必须显式工具触发） |
+| `codex.setup.auto-uac` | `true` | ⏳ 未接线 | 已移入 activate() 同步执行，此键不再需要 |
 | `codex.setup-timeout-ms` / `codex.exec-timeout-ms` | 120000 / 沙箱默认 | ⏳ 未接线 | 走 `worker.sandbox.timeout-ms` |
 
 ## 5. 与 windows-mic / wsl-ubuntu 的差异
@@ -113,8 +113,8 @@ setup 是**显式用户动作**——`Provider.isAvailable` 只做只读探测�
 | 工具 | Provider | 说明 |
 |---|---|---|
 | `cmd` | CodexBashToolProvider（appliesTo：当前后端 id==codex） | `cmd.exe /d /c <command>`，cwd=工作区根，stdin 关闭，rg 前置进 PATH；输出每流 100 万字符截断，`[stderr]`/超时/exit code 尾注与 wsl-ubuntu 同款 |
-| `codex_sandbox_setup` | CodexSandboxSetupToolProvider（恒 appliesTo） | 显式触发完整 setup——**会弹 UAC**，幂等可修复 |
-| `codex_sandbox_status` | 同上 | 只读摘要：平台/marker 双闸门/账户禁用位/凭据/防火墙规则名 |
+
+> setup 已移入 `CodexSandboxPlugin.activate()` 同步执行（幂等），不再以 AI 工具暴露。
 
 ## 7. 限制与遗留 TODO
 
@@ -130,7 +130,7 @@ setup 是**显式用户动作**——`Provider.isAvailable` 只做只读探测�
 两阶段（prepare：锁→禁用账户→按 SID 杀进程 → finish：删三目录→WFP→防火墙规则→unhide→DeleteProfile+NetUserDel→NetLocalGroupDel；flags 可回滚、SID 复验防同名顶替，不变量⑤）：
 
 ```bash
-# 组装 remove 载荷并经提权 helper 执行（或直接让 AI 调 codex_sandbox_setup 的后续卸载工具）
+# 组装 remove 载荷并经提权 helper 执行（或重新激活插件触发 setup 修复）
 payload='{"version":5,"offline_username":"EveryAgentCodexOffline","online_username":"EveryAgentCodexOnline",
   "group_name":"EveryAgentCodexSandboxUsers","codex_home":"<codexHome>","real_user":"<用户名>",
   "mode":"remove"}'
@@ -150,7 +150,7 @@ dev.everyagent.plugin.sandbox.codex
 ├── CodexSandboxBackend           # mount=恒等映射 + 根登记；onWorkspaceRemoved=no-op
 ├── CodexCommandExecutor          # readiness→preflight→SpawnRequest→会话→聚合/格式化
 ├── CodexBashToolProvider         # cmd 工具（appliesTo=codex 后端）
-├── CodexSandboxSetupToolProvider # codex_sandbox_setup / codex_sandbox_status
+├── CodexSandboxProvider/Backend    # 后端 id=codex
 ├── accounts/ acl/ setup/ fw/ session/ runner/ win/   # 域代码（步骤 1-6 交付）
 └── docs/ design.md codex-analysis.md parts/
 ```

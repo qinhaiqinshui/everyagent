@@ -255,7 +255,7 @@ class CodexCommandExecutorTest {
                 tempDir.resolve("ws"), null);
         String result = exec.execute("echo hi", "powershell");
         assertTrue(result.startsWith("[codex sandbox 未完成 setup"));
-        assertTrue(result.contains("codex_sandbox_setup"), "错误里给出显式 setup 指引");
+        assertTrue(result.contains("重新激活"), "错误里给出重新激活的指引");
     }
 
     @Test
