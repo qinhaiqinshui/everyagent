@@ -34,9 +34,10 @@ public final class ShellTool {
             + "命令工作目录默认为任务工作区根;"
             + "stdin 为 /dev/null,命令无法从 stdin 读入输入;";
 
-    private final String name;
     private final ShellExecutor exec;
     private final Class<?> inputType;
+    /** 最终工具名（默认由工厂方法指定，可经 {@link #name(String)} 覆盖）。 */
+    private String name;
     /** 最终描述（基线或覆盖后的文本 + 追加备注）。 */
     private String description;
 
@@ -55,6 +56,12 @@ public final class ShellTool {
     /** 注册 bash 工具。 */
     public static ShellTool bash(ShellExecutor exec) {
         return new ShellTool("bash", BASH_BASELINE, BashCommand.class, exec);
+    }
+
+    /** 覆盖工具名（默认由工厂方法指定为 "powershell" / "bash"），返回 this（链式）。 */
+    public ShellTool name(String name) {
+        this.name = name;
+        return this;
     }
 
     /** 全量覆盖描述（替换内置基线），返回 this（链式）。 */

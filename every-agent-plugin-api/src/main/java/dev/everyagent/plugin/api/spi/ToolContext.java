@@ -41,7 +41,4 @@ public interface ToolContext {
     default ShellExecutor shellExecutor() {
         return null;
     }
-
-    /** 同 {@link #shellExecutor()}，但把 extraBinDir 注入子进程 PATH（插件自带 rg 等工具用）。 */
-    default ShellExecutor shellExecutor(java.nio.file.Path extraBinDir) { return shellExecutor(); }
 }

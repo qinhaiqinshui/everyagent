@@ -38,9 +38,10 @@
     - 状态：已完成
     - agent：主 agent
     - 结果：①plugin-api + worker 编译通过；②worker 测试失败均为预存（基线 8c8fa8d 同样 12 个 RoundIndexStore/PermissionGate 失败 + E2E 环境性超时/git UNKNOWN_METHOD），本次改动未引入新失败；③三个插件测试全绿（wsl-ubuntu 6/6、codex 166 pass、mic 无测试编译通过）。
-- [~] 步骤 7：提交
-    - 状态：进行中
+- [x] 步骤 7：提交
+    - 状态：已完成
     - agent：主 agent
+    - 结果：6 个 feat 提交（d633dd3 → f03cda3）+ 文档提交 8ef7140。每个模块独立提交，一次一事。
 
 ## 备注
 - 步骤 1 是全部后续步骤的基础（shell 包 API），必须先完成。

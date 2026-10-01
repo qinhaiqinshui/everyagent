@@ -91,23 +91,14 @@ public class ToolContextImpl implements ToolContext {
 
     @Override
     public ShellExecutor shellExecutor() {
-        // 不带 rg 的执行器(rgBinDir=null),服务 windows-mic 等外部插件
-        //（mic 插件自己带 rg）。DIRECT 后端的 rg 注入由 DirectShellToolProvider 自行创建
-        // 带 rgBinDir 的 CommandExecutor 承担。
+        // 不带 rg 的执行器(rgBinDir=null),服务外部插件。
+        // 插件如需注入自带工具(如 rg)到 PATH，自行包装 ShellExecutor 实现。
+        // DIRECT 后端的 rg 注入由 DirectShellToolProvider 自行创建带 rgBinDir 的
+        // CommandExecutor 承担，不经此接口。
         if (osSandbox == null) {
             return null;
         }
         CommandExecutor exec = new CommandExecutor(osSandbox, taskEntry, gate, agentId);
-        return exec::execute;
-    }
-
-    @Override
-    public ShellExecutor shellExecutor(Path extraBinDir) {
-        // 带插件自带工具目录(如 rg)的执行器,把 extraBinDir 注入子进程 PATH
-        if (osSandbox == null) {
-            return null;
-        }
-        CommandExecutor exec = new CommandExecutor(osSandbox, taskEntry, gate, agentId, extraBinDir);
         return exec::execute;
     }
 
