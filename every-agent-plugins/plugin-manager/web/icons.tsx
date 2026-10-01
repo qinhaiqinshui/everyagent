@@ -1,23 +1,78 @@
 /**
  * 插件管理面板图标组件。
+ *
+ * 活动栏图标一律走 AppSvg 底座(与宿主 components/icon/AppSvg、git 插件 icons 同构:
+ * 外层 22、内层画布 20 映射 16 viewBox、描边 1.6)。插件禁止引用宿主 web 模块,
+ * 故本文件自带一份底座实现,参数与宿主逐项一致。
  */
 import React from 'react'
 
-/** VSCode 风格的扩展(Extensions)图标。 */
-export function ExtensionIcon({ size = 16, className }: { size?: number; className?: string }) {
+export type IconProps = {
+  size?: number
+  color?: string
+  className?: string
+}
+
+const baseSvgStyle: React.CSSProperties = {
+  display: 'block',
+}
+
+const APP_SVG_OUTER_SIZE = 22
+const APP_SVG_DRAWING_VIEWBOX_SIZE = 16
+const APP_SVG_CANVAS_LAYOUT_SIZE = 20
+const APP_SVG_CANVAS_OFFSET = (APP_SVG_OUTER_SIZE - APP_SVG_CANVAS_LAYOUT_SIZE) / 2
+const APP_SVG_STROKE_WIDTH = 1.6
+
+/** 活动栏图标底座（与宿主 AppSvg 同构）。 */
+function AppSvg({ size = 22, color, className, children }: React.PropsWithChildren<IconProps>) {
   return (
     <svg
       width={size}
       height={size}
-      viewBox="0 0 16 16"
-      fill="none"
-      className={className}
+      viewBox={`0 0 ${APP_SVG_OUTER_SIZE} ${APP_SVG_OUTER_SIZE}`}
       aria-hidden="true"
+      className={className}
+      style={{
+        ...baseSvgStyle,
+        ...(color ? { color } : null),
+      }}
     >
-      <path
-        d="M2 2.5a.5.5 0 0 1 .5-.5h4.379a.5.5 0 0 1 .353.146l1.06 1.061a.5.5 0 0 0 .708 0l1.06-1.06A.5.5 0 0 1 10.5 2H13.5a.5.5 0 0 1 .5.5v3.379a.5.5 0 0 1-.146.353l-1.061 1.06a.5.5 0 0 0 0 .708l1.061 1.06A.5.5 0 0 1 14 9.621V13.5a.5.5 0 0 1-.5.5h-3.379a.5.5 0 0 1-.353-.146l-1.06-1.061a.5.5 0 0 0-.708 0l-1.06 1.061A.5.5 0 0 1 6.621 14H2.5a.5.5 0 0 1-.5-.5V9.621a.5.5 0 0 1 .146-.353l1.061-1.06a.5.5 0 0 0 0-.708L2.146 6.439A.5.5 0 0 1 2 6.086V2.5Z"
-        fill="currentColor"
-      />
+      <svg
+        x={APP_SVG_CANVAS_OFFSET}
+        y={APP_SVG_CANVAS_OFFSET}
+        width={APP_SVG_CANVAS_LAYOUT_SIZE}
+        height={APP_SVG_CANVAS_LAYOUT_SIZE}
+        viewBox={`0 0 ${APP_SVG_DRAWING_VIEWBOX_SIZE} ${APP_SVG_DRAWING_VIEWBOX_SIZE}`}
+        preserveAspectRatio="xMidYMid meet"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={APP_SVG_STROKE_WIDTH}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        {children}
+      </svg>
     </svg>
   )
 }
+
+/**
+ * 扩展(Extensions)图标 —— 活动栏入口。
+ *
+ * 造型与宿主 components/icon/ExtensionsSidebarIcon 逐项一致(三个圆角方块 + 一个菱形),
+ * 纯几何描述、不写 fill/stroke,继承底座的 fill=none / stroke=currentColor / 描边 1.6,
+ * 与任务、文件、搜索、Git、设置等内置入口同为线性描边风格。
+ * (此前用 VSCode 面性 path + fill=currentColor 覆盖底座,是唯一实心图标,风格突兀。)
+ * 插件禁止引用宿主 web 模块,故此处复制一份几何。
+ */
+export function ExtensionIcon({ size = 22, color, className }: IconProps) {
+  return (
+    <AppSvg size={size} color={color} className={className}>
+      <rect x="1.8" y="2.2" width="4.1" height="4.1" rx="0.5" />
+      <rect x="1.8" y="9.1" width="4.1" height="4.1" rx="0.5" />
+      <rect x="8.7" y="9.1" width="4.1" height="4.1" rx="0.5" />
+      <path d="M10.75 1.8L14.2 5.25L10.75 8.7L7.3 5.25L10.75 1.8Z" />
+    </AppSvg>
+  )
+}
+
