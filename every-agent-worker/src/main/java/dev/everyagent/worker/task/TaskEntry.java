@@ -85,14 +85,6 @@ public final class TaskEntry implements TaskRuntime {
     public final java.util.Map<String, Object> metadata = new java.util.concurrent.ConcurrentHashMap<>();
 
     /**
-     * 禁网开关(任务级):开启后本任务后续所有命令禁止访问网络(覆盖 worker 级
-     * {@code sandbox.allow-network=true} 默认放行),随 {@link #summaryJson()} 落盘
-     * meta.json、再运行仍保持。由 {@code NetworkSlashProvider}(/禁用网络)的 onSelect/onCancel
-     * 置位复位并落盘。默认 false = 继承全局默认(放行),用户选 /禁用网络 显式关闭。
-     */
-    public volatile boolean networkBlocked;
-
-    /**
      * slash 任务级 token 槽:自包含 opaque token 串数组,仅 slash 层存储、业务方不读。
      * 新任务由 task.run 的 taskTokens 入参写入,随 meta.json 的 slashTaskTokens 落盘,
      * 冷启动续跑(startRerun)回读恢复。线程安全(CopyOnWriteArrayList),快照读。
@@ -386,9 +378,6 @@ public final class TaskEntry implements TaskRuntime {
         if (!metadata.isEmpty()) {
             var metaObj = n.putObject("metadata");
             metadata.forEach((k, v) -> metaObj.set(k, Json.toJson(v)));
-        }
-        if (networkBlocked) {
-            n.put("networkBlocked", true);
         }
         // slash 任务级 token(仅 slash 层存储、业务方不读;随 meta 落盘,冷启动续跑回读)。
         List<String> slashTokens = slashTaskTokens();

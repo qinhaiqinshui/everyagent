@@ -45,15 +45,15 @@ runner JVM（沙箱账户，agent 侧）                ┌ CodexRunnerMain ─�
 child 进程（WRITE_RESTRICTED 令牌 + Job + 句柄白名单 + 私有桌面）
 ```
 
-- 提权只发生在**一次性 setup**（显式用户动作）；日常执行零提权。
+- 提权只发生在**一次性 setup**（延迟触发，仅当 codex 被选为最高优先级可用沙箱时）；日常执行零提权。
 - 命令跑在**宿主路径**（无路径重写），读写边界由账户基线 DACL + capability SID ACE 表达——这是与 wsl-ubuntu（路径翻译）的根本差异。
 - 与 PermissionGate 的分工：gate 仍是工作区外路径访问的前置授权（fs.\*/命令越界先弹 ask）；授权通过的 externalRoots 进入 mount(RW) → 写根 → preflight 落 allow-write ACE。沙箱内 IO 另有 OS 级兜底：即便 gate 被绕过，沙箱账户对未授权路径默认拒绝写（mic 后端没有的第二道闸）。
 
 ## 3. 安装（setup 流程）
 
-setup 是**显式用户动作**——`Provider.isAvailable` 只做只读探测，绝不自动弹 UAC。
+setup 是**延迟触发**的——`Provider.isAvailable` 仅探测 Windows 平台（不查 marker），`priority=8`。沙箱选择器在所有后端注册完毕后按优先级选出最高者。只有当 codex 真正胜出（即没有 WSL 等更高优先级沙箱可用）时，`Provider.create()` 才被调用，此时才同步执行 setup（会弹 UAC）。
 
-1. 插件激活时（`CodexSandboxPlugin.activate()`），若 Windows 平台且 setup marker 未就绪，自动同步执行完整 setup（会弹 UAC 提权确认窗，用户需当场同意）。幂等：已完成时 marker 双闸门短路返回；账户/凭据失配（错误码 1326/1331/1387 等）时重跑 setup 修复。
+1. codex 后端被沙箱选择器选中（`SandboxProviderRegistry.select` 按 priority 选最高可用），`CodexSandboxProvider.create()` 被调用。若 setup marker 未就绪，在此同步执行完整 setup（会弹 UAC 提权确认窗，用户需当场同意）。幂等：已完成时 marker 双闸门短路返回；账户/凭据失配时重跑 setup 修复。
 2. UAC 弹窗 → 用户同意 → 提权 helper 依次完成：
    - 建组 `EveryAgentCodexSandboxUsers`（`NetLocalGroupAdd`）；
    - 建账户 `EveryAgentCodexOffline`/`EveryAgentCodexOnline`（`NetUserAdd`，24 字符随机密码，先禁用、网络限制就绪后才解禁——修复路径不变量④）；
@@ -62,10 +62,10 @@ setup 是**显式用户动作**——`Provider.isAvailable` 只做只读探测�
    - 防火墙：offline 账户 4 条 block 规则（出/入非环回、环回 TCP 代理端口补集、环回 UDP 全禁；`LocalUserAuthorizedList` SDDL 按 SID 限定）+ LocalPolicyModifyState 自检 + 写后读回；
    - WFP：12 条持久 filter（固定自有 provider/sublayer GUID，事务包裹；排在防火墙之后的第二道防线）；
    - 隐藏账户（`Winlogon\UserList=0`）、目录锁定（`.sandbox` 组 RWX / `.sandbox-secrets` 组 DENY / `.sandbox-bin` 组 R+X+Protected）、marker 两阶段提交。
-3. marker（`<codexHome>/.sandbox/setup_marker.json`）+ 凭据文件双闸门就绪 → `Provider.isAvailable()=true`。
+3. marker（`<codexHome>/.sandbox/setup_marker.json`）+ 凭据文件双闸门就绪 → 后续 `create()` 调用短路返回，不再弹 UAC。
 4. 幂等：已完成时 setup 立即短路返回；账户/凭据失配（错误码 1326/1331/1387 等）时重跑 setup 修复。
 
-选择语义：auto 模式下就绪的 codex priority=8——**低于 wsl-ubuntu(10)**（不抢既有默认后端，WSL 可用的机器行为不变）、**高于 windows-mic(5)**（setup 完成是一次显式 UAC 授权的用户选择，无 WSL 的机器上 auto 兑现为更强隔离）；未 setup 时 priority=0 且不可用。
+选择语义：auto 模式下 codex priority=8——**低于 wsl-ubuntu(10)**（不抢既有默认后端，WSL 可用的机器行为不变）、**高于 windows-mic(5)**（无 WSL 的机器上 auto 兑现为更强隔离）。isAvailable 仅探测 Windows 平台（不查 marker），故选择器始终能看到 codex 后端；只有当 codex 胜出时 `create()` 才触发 setup（首次弹 UAC，后续幂等短路）。
 
 > 注意：worker 当前后端词汇表尚未收录 `codex` 值（`sandbox.type=codex` 会被归一为 auto），因此实际生效路径是「auto + setup 就绪即最高可用优先」。worker 侧词汇表扩展见 §7 TODO。
 

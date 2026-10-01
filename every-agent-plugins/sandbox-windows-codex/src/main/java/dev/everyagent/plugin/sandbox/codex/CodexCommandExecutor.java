@@ -29,7 +29,8 @@ import java.util.Map;
 /**
  * codex 沙箱自己的命令执行器（设计文档 §2.8/§5，形态对照 WslUbuntuCommandExecutor）。
  *
- * <p>执行链：readiness（Windows ∧ marker 双闸门，<b>绝不自动 setup/UAC</b>）→
+ * <p>执行链：readiness（Windows ∧ marker 双闸门，setup 在 {@link CodexSandboxProvider#create}
+ * 时已完成）→
  * 会话根计算（{@link CodexSandboxManager} 登记根 + 工作区根，逐根取 capability SID）→
  * preflight 刷写根 ACE（{@link ProvisioningAcl}，真实用户身份持有 WRITE_DAC）→
  * 组 {@link CodexSandboxSession.SessionSpec}（cwd=工作区根、cap_sids=各写根 cap +
@@ -150,8 +151,8 @@ public final class CodexCommandExecutor {
                         + System.getProperty("os.name") + "]";
             }
             if (!SetupMarker.isComplete(options.codexHome(), SetupPayload.SETUP_VERSION)) {
-                return "[codex sandbox 未完成 setup;请重新激活/重启 worker 以触发 setup"
-                        + "(会弹出 UAC 提权确认)完成账户/ACL/防火墙供给]";
+                return "[codex sandbox 未完成 setup;setup 应在后端 create() 时自动触发,"
+                        + "若仍失败请检查 UAC 是否被拒绝或重新启动 worker]";
             }
         }
         SessionRun run;

@@ -17,8 +17,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * {@link SetupStatus}：status 摘要纯函数格式测试。
  *
- * <p>原 {@code CodexSandboxSetupToolProvider} 已删除——setup 移入
- * {@link CodexSandboxPlugin#activate} 同步执行，不再以 AI 工具暴露。
+ * <p>原 {@code CodexSandboxSetupToolProvider} 已删除——setup 延迟到
+ * {@link CodexSandboxProvider#create} 被调用时执行（仅当 codex 被选为最高
+ * 优先级沙箱时），不再在 activate() 中也不以 AI 工具形式暴露。
  * 本测试只覆盖纯函数 {@link SetupStatus#statusSummary}。
  */
 class SetupStatusTest {
@@ -62,7 +63,8 @@ class SetupStatusTest {
                 false, options(), null, false, null, null);
         assertTrue(summary.contains("- 平台: 非 Windows(不可用)"));
         assertTrue(summary.contains("- setup: 未完成(缺 marker; 凭据文件缺失)"), summary);
-        assertTrue(summary.contains("重新激活插件以完成 setup"), "给出重新激活指引");
+        assertTrue(summary.contains("setup 应在 codex 后端被选中时自动触发"),
+                "给出延迟 setup 指引");
         assertTrue(summary.contains("offline=EveryAgentCodexOffline(不存在/未知)"));
         assertTrue(summary.contains("- 凭据文件(DPAPI): 缺失"));
     }
@@ -76,4 +78,3 @@ class SetupStatusTest {
         assertTrue(summary.contains("online=EveryAgentCodexOnline(不存在/未知)"));
     }
 }
-

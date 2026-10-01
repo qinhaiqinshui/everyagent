@@ -142,9 +142,8 @@ public class CommandExecutor {
         // 授权根由动态 ensureMount 承担,此参数为空。powershell 走 Windows 原生,
         // 附加根 prepareWritableRoots 已空体(Medium IL 无需标注);不参与 bwrap 挂载。
         java.util.List<Path> extraRoots = java.util.List.of(); // WSL branches removed
-        // 网络许可:任务级 /禁用网络 开关未开 且 worker 全局默认放行 → 本次命令放行网络;
-        // 否则按 deny 断网(三个后端各自落地:wsl --unshare-net / unshare -n / 剥代理 env)
-        boolean allowNetwork = !task.networkBlocked && sandbox.networkAllowedByDefault();
+        // 网络许可不在核心层判定:真断网只有个别后端做得到(如 wsl-ubuntu 的 `unshare -n`),
+        // 全局 allow-network 与各后端任务级开关一律由各沙箱插件自己的 CommandExecutor 落地。
         // 提权授权:优先走 seccomp 内核级拦截(仅 wsl-bwrap + 未全局放行 + 开关开启),
         // 它能覆盖文本扫描漏掉的别名/脚本内 setuid 提权;否则退回文本扫描启发式。
         // wsl-direct 恒 root,无提权授权概念。powershell 走 Windows 原生沙箱,

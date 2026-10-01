@@ -1,5 +1,6 @@
 package dev.everyagent.plugin.sandbox.wslubuntu;
 
+import dev.everyagent.plugin.api.WorkerServices;
 import dev.everyagent.plugin.api.spi.ToolContext;
 import dev.everyagent.plugin.api.spi.ToolProvider;
 import dev.everyagent.plugin.api.config.WorkerConfig;
@@ -12,6 +13,7 @@ import org.springframework.ai.tool.annotation.ToolParam;
 
 import java.nio.file.Path;
 import java.util.List;
+import java.util.function.BooleanSupplier;
 
 /**
  * wsl-ubuntu 沙箱自己的命令工具 ToolProvider。
@@ -19,18 +21,23 @@ import java.util.List;
  * <p>appliesTo：只在当前沙箱是 wsl-ubuntu 时生效。
  * createTools：创建 {@link WslUbuntuBashTool}（使用 {@link WslUbuntuCommandExecutor}），
  * 返回 {@code List.of(ToolCallbacks.from(...))}。
+ *
+ * <p>禁网开关按 taskId 实时读取(每条命令执行瞬间查任务
+ * {@code metadata[networkBlocked]}),故运行中用户选中/取消 /禁用网络 对本轮后续命令即时生效。
  */
 public class WslUbuntuBashToolProvider implements ToolProvider {
 
     private final WorkerConfig props;
     private final WorkspaceManager workspaces;
     private final Path pluginDir;
+    private final WorkerServices services;
 
     public WslUbuntuBashToolProvider(WorkerConfig props, WorkspaceManager workspaces,
-            Path pluginDir) {
+            Path pluginDir, WorkerServices services) {
         this.props = props;
         this.workspaces = workspaces;
         this.pluginDir = pluginDir;
+        this.services = services;
     }
 
     @Override
@@ -46,8 +53,17 @@ public class WslUbuntuBashToolProvider implements ToolProvider {
     @Override
     public List<ToolCallback> createTools(ToolContext ctx) {
         Path workspaceRoot = ctx.workspaceRoot();
-        WslUbuntuCommandExecutor exec = new WslUbuntuCommandExecutor(props, workspaceRoot, workspaces, pluginDir);
+        WslUbuntuCommandExecutor exec = new WslUbuntuCommandExecutor(props, workspaceRoot,
+                workspaces, pluginDir, taskNetworkBlocked(ctx.taskId()));
         return List.of(ToolCallbacks.from(new WslUbuntuBashTool(exec)));
+    }
+
+    /** 任务级禁网开关读取器(每次调用实时查任务 metadata;任务服务缺失时恒 false)。 */
+    private BooleanSupplier taskNetworkBlocked(String taskId) {
+        if (services == null || services.task() == null) {
+            return () -> false;
+        }
+        return () -> NetworkTaskFlag.isOn(services.task().get(taskId));
     }
 
     /**

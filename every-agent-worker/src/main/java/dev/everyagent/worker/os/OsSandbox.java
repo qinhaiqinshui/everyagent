@@ -118,11 +118,6 @@ public final class OsSandbox implements SandboxBackend, NativeExec {
         };
     }
 
-    /** 全局网络策略是否默认放行(worker.sandbox.allow-network=true)。 */
-    public boolean networkAllowedByDefault() {
-        return !cfg.networkDenied();
-    }
-
     /** 全局提权是否默认放行(worker.sandbox.allow-privilege-escalation=true)。 */
     public boolean privilegeAllowedByDefault() {
         return cfg.isAllowPrivilegeEscalation();

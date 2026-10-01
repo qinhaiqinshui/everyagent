@@ -10,8 +10,8 @@ import dev.everyagent.plugin.sandbox.codex.win.NetApi32Ex;
  * codex 沙箱 setup 状态摘要工具（纯函数，跨平台可单测）。
  *
  * <p>原为 {@code CodexSandboxSetupToolProvider} 的内部方法，现迁移至此——
- * setup 已移入 {@code CodexSandboxPlugin.activate()} 同步执行，
- * 不再以 AI 工具形式暴露。本类仅供 activate 日志与诊断调用。
+ * setup 延迟到 {@link CodexSandboxProvider#create} 被调用时执行（仅当 codex
+ * 被选为最高优先级沙箱时），不再在 activate() 中也不以 AI 工具形式暴露。
  */
 public final class SetupStatus {
 
@@ -43,7 +43,7 @@ public final class SetupStatus {
             sb.append("未完成(")
                     .append(marker == null ? "缺 marker" : "marker 版本/账户不匹配")
                     .append(secretsPresent ? "" : "; 凭据文件缺失")
-                    .append(");需重新激活插件以完成 setup(会弹 UAC)");
+                    .append(");setup 应在 codex 后端被选中时自动触发(会弹 UAC)");
         }
         sb.append('\n');
         sb.append("- codexHome: ").append(options.codexHome()).append('\n');

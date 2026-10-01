@@ -18,7 +18,7 @@ import java.nio.file.Path;
  * 据此创建工具实例。
  *
  * <p>除实现 {@link ToolContext} 接口方法外，额外暴露 {@link #taskEntry()} 供内置适配器
- * 获取 {@link TaskEntry}（含 networkBlocked 等任务级开关）。外部插件仅依赖接口方法。
+ * 获取 {@link TaskEntry}（含 metadata 等任务级开关）。外部插件仅依赖接口方法。
  */
 public class ToolContextImpl implements ToolContext {
 
@@ -84,7 +84,7 @@ public class ToolContextImpl implements ToolContext {
         return interaction;
     }
 
-    /** 额外暴露：任务条目（含 networkBlocked 等任务级开关），供内置适配器使用。 */
+    /** 额外暴露：任务条目（含 metadata 等任务级开关），供内置适配器使用。 */
     public TaskEntry taskEntry() {
         return taskEntry;
     }

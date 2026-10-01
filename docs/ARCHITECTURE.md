@@ -533,6 +533,7 @@ ask 管道承载第二类阻塞请求:**危险操作授权**。`PermissionGate` 
 - **核心的命令工具**(windows-mic / DIRECT 后端):核心自带,Windows 上 PowerShellTool 以 `powershell` 工具名注册;Linux 上 BashTool 以 `bash` 工具名注册。直接 ProcessBuilder 执行,走自己的授权链。
 - **沙箱插件的命令工具**:沙箱插件不只提供 `SandboxBackend`(挂载+清理),还提供 `ToolProvider`(命令工具)。沙箱完全自由:自己实现 CommandExecutor、自己扫描路径、自己决定授权策略。通过 `appliesTo(ToolContext)` 控制生效条件(如 `ctx.sandbox().id().equals("wsl-ubuntu")`)。
 - 两者通过 `ToolProvider.appliesTo()` 各自控制生效条件,不冲突。`PowerShellToolProvider`（核心）appliesTo = Windows ∧ (sandbox id == direct ∨ windows-mic),提供 `powershell` 工具;wsl-ubuntu 提供 `bash` 工具;codex 提供 `powershell` 工具。
+- **只有某后端才做得到的隔离能力,其命令与状态一律归该插件**:wsl-ubuntu 的 `/禁用网络` 由 `sandbox-wsl-ubuntu` 自己经 `registerSlashProvider`/`registerSlashTokenResolver` 注册、状态写任务 `metadata`,并在自己的 CommandExecutor 里读取生效;worker 核心不持有该开关,也不为做不到断网的后端预留同名命令。
 
 **路径翻译流程:**
 1. 路径提供方注册 → `SandboxPathRegistry.register()` → 核心调 `sandbox.mount()` → 沙箱返回沙箱内路径 → 核心保存映射表。
@@ -541,7 +542,7 @@ ask 管道承载第二类阻塞请求:**危险操作授权**。`PermissionGate` 
 
 - `worker.sandbox.type`: `auto`(默认)| `wsl-ubuntu` | `windows-mic` | `none`。旧值 `wsl-direct` → 归一为 `wsl-ubuntu`(静默兼容);旧值 `wsl-bwrap`/`bwrap`/`wsl` → 归一为 `auto` 并 WARN。WSL 专属配置(distro/tarball 等)由插件通过 `plugin.json contributes.config` 自管。
 - **Windows Medium IL 契约**(对 windows-mic 后端):沙箱进程运行在 Medium IL(Restricted Token 去特权但不降级),天然可写工作区与已授权目录,不对文件系统做任何标注或 ACL 修改——零副作用、零残留。越界写拦截由 PermissionGate 责任链承担。
-- **网络策略**:默认放行;任务级 `/禁用网络` 或全局 `allow-network=false` 才断网。沙箱插件自己的 CommandExecutor 负责落地(wsl-ubuntu = `unshare -n`;direct/mic = 剥代理 env)。
+- **网络策略**:两级开关,默认放行——① 全局 `worker.sandbox.allow-network=false`(经 `SandboxConfig.networkDenied` 交给后端:wsl-ubuntu 真断网、codex 选 Offline 账户;mic/direct 只剥代理 env 拦不住直连);② 任务级 `/禁用网络`(**只有 wsl-ubuntu 后端做得到**,故整个能力归 `sandbox-wsl-ubuntu` 插件自带:插件自己注册 slash 命令提供者 + token 提交解析器,状态写任务 `metadata["networkBlocked"]`(核心不感知 key),随 meta.json 持久化、再运行保持;`/` 菜单条目按当前生效后端 `sandbox().id()` 决定是否出现,其他后端不提供该命令)。落地由沙箱插件自己的 CommandExecutor 负责:wsl-ubuntu = 发行版内 `unshare -n` 新建无 eth0 的 netns(DNS/回环全断)。worker 核心不持有任何任务级禁网状态,通用 `CommandExecutor`/`OsSandbox` 也不再判定网络。
 - **命令 stdin 契约**:AI 命令的 stdin 一律接 null 设备(`/dev/null`/`NUL`)。
 
 ### 7.11 提权拦截

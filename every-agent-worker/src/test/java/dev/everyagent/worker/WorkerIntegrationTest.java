@@ -7,7 +7,9 @@ import dev.everyagent.plugin.api.spi.TokenEstimator;
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.plugin.registry.ChatModelEnhancerRegistry;
 import dev.everyagent.worker.hub.HubPool;
-import dev.everyagent.worker.network.NetworkToken;
+import dev.everyagent.plugin.api.slash.SlashCancelHandler;
+import dev.everyagent.plugin.api.slash.SlashCommandItem;
+import dev.everyagent.plugin.api.slash.SlashSelectionResult;
 import dev.everyagent.worker.modules.ConfigStore;
 import dev.everyagent.worker.modules.ConfigStore.ResolvedConfig;
 import dev.everyagent.plugin.api.event.Channels;
@@ -197,6 +199,9 @@ class WorkerIntegrationTest {
 
     @Autowired
     HubPool pool;
+
+    @Autowired
+    dev.everyagent.worker.slash.SlashCommandRegistry slashRegistry;
 
     private final String k = Ids.ownerKey(KEY);
     private WsTestClient fe;
@@ -782,11 +787,28 @@ class WorkerIntegrationTest {
                 "网络错误不得切换到池内模型(不得出现回声)");
     }
 
+    /** 合成 slash 条目的 id 与 kind(基础设施验收用,不绑任何业务命令)。 */
+    private static final String ITEST_ID = "itest:demo";
+    private static final String ITEST_KIND = "itest.demo";
+
+    /**
+     * slash 任务级 token 的 select → apply → cancel 往返(纯 slash 基础设施验收,与具体业务
+     * 命令解耦):测试自己向 {@code SlashCommandRegistry} 注册合成条目 {@code itest:demo}
+     * 「/禁用网络」这类业务命令现由各沙箱/功能插件自带,核心只提供注册与存储机制。
+     */
     @Test
     void slashTaskTokensApplyCancelRoundTrip() {
-        // 1. slash.list 应含 network:on 条目(入口存在)
+        // 0. 注册合成条目(select 返回 bottom 胶囊,与业务插件命令同形态)
+        String opaque = SlashTokenEncoder.buildToken(ITEST_KIND, "测试命令", "合成条目",
+                Json.obj().put("enabled", true));
+        slashRegistry.registerProvider("itest", () -> List.of(new SlashCommandItem(
+                ITEST_ID, "测试命令", null, null, null, opaque,
+                (item, taskId) -> List.of(SlashSelectionResult.bottom(item.insertText())),
+                SlashCancelHandler.NOOP)));
+
+        // 1. slash.list 应含合成条目(入口存在)
         String list = rpc("slash.list", "{}");
-        assertTrue(list.contains("\"network:on\""), "slash.list 缺少 network:on: " + list);
+        assertTrue(list.contains("\"" + ITEST_ID + "\""), "slash.list 缺少 " + ITEST_ID + ": " + list);
 
         // 2. 建真实任务并等终态落盘(meta 走磁盘真相源路径)
         String taskId = create("你好,slash 任务");
@@ -797,20 +819,20 @@ class WorkerIntegrationTest {
                 "初始任务不应有 slash 任务 token: " + readMeta(taskId));
 
         // 3. slash.select 不带 taskId → token + position=bottom;token payload 注入 slashId
-        String select = rpc("slash.select", Json.write(Json.obj().put("id", "network:on")));
+        String select = rpc("slash.select", Json.write(Json.obj().put("id", ITEST_ID)));
         JsonNode selectRes = Json.parse(select).path("payload").path("result").path("results").path(0);
         assertEquals("bottom", selectRes.path("position").asString(), "slash.select 应返回 bottom 位置: " + select);
         String token = selectRes.path("token").asString();
         assertNotNull(token, "slash.select 应返回 token: " + select);
         SlashTokenEncoder.ParsedToken parsed = SlashTokenEncoder.parseToken(token);
         assertNotNull(parsed, "返回的 token 应为合法 opaque: " + token);
-        assertEquals("network.access", parsed.kind(), "kind 应为 network.access");
-        assertEquals("network:on", parsed.payload().path("slashId").asString(),
+        assertEquals(ITEST_KIND, parsed.kind(), "kind 应为 " + ITEST_KIND);
+        assertEquals(ITEST_ID, parsed.payload().path("slashId").asString(),
                 "token payload 应注入 slashId: " + parsed.payload());
 
         // 4. slash.taskTokens.apply 挂到任务 → applied=true
         String apply = rpc("slash.taskTokens.apply", Json.write(Json.obj()
-                .put("taskId", taskId).put("id", "network:on").put("token", token)));
+                .put("taskId", taskId).put("id", ITEST_ID).put("token", token)));
         JsonNode applyRes = Json.parse(apply).path("payload").path("result");
         assertTrue(applyRes.path("applied").asBoolean(false), "apply 应 applied=true: " + apply);
 
@@ -822,7 +844,7 @@ class WorkerIntegrationTest {
 
         // 6. slash.cancel 移除 → removed=true
         String cancel = rpc("slash.cancel", Json.write(Json.obj()
-                .put("id", "network:on").put("token", token).put("taskId", taskId)));
+                .put("id", ITEST_ID).put("token", token).put("taskId", taskId)));
         JsonNode cancelRes = Json.parse(cancel).path("payload").path("result");
         assertTrue(cancelRes.path("removed").asBoolean(false), "cancel 应 removed=true: " + cancel);
 

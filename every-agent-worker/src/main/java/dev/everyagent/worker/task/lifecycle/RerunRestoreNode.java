@@ -8,8 +8,8 @@ import tools.jackson.databind.JsonNode;
 
 /**
  * 下行节点(order=50)：再运行状态恢复（一事）。
- * meta → TaskEntry 全量恢复：createdAt / metadata（含 aiReview、unattended 旧字段兼容迁移）/
- * networkBlocked / seedUsageMeta / slashTaskTokens 回读 + log.seed 水位续号。
+ * meta → TaskEntry 全量恢复：createdAt / metadata（含 aiReview、unattended 旧字段兼容迁移,
+ * 插件自管的禁网等业务标记随 metadata 一并回读）/ seedUsageMeta / slashTaskTokens 回读 + log.seed 水位续号。
  * 新建任务无 rerunMeta，整体空转。
  * 必须在 persistence.track(100) 之前执行（首落盘 meta 须含恢复后的 slashTaskTokens 等字段）。
  */
@@ -58,7 +58,6 @@ public final class RerunRestoreNode implements TaskLifecycleNode {
                     }
                 });
             }
-            t.networkBlocked = meta.path("networkBlocked").asBoolean(false); // 禁网开关任务级(/禁用网络)
             t.seedUsageMeta(meta.path("usage")); // 恢复最近一轮上下文用量(续跑后列表/电池数据不丢)
             // slash 任务级 token 回读(仅 slash 层存储、业务方不读;随 meta.json 落盘,冷启动续跑恢复)。
             // 在 store.track 之前完成 add,确保首落盘 meta 含 slashTaskTokens。
