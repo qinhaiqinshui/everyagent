@@ -2,7 +2,6 @@ package dev.everyagent.plugin.aireview;
 
 import dev.everyagent.plugin.api.permission.AuthorizationChain;
 import dev.everyagent.plugin.api.permission.AuthorizationHandler;
-import dev.everyagent.plugin.api.task.TaskRuntime;
 
 public class AiReviewAuthHandler implements AuthorizationHandler {
     private final AiAuthReviewer reviewer;
@@ -19,10 +18,10 @@ public class AiReviewAuthHandler implements AuthorizationHandler {
 
     @Override
     public AuthorizationDecision invoke(AuthorizationRequest req, AuthorizationChain next) throws Exception {
-        if (!Boolean.TRUE.equals(req.task().metadata().getOrDefault("ai-review", false))) {
+        if (!Boolean.TRUE.equals(req.context().metadata().getOrDefault("ai-review", false))) {
             return next.proceed(req); // 不适用，放行
         }
-        ReviewDecision d = reviewer.review((TaskRuntime) req.task(), req.grantKey(), req.prompt());
+        ReviewDecision d = reviewer.review(req);
         if (d.fallback()) {
             return next.proceed(req); // PASS
         }

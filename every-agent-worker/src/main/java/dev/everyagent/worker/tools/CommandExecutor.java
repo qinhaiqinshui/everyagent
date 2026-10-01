@@ -1,10 +1,9 @@
 package dev.everyagent.worker.tools;
 
-import dev.everyagent.worker.os.OsSandbox;
+import dev.everyagent.plugin.api.execution.ExecContext;
 import dev.everyagent.plugin.api.shell.ExecResults;
 import dev.everyagent.plugin.api.spi.ExecResult;
-
-import dev.everyagent.worker.task.TaskEntry;
+import dev.everyagent.worker.os.OsSandbox;
 
 import java.nio.file.Path;
 import java.util.HashMap;
@@ -29,7 +28,7 @@ import org.slf4j.LoggerFactory;
  *
  * <p>安全边界(与旧 execute_command 完全一致):
  * <ul>
- *   <li>cwd 锁 {@code task.workspaceRoot},子进程工作目录固定在工作区内;</li>
+ *   <li>cwd 锁 {@code exec.workspaceRoot()},子进程工作目录固定在工作区内;</li>
  *   <li>执行前经 {@link PermissionGate#requireCommand}:危险命令(删除类动词)与命令串中
  *       越界已存在路径须用户授权(拒绝/超时回灌错误文本,不执行);</li>
  *   <li>经 OsSandbox(后端见 worker.sandbox.type):
@@ -46,16 +45,16 @@ public class CommandExecutor {
     private static final Logger log = LoggerFactory.getLogger(CommandExecutor.class);
 
     private final OsSandbox sandbox;
-    private final TaskEntry task;
+    private final ExecContext task;
     private final PermissionGate gate;
     private final String agentId;
     /** 打包 rg 二进制所在目录(可空);非空时 bash/powershell 子进程把它注入 PATH。 */
     private final Path rgBinDir;
-    public CommandExecutor(OsSandbox sandbox, TaskEntry task, PermissionGate gate, String agentId) {
+    public CommandExecutor(OsSandbox sandbox, ExecContext task, PermissionGate gate, String agentId) {
         this(sandbox, task, gate, agentId, null);
     }
 
-    public CommandExecutor(OsSandbox sandbox, TaskEntry task, PermissionGate gate, String agentId,
+    public CommandExecutor(OsSandbox sandbox, ExecContext task, PermissionGate gate, String agentId,
                            Path rgBinDir) {
         this.sandbox = sandbox;
         this.task = task;
@@ -94,7 +93,7 @@ public class CommandExecutor {
                 return "execute: 授权检查失败 " + e.getMessage();
             }
         }
-        Path cwd = Path.of(task.workspaceRoot);
+        Path cwd = Path.of(task.workspaceRoot());
         if (!wsl) {
             // Medium IL 方案:沙箱进程运行在 Medium IL,天然可写工作区,无需预处理
             prepareWritableRoots(cwd, powershell);
@@ -154,7 +153,7 @@ public class CommandExecutor {
         if (powershell) {
             r = stripClixml(r);
         }
-        log.info("[exec] task={} backend={} rc={} aborted={} cmd={}", task.taskId,
+        log.info("[exec] task={} backend={} rc={} aborted={} cmd={}", task.subjectId(),
                 sandbox.id(),
                 r.exitCode(), r.aborted(), ExecResults.truncate(command, 200));
         return ExecResults.format(r);

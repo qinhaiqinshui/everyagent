@@ -15,7 +15,7 @@ public class UnattendedAuthHandler implements AuthorizationHandler {
 
     @Override
     public AuthorizationDecision invoke(AuthorizationRequest req, AuthorizationChain next) throws Exception {
-        if (!Boolean.TRUE.equals(req.task().metadata().getOrDefault("unattended", false))) {
+        if (!Boolean.TRUE.equals(req.context().metadata().getOrDefault("unattended", false))) {
             return next.proceed(req);
         }
         return new AuthorizationDecision(AuthorizationDecision.Type.DENY, "无人值守模式拒绝授权");

@@ -158,7 +158,7 @@ public class TaskLifecycleContextImpl implements TaskLifecycleContext {
     @Override public String workspaceId() { return taskEntry != null ? taskEntry.workspaceId : workspaceId; }
     @Override public String mainAgentId() { return taskEntry.mainAgentId; }
     @Override public String status() { return taskEntry.status.wire(); }
-    @Override public dev.everyagent.plugin.api.permission.TaskInfo taskInfo() { return taskEntry; }
+    @Override public TaskRuntime taskInfo() { return taskEntry; }
     @Override public Object taskLock() { return taskEntry; }
     @Override public long startedAt() { return taskEntry.startedAt != null ? taskEntry.startedAt : 0; }
     @Override public void startedAt(long ms) { taskEntry.startedAt = ms; }

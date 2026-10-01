@@ -53,6 +53,8 @@ export interface WorkerAskPayload {
 export interface WorkerAskQuestion {
   id?: string
   prompt?: string
+  /** 结构化信息槽(§12「标签 → 值」;老 worker 不带该字段,判空跳过)。 */
+  fields?: Record<string, string>
   options?: WorkerAskOption[]
 }
 
@@ -122,6 +124,7 @@ function toInteractionRequest(payload: WorkerAskPayload): UserInteractionRequest
       questions: payload.questions.map((q, idx) => ({
         id: q.id ?? `${payload.askId}_${idx}`,
         prompt: q.prompt ?? '',
+        fields: q.fields,
         options: (q.options ?? []).map((o) => ({
           id: o.label,  // label 即 ID（回传用）
           label: o.label,

@@ -143,10 +143,14 @@ public class ImageReferenceHandler implements FileReferenceHandler {
         if (interaction == null) {
             return false;
         }
-        String prompt = "AI 请求读取工作区外的图片文件并注入模型（base64）：\n" + real + "\n是否允许？";
+        // §12.2:prompt 短问句 + fields 结构化信息槽(文件/授权类型;关键信息保留,磁盘回放可读)
+        String prompt = "是否授权读取工作区外的图片?";
+        Map<String, String> fields = Map.of(
+                "文件", real.toString(),
+                "授权类型", "读取图片并 base64 注入模型");
         AskResult ans;
         try {
-            ans = interaction.ask(List.of(new AskQuestion("", prompt, AUTHORIZE_OPTIONS)),
+            ans = interaction.ask(List.of(new AskQuestion("", prompt, AUTHORIZE_OPTIONS, fields)),
                     AUTH_ASK_TIMEOUT_MS, Map.of("taskId", ctx.taskId()));
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();

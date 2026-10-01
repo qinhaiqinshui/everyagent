@@ -1,5 +1,7 @@
 package dev.everyagent.plugin.api.permission;
 
+import dev.everyagent.plugin.api.execution.ExecContext;
+
 /**
  * 授权决议链节点 SPI（filter 形态，与任务洋葱 §3.1 同一范式）。
  * <ul>
@@ -22,8 +24,17 @@ public interface AuthorizationHandler {
      */
     AuthorizationDecision invoke(AuthorizationRequest req, AuthorizationChain next) throws Exception;
 
-    record AuthorizationRequest(
-            TaskInfo task, String agentId, String grantKey, String prompt) {}
+    /**
+     * 授权请求：执行上下文 + 两个授权专属参数。
+     *
+     * <p>主体数据面已全部由 {@link ExecContext} 槽位携带（subjectId = 授权状态分区键 /
+     * metadata = 主体策略标记 / dataDir = grants.json 落盘 / emitter = 审计 trace /
+     * agentFactory / interaction = 绑定主体的交互口），授权请求只剩
+     * {@code grantKey}（授权状态分区键，如 {@code p::write::<realpath>}）与
+     * {@code prompt}（授权请求原文：人工弹窗/AI 审议的输入）。
+     */
+    record AuthorizationRequest(ExecContext context, String agentId,
+                                String grantKey, String prompt) {}
 
     record AuthorizationDecision(Type type, String reason) {
         public enum Type { ALLOW, DENY, PASS }

@@ -102,7 +102,7 @@ public class InteractionServiceImpl implements InteractionService {
         List<AskQuestion> withIds = new java.util.ArrayList<>(questions.size());
         for (int i = 0; i < questions.size(); i++) {
             AskQuestion q = questions.get(i);
-            withIds.add(new AskQuestion(askId + "_" + i, q.prompt(), q.options()));
+            withIds.add(new AskQuestion(askId + "_" + i, q.prompt(), q.options(), q.fields()));
         }
         Ask ask = new Ask(askId, taskId, agentId, withIds, events);
         asks.put(askId, ask);

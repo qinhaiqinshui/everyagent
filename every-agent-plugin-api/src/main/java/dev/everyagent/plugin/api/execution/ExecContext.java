@@ -15,7 +15,7 @@ import java.util.Map;
  * <p>取代原穿透 agent 层的无类型黑盒 map（{@code properties: {taskEntry, taskId,
  * workspaceRoot, configId}}）：上层（task 层）构造本接口实例沿
  * 「agent 层 → 工具执行链 → 授权链」逐层往下传；advisor / 工具 / 授权链 / 子 agent /
- * 审议 agent 只见本接口，不见 {@code TaskEntry}/{@code TaskRuntime}/{@code TaskInfo}
+ * 审议 agent 只见本接口，不见 {@code TaskEntry}/{@code TaskRuntime}
  * 任务域类型。未来工作流层实现 {@code WorkflowRuntime implements ExecContext} 即可
  * 复用全部横切基础设施，横切层零改动。
  *

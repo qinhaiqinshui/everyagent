@@ -20,9 +20,9 @@ import java.util.Map;
  * 抽象签名重合，由实现类提供。worker 的 {@code TaskEntry} 实现此接口；
  * 需要完整任务运行时数据的内置组件可直接依赖 {@code TaskEntry} 具体类。
  *
- * <p>任务域私有成员保留在本接口：taskId / status / taskDir（原 {@code TaskInfo}
- * 声明显式吸收，S3 退役该接口）、mainAgentId / log、fileChanges 系列槽位、
- * 时间戳与运行时操作。{@code fileChanges} 系列是任务域私有槽位，
+ * <p>任务域私有成员保留在本接口：taskId / status / taskDir（原 permission 包
+ * {@code TaskInfo} 的三成员，该接口已随 S3 授权链收编退役删除）、mainAgentId / log、
+ * fileChanges 系列槽位、时间戳与运行时操作。{@code fileChanges} 系列是任务域私有槽位，
  * 不进 {@code ExecContext}。
  *
  * <p>读写混合接口：subagent 插件需要写 {@link #agents()} Map(put / get / values / containsKey)，
@@ -31,7 +31,7 @@ import java.util.Map;
  */
 public interface TaskRuntime extends ExecContext {
 
-    // ---- 任务域只读成员(原 TaskInfo 吸收声明;构造时确定或任务级定死) ----
+    // ---- 任务域只读成员(构造时确定或任务级定死) ----
 
     /** 任务 ID。 */
     String taskId();

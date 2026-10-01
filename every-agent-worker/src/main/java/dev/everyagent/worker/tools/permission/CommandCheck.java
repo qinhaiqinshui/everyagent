@@ -1,8 +1,8 @@
 package dev.everyagent.worker.tools.permission;
 
+import dev.everyagent.plugin.api.permission.AuthorizationHandler.AuthorizationRequest;
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.modules.WorkspaceManager;
-import dev.everyagent.worker.task.TaskEntry;
 import dev.everyagent.worker.tools.PermissionDeniedException;
 import dev.everyagent.worker.tools.PermissionGate.Op;
 import org.slf4j.Logger;
@@ -72,9 +72,8 @@ public class CommandCheck implements PermissionCheck {
         if (command == null || command.isBlank()) {
             return PermissionDecision.allow("空命令无需授权");
         }
-        TaskEntry t = ctx.task();
         try {
-            WorkspaceManager.Root ws = workspaces.resolve(t.workspaceRoot);
+            WorkspaceManager.Root ws = workspaces.resolve(ctx.workspaceRoot());
             List<String> candidates = extractPathCandidates(command);
             // 命令可能影响工作区外(越界路径候选 / 主目录环境变量引用)→ 危险动词才需授权;
             // 仅工作区内(或无可识别外部引用)→ 危险动词直接放行(工作区内增删改查自由)
@@ -90,8 +89,8 @@ public class CommandCheck implements PermissionCheck {
                         String prompt = "AI 请求执行危险命令: " + PathSupport.abbreviate(command) + "\n"
                                 + "命令类别: " + verb + "(删除/破坏类动词)。"
                                 + "授权后同类命令(" + verb + ")在所选范围内不再询问。";
-                        grants.authorize(t, ctx.agentId(), PathSupport.verbKey(verb),
-                                prompt, List.of(), List.of());
+                        grants.authorize(ctx.authRequest(PathSupport.verbKey(verb), prompt),
+                                List.of(), List.of());
                     }
                 }
             }
@@ -115,8 +114,8 @@ public class CommandCheck implements PermissionCheck {
                 }
                 String prompt = "AI 请求在命令中访问工作区外路径: " + PathSupport.abbreviate(command) + "\n"
                         + "授权范围: " + real + " 及其子目录内的命令访问。";
-                grants.authorize(t, ctx.agentId(), PathSupport.pathKey(real, Op.EXEC),
-                        prompt, List.of(), List.of(real));
+                grants.authorize(ctx.authRequest(PathSupport.pathKey(real, Op.EXEC), prompt),
+                        List.of(), List.of(real));
             }
             return PermissionDecision.allow("命令授权检查通过");
         } catch (PermissionDeniedException e) {

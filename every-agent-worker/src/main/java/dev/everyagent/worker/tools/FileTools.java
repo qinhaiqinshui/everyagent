@@ -1,7 +1,7 @@
 package dev.everyagent.worker.tools;
 
-import dev.everyagent.worker.task.TaskEntry;
 
+import dev.everyagent.plugin.api.execution.ExecContext;
 import dev.everyagent.plugin.api.exception.NotFoundException;
 
 import org.springframework.ai.tool.annotation.Tool;
@@ -27,10 +27,10 @@ public class FileTools {
     static final int READ_FILE_AUTO_TRUNCATE_CHARS = 30_000;
 
     private final FsToolSupport fs;
-    private final TaskEntry task;
+    private final ExecContext task;
     private final String agentId;
 
-    public FileTools(FsToolSupport fs, TaskEntry task, String agentId) {
+    public FileTools(FsToolSupport fs, ExecContext task, String agentId) {
         this.fs = fs;
         this.task = task;
         this.agentId = agentId;

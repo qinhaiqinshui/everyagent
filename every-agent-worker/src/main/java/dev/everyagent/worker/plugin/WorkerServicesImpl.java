@@ -9,7 +9,6 @@ import dev.everyagent.plugin.api.spi.IdGenerator;
 import dev.everyagent.plugin.api.spi.NativeExec;
 import dev.everyagent.plugin.api.spi.SandboxBackend;
 import dev.everyagent.plugin.api.spi.TokenEstimator;
-import dev.everyagent.plugin.api.permission.TaskInfo;
 import dev.everyagent.plugin.api.proto.ShortIds;
 import dev.everyagent.plugin.api.proto.SnowflakeId;
 import dev.everyagent.plugin.api.task.StoredTaskInfo;

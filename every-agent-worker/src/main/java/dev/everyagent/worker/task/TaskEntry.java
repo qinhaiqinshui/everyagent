@@ -4,7 +4,6 @@ import dev.everyagent.plugin.api.agent.AgentContext;
 import dev.everyagent.plugin.api.agent.AgentFactory;
 import dev.everyagent.plugin.api.event.EventLogReader;
 import dev.everyagent.plugin.api.interaction.InteractionService;
-import dev.everyagent.plugin.api.permission.TaskInfo;
 import dev.everyagent.plugin.api.task.FileChangesCollector;
 import dev.everyagent.plugin.api.task.TaskRuntime;
 import dev.everyagent.contract.json.Json;
@@ -33,10 +32,10 @@ import java.util.concurrent.atomic.AtomicLong;
  * 再运行 = 同 taskId 新建本对象(冷启动,mainAgentId 沿用 → 同一 jsonl 文件续写)。
  *
  * <p>S2 起 implements {@link TaskRuntime}(extends ExecContext):预绑定端口
- * agentFactory()/interaction() 见下方懒加载实现。过渡期额外直接 implements
- * {@link TaskInfo}(授权链 SPI 签名,S1 起 TaskRuntime 不再继承它;S3 授权链收编后退役)。
+ * agentFactory()/interaction() 见下方懒加载实现;S3 授权链收编 ExecContext 后,
+ * 原 permission {@code TaskInfo} 过渡实现已退役删除。
  */
-public final class TaskEntry implements TaskRuntime, TaskInfo {
+public final class TaskEntry implements TaskRuntime {
 
     public final String taskId;
     public final String title;
@@ -124,7 +123,7 @@ public final class TaskEntry implements TaskRuntime, TaskInfo {
     }
 
 
-    // ---- TaskInfo 接口实现 ----
+    // ---- TaskRuntime 域中性槽位实现 ----
 
     @Override
     public String taskId() {

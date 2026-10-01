@@ -3,7 +3,7 @@ package dev.everyagent.plugin.aireview;
 import java.util.List;
 
 import dev.everyagent.plugin.api.WorkerServices;
-import dev.everyagent.plugin.api.permission.TaskInfo;
+import dev.everyagent.plugin.api.execution.ExecContext;
 import dev.everyagent.plugin.api.slash.SlashCancelHandler;
 import dev.everyagent.plugin.api.slash.SlashCommandItem;
 import dev.everyagent.plugin.api.slash.SlashSelectHandler;
@@ -38,7 +38,7 @@ public class AiReviewSlashProvider {
         // 返回 bottom token 供底部渲染(不写输入框),业务标记由注册方自行维护。
         SlashSelectHandler selectHandler = (item, taskId) -> {
             if (taskId != null && !taskId.isEmpty()) {
-                TaskInfo t = services.task().get(taskId);
+                ExecContext t = services.task().get(taskId);
                 if (t != null) {
                     t.metadata().put("ai-review", true);
                     services.task().publishUpdated(taskId);
@@ -49,7 +49,7 @@ public class AiReviewSlashProvider {
         // 业务 onCancel:taskId 非空时复位业务标记并落盘。
         SlashCancelHandler cancelHandler = (item, token, taskId) -> {
             if (taskId != null && !taskId.isEmpty()) {
-                TaskInfo t = services.task().get(taskId);
+                ExecContext t = services.task().get(taskId);
                 if (t != null) {
                     t.metadata().put("ai-review", false);
                     services.task().publishUpdated(taskId);

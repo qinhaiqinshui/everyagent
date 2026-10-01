@@ -670,6 +670,8 @@ export interface UserInteractionQuestion {
   prompt: string
   /** 补充说明。 */
   details?: string
+  /** 结构化信息槽（「标签 → 值」，在 prompt 下、options 上渲染为信息块；空/缺省不渲染）。 */
+  fields?: Record<string, string>
   /** 可选项列表（每项含 type："radio" 单选 / "input" 自由输入）。 */
   options: UserInteractionOption[]
   /** 「其他」选项文案（旧格式兼容，缺省「其他」）。 */

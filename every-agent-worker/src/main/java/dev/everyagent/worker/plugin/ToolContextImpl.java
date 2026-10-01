@@ -1,5 +1,6 @@
 package dev.everyagent.worker.plugin;
 
+import dev.everyagent.plugin.api.execution.ExecContext;
 import dev.everyagent.worker.modules.WorkspaceManager;
 import dev.everyagent.worker.os.OsSandbox;
 import dev.everyagent.worker.os.SandboxPathRegistry;
@@ -98,11 +99,20 @@ public class ToolContextImpl implements ToolContext {
         if (osSandbox == null) {
             return null;
         }
-        CommandExecutor exec = new CommandExecutor(osSandbox, taskEntry, gate, agentId);
+        CommandExecutor exec = new CommandExecutor(osSandbox, execution(), gate, agentId);
         return exec::execute;
     }
 
-    /** 额外暴露：任务条目（含 metadata 等任务级开关），供内置适配器使用。 */
+    /**
+     * 统一执行上下文槽位（S3 起内置工具/授权链经此取数，不再接触 TaskEntry 具体类型；
+     * worker 域内恒为 TaskEntry 实例）。
+     */
+    @Override
+    public ExecContext execution() {
+        return taskEntry;
+    }
+
+    /** 额外暴露：任务条目（含 metadata 等任务级开关），供内置适配器使用（过渡，S5 退役）。 */
     public TaskEntry taskEntry() {
         return taskEntry;
     }

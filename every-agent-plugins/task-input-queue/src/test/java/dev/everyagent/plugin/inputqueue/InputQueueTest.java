@@ -1,6 +1,6 @@
 package dev.everyagent.plugin.inputqueue;
 
-import dev.everyagent.plugin.api.permission.TaskInfo;
+import dev.everyagent.plugin.api.task.TaskRuntime;
 import dev.everyagent.plugin.api.task.TaskLifecycleContext;
 import org.junit.jupiter.api.Test;
 
@@ -27,7 +27,7 @@ class InputQueueTest {
             @Override public String workspaceId() { return "defaultworkspace"; }
             @Override public String mainAgentId() { return "main"; }
             @Override public String status() { return "running"; }
-            @Override public TaskInfo taskInfo() { return null; }
+            @Override public TaskRuntime taskInfo() { return null; }
             @Override public Object taskLock() { return new Object(); }
             @Override public long startedAt() { return 0; }
             @Override public void startedAt(long ms) { }

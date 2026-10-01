@@ -3,7 +3,7 @@ package dev.everyagent.plugin.unattended;
 import java.util.List;
 
 import dev.everyagent.plugin.api.WorkerServices;
-import dev.everyagent.plugin.api.permission.TaskInfo;
+import dev.everyagent.plugin.api.execution.ExecContext;
 import dev.everyagent.plugin.api.slash.SlashCancelHandler;
 import dev.everyagent.plugin.api.slash.SlashCommandItem;
 import dev.everyagent.plugin.api.slash.SlashSelectHandler;
@@ -36,7 +36,7 @@ public class UnattendedSlashProvider {
         String subtitle = "无人在场时 ask_user 自动作答、授权一律拒绝（本任务有效，底部可取消）";
         SlashSelectHandler selectHandler = (item, taskId) -> {
             if (taskId != null && !taskId.isEmpty()) {
-                TaskInfo t = services.task().get(taskId);
+                ExecContext t = services.task().get(taskId);
                 if (t != null) {
                     t.metadata().put("unattended", true);
                     services.task().publishUpdated(taskId);
@@ -46,7 +46,7 @@ public class UnattendedSlashProvider {
         };
         SlashCancelHandler cancelHandler = (item, token, taskId) -> {
             if (taskId != null && !taskId.isEmpty()) {
-                TaskInfo t = services.task().get(taskId);
+                ExecContext t = services.task().get(taskId);
                 if (t != null) {
                     t.metadata().put("unattended", false);
                     services.task().publishUpdated(taskId);

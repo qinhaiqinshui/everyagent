@@ -1,12 +1,12 @@
 package dev.everyagent.plugin.sandbox.wslubuntu;
 
-import dev.everyagent.plugin.api.permission.TaskInfo;
+import dev.everyagent.plugin.api.execution.ExecContext;
 import dev.everyagent.plugin.api.task.TaskService;
 
 /**
  * 「本任务禁用网络」开关的唯一读写入口(任务级状态,归本插件自管)。
  *
- * <p>状态存在 worker 通用任务槽 {@code TaskInfo.metadata()} 里,key =
+ * <p>状态存在执行上下文通用任务槽 {@code ExecContext.metadata()} 里,key =
  * {@link #META_KEY},随任务 meta.json 落盘、再运行仍保持;worker 核心不感知该 key,
  * 也不持有禁网状态 —— 因为只有 wsl-ubuntu 后端能在发行版内 {@code unshare -n}
  * 真正断网,这个能力整体归本插件(架构 §7.10 网络策略)。
@@ -24,7 +24,7 @@ public final class NetworkTaskFlag {
     }
 
     /** 读:该任务是否已开启禁网(task 为 null = 任务不可寻,按未开启处理)。 */
-    public static boolean isOn(TaskInfo task) {
+    public static boolean isOn(ExecContext task) {
         return task != null && Boolean.TRUE.equals(task.metadata().get(META_KEY));
     }
 
@@ -36,7 +36,7 @@ public final class NetworkTaskFlag {
         if (tasks == null || taskId == null || taskId.isEmpty()) {
             return;
         }
-        TaskInfo t = tasks.get(taskId);
+        ExecContext t = tasks.get(taskId);
         if (t == null) {
             return;
         }

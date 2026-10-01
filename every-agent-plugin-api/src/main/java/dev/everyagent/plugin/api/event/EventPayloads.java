@@ -106,7 +106,7 @@ public final class EventPayloads {
 
     // ---- ask questions ----
 
-    /** 多问题选择题 → 前端 ask.create/ask.state 的 questions 数组(含 id/prompt/options)。 */
+    /** 多问题选择题 → 前端 ask.create/ask.state 的 questions 数组(含 id/prompt/options/fields)。 */
     public static ArrayNode questionsToJson(
             List<AskQuestion> questions) {
         var arr = Json.arr();
@@ -123,6 +123,12 @@ public final class EventPayloads {
                         oo.put("value", opt.value());
                         oo.put("type", opt.type());
                     }
+                }
+                // 结构化信息槽(§12):空 map 省略该字段——老 worker 不带、老前端忽略,
+                // 双向 must-ignore 兼容;无 fields 的旧调用输出逐字节不变。
+                if (q.fields() != null && !q.fields().isEmpty()) {
+                    ObjectNode f = o.putObject("fields");
+                    q.fields().forEach(f::put);
                 }
                 arr.add(o);
             }

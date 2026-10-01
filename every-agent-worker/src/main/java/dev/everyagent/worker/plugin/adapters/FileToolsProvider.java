@@ -1,6 +1,5 @@
 package dev.everyagent.worker.plugin.adapters;
 
-import dev.everyagent.worker.plugin.ToolContextImpl;
 import dev.everyagent.plugin.api.spi.ToolContext;
 import dev.everyagent.plugin.api.spi.ToolProvider;
 import dev.everyagent.worker.tools.FsToolSupport;
@@ -31,7 +30,6 @@ public class FileToolsProvider implements ToolProvider {
 
     @Override
     public List<ToolCallback> createTools(ToolContext ctx) {
-        ToolContextImpl impl = (ToolContextImpl) ctx;
-        return List.of(ToolCallbacks.from(new FileTools(fs, impl.taskEntry(), ctx.agentId())));
+        return List.of(ToolCallbacks.from(new FileTools(fs, ctx.execution(), ctx.agentId())));
     }
 }

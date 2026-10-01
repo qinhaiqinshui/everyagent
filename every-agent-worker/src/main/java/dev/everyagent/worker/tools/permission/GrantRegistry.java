@@ -7,9 +7,9 @@ import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.modules.WorkspaceManager;
 import dev.everyagent.worker.plugin.registry.AuthorizationHandlerRegistry;
 import dev.everyagent.plugin.api.exception.AgentCancelledException;
+import dev.everyagent.plugin.api.execution.ExecContext;
 import dev.everyagent.plugin.api.interaction.InteractionService;
-import dev.everyagent.worker.task.TaskEntry;
-import dev.everyagent.worker.task.TaskStore;
+import dev.everyagent.plugin.api.permission.AuthorizationHandler.AuthorizationRequest;
 import dev.everyagent.worker.tools.PermissionDeniedException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -49,26 +49,24 @@ public class GrantRegistry {
     private final InteractionService asks;
     private final WorkerProperties props;
     private final WorkspaceManager workspaces;
-    private final TaskStore store;
     /** 授权决议链节点注册表(按 order 排序);零节点 → 直接放行。 */
     private final AuthorizationHandlerRegistry authHandlerRegistry;
 
     private final Map<String, TaskGrants> byTask = new ConcurrentHashMap<>();
 
     public GrantRegistry(InteractionService asks, WorkerProperties props, WorkspaceManager workspaces,
-            TaskStore store, AuthorizationHandlerRegistry authHandlerRegistry) {
+            AuthorizationHandlerRegistry authHandlerRegistry) {
         this.asks = asks;
         this.props = props;
         this.workspaces = workspaces;
-        this.store = store;
         this.authHandlerRegistry = authHandlerRegistry;
     }
 
     // ---- 生命周期 ---- 
 
-    /** 新一条用户输入到达:本轮(run)授权即失效(任务级不受影响)。 */
-    public void beginRun(String taskId) {
-        TaskGrants g = byTask.get(taskId);
+    /** 新一条用户输入到达:本轮(run)授权即失效(任务级不受影响)。subjectId=执行主体 ID(今天=taskId)。 */
+    public void beginRun(String subjectId) {
+        TaskGrants g = byTask.get(subjectId);
         if (g != null) {
             g.runGrants.clear();
             g.runRoots.clear();
@@ -76,14 +74,14 @@ public class GrantRegistry {
         }
     }
 
-    /** 任务终态:内存驱逐(任务级授权已在磁盘,再运行时 lazy 重载)。 */
-    public void untrack(String taskId) {
-        byTask.remove(taskId);
+    /** 主体终态:内存驱逐(任务级授权已在磁盘,再运行时 lazy 重载)。subjectId=执行主体 ID(今天=taskId)。 */
+    public void untrack(String subjectId) {
+        byTask.remove(subjectId);
     }
 
-    /** 已授权外部根(realpath + 词法形态),供 Sandbox 附加放行。 */
-    public List<Path> extraRoots(String taskId) {
-        TaskGrants g = byTask.get(taskId);
+    /** 已授权外部根(realpath + 词法形态),供 Sandbox 附加放行。subjectId=执行主体 ID(今天=taskId)。 */
+    public List<Path> extraRoots(String subjectId) {
+        TaskGrants g = byTask.get(subjectId);
         if (g == null) {
             return List.of();
         }
@@ -93,9 +91,9 @@ public class GrantRegistry {
         return out;
     }
 
-    /** 已授权的命令 EXEC 根(realpath),供命令执行器做 Windows Low 完整性标注(§13.6)。 */
-    public List<Path> execRoots(String taskId) {
-        TaskGrants g = byTask.get(taskId);
+    /** 已授权的命令 EXEC 根(realpath),供命令执行器做 Windows Low 完整性标注(§13.6)。subjectId=执行主体 ID(今天=taskId)。 */
+    public List<Path> execRoots(String subjectId) {
+        TaskGrants g = byTask.get(subjectId);
         if (g == null) {
             return List.of();
         }
@@ -116,32 +114,32 @@ public class GrantRegistry {
      * 完全读写)同样进入本视图——注册时已过宽根滤过,这里按同一谓词再滤一遍(纵深),
      * 与已授权 EXEC 根去重后拼接。
      */
-    public List<Path> execRootsSandboxed(TaskEntry t) {
+    public List<Path> execRootsSandboxed(String workspaceRoot, String subjectId) {
         Path wsLex = null;
         Path wsReal = null;
         try {
-            WorkspaceManager.Root ws = workspaces.resolve(t.workspaceRoot);
+            WorkspaceManager.Root ws = workspaces.resolve(workspaceRoot);
             wsLex = ws.path();
             wsReal = ws.realPath();
         } catch (IOException e) {
-            log.warn("[gate] 工作区解析失败,EXEC 根过滤退化为仅文件系统根判定 task={}", t.taskId, e);
+            log.warn("[gate] 工作区解析失败,EXEC 根过滤退化为仅文件系统根判定 subject={}", subjectId, e);
         }
         List<Path> out = new ArrayList<>();
-        for (Path root : execRoots(t.taskId)) {
+        for (Path root : execRoots(subjectId)) {
             if (OverBroadRootCheck.isOverBroadRoot(root, wsLex, wsReal)) {
-                log.warn("[gate] L2 拒收过度宽泛 EXEC 根(不进沙箱/标注/ACL)task={} root={}",
-                        t.taskId, root);
+                log.warn("[gate] L2 拒收过度宽泛 EXEC 根(不进沙箱/标注/ACL)subject={} root={}",
+                        subjectId, root);
                 continue;
             }
             out.add(root);
         }
-        for (Path root : workspaces.externalRootsOf(t.workspaceRoot)) {
+        for (Path root : workspaces.externalRootsOf(workspaceRoot)) {
             if (out.contains(root)) {
                 continue; // 与已授权 EXEC 根重叠:去重
             }
             if (OverBroadRootCheck.isOverBroadRoot(root, wsLex, wsReal)) {
-                log.warn("[gate] L2 拒收过度宽泛外部授权根(不进沙箱/标注/ACL)task={} root={}",
-                        t.taskId, root);
+                log.warn("[gate] L2 拒收过度宽泛外部授权根(不进沙箱/标注/ACL)subject={} root={}",
+                        subjectId, root);
                 continue;
             }
             out.add(root);
@@ -158,9 +156,12 @@ public class GrantRegistry {
      * rootsOnGrant 为该授权随附的 Sandbox 附加根;execRootsOnGrant 为命令 EXEC 授权随附的
      * Low 完整性标注根。
      */
-    public void authorize(TaskEntry t, String agentId, String grantKey, String prompt,
-            List<Path> rootsOnGrant, List<Path> execRootsOnGrant) {
-        TaskGrants g = grantsOf(t.taskId);
+    public void authorize(AuthorizationRequest req, List<Path> rootsOnGrant, List<Path> execRootsOnGrant) {
+        ExecContext ctx = req.context();
+        String subjectId = ctx.subjectId(); // 授权状态分区键(今天=taskId,未来=workflowId)
+        Path dataDir = ctx.dataDir();       // grants.json 落盘目录(ExecContext 数据目录槽位)
+        String grantKey = req.grantKey();
+        TaskGrants g = grantsOf(subjectId, dataDir);
         if (g.hasGrant(grantKey)) {
             return;
         }
@@ -186,9 +187,9 @@ public class GrantRegistry {
             return; // 授权者已记录,后来者直接放行
         }
         try {
-            GrantScope scope = resolveScope(t, agentId, prompt, grantKey);
+            GrantScope scope = resolveScope(req);
             future.complete(scope);
-            record(t, g, grantKey, scope, prompt, rootsOnGrant, execRootsOnGrant);
+            record(dataDir, g, grantKey, scope, rootsOnGrant, execRootsOnGrant);
         } catch (Throwable e) {
             future.complete(GrantScope.DENY); // 分派异常结束(审议/弹窗):后来者按拒绝处理
             throw e;
@@ -215,8 +216,7 @@ public class GrantRegistry {
      * 核心不感知任何具体节点(AI 审议、无人值守、人工弹窗等均由各 handler 自行判断)。
      * future.complete 与 record 由 {@link #authorize} owner 路径统一执行,后来者 join 共享同一结论。
      */
-    private GrantScope resolveScope(TaskEntry t, String agentId, String prompt, String grantKey) {
-        AuthorizationHandler.AuthorizationRequest req = new AuthorizationHandler.AuthorizationRequest(t, agentId, grantKey, prompt);
+    private GrantScope resolveScope(AuthorizationRequest req) {
         AuthorizationHandler.AuthorizationDecision d = new AuthorizationChainExecutor()
                 .run(authHandlerRegistry.sorted(), req);
         return switch (d.type()) {
@@ -237,8 +237,8 @@ public class GrantRegistry {
         return GrantScope.DENY;
     }
 
-    /** 按档位记录授权(DENY 抛 PermissionDeniedException)。 */
-    private void record(TaskEntry t, TaskGrants g, String grantKey, GrantScope scope, String prompt,
+    /** 按档位记录授权(DENY 抛 PermissionDeniedException)。dataDir=grants.json 落盘目录(ExecContext.dataDir)。 */
+    private void record(Path dataDir, TaskGrants g, String grantKey, GrantScope scope,
             List<Path> rootsOnGrant, List<Path> execRootsOnGrant) {
         switch (scope) {
             case RUN -> {
@@ -250,7 +250,7 @@ public class GrantRegistry {
                 g.taskGrants.add(grantKey);
                 g.taskRoots.addAll(rootsOnGrant);
                 g.taskExecRoots.addAll(execRootsOnGrant);
-                persistTaskGrants(t, g);
+                persistGrants(dataDir, g);
             }
             case DENY -> throw denyException();
         }
@@ -281,12 +281,12 @@ public class GrantRegistry {
         }
     }
 
-    private TaskGrants grantsOf(String taskId) {
-        TaskGrants g = byTask.computeIfAbsent(taskId, k -> new TaskGrants());
+    private TaskGrants grantsOf(String subjectId, Path dataDir) {
+        TaskGrants g = byTask.computeIfAbsent(subjectId, k -> new TaskGrants());
         if (!g.diskLoaded) {
             synchronized (g) {
                 if (!g.diskLoaded) {
-                    loadDiskGrants(taskId, g);
+                    loadDiskGrants(subjectId, dataDir, g);
                     g.diskLoaded = true;
                 }
             }
@@ -294,10 +294,13 @@ public class GrantRegistry {
         return g;
     }
 
-    /** 任务级授权 lazy 载入(首次过 gate 时;startRerun 冷启动后自然恢复)。 */
-    private void loadDiskGrants(String taskId, TaskGrants g) {
+    /** 任务级授权 lazy 载入(首次过 gate 时;startRerun 冷启动后自然恢复)。dataDir 来自 ExecContext 槽位。 */
+    private void loadDiskGrants(String subjectId, Path dataDir, TaskGrants g) {
+        if (dataDir == null) {
+            return; // 上下文未携带数据目录(单测直构场景):按无磁盘授权处理
+        }
         try {
-            Path f = store.dirOf(taskId).resolve("grants.json");
+            Path f = dataDir.resolve("grants.json");
             if (!Files.isRegularFile(f)) {
                 return;
             }
@@ -329,14 +332,18 @@ public class GrantRegistry {
                 }
             }
         } catch (IOException | RuntimeException e) {
-            log.warn("任务级授权读取失败 task={}(按无授权处理)", taskId, e);
+            log.warn("任务级授权读取失败 subject={}(按无授权处理)", subjectId, e);
         }
     }
 
-    /** 任务级授权落盘(tmp + ATOMIC_MOVE;仅用户点「本任务」时发生,频率极低)。 */
-    private void persistTaskGrants(TaskEntry t, TaskGrants g) {
+    /** 任务级授权落盘(tmp + ATOMIC_MOVE;仅用户点「本任务」时发生,频率极低)。dataDir 来自 ExecContext 槽位。 */
+    private void persistGrants(Path dataDir, TaskGrants g) {
+        if (dataDir == null) {
+            log.warn("任务级授权落盘失败(上下文未携带数据目录,继续内存生效)");
+            return;
+        }
         try {
-            Path dir = store.dirOf(t.taskId);
+            Path dir = dataDir;
             Files.createDirectories(dir);
             ObjectNode root = Json.obj().put("version", 1);
             ArrayNode grants = root.putArray("taskGrants");
@@ -354,7 +361,7 @@ public class GrantRegistry {
             Files.writeString(tmp, Json.write(root));
             AtomicFiles.replace(tmp, f); // 原子替换(失败已清理 tmp 后抛出,不残留垃圾)
         } catch (IOException e) {
-            log.warn("任务级授权落盘失败 task={}(继续内存生效)", t.taskId, e);
+            log.warn("任务级授权落盘失败 dir={}(继续内存生效)", dataDir, e);
         }
     }
 }

@@ -9,9 +9,9 @@ import dev.everyagent.worker.modules.WorkspaceManager;
 import dev.everyagent.worker.os.OsSandbox;
 import dev.everyagent.worker.os.SandboxPathRegistry;
 
+import dev.everyagent.plugin.api.execution.ExecContext;
 import dev.everyagent.plugin.api.exception.NotFoundException;
 import dev.everyagent.worker.rpc.SandboxViolationException;
-import dev.everyagent.worker.task.TaskEntry;
 import tools.jackson.databind.node.ObjectNode;
 
 import org.springframework.beans.factory.annotation.Autowired;
@@ -30,7 +30,7 @@ import java.util.List;
 
 /**
  * 工具层共享的文件能力(移植自 novel_agent-n 的 fileAccessGateway):
- * 所有路径相对「任务工作区根」({@link TaskEntry#workspaceRoot}),经 {@link WorkspaceManager}
+ * 所有路径相对「任务工作区根」({@code ExecContext.workspaceRoot()}),经 {@link WorkspaceManager}
  * + {@link Sandbox} 沙箱化(越界/符号链接逃逸即拒),与 RPC 层 FsService 同一套安全模型。
  *
  * <p>危险操作授权:工作区外的读/写在解析前经 {@link PermissionGate} 判定(阻塞弹窗授权
@@ -103,15 +103,15 @@ public class FsToolSupport {
      * 另并入该工作区外部授权根——用户显式选择=已授权,§7.17,read_file/write_text 等
      * 经 gate 放行环后由沙箱直接放行,与 extraRoots 去重)。
      */
-    private Sandbox sandbox(TaskEntry t) throws IOException {
-        List<Path> roots = new ArrayList<>(gate.extraRoots(t.taskId));
-        for (Path ext : workspaces.externalRootsOf(t.workspaceRoot)) {
+    private Sandbox sandbox(ExecContext t) throws IOException {
+        List<Path> roots = new ArrayList<>(gate.extraRoots(t.subjectId()));
+        for (Path ext : workspaces.externalRootsOf(t.workspaceRoot())) {
             if (!roots.contains(ext)) {
                 roots.add(ext);
             }
         }
         roots.addAll(skillsReadonlyRoots.get());
-        return new Sandbox(workspaces.resolve(t.workspaceRoot), roots);
+        return new Sandbox(workspaces.resolve(t.workspaceRoot()), roots);
     }
 
     /**
@@ -129,7 +129,7 @@ public class FsToolSupport {
     }
 
     /** 授权解析已存在路径:工作区内/已授权为无感直通,越界则先经授权门(阻塞)。 */
-    private Path resolveExistingAuthorized(TaskEntry t, String agentId, String rel,
+    private Path resolveExistingAuthorized(ExecContext t, String agentId, String rel,
             PermissionGate.Op op) throws IOException {
         String resolved = resolveSandboxPath(rel);
         gate.requirePath(t, agentId, resolved, op);
@@ -137,24 +137,24 @@ public class FsToolSupport {
     }
 
     /** 授权解析写入目标(可不存在):同 {@link #resolveExistingAuthorized}。 */
-    private Path resolveTargetAuthorized(TaskEntry t, String agentId, String rel,
+    private Path resolveTargetAuthorized(ExecContext t, String agentId, String rel,
             PermissionGate.Op op) throws IOException {
         String resolved = resolveSandboxPath(rel);
         gate.requirePath(t, agentId, resolved, op);
         return sandbox(t).resolveTarget(resolved);
     }
 
-    public String readText(TaskEntry t, String agentId, String rel, PermissionGate.Op op)
+    public String readText(ExecContext t, String agentId, String rel, PermissionGate.Op op)
             throws IOException {
         Path f = resolveExistingAuthorized(t, agentId, rel, op);
         return Files.readString(f, StandardCharsets.UTF_8);
     }
 
-    public String readText(TaskEntry t, String agentId, String rel) throws IOException {
+    public String readText(ExecContext t, String agentId, String rel) throws IOException {
         return readText(t, agentId, rel, PermissionGate.Op.READ);
     }
 
-    public ReadResult readCapped(TaskEntry t, String agentId, String rel, long maxBytes)
+    public ReadResult readCapped(ExecContext t, String agentId, String rel, long maxBytes)
             throws IOException {
         Path f = resolveExistingAuthorized(t, agentId, rel, PermissionGate.Op.READ);
         long size = Files.size(f);
@@ -171,7 +171,7 @@ public class FsToolSupport {
         return new ReadResult(new String(buf, 0, off, StandardCharsets.UTF_8), truncated);
     }
 
-    public boolean exists(TaskEntry t, String rel) {
+    public boolean exists(ExecContext t, String rel) {
         try {
             Sandbox sb = sandbox(t);
             String resolved = resolveSandboxPath(rel);
@@ -188,7 +188,7 @@ public class FsToolSupport {
         }
     }
 
-    public void writeText(TaskEntry t, String agentId, String rel, String content, boolean append)
+    public void writeText(ExecContext t, String agentId, String rel, String content, boolean append)
             throws IOException {
         Sandbox sb = sandbox(t);
         String finalText = content == null ? "" : content;
@@ -205,7 +205,7 @@ public class FsToolSupport {
         changed(t, sb.display(target), "write");
     }
 
-    public void mkdir(TaskEntry t, String agentId, String rel, boolean recursive) throws IOException {
+    public void mkdir(ExecContext t, String agentId, String rel, boolean recursive) throws IOException {
         Sandbox sb = sandbox(t);
         Path target = resolveTargetAuthorized(t, agentId, rel, PermissionGate.Op.WRITE);
         if (recursive) {
@@ -216,7 +216,7 @@ public class FsToolSupport {
         changed(t, sb.display(target), "mkdir");
     }
 
-    public void move(TaskEntry t, String agentId, String from, String to) throws IOException {
+    public void move(ExecContext t, String agentId, String from, String to) throws IOException {
         Sandbox sb = sandbox(t);
         Path src = resolveExistingAuthorized(t, agentId, from, PermissionGate.Op.WRITE);
         sb.requireNotRoot(src);
@@ -227,7 +227,7 @@ public class FsToolSupport {
         changed(t, sb.display(dst), "write");
     }
 
-    public void remove(TaskEntry t, String agentId, String rel, boolean recursive, boolean force)
+    public void remove(ExecContext t, String agentId, String rel, boolean recursive, boolean force)
             throws IOException {
         Sandbox sb = sandbox(t);
         String resolved = resolveSandboxPath(rel);
@@ -246,7 +246,7 @@ public class FsToolSupport {
         changed(t, sb.display(target), "delete");
     }
 
-    public List<Entry> list(TaskEntry t, String agentId, String rel) throws IOException {
+    public List<Entry> list(ExecContext t, String agentId, String rel) throws IOException {
         Sandbox sb = sandbox(t);
         Path dir = resolveExistingAuthorized(t, agentId, rel, PermissionGate.Op.READ);
         if (!Files.isDirectory(dir)) {
@@ -269,13 +269,13 @@ public class FsToolSupport {
         return out;
     }
 
-    public Stat stat(TaskEntry t, String agentId, String rel) throws IOException {
+    public Stat stat(ExecContext t, String agentId, String rel) throws IOException {
         Path p = resolveExistingAuthorized(t, agentId, rel, PermissionGate.Op.READ);
         boolean isDir = Files.isDirectory(p);
         return new Stat(isDir, isDir ? 0 : Files.size(p), Files.getLastModifiedTime(p).toMillis());
     }
 
-    public List<String> walk(TaskEntry t, String agentId, String rel) throws IOException {
+    public List<String> walk(ExecContext t, String agentId, String rel) throws IOException {
         Sandbox sb = sandbox(t);
         Path dir = resolveExistingAuthorized(t, agentId, rel, PermissionGate.Op.READ);
         if (!Files.isDirectory(dir)) {
@@ -307,11 +307,11 @@ public class FsToolSupport {
         }
     }
 
-    public void changed(TaskEntry t, String displayRel, String kind) {
+    public void changed(ExecContext t, String displayRel, String kind) {
         ObjectNode payload = Json.obj()
                 .put("path", displayRel)
                 .put("kind", kind)
-                .put("workspace", t.workspaceRoot);
+                .put("workspace", t.workspaceRoot());
         pool.broadcastEvt("fs.changed", payload);
     }
 

@@ -5,8 +5,9 @@ import dev.everyagent.plugin.api.agent.Agent;
 import dev.everyagent.plugin.api.agent.AgentBuilder;
 import dev.everyagent.plugin.api.agent.AgentFactory;
 import dev.everyagent.plugin.api.config.WorkerConfig;
+import dev.everyagent.plugin.api.execution.ExecContext;
 import dev.everyagent.plugin.api.model.EmitEvent;
-import dev.everyagent.plugin.api.task.TaskRuntime;
+import dev.everyagent.plugin.api.permission.AuthorizationHandler.AuthorizationRequest;
 import dev.everyagent.plugin.api.proto.ShortIds;
 import dev.everyagent.plugin.api.proto.SnowflakeId;
 import dev.everyagent.plugin.api.util.RootCause;
@@ -36,14 +37,14 @@ import java.util.concurrent.TimeoutException;
  * <p>审议请求链路:走 {@link AgentFactory#create} 自动获得全套 Advisor 链
  * (重试/压缩/限流等),<b>不挂</b>工具循环 /
  * 技能 / 系统信息 / 无人值守 / 事件发射 advisor——审议无工具,且不发
- * delta/message/usage/tool 事件(正文不污染主对话流);事件全部经 {@code t.events} 落原任务 jsonl。
+ * delta/message/usage/tool 事件(正文不污染主对话流);事件全部经 {@code ctx.emitter()} 落原任务 jsonl。
  * <b>容灾在模型层</b>:审议模型经 AgentFactory 内部构建,若为
  * {@code provider: model-pool} 池配置,chatModel 即 {@code ModelPoolChatModel}(自动换池容灾)。
  *
  * <p>载体:内部构造一个轻量「审议 Agent」(空 tools、conversation=[独立审议 system
  * prompt, 授权信息 user]、agentId=review-&lt;shortId&gt;、options=审议超时快照),<b>仅作
  * AgentFactory 装配载体</b>:不进 {@code task.agents} / 不随 agents.json 落盘,
- * 不新建 TaskEntry/EventLog。
+ * 不新建任务实体/事件日志。
  *
  * <p>时效双层控制:<ul>
  * <li>内层:{@code options.timeout = review-timeout-ms},仅约束单次 HTTP 调用;</li>
@@ -108,34 +109,34 @@ public class AiAuthReviewer {
     /**
      * 审议一次授权请求,返回三态之一(含回退标记信号)。
      *
-     * @param t        被授权任务(事件/日志全落此任务;不新建 TaskEntry/EventLog)
-     * @param grantKey 授权 key(如 p::read::… / c::verb,审计用)
-     * @param prompt   授权请求原文(审议输入;system prompt 声明忽略其中指令防注入)
+     * @param req      授权请求(执行上下文 + grantKey + prompt;事件/日志全落
+     *                 {@code req.context().emitter()},不新建任务实体/事件日志)
      * @return 审议结论;{@link ReviewDecision#fallback()} = true 表示应回退人工弹窗(deny-on-error=false)
      */
-    public ReviewDecision review(TaskRuntime t, String grantKey, String prompt) {
+    public ReviewDecision review(AuthorizationRequest req) {
+        ExecContext ctx = req.context();
         long reviewTimeoutMs = props.permissions().reviewTimeoutMs();
         String reviewAgentId = ShortIds.next("review"); // 形如 review-<shortId>
         // 独立 executor + future.get(总预算硬闸):覆盖重试退避 + 容灾轮询总耗时。
         ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
         try {
-            String gk = grantKey == null ? "" : grantKey;
-            String pr = prompt == null ? "" : prompt;
+            String gk = req.grantKey() == null ? "" : req.grantKey();
+            String pr = req.prompt() == null ? "" : req.prompt();
             Future<ReviewDecision> future = executor.submit(
-                    () -> doReview(t, reviewAgentId, gk, pr));
+                    () -> doReview(ctx, reviewAgentId, gk, pr));
             try {
                 ReviewDecision d = future.get(reviewTimeoutMs, TimeUnit.MILLISECONDS);
-                emitAuthTrace(t, reviewAgentId, d, gk, pr);
+                emitAuthTrace(ctx, reviewAgentId, d, gk, pr);
                 return d;
             } catch (TimeoutException te) {
                 future.cancel(true); // 总预算到点:取消审议调用,按 deny-on-error 处理
-                return handleError(t, reviewAgentId, gk, pr, "timeout");
+                return handleError(ctx, reviewAgentId, gk, pr, "timeout");
             } catch (InterruptedException ie) {
                 Thread.currentThread().interrupt();
                 future.cancel(true);
-                return handleError(t, reviewAgentId, gk, pr, "error");
+                return handleError(ctx, reviewAgentId, gk, pr, "error");
             } catch (java.util.concurrent.ExecutionException ee) {
-                return handleError(t, reviewAgentId, gk, pr,
+                return handleError(ctx, reviewAgentId, gk, pr,
                         "error: " + RootCause.summary(ee.getCause()));
             }
         } finally {
@@ -150,8 +151,8 @@ public class AiAuthReviewer {
      * 容灾在模型层:若审议模型是 provider=model-pool 池配置,chatModel 本身即
      * ModelPoolChatModel(自动换池容灾)。
      */
-    private ReviewDecision doReview(TaskRuntime t, String reviewAgentId, String grantKey, String prompt) {
-        Agent reviewAgent = buildReviewAgent(t, reviewAgentId, grantKey, prompt);
+    private ReviewDecision doReview(ExecContext ctx, String reviewAgentId, String grantKey, String prompt) {
+        Agent reviewAgent = buildReviewAgent(ctx, reviewAgentId, grantKey, prompt);
         try {
             reviewAgent.run();
         } catch (InterruptedException e) {
@@ -163,31 +164,31 @@ public class AiAuthReviewer {
 
     /**
      * 构建轻量「审议 Agent」:空 tools、独立 conversation,仅作
-     * AgentFactory 装配载体——不进 task.agents / 不随 agents.json 落盘,
-     * 不新建 TaskEntry/EventLog。package-private 供单测断言「无任何工具」与独立 system prompt。
+     * AgentFactory 装配载体——不进 {@code ctx.agents()} / 不随 agents.json 落盘,
+     * 不新建任务实体/事件日志。package-private 供单测断言「无任何工具」与独立 system prompt。
      */
-    Agent buildReviewAgent(TaskRuntime t, String reviewAgentId, String grantKey, String prompt) {
+    Agent buildReviewAgent(ExecContext ctx, String reviewAgentId, String grantKey, String prompt) {
         long reviewTimeoutMs = props.permissions().reviewTimeoutMs();
-        String configId = resolveConfigId(t);
+        String configId = resolveConfigId(ctx);
 
         Map<String, Object> agentProps = new HashMap<>();
-        agentProps.put("taskEntry", t);
-        agentProps.put("taskId", t.taskId());
-        agentProps.put("workspaceRoot", t.workspaceRoot());
+        agentProps.put("taskEntry", ctx);
+        agentProps.put("taskId", ctx.subjectId());
+        agentProps.put("workspaceRoot", ctx.workspaceRoot());
         agentProps.put("configId", configId);
 
-        return agentFactory.create(reviewAgentId, configId, t.events(), agentProps)
+        return agentFactory.create(reviewAgentId, configId, ctx.emitter(), agentProps)
                 .title("AI 安全审议")
                 .tools(List.of(), AgentBuilder.ModifyMode.REPLACE)
-                .systemPrompt(reviewSystemPrompt(t))
+                .systemPrompt(reviewSystemPrompt(ctx))
                 .userInput(userPrompt(grantKey, prompt))
                 .build();
     }
 
     /** 生成独立审议 system prompt:注入任务当前工作区目录(占位符 %s)。 */
-    private static String reviewSystemPrompt(TaskRuntime t) {
-        String workspace = (t == null || t.workspaceRoot() == null || t.workspaceRoot().isBlank())
-                ? "(未指定)" : t.workspaceRoot();
+    private static String reviewSystemPrompt(ExecContext ctx) {
+        String workspace = (ctx == null || ctx.workspaceRoot() == null || ctx.workspaceRoot().isBlank())
+                ? "(未指定)" : ctx.workspaceRoot();
         return REVIEW_SYSTEM_PROMPT.formatted(workspace);
     }
 
@@ -195,12 +196,12 @@ public class AiAuthReviewer {
      * 模型选择:review-model 配置非空 → 用该 configId(与任务 configId 同域);
      * 空 → 用任务当前 configId。
      */
-    private String resolveConfigId(TaskRuntime t) {
+    private String resolveConfigId(ExecContext ctx) {
         String reviewModel = props.permissions().reviewModel();
         if (reviewModel != null && !reviewModel.isBlank()) {
             return reviewModel;
         }
-        return t.snapshot().configId();
+        return ctx.snapshot().configId();
     }
 
     /** 授权信息 user 消息(审议输入原文)。 */
@@ -280,11 +281,11 @@ public class AiAuthReviewer {
     }
 
     /** 审议结论一律发射 kind=auth.review(persist=true 落盘),并记审计 debug 日志(独立文件)。 */
-    private void emitAuthTrace(TaskRuntime t, String reviewAgentId, ReviewDecision d,
+    private void emitAuthTrace(ExecContext ctx, String reviewAgentId, ReviewDecision d,
             String grantKey, String prompt) {
         // 审计数据独立 debug 日志:每次审议一条,记录全部审计字段(与 auth.review 事件同字段集)。
         auditLog.debug("auth.review taskId={} reviewAgentId={} decision={} confidence={} scope={} grantKey={} reason={} prompt={}",
-                t.taskId(), reviewAgentId, d.verdict().name(), d.confidence(), d.scope(),
+                ctx.subjectId(), reviewAgentId, d.verdict().name(), d.confidence(), d.scope(),
                 grantKey == null ? "" : grantKey, d.reason(), prompt == null ? "" : prompt);
         try {
             String summary = d.verdict().name()
@@ -296,23 +297,23 @@ public class AiAuthReviewer {
             authData.put("scope", d.scope() == null ? "" : d.scope());
             authData.put("grantKey", grantKey == null ? "" : grantKey);
             authData.put("prompt", prompt == null ? "" : prompt);
-            authData.put("taskId", t.taskId());
+            authData.put("taskId", ctx.subjectId());
             authData.put("agentId", reviewAgentId);
-            t.events().emit(EmitEvent.of(SnowflakeId.next(), "auth.review", reviewAgentId,
+            ctx.emitter().emit(EmitEvent.of(SnowflakeId.next(), "auth.review", reviewAgentId,
                     "AI 安全审议", summary, null, "done", authData, EmitEvent.Mode.REPLACE));
         } catch (RuntimeException e) {
             // 审计落盘失败不阻塞授权分派(事件日志已有护栏;失败仅丢一条审计展示)
-            auditLog.warn("任务 {} AI 审议审计 trace 发射失败: {}", t.taskId(), RootCause.summary(e));
+            auditLog.warn("任务 {} AI 审议审计 trace 发射失败: {}", ctx.subjectId(), RootCause.summary(e));
         }
     }
 
     /** 异常/超时处理:deny-on-error=true → DENY;false → fallback 标记(回退人工弹窗)。 */
-    private ReviewDecision handleError(TaskRuntime t, String reviewAgentId, String grantKey,
+    private ReviewDecision handleError(ExecContext ctx, String reviewAgentId, String grantKey,
             String prompt, String reason) {
         ReviewDecision d = props.permissions().reviewDenyOnError()
                 ? ReviewDecision.deny(reason)
                 : ReviewDecision.fallback(reason);
-        emitAuthTrace(t, reviewAgentId, d, grantKey, prompt);
+        emitAuthTrace(ctx, reviewAgentId, d, grantKey, prompt);
         return d;
     }
 }

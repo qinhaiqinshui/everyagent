@@ -5,6 +5,7 @@ import dev.everyagent.plugin.api.task.TaskKernel;
 import dev.everyagent.plugin.api.task.TaskLifecycleContext;
 import dev.everyagent.plugin.api.task.TaskLifecycleNode;
 import dev.everyagent.plugin.api.task.TaskOutcome;
+import dev.everyagent.plugin.api.task.TaskRuntime;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.BeforeEach;
 
@@ -271,7 +272,7 @@ class TaskLifecycleExecutorTest {
         @Override public String workspaceId() { return "ws"; }
         @Override public String mainAgentId() { return "main"; }
         @Override public String status() { return "running"; }
-        @Override public dev.everyagent.plugin.api.permission.TaskInfo taskInfo() { return null; }
+        @Override public TaskRuntime taskInfo() { return null; }
         @Override public Object taskLock() { return this; }
         @Override public long startedAt() { return 0; }
         @Override public void startedAt(long ms) { }

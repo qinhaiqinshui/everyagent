@@ -6,6 +6,7 @@ import dev.everyagent.plugin.api.agent.AgentBuilder;
 import dev.everyagent.plugin.api.agent.AgentContext;
 import dev.everyagent.plugin.api.agent.AgentFactory;
 import dev.everyagent.plugin.api.config.WorkerConfig;
+import dev.everyagent.plugin.api.permission.AuthorizationHandler;
 import dev.everyagent.plugin.api.event.EventLogReader;
 import dev.everyagent.plugin.api.event.EventRecord;
 import dev.everyagent.plugin.api.model.EmitEvent;
@@ -97,6 +98,11 @@ class AiAuthReviewerTest {
         return new RecordingTaskRuntime("t-1", snap);
     }
 
+    /** 组装授权请求桩(agentId 不参与审议,置 null)。 */
+    private AuthorizationHandler.AuthorizationRequest req(String grantKey, String prompt) {
+        return new AuthorizationHandler.AuthorizationRequest(task, null, grantKey, prompt);
+    }
+
     private AiAuthReviewer reviewer(String content) {
         lastTextHolder.set(content);
         runAction.set(null);
@@ -125,7 +131,7 @@ class AiAuthReviewerTest {
     @Test
     void parsesAllow() {
         ReviewDecision d = reviewer("{\"decision\":\"ALLOW\",\"confidence\":0.9,\"reason\":\"安全\"}")
-                .review(task, "c::del", "AI 请求删除工作区外文件");
+                .review(req("c::del", "AI 请求删除工作区外文件"));
         assertEquals(ReviewDecision.Verdict.ALLOW, d.verdict());
         assertFalse(d.fallback());
         assertEquals(0.9, d.confidence());
@@ -137,7 +143,7 @@ class AiAuthReviewerTest {
     @Test
     void parsesDenyCaseInsensitive() {
         ReviewDecision d = reviewer("{\"decision\":\"deny\",\"confidence\":\"0.2\",\"reason\":\"危险\"}")
-                .review(task, "c::rm", "AI 请求 rm -rf");
+                .review(req("c::rm", "AI 请求 rm -rf"));
         assertEquals(ReviewDecision.Verdict.DENY, d.verdict());
         assertFalse(d.fallback());
         assertEquals(0.2, d.confidence());
@@ -148,7 +154,7 @@ class AiAuthReviewerTest {
     @Test
     void parsesEscalate() {
         ReviewDecision d = reviewer("{\"decision\":\"ESCALATE\",\"confidence\":0.5,\"reason\":\"不确定\"}")
-                .review(task, "p::read::x", "AI 请求读取工作区外路径");
+                .review(req("p::read::x", "AI 请求读取工作区外路径"));
         assertEquals(ReviewDecision.Verdict.ESCALATE, d.verdict());
         assertFalse(d.fallback());
         assertEquals("deny", d.scope());
@@ -159,7 +165,7 @@ class AiAuthReviewerTest {
     @Test
     void parsesJsonInsideMarkdownFence() {
         ReviewDecision d = reviewer("```json\n  {\"decision\":\"ALLOW\",\"confidence\":0.8,\"reason\":\"ok\"}  \n```")
-                .review(task, "c::del", "AI 请求");
+                .review(req("c::del", "AI 请求"));
         assertEquals(ReviewDecision.Verdict.ALLOW, d.verdict());
     }
 
@@ -167,7 +173,7 @@ class AiAuthReviewerTest {
 
     @Test
     void nonJsonDefaultsToDeny() {
-        ReviewDecision d = reviewer("不好意思我无法判断").review(task, "c::del", "AI 请求");
+        ReviewDecision d = reviewer("不好意思我无法判断").review(req("c::del", "AI 请求"));
         assertEquals(ReviewDecision.Verdict.DENY, d.verdict());
         assertFalse(d.fallback());
         assertTrue(d.reason().contains("非 JSON"), d.reason());
@@ -176,7 +182,7 @@ class AiAuthReviewerTest {
 
     @Test
     void emptyResponseDefaultsToDeny() {
-        ReviewDecision d = reviewer("").review(task, "c::del", "AI 请求");
+        ReviewDecision d = reviewer("").review(req("c::del", "AI 请求"));
         assertEquals(ReviewDecision.Verdict.DENY, d.verdict());
         assertTrue(d.reason().contains("空响应"), d.reason());
         assertAuthTrace("DENY", null);
@@ -184,7 +190,7 @@ class AiAuthReviewerTest {
 
     @Test
     void missingDecisionFieldDefaultsToDeny() {
-        ReviewDecision d = reviewer("{\"confidence\":0.9,\"reason\":\"无结论\"}").review(task, "c::del", "AI 请求");
+        ReviewDecision d = reviewer("{\"confidence\":0.9,\"reason\":\"无结论\"}").review(req("c::del", "AI 请求"));
         assertEquals(ReviewDecision.Verdict.DENY, d.verdict());
         assertFalse(d.fallback());
         assertTrue(d.reason().contains("缺 decision"), d.reason());
@@ -192,7 +198,7 @@ class AiAuthReviewerTest {
 
     @Test
     void illegalDecisionValueDefaultsToDeny() {
-        ReviewDecision d = reviewer("{\"decision\":\"MAYBE\"}").review(task, "c::del", "AI 请求");
+        ReviewDecision d = reviewer("{\"decision\":\"MAYBE\"}").review(req("c::del", "AI 请求"));
         assertEquals(ReviewDecision.Verdict.DENY, d.verdict());
         assertTrue(d.reason().contains("非法 decision"), d.reason());
     }
@@ -204,7 +210,7 @@ class AiAuthReviewerTest {
         when(props.permissions().reviewTimeoutMs()).thenReturn(100L);
         when(props.permissions().reviewDenyOnError()).thenReturn(true);
         long start = System.currentTimeMillis();
-        ReviewDecision d = hangReviewer(5_000).review(task, "c::del", "AI 请求");
+        ReviewDecision d = hangReviewer(5_000).review(req("c::del", "AI 请求"));
         assertTrue(System.currentTimeMillis() - start < 5_000, "外层总预算硬闸应提前返回");
         assertEquals(ReviewDecision.Verdict.DENY, d.verdict());
         assertFalse(d.fallback());
@@ -217,7 +223,7 @@ class AiAuthReviewerTest {
     void totalBudgetTimeoutFallsBackWhenDenyOnErrorFalse() {
         when(props.permissions().reviewTimeoutMs()).thenReturn(100L);
         when(props.permissions().reviewDenyOnError()).thenReturn(false);
-        ReviewDecision d = hangReviewer(5_000).review(task, "c::del", "AI 请求");
+        ReviewDecision d = hangReviewer(5_000).review(req("c::del", "AI 请求"));
         assertEquals(ReviewDecision.Verdict.DENY, d.verdict());
         assertTrue(d.fallback(), "deny-on-error=false 应返回 fallback 标记(回退人工弹窗)");
         assertTrue(d.reason().contains("timeout"), d.reason());
@@ -229,7 +235,7 @@ class AiAuthReviewerTest {
     @Test
     void modelErrorDeniesByDefault() {
         when(props.permissions().reviewDenyOnError()).thenReturn(true);
-        ReviewDecision d = failReviewer().review(task, "c::del", "AI 请求");
+        ReviewDecision d = failReviewer().review(req("c::del", "AI 请求"));
         assertEquals(ReviewDecision.Verdict.DENY, d.verdict());
         assertFalse(d.fallback());
         assertTrue(d.reason().contains("error"), d.reason());
@@ -239,7 +245,7 @@ class AiAuthReviewerTest {
     @Test
     void modelErrorFallsBackWhenDenyOnErrorFalse() {
         when(props.permissions().reviewDenyOnError()).thenReturn(false);
-        ReviewDecision d = failReviewer().review(task, "c::del", "AI 请求");
+        ReviewDecision d = failReviewer().review(req("c::del", "AI 请求"));
         assertEquals(ReviewDecision.Verdict.DENY, d.verdict());
         assertTrue(d.fallback(), "deny-on-error=false 应回退人工(fallback 标记)");
         assertTrue(d.reason().contains("error"), d.reason());
@@ -249,7 +255,7 @@ class AiAuthReviewerTest {
 
     @Test
     void doesNotCreateNewTaskEntryOrEventLog() {
-        reviewer("{\"decision\":\"ALLOW\"}").review(task, "c::del", "AI 请求");
+        reviewer("{\"decision\":\"ALLOW\"}").review(req("c::del", "AI 请求"));
         assertTrue(task.agents().isEmpty(), "审议不复用/新建子 agent 集合");
         assertNotNull(authTracePayload(), "原任务应有 auth.review trace");
         assertTrue(authTraceEvent().ext().path("persist").asBoolean(),

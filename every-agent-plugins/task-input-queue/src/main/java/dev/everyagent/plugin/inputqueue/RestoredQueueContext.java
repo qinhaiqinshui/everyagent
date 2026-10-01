@@ -1,6 +1,6 @@
 package dev.everyagent.plugin.inputqueue;
 
-import dev.everyagent.plugin.api.permission.TaskInfo;
+import dev.everyagent.plugin.api.task.TaskRuntime;
 import dev.everyagent.plugin.api.task.TaskLifecycleContext;
 
 import java.util.Map;
@@ -39,7 +39,7 @@ final class RestoredQueueContext implements TaskLifecycleContext {
     @Override public String workspaceId() { return null; }
     @Override public String mainAgentId() { return null; }
     @Override public String status() { return null; }
-    @Override public TaskInfo taskInfo() { return null; }
+    @Override public TaskRuntime taskInfo() { return null; }
     @Override public Object taskLock() { return null; }
     @Override public long startedAt() { return 0; }
     @Override public void startedAt(long ms) { }

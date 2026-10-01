@@ -27,8 +27,8 @@ public interface TaskLifecycleContext {
     /** 当前任务状态（wire 字符串："created"/"running"/"waiting-user"/"done"/"failed"/"cancelled"）。 */
     String status();
 
-    /** 任务信息（向上转型的 TaskInfo，可访问任务级持久化 metadata）。 */
-    dev.everyagent.plugin.api.permission.TaskInfo taskInfo();
+    /** 任务运行时（TaskEntry 的窄面：可访问任务级持久化 metadata 及运行时能力；早期节点尚未创建任务时为 null）。 */
+    TaskRuntime taskInfo();
 
     /** 任务同步原语（锁内节点上行段自行 synchronized）。 */
     Object taskLock();
@@ -63,10 +63,10 @@ public interface TaskLifecycleContext {
 
     /**
      * 任务级持久化数据（便捷方法，委托给 {@link #taskInfo()}).
-     * @return TaskInfo 的 metadata Map，或 taskInfo() 为 null 时返回 null
+     * @return 任务运行时的 metadata Map，或 taskInfo() 为 null 时返回 null
      */
     default java.util.Map<String, Object> metadata() {
-        dev.everyagent.plugin.api.permission.TaskInfo info = taskInfo();
+        TaskRuntime info = taskInfo();
         return info != null ? info.metadata() : null;
     }
 
@@ -93,13 +93,11 @@ public interface TaskLifecycleContext {
     // ---- 运行时访问 ----
 
     /**
-     * 获取任务运行时（TaskRuntime，向上转型的 TaskInfo）。
-     * <p>与 {@link #taskInfo()} 的区别：返回 {@link TaskRuntime}（继承 TaskInfo），
-     * 插件可访问 agents / events / log / fileChanges 等运行时能力。
+     * 获取任务运行时（与 {@link #taskInfo()} 同一对象的语义别名，保留既有插件调用点）。
+     * <p>插件可访问 agents / events / log / fileChanges 等运行时能力。
      * taskEntry 尚未创建时返回 null（RPC 阶段早期节点）。
      */
     default TaskRuntime taskRuntime() {
-        dev.everyagent.plugin.api.permission.TaskInfo info = taskInfo();
-        return info instanceof TaskRuntime ? (TaskRuntime) info : null;
+        return taskInfo();
     }
 }

@@ -1,7 +1,5 @@
 package dev.everyagent.plugin.api.task;
 
-import dev.everyagent.plugin.api.permission.TaskInfo;
-
 /**
  * 任务服务 —— 插件经 {@link dev.everyagent.plugin.api.WorkerServices#task()} 访问。
  *
@@ -13,7 +11,7 @@ public interface TaskService {
 
     /**
      * 获取运行中任务运行时（内存驻留任务；不存在/已终态驱逐返回 null）。
-     * <p>返回 {@link TaskRuntime}（继承 {@link TaskInfo}），插件可访问 agents / events / log 等运行时能力。
+     * <p>返回 {@link TaskRuntime}（继承 {@link dev.everyagent.plugin.api.execution.ExecContext}），插件可访问 agents / events / log 等运行时能力。
      */
     TaskRuntime get(String taskId);
 

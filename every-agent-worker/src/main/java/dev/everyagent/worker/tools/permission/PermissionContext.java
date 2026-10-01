@@ -1,6 +1,6 @@
 package dev.everyagent.worker.tools.permission;
 
-import dev.everyagent.worker.task.TaskEntry;
+import dev.everyagent.plugin.api.permission.AuthorizationHandler.AuthorizationRequest;
 import dev.everyagent.worker.tools.PermissionGate.Op;
 
 import java.nio.file.Path;
@@ -16,6 +16,10 @@ import java.util.Objects;
  * </ul>
  * realPath 为「授权根粒度」的 realpath(目标提升到父目录后),WorkspaceAllowCheck /
  * OverBroadRootCheck 以此判定;wsLex/wsReal 为工作区词法根/realpath。
+ *
+ * <p>域中性(§6.4):不携带 worker {@code TaskEntry}——路径判定用 {@code workspaceRoot}
+ * 字符串,授权决议字段经 {@code authReq}(AuthorizationRequest,内含 ExecContext)
+ * 由 AuthorizeCheck/CommandCheck/PrivilegeCheck 透传给 {@link GrantRegistry}。
  */
 public final class PermissionContext {
 
@@ -23,7 +27,8 @@ public final class PermissionContext {
     public enum Kind { PATH, COMMAND, PRIVILEGE, PRIVILEGE_EXEC }
 
     private final Kind kind;
-    private final TaskEntry task;
+    private final String workspaceRoot;
+    private final AuthorizationRequest authReq;
     private final String agentId;
     private final Op op;
     private final String rel;
@@ -40,7 +45,8 @@ public final class PermissionContext {
 
     private PermissionContext(Builder b) {
         this.kind = Objects.requireNonNull(b.kind, "kind");
-        this.task = b.task;
+        this.workspaceRoot = b.workspaceRoot;
+        this.authReq = b.authReq;
         this.agentId = b.agentId;
         this.op = b.op;
         this.rel = b.rel;
@@ -57,7 +63,10 @@ public final class PermissionContext {
     }
 
     public Kind kind() { return kind; }
-    public TaskEntry task() { return task; }
+    /** 工作区根路径(路径判定用;域中性字符串,非 TaskEntry)。 */
+    public String workspaceRoot() { return workspaceRoot; }
+    /** 授权决议请求(内含 ExecContext;责任链节点透传给 GrantRegistry 用)。 */
+    public AuthorizationRequest authReq() { return authReq; }
     public String agentId() { return agentId; }
     public Op op() { return op; }
     public String rel() { return rel; }
@@ -72,13 +81,25 @@ public final class PermissionContext {
     public String command() { return command; }
     public String execPath() { return execPath; }
 
+    /**
+     * 以本上下文为模板组装授权请求:沿用 {@link #authReq()} 携带的 ExecContext 与
+     * {@link #agentId()},替换授权专属参数(grantKey/prompt)。命令/提权链节点
+     * 按候选逐个组装时使用(CommandCheck/PrivilegeCheck)。
+     */
+    public AuthorizationRequest authRequest(String grantKey, String prompt) {
+        AuthorizationRequest base = authReq;
+        return new AuthorizationRequest(base != null ? base.context() : null,
+                agentId, grantKey, prompt);
+    }
+
     public static Builder builder() {
         return new Builder();
     }
 
     public static final class Builder {
         private Kind kind;
-        private TaskEntry task;
+        private String workspaceRoot;
+        private AuthorizationRequest authReq;
         private String agentId;
         private Op op;
         private String rel;
@@ -94,7 +115,8 @@ public final class PermissionContext {
         private String execPath;
 
         public Builder kind(Kind kind) { this.kind = kind; return this; }
-        public Builder task(TaskEntry task) { this.task = task; return this; }
+        public Builder workspaceRoot(String workspaceRoot) { this.workspaceRoot = workspaceRoot; return this; }
+        public Builder authReq(AuthorizationRequest authReq) { this.authReq = authReq; return this; }
         public Builder agentId(String agentId) { this.agentId = agentId; return this; }
         public Builder op(Op op) { this.op = op; return this; }
         public Builder rel(String rel) { this.rel = rel; return this; }

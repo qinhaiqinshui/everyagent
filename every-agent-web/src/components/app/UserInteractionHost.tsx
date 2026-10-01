@@ -340,6 +340,13 @@ export default function UserInteractionHost() {
           {currentQuestion ? (
             <React.Fragment key={currentQuestion.id}>
               {currentQuestion.details ? <div style={questionDetailsStyle}>{currentQuestion.details}</div> : null}
+              {currentQuestion.fields && Object.keys(currentQuestion.fields).length > 0 ? (
+                <div style={infoBlockStyle}>
+                  {Object.entries(currentQuestion.fields).map(([label, value]) => (
+                    <div key={label} style={infoLineStyle}>{label}: {value}</div>
+                  ))}
+                </div>
+              ) : null}
               <div style={optionListStyle}>
                 {currentQuestion.options.map((option) => {
                   const checked = currentSelectedIds.includes(option.id)

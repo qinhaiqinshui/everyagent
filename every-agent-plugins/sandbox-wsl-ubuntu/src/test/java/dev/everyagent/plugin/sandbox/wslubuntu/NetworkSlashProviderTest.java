@@ -31,7 +31,7 @@ import static org.mockito.Mockito.when;
 /**
  * NetworkSlashProvider 单测:`/` 候选 id=network:on;select 返回单个 bottom 结果
  * (token 可 parse 为 kind=network.access);taskId 非空时置
- * {@code TaskInfo.metadata["networkBlocked"]=true} 并广播 task.updated;taskId 为空
+ * {@code ExecContext.metadata["networkBlocked"]=true} 并广播 task.updated;taskId 为空
  * (草稿态)不写业务标记仍返回胶囊;cancel 复位;非 wsl-ubuntu 后端不提供该命令
  * (真断网只有本后端做得到)。
  *
