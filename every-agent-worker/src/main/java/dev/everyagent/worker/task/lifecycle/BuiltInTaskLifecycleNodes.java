@@ -2,6 +2,7 @@ package dev.everyagent.worker.task.lifecycle;
 
 import dev.everyagent.worker.hub.HubPool;
 import dev.everyagent.worker.modules.WorkspaceActivityTracker;
+import dev.everyagent.worker.plugin.registry.FileReferenceHandlerRegistry;
 import dev.everyagent.worker.plugin.registry.TaskLifecycleRegistry;
 import dev.everyagent.worker.ship.StreamSourceRegistry;
 import dev.everyagent.worker.slash.SlashTaskCallbacks;
@@ -19,7 +20,7 @@ import org.springframework.stereotype.Component;
  *   → queue.admission(40) → taskentry.create(50) → rerun.restore(55)
  *   → slash.notify(60) → response.ack(70) → thread.submit(80)
  *   → persistence.track(100) → task.wires(200) → model.switch.trace(310)
- *   → main.agent(390) → status.down(840)
+ *   → main.agent(390) → file.reference.process(395.4) → consume.input(396) → status.down(840)
  * 内核: 轮次循环
  * 上行: spawned.await(950) → cascade.stop(900)
  *   → [临界段: status(840) → concurrency.release(800) → log.flush(750)
@@ -38,6 +39,7 @@ public class BuiltInTaskLifecycleNodes {
     private final InteractionServiceImpl asks;
     private final WorkspaceActivityTracker activityTracker;
     private final SlashTaskCallbacks slashCallbacks;
+    private final FileReferenceHandlerRegistry fileReferenceHandlerRegistry;
 
     public BuiltInTaskLifecycleNodes(
             TaskLifecycleRegistry registry,
@@ -47,7 +49,8 @@ public class BuiltInTaskLifecycleNodes {
             PermissionGate gate,
             InteractionServiceImpl asks,
             WorkspaceActivityTracker activityTracker,
-            SlashTaskCallbacks slashCallbacks) {
+            SlashTaskCallbacks slashCallbacks,
+            FileReferenceHandlerRegistry fileReferenceHandlerRegistry) {
         this.registry = registry;
         this.store = store;
         this.pool = pool;
@@ -56,6 +59,7 @@ public class BuiltInTaskLifecycleNodes {
         this.asks = asks;
         this.activityTracker = activityTracker;
         this.slashCallbacks = slashCallbacks;
+        this.fileReferenceHandlerRegistry = fileReferenceHandlerRegistry;
     }
 
     @PostConstruct
@@ -67,6 +71,7 @@ public class BuiltInTaskLifecycleNodes {
         registry.register(new TaskWiresNode(pool), "worker");
         registry.register(new ModelSwitchTraceNode(), "worker");
         registry.register(new MainAgentNode(), "worker");
+        registry.register(new FileReferenceProcessNode(fileReferenceHandlerRegistry), "worker");
         registry.register(new ConsumeInputNode(), "worker");
         // 成对节点（下行在段边界外、上行在临界段内）
         registry.register(new StatusNode(pool), "worker");       // order=840

@@ -56,6 +56,8 @@ public class BuiltInAdvisorProviders {
         // 功能 Advisor（100─199）
         registry.register(new SkillAdvisorProvider(skillAdvisor));
         registry.register(new SlashTokenResolveAdvisorProvider(slashTokenHandler));
+        // 文件附件注入（读 metadata.attachments → 末位 UserMessage 重建为多模态消息）
+        registry.register(new FileAttachmentAdvisorProvider());
 
         // 事件发射 / 文件跟踪（200─399）
         // LoopRepeatGuardAdvisorProvider 已移除，死循环守卫改由 AgentClientFactory 在组装入口装饰 TCM 承担；

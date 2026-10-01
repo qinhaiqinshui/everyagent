@@ -9,6 +9,7 @@ import dev.everyagent.plugin.api.skill.SkillContributor;
 import dev.everyagent.plugin.api.slash.SlashProvider;
 import dev.everyagent.plugin.api.slash.SlashTokenResolver;
 import dev.everyagent.plugin.api.spi.AdvisorProvider;
+import dev.everyagent.plugin.api.spi.FileReferenceHandler;
 import dev.everyagent.plugin.api.spi.SandboxProvider;
 import dev.everyagent.plugin.api.spi.SearchProvider;
 import dev.everyagent.plugin.api.spi.TokenEstimator;
@@ -20,6 +21,7 @@ import dev.everyagent.plugin.api.task.TaskLifecycleNode;
 import dev.everyagent.worker.plugin.registry.AdvisorProviderRegistry;
 import dev.everyagent.worker.plugin.registry.AuthorizationHandlerRegistry;
 import dev.everyagent.worker.plugin.registry.ChatModelEnhancerRegistry;
+import dev.everyagent.worker.plugin.registry.FileReferenceHandlerRegistry;
 import dev.everyagent.worker.plugin.registry.SandboxProviderRegistry;
 import dev.everyagent.worker.plugin.registry.SearchProviderRegistry;
 import dev.everyagent.worker.plugin.registry.SkillContributorRegistry;
@@ -62,6 +64,7 @@ public class WorkerPluginContextImpl implements WorkerPluginContext {
     private final ChatModelEnhancerRegistry chatModelEnhancerRegistry;
     private final TaskAdmissionPolicyRegistry admissionPolicyRegistry;
     private final SkillContributorRegistry skillContributorRegistry;
+    private final FileReferenceHandlerRegistry fileReferenceHandlerRegistry;
     private final RpcDispatcher rpcDispatcher;
     private final SlashCommandRegistry slashRegistry;
     private final SlashTokenHandler slashTokenHandler;
@@ -81,6 +84,7 @@ public class WorkerPluginContextImpl implements WorkerPluginContext {
             ChatModelEnhancerRegistry chatModelEnhancerRegistry,
             TaskAdmissionPolicyRegistry admissionPolicyRegistry,
             SkillContributorRegistry skillContributorRegistry,
+            FileReferenceHandlerRegistry fileReferenceHandlerRegistry,
             RpcDispatcher rpcDispatcher,
             SlashCommandRegistry slashRegistry,
             SlashTokenHandler slashTokenHandler,
@@ -99,6 +103,7 @@ public class WorkerPluginContextImpl implements WorkerPluginContext {
         this.chatModelEnhancerRegistry = chatModelEnhancerRegistry;
         this.admissionPolicyRegistry = admissionPolicyRegistry;
         this.skillContributorRegistry = skillContributorRegistry;
+        this.fileReferenceHandlerRegistry = fileReferenceHandlerRegistry;
         this.rpcDispatcher = rpcDispatcher;
         this.slashRegistry = slashRegistry;
         this.slashTokenHandler = slashTokenHandler;
@@ -171,6 +176,11 @@ public class WorkerPluginContextImpl implements WorkerPluginContext {
     @Override
     public void registerSkillContributor(SkillContributor contributor) {
         skillContributorRegistry.register(contributor);
+    }
+
+    @Override
+    public void registerFileReferenceHandler(FileReferenceHandler handler) {
+        fileReferenceHandlerRegistry.register(handler);
     }
 
     @Override

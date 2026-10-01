@@ -6,6 +6,7 @@ import dev.everyagent.plugin.api.skill.SkillContributor;
 import dev.everyagent.plugin.api.slash.SlashProvider;
 import dev.everyagent.plugin.api.slash.SlashTokenResolver;
 import dev.everyagent.plugin.api.spi.AdvisorProvider;
+import dev.everyagent.plugin.api.spi.FileReferenceHandler;
 import dev.everyagent.plugin.api.spi.SandboxProvider;
 import dev.everyagent.plugin.api.spi.SearchProvider;
 import dev.everyagent.plugin.api.spi.TokenEstimator;
@@ -70,6 +71,9 @@ public interface WorkerPluginContext {
 
     /** 注册 ChatModelEnhancer（模型构建增强器，如模型池容灾）。 */
     void registerChatModelEnhancer(ChatModelEnhancer enhancer);
+
+    /** 注册 FileReferenceHandler（文件引用处理器，按扩展名处理 @ 文件引用）。 */
+    void registerFileReferenceHandler(FileReferenceHandler handler);
 
     // ── 通用扩展注册 ──
 

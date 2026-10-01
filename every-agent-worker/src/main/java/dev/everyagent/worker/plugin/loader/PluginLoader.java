@@ -10,6 +10,7 @@ import dev.everyagent.plugin.api.WorkerServices;
 import dev.everyagent.worker.plugin.registry.AdvisorProviderRegistry;
 import dev.everyagent.worker.plugin.registry.AuthorizationHandlerRegistry;
 import dev.everyagent.worker.plugin.registry.ChatModelEnhancerRegistry;
+import dev.everyagent.worker.plugin.registry.FileReferenceHandlerRegistry;
 import dev.everyagent.worker.plugin.registry.SandboxProviderRegistry;
 import dev.everyagent.worker.plugin.registry.SearchProviderRegistry;
 import dev.everyagent.worker.plugin.registry.SkillContributorRegistry;
@@ -94,6 +95,7 @@ public class PluginLoader {
     private final ChatModelEnhancerRegistry chatModelEnhancerRegistry;
     private final TaskAdmissionPolicyRegistry admissionPolicyRegistry;
     private final SkillContributorRegistry skillContributorRegistry;
+    private final FileReferenceHandlerRegistry fileReferenceHandlerRegistry;
     private final RpcDispatcher rpcDispatcher;
     private final SlashCommandRegistry slashRegistry;
     private final SlashTokenHandler slashTokenHandler;
@@ -115,6 +117,7 @@ public class PluginLoader {
             ChatModelEnhancerRegistry chatModelEnhancerRegistry,
             TaskAdmissionPolicyRegistry admissionPolicyRegistry,
             SkillContributorRegistry skillContributorRegistry,
+            FileReferenceHandlerRegistry fileReferenceHandlerRegistry,
             RpcDispatcher rpcDispatcher,
             SlashCommandRegistry slashRegistry,
             SlashTokenHandler slashTokenHandler,
@@ -132,6 +135,7 @@ public class PluginLoader {
         this.chatModelEnhancerRegistry = chatModelEnhancerRegistry;
         this.admissionPolicyRegistry = admissionPolicyRegistry;
         this.skillContributorRegistry = skillContributorRegistry;
+        this.fileReferenceHandlerRegistry = fileReferenceHandlerRegistry;
         this.rpcDispatcher = rpcDispatcher;
         this.slashRegistry = slashRegistry;
         this.slashTokenHandler = slashTokenHandler;
@@ -306,6 +310,7 @@ public class PluginLoader {
                     lifecycleRegistry, chatModelEnhancerRegistry,
                     admissionPolicyRegistry,
                     skillContributorRegistry,
+                    fileReferenceHandlerRegistry,
                     rpcDispatcher, slashRegistry, slashTokenHandler, services, config, applicationContext);
 
             // 调用 activate()
