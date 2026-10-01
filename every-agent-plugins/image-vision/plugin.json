@@ -1,0 +1,27 @@
+{
+  "id": "image-vision",
+  "name": "图片识别",
+  "version": "0.1.0",
+  "description": "图片文件引用处理：读取 → 压缩 → 转 base64 dataURL 注入视觉模型（依赖模型视觉能力）",
+  "author": "everyagent",
+  "main": "dev.everyagent.plugin.imagevision.ImageVisionPlugin",
+  "contributes": {
+    "config": {
+      "image-vision.enabled": {
+        "type": "boolean",
+        "default": true,
+        "description": "图片注入开关：false = 图片 @ 引用退化为纯路径文本（不读取、不注入）"
+      },
+      "image-vision.max-size-mb": {
+        "type": "number",
+        "default": 10,
+        "description": "单图大小上限（MB，按 base64 后长度计）；超限自动逐步缩放压缩，压到最小仍超限则放弃并提示"
+      },
+      "image-vision.extensions": {
+        "type": "string",
+        "default": ".png,.jpg,.jpeg,.gif,.webp,.bmp",
+        "description": "支持的图片扩展名列表（逗号分隔，小写含点）"
+      }
+    }
+  }
+}

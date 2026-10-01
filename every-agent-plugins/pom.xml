@@ -37,6 +37,7 @@
         <module>sandbox-windows-mic</module>
         <module>sandbox-windows-codex</module>
         <module>sandbox-wsl-ubuntu</module>
+        <module>image-vision</module>
     </modules>
 
     <build>
