@@ -4,6 +4,9 @@
  * 扩展点注册表 + 分发逻辑：插件在 activate() 时通过 ctx.ui.register* 注册
  * 扩展点实现，核心在 dispatch(extPoint) 时遍历所有已注册实现并返回结果数组。
  *
+ * 注册表变更对外可订阅（subscribeExtensionsChanged / getExtensionsVersion）：
+ * activate 是异步的、晚于宿主首屏渲染，宿主必须订阅变更才会重渲染并显示插件贡献。
+ *
  * 对标 VSCode 的 extension host：核心不写业务分支，只收集与分发。
  */
 
@@ -56,10 +59,44 @@ let factoryLocked = false
 
 const registries = new Map<string, ExtensionRegistry<any>>()
 
+// ── 扩展点变更通知（供 React 等宿主订阅）──
+
+/**
+ * 全局扩展点版本号：任一扩展点注册表发生注册/注销即递增。
+ * 递增计数而非直接给出数组，是为了让 `useSyncExternalStore` 的 getSnapshot
+ * 返回稳定值（引用每次新建的数组会让 React 判定快照不一致而无限重渲染）。
+ */
+let extensionsVersion = 0
+
+const extensionChangeListeners = new Set<() => void>()
+
+function notifyExtensionsChanged() {
+  extensionsVersion += 1
+  for (const listener of [...extensionChangeListeners]) listener()
+}
+
+/**
+ * 订阅「插件扩展点发生变化」（任一变即通知，不区分具体扩展点）。
+ * 宿主据此重渲染，使插件在 `activate()` 中注册的贡献立即上屏。
+ */
+function subscribeExtensionsChanged(listener: () => void): () => void {
+  extensionChangeListeners.add(listener)
+  return () => {
+    extensionChangeListeners.delete(listener)
+  }
+}
+
+/** 当前扩展点版本号（订阅快照用；内容变化才变，同一版本内返回值恒定）。 */
+function getExtensionsVersion(): number {
+  return extensionsVersion
+}
+
 function getRegistry<T>(extensionPoint: string): ExtensionRegistry<T> {
   let reg = registries.get(extensionPoint)
   if (!reg) {
     reg = registryFactory.create<T>(extensionPoint)
+    // 注册表内容一变就升版本并通知宿主（注册表实例与模块同生命周期，不退订）。
+    reg.subscribe(notifyExtensionsChanged)
     registries.set(extensionPoint, reg)
   }
   return reg as ExtensionRegistry<T>
@@ -74,6 +111,13 @@ const outputBlocksMap = new Map<string, OutputBlockHandler>()
 export interface RealPluginDispatcher {
   /** 设置扩展点注册表工厂（仅允许插件激活前调用一次）。 */
   setExtensionRegistryFactory: (factory: ExtensionRegistryFactory) => void
+  /**
+   * 订阅扩展点变更（插件注册/注销任一扩展点实现时触发），返回取消订阅函数。
+   * 与 `getExtensionsVersion` 配对，可直接交给 `React.useSyncExternalStore`。
+   */
+  subscribeExtensionsChanged: (listener: () => void) => () => void
+  /** 扩展点变更版本号（每次注册/注销递增），作为外部 store 的稳定快照。 */
+  getExtensionsVersion: () => number
   /** 通用扩展点分发（按扩展点名查询）。 */
   dispatch: <T>(extensionPoint: string) => Promise<T[]>
   /** 侧边栏项。 */
@@ -144,6 +188,9 @@ export const pluginDispatcher: RealPluginDispatcher = {
     registryFactory = factory
     factoryLocked = true
   },
+
+  subscribeExtensionsChanged,
+  getExtensionsVersion,
 
   async dispatch<T>(extensionPoint: string): Promise<T[]> {
     // 按扩展点名分发到对应注册表

@@ -130,6 +130,15 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
   const [workspaceFileLocateRequest, setWorkspaceFileLocateRequest] = React.useState<{ filePath: string; workspaceRoot: string | null; requestedAt: number } | null>(null)
   /** 双击 Shift 呼出的全局搜索弹窗开关。 */
   const [searchModalOpen, setSearchModalOpen] = React.useState(false)
+  /**
+   * 插件扩展点版本号:插件在 `activate()` 里注册的贡献(侧边栏项等)晚于本组件首屏渲染,
+   * 光靠渲染期读 `listRegisteredSidebarItems()` 快照会漏掉它们,直到别处 setState 触发
+   * 重渲染才「顺带」显示。订阅版本变化,保证注册即上屏。
+   */
+  const pluginExtensionsVersion = React.useSyncExternalStore(
+    pluginDispatcher.subscribeExtensionsChanged,
+    pluginDispatcher.getExtensionsVersion,
+  )
   const prevIsMobileRef = React.useRef(isMobile)
 
   /**
@@ -271,7 +280,7 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
     if (!validPanelIds.has(activeSidebarPanelId)) {
       setActiveSidebarPanelId('tasks')
     }
-  }, [activeSidebarPanelId])
+  }, [activeSidebarPanelId, pluginExtensionsVersion])
 
   const setActiveSidebarPanel = React.useCallback((panelId: SidebarPanelId) => {
     setActiveSidebarPanelId(panelId)
@@ -832,12 +841,13 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
       nextIds.push(workspaceActivityItemId)
     }
     return nextIds
-  }, [activeSidebarPanelId, activeWorkspaceTab, sidebarOpen])
+  }, [activeSidebarPanelId, activeWorkspaceTab, pluginExtensionsVersion, sidebarOpen])
 
   /**
    * 侧边栏面板描述符：合并内置面板与插件注册的面板。
    * 内置面板用 children（现有懒加载组件），插件面板用 Panel 组件。
    * 所有面板常驻 DOM，仅通过 visible 控制显隐（保留滚动/草稿等内部状态）。
+   * 插件项在此渲染期读取，靠 `pluginExtensionsVersion` 变化触发本组件重渲染来保证注册即出现。
    */
   const sidebarPanels: Array<{
     id: string
@@ -1024,6 +1034,7 @@ function renderWorkspaceTabContent(
 /**
  * 构建活动栏条目：内置项在前，插件注册的侧边栏项在后。
  * 内置项含 tasks/files/search/settings；插件项来自 pluginDispatcher.listRegisteredSidebarItems()。
+ * 在渲染期读取快照，由调用方（LayoutContent）订阅 `pluginExtensionsVersion` 保证注册后立刻重算。
  */
 function buildSidebarActivityItems(openTopLevelPageIds: TopLevelPageId[]): SidebarActivityItem[] {
   const builtinItems: SidebarActivityItem[] = [

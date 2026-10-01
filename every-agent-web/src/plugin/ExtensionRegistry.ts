@@ -18,6 +18,12 @@ export interface ExtensionRegistry<T> {
   register(pluginId: string, item: T): Disposable
   /** 获取所有已注册的扩展点实现。 */
   getAll(): T[]
+  /**
+   * 订阅注册表变更（注册或注销时触发），返回取消订阅函数。
+   * 插件的注册发生在 `activate()` 里（异步、晚于宿主首屏渲染），
+   * 消费方必须能感知变更才会重渲染；只靠 `getAll()` 快照会把贡献读成渲染期的一次性值。
+   */
+  subscribe(listener: () => void): () => void
 }
 
 /**
@@ -30,23 +36,41 @@ export interface ExtensionRegistryFactory {
 
 /**
  * 默认的扩展点注册表实现——普通列表。
- * 注册进来的项目按注册顺序排列，全部有效。
+ * 注册进来的项目按注册顺序排列，全部有效；内容变化时通知订阅者。
  */
 export class ListExtensionRegistry<T> implements ExtensionRegistry<T> {
   private items: T[] = []
+  private listeners = new Set<() => void>()
 
   register(pluginId: string, item: T): Disposable {
     this.items.push(item)
+    this.notifyChanged()
     return {
       dispose: () => {
         const i = this.items.indexOf(item)
-        if (i >= 0) this.items.splice(i, 1)
+        if (i < 0) return
+        this.items.splice(i, 1)
+        this.notifyChanged()
       },
     }
   }
 
   getAll(): T[] {
     return [...this.items]
+  }
+
+  subscribe(listener: () => void): () => void {
+    this.listeners.add(listener)
+    return () => {
+      this.listeners.delete(listener)
+    }
+  }
+
+  /** 通知全部订阅者；副本遍历，避免订阅者在回调里增删订阅导致迭代错乱。 */
+  private notifyChanged(): void {
+    for (const listener of [...this.listeners]) {
+      listener()
+    }
   }
 }
 
