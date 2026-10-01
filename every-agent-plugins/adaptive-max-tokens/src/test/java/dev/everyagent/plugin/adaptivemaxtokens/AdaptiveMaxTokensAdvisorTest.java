@@ -393,6 +393,8 @@ class AdaptiveMaxTokensAdvisorTest {
         }
         @Override public EventEmitter events() { return e -> e.id(); }
         @Override public Map<String, AgentContext> agents() { return new HashMap<>(); }
+        @Override public dev.everyagent.plugin.api.agent.AgentFactory agentFactory() { return null; }
+        @Override public dev.everyagent.plugin.api.interaction.InteractionService interaction() { return null; }
         @Override public AgentContext main() { return null; }
         @Override public EventLogReader log() {
             return new EventLogReader() {

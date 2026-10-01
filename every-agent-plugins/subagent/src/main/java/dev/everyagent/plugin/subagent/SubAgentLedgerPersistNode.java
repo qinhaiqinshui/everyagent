@@ -3,6 +3,7 @@ package dev.everyagent.plugin.subagent;
 import dev.everyagent.plugin.api.task.TaskChain;
 import dev.everyagent.plugin.api.task.TaskLifecycleContext;
 import dev.everyagent.plugin.api.task.TaskLifecycleNode;
+import dev.everyagent.plugin.api.task.TaskRuntime;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -31,7 +32,11 @@ public final class SubAgentLedgerPersistNode implements TaskLifecycleNode {
     public Object invoke(TaskLifecycleContext ctx, TaskChain next) throws Exception {
         Object result = next.proceed(ctx);
         try {
-            ledger.persistFinal(ctx.taskId());
+            TaskRuntime t = ctx.taskRuntime();
+            if (t != null) {
+                // subjectId 槽位定位台账(§8.2:节点体内取数面中性化,壳留 task 面)
+                ledger.persistFinal(t.subjectId());
+            }
         } catch (RuntimeException e) {
             log.warn("台账终态持久化异常 task={}", ctx.taskId(), e);
         }

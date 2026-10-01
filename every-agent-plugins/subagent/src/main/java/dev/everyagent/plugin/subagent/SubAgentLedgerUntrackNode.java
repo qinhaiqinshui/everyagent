@@ -33,8 +33,11 @@ public final class SubAgentLedgerUntrackNode implements TaskLifecycleNode {
     public Object invoke(TaskLifecycleContext ctx, TaskChain next) throws Exception {
         Object result = next.proceed(ctx);
         try {
-            TaskRuntime t = (TaskRuntime) ctx.taskInfo();
-            ledger.onUntrack(t.taskId(), t.log());
+            TaskRuntime t = ctx.taskRuntime();
+            if (t == null) {
+                return result; // 任务运行时不存在(早期失败路径):无台账可 untrack
+            }
+            ledger.onUntrack(t.subjectId(), t.log());
         } catch (Exception e) {
             log.warn("subagent 台账 untrack 失败 task={}", ctx.taskId(), e);
         }

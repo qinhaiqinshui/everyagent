@@ -1,5 +1,7 @@
 package dev.everyagent.plugin.api.spi;
 
+import dev.everyagent.plugin.api.execution.ExecContext;
+
 import java.nio.file.Path;
 
 /**
@@ -19,4 +21,13 @@ public interface FileReferenceContext {
 
     /** 工作区根路径（任务挂靠的工作区目录）。 */
     Path workspaceRoot();
+
+    /**
+     * 统一执行上下文（subjectId / workspaceRoot / interaction 等主体绑定端口）。
+     * <p>授权 ask 等用户交互经 {@code execution().interaction()} 发出
+     * （自动补 subjectId 键）。早期节点任务尚未创建时为 null。
+     */
+    default ExecContext execution() {
+        return null;
+    }
 }

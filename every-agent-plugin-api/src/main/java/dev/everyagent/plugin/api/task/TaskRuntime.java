@@ -8,7 +8,6 @@ import dev.everyagent.plugin.api.model.ModelConfig;
 import tools.jackson.databind.JsonNode;
 
 import java.nio.file.Path;
-import java.util.Map;
 
 /**
  * 任务运行时接口 —— 插件用此替代对 worker {@code TaskEntry} 的直接引用。
@@ -23,9 +22,11 @@ import java.util.Map;
  * <p>任务域私有成员保留在本接口：taskId / status / taskDir（原 permission 包
  * {@code TaskInfo} 的三成员，该接口已随 S3 授权链收编退役删除）、mainAgentId / log、
  * fileChanges 系列槽位、时间戳与运行时操作。{@code fileChanges} 系列是任务域私有槽位，
- * 不进 {@code ExecContext}。
+ * 不进 {@code ExecContext}；{@code agents()} 已上移 {@code ExecContext}
+ * （语义 = 主体活动 agent 注册表），本接口不再声明。
  *
- * <p>读写混合接口：subagent 插件需要写 {@link #agents()} Map(put / get / values / containsKey)，
+ * <p>读写混合接口：主体内各插件派生 agent（子 agent / 审议 agent 等）经
+ * {@code agents()}（{@code ExecContext} 槽位）put / get / values / containsKey，
  * file-change 插件需要读写 fileChanges 系列槽位，task-edit-resend 插件需要清空这些槽位。
  * 只暴露插件实际调用的方法，不做过度设计。
  */
@@ -79,12 +80,6 @@ public interface TaskRuntime extends ExecContext {
 
     /** 事件发射器(发射时自动填 agentId)。 */
     EventEmitter events();
-
-    /**
-     * 主 + 子 agent 集合(可读写 Map：subagent 需 put / get / values / containsKey)。
-     * key = agentId，value = {@link AgentContext}。
-     */
-    Map<String, AgentContext> agents();
 
     /** 主 agent 当前实体(runTask 建好后置；运行期可能为 null)。 */
     AgentContext main();

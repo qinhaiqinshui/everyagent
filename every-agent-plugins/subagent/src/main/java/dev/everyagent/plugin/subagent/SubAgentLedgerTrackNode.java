@@ -30,13 +30,16 @@ public final class SubAgentLedgerTrackNode implements TaskLifecycleNode {
 
     @Override
     public Object invoke(TaskLifecycleContext ctx, TaskChain next) throws Exception {
-        try {
-            TaskRuntime t = (TaskRuntime) ctx.taskInfo();
-            EventLogReader eventLog = t.log();
-            // 读取 meta 用于冷启动恢复（null 安全：新任务无 meta）
-            ledger.onTrack(t.taskId(), eventLog, null);
-        } catch (Exception e) {
-            log.warn("subagent 台账 track 失败 task={}", ctx.taskId(), e);
+        TaskRuntime t = ctx.taskRuntime();
+        if (t != null) {
+            try {
+                // 核心取数面中性化(§8.2 壳/核分离):subjectId/dataDir 走 ExecContext 槽位
+                EventLogReader eventLog = t.log();
+                // 读取 meta 用于冷启动恢复（null 安全：新任务无 meta）
+                ledger.onTrack(t.subjectId(), t.dataDir(), eventLog, null);
+            } catch (Exception e) {
+                log.warn("subagent 台账 track 失败 task={}", ctx.taskId(), e);
+            }
         }
         return next.proceed(ctx);
     }

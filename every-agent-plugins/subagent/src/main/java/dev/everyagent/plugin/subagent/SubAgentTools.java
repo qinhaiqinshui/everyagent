@@ -1,17 +1,22 @@
 package dev.everyagent.plugin.subagent;
 
 import dev.everyagent.plugin.api.exception.AgentCancelledException;
+import dev.everyagent.plugin.api.execution.ExecContext;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 
+/**
+ * subagent 工具集:绑定 {@link ExecContext} 整个上下文句柄(工具调用时由
+ * {@code ToolContext.execution()} 传入),不再以 taskId 反查任务服务(§8.2)。
+ */
 public class SubAgentTools {
 
     private final SubAgentManager subAgentManager;
-    private final String taskId;
+    private final ExecContext ctx;
 
-    public SubAgentTools(SubAgentManager subAgentManager, String taskId) {
+    public SubAgentTools(SubAgentManager subAgentManager, ExecContext ctx) {
         this.subAgentManager = subAgentManager;
-        this.taskId = taskId;
+        this.ctx = ctx;
     }
 
     @Tool(description = "派生一个子 agent 去完成一项独立子任务。子 agent 有独立上下文,看不到当前对话。"
@@ -21,7 +26,7 @@ public class SubAgentTools {
             @ToolParam(description = "简短标题", required = false) String title,
             @ToolParam(description = "指定复用的 agentId", required = false) String agentId) {
         try {
-            return subAgentManager.run(taskId, input, title, agentId);
+            return subAgentManager.run(ctx, input, title, agentId);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new AgentCancelledException("task cancelled");
@@ -33,7 +38,7 @@ public class SubAgentTools {
             + "latestActivity 是最近一次活动快照(reasoning/content/error/createdAt/updatedAt),不含完整历史。")
     public String list_agents() {
         try {
-            return subAgentManager.list(taskId);
+            return subAgentManager.list(ctx);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new AgentCancelledException("task cancelled");
@@ -47,7 +52,7 @@ public class SubAgentTools {
             @ToolParam(description = "要等待的子 agent agentId(可选,来自 list_agents;省略则等待全部)", required = false) String agentId,
             @ToolParam(description = "超时毫秒(可选,默认 30000)", required = false) Long timeoutMs) {
         try {
-            return subAgentManager.waitFor(taskId, agentId, timeoutMs);
+            return subAgentManager.waitFor(ctx, agentId, timeoutMs);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new AgentCancelledException("task cancelled");
@@ -57,6 +62,6 @@ public class SubAgentTools {
     @Tool(description = "停止一个子 agent。")
     public String stop_agent(
             @ToolParam(description = "要停止的 agentId") String agentId) {
-        return subAgentManager.stop(taskId, agentId);
+        return subAgentManager.stop(ctx, agentId);
     }
 }

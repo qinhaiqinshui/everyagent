@@ -47,13 +47,8 @@ public interface ExecContext {
     /**
      * 已绑定本主体的 Agent 工厂（静态代理）；create(agentId) 单参创建，
      * create(agentId, configIdOverride) 覆盖模型。
-     *
-     * <p>过渡实现：本阶段（S1）返回 null，S2 起由 worker TaskEntry 覆盖返回绑定工厂
-     * （TaskBoundAgentFactory）。
      */
-    default AgentFactory agentFactory() {
-        return null;
-    }
+    AgentFactory agentFactory();
 
     /** 主体策略标记（unattended / ai-review 等；随 meta.json 落盘的持久数据；授权链节点判定用）。 */
     Map<String, Object> metadata();
@@ -69,13 +64,8 @@ public interface ExecContext {
      * ——替代 HumanAuthorizationHandler / ImageReferenceHandler / AskUserTool 手动
      * 组装 Map.of("taskId",...)；agentId 由调用方按需经 context 参数补充）。
      * 与 emitter()/agentFactory() 同为预绑定端口。
-     *
-     * <p>过渡实现：本阶段（S1）返回 null，S2 起由 worker TaskEntry 覆盖返回绑定交互口
-     * （SubjectBoundInteractionService）。
      */
-    default InteractionService interaction() {
-        return null;
-    }
+    InteractionService interaction();
 
     /**
      * 本主体的活动 agent 注册表（可读写 Map：put/get/values/containsKey）。

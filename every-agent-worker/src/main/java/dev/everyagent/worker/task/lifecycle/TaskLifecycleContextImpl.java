@@ -101,8 +101,6 @@ public class TaskLifecycleContextImpl implements TaskLifecycleContext {
 
     // ---- 访问器（节点用，worker 模块内部）----
 
-    /** 插件面向接口：返回 TaskRuntime（TaskEntry implements TaskRuntime）。 */
-    public TaskRuntime taskEntry() { return taskEntry; }
     /** worker 内部节点需要 TaskEntry 具体类型时调用。 */
     public TaskEntry taskEntryImpl() { return taskEntry; }
     public UserInput initialInput() { return initialInput; }

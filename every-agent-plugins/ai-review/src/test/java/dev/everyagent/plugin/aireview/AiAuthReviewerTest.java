@@ -28,6 +28,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -60,6 +61,7 @@ class AiAuthReviewerTest {
         when(perms.reviewDenyOnError()).thenReturn(true);
         when(perms.reviewModel()).thenReturn("");
 
+        // 绑定工厂 mock:经 ctx.agentFactory() 槽位提供给 reviewer(§8.3)
         agentFactory = mock(AgentFactory.class);
         task = newTask("task-cfg");
         setupAgentFactoryMock();
@@ -78,6 +80,7 @@ class AiAuthReviewerTest {
             // 返回一个 mock Agent,由 reviewer(ChatModel model) 设置 lastText
             Agent agent = mock(Agent.class);
             when(agent.lastText()).thenReturn(lastTextHolder.get());
+            when(agent.conversation()).thenReturn(new ArrayList<>());
             org.mockito.Mockito.doAnswer(runInv -> {
                 // 模拟 run:如果有 error,抛异常;否则正常完成
                 Runnable r = runAction.get();
@@ -86,7 +89,7 @@ class AiAuthReviewerTest {
             }).when(agent).run();
             return agent;
         });
-        when(agentFactory.create(anyString(), anyString(), any(), any())).thenReturn(mockBuild);
+        when(agentFactory.create(anyString(), any())).thenReturn(mockBuild);
     }
 
     private final java.util.concurrent.atomic.AtomicReference<String> lastTextHolder = new java.util.concurrent.atomic.AtomicReference<>("");
@@ -95,7 +98,7 @@ class AiAuthReviewerTest {
     private RecordingTaskRuntime newTask(String cfgId) {
         ModelConfig snap = new ModelConfig(cfgId, "openai-compat",
                 "http://localhost:9999/v1", "task-model", null);
-        return new RecordingTaskRuntime("t-1", snap);
+        return new RecordingTaskRuntime("t-1", snap, agentFactory);
     }
 
     /** 组装授权请求桩(agentId 不参与审议,置 null)。 */
@@ -106,7 +109,7 @@ class AiAuthReviewerTest {
     private AiAuthReviewer reviewer(String content) {
         lastTextHolder.set(content);
         runAction.set(null);
-        return new AiAuthReviewer(props, agentFactory);
+        return new AiAuthReviewer(props);
     }
 
     private AiAuthReviewer hangReviewer(long sleepMs) {
@@ -117,13 +120,13 @@ class AiAuthReviewerTest {
                 throw new RuntimeException("审议调用被中断", e);
             }
         });
-        return new AiAuthReviewer(props, agentFactory);
+        return new AiAuthReviewer(props);
     }
 
     private AiAuthReviewer failReviewer() {
         lastTextHolder.set("");
         runAction.set(() -> { throw new RuntimeException("模拟审议模型故障"); });
-        return new AiAuthReviewer(props, agentFactory);
+        return new AiAuthReviewer(props);
     }
 
     // ---- 三态解析 ----
@@ -254,12 +257,35 @@ class AiAuthReviewerTest {
     // ---- 组件不注册任何工具 / 不新建任务实体 / 审计 trace persist 落盘 ----
 
     @Test
-    void doesNotCreateNewTaskEntryOrEventLog() {
+    void registersFixedReviewAgentInContextAgents() {
         reviewer("{\"decision\":\"ALLOW\"}").review(req("c::del", "AI 请求"));
-        assertTrue(task.agents().isEmpty(), "审议不复用/新建子 agent 集合");
+        // §8.3:审议 agent 以固定 agentId 注册进 ctx.agents()(不新建任务实体/事件日志)
+        assertTrue(task.agents().containsKey("review-t-1"), "审议 agent 应注册为 review-<subjectId>");
         assertNotNull(authTracePayload(), "原任务应有 auth.review trace");
         assertTrue(authTraceEvent().ext().path("persist").asBoolean(),
                 "persist=true 落盘 trace 的 ext.persist 应为 true(非瞬态)");
+    }
+
+    // ---- 固定 per-task agentId 复用会话(§8.3):两次 review 同一 ctx,第二次命中注册表续跑 ----
+
+    @Test
+    void secondReviewReusesRegisteredAgentNotRecreating() {
+        AiAuthReviewer r = reviewer("{\"decision\":\"ALLOW\"}");
+        r.review(req("c::del", "第一次授权请求"));
+        org.mockito.Mockito.verify(agentFactory).create(org.mockito.ArgumentMatchers.eq("review-t-1"), org.mockito.ArgumentMatchers.isNull());
+        Agent first = (Agent) task.agents().get("review-t-1");
+        assertNotNull(first, "首次审议应创建并注册 review-t-1");
+
+        lastTextHolder.set("{\"decision\":\"DENY\",\"reason\":\"危险\"}");
+        r.review(req("c::rm", "第二次授权请求"));
+
+        // 第二次:命中 agents().get → resetForRerun + conversation().add 续跑,不再新建
+        org.mockito.Mockito.verify(agentFactory, org.mockito.Mockito.times(1))
+                .create(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.any());
+        org.mockito.Mockito.verify(first, org.mockito.Mockito.times(1)).resetForRerun();
+        assertEquals(1, first.conversation().size(), "续跑应向原会话追加一条新授权请求 user 消息");
+        assertTrue(first.conversation().get(0) instanceof org.springframework.ai.chat.messages.UserMessage);
+        assertSame(first, task.agents().get("review-t-1"), "注册表应仍指向同一审议 agent 实例");
     }
 
     // ---- 辅助:读取桩内记录的 auth.review trace ----
@@ -311,9 +337,12 @@ class AiAuthReviewerTest {
         private final Map<String, AgentContext> agentsMap = new HashMap<>();
         private final List<EventRecord> records = new CopyOnWriteArrayList<>();
 
-        RecordingTaskRuntime(String taskId, ModelConfig snapshot) {
+        private final AgentFactory agentFactory;
+
+        RecordingTaskRuntime(String taskId, ModelConfig snapshot, AgentFactory agentFactory) {
             this.taskId = taskId;
             this.snapshot = snapshot;
+            this.agentFactory = agentFactory;
         }
 
         private final EventEmitter emitter = e -> {
@@ -357,6 +386,8 @@ class AiAuthReviewerTest {
         };
 
         @Override public String taskId() { return taskId; }
+        @Override public dev.everyagent.plugin.api.agent.AgentFactory agentFactory() { return agentFactory; }
+        @Override public dev.everyagent.plugin.api.interaction.InteractionService interaction() { return null; }
         @Override public String status() { return "running"; }
         @Override public boolean terminal() { return false; }
         @Override public Map<String, Object> metadata() { return new HashMap<>(); }

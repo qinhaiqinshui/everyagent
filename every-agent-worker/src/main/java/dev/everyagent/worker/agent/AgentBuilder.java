@@ -14,7 +14,6 @@ import dev.everyagent.worker.plugin.registry.AdvisorProviderRegistry;
 import dev.everyagent.worker.plugin.registry.ToolProviderRegistry;
 import dev.everyagent.worker.task.InterceptingToolCallingManager;
 import dev.everyagent.worker.task.LoopRepeatGuardToolManager;
-import dev.everyagent.worker.task.TaskEntry;
 import dev.everyagent.worker.tools.PermissionGate;
 import dev.everyagent.worker.tools.RipgrepBinary;
 import dev.everyagent.worker.plugin.registry.ToolExecutionInterceptorRegistry;
@@ -131,12 +130,10 @@ public class AgentBuilder {
 
     /** 从 exec 槽位构造 ToolContext（S2 起不再从 map 逐个 get）。 */
     private ToolContextImpl createToolContext(String agentId, ExecContext exec) {
-        // 过渡：worker 域内 exec 恒为 TaskEntry（ToolContextImpl 仍暴露 taskEntry()，S5 退役）
-        TaskEntry taskEntry = (TaskEntry) exec;
         Path workspaceRoot = exec.workspaceRoot() == null
                 ? null : Paths.get(exec.workspaceRoot());
         return new ToolContextImpl(exec.subjectId(), agentId, workspaceRoot,
-                sandbox, gate, workspaces, rgBinary != null ? rgBinary.path() : null, interaction, taskEntry,
+                sandbox, gate, workspaces, rgBinary != null ? rgBinary.path() : null, interaction, exec,
                 pathRegistry);
     }
 

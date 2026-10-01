@@ -227,11 +227,12 @@ public final class FileReferenceProcessNode implements TaskLifecycleNode {
     }
 
     /** per-任务的 FileReferenceContext 只读视图。 */
-    private record ContextView(String taskId, String workspaceId, Path workspaceRoot)
+    private record ContextView(String taskId, String workspaceId, Path workspaceRoot,
+            dev.everyagent.plugin.api.execution.ExecContext execution)
             implements FileReferenceContext {
 
         ContextView(TaskLifecycleContext ctx) {
-            this(ctx.taskId(), ctx.workspaceId(), toPath(ctx.workspaceRoot()));
+            this(ctx.taskId(), ctx.workspaceId(), toPath(ctx.workspaceRoot()), ctx.taskRuntime());
         }
 
         private static Path toPath(String workspaceRoot) {

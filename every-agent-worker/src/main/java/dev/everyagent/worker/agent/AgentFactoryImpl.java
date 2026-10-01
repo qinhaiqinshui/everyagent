@@ -3,7 +3,6 @@ package dev.everyagent.worker.agent;
 import dev.everyagent.plugin.api.agent.Agent;
 import dev.everyagent.plugin.api.agent.AgentFactory;
 import dev.everyagent.plugin.api.execution.ExecContext;
-import dev.everyagent.plugin.api.model.EventEmitter;
 import dev.everyagent.worker.modules.ConfigStore;
 import dev.everyagent.worker.modules.ConfigStore.ResolvedConfig;
 import dev.everyagent.worker.task.ChatModelFactory;
@@ -13,12 +12,11 @@ import org.springframework.ai.tool.ToolCallback;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
-import java.util.Map;
 import java.util.function.Consumer;
 import java.util.function.UnaryOperator;
 
 /**
- * Agent 工厂实现（plugin-api {@link AgentFactory} 契约）。
+ * Agent 工厂实现（worker 内部；plugin-api 契约见 {@link AgentFactory}）。
  *
  * <p>工厂内部自行解析配置（configId）并构建模型，不暴露 apiKey 等敏感参数给插件。
  * {@code create()} 返回 fluent {@link dev.everyagent.plugin.api.agent.AgentBuilder}，
@@ -30,13 +28,15 @@ import java.util.function.UnaryOperator;
  * {@code exec.snapshot().configId()}，emitter 固定取 {@code exec.emitter()}；
  * {@link #bind(ExecContext)} 据此产出绑定工厂静态代理（TaskBoundAgentFactory），
  * 挂到 {@code ExecContext.agentFactory()} 槽位，作为绑定工厂的唯一获取口。
+ * S5 起本类不再 implements plugin-api {@code AgentFactory}（内部化：具体类 +
+ * 全参方法仅供 worker 域内与绑定代理使用）。
  *
  * <p>设计要点：模型构建延迟到 {@code build()} 执行，以便 {@code options(Consumer)}
  * 在模型构建前生效——{@code buildAgentModel} 的 optionsCustomizer 参数由
  * {@code options(Consumer<ChatOptions>)} 转换而来。
  */
 @Component
-public class AgentFactoryImpl implements AgentFactory {
+public class AgentFactoryImpl {
 
     private final ConfigStore configStore;
     private final ChatModelFactory chatModelFactory;
@@ -68,27 +68,6 @@ public class AgentFactoryImpl implements AgentFactory {
      */
     public AgentFactory bind(ExecContext exec) {
         return new TaskBoundAgentFactory(this, exec);
-    }
-
-    /**
-     * 过渡桥接（S5 退役；SubAgentManager / AiAuthReviewer 迁移到绑定工厂后删除）：
-     * 从 properties 黑盒 map 取 {@code "taskEntry"}（TaskEntry 即 ExecContext）作
-     * exec 走全参路径；传入 emitter 被忽略——过渡期两个调用方传的都是
-     * {@code task.events()}，恒等于 {@code exec.emitter()}，行为不变。
-     *
-     * @throws IllegalArgumentException properties 缺 {@code "taskEntry"}（全仓现无此调用形态）
-     */
-    @Override
-    public dev.everyagent.plugin.api.agent.AgentBuilder create(
-            String agentId, String configId,
-            EventEmitter emitter, Map<String, Object> properties) {
-        Object exec = properties != null ? properties.get("taskEntry") : null;
-        if (exec instanceof ExecContext ctx) {
-            return create(agentId, configId, ctx);
-        }
-        throw new IllegalArgumentException(
-                "AgentFactory 过渡四参签名要求 properties 含 \"taskEntry\"（ExecContext）；"
-                        + "S2 起请改用 ExecContext.agentFactory() 绑定工厂创建");
     }
 
     /**

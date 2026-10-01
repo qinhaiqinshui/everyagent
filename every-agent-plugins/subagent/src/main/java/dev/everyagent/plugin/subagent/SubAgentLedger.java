@@ -3,15 +3,19 @@ package dev.everyagent.plugin.subagent;
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.plugin.api.event.EventLogReader;
 import dev.everyagent.plugin.api.event.EventRecord;
-import dev.everyagent.plugin.api.task.TaskStoreService;
+import dev.everyagent.plugin.api.util.AtomicFiles;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.node.ArrayNode;
 import tools.jackson.databind.node.ObjectNode;
 
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -20,18 +24,19 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 /**
- * 子 agent 台账事件投影（Phase 4：从 TaskManager 迁入插件域）。
+ * 子 agent 台账事件投影（Phase 4 从 TaskManager 迁入插件域;S5 起 IO 自持,§8.2/§8.5②）。
  *
- * <p>订阅任务 EventLog 的 agent.started / agent.done / agent.status / usage / message / error 事件，维护 per-task 内存台账
- * （agentId → ObjectNode 摘要）。台账随 agents.json 独立落盘：
+ * <p>订阅主体 EventLog 的 agent.started / agent.done / agent.status / usage / message / error 事件，维护 per-subject 内存台账
+ * （agentId → ObjectNode 摘要）。台账随 agents.json 独立落盘（插件自有数据,住在主体
+ * dataDir 下,由本类经 {@link AtomicFiles} 自行读写,不再挂 TaskStoreService）：
  * <ul>
- *   <li>30s 定时快照（运行中任务）</li>
- *   <li>任务收口时经 ledger.persist 生命周期节点写终态快照</li>
+ *   <li>30s 定时快照（运行中主体）</li>
+ *   <li>主体收口时经 ledger.persist 生命周期节点写终态快照</li>
  *   <li>冷启动恢复时读 agents.json（running/waiting-user → stopped 归一）</li>
  * </ul>
  *
- * <p>读侧（task.agents RPC / list_agents 工具）：live 任务读内存台账，
- * 冷任务读磁盘 agents.json。
+ * <p>读侧（task.agents RPC / list_agents 工具）：live 主体读内存台账，
+ * 冷主体读磁盘 agents.json（{@link #readAgents(Path)}）。
  */
 public class SubAgentLedger {
 
@@ -39,34 +44,36 @@ public class SubAgentLedger {
 
     private static final long PERSIST_INTERVAL_MS = 30_000;
 
-    private final TaskStoreService store;
-    /** per-task 内存台账：taskId → (agentId → 摘要 ObjectNode) */
+    /** per-subject 内存台账：subjectId → (agentId → 摘要 ObjectNode)。 */
     private final Map<String, Map<String, ObjectNode>> taskLedgers = new ConcurrentHashMap<>();
-    /** per-task EventLog 游标：taskId → 最后处理的 EventLog 位置（按记录数） */
+    /** per-subject 数据目录（track 时登记,persistAll 落盘定位用）。 */
+    private final Map<String, Path> taskDirs = new ConcurrentHashMap<>();
+    /** per-subject EventLog 游标：subjectId → 最后处理的 EventLog 位置（按记录数）。 */
     private final Map<String, Integer> taskCursors = new ConcurrentHashMap<>();
-    /** per-task EventLogReader.Listener 引用（用于 untrack 时移除） */
+    /** per-subject EventLogReader.Listener 引用（用于 untrack 时移除）。 */
     private final Map<String, EventLogReader.Listener> taskListeners = new ConcurrentHashMap<>();
 
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(
             r -> Thread.ofVirtual().name("subagent-ledger-timer").unstarted(r));
 
-    public SubAgentLedger(TaskStoreService store) {
-        this.store = store;
+    public SubAgentLedger() {
         scheduler.scheduleAtFixedRate(this::persistAll, PERSIST_INTERVAL_MS, PERSIST_INTERVAL_MS,
                 TimeUnit.MILLISECONDS);
     }
 
-    // ── 任务生命周期回调 ──
+    // ── 主体生命周期回调 ──
 
     /**
-     * 任务 track 时调用：注册 EventLogReader.Listener，开始订阅事件维护台账。
+     * 主体 track 时调用：登记数据目录、注册 EventLogReader.Listener，开始订阅事件维护台账。
      * 同时从磁盘恢复已有台账（冷启动续跑场景）。
      */
-    public void onTrack(String taskId, EventLogReader log, JsonNode meta) {
+    public void onTrack(String subjectId, Path dataDir, EventLogReader log, JsonNode meta) {
+        if (dataDir != null) {
+            taskDirs.put(subjectId, dataDir);
+        }
         // 冷启动恢复：优先 agents.json，回退 meta.agents
-        Map<String, ObjectNode> ledger = taskLedgers.computeIfAbsent(taskId, k -> new ConcurrentHashMap<>());
-        Path dir = store.dirOf(taskId);
-        List<ObjectNode> disk = store.readAgents(dir);
+        Map<String, ObjectNode> ledger = taskLedgers.computeIfAbsent(subjectId, k -> new ConcurrentHashMap<>());
+        List<ObjectNode> disk = dataDir != null ? readAgents(dataDir) : null;
         if (disk != null) {
             for (ObjectNode a : disk) {
                 String id = a.path("agentId").asString("");
@@ -103,24 +110,25 @@ public class SubAgentLedger {
         EventLogReader.Listener listener = new EventLogReader.Listener() {
             @Override
             public void onAppend() {
-                processNewEvents(taskId, log);
+                processNewEvents(subjectId, log);
             }
         };
         log.addListener(listener);
-        taskListeners.put(taskId, listener);
+        taskListeners.put(subjectId, listener);
     }
 
     /**
-     * 任务 untrack 时调用：移除 EventLogReader.Listener，清理内存台账。
+     * 主体 untrack 时调用：移除 EventLogReader.Listener，清理内存台账。
      * 终态快照已由 ledger.persist 节点写入磁盘。
      */
-    public void onUntrack(String taskId, EventLogReader log) {
-        EventLogReader.Listener listener = taskListeners.remove(taskId);
+    public void onUntrack(String subjectId, EventLogReader log) {
+        EventLogReader.Listener listener = taskListeners.remove(subjectId);
         if (listener != null) {
             log.removeListener(listener);
         }
-        taskCursors.remove(taskId);
-        taskLedgers.remove(taskId);
+        taskCursors.remove(subjectId);
+        taskLedgers.remove(subjectId);
+        taskDirs.remove(subjectId);
     }
 
     // ── 事件处理 ──
@@ -128,24 +136,24 @@ public class SubAgentLedger {
     /**
      * 处理 EventLog 中新增的事件，过滤 agent.started / agent.done / agent.status / usage / message / error 更新台账。
      */
-    private void processNewEvents(String taskId, EventLogReader log) {
-        Map<String, ObjectNode> ledger = taskLedgers.get(taskId);
+    private void processNewEvents(String subjectId, EventLogReader log) {
+        Map<String, ObjectNode> ledger = taskLedgers.get(subjectId);
         if (ledger == null) return;
 
-        int cursor = taskCursors.getOrDefault(taskId, 0);
+        int cursor = taskCursors.getOrDefault(subjectId, 0);
         List<EventRecord> newRecords = log.readFrom(cursor, 200);
         if (newRecords.isEmpty()) return;
 
         for (EventRecord r : newRecords) {
-            processEvent(taskId, ledger, r);
+            processEvent(ledger, r);
         }
-        taskCursors.put(taskId, cursor + newRecords.size());
+        taskCursors.put(subjectId, cursor + newRecords.size());
     }
 
     /**
      * 处理单个事件，更新台账。
      */
-    private void processEvent(String taskId, Map<String, ObjectNode> ledger, EventRecord r) {
+    private void processEvent(Map<String, ObjectNode> ledger, EventRecord r) {
         String event = r.event();
         String agentId = r.agentId();
         if (agentId == null || agentId.isEmpty()) return;
@@ -238,45 +246,49 @@ public class SubAgentLedger {
         }
     }
 
-    // ── 持久化 ──
+    // ── 持久化（插件自有数据,IO 自持,§8.5②）──
 
     /**
-     * 30s 定时持久化运行中任务的台账。
+     * 30s 定时持久化运行中主体的台账。
      */
     private void persistAll() {
         for (Map.Entry<String, Map<String, ObjectNode>> e : taskLedgers.entrySet()) {
-            String taskId = e.getKey();
+            String subjectId = e.getKey();
             Map<String, ObjectNode> ledger = e.getValue();
             if (ledger.isEmpty()) continue;
+            Path dir = taskDirs.get(subjectId);
+            if (dir == null) continue;
             try {
-                store.writeAgents(taskId, new ArrayList<>(ledger.values()));
+                writeAgents(dir, ledger.values());
             } catch (RuntimeException ex) {
-                log.debug("台账定时持久化失败 task={}", taskId, ex);
+                log.debug("台账定时持久化失败 subject={}", subjectId, ex);
             }
         }
     }
 
     /**
-     * 任务收口时写终态快照（由 ledger.persist 生命周期节点调用）。
+     * 主体收口时写终态快照（由 ledger.persist 生命周期节点调用）。
      */
-    public void persistFinal(String taskId) {
-        Map<String, ObjectNode> ledger = taskLedgers.get(taskId);
+    public void persistFinal(String subjectId) {
+        Map<String, ObjectNode> ledger = taskLedgers.get(subjectId);
         if (ledger == null) return;
+        Path dir = taskDirs.get(subjectId);
+        if (dir == null) return;
         try {
-            store.writeAgents(taskId, new ArrayList<>(ledger.values()));
+            writeAgents(dir, ledger.values());
         } catch (RuntimeException ex) {
-            log.warn("台账终态持久化失败 task={}", taskId, ex);
+            log.warn("台账终态持久化失败 subject={}", subjectId, ex);
         }
     }
 
     // ── 读取 ──
 
     /**
-     * 获取 live 任务的台账摘要数组（用于 task.agents RPC）。
-     * 返回 null 表示该任务不在内存中（冷任务）。
+     * 获取 live 主体的台账摘要数组（用于 task.agents RPC）。
+     * 返回 null 表示该主体不在内存中（冷主体）。
      */
-    public List<ObjectNode> getLiveAgents(String taskId) {
-        Map<String, ObjectNode> ledger = taskLedgers.get(taskId);
+    public List<ObjectNode> getLiveAgents(String subjectId) {
+        Map<String, ObjectNode> ledger = taskLedgers.get(subjectId);
         if (ledger == null) return null;
         List<ObjectNode> ordered = new ArrayList<>(ledger.values());
         ordered.sort(java.util.Comparator.comparingLong(a -> a.path("createdAt").asLong(0)));
@@ -286,10 +298,66 @@ public class SubAgentLedger {
     /**
      * 获取单个 live agent 的台账摘要（用于 wait_agents 工具历史查询）。
      */
-    public ObjectNode getLiveAgent(String taskId, String agentId) {
-        Map<String, ObjectNode> ledger = taskLedgers.get(taskId);
+    public ObjectNode getLiveAgent(String subjectId, String agentId) {
+        Map<String, ObjectNode> ledger = taskLedgers.get(subjectId);
         if (ledger == null) return null;
         return ledger.get(agentId);
+    }
+
+    // ── agents.json 读写（中性台账 reader/writer:本插件自有数据,经 AtomicFiles 自持 IO）──
+
+    /**
+     * 读主体数据目录下 agents.json（形状 {@code {"agents":[...]}}）。
+     * 文件不存在/损坏/形状不符返回 null（null = 调用方回退旧格式 meta.agents）。
+     * 消费者:本类冷启动恢复 + SubAgentRpcHandler 冷路径。
+     */
+    public List<ObjectNode> readAgents(Path dir) {
+        Path f = dir.resolve("agents.json");
+        if (!Files.isRegularFile(f)) {
+            return null;
+        }
+        try {
+            JsonNode agents = Json.parse(Files.readString(f)).path("agents");
+            if (!agents.isArray()) {
+                log.debug("agents.json 形状异常(无 agents 数组): {}", f);
+                return null;
+            }
+            List<ObjectNode> out = new ArrayList<>();
+            for (JsonNode a : agents) {
+                if (a.isObject()) {
+                    out.add((ObjectNode) a);
+                }
+            }
+            return out;
+        } catch (IOException | RuntimeException e) {
+            log.debug("agents.json 读取失败 {}", f, e);
+            return null;
+        }
+    }
+
+    /**
+     * 原子写 agents.json（临时文件 + {@link AtomicFiles#replace},同 writeMeta 惯例;
+     * 与原 TaskStore.writeAgents 逐字节同格式——路径/形状/wire 均不变）。
+     * 空台账时删除已存在的 agents.json(避免遗留脏数据;无文件则 no-op,不写空数组占位)。
+     * 失败仅 warn 不抛(台账非真相源,下一轮 persist/30s 定时会重写)。
+     */
+    public void writeAgents(Path dir, Collection<ObjectNode> agents) {
+        try {
+            Path f = dir.resolve("agents.json");
+            if (agents == null || agents.isEmpty()) {
+                Files.deleteIfExists(f);
+                return;
+            }
+            ObjectNode root = Json.obj();
+            ArrayNode arr = Json.arr();
+            agents.forEach(arr::add);
+            root.set("agents", arr);
+            Path tmp = dir.resolve("agents.json.tmp");
+            Files.writeString(tmp, Json.write(root), StandardCharsets.UTF_8);
+            AtomicFiles.replace(tmp, f); // 原子替换(失败已清理 tmp 后抛出,不残留垃圾)
+        } catch (IOException | RuntimeException e) {
+            log.warn("agents.json 写入失败 dir={}", dir, e);
+        }
     }
 
     @jakarta.annotation.PreDestroy

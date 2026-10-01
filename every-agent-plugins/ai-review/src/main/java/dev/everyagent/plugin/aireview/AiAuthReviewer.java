@@ -3,22 +3,20 @@ package dev.everyagent.plugin.aireview;
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.plugin.api.agent.Agent;
 import dev.everyagent.plugin.api.agent.AgentBuilder;
-import dev.everyagent.plugin.api.agent.AgentFactory;
+import dev.everyagent.plugin.api.agent.AgentContext;
 import dev.everyagent.plugin.api.config.WorkerConfig;
 import dev.everyagent.plugin.api.execution.ExecContext;
 import dev.everyagent.plugin.api.model.EmitEvent;
 import dev.everyagent.plugin.api.permission.AuthorizationHandler.AuthorizationRequest;
-import dev.everyagent.plugin.api.proto.ShortIds;
 import dev.everyagent.plugin.api.proto.SnowflakeId;
 import dev.everyagent.plugin.api.util.RootCause;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.ai.chat.messages.UserMessage;
 import tools.jackson.databind.JsonNode;
 
-import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -41,10 +39,14 @@ import java.util.concurrent.TimeoutException;
  * <b>容灾在模型层</b>:审议模型经 AgentFactory 内部构建,若为
  * {@code provider: model-pool} 池配置,chatModel 即 {@code ModelPoolChatModel}(自动换池容灾)。
  *
- * <p>载体:内部构造一个轻量「审议 Agent」(空 tools、conversation=[独立审议 system
- * prompt, 授权信息 user]、agentId=review-&lt;shortId&gt;、options=审议超时快照),<b>仅作
- * AgentFactory 装配载体</b>:不进 {@code task.agents} / 不随 agents.json 落盘,
- * 不新建任务实体/事件日志。
+ * <p>载体(§8.3 固定 per-task agentId 复用会话):同一主体固定
+ * {@code review-<subjectId>} 的轻量「审议 Agent」(空 tools、独立审议 system prompt),
+ * 注册进 {@code ctx.agents()}(随 list_agents 合并视图可见);后续审议请求命中注册表
+ * → {@code resetForRerun()} + {@code conversation().add(授权请求)} 续跑——历史审议
+ * Q&A 留在会话内,审议员看得见本任务既往授权决策的结论与理由。会话随授权次数增长
+ * (主体生命周期内有限;条数上限裁剪为后续开放项)。装配经
+ * {@code ctx.agentFactory()}(S5 起 AgentFactory 依赖删除);不新建任务实体/事件日志,
+ * 事件全部经 {@code ctx.emitter()} 落主体 jsonl。
  *
  * <p>时效双层控制:<ul>
  * <li>内层:{@code options.timeout = review-timeout-ms},仅约束单次 HTTP 调用;</li>
@@ -99,11 +101,9 @@ public class AiAuthReviewer {
             放宽原则:除非明确知道会损坏系统,否则允许操作;无法判断时返回 ALLOW。""";
 
     private final WorkerConfig props;
-    private final AgentFactory agentFactory;
 
-    public AiAuthReviewer(WorkerConfig props, AgentFactory agentFactory) {
+    public AiAuthReviewer(WorkerConfig props) {
         this.props = props;
-        this.agentFactory = agentFactory;
     }
 
     /**
@@ -116,7 +116,8 @@ public class AiAuthReviewer {
     public ReviewDecision review(AuthorizationRequest req) {
         ExecContext ctx = req.context();
         long reviewTimeoutMs = props.permissions().reviewTimeoutMs();
-        String reviewAgentId = ShortIds.next("review"); // 形如 review-<shortId>
+        // §8.3:同一主体固定 agentId(review-<subjectId>),跨请求复用审议会话
+        String reviewAgentId = "review-" + ctx.subjectId();
         // 独立 executor + future.get(总预算硬闸):覆盖重试退避 + 容灾轮询总耗时。
         ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
         try {
@@ -152,37 +153,45 @@ public class AiAuthReviewer {
      * ModelPoolChatModel(自动换池容灾)。
      */
     private ReviewDecision doReview(ExecContext ctx, String reviewAgentId, String grantKey, String prompt) {
-        Agent reviewAgent = buildReviewAgent(ctx, reviewAgentId, grantKey, prompt);
-        try {
-            reviewAgent.run();
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new RuntimeException("审议调用被中断", e);
+        Agent reviewAgent = getOrCreateReviewAgent(ctx, reviewAgentId, grantKey, prompt);
+        // 同主体并发审议串行化:固定 agentId 复用会话下,防两条审议请求交错污染会话。
+        synchronized (reviewAgent) {
+            try {
+                reviewAgent.run();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new RuntimeException("审议调用被中断", e);
+            }
         }
         return parse(reviewAgent.lastText());
     }
 
     /**
-     * 构建轻量「审议 Agent」:空 tools、独立 conversation,仅作
-     * AgentFactory 装配载体——不进 {@code ctx.agents()} / 不随 agents.json 落盘,
-     * 不新建任务实体/事件日志。package-private 供单测断言「无任何工具」与独立 system prompt。
+     * 获取或创建轻量「审议 Agent」(SubAgentManager 同款运行范式,§8.3):
+     * <ul>
+     *   <li>命中 {@code ctx.agents()} → {@code resetForRerun()} +
+     *       {@code conversation().add(授权请求)} 续跑(历史审议 Q&A 留在会话内);</li>
+     *   <li>未命中 → {@code ctx.agentFactory().create(agentId, 覆盖模型)} 创建
+     *       (空 tools、独立审议 system prompt、首条授权请求)并注册进 {@code ctx.agents()}。</li>
+     * </ul>
+     * package-private 供单测断言复用/新建路径。
      */
-    Agent buildReviewAgent(ExecContext ctx, String reviewAgentId, String grantKey, String prompt) {
-        long reviewTimeoutMs = props.permissions().reviewTimeoutMs();
-        String configId = resolveConfigId(ctx);
-
-        Map<String, Object> agentProps = new HashMap<>();
-        agentProps.put("taskEntry", ctx);
-        agentProps.put("taskId", ctx.subjectId());
-        agentProps.put("workspaceRoot", ctx.workspaceRoot());
-        agentProps.put("configId", configId);
-
-        return agentFactory.create(reviewAgentId, configId, ctx.emitter(), agentProps)
+    Agent getOrCreateReviewAgent(ExecContext ctx, String reviewAgentId, String grantKey, String prompt) {
+        AgentContext existing = ctx.agents().get(reviewAgentId);
+        if (existing != null) {
+            Agent reused = (Agent) existing;
+            reused.resetForRerun();
+            reused.conversation().add(new UserMessage(userPrompt(grantKey, prompt))); // 续跑:历史 + 新授权请求
+            return reused;
+        }
+        Agent created = ctx.agentFactory().create(reviewAgentId, resolveReviewModel())
                 .title("AI 安全审议")
                 .tools(List.of(), AgentBuilder.ModifyMode.REPLACE)
                 .systemPrompt(reviewSystemPrompt(ctx))
                 .userInput(userPrompt(grantKey, prompt))
                 .build();
+        ctx.agents().put(reviewAgentId, created); // 注册:跨请求复用 + list_agents 合并视图可见
+        return created;
     }
 
     /** 生成独立审议 system prompt:注入任务当前工作区目录(占位符 %s)。 */
@@ -193,15 +202,15 @@ public class AiAuthReviewer {
     }
 
     /**
-     * 模型选择:review-model 配置非空 → 用该 configId(与任务 configId 同域);
-     * 空 → 用任务当前 configId。
+     * 模型选择:review-model 配置非空 → 用该 configId 覆盖(与任务 configId 同域);
+     * 空 → null(= 绑定工厂默认,即 {@code ctx.snapshot().configId()})。
      */
-    private String resolveConfigId(ExecContext ctx) {
+    private String resolveReviewModel() {
         String reviewModel = props.permissions().reviewModel();
         if (reviewModel != null && !reviewModel.isBlank()) {
             return reviewModel;
         }
-        return ctx.snapshot().configId();
+        return null;
     }
 
     /** 授权信息 user 消息(审议输入原文)。 */

@@ -31,7 +31,6 @@ import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
@@ -207,7 +206,12 @@ public class TaskStore implements TaskStoreService {
      * 丢弃 seq > target 的所有事件;不修改 target 处的 user.message 内容
      * (新内容由后续 consumeInput 写新的 user.message)。
      * 原子重写每个 jsonl 文件(整读→过滤→临时文件+ATOMIC_MOVE)。
-     * 截断 rounds.jsonl(保留 startSeq &lt; targetSeq 的轮次)、清理 file-changes/、agents.json。
+     * 截断 rounds.jsonl(保留 startSeq &lt; targetSeq 的轮次)。
+     *
+     * <p>只动事件 jsonl 与 rounds.jsonl,<b>不删任何插件数据文件</b>
+     * (file-changes/、agents.json 等):task 核心不知晓插件文件名;
+     * 截断后插件数据残留陈旧条目被接受(台账/轮详情展示陈旧数据,无正确性影响)。
+     * 开放项:后续增加截断事件通知(如 task.truncated 领域事件),插件自行决定清理。
      *
      * @return true 如果找到 target seq 处的 user.message 事件;false 表示未找到(调用方应报错)
      */
@@ -281,17 +285,8 @@ public class TaskStore implements TaskStoreService {
                 log.warn("rounds 截断写入失败 {} {}", dir, e);
             }
         }
-        // 清理 file-changes/ 目录
-        Path fc = dir.resolve("file-changes");
-        if (Files.isDirectory(fc)) {
-            try {
-                deleteRecursively(fc);
-            } catch (IOException e) {
-                log.warn("file-changes 目录清理失败 {}", fc, e);
-            }
-        }
-        // 清理 agents.json(将重新生成)
-        Files.deleteIfExists(dir.resolve("agents.json"));
+        // 插件数据文件(file-changes/、agents.json 等)不清理:截断只动事件空间
+        // (§8.5③)。残留陈旧条目被接受;开放项 = 后续 task.truncated 事件通知插件自清。
         return found;
     }
 
@@ -420,62 +415,6 @@ public class TaskStore implements TaskStoreService {
             return n.isObject() ? (ObjectNode) n : null;
         } catch (IOException | RuntimeException e) {
             return null;
-        }
-    }
-
-    /**
-     * 读 agents.json(子 agent 台账独立落盘,冷启动恢复供体;形状 {@code {"agents":[...]}})。
-     * 文件不存在/损坏/形状不符返回 null(损坏记 debug;null = 调用方回退旧格式 meta.agents)。
-     */
-    public List<ObjectNode> readAgents(Path dir) {
-        Path f = dir.resolve("agents.json");
-        if (!Files.isRegularFile(f)) {
-            return null;
-        }
-        try {
-            JsonNode agents = Json.parse(Files.readString(f)).path("agents");
-            if (!agents.isArray()) {
-                log.debug("agents.json 形状异常(无 agents 数组): {}", f);
-                return null;
-            }
-            List<ObjectNode> out = new ArrayList<>();
-            for (JsonNode a : agents) {
-                if (a.isObject()) {
-                    out.add((ObjectNode) a);
-                }
-            }
-            return out;
-        } catch (IOException | RuntimeException e) {
-            log.debug("agents.json 读取失败 {}", f, e);
-            return null;
-        }
-    }
-
-    /**
-     * 写 agents.json(临时文件 + 原子 move,同 writeMeta 惯例):子 agent 台账从 meta.json
-     * 拆出独立落盘,减轻 tasks.list 读 meta 的任务列表数据。目录解析与 updateMeta 同口径
-     * (优先 track 登记目录,否则 dirOf 映射/懒发现)。
-     * 空台账时删除已存在的 agents.json(避免遗留脏数据;无文件则 no-op,不写空数组占位)。
-     * 失败仅 warn 不抛(台账非真相源,下一轮 persist/30s 定时会重写)。
-     */
-    public void writeAgents(String taskId, Collection<ObjectNode> agents) {
-        try {
-            Tracked t = tracked.get(taskId);
-            Path dir = t != null ? t.dir : dirOf(taskId);
-            Path f = dir.resolve("agents.json");
-            if (agents == null || agents.isEmpty()) {
-                Files.deleteIfExists(f);
-                return;
-            }
-            ObjectNode root = Json.obj();
-            ArrayNode arr = Json.arr();
-            agents.forEach(arr::add);
-            root.set("agents", arr);
-            Path tmp = dir.resolve("agents.json.tmp");
-            Files.writeString(tmp, Json.write(root));
-            AtomicFiles.replace(tmp, f); // 原子替换(失败已清理 tmp 后抛出,不残留垃圾)
-        } catch (IOException | RuntimeException e) {
-            log.warn("agents.json 写入失败 task={}", taskId, e);
         }
     }
 

@@ -12,7 +12,7 @@ import dev.everyagent.plugin.api.config.WorkerConfig;
  *   <li>SubAgentToolsProvider → ToolProviderRegistry</li>
  *   <li>SubAgentSkillContributor → SkillContributorRegistry</li>
  *   <li>task.agents RPC → RpcDispatcher</li>
- *   <li>3 个 TaskLifecycleNode → TaskLifecycleRegistry（ledger track/untrack/persist）</li>
+ *   <li>4 个 TaskLifecycleNode → TaskLifecycleRegistry（ledger track/untrack/persist、spawned.await）</li>
  * </ul>
  */
 public class SubAgentPlugin implements EveryAgentPlugin {
@@ -23,24 +23,22 @@ public class SubAgentPlugin implements EveryAgentPlugin {
     @Override
     public void activate(WorkerPluginContext ctx) {
         // SubAgentManager 是插件内部类,不在 Spring 容器中(插件经 URLClassLoader 加载,
-        // Spring 组件扫描不可见)。在此手动构造,依赖从 worker 服务获取。
-        SubAgentManager subAgentManager = new SubAgentManager(
-                ctx.services().agentFactory(),
-                ctx.services().interaction(),
-                ctx.services().task());
+        // Spring 组件扫描不可见)。在此手动构造;零服务依赖——全部取数经 ExecContext
+        // 槽位(§8.2),services().task() / agentFactory() / interaction() 均不再使用。
+        SubAgentManager subAgentManager = new SubAgentManager();
 
-        // 1. 注册工具提供者
+        // 1. 注册工具提供者(工具入口绑 ToolContext.execution() 整个上下文句柄)
         ctx.registerToolProvider(new SubAgentToolsProvider(subAgentManager));
 
-        // 2. 台账实例（per-task 事件投影 + agents.json 读写）
-        SubAgentLedger ledger = new SubAgentLedger(ctx.services().store());
+        // 2. 台账实例（per-subject 事件投影 + agents.json 自持读写,零 store 依赖）
+        SubAgentLedger ledger = new SubAgentLedger();
         // 注入 ledger 到 SubAgentManager,使 list_agents 工具能读取台账
         // (含从磁盘 agents.json 恢复的历史已完成子 agent)
         subAgentManager.setLedger(ledger);
 
-        // 3. 注册 task.agents RPC
+        // 3. 注册 task.agents RPC（store 仅 RpcHandler 的 task 壳:readMeta/dirOf/taskDirExists）
         SubAgentRpcHandler rpcHandler = new SubAgentRpcHandler(ledger, ctx.services().store());
-        ctx.registerRpcMethod("task.agents", rpcHandler::handleTaskAgents);
+        ctx.registerRpcMethod(SubAgentRpcHandler.TASK_AGENTS, rpcHandler::handleTaskAgents);
 
         // 4. 注册生命周期节点
         ctx.registerTaskLifecycleNode(new SubAgentLedgerTrackNode(ledger));

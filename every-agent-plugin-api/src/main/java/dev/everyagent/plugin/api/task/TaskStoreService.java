@@ -35,8 +35,10 @@ public interface TaskStoreService {
     // ---- 截断（编辑重发）----
 
     /**
-     * 截断磁盘后续事件（所有 *.jsonl 保留 seq ≤ targetSeq 的事件，
-     * 截断 rounds.jsonl、清理 file-changes/ 与 agents.json）。
+     * 截断磁盘后续事件（所有 *.jsonl 保留 seq ≤ targetSeq 的事件，截断
+     * rounds.jsonl；<b>只动事件 jsonl，不删任何插件数据文件</b>——
+     * file-changes/、agents.json 等插件自有数据残留陈旧条目被接受，
+     * 后续经截断事件通知（如 task.truncated）由插件自行清理，开放项）。
      *
      * @return true 如果找到 targetSeq 处的 user.message 事件
      */
@@ -65,14 +67,6 @@ public interface TaskStoreService {
      * 文件缺失/旧格式返回空列表。
      */
     List<Message> loadConversation(Path dir, String mainAgentId);
-
-    // ---- agents.json 读写（subagent 台账）----
-
-    /** 读 agents.json（不存在返回 null）。 */
-    java.util.List<tools.jackson.databind.node.ObjectNode> readAgents(Path dir);
-
-    /** 原子写 agents.json（覆盖写）。 */
-    void writeAgents(String taskId, java.util.Collection<tools.jackson.databind.node.ObjectNode> agents);
 
     /** 判断任务数据目录是否存在（磁盘终态或运行中）。 */
     boolean taskDirExists(String taskId);

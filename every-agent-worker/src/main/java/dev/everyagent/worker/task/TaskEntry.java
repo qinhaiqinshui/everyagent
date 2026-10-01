@@ -191,7 +191,7 @@ public final class TaskEntry implements TaskRuntime {
 
     /**
      * 注入预绑定端口的裸依赖(TaskEntryCreateNode 创建本对象后调用,与 taskDir 注入同风格)。
-     * 未注入时 agentFactory()/interaction() 返回 null(单测直构场景,与 ExecContext default 语义一致)。
+     * 未注入时 agentFactory()/interaction() 返回 null(单测直构场景)。
      */
     public void bindExecPorts(AgentFactoryImpl agentFactory, InteractionService interaction) {
         this.agentFactoryImpl = agentFactory;

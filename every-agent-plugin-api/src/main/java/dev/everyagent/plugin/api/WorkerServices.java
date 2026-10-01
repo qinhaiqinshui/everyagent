@@ -1,6 +1,5 @@
 package dev.everyagent.plugin.api;
 
-import dev.everyagent.plugin.api.agent.AgentFactory;
 import dev.everyagent.plugin.api.config.WorkerConfig;
 import dev.everyagent.plugin.api.event.StreamEmitter;
 import dev.everyagent.plugin.api.interaction.InteractionService;
@@ -49,7 +48,4 @@ public interface WorkerServices {
 
     /** 事件扇出口（向 hub 连接广播事件）。 */
     StreamEmitter stream();
-
-    /** Agent 工厂（创建 agent 装配会话）。 */
-    AgentFactory agentFactory();
 }

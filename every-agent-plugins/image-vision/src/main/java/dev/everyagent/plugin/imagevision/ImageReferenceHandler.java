@@ -1,6 +1,7 @@
 package dev.everyagent.plugin.imagevision;
 
 import dev.everyagent.plugin.api.WorkerServices;
+import dev.everyagent.plugin.api.execution.ExecContext;
 import dev.everyagent.plugin.api.interaction.AskOption;
 import dev.everyagent.plugin.api.interaction.AskQuestion;
 import dev.everyagent.plugin.api.interaction.AskResult;
@@ -139,7 +140,9 @@ public class ImageReferenceHandler implements FileReferenceHandler {
      * 拒绝/超时/取消/交互服务不可用 → false（降级为纯路径文本，不阻断任务）。
      */
     private boolean authorizeExternal(FileReferenceContext ctx, Path real) {
-        InteractionService interaction = services.interaction();
+        // §8.2/F:ask 经主体绑定交互口(SubjectBoundInteractionService 自动补 taskId 键)
+        ExecContext exec = ctx.execution();
+        InteractionService interaction = exec == null ? null : exec.interaction();
         if (interaction == null) {
             return false;
         }
@@ -151,7 +154,7 @@ public class ImageReferenceHandler implements FileReferenceHandler {
         AskResult ans;
         try {
             ans = interaction.ask(List.of(new AskQuestion("", prompt, AUTHORIZE_OPTIONS, fields)),
-                    AUTH_ASK_TIMEOUT_MS, Map.of("taskId", ctx.taskId()));
+                    AUTH_ASK_TIMEOUT_MS, Map.of());
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             return false;

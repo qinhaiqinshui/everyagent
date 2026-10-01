@@ -43,10 +43,13 @@ public final class SubAgentSpawnedAwaitNode implements TaskLifecycleNode {
         }
 
         Object result = next.proceed(ctx);
-        TaskRuntime t = (TaskRuntime) ctx.taskInfo();
+        TaskRuntime t = ctx.taskRuntime();
         log.info("[sub] spawned.await 上行: awaitAllBeforeFinish taskId={}", ctx.taskId());
         try {
-            subs.awaitAllBeforeFinish(t);
+            if (t != null) {
+                // TaskRuntime extends ExecContext:awaitAllBeforeFinish 收中性上下文(§8.2)
+                subs.awaitAllBeforeFinish(t);
+            }
         } catch (RuntimeException e) {
             log.warn("awaitAllBeforeFinish 异常 task={}", ctx.taskId(), e);
         }

@@ -15,14 +15,21 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * task.agents RPC 处理器（从 TaskManager.rpcTaskAgents 迁入插件域）。
+ * task.agents RPC 处理器（从 TaskManager.rpcTaskAgents 迁入插件域;§8.2 壳/核分层）。
  *
  * <p>唯一取数口：live 任务读 SubAgentLedger 内存台账，
  * 冷任务读磁盘 agents.json（回退 meta.agents）。
+ *
+ * <p>壳/核分层：冷路径 readMeta(dir) 取 mainAgentId / dirOf(taskId) 继续用
+ * TaskStoreService（meta.json 是任务摘要,mainAgentId 是任务概念——壳留 task 面）；
+ * 核心列表逻辑（读 agents.json）复用中性台账 reader（{@link SubAgentLedger#readAgents}）。
  */
 public class SubAgentRpcHandler {
 
     private static final Logger log = LoggerFactory.getLogger(SubAgentRpcHandler.class);
+
+    /** RPC 方法名（worker RpcMethods 已清退,常量跟注册方走,§8.5④）。 */
+    public static final String TASK_AGENTS = "task.agents";
 
     private final SubAgentLedger ledger;
     private final TaskStoreService store;
@@ -33,7 +40,7 @@ public class SubAgentRpcHandler {
     }
 
     /**
-     * task.agents RPC 处理方法（经 RpcDispatcher 调用）。
+     * task.agents RPC 处理方法（经 RpcDispatcher 调用,方法名常量 {@link #TASK_AGENTS}）。
      */
     public void handleTaskAgents(RpcContext ctx) {
         String taskId = ctx.strParam("taskId");
@@ -67,7 +74,7 @@ public class SubAgentRpcHandler {
             ObjectNode meta = store.readMeta(dir);
             mainAgentId = meta == null ? "" : meta.path("mainAgentId").asString("");
 
-            List<ObjectNode> disk = store.readAgents(dir);
+            List<ObjectNode> disk = ledger.readAgents(dir);
             if (disk != null) {
                 for (ObjectNode a : disk) {
                     agents.add(a.deepCopy());

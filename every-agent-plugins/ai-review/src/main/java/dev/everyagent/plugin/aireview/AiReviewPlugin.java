@@ -17,9 +17,8 @@ public class AiReviewPlugin implements EveryAgentPlugin {
 
     @Override
     public void activate(WorkerPluginContext ctx) {
-        // 1. 实例化 AI 审议器
-        AiAuthReviewer reviewer = new AiAuthReviewer(
-                ctx.services().config(), ctx.services().agentFactory());
+        // 1. 实例化 AI 审议器(仅 WorkerConfig;agent 装配经 req.context().agentFactory(),§8.3)
+        AiAuthReviewer reviewer = new AiAuthReviewer(ctx.services().config());
 
         // 2. 注册授权链节点
         ctx.registerAuthorizationHandler(new AiReviewAuthHandler(reviewer));

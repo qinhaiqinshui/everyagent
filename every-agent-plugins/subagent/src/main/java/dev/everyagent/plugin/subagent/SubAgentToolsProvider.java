@@ -22,6 +22,6 @@ public class SubAgentToolsProvider implements ToolProvider {
 
     @Override
     public List<ToolCallback> createTools(ToolContext ctx) {
-        return List.of(ToolCallbacks.from(new SubAgentTools(subAgentManager, ctx.taskId())));
+        return List.of(ToolCallbacks.from(new SubAgentTools(subAgentManager, ctx.execution())));
     }
 }

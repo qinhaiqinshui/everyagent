@@ -130,6 +130,8 @@ class UnattendedSlashProviderTest {
         }
         @Override public dev.everyagent.plugin.api.model.EventEmitter events() { return e -> e.id(); }
         @Override public Map<String, AgentContext> agents() { return new HashMap<>(); }
+        @Override public dev.everyagent.plugin.api.agent.AgentFactory agentFactory() { return null; }
+        @Override public dev.everyagent.plugin.api.interaction.InteractionService interaction() { return null; }
         @Override public AgentContext main() { return null; }
         @Override public dev.everyagent.plugin.api.event.EventLogReader log() {
             return new dev.everyagent.plugin.api.event.EventLogReader() {

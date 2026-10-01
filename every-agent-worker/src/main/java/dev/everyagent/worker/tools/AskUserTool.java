@@ -8,10 +8,9 @@ import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 import dev.everyagent.plugin.api.interaction.AskOption;
 import dev.everyagent.plugin.api.interaction.AskQuestion;
 import dev.everyagent.plugin.api.interaction.AskResult;
-import dev.everyagent.plugin.api.interaction.InteractionService;
+import dev.everyagent.plugin.api.execution.ExecContext;
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.plugin.api.exception.AgentCancelledException;
-import dev.everyagent.worker.task.TaskEntry;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 
@@ -97,15 +96,13 @@ public class AskUserTool {
         }
     }
 
-    private final InteractionService interaction;
     private final WorkerProperties props;
-    private final TaskEntry task;
+    private final ExecContext ctx;
     private final String agentId;
 
-    public AskUserTool(InteractionService interaction, WorkerProperties props, TaskEntry task, String agentId) {
-        this.interaction = interaction;
+    public AskUserTool(WorkerProperties props, ExecContext ctx, String agentId) {
         this.props = props;
-        this.task = task;
+        this.ctx = ctx;
         this.agentId = agentId;
     }
 
@@ -136,9 +133,9 @@ public class AskUserTool {
                 }
                 built.add(new AskQuestion("", prompt, askOpts));
             }
-                        AskResult ans = interaction.ask(built,
+                        AskResult ans = ctx.interaction().ask(built,
                     props.getLimits().getAskTimeoutMs(),
-                    java.util.Map.of("taskId", task.taskId, "agentId", agentId));
+                    java.util.Map.of("agentId", agentId));
             return switch (ans.status()) {
                 case "answered" -> ans.text();
                 case "timeout" -> "用户未在规定时间内回答(已超时)。请基于现有信息继续,并明确告知用户未获得答复。";

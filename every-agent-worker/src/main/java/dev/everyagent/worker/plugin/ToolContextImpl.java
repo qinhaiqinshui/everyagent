@@ -8,7 +8,6 @@ import dev.everyagent.plugin.api.interaction.InteractionService;
 import dev.everyagent.plugin.api.shell.ShellExecutor;
 import dev.everyagent.plugin.api.spi.SandboxBackend;
 import dev.everyagent.plugin.api.spi.ToolContext;
-import dev.everyagent.worker.task.TaskEntry;
 import dev.everyagent.worker.tools.CommandExecutor;
 import dev.everyagent.worker.tools.PermissionGate;
 
@@ -17,12 +16,10 @@ import java.nio.file.Path;
 /**
  * {@link ToolContext} 的内置实现。
  *
- * <p>封装 per-task 信息（taskId、agentId、workspaceRoot、TaskEntry）和核心只读服务
+ * <p>封装 per-task 信息（taskId、agentId、workspaceRoot、execution）和核心只读服务
  * （沙箱、权限门、工作区管理器、rg 二进制路径），供 {@link dev.everyagent.worker.plugin.spi.ToolProvider}
- * 据此创建工具实例。
- *
- * <p>除实现 {@link ToolContext} 接口方法外，额外暴露 {@link #taskEntry()} 供内置适配器
- * 获取 {@link TaskEntry}（含 metadata 等任务级开关）。外部插件仅依赖接口方法。
+ * 据此创建工具实例。内置适配器与外部插件一律经 {@link #execution()}（ExecContext
+ * 类型化槽位）取数，不再接触 {@code TaskEntry} 具体类型。
  */
 public class ToolContextImpl implements ToolContext {
 
@@ -35,12 +32,12 @@ public class ToolContextImpl implements ToolContext {
     private final WorkspaceManager workspaces;
     private final Path rgBinary;
     private final InteractionService interaction;
-    private final TaskEntry taskEntry;
+    private final ExecContext execution;
     private final SandboxPathRegistry pathRegistry;
 
     public ToolContextImpl(String taskId, String agentId, Path workspaceRoot,
             SandboxBackend sandbox, PermissionGate gate, WorkspaceManager workspaces,
-            Path rgBinary, InteractionService interaction, TaskEntry taskEntry,
+            Path rgBinary, InteractionService interaction, ExecContext execution,
             SandboxPathRegistry pathRegistry) {
         this.taskId = taskId;
         this.agentId = agentId;
@@ -51,7 +48,7 @@ public class ToolContextImpl implements ToolContext {
         this.workspaces = workspaces;
         this.rgBinary = rgBinary;
         this.interaction = interaction;
-        this.taskEntry = taskEntry;
+        this.execution = execution;
         this.pathRegistry = pathRegistry;
     }
 
@@ -109,12 +106,7 @@ public class ToolContextImpl implements ToolContext {
      */
     @Override
     public ExecContext execution() {
-        return taskEntry;
-    }
-
-    /** 额外暴露：任务条目（含 metadata 等任务级开关），供内置适配器使用（过渡，S5 退役）。 */
-    public TaskEntry taskEntry() {
-        return taskEntry;
+        return execution;
     }
 
     /** 内置适配器专用：权限门具体实现（接口方法返回 SPI 接口类型）。 */
