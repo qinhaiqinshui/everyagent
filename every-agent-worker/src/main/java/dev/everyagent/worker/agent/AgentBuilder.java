@@ -1,6 +1,6 @@
 package dev.everyagent.worker.agent;
 
-import dev.everyagent.plugin.api.model.EventEmitter;
+import dev.everyagent.plugin.api.execution.ExecContext;
 import dev.everyagent.plugin.api.spi.AdvisorProvider;
 import dev.everyagent.plugin.api.spi.ToolProvider;
 import dev.everyagent.worker.config.WorkerProperties;
@@ -33,21 +33,25 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
 /**
  * Agent 层 Builder 模式装配入口。
  *
- * <p>从上层接收 {@link EventEmitter}（逐层传播）+ {@code Map<String, Object> properties}（黑盒数据），
- * 不接收 TaskEntry。{@code create()} 时从注册表聚合全部工具和 advisor 到内部列表，
+ * <p>S2 起从上层接收 {@link ExecContext}（执行上下文：emitter 取
+ * {@code exec.emitter()}，工具上下文直接用 exec 槽位构造）。
+ * {@code create()} 时从注册表聚合全部工具和 advisor 到内部列表，
  * 之后可用 {@code .tools(list, mode)} / {@code .advisors(list, mode)} 按模式增删改。
  *
  * <p>核心设计：{@code create()} 聚合全部工具（工具只需 ToolContext，不需 entity）；
  * {@code build()} 创建 entity 后聚合 advisor（advisor 需要 entity 引用），再装配 ChatClient。
  *
- * <p>{@code properties} 是黑盒：agent 层核心（{@link AgentRunner}）完全不读；
- * task 层 advisor 从中取出 TaskEntry 等。builder 内部从 properties 取必要信息构造 ToolContext。
+ * <p>过渡 map（S4 advisor 迁移后删除）：S4 前 advisor 仍读
+ * {@code AgentContext.properties().get("taskEntry")} 等四件套键，故 create 内从 exec
+ * 重建等价 map 挂到 Build/AgentEntity 的 properties 上；agent 层核心（{@link AgentRunner}）
+ * 完全不读。S4 advisor 全迁 {@code execution()} 槽位后，map 与 properties 字段一并删除。
  */
 @Component
 public class AgentBuilder {
@@ -97,33 +101,60 @@ public class AgentBuilder {
     /**
      * 创建装配会话：聚合全部工具 + 全部 advisor 到内部列表，返回 fluent Build 对象。
      *
-     * @param agentId    agent 标识
-     * @param chatModel  模型层 ChatModel（由上层解析后传入）
-     * @param options    请求参数快照
-     * @param emitter    从上层传入的事件发射器（逐层传播）
-     * @param properties 上层黑盒数据（taskEntry / taskId / workspaceRoot 等，agent 层核心不读）
+     * @param agentId   agent 标识
+     * @param chatModel 模型层 ChatModel（由上层解析后传入）
+     * @param options   请求参数快照
+     * @param exec      本 agent 所属执行上下文（task 或未来 workflow）；emitter 取
+     *                  {@code exec.emitter()}，过渡 map 的 configId 取
+     *                  {@code exec.snapshot().configId()}
      */
     public Build create(String agentId, ChatModel chatModel, OpenAiChatOptions options,
-            EventEmitter emitter, Map<String, Object> properties) {
+            ExecContext exec) {
+        return create(agentId, chatModel, options, exec, exec.snapshot().configId());
+    }
+
+    /**
+     * 包内全参变体：{@code configId} 为本 agent 实际解析所用的配置 ID，作为过渡 map
+     * {@code "configId"} 键的取值——AgentFactoryImpl 主干传入（审议 agent 覆盖模型时
+     * 与 {@code exec.snapshot().configId()} 不同，须保 advisor 取数与原先一致）。
+     */
+    Build create(String agentId, ChatModel chatModel, OpenAiChatOptions options,
+            ExecContext exec, String configId) {
+        // 过渡 map（S4 advisor 迁移后删除）：advisor 此期间仍读 properties 四件套键
+        Map<String, Object> properties = transitionProps(exec, configId);
         // 聚合全部工具: 遍历 toolRegistry.getProviders() → appliesTo → createTools
-        ToolContextImpl toolCtx = createToolContext(agentId, properties);
+        ToolContextImpl toolCtx = createToolContext(agentId, exec);
         List<ToolCallback> tools = new ArrayList<>();
         for (ToolProvider p : toolRegistry.getProviders()) {
             if (p.appliesTo(toolCtx)) {
                 tools.addAll(p.createTools(toolCtx));
             }
         }
-        return new Build(agentId, chatModel, options, emitter, properties, tools);
+        return new Build(agentId, chatModel, options, exec, properties, tools);
     }
 
-    /** 从 properties 提取必要信息构造 ToolContext。 */
-    @SuppressWarnings("unchecked")
-    private ToolContextImpl createToolContext(String agentId, Map<String, Object> properties) {
-        String taskId = (String) properties.get("taskId");
-        Object wsRoot = properties.get("workspaceRoot");
-        Path workspaceRoot = wsRoot == null ? null : Paths.get(wsRoot.toString());
-        TaskEntry taskEntry = (TaskEntry) properties.get("taskEntry");
-        return new ToolContextImpl(taskId, agentId, workspaceRoot,
+    /**
+     * 过渡 map 重建（S4 advisor 迁移后删除）：键集与原 ThreadSubmitNode /
+     * SubAgentManager / AiAuthReviewer 手工组装完全一致
+     * （taskEntry / taskId / workspaceRoot / configId），advisor 经
+     * {@code AgentContext.properties().get(...)} 的取数路径与取值完全不变。
+     */
+    private static Map<String, Object> transitionProps(ExecContext exec, String configId) {
+        Map<String, Object> props = new HashMap<>(4);
+        props.put("taskEntry", exec);
+        props.put("taskId", exec.subjectId());
+        props.put("workspaceRoot", exec.workspaceRoot());
+        props.put("configId", configId);
+        return props;
+    }
+
+    /** 从 exec 槽位构造 ToolContext（S2 起不再从 map 逐个 get）。 */
+    private ToolContextImpl createToolContext(String agentId, ExecContext exec) {
+        // 过渡：worker 域内 exec 恒为 TaskEntry（ToolContextImpl 仍暴露 taskEntry()，S5 退役）
+        TaskEntry taskEntry = (TaskEntry) exec;
+        Path workspaceRoot = exec.workspaceRoot() == null
+                ? null : Paths.get(exec.workspaceRoot());
+        return new ToolContextImpl(exec.subjectId(), agentId, workspaceRoot,
                 sandbox, gate, workspaces, rgBinary != null ? rgBinary.path() : null, interaction, taskEntry,
                 pathRegistry);
     }
@@ -146,7 +177,9 @@ public class AgentBuilder {
         private final String agentId;
         private final ChatModel chatModel;
         private final OpenAiChatOptions options;
-        private final EventEmitter emitter;
+        /** 本 agent 所属执行上下文（S2 起为装配主干；agent 级 emitter 包它的 emitter()）。 */
+        private final ExecContext execution;
+        /** 过渡 map（S4 advisor 迁移后删除）：advisor / 工具拦截器此期间仍经此取数。 */
         private final Map<String, Object> properties;
 
         // create() 时已聚合填充，后续可按模式增删改
@@ -160,12 +193,12 @@ public class AgentBuilder {
         private String title = "";
 
         Build(String agentId, ChatModel chatModel, OpenAiChatOptions options,
-                EventEmitter emitter, Map<String, Object> properties,
+                ExecContext execution, Map<String, Object> properties,
                 List<ToolCallback> tools) {
             this.agentId = agentId;
             this.chatModel = chatModel;
             this.options = options;
-            this.emitter = emitter;
+            this.execution = execution;
             this.properties = properties;
             this.tools = new ArrayList<>(tools);
         }
@@ -225,9 +258,10 @@ public class AgentBuilder {
          * 装配完成：创建 AgentEntity → 聚合 advisor → 装配 ChatClient → 设置到 entity。
          */
         public AgentEntity build() {
-            // 1. 创建 AgentEntity（chatClient 暂为 null，build 后设置）
+            // 1. 创建 AgentEntity（chatClient 暂为 null，build 后设置）；
+            //    上游 emitter 取 execution.emitter()（任务级事件口）
             AgentEntity entity = new AgentEntity(agentId, title, chatModel, options,
-                    List.copyOf(tools), emitter, properties);
+                    List.copyOf(tools), execution.emitter(), execution, properties);
             entity.conversation.addAll(conversation);
 
             // 2. 装配 TCM：per-run InterceptingToolCallingManager（持 properties，替代 ThreadLocal）

@@ -2,6 +2,7 @@ package dev.everyagent.worker.agent;
 
 import dev.everyagent.plugin.api.agent.Agent;
 import dev.everyagent.plugin.api.agent.AgentFactory;
+import dev.everyagent.plugin.api.execution.ExecContext;
 import dev.everyagent.plugin.api.model.EventEmitter;
 import dev.everyagent.worker.modules.ConfigStore;
 import dev.everyagent.worker.modules.ConfigStore.ResolvedConfig;
@@ -24,6 +25,12 @@ import java.util.function.UnaryOperator;
  * 调用方可链式配置（title / tools / systemPrompt / userInput / options）后
  * {@code build()} 出 {@link Agent} 实例。
  *
+ * <p>S2 起（§4.5）：创建主干是包内全参 {@link #create(String, String, ExecContext)}
+ * ——接收 {@link ExecContext}，configId 为 null 时取绑定默认
+ * {@code exec.snapshot().configId()}，emitter 固定取 {@code exec.emitter()}；
+ * {@link #bind(ExecContext)} 据此产出绑定工厂静态代理（TaskBoundAgentFactory），
+ * 挂到 {@code ExecContext.agentFactory()} 槽位，作为绑定工厂的唯一获取口。
+ *
  * <p>设计要点：模型构建延迟到 {@code build()} 执行，以便 {@code options(Consumer)}
  * 在模型构建前生效——{@code buildAgentModel} 的 optionsCustomizer 参数由
  * {@code options(Consumer<ChatOptions>)} 转换而来。
@@ -43,11 +50,45 @@ public class AgentFactoryImpl implements AgentFactory {
         this.agentBuilder = agentBuilder;
     }
 
+    /**
+     * 全参创建（S2 内部主干，包内可见）：接收 {@link ExecContext}；
+     * {@code configId = null} 时取绑定默认 {@code exec.snapshot().configId()}；
+     * emitter 固定取 {@code exec.emitter()}（任务级事件口）。
+     */
+    dev.everyagent.plugin.api.agent.AgentBuilder create(
+            String agentId, String configId, ExecContext exec) {
+        String bound = configId != null ? configId : exec.snapshot().configId();
+        return new AgentBuilderAdapter(agentId, bound, exec);
+    }
+
+    /**
+     * 绑定 {@link ExecContext} 产出 {@link AgentFactory} 静态代理
+     * （TaskBoundAgentFactory，包内类型）：TaskEntry.agentFactory() 经本方法获取，
+     * 调用方只见 plugin-api 契约类型，不见代理实现类。
+     */
+    public AgentFactory bind(ExecContext exec) {
+        return new TaskBoundAgentFactory(this, exec);
+    }
+
+    /**
+     * 过渡桥接（S5 退役；SubAgentManager / AiAuthReviewer 迁移到绑定工厂后删除）：
+     * 从 properties 黑盒 map 取 {@code "taskEntry"}（TaskEntry 即 ExecContext）作
+     * exec 走全参路径；传入 emitter 被忽略——过渡期两个调用方传的都是
+     * {@code task.events()}，恒等于 {@code exec.emitter()}，行为不变。
+     *
+     * @throws IllegalArgumentException properties 缺 {@code "taskEntry"}（全仓现无此调用形态）
+     */
     @Override
     public dev.everyagent.plugin.api.agent.AgentBuilder create(
             String agentId, String configId,
             EventEmitter emitter, Map<String, Object> properties) {
-        return new AgentBuilderAdapter(agentId, configId, emitter, properties);
+        Object exec = properties != null ? properties.get("taskEntry") : null;
+        if (exec instanceof ExecContext ctx) {
+            return create(agentId, configId, ctx);
+        }
+        throw new IllegalArgumentException(
+                "AgentFactory 过渡四参签名要求 properties 含 \"taskEntry\"（ExecContext）；"
+                        + "S2 起请改用 ExecContext.agentFactory() 绑定工厂创建");
     }
 
     /**
@@ -61,9 +102,10 @@ public class AgentFactoryImpl implements AgentFactory {
             implements dev.everyagent.plugin.api.agent.AgentBuilder {
 
         private final String agentId;
+        /** 已解析的配置 ID（null 已在入口回退为绑定默认值）。 */
         private final String configId;
-        private final EventEmitter emitter;
-        private final Map<String, Object> properties;
+        /** 本 agent 所属执行上下文（S2 起替代 emitter + properties 黑盒入参）。 */
+        private final ExecContext exec;
 
         private String title = "";
         private Consumer<ChatOptions> optionsCustomizer;
@@ -72,12 +114,10 @@ public class AgentFactoryImpl implements AgentFactory {
         private String systemPrompt;
         private String userInput;
 
-        AgentBuilderAdapter(String agentId, String configId, EventEmitter emitter,
-                Map<String, Object> properties) {
+        AgentBuilderAdapter(String agentId, String configId, ExecContext exec) {
             this.agentId = agentId;
             this.configId = configId;
-            this.emitter = emitter;
-            this.properties = properties;
+            this.exec = exec;
         }
 
         @Override
@@ -122,13 +162,15 @@ public class AgentFactoryImpl implements AgentFactory {
             // 2. 转换 Consumer<ChatOptions> → UnaryOperator<OpenAiChatOptions>
             UnaryOperator<OpenAiChatOptions> customizer = toUnaryOperator(optionsCustomizer);
 
-            // 3. 构建模型 + options 快照
+            // 3. 构建模型 + options 快照（emitter 取执行上下文的任务级事件口）
             ChatModelFactory.AgentModel am =
-                    chatModelFactory.buildAgentModel(cfg, agentId, emitter, customizer);
+                    chatModelFactory.buildAgentModel(cfg, agentId, exec.emitter(), customizer);
 
-            // 4. 创建 worker Build（聚合全部工具 + advisor 到内部列表）
+            // 4. 创建 worker Build（聚合全部工具 + advisor 到内部列表）。
+            //    configId 透传：保过渡 map 的 "configId" 键与本 agent 实际解析值一致
+            //    （审议 agent 覆盖模型时与 exec.snapshot().configId() 不同）。
             AgentBuilder.Build build = agentBuilder.create(
-                    agentId, am.chatModel(), am.options(), emitter, properties);
+                    agentId, am.chatModel(), am.options(), exec, configId);
 
             // 5. 应用 fluent 配置
             if (title != null && !title.isEmpty()) {

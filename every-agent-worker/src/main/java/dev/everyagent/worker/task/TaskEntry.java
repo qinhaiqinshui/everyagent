@@ -1,7 +1,9 @@
 package dev.everyagent.worker.task;
 
 import dev.everyagent.plugin.api.agent.AgentContext;
+import dev.everyagent.plugin.api.agent.AgentFactory;
 import dev.everyagent.plugin.api.event.EventLogReader;
+import dev.everyagent.plugin.api.interaction.InteractionService;
 import dev.everyagent.plugin.api.permission.TaskInfo;
 import dev.everyagent.plugin.api.task.FileChangesCollector;
 import dev.everyagent.plugin.api.task.TaskRuntime;
@@ -9,6 +11,8 @@ import dev.everyagent.contract.json.Json;
 import dev.everyagent.plugin.api.model.EventEmitter;
 import dev.everyagent.plugin.api.model.ModelConfig;
 import dev.everyagent.worker.agent.AgentEntity;
+import dev.everyagent.worker.agent.AgentFactoryImpl;
+import dev.everyagent.worker.interaction.SubjectBoundInteractionService;
 import dev.everyagent.worker.proto.TaskDtos.TaskStatus;
 import dev.everyagent.worker.proto.TaskDtos.TaskSummary;
 import dev.everyagent.plugin.api.event.Usage;
@@ -27,8 +31,12 @@ import java.util.concurrent.atomic.AtomicLong;
  * 任务运行时(架构 §5.8):快照 + 事件日志 + 输入队列 + agent 集合。
  * 运行完成即销毁(finish 里 untrack + tasks.remove),磁盘是唯一真相源;
  * 再运行 = 同 taskId 新建本对象(冷启动,mainAgentId 沿用 → 同一 jsonl 文件续写)。
+ *
+ * <p>S2 起 implements {@link TaskRuntime}(extends ExecContext):预绑定端口
+ * agentFactory()/interaction() 见下方懒加载实现。过渡期额外直接 implements
+ * {@link TaskInfo}(授权链 SPI 签名,S1 起 TaskRuntime 不再继承它;S3 授权链收编后退役)。
  */
-public final class TaskEntry implements TaskRuntime {
+public final class TaskEntry implements TaskRuntime, TaskInfo {
 
     public final String taskId;
     public final String title;
@@ -149,6 +157,78 @@ public final class TaskEntry implements TaskRuntime {
     @Override
     public Path taskDir() {
         return taskDir;
+    }
+
+    // ---- ExecContext 槽位显式实现(原 TaskRuntime default 桥接显式化,语义不变;§4.3) ----
+
+    /** 执行主体 ID:任务域即 taskId。 */
+    @Override
+    public String subjectId() {
+        return taskId;
+    }
+
+    /** 任务级事件口:桥接 {@link #events()}。 */
+    @Override
+    public EventEmitter emitter() {
+        return events();
+    }
+
+    /** 数据目录:桥接 {@link #taskDir()}。 */
+    @Override
+    public Path dataDir() {
+        return taskDir();
+    }
+
+    // ---- ExecContext 预绑定端口(agentFactory / interaction,§4.1;懒加载 + 裸依赖注入) ----
+
+    /** 绑定 Agent 工厂的裸依赖(TaskManager → TaskEntryCreateNode 组装时注入)。 */
+    private volatile AgentFactoryImpl agentFactoryImpl;
+    /** 绑定交互口的裸依赖(TaskManager → TaskEntryCreateNode 组装时注入)。 */
+    private volatile InteractionService interactionService;
+    /** 懒加载缓存:agentFactoryImpl.bind(this)(TaskBoundAgentFactory,worker.agent 包内类型)。 */
+    private volatile AgentFactory boundAgentFactory;
+    /** 懒加载缓存:new SubjectBoundInteractionService(interactionService, taskId)。 */
+    private volatile InteractionService boundInteraction;
+
+    /**
+     * 注入预绑定端口的裸依赖(TaskEntryCreateNode 创建本对象后调用,与 taskDir 注入同风格)。
+     * 未注入时 agentFactory()/interaction() 返回 null(单测直构场景,与 ExecContext default 语义一致)。
+     */
+    public void bindExecPorts(AgentFactoryImpl agentFactory, InteractionService interaction) {
+        this.agentFactoryImpl = agentFactory;
+        this.interactionService = interaction;
+    }
+
+    /** 已绑定本任务的 Agent 工厂(TaskBoundAgentFactory 静态代理;唯一获取口,§4.5)。 */
+    @Override
+    public AgentFactory agentFactory() {
+        AgentFactory bound = boundAgentFactory;
+        if (bound != null) {
+            return bound;
+        }
+        AgentFactoryImpl impl = agentFactoryImpl;
+        if (impl == null) {
+            return null;
+        }
+        bound = impl.bind(this);
+        boundAgentFactory = bound;
+        return bound;
+    }
+
+    /** 已绑定本任务的交互口(SubjectBoundInteractionService:ask 自动填 taskId,§4.1)。 */
+    @Override
+    public InteractionService interaction() {
+        InteractionService bound = boundInteraction;
+        if (bound != null) {
+            return bound;
+        }
+        InteractionService raw = interactionService;
+        if (raw == null) {
+            return null;
+        }
+        bound = new SubjectBoundInteractionService(raw, taskId);
+        boundInteraction = bound;
+        return bound;
     }
 
     // ---- AgentContext 接口已删除，以下为 TaskEntry 自身方法 ----

@@ -12,6 +12,8 @@ import dev.everyagent.worker.plugin.registry.TaskAdmissionPolicyRegistry;
 import dev.everyagent.plugin.api.proto.ShortIds;
 import dev.everyagent.worker.rpc.RpcContext;
 import dev.everyagent.plugin.api.slash.SlashTokenEncoder;
+import dev.everyagent.worker.agent.AgentFactoryImpl;
+import dev.everyagent.worker.interaction.InteractionServiceImpl;
 import dev.everyagent.worker.task.TaskBootstrap;
 import dev.everyagent.worker.task.TaskEntry;
 import dev.everyagent.worker.task.TaskManager;
@@ -44,12 +46,16 @@ public final class TaskEntryCreateNode implements TaskLifecycleNode {
     private final TaskStore store;
     private final Map<String, TaskManager.IdemEntry> idem;
     private final TaskAdmissionPolicyRegistry admissionPolicyRegistry;
+    /** ExecContext 预绑定端口裸依赖:创建 TaskEntry 后注入(S2,agentFactory()/interaction() 槽位)。 */
+    private final AgentFactoryImpl agentFactory;
+    private final InteractionServiceImpl asks;
 
     public TaskEntryCreateNode(TaskBootstrap taskBootstrap, WorkerProperties props,
             Map<String, TaskEntry> tasks, Map<String, TaskStore.StoredTask> diskTasks,
             AtomicInteger active, TaskStore store,
             Map<String, TaskManager.IdemEntry> idem,
-            TaskAdmissionPolicyRegistry admissionPolicyRegistry) {
+            TaskAdmissionPolicyRegistry admissionPolicyRegistry,
+            AgentFactoryImpl agentFactory, InteractionServiceImpl asks) {
         this.taskBootstrap = taskBootstrap;
         this.props = props;
         this.tasks = tasks;
@@ -58,6 +64,8 @@ public final class TaskEntryCreateNode implements TaskLifecycleNode {
         this.store = store;
         this.idem = idem;
         this.admissionPolicyRegistry = admissionPolicyRegistry;
+        this.agentFactory = agentFactory;
+        this.asks = asks;
     }
 
     @Override
@@ -172,6 +180,7 @@ public final class TaskEntryCreateNode implements TaskLifecycleNode {
                 impl.workspaceRoot(), impl.workspaceId(),
                 mainAgentId, props.getLimits().getMaxEventsPerTask());
         t.taskDir(store.dirOf(taskId, impl.workspaceId()));
+        t.bindExecPorts(agentFactory, asks);
         tasks.put(taskId, t);
         log.debug("[entry] taskentry.create 新建 task={} workspaceId={} workspaceRoot={} dir={} thread={}",
                 taskId, impl.workspaceId(), impl.workspaceRoot(), t.taskDir(),
@@ -233,6 +242,7 @@ public final class TaskEntryCreateNode implements TaskLifecycleNode {
                 meta.path("workspace").asString(null), workspaceId, mainAgentId,
                 props.getLimits().getMaxEventsPerTask());
         t.taskDir(st.dir());
+        t.bindExecPorts(agentFactory, asks);
         return t;
     }
 }

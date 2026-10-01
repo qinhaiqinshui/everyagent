@@ -18,7 +18,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import tools.jackson.databind.JsonNode;
 
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
@@ -83,14 +82,11 @@ public final class ThreadSubmitNode implements TaskLifecycleNode {
         // ---- 设置 VT 阶段 context 回调 ----
         impl.initialInput(UserInput.of(impl.input(), impl.rawContent()));
         impl.mainAgentBuilder(prior -> {
-            Map<String, Object> props = new HashMap<>();
-            props.put("taskEntry", t);
-            props.put("taskId", t.taskId);
-            props.put("workspaceRoot", t.workspaceRoot);
-            props.put("configId", t.snapshot.configId());
             ResolvedConfig cfg = configs.resolve(t.snapshot.configId());
             ChatModelFactory.AgentModel am = modelFactory.buildAgentModel(cfg, t.mainAgentId, t.events, null);
-            return agentBuilder.create(t.mainAgentId, am.chatModel(), am.options(), t.events, props)
+            // S2 起:TaskEntry(即 ExecContext)替代 emitter + props 黑盒四件套,
+            // 过渡 map 由 AgentBuilder.create 内部重建(S4 advisor 迁移后删除)
+            return agentBuilder.create(t.mainAgentId, am.chatModel(), am.options(), t)
                     .title("主 agent")
                     .conversation(prior)
                     .build();

@@ -1,6 +1,7 @@
 package dev.everyagent.worker.agent;
 
 import dev.everyagent.contract.json.Json;
+import dev.everyagent.plugin.api.execution.ExecContext;
 import dev.everyagent.plugin.api.model.EventEmitter;
 import dev.everyagent.plugin.api.model.EmitEvent;
 import dev.everyagent.plugin.api.event.Usage;
@@ -22,8 +23,9 @@ import java.util.concurrent.atomic.AtomicReference;
 /**
  * 单个 agent(主或子)的运行时:模型客户端、工具集、会话内存(可被压缩重写的载体,§5.8)。
  *
- * <p>解耦后(agent 层):不再引用 TaskEntry，持有从上层传入的 {@link EventEmitter}
- * (构造时包装：填 agentId → 委托上游)和 {@link #properties}（上层黑盒数据，agent 层核心不读）。
+ * <p>S2 起持有 {@link #execution}(本 agent 所属执行上下文,构造注入)与过渡
+ * {@link #properties}(S4 advisor 迁移后删除的黑盒 map);agent 级 {@link #emitter}
+ * 构造时包装上游 emitter(填 agentId → 委托 execution.emitter())。
  * {@link #chatClient} 由 {@link AgentBuilder} 装配注入。
  */
 public final class AgentEntity implements Agent {
@@ -41,8 +43,11 @@ public final class AgentEntity implements Agent {
     /** 由 AgentBuilder 装配注入(build 后设置)。 */
     public ChatClient chatClient;
 
-    /** 上层黑盒数据，agent 层核心(AgentRunner)完全不读；task 层 advisor 从中取 TaskEntry 等。 */
+    /** 上层黑盒数据（过渡 map，S4 advisor 迁移后删除），agent 层核心(AgentRunner)完全不读；task 层 advisor 从中取 TaskEntry 等。 */
     public final Map<String, Object> properties;
+
+    /** 本 agent 所属的执行上下文（task 或未来 workflow；S2 起构造注入，S4 起为 advisor 取数主干）。 */
+    public final ExecContext execution;
 
     private final AtomicReference<Usage> usage = new AtomicReference<>(Usage.zero());
     /** 最近一轮实测 usage(WorkerToolEventAdvisor 每轮 usage 事件时写;任务级 usageSummary 的供体)。 */
@@ -73,12 +78,14 @@ public final class AgentEntity implements Agent {
 
     public AgentEntity(String agentId, String title, ChatModel chatModel,
             OpenAiChatOptions options, List<ToolCallback> tools,
-            EventEmitter upstreamEmitter, Map<String, Object> properties) {
+            EventEmitter upstreamEmitter, ExecContext execution,
+            Map<String, Object> properties) {
         this.agentId = agentId;
         this.title = title;
         this.chatModel = chatModel;
         this.options = options;
         this.tools = tools;
+        this.execution = execution;
         this.properties = properties;
         // 包装：添加本层信息（agentId），委托上游 emitter
         this.emitter = e -> {
@@ -117,6 +124,11 @@ public final class AgentEntity implements Agent {
     @Override
     public Map<String, Object> properties() {
         return properties;
+    }
+
+    @Override
+    public ExecContext execution() {
+        return execution;
     }
 
     @Override

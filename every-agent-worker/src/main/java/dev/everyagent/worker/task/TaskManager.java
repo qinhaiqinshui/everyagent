@@ -7,6 +7,7 @@ import dev.everyagent.contract.rpc.Rpc;
 import dev.everyagent.plugin.api.event.EventLogReader;
 import dev.everyagent.worker.agent.AgentBuilder;
 import dev.everyagent.worker.agent.AgentEntity;
+import dev.everyagent.worker.agent.AgentFactoryImpl;
 import dev.everyagent.worker.agent.AgentRunner;
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.hub.EventSink;
@@ -86,6 +87,8 @@ public class TaskManager implements TaskInputHandler, InteractionServiceImpl.Sta
     private final EventSink eventSink;
     private final AgentBuilder agentBuilder;
     private final AgentRunner runner;
+    /** Agent 工厂实现:TaskEntry.agentFactory() 预绑定端口的裸依赖(S2,经 TaskEntryCreateNode 注入)。 */
+    private final AgentFactoryImpl agentFactory;
     /** 模型配置解析(configs + modelFactory 用于主 agent 装配时解析模型)。 */
     private final ConfigStore configs;
     private final ChatModelFactory modelFactory;
@@ -125,6 +128,7 @@ public class TaskManager implements TaskInputHandler, InteractionServiceImpl.Sta
     }
 
     public TaskManager(EventSink eventSink, AgentBuilder agentBuilder, AgentRunner runner,
+            AgentFactoryImpl agentFactory,
             ConfigStore configs, ChatModelFactory modelFactory,
             TaskBootstrap taskBootstrap, InteractionServiceImpl asks,
             WorkerProperties props, RpcDispatcher dispatcher,
@@ -135,6 +139,7 @@ public class TaskManager implements TaskInputHandler, InteractionServiceImpl.Sta
         this.eventSink = eventSink;
         this.agentBuilder = agentBuilder;
         this.runner = runner;
+        this.agentFactory = agentFactory;
         this.configs = configs;
         this.modelFactory = modelFactory;
         this.taskBootstrap = taskBootstrap;
@@ -171,7 +176,8 @@ public class TaskManager implements TaskInputHandler, InteractionServiceImpl.Sta
         lifecycleRegistry.register(
                 new TaskIdGenerateNode(tasks, diskTasks, store), "worker");
         lifecycleRegistry.register(
-                new TaskEntryCreateNode(taskBootstrap, props, tasks, diskTasks, active, store, idem, admissionPolicyRegistry), "worker");
+                new TaskEntryCreateNode(taskBootstrap, props, tasks, diskTasks, active, store, idem,
+                        admissionPolicyRegistry, agentFactory, asks), "worker");
         lifecycleRegistry.register(
                 new ResponseAckNode(eventSink), "worker");
         lifecycleRegistry.register(
