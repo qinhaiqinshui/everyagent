@@ -1,6 +1,7 @@
 package dev.everyagent.worker.tools;
 
 import dev.everyagent.worker.os.OsSandbox;
+import dev.everyagent.plugin.api.shell.ExecResults;
 import dev.everyagent.plugin.api.spi.ExecResult;
 
 import dev.everyagent.worker.task.TaskEntry;
@@ -20,8 +21,8 @@ import org.slf4j.LoggerFactory;
  *
  * <p>被以下工具注入复用(不重复造轮子):
  * <ul>
- *   <li>{@link BashTool}(Linux/macOS 注册,shell=bash);</li>
- *   <li>{@link PowerShellTool}(Windows 注册,shell=powershell);</li>
+ *   <li>{@link dev.everyagent.worker.plugin.adapters.DirectShellToolProvider}
+ *       (DIRECT 无沙箱后端,按 OS 注册 bash / powershell);</li>
  * </ul>
  *
  * <p>bash/powershell 子进程会注入打包 rg 二进制所在目录到 PATH(见 rgBinDir),方便直接调用 rg。
@@ -43,31 +44,6 @@ import org.slf4j.LoggerFactory;
 public class CommandExecutor {
 
     private static final Logger log = LoggerFactory.getLogger(CommandExecutor.class);
-
-    /**
-     * PowerShell 脚本预置前缀。两项职责:
-     *
-     * <p><b>1. UTF-8 编码(PS-001 修复)</b>:
-     * {@code [Console]::OutputEncoding=UTF8} 使 PowerShell 向管道输出时按 UTF-8 编码
-     * (简体中文系统默认 GBK/936,Java 端统一按 UTF-8 解码会导致乱码);
-     * {@code $OutputEncoding=UTF8} 使 PowerShell 管道数据传给原生子进程时也用 UTF-8;
-     * {@code $PSDefaultParameterValues} 让 Get-Content / Set-Content / Out-File
-     * 不带 {@code -Encoding} 时默认用 UTF-8 读写文件(PS 5.1 默认按系统 ACP 如 GBK 读,
-     * UTF-8 中文文件会乱码)。前缀先于用户命令执行,用户显式指定 {@code -Encoding} 则覆盖。
-     *
-     * <p><b>2. 非成功流静默化</b>:静默 progress/information/warning/verbose/debug 流,
-     * 避免个别 cmdlet / 模块显式 Write-Progress 等刷屏(不影响真实 stdout 数据与真实 stderr 错误)。
-     * 残余 CLIXML 噪声由 {@link #stripClixml} 兜底剥除。不改变、也不要求改变 AI 的命令写法。
-     */
-    private static final String POWERSHELL_PREFIX =
-            "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; "
-            + "$OutputEncoding=[System.Text.Encoding]::UTF8; "
-            + "$PSDefaultParameterValues['Get-Content:Encoding']='UTF8'; "
-            + "$PSDefaultParameterValues['Set-Content:Encoding']='UTF8'; "
-            + "$PSDefaultParameterValues['Out-File:Encoding']='UTF8'; "
-            + "$ProgressPreference='SilentlyContinue'; $InformationPreference='SilentlyContinue'; "
-            + "$WarningPreference='SilentlyContinue'; $VerbosePreference='SilentlyContinue'; "
-            + "$DebugPreference='SilentlyContinue'; ";
 
     private final OsSandbox sandbox;
     private final TaskEntry task;
@@ -135,7 +111,7 @@ public class CommandExecutor {
         // powershell 专属(Windows 原生域):授权检查之后给命令串预置 UTF-8 编码设置 +
         // 非成功流抑制(权限检查与审计日志始终是用户原始命令)。前缀先于用户命令执行,
         // 用户若显式设置该偏好,后写覆盖本前缀。
-        String spawnCmd = powershell ? POWERSHELL_PREFIX + command : command;
+        String spawnCmd = powershell ? ExecResults.POWERSHELL_PREFIX + command : command;
         // wsl-bwrap 后端:已授权 EXEC 根随调用挂载进沙箱(授权=绑定,撤销=下次不绑,零宿主状态);
         // 走 execRootsSandboxed(§13.3 L2 过滤)——过度宽泛根(如历史 C:\\)不得进 --bind 白名单,
         // 否则整个 /mnt/c 会被读写挂进沙箱,读隔离被击穿。wsl-direct 不建 bwrap 命名空间,
@@ -180,8 +156,8 @@ public class CommandExecutor {
         }
         log.info("[exec] task={} backend={} rc={} aborted={} cmd={}", task.taskId,
                 sandbox.id(),
-                r.exitCode(), r.aborted(), truncate(command, 200));
-        return format(r);
+                r.exitCode(), r.aborted(), ExecResults.truncate(command, 200));
+        return ExecResults.format(r);
     }
 
     /**
@@ -199,7 +175,7 @@ public class CommandExecutor {
      *
      * <p><b>编码</b>:临时文件以 UTF-8 BOM 写入。PowerShell 5.1 无 BOM 时按系统 ACP
      *（如 GBK）解码脚本文件,含中文的脚本会乱码;BOM 强制 UTF-8 解码。
-     * UTF-8 输出编码已由 {@link #POWERSHELL_PREFIX} 设置,无需额外处理。
+     * UTF-8 输出编码已由 {@link ExecResults#POWERSHELL_PREFIX} 设置,无需额外处理。
      *
      * <p><b>CLIXML</b>:{@code -File} 模式与 {@code -Command} 模式行为一致——
      * Write-Host / Write-Output / 2>&1 / 原生 stderr 均以纯文本输出,不产生 CLIXML。
@@ -241,7 +217,7 @@ public class CommandExecutor {
      * PowerShell 5.1 在 stdout/stderr 被管道重定向(非交互)时,把非成功流(progress/information/
      * verbose/warning/debug/error)序列化为 CLIXML 写进 stderr,格式为 {@code #< CLIXML} 头 +
      * {@code <Objs ...>...</Objs>} XML 块(「正在准备首次使用模块」、Write-Progress、Write-Host 等)。
-     * 这些是流记录噪声,不是命令真实错误文本;{@link #POWERSHELL_PREFIX} 已从源头抑制 progress 与
+     * 这些是流记录噪声,不是命令真实错误文本;{@link ExecResults#POWERSHELL_PREFIX} 已从源头抑制 progress 与
      * information 流,此处兜底剥除残余(第三方 cmdlet / 个别模块),真实 stderr 错误文本保留。
      */
     private static final Pattern CLIXML_BLOCK = Pattern.compile("(?s)#< CLIXML.*?</Objs>");
@@ -258,28 +234,6 @@ public class CommandExecutor {
         return new ExecResult(r.stdout(), cleaned, r.exitCode(), r.aborted());
     }
 
-    /** stdout / [stderr] / 超时 / exit code 尾注的共享格式化(尾注仅非零时附加)。 */
-    private static String format(ExecResult r) {
-        StringBuilder sb = new StringBuilder();
-        if (r.stdout() != null && !r.stdout().isEmpty()) {
-            sb.append(r.stdout());
-        }
-        if (r.stderr() != null && !r.stderr().isEmpty()) {
-            // stderr 独立成段带标记:stdout 段永远是命令的干净数据,
-            // PowerShell 的 CLIXML 流记录(#< CLIXML 进度 XML)等噪音只出现在 [stderr] 段
-            sb.append(sb.isEmpty() ? "" : "\n").append("[stderr]\n").append(r.stderr());
-        }
-        if (r.aborted()) {
-            sb.append(sb.isEmpty() ? "" : "\n").append("[命令被沙箱超时中止]");
-        }
-        // exit code 尾注仅在非零时附加:0(成功)是噪音;非零(尤其 rg 无匹配=exit 1)
-        // 是 AI 判读语义的关键信号,必须保留
-        if (r.exitCode() != 0) {
-            sb.append(sb.isEmpty() ? "" : "\n").append("[exit code: ").append(r.exitCode()).append("]");
-        }
-        return sb.toString();
-    }
-
     /**
      * Medium IL 方案:沙箱进程运行在 Medium IL(Restricted Token 去特权但不降级),
      * 天然可写工作区与已授权目录,无需标注 Low 完整性或追加 DACL。
@@ -287,9 +241,5 @@ public class CommandExecutor {
      */
     private void prepareWritableRoots(Path cwd, boolean forceNative) {
         // Medium IL 天然可写,无需标注/ACL——空体
-    }
-
-    private static String truncate(String s, int n) {
-        return s == null ? "" : (s.length() <= n ? s : s.substring(0, n) + "...");
     }
 }

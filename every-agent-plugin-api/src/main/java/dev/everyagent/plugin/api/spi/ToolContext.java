@@ -1,6 +1,7 @@
 package dev.everyagent.plugin.api.spi;
 
 import dev.everyagent.plugin.api.interaction.InteractionService;
+import dev.everyagent.plugin.api.shell.ShellExecutor;
 import java.nio.file.Path;
 
 /**
@@ -33,6 +34,11 @@ public interface ToolContext {
 
     /** 用户交互服务（向用户发起提问，同步阻塞或异步回调）。 */
     default InteractionService interaction() {
+        return null;
+    }
+
+    /** 已组装好的 shell 执行器（授权 + 沙箱已内建），插件用它注册 ShellTool。 */
+    default ShellExecutor shellExecutor() {
         return null;
     }
 }
