@@ -145,6 +145,11 @@ public interface ExecContext {
      *  组装 Map.of("taskId",...)；agentId 由调用方按需经 context 参数补充）。
      *  与 emitter()/agentFactory() 同为预绑定端口。 */
     InteractionService interaction();
+
+    /** 本主体的活动 agent 注册表（主 + 子；put/get/values/containsKey）。
+     *  任何编排主体必然具备——task 是主 agent + 子 agent，未来工作流是编排 agent +
+     *  子 agent。subagent 插件的复用判定/台账合并/注册全走此槽位。 */
+    Map<String, AgentContext> agents();
 }
 ```
 
@@ -161,6 +166,7 @@ public interface ExecContext {
 | `dataDir()` | `t.taskDir()` / `store.dirOf(taskId)` | GrantRegistry |
 | `terminal()` | `t.status.terminal()` | WorkerToolEventAdvisor（leak-guard） |
 | `interaction()` | `services.interaction()` + 手动填 `Map.of("taskId",...)` | HumanAuthorizationHandler、ImageReferenceHandler、AskUserTool（经 ToolContext）——三处手动绑定消失 |
+| `agents()` | `t.agents()`（Map，7 处） | SubAgentManager（复用判定/台账合并/注册）；edit-resend 清空走 TaskRuntime 不变 |
 
 **不进 ExecContext 的槽位（判据 §3.3）**：fileChanges 三槽位（瞬态回合槽）留
 `TaskRuntime` 任务域私有——file-change 插件（写）经 `TaskService.get(subjectId())`
@@ -349,16 +355,55 @@ public interface AgentContext {
 | worker: WorkerToolEventAdvisor ×4 / RoundIndexAdvisor / ContextOverflow | terminal / taskId / snapshot |
 | worker: SlashTokenResolve / FileAttachment AdvisorProvider | → execution() |
 
-### 8.2 SubAgentManager / 任务域插件
+### 8.2 SubAgentManager 全面中性化（subagent 插件域中性）
 
-- SubAgentManager 构造参数去掉 `AgentFactory`：`SubAgentManager(InteractionService, TaskService)`
-- `buildSubAgent`：`task.agentFactory().create(agentId)` + fluent 链（props 四件套
-  组装消失）；agents()/events()/taskId() 等编排本职依赖保留
-- `SubAgentPlugin.activate()` 不再取 `ctx.services().agentFactory()`
-- **任务域插件分类明确**（SubAgentManager、file-change、edit-resend、git）：它们
-  的本职就是任务域功能，经 `TaskService`/`TaskLifecycleContext.taskRuntime()` 取
-  `TaskRuntime` 是合法依赖——本方案解耦目标是横切基础设施（advisor 取数/工具链/
-  授权链/agent 装配），不是消灭任务域插件对任务域接口的正常使用。
+subagent 能力（spawn/wait/stop 子 agent）是**执行域能力**，不是任务域能力——没有 task
+只有 workflow 时同样可用。全面改造：
+
+**SubAgentManager 零服务依赖**：
+
+- 构造参数归零（`InteractionService`、`TaskService` 全删；仅保留 `setLedger`）。
+- 方法签名改收 ExecContext：`run(ctx, input, title, agentId)` / `list(ctx)` /
+  `waitFor(ctx, agentId, timeout)` / `stop(ctx, agentId)` /
+  `awaitAllBeforeFinish(ctx)` / `stopAll(ctx)`——工具入口不再
+  `taskService.get(taskId)` 反查，`SubAgentTools` 改绑 `ToolContext.execution()`
+  整个上下文句柄。
+- 取数全走槽位：`task.agents()`→`ctx.agents()`（×7）、`task.events()`→`ctx.emitter()`、
+  `task.taskId()`→`ctx.subjectId()`、`asks.hasPendingFor(taskId,...)`→
+  `ctx.interaction().hasPendingFor(ctx.subjectId(),...)`、装配→`ctx.agentFactory()`。
+- **监视器内部化**：`synchronized (task)`（拿任务对象当锁）→ `synchronized (taskState)`
+  （Manager 自有 per-subject `TaskSubState`）——任务对象监视器依赖消失。
+
+**SubAgentLedger IO 自持**：
+
+- agents.json 本是**插件自有数据**（住在主体 dataDir 下），但 IO 挂在
+  `TaskStoreService`（接口里"agents.json 读写（subagent 台账）"整段就是为此加的）。
+- 台账改用 `AtomicFiles`（plugin-api util）自行读写 `ctx.dataDir().resolve("agents.json")`；
+  `TaskStoreService` 的 readAgents/writeAgents 段退役（全仓仅 subagent 消费）。
+
+**生命周期节点壳/核分离**：
+
+- 四个 `TaskLifecycleNode`（track/untrack/persist/spawned.await）的逻辑全是主体无关的
+  （track=订阅 emitter 投影、persist=台账落盘、await=收口等待）：节点体内改取
+  `ctx.taskRuntime()`（TaskRuntime extends ExecContext，零强转）的
+  subjectId/emitter/dataDir/agents 槽位。
+- **壳留 task 面**：`TaskLifecycleNode` SPI 是任务生命周期的（工作流未来有自己的同构
+  SPI）；中性核心（Manager/台账逻辑）+ task 注册壳（现有节点类）。工作流落地时同一
+  核心以 `WorkflowLifecycleNode` 壳挂载，零新逻辑。
+
+**SubAgentRpcHandler 壳/核分层**：
+
+- `task.agents` RPC 冷路径 `readMeta(dir)` 取 mainAgentId / `dirOf(taskId)`——
+  meta.json 是任务摘要，mainAgentId 是任务概念：**壳留 task 面**（继续用
+  TaskStoreService），核心列表逻辑复用中性台账 reader。未来 `wf.agents` 同构包壳。
+
+**SubAgentPlugin.activate()**：`services().task()` 删除；`services().store()` 仅供
+RpcHandler（task 壳）；Ledger 不再需要 store。
+
+**任务域插件分类明确**（file-change、edit-resend、git）：它们的本职就是任务域功能，
+经 `TaskService`/`TaskLifecycleContext.taskRuntime()` 取 `TaskRuntime` 是合法依赖——
+本方案解耦目标是横切基础设施与执行域能力插件（subagent），不是消灭任务域插件对
+任务域接口的正常使用。
 
 ### 8.3 AiAuthReviewer
 
@@ -378,11 +423,11 @@ AskUserToolProvider / DirectShellToolProvider / FileToolsProvider：
 
 | 阶段 | 内容 | 提交 |
 |---|---|---|
-| S1 | plugin-api：新增 `execution.ExecContext`（含 `interaction()` 槽位，不含 fileChanges）；`TaskRuntime extends ExecContext`（保留全部旧成员含 fileChanges 六方法）；`AgentFactory` 重签（两参）；`AgentContext.execution()` 与 `properties()` 并存（@Deprecated） | feat: 新增 ExecContext 统一执行上下文接口 |
+| S1 | plugin-api：新增 `execution.ExecContext`（含 `interaction()`/`agents()` 槽位，不含 fileChanges）；`TaskRuntime extends ExecContext`（保留全部旧成员含 fileChanges 六方法）；`AgentFactory` 重签（两参）；`AgentContext.execution()` 与 `properties()` 并存（@Deprecated） | feat: 新增 ExecContext 统一执行上下文接口 |
 | S2 | worker：`AgentFactoryImpl` 内部化（全参收 ExecContext）+ `TaskBoundAgentFactory` + `SubjectBoundInteractionService`（绑 subjectId 的 ask 代理）+ `TaskEntry` 实现 ExecContext 全槽位（agentFactory()/interaction()/subjectId()...）；`ThreadSubmitNode` 主 agent 构造改传 exec | feat: worker 实现 ExecContext 与三预绑定端口 |
 | S3 | 授权链：`AuthorizationRequest` 重签 + 三 handler + GrantRegistry + PermissionContext + FsToolSupport/CommandExecutor + TaskInfo 退役（permission 包删除，11 文件 import） | feat: 授权链收编 ExecContext 实现域中性 |
 | S4 | advisor 迁移（§8.1 全表，FileChangeAdvisor 走 TaskService 路径）+ AgentContext 删 properties() + AgentEntity 字段替换 | feat: advisor 链全面迁移 ExecContext |
-| S5 | SubAgentManager/AiAuthReviewer/两 Plugin 入口 + ImageReferenceHandler/AskUserTool 改经 ctx.interaction() + WorkerServices.agentFactory() 删除 + ToolContextImpl.taskEntry() 删除 | feat: 子 agent、审议 agent 与交互口收编 ExecContext |
+| S5 | subagent 全面中性化（Manager 零服务依赖+监视器内部化/Ledger IO 自持/生命周期节点壳核分离/RpcHandler 分层/TaskStoreService agents 段退役）+ SubAgentManager/AiAuthReviewer/两 Plugin 入口 + ImageReferenceHandler/AskUserTool 改经 ctx.interaction() + WorkerServices.agentFactory() 删除 + ToolContextImpl.taskEntry() 删除 | feat: subagent 插件全面中性化与审议 agent 收编 ExecContext |
 | S6 | ARCHITECTURE.md 同步 | other: 架构文档同步执行上下文管道 |
 
 依赖顺序：S1→S2→（S3/S4 可并行）→S5→S6。S3 与 S4 均只依赖 S2 的 TaskEntry 实现。
@@ -391,7 +436,8 @@ AskUserToolProvider / DirectShellToolProvider / FileToolsProvider：
 
 - **plugin-api breaking**：`AgentFactory` 签名、`AuthorizationRequest`、
   `AgentContext.properties()`、`TaskInfo` 删除、`WorkerServices.agentFactory()` 删除
-  （`WorkerServices.interaction()` 保留——非主体绑定的场景仍可用裸服务）。
+  （`WorkerServices.interaction()` 保留——非主体绑定的场景仍可用裸服务）、
+  `TaskStoreService` agents 段删除（仅 subagent 消费，台账 IO 自持）。
   外部插件如有自定义 AuthorizationHandler / 直接读 properties 的 advisor 需适配；
   当前扩展点全部为内置插件，影响面 = 本仓库 18 个插件 + worker。
 - **wire 零变化**：事件名/payload/RPC 全不动；grants.json 格式不变（落盘路径经

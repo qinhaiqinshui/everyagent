@@ -1127,7 +1127,7 @@ docker-compose 一键:`HUB_KEY=你的密钥 docker-compose up --build`;数据落
 | D26 | 命令沙箱多后端:Windows 默认 wsl-direct、wsl-bwrap 显式、windows-mic 回退 | 「零管理员 + 网络硬隔离 + 零宿主残留」在原生 Windows 不可兼得;WSL2 生态已验证 |
 | D27 | 授权语义(seccomp 场景)= WSL 原生 root 重跑 | NNP + userns 不映射 uid0 + 基座只读 → 沙箱内真实提权物理不可行 |
 | D28 | AI 审议与无人值守为独立任务级开关,开启时联动、事后可拆分 | 分别满足"无人监督但有把关"与"全流程无人值守"两种需求 |
-| D29 | **统一执行上下文 ExecContext**:黑盒 properties 四件套(taskEntry/taskId/workspaceRoot/configId)显式类型化为 plugin-api 接口槽位(仅主体必然具备的核心属性与端口);三预绑定端口 `emitter()/agentFactory()/interaction()`(静态代理)经 ctx 下传;`TaskInfo` 退役;授权请求收编为 `AuthorizationRequest(ExecContext,agentId,grantKey,prompt)`;fileChanges 等插件功能槽位留 TaskRuntime | 授权链与全部横切层(advisor/工具/子 agent/审议)域中性,未来工作流实现 ExecContext 即零改动复用;20+ 处强转消失;详见 docs/design-exec-context.md |
+| D29 | **统一执行上下文 ExecContext**:黑盒 properties 四件套(taskEntry/taskId/workspaceRoot/configId)显式类型化为 plugin-api 接口槽位(仅主体必然具备的核心属性与端口,含 agents 活动实体注册表);三预绑定端口 `emitter()/agentFactory()/interaction()`(静态代理)经 ctx 下传;`TaskInfo` 退役;授权请求收编为 `AuthorizationRequest(ExecContext,agentId,grantKey,prompt)`;fileChanges 等插件功能槽位留 TaskRuntime;subagent 作为执行域能力插件全面中性化(零服务依赖/台账 IO 自持/生命周期壳核分离) | 授权链与全部横切层(advisor/工具/子 agent/审议)域中性,subagent 无 task 只有 workflow 亦可复用;未来工作流实现 ExecContext 即零改动复用;20+ 处强转消失;详见 docs/design-exec-context.md |
 
 ---
 
@@ -1159,9 +1159,9 @@ docker-compose 一键:`HUB_KEY=你的密钥 docker-compose up --build`;数据落
 9. **插件零 worker 依赖**:插件的 pom 中不得出现对 `every-agent-worker` 的依赖,compile/provided/runtime/test 任何 scope 一律禁止;插件测试需要任务/agent/配置等桩时,在测试源码内自建实现 plugin-api 接口的等价桩类,不得把 worker 具体实现类(TaskEntry/AgentEntity/WorkerProperties/SlashCommandRegistry 等)当测试脚手架;类型确实需要跨 worker 与插件共享时,先下沉到 plugin-api(§1.1,文档先行)。
 10. **文档**:本文档是唯一架构事实源;根目录 AGENTS.md 只写核心约束(每会话加载,保持精简),细节一律进 docs/。
 11. **执行上下文管道(ExecContext,与 §14.0 事件管道同构)**：执行数据沿 `task 层 → agent 层 → 工具执行链 → 授权链` 逐层传递,每层只消费自己层级的槽位,下层不知道上层是谁(task 还是未来 workflow):
-    - **槽位判据**:ExecContext 槽位 = 任何执行主体(任务/工作流)都必然具备的核心属性与端口(subjectId/workspaceRoot/workspaceId/configId/snapshot/emitter/agentFactory/interaction/metadata/dataDir/terminal);**插件功能与主体特有槽位不进核心接口**——fileChanges 回合槽留 `TaskRuntime`(file-change 插件功能,经 `TaskService.get(subjectId())` 访问),metadata 只承载随 meta.json 落盘的持久策略标记(不混入运行时瞬态数据)。
+    - **槽位判据**:ExecContext 槽位 = 任何执行主体(任务/工作流)都必然具备的核心属性与端口(subjectId/workspaceRoot/workspaceId/configId/snapshot/emitter/agentFactory/interaction/metadata/dataDir/terminal/agents 活动实体注册表);**插件功能与主体特有槽位不进核心接口**——fileChanges 回合槽留 `TaskRuntime`(file-change 插件功能,经 `TaskService.get(subjectId())` 访问),metadata 只承载随 meta.json 落盘的持久策略标记(不混入运行时瞬态数据)。
     - **task 层构造并预绑定**:`TaskEntry implements TaskRuntime extends ExecContext`(subjectId=taskId);三预绑定端口同范式(静态代理,worker 内部实现,可链式套娃)——`emitter()`(主体事件口)、`agentFactory()`(主体 agent 装配,`create(agentId)` 单参)、`interaction()`(主体交互口,ask 的 context map 自动填 subjectId)——**上层预绑定能力往下传,不传裸工厂/裸服务、不传任务域对象**。
     - **agent 层唯一取数口**:`AgentContext.execution()`;`properties` 黑盒 map 与 `get("taskEntry")` 强转**禁止再现**。
-    - **advisor 只取槽位**:`configId()/snapshot()`(模型配置)、`subjectId()`(审计)、`emitter()`(事件)、`terminal()`(leak-guard)——不 import 任务域类型;任务域插件(SubAgentManager/file-change/edit-resend/git)经 `TaskService`/`taskRuntime()` 取 `TaskRuntime` 是合法本职依赖。
+    - **advisor 只取槽位**:`configId()/snapshot()`(模型配置)、`subjectId()`(审计)、`emitter()`(事件)、`terminal()`(leak-guard)——不 import 任务域类型;**subagent 是执行域能力插件(非任务域),全面中性化**:SubAgentManager 零服务依赖(方法收 ExecContext、监视器内部化、`agents()` 槽位替代 task.agents)、台账 agents.json IO 自持(ctx.dataDir()+AtomicFiles)、生命周期节点壳留 task 面/逻辑取 ExecContext 槽位、`task.agents` RPC 壳留 task 面(mainAgentId 是任务概念);任务域插件(file-change/edit-resend/git)经 `TaskService`/`taskRuntime()` 取 `TaskRuntime` 是合法本职依赖。
     - **授权请求域中性**:`AuthorizationRequest(ExecContext, agentId, grantKey, prompt)`;GrantRegistry 按 `subjectId()` 分区、`dataDir()` 落盘;`InteractionService` ask 的 context map `"taskId"` 键保留(值=subjectId,前端兼容)。
     - **禁止**:横切层 import `TaskEntry/TaskRuntime/TaskInfo`;绕过 `ctx.agentFactory()` 手工组装四件套 map;绕过 `ctx.interaction()` 手动填 taskId context;worker 侧新增 properties 透传通道。工作流层实现 `WorkflowRuntime implements ExecContext` 后,同一条授权链、同一批 advisor、同一工具链零改动复用。
