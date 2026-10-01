@@ -180,7 +180,7 @@ public class CommandExecutor {
             r = stripClixml(r);
         }
         log.info("[exec] task={} backend={} rc={} aborted={} cmd={}", task.taskId,
-                "direct",
+                sandbox.id(),
                 r.exitCode(), r.aborted(), truncate(command, 200));
         return format(r);
     }
