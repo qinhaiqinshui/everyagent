@@ -425,7 +425,7 @@ AskUserToolProvider / DirectShellToolProvider / FileToolsProvider：
 |---|---|---|
 | S1 | plugin-api：新增 `execution.ExecContext`（含 `interaction()`/`agents()` 槽位，不含 fileChanges）；`TaskRuntime extends ExecContext`（保留全部旧成员含 fileChanges 六方法）；`AgentFactory` 重签（两参）；`AgentContext.execution()` 与 `properties()` 并存（@Deprecated） | feat: 新增 ExecContext 统一执行上下文接口 |
 | S2 | worker：`AgentFactoryImpl` 内部化（全参收 ExecContext）+ `TaskBoundAgentFactory` + `SubjectBoundInteractionService`（绑 subjectId 的 ask 代理）+ `TaskEntry` 实现 ExecContext 全槽位（agentFactory()/interaction()/subjectId()...）；`ThreadSubmitNode` 主 agent 构造改传 exec | feat: worker 实现 ExecContext 与三预绑定端口 |
-| S3 | 授权链：`AuthorizationRequest` 重签 + 三 handler + GrantRegistry + PermissionContext + FsToolSupport/CommandExecutor + TaskInfo 退役（permission 包删除，11 文件 import） | feat: 授权链收编 ExecContext 实现域中性 |
+| S3 | 授权链：`AuthorizationRequest` 重签 + 三 handler + GrantRegistry + PermissionContext + FsToolSupport/CommandExecutor + TaskInfo 退役（permission 包删除，11 文件 import）；附带 AskQuestion.fields 结构化信息槽（§12，含前端渲染） | feat: 授权链收编 ExecContext 实现域中性 |
 | S4 | advisor 迁移（§8.1 全表，FileChangeAdvisor 走 TaskService 路径）+ AgentContext 删 properties() + AgentEntity 字段替换 | feat: advisor 链全面迁移 ExecContext |
 | S5 | subagent 全面中性化（Manager 零服务依赖+监视器内部化/Ledger IO 自持/生命周期节点壳核分离/RpcHandler 分层/TaskStoreService agents 段退役）+ SubAgentManager/AiAuthReviewer/两 Plugin 入口 + ImageReferenceHandler/AskUserTool 改经 ctx.interaction() + WorkerServices.agentFactory() 删除 + ToolContextImpl.taskEntry() 删除 | feat: subagent 插件全面中性化与审议 agent 收编 ExecContext |
 | S6 | ARCHITECTURE.md 同步 | other: 架构文档同步执行上下文管道 |
@@ -459,7 +459,66 @@ class WorkflowRuntime implements ExecContext {
 grantRegistry.authorize(new AuthorizationRequest(wfCtx, agentId, grantKey, prompt), ...);
 ```
 
-## 12. 红线对照
+## 12. 附带小任务：AskQuestion 结构化信息槽（授权弹窗信息增强）
+
+### 12.1 现状与动机
+
+`AskQuestion(id, prompt, options)` 三字段；wire 序列化（plugin-api
+`EventPayloads.questionsToJson`）只带 id/prompt/options。前端 `UserInteractionQuestion`
+已预留 `details?: string`（渲染为补充说明块）但后端从未填充。
+
+授权弹窗现状是全部信息挤在 prompt 一段文本里（"AI 请求写入工作区外路径: /c/root\n
+授权范围: ..."）——机器可读字段与人类可读文案混排。补一个默认为空的**结构化
+键值对 map**，前端以"标签: 值"列表渲染：
+
+```
+┌ 是否授权? ────────────────┐
+│ 目录: /c/root             │
+│ 授权类型: 写               │
+│ ◉ 授权                    │
+│ ○ 否                      │
+└───────────────────────────┘
+```
+
+### 12.2 改动
+
+**plugin-api**（record 加字段，旧构造调用点经紧凑构造器兼容）：
+
+```java
+public record AskQuestion(String id, String prompt, List<AskOption> options,
+                          Map<String, String> fields) {
+    /** 兼容旧构造（fields 默认空）。 */
+    public AskQuestion(String id, String prompt, List<AskOption> options) {
+        this(id, prompt, options, Map.of());
+    }
+}
+```
+
+**wire 序列化**：`EventPayloads.questionsToJson` 补 `fields`（空 map 省略——
+must-ignore 双向兼容：老前端忽略未知字段，老 worker 不带该字段，前端判空跳过）。
+
+**前端**：`UserInteractionQuestion` 加 `fields?: Record<string, string>`；
+`UserInteractionHost` 在 prompt 下、options 上渲染"标签: 值"信息块（复用
+constraints/infoBlock 样式）；`details` 保留（自由文本，与 fields 并列）。
+
+**消费者（授权链先行）**：`HumanAuthorizationHandler`/`ImageReferenceHandler` 的授权
+ask 从"prompt 长文案"改为"prompt 短问句 + fields 结构化"：
+
+```java
+new AskQuestion("", "是否授权?", AUTHORIZE_OPTIONS, Map.of(
+        "目录", real.toString(),
+        "授权类型", PathSupport.opDesc(op)))
+```
+
+prompt 文案保留完整语义（磁盘回放/通知摘要仍可读），fields 只是增强展示层——
+不改变 ask 协议语义、不影响回答解析。
+
+### 12.3 阶段归属
+
+随 S3（授权链迁移）一并落地：授权链是 fields 的第一个消费者；`AskUserTool`
+（AI 提问）后续按需自行使用。
+
+
 
 | 红线 | 本方案 |
 |---|---|
