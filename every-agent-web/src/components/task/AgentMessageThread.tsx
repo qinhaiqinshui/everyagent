@@ -303,7 +303,7 @@ function UserMessageReplay({
         return (
           <span
             key={`token:${index}:${view.tokenId}`}
-            className="nagent-msg__inline-chip"
+            className="nagent-inline-chip nagent-inline-chip--replay"
             title={view.label || segment.value}
             role="button"
             tabIndex={0}
@@ -322,7 +322,7 @@ function UserMessageReplay({
               }
             }}
           >
-            <span className="nagent-msg__inline-chip-label">{view.label || segment.value}</span>
+            <span className="nagent-inline-chip__label">{view.label || segment.value}</span>
           </span>
         )
       })}
