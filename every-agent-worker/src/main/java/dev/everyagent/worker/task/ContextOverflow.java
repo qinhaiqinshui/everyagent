@@ -89,7 +89,7 @@ public final class ContextOverflow {
     /** 组装单行诊断文本(字段缺省以 - / (未配置) / (默认) 标记,不含 apiKey)。 */
     private static String describe(AgentEntity a, Throwable t) {
         StringBuilder sb = new StringBuilder(256);
-        sb.append("task=").append(a.properties.get("taskId"))
+        sb.append("task=").append(a.execution().subjectId())
                 .append(" agent=").append(a.agentId);
 
         // 超限的模型配置(请求 options 是实际发往服务商的值)
@@ -100,7 +100,7 @@ public final class ContextOverflow {
                 .append(" temperature=").append(a.options.getTemperature() == null
                         ? "-" : a.options.getTemperature())
                 .append(" reasoningEffort=").append(nz(a.options.getReasoningEffort()));
-        ModelConfig snap = ((dev.everyagent.worker.task.TaskEntry) a.properties.get("taskEntry")).snapshot;
+        ModelConfig snap = a.execution().snapshot();
         sb.append(" | configId=").append(nz(snap.configId()))
                 .append(" provider=").append(nz(snap.provider()))
                 .append(" params.maxTokens=").append(paramLong(snap.params(), "maxTokens"))

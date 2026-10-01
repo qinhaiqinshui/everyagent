@@ -112,7 +112,7 @@ public class WorkerToolEventAdvisor extends ToolCallingAdvisor {
         }
         // 防御:任务已终态(用户取消/finish 完成)时不再发射瞬态事件。
         // 即使 reactive 链的 dispose 有微秒级竞态窗口,残留 chunk 也不会泄漏到前端。
-        TaskEntry t = (TaskEntry) a.properties.get("taskEntry");
+        TaskEntry t = (TaskEntry) a.execution();
         if (t.status.terminal()) {
             return;
         }
@@ -146,7 +146,7 @@ public class WorkerToolEventAdvisor extends ToolCallingAdvisor {
         }
         // 防御:任务已终态时不再发射任何事件(取消后 dispose 与 reactor 线程间有竞态窗口,
         // 残留轮次在此直接丢弃,不再产生 message/usage 等落盘事件,也不写入 lastText)。
-        TaskEntry t = (TaskEntry) a.properties.get("taskEntry");
+        TaskEntry t = (TaskEntry) a.execution();
         if (t.status.terminal()) {
             log.warn("[leak-guard] 任务已终态({}),拦截轮次事件发射 agentId={} thread={}",
                     t.status, a.agentId, Thread.currentThread().getName());
@@ -250,7 +250,7 @@ public class WorkerToolEventAdvisor extends ToolCallingAdvisor {
     @Override
     protected List<Message> doGetNextInstructionsForToolCallStream(ChatClientRequest chatClientRequest,
             ChatClientResponse chatClientResponse, ToolExecutionResult toolExecutionResult) {
-        TaskEntry t = (TaskEntry) a.properties.get("taskEntry");
+        TaskEntry t = (TaskEntry) a.execution();
         // 工具已执行:只发「本轮刚下发」的工具结果(callId 与 message.toolCalls[].id 配对)。
         // 此前遍历整个 conversationHistory 会把历史所有 ToolResponseMessage 逐条重发,
         // 导致同一 callId 的 tool.result 在每轮工具执行后都被再次落盘(前端按 seq 无法去重,
@@ -320,7 +320,7 @@ public class WorkerToolEventAdvisor extends ToolCallingAdvisor {
 
     /** 任务快照 params 里的上下文窗口大小(未配置/非法回退默认窗口,与压缩/超限诊断口径一致)。 */
     private Long contextWindowTokens() {
-        TaskEntry t = (TaskEntry) a.properties.get("taskEntry");
+        TaskEntry t = (TaskEntry) a.execution();
         JsonNode params = t.snapshot.params();
         if (params != null && params.isObject() && params.has("contextWindowTokens")) {
             long v = params.path("contextWindowTokens").asLong(0);

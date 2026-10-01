@@ -31,7 +31,7 @@ public class FileAttachmentAdvisorProvider implements AdvisorProvider {
     @Override
     public Advisor create(AdvisorContext ctx) {
         AgentEntity a = (AgentEntity) ((AdvisorContextImpl) ctx).agentEntity();
-        TaskEntry t = a != null ? (TaskEntry) a.properties.get("taskEntry") : null;
+        TaskEntry t = a != null ? (TaskEntry) a.execution() : null;
         return new FileAttachmentAdvisor(t);
     }
 }

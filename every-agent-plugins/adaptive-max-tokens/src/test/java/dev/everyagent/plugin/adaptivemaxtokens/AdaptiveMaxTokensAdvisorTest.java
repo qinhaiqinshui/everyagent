@@ -6,6 +6,7 @@ import dev.everyagent.plugin.api.config.WorkerConfig;
 import dev.everyagent.plugin.api.event.EventLogReader;
 import dev.everyagent.plugin.api.event.EventRecord;
 import dev.everyagent.plugin.api.event.Usage;
+import dev.everyagent.plugin.api.execution.ExecContext;
 import dev.everyagent.plugin.api.model.EventEmitter;
 import dev.everyagent.plugin.api.model.ModelConfig;
 import dev.everyagent.plugin.api.task.FileChangesCollector;
@@ -317,11 +318,7 @@ class AdaptiveMaxTokensAdvisorTest {
 
     private static AgentContext testAgent() {
         TaskRuntime task = new StubTaskRuntime("t_test", "a_test");
-        Map<String, Object> props = new HashMap<>();
-        props.put("taskEntry", task);
-        props.put("taskId", task.taskId());
-        props.put("workspaceRoot", task.workspaceRoot());
-        return new StubAgentContext("a_test", "test", props);
+        return new StubAgentContext("a_test", "test", task);
     }
 
     private static ChatClientRequest request(int maxTokens) {
@@ -418,22 +415,22 @@ class AdaptiveMaxTokensAdvisorTest {
         @Override public void truncateLogAfter(long targetSeq) { }
     }
 
-    /** AgentContext 最小桩(原借 worker AgentEntity):advisor 只读 agentId/properties。 */
+    /** AgentContext 最小桩(原借 worker AgentEntity):advisor 只读 agentId/execution。 */
     private static final class StubAgentContext implements AgentContext {
         private final String agentId;
         private final String title;
-        private final Map<String, Object> props;
+        private final TaskRuntime task;
 
-        StubAgentContext(String agentId, String title, Map<String, Object> props) {
+        StubAgentContext(String agentId, String title, TaskRuntime task) {
             this.agentId = agentId;
             this.title = title;
-            this.props = props;
+            this.task = task;
         }
 
         @Override public String agentId() { return agentId; }
         @Override public String title() { return title; }
         @Override public long createdAt() { return 0; }
-        @Override public Map<String, Object> properties() { return props; }
+        @Override public ExecContext execution() { return task; }
         @Override public EventEmitter emitter() { return e -> e.id(); }
         @Override public String status() { return "running"; }
         @Override public boolean finished() { return false; }

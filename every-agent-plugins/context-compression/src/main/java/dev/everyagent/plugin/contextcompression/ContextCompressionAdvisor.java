@@ -5,7 +5,7 @@ import dev.everyagent.plugin.api.config.WorkerConfig;
 import dev.everyagent.plugin.api.proto.SnowflakeId;
 import dev.everyagent.plugin.api.event.Usage;
 import dev.everyagent.plugin.api.agent.AgentContext;
-import dev.everyagent.plugin.api.task.TaskRuntime;
+import dev.everyagent.plugin.api.execution.ExecContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClientRequest;
@@ -88,7 +88,7 @@ public class ContextCompressionAdvisor implements CallAdvisor, StreamAdvisor {
 
     /** 检查并压缩;未触发/无需改写时也统一走「状态化发送视图」构造,保证 lastSent 口径一致。 */
     private ChatClientRequest maybeCompress(ChatClientRequest request) {
-        TaskRuntime t = (TaskRuntime) a.properties().get("taskEntry");
+        ExecContext exec = a.execution();
         if (request == null || request.prompt() == null) {
             return request;
         }
@@ -166,11 +166,11 @@ public class ContextCompressionAdvisor implements CallAdvisor, StreamAdvisor {
                         null, null, null, EmitEvent.Mode.REPLACE));
                 log.info("任务 {} agent {} 上下文压缩: used={} trigger={} target={} messages {}→{} 阶段={} "
                                 + "丢历史轮={} 丢本轮工具对={}",
-                        t.taskId(), a.agentId(), used, trigger, target, working.size(), toSend.size(),
+                        exec.subjectId(), a.agentId(), used, trigger, target, working.size(), toSend.size(),
                         stageName(r.stage()), r.droppedHistoryTurns(), r.droppedCurrentToolPairs());
                 if (after > target) {
                     log.warn("任务 {} agent {} 上下文压缩后仍 > 目标阈值(本轮单 turn 过大),交由模型上限兜底",
-                            t.taskId(), a.agentId());
+                            exec.subjectId(), a.agentId());
                 }
             }
         }
@@ -197,8 +197,8 @@ public class ContextCompressionAdvisor implements CallAdvisor, StreamAdvisor {
     }
 
     private long contextWindowTokens() {
-        TaskRuntime t = (TaskRuntime) a.properties().get("taskEntry");
-        JsonNode params = t.snapshot() == null ? null : t.snapshot().params();
+        ExecContext exec = a.execution();
+        JsonNode params = exec.snapshot() == null ? null : exec.snapshot().params();
         if (params != null && params.isObject() && params.has("contextWindowTokens")) {
             long v = params.path("contextWindowTokens").asLong(0);
             if (v > 0) {

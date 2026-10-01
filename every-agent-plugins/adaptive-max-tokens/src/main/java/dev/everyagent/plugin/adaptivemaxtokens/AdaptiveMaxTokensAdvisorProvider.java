@@ -5,7 +5,7 @@ import dev.everyagent.plugin.api.config.WorkerConfig;
 import dev.everyagent.plugin.api.agent.AgentContext;
 import dev.everyagent.plugin.api.spi.AdvisorContext;
 import dev.everyagent.plugin.api.spi.AdvisorProvider;
-import dev.everyagent.plugin.api.task.TaskRuntime;
+import dev.everyagent.plugin.api.execution.ExecContext;
 import org.springframework.ai.chat.client.advisor.ToolCallingAdvisor;
 import org.springframework.ai.chat.client.advisor.api.Advisor;
 import tools.jackson.databind.JsonNode;
@@ -41,12 +41,12 @@ public class AdaptiveMaxTokensAdvisorProvider implements AdvisorProvider {
     @Override
     public Advisor create(AdvisorContext ctx) {
         AgentContext a = ctx.agentEntity();
-        TaskRuntime t = (TaskRuntime) a.properties().get("taskEntry");
+        ExecContext exec = a.execution();
         WorkerConfig.Limits.AdaptiveMaxTokens cfg = config.limits().adaptiveMaxTokens();
 
         // 模型级 ceiling 覆盖:从 snapshot params 中的 maxTokensCeiling 获取。
         long ceiling = cfg.ceiling();
-        ModelConfig snapshot = t.snapshot();
+        ModelConfig snapshot = exec.snapshot();
         if (snapshot != null && snapshot.params() != null) {
             JsonNode node = snapshot.params().get("maxTokensCeiling");
             if (node != null && node.isNumber()) {

@@ -17,7 +17,6 @@ import tools.jackson.databind.ObjectMapper;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 
 public class UnattendedToolInterceptor implements ToolExecutionInterceptor {
 
@@ -34,9 +33,8 @@ public class UnattendedToolInterceptor implements ToolExecutionInterceptor {
 
     @Override
     public ToolExecutionResult invoke(ToolExecutionContext ctx, ToolExecutionChain next) throws Exception {
-        Map<String, Object> props = ctx.properties();
-        if (props == null
-                || !(props.get("taskEntry") instanceof ExecContext task)
+        ExecContext task = ctx.execution();
+        if (task == null
                 || !Boolean.TRUE.equals(task.metadata().getOrDefault("unattended", false))) {
             return next.proceed(ctx); // 不是无人值守模式，放行
         }

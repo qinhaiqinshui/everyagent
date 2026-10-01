@@ -8,7 +8,7 @@ import dev.everyagent.plugin.api.config.WorkerConfig;
 import dev.everyagent.plugin.api.proto.SnowflakeId;
 import dev.everyagent.plugin.api.exception.AgentCancelledException;
 import dev.everyagent.plugin.api.agent.AgentContext;
-import dev.everyagent.plugin.api.task.TaskRuntime;
+import dev.everyagent.plugin.api.execution.ExecContext;
 import dev.everyagent.plugin.api.event.EventPayloads;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -187,7 +187,7 @@ public class TransientErrorRetryAdvisor implements CallAdvisor, StreamAdvisor {
     private Flux<ChatClientResponse> attemptStream(ChatClientRequest request, StreamAdvisorChain chain,
             StreamAdvisorChain original, AtomicBoolean emittedSignal, AtomicInteger retries,
             AtomicLong totalDelayMs, AtomicLong waveId) {
-        TaskRuntime t = (TaskRuntime) a.properties().get("taskEntry");
+        ExecContext exec = a.execution();
         return chain.nextStream(request)
                 .doOnNext(chunk -> {
                     if (hasSignal(chunk)) {
@@ -235,7 +235,7 @@ public class TransientErrorRetryAdvisor implements CallAdvisor, StreamAdvisor {
                                     ms, 0, ms, errMsg),
                             EmitEvent.Mode.REPLACE));
                     log.warn("任务 {} agent {} 模型瞬时错误({}: {}),{}ms 后重试({}/{})",
-                            t.taskId(), a.agentId(), error.getClass().getSimpleName(),
+                            exec.subjectId(), a.agentId(), error.getClass().getSimpleName(),
                             errMsg, ms, attempt, cfg.maxRequestRetries());
                     return backoffAndRetry(ms, attempt, errMsg, request, original,
                             emittedSignal, retries, totalDelayMs, waveId);
@@ -275,10 +275,10 @@ public class TransientErrorRetryAdvisor implements CallAdvisor, StreamAdvisor {
 
     /** 阻塞退避(仅非流式路径);中断 → 取消类异常穿透,交任务层收口为 cancelled。 */
     private void sleepBackoff(Throwable error, int attempt) {
-        TaskRuntime t = (TaskRuntime) a.properties().get("taskEntry");
+        ExecContext exec = a.execution();
         long ms = cfg.backoffMs(attempt);
         log.warn("任务 {} agent {} 模型瞬时错误({}: {}),{}ms 后重试({}/{})",
-                t.taskId(), a.agentId(), error.getClass().getSimpleName(), error.getMessage(),
+                exec.subjectId(), a.agentId(), error.getClass().getSimpleName(), error.getMessage(),
                 ms, attempt, cfg.maxRequestRetries());
         try {
             Thread.sleep(ms);

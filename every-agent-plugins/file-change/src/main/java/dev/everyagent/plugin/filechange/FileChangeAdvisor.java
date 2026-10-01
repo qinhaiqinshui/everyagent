@@ -2,8 +2,10 @@ package dev.everyagent.plugin.filechange;
 
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.plugin.api.agent.AgentContext;
+import dev.everyagent.plugin.api.execution.ExecContext;
 import dev.everyagent.plugin.api.task.FileChangesCollector;
 import dev.everyagent.plugin.api.task.TaskRuntime;
+import dev.everyagent.plugin.api.task.TaskService;
 import org.springframework.ai.chat.client.ChatClientRequest;
 import org.springframework.ai.chat.client.ChatClientResponse;
 import org.springframework.ai.chat.client.advisor.api.StreamAdvisor;
@@ -45,6 +47,11 @@ import tools.jackson.databind.JsonNode;
  * 「内层直接看到工具轮」与「回合末收口」不可兼得的取舍;如需 fileChanges 排在最终 message 之后,
  * 需将收口拆到外层(见最终交付说明)。
  *
+ * <p>取数路径(S4):本插件是任务域插件,fileChanges 三槽位是 TaskRuntime 私有成员
+ * (不进 ExecContext)——经构造注入的 {@link TaskService} 按
+ * {@code a.execution().subjectId()}(今天=taskId)取回 TaskRuntime 读写
+ * (SubAgentManager 同款路径;原黑盒 map 取数路径已随 S4 退役)。
+ *
  * <p>设计纪律:per-run 物化(每 run 新建实例,状态随实例隔离),多任务并发安全;流式({@link #adviseStream})
  * 为 worker 唯一路径(AgentRunner 始终 stream),非流式 call 不实现记录(默认透传)。
  */
@@ -57,13 +64,26 @@ public class FileChangeAdvisor implements StreamAdvisor {
     /** 目标 agent(主 agent 建收集器+收口;子 agent 只记录到共享槽)。 */
     private final AgentContext a;
 
+    /** 任务服务(任务域插件取 TaskRuntime 的通道,经 subjectId 查询)。 */
+    private final TaskService taskService;
+
     /** 主 agent 首次 adviseStream 建回合收集器(per-run 实例标志)。 */
     private boolean collectorInitialized = false;
     /** 当前轮(本次 adviseStream 调用)是否含工具调用:有=工具轮(将继续递归,延后收口)。 */
     private boolean turnHasToolCalls = false;
 
-    public FileChangeAdvisor(AgentContext a) {
+    public FileChangeAdvisor(AgentContext a, TaskService taskService) {
         this.a = a;
+        this.taskService = taskService;
+    }
+
+    /**
+     * 经 TaskService 按 {@code a.execution().subjectId()}(今天=taskId)取回任务运行时;
+     * 无执行上下文或任务不在内存(终态驱逐)时返回 null,调用方按「无任务上下文不收集」透传。
+     */
+    private TaskRuntime taskRuntime() {
+        ExecContext exec = a.execution();
+        return exec == null ? null : taskService.get(exec.subjectId());
     }
 
     @Override
@@ -82,7 +102,10 @@ public class FileChangeAdvisor implements StreamAdvisor {
     @Override
     public Flux<ChatClientResponse> adviseStream(ChatClientRequest chatClientRequest,
             StreamAdvisorChain streamAdvisorChain) {
-        TaskRuntime t = (TaskRuntime) a.properties().get("taskEntry");
+        TaskRuntime t = taskRuntime();
+        if (t == null) {
+            return streamAdvisorChain.nextStream(chatClientRequest); // 无任务上下文:不收集,透传
+        }
         if (!collectorInitialized) {
             t.fileChanges(new FileChangesCollector());
             collectorInitialized = true;
@@ -95,7 +118,10 @@ public class FileChangeAdvisor implements StreamAdvisor {
 
     /** 逐条检查模型流:工具轮已是完整消息(含 toolCalls),命中 update_file/create_file 则记录。 */
     private void record(ChatClientResponse chunk) {
-        TaskRuntime t = (TaskRuntime) a.properties().get("taskEntry");
+        TaskRuntime t = taskRuntime();
+        if (t == null) {
+            return;
+        }
         ChatResponse cr = chunk.chatResponse();
         if (cr == null || cr.getResult() == null) {
             return;
@@ -120,8 +146,8 @@ public class FileChangeAdvisor implements StreamAdvisor {
 
     /** 「本轮无工具调用」= 工具循环最后一轮 = 整次 run 完成;主 agent 收口填充 light/full 槽,由 RoundIndexAdvisor 落盘。 */
     private void finalizeIfLastTurn() {
-        TaskRuntime t = (TaskRuntime) a.properties().get("taskEntry");
-        if (turnHasToolCalls) {
+        TaskRuntime t = taskRuntime();
+        if (t == null || turnHasToolCalls) {
             return; // 工具轮:ToolCallingAdvisor 将继续递归,收口延后到最终回答轮
         }
         FileChangesCollector c = t.fileChanges();

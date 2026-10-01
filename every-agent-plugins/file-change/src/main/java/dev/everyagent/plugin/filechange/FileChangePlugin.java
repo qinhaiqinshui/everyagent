@@ -13,7 +13,7 @@ public class FileChangePlugin implements EveryAgentPlugin {
 
     @Override
     public void activate(WorkerPluginContext ctx) throws Exception {
-        ctx.registerAdvisorProvider(new FileChangeAdvisorProvider());
+        ctx.registerAdvisorProvider(new FileChangeAdvisorProvider(ctx.services().task()));
         log.info("[file-change] 已注册 FileChangeAdvisorProvider");
     }
 }

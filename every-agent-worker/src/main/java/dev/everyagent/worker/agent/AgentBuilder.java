@@ -33,9 +33,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 
 /**
  * Agent 层 Builder 模式装配入口。
@@ -48,10 +46,10 @@ import java.util.Map;
  * <p>核心设计：{@code create()} 聚合全部工具（工具只需 ToolContext，不需 entity）；
  * {@code build()} 创建 entity 后聚合 advisor（advisor 需要 entity 引用），再装配 ChatClient。
  *
- * <p>过渡 map（S4 advisor 迁移后删除）：S4 前 advisor 仍读
- * {@code AgentContext.properties().get("taskEntry")} 等四件套键，故 create 内从 exec
- * 重建等价 map 挂到 Build/AgentEntity 的 properties 上；agent 层核心（{@link AgentRunner}）
- * 完全不读。S4 advisor 全迁 {@code execution()} 槽位后，map 与 properties 字段一并删除。
+ * <p>S4 起 advisor 链全面经 {@code AgentContext.execution()} 类型化槽位取数
+ * （{@code entity.execution().subjectId()/workspaceRoot()/snapshot()}），原过渡黑盒
+ * map（taskEntry/taskId/workspaceRoot/configId 四件套键）与 AgentEntity.properties
+ * 字段已删除；agent 层核心（{@link AgentRunner}）零读上下文数据。
  */
 @Component
 public class AgentBuilder {
@@ -105,8 +103,7 @@ public class AgentBuilder {
      * @param chatModel 模型层 ChatModel（由上层解析后传入）
      * @param options   请求参数快照
      * @param exec      本 agent 所属执行上下文（task 或未来 workflow）；emitter 取
-     *                  {@code exec.emitter()}，过渡 map 的 configId 取
-     *                  {@code exec.snapshot().configId()}
+     *                  {@code exec.emitter()}，configId 取 {@code exec.snapshot().configId()}
      */
     public Build create(String agentId, ChatModel chatModel, OpenAiChatOptions options,
             ExecContext exec) {
@@ -114,14 +111,13 @@ public class AgentBuilder {
     }
 
     /**
-     * 包内全参变体：{@code configId} 为本 agent 实际解析所用的配置 ID，作为过渡 map
-     * {@code "configId"} 键的取值——AgentFactoryImpl 主干传入（审议 agent 覆盖模型时
-     * 与 {@code exec.snapshot().configId()} 不同，须保 advisor 取数与原先一致）。
+     * 包内全参变体：{@code configId} 为本 agent 实际解析所用的配置 ID
+     * （AgentFactoryImpl 主干传入——审议 agent 覆盖模型时与
+     * {@code exec.snapshot().configId()} 不同），Build 持有供
+     * {@code createAdvisorContext} 填充 {@code AdvisorContext.configId()}。
      */
     Build create(String agentId, ChatModel chatModel, OpenAiChatOptions options,
             ExecContext exec, String configId) {
-        // 过渡 map（S4 advisor 迁移后删除）：advisor 此期间仍读 properties 四件套键
-        Map<String, Object> properties = transitionProps(exec, configId);
         // 聚合全部工具: 遍历 toolRegistry.getProviders() → appliesTo → createTools
         ToolContextImpl toolCtx = createToolContext(agentId, exec);
         List<ToolCallback> tools = new ArrayList<>();
@@ -130,22 +126,7 @@ public class AgentBuilder {
                 tools.addAll(p.createTools(toolCtx));
             }
         }
-        return new Build(agentId, chatModel, options, exec, properties, tools);
-    }
-
-    /**
-     * 过渡 map 重建（S4 advisor 迁移后删除）：键集与原 ThreadSubmitNode /
-     * SubAgentManager / AiAuthReviewer 手工组装完全一致
-     * （taskEntry / taskId / workspaceRoot / configId），advisor 经
-     * {@code AgentContext.properties().get(...)} 的取数路径与取值完全不变。
-     */
-    private static Map<String, Object> transitionProps(ExecContext exec, String configId) {
-        Map<String, Object> props = new HashMap<>(4);
-        props.put("taskEntry", exec);
-        props.put("taskId", exec.subjectId());
-        props.put("workspaceRoot", exec.workspaceRoot());
-        props.put("configId", configId);
-        return props;
+        return new Build(agentId, chatModel, options, exec, configId, tools);
     }
 
     /** 从 exec 槽位构造 ToolContext（S2 起不再从 map 逐个 get）。 */
@@ -179,8 +160,8 @@ public class AgentBuilder {
         private final OpenAiChatOptions options;
         /** 本 agent 所属执行上下文（S2 起为装配主干；agent 级 emitter 包它的 emitter()）。 */
         private final ExecContext execution;
-        /** 过渡 map（S4 advisor 迁移后删除）：advisor / 工具拦截器此期间仍经此取数。 */
-        private final Map<String, Object> properties;
+        /** 本 agent 实际解析所用的配置 ID（AdvisorContext.configId() 的供体）。 */
+        private final String configId;
 
         // create() 时已聚合填充，后续可按模式增删改
         private List<ToolCallback> tools;
@@ -193,13 +174,13 @@ public class AgentBuilder {
         private String title = "";
 
         Build(String agentId, ChatModel chatModel, OpenAiChatOptions options,
-                ExecContext execution, Map<String, Object> properties,
+                ExecContext execution, String configId,
                 List<ToolCallback> tools) {
             this.agentId = agentId;
             this.chatModel = chatModel;
             this.options = options;
             this.execution = execution;
-            this.properties = properties;
+            this.configId = configId;
             this.tools = new ArrayList<>(tools);
         }
 
@@ -261,17 +242,17 @@ public class AgentBuilder {
             // 1. 创建 AgentEntity（chatClient 暂为 null，build 后设置）；
             //    上游 emitter 取 execution.emitter()（任务级事件口）
             AgentEntity entity = new AgentEntity(agentId, title, chatModel, options,
-                    List.copyOf(tools), execution.emitter(), execution, properties);
+                    List.copyOf(tools), execution.emitter(), execution);
             entity.conversation.addAll(conversation);
 
-            // 2. 装配 TCM：per-run InterceptingToolCallingManager（持 properties，替代 ThreadLocal）
+            // 2. 装配 TCM：per-run InterceptingToolCallingManager（持 exec，替代 ThreadLocal）
             //    → 可选 LoopRepeatGuardToolManager 装饰
             ToolCallingManager interceptingTcm = new InterceptingToolCallingManager(
-                    defaultTcm, interceptorRegistry, properties);
+                    defaultTcm, interceptorRegistry, execution);
             ToolCallingManager tcm = wrapWithGuardIfNeeded(interceptingTcm);
 
             // 3. 聚合 advisor：创建 AdvisorContext → 遍历 registry → appliesTo → create → 排序
-            AdvisorContextImpl advCtx = createAdvisorContext(entity, tcm);
+            AdvisorContextImpl advCtx = createAdvisorContext(entity, tcm, configId);
             List<Advisor> advisors = new ArrayList<>();
             for (AdvisorProvider p : advisorRegistry.getProviders().stream()
                     .sorted(Comparator.comparingInt(AdvisorProvider::order)).toList()) {
@@ -321,13 +302,15 @@ public class AgentBuilder {
         }
     }
 
-    /** 从 properties 提取必要信息构造 AdvisorContext。 */
-    private AdvisorContextImpl createAdvisorContext(AgentEntity entity, ToolCallingManager tcm) {
-        String taskId = (String) entity.properties.get("taskId");
-        Object wsRoot = entity.properties.get("workspaceRoot");
-        Path workspaceRoot = wsRoot == null ? null : Paths.get(wsRoot.toString());
-        Object cid = entity.properties.get("configId");
-        String configId = cid == null ? null : cid.toString();
-        return new AdvisorContextImpl(entity, tcm, taskId, workspaceRoot, configId);
+    /**
+     * 从 entity.execution() 类型化槽位提取必要信息构造 AdvisorContext;
+     * {@code configId} 为本 agent 实际解析所用配置 ID(Build 持有传入)。
+     */
+    private AdvisorContextImpl createAdvisorContext(AgentEntity entity, ToolCallingManager tcm,
+            String configId) {
+        ExecContext exec = entity.execution();
+        Path workspaceRoot = exec.workspaceRoot() == null
+                ? null : Paths.get(exec.workspaceRoot());
+        return new AdvisorContextImpl(entity, tcm, exec.subjectId(), workspaceRoot, configId);
     }
 }

@@ -5,7 +5,7 @@ import dev.everyagent.plugin.api.config.WorkerConfig;
 import dev.everyagent.plugin.api.proto.SnowflakeId;
 import dev.everyagent.plugin.api.exception.AgentCancelledException;
 import dev.everyagent.plugin.api.agent.AgentContext;
-import dev.everyagent.plugin.api.task.TaskRuntime;
+import dev.everyagent.plugin.api.execution.ExecContext;
 import dev.everyagent.plugin.api.event.EventPayloads;
 import dev.everyagent.plugin.api.exception.ModelCallException;
 import org.slf4j.Logger;
@@ -165,7 +165,7 @@ public class EmptyResponseRetryAdvisor implements CallAdvisor, StreamAdvisor {
     private Flux<ChatClientResponse> attemptStream(ChatClientRequest request, StreamAdvisorChain chain,
             StreamAdvisorChain original, AtomicBoolean sawSignal, AtomicInteger emptyAttempts,
             AtomicLong totalDelayMs, AtomicLong waveId) {
-        TaskRuntime t = (TaskRuntime) a.properties().get("taskEntry");
+        ExecContext exec = a.execution();
         return chain.nextStream(request)
                 .doOnNext(chunk -> {
                     if (hasSignal(chunk)) {
@@ -205,7 +205,7 @@ public class EmptyResponseRetryAdvisor implements CallAdvisor, StreamAdvisor {
                             EventPayloads.retryMeta(attempt, maxAttempts, ms, 0, ms, "empty_response"),
                             EmitEvent.Mode.REPLACE));
                     log.warn("任务 {} agent {} 模型返回空响应,{}ms 后重试({}/{})",
-                            t.taskId(), a.agentId(), ms, attempt, maxAttempts - 1);
+                            exec.subjectId(), a.agentId(), ms, attempt, maxAttempts - 1);
                     return backoffAndRetry(ms, attempt, request, original,
                             sawSignal, emptyAttempts, totalDelayMs, waveId);
                 }));
@@ -243,10 +243,10 @@ public class EmptyResponseRetryAdvisor implements CallAdvisor, StreamAdvisor {
 
     /** 阻塞退避(仅非流式路径);中断 → 取消类异常穿透,交任务层收口为 cancelled。 */
     private void sleepBackoff(int attempt) {
-        TaskRuntime t = (TaskRuntime) a.properties().get("taskEntry");
+        ExecContext exec = a.execution();
         long ms = cfg.backoffMs(attempt);
         log.warn("任务 {} agent {} 模型返回空响应,{}ms 后重试({}/{})",
-                t.taskId(), a.agentId(), ms, attempt, maxAttempts - 1);
+                exec.subjectId(), a.agentId(), ms, attempt, maxAttempts - 1);
         try {
             Thread.sleep(ms);
         } catch (InterruptedException ie) {

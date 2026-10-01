@@ -3,7 +3,7 @@ package dev.everyagent.plugin.agentsmd;
 import dev.everyagent.plugin.api.agent.AgentContext;
 import dev.everyagent.plugin.api.spi.AdvisorContext;
 import dev.everyagent.plugin.api.spi.AdvisorProvider;
-import dev.everyagent.plugin.api.task.TaskRuntime;
+import dev.everyagent.plugin.api.execution.ExecContext;
 import org.springframework.ai.chat.client.advisor.api.Advisor;
 import org.springframework.core.Ordered;
 
@@ -27,7 +27,7 @@ public class AgentsMdAdvisorProvider implements AdvisorProvider {
     @Override
     public Advisor create(AdvisorContext ctx) {
         AgentContext a = ctx.agentEntity();
-        TaskRuntime t = (TaskRuntime) a.properties().get("taskEntry");
-        return new AgentsMdAdvisor(t.workspaceRoot());
+        ExecContext exec = a.execution();
+        return new AgentsMdAdvisor(exec.workspaceRoot());
     }
 }

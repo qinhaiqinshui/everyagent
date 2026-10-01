@@ -32,8 +32,9 @@ public interface AdvisorContext {
     /**
      * 当前 agent 的上下文（plugin-api 契约接口，隐藏 worker 实现细节）。
      *
-     * <p>插件经此获取 {@link AgentContext} 来读取 agent properties（如 taskEntry）
-     * 或会话内存，无需依赖 worker 的 {@code AgentEntity} 具体类。
+     * <p>插件经此获取 {@link AgentContext} 来读取会话内存等 agent 域成员,
+     * 或经 {@link #execution()} 取执行上下文槽位,无需依赖 worker 的
+     * {@code AgentEntity} 具体类。
      *
      * @return 当前 agent 上下文
      */
@@ -41,8 +42,8 @@ public interface AdvisorContext {
 
     /**
      * 统一执行上下文（taskId / workspaceRoot / snapshot / emitter 等类型化槽位）。
-     * <p>worker 实现注入（Impl 构造时传入）;过渡返回 null,
-     * 消费者此期间继续经 {@link #agentEntity()}.properties() 取数。
+     * <p>worker 实现(Impl)注入(委托 {@link #agentEntity()}.execution());
+     * S4 起 advisor 链全面经此取数,黑盒 map 取数路径已退役。
      */
     default ExecContext execution() {
         return null;

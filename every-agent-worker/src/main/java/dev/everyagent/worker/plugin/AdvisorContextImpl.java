@@ -1,6 +1,7 @@
 package dev.everyagent.worker.plugin;
 
 import dev.everyagent.plugin.api.agent.AgentContext;
+import dev.everyagent.plugin.api.execution.ExecContext;
 import dev.everyagent.plugin.api.spi.AdvisorContext;
 import dev.everyagent.worker.agent.AgentEntity;
 import org.springframework.ai.model.tool.ToolCallingManager;
@@ -59,6 +60,12 @@ public class AdvisorContextImpl implements AdvisorContext {
     @Override
     public String configId() {
         return configId;
+    }
+
+    /** S4 起注入:委托 agentEntity.execution()(advisor 链类型化槽位取数主干)。 */
+    @Override
+    public ExecContext execution() {
+        return agentEntity.execution();
     }
 
     @Override

@@ -16,17 +16,16 @@ import tools.jackson.databind.node.ObjectNode;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * 单个 agent(主或子)的运行时:模型客户端、工具集、会话内存(可被压缩重写的载体,§5.8)。
  *
- * <p>S2 起持有 {@link #execution}(本 agent 所属执行上下文,构造注入)与过渡
- * {@link #properties}(S4 advisor 迁移后删除的黑盒 map);agent 级 {@link #emitter}
- * 构造时包装上游 emitter(填 agentId → 委托 execution.emitter())。
- * {@link #chatClient} 由 {@link AgentBuilder} 装配注入。
+ * <p>S2 起持有 {@link #execution}(本 agent 所属执行上下文,构造注入);S4 起
+ * advisor 链全面经 {@code execution()} 类型化槽位取数,原过渡黑盒 map properties
+ * 已删除。agent 级 {@link #emitter} 构造时包装上游 emitter(填 agentId →
+ * 委托 execution.emitter())。{@link #chatClient} 由 {@link AgentBuilder} 装配注入。
  */
 public final class AgentEntity implements Agent {
 
@@ -42,9 +41,6 @@ public final class AgentEntity implements Agent {
 
     /** 由 AgentBuilder 装配注入(build 后设置)。 */
     public ChatClient chatClient;
-
-    /** 上层黑盒数据（过渡 map，S4 advisor 迁移后删除），agent 层核心(AgentRunner)完全不读；task 层 advisor 从中取 TaskEntry 等。 */
-    public final Map<String, Object> properties;
 
     /** 本 agent 所属的执行上下文（task 或未来 workflow；S2 起构造注入，S4 起为 advisor 取数主干）。 */
     public final ExecContext execution;
@@ -78,15 +74,13 @@ public final class AgentEntity implements Agent {
 
     public AgentEntity(String agentId, String title, ChatModel chatModel,
             OpenAiChatOptions options, List<ToolCallback> tools,
-            EventEmitter upstreamEmitter, ExecContext execution,
-            Map<String, Object> properties) {
+            EventEmitter upstreamEmitter, ExecContext execution) {
         this.agentId = agentId;
         this.title = title;
         this.chatModel = chatModel;
         this.options = options;
         this.tools = tools;
         this.execution = execution;
-        this.properties = properties;
         // 包装：添加本层信息（agentId），委托上游 emitter
         this.emitter = e -> {
             EmitEvent filled = (e.agentId() == null || e.agentId().isEmpty())
@@ -119,11 +113,6 @@ public final class AgentEntity implements Agent {
     @Override
     public long createdAt() {
         return createdAt;
-    }
-
-    @Override
-    public Map<String, Object> properties() {
-        return properties;
     }
 
     @Override

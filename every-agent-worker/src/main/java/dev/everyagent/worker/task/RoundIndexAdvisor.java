@@ -69,7 +69,7 @@ public class RoundIndexAdvisor implements StreamAdvisor {
 
     /** 一轮用户任务流完成:增量补写已闭合轮(耗时由 RoundIndexStore 从磁盘 startedAt 计算并随行内联),并对本次新闭合的轮推 round.closed(异常自吞,不阻断 onComplete)。 */
     private void persistRounds() {
-        TaskEntry t = (TaskEntry) a.properties.get("taskEntry");
+        TaskEntry t = (TaskEntry) a.execution();
         // 取出本轮文件变更槽并清空(FileChangeAdvisor 收口填充;无变更时两槽均为 null)
         JsonNode light = t.fileChangesLight;
         JsonNode full = t.fileChangesFull;

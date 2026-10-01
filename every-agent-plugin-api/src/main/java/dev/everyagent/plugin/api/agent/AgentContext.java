@@ -7,7 +7,6 @@ import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.model.ChatModel;
 
 import java.util.List;
-import java.util.Map;
 
 /**
  * per-run agent 的数据面接口(plugin-api 契约)。
@@ -33,18 +32,10 @@ public interface AgentContext {
     long createdAt();
 
     /**
-     * 上层黑盒数据(agent 核心不读;task 层 advisor 从中取 TaskEntry 等)。
-     *
-     * @deprecated 过渡保留,S4 随 advisor 链全面迁移 {@link #execution()} 后删除;
-     *             消费者请改用 {@code execution()} 的类型化槽位取数。
-     */
-    @Deprecated
-    Map<String, Object> properties();
-
-    /**
-     * 本 agent 所属的执行上下文(task 或未来 workflow)。
-     * <p>worker {@code AgentEntity} 在 S2 实现注入;过渡返回 null,
-     * 消费者此期间继续经 {@link #properties()} 取数。
+     * 本 agent 所属的执行上下文(task 或未来 workflow;原黑盒 map
+     * {@code properties().get("taskEntry")} 四件套键已随 S4 退役)。
+     * <p>横切 advisor / 工具拦截器经此类型化槽位取数
+     * ({@code subjectId()} / {@code workspaceRoot()} / {@code snapshot()} 等)。
      */
     default ExecContext execution() {
         return null;
