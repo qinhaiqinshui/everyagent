@@ -1095,7 +1095,8 @@ public class WorkerProperties implements WorkerConfig {
          * 是否允许沙箱内命令访问网络。默认 true = 放行(含回环 127.0.0.1 与出站;
          * wsl-bwrap 不加 {@code --unshare-net} / wsl-direct 不 unshare / direct/mic 不剥代理 env)。
          * false 回落到 networkPolicy(deny-all 硬/软拒,audit-only 放行)。
-         * 任务级更细粒度:保持 true,用户对某个任务选 /禁用网络 斜杠命令即可单独关闭该任务网络。
+         * 任务级更细粒度:保持 true;任务级 /禁用网络 由 wsl-ubuntu 沙箱插件自带(只有它能在
+         * 发行版内 unshare -n 真断网),用户对某个任务选中该命令即单独关闭本任务网络。
          */
         private boolean allowNetwork = true;
         /**

@@ -348,7 +348,8 @@ public final class WindowsSandbox {
      * <p>先复制 {@link System#getenv()} 的完整父环境,再以 {@code extra} 覆盖
      * (extra 为 null 时仅父环境)。这样注入 PATH 等变量时不丢失 SystemRoot /
      * SYSTEMDRIVE 等父进程关键路径变量,避免子进程找不到系统组件。
-     * 当 {@code !allowNetwork}(任务禁网:选了 /禁用网络 或 worker 全局拒网)时剥除代理变量
+     * 当 {@code !allowNetwork}(worker 全局拒网 {@code sandbox.allow-network=false};任务级
+     * /禁用网络 只有 wsl-ubuntu 后端提供,本后端不读该开关)时剥除代理变量
      * (Job Object 管不了网络,此为 advisory 边界)。
      * 合并后为空才返回 {@link Pointer#NULL}(CreateProcess* 视作继承父环境);
      * 返回 UTF-16 块时调用方必须带 CREATE_UNICODE_ENVIRONMENT(见类注释)。

@@ -203,7 +203,7 @@ SpawnRequest 不搬 codex 的 permission_profile 结构,改为自有 `writeRoots
 - **Backend.mount**:codex 模式命令跑在宿主路径上 → 返回**恒等映射**(同 mic);同时把每个 `MountRequest(hostPath, access)` 登记进 RootPolicy:READ_WRITE→写根(cap SID + preflight 刷 ACE),READ_ONLY→读根补充。映射表由核心 SandboxPathRegistry 使用,本插件不翻译路径。
 - **命令执行入口**:对齐 wsl-ubuntu 形态——插件自己的 `CodexCommandExecutor` + `CodexBashToolProvider`(`appliesTo` 判 `ctx.sandbox().id()=="codex"`),提供 `bash` 工具;执行链 = readiness → preflight 刷写根 ACE → SpawnRequest → RunnerClient 会话 → `ExecResult`(stdout/stderr/exitCode/aborted)→ wsl 同款格式化尾注。core 的 DIRECT 工具与本工具经 appliesTo 互斥共存。
 - **与 PermissionGate 的关系(分工)**:gate 仍是**工作区外路径访问的前置授权**(fs.* 工具、命令引用越界路径先弹 ask);授权通过的 externalRoots 进入 mount(RW)→ RootPolicy → preflight 落 allow-write ACE。沙箱内 IO 由账户 DACL 二次兜底:即便 gate 被绕过,沙箱账户对未授权路径默认拒绝写(这是 mic 后端没有的 OS 级兜底);工作区内命令不弹授权。沙箱自身不改工作区文件 ACL 之外的任何系统标注。
-- **网络**:全局 `allow-network=false` 或任务 `/禁用网络` → Offline 账户(防火墙+WFP 天然断网);放行 → Online 账户。选择在会话组 SpawnRequest 时确定,凭据按账户取。
+- **网络**:全局 `allow-network=false`(经 `SandboxConfig.networkDenied`)或 `codex.network-policy=offline` → Offline 账户(防火墙+WFP 天然断网);放行 → Online 账户。选择在会话组 SpawnRequest 时确定,凭据按账户取。任务级 `/禁用网络` 胶囊不在本后端提供(归 wsl-ubuntu 插件,见架构 §7.10)。
 
 ## 6. 与 sandbox-windows-mic 的差异
 

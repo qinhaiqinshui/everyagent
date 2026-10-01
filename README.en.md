@@ -51,7 +51,7 @@
 - Per-round token usage and context consumption are clear at a glance.
 
 ### 🛡️ Security sandbox + human-AI collaboration guardrails
-- Commands run in a **sandbox**: on Windows it defaults to a WSL2 managed distribution (a disposable system that can be fully reinstalled); host drives **outside the workspace are invisible**. Network is allowed by default and can be disabled per-task via `/disable-network`.
+- Commands run in a **sandbox**: on Windows it defaults to a WSL2 managed distribution (a disposable system that can be fully reinstalled); host drives **outside the workspace are invisible**. Network is allowed by default and can be disabled per-task via `/disable-network` (this command ships with the wsl-ubuntu sandbox plugin — it is the only backend that can truly cut the network via `unshare -n`).
 - Out-of-workspace operations / dangerous commands always require **popup authorization** (reject / this round / this task), with optional **AI review** for auto-adjudication or **unattended mode** to run fully automatically.
 - Git credentials are AES-GCM encrypted and stored locally, never transmitted over the network.
 
