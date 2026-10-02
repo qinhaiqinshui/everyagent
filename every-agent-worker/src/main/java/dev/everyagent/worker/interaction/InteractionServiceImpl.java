@@ -5,12 +5,10 @@ import dev.everyagent.plugin.api.interaction.AskQuestion;
 import dev.everyagent.plugin.api.interaction.AskResult;
 import dev.everyagent.plugin.api.interaction.InteractionService;
 import dev.everyagent.plugin.api.model.EmitEvent;
+import dev.everyagent.plugin.api.model.EventEmitter;
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.plugin.api.proto.SnowflakeId;
 import dev.everyagent.plugin.api.event.EventPayloads;
-import dev.everyagent.worker.task.TaskEntry;
-import dev.everyagent.worker.task.TaskEvents;
-import dev.everyagent.worker.task.TaskManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Lazy;
@@ -50,18 +48,18 @@ public class InteractionServiceImpl implements InteractionService {
         final String taskId;
         final String agentId;
         final List<AskQuestion> questions;
-        final TaskEvents events;
+        final EventEmitter emitter;
         final CompletableFuture<AskResult> future = new CompletableFuture<>();
         volatile ScheduledFuture<?> refresher;
         volatile ScheduledFuture<?> timeout;
 
         Ask(String askId, String taskId, String agentId,
-                List<AskQuestion> questions, TaskEvents events) {
+                List<AskQuestion> questions, EventEmitter emitter) {
             this.askId = askId;
             this.taskId = taskId;
             this.agentId = agentId;
             this.questions = questions;
-            this.events = events;
+            this.emitter = emitter;
         }
     }
 
@@ -75,11 +73,11 @@ public class InteractionServiceImpl implements InteractionService {
             });
     private volatile StatusHook hook;
 
-    /** @Lazy 断环:TaskManager 注入本类,本类反向查 TaskEntry.events。 */
-    private final TaskManager taskManager;
+    /** 断环:TaskManager 注入本类,本类经 EmitterLookup 反向取 EventEmitter。 */
+    private final EmitterLookup emitterLookup;
 
-    public InteractionServiceImpl(@Lazy TaskManager taskManager) {
-        this.taskManager = taskManager;
+    public InteractionServiceImpl(@Lazy EmitterLookup emitterLookup) {
+        this.emitterLookup = emitterLookup;
     }
 
     public void setHook(StatusHook hook) {
@@ -91,9 +89,8 @@ public class InteractionServiceImpl implements InteractionService {
             throws InterruptedException {
         String taskId = context != null ? context.getOrDefault("taskId", "") : "";
         String agentId = context != null ? context.getOrDefault("agentId", "") : "";
-        TaskEntry entry = taskManager.get(taskId);
-        TaskEvents events = entry != null ? entry.events : null;
-        if (events == null) {
+        EventEmitter emitter = emitterLookup.emitterFor(taskId);
+        if (emitter == null) {
             return new AskResult("cancelled", null);
         }
         String askId = dev.everyagent.plugin.api.proto.ShortIds.askId();
@@ -104,7 +101,7 @@ public class InteractionServiceImpl implements InteractionService {
             AskQuestion q = questions.get(i);
             withIds.add(new AskQuestion(askId + "_" + i, q.prompt(), q.options(), q.fields()));
         }
-        Ask ask = new Ask(askId, taskId, agentId, withIds, events);
+        Ask ask = new Ask(askId, taskId, agentId, withIds, emitter);
         asks.put(askId, ask);
         ObjectNode askData = Json.obj();
         askData.put("askId", askId);
@@ -112,9 +109,9 @@ public class InteractionServiceImpl implements InteractionService {
         if (timeoutMs > 0) {
             askData.put("timeoutMs", timeoutMs);
         }
-        events.emit(EmitEvent.of(SnowflakeId.next(), "ask.create", agentId,
+        emitter.emit(EmitEvent.of(SnowflakeId.next(), "ask.create", agentId,
                 null, null, null, null, askData, EmitEvent.Mode.REPLACE));
-        events.emit(EmitEvent.of(SnowflakeId.next(), "agent.status", agentId,
+        emitter.emit(EmitEvent.of(SnowflakeId.next(), "agent.status", agentId,
                 null, null, null, "waiting-user", null, EmitEvent.Mode.REPLACE));
         pendingChanged(taskId, +1);
         ask.refresher = scheduler.scheduleAtFixedRate(() -> {
@@ -123,7 +120,7 @@ public class InteractionServiceImpl implements InteractionService {
                 stateData.put("askId", askId);
                 stateData.put("status", "pending");
                 stateData.set("questions", EventPayloads.questionsToJson(withIds));
-                events.emit(EmitEvent.of(SnowflakeId.next(), "ask.state", agentId,
+                emitter.emit(EmitEvent.of(SnowflakeId.next(), "ask.state", agentId,
                         null, null, null, null, stateData, EmitEvent.Mode.REPLACE));
             } catch (RuntimeException e) {
                 log.warn("ask.state 刷新失败", e);
@@ -135,9 +132,9 @@ public class InteractionServiceImpl implements InteractionService {
                 resolvedData.put("askId", askId);
                 resolvedData.put("by", "timeout");
                 resolvedData.put("status", "timeout");
-                events.emit(EmitEvent.of(SnowflakeId.next(), "ask.resolved", agentId,
+                emitter.emit(EmitEvent.of(SnowflakeId.next(), "ask.resolved", agentId,
                         null, null, null, null, resolvedData, EmitEvent.Mode.REPLACE));
-                events.emit(EmitEvent.of(SnowflakeId.next(), "agent.status", agentId,
+                emitter.emit(EmitEvent.of(SnowflakeId.next(), "agent.status", agentId,
                         null, null, null, "running", null, EmitEvent.Mode.REPLACE));
             }
         }, timeoutMs, TimeUnit.MILLISECONDS);
@@ -180,9 +177,9 @@ public class InteractionServiceImpl implements InteractionService {
             resolvedData.put("askId", askId);
             resolvedData.put("by", by);
             resolvedData.put("status", "answered");
-            a.events.emit(EmitEvent.of(SnowflakeId.next(), "ask.resolved", a.agentId,
+            a.emitter.emit(EmitEvent.of(SnowflakeId.next(), "ask.resolved", a.agentId,
                     null, null, null, null, resolvedData, EmitEvent.Mode.REPLACE));
-            a.events.emit(EmitEvent.of(SnowflakeId.next(), "agent.status", a.agentId,
+            a.emitter.emit(EmitEvent.of(SnowflakeId.next(), "agent.status", a.agentId,
                     null, null, null, "running", null, EmitEvent.Mode.REPLACE));
         }
         return first;
@@ -196,7 +193,7 @@ public class InteractionServiceImpl implements InteractionService {
                 resolvedData.put("askId", a.askId);
                 resolvedData.put("by", by);
                 resolvedData.put("status", "cancelled");
-                a.events.emit(EmitEvent.of(SnowflakeId.next(), "ask.resolved", a.agentId,
+                a.emitter.emit(EmitEvent.of(SnowflakeId.next(), "ask.resolved", a.agentId,
                         null, null, null, null, resolvedData, EmitEvent.Mode.REPLACE));
             }
         }

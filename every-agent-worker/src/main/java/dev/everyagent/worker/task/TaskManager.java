@@ -25,8 +25,10 @@ import dev.everyagent.worker.rpc.RpcContext;
 import dev.everyagent.worker.rpc.RpcDispatcher;
 import dev.everyagent.worker.ship.TaskInputHandler;
 import dev.everyagent.plugin.api.slash.SlashTokenEncoder;
+import dev.everyagent.worker.interaction.EmitterLookup;
 import dev.everyagent.worker.interaction.InteractionServiceImpl;
 import dev.everyagent.worker.plugin.registry.TaskAdmissionPolicyRegistry;
+import dev.everyagent.plugin.api.model.EventEmitter;
 import dev.everyagent.worker.plugin.registry.TaskLifecycleRegistry;
 import dev.everyagent.worker.task.lifecycle.IdempotencyCheckNode;
 import dev.everyagent.worker.task.lifecycle.ResponseAckNode;
@@ -76,7 +78,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  * 多 hub:任务不做 owner 隔离;任务事件经 EventSink.fanout 扇出到全部连接的 tasks 频道。
  */
 @Component
-public class TaskManager implements TaskInputHandler, InteractionServiceImpl.StatusHook, WorkspaceCascadePort {
+public class TaskManager implements TaskInputHandler, InteractionServiceImpl.StatusHook, WorkspaceCascadePort, EmitterLookup {
 
     private static final Logger log = LoggerFactory.getLogger(TaskManager.class);
     private static final long IDEM_WINDOW_MS = 600_000;
@@ -1201,6 +1203,12 @@ public class TaskManager implements TaskInputHandler, InteractionServiceImpl.Sta
 
     public TaskEntry get(String taskId) {
         return tasks.get(taskId);
+    }
+
+    @Override
+    public EventEmitter emitterFor(String subjectId) {
+        TaskEntry entry = get(subjectId);
+        return entry != null ? entry.events : null;
     }
 
     /**
