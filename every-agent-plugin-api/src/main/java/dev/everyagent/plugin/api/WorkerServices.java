@@ -78,4 +78,16 @@ public interface WorkerServices extends TaskServices {
      * 传递 taskId、dataDir 和闭合轮信息列表。插件可据此写入按轮分片的数据文件。
      */
     void addRoundClosedListener(dev.everyagent.plugin.api.task.RoundClosedListener listener);
+
+    /**
+     * 宿主路径 → AI 沙箱内可见路径翻译。
+     *
+     * <p>经核心 {@code SandboxPathRegistry} 查表翻译;无映射则原样返回(DIRECT 场景
+     * 或路径尚未注册)。供插件(如 system-info)在注入 system prompt 时将宿主路径
+     * 翻译为 AI 沙箱内实际可见的路径(如 WSL 后端 {@code C:\\...} → {@code /c/...})。
+     *
+     * @param hostPath 宿主绝对路径
+     * @return AI 沙箱内可见路径;无映射时原样返回
+     */
+    String toSandboxPath(Path hostPath);
 }

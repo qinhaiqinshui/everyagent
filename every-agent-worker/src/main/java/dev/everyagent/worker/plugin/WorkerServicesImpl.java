@@ -20,6 +20,7 @@ import dev.everyagent.worker.modules.WorkspaceManager;
 import dev.everyagent.worker.hub.EventSink;
 import dev.everyagent.worker.interaction.InteractionServiceImpl;
 import dev.everyagent.worker.os.OsSandbox;
+import dev.everyagent.worker.os.SandboxPathRegistry;
 import dev.everyagent.worker.task.TaskManager;
 import dev.everyagent.worker.task.RoundIndexStore;
 import dev.everyagent.worker.task.TaskStore;
@@ -35,6 +36,7 @@ import java.util.concurrent.atomic.AtomicReference;
 public class WorkerServicesImpl implements WorkerServices {
 
     private final OsSandbox sandbox;
+    private final SandboxPathRegistry pathRegistry;
     private final WorkspaceManager workspaces;
     private final AtomicReference<TokenEstimator> tokenEstimator;
     private final TaskManager taskManager;
@@ -45,13 +47,15 @@ public class WorkerServicesImpl implements WorkerServices {
     private final EventSink eventSink;
     private final IdGenerator idGenerator;
 
-    public WorkerServicesImpl(OsSandbox sandbox, WorkspaceManager workspaces,
+    public WorkerServicesImpl(OsSandbox sandbox, SandboxPathRegistry pathRegistry,
+            WorkspaceManager workspaces,
             TokenEstimator tokenEstimator, @Lazy TaskManager taskManager,
             TaskStore taskStore,
             RoundIndexStore roundIndexStore,
             InteractionServiceImpl interaction,
             WorkerProperties workerProperties, EventSink eventSink) {
         this.sandbox = sandbox;
+        this.pathRegistry = pathRegistry;
         this.workspaces = workspaces;
         this.tokenEstimator = new AtomicReference<>(tokenEstimator);
         this.taskManager = taskManager;
@@ -157,6 +161,11 @@ public class WorkerServicesImpl implements WorkerServices {
     @Override
     public void addRoundClosedListener(RoundClosedListener listener) {
         roundIndexStore.addRoundClosedListener(listener);
+    }
+
+    @Override
+    public String toSandboxPath(java.nio.file.Path hostPath) {
+        return pathRegistry.toSandboxPath(hostPath);
     }
 
 }
