@@ -1,4 +1,4 @@
-package dev.everyagent.worker.task;
+package dev.everyagent.worker.agent;
 
 import dev.everyagent.plugin.api.agent.AgentContext;
 import dev.everyagent.plugin.api.agent.AgentFactory;

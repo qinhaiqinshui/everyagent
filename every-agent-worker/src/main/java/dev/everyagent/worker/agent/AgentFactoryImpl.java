@@ -5,7 +5,7 @@ import dev.everyagent.plugin.api.agent.AgentFactory;
 import dev.everyagent.plugin.api.execution.ExecContext;
 import dev.everyagent.worker.modules.ConfigStore;
 import dev.everyagent.worker.modules.ConfigStore.ResolvedConfig;
-import dev.everyagent.worker.task.ChatModelFactory;
+import dev.everyagent.worker.config.ChatModelFactory;
 import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.ai.tool.ToolCallback;

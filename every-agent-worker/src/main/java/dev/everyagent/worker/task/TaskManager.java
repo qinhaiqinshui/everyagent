@@ -10,6 +10,7 @@ import dev.everyagent.worker.agent.AgentEntity;
 import dev.everyagent.worker.agent.AgentFactoryImpl;
 import dev.everyagent.worker.agent.AgentRunner;
 import dev.everyagent.worker.config.WorkerProperties;
+import dev.everyagent.worker.config.ChatModelFactory;
 import dev.everyagent.worker.hub.EventSink;
 import dev.everyagent.worker.modules.ConfigStore;
 import dev.everyagent.worker.modules.ConfigStore.ResolvedConfig;

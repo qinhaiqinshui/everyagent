@@ -1,4 +1,4 @@
-package dev.everyagent.worker.task;
+package dev.everyagent.worker.agent;
 
 import dev.everyagent.plugin.api.model.ModelConfig;
 import dev.everyagent.plugin.api.util.RootCause;

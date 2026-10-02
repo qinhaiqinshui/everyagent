@@ -1,4 +1,4 @@
-package dev.everyagent.worker.task;
+package dev.everyagent.worker.config;
 
 import dev.everyagent.plugin.api.model.ChatModelEnhancer;
 import dev.everyagent.plugin.api.model.EnhancedChatModel;

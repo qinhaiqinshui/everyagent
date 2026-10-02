@@ -1,10 +1,6 @@
 package dev.everyagent.worker.agent;
 
-import dev.everyagent.worker.task.ContextOverflow;
-import dev.everyagent.worker.task.InterceptingToolCallingManager;
-import dev.everyagent.worker.task.LoopRepeatException;
 import dev.everyagent.plugin.api.exception.ModelCallException;
-import dev.everyagent.worker.task.SchemaStrippedToolCallback;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.model.ChatResponse;

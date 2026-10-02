@@ -10,7 +10,7 @@ import dev.everyagent.worker.hub.HubPool;
 import dev.everyagent.worker.modules.ConfigStore;
 import dev.everyagent.worker.modules.ConfigStore.ResolvedConfig;
 import dev.everyagent.plugin.api.event.Channels;
-import dev.everyagent.worker.task.ChatModelFactory;
+import dev.everyagent.worker.config.ChatModelFactory;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;

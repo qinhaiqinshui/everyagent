@@ -15,8 +15,6 @@ import dev.everyagent.worker.plugin.ToolContextImpl;
 import dev.everyagent.worker.os.SandboxPathRegistry;
 import dev.everyagent.worker.plugin.registry.AdvisorProviderRegistry;
 import dev.everyagent.worker.plugin.registry.ToolProviderRegistry;
-import dev.everyagent.worker.task.InterceptingToolCallingManager;
-import dev.everyagent.worker.task.LoopRepeatGuardToolManager;
 import dev.everyagent.worker.tools.PermissionGate;
 import dev.everyagent.worker.tools.RipgrepBinary;
 import dev.everyagent.worker.plugin.registry.ToolExecutionInterceptorRegistry;

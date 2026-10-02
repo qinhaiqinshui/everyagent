@@ -4,6 +4,7 @@ import dev.everyagent.contract.json.Json;
 import dev.everyagent.plugin.api.event.EventPayloads;
 import dev.everyagent.plugin.api.model.EmitEvent;
 import dev.everyagent.worker.agent.AgentEntity;
+import dev.everyagent.worker.agent.ContextOverflow;
 import dev.everyagent.plugin.api.event.Events;
 import dev.everyagent.plugin.api.event.Events.ToolCallPart;
 import dev.everyagent.plugin.api.proto.SnowflakeId;

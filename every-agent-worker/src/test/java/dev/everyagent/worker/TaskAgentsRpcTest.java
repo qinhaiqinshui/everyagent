@@ -10,7 +10,7 @@ import dev.everyagent.worker.hub.HubPool;
 import dev.everyagent.worker.modules.ConfigStore;
 import dev.everyagent.worker.modules.ConfigStore.ResolvedConfig;
 import dev.everyagent.plugin.api.event.Channels;
-import dev.everyagent.worker.task.ChatModelFactory;
+import dev.everyagent.worker.config.ChatModelFactory;
 import dev.everyagent.worker.task.TaskEntry;
 import dev.everyagent.worker.task.TaskManager;
 import dev.everyagent.worker.task.TaskStore;

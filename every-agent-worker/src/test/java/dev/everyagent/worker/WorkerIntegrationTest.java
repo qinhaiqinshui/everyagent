@@ -14,7 +14,7 @@ import dev.everyagent.worker.modules.ConfigStore;
 import dev.everyagent.worker.modules.ConfigStore.ResolvedConfig;
 import dev.everyagent.plugin.api.event.Channels;
 import dev.everyagent.plugin.api.slash.SlashTokenEncoder;
-import dev.everyagent.worker.task.ChatModelFactory;
+import dev.everyagent.worker.config.ChatModelFactory;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;

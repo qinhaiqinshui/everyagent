@@ -1,4 +1,4 @@
-package dev.everyagent.worker.task;
+package dev.everyagent.worker.agent;
 
 import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.ToolCallback;

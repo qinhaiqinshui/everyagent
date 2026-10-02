@@ -6,7 +6,7 @@ import dev.everyagent.plugin.api.task.TaskLifecycleNode;
 import dev.everyagent.worker.agent.AgentBuilder;
 import dev.everyagent.worker.modules.ConfigStore;
 import dev.everyagent.worker.modules.ConfigStore.ResolvedConfig;
-import dev.everyagent.worker.task.ChatModelFactory;
+import dev.everyagent.worker.config.ChatModelFactory;
 import dev.everyagent.worker.task.ConversationLoader;
 import dev.everyagent.plugin.api.util.RootCause;
 import dev.everyagent.worker.task.TaskEntry;
