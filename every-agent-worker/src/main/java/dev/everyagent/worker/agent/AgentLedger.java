@@ -190,12 +190,19 @@ public class AgentLedger {
                 ObjectNode entry = ledger.get(agentId);
                 if (entry != null) {
                     entry.put("status", "completed");
-                    JsonNode result = payload.path("result");
+                    // content 在 payload 顶层(EmitEvent.content → payload.content)
+                    JsonNode result = payload.path("content");
                     if (result.isTextual() && !result.asText().isEmpty()) {
                         ObjectNode la = entry.has("latestActivity") && entry.get("latestActivity").isObject()
                                 ? (ObjectNode) entry.get("latestActivity") : entry.putObject("latestActivity");
                         la.put("content", result.asText());
                         la.put("updatedAt", r.ts());
+                    }
+                    // usage 在 payload.data.usage(EmitEvent.data → payload.data)
+                    JsonNode dataNode = payload.path("data");
+                    JsonNode doneUsage = dataNode.path("usage");
+                    if (doneUsage.isObject()) {
+                        entry.set("usage", doneUsage.deepCopy());
                     }
                 }
             }
@@ -219,7 +226,8 @@ public class AgentLedger {
             case "error" -> {
                 ObjectNode entry = ledger.get(agentId);
                 if (entry != null) {
-                    String msg = payload.path("message").asString("");
+                    // content 在 payload 顶层(EmitEvent.content → payload.content)
+                    String msg = payload.path("content").asString("");
                     ObjectNode la = entry.has("latestActivity") && entry.get("latestActivity").isObject()
                             ? (ObjectNode) entry.get("latestActivity") : entry.putObject("latestActivity");
                     la.put("error", msg);
@@ -235,11 +243,13 @@ public class AgentLedger {
                 if (entry != null) {
                     ObjectNode la = entry.has("latestActivity") && entry.get("latestActivity").isObject()
                             ? (ObjectNode) entry.get("latestActivity") : entry.putObject("latestActivity");
-                    JsonNode thinking = payload.path("thinking");
+                    // thinking 在 payload.data.thinking,content 在 payload.content(EmitEvent 映射)
+                    JsonNode dataNode = payload.path("data");
+                    JsonNode thinking = dataNode.path("thinking");
                     if (thinking.isTextual() && !thinking.asText().isEmpty()) {
                         la.put("reasoning", thinking.asText());
                     }
-                    JsonNode text = payload.path("text");
+                    JsonNode text = payload.path("content");
                     if (text.isTextual() && !text.asText().isEmpty()) {
                         la.put("content", text.asText());
                     }
@@ -249,9 +259,25 @@ public class AgentLedger {
             case "usage" -> {
                 ObjectNode entry = ledger.get(agentId);
                 if (entry != null) {
-                    JsonNode usage = payload.path("total");
-                    if (usage.isObject()) {
-                        entry.set("usage", usage.deepCopy());
+                    // usage 事件的 EmitEvent.data = {model, contextWindowTokens, round, total}
+                    // 经 TaskEvents.emit 映射后 → payload.data = {model, contextWindowTokens, round, total}
+                    JsonNode dataNode = payload.path("data");
+                    JsonNode total = dataNode.path("total");
+                    if (total.isObject()) {
+                        entry.set("usage", total.deepCopy());
+                    }
+                    // 构建 context 字段:round.inputTokens(最近一轮 prompt tokens) + contextWindowTokens + model
+                    // 与 AgentEntity.toSummary() 的 context 字段形状对齐,供前端 seedAgents 读取
+                    JsonNode round = dataNode.path("round");
+                    long ctxInput = round.path("inputTokens").asLong(0);
+                    long ctxWindow = dataNode.path("contextWindowTokens").asLong(0);
+                    String model = dataNode.path("model").asString("");
+                    if (ctxInput != 0 || ctxWindow != 0 || !model.isEmpty()) {
+                        ObjectNode ctx = Json.obj();
+                        if (ctxInput != 0) ctx.put("inputTokens", ctxInput);
+                        if (ctxWindow > 0) ctx.put("contextWindowTokens", ctxWindow);
+                        if (!model.isEmpty()) ctx.put("model", model);
+                        entry.set("context", ctx);
                     }
                 }
             }
