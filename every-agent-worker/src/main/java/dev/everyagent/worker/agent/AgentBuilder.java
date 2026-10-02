@@ -336,7 +336,8 @@ public class AgentBuilder {
             execution.emitter().emit(EmitEvent.of(
                     SnowflakeId.next(),
                     "agent.started", agentId,
-                    null, null, null, null, startedData,
+                    (title != null && !title.isEmpty()) ? title : null,
+                    null, null, null, startedData,
                     EmitEvent.Mode.REPLACE));
 
             return entity;

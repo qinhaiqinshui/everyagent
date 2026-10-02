@@ -177,8 +177,10 @@ public class AgentLedger {
                 entry.put("createdAt", createdAt);
                 entry.put("status", "running");
                 entry.putObject("latestActivity");
-                // metadata 投影（agent.started 事件 payload 携带的 metadata 字段）
-                JsonNode metadata = payload.path("metadata");
+                // metadata 投影：agent.started 事件 payload 携带的 metadata 字段
+                // (metadata 在 payload.data.metadata，EmitEvent.data → payload.data)
+                JsonNode dataNode = payload.path("data");
+                JsonNode metadata = dataNode.path("metadata").isObject() ? dataNode.path("metadata") : payload.path("metadata");
                 if (metadata.isObject()) {
                     entry.set("metadata", metadata.deepCopy());
                 }
