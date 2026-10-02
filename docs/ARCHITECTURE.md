@@ -199,7 +199,7 @@ hub 对频道名不解释业务语义:它只做"前缀必须匹配本连接命�
 | input | `ask.reply` | — | `{askId, answer}` |
 | input | `stream.ack` | — | `{taskId, creditIndex}` 流消费进度回报(§7.13 背压) |
 
-> **线上 wire 形态**:事件名不分主/子 agent(delta/message/error 同名),归属由 `agentId` 决定——主 agent payload 不带 agentId,子 agent 必带;磁盘 jsonl 每行必记 agentId。仅 spawn 生命周期用 `agent.started`/`agent.done` 专用名(只对子 agent 发)。
+> **线上 wire 形态**:事件名不分主/子 agent(delta/message/error 同名),归属由 `agentId` 决定——主 agent payload 不带 agentId,子 agent 必带;磁盘 jsonl 每行必记 agentId。`agent.started`/`agent.done`/`agent.status` 为 agent 生命周期专用名:其中 `agent.started` 由 `AgentBuilder.build()` 统一发射(主 agent + 各插件派生 agent,§7.20——主 agent 的 wire payload 仍不带 agentId 字段,前端以缺省识别主线程),`agent.done`/`agent.status`(stopped) 等终态事件仍由执行体(派生 agent 的管理方)发射——核心管"出生",执行体管"死亡"。
 
 单帧上限默认 16 MiB(可配 `hub.max-frame-bytes`);超大工具结果截断为 `summary + truncated:true`。
 
@@ -222,7 +222,7 @@ worker 端 `RpcDispatcher` 注册方法;应答回**请求来源连接**的 `evt`
 | `task.poll` | 任务流纯拉取:历史(磁盘)∪ 实时(内存尾部)按 seq 归并;支持 afterSeq/beforeSeq/区间/mode('events'/'rounds')/waitMs 长轮询 |
 | `task.rounds` | 轮次索引拉取(rounds.jsonl 全部行 + 运行中未闭合轮 open;旧任务首次惰性全量生成落盘) |
 | `task.roundTail` | 按轮起点(startSeq)取该轮末尾 limit 条事件,用于初始渲染 |
-| `task.agents` | 子 agent 台账一次性拉取(前端打开任务详情、建子 agent 胶囊列表的唯一取数口;live 任务取内存台账,磁盘路径 agents.json 优先、旧任务回退 meta.json 的 agents 数组只读;按 createdAt 升序;应答 `{agents:[台账项], mainAgentId}`);方法由 subagent 插件注册,方法名常量跟注册方走(住插件侧,§14.11) |
+| `task.agents` | 子 agent 台账一次性拉取(前端打开任务详情、建子 agent 胶囊列表的唯一取数口;live 任务取内存台账,磁盘路径 agents.json 优先、旧任务回退 meta.json 的 agents 数组只读;按 createdAt 升序;**按 `metadata.creator=subagent` 过滤——审议 agent 等 creator≠subagent 的条目不出现在子 agent 列表,§7.20.1**;应答 `{agents:[台账项], mainAgentId}`);方法由 subagent 插件注册,方法名常量跟注册方走(住插件侧,§14.11) |
 | `task.fileChanges` | 单轮文件变更全文:`file-changes/<roundId>.json` 的 `{changes:[...]}` |
 | `task.search` | 任务内容搜索(内置 rg + worker 后处理):`workspaceId` 必填且必须是稳定 id 形态(`defaultworkspace` / `w_xxxxx`,拒绝路径穿越),按 `workspaces/<workspaceId>/tasks/<taskId>/` 枚举任务目录,复用 rg 搜索 `rounds.jsonl`(每行一轮,含 user/finalReply 正文);入参 `pattern` / `isRegex` / `caseSensitive` / `wholeWord` / `maxResults`(默认 500),pattern 语义与 `fs.search` 共用 `buildMatchArgs`;rg 命中 JSON 原始行后由 worker `parseRoundLine` 解析、对 user/finalReply 干净文本二次匹配(消除字段名/转义噪音,同时得到准确 `matchIndex`/`matchText`);结果项 `{taskId, title, workspace, workspaceId, status, matches:[{roundIndex, field:'user'|'finalReply', line, matchIndex, matchText}]}`,按任务聚合;大结果复用 `rpc.data` 分批 + 末帧 `ok` 汇总(§5.4) |
 | `task.queueRemove` / `task.queueMove` | 删除/重排某条队列输入 |
@@ -619,9 +619,9 @@ wsl-bwrap 后端的 seccomp 内核级提权拦截已随 bwrap 后端删除而移
 - **收口前自动等待**:父任务结束前自动 wait 全部子 agent 聚合回灌;安全超时(默认 5 min)。
 - 并发守卫:运行中的 agentId 再次 run_agent 报错。
 
-**事件与持久化**:子 agent 不建独立 Task,事件与主 agent 同名、以 agentId 字段嵌套在父任务流(spawn 生命周期为 agent.started/agent.done);**每个子 agent 一个独立会话文件 `<subAgentId>.jsonl`**;冷启动重建、断线续播、ask(带 agentId)全部复用既有机制。子 agent 台账**独立落盘任务目录 `agents.json`**(形状 `{"agents":[...]}`,临时文件 + 原子 move 写入、空台账删文件)——从 meta.json 拆出,TaskSummary 不再携带 agents 数组,`tasks.list` 读 meta 的任务列表数据因此减负;台账项 = `AgentEntity.toSummary()`:agentId/kind/title/createdAt/status/latestActivity/**usage(累计)**/lastText/**context(最近一轮上下文快照 `{inputTokens, contextWindowTokens, model}`,有数据才写)**,前端经 `task.agents` 拉取。usage 事件语义:WorkerToolEventAdvisor 每轮模型调用 usage 发射前先 `addUsage` 累计进 AgentEntity——usage 事件 total 载荷 = 含本轮累计;子 agent 每轮 usage 后刷新内存台账并触发 agents.json 落盘(persistHook / 30s 定时 / 终态 finish 三路径)。
+**事件与持久化**:子 agent 不建独立 Task,事件与主 agent 同名、以 agentId 字段嵌套在父任务流(spawn 生命周期为 agent.started/agent.done);**每个子 agent 一个独立会话文件 `<subAgentId>.jsonl`**;冷启动重建、断线续播、ask(带 agentId)全部复用既有机制。子 agent 台账**独立落盘任务目录 `agents.json`**(形状 `{"agents":[...]}`,临时文件 + 原子 move 写入、空台账删文件)——从 meta.json 拆出,TaskSummary 不再携带 agents 数组,`tasks.list` 读 meta 的任务列表数据因此减负;台账项 = `AgentEntity.toSummary()`:agentId/kind/title/createdAt/status/latestActivity/**usage(累计)**/lastText/**context(最近一轮上下文快照 `{inputTokens, contextWindowTokens, model}`,有数据才写)**/**metadata(含 creator,随 agent.started 事件投影)**,前端经 `task.agents` 拉取。台账投影与 agents.json 读写由 worker core `AgentLedger` 承担(订阅 EventLog 的 agent.started/done/status/usage/message/error 事件,§7.20.1;原插件 `SubAgentLedger` 退役);`agent.started` 事件由 `AgentBuilder.build()` 自动发射(payload 含 agentMetadata,§7.20.1),SubAgentManager 不再手动 put/emit。usage 事件语义:WorkerToolEventAdvisor 每轮模型调用 usage 发射前先 `addUsage` 累计进 AgentEntity——usage 事件 total 载荷 = 含本轮累计;子 agent 每轮 usage 后由 AgentLedger 刷新内存台账并触发 agents.json 落盘(30s 定时 / 终态 persistFinal 两路径)。
 
-**域中性(§7.20/§14.11)**:subagent 是**执行域能力插件**(spawn/wait/stop 子 agent 是执行域能力,不是任务域能力——没有 task 只有 workflow 的执行主体同样可用)。`SubAgentManager` 构造零服务依赖,方法收 `ExecContext`(run/list/waitFor/stop/awaitAllBeforeFinish/stopAll),工具入口绑 `ToolContext`(extends ExecContext,§7.20.5) 不再反查任务;per-subject 状态自持 `TaskSubState`(监视器内部化,对任务对象的锁依赖消失)。台账 agents.json 是**插件自有数据**(住主体 dataDir 下),`SubAgentLedger` 经 `AtomicFiles` 自行读写、不挂 TaskStoreService;四个生命周期节点(track/untrack/persist/spawned.await)壳留 task 面、逻辑取 ExecContext 槽位,工作流落地时同一核心以同构生命周期壳挂载、零新逻辑。
+**域中性(§7.20/§14.11)**:subagent 是**执行域能力插件**(spawn/wait/stop 子 agent 是执行域能力,不是任务域能力——没有 task 只有 workflow 的执行主体同样可用)。`SubAgentManager` 构造零服务依赖,方法收 `ExecContext`(run/list/waitFor/stop/awaitAllBeforeFinish/stopAll),工具入口绑 `ToolContext`(extends ExecContext,§7.20.5) 不再反查任务;per-subject 状态自持 `TaskSubState`(监视器内部化,对任务对象的锁依赖消失)。台账 agents.json 住主体 dataDir 下,IO 已由 worker core `AgentLedger` 收编(事件投影 + 原子读写 + 冷启动恢复,原插件 `SubAgentLedger` 退役,§7.20.1);生命周期节点(track/untrack/persist 由 AgentLedger 内置节点承担,§7.20.1)壳留 task 面、逻辑取 ExecContext 槽位,工作流落地时同一核心以同构生命周期壳挂载、零新逻辑。
 
 ### 7.14.1 任务生命周期洋葱模型（Phase 1）
 
@@ -689,7 +689,7 @@ worker 的两条运行期责任链迁移为与任务洋葱同一的 filter 形�
 │   ├─ workspaces.json               # 唯一工作区注册表 {id, root, addedTs, lastActivityTs?, externalRoots?}(默认工作区也在册)
 │   ├─ defaultworkspace/tasks/<taskId>/      # 默认工作区任务目录;永久保留
 │   │   ├─ meta.json                 # TaskSummary(含 workspaceId、最近一轮上下文用量、任务级开关)+ mainAgentId
-│   │   ├─ agents.json               # 子 agent 台账 {agents:[...]}(从 meta.json 拆出独立落盘,减轻任务列表数据;含累计 usage 与最近一轮 context 快照;临时文件 + 原子 move 写入,空台账删文件;subagent 插件自有数据,SubAgentLedger 自持 IO,§7.20)
+│   │   ├─ agents.json               # 子 agent 台账 {agents:[...]}(从 meta.json 拆出独立落盘,减轻任务列表数据;含累计 usage 与最近一轮 context 快照 + metadata.creator;临时文件 + 原子 move 写入,空台账删文件;worker core AgentLedger 事件投影 + 自持 IO,§7.20.1)
 │   │   ├─ grants.json               # task 档授权 {taskGrants, extraRoots}(§7.8,首次授权时原子写)
 │   │   ├─ <mainAgentId>.jsonl       # 主 agent 会话 + 任务级事件
 │   │   ├─ rounds.jsonl              # 轮次索引(§7.15.1)
@@ -978,12 +978,19 @@ advisor 链
 | `emitter()` | 已绑定主体的任务级事件口（trace/审计/agent.started 落此处） | `t.events()` | 全部 advisor、SubAgentManager、AiAuthReviewer |
 | `agentFactory()` | 已绑定主体的 Agent 工厂（静态代理，见 §7.20.3） | 手工组装四件套 → create(...) | SubAgentManager、AiAuthReviewer |
 | `metadata()` | 主体策略标记（随 meta.json 落盘的持久数据，不混入运行时瞬态） | `t.metadata()` | Unattended/AiReview 授权节点、slash provider |
-| `dataDir()` | 数据目录（grants.json/agents.json 落盘；今天=任务数据目录） | `t.taskDir()` | GrantRegistry、SubAgentLedger |
+| `dataDir()` | 数据目录（grants.json/agents.json 落盘；今天=任务数据目录） | `t.taskDir()` | GrantRegistry、AgentLedger |
 | `terminal()` | 主体是否已收口（leak-guard：终态后不再发射事件） | `t.status.terminal()` | WorkerToolEventAdvisor |
 | `interaction()` | 已绑定主体的用户交互口（静态代理，ask 的 context map 自动填 subjectId；替代三处手动组装 `Map.of("taskId",...)`） | 手动组装 context map | Human 授权节点、ImageReferenceHandler、AskUserTool |
-| `agents()` | 主体活动 agent 注册表（可读写 Map：主 agent + 各插件派生——子 agent、审议 agent，由创建方插件注册；无子 agent 是正常形态） | `t.agents()` | SubAgentManager（复用判定/台账合并/注册）、AiAuthReviewer |
+| `agents()` | 主体活动 agent 注册表（可读写 Map：主 agent + 各插件派生——子 agent、审议 agent；**由 `AgentBuilder.build()` 自动填充（put + 发射 `agent.started` 事件，payload 含 agentMetadata），插件不再手动 put/emit**；无子 agent 是正常形态） | `t.agents()` | SubAgentManager（复用判定）、AiAuthReviewer（复用判定）、AgentLedger（台账投影） |
 
 **不进 ExecContext 的槽位**：fileChanges 三槽位（瞬态回合槽）留 `TaskRuntime` 任务域私有——file-change 插件（写）经 `TaskService.get(subjectId())` 访问、edit-resend（清空）走 `ctx.taskRuntime()`、RoundIndexAdvisor（落盘）worker 内置直读 `TaskEntry`；status 完整状态/touch 等任务操作同为任务域私有，横切层只需要 `terminal()`。
+
+**agent 层统一台账 + `agentMetadata` 槽位（AgentContext 槽位，非 ExecContext）**：
+
+- **`AgentBuilder.build()` 自动注册**：`ctx.agentFactory().create(id).agentMetadata(...).build()` 末尾自动完成三件事——`exec.agents().put(id, agent)`（注册）、`exec.emitter().emit("agent.started", payload 含 metadata)`（发事件）、台账经 AgentLedger 事件投影自动更新。**插件只管创建与配置，永远不碰 put 和 `agent.started` 事件。**（复用路径不经过 `build()`——SubAgentManager / AiAuthReviewer 的 `agents().get(id)` 命中续跑场景，由调用方显式 emit `agent.started` 让台账更新为 running。）
+- **台账收编 worker core `AgentLedger`**：原 subagent 插件 `SubAgentLedger` 退役。`AgentLedger`（worker agent 层，`@Component`）订阅主体 EventLog 的 agent.started/done/status/usage/message/error 事件，维护 per-subject 内存台账（agentId → 摘要），经 `AtomicFiles` 自行读写 `ctx.dataDir().resolve("agents.json")`（30s 定时 + 终态 persistFinal 两路径），冷启动从 agents.json 恢复（running/waiting-user → stopped 归一，旧任务回退 meta.agents）。
+- **`agent.started` 事件 payload 新增 `metadata` 字段**：携带创建时注入的 agentMetadata（含 `creator` 标记），AgentLedger 把它投影进台账条目并随 agents.json 落盘。
+- **`AgentContext.agentMetadata()` 槽位**（plugin-api，default 返回空 Map）：`creator=subagent` / `creator=ai-review` 等来源标记。**是否可见是消费方决策**——`list_agents` 工具与 `task.agents` RPC 只展示 `creator=subagent`（或旧格式无 metadata）的条目，审议 agent（`creator=ai-review`）不出现在子 agent 列表；不设 `listed` 布尔（与 creator 冗余且耦合方向反了）。
 
 #### 7.20.2 TaskRuntime 与 TaskInfo
 
@@ -1028,8 +1035,8 @@ public interface AgentFactory {
 
 - advisor：`AgentContext.execution()`（`AgentEntity` 字段替换为 execution）；`AdvisorContext extends ExecContext`，槽位委托 `agentEntity.execution()`（§7.20.5）。
 - 工具 provider：`ToolContext`/`ToolExecutionContext` 本身即 ExecContext（`extends`，`execution()` 槽位已删、直读槽位；`ToolContextImpl.taskEntry()` 已删，§7.20.5）；`InterceptingToolCallingManager` per-run 实例构造参数直持 ExecContext（不依赖 ThreadLocal——reactive 流工具执行可能切 boundedElastic 线程）。
-- subagent 插件：全面中性化（§7.14）——Manager 零服务依赖收 ExecContext、台账 IO 自持（AtomicFiles + `ctx.dataDir()`）、`TaskStoreService` agents 段退役、生命周期节点壳核分离、`task.agents` RPC 壳留 task 面（mainAgentId/meta.json 是任务概念）、方法名常量 TASK_AGENTS 跟注册方走（住插件侧）；`TaskStore.truncateAfterSeq` 编辑重发截断只动 *.jsonl/rounds.jsonl，**不删任何插件数据文件**（agents.json/file-changes 残留陈旧条目被接受；后续可增加 `task.truncated` 截断事件通知由插件自清——开放项，task 核心永不知晓插件文件名）。
-- AI 审议 agent：per-task 固定 agentId `review-<subjectId>` 注册进 `agents()` 跨请求复用会话（§7.9）——`agents().get(id)` 命中即续跑，未命中经 `ctx.agentFactory()` 创建并注册。
+- subagent 插件：全面中性化（§7.14）——Manager 零服务依赖收 ExecContext、**台账收编 worker core `AgentLedger`（`SubAgentLedger` 退役，agents.json 读写/事件投影/冷启动恢复全部由 worker agent 层承担）**、`TaskStoreService` agents 段退役、生命周期节点壳核分离、`task.agents` RPC 壳留 task 面（mainAgentId/meta.json 是任务概念，读侧按 `creator=subagent` 过滤，§7.20.1）、方法名常量 TASK_AGENTS 跟注册方走（住插件侧）；SubAgentManager 创建子 agent 时设 `agentMetadata(creator=subagent)`、移除手动 put 与 `agent.started` 发射（由 `build()` 自动完成），复用路径显式 emit `agent.started` 让台账更新；`TaskStore.truncateAfterSeq` 编辑重发截断只动 *.jsonl/rounds.jsonl，**不删任何插件数据文件**（agents.json/file-changes 残留陈旧条目被接受；后续可增加 `task.truncated` 截断事件通知由插件自清——开放项，task 核心永不知晓插件文件名）。
+- AI 审议 agent：per-task 固定 agentId `review-<subjectId>` 注册进 `agents()` 跨请求复用会话（§7.9）——`agents().get(id)` 命中即续跑（复用路径显式 emit `agent.started`）；未命中经 `ctx.agentFactory().create(id, reviewModel)` 创建，设 `agentMetadata(creator=ai-review)` 后 `build()` 自动注册并发射 `agent.started`（台账自动更新，按 creator 过滤不出现在子 agent 列表）。
 - `InteractionService` ask 的 context map `"taskId"` 键保留（值=subjectId，今天相等，前端兼容）；`SubjectBoundInteractionService` 静态代理在键缺失时自动补填，替代各处手动组装。
 
 #### 7.20.7 工作流复用终态
@@ -1236,7 +1243,7 @@ docker-compose 一键:`HUB_KEY=你的密钥 docker-compose up --build`;数据落
 | D26 | 命令沙箱多后端:Windows 默认 wsl-direct、wsl-bwrap 显式、windows-mic 回退 | 「零管理员 + 网络硬隔离 + 零宿主残留」在原生 Windows 不可兼得;WSL2 生态已验证 |
 | D27 | 授权语义(seccomp 场景)= WSL 原生 root 重跑 | NNP + userns 不映射 uid0 + 基座只读 → 沙箱内真实提权物理不可行 |
 | D28 | AI 审议与无人值守为独立任务级开关,开启时联动、事后可拆分 | 分别满足"无人监督但有把关"与"全流程无人值守"两种需求 |
-| D29 | **统一执行上下文 ExecContext**:黑盒 properties 四件套(taskEntry/taskId/workspaceRoot/configId)显式类型化为 plugin-api 接口槽位(仅主体必然具备的核心属性与端口,含 agents 活动实体注册表=主+各插件派生 agent;configId 无独立槽);三预绑定端口 `emitter()/agentFactory()/interaction()`(静态代理)经 ctx 下传;`TaskInfo` 退役;授权请求收编为 `AuthorizationRequest(ExecContext,agentId,grantKey,prompt)`;fileChanges 等插件功能槽位留 TaskRuntime;subagent 作为执行域能力插件全面中性化(零服务依赖/台账 IO 自持/生命周期壳核分离);task 核心去插件概念(截断不删插件数据文件);审议 agent per-task 固定 id 复用会话;各横切 Context 接口(ToolContext/AdvisorContext/FileReferenceContext/ToolExecutionContext/TaskLifecycleContext)收编为 `extends ExecContext`(重复字段与 execution() 槽位删除,消费侧直读槽位、主体 ID 一律 subjectId(),§7.20.5) | 授权链与全部横切层(advisor/工具/子 agent/审议)域中性,subagent 无 task 只有 workflow 亦可复用;未来工作流实现 ExecContext 即零改动复用;20+ 处强转消失;详见 docs/design-exec-context.md 与 §7.20 |
+| D29 | **统一执行上下文 ExecContext**:黑盒 properties 四件套(taskEntry/taskId/workspaceRoot/configId)显式类型化为 plugin-api 接口槽位(仅主体必然具备的核心属性与端口,含 agents 活动实体注册表=主+各插件派生 agent;configId 无独立槽);三预绑定端口 `emitter()/agentFactory()/interaction()`(静态代理)经 ctx 下传;`TaskInfo` 退役;授权请求收编为 `AuthorizationRequest(ExecContext,agentId,grantKey,prompt)`;fileChanges 等插件功能槽位留 TaskRuntime;subagent 作为执行域能力插件全面中性化(零服务依赖/生命周期壳核分离;**台账后续收编 worker core `AgentLedger`——原 `SubAgentLedger` IO 自持已退役,`AgentBuilder.build()` 自动注册+发 `agent.started`,见 §7.20.1**);task 核心去插件概念(截断不删插件数据文件);审议 agent per-task 固定 id 复用会话;各横切 Context 接口(ToolContext/AdvisorContext/FileReferenceContext/ToolExecutionContext/TaskLifecycleContext)收编为 `extends ExecContext`(重复字段与 execution() 槽位删除,消费侧直读槽位、主体 ID 一律 subjectId(),§7.20.5) | 授权链与全部横切层(advisor/工具/子 agent/审议)域中性,subagent 无 task 只有 workflow 亦可复用;未来工作流实现 ExecContext 即零改动复用;20+ 处强转消失;详见 docs/design-exec-context.md 与 §7.20 |
 
 ---
 
@@ -1268,9 +1275,9 @@ docker-compose 一键:`HUB_KEY=你的密钥 docker-compose up --build`;数据落
 9. **插件零 worker 依赖**:插件的 pom 中不得出现对 `every-agent-worker` 的依赖,compile/provided/runtime/test 任何 scope 一律禁止;插件测试需要任务/agent/配置等桩时,在测试源码内自建实现 plugin-api 接口的等价桩类,不得把 worker 具体实现类(TaskEntry/AgentEntity/WorkerProperties/SlashCommandRegistry 等)当测试脚手架;类型确实需要跨 worker 与插件共享时,先下沉到 plugin-api(§1.1,文档先行)。
 10. **文档**:本文档是唯一架构事实源;根目录 AGENTS.md 只写核心约束(每会话加载,保持精简),细节一律进 docs/。
 11. **执行上下文管道(ExecContext,与 §14.0 事件管道同构;展开说明见 §7.20)**：执行数据沿 `task 层 → agent 层 → 工具执行链 → 授权链` 逐层传递,每层只消费自己层级的槽位,下层不知道上层是谁(task 还是未来 workflow):
-    - **槽位判据**:ExecContext 槽位 = 任何执行主体都必然具备的核心属性与端口(subjectId/workspaceRoot/workspaceId/snapshot/emitter/agentFactory/interaction/metadata/dataDir/terminal/agents 活动实体注册表;configId 不设独立槽,经 snapshot().configId() 取);**插件功能与主体特有槽位不进核心接口**——fileChanges 回合槽留 `TaskRuntime`(file-change 插件功能,经 `TaskService.get(subjectId())` 访问),metadata 只承载随 meta.json 落盘的持久策略标记(不混入运行时瞬态数据);agents() 收纳主体上下文内全部 agent(主 agent + 各插件派生:子 agent、审议 agent,由创建方插件注册),无子 agent 是正常形态。
+    - **槽位判据**:ExecContext 槽位 = 任何执行主体都必然具备的核心属性与端口(subjectId/workspaceRoot/workspaceId/snapshot/emitter/agentFactory/interaction/metadata/dataDir/terminal/agents 活动实体注册表;configId 不设独立槽,经 snapshot().configId() 取);**插件功能与主体特有槽位不进核心接口**——fileChanges 回合槽留 `TaskRuntime`(file-change 插件功能,经 `TaskService.get(subjectId())` 访问),metadata 只承载随 meta.json 落盘的持久策略标记(不混入运行时瞬态数据);agents() 收纳主体上下文内全部 agent(主 agent + 各插件派生:子 agent、审议 agent),由 `AgentBuilder.build()` 自动注册(put + 发射 `agent.started`,§7.20.1),插件不再手动 put/emit;`AgentContext.agentMetadata()` 槽位(creator 等来源标记,非 ExecContext 槽位)随 `agent.started` 持久化进台账,消费方按 creator 决定展示范围(§7.20.1);无子 agent 是正常形态。
     - **task 层构造并预绑定**:`TaskEntry implements TaskRuntime extends ExecContext`(subjectId=taskId);三预绑定端口同范式(静态代理,worker 内部实现,可链式套娃)——`emitter()`(主体事件口)、`agentFactory()`(主体 agent 装配,`create(agentId)` 单参)、`interaction()`(主体交互口,ask 的 context map 自动填 subjectId)——**上层预绑定能力往下传,不传裸工厂/裸服务、不传任务域对象**。
     - **agent 层/工具链唯一取数口**:`AgentContext.execution()`;`ToolContext`/`ToolExecutionContext`/`AdvisorContext`/`FileReferenceContext`/`TaskLifecycleContext` 一律 `extends ExecContext`(重复字段与 `execution()` 槽位已删,消费侧直读槽位、横切层取主体 ID 一律 `subjectId()`,§7.20.5;`InterceptingToolCallingManager` per-run 构造参数直持 ExecContext,不依赖 ThreadLocal);`properties` 黑盒 map 与 `get("taskEntry")` 强转**禁止再现**。
-    - **advisor 只取槽位**:`snapshot()`(模型配置,configId 经 snapshot().configId())、`subjectId()`(审计)、`emitter()`(事件)、`terminal()`(leak-guard)——不 import 任务域类型;**subagent 是执行域能力插件(非任务域),全面中性化**:SubAgentManager 零服务依赖(方法收 ExecContext、监视器内部化、`agents()` 槽位替代 task.agents)、台账 agents.json IO 自持(ctx.dataDir()+AtomicFiles)、生命周期节点壳留 task 面/逻辑取 ExecContext 槽位、`task.agents` RPC 壳留 task 面(mainAgentId 是任务概念);**task 核心不依赖插件**:编辑重发截断只动 *.jsonl/rounds.jsonl 不删插件数据文件(agents.json/file-changes 残留被接受,事件通知自清为开放项),`task.agents` 方法名常量住插件侧;AI 审议 agent 以 per-task 固定 agentId 注册进 agents() 跨请求复用会话(既往授权决策留在审议员上下文);任务域插件(file-change/edit-resend/git)经 `TaskService`/`taskRuntime()` 取 `TaskRuntime` 是合法本职依赖。
+    - **advisor 只取槽位**:`snapshot()`(模型配置,configId 经 snapshot().configId())、`subjectId()`(审计)、`emitter()`(事件)、`terminal()`(leak-guard)——不 import 任务域类型;**subagent 是执行域能力插件(非任务域),全面中性化**:SubAgentManager 零服务依赖(方法收 ExecContext、监视器内部化、`agents()` 槽位替代 task.agents)、创建子 agent 时设 `agentMetadata(creator=subagent)` 交由 `AgentBuilder.build()` 自动注册+发 `agent.started`(插件不再手动 put/emit)、台账 agents.json 由 worker core `AgentLedger` 收编(`SubAgentLedger` 退役;事件投影+原子读写+冷启动恢复,§7.20.1)、生命周期节点壳留 task 面/逻辑取 ExecContext 槽位、`task.agents` RPC 壳留 task 面(mainAgentId 是任务概念,读侧按 creator 过滤);**task 核心不依赖插件**:编辑重发截断只动 *.jsonl/rounds.jsonl 不删插件数据文件(agents.json/file-changes 残留被接受,事件通知自清为开放项),`task.agents` 方法名常量住插件侧;AI 审议 agent 以 per-task 固定 agentId(creator=ai-review)注册进 agents() 跨请求复用会话(既往授权决策留在审议员上下文);任务域插件(file-change/edit-resend/git)经 `TaskService`/`taskRuntime()` 取 `TaskRuntime` 是合法本职依赖。
     - **授权请求域中性**:`AuthorizationRequest(ExecContext, agentId, grantKey, prompt)`;GrantRegistry 按 `subjectId()` 分区、`dataDir()` 落盘;`InteractionService` ask 的 context map `"taskId"` 键保留(值=subjectId,前端兼容)。
     - **禁止**:横切层 import `TaskEntry/TaskRuntime/TaskInfo`;绕过 `ctx.agentFactory()` 手工组装四件套 map;绕过 `ctx.interaction()` 手动填 taskId context;worker 侧新增 properties 透传通道。工作流层实现 `WorkflowRuntime implements ExecContext` 后,同一条授权链、同一批 advisor、同一工具链零改动复用。

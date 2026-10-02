@@ -145,7 +145,9 @@ public interface ExecContext {
 
     /** 本主体的活动 agent 注册表（可读写 Map：put/get/values/containsKey）。
      *  收纳主体上下文内创建的全部 agent：主 agent + 各插件派生的 agent
-     *  （subagent 的子 agent、ai-review 的审议 agent 等，由创建方插件注册）。
+     *  （subagent 的子 agent、ai-review 的审议 agent 等）。**由 `AgentBuilder.build()`
+     *  自动填充**：build() 末尾 put + 发射 `agent.started` 事件（payload 含
+     *  {@link AgentContext#agentMetadata()}），插件不再手动 put/emit。
      *  无子 agent 是正常形态（主 agent 独立完成全部工作）。 */
     Map<String, AgentContext> agents();
 }
@@ -163,12 +165,21 @@ public interface ExecContext {
 | `dataDir()` | `t.taskDir()` / `store.dirOf(taskId)` | GrantRegistry |
 | `terminal()` | `t.status.terminal()` | WorkerToolEventAdvisor（leak-guard） |
 | `interaction()` | `services.interaction()` + 手动填 `Map.of("taskId",...)` | HumanAuthorizationHandler、ImageReferenceHandler、AskUserTool（经 ToolContext）——三处手动绑定消失 |
-| `agents()` | `t.agents()`（Map，7 处） | SubAgentManager（复用判定/台账合并/注册）；ai-review 审议 agent 注册与跨请求复用（§8.3）；edit-resend 清空走 TaskRuntime 不变 |
+| `agents()` | `t.agents()`（Map，7 处） | **`AgentBuilder.build()` 自动注册+发 `agent.started`**（插件不再手动 put/emit）；台账由 worker core `AgentLedger` 收编（原 `SubAgentLedger` 退役，事件投影+原子读写+冷启动恢复，§7.20.1）；SubAgentManager/AiAuthReviewer（复用判定）；task.agents RPC 按 `creator=subagent` 过滤 |
 
 **不进 ExecContext 的槽位（判据 §3.3）**：fileChanges 三槽位（瞬态回合槽）留
 `TaskRuntime` 任务域私有——file-change 插件（写）经 `TaskService.get(subjectId())`
 访问（SubAgentManager 先例）、edit-resend（清空）已是 `ctx.taskRuntime()` 路径
 零改动、RoundIndexAdvisor（落盘）是 worker 内置直读 TaskEntry 零改动。
+
+**`AgentContext.agentMetadata()` 槽位（agent 层，非 ExecContext）**：`AgentBuilder`
+新增 `agentMetadata(Map<String,Object>)` fluent 方法，`AgentContext` 新增 default
+`agentMetadata()`（返回空 Map）。创建方插件设 `creator=subagent` / `creator=ai-review`
+等来源标记；`build()` 把它并入 `agent.started` 事件 payload 的 `metadata` 字段，
+随 worker core `AgentLedger` 投影进台账条目并落盘 agents.json。**是否可见是消费方
+决策**：`list_agents` 工具与 `task.agents` RPC 只展示 `creator=subagent`（或旧格式
+无 metadata）的条目；审议 agent（creator=ai-review）不出现在子 agent 列表。不设
+`listed` 布尔（与 creator 冗余且耦合方向反了）。
 
 ### 4.3 TaskRuntime 与 ExecContext 的关系
 
@@ -371,12 +382,17 @@ subagent 能力（spawn/wait/stop 子 agent）是**执行域能力**，不是任
 - **监视器内部化**：`synchronized (task)`（拿任务对象当锁）→ `synchronized (taskState)`
   （Manager 自有 per-subject `TaskSubState`）——任务对象监视器依赖消失。
 
-**SubAgentLedger IO 自持**：
+**台账收编 worker core AgentLedger**（后续演进，原计划"SubAgentLedger IO 自持"已升级）：
 
-- agents.json 本是**插件自有数据**（住在主体 dataDir 下），但 IO 挂在
-  `TaskStoreService`（接口里"agents.json 读写（subagent 台账）"整段就是为此加的）。
-- 台账改用 `AtomicFiles`（plugin-api util）自行读写 `ctx.dataDir().resolve("agents.json")`；
-  `TaskStoreService` 的 readAgents/writeAgents 段退役（全仓仅 subagent 消费）。
+- agents.json 住主体 dataDir 下；台账职责（事件投影 + 原子读写 + 冷启动恢复）从
+  subagent 插件 `SubAgentLedger` **收编到 worker agent 层 `AgentLedger`**（`@Component`，
+  订阅 EventLog 的 agent.started/done/status/usage/message/error 事件，经 `AtomicFiles`
+  自持 IO；30s 定时 + 终态 persistFinal 两路径落盘）。`SubAgentLedger` 与其三个生命周期
+  节点全部退役，由 worker 内置 `AgentLedgerTrackNode/UntrackNode/PersistNode` 替代。
+- `agent.started` 事件由 `AgentBuilder.build()` 自动发射（payload 含 agentMetadata），
+  AgentLedger 据此投影台账条目（含 metadata.creator）。`TaskStoreService` 的
+  readAgents/writeAgents 段保持退役状态。SubAgentRpcHandler 内联读 agents.json，
+  按 `creator=subagent` 过滤。
 
 **生命周期节点壳/核分离**：
 
@@ -385,17 +401,20 @@ subagent 能力（spawn/wait/stop 子 agent）是**执行域能力**，不是任
   `ctx.taskRuntime()`（TaskRuntime extends ExecContext，零强转）的
   subjectId/emitter/dataDir/agents 槽位。
 - **壳留 task 面**：`TaskLifecycleNode` SPI 是任务生命周期的（工作流未来有自己的同构
-  SPI）；中性核心（Manager/台账逻辑）+ task 注册壳（现有节点类）。工作流落地时同一
-  核心以 `WorkflowLifecycleNode` 壳挂载，零新逻辑。
+  SPI）；中性核心（Manager 逻辑）+ task 注册壳（现有节点类）。工作流落地时同一
+  核心以 `WorkflowLifecycleNode` 壳挂载，零新逻辑。（台账投影/落盘/await 的生命周期
+  节点后续随 `SubAgentLedger` 一并收编进 worker `AgentLedger` 的内置节点，见上文
+  "台账收编 worker core AgentLedger"。）
 
 **SubAgentRpcHandler 壳/核分层**：
 
 - `task.agents` RPC 冷路径 `readMeta(dir)` 取 mainAgentId / `dirOf(taskId)`——
   meta.json 是任务摘要，mainAgentId 是任务概念：**壳留 task 面**（继续用
-  TaskStoreService），核心列表逻辑复用中性台账 reader。未来 `wf.agents` 同构包壳。
+  TaskStoreService），核心列表逻辑内联读 agents.json 并按 `creator=subagent` 过滤。
+  未来 `wf.agents` 同构包壳。
 
 **SubAgentPlugin.activate()**：`services().task()` 删除；`services().store()` 仅供
-RpcHandler（task 壳）；Ledger 不再需要 store。
+RpcHandler（task 壳）；台账 IO 已收编 worker `AgentLedger`，插件不再持 Ledger。
 
 **任务域插件分类明确**（file-change、edit-resend）：它们的本职就是任务域功能
 （本任务本回合的改动收集/会话截断重发），经 `TaskService`/
