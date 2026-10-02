@@ -8,7 +8,6 @@ import dev.everyagent.plugin.api.model.EventEmitter;
 import dev.everyagent.plugin.api.model.ModelConfig;
 import dev.everyagent.plugin.api.spi.ToolExecutionContext;
 import dev.everyagent.worker.plugin.registry.ToolExecutionInterceptorRegistry;
-import dev.everyagent.worker.task.ToolExecutionChainExecutor;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
