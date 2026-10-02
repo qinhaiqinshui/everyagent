@@ -124,6 +124,8 @@ export const DOMAIN_EVENTS = {
   TASK_TURN_COMPLETED: 'task-turn-completed',
   AGENT_RUN_EVENT: 'agent-run-event',
   PLUGINS_LOADED: 'plugins-loaded',
+  WORKER_DATA_CHANGED: 'worker-data-changed',
+  WORKSPACE_TAB_CLOSED: 'workspace-tab-closed',
 } as const
 
 export type DomainEventMap = {
@@ -345,6 +347,8 @@ export type DomainEventMap = {
     /** 已装载的插件数量（含动态插件）。 */
     count: number
   }
+  [DOMAIN_EVENTS.WORKER_DATA_CHANGED]: Record<string, never>
+  [DOMAIN_EVENTS.WORKSPACE_TAB_CLOSED]: { tabId: string }
   [DOMAIN_EVENTS.AGENT_RUN_EVENT]: AgentRunEvent
 }
 

@@ -14,7 +14,7 @@ import MoreActionsButton, { type MoreActionItem } from '@/components/shared/More
 import ConfirmDialog from '@/components/shared/ConfirmDialog'
 import { useHub } from '@/hub/HubProvider'
 import { hubSession, type WorkerInfo } from '@/hub/session'
-import { taskStore } from '@/task/taskStore'
+import { domainEventBus, DOMAIN_EVENTS } from '@/events/eventBus'
 import { workspaceRegistry } from '@/hub/workspaceRegistry'
 import { useAppUi } from '@/components/app/AppUiContext'
 import {
@@ -83,8 +83,8 @@ export default function WorkerList() {
 
   /** 连接成功/启用后刷新任务与工作区数据(与原设置页行为一致)。 */
   const refreshWorkerData = React.useCallback(async () => {
-    await taskStore.refresh()
     await workspaceRegistry.refresh()
+    domainEventBus.emit(DOMAIN_EVENTS.WORKER_DATA_CHANGED, {})
   }, [])
 
   const handleConnect = async (worker: WorkerInfo) => {
@@ -151,8 +151,8 @@ export default function WorkerList() {
           'success',
         )
       } else {
-        void taskStore.refresh()
         void workspaceRegistry.refresh()
+        domainEventBus.emit(DOMAIN_EVENTS.WORKER_DATA_CHANGED, {})
         showToast('已停用 ' + workerDisplayName(worker), 'success')
       }
     } catch (error) {
@@ -165,8 +165,8 @@ export default function WorkerList() {
   const handleRemove = (worker: WorkerInfo) => {
     hubSession.removeWorker(worker.workerId)
     setRemovingId('')
-    void taskStore.refresh()
     void workspaceRegistry.refresh()
+    domainEventBus.emit(DOMAIN_EVENTS.WORKER_DATA_CHANGED, {})
     showToast('已移除 ' + workerDisplayName(worker) + ' 的配置', 'success')
   }
 

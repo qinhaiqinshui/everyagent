@@ -24,7 +24,7 @@ import {
   saveBrowserNotificationsEnabled,
 } from '@/settings/browserNotifications'
 import { hubSession } from '@/hub/session'
-import { taskStore } from '@/task/taskStore'
+import { domainEventBus, DOMAIN_EVENTS } from '@/events/eventBus'
 import WorkerList from '@/components/system/WorkerList'
 import { APP_NAME, APP_VERSION, APP_COPYRIGHT, APP_LICENSE } from '@/appInfo'
 
@@ -67,7 +67,7 @@ export default function SettingsPanel() {
         hubKey: hubKey.trim(),
         workers: hub.config?.workers ?? [],
       })
-      await taskStore.refresh()
+      domainEventBus.emit(DOMAIN_EVENTS.WORKER_DATA_CHANGED, {})
       setMessage('已连接 hub')
       setMessageTone('ok')
     } catch (error) {

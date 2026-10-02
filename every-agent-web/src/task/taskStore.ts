@@ -16,6 +16,7 @@ import type { TaskStatus } from './types'
 import { hubSession } from '../hub/session'
 import { workspaceRegistry } from '../hub/workspaceRegistry'
 import { channels } from '@every-agent/client'
+import { domainEventBus, DOMAIN_EVENTS } from '@/events/eventBus'
 
 /** worker TaskDtos.UsageSummary 的前端形状(最近一轮主 agent 实测 usage + 窗口上限 + 模型)。 */
 export interface WorkerUsageSummary {
@@ -273,6 +274,9 @@ class TaskStore {
     for (const client of hubSession.workerClients.values()) {
       if (client.k) client.sub(channels.tasks(client.k))
     }
+    domainEventBus.subscribe(DOMAIN_EVENTS.WORKER_DATA_CHANGED, () => {
+      this.refresh()
+    })
   }
 
   /**
@@ -420,8 +424,19 @@ class TaskStore {
     if (!summary?.taskId) return
     const entry = toEntry(summary)
     if (!entry.workerId) entry.workerId = sourceWorkerId || ''
+    const prev = this.tasks.get(entry.taskId)
+    const prevStatus = prev?.status
     this.tasks.set(entry.taskId, entry)
     this.sortAndNotify()
+    if (prevStatus !== undefined && prevStatus !== entry.status) {
+      domainEventBus.emit(DOMAIN_EVENTS.TASK_STATUS_CHANGED, {
+        taskId: entry.taskId,
+        status: entry.status,
+        error: entry.error,
+        endTime: entry.endedAt ?? undefined,
+        displayTitle: entry.title,
+      })
+    }
   }
 
   /** task.deleted(用户主动删除,唯一删除路径)→ 移除条目。 */

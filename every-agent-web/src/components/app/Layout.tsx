@@ -67,7 +67,6 @@ import { useHub } from '@/hub/HubProvider'
 import { hubSession } from '@/hub/session'
 import { randomUUID } from '@/utils/uuid'
 import { taskStore } from '@/task/taskStore'
-import { taskStreamManager } from '@/task/taskStream'
 import { workspaceRegistry } from '@/hub/workspaceRegistry'
 import { DRAFT_TASK_ID, setDraftPreset } from '@/components/task/taskChatDraft'
 
@@ -385,10 +384,8 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
   }, [activateWorkspaceTab])
 
   const closeWorkspaceTabNow = React.useCallback((tabId: WorkspaceTab['id']) => {
-    // 关闭任务标签页:退订该任务 stream 频道(hub 通知 worker 销毁 DataPusher,释放资源)。
-    if (tabId.startsWith('task:')) {
-      taskStreamManager.close(tabId.slice('task:'.length))
-    }
+    // 关闭任务标签页:发事件让 task 层自行退订 stream 频道。
+    domainEventBus.emit(DOMAIN_EVENTS.WORKSPACE_TAB_CLOSED, { tabId })
     setWorkspaceTabs((current) => {
       const index = current.findIndex((item) => item.id === tabId)
       if (index < 0) return current

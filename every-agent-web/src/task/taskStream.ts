@@ -44,6 +44,7 @@ import { hubSession } from '../hub/session'
 import { taskStore } from './taskStore'
 import { clearAsksOfTask, settleAsk, upsertPendingAsk, type WorkerAskPayload } from '../hub/askStore'
 import { registerAskReplySender } from '../hub/askStore'
+import { domainEventBus, DOMAIN_EVENTS } from '@/events/eventBus'
 
 /** 折叠推进 → 重渲染的合并窗口(ms):流式高频事件按拍合并。 */
 const NOTIFY_COALESCE_MS = 50
@@ -620,4 +621,10 @@ class TaskStreamManager {
 }
 
 export const taskStreamManager = new TaskStreamManager()
+
+domainEventBus.subscribe(DOMAIN_EVENTS.WORKSPACE_TAB_CLOSED, ({ tabId }) => {
+  if (tabId.startsWith('task:')) {
+    taskStreamManager.close(tabId.slice('task:'.length))
+  }
+})
 
