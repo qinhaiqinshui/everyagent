@@ -28,6 +28,9 @@ public interface EventLogReader {
      */
     List<EventRecord> readAfterSeq(long afterSeq, int max);
 
+    /** 当前内存记录数(含瞬态;0-based 位置游标上界)。 */
+    int size();
+
     /** 注册追加监听器(新事件追加时回调,仅信号不阻塞)。 */
     void addListener(Listener listener);
 

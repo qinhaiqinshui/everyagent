@@ -46,7 +46,7 @@ public final class PersistenceTrackNode implements TaskLifecycleNode {
         }
         // 挂接流源：StreamSourceRegistry.attach（推送器经此取日志，反转后正向依赖）
         try {
-            streamSources.attach(t.taskId, t.log);
+            streamSources.attach(t.taskId, t.log, t.mainAgentId);
             log.debug("[track] 流源挂接完成 task={}", t.taskId);
         } catch (RuntimeException e) {
             log.warn("流源挂接失败 task={}", t.taskId, e);

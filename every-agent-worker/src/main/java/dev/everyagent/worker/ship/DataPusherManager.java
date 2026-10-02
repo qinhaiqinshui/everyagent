@@ -3,9 +3,9 @@ package dev.everyagent.worker.ship;
 import dev.everyagent.contract.frame.Frames;
 import dev.everyagent.worker.hub.HubLink;
 import dev.everyagent.worker.hub.HubPool;
+import dev.everyagent.plugin.api.event.EventLogReader;
 import dev.everyagent.plugin.api.event.Events;
-import dev.everyagent.worker.task.EventLog;
-import dev.everyagent.worker.task.TaskManager;
+import dev.everyagent.plugin.api.event.StreamSourceListener;
 import dev.everyagent.worker.task.TaskStore;
 import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
@@ -23,26 +23,22 @@ import java.util.concurrent.ConcurrentHashMap;
  * 幂等不重复创建;多 hub 时通知来自哪条连接就用哪条连接推送(ext.target=sessionId 定向到
  * 该 hub 上的前端会话)。连接断开时清理该连接的推送器。
  *
- * <p>兜底路径:worker 重启后内存推送器表清空,而前端页面未刷新(WS 未断、仍订阅着 stream
- * 频道)就不会再收到 subscriber.join 通知——若前端继续发 task.input,任务照跑但该前端永远
- * 收不到增量。因此在收到前端 task.input 时也按 sessionId|taskId 兜底补建推送器,与
- * subscriber.join 同源幂等(sessionId 由 hub 在转发帧的 from.sessionId 附上)。
+ * <p>流源通知:实现 {@link StreamSourceListener},经 {@link StreamSourceRegistry}
+ * 感知流源挂接/摘除,不再反向依赖 {@code TaskManager}。
  */
 @Component
-public class DataPusherManager implements HubPool.Listener, TaskManager.TaskResumeListener, StreamSourceRegistry.Listener {
+public class DataPusherManager implements HubPool.Listener, StreamSourceListener {
 
     private static final Logger log = LoggerFactory.getLogger(DataPusherManager.class);
 
     private final HubPool pool;
-    private final TaskManager tasks;
     private final TaskStore store;
     private final StreamSourceRegistry streamSources;
     private final Map<String, DataPusher> pushers = new ConcurrentHashMap<>();
 
-    public DataPusherManager(HubPool pool, TaskManager tasks, TaskStore store,
+    public DataPusherManager(HubPool pool, TaskStore store,
                              StreamSourceRegistry streamSources) {
         this.pool = pool;
-        this.tasks = tasks;
         this.store = store;
         this.streamSources = streamSources;
     }
@@ -50,16 +46,14 @@ public class DataPusherManager implements HubPool.Listener, TaskManager.TaskResu
     @PostConstruct
     void init() {
         pool.addListener(this);
-        tasks.addResumeListener(this);
         streamSources.addListener(this);
     }
 
     /**
      * 流源挂接（新任务 track 或再运行）：唤醒该任务的全部定向推送器立即对账挂接新日志。
-     * 替代 onTaskResumed 的正向通知路径（经 StreamSourceRegistry，不再反向感知 TaskManager）。
      */
     @Override
-    public void onAttach(String streamKey, EventLog log) {
+    public void onAttach(String streamKey, EventLogReader log) {
         for (DataPusher p : pushers.values()) {
             if (streamKey.equals(p.taskId())) {
                 p.wake();
@@ -74,20 +68,6 @@ public class DataPusherManager implements HubPool.Listener, TaskManager.TaskResu
     public void onDetach(String streamKey) {
         for (DataPusher p : pushers.values()) {
             if (streamKey.equals(p.taskId())) {
-                p.wake();
-            }
-        }
-    }
-
-    /**
-     * 任务被再运行(冷启动续跑,新 TaskEntry 已入 tasks):唤醒该任务的全部定向推送器立即
-     * 对账挂接新日志。纯轮询(1s)在极快续跑(两次轮询间完成并驱逐)时会漏推整轮——即
-     * 「终态任务再运行后前端看不到新输出」的根因,这里用事件驱动补上。
-     */
-    @Override
-    public void onTaskResumed(String taskId) {
-        for (DataPusher p : pushers.values()) {
-            if (taskId.equals(p.taskId())) {
                 p.wake();
             }
         }
@@ -112,13 +92,14 @@ public class DataPusherManager implements HubPool.Listener, TaskManager.TaskResu
         }
         String key = sessionId + "|" + taskId;
         if (Frames.SUBSCRIBER_JOIN.equals(event)) {
-            // 校验 taskId 属于本 worker:内存运行中或磁盘目录存在(否则可能是别的 worker 的任务)
-            if (tasks.get(taskId) == null && !store.taskDirExists(taskId)) {
+            // 校验 taskId 属于本 worker:流源注册表有此任务或磁盘目录存在
+            // (否则可能是别的 worker 的任务)
+            if (streamSources.getReader(taskId) == null && !store.taskDirExists(taskId)) {
                 log.debug("忽略非本 worker 任务的订阅通知 channel={}", channel);
                 return;
             }
             pushers.computeIfAbsent(key, k -> {
-                DataPusher p = new DataPusher(sessionId, taskId, conn, tasks, streamSources);
+                DataPusher p = new DataPusher(sessionId, taskId, conn, streamSources);
                 p.start();
                 log.debug("定向推送器已建立 session={} task={}", sessionId, taskId);
                 return p;

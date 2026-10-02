@@ -2,13 +2,9 @@ package dev.everyagent.worker.ship;
 
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.plugin.api.event.EventLogReader;
-import dev.everyagent.worker.hub.HubLink;
-import dev.everyagent.plugin.api.event.Channels;
-import dev.everyagent.worker.task.EventLog;
 import dev.everyagent.plugin.api.event.EventRecord;
-import dev.everyagent.worker.task.TaskEntry;
-import dev.everyagent.worker.task.TaskManager;
-import dev.everyagent.worker.task.TaskEvents;
+import dev.everyagent.plugin.api.event.Channels;
+import dev.everyagent.worker.hub.HubLink;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import tools.jackson.databind.JsonNode;
@@ -54,8 +50,7 @@ public class DataPusher implements EventLogReader.Listener {
     private final String sessionId;
     private final String taskId;
     private final HubLink conn;
-    private final TaskManager tasks;
-    /** 流源注册表:优先经此取 EventLog（反转后正向依赖基础设施层）。 */
+    /** 流源注册表:优先经此取 EventLogReader（反转后正向依赖基础设施层）。 */
     private final StreamSourceRegistry streamSources;
     /** 被动推送管道：背压控制 + 定向推送（替代原 acquireCredit/onAck/conn.pub 内联逻辑）。 */
     private final WebSocketEmitter wsEmitter;
@@ -67,17 +62,16 @@ public class DataPusher implements EventLogReader.Listener {
     private volatile int cursor;
     /** 首挂回扫边界:位置 &lt; replayEnd 的帧标 initial=true(前端 ask 卡片静默);换挂(再运行)归零。 */
     private volatile int replayEnd;
-    /** 当前挂接监听的日志(停止时摘除;再运行换挂新 TaskEntry 的日志时先摘旧)。 */
-    private volatile EventLog liveLog;
+    /** 当前挂接监听的日志(停止时摘除;再运行换挂新日志时先摘旧)。 */
+    private volatile EventLogReader liveLog;
     /** 挂接时记主 agentId(payload 组装用,wireEvent 同 task.poll 口径)。 */
     private volatile String mainAgentId;
 
-    public DataPusher(String sessionId, String taskId, HubLink conn, TaskManager tasks,
+    public DataPusher(String sessionId, String taskId, HubLink conn,
                       StreamSourceRegistry streamSources) {
         this.sessionId = sessionId;
         this.taskId = taskId;
         this.conn = conn;
-        this.tasks = tasks;
         this.streamSources = streamSources;
         this.wsEmitter = new WebSocketEmitter(sessionId, taskId, conn);
     }
@@ -134,7 +128,7 @@ public class DataPusher implements EventLogReader.Listener {
     }
 
     /**
-     * 推送主循环(单虚拟线程):每拍对账 tasks 表,确保挂在「当前」TaskEntry 的 EventLog 上
+     * 推送主循环(单虚拟线程):每拍对账 StreamSourceRegistry,确保挂在「当前」流源上
      * 推送增量,并等 onAppend 唤醒(带 1s 兜底轮询,保证无人唤醒也最终对账)。
      */
     private void runLive() throws InterruptedException {
@@ -145,22 +139,16 @@ public class DataPusher implements EventLogReader.Listener {
     }
 
     /**
-     * 对账一次:任务在内存且非终态 → 确保挂在其日志上并推送增量;任务已终态但日志还挂着 →
-     * 收尾排水一次(finish 先置终态、agent.status 等尾事件后追加,不排会丢尾);任务不在内存
-     * (终态已驱逐/尚未创建)→ 若 liveLog 仍挂着,做一次最终排水再 detach(防止子 agent 完成事件
-     * 在上一次 pushFrom 返回与 finish 驱逐之间追加、因 tasks.get 返回 null 而永不推送);
-     * 无 liveLog(尚未创建/已 detach)→ 空转等待(历史与终态数据走 task.poll 拉取,本推送器不负责)。
-     */
-    /**
-     * 对账一次:优先从 StreamSourceRegistry 取日志(反转后正向依赖);流源注册表无此任务
-     * (尚未 track/已 detach)→ 回退到 TaskManager(过渡期兜底,保持行为不变)。
+     * 对账一次:从 StreamSourceRegistry 取日志(正向依赖基础设施层)。
      *
      * <p>流源路径:streamLog 非空 → 确保挂在其上推送增量(换挂=再运行,从头推,seq 去重无害)。
-     * 回退路径:任务在内存且非终态 → 挂日志推送;终态 → 排尾水;不在内存 → 排尾水后 detach。
+     * 无流源(尚未 track/已 detach)→ liveLog 仍挂着则做一次最终排水再 detach
+     * (防止子 agent 完成事件在最后一次 pushFrom 返回与 untrack 之间追加、
+     * 因 getReader 返回 null 而永不推送);无 liveLog → 空转等待
+     * (历史与终态数据走 task.poll 拉取,本推送器不负责)。
      */
     private void reconcileLive() {
-        // 优先从 StreamSourceRegistry 取日志（反转后正向依赖基础设施层）
-        EventLog streamLog = streamSources.getEventLog(taskId);
+        EventLogReader streamLog = streamSources.getReader(taskId);
         if (streamLog != null) {
             if (liveLog != streamLog) {
                 attachLog(streamLog);
@@ -168,79 +156,36 @@ public class DataPusher implements EventLogReader.Listener {
             cursor = pushFrom(streamLog, cursor);
             return;
         }
-        // 流源注册表无此任务（尚未 track/已 detach）：回退到 TaskManager（过渡期兜底）
-        TaskEntry t = tasks.get(taskId);
-        if (t == null) {
-            // 任务已被驱逐(finish 移除):liveLog 仍引用旧 EventLog(对象未 GC),
-            // 推一次尾排水把可能在上次 pushFrom 返回与驱逐之间追加的事件(子 agent done/status)
-            // 推给前端,然后 detach 防止后续空轮询反复读已空的旧日志。
-            if (liveLog != null) {
-                cursor = pushFrom(liveLog, cursor);
-                detach();
-            }
-            return;
+        // 流源注册表无此任务（尚未 track/已 detach）:
+        // liveLog 仍引用旧日志(对象未 GC),推一次尾排水把可能在上次 pushFrom 返回
+        // 与 untrack 之间追加的事件(子 agent done/status)推给前端,然后 detach 防止
+        // 后续空轮询反复读已空的旧日志。
+        if (liveLog != null) {
+            cursor = pushFrom(liveLog, cursor);
+            detach();
         }
-        if (t.status.terminal()) {
-            if (liveLog == t.log) {
-                cursor = pushFrom(t.log, cursor);
-            }
-            return;
-        }
-        if (liveLog != t.log) {
-            attachLog(t);
-        }
-        cursor = pushFrom(t.log, cursor);
     }
 
     /**
-     * 挂接到指定 EventLog(经 StreamSourceRegistry 取得):首次挂接回扫尾部存量(上限
+     * 挂接到指定 EventLogReader(经 StreamSourceRegistry 取得):首次挂接回扫尾部存量(上限
      * {@link #FIRST_SWEEP_MAX},标 initial 回放);换挂(再运行)从头推——新日志本推送器从未
      * 消费过,已落盘部分前端按 seq 去重,重复推送无害,不从头推则会漏掉本推送器未推送的记录。
-     * mainAgentId:过渡期从 TaskEntry 获取(同 taskId mainAgentId 不变,已缓存则沿用)。
+     * mainAgentId:从 StreamSourceRegistry 获取(同 taskId mainAgentId 不变,已缓存则沿用)。
      */
-    private void attachLog(EventLog elog) {
-        EventLog old = liveLog;
+    private void attachLog(EventLogReader reader) {
+        EventLogReader old = liveLog;
         if (old != null) {
             old.removeListener(this);
             log.debug("换挂任务日志 task={} (再运行续跑)", taskId);
         }
-        liveLog = elog;
-        // 过渡期:首次挂接时从 TaskEntry 获取 mainAgentId;换挂时沿用缓存值（同 taskId 不变）
+        liveLog = reader;
         if (mainAgentId == null) {
-            TaskEntry t = tasks.get(taskId);
-            if (t != null) {
-                mainAgentId = t.mainAgentId;
-            }
+            mainAgentId = streamSources.getMainAgentId(taskId);
         }
-        elog.addListener(this);
+        reader.addListener(this);
         if (old == null) {
             // 首挂:回扫订阅时已在内存的尾部存量(与前端首拉重叠,seq 去重吸收)
-            int size = elog.size();
-            replayEnd = size;
-            cursor = Math.max(0, size - FIRST_SWEEP_MAX);
-        } else {
-            replayEnd = 0;
-            cursor = 0;
-        }
-    }
-
-    /** 挂接到指定 TaskEntry 的日志:首次挂接回扫尾部存量(上限 {@link #FIRST_SWEEP_MAX},
-     * 标 initial 回放);换挂(再运行)从头推——新日志本推送器从未消费过,已落盘部分前端
-     * 按 seq 去重,重复推送无害,不从头推则会漏掉本推送器未推送的记录。
-     */
-    private void attachLog(TaskEntry t) {
-        EventLog old = liveLog;
-        if (old != null) {
-            old.removeListener(this);
-            log.debug("换挂任务日志 task={} (再运行续跑)", taskId);
-        }
-        EventLog elog = t.log;
-        liveLog = elog;
-        mainAgentId = t.mainAgentId;
-        elog.addListener(this);
-        if (old == null) {
-            // 首挂:回扫订阅时已在内存的尾部存量(与前端首拉重叠,seq 去重吸收)
-            int size = elog.size();
+            int size = reader.size();
             replayEnd = size;
             cursor = Math.max(0, size - FIRST_SWEEP_MAX);
         } else {
@@ -251,7 +196,7 @@ public class DataPusher implements EventLogReader.Listener {
 
     /** 摘除当前日志监听(run 收口/stop/换挂共用)。 */
     private void detach() {
-        EventLog l = liveLog;
+        EventLogReader l = liveLog;
         if (l != null) {
             l.removeListener(this);
         }
@@ -259,7 +204,7 @@ public class DataPusher implements EventLogReader.Listener {
     }
 
     /** 从记录位置 from 起把日志推一段,返回新的已消费位置。 */
-    private int pushFrom(EventLog log, int from) {
+    private int pushFrom(EventLogReader log, int from) {
         int pos = from;
         while (running.get()) {
             List<EventRecord> batch = log.readFrom(pos, BATCH);
@@ -280,7 +225,7 @@ public class DataPusher implements EventLogReader.Listener {
     /**
      * 推送一条内存记录:ext = target(定向) + operate(delta/thinking=append,其余=replace)
      * + 回放帧 initial=true(前端 askStore 静默依赖)+ 原事件 ext 字段合并(如 persist=false);
-     * payload 走 {@link TaskEvents#wireEvent} 同 task.poll wire 口径(子 agent 事件把
+     * payload 走 {@link EventWireFormatter#wireEvent} 同 task.poll wire 口径(子 agent 事件把
      * agentId 注入 payload,前端折叠器据以分流主/子线程)。
      */
     private void push(EventRecord r, boolean replay) {
@@ -303,7 +248,7 @@ public class DataPusher implements EventLogReader.Listener {
                 ext.set(k, src.get(k));
             }
         }
-        JsonNode payload = TaskEvents.wireEvent(r, mainAgentId).path("payload");
+        JsonNode payload = EventWireFormatter.wireEvent(r, mainAgentId).path("payload");
         wsEmitter.push(Channels.taskStream(conn.k(), taskId), r.event(), r.seq(), r.ts(),
                 payload, ext);
     }
