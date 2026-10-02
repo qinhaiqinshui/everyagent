@@ -54,8 +54,6 @@ export interface WorkerTaskSummary {
   mainAgentId?: string | null
   /** 最近一轮上下文用量快照(worker TaskSummary.usage;终态随 meta.json 持久化,无数据=缺省)。 */
   usage?: WorkerUsageSummary | null
-  /** 任务级 slash token(worker 下发的一组自包含 opaque token 串,建后写入 meta.slashTaskTokens)。 */
-  slashTaskTokens?: string[]
 }
 
 /** 映射后的任务列表条目(UI 直接消费)。 */
@@ -85,8 +83,6 @@ export interface TaskListEntry {
   mainAgentId: string
   /** 最近一轮上下文用量(列表电池直接消费;无数据=null)。 */
   contextUsage: ContextMonitorSnapshot | null
-  /** 任务级 slash token(自包含 opaque token 串;空=无)。 */
-  slashTaskTokens: string[]
 }
 
 /** worker 状态 → n 前端 TaskStatus。 */
@@ -177,7 +173,6 @@ function toEntry(summary: WorkerTaskSummary): TaskListEntry {
     configId: summary.configId ?? existing?.configId ?? '',
     mainAgentId: summary.mainAgentId ?? existing?.mainAgentId ?? '',
     contextUsage,
-    slashTaskTokens: summary.slashTaskTokens ?? existing?.slashTaskTokens ?? [],
   }
   // 任务归属 worker 由任务本身携带;workerId 缺失时保持空串,由后续严格校验兜底,不做隐式默认。
   return entry

@@ -24,7 +24,6 @@ import dev.everyagent.worker.proto.TaskDtos.TaskStatus;
 import dev.everyagent.worker.rpc.RpcContext;
 import dev.everyagent.worker.rpc.RpcDispatcher;
 import dev.everyagent.worker.ship.TaskInputHandler;
-import dev.everyagent.plugin.api.slash.SlashTokenEncoder;
 import dev.everyagent.worker.interaction.EmitterLookup;
 import dev.everyagent.worker.interaction.InteractionServiceImpl;
 import dev.everyagent.worker.plugin.registry.TaskAdmissionPolicyRegistry;
@@ -96,7 +95,6 @@ public class TaskManager implements TaskInputHandler, InteractionServiceImpl.Sta
     /** 模型配置解析(configs + modelFactory 用于主 agent 装配时解析模型)。 */
     private final ConfigStore configs;
     private final ChatModelFactory modelFactory;
-    /** slash 建后回调已移入洋葱下行节点 SlashNotifyNode(order=90)。 */
     /** 创建/再运行准备路径:workspace 解析与模型配置解析已迁 TaskBootstrap(TaskEntry 构造前的动作)。 */
     private final TaskBootstrap taskBootstrap;
     private final InteractionServiceImpl asks;
@@ -1238,40 +1236,6 @@ public class TaskManager implements TaskInputHandler, InteractionServiceImpl.Sta
         if (st != null) {
             eventSink.fanout(k -> Channels.tasks(k), Events.TASK_UPDATED, null, st.summary(), null);
         }
-    }
-
-    /**
-     * slash 任务级 token 快照(仅 slash 层存储、业务方不读):运行中读内存槽;
-     * 磁盘读 summary 的 slashTaskTokens 数组(meta 缺失/非数组→空,仅收集 textual 项,
-     * 与 TaskEntry.slashTaskTokens 语义一致);任务不存在返回空列表。
-     */
-    public List<String> slashTaskTokens(String taskId) {
-        TaskEntry t = tasks.get(taskId);
-        if (t != null) {
-            return t.slashTaskTokens();
-        }
-        TaskStore.StoredTask st = diskTasks.get(taskId);
-        if (st == null || st.summary() == null) {
-            return List.of();
-        }
-        List<String> out = new ArrayList<>();
-        JsonNode arr = st.summary().path("slashTaskTokens");
-        if (arr.isArray()) {
-            for (JsonNode n : arr) {
-                if (n.isTextual()) {
-                    out.add(n.asText());
-                }
-            }
-        }
-        return out;
-    }
-
-    /**
-     * slash 任务级 token 存储是否可寻(任务存在:运行中或磁盘索引可寻)
-     * —— 供 slash.cancel 等后续步骤区分「任务不存在」与「token 不在」。
-     */
-    public boolean slashTaskTokenExists(String taskId) {
-        return tasks.containsKey(taskId) || diskTasks.containsKey(taskId);
     }
 
     public int activeCount() {

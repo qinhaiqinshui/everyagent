@@ -1,6 +1,5 @@
 package dev.everyagent.worker.task.lifecycle;
 
-import dev.everyagent.contract.json.Json;
 import dev.everyagent.contract.rpc.Rpc;
 import dev.everyagent.plugin.api.task.TaskChain;
 import dev.everyagent.plugin.api.task.TaskLifecycleContext;
@@ -11,7 +10,6 @@ import dev.everyagent.worker.modules.ConfigStore.ResolvedConfig;
 import dev.everyagent.worker.plugin.registry.TaskAdmissionPolicyRegistry;
 import dev.everyagent.plugin.api.proto.ShortIds;
 import dev.everyagent.worker.rpc.RpcContext;
-import dev.everyagent.plugin.api.slash.SlashTokenEncoder;
 import dev.everyagent.worker.agent.AgentFactoryImpl;
 import dev.everyagent.worker.interaction.InteractionServiceImpl;
 import dev.everyagent.worker.task.TaskBootstrap;
@@ -185,22 +183,6 @@ public final class TaskEntryCreateNode implements TaskLifecycleNode {
         log.debug("[entry] taskentry.create 新建 task={} workspaceId={} workspaceRoot={} dir={} thread={}",
                 taskId, impl.workspaceId(), impl.workspaceRoot(), t.taskDir(),
                 Thread.currentThread().getName());
-
-        // slash 任务级 token
-        if (rc != null) {
-            JsonNode tt = rc.params().path("taskTokens");
-            if (tt.isArray()) {
-                for (JsonNode e : tt) {
-                    if (!e.isTextual()) continue;
-                    String opaque = e.asText();
-                    if (SlashTokenEncoder.parseToken(opaque) != null) {
-                        t.addSlashTaskToken(opaque);
-                    } else {
-                        log.warn("slash 任务 token 非法跳过 task={} token={}", taskId, opaque);
-                    }
-                }
-            }
-        }
 
         active.incrementAndGet();
 

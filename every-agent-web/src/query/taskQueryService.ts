@@ -153,8 +153,6 @@ export const taskQueryService = {
     configId?: string
     /** 任务挂靠的工作区根(新建必填;草稿选择器指定,缺省用注册表首选根)。 */
     workspace?: string
-    /** 任务级 slash token(仅新建时传;worker 写入 meta.slashTaskTokens 并触发建后回调)。 */
-    taskTokens?: string[]
     /** 原始输入(含 opaque token 串,仅用于 user.message 回放还原胶囊;缺省=纯文本输入)。 */
     rawContent?: string
     /** 通用 metadata(透传到 task.run RPC params;如 { insert: true } 表示插入当前对话、{ editSeq } 表示编辑重发)。 */
@@ -180,15 +178,12 @@ export const taskQueryService = {
       throw new Error('请先选择 worker')
     }
     const workspace = opts?.workspace?.trim() || await resolveWorkspaceRoot()
-    const taskTokens = opts?.taskTokens?.filter((token) => token?.length > 0) ?? []
     const result = await hubSession.rpcTo(opts.workerId, 'task.run', {
       input,
       title: opts?.title,
       idempotencyKey: opts?.idempotencyKey,
       workspace,
       configId: opts?.configId || undefined,
-      // 仅新建分支携带;为空不传,保持与现状一致。
-      ...(taskTokens.length > 0 ? { taskTokens } : {}),
       ...(opts.rawContent ? { rawContent: opts.rawContent } : {}),
       ...(opts.metadata ? { metadata: opts.metadata } : {}),
     })

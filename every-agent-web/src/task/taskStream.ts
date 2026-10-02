@@ -163,6 +163,14 @@ class ManagedStream {
   }
 
   private onEvent(event: TaskStreamEvent): void {
+    // slash.tokens.changed:slash 层自管 token 变更(REPLACE 整体替换)。
+    // 不折入线程 items,仅更新 state.slashTokens 并触发重渲染。
+    if (event.event === 'slash.tokens.changed') {
+      const tokens = event.payload?.data
+      this.folder.state.slashTokens = Array.isArray(tokens) ? tokens : null
+      this.notify()
+      return
+    }
     // round.opened / round.closed 是信号事件,不折入 items;仅触发 rounds 快照刷新(重新 task.rounds + 幂等 foldRound)。
     if (event.event === 'round.opened' || event.event === 'round.closed') {
       void this.refreshRounds()

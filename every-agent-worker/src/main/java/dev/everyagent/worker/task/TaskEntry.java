@@ -16,7 +16,6 @@ import dev.everyagent.worker.proto.TaskDtos.TaskSummary;
 import dev.everyagent.plugin.api.event.Usage;
 import dev.everyagent.worker.proto.TaskDtos.UsageSummary;
 import tools.jackson.databind.JsonNode;
-import tools.jackson.databind.node.ArrayNode;
 import tools.jackson.databind.node.ObjectNode;
 
 import java.nio.file.Path;
@@ -95,38 +94,6 @@ public final class TaskEntry implements TaskRuntime {
      * 随 {@link #summaryJson()} 落盘 meta.json、再运行仍保持。旧格式自动迁移（见 TaskManager）。
      */
     public final java.util.Map<String, Object> metadata = new java.util.concurrent.ConcurrentHashMap<>();
-
-    /**
-     * slash 任务级 token 槽:自包含 opaque token 串数组,仅 slash 层存储、业务方不读。
-     * 新任务由 task.run 的 taskTokens 入参写入,随 meta.json 的 slashTaskTokens 落盘,
-     * 冷启动续跑(startRerun)回读恢复。线程安全(CopyOnWriteArrayList),快照读。
-     */
-    private final java.util.concurrent.CopyOnWriteArrayList<String> slashTaskTokens =
-            new java.util.concurrent.CopyOnWriteArrayList<>();
-
-    /** 追加一条 slash 任务级 opaque token(判空、去重:重复或空/null 忽略)。 */
-    public void addSlashTaskToken(String opaque) {
-        if (opaque == null || opaque.isEmpty()) {
-            return;
-        }
-        if (!slashTaskTokens.contains(opaque)) {
-            slashTaskTokens.add(opaque);
-        }
-    }
-
-    /** 移除一条 slash 任务级 opaque token。 */
-    public void removeSlashTaskToken(String opaque) {
-        if (opaque == null) {
-            return;
-        }
-        slashTaskTokens.remove(opaque);
-    }
-
-    /** slash 任务级 token 快照(不可变;供 summaryJson 序列化与建后回调遍历)。 */
-    public List<String> slashTaskTokens() {
-        return List.copyOf(slashTaskTokens);
-    }
-
 
     // ---- TaskRuntime 域中性槽位实现 ----
 
@@ -415,15 +382,6 @@ public final class TaskEntry implements TaskRuntime {
         if (!metadata.isEmpty()) {
             var metaObj = n.putObject("metadata");
             metadata.forEach((k, v) -> metaObj.set(k, Json.toJson(v)));
-        }
-        // slash 任务级 token(仅 slash 层存储、业务方不读;随 meta 落盘,冷启动续跑回读)。
-        List<String> slashTokens = slashTaskTokens();
-        if (!slashTokens.isEmpty()) {
-            ArrayNode tokArr = Json.arr();
-            for (String tok : slashTokens) {
-                tokArr.add(tok);
-            }
-            n.set("slashTaskTokens", tokArr);
         }
         return n;
     }

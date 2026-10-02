@@ -810,13 +810,12 @@ class WorkerIntegrationTest {
         String list = rpc("slash.list", "{}");
         assertTrue(list.contains("\"" + ITEST_ID + "\""), "slash.list 缺少 " + ITEST_ID + ": " + list);
 
-        // 2. 建真实任务并等终态落盘(meta 走磁盘真相源路径)
+        // 2. 建真实任务并等终态落盘
         String taskId = create("你好,slash 任务");
         fe.await(t -> t.contains("\"event\":\"task.updated\"") && t.contains("\"status\":\"done\"")
                 && t.contains(taskId), "任务完成");
-        assertFalse(readMeta(taskId).has("slashTaskTokens")
-                        || readMeta(taskId).path("slashTaskTokens").size() > 0,
-                "初始任务不应有 slash 任务 token: " + readMeta(taskId));
+        assertTrue(readSlashTokens(taskId).isEmpty(),
+                "初始任务不应有 slash 任务 token: " + readSlashTokens(taskId));
 
         // 3. slash.select 不带 taskId → token + position=bottom;token payload 注入 slashId
         String select = rpc("slash.select", Json.write(Json.obj().put("id", ITEST_ID)));
@@ -830,29 +829,42 @@ class WorkerIntegrationTest {
         assertEquals(ITEST_ID, parsed.payload().path("slashId").asString(),
                 "token payload 应注入 slashId: " + parsed.payload());
 
-        // 4. slash.taskTokens.apply 挂到任务 → applied=true
+        // 4. slash.taskTokens.apply 挂到任务 → applied=true + tokens 含该 token
         String apply = rpc("slash.taskTokens.apply", Json.write(Json.obj()
                 .put("taskId", taskId).put("id", ITEST_ID).put("token", token)));
         JsonNode applyRes = Json.parse(apply).path("payload").path("result");
         assertTrue(applyRes.path("applied").asBoolean(false), "apply 应 applied=true: " + apply);
+        JsonNode applyTokens = applyRes.path("tokens");
+        assertTrue(applyTokens.isArray() && applyTokens.size() == 1
+                        && token.equals(applyTokens.path(0).asString()),
+                "apply 返回 tokens 应恰好含该 token: " + applyTokens);
 
-        // 5. meta.slashTaskTokens 包含该 token(apply 落盘后 readMeta 即见)
-        JsonNode metaTokens = readMeta(taskId).path("slashTaskTokens");
-        assertTrue(metaTokens.isArray() && metaTokens.size() == 1
-                        && token.equals(metaTokens.path(0).asString()),
-                "meta 应恰好含该 token: " + metaTokens);
+        // 5. slash-tokens.json 包含该 token(apply 落盘后 readSlashTokens 即见)
+        JsonNode fileTokens = readSlashTokens(taskId);
+        assertTrue(fileTokens.isArray() && fileTokens.size() == 1
+                        && token.equals(fileTokens.path(0).asString()),
+                "slash-tokens.json 应恰好含该 token: " + fileTokens);
 
-        // 6. slash.cancel 移除 → removed=true
+        // 5b. slash.taskTokens.list 返回 tokens 含该 token
+        String listTokens = rpc("slash.taskTokens.list", Json.write(Json.obj().put("taskId", taskId)));
+        JsonNode listRes = Json.parse(listTokens).path("payload").path("result").path("tokens");
+        assertTrue(listRes.isArray() && listRes.size() == 1
+                        && token.equals(listRes.path(0).asString()),
+                "slash.taskTokens.list 应返回含该 token 的列表: " + listRes);
+
+        // 6. slash.cancel 移除 → removed=true + tokens 为空
         String cancel = rpc("slash.cancel", Json.write(Json.obj()
                 .put("id", ITEST_ID).put("token", token).put("taskId", taskId)));
         JsonNode cancelRes = Json.parse(cancel).path("payload").path("result");
         assertTrue(cancelRes.path("removed").asBoolean(false), "cancel 应 removed=true: " + cancel);
+        JsonNode cancelTokens = cancelRes.path("tokens");
+        assertTrue(cancelTokens.isArray() && cancelTokens.isEmpty(),
+                "cancel 返回 tokens 应为空: " + cancelTokens);
 
-        // 7. meta 不再含该 token(空数组字段会被移除更干净)
-        JsonNode meta2 = readMeta(taskId);
-        assertFalse(meta2.path("slashTaskTokens").isArray()
-                        && meta2.path("slashTaskTokens").size() > 0,
-                "取消后 meta 不应再有 slash 任务 token: " + meta2.path("slashTaskTokens"));
+        // 7. slash-tokens.json 不再含该 token
+        JsonNode fileTokens2 = readSlashTokens(taskId);
+        assertFalse(fileTokens2.isArray() && fileTokens2.size() > 0,
+                "取消后 slash-tokens.json 不应再有 slash 任务 token: " + fileTokens2);
     }
 
     // ---- 帮助方法 ----
@@ -1012,6 +1024,19 @@ class WorkerIntegrationTest {
                     taskStore.dirOf(taskId).resolve("meta.json")));
         } catch (java.io.IOException e) {
             throw new AssertionError("meta 读取失败 task=" + taskId, e);
+        }
+    }
+
+    /** 读取 slash-tokens.json(slash 层自管存储;文件不存在视为空数组)。 */
+    private JsonNode readSlashTokens(String taskId) {
+        try {
+            java.nio.file.Path file = taskStore.dirOf(taskId).resolve("slash-tokens.json");
+            if (!Files.exists(file)) {
+                return Json.arr();
+            }
+            return Json.parse(Files.readString(file));
+        } catch (java.io.IOException e) {
+            throw new AssertionError("slash-tokens 读取失败 task=" + taskId, e);
         }
     }
 

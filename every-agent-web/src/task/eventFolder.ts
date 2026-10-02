@@ -85,6 +85,8 @@ export interface TaskThreadState {
   contextUsage?: ContextMonitorSnapshot | null
   /** 任务冻结的模型信息(当前不再由流事件填充,通常为空,见 TaskModelInfo)。 */
   taskModel?: TaskModelInfo | null
+  /** slash 任务级 token(slash.tokens.changed 事件 REPLACE 更新;null=未收到)。 */
+  slashTokens?: string[] | null
 }
 
 /** worker 流事件(SDK TaskEvent 同形;数据包模式下 seq 可为 Snowflake string)。 */
@@ -154,6 +156,7 @@ export class TaskEventFolder {
     this.state.agentMeta = {}
     this.state.contextUsage = null
     this.state.taskModel = null
+    this.state.slashTokens = null
     this.bySeq.clear()
     this.anchors.streaming.clear()
     this.anchors.toolNames.clear()
@@ -908,7 +911,7 @@ export function readUsage(value: unknown): { inputTokens: number; outputTokens: 
 
 /** 空状态。 */
 export function emptyThreadState(taskId: string): TaskThreadState {
-  return { taskId, items: [], agentStates: {}, agentMeta: {} }
+  return { taskId, items: [], agentStates: {}, agentMeta: {}, slashTokens: null }
 }
 
 /** agentMeta 快照字段级相等判定(mergeAgentMeta 变更检测;undefined 与缺失视为同值)。 */

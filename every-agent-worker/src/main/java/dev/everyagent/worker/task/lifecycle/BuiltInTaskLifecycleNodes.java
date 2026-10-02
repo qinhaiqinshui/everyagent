@@ -6,7 +6,6 @@ import dev.everyagent.worker.modules.WorkspaceActivityTracker;
 import dev.everyagent.worker.plugin.registry.FileReferenceHandlerRegistry;
 import dev.everyagent.worker.plugin.registry.TaskLifecycleRegistry;
 import dev.everyagent.worker.ship.StreamSourceRegistry;
-import dev.everyagent.worker.slash.SlashTaskCallbacks;
 import dev.everyagent.worker.interaction.InteractionServiceImpl;
 import dev.everyagent.worker.task.TaskStore;
 import dev.everyagent.worker.tools.PermissionGate;
@@ -19,7 +18,7 @@ import org.springframework.stereotype.Component;
  * <p>收敛后基线（§11）：
  * 下行: idempotency.check(10) → workspace.resolve(20) → taskid.generate(30)
  *   → queue.admission(40) → taskentry.create(50) → rerun.restore(55)
- *   → slash.notify(60) → response.ack(70) → thread.submit(80)
+ *   → response.ack(70) → thread.submit(80)
  *   → persistence.track(100) → task.wires(200) → model.switch.trace(310)
  *   → main.agent(390) → file.reference.process(395.4) → consume.input(396) → status.down(840)
  * 内核: 轮次循环
@@ -39,7 +38,6 @@ public class BuiltInTaskLifecycleNodes {
     private final PermissionGate gate;
     private final InteractionServiceImpl asks;
     private final WorkspaceActivityTracker activityTracker;
-    private final SlashTaskCallbacks slashCallbacks;
     private final FileReferenceHandlerRegistry fileReferenceHandlerRegistry;
     private final AgentLedger agentLedger;
 
@@ -51,7 +49,6 @@ public class BuiltInTaskLifecycleNodes {
             PermissionGate gate,
             InteractionServiceImpl asks,
             WorkspaceActivityTracker activityTracker,
-            SlashTaskCallbacks slashCallbacks,
             FileReferenceHandlerRegistry fileReferenceHandlerRegistry,
             AgentLedger agentLedger) {
         this.registry = registry;
@@ -61,7 +58,6 @@ public class BuiltInTaskLifecycleNodes {
         this.gate = gate;
         this.asks = asks;
         this.activityTracker = activityTracker;
-        this.slashCallbacks = slashCallbacks;
         this.fileReferenceHandlerRegistry = fileReferenceHandlerRegistry;
         this.agentLedger = agentLedger;
     }
@@ -70,7 +66,6 @@ public class BuiltInTaskLifecycleNodes {
     void registerAll() {
         // 下行节点（order 升序）
         registry.register(new RerunRestoreNode(), "worker");
-        registry.register(new SlashNotifyNode(slashCallbacks), "worker");
         registry.register(new PersistenceTrackNode(store, streamSources), "worker");
         // agent 台账生命周期节点（收编自 subagent 插件）
         registry.register(new AgentLedgerTrackNode(agentLedger), "worker");  // order=150

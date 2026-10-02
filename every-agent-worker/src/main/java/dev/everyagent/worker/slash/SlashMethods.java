@@ -45,7 +45,7 @@ import tools.jackson.databind.node.ObjectNode;
  *       返回的多个 {@link SlashSelectionResult},把各 result 的 {@code payload.slashId} 注入
  *       返回的 opaque token 后下发(未指定 id 回退父条目 id),响应 {@code { results: [...] }}。</li>
  *   <li>{@code slash.cancel}:用户取消胶囊(底部 ❌ 或内联 ✕)时,有 taskId 先从任务 meta
- *       的 {@code slashTaskTokens} 移除自己的 token,再触发条目 cancelHandler(业务 onCancel)。</li>
+ *       的 {@code slash-tokens.json} 移除自己的 token,再触发条目 cancelHandler(业务 onCancel)。</li>
  * </ul>
  *
  * <p>路径语义(与前端 pathUtils 一致):{@code path} 为工作区相对路径(空/缺省=根,经
@@ -77,6 +77,7 @@ public class SlashMethods {
         dispatcher.register(RpcMethods.SLASH_LIST, ctx -> ctx.ok(listItems()));
         dispatcher.register(RpcMethods.SLASH_SELECT, this::selectItem);
         dispatcher.register(RpcMethods.SLASH_TASK_TOKENS_APPLY, this::applyTaskToken);
+        dispatcher.register(RpcMethods.SLASH_TASK_TOKENS_LIST, this::listTaskTokens);
         dispatcher.register(RpcMethods.SLASH_CANCEL, this::cancelItem);
         dispatcher.register(RpcMethods.MENTION_QUERY, this::mentionQuery);
     }
@@ -159,7 +160,7 @@ public class SlashMethods {
 
     /**
      * slash.taskTokens.apply:把返回的 bottom token 写入任务级 scope(slash 层公共存储,
-     * 字段 slashTaskTokens 仅 slash 层读写),随后调业务 onSelect 让注册方写自己的业务标记
+     * 字段 slash-tokens.json 仅 slash 层读写),随后调业务 onSelect 让注册方写自己的业务标记
      * (注册方自己实现;异常仅记日志,不阻塞 RPC 应答)。
      * 流程:查条目(未知 id → NotFound)→ 公共存储写入(不存在/无权 → NOT_FOUND)→ 业务 onSelect → ok。
      */
@@ -179,10 +180,24 @@ public class SlashMethods {
         } catch (RuntimeException e) {
             log.warn("slash 任务 token 业务 onSelect 失败 id={} task={}", id, taskId, e);
         }
+        List<String> latestTokens = scopeStore.tokensOf(taskId);
         ctx.ok(Json.obj()
                 .put("applied", true)
                 .put("taskId", taskId)
-                .put("token", token));
+                .put("token", token)
+                .set("tokens", Json.toJson(latestTokens)));
+    }
+
+    // ---- slash.taskTokens.list ----
+
+    /**
+     * slash.taskTokens.list:返回任务当前的全部 slash 任务级 token(slash 层公共存储,
+     * 自管 slash-tokens.json)。参数 taskId 必填,应答 { tokens: [...] }。
+     */
+    private void listTaskTokens(RpcContext ctx) {
+        String taskId = ctx.strParam("taskId");
+        List<String> tokens = scopeStore.tokensOf(taskId);
+        ctx.ok(Json.obj().set("tokens", Json.toJson(tokens)));
     }
 
     // ---- slash.cancel ----
@@ -191,7 +206,7 @@ public class SlashMethods {
      * slash.cancel:用户取消 slash 胶囊(底部 ❌ 或内联 ✕)时触发。
      * 流程:
      * 1. resolveItem(id, token) 反查条目(仅用于业务 onCancel;解析不到为 null,绝不让 RPC 失败);
-     * 2. 有 taskId 时先从任务 meta 的 slashTaskTokens 移除自身 token(scopeStore.remove
+     * 2. 有 taskId 时先从 slash-tokens.json 移除自身 token(scopeStore.remove
      *    内部落盘 + 广播 task.updated);任务不存在/非归属 → removed=false 降级应答,不抛错;
      * 3. 无 taskId(草稿取消/内联 ✕)→ 不碰 meta,removed=false;
      * 4. 条目非空才调业务 cancelHandler(onCancel),异常仅记日志,不阻塞应答;
@@ -218,7 +233,11 @@ public class SlashMethods {
                 log.warn("slash cancel 业务回调失败 id={} task={}", id, taskId, e);
             }
         }
-        ctx.ok(Json.obj().put("removed", removed));
+        List<String> latestTokens = (taskId != null && !taskId.isEmpty())
+                ? scopeStore.tokensOf(taskId) : List.of();
+        ctx.ok(Json.obj()
+                .put("removed", removed)
+                .set("tokens", Json.toJson(latestTokens)));
     }
 
     /**

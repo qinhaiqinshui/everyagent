@@ -71,6 +71,8 @@ public final class RpcMethods {
     public static final String SLASH_CANCEL = "slash.cancel";
     /** 把任务相关 opaque token 以其 payload 注入(按 payload 落地/还原 token 携带的数据)。 */
     public static final String SLASH_TASK_TOKENS_APPLY = "slash.taskTokens.apply";
+    /** 拉取任务的全部 slash 任务级 token(返回 { tokens: [...] })。 */
+    public static final String SLASH_TASK_TOKENS_LIST = "slash.taskTokens.list";
     /** @ 文件搜索(后端做子序列模糊匹配 + 隐藏规则 + 截断 10 条,前端零递归)。 */
     public static final String MENTION_QUERY = "mention.query";
     public static final String SYS_METHODS = "sys.methods";

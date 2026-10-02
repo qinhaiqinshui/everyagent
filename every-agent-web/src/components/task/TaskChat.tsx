@@ -36,7 +36,7 @@ import { setComposerBridge } from '@/plugin/pluginRuntimeBridge'
 import { useWorkspaceShell } from '@/components/app/WorkspaceShellContext'
 import { useResponsiveViewport } from '@/hooks/useResponsiveViewport'
 import { parseOpaqueTokenText, replaceComposerTokensForSubmission } from '@/composerToken/composerOpaqueToken'
-import { parseTaskScopeTokens, upsertTaskToken, removeTaskToken, applyTaskToken, cancelTaskToken, extractSlashId } from '@/slash/taskScopedTokens'
+import { parseTaskScopeTokens, upsertTaskToken, removeTaskToken, applyTaskToken, cancelTaskToken, extractSlashId, listTaskTokens } from '@/slash/taskScopedTokens'
 import { slashCommandRegistry } from '@/slash/slashCommandRegistry'
 import { createSnowflakeId } from '@/utils/snowflakeId'
 import { taskQueryService } from '@/query/taskQueryService'
@@ -223,8 +223,8 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
     rawContent: '',
     tokens: [],
   })
-  // 任务级底部 token（胶囊）：草稿态本地持有；真实任务乐观更新 + RPC 落盘，随
-  // worker task.updated 广播从 taskStore 镜像回显（parseTaskScopeTokens 内部去重）。
+  // 任务级底部 token（胶囊）：草稿态本地持有；真实任务从 slash.taskTokens.list
+  // 拉取 + apply/cancel RPC 返回值 + slash.tokens.changed stream 事件更新。
   const [scopeTokens, setScopeTokens] = React.useState<ChatComposerToken[]>([])
   // 队列面板「编辑」回填回调:纯文本替换草稿(清空胶囊 token,回到普通输入态)。
   const handleEditQueuedDraft = React.useCallback((text: string) => {
@@ -274,21 +274,38 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
   const activeWorkerId = isDraft ? draftWorkerId : (entry?.workerId ?? '')
   const ownerWorkerId = !isDraft ? (entry?.workerId ?? taskStore.get(effectiveTaskId)?.workerId ?? '') : ''
 
-  // 任务级底部 token 回显：草稿态清空（草稿只本地持有）；真实任务从 taskStore 镜像
-  // 的 meta.slashTaskTokens 解析。task.updated 广播后 entry 引用/字段变化即同步刷新。
+  // 任务级底部 token 回显：草稿态清空（草稿只本地持有）；真实任务从
+  // slash.taskTokens.list 拉取初始值，apply/cancel RPC 返回值更新，
+  // slash.tokens.changed stream 事件实时同步。
   React.useEffect(() => {
     if (isDraft) {
       setScopeTokens([])
       return
     }
-    setScopeTokens(parseTaskScopeTokens(entry?.slashTaskTokens))
-  }, [isDraft, entry?.slashTaskTokens])
+    // 优先用 stream 推送的 slashTokens（slash.tokens.changed 事件）；
+    // stream 尚未推送时从 listTaskTokens RPC 拉取初始值。
+    if (stream?.state.slashTokens) {
+      setScopeTokens(parseTaskScopeTokens(stream.state.slashTokens))
+      return
+    }
+    let cancelled = false
+    void listTaskTokens(effectiveTaskId).then((tokens) => {
+      if (cancelled) return
+      // stream 推送可能在此期间到达并已更新，避免覆盖
+      if (!stream?.state.slashTokens) {
+        setScopeTokens(parseTaskScopeTokens(tokens))
+      }
+    }).catch((error) => {
+      console.warn('[slash] listTaskTokens 失败', error)
+    })
+    return () => { cancelled = true }
+  }, [isDraft, effectiveTaskId, stream?.state.slashTokens])
 
   /**
    * 新建任务时默认选中的 `/` 项（defaultSelected=true）：草稿进入 / 切换 worker 时
    * 按 slash 候选的该字段预置任务级底部 token（bottom 结果进 scopeTokens，用户仍可 ✕ 取消）。
    * 走与用户点击相同的 item.select(item)（草稿态无 taskId → 不触发业务 onSelect 置位），
-   * 提交时随 taskTokens 进 task.run，由 worker 建后回调真正生效。
+   * 提交时随 task.run 建后逐个 apply（slash 层自管存储）。
    */
   React.useEffect(() => {
     if (!isDraft || !draftWorkerId) {
@@ -342,7 +359,10 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
       return
     }
     setScopeTokens((cur) => upsertTaskToken(cur, scopeToken))
-    return applyTaskToken({ taskId: effectiveTaskId, id, token }).catch((applyError) => {
+    return applyTaskToken({ taskId: effectiveTaskId, id, token }).then((tokens) => {
+      // RPC 返回最新 token 列表，直接同步（覆盖乐观更新）
+      setScopeTokens(parseTaskScopeTokens(tokens))
+    }).catch((applyError) => {
       setError(applyError instanceof Error ? applyError.message : '应用任务级 token 失败')
     })
   }, [isDraft, effectiveTaskId])
@@ -354,7 +374,10 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
       void cancelTaskToken({ id, token })
       return
     }
-    void cancelTaskToken({ id, token, taskId: effectiveTaskId })
+    void cancelTaskToken({ id, token, taskId: effectiveTaskId }).then(({ tokens }) => {
+      // RPC 返回最新 token 列表，直接同步（覆盖乐观更新）
+      setScopeTokens(parseTaskScopeTokens(tokens))
+    })
   }, [isDraft, effectiveTaskId])
 
   // 模型配置列表(worker config.get 校准 + config.changed 感知;apiKey 恒为掩码)。
@@ -574,17 +597,27 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
         if (isDraft) {
           // 草稿首次发送：建任务（worker 立即开跑），替换草稿标签。
           // workspace 必填:草稿选择器的有效值(显式选择/预设 > 注册表首选根)。
-          // 任务级底部 token 随 task.run 提交（仅新建分支携带），worker 写入 meta。
+          // 任务级底部 token 在任务创建后通过 slash.taskTokens.apply 逐个写入
+          // (slash 层自管 slash-tokens.json,不走 task.run 参数)。
           const newTaskId = await taskQueryService.runTask(aiText, {
             title: aiText.slice(0, 40),
             configId: selectedLlmConfigId || undefined,
             workspace: effectiveDraftWorkspace || undefined,
             workerId: draftWorkerId,
-            taskTokens: scopeTokens.map((t) => t.opaqueText).filter((token) => token.length > 0),
             rawContent,
           })
+          // 任务创建后，把草稿态持有的 scope token 逐个 apply 到新任务
+          for (const t of scopeTokens) {
+            if (t.opaqueText && t.opaqueText.length > 0) {
+              try {
+                await applyTaskToken({ taskId: newTaskId, id: extractSlashId(t.opaqueText) ?? '', token: t.opaqueText })
+              } catch (e) {
+                console.warn('[slash] 建后 apply 任务级 token 失败', e)
+              }
+            }
+          }
           setDraft({ text: '', rawContent: '', tokens: [], activeTokenId: undefined })
-          // 新任务页回显由其任务页 entry 负责（task.updated 广播镜像 slashTaskTokens）。
+          // 新任务页回显由其任务页的 listTaskTokens / slash.tokens.changed 负责。
           setScopeTokens([])
           // 先关草稿标签、再打开真实任务标签并激活:顺序不能反——若先 openTaskChatTab,
           // 紧接着 closeWorkspaceTab 关闭草稿时,内部按旧闭包 activeWorkspaceTabId(草稿)
