@@ -166,7 +166,7 @@ logging:
     # AI 请求原始内容打印(排除 apiKey),走 DEBUG 级别:
     # 由 HttpRequestLoggingInterceptor 在 HTTP 层打印(真实报文,含 skill 渐进式披露索引等全部注入)。
     # 开发期设为 DEBUG 开启控制台打印,生产环境保持 INFO 即静默。
-    dev.everyagent.worker.task.HttpRequestLoggingInterceptor: info
+    dev.everyagent.worker.http.HttpRequestLoggingInterceptor: info
 
     dev.everyagent.worker.tools: DEBUG
     dev.everyagent.worker.os: DEBUG
