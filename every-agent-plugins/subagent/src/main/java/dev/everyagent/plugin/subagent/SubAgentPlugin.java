@@ -30,24 +30,15 @@ public class SubAgentPlugin implements EveryAgentPlugin {
         // 1. 注册工具提供者(工具入口绑 ToolContext.execution() 整个上下文句柄)
         ctx.registerToolProvider(new SubAgentToolsProvider(subAgentManager));
 
-        // 2. 台账实例（per-subject 事件投影 + agents.json 自持读写,零 store 依赖）
-        SubAgentLedger ledger = new SubAgentLedger();
-        // 注入 ledger 到 SubAgentManager,使 list_agents 工具能读取台账
-        // (含从磁盘 agents.json 恢复的历史已完成子 agent)
-        subAgentManager.setLedger(ledger);
-
-        // 3. 注册 task.agents RPC（store 仅 RpcHandler 的 task 壳:readMeta/dirOf/taskDirExists）
-        SubAgentRpcHandler rpcHandler = new SubAgentRpcHandler(ledger, ctx.services().store());
+        // 2. 注册 task.agents RPC（store 仅 RpcHandler 的 task 壳:readMeta/dirOf/taskDirExists）
+        SubAgentRpcHandler rpcHandler = new SubAgentRpcHandler(ctx.services().store());
         ctx.registerRpcMethod(SubAgentRpcHandler.TASK_AGENTS, rpcHandler::handleTaskAgents);
 
-        // 4. 注册生命周期节点
-        ctx.registerTaskLifecycleNode(new SubAgentLedgerTrackNode(ledger));
-        ctx.registerTaskLifecycleNode(new SubAgentLedgerUntrackNode(ledger));
-        ctx.registerTaskLifecycleNode(new SubAgentLedgerPersistNode(ledger));
+        // 3. 注册生命周期节点
         // 任务收口前等待全部子 agent（超时级联停）
         ctx.registerTaskLifecycleNode(new SubAgentSpawnedAwaitNode(subAgentManager));
 
-        // 5. 注册 Skill 贡献者
+        // 4. 注册 Skill 贡献者
         WorkerConfig props = ctx.services().config();
         SubAgentSkillContributor skillContributor = new SubAgentSkillContributor(props);
         ctx.registerSkillContributor(skillContributor);

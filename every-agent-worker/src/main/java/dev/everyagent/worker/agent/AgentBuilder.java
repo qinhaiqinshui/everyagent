@@ -1,6 +1,9 @@
 package dev.everyagent.worker.agent;
 
+import dev.everyagent.contract.json.Json;
 import dev.everyagent.plugin.api.execution.ExecContext;
+import dev.everyagent.plugin.api.model.EmitEvent;
+import dev.everyagent.plugin.api.proto.SnowflakeId;
 import dev.everyagent.plugin.api.spi.AdvisorProvider;
 import dev.everyagent.plugin.api.spi.ToolProvider;
 import dev.everyagent.worker.config.WorkerProperties;
@@ -31,6 +34,9 @@ import org.springframework.stereotype.Component;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
+
+import tools.jackson.databind.node.ObjectNode;
 
 /**
  * Agent 层 Builder 模式装配入口。
@@ -165,6 +171,8 @@ public class AgentBuilder {
         private final List<Message> conversation = new ArrayList<>();
         private String title = "";
 
+        private Map<String, Object> agentMetadata = Map.of();
+
         Build(String agentId, ChatModel chatModel, OpenAiChatOptions options,
                 ExecContext execution, String configId,
                 List<ToolCallback> tools) {
@@ -211,6 +219,11 @@ public class AgentBuilder {
             return this;
         }
 
+        public Build agentMetadata(Map<String, Object> m) {
+            this.agentMetadata = m != null ? m : Map.of();
+            return this;
+        }
+
         public Build conversation(List<Message> c) {
             this.conversation.clear();
             this.conversation.addAll(c);
@@ -234,7 +247,7 @@ public class AgentBuilder {
             // 1. 创建 AgentEntity（chatClient 暂为 null，build 后设置）；
             //    上游 emitter 取 execution.emitter()（任务级事件口）
             AgentEntity entity = new AgentEntity(agentId, title, chatModel, options,
-                    List.copyOf(tools), execution.emitter(), execution);
+                    List.copyOf(tools), execution.emitter(), execution, agentMetadata);
             entity.conversation.addAll(conversation);
 
             // 2. 装配 TCM：per-run InterceptingToolCallingManager（持 exec，替代 ThreadLocal）
@@ -271,6 +284,22 @@ public class AgentBuilder {
 
             // 7. 注入 AgentRunner(供 AgentEntity.run() 委托调用)
             entity.runner(AgentBuilder.this.runner);
+
+            // 8. 自动注册 agent 到执行主体的 agents 注册表 + 发射 agent.started 事件
+            execution.agents().put(agentId, entity);
+            ObjectNode startedData = Json.obj();
+            startedData.put("agentId", agentId);
+            if (title != null && !title.isEmpty()) {
+                startedData.put("title", title);
+            }
+            if (!agentMetadata.isEmpty()) {
+                startedData.set("metadata", Json.toJson(agentMetadata));
+            }
+            execution.emitter().emit(EmitEvent.of(
+                    SnowflakeId.next(),
+                    "agent.started", agentId,
+                    null, null, null, null, startedData,
+                    EmitEvent.Mode.REPLACE));
 
             return entity;
         }

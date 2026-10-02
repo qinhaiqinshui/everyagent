@@ -16,6 +16,7 @@ import tools.jackson.databind.node.ObjectNode;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -44,6 +45,9 @@ public final class AgentEntity implements Agent {
 
     /** 本 agent 所属的执行上下文（task 或未来 workflow；S2 起构造注入，S4 起为 advisor 取数主干）。 */
     public final ExecContext execution;
+
+    /** agent 元数据（创建时注入，如 creator=subagent / creator=ai-review；随 agent.started 事件持久化到台账）。 */
+    public final Map<String, Object> agentMetadata;
 
     private final AtomicReference<Usage> usage = new AtomicReference<>(Usage.zero());
     /** 最近一轮实测 usage(WorkerToolEventAdvisor 每轮 usage 事件时写;任务级 usageSummary 的供体)。 */
@@ -74,13 +78,15 @@ public final class AgentEntity implements Agent {
 
     public AgentEntity(String agentId, String title, ChatModel chatModel,
             OpenAiChatOptions options, List<ToolCallback> tools,
-            EventEmitter upstreamEmitter, ExecContext execution) {
+            EventEmitter upstreamEmitter, ExecContext execution,
+            Map<String, Object> agentMetadata) {
         this.agentId = agentId;
         this.title = title;
         this.chatModel = chatModel;
         this.options = options;
         this.tools = tools;
         this.execution = execution;
+        this.agentMetadata = agentMetadata != null ? Map.copyOf(agentMetadata) : Map.of();
         // 包装：添加本层信息（agentId），委托上游 emitter
         this.emitter = e -> {
             EmitEvent filled = (e.agentId() == null || e.agentId().isEmpty())
@@ -108,6 +114,11 @@ public final class AgentEntity implements Agent {
     @Override
     public String title() {
         return title;
+    }
+
+    @Override
+    public Map<String, Object> agentMetadata() {
+        return agentMetadata;
     }
 
     @Override

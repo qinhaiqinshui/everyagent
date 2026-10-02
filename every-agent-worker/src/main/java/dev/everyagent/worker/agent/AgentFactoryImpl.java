@@ -12,6 +12,7 @@ import org.springframework.ai.tool.ToolCallback;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
+import java.util.Map;
 import java.util.function.Consumer;
 import java.util.function.UnaryOperator;
 
@@ -92,6 +93,7 @@ public class AgentFactoryImpl {
         private dev.everyagent.plugin.api.agent.AgentBuilder.ModifyMode toolsMode;
         private String systemPrompt;
         private String userInput;
+        private Map<String, Object> agentMetadata = Map.of();
 
         AgentBuilderAdapter(String agentId, String configId, ExecContext exec) {
             this.agentId = agentId;
@@ -102,6 +104,12 @@ public class AgentFactoryImpl {
         @Override
         public dev.everyagent.plugin.api.agent.AgentBuilder title(String title) {
             this.title = title;
+            return this;
+        }
+
+        @Override
+        public dev.everyagent.plugin.api.agent.AgentBuilder agentMetadata(Map<String, Object> metadata) {
+            this.agentMetadata = metadata != null ? metadata : Map.of();
             return this;
         }
 
@@ -164,6 +172,7 @@ public class AgentFactoryImpl {
             if (userInput != null) {
                 build.userInput(userInput);
             }
+            build.agentMetadata(this.agentMetadata);
 
             // 6. 装配完成，返回 AgentEntity（已 implements Agent）
             return build.build();

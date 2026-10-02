@@ -62,9 +62,6 @@ public class SubAgentManager {
     /** 子 agent 运行线程池(虚拟线程 per-task)。 */
     private final java.util.concurrent.ExecutorService vt = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();
 
-    /** 台账引用(setter 注入,因为 SubAgentLedger 在本类之后创建)。 */
-    private SubAgentLedger ledger;
-
     /** per-subject 状态:子 agent futures + 停止标志(也是 run/stopAll 的互斥监视器)。 */
     private static final class TaskSubState {
         final Map<String, Future<?>> subFutures = new ConcurrentHashMap<>();
@@ -95,11 +92,6 @@ public class SubAgentManager {
         // 清理上一轮已完成的子 agent futures(未完成的保留:极端情况下
         // 上一轮的子 agent 可能尚未收口,不应在此丢弃)
         st.subFutures.entrySet().removeIf(e -> e.getValue().isDone());
-    }
-
-    /** 注入 ledger 引用(SubAgentLedger 在本类之后创建,故用 setter)。 */
-    public void setLedger(SubAgentLedger ledger) {
-        this.ledger = ledger;
     }
 
     /**
@@ -148,20 +140,8 @@ public class SubAgentManager {
                 sub = (Agent) ctx.agents().get(id);
                 sub.resetForRerun();
                 sub.conversation().add(new UserMessage(input)); // 续跑:原会话历史 + 新指令
-            } else {
-                sub = buildSubAgent(ctx, id, title == null || title.isEmpty() ? "子任务" : title, input);
-            }
-
-            // FutureTask 先入册再执行:waitFor/stop/run 守卫看到的永远是当前运行,
-            // 不存在 submit 与 put 之间被查询/完成的窗口。注册必须先于 running 事件,
-            // 这样前端一旦看到「运行中」,stop 就一定能在 subFutures 里找到并取消它。
-            java.util.concurrent.FutureTask<Void> ft = new java.util.concurrent.FutureTask<>(() -> {
-                runSub(ctx, id, sub);
-                return null;
-            });
-            ctx.agents().put(id, sub);
-            st.subFutures.put(id, ft);
-            {
+                // 复用路径不经过 build(),不会自动注册和发射 agent.started;
+                // 需要重新发射 agent.started 让 worker 台账更新状态为 running。
                 ObjectNode startedData = Json.obj();
                 startedData.put("agentId", id);
                 if (sub.title() != null) {
@@ -170,9 +150,19 @@ public class SubAgentManager {
                 startedData.put("input", input);
                 ctx.emitter().emit(EmitEvent.of(SnowflakeId.next(), "agent.started", id,
                         null, null, null, null, startedData, EmitEvent.Mode.REPLACE));
-                ctx.emitter().emit(EmitEvent.of(SnowflakeId.next(), "agent.status", id,
-                        null, null, null, "running", null, EmitEvent.Mode.REPLACE));
+            } else {
+                sub = buildSubAgent(ctx, id, title == null || title.isEmpty() ? "子任务" : title, input);
             }
+
+            // FutureTask 先入册再执行:waitFor/stop/run 守卫看到的永远是当前运行,
+            // 不存在 submit 与 put 之间被查询/完成的窗口。
+            // 注:agents().put 和 agent.started 事件由 build() 自动完成;
+            // 此处只管理 SubAgentManager 自己的 future。
+            java.util.concurrent.FutureTask<Void> ft = new java.util.concurrent.FutureTask<>(() -> {
+                runSub(ctx, id, sub);
+                return null;
+            });
+            st.subFutures.put(id, ft);
             vt.execute(ft);
             log.debug("[sub] 启动子 agent id={} subjectId={} reuse={} thread={}",
                     id, ctx.subjectId(), reuse, Thread.currentThread().getName());
@@ -196,6 +186,7 @@ public class SubAgentManager {
                 .tools(toRemove, AgentBuilder.ModifyMode.REMOVE)
                 .systemPrompt(SUB_SYSTEM_PROMPT)
                 .userInput(input)
+                .agentMetadata(Map.of("creator", "subagent"))
                 .build();
     }
 
@@ -284,30 +275,16 @@ public class SubAgentManager {
     }
 
     /**
-     * 合并台账 + 运行中实体的 agents 摘要数组。
-     * 台账(ledger)包含从磁盘 agents.json 恢复的历史已完成子 agent +
-     * 运行中事件投影;ctx.agents() 包含当前轮次运行中的实时实体。
-     * 同一 agentId 以 ctx.agents() 的实时状态为准(更准确)。
+     * 遍历 ctx.agents() 返回 subagent 创建的 agent 摘要数组。
+     * 按 creator=subagent 过滤,只展示本插件创建的子 agent。
      */
     private ArrayNode agentsJsonMerged(ExecContext ctx) {
         java.util.LinkedHashMap<String, ObjectNode> merged = new java.util.LinkedHashMap<>();
-        // 1. 台账基底(含历史已完成子 agent,冷启动从磁盘恢复)
-        if (ledger != null) {
-            java.util.List<ObjectNode> live = ledger.getLiveAgents(ctx.subjectId());
-            if (live != null) {
-                for (ObjectNode a : live) {
-                    String id = a.path("agentId").asString("");
-                    if (!id.isEmpty()) {
-                        merged.put(id, a);
-                    }
-                }
-            }
-        }
-        // 2. 用 ctx.agents() 运行中实体的实时状态覆盖(更准确)
         for (AgentContext s : ctx.agents().values()) {
+            // 过滤:只展示 subagent 创建的 agent
+            if (!"subagent".equals(s.agentMetadata().get("creator"))) continue;
             merged.put(s.agentId(), summaryJson(ctx, s));
         }
-        // 按 createdAt 稳定排序。
         java.util.List<ObjectNode> ordered = new java.util.ArrayList<>(merged.values());
         ordered.sort(java.util.Comparator.comparingLong(a -> a.path("createdAt").asLong(0)));
         ArrayNode agents = Json.arr();

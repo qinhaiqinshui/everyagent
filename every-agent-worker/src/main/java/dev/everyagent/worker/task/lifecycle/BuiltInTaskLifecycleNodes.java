@@ -1,6 +1,7 @@
 package dev.everyagent.worker.task.lifecycle;
 
 import dev.everyagent.worker.hub.HubPool;
+import dev.everyagent.worker.agent.AgentLedger;
 import dev.everyagent.worker.modules.WorkspaceActivityTracker;
 import dev.everyagent.worker.plugin.registry.FileReferenceHandlerRegistry;
 import dev.everyagent.worker.plugin.registry.TaskLifecycleRegistry;
@@ -40,6 +41,7 @@ public class BuiltInTaskLifecycleNodes {
     private final WorkspaceActivityTracker activityTracker;
     private final SlashTaskCallbacks slashCallbacks;
     private final FileReferenceHandlerRegistry fileReferenceHandlerRegistry;
+    private final AgentLedger agentLedger;
 
     public BuiltInTaskLifecycleNodes(
             TaskLifecycleRegistry registry,
@@ -50,7 +52,8 @@ public class BuiltInTaskLifecycleNodes {
             InteractionServiceImpl asks,
             WorkspaceActivityTracker activityTracker,
             SlashTaskCallbacks slashCallbacks,
-            FileReferenceHandlerRegistry fileReferenceHandlerRegistry) {
+            FileReferenceHandlerRegistry fileReferenceHandlerRegistry,
+            AgentLedger agentLedger) {
         this.registry = registry;
         this.store = store;
         this.pool = pool;
@@ -60,6 +63,7 @@ public class BuiltInTaskLifecycleNodes {
         this.activityTracker = activityTracker;
         this.slashCallbacks = slashCallbacks;
         this.fileReferenceHandlerRegistry = fileReferenceHandlerRegistry;
+        this.agentLedger = agentLedger;
     }
 
     @PostConstruct
@@ -68,6 +72,8 @@ public class BuiltInTaskLifecycleNodes {
         registry.register(new RerunRestoreNode(), "worker");
         registry.register(new SlashNotifyNode(slashCallbacks), "worker");
         registry.register(new PersistenceTrackNode(store, streamSources), "worker");
+        // agent 台账生命周期节点（收编自 subagent 插件）
+        registry.register(new AgentLedgerTrackNode(agentLedger), "worker");  // order=150
         registry.register(new TaskWiresNode(pool), "worker");
         registry.register(new ModelSwitchTraceNode(), "worker");
         registry.register(new MainAgentNode(), "worker");
@@ -76,6 +82,7 @@ public class BuiltInTaskLifecycleNodes {
         // 成对节点（下行在段边界外、上行在临界段内）
         registry.register(new StatusNode(pool), "worker");       // order=840
         // 上行节点（段外，按 order 从高到低注册，仅影响同 order 的稳定排序兜底）
+        registry.register(new AgentLedgerPersistNode(agentLedger), "worker");  // order=860
         registry.register(new CascadeStopNode(asks), "worker");
         // 临界段内纯上行节点（UpstreamNode，order ∈ [420,850]）
         registry.register(new ConcurrencyReleaseNode(), "worker");
@@ -86,6 +93,7 @@ public class BuiltInTaskLifecycleNodes {
         registry.register(new GateEvictNode(gate), "worker");
         registry.register(new RegistryRemoveNode(), "worker");
         // 段外尾部
+        registry.register(new AgentLedgerUntrackNode(agentLedger), "worker");  // order=340
         registry.register(new WorkspaceActivityNode(activityTracker), "worker");
     }
 }

@@ -10,6 +10,8 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.node.ArrayNode;
 import tools.jackson.databind.node.ObjectNode;
 
+import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -17,12 +19,11 @@ import java.util.List;
 /**
  * task.agents RPC 处理器（从 TaskManager.rpcTaskAgents 迁入插件域;§8.2 壳/核分层）。
  *
- * <p>唯一取数口：live 任务读 SubAgentLedger 内存台账，
- * 冷任务读磁盘 agents.json（回退 meta.agents）。
+ * <p>唯一取数口：读磁盘 agents.json（worker AgentLedger 落盘），回退 meta.agents。
  *
  * <p>壳/核分层：冷路径 readMeta(dir) 取 mainAgentId / dirOf(taskId) 继续用
  * TaskStoreService（meta.json 是任务摘要,mainAgentId 是任务概念——壳留 task 面）；
- * 核心列表逻辑（读 agents.json）复用中性台账 reader（{@link SubAgentLedger#readAgents}）。
+ * 核心列表逻辑（读 agents.json）直接内联 JSON 解析。
  */
 public class SubAgentRpcHandler {
 
@@ -31,11 +32,9 @@ public class SubAgentRpcHandler {
     /** RPC 方法名（worker RpcMethods 已清退,常量跟注册方走,§8.5④）。 */
     public static final String TASK_AGENTS = "task.agents";
 
-    private final SubAgentLedger ledger;
     private final TaskStoreService store;
 
-    public SubAgentRpcHandler(SubAgentLedger ledger, TaskStoreService store) {
-        this.ledger = ledger;
+    public SubAgentRpcHandler(TaskStoreService store) {
         this.store = store;
     }
 
@@ -55,38 +54,23 @@ public class SubAgentRpcHandler {
         List<ObjectNode> agents = new ArrayList<>();
         String mainAgentId = "";
 
-        // 优先读 live 内存台账
-        List<ObjectNode> live = ledger.getLiveAgents(taskId);
-        if (live != null) {
-            // live 任务：从台账读
-            for (ObjectNode a : live) {
+        // 读磁盘 agents.json（worker AgentLedger 落盘）
+        Path dir = store.dirOf(taskId);
+        ObjectNode meta = store.readMeta(dir);
+        mainAgentId = meta == null ? "" : meta.path("mainAgentId").asString("");
+
+        List<ObjectNode> disk = readAgentsJson(dir);
+        if (disk != null) {
+            for (ObjectNode a : disk) {
                 agents.add(a.deepCopy());
             }
-            // mainAgentId 从 store.readMeta 获取
-            Path dir = store.dirOf(taskId);
-            ObjectNode meta = store.readMeta(dir);
-            if (meta != null) {
-                mainAgentId = meta.path("mainAgentId").asString("");
-            }
-        } else {
-            // 冷任务：从磁盘读
-            Path dir = store.dirOf(taskId);
-            ObjectNode meta = store.readMeta(dir);
-            mainAgentId = meta == null ? "" : meta.path("mainAgentId").asString("");
-
-            List<ObjectNode> disk = ledger.readAgents(dir);
-            if (disk != null) {
-                for (ObjectNode a : disk) {
-                    agents.add(a.deepCopy());
-                }
-            } else if (meta != null) {
-                // 旧任务兼容：从 meta.agents 回退
-                JsonNode legacyAgents = meta.path("agents");
-                if (legacyAgents.isArray()) {
-                    for (JsonNode a : legacyAgents) {
-                        if (a.isObject()) {
-                            agents.add(((ObjectNode) a).deepCopy());
-                        }
+        } else if (meta != null) {
+            // 旧任务兼容：从 meta.agents 回退
+            JsonNode legacyAgents = meta.path("agents");
+            if (legacyAgents.isArray()) {
+                for (JsonNode a : legacyAgents) {
+                    if (a.isObject()) {
+                        agents.add(((ObjectNode) a).deepCopy());
                     }
                 }
             }
@@ -101,5 +85,33 @@ public class SubAgentRpcHandler {
         r.set("agents", arr);
         r.put("mainAgentId", mainAgentId);
         ctx.ok(r);
+    }
+
+    /**
+     * 读任务数据目录下 agents.json（形状 {@code {"agents":[...]}}）。
+     * 文件不存在/损坏/形状不符返回 null（null = 调用方回退旧格式 meta.agents）。
+     */
+    private List<ObjectNode> readAgentsJson(Path dir) {
+        Path f = dir.resolve("agents.json");
+        if (!Files.isRegularFile(f)) {
+            return null;
+        }
+        try {
+            JsonNode agents = Json.parse(Files.readString(f)).path("agents");
+            if (!agents.isArray()) {
+                log.debug("agents.json 形状异常(无 agents 数组): {}", f);
+                return null;
+            }
+            List<ObjectNode> out = new ArrayList<>();
+            for (JsonNode a : agents) {
+                if (a.isObject()) {
+                    out.add((ObjectNode) a);
+                }
+            }
+            return out;
+        } catch (IOException | RuntimeException e) {
+            log.debug("agents.json 读取失败 {}", f, e);
+            return null;
+        }
     }
 }
