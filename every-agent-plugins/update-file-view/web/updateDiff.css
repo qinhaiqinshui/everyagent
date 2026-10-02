@@ -3,6 +3,9 @@
  *
  * 徽章渲染在核心 inline-preview 分段之间（文件名后、完整路径前），
  * 沿用 --font-mono，绿加红删着色提示变更方向；明暗主题自动适配。
+ *
+ * diff 表刻意压低「整行底色」的强度，把视觉重心留给改动词的行内高亮
+ * （--hl-* 比 --line-* 更饱和），使 v2.0 → v3.0 这类小改动一眼可辨。
  */
 
 .update-file-view__stat {
@@ -22,58 +25,64 @@
   color: var(--accent-red, #f85149);
 }
 
-/* ── 内嵌 diff 紧凑表 ── */
+/* 无实际变更：中性弱化，不与增删配色抢注意力。 */
+.update-file-view__stat--none {
+  color: var(--text-muted);
+}
+
+/* ── 内嵌 diff ── */
 
 .update-diff {
   display: flex;
   flex-direction: column;
   gap: 4px;
   margin: 2px 0;
+  min-width: 0;
 }
 
-.update-diff__toggle {
+/* 调用失败：diff 只是 AI 尝试写入的内容，标注「未应用」避免误读为已落盘。 */
+.update-diff__unapplied {
   align-self: flex-start;
-  padding: 1px 8px;
-  border: 1px solid var(--border-light);
-  border-radius: 4px;
-  background: transparent;
-  color: var(--text-muted);
+  padding: 0 4px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--accent-red, #f85149) 14%, transparent);
+  color: var(--accent-red, #f85149);
   font-size: var(--text-xs);
-  cursor: pointer;
-  user-select: none;
-}
-
-.update-diff__toggle:hover {
-  color: var(--text-primary);
-  border-color: var(--border-primary, var(--border-light));
 }
 
 .update-diff__table {
   border: 1px solid color-mix(in srgb, var(--border-light) 80%, transparent);
   border-radius: 6px;
-  overflow: hidden;
+  background: color-mix(in srgb, var(--bg-primary) 60%, transparent);
   font-family: var(--font-mono);
   font-size: var(--text-xs);
   line-height: 1.5;
   color: var(--text-primary);
-  overflow-x: auto;
+  /* 展开全量时长 diff 不撑爆消息流：纵向滚动，横向按需滚动。 */
+  max-height: 340px;
+  overflow: auto;
 }
 
 .update-diff__line {
   display: grid;
-  grid-template-columns: 40px 40px 14px minmax(0, 1fr);
+  /* 单列行号：变更标记已区分旧行 / 新行，双列行号在窄气泡里白占近 80px。 */
+  grid-template-columns: 30px 13px minmax(0, 1fr);
   align-items: stretch;
   min-width: 0;
   white-space: pre;
+}
+
+.update-diff__line:hover {
+  background: color-mix(in srgb, var(--bg-primary) 70%, transparent);
 }
 
 .update-diff__ln {
   display: flex;
   justify-content: flex-end;
   align-items: center;
-  padding: 0 6px;
+  padding: 0 4px;
   color: var(--text-muted);
-  background: color-mix(in srgb, var(--bg-primary) 92%, transparent);
+  opacity: 0.75;
   user-select: none;
   font-variant-numeric: tabular-nums;
 }
@@ -87,28 +96,51 @@
 }
 
 .update-diff__content {
-  padding: 0 8px;
+  padding: 0 8px 0 2px;
   white-space: pre-wrap;
   word-break: break-word;
+  min-width: 0;
 }
 
 .update-diff__line--context .update-diff__content {
   color: var(--text-secondary);
 }
 
-.update-diff__line--added .update-diff__content,
+/* 整行底色：只作方向提示，压到很淡，避免盖过行内高亮。 */
+.update-diff__line--added {
+  background: color-mix(in srgb, var(--accent-green, #2ea043) 8%, transparent);
+}
+
+.update-diff__line--removed {
+  background: color-mix(in srgb, var(--accent-red, #f85149) 8%, transparent);
+}
+
 .update-diff__line--added .update-diff__marker {
-  background: color-mix(in srgb, var(--accent-green, #2ea043) 14%, transparent);
-  color: var(--text-primary);
+  color: var(--accent-green, #2ea043);
 }
 
-.update-diff__line--removed .update-diff__content,
 .update-diff__line--removed .update-diff__marker {
-  background: color-mix(in srgb, var(--accent-red, #f85149) 14%, transparent);
-  color: var(--text-primary);
+  color: var(--accent-red, #f85149);
 }
 
-.update-diff__stat {
+/* 行内高亮：真正改动的词，比整行底色更饱和。 */
+.update-diff__hl {
+  border-radius: 3px;
+}
+
+.update-diff__hl--added {
+  background: color-mix(in srgb, var(--accent-green, #2ea043) 26%, transparent);
+}
+
+.update-diff__hl--removed {
+  background: color-mix(in srgb, var(--accent-red, #f85149) 26%, transparent);
+}
+
+.update-diff__empty {
+  padding: 4px 8px;
+  border: 1px solid color-mix(in srgb, var(--border-light) 80%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--bg-primary) 60%, transparent);
   color: var(--text-muted);
   font-size: var(--text-xs);
 }
