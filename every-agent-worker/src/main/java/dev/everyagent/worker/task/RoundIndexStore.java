@@ -1,8 +1,11 @@
 package dev.everyagent.worker.task;
 
+import dev.everyagent.plugin.api.event.EventLogReader;
 import dev.everyagent.plugin.api.event.Events;
 import dev.everyagent.plugin.api.event.EventRecord;
 import dev.everyagent.plugin.api.proto.ShortIds;
+import dev.everyagent.plugin.api.task.RoundClosedInfo;
+import dev.everyagent.plugin.api.task.RoundClosedListener;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -40,11 +43,17 @@ import java.util.TreeMap;
 public class RoundIndexStore {
 
     private final TaskStore taskStore;
+    private final java.util.List<RoundClosedListener> roundClosedListeners = new java.util.concurrent.CopyOnWriteArrayList<>();
 
     private static final Logger LOG = LoggerFactory.getLogger(RoundIndexStore.class);
 
     public RoundIndexStore(TaskStore taskStore) {
         this.taskStore = taskStore;
+    }
+
+    /** 注册轮闭合监听器（由 WorkerServicesImpl 转发）。 */
+    public void addRoundClosedListener(RoundClosedListener listener) {
+        roundClosedListeners.add(listener);
     }
 
     /** 增量闭合的单次扫描窗口上限(记录数;内存日志护栏 50 万,一轮远小于此,超限由 task.rounds 惰性重建兜底)。 */
@@ -193,7 +202,7 @@ public class RoundIndexStore {
             String roundId = ShortIds.next("round");
             long startedAt = System.currentTimeMillis(); // 开始时间随开轮落盘,耗时从磁盘计算
             taskStore.appendRound(taskId, new RoundIndex.Round(roundId, index, startSeq, null, user, "",
-                    List.of(), 0L, startedAt, null, userMessage));
+                    List.of(), 0L, startedAt, userMessage));
             return true;
         } catch (IOException | RuntimeException e) {
             LOG.warn("开轮落盘失败 task={}(不影响任务运行)", taskId, e);
@@ -214,13 +223,10 @@ public class RoundIndexStore {
      * @param log   任务内存事件日志(当前 run 的全部事件;冷启动后 EventLog 只含本次运行)
      * @param taskId 任务 id(定位任务目录)
      * @param mainAgentId 主 agent id
-     * @param fileChangesLight 本轮文件变更轻量摘要数组(随闭合行内联进 rounds.jsonl;无变更 null)
-     * @param fileChangesFull  本轮文件变更全文({changes:[...]};非 null 时对每个新闭合轮写
-     *                         {@code file-changes/<roundId>.json},失败仅记日志不阻断)
      * @return 本次实际「新闭合」的轮(幂等跳过与未闭合沿用不计入;失败为空列表)
      */
-    public List<RoundIndex.Round> persistClosedRounds(Path dir, EventLog log,
-            String taskId, String mainAgentId, JsonNode fileChangesLight, JsonNode fileChangesFull) {
+    public List<RoundIndex.Round> persistClosedRounds(Path dir, EventLogReader log,
+            String taskId, String mainAgentId) {
         try {
             long anchor = taskStore.lastRoundStartSeq(dir);
             List<EventRecord> window = mergedWindow(log, dir, mainAgentId, anchor);
@@ -232,14 +238,8 @@ public class RoundIndexStore {
                 return List.of();
             }
             List<RoundIndex.Round> newlyClosed =
-                    applyRounds(taskId, taskStore.readRounds(dir), found, fileChangesLight);
-            if (fileChangesFull != null) {
-                for (RoundIndex.Round r : newlyClosed) {
-                    if (r.roundId() != null && !r.roundId().isBlank()) {
-                        taskStore.writeRoundFileChanges(taskId, r.roundId(), fileChangesFull);
-                    }
-                }
-            }
+                    applyRounds(taskId, taskStore.readRounds(dir), found);
+            notifyRoundClosedListeners(taskId, dir, newlyClosed);
             return newlyClosed;
         } catch (IOException | RuntimeException e) {
             LOG.warn("轮次索引增量补写失败 task={}(不影响任务运行)", taskId, e);
@@ -266,8 +266,7 @@ public class RoundIndexStore {
      *         幂等跳过与双双未闭合不计入)
      */
     private List<RoundIndex.Round> applyRounds(String taskId,
-            List<RoundIndex.Round> existing, List<RoundIndex.Round> found,
-            JsonNode fileChangesLight) throws IOException {
+            List<RoundIndex.Round> existing, List<RoundIndex.Round> found) throws IOException {
         Map<Long, RoundIndex.Round> byStart = new LinkedHashMap<>();
         for (RoundIndex.Round r : existing) {
             byStart.putIfAbsent(r.startSeq(), r); // 撕行已由 readRounds 过滤,不参与对账
@@ -284,7 +283,7 @@ public class RoundIndexStore {
             if (r.closed()) {
                 // 未闭合尾行 → 闭合行:原地改写(index 沿用磁盘行;roundId 沿用 prior 的稳定主键,
                 // 不新生成;耗时随行内联——prior 已有耗时(>0)不覆盖,未知(≤0)且 prior.startedAt
-                // 有效时取「当前时间 − 磁盘 startedAt」;fileChanges 写入本轮轻量摘要)
+                // 有效时取「当前时间 − 磁盘 startedAt」)
                 long dur = prior.durationMs() > 0
                         ? prior.durationMs()
                         : (prior.startedAt() > 0
@@ -292,7 +291,7 @@ public class RoundIndexStore {
                                 : 0L);
                 RoundIndex.Round closed = new RoundIndex.Round(prior.roundId(), prior.index(),
                         r.startSeq(), r.endSeq(), r.user(), r.finalReply(),
-                        r.agentRanges(), dur, prior.startedAt(), fileChangesLight,
+                        r.agentRanges(), dur, prior.startedAt(),
                         r.userMessage() != null ? r.userMessage() : prior.userMessage());
                 if (taskStore.rewriteRound(taskId, closed)) {
                     newlyClosed.add(closed); // 磁盘闭合成功才算「本轮新闭合」(带正确 roundId,供全文落盘)
@@ -310,7 +309,7 @@ public class RoundIndexStore {
      * (同 rpcTaskPoll 的 readSince(start-1) 惯例):未闭合尾行 startSeq 的开轮 user.message
      * 事件本身要进窗口,开着的轮才能被重扫并闭合。
      */
-    private List<EventRecord> mergedWindow(EventLog log, Path dir,
+    private List<EventRecord> mergedWindow(EventLogReader log, Path dir,
             String mainAgentId, long anchor) throws IOException {
         Map<Long, EventRecord> merged = new TreeMap<>();
         for (EventRecord r : taskStore.readSince(dir, mainAgentId, anchor - 1, PERSIST_WINDOW_MAX)) {
@@ -367,5 +366,22 @@ public class RoundIndexStore {
             return p.path("title").asString();
         }
         return "";
+    }
+
+    /** 通知已注册的轮闭合监听器（异常自吞，不阻断）。 */
+    private void notifyRoundClosedListeners(String taskId, Path dir, List<RoundIndex.Round> newlyClosed) {
+        if (roundClosedListeners.isEmpty() || newlyClosed.isEmpty()) {
+            return;
+        }
+        List<RoundClosedInfo> infos = newlyClosed.stream()
+                .map(r -> new RoundClosedInfo(r.roundId(), r.startSeq(), r.endSeq(), r.index()))
+                .toList();
+        for (RoundClosedListener listener : roundClosedListeners) {
+            try {
+                listener.onRoundsClosed(taskId, dir, infos);
+            } catch (Exception e) {
+                LOG.warn("轮闭合监听器回调异常 listener={}", listener.getClass().getSimpleName(), e);
+            }
+        }
     }
 }

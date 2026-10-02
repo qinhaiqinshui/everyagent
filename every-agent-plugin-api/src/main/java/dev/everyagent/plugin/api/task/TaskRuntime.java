@@ -22,13 +22,11 @@ import java.nio.file.Path;
  *
  * <p>任务域私有成员保留在本接口：taskId / status / taskDir（原 permission 包
  * {@code TaskInfo} 的三成员，该接口已随 S3 授权链收编退役删除）、mainAgentId / log、
- * fileChanges 系列槽位、时间戳与运行时操作。{@code fileChanges} 系列是任务域私有槽位，
- * 不进 {@code ExecContext}；{@code agents()} 已上移 {@code ExecContext}
+ * 时间戳与运行时操作。{@code agents()} 已上移 {@code ExecContext}
  * （语义 = 主体活动 agent 注册表），本接口不再声明。
  *
  * <p>读写混合接口：主体内各插件派生 agent（子 agent / 审议 agent 等）经
- * {@code agents()}（{@code ExecContext} 槽位）put / get / values / containsKey，
- * file-change 插件需要读写 fileChanges 系列槽位，task-edit-resend 插件需要清空这些槽位。
+ * {@code agents()}（{@code ExecContext} 槽位）put / get / values / containsKey。
  * 只暴露插件实际调用的方法，不做过度设计。
  */
 public interface TaskRuntime extends ExecContext {
@@ -87,26 +85,6 @@ public interface TaskRuntime extends ExecContext {
 
     /** 事件日志只读接口(供插件读取任务事件流)。 */
     EventLogReader log();
-
-    // ---- fileChanges 回合槽(file-change / task-edit-resend 插件读写) ----
-
-    /** 当前回合文件改动收集器(无则 null)。 */
-    FileChangesCollector fileChanges();
-
-    /** 设置当前回合文件改动收集器(null = 清空)。 */
-    void fileChanges(FileChangesCollector collector);
-
-    /** 本轮文件改动轻量摘要(无则 null)。 */
-    JsonNode fileChangesLight();
-
-    /** 设置本轮文件改动轻量摘要(null = 清空)。 */
-    void fileChangesLight(JsonNode light);
-
-    /** 本轮文件改动全文(无则 null)。 */
-    JsonNode fileChangesFull();
-
-    /** 设置本轮文件改动全文(null = 清空)。 */
-    void fileChangesFull(JsonNode full);
 
     // ---- 时间戳 ----
 

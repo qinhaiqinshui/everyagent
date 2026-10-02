@@ -921,43 +921,6 @@ public class TaskStore implements TaskStoreService {
     }
 
     /**
-     * 写本轮文件变更全文:<任务目录>/file-changes/<roundId>.json(内容即 fullContent,UTF-8)。
-     * 失败只记日志不抛(与 rounds 写盘同风格),绝不阻塞任务流。
-     */
-    public void writeRoundFileChanges(String taskId, String roundId, JsonNode fullContent) {
-        if (roundId == null || roundId.isBlank() || fullContent == null) {
-            return;
-        }
-        try {
-            Path dir = dirOf(taskId);
-            Path sub = dir.resolve("file-changes");
-            Files.createDirectories(sub);
-            Path f = sub.resolve(roundId + ".json");
-            Files.writeString(f, Json.write(fullContent), StandardCharsets.UTF_8);
-        } catch (IOException | RuntimeException e) {
-            log.warn("轮次文件变更全文写盘失败 task={} round={}(不影响任务运行)", taskId, roundId, e);
-        }
-    }
-
-    /**
-     * 读本轮文件变更全文(file-changes/<roundId>.json):文件不存在返回 null;解析失败返回 null 并 warn。
-     */
-    public JsonNode readRoundFileChanges(String taskId, String roundId) {
-        if (roundId == null || roundId.isBlank()) {
-            return null;
-        }
-        try {
-            Path f = dirOf(taskId).resolve("file-changes").resolve(roundId + ".json");
-            if (!Files.isRegularFile(f)) {
-                return null;
-            }
-            return Json.parse(Files.readString(f, StandardCharsets.UTF_8));
-        } catch (IOException | RuntimeException e) {
-            log.warn("轮次文件变更全文读取失败 task={} round={}", taskId, roundId, e);
-            return null;
-        }
-    }
-
     /** 一行 Round → jsonl 行(seq 全字符串;endSeq null → "";agentRanges 恒为数组)。 */
     private static String roundLine(RoundIndex.Round round) {
         ObjectNode line = Json.obj()
@@ -970,9 +933,6 @@ public class TaskStore implements TaskStoreService {
         line.put("startedAt", round.startedAt());
         if (round.roundId() != null && !round.roundId().isBlank()) {
             line.put("roundId", round.roundId()); // roundId 稳定主键:缺失(旧行)不写
-        }
-        if (round.fileChanges() != null) {
-            line.set("fileChanges", round.fileChanges()); // 本轮文件变更轻量摘要:无变更不写
         }
         if (round.userMessage() != null) {
             line.set("userMessage", round.userMessage()); // 完整 user.message payload(懒加载骨架起点;旧行缺失=null)
@@ -1008,10 +968,6 @@ public class TaskStore implements TaskStoreService {
             long durationMs = n.path("durationMs").asLong(0); // 旧行缺失 → 0(未记录耗时)
             long startedAt = n.path("startedAt").asLong(0); // 旧行缺失 → 0(未知,闭合时不据此计耗时)
             String roundId = n.path("roundId").asString(null); // 旧行缺失 → null
-            JsonNode fileChanges = n.path("fileChanges"); // 缺失/null → null;存在则按 JsonNode 原样读入
-            if (fileChanges.isMissingNode() || fileChanges.isNull()) {
-                fileChanges = null;
-            }
             JsonNode userMessage = n.path("userMessage"); // 缺失/null → null(旧行);存在则按 JsonNode 原样读入
             if (userMessage.isMissingNode() || userMessage.isNull()) {
                 userMessage = null;
@@ -1034,7 +990,7 @@ public class TaskStore implements TaskStoreService {
                 }
             }
             return new RoundIndex.Round(roundId, index, startSeq, endSeq, user, finalReply,
-                    agentRanges, durationMs, startedAt, fileChanges, userMessage);
+                    agentRanges, durationMs, startedAt, userMessage);
         } catch (RuntimeException e) {
             return null; // 撕行
         }

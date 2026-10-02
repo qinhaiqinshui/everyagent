@@ -26,8 +26,6 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.web.socket.server.standard.ServerEndpointExporter;
 import tools.jackson.databind.JsonNode;
-import tools.jackson.databind.node.ArrayNode;
-import tools.jackson.databind.node.ObjectNode;
 
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
@@ -373,10 +371,10 @@ class TaskRoundsRpcTest {
         awaitEvicted(taskId);
     }
 
-    // ---- 返工(文件变更迁移):roundId + fileChanges wire、task.fileChanges RPC ----
+    // ---- 返工:roundId wire ----
 
     @Test
-    void roundsResponseCarriesRoundIdAndFileChanges() throws java.io.IOException {
+    void roundsResponseCarriesRoundId() throws java.io.IOException {
         String taskId = create("你好,轮次测试");
         awaitEvicted(taskId); // finish 全部完成,磁盘为完整真相源
         Path dir = store.dirOf(taskId);
@@ -388,12 +386,11 @@ class TaskRoundsRpcTest {
         assertTrue(r0.path("roundId").isTextual() && !r0.path("roundId").asString().isBlank(),
                 "开轮生成的 roundId 应随 rounds 应答返回: " + r0);
 
-        // 预置带轻量摘要的一行(roundId + fileChanges)→ 应答原样携带两字段
+        // 预置带 roundId 的一行 → 应答原样携带
         String rid = "round_seeded_1";
         String line = "{\"index\":1,\"startSeq\":\"" + r0.path("startSeq").asString()
                 + "\",\"endSeq\":\"" + r0.path("endSeq").asString()
                 + "\",\"roundId\":\"" + rid + "\","
-                + "\"fileChanges\":[{\"filePath\":\"/a.md\",\"fileName\":\"a.md\",\"changeType\":\"updated\",\"saveCount\":1}],"
                 + "\"subs\":[]}\n";
         Files.writeString(dir.resolve("rounds.jsonl"), line, StandardCharsets.UTF_8);
 
@@ -401,55 +398,7 @@ class TaskRoundsRpcTest {
         assertFalse(second.isErr(), String.valueOf(second.err()));
         JsonNode seeded = second.result().path("rounds").get(0);
         assertEquals(rid, seeded.path("roundId").asString(), "roundId 随应答携带");
-        assertTrue(seeded.path("fileChanges").isArray() && seeded.path("fileChanges").size() == 1,
-                "fileChanges 轻量摘要数组随应答携带: " + seeded);
-        assertEquals("/a.md", seeded.path("fileChanges").get(0).path("filePath").asString());
-        assertEquals("updated", seeded.path("fileChanges").get(0).path("changeType").asString());
-        assertEquals(1, seeded.path("fileChanges").get(0).path("saveCount").asInt());
         assertEquals("done", second.result().path("status").asString());
-    }
-
-    @Test
-    void taskFileChangesReturnsFullContent() throws java.io.IOException {
-        String taskId = create("你好,轮次测试");
-        awaitEvicted(taskId);
-        String rid = "round_fc_1";
-        ObjectNode full = Json.obj();
-        ArrayNode changesArr = Json.arr();
-        changesArr.addObject()
-                .put("filePath", "/a.md").put("fileName", "a.md")
-                .put("changeType", "updated").put("beforeContent", "旧")
-                .put("afterContent", "新").put("saveCount", 1);
-        full.set("changes", changesArr);
-        store.writeRoundFileChanges(taskId, rid, full);
-
-        RpcResp r = call("task.fileChanges", "{\"taskId\":\"" + taskId + "\",\"roundId\":\"" + rid + "\"}");
-        assertFalse(r.isErr(), String.valueOf(r.err()));
-        JsonNode changes = r.result().path("changes");
-        assertTrue(changes.isArray() && changes.size() == 1, "返回全文 changes 数组: " + r.result());
-        assertEquals("/a.md", changes.get(0).path("filePath").asString());
-        assertEquals("新", changes.get(0).path("afterContent").asString());
-        assertEquals("updated", changes.get(0).path("changeType").asString());
-        assertEquals(1, changes.get(0).path("saveCount").asInt());
-    }
-
-    @Test
-    void taskFileChangesMissingFileReturnsEmptyChanges() throws java.io.IOException {
-        String taskId = create("你好,轮次测试");
-        awaitEvicted(taskId);
-        RpcResp r = call("task.fileChanges", "{\"taskId\":\"" + taskId + "\",\"roundId\":\"round_no_file\"}");
-        assertFalse(r.isErr(), "无全文文件应返回空 changes 而非报错: " + String.valueOf(r.err()));
-        assertTrue(r.result().path("changes").isArray() && r.result().path("changes").isEmpty(),
-                "无文件 → {changes:[]}: " + r.result());
-    }
-
-    @Test
-    void taskFileChangesUnknownTaskIsNotFound() {
-        RpcResp r = call("task.fileChanges", "{\"taskId\":\"t_nonexistent\",\"roundId\":\"round_x\"}");
-        assertTrue(r.isErr(), "不存在任务应 NOT_FOUND");
-        assertEquals("NOT_FOUND", r.err().path("code").asString());
-        assertTrue(r.err().path("message").asString().contains("t_nonexistent"),
-                "错误信息应含 taskId: " + r.err());
     }
 
     // ---- 帮助方法 ----

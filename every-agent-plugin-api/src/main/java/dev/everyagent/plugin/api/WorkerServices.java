@@ -70,4 +70,12 @@ public interface WorkerServices extends TaskServices {
      * @return EventEmitter 或 null（终态）
      */
     EventEmitter emitterOf(String subjectId);
+
+    /**
+     * 注册轮闭合监听器（插件在 activate 时调用）。
+     *
+     * <p>当 RoundIndexStore 持久化新闭合轮后，会回调所有已注册的监听器，
+     * 传递 taskId、dataDir 和闭合轮信息列表。插件可据此写入按轮分片的数据文件。
+     */
+    void addRoundClosedListener(dev.everyagent.plugin.api.task.RoundClosedListener listener);
 }

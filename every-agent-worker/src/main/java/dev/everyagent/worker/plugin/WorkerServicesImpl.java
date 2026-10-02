@@ -12,6 +12,7 @@ import dev.everyagent.plugin.api.proto.ShortIds;
 import dev.everyagent.plugin.api.proto.SnowflakeId;
 import dev.everyagent.plugin.api.task.StoredTaskInfo;
 import dev.everyagent.plugin.api.task.TaskRuntime;
+import dev.everyagent.plugin.api.task.RoundClosedListener;
 import dev.everyagent.plugin.api.task.TaskService;
 import dev.everyagent.plugin.api.task.TaskStoreService;
 import dev.everyagent.worker.config.WorkerProperties;
@@ -20,6 +21,7 @@ import dev.everyagent.worker.hub.EventSink;
 import dev.everyagent.worker.interaction.InteractionServiceImpl;
 import dev.everyagent.worker.os.OsSandbox;
 import dev.everyagent.worker.task.TaskManager;
+import dev.everyagent.worker.task.RoundIndexStore;
 import dev.everyagent.worker.task.TaskStore;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Component;
@@ -37,6 +39,7 @@ public class WorkerServicesImpl implements WorkerServices {
     private final AtomicReference<TokenEstimator> tokenEstimator;
     private final TaskManager taskManager;
     private final TaskStore taskStore;
+    private final RoundIndexStore roundIndexStore;
     private final InteractionServiceImpl interaction;
     private final WorkerProperties workerProperties;
     private final EventSink eventSink;
@@ -45,6 +48,7 @@ public class WorkerServicesImpl implements WorkerServices {
     public WorkerServicesImpl(OsSandbox sandbox, WorkspaceManager workspaces,
             TokenEstimator tokenEstimator, @Lazy TaskManager taskManager,
             TaskStore taskStore,
+            RoundIndexStore roundIndexStore,
             InteractionServiceImpl interaction,
             WorkerProperties workerProperties, EventSink eventSink) {
         this.sandbox = sandbox;
@@ -52,6 +56,7 @@ public class WorkerServicesImpl implements WorkerServices {
         this.tokenEstimator = new AtomicReference<>(tokenEstimator);
         this.taskManager = taskManager;
         this.taskStore = taskStore;
+        this.roundIndexStore = roundIndexStore;
         this.interaction = interaction;
         this.workerProperties = workerProperties;
         this.eventSink = eventSink;
@@ -136,6 +141,22 @@ public class WorkerServicesImpl implements WorkerServices {
     @Override
     public StreamEmitter stream() {
         return eventSink;
+    }
+
+    @Override
+    public java.nio.file.Path dataDirOf(String subjectId) {
+        return taskStore.dirOf(subjectId);
+    }
+
+    @Override
+    public dev.everyagent.plugin.api.model.EventEmitter emitterOf(String subjectId) {
+        dev.everyagent.worker.task.TaskEntry t = taskManager.runningTask(subjectId);
+        return t != null ? t.events() : null;
+    }
+
+    @Override
+    public void addRoundClosedListener(RoundClosedListener listener) {
+        roundIndexStore.addRoundClosedListener(listener);
     }
 
 }

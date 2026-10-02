@@ -21,7 +21,7 @@ import java.util.Map;
  *
  * <p>本接口只收编横切消费者实际需要的域中性值与端口（emitter / agentFactory /
  * interaction 三个预绑定端口与 {@code AgentContext.emitter()} 的 agentId 包装同构）；
- * 任务域私有成员（status 完整状态 / touch / fileChanges 系列槽位等）留在
+ * 任务域私有成员（status 完整状态 / touch / 时间戳与运行时操作等）留在
  * {@code TaskRuntime}，不进本接口。
  */
 public interface ExecContext {

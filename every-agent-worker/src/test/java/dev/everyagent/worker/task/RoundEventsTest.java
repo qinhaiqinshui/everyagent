@@ -115,7 +115,7 @@ class RoundEventsTest {
 
         // 闭合后再次开轮又为 true
         emitMessage(MAIN, "", "第一答", List.of());
-        rounds.persistClosedRounds(dir(), log, "t1", MAIN, null, null);
+        rounds.persistClosedRounds(dir(), log, "t1", MAIN);
         long s3 = events.emit(EmitEvent.of(SnowflakeId.next(),
                 Events.USER_MESSAGE, null, null, null, "第二问", null, null,
                 EmitEvent.Mode.REPLACE));
@@ -127,7 +127,7 @@ class RoundEventsTest {
     @Test
     void persistClosedRoundsReturnsNewlyClosedRounds() {
         long startSeq = openAndEmitClosedRound("第一问", "第一答");
-        List<RoundIndex.Round> closed = rounds.persistClosedRounds(dir(), log, "t1", MAIN, null, null);
+        List<RoundIndex.Round> closed = rounds.persistClosedRounds(dir(), log, "t1", MAIN);
         assertEquals(1, closed.size(), "本次确实新闭合了一轮");
         RoundIndex.Round r = closed.get(0);
         assertEquals(startSeq, r.startSeq());
@@ -136,7 +136,7 @@ class RoundEventsTest {
         assertNotNull(r.endSeq());
 
         // 幂等:再调用返回空(已闭合,不算新闭合)
-        assertTrue(rounds.persistClosedRounds(dir(), log, "t1", MAIN, null, null).isEmpty(), "幂等:已闭合轮不再计入新闭合");
+        assertTrue(rounds.persistClosedRounds(dir(), log, "t1", MAIN).isEmpty(), "幂等:已闭合轮不再计入新闭合");
 
         // 无最终回复的未闭合轮(中间输入/中断)不产生新闭合
         long s2 = events.emit(EmitEvent.of(SnowflakeId.next(),
@@ -146,7 +146,7 @@ class RoundEventsTest {
         events.emit(EmitEvent.transientOf(SnowflakeId.next(),
                 Events.DELTA, MAIN, null, null, "半截", null, null,
                 EmitEvent.Mode.APPEND));
-        assertTrue(rounds.persistClosedRounds(dir(), log, "t1", MAIN, null, null).isEmpty(), "无最终回复:无新闭合轮");
+        assertTrue(rounds.persistClosedRounds(dir(), log, "t1", MAIN).isEmpty(), "无最终回复:无新闭合轮");
     }
 
     // ---- 磁盘 jsonl 不含 round 事件(经 TaskStore 真落盘)----
@@ -173,7 +173,7 @@ class RoundEventsTest {
                     Events.DELTA, MAIN, null, null, "流", null, null,
                     EmitEvent.Mode.APPEND));
             emitMessage(MAIN, "", "第一答", List.of());
-            for (RoundIndex.Round r : rounds.persistClosedRounds(dir(), log, "t1", MAIN, null, null)) {
+            for (RoundIndex.Round r : rounds.persistClosedRounds(dir(), log, "t1", MAIN)) {
                 if (r.endSeq() != null) {
                     ObjectNode closedData = Json.obj();
                     closedData.put("startSeq", String.valueOf(r.startSeq()));

@@ -1,4 +1,4 @@
-package dev.everyagent.worker.task;
+package dev.everyagent.worker.http;
 
 import okhttp3.OkHttpClient;
 import okhttp3.Request;

@@ -2,6 +2,7 @@ package dev.everyagent.worker.task;
 
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.plugin.api.model.EmitEvent;
+import dev.everyagent.plugin.api.task.TaskRuntime;
 import dev.everyagent.worker.agent.AgentEntity;
 import dev.everyagent.plugin.api.proto.SnowflakeId;
 import org.springframework.ai.chat.client.ChatClientRequest;
@@ -70,19 +71,13 @@ public class RoundIndexAdvisor implements StreamAdvisor {
 
     /** 一轮用户任务流完成:增量补写已闭合轮(耗时由 RoundIndexStore 从磁盘 startedAt 计算并随行内联),并对本次新闭合的轮推 round.closed(异常自吞,不阻断 onComplete)。 */
     private void persistRounds() {
-        TaskEntry t = (TaskEntry) a.execution();
-        // 取出本轮文件变更槽并清空(FileChangeAdvisor 收口填充;无变更时两槽均为 null)
-        JsonNode light = t.fileChangesLight;
-        JsonNode full = t.fileChangesFull;
-        t.fileChangesLight = null;
-        t.fileChangesFull = null;
+        TaskRuntime t = (TaskRuntime) a.execution();
         // 本轮端到端耗时:由 persistClosedRounds/applyRounds 取当前时间减去开轮时随行落盘的
         // startedAt 计算,随闭合行同一次落盘内联,保证下方 round.closed 推送时耗时已在磁盘
         // (消除「前端收到通知即拉快照、却拉在耗时写入之前」的竞态,见 §7.15.1);耗时不再依赖
         // 内存计时槽,任务出错停止后继续(续跑改判闭合)同样以磁盘 startedAt 计耗时。
         List<RoundIndex.Round> closed =
-                rounds.persistClosedRounds(dataDir, t.log, t.taskId, t.mainAgentId,
-                        light, full);
+                rounds.persistClosedRounds(dataDir, t.log(), t.taskId(), t.mainAgentId());
         for (RoundIndex.Round r : closed) {
             if (r.endSeq() != null) {
                 // round.closed 与 rounds.jsonl 闭合行同源;瞬态不落盘,仅推 stream 频道。
@@ -92,7 +87,7 @@ public class RoundIndexAdvisor implements StreamAdvisor {
                 if (r.finalReply() != null) {
                     roundClosedData.put("finalReply", r.finalReply());
                 }
-                t.events.emit(EmitEvent.transientOf(SnowflakeId.next(), "round.closed", null,
+                t.events().emit(EmitEvent.transientOf(SnowflakeId.next(), "round.closed", null,
                         null, null, null, null, roundClosedData, EmitEvent.Mode.REPLACE));
             }
         }

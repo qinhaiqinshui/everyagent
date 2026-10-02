@@ -4,7 +4,6 @@ import dev.everyagent.plugin.api.agent.AgentContext;
 import dev.everyagent.plugin.api.agent.AgentFactory;
 import dev.everyagent.plugin.api.event.EventLogReader;
 import dev.everyagent.plugin.api.interaction.InteractionService;
-import dev.everyagent.plugin.api.task.FileChangesCollector;
 import dev.everyagent.plugin.api.task.TaskRuntime;
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.plugin.api.model.EventEmitter;
@@ -282,36 +281,6 @@ public final class TaskEntry implements TaskRuntime {
     }
 
     @Override
-    public FileChangesCollector fileChanges() {
-        return fileChanges;
-    }
-
-    @Override
-    public void fileChanges(FileChangesCollector collector) {
-        fileChanges = collector;
-    }
-
-    @Override
-    public JsonNode fileChangesLight() {
-        return fileChangesLight;
-    }
-
-    @Override
-    public void fileChangesLight(JsonNode light) {
-        fileChangesLight = light;
-    }
-
-    @Override
-    public JsonNode fileChangesFull() {
-        return fileChangesFull;
-    }
-
-    @Override
-    public void fileChangesFull(JsonNode full) {
-        fileChangesFull = full;
-    }
-
-    @Override
     public long startedAt() {
         Long v = startedAt;
         return v != null ? v : 0;
@@ -337,27 +306,8 @@ public final class TaskEntry implements TaskRuntime {
 
     public final Map<String, AgentEntity> agents = new ConcurrentHashMap<>();
     public volatile java.util.concurrent.Future<?> runFuture;
-    /**
-     * 当前回合文件改动收集器:FileChangeAdvisor 在主 agent 首次 adviseStream 时新建、
-     * 工具循环最后一轮收口后置空;主/子 agent 的工具调用均经 FileChangeAdvisor 记录到本槽
-     * (子 agent 在主 agent run 内部递归执行,其保存同样归入当前回合)。运行期状态,不落盘。
-     */
-    public volatile FileChangesCollector fileChanges;
 
-    /**
-     * 本轮文件改动轻量摘要(FileChangeAdvisor 收口时写,RoundIndexAdvisor 消费后清空):
-     * 仅 filePath/fileName/changeType/saveCount 的数组,随 rounds.jsonl 每轮行内联落盘。
-     */
-    public volatile JsonNode fileChangesLight;
-
-    /**
-     * 本轮文件改动全文(FileChangeAdvisor 收口时写,RoundIndexAdvisor 消费后清空):
-     * 形状为 { changes:[{filePath,fileName,changeType,beforeContent,afterContent,saveCount}] },
-     * 由 RoundIndexStore 写到 {@code file-changes/<roundId>.json}。
-     */
-    public volatile JsonNode fileChangesFull;
-
-    private final AtomicLong lastActivityMs = new AtomicLong(createdAt);
+    private final java.util.concurrent.atomic.AtomicLong lastActivityMs;
 
     public TaskEntry(String taskId, String title,
             ModelConfig snapshot, String workspaceRoot, String workspaceId, String mainAgentId,
@@ -368,6 +318,7 @@ public final class TaskEntry implements TaskRuntime {
         this.workspaceRoot = workspaceRoot;
         this.workspaceId = workspaceId;
         this.mainAgentId = mainAgentId;
+        this.lastActivityMs = new java.util.concurrent.atomic.AtomicLong(createdAt);
         this.log = new EventLog(maxEvents);
         this.events = new TaskEvents(log, mainAgentId);
     }

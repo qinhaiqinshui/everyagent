@@ -3,8 +3,8 @@ package dev.everyagent.plugin.filechange;
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.plugin.api.agent.AgentContext;
 import dev.everyagent.plugin.api.execution.ExecContext;
-import dev.everyagent.plugin.api.task.FileChangesCollector;
-import dev.everyagent.plugin.api.task.TaskRuntime;
+import dev.everyagent.plugin.api.task.RoundClosedInfo;
+import dev.everyagent.plugin.api.task.RoundClosedListener;
 import dev.everyagent.plugin.api.task.TaskService;
 import org.springframework.ai.chat.client.ChatClientRequest;
 import org.springframework.ai.chat.client.ChatClientResponse;
@@ -16,74 +16,43 @@ import org.springframework.core.Ordered;
 import reactor.core.publisher.Flux;
 import tools.jackson.databind.JsonNode;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+
 /**
- * 本轮文件改动收集 advisor(独立普通 advisor,<b>不继承</b> {@link ToolCallingAdvisor})。
+ * 本轮文件改动收集 advisor（独立普通 advisor，<b>不继承</b> {@link StreamAdvisor}）。
  *
- * <p>位置:order = {@link Ordered#HIGHEST_PRECEDENCE} + 301,位于工具调用 advisor
- * (ToolCallingAdvisor,HIGHEST+300)的<b>内层</b>、模型侧({@code ChatModelStreamAdvisor} 最内层)
- * 的<b>外层</b>。这样它通过 {@link #adviseStream} 的 {@code doOnNext} <b>直接看到模型流</b>——
- * 关键事实:OpenAiChatModel 流式内部已用 {@code bufferUntil}+{@code ChunkMerger} 把工具调用分片
- * <b>合并成一条完整消息</b>(含完整 toolCalls/思考/正文)输出,{@code ChatModelStreamAdvisor} 原样透传
- * 不过滤。因此本 advisor 无需继承 ToolCallingAdvisor,也无需聚合——工具轮就是流里一条
- * {@code hasToolCalls()==true} 的完整 AI 消息,直接检查即可。工具循环/事件发射由
- * 工具调用 advisor 承担,死循环检测由工厂装饰的 TCM 承担,本 advisor 纯旁观,对其他 advisor 零影响。
+ * <p>位置：order = {@link Ordered#HIGHEST_PRECEDENCE} + 301，位于工具调用 advisor 内层。
+ * 通过 {@link #adviseStream} 的 {@code doOnNext} 直接看到模型流。
  *
- * <p>职责(替代原 {@code FileTools.notifySaved} 与 {@code TaskManager.persistTurnFileChanges}):
+ * <p>职责：
  * <ul>
- *   <li><b>检测记录</b>:每轮 {@code doOnNext} 检查 AI 回复的工具调用,命中
- *       {@code update_file} / {@code create_file} 则解析 path 并记录到 {@link FileChangesCollector}
- *       (主/子 agent 共享的 {@link TaskRuntime#fileChanges()} 回合槽,子 agent 递归记录归入当前回合)。</li>
- *   <li><b>收口保存</b>:<b>「本轮无工具调用」= 工具循环最后一轮 = 整次 run 完成</b>,在该轮
- *       {@code doOnComplete} 由主 agent 把本轮文件变更的<b>轻量摘要</b>与<b>全文</b>分别填充到
- *       {@link TaskRuntime#fileChangesLight()} / {@link TaskRuntime#fileChangesFull()}(此后由
- *       {@link RoundIndexAdvisor} 落盘:摘要内联进 rounds.jsonl 每轮行、全文写
- *       {@code file-changes/<roundId>.json}),并清空回合槽。不再发 kind='file_changes' 的 task.trace。</li>
+ *   <li><b>检测记录</b>：每轮检查 AI 回复的工具调用，命中 update_file / create_file 则记录。</li>
+ *   <li><b>收口保存</b>：主 agent 的最后一轮（无工具调用 = run 完成）收口 collector，
+ *       暂存到 provider 的共享 Map，等 RoundClosedListener 回调时写 file-changes/&lt;roundId&gt;.json。</li>
  * </ul>
  *
- * <p><b>顺序(关键)</b>:收口填充发生在内层该轮 doOnComplete(整 run 全部工具调用已记录),
- * 先于最外层 {@link RoundIndexAdvisor} 的 doOnComplete → 文件变更与轮次(含耗时,由
- * RoundIndexStore 从磁盘 startedAt 计算)同一次落盘互不干扰。注意:由于本 advisor 位于工具循环驱动层内层,fileChanges 的
- * 消费({@link RoundIndexAdvisor#persistRounds} 落盘)会排在<b>最终回答 message 之前</b>(在最后一轮模型流完成、权威 message 落盘前即收口)——这是
- * 「内层直接看到工具轮」与「回合末收口」不可兼得的取舍;如需 fileChanges 排在最终 message 之后,
- * 需将收口拆到外层(见最终交付说明)。
- *
- * <p>取数路径(S4):本插件是任务域插件,fileChanges 三槽位是 TaskRuntime 私有成员
- * (不进 ExecContext)——经构造注入的 {@link TaskService} 按
- * {@code a.execution().subjectId()}(今天=taskId)取回 TaskRuntime 读写
- * (SubAgentManager 同款路径;原黑盒 map 取数路径已随 S4 退役)。
- *
- * <p>设计纪律:per-run 物化(每 run 新建实例,状态随实例隔离),多任务并发安全;流式({@link #adviseStream})
- * 为 worker 唯一路径(AgentRunner 始终 stream),非流式 call 不实现记录(默认透传)。
+ * <p>per-run 物化（每 run 新建实例，状态随实例隔离），多任务并发安全。
  */
 public class FileChangeAdvisor implements StreamAdvisor {
 
-    /** 需要记录文件改变的工具名(与 FileTools 注册的 @Tool 名一致)。 */
     private static final String UPDATE_FILE = "update_file";
     private static final String CREATE_FILE = "create_file";
 
-    /** 目标 agent(主 agent 建收集器+收口;子 agent 只记录到共享槽)。 */
     private final AgentContext a;
-
-    /** 任务服务(任务域插件取 TaskRuntime 的通道,经 subjectId 查询)。 */
     private final TaskService taskService;
+    private final FileChangeAdvisorProvider provider;
 
-    /** 主 agent 首次 adviseStream 建回合收集器(per-run 实例标志)。 */
-    private boolean collectorInitialized = false;
-    /** 当前轮(本次 adviseStream 调用)是否含工具调用:有=工具轮(将继续递归,延后收口)。 */
+    private FileChangesCollector collector;
     private boolean turnHasToolCalls = false;
 
-    public FileChangeAdvisor(AgentContext a, TaskService taskService) {
+    public FileChangeAdvisor(AgentContext a, TaskService taskService, FileChangeAdvisorProvider provider) {
         this.a = a;
         this.taskService = taskService;
-    }
-
-    /**
-     * 经 TaskService 按 {@code a.execution().subjectId()}(今天=taskId)取回任务运行时;
-     * 无执行上下文或任务不在内存(终态驱逐)时返回 null,调用方按「无任务上下文不收集」透传。
-     */
-    private TaskRuntime taskRuntime() {
-        ExecContext exec = a.execution();
-        return exec == null ? null : taskService.get(exec.subjectId());
+        this.provider = provider;
     }
 
     @Override
@@ -93,35 +62,22 @@ public class FileChangeAdvisor implements StreamAdvisor {
 
     @Override
     public int getOrder() {
-        // 位于 WorkerToolEventAdvisor(ToolCallingAdvisor,HIGHEST+300)内层、模型(ChatModelStreamAdvisor)外层:
-        // doOnNext 直接看到模型流,工具轮为模型层合并后的完整消息(含 toolCalls)。
-        // doOnComplete 先于最外层 RoundIndexAdvisor 触发 → file_changes 与轮次索引(含耗时)同一轮落盘。
         return Ordered.HIGHEST_PRECEDENCE + 301;
     }
 
     @Override
     public Flux<ChatClientResponse> adviseStream(ChatClientRequest chatClientRequest,
             StreamAdvisorChain streamAdvisorChain) {
-        TaskRuntime t = taskRuntime();
-        if (t == null) {
-            return streamAdvisorChain.nextStream(chatClientRequest); // 无任务上下文:不收集,透传
+        if (collector == null) {
+            collector = new FileChangesCollector();
         }
-        if (!collectorInitialized) {
-            t.fileChanges(new FileChangesCollector());
-            collectorInitialized = true;
-        }
-        turnHasToolCalls = false; // 每轮(每次内层链进入)重置
+        turnHasToolCalls = false;
         return streamAdvisorChain.nextStream(chatClientRequest)
                 .doOnNext(this::record)
                 .doOnComplete(this::finalizeIfLastTurn);
     }
 
-    /** 逐条检查模型流:工具轮已是完整消息(含 toolCalls),命中 update_file/create_file 则记录。 */
     private void record(ChatClientResponse chunk) {
-        TaskRuntime t = taskRuntime();
-        if (t == null) {
-            return;
-        }
         ChatResponse cr = chunk.chatResponse();
         if (cr == null || cr.getResult() == null) {
             return;
@@ -135,35 +91,36 @@ public class FileChangeAdvisor implements StreamAdvisor {
             return;
         }
         turnHasToolCalls = true;
-        FileChangesCollector c = t.fileChanges();
-        if (c == null) {
-            return;
-        }
         for (AssistantMessage.ToolCall tc : calls) {
-            recordIfFileChange(c, tc);
+            recordIfFileChange(collector, tc);
         }
     }
 
-    /** 「本轮无工具调用」= 工具循环最后一轮 = 整次 run 完成;主 agent 收口填充 light/full 槽,由 RoundIndexAdvisor 落盘。 */
+    /** 主 agent 的最后一轮收口：暂存 collector 到 provider 的共享 Map，等 RoundClosedListener 回调写文件。 */
     private void finalizeIfLastTurn() {
-        TaskRuntime t = taskRuntime();
-        if (t == null || turnHasToolCalls) {
-            return; // 工具轮:ToolCallingAdvisor 将继续递归,收口延后到最终回答轮
+        if (turnHasToolCalls) {
+            return; // 工具轮：将继续递归，收口延后
         }
-        FileChangesCollector c = t.fileChanges();
-        if (c == null || c.isEmpty()) {
+        // 只主 agent 收口（子 agent 不收口，避免覆盖）
+        ExecContext exec = a.execution();
+        if (exec == null) {
             return;
         }
-        try {
-            // 不再发 file_changes trace:轻量摘要内联进 rounds.jsonl 每轮行,全文由 RoundIndexStore 单独落盘。
-            t.fileChangesLight(c.buildLightSummary());
-            t.fileChangesFull(c.buildContent());
-        } finally {
-            t.fileChanges(null);
+        var taskRuntime = taskService.get(exec.subjectId());
+        if (taskRuntime == null) {
+            return;
         }
+        if (!a.agentId().equals(taskRuntime.mainAgentId())) {
+            return; // 子 agent：不收口
+        }
+        if (collector == null || collector.isEmpty()) {
+            return;
+        }
+        // 暂存 collector，等 RoundClosedListener 回调时按 roundId 写文件
+        provider.storePendingCollector(exec.subjectId(), collector);
+        // 不置 null：如果 listener 回调晚于下一轮 adviseStream，collector 需要保持可用
     }
 
-    /** 识别 update_file / create_file 工具调用并记录一次文件改变。 */
     private void recordIfFileChange(FileChangesCollector c, AssistantMessage.ToolCall tc) {
         String name = tc.name();
         if (!UPDATE_FILE.equals(name) && !CREATE_FILE.equals(name)) {
@@ -187,7 +144,6 @@ public class FileChangeAdvisor implements StreamAdvisor {
         }
     }
 
-    /** 解析工具参数 JSON(非法/空时回空对象,路径取不到则跳过)。 */
     private static JsonNode parseArgs(String arguments) {
         if (arguments == null || arguments.isEmpty()) {
             return Json.obj();

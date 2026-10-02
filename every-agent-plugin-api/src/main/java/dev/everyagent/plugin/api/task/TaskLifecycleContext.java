@@ -121,7 +121,7 @@ public interface TaskLifecycleContext extends ExecContext {
 
     /**
      * 获取任务运行时（与 {@link #taskInfo()} 同一对象的语义别名，保留既有插件调用点）。
-     * <p>插件可访问 agents / events / log / fileChanges 等运行时能力。
+     * <p>插件可访问 agents / events / log 等运行时能力。
      * taskEntry 尚未创建时返回 null（RPC 阶段早期节点）。
      */
     default TaskRuntime taskRuntime() {

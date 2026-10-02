@@ -596,6 +596,7 @@ public class TaskManager implements TaskInputHandler, InteractionServiceImpl.Sta
         }
     }
 
+    /**
      * task.roundTail:一次性拉取「seq &gt;= startSeq 的最后 limit 条事件」(前端打开任务时,
      * 最后一轮未闭合要按轮起点渲染尾部)。无轮询/长轮询/waitMs 副作用。
      * 参数:taskId 必填;startSeq 必填(轮起点,雪花大数须字符串传输,转 long 失败 → BAD_PARAMS);
@@ -772,7 +773,7 @@ public class TaskManager implements TaskInputHandler, InteractionServiceImpl.Sta
             lastIndex++;
             store.appendRound(taskId, new RoundIndex.Round(ShortIds.next("round"), lastIndex,
                     r.startSeq(), r.endSeq(), r.user(), r.finalReply(),
-                    r.agentRanges(), 0L, 0L, null, r.userMessage()));
+                    r.agentRanges(), 0L, 0L, r.userMessage()));
             existingStarts.add(r.startSeq());
         }
     }

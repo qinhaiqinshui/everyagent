@@ -98,10 +98,6 @@ public final class EditTruncateProcessor {
         // 清理子 agent 运行态(截断后旧轮的子 agent 已无效)
         t.agents().clear();
         // 子 agent Future 清理由 subagent 插件负责
-        // 清理本轮文件改动收集器(随截断失效,新轮重建)
-        t.fileChanges(null);
-        t.fileChangesLight(null);
-        t.fileChangesFull(null);
         // 更新 meta
         ObjectNode meta = store.readMeta(dir);
         if (meta != null) {
