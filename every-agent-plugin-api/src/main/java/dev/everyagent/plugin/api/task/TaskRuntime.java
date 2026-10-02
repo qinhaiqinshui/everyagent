@@ -4,6 +4,7 @@ import dev.everyagent.plugin.api.agent.AgentContext;
 import dev.everyagent.plugin.api.event.EventLogReader;
 import dev.everyagent.plugin.api.execution.ExecContext;
 import dev.everyagent.plugin.api.model.EventEmitter;
+import dev.everyagent.plugin.api.event.Usage;
 import dev.everyagent.plugin.api.model.ModelConfig;
 import tools.jackson.databind.JsonNode;
 
@@ -132,4 +133,18 @@ public interface TaskRuntime extends ExecContext {
      * 内存日志同步截断，防止 task.poll 从内存尾部返回已截断的旧事件。
      */
     void truncateLogAfter(long targetSeq);
+
+    // ---- usage 记录与广播(WorkerToolEventAdvisor 用) ----
+
+    /**
+     * 记录最近一轮主 agent 实测 usage(上下文窗口占用口径,随 meta.json 持久化)。
+     * 由 WorkerToolEventAdvisor 在主 agent 模型调用末帧调用;子 agent 用量忽略。
+     */
+    void recordUsage(Usage round, Long ctxWindow, String model);
+
+    /**
+     * 每轮主 agent usage 后触发的广播回调(TaskManager 注入的 task.updated 实时广播;
+     * 终态后不再触发)。返回 null 表示无广播回调。
+     */
+    Runnable onUsageBroadcastCallback();
 }

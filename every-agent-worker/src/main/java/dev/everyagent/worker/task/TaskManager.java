@@ -228,7 +228,6 @@ public class TaskManager implements TaskInputHandler, InteractionServiceImpl.Sta
         dispatcher.register(RpcMethods.TASK_POLL, this::rpcTaskPoll);
         dispatcher.register(RpcMethods.TASK_ROUNDS, this::rpcTaskRounds);
         dispatcher.register(RpcMethods.TASK_ROUND_TAIL, this::rpcTaskRoundTail);
-        dispatcher.register(RpcMethods.TASK_FILE_CHANGES, this::rpcTaskFileChanges);
         dispatcher.register(RpcMethods.TASK_RUN, this::rpcTaskRun);
         dispatcher.register(RpcMethods.TASK_CANCEL, this::rpcTaskCancel);
         dispatcher.register(RpcMethods.TASK_DELETE, this::rpcTaskDelete);
@@ -597,25 +596,6 @@ public class TaskManager implements TaskInputHandler, InteractionServiceImpl.Sta
         }
     }
 
-    /**
-     * task.fileChanges:拉取单轮文件变更全文(轻量摘要已内联进 rounds.jsonl 行,全文单独落盘
-     * file-changes/<roundId>.json)。参数:taskId 必填;roundId 必填。应答 {changes:[...]};
-     * 文件不存在返回 {changes:[]};task 不存在返回 NOT_FOUND(与 task.rounds 同口径)。
-     */
-    private void rpcTaskFileChanges(RpcContext ctx) {
-        String taskId = ctx.strParam("taskId");
-        String roundId = ctx.strParam("roundId");
-        boolean known = store.taskDirExists(taskId) || tasks.containsKey(taskId) || diskTasks.containsKey(taskId);
-        if (!known) {
-            ctx.err(Rpc.ERR_NOT_FOUND, "task 不存在: " + taskId);
-            return;
-        }
-        JsonNode full = store.readRoundFileChanges(taskId, roundId);
-        JsonNode changes = full == null ? Json.arr() : full.path("changes");
-        ctx.ok(Json.obj().set("changes", changes));
-    }
-
-    /**
      * task.roundTail:一次性拉取「seq &gt;= startSeq 的最后 limit 条事件」(前端打开任务时,
      * 最后一轮未闭合要按轮起点渲染尾部)。无轮询/长轮询/waitMs 副作用。
      * 参数:taskId 必填;startSeq 必填(轮起点,雪花大数须字符串传输,转 long 失败 → BAD_PARAMS);
@@ -837,7 +817,7 @@ public class TaskManager implements TaskInputHandler, InteractionServiceImpl.Sta
         return openNode;
     }
 
-    /** Round → wire 形态(seq 一律字符串;endSeq 未闭合为 "";durationMs 数值;roundId 非空才写;fileChanges 非 null 写为数组;subs 恒数组;与 rounds.jsonl 行格式一致)。 */
+    /** Round → wire 形态(seq 一律字符串;endSeq 未闭合为 "";durationMs 数值;roundId 非空才写;subs 恒数组;与 rounds.jsonl 行格式一致)。 */
     private static ObjectNode wireRound(RoundIndex.Round r) {
         ObjectNode n = Json.obj()
                 .put("index", r.index())
@@ -848,9 +828,6 @@ public class TaskManager implements TaskInputHandler, InteractionServiceImpl.Sta
                 .put("durationMs", r.durationMs());
         if (r.roundId() != null && !r.roundId().isBlank()) {
             n.put("roundId", r.roundId()); // roundId 稳定主键:缺失(旧行)不写
-        }
-        if (r.fileChanges() != null) {
-            n.set("fileChanges", r.fileChanges()); // 本轮文件变更轻量摘要:无变更不写
         }
         if (r.userMessage() != null) {
             n.set("userMessage", r.userMessage()); // 完整 user.message payload:懒加载骨架起点(旧行缺失不写)

@@ -73,6 +73,12 @@ public final class TaskEntry implements TaskRuntime {
      */
     public volatile Runnable onUsageBroadcast;
 
+    /** @see dev.everyagent.plugin.api.task.TaskRuntime#onUsageBroadcastCallback() */
+    @Override
+    public Runnable onUsageBroadcastCallback() {
+        return onUsageBroadcast;
+    }
+
     /** 创建时间:新任务 = 当前时刻;再运行沿用 meta 原值(createdAt 不随续写重置)。 */
     public volatile long createdAt = System.currentTimeMillis();
     public volatile TaskStatus status = TaskStatus.CREATED;
@@ -396,6 +402,7 @@ public final class TaskEntry implements TaskRuntime {
      * 记录最近一轮主 agent 实测 usage(上下文窗口占用口径)。
      * 由 WorkerToolEventAdvisor 在主 agent 模型调用末帧调用;子 agent 用量忽略。
      */
+    @Override
     public void recordUsage(Usage round, Long ctxWindow, String model) {
         if (round == null) {
             return;

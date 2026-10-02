@@ -14,8 +14,6 @@ public final class RpcMethods {
     public static final String TASK_ROUNDS = "task.rounds";
     /** 轮尾一次性拉取:按轮起点(startSeq)取该轮末尾 limit 条事件用于初始渲染(磁盘∪内存,同 seq 以内存为准、同 seq 组不拆批)。 */
     public static final String TASK_ROUND_TAIL = "task.roundTail";
-    /** 单轮文件变更全文拉取:参数 taskId+roundId,返回 file-changes/<roundId>.json 的 {changes:[...]}。 */
-    public static final String TASK_FILE_CHANGES = "task.fileChanges";
     public static final String TASK_CANCEL = "task.cancel";
     public static final String TASK_DELETE = "task.delete";
     /** 队列快照拉取：返回当前排队中的任务列表及位置。 */

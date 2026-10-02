@@ -1,8 +1,11 @@
 package dev.everyagent.plugin.api;
 
+import java.nio.file.Path;
+
 import dev.everyagent.plugin.api.config.WorkerConfig;
 import dev.everyagent.plugin.api.event.StreamEmitter;
 import dev.everyagent.plugin.api.interaction.InteractionService;
+import dev.everyagent.plugin.api.model.EventEmitter;
 import dev.everyagent.plugin.api.spi.IdGenerator;
 import dev.everyagent.plugin.api.spi.NativeExec;
 import dev.everyagent.plugin.api.spi.SandboxBackend;
@@ -45,4 +48,26 @@ public interface WorkerServices extends TaskServices {
 
     /** 事件扇出口（向 hub 连接广播事件）。 */
     StreamEmitter stream();
+
+    /**
+     * 获取指定 subject（任务）的数据目录（落盘根）。
+     *
+     * <p>用于底层组件（如 slash 自管存储）直接读写自己的文件，
+     * 不经 TaskStore / meta.json。
+     *
+     * @param subjectId 任务 ID
+     * @return 数据目录 Path；任务不存在或终态清理后返回 null
+     */
+    Path dataDirOf(String subjectId);
+
+    /**
+     * 获取指定 subject（任务）的事件发射器。
+     *
+     * <p>运行中任务返回有效 emitter（经 EventLog → DataPusher → stream 频道广播）；
+     * 终态任务返回 null（不广播，调用方应跳过 emit）。
+     *
+     * @param subjectId 任务 ID
+     * @return EventEmitter 或 null（终态）
+     */
+    EventEmitter emitterOf(String subjectId);
 }

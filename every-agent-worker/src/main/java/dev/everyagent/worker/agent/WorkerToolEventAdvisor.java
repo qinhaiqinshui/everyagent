@@ -5,7 +5,7 @@ import dev.everyagent.plugin.api.event.EventPayloads;
 import dev.everyagent.plugin.api.model.EmitEvent;
 import dev.everyagent.worker.agent.AgentEntity;
 import dev.everyagent.worker.agent.ContextOverflow;
-import dev.everyagent.worker.task.TaskEntry;
+import dev.everyagent.plugin.api.task.TaskRuntime;
 import dev.everyagent.plugin.api.event.Events;
 import dev.everyagent.plugin.api.event.Events.ToolCallPart;
 import dev.everyagent.plugin.api.proto.SnowflakeId;
@@ -114,8 +114,8 @@ public class WorkerToolEventAdvisor extends ToolCallingAdvisor {
         }
         // 防御:任务已终态(用户取消/finish 完成)时不再发射瞬态事件。
         // 即使 reactive 链的 dispose 有微秒级竞态窗口,残留 chunk 也不会泄漏到前端。
-        TaskEntry t = (TaskEntry) a.execution();
-        if (t.status.terminal()) {
+        TaskRuntime t = (TaskRuntime) a.execution();
+        if (t.terminal()) {
             return;
         }
         AssistantMessage out = cr.getResult().getOutput();
@@ -148,14 +148,14 @@ public class WorkerToolEventAdvisor extends ToolCallingAdvisor {
         }
         // 防御:任务已终态时不再发射任何事件(取消后 dispose 与 reactor 线程间有竞态窗口,
         // 残留轮次在此直接丢弃,不再产生 message/usage 等落盘事件,也不写入 lastText)。
-        TaskEntry t = (TaskEntry) a.execution();
-        if (t.status.terminal()) {
+        TaskRuntime t = (TaskRuntime) a.execution();
+        if (t.terminal()) {
             log.warn("[leak-guard] 任务已终态({}),拦截轮次事件发射 agentId={} thread={}",
-                    t.status, a.agentId, Thread.currentThread().getName());
+                    t.status(), a.agentId, Thread.currentThread().getName());
             return chatClientResponse;
         }
         log.debug("[advisor] doAfterStream 发射轮次 agentId={} taskId={} hasToolCalls={} thread={}",
-                a.agentId, t.taskId,
+                a.agentId, t.taskId(),
                 out.getToolCalls() != null && !out.getToolCalls().isEmpty(),
                 Thread.currentThread().getName());
         long rid = ensureRoundId();
@@ -236,7 +236,7 @@ public class WorkerToolEventAdvisor extends ToolCallingAdvisor {
                 // → 触发任务列表用量实时广播(task.updated,每轮一次)。
                 // 所有 agent 均记录 usage + 触发广播(Phase 6: 去除 kind 判断)。
                 t.recordUsage(roundUsage, contextWindowTokens(), a.options.getModel());
-                Runnable broadcast = t.onUsageBroadcast;
+                Runnable broadcast = t.onUsageBroadcastCallback();
                 if (broadcast != null) {
                     try {
                         broadcast.run();
@@ -252,7 +252,7 @@ public class WorkerToolEventAdvisor extends ToolCallingAdvisor {
     @Override
     protected List<Message> doGetNextInstructionsForToolCallStream(ChatClientRequest chatClientRequest,
             ChatClientResponse chatClientResponse, ToolExecutionResult toolExecutionResult) {
-        TaskEntry t = (TaskEntry) a.execution();
+        TaskRuntime t = (TaskRuntime) a.execution();
         // 工具已执行:只发「本轮刚下发」的工具结果(callId 与 message.toolCalls[].id 配对)。
         // 此前遍历整个 conversationHistory 会把历史所有 ToolResponseMessage 逐条重发,
         // 导致同一 callId 的 tool.result 在每轮工具执行后都被再次落盘(前端按 seq 无法去重,
@@ -272,7 +272,7 @@ public class WorkerToolEventAdvisor extends ToolCallingAdvisor {
                             continue; // 历史轮次的工具结果:本轮未下发,不重复发射
                         }
                         // 防御:任务已终态时不再发射 tool.result(与 doAfterStream 同语义)
-                        if (t.status.terminal()) {
+                        if (t.terminal()) {
                             continue;
                         }
                         String summary = r.responseData() == null ? "(无返回)" : r.responseData();
@@ -322,8 +322,8 @@ public class WorkerToolEventAdvisor extends ToolCallingAdvisor {
 
     /** 任务快照 params 里的上下文窗口大小(未配置/非法回退默认窗口,与压缩/超限诊断口径一致)。 */
     private Long contextWindowTokens() {
-        TaskEntry t = (TaskEntry) a.execution();
-        JsonNode params = t.snapshot.params();
+        TaskRuntime t = (TaskRuntime) a.execution();
+        JsonNode params = t.snapshot().params();
         if (params != null && params.isObject() && params.has("contextWindowTokens")) {
             long v = params.path("contextWindowTokens").asLong(0);
             if (v > 0) {

@@ -71,10 +71,9 @@ public class RoundIndexStore {
         }
 
         RoundIndex.Round toRound() {
-            // durationMs/startedAt 扫描阶段均未知为 0(闭合行耗时由 applyRounds 从磁盘 prior.startedAt 算);
-            // fileChanges 扫描阶段未知为 null(由 applyRounds 按轻量摘要写入闭合行)。
+            // durationMs/startedAt 扫描阶段均未知为 0(闭合行耗时由 applyRounds 从磁盘 prior.startedAt 算)。
             return new RoundIndex.Round(roundId, index, startSeq, endSeq, user, finalReply,
-                    agentRanges.stream().map(AgentRangeBuilder::toAgentRange).toList(), 0L, 0L, null,
+                    agentRanges.stream().map(AgentRangeBuilder::toAgentRange).toList(), 0L, 0L,
                     userMessage);
         }
     }
@@ -152,7 +151,7 @@ public class RoundIndexStore {
 
     /**
      * 整体重排 index:把每轮 index 加 baseIndex(例如磁盘已有 N 行,新轮从 N+1 起)。
-     * 轮内容(roundId/startSeq/endSeq/user/finalReply/agentRanges/fileChanges)原样保留。
+     * 轮内容(roundId/startSeq/endSeq/user/finalReply/agentRanges)原样保留。
      */
     public List<RoundIndex.Round> reindex(List<RoundIndex.Round> rounds, long baseIndex) {
         if (rounds == null || rounds.isEmpty()) {
@@ -162,7 +161,7 @@ public class RoundIndexStore {
         for (RoundIndex.Round r : rounds) {
             out.add(new RoundIndex.Round(r.roundId(), r.index() + baseIndex, r.startSeq(),
                     r.endSeq(), r.user(), r.finalReply(), r.agentRanges(),
-                    r.durationMs(), r.startedAt(), r.fileChanges(), r.userMessage()));
+                    r.durationMs(), r.startedAt(), r.userMessage()));
         }
         return out;
     }
