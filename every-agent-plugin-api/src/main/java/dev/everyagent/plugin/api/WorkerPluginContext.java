@@ -13,8 +13,7 @@ import dev.everyagent.plugin.api.spi.TokenEstimator;
 import dev.everyagent.plugin.api.spi.ToolExecutionInterceptor;
 import dev.everyagent.plugin.api.spi.ToolProvider;
 import dev.everyagent.plugin.api.model.ChatModelEnhancer;
-import dev.everyagent.plugin.api.task.TaskAdmissionPolicy;
-import dev.everyagent.plugin.api.task.TaskLifecycleNode;
+import dev.everyagent.plugin.api.task.TaskPluginContext;
 
 import java.nio.file.Path;
 
@@ -24,7 +23,7 @@ import java.nio.file.Path;
  * <p>插件在 {@link EveryAgentPlugin#activate} 中通过此接口注册自己的 SPI 实现。
  * 核心提供注册方法与只读服务访问。
  */
-public interface WorkerPluginContext {
+public interface WorkerPluginContext extends TaskPluginContext {
 
     /** 插件 id。 */
     String pluginId();
@@ -57,14 +56,8 @@ public interface WorkerPluginContext {
     /** 注册 ToolExecutionInterceptor（工具执行拦截链节点）。 */
     void registerToolExecutionInterceptor(ToolExecutionInterceptor interceptor);
 
-    /** 注册 TaskLifecycleNode（任务生命周期链节点）。 */
-    void registerTaskLifecycleNode(TaskLifecycleNode node);
-
     /** 注册 SkillContributor（skill 贡献者，向 system prompt 与 / 菜单贡献 skill）。 */
     void registerSkillContributor(SkillContributor contributor);
-
-    /** 注册任务准入策略（队列插件用）。 */
-    void registerTaskAdmissionPolicy(TaskAdmissionPolicy policy);
 
     /** 注册 TokenEstimator（Token 估算器，替换内置实现）。 */
     void registerTokenEstimator(TokenEstimator estimator);
