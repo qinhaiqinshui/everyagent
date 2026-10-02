@@ -39,7 +39,13 @@ import java.util.TreeMap;
 @Component
 public class RoundIndexStore {
 
+    private final TaskStore taskStore;
+
     private static final Logger LOG = LoggerFactory.getLogger(RoundIndexStore.class);
+
+    public RoundIndexStore(TaskStore taskStore) {
+        this.taskStore = taskStore;
+    }
 
     /** 增量闭合的单次扫描窗口上限(记录数;内存日志护栏 50 万,一轮远小于此,超限由 task.rounds 惰性重建兜底)。 */
     private static final int PERSIST_WINDOW_MAX = 20_000;
@@ -176,11 +182,10 @@ public class RoundIndexStore {
      *
      * @return true=真的追加了新行(新开一轮);false=沿用未闭合尾行未写或写盘失败
      */
-    public boolean openRoundAtStart(TaskStore store, String taskId, long startSeq, String user,
+    public boolean openRoundAtStart(Path dir, String taskId, long startSeq, String user,
             JsonNode userMessage) {
         try {
-            Path dir = store.dirOf(taskId);
-            List<RoundIndex.Round> existing = store.readRounds(dir);
+            List<RoundIndex.Round> existing = taskStore.readRounds(dir);
             RoundIndex.Round last = existing.isEmpty() ? null : existing.get(existing.size() - 1);
             if (last != null && !last.closed()) {
                 return false; // 沿用当前未闭合轮(roundId 已存在,不重生成)
@@ -188,7 +193,7 @@ public class RoundIndexStore {
             long index = last == null ? 1 : last.index() + 1;
             String roundId = ShortIds.next("round");
             long startedAt = System.currentTimeMillis(); // 开始时间随开轮落盘,耗时从磁盘计算
-            store.appendRound(taskId, new RoundIndex.Round(roundId, index, startSeq, null, user, "",
+            taskStore.appendRound(taskId, new RoundIndex.Round(roundId, index, startSeq, null, user, "",
                     List.of(), 0L, startedAt, null, userMessage));
             return true;
         } catch (IOException | RuntimeException e) {
@@ -206,7 +211,7 @@ public class RoundIndexStore {
      * rounds.jsonl 缺失时另由 {@code task.rounds} 首次惰性全量生成兜底。异常全部吞掉
      * (仅记日志),绝不阻断模型流的 doOnComplete。
      *
-     * @param store 落盘组件(rounds.jsonl 读写)
+     * @param dir   任务数据目录(定位 rounds.jsonl 及 agent 事件文件)
      * @param log   任务内存事件日志(当前 run 的全部事件;冷启动后 EventLog 只含本次运行)
      * @param taskId 任务 id(定位任务目录)
      * @param mainAgentId 主 agent id
@@ -215,12 +220,11 @@ public class RoundIndexStore {
      *                         {@code file-changes/<roundId>.json},失败仅记日志不阻断)
      * @return 本次实际「新闭合」的轮(幂等跳过与未闭合沿用不计入;失败为空列表)
      */
-    public List<RoundIndex.Round> persistClosedRounds(TaskStore store, EventLog log,
+    public List<RoundIndex.Round> persistClosedRounds(Path dir, EventLog log,
             String taskId, String mainAgentId, JsonNode fileChangesLight, JsonNode fileChangesFull) {
         try {
-            Path dir = store.dirOf(taskId);
-            long anchor = store.lastRoundStartSeq(dir);
-            List<EventRecord> window = mergedWindow(store, log, dir, mainAgentId, anchor);
+            long anchor = taskStore.lastRoundStartSeq(dir);
+            List<EventRecord> window = mergedWindow(log, dir, mainAgentId, anchor);
             if (window.isEmpty()) {
                 return List.of();
             }
@@ -229,11 +233,11 @@ public class RoundIndexStore {
                 return List.of();
             }
             List<RoundIndex.Round> newlyClosed =
-                    applyRounds(store, taskId, store.readRounds(dir), found, fileChangesLight);
+                    applyRounds(taskId, taskStore.readRounds(dir), found, fileChangesLight);
             if (fileChangesFull != null) {
                 for (RoundIndex.Round r : newlyClosed) {
                     if (r.roundId() != null && !r.roundId().isBlank()) {
-                        store.writeRoundFileChanges(taskId, r.roundId(), fileChangesFull);
+                        taskStore.writeRoundFileChanges(taskId, r.roundId(), fileChangesFull);
                     }
                 }
             }
@@ -262,7 +266,7 @@ public class RoundIndexStore {
      * @return 本次实际<b>新闭合</b>的轮(含 startSeq/endSeq/finalReply,供 round.closed 事件发射;
      *         幂等跳过与双双未闭合不计入)
      */
-    private static List<RoundIndex.Round> applyRounds(TaskStore store, String taskId,
+    private List<RoundIndex.Round> applyRounds(String taskId,
             List<RoundIndex.Round> existing, List<RoundIndex.Round> found,
             JsonNode fileChangesLight) throws IOException {
         Map<Long, RoundIndex.Round> byStart = new LinkedHashMap<>();
@@ -291,7 +295,7 @@ public class RoundIndexStore {
                         r.startSeq(), r.endSeq(), r.user(), r.finalReply(),
                         r.agentRanges(), dur, prior.startedAt(), fileChangesLight,
                         r.userMessage() != null ? r.userMessage() : prior.userMessage());
-                if (store.rewriteRound(taskId, closed)) {
+                if (taskStore.rewriteRound(taskId, closed)) {
                     newlyClosed.add(closed); // 磁盘闭合成功才算「本轮新闭合」(带正确 roundId,供全文落盘)
                 }
                 byStart.put(r.startSeq(), closed);
@@ -307,10 +311,10 @@ public class RoundIndexStore {
      * (同 rpcTaskPoll 的 readSince(start-1) 惯例):未闭合尾行 startSeq 的开轮 user.message
      * 事件本身要进窗口,开着的轮才能被重扫并闭合。
      */
-    private List<EventRecord> mergedWindow(TaskStore store, EventLog log, Path dir,
+    private List<EventRecord> mergedWindow(EventLog log, Path dir,
             String mainAgentId, long anchor) throws IOException {
         Map<Long, EventRecord> merged = new TreeMap<>();
-        for (EventRecord r : store.readSince(dir, mainAgentId, anchor - 1, PERSIST_WINDOW_MAX)) {
+        for (EventRecord r : taskStore.readSince(dir, mainAgentId, anchor - 1, PERSIST_WINDOW_MAX)) {
             merged.put(r.seq(), r);
         }
         for (EventRecord r : log.readAfterSeq(anchor - 1, PERSIST_WINDOW_MAX)) {

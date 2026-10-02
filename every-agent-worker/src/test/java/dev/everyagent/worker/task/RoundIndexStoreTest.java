@@ -23,7 +23,7 @@ class RoundIndexStoreTest {
     private static final String MAIN = "a_main1";
     private static final String SUB = "sub_x9";
 
-    private final RoundIndexStore store = new RoundIndexStore();
+    private final RoundIndexStore store = new RoundIndexStore(null);
 
     private static EventRecord rec(long seq, String event, String agentId, JsonNode payload) {
         return new EventRecord(seq, seq, event, agentId, payload, null);

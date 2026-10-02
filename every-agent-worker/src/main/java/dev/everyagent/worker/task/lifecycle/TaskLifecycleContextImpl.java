@@ -136,7 +136,7 @@ public class TaskLifecycleContextImpl implements TaskLifecycleContext {
         if (rawContent != null && !rawContent.isEmpty()) {
             userPayload.set("data", Json.obj().put("rawContent", rawContent));
         }
-        if (roundIndexStore.openRoundAtStart(store, taskEntry.taskId, seq, text, userPayload)) {
+        if (roundIndexStore.openRoundAtStart(taskEntry.taskDir(), taskEntry.taskId, seq, text, userPayload)) {
             // 真的新开一轮(非中间输入/续跑沿用)才推 round.opened;瞬态不落盘。
             ObjectNode roundData = Json.obj();
             roundData.put("startSeq", String.valueOf(seq));

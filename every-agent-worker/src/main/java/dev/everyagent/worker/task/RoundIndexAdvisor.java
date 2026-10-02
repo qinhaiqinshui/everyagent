@@ -13,6 +13,7 @@ import reactor.core.publisher.Flux;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.node.ObjectNode;
 
+import java.nio.file.Path;
 import java.util.List;
 
 /**
@@ -39,13 +40,13 @@ import java.util.List;
 public class RoundIndexAdvisor implements StreamAdvisor {
 
     private final AgentEntity a;
-    private final TaskStore store;
     private final RoundIndexStore rounds;
+    private final Path dataDir;
 
-    public RoundIndexAdvisor(AgentEntity a, TaskStore store, RoundIndexStore rounds) {
+    public RoundIndexAdvisor(AgentEntity a, RoundIndexStore rounds, Path dataDir) {
         this.a = a;
-        this.store = store;
         this.rounds = rounds;
+        this.dataDir = dataDir;
     }
 
     @Override
@@ -80,7 +81,7 @@ public class RoundIndexAdvisor implements StreamAdvisor {
         // (消除「前端收到通知即拉快照、却拉在耗时写入之前」的竞态,见 §7.15.1);耗时不再依赖
         // 内存计时槽,任务出错停止后继续(续跑改判闭合)同样以磁盘 startedAt 计耗时。
         List<RoundIndex.Round> closed =
-                rounds.persistClosedRounds(store, t.log, t.taskId, t.mainAgentId,
+                rounds.persistClosedRounds(dataDir, t.log, t.taskId, t.mainAgentId,
                         light, full);
         for (RoundIndex.Round r : closed) {
             if (r.endSeq() != null) {

@@ -6,7 +6,6 @@ import dev.everyagent.plugin.api.spi.AdvisorProvider;
 import dev.everyagent.worker.agent.AgentEntity;
 import dev.everyagent.worker.task.RoundIndexAdvisor;
 import dev.everyagent.worker.task.RoundIndexStore;
-import dev.everyagent.worker.task.TaskStore;
 import org.springframework.ai.chat.client.advisor.api.Advisor;
 import org.springframework.core.Ordered;
 
@@ -18,11 +17,9 @@ import org.springframework.core.Ordered;
  */
 public class RoundIndexAdvisorProvider implements AdvisorProvider {
 
-    private final TaskStore taskStore;
     private final RoundIndexStore roundIndexStore;
 
-    public RoundIndexAdvisorProvider(TaskStore taskStore, RoundIndexStore roundIndexStore) {
-        this.taskStore = taskStore;
+    public RoundIndexAdvisorProvider(RoundIndexStore roundIndexStore) {
         this.roundIndexStore = roundIndexStore;
     }
 
@@ -39,6 +36,6 @@ public class RoundIndexAdvisorProvider implements AdvisorProvider {
     @Override
     public Advisor create(AdvisorContext ctx) {
         AgentEntity a = (AgentEntity) ((AdvisorContextImpl) ctx).agentEntity();
-        return new RoundIndexAdvisor(a, taskStore, roundIndexStore);
+        return new RoundIndexAdvisor(a, roundIndexStore, ctx.dataDir());
     }
 }

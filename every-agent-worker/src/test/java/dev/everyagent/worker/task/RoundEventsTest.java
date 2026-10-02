@@ -47,7 +47,7 @@ class RoundEventsTest {
         Files.createDirectories(dataDir.resolve("workspaces").resolve("defaultworkspace")
                 .resolve("tasks").resolve("t1"));
         store = new TaskStore(props);
-        rounds = new RoundIndexStore();
+        rounds = new RoundIndexStore(store);
         log = new EventLog(100_000);
         events = new TaskEvents(log, MAIN);
     }
@@ -106,20 +106,20 @@ class RoundEventsTest {
         long s1 = events.emit(EmitEvent.of(SnowflakeId.next(),
                 Events.USER_MESSAGE, null, null, null, "第一问", null, null,
                 EmitEvent.Mode.REPLACE));
-        assertTrue(rounds.openRoundAtStart(store, "t1", s1, "第一问", null), "空/无行 → 追加新行=true");
+        assertTrue(rounds.openRoundAtStart(dir(), "t1", s1, "第一问", null), "空/无行 → 追加新行=true");
 
         long s2 = events.emit(EmitEvent.of(SnowflakeId.next(),
                 Events.USER_MESSAGE, null, null, null, "中间补充", null, null,
                 EmitEvent.Mode.REPLACE));
-        assertFalse(rounds.openRoundAtStart(store, "t1", s2, "中间补充", null), "未闭合尾行沿用:false");
+        assertFalse(rounds.openRoundAtStart(dir(), "t1", s2, "中间补充", null), "未闭合尾行沿用:false");
 
         // 闭合后再次开轮又为 true
         emitMessage(MAIN, "", "第一答", List.of());
-        rounds.persistClosedRounds(store, log, "t1", MAIN, null, null);
+        rounds.persistClosedRounds(dir(), log, "t1", MAIN, null, null);
         long s3 = events.emit(EmitEvent.of(SnowflakeId.next(),
                 Events.USER_MESSAGE, null, null, null, "第二问", null, null,
                 EmitEvent.Mode.REPLACE));
-        assertTrue(rounds.openRoundAtStart(store, "t1", s3, "第二问", null), "已闭合尾行 → 追加新行=true");
+        assertTrue(rounds.openRoundAtStart(dir(), "t1", s3, "第二问", null), "已闭合尾行 → 追加新行=true");
     }
 
     // ---- persistClosedRounds 返回本次新闭合的轮 ----
@@ -127,7 +127,7 @@ class RoundEventsTest {
     @Test
     void persistClosedRoundsReturnsNewlyClosedRounds() {
         long startSeq = openAndEmitClosedRound("第一问", "第一答");
-        List<RoundIndex.Round> closed = rounds.persistClosedRounds(store, log, "t1", MAIN, null, null);
+        List<RoundIndex.Round> closed = rounds.persistClosedRounds(dir(), log, "t1", MAIN, null, null);
         assertEquals(1, closed.size(), "本次确实新闭合了一轮");
         RoundIndex.Round r = closed.get(0);
         assertEquals(startSeq, r.startSeq());
@@ -136,17 +136,17 @@ class RoundEventsTest {
         assertNotNull(r.endSeq());
 
         // 幂等:再调用返回空(已闭合,不算新闭合)
-        assertTrue(rounds.persistClosedRounds(store, log, "t1", MAIN, null, null).isEmpty(), "幂等:已闭合轮不再计入新闭合");
+        assertTrue(rounds.persistClosedRounds(dir(), log, "t1", MAIN, null, null).isEmpty(), "幂等:已闭合轮不再计入新闭合");
 
         // 无最终回复的未闭合轮(中间输入/中断)不产生新闭合
         long s2 = events.emit(EmitEvent.of(SnowflakeId.next(),
                 Events.USER_MESSAGE, null, null, null, "被中断之问", null, null,
                 EmitEvent.Mode.REPLACE));
-        rounds.openRoundAtStart(store, "t1", s2, "被中断之问", null);
+        rounds.openRoundAtStart(dir(), "t1", s2, "被中断之问", null);
         events.emit(EmitEvent.transientOf(SnowflakeId.next(),
                 Events.DELTA, MAIN, null, null, "半截", null, null,
                 EmitEvent.Mode.APPEND));
-        assertTrue(rounds.persistClosedRounds(store, log, "t1", MAIN, null, null).isEmpty(), "无最终回复:无新闭合轮");
+        assertTrue(rounds.persistClosedRounds(dir(), log, "t1", MAIN, null, null).isEmpty(), "无最终回复:无新闭合轮");
     }
 
     // ---- 磁盘 jsonl 不含 round 事件(经 TaskStore 真落盘)----
@@ -162,7 +162,7 @@ class RoundEventsTest {
             long startSeq = events.emit(EmitEvent.of(SnowflakeId.next(),
                     Events.USER_MESSAGE, null, null, null, "第一问", null, null,
                     EmitEvent.Mode.REPLACE));
-            assertTrue(rounds.openRoundAtStart(store, "t1", startSeq, "第一问", null));
+            assertTrue(rounds.openRoundAtStart(dir(), "t1", startSeq, "第一问", null));
             ObjectNode roundData = Json.obj();
             roundData.put("startSeq", String.valueOf(startSeq));
             roundData.put("user", "第一问");
@@ -173,7 +173,7 @@ class RoundEventsTest {
                     Events.DELTA, MAIN, null, null, "流", null, null,
                     EmitEvent.Mode.APPEND));
             emitMessage(MAIN, "", "第一答", List.of());
-            for (RoundIndex.Round r : rounds.persistClosedRounds(store, log, "t1", MAIN, null, null)) {
+            for (RoundIndex.Round r : rounds.persistClosedRounds(dir(), log, "t1", MAIN, null, null)) {
                 if (r.endSeq() != null) {
                     ObjectNode closedData = Json.obj();
                     closedData.put("startSeq", String.valueOf(r.startSeq()));
@@ -225,7 +225,7 @@ class RoundEventsTest {
         long startSeq = events.emit(EmitEvent.of(SnowflakeId.next(),
                 Events.USER_MESSAGE, null, null, null, question, null, null,
                 EmitEvent.Mode.REPLACE));
-        rounds.openRoundAtStart(store, "t1", startSeq, question, null);
+        rounds.openRoundAtStart(dir(), "t1", startSeq, question, null);
         ObjectNode roundData = Json.obj();
         roundData.put("startSeq", String.valueOf(startSeq));
         roundData.put("user", question);

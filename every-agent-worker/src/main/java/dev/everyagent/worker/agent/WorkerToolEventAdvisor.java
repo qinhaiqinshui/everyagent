@@ -1,10 +1,11 @@
-package dev.everyagent.worker.task;
+package dev.everyagent.worker.agent;
 
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.plugin.api.event.EventPayloads;
 import dev.everyagent.plugin.api.model.EmitEvent;
 import dev.everyagent.worker.agent.AgentEntity;
 import dev.everyagent.worker.agent.ContextOverflow;
+import dev.everyagent.worker.task.TaskEntry;
 import dev.everyagent.plugin.api.event.Events;
 import dev.everyagent.plugin.api.event.Events.ToolCallPart;
 import dev.everyagent.plugin.api.proto.SnowflakeId;
@@ -34,7 +35,7 @@ import java.util.concurrent.atomic.AtomicReference;
  * worker 事件发射 advisor(架构 §5.2 + 红线:一个 advisor 只负责一个功能)。
  *
  * <p>继承 {@link ToolCallingAdvisor},复用其递归工具循环(绝不手搓);仅重写受保护 hook,
- * 在工具循环的关键节点把 worker 事件协议({@link TaskEvents})发射出去——不改动循环逻辑本身:
+ * 在工具循环的关键节点把 worker 事件协议({@code TaskEvents})发射出去——不改动循环逻辑本身:
  * <ul>
  *   <li>{@link #adviseStream}:逐 chunk 旁路发瞬态 {@code delta}(正文增量,真逐字流)
  *       + 瞬态 {@code thinking}(思考差分,同频逐字流;Spring AI 2.0.1 的

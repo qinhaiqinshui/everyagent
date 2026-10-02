@@ -4,7 +4,7 @@ import dev.everyagent.worker.plugin.AdvisorContextImpl;
 import dev.everyagent.plugin.api.spi.AdvisorContext;
 import dev.everyagent.plugin.api.spi.AdvisorProvider;
 import dev.everyagent.worker.agent.AgentEntity;
-import dev.everyagent.worker.task.WorkerToolEventAdvisor;
+import dev.everyagent.worker.agent.WorkerToolEventAdvisor;
 import org.springframework.ai.chat.client.advisor.ToolCallingAdvisor;
 import org.springframework.ai.chat.client.advisor.api.Advisor;
 

@@ -52,7 +52,7 @@ class RoundIndexPersistTest {
         Files.createDirectories(dataDir.resolve("workspaces").resolve("defaultworkspace")
                 .resolve("tasks").resolve("t1"));
         store = new TaskStore(props);
-        rounds = new RoundIndexStore();
+        rounds = new RoundIndexStore(store);
         log = new EventLog(100_000);
         events = new TaskEvents(log, MAIN);
     }
@@ -120,7 +120,7 @@ class RoundIndexPersistTest {
     /** 开一轮:user.message 落盘后调用 openRoundAtStart(与 consumeInput 同路径)。 */
     private long openRound(String question) {
         long seq = emitUserMessage(question);
-        rounds.openRoundAtStart(store, "t1", seq, question, null);
+        rounds.openRoundAtStart(dir(), "t1", seq, question, null);
         return seq;
     }
 
@@ -154,7 +154,7 @@ class RoundIndexPersistTest {
 
         // 闭合第一轮后,再开新轮应追加
         emitMessage(MAIN, "", "第一答", List.of());
-        rounds.persistClosedRounds(store, log, "t1", MAIN, null, null);
+        rounds.persistClosedRounds(dir(), log, "t1", MAIN, null, null);
         long s3 = openRound("第三问");
         List<RoundIndex.Round> r3 = store.readRounds(dir());
         assertEquals(2, r3.size());
@@ -166,7 +166,7 @@ class RoundIndexPersistTest {
     @Test
     void persistClosedRoundsWritesOnlyClosedAndIsIdempotent() {
         emitNormalRound("第一问", "第一答");
-        rounds.persistClosedRounds(store, log, "t1", MAIN, null, null);
+        rounds.persistClosedRounds(dir(), log, "t1", MAIN, null, null);
 
         List<RoundIndex.Round> r1 = store.readRounds(dir());
         assertEquals(1, r1.size());
@@ -179,14 +179,14 @@ class RoundIndexPersistTest {
 
         // 再来一轮(独立 run 模拟:同一 EventLog 追加即可)
         emitNormalRound("第二问", "第二答");
-        rounds.persistClosedRounds(store, log, "t1", MAIN, null, null);
+        rounds.persistClosedRounds(dir(), log, "t1", MAIN, null, null);
         List<RoundIndex.Round> r2 = store.readRounds(dir());
         assertEquals(2, r2.size());
         assertEquals(2, r2.get(1).index());
         assertEquals("第二问", r2.get(1).user());
 
         // 幂等:重复补写不产生重复行
-        rounds.persistClosedRounds(store, log, "t1", MAIN, null, null);
+        rounds.persistClosedRounds(dir(), log, "t1", MAIN, null, null);
         assertEquals(2, store.readRounds(dir()).size(), "已写过的轮不重复补写");
     }
 
@@ -196,7 +196,7 @@ class RoundIndexPersistTest {
         emitUserMessage("未开轮之问");
         emitDelta(MAIN, "流");
         emitMessage(MAIN, "", "已答", List.of());
-        rounds.persistClosedRounds(store, log, "t1", MAIN, null, null);
+        rounds.persistClosedRounds(dir(), log, "t1", MAIN, null, null);
         assertTrue(store.readRounds(dir()).isEmpty(), "缺失开轮行的已闭合轮不补写");
     }
 
@@ -204,7 +204,7 @@ class RoundIndexPersistTest {
     void persistIgnoresForeignMainId() {
         // 事件 agentId 归属另一主 id:扫描不产轮(防御)
         log.append(Events.USER_MESSAGE, Json.obj().put("content", "别人的"), "other_main", null);
-        rounds.persistClosedRounds(store, log, "t1", MAIN, null, null);
+        rounds.persistClosedRounds(dir(), log, "t1", MAIN, null, null);
         assertTrue(store.readRounds(dir()).isEmpty());
     }
 
@@ -213,10 +213,10 @@ class RoundIndexPersistTest {
     @Test
     void persistRewritesUnclosedRowAfterResume() {
         emitNormalRound("第一问", "第一答");
-        rounds.persistClosedRounds(store, log, "t1", MAIN, null, null); // 第 1 轮闭合落盘
+        rounds.persistClosedRounds(dir(), log, "t1", MAIN, null, null); // 第 1 轮闭合落盘
         // 中断:新输入无最终回复 → 开轮路径即落未闭合行(endSeq="")
         long interruptedSeq = emitUserMessage("被中断之问");
-        rounds.openRoundAtStart(store, "t1", interruptedSeq, "被中断之问", null);
+        rounds.openRoundAtStart(dir(), "t1", interruptedSeq, "被中断之问", null);
         emitDelta(MAIN, "半截");
         List<RoundIndex.Round> before = store.readRounds(dir());
         assertEquals(2, before.size());
@@ -230,7 +230,7 @@ class RoundIndexPersistTest {
         emitToolResult("c9", "bash", "ok", false, MAIN);
         emitDelta(MAIN, "续答");
         emitMessage(MAIN, "", "补完之答", List.of());
-        rounds.persistClosedRounds(store, log, "t1", MAIN, null, null); // 增量路径改判闭合
+        rounds.persistClosedRounds(dir(), log, "t1", MAIN, null, null); // 增量路径改判闭合
 
         List<RoundIndex.Round> after = store.readRounds(dir());
         assertEquals(2, after.size(), "行数不变:未闭合行被原位改写,不追加新行");
@@ -243,7 +243,7 @@ class RoundIndexPersistTest {
         assertEquals("补完之答", closed.finalReply());
         assertEquals(closed.startSeq(), after.get(1).startSeq());
         // 幂等:重复增量调用不改判也不重复
-        rounds.persistClosedRounds(store, log, "t1", MAIN, null, null);
+        rounds.persistClosedRounds(dir(), log, "t1", MAIN, null, null);
         assertEquals(2, store.readRounds(dir()).size());
     }
 
@@ -269,14 +269,14 @@ class RoundIndexPersistTest {
         store.appendRound("t1", new RoundIndex.Round("round_old", 1L, s1, null, "被中断之问", "",
                 List.of(), 0L, startedAt, null, null));
         emitMessage(MAIN, "", "补完之答", List.of());
-        rounds.persistClosedRounds(store, log, "t1", MAIN, null, null);
+        rounds.persistClosedRounds(dir(), log, "t1", MAIN, null, null);
 
         RoundIndex.Round closed = store.readRounds(dir()).get(0);
         assertTrue(closed.closed(), "中断尾行被续跑闭合");
         assertEquals(startedAt, closed.startedAt(), "闭合行保留磁盘 startedAt(最初开轮时刻)");
         assertTrue(closed.durationMs() > 0, "耗时 = 当前时间 − 磁盘 startedAt(跨运行延续)");
         // 幂等:已闭合且已有耗时,再次增量闭合不改判、不覆盖
-        rounds.persistClosedRounds(store, log, "t1", MAIN, null, null);
+        rounds.persistClosedRounds(dir(), log, "t1", MAIN, null, null);
         assertEquals(closed.durationMs(), store.readRounds(dir()).get(0).durationMs(),
                 "已闭合轮耗时不被覆盖");
     }
@@ -288,7 +288,7 @@ class RoundIndexPersistTest {
         store.appendRound("t1", new RoundIndex.Round("round_old", 1L, s1, null, "旧数据之问", "",
                 List.of(), 0L, 0L, null, null));
         emitMessage(MAIN, "", "旧答", List.of());
-        rounds.persistClosedRounds(store, log, "t1", MAIN, null, null);
+        rounds.persistClosedRounds(dir(), log, "t1", MAIN, null, null);
 
         RoundIndex.Round closed = store.readRounds(dir()).get(0);
         assertTrue(closed.closed());
@@ -300,19 +300,19 @@ class RoundIndexPersistTest {
     @Test
     void persistMergesIntermediateUserInputIntoRound() {
         emitNormalRound("第一问", "第一答");
-        rounds.persistClosedRounds(store, log, "t1", MAIN, null, null);
+        rounds.persistClosedRounds(dir(), log, "t1", MAIN, null, null);
 
         long secondSeq = emitUserMessage("第二问");
-        rounds.openRoundAtStart(store, "t1", secondSeq, "第二问", null);
+        rounds.openRoundAtStart(dir(), "t1", secondSeq, "第二问", null);
         emitMessage(MAIN, "想", "先调工具",
                 List.of(new ToolCallPart("c2", "bash", "{}")));
         emitToolResult("c2", "bash", "ok", false, MAIN);
         // 开着的轮内第二条用户输入:openRoundAtStart 沿用当前未闭合轮,不写新行
         long midSeq = emitUserMessage("中间补充输入");
-        rounds.openRoundAtStart(store, "t1", midSeq, "中间补充输入", null);
+        rounds.openRoundAtStart(dir(), "t1", midSeq, "中间补充输入", null);
         emitDelta(MAIN, "答");
         emitMessage(MAIN, "", "第二答", List.of());
-        rounds.persistClosedRounds(store, log, "t1", MAIN, null, null);
+        rounds.persistClosedRounds(dir(), log, "t1", MAIN, null, null);
 
         List<RoundIndex.Round> all = store.readRounds(dir());
         assertEquals(2, all.size(), "中间输入不开新轮,仍只有 2 行");
@@ -333,14 +333,14 @@ class RoundIndexPersistTest {
 
         // 再次 open(尾行未闭合)→ 沿用当前轮,不重新生成(roundId 不变、行数不变)
         long s2 = emitUserMessage("中间补充");
-        assertFalse(rounds.openRoundAtStart(store, "t1", s2, "中间补充", null), "未闭合尾行沿用返回 false");
+        assertFalse(rounds.openRoundAtStart(dir(), "t1", s2, "中间补充", null), "未闭合尾行沿用返回 false");
         List<RoundIndex.Round> afterReuse = store.readRounds(dir());
         assertEquals(1, afterReuse.size(), "沿用不追加新行");
         assertEquals(first.roundId(), afterReuse.get(0).roundId(), "沿用轮 roundId 不重新生成");
 
         // 闭合该轮(增量改写路径)→ roundId 沿用不变化
         emitMessage(MAIN, "", "第一答", List.of());
-        rounds.persistClosedRounds(store, log, "t1", MAIN, null, null);
+        rounds.persistClosedRounds(dir(), log, "t1", MAIN, null, null);
         List<RoundIndex.Round> closed = store.readRounds(dir());
         assertEquals(1, closed.size());
         assertTrue(closed.get(0).closed(), "未闭合尾行被改判为闭合");
@@ -369,7 +369,7 @@ class RoundIndexPersistTest {
         full.set("changes", fullChanges);
 
         List<RoundIndex.Round> closed =
-                rounds.persistClosedRounds(store, log, "t1", MAIN, light, full);
+                rounds.persistClosedRounds(dir(), log, "t1", MAIN, light, full);
         assertEquals(1, closed.size(), "本次确实新闭合了一轮");
         // 闭合行:roundId 沿用开轮的稳定主键,fileChanges = 轻量摘要
         RoundIndex.Round onDisk = store.readRounds(dir()).get(0);
@@ -398,7 +398,7 @@ class RoundIndexPersistTest {
                 .put("filePath", "/a.md").put("fileName", "a.md")
                 .put("changeType", "created").put("saveCount", 2);
         // fileChangesFull == null:light 摘要仍内联,但不写全文文件
-        rounds.persistClosedRounds(store, log, "t1", MAIN, light, null);
+        rounds.persistClosedRounds(dir(), log, "t1", MAIN, light, null);
 
         RoundIndex.Round onDisk = store.readRounds(dir()).get(0);
         assertTrue(onDisk.closed());
