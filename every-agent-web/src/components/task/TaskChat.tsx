@@ -737,6 +737,9 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
   const agentListItems = React.useMemo<AgentListItem[]>(() => {
     const states = stream?.state.agentStates ?? {}
     const metas = agentMeta ?? {}
+    const entryStatus = entry?.status ?? 'idle'
+    // 任务终态判定:completed/stopped/error 时,任务状态是主 agent 的权威状态。
+    const entryStatusTerminaled = entryStatus === 'completed' || entryStatus === 'stopped' || entryStatus === 'error'
     return agents.map((agent) => {
       const isMain = agent.agentId === mainAgentId
       const meta = metas[isMain ? '' : agent.agentId]
@@ -749,9 +752,12 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
         agentId: agent.agentId,
         title: agent.title,
         status: isMain
-          // 主 agent:流事件状态优先;终态任务刷新后 agent.status 不随 rounds 骨架折入,
-          // 用任务状态兜底(词表同为 idle/running/completed/stopped/error),避免胶囊灰化。
-          ? (states[''] ?? (entry?.status ?? 'idle'))
+          // 主 agent:任务终态时,任务状态(entry.status)是权威——流事件 agentStates['']
+          // 可能因 resync reset 后丢失、或被 cancelled 等事件设为 stopped 而与实际任务
+          // 终态(completed)不一致;非终态时流事件优先(反映 running/waiting-user 实时状态)。
+          ? (entryStatusTerminaled
+            ? entryStatus
+            : (states[''] ?? (entryStatus ?? 'idle')))
           : (states[agent.agentId] ?? 'idle'),
         isMain,
         meta,
