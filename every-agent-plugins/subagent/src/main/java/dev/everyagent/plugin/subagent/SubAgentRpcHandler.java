@@ -62,14 +62,31 @@ public class SubAgentRpcHandler {
         List<ObjectNode> disk = readAgentsJson(dir);
         if (disk != null) {
             for (ObjectNode a : disk) {
+                // 按 creator 过滤：只保留 subagent 创建的 agent
+                JsonNode aMeta = a.path("metadata");
+                if (aMeta.isObject()) {
+                    String creator = aMeta.path("creator").asString("");
+                    if (!creator.isEmpty() && !"subagent".equals(creator)) {
+                        continue; // 非 subagent 创建的 agent，跳过
+                    }
+                }
+                // 无 metadata 或 creator 为空 = 旧格式 subagent 创建的，保留
                 agents.add(a.deepCopy());
             }
         } else if (meta != null) {
-            // 旧任务兼容：从 meta.agents 回退
+            // 旧任务兼容：从 meta.agents 回退（旧格式无 metadata，全部保留）
             JsonNode legacyAgents = meta.path("agents");
             if (legacyAgents.isArray()) {
                 for (JsonNode a : legacyAgents) {
                     if (a.isObject()) {
+                        // 按 creator 过滤：只保留 subagent 创建的 agent
+                        JsonNode aMeta = a.path("metadata");
+                        if (aMeta.isObject()) {
+                            String creator = aMeta.path("creator").asString("");
+                            if (!creator.isEmpty() && !"subagent".equals(creator)) {
+                                continue;
+                            }
+                        }
                         agents.add(((ObjectNode) a).deepCopy());
                     }
                 }
