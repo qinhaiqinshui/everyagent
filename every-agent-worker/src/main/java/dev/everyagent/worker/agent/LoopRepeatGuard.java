@@ -47,7 +47,7 @@ public final class LoopRepeatGuard {
     /**
      * 本轮工具调用集合的稳定签名;空集返回 null(不会死循环)。
      */
-    static String signature(List<AssistantMessage.ToolCall> toolCalls) {
+    public static String signature(List<AssistantMessage.ToolCall> toolCalls) {
         if (toolCalls == null || toolCalls.isEmpty()) {
             return null;
         }

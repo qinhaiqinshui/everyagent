@@ -225,7 +225,7 @@ public class FsSearchService {
     }
 
     /** rg --json 单条 match 记录的解析结果(路径保持 rg 原始形态,聚合时归一)。 */
-    record RawHit(String rawPath, int lineNumber, String line, int matchIndex, String matchText) {
+    public record RawHit(String rawPath, int lineNumber, String line, int matchIndex, String matchText) {
     }
 
     /**
@@ -234,7 +234,7 @@ public class FsSearchService {
      * submatches[0] 的 start(行内偏移,0-based)与 match.text;非 match 记录
      * (begin/end/summary)返回 null。
      */
-    static RawHit parseMatchLine(String json) {
+    public static RawHit parseMatchLine(String json) {
         JsonNode n = Json.parse(json);
         if (!"match".equals(n.path("type").asString(""))) {
             return null;
@@ -333,7 +333,7 @@ public class FsSearchService {
      *       保持字面量语义。</li>
      * </ul>
      */
-    static List<String> buildMatchArgs(String pattern, boolean isRegex, boolean caseSensitive,
+    public static List<String> buildMatchArgs(String pattern, boolean isRegex, boolean caseSensitive,
             boolean wholeWord) {
         String effective = pattern;
         if (wholeWord) {
@@ -357,7 +357,7 @@ public class FsSearchService {
      * 转义正则元字符(VSCode escapeRegExpCharacters 同集:{@code \ { } * + ? | ^ $ . [ ] ( )};
      * rg 用 Rust regex、不支持 {@code \Q..\E},必须逐字符转义)。
      */
-    static String escapeRegex(String s) {
+    public static String escapeRegex(String s) {
         StringBuilder sb = new StringBuilder(s.length() + 8);
         for (int i = 0; i < s.length(); i++) {
             char c = s.charAt(i);

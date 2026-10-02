@@ -39,14 +39,14 @@ public class StreamSourceRegistry {
      * @param log 任务的内存事件日志（EventLogReader 接口）
      * @param mainAgentId 任务主 agent 稳定 id（推送器 payload 组装用）
      */
-    public void attach(String streamKey, EventLogReader log, String mainAgentId) {
-        sources.put(streamKey, log);
+    public void attach(String streamKey, EventLogReader reader, String mainAgentId) {
+        sources.put(streamKey, reader);
         if (mainAgentId != null) {
             mainAgentIds.put(streamKey, mainAgentId);
         }
         for (StreamSourceListener l : listeners) {
             try {
-                l.onAttach(streamKey, log);
+                l.onAttach(streamKey, reader);
             } catch (RuntimeException e) {
                 log.debug("onAttach 监听器异常 streamKey={}", streamKey, e);
             }

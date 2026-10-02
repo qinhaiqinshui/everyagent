@@ -7,7 +7,7 @@ import dev.everyagent.worker.hub.HubPool;
 import dev.everyagent.plugin.api.event.Channels;
 import dev.everyagent.worker.proto.RpcMethods;
 import dev.everyagent.worker.rpc.RpcDispatcher;
-import dev.everyagent.worker.task.TaskManager;
+import dev.everyagent.worker.modules.WorkspaceCascadePort;
 import dev.everyagent.worker.tools.RipgrepBinary;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeEach;
@@ -73,7 +73,7 @@ class FsSearchServiceTest {
 
         dispatcher = new RpcDispatcher(null, new WorkerProperties());
         @SuppressWarnings("unchecked")
-        ObjectProvider<TaskManager> provider = mock(ObjectProvider.class);
+        ObjectProvider<WorkspaceCascadePort> provider = mock(ObjectProvider.class);
         workspaces = new WorkspaceManager(props, mock(RpcDispatcher.class), mock(HubPool.class),
                 provider, new dev.everyagent.worker.os.SandboxPathRegistry(new dev.everyagent.worker.os.OsSandbox(props, null)));
         workspaces.init();
