@@ -151,8 +151,7 @@ export function AgentInfoHoverCard({ item, anchorEl, onMouseEnter, onMouseLeave 
           aria-hidden="true"
         />
         <span className="nagent-agent-card__id">{label}</span>
-        {item.isMain ? <span className="nagent-agent-card__badge">主 agent</span> : null}
-        {item.title && item.title !== label ? (
+        {item.title && item.title !== item.agentId && item.title !== label ? (
           <span className="nagent-agent-card__title" title={item.title}>{item.title}</span>
         ) : null}
       </div>

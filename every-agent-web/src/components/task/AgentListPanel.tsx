@@ -78,7 +78,14 @@ export default function AgentListPanel({ agents, filterAgentId, onSelect }: Agen
       <div className="nagent-agent-list__frame">
         <div className="nagent-agent-list__scroll" ref={scrollRef}>
           {agents.map((agent) => {
-            const label = shortAgentId(agent.agentId)
+            // 胶囊只显示 title：有真实标题(title ≠ agentId)时显示 title；
+            // 无标题时主 agent 显示「主 agent」，子 agent 显示短 ID。
+            const displayName =
+              agent.title && agent.title !== agent.agentId
+                ? agent.title
+                : agent.isMain
+                  ? '主 agent'
+                  : shortAgentId(agent.agentId)
             const selected = filterAgentId === agent.agentId
             return (
               <button
@@ -91,7 +98,7 @@ export default function AgentListPanel({ agents, filterAgentId, onSelect }: Agen
                 )}
                 onClick={() => onSelect(selected ? '' : agent.agentId)}
                 aria-pressed={selected}
-                aria-label={`agent ${label}${agent.title && agent.title !== label ? ` · ${agent.title}` : ''}（点击${
+                aria-label={`agent ${displayName}（点击${
                   selected ? '恢复全部' : '只看该 agent'
                 }，悬停查看详情）`}
                 onMouseEnter={(event) => openCard(agent.agentId, event.currentTarget)}
@@ -100,10 +107,7 @@ export default function AgentListPanel({ agents, filterAgentId, onSelect }: Agen
                 onBlur={scheduleClose}
               >
                 <span className="nagent-agent__dot" aria-hidden="true" />
-                <span className="nagent-agent__label">{label}</span>
-                {agent.title && agent.title !== label ? (
-                  <span className="nagent-agent__title">{agent.title}</span>
-                ) : null}
+                <span className="nagent-agent__label">{displayName}</span>
                 {!agent.isMain && agent.contextRatio != null ? (
                   <span
                     className={cn(
