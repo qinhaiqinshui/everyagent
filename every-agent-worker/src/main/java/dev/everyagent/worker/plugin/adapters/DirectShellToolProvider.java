@@ -1,6 +1,7 @@
 package dev.everyagent.worker.plugin.adapters;
 
 import dev.everyagent.plugin.api.shell.ShellTool;
+import dev.everyagent.plugin.api.spi.SandboxBackend;
 import dev.everyagent.plugin.api.spi.ToolContext;
 import dev.everyagent.plugin.api.spi.ToolProvider;
 import dev.everyagent.worker.os.OsSandbox;
@@ -17,7 +18,8 @@ import java.util.List;
  * {@code PowerShellToolProvider} + {@code BashToolProvider} 的 Windows DIRECT 分支
  * 与 Linux/macOS 分支。
  *
- * <p>appliesTo: 仅当 {@code ctx.sandbox() == null}（DIRECT 无沙箱后端）时 true。
+ * <p>appliesTo: 生效后端 id == {@code "direct"}（即 SPI 未解析到可用后端；
+ * {@code ctx.sandbox()} 是 {@link OsSandbox} 门面,恒非 null,故不能只判 null）。
  *
  * <p>createTools: 按 OS 选工具——Windows 用 {@link ShellTool#powershell}，
  * 非 Windows 用 {@link ShellTool#bash}。执行器为自行创建的
@@ -47,8 +49,9 @@ public class DirectShellToolProvider implements ToolProvider {
 
     @Override
     public boolean appliesTo(ToolContext ctx) {
-        // 仅 DIRECT 无沙箱后端
-        return ctx.sandbox() == null;
+        // 仅 DIRECT（无 SPI 后端生效）:门面恒非 null,判「生效后端 id == direct」
+        SandboxBackend sb = ctx.sandbox();
+        return sb == null || "direct".equals(sb.id());
     }
 
     @Override

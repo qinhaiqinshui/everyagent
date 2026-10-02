@@ -29,7 +29,9 @@ import java.util.concurrent.TimeoutException;
  * onWorkspaceRemoved no-op），以及提供通用宿主进程执行服务（{@link #spawnNative}）。
  *
  * <p>沙箱后端（wsl-ubuntu / windows-mic）由独立插件通过 {@link SandboxProviderRegistry}
- * 注册;本类实现 SPI 接口的默认行为（不挂载、不清理），插件后端覆盖之。
+ * 注册;本类实现 SPI 接口作为 DIRECT 默认行为（mount 原路径直通、onWorkspaceRemoved no-op）,
+ * 并在解析到 SPI 后端时把 {@code id()/mount()/onWorkspaceRemoved()} <strong>转发</strong>给它。
+ * 后端解析按注册表代次惰性完成（插件注册晚于本类初始化,见 §7.10）。
  *
  * <p>核心的宿主访问工具（"允许AI访问电脑"开关）直接通过 ProcessBuilder 执行,
  * 不经本类 delegate。
@@ -53,8 +55,12 @@ public final class OsSandbox implements SandboxBackend, NativeExec {
     private final ExecutorService exec = Executors.newVirtualThreadPerTaskExecutor();
     /** SPI 沙箱提供者注册表。 */
     private final SandboxProviderRegistry sandboxRegistry;
-    /** SPI 沙箱后端委托（从 SandboxProviderRegistry 选择；null = 无可用后端,退化为直接 spawn）。 */
+    /** SPI 沙箱后端委托（按注册表代次惰性解析；null = 无可用后端,退化为直接 spawn）。 */
     private volatile SandboxBackend delegate;
+    /** 上一次解析对应的 {@link SandboxProviderRegistry#generation()}；-1 = 尚未解析过。 */
+    private volatile long delegateGeneration = -1;
+    /** 解析互斥锁:并发首次访问只解析一次。 */
+    private final Object resolveLock = new Object();
 
     @jakarta.annotation.PreDestroy
     void shutdown() {
@@ -69,31 +75,100 @@ public final class OsSandbox implements SandboxBackend, NativeExec {
     }
 
     /**
-     * 启动即解析并打印生效后端。
+     * 启动期日志：<b>只陈述配置与候选,不对生效后端定论</b>。
+     *
+     * <p>时序红线（架构 §7.10）：全部 {@code SandboxProvider} 都由插件在 {@code PluginLoader}
+     * 的 {@code @PostConstruct} 里注册,而 {@code PluginLoader → WorkerServices → OsSandbox}
+     * 的构造依赖链决定了本方法必然<b>早于</b>任何注册执行。曾在此一次性 {@code select()} 定论,
+     * 结果恒定打出「无可用 SPI 后端」并让 delegate 永远为 null —— 既没有 SPI 命令工具
+     * （各后端 {@code ToolProvider.appliesTo} 全不成立）,也没有挂载/清理转发。
+     * 生效后端改由 {@link #backend()} 按注册表代次惰性解析。
      */
     @PostConstruct
     void logBackendAtStartup() {
-        if (cfg.isEnabled()) {
-            String type = normalizeBackend(cfg.getType());
-            SandboxConfig sboxConfig = new SandboxConfig(
-                    type, cfg.isEnabled(), cfg.networkDenied(),
-                    cfg.isAllowPrivilegeEscalation(),
-                    cfg.getTimeoutMs(), props.resolveSandboxPersistentRoot(), props);
-            this.delegate = sandboxRegistry.select(sboxConfig);
-            if (delegate != null) {
-                log.info("[sandbox] SPI 后端委托 = {}", delegate.id());
-            } else {
-                log.info("[sandbox] 无可用 SPI 后端,使用 DIRECT 默认沙箱(直接 spawn)");
-            }
-        } else {
-            log.info("[sandbox] 沙箱未启用,命令直接 spawn(仅超时/输出护栏):type={}",
-                    cfg.getType() == null || cfg.getType().isBlank() ? "auto" : cfg.getType().trim());
+        String type = normalizeBackend(cfg.getType());
+        if (!cfg.isEnabled()) {
+            log.info("[sandbox] 沙箱未启用,命令直接 spawn(仅超时/输出护栏):type={}", type);
+            return;
+        }
+        log.info("[sandbox] 沙箱已启用 type={} → 归一 {};SPI 候选 = {}"
+                + "(插件注册晚于本组件初始化,生效后端将于首次使用时定论)",
+                cfg.getType() == null || cfg.getType().isBlank() ? "auto" : cfg.getType().trim(),
+                type, providersDesc());
+    }
+
+    /** 生效后端 id：有 SPI 后端时是其 id，否则 {@code "direct"}（本类自身即 DIRECT 默认沙箱）。 */
+    @Override
+    public String id() {
+        SandboxBackend d = backend();
+        return d != null ? d.id() : "direct";
+    }
+
+    /**
+     * 挂载转发：有 SPI 后端则交给它（如 wsl-ubuntu 的批量 drvfs 挂载）,
+     * 无后端才走 SPI 默认实现（原路径直通,即 DIRECT 语义）。
+     *
+     * <p>门面吞掉 mount 会让 {@code SandboxPathRegistry} 的宿主↔沙箱路径映射整体失效。
+     */
+    @Override
+    public Map<Path, String> mount(List<SandboxBackend.MountRequest> requests) {
+        SandboxBackend d = backend();
+        return d != null ? d.mount(requests) : SandboxBackend.super.mount(requests);
+    }
+
+    /** 工作区移除清理转发：有 SPI 后端则交给它（如 wsl-ubuntu 的 best-effort umount）。 */
+    @Override
+    public void onWorkspaceRemoved(Path root) {
+        SandboxBackend d = backend();
+        if (d != null) {
+            d.onWorkspaceRemoved(root);
         }
     }
 
-    @Override
-    public String id() {
-        return delegate != null ? delegate.id() : "direct";
+    /**
+     * 按注册表代次惰性解析 SPI 后端委托。
+     *
+     * <p>代次未变（含解析结果为 null）直接复用缓存,不重复探测；沙箱未启用或无注册表恒为 null。
+     */
+    public SandboxBackend backend() {
+        if (!cfg.isEnabled() || sandboxRegistry == null) {
+            return null;
+        }
+        long gen = sandboxRegistry.generation();
+        if (gen == delegateGeneration) {
+            return delegate;
+        }
+        synchronized (resolveLock) {
+            if (gen != delegateGeneration) {
+                SandboxBackend prev = delegate;
+                SandboxBackend sel = sandboxRegistry.select(sandboxSpiConfig());
+                delegate = sel;
+                delegateGeneration = gen;
+                if (sel != null) {
+                    log.info("[sandbox] 生效 SPI 后端 = {}(代次 {},候选 {}){}",
+                            sel.id(), gen, providersDesc(),
+                            prev != null && !prev.id().equals(sel.id())
+                                    ? ",由 " + prev.id() + " 切换" : "");
+                } else {
+                    log.warn("[sandbox] 未解析到可用 SPI 后端(代次 {},候选 {}),使用 DIRECT 默认沙箱(直接 spawn)",
+                            gen, providersDesc());
+                }
+            }
+            return delegate;
+        }
+    }
+
+    /** 把 {@code WorkerProperties.Sandbox} 折算成 SPI 侧 {@code SandboxConfig}。 */
+    private SandboxConfig sandboxSpiConfig() {
+        return new SandboxConfig(
+                normalizeBackend(cfg.getType()), cfg.isEnabled(), cfg.networkDenied(),
+                cfg.isAllowPrivilegeEscalation(),
+                cfg.getTimeoutMs(), props.resolveSandboxPersistentRoot(), props);
+    }
+
+    /** 候选清单（id+priority,不探测可用性）;无注册表时返回占位描述。 */
+    private String providersDesc() {
+        return sandboxRegistry == null ? "（无注册表）" : sandboxRegistry.describeProviders();
     }
 
     /**

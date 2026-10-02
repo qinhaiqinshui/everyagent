@@ -18,7 +18,12 @@ public interface ToolContext extends ExecContext {
     /** Agent ID（主 agent 的 mainAgentId 或子 agent 的 agentId）。 */
     String agentId();
 
-    /** 当前激活的沙箱后端（来自 SandboxProviderRegistry）。 */
+    /**
+     * 生效的沙箱后端（由 {@code SandboxProviderRegistry} 按注册表代次惰性解析,
+     * 未解析到 SPI 后端时为 DIRECT 门面,{@code id() == "direct"}）。
+     *
+     * <p>各后端的命令工具用 {@code ctx.sandbox().id().equals("<自己的 id>")} 判定生效条件。
+     */
     SandboxBackend sandbox();
 
     /** 工作区管理器（多工作区注册表）。 */
