@@ -14,6 +14,7 @@ import dev.everyagent.worker.hub.EventSink;
 import dev.everyagent.worker.modules.ConfigStore;
 import dev.everyagent.worker.modules.ConfigStore.ResolvedConfig;
 import dev.everyagent.worker.modules.WorkspaceManager;
+import dev.everyagent.worker.modules.WorkspaceCascadePort;
 import dev.everyagent.plugin.api.event.Channels;
 import dev.everyagent.plugin.api.event.Events;
 import dev.everyagent.worker.proto.RpcMethods;
@@ -74,7 +75,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  * 多 hub:任务不做 owner 隔离;任务事件经 EventSink.fanout 扇出到全部连接的 tasks 频道。
  */
 @Component
-public class TaskManager implements TaskInputHandler, InteractionServiceImpl.StatusHook {
+public class TaskManager implements TaskInputHandler, InteractionServiceImpl.StatusHook, WorkspaceCascadePort {
 
     private static final Logger log = LoggerFactory.getLogger(TaskManager.class);
     private static final long IDEM_WINDOW_MS = 600_000;
@@ -1009,6 +1010,7 @@ public class TaskManager implements TaskInputHandler, InteractionServiceImpl.Sta
      * (meta.json/jsonl 等系统落盘,位于 workspaces/&lt;workspaceId&gt;/tasks/&lt;taskId&gt;/;
      * 绝不动工作区目录本身)。运行中任务跳过(与 task.delete 语义一致),返回实际删除数。
      */
+    @Override
     public int deleteByWorkspaceId(String workspaceId) {
         int deleted = 0;
         // 冷任务(磁盘索引;含已驱逐的终态任务)
@@ -1040,6 +1042,7 @@ public class TaskManager implements TaskInputHandler, InteractionServiceImpl.Sta
      * 改到新根,保证任务仍归属移动后的工作区、后续运行沙箱挂载新目录。运行中任务直接改
      * 内存字段并回写 meta;磁盘终态任务原地改 meta.json 后替换内存索引镜像。返回迁移数。
      */
+    @Override
     public int redirectWorkspace(String oldRoot, String newRoot) {
         int moved = 0;
         for (TaskStore.StoredTask st : store.scan()) {

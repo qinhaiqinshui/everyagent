@@ -12,7 +12,6 @@ import dev.everyagent.plugin.api.exception.BadParamsException;
 import dev.everyagent.worker.rpc.RpcDispatcher;
 import dev.everyagent.worker.rpc.RpcContext;
 import dev.everyagent.worker.rpc.SandboxViolationException;
-import dev.everyagent.worker.task.TaskManager;
 import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -86,7 +85,7 @@ public class WorkspaceManager implements dev.everyagent.plugin.api.spi.Workspace
      * 直接注入 TaskManager 会构成构造器循环。用 ObjectProvider 懒解析,仅 workspaces.remove
      * 级联删除时取用。
      */
-    private final ObjectProvider<TaskManager> taskManagers;
+    private final ObjectProvider<WorkspaceCascadePort> cascadePorts;
     /**
      * 路径翻译中间人,工作区删除时通知沙箱清理挂载 + 清理映射表。
      */
@@ -106,11 +105,11 @@ public class WorkspaceManager implements dev.everyagent.plugin.api.spi.Workspace
     private final Set<String> missing = ConcurrentHashMap.newKeySet();
 
     public WorkspaceManager(WorkerProperties props, RpcDispatcher dispatcher, HubPool pool,
-            ObjectProvider<TaskManager> taskManagers, SandboxPathRegistry pathRegistry) {
+            ObjectProvider<WorkspaceCascadePort> cascadePorts, SandboxPathRegistry pathRegistry) {
         this.props = props;
         this.dispatcher = dispatcher;
         this.pool = pool;
-        this.taskManagers = taskManagers;
+        this.cascadePorts = cascadePorts;
         this.pathRegistry = pathRegistry;
         dispatcher.register(RpcMethods.WORKSPACES_LIST, this::rpcList);
         dispatcher.register(RpcMethods.WORKSPACES_ADD, this::rpcAdd);
@@ -453,9 +452,9 @@ public class WorkspaceManager implements dev.everyagent.plugin.api.spi.Workspace
         persistRegistry();
         broadcastRegistry();
         // 级联删除该工作区下的任务数据(任务落盘 workspaces/<wsId>/tasks/<taskId>/,与用户目录无关)。
-        TaskManager taskManager = taskManagers.getIfAvailable();
-        if (taskManager != null) {
-            taskManager.deleteByWorkspaceId(removed.id());
+        WorkspaceCascadePort port = cascadePorts.getIfAvailable();
+        if (port != null) {
+            port.deleteByWorkspaceId(removed.id());
         }
         // 任务目录删完后,幂等清理工作区任务根目录剩余(空 tasks/ 与 workspaces/<wsId>/ 本身)。
         deleteWorkspaceDir(removed.id());
@@ -495,9 +494,9 @@ public class WorkspaceManager implements dev.everyagent.plugin.api.spi.Workspace
         cache.remove(key);
         persistRegistry();
         broadcastRegistry();
-        TaskManager taskManager = taskManagers.getIfAvailable();
-        if (taskManager != null) {
-            taskManager.deleteByWorkspaceId(removed.id());
+        WorkspaceCascadePort port = cascadePorts.getIfAvailable();
+        if (port != null) {
+            port.deleteByWorkspaceId(removed.id());
         }
         // 任务目录删完后,幂等清理工作区任务根目录剩余(空 tasks/ 与 workspaces/<wsId>/ 本身)。
         deleteWorkspaceDir(removed.id());
@@ -530,9 +529,9 @@ public class WorkspaceManager implements dev.everyagent.plugin.api.spi.Workspace
         }
         persistRegistry();
         broadcastRegistry();
-        TaskManager taskManager = taskManagers.getIfAvailable();
-        if (taskManager != null) {
-            taskManager.redirectWorkspace(key, newKey);
+        WorkspaceCascadePort port = cascadePorts.getIfAvailable();
+        if (port != null) {
+            port.redirectWorkspace(key, newKey);
         }
         ctx.ok(snapshot());
     }
