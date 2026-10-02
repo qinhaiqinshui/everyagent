@@ -6,13 +6,12 @@ import dev.everyagent.plugin.api.agent.AgentBuilder;
 import dev.everyagent.plugin.api.agent.AgentContext;
 import dev.everyagent.plugin.api.agent.AgentFactory;
 import dev.everyagent.plugin.api.config.WorkerConfig;
+import dev.everyagent.plugin.api.execution.ExecContext;
 import dev.everyagent.plugin.api.permission.AuthorizationHandler;
-import dev.everyagent.plugin.api.event.EventLogReader;
 import dev.everyagent.plugin.api.event.EventRecord;
 import dev.everyagent.plugin.api.model.EmitEvent;
 import dev.everyagent.plugin.api.model.EventEmitter;
 import dev.everyagent.plugin.api.model.ModelConfig;
-import dev.everyagent.plugin.api.task.TaskRuntime;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import tools.jackson.databind.JsonNode;
@@ -42,7 +41,7 @@ import static org.mockito.Mockito.when;
  * 审计 trace persist 落盘。模型调用全部用 mock Agent 模拟预设 lastText。
  *
  * <p>约束(§14.9):插件对 worker 任何 scope 零依赖,测试桩在本类内自建——
- * {@link RecordingTaskRuntime} 复刻 worker TaskEvents 的 EmitEvent→EventRecord
+ * {@link RecordingExecContext} 复刻 worker TaskEvents 的 EmitEvent→EventRecord
  * wire 映射(payload{title,summary,content,status,data}+ext{persist,operate}),
  * 不引用 worker 的 TaskEntry/TaskStore。
  */
@@ -50,7 +49,7 @@ class AiAuthReviewerTest {
 
     private WorkerConfig props;
     private AgentFactory agentFactory;
-    private RecordingTaskRuntime task;
+    private RecordingExecContext task;
 
     @BeforeEach
     void setUp() {
@@ -95,10 +94,10 @@ class AiAuthReviewerTest {
     private final java.util.concurrent.atomic.AtomicReference<String> lastTextHolder = new java.util.concurrent.atomic.AtomicReference<>("");
     private final java.util.concurrent.atomic.AtomicReference<Runnable> runAction = new java.util.concurrent.atomic.AtomicReference<>();
 
-    private RecordingTaskRuntime newTask(String cfgId) {
+    private RecordingExecContext newTask(String cfgId) {
         ModelConfig snap = new ModelConfig(cfgId, "openai-compat",
                 "http://localhost:9999/v1", "task-model", null);
-        return new RecordingTaskRuntime("t-1", snap, agentFactory);
+        return new RecordingExecContext("t-1", snap, agentFactory);
     }
 
     /** 组装授权请求桩(agentId 不参与审议,置 null)。 */
@@ -295,7 +294,7 @@ class AiAuthReviewerTest {
     }
 
     private EventRecord authTraceEvent() {
-        for (EventRecord r : task.log().readFrom(0, 100)) {
+        for (EventRecord r : task.records) {
             if ("auth.review".equals(r.event())) {
                 return r;
             }
@@ -309,7 +308,7 @@ class AiAuthReviewerTest {
         // summary = verdict + " — " + reason(reason 非空时)
         assertTrue(payload.path("summary").asString().contains(decision), payload.path("summary").asString());
         assertEquals(decision, authTracePayload().path("decision").asString());
-        assertEquals(task.taskId(), authTracePayload().path("taskId").asString());
+        assertEquals(task.subjectId(), authTracePayload().path("taskId").asString());
         assertTrue(authTracePayload().path("agentId").asString().startsWith("review"));
         assertTrue(authTracePayload().has("prompt"));
         assertTrue(authTracePayload().has("grantKey"));
@@ -326,21 +325,21 @@ class AiAuthReviewerTest {
     // ---- 自建等价桩(实现 plugin-api 接口;§14.9) ----
 
     /**
-     * TaskRuntime 记录桩(原借 worker TaskEntry + TaskEvents):
-     * events() 发射的 EmitEvent 按 wire 口径复刻为 EventRecord(event=kind,
+     * ExecContext 记录桩(原借 worker TaskEntry + TaskEvents):
+     * emitter() 发射的 EmitEvent 按 wire 口径复刻为 EventRecord(event=kind,
      * payload{title,summary,content,status,data},ext{persist,operate}),
-     * log() 只读回放同一列表,供测试断言审计 trace。
+     * records 只读回放同一列表,供测试断言审计 trace。
      */
-    private static final class RecordingTaskRuntime implements TaskRuntime {
-        private final String taskId;
+    private static final class RecordingExecContext implements ExecContext {
+        private final String subjectId;
         private final ModelConfig snapshot;
         private final Map<String, AgentContext> agentsMap = new HashMap<>();
         private final List<EventRecord> records = new CopyOnWriteArrayList<>();
 
         private final AgentFactory agentFactory;
 
-        RecordingTaskRuntime(String taskId, ModelConfig snapshot, AgentFactory agentFactory) {
-            this.taskId = taskId;
+        RecordingExecContext(String subjectId, ModelConfig snapshot, AgentFactory agentFactory) {
+            this.subjectId = subjectId;
             this.snapshot = snapshot;
             this.agentFactory = agentFactory;
         }
@@ -370,48 +369,16 @@ class AiAuthReviewerTest {
             return e.id();
         };
 
-        private final EventLogReader reader = new EventLogReader() {
-            @Override public List<EventRecord> readFrom(int from, int max) {
-                if (from < 0 || from >= records.size()) {
-                    return List.of();
-                }
-                return List.copyOf(records.subList(from, Math.min(from + max, records.size())));
-            }
-            @Override public List<EventRecord> readAfterSeq(long afterSeq, int max) {
-                return records.stream().filter(r -> r.seq() > afterSeq)
-                        .limit(max).toList();
-            }
-            @Override public void addListener(Listener listener) { }
-            @Override public void removeListener(Listener listener) { }
-        };
-
-        @Override public String taskId() { return taskId; }
-        @Override public dev.everyagent.plugin.api.agent.AgentFactory agentFactory() { return agentFactory; }
-        @Override public dev.everyagent.plugin.api.interaction.InteractionService interaction() { return null; }
-        @Override public String status() { return "running"; }
-        @Override public boolean terminal() { return false; }
-        @Override public Map<String, Object> metadata() { return new HashMap<>(); }
-        @Override public Path taskDir() { return Path.of("workspaces", "defaultworkspace", "tasks", taskId); }
+        @Override public String subjectId() { return subjectId; }
         @Override public String workspaceRoot() { return "ws"; }
         @Override public String workspaceId() { return "defaultworkspace"; }
-        @Override public String mainAgentId() { return "main-agent"; }
         @Override public ModelConfig snapshot() { return snapshot; }
-        @Override public EventEmitter events() { return emitter; }
+        @Override public EventEmitter emitter() { return emitter; }
+        @Override public AgentFactory agentFactory() { return agentFactory; }
+        @Override public Map<String, Object> metadata() { return new HashMap<>(); }
+        @Override public Path dataDir() { return Path.of("workspaces", "defaultworkspace", "tasks", subjectId); }
+        @Override public boolean terminal() { return false; }
+        @Override public dev.everyagent.plugin.api.interaction.InteractionService interaction() { return null; }
         @Override public Map<String, AgentContext> agents() { return agentsMap; }
-        @Override public AgentContext main() { return null; }
-        @Override public EventLogReader log() { return reader; }
-        @Override public ObjectNode summaryJson() { return Json.obj(); }
-        @Override public dev.everyagent.plugin.api.task.FileChangesCollector fileChanges() { return null; }
-        @Override public void fileChanges(dev.everyagent.plugin.api.task.FileChangesCollector c) { }
-        @Override public JsonNode fileChangesLight() { return null; }
-        @Override public void fileChangesLight(JsonNode light) { }
-        @Override public JsonNode fileChangesFull() { return null; }
-        @Override public void fileChangesFull(JsonNode full) { }
-        @Override public long startedAt() { return 0; }
-        @Override public long endedAt() { return 0; }
-        @Override public void touch() { }
-        @Override public void truncateLogAfter(long targetSeq) {
-            records.removeIf(r -> r.seq() >= targetSeq);
-        }
     }
 }

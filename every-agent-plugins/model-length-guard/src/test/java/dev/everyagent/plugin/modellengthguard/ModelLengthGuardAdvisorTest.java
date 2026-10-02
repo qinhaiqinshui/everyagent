@@ -3,15 +3,11 @@ package dev.everyagent.plugin.modellengthguard;
 import dev.everyagent.plugin.api.agent.AgentActivity;
 import dev.everyagent.plugin.api.agent.AgentContext;
 import dev.everyagent.plugin.api.config.WorkerConfig;
-import dev.everyagent.plugin.api.event.EventLogReader;
-import dev.everyagent.plugin.api.event.EventRecord;
 import dev.everyagent.plugin.api.event.Usage;
 import dev.everyagent.plugin.api.execution.ExecContext;
 import dev.everyagent.plugin.api.model.EventEmitter;
 import dev.everyagent.plugin.api.model.ModelConfig;
 import dev.everyagent.plugin.api.spi.TokenEstimator;
-import dev.everyagent.plugin.api.task.FileChangesCollector;
-import dev.everyagent.plugin.api.task.TaskRuntime;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.client.ChatClientRequest;
 import org.springframework.ai.chat.client.ChatClientResponse;
@@ -27,7 +23,6 @@ import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import reactor.core.publisher.Flux;
 import reactor.test.StepVerifier;
-import tools.jackson.databind.JsonNode;
 
 import java.io.IOException;
 import java.net.SocketException;
@@ -260,7 +255,7 @@ class ModelLengthGuardAdvisorTest {
 
     /** 构造 advisor(nextStream 返回 source 的桩链 + 轻量 AgentContext 桩;advisor 不发事件)。 */
     private static ModelLengthGuardAdvisor advisor(Flux<ChatClientResponse> source) {
-        TaskRuntime task = new StubTaskRuntime("t_test");
+        ExecContext task = new StubExecContext("t_test");
         AgentContext a = new StubAgentContext("a_test", "test", task);
         return new ModelLengthGuardAdvisor(a, new StubWorkerConfig(), STUB_ESTIMATOR);
     }
@@ -357,58 +352,36 @@ class ModelLengthGuardAdvisorTest {
         @Override public double tokenEstimatorDriftThreshold() { return 0.3; }
     }
 
-    /** TaskRuntime 最小桩(原借 worker TaskEntry):Guard 构造时只读 snapshot().configId()。 */
-    private static final class StubTaskRuntime implements TaskRuntime {
-        private final String taskId;
+    /** ExecContext 最小桩(原借 worker TaskEntry):Guard 构造时只读 snapshot().configId()。 */
+    private static final class StubExecContext implements ExecContext {
+        private final String subjectId;
 
-        StubTaskRuntime(String taskId) {
-            this.taskId = taskId;
+        StubExecContext(String subjectId) {
+            this.subjectId = subjectId;
         }
 
-        @Override public String taskId() { return taskId; }
-        @Override public String status() { return "running"; }
-        @Override public boolean terminal() { return false; }
-        @Override public Map<String, Object> metadata() { return new HashMap<>(); }
-        @Override public Path taskDir() { return Path.of("/tmp", taskId); }
+        @Override public String subjectId() { return subjectId; }
         @Override public String workspaceRoot() { return "/tmp"; }
         @Override public String workspaceId() { return "w_1"; }
-        @Override public String mainAgentId() { return "main-agent"; }
         @Override public ModelConfig snapshot() {
             return new ModelConfig("cfg", "openai", "http://localhost", "test-model", null);
         }
-        @Override public EventEmitter events() { return e -> e.id(); }
-        @Override public Map<String, AgentContext> agents() { return new HashMap<>(); }
+        @Override public EventEmitter emitter() { return e -> e.id(); }
         @Override public dev.everyagent.plugin.api.agent.AgentFactory agentFactory() { return null; }
+        @Override public Map<String, Object> metadata() { return new HashMap<>(); }
+        @Override public Path dataDir() { return Path.of("/tmp", subjectId); }
+        @Override public boolean terminal() { return false; }
         @Override public dev.everyagent.plugin.api.interaction.InteractionService interaction() { return null; }
-        @Override public AgentContext main() { return null; }
-        @Override public EventLogReader log() {
-            return new EventLogReader() {
-                @Override public List<EventRecord> readFrom(int from, int max) { return List.of(); }
-                @Override public List<EventRecord> readAfterSeq(long afterSeq, int max) { return List.of(); }
-                @Override public void addListener(Listener listener) { }
-                @Override public void removeListener(Listener listener) { }
-            };
-        }
-        @Override public FileChangesCollector fileChanges() { return null; }
-        @Override public void fileChanges(FileChangesCollector collector) { }
-        @Override public JsonNode fileChangesLight() { return null; }
-        @Override public void fileChangesLight(JsonNode light) { }
-        @Override public JsonNode fileChangesFull() { return null; }
-        @Override public void fileChangesFull(JsonNode full) { }
-        @Override public long startedAt() { return 0; }
-        @Override public long endedAt() { return 0; }
-        @Override public void touch() { }
-        @Override public tools.jackson.databind.node.ObjectNode summaryJson() { return null; }
-        @Override public void truncateLogAfter(long targetSeq) { }
+        @Override public Map<String, AgentContext> agents() { return new HashMap<>(); }
     }
 
     /** AgentContext 最小桩(原借 worker AgentEntity):Guard 只读 agentId/execution。 */
     private static final class StubAgentContext implements AgentContext {
         private final String agentId;
         private final String title;
-        private final TaskRuntime task;
+        private final ExecContext task;
 
-        StubAgentContext(String agentId, String title, TaskRuntime task) {
+        StubAgentContext(String agentId, String title, ExecContext task) {
             this.agentId = agentId;
             this.title = title;
             this.task = task;

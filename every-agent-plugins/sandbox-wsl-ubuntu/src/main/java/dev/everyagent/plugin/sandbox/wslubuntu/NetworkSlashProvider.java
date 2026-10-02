@@ -3,6 +3,7 @@ package dev.everyagent.plugin.sandbox.wslubuntu;
 import java.util.List;
 
 import dev.everyagent.plugin.api.WorkerServices;
+import dev.everyagent.plugin.api.execution.ExecContext;
 import dev.everyagent.plugin.api.slash.SlashCancelHandler;
 import dev.everyagent.plugin.api.slash.SlashCommandItem;
 import dev.everyagent.plugin.api.slash.SlashSelectHandler;
@@ -55,12 +56,25 @@ public final class NetworkSlashProvider {
         // 业务 onSelect:taskId 非空时经任务服务置位任务级禁网开关(草稿态不写);
         // 返回 bottom token 供底部渲染(不写输入框),业务标记由本插件自行维护。
         SlashSelectHandler selectHandler = (item, taskId) -> {
-            NetworkTaskFlag.set(services.task(), taskId, true);
+            if (taskId != null && !taskId.isEmpty()) {
+                ExecContext t = services.task().get(taskId);
+                if (t != null) {
+                    NetworkTaskFlag.set(t, true);
+                    services.task().publishUpdated(taskId);
+                }
+            }
             return List.of(SlashSelectionResult.bottom(NetworkToken.buildToken(), ITEM_ID));
         };
         // 业务 onCancel:复位任务级禁网开关。
-        SlashCancelHandler cancelHandler = (item, token, taskId) ->
-                NetworkTaskFlag.set(services.task(), taskId, false);
+        SlashCancelHandler cancelHandler = (item, token, taskId) -> {
+            if (taskId != null && !taskId.isEmpty()) {
+                ExecContext t = services.task().get(taskId);
+                if (t != null) {
+                    NetworkTaskFlag.set(t, false);
+                    services.task().publishUpdated(taskId);
+                }
+            }
+        };
         return List.of(new SlashCommandItem(
                 ITEM_ID,
                 "禁用网络",

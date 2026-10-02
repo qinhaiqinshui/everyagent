@@ -1,7 +1,6 @@
 package dev.everyagent.plugin.sandbox.wslubuntu;
 
 import dev.everyagent.plugin.api.execution.ExecContext;
-import dev.everyagent.plugin.api.task.TaskService;
 
 /**
  * 「本任务禁用网络」开关的唯一读写入口(任务级状态,归本插件自管)。
@@ -32,15 +31,10 @@ public final class NetworkTaskFlag {
      * 写:置位/复位任务级禁网开关并广播 {@code task.updated}(meta 由 slash 层与任务
      * 生命周期统一落盘)。taskId 为空(草稿态)或任务不可寻时不做任何写入。
      */
-    public static void set(TaskService tasks, String taskId, boolean blocked) {
-        if (tasks == null || taskId == null || taskId.isEmpty()) {
+    public static void set(ExecContext ctx, boolean blocked) {
+        if (ctx == null) {
             return;
         }
-        ExecContext t = tasks.get(taskId);
-        if (t == null) {
-            return;
-        }
-        t.metadata().put(META_KEY, blocked);
-        tasks.publishUpdated(taskId);
+        ctx.metadata().put(META_KEY, blocked);
     }
 }

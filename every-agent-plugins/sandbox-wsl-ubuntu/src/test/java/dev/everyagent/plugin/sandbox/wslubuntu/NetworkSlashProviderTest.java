@@ -2,13 +2,13 @@ package dev.everyagent.plugin.sandbox.wslubuntu;
 
 import dev.everyagent.plugin.api.WorkerServices;
 import dev.everyagent.plugin.api.agent.AgentContext;
+import dev.everyagent.plugin.api.execution.ExecContext;
 import dev.everyagent.plugin.api.model.ModelConfig;
 import dev.everyagent.plugin.api.spi.SandboxBackend;
 import dev.everyagent.plugin.api.slash.SlashCommandItem;
 import dev.everyagent.plugin.api.slash.SlashDisplayPosition;
 import dev.everyagent.plugin.api.slash.SlashSelectionResult;
 import dev.everyagent.plugin.api.slash.SlashTokenEncoder;
-import dev.everyagent.plugin.api.task.TaskRuntime;
 import dev.everyagent.plugin.api.task.TaskService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -23,6 +23,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -36,24 +37,24 @@ import static org.mockito.Mockito.when;
  * (真断网只有本后端做得到)。
  *
  * <p>约束(§14.9):插件对 worker 任何 scope 零依赖——provider 是静态产物,任务桩在本类
- * 内自建(实现 plugin-api TaskRuntime),不引用 worker TaskEntry。
+ * 内自建(实现 plugin-api ExecContext),不引用 worker TaskEntry。
  */
 class NetworkSlashProviderTest {
 
     private WorkerServices services;
     private TaskService taskService;
-    private StubTaskRuntime task;
+    private StubExecContext task;
 
     @BeforeEach
     void setUp() {
         services = mock(WorkerServices.class);
         taskService = mock(TaskService.class);
         SandboxBackend backend = mock(SandboxBackend.class);
-        task = new StubTaskRuntime();
+        task = new StubExecContext();
         when(services.task()).thenReturn(taskService);
         when(services.sandbox()).thenReturn(backend);
         when(backend.id()).thenReturn("wsl-ubuntu");
-        when(taskService.get("t-1")).thenReturn(task);
+        doReturn(task).when(taskService).get("t-1");
     }
 
     private SlashCommandItem item() {
@@ -127,49 +128,27 @@ class NetworkSlashProviderTest {
     @Test
     void isOnToleratesUnknownTask() {
         assertFalse(NetworkTaskFlag.isOn(null), "null 任务 = 未开启");
-        assertFalse(NetworkTaskFlag.isOn(new StubTaskRuntime()), "默认 metadata 无该 key = 未开启");
+        assertFalse(NetworkTaskFlag.isOn(new StubExecContext()), "默认 metadata 无该 key = 未开启");
     }
 
     // ---- 自建等价桩(实现 plugin-api 接口;§14.9) ----
 
-    /** TaskRuntime 最小桩(provider 只读写 metadata())。 */
-    private static final class StubTaskRuntime implements TaskRuntime {
+    /** ExecContext 最小桩(provider 只读写 metadata())。 */
+    private static final class StubExecContext implements ExecContext {
         private final Map<String, Object> metadata = new HashMap<>();
 
-        @Override public String taskId() { return "t-1"; }
-        @Override public String status() { return "running"; }
-        @Override public boolean terminal() { return false; }
-        @Override public Map<String, Object> metadata() { return metadata; }
-        @Override public Path taskDir() { return Path.of("workspaces", "defaultworkspace", "tasks", "t-1"); }
+        @Override public String subjectId() { return "t-1"; }
         @Override public String workspaceRoot() { return "ws"; }
         @Override public String workspaceId() { return "defaultworkspace"; }
-        @Override public String mainAgentId() { return "main-agent"; }
         @Override public ModelConfig snapshot() {
             return new ModelConfig("cfg", "openai-compat", "http://localhost:9999/v1", "m", null);
         }
-        @Override public dev.everyagent.plugin.api.model.EventEmitter events() { return e -> e.id(); }
-        @Override public Map<String, AgentContext> agents() { return new HashMap<>(); }
+        @Override public dev.everyagent.plugin.api.model.EventEmitter emitter() { return e -> e.id(); }
         @Override public dev.everyagent.plugin.api.agent.AgentFactory agentFactory() { return null; }
+        @Override public Map<String, Object> metadata() { return metadata; }
+        @Override public Path dataDir() { return Path.of("workspaces", "defaultworkspace", "tasks", "t-1"); }
+        @Override public boolean terminal() { return false; }
         @Override public dev.everyagent.plugin.api.interaction.InteractionService interaction() { return null; }
-        @Override public AgentContext main() { return null; }
-        @Override public dev.everyagent.plugin.api.event.EventLogReader log() {
-            return new dev.everyagent.plugin.api.event.EventLogReader() {
-                @Override public List<dev.everyagent.plugin.api.event.EventRecord> readFrom(int from, int max) { return List.of(); }
-                @Override public List<dev.everyagent.plugin.api.event.EventRecord> readAfterSeq(long afterSeq, int max) { return List.of(); }
-                @Override public void addListener(Listener listener) { }
-                @Override public void removeListener(Listener listener) { }
-            };
-        }
-        @Override public dev.everyagent.plugin.api.task.FileChangesCollector fileChanges() { return null; }
-        @Override public void fileChanges(dev.everyagent.plugin.api.task.FileChangesCollector collector) { }
-        @Override public tools.jackson.databind.JsonNode fileChangesLight() { return null; }
-        @Override public void fileChangesLight(tools.jackson.databind.JsonNode light) { }
-        @Override public tools.jackson.databind.JsonNode fileChangesFull() { return null; }
-        @Override public void fileChangesFull(tools.jackson.databind.JsonNode full) { }
-        @Override public long startedAt() { return 0; }
-        @Override public long endedAt() { return 0; }
-        @Override public void touch() { }
-        @Override public tools.jackson.databind.node.ObjectNode summaryJson() { return null; }
-        @Override public void truncateLogAfter(long targetSeq) { }
+        @Override public Map<String, AgentContext> agents() { return new HashMap<>(); }
     }
 }
