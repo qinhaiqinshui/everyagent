@@ -8,16 +8,19 @@ import dev.everyagent.plugin.api.spi.NativeExec;
 import dev.everyagent.plugin.api.spi.SandboxBackend;
 import dev.everyagent.plugin.api.spi.TokenEstimator;
 import dev.everyagent.plugin.api.spi.WorkspaceManager;
-import dev.everyagent.plugin.api.task.TaskService;
-import dev.everyagent.plugin.api.task.TaskStoreService;
+import dev.everyagent.plugin.api.task.TaskServices;
 
 /**
  * Worker 核心只读服务 —— 插件经此访问 worker 的公共能力。
  *
  * <p>对标 VSCode 的 {@code vscode.*} 命名空间——插件不直接依赖具体实现类，
  * 只经此接口访问核心服务。
+ *
+ * <p>继承 {@link TaskServices} 以提供 task 域服务（{@code task()} / {@code store()}）。
+ * 不需要 task 功能的插件只面向基础 {@code WorkerServices} 编程，
+ * 不会被被迫传递性 import task 域类型。
  */
-public interface WorkerServices {
+public interface WorkerServices extends TaskServices {
 
     /** 沙箱门面（SandboxBackend，插件可委托挂载与生命周期管理）。 */
     SandboxBackend sandbox();
@@ -30,12 +33,6 @@ public interface WorkerServices {
 
     /** Token 估算器（内置或插件注册的自定义实现）。 */
     TokenEstimator tokenEstimator();
-
-    /** 任务服务（查询任务信息、广播 task.updated）。 */
-    TaskService task();
-
-    /** 任务落盘服务（队列读写、截断、meta 读写、会话重建等）。 */
-    TaskStoreService store();
 
     /** 用户交互服务（向用户发起提问/授权，同步或异步）。 */
     InteractionService interaction();
