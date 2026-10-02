@@ -121,6 +121,8 @@ public final class TaskEntryCreateNode implements TaskLifecycleNode {
             }
             active.incrementAndGet();
             impl.taskEntry(t);
+            // 预登记 workspace 映射(同新建路径理由:track 在 VT 异步执行前,竞态 RPC 需要定位)。
+            store.registerWorkspace(taskId, t.workspaceId);
             // 设置 rerunMeta 供后续 RerunRestoreNode 使用
             impl.rerunMeta(st.summary());
             log.debug("[entry] taskentry.create 再运行认领 task={} workspace={} dir={}",
@@ -180,6 +182,9 @@ public final class TaskEntryCreateNode implements TaskLifecycleNode {
         t.taskDir(store.dirOf(taskId, impl.workspaceId()));
         t.bindExecPorts(agentFactory, asks);
         tasks.put(taskId, t);
+        // 预登记 workspace 映射:RPC 应答(order=70)发出后,track(order=100,VT 异步)执行前,
+        // slash.taskTokens.apply 等竞态 RPC 可经 dirOf(taskId) 定位任务目录。
+        store.registerWorkspace(taskId, impl.workspaceId());
         log.debug("[entry] taskentry.create 新建 task={} workspaceId={} workspaceRoot={} dir={} thread={}",
                 taskId, impl.workspaceId(), impl.workspaceRoot(), t.taskDir(),
                 Thread.currentThread().getName());

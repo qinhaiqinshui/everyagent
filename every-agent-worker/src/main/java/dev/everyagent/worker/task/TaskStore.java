@@ -131,6 +131,17 @@ public class TaskStore implements TaskStoreService {
 
     // ---- 写路径 ----
 
+    /**
+     * 预登记 taskId → workspaceId 映射(不建目录、不写 meta)。
+     * 在 TaskEntryCreateNode(order=50)创建 TaskEntry 后立即调用,
+     * 使 RPC 应答(ResponseAckNode order=70)发出后、track(order=100,VT 异步)执行前,
+     * {@link #dirOf(String)} 即可定位任务目录(供 slash.taskTokens.apply 等竞态 RPC 使用)。
+     * track() 后续会用 putIfAbsent 覆盖,语义幂等。
+     */
+    public void registerWorkspace(String taskId, String workspaceId) {
+        taskWorkspace.putIfAbsent(taskId, workspaceId);
+    }
+
     /** 开始落盘一个任务:建目录、写初始 meta、挂日志监听(writer 按 agent 懒开)。 */
     public synchronized void track(String taskId, String workspaceId, EventLog log,
             Supplier<ObjectNode> meta) throws IOException {
@@ -144,7 +155,7 @@ public class TaskStore implements TaskStoreService {
         writeMeta(dir, meta.get());
         Tracked t = new Tracked(taskId, log, meta, dir);
         tracked.put(taskId, t);
-        taskWorkspace.put(taskId, workspaceId);
+        taskWorkspace.putIfAbsent(taskId, workspaceId);
         TaskStore.log.debug("[store] track 完成 task={} dir={} (目录已建,taskWorkspace 已登记)", taskId, dir);
         log.addListener(() -> wake.release());
         wake.release();
