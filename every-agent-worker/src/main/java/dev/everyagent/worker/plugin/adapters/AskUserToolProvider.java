@@ -15,8 +15,9 @@ import java.util.List;
  *
  * <p>子 agent 不注册 ask_user（提问只能由主 agent 发起，§5.6）。
  *
- * <p>createTools: {@code ToolCallbacks.from(new AskUserTool(props, ctx.execution(), agentId))}，
- * 直接添加裸 ToolCallback——无人值守拦截逻辑已上移到 ToolExecutionInterceptor 责任链
+ * <p>createTools: {@code ToolCallbacks.from(new AskUserTool(props, ctx, agentId))}（ctx
+ * 本身即 ExecContext），直接添加裸 ToolCallback——无人值守拦截逻辑已上移到
+ * ToolExecutionInterceptor 责任链
  * （{@link dev.everyagent.worker.plugin.spi.ToolExecutionInterceptor}），核心不再硬编码装饰器。
  */
 public class AskUserToolProvider implements ToolProvider {
@@ -35,7 +36,7 @@ public class AskUserToolProvider implements ToolProvider {
     @Override
     public List<ToolCallback> createTools(ToolContext ctx) {
         List<ToolCallback> tools = new ArrayList<>();
-        for (ToolCallback c : ToolCallbacks.from(new AskUserTool(props, ctx.execution(), ctx.agentId()))) {
+        for (ToolCallback c : ToolCallbacks.from(new AskUserTool(props, ctx, ctx.agentId()))) {
             tools.add(c);
         }
         return tools;

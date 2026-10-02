@@ -1,26 +1,22 @@
 package dev.everyagent.plugin.api.spi;
 
 import dev.everyagent.plugin.api.execution.ExecContext;
-import dev.everyagent.plugin.api.interaction.InteractionService;
 import dev.everyagent.plugin.api.shell.ShellExecutor;
 import java.nio.file.Path;
 
 /**
  * 工具创建上下文 —— {@link ToolProvider#createTools} 的参数。
  *
- * <p>封装 per-task 信息（taskId、workspaceRoot）和核心只读服务
- * （沙箱、工作区管理器等），工具提供者据此创建工具实例。
+ * <p>本身即统一执行上下文（extends {@link ExecContext}：subjectId / workspaceRoot /
+ * snapshot / emitter 等类型化槽位），外加工具创建侧专属信息
+ * （agentId、沙箱后端、工作区管理器、rg 二进制路径、shell 执行器），
+ * 工具提供者据此创建工具实例。需要 {@link Path} 形态工作区根的消费者
+ * 经 {@code Path.of(ctx.workspaceRoot())} 转换并自行 null 判定。
  */
-public interface ToolContext {
-
-    /** 任务 ID。 */
-    String taskId();
+public interface ToolContext extends ExecContext {
 
     /** Agent ID（主 agent 的 mainAgentId 或子 agent 的 agentId）。 */
     String agentId();
-
-    /** 工作区根路径。 */
-    Path workspaceRoot();
 
     /** 当前激活的沙箱后端（来自 SandboxProviderRegistry）。 */
     SandboxBackend sandbox();
@@ -33,22 +29,8 @@ public interface ToolContext {
         return null;
     }
 
-    /** 用户交互服务（向用户发起提问，同步阻塞或异步回调）。 */
-    default InteractionService interaction() {
-        return null;
-    }
-
     /** 已组装好的 shell 执行器（授权 + 沙箱已内建），插件用它注册 ShellTool。 */
     default ShellExecutor shellExecutor() {
-        return null;
-    }
-
-    /**
-     * 统一执行上下文（taskId / workspaceRoot / snapshot / emitter 等类型化槽位）。
-     * <p>worker {@code ToolContextImpl} 实现注入;过渡返回 null,
-     * 消费者此期间继续经 {@link #taskId()} / {@link #workspaceRoot()} 取数。
-     */
-    default ExecContext execution() {
         return null;
     }
 }

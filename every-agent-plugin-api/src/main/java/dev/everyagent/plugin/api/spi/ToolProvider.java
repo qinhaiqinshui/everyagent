@@ -18,7 +18,7 @@ public interface ToolProvider {
     /**
      * 为指定任务创建工具回调列表。
      *
-     * @param ctx 工具创建上下文（含 taskId、workspaceRoot、sandbox、gate 等）
+     * @param ctx 工具创建上下文（含 subjectId、workspaceRoot、sandbox 等，extends ExecContext）
      * @return 该 provider 贡献的工具回调列表
      */
     List<ToolCallback> createTools(ToolContext ctx);

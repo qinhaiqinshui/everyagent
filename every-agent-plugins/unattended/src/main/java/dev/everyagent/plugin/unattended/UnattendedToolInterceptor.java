@@ -1,6 +1,5 @@
 package dev.everyagent.plugin.unattended;
 
-import dev.everyagent.plugin.api.execution.ExecContext;
 import dev.everyagent.plugin.api.spi.ToolExecutionChain;
 import dev.everyagent.plugin.api.spi.ToolExecutionContext;
 import dev.everyagent.plugin.api.spi.ToolExecutionInterceptor;
@@ -33,9 +32,7 @@ public class UnattendedToolInterceptor implements ToolExecutionInterceptor {
 
     @Override
     public ToolExecutionResult invoke(ToolExecutionContext ctx, ToolExecutionChain next) throws Exception {
-        ExecContext task = ctx.execution();
-        if (task == null
-                || !Boolean.TRUE.equals(task.metadata().getOrDefault("unattended", false))) {
+        if (!Boolean.TRUE.equals(ctx.metadata().getOrDefault("unattended", false))) {
             return next.proceed(ctx); // 不是无人值守模式，放行
         }
         Prompt prompt = ctx.prompt();

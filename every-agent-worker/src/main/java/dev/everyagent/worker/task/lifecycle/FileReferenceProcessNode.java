@@ -1,5 +1,11 @@
 package dev.everyagent.worker.task.lifecycle;
 
+import dev.everyagent.plugin.api.agent.AgentContext;
+import dev.everyagent.plugin.api.agent.AgentFactory;
+import dev.everyagent.plugin.api.execution.ExecContext;
+import dev.everyagent.plugin.api.interaction.InteractionService;
+import dev.everyagent.plugin.api.model.EventEmitter;
+import dev.everyagent.plugin.api.model.ModelConfig;
 import dev.everyagent.plugin.api.slash.SlashTokenEncoder;
 import dev.everyagent.plugin.api.spi.FileReference;
 import dev.everyagent.plugin.api.spi.FileReferenceContext;
@@ -8,6 +14,7 @@ import dev.everyagent.plugin.api.spi.FileReferenceResult;
 import dev.everyagent.plugin.api.task.TaskChain;
 import dev.everyagent.plugin.api.task.TaskLifecycleContext;
 import dev.everyagent.plugin.api.task.TaskLifecycleNode;
+import dev.everyagent.plugin.api.task.TaskRuntime;
 import dev.everyagent.worker.plugin.registry.FileReferenceHandlerRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -226,17 +233,84 @@ public final class FileReferenceProcessNode implements TaskLifecycleNode {
         return fileName.substring(idx).toLowerCase(Locale.ROOT);
     }
 
-    /** per-任务的 FileReferenceContext 只读视图。 */
-    private record ContextView(String taskId, String workspaceId, Path workspaceRoot,
-            dev.everyagent.plugin.api.execution.ExecContext execution)
-            implements FileReferenceContext {
+    /**
+     * per-任务的 FileReferenceContext 只读视图。
+     *
+     * <p>持有委托 {@link ExecContext}（即 TaskRuntime；早期节点任务尚未创建时为
+     * null）+ 早期回退字段（taskId / workspaceId / workspaceRoot 字符串）。
+     * {@link ExecContext} 非空时槽位一律委托；为 null 时早期回退字段供给
+     * {@code subjectId()} / {@code workspaceId()} / {@code workspaceRoot()}，
+     * 其余槽位（snapshot/emitter/agentFactory/interaction/dataDir/agents）回退为
+     * null（terminal 回退 false、metadata/agents 回退空 Map）。
+     */
+    private static final class ContextView implements FileReferenceContext {
+
+        private final ExecContext exec;
+        private final String earlyTaskId;
+        private final String earlyWorkspaceId;
+        private final String earlyWorkspaceRoot;
 
         ContextView(TaskLifecycleContext ctx) {
-            this(ctx.taskId(), ctx.workspaceId(), toPath(ctx.workspaceRoot()), ctx.taskRuntime());
+            TaskRuntime runtime = ctx.taskRuntime();
+            this.exec = runtime; // TaskRuntime implements ExecContext
+            this.earlyTaskId = ctx.taskId();
+            this.earlyWorkspaceId = ctx.workspaceId();
+            this.earlyWorkspaceRoot = ctx.workspaceRoot();
         }
 
-        private static Path toPath(String workspaceRoot) {
-            return workspaceRoot != null && !workspaceRoot.isEmpty() ? Path.of(workspaceRoot) : null;
+        @Override
+        public String subjectId() {
+            return exec != null ? exec.subjectId() : earlyTaskId;
+        }
+
+        @Override
+        public String workspaceRoot() {
+            return exec != null ? exec.workspaceRoot() : earlyWorkspaceRoot;
+        }
+
+        @Override
+        public String workspaceId() {
+            return exec != null ? exec.workspaceId() : earlyWorkspaceId;
+        }
+
+        @Override
+        public ModelConfig snapshot() {
+            return exec != null ? exec.snapshot() : null;
+        }
+
+        @Override
+        public EventEmitter emitter() {
+            return exec != null ? exec.emitter() : null;
+        }
+
+        @Override
+        public AgentFactory agentFactory() {
+            return exec != null ? exec.agentFactory() : null;
+        }
+
+        @Override
+        public Map<String, Object> metadata() {
+            return exec != null ? exec.metadata() : Map.of();
+        }
+
+        @Override
+        public Path dataDir() {
+            return exec != null ? exec.dataDir() : null;
+        }
+
+        @Override
+        public boolean terminal() {
+            return exec != null && exec.terminal();
+        }
+
+        @Override
+        public InteractionService interaction() {
+            return exec != null ? exec.interaction() : null;
+        }
+
+        @Override
+        public Map<String, AgentContext> agents() {
+            return exec != null ? exec.agents() : Map.of();
         }
     }
 }

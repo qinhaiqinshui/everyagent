@@ -50,19 +50,19 @@ public class WslUbuntuBashToolProvider implements ToolProvider {
 
     @Override
     public List<ToolCallback> createTools(ToolContext ctx) {
-        Path workspaceRoot = ctx.workspaceRoot();
+        Path workspaceRoot = ctx.workspaceRoot() != null ? Path.of(ctx.workspaceRoot()) : null;
         WslUbuntuCommandExecutor exec = new WslUbuntuCommandExecutor(props, workspaceRoot,
-                workspaces, pluginDir, taskNetworkBlocked(ctx.taskId()));
+                workspaces, pluginDir, taskNetworkBlocked(ctx.subjectId()));
         return List.of(ShellTool.bash(exec::execute)
                 .appendDescription("rg 已加入 PATH,可直接执行 rg 命令，内容搜索尽量使用rg命令，性能更好;")
                 .callback());
     }
 
     /** 任务级禁网开关读取器(每次调用实时查任务 metadata;任务服务缺失时恒 false)。 */
-    private BooleanSupplier taskNetworkBlocked(String taskId) {
+    private BooleanSupplier taskNetworkBlocked(String subjectId) {
         if (services == null || services.task() == null) {
             return () -> false;
         }
-        return () -> NetworkTaskFlag.isOn(services.task().get(taskId));
+        return () -> NetworkTaskFlag.isOn(services.task().get(subjectId));
     }
 }

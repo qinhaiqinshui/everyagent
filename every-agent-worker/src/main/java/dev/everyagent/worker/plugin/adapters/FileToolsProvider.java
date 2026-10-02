@@ -30,6 +30,6 @@ public class FileToolsProvider implements ToolProvider {
 
     @Override
     public List<ToolCallback> createTools(ToolContext ctx) {
-        return List.of(ToolCallbacks.from(new FileTools(fs, ctx.execution(), ctx.agentId())));
+        return List.of(ToolCallbacks.from(new FileTools(fs, ctx, ctx.agentId())));
     }
 }

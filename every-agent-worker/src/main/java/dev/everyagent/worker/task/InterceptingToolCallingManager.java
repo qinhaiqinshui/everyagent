@@ -1,6 +1,11 @@
 package dev.everyagent.worker.task;
 
+import dev.everyagent.plugin.api.agent.AgentContext;
+import dev.everyagent.plugin.api.agent.AgentFactory;
 import dev.everyagent.plugin.api.execution.ExecContext;
+import dev.everyagent.plugin.api.interaction.InteractionService;
+import dev.everyagent.plugin.api.model.EventEmitter;
+import dev.everyagent.plugin.api.model.ModelConfig;
 import dev.everyagent.plugin.api.spi.ToolExecutionContext;
 import dev.everyagent.worker.plugin.registry.ToolExecutionInterceptorRegistry;
 import org.springframework.ai.chat.messages.AssistantMessage;
@@ -12,7 +17,9 @@ import org.springframework.ai.model.tool.ToolCallingManager;
 import org.springframework.ai.model.tool.ToolExecutionResult;
 import org.springframework.ai.tool.definition.ToolDefinition;
 
+import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 
 /**
  * per-run 拦截工具调用管理器（非单例）。
@@ -63,5 +70,19 @@ public class InterceptingToolCallingManager implements ToolCallingManager {
     private record ToolExecutionContextImpl(
             Prompt prompt, ChatResponse chatResponse,
             List<AssistantMessage.ToolCall> toolCalls,
-            ExecContext execution) implements ToolExecutionContext {}
+            ExecContext execution) implements ToolExecutionContext {
+
+        // — ExecContext 委托 —
+        @Override public String subjectId() { return execution.subjectId(); }
+        @Override public String workspaceRoot() { return execution.workspaceRoot(); }
+        @Override public String workspaceId() { return execution.workspaceId(); }
+        @Override public ModelConfig snapshot() { return execution.snapshot(); }
+        @Override public EventEmitter emitter() { return execution.emitter(); }
+        @Override public AgentFactory agentFactory() { return execution.agentFactory(); }
+        @Override public Map<String, Object> metadata() { return execution.metadata(); }
+        @Override public Path dataDir() { return execution.dataDir(); }
+        @Override public boolean terminal() { return execution.terminal(); }
+        @Override public InteractionService interaction() { return execution.interaction(); }
+        @Override public Map<String, AgentContext> agents() { return execution.agents(); }
+    }
 }

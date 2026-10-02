@@ -31,8 +31,8 @@ public class DialogInsertAdvisorProvider implements AdvisorProvider {
     @Override
     public Advisor create(AdvisorContext ctx) {
         return new DialogInsertAdvisor(
-                registry.getDialogInsertQueue(ctx.taskId()),
-                ctx.taskId()
+                registry.getDialogInsertQueue(ctx.subjectId()),
+                ctx.subjectId()
         );
     }
 }

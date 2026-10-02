@@ -56,7 +56,7 @@ public class DirectShellToolProvider implements ToolProvider {
         Path rgDir = (rgBinary != null && rgBinary.available() && rgBinary.path() != null)
                 ? rgBinary.path().getParent() : null;
         ToolContextImpl impl = (ToolContextImpl) ctx;
-        CommandExecutor exec = new CommandExecutor(sandbox, ctx.execution(),
+        CommandExecutor exec = new CommandExecutor(sandbox, ctx,
                 impl.gateImpl(), ctx.agentId(), rgDir);
         boolean win = isWindows();
         String rgNote = "rg 已加入 PATH,可直接执行 rg 命令，内容搜索尽量使用rg命令，性能更好;";

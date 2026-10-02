@@ -42,7 +42,7 @@ public class CodexBashToolProvider implements ToolProvider {
 
     @Override
     public List<ToolCallback> createTools(ToolContext ctx) {
-        Path workspaceRoot = ctx.workspaceRoot();
+        Path workspaceRoot = ctx.workspaceRoot() != null ? Path.of(ctx.workspaceRoot()) : null;
         CodexCommandExecutor exec = new CodexCommandExecutor(manager, workspaceRoot, rgPath);
         return List.of(ShellTool.powershell(exec::execute)
                 .appendDescription("rg 已加入 PATH,可直接执行 rg 命令，内容搜索尽量使用rg命令，性能更好;"

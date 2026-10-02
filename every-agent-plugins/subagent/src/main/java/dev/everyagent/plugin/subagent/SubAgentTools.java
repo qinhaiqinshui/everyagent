@@ -7,7 +7,7 @@ import org.springframework.ai.tool.annotation.ToolParam;
 
 /**
  * subagent 工具集:绑定 {@link ExecContext} 整个上下文句柄(工具调用时由
- * {@code ToolContext.execution()} 传入),不再以 taskId 反查任务服务(§8.2)。
+ * {@code ToolContext} 传入,本身即 ExecContext),不再以 taskId 反查任务服务(§8.2)。
  */
 public class SubAgentTools {
 

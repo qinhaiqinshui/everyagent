@@ -498,7 +498,7 @@ ask 管道承载第二类阻塞请求:**危险操作授权**。`PermissionGate` 
 当需要人工授权(PermissionGate 拦到工作区外路径/危险命令)时,除人工弹窗外提供两条可选的任务级自动路径:
 
 - **AI 审议(`/AI 审议`,kind=ai.review)**:可单独开启。授权弹窗改为由**独立的 AI 审议会话**(无任何工具、独立 system prompt,只基于安全策略判断并要求忽略授权正文中的任何指令,防 prompt 注入)读取授权信息并输出结构化判断(ALLOW/DENY/ESCALATE),在 PermissionGate 内部闭环自动放行/拦截并落审计。**主 Agent 是被审议方,不能自我授权**。审议 agent 经 `req.context().agentFactory().create(reviewAgentId, reviewModel?)` 创建——工厂为预绑定静态代理(§7.20),事件/审计自动落被审议主体日志,advisor 链(重试/压缩/限流)照常装配;审议 agent 以 per-task 固定 agentId `review-<subjectId>` 注册进 `agents()` 跨请求复用会话——既往授权决策的结论与理由留在审议员上下文内,后续审议看得见本任务历史决策(会话随授权次数增长,任务生命周期内有限)。
-- **无人值守(`/无人值守`,kind=unattended.mode)**:开启时**联动**开启 AI 审议(selectHandler 一次返回两个胶囊,前端各自 apply)。AI 仍可看到并调用 `ask_user` 工具,但 `UnattendedToolInterceptor`(工具执行拦截链节点,§7.14.3)在工具执行瞬间拦截该调用、代替人工逐题选择第一个选项,以「题干：首选项」格式回传作答文本(与前端真实作答格式一致;不创建 ask、不挂起等待);拦截器每次工具执行实时读 `ctx.execution().metadata()` 的 unattended 标记(域中性取数,§7.20),运行中点胶囊开/关即时生效。两胶囊 ✕ 独立,开启时联动、事后可拆分。
+- **无人值守(`/无人值守`,kind=unattended.mode)**:开启时**联动**开启 AI 审议(selectHandler 一次返回两个胶囊,前端各自 apply)。AI 仍可看到并调用 `ask_user` 工具,但 `UnattendedToolInterceptor`(工具执行拦截链节点,§7.14.3)在工具执行瞬间拦截该调用、代替人工逐题选择第一个选项,以「题干：首选项」格式回传作答文本(与前端真实作答格式一致;不创建 ask、不挂起等待);拦截器每次工具执行实时读 `ctx.metadata()` 的 unattended 标记(`ToolExecutionContext extends ExecContext`,域中性直读槽位,§7.20),运行中点胶囊开/关即时生效。两胶囊 ✕ 独立,开启时联动、事后可拆分。
 
 **授权拦截链**(`PermissionGate.ensureGranted` 内、发起人工弹窗前短路,两条独立环节互不相关):
 
@@ -621,13 +621,13 @@ wsl-bwrap 后端的 seccomp 内核级提权拦截已随 bwrap 后端删除而移
 
 **事件与持久化**:子 agent 不建独立 Task,事件与主 agent 同名、以 agentId 字段嵌套在父任务流(spawn 生命周期为 agent.started/agent.done);**每个子 agent 一个独立会话文件 `<subAgentId>.jsonl`**;冷启动重建、断线续播、ask(带 agentId)全部复用既有机制。子 agent 台账**独立落盘任务目录 `agents.json`**(形状 `{"agents":[...]}`,临时文件 + 原子 move 写入、空台账删文件)——从 meta.json 拆出,TaskSummary 不再携带 agents 数组,`tasks.list` 读 meta 的任务列表数据因此减负;台账项 = `AgentEntity.toSummary()`:agentId/kind/title/createdAt/status/latestActivity/**usage(累计)**/lastText/**context(最近一轮上下文快照 `{inputTokens, contextWindowTokens, model}`,有数据才写)**,前端经 `task.agents` 拉取。usage 事件语义:WorkerToolEventAdvisor 每轮模型调用 usage 发射前先 `addUsage` 累计进 AgentEntity——usage 事件 total 载荷 = 含本轮累计;子 agent 每轮 usage 后刷新内存台账并触发 agents.json 落盘(persistHook / 30s 定时 / 终态 finish 三路径)。
 
-**域中性(§7.20/§14.11)**:subagent 是**执行域能力插件**(spawn/wait/stop 子 agent 是执行域能力,不是任务域能力——没有 task 只有 workflow 的执行主体同样可用)。`SubAgentManager` 构造零服务依赖,方法收 `ExecContext`(run/list/waitFor/stop/awaitAllBeforeFinish/stopAll),工具入口绑 `ToolContext.execution()` 不再反查任务;per-subject 状态自持 `TaskSubState`(监视器内部化,对任务对象的锁依赖消失)。台账 agents.json 是**插件自有数据**(住主体 dataDir 下),`SubAgentLedger` 经 `AtomicFiles` 自行读写、不挂 TaskStoreService;四个生命周期节点(track/untrack/persist/spawned.await)壳留 task 面、逻辑取 ExecContext 槽位,工作流落地时同一核心以同构生命周期壳挂载、零新逻辑。
+**域中性(§7.20/§14.11)**:subagent 是**执行域能力插件**(spawn/wait/stop 子 agent 是执行域能力,不是任务域能力——没有 task 只有 workflow 的执行主体同样可用)。`SubAgentManager` 构造零服务依赖,方法收 `ExecContext`(run/list/waitFor/stop/awaitAllBeforeFinish/stopAll),工具入口绑 `ToolContext`(extends ExecContext,§7.20.5) 不再反查任务;per-subject 状态自持 `TaskSubState`(监视器内部化,对任务对象的锁依赖消失)。台账 agents.json 是**插件自有数据**(住主体 dataDir 下),`SubAgentLedger` 经 `AtomicFiles` 自行读写、不挂 TaskStoreService;四个生命周期节点(track/untrack/persist/spawned.await)壳留 task 面、逻辑取 ExecContext 槽位,工作流落地时同一核心以同构生命周期壳挂载、零新逻辑。
 
 ### 7.14.1 任务生命周期洋葱模型（Phase 1）
 
 任务开始/结束收口采用 **洋葱模型**（Servlet Filter 风格参与式链）：节点拿到运行上下文，调用 `result = next(context)` 得到后面全部节点+内核的执行结果。`next()` 之前 = 下行（开始）阶段，之后 = 上行（结束）阶段。
 
-- **契约**：`TaskLifecycleNode`（plugin-api）、`TaskLifecycleContext`、`TaskOutcome`、`TaskKernel`——放 plugin-api `dev.everyagent.plugin.api.task` 包，插件可贡献节点。
+- **契约**：`TaskLifecycleNode`（plugin-api）、`TaskLifecycleContext`、`TaskOutcome`、`TaskKernel`——放 plugin-api `dev.everyagent.plugin.api.task` 包，插件可贡献节点；`TaskLifecycleContext extends ExecContext`（任务域成员保留 + default 桥接，§7.20.5）。
 - **执行器**：`TaskLifecycleExecutor`（worker `task.lifecycle` 包）——按 order 升序稳定排序折叠为嵌套链，链尾接内核；`InterruptedException`→CANCELLED 兜底。
 - **临界段**：order ∈ [420, 850] 的连续 `UpstreamNode` 段共享一次 `synchronized(taskLock)`，对外表现为 order=850 的单一链位置。段内上行执行序 = order 降序（与现状 finish 持锁段逐项一致）。
 - **注册表**：`TaskLifecycleRegistry`（`plugin/registry/` 第 8 个注册表）——CopyOnWriteArrayList + PluginStateStore 过滤 + float 稳定排序。850..420 区间拒绝插件节点插入。
@@ -664,7 +664,7 @@ worker 的两条运行期责任链迁移为与任务洋葱同一的 filter 形�
 | PermissionGate 内部三链 | `check(ctx)` 返回 ALLOW/DENY/SKIP | `invoke(ctx, next)`：SKIP=proceed，短路=ALLOW/DENY | 与洋葱同构 |
 
 - **链组装器**：`ToolExecutionChainExecutor` / `AuthorizationChainExecutor` / `PermissionChainImpl`，均按 order 升序折叠为嵌套链，与 `TaskLifecycleExecutor` 同构。
-- **ThreadLocal 消除**：`InterceptingToolCallingManager` 改为 per-run 实例、以构造参数直持 `ExecContext`(S4,§7.20)——reactive 流的工具执行可能切换到 boundedElastic 线程,ThreadLocal 不可靠;插件经 `ToolExecutionContext.execution()` 取执行上下文,不再直接依赖 worker 内部类。
+- **ThreadLocal 消除**：`InterceptingToolCallingManager` 改为 per-run 实例、以构造参数直持 `ExecContext`(S4,§7.20)——reactive 流的工具执行可能切换到 boundedElastic 线程,ThreadLocal 不可靠;插件的 `ToolExecutionContext` 本身即 ExecContext(extends,§7.20.5),拦截器直读槽位,不再直接依赖 worker 内部类。
 - **`LoopRepeatGuardToolManager` 保持装饰器**：核心守卫不是插件扩展点，且需在 `executeToolCalls` 处合成工具结果回传模型，与插件链职责不同。
 - **行为零变化**：短路/放行/兜底语义逐项等价（§6.3 迁移映射表）。
 
@@ -888,7 +888,7 @@ EventLog → DataPusher.readFrom → WebSocketEmitter.push → conn.pub → 前�
 限流插件以 Advisor 形式注入 Agent 执行链,不再经独立的模型请求中间层:
 
 - **`RateLimitAdvisor` implements `CallAdvisor, StreamAdvisor`**:order=`ToolCallingAdvisor.DEFAULT_ORDER+500`(最内层,ContextCompression +400 之后),对主/子/AI 审议/池成员全部自动生效。
-- `adviseCall`/`adviseStream` 中经 `a.execution().snapshot()` 查 limiter:无限流配置 → 直通下一层;有配置 → `acquire()` 排队等待(虚拟线程 park,零线程开销),等待期间经 `a.emitter().emit(EmitEvent.transientOf(...))` 发语义事件(取数经 `a.execution()`,§7.20)。
+- `adviseCall`/`adviseStream` 中经 `a.snapshot()` 查 limiter:无限流配置 → 直通下一层;有配置 → `acquire()` 排队等待(虚拟线程 park,零线程开销),等待期间经 `a.emitter().emit(EmitEvent.transientOf(...))` 发语义事件(`AdvisorContext extends ExecContext`,直读槽位,§7.20)。
 - 通过 Reactor 操作符(`doOnNext`/`doOnCancel`/`doOnError`/`doOnComplete`)绑定 Permit 生命周期:`doOnNext` 驱动流中 token 估算(`permit::onChunk`),`doOnComplete` 驱动事后精确记账与信号量释放(`permit::complete`),`doOnError`/`doOnCancel` 驱动取消与释放(`permit::cancel`)。不再经 `ModelRequestContext` 回调,直接在 Advisor 链操作。
 - **限流类驻插件包**:`ModelRateLimiter` / `RateLimitAdvisor` / `RateLimitAdvisorProvider` / `ModelRateLimitConfig` / `ModelRateLimiterRegistry` / `BuiltinTokenEstimator` / `TokenCalibrationAdvisor`(+ Provider);测试一并随插件。
 - **不耦合内核**:插件只依赖 `ModelConfig` + `EventEmitter`,不耦合 `ChatModel`/`Prompt`/`ChatResponse`/`Flux`/`TaskEvents`/`agentId`/`taskId`/`DataPusher`。
@@ -948,10 +948,10 @@ agent 层（AgentContext）
   emitter()（agent 级 agentId 包装）保留,包的是 execution().emitter()
         │
 advisor 链
-  a.execution().snapshot().configId() / .emitter() / .terminal() ...   ← 强转消失
+  a.snapshot().configId() / .emitter() / .terminal() ...   ← AdvisorContext extends ExecContext,强转消失
         │
 工具执行链（InterceptingToolCallingManager per-run 构造参数直持 ExecContext）
-  ToolContext / ToolExecutionContext / AdvisorContext.execution()
+  ToolContext / ToolExecutionContext / AdvisorContext（均 extends ExecContext，直读槽位，§7.20.5）
   FsToolSupport / CommandExecutor: gate.requirePath(ExecContext, agentId, path, op)
         │
 授权链（AuthorizationRequest）
@@ -1008,17 +1008,31 @@ public interface AgentFactory {
 
 - `AuthorizationRequest(ExecContext context, agentId, grantKey, prompt)`——主体数据面全部由 ExecContext 槽位携带（subjectId/metadata/dataDir/emitter/agentFactory/interaction），授权请求只剩 `grantKey`（授权状态分区键）与 `prompt`（授权请求原文）两个授权专属参数。
 - `GrantRegistry` 域中性：按 `subjectId()` 分区授权状态（beginRun/untrack/extraRoots/execRoots 参数语义改 subjectId，值不变——今天=taskId）、`dataDir()` 落盘 grants.json（wire 格式不变）。
-- 外层权限链 `PermissionContext` 域中性形态：不携带 `TaskEntry`——路径判定用 `workspaceRoot` 字符串 + 授权决议经 `authReq`（AuthorizationRequest，内含 ExecContext）；调用方（`FsToolSupport`/`CommandExecutor`）从 `ToolContext.execution()` 取 ExecContext 构造。
+- 外层权限链 `PermissionContext` 域中性形态：不携带 `TaskEntry`——路径判定用 `workspaceRoot` 字符串 + 授权决议经 `authReq`（AuthorizationRequest，内含 ExecContext）；调用方（`FsToolSupport`/`CommandExecutor`）直取 `ToolContext`（本身即 ExecContext，§7.20.5）构造。
 
-#### 7.20.5 消费者取数路径（properties 黑盒与 map 槽退役后）
+#### 7.20.5 Context 接口收编（全部 extends ExecContext）
 
-- advisor：`AgentContext.execution()`（`AgentEntity` 字段替换为 execution）；`AdvisorContext.execution()` 委托 agentEntity。
-- 工具 provider：`ToolContext.execution()` / `ToolExecutionContext.execution()`（`ToolContextImpl.taskEntry()` 已删）；`InterceptingToolCallingManager` per-run 实例构造参数直持 ExecContext（不依赖 ThreadLocal——reactive 流工具执行可能切 boundedElastic 线程）。
+各横切 Context 接口统一 `extends ExecContext`（与 `TaskRuntime` 桥接范式同构，§7.20.2）：重复字段一律删除、`execution()` 槽位一律退役——**Context 即执行上下文本体，消费侧直读槽位**，不再有间接访问器。
+
+| 接口 | 删除 | 保留（领域专属成员） | 桥接/实现 |
+|---|---|---|---|
+| `ToolContext`（spi 包） | `taskId()`、`workspaceRoot():Path`（与 ExecContext 的 String 返回类型冲突，消费侧改 `Path.of(ctx.workspaceRoot())`）、`interaction()`（由 ExecContext 预绑定交互口取代）、`execution()` | agentId/sandbox/workspaces/rgBinary/shellExecutor（工具创建专属） | worker `ToolContextImpl` 持有 ExecContext 并委托全部槽位 |
+| `AdvisorContext` | `taskId()`、`workspaceRoot():Path`、`execution()` | agentId/toolCallingManager/agentEntity；**`configId()` 保留**——它是 per-agent 语义（审议 agent 覆盖模型时与 `exec.snapshot().configId()` 不同），不是重复字段 | worker `AdvisorContextImpl` 的 ExecContext 槽位委托 `agentEntity.execution()` |
+| `FileReferenceContext` | `taskId()`、`workspaceId()`、`workspaceRoot():Path`、`execution()` | （无领域专属成员） | 早期节点任务未创建时槽位可为 null，语义保留 |
+| `ToolExecutionContext` | `execution()` | prompt/chatResponse/toolCalls（拦截专属） | 拦截器直读槽位（如 `ctx.metadata()`） |
+| `TaskLifecycleContext` | — | `taskId()`/`workspaceRoot()`/`workspaceId()` 作为**任务域成员**保留（消费侧零改动） | 仿 TaskRuntime 范式：新增 default 桥接（`subjectId()`→`taskId()` 等），其余 ExecContext 槽位以 default 委托 `taskRuntime()`（早期 RPC 阶段任务未创建时返回 null/空，语义保留） |
+
+**消费侧命名迁移规则**：横切层取主体 ID 一律 `subjectId()`；原 `ctx.taskId()` 调用点（ToolContext/AdvisorContext/FileReferenceContext/ToolExecutionContext 的消费侧）全部迁移到 `subjectId()`，`taskId()` 只保留在 TaskRuntime/TaskLifecycleContext 等任务域接口上作为任务域成员。
+
+#### 7.20.6 消费者取数路径（properties 黑盒与 map 槽退役后）
+
+- advisor：`AgentContext.execution()`（`AgentEntity` 字段替换为 execution）；`AdvisorContext extends ExecContext`，槽位委托 `agentEntity.execution()`（§7.20.5）。
+- 工具 provider：`ToolContext`/`ToolExecutionContext` 本身即 ExecContext（`extends`，`execution()` 槽位已删、直读槽位；`ToolContextImpl.taskEntry()` 已删，§7.20.5）；`InterceptingToolCallingManager` per-run 实例构造参数直持 ExecContext（不依赖 ThreadLocal——reactive 流工具执行可能切 boundedElastic 线程）。
 - subagent 插件：全面中性化（§7.14）——Manager 零服务依赖收 ExecContext、台账 IO 自持（AtomicFiles + `ctx.dataDir()`）、`TaskStoreService` agents 段退役、生命周期节点壳核分离、`task.agents` RPC 壳留 task 面（mainAgentId/meta.json 是任务概念）、方法名常量 TASK_AGENTS 跟注册方走（住插件侧）；`TaskStore.truncateAfterSeq` 编辑重发截断只动 *.jsonl/rounds.jsonl，**不删任何插件数据文件**（agents.json/file-changes 残留陈旧条目被接受；后续可增加 `task.truncated` 截断事件通知由插件自清——开放项，task 核心永不知晓插件文件名）。
 - AI 审议 agent：per-task 固定 agentId `review-<subjectId>` 注册进 `agents()` 跨请求复用会话（§7.9）——`agents().get(id)` 命中即续跑，未命中经 `ctx.agentFactory()` 创建并注册。
 - `InteractionService` ask 的 context map `"taskId"` 键保留（值=subjectId，今天相等，前端兼容）；`SubjectBoundInteractionService` 静态代理在键缺失时自动补填，替代各处手动组装。
 
-#### 7.20.6 工作流复用终态
+#### 7.20.7 工作流复用终态
 
 未来工作流层 `WorkflowRuntime implements ExecContext`（subjectId=workflowId、dataDir=工作流数据目录、emitter=工作流事件口、agentFactory=WorkflowBoundAgentFactory）——同一条授权链、同一批 advisor、同一工具链、同一 subagent/审议能力**零改动复用**（§7.14.2 分层：工作区 → task 层/工作流层平级编排 → agent 层 → 基础设施层，下层不知道上层）；事件管道（§14.0）与执行上下文管道双通道同构。
 
@@ -1222,7 +1236,7 @@ docker-compose 一键:`HUB_KEY=你的密钥 docker-compose up --build`;数据落
 | D26 | 命令沙箱多后端:Windows 默认 wsl-direct、wsl-bwrap 显式、windows-mic 回退 | 「零管理员 + 网络硬隔离 + 零宿主残留」在原生 Windows 不可兼得;WSL2 生态已验证 |
 | D27 | 授权语义(seccomp 场景)= WSL 原生 root 重跑 | NNP + userns 不映射 uid0 + 基座只读 → 沙箱内真实提权物理不可行 |
 | D28 | AI 审议与无人值守为独立任务级开关,开启时联动、事后可拆分 | 分别满足"无人监督但有把关"与"全流程无人值守"两种需求 |
-| D29 | **统一执行上下文 ExecContext**:黑盒 properties 四件套(taskEntry/taskId/workspaceRoot/configId)显式类型化为 plugin-api 接口槽位(仅主体必然具备的核心属性与端口,含 agents 活动实体注册表=主+各插件派生 agent;configId 无独立槽);三预绑定端口 `emitter()/agentFactory()/interaction()`(静态代理)经 ctx 下传;`TaskInfo` 退役;授权请求收编为 `AuthorizationRequest(ExecContext,agentId,grantKey,prompt)`;fileChanges 等插件功能槽位留 TaskRuntime;subagent 作为执行域能力插件全面中性化(零服务依赖/台账 IO 自持/生命周期壳核分离);task 核心去插件概念(截断不删插件数据文件);审议 agent per-task 固定 id 复用会话 | 授权链与全部横切层(advisor/工具/子 agent/审议)域中性,subagent 无 task 只有 workflow 亦可复用;未来工作流实现 ExecContext 即零改动复用;20+ 处强转消失;详见 docs/design-exec-context.md 与 §7.20 |
+| D29 | **统一执行上下文 ExecContext**:黑盒 properties 四件套(taskEntry/taskId/workspaceRoot/configId)显式类型化为 plugin-api 接口槽位(仅主体必然具备的核心属性与端口,含 agents 活动实体注册表=主+各插件派生 agent;configId 无独立槽);三预绑定端口 `emitter()/agentFactory()/interaction()`(静态代理)经 ctx 下传;`TaskInfo` 退役;授权请求收编为 `AuthorizationRequest(ExecContext,agentId,grantKey,prompt)`;fileChanges 等插件功能槽位留 TaskRuntime;subagent 作为执行域能力插件全面中性化(零服务依赖/台账 IO 自持/生命周期壳核分离);task 核心去插件概念(截断不删插件数据文件);审议 agent per-task 固定 id 复用会话;各横切 Context 接口(ToolContext/AdvisorContext/FileReferenceContext/ToolExecutionContext/TaskLifecycleContext)收编为 `extends ExecContext`(重复字段与 execution() 槽位删除,消费侧直读槽位、主体 ID 一律 subjectId(),§7.20.5) | 授权链与全部横切层(advisor/工具/子 agent/审议)域中性,subagent 无 task 只有 workflow 亦可复用;未来工作流实现 ExecContext 即零改动复用;20+ 处强转消失;详见 docs/design-exec-context.md 与 §7.20 |
 
 ---
 
@@ -1256,7 +1270,7 @@ docker-compose 一键:`HUB_KEY=你的密钥 docker-compose up --build`;数据落
 11. **执行上下文管道(ExecContext,与 §14.0 事件管道同构;展开说明见 §7.20)**：执行数据沿 `task 层 → agent 层 → 工具执行链 → 授权链` 逐层传递,每层只消费自己层级的槽位,下层不知道上层是谁(task 还是未来 workflow):
     - **槽位判据**:ExecContext 槽位 = 任何执行主体都必然具备的核心属性与端口(subjectId/workspaceRoot/workspaceId/snapshot/emitter/agentFactory/interaction/metadata/dataDir/terminal/agents 活动实体注册表;configId 不设独立槽,经 snapshot().configId() 取);**插件功能与主体特有槽位不进核心接口**——fileChanges 回合槽留 `TaskRuntime`(file-change 插件功能,经 `TaskService.get(subjectId())` 访问),metadata 只承载随 meta.json 落盘的持久策略标记(不混入运行时瞬态数据);agents() 收纳主体上下文内全部 agent(主 agent + 各插件派生:子 agent、审议 agent,由创建方插件注册),无子 agent 是正常形态。
     - **task 层构造并预绑定**:`TaskEntry implements TaskRuntime extends ExecContext`(subjectId=taskId);三预绑定端口同范式(静态代理,worker 内部实现,可链式套娃)——`emitter()`(主体事件口)、`agentFactory()`(主体 agent 装配,`create(agentId)` 单参)、`interaction()`(主体交互口,ask 的 context map 自动填 subjectId)——**上层预绑定能力往下传,不传裸工厂/裸服务、不传任务域对象**。
-    - **agent 层/工具链唯一取数口**:`AgentContext.execution()`,`ToolContext`/`ToolExecutionContext`/`AdvisorContext` 的 `execution()` 同范式(`InterceptingToolCallingManager` per-run 构造参数直持 ExecContext,不依赖 ThreadLocal);`properties` 黑盒 map 与 `get("taskEntry")` 强转**禁止再现**。
+    - **agent 层/工具链唯一取数口**:`AgentContext.execution()`;`ToolContext`/`ToolExecutionContext`/`AdvisorContext`/`FileReferenceContext`/`TaskLifecycleContext` 一律 `extends ExecContext`(重复字段与 `execution()` 槽位已删,消费侧直读槽位、横切层取主体 ID 一律 `subjectId()`,§7.20.5;`InterceptingToolCallingManager` per-run 构造参数直持 ExecContext,不依赖 ThreadLocal);`properties` 黑盒 map 与 `get("taskEntry")` 强转**禁止再现**。
     - **advisor 只取槽位**:`snapshot()`(模型配置,configId 经 snapshot().configId())、`subjectId()`(审计)、`emitter()`(事件)、`terminal()`(leak-guard)——不 import 任务域类型;**subagent 是执行域能力插件(非任务域),全面中性化**:SubAgentManager 零服务依赖(方法收 ExecContext、监视器内部化、`agents()` 槽位替代 task.agents)、台账 agents.json IO 自持(ctx.dataDir()+AtomicFiles)、生命周期节点壳留 task 面/逻辑取 ExecContext 槽位、`task.agents` RPC 壳留 task 面(mainAgentId 是任务概念);**task 核心不依赖插件**:编辑重发截断只动 *.jsonl/rounds.jsonl 不删插件数据文件(agents.json/file-changes 残留被接受,事件通知自清为开放项),`task.agents` 方法名常量住插件侧;AI 审议 agent 以 per-task 固定 agentId 注册进 agents() 跨请求复用会话(既往授权决策留在审议员上下文);任务域插件(file-change/edit-resend/git)经 `TaskService`/`taskRuntime()` 取 `TaskRuntime` 是合法本职依赖。
     - **授权请求域中性**:`AuthorizationRequest(ExecContext, agentId, grantKey, prompt)`;GrantRegistry 按 `subjectId()` 分区、`dataDir()` 落盘;`InteractionService` ask 的 context map `"taskId"` 键保留(值=subjectId,前端兼容)。
     - **禁止**:横切层 import `TaskEntry/TaskRuntime/TaskInfo`;绕过 `ctx.agentFactory()` 手工组装四件套 map;绕过 `ctx.interaction()` 手动填 taskId context;worker 侧新增 properties 透传通道。工作流层实现 `WorkflowRuntime implements ExecContext` 后,同一条授权链、同一批 advisor、同一工具链零改动复用。

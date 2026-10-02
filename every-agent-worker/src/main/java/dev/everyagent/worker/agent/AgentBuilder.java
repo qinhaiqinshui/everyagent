@@ -28,8 +28,6 @@ import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.stereotype.Component;
 
-import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -130,11 +128,8 @@ public class AgentBuilder {
 
     /** 从 exec 槽位构造 ToolContext（S2 起不再从 map 逐个 get）。 */
     private ToolContextImpl createToolContext(String agentId, ExecContext exec) {
-        Path workspaceRoot = exec.workspaceRoot() == null
-                ? null : Paths.get(exec.workspaceRoot());
-        return new ToolContextImpl(exec.subjectId(), agentId, workspaceRoot,
-                sandbox, gate, workspaces, rgBinary != null ? rgBinary.path() : null, interaction, exec,
-                pathRegistry);
+        return new ToolContextImpl(exec, agentId, sandbox, gate, workspaces,
+                rgBinary != null ? rgBinary.path() : null, pathRegistry);
     }
 
     /**
@@ -300,14 +295,11 @@ public class AgentBuilder {
     }
 
     /**
-     * 从 entity.execution() 类型化槽位提取必要信息构造 AdvisorContext;
-     * {@code configId} 为本 agent 实际解析所用配置 ID(Build 持有传入)。
+     * 构造 AdvisorContext：ExecContext 槽位由 Impl 委托 entity.execution();
+     * {@code configId} 为本 agent 实际解析所用配置 ID(Build 持有传入,per-agent 语义)。
      */
     private AdvisorContextImpl createAdvisorContext(AgentEntity entity, ToolCallingManager tcm,
             String configId) {
-        ExecContext exec = entity.execution();
-        Path workspaceRoot = exec.workspaceRoot() == null
-                ? null : Paths.get(exec.workspaceRoot());
-        return new AdvisorContextImpl(entity, tcm, exec.subjectId(), workspaceRoot, configId);
+        return new AdvisorContextImpl(entity, tcm, configId);
     }
 }
