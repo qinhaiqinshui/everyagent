@@ -3,7 +3,6 @@ package dev.everyagent.worker.ship;
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.plugin.api.event.EventLogReader;
 import dev.everyagent.plugin.api.event.EventRecord;
-import dev.everyagent.plugin.api.event.Channels;
 import dev.everyagent.worker.hub.HubLink;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -49,6 +48,8 @@ public class DataPusher implements EventLogReader.Listener {
 
     private final String sessionId;
     private final String taskId;
+    /** 推送目标频道名（从 hub subscriber.join 帧透传，不自己构造）。 */
+    private final String channel;
     private final HubLink conn;
     /** 流源注册表:优先经此取 EventLogReader（反转后正向依赖基础设施层）。 */
     private final StreamSourceRegistry streamSources;
@@ -67,10 +68,11 @@ public class DataPusher implements EventLogReader.Listener {
     /** 挂接时记主 agentId(payload 组装用,wireEvent 同 task.poll 口径)。 */
     private volatile String mainAgentId;
 
-    public DataPusher(String sessionId, String taskId, HubLink conn,
+    public DataPusher(String sessionId, String taskId, String channel, HubLink conn,
                       StreamSourceRegistry streamSources) {
         this.sessionId = sessionId;
         this.taskId = taskId;
+        this.channel = channel;
         this.conn = conn;
         this.streamSources = streamSources;
         this.wsEmitter = new WebSocketEmitter(sessionId, taskId, conn);
@@ -249,7 +251,7 @@ public class DataPusher implements EventLogReader.Listener {
             }
         }
         JsonNode payload = EventWireFormatter.wireEvent(r, mainAgentId).path("payload");
-        wsEmitter.push(Channels.taskStream(conn.k(), taskId), r.event(), r.seq(), r.ts(),
+        wsEmitter.push(channel, r.event(), r.seq(), r.ts(),
                 payload, ext);
     }
 

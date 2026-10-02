@@ -6,7 +6,6 @@ import dev.everyagent.worker.hub.HubPool;
 import dev.everyagent.plugin.api.event.EventLogReader;
 import dev.everyagent.plugin.api.event.Events;
 import dev.everyagent.plugin.api.event.StreamSourceListener;
-import dev.everyagent.worker.task.TaskStore;
 import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -32,14 +31,12 @@ public class DataPusherManager implements HubPool.Listener, StreamSourceListener
     private static final Logger log = LoggerFactory.getLogger(DataPusherManager.class);
 
     private final HubPool pool;
-    private final TaskStore store;
     private final StreamSourceRegistry streamSources;
     private final Map<String, DataPusher> pushers = new ConcurrentHashMap<>();
 
-    public DataPusherManager(HubPool pool, TaskStore store,
+    public DataPusherManager(HubPool pool,
                              StreamSourceRegistry streamSources) {
         this.pool = pool;
-        this.store = store;
         this.streamSources = streamSources;
     }
 
@@ -92,14 +89,8 @@ public class DataPusherManager implements HubPool.Listener, StreamSourceListener
         }
         String key = sessionId + "|" + taskId;
         if (Frames.SUBSCRIBER_JOIN.equals(event)) {
-            // 校验 taskId 属于本 worker:流源注册表有此任务或磁盘目录存在
-            // (否则可能是别的 worker 的任务)
-            if (streamSources.getReader(taskId) == null && !store.taskDirExists(taskId)) {
-                log.debug("忽略非本 worker 任务的订阅通知 channel={}", channel);
-                return;
-            }
             pushers.computeIfAbsent(key, k -> {
-                DataPusher p = new DataPusher(sessionId, taskId, conn, streamSources);
+                DataPusher p = new DataPusher(sessionId, taskId, channel, conn, streamSources);
                 p.start();
                 log.debug("定向推送器已建立 session={} task={}", sessionId, taskId);
                 return p;
