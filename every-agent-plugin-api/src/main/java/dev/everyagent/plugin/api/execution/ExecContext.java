@@ -50,6 +50,9 @@ public interface ExecContext {
      */
     AgentFactory agentFactory();
 
+    /** metadata 中附件列表的键名（{@code List<Map>} 形态，由 FileReferenceProcessNode 写入）。 */
+    String METADATA_ATTACHMENTS_KEY = "attachments";
+
     /** 主体策略标记（unattended / ai-review 等；随 meta.json 落盘的持久数据；授权链节点判定用）。 */
     Map<String, Object> metadata();
 

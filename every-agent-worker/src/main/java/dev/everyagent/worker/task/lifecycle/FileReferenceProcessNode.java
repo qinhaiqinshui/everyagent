@@ -56,9 +56,6 @@ public final class FileReferenceProcessNode implements TaskLifecycleNode {
     private static final String KIND_WORKSPACE_FILE = "system.workspace_file";
     private static final String KIND_EXTERNAL_FILE = "system.external_file";
 
-    /** TaskEntry.metadata 键：附件列表（项约定 {type, dataUrl, fileName, mimeType}）。 */
-    public static final String METADATA_ATTACHMENTS_KEY = "attachments";
-
     private final FileReferenceHandlerRegistry handlers;
 
     public FileReferenceProcessNode(FileReferenceHandlerRegistry handlers) {
@@ -166,7 +163,7 @@ public final class FileReferenceProcessNode implements TaskLifecycleNode {
             return;
         }
         List<Map<String, Object>> merged = new ArrayList<>();
-        Object existing = metadata.get(METADATA_ATTACHMENTS_KEY);
+        Object existing = metadata.get(ExecContext.METADATA_ATTACHMENTS_KEY);
         if (existing instanceof List<?> list) {
             for (Object item : list) {
                 if (item instanceof Map<?, ?> map) {
@@ -175,7 +172,7 @@ public final class FileReferenceProcessNode implements TaskLifecycleNode {
             }
         }
         merged.addAll(collected);
-        metadata.put(METADATA_ATTACHMENTS_KEY, merged);
+        metadata.put(ExecContext.METADATA_ATTACHMENTS_KEY, merged);
     }
 
     /** 把解析出的 token 转为 FileReference；非文件引用 kind / payload 缺路径返回 null。 */

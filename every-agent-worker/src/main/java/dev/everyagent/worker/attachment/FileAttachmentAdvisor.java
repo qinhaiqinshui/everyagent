@@ -1,7 +1,6 @@
 package dev.everyagent.worker.attachment;
 
 import dev.everyagent.plugin.api.execution.ExecContext;
-import dev.everyagent.worker.task.lifecycle.FileReferenceProcessNode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClientRequest;
@@ -98,7 +97,7 @@ public class FileAttachmentAdvisor implements BaseAdvisor {
         if (exec == null) {
             return List.of();
         }
-        Object attachments = exec.metadata().get(FileReferenceProcessNode.METADATA_ATTACHMENTS_KEY);
+        Object attachments = exec.metadata().get(ExecContext.METADATA_ATTACHMENTS_KEY);
         if (!(attachments instanceof List<?> list) || list.isEmpty()) {
             return List.of();
         }
