@@ -1,6 +1,8 @@
 package dev.everyagent.worker.modules;
 
 import dev.everyagent.contract.json.Json;
+import dev.everyagent.plugin.api.spi.SandboxBackend.Access;
+import dev.everyagent.plugin.api.spi.SandboxBackend.MountRequest;
 import dev.everyagent.plugin.api.util.AtomicFiles;
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.hub.HubPool;
@@ -216,7 +218,7 @@ public class WorkspaceManager implements dev.everyagent.plugin.api.spi.Workspace
         } catch (IOException e) {
             log.warn("工作区最后活动时间落盘失败(不影响收口): {}", key, e);
         }
-        broadcastRegistry();
+        onRegistryChanged();
     }
 
     public Path systemDir() {
@@ -393,7 +395,7 @@ public class WorkspaceManager implements dev.everyagent.plugin.api.spi.Workspace
             } catch (IOException e) {
                 log.warn("清理失效挂载源后注册表落盘失败: {}", e.getMessage());
             }
-            broadcastRegistry();
+            onRegistryChanged();
         }
 
         // ③ 返回存活列表(注册工作区根 + 外部授权根,Path 去重)
@@ -450,7 +452,7 @@ public class WorkspaceManager implements dev.everyagent.plugin.api.spi.Workspace
         missing.remove(key);
         cache.remove(key);
         persistRegistry();
-        broadcastRegistry();
+        onRegistryChanged();
         // 级联删除该工作区下的任务数据(任务落盘 workspaces/<wsId>/tasks/<taskId>/,与用户目录无关)。
         WorkspaceCascadePort port = cascadePorts.getIfAvailable();
         if (port != null) {
@@ -493,7 +495,7 @@ public class WorkspaceManager implements dev.everyagent.plugin.api.spi.Workspace
         missing.remove(key);
         cache.remove(key);
         persistRegistry();
-        broadcastRegistry();
+        onRegistryChanged();
         WorkspaceCascadePort port = cascadePorts.getIfAvailable();
         if (port != null) {
             port.deleteByWorkspaceId(removed.id());
@@ -528,7 +530,7 @@ public class WorkspaceManager implements dev.everyagent.plugin.api.spi.Workspace
             defaultRoot = newRoot.path();
         }
         persistRegistry();
-        broadcastRegistry();
+        onRegistryChanged();
         WorkspaceCascadePort port = cascadePorts.getIfAvailable();
         if (port != null) {
             port.redirectWorkspace(key, newKey);
@@ -603,7 +605,7 @@ public class WorkspaceManager implements dev.everyagent.plugin.api.spi.Workspace
         registry.put(key, new Registered(ShortIds.next("w"), key,
                 System.currentTimeMillis(), System.currentTimeMillis(), List.of()));
         persistRegistry();
-        broadcastRegistry(); // task.create 注册新工作区时,前端资源管理器即时感知
+        onRegistryChanged(); // task.create 注册新工作区时,前端资源管理器即时感知
     }
 
     /**
@@ -618,14 +620,14 @@ public class WorkspaceManager implements dev.everyagent.plugin.api.spi.Workspace
                 registry.put(key, new Registered(DEFAULT_WORKSPACE_ID, key,
                         existing.addedAt(), existing.lastActivityAt(), existing.externalRoots()));
                 persistRegistry();
-                broadcastRegistry();
+                onRegistryChanged();
             }
             return;
         }
         registry.put(key, new Registered(DEFAULT_WORKSPACE_ID, key,
                 System.currentTimeMillis(), System.currentTimeMillis(), List.of()));
         persistRegistry();
-        broadcastRegistry();
+        onRegistryChanged();
     }
 
     /**
@@ -683,12 +685,40 @@ public class WorkspaceManager implements dev.everyagent.plugin.api.spi.Workspace
         return Json.obj().put("defaultRoot", defaultRoot.toString()).set("workspaces", arr);
     }
 
-    /** 注册表变化广播(各连接的 evt 频道);全断时安静跳过,前端重连后经 list 校准。 */
-    private void broadcastRegistry() {
+    /**
+     * 注册表变化收口点（各结构变更路径的唯一出口）：
+     * ① 广播 {@code workspaces.changed} 给前端（全断时安静跳过，重连后经 list 校准）；
+     * ② 把「AI 可见根」意图覆盖式对齐进 {@link SandboxPathRegistry}（owner={@code workspaces}：
+     * 全部在册工作区根 + 各工作区外部授权根）。
+     *
+     * <p>②只登记意图、零 IO（实际 mount 由 pathRegistry 在首次路径翻译时按生效后端惰性物化），
+     * 故本收口点被高频调用（含 task.run 注册新工作区、启动载入、失效清理）也无挂载开销。
+     */
+    private void onRegistryChanged() {
+        syncSandboxRoots();
         try {
             pool.broadcastEvt("workspaces.changed", snapshot());
         } catch (RuntimeException e) {
             log.debug("workspaces.changed 广播失败(hub 未连接?): {}", e.getMessage());
+        }
+    }
+
+    /**
+     * 在册工作区根 + 各工作区外部授权根（READ_WRITE）覆盖式对齐进路径翻译注册表。
+     * 集合取自 {@link #list()}（已含 externalRoots），与既有意图相同则不产生版本变化。
+     */
+    private void syncSandboxRoots() {
+        List<MountRequest> reqs = new ArrayList<>();
+        for (Registered r : list()) {
+            reqs.add(new MountRequest(Path.of(r.root()), Access.READ_WRITE));
+            for (String raw : r.externalRoots()) {
+                reqs.add(new MountRequest(Path.of(raw), Access.READ_WRITE));
+            }
+        }
+        try {
+            pathRegistry.sync(SandboxPathRegistry.OWNER_WORKSPACES, reqs);
+        } catch (RuntimeException e) {
+            log.warn("沙箱挂载意图对齐失败(不影响注册表广播): {}", e.getMessage());
         }
     }
 

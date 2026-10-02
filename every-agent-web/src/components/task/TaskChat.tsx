@@ -30,7 +30,7 @@ import HScrollArea from '@/components/shared/HScrollArea'
 import { ArrowDownIcon, ArrowRightIcon, StopIcon } from '../shared/AppGlyphs'
 import { Button, InlineSpinner } from '@/components/shared/ui'
 import { pluginDispatcher } from '@/plugin/PluginDispatcher'
-import type { TaskRunSubmitContribution, TaskRunSubmitContributionProvider } from '@/plugin/types'
+import type { TaskRunSubmitContribution, TaskRunSubmitContributionProvider, ComposerPanelCtx } from '@/plugin/types'
 import { ComposerDraftBridgeContext, type ComposerDraftBridgeValue } from '@/plugin/composerDraftBridge'
 import { setComposerBridge } from '@/plugin/pluginRuntimeBridge'
 import { useWorkspaceShell } from '@/components/app/WorkspaceShellContext'
@@ -48,6 +48,7 @@ import { workspaceRegistry, type WorkspaceEntry } from '@/hub/workspaceRegistry'
 import { modelConfigs, type ModelConfigInfo } from '@/hub/modelConfigs'
 import { useHub } from '@/hub/HubProvider'
 import type { WorkerInfo } from '@/hub/session'
+import { hubSession } from '@/hub/session'
 import { DRAFT_TASK_ID, getDraftPreset, subscribeDraftPreset } from './taskChatDraft'
 import '@/components/task/chatPanel.css'
 
@@ -771,6 +772,38 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
     setFilterAgentId(agentId)
   }, [])
 
+  // 插件扩展点版本：注册/注销时递增，驱动插件面板重渲染。
+  const pluginExtVersion = React.useSyncExternalStore(
+    pluginDispatcher.subscribeExtensionsChanged,
+    pluginDispatcher.getExtensionsVersion,
+  )
+  // 插件注册的输入框上方面板（每个 Component 接收 ComposerPanelCtx）。
+  const composerAbovePanels = React.useMemo(
+    () => pluginDispatcher.listRegisteredComposerAbovePanels(),
+    // pluginExtVersion 变化时重新读取快照（注册/注销后立即出现/消失）。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [pluginExtVersion],
+  )
+  // 为插件面板构建 ComposerPanelCtx（每次渲染新建，保持引用最新）。
+  const composerPanelCtx = React.useMemo<ComposerPanelCtx>(() => ({
+    taskId: effectiveTaskId,
+    draft: draft as ComposerPanelCtx['draft'],
+    isRunning: isTaskActive(entry?.status ?? 'idle'),
+    selectAgent: (agentId: string | null) => {
+      if (agentId) handleSelectAgent(agentId)
+    },
+    rpc: (method: string, params: Record<string, unknown>) => {
+      const ownerW = ownerWorkerId || taskStore.get(effectiveTaskId)?.workerId || ''
+      return hubSession.rpcTo(ownerW, method, params)
+    },
+    subscribeTaskEvents: (handler) => {
+      if (!stream) return () => {}
+      return stream.subscribe(() => {
+        handler('task.updated', null, null)
+      })
+    },
+  }), [effectiveTaskId, draft, entry?.status, handleSelectAgent, hubSession, ownerWorkerId, stream])
+
   const submitDisabled = Boolean(!draft.text.trim() || submitting || (isDraft && !draftWorkerId) || (isDraft && !effectiveDraftWorkspace))
 
   // 草稿态：渲染与 n 版启动台一致的草稿面板（BrandMark 顶栏 + 空线程 + 输入区）。
@@ -856,6 +889,10 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
                   filterAgentId={filterAgentId}
                   onSelect={handleSelectAgent}
                 />
+                {composerAbovePanels.map((def) => {
+                  const Component = def.Component as React.ComponentType<ComposerPanelCtx>
+                  return <Component key={def.id} {...composerPanelCtx} />
+                })}
               </div>
             )}
             submitLabel={submitting ? '发送中...' : '发送'}

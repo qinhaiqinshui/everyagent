@@ -1,6 +1,9 @@
 package dev.everyagent.plugin.inputqueue;
 
 import dev.everyagent.contract.json.Json;
+import dev.everyagent.plugin.api.event.Channels;
+import dev.everyagent.plugin.api.event.Events;
+import dev.everyagent.plugin.api.event.StreamEmitter;
 import dev.everyagent.plugin.api.task.TaskChain;
 import dev.everyagent.plugin.api.task.TaskLifecycleContext;
 import dev.everyagent.plugin.api.task.TaskLifecycleNode;
@@ -30,10 +33,12 @@ public final class QueueDispatchNode implements TaskLifecycleNode {
 
     private final TaskQueueRegistry registry;
     private final TaskService taskService;
+    private final StreamEmitter eventSink;
 
-    public QueueDispatchNode(TaskQueueRegistry registry, TaskService taskService) {
+    public QueueDispatchNode(TaskQueueRegistry registry, TaskService taskService, StreamEmitter eventSink) {
         this.registry = registry;
         this.taskService = taskService;
+        this.eventSink = eventSink;
     }
 
     @Override
@@ -73,11 +78,36 @@ public final class QueueDispatchNode implements TaskLifecycleNode {
                         .put("status", t.status())
                         .put("queued", true));
             }
+
+            // 广播 task.updated 携带 pendingInputs，前端队列面板据此刷新
+            broadcastQueueUpdate(taskId, t);
+
             return null;  // 短路，后续节点不执行
         }
 
         log.debug("[queue] dispatch 终态/不存在继续下行 task={} terminal={}",
                 taskId, t != null && t.terminal());
         return next.proceed(ctx);  // 终态或不存在，继续往下
+    }
+
+    /**
+     * 广播 task.updated 携带 pendingInputs（与 QueueRpcHandler.broadcastQueueUpdate 同构）。
+     * 前端 taskStore 收到后更新 pendingInputs 镜像，队列面板据此刷新。
+     */
+    private void broadcastQueueUpdate(String taskId, TaskRuntime t) {
+        try {
+            InputQueue queue = registry.getInputQueue(taskId);
+            var summary = t.summaryJson();
+            if (queue != null) {
+                var arr = tools.jackson.databind.node.JsonNodeFactory.instance.arrayNode();
+                for (String text : queue.snapshot()) {
+                    arr.add(text);
+                }
+                summary.set("pendingInputs", arr);
+            }
+            eventSink.fanout(k -> Channels.tasks(k), Events.TASK_UPDATED, null, summary, null);
+        } catch (Exception e) {
+            log.warn("[queue] dispatch 广播队列更新失败 task={}", taskId, e);
+        }
     }
 }

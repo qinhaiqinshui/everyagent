@@ -534,12 +534,22 @@ ask 管道承载第二类阻塞请求:**危险操作授权**。`PermissionGate` 
 - `mount()`/`onWorkspaceRemoved()` 由 OsSandbox **必须转发给 delegate**(delegate 为 null 才走 SPI 默认的原路径/no-op)——门面自己吞掉挂载会让 wsl 系列的 drvfs 挂载整体失效。
 
 **核心路径翻译中间人(SandboxPathRegistry):** worker 核心内部 `@Component`,管理 {宿主路径 → 沙箱内路径} 映射表。核心调 `sandbox.mount()` 拿到映射关系后自己查表翻译,不依赖沙箱。
-- `register(List<MountRequest>)` — 批量注册(工作区根 + 外部授权根 + skills 根等)。
-- `toSandboxPath(Path)` — 宿主路径 → AI 可见路径;无映射原样返回(DIRECT 场景)。
-- `toHostPath(String)` — AI 视角路径 → 宿主路径;无映射返回 null(注册表外路径,Java NIO 自然报错,AI 改用沙箱命令工具)。
-- `onWorkspaceRemoved(Path)` — 通知沙箱清理 + 清理映射表。
 
-**注册时机:** 工作区创建时、用户授权时、skills 目录初始化时。
+**意图登记 / 映射物化两段式**(否则「注册即挂载」会把 `wsl.exe` 进程开销压进启动路径,且启动期后端尚未定论):
+- `register(owner, path, access)` / `sync(owner, requests)` — **只登记挂载意图**(按 owner 分组的幂等集合,零 IO);`sync` 为**覆盖式对齐**(该 owner 的差集自动撤销),`unregister(owner, path)` 撤销单条。
+- **物化惰性**于首次翻译查询:按当前生效后端把全部意图**一次批量** `mount()`,代次键 = (后端 id, 意图版本);任一变化即整表重建——后端切换(如 mic → wsl-ubuntu)不会残留旧形态映射,插件热插拔同理自愈。
+- `toSandboxPath(Path)` — 宿主路径 → AI 可见路径:命中意图根取其视图,否则**最长前缀根**推导子路径;无映射原样返回(DIRECT 场景)。
+- `toHostPath(String)` — AI 视角路径 → 宿主路径:同样最长前缀反推;**无映射返回 null**(注册表外路径,调用方原样交给 Java NIO 自然报错,AI 改用沙箱命令工具)。
+- 前缀比较两侧统一 `'/'` 归一 + Windows 下大小写不敏感;返回的宿主路径一律由登记的原始形态拼接(不丢大小写)。
+- `onWorkspaceRemoved(Path)` — 通知沙箱清理 + 从意图表与映射表移除该根。
+
+**登记方(owner 分组,谁的路径谁登记):**
+| owner | 登记方 | 内容 | 时机 |
+|---|---|---|---|
+| `workspaces` | `WorkspaceManager` | 全部在册工作区根 + 各工作区 `externalRoots`(READ_WRITE) | 注册表变更(`broadcastRegistry` 单一收口点:启动载入、新增/注册、外部授权根新增、移除、失效清理) |
+| `skills` | `BuiltInSkills` | 系统技能目录根(READ_WRITE,§7.17 读写挂入) | `@PostConstruct` 物化知识包时 |
+
+**任务级授权不进意图表**:单次 EXEC/READ 授权(grant)只在**授权决议链**(`PermissionGate`/`GrantRegistry`)层面放行文件工具,不经常规意图表扩挂进沙箱——命令侧挂载清单由各沙箱插件每次执行自行推导(wsl-ubuntu = `WorkspaceManager.pruneStaleAndListMountRoots()` + skills 目录),避免 run 档授权经持久 drvfs 挂载泄漏成跨任务可读根。
 
 **核心宿主访问工具与沙箱命令工具共存:**
 - **核心的命令工具**(windows-mic / DIRECT 后端):核心自带,Windows 上 PowerShellTool 以 `powershell` 工具名注册;Linux 上 BashTool 以 `bash` 工具名注册。直接 ProcessBuilder 执行,走自己的授权链。

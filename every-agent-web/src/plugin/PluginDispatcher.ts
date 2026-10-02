@@ -168,6 +168,8 @@ export interface RealPluginDispatcher {
   registerRoundTailPanel: (def: UiRoundTailPanelDefinition) => Disposable
   /** 同步获取已注册的轮末展示区组件列表。 */
   listRegisteredRoundTailPanels: () => UiRoundTailPanelDefinition[]
+  /** 同步获取插件注册的输入框上方面板列表（供 TaskChat 渲染合并）。 */
+  listRegisteredComposerAbovePanels: () => UiComposerAbovePanelDefinition[]
   /** 打开插件自定义标签（委托宿主 WorkspaceShellContext）。 */
   openPluginTab: (type: string, data: Record<string, string>, title?: string) => void
   /** 打开顶层文件标签（委托宿主 WorkspaceShellContext）。 */
@@ -300,6 +302,9 @@ export const pluginDispatcher: RealPluginDispatcher = {
   },
   listRegisteredRoundTailPanels() {
     return getRegistry<UiRoundTailPanelDefinition>(EXT_UI_ROUND_TAIL_PANELS).getAll()
+  },
+  listRegisteredComposerAbovePanels() {
+    return getRegistry<UiComposerAbovePanelDefinition>(EXT_UI_COMPOSER_ABOVE_PANEL).getAll()
   },
   registerRoundTailPanel(def) {
     return getRegistry<UiRoundTailPanelDefinition>(EXT_UI_ROUND_TAIL_PANELS).register('', def)

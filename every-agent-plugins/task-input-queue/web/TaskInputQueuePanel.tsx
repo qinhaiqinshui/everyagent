@@ -14,23 +14,45 @@ import './task-input-queue.css'
 
 export default function TaskInputQueuePanel(ctx: ComposerPanelCtx): React.ReactNode {
   const taskId = ctx.taskId
-  // 从 ctx 读取 pendingInputs（由 task.updated 广播携带，核心 taskStore 镜像）
-  // 插件模式下 pendingInputs 经 task.updated 事件进入 taskStore
+  // pendingInputs 来源：ctx.rpc('tasks.list', { taskIds: [taskId] }) 拉取任务摘要，
+  // worker 侧 queue.dispatch 入队后广播 task.updated → taskStore 更新 →
+  // stream.subscribe 触发 ctx.subscribeTaskEvents → 面板重新拉取。
   const [items, setItems] = React.useState<string[]>([])
   const [running, setRunning] = React.useState(ctx.isRunning)
   // 操作进行中:禁用全部按钮防止连点(worker 侧 RPC 完成前队列索引未刷新)。
   const [busy, setBusy] = React.useState(false)
   const [error, setError] = React.useState('')
 
+  /** 从 worker 拉取任务摘要中的 pendingInputs。 */
+  const refreshPendingInputs = React.useCallback(() => {
+    if (!taskId) return
+    void ctx.rpc('tasks.list', { taskIds: [taskId], limit: 1 })
+      .then((result) => {
+        const tasks = (result as { tasks?: Array<{ pendingInputs?: string[] }> })?.tasks
+        if (tasks && tasks.length > 0) {
+          setItems(tasks[0].pendingInputs ?? [])
+        }
+      })
+      .catch((err) => {
+        console.warn('[TaskQueuePanel] 拉取 pendingInputs 失败:', err)
+      })
+  }, [taskId, ctx])
+
   React.useEffect(() => {
     if (!taskId) return
-    // 订阅任务流事件更新 pendingInputs
+    // 首次拉取
+    refreshPendingInputs()
+    // 订阅任务流事件：worker 广播 task.updated 后 stream.subscribe 触发，
+    // 重新拉取 pendingInputs。
     const unsub = ctx.subscribeTaskEvents(() => {
-      // pendingInputs 经 task.updated 广播进入 taskStore（核心镜像）
-      // 这里仅触发重渲染
+      refreshPendingInputs()
     })
     return unsub
-  }, [taskId, ctx])
+  }, [taskId, ctx, refreshPendingInputs])
+
+  React.useEffect(() => {
+    setRunning(ctx.isRunning)
+  }, [ctx.isRunning])
 
   if (!taskId || items.length === 0) return null
 
@@ -59,9 +81,10 @@ export default function TaskInputQueuePanel(ctx: ComposerPanelCtx): React.ReactN
     runAction(() => ctx.rpc('task.run', { taskId, input: text, metadata: { insert: true, index: idx } }))
   }
 
-  const handleEdit = (idx: number, text: string) => {
+  const handleEdit = (idx: number, _text: string) => {
     // 编辑语义:先回填输入框,再移除该项(避免移除失败但草稿没回填的割裂)。
-    ctx.draft && void ctx.rpc("task.queueRemove", { taskId, index: idx })
+    // 回填由宿主 ui.appendComposerText / ui.setComposerRawContent 处理,
+    // 此处仅移除队列项。
     runAction(() => ctx.rpc('task.queueRemove', { taskId, index: idx }))
   }
 
