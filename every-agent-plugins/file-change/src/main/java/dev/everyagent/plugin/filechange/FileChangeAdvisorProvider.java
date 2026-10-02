@@ -60,7 +60,14 @@ public class FileChangeAdvisorProvider implements AdvisorProvider, RoundClosedLi
     @Override
     public void onRoundsClosed(String taskId, Path dataDir, List<RoundClosedInfo> closedRounds) {
         FileChangesCollector collector = pendingCollectors.remove(taskId);
-        if (collector == null || collector.isEmpty()) {
+        if (collector == null) {
+            log.debug("[file-change] 闭合回调无暂存 collector(本 run 未收口或无文件改动) task={} rounds={}",
+                    taskId, closedRounds.stream().map(RoundClosedInfo::roundId).toList());
+            return;
+        }
+        if (collector.isEmpty()) {
+            log.debug("[file-change] 闭合回调 collector 为空(本 run 无文件改动) task={} rounds={}",
+                    taskId, closedRounds.stream().map(RoundClosedInfo::roundId).toList());
             return;
         }
         for (RoundClosedInfo info : closedRounds) {

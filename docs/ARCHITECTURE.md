@@ -223,7 +223,7 @@ worker 端 `RpcDispatcher` 注册方法;应答回**请求来源连接**的 `evt`
 | `task.rounds` | 轮次索引拉取(rounds.jsonl 全部行 + 运行中未闭合轮 open;旧任务首次惰性全量生成落盘) |
 | `task.roundTail` | 按轮起点(startSeq)取该轮末尾 limit 条事件,用于初始渲染 |
 | `task.agents` | 子 agent 台账一次性拉取(前端打开任务详情、建子 agent 胶囊列表的唯一取数口;live 任务取内存台账,磁盘路径 agents.json 优先、旧任务回退 meta.json 的 agents 数组只读;按 createdAt 升序;**按 `metadata.creator=subagent` 过滤——审议 agent 等 creator≠subagent 的条目不出现在子 agent 列表,§7.20.1**;应答 `{agents:[台账项], mainAgentId}`);方法由 subagent 插件注册,方法名常量跟注册方走(住插件侧,§14.11) |
-| `task.fileChanges` | 单轮文件变更全文:`file-changes/<roundId>.json` 的 `{changes:[...]}` |
+| `task.fileChanges` | **file-change 插件注册的 RPC**(方法名常量与语义全住插件侧,task 核心不感知,§14.11/§7.15.2):带 `roundId` → 该轮变更全文 `file-changes/<roundId>.json` 的 `{changes:[...]}`(含 beforeContent/afterContent);**省略 `roundId`** → 全任务各轮轻量摘要 `{rounds:[{roundId, changes:[{filePath,fileName,changeType,saveCount}]}]}`(前端轮末面板一次拉全,不做逐轮 N 次 RPC) |
 | `task.search` | 任务内容搜索(内置 rg + worker 后处理):`workspaceId` 必填且必须是稳定 id 形态(`defaultworkspace` / `w_xxxxx`,拒绝路径穿越),按 `workspaces/<workspaceId>/tasks/<taskId>/` 枚举任务目录,复用 rg 搜索 `rounds.jsonl`(每行一轮,含 user/finalReply 正文);入参 `pattern` / `isRegex` / `caseSensitive` / `wholeWord` / `maxResults`(默认 500),pattern 语义与 `fs.search` 共用 `buildMatchArgs`;rg 命中 JSON 原始行后由 worker `parseRoundLine` 解析、对 user/finalReply 干净文本二次匹配(消除字段名/转义噪音,同时得到准确 `matchIndex`/`matchText`);结果项 `{taskId, title, workspace, workspaceId, status, matches:[{roundIndex, field:'user'|'finalReply', line, matchIndex, matchText}]}`,按任务聚合;大结果复用 `rpc.data` 分批 + 末帧 `ok` 汇总(§5.4) |
 | `task.queueRemove` / `task.queueMove` | 删除/重排某条队列输入 |
 | `task.message.edit` | 编辑已发送的用户消息:截断 seq > 该消息的所有磁盘事件(仅 *.jsonl/rounds.jsonl,**不删插件数据文件**——agents.json/file-changes/ 残留陈旧条目被接受,task 核心不感知插件文件名;后续可增加截断事件通知由插件自清)、原地更新该消息内容、广播 `message.edited` 同步事件、冷启动重跑(不写新 user.message,对话历史已含编辑后的消息);任务运行中拒绝 |
@@ -337,7 +337,7 @@ RoundIndexAdvisor(轮次索引+耗时,最外层) → SkillAdvisor(内置 skill �
 - `LoopRepeatGuardAdvisor` 叠加**死循环检测**:比较本轮与上一轮工具调用签名(名称+参数集合,顺序无关),连续重复达 `worker.limits.max-repeated-tool-rounds`(默认 3)**不再直接中断**——而是把一条提醒文本作为该轮工具执行结果回传 AI,留一次纠正机会(本轮不真正执行工具,与 `MissingToolCallbackResolver` 同构:错误信息作为工具结果回传由 AI 自纠);若提醒后下一轮仍下发完全相同的工具调用,才中断任务(error 收口)。守卫逻辑不在 advisor 体内,而在装饰 `ToolCallingManager` 的 `LoopRepeatGuardToolManager` 中(框架唯一允许「既阻止真实工具执行、又能注入合成工具结果回传模型」的扩展点是 `executeToolCalls`),advisor 仅负责把守卫装饰器装配到工具循环入口,事件逻辑全部继承 `WorkerToolEventAdvisor`。
 - `DialogInsertAdvisor`(普通 StreamAdvisor,在主 agent 的工具循环下行阶段)把任务队列「插入到当前对话」的用户消息 drain 并追加给 AI + 发射 `user.message` 事件;子 agent 按 kind==MAIN 旁路(对话是一次性嵌套,不接收任务队列输入)。
 - 主 Agent 与子 Agent **共用同一执行入口与 Advisor 链**,仅 agentId 不同;子 agent 不挂计时与 skill,但同挂上下文压缩。
-- **advisor 取数统一走 `AgentContext.execution()`(ExecContext 槽位)**:taskId→`subjectId()`、模型配置→`snapshot()`(configId 经 `snapshot().configId()` 取)、事件→`emitter()`、终态判定→`terminal()`;agent 装配经 `ctx.agentFactory().create(agentId)`(预绑定工厂,静态代理)。worker 不再有 `properties` 黑盒 map 与 `get("taskEntry")` 强转(§7.20/§14.11)。**fileChanges 回合槽不进 ExecContext**(插件功能不占核心接口,§14.11 判据)——留 `TaskRuntime` 任务域私有,file-change 插件经 `TaskService.get(subjectId())` 访问(SubAgentManager 先例)。
+- **advisor 取数统一走 `AgentContext.execution()`(ExecContext 槽位)**:taskId→`subjectId()`、模型配置→`snapshot()`(configId 经 `snapshot().configId()` 取)、事件→`emitter()`、终态判定→`terminal()`;agent 装配经 `ctx.agentFactory().create(agentId)`(预绑定工厂,静态代理)。worker 不再有 `properties` 黑盒 map 与 `get("taskEntry")` 强转(§7.20/§14.11)。**fileChanges 不进 ExecContext 也不进 TaskRuntime**(插件功能不占核心接口,§14.11 判据)——collector 是 `FileChangeAdvisor` 的 per-run 实例字段,按轮落盘走 `RoundClosedListener` 回调,读侧走插件自己的 `task.fileChanges` RPC(§7.15.2)。
 
 ### 7.3.1 自适应输出预算（adaptive-max-tokens 插件）
 
@@ -527,6 +527,12 @@ ask 管道承载第二类阻塞请求:**危险操作授权**。`PermissionGate` 
 | **Windows MIC** | `windows-mic` | 5 | 返回原路径 | 命令跑在宿主上,独立插件 |
 | **DIRECT(默认沙箱)** | `direct` | — | 返回原路径 | OsSandbox 自身,无 Provider |
 
+**后端选择时机(时序红线)**:`SandboxProvider` 全部由插件在 `PluginLoader` 的 `@PostConstruct` 里注册,而 `PluginLoader → WorkerServices → OsSandbox` 的构造依赖链决定了 **OsSandbox 一定先于插件激活完成初始化**。因此后端**不得在 `@PostConstruct` 一次性定论**:
+- `OsSandbox` 的 delegate 按 **`SandboxProviderRegistry` 代次(generation,每次注册/注销自增)惰性解析**:首次访问(`id()`/`mount()`/`onWorkspaceRemoved()`)或代次变化时重新 `select()`,解析结果(含「无可用后端」的 null)按代次缓存,不产生每次调用的重复探测;
+- 选择规则不变:`select()` 先按 `isAvailable()` 过滤候选,再对胜出者 `create()`——重副作用(如 codex 的 UAC setup)只可能发生在胜出时刻,不因探测而提前;
+- 启动期日志只陈述「配置 + 候选清单(不探测、不 create)」,后端**定论推迟**到首次真正访问 delegate 时;生效后打一条 INFO(后端切换时带原 id),解析不到时打 WARN 并附候选 id/priority;
+- `mount()`/`onWorkspaceRemoved()` 由 OsSandbox **必须转发给 delegate**(delegate 为 null 才走 SPI 默认的原路径/no-op)——门面自己吞掉挂载会让 wsl 系列的 drvfs 挂载整体失效。
+
 **核心路径翻译中间人(SandboxPathRegistry):** worker 核心内部 `@Component`,管理 {宿主路径 → 沙箱内路径} 映射表。核心调 `sandbox.mount()` 拿到映射关系后自己查表翻译,不依赖沙箱。
 - `register(List<MountRequest>)` — 批量注册(工作区根 + 外部授权根 + skills 根等)。
 - `toSandboxPath(Path)` — 宿主路径 → AI 可见路径;无映射原样返回(DIRECT 场景)。
@@ -538,7 +544,7 @@ ask 管道承载第二类阻塞请求:**危险操作授权**。`PermissionGate` 
 **核心宿主访问工具与沙箱命令工具共存:**
 - **核心的命令工具**(windows-mic / DIRECT 后端):核心自带,Windows 上 PowerShellTool 以 `powershell` 工具名注册;Linux 上 BashTool 以 `bash` 工具名注册。直接 ProcessBuilder 执行,走自己的授权链。
 - **沙箱插件的命令工具**:沙箱插件不只提供 `SandboxBackend`(挂载+清理),还提供 `ToolProvider`(命令工具)。沙箱完全自由:自己实现 CommandExecutor、自己扫描路径、自己决定授权策略。通过 `appliesTo(ToolContext)` 控制生效条件(如 `ctx.sandbox().id().equals("wsl-ubuntu")`)。
-- 两者通过 `ToolProvider.appliesTo()` 各自控制生效条件,不冲突。`PowerShellToolProvider`（核心）appliesTo = Windows ∧ (sandbox id == direct ∨ windows-mic),提供 `powershell` 工具;wsl-ubuntu 提供 `bash` 工具;codex 提供 `powershell` 工具。
+- 两者通过 `ToolProvider.appliesTo()` 各自控制生效条件,不冲突。核心 `DirectShellToolProvider` appliesTo = 生效后端 id == `direct`(即无任何 SPI 后端),Windows 提供 `powershell`、其余提供 `bash`;windows-mic / wsl-ubuntu / codex 各自提供自己方言的命令工具。
 - **只有某后端才做得到的隔离能力,其命令与状态一律归该插件**:wsl-ubuntu 的 `/禁用网络` 由 `sandbox-wsl-ubuntu` 自己经 `registerSlashProvider`/`registerSlashTokenResolver` 注册、状态写任务 `metadata`,并在自己的 CommandExecutor 里读取生效;worker 核心不持有该开关,也不为做不到断网的后端预留同名命令。
 
 **路径翻译流程:**
@@ -718,7 +724,7 @@ worker 的两条运行期责任链迁移为与任务洋葱同一的 filter 形�
 
 主 agent 侧生成轮次索引(每行一轮:用户输入 → 主 agent 最终回复):
 
-- 行格式:`{index, startSeq, endSeq, user, finalReply, durationMs, startedAt, subs, fileChanges, userMessage}`;seq 一律字符串;`endSeq=""` = 未闭合轮;`startedAt` = 开轮落盘时刻(epoch 毫秒,耗时从磁盘算的起点;`durationMs` = 闭合时当前时间 − startedAt);`userMessage` = 完整 user.message payload(懒加载骨架),**形状必须与 user.message 事件 payload 一致**(`{content, data:{rawContent?}}`)——开轮落盘(openRoundAtStart)与 scan 重建两条路径同形,前端 foldRound 按 `userMessage.data.rawContent` 回放 @文件胶囊。
+- 行格式:`{index, startSeq, endSeq, user, finalReply, durationMs, startedAt, agentRanges, userMessage}`(**轮行不含任何插件业务字段**,文件变更等按轮旁路数据由插件自持文件 + 插件 RPC 提供,§7.15.2);seq 一律字符串;`endSeq=""` = 未闭合轮;`startedAt` = 开轮落盘时刻(epoch 毫秒,耗时从磁盘算的起点;`durationMs` = 闭合时当前时间 − startedAt);`userMessage` = 完整 user.message payload(懒加载骨架),**形状必须与 user.message 事件 payload 一致**(`{content, data:{rawContent?}}`)——开轮落盘(openRoundAtStart)与 scan 重建两条路径同形,前端 foldRound 按 `userMessage.data.rawContent` 回放 @文件胶囊。
 - 增量写:消费用户输入即 `openRoundAtStart` 落一行 `endSeq=""`(并把 `startedAt = System.currentTimeMillis()` 随行落盘);`RoundIndexAdvisor` 在主 agent 最终回复后 `rewriteRound` 原位改写闭合(临时文件 + 原子 move,与追加同锁串行)。**`durationMs` 随闭合行同一次落盘内联写入**——耗时不再内存中计算:闭合轮时 `applyRounds` 取当前时间减去磁盘行的 `startedAt`(开轮落盘时刻)得到;任务出错停止后继续(续跑改判闭合)也以最初开轮时刻计耗时,跨运行延续不失真。`round.closed` 通知在闭合行落盘**之后**推送——前端收到通知拉 `task.rounds` 时耗时必已就位。历史上「先闭合推送、后单独回填耗时」的两段写存在竞态:前端在回填完成前拉快照会拿到 `durationMs=0` 且无后续刷新触发,表现为本轮耗时不显示(重连才恢复)。旧行/scan 行无 `startedAt`(0)时闭合不计算耗时(保持 0,优雅降级)。
 - 旧任务首次 `task.rounds` 惰性全量生成落盘;任务终态 do `finalizeRounds` 补写未闭合轮。中断/失败/取消的未闭合轮自然保留。
 - 消息编辑重发(`truncateAfterSeq`):事件日志按 `seq >= editSeq` 截断重写;rounds.jsonl 同步截断为 `startSeq < editSeq` 的行(**编辑点之前的轮次保留**,新轮 index 顺延)。事件文件重写只针对 agent 事件日志(`<agentId>.jsonl`)——任务目录下的 `rounds.jsonl`/`queue.jsonl` 不属事件空间(行无 seq 字段),误入事件重写会被「seq<=0 丢弃」整文件清空,表现为编辑后历史轮次全丢、新轮 index 归 1。
@@ -726,7 +732,11 @@ worker 的两条运行期责任链迁移为与任务洋葱同一的 filter 形�
 
 #### 7.15.2 文件变更(file changes)
 
-每一轮 agent 执行中对工作区的文件写操作被记录为 `round.filesChanged` 类过程数据,落盘 `file-changes/<roundId>.json`(rounds.jsonl 的 fileChanges 字段引用),前端轮详情可拉 `task.fileChanges` 查看该轮改了哪些文件(新增/修改/删除)。
+每一轮 agent 执行中对工作区的文件写操作由 **file-change 插件自管**(task 核心零 fileChanges 概念,§14.11):
+
+- **写侧**:`FileChangeAdvisor`(order=HIGHEST+301,工具 advisor 内层)per-run 物化 collector,从模型流的 toolCalls 里识别 `create_file`/`update_file`;主 agent 最后一轮(无 toolCalls)收口把 collector 暂存进 provider,`RoundIndexStore` 闭合轮后经 `RoundClosedListener` 回调按 roundId 写全文分片 `file-changes/<roundId>.json`(轻量摘要与全文同在该文件,不落 rounds.jsonl 行)。
+- **读侧**:唯一取数口是插件自己的 `task.fileChanges` RPC——`roundId` 必填返回该轮全文;省略 `roundId` 返回全任务各轮的轻量摘要(`{rounds:[{roundId, changes:[{filePath,fileName,changeType,saveCount}]}]}`),供前端轮末面板一次拉全。
+- **失效与刷新**:前端插件 web 侧按 taskId 缓存全任务摘要;宿主 `taskStream` 收到瞬态 `round.closed` 信号时 emit 领域事件 **`task-round-closed`**(通用名,不含文件变更语义,payload `{taskId, startSeq, endSeq}`),插件订阅后作废该任务缓存并重拉——旧任务(重构前落盘的分片)同样可显示,摘要始终由插件数据文件反推,不依赖轮行内联字段。
 
 ### 7.16 数据模型(完整)
 
@@ -983,7 +993,7 @@ advisor 链
 | `interaction()` | 已绑定主体的用户交互口（静态代理，ask 的 context map 自动填 subjectId；替代三处手动组装 `Map.of("taskId",...)`） | 手动组装 context map | Human 授权节点、ImageReferenceHandler、AskUserTool |
 | `agents()` | 主体活动 agent 注册表（可读写 Map：主 agent + 各插件派生——子 agent、审议 agent；**由 `AgentBuilder.build()` 自动填充（put + 发射 `agent.started` 事件，payload 含 agentMetadata），插件不再手动 put/emit**；无子 agent 是正常形态） | `t.agents()` | SubAgentManager（复用判定）、AiAuthReviewer（复用判定）、AgentLedger（台账投影） |
 
-**不进 ExecContext 的槽位**：fileChanges 三槽位（瞬态回合槽）留 `TaskRuntime` 任务域私有——file-change 插件（写）经 `TaskService.get(subjectId())` 访问、edit-resend（清空）走 `ctx.taskRuntime()`、RoundIndexAdvisor（落盘）worker 内置直读 `TaskEntry`；status 完整状态/touch 等任务操作同为任务域私有，横切层只需要 `terminal()`。
+**不进 ExecContext 的槽位**：fileChanges 曾是「留 TaskRuntime 的插件功能槽」，现已彻底退役出核心接口（连 TaskRuntime 也不留，§7.15.2）——collector 住 `FileChangeAdvisor` per-run 实例字段，按轮落盘靠 `RoundClosedListener` 回调，读侧靠插件自注册的 `task.fileChanges` RPC；status 完整状态/touch 等任务操作同为任务域私有，横切层只需要 `terminal()`。
 
 **agent 层统一台账 + `agentMetadata` 槽位（AgentContext 槽位，非 ExecContext）**：
 
@@ -994,7 +1004,7 @@ advisor 链
 
 #### 7.20.2 TaskRuntime 与 TaskInfo
 
-- `TaskRuntime extends ExecContext`：任务域私有成员保留在本接口（taskId/status/taskDir/mainAgentId/log/fileChanges 系列/时间戳/touch/truncateLogAfter）；`subjectId()`/`emitter()`/`dataDir()` 以 default 桥接方法映射到任务域成员（taskId/events/taskDir）。
+- `TaskRuntime extends ExecContext`：任务域私有成员保留在本接口（taskId/status/taskDir/mainAgentId/log/时间戳/touch/truncateLogAfter；fileChanges 系列已退役出核心，见 §7.15.2）；`subjectId()`/`emitter()`/`dataDir()` 以 default 桥接方法映射到任务域成员（taskId/events/taskDir）。
 - `TaskEntry`（worker）是**唯一实现**：`implements TaskRuntime`，`subjectId() = taskId`；三预绑定端口在 TaskEntry 内实现（`agentFactory()` 经 `AgentFactoryImpl.bind()` 取代理、`interaction()` 懒加载 `SubjectBoundInteractionService`）。
 - **`TaskInfo` 已退役（S3 删除）**：原 permission 包接口五成员（taskId/metadata/taskDir/terminal/status）全部被吸收（taskId→subjectId、metadata→metadata、taskDir→dataDir、terminal→terminal、status→TaskRuntime），消费者改 import `TaskRuntime` 或 `ExecContext`。
 
@@ -1275,7 +1285,7 @@ docker-compose 一键:`HUB_KEY=你的密钥 docker-compose up --build`;数据落
 9. **插件零 worker 依赖**:插件的 pom 中不得出现对 `every-agent-worker` 的依赖,compile/provided/runtime/test 任何 scope 一律禁止;插件测试需要任务/agent/配置等桩时,在测试源码内自建实现 plugin-api 接口的等价桩类,不得把 worker 具体实现类(TaskEntry/AgentEntity/WorkerProperties/SlashCommandRegistry 等)当测试脚手架;类型确实需要跨 worker 与插件共享时,先下沉到 plugin-api(§1.1,文档先行)。
 10. **文档**:本文档是唯一架构事实源;根目录 AGENTS.md 只写核心约束(每会话加载,保持精简),细节一律进 docs/。
 11. **执行上下文管道(ExecContext,与 §14.0 事件管道同构;展开说明见 §7.20)**：执行数据沿 `task 层 → agent 层 → 工具执行链 → 授权链` 逐层传递,每层只消费自己层级的槽位,下层不知道上层是谁(task 还是未来 workflow):
-    - **槽位判据**:ExecContext 槽位 = 任何执行主体都必然具备的核心属性与端口(subjectId/workspaceRoot/workspaceId/snapshot/emitter/agentFactory/interaction/metadata/dataDir/terminal/agents 活动实体注册表;configId 不设独立槽,经 snapshot().configId() 取);**插件功能与主体特有槽位不进核心接口**——fileChanges 回合槽留 `TaskRuntime`(file-change 插件功能,经 `TaskService.get(subjectId())` 访问),metadata 只承载随 meta.json 落盘的持久策略标记(不混入运行时瞬态数据);agents() 收纳主体上下文内全部 agent(主 agent + 各插件派生:子 agent、审议 agent),由 `AgentBuilder.build()` 自动注册(put + 发射 `agent.started`,§7.20.1),插件不再手动 put/emit;`AgentContext.agentMetadata()` 槽位(creator 等来源标记,非 ExecContext 槽位)随 `agent.started` 持久化进台账,消费方按 creator 决定展示范围(§7.20.1);无子 agent 是正常形态。
+    - **槽位判据**:ExecContext 槽位 = 任何执行主体都必然具备的核心属性与端口(subjectId/workspaceRoot/workspaceId/snapshot/emitter/agentFactory/interaction/metadata/dataDir/terminal/agents 活动实体注册表;configId 不设独立槽,经 snapshot().configId() 取);**插件功能与主体特有槽位不进核心接口**——file-change 插件的 collector 连 `TaskRuntime` 都不进(留 advisor per-run 实例字段 + `RoundClosedListener` 落盘 + 插件自注册 RPC 读,§7.15.2),metadata 只承载随 meta.json 落盘的持久策略标记(不混入运行时瞬态数据);agents() 收纳主体上下文内全部 agent(主 agent + 各插件派生:子 agent、审议 agent),由 `AgentBuilder.build()` 自动注册(put + 发射 `agent.started`,§7.20.1),插件不再手动 put/emit;`AgentContext.agentMetadata()` 槽位(creator 等来源标记,非 ExecContext 槽位)随 `agent.started` 持久化进台账,消费方按 creator 决定展示范围(§7.20.1);无子 agent 是正常形态。
     - **task 层构造并预绑定**:`TaskEntry implements TaskRuntime extends ExecContext`(subjectId=taskId);三预绑定端口同范式(静态代理,worker 内部实现,可链式套娃)——`emitter()`(主体事件口)、`agentFactory()`(主体 agent 装配,`create(agentId)` 单参)、`interaction()`(主体交互口,ask 的 context map 自动填 subjectId)——**上层预绑定能力往下传,不传裸工厂/裸服务、不传任务域对象**。
     - **agent 层/工具链唯一取数口**:`AgentContext.execution()`;`ToolContext`/`ToolExecutionContext`/`AdvisorContext`/`FileReferenceContext`/`TaskLifecycleContext` 一律 `extends ExecContext`(重复字段与 `execution()` 槽位已删,消费侧直读槽位、横切层取主体 ID 一律 `subjectId()`,§7.20.5;`InterceptingToolCallingManager` per-run 构造参数直持 ExecContext,不依赖 ThreadLocal);`properties` 黑盒 map 与 `get("taskEntry")` 强转**禁止再现**。
     - **advisor 只取槽位**:`snapshot()`(模型配置,configId 经 snapshot().configId())、`subjectId()`(审计)、`emitter()`(事件)、`terminal()`(leak-guard)——不 import 任务域类型;**subagent 是执行域能力插件(非任务域),全面中性化**:SubAgentManager 零服务依赖(方法收 ExecContext、监视器内部化、`agents()` 槽位替代 task.agents)、创建子 agent 时设 `agentMetadata(creator=subagent)` 交由 `AgentBuilder.build()` 自动注册+发 `agent.started`(插件不再手动 put/emit)、台账 agents.json 由 worker core `AgentLedger` 收编(`SubAgentLedger` 退役;事件投影+原子读写+冷启动恢复,§7.20.1)、生命周期节点壳留 task 面/逻辑取 ExecContext 槽位、`task.agents` RPC 壳留 task 面(mainAgentId 是任务概念,读侧按 creator 过滤);**task 核心不依赖插件**:编辑重发截断只动 *.jsonl/rounds.jsonl 不删插件数据文件(agents.json/file-changes 残留被接受,事件通知自清为开放项),`task.agents` 方法名常量住插件侧;AI 审议 agent 以 per-task 固定 agentId(creator=ai-review)注册进 agents() 跨请求复用会话(既往授权决策留在审议员上下文);任务域插件(file-change/edit-resend/git)经 `TaskService`/`taskRuntime()` 取 `TaskRuntime` 是合法本职依赖。

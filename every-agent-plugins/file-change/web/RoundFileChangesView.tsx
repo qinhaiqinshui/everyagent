@@ -1,31 +1,16 @@
-import { useRef, useState } from 'react'
+import { useEffect, useState, useSyncExternalStore } from 'react'
 import type { RoundTailPanelProps } from '@everyagent/plugin-api'
 import { CaretDownOutlined, CaretRightOutlined } from '@ant-design/icons'
 import { getPluginContext } from './pluginRuntime'
 import './roundFileChanges.css'
-
-/** 文件变更摘要（rounds.jsonl 每轮 fileChanges 项，轻量级）。 */
-interface RoundFileChangeSummary {
-  filePath: string
-  fileName: string
-  changeType: 'created' | 'updated' | 'deleted'
-  saveCount: number
-}
-
-/** 文件变更全文项。 */
-interface TaskFileChangeFull {
-  filePath: string
-  fileName: string
-  changeType: 'created' | 'updated' | 'deleted'
-  saveCount: number
-  beforeContent: string
-  afterContent: string
-}
-
-/** task.fileChanges rpc.ok 应答。 */
-interface TaskFileChangesResult {
-  changes: TaskFileChangeFull[]
-}
+import {
+  ensureRoundChanges,
+  getRoundChanges,
+  getRoundChangesVersion,
+  loadRoundFullChanges,
+  subscribeRoundChanges,
+  type RoundFileChangeSummary,
+} from './roundChangesStore'
 
 /** changeType 与 git 状态字母、中文含义的映射(A=Added/新建,M=Modified/修改,D=Deleted/删除)。 */
 const CHANGE_GIT_LETTER: Record<
@@ -67,48 +52,47 @@ function toDisplayPath(filePath: string): string {
 
 /**
  * 轮末文件变更视图:渲染该轮文件变更轻量摘要行(文件名 + 完整路径 + A/M/D 标签),
- * 点击某行时按 roundId 经 task.fileChanges 拉取全文(含 beforeContent/afterContent),
- * 再开 diff 标签对比。同一轮的全文按 roundId 缓存,同轮多次点击不重复 RPC;
- * 拉取失败时仅记 warn 忽略(轻提示即可,不阻断线程浏览)。
+ * 点击某行时按 roundId 经 task.fileChanges 拉全文(含 beforeContent/afterContent),
+ * 再开 diff 标签对比。
+ *
+ * 数据不来自轮行(轮行不含插件业务字段,架构 §7.15.2),而来自插件自持的 roundChangesStore:
+ * 真相源是本插件落盘的 `file-changes/<roundId>.json`,一次 RPC 拉全任务各轮轻量摘要按 taskId
+ * 缓存,宿主 `task-round-closed` 领域事件(在 index.ts activate 里订阅)触发作废重拉;
+ * 全文按 roundId 缓存,同轮多次点击不重复 RPC。
  */
 export default function RoundFileChangesView({
   taskId,
   roundId,
   workerId,
   workspaceRoot,
-  round,
 }: RoundTailPanelProps) {
-  const changes = ((round as { fileChanges?: RoundFileChangeSummary[] })?.fileChanges) ?? []
+  // 订阅插件缓存版本:摘要拉取完成 / 轮闭合作废时重渲染本面板。
+  // version 同时进 effect 依赖:作废发生后条目已被删,靠下一次 effect 触发重拉(已加载/在途时
+  // ensure 幂等直返,不会成环)。
+  const cacheVersion = useSyncExternalStore(subscribeRoundChanges, getRoundChangesVersion, getRoundChangesVersion)
+  useEffect(() => {
+    ensureRoundChanges(taskId, workerId)
+  }, [taskId, workerId, cacheVersion])
+
+  const changes = getRoundChanges(taskId, roundId) ?? []
 
   /** 默认折叠:只显示「文件变更」汇总头,点击展开文件行列表。 */
   const [open, setOpen] = useState(false)
-  /** roundId → 该轮已拉取的全文变更列表(避免同轮多次点击重复 RPC)。 */
-  const fullCacheRef = useRef<Map<string, TaskFileChangeFull[]>>(new Map())
 
   if (changes.length === 0) return null
 
   const openDiff = async (summary: RoundFileChangeSummary) => {
-    let fullChanges = fullCacheRef.current.get(roundId)
-    if (!fullChanges) {
-      const ctx = getPluginContext()
-      try {
-        const result = await ctx.sdk.rpc(
-          workerId ?? ctx.sdk.workerId,
-          'task.fileChanges',
-          { taskId, roundId },
-        ) as TaskFileChangesResult
-        fullChanges = result.changes ?? []
-        fullCacheRef.current.set(roundId, fullChanges)
-      } catch (error) {
-        console.warn(`[RoundFileChangesView] 拉取第 ${roundId} 轮文件变更全文失败(${taskId}):`, error)
-        return
-      }
+    let fullChanges: Awaited<ReturnType<typeof loadRoundFullChanges>>
+    try {
+      fullChanges = await loadRoundFullChanges(taskId, roundId, workerId)
+    } catch (error) {
+      console.warn(`[RoundFileChangesView] 拉取第 ${roundId} 轮文件变更全文失败(${taskId}):`, error)
+      return
     }
     const full = fullChanges.find((c) => c.filePath === summary.filePath)
     if (!full) return
     const displayPath = toDisplayPath(full.filePath)
-    const ctx = getPluginContext()
-    ctx.ui.openDiffTab({
+    getPluginContext().ui.openDiffTab({
       filePath: displayPath,
       fileName: full.fileName,
       changeType: full.changeType === 'created' ? 'created' : 'updated',

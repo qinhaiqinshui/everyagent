@@ -95,44 +95,11 @@ export interface RoundSummary {
    * 前端折叠时折叠图标左侧不显示。
    */
   durationMs?: number
-  /**
-   * 该轮文件变更摘要（轻量数组，仅 filePath/fileName/changeType/saveCount；rounds.jsonl 每行
-   * 携带，无变更时字段缺失/undefined）。全文需通过 task.fileChanges 按 roundId 拉取。
-   */
-  fileChanges?: unknown[]
 }
 
-/**
- * 单个文件变更摘要（rounds.jsonl 每轮 fileChanges 项，轻量级）。
- * 全文内容不落 rounds.jsonl，需通过 task.fileChanges 按 roundId 拉取。
- */
-export interface RoundFileChangeSummary {
-  /** 文件路径。 */
-  filePath: string
-  /** 文件名。 */
-  fileName: string
-  /** 变更类型。 */
-  changeType: 'created' | 'updated' | 'deleted'
-  /** 保存次数。 */
-  saveCount: number
-}
-
-/**
- * 单个文件变更全文项（task.fileChanges 应答 changes 项）。
- * 在轻量摘要基础上补充变更前/后全文内容。
- */
-export interface TaskFileChangeFull extends RoundFileChangeSummary {
-  /** 变更前内容。 */
-  beforeContent: string
-  /** 变更后内容。 */
-  afterContent: string
-}
-
-/** task.fileChanges rpc.ok 应答（与 worker wire 严格对齐）。 */
-export interface TaskFileChangesResult {
-  /** 该轮全部文件变更全文项。 */
-  changes: TaskFileChangeFull[]
-}
+// 文件变更(file changes)的类型/取数已全部归 file-change 插件自持
+// （every-agent-plugins/file-change/web/,经插件自己的 task.fileChanges RPC 取数,架构 §7.15.2）;
+// task 域不再声明任何文件变更概念。
 
 /** 运行中任务的当前未闭合轮起点（task.rounds 应答 open；终态任务为 null，未闭合尾轮已落盘进 rounds）。 */
 export interface TaskRoundsOpenRound {

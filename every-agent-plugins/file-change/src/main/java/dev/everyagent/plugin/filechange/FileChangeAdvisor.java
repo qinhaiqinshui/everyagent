@@ -6,6 +6,8 @@ import dev.everyagent.plugin.api.execution.ExecContext;
 import dev.everyagent.plugin.api.task.RoundClosedInfo;
 import dev.everyagent.plugin.api.task.RoundClosedListener;
 import dev.everyagent.plugin.api.task.TaskService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClientRequest;
 import org.springframework.ai.chat.client.ChatClientResponse;
 import org.springframework.ai.chat.client.advisor.api.StreamAdvisor;
@@ -38,6 +40,8 @@ import java.util.concurrent.ConcurrentHashMap;
  * <p>per-run 物化（每 run 新建实例，状态随实例隔离），多任务并发安全。
  */
 public class FileChangeAdvisor implements StreamAdvisor {
+
+    private static final Logger log = LoggerFactory.getLogger(FileChangeAdvisor.class);
 
     private static final String UPDATE_FILE = "update_file";
     private static final String CREATE_FILE = "create_file";
@@ -104,20 +108,28 @@ public class FileChangeAdvisor implements StreamAdvisor {
         // 只主 agent 收口（子 agent 不收口，避免覆盖）
         ExecContext exec = a.execution();
         if (exec == null) {
+            log.debug("[file-change] 收口跳过:execution()==null agent={}", a.agentId());
             return;
         }
         var taskRuntime = taskService.get(exec.subjectId());
         if (taskRuntime == null) {
+            log.debug("[file-change] 收口跳过:taskService.get 无此任务 subject={}", exec.subjectId());
             return;
         }
         if (!a.agentId().equals(taskRuntime.mainAgentId())) {
+            log.debug("[file-change] 收口跳过:非主 agent agent={} main={}", a.agentId(),
+                    taskRuntime.mainAgentId());
             return; // 子 agent：不收口
         }
         if (collector == null || collector.isEmpty()) {
+            log.debug("[file-change] 收口跳过:collector 空(本 run 无文件改动) task={} agent={}",
+                    exec.subjectId(), a.agentId());
             return;
         }
         // 暂存 collector，等 RoundClosedListener 回调时按 roundId 写文件
         provider.storePendingCollector(exec.subjectId(), collector);
+        log.debug("[file-change] 收口暂存 collector task={} agent={} 文件数={}",
+                exec.subjectId(), a.agentId(), collector.buildSummaries().size());
         // 不置 null：如果 listener 回调晚于下一轮 adviseStream，collector 需要保持可用
     }
 

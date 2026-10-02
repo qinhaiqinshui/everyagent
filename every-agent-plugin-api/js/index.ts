@@ -155,6 +155,7 @@ export type PluginDomainEvent =
   | 'task-deleted'
   | 'task-status-changed'
   | 'task-trace-changed'
+  | 'task-round-closed'
   | (string & {})
 
 /** 领域事件总线（对标 vscode.event；委托宿主 domainEventBus）。 */

@@ -1,5 +1,5 @@
 import type { HubClient } from '../sdk/hub-client'
-import type { TaskFileChangesResult, TaskRoundsResult } from './types'
+import type { TaskRoundsResult } from './types'
 
 /** task.poll 参数 */
 export interface TaskPollParams {
@@ -108,30 +108,6 @@ export async function fetchTaskAgents(
   params: TaskAgentsParams,
 ): Promise<TaskAgentsResult> {
   return (await client.rpc(workerId, 'task.agents', { taskId: params.taskId })) as TaskAgentsResult;
-}
-
-/** task.fileChanges 参数。 */
-export interface TaskFileChangesParams {
-  taskId: string;
-  /** 目标轮次 ID（rounds.jsonl 每行 roundId）。 */
-  roundId: string;
-}
-
-/**
- * 拉取指定轮次的文件变更全文（task.fileChanges）：一次应答携带该轮全部文件变更，
- * 每项含 beforeContent / afterContent。参数透传，与 fetchTaskRounds 同风格。
- * 应答类型见 TaskFileChangesResult（types/index.ts）。任务或轮次不存在 → hub-client
- * 以 RpcError（code='NOT_FOUND'）reject，沿用现有 RPC 错误处理模式。
- */
-export async function fetchTaskFileChanges(
-  client: HubClient,
-  workerId: string,
-  params: TaskFileChangesParams,
-): Promise<TaskFileChangesResult> {
-  return (await client.rpc(workerId, 'task.fileChanges', {
-    taskId: params.taskId,
-    roundId: params.roundId,
-  })) as TaskFileChangesResult;
 }
 
 /** task.roundTail 参数。 */

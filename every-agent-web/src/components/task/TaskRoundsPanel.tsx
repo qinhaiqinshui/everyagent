@@ -25,8 +25,8 @@ import './TaskRoundsPanel.css'
  * - 终态未闭合尾轮：常开视图，从 startSeq 起前向懒加载（底部 forward sentinel）；
  * - 运行中未闭合尾轮：原样订阅实时流 + 自动滚底，初始为「最后一页」（roundTail 200）与
  *   流式增量接上，顶部（user 之后）backward sentinel 支持往上翻历史（到达 startSeq 停）；
- * - 轮末展示区：rounds.jsonl 每轮携带轻量 fileChanges 等数据，折叠/展开态均在
- *   当前轮最后渲染轮末展示区视图（通用扩展点，插件自行注册）。
+ * - 轮末展示区：通用扩展点（ui.round_tail_panels），折叠/展开两态均由插件自行在该轮末尾渲染，
+ *   轮行不携带任何插件业务字段（旁路数据如文件变更由插件自持，架构 §7.15.2）。
  * - agent 过滤（「只看该 agent」，filterAgentId 非空）：闭合轮展开态（RoundDetail）与尾轮
  *   过程流仅显示归属该 agent 的项；轮骨架（user 气泡/折叠条/final 摘要/轮末展示区）不过滤，
  *   避免未加载轮被误判「消失」。纯渲染派生——只过滤已加载内容，不新增任何拉取触发；

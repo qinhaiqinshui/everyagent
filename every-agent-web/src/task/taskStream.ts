@@ -173,6 +173,16 @@ class ManagedStream {
     }
     // round.opened / round.closed 是信号事件,不折入 items;仅触发 rounds 快照刷新(重新 task.rounds + 幂等 foldRound)。
     if (event.event === 'round.opened' || event.event === 'round.closed') {
+      // round.closed 另发一条通用领域事件(名不含任何业务语义):轮末旁路数据(如 file-change 插件
+      // 按轮落盘的变更分片)由插件自持文件提供,宿主只负责通知失效,核心不感知业务(§7.15.2)。
+      if (event.event === 'round.closed') {
+        const data = event.payload?.data
+        domainEventBus.emit(DOMAIN_EVENTS.TASK_ROUND_CLOSED, {
+          taskId: this.taskId,
+          startSeq: String(data?.startSeq ?? event.payload?.startSeq ?? ''),
+          endSeq: String(data?.endSeq ?? event.payload?.endSeq ?? ''),
+        })
+      }
       void this.refreshRounds()
       return
     }

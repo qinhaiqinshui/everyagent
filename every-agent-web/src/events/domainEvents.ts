@@ -122,6 +122,7 @@ export const DOMAIN_EVENTS = {
   FILE_CONTENT_SAVED: 'file-content-saved',
   TASK_TURN_STARTED: 'task-turn-started',
   TASK_TURN_COMPLETED: 'task-turn-completed',
+  TASK_ROUND_CLOSED: 'task-round-closed',
   AGENT_RUN_EVENT: 'agent-run-event',
   PLUGINS_LOADED: 'plugins-loaded',
   WORKER_DATA_CHANGED: 'worker-data-changed',
@@ -342,6 +343,14 @@ export type DomainEventMap = {
     mainAgentId: string
     /** 主 agent 执行最终完成时间戳。 */
     ts: number
+  }
+  [DOMAIN_EVENTS.TASK_ROUND_CLOSED]: {
+    /** 所属 Task ID。 */
+    taskId: string
+    /** 闭合轮起点 seq（worker round.closed 瞬态信号透传）。 */
+    startSeq: string
+    /** 闭合轮终点 seq。 */
+    endSeq: string
   }
   [DOMAIN_EVENTS.PLUGINS_LOADED]: {
     /** 已装载的插件数量（含动态插件）。 */
