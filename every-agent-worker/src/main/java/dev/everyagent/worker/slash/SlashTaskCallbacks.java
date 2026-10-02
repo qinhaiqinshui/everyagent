@@ -1,8 +1,9 @@
 package dev.everyagent.worker.slash;
 
-import dev.everyagent.worker.task.TaskEntry;
+import dev.everyagent.plugin.api.execution.ExecContext;
 import dev.everyagent.plugin.api.slash.SlashCommandItem;
 import dev.everyagent.plugin.api.slash.SlashTokenEncoder;
+import dev.everyagent.worker.task.TaskManager;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -19,9 +20,11 @@ public class SlashTaskCallbacks {
     private static final Logger log = LoggerFactory.getLogger(SlashTaskCallbacks.class);
 
     private final SlashCommandRegistry slashRegistry;
+    private final TaskManager taskManager;
 
-    public SlashTaskCallbacks(SlashCommandRegistry slashRegistry) {
+    public SlashTaskCallbacks(SlashCommandRegistry slashRegistry, TaskManager taskManager) {
         this.slashRegistry = slashRegistry;
+        this.taskManager = taskManager;
     }
 
     /**
@@ -30,9 +33,9 @@ public class SlashTaskCallbacks {
      * try/catch(RuntimeException) 兜底,反查 NotFound 与 onSelect 异常仅记日志,
      * 绝不影响任务创建/运行/续跑。新建任务与冷启动续跑(startRerun)共用。
      */
-    public void notifySlashCallbacks(TaskEntry t, String taskId) {
+    public void notifySlashCallbacks(ExecContext exec, String taskId) {
         try {
-            for (String opaque : t.slashTaskTokens()) {
+            for (String opaque : taskManager.slashTaskTokens(taskId)) {
                 SlashTokenEncoder.ParsedToken parsed = SlashTokenEncoder.parseToken(opaque);
                 if (parsed == null) {
                     continue;

@@ -9,7 +9,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import dev.everyagent.contract.json.Json;
-import dev.everyagent.worker.task.TaskEntry;
+import dev.everyagent.plugin.api.execution.ExecContext;
 import dev.everyagent.worker.task.TaskManager;
 import dev.everyagent.worker.task.TaskStore;
 import tools.jackson.databind.JsonNode;
@@ -59,7 +59,7 @@ public class SlashTaskScopeStore {
             return false; // token 非合法 opaque
         }
         synchronized (lockOf(taskId)) {
-            TaskEntry t = taskManager.runningTask(taskId);
+            var t = taskManager.runningTask(taskId);
             if (t != null) {
                 // 运行中:内存槽(判空去重)→ 落盘 meta → 广播 task.updated
                 t.addSlashTaskToken(token);
@@ -104,7 +104,7 @@ public class SlashTaskScopeStore {
      */
     public boolean remove(String taskId, String ownerKey, String token) {
         synchronized (lockOf(taskId)) {
-            TaskEntry t = taskManager.runningTask(taskId);
+            var t = taskManager.runningTask(taskId);
             if (t != null) {
                 t.removeSlashTaskToken(token);
                 store.updateMeta(taskId);

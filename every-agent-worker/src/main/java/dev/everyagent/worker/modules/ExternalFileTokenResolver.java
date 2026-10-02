@@ -11,8 +11,8 @@ import org.springframework.stereotype.Component;
 import dev.everyagent.worker.os.SandboxPathRegistry;
 
 import dev.everyagent.plugin.api.exception.BadParamsException;
+import dev.everyagent.plugin.api.execution.ExecContext;
 import dev.everyagent.worker.slash.SlashTokenHandler;
-import dev.everyagent.worker.task.TaskEntry;
 import dev.everyagent.worker.tools.permission.OverBroadRootCheck;
 import tools.jackson.databind.JsonNode;
 
@@ -63,13 +63,14 @@ public class ExternalFileTokenResolver implements SlashTokenHandler.SlashTokenRe
     }
 
     @Override
-    public String resolveSubmissionText(JsonNode payload, TaskEntry task) {
+    public String resolveSubmissionText(JsonNode payload, ExecContext exec) {
         String absolutePath = payload.path("absolutePath").asString("");
         if (absolutePath.isBlank()) {
             return null; // payload 不完整:交 handler 保留原串
         }
-        if (task == null || task.workspaceRoot == null || task.workspaceRoot.isBlank()) {
-            return null; // 无任务上下文无法判定归属/注册:保留原串
+        String wsRoot = exec == null ? null : exec.workspaceRoot();
+        if (wsRoot == null || wsRoot.isBlank()) {
+            return null; // 无执行上下文无法判定归属/注册:保留原串
         }
         String trimmed = absolutePath.trim();
         Path real;
@@ -80,9 +81,9 @@ public class ExternalFileTokenResolver implements SlashTokenHandler.SlashTokenRe
         }
         WorkspaceManager.Root ws;
         try {
-            ws = workspaces.resolve(task.workspaceRoot);
+            ws = workspaces.resolve(wsRoot);
         } catch (IOException | RuntimeException e) {
-            log.warn("外部文件引用解析失败(工作区不可解析): ws={} - {}", task.workspaceRoot, e.getMessage());
+            log.warn("外部文件引用解析失败(工作区不可解析): ws={} - {}", wsRoot, e.getMessage());
             return "（外部引用注册失败：" + absolutePath + "）";
         }
         // 工作区内(词法/realpath 双形态,防符号链接形态差):退化为工作区相对路径明文,不注册根。
@@ -99,9 +100,9 @@ public class ExternalFileTokenResolver implements SlashTokenHandler.SlashTokenRe
             return "（外部路径被拒：授权根过于宽泛 " + absolutePath + "）";
         }
         try {
-            workspaces.addExternalRoot(task.workspaceRoot, trimmed); // 幂等(skipped/absorbed 均视为成功)
+            workspaces.addExternalRoot(wsRoot, trimmed); // 幂等(skipped/absorbed 均视为成功)
         } catch (BadParamsException | IOException e) {
-            log.warn("外部授权根注册失败: ws={} path={} - {}", task.workspaceRoot, absolutePath, e.getMessage());
+            log.warn("外部授权根注册失败: ws={} path={} - {}", wsRoot, absolutePath, e.getMessage());
             return "（外部引用注册失败：" + absolutePath + "）";
         }
         return externalRefText(real, pathRegistry);
