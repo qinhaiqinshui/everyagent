@@ -1,6 +1,7 @@
 package dev.everyagent.hub.reg;
 
 import dev.everyagent.contract.frame.Frames;
+import dev.everyagent.contract.frame.StreamChannelParser;
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.hub.ws.HubConnection;
 import org.springframework.stereotype.Component;
@@ -32,7 +33,7 @@ public class ChannelRegistry {
     public void subscribe(String channel, HubConnection conn) {
         byChannel.computeIfAbsent(channel, k -> ConcurrentHashMap.newKeySet()).add(conn);
         // 前端订阅 stream 频道 → 通知该 owner 下全部在线 worker:subscriber.join
-        StreamRef ref = parseStreamChannel(channel);
+        StreamChannelParser.StreamRef ref = parseStreamChannel(channel);
         if (ref != null && conn.isFrontend()) {
             notifyWorkers(channel, ref, conn.sessionId(), Frames.SUBSCRIBER_JOIN);
         }
@@ -51,7 +52,7 @@ public class ChannelRegistry {
             return; // 从未订阅过该频道:不触发 leave 通知
         }
         // 前端退订 stream 频道(含 cleanup 经 unsubscribeAll 收口)→ subscriber.leave
-        StreamRef ref = parseStreamChannel(channel);
+        StreamChannelParser.StreamRef ref = parseStreamChannel(channel);
         if (ref != null && conn.isFrontend()) {
             notifyWorkers(channel, ref, conn.sessionId(), Frames.SUBSCRIBER_LEAVE);
         }
@@ -117,36 +118,13 @@ public class ChannelRegistry {
 
     // ---- stream 频道订阅通知(混合模型:worker 定向推送器的建/销触发)----
 
-    /** stream 频道解析结果:ownerKey = 第二个点分隔段,taskId = task. 之后、.stream 之前。 */
-    record StreamRef(String ownerKey, String taskId) {
-    }
-
-    /** 解析 stream 频道 u.&lt;ownerKey&gt;.task.&lt;taskId&gt;.stream;非 stream 频道返回 null。 */
-    static StreamRef parseStreamChannel(String channel) {
-        if (channel == null || !channel.startsWith("u.")) {
-            return null;
-        }
-        int ownerEnd = channel.indexOf('.', 2);
-        if (ownerEnd < 0) {
-            return null;
-        }
-        String ownerKey = channel.substring(2, ownerEnd);
-        if (ownerKey.isEmpty()) {
-            return null;
-        }
-        String rest = channel.substring(ownerEnd + 1);
-        if (!rest.startsWith("task.") || !rest.endsWith(".stream")) {
-            return null;
-        }
-        String taskId = rest.substring("task.".length(), rest.length() - ".stream".length());
-        if (taskId.isEmpty()) {
-            return null;
-        }
-        return new StreamRef(ownerKey, taskId);
+    /** 解析 stream 频道;委托 contract 的 StreamChannelParser,hub 不持有频道命名知识。 */
+    static StreamChannelParser.StreamRef parseStreamChannel(String channel) {
+        return StreamChannelParser.parse(channel);
     }
 
     /** 向该 owner 下全部在线 worker 投递订阅通知;已关闭的 worker 连接 deliver 返回 false,静默跳过。 */
-    private void notifyWorkers(String channel, StreamRef ref, String sessionId, String event) {
+    private void notifyWorkers(String channel, StreamChannelParser.StreamRef ref, String sessionId, String event) {
         String wire = subscriberFrame(channel, ref.taskId(), sessionId, event);
         for (HubConnection worker : connections.onlineWorkers(ref.ownerKey())) {
             worker.deliver(wire);
