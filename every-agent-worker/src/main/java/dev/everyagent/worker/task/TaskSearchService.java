@@ -1,12 +1,12 @@
-package dev.everyagent.worker.modules;
+package dev.everyagent.worker.task;
 
 import dev.everyagent.contract.json.Json;
+import dev.everyagent.worker.modules.FsSearchService;
+import dev.everyagent.worker.modules.FsService;
 import dev.everyagent.worker.proto.RpcMethods;
 import dev.everyagent.plugin.api.exception.BadParamsException;
 import dev.everyagent.worker.rpc.RpcContext;
 import dev.everyagent.worker.rpc.RpcDispatcher;
-import dev.everyagent.worker.task.RoundIndex;
-import dev.everyagent.worker.task.TaskStore;
 import dev.everyagent.worker.tools.RipgrepBinary;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

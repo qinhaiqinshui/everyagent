@@ -1,4 +1,4 @@
-package dev.everyagent.worker.modules;
+package dev.everyagent.worker.task;
 
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.worker.config.WorkerProperties;
@@ -6,7 +6,6 @@ import dev.everyagent.worker.hub.HubLink;
 import dev.everyagent.plugin.api.event.Channels;
 import dev.everyagent.worker.proto.RpcMethods;
 import dev.everyagent.worker.rpc.RpcDispatcher;
-import dev.everyagent.worker.task.TaskStore;
 import dev.everyagent.worker.tools.RipgrepBinary;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeEach;

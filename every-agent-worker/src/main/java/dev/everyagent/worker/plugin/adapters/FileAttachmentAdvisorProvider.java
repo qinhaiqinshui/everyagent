@@ -5,7 +5,7 @@ import dev.everyagent.plugin.api.spi.AdvisorProvider;
 import dev.everyagent.worker.agent.AgentEntity;
 import dev.everyagent.worker.attachment.FileAttachmentAdvisor;
 import dev.everyagent.worker.plugin.AdvisorContextImpl;
-import dev.everyagent.worker.task.TaskEntry;
+import dev.everyagent.plugin.api.execution.ExecContext;
 import org.springframework.ai.chat.client.advisor.api.Advisor;
 import org.springframework.core.Ordered;
 
@@ -31,7 +31,7 @@ public class FileAttachmentAdvisorProvider implements AdvisorProvider {
     @Override
     public Advisor create(AdvisorContext ctx) {
         AgentEntity a = (AgentEntity) ((AdvisorContextImpl) ctx).agentEntity();
-        TaskEntry t = a != null ? (TaskEntry) a.execution() : null;
-        return new FileAttachmentAdvisor(t);
+        ExecContext exec = a != null ? a.execution() : null;
+        return new FileAttachmentAdvisor(exec);
     }
 }

@@ -73,25 +73,29 @@ SubAgentManager 的复用路径（`ctx.agents().get(id)` → `resetForRerun()` +
     - 验收标准：新建 3 个 worker 内置生命周期节点（AgentLedgerTrackNode/UntrackNode/PersistNode）；BuiltInTaskLifecycleNodes 注入 AgentLedger 并注册 3 个节点；编译通过
     - 产出：`AgentLedgerTrackNode.java`（order=150 下行）、`AgentLedgerUntrackNode.java`（order=340 上行）、`AgentLedgerPersistNode.java`（order=860 上行）；`BuiltInTaskLifecycleNodes.java` 注册 3 节点；`AgentLedger.java` 加 @Component
 
-- [ ] 步骤 5：subagent 插件 — 移除 SubAgentLedger，SubAgentManager 改设 agentMetadata + 移除手动注册/事件
-    - 状态：进行中
-    - agent：sub_o3y52；② `SubAgentManager` 不再引用 ledger；③ `buildSubAgent` 创建时 `.agentMetadata(Map.of("creator", "subagent"))`，不再手动 `ctx.agents().put()` 和 `emit("agent.started")`/`emit("agent.status","running")`（由 build() 自动完成）；④ 复用路径仍调 `resetForRerun()` + 显式 emit `agent.started`（让台账更新）；⑤ `agentsJsonMerged` 改为只遍历 `ctx.agents().values()`（不再合并台账基底，台账已由 AgentLedger 统一维护）；⑥ `SubAgentPlugin` 不再注册台账相关生命周期节点（track/untrack/persist 由 TaskEntry/AgentLedger 内部处理）；⑦ 终态事件 `agent.done`/`agent.status` stopped 仍由 SubAgentManager 发射（执行体控制）；编译通过
+- [x] 步骤 5：subagent 插件 — 移除 SubAgentLedger，SubAgentManager 改设 agentMetadata + 移除手动注册/事件
+    - 状态：已完成
+    - agent：sub_o3y52
+    - 依赖：依赖步骤 4
+    - 产出：删除 SubAgentLedger+3 个生命周期节点；SubAgentManager 设 agentMetadata(creator=subagent)、移除手动 put+emit、复用路径显式 emit agent.started、agentsJsonMerged 按 creator=subagent 过滤；SubAgentRpcHandler 内联 agents.json 读取；编译通过
 
-- [ ] 步骤 6：ai-review 插件 — 设 agentMetadata + 移除手动注册
-    - 状态：进行中
-    - agent：sub_o3y53；不再手动 `ctx.agents().put()`（由 build() 自动注册 + 自动发 agent.started + 台账自动更新）；复用路径仍 `resetForRerun()` + 显式 emit `agent.started`；编译通过
+- [x] 步骤 6：ai-review 插件 — 设 agentMetadata + 移除手动注册
+    - 状态：已完成
+    - agent：sub_o3y53
+    - 依赖：依赖步骤 4
+    - 产出：AiAuthReviewer 设 agentMetadata(creator=ai-review)、删手动 put、复用路径显式 emit agent.started；编译通过
 
-- [ ] 步骤 7：list_agents / task.agents — 按 creator 过滤（消费方决策）
-    - 状态：待执行
-    - agent：-
+- [x] 步骤 7：task.agents RPC — 按 creator 过滤（消费方决策）
+    - 状态：已完成
+    - agent：sub_o3y54
     - 依赖：依赖步骤 5、6
-    - 验收标准：`SubAgentManager.agentsJsonMerged` 遍历 `ctx.agents()` 时只保留 `agentMetadata().get("creator") == "subagent"` 的条目（消费方自行决定展示哪些 creator 的 agent）；`SubAgentRpcHandler` 读 agents.json 台账时同理按 creator 过滤；`list_agents` 返回结果中不包含 ai-review 的 review agent；`task.agents` RPC 同理；编译通过
+    - 产出：SubAgentRpcHandler 按 metadata.creator 过滤 agents.json 条目；编译通过
 
-- [ ] 步骤 8：文档同步 + 编译验证
-    - 状态：待执行
-    - agent：-
+- [x] 步骤 8：文档同步 + 编译验证
+    - 状态：已完成
+    - agent：主 Agent 自行完成（sub_o3y55 中断后接手）
     - 依赖：依赖步骤 7
-    - 验收标准：`docs/ARCHITECTURE.md` §7.20/§14.11 相关段落更新（agentMetadata 槽位、build() 自动注册、台账收编 agent 层、creator 过滤语义）；`docs/design-exec-context.md` 同步；`mvn compile` 全模块通过；提交
+    - 产出：`docs/ARCHITECTURE.md` §7.20.1/§5.3/§7.14/task.agents RPC 同步；`docs/design-exec-context.md` §4.1/§4.2/§8.2 同步；全量 `mvn compile` 通过；提交 `other: 架构文档同步 agent 层统一台账与 agentMetadata 收编`
 
 ## 备注
 

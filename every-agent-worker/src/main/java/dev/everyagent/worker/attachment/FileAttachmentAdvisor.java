@@ -1,6 +1,6 @@
 package dev.everyagent.worker.attachment;
 
-import dev.everyagent.worker.task.TaskEntry;
+import dev.everyagent.plugin.api.execution.ExecContext;
 import dev.everyagent.worker.task.lifecycle.FileReferenceProcessNode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -23,7 +23,7 @@ import java.util.Map;
 /**
  * 文件附件注入 Advisor（核心统一 Advisor，与 {@link FileReferenceProcessNode} 配对）。
  *
- * <p>职责单一（一个 Advisor 只做一个功能）：读 {@code TaskEntry.metadata.attachments}，
+ * <p>职责单一（一个 Advisor 只做一个功能）：读 {@code ExecContext.metadata().attachments}，
  * 把 {@code type=image} 项转为 Spring AI {@link Media}（data URL base64），重建末位
  * {@link UserMessage} 为带媒体的多模态消息并 {@code mutate()}。无附件 / 无 user 消息 /
  * 末位 user 消息已带媒体 → 原样放行。
@@ -39,11 +39,11 @@ public class FileAttachmentAdvisor implements BaseAdvisor {
 
     private static final Logger log = LoggerFactory.getLogger(FileAttachmentAdvisor.class);
 
-    /** 任务上下文（只读引用）；为 null（如子 agent 无 taskEntry 属性）时恒放行。 */
-    private final TaskEntry task;
+    /** 执行上下文（只读引用）；为 null（如子 agent 无 taskEntry 属性）时恒放行。 */
+    private final ExecContext exec;
 
-    public FileAttachmentAdvisor(TaskEntry task) {
-        this.task = task;
+    public FileAttachmentAdvisor(ExecContext exec) {
+        this.exec = exec;
     }
 
     @Override
@@ -95,10 +95,10 @@ public class FileAttachmentAdvisor implements BaseAdvisor {
 
     /** 从任务 metadata.attachments 收集 type=image 的附件并转为 Media；无则返回空表。 */
     private List<Media> collectMedia() {
-        if (task == null) {
+        if (exec == null) {
             return List.of();
         }
-        Object attachments = task.metadata.get(FileReferenceProcessNode.METADATA_ATTACHMENTS_KEY);
+        Object attachments = exec.metadata().get(FileReferenceProcessNode.METADATA_ATTACHMENTS_KEY);
         if (!(attachments instanceof List<?> list) || list.isEmpty()) {
             return List.of();
         }
