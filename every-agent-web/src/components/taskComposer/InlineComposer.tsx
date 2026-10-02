@@ -653,9 +653,11 @@ const InlineComposer = React.forwardRef<InlineComposerHandle, InlineComposerProp
     event.preventDefault()
     const files = collectClipboardFiles(event.clipboardData)
     const text = event.clipboardData.getData('text/plain') ?? ''
-    if (!text && files.length === 0) return
+    // 纯空白文本（如截图粘贴时剪贴板附带的 \n）不插入，
+    // 避免 white-space:pre-wrap 将其渲染为胶囊前的空行/自动换行。
+    if (!text.trim() && files.length === 0) return
     root.focus()
-    if (text) {
+    if (text.trim()) {
       const segments = splitComposerRawContent(text, [])
       const inserted: ChatComposerToken[] = []
       for (const segment of segments) {
