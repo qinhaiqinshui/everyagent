@@ -8,9 +8,10 @@
  */
 import { formatTaskStatus, resolveTaskStatusTone, type TaskStatusTone } from '@/task/taskStatusPresentation'
 import type { TaskThreadItem } from '@/task/eventFolder'
-import type { AgentMessageRecord, ContextMonitorSnapshot, TaskStatus, TaskTraceRecord } from '@/types'
-import { taskStore, type TaskListEntry } from '@/hub/taskStore'
-import { taskStreamManager } from '@/hub/taskStream'
+import type { AgentMessageRecord, ContextMonitorSnapshot } from '@/types'
+import type { TaskStatus, TaskTraceRecord } from '@/task/types'
+import { taskStore, type TaskListEntry } from '@/task/taskStore'
+import { taskStreamManager } from '@/task/taskStream'
 import { hubSession } from '@/hub/session'
 import { workspaceRegistry } from '@/hub/workspaceRegistry'
 

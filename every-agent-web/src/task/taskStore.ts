@@ -11,9 +11,10 @@
  * worker 状态(created/running/waiting-user/done/failed/cancelled)在这里映射为
  * n 前端的 TaskStatus(idle/running/waiting-user/completed/stopped/error),UI 层不再感知 worker 枚举。
  */
-import type { ContextMonitorSnapshot, TaskStatus } from '@/types'
-import { hubSession } from './session'
-import { workspaceRegistry } from './workspaceRegistry'
+import type { ContextMonitorSnapshot } from '@/types'
+import type { TaskStatus } from './types'
+import { hubSession } from '../hub/session'
+import { workspaceRegistry } from '../hub/workspaceRegistry'
 import { channels } from '@every-agent/client'
 
 /** worker TaskDtos.UsageSummary 的前端形状(最近一轮主 agent 实测 usage + 窗口上限 + 模型)。 */
@@ -219,12 +220,14 @@ class TaskStore {
   start(): void {
     if (this.started) return
     this.started = true
+    this.subscribeTaskChannels()
     hubSession.onFrame((frame) => {
       // worker 上线(presence 目录帧):若该 worker 的前端连接早已建立(连接先于 worker 就绪,
       // 如 desktop 启动时序竞态或 worker 重启后重连),初始 tasks.list 会落在 worker 尚未
       // 订阅 cmd 频道的窗口而落空,且之后无 onReconnect 补救——此处主动全量校准。
       // refresh 内部已处理在途去重(refreshPending),直接调用即可。
       if (hubSession.isDirectoryFrame(frame) && frame.event === 'worker.online') {
+        this.subscribeTaskChannels()
         void this.refresh()
         return
       }
@@ -243,6 +246,7 @@ class TaskStore {
       this.upsert(frame.payload as WorkerTaskSummary, workerId)
     })
     hubSession.onReconnect(() => {
+      this.subscribeTaskChannels()
       void this.refresh()
     })
     // 首次:若已连接立即拉全量;未连接时由 ensureConnected 后的 onReconnect 触发。
@@ -255,6 +259,19 @@ class TaskStore {
       this.unsubscribeRegistry = workspaceRegistry.subscribe(() => {
         void this.refresh()
       })
+    }
+  }
+
+  /**
+   * 订阅所有 worker 连接的 tasks 频道(task.created/updated/deleted 事件)。
+   * hub-client 的 desiredSubs 机制保证连接建立/重连后自动发送订阅;
+   * worker 新上线时由 onFrame 的 worker.online 分支再次调用(此时连接可能
+   * 尚未 open,sub 会加入 desiredSubs 在连接建立后自动发出)。sub 幂等,
+   * 重复调用无副作用。
+   */
+  subscribeTaskChannels(): void {
+    for (const client of hubSession.workerClients.values()) {
+      if (client.k) client.sub(channels.tasks(client.k))
     }
   }
 

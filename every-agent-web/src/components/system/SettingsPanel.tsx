@@ -24,7 +24,7 @@ import {
   saveBrowserNotificationsEnabled,
 } from '@/settings/browserNotifications'
 import { hubSession } from '@/hub/session'
-import { taskStore } from '@/hub/taskStore'
+import { taskStore } from '@/task/taskStore'
 import WorkerList from '@/components/system/WorkerList'
 import { APP_NAME, APP_VERSION, APP_COPYRIGHT, APP_LICENSE } from '@/appInfo'
 

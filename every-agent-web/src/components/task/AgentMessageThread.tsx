@@ -6,7 +6,7 @@ import { getComposerChipView } from '@/composerToken/composerChipRenderer'
 import { openSlashItemDetail } from '@/components/taskComposer/SlashItemDetailPopover'
 import { pluginDispatcher } from '@/plugin/PluginDispatcher'
 import { useWorkspaceShell } from '@/components/app/WorkspaceShellContext'
-import { taskStore } from '@/hub/taskStore'
+import { taskStore } from '@/task/taskStore'
 import { workspaceRegistry } from '@/hub/workspaceRegistry'
 import {
   SparkIcon,

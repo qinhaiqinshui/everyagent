@@ -25,9 +25,9 @@
  * 游标 lastSeq 用事件自带 seq(wire 字符串,精确)经 compareSeq 取大推进——推送帧与历史拉取批次
  * 共用;rpc.ok 的 result.lastSeq 是 JSON 数值(雪花 ID 超 2^53 丢精度),不作游标。
  */
-import { channels } from './channels'
-import { HubClient } from './hub-client'
-import { STREAM_ACK, type MsgFrame } from './frames'
+import { channels } from '../sdk/channels'
+import { HubClient } from '../sdk/hub-client'
+import { STREAM_ACK, type MsgFrame } from '../sdk/frames'
 import { TaskPacketBuffer, compareSeq, type PacketFrame } from './task-packet-buffer'
 import type { TaskPollEvent, TaskPollParams, TaskPollResult, TaskPollWireEvent } from './task-poll'
 

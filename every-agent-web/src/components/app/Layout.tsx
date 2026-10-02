@@ -13,13 +13,13 @@ import { App as AntApp, ConfigProvider } from 'antd'
 import type {
   OpenWorkspaceFileOptions,
   SidebarPanelId,
-  TaskChatTabInput,
   ThemeMode,
   TopLevelPageId,
   WorkspaceTab,
   WorkspaceTaskChatTab,
   WorkspaceTerminalTab,
 } from '@/types'
+import type { TaskChatTabInput } from '@/task/types'
 import { getAntdTheme } from '@/theme/antdTheme'
 import {
   FilesIcon,
@@ -66,8 +66,8 @@ import { createLazyRouteComponent, scheduleLazyRoutePreload } from '@/components
 import { useHub } from '@/hub/HubProvider'
 import { hubSession } from '@/hub/session'
 import { randomUUID } from '@/utils/uuid'
-import { taskStore } from '@/hub/taskStore'
-import { taskStreamManager } from '@/hub/taskStream'
+import { taskStore } from '@/task/taskStore'
+import { taskStreamManager } from '@/task/taskStream'
 import { workspaceRegistry } from '@/hub/workspaceRegistry'
 import { DRAFT_TASK_ID, setDraftPreset } from '@/components/task/taskChatDraft'
 

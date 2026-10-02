@@ -3,7 +3,7 @@ import { taskQueryService, type TaskListItemSnapshot } from '@/query/taskQuerySe
 import { isTaskActive } from '@/task/taskStatusPresentation'
 import SidebarScrollArea from '@/components/shared/SidebarScrollArea'
 import { getDefaultRuntimeService } from '@/task'
-import { taskStore } from '@/hub/taskStore'
+import { taskStore } from '@/task/taskStore'
 import { workspaceRegistry } from '@/hub/workspaceRegistry'
 import { domainEventBus, DOMAIN_EVENTS } from '@/events/eventBus'
 import { useWorkspaceShell } from '@/components/app/WorkspaceShellContext'

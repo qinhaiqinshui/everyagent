@@ -1,5 +1,5 @@
 import React from 'react'
-import type { RoundSummary } from '@/types'
+import type { RoundSummary } from '@/task/types'
 import type { TaskThreadItem } from '@/task/eventFolder'
 import { InlineSpinner } from '@/components/shared/ui'
 import TaskThread from './TaskThread'

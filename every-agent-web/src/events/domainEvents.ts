@@ -4,14 +4,16 @@ import type {
   FileTabOpenMode,
   AgentMessageRecord,
   AgentRecord,
-  TaskRecord,
-  TaskProtocolStateData,
-  TaskTraceRecord,
-  TaskStatus,
   ThemeMode,
   UserInteractionRequest,
   UserInteractionResult,
 } from '@/types'
+import type {
+  TaskRecord,
+  TaskProtocolStateData,
+  TaskTraceRecord,
+  TaskStatus,
+} from '@/task/types'
 
 /**
  * `Agent` 运行期对外公布的可见事件（step-14：trace 收口）。

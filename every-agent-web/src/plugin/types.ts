@@ -18,10 +18,10 @@ import type { ToolViewProps } from '@/components/task/toolViews/types'
 import type {
   ChatComposerDraftState,
   ChatComposerToken,
-  RoundSummary,
   SidebarPanelId,
   WorkspaceTab,
 } from '@/types'
+import type { RoundSummary } from '@/task/types'
 
 /** 统一别名：方案文档中的 `ComposerToken` 在代码库中就是 `ChatComposerToken`。 */
 export type ComposerToken = ChatComposerToken

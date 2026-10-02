@@ -552,7 +552,6 @@ class HubSession {
     }
     try {
       await client.connect()
-      client.sub(channels.tasks(client.k))
       client.sub(channels.workerEvt(client.k, workerId))
       this.workerErrors.delete(workerId)
     } catch (error) {

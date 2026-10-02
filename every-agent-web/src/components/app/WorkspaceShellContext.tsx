@@ -3,11 +3,11 @@ import type {
   FileTabOpenMode,
   OpenWorkspaceFileOptions,
   SidebarPanelId,
-  TaskChatTabInput,
   WorkspaceFileTab,
   WorkspaceTab,
   WorkspaceTaskChatTab,
 } from '@/types'
+import type { TaskChatTabInput } from '@/task/types'
 
 /**
  * 工作区壳层上下文。

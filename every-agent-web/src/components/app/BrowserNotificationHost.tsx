@@ -14,10 +14,11 @@
  * 本组件不自行请求权限:权限申请入口在设置页与 BrowserNotificationGuide。
  */
 import React from 'react'
-import type { TaskListEntry } from '@/hub/taskStore'
-import { taskStore } from '@/hub/taskStore'
+import type { TaskListEntry } from '@/task/taskStore'
+import { taskStore } from '@/task/taskStore'
 import { domainEventBus, DOMAIN_EVENTS } from '@/events/eventBus'
-import type { TaskStatus, UserInteractionRequest } from '@/types'
+import type { TaskStatus } from '@/task/types'
+import type { UserInteractionRequest } from '@/types'
 import { showSystemNotification } from '@/notification'
 import { loadBrowserNotificationsEnabled } from '@/settings/browserNotifications'
 

@@ -14,7 +14,7 @@ import MoreActionsButton, { type MoreActionItem } from '@/components/shared/More
 import ConfirmDialog from '@/components/shared/ConfirmDialog'
 import { useHub } from '@/hub/HubProvider'
 import { hubSession, type WorkerInfo } from '@/hub/session'
-import { taskStore } from '@/hub/taskStore'
+import { taskStore } from '@/task/taskStore'
 import { workspaceRegistry } from '@/hub/workspaceRegistry'
 import { useAppUi } from '@/components/app/AppUiContext'
 import {

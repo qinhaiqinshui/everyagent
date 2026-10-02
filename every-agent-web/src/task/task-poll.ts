@@ -1,5 +1,5 @@
-import type { HubClient } from './hub-client'
-import type { TaskFileChangesResult, TaskRoundsResult } from '../types'
+import type { HubClient } from '../sdk/hub-client'
+import type { TaskFileChangesResult, TaskRoundsResult } from './types'
 
 /** task.poll 参数 */
 export interface TaskPollParams {

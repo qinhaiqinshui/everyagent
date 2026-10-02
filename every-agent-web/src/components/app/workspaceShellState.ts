@@ -1,5 +1,4 @@
 import type {
-  TaskChatTabInput,
   TopLevelPageId,
   WorkspaceTaskChatTab,
   WorkspaceFileTab,
@@ -9,6 +8,7 @@ import type {
   WorkspaceDiffTab,
   WorkspaceTab,
 } from '@/types'
+import type { TaskChatTabInput } from '@/task/types'
 
 /**
  * 工作区标签状态的纯函数工具。

@@ -6,7 +6,7 @@
  * data/<ownerKey>/<taskId>/ 目录——任务永久保留,用户删除是唯一出口)。
  */
 import { hubSession } from '@/hub/session'
-import { taskStore } from '@/hub/taskStore'
+import { taskStore } from '@/task/taskStore'
 
 export interface TaskRuntimeService {
   deleteTask(taskId: string): Promise<void>

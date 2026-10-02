@@ -3,7 +3,7 @@
 // Task 状态展示工具（架构边界审计 7.1 A3：task 概念只允许落在 `src/task/`，已从 `src/agent/` 迁入）。
 // 查询层和界面层共用这组有限取值，避免各自维护一份状态展示语义。
 
-import type { TaskStatus } from '@/types'
+import type { TaskStatus } from '@/task/types'
 
 export type TaskStatusTone = 'idle' | 'active' | 'waiting' | 'stopped' | 'error' | 'completed'
 

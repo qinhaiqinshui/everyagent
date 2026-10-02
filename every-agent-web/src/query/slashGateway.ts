@@ -7,7 +7,7 @@
  * `slash.list` RPC 提供,前端零命令定义、零 token 构造逻辑。
  */
 import { hubSession } from '@/hub/session'
-import { taskStore } from '@/hub/taskStore'
+import { taskStore } from '@/task/taskStore'
 
 /** worker `slash.list` 返回的单个候选项。 */
 export interface RemoteSlashItem {

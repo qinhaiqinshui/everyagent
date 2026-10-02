@@ -11,7 +11,7 @@
 import type { ChatComposerToken } from '@/types'
 import { parseOpaqueTokenText } from '@/composerToken/composerOpaqueToken'
 import { hubSession } from '@/hub/session'
-import { taskStore } from '@/hub/taskStore'
+import { taskStore } from '@/task/taskStore'
 import { createSnowflakeId } from '@/utils/snowflakeId'
 
 /**

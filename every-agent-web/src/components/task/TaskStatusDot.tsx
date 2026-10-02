@@ -1,5 +1,5 @@
 import React from 'react'
-import type { TaskStatus } from '@/types'
+import type { TaskStatus } from '@/task/types'
 import {
   AlertTriangleIcon,
   CheckIcon,

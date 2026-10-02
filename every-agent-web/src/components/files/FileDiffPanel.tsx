@@ -1,5 +1,5 @@
 import React from 'react'
-import type { TaskFileChange } from '@/types'
+import type { TaskFileChange } from '@/task/types'
 import { useResponsiveViewport } from '@/hooks/useResponsiveViewport'
 import { buildLineDiff, buildSideBySideRows, type SideBySideDiffRow } from '@/utils/textDiff';
 import { Button } from '@/components/shared/ui'

@@ -25,23 +25,25 @@
  */
 import {
   TaskPacketView,
+  type TaskStreamEvent,
+} from './task-packet-view'
+import {
   fetchTaskAgents,
   fetchTaskRounds,
   fetchTaskRoundTail,
-  type TaskStreamEvent,
   type TaskPollWireEvent,
-} from '@every-agent/client'
+} from './task-poll'
 import {
   emptyThreadState,
   TaskEventFolder,
   type FoldableTaskEvent,
   type TaskThreadState,
-} from '@/task/eventFolder'
-import type { RoundSummary, TaskRoundsResult } from '@/types'
-import { hubSession } from './session'
+} from './eventFolder'
+import type { RoundSummary, TaskRoundsResult } from './types'
+import { hubSession } from '../hub/session'
 import { taskStore } from './taskStore'
-import { clearAsksOfTask, settleAsk, upsertPendingAsk, type WorkerAskPayload } from './askStore'
-import { registerAskReplySender } from './askStore'
+import { clearAsksOfTask, settleAsk, upsertPendingAsk, type WorkerAskPayload } from '../hub/askStore'
+import { registerAskReplySender } from '../hub/askStore'
 
 /** 折叠推进 → 重渲染的合并窗口(ms):流式高频事件按拍合并。 */
 const NOTIFY_COALESCE_MS = 50
@@ -118,7 +120,7 @@ export interface TaskStreamHandle {
 class ManagedStream {
   view: TaskPacketView | null = null
   /** view 绑定的 HubClient(仅致命错误替换实例时换新,ensureView 检测后自动重建 view)。 */
-  boundClient: import('@every-agent/client').HubClient | null = null
+  boundClient: import('../sdk/hub-client').HubClient | null = null
   folder: TaskEventFolder
   listeners = new Set<() => void>()
   notifyTimer: ReturnType<typeof setTimeout> | null = null
