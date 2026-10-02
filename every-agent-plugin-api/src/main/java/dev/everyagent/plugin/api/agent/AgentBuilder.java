@@ -4,6 +4,7 @@ import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.tool.ToolCallback;
 
 import java.util.List;
+import java.util.Map;
 import java.util.function.Consumer;
 
 /**
@@ -23,6 +24,9 @@ public interface AgentBuilder {
 
     /** 设置 agent 标题（展示用）。 */
     AgentBuilder title(String title);
+
+    /** 设置 agent 元数据（如 creator 标记；随 agent.started 事件持久化到台账）。 */
+    AgentBuilder agentMetadata(Map<String, Object> metadata);
 
     /**
      * 按模式增删改工具列表。

@@ -7,6 +7,7 @@ import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.model.ChatModel;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * per-run agent 的数据面接口(plugin-api 契约)。
@@ -27,6 +28,11 @@ public interface AgentContext {
 
     /** agent 标题(展示用)。 */
     String title();
+
+    /** agent 元数据（创建时注入，如 creator=subagent / creator=ai-review；随 agent.started 事件持久化到台账）。 */
+    default Map<String, Object> agentMetadata() {
+        return Map.of();
+    }
 
     /** 创建时刻(毫秒时间戳)。 */
     long createdAt();
