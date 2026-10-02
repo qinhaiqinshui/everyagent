@@ -4,6 +4,7 @@ import dev.everyagent.plugin.api.task.TaskChain;
 import dev.everyagent.plugin.api.task.TaskLifecycleContext;
 import dev.everyagent.plugin.api.task.TaskLifecycleNode;
 import dev.everyagent.plugin.api.task.TaskOutcome;
+import dev.everyagent.plugin.api.task.TaskService;
 import dev.everyagent.plugin.api.task.TaskStoreService;
 import dev.everyagent.plugin.api.task.UserInput;
 import org.slf4j.Logger;
@@ -25,10 +26,12 @@ public final class QueueLoopNode implements TaskLifecycleNode {
 
     private final TaskQueueRegistry registry;
     private final TaskStoreService store;
+    private final TaskService taskService;
 
-    public QueueLoopNode(TaskQueueRegistry registry, TaskStoreService store) {
+    public QueueLoopNode(TaskQueueRegistry registry, TaskStoreService store, TaskService taskService) {
         this.registry = registry;
         this.store = store;
+        this.taskService = taskService;
     }
 
     @Override
@@ -67,6 +70,10 @@ public final class QueueLoopNode implements TaskLifecycleNode {
                 ctx.rawContent(polledCtx.rawContent());
                 ctx.runParams(polledCtx.runParams());
                 ctx.metadata(polledCtx.metadata());
+                // 重新挂接流推送源：上一轮的上行段 persistence.untrack(500) 已摘除流源，
+                // 但 persistence.track(100) 在本节点之前、不随续跑重入。
+                // 若不重新挂接，第二轮事件只落盘不实时推送（前端延迟到 task.poll 补齐）。
+                taskService.reattachStream(taskId);
                 result = next.proceed(ctx);
             }
 

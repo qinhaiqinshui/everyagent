@@ -1,11 +1,12 @@
 /**
  * 任务输入队列面板(n 分支 QueuePanel 视觉移植 + 操作按钮)。
  *
- * 数据:taskStore 条目的 pendingInputs —— worker 侧 inputQueue 的镜像,
- * 入队/消费即 task.updated 广播实时刷新;刷新/重连经 tasks.list 内存行恢复
- * (运行时态不落盘)。队列在 worker,操作经 taskQueryService 的
- * queueMove / queueRemove RPC 下发:每条项支持 ↑ / 编辑 / 删除;
- * 编辑 = 先回填输入框(onEditDraft)再移除该项。
+ * 数据:ctx.pendingInputs —— worker 侧 inputQueue 的镜像,
+ * 由 worker queue.dispatch 入队后广播 task.updated 携带 pendingInputs,
+ * 核心 taskStore 收到后更新 entry → ComposerPanelCtx 更新 → 本面板重渲染。
+ * 队列在 worker,操作经 ctx.rpc 的 task.queueRemove/move 下发:
+ * 每条项支持 ↑ / 编辑 / 删除;
+ * 编辑 = 先回填输入框再移除该项。
  * 队列为空整个卸载(return null),挂在输入框上方(abovePanel 插槽)。
  */
 import React from 'react'
@@ -14,45 +15,13 @@ import './task-input-queue.css'
 
 export default function TaskInputQueuePanel(ctx: ComposerPanelCtx): React.ReactNode {
   const taskId = ctx.taskId
-  // pendingInputs 来源：ctx.rpc('tasks.list', { taskIds: [taskId] }) 拉取任务摘要，
-  // worker 侧 queue.dispatch 入队后广播 task.updated → taskStore 更新 →
-  // stream.subscribe 触发 ctx.subscribeTaskEvents → 面板重新拉取。
-  const [items, setItems] = React.useState<string[]>([])
-  const [running, setRunning] = React.useState(ctx.isRunning)
+  // pendingInputs 由 ComposerPanelCtx 直接传入（数据源是 taskStore entry，
+  // 经 task.updated 广播实时同步）
+  const items = ctx.pendingInputs ?? []
+  const running = ctx.isRunning
   // 操作进行中:禁用全部按钮防止连点(worker 侧 RPC 完成前队列索引未刷新)。
   const [busy, setBusy] = React.useState(false)
   const [error, setError] = React.useState('')
-
-  /** 从 worker 拉取任务摘要中的 pendingInputs。 */
-  const refreshPendingInputs = React.useCallback(() => {
-    if (!taskId) return
-    void ctx.rpc('tasks.list', { taskIds: [taskId], limit: 1 })
-      .then((result) => {
-        const tasks = (result as { tasks?: Array<{ pendingInputs?: string[] }> })?.tasks
-        if (tasks && tasks.length > 0) {
-          setItems(tasks[0].pendingInputs ?? [])
-        }
-      })
-      .catch((err) => {
-        console.warn('[TaskQueuePanel] 拉取 pendingInputs 失败:', err)
-      })
-  }, [taskId, ctx])
-
-  React.useEffect(() => {
-    if (!taskId) return
-    // 首次拉取
-    refreshPendingInputs()
-    // 订阅任务流事件：worker 广播 task.updated 后 stream.subscribe 触发，
-    // 重新拉取 pendingInputs。
-    const unsub = ctx.subscribeTaskEvents(() => {
-      refreshPendingInputs()
-    })
-    return unsub
-  }, [taskId, ctx, refreshPendingInputs])
-
-  React.useEffect(() => {
-    setRunning(ctx.isRunning)
-  }, [ctx.isRunning])
 
   if (!taskId || items.length === 0) return null
 

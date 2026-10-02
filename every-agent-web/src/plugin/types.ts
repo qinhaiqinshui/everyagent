@@ -184,6 +184,8 @@ export interface ComposerPanelCtx {
   rpc: (method: string, params: Record<string, unknown>) => Promise<unknown>
   /** 订阅任务流事件（agent.*、usage 等），返回取消订阅函数。 */
   subscribeTaskEvents: (handler: (event: string, agentId: string | null, payload: unknown) => void) => () => void
+  /** 待消费输入快照（worker 队列镜像，经 task.updated 广播实时同步）。空=无排队。 */
+  pendingInputs?: string[]
 }
 
 /**

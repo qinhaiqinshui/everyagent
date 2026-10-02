@@ -24,6 +24,7 @@ import dev.everyagent.worker.os.SandboxPathRegistry;
 import dev.everyagent.worker.task.TaskManager;
 import dev.everyagent.worker.task.RoundIndexStore;
 import dev.everyagent.worker.task.TaskStore;
+import dev.everyagent.worker.ship.StreamSourceRegistry;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Component;
 
@@ -46,6 +47,7 @@ public class WorkerServicesImpl implements WorkerServices {
     private final WorkerProperties workerProperties;
     private final EventSink eventSink;
     private final IdGenerator idGenerator;
+    private final StreamSourceRegistry streamSources;
 
     public WorkerServicesImpl(OsSandbox sandbox, SandboxPathRegistry pathRegistry,
             WorkspaceManager workspaces,
@@ -53,7 +55,8 @@ public class WorkerServicesImpl implements WorkerServices {
             TaskStore taskStore,
             RoundIndexStore roundIndexStore,
             InteractionServiceImpl interaction,
-            WorkerProperties workerProperties, EventSink eventSink) {
+            WorkerProperties workerProperties, EventSink eventSink,
+            StreamSourceRegistry streamSources) {
         this.sandbox = sandbox;
         this.pathRegistry = pathRegistry;
         this.workspaces = workspaces;
@@ -64,6 +67,7 @@ public class WorkerServicesImpl implements WorkerServices {
         this.interaction = interaction;
         this.workerProperties = workerProperties;
         this.eventSink = eventSink;
+        this.streamSources = streamSources;
         this.idGenerator = new IdGenerator() {
             @Override
             public long next() {
@@ -118,6 +122,14 @@ public class WorkerServicesImpl implements WorkerServices {
             @Override
             public void publishUpdated(String taskId) {
                 taskManager.publishTaskUpdated(taskId);
+            }
+
+            @Override
+            public void reattachStream(String taskId) {
+                var t = taskManager.get(taskId);
+                if (t != null) {
+                    streamSources.attach(taskId, t.log(), t.mainAgentId());
+                }
             }
         };
     }
