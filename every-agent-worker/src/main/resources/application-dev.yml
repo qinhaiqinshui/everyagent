@@ -29,3 +29,5 @@ logging:
     dev.everyagent.worker.task.WorkerToolEventAdvisor: debug
     dev.everyagent.worker.task.TaskStore: debug
     dev.everyagent.worker.task.lifecycle: debug
+    # file-change 插件链路诊断(轮末文件变更面板:收口跳过原因/collector 暂存/分片落盘与 RPC 命中):
+    dev.everyagent.plugin.filechange: debug
