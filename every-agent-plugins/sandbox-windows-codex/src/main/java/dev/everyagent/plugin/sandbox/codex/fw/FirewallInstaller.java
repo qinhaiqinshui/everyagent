@@ -223,8 +223,11 @@ public final class FirewallInstaller {
 
     private static Pointer newPolicy() {
         try {
+            // 请求 IDispatch 接口（而非 INetFwPolicy2）：Java 侧用 IDispatch vtable
+            // 调用（GetIDsOfNames + Invoke），INetFwPolicy2 是 IDispatch 双接口，
+            // 请求 IDispatch 与 JNA 内置 COMBindingBaseObject 一致。
             return NetFwCom.coCreateInstance(NetFwCom.CLSID_NET_FW_POLICY2,
-                    NetFwCom.IID_INET_FW_POLICY2);
+                    NetFwCom.IID_IDISPATCH);
         } catch (RuntimeException e) {
             throw new SetupErrorReport.SetupException(
                     SetupErrorReport.HELPER_FIREWALL_POLICY_ACCESS_FAILED, e.getMessage());
