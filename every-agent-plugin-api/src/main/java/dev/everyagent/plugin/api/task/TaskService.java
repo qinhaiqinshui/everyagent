@@ -20,12 +20,4 @@ public interface TaskService {
 
     /** 广播 task.updated（运行中用内存 summary，磁盘终态用磁盘 summary）。 */
     void publishUpdated(String taskId);
-
-    /**
-     * 重新挂接流推送源（DataPusher 据此实时推送事件）。
-     * <p>队列续跑场景：QueueLoopNode 的 next.proceed 内层链在上行段执行 persistence.untrack
-     * 摘除流源，但 persistence.track 在 queue.loop 之前、不随续跑重入。
-     * 续跑前调用此方法重新挂接，否则第二轮事件只落盘不实时推送（前端延迟到 task.poll 补齐）。
-     */
-    void reattachStream(String taskId);
 }

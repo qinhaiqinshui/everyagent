@@ -46,8 +46,6 @@ export interface WorkerTaskSummary {
   workspace?: string | null
   /** 任务挂靠工作区的稳定 id(新 worker 提供;旧 worker 无此字段时为 undefined)。 */
   workspaceId?: string | null
-  /** 运行中任务的待消费输入快照(运行时态不落盘;终态/磁盘行无此字段=空)。 */
-  pendingInputs?: string[]
   /** 任务创建时冻结的模型配置 ID(worker TaskSummary 已下发,前端据其反查模型信息)。 */
   configId?: string | null
   /** 主 agent 稳定 Id(a_… 短 ID;agent 列表首项与主 agent 状态归属标识)。 */
@@ -75,8 +73,6 @@ export interface TaskListEntry {
   workspace: string
   /** 任务挂靠工作区的稳定 id(新 worker 提供;旧数据/旧 worker 为 null)。 */
   workspaceId?: string | null
-  /** 待消费输入快照(队列面板展示;空=无排队)。 */
-  pendingInputs: string[]
   /** 任务创建时冻结的模型配置 ID(据其反查模型信息;空=未知)。 */
   configId: string
   /** 主 agent 稳定 Id(a_… 短 ID;空=未知/旧格式任务)。 */
@@ -169,7 +165,6 @@ function toEntry(summary: WorkerTaskSummary): TaskListEntry {
     error: summary.error ?? existing?.error ?? '',
     workspace,
     workspaceId,
-    pendingInputs: summary.pendingInputs ?? existing?.pendingInputs ?? [],
     configId: summary.configId ?? existing?.configId ?? '',
     mainAgentId: summary.mainAgentId ?? existing?.mainAgentId ?? '',
     contextUsage,

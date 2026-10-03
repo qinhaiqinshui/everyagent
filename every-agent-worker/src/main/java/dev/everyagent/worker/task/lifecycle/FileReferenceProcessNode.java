@@ -29,7 +29,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * 文件引用处理节点（order=395.4，consume.input=396 之前，与 EditResendNode=395.5 错开）。
+ * 文件引用处理节点（order=875，临界段内侧·轮次循环段，consume.input=880 之前，与 EditResendNode=877 错开）。
  *
  * <p>职责（通用机制，核心对具体文件类型零感知）：
  * <ol>
@@ -69,7 +69,7 @@ public final class FileReferenceProcessNode implements TaskLifecycleNode {
 
     @Override
     public float order() {
-        return 395.4f;
+        return 875f;
     }
 
     @Override

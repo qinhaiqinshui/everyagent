@@ -791,13 +791,12 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
     [pluginExtVersion],
   )
   // 为插件面板构建 ComposerPanelCtx（每次渲染新建，保持引用最新）。
-  // pendingInputs 数据流：worker queue.dispatch 入队 → 广播 task.updated 携带 pendingInputs
-  // → taskStore.upsert（tasks 频道）→ useTaskEntry 重渲染 → entry.pendingInputs 更新 → ctx 更新
+  // 公共上下文不携带任何插件专有数据（如队列插件的 pendingInputs）——
+  // 插件面板自持数据源（经 ctx.rpc 拉取 + subscribeTaskEvents 信号刷新）。
   const composerPanelCtx = React.useMemo<ComposerPanelCtx>(() => ({
     taskId: effectiveTaskId,
     draft: draft as ComposerPanelCtx['draft'],
     isRunning: isTaskActive(entry?.status ?? 'idle'),
-    pendingInputs: entry?.pendingInputs ?? [],
     selectAgent: (agentId: string | null) => {
       if (agentId) handleSelectAgent(agentId)
     },
@@ -806,7 +805,7 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
       return hubSession.rpcTo(ownerW, method, params)
     },
     subscribeTaskEvents: (handler) => {
-      // taskStore 变更（task.updated 广播携带 pendingInputs/status 等）
+      // taskStore 变更（task.updated 广播：status/usage 及插件附带的扩展字段等）
       const unsubStore = taskStore.subscribe(() => {
         handler('task.updated', null, null)
       })
@@ -819,7 +818,7 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
         unsubStream?.()
       }
     },
-  }), [effectiveTaskId, draft, entry?.status, entry?.pendingInputs, handleSelectAgent, hubSession, ownerWorkerId, stream])
+  }), [effectiveTaskId, draft, entry?.status, handleSelectAgent, hubSession, ownerWorkerId, stream])
 
   const submitDisabled = Boolean(!draft.text.trim() || submitting || (isDraft && !draftWorkerId) || (isDraft && !effectiveDraftWorkspace))
 

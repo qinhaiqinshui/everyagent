@@ -8,7 +8,8 @@ import dev.everyagent.plugin.api.task.TaskStoreService;
 
 /**
  * task-input-queue 插件入口。
- * <p>activate() 中注册 QueueDispatchNode、QueueLoopNode、DialogInsertAdvisorProvider。
+ * <p>activate() 中注册 QueueDispatchNode(15)、QueueLoopNode(870,临界段内侧轮次循环)、
+ * DialogInsertAdvisorProvider 与队列 RPC（queueRemove/queueMove/queueSnapshot）。
  */
 public class TaskInputQueuePlugin implements EveryAgentPlugin {
 
@@ -24,13 +25,14 @@ public class TaskInputQueuePlugin implements EveryAgentPlugin {
         TaskQueueRegistry queueRegistry = new TaskQueueRegistry();
 
         ctx.registerTaskLifecycleNode(new QueueDispatchNode(queueRegistry, taskService, eventSink));
-        ctx.registerTaskLifecycleNode(new QueueLoopNode(queueRegistry, store, taskService));
+        ctx.registerTaskLifecycleNode(new QueueLoopNode(queueRegistry, store, eventSink));
         ctx.registerAdvisorProvider(new DialogInsertAdvisorProvider(queueRegistry));
 
-        // 注册 task.queueRemove / task.queueMove RPC
+        // 注册 task.queueRemove / task.queueMove / task.queueSnapshot RPC
         QueueRpcHandler rpcHandler = new QueueRpcHandler(queueRegistry, taskService, store, eventSink);
         ctx.registerRpcMethod("task.queueRemove", rpcHandler::rpcQueueRemove);
         ctx.registerRpcMethod("task.queueMove", rpcHandler::rpcQueueMove);
+        ctx.registerRpcMethod("task.queueSnapshot", rpcHandler::rpcQueueSnapshot);
     }
 }
 

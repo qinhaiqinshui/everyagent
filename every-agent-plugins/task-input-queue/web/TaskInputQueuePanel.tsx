@@ -1,9 +1,11 @@
 /**
  * 任务输入队列面板(n 分支 QueuePanel 视觉移植 + 操作按钮)。
  *
- * 数据:ctx.pendingInputs —— worker 侧 inputQueue 的镜像,
- * 由 worker queue.dispatch 入队后广播 task.updated 携带 pendingInputs,
- * 核心 taskStore 收到后更新 entry → ComposerPanelCtx 更新 → 本面板重渲染。
+ * 数据源:插件自持——`task.queueSnapshot` RPC(热任务内存队列 / 终态任务磁盘悬空队列),
+ * 以 `ctx.subscribeTaskEvents('task.updated')` 为刷新信号(worker 队列入队/轮间消费/增删改
+ * 均广播 task.updated 携带 pendingInputs,taskStore 收到即触发本面板重拉)。
+ * 队列专有数据不进宿主公共类型(ComposerPanelCtx/TaskListEntry 均无 pendingInputs)。
+ *
  * 队列在 worker,操作经 ctx.rpc 的 task.queueRemove/move 下发:
  * 每条项支持 ↑ / 编辑 / 删除;
  * 编辑 = 先回填输入框再移除该项。
@@ -15,22 +17,56 @@ import './task-input-queue.css'
 
 export default function TaskInputQueuePanel(ctx: ComposerPanelCtx): React.ReactNode {
   const taskId = ctx.taskId
-  // pendingInputs 由 ComposerPanelCtx 直接传入（数据源是 taskStore entry，
-  // 经 task.updated 广播实时同步）
-  const items = ctx.pendingInputs ?? []
   const running = ctx.isRunning
-  // 操作进行中:禁用全部按钮防止连点(worker 侧 RPC 完成前队列索引未刷新)。
+  // 队列快照(插件自持状态;空=无排队,面板卸载)
+  const [items, setItems] = React.useState<string[]>([])
   const [busy, setBusy] = React.useState(false)
   const [error, setError] = React.useState('')
 
-  if (!taskId || items.length === 0) return null
+  const itemsRef = React.useRef(items)
+  itemsRef.current = items
 
-  /** 统一异步外壳:忙态守卫 + 错误收口(面板内可读错误 + console.warn)。 */
+  /** 拉取最新队列快照(静默失败:面板数据缺失不打扰用户)。 */
+  const refresh = React.useCallback(() => {
+    if (!taskId) return
+    void Promise.resolve(ctx.rpc('task.queueSnapshot', { taskId }))
+      .then((res) => {
+        const next = (res as { pendingInputs?: string[] } | null)?.pendingInputs
+        const list = Array.isArray(next) ? next : []
+        // 仅在内容变化时 setState,避免 task.updated 高频信号下无谓重渲染
+        const prev = itemsRef.current
+        if (prev.length === list.length && prev.every((v, i) => v === list[i])) return
+        itemsRef.current = list
+        setItems(list)
+      })
+      .catch((refreshError) => {
+        // 版本偏差(worker 未升级到含 task.queueSnapshot 的插件)等:静默降级为不显示
+        console.warn('[TaskQueuePanel] 队列快照拉取失败:', refreshError)
+      })
+  }, [taskId, ctx.rpc])
+
+  // 数据流:taskId 变化首拉 + task.updated 广播信号触发重拉。
+  // subscribeTaskEvents 的 ctx.rpc 依赖随 memo 变化,重订阅无害(退订旧/订新)。
+  React.useEffect(() => {
+    if (!taskId) {
+      setItems([])
+      return
+    }
+    refresh()
+    return ctx.subscribeTaskEvents((event) => {
+      // 只响应 tasks 频道信号(task.updated:入队/轮间消费/增删改/status 变化);
+      // task.stream(delta/thinking 高频流式)与队列无关,跳过防抖动。
+      if (event === 'task.updated') refresh()
+    })
+  }, [taskId, ctx.subscribeTaskEvents, refresh])
+
+  /** 统一异步外壳:忙态守卫 + 错误收口 + 完成后重拉快照(RPC ok 早于广播时兜底)。 */
   const runAction = (action: () => Promise<unknown>) => {
     if (busy) return
     setBusy(true)
     setError('')
     void action()
+      .then(() => refresh())
       .catch((actionError) => {
         const message = actionError instanceof Error ? actionError.message : '队列操作失败'
         setError(message)
@@ -46,7 +82,7 @@ export default function TaskInputQueuePanel(ctx: ComposerPanelCtx): React.ReactN
 
   const handleInsert = (idx: number, text: string) => {
     // 插入到当前对话:通过 task.run 携带 metadata.insert=true,worker 侧在工具循环
-    // 把该输入以 role=user 随工具结果一并提交给模型,同时从 pendingInputs 移除该项。
+    // 把该输入以 role=user 随工具结果一并提交给模型,同时从队列移除该项。
     runAction(() => ctx.rpc('task.run', { taskId, input: text, metadata: { insert: true, index: idx } }))
   }
 
@@ -60,6 +96,8 @@ export default function TaskInputQueuePanel(ctx: ComposerPanelCtx): React.ReactN
   const handleDelete = (idx: number) => {
     runAction(() => ctx.rpc('task.queueRemove', { taskId, index: idx }))
   }
+
+  if (!taskId || items.length === 0) return null
 
   return (
     <div className="task-queue-panel">

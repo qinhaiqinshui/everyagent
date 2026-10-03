@@ -68,7 +68,7 @@ export function useEditResend(taskId: string | undefined): {
  *
  * 编辑模式下：
  * - getContribution → { metadata: { editSeq }, submitLabel: '重新发送', submitDanger: true }
- *   （editSeq 作为 metadata 透传到后端，由本插件的 EditResendNode(395.5) 消费截断）；
+ *   （editSeq 作为 metadata 透传到后端，由本插件的 EditResendNode(877) 消费截断）；
  * - onSubmitted → 提交成功后清除编辑目标。
  */
 export function createEditResendContributionProvider(): TaskRunSubmitContributionProvider {

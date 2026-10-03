@@ -225,7 +225,8 @@ worker 端 `RpcDispatcher` 注册方法;应答回**请求来源连接**的 `evt`
 | `task.agents` | 子 agent 台账一次性拉取(前端打开任务详情、建子 agent 胶囊列表的唯一取数口;live 任务取内存台账,磁盘路径 agents.json 优先、旧任务回退 meta.json 的 agents 数组只读;按 createdAt 升序;**按 `metadata.creator=subagent` 过滤——审议 agent 等 creator≠subagent 的条目不出现在子 agent 列表,§7.20.1**;应答 `{agents:[台账项], mainAgentId}`);方法由 subagent 插件注册,方法名常量跟注册方走(住插件侧,§14.11) |
 | `task.fileChanges` | **file-change 插件注册的 RPC**(方法名常量与语义全住插件侧,task 核心不感知,§14.11/§7.15.2):带 `roundId` → 该轮变更全文 `file-changes/<roundId>.json` 的 `{changes:[...]}`(含 beforeContent/afterContent);**省略 `roundId`** → 全任务各轮轻量摘要 `{rounds:[{roundId, changes:[{filePath,fileName,changeType,saveCount}]}]}`(前端轮末面板一次拉全,不做逐轮 N 次 RPC) |
 | `task.search` | 任务内容搜索(内置 rg + worker 后处理):`workspaceId` 必填且必须是稳定 id 形态(`defaultworkspace` / `w_xxxxx`,拒绝路径穿越),按 `workspaces/<workspaceId>/tasks/<taskId>/` 枚举任务目录,复用 rg 搜索 `rounds.jsonl`(每行一轮,含 user/finalReply 正文);入参 `pattern` / `isRegex` / `caseSensitive` / `wholeWord` / `maxResults`(默认 500),pattern 语义与 `fs.search` 共用 `buildMatchArgs`;rg 命中 JSON 原始行后由 worker `parseRoundLine` 解析、对 user/finalReply 干净文本二次匹配(消除字段名/转义噪音,同时得到准确 `matchIndex`/`matchText`);结果项 `{taskId, title, workspace, workspaceId, status, matches:[{roundIndex, field:'user'|'finalReply', line, matchIndex, matchText}]}`,按任务聚合;大结果复用 `rpc.data` 分批 + 末帧 `ok` 汇总(§5.4) |
-| `task.queueRemove` / `task.queueMove` | 删除/重排某条队列输入 |
+| `task.queueRemove` / `task.queueMove` | 删除/重排某条队列输入(task-input-queue 插件注册;运行中热队列直改内存、终态改磁盘悬空队列 queue.jsonl) |
+| `task.queueSnapshot` | 拉取队列快照 `{taskId, pendingInputs:[…]}`(task-input-queue 插件注册;热任务取内存 InputQueue,终态任务读 queue.jsonl 悬空队列)——前端队列面板自持数据源(插件专有数据不进核心 ComposerPanelCtx/taskStore),入队/消费/增删均广播 `task.updated`(携带 pendingInputs)驱动刷新 |
 | `task.message.edit` | 编辑已发送的用户消息:截断 seq > 该消息的所有磁盘事件(仅 *.jsonl/rounds.jsonl,**不删插件数据文件**——agents.json/file-changes/ 残留陈旧条目被接受,task 核心不感知插件文件名;后续可增加截断事件通知由插件自清)、原地更新该消息内容、广播 `message.edited` 同步事件、冷启动重跑(不写新 user.message,对话历史已含编辑后的消息);任务运行中拒绝 |
 | `config.get` | 模型配置只读(Spring 配置承载,见 §7.17) |
 | `config.reload` | 重新读取模型配置(重新解析 worker.models,应用用户在外部 YAML 中的修改);广播 `config.changed{keys:["models"]}` |
@@ -437,7 +438,7 @@ worker ── HubPool ──┬─ conn₁ (url₁, apiKey₁ → K₁)  订阅 
 ```
 
 - **创建**:`task.run`(不传 taskId;必带 workspace)→ 建目录 → 任务驻留内存。
-- **运行中**:新到输入入 inputQueue 在本次运行内消费,队列增减广播 `task.updated`(pendingInputs 快照;运行时态不落盘)。
+- **运行中**:新到输入入 inputQueue 在本次运行内消费(轮次循环 queue.loop 在每轮内核返回后 poll,临界段内侧续跑),队列增减**与逐项消费**均广播 `task.updated`(pendingInputs 快照;运行时态不落盘);悬空队列(终态未消费项)随 queue.jsonl 持久化、再运行时恢复。
 - **终态(finish)**:flush 落盘 → 更新 meta → **销毁内存驻留**。内存只剩索引条目(~150B)。
 - **再运行**:从磁盘载入(ConversationLoader 重建 conversation),复用原 taskId/workspace,`log.seed(seqLastOf)` 接续序号,作为一次普通运行。模型取任务 meta 的 configId(配置已删则回退默认)。
 - **删除**:运行中拒绝;否则删磁盘目录 + 索引,广播 `task.deleted`。**这是任务唯一消失路径**。
@@ -649,8 +650,8 @@ wsl-bwrap 后端的 seccomp 内核级提权拦截已随 bwrap 后端删除而移
 - **注册表**：`TaskLifecycleRegistry`（`plugin/registry/` 第 8 个注册表）——CopyOnWriteArrayList + float 稳定排序。850..420 区间拒绝插件节点插入。（注册表不感知插件禁用：禁用的插件根本不会被 `activate`，也就不会往这里注册节点，见 §8.5）
 - **内置节点（17 个）**：
   - 下行 4：`persistence.track`(100) → `task.wires`(200) → `status.start`(300) → `main.agent`(390)
-  - 内核：轮次循环 `while(true){ runner.run(main); inputQueue.poll… }`
-  - 上行 13：`spawned.await`(950) → `cascade.stop`(900) → **[临界段]** `status.finalize`(850) → `concurrency.release`(800) → `log.flush`(750) → `queue.persist`(700) → `status.persist`(650) → `ledger.persist`(600) → `disk.index`(550) → `persistence.untrack`(500) → `gate.evict`(450) → `registry.remove`(420) **[/临界段]** → `workspace.activity`(350)
+  - **轮次循环段（每轮重入，临界段内侧）**：`queue.loop`(870，task-input-queue 插件) 包裹 `[ file.reference.process(875) → edit.resend(877，task-edit-resend 插件) → consume.input(880) → 内核 runner.run(main) 一次 ]`——每轮 poll 队列项后覆盖 ctx.input 再 proceed;`cascade.stop`(900)/`spawned.await`(950) 亦在循环内侧(逐轮失败级联停/子 agent 等待)。**轮次循环必须在临界段 [420,850] 内侧**：若在 420 之外包裹(如 order=395),每轮上行段会把 status 终态/registry.remove/persistence.untrack/concurrency.release 等一次性收口节点逐轮执行——任务中途被移出注册表(实时推送断流、cancel/task.poll 失效)、writer 提前关闭(后续轮次事件不落盘)、并发计数重复扣减
+  - 上行 13：`spawned.await`(950) → `cascade.stop`(900) → `ledger.persist`(860) → **[临界段]** `status.finalize`(850) → `concurrency.release`(800) → `log.flush`(750) → `queue.persist`(700) → `status.persist`(650) → `ledger.persist`(600) → `disk.index`(550) → `persistence.untrack`(500) → `gate.evict`(450) → `registry.remove`(420) **[/临界段]** → `workspace.activity`(350)
 - **行为零变化**：事件发射顺序、seq 语义、落盘内容与重构前逐项一致（§3.3 基线表逐字映射）。
 - **后续 Phase**：agent 层独立(Phase 2)、拦截链范式统一(Phase 3)、subagent 插件(Phase 4)、队列插件(Phase 5)。详见 `docs/design-agent-layer-onion.md`。
 
@@ -792,7 +793,7 @@ worker(进程)
 
 **`@` 弹窗外部文件引用(kind=`system.external_file`)**:payload `{absolutePath, fileName, kind:"file"|"directory"}`;前端不解析该 token,提交时原串上行(复用 slash token 通路),worker 统一解析:① realpath 不存在 → 替换为失效提示文本;② realpath 落在工作区内 → 退化为「工作区相对路径」明文(与 `system.workspace_file` 提交语义一致);③ 工作区外 → 注册为该工作区外部授权根(§7.17)并替换为「原生绝对路径 + 沙箱内路径」文本。前端入口:`@` 弹窗标题行 `+` 图标打开外部文件选择框(`fs.browse` `includeFiles=true` 数据源;默认目录=当前工作区根,面包屑+返回父目录,最顶层为盘符根列表;目录行可进入+可选,文件行可选;响应缺 `supportsFiles` 时降级仅目录);点击 `+` 先删除输入框中的 `@` 触发片段,选中后与 @ 搜索选中一致走 insertToken 插入胶囊。
 
-**队列输入与「插入到当前对话」**:任务运行中输入入队(pendingInputs 外显,可 `task.queueRemove`/`task.queueMove` 管理);「插入到当前对话」(`task.dialogInsert`)把队列项交给本轮主 agent 的插入队列,`DialogInsertAdvisor` 随下一轮工具结果以 role=user 提交给 AI + 发 `user.message`;终态/停止即随 AgentEntity 作废。
+**队列输入与「插入到当前对话」**:任务运行中输入入队(pendingInputs 经 `task.updated` 广播外显、`task.queueSnapshot` RPC 拉取——队列面板数据源由插件自持,`ComposerPanelCtx` 等公共类型不携带插件专有字段;可 `task.queueRemove`/`task.queueMove` 管理,消费一项即广播刷新);「插入到当前对话」(`task.dialogInsert`)把队列项交给本轮主 agent 的插入队列,`DialogInsertAdvisor` 随下一轮工具结果以 role=user 提交给 AI + 发 `user.message`;终态/停止即随 AgentEntity 作废。
 
 **不变式**:
 

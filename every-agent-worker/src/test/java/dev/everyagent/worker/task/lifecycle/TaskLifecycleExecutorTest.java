@@ -240,6 +240,91 @@ class TaskLifecycleExecutorTest {
         assertEquals(TaskOutcome.TaskEndStatus.FAILED, result.status());
     }
 
+    // ===== 10. 轮次循环在临界段内侧：收口节点整轮任务仅一次、逐轮节点每轮执行 =====
+    // 回归：queue.loop 曾置于 order=395（临界段外侧），每轮 next.proceed 的上行段把
+    // registry.remove/persistence.untrack/concurrency.release 等一次性收口节点逐轮执行——
+    // 任务中途被移出注册表（续跑轮次实时推送断流、事件不落盘）。修复后 queue.loop=870
+    // 位于临界段 [420,850] 内侧，循环只重入「每轮语义」节点（consume.input 等）。
+    @Test
+    void roundLoopInsideCriticalSection_finalizesOncePerRun() {
+        List<String> events = new ArrayList<>();
+        AtomicInteger kernelRounds = new AtomicInteger();
+        java.util.Deque<String> queue = new java.util.concurrent.ConcurrentLinkedDeque<>();
+        queue.add("queued-1");
+
+        List<TaskLifecycleNode> nodes = List.of(
+            // 一次性收口簇（临界段 [420,850]）
+            upNode("registry.remove", 420, events),
+            upNode("persistence.untrack", 500, events),
+            upNode("disk.index", 550, events),
+            upNode("status.persist", 650, events),
+            upNode("log.flush", 750, events),
+            upNode("concurrency.release", 800, events),
+            new SectionNode() {
+                @Override public String id() { return "status"; }
+                @Override public float order() { return 840; }
+                @Override protected void down(TaskLifecycleContext c) { events.add("status.down"); }
+                @Override protected Object up(TaskLifecycleContext c, Object r) { events.add("status.up"); return r; }
+            },
+            // 轮次循环节点（真实 order=870，临界段内侧；重复 next.proceed 续跑队列项）
+            new TaskLifecycleNode() {
+                @Override public String id() { return "queue.loop"; }
+                @Override public float order() { return 870; }
+                @Override public Object invoke(TaskLifecycleContext c, TaskChain n) throws Exception {
+                    Object result = n.proceed(c);
+                    while (result instanceof TaskOutcome to && to.status() == TaskOutcome.TaskEndStatus.DONE) {
+                        String polled = queue.poll();
+                        if (polled == null) break;
+                        c.input(polled);
+                        result = n.proceed(c);
+                    }
+                    return result;
+                }
+            },
+            // 每轮输入消费节点（真实 order=880）
+            new TaskLifecycleNode() {
+                @Override public String id() { return "consume.input"; }
+                @Override public float order() { return 880; }
+                @Override public Object invoke(TaskLifecycleContext c, TaskChain n) throws Exception {
+                    events.add("consume:" + c.input());
+                    return n.proceed(c);
+                }
+            }
+        );
+        TaskKernel kernel = c -> {
+            kernelRounds.incrementAndGet();
+            return TaskOutcome.done(0, 0);
+        };
+        executor.run(nodes, kernel, ctx);
+
+        assertEquals(2, kernelRounds.get(), "内核应跑两轮（首轮 + 队列 1 项）");
+        assertEquals(2, (int) events.stream().filter(e -> e.startsWith("consume:")).count(),
+                "consume.input 每轮执行一次");
+        assertEquals(1, (int) events.stream().filter(e -> e.equals("registry.remove")).count(),
+                "registry.remove 整轮任务仅执行一次");
+        assertEquals(1, (int) events.stream().filter(e -> e.equals("persistence.untrack")).count(),
+                "persistence.untrack 整轮任务仅执行一次");
+        assertEquals(1, (int) events.stream().filter(e -> e.equals("status.up")).count(),
+                "终态收口 status.up 整轮任务仅执行一次");
+        assertEquals(1, (int) events.stream().filter(e -> e.equals("concurrency.release")).count(),
+                "concurrency.release 整轮任务仅执行一次（曾逐轮扣减导致计数下溢）");
+        assertEquals(List.of("consume:", "consume:queued-1"),
+                events.stream().filter(e -> e.startsWith("consume:")).toList(),
+                "队列项应作为第二轮输入被消费");
+    }
+
+    /** 记录上行段调用的辅助节点。 */
+    private static UpstreamNode upNode(String name, float order, List<String> events) {
+        return new UpstreamNode() {
+            @Override public String id() { return name; }
+            @Override public float order() { return order; }
+            @Override protected Object up(TaskLifecycleContext c, Object r) {
+                events.add(name);
+                return r;
+            }
+        };
+    }
+
     // ===== 辅助类 =====
 
     /** 追踪下行调用顺序的节点。 */
@@ -264,8 +349,9 @@ class TaskLifecycleExecutorTest {
         }
     }
 
-    /** 简单的 TaskLifecycleContext 测试实现。 */
+    /** 简单的 TaskLifecycleContext 测试实现（input 可写读回传）。 */
     private static class TestContext implements TaskLifecycleContext {
+        private String input = "";
         @Override public String taskId() { return "test"; }
         @Override public String title() { return "test"; }
         @Override public String workspaceRoot() { return "/tmp"; }
@@ -278,8 +364,8 @@ class TaskLifecycleExecutorTest {
         @Override public void startedAt(long ms) { }
         @Override public void onUsageBroadcast(Runnable hook) { }
         @Override public void agentStatus(String agentId, String status) { }
-        @Override public String input() { return ""; }
-        @Override public void input(String input) { }
+        @Override public String input() { return input; }
+        @Override public void input(String input) { this.input = input; }
         @Override public String rawContent() { return ""; }
         @Override public void rawContent(String rawContent) { }
         @Override public Map<String, Object> runParams() { return Map.of(); }

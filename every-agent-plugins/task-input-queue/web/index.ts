@@ -1,8 +1,9 @@
 /**
  * task-input-queue 插件 —— Web 插件入口。
  *
- * 注册 composer 上方输入队列面板（从 web 核心 TaskQueuePanel 迁入）。
- * 面板订阅 task.updated 取 pendingInputs，操作经 ctx.rpc() 调 task.queueRemove/move。
+ * 注册 composer 上方输入队列面板。面板自持数据源:task.queueSnapshot RPC 拉取队列快照,
+ * 以 task.updated 广播(入队/轮间消费/增删改时 worker 携带 pendingInputs 广播)为刷新信号;
+ * 操作经 ctx.rpc() 调 task.queueRemove/move。
  */
 import type { PluginModule } from '@everyagent/plugin-api'
 import TaskInputQueuePanel from './TaskInputQueuePanel'

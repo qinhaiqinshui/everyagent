@@ -123,14 +123,6 @@ public class WorkerServicesImpl implements WorkerServices {
             public void publishUpdated(String taskId) {
                 taskManager.publishTaskUpdated(taskId);
             }
-
-            @Override
-            public void reattachStream(String taskId) {
-                var t = taskManager.get(taskId);
-                if (t != null) {
-                    streamSources.attach(taskId, t.log(), t.mainAgentId());
-                }
-            }
         };
     }
 

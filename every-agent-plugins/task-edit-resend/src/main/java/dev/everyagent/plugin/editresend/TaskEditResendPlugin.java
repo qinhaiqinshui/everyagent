@@ -8,7 +8,7 @@ import dev.everyagent.plugin.api.task.TaskStoreService;
 
 /**
  * task-edit-resend 插件入口。
- * <p>activate() 中注册 EditResendNode（虚拟线程阶段 order=395.5）。
+ * <p>activate() 中注册 EditResendNode（虚拟线程阶段 order=877，轮次循环段）。
  */
 public class TaskEditResendPlugin implements EveryAgentPlugin {
 

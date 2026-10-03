@@ -1,24 +1,33 @@
 package dev.everyagent.plugin.inputqueue;
 
+import dev.everyagent.plugin.api.event.StreamEmitter;
 import dev.everyagent.plugin.api.task.TaskChain;
 import dev.everyagent.plugin.api.task.TaskLifecycleContext;
 import dev.everyagent.plugin.api.task.TaskLifecycleNode;
 import dev.everyagent.plugin.api.task.TaskOutcome;
-import dev.everyagent.plugin.api.task.TaskService;
 import dev.everyagent.plugin.api.task.TaskStoreService;
 import dev.everyagent.plugin.api.task.UserInput;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * 队列循环节点（紧贴内核，order=395）。
+ * 队列循环节点（order=870，临界段 [420,850] 内侧、ledger.persist(860) 之后）。
+ * <p><b>位置红线：必须在临界段内侧。</b>本节点靠重复 {@code next.proceed} 续跑队列项，
+ * 其 next 链 = [file.reference.process(875) → edit.resend(877) → consume.input(880) → 内核
+ * → cascade.stop(900)↑ → spawned.await(950)↑]，全部是「每轮」语义的节点（逐轮输入预处理、
+ * 逐轮失败级联停、逐轮子 agent 等待）。一旦本节点落到临界段之外（如曾经的 395），每轮
+ * next.proceed 的上行段会把 status 终态 / registry.remove / persistence.untrack /
+ * concurrency.release 等<b>一次性收口节点逐轮执行</b>——任务中途被移出注册表
+ * （DataPusher 流源挂不回、cancel/task.poll 失效、ask 门失效）、事件 writer 提前关闭
+ * （后续轮次事件不落盘，重启即丢）、并发计数重复扣减（2026-10 队列续跑第二轮
+ * 无实时推送事故根因）。
  * <p>下行段：注册 per-task InputQueue + 恢复悬空队列（readQueue → 包装为 ctx → offer）。
- * <p>invoke 体内：next.proceed(ctx)（= 后续节点直至内核，agent.run 一次）→ queue.poll()
- * → 有则把 polledCtx 的 input/rawContent/metadata 设到当前 ctx 再 next.proceed，空就返回。
- * consumeInput 不由本节点执行——交给后续的 consume.input(396) 核心节点。
- * <p>上行段（return 后）：落盘悬空队列 queue.jsonl / 空则删除。
- * <p>finally：从注册表注销队列。
- * <p>非临界段节点（order=395 < 420），不经临界段共享锁。queue.jsonl 读写失败仅 warn。
+ * <p>invoke 体内：next.proceed(ctx)（首轮，输入由后续 consume.input 消费）→ queue.poll()
+ * → 有则把 polledCtx 的 input/rawContent/runParams/metadata 设到当前 ctx、广播消费后的
+ * pendingInputs 快照（前端队列面板据此收敛），再 next.proceed 续跑；空就返回。
+ * <p>上行段（全部轮次跑完才到）：落盘悬空队列 queue.jsonl / 空则删除。
+ * <p>finally：从注册表注销队列。段外节点（非 SectionNode），不经临界段共享锁；
+ * queue.jsonl 读写失败仅 warn。
  */
 public final class QueueLoopNode implements TaskLifecycleNode {
 
@@ -26,25 +35,25 @@ public final class QueueLoopNode implements TaskLifecycleNode {
 
     private final TaskQueueRegistry registry;
     private final TaskStoreService store;
-    private final TaskService taskService;
+    private final StreamEmitter eventSink;
 
-    public QueueLoopNode(TaskQueueRegistry registry, TaskStoreService store, TaskService taskService) {
+    public QueueLoopNode(TaskQueueRegistry registry, TaskStoreService store, StreamEmitter eventSink) {
         this.registry = registry;
         this.store = store;
-        this.taskService = taskService;
+        this.eventSink = eventSink;
     }
 
     @Override
     public String id() { return "queue.loop"; }
 
     @Override
-    public float order() { return 395; }
+    public float order() { return 870; }
 
     @Override
     public Object invoke(TaskLifecycleContext ctx, TaskChain next) throws Exception {
         String taskId = ctx.taskId();
         // 注册 per-task 队列（queue.dispatch 节点在 RPC 线程入队用）
-        // 用 getOrCreateInputQueue：若 queue.dispatch 已先行创建队列（极窄竞态窗口），复用之
+        // 用 getOrCreateInputQueue：若 queue.dispatch 已先行创建队列（竞态窗口），复用之
         InputQueue queue = registry.getOrCreateInputQueue(taskId);
 
         // 下行：恢复悬空队列（新建任务 readQueue 返回空）
@@ -58,22 +67,22 @@ public final class QueueLoopNode implements TaskLifecycleNode {
         }
 
         try {
-            // 内核循环：跑一轮 → 队列取下一条 → 有就再跑
+            // 内核循环：跑一轮 → 队列取下一条 → 有就再跑。
+            // 全程位于临界段内侧：流源/落盘 writer/注册表条目/并发计数直到全部轮次
+            // 结束才由外层收口节点一次性拆除，续跑轮次与首轮同权（实时推送 + 落盘）。
             Object result = next.proceed(ctx);
             while (result instanceof TaskOutcome to && to.status() == TaskOutcome.TaskEndStatus.DONE) {
                 TaskLifecycleContext polledCtx = queue.poll();
                 if (polledCtx == null) {
                     break;
                 }
-                // 把 polledCtx 的数据设到当前 ctx，后续节点（edit.resend / consume.input）能读到
+                // 把 polledCtx 的数据设到当前 ctx，后续节点（file.reference/edit.resend/consume.input）能读到
                 ctx.input(polledCtx.input());
                 ctx.rawContent(polledCtx.rawContent());
                 ctx.runParams(polledCtx.runParams());
                 ctx.metadata(polledCtx.metadata());
-                // 重新挂接流推送源：上一轮的上行段 persistence.untrack(500) 已摘除流源，
-                // 但 persistence.track(100) 在本节点之前、不随续跑重入。
-                // 若不重新挂接，第二轮事件只落盘不实时推送（前端延迟到 task.poll 补齐）。
-                taskService.reattachStream(taskId);
+                // 消费一项即广播消费后的 pendingInputs 快照：前端队列列表实时收敛/消失
+                QueueBroadcast.pendingInputs(eventSink, ctx.taskRuntime(), queue);
                 result = next.proceed(ctx);
             }
 

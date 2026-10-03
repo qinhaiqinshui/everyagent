@@ -1,8 +1,6 @@
 package dev.everyagent.plugin.inputqueue;
 
 import dev.everyagent.contract.json.Json;
-import dev.everyagent.plugin.api.event.Channels;
-import dev.everyagent.plugin.api.event.Events;
 import dev.everyagent.plugin.api.event.StreamEmitter;
 import dev.everyagent.plugin.api.task.TaskChain;
 import dev.everyagent.plugin.api.task.TaskLifecycleContext;
@@ -91,23 +89,10 @@ public final class QueueDispatchNode implements TaskLifecycleNode {
     }
 
     /**
-     * 广播 task.updated 携带 pendingInputs（与 QueueRpcHandler.broadcastQueueUpdate 同构）。
-     * 前端 taskStore 收到后更新 pendingInputs 镜像，队列面板据此刷新。
+     * 广播 task.updated 携带 pendingInputs（统一走 {@link QueueBroadcast}）。
+     * 前端队列面板自持数据源（task.queueSnapshot），收到广播信号后拉取最新快照。
      */
     private void broadcastQueueUpdate(String taskId, TaskRuntime t) {
-        try {
-            InputQueue queue = registry.getInputQueue(taskId);
-            var summary = t.summaryJson();
-            if (queue != null) {
-                var arr = tools.jackson.databind.node.JsonNodeFactory.instance.arrayNode();
-                for (String text : queue.snapshot()) {
-                    arr.add(text);
-                }
-                summary.set("pendingInputs", arr);
-            }
-            eventSink.fanout(k -> Channels.tasks(k), Events.TASK_UPDATED, null, summary, null);
-        } catch (Exception e) {
-            log.warn("[queue] dispatch 广播队列更新失败 task={}", taskId, e);
-        }
+        QueueBroadcast.pendingInputs(eventSink, t, registry.getInputQueue(taskId));
     }
 }
