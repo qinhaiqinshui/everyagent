@@ -169,6 +169,14 @@ public final class RunnerClient {
                             envDiag == null ? -1 : envDiag.substring(0, envDiag.indexOf('/')),
                             envDiag == null ? -1 : envDiag.substring(envDiag.indexOf('/') + 1),
                             cmdline.length());
+                    // cmdline 全文 + argv 逐项（含可打印性检测：非 ASCII/控制字符以 U+XXXX 标注）
+                    LOG.log(System.Logger.Level.WARNING,
+                            "[runner] E_INVALIDARG cmdline 全文: <{0}>", cmdline);
+                    for (int ai = 0; ai < argv.size(); ai++) {
+                        LOG.log(System.Logger.Level.WARNING,
+                                "[runner] E_INVALIDARG argv[{0}] len={1}: <{2}>",
+                                ai, argv.get(ai).length(), printable(argv.get(ai)));
+                    }
                     diagnoseSpawn(cfg, argv, cmdline);
                 }
                 closeQuietly(pi.hThread);
@@ -183,6 +191,20 @@ public final class RunnerClient {
             throw new IOException("CreateProcessWithLogonW failed for runner: " + failure);
         }
         throw new IOException("CreateProcessWithLogonW failed for runner (retried)");
+    }
+
+    /** 诊断用：非 ASCII/控制字符转 U+XXXX（不可见字符一眼可见）。 */
+    private static String printable(String s) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c >= 0x20 && c < 0x7F) {
+                sb.append(c);
+            } else {
+                sb.append(String.format("[U+%04X]", (int) c));
+            }
+        }
+        return sb.toString();
     }
 
     /**
