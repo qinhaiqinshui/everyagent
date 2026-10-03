@@ -227,10 +227,10 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
   // 任务级底部 token（胶囊）：草稿态本地持有；真实任务从 slash.taskTokens.list
   // 拉取 + apply/cancel RPC 返回值 + slash.tokens.changed stream 事件更新。
   const [scopeTokens, setScopeTokens] = React.useState<ChatComposerToken[]>([])
-  // 队列面板「编辑」回填回调:纯文本替换草稿(清空胶囊 token,回到普通输入态)。
-  const handleEditQueuedDraft = React.useCallback((text: string) => {
-    setDraft({ text, rawContent: text, tokens: [], activeTokenId: undefined })
-  }, [])
+  // 队列面板「编辑」的回填不走这里:插件经自己的 ctx.ui.appendComposerText /
+  // setComposerRawContent 回填(宿主已实现该 ui 契约,与 task-edit-resend 同一条路)。
+  // 曾在此留一个 handleEditQueuedDraft 纯文本回调,但从未接线到 ComposerPanelCtx——
+  // 注释让人误以为宿主已代劳,面板于是只删不回填;死代码已随该 bug 修复移除。
   const [submitting, setSubmitting] = React.useState(false)
   const [stopping, setStopping] = React.useState(false)
   const [error, setError] = React.useState('')

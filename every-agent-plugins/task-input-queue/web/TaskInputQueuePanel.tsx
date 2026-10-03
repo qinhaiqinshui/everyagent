@@ -8,22 +8,31 @@
  *
  * 队列在 worker,操作经 ctx.rpc 的 task.queueRemove/move 下发:
  * 每条项支持 插入 / ↑ / 编辑 / 删除;
- * 插入 = `task.run{taskId, input, metadata:{insert:true, index}}`——worker 侧 queue.dispatch
- * 按 index 从输入队列**摘掉该项**并入本轮主 agent 的插入队列,DialogInsertAdvisor 随下一轮
- * 工具结果以 role=user 提交给 AI 并发 `user.message`;摘除后的 pendingInputs 广播即本面板收敛信号
- * (故此处不再补发 queueRemove)。未及 drain 的项由 queue.loop 回收,不丢输入。
- * 编辑 = 先回填输入框再移除该项。
+ * 插入 = `task.run{taskId, input, rawContent?, metadata:{insert:true, index}}`——worker 侧
+ * queue.dispatch 按 index 从输入队列**摘掉该项**并入本轮主 agent 的插入队列,
+ * DialogInsertAdvisor 随下一轮工具结果以 role=user 提交给 AI 并发 `user.message`;摘除后的
+ * pendingInputs 广播即本面板收敛信号(故此处不再补发 queueRemove)。未及 drain 的项由
+ * queue.loop 回收进输入队列,不丢输入。
+ * 编辑 = 先回填输入框再移除该项(回填走插件自己的 ctx.ui 草稿能力,优先 rawContent 还原
+ * 胶囊,见 handleEdit);只摘不回填等于把这条输入删掉。
  * 队列为空整个卸载(return null),挂在输入框上方(abovePanel 插槽)。
  */
 import React from 'react'
 import type { ComposerPanelCtx } from '@everyagent/plugin-api'
+import { getPluginContext } from './pluginRuntime'
 import './task-input-queue.css'
+
+/** 一条队列项:text=纯文本(展示与提交给 AI),raw=原始输入(含 opaque token 串,可空)。 */
+interface QueueItem {
+  text: string
+  raw: string
+}
 
 export default function TaskInputQueuePanel(ctx: ComposerPanelCtx): React.ReactNode {
   const taskId = ctx.taskId
   const running = ctx.isRunning
   // 队列快照(插件自持状态;空=无排队,面板卸载)
-  const [items, setItems] = React.useState<string[]>([])
+  const [items, setItems] = React.useState<QueueItem[]>([])
   const [busy, setBusy] = React.useState(false)
   const [error, setError] = React.useState('')
 
@@ -35,11 +44,16 @@ export default function TaskInputQueuePanel(ctx: ComposerPanelCtx): React.ReactN
     if (!taskId) return
     void Promise.resolve(ctx.rpc('task.queueSnapshot', { taskId }))
       .then((res) => {
-        const next = (res as { pendingInputs?: string[] } | null)?.pendingInputs
-        const list = Array.isArray(next) ? next : []
+        const payload = res as { pendingInputs?: string[]; pendingInputsRaw?: string[] } | null
+        const texts = Array.isArray(payload?.pendingInputs) ? payload.pendingInputs : []
+        // pendingInputsRaw 与 pendingInputs 等长按位对齐(worker 侧快照附带);
+        // 缺失 = 旧版 worker 插件,退化为纯文本(编辑仍能回填,只是不还原胶囊)
+        const raws = Array.isArray(payload?.pendingInputsRaw) ? payload.pendingInputsRaw : []
+        const list: QueueItem[] = texts.map((text, i) => ({ text: text ?? '', raw: raws[i] ?? '' }))
         // 仅在内容变化时 setState,避免 task.updated 高频信号下无谓重渲染
         const prev = itemsRef.current
-        if (prev.length === list.length && prev.every((v, i) => v === list[i])) return
+        if (prev.length === list.length
+          && prev.every((v, i) => v.text === list[i].text && v.raw === list[i].raw)) return
         itemsRef.current = list
         setItems(list)
       })
@@ -84,17 +98,40 @@ export default function TaskInputQueuePanel(ctx: ComposerPanelCtx): React.ReactN
     runAction(() => ctx.rpc('task.queueMove', { taskId, fromIndex: idx, toIndex: idx - 1 }))
   }
 
-  const handleInsert = (idx: number, text: string) => {
-    // 插入到当前对话:通过 task.run 携带 metadata.insert=true,worker 侧在工具循环
-    // 把该输入以 role=user 随工具结果一并提交给模型,同时从队列移除该项。
-    runAction(() => ctx.rpc('task.run', { taskId, input: text, metadata: { insert: true, index: idx } }))
+  const handleInsert = (idx: number, item: QueueItem) => {
+    // 插入到当前对话:task.run 携带 metadata.insert=true,worker 侧 queue.dispatch 按 index
+    // 从队列摘项并把原 ctx 交给本轮主 agent 的插入队列,DialogInsertAdvisor 在工具循环下行
+    // 以 role=user 随工具结果提交给模型(同时发 user.message)。
+    // rawContent 一并上行:摘不到队列项时 dispatch 兜底用本次 RPC 的 ctx,胶囊原串才不丢。
+    runAction(() => ctx.rpc('task.run', {
+      taskId,
+      input: item.text,
+      rawContent: item.raw || undefined,
+      metadata: { insert: true, index: idx },
+    }))
   }
 
-  const handleEdit = (idx: number, _text: string) => {
-    // 编辑语义:先回填输入框,再移除该项(避免移除失败但草稿没回填的割裂)。
-    // 回填由宿主 ui.appendComposerText / ui.setComposerRawContent 处理,
-    // 此处仅移除队列项。
-    runAction(() => ctx.rpc('task.queueRemove', { taskId, index: idx }))
+  const handleEdit = (idx: number, item: QueueItem) => {
+    // 编辑语义:回填输入框 + 从队列摘除,两件事都必须发生——只摘不回填等于删掉这条输入。
+    // 回填走插件自己的 ctx.ui(宿主 ui 契约面,与 task-edit-resend 的「编辑重发」同一条路),
+    // 不经 ComposerPanelCtx props(公共上下文不携带插件/宿主能力)。
+    const ui = getPluginContext()?.ui
+    if (!ui) {
+      setError('输入框回填能力不可用(插件上下文未激活),队列项未改动')
+      return
+    }
+    // 草稿非空时不覆盖:rawContent 回填是整体替换,会冲掉用户正在输入的内容。
+    if (ctx.draft.text.trim().length > 0) {
+      setError('输入框已有内容,请先发送或清空后再编辑队列项(队列项未改动)')
+      return
+    }
+    runAction(async () => {
+      // 优先原始串:含 opaque token,输入框重解析后 @文件胶囊可还原;纯文本会退化成明文。
+      if (item.raw) ui.setComposerRawContent(item.raw)
+      else ui.appendComposerText(item.text)
+      // 再摘除队列项:这步失败时内容已在草稿里(用户可见、可手动处理),不丢输入。
+      await ctx.rpc('task.queueRemove', { taskId, index: idx })
+    })
   }
 
   const handleDelete = (idx: number) => {
@@ -106,17 +143,17 @@ export default function TaskInputQueuePanel(ctx: ComposerPanelCtx): React.ReactN
   return (
     <div className="task-queue-panel">
       <div className="task-queue-panel__list">
-        {items.map((text, idx) => (
-          <div key={`${idx}-${text}`} className="task-queue-panel__item">
-            <div className="task-queue-panel__item-text">{text}</div>
+        {items.map((item, idx) => (
+          <div key={`${idx}-${item.text}`} className="task-queue-panel__item">
+            <div className="task-queue-panel__item-text">{item.text}</div>
             <div className="task-queue-panel__item-actions">
               <button
                 type="button"
                 className="task-queue-panel__btn task-queue-panel__btn--insert"
                 onMouseDown={(event) => event.preventDefault()}
-                onClick={() => handleInsert(idx, text)}
+                onClick={() => handleInsert(idx, item)}
                 disabled={busy || !running}
-                title={running ? '插入到当前对话' : '任务未在运行,无法插入'}
+                title={running ? '插入到当前对话(随即从队列移除)' : '任务未在运行,无法插入'}
                 aria-label="插入到当前对话"
               >
                 <InsertGlyph />
@@ -136,10 +173,10 @@ export default function TaskInputQueuePanel(ctx: ComposerPanelCtx): React.ReactN
                 type="button"
                 className="task-queue-panel__btn"
                 onMouseDown={(event) => event.preventDefault()}
-                onClick={() => handleEdit(idx, text)}
+                onClick={() => handleEdit(idx, item)}
                 disabled={busy}
-                title="编辑"
-                aria-label="编辑"
+                title="编辑(回填到输入框后从队列移除)"
+                aria-label="编辑队列项"
               >
                 <EditGlyph />
               </button>
