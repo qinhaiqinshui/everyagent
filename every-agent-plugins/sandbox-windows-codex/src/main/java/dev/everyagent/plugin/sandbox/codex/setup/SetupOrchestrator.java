@@ -12,10 +12,10 @@ import com.sun.jna.ptr.PointerByReference;
 import dev.everyagent.plugin.sandbox.codex.win.Advapi32Ex;
 import dev.everyagent.plugin.sandbox.codex.win.WinErr;
 
+import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
@@ -177,9 +177,7 @@ public final class SetupOrchestrator {
                         "write payload file failed: " + e.getMessage());
             }
         }
-        List<String> argv = new ArrayList<>(List.of(javaExecutable(), "-cp",
-                System.getProperty("java.class.path"),
-                SetupHelperMain.class.getName(), argFlag, payloadArg));
+        List<String> argv = buildHelperArgv(argFlag, payloadArg);
         SHELLEXECUTEINFO sei = new SHELLEXECUTEINFO();
         sei.cbSize = sei.size();
         sei.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC;
@@ -230,6 +228,46 @@ public final class SetupOrchestrator {
         } finally {
             Advapi32Ex.INSTANCE.FreeSid(adminsGroup);
         }
+    }
+
+    /**
+     * 构造 helper JVM 命令行（含 java.exe）。
+     *
+     * <p>dev 模式（worker 从 target/classes 启动）：插件经 URLClassLoader 隔离加载，
+     * 不在 {@code java.class.path} 上；从 {@code ProtectionDomain.codeSource} 补齐插件
+     * jar/目录路径，确保 helper JVM 能找到 {@link SetupHelperMain}。
+     *
+     * <p>fat jar 模式（worker 从 Spring Boot 可执行 jar 启动）：插件类嵌套在
+     * {@code BOOT-INF/lib/} 内，{@code -cp} 无法直接加载；改用 Spring Boot
+     * {@code PropertiesLauncher}（{@code -Dloader.main}）绕过嵌套类加载器。
+     */
+    private static List<String> buildHelperArgv(String argFlag, String payloadArg) {
+        String classpath = System.getProperty("java.class.path", "");
+        String helperMain = SetupHelperMain.class.getName();
+
+        var codeSource = SetupHelperMain.class.getProtectionDomain().getCodeSource();
+        if (codeSource != null && codeSource.getLocation() != null) {
+            var url = codeSource.getLocation();
+            if ("jar".equals(url.getProtocol())) {
+                // fat jar 模式：插件类嵌套在 Spring Boot fat jar 的 BOOT-INF/ 内。
+                // java.class.path 已含 fat jar 路径；用 PropertiesLauncher 绕过嵌套加载器。
+                return List.of(javaExecutable(), "-cp", classpath,
+                        "-Dloader.main=" + helperMain,
+                        "org.springframework.boot.loader.launch.PropertiesLauncher",
+                        argFlag, payloadArg);
+            }
+            // dev 模式：将插件 jar/目录补齐到 classpath
+            try {
+                String codePath = Path.of(url.toURI()).toString();
+                if (!classpath.contains(codePath)) {
+                    classpath = classpath.isEmpty() ? codePath
+                            : classpath + File.pathSeparator + codePath;
+                }
+            } catch (Exception ignored) {
+                // 无法解析 codeSource 路径时退回 java.class.path 原样
+            }
+        }
+        return List.of(javaExecutable(), "-cp", classpath, helperMain, argFlag, payloadArg);
     }
 
     /** 当前 JVM 的 java.exe 绝对路径（helper 同 jar 运行的载体）。 */
