@@ -3,6 +3,7 @@ package dev.everyagent.plugin.sandbox.codex.session;
 import com.sun.jna.platform.win32.Advapi32;
 import com.sun.jna.platform.win32.Kernel32;
 import com.sun.jna.platform.win32.WinBase;
+import com.sun.jna.platform.win32.WinDef;
 import com.sun.jna.platform.win32.WinNT;
 import com.sun.jna.ptr.IntByReference;
 
@@ -158,31 +159,17 @@ public final class RunnerClient {
                     return pi;
                 }
                 failure = Kernel32.INSTANCE.GetLastError();
-                if (failure == 0x80070057) { // E_INVALIDARG：打印诊断并降级 NULL env 重试一次
+                if (failure == 0x80070057) { // E_INVALIDARG：参数二分诊断（每个变体独立打印错误码）
                     String envDiag = lastEnvDiag;
                     LOG.log(System.Logger.Level.WARNING,
-                            "[runner] CreateProcessWithLogonW E_INVALIDARG 诊断: passwordLen={0} "
-                                    + "argv0={1} cwd={2} envEntries={3} envBlockBytes={4}",
+                            "[runner] E_INVALIDARG 诊断: passwordLen={0} argv0={1} cwd={2} "
+                                    + "envEntries={3} envBlockBytes={4} cmdlineLen={5}",
                             cfg.password() == null ? -1 : cfg.password().length(),
                             argv.get(0), cfg.workingDirectory(),
                             envDiag == null ? -1 : envDiag.substring(0, envDiag.indexOf('/')),
-                            envDiag == null ? -1 : envDiag.substring(envDiag.indexOf('/') + 1));
-                    com.sun.jna.Pointer retryEnv = com.sun.jna.Pointer.NULL;
-                    pi = new WinBase.PROCESS_INFORMATION();
-                    boolean retried = Advapi32.INSTANCE.CreateProcessWithLogonW(
-                            cfg.username(), ".", cfg.password(), 0,
-                            argv.get(0), cmdline,
-                            Kernel32Ex.CREATE_NO_WINDOW
-                                    | WinBase.CREATE_UNICODE_ENVIRONMENT,
-                            retryEnv, cfg.workingDirectory(), startupInfo(), pi);
-                    if (retried) {
-                        LOG.log(System.Logger.Level.WARNING,
-                                "[runner] NULL-env 降级重试成功（环境块非法已绕过）");
-                        return pi;
-                    }
-                    failure = Kernel32.INSTANCE.GetLastError();
-                    closeQuietly(pi.hThread);
-                    closeQuietly(pi.hProcess);
+                            envDiag == null ? -1 : envDiag.substring(envDiag.indexOf('/') + 1),
+                            cmdline.length());
+                    diagnoseSpawn(cfg, argv, cmdline);
                 }
                 closeQuietly(pi.hThread);
                 closeQuietly(pi.hProcess);
@@ -196,6 +183,55 @@ public final class RunnerClient {
             throw new IOException("CreateProcessWithLogonW failed for runner: " + failure);
         }
         throw new IOException("CreateProcessWithLogonW failed for runner (retried)");
+    }
+
+    /**
+     * E_INVALIDARG 参数二分诊断（只打印不改变行为；成功变体立即杀进程留痕）。
+     * 变体矩阵逐个隔离参数：NULL-env / 无 FORCEOFFEEDBACK / 无 lpApplicationName /
+     * 最小命令行（无 ErrorFile/classpath/runner 参数）。
+     */
+    private static void diagnoseSpawn(RunnerConfig cfg, List<String> argv, String cmdline) {
+        String minimal = "\"" + argv.get(0) + "\" -version";
+        WinBase.STARTUPINFO plain = new WinBase.STARTUPINFO();
+        plain.cb = new WinDef.DWORD(plain.size());
+        record Variant(String tag, String app, String cmd, com.sun.jna.Pointer env,
+                WinBase.STARTUPINFO si) { }
+        java.util.List<Variant> tries = new java.util.ArrayList<>();
+        tries.add(new Variant("V1-nullEnv", argv.get(0), cmdline,
+                com.sun.jna.Pointer.NULL, startupInfo()));
+        tries.add(new Variant("V2-plainStartup", argv.get(0), cmdline, null, plain));
+        tries.add(new Variant("V3-noAppName", null, cmdline, null, startupInfo()));
+        tries.add(new Variant("V4-minimal", argv.get(0), minimal,
+                com.sun.jna.Pointer.NULL, plain));
+        for (Variant v : tries) {
+            WinBase.PROCESS_INFORMATION pi = new WinBase.PROCESS_INFORMATION();
+            com.sun.jna.Pointer env = v.env() == null
+                    ? EnvBlock.makeEnvBlock(java.util.Map.of())
+                    : v.env();
+            try {
+                boolean ok = Advapi32.INSTANCE.CreateProcessWithLogonW(
+                        cfg.username(), ".", cfg.password(), 0,
+                        v.app(), v.cmd(),
+                        Kernel32Ex.CREATE_NO_WINDOW | WinBase.CREATE_UNICODE_ENVIRONMENT,
+                        env, cfg.workingDirectory(), v.si(), pi);
+                if (ok) {
+                    LOG.log(System.Logger.Level.WARNING,
+                            "[runner] E_INVALIDARG 二分: {0} => OK(pid={1}) ← 参数组合可定位",
+                            v.tag(), pi.dwProcessId);
+                    Kernel32Ex.INSTANCE.TerminateProcess(pi.hProcess, 1);
+                } else {
+                    LOG.log(System.Logger.Level.WARNING,
+                            "[runner] E_INVALIDARG 二分: {0} => err={1}",
+                            v.tag(), Kernel32.INSTANCE.GetLastError());
+                }
+            } catch (Throwable t) {
+                LOG.log(System.Logger.Level.WARNING,
+                        "[runner] E_INVALIDARG 二分: {0} => ex {1}", v.tag(), t);
+            } finally {
+                closeQuietly(pi.hThread);
+                closeQuietly(pi.hProcess);
+            }
+        }
     }
 
     /** STARTUPINFO：cb + STARTF_FORCEOFFFEEDBACK（对齐 runner_client.rs；无桌面字段）。 */
