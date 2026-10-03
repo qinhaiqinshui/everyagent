@@ -48,7 +48,7 @@ public final class SetupLock implements AutoCloseable {
     public static SetupLock acquire(long timeoutMs) {
         PointerByReference sdRef = new PointerByReference();
         if (!Advapi32Ex.INSTANCE.ConvertStringSecurityDescriptorToSecurityDescriptorW(
-                "D:P(A;;GA;;;SY)(A;;GA;;;BA)", Advapi32Ex.SDDL_REVISION_1, sdRef,
+                new com.sun.jna.WString("D:P(A;;GA;;;SY)(A;;GA;;;BA)"), Advapi32Ex.SDDL_REVISION_1, sdRef,
                 new IntByReference())) {
             throw new SetupErrorReport.SetupException(
                     SetupErrorReport.HELPER_SETUP_LOCK_FAILED,

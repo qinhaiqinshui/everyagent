@@ -125,7 +125,7 @@ public final class SetupMarker {
         String sddl = "D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;" + ownerSid + ")";
         PointerByReference sdRef = new PointerByReference();
         if (!Advapi32Ex.INSTANCE.ConvertStringSecurityDescriptorToSecurityDescriptorW(
-                sddl, Advapi32Ex.SDDL_REVISION_1, sdRef, new IntByReference())) {
+                new com.sun.jna.WString(sddl), Advapi32Ex.SDDL_REVISION_1, sdRef, new IntByReference())) {
             throw new SetupErrorReport.SetupException(
                     SetupErrorReport.HELPER_SETUP_MARKER_WRITE_FAILED,
                     "create setup marker security descriptor failed: "

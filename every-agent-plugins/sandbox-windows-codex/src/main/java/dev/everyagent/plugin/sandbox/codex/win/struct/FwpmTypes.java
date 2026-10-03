@@ -2,6 +2,7 @@ package dev.everyagent.plugin.sandbox.codex.win.struct;
 
 import com.sun.jna.Pointer;
 import com.sun.jna.Structure;
+import com.sun.jna.WString;
 import com.sun.jna.platform.win32.Guid;
 
 import dev.everyagent.plugin.sandbox.codex.win.struct.FwpTypes.FWP_BYTE_BLOB;
@@ -28,35 +29,44 @@ public final class FwpmTypes {
     public static final int FWPM_SUBLAYER_FLAG_PERSISTENT = 0x00000001;
     public static final int FWPM_FILTER_FLAG_PERSISTENT = 0x00000001;
 
-    /** 显示信息（unicode 字符串对）。 */
+    /** 显示信息（unicode 字符串对；W 系列 API 一律 WString→wchar_t*）。 */
     @Structure.FieldOrder({ "name", "description" })
     public static final class FWPM_DISPLAY_DATA0 extends Structure {
-        public String name;
-        public String description;
+        public WString name;
+        public WString description;
     }
 
     /**
      * 引擎会话——wfp.rs::Engine::open：displayName 固定会话名，
      * txnWatchdogTimeoutInMSec 事务看门狗（INFINITE 传 0xFFFFFFFF），flags 常为 0。
+     *
+     * <p>字段布局对齐 SDK fwpmu.h（2026-10-03 排障修正：displayName 是内嵌
+     * FWPM_DISPLAY_DATA0（16B 双指针），processId 为 DWORD(4B+4pad)，kernelMode
+     * 为 BOOL(4B+4pad)，无 vendorData 字段——旧版平铺单 String/byte kernelMode
+     * 使全部字段错位 8B，FwpmEngineOpen0 读到垃圾 kernelMode/username 指针触发
+     * Invalid memory access）。
      */
     @Structure.FieldOrder({ "sessionKey", "displayName", "flags", "txnWatchdogTimeoutInMSec",
-            "processId", "sid", "username", "kernelMode", "vendorData" })
+            "processId", "sid", "username", "kernelMode" })
     public static final class FWPM_SESSION0 extends Structure {
         /** 会话 GUID（值语义；传 0 由引擎生成）。 */
         public Guid.GUID sessionKey;
-        public String displayName;
+        /** 内嵌显示数据（name/description 双 wchar_t*，16B）。 */
+        public FWPM_DISPLAY_DATA0 displayName;
         public int flags;
         public int txnWatchdogTimeoutInMSec;
+        /** DWORD（4B，后随 4B 对齐垫层）。 */
         public int processId;
         /** PSID（输出字段，输入传 null）。 */
         public Pointer sid;
-        public String username;
-        public byte kernelMode;
-        /** SDK 为 FWP_BYTE_BLOB16*，本插件不使用，按裸指针占位（8B 槽位）。 */
-        public Pointer vendorData;
+        /** wchar_t*。 */
+        public WString username;
+        /** BOOL（4B，后随 4B 对齐垫层）。 */
+        public int kernelMode;
 
         public FWPM_SESSION0() {
             sessionKey = new Guid.GUID();
+            displayName = new FWPM_DISPLAY_DATA0();
         }
     }
 

@@ -3,6 +3,7 @@ package dev.everyagent.plugin.sandbox.codex.win;
 import com.sun.jna.Native;
 import com.sun.jna.Pointer;
 import com.sun.jna.Structure;
+import com.sun.jna.WString;
 import com.sun.jna.platform.win32.Advapi32;
 import com.sun.jna.platform.win32.WinNT;
 import com.sun.jna.platform.win32.WinReg;
@@ -63,7 +64,7 @@ public interface Advapi32Ex extends Advapi32 {
             IntByReference isMember);
 
     /** SDDL 字符串 → 自相对安全描述符（LocalAlloc 分配，用后 LocalFree）——管道 DACL 等。 */
-    boolean ConvertStringSecurityDescriptorToSecurityDescriptorW(String sddl,
+    boolean ConvertStringSecurityDescriptorToSecurityDescriptorW(WString sddl,
             int sddlRevision, PointerByReference ppSecurityDescriptor,
             IntByReference pSecurityDescriptorSize);
 
@@ -80,11 +81,16 @@ public interface Advapi32Ex extends Advapi32 {
             PointerByReference newAcl);
 
     /** 填充 EXPLICIT_ACCESS_W（trustee 名 + 掩码 + 模式 + 继承）——acl.rs 构造 ACE 前置。 */
-    void BuildExplicitAccessWithNameW(EXPLICIT_ACCESS_W pExplicitAccess, String pTrusteeName,
+    void BuildExplicitAccessWithNameW(EXPLICIT_ACCESS_W pExplicitAccess, WString pTrusteeName,
             int accessPermissions, int accessMode, int inheritance);
 
     /**
-     * BuildSecurityDescriptorW——wfp.rs 用户条件 SD blob：owner=账户 SID +
+     * <b>已知崩溃（2026-10-03 实证，勿用）</b>：JNA 与原生 P/Invoke（0-entry）下均
+     * 触发 Invalid memory access（WfpTest2~8 系列）；SD 组装改走
+     * SetEntriesInAclW→InitializeSecurityDescriptor→SetSecurityDescriptorDacl→
+     * MakeSelfRelativeSD（见 WfpInstaller.UserMatchCondition）。声明保留仅作记录。
+     *
+     * <p>原语义：wfp.rs 用户条件 SD blob：owner=账户 SID +
      * 一条 {@code BuildExplicitAccessWithNameW(FWP_ACTRL_MATCH_FILTER)} 条目 →
      * 自相对 SD，供 FWP_CONDITION_ALE_USER_ID 匹配（FWP_SECURITY_DESCRIPTOR_TYPE）。
      * 返回 ERROR_SUCCESS=0；产物 LocalFree 释放。

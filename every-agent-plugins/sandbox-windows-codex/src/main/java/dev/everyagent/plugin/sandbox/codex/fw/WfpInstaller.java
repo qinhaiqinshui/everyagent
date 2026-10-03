@@ -1,9 +1,13 @@
 package dev.everyagent.plugin.sandbox.codex.fw;
 
+import com.sun.jna.Memory;
 import com.sun.jna.Pointer;
+import com.sun.jna.platform.win32.Advapi32;
 import com.sun.jna.platform.win32.Guid;
 import com.sun.jna.platform.win32.Kernel32;
 import com.sun.jna.platform.win32.WinNT;
+
+import dev.everyagent.plugin.sandbox.codex.win.struct.AclStructs;
 import com.sun.jna.ptr.IntByReference;
 import com.sun.jna.ptr.LongByReference;
 import com.sun.jna.ptr.PointerByReference;
@@ -44,6 +48,10 @@ import dev.everyagent.plugin.sandbox.codex.win.struct.FwpmTypes.FWPM_SUBLAYER0;
  * GUID——WFP 按固定 GUID 识别持久对象，永不重生成以免孤儿化旧对象）。
  */
 public final class WfpInstaller {
+
+    /** AclStructs trustee 形态/类型（手填 EXPLICIT_ACCESS_W 用）。 */
+    private static final int AclStructs_TRUSTEE_IS_NAME = AclStructs.TRUSTEE_IS_NAME;
+    private static final int AclStructs_TRUSTEE_IS_USER = AclStructs.TRUSTEE_IS_USER;
 
     private static final String SESSION_NAME = "EveryAgent Codex Windows Sandbox WFP";
     private static final String PROVIDER_NAME = "EveryAgent Codex Windows Sandbox WFP";
@@ -250,7 +258,7 @@ public final class WfpInstaller {
 
     private static WinNT.HANDLE openEngine(int txnWaitTimeoutMs) {
         FWPM_SESSION0 session = new FWPM_SESSION0();
-        session.displayName = SESSION_NAME;
+        session.displayName.name = new com.sun.jna.WString(SESSION_NAME);
         session.flags = 0;
         session.txnWatchdogTimeoutInMSec = txnWaitTimeoutMs;
         session.write();
@@ -263,8 +271,8 @@ public final class WfpInstaller {
     private static void ensureSublayer(WinNT.HANDLE engine) {
         FWPM_SUBLAYER0 sublayer = new FWPM_SUBLAYER0();
         sublayer.subLayerKey = SUBLAYER_KEY;
-        sublayer.displayData.name = PROVIDER_NAME;
-        sublayer.displayData.description = SUBLAYER_DESCRIPTION;
+        sublayer.displayData.name = new com.sun.jna.WString(PROVIDER_NAME);
+        sublayer.displayData.description = new com.sun.jna.WString(SUBLAYER_DESCRIPTION);
         sublayer.flags = FwpmTypes.FWPM_SUBLAYER_FLAG_PERSISTENT;
         sublayer.providerKey = null; // 不挂 provider（见类注释：provider 注册暂缓）
         sublayer.weight = SUBLAYER_WEIGHT;
@@ -278,8 +286,8 @@ public final class WfpInstaller {
         FWPM_FILTER_CONDITION0[] conditions = buildConditions(spec.conditions(), user);
         FWPM_FILTER0 filter = new FWPM_FILTER0();
         filter.filterKey = spec.key();
-        filter.displayData.name = spec.name();
-        filter.displayData.description = spec.description();
+        filter.displayData.name = new com.sun.jna.WString(spec.name());
+        filter.displayData.description = new com.sun.jna.WString(spec.description());
         filter.flags = FwpmTypes.FWPM_FILTER_FLAG_PERSISTENT;
         filter.providerKey = null; // 不挂 provider（见类注释：provider 注册暂缓）
         filter.layerKey = spec.layerKey();
@@ -323,40 +331,92 @@ public final class WfpInstaller {
                 "FwpmFilterDeleteByKey0", WinErr.FWP_E_FILTER_NOT_FOUND, WinErr.FWP_E_NOT_FOUND);
     }
 
-    /** ALE_USER_ID 的 SD blob（BuildSecurityDescriptorW 产物；close 时 LocalFree）。 */
+    /**
+     * ALE_USER_ID 的 SD blob（自管 {@link Memory}，事务提交前防 GC）。
+     *
+     * <p><b>2026-10-03 排障修正</b>：原实现走 {@code BuildSecurityDescriptorW}，
+     * 该函数在 JNA（含原生 P/Invoke 0-entry 形态）下触发 Invalid memory access
+     * （WfpTest2~8 系列受控实验实证，SetEntriesInAclW 等同 DLL 邻居函数全部正常）。
+     * 改用等价标准链路（WfpTest9 验证 4 步全过）：手填 EXPLICIT_ACCESS_W（自管
+     * 宽字符名内存，规避 BuildExplicitAccessWithNameW 拷贝语义不确定性）→
+     * SetEntriesInAclW 产 ACL → InitializeSecurityDescriptor+SetSecurityDescriptorDacl
+     * 组绝对 SD → MakeSelfRelativeSD 产 WFP 需要的自相对 SD blob。
+     */
     private static final class UserMatchCondition implements AutoCloseable {
-        private final Pointer securityDescriptor;
+        /** 自相对 SD blob（WFP_CONDITION_VALUE0 指向的字节序列）。 */
+        private final Memory sdBlob;
         private final FWP_BYTE_BLOB blob = new FWP_BYTE_BLOB();
+        /** 中间资源（ACL 由 SetEntriesInAclW LocalAlloc，close 时 LocalFree）。 */
+        private Pointer aclToFree;
 
         static UserMatchCondition forAccount(String account) {
-            EXPLICIT_ACCESS_W access = new EXPLICIT_ACCESS_W();
-            Advapi32Ex.INSTANCE.BuildExplicitAccessWithNameW(access, account,
-                    FWP_ACTRL_MATCH_FILTER, Advapi32Ex.GRANT_ACCESS, 0);
-            access.read();
-            IntByReference sdSize = new IntByReference();
-            PointerByReference sdRef = new PointerByReference();
-            int result = Advapi32Ex.INSTANCE.BuildSecurityDescriptorW(null, null, 1,
-                    new EXPLICIT_ACCESS_W[] { access }, 0, null, null, 0, sdSize, sdRef);
-            if (result != 0) {
-                throw new SetupErrorReport.SetupException(SetupErrorReport.HELPER_WFP_INSTALL_FAILED,
-                        "BuildSecurityDescriptorW failed: " + result);
+            // 宽字符名内存：生命周期须覆盖 SetEntriesInAclW 调用（栈上局部即可）
+            Memory nameMem = new Memory((account.length() + 1L) * 2L);
+            for (int i = 0; i < account.length(); i++) {
+                nameMem.setShort(i * 2L, (short) account.charAt(i));
             }
-            UserMatchCondition condition = new UserMatchCondition(sdRef.getValue());
-            condition.blob.size = sdSize.getValue();
-            condition.blob.data = condition.securityDescriptor;
-            condition.blob.write();
-            return condition;
+            nameMem.setShort(account.length() * 2L, (short) 0);
+
+            EXPLICIT_ACCESS_W access = new EXPLICIT_ACCESS_W();
+            access.grfAccessPermissions = FWP_ACTRL_MATCH_FILTER;
+            access.grfAccessMode = Advapi32Ex.GRANT_ACCESS;
+            access.grfInheritance = 0;
+            access.Trustee.MultipleTrusteeOperation = 0;
+            access.Trustee.TrusteeForm = AclStructs_TRUSTEE_IS_NAME;
+            access.Trustee.TrusteeType = AclStructs_TRUSTEE_IS_USER;
+            access.Trustee.ptstrName = nameMem;
+            access.write();
+
+            // 1. EXPLICIT_ACCESS_W → ACL
+            PointerByReference aclRef = new PointerByReference();
+            int err = Advapi32Ex.INSTANCE.SetEntriesInAclW(1,
+                    new EXPLICIT_ACCESS_W[] { access }, null, aclRef);
+            if (err != 0) {
+                throw new SetupErrorReport.SetupException(SetupErrorReport.HELPER_WFP_INSTALL_FAILED,
+                        "SetEntriesInAclW failed: " + err);
+            }
+            WinNT.ACL acl = new WinNT.ACL(aclRef.getValue());
+            try {
+                // 2/3. 最小绝对 SD + DACL
+                WinNT.SECURITY_DESCRIPTOR sd = new WinNT.SECURITY_DESCRIPTOR(64);
+                if (!Advapi32.INSTANCE.InitializeSecurityDescriptor(sd,
+                        WinNT.SECURITY_DESCRIPTOR_REVISION)
+                        || !Advapi32.INSTANCE.SetSecurityDescriptorDacl(sd, true, acl, false)) {
+                    throw new SetupErrorReport.SetupException(
+                            SetupErrorReport.HELPER_WFP_INSTALL_FAILED,
+                            "build SD failed: " + Kernel32.INSTANCE.GetLastError());
+                }
+                // 4. 自相对化（WFP_CONDITION_VALUE0 要求自相对布局）
+                IntByReference sizeNeeded = new IntByReference();
+                Advapi32.INSTANCE.MakeSelfRelativeSD(sd, null, sizeNeeded);
+                Memory blobMem = new Memory(Math.max(1, sizeNeeded.getValue()));
+                WinNT.SECURITY_DESCRIPTOR_RELATIVE rel =
+                        new WinNT.SECURITY_DESCRIPTOR_RELATIVE(blobMem);
+                IntByReference sizeInOut = new IntByReference(sizeNeeded.getValue());
+                if (!Advapi32.INSTANCE.MakeSelfRelativeSD(sd, rel, sizeInOut)) {
+                    throw new SetupErrorReport.SetupException(
+                            SetupErrorReport.HELPER_WFP_INSTALL_FAILED,
+                            "MakeSelfRelativeSD failed: " + Kernel32.INSTANCE.GetLastError());
+                }
+                UserMatchCondition condition = new UserMatchCondition(blobMem);
+                condition.blob.size = sizeInOut.getValue();
+                condition.blob.data = blobMem;
+                condition.blob.write();
+                return condition;
+            } finally {
+                // ACL 已并入 SD；SetEntriesInAclW 产物须 LocalFree
+                Kernel32.INSTANCE.LocalFree(aclRef.getValue());
+            }
         }
 
-        private UserMatchCondition(Pointer securityDescriptor) {
-            this.securityDescriptor = securityDescriptor;
+        private UserMatchCondition(Memory sdBlob) {
+            this.sdBlob = sdBlob;
         }
 
         @Override
         public void close() {
-            if (securityDescriptor != null) {
-                Kernel32.INSTANCE.LocalFree(securityDescriptor);
-            }
+            // Memory 由 JNA GC 托管；此处仅保引用至 close（事务提交后）
+            // acl 已在 forAccount finally 释放
         }
     }
 

@@ -54,7 +54,7 @@ final class RunnerPipe implements AutoCloseable {
         String sddl = String.format(RunnerPaths.PIPE_SDDL_FORMAT, sandboxSid);
         PointerByReference sd = new PointerByReference();
         if (!Advapi32Ex.INSTANCE.ConvertStringSecurityDescriptorToSecurityDescriptorW(
-                sddl, Advapi32Ex.SDDL_REVISION_1, sd, null)) {
+                new com.sun.jna.WString(sddl), Advapi32Ex.SDDL_REVISION_1, sd, null)) {
             throw new Win32Exception("ConvertStringSecurityDescriptorToSecurityDescriptorW",
                     Kernel32Ex.INSTANCE.GetLastError());
         }
