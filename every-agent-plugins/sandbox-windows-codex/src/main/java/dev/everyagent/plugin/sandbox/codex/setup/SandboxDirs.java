@@ -122,6 +122,13 @@ public final class SandboxDirs {
      */
     public static void lockDir(Path dir, String groupSid, boolean groupGrant, int groupMask,
             String realUser, int realUserMask, boolean protectedDacl) {
+        // 对齐 Rust lock_sandbox_dir Full 模式：锁前确保目录存在
+        // （.sandbox-bin 首次 setup 时尚不存在——runner.jar 由任务期 RunnerMaterializer 物化）
+        try {
+            Files.createDirectories(dir);
+        } catch (IOException e) {
+            throw lockFailure(dir, "create sandbox dir failed: " + e.getMessage());
+        }
         Entry[] entries = {
             new Entry(groupSid, groupGrant ? Advapi32Ex.GRANT_ACCESS : Advapi32Ex.DENY_ACCESS,
                     groupMask),
