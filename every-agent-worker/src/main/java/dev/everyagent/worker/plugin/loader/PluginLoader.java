@@ -11,6 +11,7 @@ import dev.everyagent.worker.plugin.registry.AdvisorProviderRegistry;
 import dev.everyagent.worker.plugin.registry.AuthorizationHandlerRegistry;
 import dev.everyagent.worker.plugin.registry.ChatModelEnhancerRegistry;
 import dev.everyagent.worker.plugin.registry.FileReferenceHandlerRegistry;
+import dev.everyagent.worker.plugin.registry.PluginStateStore;
 import dev.everyagent.worker.plugin.registry.SandboxProviderRegistry;
 import dev.everyagent.worker.plugin.registry.SearchProviderRegistry;
 import dev.everyagent.worker.plugin.registry.SkillContributorRegistry;
@@ -96,6 +97,8 @@ public class PluginLoader {
     private final TaskAdmissionPolicyRegistry admissionPolicyRegistry;
     private final SkillContributorRegistry skillContributorRegistry;
     private final FileReferenceHandlerRegistry fileReferenceHandlerRegistry;
+    /** 禁用名单真相源:被禁用的插件核心不调 activate,不注册任何贡献。 */
+    private final PluginStateStore pluginStates;
     private final RpcDispatcher rpcDispatcher;
     private final SlashCommandRegistry slashRegistry;
     private final SlashTokenHandler slashTokenHandler;
@@ -118,6 +121,7 @@ public class PluginLoader {
             TaskAdmissionPolicyRegistry admissionPolicyRegistry,
             SkillContributorRegistry skillContributorRegistry,
             FileReferenceHandlerRegistry fileReferenceHandlerRegistry,
+            PluginStateStore pluginStates,
             RpcDispatcher rpcDispatcher,
             SlashCommandRegistry slashRegistry,
             SlashTokenHandler slashTokenHandler,
@@ -136,6 +140,7 @@ public class PluginLoader {
         this.admissionPolicyRegistry = admissionPolicyRegistry;
         this.skillContributorRegistry = skillContributorRegistry;
         this.fileReferenceHandlerRegistry = fileReferenceHandlerRegistry;
+        this.pluginStates = pluginStates;
         this.rpcDispatcher = rpcDispatcher;
         this.slashRegistry = slashRegistry;
         this.slashTokenHandler = slashTokenHandler;
@@ -228,6 +233,17 @@ public class PluginLoader {
             entryClass = json.path("provides").path("spi").path("EveryAgentPlugin").asString("");
         }
         String webMain = json.path("webMain").asString("");
+
+        // 禁用的插件:核心不调 activate —— 插件压根没被激活,自然不会向任何注册表
+        // (advisor/tool/interceptor/slash/tokenResolver…)注册贡献,"/菜单"里也就没有它的候选。
+        // 仍登记进已加载清单(不激活),否则扩展管理面板看不到它,也就无法再启用。
+        if (pluginStates.isDisabled(pluginId)) {
+            log.info("[plugins] 插件已禁用,跳过激活: id={} name={} (source={})",
+                    id, name, source);
+            loadedPlugins.add(new LoadedPlugin(pluginId, name, version, description, author,
+                    pluginDir, source, false, "已禁用(未激活)", entryClass, webMain));
+            return;
+        }
 
         // 解析 contributes.config 默认值 → PluginConfig
         Map<String, Object> configDefaults = new HashMap<>();

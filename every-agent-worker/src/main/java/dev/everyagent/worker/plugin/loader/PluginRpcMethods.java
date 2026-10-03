@@ -22,7 +22,9 @@ import java.util.zip.ZipInputStream;
 /**
  * plugin.* RPC 方法：插件管理。
  *
- * <p>内置插件随主包打包（Spring @Component），不能卸载但可以禁用（经 PluginRegistry 运行时生效）。
+ * <p>内置插件随主包打包，不能卸载但可以禁用。禁用名单持久化在 worker 侧
+ * （{@code PluginStateStore}），由 {@code PluginLoader} 在加载时生效:被禁用的插件
+ * 核心不调它的 {@code activate}，因此不会注册任何贡献（重启 worker 后完全生效）。
  * 外部插件在 ~/.everyagent/plugins/ 目录，可以安装/卸载/启用/禁用。
  */
 @Component
@@ -144,7 +146,7 @@ public class PluginRpcMethods {
         ObjectNode result = Json.obj();
         result.put("enabled", true);
         result.put("pluginId", pluginId);
-        result.put("message", "插件已启用");
+        result.put("message", "插件已启用，重启 worker 后生效");
         ctx.ok(result);
     }
 
@@ -159,7 +161,7 @@ public class PluginRpcMethods {
         ObjectNode result = Json.obj();
         result.put("disabled", true);
         result.put("pluginId", pluginId);
-        result.put("message", "插件已禁用");
+        result.put("message", "插件已禁用，重启 worker 后生效");
         ctx.ok(result);
     }
 
