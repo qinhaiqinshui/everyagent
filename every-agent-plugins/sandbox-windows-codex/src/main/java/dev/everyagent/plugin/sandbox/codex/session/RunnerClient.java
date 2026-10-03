@@ -126,7 +126,7 @@ public final class RunnerClient {
             try {
                 pi = new WinBase.PROCESS_INFORMATION();
                 List<String> argv = runnerArgv(cfg.javaHome(), cfg.classpath(),
-                        pipeInName, pipeOutName);
+                        pipeInName, pipeOutName, cfg.codexHome());
                 String cmdline = joinCommandLine(argv);
                 boolean ok = Advapi32.INSTANCE.CreateProcessWithLogonW(
                         cfg.username(),
@@ -176,16 +176,33 @@ public final class RunnerClient {
     /** 纯函数（可测）：runner 命令行参数（JVM flags 对齐设计 §4.1）。 */
     public static List<String> runnerArgv(String javaHome, String classpath,
             String pipeInName, String pipeOutName) {
+        return runnerArgv(javaHome, classpath, pipeInName, pipeOutName, null);
+    }
+
+    /** 带 codexHome 重载：JVM 崩溃文件落 .sandbox/tmp（沙箱进程无控制台，hs_err 默认进黑洞）。 */
+    public static List<String> runnerArgv(String javaHome, String classpath,
+            String pipeInName, String pipeOutName, java.nio.file.Path codexHome) {
         // Windows 语义固定反斜杠（runner 仅在 Windows 上被拉起；跨平台单测断言此形态）
         String home = javaHome.endsWith("\\") || javaHome.endsWith("/")
                 ? javaHome.substring(0, javaHome.length() - 1) : javaHome;
         String javaExe = home + "\\bin\\java.exe";
-        return List.of(javaExe,
-                "-XX:+UseSerialGC", "-Xshare:auto", "-Dfile.encoding=UTF-8",
+        java.util.List<String> argv = new java.util.ArrayList<>(java.util.List.of(javaExe,
+                "-XX:+UseSerialGC", "-Xshare:auto", "-Dfile.encoding=UTF-8"));
+        if (codexHome != null) {
+            try {
+                java.nio.file.Path tmp = SandboxDirs.sandboxDir(codexHome).resolve("tmp");
+                java.nio.file.Files.createDirectories(tmp);
+                argv.add("-XX:ErrorFile=" + tmp.resolve("runner-hs_err.log"));
+            } catch (java.io.IOException ignored) {
+                // 崩溃文件不可用时默认行为
+            }
+        }
+        argv.addAll(java.util.List.of(
                 "-cp", classpath,
                 RunnerMaterializer.RUNNER_MAIN,
                 "--pipe-in=" + pipeInName,
-                "--pipe-out=" + pipeOutName);
+                "--pipe-out=" + pipeOutName));
+        return java.util.Collections.unmodifiableList(argv);
     }
 
     /** runner 环境变量：继承当前环境 + TEMP/TMP → {@code <codexHome>/.sandbox/tmp}。 */

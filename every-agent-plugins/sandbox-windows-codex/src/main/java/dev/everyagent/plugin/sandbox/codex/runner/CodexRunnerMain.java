@@ -44,6 +44,10 @@ public final class CodexRunnerMain {
                     + System.getProperty("os.name") + ")");
             System.exit(2);
         }
+        // stderr tee：沙箱进程无控制台，JVM/未捕获异常输出默认进黑洞（对齐排障需要，
+        // broker 侧 CREATE_NO_WINDOW）。重定向 System.err 到 %TEMP%\runner-stderr.log
+        //（broker 已把 TEMP 指向 <codexHome>/.sandbox/tmp），保留原 stderr 双写。
+        // 任何 tee 失败静默降级——诊断日志绝不改变 runner 行为。
         String in = null;
         String out = null;
         for (String arg : args) {
@@ -53,11 +57,55 @@ public final class CodexRunnerMain {
                 out = arg.substring(OPT_PIPE_OUT.length());
             }
         }
+        installStderrTee();
+        Thread.setDefaultUncaughtExceptionHandler((t, e) -> {
+            System.err.println("[codex-runner] uncaught in " + t.getName() + ": " + e);
+            e.printStackTrace(System.err);
+            System.err.flush();
+        });
         if (in == null || out == null) {
             System.err.println("usage: CodexRunnerMain --pipe-in=<name> --pipe-out=<name>");
             System.exit(2);
         }
+        System.err.println("[codex-runner] start pipes in=" + in + " out=" + out);
         System.exit(run(in, out));
+    }
+
+    /** System.err → 文件 tee（追加；失败静默）。 */
+    private static void installStderrTee() {
+        try {
+            String tempDir = System.getenv("TEMP");
+            if (tempDir == null || tempDir.isBlank()) {
+                tempDir = System.getProperty("java.io.tmpdir");
+            }
+            java.nio.file.Path log = java.nio.file.Path.of(tempDir, "runner-stderr.log");
+            java.nio.file.Files.writeString(log,
+                    "---- runner session " + java.time.LocalTime.now()
+                            + " pid=" + ProcessHandle.current().pid() + " ----"
+                            + System.lineSeparator(),
+                    java.nio.charset.StandardCharsets.UTF_8,
+                    java.nio.file.StandardOpenOption.CREATE,
+                    java.nio.file.StandardOpenOption.APPEND);
+            java.io.PrintStream original = System.err;
+            java.io.PrintStream tee = new java.io.PrintStream(
+                    new java.io.FileOutputStream(log.toFile(), true), true,
+                    java.nio.charset.StandardCharsets.UTF_8) {
+                @Override
+                public void println(String x) {
+                    original.println(x);
+                    super.println(x);
+                }
+
+                @Override
+                public void print(String x) {
+                    original.print(x);
+                    super.print(x);
+                }
+            };
+            System.setErr(tee);
+        } catch (Throwable ignored) {
+            // 静默降级：诊断输出不可用时保留原行为
+        }
     }
 
     /** 0 = runner 正常走完；非 0 = 已尽力发 error 帧（对齐 codex 语义）。 */
