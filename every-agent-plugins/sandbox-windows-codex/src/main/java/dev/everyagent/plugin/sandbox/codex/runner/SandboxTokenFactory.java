@@ -257,7 +257,8 @@ public final class SandboxTokenFactory {
                 accessEntry(convertSid(OWNER_RIGHTS_SID), WinNT.READ_CONTROL)
         };
         PointerByReference newAcl = new PointerByReference();
-        int rc = Advapi32Ex.INSTANCE.SetEntriesInAclW(entries.length, entries, null, newAcl);
+        int rc = Advapi32Ex.INSTANCE.SetEntriesInAclW(entries.length,
+                AclStructs.contiguous(entries), null, newAcl);
         if (rc != 0) {
             throw new Win32Exception("SetEntriesInAclW", rc);
         }

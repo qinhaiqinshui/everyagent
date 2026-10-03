@@ -7,6 +7,7 @@ import com.sun.jna.platform.win32.WinNT;
 import com.sun.jna.ptr.PointerByReference;
 
 import dev.everyagent.plugin.sandbox.codex.win.Advapi32Ex;
+import dev.everyagent.plugin.sandbox.codex.win.struct.AclStructs;
 import dev.everyagent.plugin.sandbox.codex.win.struct.AclStructs.EXPLICIT_ACCESS_W;
 import dev.everyagent.plugin.sandbox.codex.win.struct.AclStructs.TRUSTEE_W;
 
@@ -140,7 +141,8 @@ public final class SandboxDirs {
                         entries[i].mask());
             }
             PointerByReference newAcl = new PointerByReference();
-            int set = Advapi32Ex.INSTANCE.SetEntriesInAclW(eas.length, eas, null, newAcl);
+            int set = Advapi32Ex.INSTANCE.SetEntriesInAclW(eas.length,
+                    AclStructs.contiguous(eas), null, newAcl);
             if (set != 0) {
                 throw lockFailure(dir, "SetEntriesInAclW sandbox dir failed: " + set);
             }

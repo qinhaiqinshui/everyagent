@@ -223,7 +223,9 @@ public final class AclPrimitives {
     static Pointer mergeEntries(WinNT.HANDLE handle, Path path, EXPLICIT_ACCESS_W[] entries,
             Pointer oldDacl) throws IOException {
         PointerByReference ppNew = new PointerByReference();
-        int merge = Advapi32Ex.INSTANCE.SetEntriesInAclW(entries.length, entries, oldDacl, ppNew);
+        int merge = Advapi32Ex.INSTANCE.SetEntriesInAclW(entries.length,
+                dev.everyagent.plugin.sandbox.codex.win.struct.AclStructs.contiguous(entries),
+                oldDacl, ppNew);
         if (merge != 0) {
             throw new IOException("SetEntriesInAclW failed for " + path + ": "
                     + AclPrimitives.winError(merge));

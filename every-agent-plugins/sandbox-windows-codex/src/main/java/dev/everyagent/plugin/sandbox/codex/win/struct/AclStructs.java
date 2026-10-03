@@ -46,7 +46,17 @@ public final class AclStructs {
         public Pointer ptstrName;
     }
 
-    /** 显式访问条目（SetEntriesInAclW/BuildSecurityDescriptorW 的输入）。 */
+    /**
+     * 显式访问条目（SetEntriesInAclW/BuildSecurityDescriptorW 的输入）。
+     *
+     * <p><b>数组封送约束（2026-10-03 排障结论）</b>：JNA 把 {@code EXPLICIT_ACCESS_W[]}
+     * 传给 native 前会 {@code autoWrite} 并校验元素内存<b>连续</b>——元素经
+     * {@code new EXPLICIT_ACCESS_W[]{a, b, ...}} 或逐个 {@code new} 组装的数组各自
+     * 持有独立内存，必然触发
+     * {@code Structure array elements must use contiguous memory}。多元素数组一律经
+     * {@link #contiguous} 拷贝为 {@code toArray()} 连续副本后再传（单元素数组
+     * JNA 无连续性校验问题，可直传）。
+     */
     @Structure.FieldOrder({ "grfAccessPermissions", "grfAccessMode", "grfInheritance", "Trustee" })
     public static final class EXPLICIT_ACCESS_W extends Structure {
         /** 访问掩码（GENERIC_READ/WRITE/EXECUTE/ALL 或位组合）。 */
@@ -61,6 +71,28 @@ public final class AclStructs {
         public EXPLICIT_ACCESS_W() {
             Trustee = new TRUSTEE_W();
         }
+    }
+
+    /**
+     * 拷贝为 {@code toArray()} 连续数组（多元素 SetEntriesInAclW 的前置）。
+     *
+     * <p>字节级拷贝后 {@code read()} 同步字段——否则 JNA 侧 autoWrite 会把
+     * 未同步的默认字段值写回、覆盖拷贝内容。trustee.ptstrName 指针值随字节
+     * 拷贝带过，其指向的 PSID 内存仍由调用方持有（存活覆盖调用期即可）。
+     */
+    public static EXPLICIT_ACCESS_W[] contiguous(EXPLICIT_ACCESS_W[] src) {
+        if (src == null || src.length <= 1) {
+            return src;
+        }
+        EXPLICIT_ACCESS_W[] out = (EXPLICIT_ACCESS_W[]) new EXPLICIT_ACCESS_W().toArray(src.length);
+        for (int i = 0; i < src.length; i++) {
+            src[i].write();
+            int size = src[i].size();
+            byte[] raw = src[i].getPointer().getByteArray(0, size);
+            out[i].getPointer().write(0, raw, 0, size);
+            out[i].read();
+        }
+        return out;
     }
 
     /**
