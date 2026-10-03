@@ -7,7 +7,11 @@
  * 队列专有数据不进宿主公共类型(ComposerPanelCtx/TaskListEntry 均无 pendingInputs)。
  *
  * 队列在 worker,操作经 ctx.rpc 的 task.queueRemove/move 下发:
- * 每条项支持 ↑ / 编辑 / 删除;
+ * 每条项支持 插入 / ↑ / 编辑 / 删除;
+ * 插入 = `task.run{taskId, input, metadata:{insert:true, index}}`——worker 侧 queue.dispatch
+ * 按 index 从输入队列**摘掉该项**并入本轮主 agent 的插入队列,DialogInsertAdvisor 随下一轮
+ * 工具结果以 role=user 提交给 AI 并发 `user.message`;摘除后的 pendingInputs 广播即本面板收敛信号
+ * (故此处不再补发 queueRemove)。未及 drain 的项由 queue.loop 回收,不丢输入。
  * 编辑 = 先回填输入框再移除该项。
  * 队列为空整个卸载(return null),挂在输入框上方(abovePanel 插槽)。
  */

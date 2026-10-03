@@ -26,7 +26,7 @@ public class TaskInputQueuePlugin implements EveryAgentPlugin {
 
         ctx.registerTaskLifecycleNode(new QueueDispatchNode(queueRegistry, taskService, eventSink));
         ctx.registerTaskLifecycleNode(new QueueLoopNode(queueRegistry, store, eventSink));
-        ctx.registerAdvisorProvider(new DialogInsertAdvisorProvider(queueRegistry));
+        ctx.registerAdvisorProvider(new DialogInsertAdvisorProvider(queueRegistry, taskService));
 
         // 注册 task.queueRemove / task.queueMove / task.queueSnapshot RPC
         QueueRpcHandler rpcHandler = new QueueRpcHandler(queueRegistry, taskService, store, eventSink);

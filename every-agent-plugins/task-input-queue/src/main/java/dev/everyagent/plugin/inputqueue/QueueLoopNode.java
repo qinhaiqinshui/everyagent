@@ -7,6 +7,7 @@ import dev.everyagent.plugin.api.task.TaskLifecycleNode;
 import dev.everyagent.plugin.api.task.TaskOutcome;
 import dev.everyagent.plugin.api.task.TaskStoreService;
 import dev.everyagent.plugin.api.task.UserInput;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -24,10 +25,13 @@ import org.slf4j.LoggerFactory;
  * <p>下行段：注册 per-task InputQueue + 恢复悬空队列（readQueue → 包装为 ctx → offer）。
  * <p>invoke 体内：next.proceed(ctx)（首轮，输入由后续 consume.input 消费）→ queue.poll()
  * → 有则把 polledCtx 的 input/rawContent/runParams/metadata 设到当前 ctx、广播消费后的
- * pendingInputs 快照（前端队列面板据此收敛），再 next.proceed 续跑；空就返回。
- * <p>上行段（全部轮次跑完才到）：落盘悬空队列 queue.jsonl / 空则删除。
- * <p>finally：从注册表注销队列。段外节点（非 SectionNode），不经临界段共享锁；
- * queue.jsonl 读写失败仅 warn。
+ * pendingInputs 快照（前端队列面板据此收敛），再 next.proceed 续跑；队列空时先回收没赶上
+ * 工具循环下行的「插入对话」项（{@link #recycleUndrainedInserts}），有回收就继续续跑，
+ * 真空才返回。
+ * <p>上行段（全部轮次跑完才到）：再次回收残留插入项（取消/失败退出循环时 advisor 已无 drain
+ * 时机，直接随 unregister 丢弃会吃掉用户输入）→ 广播收敛 → 落盘悬空队列 queue.jsonl / 空则删除。
+ * <p>finally：从注册表注销队列（输入队列 + 插入对话队列一并移除）。段外节点（非 SectionNode），
+ * 不经临界段共享锁；queue.jsonl 读写失败仅 warn。
  */
 public final class QueueLoopNode implements TaskLifecycleNode {
 
@@ -74,7 +78,14 @@ public final class QueueLoopNode implements TaskLifecycleNode {
             while (result instanceof TaskOutcome to && to.status() == TaskOutcome.TaskEndStatus.DONE) {
                 TaskLifecycleContext polledCtx = queue.poll();
                 if (polledCtx == null) {
-                    break;
+                    // 输入队列已空：把没赶上工具循环下行的插入项回收成普通轮次输入，本轮之后照跑
+                    if (!recycleUndrainedInserts(taskId, queue)) {
+                        break;
+                    }
+                    polledCtx = queue.poll();
+                    if (polledCtx == null) {
+                        break;
+                    }
                 }
                 // 把 polledCtx 的数据设到当前 ctx，后续节点（file.reference/edit.resend/consume.input）能读到
                 ctx.input(polledCtx.input());
@@ -84,6 +95,14 @@ public final class QueueLoopNode implements TaskLifecycleNode {
                 // 消费一项即广播消费后的 pendingInputs 快照：前端队列列表实时收敛/消失
                 QueueBroadcast.pendingInputs(eventSink, ctx.taskRuntime(), queue);
                 result = next.proceed(ctx);
+            }
+
+            // 回收未消费的插入项：AI 已收尾（本轮再无工具循环下行穿过 advisor）、取消或失败时，
+            // 插入队列里的项不会被任何 advisor drain；随 finally unregister 一并丢弃会吃掉用户输入。
+            // 故回填输入队列尾部 → 下面的 queue.jsonl 落盘把它当悬空队列持久化，
+            // 下次运行时作普通轮次消费；同时广播一次 pendingInputs，前端队列面板据此重新显形。
+            if (recycleUndrainedInserts(taskId, queue)) {
+                QueueBroadcast.pendingInputs(eventSink, ctx.taskRuntime(), queue);
             }
 
             // 上行：落盘悬空队列（queue.jsonl 只持久化 text/rawContent，metadata 不落盘）
@@ -104,5 +123,24 @@ public final class QueueLoopNode implements TaskLifecycleNode {
         } finally {
             registry.unregister(taskId);
         }
+    }
+
+    /**
+     * 回收未消费的插入项：把「插入到当前对话」队列里残留的 ctx 逐项搬回输入队列尾部。
+     * @return true 表示确有回收发生（调用方据此广播 pendingInputs）
+     */
+    private boolean recycleUndrainedInserts(String taskId, InputQueue queue) {
+        ConcurrentLinkedQueue<TaskLifecycleContext> inserts = registry.getDialogInsertQueue(taskId);
+        if (inserts == null || inserts.isEmpty()) {
+            return false;
+        }
+        int recycled = 0;
+        TaskLifecycleContext undrained;
+        while ((undrained = inserts.poll()) != null) {
+            queue.offer(undrained);
+            recycled++;
+        }
+        log.info("[queue] 插入项未被 advisor drain，回收进输入队列续跑 task={} count={}", taskId, recycled);
+        return recycled > 0;
     }
 }
