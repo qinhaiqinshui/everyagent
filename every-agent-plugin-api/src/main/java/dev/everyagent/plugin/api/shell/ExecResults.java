@@ -15,22 +15,29 @@ public final class ExecResults {
     public static final int MAX_OUTPUT_CHARS = 1_000_000;
 
     /**
-     * PowerShell 脚本预置前缀。两项职责：
+     * PowerShell 脚本预置前缀。三项职责：
      *
-     * <p><b>1. UTF-8 编码</b>：
-     * {@code [Console]::OutputEncoding=UTF8} 使 PowerShell 向管道输出时按 UTF-8 编码
-     *（简体中文系统默认 GBK/936，Java 端统一按 UTF-8 解码会导致乱码）；
-     * {@code $OutputEncoding=UTF8} 使 PowerShell 管道数据传给原生子进程时也用 UTF-8；
-     * {@code $PSDefaultParameterValues} 让 Get-Content / Set-Content / Out-File
-     * 不带 {@code -Encoding} 时默认用 UTF-8 读写文件（PS 5.1 默认按系统 ACP 如 GBK 读，
-     * UTF-8 中文文件会乱码）。前缀先于用户命令执行，用户显式指定 {@code -Encoding} 则覆盖。
+     * <p><b>1. UTF-8 编码（Constrained Language 兼容，2026-10-04 修正）</b>：
+     * 沙箱账户受 WDAC/AppLocker 策略进入 CLM 时，
+     * {@code [Console]::OutputEncoding=...} 属性 setter 被拒
+     *（PropertySetterNotSupportedInConstrainedLanguage）。改用双保险：
+     * {@code chcp 65001 >$null}（原生命令，CLM 允许）先把控制台输出码页切到
+     * UTF-8——.NET Console.OutputEncoding 动态反映控制台码页，后续管道输出即
+     * UTF-8；setter 再以 {@code try/catch} 包裹（FullLanguage 下直设，CLM 下
+     * 静默跳过，chcp 已兜底）。{@code $OutputEncoding=UTF8} 使管道数据传给
+     * 原生子进程时也用 UTF-8；{@code $PSDefaultParameterValues} 让
+     * Get-Content / Set-Content / Out-File 不带 {@code -Encoding} 时默认用
+     * UTF-8 读写文件（PS 5.1 默认按系统 ACP 如 GBK 读，UTF-8 中文文件会乱码）。
+     * 变量/哈希表赋值在 CLM 下允许，无需包裹。前缀先于用户命令执行，
+     * 用户显式指定 {@code -Encoding} 则覆盖。
      *
      * <p><b>2. 非成功流静默化</b>：静默 progress/information/warning/verbose/debug 流，
      * 避免个别 cmdlet / 模块显式 Write-Progress 等刷屏（不影响真实 stdout 数据与真实 stderr 错误）。
      * 不改变、也不要求改变 AI 的命令写法。
      */
     public static final String POWERSHELL_PREFIX =
-            "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; "
+            "chcp 65001 >$null; "
+            + "try{ [Console]::OutputEncoding=[System.Text.Encoding]::UTF8 }catch{ }; "
             + "$OutputEncoding=[System.Text.Encoding]::UTF8; "
             + "$PSDefaultParameterValues['Get-Content:Encoding']='UTF8'; "
             + "$PSDefaultParameterValues['Set-Content:Encoding']='UTF8'; "
