@@ -166,11 +166,18 @@ public final class NetFwCom {
     /** IDispatch::Invoke（底层）。 */
     private static int invoke(Pointer dispatch, String name, int flags,
             Memory dispParams, Memory varResult) {
+        // 对 DISPATCH_METHOD / DISPATCH_PROPERTYGET 自动合并两个标志
+        // （对齐 JNA COMBindingBaseObject#oleMethod 的做法：某些 COM 对象
+        // 的属性/方法只接受同时设置两个标志，否则返回 E_INVALIDARG）
+        int finalFlags = flags;
+        if (flags == DISPATCH_METHOD || flags == DISPATCH_PROPERTYGET) {
+            finalFlags = DISPATCH_METHOD | DISPATCH_PROPERTYGET;
+        }
         Memory riid = new Memory(16);
         Memory excepInfo = new Memory(64);
         IntByReference argErr = new IntByReference();
         return invokeInt(dispatch, SLOT_INVOKE, dispid(dispatch, name), riid,
-                LOCALE_USER_DEFAULT, flags, dispParams, varResult, excepInfo, argErr);
+                LOCALE_USER_DEFAULT, finalFlags, dispParams, varResult, excepInfo, argErr);
     }
 
     /** 空参数 DISPPARAMS（清零结构体即无参）。 */
