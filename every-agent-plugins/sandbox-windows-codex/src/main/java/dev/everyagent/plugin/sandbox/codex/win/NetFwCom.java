@@ -166,18 +166,11 @@ public final class NetFwCom {
     /** IDispatch::Invoke（底层）。 */
     private static int invoke(Pointer dispatch, String name, int flags,
             Memory dispParams, Memory varResult) {
-        // 对 DISPATCH_METHOD / DISPATCH_PROPERTYGET 自动合并两个标志
-        // （对齐 JNA COMBindingBaseObject#oleMethod 的做法：某些 COM 对象
-        // 的属性/方法只接受同时设置两个标志，否则返回 E_INVALIDARG）
-        int finalFlags = flags;
-        if (flags == DISPATCH_METHOD || flags == DISPATCH_PROPERTYGET) {
-            finalFlags = DISPATCH_METHOD | DISPATCH_PROPERTYGET;
-        }
         Memory riid = new Memory(16);
         Memory excepInfo = new Memory(64);
         IntByReference argErr = new IntByReference();
         return invokeInt(dispatch, SLOT_INVOKE, dispid(dispatch, name), riid,
-                LOCALE_USER_DEFAULT, finalFlags, dispParams, varResult, excepInfo, argErr);
+                LOCALE_USER_DEFAULT, flags, dispParams, varResult, excepInfo, argErr);
     }
 
     /** 空参数 DISPPARAMS（清零结构体即无参）。 */
@@ -217,8 +210,9 @@ public final class NetFwCom {
         varg.setPointer(8, payload);
         Memory namedArgs = new Memory(Native.POINTER_SIZE);
         namedArgs.setInt(0, DISPID_PROPERTYPUT);
-        dispParams.setPointer(0, namedArgs);              // rgdispidNamedArgs
-        dispParams.setPointer(Native.POINTER_SIZE, varg); // rgvarg
+        // DISPPARAMS layout (x64): rgvarg(0), rgdispidNamedArgs(8), cArgs(16), cNamedArgs(20)
+        dispParams.setPointer(0, varg);                   // rgvarg → VARIANT 参数
+        dispParams.setPointer(Native.POINTER_SIZE, namedArgs); // rgdispidNamedArgs → DISPID_PROPERTYPUT
         dispParams.setInt(Native.POINTER_SIZE * 2, 1);    // cArgs
         dispParams.setInt(Native.POINTER_SIZE * 2 + 4, 1); // cNamedArgs
         int hr = invoke(dispatch, prop, DISPATCH_PROPERTYPUT, dispParams, null);
@@ -269,7 +263,10 @@ public final class NetFwCom {
     /** propget → IDispatch*（Rules 属性；返回自持引用，调用方负责 Release）。 */
     public static Pointer getDispatch(Pointer dispatch, String prop) {
         Memory result = new Memory(VARIANT_SIZE);
-        int hr = invoke(dispatch, prop, DISPATCH_PROPERTYGET, emptyDispParams(), result);
+        // 返回 VT_DISPATCH 的 propget 需同时设 DISPATCH_METHOD | DISPATCH_PROPERTYGET
+        // （对齐 JNA COMBindingBaseObject#oleMethod：某些 COM 属性只接受合并标志）
+        int hr = invoke(dispatch, prop,
+                DISPATCH_METHOD | DISPATCH_PROPERTYGET, emptyDispParams(), result);
         if (hr != 0) {
             throw new IllegalStateException("Invoke propget " + prop + " failed: 0x"
                     + Integer.toUnsignedString(hr, 16));
@@ -298,7 +295,8 @@ public final class NetFwCom {
         Memory varg = new Memory(VARIANT_SIZE);
         varg.setShort(0, (short) VT_DISPATCH);
         varg.setPointer(8, arg);
-        dispParams.setPointer(Native.POINTER_SIZE, varg); // rgvarg
+        // DISPPARAMS: rgvarg(0), rgdispidNamedArgs(8), cArgs(16), cNamedArgs(20)
+        dispParams.setPointer(0, varg);               // rgvarg
         dispParams.setInt(Native.POINTER_SIZE * 2, 1);    // cArgs
         int hr = invoke(dispatch, method, DISPATCH_METHOD, dispParams, null);
         if (hr != 0) {
@@ -315,7 +313,8 @@ public final class NetFwCom {
         Memory varg = new Memory(VARIANT_SIZE);
         varg.setShort(0, (short) VT_BSTR);
         varg.setPointer(8, bstr.getPointer());
-        dispParams.setPointer(Native.POINTER_SIZE, varg);
+        // DISPPARAMS: rgvarg(0), rgdispidNamedArgs(8), cArgs(16), cNamedArgs(20)
+        dispParams.setPointer(0, varg);
         dispParams.setInt(Native.POINTER_SIZE * 2, 1);
         Memory result = new Memory(VARIANT_SIZE);
         try {
@@ -347,7 +346,8 @@ public final class NetFwCom {
         Memory varg = new Memory(VARIANT_SIZE);
         varg.setShort(0, (short) VT_BSTR);
         varg.setPointer(8, bstr.getPointer());
-        dispParams.setPointer(Native.POINTER_SIZE, varg);
+        // DISPPARAMS: rgvarg(0), rgdispidNamedArgs(8), cArgs(16), cNamedArgs(20)
+        dispParams.setPointer(0, varg);
         dispParams.setInt(Native.POINTER_SIZE * 2, 1);
         try {
             return invoke(dispatch, method, DISPATCH_METHOD, dispParams, null);
