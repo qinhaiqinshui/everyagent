@@ -193,6 +193,34 @@ public final class RunnerClient {
         throw new IOException("CreateProcessWithLogonW failed for runner (retried)");
     }
 
+    /**
+     * classpath 通配符收敛：同目录多 jar → {@code <dir>\*}。
+     *
+     * <p><b>动机（2026-10-04 宿主实验实锤）</b>：CreateProcessWithLogonW 命令行
+     * 上限 1024 字符（未文档化；阈值精确复现 1024=OK/1025=E_INVALIDARG）。8 jar
+     * 全路径 classpath 使命令行达 1095 必然失败。Java 的 {@code dir\*} 通配符
+     * 恰好展开为该目录全部 .jar（物化目录只含 runner 依赖 jar，语义等价），
+     * 命令行降至 ~481 字符并留足余量。
+     */
+    static String collapseClasspathWildcard(String classpath) {
+        if (classpath == null || classpath.indexOf(';') < 0) {
+            return classpath;
+        }
+        String[] parts = classpath.split(";");
+        java.nio.file.Path parent = null;
+        for (String part : parts) {
+            if (!part.endsWith(".jar")) {
+                return classpath; // 非 jar 条目不收敛
+            }
+            java.nio.file.Path p = java.nio.file.Path.of(part).getParent();
+            if (p == null || (parent != null && !p.equals(parent))) {
+                return classpath; // 跨目录不收敛
+            }
+            parent = p;
+        }
+        return parent == null ? classpath : parent + "\\*";
+    }
+
     /** 诊断用：非 ASCII/控制字符转 U+XXXX（不可见字符一眼可见）。 */
     private static String printable(String s) {
         StringBuilder sb = new StringBuilder();
@@ -296,7 +324,7 @@ public final class RunnerClient {
             }
         }
         argv.addAll(java.util.List.of(
-                "-cp", classpath,
+                "-cp", collapseClasspathWildcard(classpath),
                 RunnerMaterializer.RUNNER_MAIN,
                 "--pipe-in=" + pipeInName,
                 "--pipe-out=" + pipeOutName));
