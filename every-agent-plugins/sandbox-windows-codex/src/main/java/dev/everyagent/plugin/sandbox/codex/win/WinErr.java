@@ -63,6 +63,8 @@ public final class WinErr {
     // ---- NET_API_STATUS（lmerr.h；不走 GetLastError） ----
 
     public static final int NERR_Success = 0;
+    /** 用户名参数无效（如超长：Windows SAM 用户名上限 20 字符）。 */
+    public static final int NERR_BadUsername = 2202;
     /** 用户不存在。 */
     public static final int NERR_UserNotFound = 2221;
     /** 用户已存在（NetUserAdd 幂等判定 → 转 NetUserSetInfo）。 */

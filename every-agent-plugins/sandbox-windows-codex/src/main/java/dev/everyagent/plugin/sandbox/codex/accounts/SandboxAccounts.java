@@ -16,8 +16,9 @@ import java.security.SecureRandom;
  * 沙箱本地账户/组供给（对应 codex setup_provisioning/sandbox_users.rs + winutil.rs，
  * 设计文档 §2.3 AccountProvisioner）。
  *
- * <p>命名约定：组 {@code EveryAgentCodexSandboxUsers}，账户
- * {@code EveryAgentCodexOffline}/{@code EveryAgentCodexOnline}（前缀可配置）。
+ * <p>命名约定：组 {@code EACodexSandboxUsers}，账户
+ * {@code EACodexOffline}/{@code EACodexOnline}（前缀可配置；
+ * Windows SAM 用户名上限 20 字符）。
  * 修复路径（不变量④）：检测到禁用账户残留时新建账户带 UF_ACCOUNTDISABLE，
  * 网络限制恢复成功后才解禁。
  *
@@ -25,10 +26,12 @@ import java.security.SecureRandom;
  */
 public final class SandboxAccounts {
 
-    /** 默认账户/组前缀（设计文档 §7 codex.account-prefix）。 */
-    public static final String DEFAULT_PREFIX = "EveryAgentCodex";
+    /** 默认账户/组前缀（设计文档 §7 codex.account-prefix；Windows SAM 用户名上限 20 字符）。 */
+    public static final String DEFAULT_PREFIX = "EACodex";
     /** 沙箱组名（对齐 SANDBOX_USERS_GROUP）。 */
     public static final String DEFAULT_GROUP = DEFAULT_PREFIX + "SandboxUsers";
+    /** Windows SAM 本地账户用户名上限（UNLEN）。 */
+    public static final int MAX_USERNAME_LEN = 20;
     private static final String GROUP_COMMENT = "EveryAgent Codex sandbox internal group (managed)";
     /** 内建 Users 组 SID（ensure_local_user 的普通用户主体保障）。 */
     public static final String SID_BUILTIN_USERS = "S-1-5-32-545";
@@ -102,6 +105,10 @@ public final class SandboxAccounts {
      */
     public static void ensureUser(String username, String password, int extraFlags,
             String groupName) {
+        if (username.length() > MAX_USERNAME_LEN) {
+            throw new IllegalStateException("username '" + username
+                    + "' exceeds SAM limit of " + MAX_USERNAME_LEN + " characters");
+        }
         LMAccess.USER_INFO_1 info = new LMAccess.USER_INFO_1();
         info.usri1_name = username;
         info.usri1_password = password;

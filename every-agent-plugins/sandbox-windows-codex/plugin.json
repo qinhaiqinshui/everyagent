@@ -14,8 +14,8 @@
       },
       "codex.account-prefix": {
         "type": "string",
-        "default": "EveryAgentCodex",
-        "description": "沙箱账户/组前缀：账户 <前缀>Offline/<前缀>Online，组 <前缀>SandboxUsers"
+        "default": "EACodex",
+        "description": "沙箱账户/组前缀：账户 <前缀>Offline/<前缀>Online（≤20字符），组 <前缀>SandboxUsers"
       },
       "codex.network-policy": {
         "type": "string",
