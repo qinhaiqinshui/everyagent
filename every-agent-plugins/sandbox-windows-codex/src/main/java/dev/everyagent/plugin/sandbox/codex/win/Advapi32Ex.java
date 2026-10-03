@@ -63,6 +63,18 @@ public interface Advapi32Ex extends Advapi32 {
     boolean CheckTokenMembership(WinNT.HANDLE tokenHandle, Pointer sidToCheck,
             IntByReference isMember);
 
+    /**
+     * GetTokenInformation 裸指针重载（LPVOID 本义）：官方 Advapi32 签名第 3 参是
+     * {@code Structure}，传 Structure 会触发 JNA 构造期 autoRead——把未初始化
+     * malloc 内存当字段布局解引用（TOKEN_GROUPS.Group0.Sid 垃圾指针 → 间歇性
+     * Invalid memory access，2026-10-04 runner-stderr.log 实证）。本重载传
+     * {@link Pointer} 无任何自动同步副作用；JNA 支持接口方法重载（同名映射
+     * 同一 native 符号，参数封送按各自签名）。
+     */
+    boolean GetTokenInformation(WinNT.HANDLE tokenHandle, int tokenInformationClass,
+            Pointer tokenInformation, int tokenInformationLength,
+            IntByReference returnLengthInBytes);
+
     /** SDDL 字符串 → 自相对安全描述符（LocalAlloc 分配，用后 LocalFree）——管道 DACL 等。 */
     boolean ConvertStringSecurityDescriptorToSecurityDescriptorW(WString sddl,
             int sddlRevision, PointerByReference ppSecurityDescriptor,

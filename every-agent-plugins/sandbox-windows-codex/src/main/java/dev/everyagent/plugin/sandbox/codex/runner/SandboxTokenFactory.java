@@ -162,7 +162,7 @@ public final class SandboxTokenFactory {
             return sid;
         }
         IntByReference need = new IntByReference();
-        Advapi32Ex.INSTANCE.GetTokenInformation(token, TOKEN_LINKED_TOKEN_CLASS, null, 0, need);
+        Advapi32Ex.INSTANCE.GetTokenInformation(token, TOKEN_LINKED_TOKEN_CLASS, (Pointer) null, 0, need);
         if (need.getValue() >= Native.POINTER_SIZE) {
             Memory buf = queryTokenInformation(token, TOKEN_LINKED_TOKEN_CLASS);
             WinNT.HANDLE linked = new WinNT.HANDLE(buf.getPointer(0));
@@ -209,13 +209,19 @@ public final class SandboxTokenFactory {
     }
 
     /**
-     * GetTokenInformation 通用查询：先探长度再取载荷，原始字节落 {@link Memory}
-     * （壳 Structure 只当长度载体，内核整块覆盖；缓冲至少为壳声明尺寸，防
-     * Structure 参数自动同步时越界写）。
+     * GetTokenInformation 通用查询：先探长度再取载荷，原始字节落 {@link Memory}。
+     *
+     * <p><b>2026-10-04 排障修正</b>：原实现以 {@code new TOKEN_GROUPS(buf)} 壳
+     * Structure 传参——JNA 构造即 {@code autoRead}，把未初始化 malloc 内存里的
+     * 堆残留当 {@code Group0.Sid} 指针解引用（PSID.read），间歇性
+     * Invalid memory access（垃圾恰为零时幸免 → 「时好时坏」假象，
+     * runner-stderr.log 实证）。改直接传裸 {@link Pointer}：GetTokenInformation
+     * 第 3 参本就是 LPVOID，无任何 autoRead/autoWrite 副作用；alloc 仍取
+     * {@code max(len, 壳声明尺寸)} 防御性保留（部分 class 返回长度小于壳声明）。
      */
     private static Memory queryTokenInformation(WinNT.HANDLE token, int infoClass) {
         IntByReference need = new IntByReference();
-        Advapi32Ex.INSTANCE.GetTokenInformation(token, infoClass, null, 0, need);
+        Advapi32Ex.INSTANCE.GetTokenInformation(token, infoClass, (Pointer) null, 0, need);
         int len = need.getValue();
         if (len <= 0) {
             throw Win32Exception.of("GetTokenInformation(size, class=" + infoClass + ")");
@@ -223,8 +229,7 @@ public final class SandboxTokenFactory {
         WinNT.TOKEN_GROUPS probe = new WinNT.TOKEN_GROUPS();
         int alloc = Math.max(len, probe.size());
         Memory buf = new Memory(alloc);
-        WinNT.TOKEN_GROUPS shell = new WinNT.TOKEN_GROUPS(buf);
-        if (!Advapi32Ex.INSTANCE.GetTokenInformation(token, infoClass, shell, alloc, need)) {
+        if (!Advapi32Ex.INSTANCE.GetTokenInformation(token, infoClass, buf, alloc, need)) {
             throw Win32Exception.of("GetTokenInformation(class=" + infoClass + ")");
         }
         return buf;
