@@ -125,11 +125,13 @@ public final class NetFwCom {
         }
     }
 
-    /** vtable 直调（HRESULT；首个隐参 this=comObj；仅用于 IUnknown/IDispatch 契约槽）。 */
+    /** vtable 直调（HRESULT；首个隐参 this=comObj；仅用于 IUnknown/IDispatch 契约槽）。
+     * 对齐 JNA COMInvoker：用默认调用约定（非 ALT_CONVENTION），
+     * 直接传 args（含 this 指针作为 args[0]）。 */
     public static int invokeInt(Pointer comObj, int slot, Object... args) {
         Pointer vtable = comObj.getPointer(0);
         Pointer fn = vtable.getPointer((long) slot * Native.POINTER_SIZE);
-        Function function = Function.getFunction(fn, Function.ALT_CONVENTION);
+        Function function = Function.getFunction(fn);
         Object[] full = new Object[args.length + 1];
         full[0] = comObj;
         System.arraycopy(args, 0, full, 1, args.length);
@@ -263,10 +265,7 @@ public final class NetFwCom {
     /** propget → IDispatch*（Rules 属性；返回自持引用，调用方负责 Release）。 */
     public static Pointer getDispatch(Pointer dispatch, String prop) {
         Memory result = new Memory(VARIANT_SIZE);
-        // 返回 VT_DISPATCH 的 propget 需同时设 DISPATCH_METHOD | DISPATCH_PROPERTYGET
-        // （对齐 JNA COMBindingBaseObject#oleMethod：某些 COM 属性只接受合并标志）
-        int hr = invoke(dispatch, prop,
-                DISPATCH_METHOD | DISPATCH_PROPERTYGET, emptyDispParams(), result);
+        int hr = invoke(dispatch, prop, DISPATCH_PROPERTYGET, emptyDispParams(), result);
         if (hr != 0) {
             throw new IllegalStateException("Invoke propget " + prop + " failed: 0x"
                     + Integer.toUnsignedString(hr, 16));
