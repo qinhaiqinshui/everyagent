@@ -11,6 +11,8 @@ import com.sun.jna.platform.win32.WTypes;
 import com.sun.jna.ptr.IntByReference;
 import com.sun.jna.ptr.PointerByReference;
 
+import dev.everyagent.plugin.sandbox.codex.setup.HelperLog;
+
 import java.util.HashMap;
 import java.util.Map;
 
@@ -91,6 +93,7 @@ public final class NetFwCom {
         public static Apartment initialize() {
             int hr = Ole32.INSTANCE.CoInitializeEx(null, Ole32.COINIT_APARTMENTTHREADED)
                     .intValue();
+            HelperLog.log("COM CoInitializeEx(APARTMENTTHREADED) hr=" + HelperLog.hex(hr));
             if (hr != 0 && hr != WinErr.RPC_E_CHANGED_MODE) {
                 throw new IllegalStateException("CoInitializeEx failed: 0x"
                         + Integer.toUnsignedString(hr, 16));
@@ -108,9 +111,13 @@ public final class NetFwCom {
 
     /** CoCreateInstance（in-proc；失败抛 IllegalStateException 含 HRESULT）。 */
     public static Pointer coCreateInstance(Guid.GUID clsid, Guid.GUID iid) {
+        HelperLog.log("COM CoCreateInstance clsid=" + clsid.toGuidString()
+                + " iid=" + iid.toGuidString());
         PointerByReference out = new PointerByReference();
         int hr = Ole32.INSTANCE.CoCreateInstance(clsid, null, 1 /* CLSCTX_INPROC_SERVER */,
                 iid, out).intValue();
+        HelperLog.log("COM CoCreateInstance hr=" + HelperLog.hex(hr)
+                + " obj=" + out.getValue());
         if (hr != 0) {
             throw new IllegalStateException("CoCreateInstance failed: 0x"
                     + Integer.toUnsignedString(hr, 16));
@@ -171,8 +178,14 @@ public final class NetFwCom {
         Memory riid = new Memory(16);
         Memory excepInfo = new Memory(64);
         IntByReference argErr = new IntByReference();
-        return invokeInt(dispatch, SLOT_INVOKE, dispid(dispatch, name), riid,
+        int dispid = dispid(dispatch, name);
+        HelperLog.log("COM Invoke obj=" + dispatch + " name=" + name + " dispid=" + dispid
+                + " flags=0x" + Integer.toHexString(flags) + " dispParams=" + dispParams
+                + " varResult=" + varResult);
+        int hr = invokeInt(dispatch, SLOT_INVOKE, dispid, riid,
                 LOCALE_USER_DEFAULT, flags, dispParams, varResult, excepInfo, argErr);
+        HelperLog.log("COM Invoke name=" + name + " hr=" + HelperLog.hex(hr));
+        return hr;
     }
 
     /** 空参数 DISPPARAMS（清零结构体即无参）。 */
@@ -234,6 +247,7 @@ public final class NetFwCom {
         }
         try {
             int vt = result.getShort(0) & 0xFFFF;
+            HelperLog.log("COM propget " + prop + " vt=" + vt + " value=" + result.getInt(8));
             if (vt != VT_I4) {
                 throw new IllegalStateException("propget " + prop + " returned vt=" + vt);
             }
@@ -272,12 +286,14 @@ public final class NetFwCom {
         }
         try {
             int vt = result.getShort(0) & 0xFFFF;
+            HelperLog.log("COM propget " + prop + " vt=" + vt + " obj=" + result.getPointer(8));
             if (vt != VT_DISPATCH) {
                 throw new IllegalStateException("propget " + prop + " returned vt=" + vt);
             }
             Pointer obj = result.getPointer(8);
             PointerByReference keep = new PointerByReference();
             int qi = invokeInt(obj, SLOT_QUERY_INTERFACE, IID_IDISPATCH, keep);
+            HelperLog.log("COM QI(IDispatch) on " + prop + " hr=" + HelperLog.hex(qi));
             if (qi != 0) {
                 throw new IllegalStateException("QI(IDispatch) on " + prop + " failed: 0x"
                         + Integer.toUnsignedString(qi, 16));

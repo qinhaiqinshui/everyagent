@@ -83,6 +83,13 @@ public final class SetupHelperMain {
 
     /** 提权载荷执行（模式分派；失败时写 setup_error.json 并重抛）。 */
     public static void executePayload(SetupPayload payload) throws IOException {
+        HelperLog.init(Path.of(payload.model().codexHome));
+        HelperLog.log("helper executePayload mode=" + payload.mode()
+                + " codexHome=" + payload.model().codexHome
+                + " group=" + payload.model().groupName
+                + " offline=" + payload.model().offlineUsername
+                + " online=" + payload.model().onlineUsername
+                + " refreshOnly=" + payload.model().refreshOnly);
         try {
             SetupPayload.Model model = payload.model();
             if (payload.mode() == SetupPayload.Mode.REMOVE) {
@@ -91,10 +98,12 @@ public final class SetupHelperMain {
             }
             runProvisioning(payload, model);
         } catch (SetupErrorReport.SetupException e) {
+            HelperLog.log("helper failed: " + e.code(), e);
             writeErrorReport(payload, e.code(), e.getMessage());
             throw e;
         } catch (Exception e) {
             String message = e.getMessage() == null ? e.toString() : e.getMessage();
+            HelperLog.log("helper failed (unexpected)", e);
             writeErrorReport(payload, SetupErrorReport.HELPER_UNKNOWN_ERROR, message);
             throw e instanceof RuntimeException runtime ? runtime
                     : new SetupErrorReport.SetupException(
