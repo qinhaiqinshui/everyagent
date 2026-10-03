@@ -42,6 +42,12 @@ import java.util.Map;
  */
 public final class RunnerClient {
 
+    /** 最近一次 spawn 的 env 诊断（条目数/字节数）。 */
+    private static volatile String lastEnvDiag;
+
+    private static final System.Logger LOG =
+            System.getLogger(RunnerClient.class.getName());
+
     /** 连接与 spawn_ready 等待上限（RUNNER_PIPE_CONNECT_TIMEOUT / RUNNER_SPAWN_READY_TIMEOUT = 15s）。 */
     public static final long PIPE_CONNECT_TIMEOUT_MS = 15_000;
     public static final long SPAWN_READY_TIMEOUT_MS = 15_000;
@@ -128,6 +134,14 @@ public final class RunnerClient {
                 List<String> argv = runnerArgv(cfg.javaHome(), cfg.classpath(),
                         pipeInName, pipeOutName, cfg.codexHome());
                 String cmdline = joinCommandLine(argv);
+                java.nio.file.Path envTmp = SandboxDirs.sandboxDir(cfg.codexHome()).resolve("tmp");
+                Files.createDirectories(envTmp);
+                java.util.Map<String, String> runnerEnv =
+                        new java.util.LinkedHashMap<>(System.getenv());
+                runnerEnv.put("TEMP", envTmp.toString());
+                runnerEnv.put("TMP", envTmp.toString());
+                lastEnvDiag = runnerEnv.size() + "/" + envBlockBytes(runnerEnv);
+                com.sun.jna.Pointer envBlock = EnvBlock.makeEnvBlock(runnerEnv);
                 boolean ok = Advapi32.INSTANCE.CreateProcessWithLogonW(
                         cfg.username(),
                         ".",
@@ -136,7 +150,7 @@ public final class RunnerClient {
                         argv.get(0), // lpApplicationName = java.exe 绝对路径（对齐 codex）
                         cmdline,
                         Kernel32Ex.CREATE_NO_WINDOW | WinBase.CREATE_UNICODE_ENVIRONMENT,
-                        EnvBlock.makeEnvBlock(runnerEnvironment(cfg.codexHome())),
+                        envBlock,
                         cfg.workingDirectory(),
                         startupInfo(),
                         pi);
@@ -144,6 +158,32 @@ public final class RunnerClient {
                     return pi;
                 }
                 failure = Kernel32.INSTANCE.GetLastError();
+                if (failure == 0x80070057) { // E_INVALIDARG：打印诊断并降级 NULL env 重试一次
+                    String envDiag = lastEnvDiag;
+                    LOG.log(System.Logger.Level.WARNING,
+                            "[runner] CreateProcessWithLogonW E_INVALIDARG 诊断: passwordLen={0} "
+                                    + "argv0={1} cwd={2} envEntries={3} envBlockBytes={4}",
+                            cfg.password() == null ? -1 : cfg.password().length(),
+                            argv.get(0), cfg.workingDirectory(),
+                            envDiag == null ? -1 : envDiag.substring(0, envDiag.indexOf('/')),
+                            envDiag == null ? -1 : envDiag.substring(envDiag.indexOf('/') + 1));
+                    com.sun.jna.Pointer retryEnv = com.sun.jna.Pointer.NULL;
+                    pi = new WinBase.PROCESS_INFORMATION();
+                    boolean retried = Advapi32.INSTANCE.CreateProcessWithLogonW(
+                            cfg.username(), ".", cfg.password(), 0,
+                            argv.get(0), cmdline,
+                            Kernel32Ex.CREATE_NO_WINDOW
+                                    | WinBase.CREATE_UNICODE_ENVIRONMENT,
+                            retryEnv, cfg.workingDirectory(), startupInfo(), pi);
+                    if (retried) {
+                        LOG.log(System.Logger.Level.WARNING,
+                                "[runner] NULL-env 降级重试成功（环境块非法已绕过）");
+                        return pi;
+                    }
+                    failure = Kernel32.INSTANCE.GetLastError();
+                    closeQuietly(pi.hThread);
+                    closeQuietly(pi.hProcess);
+                }
                 closeQuietly(pi.hThread);
                 closeQuietly(pi.hProcess);
             } finally {
@@ -203,6 +243,15 @@ public final class RunnerClient {
                 "--pipe-in=" + pipeInName,
                 "--pipe-out=" + pipeOutName));
         return java.util.Collections.unmodifiableList(argv);
+    }
+
+    /** env 块字节数（UTF-16，双 null 终结；与 EnvBlock 同口径，仅诊断用）。 */
+    static int envBlockBytes(java.util.Map<String, String> env) {
+        int chars = 1; // 末尾终结符
+        for (java.util.Map.Entry<String, String> e : env.entrySet()) {
+            chars += e.getKey().length() + 1 + e.getValue().length() + 1;
+        }
+        return chars * 2;
     }
 
     /** runner 环境变量：继承当前环境 + TEMP/TMP → {@code <codexHome>/.sandbox/tmp}。 */
