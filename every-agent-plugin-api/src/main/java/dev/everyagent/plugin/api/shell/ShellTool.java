@@ -26,7 +26,8 @@ public final class ShellTool {
     private static final String POWERSHELL_BASELINE =
             "在系统上用 PowerShell 执行真实 OS 命令;"
             + "命令工作目录默认为任务工作区根;"
-            + "stdin 为 null 设备,命令无法从 stdin 读入输入;";
+            + "stdin 为 null 设备,命令无法从 stdin 读入输入;"
+            + "Windows PowerShell 5.1 不支持 && 与 || 连接符,请用 ; 分隔多条命令;";
 
     /** bash 默认基线描述。 */
     private static final String BASH_BASELINE =
