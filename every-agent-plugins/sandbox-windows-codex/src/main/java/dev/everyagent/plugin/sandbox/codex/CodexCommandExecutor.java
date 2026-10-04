@@ -285,8 +285,13 @@ public final class CodexCommandExecutor {
         if (shell.isPowerShell) {
             // -ExecutionPolicy Bypass：沙箱账户默认 Restricted 策略会拦截 .ps1 脚本
             // （如 npm.ps1），per-process 旁路不影响系统策略。
+            // -ExecutionPolicy Bypass：沙箱账户默认 Restricted 策略会拦截 .ps1 脚本
+            //（如 npm.ps1），per-process 旁路不影响系统策略。
+            // 尾部 POWERSHELL_EXIT_TAIL：把最后一个原生子进程的退出码转成 powershell.exe 的
+            // 进程码——否则 Exit 帧里的退出码恒 0,模型分不清 rg「无匹配=1」与「用错=2」。
             return List.of(shell.exe, "-NoProfile", "-ExecutionPolicy", "Bypass",
-                    "-Command", ExecResults.POWERSHELL_PREFIX + command);
+                    "-Command", ExecResults.POWERSHELL_PREFIX + command
+                            + ExecResults.POWERSHELL_EXIT_TAIL);
         }
         return List.of(shell.exe, "/c", "chcp 65001 >nul & " + command);
     }

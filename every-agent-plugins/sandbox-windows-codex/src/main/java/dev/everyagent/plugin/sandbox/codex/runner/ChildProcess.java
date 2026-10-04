@@ -10,6 +10,12 @@ import com.sun.jna.platform.win32.WinNT;
 import com.sun.jna.ptr.IntByReference;
 import com.sun.jna.ptr.LongByReference;
 
+import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
@@ -24,10 +30,18 @@ import dev.everyagent.plugin.sandbox.codex.win.struct.StartupInfoExW;
  * process.rs::spawn_process_with_pipes + job.rs + proc_thread_attr.rs）。
  *
  * <p>CreateProcessAsUserW(受限令牌)：STARTUPINFOEXW +
- * PROC_THREAD_ATTRIBUTE_HANDLE_LIST（stdio 三管道句柄白名单，其余句柄不泄漏进沙箱）
+ * PROC_THREAD_ATTRIBUTE_HANDLE_LIST（stdio 三句柄白名单，其余句柄不泄漏进沙箱）
  * + PROC_THREAD_ATTRIBUTE_JOB_LIST（Job 原子挂接，KILL_ON_JOB_CLOSE|BREAKAWAY_OK，
  * 只做整树终止不做配额；无法满足 job list 直接拒绝 spawn）；环境块走
  * {@link EnvBlock}（UTF-16 + CREATE_UNICODE_ENVIRONMENT）。
+ *
+ * <p><b>stdout/stderr 首选文件承载,管道只作回退</b>——PowerShell 5.1 的 stdout 指向
+ * <b>管道</b>时 {@code [Console]::OutputEncoding} 取系统 OEM 码页(中文 Windows=936/GBK),
+ * 而沙箱账户在 CLM 下被策略禁止改该属性、{@code chcp 65001} 也不同步到它;于是原生子进程
+ *（rg/git/npm）写出的 UTF-8 字节被 PS 先按 GBK 解码(非法序列当场变 U+FFFD,不可逆丢失)再按
+ * GBK 编码送回管道,读端任何"智能解码"都救不回来。改为文件承载后,PS 把该文件句柄原样交给
+ * 原生子进程,子进程写原始字节,PS 完全不参与转码:实测同一文件里 cmdlet 中文与原生 UTF-8
+ * 输出<b>同为合法 UTF-8</b>,stderr 也不再被包成 CLIXML(错误文本因此不再静默丢失)。
  *
  * <p>超时语义（command_runner/win.rs 同款）：WaitForSingleObject → WAIT_TIMEOUT(0x102)
  * → terminate（TerminateJobObject 优先，TerminateProcess 兜底）→
@@ -45,21 +59,32 @@ public final class ChildProcess {
     public static final int TIMED_OUT_EXIT_CODE = 128 + 64;
     /** 输出读取块大小（codex read_handle_loop 同款 8KiB）。 */
     private static final int READ_CHUNK = 8192;
+    /** 文件承载模式的下一次轮询间隔(ms)——保持输出接近实时,不因等待进程退出才回传。 */
+    private static final long TAIL_POLL_MS = 20;
 
     private final WinNT.HANDLE job;
     private final WinBase.PROCESS_INFORMATION pi;
     private WinNT.HANDLE stdinWrite;
+    /** 管道承载模式下的读句柄;文件承载模式为 null。 */
     private final WinNT.HANDLE stdoutRead;
     private final WinNT.HANDLE stderrRead;
+    /** 非 null = stdout/stderr 走文件承载。 */
+    private final OutputFiles files;
+    /** 进程是否已退出(含被终止)——tail 线程据此排空收尾。 */
+    private volatile boolean exitObserved;
+    /** 主动要求 tail 线程收尾(close / awaitOutputReaders)。 */
+    private volatile boolean stopTailing;
     private volatile CountDownLatch readersDone;
 
     private ChildProcess(WinNT.HANDLE job, WinBase.PROCESS_INFORMATION pi,
-            WinNT.HANDLE stdinWrite, WinNT.HANDLE stdoutRead, WinNT.HANDLE stderrRead) {
+            WinNT.HANDLE stdinWrite, WinNT.HANDLE stdoutRead, WinNT.HANDLE stderrRead,
+            OutputFiles files) {
         this.job = job;
         this.pi = pi;
         this.stdinWrite = stdinWrite;
         this.stdoutRead = stdoutRead;
         this.stderrRead = stderrRead;
+        this.files = files;
     }
 
     /** 输出回调：{@code onOutput(chunk, stderr)}。 */
@@ -72,7 +97,7 @@ public final class ChildProcess {
     }
 
     /**
-     * 以受限令牌启动子进程。
+     * 以受限令牌启动子进程:先试文件承载(非 ASCII 正确性所需),建不出来才回退管道。
      *
      * @param desktop lpDesktop（如 {@code Winsta0\\EveryAgentCodexDesktop-…}）；null =
      *                不指定（受限令牌下部分程序如 PowerShell 会 STATUS_DLL_INIT_FAILED，
@@ -83,6 +108,51 @@ public final class ChildProcess {
         if (argv == null || argv.isEmpty()) {
             throw new IllegalArgumentException("empty command");
         }
+        OutputFiles files = OutputFiles.tryCreate(cwd);
+        if (files != null) {
+            try {
+                ChildProcess child = spawnViaFiles(hToken, argv, cwd, env, desktop, files);
+                files.closeParentWriteHandles(); // 子进程已持有自己的副本,父侧不必留
+                return child;
+            } catch (RuntimeException e) {
+                files.deleteQuietly(); // 回退管道承载,不留半成品文件
+            }
+        }
+        return spawnViaPipes(hToken, argv, cwd, env, desktop);
+    }
+
+    /** 文件承载:stdin 仍用管道(交互输入语义不变),stdout/stderr 用落盘文件句柄。 */
+    private static ChildProcess spawnViaFiles(WinNT.HANDLE hToken, List<String> argv,
+            String cwd, Map<String, String> env, String desktop, OutputFiles files) {
+        WinNT.HANDLE job = createJob();
+        WinNT.HANDLE inR = null;
+        WinNT.HANDLE inW = null;
+        ChildProcess child = null;
+        try {
+            WinNT.HANDLEByReference inRR = new WinNT.HANDLEByReference();
+            WinNT.HANDLEByReference inWR = new WinNT.HANDLEByReference();
+            if (!Kernel32Ex.INSTANCE.CreatePipe(inRR, inWR, null, 0)) {
+                throw Win32Exception.of("CreatePipe(stdin)");
+            }
+            inR = inRR.getValue();
+            inW = inWR.getValue();
+            child = spawnWithStdio(hToken, argv, cwd, env, desktop, job,
+                    inR, inW, files.outWrite, files.errWrite, null, null, files);
+            return child;
+        } catch (RuntimeException e) {
+            closeQuietly(job); // KILL_ON_JOB_CLOSE:刚启动的子进程随之收束(fail-closed)
+            throw e;
+        } finally {
+            closeQuietly(inR); // 父进程不再持有子进程侧读端
+            if (child == null) {
+                closeQuietly(inW);
+            }
+        }
+    }
+
+    /** 管道承载(回退路径,历史行为):stdio 三支匿名管道。 */
+    private static ChildProcess spawnViaPipes(WinNT.HANDLE hToken, List<String> argv,
+            String cwd, Map<String, String> env, String desktop) {
         WinNT.HANDLE job = createJob();
         WinNT.HANDLE inR = null;
         WinNT.HANDLE inW = null;
@@ -113,11 +183,11 @@ public final class ChildProcess {
             }
             errR = errRR.getValue();
             errW = errWR.getValue();
-            child = spawnWithPipes(hToken, argv, cwd, env, desktop, job,
-                    inR, inW, outR, outW, errR, errW);
+            child = spawnWithStdio(hToken, argv, cwd, env, desktop, job,
+                    inR, inW, outW, errW, outR, errR, null);
             return child;
         } catch (RuntimeException e) {
-            closeQuietly(job); // KILL_ON_JOB_CLOSE：刚启动的子进程随之收束（fail-closed）
+            closeQuietly(job); // KILL_ON_JOB_CLOSE:刚启动的子进程随之收束(fail-closed)
             throw e;
         } finally {
             // 子进程侧三端（inR/outW/errW）父进程不再持有：关掉，否则 stdout 永不 EOF；
@@ -133,11 +203,17 @@ public final class ChildProcess {
         }
     }
 
-    private static ChildProcess spawnWithPipes(WinNT.HANDLE hToken, List<String> argv, String cwd,
+    /**
+     * 实际创建子进程:句柄白名单 = {@code inR/outW/errW}(三支都必须可继承),
+     * Job 原子挂接,CREATE_UNICODE_ENVIRONMENT + EXTENDED_STARTUPINFO_PRESENT + CREATE_NO_WINDOW。
+     *
+     * @param outR {@code null} = 文件承载(由 tail 线程读落盘文件);否则为管道读端
+     */
+    private static ChildProcess spawnWithStdio(WinNT.HANDLE hToken, List<String> argv, String cwd,
             Map<String, String> env, String desktop, WinNT.HANDLE job,
-            WinNT.HANDLE inR, WinNT.HANDLE inW, WinNT.HANDLE outR, WinNT.HANDLE outW,
-            WinNT.HANDLE errR, WinNT.HANDLE errW) {
-        // stdio 三句柄白名单（子进程只继承这三支管道）
+            WinNT.HANDLE inR, WinNT.HANDLE inW, WinNT.HANDLE outW, WinNT.HANDLE errW,
+            WinNT.HANDLE outR, WinNT.HANDLE errR, OutputFiles files) {
+        // stdio 三句柄白名单（子进程只继承这三支）
         for (WinNT.HANDLE h : new WinNT.HANDLE[] { inR, outW, errW }) {
             if (!Kernel32Ex.INSTANCE.SetHandleInformation(h,
                     WinBase.HANDLE_FLAG_INHERIT, WinBase.HANDLE_FLAG_INHERIT)) {
@@ -188,7 +264,7 @@ public final class ChildProcess {
                 throw Win32Exception.of("CreateProcessAsUserW");
             }
             closeQuietly(pi.hThread);
-            return new ChildProcess(job, pi, inW, outR, errR);
+            return new ChildProcess(job, pi, inW, outR, errR, files);
         } finally {
             Kernel32Ex.INSTANCE.DeleteProcThreadAttributeList(attrList);
         }
@@ -263,21 +339,34 @@ public final class ChildProcess {
             terminate();
             boolean stopped = Kernel32Ex.INSTANCE.WaitForSingleObject(
                     pi.hProcess, TERMINATION_WAIT_MS) != WAIT_TIMEOUT;
+            exitObserved = true;
             return new ExitResult(TIMED_OUT_EXIT_CODE, true, stopped);
         }
         IntByReference code = new IntByReference(1);
         if (!Kernel32Ex.INSTANCE.GetExitCodeProcess(pi.hProcess, code)) {
             throw Win32Exception.of("GetExitCodeProcess");
         }
+        exitObserved = true;
         return new ExitResult(code.getValue(), false, true);
     }
 
-    /** 起 stdout/stderr 两条读线程 → Output 帧（8KiB 循环，EOF 收尾关句柄）。 */
+    /**
+     * 起 stdout/stderr 两条输出线程 → Output 帧。
+     *
+     * <p>管道模式:ReadFile 到 EOF;文件模式:轮询追加读(tail),既不阻塞也保持输出接近实时
+     *（不等进程退出才回传）。两种模式都用同一个 latch 收口,由 {@link #awaitOutputReaders}
+     * 或 {@link #close} 结束。
+     */
     public void startOutputReaders(OutputSink sink) {
         CountDownLatch done = new CountDownLatch(2);
         readersDone = done;
-        startReader(stdoutRead, false, sink, done);
-        startReader(stderrRead, true, sink, done);
+        if (files != null) {
+            startFileTailReader(files.outPath, false, sink, done);
+            startFileTailReader(files.errPath, true, sink, done);
+        } else {
+            startReader(stdoutRead, false, sink, done);
+            startReader(stderrRead, true, sink, done);
+        }
     }
 
     private void startReader(WinNT.HANDLE handle, boolean stderr, OutputSink sink,
@@ -306,8 +395,46 @@ public final class ChildProcess {
         Thread.ofVirtual().name(stderr ? "codex-runner-stderr" : "codex-runner-stdout").start(loop);
     }
 
+    /** 文件承载模式的 tail 读取:每 {@link #TAIL_POLL_MS}ms 追加读,退出/收尾后排空即止。 */
+    private void startFileTailReader(Path path, boolean stderr, OutputSink sink,
+            CountDownLatch done) {
+        Runnable loop = () -> {
+            try (FileChannel ch = FileChannel.open(path, StandardOpenOption.READ)) {
+                ByteBuffer bb = ByteBuffer.allocate(READ_CHUNK);
+                while (true) {
+                    int emitted = 0;
+                    while (true) {
+                        bb.clear();
+                        int r = ch.read(bb);
+                        if (r <= 0) {
+                            break;
+                        }
+                        bb.flip();
+                        byte[] chunk = new byte[bb.limit()];
+                        bb.get(chunk);
+                        sink.onOutput(chunk, stderr);
+                        emitted += r;
+                    }
+                    // 进程已退出(句柄必已关闭,文件已完整)或被要求收尾,且无新增 → 收
+                    if (emitted == 0 && (exitObserved || stopTailing)) {
+                        break;
+                    }
+                    Thread.sleep(TAIL_POLL_MS);
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            } catch (IOException | RuntimeException e) {
+                // 读不到即提前收尾;退出码仍由 waitForExit 给出,不影响会话
+            } finally {
+                done.countDown();
+            }
+        };
+        Thread.ofVirtual().name(stderr ? "codex-runner-stderr" : "codex-runner-stdout").start(loop);
+    }
+
     /** 等输出读线程排空（有界，防孙进程持写端挂死）。 */
     public void awaitOutputReaders(long timeoutMs) {
+        stopTailing = true;
         CountDownLatch done = readersDone;
         if (done == null) {
             return;
@@ -319,13 +446,18 @@ public final class ChildProcess {
         }
     }
 
-    /** 收尾：关 stdio/进程句柄与 Job（KILL_ON_JOB_CLOSE 兜底杀树）。 */
+    /** 收尾：关 stdio/进程句柄与 Job（KILL_ON_JOB_CLOSE 兜底杀树），并清承载文件。 */
     public void close() {
+        stopTailing = true;
         closeStdin();
         closeQuietly(pi.hProcess);
         closeQuietly(stdoutRead);
         closeQuietly(stderrRead);
         closeQuietly(job);
+        if (files != null) {
+            awaitOutputReaders(1_000L); // 让 tail 线程先放下最后一段,再删文件
+            files.deleteQuietly();
+        }
     }
 
     private static void closeQuietly(WinNT.HANDLE h) {
@@ -333,6 +465,120 @@ public final class ChildProcess {
                 && Pointer.nativeValue(h.getPointer()) != 0
                 && !h.equals(WinBase.INVALID_HANDLE_VALUE)) {
             Kernel32Ex.INSTANCE.CloseHandle(h);
+        }
+    }
+
+    // ---- 文件承载（非 ASCII 正确性所需） ----
+
+    /**
+     * stdout/stderr 的落盘承载:文件由 runner 建在工作区 {@code .everyagent/tmp}
+     *（沙箱账户对已授权根本就有写权,不依赖系统 TEMP——受限账户下系统 TEMP 常被拒写）,
+     * 再以<b>可继承句柄</b>交给子进程;runner 侧用 {@link FileChannel} 追加读。
+     *
+     * <p>关键:文件以 {@code FILE_SHARE_READ} 打开,子进程(及其原生孙进程 rg/git)直接写原始
+     * 字节,PS 不参与转码——这就是中文不乱码的全部原因,不是"读端解码技巧"。
+     */
+    private static final class OutputFiles {
+
+        private final Path outPath;
+        private final Path errPath;
+        private WinNT.HANDLE outWrite;
+        private WinNT.HANDLE errWrite;
+
+        private OutputFiles(Path outPath, Path errPath, WinNT.HANDLE outWrite,
+                WinNT.HANDLE errWrite) {
+            this.outPath = outPath;
+            this.errPath = errPath;
+            this.outWrite = outWrite;
+            this.errWrite = errWrite;
+        }
+
+        /** 建不出来一律返回 null(由调用方回退管道承载),绝不把沙箱会话整个打挂。 */
+        static OutputFiles tryCreate(String cwd) {
+            Path dir = scratchDir(cwd);
+            if (dir == null) {
+                return null;
+            }
+            Path o = null;
+            Path e = null;
+            WinNT.HANDLE oh = null;
+            WinNT.HANDLE eh = null;
+            try {
+                o = Files.createTempFile(dir, "ea-codex-out-", ".tmp");
+                e = Files.createTempFile(dir, "ea-codex-err-", ".tmp");
+                oh = openWriteHandle(o);
+                eh = openWriteHandle(e);
+                if (oh == null || eh == null) {
+                    return null;
+                }
+                return new OutputFiles(o, e, oh, eh);
+            } catch (IOException | RuntimeException ex) {
+                closeQuietly(oh);
+                closeQuietly(eh);
+                delete(o);
+                delete(e);
+                return null;
+            }
+        }
+
+        /** 落点:优先 {@code <cwd>/.everyagent/tmp},退系统 temp;都不可用返回 null。 */
+        private static Path scratchDir(String cwd) {
+            if (cwd != null && !cwd.isBlank()) {
+                Path root = Path.of(cwd);
+                if (Files.isDirectory(root)) {
+                    try {
+                        Path d = root.resolve(".everyagent").resolve("tmp");
+                        Files.createDirectories(d);
+                        return d;
+                    } catch (IOException | RuntimeException ignored) {
+                        // 工作区不可写(异常挂载)→ 继续退系统 temp
+                    }
+                }
+            }
+            try {
+                Path t = Path.of(System.getProperty("java.io.tmpdir"));
+                Files.createDirectories(t);
+                return t;
+            } catch (IOException | RuntimeException e) {
+                return null;
+            }
+        }
+
+        /** 以可共享(读+写+删)方式打开写句柄,供子进程继承后直写原始字节。 */
+        private static WinNT.HANDLE openWriteHandle(Path p) {
+            WinNT.HANDLE h = Kernel32Ex.INSTANCE.CreateFile(p.toString(), WinNT.GENERIC_WRITE,
+                    WinNT.FILE_SHARE_READ | WinNT.FILE_SHARE_WRITE | WinNT.FILE_SHARE_DELETE,
+                    null, WinNT.CREATE_ALWAYS, WinNT.FILE_ATTRIBUTE_NORMAL, null);
+            if (h == null || h.getPointer() == null
+                    || Pointer.nativeValue(h.getPointer()) == -1) { // INVALID_HANDLE_VALUE
+                return null;
+            }
+            return h;
+        }
+
+        /** 子进程已持有副本,父侧写句柄即可关(不关也不影响读,但白占句柄)。 */
+        void closeParentWriteHandles() {
+            closeQuietly(outWrite);
+            outWrite = null;
+            closeQuietly(errWrite);
+            errWrite = null;
+        }
+
+        void deleteQuietly() {
+            closeParentWriteHandles();
+            delete(outPath);
+            delete(errPath);
+        }
+
+        private static void delete(Path p) {
+            if (p == null) {
+                return;
+            }
+            try {
+                Files.deleteIfExists(p);
+            } catch (IOException ignored) {
+                // 子进程尚持有则删不掉:留在 scratch 目录,不影响结果
+            }
         }
     }
 

@@ -101,13 +101,14 @@ Every Agent 是一套「**公网可及、本机执行**」的 AI Agent 系统:AI
 
 - **hub key(必填)**:hub 启动即强制校验 `hub.hub-key`(配置直接填原始密钥,程序启动自算 sha256,未配置拒绝启动)。所有 frontend/worker 连接必须在 hello 携带原始 `hubKey`,缺失/不符一律 `NOT_AUTHENTICATED`。
 - **worker apiKey(按 worker 各自配置)**:连上 hub 后,要访问某台 worker 的任务、文件、git 数据,必须持该 worker 的 apiKey 建立对应命名空间的连接;worker 端 RPC 按连接身份处理。
-- 前端因此有**两类连接**:一条"目录连接"(用 hubKey 连,订阅 `u.<sha256(hubKey)>.workers` 看在线 worker 目录)+ 每条 worker 一条"数据连接"(用该 worker 的 apiKey,订阅其 `u.<K>.tasks/evt`,任务与 RPC 走这条)。
+- 前端因此有**两类连接**:一条"目录连接"(用 hubKey 连,订阅 `u.<sha256(hubKey)>.workers` 看在线 worker 目录)+ 每条 worker 一条"数据连接"(用该 worker 的 apiKey,订阅其 `u.<K>.worker.<id>.tasks` 与 `u.<K>.worker.<id>.evt`,任务与 RPC 走这条)。
 
 ### 4.3 频道即鉴权边界
 
 - 频道名本身即 ACL:频道必须落在连接自己的 `u.<ownerKey>.` 前缀内(字符集 `[a-z0-9._-]`,长度 ≤160)。hub 对每个 sub/pub 强制校验,越命名空间返回 `ACL_DENIED`。
 - 由于前缀校验由 hub 在连接级完成,A 的连接物理上无法订阅 `u.B.**`(B 为另一命名空间)→ 客户端伪造归属不可能。
 - **同命名空间内互信(取舍)**:持有同一 apiKey 的任何角色可 pub/sub 该命名空间内任意频道;任务归属、越权等业务规则全部由 worker 处理(hub 不理解业务)。对单人/小团队部署可接受。
+- **互信 ≠ 混频道:任务事件与任务流频道带 worker 段(§5.2)**。同一 apiKey 下可有多台 worker(同 `u.<K>.`,不同 workerId);任务生命周期事件与运行中任务的实时增量是**某一台 worker 的数据**,不是命名空间的数据。因此二者住在 worker 段频道 `u.<K>.worker.<id>.tasks` / `u.<K>.worker.<id>.task.<taskId>.stream`:一台 worker 的事件物理上只进它自己的频道,前端从「我订阅了谁的频道」即可无歧义地知道归属。**禁止**客户端按 ownerKey 前缀猜测帧来源 worker(§14.12)。
 
 ### 4.4 连接级规则
 
@@ -125,15 +126,15 @@ Every Agent 是一套「**公网可及、本机执行**」的 AI Agent 系统:AI
 
 ```
 wss://hub:6101/ws
-→ { "type":"hello", "ver":3, "role":"frontend"|"worker", "apiKey":"sk-...", "hubKey":"hub-secret", "clientId":"fe-1",
+→ { "type":"hello", "ver":4, "role":"frontend"|"worker", "apiKey":"sk-...", "hubKey":"hub-secret", "clientId":"fe-1",
     "meta": { "hostname":"home-pc", "version":"0.1.0" } }        // hubKey 必填;meta 可选,worker 上报
-← { "type":"welcome", "ver":3, "sessionId":"s-17", "serverTs":1755859200000 }
+← { "type":"welcome", "ver":4, "sessionId":"s-17", "serverTs":1755859200000 }
 ```
 
-- `ver` 为协议版本(当前 **3**),握手协商一次;无共同版本 → `VERSION_MISMATCH` 断开。不逐帧携带版本。
+- `ver` 为协议版本(当前 **4**),握手协商一次;无共同版本 → `VERSION_MISMATCH` 断开。不逐帧携带版本。
 - 未 hello 就 pub/sub → `NOT_AUTHENTICATED` 并断开。
 - 控制帧全集:`hello` `welcome` `sub` `unsub` `pub` `msg` `error` `ping` `pong`。
-- **ping/pong(应用层心跳帧)**:`{"type":"ping","ts":…}` / `{"type":"pong","ts":…}`。前端与 worker 的应用层心跳:间隔 5s,**仅当本周期内无任何帧到达时才发 ping**;判死唯一依据 = **发出 ping 后 15s 无任何帧到达**(不是「距上帧超时」——主动退订降载后连接合法空闲,按距上帧判死会误杀;探测有应答=活,探测超时=死);hub 收到 ping 即回 pong(不路由、不记录)。协议 v3 全链端统一升级,不兼容 v2。
+- **ping/pong(应用层心跳帧)**:`{"type":"ping","ts":…}` / `{"type":"pong","ts":…}`。前端与 worker 的应用层心跳:间隔 5s,**仅当本周期内无任何帧到达时才发 ping**;判死唯一依据 = **发出 ping 后 15s 无任何帧到达**(不是「距上帧超时」——主动退订降载后连接合法空闲,按距上帧判死会误杀;探测有应答=活,探测超时=死);hub 收到 ping 即回 pong(不路由、不记录)。协议 v4 全链端统一升级,不兼容 v3(v3→v4 的唯一 wire 变更是任务事件/任务流频道加 worker 段,见 §5.2;不做双订阅兼容)。
 
 ```jsonc
 // 订阅 / 退订(hub 无缓冲,sub 不带 since)
@@ -141,13 +142,13 @@ wss://hub:6101/ws
 { "type":"unsub", "channel":"u.K.worker.w7.evt" }
 
 // 发布(ext 开放扩展;任务流实时增量由 worker 定向 pub 到 stream 频道,ext.target=前端 sessionId)
-{ "type":"pub", "mid":"uuid", "channel":"u.K.tasks",
-  "event":"task.updated", "ts":1755859200000, "payload": { "taskId":"t_k3f0", "status":"running" },
+{ "type":"pub", "mid":"uuid", "channel":"u.K.worker.w7.tasks",
+  "event":"task.updated", "ts":1755859200000, "payload": { "taskId":"t_k3f0", "workerId":"w7", "status":"running" },
   "ext": { "traceparent":"00-…-01" } }
 
 // hub → 订阅者(原样投递,附已认证 from,ext 原样转发)
-{ "type":"msg", "channel":"u.K.tasks", "event":"task.updated",
-  "ts":1755859200000, "from":{ "clientId":"worker-1", "role":"worker" },
+{ "type":"msg", "channel":"u.K.worker.w7.tasks", "event":"task.updated",
+  "ts":1755859200000, "from":{ "clientId":"w7", "role":"worker" },
   "payload": { … }, "ext": { … } }
 
 // 错误
@@ -162,11 +163,11 @@ wss://hub:6101/ws
 | `u.<K>.worker.<id>.cmd` | `rpc`(一切请求-命令的统一信封) | 命名空间内任意角色 |
 | `u.<K>.worker.<id>.evt` | `rpc.ok/rpc.err/rpc.data/rpc.progress` + 通知事件(`config.changed`、`fs.changed`、`workspaces.changed`) | 命名空间内任意角色 |
 | `u.<K>.worker.<id>.input` | **worker 级输入频道**:`task.input` / `ask.reply` / `stream.ack`(worker 每连接订阅一次,订阅数 O(worker×hub)) | 命名空间内任意角色 |
-| `u.<K>.tasks` | 任务生命周期:`task.created` / `task.updated` / `task.deleted` | 命名空间内任意角色 |
-| `u.<K>.task.<id>.stream` | **运行中任务实时增量**(worker 定向推送,`ext.target=sessionId` 只投该会话) | 命名空间内任意角色 |
-| `u.<K>.term.<termId>.stream` | **内嵌终端实时输出**(worker 定向推送：event `term.output` payload `{data: base64}`；进程退出推 `term.exited`) | 命名空间内任意角色 |
+| `u.<K>.worker.<id>.tasks` | 任务生命周期:`task.created` / `task.updated` / `task.deleted`(**worker 段必填**:一台 worker 的任务事件只进自己的频道,payload 另带 `workerId`) | 命名空间内任意角色 |
+| `u.<K>.worker.<id>.task.<taskId>.stream` | **运行中任务实时增量**(worker 定向推送,`ext.target=sessionId` 只投该会话;worker 段用于区分同 apiKey 下的不同 worker) | 命名空间内任意角色 |
+| `u.<K>.term.<termId>.stream` | **内嵌终端实时输出**(worker 定向推送：event `term.output` payload `{data: base64}`；进程退出推 `term.exited`)。**不加 worker 段**:`termId` 由前端生成且 `term.open` RPC 已按 worker 定向,一台 worker 的 PTY 只对它自己可见,不构成串台 | 命名空间内任意角色 |
 
-> **stream 订阅通知**:前端 sub/unsub `u.<K>.task.<id>.stream` 时,hub 向该命名空间的在线 worker 连接定向发 `subscriber.join/subscriber.leave`(`payload={sessionId,taskId}`)——这是无状态 fire-and-forget 通知(hub 不存订阅簿),worker 据此按 (sessionId,taskId) 建/销 DataPusher(§7.13)。
+> **stream 订阅通知**:前端 sub/unsub `u.<K>.worker.<id>.task.<taskId>.stream` 时,hub 发 `subscriber.join/subscriber.leave`(`payload={sessionId, taskId}`)——这是无状态 fire-and-forget 通知(hub 不存订阅簿),worker 据此按 (sessionId,taskId) 建/销 DataPusher(§7.13)。投递目标:**频道名带 worker 段时按 `ConnectionRegistry.findWorker(ownerKey, workerId)` 只投那一台**(worker 的 clientId 即其 workerId,§4.4);频道名无 worker 段时退化为投给该命名空间全部在线 worker。hub 只做「按频道名寻址连接」这一路由,不解释任务语义(§6.1 零状态红线不变)。
 
 hub 对频道名不解释业务语义:它只做"前缀必须匹配本连接命名空间 + 字符集/长度合法性"这一件事。业务规则(如任务归属)全部住在 worker。
 
@@ -181,7 +182,7 @@ hub 对频道名不解释业务语义:它只做"前缀必须匹配本连接命�
 | evt | `rpc.data` | — | `reqId, batch, hasMore`(流式应答分批) |
 | evt | `rpc.progress` | — | `reqId, message, pct?` |
 | evt | `config.changed` / `fs.changed` / `workspaces.changed` | — | `{keys}` / `{workspace,path,kind}` / 注册表快照 |
-| tasks | `task.created` / `task.updated` / `task.deleted` | — | 任务摘要(含 `pendingInputs` 待消费输入快照,运行时态不落盘);deleted:`{taskId}` |
+| `worker.<id>.tasks` | `task.created` / `task.updated` / `task.deleted` | — | 任务摘要(**必带 `workerId`**,与 `tasks.list` 的 TaskSummary 同形;含 `pendingInputs` 待消费输入快照,运行时态不落盘);deleted:`{taskId, workerId}` |
 | task.poll / stream | `user.message` | ✓ | 用户输入入日志:`{content, data:{rawContent?}}`(统一事件模型,content=AI 可见明文;rawContent=原始输入含 opaque token 串,仅用于前端回放还原胶囊,在 `data` 内、非顶层) |
 | task.poll / stream | `delta` / `thinking` | ✗ 瞬态 | 逐 token / 推理增量(主/子同名,子带 agentId) |
 | task.poll / stream | `message` | ✓ | **每轮权威完成记录**:`{thinking, text, toolCalls:[{id,name,arguments}], agentId?}` |
@@ -270,7 +271,7 @@ hub 只解析信封的 `type` / `channel`(及 hello 握手字段);`event` / `seq
 ### 6.2 内部组件
 
 - **SessionRegistry** — sessionId → 连接、角色、ownerKey、订阅集。
-- **ChannelRegistry** — channel → 订阅者集合;pub 到来即遍历投递(带 `ext.target` 时只定向投给该 sessionId);前端 sub/unsub stream 频道时向该命名空间在线 worker 发 join/leave 通知。
+- **ChannelRegistry** — channel → 订阅者集合;pub 到来即遍历投递(带 `ext.target` 时只定向投给该 sessionId);前端 sub/unsub stream 频道时发 join/leave 通知——**频道名带 worker 段则按 `findWorker(ownerKey, workerId)` 只投那一台**,否则投该命名空间全部在线 worker(仍是无状态 fire-and-forget,不存订阅簿,§5.2)。
 - **PresenceService** — worker 会话建立/断开时向 `u.<K>.workers` 发 worker.online/offline;订阅时补发全量快照。
 - **慢消费者保护** — 每连接出口队列上限 1000 条,溢出断开;前端自动重连 + 重新拉取,不丢数据。
 - **心跳** — WS protocol-level ping 每 15s,45s 无 pong 判死;同时响应应用层 ping 帧——收到即回 pong,不路由、不记录(§5.1)。
@@ -566,10 +567,11 @@ ask 管道承载第二类阻塞请求:**危险操作授权**。`PermissionGate` 
 - `worker.sandbox.type`: `auto`(默认)| `wsl-ubuntu` | `windows-mic` | `none`。旧值 `wsl-direct` → 归一为 `wsl-ubuntu`(静默兼容);旧值 `wsl-bwrap`/`bwrap`/`wsl` → 归一为 `auto` 并 WARN。WSL 专属配置(distro/tarball 等)由插件通过 `plugin.json contributes.config` 自管。
 - **Windows Medium IL 契约**(对 windows-mic 后端):沙箱进程运行在 Medium IL(Restricted Token 去特权但不降级),天然可写工作区与已授权目录,不对文件系统做任何标注或 ACL 修改——零副作用、零残留。越界写拦截由 PermissionGate 责任链承担。
 - **网络策略**:两级开关,默认放行——① 全局 `worker.sandbox.allow-network=false`(经 `SandboxConfig.networkDenied` 交给后端:wsl-ubuntu 真断网、codex 选 Offline 账户;mic/direct 只剥代理 env 拦不住直连);② 任务级 `/禁用网络`(**只有 wsl-ubuntu 后端做得到**,故整个能力归 `sandbox-wsl-ubuntu` 插件自带:插件自己注册 slash 命令提供者 + token 提交解析器,状态写任务 `metadata["networkBlocked"]`(核心不感知 key),随 meta.json 持久化、再运行保持;`/` 菜单条目按当前生效后端 `sandbox().id()` 决定是否出现,其他后端不提供该命令)。落地由沙箱插件自己的 CommandExecutor 负责:wsl-ubuntu = 发行版内 `unshare -n` 新建无 eth0 的 netns(DNS/回环全断)。worker 核心不持有任何任务级禁网状态,通用 `CommandExecutor`/`OsSandbox` 也不再判定网络。
-- **命令 stdin 契约**:AI 命令的 stdin 一律接 null 设备(`/dev/null`/`NUL`)。副作用必须被处理:rg 一类工具在「未给搜索路径 且 stdin 非终端」时会转去**过滤 stdin**——喂 null 设备即恒得空结果 + exit 1,与「代码里不存在该符号」完全同形。故 windows-mic 后端在 PATH 注入处同时前置一个 `rg` 包装函数(`MicRgShim`),按 rg 自身语法判定「没给路径」时补 `.`;`--files`/`--type-list` 等不读 stdin 的模式不补(补了会改变输出前缀形态)。
+- **命令 stdin 契约**:AI 命令的 stdin 一律接 null 设备(`/dev/null`/`NUL`)。副作用必须被处理:rg 一类工具在「未给搜索路径 且 stdin 非终端」时会转去**过滤 stdin**——喂 null 设备即恒得空结果 + exit 1,与「代码里不存在该符号」完全同形。故**两个 Windows 沙箱后端**(windows-mic 与 sandbox-windows-codex)都在命令前
+   置同一个 rg 包装(唯一实现住 plugin-api `shell/RgShim`,不在各插件里各写一份),按 rg 自身语法判定「没给路径」时补 `.`;`--files`/`--type-list` 等不读 stdin 的模式不补(补了会改变输出前缀形态)。
 - **环境侧信道闸门(§7.17 凭据纪律的环境维度)**:沙箱隔离了文件系统与网络,**默认还会把宿主进程环境整块继承**给子进程——宿主 shell 里散落的 API key 因此对沙箱内任意命令(`Get-ChildItem Env:`/`env`/`cat /proc/self/environ`)可见,并随工具输出落进事件日志与模型上下文。故**一切子进程环境构造点必须先过 `SecretPatterns.scrubEnv`/`scrubInPlace`**,共 7 处:`CodexCommandExecutor.childEnv`(codex 命令 env)、`RunnerClient.spawnWithLogon` + `RunnerClient.runnerEnvironment`(runner env block)、`WindowsSandbox.buildEnvBlock`(mic env block)、`TerminalPtyFactory.open`(内嵌终端 PTY)、`OsSandbox.runDirectCommand` 与 `OsSandbox.spawnToFileRedirected`(同一 `scrubInPlace` 口径,`ProcessBuilder.environment()` 活视图只能就地删)。判定两条:①**值形态指纹**(不看变量名——真事故里泄露的 key 挂在名叫 `codex` 的变量上)②**名字属凭据词族**(含裸 `key`,覆盖 `HUB_KEY`/`DEPLOY_KEY` 这类无指纹随机值)且值非短占位;`SSH_AUTH_SOCK`/`AUTHLOGONSERVER`/`PATH`/`SYSTEMROOT` 等运行时关键变量走**豁免表**(误删会直接打断 git-over-ssh 与进程启动)。审计**只打被删变量名、绝不打值**;规则源单一住在 `every-agent-plugin-api/util/SecretPatterns`(三层与插件共用,不新增跨层依赖)。
 
-- **输出承载契约(Windows PowerShell,非 ASCII 正确性的唯一保证)**:`powershell` 工具的子进程 **stdout/stderr 一律用文件承载**(`OsSandbox.spawnToFileRedirected`),不得用管道。原因:PS 5.1 的 stdout 指向**管道**时,`[Console]::OutputEncoding` 取系统 OEM 码页(中文 Windows=936/GBK)而非控制台码页——`chcp 65001` 改的是控制台,不同步到它;沙箱账户受 WDAC/AppLocker 进入 CLM(Constrained Language Mode),属性 setter 被策略拒,**运行时也改不动**。于是原生子进程(rg/git/npm)写出的 UTF-8 字节被 PS 先按 GBK 解码(非法序列当场成 U+FFFD,信息不可逆丢失)再按 GBK 编码送回管道,读端任何"智能解码"都救不回来(现场:中文仓库里 `rg 架构 docs` 返回乱码文件名,把乱码名回灌 rg 直接 os error 2,任务卡死)。stdout 指向**文件**时,原生子进程直接继承该文件句柄写原始字节,PS 完全不参与转码;实测同一文件里 cmdlet 中文与原生 UTF-8 **同为合法 UTF-8**,stderr 也不再被包成 CLIXML。承载文件由 worker JVM 创建并把可继承句柄交给子进程,故**不要求**沙箱账户对临时目录有写权限(受限账户下系统 TEMP 常不可写,故 `createScratchFile` 必须带工作区 `.everyagent/tmp` 兜底)。读端 `ExecResults.decodeConsoleOutput` 的 UTF-8→ANSI 智能回退自此**降级为兜底**,不再是中文正确性的依赖。
+- **输出承载契约(Windows PowerShell,非 ASCII 正确性的唯一保证)**:`powershell` 工具的子进程 **stdout/stderr 一律用文件承载**(`OsSandbox.spawnToFileRedirected`;codex 后端由 runner 的 `ChildProcess` 同样以文件句柄承载 stdout/stderr——实测受限令牌 + 无控制台时,PS 自身输出与 stderr、退出码都已正确,但 PS 内部再调原生命令仍按 GBK 解码,故 rg 必须由 `RgShim` 把输出口改文件承载;管道仅作回退),不得用管道。原因:PS 5.1 的 stdout 指向**管道**时,`[Console]::OutputEncoding` 取系统 OEM 码页(中文 Windows=936/GBK)而非控制台码页——`chcp 65001` 改的是控制台,不同步到它;沙箱账户受 WDAC/AppLocker 进入 CLM(Constrained Language Mode),属性 setter 被策略拒,**运行时也改不动**。于是原生子进程(rg/git/npm)写出的 UTF-8 字节被 PS 先按 GBK 解码(非法序列当场成 U+FFFD,信息不可逆丢失)再按 GBK 编码送回管道,读端任何"智能解码"都救不回来(现场:中文仓库里 `rg 架构 docs` 返回乱码文件名,把乱码名回灌 rg 直接 os error 2,任务卡死)。stdout 指向**文件**时,原生子进程直接继承该文件句柄写原始字节,PS 完全不参与转码;实测同一文件里 cmdlet 中文与原生 UTF-8 **同为合法 UTF-8**,stderr 也不再被包成 CLIXML。承载文件由 worker JVM 创建并把可继承句柄交给子进程,故**不要求**沙箱账户对临时目录有写权限(受限账户下系统 TEMP 常不可写,故 `createScratchFile` 必须带工作区 `.everyagent/tmp` 兜底)。读端 `ExecResults.decodeConsoleOutput` 的 UTF-8→ANSI 智能回退自此**降级为兜底**,不再是中文正确性的依赖。
 - **退出码与错误文本契约**:PS 脚本尾部固定追加 `ExecResults.POWERSHELL_EXIT_TAIL`(`exit $LASTEXITCODE`),把**最后一个原生子进程**的退出码转成 `powershell.exe` 的进程码——否则工具尾注 `[exit code: N]` 恒为 0,模型无法区分 rg「无匹配=1」与「用法/正则错误=2」。stderr 里的 CLIXML 流记录**必须还原成错误文本**(`ExecResults.decodeClixml` 抽 `<S S="Error">` 载荷,含截断残块),**严禁整段删除**——删除会把「正则写错/路径不存在/命令不存在」静默吞成空结果,与「没有匹配」同形,是最恶劣的判断污染。执行形态统一为「UTF-8 **BOM** 临时 `.ps1` + `-File`」,不再有「带引号走 `-File`、不带引号走 `-Command`」的分叉(`-Command` 经 ProcessBuilder 的 MSVCRT 引号转义会吞掉 PowerShell 嵌套引号,PS-002)。
 
 ### 7.11 提权拦截
@@ -602,7 +604,9 @@ wsl-bwrap 后端的 seccomp 内核级提权拦截已随 bwrap 后端删除而移
 
 ### 7.13 任务流传输(混合模型:定向推送 + 拉取)
 
-**实时增量 = worker 定向推送**(DataPusher):前端 sub `u.K.task.<id>.stream` → hub 向 worker 发 `subscriber.join{sessionId,taskId}` → DataPusherManager 校验归属后按 (sessionId,taskId) 建推送器;推送器虚拟线程把运行中任务内存 EventLog 增量(含瞬态 delta/thinking)推到 stream 频道,`ext={target:sessionId, operate, initial}`。
+**实时增量 = worker 定向推送**(DataPusher):前端 sub `u.K.worker.<id>.task.<taskId>.stream` → hub 按频道名的 worker 段向**那一台** worker 发 `subscriber.join{sessionId,taskId}`(无 worker 段时退化为投该命名空间全部在线 worker)→ DataPusherManager 校验归属后按 (sessionId,taskId) 建推送器;推送器虚拟线程把运行中任务内存 EventLog 增量(含瞬态 delta/thinking)推到 stream 频道,`ext={target:sessionId, operate, initial}`。
+
+- **归属自检(硬约束)**:worker 收到 join/leave 时,先比对频道名里的 worker 段与自身 `worker.worker-id`;**不相等一律丢弃,不建也不销推送器**。这条自检与 hub 的定向投递构成双保险:同 apiKey 两台 worker 下,非寻址那台绝不会凭空建起 DataPusher——否则它的推送器收不到前端 ack(ack 只发到寻址那台的 input 频道),credit 窗口(128)永不释放,`beginTurn` 永久阻塞,白占出站队列与虚拟线程。
 
 - **窗口式背压(credit + ack)**:DataPusher 维护 `nextPushIndex`(每推一帧 +1)与 `ackedIndex`;`nextPushIndex - ackedIndex >= CREDIT_WINDOW(128)` 时**持续真阻塞**等待前端 ack——直到 ack / 连接断开 / 推送器销毁,无超时降级(全链端统一升级,无老前端兼容负担);每帧 ext 携带 `credit=true/creditIndex`;前端消费完一帧后经 worker 级 input 频道回 `stream.ack{taskId,creditIndex}`,worker 只路由释放窗口、不建推送器。多前端窗口独立,慢端不拖累快端。
 - **先订阅后首拉**:前端 `open()` 先 sub stream 再拉初始(rounds + roundTail),推送首扫与首拉重叠的部分前端按 seq 去重吸收。
@@ -1092,9 +1096,14 @@ public interface AgentFactory {
 - **TaskPacketView** — 数据包模式:打开任务 = 先 sub stream 频道(worker 据 join 建推送器收到实时增量)→ `task.rounds` + `task.roundTail` + `task.agents`(子 agent 台账,在 task.rounds 之后调用)拉初始 → 之后仅靠定向推送收流式(帧与拉取帧同一路 seq 去重/排序聚合);帧消费后回 `stream.ack` 释放背压窗口(§7.13);上滚 `loadBefore(beforeSeq)` 拉更早轮次;`resync()` = 重订阅 + 重拉。`task.agents` 应答灌入 eventFolder 新状态 `agentMeta`(键:主 agent=''、子 agent=子 id;流事件 usage/agent.started/agent.done 实时覆盖合并);AgentListPanel 胶囊列表数据源从「items 派生」扩展为 **items ∪ agentMeta**,悬停胶囊显示信息卡(标题/状态/创建时间/模型/累计 tokens/上下文用量),子 agent 胶囊底部边框内一条 2px 用量线(比例 = 最近一轮 prompt/上下文窗口,父级 overflow:hidden 裁剪不越圆角)。
 - **channels / ownerKey** — 频道名构造与 sha256 身份,与 Java 契约逐字对齐。
 
-### 8.2 多 worker 聚合
+### 8.2 多 worker 聚合(单连模式)
 
-一个 hub 下可有多台 worker。前端以 1 条目录连接(hubKey)看全部在线 worker(presence),对每台已启用的 worker 用其 apiKey 建数据连接;**worker 离线时连接保持建立**(WS 本身健康,仅 presence 变化;显示态 = `presence && wsOpen` 双条件,不靠断连表达离线),RPC 向离线 worker 排队直到超时拒绝(holdTimer 兜底),仅致命错误(鉴权失败等,凭证不修正重试永远失败)才替换连接实例,任务列表/工作区/git 按 worker 合并展示、按归属定向操作;任务归属 worker 由前端按帧来源动态标注(TaskSummary 后端不含 workerId)。凭证 AES-GCM 加密存 localStorage,presence 指纹(ownerFingerprint 前 16 hex)支持 worker 改名后自动复用凭证。
+一个 hub 下可有多台 worker。前端以 1 条目录连接(hubKey)看全部在线 worker(presence),对**当前启用的那台** worker 用其 apiKey 建数据连接;**同一时刻只保留一条 worker 数据连接**——在设置页启用另一台时,先关闭并把其他 worker 的本地启用开关置 false(`disconnectOtherWorkers`),再连目标 worker。**worker 离线时连接保持建立**(WS 本身健康,仅 presence 变化;显示态 = `presence && wsOpen` 双条件,不靠断连表达离线),RPC 向离线 worker 排队直到超时拒绝(holdTimer 兜底),仅致命错误(鉴权失败等,凭证不修正重试永远失败)才替换连接实例。
+
+- **任务归属 = 频道携带,不由前端推断**:任务事件住在 `u.<K>.worker.<id>.tasks`、任务流住在 `u.<K>.worker.<id>.task.<taskId>.stream`(§5.2),TaskSummary 与 tasks 事件 payload 恒带 `workerId`。前端「订阅了谁的频道 = 谁的数据」,无歧义;`workerIdOfFrame()` 只认频道的 worker 段与 `payload.workerId`,**禁止**按 ownerKey 前缀猜测首个连接(同 apiKey 两台 worker 时会误判,把禁用那台的任务混进启用这台)。工作区/git 等非任务域仍按 worker 合并展示、按归属定向操作。
+- **切换 worker = worker 级客户端状态整体失效**:worker 数据连接集合变化时,`hubSession` 发一次 `onWorkerConnectionsChanged` 通知(仅通知,不含业务),各持有方各自负责清理自己的 per-worker 缓存——任务列表镜像与分页游标(`taskStore`)、任务流句柄(`taskStreamManager`)、模型配置缓存(`modelConfigs.byWorker`)、插件加载态(`pluginLoader`,其 RPC 闭包必须**调用期**解析 workerId 而非创建期捕获)、挂起中的 ask(`askStore`)、工作区镜像(`workspaceRegistry`);同时**关闭全部 `task:*` 标签页**(工作区身份对任务标签是硬依赖,残留标签必然指向已断开的 worker;项目/文件/终端/设置等标签保留)。
+- **失败必须可见**:任务详情取不到所属 worker 的连接时,写 `roundsError` 并通知渲染,呈现「未连接 + 重试」错误条;不得 `return` 于无声(此前切 worker 后整页空白、既不报错也不自愈,只能刷新页面,正是因为该路径静默 + 归属快照永不纠正)。
+- 凭证 AES-GCM 加密存 localStorage,presence 指纹(ownerFingerprint 前 16 hex)支持 worker 改名后自动复用凭证。
 
 ### 8.3 轮次浏览与懒加载
 
@@ -1143,9 +1152,9 @@ Electron 将 web + hub + worker **一体打包**为 Windows x64 便携(portable)
 ```
 前端A                     hub                         worker(家中PC)
  │─cmd: rpc{task.run}───→│──转发───────────────────→│ 创建任务,起虚拟线程
- │←─u.K.tasks: task.created{taskId}───────────────────│
- │─sub u.K.task.<id>.stream──────────────────────────→│(hub 定向通知 worker:join)
- │                                                      │ DataPusherManager 建定向推送器
+ │←─u.K.worker.<id>.tasks: task.created{taskId,workerId}│
+ │─sub u.K.worker.<id>.task.<taskId>.stream─────────→│(hub 按 worker 段定向通知那一台:join)
+ │                                                      │ DataPusherManager 自检归属后建定向推送器
  │─cmd: rpc{task.rounds + task.roundTail + task.agents}→│ 初始渲染(轮次 + 尾段 + 子 agent 台账)
  │←─evt: rpc.data / rpc.ok────────────────────────────│
  │←─msg: stream 频道定向推送(delta/thinking/message)──│ 实时增量(ext.target=本会话)
@@ -1163,7 +1172,7 @@ Electron 将 web + hub + worker **一体打包**为 Windows x64 便携(portable)
  │─cmd: rpc{tasks.list}──│──转发──→│ 按命名空间返回全部任务
  │─cmd: rpc{task.poll, mode:'rounds', count:1}──→│ 拉尾段(磁盘∪内存归并)
  │←─evt: rpc.data/ok────────────────│
- │─sub u.K.task.<id>.stream──→│     (重订阅 → hub 再发 join → 新推送器)
+ │─sub u.K.worker.<id>.task.<taskId>.stream──→│  (重订阅 → hub 定向再发 join → 新推送器)
  │←─msg: stream 帧(delta/message)──│ 实时增量续播(seq 去重合并,无缝续播)
 ```
 
@@ -1173,7 +1182,7 @@ Electron 将 web + hub + worker **一体打包**为 Windows x64 便携(portable)
 前端                        hub                         worker
  │─cmd: rpc{task.run, taskId:t_x, input:"追问…"}───→│ 校验后从磁盘认领
  │←─evt: rpc.ok{taskId}───────────────────────────────│ ConversationLoader 重建历史
- │←─u.K.tasks: task.updated{status:running}───────────│ log.seed(seqLastOf) 接续序号
+ │←─u.K.worker.<id>.tasks: task.updated{status:running}│ log.seed(seqLastOf) 接续序号
  │←─task.poll: user.message → message → done──────────│ 一次普通运行,目录/createdAt 不变
 ```
 

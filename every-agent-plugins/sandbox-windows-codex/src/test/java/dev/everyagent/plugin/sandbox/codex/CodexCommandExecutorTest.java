@@ -114,7 +114,8 @@ class CodexCommandExecutorTest {
     void commandArgvIsPowerShellNoProfile() {
         CodexCommandExecutor exec = executor(new Capture(new FakeSession()), new FakeSession(), 30_000);
         assertEquals(List.of("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
-                        "-Command", ExecResults.POWERSHELL_PREFIX + "echo hi"),
+                        "-Command", ExecResults.POWERSHELL_PREFIX + "echo hi"
+                                + ExecResults.POWERSHELL_EXIT_TAIL),
                 exec.commandArgv("echo hi"));
     }
 
@@ -235,7 +236,8 @@ class CodexCommandExecutorTest {
         assertFalse(session.terminated, "正常退出不发 terminate");
 
         assertEquals(List.of("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
-                        "-Command", ExecResults.POWERSHELL_PREFIX + "echo hi"), capture.spec.command());
+                        "-Command", ExecResults.POWERSHELL_PREFIX + "echo hi"
+                                + ExecResults.POWERSHELL_EXIT_TAIL), capture.spec.command());
         assertEquals(tempDir.resolve("ws").toString(), capture.spec.cwd(), "cwd=工作区根");
         assertEquals(30_000L, capture.spec.timeoutMs(), "timeout=SandboxConfig/manager 值");
         assertFalse(capture.spec.stdinOpen(), "worker 契约 stdin 关闭");
