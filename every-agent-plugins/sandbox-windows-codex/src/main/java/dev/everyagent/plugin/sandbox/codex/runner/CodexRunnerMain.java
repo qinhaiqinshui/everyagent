@@ -35,23 +35,58 @@ public final class CodexRunnerMain {
     private static final String OPT_PIPE_OUT = "--pipe-out=";
     /** 类加载时刻（≈main 入口）；stage 计时基准。 */
     private static final long T0 = System.nanoTime();
+    /**
+     * 进程创建时刻（epoch ms，OS 口径）；用于测 JVM boot（进程创建 → T0）。
+     * startInstant 精度为 ms 且可能为空，取不到则 0。
+     */
+    private static final long PROCESS_START_MILLIS = ProcessHandle.current().info()
+            .startInstant().map(java.time.Instant::toEpochMilli).orElse(0L);
+    private static final long T0_WALL_MILLIS = System.currentTimeMillis();
+
+    /** tee 就绪前的打点缓冲（此时 System.err 无控制台，直写会进黑洞）。 */
+    private static final java.util.List<String> PENDING = new java.util.ArrayList<>();
+    private static volatile boolean teeReady;
 
     private CodexRunnerMain() {
     }
 
     /** 阶段耗时打点（ms，进 runner-stderr.log；定位启动链路瓶颈用）。 */
     private static void stage(String msg) {
-        System.err.println("[codex-runner] +" + ((System.nanoTime() - T0) / 1_000_000L)
-                + "ms " + msg);
+        String line = "[codex-runner] +" + ((System.nanoTime() - T0) / 1_000_000L) + "ms " + msg;
+        if (teeReady) {
+            System.err.println(line);
+        } else {
+            synchronized (PENDING) {
+                PENDING.add(line);
+            }
+        }
+    }
+
+    /** tee 装好后补打 boot 行 + 冲刷缓冲。 */
+    private static void flushPending() {
+        teeReady = true;
+        if (PROCESS_START_MILLIS > 0) {
+            long boot = T0_WALL_MILLIS - PROCESS_START_MILLIS;
+            System.err.println("[codex-runner] +" + boot + "ms jvm boot (process create"
+                    + " → class init)");
+        }
+        synchronized (PENDING) {
+            for (String line : PENDING) {
+                System.err.println(line);
+            }
+            PENDING.clear();
+        }
     }
 
     public static void main(String[] args) {
+        stage("main entered");
         // Windows 守卫：防误用（broker 只会在 Windows 上 spawn 本类）
         if (!Platform.isWindows()) {
             System.err.println("[codex-runner] this runner only supports Windows (os.name="
                     + System.getProperty("os.name") + ")");
             System.exit(2);
         }
+        stage("Platform.isWindows ok (JNA core loaded)");
         // stderr tee：沙箱进程无控制台，JVM/未捕获异常输出默认进黑洞（对齐排障需要，
         // broker 侧 CREATE_NO_WINDOW）。重定向 System.err 到 %TEMP%\runner-stderr.log
         //（broker 已把 TEMP 指向 <codexHome>/.sandbox/tmp），保留原 stderr 双写。
@@ -66,6 +101,8 @@ public final class CodexRunnerMain {
             }
         }
         installStderrTee();
+        flushPending();
+        stage("stderr tee installed");
         Thread.setDefaultUncaughtExceptionHandler((t, e) -> {
             System.err.println("[codex-runner] uncaught in " + t.getName() + ": " + e);
             e.printStackTrace(System.err);
@@ -119,6 +156,7 @@ public final class CodexRunnerMain {
     /** 0 = runner 正常走完；非 0 = 已尽力发 error 帧（对齐 codex 语义）。 */
     static int run(String pipeInName, String pipeOutName) {
         WinNT.HANDLE in = openPipe(pipeInName, WinNT.FILE_GENERIC_READ);
+        stage("pipe-in connected (JNA Kernel32 first call done)");
         WinNT.HANDLE out = openPipe(pipeOutName, WinNT.FILE_GENERIC_WRITE);
         stage("pipes opened");
         Object writeLock = new Object(); // output 读线程与主线程共用 -out 管写端
@@ -253,6 +291,7 @@ public final class CodexRunnerMain {
     private static ChildProcess spawnChild(SpawnRequest req, WinNT.HANDLE out, Object writeLock) {
         try {
             WinNT.HANDLE token = SandboxTokenFactory.createRestrictedTokenWithCaps(req.capSids());
+            stage("restricted token derived");
             try {
                 return ChildProcess.spawn(token, req.command(), req.cwd(), req.env(),
                         desktopFor(req.privateDesktopName()));

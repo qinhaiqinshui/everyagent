@@ -92,19 +92,32 @@ public final class RunnerClient {
      * 任何失败：TerminateProcess(hProcess,1) 收尸 + 关闭已建管道（fail-closed）。
      */
     public static Channel start(RunnerConfig cfg) throws IOException {
+        long t0 = System.nanoTime();
         String nonce = RunnerPaths.newNonce();
         String inName = RunnerPaths.inPipeName(nonce);
         String outName = RunnerPaths.outPipeName(nonce);
         String sandboxSid = SandboxAccounts.sidString(cfg.username());
+        long tSid = System.nanoTime();
         RunnerPipe in = null;
         RunnerPipe out = null;
         try {
             in = RunnerPipe.create(inName, RunnerPaths.PIPE_ACCESS_OUTBOUND, sandboxSid);
             out = RunnerPipe.create(outName, RunnerPaths.PIPE_ACCESS_INBOUND, sandboxSid);
+            long tPipes = System.nanoTime();
             WinBase.PROCESS_INFORMATION pi = spawnWithLogon(cfg, inName, outName);
+            long tSpawn = System.nanoTime();
             try {
                 in.connect(pi.dwProcessId.intValue(), PIPE_CONNECT_TIMEOUT_MS);
+                long tIn = System.nanoTime();
                 out.connect(pi.dwProcessId.intValue(), PIPE_CONNECT_TIMEOUT_MS);
+                LOG.log(System.Logger.Level.INFO,
+                        "[runner] pid={0} timing sidResolve={1}ms pipesCreate={2}ms"
+                                + " spawnWithLogon={3}ms connectIn={4}ms connectOut={5}ms",
+                        new Object[] { pi.dwProcessId.intValue(),
+                                (tSid - t0) / 1_000_000L, (tPipes - tSid) / 1_000_000L,
+                                (tSpawn - tPipes) / 1_000_000L,
+                                (tIn - tSpawn) / 1_000_000L,
+                                (System.nanoTime() - tIn) / 1_000_000L });
                 return new Channel(in, out, pi);
             } catch (IOException | RuntimeException e) {
                 Kernel32Ex.INSTANCE.TerminateProcess(pi.hProcess, 1); // 收尸
