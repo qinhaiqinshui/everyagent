@@ -201,13 +201,88 @@ public final class RunnerMaterializer {
         return entries;
     }
 
+    /**
+     * JNA 原生库预提取到 {@code binDir}，供 runner JVM 以 {@code -Djna.boot.library.path}
+     * 直指该目录（见 {@link RunnerClient#bootLibraryPathProperty}）。
+     *
+     * <p><b>动机</b>：JNA 默认在<b>每个进程</b>首次触碰 native 时，把 jnidispatch.dll 从
+     * jar 解压到自身 {@code java.io.tmpdir} 再 LoadLibrary，并在进程退出时删除。runner 的
+     * TEMP 是沙箱账户私有的 {@code .sandbox/tmp}——于是每条命令都产生一次「用户可写目录里
+     * 出现一个陌生新 DLL」，既是固定启动开销，也是 EDR/AMSI 强查特征（实测 runner 启动
+     * 卡 8.2s，落在 tee 之后、首次 JNA native 调用附近，见 CodexRunnerMain stage 打点）。
+     * 预提取到 ACL 锁定的 {@code .sandbox-bin}（组 R+X、沙箱账户不可写）后解压路径不再
+     * 发生。定位不到 jna 核心 jar 或 entry 时返回 null，调用方按原行为走。
+     */
+    public static Path ensureJnidispatch(List<Path> sources, Path binDir, String groupSid)
+            throws IOException {
+        Path jnaJar = jnaCoreJar(sources);
+        if (jnaJar == null) {
+            return null;
+        }
+        String entryName = "com/sun/jna/" + nativeResourceDir() + "/jnidispatch.dll";
+        Path target = binDir.resolve("jnidispatch.dll");
+        try (java.util.zip.ZipFile zip = new java.util.zip.ZipFile(jnaJar.toFile())) {
+            java.util.zip.ZipEntry entry = zip.getEntry(entryName);
+            if (entry == null) {
+                return null;
+            }
+            if (Files.isRegularFile(target) && entry.getSize() > 0
+                    && Files.size(target) == entry.getSize()) {
+                return target; // 已提取且大小一致
+            }
+            Path tmp = binDir.resolve("jnidispatch.dll.tmp");
+            try (InputStream in = zip.getInputStream(entry)) {
+                Files.copy(in, tmp, StandardCopyOption.REPLACE_EXISTING);
+            }
+            try {
+                Files.move(tmp, target, StandardCopyOption.ATOMIC_MOVE,
+                        StandardCopyOption.REPLACE_EXISTING);
+            } catch (java.nio.file.AtomicMoveNotSupportedException e) {
+                Files.move(tmp, target, StandardCopyOption.REPLACE_EXISTING);
+            }
+            grantGroupReadExecute(target, groupSid);
+            return target;
+        }
+    }
+
+    /** jna 核心 jar（排除 jna-platform-*；由 classpath 条目里取第一个匹配的）。 */
+    static Path jnaCoreJar(List<Path> sources) {
+        for (Path p : sources) {
+            String name = p.getFileName().toString();
+            if (name.startsWith("jna-") && !name.startsWith("jna-platform-")
+                    && name.endsWith(".jar") && Files.isRegularFile(p)) {
+                return p;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * JNA jar 内原生库资源目录名——恒取 win32 变体（按 runner 宿主 os.arch 判定）。
+     * runner 只在 Windows 被拉起，故此处不按 {@code os.name} 分支；非 Windows 开发机上
+     * jar 内该 win32 目录缺少对应平台名时提取自然跳过（返回 null）。
+     */
+    static String nativeResourceDir() {
+        String arch = System.getProperty("os.arch", "").toLowerCase();
+        if (arch.contains("aarch64") || arch.equals("arm64")) {
+            return "win32-aarch64";
+        }
+        return arch.contains("64") ? "win32-x86-64" : "win32-i386";
+    }
+
     /** 便捷入口：物化并返回 -cp 字符串（bin = {@link SandboxDirs#sandboxBinDir}）。 */
     public static String ensureRunnerClasspath(Path codexHome, String groupSid)
             throws IOException {
         List<Path> sources = materializationSources(System.getProperty("java.class.path"),
                 System.getProperty("path.separator"));
-        return classpathString(materialize(sources, SandboxDirs.sandboxBinDir(codexHome),
-                groupSid));
+        Path binDir = SandboxDirs.sandboxBinDir(codexHome);
+        String cp = classpathString(materialize(sources, binDir, groupSid));
+        Path jnidispatch = ensureJnidispatch(sources, binDir, groupSid);
+        if (jnidispatch != null) {
+            System.getLogger(RunnerMaterializer.class.getName()).log(System.Logger.Level.INFO,
+                    "[runner] jnidispatch pre-extracted to {0}", jnidispatch);
+        }
+        return cp;
     }
 
     /**

@@ -207,6 +207,32 @@ public final class RunnerClient {
     }
 
     /**
+     * runner JVM 的 {@code -Djna.boot.library.path} 取值：预提取产物所在目录
+     * （{@link SandboxDirs#sandboxBinDir}，见 {@link RunnerMaterializer#ensureJnidispatch}），
+     * 目录内无 {@code jnidispatch.dll} 则返回 null（不带该参数，行为回退默认）。
+     *
+     * <p><b>属性名易踩坑（本仓 Linux 实测）</b>：生效的是 {@code jna.boot.library.path}
+     * 且必须<b>直接</b>指向含 native 库文件的目录（放 arch 子目录下仍会走解压）；
+     * {@code jnidispatch.path} 是 JNA 解压<b>之后自己写出</b>的结果属性，作为入参会被
+     * 覆写、完全无效。Windows 侧文件名无 {@code lib} 前缀（{@code jnidispatch.dll}），
+     * 由 {@code System.loadLibrary("jnidispatch")} 按平台补全。
+     *
+     * <p><b>动机</b>：JNA 默认每个新进程都把 jnidispatch.dll 从 jar 解压到自身 TEMP 再
+     * LoadLibrary、退出时删除；runner 的 TEMP 是沙箱账户私有目录，于是每条命令都制造一次
+     * 「用户可写目录里的陌生新 DLL」——既是固定启动开销，也是 EDR 强查特征（实测 runner
+     * 启动卡 8.2s 正落在 tee 之后、首次 JNA native 调用前后的窗口）。预提取目录 ACL 锁定
+     * （组 R+X、沙箱账户不可写），解压路径不再发生。
+     */
+    static String bootLibraryPath(java.nio.file.Path codexHome) {
+        if (codexHome == null) {
+            return null;
+        }
+        java.nio.file.Path binDir = SandboxDirs.sandboxBinDir(codexHome);
+        return java.nio.file.Files.isRegularFile(binDir.resolve("jnidispatch.dll"))
+                ? binDir.toString() : null;
+    }
+
+    /**
      * classpath 通配符收敛：同目录多 jar → {@code <dir>\*}。
      *
      * <p><b>动机（2026-10-04 宿主实验实锤）</b>：CreateProcessWithLogonW 命令行
@@ -327,6 +353,10 @@ public final class RunnerClient {
         String javaExe = home + "\\bin\\java.exe";
         java.util.List<String> argv = new java.util.ArrayList<>(java.util.List.of(javaExe,
                 "-XX:+UseSerialGC", "-Xshare:auto", "-Dfile.encoding=UTF-8"));
+        String bootPath = bootLibraryPath(codexHome);
+        if (bootPath != null) {
+            argv.add("-Djna.boot.library.path=" + bootPath);
+        }
         if (codexHome != null) {
             try {
                 java.nio.file.Path tmp = SandboxDirs.sandboxDir(codexHome).resolve("tmp");

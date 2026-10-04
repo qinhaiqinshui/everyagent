@@ -114,6 +114,52 @@ class CodexSandboxSessionTest {
         assertEquals("--pipe-out=\\\\.\\pipe\\every-agent-codex-runner-abc-out", argv.get(8));
     }
 
+    /** 预提取产物就位（.sandbox-bin/jnidispatch.dll）→ runner argv 带 boot.library.path。 */
+    @Test
+    void runnerArgvCarriesBootLibraryPathWhenPreExtracted(
+            @org.junit.jupiter.api.io.TempDir Path codexHome) throws Exception {
+        Path binDir = codexHome.resolve(".sandbox-bin");
+        java.nio.file.Files.createDirectories(binDir);
+        java.nio.file.Files.writeString(binDir.resolve("jnidispatch.dll"), "MZ");
+        List<String> argv = RunnerClient.runnerArgv("C:\\jdk-25", "C:\\b\\runner.jar",
+                "in", "out", codexHome);
+        assertTrue(argv.contains("-Djna.boot.library.path=" + binDir),
+                "应带 boot.library.path 指向 .sandbox-bin: " + argv);
+    }
+
+    /** 未预提取 → 不带该参数（回退 JNA 默认行为）。 */
+    @Test
+    void runnerArgvOmitsBootLibraryPathWhenAbsent(
+            @org.junit.jupiter.api.io.TempDir Path codexHome) throws Exception {
+        List<String> argv = RunnerClient.runnerArgv("C:\\jdk-25", "C:\\b\\runner.jar",
+                "in", "out", codexHome);
+        assertTrue(argv.stream().noneMatch(a -> a.startsWith("-Djna.boot.library.path=")),
+                "未预提取时不得带该参数: " + argv);
+        assertTrue(RunnerClient.runnerArgv("C:\\jdk-25", "C:\\b\\runner.jar", "in", "out")
+                .stream().noneMatch(a -> a.startsWith("-Djna.boot.library.path=")),
+                "无 codexHome 重载不带该参数");
+    }
+
+    /** 真 jna jar（测试 classpath 上就有）：提取产物为 PE，二次调用幂等复用。 */
+    @Test
+    void ensureJnidispatchExtractsFromRealJnaJar(
+            @org.junit.jupiter.api.io.TempDir Path dir) throws Exception {
+        List<Path> sources = RunnerMaterializer.materializationSources(
+                System.getProperty("java.class.path"), System.getProperty("path.separator"));
+        Path dll = RunnerMaterializer.ensureJnidispatch(sources, dir, null);
+        org.junit.jupiter.api.Assumptions.assumeTrue(dll != null, "classpath 无 jna 核心 jar");
+        assertEquals("jnidispatch.dll", dll.getFileName().toString());
+        assertTrue(java.nio.file.Files.size(dll) > 1000, "dll 非空");
+        byte[] head = new byte[2];
+        try (var in = java.nio.file.Files.newInputStream(dll)) {
+            assertEquals(2, in.read(head));
+        }
+        assertEquals('M', head[0]);
+        assertEquals('Z', head[1]);
+        assertEquals(dll, RunnerMaterializer.ensureJnidispatch(sources, dir, null),
+                "二次调用复用既有产物");
+    }
+
     @Test
     void commandLineQuotesOnlyArgsNeedingIt() {
         assertEquals("a.jar b", RunnerClient.joinCommandLine(List.of("a.jar", "b")));

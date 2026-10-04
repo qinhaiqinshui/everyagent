@@ -155,8 +155,16 @@ public final class CodexRunnerMain {
 
     /** 0 = runner 正常走完；非 0 = 已尽力发 error 帧（对齐 codex 语义）。 */
     static int run(String pipeInName, String pipeOutName) {
+        // 关键切分：JNA 首次 native 调用会触发 jnidispatch.dll 从 jar 解压到
+        // java.io.tmpdir 再 LoadLibrary（沙箱账户私有 temp，疑为 EDR 强查点）。
+        // 单独预热以把它与 CreateFileW 的阻塞时长分开归因。
+        System.err.println("[codex-runner] tmpdir=" + System.getProperty("java.io.tmpdir")
+                + " TEMP=" + System.getenv("TEMP"));
+        stage("warming jna native");
+        Kernel32.INSTANCE.GetCurrentProcess();
+        stage("jna native warmed (jnidispatch unpack+load done)");
         WinNT.HANDLE in = openPipe(pipeInName, WinNT.FILE_GENERIC_READ);
-        stage("pipe-in connected (JNA Kernel32 first call done)");
+        stage("pipe-in connected (CreateFileW in)");
         WinNT.HANDLE out = openPipe(pipeOutName, WinNT.FILE_GENERIC_WRITE);
         stage("pipes opened");
         Object writeLock = new Object(); // output 读线程与主线程共用 -out 管写端
