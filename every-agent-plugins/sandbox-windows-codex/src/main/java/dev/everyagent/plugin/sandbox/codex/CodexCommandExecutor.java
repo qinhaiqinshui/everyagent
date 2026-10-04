@@ -156,6 +156,9 @@ public final class CodexCommandExecutor {
         } catch (IOException | RuntimeException e) {
             LOG.log(System.Logger.Level.WARNING, "[exec] codex 会话失败 cmd={0}",
                     ExecResults.truncate(command, 200) + " | " + e);
+            // 物化缓存可能失真（.sandbox-bin 被外部清理/篡改）：丢弃缓存，
+            // 下一条命令重做物化自愈（代价仅一次 ~150ms 校验）
+            RunnerMaterializer.invalidateRunnerClasspath(options.codexHome());
             return "[codex sandbox 执行失败] "
                     + (e.getMessage() == null ? e.toString() : e.getMessage());
         }

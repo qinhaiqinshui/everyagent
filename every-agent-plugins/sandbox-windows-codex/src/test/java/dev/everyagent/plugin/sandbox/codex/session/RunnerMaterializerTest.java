@@ -120,4 +120,53 @@ class RunnerMaterializerTest {
         assertEquals(a + ";" + b, RunnerMaterializer.classpathString(List.of(a, b)),
                 "Windows -cp 分号语义");
     }
+
+    /**
+     * 进程内缓存：第二次调用不再逐 jar 全量 SHA-256（实测该开销 146-266ms/命令）。
+     * 证据 = 产物被外部删除后第二次调用不重拷；invalidate 后自愈。
+     */
+    @Test
+    void ensureRunnerClasspathCachesPerProcessAndHealsOnInvalidate() throws IOException {
+        RunnerMaterializer.invalidateAllRunnerClasspaths();
+        String cp = RunnerMaterializer.ensureRunnerClasspath(tmp, null);
+        Path bin = tmp.resolve(".sandbox-bin");
+        List<Path> copied;
+        try (var s = Files.list(bin)) {
+            copied = s.filter(p -> p.toString().endsWith(".jar")).sorted().toList();
+        }
+        org.junit.jupiter.api.Assumptions.assumeTrue(!copied.isEmpty(),
+                "本环境 classpath 无 jar 来源（纯 classes 目录）→ 无删除证据可用");
+        Path deleted = copied.get(0);
+        Files.delete(deleted);
+
+        assertEquals(cp, RunnerMaterializer.ensureRunnerClasspath(tmp, null), "返回同一 -cp");
+        assertFalse(Files.exists(deleted), "第二次调用应短路（不重拷 → 证明未重复校验）");
+
+        RunnerMaterializer.invalidateRunnerClasspath(tmp);
+        RunnerMaterializer.ensureRunnerClasspath(tmp, null);
+        assertTrue(Files.exists(deleted), "失效后重做物化，产物自愈");
+    }
+
+    /** 缓存按 codexHome 隔离：A 的缓存不得让 B 短路。 */
+    @Test
+    void cacheIsKeyedByCodexHome() throws IOException {
+        RunnerMaterializer.invalidateAllRunnerClasspaths();
+        Path homeA = Files.createDirectories(tmp.resolve("homeA"));
+        Path homeB = Files.createDirectories(tmp.resolve("homeB"));
+        RunnerMaterializer.ensureRunnerClasspath(homeA, null);
+        Path binA = homeA.resolve(".sandbox-bin");
+        List<Path> copiedA;
+        try (var s = Files.list(binA)) {
+            copiedA = s.filter(p -> p.toString().endsWith(".jar")).sorted().toList();
+        }
+        org.junit.jupiter.api.Assumptions.assumeTrue(!copiedA.isEmpty(),
+                "本环境 classpath 无 jar 来源 → 无隔离证据可用");
+        Files.delete(copiedA.get(0));
+
+        RunnerMaterializer.ensureRunnerClasspath(homeB, null); // 不得被 A 的缓存短路
+        try (var s = Files.list(homeB.resolve(".sandbox-bin"))) {
+            assertTrue(s.findAny().isPresent(), "B 独立物化");
+        }
+        assertFalse(Files.exists(copiedA.get(0)), "A 仍走自己的缓存（未因 B 的调用而重拷）");
+    }
 }

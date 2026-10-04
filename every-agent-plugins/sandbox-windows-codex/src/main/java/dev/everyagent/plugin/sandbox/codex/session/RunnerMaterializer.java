@@ -277,16 +277,50 @@ public final class RunnerMaterializer {
         return arch.contains("64") ? "win32-x86-64" : "win32-i386";
     }
 
-    /** 便捷入口：物化并返回 -cp 字符串（bin = {@link SandboxDirs#sandboxBinDir}）。 */
+    /**
+     * 便捷入口：物化并返回 -cp 字符串（bin = {@link SandboxDirs#sandboxBinDir}）。
+     *
+     * <p><b>进程内只做一次</b>：产物按「大小 + SHA-256 前 8 字节」逐 jar 双份校验，8 个
+     * 依赖合计约 8.3MB，一次完整校验实测 146-266ms——每条命令都付这笔钱毫无意义。缓存键
+     * 是 {@code codexHome}；同一 worker 进程内 {@code java.class.path} 与插件 jar 内容不会
+     * 变（换 jar 必须重启 JVM 才生效），故跳过重复校验不会让 runner 加载到陈旧类。
+     *
+     * <p>失效：磁盘产物被外部清理/篡改时缓存会失真，由调用方在会话失败路径调
+     * {@link #invalidateRunnerClasspath} 自愈（下一条命令重做物化）。
+     */
     public static String ensureRunnerClasspath(Path codexHome, String groupSid)
             throws IOException {
+        Path key = codexHome.toAbsolutePath().normalize();
+        String cached = CACHED_CLASSPATHS.get(key);
+        if (cached != null) {
+            return cached;
+        }
         List<Path> sources = materializationSources(System.getProperty("java.class.path"),
                 System.getProperty("path.separator"));
-        Path binDir = SandboxDirs.sandboxBinDir(codexHome);
+        Path binDir = SandboxDirs.sandboxBinDir(key);
         String cp = classpathString(materialize(sources, binDir, groupSid));
         ensureJnidispatch(sources, binDir, groupSid);
+        CACHED_CLASSPATHS.put(key, cp);
+        System.getLogger(RunnerMaterializer.class.getName()).log(System.Logger.Level.INFO,
+                "[runner] classpath 已物化（本进程不再重复校验）: {0}", binDir);
         return cp;
     }
+
+    /** 丢弃 {@code codexHome} 的物化缓存（会话失败时自愈用）。 */
+    public static void invalidateRunnerClasspath(Path codexHome) {
+        if (codexHome != null) {
+            CACHED_CLASSPATHS.remove(codexHome.toAbsolutePath().normalize());
+        }
+    }
+
+    /** 清全部缓存（测试隔离用）。 */
+    public static void invalidateAllRunnerClasspaths() {
+        CACHED_CLASSPATHS.clear();
+    }
+
+    /** {@code codexHome}（canonical）→ 已物化的 -cp 字符串。 */
+    private static final java.util.concurrent.ConcurrentHashMap<Path, String> CACHED_CLASSPATHS =
+            new java.util.concurrent.ConcurrentHashMap<>();
 
     /**
      * 给物化产物挂组 SID GRANT R+X ACE（文件级、无继承位——目录级
