@@ -166,11 +166,14 @@ public final class CodexCommandExecutor {
         }
         RootPolicy policy = new RootPolicy(writeRoots, List.of(), List.of(),
                 manager.readRoots()).sanitized(home);
+        long tStart = System.nanoTime();
         preflight.refresh(options, capSids, roots, manager.readRoots());
+        long tPreflight = System.nanoTime();
 
         NetworkIdentity identity = options.networkIdentity(manager.networkDenied());
         String username = SandboxAccounts.usernameFor(options.accountPrefix(), identity);
         RunnerClient.RunnerConfig cfg = runnerConfigFactory.create(options, username);
+        long tConfig = System.nanoTime();
 
         long timeoutMs = manager.execTimeoutMs();
         CodexSandboxSession.SessionSpec spec = new CodexSandboxSession.SessionSpec(
@@ -178,7 +181,13 @@ public final class CodexCommandExecutor {
                 timeoutMs > 0 ? timeoutMs : null, policy.writeRoots(), List.of(),
                 CapSids.workspaceCapSidForCwd(home, workspaceRoot),
                 wireName(identity), false, null);
-        return aggregate(cfg, spec, timeoutMs);
+        SessionRun run = aggregate(cfg, spec, timeoutMs);
+        LOG.log(System.Logger.Level.INFO,
+                "[exec] timing preflight={0}ms runnerCfg={1}ms sessionExec={2}ms",
+                new Object[] { (tPreflight - tStart) / 1_000_000L,
+                        (tConfig - tPreflight) / 1_000_000L,
+                        (System.nanoTime() - tConfig) / 1_000_000L });
+        return run;
     }
 
     /** 收帧聚合（父侧看门狗：超时先 terminate 再等 Exit 帧；宽限 TEARDOWN_GRACE_MS）。 */
@@ -194,7 +203,11 @@ public final class CodexCommandExecutor {
         long deadline = timeoutMs > 0
                 ? System.nanoTime() + (timeoutMs + TEARDOWN_GRACE_MS) * 1_000_000L
                 : Long.MAX_VALUE;
+        long tOpen = System.nanoTime();
         try (ExecSession session = sessionOpener.open(cfg, spec)) {
+            LOG.log(System.Logger.Level.INFO, "[exec] timing sessionOpen={0}ms",
+                    (System.nanoTime() - tOpen) / 1_000_000L);
+            boolean firstOutputLogged = false;
             while (!exited) {
                 FrameCodec.FramedMessage frame;
                 if (!timedOut && deadline != Long.MAX_VALUE) {
@@ -219,6 +232,12 @@ public final class CodexCommandExecutor {
                     break;
                 }
                 if (frame.message() instanceof Output out) {
+                    if (!firstOutputLogged) {
+                        firstOutputLogged = true;
+                        LOG.log(System.Logger.Level.INFO,
+                                "[exec] timing firstOutput={0}ms",
+                                (System.nanoTime() - tOpen) / 1_000_000L);
+                    }
                     String text = new String(IpcMessage.decodeBytes(out.dataBase64()),
                             StandardCharsets.UTF_8);
                     truncated |= out.stream() == IpcMessage.Stream.STDOUT

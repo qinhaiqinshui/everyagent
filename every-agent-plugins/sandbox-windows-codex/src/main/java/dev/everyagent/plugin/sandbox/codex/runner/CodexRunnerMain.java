@@ -33,8 +33,16 @@ public final class CodexRunnerMain {
 
     private static final String OPT_PIPE_IN = "--pipe-in=";
     private static final String OPT_PIPE_OUT = "--pipe-out=";
+    /** 类加载时刻（≈main 入口）；stage 计时基准。 */
+    private static final long T0 = System.nanoTime();
 
     private CodexRunnerMain() {
+    }
+
+    /** 阶段耗时打点（ms，进 runner-stderr.log；定位启动链路瓶颈用）。 */
+    private static void stage(String msg) {
+        System.err.println("[codex-runner] +" + ((System.nanoTime() - T0) / 1_000_000L)
+                + "ms " + msg);
     }
 
     public static void main(String[] args) {
@@ -112,6 +120,7 @@ public final class CodexRunnerMain {
     static int run(String pipeInName, String pipeOutName) {
         WinNT.HANDLE in = openPipe(pipeInName, WinNT.FILE_GENERIC_READ);
         WinNT.HANDLE out = openPipe(pipeOutName, WinNT.FILE_GENERIC_WRITE);
+        stage("pipes opened");
         Object writeLock = new Object(); // output 读线程与主线程共用 -out 管写端
         try {
             // 1) 先读 spawn_request（写 spawn_ready 之前必须等到）
@@ -119,11 +128,13 @@ public final class CodexRunnerMain {
             if (req == null) {
                 return 1;
             }
+            stage("spawn_request read");
             // 2) 受限令牌 + 子进程（失败 → error(stage=spawn_child)）
             ChildProcess child = spawnChild(req, out, writeLock);
             if (child == null) {
                 return 1;
             }
+            stage("token+child spawned pid=" + child.processId());
             try {
                 if (!req.stdinOpen()) {
                     child.closeStdin(); // stdin 关闭 = 子进程读 EOF
@@ -138,6 +149,7 @@ public final class CodexRunnerMain {
                             "write spawn_ready failed: " + e.getMessage());
                     return 1;
                 }
+                stage("spawn_ready sent");
                 // 4) 帧循环：输出转发 + 输入处理 + 等待退出
                 runSession(in, out, writeLock, req, child);
                 return 0;
@@ -152,10 +164,18 @@ public final class CodexRunnerMain {
 
     private static void runSession(WinNT.HANDLE in, WinNT.HANDLE out, Object writeLock,
             SpawnRequest req, ChildProcess child) {
-        child.startOutputReaders((chunk, stderr) -> sendOutput(out, writeLock, chunk, stderr));
+        java.util.concurrent.atomic.AtomicBoolean firstOutput =
+                new java.util.concurrent.atomic.AtomicBoolean();
+        child.startOutputReaders((chunk, stderr) -> {
+            if (firstOutput.compareAndSet(false, true)) {
+                stage("first output");
+            }
+            sendOutput(out, writeLock, chunk, stderr);
+        });
         Thread input = Thread.ofVirtual().name("codex-runner-input")
                 .start(() -> inputLoop(in, child));
         ChildProcess.ExitResult r = child.waitForExit(req.timeoutMs());
+        stage("child exited rc=" + r.exitCode() + " timedOut=" + r.timedOut());
         if (!r.terminatedCleanly()) {
             System.err.println("[codex-runner] root process did not exit after termination");
         } else {
@@ -168,6 +188,7 @@ public final class CodexRunnerMain {
         } catch (RuntimeException e) {
             System.err.println("[codex-runner] exit write failed: " + e.getMessage());
         }
+        stage("exit frame sent");
         // input 虚拟线程随 System.exit 消亡，不阻塞退出
     }
 
