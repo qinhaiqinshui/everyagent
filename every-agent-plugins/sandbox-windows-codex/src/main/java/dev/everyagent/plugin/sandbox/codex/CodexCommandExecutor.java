@@ -19,7 +19,6 @@ import dev.everyagent.plugin.sandbox.codex.setup.SetupMarker;
 import dev.everyagent.plugin.sandbox.codex.setup.SetupPayload;
 
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -36,8 +35,9 @@ import java.util.Map;
  * preflight 刷写根 ACE（{@link ProvisioningAcl}，真实用户身份持有 WRITE_DAC）→
  * 组 {@link CodexSandboxSession.SessionSpec}（cwd=工作区根、cap_sids=各写根 cap +
  * workspace cap、timeout={@code SandboxConfig.timeoutMs}、env 继承）→
- * {@link CodexSandboxSession#open} 拉起 runner 会话 → 聚合 stdout/stderr（base64 解码、
- * 每流上限截断）→ Exit 帧 → wsl 同款格式化尾注。
+ * {@link CodexSandboxSession#open} 拉起 runner 会话 → 聚合 stdout/stderr（base64 还原
+ * 原始字节、每流字节上限截断、整段 {@link ExecResults#decodeConsoleOutput(byte[])}
+ * 智能 UTF-8/ANSI 解码）→ Exit 帧 → wsl 同款格式化尾注。
  *
  * <p>Windows 原生调用集中在三个可注入 seam（{@link SessionOpener}/
  * {@link PreflightRefresher}/{@link RunnerConfigFactory}）的生产默认实现里，
@@ -98,10 +98,12 @@ public final class CodexCommandExecutor {
     private final SessionOpener sessionOpener;
     private final PreflightRefresher preflight;
     private final RunnerConfigFactory runnerConfigFactory;
+    /** 探测到的 shell（缓存，进程生命周期内只探测一次）。 */
+    private final ShellChoice shell;
 
     public CodexCommandExecutor(CodexSandboxManager manager, Path workspaceRoot,
             Path rgBinary) {
-        this(manager, workspaceRoot, rgBinary, true,
+        this(manager, workspaceRoot, rgBinary, true, detectShell(),
                 (cfg, spec) -> adapt(CodexSandboxSession.open(cfg, spec)),
                 CodexCommandExecutor::refreshWriteRootAces,
                 CodexCommandExecutor::createRunnerConfig);
@@ -111,10 +113,19 @@ public final class CodexCommandExecutor {
     CodexCommandExecutor(CodexSandboxManager manager, Path workspaceRoot, Path rgBinary,
             boolean nativeGuard, SessionOpener sessionOpener, PreflightRefresher preflight,
             RunnerConfigFactory runnerConfigFactory) {
+        this(manager, workspaceRoot, rgBinary, nativeGuard, ShellChoice.POWERSHELL,
+                sessionOpener, preflight, runnerConfigFactory);
+    }
+
+    /** 测试构造：显式指定 shell。 */
+    CodexCommandExecutor(CodexSandboxManager manager, Path workspaceRoot, Path rgBinary,
+            boolean nativeGuard, ShellChoice shell, SessionOpener sessionOpener,
+            PreflightRefresher preflight, RunnerConfigFactory runnerConfigFactory) {
         this.manager = manager;
         this.workspaceRoot = workspaceRoot;
         this.rgBinary = rgBinary;
         this.nativeGuard = nativeGuard;
+        this.shell = shell;
         this.sessionOpener = sessionOpener;
         this.preflight = preflight;
         this.runnerConfigFactory = runnerConfigFactory;
@@ -193,8 +204,8 @@ public final class CodexCommandExecutor {
     /** 收帧聚合（父侧看门狗：超时先 terminate 再等 Exit 帧；宽限 TEARDOWN_GRACE_MS）。 */
     private SessionRun aggregate(RunnerClient.RunnerConfig cfg,
             CodexSandboxSession.SessionSpec spec, long timeoutMs) throws IOException {
-        StringBuilder stdout = new StringBuilder();
-        StringBuilder stderr = new StringBuilder();
+        java.io.ByteArrayOutputStream stdout = new java.io.ByteArrayOutputStream();
+        java.io.ByteArrayOutputStream stderr = new java.io.ByteArrayOutputStream();
         boolean truncated = false;
         boolean timedOut = false;
         boolean interrupted = false;
@@ -238,10 +249,9 @@ public final class CodexCommandExecutor {
                                 "[exec] timing firstOutput={0}ms",
                                 (System.nanoTime() - tOpen) / 1_000_000L);
                     }
-                    String text = new String(IpcMessage.decodeBytes(out.dataBase64()),
-                            StandardCharsets.UTF_8);
+                    byte[] chunk = IpcMessage.decodeBytes(out.dataBase64());
                     truncated |= out.stream() == IpcMessage.Stream.STDOUT
-                            ? appendCapped(stdout, text) : appendCapped(stderr, text);
+                            ? appendCapped(stdout, chunk) : appendCapped(stderr, chunk);
                 } else if (frame.message() instanceof Exit exit) {
                     exitCode = exit.exitCode();
                     timedOut |= exit.timedOut();
@@ -250,8 +260,13 @@ public final class CodexCommandExecutor {
                 // 其余帧（父→runner 方向不会出现；容忍协议演进）静默丢弃
             }
         }
-        return new SessionRun(stdout.toString(), stderr.toString(), exitCode,
-                timedOut, interrupted, truncated);
+        // 全流原始字节一次性智能解码：严格 UTF-8 失败回退系统 ANSI 码页，
+        // 解决 PowerShell CLM 下中文按 GBK 编码、外部程序按 UTF-8 输出的混合编码问题（BUG-1）；
+        // 整段解码也消除了逐帧解码时多字节字符跨 chunk 被拆导致的替换字符隐患。
+        return new SessionRun(
+                ExecResults.decodeConsoleOutput(stdout.toByteArray()),
+                ExecResults.decodeConsoleOutput(stderr.toByteArray()),
+                exitCode, timedOut, interrupted, truncated);
     }
 
     /** 会话聚合结果（格式化输入；纯数据）。 */
@@ -261,10 +276,75 @@ public final class CodexCommandExecutor {
 
     // ---- 纯函数（跨平台单测） ----
 
-    /** shell 命令 → 子进程 argv：PowerShell -NoProfile -Command（UTF-8 编码前缀 + 用户命令）。 */
-    static List<String> commandArgv(String command) {
-        return List.of("powershell.exe", "-NoProfile", "-Command",
-                ExecResults.POWERSHELL_PREFIX + command);
+    /** shell 命令 → 子进程 argv：按探测到的 shell 分派。 */
+    List<String> commandArgv(String command) {
+        if (shell.isPowerShell) {
+            return List.of(shell.exe, "-NoProfile", "-Command",
+                    ExecResults.POWERSHELL_PREFIX + command);
+        }
+        return List.of(shell.exe, "/c", "chcp 65001 >nul & " + command);
+    }
+
+    /** 探测 shell：pwsh.exe → powershell.exe → cmd.exe（进程级缓存，只探测一次）。 */
+    static ShellChoice detectShell() {
+        ShellChoice cached = cachedShell;
+        if (cached != null) {
+            return cached;
+        }
+        synchronized (CodexCommandExecutor.class) {
+            if (cachedShell != null) {
+                return cachedShell;
+            }
+            if (findInPath("pwsh.exe") != null) {
+                cachedShell = ShellChoice.PWSH;
+            } else if (findInPath("powershell.exe") != null) {
+                cachedShell = ShellChoice.POWERSHELL;
+            } else {
+                cachedShell = ShellChoice.CMD;
+            }
+            LOG.log(System.Logger.Level.INFO, "[shell] detected: {0}", cachedShell.exe);
+            return cachedShell;
+        }
+    }
+
+    /** 探测缓存（volatile 双检锁；static 全进程只探测一次）。 */
+    private static volatile ShellChoice cachedShell;
+
+    /** PATH 中查找可执行文件；找到返回绝对路径，未找到返回 null。 */
+    static String findInPath(String name) {
+        String pathEnv = System.getenv("Path");
+        if (pathEnv == null || pathEnv.isBlank()) {
+            pathEnv = System.getenv("PATH");
+        }
+        if (pathEnv == null || pathEnv.isBlank()) {
+            return null;
+        }
+        String sep = java.io.File.pathSeparator;
+        for (String dir : pathEnv.split(java.util.regex.Pattern.quote(sep))) {
+            if (dir.isBlank()) {
+                continue;
+            }
+            java.nio.file.Path candidate = java.nio.file.Path.of(dir, name);
+            if (java.nio.file.Files.isRegularFile(candidate)) {
+                return candidate.toAbsolutePath().toString();
+            }
+        }
+        return null;
+    }
+
+    /** 探测到的 shell 类型。 */
+    enum ShellChoice {
+        PWSH("pwsh.exe", true),
+        POWERSHELL("powershell.exe", true),
+        CMD("cmd.exe", false);
+
+        final String exe;
+        final boolean isPowerShell;
+
+        ShellChoice(String exe, boolean isPowerShell) {
+            this.exe = exe;
+            this.isPowerShell = isPowerShell;
+        }
     }
 
     /** 继承当前环境；rgBinary 非空时其所在目录前置进 Path（Windows 键名优先）。 */
@@ -287,17 +367,18 @@ public final class CodexCommandExecutor {
         return identity == NetworkIdentity.OFFLINE ? "offline" : "online";
     }
 
-    /** 追加并执行每流上限；返回 true 表示有内容被截掉。 */
-    static boolean appendCapped(StringBuilder sb, String text) {
-        if (text == null || text.isEmpty()) {
+    /** 追加并执行每流字节上限；返回 true 表示有内容被截掉。 */
+    static boolean appendCapped(java.io.ByteArrayOutputStream out, byte[] chunk) {
+        if (chunk == null || chunk.length == 0) {
             return false;
         }
-        int room = ExecResults.MAX_OUTPUT_CHARS - sb.length();
+        int room = ExecResults.MAX_OUTPUT_CHARS - out.size();
         if (room <= 0) {
             return true;
         }
-        sb.append(text, 0, Math.min(text.length(), room));
-        return text.length() > room;
+        int n = Math.min(chunk.length, room);
+        out.write(chunk, 0, n);
+        return chunk.length > room;
     }
 
     /** stdout / [stderr] / 超时 / 中断 / 截断 / exit code 尾注（委托 {@link ExecResults}）。 */
