@@ -228,8 +228,12 @@ public final class RunnerMaterializer {
             }
             if (Files.isRegularFile(target) && entry.getSize() > 0
                     && Files.size(target) == entry.getSize()) {
-                return target; // 已提取且大小一致
+                return target; // 已存在且大小一致 → 幂等复用，不再重拷
             }
+            // 判据只比大小（不比内容哈希）：文件名必须是裸 jnidispatch.dll（System
+            // .loadLibrary 按此名在 bootLibraryPath 目录内查找），无法把指纹编进文件名
+            // 做版本区分。风险可接受——jna 版本由根 pom 锁定，且版本错配时 loadLibrary
+            // 会显式失败（runner 发 error 帧），不会静默用错库。
             Path tmp = binDir.resolve("jnidispatch.dll.tmp");
             try (InputStream in = zip.getInputStream(entry)) {
                 Files.copy(in, tmp, StandardCopyOption.REPLACE_EXISTING);
@@ -241,6 +245,9 @@ public final class RunnerMaterializer {
                 Files.move(tmp, target, StandardCopyOption.REPLACE_EXISTING);
             }
             grantGroupReadExecute(target, groupSid);
+            // 只在真正提取时打点（幂等复用路径静默，避免每条命令一行 INFO 刷屏）
+            System.getLogger(RunnerMaterializer.class.getName()).log(System.Logger.Level.INFO,
+                    "[runner] jnidispatch extracted to {0}", target);
             return target;
         }
     }
@@ -277,11 +284,7 @@ public final class RunnerMaterializer {
                 System.getProperty("path.separator"));
         Path binDir = SandboxDirs.sandboxBinDir(codexHome);
         String cp = classpathString(materialize(sources, binDir, groupSid));
-        Path jnidispatch = ensureJnidispatch(sources, binDir, groupSid);
-        if (jnidispatch != null) {
-            System.getLogger(RunnerMaterializer.class.getName()).log(System.Logger.Level.INFO,
-                    "[runner] jnidispatch pre-extracted to {0}", jnidispatch);
-        }
+        ensureJnidispatch(sources, binDir, groupSid);
         return cp;
     }
 
