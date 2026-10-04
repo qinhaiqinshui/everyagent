@@ -3,13 +3,11 @@
  * 所选 worker 决定工作区/模型/slash/浏览目录的数据源(全链路按 worker 定向)。
  *
  * 候选列表已由父组件筛好「已连接可用」(online && enabled && hasApiKey && !error
- * && !connecting),本组件只做展示:显示名 = 本地别名 > hostname > workerId
- * (与设置页 Worker 列表一致);无候选时显示「暂无可用 worker」占位。
+ * && !connecting),本组件只做展示:直接显示 workerId(不显示计算机名 hostname,
+ * 避免多机同名的歧义);无候选时显示「暂无可用 worker」占位。
  */
-import React from 'react'
 import { Select } from 'antd'
 import type { WorkerInfo } from '@/hub/session'
-import { onWorkerAliasesChanged, workerDisplayName } from '@/settings/workerAliases'
 
 interface TaskWorkerPickerProps {
   workers: WorkerInfo[]
@@ -18,10 +16,6 @@ interface TaskWorkerPickerProps {
 }
 
 export default function TaskWorkerPicker({ workers, selected, onSelect }: TaskWorkerPickerProps) {
-  // 别名变化时重渲染(显示名依赖别名)。
-  const [, setAliasesVersion] = React.useState(0)
-  React.useEffect(() => onWorkerAliasesChanged(() => setAliasesVersion((v) => v + 1)), [])
-
   return (
     <div className="task-workspace-picker">
       <div className="task-workspace-picker__row" style={{ display: 'flex', minWidth: 'fit-content' }}>
@@ -39,7 +33,7 @@ export default function TaskWorkerPicker({ workers, selected, onSelect }: TaskWo
           }}
           options={workers.map((worker) => ({
             value: worker.workerId,
-            label: workerDisplayName(worker),
+            label: worker.workerId,
           }))}
         />
       </div>
