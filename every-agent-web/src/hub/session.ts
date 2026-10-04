@@ -488,9 +488,19 @@ class HubSession {
         (w) => w.ownerKey && w.ownerKey.startsWith(ownerFingerprint),
       )
       if (cred && cred.workerId !== workerId) {
-        cred.workerId = workerId
-        saveConnectionConfig(config)
-        console.info('[hub] worker 身份变更,已复用凭证:旧 workerId → ' + workerId)
+        // 凭证迁移仅适用于「worker 改名后重新上线」(原 worker 已离线):
+        // 若原 worker 仍在线,说明这是同 apiKey 下的另一台 worker(架构 §2 多 worker 场景),
+        // 不应窃取其凭证——新 worker 在目录中显示为「在线但未配置 apiKey」,需用户手动配置。
+        const originalWorkerId = cred.workerId
+        const originalOnline = this.workersOnline.get(originalWorkerId) ?? false
+        if (!originalOnline) {
+          cred.workerId = workerId
+          saveConnectionConfig(config)
+          console.info('[hub] worker 身份变更,已复用凭证:旧 workerId → ' + workerId)
+        } else {
+          // 原 worker 仍在线:不迁移凭证,清空 cred 以跳过后续建连。
+          cred = undefined
+        }
       }
     }
     if (!cred || !cred.enabled || !cred.apiKeyEnc) return
