@@ -5,13 +5,45 @@
 
     <parent>
         <groupId>dev.everyagent</groupId>
-        <artifactId>every-agent-plugins</artifactId>
-        <version>0.11.0</version>
+        <artifactId>every-agent-parent</artifactId>
+        <version>1.0.0</version>
+        <relativePath>../../pom.xml</relativePath>
     </parent>
+    <version>0.11.0</version>
 
     <artifactId>sandbox-windows-codex</artifactId>
     <name>sandbox-windows-codex</name>
     <description>Windows Codex 沙箱插件（双账户 + WRITE_RESTRICTED 受限令牌 + capability SID + WFP/防火墙）</description>
+
+    <build>
+        <plugins>
+            <!-- 将插件根目录的 plugin.json 复制到 classpath 根目录，供 PluginRegistry 扫描 -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-resources-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>copy-plugin-manifest</id>
+                        <phase>process-resources</phase>
+                        <goals>
+                            <goal>copy-resources</goal>
+                        </goals>
+                        <configuration>
+                            <outputDirectory>${project.build.outputDirectory}</outputDirectory>
+                            <resources>
+                                <resource>
+                                    <directory>${project.basedir}</directory>
+                                    <includes>
+                                        <include>plugin.json</include>
+                                    </includes>
+                                </resource>
+                            </resources>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
 
     <dependencies>
         <dependency>

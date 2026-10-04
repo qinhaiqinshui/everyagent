@@ -5,13 +5,45 @@
 
     <parent>
         <groupId>dev.everyagent</groupId>
-        <artifactId>every-agent-plugins</artifactId>
-        <version>0.11.0</version>
+        <artifactId>every-agent-parent</artifactId>
+        <version>1.0.0</version>
+        <relativePath>../../pom.xml</relativePath>
     </parent>
+    <version>0.11.0</version>
 
     <artifactId>model-length-guard</artifactId>
     <name>model-length-guard</name>
     <description>模型输出预算耗尽护栏插件:finish_reason=length 检测与合成帧信号</description>
+
+    <build>
+        <plugins>
+            <!-- 将插件根目录的 plugin.json 复制到 classpath 根目录，供 PluginRegistry 扫描 -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-resources-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>copy-plugin-manifest</id>
+                        <phase>process-resources</phase>
+                        <goals>
+                            <goal>copy-resources</goal>
+                        </goals>
+                        <configuration>
+                            <outputDirectory>${project.build.outputDirectory}</outputDirectory>
+                            <resources>
+                                <resource>
+                                    <directory>${project.basedir}</directory>
+                                    <includes>
+                                        <include>plugin.json</include>
+                                    </includes>
+                                </resource>
+                            </resources>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
 
     <dependencies>
         <dependency>
