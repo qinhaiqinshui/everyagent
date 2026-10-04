@@ -23,7 +23,7 @@
     "agentIdField": { "agentId": { "type": "string", "description": "子 agent 事件必带;主 agent 省略(事件名不分主/子,归属由此字段决定)" } },
     "streamEvent": {
       "properties": {
-        "channel": { "pattern": "^u\\.[0-9a-f]{64}\\.task\\.[a-z0-9-]+\\.stream$" },
+        "channel": { "pattern": "^u\\.[0-9a-f]{64}\\.worker\\.[a-z0-9._-]+\\.task\\.[a-z0-9-]+\\.stream$" },
         "event": {
           "enum": [
             "user.message", "delta", "thinking", "message", "usage",
@@ -121,7 +121,7 @@
     },
     "tasksEvent": {
       "properties": {
-        "channel": { "pattern": "^u\\.[0-9a-f]{64}\\.tasks$" },
+        "channel": { "pattern": "^u\\.[0-9a-f]{64}\\.worker\\.[a-z0-9._-]+\\.tasks$" },
         "event": { "enum": ["task.created", "task.updated"] },
         "payload": {
           "type": "object",
@@ -140,7 +140,7 @@
     },
     "inputEvent": {
       "properties": {
-        "channel": { "pattern": "^u\\.[0-9a-f]{64}\\.task\\.[a-z0-9-]+\\.input$" },
+        "channel": { "pattern": "^u\\.[0-9a-f]{64}\\.worker\\.[a-z0-9._-]+\\.input$" },
         "event": { "enum": ["task.input", "ask.reply"] },
         "payload": {
           "type": "object",

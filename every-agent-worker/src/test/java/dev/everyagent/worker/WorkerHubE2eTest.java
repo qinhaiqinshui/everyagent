@@ -153,7 +153,7 @@ class WorkerHubE2eTest {
                 + ",\"role\":\"frontend\",\"apiKey\":\"" + KEY + "\",\"clientId\":\"fe-e2e\",\"hubKey\":\""
                 + HUB_KEY + "\"}");
         fe.await(t -> t.contains("\"type\":\"welcome\""), "welcome(真实 hub)");
-        sub(Channels.tasks(k));
+        sub(Channels.tasks(k, workerProps.getWorkerId()));
         sub(Channels.workers(k));
         sub(Channels.workerEvt(k, workerProps.getWorkerId()));
     }

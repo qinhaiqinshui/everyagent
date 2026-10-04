@@ -161,7 +161,7 @@ class WorkerDataPusherTest {
         }
         fe = WsTestClient.connect(URI.create("ws://127.0.0.1:" + PORT + "/fakehub"));
         sessionId = hello(fe);
-        sub(fe, Channels.tasks(k));
+        sub(fe, Channels.tasks(k, workerProps.getWorkerId()));
         sub(fe, Channels.workerEvt(k, workerProps.getWorkerId()));
     }
 
@@ -316,7 +316,7 @@ class WorkerDataPusherTest {
 
     @Test
     void nonOwnedTaskJoinIgnored() {
-        sub(fe, Channels.taskStream(k, "t_nope123"));
+        sub(fe, Channels.taskStream(k, workerProps.getWorkerId(), "t_nope123"));
         sleep(700);
         assertEquals(0, pushers.pusherCount(), "非本 worker 任务的订阅通知被忽略(内存/磁盘均无)");
     }
@@ -334,7 +334,7 @@ class WorkerDataPusherTest {
     // ---- 帮助方法 ----
 
     private String streamCh(String taskId) {
-        return Channels.taskStream(k, taskId);
+        return Channels.taskStream(k, workerProps.getWorkerId(), taskId);
     }
 
     /** 等活跃推送器数达到 n(推送器建/销均由异步通知驱动)。 */

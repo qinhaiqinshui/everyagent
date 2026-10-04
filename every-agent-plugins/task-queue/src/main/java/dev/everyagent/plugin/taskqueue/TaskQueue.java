@@ -97,7 +97,10 @@ public class TaskQueue {
                 arr.add(tid);
             }
             payload.set("queue", arr);
-            eventSink.fanout(k -> Channels.tasks(k), Events.TASK_QUEUED, null, payload, null);
+            // 队列状态也走本 worker 的 tasks 频道(带 worker 段),并标明归属 worker(架构 §5.2)。
+            payload.put("workerId", eventSink.workerId());
+            eventSink.fanout(k -> Channels.tasks(k, eventSink.workerId()), Events.TASK_QUEUED, null,
+                    payload, null);
         } catch (Exception e) {
             log.warn("广播队列状态失败", e);
         }

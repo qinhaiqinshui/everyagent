@@ -166,7 +166,10 @@ public class QueueRpcHandler {
         ObjectNode summary = st.summary().deepCopy();
         summary.set("pendingInputs", QueueBroadcast.toArray(
                 list.stream().map(UserInput::text).toList()));
-        eventSink.fanout(k -> Channels.tasks(k), Events.TASK_UPDATED, null, summary, null);
+        // 本 worker 的 tasks 频道 + 显式 workerId(旧任务 meta 里可能没有该字段,架构 §5.2)
+        summary.put("workerId", eventSink.workerId());
+        eventSink.fanout(k -> Channels.tasks(k, eventSink.workerId()), Events.TASK_UPDATED, null,
+                summary, null);
         ctx.ok(Json.obj().put("taskId", taskId).put("ok", true));
     }
 }

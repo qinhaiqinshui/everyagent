@@ -33,7 +33,11 @@ final class QueueBroadcast {
             t.touch();
             ObjectNode summary = t.summaryJson();
             summary.set("pendingInputs", toArray(queue == null ? null : queue.snapshot()));
-            eventSink.fanout(k -> Channels.tasks(k), Events.TASK_UPDATED, null, summary, null);
+            // 广播到本 worker 的 tasks 频道(带 worker 段),并标明归属 worker(架构 §5.2);
+            // 扇出入口自带 workerId,插件无需知道自身身份以外的信息。
+            summary.put("workerId", eventSink.workerId());
+            eventSink.fanout(k -> Channels.tasks(k, eventSink.workerId()), Events.TASK_UPDATED, null,
+                    summary, null);
         } catch (Exception e) {
             log.warn("[queue] 广播队列更新失败 task={}", t.taskId(), e);
         }

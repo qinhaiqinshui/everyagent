@@ -179,9 +179,9 @@ class MultiHubE2eTest {
         feA1 = connect(portA1, KEY_A, "fe-a1");
         feA2 = connect(portA2, KEY_A, "fe-a2");
         feB = connect(portB, KEY_B, "fe-b");
-        sub(feA1, Channels.tasks(kA));
-        sub(feA2, Channels.tasks(kA));
-        sub(feB, Channels.tasks(kB));
+        sub(feA1, Channels.tasks(kA, workerProps.getWorkerId()));
+        sub(feA2, Channels.tasks(kA, workerProps.getWorkerId()));
+        sub(feB, Channels.tasks(kB, workerProps.getWorkerId()));
         // RPC 应答回来源连接的 evt 频道:各前端须先订自己的 evt(先订后请求)
         sub(feA1, Channels.workerEvt(kA, workerProps.getWorkerId()));
         sub(feA2, Channels.workerEvt(kA, workerProps.getWorkerId()));

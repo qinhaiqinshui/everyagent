@@ -12,11 +12,13 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * channel → 订阅者集合;pub 到来即遍历投递。无缓冲、无持久化。
  *
- * <p>架构演进(混合模型:hub 感知 stream 频道订阅):前端在 u.&lt;ownerKey&gt;.task.&lt;taskId&gt;.stream
- * 频道上 sub/unsub(或连接断开 cleanup)时,向该 owner 下全部在线 worker 连接投递
- * subscriber.join / subscriber.leave 通知帧(msg 帧,channel=原 stream 频道,
- * payload={sessionId, taskId}),worker 据此按 (sessionId,taskId) 建/销定向推送器,
- * 只推运行中任务的实时增量(历史/补齐仍走 task.poll 拉取)。仅「前端 + stream 频道」触发;
+ * <p>架构演进(混合模型:hub 感知 stream 频道订阅):前端在
+ * {@code u.<ownerKey>.worker.<workerId>.task.<taskId>.stream} 频道上 sub/unsub(或连接断开
+ * cleanup)时,投递 {@code subscriber.join / subscriber.leave} 通知帧(msg 帧,
+ * channel=原 stream 频道,payload={sessionId, taskId})——**频道名带 worker 段时只投那一台**
+ * (worker 握手 clientId 即 workerId,§4.4),无 worker 段时投该 owner 下全部在线 worker。
+ * worker 据此按 (sessionId,taskId) 建/销定向推送器,只推运行中任务的实时增量
+ * (历史/补齐仍走 task.poll 拉取,§7.13)。仅「前端 + stream 频道」触发;
  * worker 订阅 stream 频道或前端订阅非 stream 频道均不通知。通知为无状态 fire-and-forget
  * msg,hub 不存任何订阅簿(零状态红线不变)。
  */
@@ -123,12 +125,30 @@ public class ChannelRegistry {
         return StreamChannelParser.parse(channel);
     }
 
-    /** 向该 owner 下全部在线 worker 投递订阅通知;已关闭的 worker 连接 deliver 返回 false,静默跳过。 */
+    /**
+     * 向目标 worker 投递订阅通知;已关闭的 worker 连接 deliver 返回 false,静默跳过。
+     *
+     * <p>定向规则:stream 频道名带 worker 段({@code u.<K>.worker.<wid>.task.<tid>.stream})时,
+     * 只投给该 ownerKey 下 clientId=wid 的那一条 worker 连接(worker 握手 hello 的 clientId
+     * 即其 workerId,§4.4)——同 apiKey 多台 worker 因此不会彼此为对方的任务建定向推送器。
+     * 频道名无 worker 段(旧形态)时退化为投给该 ownerKey 全部在线 worker,保持原行为。
+     * 仍是无状态 fire-and-forget:只读现成的连接索引,hub 不存任何订阅簿(§6.1/§14.2)。
+     */
     private void notifyWorkers(String channel, StreamChannelParser.StreamRef ref, String sessionId, String event) {
         String wire = subscriberFrame(channel, ref.taskId(), sessionId, event);
-        for (HubConnection worker : connections.onlineWorkers(ref.ownerKey())) {
+        for (HubConnection worker : joinTargets(ref)) {
             worker.deliver(wire);
         }
+    }
+
+    /** join/leave 的投递目标:频道带 worker 段 → 只那一台;否则该 ownerKey 全部在线 worker。 */
+    private java.util.List<HubConnection> joinTargets(StreamChannelParser.StreamRef ref) {
+        String workerId = ref.workerId();
+        if (workerId != null) {
+            HubConnection target = connections.findWorker(ref.ownerKey(), workerId);
+            return target == null ? java.util.List.of() : java.util.List.of(target);
+        }
+        return connections.onlineWorkers(ref.ownerKey());
     }
 
     /** 构造 subscriber.join / subscriber.leave 通知帧(msg 帧,channel=原 stream 频道,payload={sessionId, taskId})。 */

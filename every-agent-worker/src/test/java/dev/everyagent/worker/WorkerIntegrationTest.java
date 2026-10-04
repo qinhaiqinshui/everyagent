@@ -215,7 +215,7 @@ class WorkerIntegrationTest {
         }
         fe = WsTestClient.connect(URI.create("ws://127.0.0.1:" + PORT + "/fakehub"));
         hello(fe);
-        sub(fe, Channels.tasks(k));
+        sub(fe, Channels.tasks(k, workerProps.getWorkerId()));
         sub(fe, Channels.workerEvt(k, workerProps.getWorkerId()));
     }
 

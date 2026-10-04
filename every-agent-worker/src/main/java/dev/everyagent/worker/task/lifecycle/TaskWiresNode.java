@@ -5,7 +5,7 @@ import dev.everyagent.plugin.api.task.TaskLifecycleContext;
 import dev.everyagent.plugin.api.task.TaskLifecycleNode;
 import dev.everyagent.plugin.api.task.TaskOutcome;
 import dev.everyagent.worker.hub.EventSink;
-import dev.everyagent.plugin.api.event.Channels;
+import dev.everyagent.worker.task.TaskEventWire;
 import dev.everyagent.plugin.api.event.Events;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -36,7 +36,7 @@ public final class TaskWiresNode implements TaskLifecycleNode {
         ctx.onUsageBroadcast(() -> {
             if (t.status.terminal()) return;
             try {
-                eventSink.fanout(k -> Channels.tasks(k), Events.TASK_UPDATED, null, t.runtimeSummaryJson(), null);
+                TaskEventWire.fanoutTasks(eventSink, Events.TASK_UPDATED, t.runtimeSummaryJson());
             } catch (RuntimeException e) {
                 log.debug("任务用量广播失败 task={}", t.taskId, e);
             }

@@ -77,7 +77,8 @@ import java.util.concurrent.atomic.AtomicInteger;
  * 多 hub:任务不做 owner 隔离;任务事件经 EventSink.fanout 扇出到全部连接的 tasks 频道。
  */
 @Component
-public class TaskManager implements TaskInputHandler, InteractionServiceImpl.StatusHook, WorkspaceCascadePort, EmitterLookup {
+public class TaskManager implements TaskInputHandler, InteractionServiceImpl.StatusHook,
+        WorkspaceCascadePort, EmitterLookup, dev.everyagent.worker.ship.TaskOwnership {
 
     private static final Logger log = LoggerFactory.getLogger(TaskManager.class);
     private static final long IDEM_WINDOW_MS = 600_000;
@@ -302,7 +303,8 @@ public class TaskManager implements TaskInputHandler, InteractionServiceImpl.Sta
         long to = limit > 0 ? Math.min(from + limit, total) : total;
         ArrayNode arr = Json.arr();
         for (long i = from; i < to; i++) {
-            arr.add(all.get((int) i));
+            // 每条摘要都带 workerId(契约字段):前端据此把任务条目钉到归属 worker,不再猜(§5.2/§8.2)。
+            arr.add(TaskEventWire.withWorkerId(all.get((int) i), eventSink.workerId()));
         }
         ctx.ok(Json.obj()
                 .set("tasks", arr)
@@ -979,8 +981,8 @@ public class TaskManager implements TaskInputHandler, InteractionServiceImpl.Sta
         }
         store.delete(st.dir());
         store.forgetTask(taskId); // 忘记 workspaceId 映射(幂等:已删除/未登记均无害)
-        eventSink.fanout(k -> Channels.tasks(k), Events.TASK_DELETED, null,
-                Json.obj().put("taskId", taskId), null);
+        // 删除事件同样发到本 worker 的 tasks 频道;workerId 由 fanoutTasks 统一补齐。
+        fanoutTasks(Events.TASK_DELETED, Json.obj().put("taskId", taskId));
         return DeleteResult.OK;
     }
 
@@ -1113,7 +1115,7 @@ public class TaskManager implements TaskInputHandler, InteractionServiceImpl.Sta
             }
             t.status = s;
         }
-        eventSink.fanout(k -> Channels.tasks(k), Events.TASK_UPDATED, null, t.runtimeSummaryJson(), null);
+        fanoutTasks(Events.TASK_UPDATED, t.runtimeSummaryJson());
     }
 
 // ---- InteractionServiceImpl.StatusHook:waiting-user ⇄ running ----
@@ -1238,19 +1240,42 @@ public class TaskManager implements TaskInputHandler, InteractionServiceImpl.Sta
     }
 
     /**
+     * 本 worker 是否持有该任务(内存运行中 ∪ 磁盘索引 ∪ 任务目录存在,任一即可)——
+     * {@link dev.everyagent.worker.ship.TaskOwnership} 的 task 层实现。
+     *
+     * <p>口径与 {@code rpcTaskPoll}/{@code rpcTaskRounds} 的存在性判定<b>逐字一致</b>,
+     * 避免「RPC 说任务在、推送器说任务不在」这类自相矛盾。
+     */
+    @Override
+    public boolean ownsTask(String taskId) {
+        if (taskId == null || taskId.isEmpty()) {
+            return false;
+        }
+        return tasks.containsKey(taskId) || diskTasks.containsKey(taskId) || store.taskDirExists(taskId);
+    }
+
+    /**
      * 广播 task.updated 到全部连接:运行中任务用内存 runtimeSummaryJson,
      * 磁盘终态任务用磁盘 summary(共享引用,只读广播);任务都不存在则不广播。
      */
     public void publishTaskUpdated(String taskId) {
         TaskEntry t = tasks.get(taskId);
         if (t != null) {
-            eventSink.fanout(k -> Channels.tasks(k), Events.TASK_UPDATED, null, t.runtimeSummaryJson(), null);
+            fanoutTasks(Events.TASK_UPDATED, t.runtimeSummaryJson());
             return;
         }
         TaskStore.StoredTask st = diskTasks.get(taskId);
         if (st != null) {
-            eventSink.fanout(k -> Channels.tasks(k), Events.TASK_UPDATED, null, st.summary(), null);
+            fanoutTasks(Events.TASK_UPDATED, st.summary());
         }
+    }
+
+    /**
+     * 任务生命周期事件扇出:委托 {@link TaskEventWire#fanoutTasks}(频道 = 本 worker 的 tasks 频道
+     * {@code u.<K>.worker.<workerId>.tasks},并保证 payload 带 {@code workerId},架构 §5.2)。
+     */
+    private void fanoutTasks(String event, JsonNode payload) {
+        TaskEventWire.fanoutTasks(eventSink, event, payload);
     }
 
     public int activeCount() {

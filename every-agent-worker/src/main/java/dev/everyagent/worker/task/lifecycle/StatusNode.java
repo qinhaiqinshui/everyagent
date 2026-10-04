@@ -3,7 +3,7 @@ package dev.everyagent.worker.task.lifecycle;
 import dev.everyagent.plugin.api.task.TaskLifecycleContext;
 import dev.everyagent.plugin.api.task.TaskOutcome;
 import dev.everyagent.worker.hub.EventSink;
-import dev.everyagent.plugin.api.event.Channels;
+import dev.everyagent.worker.task.TaskEventWire;
 import dev.everyagent.plugin.api.event.Events;
 import dev.everyagent.worker.proto.TaskDtos.TaskStatus;
 import org.slf4j.Logger;
@@ -43,7 +43,7 @@ public final class StatusNode extends SectionNode {
             t.status = TaskStatus.RUNNING;
         }
         // agent.status{running} 已退役：由 AgentStatusAdvisor 每轮 run() 首帧自动发。
-        eventSink.fanout(k -> Channels.tasks(k), Events.TASK_UPDATED, null, t.runtimeSummaryJson(), null);
+        TaskEventWire.fanoutTasks(eventSink, Events.TASK_UPDATED, t.runtimeSummaryJson());
     }
 
     @Override
@@ -62,7 +62,7 @@ public final class StatusNode extends SectionNode {
         // agent.status 终态已退役：由 AgentStatusAdvisor 的 doOnComplete/doOnError/doOnCancel
         // 自动发（任务级终态与本节点的 task.updated 广播是分属两个维度的状态，§7.20.1）。
         try {
-            eventSink.fanout(k -> Channels.tasks(k), Events.TASK_UPDATED, null, t.runtimeSummaryJson(), null);
+            TaskEventWire.fanoutTasks(eventSink, Events.TASK_UPDATED, t.runtimeSummaryJson());
         } catch (RuntimeException e) {
             log.debug("终态广播失败 task={}", t.taskId, e);
         }

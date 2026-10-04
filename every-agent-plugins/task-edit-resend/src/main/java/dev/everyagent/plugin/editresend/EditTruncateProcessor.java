@@ -148,6 +148,9 @@ public final class EditTruncateProcessor {
         ObjectNode editPayload = Json.obj()
                 .put("content", text);
         editPayload.set("data", editData);
-        eventSink.fanout(k -> Channels.taskStream(k, taskId), Events.MESSAGE_EDITED, null, editPayload, null);
+        // stream 频道带 worker 段:hub 据此把 subscriber.join 定向到本 worker,
+        // 同 apiKey 的另一台不会为此任务建推送器(架构 §5.2/§7.13)。
+        eventSink.fanout(k -> Channels.taskStream(k, eventSink.workerId(), taskId), Events.MESSAGE_EDITED,
+                null, editPayload, null);
     }
 }

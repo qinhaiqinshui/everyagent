@@ -1,6 +1,7 @@
 package dev.everyagent.worker;
 
 import dev.everyagent.contract.frame.Frames;
+import dev.everyagent.contract.frame.StreamChannelParser;
 import dev.everyagent.contract.json.Json;
 import jakarta.websocket.OnClose;
 import jakarta.websocket.OnMessage;
@@ -63,10 +64,10 @@ public class FakeHub {
                 subs.computeIfAbsent(channel, k -> ConcurrentHashMap.newKeySet()).add(session);
                 sessionSubs.computeIfAbsent(session, k -> ConcurrentHashMap.newKeySet()).add(channel);
                 // 前端订阅 stream 频道 → 通知该 owner 的 worker 连接(subscriber.join)
-                String taskId = streamTaskId(channel);
-                if (taskId != null && isFrontend(session)) {
+                StreamChannelParser.StreamRef joined = parseStream(channel);
+                if (joined != null && isFrontend(session)) {
                     notifyWorkers(subscriberFrame(channel, "subscriber.join",
-                            session.getId(), taskId));
+                            session.getId(), joined.taskId()), joined);
                 }
             }
             case "unsub" -> {
@@ -79,10 +80,10 @@ public class FakeHub {
                 if (mine != null) {
                     mine.remove(channel);
                 }
-                String taskId = streamTaskId(channel);
-                if (taskId != null && isFrontend(session)) {
+                StreamChannelParser.StreamRef left = parseStream(channel);
+                if (left != null && isFrontend(session)) {
                     notifyWorkers(subscriberFrame(channel, "subscriber.leave",
-                            session.getId(), taskId));
+                            session.getId(), left.taskId()), left);
                 }
             }
             case "pub" -> {
@@ -123,10 +124,10 @@ public class FakeHub {
         Set<String> mine = sessionSubs.remove(session);
         if (mine != null && isFrontend(session)) {
             for (String channel : mine) {
-                String taskId = streamTaskId(channel);
-                if (taskId != null) {
+                StreamChannelParser.StreamRef ref = parseStream(channel);
+                if (ref != null) {
                     notifyWorkers(subscriberFrame(channel, "subscriber.leave",
-                            session.getId(), taskId));
+                            session.getId(), ref.taskId()), ref);
                 }
             }
         }
@@ -155,13 +156,25 @@ public class FakeHub {
         }
     }
 
-    /** 向全部 worker 连接投递一帧(定向推送的 hub 通知侧)。 */
-    private static void notifyWorkers(ObjectNode frame) {
+    /**
+     * 向目标 worker 连接投递一帧(定向推送的 hub 通知侧)。
+     *
+     * <p>与真实 hub({@code ChannelRegistry.joinTargets})同口径:频道名带 worker 段时只投那一台
+     * (worker 握手 clientId 即 workerId),无 worker 段时投该 owner 全部 worker 连接 ——
+     * 这样测试替身不会替实现"打折",同 apiKey 多 worker 的隔离在单测里同样成立。
+     */
+    private static void notifyWorkers(ObjectNode frame, StreamChannelParser.StreamRef ref) {
         String wire = frame.toString();
+        String target = ref == null ? null : ref.workerId();
         for (Map.Entry<Session, String> e : identities.entrySet()) {
-            if (e.getValue().startsWith("worker:") && e.getKey().isOpen()) {
-                send(e.getKey(), wire);
+            String id = e.getValue();
+            if (!id.startsWith("worker:") || !e.getKey().isOpen()) {
+                continue;
             }
+            if (target != null && !id.substring("worker:".length()).equals(target)) {
+                continue; // 频道点名的不是这台 worker
+            }
+            send(e.getKey(), wire);
         }
     }
 
@@ -183,21 +196,15 @@ public class FakeHub {
         return msg;
     }
 
-    /** stream 频道 u.&lt;k&gt;.task.&lt;taskId&gt;.stream → taskId;非 stream 频道返回 null。 */
-    private static String streamTaskId(String channel) {
-        if (channel == null || !channel.startsWith("u.")) {
-            return null;
-        }
-        int ownerEnd = channel.indexOf('.', 2);
-        if (ownerEnd < 0) {
-            return null;
-        }
-        String rest = channel.substring(ownerEnd + 1);
-        if (!rest.startsWith("task.") || !rest.endsWith(".stream")) {
-            return null;
-        }
-        String taskId = rest.substring("task.".length(), rest.length() - ".stream".length());
-        return taskId.isEmpty() ? null : taskId;
+    /**
+     * 解析 stream 频道 → 解析结果;非 stream 频道返回 null。
+     *
+     * <p>委托 contract 的 {@link StreamChannelParser}(与真实 hub 同一份频道命名知识):
+     * 测试替身不得自己硬编码频道语法,否则频道一改形态,替身就"认不出"新频道、
+     * 不再发订阅通知,导致推送相关用例假绿/假红。
+     */
+    private static StreamChannelParser.StreamRef parseStream(String channel) {
+        return StreamChannelParser.parse(channel);
     }
 
     private static boolean isFrontend(Session session) {

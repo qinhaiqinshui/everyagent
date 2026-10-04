@@ -5,7 +5,7 @@ import dev.everyagent.plugin.api.task.TaskChain;
 import dev.everyagent.plugin.api.task.TaskLifecycleContext;
 import dev.everyagent.plugin.api.task.TaskLifecycleNode;
 import dev.everyagent.worker.hub.EventSink;
-import dev.everyagent.plugin.api.event.Channels;
+import dev.everyagent.worker.task.TaskEventWire;
 import dev.everyagent.plugin.api.event.Events;
 import dev.everyagent.worker.rpc.RpcContext;
 import dev.everyagent.worker.task.TaskEntry;
@@ -41,8 +41,7 @@ public final class ResponseAckNode implements TaskLifecycleNode {
         if (rpcCtx instanceof RpcContext rc) {
             // 新建任务：广播 TASK_CREATED
             if (t.status != null && "created".equals(t.status.wire())) {
-                eventSink.fanout(k -> Channels.tasks(k), Events.TASK_CREATED, null,
-                        t.runtimeSummaryJson(), null);
+                TaskEventWire.fanoutTasks(eventSink, Events.TASK_CREATED, t.runtimeSummaryJson());
             }
             rc.ok(Json.obj()
                     .put("taskId", t.taskId)
