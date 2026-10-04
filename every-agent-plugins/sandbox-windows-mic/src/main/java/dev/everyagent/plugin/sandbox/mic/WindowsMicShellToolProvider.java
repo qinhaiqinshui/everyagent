@@ -20,6 +20,9 @@ import java.util.List;
  * <p>rg 归属下放：rg 由插件自带（{@code <pluginDir>/bin/rg.exe}），activate 时经
  * {@link MicRg#resolve} 解析后传入（已转为其所在目录路径），不再依赖 worker 核心的 rg。
  * PATH 注入由本插件自行包装 ShellExecutor 实现，核心不感知 extraBinDir。
+ *
+ * <p>除 PATH 注入外，还前置 {@link MicRgShim#build} 生成的 rg 包装函数：沙箱里 stdin 恒为
+ * NUL 设备，rg「未给路径」时会转去过滤 stdin 而静默返回空结果，必须由包装函数补 cwd。
  */
 public class WindowsMicShellToolProvider implements ToolProvider {
 
@@ -49,19 +52,25 @@ public class WindowsMicShellToolProvider implements ToolProvider {
         ShellExecutor exec = rgDir != null ? withRgInPath(base, rgDir) : base;
         return List.of(ShellTool.powershell(exec)
                 .appendDescription("rg 已加入 PATH,可直接执行 rg 命令，内容搜索尽量使用rg命令，性能更好;"
-                        + "中文等非 ASCII 输出已自动正确解码，无需手动处理编码。")
+                        + "rg 省略搜索路径时默认搜当前工作区(已自动补齐,不会静默读空 stdin);"
+                        + "中文等非 ASCII 输出已正确解码,无需手动处理编码。")
                 .callback());
     }
 
     /**
-     * 包装执行器：命令前预置 PATH 注入（PowerShell 语法），使子进程能找到 rg。
+     * 包装执行器：命令前预置 PATH 注入 + rg 包装函数（PowerShell 语法），
+     * 使子进程能找到 rg，且「没给搜索路径」时语义与交互终端一致。
      */
     private static ShellExecutor withRgInPath(ShellExecutor base, Path rgDir) {
         String dir = rgDir.toString().replace("'", "''");
+        String shim = MicRgShim.build(rgDir.resolve("rg.exe").toString());
+        // PATH 注入必须是 PowerShell 语句 $env:PATH = '<dir>;' + $env:PATH;
+        // 引号错位(把 ;' 写成 ';)会留下未闭合字符串,把后续 shim/命令一起吞进字符串里,
+        // 注入静默失效且命令语法走形(实测曾被 POWERSHELL_PREFIX 里的引号侥幸闭合而看不出来)。
+        String head = "$env:PATH = '" + dir + ";' + $env:PATH; " + shim;
         return (command, shell) -> {
             if ("powershell".equals(shell)) {
-                return base.execute(
-                        "$env:PATH = '" + dir + ";' + $env:PATH; " + command, shell);
+                return base.execute(head + command, shell);
             }
             return base.execute(command, shell);
         };
