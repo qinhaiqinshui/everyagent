@@ -3,6 +3,7 @@ package dev.everyagent.plugin.sandbox.mic;
 import dev.everyagent.plugin.api.config.WorkerConfig;
 import dev.everyagent.plugin.api.shell.ExecResults;
 import dev.everyagent.plugin.api.spi.ExecResult;
+import dev.everyagent.plugin.api.util.SecretPatterns;
 
 import com.sun.jna.Memory;
 import com.sun.jna.Pointer;
@@ -357,7 +358,13 @@ public final class WindowsSandbox {
      */
     private static Pointer buildEnvBlock(Map<String, String> extra, WorkerConfig.Sandbox cfg,
             boolean allowNetwork) {
-        Map<String, String> env = new HashMap<>(System.getenv());
+        // 父环境基底先剔除凭据形态变量(§7.17 环境侧信道):沙箱内任意命令读 Env
+        // 不该拿到宿主 shell 的 API key;审计只打变量名,绝不打值
+        SecretPatterns.EnvScrub inherit = SecretPatterns.scrubEnv(System.getenv());
+        if (inherit.cleaned()) {
+            log.info("[sandbox] 沙箱 env 剔除凭据变量(仅名): {}", inherit.removedNames());
+        }
+        Map<String, String> env = new HashMap<>(inherit.env());
         if (extra != null) {
             env.putAll(extra);
         }

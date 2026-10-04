@@ -7,6 +7,7 @@ import com.sun.jna.platform.win32.WinDef;
 import com.sun.jna.platform.win32.WinNT;
 import com.sun.jna.ptr.IntByReference;
 
+import dev.everyagent.plugin.api.util.SecretPatterns;
 import dev.everyagent.plugin.sandbox.codex.accounts.SandboxAccounts;
 import dev.everyagent.plugin.sandbox.codex.accounts.SandboxSecrets;
 import dev.everyagent.plugin.sandbox.codex.runner.EnvBlock;
@@ -150,8 +151,15 @@ public final class RunnerClient {
                 String cmdline = joinCommandLine(argv);
                 java.nio.file.Path envTmp = SandboxDirs.sandboxDir(cfg.codexHome()).resolve("tmp");
                 Files.createDirectories(envTmp);
+                // 继承父环境但剔除凭据形态变量:runner 跑在沙箱账户里,任何命令读 Env 都
+                // 不该看到宿主 shell 的 API key(§7.17 环境侧信道)
+                SecretPatterns.EnvScrub inherit = SecretPatterns.scrubEnv(System.getenv());
+                if (inherit.cleaned()) {
+                    LOG.log(System.Logger.Level.INFO, "[runner] env 剔除凭据变量(仅名): {0}",
+                            inherit.removedNames());
+                }
                 java.util.Map<String, String> runnerEnv =
-                        new java.util.LinkedHashMap<>(System.getenv());
+                        new java.util.LinkedHashMap<>(inherit.env());
                 runnerEnv.put("TEMP", envTmp.toString());
                 runnerEnv.put("TMP", envTmp.toString());
                 lastEnvDiag = runnerEnv.size() + "/" + envBlockBytes(runnerEnv);
@@ -383,11 +391,19 @@ public final class RunnerClient {
         return chars * 2;
     }
 
-    /** runner 环境变量：继承当前环境 + TEMP/TMP → {@code <codexHome>/.sandbox/tmp}。 */
+    /**
+     * runner 环境变量：继承当前环境（<b>剔除凭据形态变量</b>——沙箱内任意命令读 Env
+     * 不该拿到宿主 shell 的 API key，§7.17 环境侧信道）+ TEMP/TMP → {@code <codexHome>/.sandbox/tmp}。
+     */
     static Map<String, String> runnerEnvironment(Path codexHome) throws IOException {
         Path tmp = SandboxDirs.sandboxDir(codexHome).resolve("tmp");
         Files.createDirectories(tmp);
-        Map<String, String> env = new LinkedHashMap<>(System.getenv());
+        SecretPatterns.EnvScrub inherit = SecretPatterns.scrubEnv(System.getenv());
+        if (inherit.cleaned()) {
+            LOG.log(System.Logger.Level.INFO, "[runner] env 剔除凭据变量(仅名): {0}",
+                    inherit.removedNames());
+        }
+        Map<String, String> env = new LinkedHashMap<>(inherit.env());
         env.put("TEMP", tmp.toString());
         env.put("TMP", tmp.toString());
         return env;

@@ -219,6 +219,13 @@ public final class OsSandbox implements SandboxBackend, NativeExec {
         ProcessBuilder pb = new ProcessBuilder(cmd);
         pb.directory(cwd.toFile());
         pb.redirectInput(ProcessBuilder.Redirect.from(NULL_INPUT));
+        // ProcessBuilder 默认整块继承父进程 env —— 这里就地剔除凭据形态变量,
+        // 防沙箱外直跑的子进程(git/rg/npm 等)从 Env 读到宿主 shell 的 API key(§7.17)
+        List<String> scrubbed = dev.everyagent.plugin.api.util.SecretPatterns
+                .scrubInPlace(pb.environment());
+        if (!scrubbed.isEmpty()) {
+            log.info("[os-sandbox] 子进程 env 剔除凭据变量(仅名): {}", scrubbed);
+        }
         pb.environment().putAll(sanitizedEnv(extraEnv, allowNetwork));
         try {
             Process p = pb.start();

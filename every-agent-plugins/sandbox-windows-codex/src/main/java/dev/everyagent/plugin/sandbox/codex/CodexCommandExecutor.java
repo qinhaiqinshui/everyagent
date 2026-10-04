@@ -1,6 +1,7 @@
 package dev.everyagent.plugin.sandbox.codex;
 
 import dev.everyagent.plugin.api.shell.ExecResults;
+import dev.everyagent.plugin.api.util.SecretPatterns;
 import dev.everyagent.plugin.sandbox.codex.accounts.CapSids;
 import dev.everyagent.plugin.sandbox.codex.accounts.SandboxAccounts;
 import dev.everyagent.plugin.sandbox.codex.accounts.SandboxAccounts.NetworkIdentity;
@@ -352,9 +353,14 @@ public final class CodexCommandExecutor {
         }
     }
 
-    /** 继承当前环境；rgBinary 非空时其所在目录前置进 Path（Windows 键名优先）。 */
+    /**
+     * 继承当前环境<b>但剔除凭据形态变量</b>（§7.17「真实 key 不进事件日志」的环境侧对应物：
+     * 宿主 shell 里散落的 {@code *KEY}/{@code *TOKEN}/值像 {@code sk-ant-…} 的变量不得进入沙箱,
+     * 否则沙箱内任意命令 {@code Get-ChildItem Env:} 即可窃取,再随工具输出落盘）；
+     * rgBinary 非空时其所在目录前置进 Path（Windows 键名优先）。
+     */
     static Map<String, String> childEnv(Path rgBinary) {
-        Map<String, String> env = new LinkedHashMap<>(System.getenv());
+        Map<String, String> env = new LinkedHashMap<>(inheritEnv());
         if (rgBinary != null && rgBinary.getParent() != null) {
             String dir = rgBinary.getParent().toString();
             String key = env.containsKey("Path") ? "Path" : "PATH";
@@ -365,6 +371,16 @@ public final class CodexCommandExecutor {
                     : present ? current : dir + ";" + current);
         }
         return env;
+    }
+
+    /** 父环境继承 + 凭据剔除（审计只打变量名，绝不打值）；同口径供 runner 复用。 */
+    static Map<String, String> inheritEnv() {
+        SecretPatterns.EnvScrub scrub = SecretPatterns.scrubEnv(System.getenv());
+        if (scrub.cleaned()) {
+            LOG.log(System.Logger.Level.INFO, "[exec] 沙箱 env 剔除凭据变量(仅名): {0}",
+                    scrub.removedNames());
+        }
+        return scrub.env();
     }
 
     /** NetworkIdentity → wire 名（SpawnRequest.network_identity：offline/online）。 */

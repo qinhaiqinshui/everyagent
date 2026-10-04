@@ -139,7 +139,13 @@ class CodexCommandExecutorTest {
         assertTrue(env.get(key).startsWith(rg.getParent().toString()),
                 "rg 所在目录前置进 Path:" + env.get(key));
         Map<String, String> plain = CodexCommandExecutor.childEnv(null);
-        assertEquals(System.getenv(), plain, "无 rg 时原样继承环境");
+        assertEquals(dev.everyagent.plugin.api.util.SecretPatterns.scrubEnv(System.getenv()).env(),
+                plain, "无 rg 时继承「凭据剔除后的父环境」(整块原样继承是泄露面,见 SecretPatterns)");
+        assertFalse(plain.entrySet().stream()
+                        .anyMatch(e -> dev.everyagent.plugin.api.util.SecretPatterns
+                                .isSecretBearing(e.getKey(), e.getValue())),
+                "沙箱 env 不得携带凭据形态变量");
+        assertTrue(plain.size() > 0, "父环境仍被继承(不是清空)");
     }
 
     @Test

@@ -3,6 +3,7 @@ package dev.everyagent.worker.os.pty;
 import com.pty4j.PtyProcess;
 import com.pty4j.PtyProcessBuilder;
 import com.pty4j.WinSize;
+import dev.everyagent.plugin.api.util.SecretPatterns;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -68,8 +69,9 @@ public final class TerminalPtyFactory {
 
         String shellPath = (shell != null) ? shell : defaultShell();
 
-        // 环境变量:当前进程 env + extraEnv + TERM
-        Map<String, String> env = new HashMap<>(System.getenv());
+        // 环境变量:当前进程 env(剔除凭据形态变量,§7.17 环境侧信道——交互式终端里的任意
+        // 命令都不该读到宿主 shell 的 API key) + extraEnv + TERM
+        Map<String, String> env = new HashMap<>(SecretPatterns.scrubEnv(System.getenv()).env());
         if (extraEnv != null) {
             env.putAll(extraEnv);
         }
