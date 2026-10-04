@@ -21,6 +21,7 @@
         <module>every-agent-contract</module>
         <module>every-agent-hub</module>
         <module>every-agent-plugin-api</module>
+        <module>every-agent-plugins/task-edit-resend</module>
         <module>every-agent-worker</module>
     </modules>
 

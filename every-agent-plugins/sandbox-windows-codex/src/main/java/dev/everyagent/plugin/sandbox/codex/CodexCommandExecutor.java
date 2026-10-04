@@ -282,8 +282,10 @@ public final class CodexCommandExecutor {
     /** shell 命令 → 子进程 argv：按探测到的 shell 分派。 */
     List<String> commandArgv(String command) {
         if (shell.isPowerShell) {
-            return List.of(shell.exe, "-NoProfile", "-Command",
-                    ExecResults.POWERSHELL_PREFIX + command);
+            // -ExecutionPolicy Bypass：沙箱账户默认 Restricted 策略会拦截 .ps1 脚本
+            // （如 npm.ps1），per-process 旁路不影响系统策略。
+            return List.of(shell.exe, "-NoProfile", "-ExecutionPolicy", "Bypass",
+                    "-Command", ExecResults.POWERSHELL_PREFIX + command);
         }
         return List.of(shell.exe, "/c", "chcp 65001 >nul & " + command);
     }
