@@ -23,7 +23,7 @@ public final class AclStructs {
     public static final int TRUSTEE_IS_UNKNOWN = 0;
     /** TRUSTEE_TYPE：用户（沙箱账户/组用 GROUP）。 */
     public static final int TRUSTEE_IS_USER = 1;
-    /** TRUSTEE_TYPE：组（EveryAgentCodexUsers 基线 ACE）。 */
+    /** TRUSTEE_TYPE：组（沙箱组基线 ACE）。 */
     public static final int TRUSTEE_IS_GROUP = 2;
 
     /**

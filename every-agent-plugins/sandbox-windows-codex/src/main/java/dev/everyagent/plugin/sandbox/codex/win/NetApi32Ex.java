@@ -61,7 +61,9 @@ public interface NetApi32Ex extends Netapi32 {
 
     /**
      * NetLocalGroupAddMembers——ensure_local_group_member：把沙箱账户加入
-     * EveryAgentCodexUsers 组与内建 Users（S-1-5-32-545），level 0 传 PSID 数组、
+     * 沙箱组（{@code <前缀>SandboxUsers}，见
+     * {@link dev.everyagent.plugin.sandbox.codex.accounts.SandboxAccounts#groupName}）
+     * 与内建 Users（S-1-5-32-545），level 0 传 PSID 数组、
      * level 3 传「域\名」字符串数组（调用方平铺进 Memory，本处按 Pointer 传首地址）。
      */
     int NetLocalGroupAddMembers(String servername, String groupname, int level, Pointer buf,

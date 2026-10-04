@@ -19,7 +19,9 @@ import java.util.Locale;
  *
  * @param codexHome        状态根（.sandbox/.sandbox-secrets/.sandbox-bin/cap_sid 之父；
  *                         默认 {@code <sandboxPersistentRoot>/codex}，键 codex.home）
- * @param accountPrefix    账户/组前缀（默认 EveryAgentCodex，键 codex.account-prefix）
+ * @param accountPrefix    账户/组前缀（默认 {@link SandboxAccounts#DEFAULT_PREFIX}，
+ *                         键 codex.account-prefix；派生名受 SAM 20 字符上限约束，
+ *                         见 {@link SandboxAccounts#MAX_USERNAME_LEN}）
  * @param networkPolicy    auto（随 worker networkDenied）/ offline / online 强制
  *                         （键 codex.network-policy）
  * @param proxyPorts       offline 账户放行的环回 TCP 代理端口（键 codex.proxy-ports，

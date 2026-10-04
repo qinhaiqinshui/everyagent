@@ -97,15 +97,19 @@ class SetupPayloadTest {
     @Test
     void markerSchemaMatchesCodexShape() throws IOException {
         Path codexHome = tempDir;
+        // 账户名从前缀派生：字面量 EveryAgentCodexOffline（22）超 SAM 20 上限，
+        // 现实里根本建不出来，用它当夹具会掩盖真实形态
+        String offline = SandboxAccounts.offlineUsername(SandboxAccounts.DEFAULT_PREFIX);
+        String online = SandboxAccounts.onlineUsername(SandboxAccounts.DEFAULT_PREFIX);
         SetupMarker.commit(codexHome, SetupPayload.SETUP_VERSION,
-                "EveryAgentCodexOffline", "EveryAgentCodexOnline",
+                offline, online,
                 List.of(8080), false);
         Path file = SetupMarker.markerFile(codexHome);
         assertTrue(Files.exists(file));
         JsonNode node = MAPPER.readTree(Files.readString(file));
         assertEquals(SetupPayload.SETUP_VERSION, node.get("version").asInt());
-        assertEquals("EveryAgentCodexOffline", node.get("offline_username").asText());
-        assertEquals("EveryAgentCodexOnline", node.get("online_username").asText());
+        assertEquals(offline, node.get("offline_username").asText());
+        assertEquals(online, node.get("online_username").asText());
         assertTrue(node.has("created_at"), "RFC3339 时间戳");
         assertTrue(node.get("proxy_ports").isArray());
         assertTrue(node.has("allow_local_binding"));
@@ -116,7 +120,7 @@ class SetupPayloadTest {
 
         SetupMarker.Model read = SetupMarker.read(codexHome);
         assertNotNull(read);
-        assertEquals("EveryAgentCodexOffline", read.offlineUsername);
+        assertEquals(offline, read.offlineUsername);
     }
 
     @Test

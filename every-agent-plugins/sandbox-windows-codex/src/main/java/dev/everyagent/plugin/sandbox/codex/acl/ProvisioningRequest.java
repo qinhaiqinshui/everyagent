@@ -12,7 +12,8 @@ import java.util.Objects;
  * <p>由 setup 编排层（步骤 6a/6c 适配器）组装；SID/根集合来自
  * CapSidStore/账户供应/工作区登记。
  *
- * @param groupSid      沙箱组 SID（如 {@code S-1-5-21-…}，EveryAgentCodexUsers）——
+ * @param groupSid      沙箱组 SID（如 {@code S-1-5-21-…}，组名
+ *                      {@code <前缀>SandboxUsers}）——
  *                      读授权（RX allow）与 deny-read 的主体
  * @param capSids       写根路径 → 该根 capability SID（与 {@code writeRoots} 键集对齐；
  *                      deny-write 按重叠根选择 cap；值为字符串键的 canonical 归一由

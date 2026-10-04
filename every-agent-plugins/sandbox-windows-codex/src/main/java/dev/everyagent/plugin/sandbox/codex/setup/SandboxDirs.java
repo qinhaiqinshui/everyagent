@@ -24,7 +24,7 @@ import java.nio.file.Path;
  * {@code codex.home} 可覆盖），含 {@code .sandbox}/
  * {@code .sandbox-secrets}/{@code .sandbox-bin} 三子目录（结构对齐 CODEX_HOME/.sandbox*）。
  *
- * <p>目录矩阵（组=EveryAgentCodexSandboxUsers，real_user=真实用户）：
+ * <p>目录矩阵（组={@code <前缀>SandboxUsers}，real_user=真实用户）：
  * <table border="1">
  * <tr><th>目录</th><th>组 ACE</th><th>real_user 掩码</th><th>DACL 继承</th></tr>
  * <tr><td>.sandbox</td><td>GRANT RWX+DELETE</td><td>RWX（无 DELETE）</td><td>Inherited</td></tr>

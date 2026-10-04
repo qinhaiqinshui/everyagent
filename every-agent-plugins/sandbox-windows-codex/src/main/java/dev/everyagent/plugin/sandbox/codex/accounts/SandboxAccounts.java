@@ -16,9 +16,13 @@ import java.security.SecureRandom;
  * 沙箱本地账户/组供给（对应 codex setup_provisioning/sandbox_users.rs + winutil.rs，
  * 设计文档 §2.3 AccountProvisioner）。
  *
- * <p>命名约定：组 {@code EACodexSandboxUsers}，账户
- * {@code EACodexOffline}/{@code EACodexOnline}（前缀可配置；
- * Windows SAM 用户名上限 20 字符）。
+ * <p>命名约定（一律由前缀派生，不要在别处硬编码字面量）：组
+ * {@code <前缀>SandboxUsers}（{@link #groupName}）、账户
+ * {@code <前缀>Offline}/{@code <前缀>Online}（{@link #offlineUsername}/
+ * {@link #onlineUsername}）；默认前缀 {@link #DEFAULT_PREFIX}，可经
+ * {@code codex.account-prefix} 配置。派生名必须 {@code <= }{@link #MAX_USERNAME_LEN}
+ * 字符——历史教训：前缀 {@code EveryAgentCodex}（15）派生的账户名长 22，
+ * {@code NetUserAdd} 直接拒绝，故缩短为 {@code EACodex}（7，组名 19 已贴边）。
  * 修复路径（不变量④）：检测到禁用账户残留时新建账户带 UF_ACCOUNTDISABLE，
  * 网络限制恢复成功后才解禁。
  *

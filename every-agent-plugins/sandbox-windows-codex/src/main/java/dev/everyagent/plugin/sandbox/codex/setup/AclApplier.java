@@ -24,7 +24,7 @@ public interface AclApplier {
      * 在提权 helper 内应用 ACL 授权。
      *
      * @param payload  编排层下发的完整载荷（read/write roots、deny 路径、真实用户等）
-     * @param groupSid 沙箱组 SID 字符串（EveryAgentCodexSandboxUsers）
+     * @param groupSid 沙箱组 SID 字符串（组名 {@code <前缀>SandboxUsers}）
      * @param capSids  已加载的 capability SID 集合（含惰性新建的写根 cap）
      * @throws Exception 任何失败——setup fail-closed，账户修复路径不解禁
      */
