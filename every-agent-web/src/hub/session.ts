@@ -276,6 +276,8 @@ class HubSession {
     }
     this.workerErrors.delete(workerId)
     this.notifyDirectory()
+    // 只能同时连接一个 worker:连接当前 worker 前先关闭并禁用其他已连接的 worker。
+    this.disconnectOtherWorkers(workerId)
     await this.connectWorker(workerId)
     this.notifyWorkers()
     return this.workerConnectResult(workerId)
@@ -296,6 +298,8 @@ class HubSession {
     this.config = { ...this.config, workers }
     saveConnectionConfig(this.config)
     if (enabled) {
+      // 只能同时连接一个 worker:启用当前 worker 前先关闭并禁用其他已连接的 worker。
+      this.disconnectOtherWorkers(workerId)
       await this.connectWorker(workerId)
     } else {
       this.closeWorker(workerId)
@@ -590,6 +594,35 @@ class HubSession {
     }
     this.workerErrors.delete(workerId)
     this.notifyDirectory()
+  }
+
+  /**
+   * 只能同时连接一个 worker:关闭并禁用除当前 worker 外的所有其他 worker。
+   * - 关闭已建立的连接(从 workerClients 移除);
+   * - 将其他 worker 的本地启用开关置为 false(持久化),避免重连时被再次自动连上;
+   * - 目标 worker(exceptWorkerId)不受影响。
+   */
+  private disconnectOtherWorkers(exceptWorkerId: string): void {
+    if (!this.config) return
+    let configChanged = false
+    for (const cred of this.config.workers) {
+      if (cred.workerId === exceptWorkerId) continue
+      if (cred.enabled) {
+        cred.enabled = false
+        configChanged = true
+      }
+      const client = this.workerClients.get(cred.workerId)
+      if (client) {
+        client.close()
+        this.workerClients.delete(cred.workerId)
+      }
+      this.workerErrors.delete(cred.workerId)
+    }
+    if (configChanged) {
+      saveConnectionConfig(this.config)
+    }
+    this.notifyDirectory()
+    this.notifyWorkers()
   }
 
   /** 目录帧:处理 presence(u.<hubK>.workers)并联动 worker 连接。 */
