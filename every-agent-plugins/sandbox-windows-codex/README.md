@@ -11,7 +11,7 @@
 
 | 机制 | 本插件实现 | 对应 codex 源 |
 |---|---|---|
-| 真实本地双账户 + 沙箱组 | 账户 `<前缀>Offline`/`<前缀>Online`（默认 `EveryAgentCodex*`），组 `<前缀>SandboxUsers`；隐藏账户（登录界面不可见） | `sandbox_users.rs` / `principals.rs` / `hide_users.rs` |
+| 真实本地双账户 + 沙箱组 | 账户 `<前缀>Offline`/`<前缀>Online`（默认 `EACodex*`,见 `SandboxAccounts.DEFAULT_PREFIX`），组 `<前缀>SandboxUsers`；隐藏账户（登录界面不可见） | `sandbox_users.rs` / `principals.rs` / `hide_users.rs` |
 | 合成 capability SID | 随机 `S-1-5-21-…`，按 workspace / readonly / per-cwd / per-writable-root 分键持久化 `cap_sid` | `cap.rs` |
 | WRITE_RESTRICTED 受限令牌 | `DISABLE_MAX_PRIVILEGE\|LUA_TOKEN\|WRITE_RESTRICTED`；restricting = caps → 额外 → logon SID → Everyone；default DACL + SeChangeNotifyPrivilege 恢复 | `token.rs` |
 | 读 ACL 三段式 | 账户基线无权读真实用户目录 → 组授 RX → deny-read ACE 压制 | `acl.rs` / `deny_read_*.rs` |
@@ -55,8 +55,8 @@ setup 是**延迟触发**的——`Provider.isAvailable` 仅探测 Windows 平�
 
 1. codex 后端被沙箱选择器选中（`SandboxProviderRegistry.select` 按 priority 选最高可用），`CodexSandboxProvider.create()` 被调用。若 setup marker 未就绪，在此同步执行完整 setup（会弹 UAC 提权确认窗，用户需当场同意）。幂等：已完成时 marker 双闸门短路返回；账户/凭据失配时重跑 setup 修复。
 2. UAC 弹窗 → 用户同意 → 提权 helper 依次完成：
-   - 建组 `EveryAgentCodexSandboxUsers`（`NetLocalGroupAdd`）；
-   - 建账户 `EveryAgentCodexOffline`/`EveryAgentCodexOnline`（`NetUserAdd`，24 字符随机密码，先禁用、网络限制就绪后才解禁——修复路径不变量④）；
+   - 建组 `EACodexSandboxUsers`（`NetLocalGroupAdd`）；
+   - 建账户 `EACodexOffline`/`EACodexOnline`（`NetUserAdd`，24 字符随机密码，先禁用、网络限制就绪后才解禁——修复路径不变量④）；
    - 密码 DPAPI 机器作用域加密 → `.sandbox-secrets/sandbox_users.json`（目录 DENY 沙箱组）；
    - 账户级 ACL：平台默认读根（C:\Windows、Program Files×2、ProgramData + java.home + 插件目录）组授 RX；写根 allow-write ACE（组 + root cap SID 双主体）；
    - 防火墙：offline 账户 4 条 block 规则（出/入非环回、环回 TCP 代理端口补集、环回 UDP 全禁；`LocalUserAuthorizedList` SDDL 按 SID 限定）+ LocalPolicyModifyState 自检 + 写后读回；
@@ -84,7 +84,7 @@ setup 是**延迟触发**的——`Provider.isAvailable` 仅探测 Windows 平�
 | 键 | 默认 | 接线状态 | 说明 |
 |---|---|---|---|
 | `codex.home` | `<沙箱持久根>/codex` | ✅ | 状态根（.sandbox/.sandbox-secrets/.sandbox-bin/cap_sid 之父） |
-| `codex.account-prefix` | `EveryAgentCodex` | ✅ | 账户 `<前缀>Offline/Online`、组 `<前缀>SandboxUsers` |
+| `codex.account-prefix` | `EACodex` | ✅ | 账户 `<前缀>Offline/Online`、组 `<前缀>SandboxUsers` |
 | `codex.network-policy` | `auto` | ✅ | auto（随 allow-network）/ `offline` / `online` 强制 |
 | `codex.proxy-ports` | 空 | ✅ | offline 放行的环回 TCP 代理端口列表（setup 时生成规则） |
 | `codex.allow-local-binding` | `false` | ✅ | true = 移除环回 block 规则 |
@@ -131,8 +131,8 @@ setup 是**延迟触发**的——`Provider.isAvailable` 仅探测 Windows 平�
 
 ```bash
 # 组装 remove 载荷并经提权 helper 执行（或重新激活插件触发 setup 修复）
-payload='{"version":5,"offline_username":"EveryAgentCodexOffline","online_username":"EveryAgentCodexOnline",
-  "group_name":"EveryAgentCodexSandboxUsers","codex_home":"<codexHome>","real_user":"<用户名>",
+payload='{"version":5,"offline_username":"EACodexOffline","online_username":"EACodexOnline",
+  "group_name":"EACodexSandboxUsers","codex_home":"<codexHome>","real_user":"<用户名>",
   "mode":"remove"}'
 java -cp <本插件jar> dev.everyagent.plugin.sandbox.codex.setup.SetupHelperMain \
   --setup-payload "$(printf %s "$payload" | base64 -w0)"   # UAC 一次

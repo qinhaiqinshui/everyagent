@@ -28,7 +28,7 @@ worker JVM(真实用户)                    setup helper JVM(管理员,UAC 一�
 
 | 机制 | 决策 | 依据 |
 |---|---|---|
-| 真实本地双账户 + 沙箱组 | **做**。账户 `<前缀>Offline`/`<前缀>Online`(默认 `EveryAgentCodex*`),组 `EveryAgentCodexUsers` | 分析文档 §4;读隔离与网络隔离的唯一可靠载体 |
+| 真实本地双账户 + 沙箱组 | **做**。账户 `<前缀>Offline`/`<前缀>Online`(默认前缀 `EACodex`,见 `SandboxAccounts.DEFAULT_PREFIX`),组 `<前缀>SandboxUsers`(`groupName`) | 分析文档 §4;读隔离与网络隔离的唯一可靠载体 |
 | 合成 capability SID(cap.rs) | **做**。随机 `S-1-5-21-a-b-c-d`,按 readonly/workspace/per-workspace-cwd/per-writable-root 分键,持久化 `<codexHome>/cap_sid.json`,兼容裸 SID 旧格式 | §5;工作区隔离与最小写面(过期根不进令牌) |
 | WRITE_RESTRICTED 受限令牌 | **做**。flags `DISABLE_MAX_PRIVILEGE|LUA_TOKEN|WRITE_RESTRICTED`(0x01|0x04|0x08);restricting 顺序 caps → 额外(令牌 user SID 首位)→ logon SID → Everyone;`set_default_dacl`(logon SID GENERIC_ALL + OWNER RIGHTS S-1-3-4 仅 READ_CONTROL)+ 恢复 SeChangeNotifyPrivilege | §2.1(token.rs) |
 | 读 ACL 三段式(账户基线无权 → 组授 RX → deny-read ACE 压制) | **做**(首期静态部分) | §2.2 |
@@ -228,7 +228,7 @@ SpawnRequest 不搬 codex 的 permission_profile 结构,改为自有 `writeRoots
 | 键 | 默认 | 说明 |
 |---|---|---|
 | `codex.home` | `<sandboxPersistentRoot>/codex` | codexHome(`.sandbox`/`.sandbox-secrets`/`.sandbox-bin`/cap_sid.json 之父) |
-| `codex.account-prefix` | `EveryAgentCodex` | 账户 `<前缀>Offline`/`<前缀>Online`、组 `<前缀>Users` |
+| `codex.account-prefix` | `EACodex` | 账户 `<前缀>Offline`/`<前缀>Online`、组 `<前缀>SandboxUsers`（前缀受 SAM 账户名 20 字符上限约束，见 `SandboxAccounts.MAX_USERNAME_LEN`） |
 | `codex.network-policy` | `auto` | auto(随 allow-network)/`offline`/`online` 强制 |
 | `codex.proxy-ports` | 空 | offline 放行的环回 TCP 端口列表(代理) |
 | `codex.allow-local-binding` | false | true=移除环回 block 规则 |
