@@ -272,21 +272,31 @@ def render_runtime_env_file(cfg) -> str:
 def host_deploy_command(cfg, services, ts: str) -> str:
     """宿主机模式远端执行脚本：若缺失则装 Java25(幂等) → 装 systemd 单元 → 接管 nginx 80。
     hub 由 nginx 的 /hub/ 反代对外暴露，worker 仍直连 localhost:9100。
-    sudo 由 --sudo / DEPLOY_SUDO 控制（root 直连时留空，免密 sudo 时加 sudo -n）。"""
+    sudo 由 --sudo / DEPLOY_SUDO 控制（root 直连时留空，免密 sudo 时加 sudo -n）。
+    --skip-install 时跳过所有 apt-get 安装，需提前手动装好 Java25 和 nginx。"""
     rd = cfg.remote_dir.rstrip("/")
     cur = f"{rd}/current"
     sudo = "sudo -n" if getattr(cfg, "sudo", False) else ""
-    # 等待 dpkg 锁释放（unattended-upgr 等自动更新常导致 apt-get 拿不到锁）
-    apt_wait = (
-        "i=0; while fuser /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock >/dev/null 2>&1; do "
-        "i=$((i+1)); if [ $i -gt 60 ]; then echo '[deploy] dpkg 锁等待超时(180s),放弃'; exit 100; fi; "
-        "echo '[deploy] 等待 dpkg 锁释放...'; sleep 3; done"
-    )
-    java_check = (
-        f'if ! java -version 2>&1 | grep -q " 25"; then '
-        f'{apt_wait}; {sudo} apt-get update && {sudo} apt-get install -y openjdk-25-jre-headless; fi'
-    )
-    lines = ["set -e", java_check]
+    skip_install = getattr(cfg, "skip_install", False)
+
+    lines = ["set -e"]
+    if skip_install:
+        lines.append('echo "[deploy] --skip-install: 跳过 apt-get 安装（假定 Java25/nginx 已手动安装）"')
+        lines.append('if ! java -version 2>&1 | grep -q " 25"; then echo "[deploy] 警告: java 未检测到 25 版本"; fi')
+    else:
+        # 先暂停 unattended-upgrades，避免它抢 dpkg 锁
+        apt_stop = f"{sudo} systemctl stop unattended-upgrades 2>/dev/null || true"
+        # 等待 dpkg 锁释放
+        apt_wait = (
+            "i=0; while fuser /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock >/dev/null 2>&1; do "
+            "i=$((i+1)); if [ $i -gt 40 ]; then echo '[deploy] dpkg 锁等待超时(120s),放弃'; exit 100; fi; "
+            "echo '[deploy] 等待 dpkg 锁释放...'; sleep 3; done"
+        )
+        java_check = (
+            f'if ! java -version 2>&1 | grep -q " 25"; then '
+            f'{apt_stop}; {apt_wait}; {sudo} apt-get update && {sudo} apt-get install -y openjdk-25-jre-headless; fi'
+        )
+        lines.append(java_check)
     if "hub" in services:
         lines.append(f"{sudo} cp {cur}/systemd/everyagent-hub.service /etc/systemd/system/")
     if "worker" in services:
@@ -301,10 +311,13 @@ def host_deploy_command(cfg, services, ts: str) -> str:
         lines.append(f"{sudo} systemctl restart everyagent-worker")
     if "webapp" in services:
         # nginx 缺失时幂等安装并启动（webapp 依赖 nginx 接管 80 默认站点）
-        lines.append(
-            f'if ! command -v nginx >/dev/null 2>&1; then '
-            f'{apt_wait}; {sudo} apt-get update && {sudo} apt-get install -y nginx; fi'
-        )
+        if skip_install:
+            lines.append('if ! command -v nginx >/dev/null 2>&1; then echo "[deploy] 警告: nginx 未安装，但 --skip-install 跳过安装"; fi')
+        else:
+            lines.append(
+                f'if ! command -v nginx >/dev/null 2>&1; then '
+                f'{apt_stop}; {apt_wait}; {sudo} apt-get update && {sudo} apt-get install -y nginx; fi'
+            )
         lines.append(f"{sudo} systemctl enable --now nginx")
         # every-agent 作为 80 默认站点：禁用其它声明 default_server 的启用站点，
         # 避免重复 default_server 冲突（如老项目 novel-agent 已占用 80 默认）。
@@ -744,6 +757,7 @@ def parse_args(argv):
     p.add_argument("--no-deps", action="store_true", help="部署时不连带拉起所依赖的服务")
     p.add_argument("--pull", action="store_true", help="up 时强制拉取最新官方镜像")
     p.add_argument("--prune", action="store_true", help="部署后执行 docker image prune -f")
+    p.add_argument("--skip-install", action="store_true", help="跳过远端 apt-get 安装（Java/nginx）；需已手动安装好这些包，用于避开 dpkg 锁冲突等问题")
     p.add_argument("--dry-run", action="store_true", help="仅本地预览，不构建/不上传/不连接服务器")
     p.add_argument("--list", action="store_true", help="列出可部署服务后退出")
     args = p.parse_args(argv)
