@@ -17,13 +17,32 @@ class SandboxAccountsTest {
 
     @Test
     void accountNamesFollowNamingConvention() {
-        assertEquals("EveryAgentCodexOffline", SandboxAccounts.offlineUsername(
-                SandboxAccounts.DEFAULT_PREFIX));
-        assertEquals("EveryAgentCodexOnline", SandboxAccounts.onlineUsername(
-                SandboxAccounts.DEFAULT_PREFIX));
-        assertEquals("EveryAgentCodexSandboxUsers", SandboxAccounts.groupName(
-                SandboxAccounts.DEFAULT_PREFIX));
+        // 期望值从前缀派生：前缀曾因 EveryAgentCodexOffline 长 22 超 SAM 20 上限
+        // （NetUserAdd 直接拒绝）而缩短为 EACodex，硬编码字面量会在下次改前缀时再次腐烂
+        String p = SandboxAccounts.DEFAULT_PREFIX;
+        assertEquals(p + "Offline", SandboxAccounts.offlineUsername(p));
+        assertEquals(p + "Online", SandboxAccounts.onlineUsername(p));
+        assertEquals(p + "SandboxUsers", SandboxAccounts.groupName(p));
         assertEquals("CustomOffline", SandboxAccounts.offlineUsername("Custom"));
+    }
+
+    /**
+     * 护栏：默认前缀派生的账户名/组名必须落在 Windows SAM 20 字符上限内。
+     * 历史教训：前缀为 EveryAgentCodex 时 EveryAgentCodexOffline 长 22，
+     * {@code ensureUser} 直接抛异常（NetUserAdd 也会拒绝），故缩短为 EACodex。
+     * 组名当前 19 字符已贴边，前缀再加长即溢出——把约束固定成断言，不靠人工记忆。
+     */
+    @Test
+    void defaultDerivedNamesFitSamNameLimit() {
+        String p = SandboxAccounts.DEFAULT_PREFIX;
+        for (String name : java.util.List.of(
+                SandboxAccounts.offlineUsername(p),
+                SandboxAccounts.onlineUsername(p),
+                SandboxAccounts.groupName(p))) {
+            assertTrue(name.length() <= SandboxAccounts.MAX_USERNAME_LEN,
+                    name + " (" + name.length() + " 字符) 超过 SAM 上限 "
+                            + SandboxAccounts.MAX_USERNAME_LEN);
+        }
     }
 
     @Test
@@ -33,10 +52,11 @@ class SandboxAccountsTest {
                 SandboxAccounts.NetworkIdentity.from(true));
         assertEquals(SandboxAccounts.NetworkIdentity.ONLINE,
                 SandboxAccounts.NetworkIdentity.from(false));
-        assertEquals("EveryAgentCodexOffline", SandboxAccounts.usernameFor(
-                SandboxAccounts.DEFAULT_PREFIX, SandboxAccounts.NetworkIdentity.OFFLINE));
-        assertEquals("EveryAgentCodexOnline", SandboxAccounts.usernameFor(
-                SandboxAccounts.DEFAULT_PREFIX, SandboxAccounts.NetworkIdentity.ONLINE));
+        String p = SandboxAccounts.DEFAULT_PREFIX;
+        assertEquals(p + "Offline", SandboxAccounts.usernameFor(
+                p, SandboxAccounts.NetworkIdentity.OFFLINE));
+        assertEquals(p + "Online", SandboxAccounts.usernameFor(
+                p, SandboxAccounts.NetworkIdentity.ONLINE));
     }
 
     @Test

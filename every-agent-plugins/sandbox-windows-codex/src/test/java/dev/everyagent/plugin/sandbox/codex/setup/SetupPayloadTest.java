@@ -47,9 +47,10 @@ class SetupPayloadTest {
 
         SetupPayload decoded = SetupPayload.decodeBase64(payload.encodeBase64());
         assertEquals(SetupPayload.SETUP_VERSION, decoded.model().version);
-        assertEquals("EveryAgentCodexOffline", decoded.model().offlineUsername);
-        assertEquals("EveryAgentCodexOnline", decoded.model().onlineUsername);
-        assertEquals("EveryAgentCodexSandboxUsers", decoded.model().groupName);
+        String p = SandboxAccounts.DEFAULT_PREFIX;
+        assertEquals(p + "Offline", decoded.model().offlineUsername);
+        assertEquals(p + "Online", decoded.model().onlineUsername);
+        assertEquals(p + "SandboxUsers", decoded.model().groupName);
         assertEquals(List.of(8080, 8443), decoded.model().proxyPorts);
         assertEquals(List.of("C:\\ws\\repo"), decoded.model().writeRoots);
         assertEquals(List.of("C:\\Users\\dev\\.ssh"), decoded.model().denyWritePaths);
