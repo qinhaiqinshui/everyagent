@@ -1,9 +1,11 @@
 package dev.everyagent.worker.plugin.scanner;
 
+import dev.everyagent.contract.json.Json;
 import dev.everyagent.worker.config.WorkerProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
+import tools.jackson.databind.JsonNode;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -20,11 +22,18 @@ import java.util.stream.Stream;
  *
  * <p>扫描规则(每个一级子目录,按名称排序保证确定性):
  * <ol>
- *   <li>若存在 {@code target/classes/plugin.json}(Java 插件,maven 已构建):
- *       还要求 {@code target/} 下至少有一个非 sources/javadoc 的 jar,
- *       两者都满足才纳入;否则 WARN 提示「内置插件未构建,请先 mvn package」并跳过。</li>
- *   <li>否则若子目录根存在 {@code plugin.json}(纯 web 插件):纳入。</li>
- *   <li>否则跳过。</li>
+ *   <li>若子目录根存在 {@code plugin.json}:解析并检查 {@code enabled} 字段,
+ *       {@code enabled=false} 的插件直接跳过(不依赖 target/ 是否存在,
+ *       避免已构建但未清理的 target/ 残留导致禁用插件被误加载)。</li>
+ *   <li>{@code enabled} 为 true 或缺省(视为 true):
+ *     <ul>
+ *       <li>若存在 {@code target/classes/plugin.json}(Java 插件,maven 已构建):
+ *           还要求 {@code target/} 下至少有一个非 sources/javadoc 的 jar,
+ *           两者都满足才纳入;否则 WARN 提示「内置插件未构建,请先 mvn package」并跳过。</li>
+ *       <li>否则(无 target/classes/plugin.json):视为纯 web 插件(根 plugin.json 即清单),纳入。</li>
+ *     </ul>
+ *   </li>
+ *   <li>子目录根无 {@code plugin.json}:跳过。</li>
  * </ol>
  *
  * <p>根目录不存在时 INFO 日志并返回空列表,不报错。
@@ -63,6 +72,20 @@ public class BuiltInPluginScanner implements PluginScanner {
 
         List<ScannedPlugin> result = new ArrayList<>();
         for (Path dir : subDirs) {
+            // 优先检查根目录 plugin.json 的 enabled 字段:
+            // enabled=false 的插件直接跳过——不依赖 target/ 是否存在,
+            // 避免已构建但未清理的 target/ 残留导致禁用插件被误加载。
+            Path rootManifest = dir.resolve("plugin.json");
+            if (Files.isRegularFile(rootManifest)) {
+                if (!isEnabled(rootManifest)) {
+                    log.info("[plugins-builtin] 插件已禁用(enabled=false),跳过: {}", dir.getFileName());
+                    continue;
+                }
+            } else {
+                // 无 plugin.json 的目录不是插件,跳过
+                continue;
+            }
+
             if (hasTargetClassesPluginJson(dir)) {
                 // Java 插件:target/classes/plugin.json 存在
                 if (hasTargetJars(dir)) {
@@ -70,11 +93,10 @@ public class BuiltInPluginScanner implements PluginScanner {
                 } else {
                     log.warn("[plugins-builtin] 内置插件未构建,请先 mvn package: {}", dir.getFileName());
                 }
-            } else if (hasRootPluginJson(dir)) {
-                // 纯 web 插件:根目录 plugin.json
+            } else {
+                // 纯 web 插件:根目录 plugin.json(已确认存在且 enabled)
                 result.add(new ScannedPlugin(dir, "builtin"));
             }
-            // else: 无 plugin.json,跳过
         }
 
         log.info("[plugins-builtin] 扫描到 {} 个内置插件 (共 {} 个子目录)", result.size(), subDirs.size());
@@ -82,6 +104,25 @@ public class BuiltInPluginScanner implements PluginScanner {
     }
 
     // ---- 工具方法(供后续 PluginLoader 复用) ----
+
+    /**
+     * 检查 plugin.json 中的 {@code enabled} 字段。
+     *
+     * <p>缺省(无该字段)视为 enabled=true。解析失败也视为 true(宽容,不因格式错误阻止加载)。
+     *
+     * @param manifestPath plugin.json 路径
+     * @return true = 已启用或缺省;false = 显式 enabled=false
+     */
+    public static boolean isEnabled(Path manifestPath) {
+        try {
+            JsonNode json = Json.parse(Files.readString(manifestPath));
+            // asBoolean(true): 字段缺省时返回 true
+            return json.path("enabled").asBoolean(true);
+        } catch (Exception e) {
+            log.warn("[plugins-builtin] 解析 plugin.json 失败,视为已启用: {}", manifestPath, e);
+            return true;
+        }
+    }
 
     /**
      * 查找 {@code target/} 下的 jar 文件列表(排除 *-sources.jar 和 *-javadoc.jar)。

@@ -7,7 +7,7 @@
 # Prereq: Docker Desktop (WSL2 backend), docker.exe on PATH.
 # Usage (normal PowerShell):
 #   powershell -NoProfile -ExecutionPolicy Bypass -File scripts\wsl-rootfs-build.ps1
-#   optional: [-Base ubuntu:24.04] [-OutDir .\dist]
+#   optional: [-Base ubuntu:24.04] [-OutDir .\every-agent-plugins\sandbox-wsl-ubuntu\runtime\wsl]
 #
 # Baked contents (for wsl-direct backend, docs wsl2-bubblewrap-sandbox-design.md sec 4.8):
 #   MINIMAL baked set (only runtime itself needs):
@@ -33,7 +33,7 @@
 #   (Get-FileHash -Algorithm SHA256 <homeDir>\wsl\eagent-rootfs.tar.gz).Hash.ToLower() + '  eagent-rootfs.tar.gz' | Out-File -Encoding ascii <homeDir>\wsl\eagent-rootfs.tar.gz.sha256
 param(
     [string]$Base = "ubuntu:24.04",
-    [string]$OutDir = ".\dist"
+    [string]$OutDir = ".\every-agent-plugins\sandbox-wsl-ubuntu\runtime\wsl"
 )
 
 # PS 5.1 会把原生命令(docker.exe)的 stderr 包成 NativeCommandError;若 ErrorActionPreference=Stop
@@ -118,4 +118,4 @@ $null = & docker rm -f $CID 2>&1
 Say ""
 Say "Artifacts:"
 Get-Item $gzFile, $shaFile | Select-Object Name, @{n='Size(MB)';e={[math]::Round($_.Length/1MB,1)}}, LastWriteTime | Format-Table -AutoSize
-Say "Deploy: 把两份文件放进仓库根 runtime/wsl/(或 -OutDir .\dist 后跑 npm run build:wsl 复制),重启 worker 即自动导入。"
+Say "Deploy: 产物在插件 runtime/wsl/ 目录下,npm run dist 时由 build:plugin-runtime 自动复制到共享 runtime/。重启 worker 即自动导入。"

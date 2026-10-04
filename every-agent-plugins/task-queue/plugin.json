@@ -4,5 +4,6 @@
   "version": "0.1.0",
   "description": "任务队列插件（并发排队等待 + task.queued 事件 + task.queueList RPC）",
   "author": "everyagent",
-  "main": "dev.everyagent.plugin.taskqueue.TaskQueuePlugin"
+  "main": "dev.everyagent.plugin.taskqueue.TaskQueuePlugin",
+  "enabled": true
 }

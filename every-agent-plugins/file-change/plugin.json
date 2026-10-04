@@ -5,5 +5,6 @@
   "description": "文件变更跟踪插件：收集本轮文件改动并落盘",
   "author": "everyagent",
   "main": "dev.everyagent.plugin.filechange.FileChangePlugin",
-  "webMain": "web/index.ts"
+  "webMain": "web/index.ts",
+  "enabled": true
 }

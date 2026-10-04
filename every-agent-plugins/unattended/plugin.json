@@ -4,5 +4,6 @@
   "version": "0.1.0",
   "description": "无人值守插件:ask_user 自动作答 + 授权拒绝",
   "author": "everyagent",
-  "main": "dev.everyagent.plugin.unattended.UnattendedPlugin"
+  "main": "dev.everyagent.plugin.unattended.UnattendedPlugin",
+  "enabled": true
 }

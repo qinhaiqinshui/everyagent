@@ -38,5 +38,6 @@
         "description": "runner JVM 的 java.exe 根目录；空 = 当前 JVM 的 java.home"
       }
     }
-  }
+  },
+  "enabled": true
 }

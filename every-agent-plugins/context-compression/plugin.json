@@ -4,5 +4,6 @@
   "version": "0.1.0",
   "description": "上下文超阈值时三阶段压缩",
   "author": "everyagent",
-  "main": "dev.everyagent.plugin.contextcompression.ContextCompressionPlugin"
+  "main": "dev.everyagent.plugin.contextcompression.ContextCompressionPlugin",
+  "enabled": true
 }

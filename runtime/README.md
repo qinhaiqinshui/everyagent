@@ -40,18 +40,24 @@ worker 运行时以**字面相对路径 `./runtime`** 按 `user.dir` **只读引
 
 ## WSL 托管发行版镜像
 
-WSL 沙箱镜像和启动器脚本由 `sandbox-wsl-ubuntu` 插件自己管理，位于插件目录
-`every-agent-plugins/sandbox-wsl-ubuntu/wsl/`：
+WSL 沙箱镜像由 `sandbox-wsl-ubuntu` 插件自己管理。镜像构建脚本输出到
+插件自己的 `runtime/wsl/` 目录，由 `copy-plugin-runtime.mjs`（通用插件
+资源打包脚本）自动复制到共享 `runtime/wsl/`。
+
+插件被禁用（`plugin.json` 中 `enabled: false`）时，镜像不会被复制，
+已有的残留会被清理——不会打进安装包。
 
 | 路径 | 用途 | 消费方 |
 |---|---|---|
 | `wsl/eagent-run.py` | WSL 发行版侧启动器（stdin 载荷 → root 直连） | `WslCommon.resolveRunner()`（定位 `<pluginDir>/wsl/`） |
 | `wsl/eagent-rootfs.tar.gz` + `.sha256` | 托管发行版 `EveryAgent` 镜像，发行版缺失时自动 `wsl --import` | `WslCommon.tarballFor()`（定位 `<pluginDir>/wsl/`） |
 
-> 镜像体积大，不入 git（见 `.gitignore`）；`eagent-run.py` 随源码入 git。
+> 镜像体积大，不入 git；`eagent-run.py` 随源码入 git。
 
 生成方式（仓库根目录执行）：
 
 ```bash
-scripts/wsl-rootfs-build.sh every-agent-plugins/sandbox-wsl-ubuntu/wsl
+scripts/wsl-rootfs-build.ps1
+# 产物输出到 every-agent-plugins/sandbox-wsl-ubuntu/runtime/wsl/
+# npm run dist 时由 build:plugin-runtime 自动复制到共享 runtime/wsl/
 ```
