@@ -412,6 +412,32 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
     }
   }, [closeWorkspaceTabNow])
 
+  /**
+   * 切换 / 禁用 / 移除 worker(= worker 数据连接集合变化)→ **关闭全部 `task:*` 标签页**。
+   *
+   * <p>为什么必须关:任务标签的作用域就是那条 worker 数据连接(任务详情、RPC、stream 订阅、
+   * 模型下拉全挂在它上面)。连接一换,留下的标签指向的是已不可寻址的 worker —— 既拉不到数据
+   * 也收不到推送,留着只会误导用户(这正是 bug1 的现场)。项目/文件/终端/设置等标签不受影响:
+   * fs/git 按调用携带 workspace 参数、与 worker 身份无关。
+   *
+   * <p>走 `closeWorkspaceTabNow`(而非 `closeWorkspaceTab`):绕过任务标签的关闭守卫,
+   * 与"任务已删除"同源处理。草稿标签一并关(正文由 taskChatDraft 自持,不会丢),
+   * 并清空其 worker 预设,避免带着已断开 worker 的预设继续新建任务。
+   */
+  const workspaceTabsRef = React.useRef(workspaceTabs)
+  workspaceTabsRef.current = workspaceTabs
+  React.useEffect(() => {
+    return hubSession.onWorkerConnectionsChanged(() => {
+      const taskTabs = workspaceTabsRef.current.filter((tab) => tab.tabType === 'task')
+      for (const tab of taskTabs) {
+        closeWorkspaceTabNowRef.current(tab.id)
+      }
+      if (taskTabs.length > 0) {
+        setDraftPreset({ workspace: '', workerId: '' })
+      }
+    })
+  }, [])
+
   const openGlobalFileTab = React.useCallback((
     target: {
       workspaceRoot: string

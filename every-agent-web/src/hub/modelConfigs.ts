@@ -118,6 +118,14 @@ class ModelConfigsService {
     hubSession.onWorkers(() => {
       this.refreshAllConnected()
     })
+    // 切换 worker = 配置作用域换了:清掉已断开 worker 的配置缓存(否则列表里留着旧 worker 的
+    // 模型,新 worker 的下拉却空着),再向新集合校准。
+    hubSession.onWorkerConnectionsChanged((connectedIds) => {
+      for (const workerId of [...this.byWorker.keys()]) {
+        if (!connectedIds.has(workerId)) this.byWorker.delete(workerId)
+      }
+      this.refreshAllConnected()
+    })
     // 连接就绪(含首次连接与每次重连)主动校准一次:避免初始 refresh 在 hub 未连时
     // 静默失败、而 onReconnect/onWorkers 又因时序未触发导致的永久空列表。
     hubSession.onState((state) => {

@@ -6,7 +6,8 @@
  *   订阅 u.<hubK>.workers 获取 hub 下全部 worker 在线目录(online/offline);
  * - worker 连接(this.workerClients):每台「启用且已填 apiKey」的 worker 一条前端连接,
  *   apiKey=workerApiKey(ownerKey=sha256(workerApiKey)),订阅该 worker 的
- *   u.<K>.tasks 与 u.<K>.worker.<id>.evt,RPC/任务流都走这条连接。
+ *   u.&lt;K&gt;.worker.&lt;id&gt;.tasks 与 u.&lt;K&gt;.worker.&lt;id&gt;.evt,RPC/任务流都走这条连接
+ *   (任务数据频道一律带 worker 段:归属是 wire 事实,不由前端猜测,§5.2/§8.2)。
  *
  * 双道鉴权语义:
  * - hubKey 保护 hub(连接 hub 必须带,错误则目录连接 NOT_AUTHENTICATED);
@@ -38,6 +39,8 @@ type FatalErrorListener = (error: { code: string; detail: string } | null) => vo
 type RateLimitedListener = (limited: boolean) => void
 type DirectoryListener = (infos: WorkerInfo[]) => void
 type ReconnectingListener = (reconnecting: boolean) => void
+/** worker 数据连接集合变化通知:参数 = 变化后「已建连接」的 workerId 快照。 */
+type WorkerSetListener = (connectedWorkerIds: ReadonlySet<string>) => void
 
 /** 前端可见的 worker 纳管信息(目录 + 本地开关 + 连接错误)。 */
 export interface WorkerInfo {
@@ -120,6 +123,7 @@ class HubSession {
   private rateLimitedListeners = new Set<RateLimitedListener>()
   private directoryListeners = new Set<DirectoryListener>()
   private reconnectingListeners = new Set<ReconnectingListener>()
+  private workerSetListeners = new Set<WorkerSetListener>()
 
   /** 是否有任一连接(目录/worker)正在重连(瞬态断连,传输层自动重连中)。 */
   private reconnecting = false
@@ -169,6 +173,24 @@ class HubSession {
   onReconnecting(fn: ReconnectingListener): () => void {
     this.reconnectingListeners.add(fn)
     return () => this.reconnectingListeners.delete(fn)
+  }
+
+  /**
+   * **worker 数据连接集合**变化时触发(架构 §8.2):携带变化后仍已建的 workerId 快照。
+   *
+   * <p>单一职责:本通知点只报「哪些 worker 的连接现在存在」,不做任何业务清理。
+   * 每个持有 per-worker 缓存的模块各自订阅并决定怎么失效(taskStore 剔条目、
+   * taskStreamManager 关流、modelConfigs 清缓存、pluginLoader 清插件、askStore 清 ask、
+   * Layout 关任务标签…)。
+   *
+   * <p>为什么必须有它:worker 连接是任务数据、RPC、模型配置、插件的**作用域**;连接一换,
+   * 任何按 worker 缓存的状态即刻陈旧。此前切换 worker 只动连接、上层缓存一个都没清,
+   * 于是任务条目留着旧 workerId、详情按旧 worker 取连接取不到 → 整页空白且不报错,
+   * 只能刷新页面(重建全部模块级单例)才恢复。
+   */
+  onWorkerConnectionsChanged(fn: WorkerSetListener): () => void {
+    this.workerSetListeners.add(fn)
+    return () => this.workerSetListeners.delete(fn)
   }
 
   // ---- 派生 ----
@@ -367,29 +389,21 @@ class HubSession {
   }
 
   /**
-   * 判断帧来自哪台 worker(按 channel 匹配各 worker 连接的命名空间)。
-   * 带显式 workerId 的频道(u.&lt;K&gt;.worker.&lt;workerId&gt;.*):按 workerId 精确归属,
-   * 并校验 K 前缀——避免同一 apiKey(同 K)下多台 worker 时误判成首个连接,
-   * 导致后续「频道是否等于该 worker 的 evt 频道」比对失败而静默丢帧;
-   * 无显式 workerId 的 worker 级频道(u.&lt;K&gt;.tasks 等)回退按 K 前缀匹配首连接。
+   * 判断帧来自哪台 worker —— **只认频道名里的 worker 段**,不做任何猜测。
+   *
+   * <p>任务事件与任务流频道都带 worker 段({@code u.<K>.worker.<wid>.tasks} /
+   * {@code u.<K>.worker.<wid>.task.<tid>.stream},架构 §5.2):订阅了谁的频道就是谁的数据,
+   * 归属是 wire 事实。曾经存在的「按 K 前缀匹配首个连接」回退已删除 —— 同一 apiKey 下
+   * 两台 worker 时它会把禁用那台的任务认成启用这台(列表混入他人任务、点开必报「任务不存在」)。
+   *
+   * <p>workerId 本身可含点,故用完整前缀匹配而非按点切分。判不出归属返回 null,调用方丢帧。
    */
   workerIdOfFrame(frame: MsgFrame): string | null {
     const channel = frame.channel
     if (!channel || !channel.startsWith('u.')) return null
-    // 显式带 workerId 的频道(u.<K>.worker.<workerId>.<suffix>):按 workerId 精确归属并校验
-    // K 前缀——避免同一 apiKey(同 K)下多台 worker 时误判成首个连接,导致后续
-    // 「频道是否等于该 worker 的 evt 频道」比对失败而静默丢帧(workerId 本身可含点,
-    // 用完整前缀匹配而非按点切分)。
     for (const [workerId, client] of this.workerClients) {
       if (!client.k) continue
-      const prefix = 'u.' + client.k + '.worker.' + workerId + '.'
-      if (channel.startsWith(prefix)) {
-        return workerId
-      }
-    }
-    // 无 worker 段(如 u.<K>.tasks / u.<K>.workers):按 K 前缀匹配首连接。
-    for (const [workerId, client] of this.workerClients) {
-      if (client.k && channel.startsWith('u.' + client.k + '.')) {
+      if (channel.startsWith('u.' + client.k + '.worker.' + workerId + '.')) {
         return workerId
       }
     }
@@ -555,6 +569,7 @@ class HubSession {
         this.workerErrors.set(workerId, { code: frame.code, detail })
         this.connectingWorkers.delete(workerId)
         this.notifyDirectory()
+        this.notifyWorkerConnections()
         return
       }
       this.workerErrors.set(workerId, { code: frame.code, detail })
@@ -562,6 +577,7 @@ class HubSession {
       this.workerClients.delete(workerId)
       this.connectingWorkers.delete(workerId)
       this.notifyDirectory()
+      this.notifyWorkerConnections()
       console.error('[hub] worker ' + workerId + ' 连接错误 ' + frame.code + ': ' + detail)
     }
     try {
@@ -583,6 +599,8 @@ class HubSession {
       this.connectingWorkers.delete(workerId)
       this.notifyDirectory()
       this.notifyWorkers()
+      // 连接集合可能已变(建连成功 set / 失败 delete):通知各方失效各自的 per-worker 缓存。
+      this.notifyWorkerConnections()
     }
   }
 
@@ -594,6 +612,8 @@ class HubSession {
     }
     this.workerErrors.delete(workerId)
     this.notifyDirectory()
+    // 连接集合变化 → 订阅方失效各自的 per-worker 缓存(§8.2)
+    this.notifyWorkerConnections()
   }
 
   /**
@@ -623,6 +643,9 @@ class HubSession {
     }
     this.notifyDirectory()
     this.notifyWorkers()
+    // 连接集合变化 → 订阅方失效各自的 per-worker 缓存(§8.2);
+    // 禁用态与启用态都算变化,任务列表/详情/模型/插件/ask 据此重校准。
+    this.notifyWorkerConnections()
   }
 
   /** 目录帧:处理 presence(u.<hubK>.workers)并联动 worker 连接。 */
@@ -704,6 +727,8 @@ class HubSession {
     this.workerErrors.clear()
     this.notifyWorkers()
     this.notifyDirectory()
+    // 全部 worker 连接已拆除:与「切换 worker」同类变化,一律通知失效。
+    this.notifyWorkerConnections()
   }
 
   // ---- 通知 ----
@@ -726,6 +751,15 @@ class HubSession {
   private notifyDirectory(): void {
     const snapshot = this.directory
     for (const fn of this.directoryListeners) fn(snapshot)
+  }
+
+  /**
+   * 广播「worker 数据连接集合已变化」(§8.2)。只报事实(现在连着哪些 worker),
+   * 清理动作由各订阅方自做——hubSession 不理解任务/模型/插件等业务缓存。
+   */
+  private notifyWorkerConnections(): void {
+    const snapshot = new Set(this.workerClients.keys())
+    for (const fn of this.workerSetListeners) fn(snapshot)
   }
 }
 

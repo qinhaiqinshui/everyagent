@@ -110,7 +110,7 @@ export class TaskPacketView {
     readonly taskId: string,
   ) {
     this.k = client.k
-    this.streamCh = channels.taskStream(this.k, taskId)
+    this.streamCh = channels.taskStream(this.k, this.workerId, taskId)
   }
 
   onEvent(cb: (e: TaskStreamEvent) => void): void {

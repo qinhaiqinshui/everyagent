@@ -185,11 +185,27 @@ function createCommandRegistry(): CommandRegistry {
   }
 }
 
+/**
+ * 解析插件 RPC 的目标 worker:优先用「加载期记下的那台」(若它的连接还在),
+ * 否则回落到当前已连的那台。
+ *
+ * <p>为什么不能在闭包里一次性捕获 workerId:插件的 sdk 是在某台 worker 连接期建立的,
+ * 用户切换启用的 worker 后闭包里的 id 就指向一条已关闭的连接,此后插件的每一次 RPC
+ * (如轮末面板拉 file-changes)都会打到不存在的 worker 上报错(§8.2)。
+ */
+function resolvePluginWorkerId(loadedFor: string): string {
+  if (loadedFor && hubSession.workerClients.has(loadedFor)) return loadedFor
+  for (const [workerId, client] of hubSession.workerClients) {
+    if (client.state === 'open') return workerId
+  }
+  return loadedFor
+}
+
 /** SDK 实现（经 hubSession RPC）。 */
 function createPluginSdk(workerId: string, workspaceId: string, workspaceRoot: string): PluginSdk {
   return {
     rpc: async (targetWorkerId: string, method: string, params?: unknown) => {
-      return hubSession.rpcTo(targetWorkerId || workerId, method, params as Record<string, unknown>)
+      return hubSession.rpcTo(targetWorkerId || resolvePluginWorkerId(workerId), method, params as Record<string, unknown>)
     },
     workspace: {
       id: workspaceId,
@@ -205,7 +221,10 @@ function createPluginSdk(workerId: string, workspaceId: string, workspaceRoot: s
         })),
       workerIdOfRoot: (root: string) => workspaceRegistry.workerIdOfRoot(root) ?? undefined,
     },
-    workerId,
+    // 读取期解析:切换 worker 后插件看到的自身宿主 worker 身份随之更新。
+    get workerId() {
+      return resolvePluginWorkerId(workerId)
+    },
   }
 }
 

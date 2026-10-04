@@ -1,6 +1,6 @@
 /**
  * 频道名构造(架构 §3.2)。K 即 ownerKey = sha256(apiKey)。
- * 与 every-agent-worker 的 proto/Channels.java 逐字对齐:
+ * 与 every-agent-plugin-api 的 event/Channels.java 逐字对齐:
  * 输入走 worker 级频道(taskId 入 payload),任务永久后 worker 不按任务订阅。
  */
 
@@ -97,8 +97,17 @@ export const channels = {
   workerEvt: (k: string, workerId: string) => `u.${k}.worker.${workerId}.evt`,
   /** worker 级输入:task.input{taskId,text} / ask.reply{askId,answer}。 */
   workerInput: (k: string, workerId: string) => `u.${k}.worker.${workerId}.input`,
-  tasks: (k: string) => `u.${k}.tasks`,
-  taskStream: (k: string, taskId: string) => `u.${k}.task.${taskId}.stream`,
+  /**
+   * 任务生命周期频道(worker 段必填,与 Java plugin-api 的 Channels.tasks 逐字对齐)。
+   * 同一 apiKey 下多台 worker 靠这一段区分归属:一台的任务事件只进自己的频道。
+   */
+  tasks: (k: string, workerId: string) => `u.${k}.worker.${workerId}.tasks`,
+  /**
+   * 任务流频道(worker 段必填):hub 的 subscriber.join 据此定向投递,
+   * 非归属 worker 不会为它建 DataPusher(否则其推送器收不到 ack 而永久阻塞)。
+   */
+  taskStream: (k: string, workerId: string, taskId: string) =>
+    `u.${k}.worker.${workerId}.task.${taskId}.stream`,
   /** 内嵌终端实时输出:worker 定向推送(term.output/term.exited);与 worker 侧 proto/Channels.java 逐字对齐。 */
   termStream: (k: string, termId: string) => `u.${k}.term.${termId}.stream`,
 } as const;

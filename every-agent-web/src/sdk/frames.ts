@@ -1,6 +1,6 @@
 /** 线上帧类型(架构 §3)。与 every-agent-contract Frames.java 对齐。 */
 
-export const PROTOCOL_VERSION = 3;
+export const PROTOCOL_VERSION = 4;
 
 /** 前端流消费进度回报事件(worker 级输入频道,payload={taskId, creditIndex})。 */
 export const STREAM_ACK = 'stream.ack';

@@ -2,8 +2,13 @@
  * 任务列表存储(worker TaskSummary 的前端镜像)。
  *
  * 数据来源:
- * - 全量:tasks.list RPC(选中 worker,磁盘 data/<ownerKey>/ 永久保留);
- * - 增量:u.K.tasks 频道的 task.created / task.updated / task.deleted 事件。
+ * - 全量:tasks.list RPC(**按已连 worker 各自拉取**,磁盘 workspaces/<wsId>/tasks/);
+ * - 增量:u.K.worker.&lt;id&gt;.tasks 频道的 task.created / task.updated / task.deleted 事件。
+ *
+ * 任务归属 = wire 事实(架构 §5.2/§8.2):任务事件住在带 worker 段的频道上,帧只会从
+ * 「本连接订阅的那台 worker」的频道进来;payload 另带 workerId 作二次校验。
+ * 条目上的 workerId 一律以**本次数据来源**为权威,不做「首次推断、此后粘住」——
+ * 后者会让切换 worker 后仍用旧 worker 取连接,详情静默拉不到数据(只剩刷新页面能救)。
  *
  * 不做 localStorage 持久化:任务数据真相源在 worker 磁盘,
  * 前端缓存会造成多端视图漂移;断线时列表为空,重连即校准。
@@ -30,7 +35,10 @@ export interface WorkerUsageSummary {
 /** worker TaskDtos.TaskSummary 的前端形状(忽略未知字段)。 */
 export interface WorkerTaskSummary {
   taskId: string
-  /** 后端不再下发(workerId 由前端按帧来源/来源 worker 动态标注),仅作前端内存字段。 */
+  /**
+   * 归属 worker(worker 侧 TaskSummary 已下发,架构 §5.2)。
+   * 旧任务数据可能缺该字段:缺失时以「本次数据来源」(订阅了谁的频道 / 向谁拉的 tasks.list)为权威。
+   */
   workerId?: string
   title?: string
   status?: string
@@ -130,7 +138,7 @@ function toContextUsage(usage: WorkerUsageSummary, updatedAt: number): ContextMo
   }
 }
 
-function toEntry(summary: WorkerTaskSummary): TaskListEntry {
+function toEntry(summary: WorkerTaskSummary, sourceWorkerId?: string): TaskListEntry {
   // 兜底:局部增量(如 taskStream.open 只带 status/seqLast)未提供 workspace/title/时间等字段时,
   // 沿用 store 中已有的正确值,避免被空值/默认值覆盖后任务名回到「任务 xxx」、时间回到 1970。
   const existing = summary.taskId ? taskStoreRef.get(summary.taskId) : undefined
@@ -152,7 +160,10 @@ function toEntry(summary: WorkerTaskSummary): TaskListEntry {
 
   const entry: TaskListEntry = {
     taskId: summary.taskId,
-    workerId: summary.workerId ?? existing?.workerId ?? '',
+    // 归属以**本次数据来源**为权威:sourceWorkerId(频道/请求指向的那台)> payload.workerId >
+    // 既有镜像。绝不反过来让旧镜像压过新来源——旧镜像可能属于一台早已断开的 worker,
+    // 那正是「切换 worker 后点开任务空白、刷新页面才好」的根因(架构 §8.2)。
+    workerId: sourceWorkerId || summary.workerId || existing?.workerId || '',
     title,
     status: mapWorkerStatus(summary.status),
     rawStatus: summary.status ?? existing?.rawStatus ?? '',
@@ -212,6 +223,12 @@ class TaskStore {
     if (this.started) return
     this.started = true
     this.subscribeTaskChannels()
+    // WORKER_DATA_CHANGED 只在此订阅一次:原先挂在 subscribeTaskChannels() 里,
+    // 而后者会被 worker.online/onReconnect 反复调用 → 每次都叠一个监听器,
+    // 造成同一变更触发 N 次全量 refresh。
+    domainEventBus.subscribe(DOMAIN_EVENTS.WORKER_DATA_CHANGED, () => {
+      void this.refresh()
+    })
     hubSession.onFrame((frame) => {
       // worker 上线(presence 目录帧):若该 worker 的前端连接早已建立(连接先于 worker 就绪,
       // 如 desktop 启动时序竞态或 worker 重启后重连),初始 tasks.list 会落在 worker 尚未
@@ -222,21 +239,34 @@ class TaskStore {
         void this.refresh()
         return
       }
-      // 帧来自哪台 worker:优先 payload.workerId,回退按 channel 匹配 worker 连接命名空间。
-      const workerId = String((frame.payload as Record<string, unknown> | null)?.workerId ?? '')
-        || hubSession.workerIdOfFrame(frame)
+      // 归属只认频道里的 worker 段(§5.2);猜不出来源就丢帧——绝不"蒙一台"。
+      const workerId = hubSession.workerIdOfFrame(frame)
       if (!workerId) return
       const client = hubSession.workerClients.get(workerId)
       if (!client || !client.k) return
-      if (frame.channel !== channels.tasks(client.k)) return
+      const tasksChannel = channels.tasks(client.k, workerId)
+      if (frame.channel !== tasksChannel) return
+      const payload = frame.payload as Record<string, unknown> | null
+      // payload.workerId 与频道归属必须一致:不一致说明数据串到了别的 worker,丢弃(不入库、不刷屏)。
+      const claimed = String(payload?.workerId ?? '')
+      if (claimed && claimed !== workerId) {
+        console.warn(`[taskStore] 帧归属与 payload.workerId 不一致,丢弃:channel=${frame.channel} payload.workerId=${claimed}`)
+        return
+      }
       if (frame.event === 'task.deleted') {
-        this.remove(String((frame.payload as Record<string, unknown>)?.taskId ?? ''))
+        this.remove(String(payload?.taskId ?? ''))
         return
       }
       if (frame.event !== 'task.created' && frame.event !== 'task.updated') return
       this.upsert(frame.payload as WorkerTaskSummary, workerId)
     })
     hubSession.onReconnect(() => {
+      this.subscribeTaskChannels()
+      void this.refresh()
+    })
+    // 连接集合变化(切换/禁用/移除 worker)→ 剔除已断开 worker 的条目与游标,再向新集合校准。
+    hubSession.onWorkerConnectionsChanged((connectedIds) => {
+      this.pruneToConnectedWorkers(connectedIds)
       this.subscribeTaskChannels()
       void this.refresh()
     })
@@ -254,19 +284,66 @@ class TaskStore {
   }
 
   /**
-   * 订阅所有 worker 连接的 tasks 频道(task.created/updated/deleted 事件)。
+   * 订阅各 worker 连接的 tasks 频道 `u.<K>.worker.<id>.tasks`。
    * hub-client 的 desiredSubs 机制保证连接建立/重连后自动发送订阅;
    * worker 新上线时由 onFrame 的 worker.online 分支再次调用(此时连接可能
    * 尚未 open,sub 会加入 desiredSubs 在连接建立后自动发出)。sub 幂等,
    * 重复调用无副作用。
+   *
+   * <p>频道带 worker 段意味着**只收到这台 worker 的任务事件**:同 apiKey 下另一台
+   * (含被禁用、未建连的)worker 的数据根本进不来(架构 §5.2)。
    */
   subscribeTaskChannels(): void {
-    for (const client of hubSession.workerClients.values()) {
-      if (client.k) client.sub(channels.tasks(client.k))
+    for (const [workerId, client] of hubSession.workerClients) {
+      if (client.k) client.sub(channels.tasks(client.k, workerId))
     }
-    domainEventBus.subscribe(DOMAIN_EVENTS.WORKER_DATA_CHANGED, () => {
-      this.refresh()
-    })
+  }
+
+  /**
+   * 只保留仍已建立连接的 worker 的条目与分页游标。
+   *
+   * <p>切换/禁用 worker 时调用:旧 worker 的任务列表条目若留着,点开会按已断开的连接取数,
+   * 表现为「列表有、详情空白」;游标留着则下次分页 offset 错位。
+   */
+  pruneToConnectedWorkers(connectedIds: ReadonlySet<string>): void {
+    let changed = false
+    for (const [taskId, entry] of this.tasks) {
+      if (entry.workerId && !connectedIds.has(entry.workerId)) {
+        this.tasks.delete(taskId)
+        changed = true
+      }
+    }
+    for (const key of [...this.pageStates.keys()]) {
+      const workerId = key.split('\u0001')[0]
+      if (workerId && !connectedIds.has(workerId)) {
+        this.pageStates.delete(key)
+      }
+    }
+    if (changed) this.sortAndNotify()
+  }
+
+  /**
+   * 剔除某台 worker 的全部条目与分页游标(该 worker 连接断开/被禁用时)。
+   *
+   * <p>与 {@link pruneToConnectedWorkers} 的区别:本方法按**指定 workerId** 精确剔除,
+   * 用于「只掉了一台 worker」的场景;后者按当前连接集合整体收敛。
+   */
+  invalidateWorker(workerId: string): void {
+    if (!workerId) return
+    let changed = false
+    for (const [taskId, entry] of [...this.tasks]) {
+      if (entry.workerId === workerId) {
+        this.tasks.delete(taskId)
+        changed = true
+      }
+    }
+    for (const key of [...this.pageStates.keys()]) {
+      if (key.split('\u0001')[0] === workerId) this.pageStates.delete(key)
+    }
+    for (const key of [...this.loadingPages]) {
+      if (key.split('\u0001')[0] === workerId) this.loadingPages.delete(key)
+    }
+    if (changed) this.sortAndNotify()
   }
 
   /**
@@ -306,9 +383,8 @@ class TaskStore {
                   hasMore: Boolean(result?.hasMore),
                 })
                 for (const summary of incoming) {
-                  const entry = toEntry(summary)
-                  if (!entry.workerId) entry.workerId = workerId
-                  entries.push(entry)
+                  // 来源即权威:这批是从 workerId 这条连接拉来的,条目归属直接定为它。
+                  entries.push(toEntry(summary, workerId))
                 }
               } catch (error) {
                 // 单台 worker 失败不影响整体合并(保留其余 worker 数据)。
@@ -367,8 +443,7 @@ class TaskStore {
         state.offset += incoming.length
         state.hasMore = Boolean(result?.hasMore)
         for (const summary of incoming) {
-          const entry = toEntry(summary)
-          if (!entry.workerId) entry.workerId = workerId
+          const entry = toEntry(summary, workerId)
           this.tasks.set(entry.taskId, entry)
         }
       }
@@ -386,7 +461,11 @@ class TaskStore {
    */
   async ensureLoaded(taskId: string): Promise<TaskListEntry | undefined> {
     const existing = this.tasks.get(taskId)
-    if (existing) return existing
+    // 「有条目」不等于「条目可用」:若它记录的归属 worker 已无连接(切换/禁用留下的陈旧条目),
+    // 必须重新定向补齐,否则详情按已断开的连接取数 → 静默空白(§8.2)。
+    if (existing && existing.workerId && hubSession.workerClients.has(existing.workerId)) {
+      return existing
+    }
     const pending: Array<Promise<void>> = []
     hubSession.forEachConnectedWorker((workerId, client) => {
       pending.push((async () => {
@@ -394,8 +473,7 @@ class TaskStore {
           const result = await client.rpc(workerId, 'tasks.list', { taskIds: [taskId], limit: 1 })
           const incoming = (result?.tasks ?? []) as WorkerTaskSummary[]
           for (const summary of incoming) {
-            const entry = toEntry(summary)
-            if (!entry.workerId) entry.workerId = workerId
+            const entry = toEntry(summary, workerId)
             this.tasks.set(entry.taskId, entry)
           }
         } catch (error) {
@@ -412,8 +490,7 @@ class TaskStore {
 
   upsert(summary: WorkerTaskSummary, sourceWorkerId?: string): void {
     if (!summary?.taskId) return
-    const entry = toEntry(summary)
-    if (!entry.workerId) entry.workerId = sourceWorkerId || ''
+    const entry = toEntry(summary, sourceWorkerId)
     const prev = this.tasks.get(entry.taskId)
     const prevStatus = prev?.status
     this.tasks.set(entry.taskId, entry)

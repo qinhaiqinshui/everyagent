@@ -122,6 +122,8 @@ class ManagedStream {
   view: TaskPacketView | null = null
   /** view 绑定的 HubClient(仅致命错误替换实例时换新,ensureView 检测后自动重建 view)。 */
   boundClient: import('../sdk/hub-client').HubClient | null = null
+  /** view 绑定的归属 worker(与 boundClient 一起构成复用条件:view 内冻结了带 worker 段的 stream 频道名)。 */
+  boundWorkerId = ''
   folder: TaskEventFolder
   listeners = new Set<() => void>()
   notifyTimer: ReturnType<typeof setTimeout> | null = null
@@ -147,18 +149,55 @@ class ManagedStream {
     }, NOTIFY_COALESCE_MS)
   }
 
+  /**
+   * 解析任务归属 worker —— **每次 open 都重解析**,不用创建期冻结的旧值。
+   *
+   * <p>切换启用的 worker 后,taskStore 里可能还留着指向已断开 worker 的陈旧归属;
+   * 若继续沿用它取连接,取不到 client 就静默 return,页面既不出数据也不报错
+   * (只有刷新页面重建全部单例才好,即 bug1)。
+   */
+  resolveWorkerId(): string {
+    const entry = taskStore.get(this.taskId)
+    const resolved = entry?.workerId || this.workerId
+    if (resolved && resolved !== this.workerId) {
+      // 归属换了 = 连接换了:view/boundClient 需重建,台账也允许重拉。
+      this.agentsSeeded = false
+    }
+    this.workerId = resolved
+    return resolved
+  }
+
+  /**
+   * 取归属 worker 的可用连接;取不到时把原因**写进可见错误态**并返回 null。
+   *
+   * <p>这是 bug1 的直接病灶:原实现 `if (!client) return` 什么都不留,UI 便永远停在
+   * 「正在加载任务线程…」且重试按钮不出现。失败必须可见可重试(§8.2)。
+   */
+  private clientOrError(): ReturnType<typeof hubSession.workerClient> {
+    const client = hubSession.workerClient(this.workerId)
+    if (client) return client
+    this.roundsError = this.workerId
+      ? `任务所属 worker ${this.workerId} 未连接(当前启用的 worker 可能已切换;重新打开任务或刷新列表可恢复)`
+      : '无法确定任务所属 worker(任务数据不可用)'
+    this.notify()
+    return null
+  }
+
   ensureView(): TaskPacketView {
     const client = hubSession.workerClient(this.workerId)
     if (!client) throw new Error('worker ' + this.workerId + ' 未连接')
-    if (this.view && this.boundClient === client) {
+    // 复用条件 = 同一条连接 **且** 同一归属 worker:view 里冻结了 stream 频道名
+    // (u.<K>.worker.<wid>.task.<tid>.stream),workerId 变了必须重建,否则会订阅到旧 worker 的频道。
+    if (this.view && this.boundClient === client && this.boundWorkerId === this.workerId) {
       return this.view
     }
-    // 换 view(如 worker 连接重建、client 实例变化)前先关旧 view,摘干净它的监听器。
+    // 换 view(如 worker 连接重建、切换启用的 worker)前先关旧 view,摘干净它的监听器。
     this.view?.close()
     const view = new TaskPacketView(client, this.workerId, this.taskId)
     view.onEvent((event: TaskStreamEvent) => this.onEvent(event))
     this.view = view
     this.boundClient = client
+    this.boundWorkerId = this.workerId
     return view
   }
 
@@ -362,7 +401,7 @@ class ManagedStream {
    *   走 full(soft=false)。
    */
   private async loadRoundsIntoFolder(soft = false): Promise<void> {
-    const client = hubSession.workerClient(this.workerId)
+    const client = this.clientOrError()
     if (!client) return
     const res = await fetchTaskRounds(client, this.workerId, { taskId: this.taskId })
     this.rounds = res
@@ -446,9 +485,11 @@ class ManagedStream {
    */
   private async loadAgentsIntoFolder(): Promise<void> {
     if (this.agentsSeeded) return
+    const client = this.clientOrError()
+    if (!client) return // 不置 agentsSeeded:连接恢复/重开时还应能重拉一次
+    // 已确认拿到 client 才置节流位;原实现写在取 client 之前,取不到也"已拉过",
+    // 于是本 open 周期内永不重试(子 agent 台账永久缺失)。
     this.agentsSeeded = true
-    const client = hubSession.workerClient(this.workerId)
-    if (!client) return
     try {
       const res = await fetchTaskAgents(client, this.workerId, { taskId: this.taskId })
       if (this.folder.seedAgents(res.agents, res.mainAgentId)) this.notify()
@@ -496,20 +537,28 @@ class ManagedStream {
     const opening = (async () => {
       // open 周期复位:重连 resync 再次 open 时允许重拉 task.agents 校准台账。
       this.agentsSeeded = false
-      if (!this.workerId) {
+      // 归属每次重解析(不用创建期冻结的旧值):切换 worker 后 taskStore 才是权威来源。
+      if (!this.resolveWorkerId()) {
         // 分页窗口外的老任务 / 重连后仍开的旧标签:镜像缺失时定向补齐归属 worker。
         const entry = await taskStore.ensureLoaded(this.taskId)
         if (!entry?.workerId) {
+          this.roundsError = '无法确定任务所属 worker(任务数据不可用)'
+          this.notify()
           throw new Error('无法确定任务所属 worker(任务数据不可用)')
         }
         this.workerId = entry.workerId
       }
-      if (!hubSession.connected) return
+      if (!hubSession.connected) {
+        // 目录连接都没起来时不做无谓 RPC;错误态留给后续 onReconnect 重开时再判。
+        return
+      }
       // 订阅推送与 rounds 快照建齐都是「尽力而为」:失败记 warn,不阻断打开。
       try {
         await this.ensureView().open()
       } catch (error) {
+        // 订阅失败必须可见:view 建不起来 = 收不到任何实时增量。
         console.warn(`[taskStream] 订阅任务流失败(${this.taskId}):`, error)
+        this.clientOrError()
       }
       try {
         await this.loadRoundsIntoFolder()
@@ -553,6 +602,7 @@ function isTerminalEvent(eventName: string): boolean {
 class TaskStreamManager {
   private streams = new Map<string, ManagedStream>()
   private reconnectWired = false
+  private workerSetWired = false
 
   constructor() {
     registerAskReplySender((taskId, askId, answer) => {
@@ -566,14 +616,25 @@ class TaskStreamManager {
   }
 
   get(taskId: string): TaskStreamHandle {
+    this.wireReconnect()
+    this.wireWorkerSetChanges()
     let stream = this.streams.get(taskId)
     if (!stream) {
       // workerId 可暂缺:open() 首步经 taskStore.ensureLoaded 定向补齐后再订阅。
       stream = new ManagedStream(taskId, taskStore.get(taskId)?.workerId ?? '')
       this.streams.set(taskId, stream)
-      this.wireReconnect()
       void stream.open().catch((error) => {
         console.warn(`[taskStream] 打开任务流失败(${taskId}):`, error)
+      })
+      return this.toHandle(stream)
+    }
+    // 缓存命中也要重解析归属并校准入参:切换 worker 后同一 taskId 可能已改由新 worker 提供,
+    // 不重解析就会一直用着指向旧连接的句柄(原实现只在缓存缺失时 open,永不自愈)。
+    const before = stream.workerId
+    const resolved = stream.resolveWorkerId()
+    if (before !== resolved) {
+      void stream.open().catch((error) => {
+        console.warn(`[taskStream] 重新打开任务流失败(${taskId}):`, error)
       })
     }
     return this.toHandle(stream)
@@ -619,6 +680,41 @@ class TaskStreamManager {
     if (!stream) return
     stream.close()
     this.streams.delete(taskId)
+  }
+
+  /**
+   * 关闭并丢弃归属该 worker 的全部流句柄(worker 断开/被禁用时)。
+   *
+   * <p>句柄里冻结了 workerId 与 view(订阅/stream 频道绑在旧连接实例上),留着复用
+   * 就会继续向已断开的连接取数。丢弃后下次 get() 会按 taskStore 的权威归属重建。
+   */
+  invalidateWorker(workerId: string): void {
+    for (const [taskId, stream] of [...this.streams]) {
+      if (stream.workerId !== workerId) continue
+      // 挂起中的 ask 随连接一起失效:否则弹窗/悬浮项会一直等一条已断开连接永远不会再来的回复。
+      clearAsksOfTask(taskId)
+      stream.close()
+      this.streams.delete(taskId)
+    }
+  }
+
+  /**
+   * 接线 worker 连接集合变化:掉线的 worker 其流句柄一律丢弃(§8.2)。
+   * 与 wireReconnect 分开维护——重连是「同一条连接复活」(只重拉校准),
+   * 而连接集合变化是「作用域换了」(必须丢弃陈旧句柄)。
+   */
+  private wireWorkerSetChanges(): void {
+    if (this.workerSetWired) return
+    this.workerSetWired = true
+    hubSession.onWorkerConnectionsChanged((connectedIds) => {
+      for (const [taskId, stream] of [...this.streams]) {
+        if (stream.workerId && !connectedIds.has(stream.workerId)) {
+          clearAsksOfTask(taskId)
+          stream.close()
+          this.streams.delete(taskId)
+        }
+      }
+    })
   }
 
   private wireReconnect(): void {

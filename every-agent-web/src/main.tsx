@@ -62,6 +62,12 @@ registerRemoteSlashProvider()
 hubSession.onReconnect(() => {
   void loadPlugins()
 })
+// 切换/禁用 worker = 换了作用域:按新 worker 的插件清单再拉一次(loadPlugins 对已加载 id 幂等跳过,
+// 新 worker 独有的插件因此得以补上;旧 worker 独有而新 worker 没有的插件不影响功能正确性,
+// 其 RPC 路由已改为调用期解析,见 pluginLoader.resolvePluginWorkerId)。
+hubSession.onWorkerConnectionsChanged(() => {
+  void loadPlugins()
+})
 
 const initialThemeMode: ThemeMode = loadThemeMode()
 document.documentElement.setAttribute('data-theme', initialThemeMode)
