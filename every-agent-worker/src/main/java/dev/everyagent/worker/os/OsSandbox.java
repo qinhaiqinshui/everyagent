@@ -198,6 +198,11 @@ public final class OsSandbox implements SandboxBackend, NativeExec {
         return cfg.isAllowPrivilegeEscalation();
     }
 
+    /** 统一沙箱超时毫秒(worker.sandbox.timeout-ms)——命令工具自选执行方式时复用同一护栏。 */
+    public long execTimeoutMs() {
+        return cfg.getTimeoutMs();
+    }
+
     /**
      * 宿主原生进程 argv 直传(不做 wsl/mic 降权;供 NativeGit 等平台受控操作使用)。
      * 网络放行,超时沿用统一沙箱超时。
@@ -211,6 +216,141 @@ public final class OsSandbox implements SandboxBackend, NativeExec {
      */
     public ExecResult spawnNative(String[] argv, Path cwd, Map<String, String> env, long timeoutMs) {
         return runDirectCommand(java.util.List.of(argv), cwd, env, true, timeoutMs);
+    }
+
+    /**
+     * <b>stdout / stderr 以文件承载</b>执行(§7.10 输出编码契约,PowerShell 中文乱码根治)。
+     *
+     * <p><b>为什么不能用管道</b>:PowerShell 5.1 的 stdout 被重定向到<b>管道</b>时,
+     * {@code [Console]::OutputEncoding} 取系统 OEM 码页(中文 Windows=936/GBK)而非控制台码页,
+     * 于是原生子进程(rg/git/npm)写出的 UTF-8 字节先被 PS 按 GBK 解码(非法序列当场变
+     * U+FFFD,信息不可逆丢失),再按 GBK 编码送回管道——读取端任何"智能解码"都救不回来
+     *（现场:中文仓库里 {@code rg 架构 docs} 返回 {@code 鏋舵瀯.md: 閺嬭埖鐎?},
+     * 文件名再回灌 rg 直接 os error 2)。CLM 下改 setter 被策略拒,会话内 {@code chcp}
+     * 也不同步到它,只有 ConPTY 或本方法这条路。
+     *
+     * <p><b>为什么文件就行</b>:stdout 指向文件时,PS 把该文件句柄直接交给原生子进程,
+     * 子进程的原始字节<b>不经 PS 转码</b>直达文件;实测 cmdlet 中文输出与原生 UTF-8 输出
+     * 在同一文件里<b>同为合法 UTF-8</b>(不再混码),stderr 同理且不再产生 CLIXML 包装。
+     * 文件由本(JVM)进程创建并把可继承句柄交给子进程,故<b>不要求</b>沙箱账户对临时目录
+     * 有写权限(实测沙箱内 {@code $env:TEMP} 不可写,只能靠句柄继承)。
+     *
+     * <p>语义与 {@link #spawnNative} 对齐:超时强杀({@code aborted=true} + exitCode=-1)、
+     * 凭据 env 剔除、单流字节上限、退出码取进程真实值、临时文件必删。
+     *
+     * @param argv      命令参数(argv 直传,无 shell 解析)
+     * @param cwd       工作目录
+     * @param env       额外环境变量
+     * @param timeoutMs 超时毫秒;&le;0 表示不设超时
+     * @return 执行结果(stdout / stderr 已按 UTF-8 优先智能解码)
+     */
+    public ExecResult spawnToFileRedirected(String[] argv, Path cwd, Map<String, String> env,
+            long timeoutMs) {
+        ProcessBuilder pb = new ProcessBuilder(argv);
+        pb.directory(cwd.toFile());
+        pb.redirectInput(ProcessBuilder.Redirect.from(NULL_INPUT));
+        List<String> scrubbed = dev.everyagent.plugin.api.util.SecretPatterns
+                .scrubInPlace(pb.environment());
+        if (!scrubbed.isEmpty()) {
+            log.info("[os-sandbox] 子进程 env 剔除凭据变量(仅名): {}", scrubbed);
+        }
+        pb.environment().putAll(sanitizedEnv(env, true));
+        java.io.File outFile = null;
+        java.io.File errFile = null;
+        try {
+            outFile = createCarryFile("ea-stdout-", cwd);
+            errFile = createCarryFile("ea-stderr-", cwd);
+            pb.redirectOutput(ProcessBuilder.Redirect.to(outFile));
+            pb.redirectError(ProcessBuilder.Redirect.to(errFile));
+            Process p = pb.start();
+            boolean aborted;
+            if (timeoutMs > 0) {
+                aborted = !p.waitFor(timeoutMs, TimeUnit.MILLISECONDS);
+            } else {
+                p.waitFor();
+                aborted = false;
+            }
+            if (aborted) {
+                p.destroyForcibly();
+                p.waitFor(5, TimeUnit.SECONDS);
+            }
+            // 句柄随子进程退出关闭,故必须等进程结束/强杀后再读,否则拿到半份输出
+            String outText = readCappedUtf8(outFile);
+            String errText = readCappedUtf8(errFile);
+            if (aborted) {
+                errText += (errText.isEmpty() ? "" : "\n") + "[exec 超时中止: >" + timeoutMs + "ms]";
+                return new ExecResult(capOutput(outText), capOutput(errText), -1, true);
+            }
+            return new ExecResult(capOutput(outText), capOutput(errText), p.exitValue(), false);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return new ExecResult("", "exec 被中断", -1, true);
+        } catch (IOException e) {
+            return new ExecResult("", "exec 启动失败: " + e.getMessage(), 1, false);
+        } finally {
+            deleteQuietly(outFile);
+            deleteQuietly(errFile);
+        }
+    }
+
+    /**
+     * 建一个临时承载/脚本文件:优先 {@code java.io.tmpdir},不可写则退到工作区
+     * {@code <root>/.everyagent/tmp}(受限账户下实测系统 TEMP 会被拒写,不退让会让
+     * powershell 工具整体瘫痪)。
+     *
+     * @param prefix         文件名前缀
+     * @param suffix         文件名后缀(如 {@code .ps1} / {@code .tmp})
+     * @param workspaceRoot  工作区根(兜底落点,可为 null)
+     * @return 已创建的空文件
+     * @throws IOException 两处都建不出来
+     */
+    public static java.io.File createScratchFile(String prefix, String suffix,
+            Path workspaceRoot) throws IOException {
+        try {
+            return java.io.File.createTempFile(prefix, suffix);
+        } catch (IOException | IllegalArgumentException | SecurityException primary) {
+            if (workspaceRoot == null) {
+                throw primary;
+            }
+            Path dir = workspaceRoot.resolve(".everyagent").resolve("tmp");
+            java.nio.file.Files.createDirectories(dir);
+            return java.nio.file.Files.createTempFile(dir, prefix, suffix).toFile();
+        }
+    }
+
+    /** stdout/stderr 承载文件(工作区兜底)。 */
+    private static java.io.File createCarryFile(String prefix, Path cwd) throws IOException {
+        return createScratchFile(prefix, ".tmp", cwd);
+    }
+
+    /** 读承载文件:上限 {@code MAX_OUTPUT_BYTES} 字节,UTF-8 优先智能解码,超限打截断标记。 */
+    private static String readCappedUtf8(java.io.File f) {
+
+        try (java.io.InputStream in = new java.io.FileInputStream(f)) {
+            byte[] all = in.readNBytes(dev.everyagent.plugin.api.shell.ExecResults.MAX_OUTPUT_BYTES
+                    + 1);
+            int cap = dev.everyagent.plugin.api.shell.ExecResults.MAX_OUTPUT_BYTES;
+            boolean over = all.length > cap;
+            byte[] use = over ? java.util.Arrays.copyOf(all, cap) : all;
+            String text = dev.everyagent.plugin.api.shell.ExecResults.decodeConsoleOutput(use);
+            return over
+                    ? text + "\n[输出已截断至 " + cap + " 字节]"
+                    : text;
+        } catch (IOException e) {
+            return "";
+        }
+    }
+
+    /** 承载文件清理:尽力删,失败留痕不抛(临时目录自带回收)。 */
+    private static void deleteQuietly(java.io.File f) {
+        if (f == null) {
+            return;
+        }
+        try {
+            java.nio.file.Files.deleteIfExists(f.toPath());
+        } catch (IOException ignored) {
+            // 删不掉不影响结果
+        }
     }
 
     /** 直接执行(ProcessBuilder 以 argv 直传,无 shell 解析;带超时 + 每流输出上限 + 网络 env 处理)。 */

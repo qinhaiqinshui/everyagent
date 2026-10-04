@@ -23,21 +23,24 @@ public final class ExecResults {
     /**
      * PowerShell 脚本预置前缀。三项职责：
      *
-     * <p><b>1. UTF-8 编码（best-effort，2026-10-04 修正）</b>：
-     * 沙箱账户受 WDAC/AppLocker 策略进入 CLM（Constrained Language Mode）时，
-     * {@code [Console]::OutputEncoding=...} 属性 setter 被拒
-     *（PropertySetterNotSupportedInConstrainedLanguage）。前缀里的
-     * {@code chcp 65001 >$null}（原生命令，CLM 允许）+ {@code try/catch} 包裹的 setter
-     * 是 best-effort：FullLanguage 或有真实控制台时能把输出码页切到 UTF-8。
-     * <b>注意</b>：stdout 被重定向到管道且无真实控制台时，chcp 不会同步到
-     * .NET Console.OutputEncoding，CLM 下又无法改 setter——PowerShell cmdlet 的
-     * 中文输出此时仍是系统 ANSI 码页（如 GBK/936）字节。这一情形由读取端
-     * {@link #decodeConsoleOutput(byte[])} 按实际字节编码智能解码兜底，二者配合。
-     * {@code $OutputEncoding=UTF8} 使管道数据传给原生子进程时也用 UTF-8；
+     * <p><b>1. UTF-8 编码（best-effort，2026-10-05 修正定性）</b>：
+     * <b>本前缀无法解决中文乱码，真正生效的是「stdout/stderr 用文件承载」</b>
+     *（见 worker {@code OsSandbox#spawnToFileRedirected}）。原因:PowerShell 5.1 的
+     * stdout 被重定向到<b>管道</b>时,{@code [Console]::OutputEncoding} 取系统 OEM 码页
+     *（中文 Windows=936/GBK）而非控制台码页——{@code chcp 65001} 改的是控制台,
+     * 不同步到它;而沙箱账户受 WDAC/AppLocker 进入 CLM(Constrained Language Mode),
+     * 属性 setter 被策略拒绝,运行时改 {@code OutputEncoding} 这条路也堵死。于是原生子进程
+     *（rg/git 等）的 UTF-8 字节先被 PS 按 GBK 解码(非法序列成 U+FFFD,信息当场丢失),
+     * 再按 GBK 编码写回管道——<b>读取端无论怎么智能解码都无法还原</b>。
+     * 改为文件承载后,PS 的原生子进程直接继承该文件句柄写原始字节,PS 完全不参与转码,
+     * cmdlet 输出也按 UTF-8 落文件(实测两条流均纯 UTF-8)。
+     * 保留本前缀里的 {@code chcp}/{@code try-catch setter} 作 FullLanguage 或有真实
+     * 控制台场景的加成;{@code $OutputEncoding=UTF8} 影响的是「PS 管道数据写入原生子进程
+     * <b>stdin</b>」的编码,与上面的 stdout 问题无关,仍有价值;
      * {@code $PSDefaultParameterValues} 让 Get-Content / Set-Content / Out-File
      * 不带 {@code -Encoding} 时默认用 UTF-8 读写文件（PS 5.1 默认按系统 ACP 如 GBK 读，
-     * UTF-8 中文文件会乱码）。变量/哈希表赋值在 CLM 下允许，无需包裹。前缀先于用户命令执行，
-     * 用户显式指定 {@code -Encoding} 则覆盖。
+     * UTF-8 中文文件会乱码）——这一项是纯收益,必须保留。变量/哈希表赋值在 CLM 下允许。
+     * 前缀先于用户命令执行,用户显式指定 {@code -Encoding} 则覆盖。
      *
      * <p><b>2. 非成功流静默化</b>：静默 progress/information/warning/verbose/debug 流，
      * 避免个别 cmdlet / 模块显式 Write-Progress 等刷屏（不影响真实 stdout 数据与真实 stderr 错误）。
@@ -54,8 +57,33 @@ public final class ExecResults {
             + "$WarningPreference='SilentlyContinue'; $VerbosePreference='SilentlyContinue'; "
             + "$DebugPreference='SilentlyContinue'; ";
 
+    /**
+     * PowerShell 脚本退出码传导尾部（拼在用户命令之后）。
+     *
+     * <p><b>问题</b>:{@code powershell.exe -File x.ps1} 的进程退出码只反映「脚本是否抛出
+     * 终止性错误」,脚本里最后一条<b>原生命令</b>（rg / git / npm …）的退出码不会传导出来。
+     * 于是工具尾注 {@code [exit code: N]} 永远是 0——而 rg 恰恰用 1 表示「无匹配」、2 表示
+     * 「用法/正则错误」,AI 依赖该信号判读结果,静默 0 会把「没搜到」误读成「搜到了但无关」。
+     *
+     * <p><b>做法</b>:取 {@code $LASTEXITCODE}(PS 为最后一个原生子进程设置),为空(纯 cmdlet
+     * 命令)则 0,显式 {@code exit} 出去。{@code if} 作表达式赋值与变量赋值在 CLM 下均允许。
+     * 用户命令自带 {@code exit}(脚本当场终止)时本尾部不执行,进程码即用户所给值,同样正确。
+     */
+    public static final String POWERSHELL_EXIT_TAIL =
+            "; $__EAExitCode = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }; "
+            + "exit $__EAExitCode";
+
+    /**
+     * 文件承载模式下 stdout / stderr 的读取字节上限（单流）。
+     *
+     * <p>字符级上限见 {@link #MAX_OUTPUT_CHARS}；此处先把「读进内存」的字节量封顶，
+     * 防止子进程输出数百 MB 时把整份文件读爆堆。UTF-8 中文 3 字节/字，取 4 倍宽裕。
+     */
+    public static final int MAX_OUTPUT_BYTES = MAX_OUTPUT_CHARS * 4;
+
     private ExecResults() {
     }
+
 
     /**
      * 智能解码子进程输出字节：先严格 UTF-8，失败则回退系统 ANSI 码页。
@@ -146,6 +174,103 @@ public final class ExecResults {
             }
         }
         return Charset.defaultCharset();
+    }
+
+    // ---- CLIXML 流记录还原（BUG-2：错误文本不得静默丢失） ----
+
+    /** CLIXML 整段：{@code #< CLIXML} 头 + {@code <Objs …>…</Objs>}（DOTALL，非贪婪）。 */
+    private static final java.util.regex.Pattern CLIXML_BLOCK =
+            java.util.regex.Pattern.compile("(?s)#< CLIXML.*?</Objs>");
+
+    /** 未闭合的 CLIXML 段（输出被字节上限拦腰截断时的残块）。 */
+    private static final java.util.regex.Pattern CLIXML_BLOCK_OPEN =
+            java.util.regex.Pattern.compile("(?s)#< CLIXML.*");
+
+    /** CLIXML 内的流记录文本载荷（Error/Warning/Information/Verbose/Debug）。 */
+    private static final java.util.regex.Pattern CLIXML_TEXT =
+            java.util.regex.Pattern.compile(
+                    "(?s)<S S=\"(?:Error|Warning|Information|Verbose|Debug)\">(.*?)</S>");
+
+    /** 未闭合的文本载荷（输出被字节上限拦腰截断时,残块里没有 {@code </S>}）。 */
+    private static final java.util.regex.Pattern CLIXML_TEXT_OPEN =
+            java.util.regex.Pattern.compile(
+                    "(?s)<S S=\"(?:Error|Warning|Information|Verbose|Debug)\">(.*?)$");
+
+    /**
+     * 把 PowerShell 在非交互重定向下写进 stderr 的 CLIXML 流记录**还原成错误文本**。
+     *
+     * <p><b>问题</b>：PowerShell 5.1 在 stderr 被重定向(管道/无控制台)时,把 error/warning
+     * 等流序列化成 CLIXML（{@code #< CLIXML} + {@code <Objs>…</Objs>}）。此前实现是
+     * <b>整段删除</b>,于是 {@code rg '(' file} 的「regex parse error」、命令不存在、
+     * 路径不可读等真实错误信息<b>全部静默消失</b>,工具结果里只剩一个 {@code [exit code: 2]}
+     * 或干脆什么都没有——AI 会把「用错了」误读成「没匹配」,这是致命的判断污染。
+     *
+     * <p><b>做法</b>：逐段用 {@link #messagesFromClixml} 抽出 {@code <S S="Error">} 等
+     * 文本载荷替换原段;段外的原生命令纯文本 stderr 保持原样(文件承载模式下本就没有
+     * CLIXML,此处只作管道模式的兜底)。抽不到任何文本时返回空段(纯 progress 噪声)。
+     *
+     * @param s stderr 原文（可为 null / 空 / 不含 CLIXML）
+     * @return 还原后的 stderr 文本；无 CLIXML 时原样返回
+     */
+    public static String decodeClixml(String s) {
+        if (s == null || s.isEmpty() || s.indexOf("CLIXML") < 0) {
+            return s == null ? "" : s;
+        }
+        StringBuilder out = new StringBuilder();
+        java.util.regex.Matcher m = CLIXML_BLOCK.matcher(s);
+        int last = 0;
+        boolean matched = false;
+        while (m.find()) {
+            matched = true;
+            out.append(s, last, m.start()).append(messagesFromClixml(m.group()));
+            last = m.end();
+        }
+        if (!matched) {
+            // 截断的残块(无 </Objs>):按开放块处理,同样抽文本,避免整段噪声留在结果里
+            java.util.regex.Matcher open = CLIXML_BLOCK_OPEN.matcher(s);
+            while (open.find()) {
+                out.append(s, last, open.start()).append(messagesFromClixml(open.group()));
+                last = open.end();
+            }
+        }
+        out.append(s, last, s.length());
+        return out.toString().replaceAll("\n{3,}", "\n\n").strip();
+    }
+
+    /** 从一段 CLIXML 中抽出全部流记录文本（去内嵌标签、还原 XML 实体与换行转义）。 */
+    private static String messagesFromClixml(String block) {
+        String closed = collectMessages(CLIXML_TEXT, block);
+        if (!closed.isEmpty()) {
+            return closed;
+        }
+        // 残块(被输出上限拦腰截断)没有 </S>,退而求其次取开放标签到段尾
+        return collectMessages(CLIXML_TEXT_OPEN, block);
+    }
+
+    /** 按给定模式抽取文本载荷并串成多行。 */
+    private static String collectMessages(java.util.regex.Pattern p, String block) {
+        StringBuilder sb = new StringBuilder();
+        java.util.regex.Matcher t = p.matcher(block);
+        while (t.find()) {
+            String text = unescapeClixml(t.group(1));
+            if (text.isEmpty()) {
+                continue;
+            }
+            if (!sb.isEmpty()) {
+                sb.append('\n');
+            }
+            sb.append(text);
+        }
+        return sb.toString();
+    }
+
+    /** CLIXML 文本清洗：剥内嵌 XML 标记 → 还原换行转义 → 解 XML 实体 → 收空白。 */
+    private static String unescapeClixml(String raw) {
+        String s = raw.replaceAll("(?s)<[^>]+>", "");
+        s = s.replace("_x000D__x000A_", "\n").replace("_x000D_", "\r").replace("_x000A_", "\n");
+        s = s.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"")
+                .replace("&apos;", "'").replace("&amp;", "&");
+        return s.strip();
     }
 
     /**

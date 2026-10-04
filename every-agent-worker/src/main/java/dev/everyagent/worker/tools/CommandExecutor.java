@@ -8,7 +8,6 @@ import dev.everyagent.worker.os.OsSandbox;
 import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.regex.Pattern;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -107,9 +106,10 @@ public class CommandExecutor {
             String sysPath = System.getenv("PATH");
             env.put("PATH", rgBinDir + java.io.File.pathSeparator + (sysPath == null ? "" : sysPath));
         }
-        // powershell 专属(Windows 原生域):授权检查之后给命令串预置 UTF-8 编码设置 +
+        // powershell 专属(Windows 原生域):授权检查之后给命令串预置 UTF-8 偏好 +
         // 非成功流抑制(权限检查与审计日志始终是用户原始命令)。前缀先于用户命令执行,
-        // 用户若显式设置该偏好,后写覆盖本前缀。
+        // 用户若显式设置该偏好,后写覆盖本前缀。真正的非 ASCII 正确性由「输出文件承载」
+        // 保证(见 OsSandbox#spawnToFileRedirect),前缀只负责编码偏好与噪声抑制。
         String spawnCmd = powershell ? ExecResults.POWERSHELL_PREFIX + command : command;
         // wsl-bwrap 后端:已授权 EXEC 根随调用挂载进沙箱(授权=绑定,撤销=下次不绑,零宿主状态);
         // 走 execRootsSandboxed(§13.3 L2 过滤)——过度宽泛根(如历史 C:\\)不得进 --bind 白名单,
@@ -132,26 +132,18 @@ public class CommandExecutor {
         // 直接 ProcessBuilder 执行（核心宿主访问工具,DIRECT 模式）
         boolean win = System.getProperty("os.name").toLowerCase().contains("win");
         if (powershell) {
-            // PS-002 修复:含双引号的命令经临时 .ps1 文件 + -File 执行,
-            // 绕开 ProcessBuilder 的 MSVCRT 引号转义对 PowerShell 引号的截断/吞掉。
-            // 不含双引号的简单命令仍走 -Command,省去临时文件 IO。
-            boolean hasDoubleQuote = spawnCmd.indexOf('"') >= 0;
-            if (hasDoubleQuote) {
-                r = executePowerShellViaTempScript(spawnCmd, win, cwd, env);
-            } else {
-                String psExe = win ? "powershell.exe" : "pwsh";
-                String[] fullCmd = {psExe, "-NoProfile", "-Command", spawnCmd};
-                r = sandbox.spawnNative(fullCmd, cwd, env);
-            }
+            // powershell 唯一执行形态:临时 .ps1 + -File + stdout/stderr 文件承载 + 退出码传导。
+            // 不再保留 -Command 分支——分支差异正是引号被 MSVCRT 转义吞掉(PS-002)的温床。
+            r = executePowerShell(spawnCmd + ExecResults.POWERSHELL_EXIT_TAIL, win, cwd, env);
         } else {
             String[] shellPrefix = win ? new String[]{"cmd.exe", "/c"} : new String[]{"bash", "-c"};
             java.util.List<String> fullCmd = new java.util.ArrayList<>(java.util.List.of(shellPrefix));
             fullCmd.add(spawnCmd);
             r = sandbox.spawnNative(fullCmd.toArray(new String[0]), cwd, env);
         }
-        // powershell 专属:输出层剥除 CLIXML 流记录噪声(兜底,覆盖 Preference 未能抑制的残余)
+        // powershell 专属:stderr 里若仍有 CLIXML 流记录,还原成真实错误文本(绝不静默丢弃)
         if (powershell) {
-            r = stripClixml(r);
+            r = restoreClixml(r);
         }
         log.info("[exec] task={} backend={} rc={} aborted={} cmd={}", task.subjectId(),
                 sandbox.id(),
@@ -160,31 +152,36 @@ public class CommandExecutor {
     }
 
     /**
-     * PowerShell 脚本经临时 .ps1 文件 + -File 执行（PS-002 修复）。
+     * PowerShell 脚本执行:临时 {@code .ps1}(UTF-8 BOM) + {@code -File} +
+     * <b>stdout/stderr 文件承载</b>（BUG-1 根治 + PS-002 修复）。
      *
-     * <p><b>问题</b>:ProcessBuilder 在 Windows 上按 MSVCRT 规则转义参数中的双引号
-     *（{@code "} → {@code \"}）。但 PowerShell 的 {@code -Command} 参数接收命令行文本时,
-     * 其引号解析规则与 MSVCRT 不完全一致,导致 PowerShell 原生 {@code ""} 嵌套引号语法
-     *（双引号字符串内 {@code ""} 表示一个字面双引号）在经 MSVCRT 转义后被截断或吞掉。
+     * <p><b>为什么文件承载而不是管道</b>:PS 5.1 的 stdout 指向管道时,
+     * {@code [Console]::OutputEncoding} 取系统 OEM 码页(中文 Windows=936),原生子进程
+     *（rg/git 等）的 UTF-8 字节会被 PS 先按 GBK 解码再回编码,非法序列当场变 U+FFFD——
+     * 信息在子进程出口就被毁掉,读取端无从还原(中文仓库里 rg 的文件名/内容全乱码,
+     * 且乱码文件名回灌 rg 直接 os error 2,任务卡死)。改为文件承载后,子进程直接继承
+     * 文件句柄写原始字节,PS 完全不参与转码;实测同一路径下 cmdlet 中文与原生 UTF-8
+     * 输出在文件里<b>同为合法 UTF-8</b>,stderr 也不再被 CLIXML 包装。
+     * 详见 {@link OsSandbox#spawnToFileRedirected}。
      *
-     * <p><b>修复</b>:仅当命令串含双引号时,将脚本内容写入临时 {@code .ps1} 文件,
-     * 以 {@code -File} 参数执行。脚本内容经 Java 文件 IO 写入,不经过命令行引号转义;
-     * 文件路径不含 {@code "} 字符,ProcessBuilder 对路径的引号包裹不会引入歧义。
-     * 不含双引号的简单命令仍走 {@code -Command},省去临时文件 IO。
+     * <p><b>为什么 -File 而不是 -Command</b>:ProcessBuilder 按 MSVCRT 规则转义参数里的
+     * 双引号({@code "} → {@code \"}),而 PowerShell {@code -Command} 的引号解析与 MSVCRT
+     * 不一致,嵌套引号会被截断或吞掉(PS-002)。脚本经 Java 文件 IO 写入,不过命令行,
+     * 引号与控制字符在进程边界被改写这一整类问题随之消失;顺带免去「有无引号走两条路」
+     * 造成的行为分叉。
      *
-     * <p><b>编码</b>:临时文件以 UTF-8 BOM 写入。PowerShell 5.1 无 BOM 时按系统 ACP
-     *（如 GBK）解码脚本文件,含中文的脚本会乱码;BOM 强制 UTF-8 解码。
-     * UTF-8 输出编码已由 {@link ExecResults#POWERSHELL_PREFIX} 设置,无需额外处理。
+     * <p><b>脚本文件编码</b>:UTF-8 <b>BOM</b>。PowerShell 5.1 读无 BOM 文件时按系统 ACP
+     *（如 GBK）解码,命令串里的中文会被错解成另一个字。
      *
-     * <p><b>CLIXML</b>:{@code -File} 模式与 {@code -Command} 模式行为一致——
-     * Write-Host / Write-Output / 2>&1 / 原生 stderr 均以纯文本输出,不产生 CLIXML。
-     * {@link #stripClixml} 仍作兜底。
+     * <p><b>退出码</b>:{@link ExecResults#POWERSHELL_EXIT_TAIL} 已在尾部把
+     * {@code $LASTEXITCODE}(最后一个原生子进程)转成 powershell.exe 的进程退出码,
+     * 否则 {@code [exit code: N]} 尾注恒为 0,模型无法区分 rg「无匹配(1)」与「用错(2)」。
      */
-    private ExecResult executePowerShellViaTempScript(String script, boolean win,
+    private ExecResult executePowerShell(String script, boolean win,
             Path cwd, Map<String, String> env) {
         java.nio.file.Path tempScript = null;
         try {
-            tempScript = java.nio.file.Files.createTempFile("ea-ps-", ".ps1");
+            tempScript = OsSandbox.createScratchFile("ea-ps-", ".ps1", cwd).toPath();
             // UTF-8 BOM: PowerShell 5.1 需要它来正确识别 UTF-8 编码的脚本文件
             byte[] bom = {(byte) 0xEF, (byte) 0xBB, (byte) 0xBF};
             byte[] content = script.getBytes(java.nio.charset.StandardCharsets.UTF_8);
@@ -196,7 +193,7 @@ public class CommandExecutor {
             String psExe = win ? "powershell.exe" : "pwsh";
             String[] fullCmd = {psExe, "-NoProfile", "-ExecutionPolicy", "Bypass",
                     "-File", tempScript.toString()};
-            return sandbox.spawnNative(fullCmd, cwd, env);
+            return sandbox.spawnToFileRedirected(fullCmd, cwd, env, sandbox.execTimeoutMs());
         } catch (java.io.IOException e) {
             return new ExecResult("", "execute: 无法创建临时脚本文件 " + e.getMessage(), 1, false);
         } catch (Exception e) {
@@ -213,24 +210,23 @@ public class CommandExecutor {
     }
 
     /**
-     * PowerShell 5.1 在 stdout/stderr 被管道重定向(非交互)时,把非成功流(progress/information/
-     * verbose/warning/debug/error)序列化为 CLIXML 写进 stderr,格式为 {@code #< CLIXML} 头 +
-     * {@code <Objs ...>...</Objs>} XML 块(「正在准备首次使用模块」、Write-Progress、Write-Host 等)。
-     * 这些是流记录噪声,不是命令真实错误文本;{@link ExecResults#POWERSHELL_PREFIX} 已从源头抑制 progress 与
-     * information 流,此处兜底剥除残余(第三方 cmdlet / 个别模块),真实 stderr 错误文本保留。
+     * 还原 stderr 里的 PowerShell CLIXML 流记录为真实错误文本（兜底路径）。
+     *
+     * <p>PowerShell 5.1 在 stderr 被<b>管道</b>重定向时,把 error/warning/verbose 等流序列化成
+     * CLIXML({@code #< CLIXML} + {@code <Objs>…</Objs>})。旧实现是<b>整段删除</b>,于是
+     * {@code rg '(' file} 的「regex parse error」、命令不存在、路径不可读全成静默——只剩
+     * {@code [exit code: 2]} 甚至什么都没有,AI 把「用错了」误读成「没匹配」(BUG-2)。
+     * 现委托 {@link ExecResults#decodeClixml}:段内 {@code <S S="Error">} 文本抽出来留在
+     * stderr,段外原生命令纯文本原样保留。文件承载模式下本不产生 CLIXML,此处覆盖
+     * 其他执行路径与个别模块的残余。
      */
-    private static final Pattern CLIXML_BLOCK = Pattern.compile("(?s)#< CLIXML.*?</Objs>");
-
-    /** 剥除 stderr 中的 PowerShell CLIXML 流记录噪声;无噪声则原样返回,不影响其余字段。 */
-    private static ExecResult stripClixml(ExecResult r) {
+    private static ExecResult restoreClixml(ExecResult r) {
         String err = r.stderr();
-        if (err == null || err.isEmpty() || err.indexOf("#< CLIXML") < 0) {
+        if (err == null || err.isEmpty() || err.indexOf("CLIXML") < 0) {
             return r;
         }
-        String cleaned = CLIXML_BLOCK.matcher(err).replaceAll("");
-        // 剥除后可能残留纯空白行/首尾空白:清掉,避免 [stderr] 段只剩空行
-        cleaned = cleaned.replaceAll("(?m)^[ \\t]+$", "").replaceAll("\\n{3,}", "\n\n").strip();
-        return new ExecResult(r.stdout(), cleaned, r.exitCode(), r.aborted());
+        return new ExecResult(r.stdout(), ExecResults.decodeClixml(err), r.exitCode(),
+                r.aborted());
     }
 
     /**
