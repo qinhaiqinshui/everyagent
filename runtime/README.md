@@ -57,7 +57,7 @@ WSL 沙箱镜像由 `sandbox-wsl-ubuntu` 插件自己管理。镜像构建脚本
 生成方式（仓库根目录执行）：
 
 ```bash
-scripts/wsl-rootfs-build.ps1
+every-agent-plugins/sandbox-wsl-ubuntu/scripts/wsl-rootfs-build.ps1
 # 产物输出到 every-agent-plugins/sandbox-wsl-ubuntu/runtime/wsl/
 # npm run dist 时由 build:plugin-runtime 自动复制到共享 runtime/wsl/
 ```

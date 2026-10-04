@@ -1,7 +1,7 @@
 # EveryAgent managed distro rootfs build -- PowerShell edition (Windows host; equivalent to wsl-rootfs-build.sh)
 #
-# Artifacts: eagent-rootfs.tar.gz + eagent-rootfs.tar.gz.sha256 -- 放仓库根 runtime/wsl/
-# (唯一真源,electron-builder extraResources 打进 <resourcesPath>/runtime/wsl),
+# Artifacts: eagent-rootfs.tar.gz + eagent-rootfs.tar.gz.sha256 -- 输出到插件 runtime/wsl/
+# (npm run dist 时由 copy-plugin-runtime.mjs 自动复制到共享 runtime/wsl/),
 # worker 探测到发行版缺失即自动 wsl --import EveryAgent (offline, sha256 gated).
 #
 # Prereq: Docker Desktop (WSL2 backend), docker.exe on PATH.

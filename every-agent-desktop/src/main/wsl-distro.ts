@@ -188,7 +188,7 @@ export async function ensureWslDistro(
     const tarball = bundledDir ? join(bundledDir, 'wsl', TARBALL_NAME) : ''
 
     if (!tarball || !existsSync(tarball)) {
-      const detail = `托管发行版 ${distro} 缺失,且未找到镜像(已检查程序根 ${tarball || '(未传入)'}),请先运行 scripts/wsl-rootfs-build.ps1 构建镜像`
+      const detail = `托管发行版 ${distro} 缺失,且未找到镜像(已检查程序根 ${tarball || '(未传入)'}),请先运行 every-agent-plugins/sandbox-wsl-ubuntu/scripts/wsl-rootfs-build.ps1 构建镜像`
       log(detail)
       return { wslAvailable: true, distroPresent: false, importedNow: false, detail }
     }
