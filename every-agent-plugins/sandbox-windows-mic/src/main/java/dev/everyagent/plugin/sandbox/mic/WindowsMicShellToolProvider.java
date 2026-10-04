@@ -49,7 +49,7 @@ public class WindowsMicShellToolProvider implements ToolProvider {
         ShellExecutor exec = rgDir != null ? withRgInPath(base, rgDir) : base;
         return List.of(ShellTool.powershell(exec)
                 .appendDescription("rg 已加入 PATH,可直接执行 rg 命令，内容搜索尽量使用rg命令，性能更好;"
-                        + "输出编码已自动设为 UTF-8,无需手动切换。")
+                        + "中文等非 ASCII 输出已自动正确解码，无需手动处理编码。")
                 .callback());
     }
 

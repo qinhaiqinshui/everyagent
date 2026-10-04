@@ -2,6 +2,12 @@ package dev.everyagent.plugin.api.shell;
 
 import dev.everyagent.plugin.api.spi.ExecResult;
 
+import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.Charset;
+import java.nio.charset.CodingErrorAction;
+import java.nio.charset.StandardCharsets;
+
 /**
  * 命令执行结果的公共静态逻辑：格式化（format）、审计截断（truncate）、
  * PowerShell 前缀常量与输出上限常量。
@@ -17,18 +23,20 @@ public final class ExecResults {
     /**
      * PowerShell 脚本预置前缀。三项职责：
      *
-     * <p><b>1. UTF-8 编码（Constrained Language 兼容，2026-10-04 修正）</b>：
-     * 沙箱账户受 WDAC/AppLocker 策略进入 CLM 时，
+     * <p><b>1. UTF-8 编码（best-effort，2026-10-04 修正）</b>：
+     * 沙箱账户受 WDAC/AppLocker 策略进入 CLM（Constrained Language Mode）时，
      * {@code [Console]::OutputEncoding=...} 属性 setter 被拒
-     *（PropertySetterNotSupportedInConstrainedLanguage）。改用双保险：
-     * {@code chcp 65001 >$null}（原生命令，CLM 允许）先把控制台输出码页切到
-     * UTF-8——.NET Console.OutputEncoding 动态反映控制台码页，后续管道输出即
-     * UTF-8；setter 再以 {@code try/catch} 包裹（FullLanguage 下直设，CLM 下
-     * 静默跳过，chcp 已兜底）。{@code $OutputEncoding=UTF8} 使管道数据传给
-     * 原生子进程时也用 UTF-8；{@code $PSDefaultParameterValues} 让
-     * Get-Content / Set-Content / Out-File 不带 {@code -Encoding} 时默认用
-     * UTF-8 读写文件（PS 5.1 默认按系统 ACP 如 GBK 读，UTF-8 中文文件会乱码）。
-     * 变量/哈希表赋值在 CLM 下允许，无需包裹。前缀先于用户命令执行，
+     *（PropertySetterNotSupportedInConstrainedLanguage）。前缀里的
+     * {@code chcp 65001 >$null}（原生命令，CLM 允许）+ {@code try/catch} 包裹的 setter
+     * 是 best-effort：FullLanguage 或有真实控制台时能把输出码页切到 UTF-8。
+     * <b>注意</b>：stdout 被重定向到管道且无真实控制台时，chcp 不会同步到
+     * .NET Console.OutputEncoding，CLM 下又无法改 setter——PowerShell cmdlet 的
+     * 中文输出此时仍是系统 ANSI 码页（如 GBK/936）字节。这一情形由读取端
+     * {@link #decodeConsoleOutput(byte[])} 按实际字节编码智能解码兜底，二者配合。
+     * {@code $OutputEncoding=UTF8} 使管道数据传给原生子进程时也用 UTF-8；
+     * {@code $PSDefaultParameterValues} 让 Get-Content / Set-Content / Out-File
+     * 不带 {@code -Encoding} 时默认用 UTF-8 读写文件（PS 5.1 默认按系统 ACP 如 GBK 读，
+     * UTF-8 中文文件会乱码）。变量/哈希表赋值在 CLM 下允许，无需包裹。前缀先于用户命令执行，
      * 用户显式指定 {@code -Encoding} 则覆盖。
      *
      * <p><b>2. 非成功流静默化</b>：静默 progress/information/warning/verbose/debug 流，
@@ -47,6 +55,97 @@ public final class ExecResults {
             + "$DebugPreference='SilentlyContinue'; ";
 
     private ExecResults() {
+    }
+
+    /**
+     * 智能解码子进程输出字节：先严格 UTF-8，失败则回退系统 ANSI 码页。
+     *
+     * <p><b>背景（中文乱码根因）</b>：PowerShell 5.1 在 stdout 被重定向到管道时用
+     * {@code [Console]::OutputEncoding} 编码文本输出，该属性进程启动时取系统 ANSI
+     * 码页（中文 Windows = GBK/936）；CLM 下禁止运行时修改 setter，
+     * 无真实控制台时 chcp 65001 也不会同步到它。故 PowerShell cmdlet 的中文输出
+     * 实为 GBK 字节，而外部程序（git / rg 等直接写管道的原生命令）输出为 UTF-8，
+     * 单一编码无法同时正确还原两者，统一按 UTF-8 解码导致中文乱码。
+     *
+     * <p><b>策略</b>：GBK 等 ANSI 中文的字节序列不构成合法 UTF-8，严格 UTF-8 解码
+     * 会在 malformed/unmappable 上失败，据此回退系统 ANSI 码页
+     *（{@code native.encoding}，JDK 18+ 由 Windows GetACP 提供，中文 = GBK）。
+     * 纯 ASCII 在两种编码下结果一致，天然安全；UTF-8 外部命令输出严格解码成功，
+     * 不受影响。
+     *
+     * <p><b>截断保护</b>：输出在字节上限处被截断时，末尾可能剩半个 UTF-8 字符，
+     * 严格解码失败会导致整条 UTF-8 输出被误判为 ANSI。若唯一错误位于缓冲末尾
+     * 3 字节内且余下字节构成合法 UTF-8 序列前缀，按 UTF-8 宽容解码（REPLACE）。
+     *
+     * <p><b>已知边界</b>：同一字节流内 UTF-8 与 ANSI 中文混排时只能整体择一
+     *（出现首个非法 UTF-8 字节即整体判为 ANSI）。属罕见场景，可接受。
+     *
+     * @param bytes 子进程 stdout/stderr 原始字节（null / 空返回空串）
+     * @return 解码后的文本
+     */
+    public static String decodeConsoleOutput(byte[] bytes) {
+        if (bytes == null || bytes.length == 0) {
+            return "";
+        }
+        ByteBuffer bb = ByteBuffer.wrap(bytes);
+        try {
+            return StandardCharsets.UTF_8.newDecoder()
+                    .onMalformedInput(CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(CodingErrorAction.REPORT)
+                    .decode(bb)
+                    .toString();
+        } catch (CharacterCodingException e) {
+            if (isIncompleteUtf8Tail(bytes, bb.position())) {
+                // 截断残尾：整段本是 UTF-8,宽容解码(末尾半个字符以 U+FFFD 占位)
+                return new String(bytes, StandardCharsets.UTF_8);
+            }
+            return new String(bytes, ansiCharset());
+        }
+    }
+
+    /**
+     * 严格 UTF-8 解码失败的错误位置起、到缓冲末尾,是否仅为一个被截断的
+     * UTF-8 序列前缀(lead 字节合法 + 后续均为 continuation + 长度不足)。
+     */
+    private static boolean isIncompleteUtf8Tail(byte[] bytes, int errorPos) {
+        int remaining = bytes.length - errorPos;
+        if (remaining <= 0 || remaining > 3) {
+            return false; // 错误不在末尾 3 字节内 → 是真实的非 UTF-8 内容
+        }
+        int lead = bytes[errorPos] & 0xFF;
+        int expected;
+        if (lead >= 0xC2 && lead <= 0xDF) {
+            expected = 2;
+        } else if (lead >= 0xE0 && lead <= 0xEF) {
+            expected = 3;
+        } else if (lead >= 0xF0 && lead <= 0xF4) {
+            expected = 4;
+        } else {
+            return false; // 非法 lead / 孤立 continuation → 非 UTF-8
+        }
+        if (remaining >= expected) {
+            return false; // 字节齐全仍报错 → 序列本身非法 → 非 UTF-8
+        }
+        for (int i = 1; i < remaining; i++) {
+            int b = bytes[errorPos + i] & 0xFF;
+            if (b < 0x80 || b > 0xBF) {
+                return false; // 后续字节非 continuation → 非 UTF-8
+            }
+        }
+        return true;
+    }
+
+    /** 系统 ANSI 码页字符集（Windows = GetACP，如中文 GBK）；取不到回退 JVM 默认。 */
+    private static Charset ansiCharset() {
+        String nativeEnc = System.getProperty("native.encoding");
+        if (nativeEnc != null && !nativeEnc.isBlank()) {
+            try {
+                return Charset.forName(nativeEnc);
+            } catch (Exception ignored) {
+                // fall through to default
+            }
+        }
+        return Charset.defaultCharset();
     }
 
     /**

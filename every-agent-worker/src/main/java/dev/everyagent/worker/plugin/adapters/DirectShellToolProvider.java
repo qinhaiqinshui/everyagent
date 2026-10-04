@@ -64,7 +64,7 @@ public class DirectShellToolProvider implements ToolProvider {
         boolean win = isWindows();
         String rgNote = "rg 已加入 PATH,可直接执行 rg 命令，内容搜索尽量使用rg命令，性能更好;";
         if (win) {
-            String note = rgNote + "输出编码已自动设为 UTF-8,无需手动切换。";
+            String note = rgNote + "中文等非 ASCII 输出已自动正确解码，无需手动处理编码。";
             return List.of(ShellTool.powershell(exec::execute)
                     .appendDescription(note)
                     .callback());

@@ -283,7 +283,10 @@ public final class OsSandbox implements SandboxBackend, NativeExec {
             while ((n = in.read(buf)) != -1) {
                 bos.write(buf, 0, n);
             }
-            return bos.toString(java.nio.charset.StandardCharsets.UTF_8);
+            // 智能 UTF-8 → ANSI 码页回退：PowerShell cmdlet 在管道重定向 + CLM 下
+            // 仍按系统 ANSI 码页（如 GBK）编码中文，外部程序输出 UTF-8；
+            // 严格 UTF-8 失败时回退 ANSI 以正确还原中文（BUG-1 修复）。
+            return dev.everyagent.plugin.api.shell.ExecResults.decodeConsoleOutput(bos.toByteArray());
         }
     }
 }
