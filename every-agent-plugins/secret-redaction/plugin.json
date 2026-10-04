@@ -1,0 +1,9 @@
+{
+  "id": "secret-redaction",
+  "name": "凭据输出脱敏",
+  "version": "0.1.0",
+  "description": "工具结果落盘/推送/回灌前的凭据掩码,防密钥经事件日志与模型上下文外泄",
+  "author": "everyagent",
+  "main": "dev.everyagent.plugin.secretredaction.SecretRedactionPlugin",
+  "enabled": true
+}
