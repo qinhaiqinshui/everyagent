@@ -11,12 +11,13 @@ import java.util.List;
  *
  * <p>事件名不做主/子 agent 区分——同一名事件(delta/message/error/...),
  * 是否子 agent 由 agentId 字段决定(主 agent = mainAgentId,wire 形剥离开;子 agent 必带)。
- * 仅 spawn 生命周期用 agent.* 专用名(agent.started/agent.done,只对子 agent 发)。
+ * `agent.*` 三个专用名(agent.started/agent.done/agent.status)也**不分主/子**:agent 状态是
+ * per-run() 生命周期,主 agent 每轮 run() 同样走 started→…→done(§7.20.1)。
  *
  * <p>事件分两类(持久化约定):
  * <ul>
  * <li><b>持久事件</b>(落盘 jsonl,回放可见):user.message / message / tool.result / usage /
- *     ask.* / agent.started / agent.done / error / cancelled。
+ *     ask.* / agent.started / agent.done / agent.status / error / cancelled。
  *     其中 message 承载完整一轮:thinking + 正文 + 工具调用下发(真实 toolCall id)。</li>
  * <li><b>瞬态事件</b>(只推前端,不落盘):delta / thinking。
  *     瞬态事件也占 seq,故磁盘 seq 有洞——回放走 sync 直折叠 + 水位,不依赖连续性。</li>

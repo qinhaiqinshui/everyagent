@@ -161,10 +161,6 @@ public class TaskLifecycleContextImpl implements TaskLifecycleContext {
     @Override public long startedAt() { return taskEntry.startedAt != null ? taskEntry.startedAt : 0; }
     @Override public void startedAt(long ms) { taskEntry.startedAt = ms; }
     @Override public void onUsageBroadcast(Runnable hook) { taskEntry.onUsageBroadcast = hook; }
-    @Override public void agentStatus(String agentId, String status) {
-        taskEntry.events.emit(EmitEvent.of(SnowflakeId.next(), "agent.status", agentId,
-                null, null, null, status, null, EmitEvent.Mode.REPLACE));
-    }
     @Override public String input() { return input; }
     @Override public String rawContent() { return rawContent; }
     @Override public java.util.Map<String, Object> runParams() { return runParams; }

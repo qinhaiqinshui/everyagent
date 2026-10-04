@@ -1,5 +1,6 @@
 package dev.everyagent.worker.interaction;
 
+import dev.everyagent.plugin.api.agent.AgentContext;
 import dev.everyagent.plugin.api.interaction.AskOption;
 import dev.everyagent.plugin.api.interaction.AskQuestion;
 import dev.everyagent.plugin.api.interaction.AskResult;
@@ -103,6 +104,13 @@ public class InteractionServiceImpl implements InteractionService {
         }
         Ask ask = new Ask(askId, taskId, agentId, withIds, emitter);
         asks.put(askId, ask);
+        // agent 级状态:本轮 run() 挂在本次 ask 上等用户回答 → waiting-user。
+        // 由 ask 生命周期驱动(不是按 ask_user 工具名嗅探):危险命令授权、图片理解授权
+        // 与 ask_user 走同一个 ask 入口,三类都要翻转;终态/未开跑时实体侧 CAS 自然失败跳过。
+        AgentContext askingAgent = emitterLookup.agentFor(taskId, agentId);
+        if (askingAgent != null) {
+            askingAgent.markWaitingUser();
+        }
         ObjectNode askData = Json.obj();
         askData.put("askId", askId);
         askData.set("questions", EventPayloads.questionsToJson(withIds));
@@ -111,8 +119,6 @@ public class InteractionServiceImpl implements InteractionService {
         }
         emitter.emit(EmitEvent.of(SnowflakeId.next(), "ask.create", agentId,
                 null, null, null, null, askData, EmitEvent.Mode.REPLACE));
-        emitter.emit(EmitEvent.of(SnowflakeId.next(), "agent.status", agentId,
-                null, null, null, "waiting-user", null, EmitEvent.Mode.REPLACE));
         pendingChanged(taskId, +1);
         ask.refresher = scheduler.scheduleAtFixedRate(() -> {
             try {
@@ -134,19 +140,32 @@ public class InteractionServiceImpl implements InteractionService {
                 resolvedData.put("status", "timeout");
                 emitter.emit(EmitEvent.of(SnowflakeId.next(), "ask.resolved", agentId,
                         null, null, null, null, resolvedData, EmitEvent.Mode.REPLACE));
-                emitter.emit(EmitEvent.of(SnowflakeId.next(), "agent.status", agentId,
-                        null, null, null, "running", null, EmitEvent.Mode.REPLACE));
+                // agent.status{running} 已退役:超时使 future 完成 → ask() 返回 → 下方 finally
+                // 统一翻转回 running(§7.20.1)。
             }
         }, timeoutMs, TimeUnit.MILLISECONDS);
+        AskResult result = null;
+        boolean interrupted = false;
         try {
-            return ask.future.get(); // 可中断:任务取消时被打断
+            result = ask.future.get(); // 可中断:任务取消时被打断
+            return result;
         } catch (java.util.concurrent.ExecutionException e) {
             // future 只会 complete 正常值,此分支不可达
             throw new IllegalStateException(e);
+        } catch (InterruptedException e) {
+            interrupted = true;
+            throw e;
         } finally {
             ask.refresher.cancel(false);
             ask.timeout.cancel(false);
             asks.remove(askId);
+            // ask 正常结束(回答/超时)才翻回 running——本 agent 还有其它挂起 ask 时不翻
+            // (并发多 ask 不能提前报 running);取消路径不翻,随即由 advisor 的 doOnCancel
+            // 收口成 stopped,避免 running 闪一下再 stopped(重构前取消也不发 running)。
+            boolean cancelled = interrupted || (result != null && "cancelled".equals(result.status()));
+            if (askingAgent != null && !cancelled && !hasPendingFor(taskId, agentId)) {
+                askingAgent.markAskResolved();
+            }
             pendingChanged(taskId, -1);
         }
     }
@@ -179,8 +198,8 @@ public class InteractionServiceImpl implements InteractionService {
             resolvedData.put("status", "answered");
             a.emitter.emit(EmitEvent.of(SnowflakeId.next(), "ask.resolved", a.agentId,
                     null, null, null, null, resolvedData, EmitEvent.Mode.REPLACE));
-            a.emitter.emit(EmitEvent.of(SnowflakeId.next(), "agent.status", a.agentId,
-                    null, null, null, "running", null, EmitEvent.Mode.REPLACE));
+            // agent.status{running} 已退役:future 完成唤醒 ask() 线程,其 finally 统一把
+            // agent 级状态翻回 running(§7.20.1)——不在此处抢先发,避免与 ask() 线程竞态双发。
         }
         return first;
     }

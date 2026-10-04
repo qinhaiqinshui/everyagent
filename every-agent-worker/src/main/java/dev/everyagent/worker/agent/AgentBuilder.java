@@ -1,9 +1,6 @@
 package dev.everyagent.worker.agent;
 
-import dev.everyagent.contract.json.Json;
 import dev.everyagent.plugin.api.execution.ExecContext;
-import dev.everyagent.plugin.api.model.EmitEvent;
-import dev.everyagent.plugin.api.proto.SnowflakeId;
 import dev.everyagent.plugin.api.spi.AdvisorProvider;
 import dev.everyagent.plugin.api.spi.ToolProvider;
 import dev.everyagent.worker.config.WorkerProperties;
@@ -208,7 +205,7 @@ public class AgentBuilder {
         // 可选 — 会话
         private final List<Message> conversation = new ArrayList<>();
         private String title = "";
-
+        private String creator;
         private Map<String, Object> agentMetadata = Map.of();
 
         Build(String agentId, ChatModel chatModel, OpenAiChatOptions options,
@@ -257,6 +254,12 @@ public class AgentBuilder {
             return this;
         }
 
+        /** 设置 agent 创建者标识（task / subagent / ai-review；随 agent.started 顶级字段落台账）。 */
+        public Build creator(String c) {
+            this.creator = c;
+            return this;
+        }
+
         public Build agentMetadata(Map<String, Object> m) {
             this.agentMetadata = m != null ? m : Map.of();
             return this;
@@ -285,7 +288,7 @@ public class AgentBuilder {
             // 1. 创建 AgentEntity（chatClient 暂为 null，build 后设置）；
             //    上游 emitter 取 execution.emitter()（任务级事件口）
             AgentEntity entity = new AgentEntity(agentId, title, chatModel, options,
-                    List.copyOf(tools), execution.emitter(), execution, agentMetadata);
+                    List.copyOf(tools), execution.emitter(), execution, creator, agentMetadata);
             entity.conversation.addAll(conversation);
 
             // 2. 装配 TCM：per-run InterceptingToolCallingManager（持 exec，替代 ThreadLocal）
@@ -323,22 +326,11 @@ public class AgentBuilder {
             // 7. 注入 AgentRunner(供 AgentEntity.run() 委托调用)
             entity.runner(AgentBuilder.this.runner);
 
-            // 8. 自动注册 agent 到执行主体的 agents 注册表 + 发射 agent.started 事件
+            // 8. 自动注册 agent 到执行主体的 agents 注册表。
+            //    agent.started **不在此发射**：出生事件移入 advisor 链
+            //    （AgentStatusAdvisor → AgentEntity.beginRun），每轮 run() 一次，
+            //    新建路径与复用续跑路径共用同一发射点，调用方不再手动补发（§7.20.1）。
             execution.agents().put(agentId, entity);
-            ObjectNode startedData = Json.obj();
-            startedData.put("agentId", agentId);
-            if (title != null && !title.isEmpty()) {
-                startedData.put("title", title);
-            }
-            if (!agentMetadata.isEmpty()) {
-                startedData.set("metadata", Json.toJson(agentMetadata));
-            }
-            execution.emitter().emit(EmitEvent.of(
-                    SnowflakeId.next(),
-                    "agent.started", agentId,
-                    (title != null && !title.isEmpty()) ? title : null,
-                    null, null, null, startedData,
-                    EmitEvent.Mode.REPLACE));
 
             return entity;
         }

@@ -62,15 +62,15 @@ public class SubAgentRpcHandler {
         List<ObjectNode> disk = readAgentsJson(dir);
         if (disk != null) {
             for (ObjectNode a : disk) {
-                // 按 creator 过滤：只保留 subagent 创建的 agent
-                JsonNode aMeta = a.path("metadata");
-                if (aMeta.isObject()) {
-                    String creator = aMeta.path("creator").asString("");
-                    if (!creator.isEmpty() && !"subagent".equals(creator)) {
-                        continue; // 非 subagent 创建的 agent，跳过
-                    }
+                // 按顶级 creator 过滤：只保留 subagent 创建的 agent
+                // （旧 agents.json 无顶级 creator，回退 metadata.creator——两者都空视为旧子 agent）；
+                // 主 agent 条目恒保留：前端 agentMeta['']（悬停信息卡 + 上下文电池）在冷启动
+                // 时只认台账这一个数据源，rounds/roundTail 不含全量 usage 事件。
+                String creator = creatorOf(a);
+                if (!isMainAgentEntry(a, mainAgentId)
+                        && !creator.isEmpty() && !"subagent".equals(creator)) {
+                    continue; // 非 subagent 创建的派生 agent（如 ai-review），不进子 agent 列表
                 }
-                // 无 metadata 或 creator 为空 = 旧格式 subagent 创建的，保留
                 agents.add(a.deepCopy());
             }
         } else if (meta != null) {
@@ -79,15 +79,13 @@ public class SubAgentRpcHandler {
             if (legacyAgents.isArray()) {
                 for (JsonNode a : legacyAgents) {
                     if (a.isObject()) {
-                        // 按 creator 过滤：只保留 subagent 创建的 agent
-                        JsonNode aMeta = a.path("metadata");
-                        if (aMeta.isObject()) {
-                            String creator = aMeta.path("creator").asString("");
-                            if (!creator.isEmpty() && !"subagent".equals(creator)) {
-                                continue;
-                            }
+                        ObjectNode item = (ObjectNode) a;
+                        String creator = creatorOf(item);
+                        if (!isMainAgentEntry(item, mainAgentId)
+                                && !creator.isEmpty() && !"subagent".equals(creator)) {
+                            continue;
                         }
-                        agents.add(((ObjectNode) a).deepCopy());
+                        agents.add(item.deepCopy());
                     }
                 }
             }
@@ -102,6 +100,24 @@ public class SubAgentRpcHandler {
         r.set("agents", arr);
         r.put("mainAgentId", mainAgentId);
         ctx.ok(r);
+    }
+
+    /**
+     * 台账项 creator（顶级字段优先，回退旧格式 {@code metadata.creator}）。
+     * 空串 = 无 creator 标记（重构前的旧 agents.json / meta.agents 条目）。
+     */
+    private static String creatorOf(ObjectNode entry) {
+        String c = entry.path("creator").asString("");
+        if (!c.isEmpty()) {
+            return c;
+        }
+        JsonNode meta = entry.path("metadata");
+        return meta.isObject() ? meta.path("creator").asString("") : "";
+    }
+
+    /** 台账项是否主 agent（agentId == mainAgentId；mainAgentId 是任务概念，读侧壳留 task 面）。 */
+    private static boolean isMainAgentEntry(ObjectNode entry, String mainAgentId) {
+        return !mainAgentId.isEmpty() && mainAgentId.equals(entry.path("agentId").asString(""));
     }
 
     /**

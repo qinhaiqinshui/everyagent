@@ -169,22 +169,36 @@ public class AgentLedger {
 
         switch (event) {
             case "agent.started" -> {
+                // per-run 语义下同一 agentId 每轮 run() 都会发 agent.started（主 agent 一条输入
+                // 一轮、复用子 agent 每次续跑一轮）。**合并不整项替换**：createdAt / usage /
+                // context / latestActivity 是跨轮累积资产，替换会把它们抹零并把台账排序键
+                // createdAt 重置成本轮时刻（子 agent 复用后跳到列表末尾）。
+                ObjectNode entry = ledger.get(agentId);
+                boolean fresh = entry == null;
+                if (fresh) {
+                    entry = Json.obj();
+                    entry.put("agentId", agentId);
+                    entry.put("createdAt", r.ts());
+                    entry.putObject("latestActivity");
+                }
                 String title = payload.path("title").asString("");
-                long createdAt = r.ts();
-                ObjectNode entry = Json.obj();
-                entry.put("agentId", agentId);
                 if (!title.isEmpty()) entry.put("title", title);
-                entry.put("createdAt", createdAt);
                 entry.put("status", "running");
-                entry.putObject("latestActivity");
+                // creator：agent.started 事件 payload.data.creator（AgentEntity 顶级字段投影）
+                JsonNode sdata = payload.path("data");
+                String creator = sdata.path("creator").asString("");
+                if (!creator.isEmpty()) {
+                    entry.put("creator", creator);
+                }
                 // metadata 投影：agent.started 事件 payload 携带的 metadata 字段
                 // (metadata 在 payload.data.metadata，EmitEvent.data → payload.data)
-                JsonNode dataNode = payload.path("data");
-                JsonNode metadata = dataNode.path("metadata").isObject() ? dataNode.path("metadata") : payload.path("metadata");
+                JsonNode metadata = sdata.path("metadata").isObject() ? sdata.path("metadata") : payload.path("metadata");
                 if (metadata.isObject()) {
                     entry.set("metadata", metadata.deepCopy());
                 }
-                ledger.put(agentId, entry);
+                if (fresh) {
+                    ledger.put(agentId, entry);
+                }
             }
             case "agent.done" -> {
                 ObjectNode entry = ledger.get(agentId);

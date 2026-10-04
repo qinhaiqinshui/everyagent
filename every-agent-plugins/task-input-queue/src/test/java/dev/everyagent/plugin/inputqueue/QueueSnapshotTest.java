@@ -129,7 +129,6 @@ class QueueSnapshotTest {
             @Override public long startedAt() { return 0; }
             @Override public void startedAt(long ms) { }
             @Override public void onUsageBroadcast(Runnable hook) { }
-            @Override public void agentStatus(String agentId, String status) { }
             @Override public String input() { return input; }
             @Override public String rawContent() { return rawContent; }
             @Override public Map<String, Object> runParams() { return Map.of(); }

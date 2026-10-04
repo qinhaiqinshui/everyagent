@@ -279,7 +279,14 @@ export class TaskEventFolder {
       // 终态(completed/stopped/error)始终覆盖——流推送可能因 DataPusher 与 finish
       // 驱逐的竞态丢失子 agent done 事件,台账是兜底权威;
       // 非终态(running/waiting-user)仅在 agentStates 尚无值时填入(不覆盖流事件实时状态)。
-      if (item.status) {
+      //
+      // 主 agent(键 '') 例外:agent 状态是 **per-run()** 的(一条输入一轮,每轮
+      // started→…→done,见 worker §7.20.1),队列连着多条输入时台账里主 agent 会是上一轮的
+      // completed 而新一轮正在 running。台账快照可能晚于实时事件到达(主 agent 终态会触发
+      // 重拉 task.agents),用它覆盖就会把正在跑的主胶囊按回「已完成」直到本轮结束。
+      // 主 agent 的状态交给流事件,兜底由 TaskChat 用任务态(entry.status)做——那里已有
+      // `states[''] ?? entryStatus ?? 'idle'`;台账只为主 agent 提供 title/usage/context 基线。
+      if (item.status && key !== '') {
         const mapped = mapAgentStatus(String(item.status))
         if (mapped && (isTerminalAgentStatus(mapped) || this.state.agentStates[key] === undefined)) {
           if (this.state.agentStates[key] !== mapped) {

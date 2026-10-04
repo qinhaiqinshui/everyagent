@@ -17,7 +17,6 @@ import tools.jackson.databind.JsonNode;
 
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -183,22 +182,18 @@ public class AiAuthReviewer {
             Agent reused = (Agent) existing;
             reused.resetForRerun();
             reused.conversation().add(new UserMessage(userPrompt(grantKey, prompt))); // 续跑:历史 + 新授权请求
-            // 复用路径:不经过 build(),需显式发 agent.started 让台账更新
-            var startedData = Json.obj();
-            startedData.put("agentId", reviewAgentId);
-            startedData.put("input", userPrompt(grantKey, prompt));
-            ctx.emitter().emit(EmitEvent.of(
-                    SnowflakeId.next(), "agent.started", reviewAgentId,
-                    null, null, null, null, startedData, EmitEvent.Mode.REPLACE));
+            // 复用路径不经过 build():agent.started 由 AgentStatusAdvisor 在本轮 run()
+            // 的流入口自动发射,审议 agent 与主/子 agent 走同一发射点,不再手动补发。
             return reused;
         }
-        // 新建路径:build() 自动注册 agent + 发 agent.started + 台账自动更新
+        // 新建路径:build() 自动注册进 agents();agent.started 由 advisor 链发射
+        // 并把顶级 creator 投影进台账(creator=ai-review 不出现在子 agent 列表)
         Agent created = ctx.agentFactory().create(reviewAgentId, resolveReviewModel())
                 .title("AI 安全审议")
                 .tools(List.of(), AgentBuilder.ModifyMode.REPLACE)
                 .systemPrompt(reviewSystemPrompt(ctx))
                 .userInput(userPrompt(grantKey, prompt))
-                .agentMetadata(Map.of("creator", "ai-review"))
+                .creator("ai-review")
                 .build();
         return created;
     }

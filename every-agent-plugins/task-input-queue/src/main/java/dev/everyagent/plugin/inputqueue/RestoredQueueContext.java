@@ -44,7 +44,6 @@ final class RestoredQueueContext implements TaskLifecycleContext {
     @Override public long startedAt() { return 0; }
     @Override public void startedAt(long ms) { }
     @Override public void onUsageBroadcast(Runnable hook) { }
-    @Override public void agentStatus(String agentId, String status) { }
     @Override public Map<String, Object> runParams() { return Map.of(); }
     @Override public Object rpcContext() { return null; }
 }

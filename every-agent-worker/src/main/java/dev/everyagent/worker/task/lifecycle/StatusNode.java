@@ -1,22 +1,23 @@
 package dev.everyagent.worker.task.lifecycle;
 
-import dev.everyagent.plugin.api.model.EmitEvent;
 import dev.everyagent.plugin.api.task.TaskLifecycleContext;
 import dev.everyagent.plugin.api.task.TaskOutcome;
 import dev.everyagent.worker.hub.EventSink;
 import dev.everyagent.plugin.api.event.Channels;
 import dev.everyagent.plugin.api.event.Events;
-import dev.everyagent.plugin.api.proto.SnowflakeId;
 import dev.everyagent.worker.proto.TaskDtos.TaskStatus;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
  * 成对节点(order=840)：任务状态（一事）。
- * <p>下行段：startedAt + setStatus(RUNNING) + task.updated 广播 + agentStatus("running")
+ * <p>下行段：startedAt + setStatus(RUNNING) + task.updated 广播
  * ——在 main.agent(390) 之后、内核之前执行（临界段节点下行段在段边界外运行）。
  * <p>上行段（临界段首环，共享临界区）：终态 CAS（幂等门）+ endedAt/error/status +
- * agentStatus 终态事件 + 终态广播。
+ * 终态 task.updated 广播。
+ * <p>**agent 级状态不在本节点**：{@code agent.status} 的 running 与终态由 advisor 链
+ * 按 per-run 生命周期发射（{@code AgentStatusAdvisor} → {@code AgentEntity}，§7.20.1）；
+ * 本节点只管任务级 {@code task.updated}。
  */
 public final class StatusNode extends SectionNode {
 
@@ -41,9 +42,8 @@ public final class StatusNode extends SectionNode {
         synchronized (t) {
             t.status = TaskStatus.RUNNING;
         }
+        // agent.status{running} 已退役：由 AgentStatusAdvisor 每轮 run() 首帧自动发。
         eventSink.fanout(k -> Channels.tasks(k), Events.TASK_UPDATED, null, t.runtimeSummaryJson(), null);
-        t.events.emit(EmitEvent.of(SnowflakeId.next(), "agent.status", t.mainAgentId,
-                null, null, null, "running", null, EmitEvent.Mode.REPLACE));
     }
 
     @Override
@@ -59,12 +59,8 @@ public final class StatusNode extends SectionNode {
         t.endedAt = System.currentTimeMillis();
         t.error = to.error();
         t.status = mapStatus(to.status());
-        try {
-            t.events.emit(EmitEvent.of(SnowflakeId.next(), "agent.status", t.mainAgentId,
-                    null, null, null, agentStatusOf(t.status), null, EmitEvent.Mode.REPLACE));
-        } catch (RuntimeException e) {
-            log.debug("终态事件写入失败(日志可能已满)", e);
-        }
+        // agent.status 终态已退役：由 AgentStatusAdvisor 的 doOnComplete/doOnError/doOnCancel
+        // 自动发（任务级终态与本节点的 task.updated 广播是分属两个维度的状态，§7.20.1）。
         try {
             eventSink.fanout(k -> Channels.tasks(k), Events.TASK_UPDATED, null, t.runtimeSummaryJson(), null);
         } catch (RuntimeException e) {
@@ -78,15 +74,6 @@ public final class StatusNode extends SectionNode {
             case DONE -> TaskStatus.DONE;
             case FAILED -> TaskStatus.FAILED;
             case CANCELLED -> TaskStatus.CANCELLED;
-        };
-    }
-
-    private static String agentStatusOf(TaskStatus s) {
-        return switch (s) {
-            case DONE -> "done";
-            case FAILED -> "failed";
-            case CANCELLED -> "stopped";
-            default -> "running";
         };
     }
 }

@@ -1188,6 +1188,21 @@ public class TaskManager implements TaskInputHandler, InteractionServiceImpl.Sta
     }
 
     /**
+     * ask 生命周期翻转 agent 级状态用（{@code waiting-user ⇄ running}）：按 subjectId 取
+     * 运行中任务的 agent 注册表条目，agentId 空回退主 agent。任务已终态驱逐或 agent 未
+     * 注册时返回 null，调用方判空跳过。
+     */
+    @Override
+    public dev.everyagent.plugin.api.agent.AgentContext agentFor(String subjectId, String agentId) {
+        TaskEntry entry = get(subjectId);
+        if (entry == null) {
+            return null;
+        }
+        String id = agentId == null || agentId.isEmpty() ? entry.mainAgentId : agentId;
+        return entry.agents().get(id);
+    }
+
+    /**
      * 运行中任务实体(供业务注册方在 slash 建后回调里用 taskId 拿内存实体改自己的业务标记,
      * 并 t.persist() 落盘)。可能为 null(任务不在内存,如已终态驱逐/不存在),调用方自行判空。
      */

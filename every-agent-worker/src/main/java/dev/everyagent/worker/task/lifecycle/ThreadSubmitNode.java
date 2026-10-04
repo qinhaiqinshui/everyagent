@@ -88,6 +88,7 @@ public final class ThreadSubmitNode implements TaskLifecycleNode {
             // 过渡 map 由 AgentBuilder.create 内部重建(S4 advisor 迁移后删除)
             return agentBuilder.create(t.mainAgentId, am.chatModel(), am.options(), t)
                     .title("主 agent")
+                    .creator("task")
                     .conversation(prior)
                     .build();
         });

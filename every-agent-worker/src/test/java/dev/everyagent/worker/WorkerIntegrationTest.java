@@ -246,11 +246,16 @@ class WorkerIntegrationTest {
 
         // done 后内存驱逐,sync = 纯磁盘回放:只有持久事件,seq 有洞(瞬态占 seq 不落盘)
         // 耗时不再发 task_duration trace,改为回填 rounds.jsonl(由 TaskRoundsRpcTest 覆盖)。
+        // per-run 生命周期(§7.20.1):agent.* 事件全部由 advisor 链在**本轮模型流**边界发射,
+        // 故 user.message(consumeInput 在内核之前消费输入)先于 agent.started;
+        // 终态顺序固定 error? → agent.done → agent.status{done}(台账 done 写 completed,
+        // 终态 status 必须后发才不被改判)。
         List<JsonNode> events = sync(taskId, 0);
         List<String> names = events.stream().map(e -> e.path("event").asString()).toList();
-        assertEquals(List.of("agent.status", "user.message", "message", "usage", "agent.status"),
+        assertEquals(List.of("user.message", "agent.started", "agent.status",
+                        "message", "usage", "agent.done", "agent.status"),
                 names,
-                "磁盘只留持久事件(agent.status 主 agent 开跑/终态,无耗时 trace): "
+                "磁盘只留持久事件(主 agent 一轮:输入→出生→running→message→usage→done→终态 status): "
                         + names);
         List<Long> seqs = events.stream().map(e -> e.path("seq").asLong()).toList();
         // seq 为雪花 ID(非自增从 1 起):只断言为正与严格递增;瞬态占 seq 不落盘 → 磁盘回放 seq 有洞合法。
@@ -367,8 +372,12 @@ class WorkerIntegrationTest {
     @Test
     void subAgentFlow() {
         String taskId = create("SUB:帮我查资料");
+        // 主 agent 现在也发 agent.started(per-run 出生,§7.20.1),所以取子 agent 的出生事件
+        // 必须按 payload.agentId 前缀筛——主 agent 的 wire payload 不带 agentId。
         JsonNode subStarted = syncUntil(taskId,
-                e -> e.path("event").asString().equals("agent.started"), "agent.started");
+                e -> e.path("event").asString().equals("agent.started")
+                        && e.path("payload").path("agentId").asString("").startsWith("sub_"),
+                "子 agent agent.started");
         String subId = subStarted.path("payload").path("agentId").asString();
         assertTrue(subId.startsWith("sub_"), subId);
         // 子 agent 权威输出 message(与主同名,靠 payload.agentId 区分归属;瞬态 delta 在快子
@@ -388,7 +397,9 @@ class WorkerIntegrationTest {
         assertNotNull(runAgentMsg, "主 message 带 run_agent 工具调用下发");
         String callId = runAgentMsg.path("payload").path("toolCalls").path(0).path("id").asString();
         JsonNode subDone = events.stream()
-                .filter(e -> e.path("event").asString().equals("agent.done")).findFirst().orElseThrow();
+                .filter(e -> e.path("event").asString().equals("agent.done")
+                        && subId.equals(e.path("payload").path("agentId").asString()))
+                .findFirst().orElseThrow();
         assertEquals(subId, subDone.path("payload").path("agentId").asString());
         JsonNode subMsg = events.stream()
                 .filter(e -> e.path("event").asString().equals("message")

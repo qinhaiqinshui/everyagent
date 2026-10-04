@@ -43,6 +43,10 @@ public class BuiltInAdvisorProviders {
 
     @PostConstruct
     public void registerBuiltin() {
+        // 生命周期事件（最外层，主链首位）：agent.started / agent.status / agent.done / error
+        // ——per-run 一次的流生命周期信号翻译（架构 §7.20.1）。
+        registry.register(new AgentStatusAdvisorProvider());
+
         // 核心基础设施（0─99）
         // TokenCalibrationAdvisor 已迁至 model-rate-limit 插件（步骤 4），不再在此注册。
         // SystemInfoAdvisor 已迁入 system-info 插件模块，由插件自行注册。

@@ -6,8 +6,6 @@ import dev.everyagent.plugin.api.agent.AgentContext;
 import dev.everyagent.plugin.api.agent.AgentActivity;
 import dev.everyagent.plugin.api.agent.AgentBuilder;
 import dev.everyagent.plugin.api.execution.ExecContext;
-import dev.everyagent.plugin.api.model.EmitEvent;
-import dev.everyagent.plugin.api.proto.SnowflakeId;
 import dev.everyagent.plugin.api.util.RootCause;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -140,16 +138,8 @@ public class SubAgentManager {
                 sub = (Agent) ctx.agents().get(id);
                 sub.resetForRerun();
                 sub.conversation().add(new UserMessage(input)); // 续跑:原会话历史 + 新指令
-                // 复用路径不经过 build(),不会自动注册和发射 agent.started;
-                // 需要重新发射 agent.started 让 worker 台账更新状态为 running。
-                ObjectNode startedData = Json.obj();
-                startedData.put("agentId", id);
-                if (sub.title() != null) {
-                    startedData.put("title", sub.title());
-                }
-                startedData.put("input", input);
-                ctx.emitter().emit(EmitEvent.of(SnowflakeId.next(), "agent.started", id,
-                        null, null, null, null, startedData, EmitEvent.Mode.REPLACE));
+                // 复用路径不经过 build():agent.started 由 AgentStatusAdvisor 在本轮
+                // run() 的流入口自动发射(与新建路径同一发射点),此处不再手动补发。
             } else {
                 sub = buildSubAgent(ctx, id, title == null || title.isEmpty() ? "子任务" : title, input);
             }
@@ -186,47 +176,46 @@ public class SubAgentManager {
                 .tools(toRemove, AgentBuilder.ModifyMode.REMOVE)
                 .systemPrompt(SUB_SYSTEM_PROMPT)
                 .userInput(input)
-                .agentMetadata(Map.of("creator", "subagent"))
+                .creator("subagent")
                 .build();
     }
 
-    /** 子 agent 运行体(vt 线程):任何收口路径都写工具契约终态 + error 快照,finally 置 finished。 */
+    /**
+     * 子 agent 运行体(vt 线程)。
+     *
+     * <p><b>本方法一发事件都不发</b>:{@code agent.started}/{@code agent.status}/
+     * {@code agent.done}/{@code error} 全由子 agent 自己 advisor 链上的
+     * {@code AgentStatusAdvisor} 按 per-run 生命周期发射(§7.20.1)。此处仅剩两件事:
+     * <ul>
+     *   <li>{@link Agent#claimTerminal} 作**兜底**——运行体没进入流生命周期就收口的路径
+     *       (FutureTask 被 cancel 后从未启动、或 run() 在订阅前就抛)不会有 advisor 终态回调,
+     *       缺这一兜底前端就永远显示 running;advisor 已声明过时 CAS 返回 false,
+     *       绝不重复发事件;</li>
+     *   <li>finally 置 finished(wait_agents 的定稿等待依赖它)。</li>
+     * </ul>
+     */
     private void runSub(ExecContext ctx, String id, Agent sub) {
         log.debug("[sub] runSub 进入 id={} subjectId={} thread={} interruptFlag={}",
                 id, ctx.subjectId(), Thread.currentThread().getName(), Thread.currentThread().isInterrupted());
         try {
             sub.run();
-            // 正常完成:只有未被 stop 侧抢先置为 stopped 时才发 done(终态唯一声明)。
-            if (sub.claimTerminal("completed")) {
-                log.debug("[sub] 正常完成 claimTerminal(completed)=true id={} thread={}",
-                        id, Thread.currentThread().getName());
-                ObjectNode doneData = Json.obj();
-                doneData.put("agentId", id);
-                doneData.set("usage", Json.toJson(sub.usage()));
-                ctx.emitter().emit(EmitEvent.of(SnowflakeId.next(), "agent.done", id,
-                        null, null, sub.lastText(), null, doneData, EmitEvent.Mode.REPLACE));
-                ctx.emitter().emit(EmitEvent.of(SnowflakeId.next(), "agent.status", id,
-                        null, null, null, "done", null, EmitEvent.Mode.REPLACE));
-            } else {
-                log.debug("[sub] 正常完成但 claimTerminal=false(已被停止侧抢先) id={} subStatus={} thread={}",
-                        id, sub.status(), Thread.currentThread().getName());
-            }
+            // 正常完成:advisor 的 doOnComplete 已发 agent.status{done} + agent.done;
+            // 未被 stop 侧抢先声明时此处 CAS 成功也不重复发(claimTerminal 幂等)。
+            boolean claimed = sub.claimTerminal("completed");
+            log.debug("[sub] 正常完成 id={} advisor 外补声明={} 现status={} thread={}",
+                    id, claimed, sub.status(), Thread.currentThread().getName());
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             log.debug("[sub] 捕获 InterruptedException id={} thread={}", id, Thread.currentThread().getName());
-            emitStopped(ctx, sub); // stop_agent / 级联取消
+            // stop_agent / 级联取消:流被 dispose 时 advisor doOnCancel 已发 stopped;
+            // 未启动过(future 在 runSub 前被 cancel)或 dispose 竞态漏信号时由此兜底。
+            markStopped(sub);
         } catch (Throwable t) {
             // 根因摘要:BaseAdvisor 包装会把真实错误埋在最里层(见 RootCause)。
             log.warn("子 agent {} 异常: {}", id, RootCause.summary(t));
             log.debug("子 agent {} 异常完整堆栈", id, t);
-            if (sub.claimTerminal("error")) {
-                String msg = RootCause.summary(t);
-                sub.updateActivity(null, null, msg);
-                ctx.emitter().emit(EmitEvent.of(SnowflakeId.next(), "error", id,
-                        null, null, msg, null, null, EmitEvent.Mode.REPLACE));
-                ctx.emitter().emit(EmitEvent.of(SnowflakeId.next(), "agent.status", id,
-                        null, null, null, "failed", null, EmitEvent.Mode.REPLACE));
-            }
+            // advisor 的 doOnError 已发 failed + error;订阅前就抛(装配/模型客户端缺失)时由此兜底。
+            sub.claimTerminal("error", RootCause.summary(t));
         } finally {
             sub.finished(true);
             log.debug("[sub] runSub 收口退出 id={} subStatus={} finished=true thread={}",
@@ -235,21 +224,13 @@ public class SubAgentManager {
     }
 
     /**
-     * 把子 agent 立即置为 stopped 并发终态事件(幂等)。
-     * stop_agent / 主体取消级联调用;如果子线程已抢先收口(completed/error),此处不覆盖。
+     * 把子 agent 收口为 stopped(CAS 幂等;advisor 已声明过则什么都不发生)。
+     * stop_agent / 主体取消级联调用;已 completed/error 收口的实体不覆盖。
      */
-    private void emitStopped(ExecContext ctx, Agent sub) {
-        boolean claimed = sub.claimTerminal("stopped");
-        log.debug("[sub] emitStopped id={} claimed={} 现status={} thread={}",
+    private static void markStopped(Agent sub) {
+        boolean claimed = sub.claimTerminal("stopped", "已取消");
+        log.debug("[sub] markStopped id={} 本次声明={} 现status={} thread={}",
                 sub.agentId(), claimed, sub.status(), Thread.currentThread().getName());
-        if (!claimed) {
-            return;
-        }
-        sub.updateActivity(null, null, "已取消");
-        ctx.emitter().emit(EmitEvent.of(SnowflakeId.next(), "error", sub.agentId(),
-                null, null, "已取消", null, null, EmitEvent.Mode.REPLACE));
-        ctx.emitter().emit(EmitEvent.of(SnowflakeId.next(), "agent.status", sub.agentId(),
-                null, null, null, "stopped", null, EmitEvent.Mode.REPLACE));
     }
 
     /**
@@ -276,13 +257,13 @@ public class SubAgentManager {
 
     /**
      * 遍历 ctx.agents() 返回 subagent 创建的 agent 摘要数组。
-     * 按 creator=subagent 过滤,只展示本插件创建的子 agent。
+     * 按顶级 creator=subagent 过滤,只展示本插件创建的子 agent。
      */
     private ArrayNode agentsJsonMerged(ExecContext ctx) {
         java.util.LinkedHashMap<String, ObjectNode> merged = new java.util.LinkedHashMap<>();
         for (AgentContext s : ctx.agents().values()) {
             // 过滤:只展示 subagent 创建的 agent
-            if (!"subagent".equals(s.agentMetadata().get("creator"))) continue;
+            if (!"subagent".equals(s.creator())) continue;
             merged.put(s.agentId(), summaryJson(ctx, s));
         }
         java.util.List<ObjectNode> ordered = new java.util.ArrayList<>(merged.values());
@@ -384,9 +365,10 @@ public class SubAgentManager {
         log.debug("[sub] stop 请求 id={} cancel(true)={} futureDone={} thread={}",
                 agentId, cancelled, f.isDone(), Thread.currentThread().getName());
         // 不能只 cancel future:FutureTask 尚未开始执行(cancel 只置 CANCELLED 不跑 runSub)、
-        // 或子线程未能立刻响应中断时,前端会一直看到 running。这里同步声明终态并发事件。
+        // 或子线程未能立刻响应中断时,前端会一直看到 running。这里同步声明终态——
+        // advisor 的 doOnCancel 已声明过时 CAS 失败,不重复发事件(§7.20.1)。
         if (sub != null) {
-            emitStopped(ctx, (Agent) sub);
+            markStopped((Agent) sub);
         }
         return "已请求停止: " + agentId;
     }
@@ -472,8 +454,9 @@ public class SubAgentManager {
             }
             // 见 stop():cancel 不保证 runSub 会执行收口(未启动/未及时响应中断的 future 永远停在 running),
             // 这里对全部未终态实体同步声明 stopped,确保主体取消/失败/停机路径下前端状态能收口。
+            // advisor 的 doOnCancel 已抢先声明过的实体 CAS 失败,不会重复发事件(§7.20.1)。
             for (AgentContext sub : ctx.agents().values()) {
-                emitStopped(ctx, (Agent) sub);
+                markStopped((Agent) sub);
             }
         }
     }

@@ -25,7 +25,19 @@ public interface AgentBuilder {
     /** 设置 agent 标题（展示用）。 */
     AgentBuilder title(String title);
 
-    /** 设置 agent 元数据（如 creator 标记；随 agent.started 事件持久化到台账）。 */
+    /**
+     * 设置 agent 创建者标识（{@code task} / {@code subagent} / {@code ai-review} 等）。
+     *
+     * <p>顶级字段，随 {@code agent.started} 事件持久化进台账顶级 {@code creator}；
+     * 消费方（{@code list_agents} / {@code task.agents}）据此决定展示范围。
+     */
+    AgentBuilder creator(String creator);
+
+    /**
+     * 设置 agent 元数据（其他元数据键；随 agent.started 事件持久化到台账 metadata）。
+     *
+     * <p>注意：{@code creator} 已提升为顶级字段（{@link #creator}），不再走本约定键。
+     */
     AgentBuilder agentMetadata(Map<String, Object> metadata);
 
     /**

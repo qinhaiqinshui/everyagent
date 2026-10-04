@@ -68,13 +68,6 @@ public interface TaskLifecycleContext extends ExecContext {
      */
     void onUsageBroadcast(Runnable hook);
 
-    /**
-     * 发射 agent 状态事件（status.start/status.finalize 节点用）。
-     * @param agentId agent ID
-     * @param status 状态字符串（如 "running"/"done"/"failed"/"stopped"）
-     */
-    void agentStatus(String agentId, String status);
-
     /** task.run 的用户输入文本（首条输入，main.agent 节点消费）。 */
     String input();
 

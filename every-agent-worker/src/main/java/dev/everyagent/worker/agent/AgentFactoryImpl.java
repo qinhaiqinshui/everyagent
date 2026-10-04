@@ -88,6 +88,7 @@ public class AgentFactoryImpl {
         private final ExecContext exec;
 
         private String title = "";
+        private String creator;
         private Consumer<ChatOptions> optionsCustomizer;
         private List<ToolCallback> tools;
         private dev.everyagent.plugin.api.agent.AgentBuilder.ModifyMode toolsMode;
@@ -104,6 +105,12 @@ public class AgentFactoryImpl {
         @Override
         public dev.everyagent.plugin.api.agent.AgentBuilder title(String title) {
             this.title = title;
+            return this;
+        }
+
+        @Override
+        public dev.everyagent.plugin.api.agent.AgentBuilder creator(String creator) {
+            this.creator = creator;
             return this;
         }
 
@@ -162,6 +169,9 @@ public class AgentFactoryImpl {
             // 5. 应用 fluent 配置
             if (title != null && !title.isEmpty()) {
                 build.title(title);
+            }
+            if (creator != null && !creator.isEmpty()) {
+                build.creator(creator);
             }
             if (tools != null && toolsMode != null) {
                 build.tools(tools, mapMode(toolsMode));

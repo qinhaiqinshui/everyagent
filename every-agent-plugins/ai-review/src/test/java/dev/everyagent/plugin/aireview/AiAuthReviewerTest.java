@@ -70,14 +70,25 @@ class AiAuthReviewerTest {
     @SuppressWarnings("unchecked")
     private void setupAgentFactoryMock() {
         AgentBuilder mockBuild = mock(AgentBuilder.class);
+        // create(agentId[, configId]) 记下本次 agentId:worker 的 AgentBuilder.build() 会
+        // 自动把实体注册进 exec.agents()(§7.20.1),测试桩必须复刻这个行为。
+        when(agentFactory.create(anyString(), any())).thenAnswer(inv -> {
+            lastCreatedAgentId.set(inv.getArgument(0));
+            return mockBuild;
+        });
         when(mockBuild.title(anyString())).thenReturn(mockBuild);
+        when(mockBuild.creator(anyString())).thenReturn(mockBuild);
         when(mockBuild.tools(any(), any())).thenReturn(mockBuild);
         when(mockBuild.systemPrompt(anyString())).thenReturn(mockBuild);
         when(mockBuild.userInput(anyString())).thenReturn(mockBuild);
         when(mockBuild.options(any())).thenReturn(mockBuild);
         when(mockBuild.build()).thenAnswer(inv -> {
             // 返回一个 mock Agent,由 reviewer(ChatModel model) 设置 lastText
+            String id = lastCreatedAgentId.get() == null ? "review-agent" : lastCreatedAgentId.get();
             Agent agent = mock(Agent.class);
+            when(agent.agentId()).thenReturn(id);
+            when(agent.title()).thenReturn("AI 安全审议");
+            when(agent.creator()).thenReturn("ai-review");
             when(agent.lastText()).thenReturn(lastTextHolder.get());
             when(agent.conversation()).thenReturn(new ArrayList<>());
             org.mockito.Mockito.doAnswer(runInv -> {
@@ -86,10 +97,14 @@ class AiAuthReviewerTest {
                 if (r != null) r.run();
                 return null;
             }).when(agent).run();
+            // build() 自动注册(与 worker AgentBuilder 同语义)
+            task.agents().put(id, agent);
             return agent;
         });
-        when(agentFactory.create(anyString(), any())).thenReturn(mockBuild);
     }
+
+    private final java.util.concurrent.atomic.AtomicReference<String> lastCreatedAgentId =
+            new java.util.concurrent.atomic.AtomicReference<>();
 
     private final java.util.concurrent.atomic.AtomicReference<String> lastTextHolder = new java.util.concurrent.atomic.AtomicReference<>("");
     private final java.util.concurrent.atomic.AtomicReference<Runnable> runAction = new java.util.concurrent.atomic.AtomicReference<>();
