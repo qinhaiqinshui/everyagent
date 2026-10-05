@@ -8,83 +8,22 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * {@link SecretPatterns}：值形态指纹、名字形态、env 清理与掩码幂等性。
+ * {@link SecretPatterns}：值形态指纹、名字形态、env 清理。
  *
  * <p>回归护栏的场景来自一次真实泄露：宿主 shell 里有个<b>名字毫无规律</b>的变量
  * {@code codex=<Anthropic key>}，沙箱内 {@code Get-ChildItem Env:} 把它整块读出并落进
  * 任务日志。因此「只看名字」的规则不够，必须有值形态指纹这条路。
+ *
+ * <p>文本输出掩码（redact/mask/countSecrets）已迁至 {@code secret-redaction} 插件
+ * （{@code SecretRedactor}），此处不再覆盖——删插件即删全部脱敏测试。
  */
 class SecretPatternsTest {
 
     /** 真实形态的 Anthropic key（长度 78,前缀 sk-ant-sid01-,此处为同形态假值）。 */
     private static final String KEY = "sk-ant-sid01-" + "A".repeat(58) + "6280";
-
-    // ---- 值形态识别 ----
-
-    @Test
-    void detectsAnthropicKeyByNamelessVariable() {
-        assertTrue(SecretPatterns.hasSecret(KEY));
-        assertTrue(SecretPatterns.isSecretBearing("codex", KEY),
-                "变量名不含凭据语义词,但值形似凭据 → 必须剔除(本次泄露的真实形态)");
-    }
-
-    @Test
-    void detectsOtherProviderFingerprints() {
-        assertTrue(SecretPatterns.hasSecret("ghp_" + "x".repeat(36)));
-        assertTrue(SecretPatterns.hasSecret("github_pat_" + "x".repeat(40)));
-        assertTrue(SecretPatterns.hasSecret("AKIA" + "ABCDEFGHIJKL2345".substring(0, 16)));
-        assertTrue(SecretPatterns.hasSecret("AIza" + "y".repeat(35)));
-        assertTrue(SecretPatterns.hasSecret("xoxb-" + "z".repeat(30)));
-        assertTrue(SecretPatterns.hasSecret("-----BEGIN RSA PRIVATE KEY-----"));
-        assertTrue(SecretPatterns.hasSecret("sk-" + "w".repeat(40)));
-    }
-
-    @Test
-    void detectsBearerAndKeyValueForms() {
-        assertTrue(SecretPatterns.hasSecret("Authorization: Bearer " + KEY));
-        assertTrue(SecretPatterns.hasSecret("password=S3cretValue"));
-    }
-
-    @Test
-    void ignoresOrdinaryText() {
-        assertFalse(SecretPatterns.hasSecret("[System.IO.Directory]::GetCurrentDirectory()"));
-        assertFalse(SecretPatterns.hasSecret("cwd=C:\\Users\\haigui\\.yu\\s23ds84\\eagent"));
-        assertFalse(SecretPatterns.hasSecret("LangMode=ConstrainedLanguage PSVer=5.1 TempIL=True"));
-        assertFalse(SecretPatterns.hasSecret("任务完成,提交信息 feat: 新增脱敏"));
-    }
-
-    // ---- 掩码 ----
-
-    @Test
-    void maskKeepsFingerprintButNotTheSecret() {
-        String redacted = SecretPatterns.redact(KEY);
-        assertFalse(redacted.contains(KEY), "掩码后原文必须不可见");
-        assertTrue(redacted.contains("[len=" + KEY.length() + "]"),
-                "保留长度指纹便于辨认是哪把: " + redacted);
-        assertTrue(redacted.startsWith("sk-ant-sid"), "保留头部形态: " + redacted);
-        assertTrue(redacted.contains("6280"), "保留尾 4 位: " + redacted);
-    }
-
-    @Test
-    void redactMasksOnlyTokenPartOfBearer() {
-        String out = SecretPatterns.redact("Authorization: Bearer " + KEY);
-        assertTrue(out.startsWith("Authorization: Bearer sk-ant-sid"),
-                "Bearer 前缀保留、token 掩掉: " + out);
-        assertFalse(out.contains(KEY));
-    }
-
-    @Test
-    void redactIsIdempotentAndReturnsSameInstanceWhenNoHit() {
-        String once = SecretPatterns.redact(KEY);
-        assertEquals(once, SecretPatterns.redact(once), "二次调用必须不变(否则历史回放会被反复改写)");
-        String plain = "普通输出文本";
-        assertSame(plain, SecretPatterns.redact(plain), "无命中返回同一实例,便于调用方判等");
-    }
 
     // ---- env 清理 ----
 
@@ -150,12 +89,6 @@ class SecretPatternsTest {
         assertTrue(SecretPatterns.scrubEnv(null).env().isEmpty());
         assertTrue(SecretPatterns.scrubEnv(null).removedNames().isEmpty());
         assertTrue(SecretPatterns.scrubInPlace(null).isEmpty());
-        assertFalse(SecretPatterns.hasSecret(null));
-        assertFalse(SecretPatterns.hasSecret(""));
-        assertNull(SecretPatterns.redact(null));
-        assertEquals("[REDACTED]", SecretPatterns.mask(null));
-        assertEquals("[REDACTED:len=6]", SecretPatterns.mask("abc123"),
-                "过短的凭据不保留任何片段");
         assertFalse(SecretPatterns.isSecretBearing("MY_TOKEN", "   "), "空白值不算凭据");
     }
 }

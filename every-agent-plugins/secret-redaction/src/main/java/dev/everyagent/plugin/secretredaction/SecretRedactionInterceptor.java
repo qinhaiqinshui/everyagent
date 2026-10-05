@@ -6,7 +6,6 @@ import dev.everyagent.plugin.api.proto.SnowflakeId;
 import dev.everyagent.plugin.api.spi.ToolExecutionChain;
 import dev.everyagent.plugin.api.spi.ToolExecutionContext;
 import dev.everyagent.plugin.api.spi.ToolExecutionInterceptor;
-import dev.everyagent.plugin.api.util.SecretPatterns;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.ToolResponseMessage;
@@ -31,15 +30,14 @@ import java.util.Set;
  * seq 不可变语义（§5.4 运行中日志永不修剪），故不在此处处理。
  *
  * <p>只处理<b>本轮</b>刚下发的 callId 对应的工具结果：历史轮在产生那一轮已脱敏，且
- * {@link SecretPatterns#redact} 幂等，重复扫描只是每轮 O(全历史) 的正则开销，无收益。
+ * {@link SecretRedactor#redact} 幂等，重复扫描只是每轮 O(全历史) 的正则开销，无收益。
  * 冷启动续跑时磁盘上的 {@code tool.result} 已是掩码文本，重建的历史同样干净。
  *
  * <p>审计走 {@code task.trace}（只报命中次数与工具名，<b>绝不报值</b>），前端可见
  * 「这条输出里有凭据、已被掩码」，用户不会误以为是工具本身出错。
  *
  * <p><b>禁用/删除本插件的影响面</b>：只失去输出侧掩码；§7.10 的 env 继承剔除住在
- * plugin-api + 沙箱/worker 的常驻链路里，<b>不随本插件装卸而失效</b>。规则源共用
- * {@code SecretPatterns}，故两半永远同口径（不会出现在环境侧已剔除、输出侧却漏掩的漂移）。
+ * plugin-api + 沙箱/worker 的常驻链路里，<b>不随本插件装卸而失效</b>。
  *
  * <p>order=900：尽量靠链尾，即真实执行完成后第一个做后处理的节点——在权限门/审计等
  * 前置拦截之后，在事件发射（{@code WorkerToolEventAdvisor} 取本轮 ToolResponseMessage）之前。
@@ -92,12 +90,12 @@ public class SecretRedactionInterceptor implements ToolExecutionInterceptor {
                         continue;
                     }
                     String data = r.responseData();
-                    String redacted = SecretPatterns.redact(data);
+                    String redacted = SecretRedactor.redact(data);
                     // redact 无命中时返回同一实例,用身份比较即可判定「是否改写过」
                     if (redacted != data) {
                         out.add(new ToolResponse(r.id(), r.name(), redacted));
                         msgChanged = true;
-                        hits += SecretPatterns.countSecrets(data);
+                        hits += SecretRedactor.countSecrets(data);
                         if (r.name() != null && !affectedTools.contains(r.name())) {
                             affectedTools.add(r.name());
                         }

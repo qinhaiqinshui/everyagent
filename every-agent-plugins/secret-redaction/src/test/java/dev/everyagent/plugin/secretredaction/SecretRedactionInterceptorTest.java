@@ -8,7 +8,6 @@ import dev.everyagent.plugin.api.model.EventEmitter;
 import dev.everyagent.plugin.api.model.ModelConfig;
 import dev.everyagent.plugin.api.spi.ToolExecutionChain;
 import dev.everyagent.plugin.api.spi.ToolExecutionContext;
-import dev.everyagent.plugin.api.util.SecretPatterns;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.ToolResponseMessage;
@@ -204,6 +203,6 @@ class SecretRedactionInterceptorTest {
 
     static {
         // 保证测试自身对规则源的期望与实现同源(避免两处常量漂移)
-        assertTrue(SecretPatterns.hasSecret(KEY));
+        assertTrue(SecretRedactor.hasSecret(KEY));
     }
 }

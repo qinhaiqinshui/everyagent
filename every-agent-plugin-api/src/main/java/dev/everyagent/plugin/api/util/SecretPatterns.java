@@ -6,41 +6,36 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
-import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * 凭据识别与掩码的<b>唯一规则源</b>（架构 §7.17「真实 key 只写用户覆盖文件、不进事件日志」
- * 的执行落点）。
+ * 环境变量凭据清理规则源（架构 §7.10 环境侧信道闸门 / §7.17 凭据纪律的环境维度）。
  *
  * <p>为什么需要它：沙箱隔离了文件系统与网络，却把宿主进程的<b>环境变量整块继承</b>给了
  * 子进程——任何跑在沙箱里的命令（{@code Get-ChildItem Env:}、{@code env}、{@code cat /proc/self/environ}）
  * 都能直接读到宿主 shell 里散落的 API key，再原样写进工具输出、事件日志与模型上下文。
  * 环境变量因此是一条真实的凭据侧信道，与「工作区外路径」同级别，必须有一道统一闸门。
  *
+ * <p>本类<b>只负责环境变量清理</b>（进程边界安全），不包含任何文本输出掩码/脱敏逻辑——
+ * 后者已全部住在 {@code secret-redaction} 插件内（{@code SecretRedactor}），删除该插件即删除
+ * 全部脱敏概念与功能，核心不持有脱敏逻辑也不依赖该插件。
+ *
  * <p>两类规则，各自适用面严格分开（误杀代价与信息泄露代价的权衡）：
  * <ol>
- *   <li><b>值形态指纹</b>（{@link #hasSecret} / {@link #redact}）：只看值的形状，不看变量名。
- *       用于<b>文本输出脱敏</b>与 env 清理的主判据——零误杀（普通日志文本不会长成
+ *   <li><b>值形态指纹</b>（内部 {@code hasSecretPattern}）：只看值的形状，不看变量名。
+ *       用于 env 清理的主判据——零误杀（普通环境变量值不会长成
  *       {@code sk-ant-…}），且变量名无规律时（如本例的 {@code codex}）照样拦得住。</li>
- *   <li><b>名字形态</b>（{@link #isSecretName}）：<b>仅用于 env 清理</b>，兜住「纯随机 hex/base64
- *       值 + 明显是凭据的名字」（如 {@code HUB_KEY=ShubS2389}）这类无指纹可认的情况。
- *       不用于输出脱敏，否则 {@code --password foo} 这类正常命令行内容会被大面积误杀。</li>
+ *   <li><b>名字形态</b>（{@link #isSecretName}）：兜住「纯随机 hex/base64
+ *       值 + 明显是凭据的名字」（如 {@code HUB_KEY=ShubS2389}）这类无指纹可认的情况。</li>
  * </ol>
  *
  * <p>永不修改入参 map、永不返回被删变量的值（审计只给名字），调用方据此打日志是安全的。
  *
- * <p><b>消费面</b>（决定哪些方法能随插件一起装卸，见架构 §7.17）：
- * <ul>
- *   <li>{@link #scrubEnv} / {@link #scrubInPlace} / {@link #isSecretBearing} / {@link #isSecretName}
- *       —— 由<b>常驻链路</b>调用：sandbox-windows-codex（{@code CodexCommandExecutor.childEnv}、
- *       {@code RunnerClient} 两处）、sandbox-windows-mic（{@code WindowsSandbox.buildEnvBlock}）、
- *       worker（{@code OsSandbox} 两处 {@code ProcessBuilder}、{@code TerminalPtyFactory}）。
- *       进程边界不该由可选扩展决定存在与否，故这些调用点<b>不放在插件里</b>。</li>
- *   <li>{@link #redact} / {@link #mask} / {@link #countSecrets} —— 生产侧唯一调用方是
- *       {@code secret-redaction} 插件（工具输出上行段掩码）。禁用该插件后这几个方法只剩测试引用，
- *       <b>不是死代码，不得顺手清理</b>。</li>
- * </ul>
+ * <p><b>消费面</b>：{@link #scrubEnv} / {@link #scrubInPlace} / {@link #isSecretBearing} /
+ * {@link #isSecretName} 由<b>常驻链路</b>调用：sandbox-windows-codex（{@code CodexCommandExecutor.childEnv}、
+ * {@code RunnerClient} 两处）、sandbox-windows-mic（{@code WindowsSandbox.buildEnvBlock}）、
+ * worker（{@code OsSandbox} 两处 {@code ProcessBuilder}、{@code TerminalPtyFactory}）。
+ * 进程边界不该由可选扩展决定存在与否，故这些调用点<b>不放在插件里</b>。
  */
 public final class SecretPatterns {
 
@@ -185,7 +180,7 @@ public final class SecretPatterns {
         if (value == null || value.isBlank()) {
             return false;
         }
-        if (hasSecret(value)) {
+        if (hasSecretPattern(value)) {
             return true; // 规则 1：值就是凭据,与变量名无关(codex=sk-ant-… 靠这条拦住)
         }
         if (isExempt(name)) {
@@ -194,8 +189,8 @@ public final class SecretPatterns {
         return isSecretName(name) && value.trim().length() >= MIN_SUSPECT_VALUE_LEN; // 规则 2
     }
 
-    /** 文本中是否存在凭据形态（输出脱敏的前置判定）。 */
-    public static boolean hasSecret(String text) {
+    /** 值是否命中凭据形态指纹（env 清理内部判定，不对外暴露——文本输出脱敏见 secret-redaction 插件）。 */
+    private static boolean hasSecretPattern(String text) {
         if (text == null || text.isEmpty()) {
             return false;
         }
@@ -205,67 +200,6 @@ public final class SecretPatterns {
             }
         }
         return false;
-    }
-
-    /**
-     * 掩码后的文本：把所有凭据本体替换成 {@code sk-ant-sid…6280[len=78]} 形态——
-     * 保留可辨识的头尾指纹与总长度（用户能确认「是哪把被遮了」），但不泄露可用信息。
-     * 幂等：掩码结果不再命中任何规则（{@link #redact} 可安全重复调用）。
-     *
-     * @return 无命中的输入原样返回（同一实例，便于调用方判等）
-     */
-    public static String redact(String text) {
-        if (text == null || text.isEmpty() || !hasSecret(text)) {
-            return text;
-        }
-        String current = text;
-        for (Rule rule : RULES) {
-            Matcher m = rule.pattern().matcher(current);
-            if (!m.find()) {
-                continue;
-            }
-            StringBuilder sb = new StringBuilder(current.length());
-            m.reset();
-            while (m.find()) {
-                int g = rule.secretGroup();
-                String secret = m.group(g);
-                m.appendReplacement(sb, Matcher.quoteReplacement(
-                        m.group(0).substring(0, g == 0 ? 0 : m.start(g) - m.start(0))
-                                + mask(secret)));
-            }
-            m.appendTail(sb);
-            current = sb.toString();
-        }
-        return current;
-    }
-
-    /** 统计文本内凭据形态的命中次数（审计用，不返回内容）。 */
-    public static int countSecrets(String text) {
-        if (text == null || text.isEmpty()) {
-            return 0;
-        }
-        int n = 0;
-        for (Rule rule : RULES) {
-            Matcher m = rule.pattern().matcher(text);
-            while (m.find()) {
-                n++;
-            }
-        }
-        return n;
-    }
-
-    /** 单个凭据的掩码形式：前 10 + … + 后 4 + 长度。 */
-    public static String mask(String secret) {
-        if (secret == null) {
-            return "[REDACTED]";
-        }
-        int n = secret.length();
-        if (n <= 12) {
-            return "[REDACTED:len=" + n + "]";
-        }
-        int head = Math.min(10, n / 3);
-        int tail = Math.min(4, n / 3);
-        return secret.substring(0, head) + "…" + secret.substring(n - tail) + "[len=" + n + "]";
     }
 
     /** 名字是否命中豁免表（大小写无关，精确 + 前缀）。 */
