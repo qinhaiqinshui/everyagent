@@ -12,8 +12,9 @@ build-plugins.py —— 一条命令重建全部内置插件(前端 bundle + 插
     URLClassLoader → 残留旧版本 jar 会遮蔽新类(表现为「改了没生效」),
     所以重建必须带 clean;
   - 纯 web 插件的 bundle 由 every-agent-web/scripts/build-plugins.mjs(esbuild)产出,
-    且 web/index.js 要被 maven resources-plugin 拷进 target/classes 打进 jar,
-    因此顺序必须是「先 web bundle,后 mvn package」。
+    web/index.js 与 index.css 不打进 jar(插件 pom 的 resources 只拷 plugin.json):
+    前端经 plugin.webSource RPC 从插件目录按相对路径读取,因此顺序必须是
+    「先 web bundle,后 mvn package」,桌面打包另由 copy-plugins.mjs 搬运 web 产物。
 
 本脚本不重复实现任何构建逻辑:web 侧直接调用既有的 build-plugins.mjs(唯一事实源),
 Java 侧逐插件调 mvn -f <id>/pom.xml,与 mvn -pl/-am 的 reactor 语义互不干扰。

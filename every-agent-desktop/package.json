@@ -8,10 +8,12 @@
     "compile": "tsc -p tsconfig.main.json && tsc -p tsconfig.preload.json",
     "start": "electron .",
     "build:backend": "node scripts/build-backend.mjs",
+    "build:plugins": "python ../scripts/build-plugins.py",
+    "copy:plugins": "node scripts/copy-plugins.mjs",
     "build:web": "node scripts/build-web.mjs",
     "build:jre": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-jre.ps1",
     "build:plugin-runtime": "node scripts/copy-plugin-runtime.mjs",
-    "build:assets": "npm run build:backend && npm run build:web && npm run build:jre && npm run build:plugin-runtime",
+    "build:assets": "npm run build:backend && npm run build:plugins && npm run copy:plugins && npm run build:web && npm run build:jre && npm run build:plugin-runtime",
     "dist": "npm run compile && npm run build:assets && electron-builder",
     "dist:dir": "npm run compile && npm run build:assets && electron-builder --dir"
   },

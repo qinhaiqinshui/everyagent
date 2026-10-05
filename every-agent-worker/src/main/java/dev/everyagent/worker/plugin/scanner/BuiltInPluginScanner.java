@@ -36,7 +36,8 @@ import java.util.stream.Stream;
  *   <li>子目录根无 {@code plugin.json}:跳过。</li>
  * </ol>
  *
- * <p>根目录不存在时 INFO 日志并返回空列表,不报错。
+ * <p>根目录不存在时 WARN 日志并返回空列表,不报错(桌面安装包若见此行,
+ * 多为打包时未含 every-agent-plugins,见 §9 copy-plugins.mjs)。
  *
  * <p>本类还提供若干 {@code public static} 工具方法,供后续步骤(PluginLoader 统一加载)复用:
  * {@link #findTargetJars(Path)}、{@link #resolveManifestPath(Path)} 等。
@@ -56,7 +57,7 @@ public class BuiltInPluginScanner implements PluginScanner {
     public List<ScannedPlugin> scan() {
         Path root = props.resolveBuiltinPluginsDir();
         if (!Files.isDirectory(root)) {
-            log.info("[plugins-builtin] 内置插件源码目录不存在,跳过扫描: {}", root);
+            log.warn("[plugins-builtin] 内置插件源码目录不存在,跳过扫描: {}(桌面安装包出现此行 = 打包未含 every-agent-plugins)", root);
             return List.of();
         }
 

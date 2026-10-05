@@ -17,6 +17,14 @@ extraResources:
     to: backend
   - from: resources/jre
     to: jre
+  # 内置插件:copy-plugins.mjs 按 BuiltInPluginScanner 期待的结构 staging 到
+  # resources/every-agent-plugins/(Java 插件:plugin.json + target/classes/plugin.json
+  # + target/*.jar;web 产物:web/ 下 index.js/index.css 等,前端经 plugin.webSource
+  # 从插件目录读取),搬到这里后 worker 打包态 cwd=resourcesPath,Scanner 默认扫
+  # <cwd>/every-agent-plugins/ 即命中。
+  # staging 每次整体清空重建:enabled=false 插件(如 sandbox-*)不复制、不残留。
+  - from: resources/every-agent-plugins
+    to: every-agent-plugins
   # 程序附属文件(rg、eagent-run.py、托管发行版镜像):唯一真源在仓库根 runtime/,
   # 经 extraResources 原样搬到 <resourcesPath>/runtime(与 web/backend/jre 同层),
   # 与 paths.ts 打包态 programRoot()=process.resourcesPath、runtimeDir()=.../runtime 对齐。
