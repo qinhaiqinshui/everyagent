@@ -105,25 +105,42 @@ public final class ChildProcess {
      */
     public static ChildProcess spawn(WinNT.HANDLE hToken, List<String> argv, String cwd,
             Map<String, String> env, String desktop) {
+        return spawnWithConsoleMode(hToken, argv, cwd, env, desktop,
+                ConsoleProbe.inheritConsole());
+    }
+
+    /**
+     * 供 {@link ConsoleProbe} 显式选模式——探测必须在"加 / 不加 {@code CREATE_NO_WINDOW}"两种形态下
+     * 各测一次,才能确认改动有无净收益。生产路径走 {@link #spawn},模式由探测结论决定。
+     */
+    public static ChildProcess spawnForProbe(WinNT.HANDLE hToken, List<String> argv, String cwd,
+            Map<String, String> env, String desktop, boolean inheritConsole) {
+        return spawnWithConsoleMode(hToken, argv, cwd, env, desktop, inheritConsole);
+    }
+
+    private static ChildProcess spawnWithConsoleMode(WinNT.HANDLE hToken, List<String> argv,
+            String cwd, Map<String, String> env, String desktop, boolean inheritConsole) {
         if (argv == null || argv.isEmpty()) {
             throw new IllegalArgumentException("empty command");
         }
+        boolean inherit = inheritConsole; // 生产由 spawn(...) 传入 ConsoleProbe 的探测结论
         OutputFiles files = OutputFiles.tryCreate(cwd);
         if (files != null) {
             try {
-                ChildProcess child = spawnViaFiles(hToken, argv, cwd, env, desktop, files);
+                ChildProcess child = spawnViaFiles(hToken, argv, cwd, env, desktop, files, inherit);
                 files.closeParentWriteHandles(); // 子进程已持有自己的副本,父侧不必留
                 return child;
             } catch (RuntimeException e) {
                 files.deleteQuietly(); // 回退管道承载,不留半成品文件
             }
         }
-        return spawnViaPipes(hToken, argv, cwd, env, desktop);
+        return spawnViaPipes(hToken, argv, cwd, env, desktop, inherit);
     }
 
     /** 文件承载:stdin 仍用管道(交互输入语义不变),stdout/stderr 用落盘文件句柄。 */
     private static ChildProcess spawnViaFiles(WinNT.HANDLE hToken, List<String> argv,
-            String cwd, Map<String, String> env, String desktop, OutputFiles files) {
+            String cwd, Map<String, String> env, String desktop, OutputFiles files,
+            boolean inheritConsole) {
         WinNT.HANDLE job = createJob();
         WinNT.HANDLE inR = null;
         WinNT.HANDLE inW = null;
@@ -137,7 +154,7 @@ public final class ChildProcess {
             inR = inRR.getValue();
             inW = inWR.getValue();
             child = spawnWithStdio(hToken, argv, cwd, env, desktop, job,
-                    inR, inW, files.outWrite, files.errWrite, null, null, files);
+                    inR, inW, files.outWrite, files.errWrite, null, null, files, inheritConsole);
             return child;
         } catch (RuntimeException e) {
             closeQuietly(job); // KILL_ON_JOB_CLOSE:刚启动的子进程随之收束(fail-closed)
@@ -152,7 +169,7 @@ public final class ChildProcess {
 
     /** 管道承载(回退路径,历史行为):stdio 三支匿名管道。 */
     private static ChildProcess spawnViaPipes(WinNT.HANDLE hToken, List<String> argv,
-            String cwd, Map<String, String> env, String desktop) {
+            String cwd, Map<String, String> env, String desktop, boolean inheritConsole) {
         WinNT.HANDLE job = createJob();
         WinNT.HANDLE inR = null;
         WinNT.HANDLE inW = null;
@@ -184,7 +201,7 @@ public final class ChildProcess {
             errR = errRR.getValue();
             errW = errWR.getValue();
             child = spawnWithStdio(hToken, argv, cwd, env, desktop, job,
-                    inR, inW, outW, errW, outR, errR, null);
+                    inR, inW, outW, errW, outR, errR, null, inheritConsole);
             return child;
         } catch (RuntimeException e) {
             closeQuietly(job); // KILL_ON_JOB_CLOSE:刚启动的子进程随之收束(fail-closed)
@@ -212,7 +229,7 @@ public final class ChildProcess {
     private static ChildProcess spawnWithStdio(WinNT.HANDLE hToken, List<String> argv, String cwd,
             Map<String, String> env, String desktop, WinNT.HANDLE job,
             WinNT.HANDLE inR, WinNT.HANDLE inW, WinNT.HANDLE outW, WinNT.HANDLE errW,
-            WinNT.HANDLE outR, WinNT.HANDLE errR, OutputFiles files) {
+            WinNT.HANDLE outR, WinNT.HANDLE errR, OutputFiles files, boolean inheritConsole) {
         // stdio 三句柄白名单（子进程只继承这三支）
         for (WinNT.HANDLE h : new WinNT.HANDLE[] { inR, outW, errW }) {
             if (!Kernel32Ex.INSTANCE.SetHandleInformation(h,
@@ -221,7 +238,8 @@ public final class ChildProcess {
             }
         }
         StartupInfoExW si = new StartupInfoExW();
-        si.dwFlags |= WinBase.STARTF_USESTDHANDLES;
+        si.dwFlags |= WinBase.STARTF_USESTDHANDLES | Kernel32Ex.STARTF_USESHOWWINDOW;
+        si.wShowWindow = new WinDef.WORD(Kernel32Ex.SW_HIDE);
         si.hStdInput = inR;
         si.hStdOutput = outW;
         si.hStdError = errW;
@@ -255,7 +273,7 @@ public final class ChildProcess {
             si.lpAttributeList = attrList;
 
             int flags = WinBase.CREATE_UNICODE_ENVIRONMENT | WinBase.EXTENDED_STARTUPINFO_PRESENT
-                    | WinBase.CREATE_NO_WINDOW;
+                    | (inheritConsole ? 0 : WinBase.CREATE_NO_WINDOW);
             Pointer envBlock = EnvBlock.makeEnvBlock(env);
             char[] cmdline = (argvToCommandLine(argv) + "\0").toCharArray();
             WinBase.PROCESS_INFORMATION pi = new WinBase.PROCESS_INFORMATION();

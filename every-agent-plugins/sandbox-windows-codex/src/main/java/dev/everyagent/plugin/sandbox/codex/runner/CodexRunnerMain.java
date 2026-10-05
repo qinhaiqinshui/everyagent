@@ -113,6 +113,14 @@ public final class CodexRunnerMain {
             System.exit(2);
         }
         System.err.println("[codex-runner] start pipes in=" + in + " out=" + out);
+        // 控制台码页探测：必须在服务循环之前——它决定的 spawn 形态对整条会话生效。
+        // 实测本机 PowerShell 能否解对原生 UTF-8：能则什么都不动；不能才采用「继承控制台 + UTF-8」，
+        // 采用后复测仍不解 UTF-8 就把码页改回原值并保留 CREATE_NO_WINDOW。
+        ConsoleProbe.runOnce(java.nio.file.Path.of(System.getProperty("user.dir")));
+        System.err.println("[codex-runner] console probe: verdict=" + ConsoleProbe.verdict()
+                + " inheritConsole=" + ConsoleProbe.inheritConsole()
+                + " cp=" + ConsoleProbe.cpAtStart() + "->" + ConsoleProbe.cpNow()
+                + " oem=" + Kernel32Ex.INSTANCE.GetOEMCP());
         System.exit(run(in, out));
     }
 

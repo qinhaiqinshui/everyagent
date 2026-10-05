@@ -6,6 +6,7 @@ import com.sun.jna.Structure;
 import com.sun.jna.platform.win32.BaseTSD;
 import com.sun.jna.platform.win32.Kernel32;
 import com.sun.jna.platform.win32.WinBase;
+import com.sun.jna.platform.win32.WinDef;
 import com.sun.jna.platform.win32.WinNT;
 import com.sun.jna.ptr.IntByReference;
 import com.sun.jna.ptr.LongByReference;
@@ -84,10 +85,62 @@ public interface Kernel32Ex extends Kernel32 {
      */
     boolean CancelSynchronousIo(WinNT.HANDLE hThread);
 
+    // ---- 控制台（子进程码页锚点，见 ConsoleAnchor） ----
+    // jna-platform 5.14 的 Kernel32 未收录这几个 API（javap 已核实），在此补齐。
+
+    /** 当前进程是否挂着控制台；无控制台返回 NULL。 */
+    WinDef.HWND GetConsoleWindow();
+
+    /** 为无控制台的进程分配一个新控制台（会带窗口，调用方负责隐藏）。 */
+    boolean AllocConsole();
+
+    /**
+     * 挂到指定进程的控制台——用 {@link #ATTACH_PARENT_PROCESS} 继承父进程（worker JVM）控制台，
+     * 比 AllocConsole 更优：不新建窗口、码页调整顺带覆盖同控制台下的其他子进程。
+     * 失败（父进程本无控制台/本进程已有控制台）返回 FALSE。
+     */
+    boolean AttachConsole(int dwFlags);
+
+    /** 解除本进程与该控制台的关联（探测/回滚用）。 */
+    boolean FreeConsole();
+
+    /** 设置控制台输出码页——<b>影响后续 spawn 的子进程在启动时读到的码页</b>（正是乱码开关）。 */
+    boolean SetConsoleOutputCP(int wCodePageID);
+
+    /** 设置控制台输入码页。 */
+    boolean SetConsoleCP(int wCodePageID);
+
+    /** 读当前控制台输出码页（用于确认设置是否真的生效）。 */
+    int GetConsoleOutputCP();
+
+    /** 本机 OEM 码页（随系统语言而变：中文 936、日文 932、西欧 850…）——<b>只能问系统，不可假设</b>。 */
+    int GetOEMCP();
+
+    /** 本机 ANSI 码页（ACP）。同上，运行时查询。 */
+    int GetACP();
+
     // ---- 常量（jna-platform 未收录的部分） ----
+
+    /** AttachConsole 的伪 PID：挂到父进程的控制台。 */
+    int ATTACH_PARENT_PROCESS = -1;
+
+    /**
+     * STARTUPINFO.dwFlags：使用 wShowWindow。配合 {@link #SW_HIDE} 使用——父进程若没有控制台,
+     * 子进程(控制台子系统程序)会被系统新建一个<b>可见</b>控制台窗口;此标志把它压成隐藏。
+     */
+    int STARTF_USESHOWWINDOW = 0x00000001;
+    /** ShowWindow / wShowWindow：隐藏窗口。 */
+    int SW_HIDE = 0;
 
     /** CreateProcess：无窗口（WinBase 有 CREATE_UNICODE_ENVIRONMENT 等，但缺此值）。 */
     int CREATE_NO_WINDOW = 0x08000000;
+
+    /**
+     * Windows 对 UTF-8 的码页标识（winnls.h 的 {@code CP_UTF8}）——<b>API 常量，不是语言环境假设</b>：
+     * 本机 OEM/ACP 一律用 {@link #GetOEMCP()}/{@link #GetACP()} 运行时查询，绝不写死
+     * （中文 936、日文 932、西欧 850/1252 各不相同）。
+     */
+    int CP_UTF8 = 65001;
 
     /** Job Object 限额标志：关句柄杀整树（codex job.rs 唯一使用的 limit 位）。 */
     int JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000;
