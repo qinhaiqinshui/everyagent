@@ -269,6 +269,22 @@ function createPluginFs(): PluginFs {
 
 const loadedPlugins: Map<string, { module: PluginModule; disposables: Disposable[] }> = new Map()
 
+// ── 并发保护 ────────────────────────────────────────────────────────────────
+
+/**
+ * 正在进行中的加载 Promise（单例）。
+ *
+ * <p>为什么需要它：worker 首次连接时，{@code HubClient.onReconnect}（welcome 触发）
+ * 与 {@code hubSession.onWorkerConnectionsChanged}（connectWorker finally 触发）几乎同时
+ * 回调到 main.tsx 的两处 {@code loadPlugins()}。两次调用并发执行，第一次的异步 RPC
+ * （plugin.list）尚未返回、{@code loadedPlugins.set} 尚未执行，第二次进入时幂等检查
+ * 全部 miss，于是同一插件被 {@code activate()} 两次，注册表不去重 → 侧边栏出现两个
+ * git/扩展图标、轮末出现两个文件变更块。
+ *
+ * <p>用 Promise 锁把「正在加载」语义坐实：第二次调用直接复用第一次的 Promise，不重复执行。
+ */
+let loadingPromise: Promise<void> | null = null
+
 // ── 插件清单条目类型（plugin.list RPC 返回） ──────────────────────────────
 
 interface PluginListEntry {
@@ -292,8 +308,22 @@ interface PluginListEntry {
  * 禁用的插件（在 disabledIds 中）不加载。
  *
  * 幂等：重复调用安全（已加载的插件不会重复 activate）。
+ *
+ * 并发保护：worker 首次连接时 onReconnect 与 onWorkerConnectionsChanged 几乎同时触发
+ * 两次调用，用 Promise 锁保证只执行一次（见 loadingPromise 注释）。
  */
 export async function loadPlugins(): Promise<void> {
+  if (loadingPromise) return loadingPromise
+  loadingPromise = doLoadPlugins().finally(() => {
+    loadingPromise = null
+  })
+  return loadingPromise
+}
+
+/**
+ * 实际加载逻辑（由 loadPlugins 包裹并发保护后调用）。
+ */
+async function doLoadPlugins(): Promise<void> {
   // 1. 找到第一个已连接 worker
   let workerId: string | null = null
   hubSession.forEachConnectedWorker((wid: string) => {
