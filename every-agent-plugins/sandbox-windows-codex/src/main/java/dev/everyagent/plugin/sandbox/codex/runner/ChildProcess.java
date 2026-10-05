@@ -207,11 +207,13 @@ public final class ChildProcess {
         WinNT.HANDLE inW = null;
         ChildProcess child = null;
         try {
+            long p0 = System.nanoTime();
             WinNT.HANDLEByReference inRR = new WinNT.HANDLEByReference();
             WinNT.HANDLEByReference inWR = new WinNT.HANDLEByReference();
             if (!Kernel32Ex.INSTANCE.CreatePipe(inRR, inWR, null, 0)) {
                 throw Win32Exception.of("CreatePipe(stdin)");
             }
+            System.err.println("[codex-runner] stdio-prep pipe=" + ms(p0, System.nanoTime()) + "ms");
             inR = inRR.getValue();
             inW = inWR.getValue();
             child = spawnWithStdio(hToken, argv, cwd, env, desktop, job,
@@ -585,19 +587,31 @@ public final class ChildProcess {
 
         /** 建不出来一律返回 null(由调用方回退管道承载),绝不把沙箱会话整个打挂。 */
         static OutputFiles tryCreate(String cwd) {
+            long t0 = System.nanoTime();
             Path dir = scratchDir(cwd);
+            long t1 = System.nanoTime();
             if (dir == null) {
+                System.err.println("[codex-runner] file-timing scratchDir=" + ms(t0, t1)
+                        + "ms (null)");
                 return null;
             }
             Path o = null;
             Path e = null;
             WinNT.HANDLE oh = null;
             WinNT.HANDLE eh = null;
+            long t2 = t1;
+            long t3 = t1;
+            long t4 = t1;
+            long t5 = t1;
             try {
                 o = Files.createTempFile(dir, "ea-codex-out-", ".tmp");
+                t2 = System.nanoTime();
                 e = Files.createTempFile(dir, "ea-codex-err-", ".tmp");
+                t3 = System.nanoTime();
                 oh = openWriteHandle(o);
+                t4 = System.nanoTime();
                 eh = openWriteHandle(e);
+                t5 = System.nanoTime();
                 if (oh == null || eh == null) {
                     return null;
                 }
@@ -608,6 +622,12 @@ public final class ChildProcess {
                 delete(o);
                 delete(e);
                 return null;
+            } finally {
+                // 8s 慢 spawn 定位打点(2026-10):实测 stage 段 8.3s 而 AsUser 仅 19ms——
+                // 嫌疑收敛到本方法的文件创建/打开(安全软件对新文件的同步检查),分段计时钉死。
+                System.err.println("[codex-runner] file-timing scratchDir=" + ms(t0, t1)
+                        + "ms tmpOut=" + ms(t1, t2) + "ms tmpErr=" + ms(t2, t3)
+                        + "ms hOut=" + ms(t3, t4) + "ms hErr=" + ms(t4, t5) + "ms");
             }
         }
 
