@@ -111,12 +111,24 @@ class CodexCommandExecutorTest {
     // ---- 纯函数 ----
 
     @Test
-    void commandArgvIsPowerShellNoProfile() {
+    void commandArgvIsPowerShellCmdChcpEncoded() {
         CodexCommandExecutor exec = executor(new Capture(new FakeSession()), new FakeSession(), 30_000);
-        assertEquals(List.of("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
-                        "-Command", ExecResults.POWERSHELL_PREFIX + "echo hi"
-                                + ExecResults.POWERSHELL_EXIT_TAIL),
-                exec.commandArgv("echo hi"));
+        List<String> argv = exec.commandArgv("echo hi");
+        assertEquals("cmd.exe", argv.get(0), "PowerShell 分支必须经 cmd 包装以便先 chcp");
+        assertEquals("/d", argv.get(1));
+        assertEquals("/s", argv.get(2));
+        assertEquals("/c", argv.get(3));
+        String payload = argv.get(4);
+        assertTrue(payload.startsWith("chcp.com 65001 >nul 2>&1 & powershell.exe -NoProfile"
+                + " -ExecutionPolicy Bypass -EncodedCommand "),
+                "载荷形态:chcp 前置 + -EncodedCommand 投递,cmd 安全字符集免疫引号嵌套:" + payload);
+        String b64 = payload.substring(payload.indexOf("-EncodedCommand ")
+                + "-EncodedCommand ".length());
+        String script = new String(java.util.Base64.getDecoder().decode(b64),
+                StandardCharsets.UTF_16LE);
+        assertEquals(ExecResults.POWERSHELL_PREFIX + "echo hi" + ExecResults.POWERSHELL_EXIT_TAIL,
+                script, "base64(UTF-16LE,无 BOM) 应还原 prefix+命令+exit 尾部");
+        assertFalse(b64.startsWith("/"), "Java UTF_16LE 编码不带 BOM(PS -EncodedCommand 裸载荷)");
     }
 
     @Test
@@ -150,17 +162,18 @@ class CodexCommandExecutorTest {
     }
 
     @Test
-    void childEnvRedirectsTempToSandboxTmp() {
-        Path codexHome = tempDir.resolve(".everyagent-codex-sandbox");
-        Map<String, String> env = CodexCommandExecutor.childEnv(null, codexHome);
-        String expected = codexHome.resolve(".sandbox").resolve("tmp").toString();
+    void childEnvRedirectsTempIntoWorkspace() {
+        Path ws = tempDir.resolve("ws-root");
+        Map<String, String> env = CodexCommandExecutor.childEnv(null, ws);
+        String expected = ws.resolve(".everyagent").resolve("tmp").toString();
         assertEquals(expected, env.get("TEMP"),
-                "沙箱账户对宿主 TEMP 无写权限,必须指到组可写的 .sandbox/tmp");
+                "命令子进程是 WRITE_RESTRICTED 受限令牌,组 ACE 对其写检查无效,"
+                        + "TEMP 必须指到 capability 覆盖的工作区 .everyagent/tmp");
         assertEquals(expected, env.get("TMP"), "TMP 与 TEMP 同指一处");
         Map<String, String> untouched = CodexCommandExecutor.childEnv(null, null);
         assertEquals(dev.everyagent.plugin.api.util.SecretPatterns.scrubEnv(System.getenv()).env()
                         .get("TEMP"),
-                untouched.get("TEMP"), "codexHome 为空时不碰 TEMP(维持宿主继承)");
+                untouched.get("TEMP"), "workspaceRoot 为空时不碰 TEMP(维持宿主继承)");
     }
 
     @Test
@@ -249,9 +262,20 @@ class CodexCommandExecutorTest {
         assertTrue(session.closed, "会话在 finally 中关闭");
         assertFalse(session.terminated, "正常退出不发 terminate");
 
-        assertEquals(List.of("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
-                        "-Command", ExecResults.POWERSHELL_PREFIX + "echo hi"
-                                + ExecResults.POWERSHELL_EXIT_TAIL), capture.spec.command());
+        List<String> argv = capture.spec.command();
+        assertEquals("cmd.exe", argv.get(0), "PowerShell 命令经 cmd-chcp 包装(BUG-1 正解)");
+        assertEquals("/d", argv.get(1));
+        assertEquals("/s", argv.get(2));
+        assertEquals("/c", argv.get(3));
+        String payload = argv.get(4);
+        assertTrue(payload.startsWith("chcp.com 65001 >nul 2>&1 & powershell.exe -NoProfile"
+                + " -ExecutionPolicy Bypass -EncodedCommand "),
+                "载荷形态:chcp 前置 + EncodedCommand:" + payload);
+        int i = payload.indexOf("-EncodedCommand ") + "-EncodedCommand ".length();
+        assertEquals(ExecResults.POWERSHELL_PREFIX + "echo hi" + ExecResults.POWERSHELL_EXIT_TAIL,
+                new String(java.util.Base64.getDecoder().decode(payload.substring(i)),
+                        StandardCharsets.UTF_16LE),
+                "base64(UTF-16LE) 还原 prefix+命令+exit 尾部");
         assertEquals(tempDir.resolve("ws").toString(), capture.spec.cwd(), "cwd=工作区根");
         assertEquals(30_000L, capture.spec.timeoutMs(), "timeout=SandboxConfig/manager 值");
         assertFalse(capture.spec.stdinOpen(), "worker 契约 stdin 关闭");

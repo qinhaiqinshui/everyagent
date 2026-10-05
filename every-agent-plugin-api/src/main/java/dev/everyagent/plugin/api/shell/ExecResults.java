@@ -107,6 +107,9 @@ public final class ExecResults {
      *
      * <p><b>已知边界</b>：同一字节流内 UTF-8 与 ANSI 中文混排时只能整体择一
      *（出现首个非法 UTF-8 字节即整体判为 ANSI）。属罕见场景，可接受。
+     * （2026-10 起 codex 后端经 cmd-chcp 包装让 PowerShell 自身输出也走 UTF-8,
+     * 混排场景在上游消除——本回退自此只剩兜底真正 ANSI 工具的价值,见 ARCHITECTURE
+     * 「cmd-chcp 包装」条。）
      *
      * @param bytes 子进程 stdout/stderr 原始字节（null / 空返回空串）
      * @return 解码后的文本

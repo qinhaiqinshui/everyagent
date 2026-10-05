@@ -171,7 +171,7 @@ public final class ConsoleProbe {
             if (!ensureConsoleAvailable()) {
                 verdict = "skip:no-console[" + diag + "]";
                 log.warn("[codex-runner] 拿不到控制台(attach/alloc 均失败: {}),保持 CREATE_NO_WINDOW"
-                        + "(非 ASCII 依赖文件承载与 rg 包装)", diag);
+                        + "(非 ASCII 依赖文件承载与 cmd-chcp 包装)", diag);
                 return;
             }
             originalCp = Kernel32Ex.INSTANCE.GetConsoleOutputCP();

@@ -20,8 +20,10 @@ import dev.everyagent.plugin.sandbox.codex.setup.SetupMarker;
 import dev.everyagent.plugin.sandbox.codex.setup.SetupPayload;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -193,7 +195,7 @@ public final class CodexCommandExecutor {
         long timeoutMs = manager.execTimeoutMs();
         CodexSandboxSession.SessionSpec spec = new CodexSandboxSession.SessionSpec(
                 commandArgv(command), workspaceRoot.toString(),
-                childEnv(rgBinary, options.codexHome()),
+                childEnv(rgBinary, workspaceRoot),
                 timeoutMs > 0 ? timeoutMs : null, policy.writeRoots(), List.of(),
                 CapSids.workspaceCapSidForCwd(home, workspaceRoot),
                 wireName(identity), false, null);
@@ -281,18 +283,32 @@ public final class CodexCommandExecutor {
 
     // ---- 纯函数（跨平台单测） ----
 
-    /** shell 命令 → 子进程 argv：按探测到的 shell 分派。 */
+    /**
+     * shell 命令 → 子进程 argv：按探测到的 shell 分派。
+     *
+     * <p>PowerShell 分支走 <b>cmd-chcp 包装</b>（BUG-1 混排编码的正解，ARCHITECTURE
+     * 「cmd-chcp 包装」条）：CLM 禁 {@code [Console]::OutputEncoding} 的 setter，但 getter
+     * 在 PS 进程<b>首次访问时</b>才读 {@code GetConsoleOutputCP()} 并缓存——把
+     * {@code chcp.com 65001} 挪到 powershell.exe <b>启动之前</b>（cmd 先建隐藏控制台并设
+     * CP=65001，PS 在同一控制台里启动），PS 自身输出与「管道内捕获原生输出」的解码即全部
+     * UTF-8，与原生工具的 UTF-8 字节同流同码，严格解码一次通过。脚本经
+     * {@code -EncodedCommand}（base64(UTF-16LE)，Java getBytes 不带 BOM）投递：载荷是
+     * cmd 安全字符集，免疫 {@code &}/{@code |}/引号嵌套解析；{@code /d} 跳过 AutoRun。
+     * 实测 git/rg 管道捕获与直出全净，退出码经 cmd→powershell 正确传导。
+     */
     List<String> commandArgv(String command) {
         if (shell.isPowerShell) {
             // -ExecutionPolicy Bypass：沙箱账户默认 Restricted 策略会拦截 .ps1 脚本
             // （如 npm.ps1），per-process 旁路不影响系统策略。
-            // -ExecutionPolicy Bypass：沙箱账户默认 Restricted 策略会拦截 .ps1 脚本
-            //（如 npm.ps1），per-process 旁路不影响系统策略。
             // 尾部 POWERSHELL_EXIT_TAIL：把最后一个原生子进程的退出码转成 powershell.exe 的
             // 进程码——否则 Exit 帧里的退出码恒 0,模型分不清 rg「无匹配=1」与「用错=2」。
-            return List.of(shell.exe, "-NoProfile", "-ExecutionPolicy", "Bypass",
-                    "-Command", ExecResults.POWERSHELL_PREFIX + command
-                            + ExecResults.POWERSHELL_EXIT_TAIL);
+            String script = ExecResults.POWERSHELL_PREFIX + command
+                    + ExecResults.POWERSHELL_EXIT_TAIL;
+            String encoded = Base64.getEncoder()
+                    .encodeToString(script.getBytes(StandardCharsets.UTF_16LE));
+            return List.of("cmd.exe", "/d", "/s", "/c",
+                    "chcp.com 65001 >nul 2>&1 & " + shell.exe
+                            + " -NoProfile -ExecutionPolicy Bypass -EncodedCommand " + encoded);
         }
         return List.of(shell.exe, "/c", "chcp 65001 >nul & " + command);
     }
@@ -364,13 +380,16 @@ public final class CodexCommandExecutor {
      * 宿主 shell 里散落的 {@code *KEY}/{@code *TOKEN}/值像 {@code sk-ant-…} 的变量不得进入沙箱,
      * 否则沙箱内任意命令 {@code Get-ChildItem Env:} 即可窃取,再随工具输出落盘）；
      * rgBinary 非空时其所在目录前置进 Path（Windows 键名优先）；
-     * codexHome 非空时 {@code TEMP}/{@code TMP} 显式指到组可写的
-     * {@code <codexHome>/.sandbox/tmp}——沙箱账户不加载 profile,继承来的宿主 TEMP
-     * （真实用户的 %LOCALAPPDATA%\Temp）对该账户**不可写**,不覆盖则 mvn/pytest 等
-     * 用临时目录的工具全数 Access Denied（命令 env 是整块替换,只修 runner env 会被
-     * 这里盖回去;目录由 runner 拉起时的 runnerEnvironment 保证存在）。
+     * workspaceRoot 非空时 {@code TEMP}/{@code TMP} 显式指到工作区
+     * {@code <workspaceRoot>/.everyagent/tmp}——落点必须 <b>capability 覆盖</b>：命令子进程
+     * 跑在 {@code WRITE_RESTRICTED} 受限令牌下,写检查要求 restricting SIDs 也授权,
+     * 普通组 ACE（如 EACodexSandboxUsers (M)）对其无效——实测 {@code <codexHome>/.sandbox/tmp}
+     * 组 ACL 齐全仍被写拒,只有 setup 注入过 capability SID ACE 的工作区树可写。不覆盖则
+     * 继承来的宿主 TEMP（真实用户的 %LOCALAPPDATA%\Temp）不可写,mvn/pytest 等用临时目录的
+     * 工具全数 Access Denied（命令 env 是整块替换,只修 runner env 会被这里盖回去;该目录由
+     * ChildProcess.OutputFiles.scratchDir 每次 spawn 时 createDirectories 保证存在）。
      */
-    static Map<String, String> childEnv(Path rgBinary, Path codexHome) {
+    static Map<String, String> childEnv(Path rgBinary, Path workspaceRoot) {
         Map<String, String> env = new LinkedHashMap<>(inheritEnv());
         if (rgBinary != null && rgBinary.getParent() != null) {
             String dir = rgBinary.getParent().toString();
@@ -381,8 +400,8 @@ public final class CodexCommandExecutor {
             env.put(key, current == null || current.isBlank() ? dir
                     : present ? current : dir + ";" + current);
         }
-        if (codexHome != null) {
-            String tmp = SandboxDirs.sandboxDir(codexHome).resolve("tmp").toString();
+        if (workspaceRoot != null) {
+            String tmp = workspaceRoot.resolve(".everyagent").resolve("tmp").toString();
             env.put("TEMP", tmp);
             env.put("TMP", tmp);
         }
