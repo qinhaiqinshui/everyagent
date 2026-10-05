@@ -1982,15 +1982,35 @@
 /* 任务级 token 胶囊（slash 选中后底部回显）不进 contentEditable；
    胶囊本身不可点击/不弹详情（cursor:default），仅 ✕ 可点击删除。
    胶囊现在渲染在 footer 左侧电池左边（.task-composer-footer__left），
-   保留 __controls 选择器以兼容草稿面板等仍挂在中间控件组的挂载位置。 */
-.task-composer-footer__controls .nagent-inline-chip,
-.task-composer-footer__left .nagent-inline-chip {
+   保留 __controls 选择器以兼容草稿面板等仍挂在中间控件组的挂载位置。
+   样式对齐项目 ui-chip--command：accent-blue-dim 背景 + accent-blue 文字、
+   无边框，与 footer 内 borderless Select 控件视觉一致。 */
+.task-composer-footer__controls .nagent-inline-chip--scope,
+.task-composer-footer__left .nagent-inline-chip--scope {
   cursor: default;
+  border-color: transparent;
+  background: var(--accent-blue-dim);
+  color: var(--accent-blue);
+  padding: 0 var(--space-2, 8px);
+  gap: 4px;
+  transition: background 0.15s ease;
 }
 
-.task-composer-footer__controls .nagent-inline-chip__close,
-.task-composer-footer__left .nagent-inline-chip__close {
+.task-composer-footer__controls .nagent-inline-chip--scope__close,
+.task-composer-footer__left .nagent-inline-chip--scope__close,
+.task-composer-footer__controls .nagent-inline-chip--scope .nagent-inline-chip__close,
+.task-composer-footer__left .nagent-inline-chip--scope .nagent-inline-chip__close {
   cursor: pointer;
+  color: inherit;
+  opacity: 0.6;
+  transition: opacity 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+
+.task-composer-footer__controls .nagent-inline-chip--scope .nagent-inline-chip__close:hover,
+.task-composer-footer__left .nagent-inline-chip--scope .nagent-inline-chip__close:hover {
+  opacity: 1;
+  background: color-mix(in srgb, var(--accent-blue) 22%, transparent);
+  color: var(--accent-blue);
 }
 
 /* 任务级 token 胶囊与模型/思考强度 compact 控件对齐：
