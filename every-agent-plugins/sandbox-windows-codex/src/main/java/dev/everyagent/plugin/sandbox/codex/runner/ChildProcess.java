@@ -141,7 +141,9 @@ public final class ChildProcess {
             throw new IllegalArgumentException("empty command");
         }
         boolean inherit = inheritConsole; // 生产由 spawn(...) 传入 ConsoleProbe 的探测结论
-        calibratePlainSpawn(cwd);
+        if (Diag.ON) {
+            calibratePlainSpawn(cwd);
+        }
         OutputFiles files = OutputFiles.tryCreate(cwd);
         if (files != null) {
             try {
@@ -165,10 +167,11 @@ public final class ChildProcess {
      * 令牌)</b>起一个 {@code cmd /c exit},与随后真正的受限令牌 {@code CreateProcessAsUserW}
      * 各自计时对照——若 plain 快而 AsUser 慢,慢点在"受限令牌创建进程"路径(安全软件对
      * token-manipulation + spawn 组合的同步检查);若两者同慢,则是进程创建本身被拖慢。
-     * 纯诊断:EA_CALIB=0 可关;结论落 runner-stderr.log,诊断完成后随打点一并清理。
+     * 纯诊断:{@code EA_RUNNER_DIAG=1} 才开(默认关,见 {@link Diag});结论落
+     * runner-stderr.log。8s 真凶(SecureRandom 首次取数)已定案,本实验留作后续排查手段。
      */
     private static void calibratePlainSpawn(String cwd) {
-        if ("0".equals(System.getenv("EA_CALIB"))) {
+        if (!Diag.ON) {
             return;
         }
         try {
@@ -213,7 +216,10 @@ public final class ChildProcess {
             if (!Kernel32Ex.INSTANCE.CreatePipe(inRR, inWR, null, 0)) {
                 throw Win32Exception.of("CreatePipe(stdin)");
             }
-            System.err.println("[codex-runner] stdio-prep pipe=" + ms(p0, System.nanoTime()) + "ms");
+            if (Diag.ON) {
+                System.err.println("[codex-runner] stdio-prep pipe="
+                        + ms(p0, System.nanoTime()) + "ms");
+            }
             inR = inRR.getValue();
             inW = inWR.getValue();
             child = spawnWithStdio(hToken, argv, cwd, env, desktop, job,
@@ -349,13 +355,15 @@ public final class ChildProcess {
             }
             long tSpawn1 = System.nanoTime();
             closeQuietly(pi.hThread);
-            // 8s 慢 spawn 定位打点(2026-10):attrs=属性表准备 env=环境块+命令行
-            // createAsUserW=受限令牌创建进程本体。与 calib 行(普通 CreateProcessW)对照,
-            // 二者之差即"受限令牌路径"被安全软件同步检查拖慢的净额。
-            System.err.println("[codex-runner] spawn-timing attrs=" + ms(tAttrs0, tEnv0)
-                    + "ms env=" + ms(tEnv0, tSpawn0)
-                    + "ms createAsUserW=" + ms(tSpawn0, tSpawn1)
-                    + "ms inherit=" + inheritConsole);
+            // spawn 分段打点(诊断,EA_RUNNER_DIAG=1 才打):attrs=属性表准备 env=环境块+命令行
+            // createAsUserW=受限令牌创建进程本体。8s 真凶(SecureRandom 首次取数)已定案,
+            // 打点留作后续排查手段。
+            if (Diag.ON) {
+                System.err.println("[codex-runner] spawn-timing attrs=" + ms(tAttrs0, tEnv0)
+                        + "ms env=" + ms(tEnv0, tSpawn0)
+                        + "ms createAsUserW=" + ms(tSpawn0, tSpawn1)
+                        + "ms inherit=" + inheritConsole);
+            }
             return new ChildProcess(job, pi, inW, outR, errR, files);
         } finally {
             Kernel32Ex.INSTANCE.DeleteProcThreadAttributeList(attrList);
@@ -591,8 +599,10 @@ public final class ChildProcess {
             Path dir = scratchDir(cwd);
             long t1 = System.nanoTime();
             if (dir == null) {
-                System.err.println("[codex-runner] file-timing scratchDir=" + ms(t0, t1)
-                        + "ms (null)");
+                if (Diag.ON) {
+                    System.err.println("[codex-runner] file-timing scratchDir=" + ms(t0, t1)
+                            + "ms (null)");
+                }
                 return null;
             }
             WinNT.HANDLE oh = null;
@@ -611,13 +621,12 @@ public final class ChildProcess {
                 }
                 oh = o.handle();
                 eh = e.handle();
-                // 8s 慢 spawn 定位打点(2026-10):真凶已锁定——Files.createTempFile 内部
-                // TempFileHelper 的 SecureRandom 首次取数(Windows Crypto/DPAPI,无 profile
-                // 账户 CryptAcquireContext 超时,实测恒 ~8.0s,与 RTP/进程创建无关,进程内
-                // 只付一次)。故文件创建改走 JNA CREATE_NEW(名字 pid+纳秒,零 crypto),
-                // 一次到位同时拿句柄。本打点验证 out/err 均应 <5ms,稳定后随诊断一并清理。
-                System.err.println("[codex-runner] file-timing scratchDir=" + ms(t0, t1)
-                        + "ms out=" + ms(t1, t2) + "ms err=" + ms(t2, t3) + "ms");
+                // file-timing(诊断,EA_RUNNER_DIAG=1 才打):8s 真凶已定案(SecureRandom
+                // 首次取数,见 createExclusive javadoc),打点留作后续排查手段。
+                if (Diag.ON) {
+                    System.err.println("[codex-runner] file-timing scratchDir=" + ms(t0, t1)
+                            + "ms out=" + ms(t1, t2) + "ms err=" + ms(t2, t3) + "ms");
+                }
                 return new OutputFiles(o.path(), e.path(), oh, eh);
             } catch (RuntimeException ex) {
                 closeQuietly(oh);
