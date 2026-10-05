@@ -696,10 +696,15 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
 
   // 插件草稿桥接：把输入框草稿写能力注入非 React 模块 holder，
   // 供插件 ctx.ui.appendComposerText 同步调用（替代 ComposerDraftBridgeContext 直接读取）。
+  // 仅在标签页激活时注入：多个任务标签页并存时，composerBridge 是模块级单例，
+  // 只有当前激活的 TaskChat 才应持有写权——否则切换标签后 bridge 仍指向旧实例，
+  // 编辑重发回填会写入非激活标签的 draft，激活标签的输入框不更新。
+  // 无 cleanup：不活跃时不清空 bridge，而是让下一个激活标签的 effect 覆盖写入，
+  // 避免「A 清空→B 写入」与「B 写入→A 清空」两种树序下 bridge 结果不一致的竞态。
   React.useEffect(() => {
+    if (!isActive) return
     setComposerBridge(composerDraftBridge)
-    return () => setComposerBridge(null)
-  }, [composerDraftBridge])
+  }, [composerDraftBridge, isActive])
 
   // 从线程派生 agent 列表:主 agent(mainAgentId)恒在首位,子 agent 按首次出现顺序。
   // 线程内主 agent 消息 agentId 为空串(缺省=主线程),此处归一到 mainAgentId 供列表/过滤使用。
