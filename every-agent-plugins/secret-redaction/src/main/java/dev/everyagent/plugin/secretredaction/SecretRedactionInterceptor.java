@@ -37,8 +37,14 @@ import java.util.Set;
  * <p>审计走 {@code task.trace}（只报命中次数与工具名，<b>绝不报值</b>），前端可见
  * 「这条输出里有凭据、已被掩码」，用户不会误以为是工具本身出错。
  *
+ * <p><b>禁用/删除本插件的影响面</b>：只失去输出侧掩码；§7.10 的 env 继承剔除住在
+ * plugin-api + 沙箱/worker 的常驻链路里，<b>不随本插件装卸而失效</b>。规则源共用
+ * {@code SecretPatterns}，故两半永远同口径（不会出现在环境侧已剔除、输出侧却漏掩的漂移）。
+ *
  * <p>order=900：尽量靠链尾，即真实执行完成后第一个做后处理的节点——在权限门/审计等
  * 前置拦截之后，在事件发射（{@code WorkerToolEventAdvisor} 取本轮 ToolResponseMessage）之前。
+ * 现役拦截链只有两环（{@code UnattendedToolInterceptor}=100 与本类=900），本类位于最内层；
+ * Unattended 上行段只读计数不重建结果，不存在覆盖本类输出的路径。
  */
 public class SecretRedactionInterceptor implements ToolExecutionInterceptor {
 

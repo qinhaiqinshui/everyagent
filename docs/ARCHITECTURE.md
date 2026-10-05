@@ -19,7 +19,7 @@ Every Agent 是一套「**公网可及、本机执行**」的 AI Agent 系统:AI
 | `every-agent-web` | 前端:React + TS,内置 TS 客户端 SDK,经 hub 遥控 worker | 5174(dev) |
 | `every-agent-contract` | 纯协议契约:帧信封 / RPC 信封 / 通用错误码 / 身份哈希(Java DTO + TS 类型) | — |
 | `every-agent-plugin-api` | 插件 API 契约:ExecContext(统一执行上下文) / EventEmitter / EmitEvent / ChatModelEnhancer / ModelConfig / TaskLifecycleNode 等接口(纯类型,插件与 worker 共用) | — |
-| `every-agent-plugins` | 内置插件集:model-rate-limit(限流) / task-queue(队列) / subagent / git / ai-review / empty-response-retry(空响应重试) / transient-error-retry(瞬时错误重试) / context-compression(上下文压缩) 等 | — |
+| `every-agent-plugins` | 内置插件集:model-rate-limit(限流) / task-queue(队列) / subagent / git / ai-review / empty-response-retry(空响应重试) / transient-error-retry(瞬时错误重试) / context-compression(上下文压缩) / secret-redaction(输出凭据脱敏) 等 | — |
 | `every-agent-desktop` | Electron 桌面版:web + hub + worker 一体打包(Windows x64 便携/安装包) | 本地 6101/6102 |
 
 ### 1.1 设计理念
@@ -843,6 +843,11 @@ Input:  queued → consumed | discarded(任务取消)
 **配置分层**:进程配置全部来自 jar 内 `application.yml` 默认 + `~/.everyagent/application-*.yaml` 用户覆盖(`spring.config.additional-location: optional:file:${EVERYAGENT_HOME:${user.home}/.everyagent}/application-worker.yaml`,自动加载,无自定义则零配置文件)。**模型配置由 `worker.models`(Spring 配置)承载**,默认在 jar 内(apiKey 占位符),真实 key 只写用户覆盖文件(机器级、不进工作区、不进 jar/git、不进事件日志)。
 
 **「不进事件日志」的执行点(`secret-redaction` 插件)**:该纪律此前只是文字,没有拦截位——一次 `Get-ChildItem Env:` 就能把宿主 key 原样打进 `tool.result` 并落盘。现由 `secret-redaction` 插件在**工具执行拦截链上行段**(`ToolExecutionInterceptor.invoke` 中 `next.proceed` 之后,order=900:权限门/审计之后、`WorkerToolEventAdvisor` 取本轮结果发事件之前)对本轮 `ToolResponseMessage.responseData` 调 `SecretPatterns.redact`。之所以这是唯一正确切入点:落盘副本(`EventLog`→`*.jsonl`)、定向推送(`DataPusher`→stream 频道)、回灌模型(同一 `conversationHistory` 交给 `ToolCallingAdvisor` 递归)**共用同一出口**,链上改写一次即三路全覆盖,冷启动续跑时磁盘文本本就是掩码后的(`ConversationLoader` 重建的历史同样干净)。掩码保留头尾指纹与总长度(`sk-ant-sid…6280[len=75]`,与 `HttpRequestLoggingInterceptor.redactHeader` 同族思路)以便辨认是哪把,且**幂等**(二次调用文本不变,不会反复改写);只处理本轮 callId(历史轮在它那轮已处理,避免每轮 O(全历史) 正则);审计发 `task.trace`,**只报命中次数与工具名,绝不报值**。**边界**:`delta`/`thinking`/`message` 等 assistant 正文是流式边生成边落盘的,事后改写会破坏 seq 不可变语义(§5.4 运行中日志永不修剪),故**不在本闸门覆盖范围**——模型自行复述凭据只能靠「凭据不进沙箱可达范围」根治(见 §7.10 环境侧信道闸门)。
+
+**与 §7.10 环境闸门的分工(决定"装卸插件"各自影响什么)**:凭据防护分两半,一半可装卸、一半常驻——①**输出掩码**住在 `secret-redaction` 插件里,禁用或删除该插件即失去这一半(落盘/推送/回灌会重新带回明文);②**env 继承剔除**住在 `SecretPatterns`(plugin-api)+ 7 处子进程环境构造点(codex/mic 两后端 + worker 的 OsSandbox/TerminalPtyFactory),**不属于任何插件、不随插件装卸而失效**——进程边界不该由可选扩展决定存在与否。`SecretPatterns` 因此同时有两类调用方:`scrubEnv`/`scrubInPlace`/`isSecretBearing` 由常驻链路调用,`redact`/`mask`/`countSecrets` 的唯一生产调用方是本插件(测试之外);删插件后这几个方法在 plugin-api 里看似无人调用,**不是死代码,不得顺手清理**。
+
+**装载前置(易踩)**:内置插件不进根 reactor(根 `<modules>` 只有 contract/plugin-api/hub/worker),`deploy.py` 也只 `-pl every-agent-hub,every-agent-worker -am package`;`BuiltInPluginScanner` 要求 `every-agent-plugins/<id>/target/classes/plugin.json` **且** `target/` 下存在非 sources/javadoc 的 jar,否则 WARN「内置插件未构建,请先 mvn package」并跳过(根 plugin.json 的 `enabled` 只是第二道门)。因此本插件需单独构建:`mvn -f every-agent-plugins/secret-redaction/pom.xml package`。同理适用于全部内置插件——`task-edit-resend` 出现在 worker pom 里仅是 `test` scope(测试内等价注册其节点),不构成运行时依赖,不构成"插件进依赖树"的先例。
+
 
 **程序附属文件**:rg 二进制、eagent-run.py、WSL 托管镜像统一放**程序根 `<程序根>/runtime/`**(程序根 = JVM 工作目录 user.dir;打包态 = resources 目录,IDE 态 = 仓库根),随安装包分发、运行时只读引用、以字面相对路径 `./runtime` 解析;不打进 jar、不写入系统目录。`worker.program-dir` 配置用于打包态显式指定。
 

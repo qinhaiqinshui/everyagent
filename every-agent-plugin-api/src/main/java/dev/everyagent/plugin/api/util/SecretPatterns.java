@@ -29,6 +29,18 @@ import java.util.regex.Pattern;
  * </ol>
  *
  * <p>永不修改入参 map、永不返回被删变量的值（审计只给名字），调用方据此打日志是安全的。
+ *
+ * <p><b>消费面</b>（决定哪些方法能随插件一起装卸，见架构 §7.17）：
+ * <ul>
+ *   <li>{@link #scrubEnv} / {@link #scrubInPlace} / {@link #isSecretBearing} / {@link #isSecretName}
+ *       —— 由<b>常驻链路</b>调用：sandbox-windows-codex（{@code CodexCommandExecutor.childEnv}、
+ *       {@code RunnerClient} 两处）、sandbox-windows-mic（{@code WindowsSandbox.buildEnvBlock}）、
+ *       worker（{@code OsSandbox} 两处 {@code ProcessBuilder}、{@code TerminalPtyFactory}）。
+ *       进程边界不该由可选扩展决定存在与否，故这些调用点<b>不放在插件里</b>。</li>
+ *   <li>{@link #redact} / {@link #mask} / {@link #countSecrets} —— 生产侧唯一调用方是
+ *       {@code secret-redaction} 插件（工具输出上行段掩码）。禁用该插件后这几个方法只剩测试引用，
+ *       <b>不是死代码，不得顺手清理</b>。</li>
+ * </ul>
  */
 public final class SecretPatterns {
 
