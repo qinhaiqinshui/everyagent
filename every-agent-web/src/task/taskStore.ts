@@ -530,13 +530,14 @@ class TaskStore {
   }
 
   /** 用户主动创建任务成功后立即落一条占位(后续 task.created 会覆盖)。 */
-  trackCreated(taskId: string, title: string, workspace: string): void {
+  trackCreated(taskId: string, title: string, workspace: string, workerId: string): void {
     this.upsert({
       taskId,
       title,
       status: 'created',
       createdAt: Date.now(),
       workspace,
+      workerId,
     })
   }
 

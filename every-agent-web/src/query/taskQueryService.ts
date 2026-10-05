@@ -189,7 +189,7 @@ export const taskQueryService = {
     })
     const taskId = String(result?.taskId ?? '')
     if (!taskId) throw new Error('worker 未返回 taskId')
-    taskStore.trackCreated(taskId, opts?.title || input.slice(0, 40), workspace)
+    taskStore.trackCreated(taskId, opts?.title || input.slice(0, 40), workspace, opts.workerId)
     return taskId
   },
 
