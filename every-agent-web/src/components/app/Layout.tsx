@@ -73,7 +73,9 @@ import { DRAFT_TASK_ID, setDraftPreset } from '@/components/task/taskChatDraft'
 const LazyTasksPanel = createLazyRouteComponent(() => import('@/components/task/TasksPanel'))
 const LazyOpenFilesSidebarPanel = createLazyRouteComponent(() => import('@/components/files/OpenFilesSidebarPanel'))
 const LazySearchSidebarPanel = createLazyRouteComponent(() => import('@/components/search/SearchSidebarPanel'))
-const LazySearchModal = createLazyRouteComponent(() => import('@/components/search/SearchModal'))
+// 全局搜索是浮层,挂在 .workspace-layout(flex row)直接子节点上:加载期不能渲染占位 div,
+// 否则它作为 flex item 抢掉半行宽度,chunk 到齐后又收回 → 首屏内容横向跳动(logo 先偏后居中)。
+const LazySearchModal = createLazyRouteComponent(() => import('@/components/search/SearchModal'), { fallback: null })
 
 /**
  * 计算移动端侧边栏允许的最大高度。
