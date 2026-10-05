@@ -67,6 +67,18 @@
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
         </dependency>
+        <!-- runner 进程日志:统一 slf4j 门面;runner 脱离主进程日志配置,用 simple 绑定落
+             System.err(installStderrTee → runner-stderr.log),cacheOutputStream=false 保证
+             写的是 tee 后的新流;默认 info,排查性能问题加 defaultLogLevel=debug -->
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-simple</artifactId>
+            <scope>runtime</scope>
+        </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>

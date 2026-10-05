@@ -406,7 +406,16 @@ public final class RunnerClient {
                 ? javaHome.substring(0, javaHome.length() - 1) : javaHome;
         String javaExe = home + "\\bin\\java.exe";
         java.util.List<String> argv = new java.util.ArrayList<>(java.util.List.of(javaExe,
-                "-XX:+UseSerialGC", "-Xshare:auto", "-Dfile.encoding=UTF-8"));
+                "-XX:+UseSerialGC", "-Xshare:auto", "-Dfile.encoding=UTF-8",
+                // slf4j-simple 落 System.err(tee→runner-stderr.log);不缓存输出流,
+                // 保证 tee 安装前后都写到当前 System.err(否则初始化早于 tee 时丢失)。
+                // EA_RUNNER_DEBUG=1 时诊断打点(debug 级)可见,默认 info。
+                "-Dorg.slf4j.simpleLogger.cacheOutputStream=false"));
+        // 诊断开关:worker 进程的环境变量透传给 runner JVM(slave 环境→JVM 系统属性),
+        // 置 1 时 simple 绑定开 debug,spawn 分段计时等打点可见。
+        if ("1".equals(System.getenv("EA_RUNNER_DEBUG"))) {
+            argv.add("-Dorg.slf4j.simpleLogger.defaultLogLevel=debug");
+        }
         String bootPath = bootLibraryPath(codexHome);
         if (bootPath != null) {
             argv.add("-Djna.boot.library.path=" + bootPath);

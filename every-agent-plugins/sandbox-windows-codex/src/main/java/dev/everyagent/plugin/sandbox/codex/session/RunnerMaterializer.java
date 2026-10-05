@@ -43,10 +43,11 @@ public final class RunnerMaterializer {
     /** runner main 类（同 jar 的第二 main，见 {@link CodexRunnerMain}）。 */
     public static final String RUNNER_MAIN = CodexRunnerMain.class.getName();
 
-    /** 依赖 jar 文件名匹配子串（jna 运行时 + jackson 帧编解码，设计 §2 模块依赖）。 */
+    /** 依赖 jar 文件名匹配子串（jna 运行时 + jackson 帧编解码 + slf4j 日志，设计 §2 模块依赖）。 */
     public static final List<String> DEPENDENCY_MATCHERS = List.of(
             "jna-", "jna-platform-",
-            "jackson-core-", "jackson-databind-", "jackson-annotations-");
+            "jackson-core-", "jackson-databind-", "jackson-annotations-",
+            "slf4j-api-", "slf4j-simple-");
 
     /** 指纹里携带的摘要前缀字节数（SHA-256 前 8 字节 = 16 个 hex 字符）。 */
     public static final int FINGERPRINT_PREFIX_BYTES = 8;

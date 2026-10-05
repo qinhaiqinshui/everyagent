@@ -101,11 +101,9 @@ public final class ChildProcess {
      * 行为;只有码页探测(默认启用,EA_CONPROBE=0 可关)通过复测后,才由 {@link CodexRunnerMain} 调
      * {@link #setInheritConsoleMode} 置真。
      *
-     * <p>刻意<b>不在这里引用 {@code ConsoleProbe}</b>:引用其静态方法会让该类在第一次 spawn 时
-     * 完成加载与 {@code <clinit>},而 runner 的精简 classpath(物化目录里的 9 个 jar)不含 slf4j
-     * ——2026-10-05 实测后果:{@code NoClassDefFoundError: org/slf4j/LoggerFactory} 直接掀掉
-     * 整条命令链路(broker 侧表现为 {@code PeekNamedPipe failed: 109}),整个沙箱不可用。
-     * 诊断类不得进入主路径的类加载图,哪怕它"看起来只是读一个布尔字段"。
+     * <p>2026-10-05 曾因引用诊断类引发 {@code NoClassDefFoundError: org/slf4j/LoggerFactory}
+     * 掀掉整条命令链路——根因是 runner 物化 classpath 缺 slf4j jar;现已补齐
+     * (RunnerMaterializer.DEPENDENCY_MATCHERS + pom 显式依赖),诊断类进入类加载图不再受限。
      */
     private static volatile boolean inheritConsoleMode;
 
@@ -141,7 +139,7 @@ public final class ChildProcess {
             throw new IllegalArgumentException("empty command");
         }
         boolean inherit = inheritConsole; // 生产由 spawn(...) 传入 ConsoleProbe 的探测结论
-        if (Diag.ON) {
+        if (LOG.isDebugEnabled()) { // calib 会真起一个进程,只在 debug 开启时跑
             calibratePlainSpawn(cwd);
         }
         OutputFiles files = OutputFiles.tryCreate(cwd);
@@ -157,6 +155,10 @@ public final class ChildProcess {
         return spawnViaPipes(hToken, argv, cwd, env, desktop, inherit);
     }
 
+    /** runner 进程日志:统一 slf4j(simple 绑定落 tee 后的 System.err,见 CodexRunnerMain 注释)。 */
+    private static final org.slf4j.Logger LOG =
+            org.slf4j.LoggerFactory.getLogger(ChildProcess.class);
+
     /** nano 区间耗时(ms,诊断打点用)。 */
     private static long ms(long fromNanos, long toNanos) {
         return (toNanos - fromNanos) / 1_000_000L;
@@ -167,13 +169,10 @@ public final class ChildProcess {
      * 令牌)</b>起一个 {@code cmd /c exit},与随后真正的受限令牌 {@code CreateProcessAsUserW}
      * 各自计时对照——若 plain 快而 AsUser 慢,慢点在"受限令牌创建进程"路径(安全软件对
      * token-manipulation + spawn 组合的同步检查);若两者同慢,则是进程创建本身被拖慢。
-     * 纯诊断:{@code EA_RUNNER_DIAG=1} 才开(默认关,见 {@link Diag});结论落
+     * 纯诊断:仅 debug 级别开启时随 spawn 跑一次(见调用处);结论落
      * runner-stderr.log。8s 真凶(SecureRandom 首次取数)已定案,本实验留作后续排查手段。
      */
     private static void calibratePlainSpawn(String cwd) {
-        if (!Diag.ON) {
-            return;
-        }
         try {
             WinBase.STARTUPINFO si = new WinBase.STARTUPINFO();
             si.cb = new WinDef.DWORD(si.size());
@@ -216,9 +215,8 @@ public final class ChildProcess {
             if (!Kernel32Ex.INSTANCE.CreatePipe(inRR, inWR, null, 0)) {
                 throw Win32Exception.of("CreatePipe(stdin)");
             }
-            if (Diag.ON) {
-                System.err.println("[codex-runner] stdio-prep pipe="
-                        + ms(p0, System.nanoTime()) + "ms");
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("stdio-prep pipe={}ms", ms(p0, System.nanoTime()));
             }
             inR = inRR.getValue();
             inW = inWR.getValue();
@@ -355,14 +353,13 @@ public final class ChildProcess {
             }
             long tSpawn1 = System.nanoTime();
             closeQuietly(pi.hThread);
-            // spawn 分段打点(诊断,EA_RUNNER_DIAG=1 才打):attrs=属性表准备 env=环境块+命令行
+            // spawn 分段打点(诊断,debug 级,EA_RUNNER_DEBUG=1 可见):attrs=属性表准备 env=环境块+命令行
             // createAsUserW=受限令牌创建进程本体。8s 真凶(SecureRandom 首次取数)已定案,
-            // 打点留作后续排查手段。
-            if (Diag.ON) {
-                System.err.println("[codex-runner] spawn-timing attrs=" + ms(tAttrs0, tEnv0)
-                        + "ms env=" + ms(tEnv0, tSpawn0)
-                        + "ms createAsUserW=" + ms(tSpawn0, tSpawn1)
-                        + "ms inherit=" + inheritConsole);
+            // 打点留作后续排查手段(debug 级,EA_RUNNER_DEBUG=1 可见)。
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("spawn-timing attrs={}ms env={}ms createAsUserW={}ms inherit={}",
+                        ms(tAttrs0, tEnv0), ms(tEnv0, tSpawn0), ms(tSpawn0, tSpawn1),
+                        inheritConsole);
             }
             return new ChildProcess(job, pi, inW, outR, errR, files);
         } finally {
@@ -599,9 +596,8 @@ public final class ChildProcess {
             Path dir = scratchDir(cwd);
             long t1 = System.nanoTime();
             if (dir == null) {
-                if (Diag.ON) {
-                    System.err.println("[codex-runner] file-timing scratchDir=" + ms(t0, t1)
-                            + "ms (null)");
+                if (LOG.isDebugEnabled()) {
+                    LOG.debug("file-timing scratchDir={}ms (null)", ms(t0, t1));
                 }
                 return null;
             }
@@ -621,11 +617,11 @@ public final class ChildProcess {
                 }
                 oh = o.handle();
                 eh = e.handle();
-                // file-timing(诊断,EA_RUNNER_DIAG=1 才打):8s 真凶已定案(SecureRandom
-                // 首次取数,见 createExclusive javadoc),打点留作后续排查手段。
-                if (Diag.ON) {
-                    System.err.println("[codex-runner] file-timing scratchDir=" + ms(t0, t1)
-                            + "ms out=" + ms(t1, t2) + "ms err=" + ms(t2, t3) + "ms");
+                // file-timing(诊断,debug 级):8s 真凶已定案(SecureRandom 首次取数,
+                // 见 createExclusive javadoc),打点留作后续排查手段。
+                if (LOG.isDebugEnabled()) {
+                    LOG.debug("file-timing scratchDir={}ms out={}ms err={}ms",
+                            ms(t0, t1), ms(t1, t2), ms(t2, t3));
                 }
                 return new OutputFiles(o.path(), e.path(), oh, eh);
             } catch (RuntimeException ex) {
