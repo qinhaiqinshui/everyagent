@@ -149,6 +149,10 @@ export class TaskEventFolder {
    * resync 时重新从 task.rounds 拉取并 foldRound 前调用,
    * 避免旧 items(编辑前的轮次,seq 已过期)与新轮次混排。
    * 保留 taskId,重置其余字段到空态。
+   * <p>slashTokens 不参与重置:它不是 rounds 折叠产物,真相源是 worker 持久化 +
+   * slash.tokens.changed 事件通道(订阅初始回放会重推最新值)。若在此清空,
+   * 初始打开流程中"先到的回放事件会被随后的 reset 抹掉",deps 回到 null→null
+   * 消费端既不重跑也不重拉,任务级胶囊即丢失(新建任务 AI 审议胶囊消失实锤)。
    */
   reset(): void {
     this.state.items = []
@@ -156,7 +160,6 @@ export class TaskEventFolder {
     this.state.agentMeta = {}
     this.state.contextUsage = null
     this.state.taskModel = null
-    this.state.slashTokens = null
     this.bySeq.clear()
     this.anchors.streaming.clear()
     this.anchors.toolNames.clear()
