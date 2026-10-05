@@ -393,7 +393,11 @@ def build_artifacts(cfg, services) -> Path:
     if java:
         mods = ",".join(f"every-agent-{s}" for s in java)
         # worker/hub 用 release 25 编译，必须 JDK 25。强制把构建进程的
-        # JAVA_HOME 指向 cfg.java_home（默认 Corretto 25），不受本机 JAVA_HOME 影响。
+        # JAVA_HOME 指向 cfg.java_home（来自 --java-home / DEPLOY_JAVA_HOME / JAVA_HOME），
+        # 显式指定可避免「PATH 上的 mvn 拿旧 JDK 编译」这类环境漂移。
+        jdk_bin = "java.exe" if os.name == "nt" else "java"
+        if not cfg.java_home or not Path(cfg.java_home, "bin", jdk_bin).exists():
+            sys.exit(f"java_home 无效: {cfg.java_home!r} —— 请用 --java-home / DEPLOY_JAVA_HOME 指向 JDK 25")
         java_env = dict(os.environ)
         java_env["JAVA_HOME"] = cfg.java_home
         java_env["PATH"] = cfg.java_home + os.sep + "bin" + os.pathsep + java_env.get("PATH", "")
@@ -747,7 +751,7 @@ def parse_args(argv):
                         "相对路径按脚本目录解析；未指定则不读取配置文件，回退到 CLI 参数 / 环境变量 / 硬默认值）")
     p.add_argument("--mvn", help="本地 maven 可执行文件（默认 mvn / DEPLOY_MVN）")
     p.add_argument("--java-home", help="本地构建用的 JDK 根目录（worker/hub 用 release 25，必须 JDK 25；"
-                                        "默认 D:\\Program Files\\jdks\\corretto-25.0.4 / DEPLOY_JAVA_HOME / 配置文件 DEPLOY_JAVA_HOME）")
+                                        "默认 DEPLOY_JAVA_HOME / 配置文件 DEPLOY_JAVA_HOME / 环境变量 JAVA_HOME）")
     p.add_argument("--java-bin", help="host 模式下远端运行的 java 可执行文件（默认 /usr/bin/java，即脚本首次部署时"
                                         "apt 安装的 openjdk-25-jre-headless；docker 模式忽略 / DEPLOY_JAVA_BIN）")
     p.add_argument("--npm", help="本地 npm 可执行文件（默认 npm / DEPLOY_NPM）")
@@ -792,7 +796,7 @@ def parse_args(argv):
     args.remote_dir = args.remote_dir or os.environ.get("DEPLOY_REMOTE_DIR") or local.get("DEPLOY_REMOTE_DIR", "~/every-agent")
     args.mvn = args.mvn or os.environ.get("DEPLOY_MVN") or local.get("DEPLOY_MVN", "mvn")
     args.npm = args.npm or os.environ.get("DEPLOY_NPM") or local.get("DEPLOY_NPM", "npm")
-    args.java_home = args.java_home or os.environ.get("DEPLOY_JAVA_HOME") or local.get("DEPLOY_JAVA_HOME", r"D:\Program Files\jdks\corretto-25.0.4")
+    args.java_home = args.java_home or os.environ.get("DEPLOY_JAVA_HOME") or local.get("DEPLOY_JAVA_HOME") or os.environ.get("JAVA_HOME", "")
     args.workspace_root = args.workspace_root or os.environ.get("DEPLOY_WORKSPACE_ROOT") or local.get("WORKSPACE_ROOT", "")
     args.hub_key = args.hub_key or os.environ.get("DEPLOY_HUB_KEY") or local.get("HUB_KEY", "")
     args.web_port = args.web_port or int(os.environ.get("DEPLOY_WEB_PORT") or local.get("DEPLOY_WEB_PORT", "80"))
