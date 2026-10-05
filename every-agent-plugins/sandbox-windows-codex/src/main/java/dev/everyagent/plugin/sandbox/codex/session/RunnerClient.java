@@ -248,6 +248,16 @@ public final class RunnerClient {
      * 全路径 classpath 使命令行达 1095 必然失败。Java 的 {@code dir\*} 通配符
      * 恰好展开为该目录全部 .jar（物化目录只含 runner 依赖 jar，语义等价），
      * 命令行降至 ~481 字符并留足余量。
+     *
+     * <p><b>收敛的前提是"目录里没有多余的 jar"（2026-10-05 实锤其破坏性）</b>：
+     * 语义等价只在目录纯净时成立。物化目录里若残留<b>同一 artifact 的旧版本 jar</b>
+     * （升级版本号后旧文件不会被自动删除），通配符会把旧 jar 一起装进 runner JVM，
+     * 且文件名排序令 {@code *-0.11.0.jar} 早于 {@code *-1.0.0.jar} → 旧同名类<b>优先命中</b>，
+     * 表现是"新 jar 已物化、worker 已重启，改动却毫无效果，且全程无报错"。
+     * <p><b>此处的处置是「只警告、不阻断收敛」</b>：拒绝收敛会退回显式 classpath（9 条全路径
+     * ≈1095 字符），必然撞上上面那个 1024 上限 → runner 起不来、整个沙箱不可用，比遮蔽更糟。
+     * 所以消除陈旧 jar 是物化阶段 {@link RunnerMaterializer#purgeStaleArtifacts} 的责任，
+     * 这里只留一条可排查的痕迹，<b>不能当唯一防线</b>。
      */
     static String collapseClasspathWildcard(String classpath) {
         if (classpath == null || classpath.indexOf(';') < 0) {
@@ -265,7 +275,43 @@ public final class RunnerClient {
             }
             parent = p;
         }
-        return parent == null ? classpath : parent + "\\*";
+        if (parent == null) {
+            return classpath;
+        }
+        if (hasForeignJar(parent, parts)) {
+            // 只警告,不阻断收敛:拒绝收敛会退回显式 classpath(9 条全路径 ≈1095 字符),
+            // 撞上 CreateProcessWithLogonW 的 1024 上限 → runner 起不来 → 整个沙箱不可用。
+            // 真正的遮蔽风险(同 artifact 的陈旧版本)由 RunnerMaterializer.purgeStaleArtifacts
+            // 在物化阶段消除;这里留一条痕迹供现场排查。
+            LOG.log(System.Logger.Level.WARNING,
+                    "[runner] 物化目录里存在 classpath 之外的 jar,通配符 -cp 会把它们一并装进"
+                            + " runner JVM(若与本批条目同 artifact 则构成遮蔽): dir={0} kept={1}",
+                    parent, java.util.Arrays.stream(parts)
+                            .map(x -> java.nio.file.Path.of(x).getFileName().toString()).toList());
+        }
+        return parent + "\\*";
+    }
+
+    /**
+     * 目录内是否存在 classpath 条目之外的 {@code .jar}。
+     * 目录不可枚举（单测里的虚构路径、权限问题）时按"无多余"处理——保持既有收敛行为。
+     */
+    static boolean hasForeignJar(java.nio.file.Path dir, String[] classpathEntries) {
+        java.util.Set<String> expected = new java.util.HashSet<>();
+        for (String e : classpathEntries) {
+            expected.add(java.nio.file.Path.of(e).getFileName().toString());
+        }
+        try (java.util.stream.Stream<Path> s = Files.list(dir)) {
+            for (Path f : s.toList()) {
+                String name = f.getFileName().toString();
+                if (name.endsWith(".jar") && !expected.contains(name)) {
+                    return true;
+                }
+            }
+        } catch (IOException | RuntimeException e) {
+            return false;
+        }
+        return false;
     }
 
     /** 诊断用：非 ASCII/控制字符转 U+XXXX（不可见字符一眼可见）。 */

@@ -54,6 +54,9 @@ public final class RunnerMaterializer {
     private RunnerMaterializer() {
     }
 
+    private static final System.Logger LOG =
+            System.getLogger(RunnerMaterializer.class.getName());
+
     // ---- 纯函数（跨平台单测） ----
 
     /** classpath 属性 → 已存在的文件/目录条目（空段/缺失项剔除，保序去重）。 */
@@ -198,7 +201,104 @@ public final class RunnerMaterializer {
             }
             entries.add(target);
         }
+        purgeStaleArtifacts(binDir, sources);
         return entries;
+    }
+
+    /**
+     * 清理物化目录里<b>同一 artifact 的陈旧版本 jar</b>。
+     *
+     * <p><b>为什么必须清</b>：{@link RunnerClient#collapseClasspathWildcard} 把 {@code -cp}
+     * 收敛成 {@code <binDir>\*}（CreateProcessWithLogonW 命令行 1024 字符上限逼出来的），而
+     * Java 的目录通配符展开该目录下<b>全部</b> .jar——文件名排序里 {@code *-0.11.0.jar} 排在
+     * {@code *-1.0.0.jar} 之前，旧 jar 的同名类<b>优先命中</b>。本仓实测后果：新构建已物化进
+     * 目录、worker 也已重启，runner 里却仍跑旧类，改动"看起来完全无效"，且没有任何报错。
+     *
+     * <p>删除失败（被正在运行的 runner JVM 锁定）只记日志不抛。兜底侧
+     * {@link RunnerClient#collapseClasspathWildcard} 对"目录里有 classpath 之外的 jar"
+     * <b>只警告不阻断收敛</b>——拒绝收敛会退回显式 classpath 并撞上 CreateProcessWithLogonW
+     * 的 1024 命令行上限，那会让整个沙箱起不来，比遮蔽更糟。所以消除陈旧 jar 是这里的
+     * <b>唯一</b>防线，不能指望调用方兜住。
+     */
+    static void purgeStaleArtifacts(Path binDir, List<Path> sources) {
+        List<String> stale;
+        try (java.util.stream.Stream<Path> walk = Files.list(binDir)) {
+            List<String> existing = walk
+                    .map(p -> p.getFileName().toString())
+                    .toList();
+            stale = staleArtifactsToPurge(existing, sources);
+        } catch (IOException e) {
+            // 目录不可枚举:本次不清理。收敛侧只警告不阻断(阻断=撞 1024 上限让沙箱起不来),
+            // 所以这里必须留下痕迹,便于现场发现遮蔽。
+            LOG.log(System.Logger.Level.WARNING,
+                    "[runner] 物化目录不可枚举,跳过陈旧 jar 清理: {0}", e.getMessage());
+            return;
+        }
+        for (String name : stale) {
+            try {
+                Files.deleteIfExists(binDir.resolve(name));
+                LOG.log(System.Logger.Level.WARNING,
+                        "[runner] 已清除物化目录里的陈旧 jar(通配符 -cp 会让它遮蔽新类): {0}",
+                        name);
+            } catch (IOException | RuntimeException e) {
+                LOG.log(System.Logger.Level.WARNING,
+                        "[runner] 陈旧 jar 删不掉(被运行中的 runner 锁定?):{0} —— {1}"
+                                + "；通配符 -cp 下它的同名类会优先命中,请停 worker 后重新构建",
+                        name, e.getMessage());
+            }
+        }
+    }
+
+    /**
+     * 纯函数（可测）：给定目录现有文件名与本次物化来源，返回应删除的陈旧 jar 名。
+     *
+     * <p>判据是 <b>artifact 基名相同、且该基名在 classpath 里只出现一次</b>
+     *（{@code foo-0.11.0.jar} 与保留的 {@code foo-1.0.0.jar} → 基名同为 {@code foo}，删旧的）。
+     * <b>同基名出现两次绝不删</b>:那是有意共存的双版本依赖——实测本插件 classpath 里就有
+     * {@code jackson-core} 2.21.5 与 3.1.5 并列(Jackson 2/3 是不同 groupId,不是新旧替代),
+     * 删掉任何一个都会改变 runner 行为。基名之外的一律不碰。
+
+     */
+    public static List<String> staleArtifactsToPurge(List<String> existingNames,
+            List<Path> sources) {
+        List<String> kept = sources.stream()
+                .filter(p -> !Files.isDirectory(p))
+                .map(p -> p.getFileName().toString())
+                .toList();
+        java.util.Set<String> keptSet = new java.util.HashSet<>(kept);
+        // 每个 artifact 基名在 classpath 里出现几次:2 次说明"同 root 双版本"是有意依赖
+        // (如 jackson-core 2.x 与 3.x 并存),那种绝不能删。
+        java.util.Map<String, Integer> keptRootCount = new java.util.HashMap<>();
+        for (String k : kept) {
+            keptRootCount.merge(artifactRoot(k), 1, Integer::sum);
+        }
+        List<String> out = new ArrayList<>();
+        for (String name : existingNames) {
+            if (!name.endsWith(".jar") || keptSet.contains(name)) {
+                continue;
+            }
+            String root = artifactRoot(name);
+            if (keptRootCount.getOrDefault(root, 0) == 1) {
+                out.add(name);
+            }
+        }
+        return out;
+    }
+
+    /**
+     * artifact 基名：剥掉尾部 {@code -<版本号>.jar}（版本号以数字开头）。
+     * 例：{@code sandbox-windows-codex-0.11.0.jar} → {@code sandbox-windows-codex}；
+     * 剥不掉（无版本段，如 {@code jna.jar}）则原样返回，从而只与同名文件配对、不误伤。
+     */
+    public static String artifactRoot(String jarFileName) {
+        int dot = jarFileName.lastIndexOf(".jar");
+        String head = dot > 0 ? jarFileName.substring(0, dot) : jarFileName;
+        int dash = head.lastIndexOf('-');
+        if (dash > 0 && dash + 1 < head.length()
+                && Character.isDigit(head.charAt(dash + 1))) {
+            return head.substring(0, dash);
+        }
+        return head;
     }
 
     /**

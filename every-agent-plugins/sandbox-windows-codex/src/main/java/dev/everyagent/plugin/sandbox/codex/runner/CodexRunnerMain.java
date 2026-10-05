@@ -113,14 +113,16 @@ public final class CodexRunnerMain {
             System.exit(2);
         }
         System.err.println("[codex-runner] start pipes in=" + in + " out=" + out);
-        // 控制台码页探测：必须在服务循环之前——它决定的 spawn 形态对整条会话生效。
-        // 实测本机 PowerShell 能否解对原生 UTF-8：能则什么都不动；不能才采用「继承控制台 + UTF-8」，
-        // 采用后复测仍不解 UTF-8 就把码页改回原值并保留 CREATE_NO_WINDOW。
-        ConsoleProbe.runOnce(java.nio.file.Path.of(System.getProperty("user.dir")));
-        System.err.println("[codex-runner] console probe: verdict=" + ConsoleProbe.verdict()
-                + " inheritConsole=" + ConsoleProbe.inheritConsole()
-                + " cp=" + ConsoleProbe.cpAtStart() + "->" + ConsoleProbe.cpNow()
-                + " oem=" + Kernel32Ex.INSTANCE.GetOEMCP());
+        // 控制台码页探测（ConsoleProbe）刻意不接在启动路径上。2026-10-05 实测回归:
+        // 探测放在此处(main → run 之前)会顶破 broker 的 15s 管道连接窗口,症状是
+        //   [codex sandbox 执行失败] timed out after 15000ms connecting \\.\pipe\...-in
+        // ——沙箱整体起不来。元凶不是探测本身的耗时,而是它把 JNA jnidispatch.dll 的
+        // 首次 unpack+load(本环境实测约 8s,见 run() 的预热注释与既有排障记录)提前到了
+        // openPipe 之前,启动预算翻倍;若本机控制台 API 可用,还要再叠两次 powershell 探针
+        // spawn(每次预算 25s)。真要评估"继承控制台"这条路,接入位置必须是
+        // run() 内 stage("pipes opened") 之后、且默认关闭由环境变量开启,绝不能再压到
+        // 管道连接之前。非 ASCII 正确性由文件承载(ChildProcess.OutputFiles)与 rg 包装
+        // (plugin-api RgShim)保证,不依赖这条探测。
         System.exit(run(in, out));
     }
 
@@ -175,6 +177,26 @@ public final class CodexRunnerMain {
         stage("pipe-in connected (CreateFileW in)");
         WinNT.HANDLE out = openPipe(pipeOutName, WinNT.FILE_GENERIC_WRITE);
         stage("pipes opened");
+        // 控制台码页探测：默认关闭，EA_CONPROBE=1 才开，且必须在管道已连接之后、
+        // 并在后台线程里跑——它既不能压 pipe-connect 预算，也不能压 spawn_ready 预算。
+        // 结论落地是"后续命令的 spawn 形态可能变化"，这是诊断用途的可接受代价（见 ConsoleProbe）。
+        if ("1".equals(System.getenv("EA_CONPROBE"))) {
+            Thread.ofVirtual().name("codex-console-probe").start(() -> {
+                try {
+                    ConsoleProbe.runOnce(java.nio.file.Path.of(System.getProperty("user.dir")));
+                    // 结论落地:由 ChildProcess 自己的字段承接(它不在 spawn 路径上引用本类)
+                    ChildProcess.setInheritConsoleMode(ConsoleProbe.inheritConsole());
+                    System.err.println("[codex-runner] console probe (EA_CONPROBE=1): verdict="
+                            + ConsoleProbe.verdict()
+                            + " inheritConsole=" + ConsoleProbe.inheritConsole()
+                            + " cp=" + ConsoleProbe.cpAtStart() + "->" + ConsoleProbe.cpNow());
+                    System.err.flush();
+                } catch (Throwable t) {
+                    System.err.println("[codex-runner] console probe failed: " + t);
+                    System.err.flush();
+                }
+            });
+        }
         Object writeLock = new Object(); // output 读线程与主线程共用 -out 管写端
         try {
             // 1) 先读 spawn_request（写 spawn_ready 之前必须等到）

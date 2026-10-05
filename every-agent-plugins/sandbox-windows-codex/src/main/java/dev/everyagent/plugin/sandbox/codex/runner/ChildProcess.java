@@ -97,6 +97,24 @@ public final class ChildProcess {
     }
 
     /**
+     * 子进程是否继承 runner 控制台(= 不加 {@code CREATE_NO_WINDOW})。<b>默认 false</b>,即修复前
+     * 行为;只有显式开启的码页探测(EA_CONPROBE=1)通过复测后,才由 {@link CodexRunnerMain} 调
+     * {@link #setInheritConsoleMode} 置真。
+     *
+     * <p>刻意<b>不在这里引用 {@code ConsoleProbe}</b>:引用其静态方法会让该类在第一次 spawn 时
+     * 完成加载与 {@code <clinit>},而 runner 的精简 classpath(物化目录里的 9 个 jar)不含 slf4j
+     * ——2026-10-05 实测后果:{@code NoClassDefFoundError: org/slf4j/LoggerFactory} 直接掀掉
+     * 整条命令链路(broker 侧表现为 {@code PeekNamedPipe failed: 109}),整个沙箱不可用。
+     * 诊断类不得进入主路径的类加载图,哪怕它"看起来只是读一个布尔字段"。
+     */
+    private static volatile boolean inheritConsoleMode;
+
+    /** 由启动期的码页探测设置(见 {@link CodexRunnerMain} 的 EA_CONPROBE 分支)。 */
+    public static void setInheritConsoleMode(boolean on) {
+        inheritConsoleMode = on;
+    }
+
+    /**
      * 以受限令牌启动子进程:先试文件承载(非 ASCII 正确性所需),建不出来才回退管道。
      *
      * @param desktop lpDesktop（如 {@code Winsta0\\EveryAgentCodexDesktop-…}）；null =
@@ -105,8 +123,7 @@ public final class ChildProcess {
      */
     public static ChildProcess spawn(WinNT.HANDLE hToken, List<String> argv, String cwd,
             Map<String, String> env, String desktop) {
-        return spawnWithConsoleMode(hToken, argv, cwd, env, desktop,
-                ConsoleProbe.inheritConsole());
+        return spawnWithConsoleMode(hToken, argv, cwd, env, desktop, inheritConsoleMode);
     }
 
     /**

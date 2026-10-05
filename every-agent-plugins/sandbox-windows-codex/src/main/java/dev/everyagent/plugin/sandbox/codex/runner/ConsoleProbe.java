@@ -12,8 +12,11 @@ import com.sun.jna.platform.win32.WinNT;
 
 import dev.everyagent.plugin.sandbox.codex.win.Kernel32Ex;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+// 刻意不 import org.slf4j:runner 是独立子 JVM,物化 classpath(.sandbox-bin 的 9 个 jar)里
+// 没有 slf4j,引用会让本类 <clinit> 抛 NoClassDefFoundError(2026-10-05 实测掀掉整条命令链路)。
+// 也不用 java.util.logging:System.Logger 的 ConsoleHandler 在初始化时绑定的是 tee 之前的旧
+// System.err 引用(CodexRunnerMain.installStderrTee 会换流),诊断会落进没人看的流里。
+// 结论:与 CodexRunnerMain 同口径,直接用 System.err(见下面的 log 适配器)。
 
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
@@ -78,7 +81,44 @@ import java.util.concurrent.atomic.AtomicBoolean;
  */
 public final class ConsoleProbe {
 
-    private static final Logger log = LoggerFactory.getLogger(ConsoleProbe.class);
+    /**
+     * 诊断输出适配器：与 {@link CodexRunnerMain} 同口径走 {@code System.err}（理由见文件头的
+     * import 位置说明）。保留 slf4j 风格的 {@code "{}"} 占位与 {@code warn/info/debug} 方法名，
+     * 是为了让本类的十几处调用点不必为"日志框架选型"改动——真正的依赖只有 {@code System.err}，
+     * 在 runner 子 JVM 里必然可用。
+     */
+    private static final ProbeLog log = new ProbeLog();
+
+    private static final class ProbeLog {
+        void info(String fmt, Object... args) {
+            write("INFO ", fmt, args);
+        }
+
+        void warn(String fmt, Object... args) {
+            write("WARN ", fmt, args);
+        }
+
+        /** 探测细节：量大且无诊断价值，不占 stderr（它会 tee 进日志文件）。 */
+        void debug(String fmt, Object... args) {
+            // 刻意丢弃
+        }
+
+        private static void write(String level, String fmt, Object... args) {
+            StringBuilder sb = new StringBuilder(fmt.length() + 64).append(level);
+            int from = 0;
+            for (Object a : args) {
+                int at = fmt.indexOf("{}", from);
+                if (at < 0) {
+                    break;
+                }
+                sb.append(fmt, from, at).append(a);
+                from = at + 2;
+            }
+            sb.append(fmt, from, fmt.length());
+            System.err.println(sb);
+            System.err.flush();
+        }
+    }
 
     /** 判定标记（纯 ASCII,回传通道不受被测码页影响）。 */
     private static final String MARK_OK = "EA_UTF8=OK";
@@ -107,8 +147,12 @@ public final class ConsoleProbe {
     }
 
     /**
-     * 跑一次探测（幂等；{@link CodexRunnerMain} 在服务循环前调用）。
-     * 任何失败路径都收敛到"不改变现状"。
+     * 跑一次探测（幂等；仅由 {@link CodexRunnerMain} 在 {@code EA_CONPROBE=1} 时、
+     * <b>管道连接之后</b>的后台线程调用）。任何失败路径都收敛到"不改变现状"。
+     *
+     * <p>结论通过 {@link ChildProcess#setInheritConsoleMode} 落地——{@code ChildProcess}
+     * 自身不引用本类，否则默认配置（探测关闭）也会触发本类加载，而 runner 子 JVM 的
+     * classpath 里没有 slf4j（2026-10-05 实测：{@code NoClassDefFoundError} 掀掉整条链路）。
      */
     public static synchronized void runOnce(Path workspaceRoot) {
         if (!"not-run".equals(verdict)) {
