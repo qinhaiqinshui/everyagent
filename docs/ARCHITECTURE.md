@@ -663,10 +663,9 @@ wsl-bwrap 后端的 seccomp 内核级提权拦截已随 bwrap 后端删除而移
 - **执行器**：`TaskLifecycleExecutor`（worker `task.lifecycle` 包）——按 order 升序稳定排序折叠为嵌套链，链尾接内核；`InterruptedException`→CANCELLED 兜底。
 - **临界段**：order ∈ [420, 850] 的连续 `UpstreamNode` 段共享一次 `synchronized(taskLock)`，对外表现为 order=850 的单一链位置。段内上行执行序 = order 降序（与现状 finish 持锁段逐项一致）。
 - **注册表**：`TaskLifecycleRegistry`（`plugin/registry/` 第 8 个注册表）——CopyOnWriteArrayList + float 稳定排序。850..420 区间拒绝插件节点插入。（注册表不感知插件禁用：禁用的插件根本不会被 `activate`，也就不会往这里注册节点，见 §8.5）
-- **内置节点（17 个）**：
-  - 下行 4：`persistence.track`(100) → `task.wires`(200) → `status.start`(300) → `main.agent`(390)
+- **节点全集（31 个实测 = worker 内置 26 + 插件贡献 5）**：order 全表（升序 = 外→内）详见插件指南 `docs/plugin-guide/backend/task-and-rpc.md` §2.3——下行含 RPC 线程段（10~80）与 `persistence.track`(100) → `task.wires`(200) → `main.agent`(390)；早期清单中的 `status.start`(300)/`status.finalize`(850) 等旧编号已随演进移除，以插件指南全表为准。
   - **轮次循环段（每轮重入，临界段内侧）**：`queue.loop`(870，task-input-queue 插件) 包裹 `[ file.reference.process(875) → edit.resend(877，task-edit-resend 插件) → consume.input(880) → 内核 runner.run(main) 一次 ]`——每轮 poll 队列项后覆盖 ctx.input 再 proceed;队列 poll 空时先回收「插入对话」队列里未被 advisor drain 的项(回收成功就继续续跑),`cascade.stop`(900)/`spawned.await`(950) 亦在循环内侧(逐轮失败级联停/子 agent 等待)。**轮次循环必须在临界段 [420,850] 内侧**：若在 420 之外包裹(如 order=395),每轮上行段会把 status 终态/registry.remove/persistence.untrack/concurrency.release 等一次性收口节点逐轮执行——任务中途被移出注册表(实时推送断流、cancel/task.poll 失效)、writer 提前关闭(后续轮次事件不落盘)、并发计数重复扣减
-  - 上行 13：`spawned.await`(950) → `cascade.stop`(900) → `ledger.persist`(860) → **[临界段]** `status.finalize`(850) → `concurrency.release`(800) → `log.flush`(750) → `queue.persist`(700) → `status.persist`(650) → `ledger.persist`(600) → `disk.index`(550) → `persistence.untrack`(500) → `gate.evict`(450) → `registry.remove`(420) **[/临界段]** → `workspace.activity`(350)
+  - 上行（概览，倒序收口）：`spawned.await`(950) → `cascade.stop`(900) → `ledger.persist`(860) → **[临界段]** `status`(840) → `concurrency.release`(800) → `log.flush`(750) → `status.persist`(650) → `disk.index`(550) → `persistence.untrack`(500) → `gate.evict`(450) → `registry.remove`(420) **[/临界段]** → `workspace.activity`(350) →（RPC 线程段收尾，逐项 order 见插件指南全表）
 - **行为零变化**：事件发射顺序、seq 语义、落盘内容与重构前逐项一致（§3.3 基线表逐字映射）。
 - **后续 Phase**：agent 层独立(Phase 2)、拦截链范式统一(Phase 3)、subagent 插件(Phase 4)、队列插件(Phase 5)。详见 `docs/design-agent-layer-onion.md`。
 
@@ -702,13 +701,13 @@ worker 的两条运行期责任链迁移为与任务洋葱同一的 filter 形�
 
 ### 7.14.4 任务队列插件（Phase 5）
 
-任务队列插件将「并发上限即拒 ERR_BUSY」语义替换为「排队等待」语义。插件以 `@Component` + 构造器注入 worker 注册表的模式注册（同 git 插件 `GitPluginRegistrar` 先例）。
+任务队列插件将「并发上限即拒 ERR_BUSY」语义替换为「排队等待」语义。插件实现 `EveryAgentPlugin.activate(WorkerPluginContext)`，在 activate 里经 `ctx.register*` 注册（全仓 25 个内置插件源码零 `@Component`，插件由 `URLClassLoader` 加载、非 Spring 托管；git 插件同类先例是 `GitPlugin`）。
 
 - **`QueueAdmissionNode`**（order=250，形态三 try/finally 成对节点）：落在洋葱下行空隙 100~400 之间（`persistence.track`=100 之后、`status.start`=300 之前）。下行段 `acquire(taskId)` 获取运行许可（`Semaphore` fair 模式，permits=maxConcurrentTasks），并发满时虚拟线程 park 阻塞（零线程开销）；finally 段 `release(taskId)` 释放许可并唤醒下一个等待者。下行抛异常时 release 不执行（未进入不收口语义）。
 - **`TaskAdmissionPolicy` SPI**（plugin-api）：RPC 边缘预检扩展点。队列插件注册 `TaskQueueAdmissionPolicy`（always-admit）后，`TaskManager.rpcTaskRun` 不再硬拒绝 ERR_BUSY，而是放任务进入洋葱由 `QueueAdmissionNode` 排队处理。无注册策略时保持原有行为。
 - **`task.queued` 事件**（tasks 频道）：任务因并发满而排队等待时广播队列状态（payload: `{queueLength, queue:[taskId...]}`），前端据此渲染排队状态。
 - **`task.queueList` RPC**：返回当前队列快照 `{availablePermits, queueLength, queue:[...]}`。
-- **`TaskQueue`**（@Component）：`Semaphore`(permits=maxConcurrentTasks, fair) + `ConcurrentLinkedQueue<String>` 跟踪排队任务；acquire/release 管理 Semaphore 许可并广播队列状态变化。
+- **`TaskQueue`**（插件内普通类，`activate` 里构造）：`Semaphore`(permits=maxConcurrentTasks, fair) + `ConcurrentLinkedQueue<String>` 跟踪排队任务；acquire/release 管理 Semaphore 许可并广播队列状态变化。
 - **worker pom 挂载**：`every-agent-worker/pom.xml` 依赖 `task-queue` 模块（worker 自行 repackage 可执行 jar,mainClass=`WorkerApplication`）。
 
 ### 7.15 持久化与磁盘布局
@@ -1139,6 +1138,7 @@ public interface AgentFactory {
 - **扩展点贡献变更须可订阅(否则插件 UI 入口不上屏)** — 插件在 `activate()` 里经 `ctx.ui.register*` 注册贡献,而 `activate` 由 `plugin.webSource` RPC 异步驱动,几乎必然晚于宿主首屏渲染。因此扩展点注册表(`ExtensionRegistry`)除 `register`/`getAll` 外必须提供 `subscribe(listener)`(注册与 dispose 均通知),`PluginDispatcher` 汇总为全局 `subscribeExtensionsChanged` + `getExtensionsVersion`(自增计数,作稳定快照;返回新数组会让 `useSyncExternalStore` 判为快照不一致而无限重渲染)。宿主侧边栏(活动栏图标/面板列表/选中态/合法面板 ID 校验)以 `useSyncExternalStore` 消费该版本,使 git/扩展管理等插件图标注册即显示——不在 React 里订阅而只在渲染期读 `listRegistered*()` 快照,图标会一直缺失,直到别处 `setState` 触发重渲染才"顺带"出现。
 - **侧边栏入口排序 `order`(float,统一坐标系)** — `ui.sidebar_items` 的 `UiSidebarItemDefinition.order` 是活动栏唯一的排序依据:内置项与插件贡献合并后按 `order` **升序混排**(float,同值按贡献先后稳定排列),不再隐含"内置在前、插件在后"的注册顺序假设。内置项占 `tasks=1 / files=2 / search=3 / settings=10`,中间空位留给插件插队(git=5、扩展管理=9);未声明 `order` 的贡献按 `DEFAULT_SIDEBAR_ORDER=100` 兜底,即排在所有已声明项之后。排序发生在 `Layout.tsx` 的 `buildSidebarActivityItems()`(活动栏图标与移动端底部栏共用同一条目序列),面板槽位显隐不受顺序影响,故无需同步排序。
 - **扩展点 `ui.tool_call_views`** — 按工具名**整体接管工具调用视图**(折叠态 + 展开态):插件注册 `ToolCallViewDefinition{pluginId, toolName, Component}`,`Component` 与核心内置视图同契约(`ToolViewProps`,聚合后的 `details` 数组)。解析优先级:插件注册的视图 > 内置 `toolViews/` 目录注册表 > `DefaultToolView`。插件视图完全自治(折叠行、展开头部、参数/结果/错误块均由插件渲染),但只能用 plugin-api 类型 + ctx 能力,不引宿主组件。内置 `update-file-view` 插件以此接管 `update_file`:折叠态显示文件名与变更统计徽章,展开态内嵌 oldcontent→content 行级 diff。
+- **插件开发指南与脚手架** — 动手开发全流程见插件指南 `docs/plugin-guide/index.md`(快速上手 / plugin.json 字段 / 后端与前端扩展点手册 / 构建分发 / 排查,19 篇);新插件工程用脚手架生成:`create-everyagent-plugin/`,命令 `node create-everyagent-plugin <id>`(java/web/full 模板 + `.eap` 打包),不必手搓模板。
 
 ---
 
@@ -1238,9 +1238,11 @@ worker                         hub                    前端(可能 0 个在线)
 ├── every-agent-contract/          # 纯协议契约:帧信封 / RPC 信封 / 错误码 / 身份哈希(Java DTO + TS 类型)
 ├── every-agent-plugin-api/        # 插件 API 契约:ExecContext(统一执行上下文) / EventEmitter / EmitEvent / ChatModelEnhancer / ModelConfig / TaskLifecycleNode 等接口(纯类型,插件与 worker 共用)
 ├── every-agent-plugins/           # 内置插件:model-rate-limit(限流) / task-queue(队列) / subagent / git / ai-review / empty-response-retry(空响应重试) / transient-error-retry(瞬时错误重试) / context-compression(上下文压缩) / ...
+├── create-everyagent-plugin/      # 插件工程脚手架 CLI(node create-everyagent-plugin <id>,java/web/full 模板 + .eap 打包)
 ├── every-agent-desktop/           # Electron 桌面打包
 ├── runtime/                       # 程序附属文件(rg 二进制、eagent-run.py、WSL 托管镜像)
-└── docs/ARCHITECTURE.md           # 本文档(唯一架构事实源)
+├── docs/ARCHITECTURE.md           # 本文档(唯一架构事实源)
+└── docs/plugin-guide/             # 插件开发指南(快速上手/扩展点/构建分发/排查,入口 index.md)
 ```
 
 三层只依赖 contract,互相零依赖;contract 是纯协议边界,业务全部住 worker proto。
@@ -1258,6 +1260,9 @@ cd every-agent-web && npm install && npm run dev
 # 测试
 mvn test                        # contract + hub + worker(worker 含真实 hub 全链路 E2E)
 cd every-agent-web && npm run typecheck
+
+# 新建插件工程(脚手架;插件开发指南 docs/plugin-guide/index.md)
+node create-everyagent-plugin <id>
 ```
 
 docker-compose 一键:`HUB_KEY=你的密钥 docker-compose up --build`;数据落在 named volume。

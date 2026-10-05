@@ -11,6 +11,7 @@
 - 任务/对话数据由 worker 落盘 `data/tasks/<taskId>/`(多端同步真相源);前端不做任务数据 localStorage 持久化。
 - 版本统一由根 pom 锁定(Spring Boot 4.1.x / Spring AI 2.0.x),三层不得各自升版本。
 - 构建:`JAVA_HOME` 指向 JDK 25(如 Corretto 25);maven 在 PATH 中可用即可。
+- 插件开发:[docs/plugin-guide/](docs/plugin-guide/index.md) 为权威指南(含脚手架 create-everyagent-plugin 与 .eap 打包);新增插件走脚手架,禁手搓模板。
 - **红线 · 复用 Spring AI 框架,禁止重复造轮子**:worker 的 agent 执行必须走 `ChatClient` + `Advisor` 生态,**不得手搓** agent 循环、工具调用循环、响应聚合、system 提示词拼接等 Spring AI 2 已有能力。Agent 执行链(`AgentRunner` 等)只能是**很薄的一层**——负责把 `Prompt` 交给 `ChatClient`、`ToolCallingAdvisor` 接管工具循环、自定义 `Advisor` 注入 skill/记忆/护栏等增强;所有可用 `ChatClient.advisors()` / `defaultAdvisors()` / `defaultTools()` / `ToolCallback` 表达的能力,一律复用,不允许自实现等价逻辑。新增 agent 能力优先做成 `Advisor`,而非改写执行核心。
 - **红线 · 一个 Advisor 只负责一个功能**:能用新增 `Advisor` 实现的增强(注入 skill、发射 worker 事件、记忆、护栏等),绝不在执行核心或别处手搓等价逻辑;不得把多个不相关职责塞进同一个 `Advisor`。事件发射等需挂钩工具循环的增强,通过**继承** `ToolCallingAdvisor` 并重写其受保护 hook(`doAfterStream` / `doGetNextInstructionsForToolCallStream` 等)实现,不得另起一层包裹或重复实现递归循环。
 - 主 Agent 与子 Agent **共用同一运行入口与 Advisor 链**,仅 `agentId` 不同(与 nagent 做法一致);禁止为子 agent 单独复制一套执行逻辑。

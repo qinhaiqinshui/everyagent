@@ -122,6 +122,8 @@ web / hub / worker / desktop 四个模块**互相解耦、物尽其用**,可按�
 
 > 详细设计见 **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**(唯一架构事实源,协议、数据模型、安全模型、实现红线)。
 
+> 插件开发见 **[docs/plugin-guide/](docs/plugin-guide/index.md)**(脚手架快速上手、plugin.json 字段、扩展点手册、构建分发、故障排查)。
+
 ---
 
 ## 🚀 快速开始

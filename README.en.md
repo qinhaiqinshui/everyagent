@@ -122,6 +122,8 @@ The four modules — web / hub / worker / desktop — are **decoupled and each s
 
 > For detailed design, see **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** (the single source of truth for architecture: protocol, data model, security model, implementation red lines).
 
+> Plugin development guide → [docs/plugin-guide/](docs/plugin-guide/index.md) (scaffold quick start, extension-point reference, build & distribution, troubleshooting).
+
 ---
 
 ## 🚀 Quick Start
