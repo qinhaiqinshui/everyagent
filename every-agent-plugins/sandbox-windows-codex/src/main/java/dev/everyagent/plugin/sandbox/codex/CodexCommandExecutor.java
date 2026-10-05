@@ -192,7 +192,8 @@ public final class CodexCommandExecutor {
 
         long timeoutMs = manager.execTimeoutMs();
         CodexSandboxSession.SessionSpec spec = new CodexSandboxSession.SessionSpec(
-                commandArgv(command), workspaceRoot.toString(), childEnv(rgBinary),
+                commandArgv(command), workspaceRoot.toString(),
+                childEnv(rgBinary, options.codexHome()),
                 timeoutMs > 0 ? timeoutMs : null, policy.writeRoots(), List.of(),
                 CapSids.workspaceCapSidForCwd(home, workspaceRoot),
                 wireName(identity), false, null);
@@ -362,9 +363,14 @@ public final class CodexCommandExecutor {
      * 继承当前环境<b>但剔除凭据形态变量</b>（§7.17「真实 key 不进事件日志」的环境侧对应物：
      * 宿主 shell 里散落的 {@code *KEY}/{@code *TOKEN}/值像 {@code sk-ant-…} 的变量不得进入沙箱,
      * 否则沙箱内任意命令 {@code Get-ChildItem Env:} 即可窃取,再随工具输出落盘）；
-     * rgBinary 非空时其所在目录前置进 Path（Windows 键名优先）。
+     * rgBinary 非空时其所在目录前置进 Path（Windows 键名优先）；
+     * codexHome 非空时 {@code TEMP}/{@code TMP} 显式指到组可写的
+     * {@code <codexHome>/.sandbox/tmp}——沙箱账户不加载 profile,继承来的宿主 TEMP
+     * （真实用户的 %LOCALAPPDATA%\Temp）对该账户**不可写**,不覆盖则 mvn/pytest 等
+     * 用临时目录的工具全数 Access Denied（命令 env 是整块替换,只修 runner env 会被
+     * 这里盖回去;目录由 runner 拉起时的 runnerEnvironment 保证存在）。
      */
-    static Map<String, String> childEnv(Path rgBinary) {
+    static Map<String, String> childEnv(Path rgBinary, Path codexHome) {
         Map<String, String> env = new LinkedHashMap<>(inheritEnv());
         if (rgBinary != null && rgBinary.getParent() != null) {
             String dir = rgBinary.getParent().toString();
@@ -374,6 +380,11 @@ public final class CodexCommandExecutor {
                     .contains(dir.toUpperCase(Locale.ROOT));
             env.put(key, current == null || current.isBlank() ? dir
                     : present ? current : dir + ";" + current);
+        }
+        if (codexHome != null) {
+            String tmp = SandboxDirs.sandboxDir(codexHome).resolve("tmp").toString();
+            env.put("TEMP", tmp);
+            env.put("TMP", tmp);
         }
         return env;
     }

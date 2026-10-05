@@ -135,11 +135,11 @@ class CodexCommandExecutorTest {
     @Test
     void childEnvPrependsRgDirToPath() {
         Path rg = tempDir.resolve("bin/rg.exe");
-        Map<String, String> env = CodexCommandExecutor.childEnv(rg);
+        Map<String, String> env = CodexCommandExecutor.childEnv(rg, null);
         String key = env.containsKey("Path") ? "Path" : "PATH";
         assertTrue(env.get(key).startsWith(rg.getParent().toString()),
                 "rg 所在目录前置进 Path:" + env.get(key));
-        Map<String, String> plain = CodexCommandExecutor.childEnv(null);
+        Map<String, String> plain = CodexCommandExecutor.childEnv(null, null);
         assertEquals(dev.everyagent.plugin.api.util.SecretPatterns.scrubEnv(System.getenv()).env(),
                 plain, "无 rg 时继承「凭据剔除后的父环境」(整块原样继承是泄露面,见 SecretPatterns)");
         assertFalse(plain.entrySet().stream()
@@ -147,6 +147,20 @@ class CodexCommandExecutorTest {
                                 .isSecretBearing(e.getKey(), e.getValue())),
                 "沙箱 env 不得携带凭据形态变量");
         assertTrue(plain.size() > 0, "父环境仍被继承(不是清空)");
+    }
+
+    @Test
+    void childEnvRedirectsTempToSandboxTmp() {
+        Path codexHome = tempDir.resolve(".everyagent-codex-sandbox");
+        Map<String, String> env = CodexCommandExecutor.childEnv(null, codexHome);
+        String expected = codexHome.resolve(".sandbox").resolve("tmp").toString();
+        assertEquals(expected, env.get("TEMP"),
+                "沙箱账户对宿主 TEMP 无写权限,必须指到组可写的 .sandbox/tmp");
+        assertEquals(expected, env.get("TMP"), "TMP 与 TEMP 同指一处");
+        Map<String, String> untouched = CodexCommandExecutor.childEnv(null, null);
+        assertEquals(dev.everyagent.plugin.api.util.SecretPatterns.scrubEnv(System.getenv()).env()
+                        .get("TEMP"),
+                untouched.get("TEMP"), "codexHome 为空时不碰 TEMP(维持宿主继承)");
     }
 
     @Test
