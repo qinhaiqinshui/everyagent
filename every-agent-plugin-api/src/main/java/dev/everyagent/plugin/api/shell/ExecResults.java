@@ -212,8 +212,10 @@ public final class ExecResults {
      * 或干脆什么都没有——AI 会把「用错了」误读成「没匹配」,这是致命的判断污染。
      *
      * <p><b>做法</b>：逐段用 {@link #messagesFromClixml} 抽出 {@code <S S="Error">} 等
-     * 文本载荷替换原段;段外的原生命令纯文本 stderr 保持原样(文件承载模式下本就没有
-     * CLIXML,此处只作管道模式的兜底)。抽不到任何文本时返回空段(纯 progress 噪声)。
+     * 文本载荷替换原段;段外的原生命令纯文本 stderr 保持原样。<b>CLIXML 与承载形态无关</b>
+     * ——powershell.exe 只看 stderr 是否控制台,文件承载下实测同样产生(2026-10 codex 后端
+     * Write-Error 实测),故 codex 后端执行器聚合处与 worker DIRECT 路径都已接入本方法。
+     * 抽不到任何文本时返回空段(纯 progress 噪声)。
      *
      * @param s stderr 原文（可为 null / 空 / 不含 CLIXML）
      * @return 还原后的 stderr 文本；无 CLIXML 时原样返回

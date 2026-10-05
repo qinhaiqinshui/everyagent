@@ -231,7 +231,8 @@ public final class OsSandbox implements SandboxBackend, NativeExec {
      *
      * <p><b>为什么文件就行</b>:stdout 指向文件时,PS 把该文件句柄直接交给原生子进程,
      * 子进程的原始字节<b>不经 PS 转码</b>直达文件;实测 cmdlet 中文输出与原生 UTF-8 输出
-     * 在同一文件里<b>同为合法 UTF-8</b>(不再混码),stderr 同理且不再产生 CLIXML 包装。
+     * 在同一文件里<b>同为合法 UTF-8</b>(不再混码),stderr 同理(ps 流记录仍会是 CLIXML,
+     * 由读取端 decodeClixml 统一还原——CLIXML 只取决于 stderr 是否控制台,与承载形态无关)。
      * 文件由本(JVM)进程创建并把可继承句柄交给子进程,故<b>不要求</b>沙箱账户对临时目录
      * 有写权限(实测沙箱内 {@code $env:TEMP} 不可写,只能靠句柄继承)。
      *

@@ -270,9 +270,13 @@ public final class CodexCommandExecutor {
         // 全流原始字节一次性智能解码：严格 UTF-8 失败回退系统 ANSI 码页，
         // 解决 PowerShell CLM 下中文按 GBK 编码、外部程序按 UTF-8 输出的混合编码问题（BUG-1）；
         // 整段解码也消除了逐帧解码时多字节字符跨 chunk 被拆导致的替换字符隐患。
+        // stderr 再过 decodeClixml：powershell.exe 在 stderr 非控制台时把 error/warning 流
+        // 记录序列化成 CLIXML(与文件/管道承载无关),还原成真实错误文本,绝不静默丢弃
+        // (2026-10 实测:文件承载下 Write-Error 仍产生 CLIXML;此前只有 worker 核心的
+        // DIRECT 路径做了还原,codex 后端漏接)。
         return new SessionRun(
                 ExecResults.decodeConsoleOutput(stdout.toByteArray()),
-                ExecResults.decodeConsoleOutput(stderr.toByteArray()),
+                ExecResults.decodeClixml(ExecResults.decodeConsoleOutput(stderr.toByteArray())),
                 exitCode, timedOut, interrupted, truncated);
     }
 

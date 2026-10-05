@@ -212,13 +212,14 @@ public class CommandExecutor {
     /**
      * 还原 stderr 里的 PowerShell CLIXML 流记录为真实错误文本（兜底路径）。
      *
-     * <p>PowerShell 5.1 在 stderr 被<b>管道</b>重定向时,把 error/warning/verbose 等流序列化成
+     * <p>PowerShell 5.1 在 stderr 被<b>重定向</b>(管道或文件——它只看是否控制台)时,把
+     * error/warning/verbose 等流序列化成
      * CLIXML({@code #< CLIXML} + {@code <Objs>…</Objs>})。旧实现是<b>整段删除</b>,于是
      * {@code rg '(' file} 的「regex parse error」、命令不存在、路径不可读全成静默——只剩
      * {@code [exit code: 2]} 甚至什么都没有,AI 把「用错了」误读成「没匹配」(BUG-2)。
      * 现委托 {@link ExecResults#decodeClixml}:段内 {@code <S S="Error">} 文本抽出来留在
-     * stderr,段外原生命令纯文本原样保留。文件承载模式下本不产生 CLIXML,此处覆盖
-     * 其他执行路径与个别模块的残余。
+     * stderr,段外原生命令纯文本原样保留。CLIXML 与承载形态无关(2026-10 codex 后端文件
+     * 承载下实测同样产生,codex 执行器聚合处已同样接入),此处覆盖本执行路径的残余。
      */
     private static ExecResult restoreClixml(ExecResult r) {
         String err = r.stderr();
