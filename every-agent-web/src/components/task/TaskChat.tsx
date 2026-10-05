@@ -329,7 +329,7 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
             if (result.position !== 'bottom') {
               continue
             }
-            const scopeToken = buildScopeToken(result.token)
+            const scopeToken = buildScopeToken(result.token, result.id ?? item.id)
             if (scopeToken) {
               setScopeTokens((cur) => upsertTaskToken(cur, scopeToken))
             }
@@ -351,7 +351,7 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
    * RPC 的 meta 写竞态（worker 端 SlashTaskScopeStore 亦按任务串行化,双保险）。
    */
   const handleAddTaskScopeToken = React.useCallback(({ id, token }: { id: string; token: string }) => {
-    const scopeToken = buildScopeToken(token)
+    const scopeToken = buildScopeToken(token, id)
     if (!scopeToken) {
       return
     }
@@ -611,7 +611,7 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
           for (const t of scopeTokens) {
             if (t.opaqueText && t.opaqueText.length > 0) {
               try {
-                await applyTaskToken({ taskId: newTaskId, id: extractSlashId(t.opaqueText) ?? '', token: t.opaqueText })
+                await applyTaskToken({ taskId: newTaskId, id: t.slashId ?? extractSlashId(t.opaqueText) ?? '', token: t.opaqueText })
               } catch (e) {
                 console.warn('[slash] 建后 apply 任务级 token 失败', e)
               }
@@ -1080,7 +1080,7 @@ function collectTaskRunSubmitContributions(taskId: string): Array<{
  * 把 opaque token 串解析为任务级底部 token（ChatComposerToken）。
  * 非法串（非 opaque token）返回 null，由调用方跳过。
  */
-function buildScopeToken(opaque: string): ChatComposerToken | null {
+function buildScopeToken(opaque: string, slashId?: string): ChatComposerToken | null {
   const parsed = parseOpaqueTokenText(opaque)
   if (!parsed) {
     return null
@@ -1091,6 +1091,7 @@ function buildScopeToken(opaque: string): ChatComposerToken | null {
     label: parsed.label ?? '',
     summary: parsed.summary,
     opaqueText: opaque,
+    slashId,
   }
 }
 

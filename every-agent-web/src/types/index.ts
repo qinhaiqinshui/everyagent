@@ -147,6 +147,8 @@ export interface ChatComposerToken {
   summary?: string
   /** 唯一序列化串（已删除 id 段；label/summary 在顶层明文段）。渲染与提交的唯一锚点。 */
   opaqueText: string
+  /** 关联的 slash 命令条目 id（如 "ai-review:on"）；草稿→提交 apply 时定位 worker 端条目。 */
+  slashId?: string
 }
 
 /** `@` 输入增强候选项。 */
