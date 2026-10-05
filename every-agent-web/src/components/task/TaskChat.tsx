@@ -437,6 +437,21 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
   // 主 agent 稳定 Id(taskStore 透传 worker TaskSummary.mainAgentId):agent 列表首项标识、
   // 归一线程内主 agent 消息的映射键(线程内主 agent 消息 agentId 为空串,见 agents 派生)。
   const mainAgentId = entry?.mainAgentId ?? ''
+  /**
+   * 派生用主 agent id:记住最近一次解析到的非空值。
+   *
+   * 任务生命周期内主 agent id 恒定(worker meta 里的 stable id),但 taskStore 镜像每次全量
+   * 校准(`refresh()` 先 `tasks.clear()` 再回填;worker presence / 工作区注册表变更都会触发)
+   * 都可能让 `entry` 瞬间缺失 → mainAgentId 塌成空串。agent 名单与「只看该 agent」的选中键
+   * 都以此为锚:一旦塌空,主胶囊连带消失、名单长度跌破 2 → 整行卸载重建,选中描边一闪而逝
+   * (2026-10 排查:运行中子 agent 胶囊点不出稳定选中态)。这里只做展示/过滤键的兜底,
+   * 不改写镜像。
+   */
+  const mainAgentIdRef = React.useRef('')
+  if (mainAgentId) {
+    mainAgentIdRef.current = mainAgentId
+  }
+  const stableMainAgentId = mainAgentId || mainAgentIdRef.current
   // 当前任务是否处于活动态(running/waiting-user)：决定右下角按钮是「停止」还是「发送」（两者合并为同一按钮位）。
   // 终态任务直接发送即可继续对话(worker 冷启动再运行,状态自动翻回 running)。
   const isTaskRunning = isTaskActive(status)
@@ -711,15 +726,24 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
   // 除 items 外还并入 agentMeta 的子 agent 键(task.agents 台账 seed):历史任务过程内容
   // 未懒加载、items 尚无子 agent 消息时,胶囊列表也能显示全部子 agent(items 派生优先,
   // meta 补齐追加在后;title 取 resolveAgentTitle 优先,兜底 meta.title)。
+  //
+  // ── 名单「只增不减」 ──────────────────────────────────────────
+  // 上面两个数据源在运行中会**整瞬间清空**:任务状态从非活动翻回活动时聊天页会 stream.resync()
+  // (= open → folder.reset(),items/agentStates/agentMeta 全清后重拉),task.agents 台账也是
+  // 异步补回。名单一旦塌成只剩主 agent,AgentListPanel 按「≤1 个 agent 不渲染」整行卸载,
+  // 胶囊连同刚点上的选中描边一起消失、DOM 节点被拆掉后点击还会落空——这正是「选中效果一闪
+  // 而逝」。一个任务的 agent 集合只会新增、不会消失,故此处按 agentId 单调累积名单:
+  // **成员与顺序冻结**,标题/状态/用量仍每帧取实时值(见 agentListItems)。
   const agentMeta = stream?.state.agentMeta
+  const agentRosterRef = React.useRef<Map<string, string>>(new Map())
   const agents = React.useMemo(() => {
     const seen = new Map<string, string>()
-    if (mainAgentId) {
-      seen.set(mainAgentId, '主 agent')
+    if (stableMainAgentId) {
+      seen.set(stableMainAgentId, '主 agent')
     }
     for (const item of items) {
       const rawKey = item.type === 'agent_message' ? item.message.agentId : (item.trace.agentId ?? '')
-      const agentKey = rawKey || mainAgentId
+      const agentKey = rawKey || stableMainAgentId
       if (agentKey && !seen.has(agentKey)) {
         seen.set(agentKey, stream?.resolveAgentTitle(rawKey) ?? rawKey)
       }
@@ -733,8 +757,15 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
         seen.set(agentId, stream?.resolveAgentTitle(agentId) ?? meta.title ?? agentId)
       }
     }
+    // 并入既往已见但本轮数据缺席的 agent(resync reset / 台账晚到的空窗期)。
+    for (const [agentId, title] of agentRosterRef.current) {
+      if (!seen.has(agentId)) {
+        seen.set(agentId, title)
+      }
+    }
+    agentRosterRef.current = seen
     return [...seen.entries()].map(([agentId, title]) => ({ agentId, title }))
-  }, [items, stream, mainAgentId, agentMeta])
+  }, [items, stream, stableMainAgentId, agentMeta])
 
   // agent 长条列表项:状态来自事件折叠器的 agentStates(主 agent 键为空串 '';子 agent 键 = 子 id);
   // meta 同源(键:主 = '',子 = 子 id)→ 悬停信息卡数据 + 子 agent 胶囊底部上下文用量线
@@ -746,7 +777,7 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
     // 任务终态判定:completed/stopped/error 时,任务状态是主 agent 的权威状态。
     const entryStatusTerminaled = entryStatus === 'completed' || entryStatus === 'stopped' || entryStatus === 'error'
     return agents.map((agent) => {
-      const isMain = agent.agentId === mainAgentId
+      const isMain = agent.agentId === stableMainAgentId
       const meta = metas[isMain ? '' : agent.agentId]
       const contextUsed = meta?.contextUsed
       const contextWindow = meta?.contextWindow
@@ -769,7 +800,7 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
         contextRatio,
       }
     })
-  }, [agents, mainAgentId, stream, agentMeta, entry?.status])
+  }, [agents, stableMainAgentId, stream, agentMeta, entry?.status])
 
   // 主 agent 列表项(供电池详情卡使用):从 agentListItems 取 isMain 项;
   // entry 未就绪时为 null,电池内部由 monitor 快照兜底构造。
@@ -883,7 +914,7 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
           isGenerating={isTaskRunning}
           scrollRoot={threadScrollRefNode.current}
           filterAgentId={filterAgentId}
-          mainAgentId={mainAgentId}
+          mainAgentId={stableMainAgentId}
         />
       )}
       composer={(

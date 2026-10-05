@@ -157,6 +157,12 @@ function toEntry(summary: WorkerTaskSummary, sourceWorkerId?: string): TaskListE
   const contextUsage = summary.usage
     ? toContextUsage(summary.usage, updatedAt)
     : existing?.contextUsage ?? null
+  // 状态与 rawStatus 同口径兜底:局部 task.* 广播不带 status 时沿用既有状态。
+  // mapWorkerStatus(undefined) 会返回 'idle',于是「running → idle → running」成对翻转,
+  // 而聊天页把「非活动态 → 活动态」当作续跑校准信号去 stream.resync()(= open → folder.reset,
+  // items/agentStates/agentMeta 全量清空重拉),表现就是 agent 胶囊行与线程整体闪断、
+  // 刚点上的选中态一闪而逝(2026-10 排查)。镜像里已有的状态是权威历史,不该被缺字段帧抹掉。
+  const rawStatus = summary.status ?? existing?.rawStatus ?? ''
 
   const entry: TaskListEntry = {
     taskId: summary.taskId,
@@ -165,8 +171,8 @@ function toEntry(summary: WorkerTaskSummary, sourceWorkerId?: string): TaskListE
     // 那正是「切换 worker 后点开任务空白、刷新页面才好」的根因(架构 §8.2)。
     workerId: sourceWorkerId || summary.workerId || existing?.workerId || '',
     title,
-    status: mapWorkerStatus(summary.status),
-    rawStatus: summary.status ?? existing?.rawStatus ?? '',
+    status: mapWorkerStatus(rawStatus),
+    rawStatus,
     createdAt,
     updatedAt,
     endedAt,

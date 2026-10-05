@@ -7,7 +7,8 @@
  * waiting-user / completed / error / stopped),running 态条内有流光滑过、圆点呼吸。
  * 点击某 agent → 线程只显示已加载内容中该 agent 的消息(TaskRoundsPanel 按归属过滤,
  * 纯渲染派生、不触发拉取);再次点击同一 agent 恢复「全部」。仅当任务存在子 agent 时渲染
- * (纯主 agent 任务无此面板)。
+ * (纯主 agent 任务无此面板);**但已有选中态时不折叠**——面板一卸载选中描边就没了、也没有
+ * 再点一次取消过滤的入口,选中态必须始终看得见、点得掉。
  *
  * 增强:
  * - 子 agent 胶囊底部 2px 上下文用量线(contextRatio,绿/黄/红按档位);父胶囊
@@ -72,7 +73,10 @@ export default function AgentListPanel({ agents, filterAgentId, onSelect }: Agen
   React.useEffect(() => clearCloseTimer, [clearCloseTimer])
 
   const hoverItem = hoverAgentId == null ? null : (agents.find((agent) => agent.agentId === hoverAgentId) ?? null)
-  if (agents.length <= 1) return null
+  // 纯主 agent 任务无「按 agent 过滤」可言 → 不渲染;但一旦有选中态(filterAgentId 非空),
+  // 即便名单暂时只剩一个 agent(如台账/尾段重建的空窗期)也必须留行:否则选中描边一闪而逝,
+  // 用户既看不到当前只看谁,也没有再点一次取消过滤的入口。
+  if (agents.length <= 1 && !filterAgentId) return null
   return (
     <div className="nagent-agent-list" role="group" aria-label="任务 agent 列表">
       <div className="nagent-agent-list__frame">

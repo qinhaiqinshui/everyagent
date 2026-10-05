@@ -5,7 +5,7 @@
  * (滚动时淡入,停止后淡出)。
  */
 .nagent-agent-list {
-  padding: 4px 0 0;
+  padding: 2px 0 0;
 }
 
 /* 恰好包裹滚动行,作为覆盖式滚动指示条的定位锚 */
@@ -17,7 +17,10 @@
   display: flex;
   gap: 8px;
   overflow-x: auto;
-  padding: 4px 2px 6px;
+  /* 内四周留白必须 ≥ 选中描边的外扩(outline-offset 2px + 宽 2px = 4px):
+     overflow-x:auto 会把 overflow-y 一并变成 auto,滚动容器即裁切边界,留白不足
+     时选中环会被整条滚行裁掉(首尾胶囊左右两侧尤其明显)。 */
+  padding: 6px 6px 8px;
   scrollbar-width: none;
 }
 
@@ -107,6 +110,9 @@
   color: var(--text-muted);
 }
 
+/* 选中态(只看该 agent)——唯一视觉标识是这圈外扩描边,因此滚行的内留白必须容得下它
+   (见 .nagent-agent-list__scroll padding);另:AgentListPanel 在有选中态时不折叠整行,
+   避免数据源重建的空窗期把描边闪掉(2026-10 排查:子 agent 胶囊选中态一闪而逝)。 */
 .nagent-agent.is-selected {
   outline: 2px solid var(--accent-blue);
   outline-offset: 2px;
