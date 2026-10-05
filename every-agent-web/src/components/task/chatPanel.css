@@ -693,9 +693,18 @@
 }
 
 /* 用户消息回放胶囊：复用输入框 .nagent-inline-chip 样式，仅追加上下文适配。
-   回放胶囊无 ✕ 关闭按钮（只读），与输入框胶囊视觉一致。 */
+   回放胶囊无 ✕ 关闭按钮（只读），与输入框胶囊视觉一致。
+   样式对齐项目 ui-chip--command：accent-blue-dim 背景 + accent-blue 文字、
+   无边框，与 footer 胶囊统一视觉语言（暗/亮两套主题均通过 CSS 变量自适应）。 */
 .nagent-inline-chip--replay {
   max-width: 100%;
+  border-color: transparent;
+  background: var(--accent-blue-dim);
+  color: var(--accent-blue);
+}
+
+.nagent-inline-chip--replay:hover {
+  background: color-mix(in srgb, var(--accent-blue) 20%, var(--accent-blue-dim));
 }
 
 .nagent-msg__selection-summary {
