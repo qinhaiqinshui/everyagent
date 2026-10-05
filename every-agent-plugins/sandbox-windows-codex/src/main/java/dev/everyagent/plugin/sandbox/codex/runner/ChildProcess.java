@@ -141,6 +141,7 @@ public final class ChildProcess {
             throw new IllegalArgumentException("empty command");
         }
         boolean inherit = inheritConsole; // 生产由 spawn(...) 传入 ConsoleProbe 的探测结论
+        calibratePlainSpawn(cwd);
         OutputFiles files = OutputFiles.tryCreate(cwd);
         if (files != null) {
             try {
@@ -152,6 +153,49 @@ public final class ChildProcess {
             }
         }
         return spawnViaPipes(hToken, argv, cwd, env, desktop, inherit);
+    }
+
+    /** nano 区间耗时(ms,诊断打点用)。 */
+    private static long ms(long fromNanos, long toNanos) {
+        return (toNanos - fromNanos) / 1_000_000L;
+    }
+
+    /**
+     * 8s 慢 spawn 定位用对照实验(2026-10):每次 spawn 前用<b>普通 CreateProcessW(继承自身
+     * 令牌)</b>起一个 {@code cmd /c exit},与随后真正的受限令牌 {@code CreateProcessAsUserW}
+     * 各自计时对照——若 plain 快而 AsUser 慢,慢点在"受限令牌创建进程"路径(安全软件对
+     * token-manipulation + spawn 组合的同步检查);若两者同慢,则是进程创建本身被拖慢。
+     * 纯诊断:EA_CALIB=0 可关;结论落 runner-stderr.log,诊断完成后随打点一并清理。
+     */
+    private static void calibratePlainSpawn(String cwd) {
+        if ("0".equals(System.getenv("EA_CALIB"))) {
+            return;
+        }
+        try {
+            WinBase.STARTUPINFO si = new WinBase.STARTUPINFO();
+            si.cb = new WinDef.DWORD(si.size());
+            char[] cmd = "cmd.exe /d /c exit\0".toCharArray();
+            WinBase.PROCESS_INFORMATION pi = new WinBase.PROCESS_INFORMATION();
+            long t0 = System.nanoTime();
+            if (!Kernel32Ex.INSTANCE.CreateProcessW(null, cmd, null, null, false,
+                    new WinDef.DWORD(WinBase.CREATE_NO_WINDOW), null, cwd, si, pi)) {
+                System.err.println("[codex-runner] calib plain CreateProcessW failed: "
+                        + Kernel32Ex.INSTANCE.GetLastError());
+                return;
+            }
+            long spawnMs = ms(t0, System.nanoTime());
+            long t1 = System.nanoTime();
+            Kernel32Ex.INSTANCE.WaitForSingleObject(pi.hProcess, 10_000);
+            long waitMs = ms(t1, System.nanoTime());
+            IntByReference rc = new IntByReference();
+            Kernel32Ex.INSTANCE.GetExitCodeProcess(pi.hProcess, rc);
+            closeQuietly(pi.hProcess);
+            closeQuietly(pi.hThread);
+            System.err.println("[codex-runner] calib plain CreateProcessW=" + spawnMs
+                    + "ms wait=" + waitMs + "ms rc=" + rc.getValue());
+        } catch (Throwable t) {
+            System.err.println("[codex-runner] calib failed: " + t);
+        }
     }
 
     /** 文件承载:stdin 仍用管道(交互输入语义不变),stdout/stderr 用落盘文件句柄。 */
@@ -263,6 +307,7 @@ public final class ChildProcess {
         si.lpDesktop = desktop;
 
         // 属性列表：JOB_LIST（原子挂接，失败即拒绝 spawn）+ HANDLE_LIST
+        long tAttrs0 = System.nanoTime();
         LongByReference size = new LongByReference();
         Kernel32Ex.INSTANCE.InitializeProcThreadAttributeList(null, 2, 0, size);
         Memory attrList = new Memory(size.getValue());
@@ -291,14 +336,24 @@ public final class ChildProcess {
 
             int flags = WinBase.CREATE_UNICODE_ENVIRONMENT | WinBase.EXTENDED_STARTUPINFO_PRESENT
                     | (inheritConsole ? 0 : WinBase.CREATE_NO_WINDOW);
+            long tEnv0 = System.nanoTime();
             Pointer envBlock = EnvBlock.makeEnvBlock(env);
             char[] cmdline = (argvToCommandLine(argv) + "\0").toCharArray();
+            long tSpawn0 = System.nanoTime();
             WinBase.PROCESS_INFORMATION pi = new WinBase.PROCESS_INFORMATION();
             if (!Kernel32Ex.INSTANCE.CreateProcessAsUserW(hToken, null, cmdline,
                     null, null, true, flags, envBlock, cwd, si, pi)) {
                 throw Win32Exception.of("CreateProcessAsUserW");
             }
+            long tSpawn1 = System.nanoTime();
             closeQuietly(pi.hThread);
+            // 8s 慢 spawn 定位打点(2026-10):attrs=属性表准备 env=环境块+命令行
+            // createAsUserW=受限令牌创建进程本体。与 calib 行(普通 CreateProcessW)对照,
+            // 二者之差即"受限令牌路径"被安全软件同步检查拖慢的净额。
+            System.err.println("[codex-runner] spawn-timing attrs=" + ms(tAttrs0, tEnv0)
+                    + "ms env=" + ms(tEnv0, tSpawn0)
+                    + "ms createAsUserW=" + ms(tSpawn0, tSpawn1)
+                    + "ms inherit=" + inheritConsole);
             return new ChildProcess(job, pi, inW, outR, errR, files);
         } finally {
             Kernel32Ex.INSTANCE.DeleteProcThreadAttributeList(attrList);
