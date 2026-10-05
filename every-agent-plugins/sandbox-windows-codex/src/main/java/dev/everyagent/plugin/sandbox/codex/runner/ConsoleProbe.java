@@ -462,7 +462,17 @@ public final class ConsoleProbe {
                 ? workspaceRoot.resolve(".everyagent").resolve("tmp")
                 : Path.of(System.getProperty("java.io.tmpdir"));
         Files.createDirectories(dir);
-        return Files.createTempFile(dir, prefix, suffix);
+        // 不用 Files.createTempFile:其内部 SecureRandom 首次取数在无 profile 账户下
+        // 实测恒 ~8s(CryptAcquireContext 超时)——探测真要跑起来时反而引入每 runner 8s。
+        // 借 OutputFiles.createExclusive(JNA CREATE_NEW,pid+纳秒命名,零 crypto)建空文件,
+        // 随即关句柄返回路径,由调用方 writeString 覆写内容。suffix 参数保留兼容调用点。
+        ChildProcess.OutputFiles.NewFile f = ChildProcess.OutputFiles.createExclusive(
+                dir, prefix.endsWith("-") ? prefix : prefix + "-");
+        if (f == null) {
+            throw new java.io.IOException("createExclusive failed for probe file in " + dir);
+        }
+        Kernel32Ex.INSTANCE.CloseHandle(f.handle());
+        return f.path();
     }
 
     private static void deleteQuietly(Path p) {

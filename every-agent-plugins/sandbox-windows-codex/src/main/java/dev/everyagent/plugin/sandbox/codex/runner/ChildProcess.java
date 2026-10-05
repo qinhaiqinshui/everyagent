@@ -570,7 +570,7 @@ public final class ChildProcess {
      * <p>关键:文件以 {@code FILE_SHARE_READ} 打开,子进程(及其原生孙进程 rg/git)直接写原始
      * 字节,PS 不参与转码——这就是中文不乱码的全部原因,不是"读端解码技巧"。
      */
-    private static final class OutputFiles {
+    static final class OutputFiles {
 
         private final Path outPath;
         private final Path errPath;
@@ -595,40 +595,68 @@ public final class ChildProcess {
                         + "ms (null)");
                 return null;
             }
-            Path o = null;
-            Path e = null;
             WinNT.HANDLE oh = null;
             WinNT.HANDLE eh = null;
-            long t2 = t1;
-            long t3 = t1;
-            long t4 = t1;
-            long t5 = t1;
             try {
-                o = Files.createTempFile(dir, "ea-codex-out-", ".tmp");
-                t2 = System.nanoTime();
-                e = Files.createTempFile(dir, "ea-codex-err-", ".tmp");
-                t3 = System.nanoTime();
-                oh = openWriteHandle(o);
-                t4 = System.nanoTime();
-                eh = openWriteHandle(e);
-                t5 = System.nanoTime();
-                if (oh == null || eh == null) {
+                NewFile o = createExclusive(dir, "ea-codex-out-");
+                long t2 = System.nanoTime();
+                NewFile e = o == null ? null : createExclusive(dir, "ea-codex-err-");
+                long t3 = System.nanoTime();
+                if (o == null || e == null) {
+                    if (o != null) {
+                        closeQuietly(o.handle());
+                        delete(o.path());
+                    }
                     return null;
                 }
-                return new OutputFiles(o, e, oh, eh);
-            } catch (IOException | RuntimeException ex) {
+                oh = o.handle();
+                eh = e.handle();
+                // 8s 慢 spawn 定位打点(2026-10):真凶已锁定——Files.createTempFile 内部
+                // TempFileHelper 的 SecureRandom 首次取数(Windows Crypto/DPAPI,无 profile
+                // 账户 CryptAcquireContext 超时,实测恒 ~8.0s,与 RTP/进程创建无关,进程内
+                // 只付一次)。故文件创建改走 JNA CREATE_NEW(名字 pid+纳秒,零 crypto),
+                // 一次到位同时拿句柄。本打点验证 out/err 均应 <5ms,稳定后随诊断一并清理。
+                System.err.println("[codex-runner] file-timing scratchDir=" + ms(t0, t1)
+                        + "ms out=" + ms(t1, t2) + "ms err=" + ms(t2, t3) + "ms");
+                return new OutputFiles(o.path(), e.path(), oh, eh);
+            } catch (RuntimeException ex) {
                 closeQuietly(oh);
                 closeQuietly(eh);
-                delete(o);
-                delete(e);
                 return null;
-            } finally {
-                // 8s 慢 spawn 定位打点(2026-10):实测 stage 段 8.3s 而 AsUser 仅 19ms——
-                // 嫌疑收敛到本方法的文件创建/打开(安全软件对新文件的同步检查),分段计时钉死。
-                System.err.println("[codex-runner] file-timing scratchDir=" + ms(t0, t1)
-                        + "ms tmpOut=" + ms(t1, t2) + "ms tmpErr=" + ms(t2, t3)
-                        + "ms hOut=" + ms(t3, t4) + "ms hErr=" + ms(t4, t5) + "ms");
             }
+        }
+
+        /** JNA 建文件结果:路径 + 已打开的写句柄。 */
+        record NewFile(Path path, WinNT.HANDLE handle) {
+        }
+
+        /**
+         * 以 {@code CREATE_NEW} 独占创建并直接持有写句柄——<b>绝不走
+         * {@link Files#createTempFile}</b>:其内部 TempFileHelper 的静态 SecureRandom
+         * 在无 profile 账户下首次取数实测恒 ~8.0s(CryptAcquireContext 超时),每命令
+         * 一个 runner JVM 即每命令付 8s。随机性由 pid+纳秒+尝试序保证,撞名
+         * (ERROR_FILE_EXISTS)换序号重试。
+         */
+        static NewFile createExclusive(Path dir, String prefix) {
+            int pid = Kernel32Ex.INSTANCE.GetCurrentProcessId();
+            for (int i = 0; i < 4; i++) {
+                String name = prefix + pid + "-" + Long.toHexString(System.nanoTime())
+                        + "-" + i + ".tmp";
+                Path p = dir.resolve(name);
+                WinNT.HANDLE h = Kernel32Ex.INSTANCE.CreateFile(p.toString(),
+                        WinNT.GENERIC_WRITE,
+                        WinNT.FILE_SHARE_READ | WinNT.FILE_SHARE_WRITE | WinNT.FILE_SHARE_DELETE,
+                        null, WinNT.CREATE_NEW, WinNT.FILE_ATTRIBUTE_NORMAL, null);
+                if (h != null && h.getPointer() != null
+                        && Pointer.nativeValue(h.getPointer()) != -1) {
+                    return new NewFile(p, h);
+                }
+                int err = Kernel32Ex.INSTANCE.GetLastError();
+                if (err != 80) { // 80=ERROR_FILE_EXISTS,撞名才重试
+                    return null;
+                }
+            }
+            return null;
         }
 
         /** 落点:优先 {@code <cwd>/.everyagent/tmp},退系统 temp;都不可用返回 null。 */
@@ -652,18 +680,6 @@ public final class ChildProcess {
             } catch (IOException | RuntimeException e) {
                 return null;
             }
-        }
-
-        /** 以可共享(读+写+删)方式打开写句柄,供子进程继承后直写原始字节。 */
-        private static WinNT.HANDLE openWriteHandle(Path p) {
-            WinNT.HANDLE h = Kernel32Ex.INSTANCE.CreateFile(p.toString(), WinNT.GENERIC_WRITE,
-                    WinNT.FILE_SHARE_READ | WinNT.FILE_SHARE_WRITE | WinNT.FILE_SHARE_DELETE,
-                    null, WinNT.CREATE_ALWAYS, WinNT.FILE_ATTRIBUTE_NORMAL, null);
-            if (h == null || h.getPointer() == null
-                    || Pointer.nativeValue(h.getPointer()) == -1) { // INVALID_HANDLE_VALUE
-                return null;
-            }
-            return h;
         }
 
         /** 子进程已持有副本,父侧写句柄即可关(不关也不影响读,但白占句柄)。 */
