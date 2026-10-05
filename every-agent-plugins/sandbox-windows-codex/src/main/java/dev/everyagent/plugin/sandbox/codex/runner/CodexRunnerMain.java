@@ -121,8 +121,9 @@ public final class CodexRunnerMain {
         // openPipe 之前,启动预算翻倍;若本机控制台 API 可用,还要再叠两次 powershell 探针
         // spawn(每次预算 25s)。真要评估"继承控制台"这条路,接入位置必须是
         // run() 内 stage("pipes opened") 之后、且默认关闭由环境变量开启,绝不能再压到
-        // 管道连接之前。非 ASCII 正确性由文件承载(ChildProcess.OutputFiles)与 rg 包装
-        // (plugin-api RgShim)保证,不依赖这条探测。
+        // 管道连接之前。非 ASCII 正确性的兜底是文件承载(ChildProcess.OutputFiles,直出路径);
+        // PS 管道内捕获路径的正解是控制台码页探测(2026-10 起默认启用,EA_CONPROBE=0 可关,
+        // 接入点见 run() 内 stage("pipes opened") 之后),rg 命令名特判包装(plugin-api RgShim)已删除。
         System.exit(run(in, out));
     }
 
@@ -177,16 +178,17 @@ public final class CodexRunnerMain {
         stage("pipe-in connected (CreateFileW in)");
         WinNT.HANDLE out = openPipe(pipeOutName, WinNT.FILE_GENERIC_WRITE);
         stage("pipes opened");
-        // 控制台码页探测：默认关闭，EA_CONPROBE=1 才开，且必须在管道已连接之后、
+        // 控制台码页探测：默认启用，EA_CONPROBE=0 显式关闭；必须在管道已连接之后、
         // 并在后台线程里跑——它既不能压 pipe-connect 预算，也不能压 spawn_ready 预算。
-        // 结论落地是"后续命令的 spawn 形态可能变化"，这是诊断用途的可接受代价（见 ConsoleProbe）。
-        if ("1".equals(System.getenv("EA_CONPROBE"))) {
+        // 结论落地是"后续命令的 spawn 形态可能变化"(探测完成前的首条命令仍按现状 spawn,
+        // 可接受)；复测不通过自动回退 CREATE_NO_WINDOW(见 ConsoleProbe)。
+        if (!"0".equals(System.getenv("EA_CONPROBE"))) {
             Thread.ofVirtual().name("codex-console-probe").start(() -> {
                 try {
                     ConsoleProbe.runOnce(java.nio.file.Path.of(System.getProperty("user.dir")));
                     // 结论落地:由 ChildProcess 自己的字段承接(它不在 spawn 路径上引用本类)
                     ChildProcess.setInheritConsoleMode(ConsoleProbe.inheritConsole());
-                    System.err.println("[codex-runner] console probe (EA_CONPROBE=1): verdict="
+                    System.err.println("[codex-runner] console probe: verdict="
                             + ConsoleProbe.verdict()
                             + " inheritConsole=" + ConsoleProbe.inheritConsole()
                             + " cp=" + ConsoleProbe.cpAtStart() + "->" + ConsoleProbe.cpNow());

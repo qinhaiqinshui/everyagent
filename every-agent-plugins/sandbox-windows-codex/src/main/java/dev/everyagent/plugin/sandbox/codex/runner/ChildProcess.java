@@ -98,7 +98,7 @@ public final class ChildProcess {
 
     /**
      * 子进程是否继承 runner 控制台(= 不加 {@code CREATE_NO_WINDOW})。<b>默认 false</b>,即修复前
-     * 行为;只有显式开启的码页探测(EA_CONPROBE=1)通过复测后,才由 {@link CodexRunnerMain} 调
+     * 行为;只有码页探测(默认启用,EA_CONPROBE=0 可关)通过复测后,才由 {@link CodexRunnerMain} 调
      * {@link #setInheritConsoleMode} 置真。
      *
      * <p>刻意<b>不在这里引用 {@code ConsoleProbe}</b>:引用其静态方法会让该类在第一次 spawn 时
@@ -109,7 +109,7 @@ public final class ChildProcess {
      */
     private static volatile boolean inheritConsoleMode;
 
-    /** 由启动期的码页探测设置(见 {@link CodexRunnerMain} 的 EA_CONPROBE 分支)。 */
+    /** 由启动期的码页探测设置(默认启用,EA_CONPROBE=0 可关;见 CodexRunnerMain)。 */
     public static void setInheritConsoleMode(boolean on) {
         inheritConsoleMode = on;
     }

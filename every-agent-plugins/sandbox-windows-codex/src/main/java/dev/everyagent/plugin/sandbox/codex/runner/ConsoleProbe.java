@@ -66,11 +66,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * 采用后的效果是：PowerShell 自己就把 rg / git / npm / cmd 的原生输出解对，<b>不需要 ConPTY</b>
  * （免掉 stdout/stderr 合并、VT 序列、列宽换行那套协议改造），也不必给每个命令单独做包装。
  *
- * <h2>为什么仍保留文件承载与 rg 包装</h2>
- * 探测可能落在 BAD-BAD 分支（比如拿不到控制台、非 Windows、令牌操作被拒），或将来某台机器上
- * 继承控制台带来别的副作用；那时唯一可靠的路径仍是"绕开 PS 的解码"——即
- * {@link ChildProcess} 的文件承载与 plugin-api 的 {@code RgShim}。两者是<b>互为兜底</b>，
- * 不是重复劳动。
+ * <h2>为什么仍保留文件承载</h2>
+ * 探测可能落在降级分支（拿不到控制台、非 Windows、令牌操作被拒、复测仍 BAD），或将来某台机器上
+ * 继承控制台带来别的副作用；那时"直出"路径的唯一可靠保障仍是"绕开 PS 的解码"——即
+ * {@link ChildProcess} 的文件承载，与探测<b>互为兜底</b>而非重复劳动。降级分支下 <b>PS 管道内
+ * 捕获</b>（{@code … | Out-String}、{@code $(rg …)}）的乱码暂无解，verdict 落 runner-stderr.log
+ * 供现场判断是否需要给 runner 接私有桌面/评估 ConPTY。
  *
  * <h2>已知代价（实测口径写清，便于复盘）</h2>
  * 采用继承模式后，控制台码页是<b>整个控制台</b>的状态，同控制台下后续启动的其它子进程都会读到
@@ -147,8 +148,8 @@ public final class ConsoleProbe {
     }
 
     /**
-     * 跑一次探测（幂等；仅由 {@link CodexRunnerMain} 在 {@code EA_CONPROBE=1} 时、
-     * <b>管道连接之后</b>的后台线程调用）。任何失败路径都收敛到"不改变现状"。
+     * 跑一次探测（幂等；由 {@link CodexRunnerMain} 默认启动——{@code EA_CONPROBE=0} 显式
+     * 关闭——且在<b>管道连接之后</b>的后台线程调用）。任何失败路径都收敛到"不改变现状"。
      *
      * <p>结论通过 {@link ChildProcess#setInheritConsoleMode} 落地——{@code ChildProcess}
      * 自身不引用本类，否则默认配置（探测关闭）也会触发本类加载，而 runner 子 JVM 的

@@ -1,6 +1,5 @@
 package dev.everyagent.plugin.sandbox.mic;
 
-import dev.everyagent.plugin.api.shell.RgShim;
 import dev.everyagent.plugin.api.shell.ShellExecutor;
 import dev.everyagent.plugin.api.shell.ShellTool;
 import dev.everyagent.plugin.api.spi.ToolContext;
@@ -22,9 +21,8 @@ import java.util.List;
  * {@link MicRg#resolve} 解析后传入（已转为其所在目录路径），不再依赖 worker 核心的 rg。
  * PATH 注入由本插件自行包装 ShellExecutor 实现，核心不感知 extraBinDir。
  *
- * <p>rg 的 PowerShell 包装本插件不再自持一份,与 codex 后端共用 plugin-api 的 {@link RgShim}
- * ——要治的两件事(无控制台 + CLM 下原生输出被按 GBK 转码、无搜索路径时 rg 转去过滤 NUL
- * stdin)都由 PowerShell 宿主形态决定,与选哪个沙箱后端无关。
+ * <p>非 ASCII 正确性<b>不做命令名特判</b>（与 codex 后端共用的 rg 包装 plugin-api RgShim
+ * 已删除，2026-10 用户决策）：直出路径由输出承载契约（stdout/stderr 文件承载）保证。
  */
 public class WindowsMicShellToolProvider implements ToolProvider {
 
@@ -51,29 +49,25 @@ public class WindowsMicShellToolProvider implements ToolProvider {
         if (base == null) {
             return List.of();
         }
-        String ws = ctx.workspaceRoot();
-        ShellExecutor exec = (rgDir != null && ws != null && !ws.isBlank())
-                ? withRgInPath(base, rgDir, Path.of(ws)) : base;
+        ShellExecutor exec = rgDir != null ? withRgInPath(base, rgDir) : base;
         return List.of(ShellTool.powershell(exec)
                 .appendDescription("rg 已加入 PATH,可直接执行 rg 命令，内容搜索尽量使用rg命令，性能更好;"
-                        + "rg 省略搜索路径时默认搜当前工作区(已自动补齐,不会静默读空 stdin);"
+                        + "rg 未给搜索路径时会静默过滤 null stdin 而返回空,请显式给搜索路径;"
                         + "中文等非 ASCII 输出已正确解码,无需手动处理编码。")
                 .callback());
     }
 
     /**
-     * 包装执行器：命令前预置 PATH 注入 + rg 包装（PowerShell 语法）。
+     * 包装执行器：命令前预置 PATH 注入（PowerShell 语法）。
      *
      * <p>PATH 注入语句必须是 {@code $env:PATH = '<dir>;' + $env:PATH;}。引号错位
      *（写成 {@code '...';' + $env:PATH;}）会留下未闭合单引号串,把后续包装与用户命令一起
      * 吞进字符串里：注入静默失效、命令语法走形——实测曾因 POWERSHELL_PREFIX 里恰好有引号
      * 而侥幸闭合,所以一直没暴露。
      */
-    private static ShellExecutor withRgInPath(ShellExecutor base, Path rgDir,
-            Path workspaceRoot) {
+    private static ShellExecutor withRgInPath(ShellExecutor base, Path rgDir) {
         String dir = rgDir.toString().replace("'", "''");
-        String head = "$env:PATH = '" + dir + ";' + $env:PATH; "
-                + RgShim.build(rgDir.resolve("rg.exe").toString(), workspaceRoot);
+        String head = "$env:PATH = '" + dir + ";' + $env:PATH; ";
         return (command, shell) -> "powershell".equals(shell)
                 ? base.execute(head + command, shell)
                 : base.execute(command, shell);
