@@ -28,8 +28,11 @@ public final class ExecResults {
      *（见 worker {@code OsSandbox#spawnToFileRedirected}）。原因:PowerShell 5.1 的
      * stdout 被重定向到<b>管道</b>时,{@code [Console]::OutputEncoding} 取系统 OEM 码页
      *（中文 Windows=936/GBK）而非控制台码页——{@code chcp 65001} 改的是控制台,
-     * 不同步到它;而沙箱账户受 WDAC/AppLocker 进入 CLM(Constrained Language Mode),
-     * 属性 setter 被策略拒绝,运行时改 {@code OutputEncoding} 这条路也堵死。于是原生子进程
+     * 不同步到它;而直接 spawn 的 powershell(无控制台、句柄为文件/管道)实测进入
+     * CLM(Constrained Language Mode)——本机经查无任何 WDAC/AppLocker/SAC 策略,
+     * 触发源是启动形态本身;经 codex 后端的 cmd-chcp 包装链(cmd 建控制台后 PS 同
+     * 控制台启动)实测恢复 FullLanguage。但无论 FullLanguage 与否,属性 setter 都
+     * 不该被依赖——编码正解见 ARCHITECTURE「cmd-chcp 包装」条(PS 启动前设 CP)。于是原生子进程
      *（rg/git 等）的 UTF-8 字节先被 PS 按 GBK 解码(非法序列成 U+FFFD,信息当场丢失),
      * 再按 GBK 编码写回管道——<b>读取端无论怎么智能解码都无法还原</b>。
      * 改为文件承载后,PS 的原生子进程直接继承该文件句柄写原始字节,PS 完全不参与转码,
