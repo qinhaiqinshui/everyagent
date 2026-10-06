@@ -11,6 +11,9 @@
  *
  * .eap 布局（与 worker 端解包约定逐字对齐，PluginRpcMethods.extractEap）：
  *   <pluginId>/plugin.json                     恒有
+ *   <pluginId>/README.md                       插件根 README（忽略大小写匹配，缺省跳过）：
+ *                                              安装后扩展详情页 README 区经 plugin.webSource
+ *                                              ('readme.md') 读取（worker 侧大小写不敏感回退）
  *   <pluginId>/lib/*.jar                       清单含 main（java/full 形态）：target/ 下非 sources/javadoc jar 全收
  *   <pluginId>/web/index.js|index.css|*.map    清单含 webMain（web/full 形态）：web/ 递归收集
  * 顶层目录名必须 = plugin.json 的 id：worker 取「第一个带 / 的条目」首段当 pluginId；条目全无 /
@@ -341,6 +344,14 @@ function collectWebArtifacts(webDir) {
  */
 function collectFiles(absPlugin, manifest) {
   const files = [{ zipName: `${manifest.id}/plugin.json`, abs: path.join(absPlugin, 'plugin.json') }]
+
+  // README.md：插件根 README 原文件名进包（忽略大小写匹配）——安装后扩展详情页
+  // README 区经 plugin.webSource('readme.md') 读取（worker 侧同目录大小写不敏感
+  // 回退）；缺 README 的工程跳过不报错（可选产物，不入 §2.3 的 fail-fast 校验）。
+  const readme = fs
+    .readdirSync(absPlugin)
+    .find((f) => /^readme\.md$/i.test(f) && fs.statSync(path.join(absPlugin, f)).isFile())
+  if (readme) files.push({ zipName: `${manifest.id}/${readme}`, abs: path.join(absPlugin, readme) })
 
   if (manifest.main) {
     const targetDir = path.join(absPlugin, 'target')

@@ -217,13 +217,14 @@ sha256sum -c my-tool-0.1.0.eap.sha256                     # 旁文件与 .eap �
 ```text
 <pluginId>/
 ├── plugin.json                    恒有
+├── README.md                      插件根 README（忽略大小写匹配，缺省跳过）——安装后扩展详情页 README 区经 plugin.webSource("readme.md") 读取
 ├── lib/                           清单含 main（java/full 形态）：target/ 下非 sources/javadoc 的 *.jar 全收
 │   └── <任意名>.jar
 └── web/                           清单含 webMain（web/full 形态）：web/ 递归收入 index.js / index.css / *.map
     └── index.js
 ```
 
-打包形态由 `plugin.json` 判定：有 `main` 就必须有 `target/*.jar`（纯 sources/javadoc 不算），有 `webMain` 就必须有 `web/index.js`（宿主前端硬编码加载这个路径，`webMain` 的值不被消费）。纯 web 插件没有 `target/` 属正常——只打 `plugin.json` + `web/`。
+打包形态由 `plugin.json` 判定：有 `main` 就必须有 `target/*.jar`（纯 sources/javadoc 不算），有 `webMain` 就必须有 `web/index.js`（宿主前端硬编码加载这个路径，`webMain` 的值不被消费）。纯 web 插件没有 `target/` 属正常——只打 `plugin.json` + `web/`（+ 可选 `README.md`）。
 
 失败与退出码（沿用主命令 EXIT 体系，三类各自区分）：
 

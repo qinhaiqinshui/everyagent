@@ -56,6 +56,7 @@ sha256sum -c my-tool-0.1.0.eap.sha256
 ```text
 <pluginId>/
 ├── plugin.json                    恒有
+├── README.md                      插件根 README（忽略大小写匹配，缺省跳过）——安装后扩展详情页 README 区经 plugin.webSource("readme.md") 读取
 ├── lib/                           清单含 main（java/full 形态）：target/ 下非 sources/javadoc 的 *.jar 全收
 │   └── <任意名>.jar
 └── web/                           清单含 webMain（web/full 形态）：web/ 递归收入 index.js / index.css / *.map
@@ -64,7 +65,7 @@ sha256sum -c my-tool-0.1.0.eap.sha256
 
 外部 java 插件的 jar 约定就是 `<id>/lib/*.jar`（`every-agent-worker/src/main/java/dev/everyagent/worker/plugin/scanner/ExternalPluginScanner.java:13-14` 类注释「jar 产物约定放在各插件目录的 `lib/` 下」，加载端为 `PluginLoader`），`pack` 的 `lib/` 布局与之逐字对齐。
 
-**包里只有产物，没有源码**：`pack` 按上面的白名单收集——`plugin.json`、`target/` 下的 jar、`web/` 下的 bundle；`src/`、`pom.xml`、`web/index.ts`、`node_modules/`、`tsconfig.json` 一概不进包。所以 `.eap` 不能拿来重建工程，只能装机；要分发源码请走 git 仓库。
+**包里只有产物，没有源码**：`pack` 按上面的白名单收集——`plugin.json`、插件根 `README.md`（可选）、`target/` 下的 jar、`web/` 下的 bundle；`src/`、`pom.xml`、`web/index.ts`、`node_modules/`、`tsconfig.json` 一概不进包。所以 `.eap` 不能拿来重建工程，只能装机；要分发源码请走 git 仓库。
 
 ### 2.3 形态判定规则
 
