@@ -194,19 +194,47 @@ public final class CodexCommandExecutor {
         long tConfig = System.nanoTime();
 
         long timeoutMs = manager.execTimeoutMs();
+        // 命令投递(仅 PowerShell 分支):主形态=脚本文件承载(-File),PS 报错定位引用
+        // 用户命令行而非内部包装前缀(见 commandArgvForFile javadoc);文件写失败回退
+        // -EncodedCommand,行为无回退仅定位质量回退。CMD 分支保持 commandArgv 原样。
+        Path cmdScript = null;
+        List<String> argv;
+        if (shell.isPowerShell) {
+            try {
+                cmdScript = writeCommandScript(workspaceRoot, command);
+                argv = commandArgvForFile(cmdScript);
+            } catch (IOException | RuntimeException e) {
+                cmdScript = null;
+                argv = commandArgv(command);
+                LOG.log(System.Logger.Level.WARNING,
+                        "[exec] 命令脚本文件承载失败,回退 -EncodedCommand: {0}", e.toString());
+            }
+        } else {
+            argv = commandArgv(command);
+        }
         CodexSandboxSession.SessionSpec spec = new CodexSandboxSession.SessionSpec(
-                commandArgv(command), workspaceRoot.toString(),
+                argv, workspaceRoot.toString(),
                 childEnv(rgBinary, workspaceRoot, sandboxProfileDir()),
                 timeoutMs > 0 ? timeoutMs : null, policy.writeRoots(), List.of(),
                 CapSids.workspaceCapSidForCwd(home, workspaceRoot),
                 wireName(identity), false, null);
-        SessionRun run = aggregate(cfg, spec, timeoutMs);
-        LOG.log(System.Logger.Level.INFO,
-                "[exec] timing preflight={0}ms runnerCfg={1}ms sessionExec={2}ms",
-                new Object[] { (tPreflight - tStart) / 1_000_000L,
-                        (tConfig - tPreflight) / 1_000_000L,
-                        (System.nanoTime() - tConfig) / 1_000_000L });
-        return run;
+        try {
+            SessionRun run = aggregate(cfg, spec, timeoutMs);
+            LOG.log(System.Logger.Level.INFO,
+                    "[exec] timing preflight={0}ms runnerCfg={1}ms sessionExec={2}ms",
+                    new Object[] { (tPreflight - tStart) / 1_000_000L,
+                            (tConfig - tPreflight) / 1_000_000L,
+                            (System.nanoTime() - tConfig) / 1_000_000L });
+            return run;
+        } finally {
+            if (cmdScript != null) {
+                try {
+                    Files.deleteIfExists(cmdScript);
+                } catch (IOException ignored) {
+                    // 尽力清理;.everyagent/tmp 随任务清理兜底
+                }
+            }
+        }
     }
 
     /** 收帧聚合（父侧看门狗：超时先 terminate 再等 Exit 帧；宽限 TEARDOWN_GRACE_MS）。 */
@@ -291,21 +319,22 @@ public final class CodexCommandExecutor {
     /**
      * shell 命令 → 子进程 argv：按探测到的 shell 分派。
      *
-     * <p>PowerShell 分支走 <b>cmd-chcp 包装</b>（BUG-1 混排编码的正解，ARCHITECTURE
-     * 「cmd-chcp 包装」条）：CLM 禁 {@code [Console]::OutputEncoding} 的 setter，但 getter
+     * <p><b>回退形态</b>(PowerShell 分支):脚本文件承载({@link #commandArgvForFile})是主形态,
+     * 本方法仅在脚本文件写失败时使用。仍走 <b>cmd-chcp 包装</b>(BUG-1 混排编码的正解,
+     * ARCHITECTURE「cmd-chcp 包装」条):CLM 禁 {@code [Console]::OutputEncoding} 的 setter,但 getter
      * 在 PS 进程<b>首次访问时</b>才读 {@code GetConsoleOutputCP()} 并缓存——把
-     * {@code chcp.com 65001} 挪到 powershell.exe <b>启动之前</b>（cmd 先建隐藏控制台并设
-     * CP=65001，PS 在同一控制台里启动），PS 自身输出与「管道内捕获原生输出」的解码即全部
-     * UTF-8，与原生工具的 UTF-8 字节同流同码，严格解码一次通过。脚本经
-     * {@code -EncodedCommand}（base64(UTF-16LE)，Java getBytes 不带 BOM）投递：载荷是
-     * cmd 安全字符集，免疫 {@code &}/{@code |}/引号嵌套解析；{@code /d} 跳过 AutoRun。
-     * 实测 git/rg 管道捕获与直出全净，退出码经 cmd→powershell 正确传导。
+     * {@code chcp.com 65001} 挪到 powershell.exe <b>启动之前</b>(cmd 先建隐藏控制台并设
+     * CP=65001,PS 在同一控制台里启动),PS 自身输出与「管道内捕获原生输出」的解码即全部
+     * UTF-8,与原生工具的 UTF-8 字节同流同码,严格解码一次通过。脚本经
+     * {@code -EncodedCommand}(base64(UTF-16LE),Java getBytes 不带 BOM)投递:载荷是
+     * cmd 安全字符集,免疫 {@code &}/{@code |}/引号嵌套解析;{@code /d} 跳过 AutoRun。
+     * 实测 git/rg 管道捕获与直出全净,退出码经 cmd→powershell 正确传导。
      */
     List<String> commandArgv(String command) {
         if (shell.isPowerShell) {
-            // -ExecutionPolicy Bypass：沙箱账户默认 Restricted 策略会拦截 .ps1 脚本
-            // （如 npm.ps1），per-process 旁路不影响系统策略。
-            // 尾部 POWERSHELL_EXIT_TAIL：把最后一个原生子进程的退出码转成 powershell.exe 的
+            // -ExecutionPolicy Bypass:沙箱账户默认 Restricted 策略会拦截 .ps1 脚本
+            // (如 npm.ps1),per-process 旁路不影响系统策略。
+            // 尾部 POWERSHELL_EXIT_TAIL:把最后一个原生子进程的退出码转成 powershell.exe 的
             // 进程码——否则 Exit 帧里的退出码恒 0,模型分不清 rg「无匹配=1」与「用错=2」。
             String script = ExecResults.POWERSHELL_PREFIX + command
                     + ExecResults.POWERSHELL_EXIT_TAIL;
@@ -316,6 +345,67 @@ public final class CodexCommandExecutor {
                             + " -NoProfile -ExecutionPolicy Bypass -EncodedCommand " + encoded);
         }
         return List.of(shell.exe, "/c", "chcp 65001 >nul & " + command);
+    }
+
+    /**
+     * <b>主形态</b>:三段式脚本(prefix/用户命令/exit 尾部各占一行,见 {@link #buildScript})
+     * 写入工作区 {@code .everyagent/tmp/ea-cmd-<pid>-<纳秒>.ps1},cmd-chcp 包装不变(码页
+     * 必须先于 powershell 启动),载荷经 {@code -File "路径"} 投递(带引号容忍空格)。
+     *
+     * <p><b>为什么换掉 -EncodedCommand</b>:单行形态下 PS 报错的 PositionMessage 会连内部
+     * 包装前缀一起回显——{@code At line:1 char:506 + ...nue'; $DebugPreference=
+     * 'SilentlyContinue'; java -version 2>&1; $__EA...}——泄漏实现细节且 char:506 定位
+     * 不可读;用户命令独占一行后变为精确引用用户代码(2026-10 实测对照):
+     * {@code At <脚本>:2 char:1 + java -version 2>&1}。
+     */
+    List<String> commandArgvForFile(Path script) {
+        return List.of("cmd.exe", "/d", "/s", "/c",
+                "chcp.com 65001 >nul 2>&1 & " + shell.exe
+                        + " -NoProfile -ExecutionPolicy Bypass -File \"" + script + "\"");
+    }
+
+    /**
+     * 三段式脚本内容:prefix/用户命令/exit 尾部各占一行。用户命令独占一行是
+     * {@link #commandArgvForFile} 定位质量的前提(PS PositionMessage 引用整行)。
+     * 行首的 {@code ;}(exit 尾部)PS 5.1 接受(实测),保持与常量原样拼接。
+     */
+    static String buildScript(String command) {
+        return ExecResults.POWERSHELL_PREFIX + "\n" + command + "\n"
+                + ExecResults.POWERSHELL_EXIT_TAIL;
+    }
+
+    /**
+     * 命令脚本落盘:{@code <workspaceRoot>/.everyagent/tmp/ea-cmd-<pid>-<纳秒>.ps1},
+     * UTF-8 BOM(PS 5.1 读无 BOM 文件按系统 ACP 解码,脚本里的中文常量会错)。
+     *
+     * <p>命名 pid+纳秒、{@code CREATE_NEW} 独占创建,<b>绝不走 {@link Files#createTempFile}</b>
+     * (其内部 SecureRandom 首次取数在无 profile 账户下实测恒 ~8s,CryptAcquireContext 超时
+     * ——8s 教训,与 runner OutputFiles 同源);扩展名必须 .ps1:{@code powershell -File}
+     * 拒绝其它扩展(实测 .tmp 直接报错)。纯 JDK(零 JNA),跨平台可跑。
+     */
+    static Path writeCommandScript(Path workspaceRoot, String command) throws IOException {
+        Path dir = workspaceRoot != null
+                ? workspaceRoot.resolve(".everyagent").resolve("tmp")
+                : Path.of(System.getProperty("java.io.tmpdir"));
+        Files.createDirectories(dir);
+        byte[] bom = {(byte) 0xEF, (byte) 0xBB, (byte) 0xBF};
+        byte[] body = buildScript(command).getBytes(StandardCharsets.UTF_8);
+        long pid = ProcessHandle.current().pid();
+        IOException last = null;
+        for (int i = 0; i < 4; i++) {
+            Path p = dir.resolve("ea-cmd-" + pid + "-" + Long.toHexString(System.nanoTime())
+                    + ".ps1");
+            try (java.io.OutputStream out = Files.newOutputStream(p,
+                    java.nio.file.StandardOpenOption.CREATE_NEW)) {
+                out.write(bom);
+                out.write(body);
+                return p;
+            } catch (java.nio.file.FileAlreadyExistsException retry) {
+                last = retry;
+                // 纳秒撞名,换名重试
+            }
+        }
+        throw new IOException("无法创建命令脚本(名字冲突): " + dir, last);
     }
 
     /** 探测 shell：pwsh.exe → powershell.exe → cmd.exe（进程级缓存，只探测一次）。 */
@@ -418,6 +508,14 @@ public final class CodexCommandExecutor {
             env.put("TEMP", tmp);
             env.put("TMP", tmp);
         }
+        // JDK 18+(JEP 400)在重定向流上 System.out/stderr 默认按 native.encoding(Windows=ACP,
+        // 中文机器=GBK)编码;本链路 PS 侧已统一按 UTF-8 解码(cmd-chcp 包装),JVM 的 GBK 字节
+        // 直出时污染整流触发 GBK 回退(PS 字面量中文反向乱码),PS 管道捕获时被按 UTF-8 有损
+        // 解成 U+FFFD(不可逆,实测 mvn 中文断言消息全损)。经 env 统一钉住 JVM 流编码;
+        // 代价是每次 JVM 启动 stderr 多一行「Picked up JAVA_TOOL_OPTIONS」(可接受),
+        // JDK<18 未知属性静默忽略无害;putIfAbsent 不覆盖用户显式配置
+        // (ARCHITECTURE「cmd-chcp 包装」①②③之②)。
+        env.putIfAbsent("JAVA_TOOL_OPTIONS", "-Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8");
         if (profileDir != null) {
             env.put("USERPROFILE", profileDir.toString());
             env.put("HOME", profileDir.toString());

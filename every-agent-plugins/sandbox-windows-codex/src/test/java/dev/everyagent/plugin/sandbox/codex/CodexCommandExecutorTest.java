@@ -148,6 +148,50 @@ class CodexCommandExecutorTest {
     }
 
     @Test
+    void buildScriptPutsUserCommandOnOwnLine() {
+        String script = CodexCommandExecutor.buildScript("java -version 2>&1");
+        String[] lines = script.split("\n", -1);
+        assertEquals(3, lines.length, "三段式:prefix/用户命令/exit 尾部各占一行");
+        assertEquals(ExecResults.POWERSHELL_PREFIX.trim(), lines[0].trim(), "第 1 行=包装前缀");
+        assertEquals("java -version 2>&1", lines[1],
+                "用户命令独占一行:PS 报错定位引用用户命令而非内部包装前缀"
+                        + "(At <脚本>:2 char:1 + java -version 2>&1)");
+        assertEquals(ExecResults.POWERSHELL_EXIT_TAIL, lines[2], "第 3 行=exit 传导尾部");
+    }
+
+    @Test
+    void commandArgvForFileCarriesQuotedPs1Path() {
+        CodexCommandExecutor exec = executor(new Capture(new FakeSession()),
+                new FakeSession(), 30_000);
+        Path script = Path.of("ea-cmd-tmp", "ea-cmd-1.ps1");
+        List<String> argv = exec.commandArgvForFile(script);
+        assertEquals(List.of("cmd.exe", "/d", "/s", "/c",
+                "chcp.com 65001 >nul 2>&1 & powershell.exe -NoProfile"
+                        + " -ExecutionPolicy Bypass -File \"" + script + "\""), argv,
+                "cmd-chcp 包装不变(码页先于 PS 启动),载荷 -File 带引号(容忍路径空格)");
+    }
+
+    @Test
+    void writeCommandScriptEmitsUtf8BomPs1AndCleanupIsCallerSide() throws IOException {
+        Path ws = Files.createDirectories(tempDir.resolve("ws-script"));
+        Path script = CodexCommandExecutor.writeCommandScript(ws, "echo 中文");
+        try {
+            assertTrue(script.getFileName().toString().startsWith("ea-cmd-"), "命名前缀");
+            assertTrue(script.getFileName().toString().endsWith(".ps1"),
+                    "-File 强制 .ps1 扩展:" + script);
+            byte[] bytes = Files.readAllBytes(script);
+            assertEquals(0xEF, bytes[0] & 0xFF, "UTF-8 BOM(PS 5.1 读无 BOM 文件按 ACP 解)");
+            assertEquals(0xBB, bytes[1] & 0xFF);
+            assertEquals(0xBF, bytes[2] & 0xFF);
+            String text = new String(bytes, 3, bytes.length - 3, StandardCharsets.UTF_8);
+            assertEquals(CodexCommandExecutor.buildScript("echo 中文"), text,
+                    "内容=三段式脚本本体");
+        } finally {
+            Files.deleteIfExists(script);
+        }
+    }
+
+    @Test
     void childEnvPrependsRgDirToPath() {
         Path rg = tempDir.resolve("bin/rg.exe");
         Map<String, String> env = CodexCommandExecutor.childEnv(rg, null, null);
@@ -155,13 +199,30 @@ class CodexCommandExecutorTest {
         assertTrue(env.get(key).startsWith(rg.getParent().toString()),
                 "rg 所在目录前置进 Path:" + env.get(key));
         Map<String, String> plain = CodexCommandExecutor.childEnv(null, null, null);
-        assertEquals(dev.everyagent.plugin.api.util.SecretPatterns.scrubEnv(System.getenv()).env(),
-                plain, "无 rg 时继承「凭据剔除后的父环境」(整块原样继承是泄露面,见 SecretPatterns)");
+        Map<String, String> expected = new java.util.LinkedHashMap<>(
+                dev.everyagent.plugin.api.util.SecretPatterns.scrubEnv(System.getenv()).env());
+        expected.putIfAbsent("JAVA_TOOL_OPTIONS",
+                "-Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8");
+        assertEquals(expected, plain,
+                "无 rg 时继承「凭据剔除后的父环境」+ JVM 流编码钉住(整块原样继承是泄露面,"
+                        + "见 SecretPatterns;JAVA_TOOL_OPTIONS 见 childEnvPinsJvmStreamEncodingToUtf8)");
         assertFalse(plain.entrySet().stream()
                         .anyMatch(e -> dev.everyagent.plugin.api.util.SecretPatterns
                                 .isSecretBearing(e.getKey(), e.getValue())),
                 "沙箱 env 不得携带凭据形态变量");
         assertTrue(plain.size() > 0, "父环境仍被继承(不是清空)");
+    }
+
+    @Test
+    void childEnvPinsJvmStreamEncodingToUtf8() {
+        Map<String, String> env = CodexCommandExecutor.childEnv(null, null, null);
+        assertEquals("-Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8",
+                env.get("JAVA_TOOL_OPTIONS"),
+                "JDK 18+(JEP 400)重定向流默认按 native.encoding(中文机器=GBK,实测"
+                        + " java -XshowSettings:properties 显示 stdout/stderr.encoding=GBK)编码:"
+                        + "直出 GBK 字节混流触发整流 GBK 回退(PS 字面量中文反向乱码),"
+                        + "PS 管道捕获时被按 UTF-8 有损解成 U+FFFD(不可逆,实测 mvn 中文"
+                        + "断言消息全损);注入后中文探针 stdout/stderr 全对");
     }
 
     @Test
@@ -333,13 +394,14 @@ class CodexCommandExecutorTest {
         assertEquals("/c", argv.get(3));
         String payload = argv.get(4);
         assertTrue(payload.startsWith("chcp.com 65001 >nul 2>&1 & powershell.exe -NoProfile"
-                + " -ExecutionPolicy Bypass -EncodedCommand "),
-                "载荷形态:chcp 前置 + EncodedCommand:" + payload);
-        int i = payload.indexOf("-EncodedCommand ") + "-EncodedCommand ".length();
-        assertEquals(ExecResults.POWERSHELL_PREFIX + "echo hi" + ExecResults.POWERSHELL_EXIT_TAIL,
-                new String(java.util.Base64.getDecoder().decode(payload.substring(i)),
-                        StandardCharsets.UTF_16LE),
-                "base64(UTF-16LE) 还原 prefix+命令+exit 尾部");
+                        + " -ExecutionPolicy Bypass -File \""),
+                "主形态=脚本文件承载(-File):" + payload);
+        assertTrue(payload.endsWith(".ps1\""),
+                "扩展名 .ps1(powershell -File 强制):" + payload);
+        assertTrue(payload.contains("ea-cmd-"), "命名 ea-cmd-<pid>-<纳秒>.ps1:" + payload);
+        int fs = payload.indexOf("-File \"") + "-File \"".length();
+        Path scriptPath = Path.of(payload.substring(fs, payload.length() - 1));
+        assertFalse(Files.exists(scriptPath), "命令脚本在 finally 中清理:" + scriptPath);
         assertEquals(tempDir.resolve("ws").toString(), capture.spec.cwd(), "cwd=工作区根");
         assertEquals(30_000L, capture.spec.timeoutMs(), "timeout=SandboxConfig/manager 值");
         assertFalse(capture.spec.stdinOpen(), "worker 契约 stdin 关闭");

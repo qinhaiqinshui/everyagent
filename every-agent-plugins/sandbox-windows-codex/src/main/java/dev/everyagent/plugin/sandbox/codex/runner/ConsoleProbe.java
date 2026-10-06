@@ -434,15 +434,22 @@ public final class ConsoleProbe {
         Files.createDirectories(dir);
         // 不用 Files.createTempFile:其内部 SecureRandom 首次取数在无 profile 账户下
         // 实测恒 ~8s(CryptAcquireContext 超时)——探测真要跑起来时反而引入每 runner 8s。
-        // 借 OutputFiles.createExclusive(JNA CREATE_NEW,pid+纳秒命名,零 crypto)建空文件,
-        // 随即关句柄返回路径,由调用方 writeString 覆写内容。suffix 参数保留兼容调用点。
-        ChildProcess.OutputFiles.NewFile f = ChildProcess.OutputFiles.createExclusive(
-                dir, prefix.endsWith("-") ? prefix : prefix + "-");
-        if (f == null) {
-            throw new java.io.IOException("createExclusive failed for probe file in " + dir);
+        // 名字 pid+纳秒(零 crypto)以 CREATE_NEW 独占创建;扩展名必须是 .ps1:
+        // powershell -File 拒绝其它扩展(实测 .tmp 直接报错)。此前经 OutputFiles
+        // .createExclusive 落 .tmp 名,探测脚本从未真正执行、measure 恒 BAD 恒回退
+        // (2026-10 修正;ARCHITECTURE「cmd-chcp 包装」①②③之③)。
+        long pid = ProcessHandle.current().pid();
+        for (int i = 0; i < 4; i++) {
+            Path p = dir.resolve(prefix + pid + "-" + Long.toHexString(System.nanoTime())
+                    + (suffix.startsWith(".") ? suffix : "." + suffix));
+            try {
+                Files.createFile(p);
+                return p;
+            } catch (java.nio.file.FileAlreadyExistsException retry) {
+                // 纳秒撞名,换名重试
+            }
         }
-        Kernel32Ex.INSTANCE.CloseHandle(f.handle());
-        return f.path();
+        throw new java.io.IOException("无法创建探测脚本文件: " + dir);
     }
 
     private static void deleteQuietly(Path p) {
