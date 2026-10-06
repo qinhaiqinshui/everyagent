@@ -357,7 +357,7 @@ rg "@Component|@Service|@Autowired|@Bean" every-agent-plugins --glob "*.java"   
 
 - **成功**：INFO `[plugins] 插件已激活: id={} name={} v{} entry={} source={}`（`PluginLoader.java:337`）；扫描期还有 `[plugins-builtin] 扫描到 {} 个内置插件…` / `[plugins-external] 扫描到 {} 个外部插件` / `[plugins] 加载完成: {}/{} 个插件成功加载`。
 - **失败**：§8.2 对应各 WARN（内置未构建、跳过重复、激活失败等，文案逐字见前文各节）。
-- **`plugin.list` RPC**：返回 `id/name/version/description/author/source/active/hasMain/hasWebMain` 九个字段（`every-agent-worker/src/main/java/dev/everyagent/worker/rpc/PluginRpcMethods.java:62-70`）。两个口径坑：① `status` **不进 RPC**，排查只能看 worker 日志；② `active = !isDisabled(id)` 只表示「不在禁用名单」，**激活失败的插件也报 `active=true`**（`PluginRpcMethods.java:68`）——真判据是 worker 日志里的「插件已激活」行。
+- **`plugin.list` RPC**：返回 `id/name/version/description/author/source/active/status/hasMain/hasWebMain/webMain` 字段（`every-agent-worker/src/main/java/dev/everyagent/worker/plugin/loader/PluginRpcMethods.java`）——`status` 是加载期实际状态文案（§8.2 那张表的取值逐字出网），激活失败的插件从它一眼可辨。一个口径坑：`active = !isDisabled(id)` 只表示「不在禁用名单」，保持旧语义兼容既有前端——激活失败的插件也报 `active=true`，判「真的跑起来了没有」看 `status` 是否以「已激活」开头。
 
 ## 9. 写完第一个后端插件后怎么验证
 

@@ -65,7 +65,11 @@ public class PluginRpcMethods {
             o.put("description", m.description());
             o.put("author", m.author());
             o.put("source", m.source());
+            // active 保持旧语义(= 不在禁用名单),兼容既有前端;真实加载结果看 status。
             o.put("active", !pluginRegistry.isDisabled(m.id()));
+            // status = 加载期实际状态(LoadedPlugin.status 透传):已激活/激活失败/已禁用(未激活)等,
+            // 前端据此区分「在跑」与「加载失败」。
+            o.put("status", m.status());
             o.put("hasMain", !m.main().isEmpty());
             o.put("hasWebMain", !m.webMain().isEmpty());
             // webMain 原始值随清单下发:前端据此推导 web 产物路径(后缀换 .js)。

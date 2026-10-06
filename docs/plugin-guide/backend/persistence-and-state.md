@@ -196,19 +196,19 @@ plugin.json 的 contributes.config.*.default
 
 ### 4.2 `plugin.list` RPC 返回字段
 
-每个插件条目（`PluginRpcMethods.java:62-70`）：`id` / `name` / `version` / `description` / `author` / `source`（`builtin` 或 `external`）/ `active` / `hasMain`（main 非空）/ `hasWebMain`（webMain 非空）；顶层另附 `disabledIds`（§3.4）。
+每个插件条目（`every-agent-worker/src/main/java/dev/everyagent/worker/plugin/loader/PluginRpcMethods.java` 的 `list`）：`id` / `name` / `version` / `description` / `author` / `source`（`builtin` 或 `external`）/ `active`（=「不在禁用名单」，旧语义，见 §4.3）/ `status`（**加载期实际状态文案**，透传自 `LoadedPlugin.status`，§4.1 那张表的取值逐字出网）/ `hasMain`（main 非空）/ `hasWebMain`（webMain 非空）/ `webMain`（原始值，前端据此推导 web 产物路径）；顶层另附 `disabledIds`（§3.4）。
 
-### 4.3 两个可见性陷阱（如实登记）
+### 4.3 `active` 与 `status` 的分工（一个旧语义陷阱）
 
-- **`status` 不出网**：`PluginRegistry` 聚合目录时把 `LoadedPlugin` 转成 `PluginManifest`，后者**没有 status/active 字段**（`every-agent-worker/src/main/java/dev/everyagent/worker/plugin/registry/PluginManifest.java:22-24`；聚合点 `PluginRegistry.java:55-67`）——§4.1 那张表只在 **worker 日志**里能看到（grep `[plugins]`）。排查「插件为什么没生效」的第一站是 worker 日志，不是 plugin.list。
-- **`active` ≠ 已激活**：plugin.list 的 `active` 取自 `!pluginRegistry.isDisabled(m.id())`（`PluginRpcMethods.java:68`）——只反映禁用名单。一个**激活失败**（status=激活失败）的插件，只要不在 `.disabled-plugins` 里，plugin.list 照样报 `active=true`。判断「真的跑起来了没有」要交叉看日志里的「插件已激活: id=...」（`PluginLoader.java:337`）。
+- **`status` 出网**：`PluginRegistry` 聚合时把 `LoadedPlugin.status` 透传进 `PluginManifest.status`，`plugin.list` 原样序列化——「已激活」「激活失败: …」「已禁用(未激活)」「无 jar 文件」等文案可直接从 RPC 应答读到，排查「插件为什么没生效」不再需要翻 worker 日志（日志仍是最全的报错详情来源）。
+- **`active` ≠ 已激活**：plugin.list 的 `active` 取自 `!pluginRegistry.isDisabled(m.id())`——只反映禁用名单（保持旧语义以兼容既有前端）。一个**激活失败**（status=激活失败）的插件，只要不在 `.disabled-plugins` 里，plugin.list 照样报 `active=true`。判断「真的跑起来了没有」以 `status` 为准（是否以「已激活」开头）。
 
 排查路径速查：
 
 | 现象 | 先看哪 |
 |---|---|
 | plugin.list 里根本没有它 | 根 plugin.json 是否 `enabled:false`（§3.1）；目录是否缺 plugin.json；内置是否没构建（WARN「内置插件未构建,请先 mvn package」，`BuiltInPluginScanner.java:95`） |
-| plugin.list 有它但功能没生效 | worker 日志 grep `[plugins] id=<id>`：status 是「激活失败」「无 jar 文件」还是「已禁用(未激活)」（§4.1） |
+| plugin.list 有它但功能没生效 | plugin.list 的 `status` 字段（§4.1 文案全集）是「激活失败」「无 jar 文件」还是「已禁用(未激活)」；报错详情再看 worker 日志 grep `[plugins] id=<id>` |
 | 禁用了还在跑 | 本进程激活过的贡献不会回收（§3.3/§5.1），重启 worker |
 | 配置改了不生效 | config 是启动期从 default 构造的（§2.1），重启 worker |
 
