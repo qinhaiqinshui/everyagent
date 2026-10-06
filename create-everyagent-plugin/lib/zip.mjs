@@ -17,10 +17,15 @@
  * 时回退用 zip 文件名去 .eap 并把文件摊进 plugins 根（扫描器发现不了）——pack 恒产出 <id>/ 前缀，
  * 不会出现这两种坑。
  *
+ * 校验和旁文件（known-issues #21 最小方案）：pack 同时产出 <id>-<version>.eap.sha256，内容为一行
+ * sha256sum 兼容格式「<64 位小写十六进制摘要>␣␣<.eap 文件名>」（两个空格 + 换行），对 .eap 全文件
+ * 计算；--verify 会重读盘上 .eap 复算摘要并与旁文件核对。安装侧（worker extractEap）目前不消费它。
+ *
  * 退出码：1 用法（缺 pluginDir、未知 flag）；2 校验（目录不存在 / 缺 plugin.json / 坏 JSON /
  * 缺 id、version / 缺构建产物）；4 写盘失败与 --verify 自检不过。
  */
 
+import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
@@ -256,6 +261,7 @@ const PACK_HELP = `create-everyagent-plugin pack —— 把插件工程打成 .e
 
 产物命名 <id>-<version>.eap（id/version 取自 plugin.json）；zip 顶层目录名 = pluginId，
 内含 plugin.json +（清单含 main）lib/*.jar +（清单含 webMain）web/ 下的构建产物。
+同时产出校验和旁文件 <id>-<version>.eap.sha256（sha256sum -c 兼容：一行摘要 + 两个空格 + 文件名）。
 缺 jar / 缺 web/index.js 会报错并给出对应构建命令。
 退出码: 1 用法错误 / 2 校验失败 / 4 写盘或自检失败
 `
@@ -489,7 +495,31 @@ function verifyZipFile(target, manifest, expectedNames, out) {
   }
   out.write(`  [${manifestOk ? 'ok' : '失败'}] ${manifest.id}/plugin.json 可解析（${detail}）\n`)
 
-  const allOk = okCount && !unsafe.length && !badTop.length && manifestOk
+  // 第 6 项（known-issues #21）：旁文件摘要与「重读盘上 .eap 复算」一致——顺带兜住写盘截断。
+  const shaName = `${path.basename(target)}.sha256`
+  let shaOk = false
+  let shaDetail = `找不到旁文件 ${shaName}`
+  try {
+    const sidecar = fs.readFileSync(`${target}.sha256`, 'utf8').trim()
+    const actual = createHash('sha256').update(fs.readFileSync(target)).digest('hex')
+    const m = sidecar.match(/^([0-9a-f]{64})(?:\s\*|\s{2}|\s)(\S+)$/)
+    if (!m) {
+      shaDetail = '旁文件内容不是 sha256sum 兼容格式（摘要 + 两个空格 + 文件名）'
+    } else if (m[2] !== path.basename(target)) {
+      shaOk = false
+      shaDetail = `旁文件文件名不符（${m[2]}，期望 ${path.basename(target)}）`
+    } else if (m[1] !== actual) {
+      shaDetail = `摘要不符（旁文件 ${m[1]}，盘上复算 ${actual}）`
+    } else {
+      shaOk = true
+      shaDetail = actual
+    }
+  } catch (err) {
+    shaDetail = `读取失败：${String(err && err.message ? err.message : err).split('\n')[0]}`
+  }
+  out.write(`  [${shaOk ? 'ok' : '失败'}] ${shaName} 与盘上 .eap 复算摘要一致（sha256: ${shaDetail}）\n`)
+
+  const allOk = okCount && !unsafe.length && !badTop.length && manifestOk && shaOk
   out.write(allOk ? '  自检全部通过\n' : '  自检未通过\n')
   return allOk
 }
@@ -501,7 +531,7 @@ function verifyZipFile(target, manifest, expectedNames, out) {
  * @param {string} [input.outDir] 产物目录，缺省当前目录
  * @param {boolean} [input.verify] 写完后读回自检
  * @param {object} [input.io] 输出流（默认 process）
- * @returns {Promise<{ file: string, entries: string[] }>}
+ * @returns {Promise<{ file: string, sha256File: string, sha256: string, entries: string[] }>}
  */
 export async function packPlugin({ pluginDir, outDir, verify = false, io = process } = {}) {
   const out = io.stdout || process.stdout
@@ -525,7 +555,18 @@ export async function packPlugin({ pluginDir, outDir, verify = false, io = proce
     throw new WriteError(`写入 .eap 失败：${target}（${err && err.message ? err.message : err}）`)
   }
 
+  // 校验和旁文件（known-issues #21 最小方案）：对 .eap 全文件做 sha256，
+  // 内容一行「摘要 + 两个空格 + 文件名 + 换行」——sha256sum -c 直接可用（两个空格 = 二进制口径）。
+  const sha256 = createHash('sha256').update(zipBuf).digest('hex')
+  const shaFile = `${target}.sha256`
+  try {
+    fs.writeFileSync(shaFile, `${sha256}  ${path.basename(target)}\n`, 'utf8')
+  } catch (err) {
+    throw new WriteError(`写入 .eap.sha256 失败：${shaFile}（${err && err.message ? err.message : err}）`)
+  }
+
   out.write(`已打包 ${target}（${entries.length} 个条目，${fmtSize(zipBuf.length)}）\n`)
+  out.write(`校验和   ${shaFile}（sha256sum -c 兼容：${sha256}  ${path.basename(target)}）\n`)
   out.write(`\n${formatTree(manifest.id, entries)}\n`)
   if (verify) {
     const ok = verifyZipFile(target, manifest, entries.map((e) => e.name), out)
@@ -534,7 +575,7 @@ export async function packPlugin({ pluginDir, outDir, verify = false, io = proce
   out.write(
     '\n安装：把该文件复制到 worker 机器后调用 RPC plugin.install {"path":"<该文件在 worker 机器上的绝对路径>"}，重启 worker 生效。\n',
   )
-  return { file: target, entries: entries.map((e) => e.name) }
+  return { file: target, sha256File: shaFile, sha256, entries: entries.map((e) => e.name) }
 }
 
 /**

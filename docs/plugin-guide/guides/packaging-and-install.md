@@ -16,6 +16,7 @@ has_children: false
 - **没有包仓库**：不存在 `eap install <name>` 这种按名拉取；你得自己把文件送到目标机器。
 - **没有版本解析**：worker 不读 `.eap` 文件名，也没有「装 1.1 自动替换 1.0」的逻辑；版本只存在于两处——产物文件名 `<id>-<version>.eap` 与 `plugin.json` 的 `version` 字段（[plugin.json 字段参考](../plugin-manifest.md)）。
 - **没有依赖解析**：`.eap` 不声明也不解决依赖（见 §5 的冲突提示）。
+- **没有签名，只有校验和旁文件**：`pack` 会顺手产出 `<id>-<version>.eap.sha256`（§2，sha256sum 兼容格式），但它只服务于分发时的人工核对——worker 安装侧既不验签也不消费它（[已知问题](../reference/known-issues.md) #21）。
 
 另外记住现状：`@everyagent/plugin-api` **双侧未发布**（npm 与 Maven Central 均 404，详见[已知问题](../reference/known-issues.md)）——仓库外开发的插件工程必须自带类型副本 / 本地 `mvn install` 的 API jar，`.eap` 分发的是**你的插件产物**，不含 API 包。
 
@@ -36,6 +37,17 @@ node create-everyagent-plugin pack --help      # 子命令自己的帮助
 | `-h, --help` | 显示 pack 帮助 |
 
 产物固定命名 `<id>-<version>.eap`，id / version 取自 `plugin.json`（`create-everyagent-plugin/lib/zip.mjs` 的 `packPlugin`：`path.join(absOutDir, `${manifest.id}-${manifest.version}.eap`)`）。
+
+**同时产出校验和旁文件 `<id>-<version>.eap.sha256`**（known-issues #21 的最小方案，`pack` 自动生成）：内容为一行 **sha256sum 兼容格式**——`64 位小写十六进制摘要` + **两个空格** + `.eap` 文件名 + 换行，摘要对 `.eap` **全文件**计算。zip 自带的 CRC32 只防传输意外损坏，不防篡改；分发 `.eap` 时把旁文件一起带走，安装前人工核对：
+
+```powershell
+# Windows（Get-FileHash 输出全大写，比对时忽略大小写）
+Get-FileHash .\my-tool-0.1.0.eap -Algorithm SHA256
+# Linux / macOS（旁文件与 .eap 同目录时直接校验）
+sha256sum -c my-tool-0.1.0.eap.sha256
+```
+
+注意：worker 侧 `plugin.install` / 手工解压**目前都不消费**该旁文件（安装侧自动校验见[已知问题](../reference/known-issues.md) #21），它服务于「自行分发、人工核对」的场景。
 
 ### 2.2 包内布局
 
@@ -76,15 +88,16 @@ node create-everyagent-plugin pack --help      # 子命令自己的帮助
 
 zip 由 `node:zlib` 手写（零 npm 依赖）：local file header + central directory + EOCD 三段齐全；条目 DEFLATE 压缩（压缩无收益回退 store）；文件名 UTF-8 且置通用标志 bit 11；条目路径一律 `/` 分隔、**不写目录条目**（worker 按条目流解包，不需要）；不做 zip64（单条目/整包 < 4 GiB、条目数 < 65536，插件包是 KB 级碰不到）。
 
-### 2.4 `--verify` 自检五项
+### 2.4 `--verify` 自检六项
 
-`--verify` 用 CLI 自带的读侧把刚写的 `.eap` 解回内存自证，打印五项结果（实现于 `create-everyagent-plugin/lib/zip.mjs` 的 `verifyZipFile`）：
+`--verify` 用 CLI 自带的读侧把刚写的 `.eap` 解回内存自证，打印六项结果（实现于 `create-everyagent-plugin/lib/zip.mjs` 的 `verifyZipFile`）：
 
 1. **EOCD 与中央目录可定位**，条目数与收集清单一致；
 2. **每条目 CRC32 与解压大小核对一致**（`readZip` 内置，对不上直接抛错）；
 3. **条目路径安全**（`/` 分隔、无 `..`、无绝对路径、无空段）；
 4. **顶层目录全部 = `<id>`**（与 `plugin.json` 的 id 一致）；
-5. **`<id>/plugin.json` 可解析**且 id / version 与源清单一致。
+5. **`<id>/plugin.json` 可解析**且 id / version 与源清单一致；
+6. **`.eap.sha256` 旁文件与盘上 `.eap` 复算摘要一致**（known-issues #21；顺带兜住写盘截断）。
 
 任一项失败即退出码 4（`打包自检失败：.eap 与预期不符（见上方 [失败] 行）`）。发布前跑一次 `pack --verify` 是最便宜的保险。
 
@@ -247,9 +260,11 @@ sandbox-wsl-ubuntu
         main/webMain 与实际形态一致（字段逐项见 plugin-manifest.md）
 [ ] 2. 构建产物齐：java/full 形态 target/ 下有 jar；web/full 形态 web/index.js 已生成
         （构建命令矩阵见 build-and-run.md）
-[ ] 3. node create-everyagent-plugin pack <dir> --verify —— 五项自检全绿
+[ ] 3. node create-everyagent-plugin pack <dir> --verify —— 六项自检全绿；.eap 与
+        同名 .eap.sha256 旁文件（sha256sum -c 兼容）一起分发
 [ ] 4. 目标机安装（三选一）：
         a. 把 .eap 送到 worker 机器 → RPC plugin.install { "path": "<worker 机器路径>" }
+           （安装前用 .eap.sha256 人工核对完整性，worker 侧不自动校验）
         b. 解压 .eap 到 ~/.everyagent/plugins/，确认顶层目录名 = id
         c. builtin：进仓库 every-agent-plugins/ 并随仓库分发（需 mvn package）
 [ ] 5. 重启 worker（一切装卸/启停的生效边界）

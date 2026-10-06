@@ -203,7 +203,16 @@ node create-everyagent-plugin pack --help      # 子命令自己的帮助
 | `--verify` | 打包后用 CLI 自带的 zip 读侧把包解回内存自检（见下），不调用任何外部解压工具 |
 | `-h, --help` | 显示 pack 帮助 |
 
-产物固定命名 `<id>-<version>.eap`（id/version 取自 `plugin.json`）。**zip 顶层目录名 = pluginId**，内部布局：
+产物固定命名 `<id>-<version>.eap`（id/version 取自 `plugin.json`），并**同时产出校验和旁文件 `<id>-<version>.eap.sha256`**（known-issues #21 最小方案）：内容为一行 sha256sum 兼容格式「64 位小写十六进制摘要 + 两个空格 + `.eap` 文件名 + 换行」，对 `.eap` 全文件计算。分发时两件一起带走，接收侧核对：
+
+```powershell
+# Windows
+Get-FileHash .\my-tool-0.1.0.eap -Algorithm SHA256        # 与旁文件第一列比对
+# Linux / macOS
+sha256sum -c my-tool-0.1.0.eap.sha256                     # 旁文件与 .eap 同目录时直接校验
+```
+
+**zip 顶层目录名 = pluginId**，内部布局：
 
 ```text
 <pluginId>/
@@ -222,11 +231,11 @@ node create-everyagent-plugin pack --help      # 子命令自己的帮助
 | --- | --- |
 | 1 | 用法错误：缺 `pluginDir`、多个位置参数、未知 flag |
 | 2 | 不是插件工程（目录不存在 / 缺 `plugin.json` / JSON 解析失败 / 缺 id、version）；缺构建产物（缺 jar、缺 `web/index.js`，错误信息附对应构建命令 `mvn -f … package` / `npm run build:plugins`） |
-| 4 | 写盘失败（输出目录创建 / `.eap` 写入）或 `--verify` 自检不过 |
+| 4 | 写盘失败（输出目录创建 / `.eap` 或 `.eap.sha256` 写入）或 `--verify` 自检不过 |
 
 zip 由 `node:zlib` 手写（零 npm 依赖）：local file header + central directory + EOCD 三段齐全；条目 DEFLATE 压缩（`deflateRawSync` level 6，压缩无收益时回退 store）；文件名 UTF-8 且置通用标志 bit 11（中文路径安全）；CRC32 查表法自实现；条目路径一律 `/` 分隔、不写目录条目（worker 按条目流解包，不需要）。**不做 zip64**：单条目/整包须 < 4 GiB、条目数 < 65536，超出直接报错（插件包是 KB 级，碰不到）。
 
-`--verify` 的自证链路：EOCD 定位 → 遍历 central directory → 逐条 `inflateRawSync` 解回内存 → CRC32 与解压大小逐条核对 → 打印条目树 → 确认顶层目录 = pluginId、确认 `<id>/plugin.json` 可解析且 id/version 与源清单一致。全程只用 `node:zlib` 与自己的读侧代码。
+`--verify` 的自证链路：EOCD 定位 → 遍历 central directory → 逐条 `inflateRawSync` 解回内存 → CRC32 与解压大小逐条核对 → 打印条目树 → 确认顶层目录 = pluginId、确认 `<id>/plugin.json` 可解析且 id/version 与源清单一致 → 重读盘上 `.eap` 复算 sha256 与 `.eap.sha256` 旁文件核对。全程只用 `node:zlib`、`node:crypto` 与自己的读侧代码。
 
 ### 安装与 worker 端约定
 
@@ -244,7 +253,7 @@ zip 由 `node:zlib` 手写（零 npm 依赖）：local file header + central dir
 本 CLI **不得引入任何 npm 依赖**（`package.json` 的 `dependencies` 恒为空）：
 
 - 交互问答走 `node:readline/promises`；
-- zip（`.eap`）走 `node:zlib` 手写条目，不引 jszip / archiver；
+- zip（`.eap`）走 `node:zlib` 手写条目，不引 jszip / archiver；校验和旁文件走 `node:crypto` 的 sha256；
 - 其余全部使用 `node:fs` / `node:path` / `node:process` / `node:url` 等内置模块。
 
 原因：目标环境可能离线，且部分 Windows 沙箱的 npm cache 有 EPERM 风险——脚手架本身绝不能因为装依赖而失败。
