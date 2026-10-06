@@ -50,6 +50,17 @@
 - hub → `<EVERYAGENT_HOME>/logs/hub.log`(由主进程生成的 desktop-hub.yml 指定 `logging.file.name`)
 - 进程 stdout/stderr → `<EVERYAGENT_HOME>/logs/{hub,worker}.out.log`(为空通常表示 java 进程未真正启动,
   需配合 `desktop.log` 查看 spawn 是否失败/健康检查是否超时)
+- **安装/卸载器 → `<EVERYAGENT_HOME>/logs/uninstall.log`(安装与卸载共用,追加式)**:
+  `build/installer.nsh` 在 NSIS 安装/卸载器的各阶段(`customInit`/`customUnInstallCheck`/`customInstall`/
+  `customInstallmode`/`customUnInit`/`customRemoveFiles`/`customUnInstall`)各写一行带时间戳的日志,
+  用于排查「卸载器一秒内退出并提示成功,但安装目录/快捷方式/沙箱账户全部残留」的问题。解读:
+  - 卸载后**没有任何 `uninstaller un.onInit done` 新行** → 卸载器进程在初始化完成前就异常退出
+    (NSIS 自拷贝到 `%TEMP%\~nsu.tmp` 或壳层阶段失败;可配合「事件查看器 → Windows 日志 → 应用程序」的
+    应用错误/WER 记录与杀软排查)。
+  - 有 `un.onInit done` 但没有 `un.install section` 行 → 向导页面中途退出(用户取消/模式选择页异常)。
+  - 有 `removing files` 且 `INSTDIR STILL CONTAINS FILES` → 删除被文件占用打断(如 worker javaw 未退出)。
+  - 卸载务必走「设置→应用→卸载」或安装目录下的 `Uninstall Every Agent.exe` 直接双击,不要自带参数。
+
 
 ## 构建与打包
 
