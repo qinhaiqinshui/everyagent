@@ -72,7 +72,7 @@ has_children: false
 
 ### #10 `SearchProvider` SPI 未接线（✅ 已修复）
 
-- **现象（修复前）**：注册方法存在，registry 的 `getDefault`/`getById`/`getProviders` 在 worker 主代码**零调用**；25 个内置插件零注册；`docs/ARCHITECTURE.md` 也零提及该 SPI。
+- **现象（修复前）**：注册方法存在，registry 的 `getDefault`/`getById`/`getProviders` 在 worker 主代码**零调用**；26 个内置插件零注册；`docs/ARCHITECTURE.md` 也零提及该 SPI。
 - **影响（修复前）**：注册 SearchProvider **没有任何运行期效果**（比死扩展点更彻底：连消费候选点都没有）。
 - **修复**：`fs.search` / `task.search` 两条既有 RPC **增补聚合**——内置 rg 结果之后按注册序追加各 provider 结果，按位置键去重（文件 `path+lineNumber+matchIndex` / 任务 `taskId+roundIndex+field+matchIndex`），仍受 `maxResults` 触顶；注册表为空 → 零行为变化，单个 provider 异常仅 WARN 跳过，rg 不可用但有 provider 时可独立供数（SPI 真正可单独供数的路径）。**取舍**：消费链路选既有 RPC 而非 Advisor——搜索结果是给用户的、不是给模型上下文的；零新 RPC，`ARCHITECTURE.md` §7/§8.5 与 [Advisor 与模型链](../backend/advisors.md) §6、api-index、builtin-plugins 状态行同步。附带修正 SPI `TaskSearchResult.Match.line` 类型（`int`→`String`，与 wire「干净文本」语义一致；此前零实现无兼容负担）。提交 `aa936bd9`；`FsSearchServiceTest` 32 + `TaskSearchServiceTest` 16 全过（含 rg 缺失回退用例）。
 - **后续**：未新增注册 SearchProvider 的示例内置插件（会与内置 rg 重复供数、无真实价值），聚合语义由单测钉住；将来做 search-es / search-vector 类插件时 SPI 契约已就绪。

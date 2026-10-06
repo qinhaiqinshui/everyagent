@@ -67,6 +67,12 @@ public interface WorkerConfig {
 
         int maxConcurrentTasks();
 
+        /**
+         * 一次用户提问(ask_user)等待答复的超时毫秒数,默认 30 分钟
+         * (worker 配置 {@code worker.limits.ask-timeout-ms});消费方为 ask-user 插件。
+         */
+        long askTimeoutMs();
+
         long modelLengthStallMs();
 
         long lengthDisconnectMinTokens();

@@ -320,7 +320,7 @@ worker 的内部类在 parent 链上**技术可见**，但架构红线明令禁�
 rg "@Component|@Service|@Autowired|@Bean" every-agent-plugins --glob "*.java"   # → 0 命中
 ```
 
-25 个内置插件源码（25 份 plugin.json 对应目录）**零 Spring 注解**：插件类由 `URLClassLoader` 反射 `newInstance()` 创建（`PluginLoader.java:318`），不进 Spring 容器，没有依赖注入、没有 `@Value`、没有 AOP。因此：
+26 个内置插件源码（26 份 plugin.json 对应目录）**零 Spring 注解**：插件类由 `URLClassLoader` 反射 `newInstance()` 创建（`PluginLoader.java:318`），不进 Spring 容器，没有依赖注入、没有 `@Value`、没有 AOP。因此：
 
 - 需要什么依赖，就在 `activate(ctx)` 里用 `ctx.services()` / `ctx.getService(Class)` **手工取**，构造器里 `new` 出自己的对象图（§6.4 两个范例的标准姿势）；
 - 插件内部想用 Spring 类型的静态工具（如 `ToolCallbacks.from`）没问题——那是普通类调用，不是容器托管。
@@ -379,7 +379,7 @@ rg "@Component|@Service|@Autowired|@Bean" every-agent-plugins --glob "*.java"   
 
 ## 10. ⚠️ 与架构文档 §7.14.4 的差异
 
-[`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) §7.14.4（行 704-705）写「任务队列插件……以 `@Component` + 构造器注入 worker 注册表的模式注册（同 git 插件 `GitPluginRegistrar` 先例）」。**以代码为准，该表述已过时**：task-queue 实际经 `EveryAgentPlugin.activate()` + `ctx.register*` 注册（`TaskQueuePlugin.java:14-30`，本篇 §6.4 摘录），全仓 25 个内置插件**零 `@Component`**（§7.3 rg 自证）。架构文档的更正由专门的收口步骤统一处理，本篇不改动它；读到 §7.14.4 时请以本节口径为准。
+[`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) §7.14.4（行 704-705）写「任务队列插件……以 `@Component` + 构造器注入 worker 注册表的模式注册（同 git 插件 `GitPluginRegistrar` 先例）」。**以代码为准，该表述已过时**：task-queue 实际经 `EveryAgentPlugin.activate()` + `ctx.register*` 注册（`TaskQueuePlugin.java:14-30`，本篇 §6.4 摘录），全仓 26 个内置插件**零 `@Component`**（§7.3 rg 自证）。架构文档的更正由专门的收口步骤统一处理，本篇不改动它；读到 §7.14.4 时请以本节口径为准。
 
 ## 下一步读
 

@@ -93,7 +93,7 @@ public class TaskQueueAdmissionPolicy implements TaskAdmissionPolicy {
 
 ### 1.4 ⚠️ 陈旧注释：250 ≠ 40（以代码为准，如实登记）
 
-`QueueAdmissionNode` 的类 Javadoc 写 `order=250，落在洋葱下行空隙 100~400 之间`（`QueueAdmissionNode.java:12`），代码实际 `return 40`（`:31`）。同样写 250 的还有 `TaskAdmissionPolicy.java:7` 的接口 Javadoc、`TaskQueueAdmissionPolicy.java:10` 的注释，以及 [`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) §7.14.4/§14.5。**以代码为准：order=40**，落在 RPC 线程段 `taskid.generate(30)` 与 `taskentry.create(50)` 之间（§2.3 全表）。ARCHITECTURE §7.14.4 还写该插件「以 `@Component` + 构造器注入注册」——实测 25 个内置插件源码零 Spring 注解、由 `URLClassLoader` 加载（[plugin-manifest 字段参考](../plugin-manifest.md) 与 [后端总览](overview.md) 已按代码事实写）。这些是文档欠账，不是代码问题，待架构文档侧统一更正。
+`QueueAdmissionNode` 的类 Javadoc 写 `order=250，落在洋葱下行空隙 100~400 之间`（`QueueAdmissionNode.java:12`），代码实际 `return 40`（`:31`）。同样写 250 的还有 `TaskAdmissionPolicy.java:7` 的接口 Javadoc、`TaskQueueAdmissionPolicy.java:10` 的注释，以及 [`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) §7.14.4/§14.5。**以代码为准：order=40**，落在 RPC 线程段 `taskid.generate(30)` 与 `taskentry.create(50)` 之间（§2.3 全表）。ARCHITECTURE §7.14.4 还写该插件「以 `@Component` + 构造器注入注册」——实测 26 个内置插件源码零 Spring 注解、由 `URLClassLoader` 加载（[plugin-manifest 字段参考](../plugin-manifest.md) 与 [后端总览](overview.md) 已按代码事实写）。这些是文档欠账，不是代码问题，待架构文档侧统一更正。
 
 ## 2. TaskLifecycleNode —— 洋葱模型
 

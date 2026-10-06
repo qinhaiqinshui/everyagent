@@ -275,7 +275,7 @@ export interface AppNotification {
 /**
  * 「其他」选项的固定 ID：旧格式兼容路径自动追加的兜底选项，
  * 用户选中后可在输入框填写自定义内容（结果经 otherText 回传）。
- * 新格式由 worker 侧 AskUserTool 自行追加 type="input" 选项，不再使用此常量。
+ * 新格式由 ask-user 插件的 AskUserTool 自行追加 type="input" 选项，不再使用此常量。
  */
 export const USER_INTERACTION_OTHER_OPTION_ID = '__other__'
 

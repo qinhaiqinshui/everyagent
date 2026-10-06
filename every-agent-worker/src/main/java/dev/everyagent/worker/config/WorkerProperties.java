@@ -547,6 +547,9 @@ public class WorkerProperties implements WorkerConfig {
         public int maxConcurrentTasks() { return getMaxConcurrentTasks(); }
 
         @Override
+        public long askTimeoutMs() { return getAskTimeoutMs(); }
+
+        @Override
         public long modelLengthStallMs() { return getModelLengthStallMs(); }
 
         @Override

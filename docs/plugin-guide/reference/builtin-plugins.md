@@ -7,7 +7,7 @@ has_children: false
 
 # 内置插件范例索引
 
-**一句话定位**：`every-agent-plugins/` 下的 25 个内置插件是**活教材**——每种扩展点、每种形态、每种 order 档位在仓内都有真实可抄的范本。本篇告诉你「想学某个扩展点，去抄哪个插件」：先查总表（§2）定位插件，再用反查表（§3）按扩展点直达推荐范本，写代码前扫一眼 order 占用表（§4）避开已占档位。
+**一句话定位**：`every-agent-plugins/` 下的 26 个内置插件是**活教材**——每种扩展点、每种形态、每种 order 档位在仓内都有真实可抄的范本。本篇告诉你「想学某个扩展点，去抄哪个插件」：先查总表（§2）定位插件，再用反查表（§3）按扩展点直达推荐范本，写代码前扫一眼 order 占用表（§4）避开已占档位。
 
 所有路径相对仓库根；表格内为省篇幅，`every-agent-plugins/` 前缀在 §5 各小节统一省略为 `~plugins/`。全部数据来自源码逐文件取证（本篇成文前按行复核过关键行号，见文末口径说明）。
 
@@ -18,7 +18,7 @@ has_children: false
 - **形态选择**：不知道该做纯 Java、纯 Web 还是混合？看 §2「形态」列，然后读 [plugin.json 字段参考](../plugin-manifest.md) §3 的三形态实例。
 - 本篇只做索引与点评，**不讲 API 细节**：注册方法的签名与生命周期见 [后端模型总览](../backend/overview.md)、[Advisor 指南](../backend/advisors.md)、[任务与 RPC](../backend/task-and-rpc.md)、[UI 扩展点](../web/ui-extensions.md)；已知偏差集中登记在 [已知问题与现状偏差](known-issues.md)。
 
-## 2. 总表（25 个内置插件）
+## 2. 总表（26 个内置插件）
 
 缩写：**DO** = `ToolCallingAdvisor.DEFAULT_ORDER`（−2147483348）；**HP** = `Ordered.HIGHEST_PRECEDENCE`（−2147483648）。「代码量级」= 入口文件（`main` 指向的 Java 类 / `web/index.ts`）行数，量级仅供参考。
 
@@ -26,6 +26,7 @@ has_children: false
 |---|---|---|---|---|---|---|
 | adaptive-max-tokens | 自适应输出预算 | java | AdvisorProvider | — | DO+250 | 入口 21 行 |
 | agents-md | agents.md 约束注入 | java | AdvisorProvider | — | HP+60 | 入口 19 行 |
+| ask-user | 用户提问 | java | ToolProvider | — | — | 入口 ≈20 行 |
 | ai-review | AI 审议 | both | AuthorizationHandler + SlashProvider + SlashTokenResolver | `ui.trace_types` | — | 入口 33 行 + web 40 行 |
 | context-compression | 上下文压缩 | java | AdvisorProvider | — | DO+400 | 入口 21 行 |
 | empty-response-retry | 空响应重试 | java | AdvisorProvider | — | DO+100 | 入口 21 行 |
@@ -52,11 +53,11 @@ has_children: false
 
 ### 2.1 全体共性（读任何一个插件前先知道）
 
-- 形态分布：java-only 16 / both 6 / web-only 3；**没有纯声明式插件**（每个都至少有一侧入口）。
-- 清单字段全体一致：`id/name/version/description/author` + `enabled`，version 一律 `0.1.0`、author 一律 `everyagent`；含 Java 的 22 个另有 `main`，含前端的 9 个另有 `webMain`（值全部写 `web/index.ts`，宿主实际加载的是构建产物 `web/index.js`，见 [plugin.json 字段参考](../plugin-manifest.md) §5）。
+- 形态分布：java-only 17 / both 6 / web-only 3；**没有纯声明式插件**（每个都至少有一侧入口）。
+- 清单字段全体一致：`id/name/version/description/author` + `enabled`，version 一律 `0.1.0`、author 一律 `everyagent`；含 Java 的 23 个另有 `main`，含前端的 9 个另有 `webMain`（值全部写 `web/index.ts`，宿主实际加载的是构建产物 `web/index.js`，见 [plugin.json 字段参考](../plugin-manifest.md) §5）。
 - 用 `contributes.config` 的只有 2 个：image-vision（3 键）、sandbox-windows-codex（6 键）。
 - `enabled:false` 的只有 2 个：sandbox-windows-mic、sandbox-wsl-ubuntu（内置扫描期整目录跳过）。
-- 依赖红线干净：全部 22 个 pom **零 `every-agent-worker` 依赖**；`task-edit-resend`、`task-input-queue` 额外依赖 `every-agent-contract` 属共享契约层，合规（[架构文档](../../ARCHITECTURE.md) §14.9）。
+- 依赖红线干净：全部 23 个 pom **零 `every-agent-worker` 依赖**；`task-edit-resend`、`task-input-queue` 额外依赖 `every-agent-contract` 属共享契约层，合规（[架构文档](../../ARCHITECTURE.md) §14.9）。
 - 全部插件源码零 Spring 容器注解：插件经 `URLClassLoader` 加载、不在 Spring 容器中，取服务只能 `ctx.services()` / `getService(Class)`。
 - 每个 Java 入口都实现 `dev.everyagent.plugin.api.EveryAgentPlugin` 的 `activate(WorkerPluginContext ctx)`；改完 Java 要重跑 `mvn package`、改完 web 要重跑 `npm run build:plugins`（均需重启 worker，见 [构建与运行](../guides/build-and-run.md)）。
 
@@ -71,7 +72,7 @@ has_children: false
 | ToolProvider（给模型加工具） | sandbox-windows-mic | `every-agent-plugins/sandbox-windows-mic/src/main/java/dev/everyagent/plugin/sandbox/mic/WindowsMicSandboxPlugin.java:31` | 入口仅 34 行，注册即用；更典型的工具型实现看 subagent（`SubAgentPlugin.java:31`） |
 | AdvisorProvider（请求/响应链增强） | system-info | `every-agent-plugins/system-info/src/main/java/dev/everyagent/plugin/sysinfo/SystemInfoAdvisorProvider.java` | 全仓最小 Advisor 范例（入口 19 行），只做请求前 system prompt 注入 |
 | SandboxProvider（自定义沙箱） | sandbox-windows-mic | `every-agent-plugins/sandbox-windows-mic/src/main/java/dev/everyagent/plugin/sandbox/mic/WindowsMicSandboxProvider.java:38-39` | 三实现中依赖最少（仅 jna）；优先级取值坐标参考 sandbox-wsl-ubuntu（priority=10） |
-| SearchProvider | **无内置范例** | —（声明：`every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/WorkerPluginContext.java:51`） | 25 个内置插件零使用，别照抄空气；SPI 已接线（`fs.search`/`task.search` 增补聚合，见 [advisors §6](../backend/advisors.md)） |
+| SearchProvider | **无内置范例** | —（声明：`every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/WorkerPluginContext.java:51`） | 26 个内置插件零使用，别照抄空气；SPI 已接线（`fs.search`/`task.search` 增补聚合，见 [advisors §6](../backend/advisors.md)） |
 | AuthorizationHandler（接管授权闸门） | unattended | `every-agent-plugins/unattended/src/main/java/dev/everyagent/plugin/unattended/UnattendedPlugin.java:23` | 逻辑最短；带评审模型的进阶版看 ai-review（`AiReviewPlugin.java:24`） |
 | ToolExecutionInterceptor（拦截工具调用） | secret-redaction | `every-agent-plugins/secret-redaction/src/main/java/dev/everyagent/plugin/secretredaction/SecretRedactionPlugin.java:22` | 唯一「单 SPI 极简」实现（入口 24 行），上行掩码单向拦截 |
 | SkillContributor（贡献技能） | subagent | `every-agent-plugins/subagent/src/main/java/dev/everyagent/plugin/subagent/SubAgentPlugin.java:44` | 全仓唯一实现，别无分号 |
@@ -182,6 +183,12 @@ has_children: false
 把工作区 `agents.md` 约束注入 system prompt。
 - 关键文件：`~plugins/agents-md/src/main/java/dev/everyagent/plugin/agentsmd/AgentsMdAdvisorProvider.java:23-24`（order=HP+60）。
 - 值得看：BaseAdvisor 请求前改 prompt 的最小写法。
+
+### ask-user（用户提问）
+
+提供 `ask_user` 工具：向用户提出单选题列表并阻塞等待回答，超时读 worker 配置 `worker.limits.ask-timeout-ms`。
+- 关键文件：`~plugins/ask-user/src/main/java/dev/everyagent/plugin/askuser/AskUserPlugin.java`；工具本体 `AskUserTool.java`（自 worker 内置工具迁出，行为零变化）。
+- 值得看：**纯 ToolProvider 型 java-only 插件**最小样本；主/子 agent 均注册（appliesTo 恒真）；工具内部经 `ctx.interaction().ask()` 发起提问、虚拟线程挂起等待。
 
 ### ai-review（AI 审议）
 

@@ -72,7 +72,7 @@ task-queue 测的是 `TaskQueue`（纯计数/事件广播）与 `QueueAdmissionN
 
 ### 1.4 官方测试桩现状：没有，手写一个
 
-如实登记：**plugin-api 不附带任何 `WorkerPluginContext` 的 fake / 测试实现**。plugin-api 自己的 `src/test` 只有两个与插件无关的自测（`shell/ExecResultsClixmlTest.java`、`util/SecretPatternsTest.java`）；全仓 25 个内置插件的测试里 `implements WorkerPluginContext` **零命中**——因为它们全都绕开 ctx，直接测被注册的类本体（§1.2/§1.3 的做法）。
+如实登记：**plugin-api 不附带任何 `WorkerPluginContext` 的 fake / 测试实现**。plugin-api 自己的 `src/test` 只有两个与插件无关的自测（`shell/ExecResultsClixmlTest.java`、`util/SecretPatternsTest.java`）；全仓 26 个内置插件的测试里 `implements WorkerPluginContext` **零命中**——因为它们全都绕开 ctx，直接测被注册的类本体（§1.2/§1.3 的做法）。
 
 但有一个场景绕不开 ctx：**你想断言「`activate()` 到底注册了什么」**（注册没走到 = 插件没生效的最常见根因，见 §4 剧本 a）。此时手写一个记录型 stub，把每次注册记进集合，测试直接断言集合内容。完整代码如下（已对本地 Maven 仓库的 `dev.everyagent:every-agent-plugin-api:1.0.0` jar 用 `javac` 编译验证通过；接口签名与 `WorkerPluginContext.java:42-94` + `TaskPluginContext.java:17,24` 的 15 个注册方法逐一核对）：
 

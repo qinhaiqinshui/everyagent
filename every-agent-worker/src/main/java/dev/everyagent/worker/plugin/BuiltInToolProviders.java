@@ -1,8 +1,6 @@
 package dev.everyagent.worker.plugin;
 
-import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.os.OsSandbox;
-import dev.everyagent.worker.plugin.adapters.AskUserToolProvider;
 import dev.everyagent.worker.plugin.adapters.DirectShellToolProvider;
 import dev.everyagent.worker.plugin.adapters.FileToolsProvider;
 import dev.everyagent.worker.plugin.registry.ToolProviderRegistry;
@@ -17,8 +15,9 @@ import org.springframework.stereotype.Component;
  * <p>Spring 启动时（@PostConstruct）把内置 ToolProvider 适配器注册到
  * {@link ToolProviderRegistry}，替代 TaskManager/SubAgentManager 中硬编码的工具创建。
  *
- * <p>适配器访问的依赖（WorkerProperties、FsToolSupport、OsSandbox、RipgrepBinary
- * FsToolSupport、OsSandbox、RipgrepBinary）均为 Spring 单例，构造时注入并传给各适配器。
+ * <p>适配器访问的依赖（FsToolSupport、OsSandbox、RipgrepBinary）均为 Spring 单例，
+ * 构造时注入并传给各适配器。ask_user 工具已迁出为 ask-user 插件
+ * （every-agent-plugins/ask-user，经 ToolProvider SPI 同链装配）。
  */
 @Component
 public class BuiltInToolProviders {
@@ -27,22 +26,19 @@ public class BuiltInToolProviders {
     private final FsToolSupport fs;
     private final OsSandbox sandbox;
     private final RipgrepBinary rgBinary;
-    private final WorkerProperties props;
 
     public BuiltInToolProviders(ToolProviderRegistry registry, FsToolSupport fs,
-            OsSandbox sandbox, RipgrepBinary rgBinary, WorkerProperties props) {
+            OsSandbox sandbox, RipgrepBinary rgBinary) {
         this.registry = registry;
         this.fs = fs;
         this.sandbox = sandbox;
         this.rgBinary = rgBinary;
-        this.props = props;
     }
 
     @PostConstruct
     void registerBuiltin() {
         registry.register(new FileToolsProvider(fs));
         registry.register(new DirectShellToolProvider(sandbox, rgBinary));
-        registry.register(new AskUserToolProvider(props));
     }
 }
 

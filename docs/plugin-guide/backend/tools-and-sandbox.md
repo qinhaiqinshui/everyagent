@@ -68,7 +68,7 @@ worker **复用 Spring AI 框架**，不手搓工具循环（根 `AGENTS.md` 红
        （WorkerToolEventAdvisor extends ToolCallingAdvisor，WorkerToolEventAdvisor.java:66,80）
 ```
 
-worker 自己的内置工具（read_file、powershell/bash、ask_user）也走同一条链：`BuiltInToolProviders` 在 `@PostConstruct` 把三个适配器注册进同一注册表（`every-agent-worker/src/main/java/dev/everyagent/worker/plugin/BuiltInToolProviders.java:41-45`：`FileToolsProvider` / `DirectShellToolProvider` / `AskUserToolProvider`）——**插件工具与内置工具完全平权**。
+worker 自己的内置工具（read_file、powershell/bash）也走同一条链：`BuiltInToolProviders` 在 `@PostConstruct` 把适配器注册进同一注册表（`every-agent-worker/src/main/java/dev/everyagent/worker/plugin/BuiltInToolProviders.java`：`FileToolsProvider` / `DirectShellToolProvider`）——**插件工具与内置工具完全平权**。`ask_user` 不在内置之列：由独立的 **ask-user 插件**以 `ToolProvider` 提供（java-only，主/子 agent 均可用，超时读 worker 配置 `worker.limits.ask-timeout-ms`，见 [内置插件清单](../reference/builtin-plugins.md) §5），与内置工具同链装配。
 
 ### 1.3 工具怎么写：注解式（推荐）
 

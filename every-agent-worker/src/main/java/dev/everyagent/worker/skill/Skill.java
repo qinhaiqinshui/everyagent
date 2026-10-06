@@ -15,7 +15,7 @@ import java.util.List;
  * 经 {@code read_file} 按 {@link #knowledgePath()}(绝对路径,系统技能目录
  * 对 AI 工具只读放行)自行读取。
  *
- * <p>工具绑定复用 worker 已有的 {@code SubAgentTools}/{@code AskUserTool}(由 toolIds 声明对齐)。
+ * <p>工具绑定复用已有的 {@code SubAgentTools}/ask-user 插件的 {@code AskUserTool}(由 toolIds 声明对齐)。
  *
  * <p>红线(AGENTS.md §13):skill 的知识注入与工具授权一律交给 Spring AI 的
  * advisor / tool 原语,本类不实现任何 prompt 拼接或工具循环逻辑。

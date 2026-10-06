@@ -1,0 +1,9 @@
+{
+  "id": "ask-user",
+  "name": "用户提问",
+  "version": "0.1.0",
+  "description": "提供 ask_user 工具，支持向用户发起单选题提问并等待答复",
+  "author": "everyagent",
+  "main": "dev.everyagent.plugin.askuser.AskUserPlugin",
+  "enabled": true
+}

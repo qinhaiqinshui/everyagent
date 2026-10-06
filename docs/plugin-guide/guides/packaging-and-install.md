@@ -185,7 +185,7 @@ Expand-Archive -Path .\my-tool-0.1.0.eap -DestinationPath "$HOME\.everyagent\plu
 
 ### 3.3 路线 c：builtin 路径（仓库内开发即分发）
 
-把插件目录放进仓库的 `every-agent-plugins/`，随整个仓库重新分发——这就是所有 25 个内置插件的姿势。要点：
+把插件目录放进仓库的 `every-agent-plugins/`，随整个仓库重新分发——这就是所有 26 个内置插件的姿势。要点：
 
 - 目录位置：`worker.builtin-plugins-dir` 配置为空时取**启动目录（user.dir）下**的 `every-agent-plugins/`（`WorkerProperties.java:257-266`）——从哪里启动 worker 决定能不能扫到，详见[构建与运行](build-and-run.md)的 cwd 一节。
 - java 插件要求 `target/classes/plugin.json` + `target/` 下的 jar；未构建只会得到 WARN 日志（内置插件未构建），不阻塞启动——文案与排查见[构建与运行](build-and-run.md)与[故障排查](troubleshooting.md)。

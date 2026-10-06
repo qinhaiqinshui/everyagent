@@ -262,7 +262,7 @@ public interface SkillContributor {
 - 结果形状与两条 RPC 的应答项一致：`SearchResult.path` 为工作区相对 posix 路径；`TaskSearchResult.Match.line` 为命中字段的**干净文本**（与 `task.search` 应答的 `line` 一致，非行号——行内定位用 `matchIndex`）。
 - 典型场景：search-es（ElasticSearch）、search-vector（向量检索）等在工作区外维护索引的引擎，把索引命中补充进前端搜索结果。
 
-**范例**：暂无内置插件注册（25 个内置插件零使用）；聚合/去重/触顶/异常跳过行为由 `FsSearchServiceTest` / `TaskSearchServiceTest` 的 StubProvider 用例钉住。若接线前曾按旧 Javadoc 期待「ripgrep 变为默认插件 search-ripgrep、provider 替换后端」——现行语义是增补聚合，不替换。
+**范例**：暂无内置插件注册（26 个内置插件零使用）；聚合/去重/触顶/异常跳过行为由 `FsSearchServiceTest` / `TaskSearchServiceTest` 的 StubProvider 用例钉住。若接线前曾按旧 Javadoc 期待「ripgrep 变为默认插件 search-ripgrep、provider 替换后端」——现行语义是增补聚合，不替换。
 
 ## 7. AuthorizationHandler —— 授权决议链节点
 
@@ -302,4 +302,4 @@ public interface AuthorizationHandler {
 
 - 任务生命周期节点（真正的 `[420,850]` 禁插段所在）与自注册 RPC：[task-and-rpc.md](task-and-rpc.md)
 - 工具与沙箱扩展点（ExecContext 槽位表、工具循环的另一半）：[tools-and-sandbox.md](tools-and-sandbox.md)
-- 25 个内置插件全景（谁注册了哪些 Advisor、order 多少）：[内置插件索引](../reference/builtin-plugins.md)
+- 26 个内置插件全景（谁注册了哪些 Advisor、order 多少）：[内置插件索引](../reference/builtin-plugins.md)

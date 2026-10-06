@@ -43,7 +43,7 @@ worker 启动（@PostConstruct，全程只读一次）
 
 | 字段 | 类型 | 必填 | 缺省值（消费点兜底） | 被哪段代码消费（相对仓库根） | 踩坑说明 |
 |---|---|---|---|---|---|
-| `id` | string | 实践必填（代码不强制） | `""` → 回退**目录名** | `every-agent-worker/.../loader/PluginLoader.java:214-217` | 它有三重身份，见 §4；仓库内 25 个内置插件全部做到 `id == 目录名` |
+| `id` | string | 实践必填（代码不强制） | `""` → 回退**目录名** | `every-agent-worker/.../loader/PluginLoader.java:214-217` | 它有三重身份，见 §4；仓库内 26 个内置插件全部做到 `id == 目录名` |
 | `name` | string | 否 | 缺省 = `id` | `PluginLoader.java:226` | 仅展示（`plugin.list` → 扩展管理面板），不参与任何判定 |
 | `version` | string | 否 | `"0.0.0"` | `PluginLoader.java:227` | 纯展示字符串：**不校验 semver、不与 Maven pom 版本比对、不参与任何兼容判定**（见 §7） |
 | `description` | string | 否 | `""` | `PluginLoader.java:228` | 仅展示 |
@@ -162,7 +162,7 @@ worker 启动（@PostConstruct，全程只读一次）
 
 ## 4. `id` 的三重身份（最容易踩坑处）
 
-同一个字符串同时是**目录名**、**注册标识**和**前端存储作用域**，三处不一致就会出灵异现象。仓库内 25 个内置插件实测全部 `id == 目录名`。
+同一个字符串同时是**目录名**、**注册标识**和**前端存储作用域**，三处不一致就会出灵异现象。仓库内 26 个内置插件实测全部 `id == 目录名`。
 
 | 身份 | 谁用它 | 不一致的后果 |
 |---|---|---|
@@ -172,7 +172,7 @@ worker 启动（@PostConstruct，全程只读一次）
 
 补充：**同名冲突时内置优先**。`PluginLoader` 先把 `builtin` 排在前面再逐个加载，后到的同 id 插件被去重跳过并 WARN「插件 {} 已加载,跳过重复」（`PluginLoader.java:176-184`、`:219-223`）⇒ 想「装个同名外部插件去覆盖内置插件」是**无效**的，只能改 `id`。
 
-命名建议：**小写字母 + 数字 + 连字符**，正则 `^[a-z0-9][a-z0-9-]{1,38}$`（脚手架 `create-everyagent-plugin` 的 id 校验同此）；实测仓内 25 个内置插件的 `id` 全部符合，例：`image-vision`、`task-edit-resend`。不要用中文、空格、下划线、点号；也不要和内置插件撞名（25 个现存 id 见 [内置插件清单](reference/builtin-plugins.md)）。
+命名建议：**小写字母 + 数字 + 连字符**，正则 `^[a-z0-9][a-z0-9-]{1,38}$`（脚手架 `create-everyagent-plugin` 的 id 校验同此）；实测仓内 26 个内置插件的 `id` 全部符合，例：`image-vision`、`task-edit-resend`。不要用中文、空格、下划线、点号；也不要和内置插件撞名（26 个现存 id 见 [内置插件清单](reference/builtin-plugins.md)）。
 
 ## 5. `webMain` 消费链与产物路径约定（known-issues #5 修复后）
 

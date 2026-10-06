@@ -23,7 +23,7 @@ has_children: false
 
 | 方法 | 一句话 | 详解 | 范例 |
 |---|---|---|---|
-| `String id()` | 必须与 plugin.json 的 `id` 一致（仅 `[a-z0-9-]`） | [总览 §5](../backend/overview.md#5-everyagentplugin-契约与最小入口类) | 全部 25 个 |
+| `String id()` | 必须与 plugin.json 的 `id` 一致（仅 `[a-z0-9-]`） | [总览 §5](../backend/overview.md#5-everyagentplugin-契约与最小入口类) | 全部 26 个 |
 | `void activate(WorkerPluginContext ctx)` | 一切注册发生在此；抛异常只废自己一个插件 | 同上 | 同上 |
 | `default void deactivate()` | 停机钩子：worker 优雅关闭时由 PluginLoader 调用（运行期禁用/卸载不触发） | [总览 §3.2](../backend/overview.md#32-deactivate-只在-worker-关闭时调用改动--重启-worker) | — |
 
@@ -202,7 +202,7 @@ has_children: false
 | `sidebar-panel-shown` | ✅ 活 | `task-round-closed` | ✅ 活（历史回放会补发） |
 | `task-status-changed` | ✅ 活 | `plugins-loaded` | ✅ 活（#4 接线） |
 
-插件间通信无先例：25 个内置插件 events 调用 6 处全是 `on`、零 `emit`；约定事件名用 `<pluginId>:<verb>` 前缀（[事件 §6](../web/events.md#6-插件间通信模式)）。
+插件间通信无先例：26 个内置插件 events 调用 6 处全是 `on`、零 `emit`；约定事件名用 `<pluginId>:<verb>` 前缀（[事件 §6](../web/events.md#6-插件间通信模式)）。
 
 ### 2.5 `PluginStorage` / `PluginFs` / `CommandRegistry` / `Disposable`
 
@@ -244,7 +244,7 @@ has_children: false
 
 ### 4.1 插件 id 规则
 
-`^[a-z0-9][a-z0-9-]{1,38}$` 且首尾不能是连字符（2~39 字符；脚手架校验 `create-everyagent-plugin/index.mjs:52`），25 个内置全部合规。id 的三重身份（目录名 / `.eap` 顶层目录 / localStorage 前缀）：[清单 §4](../plugin-manifest.md#4-id-的三重身份最容易踩坑处)。
+`^[a-z0-9][a-z0-9-]{1,38}$` 且首尾不能是连字符（2~39 字符；脚手架校验 `create-everyagent-plugin/index.mjs:52`），26 个内置全部合规。id 的三重身份（目录名 / `.eap` 顶层目录 / localStorage 前缀）：[清单 §4](../plugin-manifest.md#4-id-的三重身份最容易踩坑处)。
 
 ### 4.2 包名 / 入口类推导（脚手架约定）
 
