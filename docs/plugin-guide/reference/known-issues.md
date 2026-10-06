@@ -31,12 +31,12 @@ has_children: false
 - **修复**：实现 Badge 消费——web 内部 `UiSidebarItemDefinition` 补 `Badge` 字段，`buildSidebarActivityItems` 透传、`SidebarActivityBar` 在活动栏图标内渲染（组件自管订阅与刷新，无变更返回 null）；git 的变更角标已生效。`badgeCount`（数字角标）通道保持不变。
 - **后续**：两种角标写法都可用；详见 [UI 扩展点](../web/ui-extensions.md) §2。
 
-### #3 `registerOutputBlock` / `registerTraceType` 返回的是假 Disposable
+### #3 `registerOutputBlock` / `registerTraceType` 返回的是假 Disposable（✅ 已修复）
 
-- **现象**：`registerOutputBlock` 的 dispose 只清**无人读**的 `outputBlocksMap`（`every-agent-web/src/plugin/PluginDispatcher.ts:274-284`，清出于 `:281`），真实消费方 `RichMessageContent.tsx` 走的 `outputBlockRegistry` **不清**；`registerTraceType`（`:268-273`）返回的 disposable 只清主 registry，不清 `TaskThread.tsx` 消费的 `traceTypeRegistry` 侧路。
-- **影响**：调了 dispose 之后 UI 仍可能继续用旧 handler 渲染，造成「以为注销了其实还在」的错觉。
-- **规避**：插件**勿依赖这两个 dispose**做注销（[UI 扩展点](../web/ui-extensions.md) §10/§11 已告诫）。
-- **待办**：dispose 补齐侧路 unregister（一行改动量级，但属宿主代码，本任务不动）。
+- **现象（修复前）**：`registerOutputBlock` 的 dispose 只清**无人读**的 `outputBlocksMap`，真实消费方 `RichMessageContent.tsx` 走的 `outputBlockRegistry` **不清**；`registerTraceType` 返回的 disposable 只清主 registry，不清 `TaskThread.tsx` 消费的 `traceTypeRegistry` 侧路。
+- **影响（修复前）**：调了 dispose 之后 UI 仍可能继续用旧 handler 渲染，造成「以为注销了其实还在」的错觉。
+- **修复**：dispose 补齐侧路 unregister——`outputBlockRegistry` 新增 `unregister(tag)`、`traceTypeRegistry` 新增 `unregisterTraceType(kind)`，`PluginDispatcher` 两个注册方法的 Disposable 同时清理真实消费方；无人读的 `outputBlocksMap` 已删除。
+- **后续**：两个扩展点的 dispose 均可依赖；[UI 扩展点](../web/ui-extensions.md) §10/§11/§16 已按新口径更新。
 
 ### #4 24 个零 emit 死事件 + `task-deleted` 死订阅陷阱
 

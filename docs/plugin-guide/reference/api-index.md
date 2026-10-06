@@ -155,8 +155,8 @@ has_children: false
 | `ui.tool_call_views` | `registerToolCallView(def)` | [UI §7](../web/ui-extensions.md#7-uitool_call_views--工具调用视图接管) | update-file-view（update_file） |
 | `ui.user_message_actions` | `registerUserMessageAction(def)` | [UI §8](../web/ui-extensions.md#8-uiuser_message_actions--用户消息动作) | task-edit-resend |
 | `task.submit_contributions` | `registerTaskRunSubmitContributionProvider(p)` | [UI §9](../web/ui-extensions.md#9-tasksubmit_contributions--taskrun-提交贡献) | task-edit-resend |
-| `ui.trace_types` | `registerTraceType(def)` | [UI §10](../web/ui-extensions.md#10-uitrace_types--trace-类型渲染) | ai-review（auth.review）；⚠️ dispose 假 |
-| `ui.output_blocks` | `registerOutputBlock(def)` | [UI §11](../web/ui-extensions.md#11-uioutput_blocks--输出块渲染) | ⚠️ 无内置范例；dispose 假 |
+| `ui.trace_types` | `registerTraceType(def)` | [UI §10](../web/ui-extensions.md#10-uitrace_types--trace-类型渲染) | ai-review（auth.review）；dispose 真清理 |
+| `ui.output_blocks` | `registerOutputBlock(def)` | [UI §11](../web/ui-extensions.md#11-uioutput_blocks--输出块渲染) | ⚠️ 无内置范例；dispose 真清理 |
 | `ui.file_content_editors` | `registerFileContentEditor(desc)` | [UI §12](../web/ui-extensions.md#12-uifile_content_editors--文件内容编辑器) | pdf-viewer（.pdf） |
 | `ui.file_explorer_actions` | `registerFileExplorerAction(action)` | [UI §13](../web/ui-extensions.md#13-uifile_explorer_actions--文件树右键菜单) | git「显示 Git 历史」（追加到内置右键菜单尾部） |
 | `ui.round_tail_panels` | `registerRoundTailPanel(def)` | [UI §14](../web/ui-extensions.md#14-uiround_tail_panels--轮末展示区) | file-change |

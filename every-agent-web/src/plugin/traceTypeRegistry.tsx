@@ -87,6 +87,14 @@ export function registerTraceType(definition: TraceTypeDefinition): void {
   traceTypes.set(definition.kind, definition)
 }
 
+/** 按 kind 注销 trace 类型（插件 dispose 侧路清理用）；返回是否确实移除。 */
+export function unregisterTraceType(kind: string): boolean {
+  if (!kind.trim()) {
+    return false
+  }
+  return traceTypes.delete(kind)
+}
+
 /** 按 kind 获取 trace 类型定义。 */
 export function getTraceType(kind: string): TraceTypeDefinition {
   const registered = traceTypes.get(kind)

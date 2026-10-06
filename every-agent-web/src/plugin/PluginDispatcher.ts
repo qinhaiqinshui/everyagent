@@ -29,7 +29,7 @@ import type {
   UiRoundTailPanelDefinition,
 } from './types'
 import type { FileContentEditorDescriptor } from '@/components/files/file-tab-types'
-import { registerTraceType as registerToTraceRegistry } from './traceTypeRegistry'
+import { registerTraceType as registerToTraceRegistry, unregisterTraceType as unregisterFromTraceRegistry } from './traceTypeRegistry'
 import { outputBlockRegistry } from './outputBlockRegistry'
 import {
   ExtensionRegistry,
@@ -103,8 +103,8 @@ function getRegistry<T>(extensionPoint: string): ExtensionRegistry<T> {
 }
 
 // 特殊处理：traceTypes 和 outputBlocks 除了走 ExtensionRegistry 外，
-// 还需要同步到 traceTypeRegistry / outputBlockRegistry
-const outputBlocksMap = new Map<string, OutputBlockHandler>()
+// 还需要同步到 traceTypeRegistry / outputBlockRegistry（真实消费方），
+// dispose 时两侧都要注销（ExtensionRegistry 的 Disposable 只清自己那侧）。
 
 // ── PluginDispatcher 真实实现 ──
 
@@ -267,18 +267,21 @@ export const pluginDispatcher: RealPluginDispatcher = {
   },
   registerTraceType(def) {
     const disposable = getRegistry<TraceTypeDefinition>(EXT_UI_TRACE_TYPES).register('', def)
-    // 同时注册到 traceTypeRegistry（保持向后兼容）
+    // 同时注册到 traceTypeRegistry（真实消费方，TaskTraceShell 按 kind 查表）
     registerToTraceRegistry(def)
-    return disposable
+    return {
+      dispose() {
+        disposable.dispose()
+        unregisterFromTraceRegistry(def.kind)
+      },
+    }
   },
   registerOutputBlock(tag, handler) {
-    const key = tag.toLowerCase()
-    outputBlocksMap.set(key, handler)
-    // 同时注册到 outputBlockRegistry（保持向后兼容）
+    // 直接注册到 outputBlockRegistry（真实消费方，RichMessageContent 按 tag 查表）
     outputBlockRegistry.register(tag, handler)
     return {
       dispose() {
-        outputBlocksMap.delete(key)
+        outputBlockRegistry.unregister(tag)
       },
     }
   },

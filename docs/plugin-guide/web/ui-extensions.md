@@ -321,7 +321,7 @@ ctx.ui.registerOutputBlock('my-report', (content, { taskId }) =>
 
 消费链：同样**不在 `dispatch()` switch 内**，旁路写入 `outputBlockRegistry`（`PluginDispatcher.ts:274-284`）；消息渲染时 `RichMessageContent` 把内容按**成对** `<tag>…</tag>` 切段（`RichMessageContent.tsx:30-58`，只识别字母开头、成对闭合的标签，不成对当普通文本），命中已注册 tag 交给 handler，未命中降级为通用代码块（`:83-90`）。
 
-- **坑**：① **重复注册同 tag 直接抛错**（`outputBlockRegistry.ts:19-21`），会炸掉整个 `activate()`——与 trace 的覆盖语义相反；② **返回的 Disposable 是假的**：dispose 只删 `outputBlocksMap`（`PluginDispatcher.ts:276-282`），而该 Map 全仓无人读（rg 仅 PluginDispatcher 3 处）——真正被消费的 `outputBlockRegistry` 不会被清理，注销后渲染照旧；③ tag 大小写不敏感（两端都 toLowerCase，`PluginDispatcher.ts:275`、`outputBlockRegistry.ts:17,33`）。
+- **坑**：① **重复注册同 tag 直接抛错**（`outputBlockRegistry.ts`），会炸掉整个 `activate()`——与 trace 的覆盖语义相反；② dispose 现已真清理（`outputBlockRegistry.unregister`，known-issues #3 修复前曾只清无人读的旁路 Map，注销后渲染照旧）；③ tag 大小写不敏感（两端都 toLowerCase）。
 - **内置范例**：**无**（`every-agent-plugins` 全目录 rg `registerOutputBlock` 零命中；注册表注释自证「保持空，未注册标签走纯文本降级」，`outputBlockRegistry.ts:1-5`）。
 
 ## 12. `ui.file_content_editors` —— 文件内容编辑器
@@ -428,7 +428,7 @@ ctx.ui.appendComposerText('\n\n（追加一段）')
 
 ## 16. Disposable 与刷新
 
-- **dispose 语义是真的**：`ListExtensionRegistry.register` 返回的 Disposable 从数组 splice 并通知宿主重渲染（`ExtensionRegistry.ts:45-56`）——`ctx.events.on`、`ctx.commands.registerCommand` 同理（见[前端 ctx API](context-api.md) §9）。但**两个例外**：`registerOutputBlock` 的 dispose 只清无人读的 `outputBlocksMap`（§11 坑 2）；`registerTraceType` 的 dispose 也不清 `traceTypeRegistry` 侧路 Map（`PluginDispatcher.ts:268-273` 只旁路写入、无对应删除）。
+- **dispose 语义是真的**：`ListExtensionRegistry.register` 返回的 Disposable 从数组 splice 并通知宿主重渲染（`ExtensionRegistry.ts:45-56`）——`ctx.events.on`、`ctx.commands.registerCommand` 同理（见[前端 ctx API](context-api.md) §9）。`registerTraceType` / `registerOutputBlock` 的 dispose 也已补齐侧路注销（`traceTypeRegistry.unregisterTraceType` / `outputBlockRegistry.unregister`，known-issues #3 修复前曾是不清真实消费方的假 Disposable）。
 - **宿主不跟踪、也不调用 deactivate**：`loadedPlugins` 的 `disposables` 恒为空数组（`pluginLoader.ts:270,404-405`），前端没有任何卸载路径、`deactivate` 零调用—— Disposable 只对「你自己调用」有意义。
 - **刷新即丢**：注册表、订阅、blob 模块全是内存态，页面刷新全部清零并重新走加载链路（[加载链路](overview-and-loading.md)）；跨刷新要保留的状态用 `ctx.storage`（localStorage）。
 - **同一会话内的「更新」= 重新加载页面**：改了插件 web 代码要重跑 `npm run build:plugins` 再刷新（该脚本不在任何流水线内）；后端启停/装卸一律重启 worker（[plugin.json 字段参考](../plugin-manifest.md) §6）。

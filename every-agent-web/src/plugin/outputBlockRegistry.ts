@@ -21,6 +21,9 @@ export const outputBlockRegistry = {
     }
     handlers.set(normalizedTag, handler)
   },
+  unregister(tag: string): boolean {
+    return handlers.delete(tag.trim().toLowerCase())
+  },
   get(tag: string): OutputBlockHandler | undefined {
     return handlers.get(tag.toLowerCase())
   },
