@@ -265,5 +265,8 @@ const pluginBadgeAnchorStyle: React.CSSProperties = {
   position: 'absolute',
   top: -4,
   right: -2,
+  color: 'var(--accent-red)',
+  fontSize: 12,
+  fontWeight: 600,
   lineHeight: 1,
 }

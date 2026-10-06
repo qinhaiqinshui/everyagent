@@ -104,18 +104,7 @@ export default function GitChangeBadge() {
   }, [ctx, requestRefresh])
 
   if (count === 0) return null
-  return (
-    // 定位几何由宿主统一收口(SidebarActivityBar 的 pluginBadgeAnchorStyle),此处只管内容与配色。
-    <span
-      style={{
-        color: 'var(--accent-red)',
-        fontSize: 12,
-        fontWeight: 600,
-        lineHeight: 1,
-      }}
-    >
-      {count > 99 ? '99+' : count}
-    </span>
-  )
+  // 样式(位置/字号/颜色/字重)全部由宿主 pluginBadgeAnchorStyle 统一控制,插件只输出数字内容。
+  return <>{count > 99 ? '99+' : count}</>
 }
 
