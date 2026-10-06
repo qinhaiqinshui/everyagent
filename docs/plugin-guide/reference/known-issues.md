@@ -5,14 +5,14 @@ parent: reference
 has_children: false
 ---
 
-**一句话定位**：本页是插件系统**现状偏差的集中登记簿**——23 条已核实的问题与开放项（**17 条已修复**：#1~#5、#8/#9、#12~#17、#19、#21~#23；#6/#7 已缓解；#10/#11、#18/#20 开放），每条按「现象 / 影响 / 修复·规避 / 待办」成文，是判断「这是我的 bug 还是宿主的坑」的第一站。
+**一句话定位**：本页是插件系统**现状偏差的集中登记簿**——23 条已核实的问题与开放项（**19 条已修复**：#1~#5、#8~#17、#19、#21~#23；#6/#7 已缓解；#18/#20 开放——前者需发布凭证、后者需真机实测），每条按「现象 / 影响 / 修复·规避 / 待办」成文，是判断「这是我的 bug 还是宿主的坑」的第一站。
 
 ## 如何读这张表
 
 - **只登记事实，不评判设计**。每条「现象」都附证据（相对仓库根路径 + 行号，以登记时仓库快照为准；行号会随后续提交漂移，以内容定位为准）。外部网络类事实（npm / Maven 404）标注「调查实测」，无法静态取证。
 - **不重复正文**。某问题若在其余 18 篇已详述（多数带 ⚠️ 标记），本页只给一句话现象 + 链接，不展开机理。
 - **「待办」只是建议**（已修复条目改为「修复」记录，链接指向修复后口径的正文）。
-- 编号 **#1~#23** 全站连续（`[reference/api-index](api-index.md)` 的 ⚠️ 标记即指向本页）；#1~#5、#8/#9、#12~#17、#19、#21~#23 已修复，#6/#7 已缓解（登记在文末[已缓解项](#已缓解项)）。
+- 编号 **#1~#23** 全站连续（`[reference/api-index](api-index.md)` 的 ⚠️ 标记即指向本页）；#1~#5、#8~#17、#19、#21~#23 已修复，#6/#7 已缓解（登记在文末[已缓解项](#已缓解项)）。
 - 分组：**A 前端宿主**（#1~#9）、**B 后端 worker**（#10~#17）、**C 分发与生态**（#18~#21）、**D 文档站自身**（#22~#23）。
 
 ## A. 前端宿主
@@ -70,19 +70,19 @@ has_children: false
 
 ## B. 后端 worker
 
-### #10 `SearchProvider` SPI 未接线
+### #10 `SearchProvider` SPI 未接线（✅ 已修复）
 
-- **现象**：注册方法存在（`every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/WorkerPluginContext.java:51`），registry 的 `getDefault`/`getById`/`getProviders`（`every-agent-worker/src/main/java/dev/everyagent/worker/plugin/registry/SearchProviderRegistry.java:22,28,35`）在 worker 主代码**零调用**；25 个内置插件零注册；`docs/ARCHITECTURE.md` 也零提及该 SPI。
-- **影响**：注册 SearchProvider **没有任何运行期效果**（比死扩展点更彻底：连消费候选点都没有）。
-- **规避**：搜索类能力不要走该 SPI；文档已如实登记为「未接线」，见 [Advisor 与模型链](../backend/advisors.md) §6。
-- **待办**：接线（worker 搜索入口改查 registry，或按 Javadoc 设想的 search-ripgrep 插件落地），或从公共 API 移除该 SPI——保留一个永远不生效的注册点是最大的误导源。
+- **现象（修复前）**：注册方法存在，registry 的 `getDefault`/`getById`/`getProviders` 在 worker 主代码**零调用**；25 个内置插件零注册；`docs/ARCHITECTURE.md` 也零提及该 SPI。
+- **影响（修复前）**：注册 SearchProvider **没有任何运行期效果**（比死扩展点更彻底：连消费候选点都没有）。
+- **修复**：`fs.search` / `task.search` 两条既有 RPC **增补聚合**——内置 rg 结果之后按注册序追加各 provider 结果，按位置键去重（文件 `path+lineNumber+matchIndex` / 任务 `taskId+roundIndex+field+matchIndex`），仍受 `maxResults` 触顶；注册表为空 → 零行为变化，单个 provider 异常仅 WARN 跳过，rg 不可用但有 provider 时可独立供数（SPI 真正可单独供数的路径）。**取舍**：消费链路选既有 RPC 而非 Advisor——搜索结果是给用户的、不是给模型上下文的；零新 RPC，`ARCHITECTURE.md` §7/§8.5 与 [Advisor 与模型链](../backend/advisors.md) §6、api-index、builtin-plugins 状态行同步。附带修正 SPI `TaskSearchResult.Match.line` 类型（`int`→`String`，与 wire「干净文本」语义一致；此前零实现无兼容负担）。提交 `aa936bd9`；`FsSearchServiceTest` 32 + `TaskSearchServiceTest` 16 全过（含 rg 缺失回退用例）。
+- **后续**：未新增注册 SearchProvider 的示例内置插件（会与内置 rg 重复供数、无真实价值），聚合语义由单测钉住；将来做 search-es / search-vector 类插件时 SPI 契约已就绪。
 
-### #11 `SkillContributor` 半接线（只进 system prompt，不进 / 菜单）
+### #11 `SkillContributor` 半接线（✅ 已修复）
 
-- **现象**：registry 的 `getSkills()` 只被 `SkillAdvisor.mergedSkills()` 消费（`every-agent-worker/src/main/java/dev/everyagent/worker/skill/SkillAdvisor.java:67`，注入 system prompt）；`/` 菜单不含该 registry。subagent 的 skill 能进菜单，靠的是知识包**物化成文件**进 skillsDir 再被 `ExternalSkillScanner` 捞取，而非走此 SPI。
-- **影响**：照 SPI 语义「贡献技能」的插件，技能只对模型可见、对用户 `/` 菜单不可见——两条通道不等价。
-- **规避**：skill 需要进菜单的，物化文件到 skillsDir（subagent 先例）；只影响模型行为的才用 SPI。详见 [Advisor 与模型链](../backend/advisors.md) §5。
-- **待办**：菜单并入 registry，或文档固化「物化文件是菜单唯一通道」的现状。
+- **现象（修复前）**：registry 的 `getSkills()` 只被 `SkillAdvisor.mergedSkills()` 消费（注入 system prompt）；`/` 菜单不含该 registry——subagent 的 skill 能进菜单，靠的是知识包**物化成文件**进 skillsDir 再被 `ExternalSkillScanner` 捞取。
+- **影响（修复前）**：照 SPI 语义「贡献技能」的插件，技能只对模型可见、对用户 `/` 菜单不可见——两条通道不等价。
+- **修复**：`SkillSlashProvider.load()` 改「内置 → 插件 SPI → 外部扫描」**三路合并**，同 id 去重、优先级 内置 > SPI > 外部（subagent 物化的同名条目不再重复出菜单，改以 SPI 声明的完整标题呈现）；出网**复用既有 `slash.list` RPC**，前端零改动——插件条目与内置同 group(Skills)/icon/`system.skill` opaque token（选中执行路径完全一致），仅副标题带「插件 · 」来源前缀；无插件贡献时条目序列与合并前逐项一致（零回归测试钉住）。`ARCHITECTURE.md` §7.17 三路口径与 [Advisor 与模型链](../backend/advisors.md) §5、api-index、persistence-and-state、task-and-rpc 同步。提交 `944176d1`；`SkillSlashProviderTest` 9/9 过。
+- **后续**：物化文件到 skillsDir 仍是菜单的第三条合法通道（优先级最低）；有意为之的行为变化——subagent 在 `/` 菜单的展示由「目录名形态」变为「子 Agent + 插件 · 标记」，选中执行路径不变。
 
 ### #12 `TokenCalibrationAdvisor` 的 order=0 是绝对值错位（✅ 注释侧已修复）
 
@@ -190,7 +190,7 @@ has_children: false
 
 ## 建议的后续变更优先级（Top 5）
 
-以下为本页作者的判断，供排期参考；均为建议（#1/#4 及 #15、#17/#14、#8、#19、#9/#12、#21/#22/#23 已随修复关闭）。
+以下为本页作者的判断，供排期参考；均为建议（除 #18/#20 外均已随修复关闭：#1/#4、#15、#17/#14、#8、#19、#9/#12、#21/#22/#23、#10/#11）。
 
 1. **API 双发布（#18）**——npm 与 Maven Central 同时发布 `@everyagent/plugin-api`。这是解锁仓库外开发的唯一硬阻塞，其余生态问题（安装侧校验、卸载入口）都排在其后。~~版本口径统一（原 #23 前置项）~~ ——✅ #23 已修复（js/Java 对齐 1.0.0，双脚本联动），发布前置条件已就绪。
 2. ~~**`ui.file_explorer_actions` 接或删（#1）**~~ ——✅ 已修复（宿主文件树右键菜单已接消费点，git 的「显示 Git 历史」生效）。
