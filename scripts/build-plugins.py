@@ -279,6 +279,16 @@ def target_jars(plugin: Plugin) -> list:
     )
 
 
+def own_artifact_jars(pid: str, jars: list) -> list:
+    """插件自身产物的 jar,即 Maven 默认 finalName `{pid}-{version}[-classifier].jar`
+    (版本号以数字开头,借以区分伴生依赖 jar,如 sandbox-windows-codex 由
+    dependency-plugin 复制进 target/ 的 slf4j-simple——它被 findTargetJars
+    一并加载属预期产物,不算残留)。"""
+    return [
+        j for j in jars if j == f"{pid}.jar" or (j.startswith(f"{pid}-") and j[len(pid) + 1].isdigit())
+    ]
+
+
 def check_plugin(plugin: Plugin) -> list:
     """返回问题列表,空列表即产物完整。"""
     problems = []
@@ -286,10 +296,13 @@ def check_plugin(plugin: Plugin) -> list:
         if not plugin.manifest.is_file():
             problems.append("缺 target/classes/plugin.json(mvn 未构建)")
         jars = target_jars(plugin)
+        own = own_artifact_jars(plugin.pid, jars)
         if not jars:
             problems.append("缺插件 jar(target/ 下无非 sources/javadoc 的 jar)")
-        elif len(jars) > 1:
-            problems.append(f"target/ 残留 {len(jars)} 个 jar,字典序会遮蔽新类: {', '.join(jars)}")
+        elif not own:
+            problems.append(f"缺插件自身 jar({plugin.pid}-<版本>.jar),target/ 现有: {', '.join(jars)}")
+        elif len(own) > 1:
+            problems.append(f"target/ 残留 {len(own)} 个插件自身 jar,字典序靠前者会遮蔽新类: {', '.join(own)}")
     if plugin.has_web:
         if not plugin.bundle.is_file():
             problems.append("缺 web/index.js(esbuild 未构建)")
