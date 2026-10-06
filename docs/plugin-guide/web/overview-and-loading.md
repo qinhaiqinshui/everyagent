@@ -110,7 +110,7 @@ const plugin: PluginModule = {
       order: 50, // float；缺省 100，坐标系见 §5
     })
   },
-  // deactivate 写了也永远不会被调（见 §3 约定 6），省略
+  // deactivate 在页面卸载（刷新/关闭）时被宿主调用（见 §3 约定 6）；无清理逻辑可省略
 }
 
 export default plugin
@@ -152,10 +152,10 @@ export default plugin
 - **怎么做**：改任何插件前端代码后：`cd every-agent-web ; npm.cmd run build:plugins`（PowerShell 下 `npm` 会被执行策略拦截，用 `npm.cmd`），然后刷新页面。
 - **违反症状**：新克隆仓库直接 `npm run dev` → **内置 web 插件全部静默不出现**（worker 读不到 `web/index.js`）；忘了 `npm install` → esbuild 缺失，构建脚本报错（`scripts/build-plugins.py:213-214` 显式检查）。
 
-### 约定 6：生效边界 —— 刷新页面 / 重启 worker；前端从不卸载插件
+### 约定 6：生效边界 —— 刷新页面 / 重启 worker；运行期不卸载，页面卸载时统一停用
 
-- **为什么**：启停/装卸走 worker 的 `plugin.*` RPC，文案自证「重启 worker 后生效」；前端侧 `loadedPlugins.set(id, { module, disposables: [] })` 的 `disposables` **恒为空数组**（`pluginLoader.ts:405`），没有任何代码往里放东西，也没有 unload 路径——`every-agent-web/src` 全目录 `deactivate` 零命中（rg 确认）。页面刷新即内存态全部清零（blob 模块、注册表、事件订阅），活下来的只有 `ctx.storage`（localStorage）与 worker 侧数据。注册后的**上屏**不靠刷新，靠订阅：`ExtensionRegistry.register/dispose` 都会 notify（`ExtensionRegistry.ts:45-56`），`PluginDispatcher` 聚合成 `subscribeExtensionsChanged` + 自增 int `getExtensionsVersion()`（`PluginDispatcher.ts:69-92`），宿主用 `React.useSyncExternalStore` 消费（`Layout.tsx:139-142`、`TaskChat.tsx:818`）——版本号而非数组作快照，正是为了避免「新数组引用导致无限重渲染」（`PluginDispatcher.ts:66-68` 注释）。
-- **怎么做**：改前端 = `build:plugins` + 刷新页面；启停/装卸 = 对应 RPC + 重启 worker；自己的 Disposable 自己持有（宿主不代管）。
+- **为什么**：启停/装卸走 worker 的 `plugin.*` RPC，文案自证「重启 worker 后生效」；前端侧激活时 `ctx.ui` / `ctx.commands` / `ctx.events` 都包了收集代理（`pluginLoader.ts` 的 `trackDisposables`），注册方法返回的 Disposable 全部进该插件的 `disposables`——页面卸载（`pagehide`，涵盖刷新/关闭/跳转，即插件面板「重新加载」按钮触发的 `location.reload()`）时宿主统一调 `module.deactivate?()` 再逆序 dispose 全部注册项、移除插件 CSS（`unloadPlugin` / `unloadAllPlugins`，known-issues #8 修复前 disposables 恒为空数组、deactivate 零调用）。这是与后端 worker 优雅关闭（`@PreDestroy` → `deactivate`）对齐的尽力而为钩子；**运行期禁用插件不做前端热卸载**——worker 侧 Java 贡献要到下一次启动才摘除，前端单独摘除会两侧不同步。页面刷新即内存态全部清零（blob 模块、注册表、事件订阅），活下来的只有 `ctx.storage`（localStorage）与 worker 侧数据。注册后的**上屏**不靠刷新，靠订阅：`ExtensionRegistry.register/dispose` 都会 notify（`ExtensionRegistry.ts:45-56`），`PluginDispatcher` 聚合成 `subscribeExtensionsChanged` + 自增 int `getExtensionsVersion()`（`PluginDispatcher.ts:69-92`），宿主用 `React.useSyncExternalStore` 消费（`Layout.tsx:139-142`、`TaskChat.tsx:818`）——版本号而非数组作快照，正是为了避免「新数组引用导致无限重渲染」（`PluginDispatcher.ts:66-68` 注释）。
+- **怎么做**：改前端 = `build:plugins` + 刷新页面；启停/装卸 = 对应 RPC + 重启 worker；清理逻辑写进 `deactivate`（页面卸载时被调用，异步部分尽力而为），注册类 Disposable 可交宿主统一 dispose，运行期中途停听才需自己持有。
 - **违反症状**：改了 `web/index.ts` 不重跑构建 → 刷新也看不到变化（浏览器执行的是旧 `index.js`）；`plugin.disable` 后不重启 worker → 插件照常运行。
 
 ## 4. 扩展点清单（导航枢纽）

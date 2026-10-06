@@ -18,6 +18,11 @@
  * window.__EA_REACT__/window.__EA_REACT_DOM__/window.__EA_antd__/window.__EA_ICONS__，
  * 供 bare import 重写使用。
  *
+ * 卸载（known-issues #8）：激活时 ctx.ui / ctx.commands / ctx.events 均包一层
+ * 收集代理，注册方法返回的 Disposable 全部记入该插件的 disposables；页面卸载
+ * （pagehide，涵盖刷新/关闭/跳转）时统一调用 module.deactivate() 再逆序 dispose
+ * 全部注册项——与后端 worker 优雅关闭（@PreDestroy → deactivate）对齐的停用钩子。
+ *
  * worker 不可达时静默降级（不加载任何插件，不报错）。
  * 禁用的插件不加载。
  */
@@ -269,6 +274,92 @@ function createPluginFs(): PluginFs {
 
 const loadedPlugins: Map<string, { module: PluginModule; disposables: Disposable[] }> = new Map()
 
+// ── Disposable 收集与卸载（known-issues #8） ───────────────────────────────
+
+/** 判断返回值是否为 Disposable 形状（有 dispose 函数的对象）。 */
+function isDisposable(value: unknown): value is Disposable {
+  return !!value && typeof value === 'object' && typeof (value as Disposable).dispose === 'function'
+}
+
+/**
+ * 包一层注册表代理：透传全部方法调用，凡返回 Disposable 的（ui.register*、
+ * commands.registerCommand、events.on）自动收集进 disposables——宿主代管的
+ * dispose 收集循环。插件自己持有的 Disposable 依然有效：各注册点的 dispose
+ * 均为 Map/Set 删除或数组 splice，重复调用幂等无害。
+ */
+function trackDisposables<T extends object>(registry: T, disposables: Disposable[]): T {
+  return new Proxy(registry, {
+    get(target, prop) {
+      const value = Reflect.get(target, prop)
+      if (typeof value !== 'function') return value
+      const fn = value as (...args: unknown[]) => unknown
+      return function tracked(...args: unknown[]) {
+        const ret = fn.apply(target, args)
+        if (isDisposable(ret)) disposables.push(ret)
+        return ret
+      }
+    },
+  })
+}
+
+/**
+ * 卸载单个已激活插件：先调 `module.deactivate()`（对标 VSCode 的停用钩子），
+ * 再逆序 dispose 宿主收集的全部 Disposable（注册项/命令/事件订阅），最后移除
+ * 注入的插件 CSS。幂等（未加载的插件直接返回）；单点异常只 WARN 不扩散，
+ * 不影响其余插件与注册项的清理。
+ */
+export async function unloadPlugin(pluginId: string): Promise<void> {
+  const entry = loadedPlugins.get(pluginId)
+  if (!entry) return
+  loadedPlugins.delete(pluginId)
+
+  if (typeof entry.module.deactivate === 'function') {
+    try {
+      await entry.module.deactivate()
+    } catch (e) {
+      console.warn(`[plugins] 插件 ${pluginId} deactivate 抛错:`, e)
+    }
+  }
+
+  for (const disposable of [...entry.disposables].reverse()) {
+    try {
+      disposable.dispose()
+    } catch (e) {
+      console.warn(`[plugins] 插件 ${pluginId} 清理注册项抛错:`, e)
+    }
+  }
+
+  document.getElementById(`plugin-css:${pluginId}`)?.remove()
+}
+
+/** 卸载全部已激活插件（页面卸载时的统一停用点）。 */
+export async function unloadAllPlugins(): Promise<void> {
+  for (const pluginId of [...loadedPlugins.keys()]) {
+    await unloadPlugin(pluginId)
+  }
+}
+
+/**
+ * 页面卸载停用接线（幂等，首个插件激活成功时挂上）。
+ *
+ * 生命周期挂点的取舍：浏览器没有「插件宿主关闭」事件，前端真实存在的卸载点
+ * 只有页面离开（刷新/关闭/跳转——插件面板「重新加载」按钮触发的 location.reload()
+ * 也落在这一刻）。在 pagehide 时统一 deactivate + dispose，与后端 worker 优雅
+ * 关闭（@PreDestroy → deactivate）对齐；运行期禁用插件不做热卸载——worker 侧
+ * Java 贡献要到下一次启动才摘除，前端单独摘除会造成两侧不同步，统一维持
+ * 「重启 worker + 刷新页面」的生效边界。注意这是「尽力而为」钩子：同步清理
+ * 一定执行，异步 deactivate（await 后续）不保证在页面卸载前完成。
+ */
+let teardownWired = false
+function wirePageTeardown(): void {
+  if (teardownWired) return
+  teardownWired = true
+  window.addEventListener('pagehide', () => {
+    void unloadAllPlugins()
+  })
+}
+
+
 // ── 并发保护 ────────────────────────────────────────────────────────────────
 
 /**
@@ -393,18 +484,22 @@ async function doLoadPlugins(): Promise<void> {
         continue
       }
 
+      // 宿主代管的 Disposable 收集桶：激活期间（及之后）经注册方法返回的全部
+      // Disposable 都会进这里，页面卸载时统一 dispose（unloadPlugin）。
+      const disposables: Disposable[] = []
+
       const ctx: PluginContext = {
         pluginId: plugin.id,
         extensionPath: webEntryJsPath(plugin.webMain),
         sdk: createPluginSdk(workerId, workspaceId, workspaceRoot),
         storage: createPluginStorage(plugin.id),
-        commands: createCommandRegistry(),
-        events: createPluginEvents(),
+        commands: trackDisposables(createCommandRegistry(), disposables),
+        events: trackDisposables(createPluginEvents(), disposables),
         fs: createPluginFs(),
         // pluginDispatcher 使用 web 内部强类型（WorkspaceTab/FileTabResource 等），
         // 与 @everyagent/plugin-api 的最小化接口在 ComponentType 上因不变性不兼容，
-        // 运行时行为一致，此处安全强转。
-        ui: pluginDispatcher as unknown as PluginContext['ui'],
+        // 运行时行为一致，此处安全强转；外面再包一层收集代理（#8）。
+        ui: trackDisposables(pluginDispatcher, disposables) as unknown as PluginContext['ui'],
       }
 
       // 加载插件 CSS（esbuild 将 CSS 提取到与入口同名的 .css，需单独注入）
@@ -415,7 +510,8 @@ async function doLoadPlugins(): Promise<void> {
       }
 
       await pluginModule.activate(ctx)
-      loadedPlugins.set(plugin.id, { module: pluginModule, disposables: [] })
+      loadedPlugins.set(plugin.id, { module: pluginModule, disposables })
+      wirePageTeardown()
       console.log(`[plugins] 插件已激活: ${plugin.id} (${plugin.name})`)
     } catch (e) {
       console.warn(`[plugins] 插件 ${plugin.id} 加载失败:`, e)

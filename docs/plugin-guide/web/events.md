@@ -259,7 +259,7 @@ ctx.events.on(EVT_INDEX_UPDATED, (payload) => {
 
 ## 7. 完整监听示例（订阅、防重复、清理）
 
-插件没有组件树、也没有卸载（宿主永不调 `deactivate`、`disposables` 恒空，见[前端 ctx API](context-api.md) §9）——「清理」的真正语义只有两个：**React 组件卸载**（useEffect return）和**你自己想停止监听**。完整骨架：
+插件没有组件树，运行期也没有卸载时机（宿主只在页面卸载时统一调 `deactivate` 并 dispose 全部收集的注册项，见[前端 ctx API](context-api.md) §9）——运行期「清理」的真正语义只有两个：**React 组件卸载**（useEffect return）和**你自己想停止监听**。完整骨架：
 
 ```ts
 // web/index.ts —— 入口：模块级收集 Disposable + 防重复绑定
