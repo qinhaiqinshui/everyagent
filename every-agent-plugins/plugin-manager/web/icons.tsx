@@ -130,15 +130,6 @@ export function InstallIcon({ size = 14, color, className }: IconProps) {
   )
 }
 
-/** 返回（左箭头）图标（详情页工具栏）。 */
-export function BackIcon({ size = 14, color, className }: IconProps) {
-  return (
-    <LineSvg size={size} color={color} className={className}>
-      <path d="M9.5 3L4.5 8l5 5" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" fill="none" />
-    </LineSvg>
-  )
-}
-
 /** 卸载（垃圾桶）图标（详情页动作）。 */
 export function UninstallIcon({ size = 14, color, className }: IconProps) {
   return (

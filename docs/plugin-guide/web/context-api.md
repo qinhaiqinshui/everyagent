@@ -155,7 +155,7 @@ private void rpcTaskFileChanges(RpcContext rpc) throws IOException {
 }
 ```
 
-同一个 `sdk.rpc` 也能直接调 worker 内置方法（`plugin.list`、`task.*` 等），现成范例：`every-agent-plugins/plugin-manager/web/PluginManagerPanel.tsx:199,222,226`（调 `plugin.list` / `plugin.enable` / `plugin.disable`）。
+同一个 `sdk.rpc` 也能直接调 worker 内置方法（`plugin.list`、`task.*` 等），现成范例：`every-agent-plugins/plugin-manager/web/pluginStore.ts`（统一封装 `plugin.list` / `plugin.enable` / `plugin.disable` / `plugin.uninstall` / `plugin.install`，侧栏面板与详情标签页共享）。
 
 ## 4. `ctx.storage` —— 本地键值存储
 

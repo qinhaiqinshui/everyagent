@@ -1,8 +1,8 @@
 {
   "id": "plugin-manager",
   "name": "插件管理",
-  "version": "0.2.0",
-  "description": "VSCode 风格的插件管理面板：扩展列表（图标/描述/开发者）+ 点击进入详情页（插件信息 + README）",
+  "version": "0.3.0",
+  "description": "VSCode 风格插件管理：扩展列表面板 + 点击打开扩展详情标签页（插件信息 + README）",
   "author": "everyagent",
   "webMain": "web/index.ts",
   "categories": ["扩展管理"],

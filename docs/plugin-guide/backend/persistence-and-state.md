@@ -178,7 +178,7 @@ plugin.json 的 contributes.config.*.default
 
 ### 3.4 前端 `plugin.list` 的 `disabledIds` 来源
 
-`plugin.list` 应答在 `plugins` 数组外附顶层 `disabledIds` 数组（`PluginRpcMethods.java:96-99`，值来自 `PluginRegistry.disabledIds()` → `PluginStateStore.disabledIds()`）。前端唯一消费方是 plugin-manager 插件的管理面板：用 `disabledIds` 判定开关态，切换时本地乐观更新（`every-agent-plugins/plugin-manager/web/PluginManagerPanel.tsx`）——面板上的开关变化**只反映名单文件变化**，插件实际停没停要看 worker 是否重启过（§3.3）。
+`plugin.list` 应答在 `plugins` 数组外附顶层 `disabledIds` 数组（`PluginRpcMethods.java:96-99`，值来自 `PluginRegistry.disabledIds()` → `PluginStateStore.disabledIds()`）。前端唯一消费方是 plugin-manager 插件（共享 store `pluginStore.ts`，侧栏列表与详情标签页同源）：用 `disabledIds` 判定开关态，切换时本地乐观更新——开关变化**只反映名单文件变化**，插件实际停没停要看 worker 是否重启过（§3.3）。
 
 ## 4. 插件状态的可见性：排查时看哪里
 

@@ -255,9 +255,9 @@ token 估算 + 校准 Advisor + 限流 Advisor 三件套。
 
 ### plugin-manager（插件管理）
 
-「扩展」管理面板；web-only 形态。
-- 关键文件：`~plugins/plugin-manager/web/index.ts:18-25`；面板 `PluginManagerPanel.tsx:199,222,226`。
-- 值得看：web-only 插件经 `ctx.sdk.rpc` 调 `plugin.list/enable/disable` 的最小完整闭环。
+「扩展」侧栏列表 + 扩展详情标签页；web-only 形态。
+- 关键文件：`~plugins/plugin-manager/web/index.ts`（注册侧栏项 + `extension-detail` 标签类型）；列表 `PluginManagerPanel.tsx`、详情页 `ExtensionDetailPage.tsx`、共享 store `pluginStore.ts`。
+- 值得看：web-only 插件经 `ctx.sdk.rpc` 调 `plugin.list/enable/disable` 的最小完整闭环；`ctx.ui.registerWorkspaceTabType` + `openPluginTab` 打开详情标签页（宿主按 `data.id` 去重聚焦）的完整样本。
 
 ### sandbox-windows-codex（Windows Codex 沙箱）
 
