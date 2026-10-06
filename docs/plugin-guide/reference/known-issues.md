@@ -5,14 +5,14 @@ parent: reference
 has_children: false
 ---
 
-**一句话定位**：本页是插件系统**现状偏差的集中登记簿**——23 条已核实的问题与开放项（**#1~#5 已修复**、#6/#7 已缓解，登记保留以供追溯），每条按「现象 / 影响 / 修复·规避 / 待办」成文，是判断「这是我的 bug 还是宿主的坑」的第一站。
+**一句话定位**：本页是插件系统**现状偏差的集中登记簿**——23 条已核实的问题与开放项（**#1~#5、#13~#17 已修复**、#6/#7 已缓解，登记保留以供追溯），每条按「现象 / 影响 / 修复·规避 / 待办」成文，是判断「这是我的 bug 还是宿主的坑」的第一站。
 
 ## 如何读这张表
 
 - **只登记事实，不评判设计**。每条「现象」都附证据（相对仓库根路径 + 行号，以登记时仓库快照为准；行号会随后续提交漂移，以内容定位为准）。外部网络类事实（npm / Maven 404）标注「调查实测」，无法静态取证。
 - **不重复正文**。某问题若在其余 18 篇已详述（多数带 ⚠️ 标记），本页只给一句话现象 + 链接，不展开机理。
 - **「待办」只是建议**（已修复条目改为「修复」记录，链接指向修复后口径的正文）。
-- 编号 **#1~#23** 全站连续（`[reference/api-index](api-index.md)` 的 ⚠️ 标记即指向本页）；#1~#5 已修复，#6/#7 已缓解（登记在文末[已缓解项](#已缓解项)）。
+- 编号 **#1~#23** 全站连续（`[reference/api-index](api-index.md)` 的 ⚠️ 标记即指向本页）；#1~#5、#13~#17 已修复，#6/#7 已缓解（登记在文末[已缓解项](#已缓解项)）。
 - 分组：**A 前端宿主**（#1~#9）、**B 后端 worker**（#10~#17）、**C 分发与生态**（#18~#21）、**D 文档站自身**（#22~#23）。
 
 ## A. 前端宿主
@@ -92,40 +92,40 @@ has_children: false
 - **规避**：插件一律用 `HIGHEST_PRECEDENCE+N` 或 `TCA+N` 表达式，勿用绝对值小整数；全链真实顺序以 [Advisor 与模型链](../backend/advisors.md) §2.2 的 18 项 order 表为准。
 - **待办**：改 order 会变更现网链位（需回归评估），最小动作是先修注释；二选一择期执行。
 
-### #13 `deactivate()` 声明存在、全链零调用（死接口）
+### #13 `deactivate()` 声明存在、全链零调用（✅ 已修复）
 
-- **现象**：`EveryAgentPlugin.java:25` 声明 `default void deactivate() {}`（对标 VSCode），worker 侧零调用；前端同样不调（见 #8）。
-- **影响**：后端插件没有停机钩子——worker 关闭、插件禁用、卸载时都无法执行清理（线程池、临时文件、监听器）。
-- **规避**：需要清理的资源，在 `activate()` 里自持引用并接受「随进程消亡」语义；或自行注册 JVM shutdown hook。详见[后端总览](../backend/overview.md)。
-- **待办**：`PluginLoader` 销毁阶段遍历调用 `deactivate()`（注意激活失败的插件要跳过），或删掉声明避免误导。
+- **现象（修复前）**：`EveryAgentPlugin.java:25` 声明 `default void deactivate() {}`（对标 VSCode），worker 侧零调用；前端同样不调（见 #8）。
+- **影响（修复前）**：后端插件没有停机钩子——worker 关闭、插件禁用、卸载时都无法执行清理（线程池、临时文件、监听器）。
+- **修复**：`PluginLoader` 以 `@PreDestroy` 为销毁挂点，遍历「已成功激活」的插件逐个调用 `deactivate()`——激活失败、禁用名单命中、声明式插件一律跳过；单个插件停用抛异常只 WARN，不影响其余。运行期禁用/卸载仍不触发（「名单变更对下一次 worker 启动生效」语义不变）。接口 Javadoc、`PluginStateStore` 类注释、`ARCHITECTURE.md` §8.5 与后端总览/持久化/打包安装/构建运行等文档同步改为新口径（提交 `1553fd4f` 及收口提交）。
+- **后续**：清理逻辑可放 `deactivate()`，但要接受异常退出（强杀/崩溃）时不会被调用；前端宿主仍不调（#8 仍开放）。详见[后端总览](../backend/overview.md) §3.2。
 
-### #14 `QueueAdmissionNode` 注释写 250、代码是 40
+### #14 `QueueAdmissionNode` 注释写 250、代码是 40（✅ 已修复）
 
-- **现象**：类 Javadoc 写 `order=250，落在洋葱下行空隙 100~400 之间`（`every-agent-plugins/task-queue/src/main/java/dev/everyagent/plugin/taskqueue/QueueAdmissionNode.java:12`），代码实际 `return 40`（`:31`）。
-- **影响**：按注释推断洋葱位置会得出错误结论（40 实际排在 `queue.dispatch`(15) 之后很近的位置；注释提到的 `status.start`(300) 节点也已不存在）。
-- **规避**：以 [任务生命周期与 RPC](../backend/task-and-rpc.md) §1.4 的 31 节点实测表为准（该表已按 40 登记）。
-- **待办**：修注释（连带 [`docs/ARCHITECTURE.md`](../../ARCHITECTURE.md):707 的 250 同为旧口径，随 #17 一并更正）。
+- **现象（修复前）**：类 Javadoc 写 `order=250，落在洋葱下行空隙 100~400 之间`，代码实际 `return 40`；注释引用的 `status.start`(300) 节点也已不存在。
+- **影响（修复前）**：按注释推断洋葱位置会得出错误结论（40 实际排在 `queue.dispatch`(15) 之后很近的位置）。
+- **修复**：Javadoc 更正为 order=40 并按 31 节点实测表标注真实链位（介于 `taskid.generate`(30) 与 `taskentry.create`(50) 之间），清除 `status.start` 引用；连带更正 `invoke()` 行注释、`TaskQueueAdmissionPolicy` 注释里的 250，以及 `docs/ARCHITECTURE.md` §7.14.4/§14.5 两处残留 250（提交 `d838e51d`、`641a5099` 及收口提交）。代码 order 值 40 未动。
+- **后续**：无需规避；节点顺序以 [任务生命周期与 RPC](../backend/task-and-rpc.md) §2.3 的 31 节点实测表为准（该表已按 40 登记）。
 
-### #15 `plugin.list` 的 `active` 语义失真、`status` 不出网
+### #15 `plugin.list` 的 `active` 语义失真、`status` 不出网（✅ 已修复）
 
-- **现象**：`active` 序列化为 `!pluginRegistry.isDisabled(id)`（`every-agent-worker/src/main/java/dev/everyagent/worker/plugin/loader/PluginRpcMethods.java:68`）——只反映 `.disabled-plugins` 文件状态，**激活失败也报 true**；而 `LoadedPlugin.status` 字段真实记录 active/failed 等状态（`PluginLoader.java:357-358`），从不序列化上网。
-- **影响**：前端插件管理面板无法区分「在跑」与「加载失败」，用户以为插件生效了。
-- **规避**：排查激活问题看 worker 日志（`插件清单解析失败`/`插件已激活` 等 15 条日志逐字对照表见[故障排查](../guides/troubleshooting.md)）。
-- **待办**：`plugin.list` 增加 `status` 字段（数据已存在，只差序列化）。
+- **现象（修复前）**：`active` 只反映 `.disabled-plugins` 文件状态（**激活失败也报 true**）；`LoadedPlugin.status` 真实记录 active/failed 等状态，从不序列化上网。
+- **影响（修复前）**：前端插件管理面板无法区分「在跑」与「加载失败」，用户以为插件生效了。
+- **修复**：`status` 走既有单一聚合链出网——`LoadedPlugin.status → PluginManifest.status`（record 增字段）→ `plugin.list` 新增 `status` 项（已激活 / 激活失败: … / 已禁用(未激活)）；`active` 一字未动保持旧语义，既有前端零改动即可读到真实状态（提交 `81982b44`）。
+- **后续**：plugin-manager 面板消费 `status` 展示失败标识属后续增强；字段口径见[持久化与状态](../backend/persistence-and-state.md) §4.2/§4.3。
 
-### #16 `enabled:false` 对外部插件不生效（只有内置扫描器读）
+### #16 `enabled:false` 对外部插件不生效（只有内置扫描器读）（✅ 已修复）
 
-- **现象**：`ExternalPluginScanner.java` 内 `enabled|isEnabled` **零命中**；`plugin.json` 的 `enabled` 字段只有 `BuiltInPluginScanner` 消费（内置插件 `sandbox-windows-mic`/`sandbox-wsl-ubuntu` 即靠它整目录跳过）。
-- **影响**：外部插件想「装上但默认禁用」做不到——写 `enabled:false` 会被照常扫描加载。
-- **规避**：外部插件的禁用走 `plugin.disable` RPC（写 `.disabled-plugins`）或干脆不放入 plugins 目录；两机制差异详见[持久化与状态](../backend/persistence-and-state.md)。
-- **待办**：`ExternalPluginScanner` 补读 `enabled`（与内置行为对齐），或文档固化差异（现状已固化，改码属可选）。
+- **现象（修复前）**：`ExternalPluginScanner.java` 内 `enabled|isEnabled` 零命中；`plugin.json` 的 `enabled` 字段只有 `BuiltInPluginScanner` 消费。
+- **影响（修复前）**：外部插件想「装上但默认禁用」做不到——写 `enabled:false` 会被照常扫描加载。
+- **修复**：`ExternalPluginScanner` 补读 `enabled`，为 false 时打 INFO 并整目录跳过，判定语义与内置扫描器对齐（缺省/解析失败视为 true）；plugin-manifest.md / persistence-and-state.md / backend/overview.md 中「两机制差异」表述同步统一（提交 `572b62be`）。
+- **后续**：内外扫描器口径一致，`enabled:false` 即「装上但默认禁用」；`plugin.disable` RPC（`.disabled-plugins`）仍是运行期开关的另一机制。
 
-### #17 `docs/ARCHITECTURE.md` 三处过时（文档欠账）
+### #17 `docs/ARCHITECTURE.md` 三处过时（文档欠账）（✅ 已修复）
 
-- **现象**：① §7.14.4（`docs/ARCHITECTURE.md:705`）称插件以「`@Component` + 构造器注入（git `GitPluginRegistrar` 先例）」注册——实测 `every-agent-plugins/**` **零 `@Component`**（插件走 `URLClassLoader`，依赖经 `ctx.services()` 手工取）；② §7.14.1（`:666-669`）写「内置节点 17 个」并列 `status.start(300)`/`queue.persist(700)` 等——实测 **31 节点**、300/700 已不存在；③ `PluginLoader.java:50,75` 的 Javadoc 引用旧 §7.2/§7.3 编号，对不上现行文档结构。
-- **影响**：按架构文档写插件会走错路（最典型是期待 Spring 容器注入）。
-- **规避**：以后端四篇为准：[后端总览](../backend/overview.md) §10（差异框）、[任务生命周期与 RPC](../backend/task-and-rpc.md)（31 节点表）。
-- **待办**：①② 由本计划的收口步骤统一更正（步骤 30，改 `docs/ARCHITECTURE.md`，不改代码）；③ 属代码注释，待后续单独修。
+- **现象（修复前）**：① §7.14.4 称插件以「`@Component` + 构造器注入（git `GitPluginRegistrar` 先例）」注册；② §7.14.1 写「内置节点 17 个」并列 `status.start(300)`/`queue.persist(700)`；③ `PluginLoader.java` 的 Javadoc 引用旧 §7.2/§7.3 编号。
+- **影响（修复前）**：按架构文档写插件会走错路（最典型是期待 Spring 容器注入）。
+- **修复**：①② 经专项复核确认已在先前提交 `e9bc0c5c` 更正为现行口径（`activate` + `ctx.register*`、`URLClassLoader` 装载、31 节点 + 指向插件指南全表），并把该提交漏掉的两处 250 残留一并清掉（`641a5099`）；③ 两处 Javadoc 统一更正指向 §8.5 插件系统（`ef01ff94`）。
+- **后续**：以后端四篇为准：[后端总览](../backend/overview.md) §10（差异框）、[任务生命周期与 RPC](../backend/task-and-rpc.md) §2.3（31 节点表）。
 
 ## C. 分发与生态
 
@@ -192,13 +192,13 @@ has_children: false
 
 ## 建议的后续变更优先级（Top 5）
 
-以下为本页作者的判断，供排期参考；均为建议（#1/#4 两条已随修复关闭）。
+以下为本页作者的判断，供排期参考；均为建议（#1/#4 及 #15、#17/#14 已随修复关闭）。
 
 1. **API 双发布（#18 + #23）**——npm 与 Maven Central 同时发布 `@everyagent/plugin-api`，发布前先统一版本号并纳入 bump 脚本。这是解锁仓库外开发的唯一硬阻塞，其余生态问题（安装 UI、签名）都排在其后。
 2. ~~**`ui.file_explorer_actions` 接或删（#1）**~~ ——✅ 已修复（宿主文件树右键菜单已接消费点，git 的「显示 Git 历史」生效）。
 3. ~~**死事件常量表清理（#4）**~~ ——✅ 已修复（17 个被取代条目删除、3 个事件补齐 emit，常量表 21 条全部可用）。
-4. **`plugin.list` 增加 `status` + 插件管理安装入口（#15 + #19）**——数据已存在只差序列化（#15 是小改动大收益）；安装入口产品化后 `.eap` 生态才算闭环。
-5. **架构文档对账 + 陈旧注释批量修（#17 + #14 + #9）**——`docs/ARCHITECTURE.md` ①② 由本计划收口步骤更正；`QueueAdmissionNode`/`TokenCalibrationAdvisor` 注释与 4 处 builtInPlugins 引用、git「纯 Web」自述同批修掉，一次 PR 消灭全部注释债。
+4. ~~**`plugin.list` 增加 `status` + 插件管理安装入口（#15 + #19）**~~ ——✅ #15 已修复（`status` 经聚合链出网，`active` 保持旧语义）；#19 安装入口仍开放，产品化后 `.eap` 生态才算闭环。
+5. ~~**架构文档对账 + 陈旧注释批量修（#17 + #14 + #9）**~~ ——✅ #17/#14 已修复（ARCHITECTURE 对账完成、QueueAdmissionNode 等 250 注释清零）；#9 的批量注释修（builtInPlugins 引用、git「纯 Web」自述）与 `TokenCalibrationAdvisor` 注释（#12）仍开放，可同批处理。
 
 ## 下一步读
 
