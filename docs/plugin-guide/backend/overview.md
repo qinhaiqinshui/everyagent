@@ -84,12 +84,12 @@ worker 启动（Spring 容器装配完成 → PluginLoader.init() @PostConstruct
 
 **`activate()` 的调用时机**：每个插件在 `loadPlugin` 内被反射实例化后**立刻**调用（`PluginLoader.java:318→333`），此时 worker 的全部 Spring bean（注册中心、`WorkerServices`、`RpcDispatcher`）均已就绪，但任务尚未开始执行——所以 activate 里可以放心注册任何扩展点，但**不要**在 activate 里做重探测（沙箱后端的时序红线案例见 [tools-and-sandbox.md](tools-and-sandbox.md) §3.3）。
 
-### 3.2 无 deactivate 钩子：改动 = 重启 worker
+### 3.2 deactivate 只在 worker 关闭时调用：改动 = 重启 worker
 
-接口 `EveryAgentPlugin` 有 `default void deactivate() {}`（`every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/EveryAgentPlugin.java:25`），**但全仓 main 代码零调用点**（rg `\.deactivate\(\)` 在 worker / plugin-api / 前端源码零命中）——它是个预留空实现。worker 没有任何运行期卸载、重载、启停插件的路径：
+接口 `EveryAgentPlugin` 声明了 `default void deactivate() {}`（`every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/EveryAgentPlugin.java`），**仅在 worker 优雅关闭时**由 `PluginLoader` 的销毁阶段（`@PreDestroy`）逐个调用——只调 **activate 成功**的插件（激活失败、被禁用名单命中、声明式插件从未 activate，一概跳过）；单个插件停用抛异常只 WARN，不影响其余插件。除此之外 worker 没有任何运行期卸载、重载、启停插件的路径：
 
 - 改 `plugin.json`、改插件代码、`plugin.enable`/`plugin.disable`、装/卸外部插件，**全部要重启 worker 才生效**（禁用机制的差异详见 [persistence-and-state.md](persistence-and-state.md)）；
-- 插件内不要指望「优雅关闭」回调——需要清理的资源只能在进程退出时交给 OS。
+- 运行期禁用/卸载**不触发** `deactivate()`（名单变更对下一次 worker 启动生效）；线程池、临时文件等资源的清理可以放 `deactivate()`，但要接受异常退出（强杀/崩溃）时它不会被调用——关键数据落盘别依赖它。
 
 ## 4. 目录与形态约定
 
@@ -127,7 +127,7 @@ every-agent-plugins/
 |---|---|---|
 | `id()` | `:14` | 插件 id，必须与 plugin.json 的 `id` 一致（仅允许 `[a-z0-9-]`，类注释 `:13`） |
 | `activate(ctx)` | `:22` | 激活：拿 `WorkerPluginContext`，注册全部扩展点；**抛异常只废自己一个插件**（Javadoc `:18-21` 原文：「单个插件失败不影响其他插件」） |
-| `deactivate()` | `:25` | 预留，默认空实现，**当前无人调用**（§3.2） |
+| `deactivate()` | `:25` | 停用钩子，默认空实现；**worker 优雅关闭时由 PluginLoader 调用**（仅 activate 成功的插件，§3.2），运行期禁用/卸载不触发 |
 
 最小可运行入口类（只依赖 `every-agent-plugin-api`，Spring AI 工具注解经 plugin-api 传递引入——`every-agent-plugin-api/pom.xml:20-33` 带 `spring-ai-model`/`spring-ai-client-chat`/`every-agent-contract`）：
 
@@ -157,7 +157,7 @@ public class MyFirstPlugin implements EveryAgentPlugin {
     public void activate(WorkerPluginContext ctx) throws Exception {
         // 一切注册都发生在这里：工具 / Advisor / RPC / 生命周期节点……见 §6 总表
         ctx.registerToolProvider(new MyToolProvider());
-        // deactivate() 无需实现：worker 从不调用（§3.2）
+        // deactivate() 可选：仅在 worker 优雅关闭时被调用（§3.2），无需清理可省略
     }
 
     /** 最小 ToolProvider：每次 agent 装配时给 AI 注入一个 hello 工具。 */

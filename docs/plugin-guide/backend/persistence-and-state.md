@@ -174,7 +174,7 @@ plugin.json 的 contributes.config.*.default
 | 恢复方式 | 改回 plugin.json + 重启 | `plugin.enable` RPC（或手删文件行）+ 重启 |
 | 适合场景 | 随分发包声明「默认不启用」（如 sandbox-windows-mic、sandbox-wsl-ubuntu 的 `enabled:false`） | 用户运行期自主关停某插件 |
 
-**均须重启 worker 才真正生效**：禁用对当前进程不回收任何已注册贡献（插件系统没有 deactivate 调用点，§5.1）；启用同理——本轮进程里它从未被 activate，重启才会走加载链。
+**均须重启 worker 才真正生效**：禁用对当前进程不回收任何已注册贡献（deactivate 只在 worker 优雅关闭时调用，§5.1）；启用同理——本轮进程里它从未被 activate，重启才会走加载链。
 
 ### 3.4 前端 `plugin.list` 的 `disabledIds` 来源
 
@@ -214,13 +214,13 @@ plugin.json 的 contributes.config.*.default
 
 ## 5. 热边界：重启才生效的那些事
 
-### 5.1 无 deactivate 调用点
+### 5.1 deactivate 只在 worker 关闭时调用
 
-API 侧**声明了** `default void deactivate() {}`（`every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/EveryAgentPlugin.java:25`，javadoc「可选：停用（释放资源、注销 SPI 实现）」），但 rg 全仓 `.deactivate()` **零调用点**（worker 与插件均无）——它当前是死接口。`PluginStateStore` 的类注释直接自证设计现状（`PluginStateStore.java:29-30`）：
+API 声明的 `default void deactivate() {}`（`every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/EveryAgentPlugin.java`）**仅在 worker 优雅关闭时**由 `PluginLoader` 销毁阶段（`@PreDestroy`）对 activate 成功的插件逐个调用（激活失败的插件跳过；单个停用抛异常只 WARN）。运行期禁用/卸载**不触发**它，`PluginStateStore` 类注释自证的设计现状依然成立（`PluginStateStore.java:29-30`）：
 
-> 名单变更对<b>下一次 worker 启动</b>完全生效(**插件系统没有 deactivate 钩子**,已激活的插件在当前进程内贡献留在注册表里)。
+> 名单变更对<b>下一次 worker 启动</b>完全生效(已激活的插件在当前进程内贡献留在注册表里)。
 
-推论：禁用/卸载**不触发任何资源回收**——已注册的 SPI、RPC 方法、监听器在当前进程里全部留着。插件不要指望「停用时清理」的时机存在；可回滚逻辑要做在数据侧（如 file-change 靠截断事件自行清理陈旧分片，§1.3）。前端同样从不 dispose 插件（宿主 `loadedPlugins` 的 disposables 恒空，见 [web/overview-and-loading.md](../web/overview-and-loading.md)）。
+推论：禁用/卸载**不回收任何已注册贡献**——已注册的 SPI、RPC 方法、监听器在当前进程里全部留着，要等重启才随进程消失。插件不要指望「运行期停用时清理」的时机存在；可回滚逻辑要做在数据侧（如 file-change 靠截断事件自行清理陈旧分片，§1.3）。前端同样从不 dispose 插件（宿主 `loadedPlugins` 的 disposables 恒空，见 [web/overview-and-loading.md](../web/overview-and-loading.md)）。
 
 ### 5.2 升级插件 = 替换文件 + 重启 worker
 

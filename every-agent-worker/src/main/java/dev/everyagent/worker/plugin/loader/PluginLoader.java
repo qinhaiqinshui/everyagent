@@ -26,6 +26,7 @@ import dev.everyagent.worker.rpc.RpcDispatcher;
 import dev.everyagent.worker.slash.SlashCommandRegistry;
 import dev.everyagent.worker.slash.SlashTokenHandler;
 import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationContext;
@@ -78,6 +79,10 @@ import java.util.stream.Stream;
  *   <li>插件可见 worker 公共 API(plugin.spi.*、contract.*)</li>
  *   <li>插件之间互不可见</li>
  * </ul>
+ *
+ * <p>销毁阶段(@PreDestroy):遍历「已成功激活」的插件逐个调用 {@code deactivate()}
+ * (激活失败/被禁用/声明式插件从未成功 activate,跳过不调);单个插件停用抛异常
+ * 只 WARN,不影响其余插件。
  */
 @Component
 public class PluginLoader {
@@ -107,6 +112,9 @@ public class PluginLoader {
 
     /** 已加载的插件清单（供 plugin.list RPC 查询）。 */
     private final List<LoadedPlugin> loadedPlugins = new ArrayList<>();
+
+    /** 已成功激活的插件实例（仅 activate() 正常返回者），销毁阶段逐个调用 deactivate()。 */
+    private final List<EveryAgentPlugin> activatedPlugins = new ArrayList<>();
 
     public PluginLoader(WorkerProperties props,
             List<PluginScanner> pluginScanners,
@@ -151,6 +159,27 @@ public class PluginLoader {
     @PostConstruct
     void init() {
         scanAndLoad();
+    }
+
+    /**
+     * worker 关闭时的销毁钩点:遍历已成功激活的插件逐个调用 {@link EveryAgentPlugin#deactivate()}。
+     * 激活失败的插件(activate 抛过异常)从未成功激活,跳过不调;单个插件停用抛异常
+     * 只 WARN,不影响其余插件的停用。
+     */
+    @PreDestroy
+    void shutdown() {
+        if (activatedPlugins.isEmpty()) {
+            return;
+        }
+        log.info("[plugins] worker 关闭,开始停用 {} 个已激活插件", activatedPlugins.size());
+        for (EveryAgentPlugin plugin : activatedPlugins) {
+            try {
+                plugin.deactivate();
+            } catch (Exception e) {
+                log.warn("[plugins] 插件 {} 停用失败,继续停用其余插件: {}", plugin.id(), e.getMessage(), e);
+            }
+        }
+        log.info("[plugins] 插件停用完成");
     }
 
     /**
@@ -331,6 +360,8 @@ public class PluginLoader {
 
             // 调用 activate()
             plugin.activate(ctx);
+            // activate 成功才登记进停用清单(销毁阶段只停用已成功激活的插件)
+            activatedPlugins.add(plugin);
 
             loadedPlugins.add(new LoadedPlugin(id, name, version, description, author,
                     pluginDir, source, true, builtin ? "已激活(内置)" : "已激活", entryClass, webMain));

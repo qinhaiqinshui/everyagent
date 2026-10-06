@@ -21,6 +21,13 @@ public interface EveryAgentPlugin {
      */
     void activate(WorkerPluginContext ctx) throws Exception;
 
-    /** 可选：停用（释放资源、注销 SPI 实现）。 */
+    /**
+     * 可选：停用（释放资源、注销 SPI 实现）。
+     *
+     * <p>worker 优雅关闭时由 PluginLoader 在销毁阶段逐个调用——只调
+     * {@code activate()} 成功的插件（激活失败的插件不会被调）。运行期
+     * 禁用/卸载插件不触发本方法（名单变更对下一次 worker 启动生效）；
+     * 进程异常终止（被强杀/崩溃）时本方法也不会被调用。
+     */
     default void deactivate() {}
 }
