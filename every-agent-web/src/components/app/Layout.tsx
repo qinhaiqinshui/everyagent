@@ -1082,6 +1082,7 @@ function buildSidebarActivityItems(openTopLevelPageIds: TopLevelPageId[]): Sideb
     label: def.title,
     icon: def.icon,
     badgeCount: def.badgeCount,
+    Badge: def.Badge,
     order: def.order ?? DEFAULT_SIDEBAR_ORDER,
   }))
   return [...builtinItems, ...pluginItems].sort((a, b) => a.order - b.order)

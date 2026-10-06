@@ -8,6 +8,8 @@ export type SidebarActivityItem = {
   label: string
   icon: React.ReactNode
   badgeCount?: number
+  /** 可选角标组件（插件侧自管订阅与刷新；git 变更角标先例）。缺省不渲染。 */
+  Badge?: React.ComponentType
 }
 
 export type SidebarActivityBarProps = {
@@ -137,6 +139,8 @@ export default function SidebarActivityBar({
                       {item.badgeCount > 99 ? '99+' : item.badgeCount}
                     </span>
                   ) : null}
+                  {/* 插件自定义角标组件:绝对定位锚定在本 span(position:relative)内,组件自身决定显隐 */}
+                  {item.Badge ? <item.Badge /> : null}
                 </span>
               )}
               style={isActive ? resolvedActiveActivityButtonStyle : resolvedActivityButtonStyle}

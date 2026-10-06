@@ -44,7 +44,7 @@ has_children: false
 | `icon` | `ReactNode` | ✅ | `Layout.tsx:1083` | 活动栏图标（React 节点，须自带组件） |
 | `Panel` | `ComponentType` | ✅ | `Layout.tsx:901-902` | 点击入口后的面板组件；面板常驻 DOM、非激活态 `display:none`（`Layout.tsx:1091-1096` 注释） |
 | `badgeCount` | `number?` | — | `Layout.tsx:1084` | `>0` 时图标显示角标数字 |
-| `Badge` | `ComponentType?` | — | **无消费点** | ⚠️ 死字段：`Layout.tsx` 全文 rg `\bBadge\b` 零命中，`buildSidebarActivityItems` 只读 `badgeCount`。git 注册的 `GitChangeBadge` 永不渲染（死贡献） |
+| `Badge` | `ComponentType?` | — | `SidebarActivityBar.tsx`（活动栏图标内渲染） | 角标渲染组件（插件自管订阅与刷新，无变更返回 null 即不显示）；与 `badgeCount` 二选一，同时给出时都渲染 |
 | `order` | `number?` | — | `Layout.tsx:1085` | float 升序混排，缺省 100。坐标系见 §3 |
 
 ### 2.2 注册示例（照抄 plugin-manager，`every-agent-plugins/plugin-manager/web/index.ts:17-25`）
@@ -63,7 +63,8 @@ const plugin: PluginModule = {
       icon: React.createElement(MyIcon),   // .ts 入口用 createElement；组件可放 .tsx 用 JSX
       Panel: MyPanel,             // 无 props
       order: 6,                   // 见 §3 坐标系；不写则落 100（内置项之后）
-      // badgeCount: 3,           // 数字角标有效；Badge 组件字段当前无消费点，勿依赖
+      // badgeCount: 3,           // 数字角标（由插件自己维护刷新）
+      // Badge: MyBadge,          // 或自定义角标组件（自管订阅，无变更返回 null；git 的 GitChangeBadge 先例）
     })
   },
 }
@@ -73,7 +74,8 @@ export default plugin
 ### 2.3 宿主消费链与坑
 
 - **消费点 4 处**：活动栏图标条目 `buildSidebarActivityItems`（`Layout.tsx:1069-1086`）、面板槽位数组 `sidebarPanels`（`Layout.tsx:899-903`）、面板互斥高亮 `activeActivityItemIds`（`Layout.tsx:853-868`）、面板 id 合法性兜底（`Layout.tsx:276-284`，插件注销后回落到「任务」）。
-- **坑**：① `Badge` 死字段（见上表）；② `order` 缺省 100 会排在所有内置项之后；③ 内置范例：git（`every-agent-plugins/git/web/index.ts:28-37`，order=5）、plugin-manager（`every-agent-plugins/plugin-manager/web/index.ts:17-25`，order=9）。
+- **角标两条通道**：`badgeCount`（数字）与 `Badge`（组件）都经 `buildSidebarActivityItems` 透传、由 `SidebarActivityBar` 在图标内渲染（Badge 历史上是死字段，known-issues #2 已修复接线）。
+- **坑**：① `order` 缺省 100 会排在所有内置项之后；② 内置范例：git（`every-agent-plugins/git/web/index.ts:28-37`，order=5 + GitChangeBadge）、plugin-manager（`every-agent-plugins/plugin-manager/web/index.ts:17-25`，order=9）。
 
 ## 3. 侧边栏 `order` 坐标系（专节）
 

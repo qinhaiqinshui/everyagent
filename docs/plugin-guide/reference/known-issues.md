@@ -24,12 +24,12 @@ has_children: false
 - **修复**：文件树右键菜单消费点接线——`OpenFilesSidebarPanel.tsx` 的 `getFileActionItems` 在内置菜单项之后追加插件注册项（按 `isVisible` 过滤），面板订阅扩展点版本号，注册/注销即时刷新；git 的「显示 Git 历史」右键项已生效。
 - **后续**：无需规避；详见 [UI 扩展点](../web/ui-extensions.md) §13（已更新为接线后口径）。
 
-### #2 `UiSidebarItemDefinition.Badge` 是死字段
+### #2 `UiSidebarItemDefinition.Badge` 是死字段（✅ 已修复）
 
-- **现象**：类型包声明 `Badge?: ComponentType`（`every-agent-plugin-api/js/index.ts:231`），但 `buildSidebarActivityItems` 只读 `badgeCount`（`every-agent-web/src/components/app/Layout.tsx:1073,1084`）。
-- **影响**：git 的 `GitChangeBadge` 组件永不渲染（死贡献）；照抄 git 插件写 Badge 的新插件同样静默无效。
-- **规避**：侧边栏角标只用 `badgeCount`（数字，由插件自己维护刷新）。
-- **待办**：删字段，或实现 Badge 消费。详见 [UI 扩展点](../web/ui-extensions.md) §2。
+- **现象（修复前）**：类型包声明 `Badge?: ComponentType`（`every-agent-plugin-api/js/index.ts`），但 `buildSidebarActivityItems` 只读 `badgeCount`（`every-agent-web/src/components/app/Layout.tsx`）。
+- **影响（修复前）**：git 的 `GitChangeBadge` 组件永不渲染（死贡献）；照抄 git 插件写 Badge 的新插件同样静默无效。
+- **修复**：实现 Badge 消费——web 内部 `UiSidebarItemDefinition` 补 `Badge` 字段，`buildSidebarActivityItems` 透传、`SidebarActivityBar` 在活动栏图标内渲染（组件自管订阅与刷新，无变更返回 null）；git 的变更角标已生效。`badgeCount`（数字角标）通道保持不变。
+- **后续**：两种角标写法都可用；详见 [UI 扩展点](../web/ui-extensions.md) §2。
 
 ### #3 `registerOutputBlock` / `registerTraceType` 返回的是假 Disposable
 

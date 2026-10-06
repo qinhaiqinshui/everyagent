@@ -212,7 +212,7 @@ has_children: false
 
 13 个 `git.*` RPC + 自动同步 Advisor + 完整 Web 界面（侧边栏 / 历史标签 / diff），both 形态的集大成者。
 - 关键文件：`~plugins/git/src/main/java/dev/everyagent/plugin/git/GitPlugin.java:33-54`；`~plugins/git/web/index.ts:28-53`。
-- ⚠️ `web/index.ts:2` 注释自称「纯 Web 插件」，实际 plugin.json 有 `main`（both 形态）；⚠️ `web/index.ts:4` 引用已删除的 `builtInPlugins.ts`；⚠️ **死贡献一处**：`SidebarItem.Badge`（GitChangeBadge）宿主不消费；`ui.file_explorer_actions`（git-show-history）已接线——右键菜单可见「显示 Git 历史」。
+- ⚠️ `web/index.ts:2` 注释自称「纯 Web 插件」，实际 plugin.json 有 `main`（both 形态）；⚠️ `web/index.ts:4` 引用已删除的 `builtInPlugins.ts`；`SidebarItem.Badge`（GitChangeBadge）与 `ui.file_explorer_actions`（git-show-history）两处贡献均已接线生效（known-issues #1/#2 已修复）。
 - 值得看：`registerRpcMethod` 批量注册（方法名常量集中 `GitRpcMethods.java:4-16`）；前端 `ctx.fs.listDir/delete`、`ctx.sdk.workspace` 的用法。
 
 ### image-vision（图片识别）

@@ -53,6 +53,8 @@ export interface UiSidebarItemDefinition {
   Panel: ComponentType
   /** 可选徽标数量（>0 时在活动栏图标上显示角标）。 */
   badgeCount?: number
+  /** 可选：活动栏角标渲染组件（插件自管订阅与刷新；如 git 变更角标）。缺省不渲染角标。 */
+  Badge?: ComponentType
   /**
    * 活动栏排序字段（float，越小越靠前，同值按贡献先后稳定排列）。
    * 内置项与插件贡献统一按此字段混排，不再依赖注册顺序；缺省视为 100。
