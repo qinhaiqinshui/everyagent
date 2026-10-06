@@ -310,4 +310,4 @@ npm.cmd run build                # 即 node scripts/build.mjs，产物 web/index
 | 写前端界面（侧边栏 / 编辑器 / 工具调用视图 / 事件） | [前端总览与加载链路](web/overview-and-loading.md) → [PluginContext API](web/context-api.md) → [UI 扩展点](web/ui-extensions.md) → [事件](web/events.md) |
 | 把插件打包分发给别人安装 | [构建与运行](guides/build-and-run.md) → [打包与安装](guides/packaging-and-install.md) |
 
-不管走哪条路，先过一遍 [plugin.json 全字段](plugin-manifest.md)——清单里 `webMain` 的值不被前端消费（加载路径硬编码 `web/index.js`）、`enabled` 只有内置扫描器读等陷阱都在那一篇。
+不管走哪条路，先过一遍 [plugin.json 全字段](plugin-manifest.md)——清单里 `webMain` 的值已参与前端产物路径换算（约定写 `"web/index.ts"`）、`enabled` 只有内置扫描器读等陷阱都在那一篇。

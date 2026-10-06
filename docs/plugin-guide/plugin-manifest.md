@@ -23,7 +23,7 @@ worker 启动（@PostConstruct，全程只读一次）
         ↓
   plugin.list RPC ── 前端 pluginLoader.ts 过滤 active && hasWebMain && !disabled
         ↓
-  plugin.webSource{pluginId, path:"web/index.js"} → 重写 bare import → blob URL → import() → activate(ctx)
+  plugin.webSource{pluginId, path: <webMain 换算的产物路径>} → 重写 bare import → blob URL → import() → activate(ctx)
 ```
 
 | 读取者 | 读的字段 | 证据 |
@@ -31,7 +31,7 @@ worker 启动（@PostConstruct，全程只读一次）
 | `BuiltInPluginScanner` | 仅 `enabled` | `every-agent-worker/src/main/java/dev/everyagent/worker/plugin/scanner/BuiltInPluginScanner.java:79-88`、`isEnabled` 实现 `:117-123` |
 | `ExternalPluginScanner` | 无（只看文件在不在） | `every-agent-worker/src/main/java/dev/everyagent/worker/plugin/scanner/ExternalPluginScanner.java:44-49` |
 | `PluginLoader` | `id/name/version/description/author/main/provides.spi.EveryAgentPlugin/webMain/contributes.config.*.default` + 禁用名单 | `every-agent-worker/src/main/java/dev/everyagent/worker/plugin/loader/PluginLoader.java:202-258` |
-| 前端 `pluginLoader.ts` | 只读 `plugin.list` 返回的 `active/hasWebMain/id`（清单字段一律不直接读） | `every-agent-web/src/plugin/pluginLoader.ts:362-367` |
+| 前端 `pluginLoader.ts` | `plugin.list` 返回的 `active/hasWebMain/webMain/id`（清单字段一律不直接读文件） | `every-agent-web/src/plugin/pluginLoader.ts`（`webEntryJsPath` 消费 `webMain` 值） |
 
 ⚠️ **时机**：清单只在 `PluginLoader.init()`（`@PostConstruct`，`PluginLoader.java:151-154`）时读一次，改 `plugin.json` **必须重启 worker**；运行期没有重载入口（`scanAndLoad()` 的第二次调用只出现在单测里：`every-agent-worker/src/test/java/dev/everyagent/worker/plugin/loader/PluginLoaderDisabledTest.java:107,124`）。
 
@@ -49,7 +49,7 @@ worker 启动（@PostConstruct，全程只读一次）
 | `description` | string | 否 | `""` | `PluginLoader.java:228` | 仅展示 |
 | `author` | string | 否 | `""` | `PluginLoader.java:229` | 仅展示 |
 | `main` | string（Java 类 FQN） | java / full 形态必填 | `""` → 无 Java 入口，走「声明式插件」路径 | 取值为入口类：`PluginLoader.java:231`；反射加载：`:309-320` | FQN 必须与 `src/main/java` 路径逐段一致（§8）。**外部插件目录的清单不看 `enabled`，但看 `main` 有没有对应 jar**：`<id>/lib/*.jar` 为空 → status「无 jar 文件」 |
-| `webMain` | string（web 入口源码路径） | web / full 形态必填 | `""` → `hasWebMain=false`，前端直接不加载 | `PluginLoader.java:235` → `PluginRpcMethods.java:70` | **值本身不被任何前端代码使用**，只用来决定 `hasWebMain` 真假，见 §5 |
+| `webMain` | string（web 入口源码路径） | web / full 形态必填 | `""` → `hasWebMain=false`，前端直接不加载 | `PluginLoader.java:235` → `PluginRpcMethods.java`（`plugin.list` 同时下发 `hasWebMain` 与原始值） | 值**已被前端消费**：产物路径 = `webMain` 去扩展名拼 `.js`（空值回退 `web/index.js`），见 §5 |
 | `enabled` | boolean | 否（建议显式写） | `true`（缺省**或解析失败**都算 true） | `BuiltInPluginScanner.java:81`、`:117-123` | **只有内置扫描器看它**；外部扫描器完全不读（`ExternalPluginScanner.java:44-49`）⇒ 外部插件把 `enabled` 写成 `false` 一样会被扫描进目录。详见 §6 |
 | `contributes.config.<key>.default` | string / number / boolean | 否 | 无 `default` 键 = 该配置项不进入 map | `PluginLoader.java:248-258` → `PluginConfigImpl`（`every-agent-worker/.../plugin/PluginConfigImpl.java`） | 只有 `default` 被读；`type` / `description` **无人消费**（见 §2.2） |
 
@@ -174,26 +174,27 @@ worker 启动（@PostConstruct，全程只读一次）
 
 命名建议：**小写字母 + 数字 + 连字符**，正则 `^[a-z0-9][a-z0-9-]{1,38}$`（脚手架 `create-everyagent-plugin` 的 id 校验同此）；实测仓内 25 个内置插件的 `id` 全部符合，例：`image-vision`、`task-edit-resend`。不要用中文、空格、下划线、点号；也不要和内置插件撞名（25 个现存 id 见 [内置插件清单](reference/builtin-plugins.md)）。
 
-## 5. `webMain` 陷阱专节
+## 5. `webMain` 消费链与产物路径约定（known-issues #5 修复后）
 
-**写什么值都不会被前端使用。** 真实链路只有两行：
+**`webMain` 的值已被前端真实消费。** 链路三行：
 
-- worker 侧：`hasWebMain = !m.webMain().isEmpty()`（`PluginRpcMethods.java:70`）——只看空/非空；
-- 前端侧：一律请求 `plugin.webSource{ pluginId, path: 'web/index.js' }`（`every-agent-web/src/plugin/pluginLoader.ts:421-424`），并把 `ctx.extensionPath` 硬编码成 `'web/index.js'`（`:385`）。
+- worker 侧：`plugin.list` 同时下发 `hasWebMain = !m.webMain().isEmpty()` 与 `webMain` 原始值（`PluginRpcMethods.java`）；
+- 前端侧：产物路径 = `webMain` 去掉最后一个扩展名后拼 `.js`（`pluginLoader.ts` 的 `webEntryJsPath`：`"web/index.ts"` → `"web/index.js"`；空值/旧 worker 未下发时回退约定产物位 `web/index.js`）；CSS 同理取同名 `.css`；
+- `ctx.extensionPath` 也改为该换算结果（不再是硬编码字面量）。
 
 由此推出三条硬约束：
 
 1. **`webMain` 必须非空**（否则 `hasWebMain=false`，插件在前端根本不出现）。仓内约定值是 **源码路径 `"web/index.ts"`**（9 个含 web 的插件全都这么写，例 `every-agent-plugins/git/plugin.json`）。
-2. **必须手工产出 `web/index.js`**：`plugin.webSource` 读不到该文件就抛错，前端打日志 `[plugins] 插件 <id> 加载失败` 后跳过（`pluginLoader.ts:421-429`、`:408`）。构建命令（PowerShell 下 `npm` 被执行策略拦截时用 `npm.cmd`）：
+2. **产物必须落在 `webMain` 换算出的路径**：`build-plugins.mjs` 固定扫 `every-agent-plugins/<id>/web/index.ts` 并输出 `<id>/web/index.js`——照约定写 `"web/index.ts"` 时换算结果与产物天然一致；若把 `webMain` 改成别的源码路径，就必须让产物也落在同名 `.js` 上，否则 `plugin.webSource` 读不到该文件抛错（前端打日志 `[plugins] 插件 <id> 加载失败` 后跳过）。构建命令（PowerShell 下 `npm` 被执行策略拦截时用 `npm.cmd`）：
 
    ```powershell
    cd every-agent-web ; npm.cmd run build:plugins
    ```
 
-   `scripts/build-plugins.mjs` 固定扫 `every-agent-plugins/<id>/web/index.ts`（跳过名为 `target` 的目录，`:29-40`），esbuild `bundle / format=esm / target=es2022 / jsx=automatic / sourcemap`，`external` 白名单恰好 5 项（`:63-69`），输出**写死** `<id>/web/index.js`（`:86`）。这条流水线**不在 `dev` / `build` / 桌面打包里**，改前端不会自动重编。
+   这条流水线**不在 `dev` / `build` / 桌面打包里**，改前端不会自动重编。
 3. **不要提交 `web/index.js`**：根 `.gitignore:24-28` 已把产物排除——
 
-   ```
+   ```gitignore
    # 内置插件 web/ 预编译产物（esbuild 生成，不入库）
    every-agent-plugins/*/web/index.js
    every-agent-plugins/*/web/index.js.map
@@ -203,7 +204,7 @@ worker 启动（@PostConstruct，全程只读一次）
 
    （另 `.gitignore:1` 忽略 `target/`。）插件自己写 `.gitignore` 时不要与这几行冲突，更不要 `git add -f` 把产物拉进版本库。
 
-CSS 也是同一套写死约定：esbuild 把样式抽到同名 `web/index.css`，宿主再经 `plugin.webSource{path:'web/index.css'}` 注入 `<style id="plugin-css:<id>">`（`pluginLoader.ts:448-463`）——**`webMain` 同样不参与其中**。完整加载链路与 bare import 白名单见 [前端总览与加载链路](web/overview-and-loading.md)。
+CSS 同走换算路径：esbuild 把样式抽到与入口同名的 `.css`，宿主按入口路径把 `.js` 换成 `.css` 后经 `plugin.webSource` 注入 `<style id="plugin-css:<id>">`。完整加载链路与 bare import 白名单见 [前端总览与加载链路](web/overview-and-loading.md)。
 
 ## 6. `enabled` 与运行期禁用机制的分工
 

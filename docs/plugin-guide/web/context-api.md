@@ -32,7 +32,7 @@ const ctx: PluginContext = {
 | 成员 | 类型（声明处） | 宿主实现 | 一句话行为 |
 |---|---|---|---|
 | `ctx.pluginId` | `readonly string`（`index.ts:637`） | `pluginLoader.ts:384` | 等于 `plugin.list` 返回的 `id`（即 plugin.json 的 `id`） |
-| `ctx.extensionPath` | `readonly string`（`index.ts:638`） | `pluginLoader.ts:385` | **恒为字面量 `'web/index.js'`**，不是 URL、不是磁盘路径 |
+| `ctx.extensionPath` | `readonly string`（`index.ts:638`） | `pluginLoader.ts`（`webEntryJsPath`） | `webMain` 换算出的产物路径（约定 `"web/index.ts"` → `'web/index.js'`；known-issues #5 修复前恒为字面量），不是 URL、不是磁盘路径 |
 | `ctx.sdk` | `PluginSdk`（`index.ts:130-146`） | `pluginLoader.ts:205-229` | RPC 通道 + 工作区注册表快照 + 当前 worker id |
 | `ctx.storage` | `PluginStorage`（`index.ts:200-204`） | `pluginLoader.ts:142-165` | localStorage，键前缀 `plugin:<pluginId>:`，值 JSON 序列化 |
 | `ctx.commands` | `CommandRegistry`（`index.ts:206-209`） | `pluginLoader.ts:167-189` | **本插件私有**的命令表（普通 `Map`），不跨插件、无宿主内置命令 |
@@ -54,9 +54,9 @@ import type { PluginContext, PluginModule } from '@everyagent/plugin-api'
 | 字段 | 赋值处 | 实际值 |
 |---|---|---|
 | `pluginId` | `pluginLoader.ts:384`（`pluginId: plugin.id`） | `plugin.list` RPC 返回的 `id`；它与目录名、`.eap` 顶层目录、localStorage 前缀共用同一字符串（三重身份详见 [plugin.json 字段参考](../plugin-manifest.md) §4） |
-| `extensionPath` | `pluginLoader.ts:385` | 硬编码 `'web/index.js'`（与 `plugin.webSource` 请求的 path 一致，`pluginLoader.ts:421-424`） |
+| `extensionPath` | `pluginLoader.ts`（`webEntryJsPath`） | `webMain` 换算出的产物路径（与 `plugin.webSource` 请求的 path 一致；约定即 `'web/index.js'`，known-issues #5 修复前硬编码） |
 
-注意 `extensionPath` **不是**插件源码路径 `web/index.ts`（那是 `webMain` 的约定值，且 `webMain` 的值本身不被前端消费），也不是 blob URL。别拿它做任何字符串拼接。
+注意 `extensionPath` **不是**插件源码路径 `web/index.ts`（那是 `webMain` 的约定值），也不是 blob URL。别拿它做任何字符串拼接。
 
 ## 3. `ctx.sdk` —— RPC 与工作区
 
@@ -292,7 +292,7 @@ const plugin: PluginModule = {
   activate(ctx: PluginContext) {
     ctxRef = ctx
 
-    // ① 身份：pluginId 即 plugin.json 的 id；extensionPath 恒为 'web/index.js'
+    // ① 身份：pluginId 即 plugin.json 的 id；extensionPath 为 webMain 换算的产物路径（约定 'web/index.js'）
     console.log(`[my-plugin] activated: ${ctx.pluginId} @ ${ctx.extensionPath}`)
 
     // ② storage：读上次状态（无值给默认），键实际落在 plugin:my-plugin:panel.open

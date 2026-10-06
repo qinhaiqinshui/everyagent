@@ -307,7 +307,7 @@ Select-String -Path "$HOME\.everyagent\logs\worker.log" -Pattern "my-tool"
 **定位**（静默是这条链的特征，过滤在 `pluginLoader.ts:362-367`，不命中零日志）：
 
 1. `plugin.list` 里 `hasWebMain` 是不是 true：`webMain` 缺失/为空 → 整体被过滤且无任何报错（[前端总览](../web/overview-and-loading.md) §1 的失败症状表）。
-2. `build:plugins` 跑了没有：宿主硬编码加载 `web/index.js`（`webMain` 的值不被消费，只决定 `hasWebMain`；`pluginLoader.ts:423`）——`web/index.ts` 改了没重跑构建 = 页面还在拉旧产物。查 `every-agent-plugins/<id>/web/index.js` 的修改时间。
+2. `build:plugins` 跑了没有：宿主按 `webMain` 换算产物路径（`"web/index.ts"` → `web/index.js`，known-issues #5 修复前硬编码、`webMain` 值不被消费）——`web/index.ts` 改了没重跑构建 = 页面还在拉旧产物。查 `every-agent-plugins/<id>/web/index.js` 的修改时间。
 3. `active=false`？在不在 `.disabled-plugins` 名单（[持久化与状态](../backend/persistence-and-state.md) §3）。
 4. 面板**出现了但内容不对**（被内置覆盖/顺序不合预期）：除侧边栏外扩展点没有 order，合并顺序是「插件在前」（[前端总览](../web/overview-and-loading.md) §5.2）。
 **修复**：跑 `npm.cmd run build:plugins` → 确认 `webMain: "web/index.ts"` 在清单里 → 刷新页面；仍不行按 §2.3 看控制台两条日志。

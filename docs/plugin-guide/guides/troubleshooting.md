@@ -19,7 +19,7 @@ has_children: false
 
 1. 插件加载发生在 worker 启动的 `@PostConstruct`（`PluginLoader.java:151-154` 的 `init()` → `scanAndLoad()`），**没有任何热路径**——启停 / 装卸 / 换 jar 一律重启 worker 才生效（[持久化与状态](../backend/persistence-and-state.md) §5）。
 2. `plugin.list` RPC **不返回 status**（`PluginManifest.java:22-24` 无此字段），且 `active` 只反映禁用名单——**worker 日志是插件真实状态的唯一真相源**。
-3. 前端宿主加载的 web 产物**硬编码为 `web/index.js`**（`pluginLoader.ts:423`），源码 `web/index.ts` 不上屏；改前端 = 重新构建 + 刷新页面。
+3. 前端宿主按 `webMain` 换算产物路径（源码路径去扩展名拼 `.js`，约定 `"web/index.ts"` → `web/index.js`；known-issues #5 修复前曾硬编码），源码 `web/index.ts` 不上屏；改前端 = 重新构建 + 刷新页面。
 
 | 第一眼症状 | 直达 |
 | --- | --- |
@@ -112,8 +112,8 @@ has_children: false
 | --- | --- | --- | --- | --- |
 | 侧边栏图标不出现，控制台**零报错**（成功/失败两条日志都没有） | 被加载过滤器静默拦下：`active && hasWebMain && !disabled`（pluginLoader.ts:365-367）任一不满足——最常见：清单缺 `webMain`、在 `disabledIds` 里、worker 未连接（此时整体静默降级） | `plugin.list` 逐项核对 `hasWebMain` / `active` / `disabledIds` | 补 `webMain: "web/index.ts"` → `plugin.enable` → 刷新页面 | [前端总览](../web/overview-and-loading.md) §1 |
 | 控制台 `[plugins] 插件 <id> 加载失败:` + 异常对象（console.warn，pluginLoader.ts:408） | 取 webSource / import / `activate()` 任一环节抛错。产物缺失时异常里可见 `文件不存在或越界: web/index.js`（webSource 的 NOT_FOUND 文案，PluginRpcMethods.java:196） | F12 展开异常对象看是哪一环 | 产物缺失 → 跑构建（下行）；activate 抛错 → 按堆栈修代码 | [调试与测试](debugging-and-testing.md) §2.3 |
-| 异常对象文本是 `插件 <id> 无 web/index.js 源码`（pluginLoader.ts:428） | webSource 成功返回但 content 为空——`web/index.js` 存在却是空文件（异常产物） | 看 `every-agent-plugins\<id>\web\index.js` 大小 | 重新 `npm.cmd run build:plugins` + 刷新 | [前端总览](../web/overview-and-loading.md) 约定 5 |
-| 改了 `web/index.ts`，刷新页面无变化 | 页面加载的是**构建产物** `web/index.js`（路径硬编码，`webMain` 的值不被消费）；没重跑构建；standalone 工程则要跑自己的 `scripts/build.mjs` | 看 `web\index.js` 的修改时间 | `npm.cmd run build:plugins`（或开着 `watch:plugins`）+ 刷新页面 | [调试与测试](debugging-and-testing.md) §2.4 |
+| 异常对象文本是 `插件 <id> 无 <产物路径> 源码`（`pluginLoader.ts`，产物路径 = `webMain` 换算结果） | webSource 成功返回但 content 为空——产物文件存在却是空文件（异常产物） | 看 `every-agent-plugins\<id>\web\index.js` 大小 | 重新 `npm.cmd run build:plugins` + 刷新 | [前端总览](../web/overview-and-loading.md) 约定 5 |
+| 改了 `web/index.ts`，刷新页面无变化 | 页面加载的是**构建产物**（路径由 `webMain` 换算，约定即 `web/index.js`）；没重跑构建；standalone 工程则要跑自己的 `scripts/build.mjs` | 看 `web\index.js` 的修改时间 | `npm.cmd run build:plugins`（或开着 `watch:plugins`）+ 刷新页面 | [调试与测试](debugging-and-testing.md) §2.4 |
 | 改了根 `plugin.json`（webMain 等），重启 worker 也没变化 | java 插件加载期读的是 `target/classes/plugin.json`（`resolveManifestPath` 优先 target，BuiltInPluginScanner.java:193-204）；没重新 package ⇒ 还是旧清单（例外：`enabled` 永远看根） | diff 根清单与 `target\classes\plugin.json` | `mvn package` + 重启 worker | [持久化与状态](../backend/persistence-and-state.md) §5.4 |
 | 控制台有成功行 `[plugins] 插件已激活: <id> (<name>)`（pluginLoader.ts:406），但界面什么都没多出来 | `activate()` 正常返回但**没调 `ctx.ui.register*`**（注册代码在条件分支里 / 忘了写）——前端不校验注册面，零注册也打成功行 | 读 `web/index.ts` 的 `activate` 函数体 | 补注册调用 → `build:plugins` → 刷新 | [UI 扩展点](../web/ui-extensions.md) §1 |
 | 图标出现、点开面板**白屏** | 面板组件**渲染期**抛错（控制台是 React 渲染堆栈）；若是 `activate()` 里注册完才 throw，则走上一行打 `[plugins] 插件 <id> 加载失败:` | F12 Console 区分堆栈来源（渲染期 / 激活期） | 按堆栈修组件或 activate | [UI 扩展点](../web/ui-extensions.md) §2.3 |

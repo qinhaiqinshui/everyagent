@@ -68,6 +68,8 @@ public class PluginRpcMethods {
             o.put("active", !pluginRegistry.isDisabled(m.id()));
             o.put("hasMain", !m.main().isEmpty());
             o.put("hasWebMain", !m.webMain().isEmpty());
+            // webMain 原始值随清单下发:前端据此推导 web 产物路径(后缀换 .js)。
+            o.put("webMain", m.webMain());
             arr.add(o);
         }
 

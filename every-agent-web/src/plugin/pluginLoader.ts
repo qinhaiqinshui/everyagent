@@ -297,6 +297,19 @@ interface PluginListEntry {
   active: boolean
   hasMain: boolean
   hasWebMain: boolean
+  /** 清单 webMain 原始值（源码路径，如 "web/index.ts"；旧 worker 可能缺省为空串）。 */
+  webMain: string
+}
+
+/**
+ * 把清单 `webMain`（源码路径，如 `"web/index.ts"`）映射为 web 产物路径：
+ * 去掉最后一个扩展名后拼 `.js`。空值/无扩展名一律回退约定产物位 `web/index.js`。
+ * （构建侧 build-plugins.mjs 固定输出 `<id>/web/index.js`，故仓内约定值换算后不变。）
+ */
+function webEntryJsPath(webMain: string): string {
+  const trimmed = (webMain ?? '').trim()
+  if (!trimmed) return 'web/index.js'
+  return trimmed.replace(/\.[^./\\]+$/, '') + '.js'
 }
 
 // ── 核心加载逻辑 ───────────────────────────────────────────────────────────
@@ -382,7 +395,7 @@ async function doLoadPlugins(): Promise<void> {
 
       const ctx: PluginContext = {
         pluginId: plugin.id,
-        extensionPath: 'web/index.js',
+        extensionPath: webEntryJsPath(plugin.webMain),
         sdk: createPluginSdk(workerId, workspaceId, workspaceRoot),
         storage: createPluginStorage(plugin.id),
         commands: createCommandRegistry(),
@@ -394,9 +407,9 @@ async function doLoadPlugins(): Promise<void> {
         ui: pluginDispatcher as unknown as PluginContext['ui'],
       }
 
-      // 加载插件 CSS（esbuild 将 CSS 提取到 web/index.css，需单独注入）
+      // 加载插件 CSS（esbuild 将 CSS 提取到与入口同名的 .css，需单独注入）
       try {
-        await loadPluginCss(workerId, plugin.id)
+        await loadPluginCss(workerId, plugin.id, webEntryJsPath(plugin.webMain).replace(/\.js$/, '.css'))
       } catch {
         // 插件无 CSS 或加载失败，不阻塞
       }
@@ -422,14 +435,17 @@ async function loadPluginModule(
   workerId: string,
   plugin: PluginListEntry,
 ): Promise<{ default: PluginModule }> {
+  // 消费清单 webMain 推导产物路径(源码路径后缀换 .js);旧 worker 不下发 webMain 时
+  // 回退约定产物位 web/index.js,行为与硬编码时代一致。
+  const entryPath = webEntryJsPath(plugin.webMain)
   const result = await hubSession.rpcTo(workerId, 'plugin.webSource', {
     pluginId: plugin.id,
-    path: 'web/index.js',
+    path: entryPath,
   }) as { content?: string }
 
   const source = result?.content
   if (!source) {
-    throw new Error(`插件 ${plugin.id} 无 web/index.js 源码`)
+    throw new Error(`插件 ${plugin.id} 无 ${entryPath} 源码`)
   }
 
   // 重写 bare import 为 window 全局引用，使 blob URL 中不残留无法解析的 bare import。
@@ -446,16 +462,16 @@ async function loadPluginModule(
 }
 
 /**
- * 加载插件 CSS：经 plugin.webSource RPC 获取 web/index.css，
+ * 加载插件 CSS：经 plugin.webSource RPC 获取与入口同名的 .css 产物，
  * 注入为带 data-plugin 属性的 <style> 元素（幂等，不重复注入）。
  */
-async function loadPluginCss(workerId: string, pluginId: string): Promise<void> {
+async function loadPluginCss(workerId: string, pluginId: string, cssPath: string): Promise<void> {
   const styleId = `plugin-css:${pluginId}`
   if (document.getElementById(styleId)) return // 幂等
 
   const result = await hubSession.rpcTo(workerId, 'plugin.webSource', {
     pluginId,
-    path: 'web/index.css',
+    path: cssPath,
   }) as { content?: string }
 
   const css = result?.content

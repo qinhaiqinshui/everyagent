@@ -48,12 +48,12 @@ has_children: false
   - plugin-api 具名清单同步：删 `file-content-saved`/`task-trace-changed`、增 `plugins-loaded`，8 个具名全部存活。
 - **现状**：常量表 21 个事件 = 17 个真实 emit + 4 个「宿主监听、插件可反向 emit」的请求通道（3 个 `*-requested` + `runtime-config-error`），死事件陷阱整类消除。详见 [事件](../web/events.md) §3（两张表已按新口径重写）。
 
-### #5 `webMain` 的值不被消费（路径硬编码）
+### #5 `webMain` 的值不被消费（路径硬编码）（✅ 已修复）
 
-- **现象**：宿主一律请求 `plugin.webSource{path:'web/index.js'}`（`every-agent-web/src/plugin/pluginLoader.ts:423`），`ctx.extensionPath` 恒为 `'web/index.js'`（`:385`）；`plugin.json` 的 `webMain` 值只决定 `hasWebMain` 布尔位。
-- **影响**：把 `webMain` 改成别的路径**完全无效**；构建产物必须正好落在 `<id>/web/index.js`。
-- **规避**：`webMain` 一律写 `"web/index.ts"`（仓内 9 个 web 插件全部如此），产物命名交给 `build-plugins.mjs`。详见[前端总览与加载链路](../web/overview-and-loading.md)。
-- **待办**：要么让宿主真正消费 `webMain`（拼接 `.js`），要么在 plugin-api 类型注释里写死「此值仅作声明」并冻结约定。清单字段语义见 [plugin.json 字段参考](../plugin-manifest.md)。
+- **现象（修复前）**：宿主一律请求 `plugin.webSource{path:'web/index.js'}`，`ctx.extensionPath` 恒为 `'web/index.js'`；`plugin.json` 的 `webMain` 值只决定 `hasWebMain` 布尔位——改成别的路径完全无效，构建产物必须正好落在 `<id>/web/index.js`。
+- **影响（修复前）**：`webMain` 字段语义名存实亡，是文档与清单约定的「表面可用」陷阱。
+- **修复**：宿主真正消费 `webMain`——worker `plugin.list` 增发 `webMain` 原始值；前端 `pluginLoader` 新增 `webEntryJsPath()`（源码路径去扩展名拼 `.js`，空值/旧 worker 回退 `web/index.js`），`plugin.webSource` 请求路径、`ctx.extensionPath`、同名 CSS 注入路径全部改用换算结果。按约定写 `"web/index.ts"` 的插件行为不变。
+- **后续**：非约定源码路径的插件也能被加载（产物须落在换算路径上）；详见 [plugin.json 字段参考](../plugin-manifest.md) §5 与[前端总览与加载链路](../web/overview-and-loading.md)（均按新口径更新）。
 
 ### #8 前端从不 dispose / deactivate 插件
 

@@ -134,7 +134,7 @@ has_children: false
 | `PluginModule.activate` | `activate(ctx: PluginContext): void \| Promise<void>` | 唯一必需入口（default export） | [加载 §3](../web/overview-and-loading.md#3-六条硬约定) |
 | `PluginModule.deactivate?` | `deactivate?(): void \| Promise<void>` | 预留；宿主从不调用 | 同上 |
 | `ctx.pluginId` | `readonly string` | 等于 plugin.json 的 `id` | [ctx §2](../web/context-api.md#2-ctxpluginid-与-ctxextensionpath) |
-| `ctx.extensionPath` | `readonly string` | 恒为字面量 `'web/index.js'`，别做拼接 | 同上 |
+| `ctx.extensionPath` | `readonly string` | `webMain` 换算出的产物路径（约定即 `'web/index.js'`），别做拼接 | 同上 |
 | `ctx.sdk` | `PluginSdk` | RPC + 工作区快照 + workerId（§2.3） | [ctx §3](../web/context-api.md#3-ctxsdk--rpc-与工作区) |
 | `ctx.storage` | `PluginStorage`（§2.5） | localStorage，键前缀 `plugin:<id>:` | [ctx §4](../web/context-api.md#4-ctxstorage--本地键值存储) |
 | `ctx.commands` | `CommandRegistry`（§2.5） | 本插件私有命令表，不跨插件 | [ctx §5](../web/context-api.md#5-ctxcommands--命令注册表) |

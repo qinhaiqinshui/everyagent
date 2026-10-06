@@ -28,7 +28,8 @@ loadPlugins()                           main.tsx:46 启动、:63 重连、:69 �
       │ ③ plugin.list → 过滤            :347-367
       │      active && hasWebMain && !disabledSet.has(id)
       │ ④ 幂等：loadedPlugins 已有 id 跳过 :371-374
-      │ ⑤ plugin.webSource{pluginId, path:'web/index.js'}  :417-425
+      │ ⑤ plugin.webSource{pluginId, path: webEntryJsPath(webMain)}
+      │      （webMain 去扩展名拼 .js；缺省回退 web/index.js）
       │      worker 侧 jail 到插件目录   PluginRpcMethods.java:187-197
       │      Files.readString → 纯文本   :201
       │ ⑥ rewriteBareImports            :432（白名单 BARE_IMPORT_MAP :69-75）
@@ -49,7 +50,7 @@ extensionsVersion++                     PluginDispatcher.ts:69-79
 
 | 断点 | 症状（以源码为准） | 证据 |
 |---|---|---|
-| 没跑 `build:plugins`，worker 读不到文件 | `plugin.webSource` 报 `NOT_FOUND`，前端 console：`[plugins] 插件 <id> 加载失败: 插件 <id> 无 web/index.js 源码` | `pluginLoader.ts:407-408`、`:426-430`；worker 侧 `PluginRpcMethods.java:194-197` |
+| 没跑 `build:plugins`，worker 读不到文件 | `plugin.webSource` 报 `NOT_FOUND`，前端 console：`[plugins] 插件 <id> 加载失败: 插件 <id> 无 <产物路径> 源码`（产物路径 = `webMain` 换算结果，约定即 `web/index.js`） | `pluginLoader.ts`（`loadPluginModule` 空内容抛错）；worker 侧 `PluginRpcMethods.java:194-197` |
 | `webMain` 缺失或为空 | `hasWebMain=false` → 第 ③ 步被过滤，**插件完全不出现，无任何报错** | `PluginRpcMethods.java:70`、`pluginLoader.ts:363-367` |
 | 插件被禁用（`active=false` 或在 `disabledIds`） | 同上，静默消失 | `pluginLoader.ts:363-367` |
 | 用了白名单外的 bare import / 动态 `import('antd')` / `export {X} from 'antd'` | 改写器不动它 → 残留 import 语句进 blob → `import()` 抛模块解析错误 → 加载失败 warn | `pluginLoader.ts:69-75`（仅 5 项映射） |
@@ -60,7 +61,7 @@ extensionsVersion++                     PluginDispatcher.ts:69-79
 两个容易误判的点：
 
 - **重连与切换 worker 会重试**：`main.tsx:46,63,69` 三处触发 `loadPlugins()`；幂等靠 `loadedPlugins.has(id)`（`pluginLoader.ts:371-374`）+ 加载 Promise 锁（`:286`、`:315-321`，`273-285` 注释解释了为什么需要——否则同一插件会被 `activate()` 两次、侧边栏出双份图标）。切换 worker 只**补**新 worker 独有的插件，旧插件不卸载（`main.tsx:65-67` 注释）。
-- **`ctx.extensionPath` 恒为字面量 `'web/index.js'`**（`pluginLoader.ts:385`），与 `plugin.webSource` 请求的 path 一致（`:423`）；它不是 `webMain` 的值，也不是 blob URL，别拿它拼任何路径。
+- **`ctx.extensionPath` = `webMain` 换算出的产物路径**（`pluginLoader.ts` 的 `webEntryJsPath`；约定值 `"web/index.ts"` 换算即 `'web/index.js'`）——与 `plugin.webSource` 请求的 path 一致；它不是 blob URL，别拿它拼 `../` 之类的相对路径。
 
 ## 2. 一个 web 插件的组成
 
@@ -123,9 +124,9 @@ export default plugin
 
 ### 约定 1：入口契约 —— `webMain: "web/index.ts"` 非空 + `export default { activate(ctx) }`
 
-- **为什么**：`webMain` 的值**不被任何前端代码消费**，只决定 `hasWebMain` 真假（`every-agent-worker/.../plugin/loader/PluginRpcMethods.java:70`）；前端一律硬编码请求 `path: 'web/index.js'`（`pluginLoader.ts:423`）。加载后取 `mod.default ?? mod`（`:376`），所以入口必须 default 导出一个带 `activate` 的对象（类型声明 `every-agent-plugin-api/js/index.ts:650-653`）。
-- **怎么做**：`plugin.json` 写 `"webMain": "web/index.ts"`（仓内 9 个含 web 的插件全是这个值）；入口 `export default plugin`，`activate(ctx)` 里注册全部贡献。
-- **违反症状**：`webMain` 空 → 插件在前端**静默消失**；没 default 导出 / default 无 `activate` → **静默跳过，控制台无输出**（`pluginLoader.ts:375-379`）。
+- **为什么**：`webMain` 非空决定 `hasWebMain` 真假（`PluginRpcMethods.java`），其**值也被前端消费**——产物路径 = `webMain` 去扩展名拼 `.js`（`pluginLoader.ts` 的 `webEntryJsPath`，空值/旧 worker 回退 `web/index.js`；known-issues #5 修复前该值不被消费、路径硬编码）。加载后取 `mod.default ?? mod`，所以入口必须 default 导出一个带 `activate` 的对象（类型声明 `every-agent-plugin-api/js/index.ts`）。
+- **怎么做**：`plugin.json` 写 `"webMain": "web/index.ts"`（仓内 9 个含 web 的插件全是这个值，与 `build-plugins.mjs` 的产物位换算一致）；入口 `export default plugin`，`activate(ctx)` 里注册全部贡献。
+- **违反症状**：`webMain` 空 → 插件在前端**静默消失**；没 default 导出 / default 无 `activate` → **静默跳过，控制台无输出**；`webMain` 写了非约定路径而产物仍落在 `web/index.js` → `plugin.webSource` 读不到文件，加载失败。
 
 ### 约定 2：类型只能 `import type`
 
