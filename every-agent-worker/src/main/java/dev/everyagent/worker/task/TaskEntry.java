@@ -3,6 +3,8 @@ package dev.everyagent.worker.task;
 import dev.everyagent.plugin.api.agent.AgentContext;
 import dev.everyagent.plugin.api.agent.AgentFactory;
 import dev.everyagent.plugin.api.event.EventLogReader;
+import dev.everyagent.plugin.api.event.EventRecord;
+import dev.everyagent.plugin.api.event.Events;
 import dev.everyagent.plugin.api.interaction.InteractionService;
 import dev.everyagent.plugin.api.task.TaskRuntime;
 import dev.everyagent.contract.json.Json;
@@ -56,26 +58,21 @@ public final class TaskEntry implements TaskRuntime {
     public final TaskEvents events;
 
     /**
-     * 最近一轮主 agent 实测 usage(上下文窗口占用口径,随 meta.json 持久化;无则 null)。
-     * 由 WorkerToolEventAdvisor 在每次主 agent 模型调用末帧写入,子 agent 用量忽略
-     * (与前端聊天页电池口径一致:主 agent 最近一轮 inputTokens / contextWindowTokens)。
+     * 最近一轮实测 usage(上下文窗口占用口径,随 meta.json 持久化;无则 null)。
+     * 由 usage 投影器从本主体事件流的 {@code usage} 事件维护——任意 agent(主/子)后写者胜,
+     * 即「最近一次模型调用的上下文占用」(与前端电池口径一致:最近一轮 inputTokens /
+     * contextWindowTokens;子 agent 轮同样反映真实占用)。
      */
     private volatile Usage lastUsage;
-    /** 最近一次携带的上下文窗口上限(模型/任务快照配置)。 */
+    /** 最近一次携带的上下文窗口上限(usage 事件载荷;模型/任务快照配置)。 */
     private volatile Long contextWindowTokens;
-    /** 最近一轮所用模型名(usage 事件携带)。 */
+    /** 最近一轮所用模型名(usage 事件载荷)。 */
     private volatile String usageModel = "";
     /**
-     * 每轮主 agent usage 后触发:TaskManager 注入的 task.updated 实时广播(终态后不再触发)。
-     * 弱引用语义:广播失败不阻塞任务线程。
+     * 每条 usage 事件投影后触发:task.wires 节点注入的 task.updated 实时广播
+     * (钩子自身判终态并吞异常)。弱引用语义:广播失败不阻塞任务线程。
      */
     public volatile Runnable onUsageBroadcast;
-
-    /** @see dev.everyagent.plugin.api.task.TaskRuntime#onUsageBroadcastCallback() */
-    @Override
-    public Runnable onUsageBroadcastCallback() {
-        return onUsageBroadcast;
-    }
 
     /** 创建时间:新任务 = 当前时刻;再运行沿用 meta 原值(createdAt 不随续写重置)。 */
     public volatile long createdAt = System.currentTimeMillis();
@@ -288,6 +285,13 @@ public final class TaskEntry implements TaskRuntime {
         this.lastActivityMs = new java.util.concurrent.atomic.AtomicLong(createdAt);
         this.log = new EventLog(maxEvents);
         this.events = new TaskEvents(log, mainAgentId);
+        // usage 投影:订阅自身事件流(构造期日志必为空,首条事件必然晚于订阅;§5.2 事件先行)。
+        this.log.addListener(new EventLogReader.Listener() {
+            @Override
+            public void onAppend() {
+                projectUsage();
+            }
+        });
     }
 
     /** 再运行时保留原创建时间。 */
@@ -317,11 +321,11 @@ public final class TaskEntry implements TaskRuntime {
     public volatile AgentEntity main;
 
     /**
-     * 记录最近一轮主 agent 实测 usage(上下文窗口占用口径)。
-     * 由 WorkerToolEventAdvisor 在主 agent 模型调用末帧调用;子 agent 用量忽略。
+     * 记录最近一轮实测 usage(上下文窗口占用口径)。
+     * 由 usage 投影器内部调用(见 {@link #projectUsage()};再运行冷启动基线由
+     * {@link #seedUsageMeta} 从 meta.usage 恢复,新事件到达后自然接续覆盖)。
      */
-    @Override
-    public void recordUsage(Usage round, Long ctxWindow, String model) {
+    private void recordUsage(Usage round, Long ctxWindow, String model) {
         if (round == null) {
             return;
         }
@@ -331,6 +335,78 @@ public final class TaskEntry implements TaskRuntime {
         }
         if (model != null && !model.isEmpty()) {
             usageModel = model;
+        }
+    }
+
+    // ---- usage 事件投影(事件三条出路对 task 层同构,§5.2;原 advisor 主动下探迁此) ----
+
+    private static final org.slf4j.Logger LOG =
+            org.slf4j.LoggerFactory.getLogger(TaskEntry.class);
+
+    /** 投影串行锁:并发 agent 轮的 onAppend 信号排队处理,保证投影与广播恰好一次。 */
+    private final Object usageProjectionLock = new Object();
+    /** 已投影到的最后一条事件 seq(readAfterSeq 游标;usage 事件为独立雪花 seq,无共享组)。 */
+    private long usageCursor;
+
+    /**
+     * 订阅本主体事件流,把新增事件中的 {@code usage} 投影为任务级最近一轮占用。
+     * EventLog 的 onAppend 在发射线程内联触发(与 AgentLedger 同机制),投影时序与
+     * 原 advisor 内联调用等价;游标只进不退,编辑重发截断后新事件(新雪花 seq)天然续读。
+     */
+    private void projectUsage() {
+        synchronized (usageProjectionLock) {
+            while (true) {
+                List<EventRecord> batch = log.readAfterSeq(usageCursor, 100);
+                if (batch.isEmpty()) {
+                    return;
+                }
+                for (EventRecord r : batch) {
+                    if (Events.USAGE.equals(r.event())) {
+                        try {
+                            onUsageEvent(r);
+                        } catch (RuntimeException e) {
+                            LOG.debug("usage 事件投影失败 task={} seq={}", taskId, r.seq(), e);
+                        }
+                    }
+                    usageCursor = r.seq();
+                }
+                if (batch.size() < 100) {
+                    return;
+                }
+            }
+        }
+    }
+
+    /**
+     * 单条 usage 事件 → 任务级最近一轮占用快照 + task.updated 广播。
+     * 载荷形态:{@code {data: {model, contextWindowTokens, round: {inputTokens,
+     * outputTokens, totalTokens}}}}(EmitEvent.data → payload.data);total 不消费——
+     * 任务级口径只要最近一轮占用(agent 级累计归台账 usage 字段)。
+     */
+    private void onUsageEvent(EventRecord r) {
+        JsonNode data = r.payload() == null ? null : r.payload().path("data");
+        if (data == null || !data.isObject()) {
+            return;
+        }
+        JsonNode round = data.path("round");
+        long in = round.path("inputTokens").asLong(0);
+        long out = round.path("outputTokens").asLong(0);
+        if (in == 0 && out == 0) {
+            return; // 防御:发射侧保证 round 非零,异常形态直接丢弃
+        }
+        long total = round.path("totalTokens").asLong(0);
+        long ctxWindow = data.path("contextWindowTokens").asLong(0);
+        String model = data.path("model").asString("");
+        recordUsage(new Usage(in, out, total > 0 ? total : in + out),
+                ctxWindow > 0 ? ctxWindow : null, model.isEmpty() ? null : model);
+        // 先更新后广播:钩子内组装 runtimeSummaryJson(此刻已含本轮占用)再 fanout tasks 频道。
+        Runnable broadcast = onUsageBroadcast;
+        if (broadcast != null) {
+            try {
+                broadcast.run();
+            } catch (RuntimeException e) {
+                LOG.debug("usage 广播失败 task={} seq={}", taskId, r.seq(), e);
+            }
         }
     }
 

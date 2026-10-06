@@ -64,7 +64,7 @@ public interface TaskLifecycleContext extends ExecContext {
 
     /**
      * 注入 usage 实时广播钩子（由 task.wires 节点调用）。
-     * 钩子被 WorkerToolEventAdvisor 在每轮 usage 后触发。
+     * 钩子由 TaskEntry 的 usage 事件投影器在每条 usage 事件投影后触发（先更新占用快照再广播）。
      */
     void onUsageBroadcast(Runnable hook);
 

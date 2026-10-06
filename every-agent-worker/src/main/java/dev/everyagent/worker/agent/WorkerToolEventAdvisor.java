@@ -6,7 +6,6 @@ import dev.everyagent.plugin.api.model.EmitEvent;
 import dev.everyagent.worker.agent.AgentEntity;
 import dev.everyagent.worker.agent.ContextOverflow;
 import dev.everyagent.plugin.api.execution.ExecContext;
-import dev.everyagent.plugin.api.task.TaskRuntime;
 import dev.everyagent.plugin.api.event.Events;
 import dev.everyagent.plugin.api.event.Events.ToolCallPart;
 import dev.everyagent.plugin.api.proto.SnowflakeId;
@@ -234,21 +233,9 @@ public class WorkerToolEventAdvisor extends ToolCallingAdvisor {
                 // 最近一轮实测 usage 按 agent 记录(主/子都写;供 ContextCompressionAdvisor 读取 offset),
                 // 同时保存累计 usage 与上下文快照(台账 usage/context 字段供体)。
                 a.recordLastRound(roundUsage, a.usageRef().get(), contextWindowTokens(), a.options.getModel());
-                // 记录最近一轮上下文用量(任务列表/聊天页电池数据源,随 meta 持久化)
-                // → 触发任务列表用量实时广播(task.updated,每轮一次)。
-                // 所有 agent 均记录 usage + 触发广播(Phase 6: 去除 kind 判断)。
-                // ⚠ §14.11 违规残留:本块是 advisor 里仅存的 TaskRuntime 下探(任务域私有
-                // 操作),随下一笔「usage 投影反转」整体迁往 task 层,届时本类不再 import TaskRuntime。
-                TaskRuntime t = (TaskRuntime) a.execution();
-                t.recordUsage(roundUsage, contextWindowTokens(), a.options.getModel());
-                Runnable broadcast = t.onUsageBroadcastCallback();
-                if (broadcast != null) {
-                    try {
-                        broadcast.run();
-                    } catch (RuntimeException e) {
-                        // 广播失败不阻塞模型流
-                    }
-                }
+                // 任务级记录(最近一轮占用快照 + task.updated 广播)已反转为事件投影:
+                // TaskEntry 订阅本事件流,按 usage 事件载荷维护 TaskSummary.usage 供体并触发
+                // 广播(§7.20 下层不感知上层操作;本类至此对 task 域类型零依赖,§14.11 达标)。
             }
         }
         return chatClientResponse;
