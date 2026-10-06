@@ -10,7 +10,10 @@
  *     + target/ 下非 sources/javadoc 的 jar(URLClassLoader 加载源);
  *   - web 产物(java+web 与纯 web 插件均适用):<id>/web/ 下的构建产物(index.js/
  *     index.css 等,排除 .ts/.tsx 源码与 .map)——前端经 plugin.webSource RPC 按相对
- *     路径从插件目录读取,jar 内不含 web 产物(pom resources 只拷 plugin.json)。
+ *     路径从插件目录读取,jar 内不含 web 产物(pom resources 只拷 plugin.json);
+ *   - README.md:插件根的 README 原文件名一并 staging——扩展详情页 README 区经
+ *     plugin.webSource("readme.md") 读取(worker 侧同目录大小写不敏感回退),
+ *     缺 README 的插件跳过不报错。
  *
  * 防残留(硬性要求):staging 目录在脚本开头**整体清空重建**——
  *   - enabled=false 的插件(如 sandbox-*)不复制,上次打包留下的旧 jar 也不会残留;
@@ -136,6 +139,10 @@ for (const { name, dir, isJava, jars, webDir, hasWeb } of enabled) {
   }
   // 根 plugin.json:Scanner 的 enabled 判定 + 纯 web 插件的唯一清单
   copy(join(dir, 'plugin.json'), 'plugin.json')
+  // 根 README.md:扩展详情页 README 区经 plugin.webSource('readme.md') 读取——
+  // worker 侧有同目录大小写不敏感回退,原文件名直接 staging 即可;缺 README 跳过不报错。
+  const readme = readdirSync(dir).find((f) => /^readme\.md$/i.test(f) && statSync(join(dir, f)).isFile())
+  if (readme) copy(join(dir, readme), readme)
   if (isJava) {
     copy(join(dir, 'target', 'classes', 'plugin.json'), 'target/classes/plugin.json')
     for (const jar of jars) copy(join(dir, 'target', jar), `target/${jar}`)
