@@ -19,8 +19,9 @@ import java.util.ServiceLoader;
  *
  * <p>命令行：{@code --setup-payload <base64>}（argv 单参数，对齐 codex）或
  * {@code --setup-payload-file <path>}（超 24,000 UTF-16 单位的回退）。
- * 与 runner 是同一 jar 的两个 main——由 {@link SetupOrchestrator} 以当前 java.exe
- * {@code -cp <jar>} 提权拉起，或已在提权进程内时直接调用 {@link #executePayload}。
+ * 与 runner 是同一 jar 的两个 main——由 {@link SetupOrchestrator} 以当前 java.exe +
+ * {@link dev.everyagent.plugin.sandbox.codex.session.RunnerMaterializer#ensureHelperClasspath
+ * 物化 classpath} 提权拉起，或已在提权进程内时直接调用 {@link #executePayload}。
  *
  * <p>Full/ProvisionOnly 顺序（顺序本身即安全属性，对齐 run_setup_full）：
  * 锁 {@code Global\EveryAgentCodexSetup}（DACL SY+BA）→ marker 空 sentinel 两阶段

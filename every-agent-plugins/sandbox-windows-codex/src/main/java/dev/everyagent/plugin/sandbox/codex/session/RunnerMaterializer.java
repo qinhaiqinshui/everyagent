@@ -45,11 +45,23 @@ public final class RunnerMaterializer {
     public static final String RUNNER_MAIN = CodexRunnerMain.class.getName();
 
     /** 依赖 jar 文件名匹配子串（jna 运行时 + jackson 帧编解码 + slf4j 日志，设计 §2 模块依赖）。
-     * 来源:classpath 与插件 classloader URLs 两路(见 materializationSources)。 */
+     * 来源:classpath 与插件 classloader URLs 两路(见 materializationSources);打包形态下
+     * 另有 fat jar 解包一路(见 {@link #extractFatJarEntries})。 */
     public static final List<String> DEPENDENCY_MATCHERS = List.of(
             "jna-", "jna-platform-",
             "jackson-core-", "jackson-databind-", "jackson-annotations-",
             "slf4j-api-", "slf4j-simple-");
+
+    /**
+     * helper/runner 运行的<b>必需依赖家族</b>（DEPENDENCY_MATCHERS 子集）。文件来源
+     * （classpath/插件 classloader）覆盖全部家族 = 无需 fat jar 解包（dev/CLI 态）；
+     * 缺任一家族 = 走 {@link #extractFatJarEntries} 解包（打包态）。slf4j-simple 是
+     * 可选 provider（NOP 回退无害），不列必需。
+     */
+    static final List<String> REQUIRED_FAMILY_MATCHERS = List.of(
+            "jna-", "jna-platform-",
+            "jackson-core-", "jackson-databind-", "jackson-annotations-",
+            "slf4j-api-");
 
     /** 指纹里携带的摘要前缀字节数（SHA-256 前 8 字节 = 16 个 hex 字符）。 */
     public static final int FINGERPRINT_PREFIX_BYTES = 8;
@@ -109,6 +121,53 @@ public final class RunnerMaterializer {
     }
 
     /**
+     * 嵌套 codeSource 描述：插件 jar 位于 fat jar 的 {@code BOOT-INF/lib/} 内
+     * （codeSource URL 形如 {@code jar:file:<fatJar>!/BOOT-INF/lib/<plugin>.jar!/}）。
+     * 该形态下 {@link #pluginCodeSource()} 无法解析为真实文件路径（{@code Path.of}
+     * 不接受 {@code jar:} 协议），插件本体也须经 {@link #extractFatJarEntries} 解包。
+     *
+     * @return 嵌套描述；file: 协议（dev classes 目录 / 桌面内置插件 target jar）返回 null
+     */
+    public static NestedCodeSource nestedCodeSource() {
+        var codeSource = RunnerMaterializer.class.getProtectionDomain().getCodeSource();
+        if (codeSource == null || codeSource.getLocation() == null) {
+            return null;
+        }
+        var url = codeSource.getLocation();
+        if (!"jar".equals(url.getProtocol())) {
+            return null;
+        }
+        // jar:file:<fatJar>!/<entry>!/ → 剥 jar: 前缀与尾部 !/ 后按 "!/" 切分
+        String spec = url.toString();
+        if (spec.startsWith("jar:")) {
+            spec = spec.substring(4);
+        }
+        if (spec.endsWith("!/")) {
+            spec = spec.substring(0, spec.length() - 2);
+        }
+        int bang = spec.indexOf("!/");
+        if (bang <= 0) {
+            return null;
+        }
+        try {
+            Path fatJar = Path.of(new java.net.URL(spec.substring(0, bang)).toURI());
+            String entry = spec.substring(bang + 2);
+            if (!entry.endsWith(".jar")) {
+                return null;
+            }
+            return new NestedCodeSource(fatJar, entry);
+        } catch (Exception e) {
+            LOG.log(System.Logger.Level.DEBUG,
+                    "nested codeSource 解析失败(按非嵌套形态继续): {0}", e.toString());
+            return null;
+        }
+    }
+
+    /** 嵌套 codeSource：fat jar 路径 + 其 BOOT-INF/lib 内的插件 jar 条目名。 */
+    public record NestedCodeSource(Path fatJar, String entryName) {
+    }
+
+    /**
      * 本插件 classloader 的 jar URLs（builtin 模式=target/ 下 findTargetJars 加载的全部
      * jar,external 模式=lib/*.jar）——slf4j-simple 这类「插件需要但 worker 依赖图没有」
      * 的 jar 只能从这里物化(父委派借不到,java.class.path 也没有;2026-10 实测 simple
@@ -147,9 +206,17 @@ public final class RunnerMaterializer {
     public static List<Path> materializationSources(String classpath, String separator,
             List<Path> extraJars) {
         Map<String, Path> sources = new LinkedHashMap<>();
-        Path self = pluginCodeSource();
-        if (Files.exists(self)) {
-            sources.put(self.toAbsolutePath().normalize().toString(), self);
+        try {
+            Path self = pluginCodeSource();
+            if (Files.exists(self)) {
+                sources.put(self.toAbsolutePath().normalize().toString(), self);
+            }
+        } catch (Exception e) {
+            // 嵌套 fat jar 形态(codeSource 为 jar:…!/…!/,无真实文件可引):
+            // 插件本体由 ensureRunnerClasspath 的 fat jar 解包补齐(见 nestedCodeSource)
+            LOG.log(System.Logger.Level.DEBUG,
+                    "plugin codeSource 不可解析为文件路径(嵌套 fat jar 形态?): {0}",
+                    e.toString());
         }
         List<Path> selectable = new ArrayList<>(
                 selectDependencies(extraJars, DEPENDENCY_MATCHERS));
@@ -212,6 +279,133 @@ public final class RunnerMaterializer {
             sb.append(entry);
         }
         return sb.toString();
+    }
+
+    // ---- fat jar 依赖解包（打包形态：依赖嵌在 BOOT-INF/lib，对 -cp 不可见） ----
+
+    /**
+     * 文件来源是否已覆盖全部必需依赖家族（jna/jackson2/slf4j-api）。
+     * 覆盖 = dev/CLI 态（classpath 上有真实依赖 jar），零解包；缺任一家族 = 打包态
+     * （classpath 只有 fat jar 本身），需 {@link #extractFatJarEntries} 解包。
+     */
+    static boolean hasRequiredDependencyFamilies(List<Path> sources) {
+        java.util.Set<String> hit = new java.util.HashSet<>();
+        for (Path p : sources) {
+            String name = p.getFileName().toString();
+            if (!name.endsWith(".jar") || !Files.isRegularFile(p)) {
+                continue;
+            }
+            for (String matcher : REQUIRED_FAMILY_MATCHERS) {
+                // 不 break：一个文件可同时满足多个家族(jna-platform-*.jar 同时记入
+                // jna- 与 jna-platform-；先记先break会让后者永远缺失、误触发解包)
+                if (name.contains(matcher)) {
+                    hit.add(matcher);
+                }
+            }
+        }
+        return hit.containsAll(REQUIRED_FAMILY_MATCHERS);
+    }
+
+    /**
+     * 纯函数：从 fat jar 的 BOOT-INF/lib 条目名里选出应解包的
+     * （DEPENDENCY_MATCHERS 命中，或在 forceEntries 里——嵌套插件 jar 场景的本体）。
+     */
+    static List<String> selectFatJarEntries(List<String> bootInfLibEntries,
+            List<String> forceEntries) {
+        List<String> out = new ArrayList<>();
+        for (String entry : bootInfLibEntries) {
+            String name = entry.substring(entry.lastIndexOf('/') + 1);
+            boolean selected = forceEntries.contains(name);
+            if (!selected) {
+                for (String matcher : DEPENDENCY_MATCHERS) {
+                    if (name.contains(matcher)) {
+                        selected = true;
+                        break;
+                    }
+                }
+            }
+            if (selected) {
+                out.add(entry);
+            }
+        }
+        return out;
+    }
+
+    /**
+     * 解包目标是否需要重写：缺失/大小不符直接重写；大小相等再比 CRC32
+     * （同名字不同内容的重打包可检出；成本与既有 SHA-256 指纹校验同量级，且进程内缓存短路）。
+     */
+    static boolean needsExtract(Path target, long entrySize, long entryCrc) throws IOException {
+        if (!Files.isRegularFile(target) || Files.size(target) != entrySize) {
+            return true;
+        }
+        return fileCrc32(target) != entryCrc;
+    }
+
+    /** 文件内容 CRC32（ZipEntry.getCrc 同口径）。 */
+    static long fileCrc32(Path file) throws IOException {
+        java.util.zip.CRC32 crc = new java.util.zip.CRC32();
+        try (InputStream in = Files.newInputStream(file)) {
+            byte[] buf = new byte[64 * 1024];
+            int n;
+            while ((n = in.read(buf)) > 0) {
+                crc.update(buf, 0, n);
+            }
+        }
+        return crc.getValue();
+    }
+
+    /**
+     * 把 fat jar（Spring Boot 可执行 jar）{@code BOOT-INF/lib/} 内的依赖条目（以及
+     * forceEntries 指定的嵌套插件 jar 本体）解包到 {@code binDir}，返回解包后文件列表。
+     *
+     * <p><b>动机（2026-10 桌面打包态实测）</b>：worker 以 {@code javaw -jar worker.jar}
+     * 启动时 {@code java.class.path} 只有 fat jar 一个条目，JNA/Jackson/slf4j 嵌在
+     * {@code BOOT-INF/lib} 里对普通 {@code -cp} 完全不可见——setup helper 与 runner
+     * 以 {@code -cp fat+插件jar} 启动会死在 {@code SetupPayload.<clinit>} 的
+     * NoClassDefFoundError（早于任何日志，仅见 exit 1）。Spring Boot 的
+     * PropertiesLauncher 也救不了：{@code loader.path} 只认文件系统路径，不解析 jar 内
+     * 嵌套路径（CNFE）。唯一可靠形态 = 解包成真实文件再进 {@code -cp}。
+     *
+     * <p>幂等：目标已存在且「大小 + CRC32」与 zip 条目一致则跳过重写。
+     * 非 fat jar（无命中条目）返回空表。
+     */
+    public static List<Path> extractFatJarEntries(Path fatJar, Path binDir, String groupSid,
+            List<String> forceEntries) throws IOException {
+        if (!Files.isRegularFile(fatJar) || !fatJar.toString().endsWith(".jar")) {
+            return List.of();
+        }
+        List<Path> out = new ArrayList<>();
+        try (java.util.zip.ZipFile zip = new java.util.zip.ZipFile(fatJar.toFile())) {
+            List<String> candidates = zip.stream()
+                    .map(java.util.zip.ZipEntry::getName)
+                    .filter(n -> n.startsWith("BOOT-INF/lib/") && n.endsWith(".jar"))
+                    .toList();
+            for (String entryName : selectFatJarEntries(candidates, forceEntries)) {
+                java.util.zip.ZipEntry entry = zip.getEntry(entryName);
+                if (entry == null) {
+                    continue;
+                }
+                String fileName = entryName.substring(entryName.lastIndexOf('/') + 1);
+                Path target = binDir.resolve(fileName);
+                if (needsExtract(target, entry.getSize(), entry.getCrc())) {
+                    Files.createDirectories(binDir);
+                    Path tmp = binDir.resolve(fileName + ".tmp");
+                    try (InputStream in = zip.getInputStream(entry)) {
+                        Files.copy(in, tmp, StandardCopyOption.REPLACE_EXISTING);
+                    }
+                    try {
+                        Files.move(tmp, target, StandardCopyOption.REPLACE_EXISTING,
+                                StandardCopyOption.ATOMIC_MOVE);
+                    } catch (java.nio.file.AtomicMoveNotSupportedException e) {
+                        Files.move(tmp, target, StandardCopyOption.REPLACE_EXISTING);
+                    }
+                    grantGroupReadExecute(target, groupSid);
+                }
+                out.add(target);
+            }
+        }
+        return out;
     }
 
     // ---- 物化（文件复制，跨平台；ACL 授予仅 Windows 生效） ----
@@ -427,6 +621,10 @@ public final class RunnerMaterializer {
      * 是 {@code codexHome}；同一 worker 进程内 {@code java.class.path} 与插件 jar 内容不会
      * 变（换 jar 必须重启 JVM 才生效），故跳过重复校验不会让 runner 加载到陈旧类。
      *
+     * <p>来源三路合流：文件来源（插件 codeSource + classpath/classloader 依赖）→
+     * 必需家族齐备即止（dev/CLI 态）；打包态缺家族或插件本体嵌在 fat jar 内时，从
+     * classpath（及嵌套 codeSource 指向的）fat jar 解包 BOOT-INF/lib 补齐。
+     *
      * <p>失效：磁盘产物被外部清理/篡改时缓存会失真，由调用方在会话失败路径调
      * {@link #invalidateRunnerClasspath} 自愈（下一条命令重做物化）。
      */
@@ -437,8 +635,9 @@ public final class RunnerMaterializer {
         if (cached != null) {
             return cached;
         }
-        List<Path> sources = materializationSources(System.getProperty("java.class.path"),
-                System.getProperty("path.separator"));
+        List<Path> sources = new ArrayList<>(materializationSources(
+                System.getProperty("java.class.path"), System.getProperty("path.separator")));
+        sources.addAll(resolveFatJarSources(key, sources, groupSid));
         Path binDir = SandboxDirs.sandboxBinDir(key);
         String cp = classpathString(materialize(sources, binDir, groupSid));
         ensureJnidispatch(sources, binDir, groupSid);
@@ -446,6 +645,45 @@ public final class RunnerMaterializer {
         System.getLogger(RunnerMaterializer.class.getName()).log(System.Logger.Level.INFO,
                 "[runner] classpath 已物化（本进程不再重复校验）: {0}", binDir);
         return cp;
+    }
+
+    /**
+     * setup helper 专用物化入口：与 runner 共用同一套产物与进程内缓存。
+     * pre-setup 阶段沙箱组尚不存在，groupSid=null（不挂组 ACE——helper 是提权进程本就
+     * 可读用户产物；setup 末尾 {@code lockBinDir} 的 OI|CI 继承会补上组 RX）。
+     */
+    public static String ensureHelperClasspath(Path codexHome) throws IOException {
+        return ensureRunnerClasspath(codexHome, null);
+    }
+
+    /**
+     * 打包态补源：必需依赖家族缺失（classpath 只有 fat jar），或插件本体嵌在 fat jar
+     * 内（{@link #nestedCodeSource}）时，从 classpath 上的 fat jar 解包
+     * BOOT-INF/lib 条目到 binDir。dev/CLI 态（家族齐备且非嵌套）零开销直通。
+     */
+    private static List<Path> resolveFatJarSources(Path codexHome, List<Path> fileSources,
+            String groupSid) throws IOException {
+        NestedCodeSource nested = nestedCodeSource();
+        if (nested == null && hasRequiredDependencyFamilies(fileSources)) {
+            return List.of();
+        }
+        List<String> force = nested == null ? List.of() : List.of(nested.entryName());
+        Path binDir = SandboxDirs.sandboxBinDir(codexHome);
+        List<Path> extracted = new ArrayList<>();
+        for (Path candidate : parseClasspath(System.getProperty("java.class.path"),
+                System.getProperty("path.separator"))) {
+            extracted.addAll(extractFatJarEntries(candidate, binDir, groupSid, force));
+        }
+        if (nested != null) {
+            // codeSource 的宿主 fat jar 不一定在 java.class.path 上(兜底再解一次,幂等)
+            extracted.addAll(extractFatJarEntries(nested.fatJar(), binDir, groupSid, force));
+        }
+        if (!extracted.isEmpty()) {
+            System.getLogger(RunnerMaterializer.class.getName()).log(System.Logger.Level.INFO,
+                    "[runner] 打包形态:已从 fat jar 解包依赖 {0} 个 → {1}",
+                    new Object[] { extracted.size(), binDir });
+        }
+        return extracted;
     }
 
     /** 丢弃 {@code codexHome} 的物化缓存（会话失败时自愈用）。 */

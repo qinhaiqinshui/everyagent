@@ -9,10 +9,10 @@ import com.sun.jna.platform.win32.WinNT;
 import com.sun.jna.ptr.IntByReference;
 import com.sun.jna.ptr.PointerByReference;
 
+import dev.everyagent.plugin.sandbox.codex.session.RunnerMaterializer;
 import dev.everyagent.plugin.sandbox.codex.win.Advapi32Ex;
 import dev.everyagent.plugin.sandbox.codex.win.WinErr;
 
-import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -28,9 +28,10 @@ import java.util.concurrent.ConcurrentHashMap;
  * readiness 短路（marker + 凭据双闸门）→ 进程内 singleflight（ConcurrentHashMap 按
  * payload 编码去重，等价请求共享同一结果与异常）→ 已提权则进程内直调
  * {@link SetupHelperMain#executePayload}，未提权则 ShellExecuteExW "runas" 提权拉起
- * 同 jar 的 helper（当前 java.exe -cp；SEE_MASK_NOCLOSEPROCESS|SEE_MASK_NOASYNC +
- * SW_HIDE，ERROR_CANCELLED=1223 单列「用户拒绝」）→ 等待退出码，非 0 读
- * setup_error.json 还原精确错误，退出码 0 再校验 marker（防 helper 假成功）。
+ * 同 jar 的 helper（当前 java.exe + 物化 classpath，见 {@link #buildHelperArgv}；
+ * SEE_MASK_NOCLOSEPROCESS|SEE_MASK_NOASYNC + SW_HIDE，ERROR_CANCELLED=1223 单列
+ * 「用户拒绝」）→ 等待退出码，非 0 读 setup_error.json 还原精确错误，退出码 0 再校验
+ * marker（防 helper 假成功）。
  *
  * <p>payload 超 argv 阈值（24,000 UTF-16 单位）落 {@code .sandbox/setup_payload.json}
  * 传 {@code --setup-payload-file}（环境分块暂缓——设计文档 §1.2）。
@@ -177,7 +178,7 @@ public final class SetupOrchestrator {
                         "write payload file failed: " + e.getMessage());
             }
         }
-        List<String> argv = buildHelperArgv(argFlag, payloadArg);
+        List<String> argv = buildHelperArgv(argFlag, payloadArg, codexHome);
         SHELLEXECUTEINFO sei = new SHELLEXECUTEINFO();
         sei.cbSize = sei.size();
         sei.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC;
@@ -233,39 +234,28 @@ public final class SetupOrchestrator {
     /**
      * 构造 helper JVM 命令行（含 java.exe）。
      *
-     * <p>dev 模式（worker 从 target/classes 启动）：插件经 URLClassLoader 隔离加载，
-     * 不在 {@code java.class.path} 上；从 {@code ProtectionDomain.codeSource} 补齐插件
-     * jar/目录路径，确保 helper JVM 能找到 {@link SetupHelperMain}。
-     *
-     * <p>fat jar 模式（worker 从 Spring Boot 可执行 jar 启动）：插件类嵌套在
-     * {@code BOOT-INF/lib/} 内，{@code -cp} 无法直接加载；改用 Spring Boot
-     * {@code PropertiesLauncher}（{@code -Dloader.main}）绕过嵌套类加载器。
+     * <p>三种运行形态统一走 {@link RunnerMaterializer#ensureHelperClasspath} 物化的
+     * {@code <codexHome>/.sandbox-bin} classpath：
+     * <ul>
+     *   <li>dev（IDEA，插件 target/classes）：classes 目录原样进 -cp + classpath 真实依赖 jar；</li>
+     *   <li>桌面内置插件（resources/every-agent-plugins 下真实 jar + worker fat jar 内嵌依赖）：
+     *       依赖（JNA/Jackson/slf4j）嵌在 fat jar 的 BOOT-INF/lib 对 -cp 不可见，解包补齐；</li>
+     *   <li>嵌套 fat jar（插件 jar 本体在 BOOT-INF/lib 内）：插件与依赖一并解包。</li>
+     * </ul>
+     * 实测教训（2026-10 桌面打包态）：直接 {@code -cp <fat jar>;<插件jar>} 启动，helper 死在
+     * {@code SetupPayload.<clinit>} 的 NoClassDefFoundError——早于 HelperLog/错误报告任何
+     * 落盘，worker 侧只见 "exited with status 1" 无从定位；PropertiesLauncher + loader.path
+     * 亦不可行（loader.path 只认文件系统路径，不解析 jar 内嵌套路径，CNFE）。
      */
-    private static List<String> buildHelperArgv(String argFlag, String payloadArg) {
-        String classpath = System.getProperty("java.class.path", "");
+    static List<String> buildHelperArgv(String argFlag, String payloadArg, Path codexHome) {
         String helperMain = SetupHelperMain.class.getName();
-
-        var codeSource = SetupHelperMain.class.getProtectionDomain().getCodeSource();
-        if (codeSource != null && codeSource.getLocation() != null) {
-            var url = codeSource.getLocation();
-            if ("jar".equals(url.getProtocol())) {
-                // fat jar 模式：插件类嵌套在 Spring Boot fat jar 的 BOOT-INF/ 内。
-                // java.class.path 已含 fat jar 路径；用 PropertiesLauncher 绕过嵌套加载器。
-                return List.of(javaExecutable(), "-cp", classpath,
-                        "-Dloader.main=" + helperMain,
-                        "org.springframework.boot.loader.launch.PropertiesLauncher",
-                        argFlag, payloadArg);
-            }
-            // dev 模式：将插件 jar/目录补齐到 classpath
-            try {
-                String codePath = Path.of(url.toURI()).toString();
-                if (!classpath.contains(codePath)) {
-                    classpath = classpath.isEmpty() ? codePath
-                            : classpath + File.pathSeparator + codePath;
-                }
-            } catch (Exception ignored) {
-                // 无法解析 codeSource 路径时退回 java.class.path 原样
-            }
+        String classpath;
+        try {
+            classpath = RunnerMaterializer.ensureHelperClasspath(codexHome);
+        } catch (IOException e) {
+            throw new SetupErrorReport.SetupException(
+                    SetupErrorReport.ORCHESTRATOR_HELPER_LAUNCH_FAILED,
+                    "materialize helper classpath failed: " + e.getMessage(), e);
         }
         return List.of(javaExecutable(), "-cp", classpath, helperMain, argFlag, payloadArg);
     }

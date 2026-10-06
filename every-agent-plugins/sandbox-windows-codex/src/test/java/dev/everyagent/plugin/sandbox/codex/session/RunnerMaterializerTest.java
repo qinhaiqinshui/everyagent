@@ -121,6 +121,88 @@ class RunnerMaterializerTest {
                 "Windows -cp 分号语义");
     }
 
+    // ---- fat jar 依赖解包（打包形态：依赖嵌在 BOOT-INF/lib，对 -cp 不可见） ----
+
+    @Test
+    void requiredFamilyDetectionGatesFatJarExtraction() throws IOException {
+        Path jna = jar("jna-5.14.0.jar");
+        Path platform = jar("jna-platform-5.14.0.jar");
+        Path core = jar("jackson-core-2.21.5.jar");
+        Path databind = jar("jackson-databind-2.21.5.jar");
+        Path annotations = jar("jackson-annotations-2.21.jar");
+        Path slf4j = jar("slf4j-api-2.0.18.jar");
+        List<Path> complete = List.of(jna, platform, core, databind, annotations, slf4j);
+        assertTrue(RunnerMaterializer.hasRequiredDependencyFamilies(complete),
+                "全部必需家族齐备 → 无需解包");
+        assertFalse(RunnerMaterializer.hasRequiredDependencyFamilies(
+                        List.of(jna, platform, slf4j)),
+                "缺 jackson 家族 → 触发解包");
+        // slf4j-simple 是可选 provider,不参与判定
+        assertTrue(RunnerMaterializer.hasRequiredDependencyFamilies(complete),
+                "slf4j-simple 缺席不影响判定");
+    }
+
+    @Test
+    void fatJarEntrySelectionMatchesDependenciesAndForces() {
+        List<String> entries = List.of(
+                "BOOT-INF/lib/jna-5.14.0.jar",
+                "BOOT-INF/lib/jackson-databind-2.21.5.jar",
+                "BOOT-INF/lib/slf4j-api-2.0.18.jar",
+                "BOOT-INF/lib/spring-core-7.0.9.jar",
+                "BOOT-INF/lib/sandbox-windows-codex-1.0.0.jar");
+        assertEquals(List.of("BOOT-INF/lib/jna-5.14.0.jar",
+                        "BOOT-INF/lib/jackson-databind-2.21.5.jar",
+                        "BOOT-INF/lib/slf4j-api-2.0.18.jar"),
+                RunnerMaterializer.selectFatJarEntries(entries, List.of()),
+                "仅依赖命中条目入选,无关 jar 排除");
+        assertEquals(List.of("BOOT-INF/lib/sandbox-windows-codex-1.0.0.jar"),
+                RunnerMaterializer.selectFatJarEntries(
+                        List.of("BOOT-INF/lib/sandbox-windows-codex-1.0.0.jar",
+                                "BOOT-INF/lib/spring-core-7.0.9.jar"),
+                        List.of("sandbox-windows-codex-1.0.0.jar")),
+                "嵌套插件本体经 forceEntries 强制入选");
+    }
+
+    @Test
+    void fatJarExtractionIsIdempotentAndSelfHeals() throws IOException {
+        Path fat = tmp.resolve("worker.jar");
+        byte[] jnaBytes = "jna-payload-123".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        byte[] pluginBytes = "plugin-payload-x".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        try (java.util.zip.ZipOutputStream zos = new java.util.zip.ZipOutputStream(
+                Files.newOutputStream(fat))) {
+            zos.putNextEntry(new java.util.zip.ZipEntry("BOOT-INF/lib/jna-5.14.0.jar"));
+            zos.write(jnaBytes);
+            zos.closeEntry();
+            zos.putNextEntry(new java.util.zip.ZipEntry(
+                    "BOOT-INF/lib/sandbox-windows-codex-1.0.0.jar"));
+            zos.write(pluginBytes);
+            zos.closeEntry();
+            zos.putNextEntry(new java.util.zip.ZipEntry("BOOT-INF/lib/spring-core-7.0.9.jar"));
+            zos.write("spring".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            zos.closeEntry();
+        }
+        Path bin = Files.createDirectories(tmp.resolve(".sandbox-bin"));
+        List<String> force = List.of("sandbox-windows-codex-1.0.0.jar");
+
+        List<Path> extracted = RunnerMaterializer.extractFatJarEntries(fat, bin, null, force);
+        assertEquals(List.of(bin.resolve("jna-5.14.0.jar"),
+                bin.resolve("sandbox-windows-codex-1.0.0.jar")), extracted,
+                "命中 + 强制条目解包,无关条目排除");
+        assertFalse(Files.exists(bin.resolve("spring-core-7.0.9.jar")));
+        org.junit.jupiter.api.Assertions.assertArrayEquals(pluginBytes,
+                Files.readAllBytes(bin.resolve("sandbox-windows-codex-1.0.0.jar")));
+
+        // 幂等:再跑一次返回相同集合,内容不变
+        assertEquals(extracted, RunnerMaterializer.extractFatJarEntries(fat, bin, null, force));
+
+        // 自愈:同长度篡改(size 相同、CRC 漂移)→ 重写回源内容
+        Path jnaTarget = bin.resolve("jna-5.14.0.jar");
+        Files.write(jnaTarget, "XXX-payload-123".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        RunnerMaterializer.extractFatJarEntries(fat, bin, null, force);
+        org.junit.jupiter.api.Assertions.assertArrayEquals(jnaBytes,
+                Files.readAllBytes(jnaTarget), "CRC 漂移被检出并自愈");
+    }
+
     /**
      * 进程内缓存：第二次调用不再逐 jar 全量 SHA-256（实测该开销 146-266ms/命令）。
      * 证据 = 产物被外部删除后第二次调用不重拷；invalidate 后自愈。
