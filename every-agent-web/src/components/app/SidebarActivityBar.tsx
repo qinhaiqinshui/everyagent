@@ -263,7 +263,7 @@ const activityBadgeStyle: React.CSSProperties = {
 /** 插件自定义角标的统一锚点:定位几何由宿主收口,插件组件只管内容与配色。 */
 const pluginBadgeAnchorStyle: React.CSSProperties = {
   position: 'absolute',
-  top: -2,
+  top: -4,
   right: -2,
   lineHeight: 1,
 }

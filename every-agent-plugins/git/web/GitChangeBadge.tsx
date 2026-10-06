@@ -108,8 +108,8 @@ export default function GitChangeBadge() {
     // 定位几何由宿主统一收口(SidebarActivityBar 的 pluginBadgeAnchorStyle),此处只管内容与配色。
     <span
       style={{
-        color: 'var(--accent-blue)',
-        fontSize: 10,
+        color: 'var(--accent-red)',
+        fontSize: 12,
         fontWeight: 600,
         lineHeight: 1,
       }}
