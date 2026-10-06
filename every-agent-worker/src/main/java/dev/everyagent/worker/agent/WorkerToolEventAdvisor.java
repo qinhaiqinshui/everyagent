@@ -4,8 +4,9 @@ import dev.everyagent.contract.json.Json;
 import dev.everyagent.plugin.api.event.EventPayloads;
 import dev.everyagent.plugin.api.model.EmitEvent;
 import dev.everyagent.worker.agent.AgentEntity;
-import dev.everyagent.worker.agent.ContextOverflow;
+import dev.everyagent.plugin.api.config.WorkerConfig;
 import dev.everyagent.plugin.api.execution.ExecContext;
+import dev.everyagent.plugin.api.model.ModelConfig;
 import dev.everyagent.plugin.api.event.Events;
 import dev.everyagent.plugin.api.event.Events.ToolCallPart;
 import dev.everyagent.plugin.api.proto.SnowflakeId;
@@ -21,7 +22,6 @@ import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.model.tool.ToolCallingManager;
 import org.springframework.ai.model.tool.ToolExecutionResult;
 import reactor.core.publisher.Flux;
-import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.node.ObjectNode;
 
 import java.util.ArrayList;
@@ -222,10 +222,7 @@ public class WorkerToolEventAdvisor extends ToolCallingAdvisor {
                 a.addUsage(round);
                 ObjectNode usageData = Json.obj();
                 usageData.put("model", a.options.getModel());
-                Long cwt = contextWindowTokens();
-                if (cwt != null) {
-                    usageData.put("contextWindowTokens", cwt);
-                }
+                usageData.put("contextWindowTokens", contextWindowTokens());
                 usageData.set("round", Json.toJson(roundUsage));
                 usageData.set("total", Json.toJson(a.usageRef().get()));
                 a.emitter.emit(EmitEvent.of(SnowflakeId.next(), Events.USAGE,
@@ -312,16 +309,10 @@ public class WorkerToolEventAdvisor extends ToolCallingAdvisor {
         return ids;
     }
 
-    /** 主体快照 params 里的上下文窗口大小(未配置/非法回退默认窗口,与压缩/超限诊断口径一致)。 */
-    private Long contextWindowTokens() {
-        JsonNode params = a.execution().snapshot().params();
-        if (params != null && params.isObject() && params.has("contextWindowTokens")) {
-            long v = params.path("contextWindowTokens").asLong(0);
-            if (v > 0) {
-                return v;
-            }
-        }
-        return ContextOverflow.DEFAULT_CONTEXT_WINDOW_TOKENS;
+    /** 上下文窗口口径单点:委托 {@link ModelConfig#contextWindowTokens()}(未配置/非法回退默认窗口)。 */
+    private long contextWindowTokens() {
+        ModelConfig snapshot = a.execution().snapshot();
+        return snapshot == null ? WorkerConfig.DEFAULT_CONTEXT_WINDOW_TOKENS : snapshot.contextWindowTokens();
     }
 
     /** 从 assistant message metadata 取 reasoningContent 累积值(OpenAI 兼容思考字段)。 */

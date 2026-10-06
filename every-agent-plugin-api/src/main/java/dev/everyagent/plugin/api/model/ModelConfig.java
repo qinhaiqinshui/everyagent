@@ -2,6 +2,7 @@ package dev.everyagent.plugin.api.model;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;
+import dev.everyagent.plugin.api.config.WorkerConfig;
 import tools.jackson.databind.JsonNode;
 
 /**
@@ -18,4 +19,20 @@ import tools.jackson.databind.JsonNode;
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record ModelConfig(String configId, String provider, String baseUrl,
                           String model, JsonNode params) {
+
+    /**
+     * 上下文窗口 token 数——{@code params.contextWindowTokens} 解析口径的唯一定义点:
+     * 未配置/非法(≤0)时回退 {@link WorkerConfig#DEFAULT_CONTEXT_WINDOW_TOKENS}。
+     * usage 事件载荷(worker 电池分母)、上下文压缩触发阈值、超限诊断共用此口径,防漂移。
+     */
+    public long contextWindowTokens() {
+        JsonNode p = params();
+        if (p != null && p.isObject() && p.has("contextWindowTokens")) {
+            long v = p.path("contextWindowTokens").asLong(0);
+            if (v > 0) {
+                return v;
+            }
+        }
+        return WorkerConfig.DEFAULT_CONTEXT_WINDOW_TOKENS;
+    }
 }

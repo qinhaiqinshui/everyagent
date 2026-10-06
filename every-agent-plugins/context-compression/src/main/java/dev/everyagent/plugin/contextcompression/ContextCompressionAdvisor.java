@@ -19,7 +19,6 @@ import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.prompt.Prompt;
 import reactor.core.publisher.Flux;
-import tools.jackson.databind.JsonNode;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -196,18 +195,12 @@ public class ContextCompressionAdvisor implements CallAdvisor, StreamAdvisor {
                 .build();
     }
 
+    /** 上下文窗口口径单点:委托 {@link ModelConfig#contextWindowTokens()}(与 usage 事件/超限诊断同源,防阈值漂移)。 */
     private long contextWindowTokens() {
         ExecContext exec = a.execution();
-        JsonNode params = exec.snapshot() == null ? null : exec.snapshot().params();
-        if (params != null && params.isObject() && params.has("contextWindowTokens")) {
-            long v = params.path("contextWindowTokens").asLong(0);
-            if (v > 0) {
-                return v;
-            }
-        }
-        return WorkerConfig.DEFAULT_CONTEXT_WINDOW_TOKENS;
+        return exec.snapshot() == null ? WorkerConfig.DEFAULT_CONTEXT_WINDOW_TOKENS
+                : exec.snapshot().contextWindowTokens();
     }
-
     /** floor(window × ratio × safetyRatio)。 */
     private static long ratio(long window, double ratio, double safety) {
         return (long) Math.floor(window * ratio * safety);
