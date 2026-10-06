@@ -102,6 +102,15 @@
 ; End of installer .onInit (after initMultiUser resolved $INSTDIR).
 !macro customInit
   !insertmacro EA_LOG "===== installer .onInit done | INSTDIR=[$INSTDIR] installMode=[$installMode] ====="
+  ; Elevation awareness: an ELEVATED install (user right-clicks "run as
+  ; administrator", or UAC from a machine-wide dir) writes admin-owned
+  ; files/shortcuts/registry that a later NON-elevated per-user uninstaller
+  ; cannot delete. Log the account type so install logs reveal that path.
+  Push $0
+  UserInfo::GetAccountType
+  Pop $0
+  !insertmacro EA_LOG "  installer account type=[$0] (Admin = elevated install, admin-owned files)"
+  Pop $0
 !macroend
 
 ; Silent old-version uninstall result (runs when reinstalling over an
@@ -169,20 +178,69 @@
   Push $R7
   ${GetParameters} $R7
   !insertmacro EA_LOG "  raw parameters=[$R7]"
-  ReadRegStr $R7 HKCU "${INSTALL_REGISTRY_KEY}" InstallLocation
-  !insertmacro EA_LOG "  HKCU ${APP_GUID}\InstallLocation=[$R7]"
-  ReadRegStr $R7 HKCU "${UNINSTALL_REGISTRY_KEY}" UninstallString
-  !insertmacro EA_LOG "  HKCU UninstallString=[$R7]"
-  ReadRegStr $R7 HKLM "${INSTALL_REGISTRY_KEY}" InstallLocation
-  !insertmacro EA_LOG "  HKLM InstallLocation=[$R7] (empty = no per-machine record)"
-  !insertmacro EA_LOG "  perUser=[$perUserInstallationFolder] hasPerUser=[$hasPerUserInstallation] perMachine=[$perMachineInstallationFolder] hasPerMachine=[$hasPerMachineInstallation]"
   Pop $R7
+  ReadRegStr $7 HKCU "${INSTALL_REGISTRY_KEY}" InstallLocation
+  !insertmacro EA_LOG "  HKCU ${APP_GUID}\InstallLocation=[$7]"
+  ReadRegStr $7 HKCU "${UNINSTALL_REGISTRY_KEY}" UninstallString
+  !insertmacro EA_LOG "  HKCU UninstallString=[$7]"
+  ReadRegStr $7 HKLM "${INSTALL_REGISTRY_KEY}" InstallLocation
+  !insertmacro EA_LOG "  HKLM InstallLocation=[$7] (empty = no per-machine record)"
+  !insertmacro EA_LOG "  perUser=[$perUserInstallationFolder] hasPerUser=[$hasPerUserInstallation] perMachine=[$perMachineInstallationFolder] hasPerMachine=[$hasPerMachineInstallation]"
+  Pop $7
+
+  ; ---- self-elevation guard -------------------------------------------
+  ; Known failure mode: install done "as administrator" -> tree owned by
+  ; Administrators; later the per-user uninstaller runs NON-elevated and
+  ; every delete fails silently (RMDir error, shortcuts + registry kept)
+  ; while it still exits 0. Probe real delete rights inside INSTDIR; if
+  ; missing, relaunch ourselves elevated once and quit. /eaNoElevate guards
+  ; against loops; silent (update) runs are never elevated from here.
+  ${If} ${FileExists} "$INSTDIR"
+  ${AndIfNot} ${Silent}
+    ClearErrors
+    FileOpen $0 "$INSTDIR\~ea-delprobe.tmp" w
+    ${If} ${Errors}
+      !insertmacro EA_LOG "  delete-probe: cannot even CREATE in INSTDIR (create-denied)"
+    ${Else}
+      FileClose $0
+      Delete "$INSTDIR\~ea-delprobe.tmp"
+      ${If} ${FileExists} "$INSTDIR\~ea-delprobe.tmp"
+        Push $8
+        Push $9
+        ${GetParameters} $8
+        ClearErrors
+        ${GetOptions} $8 "/eaNoElevate" $9
+        ${If} ${Errors}
+          !insertmacro EA_LOG "  delete-probe FAILED (no delete right in INSTDIR) -> relaunching ELEVATED"
+          ExecShell "runas" '"$INSTDIR\${UNINSTALL_FILENAME}"' '"$8" /eaNoElevate'
+          ${If} ${Errors}
+            !insertmacro EA_LOG "  ELEVATION DECLINED/FAILED - continuing without it (deletes will likely fail)"
+          ${Else}
+            !insertmacro EA_LOG "  elevated relaunch handed off - quitting this instance"
+            Pop $9
+            Pop $8
+            Quit
+          ${EndIf}
+        ${Else}
+          !insertmacro EA_LOG "  delete-probe FAILED even after elevated retry (interceptor?) - continuing"
+        ${EndIf}
+        Pop $9
+        Pop $8
+      ${Else}
+        !insertmacro EA_LOG "  delete-probe OK (we have delete rights in INSTDIR)"
+      ${EndIf}
+    ${EndIf}
+  ${EndIf}
 !macroend
 
 ; Replaces the default file-removal block of un.install. Replicates
 ; uninstaller.nsh exactly (isUpdated atomic-rename dance + RMDir /r) and
-; logs what happened. Do NOT "simplify" the isUpdated branch away: silent
-; update runs (uninstallOldVersion) depend on the atomic rename semantics.
+; logs what happened. On failure, additionally walks INSTDIR item by item
+; (first EA_DEL_LOG_MAX failures logged individually) to separate
+; access-denied from locked-file situations. Do NOT "simplify" the
+; isUpdated branch away: silent update runs (uninstallOldVersion) depend
+; on the atomic rename semantics.
+!define EA_DEL_LOG_MAX 30
 !macro customRemoveFiles
   !insertmacro EA_LOG "un.install section: removing files | INSTDIR=[$INSTDIR]"
   ${if} ${isUpdated}
@@ -209,6 +267,41 @@
   ${EndIf}
   ${If} ${FileExists} "$INSTDIR\*.*"
     !insertmacro EA_LOG "  INSTDIR STILL CONTAINS FILES after removal"
+    ; ---- forensic item-by-item walk -------------------------------
+    Push $0
+    Push $1
+    Push $2
+    Push $3
+    Push $4
+    StrCpy $3 0
+    StrCpy $4 0
+    FindFirst $1 $2 "$INSTDIR\*.*"
+    ${DoWhile} $2 != ""
+      ${If} $2 != "."
+      ${AndIf} $2 != ".."
+        IntOp $4 $4 + 1
+        ${If} $3 < ${EA_DEL_LOG_MAX}
+          ClearErrors
+          ${If} ${FileExists} "$INSTDIR\$2\*.*"
+            RMDir "$INSTDIR\$2"
+          ${Else}
+            Delete "$INSTDIR\$2"
+          ${EndIf}
+          ${If} ${Errors}
+            IntOp $3 $3 + 1
+            !insertmacro EA_LOG "  delete FAILED: [$2] (error flag set)"
+          ${EndIf}
+        ${EndIf}
+      ${EndIf}
+      FindNext $1 $2
+    ${Loop}
+    FindClose $1
+    !insertmacro EA_LOG "  forensic walk: top-level items=[$4] delete-failures-logged=[$3] (capped at ${EA_DEL_LOG_MAX})"
+    Pop $4
+    Pop $3
+    Pop $2
+    Pop $1
+    Pop $0
   ${Else}
     !insertmacro EA_LOG "  INSTDIR is gone/empty after removal"
   ${EndIf}
@@ -235,5 +328,11 @@
   Push $R7
   ReadRegStr $R7 SHELL_CONTEXT "${INSTALL_REGISTRY_KEY}" InstallLocation
   !insertmacro EA_LOG "  registry InstallLocation now=[$R7] (empty = cleaned)"
+  ReadRegStr $R7 SHELL_CONTEXT "${UNINSTALL_REGISTRY_KEY}" UninstallString
+  ${If} $R7 == ""
+    !insertmacro EA_LOG "  registry ARP entry removed"
+  ${Else}
+    !insertmacro EA_LOG "  registry ARP entry STILL EXISTS: [$R7]"
+  ${EndIf}
   Pop $R7
 !macroend

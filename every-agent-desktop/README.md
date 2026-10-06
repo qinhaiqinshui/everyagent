@@ -60,6 +60,12 @@
   - 有 `un.onInit done` 但没有 `un.install section` 行 → 向导页面中途退出(用户取消/模式选择页异常)。
   - 有 `removing files` 且 `INSTDIR STILL CONTAINS FILES` → 删除被文件占用打断(如 worker javaw 未退出)。
   - 卸载务必走「设置→应用→卸载」或安装目录下的 `Uninstall Every Agent.exe` 直接双击,不要自带参数。
+  - `delete-probe` 行:卸载器初始化时对 INSTDIR 做真实删除权探针;`FAILED -> relaunching ELEVATED` 表示检测到
+    「管理员身份安装 + 普通身份卸载」错配,已自动弹 UAC 以管理员重跑;`FAILED even after elevated retry` 则强烈
+    提示有安全软件在拦截删除操作(此时请查杀软的拦截记录)。
+  - `forensic walk` 行:RMDir 失败后逐项枚举 INSTDIR 顶层条目并记录前 30 个删除失败项,用于区分「被锁」与「拒绝访问」。
+  - `installer account type`:安装时若为 Admin(提权安装),产物文件/快捷方式/注册表将归 Administrators 所有,
+    是「卸载删不动」一类问题的常见源头。
 
 
 ## 构建与打包
