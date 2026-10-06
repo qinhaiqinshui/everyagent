@@ -57,6 +57,20 @@ public interface WorkerConfig {
      */
     Path resolveSkillsDir();
 
+    /**
+     * 程序附属文件目录(runtime)绝对路径——程序根下与 rg 二进制等核心附属文件
+     * 同层的共享目录;打包 desktop 态 = {@code <resourcesPath>/runtime},源码
+     * 开发态 = {@code <仓库根>/runtime}(程序根 = JVM 工作目录 user.dir,
+     * 见架构 §7.17「程序附属文件」)。
+     *
+     * <p>插件的附属资源(如 sandbox-wsl-ubuntu 的 rootfs 镜像、eagent-run.py)
+     * 由 desktop 构建链从插件 {@code runtime/} 子目录合并到此目录(插件
+     * {@code enabled=false} 时不进包);插件应经本方法定位,而非假设 cwd。
+     *
+     * @return runtime 目录绝对路径(目录可能不存在,由调用方按需判断)
+     */
+    Path resolveRuntimeDir();
+
     // ================================================================
     // Limits
     // ================================================================

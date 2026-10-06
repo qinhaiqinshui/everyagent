@@ -6,9 +6,9 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, mkdirSync, openSync } from 'node:fs'
 import { join } from 'node:path'
-import { app, utilityProcess } from 'electron'
+import { app } from 'electron'
 import type { DesktopConfig, DesktopPaths } from './config'
-import { runtimeDir, programRoot, hubJar, jreJavaExe, jreJavaExeFallback, workerJar } from './paths'
+import { programRoot, hubJar, jreJavaExe, jreJavaExeFallback, workerJar } from './paths'
 
 export interface BackendHandles {
   /** hub 子进程(始终由 desktop 启动,退出时一并停止)。 */
@@ -329,30 +329,6 @@ export async function startBackend(
 
   log(`创建日志目录: ${paths.logsDir}`)
   mkdirSync(paths.logsDir, { recursive: true })
-
-  // 发行版 preflight:worker 需要 wsl-direct 的托管发行版(EveryAgent)。
-  // 在独立 utilityProcess 中执行(主进程不直接 spawn wsl.exe,规避 native 崩溃风险);
-  // fire-and-forget:任何异常都不影响 hub/worker 启动(worker 自身 autoImport 兜底)。
-  const wslCheck = utilityProcess.fork(join(__dirname, 'wsl-check-entry.js'), [], {
-    serviceName: 'wsl-distro-check',
-  })
-  wslCheck.on('message', (msg) => {
-    const m = msg as { type?: string; line?: string; result?: { detail?: string } }
-    if (m.type === 'log' && m.line) log(`[wsl检查] ${m.line}`)
-    else if (m.type === 'result') log(`[wsl检查] ${m.result?.detail ?? '完成'}`)
-  })
-  wslCheck.on('exit', (code) => {
-    log(`[wsl检查] 子进程退出 code=${code}`)
-  })
-  try {
-    wslCheck.postMessage({
-      home: paths.home,
-      distro: 'EveryAgent',
-      bundledDir: runtimeDir(),
-    })
-  } catch (error) {
-    log(`[wsl检查] 下发任务失败(忽略): ${(error as Error).message}`)
-  }
 
   const env: NodeJS.ProcessEnv = { ...process.env, EVERYAGENT_HOME: paths.home }
   const hubLog = join(paths.logsDir, 'hub.out.log')

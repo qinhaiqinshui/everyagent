@@ -29,8 +29,10 @@ import java.util.function.Supplier;
  *   <li>{@link #effectiveDistro}、{@link #wslCmd}、{@link #distroLabel} 等工具方法。</li>
  * </ul>
  *
- * <p>镜像与启动器脚本由插件自己管理，位于 {@code <pluginDir>/wsl/} 下。
- * 镜像自动导入({@link #autoImport}) 也由插件自行承担。
+ * <p>镜像与启动器脚本由插件自己管理,按三级链定位({@code <pluginDir>/wsl/} →
+ * 共享 runtime {@code resolveRuntimeDir()/wsl/}(打包 desktop 态)→ 配置 tarball,
+ * 见 {@link #tarballFor}/{@link #resolveRunner})。镜像自动导入({@link #autoImport})
+ * 也由插件自行承担。
  */
 public final class WslCommon {
 
@@ -63,8 +65,13 @@ public final class WslCommon {
     }
 
     /**
-     * 托管镜像路径：优先插件目录 {@code <pluginDir>/wsl/eagent-rootfs.tar.gz}；
-     * 其次配置 {@code worker.sandbox.wsl.tarball}（相对系统目录解析，兼容手动场景）。
+     * 托管镜像路径，三级链（架构 §7.10/§7.17）：
+     * <ol>
+     *   <li>插件目录 {@code <pluginDir>/wsl/eagent-rootfs.tar.gz}（.eap 安装/源码开发态）；</li>
+     *   <li>共享 runtime {@code resolveRuntimeDir()/wsl/eagent-rootfs.tar.gz}（打包 desktop 态：
+     *       插件 {@code runtime/} 子目录经构建链 copy-plugin-runtime 并入程序根 runtime/）；</li>
+     *   <li>配置 {@code worker.sandbox.wsl.tarball}（相对系统目录解析，兼容手动场景）。</li>
+     * </ol>
      * 均不存在返回 null（= 自动导入关闭）。
      */
     public static Path tarballFor(WorkerConfig props, Path pluginDir) {
@@ -74,7 +81,14 @@ public final class WslCommon {
                 return bundled;
             }
         }
-        String t = props.sandbox().wsl().tarball();
+        if (props != null) {
+            // 打包 desktop 态:插件资源不在 staging 插件目录,而在共享 runtime(与 rg 同根)
+            Path shared = props.resolveRuntimeDir().resolve("wsl").resolve("eagent-rootfs.tar.gz");
+            if (Files.isRegularFile(shared)) {
+                return shared;
+            }
+        }
+        String t = props == null ? null : props.sandbox().wsl().tarball();
         if (t == null || t.isBlank()) {
             return null;
         }
@@ -125,18 +139,28 @@ public final class WslCommon {
     }
 
     /**
-     * eagent-run.py 定位（插件目录 {@code <pluginDir>/wsl/eagent-run.py}）。
+     * eagent-run.py 定位,与 {@link #tarballFor} 同一三级链(架构 §7.10/§7.17):
+     * 插件目录 {@code <pluginDir>/wsl/} → 共享 runtime {@code resolveRuntimeDir()/wsl/}
+     * (打包 desktop 态)——均缺失才视为异常。
      */
     public static Path resolveRunner(WorkerConfig props, Path pluginDir) throws IOException {
-        if (pluginDir == null) {
-            throw new IOException("插件目录未知，无法定位 eagent-run.py");
+        if (pluginDir != null) {
+            Path target = pluginDir.resolve("wsl").resolve("eagent-run.py");
+            if (Files.isRegularFile(target)) {
+                return target;
+            }
         }
-        Path target = pluginDir.resolve("wsl").resolve("eagent-run.py");
-        if (!Files.isRegularFile(target)) {
-            throw new IOException("插件目录缺少 eagent-run.py: " + target
-                    + "(放置: <pluginDir>/wsl/eagent-run.py)");
+        if (props != null) {
+            Path shared = props.resolveRuntimeDir().resolve("wsl").resolve("eagent-run.py");
+            if (Files.isRegularFile(shared)) {
+                return shared;
+            }
         }
-        return target;
+        throw new IOException("eagent-run.py 未找到(已查插件目录 "
+                + (pluginDir == null ? "(未知)" : pluginDir.resolve("wsl"))
+                + " 与共享 runtime "
+                + (props == null ? "(未知)" : props.resolveRuntimeDir().resolve("wsl"))
+                + ";放置: <pluginDir>/wsl/eagent-run.py,或插件 runtime/wsl/ 经构建并入共享 runtime)");
     }
 
     /** 读 eagent-run.py 字节。 */

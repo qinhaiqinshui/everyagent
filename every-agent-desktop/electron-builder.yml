@@ -25,12 +25,13 @@ extraResources:
   # staging 每次整体清空重建:enabled=false 插件(如 sandbox-*)不复制、不残留。
   - from: resources/every-agent-plugins
     to: every-agent-plugins
-  # 程序附属文件(rg、eagent-run.py、托管发行版镜像):唯一真源在仓库根 runtime/,
-  # 经 extraResources 原样搬到 <resourcesPath>/runtime(与 web/backend/jre 同层),
-  # 与 paths.ts 打包态 programRoot()=process.resourcesPath、runtimeDir()=.../runtime 对齐。
+  # 程序附属文件(核心 rg 二进制;插件附属资源由各插件 runtime/ 子目录经
+  # copy-plugin-runtime.mjs 并入,如 sandbox-wsl-ubuntu 启用时的 wsl 镜像):唯一真源在
+  # 仓库根 runtime/,经 extraResources 原样搬到 <resourcesPath>/runtime(与 web/backend/jre
+  # 同层),与 paths.ts 打包态 programRoot()=process.resourcesPath、runtimeDir()=.../runtime 对齐。
   # 注意:不能用 extraFiles——extraFiles 落到应用根(win-unpacked 根),而 worker 的
   # cwd = resourcesPath,读 ./runtime 只会命中 resources/runtime,落点不一致会导致
-  # 打包后 wsl-direct 探测失败回退 windows-mic。
+  # worker 侧 rg/插件附属资源定位失败。
   - from: ../runtime
     to: runtime
   # 独立后端启动脚本:用于任务计划程序等无 GUI 场景启动 hub + worker。
@@ -58,5 +59,9 @@ nsis:
   createStartMenuShortcut: true
   createDesktopShortcut: always
   shortcutName: Every Agent
+  # 卸载问题排查插桩(known issue:卸载器秒退但什么都不删):
+  # build/installer.nsh 在安装/卸载器各阶段写追加日志到 ~/.everyagent/logs/uninstall.log,
+  # customRemoveFiles 忠实复刻默认文件删除块(含 --updated 原子迁移),仅加观测日志。
+  include: build/installer.nsh
 portable:
   artifactName: ${productName}-${version}-portable.${ext}

@@ -37,9 +37,10 @@ public class WorkerProperties implements WorkerConfig {
     private String builtinPluginsDir = "";
     /**
      * 程序资源根(仅用于授权忽略前缀等,不再是程序附属文件的定位基础):
-     * 程序附属文件(rg、eagent-run.py、WSL 托管镜像)统一随安装/解压分发到
-     * {@code <程序根>/runtime/},worker 以字面相对路径 {@code ./runtime} 按 JVM 工作目录
-     * (user.dir)解析(见 {@link #resolveRuntimeDir()}),与本字段无关。
+     * 程序附属文件(核心 rg 二进制;插件附属资源如 eagent-run.py、WSL 托管镜像由各插件
+     * runtime/ 子目录经构建链并入)统一随安装/解压分发到 {@code <程序根>/runtime/},
+     * worker 以字面相对路径 {@code ./runtime} 按 JVM 工作目录(user.dir)解析
+     * (见 {@link #resolveRuntimeDir()}),与本字段无关。
      * 空 = 用 codeSource 定位 jar 所在目录;desktop 打包态由 desktop 注入(仅影响授权忽略前缀)。
      */
     private String programDir = "";
@@ -296,8 +297,9 @@ public class WorkerProperties implements WorkerConfig {
 
     /**
      * 程序附属文件目录绝对路径;恒为 {@code <程序根>/runtime}(程序根 = JVM 工作目录 user.dir)。
-     * 程序附属文件(rg、eagent-run.py、WSL 托管镜像)随安装/解压分发到程序根下 runtime/,
-     * worker 以字面相对路径 {@code ./runtime} 按 user.dir 解析——开发态(IDE 工作目录 = 仓库根)
+     * 核心附属文件(rg)与插件附属资源(各插件 runtime/ 子目录经构建链并入,如
+     * sandbox-wsl-ubuntu 的镜像与 eagent-run.py)都随安装/解压分发到程序根下 runtime/,
+     * 以字面相对路径 {@code ./runtime} 按 user.dir 解析——开发态(IDE 工作目录 = 仓库根)
      * 与打包态(desktop spawn 时 cwd = 程序根 resources 目录)都命中同一布局,与 program-dir 无关。
      */
     public java.nio.file.Path resolveRuntimeDir() {

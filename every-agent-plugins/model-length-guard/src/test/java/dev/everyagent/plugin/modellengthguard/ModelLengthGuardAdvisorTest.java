@@ -329,12 +329,14 @@ class ModelLengthGuardAdvisorTest {
         @Override public Path resolveHomeDir() { return null; }
         @Override public Path resolveSandboxPersistentRoot() { return null; }
         @Override public Path resolveSkillsDir() { return null; }
+        @Override public Path resolveRuntimeDir() { return null; }
     }
 
     /** Limits 桩:关键两项取 worker WorkerProperties 默认值。 */
     private static final class StubLimits implements WorkerConfig.Limits {
         @Override public AdaptiveMaxTokens adaptiveMaxTokens() { return null; }
         @Override public int maxConcurrentTasks() { return 20; }
+        @Override public long askTimeoutMs() { return 1_800_000; }
         @Override public long modelLengthStallMs() { return 120_000; }
         @Override public long lengthDisconnectMinTokens() { return 32_768; }
         @Override public ModelRate modelRate() { return null; }
