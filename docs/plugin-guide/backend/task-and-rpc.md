@@ -355,7 +355,7 @@ worker 内置同路注册：SkillSlashProvider 构造器里 registry.registerPro
   把 token 替换为 resolveSubmissionText 的文本再进模型                                    advisors.md §2.2 #7
 ```
 
-**SkillSlashProvider 与 ExternalSkillScanner 的关系（SkillContributor 半接线，如实区分）**：`/` 菜单的 skill 候选来自 `BuiltInSkills.getAllSkills() + ExternalSkillScanner.scan()` 合并（`SkillSlashProvider.java:43-48`）——**不含 `SkillContributorRegistry`**。`registerSkillContributor` 通道只进 system prompt（`SkillAdvisor.mergedSkills`，[advisors.md](advisors.md) §5）；subagent 的 skill 能进 `/` 菜单，是它的知识包被物化进 skillsDir 一级子目录、被 `ExternalSkillScanner` 当**外部 skill** 捞取。想让 skill 进菜单的插件应同样物化到 skillsDir，而不是指望 SkillContributor（此为已知现状偏差，登记在 [known-issues](../reference/known-issues.md)）。
+**SkillSlashProvider 与 ExternalSkillScanner 的关系（三路合并）**：`/` 菜单的 skill 候选来自「内置 `BuiltInSkills.getAllSkills()` → 插件 `SkillContributorRegistry` → `ExternalSkillScanner.scan()`」三路合并（`SkillSlashProvider.java`），同 id 去重、优先级依次降低；插件 SPI 条目副标题带「插件 · 」来源前缀，选中执行路径（`system.skill` opaque token）与内置完全一致。`registerSkillContributor` 通道现在**同时**进 system prompt（`SkillAdvisor.mergedSkills`，[advisors.md](advisors.md) §5）与 `/` 菜单——两条通道已等价（known-issues #11 修复前 SPI 只进 prompt 不进菜单）；物化文件到 skillsDir 仍是第三条合法通道（优先级最低，subagent 先例）。
 
 ### 4.3 范例（index 表 4 处注册）
 

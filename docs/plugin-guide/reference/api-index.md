@@ -271,5 +271,5 @@ has_children: false
 ## 下一步读
 
 - 每个扩展点的逐行范例与 order 值占用：[内置插件范例索引](builtin-plugins.md)（order 速查在其 [§4](builtin-plugins.md#4-order-值占用速查)）
-- 死扩展点 / 未接线字段 / API 未发布等现状偏差：[known-issues](known-issues.md)（#1~#5 已修复、#6/#7 已缓解）
+- 死扩展点 / 未接线字段 / API 未发布等现状偏差：[known-issues](known-issues.md)（#1~#5、#8~#17、#19、#21~#23 已修复；#6/#7 已缓解）
 - 起步走读：[快速上手](../getting-started.md)（撰写中）
