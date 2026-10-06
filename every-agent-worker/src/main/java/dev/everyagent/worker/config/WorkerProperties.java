@@ -39,7 +39,7 @@ public class WorkerProperties implements WorkerConfig {
      * 程序资源根(仅用于授权忽略前缀等,不再是程序附属文件的定位基础):
      * 程序附属文件(核心 rg 二进制;插件附属资源如 eagent-run.py、WSL 托管镜像由各插件
      * runtime/ 子目录经构建链并入)统一随安装/解压分发到 {@code <程序根>/runtime/},
-     * worker 以字面相对路径 {@code ./runtime} 按 JVM 工作目录(user.dir)解析
+     * worker 按 {@code everyagent.program-dir} 属性(缺省 user.dir)解析
      * (见 {@link #resolveRuntimeDir()}),与本字段无关。
      * 空 = 用 codeSource 定位 jar 所在目录;desktop 打包态由 desktop 注入(仅影响授权忽略前缀)。
      */
@@ -252,12 +252,17 @@ public class WorkerProperties implements WorkerConfig {
     }
 
     /**
-     * 内置插件源码根目录绝对路径;配置为空时取工作目录(user.dir)下 every-agent-plugins/。
+     * 内置插件源码根目录绝对路径;配置为空时取程序根下 every-agent-plugins/
+     * (程序根优先取 {@code everyagent.program-dir} 属性,缺省回退工作目录 user.dir)。
      * 配置值支持 ~ 开头(展开为 user.home);非空时按字面路径解析后取绝对路径。
      */
     public java.nio.file.Path resolveBuiltinPluginsDir() {
         String p = builtinPluginsDir == null || builtinPluginsDir.isBlank() ? null : builtinPluginsDir.trim();
         if (p == null) {
+            String root = programDirOverride();
+            if (root != null) {
+                return java.nio.file.Path.of(root).toAbsolutePath().normalize().resolve("every-agent-plugins");
+            }
             return java.nio.file.Path.of("every-agent-plugins").toAbsolutePath().normalize();
         }
         if (p.startsWith("~")) {
@@ -296,13 +301,30 @@ public class WorkerProperties implements WorkerConfig {
     }
 
     /**
-     * 程序附属文件目录绝对路径;恒为 {@code <程序根>/runtime}(程序根 = JVM 工作目录 user.dir)。
-     * 核心附属文件(rg)与插件附属资源(各插件 runtime/ 子目录经构建链并入,如
-     * sandbox-wsl-ubuntu 的镜像与 eagent-run.py)都随安装/解压分发到程序根下 runtime/,
-     * 以字面相对路径 {@code ./runtime} 按 user.dir 解析——开发态(IDE 工作目录 = 仓库根)
-     * 与打包态(desktop spawn 时 cwd = 程序根 resources 目录)都命中同一布局,与 program-dir 无关。
+     * 程序根覆盖(system property {@code everyagent.program-dir},由 desktop/启动脚本注入)。
+     *
+     * <p>背景:worker 曾以「cwd = 程序根 + 字面 {@code ./runtime} 相对解析」定位程序附属文件,
+     * 但打包态程序根 = 安装目录 resources —— hub/worker 全程把安装目录当 CWD,
+     * Windows 下「任何进程 CWD 所在目录不可删除」,导致卸载后 resources 空目录残留、
+     * 覆盖安装失败(须提权)。修复:启动方把 cwd 设为 EVERYAGENT_HOME 等安装目录之外的位置,
+     * 并经本属性显式告知程序根;属性缺省时行为不变(字面相对 user.dir,兼容开发态/裸 bat)。
+     */
+    private static String programDirOverride() {
+        String v = System.getProperty("everyagent.program-dir");
+        return v == null || v.isBlank() ? null : v.trim();
+    }
+
+    /**
+     * 程序附属文件目录绝对路径;恒为 {@code <程序根>/runtime}。
+     * 程序根优先取 {@code everyagent.program-dir} 属性(desktop/启动脚本注入);
+     * 缺省回退 JVM 工作目录(user.dir)——开发态(IDE 工作目录 = 仓库根)与打包态
+     * 显式注入都命中同一布局。
      */
     public java.nio.file.Path resolveRuntimeDir() {
+        String root = programDirOverride();
+        if (root != null) {
+            return java.nio.file.Path.of(root).toAbsolutePath().normalize().resolve("runtime");
+        }
         return java.nio.file.Path.of("runtime").toAbsolutePath().normalize();
     }
 

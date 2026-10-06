@@ -10,16 +10,18 @@ rem 持续重试连接,直到 desktop 启动拉起 hub 后自动连上。
 rem
 rem 用法:
 rem   直接运行:双击或在命令行执行
-rem   任务计划程序:程序填此 bat 路径,"起始于"填 resources 目录;触发器选
-rem                "登录时"或"系统启动时"(后者需以最高权限运行,且因 Session 0
-rem                无 GUI,仅 worker 进程启动,Desktop 窗口/托盘不显示——这是预期行为)。
+rem   任务计划程序:程序填此 bat 路径;触发器选"登录时"或"系统启动时"(后者需以
+rem                最高权限运行,且因 Session 0 无 GUI,仅 worker 进程启动,
+rem                Desktop 窗口/托盘不显示——这是预期行为)。
 rem
 rem 打包后此脚本位于 <安装根>\resources\start-backend.bat,
 rem 同目录下有 jre\、backend\、runtime\ 等(resourcesPath 即程序根)。
 rem ========================================================================
 
-rem 切换到脚本所在目录(程序根/resourcesPath),worker 以 ./runtime 定位附属文件
-pushd "%~dp0"
+rem 程序根 = 脚本所在目录(resourcesPath);显式经 -Deveryagent.program-dir 注入给 worker。
+rem 注意:CWD 一律落 EVERYAGENT_HOME,不得落在安装目录——Windows 下进程 CWD 所在目录
+rem 不可删除,以安装目录为 CWD 会导致卸载/覆盖安装时 resources 目录删不掉(实证 bug)。
+set "PROGRAM_DIR=%~dp0"
 
 rem 设置 EVERYAGENT_HOME(默认 %USERPROFILE%\.everyagent)
 if not defined EVERYAGENT_HOME set EVERYAGENT_HOME=%USERPROFILE%\.everyagent
@@ -28,8 +30,8 @@ rem 确保日志目录存在
 if not exist "%EVERYAGENT_HOME%\logs" mkdir "%EVERYAGENT_HOME%\logs"
 
 rem 选择 Java 可执行文件:优先 jlink 精简 JRE 的 javaw.exe,回退 java.exe / 系统 java
-set "JAVA_EXE=jre\bin\javaw.exe"
-if not exist "%JAVA_EXE%" set "JAVA_EXE=jre\bin\java.exe"
+set "JAVA_EXE=%PROGRAM_DIR%jre\bin\javaw.exe"
+if not exist "%JAVA_EXE%" set "JAVA_EXE=%PROGRAM_DIR%jre\bin\java.exe"
 if not exist "%JAVA_EXE%" set "JAVA_EXE=java"
 
 set "WORKER_URL=http://127.0.0.1:6102/health"
@@ -43,7 +45,8 @@ if !errorlevel! equ 0 (
     echo [%date% %time%] worker 已在运行,跳过启动
 ) else (
     echo [%date% %time%] 启动 worker...
-    start "" "%JAVA_EXE%" -jar "backend\worker.jar" 1>> "%EVERYAGENT_HOME%\logs\worker.out.log" 2>&1
+    cd /d "%EVERYAGENT_HOME%"
+    start "" "%JAVA_EXE%" "-Deveryagent.program-dir=%PROGRAM_DIR%" -jar "%PROGRAM_DIR%backend\worker.jar" 1>> "%EVERYAGENT_HOME%\logs\worker.out.log" 2>&1
 )
 
 rem 等待 worker 就绪(健康检查 + hub 连接,最多 120 秒)
@@ -56,7 +59,6 @@ if !errorlevel! equ 0 goto worker_ready
 set /a WORKER_WAIT+=1
 if !WORKER_WAIT! geq 120 (
     echo [%date% %time%] worker 等待 hub 就绪超时 ^(120s^),worker 进程已启动但可能尚未连接 hub
-    popd
     exit /b 0
 )
 timeout /t 1 /nobreak >nul
@@ -65,7 +67,6 @@ goto wait_worker
 echo [%date% %time%] worker 就绪 ^(hub 连接已建立^)
 
 echo [%date% %time%] worker 启动完成
-popd
 exit /b 0
 
 rem ======================================================================

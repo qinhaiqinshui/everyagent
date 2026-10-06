@@ -243,6 +243,28 @@
 !define EA_DEL_LOG_MAX 30
 !macro customRemoveFiles
   !insertmacro EA_LOG "un.install section: removing files | INSTDIR=[$INSTDIR]"
+  ; ---- stop backend java processes running from INSTDIR -------------------
+  ; hub/worker live under $INSTDIR\resources\jre\bin\javaw.exe and hold open
+  ; jar handles (and, in versions before the cwd fix, the resources dir as
+  ; their CWD). While they live, RMDir silently fails on those entries.
+  ; They survive app exit when: "退出桌面" keeps the worker by design, the
+  ; worker was started externally (start-backend.bat / task scheduler), or
+  ; the app itself was hard-killed (never runs stopAll). Kill anything whose
+  ; image lives under INSTDIR - own user when non-elevated, every user when
+  ; elevated. Scope is safe: dev/other installs have different paths.
+  FileOpen $0 "$TEMP\ea-stop-backend.ps1" w
+  FileWrite $0 "param($$inst, $$log)$\r$\n"
+  FileWrite $0 "$$procs = Get-Process java,javaw -ErrorAction SilentlyContinue | Where-Object { try { $$_.Path -like ($$inst + '*') } catch { $$false } }$\r$\n"
+  FileWrite $0 "foreach ($$p in $$procs) {$\r$\n"
+  FileWrite $0 "  Add-Content -Path $$log -Value ('  backend process killed: pid=' + $$p.Id + ' ' + $$p.Path)$\r$\n"
+  FileWrite $0 "  Stop-Process -Id $$p.Id -Force -ErrorAction SilentlyContinue$\r$\n"
+  FileWrite $0 "}$\r$\n"
+  FileClose $0
+  nsExec::ExecToLog 'powershell -NoProfile -ExecutionPolicy Bypass -File "$TEMP\ea-stop-backend.ps1" "$INSTDIR" "$PROFILE\.everyagent\logs\uninstall.log"'
+  Pop $0
+  Delete "$TEMP\ea-stop-backend.ps1"
+  ; give the killed processes a moment to release file/dir handles
+  Sleep 500
   ${if} ${isUpdated}
     !insertmacro EA_LOG "  isUpdated=1 -> atomic move to old-install"
     CreateDirectory "$PLUGINSDIR\old-install"

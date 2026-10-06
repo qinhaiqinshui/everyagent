@@ -79,6 +79,7 @@ public class WorkerRestartRpcHandler {
                     System.getProperty("sun.java.command", ""),
                     System.getProperty("java.class.path", ""),
                     System.getProperty("java.home", ""));
+            reinjectProgramDir(command);
         } catch (IllegalStateException e) {
             log.warn("worker.restart 被拒绝:{}", e.getMessage());
             ctx.err("RESTART_UNSUPPORTED", e.getMessage());
@@ -90,6 +91,26 @@ public class WorkerRestartRpcHandler {
         Thread restarter = new Thread(() -> doRestart(command), "worker-restart");
         restarter.setDaemon(false);
         restarter.start();
+    }
+
+    /**
+     * 回注 {@code -Deveryagent.program-dir}:Windows 重建的最小命令不含原 JVM -D 选项
+     * (见 {@link #buildRelaunchCommand}),desktop 注入的程序根属性会丢——重启后 worker
+     * 会回退 user.dir 解析 runtime/内置插件,与注入态不一致。属性存在且新命令未携带时,
+     * 插到 exe 之后(首个 JVM 选项位)。
+     */
+    private static void reinjectProgramDir(List<String> cmd) {
+        String v = System.getProperty("everyagent.program-dir");
+        if (v == null || v.isBlank()) {
+            return;
+        }
+        String flag = "-Deveryagent.program-dir=" + v.trim();
+        for (String a : cmd) {
+            if (a.startsWith("-Deveryagent.program-dir=")) {
+                return;
+            }
+        }
+        cmd.add(1, flag);
     }
 
     private void doRestart(List<String> command) {
