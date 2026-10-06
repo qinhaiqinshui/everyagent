@@ -100,7 +100,7 @@ has_children: false
 | 现象（可见症状） | 根因 | 定位 · 取证 | 修复 | 详解 |
 | --- | --- | --- | --- | --- |
 | `plugins` 数组里根本没有你的插件 | 目录没被扫描到：位置不对（不在 `every-agent-plugins/` 或 `~/.everyagent/plugins/` 的**一级子目录**）；**目录根没有 plugin.json——静默跳过、无任何日志**（BuiltInPluginScanner.java:86-87、ExternalPluginScanner.java:46）；内置 `enabled=false`（INFO 跳过）；java 插件未构建（WARN 跳过，同样进不了列表） | grep 启动日志 `[plugins` 找对应跳过行 | 摆对位置 / 补根 plugin.json / `mvn package` / 改 enabled，重启 worker | [持久化与状态](../backend/persistence-and-state.md) §4.3 |
-| 条目报 `"active": true`，但插件毫无作用 | `active` 只看禁用名单（`PluginRpcMethods.java:68` 的 `!isDisabled`），**激活失败的插件照样报 true**；且 `LoadedPlugin.status` 不出网（`PluginManifest.java:22-24` 无此字段） | worker 日志 grep `插件已激活: id=<你的id>` / `激活失败`，以日志为准 | 按 §2.1 对应行修复 | [持久化与状态](../backend/persistence-and-state.md) §4.3 |
+| 条目报 `"active": true`，但插件毫无作用 | `active` 只看禁用名单（`PluginRpcMethods.java:70` 的 `!isDisabled`），**激活失败的插件照样报 true**；真判据看同应答的 `status` 字段（加载期实际状态，`PluginManifest.java` 的 `status`） | `plugin.list` 应答 `status` 含「激活失败: …」，或 worker 日志 grep `插件已激活: id=<你的id>` / `激活失败` | 按 §2.1 对应行修复 | [持久化与状态](../backend/persistence-and-state.md) §4.3 |
 | 顶层 `disabledIds` 数组里出现你的 id | 在 `.disabled-plugins` 名单（`PluginStateStore.java:38`；disable RPC 或手工编辑都会写它，管的范围含内置插件） | `Get-Content "$HOME\.everyagent\plugins\.disabled-plugins"` | `plugin.enable` RPC 或删该行，重启 worker | [打包与安装](packaging-and-install.md) §4.2 |
 | 日志 `[plugins] 读取禁用列表失败: {}` / `[plugins] 写入禁用列表失败: {}`（WARN，PluginStateStore.java:89,98） | `.disabled-plugins` 文件 IO 失败（权限 / 占用 / 编码） | 查该文件属性与占用 | 修好后重启 worker；`plugin.enable` / `plugin.disable` 会触发重写 | [打包与安装](packaging-and-install.md) §4.2 |
 
@@ -111,7 +111,7 @@ has_children: false
 | 现象（逐字文案 / 可见症状） | 根因 | 定位 · 取证 | 修复 | 详解 |
 | --- | --- | --- | --- | --- |
 | 侧边栏图标不出现，控制台**零报错**（成功/失败两条日志都没有） | 被加载过滤器静默拦下：`active && hasWebMain && !disabled`（pluginLoader.ts:365-367）任一不满足——最常见：清单缺 `webMain`、在 `disabledIds` 里、worker 未连接（此时整体静默降级） | `plugin.list` 逐项核对 `hasWebMain` / `active` / `disabledIds` | 补 `webMain: "web/index.ts"` → `plugin.enable` → 刷新页面 | [前端总览](../web/overview-and-loading.md) §1 |
-| 控制台 `[plugins] 插件 <id> 加载失败:` + 异常对象（console.warn，pluginLoader.ts:408） | 取 webSource / import / `activate()` 任一环节抛错。产物缺失时异常里可见 `文件不存在或越界: web/index.js`（webSource 的 NOT_FOUND 文案，PluginRpcMethods.java:196） | F12 展开异常对象看是哪一环 | 产物缺失 → 跑构建（下行）；activate 抛错 → 按堆栈修代码 | [调试与测试](debugging-and-testing.md) §2.3 |
+| 控制台 `[plugins] 插件 <id> 加载失败:` + 异常对象（console.warn，pluginLoader.ts:408） | 取 webSource / import / `activate()` 任一环节抛错。产物缺失时异常里可见 `文件不存在或越界: web/index.js`（webSource 的 NOT_FOUND 文案，PluginRpcMethods.resolvePluginFile:301） | F12 展开异常对象看是哪一环 | 产物缺失 → 跑构建（下行）；activate 抛错 → 按堆栈修代码 | [调试与测试](debugging-and-testing.md) §2.3 |
 | 异常对象文本是 `插件 <id> 无 <产物路径> 源码`（`pluginLoader.ts`，产物路径 = `webMain` 换算结果） | webSource 成功返回但 content 为空——产物文件存在却是空文件（异常产物） | 看 `every-agent-plugins\<id>\web\index.js` 大小 | 重新 `npm.cmd run build:plugins` + 刷新 | [前端总览](../web/overview-and-loading.md) 约定 5 |
 | 改了 `web/index.ts`，刷新页面无变化 | 页面加载的是**构建产物**（路径由 `webMain` 换算，约定即 `web/index.js`）；没重跑构建；standalone 工程则要跑自己的 `scripts/build.mjs` | 看 `web\index.js` 的修改时间 | `npm.cmd run build:plugins`（或开着 `watch:plugins`）+ 刷新页面 | [调试与测试](debugging-and-testing.md) §2.4 |
 | 改了根 `plugin.json`（webMain 等），重启 worker 也没变化 | java 插件加载期读的是 `target/classes/plugin.json`（`resolveManifestPath` 优先 target，BuiltInPluginScanner.java:193-204）；没重新 package ⇒ 还是旧清单（例外：`enabled` 永远看根） | diff 根清单与 `target\classes\plugin.json` | `mvn package` + 重启 worker | [持久化与状态](../backend/persistence-and-state.md) §5.4 |
@@ -164,8 +164,8 @@ has_children: false
 
 | 现象（逐字文案 / 可见症状） | 根因 | 定位 · 取证 | 修复 | 详解 |
 | --- | --- | --- | --- | --- |
-| `plugin.install` 应答 `NOT_FOUND`：`插件文件不存在: <path>`（PluginRpcMethods.java:94） | `path` 是 **worker 机器**上的路径——传成了浏览器 / 开发机路径，或 `.eap` 没先送到 worker 那台机器 | 在 worker 机器上核对路径 | 先把 `.eap` 传到 worker 机器，再传该机绝对路径 | [打包与安装](packaging-and-install.md) §3.1 |
-| `plugin.uninstall` 应答 `NOT_FOUND`：`插件目录不存在: <id>`（PluginRpcMethods.java:122） | uninstall 按 id 找 `<pluginsDir>/<id>` **目录**；手工 zip 顶层目录名 ≠ pluginId ⇒ 解出的目录名与登记 id 不一致，按 id 找不到 | `Get-ChildItem "$HOME\.everyagent\plugins\"` 看实际目录名 | 直接删那个目录（等效卸载）；下次用 `pack`（保证顶层 = id） | [打包与安装](packaging-and-install.md) §4.1 |
+| `plugin.install` 应答 `NOT_FOUND`：`插件文件不存在: <path>`（PluginRpcMethods.java:112） | `path` 是 **worker 机器**上的路径——传成了浏览器 / 开发机路径，或 `.eap` 没先送到 worker 那台机器 | 在 worker 机器上核对路径 | 先把 `.eap` 传到 worker 机器，再传该机绝对路径 | [打包与安装](packaging-and-install.md) §3.1 |
+| `plugin.uninstall` 应答 `NOT_FOUND`：`插件目录不存在: <id>`（PluginRpcMethods.java:140） | uninstall 按 id 找 `<pluginsDir>/<id>` **目录**；手工 zip 顶层目录名 ≠ pluginId ⇒ 解出的目录名与登记 id 不一致，按 id 找不到 | `Get-ChildItem "$HOME\.everyagent\plugins\"` 看实际目录名 | 直接删那个目录（等效卸载）；下次用 `pack`（保证顶层 = id） | [打包与安装](packaging-and-install.md) §4.1 |
 | 装完 `.eap` 重启后，`plugin.list` 里仍没有 | 解压布局错：平铺 zip 把文件摊进 plugins 根（扫描器只认一级子目录，等于没装）；或顶层目录里缺 `plugin.json` | 列目录对照标准布局树（`<id>/plugin.json` + `lib/` + `web/index.js`） | 重摆成标准布局，重启 worker | [打包与安装](packaging-and-install.md) §3.2 |
 | 外部插件把 plugin.json 写 `"enabled": false` 想禁用，没生效 | `enabled` 字段**只有内置扫描器读**（`ExternalPluginScanner` 全文零读 enabled）——外部插件照样被扫描加载 | — | 用 `plugin.disable` RPC / `.disabled-plugins` 名单，或直接删目录 | [打包与安装](packaging-and-install.md) §4.2 |
 | 把开发机的插件目录整目录拷到 `~/.everyagent/plugins/`，重启后 java 部分没加载（WARN `[plugins] 插件 {} 声明了入口类但无可用 jar`，PluginLoader.java:287） | 外部插件 jar 约定在 `<id>/lib/`，**不认** `target/` 布局（jar 还留在 `target/` 里） | 查该目录有没有 `lib\*.jar` | `pack` 成 `.eap` 再解压，或手工把 jar 摆进 `lib/` | [打包与安装](packaging-and-install.md) §3.2 |

@@ -263,6 +263,22 @@ public class PluginLoader {
         }
         String webMain = json.path("webMain").asString("");
 
+        // 展示元数据（扩展管理面板用，纯展示不参与加载判定）：图标相对路径 + 资源链接 + 分类标签。
+        // icon 文件是否存在不在加载期判定（plugin.asset RPC 读取时 jail 校验，缺失由前端回退默认图标）。
+        String icon = json.path("icon").asString("");
+        String repository = json.path("repository").asString("");
+        String license = json.path("license").asString("");
+        String homepage = json.path("homepage").asString("");
+        List<String> categories = new ArrayList<>();
+        JsonNode categoriesNode = json.path("categories");
+        if (categoriesNode.isArray()) {
+            for (JsonNode c : categoriesNode) {
+                if (c.isTextual() && !c.asString().isBlank()) {
+                    categories.add(c.asString());
+                }
+            }
+        }
+
         // 禁用的插件:核心不调 activate —— 插件压根没被激活,自然不会向任何注册表
         // (advisor/tool/interceptor/slash/tokenResolver…)注册贡献,"/菜单"里也就没有它的候选。
         // 仍登记进已加载清单(不激活),否则扩展管理面板看不到它,也就无法再启用。
@@ -270,7 +286,8 @@ public class PluginLoader {
             log.info("[plugins] 插件已禁用,跳过激活: id={} name={} (source={})",
                     id, name, source);
             loadedPlugins.add(new LoadedPlugin(pluginId, name, version, description, author,
-                    pluginDir, source, false, "已禁用(未激活)", entryClass, webMain));
+                    pluginDir, source, false, "已禁用(未激活)", entryClass, webMain,
+                    icon, repository, license, homepage, categories));
             return;
         }
 
@@ -292,7 +309,8 @@ public class PluginLoader {
             log.info("[plugins] 声明式插件已注册: id={} name={} v{} (无 Java 入口,source={})",
                     id, name, version, source);
             loadedPlugins.add(new LoadedPlugin(id, name, version, description, author,
-                    pluginDir, source, true, "声明式插件", "", webMain));
+                    pluginDir, source, true, "声明式插件", "", webMain,
+                    icon, repository, license, homepage, categories));
             return;
         }
 
@@ -307,7 +325,8 @@ public class PluginLoader {
             } catch (IOException e) {
                 log.warn("[plugins] 插件 {} 的 lib 目录不可读,跳过: {}", id, e.getMessage());
                 loadedPlugins.add(new LoadedPlugin(id, name, version, description, author,
-                        pluginDir, source, false, "lib 目录不可读: " + e.getMessage(), entryClass, webMain));
+                        pluginDir, source, false, "lib 目录不可读: " + e.getMessage(), entryClass, webMain,
+                        icon, repository, license, homepage, categories));
                 return;
             }
         }
@@ -315,7 +334,8 @@ public class PluginLoader {
         if (jars.isEmpty()) {
             log.warn("[plugins] 插件 {} 声明了入口类但无可用 jar (source={})", id, source);
             loadedPlugins.add(new LoadedPlugin(id, name, version, description, author,
-                    pluginDir, source, false, "无 jar 文件", entryClass, webMain));
+                    pluginDir, source, false, "无 jar 文件", entryClass, webMain,
+                    icon, repository, license, homepage, categories));
             return;
         }
 
@@ -340,7 +360,8 @@ public class PluginLoader {
             if (!EveryAgentPlugin.class.isAssignableFrom(clazz)) {
                 log.warn("[plugins] 插件 {} 的入口类 {} 未实现 EveryAgentPlugin 接口", id, entryClass);
                 loadedPlugins.add(new LoadedPlugin(id, name, version, description, author,
-                        pluginDir, source, false, "入口类未实现 EveryAgentPlugin", entryClass, webMain));
+                        pluginDir, source, false, "入口类未实现 EveryAgentPlugin", entryClass, webMain,
+                        icon, repository, license, homepage, categories));
                 return;
             }
 
@@ -364,14 +385,16 @@ public class PluginLoader {
             activatedPlugins.add(plugin);
 
             loadedPlugins.add(new LoadedPlugin(id, name, version, description, author,
-                    pluginDir, source, true, builtin ? "已激活(内置)" : "已激活", entryClass, webMain));
+                    pluginDir, source, true, builtin ? "已激活(内置)" : "已激活", entryClass, webMain,
+                    icon, repository, license, homepage, categories));
             log.info("[plugins] 插件已激活: id={} name={} v{} entry={} source={}",
                     id, name, version, entryClass, source);
 
         } catch (Exception e) {
             log.warn("[plugins] 插件 {} 激活失败: {}", id, e.getMessage(), e);
             loadedPlugins.add(new LoadedPlugin(id, name, version, description, author,
-                    pluginDir, source, false, "激活失败: " + e.getMessage(), entryClass, webMain));
+                    pluginDir, source, false, "激活失败: " + e.getMessage(), entryClass, webMain,
+                    icon, repository, license, homepage, categories));
         }
     }
 
@@ -384,10 +407,15 @@ public class PluginLoader {
      * 已加载的插件信息 record。
      *
      * @param source 插件来源({@code "builtin"} / {@code "external"} 等,与扫描器约定一致)
+     * @param icon   插件图标在插件目录内的相对路径(展示元数据,空 = 前端用默认扩展图标)
+     * @param repository / license / homepage 展示元数据(资源链接,空 = 详情页不渲染)
+     * @param categories 分类标签(展示元数据)
      */
     public record LoadedPlugin(String id, String name, String version, String description,
             String author, Path pluginDir, String source, boolean active, String status,
-            String main, String webMain) {
+            String main, String webMain,
+            String icon, String repository, String license, String homepage,
+            List<String> categories) {
     }
 
     /** 将 JsonNode 解包为原生 Java 对象（String/Long/Double/Boolean/null）。 */

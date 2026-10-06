@@ -1,6 +1,7 @@
 package dev.everyagent.worker.plugin.registry;
 
 import java.nio.file.Path;
+import java.util.List;
 
 /**
  * 插件清单（完整目录条目）。
@@ -19,9 +20,16 @@ import java.nio.file.Path;
  * @param status      加载期实际状态文案（{@code 已激活}/{@code 激活失败: ...}/{@code 已禁用(未激活)}
  *                    等，透传自 {@code LoadedPlugin.status}，供 plugin.list 出网区分「在跑」与「加载失败」）
  * @param pluginDir   插件根目录绝对路径（内置插件源码目录或外部插件安装目录），
- *                    供 {@code plugin.webSource} RPC 读取文件用
+ *                    供 {@code plugin.webSource} / {@code plugin.asset} RPC 读取文件用
+ * @param icon        插件图标在插件目录内的相对路径（展示元数据；空 = 前端回退默认扩展图标）
+ * @param repository  仓库链接（展示元数据，空 = 详情页不渲染）
+ * @param license     许可证（展示元数据，空 = 详情页不渲染）
+ * @param homepage    主页链接（展示元数据，空 = 详情页不渲染）
+ * @param categories  分类标签（展示元数据，空列表 = 详情页无标签行）
  */
 public record PluginManifest(String id, String name, String version, String description,
                              String author, String main, String webMain, String source,
-                             String status, Path pluginDir) {
+                             String status, Path pluginDir,
+                             String icon, String repository, String license, String homepage,
+                             List<String> categories) {
 }

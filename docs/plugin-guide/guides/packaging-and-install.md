@@ -117,13 +117,13 @@ zip 由 `node:zlib` 手写（零 npm 依赖）：local file header + central dir
 
 ### 3.1 路线 a：`plugin.install` RPC（面板已接线）
 
-worker 侧方法表齐备（`every-agent-worker/src/main/java/dev/everyagent/worker/plugin/loader/PluginRpcMethods.java:86-110`）：
+worker 侧方法表齐备（`every-agent-worker/src/main/java/dev/everyagent/worker/plugin/loader/PluginRpcMethods.java:104-128`）：
 
 - 参数：`path` —— **worker 机器上的 `.eap` 文件路径**（`:87`）。不是浏览器机器的路径；worker 跑在远端时文件得先送过去。
 - 缺参：`BAD_PARAMS` `缺少参数 path`（`:89`）；文件不存在：`NOT_FOUND` `插件文件不存在: <path>`（`:94`）；解包 IO 异常：`INTERNAL` `安装失败: <原因>`（`:102`）。
 - 成功返回：`{ "installed": true, "pluginId": "<id>", "message": "插件已安装，重启 worker 后生效" }`（`:105-109`，文案逐字）。
 
-解包逻辑 `extractEap`（`PluginRpcMethods.java:212-235`）的三条判定，与 CLI README 逐字对齐：
+解包逻辑 `extractEap`（`PluginRpcMethods.java:327-350`）的三条判定，与 CLI README 逐字对齐：
 
 1. **顶层目录判定**：取「第一个带 `/` 的条目」的首段当 pluginId，条目原样解到 plugins 根（默认 `~/.everyagent/plugins/`，`PluginRegistry.getPluginsRoot()` → `WorkerProperties.resolvePluginsDir()`，`every-agent-worker/src/main/java/dev/everyagent/worker/config/WorkerProperties.java:247-251`；home 默认 `<user.home>/.everyagent`，`:213-215`）。
 2. **zip-slip 防御**：每条路径先 `normalize` 再校验仍在 plugins 根内，越界条目直接跳过（`:226-229`）。
@@ -181,7 +181,7 @@ Expand-Archive -Path .\my-tool-0.1.0.eap -DestinationPath "$HOME\.everyagent\plu
 # 解完确认：~\.everyagent\plugins\my-tool\plugin.json 存在（顶层目录名 = id）
 ```
 
-> macOS 手工 zip 注意：`extractEap` 会跳过 `__MACOSX` 与 `.DS_Store` 条目（`PluginRpcMethods.java:218`），但 Finder「压缩」产出的顶层目录名是**所选目录名**——务必让目录名 = id 再压缩，否则踩 §4.1 的卸载陷阱。
+> macOS 手工 zip 注意：`extractEap` 会跳过 `__MACOSX` 与 `.DS_Store` 条目（`PluginRpcMethods.java:333`），但 Finder「压缩」产出的顶层目录名是**所选目录名**——务必让目录名 = id 再压缩，否则踩 §4.1 的卸载陷阱。
 
 ### 3.3 路线 c：builtin 路径（仓库内开发即分发）
 
@@ -193,22 +193,23 @@ Expand-Archive -Path .\my-tool-0.1.0.eap -DestinationPath "$HOME\.everyagent\plu
 
 ## 4. 卸载 / 启停
 
-先把六个 `plugin.*` RPC 一张表看清（全部注册于 `PluginRpcMethods.java:46-53`，方法名常量在 `every-agent-worker/src/main/java/dev/everyagent/worker/proto/RpcMethods.java:83-93`）：
+先把七个 `plugin.*` RPC 一张表看清（全部注册于 `PluginRpcMethods.java:47-55`，方法名常量在 `every-agent-worker/src/main/java/dev/everyagent/worker/proto/RpcMethods.java:89-101`）：
 
 | 方法 | 参数 | 返回（result） | 行号 |
 | --- | --- | --- | --- |
-| `plugin.list` | 无 | `{ plugins: [...], disabledIds: [...] }` | `:57-83` |
-| `plugin.install` | `{ path }`（worker 机器上的 .eap 路径） | `{ installed: true, pluginId, message }` | `:86-110` |
-| `plugin.uninstall` | `{ pluginId }` | `{ uninstalled: true, pluginId, message }` | `:113-136` |
-| `plugin.enable` | `{ pluginId }` | `{ enabled: true, pluginId, message }` | `:139-151` |
-| `plugin.disable` | `{ pluginId }` | `{ disabled: true, pluginId, message }` | `:154-166` |
-| `plugin.webSource` | `{ pluginId, path }` | `{ pluginId, path, content }` | `:169-210` |
+| `plugin.list` | 无 | `{ plugins: [...], disabledIds: [...] }` | `:58-101` |
+| `plugin.install` | `{ path }`（worker 机器上的 .eap 路径） | `{ installed: true, pluginId, message }` | `:104-128` |
+| `plugin.uninstall` | `{ pluginId }` | `{ uninstalled: true, pluginId, message }` | `:131-154` |
+| `plugin.enable` | `{ pluginId }` | `{ enabled: true, pluginId, message }` | `:157-169` |
+| `plugin.disable` | `{ pluginId }` | `{ disabled: true, pluginId, message }` | `:172-184` |
+| `plugin.webSource` | `{ pluginId, path }` | `{ pluginId, path, content }` | `:187-214` |
+| `plugin.asset` | `{ pluginId, path }` | `{ pluginId, path, mime, contentBase64 }` | `:217-256` |
 
 四个 message 全部以「重启 worker 后生效」收尾——这不是免责声明，是当前架构的事实（无热重载；`deactivate` 仅在 worker 优雅关闭时调用，运行期不触发）。
 
 ### 4.1 `plugin.uninstall`
 
-参数 `{ "pluginId": "<id>" }`（`PluginRpcMethods.java:113-136`）：校验 `<pluginsRoot>/<pluginId>` 是目录后递归删除（`deleteRecursive`，`:237-245`）。
+参数 `{ "pluginId": "<id>" }`（`PluginRpcMethods.java:131-154`）：校验 `<pluginsRoot>/<pluginId>` 是目录后递归删除（`deleteRecursive`，`:352-361`）。
 
 - 缺参：`BAD_PARAMS` `缺少参数 pluginId`（`:116`）；
 - 目录不存在：`NOT_FOUND` `插件目录不存在: <id>`（`:122`）；
@@ -218,12 +219,12 @@ Expand-Archive -Path .\my-tool-0.1.0.eap -DestinationPath "$HOME\.everyagent\plu
 
 ### 4.2 `plugin.enable` / `plugin.disable`
 
-参数同为 `{ "pluginId": "<id>" }`（`PluginRpcMethods.java:139-166`）。两者都经 `PluginRegistry` 委托 `PluginStateStore` **改内存 + 立即落盘**到 `<pluginsDir>/.disabled-plugins`（默认 `~/.everyagent/plugins/.disabled-plugins`；每行一个插件 id，支持 `#` 注释；`every-agent-worker/src/main/java/dev/everyagent/worker/plugin/registry/PluginStateStore.java:38,89-98`）。成功文案逐字：
+参数同为 `{ "pluginId": "<id>" }`（`PluginRpcMethods.java:157-184`）。两者都经 `PluginRegistry` 委托 `PluginStateStore` **改内存 + 立即落盘**到 `<pluginsDir>/.disabled-plugins`（默认 `~/.everyagent/plugins/.disabled-plugins`；每行一个插件 id，支持 `#` 注释；`every-agent-worker/src/main/java/dev/everyagent/worker/plugin/registry/PluginStateStore.java:38,89-98`）。成功文案逐字：
 
 - enable：`{ "enabled": true, "pluginId": "<id>", "message": "插件已启用，重启 worker 后生效" }`（`:146-150`）
 - disable：`{ "disabled": true, "pluginId": "<id>", "message": "插件已禁用，重启 worker 后生效" }`（`:161-165`）
 
-**重启生效的边界**（`PluginStateStore.java` 类注释自证）：插件系统没有运行期停用——`deactivate` 仅在 worker 优雅关闭时调用，已激活插件的贡献留在当前进程的注册表里；名单变更对**下一次 worker 启动**完全生效——加载期被禁用的插件核心不调 `activate()`，一个贡献都不会注册。`plugin.list` 的 `active` 字段即时反映名单（`PluginRpcMethods.java:68`：`active = !isDisabled(id)`），但那是「名单状态」，不是「当前进程里贡献已被摘除」。
+**重启生效的边界**（`PluginStateStore.java` 类注释自证）：插件系统没有运行期停用——`deactivate` 仅在 worker 优雅关闭时调用，已激活插件的贡献留在当前进程的注册表里；名单变更对**下一次 worker 启动**完全生效——加载期被禁用的插件核心不调 `activate()`，一个贡献都不会注册。`plugin.list` 的 `active` 字段即时反映名单（`PluginRpcMethods.java:70`：`active = !isDisabled(id)`），但那是「名单状态」，不是「当前进程里贡献已被摘除」。
 
 `.disabled-plugins` 长这样（每行一个 id，`#` 开头是注释，落盘时按字典序排序——`PluginStateStore.java:89-98`）：
 
@@ -239,8 +240,9 @@ sandbox-wsl-ubuntu
 
 ### 4.3 `plugin.list` 与 `plugin.webSource`（验证与前端加载用）
 
-- `plugin.list`（`:57-83`）：无参数，返回 `{ plugins: [ { id, name, version, description, author, source, active, status, hasMain, hasWebMain, webMain } ], disabledIds: [...] }`（`active` = 不在禁用名单的旧语义，`status` = 加载期实际状态「已激活 / 激活失败: … / 已禁用(未激活)」，插件面板据此标「加载失败」）——装机后验证就看这里（§6 清单第 6 步）。
-- `plugin.webSource`（`:169-210`）：参数 `{ pluginId, path }`，返回 `{ pluginId, path, content }`；`path` 会 normalize 并校验仍在插件目录内（越界报 `NOT_FOUND` `文件不存在或越界: <path>`，`:196`）。前端硬编码用它取 `web/index.js` / `web/index.css`（`pluginLoader.ts:421-429,452`），与安装相关的点只有一条：**解包后的 web 产物路径必须是 `web/index.js`**。
+- `plugin.list`（`:58-101`）：无参数，返回 `{ plugins: [ { id, name, version, description, author, source, active, status, hasMain, hasWebMain, webMain, icon, repository, license, homepage, categories } ], disabledIds: [...] }`（`active` = 不在禁用名单的旧语义，`status` = 加载期实际状态「已激活 / 激活失败: … / 已禁用(未激活)」，插件面板据此标「加载失败」；`icon/repository/license/homepage/categories` 为展示元数据，供扩展面板 VSCode 风格列表与详情页渲染，见 [plugin.json 字段参考](../plugin-manifest.md) §2.1）——装机后验证就看这里（§6 清单第 6 步）。
+- `plugin.webSource`（`:187-214`）：参数 `{ pluginId, path }`，返回 `{ pluginId, path, content }`；`path` 经 `resolvePluginFile`（`:282-307`）normalize 并校验仍在插件目录内（越界报 `NOT_FOUND` `文件不存在或越界: <path>`）；精确路径未命中时按**同目录大小写不敏感**回退匹配一次（Linux 上 `readme.md` 也能读到 `README.md`，供扩展详情页取 README）。前端硬编码用它取 `web/index.js` / `web/index.css`（`pluginLoader.ts:421-429,452`），与安装相关的点只有一条：**解包后的 web 产物路径必须是 `web/index.js`**。
+- `plugin.asset`（`:217-256`）：参数 `{ pluginId, path }`，返回 `{ pluginId, path, mime, contentBase64 }`——插件目录内**二进制资源**（扩展图标等）的 base64 出网通道；与 webSource 同款 jail 校验（`resolvePluginFile`，normalize + 不许逃逸插件目录），扩展名限 png/jpg/jpeg/gif/svg/webp/bmp/ico（其余报 `BAD_PARAMS` `不支持的资源类型`），单文件上限 2 MB（超限报 `FRAME_TOO_LARGE`）。图标缺失/越界报 `NOT_FOUND`，前端回退默认扩展图标。
 
 ## 5. 升级与版本
 

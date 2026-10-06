@@ -97,6 +97,8 @@ public final class RpcMethods {
     public static final String PLUGIN_DISABLE = "plugin.disable";
     /** 读取外部插件源码文件（参数 pluginId + path）。 */
     public static final String PLUGIN_WEB_SOURCE = "plugin.webSource";
+    /** 读取插件目录内二进制资源（扩展图标等，参数 pluginId + path，返回 mime + base64）。 */
+    public static final String PLUGIN_ASSET = "plugin.asset";
 
     private RpcMethods() {
     }

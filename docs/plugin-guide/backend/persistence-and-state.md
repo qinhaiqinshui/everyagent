@@ -160,7 +160,7 @@ plugin.json 的 contributes.config.*.default
 - **文件位置**：`<pluginsDir>/.disabled-plugins`，默认 `~/.everyagent/plugins/.disabled-plugins`（`every-agent-worker/src/main/java/dev/everyagent/worker/plugin/registry/PluginStateStore.java:38,103-104`；pluginsDir 解析见 §1.1）——注意它放在**外部插件目录**下，但管的是**全部插件**（含内置）的禁用名单。
 - **格式**：纯文本，每行一个插件 id；`#` 开头注释行与空行忽略（`PluginStateStore.java:74-88`）；落盘时按 id 排序写（`:93-98`）。构造时即读盘恢复（`:44-49`）。
 - **生效方式**：`PluginLoader` 加载每个插件时查名单，命中则**不调 activate 但仍登记**（`PluginLoader.java:238-246`）——`LoadedPlugin(active=false, status="已禁用(未激活)")`，代码注释自证理由：「仍登记进已加载清单(不激活),否则扩展管理面板看不到它,也就无法再启用」。⇒ `plugin.list` 里**可见**，只是不激活。
-- **改动途径**：`plugin.enable` / `plugin.disable` RPC（经 `PluginRegistry` 委托 `PluginStateStore`，改内存 + 立即落盘，`every-agent-worker/src/main/java/dev/everyagent/worker/plugin/loader/PluginRpcMethods.java:139-166`）。两者返回文案自证生效时机：「插件已启用，重启 worker 后生效」（`:149`）、「插件已禁用，重启 worker 后生效」（`:164`）。
+- **改动途径**：`plugin.enable` / `plugin.disable` RPC（经 `PluginRegistry` 委托 `PluginStateStore`，改内存 + 立即落盘，`every-agent-worker/src/main/java/dev/everyagent/worker/plugin/loader/PluginRpcMethods.java:157-184`）。两者返回文案自证生效时机：「插件已启用，重启 worker 后生效」（`:167`）、「插件已禁用，重启 worker 后生效」（`:182`）。
 
 ### 3.3 对照表
 
@@ -178,7 +178,7 @@ plugin.json 的 contributes.config.*.default
 
 ### 3.4 前端 `plugin.list` 的 `disabledIds` 来源
 
-`plugin.list` 应答在 `plugins` 数组外附顶层 `disabledIds` 数组（`PluginRpcMethods.java:77-81`，值来自 `PluginRegistry.disabledIds()` → `PluginStateStore.disabledIds()`）。前端唯一消费方是 plugin-manager 插件的管理面板：用 `disabledIds.includes(plugin.id)` 判定开关态，切换时本地乐观更新（`every-agent-plugins/plugin-manager/web/PluginManagerPanel.tsx:70,102,114-115,182,201,218-225`）——面板上的开关变化**只反映名单文件变化**，插件实际停没停要看 worker 是否重启过（§3.3）。
+`plugin.list` 应答在 `plugins` 数组外附顶层 `disabledIds` 数组（`PluginRpcMethods.java:96-99`，值来自 `PluginRegistry.disabledIds()` → `PluginStateStore.disabledIds()`）。前端唯一消费方是 plugin-manager 插件的管理面板：用 `disabledIds` 判定开关态，切换时本地乐观更新（`every-agent-plugins/plugin-manager/web/PluginManagerPanel.tsx`）——面板上的开关变化**只反映名单文件变化**，插件实际停没停要看 worker 是否重启过（§3.3）。
 
 ## 4. 插件状态的可见性：排查时看哪里
 
@@ -224,7 +224,7 @@ API 声明的 `default void deactivate() {}`（`every-agent-plugin-api/src/main/
 
 ### 5.2 升级插件 = 替换文件 + 重启 worker
 
-`plugin.install` / `plugin.uninstall` 的返回文案逐字都是「重启 worker 后生效」（`PluginRpcMethods.java:108,134`）。原因同构：类与 jar 已被 `URLClassLoader` 载入当前进程，同进程内不会换新。实操口径：
+`plugin.install` / `plugin.uninstall` 的返回文案逐字都是「重启 worker 后生效」（`PluginRpcMethods.java:126,152`）。原因同构：类与 jar 已被 `URLClassLoader` 载入当前进程，同进程内不会换新。实操口径：
 
 - **内置插件**：改源码 → `mvn package`（产物落 `target/`）→ 重启 worker；web 侧改动还要 `npm run build:plugins` + 刷新页面（[guides/build-and-run.md](../guides/build-and-run.md)）。
 - **外部插件**：替换 `<pluginsDir>/<id>/` 目录（或走 `.eap` 解压布局）→ 重启 worker。

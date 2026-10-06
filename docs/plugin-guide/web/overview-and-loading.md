@@ -30,7 +30,7 @@ loadPlugins()                           main.tsx:46 启动、:63 重连、:69 �
       │ ④ 幂等：loadedPlugins 已有 id 跳过 :371-374
       │ ⑤ plugin.webSource{pluginId, path: webEntryJsPath(webMain)}
       │      （webMain 去扩展名拼 .js；缺省回退 web/index.js）
-      │      worker 侧 jail 到插件目录   PluginRpcMethods.java:187-197
+      │      worker 侧 jail 到插件目录   PluginRpcMethods.java:187-214（resolvePluginFile :282-307）
       │      Files.readString → 纯文本   :201
       │ ⑥ rewriteBareImports            :432（白名单 BARE_IMPORT_MAP :69-75）
       │      5 项 bare import → window.__EA_*（宿主注入 :54-58）
@@ -50,8 +50,8 @@ extensionsVersion++                     PluginDispatcher.ts:69-79
 
 | 断点 | 症状（以源码为准） | 证据 |
 |---|---|---|
-| 没跑 `build:plugins`，worker 读不到文件 | `plugin.webSource` 报 `NOT_FOUND`，前端 console：`[plugins] 插件 <id> 加载失败: 插件 <id> 无 <产物路径> 源码`（产物路径 = `webMain` 换算结果，约定即 `web/index.js`） | `pluginLoader.ts`（`loadPluginModule` 空内容抛错）；worker 侧 `PluginRpcMethods.java:194-197` |
-| `webMain` 缺失或为空 | `hasWebMain=false` → 第 ③ 步被过滤，**插件完全不出现，无任何报错** | `PluginRpcMethods.java:70`、`pluginLoader.ts:363-367` |
+| 没跑 `build:plugins`，worker 读不到文件 | `plugin.webSource` 报 `NOT_FOUND`，前端 console：`[plugins] 插件 <id> 加载失败: 插件 <id> 无 <产物路径> 源码`（产物路径 = `webMain` 换算结果，约定即 `web/index.js`） | `pluginLoader.ts`（`loadPluginModule` 空内容抛错）；worker 侧 `PluginRpcMethods.resolvePluginFile:301` |
+| `webMain` 缺失或为空 | `hasWebMain=false` → 第 ③ 步被过滤，**插件完全不出现，无任何报错** | `PluginRpcMethods.java:75`、`pluginLoader.ts:363-367` |
 | 插件被禁用（`active=false` 或在 `disabledIds`） | 同上，静默消失 | `pluginLoader.ts:363-367` |
 | 用了白名单外的 bare import / 动态 `import('antd')` / `export {X} from 'antd'` | 改写器不动它 → 残留 import 语句进 blob → `import()` 抛模块解析错误 → 加载失败 warn | `pluginLoader.ts:69-75`（仅 5 项映射） |
 | 入口没 `export default`、或 default 不是 `{ activate }` | **静默 `continue`，连 warn 都没有** | `pluginLoader.ts:375-379` |

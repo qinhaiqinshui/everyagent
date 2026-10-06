@@ -18,6 +18,7 @@ worker 启动（@PostConstruct，全程只读一次）
   └─ PluginLoader.loadPlugin()      读 manifest（内置优先 target/classes/plugin.json）
                                     → id / name / version / description / author
                                       / main（兜底 provides.spi.EveryAgentPlugin）/ webMain
+                                      / icon / repository / license / homepage / categories
                                       / contributes.config.*.default
         ↓ 登记 LoadedPlugin（含内部 status） → PluginRegistry 聚合 catalog
         ↓
@@ -30,7 +31,7 @@ worker 启动（@PostConstruct，全程只读一次）
 |---|---|---|
 | `BuiltInPluginScanner` | 仅 `enabled` | `every-agent-worker/src/main/java/dev/everyagent/worker/plugin/scanner/BuiltInPluginScanner.java:79-88`、`isEnabled` 实现 `:117-123` |
 | `ExternalPluginScanner` | 仅 `enabled`（与内置同语义） | `every-agent-worker/src/main/java/dev/everyagent/worker/plugin/scanner/ExternalPluginScanner.java`（`isEnabled` 同款私有实现） |
-| `PluginLoader` | `id/name/version/description/author/main/provides.spi.EveryAgentPlugin/webMain/contributes.config.*.default` + 禁用名单 | `every-agent-worker/src/main/java/dev/everyagent/worker/plugin/loader/PluginLoader.java:202-258` |
+| `PluginLoader` | `id/name/version/description/author/main/provides.spi.EveryAgentPlugin/webMain/icon/repository/license/homepage/categories/contributes.config.*.default` + 禁用名单 | `every-agent-worker/src/main/java/dev/everyagent/worker/plugin/loader/PluginLoader.java:221-290` |
 | 前端 `pluginLoader.ts` | `plugin.list` 返回的 `active/hasWebMain/webMain/id`（清单字段一律不直接读文件） | `every-agent-web/src/plugin/pluginLoader.ts`（`webEntryJsPath` 消费 `webMain` 值） |
 
 ⚠️ **时机**：清单只在 `PluginLoader.init()`（`@PostConstruct`，`PluginLoader.java:151-154`）时读一次，改 `plugin.json` **必须重启 worker**；运行期没有重载入口（`scanAndLoad()` 的第二次调用只出现在单测里：`every-agent-worker/src/test/java/dev/everyagent/worker/plugin/loader/PluginLoaderDisabledTest.java:107,124`）。
@@ -49,7 +50,10 @@ worker 启动（@PostConstruct，全程只读一次）
 | `description` | string | 否 | `""` | `PluginLoader.java:228` | 仅展示 |
 | `author` | string | 否 | `""` | `PluginLoader.java:229` | 仅展示 |
 | `main` | string（Java 类 FQN） | java / full 形态必填 | `""` → 无 Java 入口，走「声明式插件」路径 | 取值为入口类：`PluginLoader.java:231`；反射加载：`:309-320` | FQN 必须与 `src/main/java` 路径逐段一致（§8）。外部插件的清单同样受 `enabled` 约束（§6），且**看 `main` 有没有对应 jar**：`<id>/lib/*.jar` 为空 → status「无 jar 文件」 |
-| `webMain` | string（web 入口源码路径） | web / full 形态必填 | `""` → `hasWebMain=false`，前端直接不加载 | `PluginLoader.java:235` → `PluginRpcMethods.java`（`plugin.list` 同时下发 `hasWebMain` 与原始值） | 值**已被前端消费**：产物路径 = `webMain` 去扩展名拼 `.js`（空值回退 `web/index.js`），见 §5 |
+| `webMain` | string（web 入口源码路径） | web / full 形态必填 | `""` → `hasWebMain=false`，前端直接不加载 | `PluginLoader.java:264` → `PluginRpcMethods.java`（`plugin.list` 同时下发 `hasWebMain` 与原始值） | 值**已被前端消费**：产物路径 = `webMain` 去扩展名拼 `.js`（空值回退 `web/index.js`），见 §5 |
+| `icon` | string（**插件目录内**的相对路径，如 `"icon.png"` / `"icon.svg"`） | 否 | `""` → 扩展面板用默认扩展图标 | 解析：`PluginLoader.java`（随清单进 `LoadedPlugin`/`PluginManifest`）；出网：`plugin.list` 下发 `icon` 原始值，前端再经 `plugin.asset` RPC 读字节 | **仅展示**（扩展管理面板列表行/详情页头图）。文件必须真实存在于插件目录（`plugin.asset` 做 jail 校验，越界/缺失返回 NOT_FOUND，前端回退默认扩展图标）；支持 png/jpg/jpeg/gif/svg/webp/bmp/ico，单文件上限 2 MB；相对路径以插件根目录为基准 |
+| `repository` / `homepage` / `license` | string（URL 或名称） | 否 | `""` → 详情页不渲染对应项 | `PluginLoader.java` → `plugin.list` 下发同名字段 | **纯展示**：扩展详情页「资源」区（repository/homepage 渲染为外链，license 渲染为文本）；不参与任何加载判定 |
+| `categories` | string[]（如 `["Git","任务管理"]`） | 否 | `[]` → 详情页无标签行 | `PluginLoader.java` → `plugin.list` 下发 `categories` 数组 | **纯展示**：扩展详情页标签（VSCode 扩展页 Category 角色）；非数组/元素非字符串时静默忽略 |
 | `enabled` | boolean | 否（建议显式写） | `true`（缺省**或解析失败**都算 true） | `BuiltInPluginScanner.java:81`、`:117-123`；`ExternalPluginScanner` 同款判定 | 内置与外部扫描器**都看它**（同语义：false → 整目录跳过、不加载、不进 `plugin.list`）。详见 §6 |
 | `contributes.config.<key>.default` | string / number / boolean | 否 | 无 `default` 键 = 该配置项不进入 map | `PluginLoader.java:248-258` → `PluginConfigImpl`（`every-agent-worker/.../plugin/PluginConfigImpl.java`） | 只有 `default` 被读；`type` / `description` **无人消费**（见 §2.2） |
 
@@ -157,8 +161,8 @@ worker 启动（@PostConstruct，全程只读一次）
 
 ⚠️ 两个容易读错的口径：
 
-1. **`plugin.list` 的 `active` = 「不在禁用名单里」**，即 `active = !pluginRegistry.isDisabled(id)`（`PluginRpcMethods.java:68`），**不代表后端激活成功**：激活失败的插件仍会报 `active=true`。真判据只有 `hasMain` / `hasWebMain` + worker 日志。
-2. **`status` 文案不出 RPC**：`plugin.list` 只返回 `id/name/version/description/author/source/active/hasMain/hasWebMain` 九个字段（`PluginRpcMethods.java:62-70`），`LoadedPlugin.status` 没有对外消费者 ⇒ 排查看日志，文案集见 [故障排查](guides/troubleshooting.md)：`已激活(内置)` / `已激活` / `已禁用(未激活)` / `声明式插件` / `无 jar 文件` / `lib 目录不可读: …` / `入口类未实现 EveryAgentPlugin` / `激活失败: …`。
+1. **`plugin.list` 的 `active` = 「不在禁用名单里」**，即 `active = !pluginRegistry.isDisabled(id)`（`PluginRpcMethods.java:70`），**不代表后端激活成功**：激活失败的插件仍会报 `active=true`。真判据是同应答里的 `status`（加载期实际状态）+ worker 日志。
+2. **`status` 已随 `plugin.list` 出网**：`plugin.list` 返回 `id/name/version/description/author/source/active/status/hasMain/hasWebMain/webMain/icon/repository/license/homepage/categories`（`PluginRpcMethods.java`），扩展面板据此区分「在跑」与「加载失败」，并用 `icon/repository/license/homepage/categories` 渲染 VSCode 风格列表与详情页。完整文案集见 [故障排查](guides/troubleshooting.md)：`已激活(内置)` / `已激活` / `已禁用(未激活)` / `声明式插件` / `无 jar 文件` / `lib 目录不可读: …` / `入口类未实现 EveryAgentPlugin` / `激活失败: …`。
 
 ## 4. `id` 的三重身份（最容易踩坑处）
 
@@ -167,7 +171,7 @@ worker 启动（@PostConstruct，全程只读一次）
 | 身份 | 谁用它 | 不一致的后果 |
 |---|---|---|
 | ① **目录名**（内置与外部扫描都按 `<plugins-root>/<dir>/plugin.json` 组织） | `BuiltInPluginScanner.java:79-101`、`ExternalPluginScanner.java:44-49` | 目录名与 `id` 不一致时**扫描仍会成功**，登记用清单里的 `id`（`PluginLoader.java:214-217`）⇒ 目录与 ID 对不上号，人肉排查时找不到是哪份清单 |
-| ② **`.eap` zip 顶层目录名** | `PluginRpcMethods.extractEap`：`PluginRpcMethods.java:212-235`（首个非目录条目的 `/` 前段即 pluginId；条目不含 `/` 时回退 **zip 文件名去掉 `.eap`**；全空回退字符串 `"unknown"`） | 顶层目录叫 `my-plugin/` 而清单写 `"id": "other"` ⇒ 解出来的目录是 `~/.everyagent/plugins/my-plugin/`，但注册 id 是 `other`：`plugin.uninstall{pluginId:"other"}` 按 `<pluginsRoot>/<id>` 找目录会 `NOT_FOUND`（`:119-123`），禁用名单 `.disabled-plugins` 里写的 `other` 也永远对不上这个目录。**打包时务必让顶层目录 = `id`**，细节见 [打包与安装](guides/packaging-and-install.md) |
+| ② **`.eap` zip 顶层目录名** | `PluginRpcMethods.extractEap`：`PluginRpcMethods.java:327-350`（首个非目录条目的 `/` 前段即 pluginId；条目不含 `/` 时回退 **zip 文件名去掉 `.eap`**；全空回退字符串 `"unknown"`） | 顶层目录叫 `my-plugin/` 而清单写 `"id": "other"` ⇒ 解出来的目录是 `~/.everyagent/plugins/my-plugin/`，但注册 id 是 `other`：`plugin.uninstall{pluginId:"other"}` 按 `<pluginsRoot>/<id>` 找目录会 `NOT_FOUND`（`:134-140`），禁用名单 `.disabled-plugins` 里写的 `other` 也永远对不上这个目录。**打包时务必让顶层目录 = `id`**，细节见 [打包与安装](guides/packaging-and-install.md) |
 | ③ **前端 localStorage 作用域 + 日志标识** | `createPluginStorage` 前缀 `plugin:${pluginId}:`（`every-agent-web/src/plugin/pluginLoader.ts:141-163`）；控制台 `[plugins] 插件已激活: ${id}`（`:406`） | 改 `id` = **换存储桶**：老用户的插件本地数据一夜变孤儿。要重命名请自己写迁移（读旧前缀 → 写新前缀） |
 
 补充：**同名冲突时内置优先**。`PluginLoader` 先把 `builtin` 排在前面再逐个加载，后到的同 id 插件被去重跳过并 WARN「插件 {} 已加载,跳过重复」（`PluginLoader.java:176-184`、`:219-223`）⇒ 想「装个同名外部插件去覆盖内置插件」是**无效**的，只能改 `id`。
@@ -211,7 +215,7 @@ CSS 同走换算路径：esbuild 把样式抽到与入口同名的 `.css`，宿�
 | 机制 | 写在哪 | 判在哪 | 效果 | 生效条件 |
 |---|---|---|---|---|
 | `enabled: false` | `plugin.json` | 扫描期：内置 `BuiltInPluginScanner.java:79-88` 与外部 `ExternalPluginScanner` **统一判定** | 目录被**跳过**：不加载、不进 `plugin.list`、前端与扩展管理面板都**看不到它** | 重启 worker |
-| 运行期禁用 | `~/.everyagent/plugins/.disabled-plugins`（每行一个 id，`PluginStateStore.java:38,74-104`），由 `plugin.disable` RPC 写（`PluginRpcMethods.java:153-166`） | 加载期：`PluginLoader.java:240-245` | 仍登记进目录（`plugin.list` 可见，`active=false`、`status="已禁用(未激活)"`），但**不调 `activate()`**，不注册任何贡献 | 重启 worker |
+| 运行期禁用 | `~/.everyagent/plugins/.disabled-plugins`（每行一个 id，`PluginStateStore.java:38,74-104`），由 `plugin.disable` RPC 写（`PluginRpcMethods.java:172-184`） | 加载期：`PluginLoader.java:285-291` | 仍登记进目录（`plugin.list` 可见，`active=false`、`status="已禁用(未激活)"`），但**不调 `activate()`**，不注册任何贡献 | 重启 worker |
 
 两个坑：
 

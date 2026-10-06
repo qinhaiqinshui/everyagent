@@ -69,7 +69,8 @@ public class PluginRegistry {
         for (LoadedPlugin p : loaded) {
             catalog.put(p.id(), new PluginManifest(
                     p.id(), p.name(), p.version(), p.description(), p.author(),
-                    p.main(), p.webMain(), p.source(), p.status(), p.pluginDir()));
+                    p.main(), p.webMain(), p.source(), p.status(), p.pluginDir(),
+                    p.icon(), p.repository(), p.license(), p.homepage(), p.categories()));
         }
         log.info("[plugins] 目录扫描完成: 共 {} 个插件", catalog.size());
     }

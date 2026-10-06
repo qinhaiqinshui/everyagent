@@ -1,23 +1,37 @@
 /**
- * 插件管理面板组件。
+ * 插件管理面板组件（VSCode 扩展视图风格）。
  *
- * VSCode 扩展视图风格：列表 + 搜索 + 安装入口 + 启用/禁用开关 + 重新加载提示。
+ * 结构分两层，对标 VSCode 的 Extensions 视图：
+ * - 列表层：搜索 + 分组（内置/外部）+ VSCode 风格扩展行——左侧图标（未配置 icon 时
+ *   统一用默认扩展图标）、名称、描述、作者/版本/来源行、右侧启用开关；点击行进入详情。
+ * - 详情层：头部像 VSCode 扩展详情页（大图标 + 名称 + 作者/版本/来源 + 描述 + 分类标签
+ *   + 启用/禁用、卸载动作 + 元信息与资源链接），下半区渲染插件目录下的 readme.md。
  *
- * - 从 worker `plugin.list` RPC 获取完整插件目录（含 #15 上线的 `status` 字段，
- *   激活失败的插件行内展示「加载失败」标识）
- * - 按内置 / 外部分组
- * - 每行：名称、版本、描述、启用状态开关
- * - 启用/禁用 → 调 `plugin.enable` / `plugin.disable` RPC
- * - 安装：选定 .eap 文件 → 经 `fs.write` 上传到工作区暂存目录 → 调
- *   `plugin.install` RPC（worker 机器本地路径）→ 清理暂存 → 刷新列表
- *   （known-issues #19；后端 RPC 原本就有，此处补产品化入口）
- * - 切换成功后行内显示「需要重新加载」提示（不立即生效）
- * - plugin-manager 自身永不可禁用（开关隐藏）
- * - worker 不可达时显示错误提示，不切换开关状态
+ * 数据链路：
+ * - 列表：worker `plugin.list` RPC（含 #15 的 `status` 与展示元数据
+ *   `icon/repository/license/homepage/categories`）。
+ * - 启用/禁用：`plugin.enable` / `plugin.disable`；切换成功后行内提示「需要重新加载」。
+ * - 卸载：`plugin.uninstall`（仅外部插件），成功后本地隐藏该行（重启 worker 后从目录消失）。
+ * - README：`plugin.webSource` 读插件目录 `readme.md`（worker 侧大小写不敏感回退，
+ *   Linux 上也能读到 `README.md`）；README 内相对路径图片经 `plugin.asset` 转 data URL。
+ * - 安装：选定 .eap 文件 → 经 `fs.write` 上传到工作区暂存目录 → 调 `plugin.install`
+ *   RPC（worker 机器本地路径）→ 清理暂存 → 刷新列表（known-issues #19）。
+ * - plugin-manager 自身永不可禁用/卸载（动作区显示「必需」）。
+ * - worker 不可达时显示错误提示，不切换开关状态。
  */
 import React from 'react'
-import { Input, Switch, Button, Tag, Typography, Alert, Spin, Empty } from 'antd'
+import { Input, Switch, Button, Tag, Typography, Alert, Spin, Empty, Popconfirm } from 'antd'
 import { getSdk } from './index'
+import { usePluginIcon } from './pluginAssets'
+import Markdown, { type MarkdownImageResolver } from './Markdown'
+import {
+  DefaultPluginIcon,
+  SearchIcon,
+  ReloadIcon,
+  InstallIcon,
+  BackIcon,
+  UninstallIcon,
+} from './icons'
 
 const { Text } = Typography
 
@@ -26,51 +40,6 @@ const MAX_INSTALL_BYTES = 32 * 1024 * 1024
 
 /** .eap 暂存目录（工作区内隐藏目录，工作区相对路径，无前导 `/`）。 */
 const INSTALL_STAGING_DIR = '.everyagent/plugin-install'
-
-/** 搜索图标 SVG。 */
-function SearchIcon({ size = 14 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" aria-hidden="true">
-      <circle cx="7" cy="7" r="5" stroke="currentColor" strokeWidth="1.5" fill="none" />
-      <path d="M11 11l4 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-    </svg>
-  )
-}
-
-/** 重新加载图标 SVG。 */
-function ReloadIcon({ size = 14 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" aria-hidden="true">
-      <path
-        d="M8 2a6 6 0 1 1-5.6 3.83.5.5 0 0 1 .94.34A5 5 0 1 0 8 3V5l3-2.5L8 0v2z"
-        fill="currentColor"
-        transform="translate(0 1)"
-      />
-    </svg>
-  )
-}
-
-/** 感叹号图标 SVG。 */
-function ExclamationIcon({ size = 12 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" aria-hidden="true">
-      <circle cx="8" cy="8" r="7" fill="currentColor" opacity="0.15" />
-      <path d="M8 4v5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-      <circle cx="8" cy="11.5" r="1" fill="currentColor" />
-    </svg>
-  )
-}
-
-/** 安装（下载入托盘）图标 SVG。 */
-function InstallIcon({ size = 14 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" aria-hidden="true">
-      <path d="M8 1.5v7" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-      <path d="M5 6l3 3 3-3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M2 10.5v2A1.5 1.5 0 0 0 3.5 14h9a1.5 1.5 0 0 0 1.5-1.5v-2" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-    </svg>
-  )
-}
 
 /** 把 RPC 错误归一为可展示文案（Error 取 message，对象取 message 字段，其余 String）。 */
 function rpcErrorMessage(err: unknown): string {
@@ -92,6 +61,20 @@ async function fileToBase64(file: File): Promise<string> {
   return btoa(binary)
 }
 
+/** 把相对路径归一为插件目录内 posix 风格路径（处理 ./ 与 ../ 段）。 */
+function normalizePluginRelativePath(raw: string): string {
+  const parts: string[] = []
+  for (const seg of raw.replace(/\\/g, '/').split('/')) {
+    if (!seg || seg === '.') continue
+    if (seg === '..') {
+      parts.pop()
+      continue
+    }
+    parts.push(seg)
+  }
+  return parts.join('/')
+}
+
 /** plugin.list 返回的单个插件条目。 */
 interface PluginEntry {
   id: string
@@ -105,6 +88,12 @@ interface PluginEntry {
   status?: string
   hasMain?: boolean
   hasWebMain?: boolean
+  /** 展示元数据（扩展面板 VSCode 风格列表/详情页用）。 */
+  icon?: string
+  repository?: string
+  license?: string
+  homepage?: string
+  categories?: string[]
 }
 
 /** plugin.list RPC 返回格式。 */
@@ -113,8 +102,46 @@ interface PluginListResult {
   disabledIds: string[]
 }
 
+/** plugin.webSource RPC 返回格式（README 文本）。 */
+interface PluginWebSourceResult {
+  content?: string
+}
+
 /** 行级「需要重新加载」状态：pluginId → boolean。 */
 type ReloadNeededMap = Record<string, boolean>
+
+/** 来源显示文案。 */
+function sourceLabel(source: string): string {
+  return source === 'builtin' ? '内置' : source === 'external' ? '外部' : source
+}
+
+/** ── 插件图标（icon 声明 → plugin.asset；否则默认扩展图标） ───────────────── */
+
+function PluginIcon({ size, plugin }: { size: number; plugin: PluginEntry }) {
+  const sdk = getSdk()
+  const { dataUrl } = usePluginIcon(sdk, sdk?.workerId ?? '', plugin.id, plugin.icon)
+  if (dataUrl) {
+    return (
+      <img
+        src={dataUrl}
+        alt={plugin.name}
+        style={{
+          width: size,
+          height: size,
+          borderRadius: Math.max(4, Math.round(size * 0.13)),
+          border: '1px solid var(--border-light)',
+          objectFit: 'cover',
+          flexShrink: 0,
+          display: 'block',
+          background: 'var(--bg-tertiary)',
+        }}
+      />
+    )
+  }
+  return <DefaultPluginIcon size={size} />
+}
+
+/** ── 列表层：分组标题 + VSCode 风格扩展行 ────────────────────────────────── */
 
 /** 插件分组标题。 */
 function GroupHeader({ title, count }: { title: string; count: number }) {
@@ -124,71 +151,86 @@ function GroupHeader({ title, count }: { title: string; count: number }) {
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
-        padding: '6px 12px',
+        padding: '8px 12px 4px',
         fontWeight: 600,
-        fontSize: 12,
+        fontSize: 11,
         color: 'var(--text-secondary, #888)',
         textTransform: 'uppercase',
-        letterSpacing: '0.05em',
-        borderBottom: '1px solid var(--border-color, rgba(255,255,255,0.06))',
+        letterSpacing: '0.06em',
       }}
     >
       <span>{title}</span>
-      <span style={{ fontWeight: 400 }}>{count}</span>
+      <span style={{ fontWeight: 400, color: 'var(--text-faint)' }}>{count}</span>
     </div>
   )
 }
 
-/** 单个插件行。 */
+/** 单个扩展行（VSCode 扩展视图布局：图标 + 名称/描述/作者行 + 右侧开关）。 */
 function PluginRow({
   plugin,
-  disabledIds,
+  disabled,
   reloadNeeded,
+  onOpen,
   onToggle,
   toggling,
 }: {
   plugin: PluginEntry
-  disabledIds: string[]
+  disabled: boolean
   reloadNeeded: boolean
+  onOpen: (pluginId: string) => void
   onToggle: (pluginId: string, nextEnabled: boolean) => void
   toggling: boolean
 }) {
   const isSelf = plugin.id === 'plugin-manager'
-  const isDisabled = disabledIds.includes(plugin.id)
-  // 开关状态：disabledIds 不含此插件 → 启用
-  const switchChecked = !isDisabled
-  // plugin-manager 自身永不可禁用 → 隐藏开关
-  const showSwitch = !isSelf
+  const isFailed = !!plugin.status?.startsWith('激活失败')
+  const isDeclarative = plugin.status === '声明式插件'
 
   return (
     <div
+      role="button"
+      tabIndex={0}
+      onClick={() => onOpen(plugin.id)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          onOpen(plugin.id)
+        }
+      }}
       style={{
         display: 'flex',
         alignItems: 'center',
-        gap: 8,
-        padding: '8px 12px',
-        borderBottom: '1px solid var(--border-color, rgba(255,255,255,0.06))',
+        gap: 10,
+        padding: '8px 10px 8px 12px',
+        borderRadius: 6,
+        margin: '0 6px',
+        cursor: 'pointer',
+        transition: 'background 0.12s ease',
+      }}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.background = 'var(--bg-hover)'
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.background = 'transparent'
       }}
     >
+      <PluginIcon size={44} plugin={plugin} />
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <Text style={{ fontWeight: 500, fontSize: 13 }}>{plugin.name}</Text>
-          {plugin.version && (
-            <Text type="secondary" style={{ fontSize: 11 }}>
-              v{plugin.version}
-            </Text>
-          )}
-          {isSelf && <Tag color="blue" style={{ fontSize: 10, lineHeight: '16px', margin: 0 }}>核心</Tag>}
-          {!plugin.hasMain && plugin.hasWebMain && (
-            <Tag style={{ fontSize: 10, lineHeight: '16px', margin: 0 }}>Web</Tag>
-          )}
-          {plugin.status?.startsWith('激活失败') && (
-            <Tag
-              color="error"
-              style={{ fontSize: 10, lineHeight: '16px', margin: 0 }}
-              title={plugin.status}
-            >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+          <Text
+            ellipsis
+            style={{ fontWeight: 600, fontSize: 13, flex: '0 1 auto' }}
+            title={plugin.name}
+          >
+            {plugin.name}
+          </Text>
+          {isFailed && (
+            <Tag color="error" style={{ fontSize: 10, lineHeight: '16px', margin: 0 }} title={plugin.status}>
               加载失败
+            </Tag>
+          )}
+          {reloadNeeded && (
+            <Tag color="warning" style={{ fontSize: 10, lineHeight: '16px', margin: 0 }}>
+              需重新加载
             </Tag>
           )}
         </div>
@@ -196,37 +238,327 @@ function PluginRow({
           <div
             style={{
               fontSize: 12,
-              color: 'var(--text-secondary, #888)',
+              color: 'var(--text-secondary)',
               overflow: 'hidden',
               textOverflow: 'ellipsis',
               whiteSpace: 'nowrap',
+              marginTop: 1,
             }}
             title={plugin.description}
           >
             {plugin.description}
           </div>
         )}
-        {reloadNeeded && (
-          <div style={{ marginTop: 2 }}>
-            <Tag icon={<ExclamationIcon />} color="warning" style={{ fontSize: 11, margin: 0 }}>
-              需要重新加载
-            </Tag>
-          </div>
-        )}
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 4,
+            fontSize: 11,
+            color: 'var(--text-muted)',
+            marginTop: 2,
+            overflow: 'hidden',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {plugin.author && <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{plugin.author}</span>}
+          {plugin.author && <span>·</span>}
+          <span>v{plugin.version}</span>
+          <span>·</span>
+          <span>{sourceLabel(plugin.source)}</span>
+          {!plugin.hasMain && plugin.hasWebMain && (
+            <Tag style={{ fontSize: 10, lineHeight: '14px', margin: 0, padding: '0 4px' }}>Web</Tag>
+          )}
+          {disabled && !isFailed && (
+            <span style={{ color: 'var(--text-faint)' }}>· 已禁用</span>
+          )}
+          {isDeclarative && (
+            <span style={{ color: 'var(--text-faint)' }}>· 声明式</span>
+          )}
+        </div>
       </div>
-      {showSwitch ? (
-        <Switch
-          size="small"
-          checked={switchChecked}
-          loading={toggling}
-          onChange={(checked) => onToggle(plugin.id, checked)}
-        />
+      {isSelf ? (
+        <Tag color="blue" style={{ fontSize: 10, margin: 0 }}>核心</Tag>
       ) : (
-        <Tag color="green" style={{ fontSize: 10, margin: 0 }}>必需</Tag>
+        <span onClick={(e) => e.stopPropagation()}>
+          <Switch
+            size="small"
+            checked={!disabled}
+            loading={toggling}
+            onChange={(checked) => onToggle(plugin.id, checked)}
+          />
+        </span>
       )}
     </div>
   )
 }
+
+/** ── 详情层：头部（VSCode 扩展详情头）+ README ───────────────────────────── */
+
+/** 详情页元信息行：label + value。 */
+function MetaItem({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div style={{ minWidth: 0 }}>
+      <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 2 }}>{label}</div>
+      <div style={{ fontSize: 12.5, color: 'var(--text-primary)', wordBreak: 'break-all' }}>{children}</div>
+    </div>
+  )
+}
+
+/** 扩展详情页：头部插件信息 + README 渲染。 */
+function PluginDetail({
+  plugin,
+  disabled,
+  reloadNeeded,
+  onBack,
+  onToggle,
+  onUninstall,
+  toggling,
+  uninstalling,
+}: {
+  plugin: PluginEntry
+  disabled: boolean
+  reloadNeeded: boolean
+  onBack: () => void
+  onToggle: (pluginId: string, nextEnabled: boolean) => void
+  onUninstall: (pluginId: string) => void
+  toggling: boolean
+  uninstalling: boolean
+}) {
+  const sdk = getSdk()
+  const [readme, setReadme] = React.useState<string | null>(null)
+  const [readmeLoading, setReadmeLoading] = React.useState(true)
+  const isSelf = plugin.id === 'plugin-manager'
+  const isExternal = plugin.source !== 'builtin'
+  const isFailed = !!plugin.status?.startsWith('激活失败')
+
+  // README 拉取：plugin.webSource 读插件目录 readme.md（worker 侧大小写不敏感回退）。
+  React.useEffect(() => {
+    if (!sdk) {
+      setReadmeLoading(false)
+      return
+    }
+    let cancelled = false
+    setReadmeLoading(true)
+    sdk.rpc(sdk.workerId, 'plugin.webSource', {
+      pluginId: plugin.id,
+      path: 'readme.md',
+    }).then((result) => {
+      if (cancelled) return
+      setReadme(((result as PluginWebSourceResult)?.content ?? '').trim() || null)
+    }).catch(() => {
+      if (!cancelled) setReadme(null)
+    }).finally(() => {
+      if (!cancelled) setReadmeLoading(false)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [sdk, plugin.id])
+
+  // README 内相对路径图片 → plugin.asset data URL；http(s)/data 原样直出。
+  const resolveImage = React.useCallback<MarkdownImageResolver>(async (src) => {
+    if (/^(https?:)?\/\//i.test(src) || src.startsWith('data:')) return src
+    if (!sdk) return null
+    try {
+      const result = (await sdk.rpc(sdk.workerId, 'plugin.asset', {
+        pluginId: plugin.id,
+        path: normalizePluginRelativePath(src),
+      })) as { mime?: string; contentBase64?: string }
+      if (result?.mime && result?.contentBase64) {
+        return `data:${result.mime};base64,${result.contentBase64}`
+      }
+      return null
+    } catch {
+      return null
+    }
+  }, [sdk, plugin.id])
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
+      {/* 详情工具栏：返回 + 名称 */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+          padding: '6px 10px',
+          borderBottom: '1px solid var(--border)',
+        }}
+      >
+        <Button
+          size="small"
+          type="text"
+          icon={<BackIcon />}
+          onClick={onBack}
+          aria-label="返回扩展列表"
+        />
+        <Text ellipsis style={{ fontSize: 12.5, fontWeight: 600, minWidth: 0 }} title={plugin.name}>
+          {plugin.name}
+        </Text>
+      </div>
+
+      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+        {/* 头部：VSCode 扩展详情头（图标 + 标题/作者/描述/标签 + 动作） */}
+        <div
+          style={{
+            padding: '14px 14px 12px',
+            background: 'var(--bg-soft)',
+            borderBottom: '1px solid var(--border)',
+          }}
+        >
+          <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start', flexWrap: 'wrap', rowGap: 10 }}>
+            <PluginIcon size={88} plugin={plugin} />
+            <div style={{ flex: '1 1 160px', minWidth: 0 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <Text ellipsis style={{ fontSize: 17, fontWeight: 600, minWidth: 0 }} title={plugin.name}>
+                  {plugin.name}
+                </Text>
+                {isFailed && (
+                  <Tag color="error" style={{ margin: 0 }} title={plugin.status}>加载失败</Tag>
+                )}
+              </div>
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  fontSize: 12,
+                  color: 'var(--text-secondary)',
+                  marginTop: 3,
+                  flexWrap: 'wrap',
+                }}
+              >
+                {plugin.author && <span style={{ fontWeight: 500 }}>{plugin.author}</span>}
+                <span>·</span>
+                <span>v{plugin.version}</span>
+                <span>·</span>
+                <span>{sourceLabel(plugin.source)}</span>
+                {!plugin.hasMain && plugin.hasWebMain && (
+                  <Tag style={{ fontSize: 10, lineHeight: '16px', margin: 0, padding: '0 4px' }}>Web</Tag>
+                )}
+                {plugin.hasMain && plugin.hasWebMain && (
+                  <Tag style={{ fontSize: 10, lineHeight: '16px', margin: 0, padding: '0 4px' }}>Java + Web</Tag>
+                )}
+              </div>
+              {plugin.description && (
+                <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', marginTop: 6, lineHeight: 1.6 }}>
+                  {plugin.description}
+                </div>
+              )}
+              {(plugin.categories?.length ?? 0) > 0 && (
+                <div style={{ display: 'flex', gap: 4, marginTop: 8, flexWrap: 'wrap' }}>
+                  {plugin.categories!.map((c) => (
+                    <Tag key={c} style={{ fontSize: 11, margin: 0 }}>{c}</Tag>
+                  ))}
+                </div>
+              )}
+            </div>
+            {/* 动作区：启用/禁用 + 卸载（对标 VSCode Install/Uninstall 按钮位） */}
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6, flexShrink: 0 }}>
+              {isSelf ? (
+                <Tag color="blue" style={{ margin: 0 }}>必需</Tag>
+              ) : (
+                <>
+                  <Button
+                    size="small"
+                    type={!disabled ? 'default' : 'primary'}
+                    loading={toggling}
+                    onClick={() => onToggle(plugin.id, disabled)}
+                  >
+                    {disabled ? '启用' : '禁用'}
+                  </Button>
+                  {isExternal && (
+                    <Popconfirm
+                      title="卸载该插件？"
+                      description="将从插件目录删除，重启 worker 后完全生效。"
+                      okText="卸载"
+                      okButtonProps={{ danger: true }}
+                      cancelText="取消"
+                      onConfirm={() => onUninstall(plugin.id)}
+                    >
+                      <Button size="small" danger ghost icon={<UninstallIcon />} loading={uninstalling}>
+                        卸载
+                      </Button>
+                    </Popconfirm>
+                  )}
+                </>
+              )}
+              {reloadNeeded && (
+                <Tag color="warning" style={{ fontSize: 10, margin: 0 }}>需重新加载</Tag>
+              )}
+            </div>
+          </div>
+
+          {/* 元信息 + 资源链接 */}
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))',
+              gap: '10px 14px',
+              marginTop: 14,
+            }}
+          >
+            <MetaItem label="标识符">{plugin.id}</MetaItem>
+            <MetaItem label="版本">{plugin.version}</MetaItem>
+            <MetaItem label="来源">{sourceLabel(plugin.source)}</MetaItem>
+            <MetaItem label="状态">{plugin.status || (disabled ? '已禁用' : '已启用')}</MetaItem>
+          </div>
+          {(plugin.repository || plugin.homepage || plugin.license) && (
+            <div style={{ display: 'flex', gap: 12, marginTop: 10, flexWrap: 'wrap', fontSize: 12 }}>
+              {plugin.repository && (
+                <a href={plugin.repository} target="_blank" rel="noreferrer noopener" style={{ color: 'var(--accent-blue)' }}>
+                  仓库
+                </a>
+              )}
+              {plugin.homepage && (
+                <a href={plugin.homepage} target="_blank" rel="noreferrer noopener" style={{ color: 'var(--accent-blue)' }}>
+                  主页
+                </a>
+              )}
+              {plugin.license && (
+                <span style={{ color: 'var(--text-secondary)' }}>许可：{plugin.license}</span>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* README 区：插件目录 readme.md 渲染 */}
+        <div style={{ padding: '12px 14px 20px' }}>
+          <div
+            style={{
+              fontSize: 11,
+              fontWeight: 600,
+              color: 'var(--text-secondary)',
+              textTransform: 'uppercase',
+              letterSpacing: '0.06em',
+              borderBottom: '1px solid var(--border)',
+              paddingBottom: 6,
+              marginBottom: 10,
+            }}
+          >
+            README
+          </div>
+          {readmeLoading ? (
+            <div style={{ display: 'flex', justifyContent: 'center', padding: '24px 0' }}>
+              <Spin />
+            </div>
+          ) : readme ? (
+            <Markdown source={readme} resolveImage={resolveImage} />
+          ) : (
+            <Empty
+              description="该插件目录下没有 readme.md"
+              image={Empty.PRESENTED_IMAGE_SIMPLE}
+              style={{ padding: '12px 0' }}
+            />
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/** ── 面板容器 ────────────────────────────────────────────────────────────── */
 
 const PluginManagerPanel: React.FC = () => {
   const [loading, setLoading] = React.useState(true)
@@ -236,6 +568,10 @@ const PluginManagerPanel: React.FC = () => {
   const [search, setSearch] = React.useState('')
   const [reloadNeeded, setReloadNeeded] = React.useState<ReloadNeededMap>({})
   const [togglingId, setTogglingId] = React.useState<string | null>(null)
+  const [uninstallingId, setUninstallingId] = React.useState<string | null>(null)
+  const [uninstalledIds, setUninstalledIds] = React.useState<string[]>([])
+  /** 详情页当前插件 id（null = 列表层）。 */
+  const [selectedId, setSelectedId] = React.useState<string | null>(null)
   const [installing, setInstalling] = React.useState(false)
   const [installResult, setInstallResult] = React.useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const fileInputRef = React.useRef<HTMLInputElement | null>(null)
@@ -296,6 +632,25 @@ const PluginManagerPanel: React.FC = () => {
     [sdk, disabledIds],
   )
 
+  /** 卸载（仅外部插件）：成功后本地隐藏该行并回到列表（重启 worker 后从目录消失）。 */
+  const handleUninstall = React.useCallback(
+    async (pluginId: string) => {
+      if (!sdk) return
+      setUninstallingId(pluginId)
+      try {
+        await sdk.rpc(sdk.workerId, 'plugin.uninstall', { pluginId })
+        setUninstalledIds((prev) => [...prev, pluginId])
+        setReloadNeeded((prev) => ({ ...prev, [pluginId]: true }))
+        setSelectedId(null)
+      } catch (err) {
+        setError(`卸载失败：${rpcErrorMessage(err)}`)
+      } finally {
+        setUninstallingId(null)
+      }
+    },
+    [sdk],
+  )
+
   const handleReload = React.useCallback(() => {
     location.reload()
   }, [])
@@ -337,7 +692,7 @@ const PluginManagerPanel: React.FC = () => {
           contentBase64: await fileToBase64(file),
         })
         // 2) 安装：把 worker 机器上的 .eap 绝对路径交给 plugin.install 解包
-        const absPath = `${workspaceRoot.replace(/[\\/]+$/, '')}/${stagedPath}`
+        const absPath = `${workspaceRoot.replace(/[\\\/]+$/, '')}/${stagedPath}`
         const result = (await sdk.rpc(fsWorkerId, 'plugin.install', { path: absPath })) as { message?: string }
         setInstallResult({ type: 'success', text: result?.message ?? '插件已安装，重启 worker 后生效' })
         // 3) 清理暂存包（尽力而为，失败只留工作区残留文件）
@@ -355,31 +710,46 @@ const PluginManagerPanel: React.FC = () => {
 
   const hasReloadNeeded = Object.values(reloadNeeded).some(Boolean)
 
-  // 搜索过滤
+  // 搜索过滤（含卸载隐藏）
+  const visiblePlugins = React.useMemo(
+    () => plugins.filter((p) => !uninstalledIds.includes(p.id)),
+    [plugins, uninstalledIds],
+  )
   const filtered = React.useMemo(() => {
-    if (!search.trim()) return plugins
+    if (!search.trim()) return visiblePlugins
     const q = search.toLowerCase().trim()
-    return plugins.filter(
+    return visiblePlugins.filter(
       (p) =>
         p.id.toLowerCase().includes(q) ||
         p.name.toLowerCase().includes(q) ||
-        (p.description ?? '').toLowerCase().includes(q),
+        (p.description ?? '').toLowerCase().includes(q) ||
+        (p.author ?? '').toLowerCase().includes(q),
     )
-  }, [plugins, search])
+  }, [visiblePlugins, search])
 
   // 分组
   const builtinPlugins = filtered.filter((p) => p.source === 'builtin')
   const externalPlugins = filtered.filter((p) => p.source !== 'builtin')
 
+  // 详情页当前插件（卸载后回列表；找不到时回退列表层）
+  const selectedPlugin = selectedId ? plugins.find((p) => p.id === selectedId) ?? null : null
+  React.useEffect(() => {
+    if (selectedId && (!selectedPlugin || uninstalledIds.includes(selectedId))) {
+      setSelectedId(null)
+    }
+  }, [selectedId, selectedPlugin, uninstalledIds])
+
+  const disabledSet = React.useMemo(() => new Set(disabledIds), [disabledIds])
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
-      {/* 顶部工具栏：搜索 + 重新加载 */}
+      {/* 顶部工具栏：搜索 + 安装 + 重新加载 */}
       <div
         style={{
           display: 'flex',
           gap: 8,
           padding: '8px 12px',
-          borderBottom: '1px solid var(--border-color, rgba(255,255,255,0.06))',
+          borderBottom: '1px solid var(--border)',
           alignItems: 'center',
         }}
       >
@@ -412,11 +782,15 @@ const PluginManagerPanel: React.FC = () => {
         >
           {installing ? '安装中…' : '安装…'}
         </Button>
-        {hasReloadNeeded && (
-          <Button size="small" type="primary" icon={<ReloadIcon />} onClick={handleReload}>
-            重新加载
-          </Button>
-        )}
+        <Button
+          size="small"
+          type={hasReloadNeeded ? 'primary' : 'default'}
+          icon={<ReloadIcon />}
+          onClick={handleReload}
+          title="部分插件状态已变更，重新加载页面后生效"
+        >
+          重新加载
+        </Button>
       </div>
 
       {/* 错误提示 */}
@@ -443,66 +817,66 @@ const PluginManagerPanel: React.FC = () => {
         />
       )}
 
-      {/* 全局重新加载提示 */}
-      {hasReloadNeeded && (
-        <div
-          style={{
-            padding: '6px 12px',
-            fontSize: 12,
-            color: 'var(--accent-yellow, #d7a000)',
-            background: 'var(--bg-yellow-faint, rgba(215,160,0,0.08))',
-            borderBottom: '1px solid var(--border-color, rgba(255,255,255,0.06))',
-          }}
-        >
-          部分插件状态已变更，重新加载后生效。
+      {/* 内容区：列表层 / 详情层 */}
+      {selectedPlugin ? (
+        <PluginDetail
+          plugin={selectedPlugin}
+          disabled={disabledSet.has(selectedPlugin.id)}
+          reloadNeeded={!!reloadNeeded[selectedPlugin.id]}
+          onBack={() => setSelectedId(null)}
+          onToggle={handleToggle}
+          onUninstall={handleUninstall}
+          toggling={togglingId === selectedPlugin.id}
+          uninstalling={uninstallingId === selectedPlugin.id}
+        />
+      ) : (
+        <div style={{ flex: 1, minHeight: 0, overflow: 'auto', paddingTop: 2 }}>
+          {loading ? (
+            <div style={{ display: 'flex', justifyContent: 'center', padding: '32px 0' }}>
+              <Spin />
+            </div>
+          ) : filtered.length === 0 ? (
+            <div style={{ padding: '32px 0' }}>
+              <Empty description={search ? '未找到匹配的插件' : '暂无插件'} image={Empty.PRESENTED_IMAGE_SIMPLE} />
+            </div>
+          ) : (
+            <>
+              {builtinPlugins.length > 0 && (
+                <>
+                  <GroupHeader title="内置" count={builtinPlugins.length} />
+                  {builtinPlugins.map((p) => (
+                    <PluginRow
+                      key={p.id}
+                      plugin={p}
+                      disabled={disabledSet.has(p.id)}
+                      reloadNeeded={!!reloadNeeded[p.id]}
+                      onOpen={setSelectedId}
+                      onToggle={handleToggle}
+                      toggling={togglingId === p.id}
+                    />
+                  ))}
+                </>
+              )}
+              {externalPlugins.length > 0 && (
+                <>
+                  <GroupHeader title="外部" count={externalPlugins.length} />
+                  {externalPlugins.map((p) => (
+                    <PluginRow
+                      key={p.id}
+                      plugin={p}
+                      disabled={disabledSet.has(p.id)}
+                      reloadNeeded={!!reloadNeeded[p.id]}
+                      onOpen={setSelectedId}
+                      onToggle={handleToggle}
+                      toggling={togglingId === p.id}
+                    />
+                  ))}
+                </>
+              )}
+            </>
+          )}
         </div>
       )}
-
-      {/* 列表内容 */}
-      <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
-        {loading ? (
-          <div style={{ display: 'flex', justifyContent: 'center', padding: '32px 0' }}>
-            <Spin />
-          </div>
-        ) : filtered.length === 0 ? (
-          <div style={{ padding: '32px 0' }}>
-            <Empty description={search ? '未找到匹配的插件' : '暂无插件'} image={Empty.PRESENTED_IMAGE_SIMPLE} />
-          </div>
-        ) : (
-          <>
-            {builtinPlugins.length > 0 && (
-              <>
-                <GroupHeader title="内置" count={builtinPlugins.length} />
-                {builtinPlugins.map((p) => (
-                  <PluginRow
-                    key={p.id}
-                    plugin={p}
-                    disabledIds={disabledIds}
-                    reloadNeeded={!!reloadNeeded[p.id]}
-                    onToggle={handleToggle}
-                    toggling={togglingId === p.id}
-                  />
-                ))}
-              </>
-            )}
-            {externalPlugins.length > 0 && (
-              <>
-                <GroupHeader title="外部" count={externalPlugins.length} />
-                {externalPlugins.map((p) => (
-                  <PluginRow
-                    key={p.id}
-                    plugin={p}
-                    disabledIds={disabledIds}
-                    reloadNeeded={!!reloadNeeded[p.id]}
-                    onToggle={handleToggle}
-                    toggling={togglingId === p.id}
-                  />
-                ))}
-              </>
-            )}
-          </>
-        )}
-      </div>
     </div>
   )
 }

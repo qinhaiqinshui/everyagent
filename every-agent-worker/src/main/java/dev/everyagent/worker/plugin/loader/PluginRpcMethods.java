@@ -51,6 +51,7 @@ public class PluginRpcMethods {
         dispatcher.register(RpcMethods.PLUGIN_ENABLE, this::enable);
         dispatcher.register(RpcMethods.PLUGIN_DISABLE, this::disable);
         dispatcher.register(RpcMethods.PLUGIN_WEB_SOURCE, this::webSource);
+        dispatcher.register(RpcMethods.PLUGIN_ASSET, this::asset);
     }
 
     /** plugin.list — 列出全部插件（内置 + 外部，含 web-only），附带 disabledIds。 */
@@ -74,6 +75,17 @@ public class PluginRpcMethods {
             o.put("hasWebMain", !m.webMain().isEmpty());
             // webMain 原始值随清单下发:前端据此推导 web 产物路径(后缀换 .js)。
             o.put("webMain", m.webMain());
+            // 展示元数据(扩展管理面板 VSCode 风格列表/详情页用):图标路径经 plugin.asset 读取字节,
+            // 资源链接与分类纯展示;均不参与任何加载判定。
+            o.put("icon", m.icon());
+            o.put("repository", m.repository());
+            o.put("license", m.license());
+            o.put("homepage", m.homepage());
+            ArrayNode categories = Json.arr();
+            for (String c : m.categories()) {
+                categories.add(c);
+            }
+            o.set("categories", categories);
             arr.add(o);
         }
 
@@ -184,23 +196,9 @@ public class PluginRpcMethods {
             return;
         }
 
-        // 统一从 PluginManifest 获取插件目录（内置插件源码目录或外部插件安装目录）。
-        PluginManifest manifest = pluginRegistry.get(pluginId);
-        if (manifest == null || manifest.pluginDir() == null) {
-            ctx.err("NOT_FOUND", "插件不存在: " + pluginId);
-            return;
-        }
-        Path pluginDir = manifest.pluginDir().normalize();
-        if (!Files.isDirectory(pluginDir)) {
-            ctx.err("NOT_FOUND", "插件目录不存在: " + pluginId);
-            return;
-        }
-
-        // 安全：路径必须在插件目录内
-        Path target = pluginDir.resolve(filePath).normalize();
-        if (!target.startsWith(pluginDir) || !Files.isRegularFile(target)) {
-            ctx.err("NOT_FOUND", "文件不存在或越界: " + filePath);
-            return;
+        Path target = resolvePluginFile(ctx, pluginId, filePath);
+        if (target == null) {
+            return; // resolvePluginFile 已回错误
         }
 
         try {
@@ -212,6 +210,117 @@ public class PluginRpcMethods {
             ctx.ok(result);
         } catch (IOException e) {
             ctx.err("INTERNAL", "读取文件失败: " + e.getMessage());
+        }
+    }
+
+    /** plugin.asset — 从插件目录读取二进制资源（扩展图标等）返回 mime + base64。 */
+    private void asset(dev.everyagent.worker.rpc.RpcContext ctx) {
+        String pluginId = ctx.params().path("pluginId").asString("");
+        if (pluginId.isEmpty()) {
+            ctx.err("BAD_PARAMS", "缺少参数 pluginId");
+            return;
+        }
+        String filePath = ctx.params().path("path").asString("");
+        if (filePath.isEmpty()) {
+            ctx.err("BAD_PARAMS", "缺少参数 path");
+            return;
+        }
+
+        Path target = resolvePluginFile(ctx, pluginId, filePath);
+        if (target == null) {
+            return; // resolvePluginFile 已回错误
+        }
+
+        String mime = imageMime(target.getFileName().toString());
+        if (mime == null) {
+            ctx.err("BAD_PARAMS", "不支持的资源类型: " + target.getFileName());
+            return;
+        }
+        try {
+            long size = Files.size(target);
+            if (size > MAX_ASSET_BYTES) {
+                ctx.err("FRAME_TOO_LARGE", "资源过大: " + size + " 字节,超过 "
+                        + MAX_ASSET_BYTES + " 字节上限");
+                return;
+            }
+            String base64 = java.util.Base64.getEncoder().encodeToString(Files.readAllBytes(target));
+            ObjectNode result = Json.obj();
+            result.put("pluginId", pluginId);
+            result.put("path", filePath);
+            result.put("mime", mime);
+            result.put("contentBase64", base64);
+            ctx.ok(result);
+        } catch (IOException e) {
+            ctx.err("INTERNAL", "读取资源失败: " + e.getMessage());
+        }
+    }
+
+    /** 插件目录内单文件资源的大小上限（图标等展示资源,2 MB）。 */
+    private static final long MAX_ASSET_BYTES = 2 * 1024 * 1024;
+
+    /** 按扩展名猜图片 mime；非图片类型返回 null（调用方报 BAD_PARAMS）。 */
+    private static String imageMime(String fileName) {
+        String lower = fileName.toLowerCase();
+        if (lower.endsWith(".png")) return "image/png";
+        if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
+        if (lower.endsWith(".gif")) return "image/gif";
+        if (lower.endsWith(".svg")) return "image/svg+xml";
+        if (lower.endsWith(".webp")) return "image/webp";
+        if (lower.endsWith(".bmp")) return "image/bmp";
+        if (lower.endsWith(".ico")) return "image/x-icon";
+        return null;
+    }
+
+    /**
+     * 解析插件目录内的文件路径（webSource / asset 共用）：
+     * 统一从 PluginManifest 获取插件目录，normalize + startsWith 做 jail 校验
+     * （路径不许逃逸插件目录）；精确路径未命中时按同目录大小写不敏感回退匹配一次
+     * （Linux 上 {@code readme.md} 也能读到 {@code README.md}，供扩展详情页取 README）。
+     *
+     * @return 解析后的目标文件；失败时已向 ctx 回错误并返回 null
+     */
+    private Path resolvePluginFile(dev.everyagent.worker.rpc.RpcContext ctx, String pluginId, String filePath) {
+        // 统一从 PluginManifest 获取插件目录（内置插件源码目录或外部插件安装目录）。
+        PluginManifest manifest = pluginRegistry.get(pluginId);
+        if (manifest == null || manifest.pluginDir() == null) {
+            ctx.err("NOT_FOUND", "插件不存在: " + pluginId);
+            return null;
+        }
+        Path pluginDir = manifest.pluginDir().normalize();
+        if (!Files.isDirectory(pluginDir)) {
+            ctx.err("NOT_FOUND", "插件目录不存在: " + pluginId);
+            return null;
+        }
+
+        // 安全：路径必须在插件目录内
+        Path target = pluginDir.resolve(filePath).normalize();
+        if (!target.startsWith(pluginDir) || !Files.isRegularFile(target)) {
+            // 大小写不敏感回退：同目录下找同名（忽略大小写）的常规文件
+            Path fallback = findCaseInsensitiveSibling(target);
+            if (fallback == null) {
+                ctx.err("NOT_FOUND", "文件不存在或越界: " + filePath);
+                return null;
+            }
+            target = fallback;
+        }
+        return target;
+    }
+
+    /** 在 target 的父目录里按文件名忽略大小写找一个常规文件；找不到返回 null。 */
+    private static Path findCaseInsensitiveSibling(Path target) {
+        Path parent = target.getParent();
+        if (parent == null || !Files.isDirectory(parent)) {
+            return null;
+        }
+        String wanted = target.getFileName().toString();
+        try (var stream = Files.list(parent)) {
+            return stream
+                    .filter(p -> Files.isRegularFile(p)
+                            && p.getFileName().toString().equalsIgnoreCase(wanted))
+                    .findFirst()
+                    .orElse(null);
+        } catch (IOException e) {
+            return null;
         }
     }
 
