@@ -105,13 +105,16 @@ class CodexSandboxSessionTest {
                 "\\\\.\\pipe\\every-agent-codex-runner-abc-in",
                 "\\\\.\\pipe\\every-agent-codex-runner-abc-out");
         assertEquals("C:\\jdk-25\\bin\\java.exe", argv.get(0));
-        assertEquals(List.of("-XX:+UseSerialGC", "-Xshare:auto", "-Dfile.encoding=UTF-8"),
-                argv.subList(1, 4), "runner JVM flags（设计 §4.1）");
-        assertEquals("-cp", argv.get(4));
-        assertEquals("C:\\bin\\runner.jar;C:\\bin\\jna.jar", argv.get(5));
-        assertEquals(RunnerMaterializer.RUNNER_MAIN, argv.get(6));
-        assertEquals("--pipe-in=\\\\.\\pipe\\every-agent-codex-runner-abc-in", argv.get(7));
-        assertEquals("--pipe-out=\\\\.\\pipe\\every-agent-codex-runner-abc-out", argv.get(8));
+        assertEquals(List.of("-XX:+UseSerialGC", "-Xshare:auto", "-Dfile.encoding=UTF-8",
+                "-Dorg.slf4j.simpleLogger.cacheOutputStream=false"),
+                argv.subList(1, 5), "runner JVM flags（设计 §4.1;simple 日志不缓存输出流,"
+                        + "保证写 installStderrTee 之后的 System.err）");
+        assertEquals("-cp", argv.get(5));
+        assertEquals("C:\\bin\\*", argv.get(6),
+                "classpath 折叠为目录通配符(collapseClasspathWildcard,同目录 jar 去重)");
+        assertEquals(RunnerMaterializer.RUNNER_MAIN, argv.get(7));
+        assertEquals("--pipe-in=\\\\.\\pipe\\every-agent-codex-runner-abc-in", argv.get(8));
+        assertEquals("--pipe-out=\\\\.\\pipe\\every-agent-codex-runner-abc-out", argv.get(9));
     }
 
     /** 预提取产物就位（.sandbox-bin/jnidispatch.dll）→ runner argv 带 boot.library.path。 */

@@ -14,6 +14,7 @@ import dev.everyagent.plugin.sandbox.codex.win.struct.AclStructs.TRUSTEE_W;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.URLClassLoader;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -43,7 +44,8 @@ public final class RunnerMaterializer {
     /** runner main 类（同 jar 的第二 main，见 {@link CodexRunnerMain}）。 */
     public static final String RUNNER_MAIN = CodexRunnerMain.class.getName();
 
-    /** 依赖 jar 文件名匹配子串（jna 运行时 + jackson 帧编解码 + slf4j 日志，设计 §2 模块依赖）。 */
+    /** 依赖 jar 文件名匹配子串（jna 运行时 + jackson 帧编解码 + slf4j 日志，设计 §2 模块依赖）。
+     * 来源:classpath 与插件 classloader URLs 两路(见 materializationSources)。 */
     public static final List<String> DEPENDENCY_MATCHERS = List.of(
             "jna-", "jna-platform-",
             "jackson-core-", "jackson-databind-", "jackson-annotations-",
@@ -106,15 +108,54 @@ public final class RunnerMaterializer {
         }
     }
 
-    /** 物化来源集 = 插件 codeSource（jar 或目录）+ 依赖 jar（canonical 去重保序）。 */
+    /**
+     * 本插件 classloader 的 jar URLs（builtin 模式=target/ 下 findTargetJars 加载的全部
+     * jar,external 模式=lib/*.jar）——slf4j-simple 这类「插件需要但 worker 依赖图没有」
+     * 的 jar 只能从这里物化(父委派借不到,java.class.path 也没有;2026-10 实测 simple
+     * 缺失导致 runner 落 NOP logger,debug 打点全部静默)。非 URLClassLoader 场景返回空。
+     */
+    public static List<Path> classloaderJarUrls() {
+        ClassLoader cl = RunnerMaterializer.class.getClassLoader();
+        if (!(cl instanceof URLClassLoader urls)) {
+            return List.of();
+        }
+        List<Path> out = new ArrayList<>();
+        for (java.net.URL url : urls.getURLs()) {
+            try {
+                Path p = Path.of(url.toURI());
+                if (p.toString().endsWith(".jar") && Files.isRegularFile(p)) {
+                    out.add(p);
+                }
+            } catch (Exception ignore) {
+                // 非 file: 协议等,跳过
+            }
+        }
+        return out;
+    }
+
+    /**
+     * 物化来源集 = 插件 codeSource（jar 或目录）+ classloader jar（见
+     * {@link #classloaderJarUrls()}）+ classpath 里按 matcher 命中的依赖 jar
+     * （canonical 去重保序）。classpath 仍是有效来源——builtin 模式下 jackson/jna
+     * 等由 worker classpath 经父委派提供,物化后的 runner classpath 必须自含它们。
+     */
     public static List<Path> materializationSources(String classpath, String separator) {
+        return materializationSources(classpath, separator, classloaderJarUrls());
+    }
+
+    /** 可测重载:extraJars 由测试注入(绕开对真实 classloader 的依赖)。 */
+    public static List<Path> materializationSources(String classpath, String separator,
+            List<Path> extraJars) {
         Map<String, Path> sources = new LinkedHashMap<>();
         Path self = pluginCodeSource();
         if (Files.exists(self)) {
             sources.put(self.toAbsolutePath().normalize().toString(), self);
         }
-        for (Path dep : selectDependencies(parseClasspath(classpath, separator),
-                DEPENDENCY_MATCHERS)) {
+        List<Path> selectable = new ArrayList<>(
+                selectDependencies(extraJars, DEPENDENCY_MATCHERS));
+        selectable.addAll(selectDependencies(parseClasspath(classpath, separator),
+                DEPENDENCY_MATCHERS));
+        for (Path dep : selectable) {
             sources.putIfAbsent(dep.toAbsolutePath().normalize().toString(), dep);
         }
         return new ArrayList<>(sources.values());
