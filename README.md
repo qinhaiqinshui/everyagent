@@ -20,11 +20,12 @@
 - ✅ **开源 · 免费 · 自托管(self-hosted)**:代码、文件、数据全部留在你自己的电脑上,不经过任何第三方服务器,适合重视隐私与数据主权的个人开发者和小团队;
 - ✅ **远程控制,不需要公网 IP**:NAT、路由器、无公网 IP 都不用操心 —— worker 只需「打出去」一条 **WebSocket** 加密长连接,世界各地的浏览器都能遥控它(手机、平板、办公电脑、Electron 桌面版);
 - ✅ **多端同步、断线续播**:关掉浏览器任务照跑,重开后从头到当前完整可见、继续流式输出,一次都没落下;
-- ✅ **自带安全护栏**:命令在沙箱中执行、越界操作弹窗授权,可选 **AI 审议 / 无人值守**自动裁决。
+- ✅ **自带安全护栏**:命令在沙箱中执行、越界操作弹窗授权,可选 **AI 审议 / 无人值守**自动裁决;
+- ✅ **插件化架构,一切能力皆可插拔**:沙箱 / git / 模型池 / 子 Agent 等 26 个内置插件全部跑在同一套插件体系上——后端 15 个扩展点 + 前端 12 个 UI 扩展点,不改 hub / worker / web 一行宿主代码;脚手架 5 分钟起步,`.eap` 经「扩展」面板一键安装。
 
-**技术关键词**:Spring Boot · Spring AI · Java 25 虚拟线程 · WebSocket · React · TypeScript · Electron · OpenAI 兼容模型 · 模型池容灾 · 多工作区 · 子 Agent 编排。
+**技术关键词**:Spring Boot · Spring AI · Java 25 虚拟线程 · WebSocket · React · TypeScript · Electron · OpenAI 兼容模型 · 模型池容灾 · 多工作区 · 子 Agent 编排 · 插件体系。
 
-> **English summary** — Every Agent is an open-source, self-hosted AI agent platform. Run AI tasks on your own PC and control them from any device (phone, tablet, or desktop browser) over an outbound WebSocket connection — no public IP, no port forwarding, and your data never leaves your machine. Highlights: remote multi-device control · NAT traversal · real-time streaming with resume · sandboxed execution · permission gating · AI safety review / unattended mode · OpenAI-compatible models with automatic failover · multi-workspace · sub-agent orchestration. **Free-model friendly**: the project itself was developed on free models — many thanks to SenseNova (商汤「日日新」) for its generous free model quotas and to OpenRouter for its free model endpoints; when a quota runs out or a model goes down, the model pool auto-fails-over to the next available one so development never stops. Today, Every Agent is used to develop Every Agent itself (dogfooding).
+> **English summary** — Every Agent is an open-source, self-hosted AI agent platform. Run AI tasks on your own PC and control them from any device (phone, tablet, or desktop browser) over an outbound WebSocket connection — no public IP, no port forwarding, and your data never leaves your machine. Highlights: remote multi-device control · NAT traversal · real-time streaming with resume · sandboxed execution · permission gating · AI safety review / unattended mode · OpenAI-compatible models with automatic failover · multi-workspace · sub-agent orchestration · plugin system (26 built-in plugins, 15 backend + 12 frontend extension points). **Free-model friendly**: the project itself was developed on free models — many thanks to SenseNova (商汤「日日新」) for its generous free model quotas and to OpenRouter for its free model endpoints; when a quota runs out or a model goes down, the model pool auto-fails-over to the next available one so development never stops. Today, Every Agent is used to develop Every Agent itself (dogfooding).
 
 ---
 
@@ -61,6 +62,14 @@
 - 任意 **OpenAI 兼容** provider:OpenAI、DeepSeek、Qwen、GLM、本地 vLLM/Ollama…改一行配置即可;
 - **模型池**:一个任务可配置多个模型,主模型失败自动切换下一个,任务不中断;
 - 💸 **白嫖党的福音**:项目后期就是靠**白嫖免费模型**开发出来的——感谢**商汤「日日新」(SenseNova)** 提供众多免费模型额度,以及 **OpenRouter** 开放的免费模型端点;就算免费额度用完、主模型罢工,模型池自动切换下一个还能用的,开发不中断。如今这个项目,已经能**用 Every Agent 自己开发 Every Agent** 了。
+
+### 🧱 插件化架构:一切能力皆可插拔
+- 你正在用的很多「核心能力」——沙箱、git、模型池容灾、子 Agent、上下文压缩、AI 审议、无人值守、任务队列——**没有一样写死在宿主里**,全部以插件形式实现;仓内自带 **26 个内置插件**,每个都是可直接照抄的活教材;
+- **后端 15 个扩展点**(工具 / 沙箱后端 / Advisor / 模型增强 / 任务生命周期 / 自定义 RPC / 斜杠命令)+ **前端 12 个 UI 扩展点**(侧边栏面板 / 工作区标签 / 工具调用视图 / 文件编辑器 / 消息动作…),不改一行宿主代码就能给整个系统加能力;
+- **三种插件形态**:纯 Java / 纯 Web / Java+Web 混合,一个 `plugin.json` 定形态;`create-everyagent-plugin` 脚手架 5 分钟跑通第一个插件;
+- 打包成 **`.eap`**,经前端「扩展」面板一键安装(重启 worker 生效);插件只依赖轻量 `every-agent-plugin-api`,经 `URLClassLoader` 类加载隔离,不碰 worker 内部实现。
+
+> 插件开发全手册:**[docs/plugin-guide/](docs/plugin-guide/index.md)**(脚手架上手、plugin.json 字段、扩展点手册、构建分发、故障排查)。
 
 ### 🖥️ 桌面版开箱即用
 - Windows x64 **安装包 / 便携版**:内置前端 + hub + worker + 精简 JRE,双击即用,无需装 Java / Node / Docker。
@@ -236,6 +245,7 @@ worker:
 - **子 Agent**:`run_agent` / `list_agents` / `wait_agents` / `stop_agent`,进程内嵌套、上下文隔离、并发运行;
 - **文件与 git**:工作区文件树(懒加载)、读写/移动/删除、git status/log/diff/commit/pull/push/clone、凭证加密保存;
 - **多工作区**:一台 worker 并行管理多个项目,任务按工作区分组;
+- **插件**:后端 15 个扩展点(工具 / 沙箱后端 / Advisor / 任务生命周期 / RPC / 斜杠命令)+ 前端 12 个 UI 扩展点;`.eap` 经「扩展」面板一键安装、启停(重启 worker 生效),仓内 26 个内置插件开箱即用;
 - **通知**:任务完成/错误、AI 提问、授权请求,浏览器与桌面系统通知。
 
 ---

@@ -21,8 +21,9 @@
 - ✅ **Remote control without a public IP**: no need to worry about NAT, routers, or public IPs — the worker only needs to make one **outbound WebSocket** encrypted long connection, and browsers from all over the world can remotely control it (phone, tablet, office computer, Electron desktop).
 - ✅ **Multi-device sync, resumable playback**: close the browser and the task keeps running; reopen it and the full history from start to current is visible, streaming continues, nothing is lost.
 - ✅ **Built-in safety guardrails**: commands run in a sandbox, out-of-bounds operations require popup authorization, optional **AI review / unattended** auto-adjudication.
+- ✅ **Plugin-based architecture — everything is pluggable**: sandboxes, git, model pool, sub-agents, and more (26 built-in plugins) all run on one plugin system — 15 backend + 12 frontend extension points, zero host-code changes; scaffold a new plugin in 5 minutes and install a `.eap` with one click from the Extensions panel.
 
-**Tech keywords**: Spring Boot · Spring AI · Java 25 virtual threads · WebSocket · React · TypeScript · Electron · OpenAI-compatible models · model pool failover · multi-workspace · sub-agent orchestration.
+**Tech keywords**: Spring Boot · Spring AI · Java 25 virtual threads · WebSocket · React · TypeScript · Electron · OpenAI-compatible models · model pool failover · multi-workspace · sub-agent orchestration · plugin system.
 
 ---
 
@@ -59,6 +60,14 @@
 - Any **OpenAI-compatible** provider: OpenAI, DeepSeek, Qwen, GLM, local vLLM/Ollama… just change one line of config.
 - **Model pool**: a task can be configured with multiple models; if the primary fails, it automatically switches to the next without interrupting the task.
 - 💸 **A boon for free-model users**: the project was developed in its later stages entirely on **free models** — thanks to **SenseNova** for its generous free model quotas and to **OpenRouter** for its free model endpoints. Even when a free quota runs out or a model goes down, the model pool auto-switches to the next available one so development never stops. Today, Every Agent can **develop itself using Every Agent** (dogfooding).
+
+### 🧱 Plugin-based architecture — everything is pluggable
+- Many "core capabilities" you're using — sandboxes, git, model pool failover, sub-agents, context compression, AI review, unattended mode, task queues — are **not hard-coded in the host**; they are all implemented as plugins. The repo ships **26 built-in plugins**, each a living example you can copy from.
+- **15 backend extension points** (tools / sandbox backends / Advisors / model enhancement / task lifecycle / custom RPC / slash commands) + **12 frontend UI extension points** (sidebar panels / workspace tabs / tool-call views / file editors / message actions…) — add capabilities to the whole system without touching a single line of hub / worker / web host code.
+- **Three plugin forms**: Java-only / web-only / Java+web hybrid, decided by a single `plugin.json`; the `create-everyagent-plugin` scaffold gets your first plugin running in 5 minutes.
+- Package as **`.eap`** and install with one click from the frontend "Extensions" panel (takes effect after a worker restart); plugins depend only on the lightweight `every-agent-plugin-api` and are class-loading-isolated via `URLClassLoader`, never touching worker internals.
+
+> Full plugin development manual: **[docs/plugin-guide/](docs/plugin-guide/index.md)** (scaffold quick start, plugin.json fields, extension-point reference, build & distribution, troubleshooting).
 
 ### 🖥️ Desktop edition works out of the box
 - Windows x64 **installer / portable edition**: bundles frontend + hub + worker + a slim JRE; double-click to use, no need to install Java / Node / Docker.
@@ -236,6 +245,7 @@ worker:
 - **Sub-agents**: `run_agent` / `list_agents` / `wait_agents` / `stop_agent`; in-process nesting, context isolation, concurrent execution.
 - **Files & git**: workspace file tree (lazy loading), read/write/move/delete, git status/log/diff/commit/pull/push/clone, encrypted credential storage.
 - **Multi-workspace**: one worker manages multiple projects in parallel, tasks grouped by workspace.
+- **Plugins**: 15 backend extension points (tools / sandbox backends / Advisors / task lifecycle / RPC / slash commands) + 12 frontend UI extension points; one-click `.eap` install and enable/disable from the Extensions panel (takes effect after worker restart); 26 built-in plugins out of the box.
 - **Notifications**: task completion/errors, AI questions, authorization requests — browser and desktop system notifications.
 
 ---
