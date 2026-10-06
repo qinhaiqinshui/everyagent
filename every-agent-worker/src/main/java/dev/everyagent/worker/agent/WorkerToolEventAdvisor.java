@@ -199,16 +199,9 @@ public class WorkerToolEventAdvisor extends ToolCallingAdvisor {
         a.emitter.emit(EmitEvent.of(rid, Events.MESSAGE,
                 null, null, null, text, null, messageData, EmitEvent.Mode.REPLACE));
         roundId.set(0);
-        // 队列续跑修复:把「最终回答轮」(无工具调用的收口轮)回写会话内存。
-        // 同一次运行内,下一条排队输入会被 consumeInput 直接 append 到 conversation;
-        // 若本轮 assistant 回复不回写,模型将看到两条连续 user 消息(a、b)而重复回答上一轮。
-        // 工具轮(calls 非空)不回写——避免留下无配对 tool 结果的孤立 assistant 消息。
-        // 冷启动(re-run)的历史仍由 ConversationLoader 从磁盘完整重建,此处只补运行期增量。
-        if (calls.isEmpty()) {
-            a.conversation.add(AssistantMessage.builder()
-                    .content(text)
-                    .build());
-        }
+        // 队列续跑的最终回答回写已归位 task 层:consumeInput 消费下一条排队输入前,经
+        // ConversationLoader.catchUpRuntime 从本事件流追回(与冷启动重建同一谓词)。
+        // 本 advisor 至此不再触碰会话内存,只负责事件发射与 agent 层会计(§7.20 域中性)。
         // 实测 usage(末帧携带才发)
         org.springframework.ai.chat.metadata.Usage round = cr.getMetadata() == null ? null : cr.getMetadata().getUsage();
         if (round != null) {

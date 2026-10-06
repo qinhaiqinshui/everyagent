@@ -6,6 +6,7 @@ import dev.everyagent.plugin.api.task.TaskRuntime;
 import dev.everyagent.plugin.api.task.TaskLifecycleContext;
 import dev.everyagent.plugin.api.proto.SnowflakeId;
 import dev.everyagent.worker.agent.AgentEntity;
+import dev.everyagent.worker.task.ConversationLoader;
 import dev.everyagent.worker.task.RoundIndexStore;
 import dev.everyagent.worker.task.TaskEntry;
 import dev.everyagent.worker.task.TaskStore;
@@ -119,6 +120,12 @@ public class TaskLifecycleContextImpl implements TaskLifecycleContext {
     public void consumeInput(AgentEntity main, UserInput input) {
         String text = input.text();
         String rawContent = input.rawContent();
+        // 队列续跑追回:消费本条输入前,把上一段落的最终回答轮补进会话内存(与冷启动重建
+        // 同一事件谓词,知识归位 ConversationLoader;advisor 不再回写会话内存)。保证随后
+        // append 的 user 消息之前 assistant 已在场——模型不会看到两条连续 user 而重复回答上一轮。
+        // 时序不变量:必须先于下方 user.message 事件发射(追回窗口止于上一条 user.message)。
+        ConversationLoader.catchUpRuntime(main.conversation,
+                taskEntry.log.readLastRecords(64), taskEntry.mainAgentId);
         gate.beginRun(taskEntry.taskId); // 新一条用户输入:本轮(run)授权失效(任务级不受影响)
         // user.message 落盘后以它的 seq 为轮起点开轮:最后一行未闭合则沿用(中间输入/续跑不开新轮);
         // 已闭合/无行则追加一条 endSeq="" 的未闭合轮。中断/取消/失败不再于终态补写,轮行随开轮即持久化。

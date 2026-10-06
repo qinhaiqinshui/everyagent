@@ -116,4 +116,43 @@ public final class ConversationLoader {
         out.add(ToolResponseMessage.builder().responses(responses).build());
         collected.clear();
     }
+
+    /**
+     * 运行期会话追回(队列续跑;consumeInput 消费下一条排队输入前调用)。
+     * 把上一运行段落的「最终回答轮」(无工具调用的收口轮)补进会话内存——回读内存事件
+     * 日志尾部,与 {@link #load} 同一 message 事件谓词(payload.content / data.toolCalls)。
+     * <p>只追回最终回答,工具轮不回写:与冷启动重建不同,运行期中间轮次由 Spring AI 内部
+     * 会话承载,回写会留下无配对 tool 结果的孤立 assistant 消息(部分模型 API 硬错)。
+     * 被中断的段落(最近 message 带工具调用)无最终回答可追回;回读窗口止于上一条
+     * user.message(此前历史已由冷启动重建/前次追回在场)。
+     * <p>幂等:会话尾部已是 assistant(冷启动重建已含/前次已追回)时跳过,不重复追加。
+     */
+    public static void catchUpRuntime(List<Message> conversation, List<EventRecord> tail,
+            String mainAgentId) {
+        if (!conversation.isEmpty()
+                && conversation.get(conversation.size() - 1) instanceof AssistantMessage) {
+            return;
+        }
+        for (int i = tail.size() - 1; i >= 0; i--) {
+            EventRecord r = tail.get(i);
+            String aid = r.agentId();
+            if (aid != null && !aid.isEmpty() && !aid.equals(mainAgentId)) {
+                continue; // 子 agent 事件不进主会话
+            }
+            if (Events.USER_MESSAGE.equals(r.event())) {
+                return; // 窗口起点:上一条输入之前的历史已在会话内存,无可追回
+            }
+            if (!Events.MESSAGE.equals(r.event())) {
+                continue; // usage/tool.result/瞬态/终态事件与追回无关
+            }
+            JsonNode p = r.payload();
+            if (p.path("data").path("toolCalls").size() > 0) {
+                return; // 最近一轮为工具轮(段落被中断),无最终回答
+            }
+            conversation.add(AssistantMessage.builder()
+                    .content(p.path("content").asString(""))
+                    .build());
+            return;
+        }
+    }
 }
