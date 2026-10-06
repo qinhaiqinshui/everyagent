@@ -165,6 +165,49 @@ class CodexCommandExecutorTest {
     }
 
     @Test
+    void childEnvInjectsGitSafeDirectoryForRepoRoot() throws IOException {
+        Path ws = tempDir.resolve("ws-git");
+        Files.createDirectories(ws.resolve(".git"));
+        Map<String, String> env = CodexCommandExecutor.childEnv(null, ws, null);
+        String root = ws.toAbsolutePath().normalize().toString().replace('\\', '/');
+        assertEquals("2", env.get("GIT_CONFIG_COUNT"), "树根+嵌套两条,对齐 codex");
+        assertEquals("safe.directory", env.get("GIT_CONFIG_KEY_0"));
+        assertEquals(root, env.get("GIT_CONFIG_VALUE_0"), "路径用 / (git 口径)");
+        assertEquals("safe.directory", env.get("GIT_CONFIG_KEY_1"));
+        assertEquals(root + "/*", env.get("GIT_CONFIG_VALUE_1"), "嵌套仓库/子模块一并信任");
+    }
+
+    @Test
+    void childEnvWalksUpToFindGitRoot() throws IOException {
+        Path ws = tempDir.resolve("ws-git-up");
+        Files.createDirectories(ws.resolve(".git"));
+        Path nested = ws.resolve("a").resolve("b");
+        Files.createDirectories(nested);
+        Map<String, String> env = CodexCommandExecutor.childEnv(null, nested, null);
+        String root = ws.toAbsolutePath().normalize().toString().replace('\\', '/');
+        assertEquals(root, env.get("GIT_CONFIG_VALUE_0"),
+                "workspaceRoot 在仓库子目录时向上找到树根(codex 同款语义)");
+    }
+
+    @Test
+    void childEnvNoGitRootNoInjection() throws IOException {
+        Path ws = tempDir.resolve("ws-nogit").resolve("deep");
+        Files.createDirectories(ws);
+        // @TempDir 常落在工作区(仓库树)内部,向上找必命中工作区 .git——该场景属于
+        // walk-up 的正确行为而非「无注入」;仅当 tempDir 之上确无 .git 时本用例才有效。
+        boolean repoAbove = false;
+        for (Path p = tempDir.toAbsolutePath().normalize(); p != null; p = p.getParent()) {
+            if (Files.exists(p.resolve(".git"))) {
+                repoAbove = true;
+                break;
+            }
+        }
+        assumeTrue(!repoAbove, "tempDir 之上存在 git 树根时跳过(walk-up 命中属正确行为)");
+        Map<String, String> env = CodexCommandExecutor.childEnv(null, ws, null);
+        assertNull(env.get("GIT_CONFIG_COUNT"), "无 .git 树根时不注入(不碰宿主已有配置)");
+    }
+
+    @Test
     void childEnvRedirectsHomeToSandboxProfile() {
         Path ws = tempDir.resolve("ws-profile");
         Path profile = Path.of("C:", "Users", "EACodexOnline");

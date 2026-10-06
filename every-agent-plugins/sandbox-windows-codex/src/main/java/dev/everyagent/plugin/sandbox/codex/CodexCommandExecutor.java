@@ -424,7 +424,45 @@ public final class CodexCommandExecutor {
             env.put("APPDATA", profileDir.resolve("AppData").resolve("Roaming").toString());
             env.put("LOCALAPPDATA", profileDir.resolve("AppData").resolve("Local").toString());
         }
+        if (workspaceRoot != null) {
+            injectGitSafeDirectory(env, workspaceRoot);
+        }
         return env;
+    }
+
+    /**
+     * git safe.directory 注入（对齐 codex 原生 {@code sandbox_utils::inject_git_safe_directory}，
+     * 逐语义移植）：从 workspaceRoot 向上找含 {@code .git} 的树根（{@code Files.exists}——
+     * worktree/子模块的 {@code .git} 是文件），经 git 的 env 配置机制
+     * {@code GIT_CONFIG_COUNT/KEY_n/VALUE_n} 注入 {@code safe.directory=<root>} 与
+     * {@code <root>/*}（嵌套仓库一并信任）。
+     * <p>为什么必须：仓库属主是宿主用户而命令跑在沙箱账户下,git ≥2.35.2 的 ownership
+     * 保护直接 fatal（实测）；沙箱 profile 切断了对宿主 {@code .gitconfig} 的借读后,
+     * 宿主曾有的 {@code safe.directory=*} 豁免不再可见（那本就是意外依赖+泄露面）。
+     * <p>为什么这样而非写 {@code ~/.gitconfig}：env 注入零落盘、每次 spawn 按当时
+     * workspaceRoot 重算、且精确到本仓库树——比宿主原来的 {@code *} 更收紧。已存
+     * {@code GIT_CONFIG_COUNT} 时在其后追加（codex 同款）。路径用 {@code /}（git 口径）。
+     */
+    private static void injectGitSafeDirectory(Map<String, String> env, Path workspaceRoot) {
+        Path cur = workspaceRoot.toAbsolutePath().normalize();
+        while (cur != null) {
+            if (Files.exists(cur.resolve(".git"))) {
+                String root = cur.toString().replace('\\', '/');
+                int n = 0;
+                try {
+                    n = Integer.parseInt(env.getOrDefault("GIT_CONFIG_COUNT", "0"));
+                } catch (NumberFormatException ignore) {
+                    // 宿主残留非法值,从 0 起追加(覆盖)
+                }
+                env.put("GIT_CONFIG_KEY_" + n, "safe.directory");
+                env.put("GIT_CONFIG_VALUE_" + n, root);
+                env.put("GIT_CONFIG_KEY_" + (n + 1), "safe.directory");
+                env.put("GIT_CONFIG_VALUE_" + (n + 1), root + "/*");
+                env.put("GIT_CONFIG_COUNT", String.valueOf(n + 2));
+                return;
+            }
+            cur = cur.getParent();
+        }
     }
 
     /**

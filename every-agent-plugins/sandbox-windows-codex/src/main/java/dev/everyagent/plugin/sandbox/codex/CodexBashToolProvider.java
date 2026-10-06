@@ -56,7 +56,9 @@ public class CodexBashToolProvider implements ToolProvider {
                         + "中文等非 ASCII 输出已正确解码;"
                         + "用户目录(含 Maven 仓库/npm/pip/gradle 缓存)已指向沙箱账户 profile,"
                         + "可写且持久,各工具直接用默认位置即可,勿手动指定仓库/缓存路径;"
-                        + "临时目录(TEMP)在工作区 .everyagent/tmp,随任务清理。")
+                        + "临时目录(TEMP)在工作区 .everyagent/tmp,随任务清理;"
+                        + "git 不读宿主全局配置(已注入本仓库 safe.directory),提交时请用"
+                        + " -c user.name=<名> -c user.email=<邮箱> 显式带入身份。")
                 .callback());
     }
 }
