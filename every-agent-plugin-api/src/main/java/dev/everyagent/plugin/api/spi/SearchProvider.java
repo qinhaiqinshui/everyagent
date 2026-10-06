@@ -6,8 +6,18 @@ import java.util.List;
 /**
  * 搜索后端提供者 SPI —— 插件实现此接口提供不同搜索引擎。
  *
- * <p>现有 ripgrep 后端变为默认插件（search-ripgrep）。
- * 可新增 search-es（ElasticSearch 后端）、search-vector（向量搜索）。
+ * <p><b>接线语义(增补聚合,架构 §8.5)</b>:插件经 {@code ctx.registerSearchProvider}
+ * 注册的后端由 worker 的 {@code fs.search}({@link #searchFiles})与
+ * {@code task.search}({@link #searchTasks})在完成内置 ripgrep 搜索后按注册序
+ * <b>增补聚合</b>——内置结果在前、各 provider 结果追加在后,按位置键去重(文件
+ * {@code path+lineNumber+matchIndex} / 任务 {@code taskId+roundIndex+field+matchIndex}),
+ * 合并后仍受 {@code maxResults} 触顶约束;单个 provider 抛异常仅 WARN 跳过;
+ * 注册表为空时零额外行为。结果形状与两条 RPC 的应答项一致(如
+ * {@code SearchResult.path} 为工作区相对 posix 路径)。
+ * {@code SearchRequest.workspaceId} 在工作区未注册进注册表时可能为 null。
+ *
+ * <p>典型场景:search-es(ElasticSearch 后端)、search-vector(向量搜索)等在工作区
+ * 外维护索引的引擎,经本 SPI 把索引命中补充进前端搜索结果。
  */
 public interface SearchProvider {
 
@@ -45,6 +55,11 @@ public interface SearchProvider {
     /** 任务搜索结果项。 */
     record TaskSearchResult(String taskId, String title, String workspace, String workspaceId,
             String status, List<Match> matches) {
-        public record Match(int roundIndex, String field, int line, int matchIndex, String matchText) {}
+
+        /**
+         * 单条命中:{@code line} 为命中字段的干净文本(与 {@code task.search} 应答项的
+         * {@code line} 一致,非行号;行内定位用 {@code matchIndex})。
+         */
+        public record Match(int roundIndex, String field, String line, int matchIndex, String matchText) {}
     }
 }

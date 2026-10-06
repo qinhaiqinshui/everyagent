@@ -38,7 +38,7 @@ has_children: false
 | 3 | `void registerSandboxProvider(SandboxProvider p)` | [工具 §3](../backend/tools-and-sandbox.md#3-sandboxprovider--沙箱后端) | sandbox-wsl-ubuntu(priority 10)、codex(8)、mic(5) |
 | 4 | `void registerFileReferenceHandler(FileReferenceHandler h)` | [工具 §4](../backend/tools-and-sandbox.md#4-filereferencehandler--用户输入里的文件引用) | image-vision（唯一） |
 | 5 | `void registerAdvisorProvider(AdvisorProvider p)` | [advisors §1](../backend/advisors.md#1-advisorprovider--向-agent-链注入-advisor) | 12 插件 13 provider（system-info、git、context-compression…） |
-| 6 | `void registerSearchProvider(SearchProvider p)` ⚠️ | [advisors §6](../backend/advisors.md#6-searchprovider--搜索后端未接线如实登记) | 零使用：registry 无人查询，未接线 |
+| 6 | `void registerSearchProvider(SearchProvider p)` | [advisors §6](../backend/advisors.md#6-searchprovider--搜索后端已接线fssearch--tasksearch-增补聚合) | 已接线：`fs.search` / `task.search` 增补聚合（无内置插件范例） |
 | 7 | `void registerAuthorizationHandler(AuthorizationHandler h)` | [advisors §7](../backend/advisors.md#7-authorizationhandler--授权决议链节点) | ai-review(100f)、unattended(200f)；内置 human=300f 终结 |
 | 8 | `void registerSkillContributor(SkillContributor c)` | [advisors §5](../backend/advisors.md#5-skillcontributor--贡献-skill) | subagent（半接线：只进 system prompt，不进 `/` 菜单） |
 | 9 | `void registerTokenEstimator(TokenEstimator e)` | [advisors §4](../backend/advisors.md#4-tokenestimator--替换-token-估算器) | model-rate-limit |

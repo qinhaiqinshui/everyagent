@@ -17,7 +17,7 @@ has_children: false
 | `ChatModelEnhancer` | `model` | `registerChatModelEnhancer`（:66） | `ChatModelEnhancerRegistry` | `ChatModelFactory` 构建期委托 | model-pool（唯一） |
 | `TokenEstimator` | `spi` | `registerTokenEstimator`（:63） | 无（直接替换 `WorkerServicesImpl` 持有实例） | `WorkerServices.tokenEstimator()` 的全部调用方 | model-rate-limit |
 | `SkillContributor` | `skill` | `registerSkillContributor`（:60） | `SkillContributorRegistry` | `SkillAdvisor` 合流进 system prompt | subagent（唯一） |
-| `SearchProvider` | `spi` | `registerSearchProvider`（:51） | `SearchProviderRegistry` | **零消费点（未接线）**，§6 | **无** |
+| `SearchProvider` | `spi` | `registerSearchProvider`（:51） | `SearchProviderRegistry` | `fs.search` / `task.search` 增补聚合（§6） | **无** |
 | `AuthorizationHandler` | `permission` | `registerAuthorizationHandler`（:54） | `AuthorizationHandlerRegistry` | `GrantRegistry` 授权决议链 | ai-review、unattended |
 
 所有注册方法的 worker 实现（`every-agent-worker/src/main/java/dev/everyagent/worker/plugin/WorkerPluginContextImpl.java:131,141,146,161,171,177`）都只是往注册表 `add` 一行（TokenEstimator 例外：调 `WorkerServicesImpl.replaceTokenEstimator` 原位换实例）。
@@ -243,16 +243,24 @@ public interface SkillContributor {
 1. **`/` 菜单数据源不含 `SkillContributorRegistry`**：`SkillSlashProvider` 只合并 `BuiltInSkills.getAllSkills()` + `ExternalSkillScanner.scan()`（`every-agent-worker/src/main/java/dev/everyagent/worker/slash/SkillSlashProvider.java:43-48`）。`SkillContributor` 的 Javadoc 写「向 system prompt 与 `/` 菜单贡献 skill」——registry 通道实际只覆盖 system prompt 一半；subagent 的 skill 能出现在 `/` 菜单，是因为其知识包物化进了 `skillsDir` 一级子目录、且 `agent-dispatch` 已不在 `BuiltInSkills`（现仅 plan/skill-creator，`BuiltInSkills.java:63-76`），被 `ExternalSkillScanner` 当作**外部 skill** 捞进菜单（排除集只含内置 id，`ExternalSkillScanner.java:96-99`）。想让 skill 进菜单的插件应同样物化到 skillsDir，而不是指望 registry。
 2. `skill.md` 的 id 规则与菜单副标题提取等扫描约定见 [`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) §7.12「skill 目录结构与外部 skill」；本篇不展开。
 
-## 6. SearchProvider —— 搜索后端（**未接线**，如实登记）
+## 6. SearchProvider —— 搜索后端（已接线：fs.search / task.search 增补聚合）
 
-**消费状态核实结论：预留 SPI，worker 侧零消费点。** 证据：
+**机制**：插件经 `ctx.registerSearchProvider` 注册的搜索后端由 worker 的两条搜索 RPC 消费——`fs.search`（文件，`searchFiles`）与 `task.search`（任务，`searchTasks`）。聚合语义是**增补而非替换**：内置 ripgrep 结果在前，各 provider 按注册序追加在后，按位置键去重（文件 `path+lineNumber+matchIndex` / 任务 `taskId+roundIndex+field+matchIndex`），合并后仍受 `maxResults` 触顶约束（触顶置 `truncated`）。实现住在两个入口服务里：`FsSearchService.mergeProviderResults`（`every-agent-worker/src/main/java/dev/everyagent/worker/modules/FsSearchService.java`）与 `TaskSearchService.mergeProviderResults`（`.../task/TaskSearchService.java`），[`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) §7 两条 RPC 行与 §8.5 为契约口径。
 
-- 注册表 `SearchProviderRegistry` 的 `getDefault()/getById()/getProviders()` 在 worker main 代码**零调用**（rg 全仓：`SearchProviderRegistry` 仅被 `PluginLoader` 注入、`WorkerPluginContextImpl.registerSearchProvider` 写入，无任何读侧）。
-- 插件侧 `registerSearchProvider` **零命中**（rg `every-agent-plugins/` 全量）；接口 Javadoc 提到的「默认插件 search-ripgrep」**不存在**（`every-agent-plugins/` 下无该目录）。
-- worker 自己的搜索是内置实现：文件/任务搜索走 `TaskSearchService` 自带逻辑（`every-agent-worker/src/main/java/dev/everyagent/worker/task/TaskSearchService.java:125,144` 为私有方法，不经 SPI），[`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) 亦零提及该 SPI（事实基线 rg 确认）。
-- 接口本体（`every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/spi/SearchProvider.java:12-45`）：`id()` + `searchFiles(SearchRequest)` + `searchTasks(TaskSearchRequest)`，四个 record 定义了文件/任务两种请求与结果形状。
+**无害性保证**（写插件时可以依赖的行为契约）：
 
-⇒ **当前注册一个 SearchProvider 不会有任何效果**（注册成功、无人调用）。若未来接线，按 Javadoc 意图：worker 搜索入口改为经注册表取后端（`getById` 精确选 / `getDefault` 兜底），插件即可替换 ripgrep 实现——这是设计意图，**未实测**（无代码路径可测）。此欠账已按计划登记进 `reference/known-issues.md`（文档欠账，非代码 bug）。
+- 注册表为空 → 两条 RPC 行为与无插件时**完全一致**（聚合入口直接原样返回内置结果）；
+- provider 返回 `null`/空列表 → 不加任何项、不报错；
+- 单个 provider 抛异常 → 仅 WARN 跳过，其余 provider 与整体应答不受影响；
+- 内置 rg 不可用但注册了 provider → 跳过内置 rg、仅聚合 provider 结果（无 provider 时保持原「rg 不可用」可读报错）。
+
+**实现要点**（`every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/spi/SearchProvider.java:22-65`）：
+
+- `id()` + `searchFiles(SearchRequest)` + `searchTasks(TaskSearchRequest)`；请求带 `workspaceId`（工作区未注册进注册表时可能为 null）+ `workspaceRoot` + 完整 pattern 语义（`isRegex/caseSensitive/wholeWord/includeGlobs/excludeGlobs/maxResults`）。
+- 结果形状与两条 RPC 的应答项一致：`SearchResult.path` 为工作区相对 posix 路径；`TaskSearchResult.Match.line` 为命中字段的**干净文本**（与 `task.search` 应答的 `line` 一致，非行号——行内定位用 `matchIndex`）。
+- 典型场景：search-es（ElasticSearch）、search-vector（向量检索）等在工作区外维护索引的引擎，把索引命中补充进前端搜索结果。
+
+**范例**：暂无内置插件注册（25 个内置插件零使用）；聚合/去重/触顶/异常跳过行为由 `FsSearchServiceTest` / `TaskSearchServiceTest` 的 StubProvider 用例钉住。若接线前曾按旧 Javadoc 期待「ripgrep 变为默认插件 search-ripgrep、provider 替换后端」——现行语义是增补聚合，不替换。
 
 ## 7. AuthorizationHandler —— 授权决议链节点
 

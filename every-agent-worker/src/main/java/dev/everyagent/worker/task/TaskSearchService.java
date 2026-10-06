@@ -5,6 +5,8 @@ import dev.everyagent.worker.modules.FsSearchService;
 import dev.everyagent.worker.modules.FsService;
 import dev.everyagent.worker.proto.RpcMethods;
 import dev.everyagent.plugin.api.exception.BadParamsException;
+import dev.everyagent.plugin.api.spi.SearchProvider;
+import dev.everyagent.worker.plugin.registry.SearchProviderRegistry;
 import dev.everyagent.worker.rpc.RpcContext;
 import dev.everyagent.worker.rpc.RpcDispatcher;
 import dev.everyagent.worker.tools.RipgrepBinary;
@@ -24,9 +26,11 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.regex.Matcher;
@@ -56,6 +60,12 @@ import java.util.regex.PatternSyntaxException;
  * <p><b>应答</b>:与 fs.search 同构 {matchCount, truncated, files},files 项为任务级
  * {taskId,title,workspace,workspaceId,status,matches:[{roundIndex,field,line,matchIndex,matchText}]};
  * 大结果复用 rpc.data 分批 + 末帧 ok 汇总。
+ *
+ * <p><b>SearchProvider 增补聚合(§8.5)</b>:插件经 {@code ctx.registerSearchProvider}
+ * 注册的搜索后端不替换内置 rg——本方法在内置 rg 结果之后按注册序追加各 provider 的
+ * {@code searchTasks} 结果(按 {@code taskId+roundIndex+field+matchIndex} 去重、仍受
+ * maxResults 触顶约束,见 {@link #mergeProviderResults});provider 异常仅 WARN 跳过;
+ * 注册表为空时零额外行为;rg 不可用但注册了 provider 时跳过内置 rg、仅聚合 provider 结果。
  */
 @Component
 public class TaskSearchService {
@@ -79,10 +89,13 @@ public class TaskSearchService {
 
     private final TaskStore store;
     private final RipgrepBinary rg;
+    private final SearchProviderRegistry searchProviders;
 
-    public TaskSearchService(RpcDispatcher dispatcher, TaskStore store, RipgrepBinary rg) {
+    public TaskSearchService(RpcDispatcher dispatcher, TaskStore store, RipgrepBinary rg,
+            SearchProviderRegistry searchProviders) {
         this.store = store;
         this.rg = rg;
+        this.searchProviders = searchProviders;
         dispatcher.register(RpcMethods.TASK_SEARCH, this::search);
     }
 
@@ -101,7 +114,7 @@ public class TaskSearchService {
         if (pattern.isBlank()) {
             throw new BadParamsException("pattern 不能为空");
         }
-        if (!rg.available()) {
+        if (!rg.available() && searchProviders.getProviders().isEmpty()) {
             throw new IOException("rg 不可用: 未找到内置 ripgrep(<程序根>/runtime/bin/ 或"
                     + " worker.tools.rg-path),无法执行任务搜索");
         }
@@ -120,10 +133,17 @@ public class TaskSearchService {
         } catch (PatternSyntaxException e) {
             throw new BadParamsException("正则表达式非法: " + e.getMessage());
         }
-        // 枚举任务:按 workspaceId 直接定位该工作区任务根。
-        List<TaskStore.StoredTask> tasks = store.scanWorkspace(workspaceId);
-        SearchOutcome out = searchTasks(tasks, pattern, isRegex, caseSensitive, wholeWord,
-                pat, maxResults);
+        // 枚举任务:按 workspaceId 直接定位该工作区任务根(rg 不可用但已注册 SearchProvider
+        // 时跳过内置搜索,仅聚合 provider 结果,§8.5)。
+        SearchOutcome out;
+        if (rg.available()) {
+            List<TaskStore.StoredTask> tasks = store.scanWorkspace(workspaceId);
+            out = searchTasks(tasks, pattern, isRegex, caseSensitive, wholeWord, pat, maxResults);
+        } else {
+            out = new SearchOutcome(new LinkedHashMap<>(), 0, false);
+        }
+        out = mergeProviderResults(out, searchProviders, new SearchProvider.TaskSearchRequest(
+                workspaceId, pattern, isRegex, caseSensitive, wholeWord, maxResults), maxResults);
         reply(ctx, out);
     }
 
@@ -185,6 +205,100 @@ public class TaskSearchService {
             count = maxResults;
         }
         return new SearchOutcome(files, count, truncated);
+    }
+
+    // ---- SearchProvider 增补聚合 ----
+
+    /**
+     * 把插件 SearchProvider 的任务搜索结果增补聚合进内置 rg 结果(§8.5):注册表为空或
+     * 内置结果已触顶(maxResults)时原样返回——零行为变化;provider 结果按注册序追加在
+     * 内置结果之后,按位置键 {@code taskId+roundIndex+field+matchIndex} 去重(多引擎命中
+     * 同一轮同一字段同一位置只计一条);合并后仍受 maxResults 触顶约束(触顶置 truncated
+     * 并终止 provider 循环);单个 provider 抛异常仅 WARN 跳过,不影响其余结果与应答;
+     * provider 返回 null/空列表(或全部命中被去重)不加任务项。
+     */
+    static SearchOutcome mergeProviderResults(SearchOutcome builtIn, SearchProviderRegistry registry,
+            SearchProvider.TaskSearchRequest req, int maxResults) {
+        List<SearchProvider> providers = registry.getProviders();
+        if (providers.isEmpty() || builtIn.matchCount() >= maxResults) {
+            return builtIn;
+        }
+        LinkedHashMap<String, ObjectNode> files = new LinkedHashMap<>(builtIn.files());
+        Set<String> seen = new HashSet<>();
+        for (ObjectNode task : files.values()) {
+            String taskId = task.path("taskId").asString();
+            for (JsonNode m : task.path("matches")) {
+                seen.add(taskId + "\u0000" + m.path("roundIndex").asInt() + "\u0000"
+                        + m.path("field").asString() + "\u0000" + m.path("matchIndex").asInt());
+            }
+        }
+        int count = builtIn.matchCount();
+        boolean truncated = builtIn.truncated();
+        outer:
+        for (SearchProvider provider : providers) {
+            List<SearchProvider.TaskSearchResult> hits;
+            try {
+                hits = provider.searchTasks(req);
+            } catch (RuntimeException e) {
+                log.warn("[task.search] SearchProvider {} 执行失败,跳过", provider.id(), e);
+                continue;
+            }
+            if (hits == null) {
+                continue;
+            }
+            for (SearchProvider.TaskSearchResult hit : hits) {
+                if (hit.matches() == null || hit.matches().isEmpty()) {
+                    continue;
+                }
+                // 先筛本任务可追加的命中(全被去重的任务不产出空任务项),再惰性建任务项
+                List<SearchProvider.TaskSearchResult.Match> fresh = new ArrayList<>();
+                boolean capped = false;
+                for (SearchProvider.TaskSearchResult.Match m : hit.matches()) {
+                    if (count + fresh.size() >= maxResults) {
+                        capped = true; // 全局预算耗尽,本任务命中未全量消费
+                        break;
+                    }
+                    if (seen.add(hit.taskId() + "\u0000" + m.roundIndex() + "\u0000" + m.field()
+                            + "\u0000" + m.matchIndex())) {
+                        fresh.add(m);
+                    }
+                }
+                if (!fresh.isEmpty()) {
+                    appendProviderTaskHits(files, hit, fresh);
+                    count += fresh.size();
+                }
+                if (capped) {
+                    truncated = true;
+                    break outer;
+                }
+            }
+        }
+        return new SearchOutcome(files, Math.min(count, maxResults), truncated);
+    }
+
+    /** 把一个 provider 任务结果的(去重后)命中追加进 files 聚合,任务项不存在则按元数据建。 */
+    private static void appendProviderTaskHits(LinkedHashMap<String, ObjectNode> files,
+            SearchProvider.TaskSearchResult hit, List<SearchProvider.TaskSearchResult.Match> fresh) {
+        ObjectNode task = files.get(hit.taskId());
+        if (task == null) {
+            task = Json.obj()
+                    .put("taskId", hit.taskId())
+                    .put("title", hit.title() == null ? "" : hit.title())
+                    .put("workspace", hit.workspace() == null ? "" : hit.workspace())
+                    .put("workspaceId", hit.workspaceId() == null ? "" : hit.workspaceId())
+                    .put("status", hit.status() == null ? "" : hit.status());
+            task.set("matches", Json.arr());
+            files.put(hit.taskId(), task);
+        }
+        ArrayNode arr = (ArrayNode) task.get("matches");
+        for (SearchProvider.TaskSearchResult.Match m : fresh) {
+            arr.add(Json.obj()
+                    .put("roundIndex", m.roundIndex())
+                    .put("field", m.field())
+                    .put("line", m.line())
+                    .put("matchIndex", m.matchIndex())
+                    .put("matchText", m.matchText()));
+        }
     }
 
     /**

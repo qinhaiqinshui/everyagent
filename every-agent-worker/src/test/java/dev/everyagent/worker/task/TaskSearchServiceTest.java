@@ -4,6 +4,8 @@ import dev.everyagent.contract.json.Json;
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.hub.HubLink;
 import dev.everyagent.plugin.api.event.Channels;
+import dev.everyagent.plugin.api.spi.SearchProvider;
+import dev.everyagent.worker.plugin.registry.SearchProviderRegistry;
 import dev.everyagent.worker.proto.RpcMethods;
 import dev.everyagent.worker.rpc.RpcDispatcher;
 import dev.everyagent.worker.tools.RipgrepBinary;
@@ -12,6 +14,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.node.ArrayNode;
 import tools.jackson.databind.node.ObjectNode;
 
 import java.io.File;
@@ -19,13 +22,16 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
@@ -63,7 +69,7 @@ class TaskSearchServiceTest {
 
         dispatcher = new RpcDispatcher(null, new WorkerProperties());
         store = new TaskStore(props);
-        new TaskSearchService(dispatcher, store, new RipgrepBinary(props));
+        new TaskSearchService(dispatcher, store, new RipgrepBinary(props), new SearchProviderRegistry());
     }
 
     /** 测试环境 rg 定位:程序根 runtime/bin(IDE/打包)→ 模块父目录(maven,user.dir=模块)→ PATH。 */
@@ -289,5 +295,143 @@ class TaskSearchServiceTest {
         // 全字:NEEDLE(user)与 standalone needle(finalReply)各命中一次,needlefish 不算 → 共 2 条
         Map<String, JsonNode> ww = inlineTasks(params("defaultworkspace", "needle").put("wholeWord", true));
         assertEquals(2, ww.get("t3").path("matches").size(), "全字命中 NEEDLE + standalone needle 两处");
+    }
+
+    // ---- ④ SearchProvider 增补聚合(纯函数,不依赖 rg) ----
+
+    /** 造一条内置 rg 形态的任务 outcome:单任务若干命中(roundIndex 递增,matchIndex 恒 0)。 */
+    private static TaskSearchService.SearchOutcome taskOutcomeOf(String taskId, String... fields) {
+        LinkedHashMap<String, ObjectNode> files = new LinkedHashMap<>();
+        ObjectNode task = Json.obj().put("taskId", taskId).put("title", "t").put("workspace", "/ws")
+                .put("workspaceId", "defaultworkspace").put("status", "done");
+        ArrayNode arr = Json.arr();
+        int round = 0;
+        for (String field : fields) {
+            arr.add(Json.obj().put("roundIndex", round).put("field", field).put("line", "l")
+                    .put("matchIndex", 0).put("matchText", "x"));
+            round++;
+        }
+        task.set("matches", arr);
+        files.put(taskId, task);
+        return new TaskSearchService.SearchOutcome(files, fields.length, false);
+    }
+
+    private static SearchProvider.TaskSearchResult.Match tmatch(int roundIndex, String field, int matchIndex) {
+        return new SearchProvider.TaskSearchResult.Match(roundIndex, field, "line " + field, matchIndex, "x");
+    }
+
+    private static SearchProvider.TaskSearchResult taskHit(String taskId,
+            SearchProvider.TaskSearchResult.Match... matches) {
+        return new SearchProvider.TaskSearchResult(taskId, "插件任务", "/ws", "defaultworkspace",
+                "running", List.of(matches));
+    }
+
+    /** 桩 provider:固定返回任务命中,或构造时给 error 则每次调用抛出。 */
+    private static final class StubProvider implements SearchProvider {
+        private final String id;
+        private final List<TaskSearchResult> tasks;
+        private final RuntimeException error;
+
+        StubProvider(String id, List<TaskSearchResult> tasks) {
+            this(id, tasks, null);
+        }
+
+        StubProvider(String id, List<TaskSearchResult> tasks, RuntimeException error) {
+            this.id = id;
+            this.tasks = tasks;
+            this.error = error;
+        }
+
+        @Override
+        public String id() {
+            return id;
+        }
+
+        @Override
+        public List<SearchResult> searchFiles(SearchRequest req) {
+            return List.of();
+        }
+
+        @Override
+        public List<TaskSearchResult> searchTasks(TaskSearchRequest req) {
+            if (error != null) {
+                throw error;
+            }
+            return tasks;
+        }
+    }
+
+    private static SearchProvider.TaskSearchRequest anyTaskReq() {
+        return new SearchProvider.TaskSearchRequest("defaultworkspace", "x", false, false, false, 500);
+    }
+
+    @Test
+    void providerTaskResultsAppendedWithDedup() {
+        TaskSearchService.SearchOutcome builtIn = taskOutcomeOf("t1", "user", "finalReply");
+        SearchProviderRegistry registry = new SearchProviderRegistry();
+        registry.register(new StubProvider("p1", List.of(
+                taskHit("t1", tmatch(0, "user", 0)),          // 与内置同键(任务+轮+字段+位置)→ 去重
+                taskHit("t1", tmatch(5, "finalReply", 3)),    // 同任务新命中 → 并入 t1
+                taskHit("t9", tmatch(1, "user", 0)))));       // 新任务 → 新任务项
+
+        TaskSearchService.SearchOutcome merged = TaskSearchService.mergeProviderResults(
+                builtIn, registry, anyTaskReq(), 500);
+
+        assertEquals(4, merged.matchCount(), "内置 2 + 新增 2(去重 1)");
+        assertFalse(merged.truncated());
+        JsonNode t1 = merged.files().get("t1");
+        assertEquals(3, t1.path("matches").size(), "t1 = 内置 2 + provider 1");
+        assertEquals(5, t1.path("matches").path(2).path("roundIndex").asInt(), "provider 命中追加在尾部");
+        JsonNode t9 = merged.files().get("t9");
+        assertEquals("插件任务", t9.path("title").asString(), "新任务项按 provider 元数据建");
+        assertEquals("t1", merged.files().keySet().iterator().next(), "内置任务在前");
+    }
+
+    @Test
+    void providerTaskResultsCappedAtMaxResults() {
+        TaskSearchService.SearchOutcome builtIn = taskOutcomeOf("t1", "user", "finalReply");
+        SearchProviderRegistry registry = new SearchProviderRegistry();
+        registry.register(new StubProvider("p1", List.of(
+                taskHit("t2", tmatch(1, "user", 0), tmatch(2, "finalReply", 0), tmatch(3, "user", 0)))));
+
+        TaskSearchService.SearchOutcome merged = TaskSearchService.mergeProviderResults(
+                builtIn, registry, anyTaskReq(), 3);
+
+        assertEquals(3, merged.matchCount(), "触顶截断到 maxResults");
+        assertTrue(merged.truncated(), "命中未全量消费应置 truncated");
+        assertEquals(1, merged.files().get("t2").path("matches").size(), "只追加第 3 条");
+    }
+
+    @Test
+    void emptyRegistryReturnsOutcomeUnchanged() {
+        TaskSearchService.SearchOutcome builtIn = taskOutcomeOf("t1", "user");
+        TaskSearchService.SearchOutcome merged = TaskSearchService.mergeProviderResults(
+                builtIn, new SearchProviderRegistry(), anyTaskReq(), 500);
+        assertSame(builtIn, merged, "无 provider 注册时原样返回(零行为变化)");
+    }
+
+    @Test
+    void providerFailureSkippedOthersStillMerged() {
+        SearchProviderRegistry registry = new SearchProviderRegistry();
+        registry.register(new StubProvider("bad", List.of(), new RuntimeException("boom")));
+        registry.register(new StubProvider("good", List.of(taskHit("t7", tmatch(1, "user", 0)))));
+        TaskSearchService.SearchOutcome merged = TaskSearchService.mergeProviderResults(
+                taskOutcomeOf("t1", "user"), registry, anyTaskReq(), 500);
+        assertEquals(2, merged.matchCount(), "坏 provider 跳过,好 provider 照常合并");
+        assertTrue(merged.files().containsKey("t7"));
+    }
+
+    @Test
+    void providerEmptyOrNullResultsNoTaskEntry() {
+        SearchProviderRegistry registry = new SearchProviderRegistry();
+        registry.register(new StubProvider("nullish", null));
+        registry.register(new StubProvider("emptyList", List.of()));
+        registry.register(new StubProvider("emptyMatches", List.of(taskHit("t8"))));
+        TaskSearchService.SearchOutcome builtIn = taskOutcomeOf("t1", "user", "finalReply");
+        TaskSearchService.SearchOutcome merged = TaskSearchService.mergeProviderResults(
+                builtIn, registry, anyTaskReq(), 500);
+        assertEquals(2, merged.matchCount());
+        assertEquals(1, merged.files().size(), "空/null/零命中任务不产出空任务项");
+        assertFalse(merged.truncated());
     }
 }

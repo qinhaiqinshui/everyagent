@@ -196,7 +196,7 @@ public class MyFirstPlugin implements EveryAgentPlugin {
 | 3 | `registerSandboxProvider`（`:48`） | `SandboxProvider` | 提供沙箱后端（挂载 / 清理 / 探测） | [tools-and-sandbox.md](tools-and-sandbox.md) | sandbox-windows-mic（`:25`）、sandbox-windows-codex（`:47`）、sandbox-wsl-ubuntu（`:37`） |
 | 4 | `registerFileReferenceHandler`（`:69`） | `FileReferenceHandler` | 按扩展名处理输入里的 `@` 文件引用 | [tools-and-sandbox.md](tools-and-sandbox.md) | image-vision（`ImageVisionPlugin.java:30`，唯一） |
 | 5 | `registerAdvisorProvider`（`:45`） | `AdvisorProvider` | 向模型调用链贡献 Advisor | [advisors.md](advisors.md) | system-info（`SystemInfoPlugin.java:16`）、git（`:33`）、context-compression（`:18`）等 |
-| 6 | `registerSearchProvider`（`:51`） | `SearchProvider` | 搜索后端 | [advisors.md](advisors.md) | **零插件使用**（rg 全仓 `registerSearchProvider` 仅接口与实现自身） |
+| 6 | `registerSearchProvider`（`:51`） | `SearchProvider` | 搜索后端（fs.search / task.search 增补聚合） | [advisors.md](advisors.md) | 已接线、零插件使用（无内置范例；聚合行为由 worker 测试钉住） |
 | 7 | `registerAuthorizationHandler`（`:54`） | `AuthorizationHandler` | 授权决议链节点（无人值守 / AI 审议） | [advisors.md](advisors.md) | unattended（`UnattendedPlugin.java:23`）、ai-review（`:24`） |
 | 8 | `registerSkillContributor`（`:60`） | `SkillContributor` | 向 system prompt 与 `/` 菜单贡献 skill | [advisors.md](advisors.md) | subagent（`SubAgentPlugin.java:44`） |
 | 9 | `registerTokenEstimator`（`:63`） | `TokenEstimator` | 替换内置 Token 估算器 | [advisors.md](advisors.md) | model-rate-limit（`ModelRateLimitPlugin.java:35`） |

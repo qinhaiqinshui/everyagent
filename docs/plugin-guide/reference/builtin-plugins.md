@@ -71,7 +71,7 @@ has_children: false
 | ToolProvider（给模型加工具） | sandbox-windows-mic | `every-agent-plugins/sandbox-windows-mic/src/main/java/dev/everyagent/plugin/sandbox/mic/WindowsMicSandboxPlugin.java:31` | 入口仅 34 行，注册即用；更典型的工具型实现看 subagent（`SubAgentPlugin.java:31`） |
 | AdvisorProvider（请求/响应链增强） | system-info | `every-agent-plugins/system-info/src/main/java/dev/everyagent/plugin/sysinfo/SystemInfoAdvisorProvider.java` | 全仓最小 Advisor 范例（入口 19 行），只做请求前 system prompt 注入 |
 | SandboxProvider（自定义沙箱） | sandbox-windows-mic | `every-agent-plugins/sandbox-windows-mic/src/main/java/dev/everyagent/plugin/sandbox/mic/WindowsMicSandboxProvider.java:38-39` | 三实现中依赖最少（仅 jna）；优先级取值坐标参考 sandbox-wsl-ubuntu（priority=10） |
-| SearchProvider | **无内置范例** | —（声明：`every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/WorkerPluginContext.java:51`） | 25 个内置插件零使用，别照抄空气；详见 [已知问题](known-issues.md) |
+| SearchProvider | **无内置范例** | —（声明：`every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/WorkerPluginContext.java:51`） | 25 个内置插件零使用，别照抄空气；SPI 已接线（`fs.search`/`task.search` 增补聚合，见 [advisors §6](../backend/advisors.md)） |
 | AuthorizationHandler（接管授权闸门） | unattended | `every-agent-plugins/unattended/src/main/java/dev/everyagent/plugin/unattended/UnattendedPlugin.java:23` | 逻辑最短；带评审模型的进阶版看 ai-review（`AiReviewPlugin.java:24`） |
 | ToolExecutionInterceptor（拦截工具调用） | secret-redaction | `every-agent-plugins/secret-redaction/src/main/java/dev/everyagent/plugin/secretredaction/SecretRedactionPlugin.java:22` | 唯一「单 SPI 极简」实现（入口 24 行），上行掩码单向拦截 |
 | SkillContributor（贡献技能） | subagent | `every-agent-plugins/subagent/src/main/java/dev/everyagent/plugin/subagent/SubAgentPlugin.java:44` | 全仓唯一实现，别无分号 |

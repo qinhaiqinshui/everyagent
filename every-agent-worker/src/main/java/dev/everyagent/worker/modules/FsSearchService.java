@@ -3,6 +3,8 @@ package dev.everyagent.worker.modules;
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.worker.proto.RpcMethods;
 import dev.everyagent.plugin.api.exception.BadParamsException;
+import dev.everyagent.plugin.api.spi.SearchProvider;
+import dev.everyagent.worker.plugin.registry.SearchProviderRegistry;
 import dev.everyagent.worker.rpc.RpcDispatcher;
 import dev.everyagent.worker.rpc.RpcContext;
 import dev.everyagent.worker.tools.RipgrepBinary;
@@ -22,9 +24,11 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.regex.Pattern;
@@ -60,6 +64,12 @@ import java.util.regex.PatternSyntaxException;
  *
  * <p><b>流式性(一期)</b>:不边读边推 rpc.data,先把 JSON lines 聚合完再按序列化大小
  * 分批(代码简单;maxResults 默认 1000 兜住聚合内存)。
+ *
+ * <p><b>SearchProvider 增补聚合(§8.5)</b>:插件经 {@code ctx.registerSearchProvider}
+ * 注册的搜索后端不替换内置 rg——fs.search 在内置 rg 结果之后按注册序追加各 provider
+ * 结果(按 {@code path+lineNumber+matchIndex} 去重、仍受 maxResults 触顶约束,见
+ * {@link #mergeProviderResults});provider 异常仅 WARN 跳过;注册表为空时零额外行为;
+ * rg 不可用但注册了 provider 时跳过内置 rg、仅聚合 provider 结果。
  */
 @Component
 public class FsSearchService {
@@ -85,10 +95,13 @@ public class FsSearchService {
 
     private final WorkspaceManager workspaces;
     private final RipgrepBinary rg;
+    private final SearchProviderRegistry searchProviders;
 
-    public FsSearchService(RpcDispatcher dispatcher, WorkspaceManager workspaces, RipgrepBinary rg) {
+    public FsSearchService(RpcDispatcher dispatcher, WorkspaceManager workspaces, RipgrepBinary rg,
+            SearchProviderRegistry searchProviders) {
         this.workspaces = workspaces;
         this.rg = rg;
+        this.searchProviders = searchProviders;
         dispatcher.register(RpcMethods.FS_SEARCH, this::search);
         dispatcher.register(RpcMethods.FS_FIND, this::find);
     }
@@ -96,7 +109,8 @@ public class FsSearchService {
     // ---- RPC 入口 ----
 
     private void search(RpcContext ctx) throws IOException, InterruptedException {
-        if (!rg.available()) {
+        boolean providersRegistered = !searchProviders.getProviders().isEmpty();
+        if (!rg.available() && !providersRegistered) {
             throw new IOException("rg 不可用: 未找到内置 ripgrep(<程序根>/runtime/bin/ 或"
                     + " worker.tools.rg-path),无法执行工作区搜索");
         }
@@ -123,9 +137,14 @@ public class FsSearchService {
                 throw new BadParamsException("正则表达式非法: " + e.getMessage());
             }
         }
-        SearchOutcome out = run(root,
-                buildArgs(pattern, isRegex, caseSensitive, wholeWord, include, exclude, resolveScope(ctx, sb)),
-                maxResults);
+        // 内置 rg 搜索(rg 不可用但已注册 SearchProvider 时跳过,仅聚合 provider 结果,§8.5)
+        SearchOutcome out = rg.available()
+                ? run(root, buildArgs(pattern, isRegex, caseSensitive, wholeWord, include, exclude,
+                        resolveScope(ctx, sb)), maxResults)
+                : new SearchOutcome(new LinkedHashMap<>(), 0, false);
+        out = mergeProviderResults(out, searchProviders, new SearchProvider.SearchRequest(
+                workspaces.idOfRoot(root.toString()), root, pattern, isRegex, caseSensitive,
+                wholeWord, include, exclude, maxResults), maxResults);
         reply(ctx, out);
     }
 
@@ -209,6 +228,74 @@ public class FsSearchService {
         });
         boolean truncated = finishTruncated(r, files.size(), "fs.find");
         return new SearchOutcome(files, files.size(), truncated);
+    }
+
+    // ---- SearchProvider 增补聚合 ----
+
+    /**
+     * 把插件 SearchProvider 的结果增补聚合进内置 rg 结果(§8.5):注册表为空或内置结果已
+     * 触顶(maxResults)时原样返回——零行为变化;provider 结果按注册序追加在内置结果之后,
+     * 按位置键 {@code path+lineNumber+matchIndex} 去重(多引擎命中同一位置只计一条);
+     * 合并后仍受 maxResults 触顶约束(触顶置 truncated 并终止 provider 循环);单个
+     * provider 抛异常仅 WARN 跳过,不影响其余结果与应答;provider 返回 null/空列表不加项。
+     */
+    static SearchOutcome mergeProviderResults(SearchOutcome builtIn, SearchProviderRegistry registry,
+            SearchProvider.SearchRequest req, int maxResults) {
+        List<SearchProvider> providers = registry.getProviders();
+        if (providers.isEmpty() || builtIn.matchCount() >= maxResults) {
+            return builtIn;
+        }
+        LinkedHashMap<String, ObjectNode> files = new LinkedHashMap<>(builtIn.files());
+        Set<String> seen = new HashSet<>();
+        for (ObjectNode file : files.values()) {
+            for (JsonNode m : file.path("matches")) {
+                seen.add(file.path("path").asString() + "\u0000" + m.path("lineNumber").asInt()
+                        + "\u0000" + m.path("matchIndex").asInt());
+            }
+        }
+        int count = builtIn.matchCount();
+        boolean truncated = builtIn.truncated();
+        outer:
+        for (SearchProvider provider : providers) {
+            List<SearchProvider.SearchResult> hits;
+            try {
+                hits = provider.searchFiles(req);
+            } catch (RuntimeException e) {
+                log.warn("[fs.search] SearchProvider {} 执行失败,跳过", provider.id(), e);
+                continue;
+            }
+            if (hits == null) {
+                continue;
+            }
+            for (SearchProvider.SearchResult hit : hits) {
+                if (count >= maxResults) {
+                    truncated = true;
+                    break outer;
+                }
+                if (!seen.add(hit.path() + "\u0000" + hit.lineNumber() + "\u0000" + hit.matchIndex())) {
+                    continue;
+                }
+                appendProviderHit(files, hit);
+                count++;
+            }
+        }
+        return new SearchOutcome(files, count, truncated);
+    }
+
+    /** provider 命中追加进 files 聚合(同文件命中并入同一文件项,形状与 {@link #append} 一致)。 */
+    private static void appendProviderHit(LinkedHashMap<String, ObjectNode> files,
+            SearchProvider.SearchResult hit) {
+        ObjectNode file = files.get(hit.path());
+        if (file == null) {
+            file = Json.obj().put("path", hit.path());
+            file.set("matches", Json.arr());
+            files.put(hit.path(), file);
+        }
+        ((ArrayNode) file.get("matches")).add(Json.obj()
+                .put("lineNumber", hit.lineNumber())
+                .put("line", hit.line())
+                .put("matchIndex", hit.matchIndex())
+                .put("matchText", hit.matchText()));
     }
 
     /** execRg 的逐行消费者:返回 true 继续消费,false = 触顶停止(外层 kill rg)。 */

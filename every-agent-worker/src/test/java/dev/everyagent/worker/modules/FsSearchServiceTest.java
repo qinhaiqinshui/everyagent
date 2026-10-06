@@ -5,6 +5,8 @@ import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.hub.HubLink;
 import dev.everyagent.worker.hub.HubPool;
 import dev.everyagent.plugin.api.event.Channels;
+import dev.everyagent.plugin.api.spi.SearchProvider;
+import dev.everyagent.worker.plugin.registry.SearchProviderRegistry;
 import dev.everyagent.worker.proto.RpcMethods;
 import dev.everyagent.worker.rpc.RpcDispatcher;
 import dev.everyagent.worker.modules.WorkspaceCascadePort;
@@ -15,6 +17,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.beans.factory.ObjectProvider;
 import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.node.ArrayNode;
 import tools.jackson.databind.node.ObjectNode;
 
 import java.io.File;
@@ -22,6 +25,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
@@ -30,6 +34,7 @@ import java.util.concurrent.TimeUnit;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
@@ -61,6 +66,10 @@ class FsSearchServiceTest {
 
     @BeforeEach
     void setUp() throws Exception {
+        // 环境栅栏:沙箱 TEMP 可能落在某个 git 工作树内,rg 会向上继承其 .gitignore
+        // (如 *.log)导致 meta.log 夹具被静默跳过;在临时根放一个空 .git 目录,
+        // rg 即以临时根为仓库边界,测试与 TEMP 位置解耦。
+        Files.createDirectories(tempDir.resolve(".git"));
         WorkerProperties props = new WorkerProperties();
         props.setHomeDir(tempDir.resolve("home").toString());
         props.setHomeDir(tempDir.resolve("data").toString());
@@ -78,7 +87,7 @@ class FsSearchServiceTest {
         workspaces = new WorkspaceManager(props, mock(RpcDispatcher.class), mock(HubPool.class),
                 provider, new dev.everyagent.worker.os.SandboxPathRegistry(new dev.everyagent.worker.os.OsSandbox(props, null)));
         workspaces.init();
-        new FsSearchService(dispatcher, workspaces, new RipgrepBinary(props));
+        new FsSearchService(dispatcher, workspaces, new RipgrepBinary(props), new SearchProviderRegistry());
     }
 
     /** 测试环境 rg 定位:程序根 runtime/bin(IDE/打包)→ 模块父目录(maven,user.dir=模块)→ PATH。 */
@@ -558,7 +567,7 @@ class FsSearchServiceTest {
         WorkerProperties props = new WorkerProperties();
         props.getTools().setRgPath(tempDir.resolve("no-such-rg").toString());
         RpcDispatcher d = new RpcDispatcher(null, new WorkerProperties());
-        new FsSearchService(d, workspaces, new RipgrepBinary(props));
+        new FsSearchService(d, workspaces, new RipgrepBinary(props), new SearchProviderRegistry());
         CountDownLatch replied = new CountDownLatch(1);
         List<Object[]> frames = new ArrayList<>();
         HubLink link = mock(HubLink.class);
@@ -587,5 +596,188 @@ class FsSearchServiceTest {
         JsonNode err = (JsonNode) last[3];
         assertEquals("INTERNAL", err.path("code").asString(), err.toString());
         assertTrue(err.path("message").asString().contains("rg 不可用"), err.toString());
+    }
+
+    // ---- ⑤ SearchProvider 增补聚合(纯函数,不依赖 rg) ----
+
+    /** 造一条内置 rg 形态的 outcome:单文件若干命中(行号逐条给定,matchIndex 恒 0)。 */
+    private static FsSearchService.SearchOutcome outcomeOf(String path, int... lineNumbers) {
+        LinkedHashMap<String, ObjectNode> files = new LinkedHashMap<>();
+        ObjectNode file = Json.obj().put("path", path);
+        ArrayNode arr = Json.arr();
+        for (int ln : lineNumbers) {
+            arr.add(Json.obj().put("lineNumber", ln).put("line", "l" + ln)
+                    .put("matchIndex", 0).put("matchText", "x"));
+        }
+        file.set("matches", arr);
+        files.put(path, file);
+        return new FsSearchService.SearchOutcome(files, lineNumbers.length, false);
+    }
+
+    private static SearchProvider.SearchResult hit(String path, int lineNumber, int matchIndex) {
+        return new SearchProvider.SearchResult(path, lineNumber, "line " + lineNumber, matchIndex, "x");
+    }
+
+    /** 桩 provider:固定返回文件命中,或构造时给 error 则每次调用抛出。 */
+    private static final class StubProvider implements SearchProvider {
+        private final String id;
+        private final List<SearchResult> files;
+        private final RuntimeException error;
+
+        StubProvider(String id, List<SearchResult> files) {
+            this(id, files, null);
+        }
+
+        StubProvider(String id, List<SearchResult> files, RuntimeException error) {
+            this.id = id;
+            this.files = files;
+            this.error = error;
+        }
+
+        @Override
+        public String id() {
+            return id;
+        }
+
+        @Override
+        public List<SearchResult> searchFiles(SearchRequest req) {
+            if (error != null) {
+                throw error;
+            }
+            return files;
+        }
+
+        @Override
+        public List<TaskSearchResult> searchTasks(TaskSearchRequest req) {
+            return List.of();
+        }
+    }
+
+    private static SearchProvider.SearchRequest anyReq() {
+        return new SearchProvider.SearchRequest("ws1", Path.of("."), "x", false, false, false,
+                List.of(), List.of(), 1000);
+    }
+
+    @Test
+    void providerResultsAppendedAfterBuiltinWithDedup() {
+        FsSearchService.SearchOutcome builtIn = outcomeOf("a.txt", 1, 3);
+        SearchProviderRegistry registry = new SearchProviderRegistry();
+        registry.register(new StubProvider("p1", List.of(
+                hit("a.txt", 1, 0),   // 与内置重复(path+line+index 同键)→ 去重
+                hit("a.txt", 9, 0),   // 同文件新命中 → 并入 a.txt
+                hit("b.md", 2, 4)))); // 新文件 → 新文件项
+
+        FsSearchService.SearchOutcome merged = FsSearchService.mergeProviderResults(
+                builtIn, registry, anyReq(), 1000);
+
+        assertEquals(4, merged.matchCount(), "内置 2 + 新增 2(去重 1)");
+        assertFalse(merged.truncated());
+        JsonNode a = merged.files().get("a.txt");
+        assertEquals(3, a.path("matches").size(), "a.txt = 内置 2 + provider 1");
+        assertEquals(9, a.path("matches").path(2).path("lineNumber").asInt(), "provider 命中追加在尾部");
+        JsonNode b = merged.files().get("b.md");
+        assertEquals(2, b.path("matches").path(0).path("lineNumber").asInt());
+        assertEquals(4, b.path("matches").path(0).path("matchIndex").asInt());
+        // 内置顺序在前:a.txt 在 b.md 之前
+        assertEquals("a.txt", merged.files().keySet().iterator().next());
+    }
+
+    @Test
+    void providerResultsCappedAtMaxResultsMarkTruncated() {
+        FsSearchService.SearchOutcome builtIn = outcomeOf("a.txt", 1, 2); // 已有 2
+        SearchProviderRegistry registry = new SearchProviderRegistry();
+        registry.register(new StubProvider("p1", List.of(
+                hit("a.txt", 10, 0), hit("a.txt", 11, 0), hit("a.txt", 12, 0))));
+
+        FsSearchService.SearchOutcome merged = FsSearchService.mergeProviderResults(
+                builtIn, registry, anyReq(), 3);
+
+        assertEquals(3, merged.matchCount(), "触顶截断到 maxResults");
+        assertTrue(merged.truncated(), "provider 命中未全量消费应置 truncated");
+        assertEquals(10, merged.files().get("a.txt").path("matches").path(2).path("lineNumber").asInt(),
+                "只追加第 3 条(行 10)");
+    }
+
+    @Test
+    void emptyRegistryReturnsOutcomeUnchanged() {
+        FsSearchService.SearchOutcome builtIn = outcomeOf("a.txt", 1);
+        FsSearchService.SearchOutcome merged = FsSearchService.mergeProviderResults(
+                builtIn, new SearchProviderRegistry(), anyReq(), 1000);
+        assertSame(builtIn, merged, "无 provider 注册时原样返回(零行为变化)");
+    }
+
+    @Test
+    void builtinAtCapSkipsProvidersEntirely() {
+        FsSearchService.SearchOutcome builtIn = outcomeOf("a.txt", 1, 2);
+        SearchProviderRegistry registry = new SearchProviderRegistry();
+        registry.register(new StubProvider("p1", List.of(hit("a.txt", 9, 0))));
+        FsSearchService.SearchOutcome merged = FsSearchService.mergeProviderResults(
+                builtIn, registry, anyReq(), 2);
+        assertSame(builtIn, merged, "内置已触顶时无预算可加,跳过 provider");
+    }
+
+    @Test
+    void providerFailureSkippedOthersStillMerged() {
+        SearchProviderRegistry registry = new SearchProviderRegistry();
+        registry.register(new StubProvider("bad", List.of(), new RuntimeException("boom")));
+        registry.register(new StubProvider("good", List.of(hit("b.md", 5, 0))));
+        FsSearchService.SearchOutcome merged = FsSearchService.mergeProviderResults(
+                outcomeOf("a.txt", 1), registry, anyReq(), 1000);
+        assertEquals(2, merged.matchCount(), "坏 provider 跳过,好 provider 照常合并");
+        assertTrue(merged.files().containsKey("b.md"));
+    }
+
+    @Test
+    void providerNullAndEmptyResultsNoop() {
+        SearchProviderRegistry registry = new SearchProviderRegistry();
+        registry.register(new StubProvider("nullish", null));
+        registry.register(new StubProvider("empty", List.of()));
+        FsSearchService.SearchOutcome builtIn = outcomeOf("a.txt", 1, 2);
+        FsSearchService.SearchOutcome merged = FsSearchService.mergeProviderResults(
+                builtIn, registry, anyReq(), 1000);
+        assertEquals(2, merged.matchCount());
+        assertEquals(1, merged.files().size(), "空/null 结果不产出文件项");
+        assertFalse(merged.truncated());
+    }
+
+    @Test
+    void rgMissingWithProvidersServesProviderResultsOnly() throws Exception {
+        // rg 不可用但注册了 SearchProvider:跳过内置 rg,仅聚合 provider 结果(§8.5)
+        Files.createDirectories(ws);
+        WorkerProperties props = new WorkerProperties();
+        props.getTools().setRgPath(tempDir.resolve("no-such-rg-either").toString());
+        RpcDispatcher d = new RpcDispatcher(null, new WorkerProperties());
+        SearchProviderRegistry registry = new SearchProviderRegistry();
+        registry.register(new StubProvider("p1", List.of(hit("doc/x.md", 4, 2))));
+        new FsSearchService(d, workspaces, new RipgrepBinary(props), registry);
+        CountDownLatch replied = new CountDownLatch(1);
+        List<Object[]> frames = new ArrayList<>();
+        HubLink link = mock(HubLink.class);
+        when(link.k()).thenReturn("k");
+        when(link.workerId()).thenReturn("w");
+        doAnswer(inv -> {
+            synchronized (frames) {
+                frames.add(inv.getArguments());
+            }
+            replied.countDown();
+            return null;
+        }).when(link).pub(any(), any(), any(), any(), any());
+        ObjectNode payload = Json.obj().put("reqId", "req-p").put("method", RpcMethods.FS_SEARCH);
+        payload.set("params", params(ws, "x"));
+        ObjectNode frame = Json.obj()
+                .put("channel", Channels.workerCmd("k", "w"))
+                .put("event", "rpc");
+        frame.set("payload", payload);
+        d.onHubMessage(link, frame);
+        assertTrue(replied.await(10, TimeUnit.SECONDS));
+        Object[] last;
+        synchronized (frames) {
+            last = frames.get(frames.size() - 1);
+        }
+        assertEquals("rpc.ok", last[1], "有 provider 时 rg 缺失不再报错");
+        JsonNode result = ((JsonNode) last[3]).path("result");
+        assertEquals(1, result.path("matchCount").asInt());
+        assertEquals(4, result.path("files").path(0).path("matches").path(0).path("lineNumber").asInt());
+        assertFalse(result.path("truncated").asBoolean());
     }
 }
