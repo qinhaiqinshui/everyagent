@@ -26,8 +26,12 @@ import java.util.concurrent.atomic.AtomicReference;
  * 检测到 usage 帧（{@code completionTokens > 0}）时调 {@link TokenEstimator#calibrate}
  * 并重置累加器，为下一轮模型调用做准备。
  *
- * <p>位置：order = 0（核心基础设施层），在 advisor 链最外层——能看到所有模型调用轮的
- * chunk（包括工具循环递归各轮），不受下游 advisor 的 filter/聚合影响。
+ * <p>位置：order = 0 是绝对值、不在 HIGHEST_PRECEDENCE+N 体系内——数值上大于全链
+ * 所有 HP+N，实际排在 advisor 链最内层（紧贴模型调用，比 RateLimitAdvisor 的 HP+800
+ * 更内）。响应方向最先看到每轮模型调用的原始 chunk（包括工具循环递归各轮），不受外层
+ * advisor 的 filter/聚合影响，校准目的仍达成；请求方向则最晚进入，看不到最外层的入参
+ * 改写。插件新增 advisor 勿模仿此绝对值写法，应一律用 HP+N / TCA+N 表达式对齐坐标系
+ * （全链真实顺序见插件指南 advisors 篇 §2.2 的 order 表）。
  *
  * <p>思考差分：Spring AI 2.0.1 的 OpenAiChatModel 在每个 chunk 的 metadata 里带
  * reasoningContent 累积值，需做前缀差分取增量（与 {@code WorkerToolEventAdvisor} 同纪律）。
@@ -54,7 +58,8 @@ public class TokenCalibrationAdvisor implements CallAdvisor, StreamAdvisor {
 
     @Override
     public int getOrder() {
-        // 核心基础设施层（0~99），最外层，看到所有模型调用轮。
+        // 绝对值 0（非 HP+N 系）：数值大于全链所有 HP+N，实际位于链最内层；
+        // 响应侧最先看到每轮模型调用的原始 chunk（详见类注释「位置」段）。
         return 0;
     }
 
@@ -160,7 +165,7 @@ public class TokenCalibrationAdvisor implements CallAdvisor, StreamAdvisor {
     /**
      * Provider 适配器。
      *
-     * <p>order = 0（核心基础设施层），每 run 新建实例。经 {@link AdvisorContext#configId()} 获取 configId，
+     * <p>order = 0（绝对值，实际位于链最内层，见类注释「位置」段），每 run 新建实例。经 {@link AdvisorContext#configId()} 获取 configId，
      * 不再依赖 worker 内部类型（{@code AgentEntity} / {@code AdvisorContextImpl}）。
      */
     public static class Provider implements AdvisorProvider {
