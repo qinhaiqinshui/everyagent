@@ -24,7 +24,7 @@ worker 启动（Spring 容器装配完成 → PluginLoader.init() @PostConstruct
    │     └─ 无 target 产物 → 判为纯 web 插件，直接纳入            → source="builtin"
    ├─ ExternalPluginScanner.scan()               ┘
    │   根目录 = worker.plugins-dir（默认 <home>/plugins，<home> 默认 ~/.everyagent）
-   │   一级子目录根含 plugin.json 即纳入（不读 enabled）           → source="external"
+   │   一级子目录根含 plugin.json 且 enabled≠false 即纳入（enabled=false 跳过） → source="external"
    ▼
  PluginLoader.scanAndLoad()
    ├─ 单个扫描器抛异常 → WARN 后继续（扫描器级隔离）
@@ -54,7 +54,7 @@ worker 启动（Spring 容器装配完成 → PluginLoader.init() @PostConstruct
 | 扫描根 | `worker.builtin-plugins-dir`（`BuiltInPluginScanner.java:57`） | `worker.plugins-dir`（`ExternalPluginScanner.java:37`） |
 | 默认值 | **`user.dir` 下的 `every-agent-plugins/`**（`WorkerProperties.resolveBuiltinPluginsDir`，`every-agent-worker/src/main/java/dev/everyagent/worker/config/WorkerProperties.java:256-266`；相对路径按 JVM 工作目录解析，**cwd 决定插件是否被加载**） | `<系统目录>/plugins`，系统目录默认 `~/.everyagent`（`WorkerProperties.resolvePluginsDir:246-250` + `resolveHomeDir:212-216`） |
 | 配置值语法 | 空白=默认；`~` 开头展开为 `user.home`；否则字面路径（`WorkerProperties.java:256-266`） | 空白=默认；否则字面路径（`:246-250`） |
-| 一级子目录判定 | 根 `plugin.json` 存在且 `enabled!=false`，再按 `target/` 产物分流（§2.2） | 根 `plugin.json` 存在即纳入，**不读 `enabled`**（`ExternalPluginScanner.java:43-50`） |
+| 一级子目录判定 | 根 `plugin.json` 存在且 `enabled!=false`，再按 `target/` 产物分流（§2.2） | 根 `plugin.json` 存在且 `enabled!=false`（与内置同语义，`ExternalPluginScanner.java`） |
 | source 标记 | `"builtin"` | `"external"` |
 | 根目录不存在 | WARN 并返回空（`BuiltInPluginScanner.java:59-61`） | INFO 并返回空（`ExternalPluginScanner.java:38-41`） |
 

@@ -13,8 +13,8 @@ nav_order: 3
 
 ```
 worker 启动（@PostConstruct，全程只读一次）
-  ├─ BuiltInPluginScanner.scan()    每级子目录：根 plugin.json 存在 → 才算插件；只看 enabled
-  ├─ ExternalPluginScanner.scan()   ~/.everyagent/plugins/<dir>/plugin.json 存在 → 纳入；不看 enabled
+  ├─ BuiltInPluginScanner.scan()    每级子目录：根 plugin.json 存在 → 才算插件；先看 enabled
+  ├─ ExternalPluginScanner.scan()   ~/.everyagent/plugins/<dir>/plugin.json 存在且 enabled≠false → 纳入
   └─ PluginLoader.loadPlugin()      读 manifest（内置优先 target/classes/plugin.json）
                                     → id / name / version / description / author
                                       / main（兜底 provides.spi.EveryAgentPlugin）/ webMain
@@ -29,7 +29,7 @@ worker 启动（@PostConstruct，全程只读一次）
 | 读取者 | 读的字段 | 证据 |
 |---|---|---|
 | `BuiltInPluginScanner` | 仅 `enabled` | `every-agent-worker/src/main/java/dev/everyagent/worker/plugin/scanner/BuiltInPluginScanner.java:79-88`、`isEnabled` 实现 `:117-123` |
-| `ExternalPluginScanner` | 无（只看文件在不在） | `every-agent-worker/src/main/java/dev/everyagent/worker/plugin/scanner/ExternalPluginScanner.java:44-49` |
+| `ExternalPluginScanner` | 仅 `enabled`（与内置同语义） | `every-agent-worker/src/main/java/dev/everyagent/worker/plugin/scanner/ExternalPluginScanner.java`（`isEnabled` 同款私有实现） |
 | `PluginLoader` | `id/name/version/description/author/main/provides.spi.EveryAgentPlugin/webMain/contributes.config.*.default` + 禁用名单 | `every-agent-worker/src/main/java/dev/everyagent/worker/plugin/loader/PluginLoader.java:202-258` |
 | 前端 `pluginLoader.ts` | `plugin.list` 返回的 `active/hasWebMain/webMain/id`（清单字段一律不直接读文件） | `every-agent-web/src/plugin/pluginLoader.ts`（`webEntryJsPath` 消费 `webMain` 值） |
 
@@ -48,9 +48,9 @@ worker 启动（@PostConstruct，全程只读一次）
 | `version` | string | 否 | `"0.0.0"` | `PluginLoader.java:227` | 纯展示字符串：**不校验 semver、不与 Maven pom 版本比对、不参与任何兼容判定**（见 §7） |
 | `description` | string | 否 | `""` | `PluginLoader.java:228` | 仅展示 |
 | `author` | string | 否 | `""` | `PluginLoader.java:229` | 仅展示 |
-| `main` | string（Java 类 FQN） | java / full 形态必填 | `""` → 无 Java 入口，走「声明式插件」路径 | 取值为入口类：`PluginLoader.java:231`；反射加载：`:309-320` | FQN 必须与 `src/main/java` 路径逐段一致（§8）。**外部插件目录的清单不看 `enabled`，但看 `main` 有没有对应 jar**：`<id>/lib/*.jar` 为空 → status「无 jar 文件」 |
+| `main` | string（Java 类 FQN） | java / full 形态必填 | `""` → 无 Java 入口，走「声明式插件」路径 | 取值为入口类：`PluginLoader.java:231`；反射加载：`:309-320` | FQN 必须与 `src/main/java` 路径逐段一致（§8）。外部插件的清单同样受 `enabled` 约束（§6），且**看 `main` 有没有对应 jar**：`<id>/lib/*.jar` 为空 → status「无 jar 文件」 |
 | `webMain` | string（web 入口源码路径） | web / full 形态必填 | `""` → `hasWebMain=false`，前端直接不加载 | `PluginLoader.java:235` → `PluginRpcMethods.java`（`plugin.list` 同时下发 `hasWebMain` 与原始值） | 值**已被前端消费**：产物路径 = `webMain` 去扩展名拼 `.js`（空值回退 `web/index.js`），见 §5 |
-| `enabled` | boolean | 否（建议显式写） | `true`（缺省**或解析失败**都算 true） | `BuiltInPluginScanner.java:81`、`:117-123` | **只有内置扫描器看它**；外部扫描器完全不读（`ExternalPluginScanner.java:44-49`）⇒ 外部插件把 `enabled` 写成 `false` 一样会被扫描进目录。详见 §6 |
+| `enabled` | boolean | 否（建议显式写） | `true`（缺省**或解析失败**都算 true） | `BuiltInPluginScanner.java:81`、`:117-123`；`ExternalPluginScanner` 同款判定 | 内置与外部扫描器**都看它**（同语义：false → 整目录跳过、不加载、不进 `plugin.list`）。详见 §6 |
 | `contributes.config.<key>.default` | string / number / boolean | 否 | 无 `default` 键 = 该配置项不进入 map | `PluginLoader.java:248-258` → `PluginConfigImpl`（`every-agent-worker/.../plugin/PluginConfigImpl.java`） | 只有 `default` 被读；`type` / `description` **无人消费**（见 §2.2） |
 
 ### 2.2 `contributes.config` 的实际链路（比想象短）
@@ -210,12 +210,12 @@ CSS 同走换算路径：esbuild 把样式抽到与入口同名的 `.css`，宿�
 
 | 机制 | 写在哪 | 判在哪 | 效果 | 生效条件 |
 |---|---|---|---|---|
-| `enabled: false` | `plugin.json` | **只**在内置扫描期：`BuiltInPluginScanner.java:79-88` | 目录被**跳过**：不加载、不进 `plugin.list`、前端与扩展管理面板都**看不到它** | 重启 worker |
+| `enabled: false` | `plugin.json` | 扫描期：内置 `BuiltInPluginScanner.java:79-88` 与外部 `ExternalPluginScanner` **统一判定** | 目录被**跳过**：不加载、不进 `plugin.list`、前端与扩展管理面板都**看不到它** | 重启 worker |
 | 运行期禁用 | `~/.everyagent/plugins/.disabled-plugins`（每行一个 id，`PluginStateStore.java:38,74-104`），由 `plugin.disable` RPC 写（`PluginRpcMethods.java:153-166`） | 加载期：`PluginLoader.java:240-245` | 仍登记进目录（`plugin.list` 可见，`active=false`、`status="已禁用(未激活)"`），但**不调 `activate()`**，不注册任何贡献 | 重启 worker |
 
 两个坑：
 
-- **外部插件目录没有 `enabled` 语义**：`ExternalPluginScanner.java:44-49` 只判 `plugin.json` 是否存在，不读 `enabled`。想禁用外部插件只能用 `.disabled-plugins`（或把目录移走）。
+- **外部插件同样有 `enabled` 语义**：`ExternalPluginScanner` 与内置同款判定（缺省视为 true），`enabled=false` 整目录跳过、不加载——「装上但默认禁用」直接写它即可；用户运行期自主关停仍走 `.disabled-plugins`（或把目录移走）。
 - **为什么 `enabled` 检查要在 `target/` 判定之前做**：源码注释解释得很直白——避免「已构建但没清理的 `target/` 残留导致禁用插件被误加载」（`BuiltInPluginScanner.java:26-28`、`:76-78`）。实测仓内有两个内置插件正是这样关掉的：`every-agent-plugins/sandbox-windows-mic/plugin.json` 与 `every-agent-plugins/sandbox-wsl-ubuntu/plugin.json` 均 `"enabled": false`，且两者的 `target/` 都还在。
 - 缺省即 `true`；**解析失败也算 `true`**（`isEnabled` 的 `catch (Exception)` 宽容分支，`BuiltInPluginScanner.java:117-123`）。
 
@@ -233,7 +233,6 @@ CSS 同走换算路径：esbuild 把样式抽到与入口同名的 `.css`，宿�
 | 声明了 `main` 但 `target/` 下没有非 sources/javadoc 的 jar | 内置扫描器要求「有 `target/classes/plugin.json` 就得有 jar」 | 内置：WARN「`[plugins-builtin] 内置插件未构建,请先 mvn package: <目录>`」并**整目录跳过**（连纯 web 部分都不加载）；外部：能进目录，但 `lib/` 无 jar → `status = "无 jar 文件"` | `BuiltInPluginScanner.java:90-97`、`PluginLoader.java:269-291` |
 | `plugin.json` 的 `version` 与 pom 的 `<version>` 不一致（git 实测：清单 `0.1.0` vs pom `1.0.0`） | 两者**互不校验** | 没有任何影响：清单 version 纯展示；Maven 侧版本由 `pom.xml` 的 `<version>` 决定，产物 jar 名 `git-1.0.0.jar` 也随之而来（实测 `every-agent-plugins/git/target/git-1.0.0.jar`），而扫描器只按 `target/*.jar` **通配**取 jar，不看名字里的版本 | `every-agent-plugins/git/plugin.json`、`every-agent-plugins/git/pom.xml:7-13`、`BuiltInPluginScanner.java:134-152` |
 | 改完内置插件的 `plugin.json` 却不生效 | 见 §8：Java 形态读的是 `target/classes/` 里的**副本** | 根清单只有 `enabled` 字段被直接读；其余字段要重跑 `mvn` 复制才更新 | `BuiltInPluginScanner.java:193-202`、`PluginLoader.java:198-212` |
-| 外部插件写成 `"enabled": false` 以为能关掉 | 外部扫描不看 `enabled` | 照旧纳入目录 | `ExternalPluginScanner.java:44-49` |
 
 ## 8. 与 `pom.xml` 的对应关系
 

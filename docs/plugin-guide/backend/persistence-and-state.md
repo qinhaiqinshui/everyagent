@@ -146,14 +146,14 @@ plugin.json 的 contributes.config.*.default
 
 两套机制作用在加载链的不同阶段，可见性与生效面都不同。
 
-### 3.1 `enabled=false`（plugin.json 字段）——扫描期跳过，只有内置扫描器读
+### 3.1 `enabled=false`（plugin.json 字段）——扫描期整目录跳过，两把扫描器统一读
 
-`BuiltInPluginScanner.scan()` 对每个一级子目录**先查根 plugin.json 的 enabled**（`every-agent-worker/src/main/java/dev/everyagent/worker/plugin/scanner/BuiltInPluginScanner.java:79-84`）：
+内置与外部扫描器都在扫描期读根 `plugin.json` 的 `enabled` 字段，语义完全一致：
 
-- `isEnabled`（`:117-127`）：`json.path("enabled").asBoolean(true)`——**缺省视为 true，解析失败也视为 true**（宽容，不因格式错误阻止加载）；
-- false → 打 INFO「插件已禁用(enabled=false)，跳过」并 `continue`（`:82-84`）——插件**根本不进扫描结果**，`PluginLoader` 无从加载，`plugin.list` 里**完全不出现**（连「已禁用」条目都没有）。
+- 判定（`BuiltInPluginScanner.isEnabled` 与 `ExternalPluginScanner.isEnabled` 同款实现）：`json.path("enabled").asBoolean(true)`——**缺省视为 true，解析失败也视为 true**（宽容，不因格式错误阻止加载）；
+- false → 打 INFO「插件已禁用(enabled=false)，跳过」并整目录 `continue`——插件**根本不进扫描结果**，`PluginLoader` 无从加载，`plugin.list` 里**完全不出现**（连「已禁用」条目都没有）。
 
-**外部插件不读这个字段**：`ExternalPluginScanner.scan()` 的过滤链只检查「是一级子目录 + 根有 plugin.json」（`every-agent-worker/src/main/java/dev/everyagent/worker/plugin/scanner/ExternalPluginScanner.java:36-54`），文件内 rg `enabled|isEnabled` **零命中**——外部插件把 `enabled` 写 `false` **不生效**，禁用外部插件只能靠 `.disabled-plugins` 或删目录（此坑已登记进 [plugin-manifest.md](../plugin-manifest.md)）。
+内置侧由 `BuiltInPluginScanner.scan()` 先查根 plugin.json（`every-agent-worker/src/main/java/dev/everyagent/worker/plugin/scanner/BuiltInPluginScanner.java:79-84`，刻意放在 `target/` 判定之前，防已构建残留误加载）；外部侧由 `ExternalPluginScanner.scan()` 在纳入前同样检查（`every-agent-worker/src/main/java/dev/everyagent/worker/plugin/scanner/ExternalPluginScanner.java`）——外部插件想「装上但默认禁用」，在 plugin.json 里写 `"enabled": false` 即可，不再需要 `.disabled-plugins` 或删目录绕行。
 
 ### 3.2 `.disabled-plugins`（PluginStateStore）——加载期不激活，但仍登记
 
@@ -166,13 +166,13 @@ plugin.json 的 contributes.config.*.default
 
 | 维度 | `enabled=false`（plugin.json） | `.disabled-plugins` 文件 |
 |---|---|---|
-| 阶段 | 扫描期（扫描器跳过，`BuiltInPluginScanner.java:81-84`） | 加载期（不 activate 但登记，`PluginLoader.java:238-246`） |
-| 谁读 | **仅** BuiltInPluginScanner（`isEnabled`）；ExternalPluginScanner 零判定 | `PluginStateStore`（内置/外部统一管） |
+| 阶段 | 扫描期（两把扫描器统一整目录跳过，`BuiltInPluginScanner.java:81-84` / `ExternalPluginScanner.java`） | 加载期（不 activate 但登记，`PluginLoader.java:238-246`） |
+| 谁读 | BuiltInPluginScanner 与 ExternalPluginScanner **统一读**（各自 `isEnabled`，缺省视为 true） | `PluginStateStore`（内置/外部统一管） |
 | `plugin.list` 是否可见 | ❌ 完全不出现 | ✅ 出现，`disabledIds` 含其 id |
-| 对外部插件是否生效 | ❌ 不生效 | ✅ 生效 |
+| 对外部插件是否生效 | ✅ 生效（扫描期整目录跳过，与内置同语义） | ✅ 生效 |
 | 当前进程内立即生效？ | ❌（配置是启动期读的） | ❌（已激活的贡献留在注册表里，`PluginStateStore.java:29` javadoc 自证） |
 | 恢复方式 | 改回 plugin.json + 重启 | `plugin.enable` RPC（或手删文件行）+ 重启 |
-| 适合场景 | 随分发包声明「默认不启用」（如 sandbox-windows-mic、sandbox-wsl-ubuntu 的 `enabled:false`） | 用户运行期自主关停某插件 |
+| 适合场景 | 随分发包声明「默认不启用」（内置 sandbox-windows-mic、sandbox-wsl-ubuntu 的 `enabled:false` 先例；外部插件同样支持） | 用户运行期自主关停某插件 |
 
 **均须重启 worker 才真正生效**：禁用对当前进程不回收任何已注册贡献（deactivate 只在 worker 优雅关闭时调用，§5.1）；启用同理——本轮进程里它从未被 activate，重启才会走加载链。
 
