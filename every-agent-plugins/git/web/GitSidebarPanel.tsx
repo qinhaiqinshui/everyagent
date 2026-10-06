@@ -32,6 +32,7 @@ import {
 } from './gitGateway'
 import SidebarScrollArea from './SidebarScrollArea'
 import MoreActionsButton, { MenuList, type MoreActionItem, type MenuListItem } from './Menu'
+import { useGitUiRefreshTriggers } from './useGitUiRefreshTriggers'
 
 interface GitStatusResult {
   branch?: string
@@ -290,8 +291,11 @@ function GitWorkspaceGroupPanel({
       message.error(refreshError instanceof Error ? refreshError.message : '读取 git 状态失败')
     } finally {
       setBusy(null)
+      // 广播本插件级事件:角标等本插件其它视图随之重新拉取——应用内 commit/discard/
+      // delete 等操作后角标不再滞留旧计数(worker 的 git.* RPC 不发 fs.changed)。
+      ctx.events.emit('git-plugin:status-refreshed', { workspaceRoot })
     }
-  }, [workspaceRoot, message])
+  }, [workspaceRoot, message, ctx])
 
   // 工作区「Git 历史」加载:首次展开时调用并缓存;手动刷新(带 toast 报错)强制重新拉取。
   const loadWorkspaceHistory = React.useCallback(async (showErrorToast: boolean) => {
@@ -329,16 +333,14 @@ function GitWorkspaceGroupPanel({
     }
   }, [connected, hasWorker, refresh])
 
-  // 侧边栏切到本面板时主动刷新,确保状态反映最新落盘。
-  React.useEffect(() => {
-    const disposable = ctx.events.on('sidebar-panel-shown', (payload) => {
-      if ((payload as { panelId?: string } | undefined)?.panelId !== 'git') return
-      if (connected && hasWorker) {
-        void refresh()
-      }
-    })
-    return () => disposable.dispose()
-  }, [refresh, connected, hasWorker, ctx])
+  // 刷新时机对齐 VS Code git 扩展(事件驱动、零定时器,见 useGitUiRefreshTriggers):
+  // 打开本面板 / agent 写文件后(仅前台)/ 从后台切回前台;应用内 git 操作后由 refresh() 自身刷新。
+  const handleExternalRefresh = React.useCallback(() => {
+    if (connected && hasWorker) {
+      void refresh()
+    }
+  }, [connected, hasWorker, refresh])
+  useGitUiRefreshTriggers(handleExternalRefresh)
 
   const leaves = React.useMemo(() => (status ? collectLeaves(status) : []), [status])
   const treeData = React.useMemo(() => buildTreeData(leaves), [leaves])
