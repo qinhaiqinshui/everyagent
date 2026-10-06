@@ -158,7 +158,7 @@ has_children: false
 | `ui.trace_types` | `registerTraceType(def)` | [UI §10](../web/ui-extensions.md#10-uitrace_types--trace-类型渲染) | ai-review（auth.review）；⚠️ dispose 假 |
 | `ui.output_blocks` | `registerOutputBlock(def)` | [UI §11](../web/ui-extensions.md#11-uioutput_blocks--输出块渲染) | ⚠️ 无内置范例；dispose 假 |
 | `ui.file_content_editors` | `registerFileContentEditor(desc)` | [UI §12](../web/ui-extensions.md#12-uifile_content_editors--文件内容编辑器) | pdf-viewer（.pdf） |
-| `ui.file_explorer_actions` | `registerFileExplorerAction(action)` ⚠️ | [UI §13](../web/ui-extensions.md#13-uifile_explorer_actions--文件树右键菜单-死扩展点) | git 注册但宿主无消费点（死扩展点） |
+| `ui.file_explorer_actions` | `registerFileExplorerAction(action)` | [UI §13](../web/ui-extensions.md#13-uifile_explorer_actions--文件树右键菜单) | git「显示 Git 历史」（追加到内置右键菜单尾部） |
 | `ui.round_tail_panels` | `registerRoundTailPanel(def)` | [UI §14](../web/ui-extensions.md#14-uiround_tail_panels--轮末展示区) | file-change |
 
 动作方法（不注册、只驱动宿主；桥未注入时静默降级）：详解全部在 [UI §15](../web/ui-extensions.md#15-uiregistry-动作方法5-个)。

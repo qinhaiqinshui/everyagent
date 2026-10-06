@@ -108,7 +108,7 @@ has_children: false
 | `ui.trace_types`（trace 渲染类型） | ai-review | `every-agent-plugins/ai-review/web/index.ts:16-36` | 唯一使用者，descriptor 定义 + 注册一体 |
 | `ui.output_blocks` | **无内置范例** | — | 扩展点已声明但零使用，见 [已知问题](known-issues.md) |
 | `ui.file_content_editors`（文件内容编辑器） | pdf-viewer | `every-agent-plugins/pdf-viewer/web/index.ts:14-19` | 唯一使用者 + web-only 形态最小样本（无 pom 无 src） |
-| `ui.file_explorer_actions`（文件树右键动作） | git | `every-agent-plugins/git/web/index.ts:42-53` | 唯一注册者 ⚠️ 但宿主当前无消费点（死贡献，见 §5 git 小节） |
+| `ui.file_explorer_actions`（文件树右键动作） | git | `every-agent-plugins/git/web/index.ts:42-53` | 唯一注册者；动作追加到文件树右键菜单内置项尾部（[UI §13](../web/ui-extensions.md)） |
 | `ui.round_tail_panels`（轮次尾面板） | file-change | `every-agent-plugins/file-change/web/index.ts:22` | 唯一使用者；配套 `ctx.events.on('task-round-closed')` 缓存作废范式 |
 
 另有非 register\* 的服务通道 `WorkerServices.addRoundClosedListener`（`every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/WorkerServices.java:80`），唯一使用者 file-change（`FileChangePlugin.java:33`）。
@@ -212,7 +212,7 @@ has_children: false
 
 13 个 `git.*` RPC + 自动同步 Advisor + 完整 Web 界面（侧边栏 / 历史标签 / diff），both 形态的集大成者。
 - 关键文件：`~plugins/git/src/main/java/dev/everyagent/plugin/git/GitPlugin.java:33-54`；`~plugins/git/web/index.ts:28-53`。
-- ⚠️ `web/index.ts:2` 注释自称「纯 Web 插件」，实际 plugin.json 有 `main`（both 形态）；⚠️ `web/index.ts:4` 引用已删除的 `builtInPlugins.ts`；⚠️ **死贡献两处**：`SidebarItem.Badge`（GitChangeBadge）宿主不消费，注册的 `ui.file_explorer_actions`（git-show-history）宿主无消费点。
+- ⚠️ `web/index.ts:2` 注释自称「纯 Web 插件」，实际 plugin.json 有 `main`（both 形态）；⚠️ `web/index.ts:4` 引用已删除的 `builtInPlugins.ts`；⚠️ **死贡献一处**：`SidebarItem.Badge`（GitChangeBadge）宿主不消费；`ui.file_explorer_actions`（git-show-history）已接线——右键菜单可见「显示 Git 历史」。
 - 值得看：`registerRpcMethod` 批量注册（方法名常量集中 `GitRpcMethods.java:4-16`）；前端 `ctx.fs.listDir/delete`、`ctx.sdk.workspace` 的用法。
 
 ### image-vision（图片识别）

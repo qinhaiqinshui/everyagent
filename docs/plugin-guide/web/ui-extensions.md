@@ -353,26 +353,26 @@ ctx.ui.registerFileContentEditor(descriptor)
 - **坑**：`extensions` 写大写或漏点号永远匹配不上（`normalizeExtension` 强制小写取点后缀，`editors/registry.ts:29-38`）。
 - **内置范例**：pdf-viewer（`every-agent-plugins/pdf-viewer/web/index.ts:14-19`，`.pdf` 原生 iframe 预览，descriptor 定义于 `PdfFileEditor.tsx`）。
 
-## 13. `ui.file_explorer_actions` —— 文件树右键菜单（⚠️ 死扩展点）
+## 13. `ui.file_explorer_actions` —— 文件树右键菜单
 
-### 13.1 Definition 字段表（`FileExplorerAction`，`js/index.ts:592-604`；ctx `FileExplorerActionContext` `js/index.ts:577-590`）
+### 13.1 Definition 字段表（`FileExplorerAction`，`js/index.ts:592-604`；ctx `FileExplorerActionContext`，`js/index.ts:577-590`）
 
 | 字段 | 类型 | 必填 | 消费位置（宿主） | 说明 |
 |---|---|---|---|---|
-| `id` | `string` | ✅ | **无消费点** | 全局唯一动作 id |
-| `label` | `string` | ✅ | **无消费点** | 菜单文案 |
-| `icon` | `ReactNode?` | — | **无消费点** | 可选图标 |
-| `isVisible` | `(ctx) => boolean?` | — | **无消费点** | 缺省恒显示 |
-| `invoke` | `(ctx) => void?` | — | **无消费点** | 点击回调 |
+| `id` | `string` | ✅ | `OpenFilesSidebarPanel.tsx` `getFileActionItems` | 全局唯一动作 id（菜单 key 冠以 `plugin:` 前缀防撞） |
+| `label` | `string` | ✅ | 同上 | 菜单文案 |
+| `icon` | `ReactNode?` | — | 同上 | 可选图标 |
+| `isVisible` | `(ctx) => boolean?` | — | 同上 | 缺省恒显示；返回 false 该上下文不出现 |
+| `invoke` | `(ctx) => void?` | — | 同上 | 点击回调 |
 
 `FileExplorerActionContext`：`{workspaceRoot, path, name, type:'file'|'directory'}`。
 
-### 13.2 结论：注册 API 在，宿主无消费点
+### 13.2 消费链（已接线）
 
-- 注册与读取 API 齐备：`registerFileExplorerAction` / `listRegisteredFileExplorerActions`（`PluginDispatcher.ts:297-302`），常量 `EXT_UI_FILE_EXPLORER_ACTIONS = 'ui.file_explorer_actions'`（`:50`）。
-- **宿主零消费**：`every-agent-web/src` 全目录 rg `'ui.file_explorer_actions'` 仅命中 `PluginDispatcher.ts:50`；rg `listRegisteredFileExplorerActions` 仅命中 `PluginDispatcher.ts:164,297-298`（声明与实现自身）。没有任何文件树/右键菜单组件调用它——类型注释宣称的「核心在构建右键菜单时收集所有注册项」（`js/index.ts:596-598`）**当前未实现**。
-- **内置唯一使用者 git 也白注册**：`every-agent-plugins/git/web/index.ts:41-53` 注册了「显示 Git 历史」菜单项（invoke 里 `ctx.ui.openPluginTab`），**当前注册了也不会显示，勿依赖**。git 历史入口请走侧边栏面板内的等价按钮。
-- 已登记为文档欠账（[已知问题](../reference/known-issues.md)），修码前以本节口径为准。
+- 注册与读取 API：`registerFileExplorerAction` / `listRegisteredFileExplorerActions`（`PluginDispatcher.ts`），扩展点名 `ui.file_explorer_actions`。
+- **消费点**：文件树右键/长按菜单构建处 `OpenFilesSidebarPanel.tsx` 的 `getFileActionItems`——先收集内置项（打开/新建/上传/属性/重命名/移动/搜索/下载/终端/系统文件管理器），再把插件注册项按 `isVisible(ctx)` 过滤后**追加到内置菜单项尾部**（与 `FileExplorerAction` 类型注释的约定一致）；面板订阅 `subscribeExtensionsChanged`，插件注册/注销后菜单即时刷新。
+- **内置范例**：git 的「显示 Git 历史」（`every-agent-plugins/git/web/index.ts:42-53`，invoke 里 `ctx.ui.openPluginTab` 打开 git-history 标签）——右键文件树任意节点即可见。
+- 历史欠账：该扩展点曾长期无宿主消费点（known-issues #1），已接线修复。
 
 ## 14. `ui.round_tail_panels` —— 轮末展示区
 

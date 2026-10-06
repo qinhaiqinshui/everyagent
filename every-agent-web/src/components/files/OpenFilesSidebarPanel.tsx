@@ -2,6 +2,7 @@ import React from 'react'
 import { useWorkspaceShell } from '../app/WorkspaceShellContext'
 import { useAppUi } from '@/components/app/AppUiContext'
 import { domainEventBus, DOMAIN_EVENTS } from '@/events/eventBus'
+import { pluginDispatcher } from '@/plugin/PluginDispatcher'
 import { WORKSPACE_EXPLORER_ROOT_LABEL, workspaceExplorerQueryService } from '@/query/workspaceExplorerQueryService'
 import { findExplorerNode, mergeExplorerChildrenPreservingLoaded, upsertExplorerChildren } from '@/query/workspaceExplorerTreeUtils'
 import { workspaceRegistry, workspaceActivity, type WorkspaceEntry } from '@/hub/workspaceRegistry'
@@ -735,6 +736,13 @@ function WorkspaceGroupPanel({
     }
   }, [])
 
+  // 插件扩展点注册表版本(ui.file_explorer_actions 等):插件注册/注销右键动作后
+  // 订阅版本变化触发重渲染,菜单在 titleRender 重新构建时即时反映最新注册项。
+  React.useSyncExternalStore(
+    pluginDispatcher.subscribeExtensionsChanged,
+    pluginDispatcher.getExtensionsVersion,
+  )
+
   const getFileActionItems = React.useCallback((target: WorkspaceExplorerContextTarget): ListRowActionItem[] => {
     const items: ListRowActionItem[] = []
     // 文件行显式提供「打开」:双击之外的第二入口,移动端长按菜单里是唯一入口。
@@ -820,6 +828,23 @@ function WorkspaceGroupPanel({
       icon: <FolderArrowOutIcon size={13} />,
       onSelect: () => handleRequestRevealInOs(target),
     })
+    // 插件注册的文件树右键动作(ui.file_explorer_actions 扩展点):
+    // 按 isVisible 过滤后追加到内置菜单项尾部(与 FileExplorerAction 类型注释的约定一致)。
+    const pluginActionCtx = {
+      workspaceRoot: target.workspaceRoot,
+      path: target.path,
+      name: target.name,
+      type: target.type,
+    }
+    for (const action of pluginDispatcher.listRegisteredFileExplorerActions()) {
+      if (action.isVisible && !action.isVisible(pluginActionCtx)) continue
+      items.push({
+        key: `plugin:${action.id}`,
+        label: action.label,
+        icon: action.icon,
+        onSelect: () => action.invoke?.(pluginActionCtx),
+      })
+    }
    return items
   }, [handleOpenFile, handleRequestCreate, handleRequestDownload, handleRequestMove, handleRequestOpenTerminal, handleRequestProperties, handleRequestRenameTarget, handleRequestRevealInOs, handleRequestSearch, handleRequestUpload])
 

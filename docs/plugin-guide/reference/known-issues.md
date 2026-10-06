@@ -17,12 +17,12 @@ has_children: false
 
 ## A. 前端宿主
 
-### #1 `ui.file_explorer_actions` 是死扩展点
+### #1 `ui.file_explorer_actions` 是死扩展点（✅ 已修复）
 
-- **现象**：注册 API 与列举 API 齐全（`every-agent-web/src/plugin/PluginDispatcher.ts:296-299` 的 `listRegisteredFileExplorerActions`、`:300` 的 `registerFileExplorerAction`），但宿主 UI **零消费**——`listRegisteredFileExplorerActions` 全仓只在定义处出现，没有任何界面调它；git 注册的 `git-show-history` 白注册（`every-agent-plugins/git/web/index.ts:42-53`）。
-- **影响**：插件作者按文档注册后**右键菜单不会出现任何项**，且无报错、无日志。
-- **规避**：需要「打开某个文件的历史 / 详情」的场景，改用 `ui.workspace_tab_types` + `ctx.ui.openPluginTab`（git 插件的历史面板走的就是这条路，其 tab 本身是活的）。
-- **待办**：二选一——宿主文件树接消费点，或从 plugin-api 删掉该扩展点（连同 manifest 贡献项）。详见 [UI 扩展点](../web/ui-extensions.md) §13。
+- **现象（修复前）**：注册 API 与列举 API 齐全（`every-agent-web/src/plugin/PluginDispatcher.ts` 的 `listRegisteredFileExplorerActions` / `registerFileExplorerAction`），但宿主 UI **零消费**——`listRegisteredFileExplorerActions` 全仓只在定义处出现，没有任何界面调它；git 注册的 `git-show-history` 白注册（`every-agent-plugins/git/web/index.ts:42-53`）。
+- **影响（修复前）**：插件作者按文档注册后**右键菜单不会出现任何项**，且无报错、无日志。
+- **修复**：文件树右键菜单消费点接线——`OpenFilesSidebarPanel.tsx` 的 `getFileActionItems` 在内置菜单项之后追加插件注册项（按 `isVisible` 过滤），面板订阅扩展点版本号，注册/注销即时刷新；git 的「显示 Git 历史」右键项已生效。
+- **后续**：无需规避；详见 [UI 扩展点](../web/ui-extensions.md) §13（已更新为接线后口径）。
 
 ### #2 `UiSidebarItemDefinition.Badge` 是死字段
 
