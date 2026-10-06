@@ -54,7 +54,7 @@
 - 每轮 token 用量、上下文占用一目了然。
 
 ### 🛡️ 安全沙箱 + 人机协作护栏
-- 命令在**沙箱**中执行:Windows 默认走 WSL2 托管发行版(可整体重装的可丢弃系统),工作区之外的宿主盘**不可见**;网络默认放行,可在任务内用 `/禁用网络` 单独关闭(这条命令由 wsl-ubuntu 沙箱插件自带——只有它能在发行版内 `unshare -n` 真断网,其他后端不挂这个开关);
+- 命令在**沙箱**中执行:Windows 默认走 **Codex 机制原生沙箱**(双本地账户 + WRITE_RESTRICTED 受限令牌 + capability SID + 防火墙/WFP,工作区之外只读不可写);另备 **WSL2 Ubuntu 发行版沙箱**(可整体重装的可丢弃系统,工作区之外的宿主盘完全不可见)与 **Windows 受限令牌沙箱**可选——三种后端全部是**可插拔的沙箱插件**,`worker.sandbox.type` 一行切换;网络默认放行,可在任务内用 `/禁用网络` 单独关闭(这条命令由 wsl-ubuntu 沙箱插件自带——只有它能在发行版内 `unshare -n` 真断网,其他后端不挂这个开关);
 - 工作区外操作 / 危险命令一律先**弹窗授权**(拒绝 / 本轮 / 本任务三档),可开 **AI 审议**自动裁决,亦可开 **无人值守**全自动跑完;
 - git 凭证 AES-GCM 加密存本机,不经网络传输。
 
@@ -234,7 +234,7 @@ worker:
 | `HUB_KEY`(环境变量) | hub key 原文,未配置 hub 拒绝启动(启动时自算 sha256) |
 | `WORKER_ID`(环境变量) | worker 身份,前端按此寻址 |
 | `EVERYAGENT_HOME` | 系统目录(模型配置/默认工作区/数据),默认 `~/.everyagent` |
-| `worker.sandbox.type` | `auto`(Windows 默认 wsl-direct) / `wsl-bwrap` / `windows-mic` / `none` |
+| `worker.sandbox.type` | `auto`(默认,取可用沙箱插件中优先级最高者) / `wsl-ubuntu` / `windows-mic` / `none`(旧值 `wsl-direct`、`wsl-bwrap` 自动归一) |
 | `worker.permissions.*` | 危险操作授权、AI 审议超时等(见架构文档 §7.8–§7.9) |
 
 ---

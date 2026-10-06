@@ -52,7 +52,7 @@
 - Per-round token usage and context consumption are clear at a glance.
 
 ### 🛡️ Security sandbox + human-AI collaboration guardrails
-- Commands run in a **sandbox**: on Windows it defaults to a WSL2 managed distribution (a disposable system that can be fully reinstalled); host drives **outside the workspace are invisible**. Network is allowed by default and can be disabled per-task via `/disable-network` (this command ships with the wsl-ubuntu sandbox plugin — it is the only backend that can truly cut the network via `unshare -n`).
+- Commands run in a **sandbox**: on Windows it defaults to a **Codex-style native sandbox** (dual local accounts + WRITE_RESTRICTED token + capability SIDs + firewall/WFP; outside the workspace everything is read-only); alternatively a **WSL2 Ubuntu distribution sandbox** (a disposable system that can be fully reinstalled, where host drives outside the workspace are completely invisible) or a **Windows restricted-token sandbox** — all three backends are **pluggable sandbox plugins**, switchable via one line of `worker.sandbox.type`. Network is allowed by default and can be disabled per-task via `/disable-network` (this command ships with the wsl-ubuntu sandbox plugin — it is the only backend that can truly cut the network via `unshare -n`).
 - Out-of-workspace operations / dangerous commands always require **popup authorization** (reject / this round / this task), with optional **AI review** for auto-adjudication or **unattended mode** to run fully automatically.
 - Git credentials are AES-GCM encrypted and stored locally, never transmitted over the network.
 
@@ -234,7 +234,7 @@ worker:
 | `HUB_KEY` (env var) | Hub key in plaintext; if not set, the hub refuses to start (sha256 computed at startup) |
 | `WORKER_ID` (env var) | Worker identity; the frontend addresses by this |
 | `EVERYAGENT_HOME` | System directory (model config / default workspace / data), default `~/.everyagent` |
-| `worker.sandbox.type` | `auto` (Windows defaults to wsl-direct) / `wsl-bwrap` / `windows-mic` / `none` |
+| `worker.sandbox.type` | `auto` (default; picks the highest-priority available sandbox plugin) / `wsl-ubuntu` / `windows-mic` / `none` (legacy values `wsl-direct` / `wsl-bwrap` are auto-normalized) |
 | `worker.permissions.*` | Dangerous operation authorization, AI review timeout, etc. (see Architecture §7.8–§7.9) |
 
 ---
