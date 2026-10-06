@@ -19,6 +19,7 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -30,14 +31,26 @@ import java.util.regex.Pattern;
 import java.util.regex.PatternSyntaxException;
 
 /**
- * 工作区文本内容搜索(fs.search,架构 §7 契约表):内置 ripgrep({@link RipgrepBinary},
- * §5.10)在工作区根做搜索,逐行解析 {@code rg --json} 的 JSON lines 为结构化结果。
+ * 工作区搜索模块(架构 §7 契约表):fs.search 文本内容搜索 + fs.find 文件名搜索,
+ * 内置 ripgrep({@link RipgrepBinary},§5.10)在工作区根(或其子目录范围)执行。
+ * fs.search 逐行解析 {@code rg --json} 的 JSON lines 为结构化结果;fs.find 用
+ * {@code rg --files} 枚举文件路径 + 本侧 basename 正则匹配。
  *
  * <p><b>jailed</b>:workspace 必填,经 {@link WorkspaceManager#resolve}(绝对路径 +
- * realpath + 非系统目录,与 fs.read 同源)落定工作区根;rg 进程 cwd 恒为工作区根、
- * 搜索路径参数恒为 {@code .},入参没有任何用户可控路径 → rg 只可能触碰工作区根之下
- * (include/exclude glob 只影响 rg 自身剪枝,不引入越界路径)。不经 OsSandbox 重沙箱
- * (与 NativeGit 同类的平台受控操作,前端显式触发),由「cwd 锁定 + 路径恒 .」兜底。
+ * realpath + 非系统目录,与 fs.read 同源)落定工作区根;rg 进程 cwd 恒为工作区根,
+ * 可选 {@code path}(子目录范围)经 {@link Sandbox#resolveExisting} 校验(realpath +
+ * 前缀校验防符号链接逃逸)后作为 rg 的搜索路径参数,缺省恒 {@code .} → rg 只可能
+ * 触碰工作区根之下(include/exclude glob 只影响 rg 自身剪枝,不引入越界路径)。
+ * 不经 OsSandbox 重沙箱(与 NativeGit 同类的平台受控操作,前端显式触发),由
+ * 「cwd 锁定 + 搜索路径 jailed」兜底。
+ *
+ * <p><b>fs.find</b>(文件名搜索):{@code rg --hidden --files --no-messages} 枚举
+ * (不配 --json——--files 下 --json 只吐 summary 不吐路径),basename 匹配在本侧用
+ * Java {@link Pattern} 完成(全字包裹/固定串转义与 {@link #buildMatchArgs} 同族
+ * 语义);matchCount = 命中文件数,结果项 {path}(无 matches 字段);分批/截断/
+ * 超时管道与 fs.search 共用。替代前端逐目录 fs.list 递归 walk(中型仓库数千次
+ * 串行 RPC,且单条目不可读即整树报错);rg 遵循 .gitignore、原生跳过不可读条目,
+ * 与 VSCode 默认搜索范围对齐。
  *
  * <p><b>结果形状</b>:与前端 workspaceContentSearch 的
  * {@code {matchCount, truncated, files:[{path, matches:[...]}]}} 对齐;单项命中
@@ -77,6 +90,7 @@ public class FsSearchService {
         this.workspaces = workspaces;
         this.rg = rg;
         dispatcher.register(RpcMethods.FS_SEARCH, this::search);
+        dispatcher.register(RpcMethods.FS_FIND, this::find);
     }
 
     // ---- RPC 入口 ----
@@ -87,7 +101,8 @@ public class FsSearchService {
                     + " worker.tools.rg-path),无法执行工作区搜索");
         }
         // jailed:workspace 必填,resolve 内完成绝对路径 + realpath + 非系统目录校验(与 fs.read 同源)
-        Path root = new Sandbox(workspaces.resolve(ctx.strParam("workspace"))).root();
+        Sandbox sb = new Sandbox(workspaces.resolve(ctx.strParam("workspace")));
+        Path root = sb.root();
         String pattern = ctx.strParam("pattern");
         boolean isRegex = boolParam(ctx, "isRegex");
         boolean caseSensitive = boolParam(ctx, "caseSensitive");
@@ -109,7 +124,41 @@ public class FsSearchService {
             }
         }
         SearchOutcome out = run(root,
-                buildArgs(pattern, isRegex, caseSensitive, wholeWord, include, exclude), maxResults);
+                buildArgs(pattern, isRegex, caseSensitive, wholeWord, include, exclude, resolveScope(ctx, sb)),
+                maxResults);
+        reply(ctx, out);
+    }
+
+    /**
+     * fs.find:文件名搜索(架构 §7 契约表)。参数与 fs.search 同族;basename 匹配在
+     * worker 侧完成(Java Pattern,非 rg),pattern 非法在入口即拦成可读的 rpc.err。
+     */
+    private void find(RpcContext ctx) throws IOException, InterruptedException {
+        if (!rg.available()) {
+            throw new IOException("rg 不可用: 未找到内置 ripgrep(<程序根>/runtime/bin/ 或"
+                    + " worker.tools.rg-path),无法执行工作区搜索");
+        }
+        Sandbox sb = new Sandbox(workspaces.resolve(ctx.strParam("workspace")));
+        Path root = sb.root();
+        String pattern = ctx.strParam("pattern");
+        boolean isRegex = boolParam(ctx, "isRegex");
+        boolean caseSensitive = boolParam(ctx, "caseSensitive");
+        boolean wholeWord = boolParam(ctx, "wholeWord");
+        List<String> include = splitGlobs(ctx.optStrParam("includeGlobs", ""));
+        List<String> exclude = splitGlobs(ctx.optStrParam("excludeGlobs", ""));
+        long rawMax = ctx.optLongParam("maxResults", DEFAULT_MAX_RESULTS);
+        if (rawMax < 1) {
+            throw new BadParamsException("maxResults 必须 ≥ 1: " + rawMax);
+        }
+        int maxResults = (int) Math.min(rawMax, Integer.MAX_VALUE);
+        Pattern nameRegex;
+        try {
+            nameRegex = compileNamePattern(pattern, isRegex, caseSensitive, wholeWord);
+        } catch (PatternSyntaxException e) {
+            throw new BadParamsException("正则表达式非法: " + e.getMessage());
+        }
+        SearchOutcome out = runFind(root,
+                buildFileArgs(include, exclude, resolveScope(ctx, sb)), nameRegex, maxResults);
         reply(ctx, out);
     }
 
@@ -120,16 +169,73 @@ public class FsSearchService {
     }
 
     /**
-     * 执行 rg 并逐行聚合 JSON lines。kill 时机:
-     * <ul>
-     *   <li>解析端计数达 maxResults 触顶 → 立即 {@code destroyForcibly()}(rg 不再扫盘,
-     *       不用 --max-count,由本侧计数控制);</li>
-     *   <li>超时({@link #TIMEOUT_MS})watchdog 线程强杀 → 管道 EOF 收尾,返回已完成部分
-     *       并置 truncated;</li>
-     *   <li>rg 异常退出码(非 0/1):无结果抛 IOException(rpc.err),已有结果返回并置 truncated。</li>
-     * </ul>
+     * fs.search 的 rg 执行与聚合:逐行解析 JSON lines 的 match 记录(非 match 记录跳过),
+     * 按文件聚合、保持 rg 输出顺序;matchCount = 实际聚合命中条数。kill 时机
+     * (触顶/超时/异常)由 {@link #execRg} 统一承担,退出码收尾见 {@link #finishTruncated}。
      */
     private SearchOutcome run(Path root, List<String> args, int maxResults)
+            throws IOException, InterruptedException {
+        LinkedHashMap<String, ObjectNode> files = new LinkedHashMap<>();
+        int[] count = {0};
+        StreamOutcome r = execRg(root, args, line -> {
+            RawHit hit = parseMatchLine(line);
+            if (hit == null) {
+                return true; // begin/end/summary 等非 match 记录
+            }
+            append(files, relPath(root, hit.rawPath()), hit);
+            return ++count[0] < maxResults; // 计数触顶即停止消费(不用 --max-count)
+        });
+        boolean truncated = finishTruncated(r, count[0], "fs.search");
+        return new SearchOutcome(files, count[0], truncated);
+    }
+
+    /**
+     * fs.find 的 rg 执行与聚合:逐行消费 {@code rg --files} 的路径输出(相对 cwd 的
+     * 原始形态,经 {@link #relPath} 归一为工作区相对 posix),basename 命中即记一个
+     * 文件项({@code {path}},无 matches 字段);matchCount = 命中文件数。退出码语义与
+     * fs.search 同款(--files 下 0 = 有文件、1 = 零文件,均正常;2 = 部分不可读)。
+     */
+    private SearchOutcome runFind(Path root, List<String> args, Pattern nameRegex, int maxResults)
+            throws IOException, InterruptedException {
+        LinkedHashMap<String, ObjectNode> files = new LinkedHashMap<>();
+        StreamOutcome r = execRg(root, args, line -> {
+            String rel = relPath(root, line);
+            String base = rel.substring(rel.lastIndexOf('/') + 1);
+            if (!nameRegex.matcher(base).find()) {
+                return true;
+            }
+            files.put(rel, Json.obj().put("path", rel));
+            return files.size() < maxResults;
+        });
+        boolean truncated = finishTruncated(r, files.size(), "fs.find");
+        return new SearchOutcome(files, files.size(), truncated);
+    }
+
+    /** execRg 的逐行消费者:返回 true 继续消费,false = 触顶停止(外层 kill rg)。 */
+    @FunctionalInterface
+    interface LineHandler {
+        boolean onLine(String line);
+    }
+
+    /** execRg 的执行侧收尾态(exit = -1 表示触顶/超时被杀,退出码无意义)。 */
+    record StreamOutcome(boolean truncated, boolean timedOut, int exit, String errText) {
+    }
+
+    /**
+     * 执行 rg 并逐行消费 stdout(fs.search 与 fs.find 共用的进程管理管道):
+     * <ul>
+     *   <li>stderr 并发抽干:rg 只写不读会写满管道缓冲卡死进程(与 OsSandbox 同款教训),
+     *       单写线程 + join 后读取,无并发写;</li>
+     *   <li>超时({@link #TIMEOUT_MS})看门狗线程强杀 → stdout 管道 EOF → 消费循环自然收尾,
+     *       返回已完成部分并置 truncated(readLine 阻塞期间无法检查 deadline,故须独立线程);</li>
+     *   <li>消费者返回 false(解析端计数触顶)立即停止消费、强杀 rg(rg 不再扫盘,
+     *       不用 --max-count,由本侧计数控制);</li>
+     *   <li>finally 强杀:已退出的进程是 no-op;触顶/超时/异常(含 rpc.cancel 打断)路径
+     *       绝不留孤儿 rg。</li>
+     * </ul>
+     * 正常读完时阻塞等待退出码;被杀路径 exit 记 -1。errText 为抽干的 stderr 文本。
+     */
+    private StreamOutcome execRg(Path root, List<String> args, LineHandler handler)
             throws IOException, InterruptedException {
         List<String> argv = new ArrayList<>();
         argv.add(rg.path().toString());
@@ -145,8 +251,6 @@ public class FsSearchService {
             throw new IOException("rg 启动失败: " + e.getMessage(), e);
         }
 
-        // stderr 并发抽干:rg 只写不读会写满管道缓冲卡死进程(与 OsSandbox 同款教训);
-        // 单写线程 + join 后读取,无并发写。
         ByteArrayOutputStream errBuf = new ByteArrayOutputStream();
         Thread errDrain = Thread.ofVirtual().start(() -> {
             try (InputStream es = p.getErrorStream()) {
@@ -159,8 +263,6 @@ public class FsSearchService {
                 // 进程被杀时管道异常属预期
             }
         });
-        // 超时看门狗:readLine 阻塞期间无法检查 deadline,由独立线程在超时后强杀进程
-        // → stdout 管道 EOF → 主循环自然收尾。
         AtomicBoolean timedOut = new AtomicBoolean(false);
         Thread watchdog = Thread.ofVirtual().start(() -> {
             try {
@@ -173,8 +275,6 @@ public class FsSearchService {
             }
         });
 
-        LinkedHashMap<String, ObjectNode> files = new LinkedHashMap<>();
-        int count = 0;
         boolean truncated = false;
         boolean readerEof = false;
         try (BufferedReader in = new BufferedReader(
@@ -186,42 +286,49 @@ public class FsSearchService {
                     readerEof = true;
                     break;
                 }
-                RawHit hit = parseMatchLine(raw);
-                if (hit == null) {
-                    continue; // begin/end/summary 等非 match 记录
-                }
-                append(files, relPath(root, hit.rawPath()), hit);
-                if (++count >= maxResults) {
+                if (!handler.onLine(raw)) {
                     truncated = true;
                     break; // 触顶:不再消费输出,交 finally kill
                 }
             }
         } finally {
-            // 已退出的进程是 no-op;触顶/超时/异常(含 rpc.cancel 打断)路径绝不留孤儿 rg
             p.destroyForcibly();
         }
         watchdog.interrupt();
 
+        int exit = -1;
         if (!truncated && readerEof && !timedOut.get()) {
-            // 正常读完:校验退出码(0 无匹配 / 1 有匹配均正常)
-            int exit = p.waitFor();
-            if (exit != EXIT_NO_MATCH && exit != EXIT_MATCH) {
-                errDrain.join(2_000);
-                String errText = errBuf.toString(StandardCharsets.UTF_8).trim();
-                if (count == 0) {
-                    throw new IOException("rg 搜索失败(exit=" + exit + "): " + errText);
-                }
-                log.warn("[fs.search] rg 异常退出(exit={}),返回已聚合结果并标记截断: {}", exit, errText);
-                truncated = true;
-            }
-        } else if (timedOut.get()) {
-            truncated = true;
-            log.warn("[fs.search] rg 超时(>{}ms)已强杀,返回已完成部分({} 项)", TIMEOUT_MS, count);
+            exit = p.waitFor(); // 正常读完:阻塞等待退出码
         } else {
-            // 触顶 kill:稍候进程收尾即可(退出码无意义)
-            p.waitFor(2, TimeUnit.SECONDS);
+            p.waitFor(2, TimeUnit.SECONDS); // 触顶/超时被杀:稍候进程收尾即可
         }
-        return new SearchOutcome(files, count, truncated);
+        errDrain.join(2_000);
+        return new StreamOutcome(truncated, timedOut.get(), exit,
+                errBuf.toString(StandardCharsets.UTF_8).trim());
+    }
+
+    /**
+     * 退出码/超时收尾(fs.search 与 fs.find 共用):超时被杀或触顶 → truncated;
+     * rg 异常退出码(非 0/1)时无结果抛 IOException(rpc.err),已有结果告警并置
+     * truncated(返回已完成部分,对标 rg 对不可读条目继续输出的行为)。
+     */
+    private boolean finishTruncated(StreamOutcome r, int count, String tag) throws IOException {
+        if (r.timedOut()) {
+            log.warn("[{}] rg 超时(>{}ms)已强杀,返回已完成部分({} 项)", tag, TIMEOUT_MS, count);
+            return true;
+        }
+        if (r.truncated()) {
+            return true; // 触顶 kill:退出码无意义
+        }
+        int exit = r.exit();
+        if (exit != EXIT_NO_MATCH && exit != EXIT_MATCH) {
+            if (count == 0) {
+                throw new IOException("rg 搜索失败(exit=" + exit + "): " + r.errText());
+            }
+            log.warn("[{}] rg 异常退出(exit={}),返回已聚合结果并标记截断: {}", tag, exit, r.errText());
+            return true;
+        }
+        return false;
     }
 
     /** rg --json 单条 match 记录的解析结果(路径保持 rg 原始形态,聚合时归一)。 */
@@ -284,8 +391,9 @@ public class FsSearchService {
     /**
      * 拼 rg argv(基础参数与大小写/glob 拼法对齐 VSCode ripgrepTextSearchEngine):
      * <ul>
-     *   <li>基础:{@code --hidden --json --crlf --no-config},搜索路径恒 {@code .}
-     *       (cwd = 工作区根,jailed 的执行半边);</li>
+     *   <li>基础:{@code --hidden --json --crlf --no-config},搜索路径参数由调用方传入
+     *       (缺省 {@code .} = 整根;fs.search 的可选 {@code path} 范围,cwd 恒为工作区根,
+     *       jailed 的执行半边);</li>
      *   <li>大小写:不敏感(缺省)加 {@code --ignore-case},敏感加 {@code --case-sensitive};</li>
      *   <li>固定串(isRegex=false 且非全字):pattern <b>原样</b> + {@code --fixed-strings}
      *       ——rg -F 是纯字节字面量匹配、不做反转义,转义与 -F 并用会让含元字符的搜索词
@@ -295,11 +403,11 @@ public class FsSearchService {
      *       保持字面量语义;</li>
      *   <li>include:非空时先 {@code -g !*} 全拒再逐 glob 放行(VSCode 拼法,rg 剪枝最
      *       有效);exclude:逐 {@code -g !<glob>};</li>
-     *   <li>不用 --max-count:由解析端计数触顶 kill(见 {@link #run})。</li>
+     *   <li>不用 --max-count:由解析端计数触顶 kill(见 {@link #execRg})。</li>
      * </ul>
      */
     static List<String> buildArgs(String pattern, boolean isRegex, boolean caseSensitive,
-            boolean wholeWord, List<String> includeGlobs, List<String> excludeGlobs) {
+            boolean wholeWord, List<String> includeGlobs, List<String> excludeGlobs, String searchPath) {
         List<String> args = new ArrayList<>();
         args.add("--hidden");
         args.addAll(buildMatchArgs(pattern, isRegex, caseSensitive, wholeWord));
@@ -315,7 +423,7 @@ public class FsSearchService {
             args.add("-g");
             args.add("!" + g);
         }
-        args.add(".");
+        args.add(searchPath);
         return args;
     }
 
@@ -354,6 +462,49 @@ public class FsSearchService {
     }
 
     /**
+     * fs.find 的 rg argv:{@code --hidden --files --no-messages} 枚举文件路径。
+     * <b>不配 {@code --json}</b>——{@code --files} 下 {@code --json} 只吐 summary 不吐
+     * 路径(实测 ripgrep 行为);pattern 不进 argv(basename 匹配在本侧 Java 正则完成,
+     * 见 {@link #compileNamePattern});include/exclude glob 拼法与 {@link #buildArgs}
+     * 共用;搜索路径参数语义同 fs.search(缺省 {@code .})。
+     */
+    static List<String> buildFileArgs(List<String> includeGlobs, List<String> excludeGlobs, String searchPath) {
+        List<String> args = new ArrayList<>();
+        args.add("--hidden");
+        args.add("--files");
+        args.add("--no-config");
+        args.add("--no-messages");
+        if (!includeGlobs.isEmpty()) {
+            args.add("-g");
+            args.add("!*");
+            for (String g : includeGlobs) {
+                args.add("-g");
+                args.add(g);
+            }
+        }
+        for (String g : excludeGlobs) {
+            args.add("-g");
+            args.add("!" + g);
+        }
+        args.add(searchPath);
+        return args;
+    }
+
+    /**
+     * fs.find 的 basename 匹配正则:语义与 {@link #buildMatchArgs} 同族——全字包
+     * {@code \b(?:...)\b}、固定串先转义正则元字符({@link #escapeRegex} 同集);方言为
+     * Java {@link Pattern}(basename 在本侧匹配、不过 rg),大小写用
+     * {@link Pattern#CASE_INSENSITIVE} 等价 rg 的 {@code --ignore-case} 缺省语义。
+     * 调用方用 {@code find()}(非锚定搜索)匹配,对齐前端 {@code RegExp.test} 语义。
+     */
+    static Pattern compileNamePattern(String pattern, boolean isRegex, boolean caseSensitive,
+            boolean wholeWord) {
+        String body = isRegex ? pattern : escapeRegex(pattern);
+        String effective = wholeWord ? "\\b(?:" + body + ")\\b" : body;
+        return Pattern.compile(effective, caseSensitive ? 0 : Pattern.CASE_INSENSITIVE);
+    }
+
+    /**
      * 转义正则元字符(VSCode escapeRegExpCharacters 同集:{@code \ { } * + ? | ^ $ . [ ] ( )};
      * rg 用 Rust regex、不支持 {@code \Q..\E},必须逐字符转义)。
      */
@@ -389,6 +540,24 @@ public class FsSearchService {
     /** 布尔参数(缺省 false;兼容 JSON 布尔与字符串,同 fs.browse 的 includeFiles 模式)。 */
     private static boolean boolParam(RpcContext ctx, String name) {
         return "true".equalsIgnoreCase(ctx.optStrParam(name, "false").trim());
+    }
+
+    /**
+     * 解析可选搜索范围参数 {@code path}(fs.search/fs.find 共用):缺省/空/{@code .} =
+     * 整根;否则经 {@link Sandbox#resolveExisting}(存在性 + realpath + 前缀校验)jailed
+     * 在工作区根内,返回工作区相对 posix 路径作为 rg 的搜索路径参数(根本身归一为
+     * {@code .})。非目录拒收。
+     */
+    private static String resolveScope(RpcContext ctx, Sandbox sb) throws IOException {
+        String raw = ctx.optStrParam("path", "");
+        if (raw == null || raw.isBlank() || ".".equals(raw.trim())) {
+            return ".";
+        }
+        Path resolved = sb.resolveExisting(raw.trim());
+        if (!Files.isDirectory(resolved)) {
+            throw new BadParamsException("搜索范围不是目录: " + raw);
+        }
+        return sb.display(resolved);
     }
 
     // ---- 应答 ----

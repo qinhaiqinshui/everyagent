@@ -1,13 +1,14 @@
 /**
  * src/query/workspaceContentSearch.ts
  *
- * 工作区内容搜索的纯算法，供 UI（文件树「搜索」）与 AI 命令（rg）共用。
+ * 工作区内容搜索的纯算法与结果类型。UI 搜索已全量改走 worker 内置 rg
+ * （fs.search / fs.find，见 useWorkspaceSearch）：本模块保留 WorkspaceContentSearchResult
+ * 等结果形状（UI 与 worker 应答共用的契约类型）与纯算法实现（供需要前端侧
+ * 匹配能力的调用方注入使用；walkFiles/readFileText 由调用方提供）。
  *
  * 这里只负责「给定一批文件路径与读取能力，按正则匹配并产出命中行号 + 上下文」，
  * 不关心权限校验与具体 IO 实现——文件枚举（walkFiles）与文本读取（readFileText）
- * 由调用方注入：
- * - AI 工具注入经 fileAccessGateway 的回调（带权限校验 / skill 渐进式披露）；
- * - UI 注入经 workspaceGateway 的回调（人工操作，直读，走 worker 的 fs.* RPC）。
+ * 由调用方注入（如经 fileAccessGateway 的回调，带权限校验 / skill 渐进式披露）。
  *
  * 算法与平台内容搜索命令（Linux/macOS 经 bash 执行 grep、Windows 经 powershell 执行 Select-String）核心行为一致：
  * 固定大小写敏感（RegExp 不带 i 标志，由调用方编译）、

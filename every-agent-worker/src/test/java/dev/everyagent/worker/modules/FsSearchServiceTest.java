@@ -37,13 +37,14 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 /**
- * fs.search 单元测试(架构 §7 契约表),不依赖 Spring/真实 hub:
+ * fs.search / fs.find 单元测试(架构 §7 契约表),不依赖 Spring/真实 hub:
  * ① 参数拼接与 JSON lines 解析(纯函数,钉住 VSCode ripgrepTextSearchEngine 语义的
  *    argv 契约:include 的 {@code -g !*} 放行链、exclude 的 {@code !} 前缀、
- *    fixed-strings/ignore-case/全字包裹);
+ *    fixed-strings/ignore-case/全字包裹;fs.find 的 --files argv 与 basename 正则);
  * ② 临时目录上的真实 rg 进程搜索:files 聚合、lineNumber/matchIndex/matchText、
  *    maxResults 触顶 kill 置 truncated、include/exclude 过滤、大小写、全字、
- *    元字符固定串回归、大结果 rpc.data 分批 + 末帧 ok 汇总。
+ *    元字符固定串回归、大结果 rpc.data 分批 + 末帧 ok 汇总;path 子目录范围
+ *    (fs.search/fs.find 共用,含越界/不存在拒收);fs.find 的 basename 匹配语义。
  * 真实 RpcDispatcher 分发 + mock HubLink 捕获出站帧(FsBrowseTest 同款);
  * 环境无 rg 时进程类用例跳过(assumeTrue),纯函数用例照常。
  */
@@ -119,8 +120,8 @@ class FsSearchServiceTest {
         return ws;
     }
 
-    /** 发起一次 fs.search(经真实分发器,虚拟线程异步执行),返回末帧 {event, payload},data 批次逐项收集进 sink。 */
-    private JsonNode call(ObjectNode params, List<JsonNode> sink) throws Exception {
+    /** 发起一次 RPC(经真实分发器,虚拟线程异步执行),返回末帧 {event, payload},data 批次逐项收集进 sink。 */
+    private JsonNode call(String method, ObjectNode params, List<JsonNode> sink) throws Exception {
         CountDownLatch replied = new CountDownLatch(1);
         List<Object[]> frames = new ArrayList<>();
         HubLink link = mock(HubLink.class);
@@ -143,7 +144,7 @@ class FsSearchServiceTest {
 
         ObjectNode payload = Json.obj()
                 .put("reqId", "req-" + System.nanoTime())
-                .put("method", RpcMethods.FS_SEARCH);
+                .put("method", method);
         payload.set("params", params);
         ObjectNode frame = Json.obj()
                 .put("channel", Channels.workerCmd("k", "w"))
@@ -160,13 +161,22 @@ class FsSearchServiceTest {
     }
 
     /** 内联(未分批)应答:断言 ok 并取出 result.files(按 path 建索引,跨文件顺序不依赖 rg 遍历序)。 */
-    private Map<String, JsonNode> inlineFiles(ObjectNode params) throws Exception {
-        JsonNode reply = call(params, new ArrayList<>());
+    private Map<String, JsonNode> inlineFiles(String method, ObjectNode params) throws Exception {
+        JsonNode reply = call(method, params, new ArrayList<>());
         assertEquals("rpc.ok", reply.path("event").asString(), reply.toString());
         JsonNode result = reply.path("payload").path("result");
         Map<String, JsonNode> byPath = new HashMap<>();
         result.path("files").forEach(f -> byPath.put(f.path("path").asString(), f));
         return byPath;
+    }
+
+    /** fs.search 便捷重载(多数用例)。 */
+    private JsonNode call(ObjectNode params, List<JsonNode> sink) throws Exception {
+        return call(RpcMethods.FS_SEARCH, params, sink);
+    }
+
+    private Map<String, JsonNode> inlineFiles(ObjectNode params) throws Exception {
+        return inlineFiles(RpcMethods.FS_SEARCH, params);
     }
 
     private static ObjectNode params(Path ws, String pattern) {
@@ -182,18 +192,18 @@ class FsSearchServiceTest {
         // 固定串:pattern 原样 + --fixed-strings(rg -F 纯字面量不反转义,原样才正确)
         assertEquals(List.of("--hidden", "--json", "--crlf", "--no-config", "--ignore-case",
                 "--fixed-strings", "-e", "foo.bar", "."),
-                FsSearchService.buildArgs("foo.bar", false, false, false, List.of(), List.of()));
+                FsSearchService.buildArgs("foo.bar", false, false, false, List.of(), List.of(), "."));
     }
 
     @Test
     void buildArgsCaseSensitiveAndRegex() {
         assertEquals(List.of("--hidden", "--json", "--crlf", "--no-config", "--case-sensitive",
                 "-e", "\\d+", "."),
-                FsSearchService.buildArgs("\\d+", true, true, false, List.of(), List.of()));
+                FsSearchService.buildArgs("\\d+", true, true, false, List.of(), List.of(), "."));
         // 正则模式不加 --fixed-strings,pattern 原样
         assertEquals(List.of("--hidden", "--json", "--crlf", "--no-config", "--ignore-case",
                 "-e", "a|b", "."),
-                FsSearchService.buildArgs("a|b", true, false, false, List.of(), List.of()));
+                FsSearchService.buildArgs("a|b", true, false, false, List.of(), List.of(), "."));
     }
 
     @Test
@@ -201,11 +211,11 @@ class FsSearchServiceTest {
         // 全字:不用 -w,包裹 \b(?:...)\b 后按正则传(包裹后不能用 --fixed-strings)
         assertEquals(List.of("--hidden", "--json", "--crlf", "--no-config", "--ignore-case",
                 "-e", "\\b(?:cat)\\b", "."),
-                FsSearchService.buildArgs("cat", true, false, true, List.of(), List.of()));
+                FsSearchService.buildArgs("cat", true, false, true, List.of(), List.of(), "."));
         // 全字 + 固定串:先转义元字符再包裹,保持字面量语义
         assertEquals(List.of("--hidden", "--json", "--crlf", "--no-config", "--ignore-case",
                 "-e", "\\b(?:c\\.t)\\b", "."),
-                FsSearchService.buildArgs("c.t", false, false, true, List.of(), List.of()));
+                FsSearchService.buildArgs("c.t", false, false, true, List.of(), List.of(), "."));
     }
 
     @Test
@@ -216,11 +226,48 @@ class FsSearchServiceTest {
                 "-g", "!*", "-g", "*.ts", "-g", "**/*.md",
                 "-g", "!dist/**", "-g", "!node_modules/**", "."),
                 FsSearchService.buildArgs("x", false, false, false,
-                        List.of("*.ts", "**/*.md"), List.of("dist/**", "node_modules/**")));
+                        List.of("*.ts", "**/*.md"), List.of("dist/**", "node_modules/**"), "."));
         // 仅 exclude 时不引入 -g !*(include 链专属)
         assertEquals(List.of("--hidden", "--json", "--crlf", "--no-config", "--ignore-case",
                 "--fixed-strings", "-e", "x", "-g", "!*.log", "."),
-                FsSearchService.buildArgs("x", false, false, false, List.of(), List.of("*.log")));
+                FsSearchService.buildArgs("x", false, false, false, List.of(), List.of("*.log"), "."));
+    }
+
+    @Test
+    void buildArgsScopedSearchPath() {
+        // 可选 path 范围:作为 rg 的搜索路径参数(缺省 ".")
+        assertEquals(List.of("--hidden", "--json", "--crlf", "--no-config", "--ignore-case",
+                "--fixed-strings", "-e", "x", "docs"),
+                FsSearchService.buildArgs("x", false, false, false, List.of(), List.of(), "docs"));
+    }
+
+    @Test
+    void buildFileArgsListsFilesWithoutJson() {
+        // --files 下 --json 只吐 summary 不吐路径 → 必须不配 --json;glob 拼法与 buildArgs 共用
+        assertEquals(List.of("--hidden", "--files", "--no-config", "--no-messages",
+                "-g", "!*", "-g", "*.ts", "-g", "!dist/**", "docs"),
+                FsSearchService.buildFileArgs(List.of("*.ts"), List.of("dist/**"), "docs"));
+        assertEquals(List.of("--hidden", "--files", "--no-config", "--no-messages", "."),
+                FsSearchService.buildFileArgs(List.of(), List.of(), "."));
+    }
+
+    @Test
+    void compileNamePatternSemantics() {
+        // 固定串元字符按字面量(Java 方言本侧匹配):C++ 命中、. 不当通配
+        var literal = FsSearchService.compileNamePattern("C++", false, true, false);
+        assertTrue(literal.matcher("aC++b").find(), "字面量命中");
+        assertFalse(literal.matcher("aCxb").find(), ". 不是通配");
+        // 缺省大小写不敏感 / 敏感
+        assertTrue(FsSearchService.compileNamePattern("cat", false, false, false).matcher("CAT").find());
+        assertFalse(FsSearchService.compileNamePattern("cat", false, true, false).matcher("CAT").find());
+        // 全字包裹 \b(?:...)\b:catalog 不命中、独立 cat 命中
+        var wholeWord = FsSearchService.compileNamePattern("cat", false, true, true);
+        assertFalse(wholeWord.matcher("catalog").find(), "全字:catalog 不命中");
+        assertTrue(wholeWord.matcher("cat").find(), "全字:独立 cat 命中");
+        // 全字 + 固定串:先转义再包裹,c.t 不匹配 cat
+        var wholeWordLiteral = FsSearchService.compileNamePattern("c.t", false, true, true);
+        assertFalse(wholeWordLiteral.matcher("cat").find(), "全字+固定串:. 转义后不当通配");
+        assertTrue(wholeWordLiteral.matcher("c.t").find());
     }
 
     // ---- ② JSON lines 解析(纯函数) ----
@@ -366,6 +413,79 @@ class FsSearchServiceTest {
         Map<String, JsonNode> exc = inlineFiles(params(ws, "needle").put("excludeGlobs", "sub/**"));
         assertNull(exc.get("sub/b.txt"), "exclude 前缀剪枝: " + exc.keySet());
         assertTrue(exc.containsKey("meta.log"));
+    }
+
+    @Test
+    void searchScopedToSubdirByPath() throws Exception {
+        Assumptions.assumeTrue(ready, "环境无 rg,跳过真实进程用例");
+        seed();
+        // path=sub:只搜 sub/ 下,根下 a.txt 不进结果
+        Map<String, JsonNode> files = inlineFiles(params(ws, "needle").put("path", "sub"));
+        assertTrue(files.containsKey("sub/b.txt"), files.keySet().toString());
+        assertFalse(files.containsKey("a.txt"), "范围外文件不命中: " + files.keySet());
+        // 越界范围拒收(SandboxViolationException → rpc.err)
+        JsonNode denied = call(params(ws, "needle").put("path", "../"), new ArrayList<>());
+        assertEquals("rpc.err", denied.path("event").asString(), denied.toString());
+        // 不存在范围拒收(NotFoundException → rpc.err)
+        JsonNode missing = call(params(ws, "needle").put("path", "no-such-dir"), new ArrayList<>());
+        assertEquals("rpc.err", missing.path("event").asString(), missing.toString());
+    }
+
+    /** find 夹具:needle.txt、sub/NEEDLE-log.md、sub/other.txt(内容含 needle 但文件名不匹配)、zz.txt。 */
+    private void seedNames() throws Exception {
+        Files.createDirectories(ws.resolve("sub"));
+        Files.writeString(ws.resolve("needle.txt"), "内容无关");
+        Files.writeString(ws.resolve("sub/NEEDLE-log.md"), "内容无关");
+        Files.writeString(ws.resolve("sub/other.txt"), "needle 在内容里但文件名不匹配");
+        Files.writeString(ws.resolve("zz.txt"), "needle");
+    }
+
+    @Test
+    void findMatchesBasenameNotContent() throws Exception {
+        Assumptions.assumeTrue(ready, "环境无 rg,跳过真实进程用例");
+        seedNames();
+        // 文件名搜索只看 basename:内容含 needle 的 other.txt 不命中;缺省不敏感 → NEEDLE-log.md 命中
+        Map<String, JsonNode> files = inlineFiles(RpcMethods.FS_FIND, params(ws, "needle"));
+        assertEquals(2, files.size(), files.keySet().toString());
+        assertTrue(files.containsKey("needle.txt") && files.containsKey("sub/NEEDLE-log.md"),
+                files.keySet().toString());
+        assertTrue(files.get("needle.txt").path("matches").isMissingNode(), "find 结果项无 matches 字段");
+        // 大小写敏感:NEEDLE-log.md 不再命中
+        JsonNode reply = call(RpcMethods.FS_FIND, params(ws, "needle").put("caseSensitive", true),
+                new ArrayList<>());
+        assertEquals("rpc.ok", reply.path("event").asString(), reply.toString());
+        JsonNode result = reply.path("payload").path("result");
+        assertEquals(1, result.path("files").size(), result.toString());
+        assertEquals("needle.txt", result.path("files").path(0).path("path").asString());
+        assertEquals(1, result.path("matchCount").asInt(), "matchCount = 命中文件数");
+    }
+
+    @Test
+    void findScopedToSubdirAndExcludes() throws Exception {
+        Assumptions.assumeTrue(ready, "环境无 rg,跳过真实进程用例");
+        seedNames();
+        // path 范围:只列 sub/ 下(basename 含 log 的只有 NEEDLE-log.md)
+        Map<String, JsonNode> scoped = inlineFiles(RpcMethods.FS_FIND, params(ws, "log").put("path", "sub"));
+        assertEquals(1, scoped.size(), scoped.keySet().toString());
+        assertTrue(scoped.containsKey("sub/NEEDLE-log.md"), scoped.keySet().toString());
+        // exclude 剪枝:sub/** 排除后只剩根下 needle.txt
+        Map<String, JsonNode> exc = inlineFiles(RpcMethods.FS_FIND,
+                params(ws, "needle").put("excludeGlobs", "sub/**"));
+        assertFalse(exc.containsKey("sub/NEEDLE-log.md"), exc.keySet().toString());
+        assertTrue(exc.containsKey("needle.txt"));
+    }
+
+    @Test
+    void findTruncatesAtMaxResults() throws Exception {
+        Assumptions.assumeTrue(ready, "环境无 rg,跳过真实进程用例");
+        seedNames();
+        JsonNode reply = call(RpcMethods.FS_FIND, params(ws, "needle").put("maxResults", 1),
+                new ArrayList<>());
+        assertEquals("rpc.ok", reply.path("event").asString(), reply.toString());
+        JsonNode result = reply.path("payload").path("result");
+        assertTrue(result.path("truncated").asBoolean(), "触顶应标记截断: " + result);
+        assertEquals(1, result.path("files").size());
+        assertEquals(1, result.path("matchCount").asInt());
     }
 
     @Test

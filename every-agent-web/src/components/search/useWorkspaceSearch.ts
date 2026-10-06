@@ -1,13 +1,8 @@
 import React from 'react'
-import { RpcError } from '@every-agent/client'
-import {
-  searchWorkspaceContent,
-  type WorkspaceContentSearchResult,
-} from '@/query/workspaceContentSearch'
+import { type WorkspaceContentSearchResult } from '@/query/workspaceContentSearch'
 import { workspaceGateway } from '@/platform/fs/workspaceGateway'
-import { INTERNAL_DIR_NAMES } from '@/platform/fs/pathUtils'
+import { INTERNAL_DIR_NAMES, normalizeWorkspaceRelativePath } from '@/platform/fs/pathUtils'
 import { searchTasksContent, type TaskContentSearchResult } from '@/query/taskContentSearch'
-import { walkWorkspaceFiles } from './walkWorkspaceFiles'
 
 /** 搜索执行状态机：未搜索 / 搜索中 / 完成 / 出错。 */
 export type WorkspaceSearchStatus = 'idle' | 'searching' | 'done' | 'error'
@@ -47,28 +42,8 @@ export type WorkspaceSearchResultShape = WorkspaceContentSearchResult | TaskCont
 
 const REGEX_META_PATTERN = /[.*+?^${}()|[\]\\]/g
 
-/** 内部保留目录(如 .git)的逗号串:fs.search 路径追加进 excludeGlobs,对齐纯前端路径的默认搜索范围。 */
+/** 内部保留目录(如 .git)的逗号串:搜索路径追加进 excludeGlobs(rg --hidden 会进 .git)。 */
 const INTERNAL_DIR_GLOBS = Array.from(INTERNAL_DIR_NAMES).join(',')
-
-/**
- * 判定 fs.search 的失败是否为「老 worker 不支持该方法」(应降级纯前端搜索):
- * worker 的 RpcDispatcher 对未注册方法回 `rpc.err{code:"UNKNOWN_METHOD", message:"未知方法: fs.search"}`,
- * 前端 SDK 将其抛为 RpcError(code 已结构化);对 code 可能被上层包装/转发丢失的形态,
- * 再按错误码与文案字符串兜底匹配。其余失败(网络、超时、非法参数等)不属于能力缺失,原样上抛。
- */
-function isBackendSearchUnsupported(error: unknown): boolean {
-  if (error instanceof RpcError) {
-    return error.code === 'UNKNOWN_METHOD'
-  }
-  const text = error instanceof Error ? error.message : String(error)
-  return text.includes('UNKNOWN_METHOD') || text.includes('未知方法')
-}
-
-/**
- * 后端 fs.search 不可用标记(模块级,会话内记忆):首次确认老 worker 不支持后,
- * 后续搜索不再试探、直接走纯前端路径(面板重挂载也不重试)。
- */
-let backendSearchUnavailable = false
 
 /**
  * 编译搜索正则。
@@ -96,14 +71,12 @@ export function buildWorkspaceSearchRegExp(
  * 工作区内容搜索状态 Hook（仿 VSCode 搜索面板的状态机）。
  *
  * - 状态：idle / searching / done / error，结果为算法层的 WorkspaceContentSearchResult；
- * - 查询代际取消：每次发起/取消递增 generation ref，旧查询经 shouldStop 回调中断，
- *   结果落地前核对代际，过期丢弃（不覆盖新查询或取消后的状态）；rpc 层无现成取消
- *   机制（hub-client 只有超时与断连 failPending），fs.search 在途查询同样按代际丢弃；
- * - 数据源双路径，产出同一 WorkspaceContentSearchResult 形状：
- *   1. 优先 worker 的 fs.search（内置 rg，快且不吃前端流量）；老 worker 返回
- *      UNKNOWN_METHOD 时置会话级标记降级（isBackendSearchUnavailable），不再反复试探；
- *   2. 纯前端路径（walkWorkspaceFiles 枚举 + workspaceGateway.readTextFile 直读，
- *      UI 专用，不走 AI 权限网关）。
+ * - 查询代际取消：每次发起/取消递增 generation ref，结果落地前核对代际、过期丢弃
+ *   （不覆盖新查询或取消后的状态）；rpc 层无现成取消机制（hub-client 只有超时与
+ *   断连 failPending），在途查询同样按代际丢弃；
+ * - 数据源：worker 内置 rg 的 fs.search（内容）/ fs.find（文件名），搜索范围
+ *   （rootPath）经可选 path 参数下推给 rg（缺省整根）；前端不编译正则、不逐目录
+ *   walk，不保留纯前端降级路径（需 worker ≥ fs.find 版本）。
  */
 export function useWorkspaceSearch() {
   const [status, setStatus] = React.useState<WorkspaceSearchStatus>('idle')
@@ -177,59 +150,29 @@ export function useWorkspaceSearch() {
         return
       }
       const matchMode = options.matchMode ?? 'content'
-      let nextResult: WorkspaceContentSearchResult | null = null
-      // 优先后端 fs.search：整工作区搜索且未确认该 worker 不支持时，走 worker 侧内置 rg。
-      // 限定整工作区：fs.search 契约只搜工作区根（无子目录范围参数），带范围的搜索
-      // （rootPath 非空）仍走纯前端 walk 路径，避免搜索范围语义漂移。
-      // 文件名搜索（matchMode=name）不走后端：fs.search 契约只搜内容，名称匹配由纯前端 walk + basename 完成。
-      if (matchMode !== 'name' && !backendSearchUnavailable && !options.rootPath) {
-        try {
-          // fs.search 路径不在前端编译正则：pattern 与开关原样透传，由 worker 侧 rg 语义
-          // 解释（字面量 --fixed-strings / 全字 \b 包裹）；非法正则已在前面的预检拦下。
-          // includeInternalFiles=false 时对齐纯前端路径的默认范围：内部保留目录追加进
-          // 排除 glob（rg --hidden 会进 .git，纯前端 walk 则跳过这些目录）。
-          nextResult = await workspaceGateway.search(options.workspaceRoot, {
-            pattern,
-            isRegex: options.useRegex,
-            caseSensitive: options.caseSensitive,
-            wholeWord: options.wholeWord,
-            includeGlobs: options.includePatterns,
-            excludeGlobs: options.includeInternalFiles
-              ? options.excludePatterns
-              : [options.excludePatterns, INTERNAL_DIR_GLOBS].filter(Boolean).join(','),
-            // 与纯前端路径（searchWorkspaceContent）的默认命中上限一致。
-            maxResults: 1000,
-          })
-        } catch (searchError) {
-          if (!isBackendSearchUnsupported(searchError)) {
-            throw searchError
-          }
-          // 老 worker 无 fs.search：记住结论（会话内不再试探），降级纯前端路径。
-          backendSearchUnavailable = true
-        }
+      // 文件搜索统一走 worker 内置 rg（架构 §7 契约表）：内容 = fs.search、文件名 =
+      // fs.find；搜索范围（rootPath，业务绝对形态先归一为工作区相对路径）经可选 path
+      // 参数下推给 rg（缺省整根），不再前端逐目录 walk（原路径中型仓库即数千次串行
+      // fs.list RPC，且单个不可读条目会整树报错）。pattern 与开关原样透传，由 worker
+      // 侧 rg / Java 正则语义解释（字面量 --fixed-strings / 全字 \b 包裹）；非法正则
+      // 已在前面的预检拦下。includeInternalFiles=false 时内部保留目录（如 .git）追加
+      // 进排除 glob（rg --hidden 会进 .git）。
+      const searchParams = {
+        pattern,
+        isRegex: options.useRegex,
+        caseSensitive: options.caseSensitive,
+        wholeWord: options.wholeWord,
+        includeGlobs: options.includePatterns,
+        excludeGlobs: options.includeInternalFiles
+          ? options.excludePatterns
+          : [options.excludePatterns, INTERNAL_DIR_GLOBS].filter(Boolean).join(','),
+        // 命中上限与内容搜索一致（文件名搜索按文件计）。
+        maxResults: 1000,
+        path: normalizeWorkspaceRelativePath(options.rootPath),
       }
-      if (!nextResult) {
-        nextResult = await searchWorkspaceContent({
-          // rootPath 传工作区根（空串）：walkFiles 输出已归一为工作区相对路径，
-          // glob 过滤（files to include/exclude）与结果展示都以工作区相对路径为基准（对标 VSCode）。
-          rootPath: '',
-          regex: built.regex,
-          matchMode,
-          walkFiles: async () => {
-            const paths = await walkWorkspaceFiles(
-              options.workspaceRoot,
-              options.rootPath,
-              options.includeInternalFiles ?? false,
-            )
-            // 业务绝对路径（前导 `/`）归一为工作区相对路径。
-            return paths.map((path) => path.replace(/^\/+/, ''))
-          },
-          readFileText: (filePath) => workspaceGateway.readTextFile(options.workspaceRoot, filePath),
-          includePatterns: options.includePatterns,
-          excludePatterns: options.excludePatterns,
-          shouldStop: () => generationRef.current !== generation,
-        })
-      }
+      const nextResult: WorkspaceContentSearchResult = matchMode === 'name'
+        ? await workspaceGateway.findNames(options.workspaceRoot, searchParams)
+        : await workspaceGateway.search(options.workspaceRoot, searchParams)
       if (generationRef.current !== generation) {
         // 过期查询（已取消 / 已被新查询取代），丢弃结果。
         return
@@ -248,7 +191,7 @@ export function useWorkspaceSearch() {
   }, [])
 
   /**
-   * 取消当前搜索：递增代际让在途查询的 shouldStop 生效（结果丢弃），
+   * 取消当前搜索：递增代际作废在途查询（结果丢弃），
    * 状态回到已有结果的展示态（有结果 → done，无结果 → idle）。
    */
   const cancel = React.useCallback(() => {
@@ -280,8 +223,8 @@ export function useWorkspaceSearch() {
       return ''
     }
     const truncatedSuffix = result.truncated ? '（已达上限，结果被截断）' : ''
-    // 文件名搜索：每个命中即一个文件，摘要以「N 个文件」表述。
-    if (resultMatchModeRef.current === 'name' && (result as WorkspaceContentSearchResult).files.every((file) => !file.matches)) {
+    // 文件名搜索：每个命中即一个文件（fs.find 结果项无 matches），摘要以「N 个文件」表述。
+    if (resultMatchModeRef.current === 'name') {
       return `${result.files.length} 个文件${truncatedSuffix}`
     }
     return `${result.matchCount} 个结果 · ${result.files.length} 个文件${truncatedSuffix}`

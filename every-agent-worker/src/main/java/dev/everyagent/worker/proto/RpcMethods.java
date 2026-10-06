@@ -60,6 +60,10 @@ public final class RpcMethods {
     /** 工作区文本内容搜索(内置 rg,架构 §5.10):jailed 到工作区根,JSON lines 解析为
      * 结构化结果;大结果复用 fs.read 的 rpc.data 分批 + 末帧 ok 汇总。 */
     public static final String FS_SEARCH = "fs.search";
+    /** 工作区文件名搜索(内置 rg --files + worker 侧 basename 正则):入参与 fs.search 同族
+     * + 可选 path(子目录范围);结果 {matchCount, truncated, files:[{path}]},大结果同款
+     * rpc.data 分批。替代前端逐目录 fs.list 递归 walk(数千次串行 RPC 且不容错)。 */
+    public static final String FS_FIND = "fs.find";
     /** 任务内容搜索(内置 rg + worker 后处理):按 workspaceId 枚举任务,搜索 rounds.jsonl
      * 轮次索引,解析 JSON 后对 user/finalReply 干净文本二次匹配消除字段名噪音。 */
     public static final String TASK_SEARCH = "task.search";
