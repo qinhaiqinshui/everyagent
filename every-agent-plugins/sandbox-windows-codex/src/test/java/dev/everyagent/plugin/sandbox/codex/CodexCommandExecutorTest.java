@@ -14,6 +14,9 @@ import dev.everyagent.plugin.sandbox.codex.session.RunnerClient;
 import com.sun.jna.Platform;
 
 import org.junit.jupiter.api.Test;
+
+import java.io.IOException;
+import java.nio.file.Files;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
@@ -159,6 +162,34 @@ class CodexCommandExecutorTest {
                                 .isSecretBearing(e.getKey(), e.getValue())),
                 "沙箱 env 不得携带凭据形态变量");
         assertTrue(plain.size() > 0, "父环境仍被继承(不是清空)");
+    }
+
+    @Test
+    void ensureMavenSettingsGenerated() throws IOException {
+        Path ws = tempDir.resolve("ws-m2");
+        CodexCommandExecutor.ensureMavenSettings(ws);
+        Path settings = ws.resolve(".everyagent").resolve("m2").resolve("settings.xml");
+        assertTrue(Files.exists(settings), "settings.xml 应生成");
+        String xml = Files.readString(settings);
+        assertTrue(xml.contains(ws.resolve(".everyagent").resolve("m2-repo").toString()),
+                "localRepository 指工作区可写仓库:" + xml);
+        assertTrue(xml.contains("central-online"), "在线兜底仓库必须在");
+        assertTrue(xml.contains("https://repo.maven.apache.org/maven2"), "官方 URL");
+        if (Files.isDirectory(Path.of(System.getProperty("user.home"), ".m2", "repository"))) {
+            assertTrue(xml.contains("<mirrorOf>central</mirrorOf>"),
+                    "宿主仓库存在时应挂 file:// 继承镜像");
+        }
+        // 幂等覆盖
+        CodexCommandExecutor.ensureMavenSettings(ws);
+        assertEquals(xml, Files.readString(settings), "重复生成结果一致");
+    }
+
+    @Test
+    void childEnvInjectsMavenArgs() {
+        Path ws = tempDir.resolve("ws-m2env");
+        Map<String, String> env = CodexCommandExecutor.childEnv(null, ws);
+        assertEquals("-s \"" + CodexCommandExecutor.mavenSettingsPath(ws) + "\"",
+                env.get("MAVEN_ARGS"), "MAVEN_ARGS 指向沙箱 settings(AI 显式 -s 可覆盖)");
     }
 
     @Test
