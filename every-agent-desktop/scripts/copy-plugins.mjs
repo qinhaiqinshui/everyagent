@@ -93,8 +93,17 @@ for (const entry of readdirSync(pluginsDir).sort()) {
     }
     if (jars.length === 0) {
       errors.push(`${entry}: Java 插件 target/ 下无非 sources/javadoc 的 jar —— 请先 npm run build:plugins`)
-    } else if (jars.length > 1) {
-      errors.push(`${entry}: target/ 有 ${jars.length} 个 jar(字典序遮蔽风险): ${jars.join(', ')}`)
+    } else {
+      // 与 build-plugins.py own_artifact_jars 同口径:伴生依赖 jar(如 sandbox-windows-codex
+      // 由 dependency-plugin 复制进 target/ 的 slf4j-simple)是 findTargetJars 的预期
+      // 加载源(Scanner 会连它一起塞进插件 classloader),不算残留,必须一并 staging;
+      // 真正的遮蔽风险是插件自身产物出现多个版本(clean 残留旧 jar 会遮蔽新类)。
+      const own = jars.filter(
+        (n) => n === `${entry}.jar` || (n.startsWith(`${entry}-`) && /^\d/.test(n.slice(entry.length + 1))),
+      )
+      if (own.length > 1) {
+        errors.push(`${entry}: 插件自身产物有 ${own.length} 个 jar(字典序遮蔽风险,请 clean 重建): ${own.join(', ')}`)
+      }
     }
   }
   // web bundle 不在 jar 内(pom resources 只拷 plugin.json):前端经 plugin.webSource
