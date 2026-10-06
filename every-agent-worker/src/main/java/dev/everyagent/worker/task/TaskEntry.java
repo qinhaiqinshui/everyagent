@@ -21,10 +21,12 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.node.ObjectNode;
 
 import java.nio.file.Path;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
+import dev.everyagent.plugin.api.config.WorkerConfig;
 
 /**
  * 任务运行时(架构 §5.8):快照 + 事件日志 + 输入队列 + agent 集合。
@@ -58,13 +60,14 @@ public final class TaskEntry implements TaskRuntime {
     public final TaskEvents events;
 
     /**
-     * 最近一轮实测 usage(上下文窗口占用口径,随 meta.json 持久化;无则 null)。
-     * 由 usage 投影器从本主体事件流的 {@code usage} 事件维护——任意 agent(主/子)后写者胜,
-     * 即「最近一次模型调用的上下文占用」(与前端电池口径一致:最近一轮 inputTokens /
-     * contextWindowTokens;子 agent 轮同样反映真实占用)。
+     * 任务级上下文占用聚合(随 meta.json 持久化;无则 null)。
+     * 由 usage 投影器从本主体事件流的 {@code usage} 事件维护——聚合任务下所有 agent
+     * 的「最近一轮上下文占用」:Σ inputTokens / Σ contextWindowTokens(每 agent 取其
+     * 最近一轮;已终局 agent 保留最后快照,截断不回滚,新事件自然覆盖)。
+     * 与前端电池口径一致(任务上下文总压力,非单 agent 占用)。
      */
     private volatile Usage lastUsage;
-    /** 最近一次携带的上下文窗口上限(usage 事件载荷;模型/任务快照配置)。 */
+    /** 聚合窗口上限:各 agent 最近一轮 contextWindowTokens 之和(usage 事件载荷)。 */
     private volatile Long contextWindowTokens;
     /** 最近一轮所用模型名(usage 事件载荷)。 */
     private volatile String usageModel = "";
@@ -347,6 +350,10 @@ public final class TaskEntry implements TaskRuntime {
     private final Object usageProjectionLock = new Object();
     /** 已投影到的最后一条事件 seq(readAfterSeq 游标;usage 事件为独立雪花 seq,无共享组)。 */
     private long usageCursor;
+    /** 各 agent 最近一轮 usage(聚合口径数据基;空串键 = 主 agent)。 */
+    private final Map<String, Usage> usageRoundByAgent = new LinkedHashMap<>();
+    /** 各 agent 最近一轮上下文窗口(与 usageRoundByAgent 同步维护)。 */
+    private final Map<String, Long> usageWindowByAgent = new LinkedHashMap<>();
 
     /**
      * 订阅本主体事件流,把新增事件中的 {@code usage} 投影为任务级最近一轮占用。
@@ -378,10 +385,12 @@ public final class TaskEntry implements TaskRuntime {
     }
 
     /**
-     * 单条 usage 事件 → 任务级最近一轮占用快照 + task.updated 广播。
+     * 单条 usage 事件 → 任务级聚合占用 + task.updated 广播。
+     * 聚合口径:任务电池 = 任务下所有 agent「最近一轮上下文占用」之和——
+     * Σ inputTokens / Σ contextWindowTokens,每 agent 取其最近一轮(新轮覆盖旧轮;
+     * 已终局 agent 保留最后快照;截断不回滚,后续新事件自然覆盖)。model 取最近写者。
      * 载荷形态:{@code {data: {model, contextWindowTokens, round: {inputTokens,
-     * outputTokens, totalTokens}}}}(EmitEvent.data → payload.data);total 不消费——
-     * 任务级口径只要最近一轮占用(agent 级累计归台账 usage 字段)。
+     * outputTokens, totalTokens}}}}(EmitEvent.data → payload.data)。
      */
     private void onUsageEvent(EventRecord r) {
         JsonNode data = r.payload() == null ? null : r.payload().path("data");
@@ -397,8 +406,25 @@ public final class TaskEntry implements TaskRuntime {
         long total = round.path("totalTokens").asLong(0);
         long ctxWindow = data.path("contextWindowTokens").asLong(0);
         String model = data.path("model").asString("");
-        recordUsage(new Usage(in, out, total > 0 ? total : in + out),
-                ctxWindow > 0 ? ctxWindow : null, model.isEmpty() ? null : model);
+        String agentId = r.agentId() == null ? "" : r.agentId();
+        // 每 agent 最近一轮 → 任务级聚合(锁内单线程维护,投影串行)
+        usageRoundByAgent.put(agentId, new Usage(in, out, total > 0 ? total : in + out));
+        usageWindowByAgent.put(agentId,
+                ctxWindow > 0 ? ctxWindow : WorkerConfig.DEFAULT_CONTEXT_WINDOW_TOKENS);
+        long sumIn = 0;
+        long sumOut = 0;
+        long sumTotal = 0;
+        for (Usage u : usageRoundByAgent.values()) {
+            sumIn += u.inputTokens();
+            sumOut += u.outputTokens();
+            sumTotal += u.totalTokens();
+        }
+        long sumWindow = 0;
+        for (Long w : usageWindowByAgent.values()) {
+            sumWindow += w;
+        }
+        recordUsage(new Usage(sumIn, sumOut, sumTotal), sumWindow,
+                model.isEmpty() ? null : model);
         // 先更新后广播:钩子内组装 runtimeSummaryJson(此刻已含本轮占用)再 fanout tasks 频道。
         Runnable broadcast = onUsageBroadcast;
         if (broadcast != null) {

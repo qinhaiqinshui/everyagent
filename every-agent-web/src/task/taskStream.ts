@@ -17,7 +17,7 @@
  * 收到后仅触发 rounds 快照刷新(重新 task.rounds + 幂等 foldRound),前端不在本地判开/闭。
  *
  * 实时信号链(同一折叠器状态):agentStates(agent 列表)/agentMeta(子 agent 台账+用量快照)/
- * contextUsage(上下文电池)/
+ * 上下文电池(taskStore 消费 worker usage 投影聚合值,不在流内维护)/
  * ask 登记(askStore)/taskModel;输入/控制:cancel(task.cancel)/replyAsk。
  * 重连:hubSession.onReconnect → 对所有活跃句柄只重拉数据校准(rounds+尾段+子 agent 台账);瞬态重连
  * HubClient 实例不变、view 监听器仍有效、desiredSubs 已自动重发,无需重建 view。

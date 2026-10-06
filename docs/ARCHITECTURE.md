@@ -410,7 +410,7 @@ AgentStatusAdvisor(agent 生命周期事件,最外层 +5) → RoundIndexAdvisor(
 - 配置:`worker.limits.context-compression-enabled`(关闭则整体关)、`context-offset-enabled`(默认 true)、`context-summary-enabled`(默认 true)、`context-summary-max-tokens`(默认 512)、`context-max-tool-result-chars`(默认 40000)、`context-trigger-ratio`(0.95)/`context-target-ratio`(0.50)。
 - 压缩可见性:`task.trace(kind=context_compression)`,前端可展开查看「已自动压缩上下文(阶段, 消息 M→N, 约 X→Y token)」。
 
-**用量**:每轮模型实测 token 用量由 `usage` 事件上报;task 层 usage 投影器(TaskEntry 订阅自身事件流)按每条 `usage` 事件维护 `TaskSummary.usage` 最近一轮上下文占用快照(任意 agent 后写者胜,前端任务列表上下文电池数据源,随 meta.json 持久化)并触发 `task.updated` 广播——横切层(advisor)不感知任务域操作,与 AgentLedger 台账投影同构(§5.2/§7.20)。
+**用量**:每轮模型实测 token 用量由 `usage` 事件上报;task 层 usage 投影器(TaskEntry 订阅自身事件流)把任务下所有 agent 的「最近一轮上下文占用」聚合为 `TaskSummary.usage`(Σ inputTokens / Σ contextWindowTokens,每 agent 取最近一轮、已终局 agent 保留最后快照;前端任务列表与聊天页上下文电池同源同值,随 meta.json 持久化)并触发 `task.updated` 广播——横切层(advisor)不感知任务域操作,与 AgentLedger 台账投影同构(§5.2/§7.20)。
 
 ### 7.6 多 hub 连接与输出路由
 

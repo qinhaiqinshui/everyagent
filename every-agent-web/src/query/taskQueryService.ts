@@ -77,9 +77,9 @@ function toListItem(entry: TaskListEntry): TaskListItemSnapshot {
     attachedSkillLabel: '',
     statusLabel: formatTaskStatus(entry.status),
     statusTone: resolveTaskStatusTone(entry.status),
-    // 直接消费 worker TaskSummary.usage(任务列表随 tasks.list/task.updated 携带,
-    // 不再依赖打开聊天页建流;聊天页流折叠到实时值后优先实时)。
-    contextUsage: taskStreamManager.peekState(entry.taskId)?.contextUsage ?? entry.contextUsage ?? null,
+    // 直接消费 worker TaskSummary.usage(usage 投影器聚合任务下所有 agent 最近一轮占用,
+    // 随 tasks.list/task.updated 携带;不依赖打开聊天页建流,聊天页与列表页电池同源同值)。
+    contextUsage: entry.contextUsage ?? null,
     mainAgentId: entry.mainAgentId || undefined,
     workspace: entry.workspace,
     workerId: entry.workerId,
@@ -133,7 +133,7 @@ export const taskQueryService = {
       },
       header: { displayTitle: entry.title, workspace: entry.workspace },
       thread: this.getTaskThread(taskId),
-      contextUsage: taskStreamManager.peekState(taskId)?.contextUsage ?? entry.contextUsage ?? null,
+      contextUsage: entry.contextUsage ?? null,
     }
   },
 

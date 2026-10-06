@@ -16,7 +16,6 @@ import {
   readNum,
   readStr,
   mapAgentStatus,
-  DEFAULT_CONTEXT_WINDOW_TOKENS,
 } from './eventFolder'
 
 /** 事件处理器接口。 */
@@ -163,7 +162,7 @@ registerEventKind('tool.result', {
   },
 })
 
-/** usage → 更新 contextUsage + agentMeta */
+/** usage → 更新 agentMeta(每 agent 最近一轮占用/累计);任务级电池走 taskStore 的 worker 聚合值 */
 registerEventKind('usage', {
   handle(event, state, folder) {
     const agentKey = agentKeyOf(event)
@@ -171,20 +170,6 @@ registerEventKind('usage', {
     const data = dataOf(event) ?? {}
     const round = readUsage(data.round)
     const total = readUsage(data.total)
-    if (!agentKey && round) {
-      const maxTokens = readNum(data.contextWindowTokens) ?? DEFAULT_CONTEXT_WINDOW_TOKENS
-      const model = readStr(data.model)
-      state.contextUsage = {
-        promptTokens: round.inputTokens,
-        completionTokens: round.outputTokens,
-        totalTokens: total?.totalTokens ?? round.totalTokens,
-        maxTokens,
-        usageRatio: maxTokens > 0 ? round.inputTokens / maxTokens : 0,
-        lastUpdatedAt: ts,
-        requestType: 'chatStream',
-        model: model ?? '',
-      }
-    }
     folder.mergeAgentMeta(agentKey, {
       contextUsed: round?.inputTokens,
       contextWindow: readNum(data.contextWindowTokens),

@@ -110,13 +110,14 @@ export function mapWorkerStatus(raw: string | undefined): TaskStatus {
   }
 }
 
-/** 窗口上限缺省值(与 worker ContextOverflow.DEFAULT_CONTEXT_WINDOW_TOKENS 一致):数据源未配置时兜底,避免显示 0。 */
+/** 窗口上限缺省值(与 worker WorkerConfig.DEFAULT_CONTEXT_WINDOW_TOKENS 一致):数据源未配置时兜底,避免显示 0。 */
 const DEFAULT_CONTEXT_WINDOW_TOKENS = 256_000
 
 /**
- * worker TaskSummary.usage → 列表电池快照。
- * 口径与聊天页 eventFolder 一致:最近一轮主 agent 实测 usage
- * (promptTokens=inputTokens,占比=inputTokens/maxTokens,窗口上限缺省回退默认窗口)。
+ * worker TaskSummary.usage → 上下文电池快照。
+ * 口径:任务级聚合——任务下所有 agent 最近一轮上下文占用之和(worker usage 投影器维护:
+ * Σ inputTokens / Σ contextWindowTokens,随 task.updated 每轮更新;promptTokens=聚合
+ * inputTokens,占比=聚合 inputTokens/聚合窗口上限,窗口上限缺省回退默认窗口)。
  */
 function toContextUsage(usage: WorkerUsageSummary, updatedAt: number): ContextMonitorSnapshot | null {
   const inputTokens = usage.inputTokens ?? 0

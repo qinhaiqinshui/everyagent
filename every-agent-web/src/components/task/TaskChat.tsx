@@ -969,13 +969,13 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
                         >✕</span>
                       </span>
                     ))}
-                    {/* 实时流折叠到 usage 事件优先;老任务/终态任务无尾段事件可折入时,
-                        回退到 taskStore 的 TaskSummary.usage 持久化快照(与 taskQueryService
-                        listTaskListItems 的电池兜底口径一致),保证打开老任务电池也显示最近一轮用量。
+                    {/* 上下文电池统一消费 taskStore 的 TaskSummary.usage(worker usage
+                        投影器聚合任务下所有 agent 最近一轮占用,task.updated 每轮实时推送;
+                        聊天页与任务列表同源同值,流内不再单独维护)。
                         详情卡数据 = 主 agent 列表项(与子 agent 悬停卡同构)。 */}
                     <ContextBattery
                       taskId={effectiveTaskId}
-                      monitor={stream?.state.contextUsage ?? entry?.contextUsage ?? null}
+                      monitor={entry?.contextUsage ?? null}
                       agentItem={mainAgentItem}
                     />
                   </div>

@@ -12,8 +12,9 @@
  * - thinking / delta       → 当前流式 assistant 消息的 reasoning / content 追加(瞬态,payload.content)
  * - message                → 一轮权威终结:完整 content/data.thinking/data.toolCalls(真实 toolCall id)
  *                           定稿该 agent 的流式消息
- * - usage                  → 主 agent 上下文用量快照(contextUsage,不进线程);主/子统一的
- *                           累计用量/上下文快照同时维护 agentMeta(不进线程)
+ * - usage                  → 每 agent 最近一轮占用/累计用量/上下文快照维护 agentMeta(不进线程);
+ *                           任务级上下文电池不在流内维护——统一消费 taskStore 的
+ *                           TaskSummary.usage(worker usage 投影器聚合同步,task.updated 携带)
  * - tool.result            → role:'tool' 消息(TaskChat 按 callId 合并进下发块渲染)
  * - agent.started/done     → 子 agent trace(spawn 生命周期,必带 agentId);同时合并 agentMeta
  *                           (标题/创建时间/收口累计用量)
@@ -33,7 +34,6 @@
 import type {
   AgentMessageRecord,
   AgentStatus,
-  ContextMonitorSnapshot,
   LLMToolCall,
 } from '@/types'
 import type {
@@ -81,8 +81,6 @@ export interface TaskThreadState {
    * (usage/agent.started/agent.done)字段级覆盖;驱动子 agent 胶囊列表/悬停卡片。
    */
   agentMeta: Record<string, AgentMetaSnapshot>
-  /** 主 agent 上下文用量(usage 事件滚动更新,驱动上下文电池)。 */
-  contextUsage?: ContextMonitorSnapshot | null
   /** 任务冻结的模型信息(当前不再由流事件填充,通常为空,见 TaskModelInfo)。 */
   taskModel?: TaskModelInfo | null
   /** slash 任务级 token(slash.tokens.changed 事件 REPLACE 更新;null=未收到)。 */
@@ -158,7 +156,6 @@ export class TaskEventFolder {
     this.state.items = []
     this.state.agentStates = {}
     this.state.agentMeta = {}
-    this.state.contextUsage = null
     this.state.taskModel = null
     this.bySeq.clear()
     this.anchors.streaming.clear()
@@ -897,7 +894,7 @@ export function readStr(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() !== '' ? value : undefined
 }
 
-/** 窗口上限缺省值(与 worker ContextOverflow.DEFAULT_CONTEXT_WINDOW_TOKENS 一致):数据源未配置时兜底,避免显示 0。 */
+/** 窗口上限缺省值(与 worker WorkerConfig.DEFAULT_CONTEXT_WINDOW_TOKENS 一致):数据源未配置时兜底,避免显示 0。 */
 export const DEFAULT_CONTEXT_WINDOW_TOKENS = 256_000
 
 export function readNum(value: unknown): number | undefined {
