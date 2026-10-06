@@ -22,7 +22,9 @@ import java.io.IOException;
 import java.nio.file.AccessDeniedException;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Comparator;
@@ -317,23 +319,39 @@ public class FsService {
         }
     }
 
-    private ObjectNode entry(Path p) throws IOException {
+    /**
+     * 目录条目 stat。单条目属性不可读时容错降级,不拖垮整个目录枚举:典型场景是
+     * Windows 上不可解析的 reparse 点(如 WSL/npm 生成的 LX symlink,Win32 跟随
+     * 链接读属性报 ERROR_CANT_ACCESS_FILE「系统无法访问此文件」,曾把整个 fs.list
+     * 打成 INTERNAL 错误、搜索侧边栏文件名搜索整树报错)。跟随读失败先回退
+     * NOFOLLOW 读链接自身属性(悬空/坏链接仍有真实的 size/mtime),仍失败按
+     * dir=false、时间戳 0 的普通文件条目返回(前端按「未知」展示)。
+     */
+    private ObjectNode entry(Path p) {
+        BasicFileAttributes a = statEntry(p);
         ObjectNode o = Json.obj();
         o.put("name", p.getFileName().toString());
-        o.put("dir", Files.isDirectory(p));
-        o.put("size", Files.isDirectory(p) ? 0 : Files.size(p));
-        o.put("modifiedTs", Files.getLastModifiedTime(p).toMillis());
-        o.put("createdTs", createdTs(p));
+        o.put("dir", a != null && a.isDirectory());
+        o.put("size", a == null || a.isDirectory() ? 0 : a.size());
+        o.put("modifiedTs", a != null ? a.lastModifiedTime().toMillis() : 0L);
+        o.put("createdTs", a != null ? a.creationTime().toMillis() : 0L);
         return o;
     }
 
-    /** 读取创建时间;平台/文件系统不支持(如部分 POSIX 无 birth time)时返回 0,前端按「未知」处理。 */
-    private long createdTs(Path p) {
+    /**
+     * 跟随链接读基本属性;失败(悬空链接/不可解析 reparse 点)回退 NOFOLLOW 读
+     * 链接自身,仍失败返回 null(调用方按「未知」降级)。部分平台无 birth time 时
+     * creationTime 返回纪元 0,同样由前端按「未知」处理。
+     */
+    private static BasicFileAttributes statEntry(Path p) {
         try {
-            return Files.readAttributes(p, java.nio.file.attribute.BasicFileAttributes.class)
-                    .creationTime().toMillis();
-        } catch (Exception e) {
-            return 0L;
+            return Files.readAttributes(p, BasicFileAttributes.class);
+        } catch (IOException e) {
+            try {
+                return Files.readAttributes(p, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+            } catch (IOException e2) {
+                return null;
+            }
         }
     }
 
