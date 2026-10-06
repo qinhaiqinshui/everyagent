@@ -184,24 +184,23 @@ has_children: false
 | `sdk.workspace.list()` | `() => Promise<PluginWorkspaceEntry[]>` | 前端工作区注册表合并快照 |
 | `sdk.workspace.workerIdOfRoot(root)` | `(root: string) => string \| undefined` | 按工作区根反查来源 worker |
 
-### 2.4 `PluginEvents` —— on/emit 与 38 个事件的生死
+### 2.4 `PluginEvents` —— on/emit 与 21 个事件
 
 总线实现与「emit 到不了 worker」结论：[事件 §1](../web/events.md#1-事件系统架构一个模块级单例总线)。
 
 | 方法 | 一行签名 | 详解 |
 |---|---|---|
 | `on` | `on(name: PluginDomainEvent, h: (payload: unknown) => void): Disposable` | [ctx §7](../web/context-api.md#7-ctxevents--领域事件总线) |
-| `emit` | `emit(name: PluginDomainEvent, payload: unknown): void` | 无监听者静默；`*-requested` 类可反向驱动宿主（[事件 §3.2](../web/events.md#32-声明了但全仓零-emit-的事件24-个-订阅无效)） |
+| `emit` | `emit(name: PluginDomainEvent, payload: unknown): void` | 无监听者静默；4 个请求通道可反向驱动宿主（[事件 §3.2](../web/events.md#32-宿主从不-emit但插件可反向驱动的请求通道4-个)） |
 
-宿主 `DOMAIN_EVENTS` 共 **38** 个：**14 个真实会发生**（[事件 §3.1](../web/events.md#31-真实会发生的事件14-个)）、**24 个零 emit 死事件**（[事件 §3.2](../web/events.md#32-声明了但全仓零-emit-的事件24-个-订阅无效)）。类型包具名 9 个（[事件 §2](../web/events.md#2-plugin-api-的-9-个具名事件)）生死如下：
+宿主 `DOMAIN_EVENTS` 共 **21** 个：**17 个真实会发生**（[事件 §3.1](../web/events.md#31-真实会发生的事件17-个)）、**4 个宿主监听的请求通道**（[事件 §3.2](../web/events.md#32-宿主从不-emit但插件可反向驱动的请求通道4-个)）——known-issues #4 清理后常量表已无零 emit 死事件。类型包具名 8 个（[事件 §2](../web/events.md#2-plugin-api-的具名事件)）**全部存活**：
 
 | 具名事件 | 生死 | 具名事件 | 生死 |
 |---|---|---|---|
-| `workspace-file-changed` | ✅ 活（高频） | `task-created` | ❌ 零 emit |
-| `workspace-registry-changed` | ✅ 活 | `task-deleted` | ❌ 零 emit（file-change 踩中死订阅） |
-| `sidebar-panel-shown` | ✅ 活 | `task-trace-changed` | ❌ 零 emit |
-| `task-status-changed` | ✅ 活 | `file-content-saved` | ❌ 零 emit |
-| `task-round-closed` | ✅ 活（历史回放会补发） | （其余 29 个不在具名清单） | 9 活 + 20 死，见 §3.1/§3.2 |
+| `workspace-file-changed` | ✅ 活（高频） | `task-created` | ✅ 活（#4 接线） |
+| `workspace-registry-changed` | ✅ 活 | `task-deleted` | ✅ 活（#4 接线） |
+| `sidebar-panel-shown` | ✅ 活 | `task-round-closed` | ✅ 活（历史回放会补发） |
+| `task-status-changed` | ✅ 活 | `plugins-loaded` | ✅ 活（#4 接线） |
 
 插件间通信无先例：25 个内置插件 events 调用 6 处全是 `on`、零 `emit`；约定事件名用 `<pluginId>:<verb>` 前缀（[事件 §6](../web/events.md#6-插件间通信模式)）。
 

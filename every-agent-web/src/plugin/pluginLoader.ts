@@ -29,7 +29,7 @@ import * as Icons from '@ant-design/icons'
 import * as ReactJSXRuntime from 'react/jsx-runtime'
 import { hubSession } from '@/hub/session'
 import { workspaceRegistry } from '@/hub/workspaceRegistry'
-import { domainEventBus } from '@/events/eventBus'
+import { domainEventBus, DOMAIN_EVENTS } from '@/events/eventBus'
 import { workspaceGateway } from '@/platform/fs/workspaceGateway'
 import { pluginDispatcher } from './PluginDispatcher'
 import type {
@@ -408,6 +408,10 @@ async function doLoadPlugins(): Promise<void> {
       console.warn(`[plugins] 插件 ${plugin.id} 加载失败:`, e)
     }
   }
+
+  // 本轮加载流程结束：广播 plugins-loaded（数量含此前已装载的插件）。
+  // 注意 fire-and-forget：晚于本 emit 才激活的插件收不到它（事件无重放）。
+  domainEventBus.emit(DOMAIN_EVENTS.PLUGINS_LOADED, { count: loadedPlugins.size })
 }
 
 /**

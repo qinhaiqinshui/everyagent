@@ -145,17 +145,16 @@ export interface PluginSdk {
   readonly workerId: string
 }
 
-/** 领域事件名（与宿主 DOMAIN_EVENTS 同名值，字符串字面量联合）。 */
+/** 领域事件名（与宿主 DOMAIN_EVENTS 同名值，字符串字面量联合；全部有真实 emit）。 */
 export type PluginDomainEvent =
   | 'workspace-file-changed'
   | 'workspace-registry-changed'
   | 'sidebar-panel-shown'
-  | 'file-content-saved'
   | 'task-created'
   | 'task-deleted'
   | 'task-status-changed'
-  | 'task-trace-changed'
   | 'task-round-closed'
+  | 'plugins-loaded'
   | (string & {})
 
 /** 领域事件总线（对标 vscode.event；委托宿主 domainEventBus）。 */

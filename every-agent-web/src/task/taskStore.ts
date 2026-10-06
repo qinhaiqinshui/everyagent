@@ -265,6 +265,10 @@ class TaskStore {
       }
       if (frame.event !== 'task.created' && frame.event !== 'task.updated') return
       this.upsert(frame.payload as WorkerTaskSummary, workerId)
+      // task.created(本端与其它端创建同权)→ 广播领域事件,供插件感知新任务/作废缓存。
+      if (frame.event === 'task.created') {
+        domainEventBus.emit(DOMAIN_EVENTS.TASK_CREATED, { taskId: String(payload?.taskId ?? '') })
+      }
     })
     hubSession.onReconnect(() => {
       this.subscribeTaskChannels()
@@ -517,6 +521,8 @@ class TaskStore {
     if (!taskId) return
     if (this.tasks.delete(taskId)) {
       this.sortAndNotify()
+      // 广播领域事件:任务删除(插件作废该任务相关缓存,file-change 在用)。
+      domainEventBus.emit(DOMAIN_EVENTS.TASK_DELETED, { taskId })
     }
   }
 

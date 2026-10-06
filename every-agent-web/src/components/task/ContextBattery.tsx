@@ -1,6 +1,5 @@
 import React from 'react'
 import type { ContextMonitorSnapshot } from '@/types'
-import { domainEventBus, DOMAIN_EVENTS } from '@/events/eventBus'
 import { formatTokenCount } from '@/utils/formatTokens'
 import { AgentInfoHoverCard, type AgentListItem } from './AgentInfoHoverCard'
 
@@ -18,7 +17,7 @@ function formatUsagePercent(value: number): string {
 
 /** 上下文电池属性。 */
 export type ContextBatteryProps = {
-  /** 当前任务 ID（用于订阅其私有事件）。 */
+  /** 当前任务 ID（保留给调用方锚定语境；组件本体已不按任务订阅事件）。 */
   taskId: string
   /** 初始上下文监控快照（首次渲染用，运行时由事件实时覆盖）。 */
   monitor: ContextMonitorSnapshot | null | undefined
@@ -37,25 +36,14 @@ type UsageLevel = 'ok' | 'warn' | 'danger'
  * - 电池格内已用部分按用量着色（绿 / 黄 / 红），剩余部分为轨道底色。
  * - 点击电池弹出详情卡：与子 agent 悬停信息卡共用 AgentInfoHoverCard（信息与样式
  *   完全一致——状态/标题/完整 agentId/创建时间/模型/累计 tokens 与上下文用量）。
- * - 通过 `TASK_CONTEXT_MONITOR_CHANGED` 事件实时更新（任务执行中、上下文裁剪后均生效）。
+ * - 数据经 `monitor` prop 镜像更新（任务流 usage 快照随 taskStore/taskStream 刷新）。
  */
-export default function ContextBattery({ taskId, monitor, agentItem }: ContextBatteryProps) {
+export default function ContextBattery({ monitor, agentItem }: ContextBatteryProps) {
   const [live, setLive] = React.useState<ContextMonitorSnapshot | null>(monitor ?? null)
   const [open, setOpen] = React.useState(false)
   const rootRef = React.useRef<HTMLDivElement>(null)
 
-  // 实时订阅本任务上下文监控变化。
-  React.useEffect(() => {
-    const unsubscribe = domainEventBus.subscribe(DOMAIN_EVENTS.TASK_CONTEXT_MONITOR_CHANGED, (payload) => {
-      if (payload.taskId !== taskId || !payload.snapshot) {
-        return
-      }
-      setLive(payload.snapshot)
-    })
-    return unsubscribe
-  }, [taskId])
-
-  // 外部传入的快照更新时采纳（仅接受更新的时间戳，避免覆盖事件推来的实时值）。
+  // 外部传入的快照更新时采纳（仅接受更新的时间戳，避免旧值覆盖实时值）。
   React.useEffect(() => {
     if (!monitor) {
       return

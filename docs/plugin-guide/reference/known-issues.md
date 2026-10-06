@@ -38,12 +38,15 @@ has_children: false
 - **修复**：dispose 补齐侧路 unregister——`outputBlockRegistry` 新增 `unregister(tag)`、`traceTypeRegistry` 新增 `unregisterTraceType(kind)`，`PluginDispatcher` 两个注册方法的 Disposable 同时清理真实消费方；无人读的 `outputBlocksMap` 已删除。
 - **后续**：两个扩展点的 dispose 均可依赖；[UI 扩展点](../web/ui-extensions.md) §10/§11/§16 已按新口径更新。
 
-### #4 24 个零 emit 死事件 + `task-deleted` 死订阅陷阱
+### #4 24 个零 emit 死事件 + `task-deleted` 死订阅陷阱（✅ 已修复）
 
-- **现象**：`DOMAIN_EVENTS` 常量表 38 个事件中仅 14 个有真实 emit，**24 个零 emit**（`every-agent-web/src/events/domainEvents.ts:91-130`）；plugin-api 具名 9 个中 4 个死（`file-content-saved`/`task-created`/`task-deleted`/`task-trace-changed`）。内置插件的真实死订阅：file-change 订阅 `task-deleted` 作废缓存（`every-agent-plugins/file-change/web/index.ts:28-31`），但任务删除实际走 `taskStore.remove()` **不发事件**，该作废路径永不触发。`plugins-loaded` 全仓零 emit（仅 `domainEvents.ts:127` 声明）；`agent-run-event` 零 emit，且其注释引用的 `src/task/agentRunEventBridge.ts`（`domainEvents.ts:61`）**在仓库中不存在**。
-- **影响**：订阅死事件「能编译、能注册、永远不响」——`(string & {})` 兜底不拦截，是最易踩的前端陷阱。
-- **规避**：写订阅前先查 [事件](../web/events.md) §3.1（14 个活事件）/§3.2（24 个死事件）两张表；带 `*-requested` 后缀的死事件可反向 emit 驱动宿主（Layout 在听），是唯一例外。
-- **待办**：清理 `DOMAIN_EVENTS` 常量表（折叠器/镜像订阅已取代其设计位的条目），或补齐缺失的 emit；顺带修 `domainEvents.ts:61` 的幽灵文件引用。
+- **现象（修复前）**：`DOMAIN_EVENTS` 常量表 38 个事件中仅 14 个有真实 emit，**24 个零 emit**；plugin-api 具名 9 个中 4 个死（`file-content-saved`/`task-created`/`task-deleted`/`task-trace-changed`）。内置插件的真实死订阅：file-change 订阅 `task-deleted` 作废缓存，但任务删除实际走 `taskStore.remove()` **不发事件**，该作废路径永不触发。`plugins-loaded` 全仓零 emit；`agent-run-event` 零 emit，且其注释引用的 `src/task/agentRunEventBridge.ts` **在仓库中不存在**。
+- **影响（修复前）**：订阅死事件「能编译、能注册、永远不响」——`(string & {})` 兜底不拦截，是最易踩的前端陷阱。
+- **修复**（清理 + 补 emit 双管齐下）：
+  - **补齐 emit（3 个）**：`taskStore.remove()` 删除镜像成功即 emit `task-deleted`（file-change 的缓存作废路径接活）；worker `task.created` 帧入库后 emit `task-created`（首拉列表/翻页不触发）；`loadPlugins()` 每轮流程末尾 emit `plugins-loaded`（count=已装载总数）。
+  - **清理被取代条目（17 个）**：`agent-updated`/`agent-message-appended`/`agent-message-streaming`/`task-trace-changed`/`task-token-usage-changed`/`task-context-monitor-changed`/`task-protocol-state-changed`/`file-content-saved`/`task-turn-started`/`task-turn-completed`/`agent-run-event`/`settings-llm-profiles-patched`/`settings-guardrail-patched`/`settings-prompt-templates-patched`/`app-notification-added`/`app-notification-removed`/`workspace-open-ai-call-log-requested` 连同 `DomainEventMap` 载荷一并删除；`AgentRunEvent`/`AgentRunEventPayload` 类型与幽灵文件引用（`agentRunEventBridge.ts`）随之移除；`ContextBattery` 的 `task-context-monitor-changed` 死订阅同步摘除（改经 `monitor` prop 镜像更新）。
+  - plugin-api 具名清单同步：删 `file-content-saved`/`task-trace-changed`、增 `plugins-loaded`，8 个具名全部存活。
+- **现状**：常量表 21 个事件 = 17 个真实 emit + 4 个「宿主监听、插件可反向 emit」的请求通道（3 个 `*-requested` + `runtime-config-error`），死事件陷阱整类消除。详见 [事件](../web/events.md) §3（两张表已按新口径重写）。
 
 ### #5 `webMain` 的值不被消费（路径硬编码）
 
