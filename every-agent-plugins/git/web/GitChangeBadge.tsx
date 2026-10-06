@@ -108,8 +108,8 @@ export default function GitChangeBadge() {
     <span
       style={{
         position: 'absolute',
-        top: 2,
-        right: 2,
+        top: -2,
+        right: -2,
         minWidth: 16,
         height: 16,
         padding: '0 4px',
