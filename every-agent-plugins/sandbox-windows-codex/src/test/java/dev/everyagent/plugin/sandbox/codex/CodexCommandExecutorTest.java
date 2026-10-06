@@ -150,11 +150,11 @@ class CodexCommandExecutorTest {
     @Test
     void childEnvPrependsRgDirToPath() {
         Path rg = tempDir.resolve("bin/rg.exe");
-        Map<String, String> env = CodexCommandExecutor.childEnv(rg, null);
+        Map<String, String> env = CodexCommandExecutor.childEnv(rg, null, null);
         String key = env.containsKey("Path") ? "Path" : "PATH";
         assertTrue(env.get(key).startsWith(rg.getParent().toString()),
                 "rg 所在目录前置进 Path:" + env.get(key));
-        Map<String, String> plain = CodexCommandExecutor.childEnv(null, null);
+        Map<String, String> plain = CodexCommandExecutor.childEnv(null, null, null);
         assertEquals(dev.everyagent.plugin.api.util.SecretPatterns.scrubEnv(System.getenv()).env(),
                 plain, "无 rg 时继承「凭据剔除后的父环境」(整块原样继承是泄露面,见 SecretPatterns)");
         assertFalse(plain.entrySet().stream()
@@ -165,43 +165,33 @@ class CodexCommandExecutorTest {
     }
 
     @Test
-    void ensureMavenSettingsGenerated() throws IOException {
-        Path ws = tempDir.resolve("ws-m2");
-        CodexCommandExecutor.ensureMavenSettings(ws);
-        Path settings = ws.resolve(".everyagent").resolve("m2").resolve("settings.xml");
-        assertTrue(Files.exists(settings), "settings.xml 应生成");
-        String xml = Files.readString(settings);
-        assertTrue(xml.contains(ws.resolve(".everyagent").resolve("m2-repo").toString()),
-                "localRepository 指工作区可写仓库:" + xml);
-        assertTrue(xml.contains("central-online"), "在线兜底仓库必须在");
-        assertTrue(xml.contains("https://repo.maven.apache.org/maven2"), "官方 URL");
-        if (Files.isDirectory(Path.of(System.getProperty("user.home"), ".m2", "repository"))) {
-            assertTrue(xml.contains("<mirrorOf>central</mirrorOf>"),
-                    "宿主仓库存在时应挂 file:// 继承镜像");
-        }
-        // 幂等覆盖
-        CodexCommandExecutor.ensureMavenSettings(ws);
-        assertEquals(xml, Files.readString(settings), "重复生成结果一致");
-    }
-
-    @Test
-    void childEnvInjectsMavenArgs() {
-        Path ws = tempDir.resolve("ws-m2env");
-        Map<String, String> env = CodexCommandExecutor.childEnv(null, ws);
-        assertEquals("-s \"" + CodexCommandExecutor.mavenSettingsPath(ws) + "\"",
-                env.get("MAVEN_ARGS"), "MAVEN_ARGS 指向沙箱 settings(AI 显式 -s 可覆盖)");
+    void childEnvRedirectsHomeToSandboxProfile() {
+        Path ws = tempDir.resolve("ws-profile");
+        Path profile = Path.of("C:", "Users", "EACodexOnline");
+        Map<String, String> env = CodexCommandExecutor.childEnv(null, ws, profile);
+        assertEquals(profile.toString(), env.get("USERPROFILE"),
+                "env 型工具(git/npm/pip)读 USERPROFILE,必须指沙箱真 profile 而非宿主目录"
+                        + "(宿主只读且 .gitconfig/.npmrc 凭据不得泄露)");
+        assertEquals(profile.toString(), env.get("HOME"), "跨平台工具(git/msys)优先读 HOME");
+        assertEquals(profile.resolve("AppData").resolve("Roaming").toString(),
+                env.get("APPDATA"));
+        assertEquals(profile.resolve("AppData").resolve("Local").toString(),
+                env.get("LOCALAPPDATA"), "npm cache/pip cache 默认落 LOCALAPPDATA");
+        assertNull(env.get("MAVEN_ARGS"),
+                "profile 方案下无任何工具特判(mvn 仓库随 user.home 走真 profile)");
+        assertNull(env.get("JDK_JAVA_OPTIONS"), "JVM 的 user.home 走账户 profile,无需注入");
     }
 
     @Test
     void childEnvRedirectsTempIntoWorkspace() {
         Path ws = tempDir.resolve("ws-root");
-        Map<String, String> env = CodexCommandExecutor.childEnv(null, ws);
+        Map<String, String> env = CodexCommandExecutor.childEnv(null, ws, null);
         String expected = ws.resolve(".everyagent").resolve("tmp").toString();
         assertEquals(expected, env.get("TEMP"),
                 "命令子进程是 WRITE_RESTRICTED 受限令牌,组 ACE 对其写检查无效,"
                         + "TEMP 必须指到 capability 覆盖的工作区 .everyagent/tmp");
         assertEquals(expected, env.get("TMP"), "TMP 与 TEMP 同指一处");
-        Map<String, String> untouched = CodexCommandExecutor.childEnv(null, null);
+        Map<String, String> untouched = CodexCommandExecutor.childEnv(null, null, null);
         assertEquals(dev.everyagent.plugin.api.util.SecretPatterns.scrubEnv(System.getenv()).env()
                         .get("TEMP"),
                 untouched.get("TEMP"), "workspaceRoot 为空时不碰 TEMP(维持宿主继承)");

@@ -137,6 +137,37 @@ public final class RunnerClient {
         }
     }
 
+    /**
+     * 一次性自检（进程级 flag）：LOGON_WITH_PROFILE 生效后 {@code C:\Users\<account>}
+     * 应已创建（Windows 在首次 logon 时建目录+加载 hive）。不存在即打 WARN——说明
+     * flag 未生效（如未来注册表 ProfilesDirectory 改址），沙箱内工具将回落无家状态，
+     * 提示现场排查。只读检查，零成本。
+     */
+    private static void verifyProfileLoadedOnce(String username) {
+        if (PROFILE_VERIFIED.getAndSet(true)) {
+            return;
+        }
+        try {
+            Path profile = Path.of(System.getenv().getOrDefault("SystemDrive", "C:"),
+                    "Users", username);
+            if (!Files.isDirectory(profile)) {
+                LOG.log(System.Logger.Level.WARNING,
+                        "[runner] LOGON_WITH_PROFILE 后未见 profile 目录 {0}——沙箱工具的"
+                                + "用户目录配置(mvn 仓库/npm cache 等)将不可用,请排查",
+                        profile);
+            } else {
+                LOG.log(System.Logger.Level.INFO,
+                        "[runner] 沙箱 profile 已就绪: {0}", profile);
+            }
+        } catch (RuntimeException ex) {
+            LOG.log(System.Logger.Level.WARNING, "[runner] profile 自检失败: {0}", ex);
+        }
+    }
+
+    /** {@link #verifyProfileLoadedOnce} 的一次性闸。 */
+    private static final java.util.concurrent.atomic.AtomicBoolean PROFILE_VERIFIED =
+            new java.util.concurrent.atomic.AtomicBoolean();
+
     /** CreateProcessWithLogonW + 1056 原凭据重试 + 凭据类失败分类。 */
     private static WinBase.PROCESS_INFORMATION spawnWithLogon(RunnerConfig cfg,
             String pipeInName, String pipeOutName) throws IOException {
@@ -168,7 +199,14 @@ public final class RunnerClient {
                         cfg.username(),
                         ".",
                         cfg.password(), // JNA unicode 映射 → UTF-16LE，不经默认 charset
-                        0, // 不传 LOGON_WITH_PROFILE（无 execution alias）
+                        // LOGON_WITH_PROFILE：为沙箱账户创建/加载真实 profile
+                        // （C:\Users\<account>，Windows 默认落点）——沙箱自此有「家」:
+                        // env 型工具(git/npm/pip)读 USERPROFILE/HOME(见 childEnv 注入),
+                        // JVM 系(mvn/gradle)的 user.home 走账户 profile(GetUserProfile-
+                        // Directory),不再回落 C:\ 建 C:\.m2 失败。codex 原生仅在
+                        // execution alias 场景开此 flag,我们常态化——代价仅首启建
+                        // profile 一次(秒级)+各类依赖冷下载一份(账户级持久复用)。
+                        Advapi32.LOGON_WITH_PROFILE,
                         argv.get(0), // lpApplicationName = java.exe 绝对路径（对齐 codex）
                         cmdline,
                         Kernel32Ex.CREATE_NO_WINDOW | WinBase.CREATE_UNICODE_ENVIRONMENT,
@@ -177,6 +215,7 @@ public final class RunnerClient {
                         startupInfo(),
                         pi);
                 if (ok) {
+                    verifyProfileLoadedOnce(cfg.username());
                     return pi;
                 }
                 failure = Kernel32.INSTANCE.GetLastError();

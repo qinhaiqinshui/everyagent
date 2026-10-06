@@ -196,7 +196,7 @@ public final class CodexCommandExecutor {
         long timeoutMs = manager.execTimeoutMs();
         CodexSandboxSession.SessionSpec spec = new CodexSandboxSession.SessionSpec(
                 commandArgv(command), workspaceRoot.toString(),
-                childEnv(rgBinary, workspaceRoot),
+                childEnv(rgBinary, workspaceRoot, sandboxProfileDir()),
                 timeoutMs > 0 ? timeoutMs : null, policy.writeRoots(), List.of(),
                 CapSids.workspaceCapSidForCwd(home, workspaceRoot),
                 wireName(identity), false, null);
@@ -393,8 +393,16 @@ public final class CodexCommandExecutor {
      * 继承来的宿主 TEMP（真实用户的 %LOCALAPPDATA%\Temp）不可写,mvn/pytest 等用临时目录的
      * 工具全数 Access Denied（命令 env 是整块替换,只修 runner env 会被这里盖回去;该目录由
      * ChildProcess.OutputFiles.scratchDir 每次 spawn 时 createDirectories 保证存在）。
+     * <p>profileDir 非空时 {@code USERPROFILE}/{@code HOME}/{@code APPDATA}/
+     * {@code LOCALAPPDATA} 指到<b>沙箱账户真 profile</b>（{@code C:\Users\<account>},
+     * 由 runner 的 LOGON_WITH_PROFILE 创建/加载）——env 型工具(git/npm/pip)按平台约定
+     * 把配置/缓存放用户目录,指宿主目录则只读(写全拒)且宿主 .gitconfig/.npmrc 凭据
+     * 泄露;指真 profile 则可写+隔离+账户级持久复用(依赖只冷下载一份)。JVM 系无需
+     * 任何 env——user.home 走账户 profile(GetUserProfileDirectory),LOGON_WITH_PROFILE
+     * 加载后自然正确。实测依据:仅授账户 Full(无组/无 capability)的目录受限令牌可写
+     * (写检查=DACL 授予∩restricting SIDs,账户 user SID 两边都在)。
      */
-    static Map<String, String> childEnv(Path rgBinary, Path workspaceRoot) {
+    static Map<String, String> childEnv(Path rgBinary, Path workspaceRoot, Path profileDir) {
         Map<String, String> env = new LinkedHashMap<>(inheritEnv());
         if (rgBinary != null && rgBinary.getParent() != null) {
             String dir = rgBinary.getParent().toString();
@@ -409,89 +417,24 @@ public final class CodexCommandExecutor {
             String tmp = workspaceRoot.resolve(".everyagent").resolve("tmp").toString();
             env.put("TEMP", tmp);
             env.put("TMP", tmp);
-            // Maven 3.9+:MAVEN_ARGS 展开在 CLI 之前,AI 显式 -s 时后者覆盖。
-            // 覆盖宿主 MAVEN_ARGS(若有)是刻意:沙箱内仓库策略必须一致。
-            env.put("MAVEN_ARGS", "-s \"" + mavenSettingsPath(workspaceRoot) + "\"");
+        }
+        if (profileDir != null) {
+            env.put("USERPROFILE", profileDir.toString());
+            env.put("HOME", profileDir.toString());
+            env.put("APPDATA", profileDir.resolve("AppData").resolve("Roaming").toString());
+            env.put("LOCALAPPDATA", profileDir.resolve("AppData").resolve("Local").toString());
         }
         return env;
     }
 
-    /** 沙箱 Maven settings 落点(由 {@link #ensureMavenSettings} 生成):{@code <ws>/.everyagent/m2/settings.xml}。 */
-    static Path mavenSettingsPath(Path workspaceRoot) {
-        return workspaceRoot.resolve(".everyagent").resolve("m2").resolve("settings.xml");
-    }
-
     /**
-     * 生成沙箱 Maven settings.xml(幂等覆盖,见 ARCHITECTURE「子进程 Maven 仓库供给」):
-     * <ul>
-     * <li>{@code localRepository} = {@code <ws>/.everyagent/m2-repo}——沙箱账户是
-     * WRITE_RESTRICTED 令牌且 JDK 的 {@code user.home} 走账户 profile(沙箱账户无
-     * profile→回落 {@code C:\}),默认仓库 {@code C:\.m2} 建不了({@code Could not
-     * create local repository},任何 mvn 命令直接 exit 1),宿主仓库
-     * {@code C:\Users\<host>\.m2} 又只读(install/下载全拒)——工作区是唯一可写落点;</li>
-     * <li>{@code mirrorOf=central → file:///<宿主仓库>}:宿主已有的依赖本地复制(秒得、
-     * 零流量、不污染宿主仓库);缺 .sha1 只是 warning 不失败;</li>
-     * <li>{@code central-online}(官方 URL)兜底:宿主没有的 artifact 落到在线下载。
-     * 不复用宿主 settings.xml——其中可能含 {@code <servers>} 私服凭据,不得进入沙箱。</li>
-     * </ul>
-     * 生成失败静默(工具创建不因此断),沙箱 mvn 仍可手动 {@code -s}/
-     * {@code -Dmaven.repo.local} 覆盖。
+     * 沙箱账户 profile 目录:{@code %SystemDrive%\Users\<onlineAccount>}（Windows 默认
+     * profile 落点;由 runner 侧 LOGON_WITH_PROFILE 首启创建,此处仅推导路径）。
      */
-    static void ensureMavenSettings(Path workspaceRoot) {
-        if (workspaceRoot == null) {
-            return;
-        }
-        try {
-            Path settings = mavenSettingsPath(workspaceRoot);
-            Files.createDirectories(settings.getParent());
-            Path localRepo = workspaceRoot.resolve(".everyagent").resolve("m2-repo");
-            Path hostRepo = Path.of(System.getProperty("user.home"), ".m2", "repository");
-            StringBuilder sb = new StringBuilder(1200);
-            sb.append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
-            sb.append("<!-- everyagent codex-sandbox 生成,每次启动覆盖,勿手改:\n");
-            sb.append("     localRepo=capability 可写的工作区;宿主缓存 file:// 只读继承;\n");
-            sb.append("     新依赖 central-online 在线兜底。 -->\n");
-            sb.append("<settings>\n");
-            sb.append("  <localRepository>").append(xml(localRepo.toString()))
-                    .append("</localRepository>\n");
-            if (Files.isDirectory(hostRepo)) {
-                sb.append("  <mirrors>\n");
-                sb.append("    <mirror>\n");
-                sb.append("      <id>host-cache</id>\n");
-                sb.append("      <url>").append(hostRepo.toUri()).append("</url>\n");
-                sb.append("      <mirrorOf>central</mirrorOf>\n");
-                sb.append("    </mirror>\n");
-                sb.append("  </mirrors>\n");
-            }
-            sb.append("  <profiles>\n");
-            sb.append("    <profile>\n");
-            sb.append("      <id>everyagent-sandbox</id>\n");
-            sb.append("      <repositories>\n");
-            sb.append("        <repository>\n");
-            sb.append("          <id>central-online</id>\n");
-            sb.append("          <url>https://repo.maven.apache.org/maven2</url>\n");
-            sb.append("        </repository>\n");
-            sb.append("      </repositories>\n");
-            sb.append("      <pluginRepositories>\n");
-            sb.append("        <pluginRepository>\n");
-            sb.append("          <id>central-online</id>\n");
-            sb.append("          <url>https://repo.maven.apache.org/maven2</url>\n");
-            sb.append("        </pluginRepository>\n");
-            sb.append("      </pluginRepositories>\n");
-            sb.append("    </profile>\n");
-            sb.append("  </profiles>\n");
-            sb.append("  <activeProfiles>\n");
-            sb.append("    <activeProfile>everyagent-sandbox</activeProfile>\n");
-            sb.append("  </activeProfiles>\n");
-            sb.append("</settings>\n");
-            Files.writeString(settings, sb.toString(), StandardCharsets.UTF_8);
-        } catch (IOException | RuntimeException ex) {
-            // 静默:见 javadoc
-        }
-    }
-
-    private static String xml(String s) {
-        return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
+    Path sandboxProfileDir() {
+        String prefix = manager.options().accountPrefix();
+        String username = SandboxAccounts.onlineUsername(prefix);
+        return Path.of(System.getenv().getOrDefault("SystemDrive", "C:"), "Users", username);
     }
 
     /** 父环境继承 + 凭据剔除（审计只打变量名，绝不打值）；同口径供 runner 复用。 */

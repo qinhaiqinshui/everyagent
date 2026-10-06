@@ -49,16 +49,14 @@ public class CodexBashToolProvider implements ToolProvider {
     @Override
     public List<ToolCallback> createTools(ToolContext ctx) {
         Path workspaceRoot = ctx.workspaceRoot() != null ? Path.of(ctx.workspaceRoot()) : null;
-        // 沙箱 Maven 支撑(方案见 CodexCommandExecutor#ensureMavenSettings javadoc):
-        // 生成 settings.xml 后 childEnv 注入 MAVEN_ARGS 指向它——沙箱内 mvn 读写全通。
-        CodexCommandExecutor.ensureMavenSettings(workspaceRoot);
         CodexCommandExecutor exec = new CodexCommandExecutor(manager, workspaceRoot, rgPath);
         return List.of(ShellTool.powershell(exec::execute)
                 .appendDescription("rg 已加入 PATH，内容搜索尽量使用rg命令，性能更好;"
                         + "rg 未给搜索路径时会静默过滤 null stdin 而返回空,请显式给搜索路径;"
                         + "中文等非 ASCII 输出已正确解码;"
-                        + "mvn 已配置沙箱仓库(工作区 .everyagent/m2-repo 可写,自动继承宿主缓存,"
-                        + "新依赖在线下载),直接执行 mvn 命令即可,勿手动指定 -s 或本地仓库路径。")
+                        + "用户目录(含 Maven 仓库/npm/pip/gradle 缓存)已指向沙箱账户 profile,"
+                        + "可写且持久,各工具直接用默认位置即可,勿手动指定仓库/缓存路径;"
+                        + "临时目录(TEMP)在工作区 .everyagent/tmp,随任务清理。")
                 .callback());
     }
 }
