@@ -16,7 +16,7 @@ has_children: false
 | `AdvisorProvider` | `spi` | `registerAdvisorProvider`（:45） | `AdvisorProviderRegistry` | `AgentBuilder` 每轮装配聚合 | 11 个插件（12 个 Advisor，§2 全表） |
 | `ChatModelEnhancer` | `model` | `registerChatModelEnhancer`（:66） | `ChatModelEnhancerRegistry` | `ChatModelFactory` 构建期委托 | model-pool（唯一） |
 | `TokenEstimator` | `spi` | `registerTokenEstimator`（:63） | 无（直接替换 `WorkerServicesImpl` 持有实例） | `WorkerServices.tokenEstimator()` 的全部调用方 | model-rate-limit |
-| `SkillContributor` | `skill` | `registerSkillContributor`（:60） | `SkillContributorRegistry` | `SkillAdvisor` 合流进 system prompt | subagent（唯一） |
+| `SkillContributor` | `skill` | `registerSkillContributor`（:60） | `SkillContributorRegistry` | `SkillAdvisor` 合流进 system prompt + `SkillSlashProvider` 并入 `/` 菜单 | subagent（唯一） |
 | `SearchProvider` | `spi` | `registerSearchProvider`（:51） | `SearchProviderRegistry` | `fs.search` / `task.search` 增补聚合（§6） | **无** |
 | `AuthorizationHandler` | `permission` | `registerAuthorizationHandler`（:54） | `AuthorizationHandlerRegistry` | `GrantRegistry` 授权决议链 | ai-review、unattended |
 
@@ -237,10 +237,12 @@ public interface SkillContributor {
 
 **与 worker skill 扫描如何合流**：`SkillAdvisor.mergedSkills()`（HP+100）每轮 `before()` 合并两条源——`BuiltInSkills.getActiveSkills()`（worker 内置主动 skill）优先，`SkillContributorRegistry.getSkills()`（全部插件贡献，按注册序拼接）随后，按 skill id 去重（内置赢）（`every-agent-worker/src/main/java/dev/everyagent/worker/skill/SkillAdvisor.java:67-90`）。合并结果以「标题 + 一句话描述 + 知识包绝对路径」的索引 `SystemMessage` 注入 system 区，正文由 AI 按需 `read_file`（渐进式披露）。知识包目录的沙箱可见性由 worker 侧统一登记：`WorkerBeanConfiguration.skillAdvisor` 把 `skillsDir` 以 READ_WRITE 登记挂载意图（`every-agent-worker/src/main/java/dev/everyagent/worker/config/WorkerBeanConfiguration.java:63-70`），注入路径按生效沙箱后端翻译（[`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) §7.12「skill 知识包路径的沙箱注入」）。
 
+**`/` 菜单侧同源并入**：`SkillSlashProvider.load()` 按「内置全部（主动+被动）→ 插件 SPI → 外部扫描」三路合并（见下方 ⚠️ 第 1 条），两条通道自此等价——SPI 贡献的 skill 同时对模型（system prompt 索引）与用户（`/` 菜单条目，经 `slash.list` 出网）可见。
+
 **范例（rg 唯一命中）**：subagent 的 `SubAgentSkillContributor`——把 `classpath:skill/agent-dispatch.md` 物化到 `<skillsDir>/agent-dispatch/skill.md`（幂等：已存在且大小一致跳过；路径越界跳过），再返回 `PluginSkill("agent-dispatch", "子 Agent", …, toolIds=[run_agent/list_agents/wait_agents/stop_agent])`（`every-agent-plugins/subagent/src/main/java/dev/everyagent/plugin/subagent/SubAgentSkillContributor.java:38-83`）；`init()` 物化在注册后显式调用（`SubAgentPlugin.java:43-45`）。
 
-⚠️ **两处与直觉不符的现状**（如实登记）：
-1. **`/` 菜单数据源不含 `SkillContributorRegistry`**：`SkillSlashProvider` 只合并 `BuiltInSkills.getAllSkills()` + `ExternalSkillScanner.scan()`（`every-agent-worker/src/main/java/dev/everyagent/worker/slash/SkillSlashProvider.java:43-48`）。`SkillContributor` 的 Javadoc 写「向 system prompt 与 `/` 菜单贡献 skill」——registry 通道实际只覆盖 system prompt 一半；subagent 的 skill 能出现在 `/` 菜单，是因为其知识包物化进了 `skillsDir` 一级子目录、且 `agent-dispatch` 已不在 `BuiltInSkills`（现仅 plan/skill-creator，`BuiltInSkills.java:63-76`），被 `ExternalSkillScanner` 当作**外部 skill** 捞进菜单（排除集只含内置 id，`ExternalSkillScanner.java:96-99`）。想让 skill 进菜单的插件应同样物化到 skillsDir，而不是指望 registry。
+⚠️ **一处与直觉不符的现状**（如实登记）：
+1. ~~`/` 菜单数据源不含 `SkillContributorRegistry`~~ **（已并入）**：`SkillSlashProvider` 现按「内置（`BuiltInSkills.getAllSkills()`）→ 插件 SPI（`SkillContributorRegistry.getSkills()`）→ 外部（`ExternalSkillScanner.scan()`）」三路合并进 `/` 菜单（`every-agent-worker/src/main/java/dev/everyagent/worker/slash/SkillSlashProvider.java` 的 `load()`），同 id 去重、优先级 **内置 > 插件 SPI > 外部扫描**——SPI 是插件自己的声明（title/description 完整），外部扫描捞到同 id 只是知识包物化的副产品，不重复出菜单。插件条目与内置同 group（Skills）/icon/opaque token（`system.skill`，选中执行路径与内置完全一致），仅副标题带「插件 · 」前缀区分来源；无插件贡献时菜单与两路合并时代完全一致（零回归）。subagent 的 `agent-dispatch` 现经 SPI 以完整标题（「子 Agent」）进菜单（此前靠 `ExternalSkillScanner` 以目录名形态捞进菜单）；其知识包物化到 skillsDir 的行为**保留**——那是 AI 能 `read_file` 知识包的必要条件，与进菜单与否无关。
 2. `skill.md` 的 id 规则与菜单副标题提取等扫描约定见 [`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) §7.12「skill 目录结构与外部 skill」；本篇不展开。
 
 ## 6. SearchProvider —— 搜索后端（已接线：fs.search / task.search 增补聚合）

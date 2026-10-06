@@ -40,7 +40,7 @@ has_children: false
 | 5 | `void registerAdvisorProvider(AdvisorProvider p)` | [advisors §1](../backend/advisors.md#1-advisorprovider--向-agent-链注入-advisor) | 12 插件 13 provider（system-info、git、context-compression…） |
 | 6 | `void registerSearchProvider(SearchProvider p)` | [advisors §6](../backend/advisors.md#6-searchprovider--搜索后端已接线fssearch--tasksearch-增补聚合) | 已接线：`fs.search` / `task.search` 增补聚合（无内置插件范例） |
 | 7 | `void registerAuthorizationHandler(AuthorizationHandler h)` | [advisors §7](../backend/advisors.md#7-authorizationhandler--授权决议链节点) | ai-review(100f)、unattended(200f)；内置 human=300f 终结 |
-| 8 | `void registerSkillContributor(SkillContributor c)` | [advisors §5](../backend/advisors.md#5-skillcontributor--贡献-skill) | subagent（半接线：只进 system prompt，不进 `/` 菜单） |
+| 8 | `void registerSkillContributor(SkillContributor c)` | [advisors §5](../backend/advisors.md#5-skillcontributor--贡献-skill) | subagent（skill 同时进 system prompt 与 `/` 菜单，菜单副标题带「插件 · 」来源标记） |
 | 9 | `void registerTokenEstimator(TokenEstimator e)` | [advisors §4](../backend/advisors.md#4-tokenestimator--替换-token-估算器) | model-rate-limit |
 | 10 | `void registerChatModelEnhancer(ChatModelEnhancer e)` | [advisors §3](../backend/advisors.md#3-chatmodelenhancer--模型构建期介入) | model-pool |
 | 11 | `void registerRpcMethod(String method, RpcMethod h)` | [任务 §3](../backend/task-and-rpc.md#3-registerrpcmethod--自注册-rpc) | git×13、task-input-queue×3、task-queue/subagent/file-change 各 1 |

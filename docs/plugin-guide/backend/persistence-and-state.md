@@ -42,7 +42,7 @@ rg 全部 25 个内置插件对 `pluginDir()` 的使用（排除 `target/`），
 | file-change | 每轮文件变更全文 | 任务数据目录下 `file-changes/<roundId>.json` | `RoundClosedListener` 回调按轮写（`FileChangeAdvisorProvider.java:61,78-81`） | 自注册 RPC `task.fileChanges`（`FileChangePlugin.java:35,53-58`） |
 | git | 远端凭证（加密） | `<workspace>/.everyagent/.git-credentials.enc` + 同级密钥 `.git-credential.key` | `git.credential.save` RPC → `GitCredentialStore.save`（`GitCredentialStore.java:26-32,37,143,162-163`；`GitService.java:496-515`） | 认证失败重试时 `GitCredentialStore.load`（`GitService.java:550`） |
 | model-rate-limit | token 校准系数/限流状态 | `<homeDir>/model-rate-state.json`（worker 系统目录根，非 pluginDir） | 单线程 writer 异步合并写（`BuiltinTokenEstimator.java:34,45,249`） | 构造时 `load()` 读回接续（`BuiltinTokenEstimator.java:61-69`，路径 = `config.resolveHomeDir().resolve(FILE_NAME)`） |
-| subagent | skill 知识包 | `<skillsDir>/agent-dispatch/skill.md` | activate 后物化 classpath 资源（幂等，`SubAgentSkillContributor.java:30-33,38-55`） | 被 worker `ExternalSkillScanner` 当外部 skill 捞取（[advisors.md](advisors.md) §5） |
+| subagent | skill 知识包 | `<skillsDir>/agent-dispatch/skill.md` | activate 后物化 classpath 资源（幂等，`SubAgentSkillContributor.java:30-33,38-55`） | 物化是 AI 能 `read_file` 知识包的必要条件；`/` 菜单条目经 `SkillContributorRegistry`（SPI）进入，不再依赖 `ExternalSkillScanner` 兜底（[advisors.md](advisors.md) §5） |
 | sandbox-wsl-ubuntu | 自带资源（只读） | `<pluginDir>/wsl/eagent-rootfs.tar.gz`、`<pluginDir>/wsl/eagent-run.py` | 不写，随插件分发 | `WslCommon.tarballFor/resolveRunner`（`WslCommon.java:66-72,128-137`） |
 | sandbox-windows-codex / sandbox-windows-mic | 自带 rg 二进制（只读） | `<pluginDir>/bin/rg.exe` | 不写，随插件分发 | `CodexRg.resolve`（`CodexRg.java:29-41`；系统 PATH 已有则不注入） |
 
