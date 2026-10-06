@@ -191,7 +191,7 @@ Expand-Archive -Path .\my-tool-0.1.0.eap -DestinationPath "$HOME\.everyagent\plu
 | `plugin.disable` | `{ pluginId }` | `{ disabled: true, pluginId, message }` | `:154-166` |
 | `plugin.webSource` | `{ pluginId, path }` | `{ pluginId, path, content }` | `:169-210` |
 
-四个 message 全部以「重启 worker 后生效」收尾——这不是免责声明，是当前架构的事实（无热重载、无 deactivate 钩子）。
+四个 message 全部以「重启 worker 后生效」收尾——这不是免责声明，是当前架构的事实（无热重载；`deactivate` 仅在 worker 优雅关闭时调用，运行期不触发）。
 
 ### 4.1 `plugin.uninstall`
 
@@ -210,7 +210,7 @@ Expand-Archive -Path .\my-tool-0.1.0.eap -DestinationPath "$HOME\.everyagent\plu
 - enable：`{ "enabled": true, "pluginId": "<id>", "message": "插件已启用，重启 worker 后生效" }`（`:146-150`）
 - disable：`{ "disabled": true, "pluginId": "<id>", "message": "插件已禁用，重启 worker 后生效" }`（`:161-165`）
 
-**重启生效的边界**（`PluginStateStore.java:24-29` 类注释自证）：插件系统没有 deactivate 钩子，已激活插件的贡献留在当前进程的注册表里；名单变更对**下一次 worker 启动**完全生效——加载期被禁用的插件核心不调 `activate()`，一个贡献都不会注册。`plugin.list` 的 `active` 字段即时反映名单（`PluginRpcMethods.java:68`：`active = !isDisabled(id)`），但那是「名单状态」，不是「当前进程里贡献已被摘除」。
+**重启生效的边界**（`PluginStateStore.java` 类注释自证）：插件系统没有运行期停用——`deactivate` 仅在 worker 优雅关闭时调用，已激活插件的贡献留在当前进程的注册表里；名单变更对**下一次 worker 启动**完全生效——加载期被禁用的插件核心不调 `activate()`，一个贡献都不会注册。`plugin.list` 的 `active` 字段即时反映名单（`PluginRpcMethods.java:68`：`active = !isDisabled(id)`），但那是「名单状态」，不是「当前进程里贡献已被摘除」。
 
 `.disabled-plugins` 长这样（每行一个 id，`#` 开头是注释，落盘时按字典序排序——`PluginStateStore.java:89-98`）：
 

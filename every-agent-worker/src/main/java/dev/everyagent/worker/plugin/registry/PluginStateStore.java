@@ -26,7 +26,8 @@ import java.util.concurrent.ConcurrentHashMap;
  * <p>禁用状态持久化到 {@code ~/.everyagent/plugins/.disabled-plugins}(每行一个插件 id):
  * 构造时读盘恢复;{@code plugin.enable} / {@code plugin.disable} RPC 经
  * {@link PluginRegistry} 委托本类改内存 + 立即落盘。
- * 名单变更对<b>下一次 worker 启动</b>完全生效(插件系统没有 deactivate 钩子,
+ * 名单变更对<b>下一次 worker 启动</b>完全生效(deactivate 仅在 worker 优雅关闭时
+ * 由 PluginLoader 调用,运行期禁用/卸载不触发,
  * 已激活的插件在当前进程内贡献留在注册表里)。
  */
 @Component

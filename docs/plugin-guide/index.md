@@ -87,7 +87,7 @@ worker 侧的判定规则（`every-agent-worker/src/main/java/dev/everyagent/wor
 | 前端产物 `web/index.js` 不在 `dev` / `build` / 桌面任何流水线里，改前端**必须手工** `npm run build:plugins`（`every-agent-web/scripts/build-plugins.mjs`） | `.everyagent/web-plugin-facts.md` §3 |
 | bare import 白名单只有 5 项：`react`、`react-dom`、`react/jsx-runtime`、`antd`、`@ant-design/icons`，运行时改写为 5 个 `window.__EA_*` 全局 | 同上 §4 |
 | 仓库内插件的 `web/*.ts` 由宿主 `every-agent-web/tsconfig.json` 的 `include` 覆盖，**无需自带 tsconfig** | `every-agent-web/tsconfig.json` |
-| `enable` / `disable` / `install` / `uninstall` 一律**重启 worker 才生效**（插件系统没有 `deactivate` 钩子） | `../ARCHITECTURE.md` §8.5 |
+| `enable` / `disable` / `install` / `uninstall` 一律**重启 worker 才生效**（无热重载；`deactivate` 仅在 worker 优雅关闭时调用） | `../ARCHITECTURE.md` §8.5 |
 | `@everyagent/plugin-api`（js，0.11.0）与 `dev.everyagent:every-agent-plugin-api`（1.0.0）**均未发布**到公共仓库（npm / Maven Central 实测 404），故仓库外开发需自带类型副本 | `.everyagent/plan-plugin-scaffold-docs.md` |
 
 ## 4. 能力面速查与术语

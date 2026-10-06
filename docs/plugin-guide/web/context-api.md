@@ -272,7 +272,7 @@ await ctx.fs.delete(workspaceRoot, 'docs/draft.md')
 **Disposable 语义是真的**：`events.on`（unsubscribe）、`ui.register*`（splice + notify）、`commands.registerCommand`（Map.delete）三种 Disposable 调 `dispose()` 都会立即生效（证据见各节）。但围绕它有三条「宿主不替你做」的事实：
 
 1. **宿主不跟踪你的 Disposable**：`loadedPlugins.set(plugin.id, { module, pluginModule, disposables: [] })` 的 `disposables` 恒为空数组，激活后没有任何代码往里放东西，也没有 unload 路径（`pluginLoader.ts:270`、`:405`）。Disposable 只对**你自己持有并调用**有意义。
-2. **`deactivate` 永远不会被调用**：`PluginModule.deactivate?` 类型存在（`index.ts:650-653`），但 `every-agent-web/src` 全目录 `deactivate` 零命中（rg 确认）；后端同样没有 deactivate 钩子。写了也只是死代码。
+2. **前端 `deactivate` 永远不会被调用**：`PluginModule.deactivate?` 类型存在（`index.ts:650-653`），但 `every-agent-web/src` 全目录 `deactivate` 零命中（rg 确认），写了也只是死代码。后端 Java 侧的 `deactivate()` 已接线，但仅在 worker 优雅关闭时调用（[后端总览](../backend/overview.md) §3.2），与前端宿主无关。
 3. **页面刷新 = 全部清零**：blob 模块、`loadedPlugins`、扩展点注册表、事件订阅、命令表全是模块内存态，刷新即丢；活下来的只有 `ctx.storage`（localStorage）与 worker 侧数据。同一次会话内的防重复激活靠两层：`loadedPlugins.has(id)` 幂等（`pluginLoader.ts:372`）+ 加载 Promise 锁（`:286` 起，`:273-285` 注释解释了为什么需要）。`loadPlugins()` 由 `every-agent-web/src/main.tsx:46,63,69` 三处触发（启动、重连、切换 worker）。
 
 推论：订阅类资源**不需要**（也没机会）在「插件卸载」时清理；需要警惕的反而是**组件级**泄漏——在 React 组件 `useEffect` 里 `ctx.events.on` 时记得返回 `() => disposable.dispose()`（范例：`every-agent-plugins/git/web/GitSidebarPanel.tsx:334` 附近的用法）。

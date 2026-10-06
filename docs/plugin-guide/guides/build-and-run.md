@@ -213,7 +213,7 @@ home 的解析顺序与派生（`WorkerProperties.java:213-216,221-251`）：`wo
 
 ### 5.1 改 java：package → 重启 worker
 
-插件系统**没有热重载，也没有 deactivate 钩子**（`every-agent-worker/src/main/java/dev/everyagent/worker/plugin/registry/PluginStateStore.java:24-29` 类注释自证；现状登记见[打包与安装](packaging-and-install.md) §4.2）。改完 java 源码的完整动作：`mvn -f every-agent-plugins\<id>\pom.xml package` → 重启 worker → 日志确认 `[plugins] 插件已激活: id=<id> ...`（`PluginLoader.java:337`）。单测先行的话用 `test` 目标快速回归，最后再 `package` 出 jar（取舍见[调试与测试](debugging-and-testing.md) §5）。
+插件系统**没有热重载**，`deactivate` 仅在 worker 优雅关闭时调用、运行期禁用/卸载不触发（`PluginStateStore.java` 类注释自证；现状登记见[打包与安装](packaging-and-install.md) §4.2）。改完 java 源码的完整动作：`mvn -f every-agent-plugins\<id>\pom.xml package` → 重启 worker → 日志确认 `[plugins] 插件已激活: id=<id> ...`（`PluginLoader.java:337`）。单测先行的话用 `test` 目标快速回归，最后再 `package` 出 jar（取舍见[调试与测试](debugging-and-testing.md) §5）。
 
 ### 5.2 改 web：build:plugins → 刷新页面（worker 不重启）
 

@@ -25,7 +25,7 @@ has_children: false
 |---|---|---|---|
 | `String id()` | 必须与 plugin.json 的 `id` 一致（仅 `[a-z0-9-]`） | [总览 §5](../backend/overview.md#5-everyagentplugin-契约与最小入口类) | 全部 25 个 |
 | `void activate(WorkerPluginContext ctx)` | 一切注册发生在此；抛异常只废自己一个插件 | 同上 | 同上 |
-| `default void deactivate()` | 预留钩子，worker 从不调用 | [总览 §3.2](../backend/overview.md#32-无-deactivate-钩子改动--重启-worker) | — |
+| `default void deactivate()` | 停机钩子：worker 优雅关闭时由 PluginLoader 调用（运行期禁用/卸载不触发） | [总览 §3.2](../backend/overview.md#32-deactivate-只在-worker-关闭时调用改动--重启-worker) | — |
 
 ### 1.2 `WorkerPluginContext` —— 15 个注册方法
 
