@@ -1,7 +1,7 @@
 /**
  * AI 安全审议 trace 渲染插件——PluginModule 入口。
  *
- * 经 builtInPlugins.ts 自动发现加载，通过 ctx.ui.registerTraceType 注册 kind='auth.review' 的 trace 渲染类型。
+ * 经 worker plugin.list 发现、plugin.webSource RPC 拉取 esbuild 预编译产物动态加载，通过 ctx.ui.registerTraceType 注册 kind='auth.review' 的 trace 渲染类型。
  * worker 每次审议结束时发 kind='auth.review' 的 task.trace。
  */
 

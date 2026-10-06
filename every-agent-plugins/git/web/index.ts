@@ -1,7 +1,7 @@
 /**
- * Git 插件——PluginModule 入口（纯 Web 插件）。
+ * Git 插件——前端 PluginModule 入口（both 形态：worker 端 GitPlugin 主类 + 本 Web 端）。
  *
- * 经 builtInPlugins.ts 自动发现加载，注册：
+ * 经 worker plugin.list 发现、plugin.webSource RPC 拉取 esbuild 预编译产物动态加载，注册：
  * - 侧边栏「源代码管理」面板 + 变更角标
  * - git-history 工作区标签类型
  * - 文件树右键「显示 Git 历史」菜单项

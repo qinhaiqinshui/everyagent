@@ -1,7 +1,7 @@
 /**
  * update-file-view 插件——PluginModule 入口（纯 Web 插件，无 worker 端）。
  *
- * 经 builtInPlugins.ts 自动发现加载，通过 ctx.ui.registerToolCallView
+ * 经 worker plugin.list 发现、plugin.webSource RPC 拉取 esbuild 预编译产物动态加载，通过 ctx.ui.registerToolCallView
  * （`ui.tool_call_views` 扩展点）注册 update_file 的**完整视图接管**：
  * 折叠态（文件名 + 变更统计徽章 + 完整路径）与展开态（路径 chip + 内嵌
  * oldcontent→content 行级 diff）均由插件渲染，与核心内置 toolViews 同地位。
