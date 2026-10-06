@@ -17,7 +17,9 @@ build-plugins.py —— 一条命令重建全部内置插件(前端 bundle + 插
     「先 web bundle,后 mvn package」,桌面打包另由 copy-plugins.mjs 搬运 web 产物。
 
 本脚本不重复实现任何构建逻辑:web 侧直接调用既有的 build-plugins.mjs(唯一事实源),
-Java 侧逐插件调 mvn -f <id>/pom.xml,与 mvn -pl/-am 的 reactor 语义互不干扰。
+Java 侧逐插件调 mvn -f <id>/pom.xml,与 mvn -pl/-am 的 reactor 语义互不干扰;
+plugin-api 虽在根 reactor 内,但插件以固定版本从本地仓库解析它——java 构建前
+先自动 mvn install 一次,保证仓库 jar 与源码同步(否则撞「找不到符号」)。
 
 插件清单动态发现(与 scripts/bump-version.py 同一套扫描口径):
   - Java 插件: every-agent-plugins/*/pom.xml
@@ -231,6 +233,45 @@ def default_repo_local() -> str | None:
     return str(cand) if cand.is_dir() else None
 
 
+def build_plugin_api(ctx: dict) -> bool:
+    """先把 every-agent-plugin-api 源码 install 到本地仓库。
+
+    插件 pom 以固定版本(如 1.0.0)依赖 plugin-api,逐插件单独编译时从本地
+    仓库解析 jar;plugin-api 源码新增方法后若忘记 install,插件即报
+    「找不到符号」。故 java 构建前先刷新一次,保证仓库 jar 与源码同步。
+    """
+    api_pom = ROOT / "every-agent-plugin-api" / "pom.xml"
+    if not api_pom.is_file():
+        log("[java] plugin-api: 源码模块不存在,跳过 install")
+        return True
+    cmd = [ctx["mvn"], "-B", "-f", str(api_pom), "install", "-Dmaven.test.skip=true"]
+    if ctx["repo_local"]:
+        cmd.append(f"-Dmaven.repo.local={ctx['repo_local']}")
+    log("[java] plugin-api: mvn install(刷新本地仓库依赖)")
+    if ctx["dry_run"]:
+        log(f"    $ {' '.join(cmd)}")
+        return True
+    t0 = time.perf_counter()
+    rc, out = run(cmd, cwd=ROOT, env=ctx["env"], follow=ctx["follow"])
+    if rc != 0:
+        # 与 build_java_plugin 同款兜底:user.home 解析异常时改用显式 repo.local 重试
+        if not ctx["follow"] and "Could not create local repository" in (out or ""):
+            fallback = ctx["repo_local"] or default_repo_local()
+            if fallback:
+                log(f"[java] plugin-api: 本地仓库路径异常,改用 -Dmaven.repo.local={fallback} 重试")
+                rc, _ = run(
+                    cmd + [f"-Dmaven.repo.local={fallback}"],
+                    cwd=ROOT, env=ctx["env"], follow=ctx["follow"],
+                )
+                if rc == 0:
+                    ctx["repo_local"] = fallback
+        if rc != 0:
+            log(f"[java] plugin-api: ✗ install 失败(退出码 {rc})")
+            return False
+    log(f"[java] plugin-api: ✓ {time.perf_counter() - t0:.1f}s")
+    return True
+
+
 def build_java_plugin(plugin: Plugin, ctx: dict):
     mvn, goals, env = ctx["mvn"], ctx["goals"], ctx["env"]
     base = [mvn, "-B", "-f", str(plugin.dir / "pom.xml"), *goals]
@@ -412,6 +453,9 @@ def main():
                 return
 
     if not args.web_only:
+        if not build_plugin_api(ctx):
+            report(failures + [("plugin-api", "mvn install 失败,插件无法编译")], t0, args)
+            return
         for p in plugins:
             if not p.has_pom:
                 continue
