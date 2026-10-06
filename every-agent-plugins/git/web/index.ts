@@ -42,7 +42,8 @@ const gitPlugin: PluginModule = {
     ctx.ui.registerFileExplorerAction({
       id: 'git-show-history',
       label: '显示 Git 历史',
-      icon: React.createElement(GitIcon),
+      // 菜单项图标与宿主内建动作项对齐(13px);GitIcon 默认 22 是活动栏尺寸,菜单里会显大。
+      icon: React.createElement(GitIcon, { size: 13 }),
       invoke: (actionCtx) => {
         ctx.ui.openPluginTab('git-history', {
           workspaceRoot: actionCtx.workspaceRoot,
