@@ -3,7 +3,8 @@
  *
  * 经 pluginLoader.ts 自动发现加载，注册侧边栏「扩展」面板。
  * 面板通过 ctx.sdk.rpc 调用 worker 的 plugin.list / plugin.enable / plugin.disable
- * RPC，实现插件目录的查看与启用/禁用切换。
+ * RPC，实现插件目录的查看与启用/禁用切换；并经 fs.write 上传 + plugin.install
+ * 提供 .eap 安装入口（known-issues #19）。
  */
 import React from 'react'
 import type { PluginModule, PluginContext, PluginSdk } from '@everyagent/plugin-api'

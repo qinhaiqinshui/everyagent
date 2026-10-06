@@ -1,12 +1,16 @@
 /**
  * 插件管理面板组件。
  *
- * VSCode 扩展视图风格：列表 + 搜索 + 启用/禁用开关 + 重新加载提示。
+ * VSCode 扩展视图风格：列表 + 搜索 + 安装入口 + 启用/禁用开关 + 重新加载提示。
  *
- * - 从 worker `plugin.list` RPC 获取完整插件目录
+ * - 从 worker `plugin.list` RPC 获取完整插件目录（含 #15 上线的 `status` 字段，
+ *   激活失败的插件行内展示「加载失败」标识）
  * - 按内置 / 外部分组
  * - 每行：名称、版本、描述、启用状态开关
  * - 启用/禁用 → 调 `plugin.enable` / `plugin.disable` RPC
+ * - 安装：选定 .eap 文件 → 经 `fs.write` 上传到工作区暂存目录 → 调
+ *   `plugin.install` RPC（worker 机器本地路径）→ 清理暂存 → 刷新列表
+ *   （known-issues #19；后端 RPC 原本就有，此处补产品化入口）
  * - 切换成功后行内显示「需要重新加载」提示（不立即生效）
  * - plugin-manager 自身永不可禁用（开关隐藏）
  * - worker 不可达时显示错误提示，不切换开关状态
@@ -16,6 +20,12 @@ import { Input, Switch, Button, Tag, Typography, Alert, Spin, Empty } from 'antd
 import { getSdk } from './index'
 
 const { Text } = Typography
+
+/** 安装包上传的大小上限（base64 膨胀约 4/3，32MB 原始字节 ≈ 43MB wire 载荷）。 */
+const MAX_INSTALL_BYTES = 32 * 1024 * 1024
+
+/** .eap 暂存目录（工作区内隐藏目录，工作区相对路径，无前导 `/`）。 */
+const INSTALL_STAGING_DIR = '.everyagent/plugin-install'
 
 /** 搜索图标 SVG。 */
 function SearchIcon({ size = 14 }: { size?: number }) {
@@ -51,6 +61,37 @@ function ExclamationIcon({ size = 12 }: { size?: number }) {
   )
 }
 
+/** 安装（下载入托盘）图标 SVG。 */
+function InstallIcon({ size = 14 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path d="M8 1.5v7" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+      <path d="M5 6l3 3 3-3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M2 10.5v2A1.5 1.5 0 0 0 3.5 14h9a1.5 1.5 0 0 0 1.5-1.5v-2" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+/** 把 RPC 错误归一为可展示文案（Error 取 message，对象取 message 字段，其余 String）。 */
+function rpcErrorMessage(err: unknown): string {
+  if (err instanceof Error) return err.message
+  if (err && typeof err === 'object' && typeof (err as { message?: unknown }).message === 'string') {
+    return (err as { message: string }).message
+  }
+  return String(err)
+}
+
+/** 读文件字节并转 base64（与宿主 workspaceGateway 同款分块拼接，避免超长参数栈溢出）。 */
+async function fileToBase64(file: File): Promise<string> {
+  const bytes = new Uint8Array(await file.arrayBuffer())
+  let binary = ''
+  const CHUNK = 0x8000
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK))
+  }
+  return btoa(binary)
+}
+
 /** plugin.list 返回的单个插件条目。 */
 interface PluginEntry {
   id: string
@@ -60,6 +101,8 @@ interface PluginEntry {
   author?: string
   source: string
   active: boolean
+  /** 加载期实际状态（#15 上线）：已激活 / 激活失败: … / 已禁用(未激活) 等。 */
+  status?: string
   hasMain?: boolean
   hasWebMain?: boolean
 }
@@ -139,6 +182,15 @@ function PluginRow({
           {!plugin.hasMain && plugin.hasWebMain && (
             <Tag style={{ fontSize: 10, lineHeight: '16px', margin: 0 }}>Web</Tag>
           )}
+          {plugin.status?.startsWith('激活失败') && (
+            <Tag
+              color="error"
+              style={{ fontSize: 10, lineHeight: '16px', margin: 0 }}
+              title={plugin.status}
+            >
+              加载失败
+            </Tag>
+          )}
         </div>
         {plugin.description && (
           <div
@@ -184,6 +236,9 @@ const PluginManagerPanel: React.FC = () => {
   const [search, setSearch] = React.useState('')
   const [reloadNeeded, setReloadNeeded] = React.useState<ReloadNeededMap>({})
   const [togglingId, setTogglingId] = React.useState<string | null>(null)
+  const [installing, setInstalling] = React.useState(false)
+  const [installResult, setInstallResult] = React.useState<{ type: 'success' | 'error'; text: string } | null>(null)
+  const fileInputRef = React.useRef<HTMLInputElement | null>(null)
 
   const sdk = getSdk()
 
@@ -245,6 +300,59 @@ const PluginManagerPanel: React.FC = () => {
     location.reload()
   }, [])
 
+  /**
+   * 安装 .eap（known-issues #19）：浏览器选定文件 → fs.write 上传到工作区暂存目录
+   * （`plugin.install` 只收 worker 机器本地路径，工作区是前端唯一可写的落点）→
+   * 用暂存文件的机器绝对路径调 `plugin.install` 解包到插件目录 → 清理暂存 → 刷新列表。
+   * 新插件重启 worker 后才会出现在 `plugin.list`（生效边界不变）。
+   */
+  const handleInstallFile = React.useCallback(
+    async (file: File | undefined) => {
+      if (!file || !sdk) return
+      if (!file.name.toLowerCase().endsWith('.eap')) {
+        setInstallResult({ type: 'error', text: '仅支持 .eap 插件包' })
+        return
+      }
+      if (file.size > MAX_INSTALL_BYTES) {
+        setInstallResult({
+          type: 'error',
+          text: `插件包过大（${(file.size / 1024 / 1024).toFixed(1)} MB），超过 ${MAX_INSTALL_BYTES / 1024 / 1024} MB 上限`,
+        })
+        return
+      }
+      const workspaceRoot = sdk.workspace.rootPath.trim()
+      if (!workspaceRoot) {
+        setInstallResult({ type: 'error', text: '无法确定工作区根路径，不能上传安装包' })
+        return
+      }
+      setInstalling(true)
+      setInstallResult(null)
+      try {
+        // 1) 上传：经 fs.write 落到工作区内暂存目录（fs.* 按工作区 jailed；worker 侧自动建父目录）
+        const stagedPath = `${INSTALL_STAGING_DIR}/${Date.now()}-${file.name}`
+        const fsWorkerId = sdk.workspace.workerIdOfRoot(workspaceRoot) ?? sdk.workerId
+        await sdk.rpc(fsWorkerId, 'fs.write', {
+          workspace: workspaceRoot,
+          path: stagedPath,
+          contentBase64: await fileToBase64(file),
+        })
+        // 2) 安装：把 worker 机器上的 .eap 绝对路径交给 plugin.install 解包
+        const absPath = `${workspaceRoot.replace(/[\\/]+$/, '')}/${stagedPath}`
+        const result = (await sdk.rpc(fsWorkerId, 'plugin.install', { path: absPath })) as { message?: string }
+        setInstallResult({ type: 'success', text: result?.message ?? '插件已安装，重启 worker 后生效' })
+        // 3) 清理暂存包（尽力而为，失败只留工作区残留文件）
+        await sdk.rpc(fsWorkerId, 'fs.delete', { workspace: workspaceRoot, path: stagedPath }).catch(() => undefined)
+        // 4) 刷新列表（新插件重启 worker 后出现；此处兜底拉齐既有条目的最新状态）
+        await fetchPlugins()
+      } catch (err) {
+        setInstallResult({ type: 'error', text: `安装失败：${rpcErrorMessage(err)}` })
+      } finally {
+        setInstalling(false)
+      }
+    },
+    [sdk, fetchPlugins],
+  )
+
   const hasReloadNeeded = Object.values(reloadNeeded).some(Boolean)
 
   // 搜索过滤
@@ -284,6 +392,26 @@ const PluginManagerPanel: React.FC = () => {
           onChange={(e) => setSearch(e.target.value)}
           style={{ flex: 1 }}
         />
+        {/* 安装入口：隐藏 file input（仅 .eap），选中即走上传 → plugin.install 流程 */}
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".eap"
+          style={{ display: 'none' }}
+          onChange={(e) => {
+            const file = e.target.files?.[0]
+            e.target.value = '' // 复位以允许重复选择同一文件
+            void handleInstallFile(file)
+          }}
+        />
+        <Button
+          size="small"
+          icon={<InstallIcon />}
+          disabled={installing}
+          onClick={() => fileInputRef.current?.click()}
+        >
+          {installing ? '安装中…' : '安装…'}
+        </Button>
         {hasReloadNeeded && (
           <Button size="small" type="primary" icon={<ReloadIcon />} onClick={handleReload}>
             重新加载
@@ -299,6 +427,18 @@ const PluginManagerPanel: React.FC = () => {
           showIcon
           closable
           onClose={() => setError(null)}
+          style={{ margin: '8px 12px', borderRadius: 6 }}
+        />
+      )}
+
+      {/* 安装结果提示 */}
+      {installResult && (
+        <Alert
+          message={installResult.text}
+          type={installResult.type}
+          showIcon
+          closable
+          onClose={() => setInstallResult(null)}
           style={{ margin: '8px 12px', borderRadius: 6 }}
         />
       )}

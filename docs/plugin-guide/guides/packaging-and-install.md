@@ -109,13 +109,13 @@ zip 由 `node:zlib` 手写（零 npm 依赖）：local file header + central dir
 
 | 路线 | 操作 | 前提 | 可操作性结论 |
 | --- | --- | --- | --- |
-| a. `plugin.install` RPC | 把 `.eap` 送到 worker 机器，往 cmd 频道发一帧 | 能直连 worker 的 RPC 频道（自写脚本/调试工具）；文件在 worker 本机 | 接口齐备但**前端零调用点**，今天只有手工 RPC 用户 |
-| b. 手工解压 / 复制目录 | `.eap` 解到 `~/.everyagent/plugins/<id>/`，或整目录拷贝 | 能访问 worker 机器文件系统 | **当前最实际的一条路**，零依赖、可脚本化 |
+| a. `plugin.install` RPC | 插件管理面板「安装…」选定 `.eap`（面板自动上传并代发 RPC）；或手工往 cmd 频道发一帧 | 面板路线：worker 在线且当前工作区可写；手工路线：能直连 worker 的 RPC 频道，文件已在 worker 本机 | 接口齐备且**前端已接线**（known-issues #19 修复前零调用点）；交互场景用面板，脚本场景用手工 RPC |
+| b. 手工解压 / 复制目录 | `.eap` 解到 `~/.everyagent/plugins/<id>/`，或整目录拷贝 | 能访问 worker 机器文件系统 | 无 UI 访问 / 要脚本化时最可靠的一条路，零依赖 |
 | c. builtin 路径 | 插件目录进仓库 `every-agent-plugins/`，随仓库分发 | 拿得到目标部署的仓库（发 PR / 自部署） | 适合团队内长期维护；终端用户装不了 |
 
 三条路殊途同归：**最终都是让一个含 `plugin.json` 的目录出现在某个扫描器面前，然后重启 worker**。生效边界没有例外——启停/装卸/换文件全部重启后生效（前端 webMain 插件另需刷新页面）。
 
-### 3.1 路线 a：`plugin.install` RPC（有接口，但前端零调用点）
+### 3.1 路线 a：`plugin.install` RPC（面板已接线）
 
 worker 侧方法表齐备（`every-agent-worker/src/main/java/dev/everyagent/worker/plugin/loader/PluginRpcMethods.java:86-110`）：
 
@@ -131,7 +131,7 @@ worker 侧方法表齐备（`every-agent-worker/src/main/java/dev/everyagent/wor
 
 另外 `__MACOSX` 条目与 `.DS_Store` 会被跳过（`:218`），同路径文件覆盖写（`REPLACE_EXISTING`，`:231`）——即**重复 install 同一个包 = 覆盖安装**。
 
-**当前谁在用它**：前端 `every-agent-web/src` 里 `plugin.install` / `plugin.uninstall` **零调用点**（rg 全目录确认；插件管理界面 `PluginManagerPanel.tsx:199,222,226` 只调 `plugin.list` / `plugin.enable` / `plugin.disable`）。所以现实使用者是**手工 RPC 调用**（你自己往 cmd 频道发一帧），未来接 UI 后才会变成点击操作。
+**产品化入口**：插件管理面板（侧边栏「扩展」）顶栏的「安装…」按钮已对接该 RPC（known-issues #19 修复前面板只调 `plugin.list` / `plugin.enable` / `plugin.disable`，`plugin.install` 前端零调用点）。因为 `{path}` 收的是 **worker 机器本地路径**，浏览器选中的文件先经 `fs.write` 以 base64 上传到当前工作区的暂存目录 `.everyagent/plugin-install/`（fs.* 按工作区 jailed，worker 侧自动建父目录），再用暂存文件的机器绝对路径调 `plugin.install` 解包，最后尽力清理暂存文件并刷新列表。边界要知道三条：上限 32 MB（base64 后约 43 MB wire 载荷）；worker 跑在远端时装到的是 **worker 机器**的插件目录（设计意图如此）；新插件**重启 worker 后**才出现在 `plugin.list`（面板成功提示即 RPC 原文「插件已安装，重启 worker 后生效」）。脚本/调试场景仍可直接手工发 RPC：
 
 调用示例（wire 帧结构，信封定义见 `every-agent-contract/src/main/java/dev/everyagent/contract/rpc/Rpc.java:35` 的 `RpcRequest(reqId, method, params)`；worker 在 cmd 频道上只认 `event = "rpc"`，`every-agent-worker/src/main/java/dev/everyagent/worker/rpc/RpcDispatcher.java:70-77`）：
 
@@ -151,11 +151,11 @@ worker 侧方法表齐备（`every-agent-worker/src/main/java/dev/everyagent/wor
               "message": "插件已安装，重启 worker 后生效" } }
 ```
 
-浏览器侧不必手拼帧：前端已有 `hubSession.rpcTo(workerId, method, params)` 通道（`every-agent-web/src/plugin/pluginLoader.ts:351,421` 即用它调 `plugin.list` / `plugin.webSource`），同一姿势传 `'plugin.install'` 与 `{ path }` 即可（此用法未实测，仅按接口形状推断）。
+浏览器侧不必手拼帧：前端已有 `hubSession.rpcTo(workerId, method, params)` 通道（`every-agent-web/src/plugin/pluginLoader.ts` 即用它调 `plugin.list` / `plugin.webSource`），插件面板正是经 `ctx.sdk.rpc` 以同一姿势代发 `plugin.install` 与 `{ path }`（上传暂存路径见上文）。
 
-### 3.2 路线 b：手工解压（当前最实际的一条路）
+### 3.2 路线 b：手工解压（无面板访问/脚本化时最可靠的一条路）
 
-没有 UI、也没有现成 CLI 装机命令的现状下，**把 `.eap` 当 zip 手工解压**就是最可靠的安装方式：
+面板安装入口面向交互场景（worker 在线、当前工作区可写）；没有 UI 访问、或要把安装写进脚本时，**把 `.eap` 当 zip 手工解压**仍是最可靠的方式：
 
 ```text
 ~/.everyagent/plugins/            ← worker.plugins-dir，可配置覆盖（WorkerProperties.java:35）
@@ -239,7 +239,7 @@ sandbox-wsl-ubuntu
 
 ### 4.3 `plugin.list` 与 `plugin.webSource`（验证与前端加载用）
 
-- `plugin.list`（`:57-83`）：无参数，返回 `{ plugins: [ { id, name, version, description, author, source, active, hasMain, hasWebMain } ], disabledIds: [...] }`——装机后验证就看这里（§6 清单第 6 步）。
+- `plugin.list`（`:57-83`）：无参数，返回 `{ plugins: [ { id, name, version, description, author, source, active, status, hasMain, hasWebMain, webMain } ], disabledIds: [...] }`（`active` = 不在禁用名单的旧语义，`status` = 加载期实际状态「已激活 / 激活失败: … / 已禁用(未激活)」，插件面板据此标「加载失败」）——装机后验证就看这里（§6 清单第 6 步）。
 - `plugin.webSource`（`:169-210`）：参数 `{ pluginId, path }`，返回 `{ pluginId, path, content }`；`path` 会 normalize 并校验仍在插件目录内（越界报 `NOT_FOUND` `文件不存在或越界: <path>`，`:196`）。前端硬编码用它取 `web/index.js` / `web/index.css`（`pluginLoader.ts:421-429,452`），与安装相关的点只有一条：**解包后的 web 产物路径必须是 `web/index.js`**。
 
 ## 5. 升级与版本
@@ -263,7 +263,8 @@ sandbox-wsl-ubuntu
 [ ] 3. node create-everyagent-plugin pack <dir> --verify —— 六项自检全绿；.eap 与
         同名 .eap.sha256 旁文件（sha256sum -c 兼容）一起分发
 [ ] 4. 目标机安装（三选一）：
-        a. 把 .eap 送到 worker 机器 → RPC plugin.install { "path": "<worker 机器路径>" }
+        a. 插件管理面板「安装…」选定 .eap（自动上传工作区暂存并代发 plugin.install）；
+           或把 .eap 送到 worker 机器 → 手工 RPC plugin.install { "path": "<worker 机器路径>" }
            （安装前用 .eap.sha256 人工核对完整性，worker 侧不自动校验）
         b. 解压 .eap 到 ~/.everyagent/plugins/，确认顶层目录名 = id
         c. builtin：进仓库 every-agent-plugins/ 并随仓库分发（需 mvn package）
@@ -278,4 +279,4 @@ sandbox-wsl-ubuntu
 
 - [构建与运行](build-and-run.md)——三形态构建矩阵、cwd 如何决定内置插件被扫到、`build:plugins` 的手工节奏；
 - [故障排查](troubleshooting.md)——装了没生效 / 图标不出现 / WARN 文案逐条对号；
-- [已知问题与现状偏差](../reference/known-issues.md)——`plugin.install` 前端零调用点、API 包未发布等现状登记。
+- [已知问题与现状偏差](../reference/known-issues.md)——API 包未发布、`.eap` 无签名校验等现状登记。
