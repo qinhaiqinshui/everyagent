@@ -81,6 +81,8 @@ public final class RpcMethods {
     public static final String MENTION_QUERY = "mention.query";
     public static final String SYS_METHODS = "sys.methods";
     public static final String SYS_INFO = "sys.info";
+    /** 重启 worker 进程(自重启:优雅关闭后以重建的启动命令重新拉起,架构 §5.5)。 */
+    public static final String WORKER_RESTART = "worker.restart";
 
     // ── 插件管理 ──
     /** 列出已加载的插件清单。 */

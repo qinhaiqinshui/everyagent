@@ -25,6 +25,7 @@ import {
 } from '@/settings/browserNotifications'
 import { hubSession } from '@/hub/session'
 import { domainEventBus, DOMAIN_EVENTS } from '@/events/eventBus'
+import ConfirmDialog from '@/components/shared/ConfirmDialog'
 import WorkerList from '@/components/system/WorkerList'
 import { APP_NAME, APP_VERSION, APP_COPYRIGHT, APP_LICENSE } from '@/appInfo'
 
@@ -47,6 +48,10 @@ export default function SettingsPanel() {
   const [reloadingSkills, setReloadingSkills] = React.useState(false)
   const [skillReloadHint, setSkillReloadHint] = React.useState('')
   const [skillReloadTone, setSkillReloadTone] = React.useState<'ok' | 'error'>('ok')
+  const [restartingWorkers, setRestartingWorkers] = React.useState(false)
+  const [restartConfirmOpen, setRestartConfirmOpen] = React.useState(false)
+  const [restartHint, setRestartHint] = React.useState('')
+  const [restartTone, setRestartTone] = React.useState<'ok' | 'error'>('ok')
   const isDesktopNotification = getNotificationAdapter()?.source === 'desktop'
 
   const connected = hub.state === 'open'
@@ -172,6 +177,47 @@ export default function SettingsPanel() {
       setSkillReloadTone('error')
     } finally {
       setReloadingSkills(false)
+    }
+  }
+
+  const handleRestartWorkers = async () => {
+    setRestartConfirmOpen(false)
+    if (restartingWorkers) return
+    const connectedWorkers: string[] = []
+    hub.directory.forEach((w) => {
+      if (w.connected) connectedWorkers.push(w.workerId)
+    })
+    if (connectedWorkers.length === 0) {
+      setRestartHint('无已连接的 worker')
+      setRestartTone('error')
+      return
+    }
+    setRestartingWorkers(true)
+    setRestartHint('')
+    try {
+      const results = await Promise.allSettled(
+        connectedWorkers.map((id) => hubSession.rpcTo(id, 'worker.restart')),
+      )
+      const succeeded: string[] = []
+      const failed: string[] = []
+      results.forEach((r, i) => {
+        if (r.status === 'fulfilled') {
+          succeeded.push(connectedWorkers[i])
+        } else {
+          failed.push(connectedWorkers[i])
+        }
+      })
+      if (succeeded.length > 0) {
+        setRestartHint('已向 ' + succeeded.length + ' 台 worker 发送重启指令,worker 将短暂离线后自动恢复')
+        setRestartTone('ok')
+      }
+      if (failed.length > 0) {
+        const failedText = failed.length + ' 台重启失败(' + failed.join(', ') + ',老 worker 不含此方法或无法重启)'
+        setRestartHint((prev) => (prev ? prev + ';' : '') + failedText)
+        setRestartTone('error')
+      }
+    } finally {
+      setRestartingWorkers(false)
     }
   }
 
@@ -331,6 +377,41 @@ export default function SettingsPanel() {
             <span style={skillReloadTone === 'error' ? errorStyle : okStyle}>{skillReloadHint}</span>
           ) : null}
         </div>
+      </section>
+
+      <section style={sectionStyle}>
+        <h3 style={sectionTitleStyle}>重启 Worker</h3>
+        <p style={hintStyle}>
+          重启 worker 进程(自重启:优雅关闭后自动重新拉起,无需外部看护)。运行中的任务会被中断,
+          重启后由 worker 标记为「worker 重启中断」,任务数据不丢;worker 短暂离线后会自动恢复连接。
+          模型配置与 skill 列表优先用上方「重新读取」热加载,仅在热加载无效时才需要重启。
+        </p>
+        <div style={actionsStyle}>
+          <Button
+            type="button"
+            variant="secondary"
+            style={secondaryButtonStyle}
+            onClick={() => setRestartConfirmOpen(true)}
+            disabled={restartingWorkers}
+          >
+            {restartingWorkers ? '发送中…' : '重启 Worker'}
+          </Button>
+          {restartHint ? (
+            <span style={restartTone === 'error' ? errorStyle : okStyle}>{restartHint}</span>
+          ) : null}
+        </div>
+        <ConfirmDialog
+          open={restartConfirmOpen}
+          title="重启 worker"
+          message={
+            '将向全部已连接的 worker 发送重启指令。运行中的任务会被中断(重启后标记为「worker 重启中断」),' +
+            '任务数据不丢;worker 短暂离线后自动恢复。确定重启?'
+          }
+          confirmLabel="重启"
+          danger
+          onConfirm={() => void handleRestartWorkers()}
+          onCancel={() => setRestartConfirmOpen(false)}
+        />
       </section>
 
       <section style={sectionStyle}>

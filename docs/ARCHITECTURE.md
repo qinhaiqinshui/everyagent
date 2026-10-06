@@ -245,6 +245,7 @@ worker 端 `RpcDispatcher` 注册方法;应答回**请求来源连接**的 `evt`
 | `mention.query` | `@` 文件搜索(后端子序列模糊匹配 + 隐藏规则 + 截断 10 条) |
 | `rpc.cancel` | 取消进行中的长 RPC(Future.cancel) |
 | `sys.methods` / `sys.info` | 能力发现:本 worker 支持的方法清单与版本、workspace/模型/hub 元信息 |
+| `worker.restart` | 重启 worker 进程(设置页「重启 Worker」按钮):应答 ok 后由独立非守护线程复走 `/admin/shutdown` 同款关闭路径(优雅关闭 ApplicationContext:断开 hub 连接、销毁插件),随后以**重建的启动命令**把本进程重新拉起——**自重启,不依赖 desktop/任务计划等外部 supervisor**。命令重建策略:优先 `ProcessHandle.current().info()` 的完整 argv(Linux 可用);Windows 上 `arguments()`/`commandLine()` 不可用(实测 JDK 25 返回空),按 `sun.java.command` + `java.class.path` 重建最小命令——`-jar` 形态 = 原 exe(`info.command()`,保留 javaw/java 区别)+ `-jar` + fat jar 路径(classpath 单条目即 jar 路径)+ 程序参数;classpath 形态(dev:`spring-boot:run`/IDE)= exe + `-cp java.class.path` + 主类/参数;原 JVM `-D`/`-X` 选项不保留。子进程继承 cwd(`user.dir`)、环境变量与 stdio(`inheritIO`,desktop/bat 启动时即继续写 worker.out.log),且在新 JVM 启动前旧 JVM 已释放 6102 端口(先 `context.close()` 返回再 spawn,无端口竞态)。进程级冷启动:运行中任务被中断,重启后 boot 扫描把非终态任务标 failed(§7.7),任务数据不丢;启动命令无法重建时拒绝执行并应答 err(worker 不重启) |
 
 **扩展规则**:协议固定的是交互形状(请求/应答/分批/进度/取消/通知),不是内容;`method` 只是字符串命名空间(`域.动作`),`params`/`result` 是自由 JSON。新功能 = 注册新 method,零改协议、零改 hub。兼容规则:method 只加不改;breaking change 用新名,老客户端靠 `sys.methods` 发现能力。
 
