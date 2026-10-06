@@ -106,8 +106,7 @@ node create-everyagent-plugin --id sample-web --kind web --yes --dry-run
 ```text
 插件 id      sample-web
 形态         kind=web  mode=builtin
-入口类       dev.everyagent.plugin.sampleWeb.SampleWebPlugin
-Java 包      dev.everyagent.plugin.sampleWeb
+前端入口     web/index.ts（webMain）
 目标目录     every-agent-plugins/sample-web
 模板根       <仓库根>\create-everyagent-plugin\templates
 命中模板层   common → web
@@ -125,7 +124,7 @@ sample-web/
 --dry-run：以上文件未写入。
 ```
 
-说明：`入口类` / `Java 包` 两行对 web 形态只是命名推导的展示（id 推导规则：`pdf-viewer` → 包 `dev.everyagent.plugin.pdfViewer` → 入口 `PdfViewerPlugin`），web 形态不会生成任何 Java 文件。六种组合都能这样预览，覆盖关系会标注「（覆盖 <来源模板>）」。
+说明：摘要的入口行**按 kind 分支**——web 形态没有 Java 入口类，展示前端入口（`plugin.json` 的 `webMain`，即 `web/index.ts`）；java / full 形态才展示 `入口类` / `Java 包` 两行（id 推导规则：`pdf-viewer` → 包 `dev.everyagent.plugin.pdfViewer` → 入口 `PdfViewerPlugin`）。六种组合都能这样预览，覆盖关系会标注「（覆盖 <来源模板>）」。
 
 ### 2.4 退出码速查
 

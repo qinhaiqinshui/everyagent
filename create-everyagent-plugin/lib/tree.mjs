@@ -153,11 +153,16 @@ export function formatPlan({
   overwritten = [],
 }) {
   const title = displayTarget.replace(/\/+$/, '').split('/').pop() || vars.pluginId
+  // 入口行按 kind 分支（known-issues #22）：web 形态的工程没有 Java 入口类，展示前端入口（webMain）
+  // 代替；webMain 的值与模板 web/plugin.json.tpl、overlay/full/plugin.json.tpl 的约定一致（web/index.ts）。
+  const entryLines =
+    spec.kind === 'web'
+      ? ['前端入口     web/index.ts（webMain）']
+      : [`入口类       ${vars.mainClass}`, `Java 包      ${vars.package}`]
   const lines = [
     `插件 id      ${vars.pluginId}`,
     `形态         kind=${spec.kind}  mode=${spec.mode}`,
-    `入口类       ${vars.mainClass}`,
-    `Java 包      ${vars.package}`,
+    ...entryLines,
     `目标目录     ${displayTarget}`,
     fromEnv ? `模板根       ${root}（来自环境变量 EA_PLUGIN_TEMPLATES）` : `模板根       ${root}`,
     `命中模板层   ${layersUsed.join(' → ')}`,
