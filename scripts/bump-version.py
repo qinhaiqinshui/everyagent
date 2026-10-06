@@ -68,6 +68,7 @@ SLOTS = [
     ("every-agent-hub/pom.xml", [_POM_PARENT, _POM_HUB_SELF]),
     ("every-agent-worker/pom.xml", [_POM_PARENT, _POM_WORKER_SELF]),
     ("every-agent-plugin-api/pom.xml", [_POM_PARENT, _POM_PLUGIN_API_SELF]),
+    ("every-agent-plugin-api/js/package.json", [_JSON_VERSION]),
     ("every-agent-desktop/package.json", [_JSON_VERSION]),
     ("every-agent-web/package.json", [_JSON_VERSION]),
 ]

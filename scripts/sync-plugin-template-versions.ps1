@@ -24,8 +24,8 @@ every-agent-parent 工程版本）或 plugin-api / worker 模块版本后运行�
   - 文档站 docs/plugin-guide/web/ 子目录与 reference/known-issues.md 永不写入（另有归属）；
     本脚本的文档目标全部显式登记在下方规则表里；
   - 脚手架 vendor 类型副本（index.d.ts.raw）是内容同步不是版本同步，不归本脚本管；
-  - @everyagent/plugin-api js 包版本（every-agent-plugin-api/js/package.json，known-issues #23
-    登记的 0.11.0 vs 1.0.0 口径分裂）超出本脚本职权，不碰。
+  - @everyagent/plugin-api js 包版本（every-agent-plugin-api/js/package.json）归
+    scripts/bump-version.py 统一管理（known-issues #23 收口后两侧已对齐 1.0.0）。
 
 人工后置项（脚本只改版本字样，会打印提醒）：
   - spring-boot 槽位变化时，standalone 模板显式钉死的 maven-compiler / maven-resources 插件版本
@@ -208,7 +208,7 @@ $rules += @{ File = 'docs/plugin-guide/guides/debugging-and-testing.md'; Slot = 
 $rules += @{ File = 'docs/plugin-guide/guides/troubleshooting.md'; Slot = 'plugin-api'; Name = '「every-agent-plugin-api:jar:<v>」引用'
     Pattern = 'every-agent-plugin-api:jar:[\d.]+'
     Replacement = ("every-agent-plugin-api:jar:{0}" -f $apiNew) }
-$rules += @{ File = 'docs/plugin-guide/index.md'; Slot = 'plugin-api'; Name = '「every-agent-plugin-api`（<v>）」引用（js 包 0.11.0 不在此列）'
+$rules += @{ File = 'docs/plugin-guide/index.md'; Slot = 'plugin-api'; Name = '「every-agent-plugin-api`（<v>）」引用（js 侧版本由 bump-version.py 管理，已对齐同号）'
     Pattern = 'every-agent-plugin-api`（[\d.]+）'
     Replacement = ('every-agent-plugin-api`（' + $apiNew + '）') }
 $rules += @{ File = 'docs/plugin-guide/guides/build-and-run.md'; Slot = 'worker'; Name = '「every-agent-worker-<v>-exec.jar」文件名'
