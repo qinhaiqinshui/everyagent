@@ -30,7 +30,7 @@ has_children: false
 | `ui.trace_types` | `registerTraceType` | 按 kind 接管 trace 条目渲染 | ai-review（auth.review） |
 | `ui.output_blocks` | `registerOutputBlock` | 渲染消息里的 `<tag>…</tag>` 输出块 | **无** |
 | `ui.file_content_editors` | `registerFileContentEditor` | 按扩展名注册文件编辑器 | pdf-viewer（.pdf） |
-| `ui.file_explorer_actions` | `registerFileExplorerAction` | 文件树右键菜单项 | git（⚠️ 死扩展点，见 §13） |
+| `ui.file_explorer_actions` | `registerFileExplorerAction` | 文件树右键菜单项 | git（「显示 Git 历史」，追加在内置项尾部，见 §13） |
 | `ui.round_tail_panels` | `registerRoundTailPanel` | 任务轮末展示区 | file-change |
 
 ## 2. `ui.sidebar_items` —— 侧边栏活动栏项

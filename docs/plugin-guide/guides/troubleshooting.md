@@ -145,7 +145,7 @@ has_children: false
 | 工具注册了，AI 就是不调用 | `ToolProvider.appliesTo` 的沙箱后端判据不匹配；`createTools` 拿不到依赖静默返回空；`@Tool` 描述没说清何时该用 | 剧本 b 三步（后端 id / 空返回 / 描述质量） | 对照常见坑表修 | [调试与测试](debugging-and-testing.md) §4 剧本 b、[工具与沙箱](../backend/tools-and-sandbox.md) §1.5 |
 | `插件 {} 尝试注册生命周期节点 {} 的 order={} 落入临界段 [420,850]，已拒绝`（WARN，TaskLifecycleRegistry.java:46） | `TaskLifecycleNode` 的 order 落进洋葱保留段（worker 自用临界段，注册时拒绝） | 对照 Lifecycle order 分配表 | 挪出 [420,850]（用空档段），重启 worker | [任务与 RPC](../backend/task-and-rpc.md) |
 | 前端 `ctx.sdk.rpc` 报错或无响应；worker 日志见 `rpc {} 执行异常`（ERROR，RpcDispatcher.java:107）或 `rpc 请求缺 reqId/method: {}`（WARN，:77） | 方法名两边不一致（没注册 / 拼错）；参数形状不对；handler 抛异常 | 先 grep 这两条（执行异常带完整堆栈） | 逐字核对 `registerRpcMethod` 与 `ctx.sdk.rpc` 的方法名 | [调试与测试](debugging-and-testing.md) §4 剧本 e、[任务与 RPC](../backend/task-and-rpc.md) |
-| `ctx.events.on(...)` 永不触发 | 订阅了当前全仓零 emit 的**死事件**（38 个宿主事件中 24 个；具名 9 个中 `file-content-saved` / `task-created` / `task-deleted` / `task-trace-changed` 4 个）；拼错事件名也不报错 | 对照死事件总表 | 换 14 个活事件，或改走 UI 扩展点 / `ctx.sdk.rpc` | [前端事件](../web/events.md) §3.2 |
+| `ctx.events.on(...)` 永不触发 | 订阅了不存在的**死事件名**（known-issues #4 清理后常量表 21 个全部可用，但 `(string & {})` 兜底仍放行任意拼写错误/已删除的旧名，如 `file-content-saved`、`task-trace-changed`）；拼错事件名也不报错 | 对照事件总表两张表 | 换 17 个活事件或 4 个请求通道，或改走 UI 扩展点 / `ctx.sdk.rpc` | [前端事件](../web/events.md) §3.1/§3.2 |
 | `/` 菜单里没有我的斜杠命令候选 | 插件被禁用 ⇒ `activate` 根本没被调，一个贡献都不会注册（`PluginLoader.java:237-239` 注释自证「"/菜单"里也就没有它的候选」）；或没调 `registerSlashProvider` | 日志 grep `插件已禁用,跳过激活`；读 activate 源码 | 启用插件（重启生效）；补注册调用 | [任务与 RPC](../backend/task-and-rpc.md) |
 
 ### 2.6 安装组

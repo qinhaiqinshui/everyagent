@@ -176,7 +176,7 @@ export default plugin
 | `ui.trace_types` | `registerTraceType` | trace 记录渲染类型（侧路同步进 traceTypeRegistry，`PluginDispatcher.ts:267-272`） | 正常 |
 | `ui.output_blocks` | `registerOutputBlock` | 按 tag 渲染输出块（侧路 outputBlockRegistry，`:273-284`） | 正常 |
 | `ui.file_content_editors` | `registerFileContentEditor` | 按扩展名注册文件编辑器（可覆盖内置） | 正常 |
-| `ui.file_explorer_actions` | `registerFileExplorerAction` | 文件树右键动作 | **死扩展点：注册了也不显示**（§6） |
+| `ui.file_explorer_actions` | `registerFileExplorerAction` | 文件树右键动作 | git「显示 Git 历史」（known-issues #1 修复前曾为死扩展点） |
 | `ui.round_tail_panels` | `registerRoundTailPanel` | 任务轮末展示区组件 | 正常 |
 
 注：`dispatch()` 的 switch 只列前述 10 个 `ui.*`/`task.*` 常量（`PluginDispatcher.ts:197-226`）；`ui.trace_types` / `ui.output_blocks` 走侧路注册表，不影响使用。
@@ -229,8 +229,8 @@ export default plugin
 2. **§8.5 的 external 清单漏了 `react/jsx-runtime`**（`docs/ARCHITECTURE.md:1137` 列 4 项；代码是 5 项：`pluginLoader.ts:69-75`、`build-plugins.mjs:63-69`）。
 3. **4 个插件的头注释仍写「经 builtInPlugins.ts 自动发现加载」**（该文件已删，真实加载走 `plugin.list` RPC）：`every-agent-plugins/pdf-viewer/web/index.ts:4`、`update-file-view/web/index.ts:4`、`ai-review/web/index.ts:4`、`git/web/index.ts:4`。
 4. **`git/web/index.ts:2` 自称「纯 Web 插件」**，实际其 `plugin.json` 同时有 `main`（java+web 混合形态），注释失真。
-5. **`plugins-loaded` 是死事件**：`every-agent-web/src/events/domainEvents.ts:127` 声明、`:355-357` 定义载荷，全仓**零 emit**——别订阅它感知加载完成，用 console 日志或 `plugin.list`。
-6. **两个「注册了也不显示」的死贡献**：`ui.file_explorer_actions`——`registerFileExplorerAction` 可调（`PluginDispatcher.ts:300-302`）、`listRegisteredFileExplorerActions` 也存在（`:296-298`），但宿主 UI **零消费**（rg：`every-agent-web/src` 中相关符号只出现在 `PluginDispatcher.ts`）；`UiSidebarItemDefinition.Badge`（`index.ts:231`）——宿主合并时只读 `badgeCount`（`Layout.tsx:1084`），git 的 `GitChangeBadge` 组件当前不渲染。
+5. ~~**`plugins-loaded` 是死事件**~~：known-issues #4 修复后 `loadPlugins()` 每轮流程末尾 emit `{count}`——可订阅它感知本轮装载完成；仍要注意 fire-and-forget（晚激活的插件收不到早于自己的 emit）。
+6. ~~**两个「注册了也不显示」的死贡献**~~：`ui.file_explorer_actions`（文件树右键菜单）与 `UiSidebarItemDefinition.Badge`（活动栏角标组件）均已接线（known-issues #1/#2 修复）——git 的「显示 Git 历史」右键项与 `GitChangeBadge` 角标现均生效。
 7. **`register(pluginId, …)` 的 pluginId 形参被忽略**：接口带该参数（`ExtensionRegistry.ts:18,45`）但实现只 `items.push(item)`（`:46`），`PluginDispatcher` 12 个 register 一律传 `''`（如 `:242,245,248`）——注册项无法按插件归属过滤。
 8. **`build:plugins` 流水线口径**：web 侧 `dev`/`build` 确实不含它；但桌面 `build:assets` **会**经 `scripts/build-plugins.py` 间接调用（`every-agent-desktop/package.json:11,16` → `scripts/build-plugins.py:219`），与「不在任何流水线」的旧说法不符——本文以代码为准。
 
@@ -262,7 +262,7 @@ npm.cmd run typecheck
 
 - `ctx` 各成员（sdk/storage/commands/events/fs）的签名与坑：[前端 ctx API](context-api.md)
 - 12 个扩展点逐个字段表 + 注册代码：[UI 扩展点](ui-extensions.md)
-- 36 个宿主事件与 9 个具名事件：[事件](events.md)
+- 21 个宿主事件与 8 个具名事件：[事件](events.md)
 - `webMain`/`hasWebMain`/禁用机制在清单侧的口径：[plugin.json 字段参考](../plugin-manifest.md)
 - 三形态构建矩阵与 cwd 陷阱：[构建与运行](../guides/build-and-run.md)
 - 现象对不上本文时的逐条排查：[故障排查](../guides/troubleshooting.md)、[已知问题与现状偏差](../reference/known-issues.md)

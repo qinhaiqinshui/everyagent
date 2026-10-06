@@ -47,7 +47,7 @@ has_children: false
 | [guides/troubleshooting.md](guides/troubleshooting.md) | 以 `LoadedPlugin.status` 与 worker WARN 文案逐条为行的「现象→根因→修复」表 | **已成文** |
 | [reference/builtin-plugins.md](reference/builtin-plugins.md) | 内置插件 × 扩展点索引：形态 / 注册了什么 / 能当哪个范例 | **已成文** |
 | [reference/api-index.md](reference/api-index.md) | 后端注册点 + 前端类型包导出的一屏索引表 | **已成文** |
-| [reference/known-issues.md](reference/known-issues.md) | 现状偏差、API 包未发布、死扩展点：现象 / 影响 / 规避 / 待办 | **已成文** |
+| [reference/known-issues.md](reference/known-issues.md) | 现状偏差、API 包未发布等：现象 / 影响 / 修复·规避 / 待办（#1~#5 已修复） | **已成文** |
 
 > 目录由本文件冻结：`nav_order` 按上表顺序 1~19 递增，`parent` 为所在子目录名（`backend` / `web` / `guides` / `reference`），首页无 `parent`。新增页面要同时改本表、本条编号与 §1 阅读路径。
 

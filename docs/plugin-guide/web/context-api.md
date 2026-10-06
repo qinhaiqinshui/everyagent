@@ -12,16 +12,16 @@ has_children: false
 先记住一个总事实：**`ctx` 是宿主在加载每个插件时现场构造的普通对象字面量**（`every-agent-web/src/plugin/pluginLoader.ts:383-395`），没有任何魔法代理——每个成员的实现都是一小段闭包，下文逐个拆开。宿主源码原文即：
 
 ```ts
-// every-agent-web/src/plugin/pluginLoader.ts:383-395（摘录，省略 3 行 ui 强转注释）
+// every-agent-web/src/plugin/pluginLoader.ts（摘录，省略 3 行 ui 强转注释）
 const ctx: PluginContext = {
   pluginId: plugin.id,
-  extensionPath: 'web/index.js',
+  extensionPath: webEntryJsPath(plugin.webMain),
   sdk: createPluginSdk(workerId, workspaceId, workspaceRoot),
   storage: createPluginStorage(plugin.id),
   commands: createCommandRegistry(),
   events: createPluginEvents(),
   fs: createPluginFs(),
-  ui: pluginDispatcher as unknown as PluginContext['ui'],  // 单例强转接入（:394）
+  ui: pluginDispatcher as unknown as PluginContext['ui'],  // 单例强转接入
 }
 ```
 
@@ -362,5 +362,5 @@ export default plugin
 ## 12. 下一步读
 
 - 12 个 UI 扩展点逐个字段表与注册代码：[UI 扩展点](ui-extensions.md)
-- 36 个宿主事件 + 9 个具名事件的完整手册：[事件](events.md)
+- 21 个宿主事件 + 8 个具名事件的完整手册：[事件](events.md)
 - `registerRpcMethod` 命名规范、ACL 与后端事件发射：[后端任务与 RPC](../backend/task-and-rpc.md)
