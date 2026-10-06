@@ -3,7 +3,7 @@
  * → 启动后端(hub/worker)→ 后端就绪后加载前端静态站。退出时优雅停 worker 再停 hub。
  * 启动过程会同步写入 <EVERYAGENT_HOME>/logs/desktop.log,并通过 IPC 推送到启动占位页。
  */
-import { app, BrowserWindow, ipcMain, Menu, nativeImage, Tray } from 'electron'
+import { app, BrowserWindow, ipcMain, Menu, nativeImage, shell, Tray } from 'electron'
 import { join } from 'node:path'
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
 import {
@@ -130,6 +130,9 @@ function registerIpc(): void {
   ipcMain.handle('desktop:get-startup-status', () =>
     startupLines.map((l) => `[${l.time}] ${l.text}`),
   )
+  ipcMain.on('desktop:open-external', (_event, url: unknown) => {
+    openExternalUrl(typeof url === 'string' ? url : '')
+  })
 
   // 自定义标题栏窗口控制:最小化 / 最大化·还原 / 关闭 / 查询最大化状态。
   // 用事件来源定位窗口,避免依赖闭包 mainWindow(多窗口/窗口重建更健壮)。
@@ -160,6 +163,34 @@ function installProcessHandlers(): void {
   app.on('render-process-gone', (_event, webContents, details) => {
     console.error('[desktop] 渲染进程异常退出:', details)
   })
+}
+
+/**
+ * 在系统默认浏览器打开外部链接。
+ * 只放行 http(s)/mailto/tel——相对路径、file://、javascript: 等一律拒绝,
+ * 防止把应用内部地址或危险协议带到系统层。
+ */
+function openExternalUrl(url: string): void {
+  const trimmed = typeof url === 'string' ? url.trim() : ''
+  if (!/^(https?|mailto|tel):/i.test(trimmed)) {
+    console.warn('[desktop] 拒绝打开非外部协议链接:', url)
+    return
+  }
+  shell.openExternal(trimmed).catch((error) => {
+    console.error('[desktop] 打开外部链接失败:', url, error)
+  })
+}
+
+/** 判断 url 是否为应用自身(本地静态站/启动页):这类地址不得交给系统浏览器。 */
+function isAppOwnUrl(url: string): boolean {
+  if (!staticServer) {
+    // 静态服务尚未就绪(启动占位页阶段):本机回环地址都视为应用自身。
+    return /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?/i.test(url)
+  }
+  return url === staticServer.url
+    || url.startsWith(`${staticServer.url}/`)
+    || url.startsWith(`${staticServer.url}?`)
+    || url.startsWith(`${staticServer.url}#`)
 }
 
 // 1) 尽早解析 home/logsDir 并接管 console,保证后续每一步都有日志。
@@ -383,6 +414,26 @@ function createWindow(html: string): void {
   win.webContents.on('did-finish-load', () => {
     // 不打印 URL:启动占位页是 data:text/html,URL 携带整段 HTML,会刷屏。
     pushStatus('页面加载完成')
+  })
+  // 站外新窗口(target=_blank / window.open)一律拒绝在 Electron 子窗口加载:
+  // 站外 http(s) 交系统默认浏览器打开;应用自身的地址(相对链接被解析为回环地址)直接吞掉。
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:/i.test(url) && !isAppOwnUrl(url)) {
+      openExternalUrl(url)
+    } else if (!isAppOwnUrl(url)) {
+      console.warn('[desktop] 拒绝新窗口打开链接:', url)
+    }
+    return { action: 'deny' }
+  })
+  // 页面发起的窗口级导航(链接误触发等)一律阻止:应用内导航只经前端路由,
+  // 站外 http(s) 同样交系统默认浏览器。
+  win.webContents.on('will-navigate', (event, url) => {
+    event.preventDefault()
+    if (/^https?:/i.test(url) && !isAppOwnUrl(url)) {
+      openExternalUrl(url)
+    } else {
+      console.warn('[desktop] 已阻止页面导航:', url)
+    }
   })
   win.webContents.on('did-fail-load', (_event, code, desc, url) => {
     // url 可能携带整段 HTML(data: URL)或超长地址,只保留描述性信息并截断,避免刷屏。

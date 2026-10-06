@@ -9,7 +9,7 @@
  */
 import React from 'react'
 import { workspaceGateway } from '@/platform/fs/workspaceGateway'
-import { normalizeWorkspaceRelativePath } from '@/platform/fs/pathUtils'
+import { resolveWorkspaceRelativePath } from '@/platform/fs/pathUtils'
 import { bytesToDataUrl, imageMimeOf, isImageFileName } from '@/utils/imageAsset'
 
 type MarkdownImageProps = {
@@ -97,22 +97,8 @@ export default function MarkdownImage({ src, alt, workspaceRoot, baseDir }: Mark
   )
 }
 
-/**
- * 把「baseDir 相对 src」合并为工作区相对路径,并防 `..` 越出工作区根。
- * 路径坐标系统一为工作区相对路径(无前导 /)。
- */
-function resolveWorkspaceRelativePath(baseDir: string, target: string): string {
-  const segments = normalizeWorkspaceRelativePath(baseDir).split('/').filter(Boolean)
-  for (const part of normalizeWorkspaceRelativePath(target).split('/').filter(Boolean)) {
-    if (part === '.') continue
-    if (part === '..') {
-      segments.pop()
-      continue
-    }
-    segments.push(part)
-  }
-  return segments.join('/')
-}
+// 相对路径合并(resolveWorkspaceRelativePath)已抽出至 @/platform/fs/pathUtils,
+// 与 markdown 文件链接共用同一解析。
 
 const imageStyle: React.CSSProperties = {
   maxWidth: '100%',

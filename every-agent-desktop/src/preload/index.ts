@@ -25,6 +25,10 @@ contextBridge.exposeInMainWorld('everyAgentDesktop', {
     const listener = (_event: IpcRendererEvent, tag: string): void => callback(tag)
     ipcRenderer.on('desktop:notify-click', listener)
   },
+  /** 在系统默认浏览器打开外部链接(主进程 shell.openExternal,仅放行 http(s)/mailto/tel)。 */
+  openExternal: (url: string): void => {
+    ipcRenderer.send('desktop:open-external', url)
+  },
   windowControl: {
     minimize: (): Promise<void> => ipcRenderer.invoke('desktop:window-minimize'),
     toggleMaximize: (): Promise<void> => ipcRenderer.invoke('desktop:window-toggle-maximize'),

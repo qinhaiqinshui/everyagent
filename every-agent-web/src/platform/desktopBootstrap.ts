@@ -33,6 +33,8 @@ declare global {
       notify?: (payload: { title: string; body?: string; tag?: string }) => void
       /** 订阅桌面系统通知点击(回调携带 tag,与 notify 时传入的 tag 对应)。 */
       onNotifyClick?: (callback: (tag: string) => void) => void
+      /** 在系统默认浏览器打开外部链接(主进程 shell.openExternal,仅放行 http(s)/mailto/tel)。 */
+      openExternal?: (url: string) => void
     }
   }
 }

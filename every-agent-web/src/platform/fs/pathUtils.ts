@@ -45,3 +45,21 @@ export function shouldHideWorkspacePath(path: string): boolean {
   if (path === '/plugins' || path.startsWith('/plugins/')) return true
   return hasInternalSegment(path)
 }
+
+/**
+ * 把「baseDir 相对 target」合并为工作区相对路径,并防 `..` 越出工作区根。
+ * 路径坐标系统一为工作区相对路径(无前导 /);markdown 内嵌图片/文件链接的
+ * 相对路径解析共用(以 md 文件所在目录为基准)。
+ */
+export function resolveWorkspaceRelativePath(baseDir: string, target: string): string {
+  const segments = normalizeWorkspaceRelativePath(baseDir).split('/').filter(Boolean)
+  for (const part of normalizeWorkspaceRelativePath(target).split('/').filter(Boolean)) {
+    if (part === '.') continue
+    if (part === '..') {
+      segments.pop()
+      continue
+    }
+    segments.push(part)
+  }
+  return segments.join('/')
+}
