@@ -48,7 +48,7 @@ import java.util.stream.Stream;
 /**
  * 插件加载器 —— 多扫描器统一加载架构(插件扫描机制统一重构第 2 步)。
  *
- * <p>加载流程(架构 §7.2):
+ * <p>加载流程(架构 §8.5 插件系统·统一加载架构):
  * <ol>
  *   <li>遍历所有注入的 {@link PluginScanner} 实现(Spring 自动聚合 Bean),
  *       调用 {@code scan()} 收集全部 {@link ScannedPlugin};
@@ -73,7 +73,7 @@ import java.util.stream.Stream;
  * <p>入口类解析:优先顶层 {@code "main"} 字段,兼容旧格式
  * {@code provides.spi.EveryAgentPlugin};无入口类 = 纯声明式插件(只有 plugin.json 贡献)。
  *
- * <p>ClassLoader 隔离策略(架构 §7.3):
+ * <p>ClassLoader 隔离策略(架构 §8.5 插件系统·统一加载架构):
  * <ul>
  *   <li>每个插件一个 URLClassLoader(jar, parent=workerClassLoader)</li>
  *   <li>插件可见 worker 公共 API(plugin.spi.*、contract.*)</li>
