@@ -85,7 +85,7 @@ worker 侧的判定规则（`every-agent-worker/src/main/java/dev/everyagent/wor
 | `plugin.json` 里 `webMain` 的**值不被前端消费**（只决定 `hasWebMain`）；宿主一律请求 `plugin.webSource{pluginId, path:'web/index.js'}` | `every-agent-web/src/plugin/pluginLoader.ts` |
 | 内置插件目录由 `worker.builtin-plugins-dir` 决定，默认按**进程 cwd** 解析；外部插件目录 `worker.plugins-dir`，默认 `~/.everyagent/plugins/<id>/`，其 java jar 约定落 `<id>/lib/*.jar` | 上述两个 Scanner 源文件 |
 | 前端产物 `web/index.js` 不在 `dev` / `build` / 桌面任何流水线里，改前端**必须手工** `npm run build:plugins`（`every-agent-web/scripts/build-plugins.mjs`） | `.everyagent/web-plugin-facts.md` §3 |
-| bare import 白名单只有 5 项：`react`、`react-dom`、`react/jsx-runtime`、`antd`、`@ant-design/icons`，运行时改写为 5 个 `window.__EA_*` 全局 | 同上 §4 |
+| bare import 白名单只有 7 项：`react`、`react-dom`、`react/jsx-runtime`、`antd`、`@ant-design/icons`、`react-markdown`、`remark-gfm`，运行时改写为 7 个 `window.__EA_*` 全局 | 同上 §4 |
 | 仓库内插件的 `web/*.ts` 由宿主 `every-agent-web/tsconfig.json` 的 `include` 覆盖，**无需自带 tsconfig** | `every-agent-web/tsconfig.json` |
 | `enable` / `disable` / `install` / `uninstall` 一律**重启 worker 才生效**（无热重载；`deactivate` 仅在 worker 优雅关闭时调用） | `../ARCHITECTURE.md` §8.5 |
 | `@everyagent/plugin-api`（js 与 Java，均已对齐 1.0.0）**均未发布**到公共仓库（npm / Maven Central 实测 404），故仓库外开发需自带类型副本 | `.everyagent/plan-plugin-scaffold-docs.md` |

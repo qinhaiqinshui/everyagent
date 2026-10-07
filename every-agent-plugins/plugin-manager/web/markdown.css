@@ -1,0 +1,87 @@
+/* 扩展详情页 README 区样式（.pm-md 作用域，随插件 index.css 注入）。
+ * 只做结构性排版：间距、代码/引用/表格边框；颜色跟随宿主 antd 变量。 */
+
+.pm-md {
+  font-size: 14px;
+  line-height: 1.7;
+  word-break: break-word;
+}
+
+.pm-md h1, .pm-md h2, .pm-md h3, .pm-md h4, .pm-md h5, .pm-md h6 {
+  margin: 20px 0 8px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+.pm-md h1 { font-size: 22px; }
+.pm-md h2 { font-size: 19px; }
+.pm-md h3 { font-size: 16px; }
+.pm-md h4, .pm-md h5, .pm-md h6 { font-size: 14px; }
+.pm-md > *:first-child { margin-top: 0; }
+
+.pm-md p { margin: 8px 0; }
+
+.pm-md ul, .pm-md ol { margin: 8px 0; padding-left: 24px; }
+.pm-md li { margin: 2px 0; }
+.pm-md li > p { margin: 0; }
+.pm-md li > ul, .pm-md li > ol { margin: 2px 0 0; }
+
+.pm-md code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-family: ui-monospace, SFMono-Regular, Consolas, 'Courier New', monospace;
+  font-size: 13px;
+  background: rgba(127, 127, 127, 0.14);
+}
+
+.pm-md pre {
+  margin: 10px 0;
+  padding: 12px;
+  border-radius: 8px;
+  overflow-x: auto;
+  background: rgba(127, 127, 127, 0.12);
+}
+.pm-md pre code {
+  padding: 0;
+  background: none;
+  font-size: 13px;
+}
+
+.pm-md blockquote {
+  margin: 10px 0;
+  padding: 2px 12px;
+  border-left: 3px solid rgba(127, 127, 127, 0.4);
+  color: rgba(0, 0, 0, 0.55);
+}
+
+.pm-md table {
+  margin: 10px 0;
+  border-collapse: collapse;
+  max-width: 100%;
+  display: block;
+  overflow-x: auto;
+}
+.pm-md th, .pm-md td {
+  padding: 6px 12px;
+  border: 1px solid rgba(127, 127, 127, 0.35);
+  text-align: left;
+}
+.pm-md th {
+  font-weight: 600;
+  background: rgba(127, 127, 127, 0.1);
+}
+
+.pm-md hr {
+  margin: 16px 0;
+  border: none;
+  border-top: 1px solid rgba(127, 127, 127, 0.3);
+}
+
+.pm-md img {
+  max-width: 100%;
+  border-radius: 6px;
+}
+
+.pm-md input[type="checkbox"] {
+  margin-right: 6px;
+  pointer-events: none;
+}

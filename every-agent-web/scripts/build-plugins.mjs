@@ -62,6 +62,11 @@ function esbuildOptions(entry) {
     'react/jsx-runtime',
     'antd',
     '@ant-design/icons',
+    // Markdown 渲染：宿主经 window.__EA_REACT_MARKDOWN__ / __EA_REMARK_GFM__
+    // 注入各自包的 default export（与 pluginLoader.ts 的 BARE_IMPORT_MAP 三处锁定
+    // 同一份清单，改一处必同步另一处+文档）。插件侧只可用默认导入形态。
+    'react-markdown',
+    'remark-gfm',
   ]
   return {
     entryPoints: [entry.in],

@@ -16,7 +16,7 @@ has_children: false
 every-agent-plugins/<id>/web/index.ts   （入口；JSX 组件放同级 .tsx）
       │  npm.cmd run build:plugins      every-agent-web/scripts/build-plugins.mjs
       │  esbuild bundle：format=esm / target=es2022 / jsx=automatic / sourcemap
-      │  external 5 项白名单；CSS 抽到同名 web/index.css
+      │  external 7 项白名单；CSS 抽到同名 web/index.css
       ▼
 web/index.js（+ index.css + map）       产物，.gitignore:25-28 排除，不入库
 
@@ -32,8 +32,8 @@ loadPlugins()                           main.tsx:46 启动、:63 重连、:69 �
       │      （webMain 去扩展名拼 .js；缺省回退 web/index.js）
       │      worker 侧 jail 到插件目录   PluginRpcMethods.java:187-214（resolvePluginFile :282-307）
       │      Files.readString → 纯文本   :201
-      │ ⑥ rewriteBareImports            :432（白名单 BARE_IMPORT_MAP :69-75）
-      │      5 项 bare import → window.__EA_*（宿主注入 :54-58）
+      │ ⑥ rewriteBareImports            :432（白名单 BARE_IMPORT_MAP :71-79）
+      │      7 项 bare import → window.__EA_*（宿主注入 :54-60）
       │ ⑦ Blob + createObjectURL → import() → revoke   :434-440
       │ ⑧ mod.default ?? mod；activate 必须是函数       :375-379
       │ ⑨ 注入 CSS：<style id="plugin-css:<id>"> → document.head   :448-465
@@ -53,7 +53,7 @@ extensionsVersion++                     PluginDispatcher.ts:69-79
 | 没跑 `build:plugins`，worker 读不到文件 | `plugin.webSource` 报 `NOT_FOUND`，前端 console：`[plugins] 插件 <id> 加载失败: 插件 <id> 无 <产物路径> 源码`（产物路径 = `webMain` 换算结果，约定即 `web/index.js`） | `pluginLoader.ts`（`loadPluginModule` 空内容抛错）；worker 侧 `PluginRpcMethods.resolvePluginFile:301` |
 | `webMain` 缺失或为空 | `hasWebMain=false` → 第 ③ 步被过滤，**插件完全不出现，无任何报错** | `PluginRpcMethods.java:75`、`pluginLoader.ts:363-367` |
 | 插件被禁用（`active=false` 或在 `disabledIds`） | 同上，静默消失 | `pluginLoader.ts:363-367` |
-| 用了白名单外的 bare import / 动态 `import('antd')` / `export {X} from 'antd'` | 改写器不动它 → 残留 import 语句进 blob → `import()` 抛模块解析错误 → 加载失败 warn | `pluginLoader.ts:69-75`（仅 5 项映射） |
+| 用了白名单外的 bare import / 动态 `import('antd')` / `export {X} from 'antd'` | 改写器不动它 → 残留 import 语句进 blob → `import()` 抛模块解析错误 → 加载失败 warn | `pluginLoader.ts:71-79`（仅 7 项映射） |
 | 入口没 `export default`、或 default 不是 `{ activate }` | **静默 `continue`，连 warn 都没有** | `pluginLoader.ts:375-379` |
 | `web/index.css` 缺失或读取失败 | 无样式，但不阻塞激活 | `pluginLoader.ts:398-402` |
 | worker 离线 / `plugin.list` 失败 | 整体静默降级，零插件零报错，重连后自动重试 | `pluginLoader.ts:332-334`、`:357-359`；`main.tsx:62-64` |
@@ -134,10 +134,11 @@ export default plugin
 - **怎么做**：一律 `import type { PluginContext, PluginModule } from '@everyagent/plugin-api'`；需要运行时对象时只用 `ctx`。
 - **违反症状**：纯类型位置忘写 `type` → 无症状（但别依赖）；值位置 → 构建期报错，产物不更新。
 
-### 约定 3：bare import 白名单只有 5 项
+### 约定 3：bare import 白名单只有 7 项
 
-- **为什么**：blob URL 里的 `import()` 解析不了任何裸模块名，宿主只改写这 5 项（`BARE_IMPORT_MAP`，`pluginLoader.ts:69-75`）到 5 个 window 全局——`window.__EA_REACT__ / __EA_REACT_DOM__ / __EA_REACT_JSX__ / __EA_antd__ / __EA_ICONS__`，由宿主在模块加载时注入（`pluginLoader.ts:54-58`），保证插件与宿主共用**同一个 React 实例**（多实例会 hooks 报错）。构建侧 `esbuild external` 同样只有这 5 项（`every-agent-web/scripts/build-plugins.mjs:63-69`）。
-- **怎么做**：第三方库要么不用，要么让 esbuild 打进 bundle（非 external 的依赖会被打包，前提是解析得到）；改写器认 5 种 esbuild 产出形态：默认导入、命名导入（含 `as` 重命名）、命名空间、默认+命名混合、副作用导入（`pluginLoader.ts:103-141`）。
+- **为什么**：blob URL 里的 `import()` 解析不了任何裸模块名，宿主只改写这 7 项（`BARE_IMPORT_MAP`，`pluginLoader.ts:71-79`）到 7 个 window 全局——`window.__EA_REACT__ / __EA_REACT_DOM__ / __EA_REACT_JSX__ / __EA_antd__ / __EA_ICONS__ / __EA_REACT_MARKDOWN__ / __EA_REMARK_GFM__`，由宿主在模块加载时注入（`pluginLoader.ts:54-60`），保证插件与宿主共用**同一个 React 实例**（多实例会 hooks 报错）。构建侧 `esbuild external` 同样只有这 7 项（`every-agent-web/scripts/build-plugins.mjs`），三处（BARE_IMPORT_MAP / external / 文档）锁定同一份清单，改一处必同步。
+- **react-markdown / remark-gfm 的形态限制**：两个全局挂的是各自包的 **default export**（`Markdown` 组件 / `remarkGfm` 插件函数），因此插件侧只可用**默认导入**——`import Markdown from 'react-markdown'`、`import remarkGfm from 'remark-gfm'`；运行时命名导入（`import { X } from 'react-markdown'`）取不到（全局不是命名空间对象）。类型引用一律 `import type`（会被擦除，不受影响）。用途：插件渲染 Markdown（如 plugin-manager 扩展详情页的 README 区）复用宿主同版本渲染器，**不要自研正则渲染器**（曾因 off-by-one 捕获组整类崩溃，2026-10 已删）。
+- **怎么做**：其余第三方库要么不用，要么让 esbuild 打进 bundle（非 external 的依赖会被打包，前提是解析得到）；改写器认 5 种 esbuild 产出形态：默认导入、命名导入（含 `as` 重命名）、命名空间、默认+命名混合、副作用导入（`pluginLoader.ts:103-141`）。
 - **违反症状**：`import _ from 'lodash'`、动态 `import('antd')`、`export { Badge } from 'antd'` 都**不在改写范围** → 残留 import 进 blob → 激活时抛模块解析错误，console 出 `[plugins] 插件 <id> 加载失败:`。
 
 ### 约定 4：禁 `@/` 宿主内部引用，UI 与图标自带
@@ -226,7 +227,7 @@ export default plugin
 [../../ARCHITECTURE.md](../../ARCHITECTURE.md) §8.5（`docs/ARCHITECTURE.md:1128-1139`）描述的统一加载架构与代码主体一致，但有以下已核实的偏差/限制（完整登记见 [已知问题与现状偏差](../reference/known-issues.md)）：
 
 1. **两套扩展机制并存**：§8.5 写「不再有 `import.meta.glob` / `builtInPlugins.ts`」（`docs/ARCHITECTURE.md:1137`），这只对**插件加载**成立；宿主内部注册表仍在用 glob——实际用 glob 的文件仅两个：`every-agent-web/src/components/files/editors/registry.ts:11`（模式含 `../../../plugins/*/editors/*FileEditor.tsx`，顺带发现 `src/plugins/{image,markdown}/editors/` 下的内置编辑器）与 `every-agent-web/src/components/task/toolViews/registry.ts:15`。⇒ 宿主内置编辑器是 `@/` 内部代码**不是插件**，不受本文约定约束。
-2. **§8.5 的 external 清单漏了 `react/jsx-runtime`**（`docs/ARCHITECTURE.md:1137` 列 4 项；代码是 5 项：`pluginLoader.ts:69-75`、`build-plugins.mjs:63-69`）。
+2. ~~**§8.5 的 external 清单漏了 `react/jsx-runtime`**~~：已修正——§8.5 现列全部 7 项 external（react/react-dom/react/jsx-runtime/antd/@ant-design/icons/react-markdown/remark-gfm），与代码三处锁定清单一致。
 3. **4 个插件的头注释仍写「经 builtInPlugins.ts 自动发现加载」**（该文件已删，真实加载走 `plugin.list` RPC）：`every-agent-plugins/pdf-viewer/web/index.ts:4`、`update-file-view/web/index.ts:4`、`ai-review/web/index.ts:4`、`git/web/index.ts:4`。
 4. **`git/web/index.ts:2` 自称「纯 Web 插件」**，实际其 `plugin.json` 同时有 `main`（java+web 混合形态），注释失真。
 5. ~~**`plugins-loaded` 是死事件**~~：known-issues #4 修复后 `loadPlugins()` 每轮流程末尾 emit `{count}`——可订阅它感知本轮装载完成；仍要注意 fire-and-forget（晚激活的插件收不到早于自己的 emit）。

@@ -26,7 +26,9 @@
       "@ant-design/icons": ["./node_modules/@ant-design/icons/lib"],
       "antd": ["./node_modules/antd"],
       "antd/*": ["./node_modules/antd/*"],
-      "react/jsx-runtime": ["./node_modules/@types/react/jsx-runtime"]
+      "react/jsx-runtime": ["./node_modules/@types/react/jsx-runtime"],
+      "react-markdown": ["./node_modules/react-markdown"],
+      "remark-gfm": ["./node_modules/remark-gfm"]
     }
   },
   "include": ["src", "../every-agent-plugins/*/web"],

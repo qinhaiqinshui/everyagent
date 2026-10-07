@@ -32,6 +32,8 @@ import * as ReactDOMNS from 'react-dom'
 import * as antd from 'antd'
 import * as Icons from '@ant-design/icons'
 import * as ReactJSXRuntime from 'react/jsx-runtime'
+import Markdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { hubSession } from '@/hub/session'
 import { workspaceRegistry } from '@/hub/workspaceRegistry'
 import { domainEventBus, DOMAIN_EVENTS } from '@/events/eventBus'
@@ -61,6 +63,11 @@ _g.__EA_REACT_DOM__ = ReactDOMNS
 _g.__EA_antd__ = antd
 _g.__EA_ICONS__ = Icons
 _g.__EA_REACT_JSX__ = ReactJSXRuntime
+// react-markdown / remark-gfm 挂的是各自包的 default export（组件 / 插件函数），
+// 插件侧只可用默认导入形态（import Markdown from 'react-markdown'）；
+// 供插件渲染 Markdown 复用宿主同一份实例（plugin-manager 扩展详情页 README 区）。
+_g.__EA_REACT_MARKDOWN__ = Markdown
+_g.__EA_REMARK_GFM__ = remarkGfm
 
 // ── bare import → window 全局引用重写 ─────────────────────────────────────
 
@@ -77,6 +84,8 @@ const BARE_IMPORT_MAP: Record<string, string> = {
   'react/jsx-runtime': 'window.__EA_REACT_JSX__',
   'antd': 'window.__EA_antd__',
   '@ant-design/icons': 'window.__EA_ICONS__',
+  'react-markdown': 'window.__EA_REACT_MARKDOWN__',
+  'remark-gfm': 'window.__EA_REMARK_GFM__',
 }
 
 /**
