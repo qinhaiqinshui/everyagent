@@ -5,10 +5,12 @@ import dev.everyagent.plugin.sandbox.codex.CodexCommandExecutor.ExecSession;
 import dev.everyagent.plugin.sandbox.codex.accounts.SandboxAccounts.NetworkIdentity;
 import dev.everyagent.plugin.sandbox.codex.runner.FrameCodec.FramedMessage;
 import dev.everyagent.plugin.sandbox.codex.runner.IpcMessage;
+import dev.everyagent.plugin.sandbox.codex.runner.IpcMessage.ErrorStage;
 import dev.everyagent.plugin.sandbox.codex.runner.IpcMessage.Exit;
 import dev.everyagent.plugin.sandbox.codex.runner.IpcMessage.Output;
 import dev.everyagent.plugin.sandbox.codex.runner.IpcMessage.Stream;
 import dev.everyagent.plugin.sandbox.codex.session.CodexSandboxSession;
+import dev.everyagent.plugin.sandbox.codex.session.CodexSandboxSession.RunnerStartupException;
 import dev.everyagent.plugin.sandbox.codex.session.RunnerClient;
 
 import com.sun.jna.Platform;
@@ -27,10 +29,12 @@ import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
@@ -160,15 +164,34 @@ class CodexCommandExecutorTest {
     }
 
     @Test
-    void commandArgvForFileCarriesQuotedPs1Path() {
+    void commandArgvForFileUsesQuoteFreeWorkspaceRelativePath() {
         CodexCommandExecutor exec = executor(new Capture(new FakeSession()),
                 new FakeSession(), 30_000);
-        Path script = Path.of("ea-cmd-tmp", "ea-cmd-1.ps1");
-        List<String> argv = exec.commandArgvForFile(script);
+        String fileArg = Path.of(".everyagent", "tmp", "ea-cmd-1.ps1").toString();
+        List<String> argv = exec.commandArgvForFile(fileArg);
         assertEquals(List.of("cmd.exe", "/d", "/s", "/c",
                 "chcp.com 65001 >nul 2>&1 & powershell.exe -NoProfile"
-                        + " -ExecutionPolicy Bypass -File \"" + script + "\""), argv,
-                "cmd-chcp 包装不变(码页先于 PS 启动),载荷 -File 带引号(容忍路径空格)");
+                        + " -ExecutionPolicy Bypass -File " + fileArg), argv,
+                "cmd-chcp 包装不变(码页先于 PS 启动);-File 载荷=无引号相对路径——载荷内的"
+                        + "字面引号经 runner argvToCommandLine 转义成反斜杠引号,cmd /s /c 保留后"
+                        + "被 PS 解析成路径字符,实测报 Illegal characters in path");
+        assertFalse(argv.get(4).contains("\""),
+                "回归护栏:整个载荷不得出现任何字面引号(2026-12 codex 沙箱实测回归)");
+    }
+
+    @Test
+    void scriptFileArgRelativizesAgainstWorkspaceAndRejectsOutside() throws IOException {
+        Path ws = Files.createDirectories(tempDir.resolve("ws-filearg"));
+        Path script = ws.resolve(".everyagent").resolve("tmp").resolve("ea-cmd-7-ab.ps1");
+        String arg = CodexCommandExecutor.scriptFileArg(ws, script);
+        assertEquals(Path.of(".everyagent", "tmp", "ea-cmd-7-ab.ps1").toString(), arg,
+                "cwd=工作区根,-File 用工作区相对路径");
+        assertFalse(arg.contains(" ") || arg.contains("\""),
+                "自生成分量无空格无引号,任何序列化层都不会给它加引号:" + arg);
+        assertThrows(IOException.class, () -> CodexCommandExecutor.scriptFileArg(ws,
+                ws.resolveSibling("outside.ps1")),
+                "脚本不在工作区内→IOException→调用方回退 -EncodedCommand"
+                        + "(绝不回退成带引号绝对路径)");
     }
 
     @Test
@@ -394,13 +417,18 @@ class CodexCommandExecutorTest {
         assertEquals("/c", argv.get(3));
         String payload = argv.get(4);
         assertTrue(payload.startsWith("chcp.com 65001 >nul 2>&1 & powershell.exe -NoProfile"
-                        + " -ExecutionPolicy Bypass -File \""),
+                        + " -ExecutionPolicy Bypass -File "),
                 "主形态=脚本文件承载(-File):" + payload);
-        assertTrue(payload.endsWith(".ps1\""),
+        assertTrue(payload.endsWith(".ps1"),
                 "扩展名 .ps1(powershell -File 强制):" + payload);
+        assertFalse(payload.contains("\""),
+                "载荷零引号:相对路径免引号,载荷内字面引号会被二次序列化转义成路径字符:"
+                        + payload);
         assertTrue(payload.contains("ea-cmd-"), "命名 ea-cmd-<pid>-<纳秒>.ps1:" + payload);
-        int fs = payload.indexOf("-File \"") + "-File \"".length();
-        Path scriptPath = Path.of(payload.substring(fs, payload.length() - 1));
+        String fileArg = payload.substring(payload.indexOf("-File ") + "-File ".length());
+        assertTrue(fileArg.startsWith(".everyagent"),
+                "-File 载荷=工作区相对路径(cwd=工作区根下解析):" + payload);
+        Path scriptPath = tempDir.resolve("ws").resolve(fileArg);
         assertFalse(Files.exists(scriptPath), "命令脚本在 finally 中清理:" + scriptPath);
         assertEquals(tempDir.resolve("ws").toString(), capture.spec.cwd(), "cwd=工作区根");
         assertEquals(30_000L, capture.spec.timeoutMs(), "timeout=SandboxConfig/manager 值");
@@ -504,7 +532,8 @@ class CodexCommandExecutorTest {
                 tempDir.resolve("ws"), null);
         String result = exec.execute("echo hi", "powershell");
         assertTrue(result.startsWith("[codex sandbox 未完成 setup"));
-        assertTrue(result.contains("重新激活"), "错误里给出重新激活的指引");
+        assertTrue(result.contains("重新启动 worker"),
+                "错误里给出恢复指引(检查 UAC 被拒/重启 worker)");
     }
 
     @Test
@@ -521,5 +550,132 @@ class CodexCommandExecutorTest {
                 (options, username) -> new RunnerClient.RunnerConfig(
                         options.codexHome(), username, "pw", "cp", "jh", "cwd"));
         assertEquals("[codex sandbox 执行失败] pipe broken", exec.execute("x", "powershell"));
+    }
+
+    // ---- 凭据失配自愈（BUG：沙箱账户密码被外部改动后 1326 直接报错、不自愈） ----
+
+    /** 凭据轮换自愈的 seam 注入构造器（nativeGuard=false，跨平台可测）。 */
+    private CodexCommandExecutor healingExecutor(CodexSandboxManager manager,
+            CodexCommandExecutor.SessionOpener opener,
+            CodexCommandExecutor.CredentialRotator rotator) {
+        return new CodexCommandExecutor(manager, tempDir.resolve("ws"), null, false,
+                CodexCommandExecutor.ShellChoice.POWERSHELL, opener,
+                (options, capSids, w, r) -> {
+                },
+                (options, username) -> new RunnerClient.RunnerConfig(
+                        options.codexHome(), username, "pw", "cp", "jh", "cwd"),
+                rotator);
+    }
+
+    /** 1326（密码被外部改动）→ 轮换密码 → 原地重试一次成功，命令结果正常返回。 */
+    @Test
+    void credentialMismatchTriggersRotationAndRetriesOnce() {
+        FakeSession session = new FakeSession(out("healed", Stream.STDOUT),
+                new FramedMessage(6, new Exit(0, false)));
+        AtomicInteger opened = new AtomicInteger();
+        AtomicInteger rotated = new AtomicInteger();
+        CodexSandboxManager manager = new CodexSandboxManager(
+                new CodexSandboxOptions(tempDir, null, null, null, false, null), 30_000);
+        CodexCommandExecutor exec = healingExecutor(manager, (cfg, spec) -> {
+            if (opened.incrementAndGet() == 1) {
+                throw new RunnerClient.CredentialMismatchException("EACodexOnline", 1326);
+            }
+            return session;
+        }, m -> rotated.incrementAndGet());
+        assertEquals("healed", exec.execute("Write-Host test", "powershell"),
+                "自愈重试后命令正常执行（不再把 1326 直接回给模型）");
+        assertEquals(1, rotated.get(), "凭据轮换（强制重 setup）恰触发一次");
+        assertEquals(2, opened.get(), "同一条命令原地重试一次");
+        assertTrue(session.closed, "重试会话正常关闭");
+    }
+
+    /** 重 setup 失败（如 UAC 被拒）→ 两层错误都回给模型，且给出恢复指引。 */
+    @Test
+    void credentialMismatchRotationFailureReportsBothErrors() {
+        AtomicInteger opened = new AtomicInteger();
+        CodexSandboxManager manager = new CodexSandboxManager(
+                new CodexSandboxOptions(tempDir, null, null, null, false, null), 30_000);
+        CodexCommandExecutor exec = healingExecutor(manager, (cfg, spec) -> {
+            opened.incrementAndGet();
+            throw new RunnerClient.CredentialMismatchException("EACodexOnline", 1326);
+        }, m -> {
+            throw new IllegalStateException("codex 沙箱 setup 失败: code=xx 用户在 UAC 弹窗拒绝了提权");
+        });
+        String result = exec.execute("Write-Host test", "powershell");
+        assertTrue(result.startsWith("[codex sandbox 凭据失配且自动修复失败]"),
+                "可读错误前缀: " + result);
+        assertTrue(result.contains("Windows error 1326"), "保留原始凭据失配错误: " + result);
+        assertTrue(result.contains("UAC"), "保留重 setup 失败原因: " + result);
+        assertEquals(1, opened.get(), "重 setup 失败后不再重试命令");
+    }
+
+    /** 轮换成功但重试仍凭据失配 → 只自愈一次（防循环），报重试失败。 */
+    @Test
+    void credentialMismatchRetriesOnlyOnce() {
+        AtomicInteger opened = new AtomicInteger();
+        AtomicInteger rotated = new AtomicInteger();
+        CodexSandboxManager manager = new CodexSandboxManager(
+                new CodexSandboxOptions(tempDir, null, null, null, false, null), 30_000);
+        CodexCommandExecutor exec = healingExecutor(manager, (cfg, spec) -> {
+            opened.incrementAndGet();
+            throw new RunnerClient.CredentialMismatchException("EACodexOnline", 1326);
+        }, m -> rotated.incrementAndGet());
+        String result = exec.execute("Write-Host test", "powershell");
+        assertTrue(result.startsWith("[codex sandbox 执行失败] 凭据自愈后重试仍失败"),
+                "重试失败可读错误: " + result);
+        assertTrue(result.contains("Windows error 1326"));
+        assertEquals(1, rotated.get(), "至多轮换一次");
+        assertEquals(2, opened.get(), "至多重试一次");
+    }
+
+    /** runner error 帧的凭据类 windows_error_code（1326）同样触发自愈（二次分类）。 */
+    @Test
+    void runnerStartupCredentialCodeTriggersHealing() {
+        FakeSession session = new FakeSession(out("ok", Stream.STDOUT),
+                new FramedMessage(6, new Exit(0, false)));
+        AtomicInteger opened = new AtomicInteger();
+        AtomicInteger rotated = new AtomicInteger();
+        CodexSandboxManager manager = new CodexSandboxManager(
+                new CodexSandboxOptions(tempDir, null, null, null, false, null), 30_000);
+        CodexCommandExecutor exec = healingExecutor(manager, (cfg, spec) -> {
+            if (opened.incrementAndGet() == 1) {
+                throw new RunnerStartupException(new IpcMessage.Error(
+                        "CreateProcessAsUserW failed", ErrorStage.SPAWN_CHILD, 1326));
+            }
+            return session;
+        }, m -> rotated.incrementAndGet());
+        assertEquals("ok", exec.execute("x", "powershell"),
+                "error 帧凭据码 → 自愈重试通过");
+        assertEquals(1, rotated.get());
+        assertEquals(2, opened.get());
+    }
+
+    /** runner error 帧的非凭据类码（如 5）走通用失败路径，不轮换。 */
+    @Test
+    void runnerStartupNonCredentialCodeDoesNotRotate() {
+        AtomicInteger rotated = new AtomicInteger();
+        CodexSandboxManager manager = new CodexSandboxManager(
+                new CodexSandboxOptions(tempDir, null, null, null, false, null), 30_000);
+        CodexCommandExecutor exec = healingExecutor(manager, (cfg, spec) -> {
+            throw new RunnerStartupException(new IpcMessage.Error(
+                    "access denied", ErrorStage.SPAWN_CHILD, 5));
+        }, m -> rotated.incrementAndGet());
+        String result = exec.execute("x", "powershell");
+        assertTrue(result.startsWith("[codex sandbox 执行失败]"), "通用失败路径: " + result);
+        assertEquals(0, rotated.get(), "非凭据类失败不得触发重 setup");
+    }
+
+    /** 通用失败（pipe broken）不触发凭据轮换（回归护栏）。 */
+    @Test
+    void genericFailureDoesNotRotateCredentials() {
+        AtomicInteger rotated = new AtomicInteger();
+        CodexSandboxManager manager = new CodexSandboxManager(
+                new CodexSandboxOptions(tempDir, null, null, null, false, null), 30_000);
+        CodexCommandExecutor exec = healingExecutor(manager, (cfg, spec) -> {
+            throw new IOException("pipe broken");
+        }, m -> rotated.incrementAndGet());
+        assertEquals("[codex sandbox 执行失败] pipe broken",
+                exec.execute("x", "powershell"));
+        assertEquals(0, rotated.get(), "非凭据类失败不得触发重 setup");
     }
 }

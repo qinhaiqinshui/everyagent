@@ -10,6 +10,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -197,5 +198,18 @@ class CodexSandboxSessionTest {
         }
         RunnerClient.classifyLogonFailure("sandbox-user", 1056); // 服务忙：由重试路径处理
         RunnerClient.classifyLogonFailure("sandbox-user", 5); // 其余：留给通用失败路径
+    }
+
+    /** identity.rs 密码失配口径（1330/1907）：与 1326 同归凭据类——重置密码即自愈。 */
+    @Test
+    void passwordExpiryCodesAreCredentialMismatch() {
+        for (int code : List.of(1326, 1330, 1907, 1331, 1387, 1312)) {
+            assertTrue(RunnerClient.isCredentialMismatchCode(code),
+                    "凭据类错误码 " + code);
+        }
+        for (int code : List.of(1056, 5, 1223, 231)) {
+            assertFalse(RunnerClient.isCredentialMismatchCode(code),
+                    "非凭据类错误码 " + code);
+        }
     }
 }

@@ -66,8 +66,20 @@ public final class SetupOrchestrator {
      * @throws SetupErrorReport.SetupException 结构化失败（code 可分类重试/引导）
      */
     public static void ensureSetup(SetupPayload payload) {
+        ensureSetup(payload, false);
+    }
+
+    /**
+     * 强制形态：force=true 跳过 marker 双闸门短路，无条件重跑完整 setup——
+     * 凭据失配自愈路径（marker 完好但账户密码被外部改动/过期，1326 等凭据类失败码）：
+     * 完整 setup 会重新生成两账户密码（{@code ensureUser} 对已存在账户走
+     * NetUserSetInfo(1003) 重置）并重写 DPAPI 凭据文件，随后调用方原地重试命令即恢复。
+     *
+     * @throws SetupErrorReport.SetupException 结构化失败（code 可分类重试/引导）
+     */
+    public static void ensureSetup(SetupPayload payload, boolean force) {
         Path codexHome = Path.of(payload.model().codexHome);
-        if (payload.mode() != SetupPayload.Mode.REMOVE
+        if (!force && payload.mode() != SetupPayload.Mode.REMOVE
                 && SetupMarker.isComplete(codexHome, SetupPayload.SETUP_VERSION)) {
             return; // marker + 凭据双闸门短路（幂等，对齐 sandbox_setup_is_complete）
         }

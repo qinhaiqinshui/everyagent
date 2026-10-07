@@ -39,8 +39,10 @@ import java.util.Map;
  *
  * <p>失败分类（对齐 runner_client.rs::retry_runner_spawn_once /
  * is_refreshable_windows_error）：1056（Secondary Logon 服务忙）原凭据重试一次；
- * 1326/1331/1387（+codex 同类的 1312）凭据类 → {@link CredentialMismatchException}
- * （上层引导重新 setup，不做首期自动密码轮换）。握手失败 TerminateProcess 收尸。
+ * 1326/1330/1907/1331/1387（+codex 同类的 1312）凭据类 →
+ * {@link CredentialMismatchException}——上层 {@code CodexCommandExecutor} 捕获后强制
+ * 重 setup 轮换密码并原地重试一次（对齐 codex identity.rs「凭据失配 → 重跑 setup
+ * 刷新凭据后重试，而非直接报错」）。握手失败 TerminateProcess 收尸。
  */
 public final class RunnerClient {
 
@@ -55,15 +57,19 @@ public final class RunnerClient {
     public static final long SPAWN_READY_TIMEOUT_MS = 15_000;
     /** codex RUNNER_ERROR_MODE_FLAGS = 0x1|0x2。 */
     private static final int RUNNER_ERROR_MODE_FLAGS = 0x0001 | 0x0002;
-    /** 凭据类失败码（任务口径 1326/1331/1387 + codex is_refreshable 的 1312）。 */
+    /**
+     * 凭据类失败码（任务口径 1326/1331/1387 + codex is_refreshable 的 1312 +
+     * identity.rs 密码失配口径的 1330/1907——全部可由重置密码自愈）。
+     */
     private static final List<Integer> CREDENTIAL_MISMATCH_CODES = List.of(
-            WinErr.ERROR_LOGON_FAILURE, WinErr.ERROR_ACCOUNT_DISABLED,
+            WinErr.ERROR_LOGON_FAILURE, WinErr.ERROR_PASSWORD_EXPIRED,
+            WinErr.ERROR_PASSWORD_MUST_CHANGE, WinErr.ERROR_ACCOUNT_DISABLED,
             WinErr.ERROR_NO_SUCH_MEMBER, WinErr.ERROR_NO_SUCH_LOGON_SESSION);
 
     private RunnerClient() {
     }
 
-    /** 沙箱账户凭据失配——引导重新 setup（对齐 SandboxAccountCredentialMismatch 语义）。 */
+    /** 沙箱账户凭据失配——自愈信号：上层强制重 setup 轮换密码后原地重试（对齐 SandboxAccountCredentialMismatch 语义）。 */
     public static final class CredentialMismatchException extends RuntimeException {
         private final int windowsErrorCode;
 
@@ -426,9 +432,18 @@ public final class RunnerClient {
 
     /** 凭据失败分类：凭据类抛 CredentialMismatchException，其余留给调用方处理。 */
     static void classifyLogonFailure(String username, int code) {
-        if (CREDENTIAL_MISMATCH_CODES.contains(code)) {
+        if (isCredentialMismatchCode(code)) {
             throw new CredentialMismatchException(username, code);
         }
+    }
+
+    /**
+     * 凭据类失败码判定（跨调用方共用的同一张表）：spawn 侧
+     * {@link #classifyLogonFailure} 与执行层对 runner error 帧
+     * （windows_error_code）的二次分类共用，保证自愈口径一致。
+     */
+    public static boolean isCredentialMismatchCode(int code) {
+        return CREDENTIAL_MISMATCH_CODES.contains(code);
     }
 
     /** 纯函数（可测）：runner 命令行参数（JVM flags 对齐设计 §4.1）。 */

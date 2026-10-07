@@ -105,18 +105,19 @@ type "<CODEX_HOME>\.sandbox\setup_marker.json"
 **前置**：TC-1.1 已完成
 
 **步骤**：
-1. 在 PowerShell（管理员）中重置 Offline 账户密码：
+1. 在 PowerShell（管理员）中重置 Online 账户密码：
    ```powershell
-   net user EACodexOffline "wrongpassword123!"
+   net user EACodexOnline "wrongpassword123!"
    ```
-2. 重启 worker
-3. 在 AI 对话中发送命令 `echo "recover test"`
-4. 观察 UAC 是否弹出（修复式 setup）
+2. 在 AI 对话中发送命令 `echo "recover test"`（无需重启 worker——执行链内自动自愈）
+3. 观察 UAC 是否弹出（修复式 setup）
 
 **预期**：
-- ✅ 检测到凭据失配，触发修复式 setup（可能弹 UAC）
-- ✅ setup 完成后命令正常执行
-- ✅ 凭据文件 `<CODEX_HOME>\.sandbox-secrets\sandbox_users.json` 被更新
+- ✅ 命令检测到凭据失配（Windows error 1326 等），自动触发修复式 setup（可能弹 UAC），setup 完成后**同一请求内**重试命令
+- ✅ 命令正常执行，返回 `recover test`（1326 不再直接回给模型）
+- ✅ 凭据文件 `<CODEX_HOME>\.sandbox-secrets\sandbox_users.json` 被更新（两账户密码均重新生成）
+- ✅ UAC 被拒绝时报错同时携带原始凭据错误与 setup 失败原因；重发命令可再次触发自愈
+- ✅ 一次命令至多自愈一次（自愈后仍失配则报「凭据自愈后重试仍失败」，不循环）
 
 ---
 

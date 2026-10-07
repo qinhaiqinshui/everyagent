@@ -3,16 +3,11 @@ package dev.everyagent.plugin.sandbox.codex;
 import dev.everyagent.plugin.api.spi.SandboxBackend;
 import dev.everyagent.plugin.api.spi.SandboxProvider;
 import dev.everyagent.plugin.api.spi.SandboxProvider.SandboxConfig;
-import dev.everyagent.plugin.sandbox.codex.setup.SetupErrorReport;
 import dev.everyagent.plugin.sandbox.codex.setup.SetupMarker;
-import dev.everyagent.plugin.sandbox.codex.setup.SetupOrchestrator;
 import dev.everyagent.plugin.sandbox.codex.setup.SetupPayload;
 
 import java.lang.System.Logger;
 import java.lang.System.Logger.Level;
-import java.nio.file.Path;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Locale;
 
 /**
@@ -92,29 +87,8 @@ public final class CodexSandboxProvider implements SandboxProvider {
             return;
         }
         LOG.log(Level.INFO, "codex 沙箱被选中且 setup 未完成,开始同步 setup(会弹 UAC)...");
-        CodexSandboxOptions options = manager.options();
-        List<String> roots = new ArrayList<>();
-        for (Path root : manager.writeRoots()) {
-            roots.add(root.toString());
-        }
-        SetupPayload payload = SetupPayload.create()
-                .mode(SetupPayload.Mode.FULL)
-                .accounts(options.accountPrefix(), options.codexHome().toString(),
-                        System.getProperty("user.name"))
-                .writeRoots(roots)
-                .proxyPorts(options.proxyPorts());
-        payload.model().allowLocalBinding = options.allowLocalBinding();
-        try {
-            SetupOrchestrator.ensureSetup(payload);
-        } catch (SetupErrorReport.SetupException e) {
-            String msg = "codex 沙箱 setup 失败: code=" + e.code() + " " + e.getMessage();
-            if (SetupErrorReport.ORCHESTRATOR_HELPER_LAUNCH_CANCELED.equals(e.code())) {
-                msg += "(用户在 UAC 弹窗拒绝了提权)";
-            }
-            LOG.log(Level.ERROR, msg);
-            throw new IllegalStateException(msg, e);
-        }
+        CodexSetupCoordinator.ensure(manager);
         LOG.log(Level.INFO, "codex 沙箱 setup 完成(marker 版本 {0},codexHome={1})",
-                new Object[] { SetupPayload.SETUP_VERSION, options.codexHome() });
+                new Object[] { SetupPayload.SETUP_VERSION, manager.options().codexHome() });
     }
 }

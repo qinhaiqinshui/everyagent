@@ -42,6 +42,9 @@ import java.util.Map;
  * {@link CodexSandboxSession#open} 拉起 runner 会话 → 聚合 stdout/stderr（base64 还原
  * 原始字节、每流字节上限截断、整段 {@link ExecResults#decodeConsoleOutput(byte[])}
  * 智能 UTF-8/ANSI 解码）→ Exit 帧 → wsl 同款格式化尾注。
+ * 凭据类失败（1326/1330/1907 等，账户密码被外部改动/过期）不直接报错：经
+ * {@link CredentialRotator} 强制完整重 setup 轮换密码后<b>原地重试该命令一次</b>
+ * （设计 §4.3，对齐 codex identity.rs 自愈语义）。
  *
  * <p>Windows 原生调用集中在三个可注入 seam（{@link SessionOpener}/
  * {@link PreflightRefresher}/{@link RunnerConfigFactory}）的生产默认实现里，
@@ -95,6 +98,15 @@ public final class CodexCommandExecutor {
                 throws IOException;
     }
 
+    /**
+     * 凭据轮换 seam（生产 = {@link CodexSetupCoordinator#rotateCredentials}：
+     * 强制完整重 setup——重新生成两账户密码并重写 DPAPI 凭据文件，未提权时弹一次 UAC）。
+     */
+    @FunctionalInterface
+    public interface CredentialRotator {
+        void rotate(CodexSandboxManager manager);
+    }
+
     private final CodexSandboxManager manager;
     private final Path workspaceRoot;
     private final Path rgBinary;
@@ -102,6 +114,7 @@ public final class CodexCommandExecutor {
     private final SessionOpener sessionOpener;
     private final PreflightRefresher preflight;
     private final RunnerConfigFactory runnerConfigFactory;
+    private final CredentialRotator credentialRotator;
     /** 探测到的 shell（缓存，进程生命周期内只探测一次）。 */
     private final ShellChoice shell;
 
@@ -110,7 +123,8 @@ public final class CodexCommandExecutor {
         this(manager, workspaceRoot, rgBinary, true, detectShell(),
                 (cfg, spec) -> adapt(CodexSandboxSession.open(cfg, spec)),
                 CodexCommandExecutor::refreshWriteRootAces,
-                CodexCommandExecutor::createRunnerConfig);
+                CodexCommandExecutor::createRunnerConfig,
+                CodexSetupCoordinator::rotateCredentials);
     }
 
     /** 测试构造：注入 fake seam；nativeGuard=false 跳过 Windows/marker 闸门。 */
@@ -118,13 +132,24 @@ public final class CodexCommandExecutor {
             boolean nativeGuard, SessionOpener sessionOpener, PreflightRefresher preflight,
             RunnerConfigFactory runnerConfigFactory) {
         this(manager, workspaceRoot, rgBinary, nativeGuard, ShellChoice.POWERSHELL,
-                sessionOpener, preflight, runnerConfigFactory);
+                sessionOpener, preflight, runnerConfigFactory,
+                CodexSetupCoordinator::rotateCredentials);
     }
 
     /** 测试构造：显式指定 shell。 */
     CodexCommandExecutor(CodexSandboxManager manager, Path workspaceRoot, Path rgBinary,
             boolean nativeGuard, ShellChoice shell, SessionOpener sessionOpener,
             PreflightRefresher preflight, RunnerConfigFactory runnerConfigFactory) {
+        this(manager, workspaceRoot, rgBinary, nativeGuard, shell, sessionOpener,
+                preflight, runnerConfigFactory,
+                CodexSetupCoordinator::rotateCredentials);
+    }
+
+    /** 测试构造：全 seam 注入（凭据轮换 = fake，验证自愈路径）。 */
+    CodexCommandExecutor(CodexSandboxManager manager, Path workspaceRoot, Path rgBinary,
+            boolean nativeGuard, ShellChoice shell, SessionOpener sessionOpener,
+            PreflightRefresher preflight, RunnerConfigFactory runnerConfigFactory,
+            CredentialRotator credentialRotator) {
         this.manager = manager;
         this.workspaceRoot = workspaceRoot;
         this.rgBinary = rgBinary;
@@ -133,6 +158,7 @@ public final class CodexCommandExecutor {
         this.sessionOpener = sessionOpener;
         this.preflight = preflight;
         this.runnerConfigFactory = runnerConfigFactory;
+        this.credentialRotator = credentialRotator;
     }
 
     /**
@@ -158,17 +184,84 @@ public final class CodexCommandExecutor {
         try {
             run = runInSession(command, options);
         } catch (IOException | RuntimeException e) {
-            LOG.log(System.Logger.Level.WARNING, "[exec] codex 会话失败 cmd={0}",
-                    ExecResults.truncate(command, 200) + " | " + e);
-            // 物化缓存可能失真（.sandbox-bin 被外部清理/篡改）：丢弃缓存，
-            // 下一条命令重做物化自愈（代价仅一次 ~150ms 校验）
-            RunnerMaterializer.invalidateRunnerClasspath(options.codexHome());
-            return "[codex sandbox 执行失败] "
-                    + (e.getMessage() == null ? e.toString() : e.getMessage());
+            if (isCredentialMismatch(e)) {
+                return executeAfterCredentialHealing(command, options, e);
+            }
+            return sessionFailure(options, command, e);
         }
         LOG.log(System.Logger.Level.INFO, "[exec] codex rc={0} timedOut={1} cmd={2}",
                 new Object[] { run.exitCode(), run.timedOut(), ExecResults.truncate(command, 200) });
         return format(run);
+    }
+
+    /**
+     * 凭据失配自愈（对齐 codex identity.rs「凭据失配 → 重跑 setup 刷新凭据后重试，
+     * 而非直接报错」，场景=沙箱账户密码被外部改动/过期，错误码 1326/1330/1907 等）：
+     * 强制完整重 setup——重新生成两账户密码并重写 DPAPI 凭据文件（未提权时弹一次
+     * UAC）——成功后<b>原地重试该命令一次</b>（重试经 runnerConfigFactory 重读新密码）；
+     * 重 setup 或重试仍失败才把两层错误都回给模型。一次 execute 至多自愈一次（防循环）。
+     */
+    private String executeAfterCredentialHealing(String command, CodexSandboxOptions options,
+            Throwable mismatch) {
+        LOG.log(System.Logger.Level.WARNING,
+                "[exec] codex 沙箱账户凭据失配({0}),自动重新 setup 轮换密码后重试一次",
+                messageOf(mismatch));
+        try {
+            credentialRotator.rotate(manager);
+        } catch (RuntimeException setupFailure) {
+            LOG.log(System.Logger.Level.ERROR,
+                    "[exec] 凭据自愈的重新 setup 失败: {0}", messageOf(setupFailure));
+            return "[codex sandbox 凭据失配且自动修复失败] 原始错误: "
+                    + messageOf(mismatch) + "; 自动重新 setup 失败: "
+                    + messageOf(setupFailure)
+                    + "(未提权时修复需在 UAC 弹窗中同意,拒绝后可重发命令再次触发自愈)";
+        }
+        try {
+            SessionRun run = runInSession(command, options);
+            LOG.log(System.Logger.Level.INFO,
+                    "[exec] codex 凭据自愈成功,重试通过 cmd={0}",
+                    ExecResults.truncate(command, 200));
+            return format(run);
+        } catch (IOException | RuntimeException retry) {
+            LOG.log(System.Logger.Level.WARNING,
+                    "[exec] codex 凭据自愈后重试仍失败 cmd={0}",
+                    ExecResults.truncate(command, 200) + " | " + retry);
+            // 与通用失败路径同口径：物化缓存可能失真，丢弃后下一条命令重做物化
+            RunnerMaterializer.invalidateRunnerClasspath(options.codexHome());
+            return "[codex sandbox 执行失败] 凭据自愈后重试仍失败: " + messageOf(retry);
+        }
+    }
+
+    /**
+     * 凭据类失败判定：spawn 侧 {@link RunnerClient.CredentialMismatchException}
+     * （CreateProcessWithLogonW 1326 等），或 runner error 帧带回的凭据类
+     * windows_error_code（{@link CodexSandboxSession.RunnerStartupException} 二次分类，
+     * 与 spawn 侧共用 {@link RunnerClient#isCredentialMismatchCode} 同一张表）。
+     */
+    static boolean isCredentialMismatch(Throwable e) {
+        if (e instanceof RunnerClient.CredentialMismatchException) {
+            return true;
+        }
+        if (e instanceof CodexSandboxSession.RunnerStartupException startup) {
+            Integer code = startup.error().windowsErrorCode();
+            return code != null && RunnerClient.isCredentialMismatchCode(code);
+        }
+        return false;
+    }
+
+    /** 通用会话失败：日志 + 物化缓存失效 + 可读错误（原 execute 失败路径）。 */
+    private String sessionFailure(CodexSandboxOptions options, String command, Exception e) {
+        LOG.log(System.Logger.Level.WARNING, "[exec] codex 会话失败 cmd={0}",
+                ExecResults.truncate(command, 200) + " | " + e);
+        // 物化缓存可能失真（.sandbox-bin 被外部清理/篡改）：丢弃缓存，
+        // 下一条命令重做物化自愈（代价仅一次 ~150ms 校验）
+        RunnerMaterializer.invalidateRunnerClasspath(options.codexHome());
+        return "[codex sandbox 执行失败] " + messageOf(e);
+    }
+
+    /** 异常消息（null 安全；与既有「[codex sandbox 执行失败]」格式同口径）。 */
+    private static String messageOf(Throwable e) {
+        return e.getMessage() == null ? e.toString() : e.getMessage();
     }
 
     private SessionRun runInSession(String command, CodexSandboxOptions options)
@@ -194,16 +287,24 @@ public final class CodexCommandExecutor {
         long tConfig = System.nanoTime();
 
         long timeoutMs = manager.execTimeoutMs();
-        // 命令投递(仅 PowerShell 分支):主形态=脚本文件承载(-File),PS 报错定位引用
-        // 用户命令行而非内部包装前缀(见 commandArgvForFile javadoc);文件写失败回退
+        // 命令投递(仅 PowerShell 分支):主形态=脚本文件承载(-File,载荷=工作区相对路径,
+        // 免引号——引号死亡链见 commandArgvForFile javadoc),PS 报错定位引用
+        // 用户命令行而非内部包装前缀;脚本落盘或相对化失败回退
         // -EncodedCommand,行为无回退仅定位质量回退。CMD 分支保持 commandArgv 原样。
         Path cmdScript = null;
         List<String> argv;
         if (shell.isPowerShell) {
             try {
                 cmdScript = writeCommandScript(workspaceRoot, command);
-                argv = commandArgvForFile(cmdScript);
+                argv = commandArgvForFile(scriptFileArg(workspaceRoot, cmdScript));
             } catch (IOException | RuntimeException e) {
+                if (cmdScript != null) {
+                    try {
+                        Files.deleteIfExists(cmdScript);
+                    } catch (IOException ignored) {
+                        // 尽力清理孤儿脚本;.everyagent/tmp 随任务清理兜底
+                    }
+                }
                 cmdScript = null;
                 argv = commandArgv(command);
                 LOG.log(System.Logger.Level.WARNING,
@@ -350,7 +451,20 @@ public final class CodexCommandExecutor {
     /**
      * <b>主形态</b>:三段式脚本(prefix/用户命令/exit 尾部各占一行,见 {@link #buildScript})
      * 写入工作区 {@code .everyagent/tmp/ea-cmd-<pid>-<纳秒>.ps1},cmd-chcp 包装不变(码页
-     * 必须先于 powershell 启动),载荷经 {@code -File "路径"} 投递(带引号容忍空格)。
+     * 必须先于 powershell 启动),载荷经 {@code -File <fileArg>} 投递,fileArg 由
+     * {@link #scriptFileArg} 生成——<b>工作区相对路径,零引号零空格</b>。
+     *
+     * <p><b>-File 载荷为什么绝不能内嵌引号</b>(2026-12 codex 沙箱实测回归,症状=每条命令
+     * 必报 {@code Processing -File '"C:\…\ea-cmd-*.ps1"' failed: Illegal characters in
+     * path} 且退出码 -196608/0xFFFD0000):本 argv 会经 runner 的
+     * {@code ChildProcess.argvToCommandLine}(CommandLineToArgvW/CRT 规则)<b>二次序列化</b>
+     * ——载荷元素含空格必被整体加引号,元素内嵌的字面 {@code "} 则被转义成 {@code \"};
+     * {@code cmd /d /s /c} 只剥<b>首尾</b>引号,内部的 {@code \"} 原样留在 powershell.exe
+     * 的命令行上;PS 按 CRT 规则把 {@code \"} 解析成<b>字面引号</b>,于是 -File 拿到的
+     * 路径值两端带 {@code "}——「带引号容忍空格」的旧设计恰好死于引号本身。相对路径的
+     * 分量全部自生成({@code .everyagent\tmp\ea-cmd-*.ps1}),不含空格引号,任何一层
+     * 序列化都不会碰它;配合 cwd=工作区根(SessionSpec 原样传 CreateProcessAsUserW 的
+     * lpCurrentDirectory)解析正确,工作区路径本身含空格也免疫。
      *
      * <p><b>为什么换掉 -EncodedCommand</b>:单行形态下 PS 报错的 PositionMessage 会连内部
      * 包装前缀一起回显——{@code At line:1 char:506 + ...nue'; $DebugPreference=
@@ -358,10 +472,25 @@ public final class CodexCommandExecutor {
      * 不可读;用户命令独占一行后变为精确引用用户代码(2026-10 实测对照):
      * {@code At <脚本>:2 char:1 + java -version 2>&1}。
      */
-    List<String> commandArgvForFile(Path script) {
+    List<String> commandArgvForFile(String fileArg) {
         return List.of("cmd.exe", "/d", "/s", "/c",
                 "chcp.com 65001 >nul 2>&1 & " + shell.exe
-                        + " -NoProfile -ExecutionPolicy Bypass -File \"" + script + "\"");
+                        + " -NoProfile -ExecutionPolicy Bypass -File " + fileArg);
+    }
+
+    /**
+     * -File 载荷生成:脚本路径转<b>工作区相对路径</b>。writeCommandScript 的落盘约定=
+     * {@code <workspaceRoot>/.everyagent/tmp/},故恒可相对化;真不可相对化(工作区外)
+     * 时抛 IOException 交调用方回退 -EncodedCommand——<b>绝不回退成「绝对路径+手加引号」</b>,
+     * 引号死亡链见 {@link #commandArgvForFile} javadoc。
+     */
+    static String scriptFileArg(Path workspaceRoot, Path script) throws IOException {
+        Path rel = workspaceRoot.toAbsolutePath().normalize()
+                .relativize(script.toAbsolutePath().normalize());
+        if (rel.isAbsolute() || rel.startsWith("..")) {
+            throw new IOException("命令脚本不在工作区内,无法生成相对 -File 载荷: " + script);
+        }
+        return rel.toString();
     }
 
     /**
