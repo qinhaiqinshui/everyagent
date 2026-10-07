@@ -15,7 +15,7 @@ import org.springframework.ai.tool.function.FunctionToolCallback;
  * <p>描述分两层：
  * <ul>
  *   <li><b>默认基线描述</b>（内置，与后端无关的通用契约：工具名 / 工作目录 / stdin 空输入
- *       与搜索命令无路径惯例）；</li>
+ *       ；2026-12 起只保留框架私有与本沙箱特有事实，通用 shell 语法与工具常识不再入列）；</li>
  *   <li><b>开放描述接口</b>：{@link #description(String)} 全量覆盖、
  *       {@link #appendDescription(String)} 追加备注，由后端按自身能力定制
  *       （如 rg 注入提示，各后端注入方式不同）。</li>
@@ -24,61 +24,55 @@ import org.springframework.ai.tool.function.FunctionToolCallback;
 public final class ShellTool {
 
     /**
-     * stdin 语义 + 搜索命令无路径惯例——两基线共用一份。该语义由「命令 stdin 契约」统一
-     * 保证、与后端无关，但<b>实现手段三处不同</b>（DIRECT 用 NUL 设备→读到立即 EOF；codex 用
-     * 管道 + 立即 closeStdin→2026-12 沙箱内实测 ReadToEnd 1.4ms 返回空串；windows-mic 用 NULL
-     * 句柄→读取是失败而非 EOF），故文案只按<b>效果</b>写「无输入可用」，不绑定某一手段，
-     * 详见 ARCHITECTURE §7.10。
+     * stdin 语义——powershell / bash 两基线共用一份。该语义由「命令 stdin 契约」统一保证、与
+     * 后端无关，但<b>实现手段三处不同</b>（DIRECT 用 NUL 设备→读到立即 EOF；codex 用管道 + 立即
+     * closeStdin→2026-12 沙箱内实测 ReadToEnd 1.4ms 返回空串；windows-mic 用 NULL 句柄→读取是
+     * 失败而非 EOF），故文案只按<b>效果</b>写「无输入可用」，不绑定某一手段，详见 ARCHITECTURE §7.10。
      *
-     * <p>三件事缺一不可：①stdin 无输入可用（所以无法交互输入）；②rg/grep/findstr 在未给
-     * 文件参数时按<b>工具自身惯例</b>把 stdin 当搜索源，于是得到对空输入的结果（实测空输出 +
-     * exit 1）；③该结果与「没有匹配」<b>输出同形</b>——所以必须给正解（始终显式给路径），
-     * 只警告不解决问题。这是 Unix/Windows 既有惯例、不是本实现的 bug，不用命令名特判去兜
-     * （RgShim 已 2026-10 删除，见 §7.10）。
+     * <p>本常量原名 {@code STDIN_AND_SEARCH_NOTE}，还带一条「rg/grep/findstr 未给文件参数会改读
+     * 空 stdin、结果与「没有匹配」同形，故务必显式给出搜索路径」的惯例说明——<b>2026-12 用户决策
+     * 删除</b>，理由是该惯例属搜索工具的通用常识、模型自身已知。惯例本身、其实测后果、以及
+     * 「不用命令名特判去兜底（RgShim 已 2026-10 删除）」的完整取舍依据<b>全部保留在 §7.10，
+     * 不随本处精简而删</b>。若线上出现「空输出 + exit 1 被误读成无匹配」这类判读错误，应先回到
+     * 该条核对再决定是否恢复，不要另写新文案绕开它。
      */
-    private static final String STDIN_AND_SEARCH_NOTE =
-            "命令的 stdin 无输入可用(读它会立即得到空结果,部分后端直接读取失败,故无法交互输入);"
-            + "rg/grep/findstr 这类搜索命令在未给文件参数时会按惯例改把 stdin 当搜索源,"
-            + "于是得到的是对空输入的结果(实测空输出 + exit 1),与「没有匹配」在输出上无法区分"
-            + "——搜索请始终显式给出路径(如 rg 模式 .);";
+    private static final String STDIN_NOTE =
+            "命令的 stdin 无输入可用(读它会立即得到空结果,部分后端直接读取失败,故无法交互输入);";
 
     /**
      * PowerShell 默认基线描述。
      *
-     * <p>2026-12 沙箱内实测校准三条(旧文案里有两条推荐的解法是错的,记下判据防回归):
+     * <p><b>精简原则（2026-12 用户决策）：只写「框架私有」与「本沙箱特有」两类事实，通用 shell
+     * 语法一律不写</b>——模型自身已知的内容不该占用每次调用的上下文。据此删除四条，其事实与实测
+     * 教训均保留在 ARCHITECTURE §7.10，<b>不随此处精简而删</b>：
      * <ul>
-     *   <li><b>连接符</b>:旧文案逐个枚举「5.1/cmd 会语法报错」属版本断言(实测本机是 pwsh 7.6),
-     *       且与后端追加的「实际执行 shell=&lt;exe&gt;」职责重叠;现只留「不确定就一律用 ;」。</li>
-     *   <li><b>空字符串参数</b>:旧文案称其为「PS 5.1 引擎行为」,双版本对照实测证伪——{@code -File}
-     *       形态下 Windows PowerShell 5.1 与 pwsh 7.6 <b>均完整传递空串</b>(argc=2),丢弃只发生在
-     *       已从两后端彻底删除的 {@code -Command} 内联形态。整条删除(教训归档 ARCHITECTURE §7.10,
-     *       不必每次喂给模型)。</li>
-     *   <li><b>对象输出</b>:旧文案推荐 {@code | Out-String} 提可靠性,实测<b>方向相反且有害</b>——
-     *       执行框架已由 {@code ExecResults.buildPowerShellScript} 把整条命令包成
-     *       {@code & { … } | Out-String -Width 4096} 收口(见 {@code OUT_STRING_WIDTH},其 javadoc
-     *       本就写明「重定向下 PS 默认宽度只有 120」),模型<b>什么都不加</b>才能拿到完整输出
-     *       (实测 200 字符属性完整一行);模型一旦自加 {@code | Out-String},<b>内层</b>按默认
-     *       120 列折行(同一属性折成 120×6 行),外层 4096 收到的是已折好的字符串、救不回来。
-     *       即:框架接入是对的,是<b>提示语在诱导模型破坏该收口</b>。{@code -ExpandProperty}
-     *       同样管不了「字符串拼数组按 $OFS 空格连接」这个真歧义,解法是 {@code -join}。</li>
+     *   <li>搜索命令无路径→改读空 stdin→结果与「没有匹配」同形（沿革见 {@link #STDIN_NOTE}）；</li>
+     *   <li>{@code ;} 与 {@code &&}/{@code ||} 的版本差异——与后端追加的「实际执行 shell=&lt;exe&gt;」
+     *       重复，模型据此可自行判断；</li>
+     *   <li>cmdlet 输出自动表格化与默认裁列（要完整字段用 {@code Format-List *} /
+     *       {@code ConvertTo-Json}）；</li>
+     *   <li>框架已用 {@code Out-String -Width 4096} 收口、不要自加 {@code | Out-String}。</li>
      * </ul>
+     * 末条的删除带<b>残余风险</b>：{@code 4096} 收口由 {@code ExecResults.buildPowerShellScript}
+     * 提供，属框架私有行为、模型无法推知，而它从日常经验里学到的恰好是「管道输出加
+     * {@code Out-String}」，于是描述不再拦截那个会让<b>内层</b>按默认 120 列折行的动作。将来若
+     * 出现「长行被折断」的输出问题，第一嫌疑就是这里；处置优先级见 §7.10 PS-003「二次修正」——
+     * 正解是在框架侧做到对自加不敏感，而不是把这条提示加回来。
+     *
+     * <p>保留的两条都有实测依据：{@code -join}（字符串拼数组按 {@code $OFS} 空格挤成一行是真歧义，
+     * {@code -ExpandProperty} 管不到它）；stdin 语义见 {@link #STDIN_NOTE}。
      */
     private static final String POWERSHELL_BASELINE =
             "在系统上用 PowerShell 执行真实 OS 命令;"
             + "命令工作目录默认为任务工作区根;"
-            + STDIN_AND_SEARCH_NOTE
-            + "多条命令请用 ; 分隔(&& 与 || 仅 pwsh 7+ 支持,不确定实际 shell 版本就一律用 ;);"
-            + "cmdlet 输出会被自动格式化成表格文本且默认只显示常用列(如 Get-Location 只剩 Path 列),"
-            + "要完整字段用 Format-List * 或 ConvertTo-Json -Compress;"
-            + "输出已由执行框架以 Out-String -Width 4096 统一收口,命令里不要再自己加 | Out-String"
-            + "(内层不带 -Width 时按默认 120 列折行,外层收不回来);"
+            + STDIN_NOTE
             + "多值请用 -join '<分隔符>' 明确分隔,字符串与数组直接拼接会按 $OFS 用空格连接(歧义源);";
 
     /** bash 默认基线描述。 */
     private static final String BASH_BASELINE =
             "在系统上用 bash 执行真实 OS 命令;"
             + "命令工作目录默认为任务工作区根;"
-            + STDIN_AND_SEARCH_NOTE;
+            + STDIN_NOTE;
 
     private final ShellExecutor exec;
     private final Class<?> inputType;

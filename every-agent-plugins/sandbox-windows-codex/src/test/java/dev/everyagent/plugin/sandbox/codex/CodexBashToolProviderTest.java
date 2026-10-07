@@ -67,22 +67,21 @@ class CodexBashToolProviderTest {
     }
 
     /**
-     * stdin 语义与「搜索命令无路径→读空 stdin→空结果与无匹配同形」这条惯例，必须由
-     * {@link ShellTool} 基线承担且<b>只出现一次</b>：后端各自追加正是历史上「stdin 为 null
-     * 设备」「静默过滤 null stdin」两处不准确措辞的来源（rg 是把 stdin 当搜索源，不是
-     * "过滤 null stdin"；且同类 findstr/grep 一样中招，只提 rg 会漏）。
+     * 2026-12 精简后：搜索无路径惯例、连接符版本细则、{@code Out-String} 框架收口提示等已从
+     * {@link ShellTool} 基线移除（理由与残余风险见 ARCHITECTURE §7.10），后端追加层<b>同样不得
+     * 把它们加回来</b>——否则已删内容会以「各后端自行补」的形式复活，正是当初要上收基线以避免的
+     * 分散重复；恢复提示的前提是先读 §7.10 的处置优先级，不是在此新增。
      */
     @Test
-    void stdinSearchConventionComesFromBaselineExactlyOnce() {
+    void backendDoesNotReAddPrunedBaselineClaims() {
         String desc = provider(new CodexRg.Rg(tempDir.resolve("rg.exe"), true))
                 .createTools(TestFixtures.ctx("codex", tempDir, null))
                 .get(0).getToolDefinition().description();
-        assertTrue(desc.contains("stdin 无输入可用"), "stdin 语义按效果口径(不绑定某一实现手段)");
-        assertTrue(desc.contains("空输出 + exit 1"), "讲清后果(与无匹配同形)");
-        assertTrue(desc.contains("搜索请始终显式给出路径"), "必须给正解,不只是警告");
-        assertTrue(desc.contains("grep") && desc.contains("findstr"), "覆盖同类搜索命令,不只 rg");
-        assertEquals(1, countOf(desc, "搜索请始终显式给出路径"), "该惯例只声明一次(基线唯一来源)");
+        assertTrue(desc.contains("stdin 无输入可用"), "保留项:stdin 语义仍由基线提供");
         assertEquals(1, countOf(desc, "stdin 无输入可用"), "stdin 语义只声明一次");
+        assertFalse(desc.contains("搜索请始终显式给出路径"), "已删条目不得由后端加回");
+        assertFalse(desc.contains("当搜索源"), "已删条目不得由后端加回");
+        assertFalse(desc.contains("Out-String"), "已删条目不得由后端加回");
         assertFalse(desc.contains("null 设备"), "旧措辞不得回归");
         assertFalse(desc.contains("静默过滤 null stdin"), "旧措辞不得回归");
     }
