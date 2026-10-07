@@ -61,7 +61,7 @@ Every Agent 是一套「公网可及、本机执行」的个人 AI Agent 系统�
 # - Node.js 18+（仅前端 / 桌面版）
 
 # Java 模块
-mvn -pl every-agent-hub spring-boot:run        # hub @ 9100
+mvn -pl every-agent-hub spring-boot:run        # hub @ 6101
 mvn -pl every-agent-worker spring-boot:run     # worker，出站连 hub
 
 # 前端

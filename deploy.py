@@ -17,7 +17,7 @@
 本地前置：能跑 mvn（Java 25）与 npm（Node 22）以产出 jar / dist
 服务器前置（host 模式）：nginx（已装）、systemd；Java 25 需可用——可手动预装
           openjdk-25-jre-headless，或由脚本在缺失时 apt 安装（幂等，已装则跳过）。
-          hub 端口 9100 由 nginx 反代（/hub/）对外暴露，防火墙只需开 80（默认）。需 sudo（建议免密）。
+          hub 端口 6101 由 nginx 反代（/hub/）对外暴露，防火墙只需开 80（默认）。需 sudo（建议免密）。
 
 示例：
   # 宿主部署全部（首次自动装 Java 25、建 systemd 服务、接管 nginx 80）
@@ -134,7 +134,7 @@ services:
     volumes:
       - ./hub/app.jar:/app/app.jar:ro
     ports:
-      - "9100:9100"
+      - "6101:6101"
     environment:
       HUB_KEY: "{hub_key}"
     restart: unless-stopped
@@ -230,12 +230,12 @@ server {{
     root {cur}/webapp/dist;
     index index.html;
 
-    # hub 反向代理：浏览器/webapp 经 nginx(:80) 访问 hub(:9100)，
-    # 内部 worker 仍直连 localhost:9100（不依赖 nginx）。
+    # hub 反向代理：浏览器/webapp 经 nginx(:80) 访问 hub(:6101)，
+    # 内部 worker 仍直连 localhost:6101（不依赖 nginx）。
     # /hub/ws   -> hub 的 /ws（WebSocket 升级）
     # /hub/api/ -> hub 的 /api/...
     location /hub/ {{
-        proxy_pass http://127.0.0.1:9100/;
+        proxy_pass http://127.0.0.1:6101/;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
@@ -271,7 +271,7 @@ def render_runtime_env_file(cfg) -> str:
 
 def host_deploy_command(cfg, services, ts: str) -> str:
     """宿主机模式远端执行脚本：若缺失则装 Java25(幂等) → 装 systemd 单元 → 接管 nginx 80。
-    hub 由 nginx 的 /hub/ 反代对外暴露，worker 仍直连 localhost:9100。
+    hub 由 nginx 的 /hub/ 反代对外暴露，worker 仍直连 localhost:6101。
     sudo 由 --sudo / DEPLOY_SUDO 控制（root 直连时留空，免密 sudo 时加 sudo -n）。
     --skip-install 时跳过所有 apt-get 安装，需提前手动装好 Java25 和 nginx。"""
     rd = cfg.remote_dir.rstrip("/")

@@ -14,6 +14,6 @@ RUN mvn -B -pl every-agent-worker -am package -Dmaven.test.skip=true
 FROM eclipse-temurin:25-jre
 WORKDIR /app
 COPY --from=build /src/every-agent-worker/target/every-agent-worker-*.jar app.jar
-# 9200 为本地管理端口,compose 不对外发布(架构 §2.2)
-EXPOSE 9200
+# 6102 为本地管理端口,compose 不对外发布(架构 §2.2)
+EXPOSE 6102
 ENTRYPOINT ["java", "-jar", "app.jar"]
