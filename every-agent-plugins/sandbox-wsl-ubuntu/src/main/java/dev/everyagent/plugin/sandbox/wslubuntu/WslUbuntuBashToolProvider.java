@@ -53,8 +53,11 @@ public class WslUbuntuBashToolProvider implements ToolProvider {
         Path workspaceRoot = ctx.workspaceRoot() != null ? Path.of(ctx.workspaceRoot()) : null;
         WslUbuntuCommandExecutor exec = new WslUbuntuCommandExecutor(props, workspaceRoot,
                 workspaces, pluginDir, taskNetworkBlocked(ctx.subjectId()));
+        // 「无路径会去读空 stdin」的惯例由 ShellTool 基线统一承担(bash 基线同样已含,
+        // 覆盖 rg/grep/findstr);这里只给 rg 优势的真实原因(bash 语境对照 grep -r)。
         return List.of(ShellTool.bash(exec::execute)
-                .appendDescription("rg 已加入 PATH,可直接执行 rg 命令，内容搜索尽量使用rg命令，性能更好;")
+                .appendDescription("rg 已加入 PATH,内容搜索优先用 rg——它尊重 .gitignore,"
+                        + "比 grep -r 的全仓递归快一个量级;")
                 .callback());
     }
 

@@ -14,7 +14,8 @@ import org.springframework.ai.tool.function.FunctionToolCallback;
  *
  * <p>描述分两层：
  * <ul>
- *   <li><b>默认基线描述</b>（内置，与后端无关的通用契约：工具名 / 工作目录 / stdin 为 null 设备）；</li>
+ *   <li><b>默认基线描述</b>（内置，与后端无关的通用契约：工具名 / 工作目录 / stdin 空输入
+ *       与搜索命令无路径惯例）；</li>
  *   <li><b>开放描述接口</b>：{@link #description(String)} 全量覆盖、
  *       {@link #appendDescription(String)} 追加备注，由后端按自身能力定制
  *       （如 rg 注入提示，各后端注入方式不同）。</li>
@@ -22,11 +23,28 @@ import org.springframework.ai.tool.function.FunctionToolCallback;
  */
 public final class ShellTool {
 
+    /**
+     * stdin 语义 + 搜索命令无路径惯例——两基线共用一份。该语义由「命令 stdin 契约」统一
+     * 保证、与后端无关（DIRECT 用 NUL 设备，codex 用管道 + 立即 closeStdin，效果都是读到
+     * 立即 EOF，2026-12 沙箱内实测 ReadToEnd 1.4ms 返回空串），故只写一处。
+     *
+     * <p>三件事缺一不可：①stdin 读到立即 EOF（所以无法交互输入）；②rg/grep/findstr 在未给
+     * 文件参数时按<b>工具自身惯例</b>把 stdin 当搜索源，于是恒得空结果 + exit 1；③该空结果与
+     * 「没有匹配」<b>输出同形</b>——所以必须给正解（始终显式给路径），只警告不解决问题。
+     * 这是 Unix/Windows 既有惯例、不是本实现的 bug，不用命令名特判去兜（RgShim 已 2026-10
+     * 删除，见 ARCHITECTURE §7.10「命令 stdin 契约」）。
+     */
+    private static final String STDIN_AND_SEARCH_NOTE =
+            "命令的 stdin 无输入可用(读它会立即得到空结果,部分后端直接读取失败,故无法交互输入);"
+            + "rg/grep/findstr 这类搜索命令在未给文件参数时会按惯例改把 stdin 当搜索源,"
+            + "于是得到的是对空输入的结果(实测空输出 + exit 1),与「没有匹配」在输出上无法区分"
+            + "——搜索请始终显式给出路径(如 rg 模式 .);";
+
     /** PowerShell 默认基线描述。 */
     private static final String POWERSHELL_BASELINE =
             "在系统上用 PowerShell 执行真实 OS 命令;"
             + "命令工作目录默认为任务工作区根;"
-            + "stdin 为 null 设备,命令无法从 stdin 读入输入;"
+            + STDIN_AND_SEARCH_NOTE
             + "多条命令请用 ; 分隔——&& 与 || 只有 pwsh 7+ 才支持,"
             + "Windows PowerShell 5.1 与 cmd 包装下会直接语法报错,不要依赖它们;"
             + "避免给原生命令传空字符串参数(历史 -Command 内联形态会把它静默丢弃,"
@@ -38,7 +56,7 @@ public final class ShellTool {
     private static final String BASH_BASELINE =
             "在系统上用 bash 执行真实 OS 命令;"
             + "命令工作目录默认为任务工作区根;"
-            + "stdin 为 /dev/null,命令无法从 stdin 读入输入;";
+            + STDIN_AND_SEARCH_NOTE;
 
     private final ShellExecutor exec;
     private final Class<?> inputType;

@@ -57,11 +57,14 @@ public class CodexBashToolProvider implements ToolProvider {
         Path workspaceRoot = ctx.workspaceRoot() != null ? Path.of(ctx.workspaceRoot()) : null;
         CodexCommandExecutor exec = new CodexCommandExecutor(manager, workspaceRoot, rg.injectPath());
         // rg 提示按解析结果条件化(详见类注释):三档皆无时如实说明,不谎报「已加入 PATH」。
-        // 另报出探测到的 shell 可执行名,把 && / || 这类版本相关语法能否使用交给模型自己判断,
-        // ShellTool 基线不再断言「当前是 PowerShell 几版」。
+        // 「无路径会去读空 stdin」这条惯例已上收 ShellTool 基线(powershell/bash 两基线共用,
+        // 且覆盖 rg/grep/findstr),此处不再重复;只留 rg 的优势与替代手段,并写清优势的真实原因
+        // (实测 findstr /s 全仓递归 64s 且扫进 node_modules;rg 尊重 .gitignore)——空喊
+        // 「性能更好」对模型没有决策价值。
+        // 另报出探测到的 shell 可执行名,把 && / || 这类版本相关语法能否使用交给模型自己判断。
         String rgNote = rg.available()
-                ? "rg 已加入 PATH，内容搜索尽量使用rg命令，性能更好;"
-                        + "rg 未给搜索路径时会静默过滤 null stdin 而返回空,请显式给搜索路径;"
+                ? "rg 已加入 PATH,内容搜索优先用 rg——它尊重 .gitignore,比 findstr/Select-String "
+                        + "的全仓递归快一个量级;"
                 : "rg 二进制不可用(插件根 bin/、程序根 runtime/bin/、系统 PATH 三档均未命中),"
                         + "内容搜索请改用 PowerShell 的 Select-String,勿再尝试 rg;";
         return List.of(ShellTool.powershell(exec::execute)
