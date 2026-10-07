@@ -53,11 +53,12 @@ public class WslUbuntuBashToolProvider implements ToolProvider {
         Path workspaceRoot = ctx.workspaceRoot() != null ? Path.of(ctx.workspaceRoot()) : null;
         WslUbuntuCommandExecutor exec = new WslUbuntuCommandExecutor(props, workspaceRoot,
                 workspaces, pluginDir, taskNetworkBlocked(ctx.subjectId()));
-        // 「无路径会去读空 stdin」的惯例由 ShellTool 基线统一承担(bash 基线同样已含,
-        // 覆盖 rg/grep/findstr);这里只给 rg 优势的真实原因(bash 语境对照 grep -r)。
+        // 通用常识类提示(搜索无路径读空 stdin、Out-String 收口、连接符版本)已按 2026-12
+        // 决策从描述移除(沿革见 ARCHITECTURE §7.10),四后端一律不再追加;这里只留本沙箱
+        // 特有事实,bash 语境下对照命令是 grep 而非 findstr。
         return List.of(ShellTool.bash(exec::execute)
-                .appendDescription("rg 已加入 PATH,内容搜索优先用 rg——它尊重 .gitignore,"
-                        + "比 grep -r 的全仓递归快一个量级;")
+                .appendDescription("内容搜索用 rg(已在 PATH,尊重 .gitignore,"
+                        + "全仓递归远快于 grep -r);")
                 .callback());
     }
 

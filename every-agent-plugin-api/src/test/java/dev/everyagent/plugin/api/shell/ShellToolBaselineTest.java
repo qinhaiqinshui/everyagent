@@ -75,14 +75,14 @@ class ShellToolBaselineTest {
     }
 
     /**
-     * 长度上限：本次精简的直接目的就是压缩上下文。基线层超过 200 字说明有人又往里塞通用常识，
+     * 长度上限：本次精简的直接目的就是压缩上下文。基线层实测 103 字，阈值留余量到 130——
      * 应按「框架私有 / 沙箱特有」原则复核后再决定是否放行。
      */
     @Test
     void baselineStaysShort() {
         String ps = powershellDesc();
-        assertTrue(ps.length() <= 200,
-                "powershell 基线描述应 ≤200 字,当前 " + ps.length() + " 字;新增前先核对 §7.10");
+        assertTrue(ps.length() <= 130,
+                "powershell 基线描述应 ≤130 字,当前 " + ps.length() + " 字;新增前先核对 §7.10");
     }
 
     private static int countOf(String hay, String needle) {

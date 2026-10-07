@@ -21,6 +21,18 @@ public final class ExecResults {
     public static final int MAX_OUTPUT_CHARS = 1_000_000;
 
     /**
+     * {@link #buildPowerShellScript} 中 Out-String 的行宽。4096 给宽表格(git status、
+     * 多列 Format-Table)足够余量;重定向下 PS 默认宽度本就只有 120,不存在「更宽被截」的
+     * 语义回退。public:后端(如 codex)的形态断言测试需引用。
+     *
+     * <p><b>必须声明在 {@link #POWERSHELL_PREFIX} 之前</b>:前缀的 {@code Out-String:Width}
+     * 免疫项以本常量为唯一值来源;字段初始化器里用简单名前向引用后置字段属 JLS 8.3.3 的非法
+     * 前向引用(javac 实测报「非法前向引用」——constant variable 的例外只覆盖方法/构造器内
+     * 引用,不覆盖字段初始化器),故以声明顺序体现依赖,不用限定名 {@code ExecResults.X} 规避。
+     */
+    public static final int OUT_STRING_WIDTH = 4096;
+
+    /**
      * PowerShell 脚本预置前缀。三项职责：
      *
      * <p><b>1. UTF-8 编码（best-effort，2026-10-05 修正定性）</b>：
@@ -45,6 +57,18 @@ public final class ExecResults {
      * UTF-8 中文文件会乱码）——这一项是纯收益,必须保留。变量/哈希表赋值在 CLM 下允许。
      * 前缀先于用户命令执行,用户显式指定 {@code -Encoding} 则覆盖。
      *
+     * <p><b>{@code Out-String:Width} 是给「模型自加 {@code | Out-String}」兜底的免疫项
+     * （2026-12,配合 §7.10 PS-003「二次修正」）</b>：{@link #buildPowerShellScript} 外层已按
+     * {@link #OUT_STRING_WIDTH} 收口,但模型从日常经验里学到的是「管道输出要加
+     * {@code | Out-String}」,一旦它自己加,<b>内层</b>那次 {@code Out-String} 会按无控制台的
+     * 默认 <b>120 列</b>折行,外层拿到的是<b>已折好的字符串</b>、宽度再大也救不回来（实测同一
+     * 200 字符属性：不加 guard 内层 maxLineLen=120、加 guard=200）。本项把默认宽直接对齐
+     * {@link #OUT_STRING_WIDTH},使「加不加都完整」,于是描述<b>无需再提醒模型别自加</b>——
+     * 提示语与框架机制打架时,正解是在框架侧免疫而非往描述里加禁令(该决策已把提示删掉,见
+     * {@code ShellTool.POWERSHELL_BASELINE} javadoc)。值由 {@link #OUT_STRING_WIDTH} 派生
+     * (编译期常量内联,不存在两处硬编码漂移);用户显式 {@code -Width} 仍优先,不覆盖其意图。
+     * 位置在 PREFIX 独立行内,<b>不占用户命令行号</b>,故不影响 PositionMessage 定位质量。
+     *
      * <p><b>2. 非成功流静默化</b>：静默 progress/information/warning/verbose/debug 流，
      * 避免个别 cmdlet / 模块显式 Write-Progress 等刷屏（不影响真实 stdout 数据与真实 stderr 错误）。
      * 不改变、也不要求改变 AI 的命令写法。
@@ -56,6 +80,7 @@ public final class ExecResults {
             + "$PSDefaultParameterValues['Get-Content:Encoding']='UTF8'; "
             + "$PSDefaultParameterValues['Set-Content:Encoding']='UTF8'; "
             + "$PSDefaultParameterValues['Out-File:Encoding']='UTF8'; "
+            + "$PSDefaultParameterValues['Out-String:Width']=" + OUT_STRING_WIDTH + "; "
             + "$ProgressPreference='SilentlyContinue'; $InformationPreference='SilentlyContinue'; "
             + "$WarningPreference='SilentlyContinue'; $VerbosePreference='SilentlyContinue'; "
             + "$DebugPreference='SilentlyContinue'; ";
@@ -75,13 +100,6 @@ public final class ExecResults {
     public static final String POWERSHELL_EXIT_TAIL =
             "; $__EAExitCode = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }; "
             + "exit $__EAExitCode";
-
-    /**
-     * {@link #buildPowerShellScript} 中 Out-String 的行宽。4096 给宽表格(git status、
-     * 多列 Format-Table)足够余量;重定向下 PS 默认宽度本就只有 120,不存在「更宽被截」的
-     * 语义回退。public:后端(如 codex)的形态断言测试需引用。
-     */
-    public static final int OUT_STRING_WIDTH = 4096;
 
     /**
      * 组装完整 PowerShell 执行脚本：prefix + <b>脚本块包裹的用户命令</b> + Out-String

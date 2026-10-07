@@ -63,17 +63,13 @@ public class DirectShellToolProvider implements ToolProvider {
                 impl.gateImpl(), ctx.agentId(), rgDir);
         boolean win = isWindows();
         // rg 提示按实际解析结果条件化:rgDir==null 时 CommandExecutor 根本不会注入 rg 目录,
-        // 此时若仍宣称「rg 已加入 PATH」,模型会把「命令不存在」误读成「无匹配、结果正常」。
-        // 「无路径会去读空 stdin」这条惯例已由 ShellTool 基线统一承担(powershell/bash 共用,
-        // 覆盖 rg/grep/findstr),此处不再重复。本提供者按 OS 分叉,对照命令也必须分叉——
-        // Linux/macOS 分支提 findstr 是错的(该后端两 OS 都用)。
-        String vsTool = win ? "findstr/Select-String" : "grep -r";
+        // 此时若仍宣称「已在 PATH」,模型会把「命令不存在」误读成「无匹配、结果正常」。
+        // 通用常识类提示已按 2026-12 决策从描述移除(见 ARCHITECTURE §7.10),此处只留沙箱特有
+        // 事实。本提供者按 OS 分叉,对照命令也必须分叉——Linux/macOS 分支提 findstr 是错的。
         String rgNote = rgDir != null
-                ? "rg 已加入 PATH,内容搜索优先用 rg——它尊重 .gitignore,比 " + vsTool
-                        + " 的全仓递归快一个量级;"
-                : "rg 二进制不可用(worker.tools.rg-path 与程序根 runtime/bin 均未命中),"
-                        + (win ? "内容搜索请改用 Select-String,勿再尝试 rg;"
-                               : "内容搜索请改用 grep,勿再尝试 rg;");
+                ? "内容搜索用 rg(已在 PATH,尊重 .gitignore,全仓递归远快于"
+                        + (win ? " findstr);" : " grep -r);")
+                : "rg 不可用,内容搜索改用" + (win ? " Select-String;" : " grep;");
         if (win) {
             String note = rgNote + "中文等非 ASCII 输出已自动正确解码，无需手动处理编码。";
             return List.of(ShellTool.powershell(exec::execute)

@@ -24,7 +24,7 @@ import java.util.List;
  * 落地时靠它兜住，不再出现「装了包却没有 rg」。
  *
  * <p>工具描述里的 rg 可用性<b>按解析结果条件化生成</b>：三档皆无时如实告知模型 rg 不可用、
- * 内容搜索改用 {@code Select-String}，绝不无条件宣称「rg 已加入 PATH」——那会让模型的
+ * 内容搜索改用 {@code Select-String}，绝不无条件宣称 rg 可用——那会让模型的
  * 「命令不存在」被当成「无匹配、结果正常」，是最恶劣的一类描述谎报。
  *
  * <p>非 ASCII 正确性<b>不做命令名特判</b>（历史 rg 包装 plugin-api RgShim 已删除）：直出路径
@@ -57,25 +57,18 @@ public class CodexBashToolProvider implements ToolProvider {
         Path workspaceRoot = ctx.workspaceRoot() != null ? Path.of(ctx.workspaceRoot()) : null;
         CodexCommandExecutor exec = new CodexCommandExecutor(manager, workspaceRoot, rg.injectPath());
         // rg 提示按解析结果条件化(详见类注释):三档皆无时如实说明,不谎报「已加入 PATH」。
-        // 「无路径会去读空 stdin」这条惯例已上收 ShellTool 基线(powershell/bash 两基线共用,
-        // 且覆盖 rg/grep/findstr),此处不再重复;只留 rg 的优势与替代手段,并写清优势的真实原因
-        // (实测 findstr /s 全仓递归 64s 且扫进 node_modules;rg 尊重 .gitignore)——空喊
-        // 「性能更好」对模型没有决策价值。
-        // 另报出探测到的 shell 可执行名,把 && / || 这类版本相关语法能否使用交给模型自己判断。
+        // 追加层只留「本沙箱特有」事实;搜索无路径读空 stdin、Out-String 收口、连接符版本等
+        // 通用常识/框架细节均已按 2026-12 用户决策从描述移除(沿革见 ARCHITECTURE §7.10),
+        // 后端不得在此私自加回。rg 优势保留但压到一行,给可信的区分依据而非空喊「性能更好」。
+        // 「实际执行 shell=<exe>」保留:#4 连接符版本细则删除后,版本判断依据只剩这一处。
         String rgNote = rg.available()
-                ? "rg 已加入 PATH,内容搜索优先用 rg——它尊重 .gitignore,比 findstr/Select-String "
-                        + "的全仓递归快一个量级;"
-                : "rg 二进制不可用(插件根 bin/、程序根 runtime/bin/、系统 PATH 三档均未命中),"
-                        + "内容搜索请改用 PowerShell 的 Select-String,勿再尝试 rg;";
+                ? "内容搜索用 rg(已在 PATH,尊重 .gitignore,全仓递归远快于 findstr);"
+                : "rg 不可用,内容搜索改用 Select-String;";
         return List.of(ShellTool.powershell(exec::execute)
                 .appendDescription(rgNote
                         + "实际执行 shell=" + CodexCommandExecutor.detectShell().exe + ";"
                         + "中文等非 ASCII 输出已正确解码;"
-                        + "用户目录(含 Maven 仓库/npm/pip/gradle 缓存)已指向沙箱账户 profile,"
-                        + "可写且持久,各工具直接用默认位置即可,勿手动指定仓库/缓存路径;"
-                        + "临时目录(TEMP)在工作区 .everyagent/tmp,随任务清理;"
-                        + "git 不读宿主全局配置(已注入本仓库 safe.directory),提交时请用"
-                        + " -c user.name=<名> -c user.email=<邮箱> 显式带入身份。")
+                        + "git 不读宿主全局配置,提交须带 -c user.name=<名> -c user.email=<邮箱>。")
                 .callback());
     }
 }

@@ -52,18 +52,18 @@ class CodexBashToolProviderTest {
         assertEquals(1, tools.size());
         assertEquals("powershell", tools.get(0).getToolDefinition().name());
         String desc = tools.get(0).getToolDefinition().description();
-        assertTrue(desc.contains("rg 已加入 PATH"), "rg 可用 → 描述声明 rg 可用");
-        assertFalse(desc.contains("rg 二进制不可用"), "rg 可用时不得混入「不可用」提示");
+        assertTrue(desc.contains("已在 PATH"), "rg 可用 → 描述声明 rg 可用");
+        assertFalse(desc.contains("rg 不可用"), "rg 可用时不得混入「不可用」提示");
     }
 
-    /** rg 三档全未命中:描述严禁宣称「rg 已加入 PATH」——否则命令不存在会被误读成无匹配。 */
+    /** rg 三档全未命中:描述严禁宣称 rg 可用——否则命令不存在会被误读成无匹配。 */
     @Test
     void rgUnavailableIsReportedTruthfully() {
         String desc = provider(new CodexRg.Rg(null, false))
                 .createTools(TestFixtures.ctx("codex", tempDir, null))
                 .get(0).getToolDefinition().description();
-        assertFalse(desc.contains("rg 已加入 PATH"), "rg 不可用不得谎报已加入 PATH");
-        assertTrue(desc.contains("rg 二进制不可用"), "如实声明 rg 不可用");
+        assertFalse(desc.contains("已在 PATH"), "rg 不可用不得谎报可用");
+        assertTrue(desc.contains("rg 不可用"), "如实声明 rg 不可用");
     }
 
     /**

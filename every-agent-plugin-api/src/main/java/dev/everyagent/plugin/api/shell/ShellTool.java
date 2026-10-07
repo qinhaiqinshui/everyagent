@@ -37,7 +37,7 @@ public final class ShellTool {
      * 该条核对再决定是否恢复，不要另写新文案绕开它。
      */
     private static final String STDIN_NOTE =
-            "命令的 stdin 无输入可用(读它会立即得到空结果,部分后端直接读取失败,故无法交互输入);";
+            "命令的 stdin 无输入可用,无法交互输入;";
 
     /**
      * PowerShell 默认基线描述。
@@ -66,7 +66,7 @@ public final class ShellTool {
             "在系统上用 PowerShell 执行真实 OS 命令;"
             + "命令工作目录默认为任务工作区根;"
             + STDIN_NOTE
-            + "多值请用 -join '<分隔符>' 明确分隔,字符串与数组直接拼接会按 $OFS 用空格连接(歧义源);";
+            + "数组直接拼进字符串会按 $OFS 空格连成一行,需明确分隔就用 -join;";
 
     /** bash 默认基线描述。 */
     private static final String BASH_BASELINE =

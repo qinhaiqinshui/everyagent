@@ -50,11 +50,16 @@ public class WindowsMicShellToolProvider implements ToolProvider {
             return List.of();
         }
         ShellExecutor exec = rgDir != null ? withRgInPath(base, rgDir) : base;
-        // 「无路径会去读空 stdin」的惯例已由 ShellTool 基线统一承担(四后端共用,覆盖
-        // rg/grep/findstr),此处不再重复;rg 优势给真实原因,措辞与 codex/direct 同口径。
+        // rg 可用性按解析结果条件化(§7.10 硬约束):rgDir==null 时 withRgInPath 不执行,
+        // 若仍宣称「已在 PATH」,模型会把「命令不存在」误读成「无匹配、结果正常」——此处曾是
+        // 该约束在四后端中的最后一个漏项(codex/direct 上一轮已修)。
+        // 搜索无路径读空 stdin、Out-String 收口、连接符版本等通用常识已按 2026-12 决策从
+        // 描述移除(沿革见 ARCHITECTURE §7.10),四后端一律不再追加;措辞与 codex/direct/wsl 同口径。
+        String rgNote = rgDir != null
+                ? "内容搜索用 rg(已在 PATH,尊重 .gitignore,全仓递归远快于 findstr);"
+                : "rg 不可用,内容搜索改用 Select-String;";
         return List.of(ShellTool.powershell(exec)
-                .appendDescription("rg 已加入 PATH,内容搜索优先用 rg——它尊重 .gitignore,"
-                        + "比 findstr/Select-String 的全仓递归快一个量级;"
+                .appendDescription(rgNote
                         + "中文等非 ASCII 输出已正确解码,无需手动处理编码。")
                 .callback());
     }
