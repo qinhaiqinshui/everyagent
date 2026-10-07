@@ -113,11 +113,11 @@ The four modules — web / hub / worker / desktop — are **decoupled and each s
 
 | Module | Responsibility | Port |
 |---|---|---|
-| `every-agent-hub` | Public message hub: pure relay WebSocket, zero state, zero buffer, zero business logic | 9100 |
-| `every-agent-worker` | Executor: Spring Boot + Spring AI 2, manages tasks/models/workspace/sandbox | 9200 (local health only) |
+| `every-agent-hub` | Public message hub: pure relay WebSocket, zero state, zero buffer, zero business logic | 6101 |
+| `every-agent-worker` | Executor: Spring Boot + Spring AI 2, manages tasks/models/workspace/sandbox | 6102 (local health only) |
 | `every-agent-web` | Frontend: React + TS, built-in TS client SDK, remotely controls worker via hub | 5174 (dev) |
 | `every-agent-contract` | Pure protocol contract: frames/RPC envelopes/error codes/identity hashing (Java + TS) | — |
-| `every-agent-desktop` | Electron desktop edition: bundles web + hub + worker (Windows x64) | local 9100/9200 |
+| `every-agent-desktop` | Electron desktop edition: bundles web + hub + worker (Windows x64) | local 6101/6102 |
 
 **Deployment topology matrix** — four modules can be freely combined; three typical forms:
 
@@ -171,7 +171,7 @@ Save and **restart the desktop edition** (the worker loads model config at start
 HUB_KEY=your-hub-key docker-compose up --build
 ```
 
-- Hub: `ws://<host>:9100/ws` (health check `GET :9100/health`)
+- Hub: `ws://<host>:6101/ws` (health check `GET :6101/health`)
 - Worker: inside the container it connects outbound to the hub; workspace/data is stored in named volumes
 - Frontend: open `http://<host>:5174` in a browser, fill in the hub address and hub key in the Settings page to discover the worker; then fill in the worker's apiKey to remotely control its data
 
@@ -179,7 +179,7 @@ HUB_KEY=your-hub-key docker-compose up --build
 
 ```bash
 # Java (requires JDK 25; Spring Boot 4.1 / Spring AI 2 are pinned by the root pom)
-mvn -pl every-agent-hub spring-boot:run          # hub @ 9100
+mvn -pl every-agent-hub spring-boot:run          # hub @ 6101
 mvn -pl every-agent-worker spring-boot:run       # worker, connects outbound to hub
 
 # Frontend
@@ -231,7 +231,7 @@ worker:
 | Config | Description |
 |---|---|
 | `worker.hubs[].url / api-key / hub-key` | The only entry point for worker-to-hub connection (multi-hub list); if not configured, the worker doesn't connect to any hub |
-| `HUB_KEY` (env var) | Hub key in plaintext; if not set, the hub refuses to start (sha256 computed at startup) |
+| `HUB_KEY` (env var) | Hub key in plaintext (sha256 computed at startup); falls back to a built-in dev key when unset (local testing only) — an explicitly empty value refuses to start; **public deployments must set a strong key** |
 | `WORKER_ID` (env var) | Worker identity; the frontend addresses by this |
 | `EVERYAGENT_HOME` | System directory (model config / default workspace / data), default `~/.everyagent` |
 | `worker.sandbox.type` | `auto` (default; picks the highest-priority available sandbox plugin) / `wsl-ubuntu` / `windows-mic` / `none` (legacy values `wsl-direct` / `wsl-bwrap` are auto-normalized) |
@@ -271,10 +271,6 @@ This project is licensed under the [Apache License 2.0](LICENSE), © 2026 Every 
 
 ## 🙌 Contributing
 
-Issues and PRs are welcome. Before starting, please read:
-
-- [Contributing Guide](CONTRIBUTING.md): development environment, PR process, code and commit conventions;
-- [Code of Conduct](CODE_OF_CONDUCT.md): community behavior expectations;
-- [Security Policy](SECURITY.md): how to responsibly report vulnerabilities.
+Issues and PRs are welcome. Before starting, please read the [Contributing Guide](CONTRIBUTING.md) (development environment, PR process, code and commit conventions).
 
 Development conventions: commit messages in Chinese, one commit per change; before making changes, please read the red-line checklist in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) (especially Spring AI reuse, hub zero-business, disk as single source of truth, etc.).

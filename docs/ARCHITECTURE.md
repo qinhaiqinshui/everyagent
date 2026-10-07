@@ -19,7 +19,7 @@ Every Agent 是一套「**公网可及、本机执行**」的 AI Agent 系统:AI
 | `every-agent-web` | 前端:React + TS,内置 TS 客户端 SDK,经 hub 遥控 worker | 5174(dev) |
 | `every-agent-contract` | 纯协议契约:帧信封 / RPC 信封 / 通用错误码 / 身份哈希(Java DTO + TS 类型) | — |
 | `every-agent-plugin-api` | 插件 API 契约:ExecContext(统一执行上下文) / EventEmitter / EmitEvent / ChatModelEnhancer / ModelConfig / TaskLifecycleNode 等接口(纯类型,插件与 worker 共用) | — |
-| `every-agent-plugins` | 内置插件集:model-rate-limit(限流) / task-queue(队列) / subagent / git / ai-review / empty-response-retry(空响应重试) / transient-error-retry(瞬时错误重试) / context-compression(上下文压缩) / secret-redaction(输出凭据脱敏) / ask-user(用户提问) 等 | — |
+| `every-agent-plugins` | 内置插件集(26 个,清单见 plugin-guide `reference/builtin-plugins.md`):sandbox-windows-codex(Windows 原生沙箱,**默认启用**)、sandbox-windows-mic / sandbox-wsl-ubuntu(可选沙箱,默认禁用)、model-rate-limit(限流) / task-queue(并发排队) / task-input-queue(输入队列) / subagent / git / ai-review / ask-user / empty-response-retry / transient-error-retry / context-compression / model-length-guard / adaptive-max-tokens / model-pool / file-change / agents-md / system-info / image-vision / task-edit-resend / unattended / secret-redaction(默认禁用) / plugin-manager / pdf-viewer / update-file-view | — |
 | `every-agent-desktop` | Electron 桌面版:web + hub + worker 一体打包(Windows x64 便携/安装包) | 本地 6101/6102 |
 
 ### 1.1 设计理念
@@ -84,7 +84,7 @@ Every Agent 是一套「**公网可及、本机执行**」的 AI Agent 系统:AI
 | worker | Java 25,Spring Boot + Spring AI 2,JDK 内置 HttpClient WebSocket(多连接 HubPool),虚拟线程 | 6102(仅 127.0.0.1 健康/管理) |
 | web | React + TS,内置 TS 客户端 SDK | 5174(dev)/ 静态托管 |
 | contract | 纯协议:帧/RPC 信封/错误码/身份哈希(Java DTO + TS 类型) | — |
-| desktop | Electron(内置 Node 24),spawn 本地 hub/worker 子进程(jlink 精简 JRE 25) | 本地 6101/6102 |
+| desktop | Electron(随包内置 Node 运行时),spawn 本地 hub/worker 子进程(jlink 精简 JRE 25) | 本地 6101/6102 |
 
 版本统一由仓库根父 pom 锁定(Spring Boot 4.1.x / Spring AI 2.0.x),各模块不得各自升版本。
 
@@ -99,7 +99,7 @@ Every Agent 是一套「**公网可及、本机执行**」的 AI Agent 系统:AI
 
 ### 4.2 双道鉴权:hub key 管"连上",worker apiKey 管"访问"
 
-- **hub key(必填)**:hub 启动即强制校验 `hub.hub-key`(配置直接填原始密钥,程序启动自算 sha256,未配置拒绝启动)。所有 frontend/worker 连接必须在 hello 携带原始 `hubKey`,缺失/不符一律 `NOT_AUTHENTICATED`。
+- **hub key(必填)**:hub 启动即强制校验 `hub.hub-key`(配置直接填原始密钥,程序启动自算 sha256)。jar 内 `application.yml` 给了开发默认密钥(`${HUB_KEY:sljlw23948LKS}`,缺省可本机试玩),**显式置空才 fail-fast 拒绝启动**——公网部署必须显式配置强密钥。所有 frontend/worker 连接必须在 hello 携带原始 `hubKey`,缺失/不符一律 `NOT_AUTHENTICATED`。
 - **worker apiKey(按 worker 各自配置)**:连上 hub 后,要访问某台 worker 的任务、文件、git 数据,必须持该 worker 的 apiKey 建立对应命名空间的连接;worker 端 RPC 按连接身份处理。
 - 前端因此有**两类连接**:一条"目录连接"(用 hubKey 连,订阅 `u.<sha256(hubKey)>.workers` 看在线 worker 目录)+ 每条 worker 一条"数据连接"(用该 worker 的 apiKey,订阅其 `u.<K>.worker.<id>.tasks` 与 `u.<K>.worker.<id>.evt`,任务与 RPC 走这条)。
 
@@ -146,9 +146,9 @@ wss://hub:6101/ws
   "event":"task.updated", "ts":1755859200000, "payload": { "taskId":"t_k3f0", "workerId":"w7", "status":"running" },
   "ext": { "traceparent":"00-…-01" } }
 
-// hub → 订阅者(原样投递,附已认证 from,ext 原样转发)
+// hub → 订阅者(原样投递,附已认证 from——含 sessionId 供 worker/前端识别来源连接,ext 原样转发)
 { "type":"msg", "channel":"u.K.worker.w7.tasks", "event":"task.updated",
-  "ts":1755859200000, "from":{ "clientId":"w7", "role":"worker" },
+  "ts":1755859200000, "from":{ "clientId":"w7", "role":"worker", "sessionId":"s-42" },
   "payload": { … }, "ext": { … } }
 
 // 错误
@@ -225,25 +225,27 @@ worker 端 `RpcDispatcher` 注册方法;应答回**请求来源连接**的 `evt`
 | `task.agents` | 子 agent 台账一次性拉取(前端打开任务详情、建子 agent 胶囊列表的唯一取数口;live 任务取内存台账,磁盘路径 agents.json 优先、旧任务回退 meta.json 的 agents 数组只读;按 createdAt 升序;**按顶级 `creator=subagent` 过滤(旧条目无顶级 creator 时回退 `metadata.creator`,两者皆空视为旧格式子 agent 保留)——审议 agent 等 creator≠subagent 的条目不出现在子 agent 列表;主 agent 条目恒保留(前端 `agentMeta['']` 的 title/usage/context 冷启动基线只认台账,§7.20.1**;应答 `{agents:[台账项], mainAgentId}`);方法由 subagent 插件注册,方法名常量跟注册方走(住插件侧,§14.11) |
 | `task.fileChanges` | **file-change 插件注册的 RPC**(方法名常量与语义全住插件侧,task 核心不感知,§14.11/§7.15.2):带 `roundId` → 该轮变更全文 `file-changes/<roundId>.json` 的 `{changes:[...]}`(含 beforeContent/afterContent);**省略 `roundId`** → 全任务各轮轻量摘要 `{rounds:[{roundId, changes:[{filePath,fileName,changeType,saveCount}]}]}`(前端轮末面板一次拉全,不做逐轮 N 次 RPC) |
 | `task.search` | 任务内容搜索(内置 rg + worker 后处理):`workspaceId` 必填且必须是稳定 id 形态(`defaultworkspace` / `w_xxxxx`,拒绝路径穿越),按 `workspaces/<workspaceId>/tasks/<taskId>/` 枚举任务目录,复用 rg 搜索 `rounds.jsonl`(每行一轮,含 user/finalReply 正文);入参 `pattern` / `isRegex` / `caseSensitive` / `wholeWord` / `maxResults`(默认 500),pattern 语义与 `fs.search` 共用 `buildMatchArgs`;rg 命中 JSON 原始行后由 worker `parseRoundLine` 解析、对 user/finalReply 干净文本二次匹配(消除字段名/转义噪音,同时得到准确 `matchIndex`/`matchText`);结果项 `{taskId, title, workspace, workspaceId, status, matches:[{roundIndex, field:'user'|'finalReply', line, matchIndex, matchText}]}`,按任务聚合;大结果复用 `rpc.data` 分批 + 末帧 `ok` 汇总(§5.4);插件经 `ctx.registerSearchProvider` 注册的 SearchProvider 的 `searchTasks` 结果**增补聚合**进本应答(§8.5:内置结果在前、provider 按注册序追加,按 `taskId+roundIndex+field+matchIndex` 去重,仍受 `maxResults` 触顶约束;rg 不可用但注册了 provider 时跳过内置 rg 仅聚合 provider 结果) |
+| `task.queueList` | 当前运行许可/排队快照 `{availablePermits, queueLength, queue:[taskId...]}`(task-queue 插件注册,§7.14.4) |
 | `task.queueRemove` / `task.queueMove` | 删除/重排某条队列输入(task-input-queue 插件注册;运行中热队列直改内存、终态改磁盘悬空队列 queue.jsonl) |
 | `task.queueSnapshot` | 拉取队列快照 `{taskId, pendingInputs:[…), pendingInputsRaw:[…]}`(task-input-queue 插件注册;热任务取内存 InputQueue,终态任务读 queue.jsonl 悬空队列)——前端队列面板自持数据源(插件专有数据不进核心 ComposerPanelCtx/taskStore);`pendingInputsRaw` 与 `pendingInputs` 等长按位对齐(空串=无原始内容),供面板「编辑」回填还原胶囊;入队/消费/增删均广播 `task.updated`(携带 pendingInputs)驱动刷新 |
-| `task.message.edit` | 编辑已发送的用户消息:截断 seq > 该消息的所有磁盘事件(仅 *.jsonl/rounds.jsonl,**不删插件数据文件**——agents.json/file-changes/ 残留陈旧条目被接受,task 核心不感知插件文件名;后续可增加截断事件通知由插件自清)、原地更新该消息内容、广播 `message.edited` 同步事件、冷启动重跑(不写新 user.message,对话历史已含编辑后的消息);任务运行中拒绝 |
+| `task.run{taskId, metadata:{editSeq}}`(消息编辑重发) | 编辑已发送的用户消息:**无独立 RPC**(历史方法 `task.message.edit` 已退役),统一走 `task.run` 携带 `metadata.editSeq`,由 task-edit-resend 插件的 `EditResendNode`(order=877,§7.14.1)截断 seq > 该消息的所有磁盘事件(仅 *.jsonl/rounds.jsonl,**不删插件数据文件**——agents.json/file-changes/ 残留陈旧条目被接受,task 核心不感知插件文件名;后续可增加截断事件通知由插件自清)、原地更新该消息内容、广播 `message.edited` 同步事件、冷启动重跑(不写新 user.message,对话历史已含编辑后的消息);任务运行中拒绝 |
 | `config.get` | 模型配置只读(Spring 配置承载,见 §7.17) |
 | `config.reload` | 重新读取模型配置(重新解析 worker.models,应用用户在外部 YAML 中的修改);广播 `config.changed{keys:["models"]}` |
 | `skill.reload` | 重新扫描外部 skill 列表(用户在系统技能目录下增删 skill 目录后热加载);广播 `config.changed{keys:["skills"]}`,前端 `/` 菜单下次打开即拉取最新列表 |
-| `workspaces.list` / `workspaces.add` / `workspaces.remove` | 工作区注册表 CRUD(多工作区并行) |
+| `workspaces.list` / `workspaces.add` / `workspaces.remove` / `workspaces.addExternalRoot` | 工作区注册表 CRUD(多工作区并行);addExternalRoot = 注册工作区外部授权根(`@` 弹窗 `+` 显式选择路径,§7.17) |
 | `workspaces.resolveMissing` | 启动自检缺失工作区落定:action=delete(删除注册并级联任务数据)/redirect(纠正到新目录并迁移任务归属) |
 | `fs.list` / `fs.reveal` / `fs.read` / `fs.write` / `fs.mkdir` / `fs.move` / `fs.delete` / `fs.browse` | 工作区文件操作,**必带 workspace 参数**,沙箱限定;文件树懒加载;条目 stat 逐条容错:`fs.list`/`fs.reveal` 对单条目读属性失败(典型:Windows 上 WSL/npm 生成的 LX symlink reparse 点,Win32 跟随链接读属性报 ERROR_CANT_ACCESS_FILE「系统无法访问此文件」)不拖垮整个枚举——先回退 NOFOLLOW 读链接自身属性,再失败按 `dir:false`、时间戳 0 的普通文件条目返回(前端按「未知」展示);沙箱附加根按操作语义分流(§7.17):**只读操作**(`fs.list`/`fs.reveal`/`fs.read`/`fs.revealInOs`)并入工作区外部授权根(externalRoots,完全读写已授权)+ 系统技能目录(skills 读写免授权,§13.8)——使前端「打开文件」标签页能读取 AI 已读的 skill/外部授权文件;**写操作**(`fs.write`/`fs.mkdir`/`fs.move`/`fs.delete`)仅并入 externalRoots(完全读写),技能根同样并入(读写均开放,§13.8);`fs.browse`(不经沙箱)列盘符/逐层浏览目录,可选 `includeFiles`(boolean,缺省 false 仅目录,完全兼容现有行为):true 时目录条目同时列出文件,每条目带 `kind:"file"\|"directory"`,响应带 `supportsFiles:true` 能力标记(前端能力探测;老前端不传/老 worker 不带按 must-ignore 双向兼容,§5.6) |
 | `fs.revealInOs` | 在**运行 worker 的宿主机器**上打开系统文件管理器并选中目标(资源树右键「在系统文件管理器中显示」,对标 VSCode Reveal in File Explorer),**必带 workspace 参数**,路径经沙箱 `resolveExisting` 校验(防越界/符号链接逃逸);Windows `explorer.exe /select,<path>`(fire-and-forget,退出码不表征成败)、macOS `open -R`、Linux 优先 freedesktop FileManager1 `ShowItems` 选中目标、无 dbus/无注册实现退化 `xdg-open` 打开所在目录;argv 直传无 shell 解析;无桌面环境(无头 worker/无文件管理器)抛 IO 异常转 RPC 错误;远程访问场景窗口在 worker 所在电脑弹出;老前端不调用零影响 |
 | `term.open` / `term.input` / `term.resize` / `term.close` | Web 内嵌终端会话(§7.18，真 PTY)：`term.open` 必带 `workspace`+`termId`(前端生成,先 sub 频道再 open 防丢首帧)+`path`(目录,沙箱 `resolveExisting` 校验,非目录拒收)+`cols`/`rows`+可选 `shell`，返回 `{termId, pid}`；`term.input` 入参 `{termId, data(base64)}`；`term.resize` 入参 `{termId, cols, rows}`；`term.close` 入参 `{termId}`。输出经 `u.<K>.term.<termId>.stream` 定向推送；老前端不调用零影响，老 worker 无此方法时前端按 must-ignore 降级提示 |
 | `fs.search` | 工作区文本内容搜索(内置 rg,§5.10),**必带 workspace 参数**,沙箱 jailed 到工作区根;入参 `pattern` / `isRegex` / `caseSensitive` / `wholeWord` / `includeGlobs` / `excludeGlobs`(逗号分隔 glob,include 用 `-g '!*' -g glob` 放行、exclude 用 `-g !glob`) / `maxResults`(默认 1000,触顶 kill rg 置 `truncated`) / `path`(可选,工作区相对子目录 = 搜索范围,缺省整根;经沙箱 `resolveExisting` 校验(realpath 防逃逸),作为 rg 的搜索路径参数);rg 参数 `--hidden --json --crlf -e <pattern>`(固定串加 `--fixed-strings`),逐行解析 JSON lines(`type:match` 的 `submatches` → 命中片段);结果项 `{path, lineNumber, line, matchIndex, matchText}`,按文件聚合;大结果复用 `fs.read` 的 `rpc.data` 分批 + 末帧 `ok` 汇总(§5.4);老前端不传 `path` 零影响(缺省整根,行为不变);前端不再保留纯前端搜索降级路径(需 worker ≥ 本方法版本,§5.6);插件经 `ctx.registerSearchProvider` 注册的 SearchProvider 的 `searchFiles` 结果**增补聚合**进本应答(§8.5:内置 rg 结果在前、provider 按注册序追加,按 `path+lineNumber+matchIndex` 去重,合并后仍受 `maxResults` 触顶约束;单个 provider 抛异常仅 WARN 跳过;rg 不可用但注册了 provider 时跳过内置 rg 仅聚合 provider 结果,无 provider 时行为不变) |
 | `fs.find` | 工作区文件名搜索(内置 rg `--files` + worker 侧 basename 正则匹配),**必带 workspace 参数**,沙箱 jailed 到工作区根;入参与 `fs.search` 同族(`pattern` / `isRegex` / `caseSensitive` / `wholeWord` / `includeGlobs` / `excludeGlobs` / `maxResults` 默认 1000)+ 可选 `path`(子目录范围,语义同 `fs.search`);`rg --hidden --files --no-messages` 枚举文件(**不配 `--json`**——`--files` 下 `--json` 只吐 summary 不吐路径;glob 拼法与 `fs.search` 共用),basename 匹配在 worker 侧完成(全字包 `\b(?:...)`、固定串转义元字符,语义与 `fs.search` 同族,方言为 Java `Pattern`);结果项 `{path}`(无 matches 字段),`matchCount` = 命中文件数;大结果复用 `rpc.data` 分批 + 末帧 `ok` 汇总(§5.4)。替代原「前端逐目录 `fs.list` 递归 walk」(中型仓库即数千次串行 RPC,且单条目/目录不可读会整树报错);rg 遵循 .gitignore、原生跳过不可读条目,与 VSCode 默认搜索范围对齐 |
-| `git.status` / `git.log` / `git.diff` / `git.commit` / `git.pull` / `git.push` / `git.discard` / `git.init` / `git.clone` / `git.remote.add` / `git.remote.list` | 工作区 git 快操作,必带 workspace;由 `NativeGit` 调宿主原生 git argv 直传执行(§7.12) |
+| `git.status` / `git.log` / `git.diff` / `git.show` / `git.commit` / `git.pull` / `git.push` / `git.discard` / `git.init` / `git.clone` / `git.remote.add` / `git.remote.list` | 工作区 git 快操作(git 插件注册,必带 workspace);由 `NativeGit` 调宿主原生 git argv 直传执行(§7.12) |
 | 大型迁移(批量 checkout / 大仓库迁移) | 建为 Task,进度走任务流 |
 | `git.credential.save` | 保存 git 远端凭证(AES-GCM 加密落盘,§7.12;只写不读回) |
-| `slash.list` / `slash.select` / `slash.cancel` / `slash.taskTokens.apply` | 斜杠命令清单与选中/取消/任务级 token 应用(§7.16) |
+| `slash.list` / `slash.select` / `slash.cancel` / `slash.taskTokens.apply` / `slash.taskTokens.list` | 斜杠命令清单与选中/取消/任务级 token 应用/任务级 token 现值拉取(§7.16) |
 | `mention.query` | `@` 文件搜索(后端子序列模糊匹配 + 隐藏规则 + 截断 10 条) |
 | `rpc.cancel` | 取消进行中的长 RPC(Future.cancel) |
+| `plugin.list` / `plugin.install` / `plugin.uninstall` / `plugin.enable` / `plugin.disable` / `plugin.webSource` / `plugin.asset` | 插件管理(worker 核心注册,§8.5):目录(含禁用项)、`.eap` 安装/卸载、启停(install/uninstall/enable/disable 均**重启 worker 后生效**)、web 源码/静态资源读取(jail 校验 + 大小写不敏感回退) |
 | `sys.methods` / `sys.info` | 能力发现:本 worker 支持的方法清单与版本、workspace/模型/hub 元信息 |
 | `worker.restart` | 重启 worker 进程(设置页「重启 Worker」按钮):应答 ok 后由独立非守护线程复走 `/admin/shutdown` 同款关闭路径(优雅关闭 ApplicationContext:断开 hub 连接、销毁插件),随后以**重建的启动命令**把本进程重新拉起——**自重启,不依赖 desktop/任务计划等外部 supervisor**。命令重建策略:优先 `ProcessHandle.current().info()` 的完整 argv(Linux 可用);Windows 上 `arguments()`/`commandLine()` 不可用(实测 JDK 25 返回空),按 `sun.java.command` + `java.class.path` 重建最小命令——`-jar` 形态 = 原 exe(`info.command()`,保留 javaw/java 区别)+ `-jar` + fat jar 路径(classpath 单条目即 jar 路径)+ 程序参数;classpath 形态(dev:`spring-boot:run`/IDE)= exe + `-cp java.class.path` + 主类/参数;原 JVM `-D`/`-X` 选项不保留。子进程继承 cwd(`user.dir`)、环境变量与 stdio(`inheritIO`,desktop/bat 启动时即继续写 worker.out.log),且在新 JVM 启动前旧 JVM 已释放 6102 端口(先 `context.close()` 返回再 spawn,无端口竞态)。进程级冷启动:运行中任务被中断,重启后 boot 扫描把非终态任务标 failed(§7.7),任务数据不丢;启动命令无法重建时拒绝执行并应答 err(worker 不重启) |
 
@@ -276,11 +278,11 @@ hub 只解析信封的 `type` / `channel`(及 hello 握手字段);`event` / `seq
 - **ChannelRegistry** — channel → 订阅者集合;pub 到来即遍历投递(带 `ext.target` 时只定向投给该 sessionId);前端 sub/unsub stream 频道时发 join/leave 通知——**频道名带 worker 段则按 `findWorker(ownerKey, workerId)` 只投那一台**,否则投该命名空间全部在线 worker(仍是无状态 fire-and-forget,不存订阅簿,§5.2)。
 - **PresenceService** — worker 会话建立/断开时向 `u.<K>.workers` 发 worker.online/offline;订阅时补发全量快照。
 - **慢消费者保护** — 每连接出口队列上限 1000 条,溢出断开;前端自动重连 + 重新拉取,不丢数据。
-- **心跳** — WS protocol-level ping 每 15s,45s 无 pong 判死;同时响应应用层 ping 帧——收到即回 pong,不路由、不记录(§5.1)。
+- **心跳** — WS protocol-level ping 每 15s(`hub.ping-interval-ms`);判死开关 `hub.stale-read-ms` **默认 0(关闭)**,>0 时按「无任何入站帧超过该时长」close 1001(不是按 pong 计数);同时响应应用层 ping 帧——收到即回 pong,不路由、不记录(§5.1)。
 
 ### 6.3 公网加固清单
 
-wss 强制 + 证书;hello 失败限速(防 key 枚举);单 IP / 全局连接数上限;单帧上限;pub 令牌桶;hub-key 连接鉴权(必填,fail-fast 启动);apiKey 白名单不做(它定义命名空间边界)。
+wss 强制 + 证书;hello 失败限速(防 key 枚举,60 次/分/单 IP);单帧上限;pub 令牌桶(100/s + 突发 100,**当前代码临时停用**——定向流式推送会被误限 RATE_LIMITED 丢帧,常量与配置保留、恢复只差取消注释);hub-key 连接鉴权(必填;缺省回退 jar 内置开发默认密钥,显式置空才 fail-fast,公网部署必须显式配置);apiKey 白名单不做(它定义命名空间边界)。
 
 ---
 
@@ -327,18 +329,20 @@ worker 的 agent 执行**复用 Spring AI 2 框架**,不手搓 agent 循环/工�
 主 agent advisor 链(每 run 新建实例,状态随实例隔离):
 
 ```
-AgentStatusAdvisor(agent 生命周期事件,最外层 +5) → RoundIndexAdvisor(轮次索引+耗时,+10) → SkillAdvisor(内置 skill 渐进式披露索引;外部 skill 不进提示词,仅经 `/` 菜单手动选用) → LoopRepeatGuardAdvisor(事件发射 + 工具循环 + 死循环检测)
-→ DialogInsertAdvisor(队列项「插入到当前对话」,主 agent 专属) → EmptyResponseRetryAdvisor(空响应重调,独立插件)
-→ TransientErrorRetryAdvisor(瞬时错误退避,独立插件) → AdaptiveMaxTokensAdvisor(自适应输出预算,独立插件,order=工具循环+250,Guard 外侧)
-→ ModelLengthGuardAdvisor(输出预算耗尽护栏,独立插件 model-length-guard,finish_reason=length,order=工具循环+300)
-→ ContextCompressionAdvisor(上下文压缩,独立插件,最内层重试/压缩侧) → RateLimitAdvisor(模型请求限流,独立插件,order=工具循环+500,最内层)
+[外层 → 内层;HP = HIGHEST_PRECEDENCE,DEF = ToolCallingAdvisor.DEFAULT_ORDER(=HP+300);全部经 AdvisorProvider 注册、按 order 排序]
+AgentStatusAdvisor(agent 生命周期事件,HP+5,最外层) → RoundIndexAdvisor(轮次索引+耗时,HP+10) → SystemInfoAdvisor(HP+50,system-info 插件) → AgentsMdAdvisor(HP+60,agents-md 插件) → SkillAdvisor(HP+100,内置 skill 渐进式披露索引;外部 skill 不进提示词,仅经 `/` 菜单手动选用) → GitAutoSyncAdvisor(HP+140,git 插件自动同步) → SlashTokenResolveAdvisor(HP+150,opaque token 解析) → FileAttachmentAdvisor(HP+160,@ 图片附件注入)
+→ [工具循环 ToolCallingAdvisor 层] WorkerToolEventAdvisor(DEF,核心事件发射) → FileChangeAdvisor(DEF+1,file-change 插件)
+→ [工具循环外侧重试/护栏层] DialogInsertAdvisor(队列项「插入到当前对话」,主 agent 专属,task-input-queue 插件,DEF+30) → EmptyResponseRetryAdvisor(空响应重调,独立插件,DEF+100)
+→ TransientErrorRetryAdvisor(瞬时错误退避,独立插件,DEF+200) → AdaptiveMaxTokensAdvisor(自适应输出预算,独立插件,DEF+250,Guard 外侧)
+→ ModelLengthGuardAdvisor(输出预算耗尽护栏,独立插件 model-length-guard,finish_reason=length,DEF+300)
+→ ContextCompressionAdvisor(上下文压缩,独立插件,DEF+400) → RateLimitAdvisor(模型请求限流,独立插件,DEF+500) → TokenCalibrationAdvisor(限流插件 token 估算校准记账,order=0 绝对值=全链最内层)
 ```
 
 - agent 生命周期事件由 `AgentStatusAdvisor`（全链最外层，`StreamAdvisor`）驱动 `AgentEntity` 的 per-run 状态机发射：`adviseStream` 入口 → `beginRun()`（`agent.started` + `agent.status{running}`）；`doOnComplete`/`doOnError`/`doOnCancel` → `claimTerminal(completed|error|stopped, 附言)`，终态发射顺序固定 `error? → agent.done → agent.status{终态}`。它**不继承** `ToolCallingAdvisor`——只需「整轮一次」的流生命周期信号，而工具循环递归只重入比自己更内层的 advisor，故挂在外侧恰好每次 `AgentRunner.run()` 进一次；最外层还保证终态晚于 message/usage 与 rounds 闭合落盘（前端以主 agent 终态 `agent.status` 为拉 rounds 的触发点）。详见 §7.20.1。
 - 核心事件发射由 `WorkerToolEventAdvisor` 完成(继承 Spring AI `ToolCallingAdvisor`,重写受保护 hook 发射 delta/message/usage/tool 等事件,**不另起一层重复实现递归循环**)。
 - 重试退避算法由 `worker.retry.strategy` 选择,空响应重试与瞬时错误重试共享:`fixed`(默认,固定 `backoff-base-ms` 间隔、`max-request-retries` 默认 30 次,适合网络抖动场景的稳定节奏恢复)或 `exponential`(`base × factor^(n-1)` 递增退避);未知取值回落 `exponential`(旧行为)。
 - `ModelLengthGuardAdvisor`(独立 `model-length-guard` 插件,order=工具循环+300,瞬时重试内侧、上下文压缩外侧):识别「输出预算耗尽」这一确定性失败,三条路径殊途同归报同一错误。**帧+异常双信号改造**:检测到耗尽时先向下游下发合成 `finish_reason=length` 帧,再抛非重试异常 `ModelLengthExhaustedException`。①真实 length 帧:不在 doOnNext 就地抛(会把元素转成 error,帧到不了外层)——改为透传帧 + 记 flag,流 complete 时若 flag 置位再抛;②stall/③断流:onErrorResume 里先 concatWith 下发合成帧(`ChatGenerationMetadata.builder().finishReason("length")`)再 Flux.error(原判定异常),Reactor 保证 onNext 先于 onError 到达外层。三条路径的「输出已达上限」判定(无 tokenizer,CJK≈1 token、其余≈4 字符 1 token):模型配置了 maxTokens 时用 20%~40% 容差的 ≈maxTokens 比例判定;**未配置 maxTokens 时**(provider 用服务端默认预算,客户端不可见)用绝对阈值兜底——自估输出 ≥ `worker.limits.length-disconnect-min-tokens`(默认 32768)即判定,「断流+已输出数万 token」是预算耗尽强信号,重试代价极高(每次重放整段长思考,长思考模型一轮可耗数万 token、循环几十分钟)。错误为自定义非重试异常(穿透瞬时重试,避免放大瞬态事件风暴),信息含「精简输入/拆分任务/降低 reasoningEffort/调大 maxTokens」建议,经任务层 error 收口呈现给用户。**合成帧语义不可移除**——这是跨插件协议契约:AdaptiveMaxTokensAdvisor(§7.3.1)只认帧,不认异常类型/文案。
-- `LoopRepeatGuardAdvisor` 叠加**死循环检测**:比较本轮与上一轮工具调用签名(名称+参数集合,顺序无关),连续重复达 `worker.limits.max-repeated-tool-rounds`(默认 3)**不再直接中断**——而是把一条提醒文本作为该轮工具执行结果回传 AI,留一次纠正机会(本轮不真正执行工具,与 `MissingToolCallbackResolver` 同构:错误信息作为工具结果回传由 AI 自纠);若提醒后下一轮仍下发完全相同的工具调用,才中断任务(error 收口)。守卫逻辑不在 advisor 体内,而在装饰 `ToolCallingManager` 的 `LoopRepeatGuardToolManager` 中(框架唯一允许「既阻止真实工具执行、又能注入合成工具结果回传模型」的扩展点是 `executeToolCalls`),advisor 仅负责把守卫装饰器装配到工具循环入口,事件逻辑全部继承 `WorkerToolEventAdvisor`。
+- `LoopRepeatGuardAdvisor` 已退役,死循环检测只保留一个装饰器:守卫逻辑在装饰 `ToolCallingManager` 的 `LoopRepeatGuardToolManager` 中(框架唯一允许「既阻止真实工具执行、又能注入合成工具结果回传模型」的扩展点是 `executeToolCalls`),装饰动作由 `AgentBuilder` 在装配工具循环时完成;比较本轮与上一轮工具调用签名(名称+参数集合,顺序无关),连续重复达 `worker.limits.max-repeated-tool-rounds`(默认 3)**不再直接中断**——而是把一条提醒文本作为该轮工具执行结果回传 AI,留一次纠正机会(本轮不真正执行工具,与 `MissingToolCallbackResolver` 同构:错误信息作为工具结果回传由 AI 自纠);若提醒后下一轮仍下发完全相同的工具调用,才中断任务(error 收口)。
 - `DialogInsertAdvisor`(普通 StreamAdvisor,在主 agent 的工具循环下行阶段)把任务队列「插入到当前对话」的用户消息 drain 并追加给 AI + 发射 `user.message` 事件 + 追加 agent conversation;仅主 agent 装配(`DialogInsertAdvisorProvider.appliesTo` 比 agentId==mainAgentId,子 agent 对话是一次性嵌套,不接收任务队列输入,也不与主 agent 抢同一个插入队列)。
 - 主 Agent 与子 Agent **共用同一执行入口与 Advisor 链**,仅 agentId 不同;子 agent 不挂计时与 skill,但同挂上下文压缩。
 - **advisor 取数统一走 `AgentContext.execution()`(ExecContext 槽位)**:taskId→`subjectId()`、模型配置→`snapshot()`(configId 经 `snapshot().configId()` 取)、事件→`emitter()`、终态判定→`terminal()`;agent 装配经 `ctx.agentFactory().create(agentId)`(预绑定工厂,静态代理)。worker 不再有 `properties` 黑盒 map 与 `get("taskEntry")` 强转(§7.20/§14.11)。**fileChanges 不进 ExecContext 也不进 TaskRuntime**(插件功能不占核心接口,§14.11 判据)——collector 是 `FileChangeAdvisor` 的 per-run 实例字段,按轮落盘走 `RoundClosedListener` 回调,读侧走插件自己的 `task.fileChanges` RPC(§7.15.2)。
@@ -384,7 +388,7 @@ AgentStatusAdvisor(agent 生命周期事件,最外层 +5) → RoundIndexAdvisor(
 
 **机制**(`model-rate-limit` 插件的 `RateLimitAdvisor` 实现 `CallAdvisor`/`StreamAdvisor`,经 Advisor 链注入(order=工具循环+500,最内层);主/子/AI 审议/池成员全部自动生效):
 
-- 每模型独立配置(`worker.models[].params`):`rpm`(每分钟发起数,滑动窗口)、`max-concurrency`(同时 in-flight 上限,**长思考重叠的核心闸门**)、`tpm`(可选参考线)、`token-est-factor`(估算系数初始值)。**缺省回退全局默认限流(rpm=60 / max-concurrency=4 / tpm=0),不是裸奔不限流**;某模型要关闭某维度,在其 params 显式设 0。
+- 每模型独立配置(`worker.models[].params`):`rpm`(每分钟发起数,滑动窗口)、`max-concurrency`(同时 in-flight 上限,**长思考重叠的核心闸门**)、`tpm`(可选参考线)、`token-est-factor`(估算系数初始值)。**缺省回退全局默认限流,不是裸奔不限流**(Java 默认 rpm=60 / max-concurrency=4 / tpm=0;jar 内 `application.yml` 出厂值为 rpm=120 / max-concurrency=6 / tpm=0);某模型要关闭某维度,在其 params 显式设 0。
 - 请求起步经 `ModelRateLimiter.acquire` 排队等放行:rpm 窗口 / 并发信号量 / tpm 压力三关;超限进有界等待队列(默认队列 8、等 5 分钟),**正常排队不报错**,仅队列满 + 超时才抛 `ModelRateLimitException`(非重试,文案含「减少并发派发/调大配置」建议)。阻塞等待发生在虚拟线程上(park,零线程开销)。
 - **tpm 记账**:流中无协议级 usage(OpenAI 兼容只在末帧带),故流中用自算文本 token 粗估(CJK≈1、其余≈4 字符 1 token)累计;请求完成后用厂商真实 usage 记账入 60s 窗口,并 EMA 反向校准估算系数(`token-est-factor`,每模型独立,持久化 `~/.everyagent/model-rate-state.json`,重启接续)。token 估算经 Advisor 的 `doOnNext`/`doOnComplete` 回调驱动。
 - 全局默认:`worker.limits.model-rate.{queue-capacity, wait-timeout-ms, est-window-sec, est-safety-ratio, est-ema-alpha, default-rpm, default-max-concurrency, default-tpm}`。
@@ -518,7 +522,7 @@ ask 管道承载第二类阻塞请求:**危险操作授权**。`PermissionGate` 
 
 ### 7.10 命令沙箱(插件化,多后端)
 
-沙箱后端已从 worker 核心抽离为独立插件(`every-agent-plugins/sandbox-windows-mic/`、`every-agent-plugins/sandbox-wsl-ubuntu/`)。`SandboxBackend` SPI 极简化为**挂载 + 工作区生命周期 + 标识**三个方法,不执行命令、不翻译路径、不涉及工具注册、不涉及授权策略。
+沙箱后端已从 worker 核心抽离为独立插件(`every-agent-plugins/sandbox-windows-codex/`、`every-agent-plugins/sandbox-windows-mic/`、`every-agent-plugins/sandbox-wsl-ubuntu/`)。`SandboxBackend` SPI 极简化为**挂载 + 工作区生命周期 + 标识**三个方法,不执行命令、不翻译路径、不涉及工具注册、不涉及授权策略。
 
 **SandboxBackend SPI(极简):**
 - `id()` — 后端标识。
@@ -527,9 +531,10 @@ ask 管道承载第二类阻塞请求:**危险操作授权**。`PermissionGate` 
 
 | 后端 | id | priority | mount 行为 | 说明 |
 |---|---|---|---|---|
-| **WSL Ubuntu** | `wsl-ubuntu` | 10 | 批量 drvfs 挂载 → `/c/...` | 原 wsl-direct 改名,独立插件 |
-| **Windows MIC** | `windows-mic` | 5 | 返回原路径 | 命令跑在宿主上,独立插件 |
-| **DIRECT(默认沙箱)** | `direct` | — | 返回原路径 | OsSandbox 自身,无 Provider |
+| **WSL Ubuntu** | `wsl-ubuntu` | 10 | 批量 drvfs 挂载 → `/c/...` | 原 wsl-direct 改名,独立插件;**plugin.json 默认 enabled=false** |
+| **Windows Codex** | `codex` | Windows?8:0 | 返回原路径(挂载概念不适用) | Windows 原生强隔离(双本地账户 `EACodexOffline`/`EACodexOnline` + 组 `EACodexSandboxUsers` + WRITE_RESTRICTED 受限令牌 + capability SID + 防火墙/WFP);工作区树经 capability SID ACE 可写、区外只读;**默认启用,即 Windows 出厂默认后端**(优先级低于 wsl-ubuntu,但后者默认禁用;setup 延迟到首次 `create()` 才做、弹一次 UAC) |
+| **Windows MIC** | `windows-mic` | 5 | 返回原路径 | 命令跑在宿主上(Medium IL),独立插件;**plugin.json 默认 enabled=false** |
+| **DIRECT(兜底沙箱)** | `direct` | — | 返回原路径 | OsSandbox 自身,无 Provider;auto 下无任何可用后端插件时兜底 |
 
 **后端选择时机(时序红线)**:`SandboxProvider` 全部由插件在 `PluginLoader` 的 `@PostConstruct` 里注册,而 `PluginLoader → WorkerServices → OsSandbox` 的构造依赖链决定了 **OsSandbox 一定先于插件激活完成初始化**。因此后端**不得在 `@PostConstruct` 一次性定论**:
 - `OsSandbox` 的 delegate 按 **`SandboxProviderRegistry` 代次(generation,每次注册/注销自增)惰性解析**:首次访问(`id()`/`mount()`/`onWorkspaceRemoved()`)或代次变化时重新 `select()`,解析结果(含「无可用后端」的 null)按代次缓存,不产生每次调用的重复探测;
@@ -558,7 +563,7 @@ ask 管道承载第二类阻塞请求:**危险操作授权**。`PermissionGate` 
 **核心宿主访问工具与沙箱命令工具共存:**
 - **核心的命令工具**(windows-mic / DIRECT 后端):核心自带,Windows 上 PowerShellTool 以 `powershell` 工具名注册;Linux 上 BashTool 以 `bash` 工具名注册。直接 ProcessBuilder 执行,走自己的授权链。
 - **沙箱插件的命令工具**:沙箱插件不只提供 `SandboxBackend`(挂载+清理),还提供 `ToolProvider`(命令工具)。沙箱完全自由:自己实现 CommandExecutor、自己扫描路径、自己决定授权策略。通过 `appliesTo(ToolContext)` 控制生效条件(如 `ctx.sandbox().id().equals("wsl-ubuntu")`)。
-- 两者通过 `ToolProvider.appliesTo()` 各自控制生效条件,不冲突。核心 `DirectShellToolProvider` appliesTo = 生效后端 id == `direct`(即无任何 SPI 后端),Windows 提供 `powershell`、其余提供 `bash`;windows-mic / wsl-ubuntu / codex 各自提供自己方言的命令工具。
+- 两者通过 `ToolProvider.appliesTo()` 各自控制生效条件,不冲突。核心 `DirectShellToolProvider` appliesTo = 生效后端 id == `direct`(即无任何 SPI 后端),Windows 提供 `powershell`、其余提供 `bash`;各沙箱插件提供自己方言的命令工具:windows-mic 提供 `powershell`、wsl-ubuntu 提供 `bash`、codex 提供 `powershell`(rg 预注入 PATH;PowerShell `-File` 为主形态、CMD 回退,**无独立 bash 工具**)。
 - **只有某后端才做得到的隔离能力,其命令与状态一律归该插件**:wsl-ubuntu 的 `/禁用网络` 由 `sandbox-wsl-ubuntu` 自己经 `registerSlashProvider`/`registerSlashTokenResolver` 注册、状态写任务 `metadata`,并在自己的 CommandExecutor 里读取生效;worker 核心不持有该开关,也不为做不到断网的后端预留同名命令。
 
 **路径翻译流程:**
@@ -566,7 +571,7 @@ ask 管道承载第二类阻塞请求:**危险操作授权**。`PermissionGate` 
 2. 工具参数翻译:`FsToolSupport` 收到 AI 传的路径后调 `pathRegistry.toHostPath()` 翻译为宿主路径;无映射原样保留让 Java NIO 自然报错。
 3. 非工具路径翻译:`SkillAdvisor`(知识包路径)和 `ExternalFileTokenResolver`(@ 引用)直接调 `pathRegistry.toSandboxPath()`。
 
-- `worker.sandbox.type`: `auto`(默认)| `wsl-ubuntu` | `windows-mic` | `none`。旧值 `wsl-direct` → 归一为 `wsl-ubuntu`(静默兼容);旧值 `wsl-bwrap`/`bwrap`/`wsl` → 归一为 `auto` 并 WARN。WSL 专属配置(distro/tarball 等)由插件通过 `plugin.json contributes.config` 自管。
+- `worker.sandbox.type`: `auto`(默认)| `wsl-ubuntu` | `windows-mic` | `none`。归一化别名:旧值 `wsl-direct`/`direct` → `wsl-ubuntu`(静默兼容);`wsl-bwrap`/`wsl`/`bwrap` → 归一为 `auto` 并 WARN;`acl`/`mic` → `windows-mic`;未知/空 → `auto`。WSL 专属配置(distro/tarball 等)与 codex 专属配置(`codex.home`/`codex.account-prefix`/`codex.network-policy`(auto|offline|online)/`codex.proxy-ports`/`codex.allow-local-binding`/`codex.java-home`)均由各插件通过 plugin.json `contributes.config` 自管。
 - **WSL 发行版可用性由 sandbox-wsl-ubuntu 插件全责保证(desktop 零参与,2026-10 移交)**:发行版探测与自动导入(`wsl -l -q` 探测 → 缺失时 sha256 校验 + `wsl --import EveryAgent` → 重探)全部住在 `WslUbuntuSandboxProvider.isAvailable()` 内,由上述后端选择时机的首次 `select()` 惰性触发——插件未启用/未注册即全链路零 WSL 调用。desktop 主进程**不做任何 WSL 探测**(曾有的启动期 utilityProcess preflight 硬编码了插件领域知识——发行版名/镜像文件名/导入语义——且与插件启用开关脱节,禁用插件后仍 spawn wsl.exe,已删除)。插件自带资源(rootfs 镜像、eagent-run.py)按三级链定位:`<pluginDir>/wsl/`(.eap 安装/源码开发态)→ `WorkerConfig.resolveRuntimeDir()/wsl/`(打包 desktop 态,镜像经插件 `runtime/` 目录并入程序根 runtime/,见 §7.17 程序附属文件;插件 `enabled=false` 时不进安装包)→ 配置 `worker.sandbox.wsl.tarball`(手动场景,相对系统目录解析)。
 - **Windows Medium IL 契约**(对 windows-mic 后端):沙箱进程运行在 Medium IL(Restricted Token 去特权但不降级),天然可写工作区与已授权目录,不对文件系统做任何标注或 ACL 修改——零副作用、零残留。越界写拦截由 PermissionGate 责任链承担。
 - **网络策略**:两级开关,默认放行——① 全局 `worker.sandbox.allow-network=false`(经 `SandboxConfig.networkDenied` 交给后端:wsl-ubuntu 真断网、codex 选 Offline 账户;mic/direct 只剥代理 env 拦不住直连);② 任务级 `/禁用网络`(**只有 wsl-ubuntu 后端做得到**,故整个能力归 `sandbox-wsl-ubuntu` 插件自带:插件自己注册 slash 命令提供者 + token 提交解析器,状态写任务 `metadata["networkBlocked"]`(核心不感知 key),随 meta.json 持久化、再运行保持;`/` 菜单条目按当前生效后端 `sandbox().id()` 决定是否出现,其他后端不提供该命令)。落地由沙箱插件自己的 CommandExecutor 负责:wsl-ubuntu = 发行版内 `unshare -n` 新建无 eth0 的 netns(DNS/回环全断)。worker 核心不持有任何任务级禁网状态,通用 `CommandExecutor`/`OsSandbox` 也不再判定网络。
@@ -574,6 +579,7 @@ ask 管道承载第二类阻塞请求:**危险操作授权**。`PermissionGate` 
 - **环境侧信道闸门(§7.17 凭据纪律的环境维度)**:沙箱隔离了文件系统与网络,**默认还会把宿主进程环境整块继承**给子进程——宿主 shell 里散落的 API key 因此对沙箱内任意命令(`Get-ChildItem Env:`/`env`/`cat /proc/self/environ`)可见,并随工具输出落进事件日志与模型上下文。故**一切子进程环境构造点必须先过 `SecretPatterns.scrubEnv`/`scrubInPlace`**,共 7 处:`CodexCommandExecutor.childEnv`(codex 命令 env)、`RunnerClient.spawnWithLogon` + `RunnerClient.runnerEnvironment`(runner env block)、`WindowsSandbox.buildEnvBlock`(mic env block)、`TerminalPtyFactory.open`(内嵌终端 PTY)、`OsSandbox.runDirectCommand` 与 `OsSandbox.spawnToFileRedirected`(同一 `scrubInPlace` 口径,`ProcessBuilder.environment()` 活视图只能就地删)。判定两条:①**值形态指纹**(不看变量名——真事故里泄露的 key 挂在名叫 `codex` 的变量上)②**名字属凭据词族**(含裸 `key`,覆盖 `HUB_KEY`/`DEPLOY_KEY` 这类无指纹随机值)且值非短占位;`SSH_AUTH_SOCK`/`AUTHLOGONSERVER`/`PATH`/`SYSTEMROOT` 等运行时关键变量走**豁免表**(误删会直接打断 git-over-ssh 与进程启动)。审计**只打被删变量名、绝不打值**;规则源住在 `every-agent-plugin-api/util/SecretPatterns`(三层与插件共用,不新增跨层依赖)。文本输出掩码（`redact`/`mask` 等）已全部住在 `secret-redaction` 插件的 `SecretRedactor` 内,核心不持有脱敏逻辑也不依赖该插件。
 
 - **子进程临时目录供给(Windows codex 沙箱,2026-10)**:沙箱账户不加载 profile(`CreateProcessWithLogonW` 无 `LOGON_WITH_PROFILE`),自身无 `%USERPROFILE%`;而命令 env 继承自 worker(真实用户)——`TEMP`/`TMP` 指着真实用户的 `%LOCALAPPDATA%\Temp`,沙箱账户对之**无写权限**(ACL 只授真实用户/SYSTEM/Administrators),`mvn`/`pytest`/jar 签名一类用临时目录的工具全数 `Access Denied`。Codex 原生靠账户登录加载 profile 获得 `%TEMP%`;本沙箱的等价物是**子进程真正可写的**工作区 `<workspace>/.everyagent/tmp`——**落点必须 capability 覆盖**:命令子进程跑在 `WRITE_RESTRICTED` 受限令牌下(SandboxTokenFactory,restricting SIDs = caps+user+logon+Everyone),写检查要求 restricting 列表也授予权限,**普通组 ACE(如 EACodexSandboxUsers (M))对受限令牌的写检查无效**——实测 `<codexHome>/.sandbox/tmp` 组 ACL 齐全仍全树写拒,只有 setup 注入过 capability SID ACE 的工作区树可写。故命令 env(`CodexCommandExecutor.childEnv(workspaceRoot)`)把 `TEMP`/`TMP` 指到工作区 `.everyagent/tmp`(与 ChildProcess.OutputFiles 同一落点,目录由每次 spawn 的 scratchDir `Files.createDirectories` 保证);runner 自身 env(`RunnerClient.runnerEnvironment`)的 TEMP 仍指 `<codexHome>/.sandbox/tmp`(runner 非受限令牌,组 ACL 对其有效,runner-stderr.log 落那里)。共享目录语义即临时目录语义,不做会话隔离与清扫。
+- **沙箱自愈(Windows codex 沙箱,2026-10)**:执行链内识别「可愈损伤」并自动重建——账户/组被外部删除(Win32 1332/1317)、密码被外部改动(1326 系)、凭据文件丢失/损坏/版本失配/DPAPI 解密失败、setup marker 被删——统一经 `Reprovisioner` 强制完整重 setup(重建账户/组、轮换密码、重写凭据文件与 marker)后**原地重试一次**(至多一次防循环);setup 失败回传双层错误。此前仅「密码失配」可自愈,现已并入同一管线。
 
 - **沙箱 profile 供给(Windows codex 沙箱,2026-10)**:沙箱账户此前无 profile——env 型工具(git/npm/pip)继承的 `USERPROFILE`/`HOME` 指宿主目录(只读,配置/缓存写全拒;宿主 `.gitconfig`/`.npmrc` 凭据泄露面),JVM 系的 `user.home` 更回落 `C:\`(mvn 默认仓库 `C:\.m2` 建不了,exit 1)。正解<b>治根不逐工具特判</b>(用户决策;曾试 settings.xml 生成+MAVEN_ARGS 注入=file:// 宿主镜像的 maven 特判方案,因通用性被否,提交 50165a5 后撤销):runner 的 `CreateProcessWithLogonW` 常态化 `LOGON_WITH_PROFILE`(codex 原生仅 execution alias 场景开,我们常态化)→ Windows 为沙箱账户创建/加载真 profile(`C:\Users\<account>`,默认落点,无法定制)→ ①`childEnv` 把 `USERPROFILE`/`HOME`/`APPDATA`/`LOCALAPPDATA` 指到该 profile(env 型工具);②JVM 系零配置——`user.home` 走 `GetUserProfileDirectory`,profile 加载后自然正确。可写性实测:仅授账户 Full(无组/无 capability SID)的目录,WRITE_RESTRICTED 令牌可写(写检查=DACL∩restricting SIDs,账户 user SID 两边都在),无需任何 ACE 补丁。代价:首启建 profile 一次(秒级,RunnerClient 首次 spawn 后自检目录存在,缺失打 WARN)+各类依赖冷下载一份(账户级持久复用,与宿主缓存互不污染)。`TEMP`/`TMP` 维持工作区 `.everyagent/tmp` 不变(临时文件随任务走,不写脏持久 profile;对齐 codex 写根模型)。**git safe.directory 注入**(codex 原生 `sandbox_utils::inject_git_safe_directory` 逐语义移植):仓库属主是宿主用户而命令跑在沙箱账户下,git ≥2.35.2 的 ownership 保护直接 fatal;profile 隔离切断了对宿主 `~/.gitconfig` 的借读后,宿主曾有的 `safe.directory=*` 豁免不再可见(那本就是意外依赖+泄露面,实测宿主确有 `*`)。`childEnv` 经 git 官方 env 配置机制(`GIT_CONFIG_COUNT/KEY_n/VALUE_n`)注入 `safe.directory=<向上找到的 git 树根>` 与 `<root>/*`(嵌套仓库一并信任;`.git` 为文件的 worktree 形态用 `Files.exists` 覆盖),每次 spawn 按当时 workspaceRoot 重算,零落盘,精确到本仓库树——比宿主原 `*` 更收紧。卸载:`Uninstaller` 阶段二已有 `DeleteProfileW`→`NetUserDel`(先删 profile 再删账户,顺序保证按 SID 可定位)。
 
@@ -590,7 +596,7 @@ ask 管道承载第二类阻塞请求:**危险操作授权**。`PermissionGate` 
 
 ### 7.11 提权拦截
 
-wsl-bwrap 后端的 seccomp 内核级提权拦截已随 bwrap 后端删除而移除。wsl-ubuntu 后端以 root 完整权限直连,无提权授权概念。windows-mic/DIRECT 后端通过 Restricted Token / PermissionGate 文本扫描拦截危险命令。
+wsl-bwrap 后端的 seccomp 内核级提权拦截已随 bwrap 后端删除而移除。wsl-ubuntu 后端以 root 完整权限直连,无提权授权概念。windows-mic / codex / DIRECT 后端通过 Restricted Token(mic=去特权 Medium IL;codex=WRITE_RESTRICTED + capability)+ PermissionGate 文本扫描拦截危险命令。
 
 ### 7.12 原生 git 执行与凭证
 
@@ -737,8 +743,8 @@ worker 的两条运行期责任链迁移为与任务洋葱同一的 filter 形�
 ├─ sandbox/                          # 沙箱持久状态(home/opt/usr-local/resolv.conf/env;worker.sandbox.persistent-root 可覆盖)
 │   └─ distro/                       # WSL 托管发行版 rootfs(原 wsl/distro 迁入;运行期状态,可整体重装)
 └─ skills/                           # skill 目录(一目录一 skill,目录下必有 skill.md)
-    ├─ agent-dispatch/skill.md       #   内置(启动时从 classpath 物化)
-    ├─ plan/skill.md                 #   内置
+    ├─ agent-dispatch/skill.md       #   subagent 插件经 SkillContributor SPI 贡献(启动时从 classpath 物化)
+    ├─ plan/skill.md                 #   内置(启动时从 classpath 物化)
     └─ <user-skill>/skill.md         #   外部(用户放置,可附带 scripts/ 等由 skill.md 引用)
 ```
 
@@ -859,7 +865,7 @@ Input:  queued → consumed | discarded(任务取消)
 
 **与 §7.10 环境闸门的分工(决定"装卸插件"各自影响什么)**:凭据防护分两半,一半可装卸、一半常驻——①**输出掩码**(文本脱敏的全部概念与功能:`redact`/`mask`/`countSecrets`/`hasSecret` + 值形态指纹规则)住在 `secret-redaction` 插件内的 `SecretRedactor` 类里,核心(plugin-api/worker)**不持有任何脱敏逻辑、不依赖该插件**;禁用或删除该插件即彻底删除全部文本脱敏概念与功能(落盘/推送/回灌会重新带回明文)。②**env 继承剔除**住在 `SecretPatterns`(plugin-api)+ 7 处子进程环境构造点(codex/mic 两后端 + worker 的 OsSandbox/TerminalPtyFactory),**不属于任何插件、不随插件装卸而失效**——进程边界不该由可选扩展决定存在与否。`SecretPatterns` 只负责环境变量清理(`scrubEnv`/`scrubInPlace`/`isSecretBearing`/`isSecretName`),其内部的值形态指纹检测仅供 env 清理用,不对外暴露;两份规则当前口径一致但各自独立维护。
 
-**装载前置(易踩)**:内置插件不进根 reactor(根 `<modules>` 只有 contract/plugin-api/hub/worker),`deploy.py` 也只 `-pl every-agent-hub,every-agent-worker -am package`;桌面发行版由 `npm run dist` 链中的 `build:plugins` + `copy:plugins` 构建并 staging(§9,安装包内落 `<resourcesPath>/every-agent-plugins/`);`BuiltInPluginScanner` 要求 `every-agent-plugins/<id>/target/classes/plugin.json` **且** `target/` 下存在非 sources/javadoc 的 jar,否则 WARN「内置插件未构建,请先 mvn package」并跳过(根 plugin.json 的 `enabled` 只是第二道门)。**重建全部插件的统一入口是 `python scripts/build-plugins.py`**(先跑 every-agent-web 的 esbuild bundle、再逐插件 `mvn clean package`;插件清单动态扫描 `every-agent-plugins/*/pom.xml` 与 `*/web/index.ts`,新增插件自动纳入,支持 `--only/--exclude/--java-only/--web-only/--list/--check/--dry-run`);单改一个插件也可 `mvn -f every-agent-plugins/secret-redaction/pom.xml clean package`。**另防一类静默失效**:`findTargetJars` 把 `target/` 下所有非 sources/javadoc 的 jar **按字典序全部**放进插件 `URLClassLoader`,故升级 artifact 版本后残留的旧版本 jar(如 `*-0.11.0.jar` 与 `*-1.0.0.jar` 并存)会因 `'0'<'1'` 排在前面而**遮蔽新类**——表现为"已 mvn package、已重启,改动却毫无效果",且 `RunnerMaterializer.pluginCodeSource()` 也可能解析到旧 jar 而把旧类物化给 runner。因此改内置插件后必须 `clean package`(clean 才能清掉旧 jar);若旧 jar 正被运行中的 worker 锁定而删不掉,则**必须先停止 worker 再构建**,单靠重启无效。同理适用于全部内置插件——`task-edit-resend` 出现在 worker pom 里仅是 `test` scope(测试内等价注册其节点),不构成运行时依赖,不构成"插件进依赖树"的先例。
+**装载前置(易踩)**:内置插件不进根 reactor(根 `<modules>` = contract / plugin-api / hub / worker + `every-agent-plugins/task-edit-resend`——后者是唯一例外,供 worker 测试以 **test scope** 等价注册其节点,不构成运行时依赖),`deploy.py` 也只 `-pl every-agent-hub,every-agent-worker -am package`;桌面发行版由 `npm run dist` 链中的 `build:plugins` + `copy:plugins` 构建并 staging(§9,安装包内落 `<resourcesPath>/every-agent-plugins/`);`BuiltInPluginScanner` 要求 `every-agent-plugins/<id>/target/classes/plugin.json` **且** `target/` 下存在非 sources/javadoc 的 jar,否则 WARN「内置插件未构建,请先 mvn package」并跳过(根 plugin.json 的 `enabled` 只是第二道门)。**重建全部插件的统一入口是 `python scripts/build-plugins.py`**(先跑 every-agent-web 的 esbuild bundle、再逐插件 `mvn clean package`;插件清单动态扫描 `every-agent-plugins/*/pom.xml` 与 `*/web/index.ts`,新增插件自动纳入,支持 `--only/--exclude/--java-only/--web-only/--list/--check/--dry-run`);单改一个插件也可 `mvn -f every-agent-plugins/secret-redaction/pom.xml clean package`。**另防一类静默失效**:`findTargetJars` 把 `target/` 下所有非 sources/javadoc 的 jar **按字典序全部**放进插件 `URLClassLoader`,故升级 artifact 版本后残留的旧版本 jar(如 `*-0.11.0.jar` 与 `*-1.0.0.jar` 并存)会因 `'0'<'1'` 排在前面而**遮蔽新类**——表现为"已 mvn package、已重启,改动却毫无效果",且 `RunnerMaterializer.pluginCodeSource()` 也可能解析到旧 jar 而把旧类物化给 runner。因此改内置插件后必须 `clean package`(clean 才能清掉旧 jar);若旧 jar 正被运行中的 worker 锁定而删不掉,则**必须先停止 worker 再构建**,单靠重启无效。同理适用于全部内置插件——`task-edit-resend` 出现在 worker pom 里仅是 `test` scope(测试内等价注册其节点),不构成运行时依赖,不构成"插件进依赖树"的先例。
 
 
 **程序附属文件**:核心附属文件(rg 二进制)放**程序根 `<程序根>/runtime/`**(程序根 = JVM 工作目录 user.dir;打包态 = resources 目录,IDE 态 = 仓库根),随安装包分发、运行时只读引用、以字面相对路径 `./runtime` 解析;不打进 jar、不写入系统目录。`worker.program-dir` 配置用于打包态显式指定。**插件附属文件**(如 sandbox-wsl-ubuntu 的 eagent-run.py、WSL 托管镜像)由各插件以**插件根 `runtime/` 子目录**声明,desktop 构建链 `copy-plugin-runtime.mjs` 把已启用插件的该目录合并进共享 `runtime/`(`enabled=false` 的插件不复制且清残留,故禁用 wsl 插件时镜像不进安装包);插件运行期经 `WorkerConfig.resolveRuntimeDir()` 以契约方式定位(与 rg 同一程序根口径,插件不做 cwd 假设),插件目录内自带的同名资源(如 `<pluginDir>/wsl/`)优先于共享 runtime。
@@ -874,13 +880,13 @@ Input:  queued → consumed | discarded(任务取消)
 
 **skill 知识包路径的沙箱注入**:`SkillAdvisor` 注入 system prompt 的知识包路径按当前沙箱后端解析(§7.17):WSL 系列沙箱下 `Skill.knowledgePath`(宿主 Windows 绝对路径)经 `WslPathMapper` 翻译为 AI 沙箱内可见的 `/` 开头 Linux 路径(wsl-direct `/c/...`、wsl-bwrap `/mnt/c/...`),使 AI 的 `bash`(`cat`/`grep`)与 `read_file`(经 `FsToolSupport.resolveWslPath` 反向翻译回宿主路径)均能直接使用同一路径;非 WSL 后端原样注入宿主路径。`Skill` record 仍存宿主绝对路径(物化/沙箱挂载均以此为准),路径翻译仅发生在注入提示词时。
 
-**skill 目录结构与外部 skill**:skill 统一为「一个目录一个 skill」,目录下必须有 `skill.md`。内置 skill(agent-dispatch、plan、skill-creator)启动时由 classpath `skill/<id>.md` 物化为 `<skillsDir>/<id>/skill.md`(幂等:目标已存在且大小一致则跳过;不一致则覆盖),同时清理旧扁平 `<id>.md` 担留(从扁平单文件迁移到目录形态的一次性清理)。外部 skill 由用户手工放置 `<目录名>/skill.md`(可附带 `scripts/`、配置等任意文件,由 `skill.md` 正文引用、AI 用对应解释器执行——bash/python/node 等不限语言)。**id 规则**:目录名即 skill id,仅允许 `[a-z0-9][a-z0-9-]*`;realpath 必须仍在 `skillsDir` 内(拒绝符号链接越界);与内置或其它外部 skill 同名冲突时跳过并 WARN(内置优先;内置含主动与被动两类,均排除外部重名)。**描述提取**:无 frontmatter、不引入 YAML 依赖;描述 = `skill.md` 首个非空且非 `#` 标题行的正文行,截断至 200 字符;提取失败(不可读/全文仅标题)则描述为空串,仍注册。**披露通道分离**:内置 skill 分主动(`agent-dispatch`、`plan`)与被动(`skill-creator`)两类——主动 skill 由 `BuiltInSkills.getActiveSkills()` 返回 → `SkillAdvisor` 自动注入 system prompt(渐进式披露索引,现有行为不变);被动 skill 与外部 skill 一样**不进 system prompt**,只注册进 `/` 菜单(`SkillSlashProvider` 数据源 = `BuiltInSkills.getAllSkills()`(主动+被动) + 插件 `SkillContributorRegistry.getSkills()`(经 `ctx.registerSkillContributor` 注册,副标题带「插件 · 」前缀区分来源) + `ExternalSkillScanner` 外部合并列表;同 id 去重、优先级 内置 > 插件 SPI > 外部扫描——SPI 是插件自己的声明,外部扫描捞到同 id 只是知识包物化的副产品,不重复出菜单),由用户手动选择后走现有 `SkillSlashTokenResolver` 链路(token 解析为「请使用技能:`<title>`。知识包路径:`<skillPath>`」——被动/外部 skill 不在 prompt 中,路径是 AI 唯一能 `read_file` 知识包的来源,故始终注入),AI 按需 `read_file` 知识包——零新增组件。`/` 菜单条目 title = 目录名,副标题 = 描述提取结果(被动内置 skill 的描述在 `Skill` 构造期硬编码,与主动 skill 一致;插件 SPI 贡献的条目 title/description 取插件声明值,交互与选中执行路径与内置一致)。**扫描时机**:worker 启动时一次性扫描(`@PostConstruct`),运行时经 `skill.reload` RPC 热加载(重新扫描并替换缓存,广播 `config.changed{keys:["skills"]}`,前端 `/` 菜单下次打开即拉取最新列表);只认 `skillsDir` 一级子目录,不递归;扫描器排除全部内置 id(含被动,`BuiltInSkills.getAllSkills()`)。**明确不做**:目录监听/watch、skill 开关 UI、脚本注册为独立 AI 工具(脚本一律由 AI 用对应解释器执行——bash/python/node 等不限语言,复用现有沙箱与 PermissionGate)、frontmatter/完整 YAML 语法支持。
+**skill 目录结构与外部 skill**:skill 统一为「一个目录一个 skill」,目录下必须有 `skill.md`。worker 内置 skill 启动时由 classpath `skill/<id>.md` 物化为 `<skillsDir>/<id>/skill.md`(幂等:目标已存在且大小一致则跳过;不一致则覆盖),同时清理旧扁平 `<id>.md` 担留(从扁平单文件迁移到目录形态的一次性清理)——内置清单 = **plan(主动)+ skill-creator(被动)**;`agent-dispatch` 已迁出核心,由 subagent 插件经 `SkillContributor` SPI 贡献(物化路径与机制同款)。外部 skill 由用户手工放置 `<目录名>/skill.md`(可附带 `scripts/`、配置等任意文件,由 `skill.md` 正文引用、AI 用对应解释器执行——bash/python/node 等不限语言)。**id 规则**:目录名即 skill id,仅允许 `[a-z0-9][a-z0-9-]*`;realpath 必须仍在 `skillsDir` 内(拒绝符号链接越界);与内置或其它外部 skill 同名冲突时跳过并 WARN(内置优先;含主动与被动两类,均排除外部重名)。**描述提取**:无 frontmatter、不引入 YAML 依赖;描述 = `skill.md` 首个非空且非 `#` 标题行的正文行,截断至 200 字符;提取失败(不可读/全文仅标题)则描述为空串,仍注册。**披露通道分离**:内置 skill 分主动(`plan`)与被动(`skill-creator`)两类——主动 skill 由 `BuiltInSkills.getActiveSkills()` 返回 → `SkillAdvisor` 自动注入 system prompt(渐进式披露索引,现有行为不变);被动 skill、插件 SPI 贡献(如 subagent 的 `agent-dispatch`)与外部 skill 一样**不进 system prompt**,只注册进 `/` 菜单(`SkillSlashProvider` 数据源 = `BuiltInSkills.getAllSkills()`(主动+被动) + 插件 `SkillContributorRegistry.getSkills()`(经 `ctx.registerSkillContributor` 注册,副标题带「插件 · 」前缀区分来源) + `ExternalSkillScanner` 外部合并列表;同 id 去重、优先级 内置 > 插件 SPI > 外部扫描——SPI 是插件自己的声明,外部扫描捞到同 id 只是知识包物化的副产品,不重复出菜单),由用户手动选择后走现有 `SkillSlashTokenResolver` 链路(token 解析为「请使用技能:`<title>`。知识包路径:`<skillPath>`」——被动/外部 skill 不在 prompt 中,路径是 AI 唯一能 `read_file` 知识包的来源,故始终注入),AI 按需 `read_file` 知识包——零新增组件。`/` 菜单条目 title = 目录名,副标题 = 描述提取结果(被动内置 skill 的描述在 `Skill` 构造期硬编码,与主动 skill 一致;插件 SPI 贡献的条目 title/description 取插件声明值,交互与选中执行路径与内置一致)。**扫描时机**:worker 启动时一次性扫描(`@PostConstruct`),运行时经 `skill.reload` RPC 热加载(重新扫描并替换缓存,广播 `config.changed{keys:["skills"]}`,前端 `/` 菜单下次打开即拉取最新列表);只认 `skillsDir` 一级子目录,不递归;扫描器排除全部内置 id(含被动,`BuiltInSkills.getAllSkills()`)。**明确不做**:目录监听/watch、skill 开关 UI、脚本注册为独立 AI 工具(脚本一律由 AI 用对应解释器执行——bash/python/node 等不限语言,复用现有沙箱与 PermissionGate)、frontmatter/完整 YAML 语法支持。
 
 ### 7.18 内嵌终端(term.*)
 
 文件树目录右键「在终端中打开」→ 前端主区开 xterm.js 内嵌终端标签页,worker 用**真 PTY** 拉起交互式 shell,cwd 为右键目录;输出经频道推送、输入走 RPC(§5.5)。
 
-- **PTY 实现**:Windows 用 ConPTY(`CreatePseudoConsole`/`ResizePseudoConsole`/`ClosePseudoConsole` + `InitializeProcThreadAttributeList`/`UpdateProcThreadAttribute` + `STARTUPINFOEX`/`PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE`),经 `Win32Ex` 同款「扩展平台接口再 `Native.load`」范式补齐(jna-platform 5.16 已在 worker 依赖树,经已有 JNA 依赖,零新增);Unix/macOS 用 libc `openpty`(或 `posix_openpt`+`grantpt`+`unlockpt`+`ptsname`)经 JNA。**非本平台实现类不加载**(跨平台编译安全降级,仿 `WindowsSandbox`)。
+- **PTY 实现**:基于 **pty4j**(worker 依赖,跨平台)——Windows 走 ConPTY、Unix/macOS 走 openpty 族;worker 侧 `TerminalPty`/`TerminalPtyFactory` 只做薄封装(复用现成框架,不自研 JNA 原生绑定)。
 - **shell 选择与 cwd**:Windows 取 `ComSpec`/`cmd.exe`,Unix 取 `$SHELL`/`/bin/sh`;cwd 由 `workspace`+`path` 经沙箱 `resolveExisting` 解析且必为目录(与 `fs.*` 同级权限,不额外提权);argv 直传无 shell 解析。
 - **双向传输**:worker 起**虚拟线程**读 PTY 输出并 `pubForOwner` 定向推送到 `u.<K>.term.<termId>.stream`(event `term.output`,payload `{data: base64}`;进程退出推 `term.exited`);输入/尺寸/关闭走 `term.input`/`term.resize`/`term.close` RPC。hub 零状态只路由,不存会话、不存订阅簿。
 - **会话生命周期**:存 worker 内存 `ConcurrentHashMap<termId, 会话>`;进程退出或 `term.close` 回收;worker 重启会话即失效;不实现跨前端重载续接(前端标签状态本就不持久化)。
@@ -1164,7 +1170,7 @@ Electron 将 web + hub + worker **一体打包**为 Windows x64 便携(portable)
 - **窗口不可见不后台化**:主窗口 `backgroundThrottling: false` + 启动开关 `--disable-backgrounding-occluded-windows`——窗口被遮挡/最小化时 Chromium 默认会挂起渲染进程、杀掉 WebSocket,导致每次回到前台必断连重连、弹「正在重新连接」模态框;连接生死唯一由前端应用层心跳判定(§5.1),渲染进程须持续运行(心跳与任务流推送不中断,同时 §4.2.2 的 visibility 降载在桌面端不触发——本地回环,无降载需求)。
 - **desktop 不感知任何具体插件**:主进程只编排 hub/worker 进程(端口、健康检查、启停),不携带任何插件领域行为——WSL 发行版探测/自动导入等沙箱可用性保证一律由对应插件在 worker 侧惰性完成(§7.10)。曾有的启动期 WSL preflight(utilityProcess fork `wsl-check-entry`)硬编码了 wsl 插件领域知识、与插件启用开关脱节,已于 2026-10 移除。
 - **构建流水线**:`build-backend.mjs`(mvn 打包 worker/hub)、`build:plugins`(跨模块调 `scripts/build-plugins.py` 重建全部内置插件:先 every-agent-web esbuild bundle、再逐插件 `mvn clean package`)、`copy:plugins`(`scripts/copy-plugins.mjs` 把插件产物 staging 到 `every-agent-desktop/resources/every-agent-plugins/`)、`build-web.mjs`(前端 dist)、`build-jre.ps1`(jlink)、`build:plugin-runtime`(插件 runtime 附属文件并入 `runtime/`);electron-builder `extraResources` 把 `runtime/` 与 staging 的 `every-agent-plugins/` 等打进安装包。
-- **内置插件进安装包**:worker 打包态 cwd = `process.resourcesPath`,未传 `--worker.builtin-plugins-dir` 时 `BuiltInPluginScanner` 默认扫 `<resourcesPath>/every-agent-plugins/`;故 `copy-plugins.mjs` 按 Scanner 期待结构 staging(Java 插件:`<id>/plugin.json` + `target/classes/plugin.json` + `target/*.jar` 非 sources/javadoc;web 产物(java+web 与纯 web 插件均适用):`<id>/web/` 下构建产物——前端经 `plugin.webSource` RPC 从插件目录读 `web/index.js`/`index.css`,jar 内不含 web 产物;插件根 `README.md` 原文件名一并 staging——扩展详情页 README 区经 `plugin.webSource("readme.md")` 读取,worker 侧同目录大小写不敏感回退,缺 README 的插件跳过不报错),extraResources(from: resources/every-agent-plugins → to: every-agent-plugins)原样搬运。staging **每次整体清空重建**,`enabled=false` 插件(如 sandbox-*)不复制也不残留——禁用插件的旧 jar 绝不进安装包;任一启用插件产物缺失(jar/plugin.json/bundle)则 fail-fast 退出,dist 中止。`copy-plugins.mjs` 支持 `--only a,b` 供本地小范围验证(dist 链不传,始终全量)。全新环境首次 dist 前需对根 reactor 跑过一次 `mvn install`(插件 pom 的 parent/contract 构件须在本地 .m2;`build-backend.mjs` 只 package 不 install)。
+- **内置插件进安装包**:worker 打包态 cwd = `process.resourcesPath`,未传 `--worker.builtin-plugins-dir` 时 `BuiltInPluginScanner` 默认扫 `<resourcesPath>/every-agent-plugins/`;故 `copy-plugins.mjs` 按 Scanner 期待结构 staging(Java 插件:`<id>/plugin.json` + `target/classes/plugin.json` + `target/*.jar` 非 sources/javadoc;web 产物(java+web 与纯 web 插件均适用):`<id>/web/` 下构建产物——前端经 `plugin.webSource` RPC 从插件目录读 `web/index.js`/`index.css`,jar 内不含 web 产物;插件根 `README.md` 原文件名一并 staging——扩展详情页 README 区经 `plugin.webSource("readme.md")` 读取,worker 侧同目录大小写不敏感回退,缺 README 的插件跳过不报错),extraResources(from: resources/every-agent-plugins → to: every-agent-plugins)原样搬运。staging **每次整体清空重建**,`enabled=false` 插件(出厂为 sandbox-windows-mic / sandbox-wsl-ubuntu / secret-redaction)不复制也不残留——禁用插件的旧 jar 绝不进安装包(sandbox-windows-codex 默认启用、进包);任一启用插件产物缺失(jar/plugin.json/bundle)则 fail-fast 退出,dist 中止。`copy-plugins.mjs` 支持 `--only a,b` 供本地小范围验证(dist 链不传,始终全量)。全新环境首次 dist 前需对根 reactor 跑过一次 `mvn install`(插件 pom 的 parent/contract 构件须在本地 .m2;`build-backend.mjs` 只 package 不 install)。
 
 ---
 
@@ -1314,8 +1320,8 @@ docker-compose 一键:`HUB_KEY=你的密钥 docker-compose up --build`;数据落
 | D23 | 输入走 worker 级频道 `u.K.worker.<id>.input` | 订阅数 O(worker×hub) 不随任务数增长 |
 | D24 | 短 ID:`{前缀}_{3位盐}{base36 序号}`(t_/a_/sub_/q_) | 人可读可念;单 worker 查重兜底 |
 | D25 | contract 只承载纯协议,业务常量住 worker proto | workflow 演进零改 contract、零改 hub |
-| D26 | 命令沙箱多后端:Windows 默认 wsl-direct、wsl-bwrap 显式、windows-mic 回退 | 「零管理员 + 网络硬隔离 + 零宿主残留」在原生 Windows 不可兼得;WSL2 生态已验证 |
-| D27 | 授权语义(seccomp 场景)= WSL 原生 root 重跑 | NNP + userns 不映射 uid0 + 基座只读 → 沙箱内真实提权物理不可行 |
+| D26 | 命令沙箱多后端**插件化**:sandbox-windows-codex(默认启用,Windows 出厂默认)、sandbox-wsl-ubuntu / sandbox-windows-mic(默认禁用,按需启用);`auto` 取可用插件中 priority 最高者(wsl-ubuntu=10 > codex=8 > mic=5),无后端时 DIRECT 兜底 | 隔离能力全部下沉插件(§7.10);强隔离(codex:WRITE_RESTRICTED + capability SID + 防火墙/WFP)与零管理员(WSL)各有取舍,按部署场景选 |
+| D27 | (历史)授权语义(seccomp 场景)= WSL 原生 root 重跑;bwrap 后端已删除,seccomp 拦截随之移除(§7.11) | 当时的 NNP + userns 不映射 uid0 + 基座只读 → 沙箱内真实提权物理不可行;现由 Restricted Token + PermissionGate 文本扫描承担 |
 | D28 | AI 审议与无人值守为独立任务级开关,开启时联动、事后可拆分 | 分别满足"无人监督但有把关"与"全流程无人值守"两种需求 |
 | D29 | **统一执行上下文 ExecContext**:黑盒 properties 四件套(taskEntry/taskId/workspaceRoot/configId)显式类型化为 plugin-api 接口槽位(仅主体必然具备的核心属性与端口,含 agents 活动实体注册表=主+各插件派生 agent;configId 无独立槽);三预绑定端口 `emitter()/agentFactory()/interaction()`(静态代理)经 ctx 下传;`TaskInfo` 退役;授权请求收编为 `AuthorizationRequest(ExecContext,agentId,grantKey,prompt)`;fileChanges 等插件功能槽位留 TaskRuntime;subagent 作为执行域能力插件全面中性化(零服务依赖/生命周期壳核分离;**台账后续收编 worker core `AgentLedger`——原 `SubAgentLedger` IO 自持已退役,`AgentBuilder.build()` 自动注册+发 `agent.started`,见 §7.20.1**);task 核心去插件概念(截断不删插件数据文件);审议 agent per-task 固定 id 复用会话;各横切 Context 接口(ToolContext/AdvisorContext/FileReferenceContext/ToolExecutionContext/TaskLifecycleContext)收编为 `extends ExecContext`(重复字段与 execution() 槽位删除,消费侧直读槽位、主体 ID 一律 subjectId(),§7.20.5) | 授权链与全部横切层(advisor/工具/子 agent/审议)域中性,subagent 无 task 只有 workflow 亦可复用;未来工作流实现 ExecContext 即零改动复用;20+ 处强转消失;详见 docs/design-exec-context.md 与 §7.20 |
 | D30 | **任务事件与任务流频道加 worker 段**（`u.<K>.worker.<id>.tasks` / `u.<K>.worker.<id>.task.<id>.stream`）+ 任务摘要 payload 带 `workerId`；**切换启用 worker 时 worker 级客户端状态整体失效并关闭全部 `task:*` 标签** | apiKey 即身份 ⇒ 同一 apiKey 下多台 worker 共用一个命名空间。此前 tasks/流频道只到 ownerKey、归属靠前端「按帧来源推断」，两个后果：① 一台的任务混进另一台的列表，点开按被启用那台的 RPC 寻址必报「任务不存在」；② 推断结果一旦落库就永不纠正，切换 worker 后详情按已断开的连接取数、失败还全静默（空白页，只有刷新才好）。归属改成 wire 事实 + 作用域化失效，见 §4.3/§5.2/§8.2/§14.12；协议 v3→4 |
@@ -1344,7 +1350,7 @@ docker-compose 一键:`HUB_KEY=你的密钥 docker-compose up --build`;数据落
 3. **RPC 生命周期**:reqId 连接内唯一,ok/err 已出则后续同 reqId 帧忽略;未知 method → UNKNOWN_METHOD;参数不合法 → BAD_PARAMS;超时是纯客户端语义(SDK 默认 30s),要中断须显式 rpc.cancel;task.run 新建支持 idempotencyKey(10 分钟窗口去重);task.delete 是任务唯一删除路径,无任何自动清理。
 4. **错误码两个命名空间,勿混用**:hub `error` = NOT_AUTHENTICATED/VERSION_MISMATCH(断开)、ACL_DENIED/FRAME_TOO_LARGE/RATE_LIMITED(单帧拒绝);`rpc.err` = UNKNOWN_METHOD/BAD_PARAMS/NOT_FOUND/SANDBOX_DENIED/BUSY/INTERNAL/AUTH_REQUIRED。
 5. **并发与上限**:maxConcurrentTasks(20)超限 task.run 新建 → BUSY(不排队);maxConcurrentSubs 超限 run_agent 返回错误文本由模型自决;maxEventsPerTask(50 万)超限抛 LogOverflow(磁盘 jsonl 全量不受影响);续跑放行不查并发上限。队列插件启用时超限任务排队等待（QueueAdmissionNode order=40, Semaphore fair）而非 BUSY 拒绝；无队列插件时保持 ERR_BUSY 硬拒绝。
-6. **沙箱(插件化)**:SandboxBackend SPI 极简化为 mount + onWorkspaceRemoved + id;路径翻译由核心 SandboxPathRegistry 中间人承担;沙箱插件提供自己的 CommandExecutor 和 ToolProvider;PermissionGate 不暴露到 plugin-api(核心内部保留);路径必须先规范化(realpath)再校验 workspace 根前缀,拒绝 `..`、绝对路径逃逸与符号链接逃逸;授权护的是「工作区外」,不是删除动作本身;不得绕过 PermissionGate 直接放行越界 IO;windows-mic 后端沙箱进程运行在 Medium IL,不对文件系统做标注或 ACL 修改;git 凭证只存 worker 本机加密文件,不经协议传输,注入走 env(askpass) 不经 shell 参数;
+6. **沙箱(插件化)**:SandboxBackend SPI 极简化为 mount + onWorkspaceRemoved + id;路径翻译由核心 SandboxPathRegistry 中间人承担;沙箱插件提供自己的 CommandExecutor 和 ToolProvider;PermissionGate 不暴露到 plugin-api(核心内部保留);路径必须先规范化(realpath)再校验 workspace 根前缀,拒绝 `..`、绝对路径逃逸与符号链接逃逸;授权护的是「工作区外」,不是删除动作本身;不得绕过 PermissionGate 直接放行越界 IO;windows-mic 后端沙箱进程运行在 Medium IL,不对文件系统做标注或 ACL 修改;codex 后端(默认)仅按 capability SID ACE 给工作区树注入可写授权(工作区外只读),setup 产物(账户/组/防火墙/WFP)有配套卸载清理;git 凭证只存 worker 本机加密文件,不经协议传输,注入走 env(askpass) 不经 shell 参数;
 7. **生命周期**:终态任务收到 task.run{taskId} = 冷启动一次普通运行;worker 优雅停机(SIGTERM)受影响任务标 failed 再关连接;6102 仅绑定 127.0.0.1;worker 每条 hub 连接建立即 sub 该命名空间 cmd + input 两个频道,从不订阅 per-task 频道。
 8. **复用 Spring AI,禁止重复造轮子**:agent 执行必须走 ChatClient + Advisor 生态,不得手搓 agent 循环、工具循环、响应聚合、system 拼接;执行链只能是很薄一层;新增 agent 能力优先做成 Advisor;一个 Advisor 只负责一个功能;事件发射等需挂钩工具循环的增强通过继承 ToolCallingAdvisor 并重写受保护 hook 实现;主/子 agent 共用同一运行入口与 Advisor 链,仅 agentId 不同。
 9. **插件零 worker 依赖**:插件的 pom 中不得出现对 `every-agent-worker` 的依赖,compile/provided/runtime/test 任何 scope 一律禁止;插件测试需要任务/agent/配置等桩时,在测试源码内自建实现 plugin-api 接口的等价桩类,不得把 worker 具体实现类(TaskEntry/AgentEntity/WorkerProperties/SlashCommandRegistry 等)当测试脚手架;类型确实需要跨 worker 与插件共享时,先下沉到 plugin-api(§1.1,文档先行)。

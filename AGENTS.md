@@ -7,8 +7,8 @@
 - seq 是任务流事件空间(每任务从 1 单调递增、跨运行延续;瞬态占号不落盘 → 磁盘回放有洞合法),wire 上以**字符串**携带(task.poll rpc.data 事件项与 stream 推送帧,雪花 ID 超 2^53);运行中任务日志永不修剪。
 - 频道即鉴权边界:`u.<ownerKey>.` 前缀 ACL;`fs.*`/`git.*`/`task.run`(新建)按调用必带 `workspace` 参数,jailed 到该工作区根(先 realpath 再校验前缀)。
 - 危险操作必须经 `PermissionGate` 用户授权(§7.8):AI 工具的**工作区外**路径访问一律先弹 `kind=authorization` 的 ask(拒绝/本轮运行/本任务三档),拒绝抛异常回灌模型;命令中的危险动词**仅当命令引用可能落在工作区外的路径时**才需授权,工作区内增删改查直接放行(授权护的是「工作区外」,不是删除这个动作本身;cwd 锁定 + PermissionGate 责任链兜底);不得绕过 gate 直接放行越界 IO。
-- 工作区在沙箱内可写(windows-mic 后端):沙箱进程运行在 Medium IL(Restricted Token 去特权但不降级),天然可写工作区与已授权目录,不对文件系统做任何标注或 ACL 修改——零副作用、零残留(§7.10);越界写拦截由 PermissionGate 责任链承担,无 OS 级写隔离兜底;不得绕过 gate 直接放行越界 IO。
-- 任务/对话数据由 worker 落盘 `data/tasks/<taskId>/`(多端同步真相源);前端不做任务数据 localStorage 持久化。
+- 沙箱后端插件化(§7.10):默认 sandbox-windows-codex(WRITE_RESTRICTED 受限令牌 + capability SID,工作区树可写、区外只读);可选 windows-mic(Medium IL)/ wsl-ubuntu,无任何后端插件时 DIRECT 直跑宿主。无论后端如何,越界写拦截均由 PermissionGate 责任链兜底;不得绕过 gate 直接放行越界 IO。
+- 任务/对话数据由 worker 落盘 `workspaces/<workspaceId>/tasks/<taskId>/`(多端同步真相源);前端不做任务数据 localStorage 持久化。
 - 版本统一由根 pom 锁定(Spring Boot 4.1.x / Spring AI 2.0.x),三层不得各自升版本。
 - 构建:`JAVA_HOME` 指向 JDK 25(如 Corretto 25);maven 在 PATH 中可用即可。
 - 插件开发:[docs/plugin-guide/](docs/plugin-guide/index.md) 为权威指南(含脚手架 create-everyagent-plugin 与 .eap 打包);新增插件走脚手架,禁手搓模板。

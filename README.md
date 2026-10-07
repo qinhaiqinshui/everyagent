@@ -113,11 +113,11 @@ web / hub / worker / desktop 四个模块**互相解耦、物尽其用**,可按�
 
 | 模块 | 职责 | 端口 |
 |---|---|---|
-| `every-agent-hub` | 公网消息中心:纯中转 WebSocket,零状态、零缓冲、零业务逻辑 | 9100 |
-| `every-agent-worker` | 执行器:Spring Boot + Spring AI 2,托管任务/模型/workspace/沙箱 | 9200(仅本地健康) |
+| `every-agent-hub` | 公网消息中心:纯中转 WebSocket,零状态、零缓冲、零业务逻辑 | 6101 |
+| `every-agent-worker` | 执行器:Spring Boot + Spring AI 2,托管任务/模型/workspace/沙箱 | 6102(仅本地健康) |
 | `every-agent-web` | 前端:React + TS,内置 TS 客户端 SDK,经 hub 遥控 worker | 5174(dev) |
 | `every-agent-contract` | 纯协议契约:帧/RPC 信封/错误码/身份哈希(Java + TS) | — |
-| `every-agent-desktop` | Electron 桌面版:web + hub + worker 一体打包(Windows x64) | 本地 9100/9200 |
+| `every-agent-desktop` | Electron 桌面版:web + hub + worker 一体打包(Windows x64) | 本地 6101/6102 |
 
 **部署拓扑矩阵** —— 四模块可自由组合,三种典型形态:
 
@@ -171,7 +171,7 @@ worker:
 HUB_KEY=你的hub密钥 docker-compose up --build
 ```
 
-- hub:`ws://<主机>:9100/ws`(健康检查 `GET :9100/health`)
+- hub:`ws://<主机>:6101/ws`(健康检查 `GET :6101/health`)
 - worker:容器内出站连 hub,workspace/数据落在 named volume
 - 前端:浏览器打开 `http://<主机>:5174`,在「设置」页填 hub 地址与 hub key 即可发现 worker;再填 worker 的 apiKey 才能遥控其数据
 
@@ -179,7 +179,7 @@ HUB_KEY=你的hub密钥 docker-compose up --build
 
 ```bash
 # Java 部分(需 JDK 25,Spring Boot 4.1 / Spring AI 2 由根 pom 锁定)
-mvn -pl every-agent-hub spring-boot:run          # hub @ 9100
+mvn -pl every-agent-hub spring-boot:run          # hub @ 6101
 mvn -pl every-agent-worker spring-boot:run       # worker,出站连 hub
 
 # 前端
@@ -231,7 +231,7 @@ worker:
 | 配置 | 说明 |
 |---|---|
 | `worker.hubs[].url / api-key / hub-key` | worker 连 hub 的唯一入口(多 hub 列表);不配置则 worker 不连任何 hub |
-| `HUB_KEY`(环境变量) | hub key 原文,未配置 hub 拒绝启动(启动时自算 sha256) |
+| `HUB_KEY`(环境变量) | hub key 原文(启动时自算 sha256);缺省回退 jar 内置开发默认密钥(仅限本机试玩),显式置空才拒绝启动——**公网部署必须显式配置强密钥** |
 | `WORKER_ID`(环境变量) | worker 身份,前端按此寻址 |
 | `EVERYAGENT_HOME` | 系统目录(模型配置/默认工作区/数据),默认 `~/.everyagent` |
 | `worker.sandbox.type` | `auto`(默认,取可用沙箱插件中优先级最高者) / `wsl-ubuntu` / `windows-mic` / `none`(旧值 `wsl-direct`、`wsl-bwrap` 自动归一) |
@@ -271,10 +271,6 @@ worker:
 
 ## 🙌 参与贡献
 
-欢迎提交 Issue / PR。开始前请先阅读:
-
-- [贡献指南](CONTRIBUTING.md):开发环境、PR 流程、代码与提交规范;
-- [行为准则](CODE_OF_CONDUCT.md):社区行为约定;
-- [安全政策](SECURITY.md):如何负责任地报告漏洞。
+欢迎提交 Issue / PR。开始前请先阅读 [贡献指南](CONTRIBUTING.md)(开发环境、PR 流程、代码与提交规范)。
 
 开发约定:提交信息用中文、一次一事;改动前请先阅读 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) 的红线清单(尤其 Spring AI 复用、hub 零业务、磁盘唯一事实源等约束)。
