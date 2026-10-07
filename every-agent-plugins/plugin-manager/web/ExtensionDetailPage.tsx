@@ -21,7 +21,7 @@ import {
   usePluginDirectory,
   togglePlugin,
   uninstallPlugin,
-  reloadPage,
+  reloadEffective,
   clearError,
 } from './pluginStore'
 import { PluginIcon } from './PluginIcon'
@@ -163,7 +163,7 @@ const ExtensionDetailPage: React.FC<ExtensionDetailPageProps> = ({
           showIcon
           closable
           onClose={clearError}
-          action={<Button size="small" onClick={reloadPage}>重新加载</Button>}
+          action={<Button size="small" onClick={reloadEffective}>重新加载</Button>}
         />
       </div>
     )
@@ -196,7 +196,7 @@ const ExtensionDetailPage: React.FC<ExtensionDetailPageProps> = ({
           style={{ margin: '8px 16px 0', borderRadius: 6 }}
           action={
             hasReloadNeeded ? (
-              <Button size="small" type="primary" icon={<ReloadIcon />} onClick={reloadPage}>
+              <Button size="small" type="primary" icon={<ReloadIcon />} onClick={reloadEffective}>
                 重新加载
               </Button>
             ) : undefined

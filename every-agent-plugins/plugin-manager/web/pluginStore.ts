@@ -13,8 +13,12 @@
  * - disabledIds：worker 侧 .disabled-plugins 名单（名单变更重启 worker 后生效）。
  * - uninstalledIds：本会话内已卸载条目（目录已删，plugin.list 不再返回；本地隐藏兜底）。
  * - reloadNeeded：启用/禁用/卸载后置位，侧栏/详情显示「需重新加载」标记。
+ *   「重新加载」按钮（reloadEffective）按其分流：涉及含后端（main）模块的插件 →
+ *   确认弹窗（重启 worker，进行中任务被迫停止）→ worker.restart + 等恢复 + 刷新；
+ *   仅前端插件 → 直接刷新页面。
  */
 import React from 'react'
+import { Modal } from 'antd'
 import type { PluginSdk } from '@everyagent/plugin-api'
 import { getSdk } from './index'
 
@@ -176,6 +180,69 @@ export function clearInstallResult(): void {
 
 /** 刷新整个前端页面（启用/禁用/卸载后的生效动作）。 */
 export function reloadPage(): void {
+  location.reload()
+}
+
+/** 待生效变更（reloadNeeded）中是否涉及含后端（Java/main）模块的插件。 */
+function pendingReloadAffectsBackend(): boolean {
+  return Object.entries(snapshot.reloadNeeded)
+    .filter(([, needed]) => needed)
+    .some(([id]) => snapshot.plugins.find((p) => p.id === id)?.hasMain === true)
+}
+
+/**
+ * 「重新加载」按钮入口（生效动作，按待生效变更分流）：
+ * - 仅前端插件变更 → 直接刷新页面；
+ * - 涉及含后端（main）模块的插件 → 确认弹窗（重启 worker 会中断进行中任务）→
+ *   worker.restart → 轮询待 worker 恢复 → 刷新页面。
+ */
+export function reloadEffective(): void {
+  if (pendingReloadAffectsBackend()) {
+    Modal.confirm({
+      title: '重新加载需要重启 worker',
+      content:
+        '待生效的插件变更包含后端（Java）模块，需要重启 worker 才能生效；' +
+        '重启期间进行中的任务将会被迫停止（重启后标记为失败）。是否继续？',
+      okText: '重启 worker',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      onOk: () => restartWorkerAndReload(),
+    })
+    return
+  }
+  reloadPage()
+}
+
+/**
+ * 重启 worker 并在恢复后刷新页面。worker.restart 应答 ok 后旧进程优雅关闭
+ * （先断 hub 连接）→ 新进程冷启动（数秒）；先固定等 4s 让旧 worker 断连，
+ * 再轮询 plugin.list 直到应答（= 新进程就绪）才 location.reload()，保证刷新
+ * 后的页面首拉插件目录时 worker 已在线；30s 兜底超时仍刷新（连接层自会重连）。
+ * RPC 被拒（如启动命令无法重建，worker 不重启）则不刷新，错误入 store 展示。
+ */
+export async function restartWorkerAndReload(): Promise<void> {
+  const sdk = getSdk()
+  if (!sdk) {
+    setSnapshot({ error: '插件 SDK 未初始化' })
+    return
+  }
+  try {
+    await sdk.rpc(sdk.workerId, 'worker.restart', {})
+  } catch (err) {
+    setSnapshot({ error: `重启 worker 失败：${rpcErrorMessage(err)}` })
+    return
+  }
+  await new Promise((resolve) => setTimeout(resolve, 4000))
+  const deadline = Date.now() + 30_000
+  while (Date.now() < deadline) {
+    try {
+      await sdk.rpc(sdk.workerId, 'plugin.list', {})
+      break
+    } catch {
+      // worker 冷启动未就绪，继续轮询
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1500))
+  }
   location.reload()
 }
 

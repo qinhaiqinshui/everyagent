@@ -17,7 +17,7 @@ import {
   ensureDirectoryLoaded,
   togglePlugin,
   installEapFile,
-  reloadPage,
+  reloadEffective,
   reloadDirectory,
   clearError,
   clearInstallResult,
@@ -284,8 +284,8 @@ const PluginManagerPanel: React.FC = () => {
           size="small"
           type={hasReloadNeeded ? 'primary' : 'default'}
           icon={<ReloadIcon />}
-          onClick={reloadPage}
-          title="部分插件状态已变更，重新加载页面后生效"
+          onClick={reloadEffective}
+          title="应用待生效的插件变更（涉及后端插件时将确认并重启 worker）"
         >
           重新加载
         </Button>
