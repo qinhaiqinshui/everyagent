@@ -280,15 +280,18 @@ const PluginManagerPanel: React.FC = () => {
         >
           {directory.installing ? '安装中…' : '安装…'}
         </Button>
-        <Button
-          size="small"
-          type={hasReloadNeeded ? 'primary' : 'default'}
-          icon={<ReloadIcon />}
-          onClick={reloadEffective}
-          title="应用待生效的插件变更（涉及后端插件时将确认并重启 worker）"
-        >
-          重新加载
-        </Button>
+        {/* 重新加载：默认隐藏，仅在存在待生效变更时显示（出现即 primary 强调） */}
+        {hasReloadNeeded && (
+          <Button
+            size="small"
+            type="primary"
+            icon={<ReloadIcon />}
+            onClick={reloadEffective}
+            title="应用待生效的插件变更（涉及后端插件时将确认并重启 worker）"
+          >
+            重新加载
+          </Button>
+        )}
       </div>
 
       {/* 错误提示 */}
