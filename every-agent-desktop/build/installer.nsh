@@ -105,12 +105,65 @@
   ; Elevation awareness: an ELEVATED install (user right-clicks "run as
   ; administrator", or UAC from a machine-wide dir) writes admin-owned
   ; files/shortcuts/registry that a later NON-elevated per-user uninstaller
-  ; cannot delete. Log the account type so install logs reveal that path.
-  Push $0
+  ; cannot delete. Log the real token identity (UserInfo queries the process
+  ; token - env vars like USERNAME can be inherited/spoofed, e.g. sandboxed
+  ; parents with USERPROFILE pointing at another user) so install logs reveal
+  ; who actually ran the installer and where its HKCU writes really went.
+  ; NOTE: never reference $0 inside EA_LOG lines - FileOpen clobbers it with
+  ; the log handle before the line is expanded (that bug made earlier builds
+  ; log handle numbers instead of the account type).
+  Push $7
+  UserInfo::GetName
+  Pop $7
+  !insertmacro EA_LOG "  installer real user=[$7] (process token; may differ from env USERPROFILE)"
   UserInfo::GetAccountType
-  Pop $0
-  !insertmacro EA_LOG "  installer account type=[$0] (Admin = elevated install, admin-owned files)"
-  Pop $0
+  Pop $7
+  !insertmacro EA_LOG "  installer account type=[$7] (Admin = elevated install, admin-owned files)"
+  Pop $7
+
+  ; ---- registry write self-heal ----------------------------------------
+  ; Known failure mode on some machines: NON-elevated install completes the
+  ; file copy but InstallData/ARP writes and shortcut creation silently fail
+  ; (uninstall log shows registry InstallLocation=[] + shortcuts MISSING),
+  ; so the app has no Start-Menu entry and no ARP record. Probe an actual
+  ; write+readback into INSTALL_REGISTRY_KEY; if it fails and we are not
+  ; elevated and not silent, relaunch ourselves elevated once (/eaNoElevate
+  ; guards against loops). On healthy machines the probe succeeds and the
+  ; installer behaves exactly as before.
+  ClearErrors
+  WriteRegStr SHELL_CONTEXT "${INSTALL_REGISTRY_KEY}" "~ea-probe" "1"
+  ReadRegStr $7 SHELL_CONTEXT "${INSTALL_REGISTRY_KEY}" "~ea-probe"
+  ${If} $7 == "1"
+    !insertmacro EA_LOG "  registry write probe OK (non-elevated writes work)"
+    DeleteRegValue SHELL_CONTEXT "${INSTALL_REGISTRY_KEY}" "~ea-probe"
+  ${Else}
+    !insertmacro EA_LOG "  registry write probe FAILED (HKCU writes do not stick for this token)"
+    DeleteRegValue SHELL_CONTEXT "${INSTALL_REGISTRY_KEY}" "~ea-probe"
+    ${IfNot} ${Silent}
+      Push $8
+      Push $9
+      ${GetParameters} $8
+      ClearErrors
+      ${GetOptions} $8 "/eaNoElevate" $9
+      ${If} ${Errors}
+        UserInfo::GetAccountType
+        Pop $9
+        ${If} $9 != "Admin"
+          !insertmacro EA_LOG "  -> relaunching installer ELEVATED (registry writes broken without it)"
+          ExecShell "runas" '"$EXEPATH"' '"$8" /eaNoElevate'
+          ${IfNot} ${Errors}
+            !insertmacro EA_LOG "  elevated relaunch handed off - quitting this instance"
+            Pop $9
+            Pop $8
+            Quit
+          ${EndIf}
+          !insertmacro EA_LOG "  elevation declined/failed - continuing anyway (registry/shortcuts will likely be lost)"
+        ${EndIf}
+      ${EndIf}
+      Pop $9
+      Pop $8
+    ${EndIf}
+  ${EndIf}
 !macroend
 
 ; Silent old-version uninstall result (runs when reinstalling over an
@@ -139,6 +192,20 @@
   ReadRegStr $R7 SHELL_CONTEXT "${INSTALL_REGISTRY_KEY}" InstallLocation
   !insertmacro EA_LOG "  registry InstallLocation now=[$R7]"
   Pop $R7
+  ; in-process write+readback self-test: distinguishes "writes never executed"
+  ; from "writes executed but did not stick" (ACL/token trouble)
+  ClearErrors
+  WriteRegStr SHELL_CONTEXT "${INSTALL_REGISTRY_KEY}" "~ea-probe-end" "ok"
+  ReadRegStr $R7 SHELL_CONTEXT "${INSTALL_REGISTRY_KEY}" "~ea-probe-end"
+  ${If} $R7 == "ok"
+    !insertmacro EA_LOG "  registry self-test at section end: WRITE+READBACK OK"
+  ${Else}
+    !insertmacro EA_LOG "  registry self-test at section end: READBACK=[$R7] (writes not sticking!)"
+  ${EndIf}
+  DeleteRegValue SHELL_CONTEXT "${INSTALL_REGISTRY_KEY}" "~ea-probe-end"
+  Pop $R7
+  ; where would shortcuts have gone? (SetShellVarContext telltale)
+  !insertmacro EA_LOG "  shell folders: DESKTOP=[$DESKTOP] SMPROGRAMS=[$SMPROGRAMS]"
   ${If} ${FileExists} "$DESKTOP\${SHORTCUT_NAME}.lnk"
     !insertmacro EA_LOG "  desktop shortcut exists"
   ${Else}
@@ -170,6 +237,14 @@
 ; attempt, the process died before init finished.
 !macro customUnInit
   !insertmacro EA_LOG "===== uninstaller un.onInit done | INSTDIR=[$INSTDIR] installMode=[$installMode] ====="
+  Push $7
+  UserInfo::GetName
+  Pop $7
+  !insertmacro EA_LOG "  uninstaller real user=[$7] (process token)"
+  UserInfo::GetAccountType
+  Pop $7
+  !insertmacro EA_LOG "  uninstaller account type=[$7]"
+  Pop $7
   ${If} ${Silent}
     !insertmacro EA_LOG "  run mode=SILENT (/S)"
   ${Else}
