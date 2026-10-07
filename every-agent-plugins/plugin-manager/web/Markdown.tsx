@@ -308,7 +308,10 @@ export default function Markdown({ source, resolveImage }: MarkdownProps) {
         }
         items.push({
           indent: Math.floor(m[1].replace(/\t/g, '  ').length / 2),
-          text: m[4],
+          // LIST_RE 只有 3 个捕获组:(\s*)缩进 | ([-*+]|\d+[.)])标记 | (.*)文本——
+          // 文本是 m[3]。曾误写 m[4](不存在的组 → undefined),renderInline(undefined)
+          // 在 text.length 崩溃,任何含列表的 README 都会炸详情页。
+          text: m[3],
           ordered: /\d/.test(m[2]),
         })
         i++
