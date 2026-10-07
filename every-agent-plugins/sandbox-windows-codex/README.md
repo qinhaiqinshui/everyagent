@@ -63,7 +63,7 @@ setup 是**延迟触发**的——`Provider.isAvailable` 仅探测 Windows 平�
    - WFP：12 条持久 filter（固定自有 provider/sublayer GUID，事务包裹；排在防火墙之后的第二道防线）；
    - 隐藏账户（`Winlogon\UserList=0`）、目录锁定（`.sandbox` 组 RWX / `.sandbox-secrets` 组 DENY / `.sandbox-bin` 组 R+X+Protected）、marker 两阶段提交。
 3. marker（`<codexHome>/.sandbox/setup_marker.json`）+ 凭据文件双闸门就绪 → 后续 `create()` 调用短路返回，不再弹 UAC。
-4. 幂等：已完成时 setup 立即短路返回；账户/凭据失配（错误码 1326/1331/1387 等）时重跑 setup 修复。
+4. 幂等：已完成时 setup 立即短路返回；账户/凭据失配（错误码 1317/1332/1326/1331/1387 等）时重跑 setup 修复。执行期自愈矩阵（design.md §4.3.1）：沙箱账户被删、组被删（SID 解析 1332「帐户名与安全标识间无任何映射」）、凭据文件 sandbox_users.json 丢失/损坏、setup marker 被删——命令执行链内强制重 setup 重建后**原地重试一次**，无需重启 worker；写根 ACL/`.sandbox-bin`/cap_sids.json/profile 目录本就按需自愈。
 
 选择语义：auto 模式下 codex priority=8——**低于 wsl-ubuntu(10)**（不抢既有默认后端，WSL 可用的机器行为不变）、**高于 windows-mic(5)**（无 WSL 的机器上 auto 兑现为更强隔离）。isAvailable 仅探测 Windows 平台（不查 marker），故选择器始终能看到 codex 后端；只有当 codex 胜出时 `create()` 才触发 setup（首次弹 UAC，后续幂等短路）。
 

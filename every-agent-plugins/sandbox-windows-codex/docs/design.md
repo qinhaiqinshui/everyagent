@@ -191,11 +191,28 @@ SpawnRequest 不搬 codex 的 permission_profile 结构,改为自有 `writeRoots
 ### 4.3 握手、PID 校验、超时、重试
 
 1. 父进程 `CreateNamedPipeW` 建管道对(§2.7 RunnerPipe,DACL 只授沙箱账户 GENERIC_ALL)。
-2. `CreateProcessWithLogonW` 起 runner;失败码 1056(服务已在运行)原凭据重试一次;1326/1330/1907/1331/1387 等凭据类 → 抛 `SandboxAccountCredentialMismatch`——异常即自愈信号:`CodexCommandExecutor` 捕获后经 `CodexSetupCoordinator` 强制完整重 setup(`SetupOrchestrator.ensureSetup(payload, force=true)` 跳过 marker 短路:重新生成两账户密码——已存在账户走 NetUserSetInfo(1003) 重置——并重写 DPAPI 凭据文件;未提权时弹一次 UAC),成功后**原地重试该命令一次**(重试重读新密码);重 setup 或重试仍失败才把两层错误回给模型。一次 execute 至多自愈一次(防循环),对齐 codex identity.rs「凭据失配 → 重跑 setup 刷新凭据后重试,而非直接报错」。
+2. `CreateProcessWithLogonW` 起 runner;失败码 1056(服务已在运行)原凭据重试一次;1317/1332(账户/组被删,SID 无法解析)、1326/1330/1907/1331/1387/1312 等账户·凭据类 → 抛 `SandboxAccountCredentialMismatch`——异常即自愈信号,统一自愈管线见 §4.3.1(「marker + 凭据」双闸门外的全部可愈损伤:账户被删、组被删致 `LookupAccountName` 1332、凭据文件丢失/损坏/版本失配、marker 丢失——重跑 setup 全部可重建,执行链一律**强制完整重 setup + 原地重试一次**,不区分损伤种类)。
 3. 连接超时:阻塞 `ConnectNamedPipe` 无超时参数 → 辅助虚拟线程先 `DuplicateHandle` 发布自身句柄再阻塞连接,父侧 `recv 15s`,超时 `CancelSynchronousIo(thread)` 中断;ERROR_NOT_FOUND 视为恰好完成再收割;取消后不 join,靠关管道句柄解阻塞。
 4. `GetNamedPipeClientProcessId == WithLogonW 返回 PID`,否则 PermissionDenied(与 DACL 构成双因子)。
 5. 发 SpawnRequest → `PeekNamedPipe` 5ms 轮询等完整帧,15s 内收 `spawn_ready`;收到 `error`(stage+winerr)或管道提前关闭即失败;任一步失败 `TerminateProcess(pi.hProcess,1)` 收尸。
 6. 会话中:父侧写线程独占 `-in` 管;读线程解析 output/exit;看门狗超时或取消 → 写 `terminate` 帧 → runner `TerminateJobObject` 失败回退 `TerminateProcess`;`Exit` 帧到达后会话终结,管道句柄关闭即 runner 退出信号。
+
+#### 4.3.1 沙箱依赖件自愈矩阵(执行链全量兜底)
+
+沙箱依赖的全部外部件,被删/被改后**一律在 CodexCommandExecutor 内自动修复并原地重试**,不需要重启 worker、不需要人工 re-run setup:
+
+| # | 依赖件 | 被删/改后的失败信号 | 自愈手段 |
+|---|---|---|---|
+| 1 | 沙箱账户 EACodex{Online,Offline} | spawn 1317/1332/1326/1330/1907/1331 | 强制重 setup(NetUserAdd 重建/NetUserSetInfo 重置) |
+| 2 | 沙箱组 EACodexSandboxUsers | `LookupAccountName` 1332(Win32Exception,`sidString` 处,执行链两处调用点) | 强制重 setup(重建组+重挂成员) |
+| 3 | 凭据文件 sandbox_users.json | `SandboxSecrets.CredentialsFileException`(丢失/损坏/版本失配/DPAPI 解密失败) | 强制重 setup(重写 DPAPI 凭据) |
+| 4 | setup_marker.json | readiness 双闸门失败(nativeGuard 检出) | 幂等重 setup(marker 缺失即触发全量) |
+| 5 | 写根 ACL(被 icacls reset) | —(无失败信号) | preflight 每命令刷新 ACE(既有) |
+| 6 | .sandbox-bin(runner classpath) | —(物化失败) | RunnerMaterializer 按需重物化(既有) |
+| 7 | cap_sids.json | — | CapSids.loadOrCreate 重建(既有) |
+| 8 | 沙箱账户 profile 目录 | — | LOGON_WITH_PROFILE 下次登录自动重建(Windows 既有) |
+
+判定 `needsAccountHealing`(cause 链遍历,三类信号任一):① spawn 侧 `CredentialMismatchException`(含 runner error 帧带回的凭据类 windows_error_code 二次分类);② `Win32Exception` 携可愈码(SID 解析 1332/1317);③ `CredentialsFileException`(凭据文件态失真)。触发后经 `CodexSetupCoordinator` 强制完整重 setup(跳过 marker 短路;未提权时弹一次 UAC),成功后原地重试该命令一次(重试重读新密码/重建 SID);一次 execute 至多自愈一次(防循环);重 setup 或重试仍失败才把两层错误回给模型。对齐 codex identity.rs「账户/凭据失配 → 重跑 setup 刷新后重试,而非直接报错」与 runner_client.rs is_refreshable_windows_error 口径。
 
 ## 5. SPI 对接
 

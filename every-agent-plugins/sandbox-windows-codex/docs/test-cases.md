@@ -117,7 +117,26 @@ type "<CODEX_HOME>\.sandbox\setup_marker.json"
 - ✅ 命令正常执行，返回 `recover test`（1326 不再直接回给模型）
 - ✅ 凭据文件 `<CODEX_HOME>\.sandbox-secrets\sandbox_users.json` 被更新（两账户密码均重新生成）
 - ✅ UAC 被拒绝时报错同时携带原始凭据错误与 setup 失败原因；重发命令可再次触发自愈
-- ✅ 一次命令至多自愈一次（自愈后仍失配则报「凭据自愈后重试仍失败」，不循环）
+- ✅ 一次命令至多自愈一次（自愈后仍失配则报「账户/凭据自愈后重试仍失败」，不循环）
+
+---
+
+### TC-1.3b 依赖件被删自愈矩阵——账户/组/凭据文件/marker（design.md §4.3.1）
+
+**前置**：TC-1.1 已完成
+
+**步骤**（四组独立执行，每组破坏后直接发命令 `echo "selfheal"`，均不重启 worker）：
+1. **删账户**：`net user EACodexOnline /delete` → 发命令
+2. **删组**（复现「帐户名与安全标识间无任何映射完成」报错）：`net localgroup EACodexSandboxUsers /delete` → 发命令
+3. **删凭据文件**：删除 `<CODEX_HOME>\.sandbox-secrets\sandbox_users.json` → 发命令
+4. **删 marker**：删除 `<CODEX_HOME>\.sandbox\setup_marker.json` → 发命令
+
+**预期**（四组一致）：
+- ✅ 每组均自动触发重 setup（可能弹一次 UAC），重建对应依赖件（账户经 NetUserAdd 重建/组重建+重挂成员/凭据重写/marker 重提交）后**同一请求内**重试命令成功，返回 `selfheal`
+- ✅ 全程无「请重新启动 worker」/「re-run setup」类让人工干预的报错
+- ✅ 组被删场景不再出现 `[codex sandbox 执行失败] 帐户名与安全标识间无任何映射完成`（1332 已入自愈管线）
+- ✅ UAC 被拒绝时报错携带原始错误与 setup 失败原因；重发命令可再次触发自愈
+- ✅ 写根 ACL 被 `icacls <root> /reset`、`.sandbox-bin` 被删、cap_sids.json 被删——本就按命令自愈（§4.3.1 #5-#7），验证命令仍正常即可
 
 ---
 

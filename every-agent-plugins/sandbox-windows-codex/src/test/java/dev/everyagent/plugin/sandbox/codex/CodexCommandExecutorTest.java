@@ -3,6 +3,7 @@ package dev.everyagent.plugin.sandbox.codex;
 import dev.everyagent.plugin.api.shell.ExecResults;
 import dev.everyagent.plugin.sandbox.codex.CodexCommandExecutor.ExecSession;
 import dev.everyagent.plugin.sandbox.codex.accounts.SandboxAccounts.NetworkIdentity;
+import dev.everyagent.plugin.sandbox.codex.accounts.SandboxSecrets;
 import dev.everyagent.plugin.sandbox.codex.runner.FrameCodec.FramedMessage;
 import dev.everyagent.plugin.sandbox.codex.runner.IpcMessage;
 import dev.everyagent.plugin.sandbox.codex.runner.IpcMessage.ErrorStage;
@@ -12,8 +13,11 @@ import dev.everyagent.plugin.sandbox.codex.runner.IpcMessage.Stream;
 import dev.everyagent.plugin.sandbox.codex.session.CodexSandboxSession;
 import dev.everyagent.plugin.sandbox.codex.session.CodexSandboxSession.RunnerStartupException;
 import dev.everyagent.plugin.sandbox.codex.session.RunnerClient;
+import dev.everyagent.plugin.sandbox.codex.setup.SetupMarker;
+import dev.everyagent.plugin.sandbox.codex.setup.SetupPayload;
 
 import com.sun.jna.Platform;
+import com.sun.jna.platform.win32.Win32Exception;
 
 import org.junit.jupiter.api.Test;
 
@@ -33,6 +37,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -523,17 +528,58 @@ class CodexCommandExecutorTest {
     }
 
     @Test
-    void nativeGuardRejectsIncompleteSetupWithGuidance() {
+    void nativeGuardHealsIncompleteSetupInsteadOfRejecting() throws IOException {
         assumeTrue(Platform.isWindows(), "Windows 专属(marker 闸门)");
-        FakeSession session = new FakeSession();
-        CodexSandboxManager manager = new CodexSandboxManager(
-                new CodexSandboxOptions(tempDir, null, null, null, false, null), 30_000);
-        CodexCommandExecutor exec = new CodexCommandExecutor(manager,
-                tempDir.resolve("ws"), null);
+        FakeSession session = new FakeSession(out("healed", Stream.STDOUT),
+                new FramedMessage(6, new Exit(0, false)));
+        AtomicInteger reprovisioned = new AtomicInteger();
+        CodexCommandExecutor exec = new CodexCommandExecutor(manager(),
+                tempDir.resolve("ws"), null, true,
+                CodexCommandExecutor.ShellChoice.POWERSHELL,
+                (cfg, spec) -> session,
+                (options, capSids, w, r) -> {
+                },
+                (options, username) -> new RunnerClient.RunnerConfig(
+                        options.codexHome(), username, "pw", "cp", "jh", "cwd"),
+                m -> {
+                    reprovisioned.incrementAndGet();
+                    // fake 重 setup：补写 marker + 凭据占位（纯文件写，不弹 UAC）
+                    try {
+                        SetupMarker.commit(tempDir, SetupPayload.SETUP_VERSION,
+                                "EACodexOffline", "EACodexOnline", List.of(), false);
+                        Files.createDirectories(SandboxSecrets.secretsFile(tempDir).getParent());
+                        Files.createFile(SandboxSecrets.secretsFile(tempDir));
+                    } catch (IOException e) {
+                        throw new IllegalStateException("fake reprovision failed", e);
+                    }
+                });
         String result = exec.execute("echo hi", "powershell");
-        assertTrue(result.startsWith("[codex sandbox 未完成 setup"));
-        assertTrue(result.contains("重新启动 worker"),
-                "错误里给出恢复指引(检查 UAC 被拒/重启 worker)");
+        assertEquals("healed", result,
+                "marker 被删 → 守卫自动重 setup 修复 → 不再要求重启 worker,继续执行命令");
+        assertEquals(1, reprovisioned.get());
+    }
+
+    @Test
+    void nativeGuardHealFailureReturnsReadableError() {
+        assumeTrue(Platform.isWindows(), "Windows 专属(marker 闸门)");
+        CodexCommandExecutor exec = new CodexCommandExecutor(manager(),
+                tempDir.resolve("ws"), null, true,
+                CodexCommandExecutor.ShellChoice.POWERSHELL,
+                (cfg, spec) -> {
+                    throw new IOException("unreachable");
+                },
+                (options, capSids, w, r) -> {
+                },
+                (options, username) -> new RunnerClient.RunnerConfig(
+                        options.codexHome(), username, "pw", "cp", "jh", "cwd"),
+                m -> {
+                    throw new IllegalStateException("codex 沙箱 setup 失败: code=xx UAC 被拒");
+                });
+        String result = exec.execute("echo hi", "powershell");
+        assertTrue(result.startsWith("[codex sandbox 未完成 setup 且自动修复失败]"),
+                "可读错误前缀: " + result);
+        assertTrue(result.contains("重发命令"),
+                "错误里给出恢复指引(同意 UAC 后重发命令再次触发自愈): " + result);
     }
 
     @Test
@@ -552,79 +598,86 @@ class CodexCommandExecutorTest {
         assertEquals("[codex sandbox 执行失败] pipe broken", exec.execute("x", "powershell"));
     }
 
-    // ---- 凭据失配自愈（BUG：沙箱账户密码被外部改动后 1326 直接报错、不自愈） ----
+    // ---- 账户·凭据类自愈（BUG：账户/密码被外部改动或删除后直接报错、不自愈；§4.3.1 矩阵） ----
 
-    /** 凭据轮换自愈的 seam 注入构造器（nativeGuard=false，跨平台可测）。 */
+    /** 自愈路径的 seam 注入构造器（nativeGuard=false，跨平台可测；preflight=no-op）。 */
     private CodexCommandExecutor healingExecutor(CodexSandboxManager manager,
             CodexCommandExecutor.SessionOpener opener,
-            CodexCommandExecutor.CredentialRotator rotator) {
-        return new CodexCommandExecutor(manager, tempDir.resolve("ws"), null, false,
-                CodexCommandExecutor.ShellChoice.POWERSHELL, opener,
+            CodexCommandExecutor.Reprovisioner reprovisioner) {
+        return healingExecutor(manager, opener, reprovisioner,
                 (options, capSids, w, r) -> {
-                },
-                (options, username) -> new RunnerClient.RunnerConfig(
-                        options.codexHome(), username, "pw", "cp", "jh", "cwd"),
-                rotator);
+                });
     }
 
-    /** 1326（密码被外部改动）→ 轮换密码 → 原地重试一次成功，命令结果正常返回。 */
+    /** 自愈路径的 seam 注入构造器（preflight 亦可注入——组被删场景由 preflight 抛 1332）。 */
+    private CodexCommandExecutor healingExecutor(CodexSandboxManager manager,
+            CodexCommandExecutor.SessionOpener opener,
+            CodexCommandExecutor.Reprovisioner reprovisioner,
+            CodexCommandExecutor.PreflightRefresher preflight) {
+        return new CodexCommandExecutor(manager, tempDir.resolve("ws"), null, false,
+                CodexCommandExecutor.ShellChoice.POWERSHELL, opener, preflight,
+                (options, username) -> new RunnerClient.RunnerConfig(
+                        options.codexHome(), username, "pw", "cp", "jh", "cwd"),
+                reprovisioner);
+    }
+
+    private CodexSandboxManager manager() {
+        return new CodexSandboxManager(
+                new CodexSandboxOptions(tempDir, null, null, null, false, null), 30_000);
+    }
+
+    /** 1326（密码被外部改动）→ 重 setup → 原地重试一次成功，命令结果正常返回。 */
     @Test
-    void credentialMismatchTriggersRotationAndRetriesOnce() {
+    void credentialMismatchTriggersReprovisionAndRetriesOnce() {
         FakeSession session = new FakeSession(out("healed", Stream.STDOUT),
                 new FramedMessage(6, new Exit(0, false)));
         AtomicInteger opened = new AtomicInteger();
-        AtomicInteger rotated = new AtomicInteger();
-        CodexSandboxManager manager = new CodexSandboxManager(
-                new CodexSandboxOptions(tempDir, null, null, null, false, null), 30_000);
-        CodexCommandExecutor exec = healingExecutor(manager, (cfg, spec) -> {
+        AtomicInteger reprovisioned = new AtomicInteger();
+        CodexCommandExecutor exec = healingExecutor(manager(), (cfg, spec) -> {
             if (opened.incrementAndGet() == 1) {
                 throw new RunnerClient.CredentialMismatchException("EACodexOnline", 1326);
             }
             return session;
-        }, m -> rotated.incrementAndGet());
+        }, m -> reprovisioned.incrementAndGet());
         assertEquals("healed", exec.execute("Write-Host test", "powershell"),
                 "自愈重试后命令正常执行（不再把 1326 直接回给模型）");
-        assertEquals(1, rotated.get(), "凭据轮换（强制重 setup）恰触发一次");
+        assertEquals(1, reprovisioned.get(), "重建（强制重 setup）恰触发一次");
         assertEquals(2, opened.get(), "同一条命令原地重试一次");
         assertTrue(session.closed, "重试会话正常关闭");
     }
 
     /** 重 setup 失败（如 UAC 被拒）→ 两层错误都回给模型，且给出恢复指引。 */
     @Test
-    void credentialMismatchRotationFailureReportsBothErrors() {
+    void credentialMismatchReprovisionFailureReportsBothErrors() {
         AtomicInteger opened = new AtomicInteger();
-        CodexSandboxManager manager = new CodexSandboxManager(
-                new CodexSandboxOptions(tempDir, null, null, null, false, null), 30_000);
-        CodexCommandExecutor exec = healingExecutor(manager, (cfg, spec) -> {
+        CodexCommandExecutor exec = healingExecutor(manager(), (cfg, spec) -> {
             opened.incrementAndGet();
             throw new RunnerClient.CredentialMismatchException("EACodexOnline", 1326);
         }, m -> {
             throw new IllegalStateException("codex 沙箱 setup 失败: code=xx 用户在 UAC 弹窗拒绝了提权");
         });
         String result = exec.execute("Write-Host test", "powershell");
-        assertTrue(result.startsWith("[codex sandbox 凭据失配且自动修复失败]"),
+        assertTrue(result.startsWith("[codex sandbox 账户/凭据失配且自动修复失败]"),
                 "可读错误前缀: " + result);
         assertTrue(result.contains("Windows error 1326"), "保留原始凭据失配错误: " + result);
         assertTrue(result.contains("UAC"), "保留重 setup 失败原因: " + result);
         assertEquals(1, opened.get(), "重 setup 失败后不再重试命令");
     }
 
-    /** 轮换成功但重试仍凭据失配 → 只自愈一次（防循环），报重试失败。 */
+    /** 重 setup 成功但重试仍凭据失配 → 只自愈一次（防循环），报重试失败。 */
     @Test
     void credentialMismatchRetriesOnlyOnce() {
         AtomicInteger opened = new AtomicInteger();
-        AtomicInteger rotated = new AtomicInteger();
-        CodexSandboxManager manager = new CodexSandboxManager(
-                new CodexSandboxOptions(tempDir, null, null, null, false, null), 30_000);
-        CodexCommandExecutor exec = healingExecutor(manager, (cfg, spec) -> {
+        AtomicInteger reprovisioned = new AtomicInteger();
+        CodexCommandExecutor exec = healingExecutor(manager(), (cfg, spec) -> {
             opened.incrementAndGet();
             throw new RunnerClient.CredentialMismatchException("EACodexOnline", 1326);
-        }, m -> rotated.incrementAndGet());
+        }, m -> reprovisioned.incrementAndGet());
         String result = exec.execute("Write-Host test", "powershell");
-        assertTrue(result.startsWith("[codex sandbox 执行失败] 凭据自愈后重试仍失败"),
+        assertTrue(result.startsWith("[codex sandbox 执行失败] 账户/凭据自愈后重试仍失败"),
                 "重试失败可读错误: " + result);
         assertTrue(result.contains("Windows error 1326"));
-        assertEquals(1, rotated.get(), "至多轮换一次");
+        assertEquals(1, reprovisioned.get(), "至多重建一次");
         assertEquals(2, opened.get(), "至多重试一次");
     }
 
@@ -634,48 +687,161 @@ class CodexCommandExecutorTest {
         FakeSession session = new FakeSession(out("ok", Stream.STDOUT),
                 new FramedMessage(6, new Exit(0, false)));
         AtomicInteger opened = new AtomicInteger();
-        AtomicInteger rotated = new AtomicInteger();
-        CodexSandboxManager manager = new CodexSandboxManager(
-                new CodexSandboxOptions(tempDir, null, null, null, false, null), 30_000);
-        CodexCommandExecutor exec = healingExecutor(manager, (cfg, spec) -> {
+        AtomicInteger reprovisioned = new AtomicInteger();
+        CodexCommandExecutor exec = healingExecutor(manager(), (cfg, spec) -> {
             if (opened.incrementAndGet() == 1) {
                 throw new RunnerStartupException(new IpcMessage.Error(
                         "CreateProcessAsUserW failed", ErrorStage.SPAWN_CHILD, 1326));
             }
             return session;
-        }, m -> rotated.incrementAndGet());
+        }, m -> reprovisioned.incrementAndGet());
         assertEquals("ok", exec.execute("x", "powershell"),
                 "error 帧凭据码 → 自愈重试通过");
-        assertEquals(1, rotated.get());
+        assertEquals(1, reprovisioned.get());
         assertEquals(2, opened.get());
     }
 
-    /** runner error 帧的非凭据类码（如 5）走通用失败路径，不轮换。 */
+    /** runner error 帧的非凭据类码（如 5）走通用失败路径，不重建。 */
     @Test
-    void runnerStartupNonCredentialCodeDoesNotRotate() {
-        AtomicInteger rotated = new AtomicInteger();
-        CodexSandboxManager manager = new CodexSandboxManager(
-                new CodexSandboxOptions(tempDir, null, null, null, false, null), 30_000);
-        CodexCommandExecutor exec = healingExecutor(manager, (cfg, spec) -> {
+    void runnerStartupNonCredentialCodeDoesNotReprovision() {
+        AtomicInteger reprovisioned = new AtomicInteger();
+        CodexCommandExecutor exec = healingExecutor(manager(), (cfg, spec) -> {
             throw new RunnerStartupException(new IpcMessage.Error(
                     "access denied", ErrorStage.SPAWN_CHILD, 5));
-        }, m -> rotated.incrementAndGet());
+        }, m -> reprovisioned.incrementAndGet());
         String result = exec.execute("x", "powershell");
         assertTrue(result.startsWith("[codex sandbox 执行失败]"), "通用失败路径: " + result);
-        assertEquals(0, rotated.get(), "非凭据类失败不得触发重 setup");
+        assertEquals(0, reprovisioned.get(), "非凭据类失败不得触发重 setup");
     }
 
-    /** 通用失败（pipe broken）不触发凭据轮换（回归护栏）。 */
+    /** 通用失败（pipe broken）不触发重建（回归护栏）。 */
     @Test
-    void genericFailureDoesNotRotateCredentials() {
-        AtomicInteger rotated = new AtomicInteger();
-        CodexSandboxManager manager = new CodexSandboxManager(
-                new CodexSandboxOptions(tempDir, null, null, null, false, null), 30_000);
-        CodexCommandExecutor exec = healingExecutor(manager, (cfg, spec) -> {
+    void genericFailureDoesNotReprovision() {
+        AtomicInteger reprovisioned = new AtomicInteger();
+        CodexCommandExecutor exec = healingExecutor(manager(), (cfg, spec) -> {
             throw new IOException("pipe broken");
-        }, m -> rotated.incrementAndGet());
+        }, m -> reprovisioned.incrementAndGet());
         assertEquals("[codex sandbox 执行失败] pipe broken",
                 exec.execute("x", "powershell"));
-        assertEquals(0, rotated.get(), "非凭据类失败不得触发重 setup");
+        assertEquals(0, reprovisioned.get(), "非凭据类失败不得触发重 setup");
+    }
+
+    // ---- §4.3.1 #2：组/账户被删 → sidString 的 LookupAccountName 1332 ----
+
+    /** 组 EACodexSandboxUsers 被删：preflight 的 sidString 抛 1332（用户实测报错形态）→ 重建后重试通过。 */
+    @Test
+    void groupDeletedSidResolutionFailureTriggersHealing() {
+        FakeSession session = new FakeSession(out("ok", Stream.STDOUT),
+                new FramedMessage(6, new Exit(0, false)));
+        AtomicInteger refreshed = new AtomicInteger();
+        AtomicInteger opened = new AtomicInteger();
+        AtomicInteger reprovisioned = new AtomicInteger();
+        CodexCommandExecutor exec = healingExecutor(manager(), (cfg, spec) -> {
+            opened.incrementAndGet();
+            return session;
+        }, m -> reprovisioned.incrementAndGet(),
+                (options, capSids, w, r) -> {
+                    if (refreshed.incrementAndGet() == 1) {
+                        // Advapi32Util.getAccountByName 对已删账户/组的抛法：Win32Exception(1332)
+                        throw new Win32Exception(1332);
+                    }
+                });
+        assertEquals("ok", exec.execute("x", "powershell"),
+                "组被删 → 重建组+重挂成员 → 重试 preflight/命令通过");
+        assertEquals(1, reprovisioned.get());
+        assertEquals(2, refreshed.get(), "preflight 重试一次");
+        assertEquals(1, opened.get());
+    }
+
+    /** SID 解析失败但码不可愈（如 5 拒绝访问）→ 通用失败路径，不重建（护栏）。 */
+    @Test
+    void nonHealableSidResolutionFailureDoesNotReprovision() {
+        AtomicInteger reprovisioned = new AtomicInteger();
+        CodexCommandExecutor exec = healingExecutor(manager(), (cfg, spec) -> {
+            throw new IOException("unreachable");
+        }, m -> reprovisioned.incrementAndGet(),
+                (options, capSids, w, r) -> {
+                    throw new Win32Exception(5);
+                });
+        String result = exec.execute("x", "powershell");
+        assertTrue(result.startsWith("[codex sandbox 执行失败]"), "通用失败路径: " + result);
+        assertEquals(0, reprovisioned.get(), "非可愈码不得触发重 setup");
+    }
+
+    // ---- §4.3.1 #3：凭据文件 sandbox_users.json 被删/损坏 ----
+
+    /** 凭据文件被删：runnerConfigFactory 读密码抛 CredentialsFileException → 重 setup 重写文件后重试通过。 */
+    @Test
+    void secretsFileMissingTriggersHealing() {
+        FakeSession session = new FakeSession(out("ok", Stream.STDOUT),
+                new FramedMessage(6, new Exit(0, false)));
+        AtomicInteger built = new AtomicInteger();
+        AtomicInteger reprovisioned = new AtomicInteger();
+        CodexCommandExecutor exec = new CodexCommandExecutor(manager(),
+                tempDir.resolve("ws"), null, false,
+                CodexCommandExecutor.ShellChoice.POWERSHELL,
+                (cfg, spec) -> {
+                    return session;
+                },
+                (options, capSids, w, r) -> {
+                },
+                (options, username) -> {
+                    if (built.incrementAndGet() == 1) {
+                        throw new SandboxSecrets.CredentialsFileException(
+                                "sandbox users file missing: "
+                                        + SandboxSecrets.secretsFile(options.codexHome()));
+                    }
+                    return new RunnerClient.RunnerConfig(options.codexHome(), username,
+                            "pw", "cp", "jh", "cwd");
+                },
+                m -> reprovisioned.incrementAndGet());
+        assertEquals("ok", exec.execute("x", "powershell"),
+                "凭据文件被删 → 重 setup 重写 DPAPI 凭据 → 重试通过");
+        assertEquals(1, reprovisioned.get());
+        assertEquals(2, built.get(), "runnerConfig 重试一次（重读新密码）");
+    }
+
+    // ---- §4.3.1 #4：setup marker 被删 → nativeGuard 双闸门自愈 ----
+
+    /** marker 被删：healSetupDamage 触发重 setup（fake 侧补写 marker+凭据占位）→ 闸门恢复。 */
+    @Test
+    void markerDeletedHealsViaReprovision() throws IOException {
+        CodexSandboxManager mgr = manager();
+        AtomicInteger reprovisioned = new AtomicInteger();
+        CodexCommandExecutor exec = healingExecutor(mgr, (cfg, spec) -> {
+            throw new IOException("unreachable");
+        }, m -> {
+            reprovisioned.incrementAndGet();
+            // fake 重 setup：重建 marker（commit 为纯文件写，跨平台）+ 凭据占位
+            try {
+                SetupMarker.commit(tempDir, SetupPayload.SETUP_VERSION,
+                        "EACodexOffline", "EACodexOnline", List.of(), false);
+                Files.createDirectories(SandboxSecrets.secretsFile(tempDir).getParent());
+                Files.createFile(SandboxSecrets.secretsFile(tempDir));
+            } catch (IOException e) {
+                throw new IllegalStateException("fake reprovision failed", e);
+            }
+        });
+        assertFalse(SetupMarker.isComplete(tempDir, SetupPayload.SETUP_VERSION),
+                "前置：marker 未就绪");
+        assertNull(exec.healSetupDamage(mgr.options(), "test: marker 被删"),
+                "自愈成功返回 null（继续执行命令）");
+        assertTrue(SetupMarker.isComplete(tempDir, SetupPayload.SETUP_VERSION),
+                "重 setup 后双闸门就绪");
+        assertEquals(1, reprovisioned.get());
+    }
+
+    /** marker 被删且重 setup 失败（UAC 被拒）→ 可读错误，不静默。 */
+    @Test
+    void markerDeletedReprovisionFailureIsReadable() {
+        CodexCommandExecutor exec = healingExecutor(manager(), (cfg, spec) -> {
+            throw new IOException("unreachable");
+        }, m -> {
+            throw new IllegalStateException("codex 沙箱 setup 失败: code=xx UAC 被拒");
+        });
+        String error = exec.healSetupDamage(manager().options(), "test: marker 被删");
+        assertNotNull(error, "失败返回可读错误");
+        assertTrue(error.startsWith("[codex sandbox 未完成 setup 且自动修复失败]"),
+                "可读错误前缀: " + error);
     }
 }

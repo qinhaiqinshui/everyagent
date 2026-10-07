@@ -52,6 +52,10 @@ public final class WinErr {
     public static final int ERROR_ACCOUNT_DISABLED = 1331;
     /** 组成员不存在（AddMembers 失败的可分类原因）。 */
     public static final int ERROR_NO_SUCH_MEMBER = 1387;
+    /** 账户不存在（被 net user del 删除——LookupAccountName/LogonUser 均可能回此码）。 */
+    public static final int ERROR_NO_SUCH_USER = 1317;
+    /** 帐户名与 SID 间无映射（账户/组被删后 LookupAccountName 的典型失败码——自愈矩阵 §4.3.1 #2）。 */
+    public static final int ERROR_NONE_MAPPED = 1332;
 
     // ---- HRESULT ----
 

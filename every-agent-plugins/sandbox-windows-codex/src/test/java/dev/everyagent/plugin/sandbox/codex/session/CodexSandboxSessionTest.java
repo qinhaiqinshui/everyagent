@@ -191,25 +191,34 @@ class CodexSandboxSessionTest {
 
     @Test
     void logonFailuresAreClassifiedPerTaskSpec() {
-        for (int code : List.of(1326, 1331, 1387, 1312)) {
+        for (int code : List.of(1326, 1331, 1387, 1312, 1317, 1332)) {
             assertThrows(RunnerClient.CredentialMismatchException.class,
                     () -> RunnerClient.classifyLogonFailure("sandbox-user", code),
-                    "凭据类错误码 " + code);
+                    "账户·凭据类错误码 " + code);
         }
         RunnerClient.classifyLogonFailure("sandbox-user", 1056); // 服务忙：由重试路径处理
         RunnerClient.classifyLogonFailure("sandbox-user", 5); // 其余：留给通用失败路径
     }
 
-    /** identity.rs 密码失配口径（1330/1907）：与 1326 同归凭据类——重置密码即自愈。 */
+    /** identity.rs 密码失配口径（1330/1907）+ is_refreshable 的账户被删口径（1317/1332）：全部重 setup 即自愈。 */
     @Test
-    void passwordExpiryCodesAreCredentialMismatch() {
-        for (int code : List.of(1326, 1330, 1907, 1331, 1387, 1312)) {
-            assertTrue(RunnerClient.isCredentialMismatchCode(code),
-                    "凭据类错误码 " + code);
+    void healableAccountFailureCodes() {
+        for (int code : List.of(1326, 1330, 1907, 1331, 1387, 1312, 1317, 1332)) {
+            assertTrue(RunnerClient.isHealableAccountFailureCode(code),
+                    "可自愈错误码 " + code);
         }
         for (int code : List.of(1056, 5, 1223, 231)) {
-            assertFalse(RunnerClient.isCredentialMismatchCode(code),
-                    "非凭据类错误码 " + code);
+            assertFalse(RunnerClient.isHealableAccountFailureCode(code),
+                    "不可自愈错误码 " + code);
         }
+    }
+
+    /** 账户/组被删（1317/1332）：异常消息区分「被删」与「凭据失配」，供双层错误回报。 */
+    @Test
+    void deletedAccountMessageDistinguishesMissingFromMismatch() {
+        assertTrue(new RunnerClient.CredentialMismatchException("EACodexOnline", 1332)
+                .getMessage().contains("deleted or unresolvable"));
+        assertTrue(new RunnerClient.CredentialMismatchException("EACodexOnline", 1326)
+                .getMessage().contains("credential mismatch"));
     }
 }

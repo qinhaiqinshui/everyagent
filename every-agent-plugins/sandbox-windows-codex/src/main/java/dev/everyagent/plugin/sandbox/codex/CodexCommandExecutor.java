@@ -5,6 +5,7 @@ import dev.everyagent.plugin.api.util.SecretPatterns;
 import dev.everyagent.plugin.sandbox.codex.accounts.CapSids;
 import dev.everyagent.plugin.sandbox.codex.accounts.SandboxAccounts;
 import dev.everyagent.plugin.sandbox.codex.accounts.SandboxAccounts.NetworkIdentity;
+import dev.everyagent.plugin.sandbox.codex.accounts.SandboxSecrets;
 import dev.everyagent.plugin.sandbox.codex.acl.ProvisioningAcl;
 import dev.everyagent.plugin.sandbox.codex.acl.ProvisioningRequest;
 import dev.everyagent.plugin.sandbox.codex.acl.RootPolicy;
@@ -42,9 +43,10 @@ import java.util.Map;
  * {@link CodexSandboxSession#open} 拉起 runner 会话 → 聚合 stdout/stderr（base64 还原
  * 原始字节、每流字节上限截断、整段 {@link ExecResults#decodeConsoleOutput(byte[])}
  * 智能 UTF-8/ANSI 解码）→ Exit 帧 → wsl 同款格式化尾注。
- * 凭据类失败（1326/1330/1907 等，账户密码被外部改动/过期）不直接报错：经
- * {@link CredentialRotator} 强制完整重 setup 轮换密码后<b>原地重试该命令一次</b>
- * （设计 §4.3，对齐 codex identity.rs 自愈语义）。
+ * 账户·凭据类失败不直接报错（design.md §4.3.1 自愈矩阵）：沙箱账户被删（1317/1332）、
+ * 组被删致 SID 解析失败（1332）、密码被外部改动/过期/禁用（1326/1330/1907/1331）、
+ * 凭据文件丢失/损坏、marker 被删——统一经 {@link Reprovisioner} 强制完整重 setup 重建后
+ * <b>原地重试该命令一次</b>（对齐 codex identity.rs 自愈语义）。
  *
  * <p>Windows 原生调用集中在三个可注入 seam（{@link SessionOpener}/
  * {@link PreflightRefresher}/{@link RunnerConfigFactory}）的生产默认实现里，
@@ -99,12 +101,13 @@ public final class CodexCommandExecutor {
     }
 
     /**
-     * 凭据轮换 seam（生产 = {@link CodexSetupCoordinator#rotateCredentials}：
-     * 强制完整重 setup——重新生成两账户密码并重写 DPAPI 凭据文件，未提权时弹一次 UAC）。
+     * 重建 seam（生产 = {@link CodexSetupCoordinator#rotateCredentials}：强制完整重
+     * setup——重建被删账户/组、重新生成密码并重写 DPAPI 凭据文件、恢复 marker，未提权时
+     * 弹一次 UAC；design.md §4.3.1 自愈矩阵 #1-#4 共用）。
      */
     @FunctionalInterface
-    public interface CredentialRotator {
-        void rotate(CodexSandboxManager manager);
+    public interface Reprovisioner {
+        void reprovision(CodexSandboxManager manager);
     }
 
     private final CodexSandboxManager manager;
@@ -114,7 +117,7 @@ public final class CodexCommandExecutor {
     private final SessionOpener sessionOpener;
     private final PreflightRefresher preflight;
     private final RunnerConfigFactory runnerConfigFactory;
-    private final CredentialRotator credentialRotator;
+    private final Reprovisioner reprovisioner;
     /** 探测到的 shell（缓存，进程生命周期内只探测一次）。 */
     private final ShellChoice shell;
 
@@ -145,11 +148,11 @@ public final class CodexCommandExecutor {
                 CodexSetupCoordinator::rotateCredentials);
     }
 
-    /** 测试构造：全 seam 注入（凭据轮换 = fake，验证自愈路径）。 */
+    /** 测试构造：全 seam 注入（重建 = fake，验证自愈路径）。 */
     CodexCommandExecutor(CodexSandboxManager manager, Path workspaceRoot, Path rgBinary,
             boolean nativeGuard, ShellChoice shell, SessionOpener sessionOpener,
             PreflightRefresher preflight, RunnerConfigFactory runnerConfigFactory,
-            CredentialRotator credentialRotator) {
+            Reprovisioner reprovisioner) {
         this.manager = manager;
         this.workspaceRoot = workspaceRoot;
         this.rgBinary = rgBinary;
@@ -158,7 +161,7 @@ public final class CodexCommandExecutor {
         this.sessionOpener = sessionOpener;
         this.preflight = preflight;
         this.runnerConfigFactory = runnerConfigFactory;
-        this.credentialRotator = credentialRotator;
+        this.reprovisioner = reprovisioner;
     }
 
     /**
@@ -176,16 +179,21 @@ public final class CodexCommandExecutor {
                         + System.getProperty("os.name") + "]";
             }
             if (!SetupMarker.isComplete(options.codexHome(), SetupPayload.SETUP_VERSION)) {
-                return "[codex sandbox 未完成 setup;setup 应在后端 create() 时自动触发,"
-                        + "若仍失败请检查 UAC 是否被拒绝或重新启动 worker]";
+                // marker 被删/损坏 → 不再要求重启 worker：原地触发重 setup 自愈
+                //（design.md §4.3.1 #4；marker 缺失使幂等 ensure 走完整 setup）
+                String healError = healSetupDamage(options,
+                        "marker/凭据双闸门未就绪(setup_marker.json 或 sandbox_users.json 被删/损坏)");
+                if (healError != null) {
+                    return healError;
+                }
             }
         }
         SessionRun run;
         try {
             run = runInSession(command, options);
         } catch (IOException | RuntimeException e) {
-            if (isCredentialMismatch(e)) {
-                return executeAfterCredentialHealing(command, options, e);
+            if (needsAccountHealing(e)) {
+                return executeAfterAccountHealing(command, options, e);
             }
             return sessionFailure(options, command, e);
         }
@@ -195,56 +203,98 @@ public final class CodexCommandExecutor {
     }
 
     /**
-     * 凭据失配自愈（对齐 codex identity.rs「凭据失配 → 重跑 setup 刷新凭据后重试，
-     * 而非直接报错」，场景=沙箱账户密码被外部改动/过期，错误码 1326/1330/1907 等）：
-     * 强制完整重 setup——重新生成两账户密码并重写 DPAPI 凭据文件（未提权时弹一次
-     * UAC）——成功后<b>原地重试该命令一次</b>（重试经 runnerConfigFactory 重读新密码）；
-     * 重 setup 或重试仍失败才把两层错误都回给模型。一次 execute 至多自愈一次（防循环）。
+     * 账户·凭据自愈（对齐 codex identity.rs「账户/凭据失配 → 重跑 setup 刷新后重试，
+     * 而非直接报错」；design.md §4.3.1 自愈矩阵）：触发场景=沙箱账户被删(1317/1332)、
+     * 组被删致 SID 解析失败(1332)、密码被外部改动/过期(1326/1330/1907)、账户被禁用
+     * (1331)、凭据文件丢失/损坏/版本失配、runner error 帧带回的凭据类码。手段=强制
+     * 完整重 setup（重建账户/组、重新生成密码、重写 DPAPI 凭据文件与 marker；未提权时
+     * 弹一次 UAC）——成功后<b>原地重试该命令一次</b>（重试经 preflight/runnerConfigFactory
+     * 重解析 SID、重读新密码）；重 setup 或重试仍失败才把两层错误都回给模型。
+     * 一次 execute 至多自愈一次（防循环）。
      */
-    private String executeAfterCredentialHealing(String command, CodexSandboxOptions options,
-            Throwable mismatch) {
+    private String executeAfterAccountHealing(String command, CodexSandboxOptions options,
+            Throwable damage) {
         LOG.log(System.Logger.Level.WARNING,
-                "[exec] codex 沙箱账户凭据失配({0}),自动重新 setup 轮换密码后重试一次",
-                messageOf(mismatch));
+                "[exec] codex 沙箱账户/凭据失配({0}),自动重新 setup 重建后重试一次",
+                messageOf(damage));
         try {
-            credentialRotator.rotate(manager);
+            reprovisioner.reprovision(manager);
         } catch (RuntimeException setupFailure) {
             LOG.log(System.Logger.Level.ERROR,
-                    "[exec] 凭据自愈的重新 setup 失败: {0}", messageOf(setupFailure));
-            return "[codex sandbox 凭据失配且自动修复失败] 原始错误: "
-                    + messageOf(mismatch) + "; 自动重新 setup 失败: "
+                    "[exec] 沙箱自愈的重新 setup 失败: {0}", messageOf(setupFailure));
+            return "[codex sandbox 账户/凭据失配且自动修复失败] 原始错误: "
+                    + messageOf(damage) + "; 自动重新 setup 失败: "
                     + messageOf(setupFailure)
                     + "(未提权时修复需在 UAC 弹窗中同意,拒绝后可重发命令再次触发自愈)";
         }
         try {
             SessionRun run = runInSession(command, options);
             LOG.log(System.Logger.Level.INFO,
-                    "[exec] codex 凭据自愈成功,重试通过 cmd={0}",
+                    "[exec] codex 沙箱自愈成功,重试通过 cmd={0}",
                     ExecResults.truncate(command, 200));
             return format(run);
         } catch (IOException | RuntimeException retry) {
             LOG.log(System.Logger.Level.WARNING,
-                    "[exec] codex 凭据自愈后重试仍失败 cmd={0}",
+                    "[exec] codex 沙箱自愈后重试仍失败 cmd={0}",
                     ExecResults.truncate(command, 200) + " | " + retry);
             // 与通用失败路径同口径：物化缓存可能失真，丢弃后下一条命令重做物化
             RunnerMaterializer.invalidateRunnerClasspath(options.codexHome());
-            return "[codex sandbox 执行失败] 凭据自愈后重试仍失败: " + messageOf(retry);
+            return "[codex sandbox 执行失败] 账户/凭据自愈后重试仍失败: " + messageOf(retry);
         }
     }
 
     /**
-     * 凭据类失败判定：spawn 侧 {@link RunnerClient.CredentialMismatchException}
-     * （CreateProcessWithLogonW 1326 等），或 runner error 帧带回的凭据类
-     * windows_error_code（{@link CodexSandboxSession.RunnerStartupException} 二次分类，
-     * 与 spawn 侧共用 {@link RunnerClient#isCredentialMismatchCode} 同一张表）。
+     * marker 守卫自愈：双闸门未就绪时原地重 setup 一次，成功返回 null（继续执行命令），
+     * 失败返回可读错误。包可见以便单测（跨平台——SetupMarker 判定是纯文件读）。
      */
-    static boolean isCredentialMismatch(Throwable e) {
-        if (e instanceof RunnerClient.CredentialMismatchException) {
-            return true;
+    String healSetupDamage(CodexSandboxOptions options, String reason) {
+        LOG.log(System.Logger.Level.WARNING,
+                "[exec] codex 沙箱就绪态受损({0}),自动重新 setup...", reason);
+        try {
+            reprovisioner.reprovision(manager);
+        } catch (RuntimeException setupFailure) {
+            return "[codex sandbox 未完成 setup 且自动修复失败] 原因: " + reason
+                    + "; 自动重新 setup 失败: " + messageOf(setupFailure)
+                    + "(未提权时修复需在 UAC 弹窗中同意,拒绝后可重发命令再次触发自愈)";
         }
-        if (e instanceof CodexSandboxSession.RunnerStartupException startup) {
-            Integer code = startup.error().windowsErrorCode();
-            return code != null && RunnerClient.isCredentialMismatchCode(code);
+        if (!SetupMarker.isComplete(options.codexHome(), SetupPayload.SETUP_VERSION)) {
+            return "[codex sandbox 未完成 setup;自动修复后双闸门仍未就绪,请检查 UAC 是否被拒绝"
+                    + "或重新启动 worker]";
+        }
+        return null;
+    }
+
+    /**
+     * 账户·凭据类可自愈失败判定（cause 链遍历，三类信号任一命中即触发重 setup 自愈，
+     * 与 {@link RunnerClient#isHealableAccountFailureCode} 共用同一张码表）：
+     * ① spawn 侧 {@link RunnerClient.CredentialMismatchException}（CreateProcessWithLogonW
+     *    1317/1332/1326 等），或 runner error 帧带回的凭据类 windows_error_code
+     *    （{@link CodexSandboxSession.RunnerStartupException} 二次分类）；
+     * ② {@code Win32Exception} 携可愈码——账户/组被删后 {@code LookupAccountName} 失败
+     *    （1332/1317，preflight 与 runnerConfigFactory 的 {@code sidString} 处抛出）；
+     * ③ {@link SandboxSecrets.CredentialsFileException}——凭据文件态失真
+     *    （丢失/损坏/版本失配/DPAPI 解密失败）。
+     */
+    static boolean needsAccountHealing(Throwable e) {
+        int depth = 0;
+        for (Throwable t = e; t != null && t != t.getCause() && depth <= 8;
+                t = t.getCause(), depth++) {
+            if (t instanceof RunnerClient.CredentialMismatchException) {
+                return true;
+            }
+            if (t instanceof CodexSandboxSession.RunnerStartupException startup) {
+                Integer code = startup.error().windowsErrorCode();
+                if (code != null && RunnerClient.isHealableAccountFailureCode(code)) {
+                    return true;
+                }
+            }
+            if (t instanceof com.sun.jna.platform.win32.Win32Exception win32
+                    && RunnerClient.isHealableAccountFailureCode(win32.getErrorCode())) {
+                return true;
+            }
+            if (t instanceof SandboxSecrets.CredentialsFileException) {
+                return true;
+            }
         }
         return false;
     }

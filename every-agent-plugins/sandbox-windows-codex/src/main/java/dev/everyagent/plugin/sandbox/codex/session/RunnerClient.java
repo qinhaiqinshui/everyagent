@@ -39,10 +39,11 @@ import java.util.Map;
  *
  * <p>失败分类（对齐 runner_client.rs::retry_runner_spawn_once /
  * is_refreshable_windows_error）：1056（Secondary Logon 服务忙）原凭据重试一次；
- * 1326/1330/1907/1331/1387（+codex 同类的 1312）凭据类 →
+ * 1317/1332（账户/组被删，SID 无法解析）、1326/1330/1907/1331/1387/1312 账户·凭据类 →
  * {@link CredentialMismatchException}——上层 {@code CodexCommandExecutor} 捕获后强制
- * 重 setup 轮换密码并原地重试一次（对齐 codex identity.rs「凭据失配 → 重跑 setup
- * 刷新凭据后重试，而非直接报错」）。握手失败 TerminateProcess 收尸。
+ * 重 setup 重建账户/组/凭据并原地重试一次（design.md §4.3.1 自愈矩阵，对齐 codex
+ * identity.rs「账户/凭据失配 → 重跑 setup 刷新后重试，而非直接报错」）。握手失败
+ * TerminateProcess 收尸。
  */
 public final class RunnerClient {
 
@@ -58,25 +59,39 @@ public final class RunnerClient {
     /** codex RUNNER_ERROR_MODE_FLAGS = 0x1|0x2。 */
     private static final int RUNNER_ERROR_MODE_FLAGS = 0x0001 | 0x0002;
     /**
-     * 凭据类失败码（任务口径 1326/1331/1387 + codex is_refreshable 的 1312 +
-     * identity.rs 密码失配口径的 1330/1907——全部可由重置密码自愈）。
+     * 账户·凭据类可自愈失败码（对齐 codex runner_client.rs is_refreshable_windows_error
+     * 的 1312/1317/1331/1387 + identity.rs 凭据失配口径的 1326/1330/1907 + SID 解析失配的
+     * 1332——全部可由「强制重 setup 重建账户/组 + 重写凭据」自愈，见 design.md §4.3.1）。
      */
-    private static final List<Integer> CREDENTIAL_MISMATCH_CODES = List.of(
+    private static final List<Integer> HEALABLE_ACCOUNT_FAILURE_CODES = List.of(
             WinErr.ERROR_LOGON_FAILURE, WinErr.ERROR_PASSWORD_EXPIRED,
             WinErr.ERROR_PASSWORD_MUST_CHANGE, WinErr.ERROR_ACCOUNT_DISABLED,
-            WinErr.ERROR_NO_SUCH_MEMBER, WinErr.ERROR_NO_SUCH_LOGON_SESSION);
+            WinErr.ERROR_NO_SUCH_MEMBER, WinErr.ERROR_NO_SUCH_LOGON_SESSION,
+            WinErr.ERROR_NO_SUCH_USER, WinErr.ERROR_NONE_MAPPED);
 
     private RunnerClient() {
     }
 
     /** 沙箱账户凭据失配——自愈信号：上层强制重 setup 轮换密码后原地重试（对齐 SandboxAccountCredentialMismatch 语义）。 */
+    /**
+     * 沙箱账户·凭据与系统状态失配——自愈信号：存储凭据/账户名与 OS 账户库对不上
+     * （账户被删 1317/1332、密码被外部改动/过期 1326/1330/1907、账户被禁用 1331 等），
+     * 上层强制重 setup 重建账户/组/凭据后原地重试（对齐 SandboxAccountCredentialMismatch
+     * 语义 + is_refreshable_windows_error 口径，design.md §4.3.1）。
+     */
     public static final class CredentialMismatchException extends RuntimeException {
         private final int windowsErrorCode;
 
         public CredentialMismatchException(String username, int windowsErrorCode) {
-            super("sandbox account credential mismatch for " + username
-                    + " (Windows error " + windowsErrorCode + "); re-run setup");
+            super(messageFor(username, windowsErrorCode));
             this.windowsErrorCode = windowsErrorCode;
+        }
+
+        private static String messageFor(String username, int code) {
+            String state = code == WinErr.ERROR_NO_SUCH_USER || code == WinErr.ERROR_NONE_MAPPED
+                    ? "sandbox account/group deleted or unresolvable: " + username
+                    : "sandbox account credential mismatch for " + username;
+            return state + " (Windows error " + code + "); re-setup will heal";
         }
 
         public int windowsErrorCode() {
@@ -430,20 +445,21 @@ public final class RunnerClient {
         return si;
     }
 
-    /** 凭据失败分类：凭据类抛 CredentialMismatchException，其余留给调用方处理。 */
+    /** 凭据失败分类：账户·凭据类抛 CredentialMismatchException，其余留给调用方处理。 */
     static void classifyLogonFailure(String username, int code) {
-        if (isCredentialMismatchCode(code)) {
+        if (isHealableAccountFailureCode(code)) {
             throw new CredentialMismatchException(username, code);
         }
     }
 
     /**
-     * 凭据类失败码判定（跨调用方共用的同一张表）：spawn 侧
-     * {@link #classifyLogonFailure} 与执行层对 runner error 帧
-     * （windows_error_code）的二次分类共用，保证自愈口径一致。
+     * 账户·凭据类可自愈失败码判定（跨调用方共用的同一张表）：spawn 侧
+     * {@link #classifyLogonFailure}、执行层对 runner error 帧（windows_error_code）的
+     * 二次分类、SID 解析 {@code Win32Exception}（账户/组被删 → 1332/1317）的识别
+     * 三处共用，保证自愈口径一致（design.md §4.3.1）。
      */
-    public static boolean isCredentialMismatchCode(int code) {
-        return CREDENTIAL_MISMATCH_CODES.contains(code);
+    public static boolean isHealableAccountFailureCode(int code) {
+        return HEALABLE_ACCOUNT_FAILURE_CODES.contains(code);
     }
 
     /** 纯函数（可测）：runner 命令行参数（JVM flags 对齐设计 §4.1）。 */

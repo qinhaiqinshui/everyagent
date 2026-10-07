@@ -105,26 +105,51 @@ public final class SandboxSecrets {
      * 读取指定账户的明文密码（对齐 identity.rs::decode_password：
      * 读 JSON → base64 解码 → CryptUnprotectData → UTF-8）。
      *
-     * @throws IOException 文件缺失/账户不匹配/解密失败
+     * @throws CredentialsFileException 凭据文件态失真（缺失/损坏/版本失配/无该账户记录/
+     *         DPAPI 解密失败）——执行链据此触发强制重 setup 重写凭据（design.md §4.3.1 #3）
+     * @throws IOException 其他 IO 失败
      */
     public static String readPassword(Path codexHome, int expectedVersion, String username)
             throws IOException {
         Path path = secretsFile(codexHome);
         if (!Files.exists(path)) {
-            throw new IOException("sandbox users file missing: " + path);
+            throw new CredentialsFileException("sandbox users file missing: " + path);
         }
-        SandboxUsersFile file = MAPPER.readValue(path.toFile(), SandboxUsersFile.class);
+        SandboxUsersFile file;
+        try {
+            file = MAPPER.readValue(path.toFile(), SandboxUsersFile.class);
+        } catch (IOException corrupt) {
+            throw new CredentialsFileException("sandbox users file corrupt: " + path
+                    + " (" + corrupt.getMessage() + ")");
+        }
         if (file.version != expectedVersion) {
-            throw new IOException("sandbox users file version mismatch: expected "
+            throw new CredentialsFileException("sandbox users file version mismatch: expected "
                     + expectedVersion + ", got " + file.version);
         }
         UserRecord record = username.equals(file.offline.username) ? file.offline
                 : username.equals(file.online.username) ? file.online : null;
         if (record == null) {
-            throw new IOException("sandbox users file has no credentials for " + username);
+            throw new CredentialsFileException(
+                    "sandbox users file has no credentials for " + username);
         }
-        return new String(unprotect(Base64.getDecoder().decode(record.password)),
-                StandardCharsets.UTF_8);
+        try {
+            return new String(unprotect(Base64.getDecoder().decode(record.password)),
+                    StandardCharsets.UTF_8);
+        } catch (RuntimeException decryptOrEncodingFailed) {
+            // DPAPI 解密失败 = blob 与当前机器/账户态失配（文件被篡改/换机拷贝）——同属可自愈
+            throw new CredentialsFileException("sandbox credentials undecryptable for "
+                    + username + ": " + decryptOrEncodingFailed.getMessage());
+        }
+    }
+
+    /**
+     * 凭据文件态失真（{@link #readPassword} 专属失败）：文件缺失/损坏/版本失配/记录缺失/
+     * DPAPI 解密失败——重跑 setup 重写凭据文件即愈。
+     */
+    public static final class CredentialsFileException extends IOException {
+        public CredentialsFileException(String message) {
+            super(message);
+        }
     }
 
     /** 凭据文件是否存在（readiness「marker + 凭据」双闸门之一）。 */
