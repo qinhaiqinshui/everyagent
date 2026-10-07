@@ -27,7 +27,11 @@ public final class ShellTool {
             "在系统上用 PowerShell 执行真实 OS 命令;"
             + "命令工作目录默认为任务工作区根;"
             + "stdin 为 null 设备,命令无法从 stdin 读入输入;"
-            + "多条命令请用 ; 分隔;";
+            + "多条命令请用 ; 分隔;"
+            + "Windows PowerShell 5.1 不支持 && 与 || 连接符,请用 ; 分隔多条命令;"
+            + "PowerShell 5.1 会丢弃传给原生命令的空字符串参数(如 rg -c \"\" 中的 \"\" "
+            + "不会传给 rg,导致后一个参数被当成模式),请避免空字符串参数;"
+            + "需要可靠读取对象输出时建议显式转字符串(如 | Out-String 或 -ExpandProperty);";
 
     /** bash 默认基线描述。 */
     private static final String BASH_BASELINE =

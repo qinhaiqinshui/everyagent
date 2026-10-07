@@ -485,10 +485,11 @@ public final class CodexCommandExecutor {
         if (shell.isPowerShell) {
             // -ExecutionPolicy Bypass:沙箱账户默认 Restricted 策略会拦截 .ps1 脚本
             // (如 npm.ps1),per-process 旁路不影响系统策略。
-            // 尾部 POWERSHELL_EXIT_TAIL:把最后一个原生子进程的退出码转成 powershell.exe 的
-            // 进程码——否则 Exit 帧里的退出码恒 0,模型分不清 rg「无匹配=1」与「用错=2」。
-            String script = ExecResults.POWERSHELL_PREFIX + command
-                    + ExecResults.POWERSHELL_EXIT_TAIL;
+            // 脚本本体=ExecResults.buildPowerShellScript(prefix + &{}|Out-String 包裹 +
+            // 退出码尾部):顶层对象输出断流修复(PS-003,断流对管道承载同样成立,实测复现)
+            // 与「最后一个原生命令退出码转成 powershell.exe 进程码」(否则 Exit 帧里的退出码
+            // 恒 0,模型分不清 rg「无匹配=1」与「用错=2」)都由该方法统一承担。
+            String script = ExecResults.buildPowerShellScript(command);
             String encoded = Base64.getEncoder()
                     .encodeToString(script.getBytes(StandardCharsets.UTF_16LE));
             return List.of("cmd.exe", "/d", "/s", "/c",
@@ -544,13 +545,18 @@ public final class CodexCommandExecutor {
     }
 
     /**
-     * 三段式脚本内容:prefix/用户命令/exit 尾部各占一行。用户命令独占一行是
-     * {@link #commandArgvForFile} 定位质量的前提(PS PositionMessage 引用整行)。
+     * 脚本内容:委托 {@link ExecResults#buildPowerShellScript}——prefix 行 / {@code & {}
+     * 行 / 用户命令行 / {@code } | Out-String -Width 4096}+exit 尾部行。
+     *
+     * <p>用户命令独占一行是 {@link #commandArgvForFile} 定位质量的前提(PS PositionMessage
+     * 引用整行);{@code & {} | Out-String} 包裹是 PS-003 顶层对象输出断流修复——PS 5.1
+     * {@code -File} + stdout 重定向(管道承载,本后端 runner 形态)下顶层裸对象
+     * ({@code Get-Location}/{@code [pscustomobject]} 等)触发格式化引擎后,该输出与其后
+     * 全部输出静默丢失(rc=0、stderr 空),实测管道内 Out-String 路径健康,详见其 javadoc。
      * 行首的 {@code ;}(exit 尾部)PS 5.1 接受(实测),保持与常量原样拼接。
      */
     static String buildScript(String command) {
-        return ExecResults.POWERSHELL_PREFIX + "\n" + command + "\n"
-                + ExecResults.POWERSHELL_EXIT_TAIL;
+        return ExecResults.buildPowerShellScript(command);
     }
 
     /**

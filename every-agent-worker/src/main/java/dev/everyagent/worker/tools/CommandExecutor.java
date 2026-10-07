@@ -106,11 +106,13 @@ public class CommandExecutor {
             String sysPath = System.getenv("PATH");
             env.put("PATH", rgBinDir + java.io.File.pathSeparator + (sysPath == null ? "" : sysPath));
         }
-        // powershell 专属(Windows 原生域):授权检查之后给命令串预置 UTF-8 偏好 +
-        // 非成功流抑制(权限检查与审计日志始终是用户原始命令)。前缀先于用户命令执行,
-        // 用户若显式设置该偏好,后写覆盖本前缀。真正的非 ASCII 正确性由「输出文件承载」
-        // 保证(见 OsSandbox#spawnToFileRedirect),前缀只负责编码偏好与噪声抑制。
-        String spawnCmd = powershell ? ExecResults.POWERSHELL_PREFIX + command : command;
+        // powershell 专属(Windows 原生域):授权检查之后以 ExecResults.buildPowerShellScript
+        // 组装完整脚本——UTF-8 编码偏好 + 非成功流抑制前缀(权限检查与审计日志始终是用户
+        // 原始命令)、PS-003 顶层对象输出断流修复(&{} | Out-String 包裹,见其 javadoc)、
+        // 退出码传导尾部。前缀先于用户命令执行,用户若显式设置该偏好,后写覆盖本前缀。
+        // 真正的非 ASCII 正确性由「输出文件承载」保证(见 OsSandbox#spawnToFileRedirected),
+        // 前缀只负责编码偏好与噪声抑制。
+        String spawnCmd = powershell ? ExecResults.buildPowerShellScript(command) : command;
         // wsl-bwrap 后端:已授权 EXEC 根随调用挂载进沙箱(授权=绑定,撤销=下次不绑,零宿主状态);
         // 走 execRootsSandboxed(§13.3 L2 过滤)——过度宽泛根(如历史 C:\\)不得进 --bind 白名单,
         // 否则整个 /mnt/c 会被读写挂进沙箱,读隔离被击穿。wsl-direct 不建 bwrap 命名空间,
@@ -134,7 +136,8 @@ public class CommandExecutor {
         if (powershell) {
             // powershell 唯一执行形态:临时 .ps1 + -File + stdout/stderr 文件承载 + 退出码传导。
             // 不再保留 -Command 分支——分支差异正是引号被 MSVCRT 转义吞掉(PS-002)的温床。
-            r = executePowerShell(spawnCmd + ExecResults.POWERSHELL_EXIT_TAIL, win, cwd, env);
+            // 脚本本体已在 spawnCmd 处经 buildPowerShellScript 组装完毕(含退出码尾部)。
+            r = executePowerShell(spawnCmd, win, cwd, env);
         } else {
             String[] shellPrefix = win ? new String[]{"cmd.exe", "/c"} : new String[]{"bash", "-c"};
             java.util.List<String> fullCmd = new java.util.ArrayList<>(java.util.List.of(shellPrefix));

@@ -67,10 +67,9 @@ class OsSandboxFileCarryTest {
         return new OsSandbox(new WorkerProperties(), null);
     }
 
-    /** 与 CommandExecutor 同构:前缀 + 用户命令 + 退出码尾部,UTF-8 BOM 落 .ps1。 */
+    /** 与 CommandExecutor 同构:buildPowerShellScript 组装(prefix+包裹+尾部),UTF-8 BOM 落 .ps1。 */
     private Path writeScript(String userCommand) throws IOException {
-        String script = ExecResults.POWERSHELL_PREFIX + userCommand
-                + ExecResults.POWERSHELL_EXIT_TAIL;
+        String script = ExecResults.buildPowerShellScript(userCommand);
         Path ps1 = dir.resolve("case.ps1");
         byte[] bom = {(byte) 0xEF, (byte) 0xBB, (byte) 0xBF};
         byte[] body = script.getBytes(StandardCharsets.UTF_8);

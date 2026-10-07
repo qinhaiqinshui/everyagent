@@ -77,6 +77,55 @@ public final class ExecResults {
             + "exit $__EAExitCode";
 
     /**
+     * {@link #buildPowerShellScript} 中 Out-String 的行宽。4096 给宽表格(git status、
+     * 多列 Format-Table)足够余量;重定向下 PS 默认宽度本就只有 120,不存在「更宽被截」的
+     * 语义回退。public:后端(如 codex)的形态断言测试需引用。
+     */
+    public static final int OUT_STRING_WIDTH = 4096;
+
+    /**
+     * 组装完整 PowerShell 执行脚本：prefix + <b>脚本块包裹的用户命令</b> + Out-String
+     * 文本化 + 退出码尾部（PS-003 顶层对象输出断流修复）。
+     *
+     * <p><b>问题</b>：PS 5.1 以 {@code -File} 运行且 stdout/stderr 被重定向（文件<b>或</b>
+     * 管道——worker DIRECT 文件承载与 codex runner 管道承载实测同病）时,脚本<b>顶层裸对象</b>
+     * 输出（{@code Get-Location} 的 PathInfo、{@code [pscustomobject]}、{@code Select-Object}
+     * 产物等）一旦触发格式化引擎渲染,该对象的输出与<b>其后全部输出</b>静默丢失——rc=0、
+     * stderr 空、连 CLIXML 都不产生（2026-12 ProcessBuilder 直 spawn 实测 100% 复现;
+     * {@code Get-Date}/{@code Get-Item}/{@code Int32} 顶层输出不触发,机理未明,疑与 host
+     * 格式化管线在无窗口控制台下的初始化路径有关;try-catch、预访问
+     * {@code $Host.UI.RawUI} 均不能救）。结果就是 AI 敲 {@code Get-Location} 得到空输出、
+     * 且无从分辨「命令失败」与「没有输出」。
+     *
+     * <p><b>修复</b>：用户命令包进 {@code & { … } | Out-String -Width 4096}——对象文本化在
+     * <b>管道内</b>完成,而管道内的 {@code Format-Table}/{@code Out-String} 路径实测健康,
+     * 坏的只是「顶层隐式 Out-Default」路径。
+     *
+     * <p><b>形态</b>（四行,行边界各自承担职责）：
+     * <pre>
+     * &lt;POWERSHELL_PREFIX&gt;
+     * &amp; {
+     * &lt;用户命令&gt;
+     * } | Out-String -Width 4096&lt;POWERSHELL_EXIT_TAIL&gt;
+     * </pre>
+     * 用户命令独占一行既保持 PS 报错 PositionMessage 精确引用用户代码（codex 2026-10
+     * 实测的定位质量),又保护用户命令末尾的 {@code # 注释}不被 {@code }} 吞掉——单行式
+     * {@code & { cmd # comment }} 的闭合括号会落进注释里导致语法错误。
+     *
+     * <p><b>语义实测不变</b>：块内 {@code exit N} 终止整个进程且码 N(尾部不执行,与原
+     * 行为一致);{@code $LASTEXITCODE} 传导({@code cmd /c exit 3} → rc=3);空输出块仅多
+     * 一个空行;{@code Write-Error} 等错误流照旧走 stderr + CLIXML 还原;赋值/控制流语句在
+     * 块内自洽(块作用域仅隔离变量导出,单命令内无影响)。
+     *
+     * @param command 用户命令原文（不转写、不拆分,整段嵌入）
+     * @return 完整 .ps1 脚本内容（调用方负责 UTF-8 BOM 落盘）
+     */
+    public static String buildPowerShellScript(String command) {
+        return POWERSHELL_PREFIX + "\n& {\n" + command + "\n} | Out-String -Width "
+                + OUT_STRING_WIDTH + POWERSHELL_EXIT_TAIL;
+    }
+
+    /**
      * 文件承载模式下 stdout / stderr 的读取字节上限（单流）。
      *
      * <p>字符级上限见 {@link #MAX_OUTPUT_CHARS}；此处先把「读进内存」的字节量封顶，

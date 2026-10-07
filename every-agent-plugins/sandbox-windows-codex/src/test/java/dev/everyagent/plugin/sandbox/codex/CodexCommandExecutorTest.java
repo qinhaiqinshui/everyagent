@@ -138,8 +138,8 @@ class CodexCommandExecutorTest {
                 + "-EncodedCommand ".length());
         String script = new String(java.util.Base64.getDecoder().decode(b64),
                 StandardCharsets.UTF_16LE);
-        assertEquals(ExecResults.POWERSHELL_PREFIX + "echo hi" + ExecResults.POWERSHELL_EXIT_TAIL,
-                script, "base64(UTF-16LE,无 BOM) 应还原 prefix+命令+exit 尾部");
+        assertEquals(ExecResults.buildPowerShellScript("echo hi"),
+                script, "base64(UTF-16LE,无 BOM) 应还原 prefix+脚本块包裹命令+exit 尾部");
         assertFalse(b64.startsWith("/"), "Java UTF_16LE 编码不带 BOM(PS -EncodedCommand 裸载荷)");
     }
 
@@ -160,12 +160,17 @@ class CodexCommandExecutorTest {
     void buildScriptPutsUserCommandOnOwnLine() {
         String script = CodexCommandExecutor.buildScript("java -version 2>&1");
         String[] lines = script.split("\n", -1);
-        assertEquals(3, lines.length, "三段式:prefix/用户命令/exit 尾部各占一行");
+        assertEquals(4, lines.length, "四段式:prefix/& {/用户命令/} | Out-String+exit 尾部");
         assertEquals(ExecResults.POWERSHELL_PREFIX.trim(), lines[0].trim(), "第 1 行=包装前缀");
-        assertEquals("java -version 2>&1", lines[1],
+        assertEquals("& {", lines[1], "第 2 行=脚本块开(PS-003 顶层对象输出断流修复包裹)");
+        assertEquals("java -version 2>&1", lines[2],
                 "用户命令独占一行:PS 报错定位引用用户命令而非内部包装前缀"
-                        + "(At <脚本>:2 char:1 + java -version 2>&1)");
-        assertEquals(ExecResults.POWERSHELL_EXIT_TAIL, lines[2], "第 3 行=exit 传导尾部");
+                        + "(At <脚本>:3 char:1 + java -version 2>&1),且末尾 # 注释不被 } 吞掉");
+        assertTrue(lines[3].startsWith("} | Out-String -Width " + ExecResults.OUT_STRING_WIDTH),
+                "第 4 行=Out-String 文本化收口(管道内完成,顶层隐式 Out-Default 路径断流):"
+                        + lines[3]);
+        assertTrue(lines[3].endsWith(ExecResults.POWERSHELL_EXIT_TAIL),
+                "第 4 行同含 exit 传导尾部");
     }
 
     @Test
