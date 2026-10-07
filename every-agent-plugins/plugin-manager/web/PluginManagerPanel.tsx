@@ -7,10 +7,11 @@
  * VSCode 在编辑器区打开扩展详情页）。
  *
  * 数据与动作来自共享 pluginStore（与详情标签页同源，切换/卸载后两处视图自动同步）。
- * 安装入口（.eap 上传）与「重新加载」保留在面板工具栏。
+ * 工具栏：搜索 + （有待生效变更时的）「重新加载」+ 右侧「更多（⋯）」菜单——安装入口
+ * （.eap 上传）等低频操作收进更多菜单，默认不占工具栏位。
  */
 import React from 'react'
-import { Input, Switch, Button, Tag, Typography, Alert, Spin, Empty } from 'antd'
+import { Input, Switch, Button, Tag, Typography, Alert, Spin, Empty, Dropdown } from 'antd'
 import { getUi } from './index'
 import {
   usePluginDirectory,
@@ -24,7 +25,7 @@ import {
   type PluginEntry,
 } from './pluginStore'
 import { PluginIcon } from './PluginIcon'
-import { SearchIcon, ReloadIcon, InstallIcon } from './icons'
+import { SearchIcon, ReloadIcon, InstallIcon, MoreIcon } from './icons'
 import { EXTENSION_DETAIL_TAB_TYPE } from './tabTypeKey'
 
 const { Text } = Typography
@@ -260,7 +261,7 @@ const PluginManagerPanel: React.FC = () => {
           onChange={(e) => setSearch(e.target.value)}
           style={{ flex: 1 }}
         />
-        {/* 安装入口：隐藏 file input（仅 .eap），选中即走上传 → plugin.install 流程 */}
+        {/* 安装入口：隐藏 file input（仅 .eap），选中即走上传 → plugin.install 流程（由更多菜单触发） */}
         <input
           ref={fileInputRef}
           type="file"
@@ -272,14 +273,6 @@ const PluginManagerPanel: React.FC = () => {
             void installEapFile(file)
           }}
         />
-        <Button
-          size="small"
-          icon={<InstallIcon />}
-          disabled={directory.installing}
-          onClick={() => fileInputRef.current?.click()}
-        >
-          {directory.installing ? '安装中…' : '安装…'}
-        </Button>
         {/* 重新加载：默认隐藏，仅在存在待生效变更时显示（出现即 primary 强调） */}
         {hasReloadNeeded && (
           <Button
@@ -292,6 +285,26 @@ const PluginManagerPanel: React.FC = () => {
             重新加载
           </Button>
         )}
+        {/* 更多菜单（⋯）：低频操作收纳，恒居工具栏最右 */}
+        <Dropdown
+          trigger={['click']}
+          placement="bottomRight"
+          menu={{
+            items: [
+              {
+                key: 'install',
+                icon: <InstallIcon />,
+                label: directory.installing ? '安装中…' : '安装插件…',
+                disabled: directory.installing,
+              },
+            ],
+            onClick: ({ key }) => {
+              if (key === 'install') fileInputRef.current?.click()
+            },
+          }}
+        >
+          <Button size="small" type="text" icon={<MoreIcon />} title="更多操作" />
+        </Dropdown>
       </div>
 
       {/* 错误提示 */}

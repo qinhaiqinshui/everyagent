@@ -130,6 +130,17 @@ export function InstallIcon({ size = 14, color, className }: IconProps) {
   )
 }
 
+/** 更多操作（竖排三点）图标（工具栏最右，触发更多菜单）。 */
+export function MoreIcon({ size = 14, color, className }: IconProps) {
+  return (
+    <LineSvg size={size} color={color} className={className}>
+      <circle cx="8" cy="3.6" r="1.15" fill="currentColor" />
+      <circle cx="8" cy="8" r="1.15" fill="currentColor" />
+      <circle cx="8" cy="12.4" r="1.15" fill="currentColor" />
+    </LineSvg>
+  )
+}
+
 /** 卸载（垃圾桶）图标（详情页动作）。 */
 export function UninstallIcon({ size = 14, color, className }: IconProps) {
   return (
