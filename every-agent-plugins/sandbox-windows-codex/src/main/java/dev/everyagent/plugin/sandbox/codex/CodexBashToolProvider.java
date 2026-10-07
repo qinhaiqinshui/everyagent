@@ -17,9 +17,15 @@ import java.util.List;
  * createTools：创建 {@link ShellTool}（使用 {@link CodexCommandExecutor}），
  * 返回 {@code List.of(ShellTool.powershell(...).callback())}。
  *
- * <p>rg 归属下放：rg 由插件自带（{@code <pluginDir>/bin/rg.exe}），activate 时经
- * {@link CodexRg#resolve} 解析后传入 {@link CodexCommandExecutor}（其所在目录注入子进程
- * PATH），不再依赖 worker 核心的 rg。
+ * <p>rg 归属下放：rg 首选插件自带（{@code <pluginDir>/bin/rg.exe}），activate 时经
+ * {@link CodexRg#resolve} 三档解析（插件根 bin/ → 程序根 runtime/bin/ → 系统 PATH）后传入
+ * {@link CodexCommandExecutor}（其所在目录注入子进程 PATH）。第二档程序根 {@code runtime/bin/}
+ * 与核心 {@code RipgrepBinary} 同一位置，是 desktop 打包态的实际命中位——插件自带 bin/ 未随包
+ * 落地时靠它兜住，不再出现「装了包却没有 rg」。
+ *
+ * <p>工具描述里的 rg 可用性<b>按解析结果条件化生成</b>：三档皆无时如实告知模型 rg 不可用、
+ * 内容搜索改用 {@code Select-String}，绝不无条件宣称「rg 已加入 PATH」——那会让模型的
+ * 「命令不存在」被当成「无匹配、结果正常」，是最恶劣的一类描述谎报。
  *
  * <p>非 ASCII 正确性<b>不做命令名特判</b>（历史 rg 包装 plugin-api RgShim 已删除）：直出路径
  * 由 runner 的输出文件承载（ChildProcess.OutputFiles）保证；PS 管道内捕获由默认启用的
@@ -29,11 +35,11 @@ import java.util.List;
 public class CodexBashToolProvider implements ToolProvider {
 
     private final CodexSandboxManager manager;
-    private final Path rgPath;
+    private final CodexRg.Rg rg;
 
-    public CodexBashToolProvider(CodexSandboxManager manager, Path rgPath) {
+    public CodexBashToolProvider(CodexSandboxManager manager, CodexRg.Rg rg) {
         this.manager = manager;
-        this.rgPath = rgPath;
+        this.rg = rg;
     }
 
     @Override
@@ -49,10 +55,18 @@ public class CodexBashToolProvider implements ToolProvider {
     @Override
     public List<ToolCallback> createTools(ToolContext ctx) {
         Path workspaceRoot = ctx.workspaceRoot() != null ? Path.of(ctx.workspaceRoot()) : null;
-        CodexCommandExecutor exec = new CodexCommandExecutor(manager, workspaceRoot, rgPath);
-        return List.of(ShellTool.powershell(exec::execute)
-                .appendDescription("rg 已加入 PATH，内容搜索尽量使用rg命令，性能更好;"
+        CodexCommandExecutor exec = new CodexCommandExecutor(manager, workspaceRoot, rg.injectPath());
+        // rg 提示按解析结果条件化(详见类注释):三档皆无时如实说明,不谎报「已加入 PATH」。
+        // 另报出探测到的 shell 可执行名,把 && / || 这类版本相关语法能否使用交给模型自己判断,
+        // ShellTool 基线不再断言「当前是 PowerShell 几版」。
+        String rgNote = rg.available()
+                ? "rg 已加入 PATH，内容搜索尽量使用rg命令，性能更好;"
                         + "rg 未给搜索路径时会静默过滤 null stdin 而返回空,请显式给搜索路径;"
+                : "rg 二进制不可用(插件根 bin/、程序根 runtime/bin/、系统 PATH 三档均未命中),"
+                        + "内容搜索请改用 PowerShell 的 Select-String,勿再尝试 rg;";
+        return List.of(ShellTool.powershell(exec::execute)
+                .appendDescription(rgNote
+                        + "实际执行 shell=" + CodexCommandExecutor.detectShell().exe + ";"
                         + "中文等非 ASCII 输出已正确解码;"
                         + "用户目录(含 Maven 仓库/npm/pip/gradle 缓存)已指向沙箱账户 profile,"
                         + "可写且持久,各工具直接用默认位置即可,勿手动指定仓库/缓存路径;"

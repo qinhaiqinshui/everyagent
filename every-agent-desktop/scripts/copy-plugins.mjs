@@ -14,6 +14,9 @@
  *   - README.md:插件根的 README 原文件名一并 staging——扩展详情页 README 区经
  *     plugin.webSource("readme.md") 读取(worker 侧同目录大小写不敏感回退),
  *     缺 README 的插件跳过不报错。
+ *   - 插件根 bin/ 目录:插件自带可执行文件(如 sandbox-windows-codex/bin/rg.exe)——插件
+ *     运行期按 <pluginDir>/bin/<name> 定位附属资源(架构 §7.10 rg 三档解析的第一档),
+ *     漏搬会让该资源在安装包里静默缺席,只能靠程序根 runtime/bin 回退兜住。
  *
  * 防残留(硬性要求):staging 目录在脚本开头**整体清空重建**——
  *   - enabled=false 的插件(如 sandbox-*)不复制,上次打包留下的旧 jar 也不会残留;
@@ -89,6 +92,8 @@ for (const entry of readdirSync(pluginsDir).sort()) {
   const hasWeb = existsSync(join(pluginDir, 'web', 'index.ts'))
   const jars = findTargetJars(pluginDir)
   const webDir = join(pluginDir, 'web')
+  const binDir = join(pluginDir, 'bin') // 插件自带可执行(rg.exe 等),整体 staging
+  const hasBin = existsSync(binDir) && statSync(binDir).isDirectory()
 
   if (isJava) {
     if (!existsSync(join(pluginDir, 'target', 'classes', 'plugin.json'))) {
@@ -116,7 +121,7 @@ for (const entry of readdirSync(pluginsDir).sort()) {
     errors.push(`${entry}: 缺 web/index.js(esbuild bundle 未构建) —— 请先 npm run build:plugins`)
   }
 
-  enabled.push({ name: entry, dir: pluginDir, isJava, jars, webDir, hasWeb })
+  enabled.push({ name: entry, dir: pluginDir, isJava, jars, webDir, hasWeb, binDir, hasBin })
 }
 
 if (errors.length > 0) {
@@ -129,7 +134,7 @@ if (errors.length > 0) {
 // 2. 复制(staging 已是空目录)
 // ---------------------------------------------------------------------------
 let files = 0
-for (const { name, dir, isJava, jars, webDir, hasWeb } of enabled) {
+for (const { name, dir, isJava, jars, webDir, hasWeb, binDir, hasBin } of enabled) {
   const dst = join(stagingDir, name)
   const copy = (src, rel) => {
     const to = join(dst, rel)
@@ -162,6 +167,15 @@ for (const { name, dir, isJava, jars, webDir, hasWeb } of enabled) {
       }
     }
     walk(webDir, '')
+  }
+  // 插件根 bin/:插件自带可执行文件(如 sandbox-windows-codex/bin/rg.exe)——运行期按
+  // <pluginDir>/bin/<name> 定位(§7.10 rg 三档解析第一档),必须整体搬;二进制不过滤后缀,
+  // 也不平铺进共享 runtime/(保持「插件自带资源归插件」的归属口径)。
+  if (hasBin && existsSync(binDir)) {
+    for (const f of readdirSync(binDir)) {
+      const full = join(binDir, f)
+      if (statSync(full).isFile()) copy(full, `bin/${f}`)
+    }
   }
 }
 

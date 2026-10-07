@@ -62,7 +62,13 @@ public class DirectShellToolProvider implements ToolProvider {
         CommandExecutor exec = new CommandExecutor(sandbox, ctx,
                 impl.gateImpl(), ctx.agentId(), rgDir);
         boolean win = isWindows();
-        String rgNote = "rg 已加入 PATH,可直接执行 rg 命令，内容搜索尽量使用rg命令，性能更好;";
+        // rg 提示按实际解析结果条件化:rgDir==null 时 CommandExecutor 根本不会注入 rg 目录,
+        // 此时若仍宣称「rg 已加入 PATH」,模型会把「命令不存在」误读成「无匹配、结果正常」。
+        String rgNote = rgDir != null
+                ? "rg 已加入 PATH,可直接执行 rg 命令，内容搜索尽量使用rg命令，性能更好;"
+                : "rg 二进制不可用(worker.tools.rg-path 与程序根 runtime/bin 均未命中),"
+                        + (win ? "内容搜索请改用 Select-String,勿再尝试 rg;"
+                               : "内容搜索请改用 grep,勿再尝试 rg;");
         if (win) {
             String note = rgNote + "中文等非 ASCII 输出已自动正确解码，无需手动处理编码。";
             return List.of(ShellTool.powershell(exec::execute)

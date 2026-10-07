@@ -22,9 +22,12 @@ class CodexBashToolProviderTest {
     Path tempDir;
 
     private CodexBashToolProvider provider() {
+        return provider(new CodexRg.Rg(null, false));
+    }
+
+    private CodexBashToolProvider provider(CodexRg.Rg rg) {
         return new CodexBashToolProvider(new CodexSandboxManager(
-                new CodexSandboxOptions(tempDir, null, null, null, false, null), 30_000),
-                null);
+                new CodexSandboxOptions(tempDir, null, null, null, false, null), 30_000), rg);
     }
 
     @Test
@@ -44,10 +47,32 @@ class CodexBashToolProviderTest {
 
     @Test
     void createsSinglePowerShellTool() {
-        List<ToolCallback> tools = provider().createTools(TestFixtures.ctx("codex", tempDir, null));
+        List<ToolCallback> tools = provider(new CodexRg.Rg(tempDir.resolve("rg.exe"), true))
+                .createTools(TestFixtures.ctx("codex", tempDir, null));
         assertEquals(1, tools.size());
         assertEquals("powershell", tools.get(0).getToolDefinition().name());
-        assertTrue(tools.get(0).getToolDefinition()
-                .description().contains("rg 已加入 PATH"), "描述追加 rg/UTF-8 提示");
+        String desc = tools.get(0).getToolDefinition().description();
+        assertTrue(desc.contains("rg 已加入 PATH"), "rg 可用 → 描述声明 rg 可用");
+        assertFalse(desc.contains("Select-String"), "rg 可用时不得混入「不可用」提示");
+    }
+
+    /** rg 三档全未命中:描述严禁宣称「rg 已加入 PATH」——否则命令不存在会被误读成无匹配。 */
+    @Test
+    void rgUnavailableIsReportedTruthfully() {
+        String desc = provider(new CodexRg.Rg(null, false))
+                .createTools(TestFixtures.ctx("codex", tempDir, null))
+                .get(0).getToolDefinition().description();
+        assertFalse(desc.contains("rg 已加入 PATH"), "rg 不可用不得谎报已加入 PATH");
+        assertTrue(desc.contains("Select-String"), "如实给出替代搜索手段");
+    }
+
+    /** 描述报出探测到的 shell 可执行名:版本相关语法(&& / ||)能否用交给模型判断。 */
+    @Test
+    void descriptionReportsActualShellBinary() {
+        String desc = provider(new CodexRg.Rg(null, true))
+                .createTools(TestFixtures.ctx("codex", tempDir, null))
+                .get(0).getToolDefinition().description();
+        assertTrue(desc.contains("实际执行 shell=" + CodexCommandExecutor.detectShell().exe),
+                "描述含实际 shell 名");
     }
 }
