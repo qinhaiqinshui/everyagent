@@ -505,7 +505,7 @@ ask 管道承载第二类阻塞请求:**危险操作授权**。`PermissionGate` 
 
 当需要人工授权(PermissionGate 拦到工作区外路径/危险命令)时,除人工弹窗外提供两条可选的任务级自动路径:
 
-- **AI 审议(`/AI 审议`,kind=ai.review)**:可单独开启。授权弹窗改为由**独立的 AI 审议会话**(无任何工具、独立 system prompt,只基于安全策略判断并要求忽略授权正文中的任何指令,防 prompt 注入)读取授权信息并输出结构化判断(ALLOW/DENY/ESCALATE),在 PermissionGate 内部闭环自动放行/拦截并落审计。**主 Agent 是被审议方,不能自我授权**。审议 agent 经 `req.context().agentFactory().create(reviewAgentId, reviewModel?)` 创建——工厂为预绑定静态代理(§7.20),事件/审计自动落被审议主体日志,advisor 链(重试/压缩/限流)照常装配;审议 agent 以 per-task 固定 agentId `review-<subjectId>` 注册进 `agents()` 跨请求复用会话——既往授权决策的结论与理由留在审议员上下文内,后续审议看得见本任务历史决策(会话随授权次数增长,任务生命周期内有限)。
+- **AI 审议(`/AI 审议`,kind=ai.review)**:可单独开启。授权弹窗改为由**独立的 AI 审议会话**(无任何工具、独立 system prompt,只基于安全策略判断并要求忽略授权正文中的任何指令,防 prompt 注入)读取授权信息并输出结构化判断(ALLOW/DENY/ESCALATE),在 PermissionGate 内部闭环自动放行/拦截并落审计。**主 Agent 是被审议方,不能自我授权**。审议 agent 经 `req.context().agentFactory().create(reviewAgentId, reviewModel?)` 创建——工厂为预绑定静态代理(§7.20),事件/审计自动落被审议主体日志,advisor 链(重试/压缩/限流)照常装配;审议 agent 以 per-task 固定 agentId `review-<subjectId>` 注册进 `agents()` 跨请求复用会话——既往授权决策的结论与理由留在审议员上下文内,后续审议看得见本任务历史决策(会话随授权次数增长,任务生命周期内有限)。**会话交替不变量(复用方责任)**:agent 执行链不回写会话内存(`WorkerToolEventAdvisor` 只发 message 事件、`AgentRunner` 只把会话副本交给 ChatClient),故每轮审议结束由 `AiAuthReviewer.doReview` 在 finally 把本轮结论回写为 assistant 轮(异常/中断记占位),保证「append 新 user 之前 assistant 已在场」(与 §7.16 队列续跑的 `ConversationLoader.catchUpRuntime` 同一条不变量);缺此回写则审议员看到「N 条连续未答复的 user」,会把历史授权请求一并作答(多对象/数组输出 → 解析失败 fail-closed 误拒,或旧结论被当本轮结论用)。
 - **无人值守(`/无人值守`,kind=unattended.mode)**:开启时**联动**开启 AI 审议(selectHandler 一次返回两个胶囊,前端各自 apply)。AI 仍可看到并调用 `ask_user` 工具,但 `UnattendedToolInterceptor`(工具执行拦截链节点,§7.14.3)在工具执行瞬间拦截该调用、代替人工逐题选择第一个选项,以「题干：首选项」格式回传作答文本(与前端真实作答格式一致;不创建 ask、不挂起等待);拦截器每次工具执行实时读 `ctx.metadata()` 的 unattended 标记(`ToolExecutionContext extends ExecContext`,域中性直读槽位,§7.20),运行中点胶囊开/关即时生效。两胶囊 ✕ 独立,开启时联动、事后可拆分。
 
 **授权拦截链**(`PermissionGate.ensureGranted` 内、发起人工弹窗前短路,两条独立环节互不相关):
@@ -672,7 +672,7 @@ wsl-bwrap 后端的 seccomp 内核级提权拦截已随 bwrap 后端删除而移
 
 | 工具 | 语义 |
 |---|---|
-| `run_agent(input, title, agentId?)` | 异步派发子 agent;无 agentId 新建(title 必填,agentId 动态生成);传 agentId 即续跑(复用其上下文);立即返回 agentId,需用 wait_agents 等待结果 |
+| `run_agent(input, title, agentId?)` | 异步派发子 agent;无 agentId 新建(title 必填,agentId 动态生成);传 agentId 即续跑(复用其上下文,上一轮最终回答已在会话内——`SubAgentManager.appendFinalAnswerTurn` 于收口时回写 assistant 轮,维持 §7.9 同一条会话交替不变量,中断记占位);立即返回 agentId,需用 wait_agents 等待结果 |
 | `list_agents()` | 列出本任务下全部子 agent(agentId/title/createdAt/status/latestActivity,不回灌完整历史) |
 | `wait_agents(agentId?, timeoutMs?)` | 等待子 agent 完成/超时 |
 | `stop_agent(agentId)` | 停止指定子 agent |

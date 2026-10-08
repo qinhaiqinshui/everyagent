@@ -9,6 +9,7 @@ import dev.everyagent.plugin.api.execution.ExecContext;
 import dev.everyagent.plugin.api.util.RootCause;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.support.ToolCallbacks;
 import org.springframework.ai.tool.ToolCallback;
@@ -33,6 +34,14 @@ import java.util.concurrent.TimeUnit;
  *
  * <p><b>监视器内部化</b>:run/stopAll 互斥不再借用任务对象监视器,改锁 Manager
  * 自有的 per-subject 状态对象 {@link TaskSubState}——对执行主体对象的锁依赖消失。
+ *
+ * <p><b>会话交替不变量</b>:子 agent 会话跨轮复用(同 agentId 的 run_agent 续跑),
+ * 而 agent 执行链不回写会话内存(worker 的 {@code WorkerToolEventAdvisor} 只发
+ * message 事件、{@code AgentRunner} 只把会话副本交给 ChatClient),故复用方必须自己
+ * 把上一轮最终回答补回会话——每轮收口由 {@link #runSub} 的 finally 调用
+ * {@link #appendFinalAnswerTurn} 补 assistant 轮,保证「append 新 user 之前 assistant
+ * 已在场」。缺了这一步,子 agent 续跑时会看到两条连续 user,重复回答上一轮指令
+ * (主 agent 侧同一条不变量由 task 层 {@code ConversationLoader.catchUpRuntime} 维持)。
  */
 public class SubAgentManager {
 
@@ -44,6 +53,12 @@ public class SubAgentManager {
 
     /** 取消竞态定稿等待上限(毫秒):future 已取消但子线程尚未写终态时的有界等待。 */
     private static final long SETTLE_NUDGE_MS = 2_000;
+
+    /**
+     * 上一轮未产出最终回答(被 stop / 异常中断)时回写的占位 assistant 轮:
+     * 保持会话内 user/assistant 严格交替(与 ConversationLoader 的中断占位同语义)。
+     */
+    private static final String NO_FINAL_ANSWER_PLACEHOLDER = "[上一轮被中断,无最终回答]";
 
     /** 子 agent 最大并发数(固定值,替代原 props.getLimits().getMaxConcurrentSubs())。 */
     private static final int MAX_CONCURRENT_SUBS = 10;
@@ -137,7 +152,8 @@ public class SubAgentManager {
             if (reuse) {
                 sub = (Agent) ctx.agents().get(id);
                 sub.resetForRerun();
-                sub.conversation().add(new UserMessage(input)); // 续跑:原会话历史 + 新指令
+                // 续跑:原会话历史(含上一轮最终回答,由 runSub 收口时回写)+ 新指令
+                sub.conversation().add(new UserMessage(input));
                 // 复用路径不经过 build():agent.started 由 AgentStatusAdvisor 在本轮
                 // run() 的流入口自动发射(与新建路径同一发射点),此处不再手动补发。
             } else {
@@ -217,10 +233,28 @@ public class SubAgentManager {
             // advisor 的 doOnError 已发 failed + error;订阅前就抛(装配/模型客户端缺失)时由此兜底。
             sub.claimTerminal("error", RootCause.summary(t));
         } finally {
+            // 会话配对回写:子 agent 会话跨轮复用(同 agentId 续跑),而 agent 执行链不回写
+            // 会话内存(WorkerToolEventAdvisor 只发 message 事件、AgentRunner 只把会话副本
+            // 交给 ChatClient)。本类是复用方,必须自己把本轮最终回答作为 assistant 轮补回
+            // 会话——否则下一轮 run_agent 续跑时子 agent 看到的是「两条连续 user」,会重复
+            // 回答上一轮指令(与主 agent 侧 ConversationLoader.catchUpRuntime 同一不变量)。
+            // 异常/中断路径同样回写(空则记占位),保证 user/assistant 严格交替。
+            appendFinalAnswerTurn(sub);
             sub.finished(true);
             log.debug("[sub] runSub 收口退出 id={} subStatus={} finished=true thread={}",
                     id, sub.status(), Thread.currentThread().getName());
         }
+    }
+
+    /**
+     * 把本轮最终回答以 assistant 轮补回子 agent 会话(空/异常中断则记占位),
+     * 供下一次同 agentId 续跑时模型看到完整的 (user → assistant) 配对。
+     */
+    private static void appendFinalAnswerTurn(Agent sub) {
+        String text = sub.lastText();
+        sub.conversation().add(AssistantMessage.builder()
+                .content(text == null || text.isBlank() ? NO_FINAL_ANSWER_PLACEHOLDER : text)
+                .build());
     }
 
     /**
