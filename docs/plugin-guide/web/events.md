@@ -7,7 +7,7 @@ has_children: false
 
 # 前端事件
 
-**一句话定位**：`ctx.events` 是前端插件感知（和驱动）宿主 UI 的唯一事件通道——它是宿主进程内一条模块级事件总线的最薄委托。本文给出**全部 21 个宿主事件的逐个取证表**（载荷、触发时机、来源文件、监听价值）——known-issues #4 清理后，常量表里**不再有零 emit 的死事件**：17 个有真实 emit 调用点，其余 4 个是「宿主监听、插件可反向 emit 驱动宿主」的请求通道。事件名与载荷类型的唯一登记处是 `every-agent-web/src/events/domainEvents.ts`（常量表 `DOMAIN_EVENTS` + 载荷类型 `DomainEventMap`）。
+**一句话定位**：`ctx.events` 是前端插件感知（和驱动）宿主 UI 的唯一事件通道——它是宿主进程内一条模块级事件总线的最薄委托。本文给出**全部 22 个宿主事件的逐个取证表**（载荷、触发时机、来源文件、监听价值）——known-issues #4 清理后，常量表里**不再有零 emit 的死事件**：18 个有真实 emit 调用点，其余 4 个是「宿主监听、插件可反向 emit 驱动宿主」的请求通道。事件名与载荷类型的唯一登记处是 `every-agent-web/src/events/domainEvents.ts`（常量表 `DOMAIN_EVENTS` + 载荷类型 `DomainEventMap`）。
 
 ## 1. 事件系统架构：一个模块级单例总线
 
@@ -113,9 +113,9 @@ export interface PluginEvents {
 
 ## 3. 宿主事件总表（21 个，逐一回源码复核）
 
-统计口径（rg 实测）：`DOMAIN_EVENTS` 常量表声明 **21** 个事件名；全仓（`every-agent-web/src` + `every-agent-plugins` + `every-agent-desktop`）`.emit(` 调用点命中其中 **17** 个，其余 4 个是宿主监听的请求通道。known-issues #4 清理前本表曾有 38 个声明、24 个零 emit——被折叠器/镜像订阅取代设计位的 17 个条目已连同载荷类型一起删除（`agent-run-event` 的 `AgentRunEvent`/`AgentRunEventPayload` 类型一并移除，其注释引用的幽灵文件 `src/task/agentRunEventBridge.ts` 随之消失）。
+统计口径（rg 实测）：`DOMAIN_EVENTS` 常量表声明 **22** 个事件名；全仓（`every-agent-web/src` + `every-agent-plugins` + `every-agent-desktop`）`.emit(` 调用点命中其中 **18** 个，其余 4 个是宿主监听的请求通道。known-issues #4 清理前本表曾有 38 个声明、24 个零 emit——被折叠器/镜像订阅取代设计位的 17 个条目已连同载荷类型一起删除（`agent-run-event` 的 `AgentRunEvent`/`AgentRunEventPayload` 类型一并移除，其注释引用的幽灵文件 `src/task/agentRunEventBridge.ts` 随之消失）。
 
-### 3.1 真实会发生的事件（17 个）
+### 3.1 真实会发生的事件（18 个）
 
 | 事件名 | 载荷（`DomainEventMap` 摘要） | 触发时机（谁、何时 emit） | 插件监听价值 |
 |---|---|---|---|
@@ -127,6 +127,7 @@ export interface PluginEvents {
 | `settings-theme-patched` | `{themeMode: 'light'\|'dark'}`（`:197-199`） | 用户切换主题落 localStorage 时（`every-agent-web/src/settings/localSettings.ts:14-19`，emit 于 `:18`） | 中。自带 UI 想跟随宿主主题可订阅（宿主自用：`useThemeMode.ts:15`、`TerminalPage.tsx:152`） |
 | `worker-data-changed` | `Record<string, never>`（空对象）（`:359`） | worker 启用/停用/移除/重连 hub 配置后（`WorkerList.tsx:87,155,169`、`SettingsPanel.tsx:70`） | 中。worker 集合变动后提醒自家数据可能过期（taskStore 全量 refresh 的触发器，`taskStore.ts:235`） |
 | `workspace-tab-closed` | `{tabId: string}`（`:360`） | 关闭工作区标签页的瞬间（`Layout.tsx:388-390`；taskStream 据此退订任务流频道，`taskStream.ts:739`） | 中。插件若按 tabId 持有 per-tab 资源可监听清理 |
+| `workspace-tab-activated` | `{tabId: string, tabType: string}`（`:172-177`） | 壳层激活标签变化时（`Layout.tsx` 的 activeWorkspaceTab effect：先同步 `activeTabMirror` 再 emit；所有标签关闭时只清镜像不 emit，用上一行 closed 兜底感知） | **高**。「按当前标签类型显隐/刷新 UI」的标准信号（mobile-keyboard 在用：切到 terminal 标签才显示悬浮球）；配 `ctx.ui.getActiveTab()` 同步查询 |
 | `user-interaction-requested` | `{taskId, agentId, request}`（`:287-294`） | ask 等待用户作答：实时 `ask.create`（`askStore.ts:285`）、静默注册后补发（`:263`）、回放 debounce flush（`:230`，50ms 内被 settle 则跳过防闪烁） | 中。宿主已完整消费（弹窗 `UserInteractionHost.tsx:108`、系统通知 `BrowserNotificationHost.tsx:71`、角标 `PendingUserInteractionIndicator.tsx:43`）；插件一般无需再听 |
 | `user-interaction-resolved` | `{taskId, agentId, result}`（`:295-302`） | 用户提交交互结果时（`askStore.ts:355`） | 中低。同上，多为补充感知 |
 | `user-interaction-cleared` | `{taskId, agentId, interactionId}`（`:303-310`） | ask 落定（提交/超时/取消）移除卡片时（`askStore.ts:306`；回放期间从未广播过的跳过） | 中低。同上 |

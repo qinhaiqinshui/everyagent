@@ -16,8 +16,10 @@ import type {
   OutputBlockHandler,
   FileExplorerAction,
   PluginDiffTabInput,
+  PluginActiveTabInfo,
 } from '@everyagent/plugin-api'
 import { getComposerBridge, getShellBridge } from './pluginRuntimeBridge'
+import { activeTabMirror } from './activeTabMirror'
 import type {
   UiSidebarItemDefinition,
   UiWorkspaceTabTypeDefinition,
@@ -170,9 +172,10 @@ export interface RealPluginDispatcher {
   listRegisteredRoundTailPanels: () => UiRoundTailPanelDefinition[]
   /** 同步获取插件注册的输入框上方面板列表（供 TaskChat 渲染合并）。 */
   listRegisteredComposerAbovePanels: () => UiComposerAbovePanelDefinition[]
+  /** 查询当前激活的工作区标签（读宿主壳层镜像；无激活标签返回 null）。 */
+  getActiveTab: () => PluginActiveTabInfo | null
   /** 打开插件自定义标签（委托宿主 WorkspaceShellContext）。 */
-  openPluginTab: (type: string, data: Record<string, string>, title?: string) => void
-  /** 打开顶层文件标签（委托宿主 WorkspaceShellContext）。 */
+  openPluginTab: (type: string, data: Record<string, string>, title?: string) => void  /** 打开顶层文件标签（委托宿主 WorkspaceShellContext）。 */
   openFileTab: (workspaceRoot: string, filePath: string, options?: { mode?: string }) => void
   /** 打开顶层 diff 对比标签（委托宿主 WorkspaceShellContext）。 */
   openDiffTab: (input: PluginDiffTabInput) => void
@@ -311,6 +314,9 @@ export const pluginDispatcher: RealPluginDispatcher = {
   },
   registerRoundTailPanel(def) {
     return getRegistry<UiRoundTailPanelDefinition>(EXT_UI_ROUND_TAIL_PANELS).register('', def)
+  },
+  getActiveTab() {
+    return activeTabMirror.current
   },
   openPluginTab(type, data, title) {
     getShellBridge()?.openPluginTab(type, data, title)

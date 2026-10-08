@@ -29,6 +29,17 @@ export interface PluginWorkspaceTab {
 }
 
 /**
+ * 当前激活的工作区标签（最小化快照，仅判别字段）。
+ * 由宿主壳层在激活标签变化时同步；插件经 `ctx.ui.getActiveTab()` 读取。
+ */
+export interface PluginActiveTabInfo {
+  /** 标签 ID。 */
+  id: string
+  /** 标签类型判别式（'task' / 'file' / 'terminal' / 'page' / 'diff' / 'log' / 'plugin' ...）。 */
+  tabType: string
+}
+
+/**
  * 最小化 trace 记录接口（替代 web 内部 `TaskTraceRecord`）。
  */
 export interface PluginTraceRecord {
@@ -155,6 +166,8 @@ export type PluginDomainEvent =
   | 'task-status-changed'
   | 'task-round-closed'
   | 'plugins-loaded'
+  | 'workspace-tab-activated'
+  | 'workspace-tab-closed'
   | (string & {})
 
 /** 领域事件总线（对标 vscode.event；委托宿主 domainEventBus）。 */
@@ -617,6 +630,11 @@ export interface UiRegistry {
   registerFileExplorerAction(action: FileExplorerAction): Disposable
   /** 注册轮末展示区组件（由 `ui.round_tail_panels` 扩展点产出）。 */
   registerRoundTailPanel(def: UiRoundTailPanelDefinition): Disposable
+  /**
+   * 查询当前激活的工作区标签（同步读宿主壳层镜像）；无激活标签时返回 null。
+   * 变更通知请配 `workspace-tab-activated` / `workspace-tab-closed` 领域事件。
+   */
+  getActiveTab(): PluginActiveTabInfo | null
   /** 打开插件自定义标签（替代宿主 useWorkspaceShell().openPluginTab）。 */
   openPluginTab(type: string, data: Record<string, string>, title?: string): void
   /** 打开顶层文件标签（替代宿主 useWorkspaceShell().openGlobalFileTab）。 */

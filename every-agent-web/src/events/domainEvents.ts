@@ -38,6 +38,7 @@ export const DOMAIN_EVENTS = {
   PLUGINS_LOADED: 'plugins-loaded',
   WORKER_DATA_CHANGED: 'worker-data-changed',
   WORKSPACE_TAB_CLOSED: 'workspace-tab-closed',
+  WORKSPACE_TAB_ACTIVATED: 'workspace-tab-activated',
 } as const
 
 export type DomainEventMap = {
@@ -168,6 +169,12 @@ export type DomainEventMap = {
   }
   [DOMAIN_EVENTS.WORKER_DATA_CHANGED]: Record<string, never>
   [DOMAIN_EVENTS.WORKSPACE_TAB_CLOSED]: { tabId: string }
+  [DOMAIN_EVENTS.WORKSPACE_TAB_ACTIVATED]: {
+    /** 被激活的标签 ID。 */
+    tabId: string
+    /** 被激活的标签类型判别式（'task' / 'file' / 'terminal' / ...）。 */
+    tabType: string
+  }
 }
 
 export type DomainEventName = keyof DomainEventMap

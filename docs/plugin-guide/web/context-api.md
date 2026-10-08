@@ -265,7 +265,7 @@ await ctx.fs.delete(workspaceRoot, 'docs/draft.md')
 
 ## 8. `ctx.ui` —— 一笔带过
 
-`UiRegistry` 有 12 个 `register*`（sidebar 项、工作区标签类型、工具调用视图、文件编辑器……）与 5 个动作方法（`openPluginTab`/`openFileTab`/`openDiffTab`/`appendComposerText`/`setComposerRawContent`），声明在 `index.ts:607-634`，宿主实现是单例 `pluginDispatcher`（ctx 里 `ui: pluginDispatcher as unknown as ...` 强转接入，`pluginLoader.ts:394`）。每个 `register*` 返回的 Disposable 都是**真清理**：`ListExtensionRegistry.register` 的 dispose 从数组 splice 并通知订阅者重渲染（`every-agent-web/src/plugin/ExtensionRegistry.ts:45-56`）。逐扩展点字段表与代码范例见 [UI 扩展点](ui-extensions.md)。
+`UiRegistry` 有 12 个 `register*`（sidebar 项、工作区标签类型、工具调用视图、文件编辑器……）、5 个动作方法（`openPluginTab`/`openFileTab`/`openDiffTab`/`appendComposerText`/`setComposerRawContent`）与 1 个查询方法（`getActiveTab()`——同步读宿主壳层维护的激活标签镜像，返回 `{id, tabType}` 或 null，变更通知配 `workspace-tab-activated`/`workspace-tab-closed` 事件），声明在 `index.ts:607-634`，宿主实现是单例 `pluginDispatcher`（ctx 里 `ui: pluginDispatcher as unknown as ...` 强转接入，`pluginLoader.ts:394`）。每个 `register*` 返回的 Disposable 都是**真清理**：`ListExtensionRegistry.register` 的 dispose 从数组 splice 并通知订阅者重渲染（`every-agent-web/src/plugin/ExtensionRegistry.ts:45-56`）。逐扩展点字段表与代码范例见 [UI 扩展点](ui-extensions.md)。
 
 ## 9. 寿命与清理
 

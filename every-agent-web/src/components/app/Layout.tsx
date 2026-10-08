@@ -43,6 +43,7 @@ import MissingWorkspaceRepairHost from './MissingWorkspaceRepairHost'
 import { WorkspaceShellProvider } from './WorkspaceShellContext'
 import { setShellBridge } from '@/plugin/pluginRuntimeBridge'
 import { domainEventBus, DOMAIN_EVENTS } from '@/events/eventBus'
+import { setActiveTabMirror } from '@/plugin/activeTabMirror'
 import { AppUiProvider, useAppUi } from './AppUiContext'
 import { useThemeMode } from '@/hooks/useThemeMode'
 import { useResponsiveViewport } from '@/hooks/useResponsiveViewport'
@@ -187,6 +188,27 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
     workspaceFileTabs,
     openTopLevelPageIds,
   } = workspaceTabView
+
+  /**
+   * 激活标签变化 → 同步插件侧镜像并广播领域事件：
+   * 镜像回答「此刻激活的标签是什么」（ctx.ui.getActiveTab()，同步查询），
+   * `workspace-tab-activated` 事件供插件响应式刷新（如按标签类型显隐 UI）。
+   * 所有标签关闭时 activeWorkspaceTab 为 null：只清镜像不 emit（用
+   * workspace-tab-closed 兜底感知）。
+   */
+  React.useEffect(() => {
+    setActiveTabMirror(
+      activeWorkspaceTab
+        ? { id: activeWorkspaceTab.id, tabType: activeWorkspaceTab.tabType }
+        : null,
+    )
+    if (activeWorkspaceTab) {
+      domainEventBus.emit(DOMAIN_EVENTS.WORKSPACE_TAB_ACTIVATED, {
+        tabId: activeWorkspaceTab.id,
+        tabType: activeWorkspaceTab.tabType,
+      })
+    }
+  }, [activeWorkspaceTab])
 
   /** 侧边栏任务高亮 = 当前激活的任务聊天标签。 */
   const activeTaskId = activeWorkspaceTab?.tabType === 'task' && activeWorkspaceTab.taskId !== DRAFT_TASK_ID
