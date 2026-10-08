@@ -227,13 +227,17 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
   }, [])
 
   /**
-   * 双击 Shift(两次 keydown 间隔 ≤400ms)呼出/关闭全局搜索弹窗。
+   * 双击 Shift(两次 keydown 间隔 ≤400ms,于第二次**松开**时)呼出/关闭全局搜索弹窗。
    * - 仅 Shift 单键生效:按住产生的 repeat、附带其他修饰键(Ctrl/Alt/Meta)、
    *   或两次之间按下其他键,均不触发(避免与 Shift+字母快捷键冲突);
+   * - 触发时机在第二次 Shift 的 keyup 而非 keydown:按下瞬间不弹窗,
+   *   避免抢焦点打断用户按键节奏(如双击后紧接输入);
    * - toggle 语义:已打开时再次双击则关闭。
    */
   React.useEffect(() => {
     let lastShiftAt = 0
+    /** 第二次 Shift 已按下、等待其 keyup 时才真正触发。 */
+    let pendingToggle = false
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Shift') {
         if (event.repeat || event.ctrlKey || event.altKey || event.metaKey) {
@@ -242,19 +246,30 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
         }
         const now = Date.now()
         if (now - lastShiftAt <= 400) {
+          // 判定双击成立:暂存待触发,等本次 Shift 松开(keyup)再 toggle。
           lastShiftAt = 0
-          setSearchModalOpen((current) => !current)
+          pendingToggle = true
         } else {
           lastShiftAt = now
         }
         return
       }
-      // 两次 Shift 之间按下了其他键:重置计时,打断双击序列。
+      // 两次 Shift 之间按下了其他键:重置计时并取消待触发,打断双击序列。
       lastShiftAt = 0
+      pendingToggle = false
+    }
+    const handleKeyUp = (event: KeyboardEvent) => {
+      if (event.key !== 'Shift' || !pendingToggle) return
+      pendingToggle = false
+      // 松开时已带上其他修饰键(如按住 Ctrl 再松 Shift):视为组合键操作,不触发。
+      if (event.ctrlKey || event.altKey || event.metaKey) return
+      setSearchModalOpen((current) => !current)
     }
     window.addEventListener('keydown', handleKeyDown)
+    window.addEventListener('keyup', handleKeyUp)
     return () => {
       window.removeEventListener('keydown', handleKeyDown)
+      window.removeEventListener('keyup', handleKeyUp)
     }
   }, [])
 
