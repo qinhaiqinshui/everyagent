@@ -15,6 +15,32 @@
 
 [简体中文](README.md) | **English**
 
+## 📑 Table of Contents
+
+- [✨ Highlights](#-highlights)
+  - [🌍 Multi-device control — truly "usable anywhere"](#-multi-device-control--truly-usable-anywhere)
+  - [🔒 Data never leaves your machine — dual-key authentication is safer](#-data-never-leaves-your-machine--dual-key-authentication-is-safer)
+  - [📡 Resumable playback — progress is never lost](#-resumable-playback--progress-is-never-lost)
+  - [🤖 Full AI visibility](#-full-ai-visibility)
+  - [🛡️ Security sandbox + human-AI collaboration guardrails](#-security-sandbox--human-ai-collaboration-guardrails)
+  - [🔌 Plug in any model, with built-in failover](#-plug-in-any-model-with-built-in-failover)
+  - [🧱 Plugin-based architecture — everything is pluggable](#-plugin-based-architecture--everything-is-pluggable)
+  - [🖥️ Desktop edition works out of the box](#-desktop-edition-works-out-of-the-box)
+  - [🧩 Four modules, freely combinable for deployment](#-four-modules-freely-combinable-for-deployment)
+- [📸 Screenshots](#-screenshots)
+- [🏗️ Architecture Overview](#-architecture-overview)
+- [🚀 Quick Start](#-quick-start)
+  - [Option 1: Desktop Edition (recommended — zero dependencies · zero config)](#option-1-desktop-edition-recommended--zero-dependencies--zero-config)
+  - [Option 2: Docker (self-host hub + worker + web)](#option-2-docker-self-host-hub--worker--web)
+  - [Option 3: Build from source / development](#option-3-build-from-source--development)
+- [⚙️ Configure Models (Required)](#-configure-models-required)
+- [📱 Multi-Device Access (Core Scenario)](#-multi-device-access-core-scenario)
+- [🛠️ Common Configuration Quick Reference](#-common-configuration-quick-reference)
+- [🧩 Capabilities Overview](#-capabilities-overview)
+- [📦 Tech Stack](#-tech-stack)
+- [📄 License](#-license)
+- [🙌 Contributing](#-contributing)
+
 **Every Agent** is a "reachable from anywhere, executing locally" AI agent system — in one sentence: **your own agent, usable anywhere**.
 
 - ✅ **Open source · free · self-hosted**: all code, files, and data stay on your own computer, never passing through any third-party server. Ideal for privacy-conscious individual developers and small teams.
