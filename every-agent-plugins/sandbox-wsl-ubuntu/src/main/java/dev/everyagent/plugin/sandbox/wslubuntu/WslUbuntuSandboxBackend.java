@@ -19,12 +19,16 @@ import java.util.concurrent.TimeUnit;
 /**
  * wsl-ubuntu 沙箱后端（新 SPI）。
  *
- * <p>只负责<strong>挂载</strong>和<strong>工作区生命周期</strong>：
- * <ul>
- *   <li>{@link #mount}：批量 drvfs 挂载宿主路径到发行版内，返回 {hostPath → sandboxPath} 映射；</li>
- *   <li>{@link #onWorkspaceRemoved}：best-effort umount 清理挂载。</li>
- * </ul>
- * 不执行命令、不翻译路径、不涉及工具注册、不涉及授权策略。
+ * <p>只做两件事：把宿主路径<b>挂进发行版</b>（{@link #grant} / {@link #revoke}），
+ * 以及回答「宿主路径在发行版里是什么形态」（{@link #toSandbox} / {@link #toHost}）。
+ *
+ * <p><b>翻译是后端自己的属性</b>：挂载点由 {@link WslPathMapper#toDirectMount} 推导，
+ * 但<b>只对已授权的根及其子路径</b>翻译——未授权的路径原样返回（宿主形态），
+ * 避免把「没挂进来的路径」也报成发行版内路径。反向查询无匹配返回 null，
+ * 交给调用方按宿主路径处理。
+ *
+ * <p><b>回收</b>：{@link #revoke} 做 best-effort umount 并把根移出翻译视图——
+ * 调用方只传路径，不携带任何任务 / 工作区语义。
  */
 public final class WslUbuntuSandboxBackend implements SandboxBackend {
 
@@ -34,6 +38,9 @@ public final class WslUbuntuSandboxBackend implements SandboxBackend {
     private final WorkspaceManager workspaces;
     private final Path pluginDir;
     private final WslUmounter umounter;
+
+    /** 已授权根的发行版内视图（纯映射，无 IO）。 */
+    private final WslPathView view = new WslPathView();
 
     public WslUbuntuSandboxBackend(WorkerConfig props, WorkspaceManager workspaces,
             Path pluginDir) {
@@ -48,24 +55,47 @@ public final class WslUbuntuSandboxBackend implements SandboxBackend {
         return "wsl-ubuntu";
     }
 
+    // ── 效果：挂载 / 卸载 ─────────────────────────────────────
+
     @Override
-    public Map<Path, String> mount(List<MountRequest> requests) {
-        Map<Path, String> result = new LinkedHashMap<>();
+    public void grant(List<PathGrant> grants) {
         String distro = WslCommon.effectiveDistro(props, pluginDir);
-        for (MountRequest req : requests) {
-            Path hostPath = req.hostPath();
-            String mountPoint = WslPathMapper.toDirectMount(hostPath);
-            if (mountPoint != null) {
-                ensureMount(distro, hostPath.toString(), mountPoint, req.access());
+        for (PathGrant g : grants) {
+            if (g == null || g.hostPath() == null) {
+                continue;
             }
-            result.put(hostPath, mountPoint != null ? mountPoint : hostPath.toString());
+            Path hostPath = g.hostPath();
+            String mountPoint = WslPathMapper.toDirectMount(hostPath);
+            if (mountPoint == null) {
+                log.debug("[grant] 非 Windows 盘路径，跳过挂载: {}", hostPath);
+                continue;
+            }
+            ensureMount(distro, hostPath.toString(), mountPoint, g.access());
+            view.add(hostPath);
         }
-        return result;
     }
 
     @Override
-    public void onWorkspaceRemoved(Path root) {
-        umounter.umountQuietly(root);
+    public void revoke(List<Path> hostPaths) {
+        for (Path h : hostPaths == null ? List.<Path>of() : hostPaths) {
+            if (h == null) {
+                continue;
+            }
+            view.remove(h);
+            umounter.umountQuietly(h);
+        }
+    }
+
+    // ── 查询：宿主 ↔ 发行版内 ────────────────────────────────
+
+    @Override
+    public String toSandbox(Path hostPath) {
+        return view.toSandbox(hostPath);
+    }
+
+    @Override
+    public Path toHost(String sandboxPath) {
+        return view.toHost(sandboxPath);
     }
 
     /**

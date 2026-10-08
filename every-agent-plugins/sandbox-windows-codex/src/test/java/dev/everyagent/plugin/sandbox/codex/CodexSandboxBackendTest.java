@@ -1,7 +1,7 @@
 package dev.everyagent.plugin.sandbox.codex;
 
 import dev.everyagent.plugin.api.spi.SandboxBackend.Access;
-import dev.everyagent.plugin.api.spi.SandboxBackend.MountRequest;
+import dev.everyagent.plugin.api.spi.SandboxBackend.PathGrant;
 import dev.everyagent.plugin.api.spi.SandboxProvider.SandboxConfig;
 
 import org.junit.jupiter.api.Test;
@@ -9,15 +9,14 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Path;
 import java.util.List;
-import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * {@link CodexSandboxBackend}：mount 恒等映射 + 根登记；
- * {@link CodexSandboxManager}：幂等登记/访问语义切换/SandboxConfig 折叠。
+ * {@link CodexSandboxBackend}：grant/revoke 驱动根登记 + 恒等翻译；
+ * {@link CodexSandboxManager}：幂等登记/访问语义切换/回收/配置折叠。
  */
 class CodexSandboxBackendTest {
 
@@ -29,21 +28,42 @@ class CodexSandboxBackendTest {
                 new CodexSandboxOptions(tempDir, null, null, null, false, null), 30_000);
     }
 
-    /** mount 返回恒等映射（codex 命令跑宿主路径），同时登记根。 */
+    /** grant 登记根（RW → 写根、RO → 读根），翻译恒等（codex 命令跑宿主路径）。 */
     @Test
-    void mountIsIdentityMappingAndRegistersRoots() {
+    void grantRegistersRootsAndTranslationIsIdentity() {
         CodexSandboxManager manager = manager();
         CodexSandboxBackend backend = new CodexSandboxBackend(manager);
         Path ws = tempDir.resolve("ws");
         Path ro = tempDir.resolve("ro");
-        Map<Path, String> mounted = backend.mount(List.of(
-                new MountRequest(ws, Access.READ_WRITE),
-                new MountRequest(ro, Access.READ_ONLY)));
-        assertEquals(2, mounted.size());
-        assertEquals(ws.toString(), mounted.get(ws), "恒等映射:宿主路径原样返回");
-        assertEquals(ro.toString(), mounted.get(ro));
+        backend.grant(List.of(
+                new PathGrant(ws, Access.READ_WRITE),
+                new PathGrant(ro, Access.READ_ONLY)));
+
         assertEquals(List.of(ws), manager.writeRoots());
         assertEquals(List.of(ro), manager.readRoots());
+        assertEquals(ws.toString(), backend.toSandbox(ws), "恒等翻译:宿主路径原样返回");
+        assertEquals(ws, backend.toHost(ws.toString()));
+    }
+
+    /** revoke 撤登记（幂等）:回收后该根不再进会话 —— 陈旧 ACE 因 SID 不入令牌而失效。 */
+    @Test
+    void revokeUnregistersRoots() {
+        CodexSandboxManager manager = manager();
+        CodexSandboxBackend backend = new CodexSandboxBackend(manager);
+        Path ws = tempDir.resolve("ws");
+        Path ro = tempDir.resolve("ro");
+        backend.grant(List.of(
+                new PathGrant(ws, Access.READ_WRITE),
+                new PathGrant(ro, Access.READ_ONLY)));
+
+        backend.revoke(List.of(ws));
+        assertTrue(manager.writeRoots().isEmpty(), "写根已回收");
+        assertEquals(List.of(ro), manager.readRoots(), "无关根不受影响");
+
+        backend.revoke(List.of(ro));
+        assertTrue(manager.readRoots().isEmpty());
+        backend.revoke(List.of(ro)); // 幂等
+        assertTrue(manager.readRoots().isEmpty());
     }
 
     /** 同根重复登记幂等;RO 覆盖 RW 时从写根表移除(收紧不放宽)。 */
@@ -59,15 +79,11 @@ class CodexSandboxBackendTest {
         assertEquals(1, manager.readRoots().size());
     }
 
-    /** onWorkspaceRemoved no-op:登记与 ACL 均不回收(持久供给,state 文件对账)。 */
+    /** 后端 id 稳定（供 SandboxPathRegistry 的代次判定与重放）。 */
     @Test
-    void onWorkspaceRemovedIsNoOp() {
-        CodexSandboxManager manager = manager();
-        CodexSandboxBackend backend = new CodexSandboxBackend(manager);
-        Path ws = tempDir.resolve("ws");
-        backend.mount(List.of(new MountRequest(ws, Access.READ_WRITE)));
-        backend.onWorkspaceRemoved(ws);
-        assertEquals(List.of(ws), manager.writeRoots(), "登记保留,无异常抛出");
+    void backendIdIsStable() {
+        CodexSandboxBackend backend = new CodexSandboxBackend(manager());
+        assertEquals("codex", backend.id());
     }
 
     /** SandboxConfig 折叠:timeoutMs>0 生效,networkDenied 透传;0 回退 worker 默认。 */

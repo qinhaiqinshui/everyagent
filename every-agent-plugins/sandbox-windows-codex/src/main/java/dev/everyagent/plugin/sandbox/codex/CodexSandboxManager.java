@@ -74,6 +74,22 @@ public final class CodexSandboxManager {
         return new ArrayList<>(writeRoots.values());
     }
 
+    /**
+     * 撤销一个根的登记（幂等：未登记为 no-op）。
+     *
+     * <p>回收后该根不再进入 {@link CodexCommandExecutor} 组装的 SpawnRequest，
+     * 也就不会在 preflight 刷 ACE、cap SID 不进新令牌——<b>陈旧 ACE 因此天然失效</b>；
+     * 是否回收由上层聚合判断，本类只按给定路径执行。
+     */
+    public synchronized void unregister(Path hostPath) {
+        if (hostPath == null) {
+            return;
+        }
+        String key = CapSids.canonicalPathKey(hostPath);
+        writeRoots.remove(key);
+        readRoots.remove(key);
+    }
+
     /** 全部 READ_ONLY 根（登记序）。 */
     public synchronized List<Path> readRoots() {
         return new ArrayList<>(readRoots.values());
