@@ -25,12 +25,13 @@ import java.util.concurrent.TimeoutException;
 /**
  * OS 级进程沙箱门面（瘦身版）。
  *
- * <p>职责：作为 DIRECT 默认沙箱实现 {@link SandboxBackend}（mount 返回原路径,
- * onWorkspaceRemoved no-op），以及提供通用宿主进程执行服务（{@link #spawnNative}）。
+ * <p>职责：作为 DIRECT 默认沙箱实现 {@link SandboxBackend}（grant/revoke no-op、
+ * 翻译恒等），以及提供通用宿主进程执行服务（{@link #spawnNative}）。
  *
- * <p>沙箱后端（wsl-ubuntu / windows-mic）由独立插件通过 {@link SandboxProviderRegistry}
- * 注册;本类实现 SPI 接口作为 DIRECT 默认行为（mount 原路径直通、onWorkspaceRemoved no-op）,
- * 并在解析到 SPI 后端时把 {@code id()/mount()/onWorkspaceRemoved()} <strong>转发</strong>给它。
+ * <p>沙箱后端（codex / windows-mic / wsl-ubuntu）由独立插件通过
+ * {@link SandboxProviderRegistry} 注册;本类实现 SPI 接口作为 DIRECT 默认行为,
+ * 并在解析到 SPI 后端时把 {@code id()/grant()/revoke()/toSandbox()/toHost()}
+ * <strong>转发</strong>给它。
  * 后端解析按注册表代次惰性完成（插件注册晚于本类初始化,见 §7.10）。
  *
  * <p>核心的宿主访问工具（"允许AI访问电脑"开关）直接通过 ProcessBuilder 执行,
@@ -105,18 +106,58 @@ public final class OsSandbox implements SandboxBackend, NativeExec {
     }
 
     /**
-     * 挂载转发：有 SPI 后端则交给它（如 wsl-ubuntu 的批量 drvfs 挂载）,
-     * 无后端才走 SPI 默认实现（原路径直通,即 DIRECT 语义）。
-     *
-     * <p>门面吞掉 mount 会让 {@code SandboxPathRegistry} 的宿主↔沙箱路径映射整体失效。
+     * 授权下发转发：有 SPI 后端则交给它（如 codex 施加 ACE、wsl 建立 drvfs 挂载）,
+     * 无后端时按 SPI 默认实现（no-op,即 DIRECT 语义——宿主进程即沙箱世界）。
      */
+    @Override
+    public void grant(List<SandboxBackend.PathGrant> grants) {
+        SandboxBackend d = backend();
+        if (d != null) {
+            d.grant(grants);
+        }
+    }
+
+    /** 授权回收转发：有 SPI 后端则交给它（撤 ACE / umount）；无后端 no-op。 */
+    @Override
+    public void revoke(List<Path> hostPaths) {
+        SandboxBackend d = backend();
+        if (d != null) {
+            d.revoke(hostPaths);
+        }
+    }
+
+    /** 路径翻译转发：有 SPI 后端则交给它；无后端走默认恒等（DIRECT 语义）。 */
+    @Override
+    public String toSandbox(Path hostPath) {
+        SandboxBackend d = backend();
+        return d != null ? d.toSandbox(hostPath) : SandboxBackend.super.toSandbox(hostPath);
+    }
+
+    /** 反向翻译转发：有 SPI 后端则交给它；无后端走默认恒等（DIRECT 语义）。 */
+    @Override
+    public Path toHost(String sandboxPath) {
+        SandboxBackend d = backend();
+        return d != null ? d.toHost(sandboxPath) : SandboxBackend.super.toHost(sandboxPath);
+    }
+
+    /**
+     * 挂载转发（迁移期兼容）。
+     *
+     * @deprecated 见 {@link SandboxBackend#mount}；改用 {@link #grant} + {@link #toSandbox}。
+     */
+    @Deprecated(since = "refactor/grant-revoke", forRemoval = true)
     @Override
     public Map<Path, String> mount(List<SandboxBackend.MountRequest> requests) {
         SandboxBackend d = backend();
         return d != null ? d.mount(requests) : SandboxBackend.super.mount(requests);
     }
 
-    /** 工作区移除清理转发：有 SPI 后端则交给它（如 wsl-ubuntu 的 best-effort umount）。 */
+    /**
+     * 工作区移除清理转发（迁移期兼容）。
+     *
+     * @deprecated 见 {@link SandboxBackend#onWorkspaceRemoved}；改用路径级 {@link #revoke}。
+     */
+    @Deprecated(since = "refactor/grant-revoke", forRemoval = true)
     @Override
     public void onWorkspaceRemoved(Path root) {
         SandboxBackend d = backend();

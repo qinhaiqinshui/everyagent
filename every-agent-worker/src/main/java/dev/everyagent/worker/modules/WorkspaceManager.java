@@ -2,7 +2,7 @@ package dev.everyagent.worker.modules;
 
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.plugin.api.spi.SandboxBackend.Access;
-import dev.everyagent.plugin.api.spi.SandboxBackend.MountRequest;
+import dev.everyagent.plugin.api.spi.SandboxBackend.PathGrant;
 import dev.everyagent.plugin.api.util.AtomicFiles;
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.hub.HubPool;
@@ -691,8 +691,9 @@ public class WorkspaceManager implements dev.everyagent.plugin.api.spi.Workspace
      * ② 把「AI 可见根」意图覆盖式对齐进 {@link SandboxPathRegistry}（owner={@code workspaces}：
      * 全部在册工作区根 + 各工作区外部授权根）。
      *
-     * <p>②只登记意图、零 IO（实际 mount 由 pathRegistry 在首次路径翻译时按生效后端惰性物化），
-     * 故本收口点被高频调用（含 task.run 注册新工作区、启动载入、失效清理）也无挂载开销。
+     * <p>②把「AI 可见根」集合覆盖式对齐进 {@link SandboxPathRegistry}（owner={@code workspaces}：
+     * 全部在册工作区根 + 各工作区外部授权根），由它按差量下发到生效沙箱后端；
+     * 集合未变则零下发，故本收口点被高频调用（含 task.run 注册新工作区、启动载入、失效清理）也无开销。
      */
     private void onRegistryChanged() {
         syncSandboxRoots();
@@ -704,21 +705,21 @@ public class WorkspaceManager implements dev.everyagent.plugin.api.spi.Workspace
     }
 
     /**
-     * 在册工作区根 + 各工作区外部授权根（READ_WRITE）覆盖式对齐进路径翻译注册表。
-     * 集合取自 {@link #list()}（已含 externalRoots），与既有意图相同则不产生版本变化。
+     * 在册工作区根 + 各工作区外部授权根（READ_WRITE）覆盖式对齐进授权账本。
+     * 集合取自 {@link #list()}（已含 externalRoots），与既有集合相同则不下发。
      */
     private void syncSandboxRoots() {
-        List<MountRequest> reqs = new ArrayList<>();
+        List<PathGrant> grants = new ArrayList<>();
         for (Registered r : list()) {
-            reqs.add(new MountRequest(Path.of(r.root()), Access.READ_WRITE));
+            grants.add(new PathGrant(Path.of(r.root()), Access.READ_WRITE));
             for (String raw : r.externalRoots()) {
-                reqs.add(new MountRequest(Path.of(raw), Access.READ_WRITE));
+                grants.add(new PathGrant(Path.of(raw), Access.READ_WRITE));
             }
         }
         try {
-            pathRegistry.sync(SandboxPathRegistry.OWNER_WORKSPACES, reqs);
+            pathRegistry.sync(SandboxPathRegistry.OWNER_WORKSPACES, grants);
         } catch (RuntimeException e) {
-            log.warn("沙箱挂载意图对齐失败(不影响注册表广播): {}", e.getMessage());
+            log.warn("沙箱授权根对齐失败(不影响注册表广播): {}", e.getMessage());
         }
     }
 

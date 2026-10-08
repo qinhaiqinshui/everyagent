@@ -59,7 +59,7 @@ public class WorkerBeanConfiguration {
      *
      * <p>顺带在此完成「skills 目录初始化时」的沙箱挂载意图登记（架构 §7.10）：系统技能目录
      * 是 AI 免授权可读写、且 {@link SkillAdvisor} 要注入其沙箱内可见路径的唯一根，归此登记；
-     * {@code register} 只记意图、零 IO，物化推迟到首次路径翻译时按生效后端批量 mount。
+     * {@code register} 只记账、随后由 {@link SandboxPathRegistry} 下发到生效沙箱后端。
      */
     @Bean
     public SkillAdvisor skillAdvisor(BuiltInSkills builtInSkills,

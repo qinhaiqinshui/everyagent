@@ -142,33 +142,33 @@ public class AgentBuilder {
     /**
      * 注册工作区根 + 系统技能目录到 {@link SandboxPathRegistry}。
      *
-     * <p>架构 §7.17：核心调 {@code sandbox.mount()} 拿到 {宿主路径 → 沙箱内路径} 映射,
-     * 之后 advisor / 工具链经 {@code pathRegistry.toSandboxPath()} 查表翻译。
-     * 本方法在 agent 装配(advisor 链创建)之前完成注册,使 {@code SystemInfoAdvisor}
+     * <p>架构 §7.8：账本登记后经 {@code SandboxBackend.grant} 下发到沙箱（建立权限 +
+     * 映射基准），advisor / 工具链经 {@code pathRegistry.toSandboxPath()} 得到沙箱内
+     * 可见路径。本方法在 agent 装配(advisor 链创建)之前完成注册,使 {@code SystemInfoAdvisor}
      * (工作区路径)和 {@code SkillAdvisor}(技能知识包路径)注入 system prompt 时
-     * 得到正确的沙箱内路径。幂等:重复注册同一路径只首次实际挂载。
+     * 得到正确的沙箱内路径。幂等:重复注册同一路径不产生第二次下发。
      */
     private void registerSandboxPaths(ExecContext exec) {
         if (exec.workspaceRoot() == null || exec.workspaceRoot().isBlank()) {
             return;
         }
         try {
-            java.util.List<dev.everyagent.plugin.api.spi.SandboxBackend.MountRequest> requests =
+            java.util.List<dev.everyagent.plugin.api.spi.SandboxBackend.PathGrant> grants =
                     new java.util.ArrayList<>();
             // 工作区根(读写)
-            requests.add(new dev.everyagent.plugin.api.spi.SandboxBackend.MountRequest(
+            grants.add(new dev.everyagent.plugin.api.spi.SandboxBackend.PathGrant(
                     java.nio.file.Path.of(exec.workspaceRoot()),
                     dev.everyagent.plugin.api.spi.SandboxBackend.Access.READ_WRITE));
             // 系统技能目录(只读)——SkillAdvisor 注入知识包路径时需翻译
             java.nio.file.Path skillsDir = props.resolveSkillsDir();
             if (java.nio.file.Files.isDirectory(skillsDir)) {
-                requests.add(new dev.everyagent.plugin.api.spi.SandboxBackend.MountRequest(
+                grants.add(new dev.everyagent.plugin.api.spi.SandboxBackend.PathGrant(
                         skillsDir, dev.everyagent.plugin.api.spi.SandboxBackend.Access.READ_ONLY));
             }
-            pathRegistry.register(requests);
+            pathRegistry.register(grants);
         } catch (RuntimeException e) {
-            // 路径注册失败不阻断任务执行:降级为原路径(DIRECT 场景或挂载失败)
-            // AI 看到的路径为宿主路径,与 WSL 后端命令执行侧的独立路径翻译不一致,
+            // 路径注册失败不阻断任务执行:降级为原路径(DIRECT 场景或授权下发失败)
+            // AI 看到的路径为宿主路径,与后端命令执行侧的独立路径翻译不一致,
             // 但 read_file 经 FsToolSupport 反向翻译兜底(无映射则原样,Java NIO 报错)。
         }
     }

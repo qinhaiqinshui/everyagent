@@ -8,32 +8,71 @@ import java.util.Map;
 /**
  * 沙箱后端接口 —— {@link SandboxProvider#create} 的产物。
  *
- * <p>极简化设计：沙箱后端只负责<strong>挂载</strong>和<strong>工作区生命周期</strong>，
- * 不执行命令、不翻译路径、不涉及工具注册、不涉及授权策略。
+ * <p><b>职责边界（§7.8 / §7.10 定案）</b>：沙箱后端只表达「对沙箱做了什么」——
+ * <b>{@link #grant} 让某些宿主路径在沙箱世界里可访问，{@link #revoke} 撤销</b>；
+ * <b>何时调用由上层决定</b>（沙箱不感知任务 / 工作区语义，故不订阅任何领域事件）。
+ * 后端不执行命令、不涉及工具注册、不做授权策略判定。
  *
- * <p>核心通过 {@code SandboxPathRegistry} 做路径翻译中间人：
- * 核心调 {@link #mount} 拿到映射关系后自己查表翻译，不依赖沙箱。
- * 命令执行由沙箱插件自己的 CommandExecutor 直接构造进程执行。
+ * <p><b>路径翻译是沙箱世界的纯属性</b>：{@link #toSandbox}/{@link #toHost} 是
+ * <b>无副作用的纯查询</b>，默认恒等（不需要翻译的后端零成本）。上层无条件调用一次，
+ * 不需要判断「这个后端是否需要翻译」。
+ *
+ * <p><b>映射基准由 grant 确立</b>：一个宿主路径在沙箱里长什么样，取决于它被授权 /
+ * 挂载到哪里（wsl 的 drvfs 挂载天然同时确立「可访问」与「映射」；windows ACE 只涉
+ * 权限，映射为恒等）。故翻译不是独立概念，而是授权的衍生物。
+ *
+ * <p><b>幂等与重放</b>：{@link #grant}/{@link #revoke} 是幂等的「期望状态」声明。
+ * worker 是唯一真相源、沙箱侧是缓存，会话建立 / 启动时由上层重放当前生效集合，
+ * 以解决「授权早于容器存在」与重启漂移。
  */
 public interface SandboxBackend {
+
+    /** 后端 id（与 {@link SandboxProvider#id()} 一致）。 */
+    String id();
+
+    // ── 效果层：上层决定「何时」，幂等，可重放 ──────────────────────────
+
+    /**
+     * 声明这些宿主路径在沙箱内可访问（建立权限 + 映射基准）；幂等。
+     *
+     * <p><b>best-effort 且不放大（§7.8 P5）</b>：若某授权单元无法在请求粒度上落地
+     * （典型：<b>待建文件</b>——创建需要父目录写权限），后端应<b>跳过并记日志</b>，
+     * <b>绝不自动放大到父目录</b>。该路径仍可经 worker 的 file 工具通道访问。
+     */
+    default void grant(List<PathGrant> grants) {
+    }
+
+    /**
+     * 撤销这些宿主路径的权限与映射；幂等（对未授权的路径静默忽略）。
+     *
+     * <p>只带路径、不带任务 / 工作区语义——是否还有人需要该根由<b>上层聚合判断</b>。
+     * 物理回收不得打断可能存活的子进程，失败仅记 WARN。
+     */
+    default void revoke(List<Path> hostPaths) {
+    }
+
+    // ── 查询层：纯函数，无副作用，默认恒等 ─────────────────────────────
+
+    /** 宿主路径在沙箱世界里的形态；默认恒等（= 不需要翻译的后端）。 */
+    default String toSandbox(Path hostPath) {
+        return hostPath.toString();
+    }
+
+    /** 沙箱内形态还原为宿主路径（模型回显 / fs 工具入参用，best-effort）；默认恒等。 */
+    default Path toHost(String sandboxPath) {
+        return Path.of(sandboxPath);
+    }
+
+    // ── 兼容层（迁移期保留，阶段 C 删除） ───────────────────────────────
 
     /**
      * 批量挂载宿主路径到沙箱内，返回映射表。
      *
-     * <p>核心一次性传入所有需要挂载的路径（工作区根 + 外部授权根 + skills 根等），
-     * 沙箱返回每个路径的沙箱内路径。
-     *
-     * <ul>
-     *   <li>DIRECT / windows-mic: 不挂载，返回原路径。</li>
-     *   <li>wsl-ubuntu: 批量 drvfs 挂载，返回 /c/Users/... 形态。</li>
-     *   <li>docker: 批量 bind mount，返回 /workspace 等挂载点。</li>
-     * </ul>
-     *
-     * <p>幂等：重复调用相同路径不重复挂载。
-     *
-     * @param requests 挂载请求列表
-     * @return 宿主路径 → 沙箱内路径 的映射表
+     * @deprecated 兼两职（路径映射 + 权限登记）导致触发时机错位与粒度错位；
+     *             改用 {@link #grant}（效果）+ {@link #toSandbox}（查询）。
+     *             迁移期保留，待全部消费者迁移后删除。
      */
+    @Deprecated(since = "refactor/grant-revoke", forRemoval = true)
     default Map<Path, String> mount(List<MountRequest> requests) {
         Map<Path, String> result = new LinkedHashMap<>();
         for (MountRequest req : requests) {
@@ -45,19 +84,22 @@ public interface SandboxBackend {
     /**
      * 工作区被删除时调用;后端 best-effort 清理挂载等;默认 no-op。
      *
-     * @param root 被删除的工作区根路径
+     * @deprecated 工作区语义 + 只有单根清理；改用路径级、无语义的 {@link #revoke}。
      */
+    @Deprecated(since = "refactor/grant-revoke", forRemoval = true)
     default void onWorkspaceRemoved(Path root) {
     }
 
-    /** 后端 id（与 {@link SandboxProvider#id()} 一致）。 */
-    String id();
-
     /** 单个挂载请求。 */
+    @Deprecated(since = "refactor/grant-revoke", forRemoval = true)
     record MountRequest(Path hostPath, Access access) {
     }
 
-    /** 挂载访问语义。 */
+    /** 单个授权声明：宿主路径 + 访问语义。 */
+    record PathGrant(Path hostPath, Access access) {
+    }
+
+    /** 访问语义。 */
     enum Access {
         READ_ONLY,
         READ_WRITE
