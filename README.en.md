@@ -27,6 +27,7 @@
   - [🧱 Plugin-based architecture — everything is pluggable](#-plugin-based-architecture--everything-is-pluggable)
   - [🖥️ Desktop edition works out of the box](#-desktop-edition-works-out-of-the-box)
   - [🧩 Four modules, freely combinable for deployment](#-four-modules-freely-combinable-for-deployment)
+  - [🏢 Intranet deployment for companies — integrate with existing systems with zero friction](#-intranet-deployment-for-companies--integrate-with-existing-systems-with-zero-friction)
 - [📸 Screenshots](#-screenshots)
 - [🏗️ Architecture Overview](#-architecture-overview)
 - [🚀 Quick Start](#-quick-start)
@@ -107,6 +108,11 @@ The four modules — web / hub / worker / desktop — are **decoupled and each s
 - **Desktop also supports multi-hub** → the worker bundled in the desktop edition is a full worker; configure multiple `worker.hubs` entries in `~/.everyagent/application-worker.yaml` to register this "desktop worker" to both a local hub and a remote public hub — "out-of-the-box single machine" and "remote control from anywhere" hold simultaneously.
 
 > Tip: `worker.hubs` is a list and is **replaced as a whole** — to keep both local and remote entries in an override file, you must write both entries.
+
+### 🏢 Intranet deployment for companies — integrate with existing systems with zero friction
+- **A single server is all it takes**: deploy hub + worker inside the company, and employees simply open a browser to start using it — all data stays on the company's own servers and never leaves the intranet;
+- **OA systems / mini-programs / WeCom (WeChat Work) can all plug in**: to upstream systems, the platform is just WebSocket + RPC (the protocol contract `every-agent-contract` is fully open); the web frontend is only "one of the official clients" — OA portals, office systems, mini-programs, and WeCom apps, any client that can speak WebSocket can integrate directly;
+- **Auth is deliberately apikey-only — no user-account model**: the platform has no sign-up, no login, no user tables. When a company connects its existing user system (SSO / OA / WeCom), it only needs to map employee identities to apikeys at the integration layer — no need to migrate the user system into the platform, keeping integration cost minimal.
 
 ---
 
