@@ -1,9 +1,7 @@
 package dev.everyagent.plugin.api.spi;
 
 import java.nio.file.Path;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 
 /**
  * 沙箱后端接口 —— {@link SandboxProvider#create} 的产物。
