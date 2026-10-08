@@ -11,9 +11,9 @@
  *
  * 展开态工具名后的文件路径为可点击 chip，点击经 useWorkspaceShell().openGlobalFileTab
  * 打开文件标签页（readwrite 模式，方便用户直接改 AI 写的文件）；workspaceRoot 缺失时
- * 降级为纯文本不可点，避免历史/未关联工作区场景报错。点击前先校验文件存在性，
- * 缺失（已删除/移动）时以 toast 友好提示，避免用户看到原始 RPC [NOT_FOUND] 错误
- * （与 FileDiffPanel.handleOpenFileInTab 同口径）。
+ * 降级为纯文本不可点，避免历史/未关联工作区场景报错。点击时遍历注册表工作区根
+ * 定位文件实际所属工作区（AI 可能经授权操作了工作区外的文件），找到后打开；
+ * 未找到时以 toast 提示。
  */
 
 import React from 'react'
@@ -22,6 +22,7 @@ import { useWorkspaceShell } from '@/components/app/WorkspaceShellContext'
 import { useAppUi } from '@/components/app/AppUiContext'
 import { toBusinessAbsolutePath } from '@/platform/fs/pathUtils'
 import { workspaceGateway } from '@/platform/fs/workspaceGateway'
+import { workspaceRegistry } from '@/hub/workspaceRegistry'
 import { useTaskWorkspaceRoot } from '../TaskWorkspaceContext'
 import { extractFileName, hasActiveTextSelection } from './helpers'
 import type { AggregatedToolDetail } from './types'
@@ -65,7 +66,9 @@ export function FileToolEntry({ detail, inlineExtras }: FileToolEntryProps) {
   const fullPath = typeof args.path === 'string' ? args.path : ''
   const businessPath = fullPath ? toBusinessAbsolutePath(fullPath) : ''
 
-  const workspaceRoot = useTaskWorkspaceRoot()
+  const taskWorkspaceRoot = useTaskWorkspaceRoot()
+  // 任务工作区根缺失时回退到注册表首项（与 FileDiffPanel.handleOpenFileInTab 同口径）。
+  const fallbackWorkspaceRoot = taskWorkspaceRoot ?? workspaceRegistry.primaryRoot() ?? ''
   const { openGlobalFileTab } = useWorkspaceShell()
   const { showToast } = useAppUi()
 
@@ -76,19 +79,40 @@ export function FileToolEntry({ detail, inlineExtras }: FileToolEntryProps) {
   const argLines = flattenArgs(args)
   const [open, setOpen] = React.useState(false)
 
+  /**
+   * 查找文件实际所属的工作区根。任务工作区根不一定包含该文件（AI 可能经授权
+   * 操作了工作区外的文件，或任务工作区根与文件实际位置不一致）。遍历注册表
+   * 中所有工作区根，用 stat 逐个探测，返回第一个能找到文件的工作区根。
+   */
+  const resolveFileWorkspace = React.useCallback(async (): Promise<string | null> => {
+    const candidates: string[] = []
+    if (fallbackWorkspaceRoot) candidates.push(fallbackWorkspaceRoot)
+    // 补充注册表中其他工作区根（去重，fallbackWorkspaceRoot 已排首位优先尝试）。
+    for (const entry of workspaceRegistry.current?.workspaces ?? []) {
+      if (entry.root && !candidates.includes(entry.root)) {
+        candidates.push(entry.root)
+      }
+    }
+    for (const root of candidates) {
+      const stat = await workspaceGateway.stat(root, businessPath).catch(() => null)
+      if (stat && !stat.isDirectory) {
+        return root
+      }
+    }
+    return null
+  }, [businessPath, fallbackWorkspaceRoot])
+
   const handleOpenFile = React.useCallback(async () => {
-    if (!businessPath || !workspaceRoot || !openGlobalFileTab) return
-    // 任务历史中的文件可能已被删除/移动:先校验存在性,缺失时给可读提示,
-    // 避免用户看到原始 RPC [NOT_FOUND] 错误(与 FileDiffPanel 同口径)。
-    const stat = await workspaceGateway.stat(workspaceRoot, businessPath).catch(() => null)
-    if (!stat || stat.isDirectory) {
-      showToast(`文件已不存在于工作区（可能已被删除或移动），无法打开：${businessPath}`, 'error')
+    if (!businessPath || !openGlobalFileTab) return
+    const root = await resolveFileWorkspace()
+    if (!root) {
+      showToast(`未能在已注册工作区中找到该文件：${businessPath}`, 'error')
       return
     }
-    openGlobalFileTab({ workspaceRoot, filePath: businessPath }, { mode: 'readwrite' })
-  }, [businessPath, workspaceRoot, openGlobalFileTab, showToast])
+    openGlobalFileTab({ workspaceRoot: root, filePath: businessPath }, { mode: 'readwrite' })
+  }, [businessPath, openGlobalFileTab, resolveFileWorkspace, showToast])
 
-  const canOpen = Boolean(businessPath && workspaceRoot && openGlobalFileTab)
+  const canOpen = Boolean(businessPath && fallbackWorkspaceRoot && openGlobalFileTab)
 
   return (
     <div className={`nagent-tool nagent-tool--filewrite${open ? ' is-open' : ''}`}>
