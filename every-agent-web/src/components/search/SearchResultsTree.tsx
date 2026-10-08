@@ -1,6 +1,17 @@
+/**
+ * 文件搜索结果树(薄适配器):WorkspaceContentSearchResult → SearchResultGroup[]
+ * 交给通用 SearchResultTreeView(resultTree/)渲染。
+ * - 内容模式:一个文件一组(组头 = 文件图标 + 文件名 + 相对目录,折叠键 =
+ *   文件路径),命中行 = 行号前缀 + 高亮正文,点击打开文件定位到行;
+ * - 文件名模式(nameMode):每个命中即一个文件,渲染为扁平文件行(无折叠箭头与
+ *   命中数徽章),点击直接打开文件。
+ * 对外 props 与渲染结果保持不变(SearchPanel 接线零改动);高亮 / 截断 /
+ * 折叠 / 组头样式等公共实现单点在 resultTree/。
+ */
 import React from 'react'
-import { ChevronDownIcon } from '../shared/AppGlyphs'
 import { FileTypeIcon } from '../shared/FileTypeGlyphs'
+import SearchResultTreeView, { resultTreeStyle } from './resultTree/SearchResultTreeView'
+import type { SearchResultGroup } from './resultTree/model'
 import type {
   WorkspaceContentSearchFileResult,
   WorkspaceContentSearchHit,
@@ -22,66 +33,46 @@ export interface SearchResultsTreeProps {
   onOpenFile?: (filePath: string) => void
 }
 
-/** 命中行三段式拆分：前段 + 高亮段 + 后段。 */
-interface MatchSegments {
-  prefix: string
-  hit: string
-  suffix: string
-}
-
-/** 单行最长展示字符数，超出时中间截断（优先围绕命中片段保留上下文）。 */
-const MAX_LINE_LENGTH = 250
-/** 中间截断时命中片段前后各保留的字符数。 */
-const TRUNCATE_KEEP = 110
-
-/**
- * 命中行 → 三段式展示文本。
- * 用 hit.matchIndex / hit.matchText 把行拆成「前段 + 高亮段 + 后段」；
- * matchIndex 缺失或与行内容对不上时整行不高亮（hit 为空串）。
- * 行超长（> MAX_LINE_LENGTH）时中间截断：有命中定位则围绕命中片段保留前后各
- * TRUNCATE_KEEP 字符，否则保留首尾各 TRUNCATE_KEEP 字符，两端以省略号示意。
- */
-function buildLineSegments(line: string, hit: WorkspaceContentSearchHit): MatchSegments {
-  const matchIndex = hit.matchIndex ?? -1
-  const matchText = hit.matchText ?? ''
-  const hasMatch = matchIndex >= 0
-    && matchText.length > 0
-    && matchIndex + matchText.length <= line.length
-    && line.slice(matchIndex, matchIndex + matchText.length) === matchText
-
-  if (line.length <= MAX_LINE_LENGTH) {
-    if (!hasMatch) {
-      return { prefix: line, hit: '', suffix: '' }
-    }
-    return {
-      prefix: line.slice(0, matchIndex),
-      hit: matchText,
-      suffix: line.slice(matchIndex + matchText.length),
-    }
-  }
-
-  if (hasMatch) {
-    const hitStart = matchIndex
-    const hitEnd = matchIndex + matchText.length
-    const start = Math.max(0, hitStart - TRUNCATE_KEEP)
-    const end = Math.min(line.length, hitEnd + TRUNCATE_KEEP)
-    return {
-      prefix: (start > 0 ? '…' : '') + line.slice(start, hitStart),
-      hit: matchText,
-      suffix: line.slice(hitEnd, end) + (end < line.length ? '…' : ''),
-    }
-  }
-
+/** 文件路径 → 文件名 + 相对目录(组头与文件名模式扁平行共用的拆分)。 */
+function splitPath(path: string): { fileName: string; dirPath: string } {
+  const slashIndex = path.lastIndexOf('/')
   return {
-    prefix: `${line.slice(0, TRUNCATE_KEEP)} … `,
-    hit: '',
-    suffix: line.slice(Math.max(line.length - TRUNCATE_KEEP, TRUNCATE_KEEP + 5)),
+    fileName: slashIndex >= 0 ? path.slice(slashIndex + 1) : path,
+    dirPath: slashIndex > 0 ? path.slice(0, slashIndex) : '',
   }
 }
 
+/** 文件结果 → 通用分组(组头 = 路径拆分 + 命中数;命中行前缀 = 行号,点击打开定位)。 */
+function toFileGroups(
+  result: WorkspaceContentSearchResult,
+  onOpenHit: (filePath: string, hit: WorkspaceContentSearchHit) => void,
+): SearchResultGroup[] {
+  return result.files.map((file) => {
+    const { fileName, dirPath } = splitPath(file.path)
+    const matches = file.matches ?? []
+    return {
+      key: file.path,
+      header: {
+        title: file.path,
+        name: fileName,
+        detail: dirPath ? { text: dirPath, grow: true } : undefined,
+        icon: { kind: 'file', fileName },
+      },
+      hits: matches.map((hit) => ({
+        label: hit.line,
+        line: hit.lineNumber,
+        prefix: { text: String(hit.lineNumber), minWidth: 30 },
+        matchIndex: hit.matchIndex ?? -1,
+        matchText: hit.matchText ?? '',
+        title: `${file.path}:${hit.lineNumber}`,
+        onOpen: () => onOpenHit(file.path, hit),
+      })),
+    }
+  })
+}
+
 /**
- * 搜索结果树：按文件分组（折叠箭头 + 文件名 + 相对目录 + 命中数徽章），
- * 展开后逐行渲染「行号 | 前段 + 高亮命中片段 + 后段」，点击命中行打开文件定位。
+ * 搜索结果树:内容模式走通用结果树,文件名模式渲染扁平文件行列表。
  */
 export default function SearchResultsTree({
   result,
@@ -91,32 +82,34 @@ export default function SearchResultsTree({
   nameMode,
   onOpenFile,
 }: SearchResultsTreeProps) {
-  return (
-    <div style={treeStyle}>
-      {result.files.map((file) => (
-        nameMode && onOpenFile ? (
+  const groups = React.useMemo(() => toFileGroups(result, onOpenHit), [result, onOpenHit])
+
+  if (nameMode && onOpenFile) {
+    return (
+      <div style={resultTreeStyle}>
+        {result.files.map((file) => (
           <FileNameResultRow
             key={file.path}
             file={file}
             onOpenFile={onOpenFile}
           />
-        ) : (
-          <FileResultGroup
-            key={file.path}
-            file={file}
-            collapsed={collapsedFiles.has(file.path)}
-            onToggle={() => onToggleFile(file.path)}
-            onOpenHit={onOpenHit}
-          />
-        )
-      ))}
-    </div>
+        ))}
+      </div>
+    )
+  }
+
+  return (
+    <SearchResultTreeView
+      groups={groups}
+      collapsedKeys={collapsedFiles}
+      onToggleGroup={onToggleFile}
+    />
   )
 }
 
 /**
- * 文件名搜索结果行：扁平单行（文件图标 + 文件名 + 目录），点击直接打开文件。
- * 无折叠箭头与命中数徽章（每个命中即一个文件，无需展开子项）。
+ * 文件名搜索结果行:扁平单行(文件图标 + 文件名 + 目录),点击直接打开文件。
+ * 无折叠箭头与命中数徽章(每个命中即一个文件,无需展开子项)。
  */
 function FileNameResultRow({
   file,
@@ -126,9 +119,7 @@ function FileNameResultRow({
   onOpenFile: (filePath: string) => void
 }) {
   const [hovered, setHovered] = React.useState(false)
-  const slashIndex = file.path.lastIndexOf('/')
-  const fileName = slashIndex >= 0 ? file.path.slice(slashIndex + 1) : file.path
-  const dirPath = slashIndex > 0 ? file.path.slice(0, slashIndex) : ''
+  const { fileName, dirPath } = splitPath(file.path)
 
   return (
     <div
@@ -158,127 +149,6 @@ function FileNameResultRow({
   )
 }
 
-/** 单个文件分组：头部行（折叠切换 + 文件信息 + 命中数）+ 命中行列表。 */
-function FileResultGroup({
-  file,
-  collapsed,
-  onToggle,
-  onOpenHit,
-}: {
-  file: WorkspaceContentSearchFileResult
-  collapsed: boolean
-  onToggle: () => void
-  onOpenHit: (filePath: string, hit: WorkspaceContentSearchHit) => void
-}) {
-  const [hovered, setHovered] = React.useState(false)
-  const slashIndex = file.path.lastIndexOf('/')
-  const fileName = slashIndex >= 0 ? file.path.slice(slashIndex + 1) : file.path
-  const dirPath = slashIndex > 0 ? file.path.slice(0, slashIndex) : ''
-  const matches = file.matches ?? []
-
-  return (
-    <div style={fileGroupStyle}>
-      <div
-        role="button"
-        tabIndex={0}
-        title={file.path}
-        aria-expanded={!collapsed}
-        style={{
-          ...fileHeaderStyle,
-          background: hovered ? 'var(--bg-hover)' : 'transparent',
-        }}
-        onClick={onToggle}
-        onKeyDown={(event) => {
-          if (event.key === 'Enter') {
-            event.preventDefault()
-            onToggle()
-          }
-        }}
-        onMouseEnter={() => setHovered(true)}
-        onMouseLeave={() => setHovered(false)}
-      >
-        <span style={fileChevronStyle}>
-          <ChevronDownIcon size={13} style={collapsed ? fileChevronCollapsedStyle : undefined} />
-        </span>
-        <span style={fileIconStyle}>
-          <FileTypeIcon fileName={fileName} size={14} />
-        </span>
-        <span style={fileNameStyle}>{fileName}</span>
-        {dirPath ? <span style={fileDirStyle}>{dirPath}</span> : null}
-        <span style={fileCountStyle}>{matches.length}</span>
-      </div>
-      {!collapsed ? (
-        <div style={matchesStyle}>
-          {matches.map((hit) => (
-            <MatchLine
-              key={`${file.path}:${hit.lineNumber}`}
-              filePath={file.path}
-              hit={hit}
-              onOpenHit={onOpenHit}
-            />
-          ))}
-        </div>
-      ) : null}
-    </div>
-  )
-}
-
-/** 单条命中行：行号（右对齐灰字）+ 三段式文本（命中片段高亮背景），点击打开定位。 */
-function MatchLine({
-  filePath,
-  hit,
-  onOpenHit,
-}: {
-  filePath: string
-  hit: WorkspaceContentSearchHit
-  onOpenHit: (filePath: string, hit: WorkspaceContentSearchHit) => void
-}) {
-  const [hovered, setHovered] = React.useState(false)
-  const segments = React.useMemo(() => buildLineSegments(hit.line, hit), [hit])
-
-  return (
-    <div
-      role="button"
-      tabIndex={0}
-      title={`${filePath}:${hit.lineNumber}`}
-      style={{
-        ...matchRowStyle,
-        background: hovered ? 'var(--bg-hover)' : 'transparent',
-      }}
-      onClick={() => onOpenHit(filePath, hit)}
-      onKeyDown={(event) => {
-        if (event.key === 'Enter') {
-          event.preventDefault()
-          onOpenHit(filePath, hit)
-        }
-      }}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-    >
-      <span style={matchLineNumberStyle}>{hit.lineNumber}</span>
-      <span style={matchTextStyle}>
-        {segments.prefix}
-        {segments.hit ? <mark style={matchHighlightStyle}>{segments.hit}</mark> : null}
-        {segments.suffix}
-      </span>
-    </div>
-  )
-}
-
-const treeStyle: React.CSSProperties = {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 6,
-  padding: '2px 0 8px',
-}
-
-const fileGroupStyle: React.CSSProperties = {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 2,
-  minWidth: 0,
-}
-
 const fileNameRowStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
@@ -288,29 +158,6 @@ const fileNameRowStyle: React.CSSProperties = {
   borderRadius: 'var(--radius-sm)',
   cursor: 'pointer',
   userSelect: 'none',
-}
-
-const fileHeaderStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 5,
-  minWidth: 0,
-  padding: '3px 6px',
-  borderRadius: 'var(--radius-sm)',
-  cursor: 'pointer',
-  userSelect: 'none',
-}
-
-const fileChevronStyle: React.CSSProperties = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  flexShrink: 0,
-  color: 'var(--text-muted)',
-}
-
-const fileChevronCollapsedStyle: React.CSSProperties = {
-  transform: 'rotate(-90deg)',
 }
 
 const fileIconStyle: React.CSSProperties = {
@@ -338,59 +185,4 @@ const fileDirStyle: React.CSSProperties = {
   whiteSpace: 'nowrap',
   flex: 1,
   minWidth: 0,
-}
-
-const fileCountStyle: React.CSSProperties = {
-  flexShrink: 0,
-  fontSize: 'var(--text-xs)',
-  lineHeight: 1.6,
-  padding: '0 6px',
-  borderRadius: 999,
-  color: 'var(--accent-blue)',
-  background: 'var(--accent-blue-dim)',
-}
-
-const matchesStyle: React.CSSProperties = {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 1,
-  paddingLeft: 10,
-}
-
-const matchRowStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'flex-start',
-  gap: 8,
-  padding: '1px 6px',
-  borderRadius: 'var(--radius-sm)',
-  cursor: 'pointer',
-  fontFamily: 'var(--font-mono)',
-  fontSize: 'var(--text-xs)',
-  lineHeight: 1.6,
-  color: 'var(--text-secondary)',
-  minWidth: 0,
-}
-
-const matchLineNumberStyle: React.CSSProperties = {
-  flexShrink: 0,
-  minWidth: 30,
-  textAlign: 'right',
-  color: 'var(--text-muted)',
-  userSelect: 'none',
-}
-
-const matchTextStyle: React.CSSProperties = {
-  flex: 1,
-  minWidth: 0,
-  whiteSpace: 'pre-wrap',
-  wordBreak: 'break-all',
-  overflow: 'hidden',
-}
-
-const matchHighlightStyle: React.CSSProperties = {
-  background: 'color-mix(in srgb, var(--accent-blue) 30%, transparent)',
-  color: 'var(--text-primary)',
-  fontWeight: 600,
-  borderRadius: 2,
-  padding: '0 1px',
 }
