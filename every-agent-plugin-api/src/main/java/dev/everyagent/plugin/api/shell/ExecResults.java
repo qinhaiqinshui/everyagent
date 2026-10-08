@@ -189,6 +189,39 @@ public final class ExecResults {
         return sb.append(note).append('\n').toString();
     }
 
+    // ---- 命令脚本承载路径掩蔽（ISSUES 四.9）----
+
+    /**
+     * 命令脚本承载路径在输出文本中的掩蔽替身。codex 后端以
+     * {@code pwsh -File <工作区>/.everyagent/tmp/ea-cmd-*.ps1} 投递命令,PS 报错头
+     * （ConciseView）会打印该脚本的<b>绝对路径</b>——脚本在会话结束即删,路径纯属
+     * 实现细节泄漏;掩蔽为 {@code <script>} 后 {@code :行号} 保留,定位质量不丢:
+     * {@code Get-ChildItem: <script>:3}。
+     */
+    public static final String SCRIPT_PATH_MASK = "<script>";
+
+    /**
+     * 把输出文本中<b>本次命令脚本</b>的路径形态（绝对 / 相对 / 裸文件名,由执行器在
+     * 运行时精确提供）替换为 {@link #SCRIPT_PATH_MASK}。大小写不敏感（盘符/目录大小写
+     * 与 pwsh 解析形态可能不一致）;空形态跳过,无匹配原样返回。只掩蔽本次脚本的
+     * 形态,不按通配扫别的 {@code ea-cmd-*} 名（避免误伤并列出其它脚本的合法输出）。
+     */
+    public static String maskScriptPath(String text, String... pathForms) {
+        String out = text == null ? "" : text;
+        if (out.isEmpty() || pathForms == null) {
+            return out;
+        }
+        for (String form : pathForms) {
+            if (form == null || form.isEmpty()) {
+                continue;
+            }
+            out = java.util.regex.Pattern.compile(java.util.regex.Pattern.quote(form),
+                            java.util.regex.Pattern.CASE_INSENSITIVE)
+                    .matcher(out).replaceAll(SCRIPT_PATH_MASK);
+        }
+        return out;
+    }
+
     private ExecResults() {
     }
 

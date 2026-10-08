@@ -343,11 +343,18 @@ public final class CodexCommandExecutor {
         // -EncodedCommand,行为无回退仅定位质量回退。CMD 分支保持 commandArgv 原样。
         Path cmdScript = null;
         boolean scriptFallback = false; // PS 脚本承载失败回退了 -EncodedCommand(定位质量回退)
+        String[] scriptPathForms = null; // 本次脚本的三种路径形态,供输出掩蔽(四.9)
         List<String> argv;
         if (shell.isPowerShell) {
             try {
                 cmdScript = writeCommandScript(workspaceRoot, command);
-                argv = commandArgvForFile(scriptFileArg(workspaceRoot, cmdScript));
+                String fileArg = scriptFileArg(workspaceRoot, cmdScript);
+                argv = commandArgvForFile(fileArg);
+                // PS ConciseView 报错头打印脚本绝对路径(相对 arg 被解析成绝对),而脚本
+                // 会话结束即删——实现细节不进模型输出,三种形态统一掩蔽为 <script>(:行号保留)
+                scriptPathForms = new String[] {
+                        cmdScript.toAbsolutePath().normalize().toString(), fileArg,
+                        cmdScript.getFileName().toString() };
             } catch (IOException | RuntimeException e) {
                 if (cmdScript != null) {
                     try {
@@ -373,6 +380,13 @@ public final class CodexCommandExecutor {
                 wireName(identity), false, null);
         try {
             SessionRun run = aggregate(cfg, spec, timeoutMs);
+            if (scriptPathForms != null) {
+                // 掩蔽本次脚本路径(先掩蔽,再落降级提示——提示文本不含路径,顺序无碍)
+                run = new SessionRun(
+                        ExecResults.maskScriptPath(run.stdout(), scriptPathForms),
+                        ExecResults.maskScriptPath(run.stderr(), scriptPathForms),
+                        run.exitCode(), run.timedOut(), run.interrupted(), run.truncated());
+            }
             if (scriptFallback) {
                 // 回退只发生在 PS 分支;行为不变但报错定位质量回退,让模型知情(ISSUES 一.5)
                 run = new SessionRun(run.stdout(),
