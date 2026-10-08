@@ -91,6 +91,24 @@ public class GrantRegistry {
         return out;
     }
 
+    /**
+     * 全部在途主体的已授权外部根并集(任务级 + 本轮级),供前端只读 RPC 沙箱
+     * ({@code FsService.readSandbox})放行「AI 本任务经授权读过的文件」——用户点开
+     * 工具调用里的工作区外路径 chip 时与 read_file 同源可读;主体驱逐(gate.evict,
+     * 任务收口)后自然失效,授权生命周期跟随任务。前端写沙箱不并入(不因此获得越界写)。
+     */
+    public List<Path> allExtraRoots() {
+        if (byTask.isEmpty()) {
+            return List.of();
+        }
+        List<Path> out = new ArrayList<>();
+        for (TaskGrants g : byTask.values()) {
+            out.addAll(g.taskRoots);
+            out.addAll(g.runRoots);
+        }
+        return out;
+    }
+
     /** 已授权的命令 EXEC 根(realpath),供命令执行器做 Windows Low 完整性标注(§13.6)。subjectId=执行主体 ID(今天=taskId)。 */
     public List<Path> execRoots(String subjectId) {
         TaskGrants g = byTask.get(subjectId);

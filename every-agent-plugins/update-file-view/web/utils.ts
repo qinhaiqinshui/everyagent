@@ -348,3 +348,8 @@ export function basename(path: string): string {
   const index = normalized.lastIndexOf('/')
   return index < 0 ? normalized : normalized.slice(index + 1)
 }
+
+/** 判断是否为工作区外绝对路径(Windows 盘符形态,如 C:/Windows/win.ini)。复制自宿主 pathUtils，插件不引用宿主模块。 */
+export function isAbsoluteBusinessPath(path: string): boolean {
+  return /^[A-Za-z]:\//.test(normalizeWorkspaceRelativePath(path))
+}

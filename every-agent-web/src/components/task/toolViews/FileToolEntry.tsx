@@ -13,14 +13,15 @@
  * 打开文件标签页（readwrite 模式，方便用户直接改 AI 写的文件）；workspaceRoot 缺失时
  * 降级为纯文本不可点，避免历史/未关联工作区场景报错。点击时遍历注册表工作区根
  * 定位文件实际所属工作区（AI 可能经授权操作了工作区外的文件），找到后打开；
- * 未找到时以 toast 提示。
+ * 探测未命中且为工作区外绝对路径时以任务/注册表根只读兜底打开（worker 只读沙箱
+ * 放行在途授权根/技能根，读不到时标签页内呈现 worker 错误）；相对路径未命中才 toast。
  */
 
 import React from 'react'
 import { WrenchIcon, ChevronDownIcon, ChevronRightIcon } from '@/components/shared/AppGlyphs'
 import { useWorkspaceShell } from '@/components/app/WorkspaceShellContext'
 import { useAppUi } from '@/components/app/AppUiContext'
-import { toBusinessAbsolutePath } from '@/platform/fs/pathUtils'
+import { toBusinessAbsolutePath, isAbsoluteBusinessPath } from '@/platform/fs/pathUtils'
 import { workspaceGateway } from '@/platform/fs/workspaceGateway'
 import { workspaceRegistry } from '@/hub/workspaceRegistry'
 import { useTaskWorkspaceRoot } from '../TaskWorkspaceContext'
@@ -105,12 +106,20 @@ export function FileToolEntry({ detail, inlineExtras }: FileToolEntryProps) {
   const handleOpenFile = React.useCallback(async () => {
     if (!businessPath || !openGlobalFileTab) return
     const root = await resolveFileWorkspace()
-    if (!root) {
-      showToast(`未能在已注册工作区中找到该文件：${businessPath}`, 'error')
+    if (root) {
+      openGlobalFileTab({ workspaceRoot: root, filePath: businessPath }, { mode: 'readwrite' })
       return
     }
-    openGlobalFileTab({ workspaceRoot: root, filePath: businessPath }, { mode: 'readwrite' })
-  }, [businessPath, openGlobalFileTab, resolveFileWorkspace, showToast])
+    // 探测未命中且为工作区外绝对路径:AI 可能经 PermissionGate 授权读过(worker 只读
+    // 沙箱放行在途授权根,按文件授权授父目录;任务收口 gate.evict 驱逐后失效)——直接
+    // 以任务/注册表根打开:能读则展示,读不到时标签页内呈现 worker 错误。readonly:
+    // 前端写沙箱不含授权根,避免注定失败的保存。
+    if (isAbsoluteBusinessPath(businessPath) && fallbackWorkspaceRoot) {
+      openGlobalFileTab({ workspaceRoot: fallbackWorkspaceRoot, filePath: businessPath }, { mode: 'readonly' })
+      return
+    }
+    showToast(`未能在已注册工作区中找到该文件：${businessPath}`, 'error')
+  }, [businessPath, fallbackWorkspaceRoot, openGlobalFileTab, resolveFileWorkspace, showToast])
 
   const canOpen = Boolean(businessPath && fallbackWorkspaceRoot && openGlobalFileTab)
 

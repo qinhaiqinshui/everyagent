@@ -33,6 +33,7 @@ import {
   toBusinessAbsolutePath,
   basename,
   dirname,
+  isAbsoluteBusinessPath,
   extractFileName,
   hasActiveTextSelection,
   buildLineDiff,
@@ -126,11 +127,18 @@ function UpdateFileEntry({ detail }: { detail: PluginToolCallDetail }) {
   const handleOpenFile = React.useCallback(async () => {
     if (!businessPath) return
     const root = await resolveFileWorkspaceRoot()
-    if (!root) {
-      message.error(`未能在已注册工作区中找到该文件：${businessPath}`)
+    if (root) {
+      ctx.ui.openFileTab(root, businessPath, { mode: 'readwrite' })
       return
     }
-    ctx.ui.openFileTab(root, businessPath, { mode: 'readwrite' })
+    // 探测未命中且为工作区外绝对路径:AI 可能经 PermissionGate 授权读过(worker 只读
+    // 沙箱放行在途授权根,任务收口驱逐后失效)——以默认工作区根直接打开,能读则展示,
+    // 读不到时标签页内呈现 worker 错误。readonly:前端写沙箱不含授权根。
+    if (isAbsoluteBusinessPath(businessPath) && ctx.sdk.workspace.rootPath) {
+      ctx.ui.openFileTab(ctx.sdk.workspace.rootPath, businessPath, { mode: 'readonly' })
+      return
+    }
+    message.error(`未能在已注册工作区中找到该文件：${businessPath}`)
   }, [businessPath, ctx, message, resolveFileWorkspaceRoot])
 
   return (

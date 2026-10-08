@@ -33,6 +33,14 @@ export function toBusinessAbsolutePath(value: string): string {
   return WORKSPACE_ROOT + normalizeWorkspaceRelativePath(value)
 }
 
+/**
+ * 判断是否为工作区外绝对路径(Windows 盘符形态,如 C:/Windows/win.ini)。
+ * 工具调用里的这类路径不经工作区相对解析,打不开时需走越界兜底(授权根/只读打开)。
+ */
+export function isAbsoluteBusinessPath(value: string): boolean {
+  return /^[A-Za-z]:\//.test(normalizeWorkspaceRelativePath(value))
+}
+
 /** 判断路径片段是否命中内部保留目录。 */
 export function hasInternalSegment(path: string): boolean {
   const normalized = normalizeWorkspaceRelativePath(path)
