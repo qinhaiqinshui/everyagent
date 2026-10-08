@@ -13,6 +13,7 @@ import com.sun.jna.ptr.LongByReference;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
@@ -21,6 +22,7 @@ import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
+import dev.everyagent.plugin.api.shell.ExecResults;
 import dev.everyagent.plugin.sandbox.codex.win.Kernel32Ex;
 import dev.everyagent.plugin.sandbox.codex.win.struct.JobStructs.JOBOBJECT_EXTENDED_LIMIT_INFORMATION;
 import dev.everyagent.plugin.sandbox.codex.win.struct.StartupInfoExW;
@@ -448,6 +450,16 @@ public final class ChildProcess {
     }
 
     /**
+     * 本次 spawn 是否因文件承载不可用而回退了管道承载。生产路径总是先试文件承载
+     * （非 ASCII 正确性所需），故 {@code files == null} ⇔ 换轨发生——编码路径、断流
+     * 风险面随之改变，会话层应向结果尾部补
+     * {@link ExecResults#CARRIER_FALLBACK_NOTE}（编译期内联引用）。
+     */
+    public boolean degradedToPipes() {
+        return files == null;
+    }
+
+    /**
      * 起 stdout/stderr 两条输出线程 → Output 帧。
      *
      * <p>管道模式:ReadFile 到 EOF;文件模式:轮询追加读(tail),既不阻塞也保持输出接近实时
@@ -496,6 +508,7 @@ public final class ChildProcess {
     private void startFileTailReader(Path path, boolean stderr, OutputSink sink,
             CountDownLatch done) {
         Runnable loop = () -> {
+            long emittedTotal = 0; // 供承载异常提示引用(该流已读字节累计)
             try (FileChannel ch = FileChannel.open(path, StandardOpenOption.READ)) {
                 ByteBuffer bb = ByteBuffer.allocate(READ_CHUNK);
                 while (true) {
@@ -512,6 +525,7 @@ public final class ChildProcess {
                         sink.onOutput(chunk, stderr);
                         emitted += r;
                     }
+                    emittedTotal += emitted;
                     // 进程已退出(句柄必已关闭,文件已完整)或被要求收尾,且无新增 → 收
                     if (emitted == 0 && (exitObserved || stopTailing)) {
                         break;
@@ -521,7 +535,9 @@ public final class ChildProcess {
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             } catch (IOException | RuntimeException e) {
-                // 读不到即提前收尾;退出码仍由 waitForExit 给出,不影响会话
+                // 退出码仍由 waitForExit 给出,但异常意味着该流可能整段/部分缺失——
+                // 必须把异常与已读字节数透出到结果文本,绝不静默(ISSUES 一.1)
+                emitCarrierFailure(sink, stderr, e, emittedTotal);
             } finally {
                 done.countDown();
             }
@@ -529,17 +545,39 @@ public final class ChildProcess {
         Thread.ofVirtual().name(stderr ? "codex-runner-stderr" : "codex-runner-stdout").start(loop);
     }
 
-    /** 等输出读线程排空（有界，防孙进程持写端挂死）。 */
-    public void awaitOutputReaders(long timeoutMs) {
+    /**
+     * 把承载异常作为一行文本补进对应输出流(经 Output 帧到达模型侧结果)。
+     * 前缀常量取自 {@link ExecResults}——编译期内联,runner 物化 classpath 无需
+     * plugin-api jar;补发本身再失败则只能放弃(退出码仍有效),不再向外抛。
+     */
+    private static void emitCarrierFailure(OutputSink sink, boolean stderr,
+            Exception e, long emittedTotal) {
+        try {
+            sink.onOutput((ExecResults.CARRIER_TAIL_FAILURE_PREFIX + e
+                    + " 已读 " + emittedTotal + " 字节]\n")
+                    .getBytes(StandardCharsets.UTF_8), stderr);
+        } catch (RuntimeException suppressed) {
+            // 补发失败:退回旧行为(仅退出码有效)
+        }
+    }
+
+    /**
+     * 等输出读线程排空（有界，防孙进程持写端挂死）。
+     *
+     * @return 是否在宽限内排空；{@code false} = 该流尾部字节可能缺失，
+     *         调用方应向结果补 {@link ExecResults#DRAIN_TIMEOUT_NOTE}（编译期内联引用）
+     */
+    public boolean awaitOutputReaders(long timeoutMs) {
         stopTailing = true;
         CountDownLatch done = readersDone;
         if (done == null) {
-            return;
+            return true;
         }
         try {
-            done.await(timeoutMs, TimeUnit.MILLISECONDS);
+            return done.await(timeoutMs, TimeUnit.MILLISECONDS);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+            return false;
         }
     }
 
@@ -552,7 +590,12 @@ public final class ChildProcess {
         closeQuietly(stderrRead);
         closeQuietly(job);
         if (files != null) {
-            awaitOutputReaders(1_000L); // 让 tail 线程先放下最后一段,再删文件
+            // 让 tail 线程先放下最后一段,再删文件。此处多在 Exit 帧之后,模型侧的
+            // 降级提示由 runSession 层(Exit 帧前)负责;这里超时仅落 runner 日志供排查
+            if (!awaitOutputReaders(1_000L)) {
+                LOG.warn("[codex-runner] output readers not drained within grace; "
+                        + "tail bytes lost before carrier file removal");
+            }
             files.deleteQuietly();
         }
     }
@@ -599,6 +642,7 @@ public final class ChildProcess {
                 if (LOG.isDebugEnabled()) {
                     LOG.debug("file-timing scratchDir={}ms (null)", ms(t0, t1));
                 }
+                LOG.warn("[codex-runner] scratch dir unavailable; degrade to pipe carrier");
                 return null;
             }
             WinNT.HANDLE oh = null;
@@ -613,6 +657,8 @@ public final class ChildProcess {
                         closeQuietly(o.handle());
                         delete(o.path());
                     }
+                    LOG.warn("[codex-runner] exclusive create failed under {}; degrade to pipe carrier",
+                            dir);
                     return null;
                 }
                 oh = o.handle();
@@ -627,6 +673,7 @@ public final class ChildProcess {
             } catch (RuntimeException ex) {
                 closeQuietly(oh);
                 closeQuietly(eh);
+                LOG.warn("[codex-runner] file carrier create failed: {}", ex.toString());
                 return null;
             }
         }

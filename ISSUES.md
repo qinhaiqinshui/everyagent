@@ -1,7 +1,8 @@
 # 问题清单（待修 / 未闭环）
 
-本文件登记**已定位但尚未修复**的问题，供后续按优先级处理。每条都给可跳转的
-`文件:行`、触发条件、当前是否有信号透出、以及建议修法。
+本文件登记**已定位的问题**及其处置状态，供后续按优先级处理。每条都给可跳转的
+`文件:行`、触发条件、信号透出情况、以及修法与修复记录（2026-10-08 复核：一、1-5
+已修复，待重打包重启端到端复验；三、前三条已闭环/消解）。
 
 判定原则（贯穿全部条目）：**「命令成功且确无输出」与「输出被吞」必须在工具结果文本上
 分得开**。后者若表现为前者，AI 会把执行失败读成"没有结果"并在错误前提下继续推理——
@@ -17,15 +18,15 @@
 `.everyagent/tmp` 下的 `ea-codex-out-*/err-*.tmp`）与管道承载（命名管道 + runner tail）。
 下表的"静默"指**runner/worker 日志之外，模型收到的结果文本里没有任何异常痕迹**。
 
-| # | 环节 | 级别 |
-|---|---|---|
-| 1 | tail 读线程异常空吞 | **真 bug** |
-| 2 | 排空超时不外传 + 超时后照删承载文件 | **真 bug** |
-| 3 | 文件承载创建失败，静默换轨回管道 | **真 bug** |
-| 4 | 协议演进时其余帧静默丢弃 | **真 bug**（低频） |
-| 5 | 脚本落盘失败回退 `-EncodedCommand` | 有意降级，仅对模型静默 |
-| 6 | 混排编码整体判 ANSI | 已知设计边界（有注释 + 上游缓解） |
-| 7 | CLIXML 抽不到文本返回空段 | 有意降噪（风险仅在模式漂移） |
+| # | 环节 | 级别 | 状态（2026-10-08 复核） |
+|---|---|---|---|
+| 1 | tail 读线程异常空吞 | **真 bug** | **已修复**（源码已改，待重打包重启端到端复验） |
+| 2 | 排空超时不外传 + 超时后照删承载文件 | **真 bug** | **已修复**（同上） |
+| 3 | 文件承载创建失败，静默换轨回管道 | **真 bug** | **已修复**（同上） |
+| 4 | 协议演进时其余帧静默丢弃 | **真 bug**（低频） | **已修复**（同上） |
+| 5 | 脚本落盘失败回退 `-EncodedCommand` | 有意降级，仅对模型静默 | **已修复**（同上） |
+| 6 | 混排编码整体判 ANSI | 已知设计边界（有注释 + 上游缓解） | 维持 |
+| 7 | CLIXML 抽不到文本返回空段 | 有意降噪（风险仅在模式漂移） | 维持 |
 
 ### 1. tail 读线程异常被空 catch 吞掉
 
@@ -36,6 +37,10 @@
 - **为什么危险**：退出码正常 + 输出为空 = 与"命令确无输出"完全同形，且这是**唯一**会整段吞掉 stdout 的点
 - **建议修法**：把异常类型与已读字节数写进该流的结果文本（如 `[输出承载异常: … 已读 N 字节]`），
   使模型侧可见；常量放 `plugin-api/ExecResults`，不得让插件反向依赖 worker（§14.9）
+- **已修复（2026-10-08）**：`startFileTailReader` 的 catch 经 `emitCarrierFailure` 把
+  `[输出承载异常: <异常> 已读 N 字节]` 作为 Output 帧补进该流（N 由新增的 `emittedTotal`
+  累计）；前缀常量 `ExecResults.CARRIER_TAIL_FAILURE_PREFIX` 为编译期内联，runner 物化
+  classpath 不变。未新增 IPC 字段，不触 `.sandbox-bin` 物化清单红线。
 
 ### 2. 排空超时不外传，且超时后照样删承载文件
 
@@ -48,6 +53,10 @@
 - **后果**：输出**尾部字节**静默消失（长输出被拦腰砍，且看不出被砍）
 - **建议修法**：`awaitOutputReaders` 改为返回 `boolean`，超时即在结果尾部附
   `[降级:输出未在宽限内排空,尾部可能缺失]`；或删文件前二次确认已排空
+- **已修复（2026-10-08）**：`awaitOutputReaders` 签名改 `boolean`（`ConsoleProbe` 两处
+  调用忽略返回值，兼容）；`runSession` 在 **Exit 帧之前** 对未排空发
+  `ExecResults.DRAIN_TIMEOUT_NOTE`（赶在 worker 收帧循环收口前，落在聚合文本尾部）；
+  `close()` 内宽限超时落 runner warn 日志（彼时 Exit 多已发出，模型侧由 runSession 层覆盖）。
 
 ### 3. 文件承载创建失败 → 静默换轨回管道承载
 
@@ -61,6 +70,9 @@
   而出错时无人知晓当前走的是哪条路径。排查时会被严重误导
 - **建议修法**：静默换轨一律在结果尾部留一行 `[降级:文件承载不可用,改用管道承载]`；
   `tryCreate` 的失败原因升级为 warn
+- **已修复（2026-10-08）**：`tryCreate` 三条 `return null` 路径（scratchDir null /
+  独占创建失败 / `catch RuntimeException`）均补 warn；`ChildProcess.degradedToPipes()`
+  暴露换轨事实，`runSession` 在 Exit 帧前发 `ExecResults.CARRIER_FALLBACK_NOTE`。
 
 ### 4. 未知帧静默丢弃
 
@@ -71,6 +83,9 @@
   这正是「worker 新、runner 旧 → 输出落在没人读的地方」的复发形态
 - **建议修法**：未知帧计数，会话结束时若非零则附 `[协议告警:丢弃 N 个未知帧 <类型>]`；
   并在 `.sandbox-bin` 物化清单校验里加协议版本比对（配合 §7.10）
+- **已修复（2026-10-08）**：`aggregate` 收帧循环对未知帧按类型名（`getClass().getSimpleName()`）
+  计数，会话尾经 `ExecResults.appendNote` 附告警行。无新增 IPC 字段故不触物化清单；
+  协议版本比对仍留待 §7.10。
 
 ### 5. 脚本落盘失败回退 `-EncodedCommand`（仅对模型静默）
 
@@ -80,6 +95,9 @@
 - **后果**：行为不变，但**PS 报错定位质量退化**（`PositionMessage` 不再引用用户命令行；
   见同文件 `:535` 注释与 §7.10 PS-002/PS-003）
 - **建议修法**：优先级低。若要让模型知情，附一行 `[降级:脚本承载失败,报错行号可能不准]`
+- **已修复（2026-10-08）**：回退发生处置 `scriptFallback` 标志，`aggregate` 返回后以
+  `ExecResults.appendNote` 在 stderr 尾部附 `ExecResults.SCRIPT_FALLBACK_NOTE`
+  （`SessionRun` 为 record，重建实例）。
 
 ### 6. UTF-8/ANSI 混排整体判 ANSI（已知设计边界，非未登记 bug）
 
@@ -134,13 +152,42 @@
 
 ## 三、其它已定位、尚未处理的关联事项
 
-| 事项 | 状态 |
+| 事项 | 状态（2026-10-08 复核） |
 |---|---|
-| **包内 runner 仍是 PS-003 修复前形态**，导致本会话仍在出现「含裸对象语句 → 空结果」（实测旧形态 `outLen=2` vs 修复后 `263`）。§7.10 已给判据 | 待重打包（`copy:plugins` + dist + 重启 worker）才能生效；本仓 8 次提交均未进包 |
-| 插件自带 `bin/rg.exe` 未进包（已修 `copy-plugins.mjs`），且当前运行实例里 **rg 实际不可用而描述谎报可用**；我加的三档回退第二档 `runtime/bin/rg.exe` 实测可用（ripgrep 15.2.0） | 同上，需重打包验证 |
-| `NetworkSlashProviderTest` 6 个 error：上游把 `TaskService.get()` 返回类型改为 `TaskRuntime`，测试桩仍造 `ExecContext` | 既有欠账，已用 `git archive` 基线对照确认与 shell 工具改动无关 |
-| WSL 托管分支的理论缺口：用户手工以同名 `EveryAgent` 从别处导入 rootfs 时，"镜像出处"判据会误判为可用 | 已记 §7.10；若要真判需 `command -v rg` 探测（成本权衡同节） |
-| 宿主 `runtime/bin` 里的 rg 无任何机制注入 WSL 发行版（需同时解决 drvfs 可达性与 seccomp 禁 execve） | 仅记录，无方案 |
+| **包内 runner 仍是 PS-003 修复前形态**，导致本会话仍在出现「含裸对象语句 → 空结果」（实测旧形态 `outLen=2` vs 修复后 `263`）。§7.10 已给判据 | **已闭环**：当前运行实例实测裸对象输出正常（`Get-Date`、`$PSVersionTable.PSVersion` 多行对象完整输出），重打包+重启已生效 |
+| 插件自带 `bin/rg.exe` 未进包（已修 `copy-plugins.mjs`），且当前运行实例里 **rg 实际不可用而描述谎报可用**；我加的三档回退第二档 `runtime/bin/rg.exe` 实测可用（ripgrep 15.2.0） | **已闭环**：实测 `rg --version` = ripgrep 15.2.0，PATH 注入生效（安装目录插件 `bin\rg.exe`）；`runtime/bin/rg.exe` 亦在 |
+| `NetworkSlashProviderTest` 6 个 error：上游把 `TaskService.get()` 返回类型改为 `TaskRuntime`，测试桩仍造 `ExecContext` | **已消解**：该测试与 `TaskRuntime` 已随重构删除（全仓 `rg` 无匹配；历史提交 `6a5f6375` 等） |
+| WSL 托管分支的理论缺口：用户手工以同名 `EveryAgent` 从别处导入 rootfs 时，"镜像出处"判据会误判为可用 | 维持记录（本次未验证 WSL 行为）；若要真判需 `command -v rg` 探测（成本权衡同 §7.10） |
+| 宿主 `runtime/bin` 里的 rg 无任何机制注入 WSL 发行版（需同时解决 drvfs 可达性与 seccomp 禁 execve） | 维持记录，无方案 |
+
+---
+
+## 四、2026-10-08 复核记录与新发现
+
+复核方式：以当前工作区源码逐行读码核对行号（一、全部 7 条行号精确命中），并在运行实例
+（desktop 模式 codex 沙箱）实测。一、1-5 已全部修复（见各条目「已修复」行），修复统一
+走 **既有 Output 帧文本通道**（Exit 帧之前补 stderr 行）+ `ExecResults.appendNote` 落位，
+**零新增 IPC 字段、零物化清单变更、零 wire 语义变化**；护栏测试
+`every-agent-plugin-api/src/test/.../ExecResultsNoteTest.java`（5 例）。
+**待重打包重启后做端到端复验**（复验 PS-003 与 CLIXML 还原不回归，红线 3）。
+
+复核中发现的既有测试失败与本次改动无关（`git stash` 基线对照坐实）：
+`CodexCommandExecutorTest` 2 例（junit 临时目录落在 eagent 仓库内污染 git root 探测）、
+`SandboxAccountsTest`/`AclPrimitivesTest`（code 5 需管理员）、`WindowsRunnerSmokeTest`
+（受限令牌套娃）/`WindowsSessionSmokeTest`（管道 232）——均属在 codex 沙箱内跑测试的
+环境限制。
+
+### 8. stderr 直出残留 ANSI/VT 转义序列（用户报「命令执行结果有乱码」的真相）
+
+- **现象**：模型收到 `[31;1m...` 等原始 ESC 序列（用户会话实报）。
+- **触发**：pwsh 7.x 错误流**直出**（不经 `2>&1` 合并）且 VT 着色开启时，stderr 字节里
+  带颜色码；解码链（`ExecResults.decodeConsoleOutput` → `decodeClixml`）不剥离 VT 序列。
+  2026-10-08 实测：`Get-ChildItem <不存在路径>` 的 stderr 满屏 ESC；`2>&1 | Out-String`
+  合并后则无。
+- **影响**：不吞信息（错误文本完整可读），但污染输出；与条目 6 的编码乱码是**不同形态**
+  （此处字节本身是合法 UTF-8，只是含控制序列）。
+- **建议修法**：`ExecResults` 增加统一 VT 剥离（ANSI escape 正则，仅对 CSI/OSC 等
+  控制序列，不动正文），在解码链出口应用；复验 CLIXML 还原与 PS-003 不回归。
 
 ---
 

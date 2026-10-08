@@ -342,6 +342,7 @@ public final class CodexCommandExecutor {
         // 用户命令行而非内部包装前缀;脚本落盘或相对化失败回退
         // -EncodedCommand,行为无回退仅定位质量回退。CMD 分支保持 commandArgv 原样。
         Path cmdScript = null;
+        boolean scriptFallback = false; // PS 脚本承载失败回退了 -EncodedCommand(定位质量回退)
         List<String> argv;
         if (shell.isPowerShell) {
             try {
@@ -357,6 +358,7 @@ public final class CodexCommandExecutor {
                 }
                 cmdScript = null;
                 argv = commandArgv(command);
+                scriptFallback = true;
                 LOG.log(System.Logger.Level.WARNING,
                         "[exec] 命令脚本文件承载失败,回退 -EncodedCommand: {0}", e.toString());
             }
@@ -371,6 +373,12 @@ public final class CodexCommandExecutor {
                 wireName(identity), false, null);
         try {
             SessionRun run = aggregate(cfg, spec, timeoutMs);
+            if (scriptFallback) {
+                // 回退只发生在 PS 分支;行为不变但报错定位质量回退,让模型知情(ISSUES 一.5)
+                run = new SessionRun(run.stdout(),
+                        ExecResults.appendNote(run.stderr(), ExecResults.SCRIPT_FALLBACK_NOTE),
+                        run.exitCode(), run.timedOut(), run.interrupted(), run.truncated());
+            }
             LOG.log(System.Logger.Level.INFO,
                     "[exec] timing preflight={0}ms runnerCfg={1}ms sessionExec={2}ms",
                     new Object[] { (tPreflight - tStart) / 1_000_000L,
@@ -398,6 +406,10 @@ public final class CodexCommandExecutor {
         boolean interrupted = false;
         int exitCode = 0;
         boolean exited = false;
+        // 未知帧（父→runner 方向不会出现；理论上仅协议演进/版本不一致时出现）——
+        // 计数而非静默丢弃:若某天输出改用新帧类型承载,旧 worker 必须能发现"输出被丢了"
+        int unknownFrames = 0;
+        java.util.Map<String, Integer> unknownTypes = new java.util.TreeMap<>();
         long deadline = timeoutMs > 0
                 ? System.nanoTime() + (timeoutMs + TEARDOWN_GRACE_MS) * 1_000_000L
                 : Long.MAX_VALUE;
@@ -443,8 +455,11 @@ public final class CodexCommandExecutor {
                     exitCode = exit.exitCode();
                     timedOut |= exit.timedOut();
                     exited = true;
+                } else {
+                    // 容忍协议演进(不崩),但会话尾向结果透出协议告警,绝不静默丢弃(ISSUES 一.4)
+                    unknownFrames++;
+                    unknownTypes.merge(frame.message().getClass().getSimpleName(), 1, Integer::sum);
                 }
-                // 其余帧（父→runner 方向不会出现；容忍协议演进）静默丢弃
             }
         }
         // 全流原始字节一次性智能解码：严格 UTF-8 失败回退系统 ANSI 码页，
@@ -454,9 +469,15 @@ public final class CodexCommandExecutor {
         // 记录序列化成 CLIXML(与文件/管道承载无关),还原成真实错误文本,绝不静默丢弃
         // (2026-10 实测:文件承载下 Write-Error 仍产生 CLIXML;此前只有 worker 核心的
         // DIRECT 路径做了还原,codex 后端漏接)。
+        String errText = ExecResults.decodeClixml(
+                ExecResults.decodeConsoleOutput(stderr.toByteArray()));
+        if (unknownFrames > 0) {
+            errText = ExecResults.appendNote(errText, ExecResults.UNKNOWN_FRAME_NOTE_PREFIX
+                    + unknownFrames + " 个未知帧 " + unknownTypes.keySet() + "]");
+        }
         return new SessionRun(
                 ExecResults.decodeConsoleOutput(stdout.toByteArray()),
-                ExecResults.decodeClixml(ExecResults.decodeConsoleOutput(stderr.toByteArray())),
+                errText,
                 exitCode, timedOut, interrupted, truncated);
     }
 

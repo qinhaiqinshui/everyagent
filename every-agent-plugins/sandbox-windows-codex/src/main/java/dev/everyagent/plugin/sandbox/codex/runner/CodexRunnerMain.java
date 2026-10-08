@@ -5,6 +5,9 @@ import com.sun.jna.Pointer;
 import com.sun.jna.platform.win32.Kernel32;
 import com.sun.jna.platform.win32.WinNT;
 
+import java.nio.charset.StandardCharsets;
+
+import dev.everyagent.plugin.api.shell.ExecResults;
 import dev.everyagent.plugin.sandbox.codex.runner.FrameCodec.FramedMessage;
 import dev.everyagent.plugin.sandbox.codex.runner.IpcMessage.Error;
 import dev.everyagent.plugin.sandbox.codex.runner.IpcMessage.ErrorStage;
@@ -256,8 +259,13 @@ public final class CodexRunnerMain {
         stage("child exited rc=" + r.exitCode() + " timedOut=" + r.timedOut());
         if (!r.terminatedCleanly()) {
             System.err.println("[codex-runner] root process did not exit after termination");
-        } else {
-            child.awaitOutputReaders(ChildProcess.TERMINATION_WAIT_MS); // 排空大尾巴输出
+        } else if (!child.awaitOutputReaders(ChildProcess.TERMINATION_WAIT_MS)) {
+            // 排空大尾巴输出;未在宽限内排空 = 尾部字节可能缺失,必须让模型知情(ISSUES 一.2)
+            sendNote(out, writeLock, ExecResults.DRAIN_TIMEOUT_NOTE);
+        }
+        if (child.degradedToPipes()) {
+            // 文件承载创建失败换轨了管道承载:承载语义已变,不能无人知晓(ISSUES 一.3)
+            sendNote(out, writeLock, ExecResults.CARRIER_FALLBACK_NOTE);
         }
         try {
             synchronized (writeLock) {
@@ -268,6 +276,19 @@ public final class CodexRunnerMain {
         }
         stage("exit frame sent");
         // input 虚拟线程随 System.exit 消亡，不阻塞退出
+    }
+
+    /**
+     * 把单行降级/告警提示以 Output 帧(stderr 流)送出。必须在 Exit 帧<b>之前</b>调用
+     * ——worker 侧收帧循环见到 Exit 即收口,晚于它的 Output 帧没人读。提示常量取自
+     * {@link ExecResults}(编译期内联,runner 物化 classpath 不因此新增 jar 依赖)。
+     */
+    private static void sendNote(WinNT.HANDLE out, Object writeLock, String note) {
+        try {
+            sendOutput(out, writeLock, (note + "\n").getBytes(StandardCharsets.UTF_8), true);
+        } catch (RuntimeException e) {
+            System.err.println("[codex-runner] note write failed: " + e.getMessage());
+        }
     }
 
     /** stdin/close_stdin/terminate/resize；管道 EOF 或读错 → 杀树（codex 同款）。 */

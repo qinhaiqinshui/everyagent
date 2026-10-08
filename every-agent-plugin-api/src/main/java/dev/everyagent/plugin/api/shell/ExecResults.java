@@ -151,6 +151,44 @@ public final class ExecResults {
      */
     public static final int MAX_OUTPUT_BYTES = MAX_OUTPUT_CHARS * 4;
 
+    // ---- 承载降级 / 协议告警提示（ISSUES「输出静默丢失」：失败必须对模型可见）----
+    //
+    // 判定原则：「命令成功且确无输出」与「输出被吞」必须在结果文本上分得开。以下常量
+    // 供 worker 侧执行器与 codex runner 侧共同引用——后者经编译期常量内联使用
+    //（JLS 4.12.4 constant variable），runner 物化 classpath 不因此新增 jar 依赖；
+    // 一律经 {@link #appendNote} 落位为 stderr 末尾的独立行，不改 wire 语义。
+
+    /** 文件承载 tail 读线程异常：前缀 + 异常描述 + {@code " 已读 N 字节]"}。 */
+    public static final String CARRIER_TAIL_FAILURE_PREFIX = "[输出承载异常: ";
+
+    /** 输出读线程未在宽限内排空——该流尾部字节可能缺失。 */
+    public static final String DRAIN_TIMEOUT_NOTE = "[降级:输出未在宽限内排空,尾部可能缺失]";
+
+    /** 文件承载创建失败、已换轨管道承载（编码路径与断流风险面随之改变）。 */
+    public static final String CARRIER_FALLBACK_NOTE = "[降级:文件承载不可用,改用管道承载]";
+
+    /** 收到并丢弃了未知类型帧（IPC 协议演进 / runner-worker 版本不一致信号）。 */
+    public static final String UNKNOWN_FRAME_NOTE_PREFIX = "[协议告警:丢弃 ";
+
+    /** PowerShell 命令脚本文件承载失败、回退 -EncodedCommand（报错定位质量回退）。 */
+    public static final String SCRIPT_FALLBACK_NOTE = "[降级:脚本承载失败,报错行号可能不准]";
+
+    /**
+     * 把单行提示追加到结果文本尾部：原文末尾缺换行先补、提示独立成行并以换行收尾，
+     * 与既有输出在文本上保持清晰分界。text 为 null 按空串；note 为 null/空白原样返回。
+     */
+    public static String appendNote(String text, String note) {
+        String base = text == null ? "" : text;
+        if (note == null || note.isBlank()) {
+            return base;
+        }
+        StringBuilder sb = new StringBuilder(base);
+        if (!sb.isEmpty() && sb.charAt(sb.length() - 1) != '\n') {
+            sb.append('\n');
+        }
+        return sb.append(note).append('\n').toString();
+    }
+
     private ExecResults() {
     }
 
