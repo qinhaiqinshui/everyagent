@@ -25,6 +25,7 @@ import { loadPlugins } from './plugin/pluginLoader'
 import { wireFsChanged } from './platform/fs/workspaceGateway'
 import { workspaceRegistry } from './hub/workspaceRegistry'
 import { modelConfigs } from './hub/modelConfigs'
+import { userPreferences } from './settings/userPreferences'
 import { registerRemoteSlashProvider } from './slash/remoteSlashProvider'
 import { applyDesktopBootstrapIfPresent, isDesktop } from '@/platform/desktopBootstrap'
 import { hubSession } from './hub/session'
@@ -53,6 +54,9 @@ workspaceRegistry.wire()
 
 // 模型配置列表跟踪(config.get 校准 + config.changed{models} 感知)。
 modelConfigs.wire()
+
+// 用户偏好同步(主题等;pref.get 校准 + config.changed{preferences} 感知)。
+userPreferences.wire()
 
 // `/` 斜杠命令数据源下沉 worker(slash.list RPC,动态注册)。
 registerRemoteSlashProvider()

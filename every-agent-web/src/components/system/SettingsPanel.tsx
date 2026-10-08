@@ -421,7 +421,7 @@ export default function SettingsPanel() {
             type="button"
             variant="secondary"
             style={secondaryButtonStyle}
-            onClick={() => saveThemeMode(themeMode === 'dark' ? 'light' : 'dark')}
+            onClick={() => void saveThemeMode(themeMode === 'dark' ? 'light' : 'dark')}
           >
             {themeMode === 'dark' ? '切换到浅色' : '切换到深色'}
           </Button>

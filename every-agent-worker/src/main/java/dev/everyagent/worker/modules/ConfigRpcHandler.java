@@ -2,6 +2,7 @@ package dev.everyagent.worker.modules;
 
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.worker.hub.HubPool;
+import dev.everyagent.worker.modules.UserPreferenceStore;
 import dev.everyagent.worker.proto.ConfigDtos.ModelConfig;
 import dev.everyagent.plugin.api.event.Events;
 import dev.everyagent.worker.proto.RpcMethods;
@@ -33,15 +34,18 @@ public class ConfigRpcHandler {
 
     private final ConfigStore configs;
     private final ExternalSkillScanner externalSkillScanner;
+    private final UserPreferenceStore preferences;
     private final HubPool pool;
     private final RpcDispatcher dispatcher;
 
     public ConfigRpcHandler(ConfigStore configs,
                             ExternalSkillScanner externalSkillScanner,
+                            UserPreferenceStore preferences,
                             HubPool pool,
                             RpcDispatcher dispatcher) {
         this.configs = configs;
         this.externalSkillScanner = externalSkillScanner;
+        this.preferences = preferences;
         this.pool = pool;
         this.dispatcher = dispatcher;
     }
@@ -51,6 +55,8 @@ public class ConfigRpcHandler {
         dispatcher.register(RpcMethods.CONFIG_GET, this::rpcConfigGet);
         dispatcher.register(RpcMethods.CONFIG_RELOAD, this::rpcConfigReload);
         dispatcher.register(RpcMethods.SKILL_RELOAD, this::rpcSkillReload);
+        dispatcher.register(RpcMethods.PREF_GET, this::rpcPrefGet);
+        dispatcher.register(RpcMethods.PREF_SET, this::rpcPrefSet);
     }
 
     private void rpcConfigGet(RpcContext ctx) {
@@ -96,5 +102,35 @@ public class ConfigRpcHandler {
                 Json.toJson(new Events.ConfigChanged(List.of("skills"))));
         log.info("skill.reload 完成:外部 skill 已重新扫描,共 {} 个", count);
         ctx.ok(Json.obj().put("skills", count));
+    }
+
+    /**
+     * pref.get:返回全部用户偏好(key-value),如 {theme:"dark"}。
+     * 前端连接 worker 后据此同步主题等偏好(持久化在 preferences.json)。
+     */
+    private void rpcPrefGet(RpcContext ctx) {
+        ObjectNode out = Json.obj();
+        for (var entry : preferences.getAll().entrySet()) {
+            out.put(entry.getKey(), entry.getValue());
+        }
+        ctx.ok(out);
+    }
+
+    /**
+     * pref.set:写入单个偏好(参数 key + value),原子落盘后广播
+     * config.changed{keys:["preferences"]} 通知所有客户端同步。
+     */
+    private void rpcPrefSet(RpcContext ctx) {
+        String key = ctx.optStrParam("key", "");
+        String value = ctx.optStrParam("value", "");
+        if (key.isEmpty()) {
+            ctx.err("BAD_PARAMS", "缺少参数 key");
+            return;
+        }
+        preferences.set(key, value);
+        pool.broadcastEvt(Events.CONFIG_CHANGED,
+                Json.toJson(new Events.ConfigChanged(List.of("preferences"))));
+        log.info("pref.set: {} = {} (已写入 preferences.json)", key, value);
+        ctx.ok(Json.obj().put("key", key).put("value", value));
     }
 }

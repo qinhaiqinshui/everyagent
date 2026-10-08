@@ -84,6 +84,11 @@ public final class RpcMethods {
     /** 重启 worker 进程(自重启:优雅关闭后以重建的启动命令重新拉起,架构 §5.5)。 */
     public static final String WORKER_RESTART = "worker.restart";
 
+    /** 读取用户偏好(全部 key-value,如主题等;落盘 preferences.json)。 */
+    public static final String PREF_GET = "pref.get";
+    /** 写入用户偏好(参数 key + value;写盘后广播 config.changed{keys:["preferences"]})。 */
+    public static final String PREF_SET = "pref.set";
+
     // ── 插件管理 ──
     /** 列出已加载的插件清单。 */
     public static final String PLUGIN_LIST = "plugin.list";
