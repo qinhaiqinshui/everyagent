@@ -55,8 +55,9 @@ final class AclDaclView {
         EFFECTIVE_OR_CHILD_FILE
     }
 
-    /** 单条 ACE 的解析结果（sid 为内联视图指针，随底层 DACL 存活）。 */
-    record Ace(int type, int flags, int mask, Pointer sid) {
+    /** 单条 ACE 的解析结果（sid 为内联视图指针，随底层 DACL 存活；offset/size 为
+     * 相对 PACL 起点的布局，供 revoke 的原样字节拷贝重建使用）。 */
+    record Ace(int type, int flags, int mask, Pointer sid, int offset, int size) {
         boolean isAllowed() {
             return type == ACE_TYPE_ALLOWED;
         }
@@ -97,8 +98,9 @@ final class AclDaclView {
             if (size < MIN_ACE_SIZE) {
                 break; // 畸形 ACL 防御：不再继续解引用
             }
-            consumer.accept(new Ace(acl.getByte(offset) & 0xFF, acl.getByte(offset + 1) & 0xFF,
-                    acl.getInt(offset + ACE_MASK_OFFSET), acl.share(offset + ACE_SID_OFFSET)));
+            int at = (int) offset;
+            consumer.accept(new Ace(acl.getByte(at) & 0xFF, acl.getByte(at + 1) & 0xFF,
+                    acl.getInt(at + ACE_MASK_OFFSET), acl.share(at + ACE_SID_OFFSET), at, size));
             offset += size;
         }
     }

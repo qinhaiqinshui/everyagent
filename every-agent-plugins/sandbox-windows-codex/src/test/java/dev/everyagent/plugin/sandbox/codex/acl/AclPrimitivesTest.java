@@ -44,23 +44,39 @@ class AclPrimitivesTest {
         return WindowsAclOperations.INSTANCE.psid(sid);
     }
 
+    /**
+     * deny-ACE 测试的 deny 目标——合成 SID，与测试进程身份严格不相交（design.md §8
+     * 「deny 对象纪律」）。历史上这里用 Everyone：DENY_WRITE_MASK 经 FILE_GENERIC_WRITE
+     * 含 READ_CONTROL，deny Everyone 连同属主隐式自救一起封死——后续 fetchDacl/revokeAce/
+     * JUnit @TempDir 清理全数 Access Denied，每跑一次漏一个仅管理员可清的砖目录
+     * （.everyagent/tmp/junit-*，历史残留见 scripts/clean-bricked-tmp.ps1）。
+     */
+    private static final String DENY_TARGET = "S-1-5-21-9-9-9-9";
+
     @Test
     void denyWriteAceRoundTripAndIdempotence() throws IOException {
         Path dir = Files.createDirectories(tmp.resolve("roundtrip"));
-        Pointer everyone = psid(EVERYONE);
-
-        assertTrue(DenyAcePrimitives.addDenyWriteAce(dir, everyone), "首轮应写入");
-        try (AclPrimitives.FetchedDacl fetched = AclPrimitives.fetchDacl(dir)) {
-            assertTrue(fetched.view.hasDenyMaskForSid(everyone, AclMasks.DENY_WRITE_MASK));
-            assertFalse(fetched.view.hasDenyMaskForSid(everyone, AclMasks.DENY_READ_MASK),
-                    "deny-write 不含读位");
+        Pointer target = psid(DENY_TARGET);
+        try {
+            assertTrue(DenyAcePrimitives.addDenyWriteAce(dir, target), "首轮应写入");
+            try (AclPrimitives.FetchedDacl fetched = AclPrimitives.fetchDacl(dir)) {
+                assertTrue(fetched.view.hasDenyMaskForSid(target, AclMasks.DENY_WRITE_MASK));
+                // 「不含读位」只能断 FILE_READ_DATA(0x1):hasDenyMaskForSid 是相交判定,而
+                // READ_CONTROL 同在于 FILE_GENERIC_READ/WRITE 两个掩码——拿整个 DENY_READ_MASK
+                // 比对恒有交集,旧断言在 deny 写入后必然失败(对齐 acl.rs 的分位断言语义)。
+                assertFalse(fetched.view.hasDenyMaskForSid(target, 0x0001),
+                        "deny-write 不封文件数据读位");
+            }
+            assertFalse(DenyAcePrimitives.addDenyWriteAce(dir, target), "幂等：不重复写");
+        } finally {
+            DenyAcePrimitives.revokeAce(dir, target);
         }
-        assertFalse(DenyAcePrimitives.addDenyWriteAce(dir, everyone), "幂等：不重复写");
-
-        DenyAcePrimitives.revokeAce(dir, everyone);
         try (AclPrimitives.FetchedDacl fetched = AclPrimitives.fetchDacl(dir)) {
-            assertFalse(fetched.view.hasDenyMaskForSid(everyone, AclMasks.DENY_WRITE_MASK));
+            assertFalse(fetched.view.hasDenyMaskForSid(target, AclMasks.DENY_WRITE_MASK));
         }
+        // 砖自由回归护栏：deny 撤净后目录必须可删。若有人把 deny 对象改回 Everyone 等
+        // 泛主体，此行以 AccessDeniedException 立即失败，而不是每次运行漏一个砖目录。
+        assertDoesNotThrow(() -> Files.delete(dir), "deny 撤销后目录必须可删(防砖回归)");
     }
 
     @Test

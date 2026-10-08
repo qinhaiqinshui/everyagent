@@ -2,7 +2,10 @@ package dev.everyagent.plugin.sandbox.codex.acl;
 
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 
+import com.sun.jna.Memory;
 import com.sun.jna.Pointer;
 import com.sun.jna.platform.win32.Advapi32;
 import com.sun.jna.platform.win32.Kernel32;
@@ -115,9 +118,15 @@ public final class DenyAcePrimitives {
     }
 
     /**
-     * 移除该 SID 的全部显式 ACE——对齐 {@code revoke_ace}：REVOKE_ACCESS、CI|OI；
-     * null DACL 直接成功（换成空 ACL 会全拒）；<b>AceCount 前后不变则不落盘</b>
-     * （REVOKE 只删条目，无变化时不触发继承重传播）。
+     * 移除该 SID 的全部显式 ACE（含 {@code SetEntriesInAclW} 在容器上写入时拆出的
+     * 「对自身生效」+「(OI)(CI)(IO) 仅继承」双条目）。契约对齐 {@code revoke_ace}，但实现
+     * <b>偏离 acl.rs</b>：不再走 {@code SetEntriesInAclW(REVOKE)}——容器上带 CI|OI 的
+     * deny 写入会被拆成两条 ACE，而 REVOKE 的 (trustee×继承形态) 匹配对两条都配不上，
+     * 一条也删不掉（2026-12 探针实证：11 条 DACL 加 deny 落盘成 13 条，REVOKE 合并
+     * 13→13 零删除；acl.rs 同一 Win32 语义同病，见 docs/parts/02-token-acl.md §3.5）。
+     * 改为手动重建：逐条 SID 精确匹配剔除、其余 ACE 原样字节拷贝（icacls /remove 同款
+     * 做法，形态无关）。null DACL 直接成功（换成空 ACL 会全拒）；<b>无该 SID 条目则
+     * 不落盘</b>（等价原 AceCount 短路，不触发继承重传播）。
      */
     public static void revokeAce(Path path, Pointer psid) throws IOException {
         PointerByReference ppDacl = new PointerByReference();
@@ -135,23 +144,39 @@ public final class DenyAcePrimitives {
             if (oldDacl == null) {
                 return; // null DACL 无条目可撤
             }
-            EXPLICIT_ACCESS_W entry = AclPrimitives.explicitAccess(psid, 0,
-                    Advapi32Ex.INSTANCE.REVOKE_ACCESS,
-                    Advapi32Ex.INSTANCE.CONTAINER_INHERIT_ACE | Advapi32Ex.INSTANCE.OBJECT_INHERIT_ACE);
-            Pointer newDacl = mergeSingle(null, path, entry, oldDacl);
-            try {
-                if (newDacl.getShort(4) == oldDacl.getShort(4)) {
-                    return; // AceCount 不变：不调 SetNamedSecurityInfoW
+            List<AclDaclView.Ace> keep = new ArrayList<>();
+            boolean[] removed = { false };
+            AclDaclView.of(oldDacl).forEach(ace -> {
+                if (AclDaclView.sidEquals(ace.sid(), psid)) {
+                    removed[0] = true; // deny 双变体/allow 全形态按 SID 一并剔除
+                } else {
+                    keep.add(ace);
                 }
-                int set = Advapi32.INSTANCE.SetNamedSecurityInfo(path.toString(),
-                        AclMasks.SE_FILE_OBJECT, Advapi32Ex.INSTANCE.DACL_SECURITY_INFORMATION,
-                        null, null, newDacl, null);
-                if (set != 0) {
-                    throw new IOException("SetNamedSecurityInfoW failed for " + path + ": "
-                            + AclPrimitives.winError(set));
-                }
-            } finally {
-                Kernel32.INSTANCE.LocalFree(newDacl);
+            });
+            if (!removed[0]) {
+                return; // 无该 SID 条目：不落盘
+            }
+            int total = 8; // ACL 头：Revision/Sbz1/AclSize/AceCount/Sbz2
+            for (AclDaclView.Ace ace : keep) {
+                total += ace.size();
+            }
+            Pointer newDacl = new Memory(total);
+            newDacl.setByte(0, oldDacl.getByte(0)); // AclRevision 原样保留
+            newDacl.setByte(1, (byte) 0); // Sbz1
+            newDacl.setShort(2, (short) total); // AclSize
+            newDacl.setShort(4, (short) keep.size()); // AceCount
+            newDacl.setShort(6, (short) 0); // Sbz2
+            int offset = 8;
+            for (AclDaclView.Ace ace : keep) {
+                newDacl.write(offset, oldDacl.getByteArray(ace.offset(), ace.size()), 0, ace.size());
+                offset += ace.size();
+            }
+            int set = Advapi32.INSTANCE.SetNamedSecurityInfo(path.toString(),
+                    AclMasks.SE_FILE_OBJECT, Advapi32Ex.INSTANCE.DACL_SECURITY_INFORMATION,
+                    null, null, newDacl, null);
+            if (set != 0) {
+                throw new IOException("SetNamedSecurityInfoW failed for " + path + ": "
+                        + AclPrimitives.winError(set));
             }
         } finally {
             Kernel32.INSTANCE.LocalFree(descriptor);

@@ -258,6 +258,7 @@ SpawnRequest 不搬 codex 的 permission_profile 结构,改为自有 `writeRoots
 
 - **跨平台纯逻辑(不 assumeTrue)**:FrameCodec 编解码(长度前缀/8MiB 上限/残帧/EOF);消息集 JSON 往返(base64、version=6);CapSidStore 生成格式/持久化/裸 SID 兼容/按 cwd 与写根取键/特异度排序;RootPolicy 的 allow/deny 计算(包含/重叠/敏感路径剥离);LoopbackPorts 补集区间与环回/非环回地址常量;EnvBlock 大小写不敏感排序;`quote_windows_arg`;错误码分类表(1326/1056/1223/NERR_*);防火墙规则名/SDDL/描述串生成;SpawnRequest→ACL 计划的纯函数投影。
 - **Windows-only(`assumeTrue(os.name→win)`)**:JNA 接口加载冒烟;临时目录上的 SetEntriesInAclW/GetNamedSecurityInfo 读写断言;DPAPI 加解密环回;TokenFactory 在自身令牌上的 CreateRestrictedToken(校验 restricting SIDs);Fwpuclnt 结构体内存布局(GUID/union 偏移断言)。
+- **deny 对象纪律(2026-12 事故沉淀)**:deny-ACE 类测试的 deny 目标<b>必须用与测试进程身份严格不相交的合成 SID</b>(如 `S-1-5-21-9-9-9-9`),<b>禁止 Everyone/Users 等泛主体</b>——`DENY_WRITE_MASK` 经 `FILE_GENERIC_WRITE` 含 `READ_CONTROL`(`STANDARD_RIGHTS_WRITE`),deny Everyone 会把「读 DACL/改 DACL/删除」连同<b>属主隐式自救</b>一起封死(属主隐式权利只在 DACL 无对应授权时补位,压不过显式 deny):addDenyWriteAce 之后的 fetchDacl 断言、revokeAce、JUnit `@TempDir` 清理全数 Access Denied,每跑一次就在 `.everyagent/tmp` 漏一个<b>仅管理员 takeown+reset 可清</b>的砖目录(在 jailed 会话里跑 mvn 时 TEMP 被指到该处,见 CodexCommandExecutor.childEnv)。历史残留清理:`scripts/clean-bricked-tmp.ps1`(需管理员);回归护栏:`AclPrimitivesTest` 末尾的「deny 撤净后目录必须可删」断言。
 - **需管理员的端到端(标记 `@Tag("windows-admin"`,CI 手动)**:setup 幂等(二次 marker 短路、refresh 无 UAC);写越界/读越界/junction 与 symlink 不穿越;Offline 断网(环回 proxy fixture);卸载后账户/组/规则/目录/注册表值全消失且无关对象不受影响——对齐 `sandbox_smoketests.py` 断言面。
 
 ## 9. 落地顺序(对齐分析文档 §5.6.4)

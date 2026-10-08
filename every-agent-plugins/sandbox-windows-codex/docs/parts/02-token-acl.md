@@ -120,6 +120,8 @@ const WRITE_ALLOW_MASK: u32 =
 
 `GetNamedSecurityInfoW` 取 DACL（**null DACL 直接 Ok**：替换成空 ACL 会全拒）；`EXPLICIT_ACCESS_W{0, REVOKE_ACCESS(=4), CI|OI}` 经 `SetEntriesInAclW` 移除该 SID 全部条目；**若 `AceCount` 前后不变则不调 `SetNamedSecurityInfoW`**——避免无谓触发继承重传播。
 
+> **Java 移植偏离（2026-12 探针实证，上游同病已在我们侧修复）**：`SetEntriesInAclW` 在**容器（目录）**上写入带 `CI|OI` 的 ACE 时会自动拆成两条——「对自身生效」`(DENY)` + 「`(OI)(CI)(IO)` 仅继承」变体（探针：11 条 DACL 经 merge-add 得 12、落盘后实读 13 条）；而 `REVOKE` 的匹配认 (trustee × 继承形态)，对拆出的两条**都配不上，一条也删不掉**（merge-revoke 13→13 零删除，`AceCount` 短路静默返回）。acl.rs 原版同一 Win32 语义、目录上同样失效——deny-read 状态机的撤销/对账在生产中将留下**永久 deny**。Java 侧 `DenyAcePrimitives.revokeAce` 改为**手动重建 DACL**：逐条 SID 精确匹配剔除（含 IO 变体）、其余 ACE 原样字节拷贝（icacls `/remove` 同款做法，形态无关）；契约不变（null DACL 直接成功、无匹配不落盘）。回归护栏：`AclPrimitivesTest.denyWriteAceRoundTripAndIdempotence`（该测试此前因 deny-Everyone 自锁从未通过，见 design.md §8「deny 对象纪律」）。
+
 ### 3.6 文件系统根保护
 
 `ensure_handle_is_not_filesystem_root`：`GetFinalPathNameByHandleW(VOLUME_NAME_NONE)` 解析句柄真实路径，若为单字符 `\` 即根，报 "refusing to apply a deny-read ACE to filesystem root"。deny-read 在**打开句柄**与 **plan 阶段**（§5.2）双重拦截根目录，杜绝别名/重解析路径把机器整体锁死。
