@@ -41,7 +41,7 @@ import { slashCommandRegistry } from '@/slash/slashCommandRegistry'
 import { createSnowflakeId } from '@/utils/snowflakeId'
 import { taskQueryService } from '@/query/taskQueryService'
 import { isTaskActive } from '@/task/taskStatusPresentation'
-import type { TaskThreadItem } from '@/task/eventFolder'
+import type { AgentMetaSnapshot, TaskThreadItem } from '@/task/eventFolder'
 import { taskStore } from '@/task/taskStore'
 import { taskStreamManager, type TaskStreamHandle } from '@/task/taskStream'
 import { workspaceRegistry, type WorkspaceEntry } from '@/hub/workspaceRegistry'
@@ -802,12 +802,67 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
     })
   }, [agents, stableMainAgentId, stream, agentMeta, entry?.status])
 
-  // 主 agent 列表项(供电池详情卡使用):从 agentListItems 取 isMain 项;
-  // entry 未就绪时为 null,电池内部由 monitor 快照兜底构造。
-  const mainAgentItem = React.useMemo(
-    () => agentListItems.find((item) => item.isMain) ?? null,
-    [agentListItems],
-  )
+  // 电池详情卡数据(任务级汇总):任务下全部 agent(主 + 子)聚合——累计 tokens
+  // (输入/输出/合计,每 agent 累计值)与上下文占用/窗口(每 agent 最近一轮)逐 agent
+  // 累加;创建时间用任务创建时间(entry.createdAt);模型取各 agent 快照去重拼接。
+  // 上下文占用优先取 worker 聚合快照(entry.contextUsage,与电池填充同源同值),
+  // 缺省(未建流/旧数据)时回退 agentMeta 逐项求和;无任何数据时返回 null,电池内部
+  // 由 monitor 快照兜底构造。
+  const batteryItem = React.useMemo<AgentListItem | null>(() => {
+    const mainItem = agentListItems.find((item) => item.isMain) ?? null
+    const metas = agentListItems
+      .map((item) => item.meta)
+      .filter((meta): meta is AgentMetaSnapshot => Boolean(meta))
+    const usage = entry?.contextUsage
+    if (metas.length === 0 && !usage) {
+      return null
+    }
+    const sumMeta = (pick: (meta: AgentMetaSnapshot) => number | undefined): number | undefined => {
+      let total = 0
+      let hasValue = false
+      for (const meta of metas) {
+        const value = pick(meta)
+        if (value != null) {
+          total += value
+          hasValue = true
+        }
+      }
+      return hasValue ? total : undefined
+    }
+    const models: string[] = []
+    for (const meta of metas) {
+      if (meta.model && !models.includes(meta.model)) {
+        models.push(meta.model)
+      }
+    }
+    const contextUsed = usage
+      ? (usage.promptTokens ?? usage.totalTokens ?? 0)
+      : sumMeta((meta) => meta.contextUsed)
+    const contextWindow = usage && usage.maxTokens > 0
+      ? usage.maxTokens
+      : sumMeta((meta) => meta.contextWindow)
+    const agentId = mainItem?.agentId ?? stableMainAgentId ?? ''
+    return {
+      agentId,
+      title: '全部 agent',
+      status: mainItem?.status ?? 'idle',
+      isMain: true,
+      meta: {
+        agentId,
+        createdAt: entry?.createdAt && entry.createdAt > 0 ? entry.createdAt : undefined,
+        model: models.length > 0 ? models.join(' / ') : (usage?.model || undefined),
+        inputTokens: sumMeta((meta) => meta.inputTokens),
+        outputTokens: sumMeta((meta) => meta.outputTokens),
+        totalTokens: sumMeta((meta) => meta.totalTokens),
+        contextUsed,
+        contextWindow,
+        updatedAt: usage?.lastUpdatedAt ?? sumMeta((meta) => meta.updatedAt),
+      },
+      contextRatio: contextUsed != null && contextWindow != null && contextWindow > 0
+        ? Math.min(1, Math.max(0, contextUsed / contextWindow))
+        : undefined,
+    }
+  }, [agentListItems, entry, stableMainAgentId])
 
   /** 点击 agent 长条:切换选中态(再点同一 agent 由面板回传 '' 恢复全部;轮次视图下仅高亮)。 */
   const handleSelectAgent = React.useCallback((agentId: string) => {
@@ -972,11 +1027,12 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
                     {/* 上下文电池统一消费 taskStore 的 TaskSummary.usage(worker usage
                         投影器聚合任务下所有 agent 最近一轮占用,task.updated 每轮实时推送;
                         聊天页与任务列表同源同值,流内不再单独维护)。
-                        详情卡数据 = 主 agent 列表项(与子 agent 悬停卡同构)。 */}
+                        详情卡数据 = 任务级汇总项(任务下全部 agent 聚合,创建时间用任务
+                        创建时间,上下文占用/窗口逐 agent 累加)。 */}
                     <ContextBattery
                       taskId={effectiveTaskId}
                       monitor={entry?.contextUsage ?? null}
-                      agentItem={mainAgentItem}
+                      agentItem={batteryItem}
                     />
                   </div>
                   <div className="task-composer-footer__controls">

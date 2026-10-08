@@ -22,8 +22,9 @@ export type ContextBatteryProps = {
   /** 初始上下文监控快照（首次渲染用，运行时由事件实时覆盖）。 */
   monitor: ContextMonitorSnapshot | null | undefined
   /**
-   * 详情卡数据（主 agent 列表项；缺省时由 monitor 快照兜底构造）。
-   * 聊天页传 agentListItems 中 isMain 的项，任务列表行按 contextUsage + status 整形。
+   * 详情卡数据（任务级汇总项；缺省时由 monitor 快照兜底构造）。
+   * 聊天页传任务下全部 agent 的聚合项（batteryItem：累计 tokens/上下文占用逐 agent
+   * 累加、创建时间 = 任务创建时间），任务列表行按 contextUsage + 任务创建时间整形。
    */
   agentItem?: AgentListItem | null
 }
@@ -35,7 +36,9 @@ type UsageLevel = 'ok' | 'warn' | 'danger'
  *
  * - 电池格内已用部分按用量着色（绿 / 黄 / 红），剩余部分为轨道底色。
  * - 点击电池弹出详情卡：与子 agent 悬停信息卡共用 AgentInfoHoverCard（信息与样式
- *   完全一致——状态/标题/完整 agentId/创建时间/模型/累计 tokens 与上下文用量）。
+ *   完全一致——状态/标题/完整 agentId/创建时间/模型/累计 tokens 与上下文用量）；
+ *   数据为**任务级汇总**——任务下所有 agent 聚合（创建时间 = 任务创建时间，
+ *   累计 tokens 与上下文占用/窗口逐 agent 累加）。
  * - 数据经 `monitor` prop 镜像更新（任务流 usage 快照随 taskStore/taskStream 刷新）。
  */
 export default function ContextBattery({ monitor, agentItem }: ContextBatteryProps) {
@@ -93,11 +96,12 @@ export default function ContextBattery({ monitor, agentItem }: ContextBatteryPro
     ? `上下文窗口用量 ${ratioText}，已用 ${formatTokenCount(usedTokens)} / 共 ${formatTokenCount(totalTokens)}`
     : '上下文窗口用量：暂无数据'
 
-  // 详情卡数据:优先调用方传入的主 agent 列表项;缺省时由 monitor 快照兜底构造
-  // (如聊天页 entry 未就绪的短暂窗口),缺失字段由卡片显示「—」。
+  // 详情卡数据:优先调用方传入的任务级汇总项;缺省时由 monitor 快照兜底构造
+  // (如聊天页 entry/流未就绪的短暂窗口,monitor 本就是 worker 聚合的
+  // Σ inputTokens / Σ 窗口上限),缺失字段由卡片显示「—」。
   const cardItem: AgentListItem = agentItem ?? {
     agentId: '',
-    title: '主 agent',
+    title: '全部 agent',
     status: 'idle',
     isMain: true,
     meta: hasData

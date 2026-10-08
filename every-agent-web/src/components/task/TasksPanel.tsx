@@ -94,9 +94,11 @@ interface TaskListSelection {
 }
 
 /**
- * 任务列表行电池详情卡数据:把 TaskListItemSnapshot 整形为主 agent 列表项
- * (与聊天页主 agent 胶囊/悬停卡同构,卡片信息与样式完全复用 AgentInfoHoverCard)。
- * 列表行无 agentMeta 台账,创建时间/累计 tokens 缺失,由卡片显示「—」。
+ * 任务列表行电池详情卡数据:把 TaskListItemSnapshot 整形为任务级汇总项
+ * (与聊天页电池详情卡同构,卡片信息与样式完全复用 AgentInfoHoverCard)。
+ * contextUsage 本就是 worker usage 投影器的任务级聚合(任务下所有 agent 最近一轮
+ * 上下文占用/窗口逐 agent 累加),创建时间用任务创建时间;列表行无 agentMeta 台账,
+ * 累计 tokens 缺失,由卡片显示「—」(聊天页打开建流后由 agentMeta 求和补齐)。
  */
 function toBatteryAgentItem(task: TaskListItemSnapshot): AgentListItem | null {
   const usage = task.contextUsage
@@ -107,11 +109,12 @@ function toBatteryAgentItem(task: TaskListItemSnapshot): AgentListItem | null {
   const windowTokens = usage.maxTokens
   return {
     agentId: task.mainAgentId ?? '',
-    title: '主 agent',
+    title: '全部 agent',
     status: task.status,
     isMain: true,
     meta: {
       agentId: task.mainAgentId ?? '',
+      createdAt: task.createdAt > 0 ? task.createdAt : undefined,
       model: usage.model,
       contextUsed: used,
       contextWindow: windowTokens > 0 ? windowTokens : undefined,
