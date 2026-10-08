@@ -54,6 +54,9 @@ class TaskSearchServiceTest {
 
     private RpcDispatcher dispatcher;
     private TaskStore store;
+    /** 共享注册表与 service 引用:provider 聚合/超时预算用例在此注册桩并经 setter 注入预算。 */
+    private SearchProviderRegistry registry;
+    private TaskSearchService service;
     /** rg 是否可用(不可用则真实进程用例跳过)。 */
     private boolean ready;
 
@@ -69,7 +72,8 @@ class TaskSearchServiceTest {
 
         dispatcher = new RpcDispatcher(null, new WorkerProperties());
         store = new TaskStore(props);
-        new TaskSearchService(dispatcher, store, new RipgrepBinary(props), new SearchProviderRegistry());
+        registry = new SearchProviderRegistry();
+        service = new TaskSearchService(dispatcher, store, new RipgrepBinary(props), registry);
     }
 
     /** 测试环境 rg 定位:程序根 runtime/bin(IDE/打包)→ 模块父目录(maven,user.dir=模块)→ PATH。 */
@@ -326,20 +330,30 @@ class TaskSearchServiceTest {
                 "running", List.of(matches));
     }
 
-    /** 桩 provider:固定返回任务命中,或构造时给 error 则每次调用抛出。 */
+    /** 桩 provider:固定返回任务命中,或构造时给 error 则每次调用抛出;delayMs>0 时先睡再返回(慢 provider 夹具)。 */
     private static final class StubProvider implements SearchProvider {
         private final String id;
         private final List<TaskSearchResult> tasks;
         private final RuntimeException error;
+        private final long delayMs;
 
         StubProvider(String id, List<TaskSearchResult> tasks) {
-            this(id, tasks, null);
+            this(id, tasks, null, 0);
         }
 
         StubProvider(String id, List<TaskSearchResult> tasks, RuntimeException error) {
+            this(id, tasks, error, 0);
+        }
+
+        StubProvider(String id, List<TaskSearchResult> tasks, long delayMs) {
+            this(id, tasks, null, delayMs);
+        }
+
+        StubProvider(String id, List<TaskSearchResult> tasks, RuntimeException error, long delayMs) {
             this.id = id;
             this.tasks = tasks;
             this.error = error;
+            this.delayMs = delayMs;
         }
 
         @Override
@@ -354,10 +368,23 @@ class TaskSearchServiceTest {
 
         @Override
         public List<TaskSearchResult> searchTasks(TaskSearchRequest req) {
+            sleepUnchecked(delayMs);
             if (error != null) {
                 throw error;
             }
             return tasks;
+        }
+
+        /** 慢 provider 夹具:睡 delayMs(被中断则提前返回——超时取消路径属预期)。 */
+        private static void sleepUnchecked(long ms) {
+            if (ms <= 0) {
+                return;
+            }
+            try {
+                Thread.sleep(ms);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
         }
     }
 
@@ -375,7 +402,7 @@ class TaskSearchServiceTest {
                 taskHit("t9", tmatch(1, "user", 0)))));       // 新任务 → 新任务项
 
         TaskSearchService.SearchOutcome merged = TaskSearchService.mergeProviderResults(
-                builtIn, registry, anyTaskReq(), 500);
+                builtIn, registry, anyTaskReq(), 500, TaskSearchService.PROVIDER_TIMEOUT_MS);
 
         assertEquals(4, merged.matchCount(), "内置 2 + 新增 2(去重 1)");
         assertFalse(merged.truncated());
@@ -395,7 +422,7 @@ class TaskSearchServiceTest {
                 taskHit("t2", tmatch(1, "user", 0), tmatch(2, "finalReply", 0), tmatch(3, "user", 0)))));
 
         TaskSearchService.SearchOutcome merged = TaskSearchService.mergeProviderResults(
-                builtIn, registry, anyTaskReq(), 3);
+                builtIn, registry, anyTaskReq(), 3, TaskSearchService.PROVIDER_TIMEOUT_MS);
 
         assertEquals(3, merged.matchCount(), "触顶截断到 maxResults");
         assertTrue(merged.truncated(), "命中未全量消费应置 truncated");
@@ -406,7 +433,8 @@ class TaskSearchServiceTest {
     void emptyRegistryReturnsOutcomeUnchanged() {
         TaskSearchService.SearchOutcome builtIn = taskOutcomeOf("t1", "user");
         TaskSearchService.SearchOutcome merged = TaskSearchService.mergeProviderResults(
-                builtIn, new SearchProviderRegistry(), anyTaskReq(), 500);
+                builtIn, new SearchProviderRegistry(), anyTaskReq(), 500,
+                TaskSearchService.PROVIDER_TIMEOUT_MS);
         assertSame(builtIn, merged, "无 provider 注册时原样返回(零行为变化)");
     }
 
@@ -416,7 +444,8 @@ class TaskSearchServiceTest {
         registry.register(new StubProvider("bad", List.of(), new RuntimeException("boom")));
         registry.register(new StubProvider("good", List.of(taskHit("t7", tmatch(1, "user", 0)))));
         TaskSearchService.SearchOutcome merged = TaskSearchService.mergeProviderResults(
-                taskOutcomeOf("t1", "user"), registry, anyTaskReq(), 500);
+                taskOutcomeOf("t1", "user"), registry, anyTaskReq(), 500,
+                TaskSearchService.PROVIDER_TIMEOUT_MS);
         assertEquals(2, merged.matchCount(), "坏 provider 跳过,好 provider 照常合并");
         assertTrue(merged.files().containsKey("t7"));
     }
@@ -429,9 +458,58 @@ class TaskSearchServiceTest {
         registry.register(new StubProvider("emptyMatches", List.of(taskHit("t8"))));
         TaskSearchService.SearchOutcome builtIn = taskOutcomeOf("t1", "user", "finalReply");
         TaskSearchService.SearchOutcome merged = TaskSearchService.mergeProviderResults(
-                builtIn, registry, anyTaskReq(), 500);
+                builtIn, registry, anyTaskReq(), 500, TaskSearchService.PROVIDER_TIMEOUT_MS);
         assertEquals(2, merged.matchCount());
         assertEquals(1, merged.files().size(), "空/null/零命中任务不产出空任务项");
         assertFalse(merged.truncated());
+    }
+
+    @Test
+    void providerExceedingTimeoutBudgetSkipped() {
+        // 慢 provider(sleep 2s)+ 50ms 预算:被跳过,快 provider 与内置结果不受影响
+        SearchProviderRegistry registry = new SearchProviderRegistry();
+        registry.register(new StubProvider("slow", List.of(taskHit("tSlow", tmatch(1, "user", 0))), 2_000));
+        registry.register(new StubProvider("fast", List.of(taskHit("t7", tmatch(1, "user", 0)))));
+
+        long start = System.nanoTime();
+        TaskSearchService.SearchOutcome merged = TaskSearchService.mergeProviderResults(
+                taskOutcomeOf("t1", "user"), registry, anyTaskReq(), 500, 50);
+        long elapsedMs = (System.nanoTime() - start) / 1_000_000;
+
+        assertTrue(elapsedMs < 1_500, "超时预算应截断慢 provider 而非等待其完成: " + elapsedMs + "ms");
+        assertEquals(2, merged.matchCount(), "内置 1 + 快 provider 1,慢 provider 被跳过");
+        assertFalse(merged.files().containsKey("tSlow"), "超时 provider 任务不进聚合");
+        assertTrue(merged.files().containsKey("t7"), "快 provider 照常合并");
+        assertFalse(merged.truncated());
+    }
+
+    @Test
+    void providerSlowButNoTimeoutWaitedFully() {
+        // 默认 0 = 不限时(零行为变化):慢 provider(200ms)仍被完整等待,结果包含其命中
+        SearchProviderRegistry registry = new SearchProviderRegistry();
+        registry.register(new StubProvider("slow", List.of(taskHit("tSlow", tmatch(1, "user", 0))), 200));
+
+        TaskSearchService.SearchOutcome merged = TaskSearchService.mergeProviderResults(
+                taskOutcomeOf("t1", "user"), registry, anyTaskReq(), 500,
+                TaskSearchService.PROVIDER_TIMEOUT_MS);
+
+        assertEquals(2, merged.matchCount(), "不限时路径完整等待慢 provider: " + merged.matchCount());
+        assertTrue(merged.files().containsKey("tSlow"));
+    }
+
+    @Test
+    void rpcPathAppliesProviderTimeoutBudget() throws Exception {
+        Assumptions.assumeTrue(ready, "环境无 rg,跳过真实进程用例");
+        seedDefault();
+        registry.register(new StubProvider("slow", List.of(taskHit("tSlow", tmatch(1, "user", 0))), 2_000));
+        service.setProviderTimeoutMs(50); // 接缝:包级 setter 注入小预算
+
+        long start = System.nanoTime();
+        Map<String, JsonNode> tasks = inlineTasks(params("defaultworkspace", "needle"));
+        long elapsedMs = (System.nanoTime() - start) / 1_000_000;
+
+        assertTrue(tasks.containsKey("t1"), "内置 rg 结果不受影响: " + tasks.keySet());
+        assertFalse(tasks.containsKey("tSlow"), "超时 provider 任务不进应答: " + tasks.keySet());
+        assertTrue(elapsedMs < 1_500, "RPC 路径应受超时预算截断: " + elapsedMs + "ms");
     }
 }

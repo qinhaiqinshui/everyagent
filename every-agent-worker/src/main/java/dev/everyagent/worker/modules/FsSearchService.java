@@ -4,6 +4,7 @@ import dev.everyagent.contract.json.Json;
 import dev.everyagent.worker.proto.RpcMethods;
 import dev.everyagent.plugin.api.exception.BadParamsException;
 import dev.everyagent.plugin.api.spi.SearchProvider;
+import dev.everyagent.worker.plugin.registry.SearchProviderInvoker;
 import dev.everyagent.worker.plugin.registry.SearchProviderRegistry;
 import dev.everyagent.worker.rpc.RpcDispatcher;
 import dev.everyagent.worker.rpc.RpcContext;
@@ -69,8 +70,10 @@ import java.util.regex.PatternSyntaxException;
  * 注册的搜索后端不替换内置 rg——fs.search 在内置 rg 结果之后按 order() 升序
  * (同 order 保持注册先后)追加各 provider
  * 结果(按 {@code path+lineNumber+matchIndex} 去重、仍受 maxResults 触顶约束,见
- * {@link #mergeProviderResults});provider 异常仅 WARN 跳过;注册表为空时零额外行为;
- * rg 不可用但注册了 provider 时跳过内置 rg、仅聚合 provider 结果。
+ * {@link #mergeProviderResults});provider 抛异常/超出超时预算仅 WARN 跳过(超时预算
+ * {@code worker.search.provider-timeout-ms},默认 0 不限时,见
+ * {@link #PROVIDER_TIMEOUT_MS});注册表为空时零额外行为;rg 不可用但注册了 provider
+ * 时跳过内置 rg、仅聚合 provider 结果。
  */
 @Component
 public class FsSearchService {
@@ -97,6 +100,24 @@ public class FsSearchService {
     private final WorkspaceManager workspaces;
     private final RipgrepBinary rg;
     private final SearchProviderRegistry searchProviders;
+
+    /**
+     * SearchProvider 单 provider 超时预算缺省(ms):0 = 不限时(仅异常护栏,与机制引入
+     * 前的行为一致)。配置键 {@code worker.search.provider-timeout-ms} 由后续配置装配
+     * 步骤接入 yml,本步以内部常量 + 可注入字段承载(见 {@link #providerTimeoutMs})。
+     */
+    static final long PROVIDER_TIMEOUT_MS = 0;
+
+    /** 当前生效的 provider 超时预算(ms);缺省 {@link #PROVIDER_TIMEOUT_MS}。 */
+    private long providerTimeoutMs = PROVIDER_TIMEOUT_MS;
+
+    /**
+     * 包级可见:注入 provider 超时预算(单测设小值验证预算机制;后续配置装配步骤接线)。
+     * ≤ 0 恢复不限时(同步直调,仅异常护栏)。
+     */
+    void setProviderTimeoutMs(long providerTimeoutMs) {
+        this.providerTimeoutMs = providerTimeoutMs;
+    }
 
     public FsSearchService(RpcDispatcher dispatcher, WorkspaceManager workspaces, RipgrepBinary rg,
             SearchProviderRegistry searchProviders) {
@@ -145,7 +166,7 @@ public class FsSearchService {
                 : new SearchOutcome(new LinkedHashMap<>(), 0, false);
         out = mergeProviderResults(out, searchProviders, new SearchProvider.SearchRequest(
                 workspaces.idOfRoot(root.toString()), root, pattern, isRegex, caseSensitive,
-                wholeWord, include, exclude, maxResults), maxResults);
+                wholeWord, include, exclude, maxResults), maxResults, providerTimeoutMs);
         reply(ctx, out);
     }
 
@@ -239,10 +260,12 @@ public class FsSearchService {
      * (同 order 保持注册先后)追加在内置结果之后,
      * 按位置键 {@code path+lineNumber+matchIndex} 去重(多引擎命中同一位置只计一条);
      * 合并后仍受 maxResults 触顶约束(触顶置 truncated 并终止 provider 循环);单个
-     * provider 抛异常仅 WARN 跳过,不影响其余结果与应答;provider 返回 null/空列表不加项。
+     * provider 抛异常/超出超时预算({@code providerTimeoutMs},0 不限时)仅 WARN 跳过
+     * (经 {@link SearchProviderInvoker} 护栏),不影响其余结果与应答;provider 返回
+     * null/空列表不加项。
      */
     static SearchOutcome mergeProviderResults(SearchOutcome builtIn, SearchProviderRegistry registry,
-            SearchProvider.SearchRequest req, int maxResults) {
+            SearchProvider.SearchRequest req, int maxResults, long providerTimeoutMs) {
         List<SearchProvider> providers = registry.getProviders();
         if (providers.isEmpty() || builtIn.matchCount() >= maxResults) {
             return builtIn;
@@ -257,17 +280,14 @@ public class FsSearchService {
         }
         int count = builtIn.matchCount();
         boolean truncated = builtIn.truncated();
+        // 护栏(§8.5):单个 provider 抛异常/超出超时预算仅 WARN 跳过,不影响其余结果
+        SearchProviderInvoker invoker = new SearchProviderInvoker("fs.search", providerTimeoutMs);
         outer:
         for (SearchProvider provider : providers) {
-            List<SearchProvider.SearchResult> hits;
-            try {
-                hits = provider.searchFiles(req);
-            } catch (RuntimeException e) {
-                log.warn("[fs.search] SearchProvider {} 执行失败,跳过", provider.id(), e);
-                continue;
-            }
+            List<SearchProvider.SearchResult> hits = invoker.invoke(provider,
+                    () -> provider.searchFiles(req));
             if (hits == null) {
-                continue;
+                continue; // 护栏跳过(异常/超时)或 provider 合法返回 null
             }
             for (SearchProvider.SearchResult hit : hits) {
                 if (count >= maxResults) {

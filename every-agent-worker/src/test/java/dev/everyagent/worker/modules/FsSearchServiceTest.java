@@ -60,6 +60,9 @@ class FsSearchServiceTest {
 
     private RpcDispatcher dispatcher;
     private WorkspaceManager workspaces;
+    /** 共享注册表与 service 引用:provider 聚合/超时预算用例在此注册桩并经 setter 注入预算。 */
+    private SearchProviderRegistry registry;
+    private FsSearchService service;
     /** rg 是否可用(不可用则真实进程用例跳过)。 */
     private boolean ready;
     private Path ws;
@@ -87,7 +90,8 @@ class FsSearchServiceTest {
         workspaces = new WorkspaceManager(props, mock(RpcDispatcher.class), mock(HubPool.class),
                 provider, new dev.everyagent.worker.os.SandboxPathRegistry(new dev.everyagent.worker.os.OsSandbox(props, null)));
         workspaces.init();
-        new FsSearchService(dispatcher, workspaces, new RipgrepBinary(props), new SearchProviderRegistry());
+        registry = new SearchProviderRegistry();
+        service = new FsSearchService(dispatcher, workspaces, new RipgrepBinary(props), registry);
     }
 
     /** 测试环境 rg 定位:程序根 runtime/bin(IDE/打包)→ 模块父目录(maven,user.dir=模块)→ PATH。 */
@@ -618,20 +622,30 @@ class FsSearchServiceTest {
         return new SearchProvider.SearchResult(path, lineNumber, "line " + lineNumber, matchIndex, "x");
     }
 
-    /** 桩 provider:固定返回文件命中,或构造时给 error 则每次调用抛出。 */
+    /** 桩 provider:固定返回文件命中,或构造时给 error 则每次调用抛出;delayMs>0 时先睡再返回(慢 provider 夹具)。 */
     private static final class StubProvider implements SearchProvider {
         private final String id;
         private final List<SearchResult> files;
         private final RuntimeException error;
+        private final long delayMs;
 
         StubProvider(String id, List<SearchResult> files) {
-            this(id, files, null);
+            this(id, files, null, 0);
         }
 
         StubProvider(String id, List<SearchResult> files, RuntimeException error) {
+            this(id, files, error, 0);
+        }
+
+        StubProvider(String id, List<SearchResult> files, long delayMs) {
+            this(id, files, null, delayMs);
+        }
+
+        StubProvider(String id, List<SearchResult> files, RuntimeException error, long delayMs) {
             this.id = id;
             this.files = files;
             this.error = error;
+            this.delayMs = delayMs;
         }
 
         @Override
@@ -641,6 +655,7 @@ class FsSearchServiceTest {
 
         @Override
         public List<SearchResult> searchFiles(SearchRequest req) {
+            sleepUnchecked(delayMs);
             if (error != null) {
                 throw error;
             }
@@ -650,6 +665,18 @@ class FsSearchServiceTest {
         @Override
         public List<TaskSearchResult> searchTasks(TaskSearchRequest req) {
             return List.of();
+        }
+
+        /** 慢 provider 夹具:睡 delayMs(被中断则提前返回——超时取消路径属预期)。 */
+        private static void sleepUnchecked(long ms) {
+            if (ms <= 0) {
+                return;
+            }
+            try {
+                Thread.sleep(ms);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
         }
     }
 
@@ -668,7 +695,7 @@ class FsSearchServiceTest {
                 hit("b.md", 2, 4)))); // 新文件 → 新文件项
 
         FsSearchService.SearchOutcome merged = FsSearchService.mergeProviderResults(
-                builtIn, registry, anyReq(), 1000);
+                builtIn, registry, anyReq(), 1000, FsSearchService.PROVIDER_TIMEOUT_MS);
 
         assertEquals(4, merged.matchCount(), "内置 2 + 新增 2(去重 1)");
         assertFalse(merged.truncated());
@@ -690,7 +717,7 @@ class FsSearchServiceTest {
                 hit("a.txt", 10, 0), hit("a.txt", 11, 0), hit("a.txt", 12, 0))));
 
         FsSearchService.SearchOutcome merged = FsSearchService.mergeProviderResults(
-                builtIn, registry, anyReq(), 3);
+                builtIn, registry, anyReq(), 3, FsSearchService.PROVIDER_TIMEOUT_MS);
 
         assertEquals(3, merged.matchCount(), "触顶截断到 maxResults");
         assertTrue(merged.truncated(), "provider 命中未全量消费应置 truncated");
@@ -702,7 +729,7 @@ class FsSearchServiceTest {
     void emptyRegistryReturnsOutcomeUnchanged() {
         FsSearchService.SearchOutcome builtIn = outcomeOf("a.txt", 1);
         FsSearchService.SearchOutcome merged = FsSearchService.mergeProviderResults(
-                builtIn, new SearchProviderRegistry(), anyReq(), 1000);
+                builtIn, new SearchProviderRegistry(), anyReq(), 1000, FsSearchService.PROVIDER_TIMEOUT_MS);
         assertSame(builtIn, merged, "无 provider 注册时原样返回(零行为变化)");
     }
 
@@ -712,7 +739,7 @@ class FsSearchServiceTest {
         SearchProviderRegistry registry = new SearchProviderRegistry();
         registry.register(new StubProvider("p1", List.of(hit("a.txt", 9, 0))));
         FsSearchService.SearchOutcome merged = FsSearchService.mergeProviderResults(
-                builtIn, registry, anyReq(), 2);
+                builtIn, registry, anyReq(), 2, FsSearchService.PROVIDER_TIMEOUT_MS);
         assertSame(builtIn, merged, "内置已触顶时无预算可加,跳过 provider");
     }
 
@@ -722,7 +749,7 @@ class FsSearchServiceTest {
         registry.register(new StubProvider("bad", List.of(), new RuntimeException("boom")));
         registry.register(new StubProvider("good", List.of(hit("b.md", 5, 0))));
         FsSearchService.SearchOutcome merged = FsSearchService.mergeProviderResults(
-                outcomeOf("a.txt", 1), registry, anyReq(), 1000);
+                outcomeOf("a.txt", 1), registry, anyReq(), 1000, FsSearchService.PROVIDER_TIMEOUT_MS);
         assertEquals(2, merged.matchCount(), "坏 provider 跳过,好 provider 照常合并");
         assertTrue(merged.files().containsKey("b.md"));
     }
@@ -734,10 +761,58 @@ class FsSearchServiceTest {
         registry.register(new StubProvider("empty", List.of()));
         FsSearchService.SearchOutcome builtIn = outcomeOf("a.txt", 1, 2);
         FsSearchService.SearchOutcome merged = FsSearchService.mergeProviderResults(
-                builtIn, registry, anyReq(), 1000);
+                builtIn, registry, anyReq(), 1000, FsSearchService.PROVIDER_TIMEOUT_MS);
         assertEquals(2, merged.matchCount());
         assertEquals(1, merged.files().size(), "空/null 结果不产出文件项");
         assertFalse(merged.truncated());
+    }
+
+    @Test
+    void providerExceedingTimeoutBudgetSkipped() {
+        // 慢 provider(sleep 2s)+ 50ms 预算:被跳过,快 provider 与内置结果不受影响
+        SearchProviderRegistry registry = new SearchProviderRegistry();
+        registry.register(new StubProvider("slow", List.of(hit("slow.md", 5, 0)), 2_000));
+        registry.register(new StubProvider("fast", List.of(hit("b.md", 2, 0))));
+
+        long start = System.nanoTime();
+        FsSearchService.SearchOutcome merged = FsSearchService.mergeProviderResults(
+                outcomeOf("a.txt", 1), registry, anyReq(), 1000, 50);
+        long elapsedMs = (System.nanoTime() - start) / 1_000_000;
+
+        assertTrue(elapsedMs < 1_500, "超时预算应截断慢 provider 而非等待其完成: " + elapsedMs + "ms");
+        assertEquals(2, merged.matchCount(), "内置 1 + 快 provider 1,慢 provider 被跳过");
+        assertFalse(merged.files().containsKey("slow.md"), "超时 provider 结果不进聚合");
+        assertTrue(merged.files().containsKey("b.md"), "快 provider 照常合并");
+        assertFalse(merged.truncated());
+    }
+
+    @Test
+    void providerSlowButNoTimeoutWaitedFully() {
+        // 默认 0 = 不限时(零行为变化):慢 provider(200ms)仍被完整等待,结果包含其命中
+        SearchProviderRegistry registry = new SearchProviderRegistry();
+        registry.register(new StubProvider("slow", List.of(hit("slow.md", 5, 0)), 200));
+
+        FsSearchService.SearchOutcome merged = FsSearchService.mergeProviderResults(
+                outcomeOf("a.txt", 1), registry, anyReq(), 1000, FsSearchService.PROVIDER_TIMEOUT_MS);
+
+        assertEquals(2, merged.matchCount(), "不限时路径完整等待慢 provider: " + merged.matchCount());
+        assertTrue(merged.files().containsKey("slow.md"));
+    }
+
+    @Test
+    void rpcPathAppliesProviderTimeoutBudget() throws Exception {
+        Assumptions.assumeTrue(ready, "环境无 rg,跳过真实进程用例");
+        seed();
+        registry.register(new StubProvider("slow", List.of(hit("slow.md", 5, 0)), 2_000));
+        service.setProviderTimeoutMs(50); // 接缝:包级 setter 注入小预算
+
+        long start = System.nanoTime();
+        Map<String, JsonNode> files = inlineFiles(params(ws, "needle"));
+        long elapsedMs = (System.nanoTime() - start) / 1_000_000;
+
+        assertTrue(files.containsKey("a.txt"), "内置 rg 结果不受影响: " + files.keySet());
+        assertFalse(files.containsKey("slow.md"), "超时 provider 结果不进应答: " + files.keySet());
+        assertTrue(elapsedMs < 1_500, "RPC 路径应受超时预算截断: " + elapsedMs + "ms");
     }
 
     @Test
