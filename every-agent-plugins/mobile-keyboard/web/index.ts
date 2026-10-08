@@ -18,6 +18,8 @@ const mobileKeyboardPlugin: PluginModule = {
   activate(ctx) {
     keypad = createMobileKeypad({
       storage: ctx.storage,
+      getActiveTabType: () => ctx.ui.getActiveTab()?.tabType ?? null,
+      subscribeTabActivated: (listener) => ctx.events.on('workspace-tab-activated', listener),
       subscribeTabClosed: (listener) => ctx.events.on('workspace-tab-closed', listener),
     })
   },

@@ -232,9 +232,9 @@ has_children: false
 
 ### mobile-keyboard（移动端键盘增强）
 
-移动端 + 终端界面可见时，显示 AssistiveTouch 风格悬浮球，点开是方向键小键盘，按键以合成 KeyboardEvent 派发进 xterm；web-only 形态。
+移动端 + 终端界面（激活标签 `tabType === 'terminal'`）时，显示 AssistiveTouch 风格悬浮球，点开是方向键小键盘，按键以合成 KeyboardEvent 派发给**当前焦点元素**（交给浏览器事件流，不绑定任何具体组件）；web-only 形态。
 - 关键文件：`~plugins/mobile-keyboard/web/index.ts`（入口）、`~plugins/mobile-keyboard/web/floatball.ts`（悬浮球控制器）、`~plugins/mobile-keyboard/web/floatball.css`（样式，经 esbuild 抽取注入）。
-- 值得看：**扩展点之外的自绘全局 UI** 全仓唯一范例——悬浮球拖拽/边缘吸附/位置持久化（`ctx.storage`）、「可见的 `.xterm` + 视口 ≤768px」双条件显隐（MutationObserver + resize + `workspace-tab-closed`）、向 `.xterm-helper-textarea` 派发带 legacy `keyCode` 的合成 `KeyboardEvent` 让 xterm 自行生成 `\x1b[A/B/C/D` 转义序列（xterm 不检查 `isTrusted`，已核实其 keydown 链路）。
+- 值得看：**扩展点之外的自绘全局 UI** 全仓唯一范例——悬浮球拖拽/边缘吸附/位置持久化（`ctx.storage`）、「`ctx.ui.getActiveTab()` 标签类型 + 视口 ≤768px」双条件显隐（`workspace-tab-activated`/`workspace-tab-closed` + resize，**不扫 DOM 猜组件**）；按键模拟是「**不管目标是什么组件**」的通用姿势——把带 legacy `keyCode` 的合成 `KeyboardEvent`（keydown + keyup）派发给 `document.activeElement`（无焦点落 `body`），监听方自行消费（xterm 持有焦点时其 textarea 即 activeElement，生成 `\x1b[A/B/C/D` 转义序列发往 PTY；xterm 不检查 `isTrusted`，已核实其 keydown 链路），没人消费就什么都不会发生。注意平台限制：合成事件不触发浏览器**默认行为**（往 input 插入字符等），将来扩展文本类按键需另配 `execCommand` 兜底。
 
 ### model-length-guard（模型输出预算耗尽护栏）
 

@@ -6,15 +6,18 @@
  * - 悬浮球:仿 iOS AssistiveTouch,毛玻璃圆球,可拖动、松手吸附左右屏幕边缘、
  *   位置经 ctx.storage 持久化;单击展开/收起方向键面板。
  * - 显隐条件:移动端视口(宽度 <= 768,与宿主 useResponsiveViewport 同口径)
- *   且页面上存在「可见的」终端(.xterm 元素,非 display:none——工作区标签
- *   常驻 DOM、非激活态 display:none,Layout.tsx 按 style 切换,故必须观察
- *   attributes)。观察源:body 级 MutationObserver(排除自身子树) + resize
- *   + workspace-tab-closed 领域事件,统一 rAF 节流刷新。
- * - 按键模拟:向可见终端的 .xterm-helper-textarea 派发合成 KeyboardEvent
- *   (keydown + keyup,携带 legacy keyCode)。xterm 的 keydown 监听不检查
- *   isTrusted,evaluateKeyboardEvent 按 keyCode 37/38/39/40 生成
- *   \x1b[D/A/C/B 转义序列,经宿主 term.input 通道发往 PTY——即等价于用户
- *   敲下物理方向键。单纯发按键,不管焦点与光标在哪。
+ *   且当前激活的工作区标签类型为 terminal——经 ctx.ui.getActiveTab() 查询
+ *   (宿主壳层镜像,不扫 DOM 猜组件);变更由 workspace-tab-activated /
+ *   workspace-tab-closed 领域事件 + resize 触发,统一 rAF 节流刷新。
+ * - 按键模拟:**不管目标是什么组件**——把合成 KeyboardEvent(keydown + keyup,
+ *   携带 legacy keyCode)派发给当前焦点元素(document.activeElement,无焦点时
+ *   落 document.body),剩下的交给浏览器事件流:监听该按键的组件(xterm 终端
+ *   持有焦点时,其内部 textarea 即 activeElement,xterm 会把方向键转成
+ *   \x1b[A/B/C/D 转义序列发往 PTY)自行消费;没人消费就什么都不会发生。
+ *   单纯发按键,不感知也不移动焦点与光标。
+ *   (平台限制:合成事件 isTrusted=false,不触发浏览器**默认行为**——将来扩展
+ *   文本类按键(如 A)想往 input 里真正插入字符,需另配 execCommand 兜底;
+ *   方向键在 xterm 场景走的是应用层监听,不受此限。)
  */
 
 /** 与 PluginStorage 兼容的窄接口(结构类型,避免依赖类型包)。 */
@@ -30,6 +33,10 @@ interface Unsubscribe {
 
 interface MobileKeypadOptions {
   storage: KeypadStorage
+  /** 查询当前激活的工作区标签类型(ctx.ui.getActiveTab()?.tabType;无激活标签为 null)。 */
+  getActiveTabType: () => string | null
+  /** 订阅宿主 workspace-tab-activated 领域事件(标签切换后立刻刷新显隐)。 */
+  subscribeTabActivated: (listener: () => void) => Unsubscribe
   /** 订阅宿主 workspace-tab-closed 领域事件(标签关闭后立刻刷新显隐)。 */
   subscribeTabClosed: (listener: () => void) => Unsubscribe
 }
@@ -54,28 +61,24 @@ const DEFAULT_POS = { xf: 0.94, yf: 0.78 }
 
 type ArrowDir = 'up' | 'down' | 'left' | 'right'
 
-interface ArrowDef {
-  keyCode: number
+/**
+ * 可模拟按键的最小描述。将来扩展其他按键(如字母 A)时往 KEYS 表加条目即可:
+ * 派发逻辑不感知按键语义,只负责把 keydown/keyup 忠实地发给焦点元素。
+ */
+interface KeyDef {
+  /** KeyboardEvent.key。 */
   key: string
+  /** legacy keyCode(xterm 等按此生成转义序列;合成事件里走 init + 实例兜底)。 */
+  keyCode: number
+  /** 无障碍文案。 */
   aria: string
 }
 
-const ARROWS: Record<ArrowDir, ArrowDef> = {
+const ARROWS: Record<ArrowDir, KeyDef> = {
   up: { keyCode: 38, key: 'ArrowUp', aria: '上方向键' },
   down: { keyCode: 40, key: 'ArrowDown', aria: '下方向键' },
   left: { keyCode: 37, key: 'ArrowLeft', aria: '左方向键' },
   right: { keyCode: 39, key: 'ArrowRight', aria: '右方向键' },
-}
-
-/** 找到当前可见终端的 xterm 输入 textarea;工作区标签常驻 DOM,隐藏标签 offsetWidth 为 0。 */
-function findVisibleTerminalTextarea(): HTMLTextAreaElement | null {
-  const terms = document.querySelectorAll<HTMLElement>('.xterm')
-  for (const term of terms) {
-    if (term.offsetWidth <= 0 || term.offsetHeight <= 0) continue
-    const textarea = term.querySelector<HTMLTextAreaElement>('.xterm-helper-textarea')
-    if (textarea) return textarea
-  }
-  return null
 }
 
 /** 是否处于移动端视口(与宿主 useResponsiveViewport 同口径:宽度 <= 768)。 */
@@ -250,9 +253,14 @@ export function createMobileKeypad(options: MobileKeypadOptions): MobileKeypadCo
   let destroyed = false
 
   // ── 按键派发 ─────────────────────────────────────────────────────────────
-  function dispatchArrow(def: ArrowDef): void {
-    const textarea = findVisibleTerminalTextarea()
-    if (!textarea) return
+  /**
+   * 把一次按键(keydown + keyup)如实派发给当前焦点元素,不管那是什么组件、
+   * 有没有焦点——无焦点时落到 document.body,事件沿冒泡路径走一圈,没人
+   * 消费就什么都不会发生(与真实按键落在无监听的页面上等价)。
+   */
+  function dispatchKey(def: KeyDef): void {
+    const target: EventTarget =
+      document.activeElement instanceof HTMLElement ? document.activeElement : document.body
     const init: KeyboardEventInit & { keyCode?: number; which?: number } = {
       key: def.key,
       code: def.key,
@@ -271,8 +279,8 @@ export function createMobileKeypad(options: MobileKeypadOptions): MobileKeypadCo
     if (up.keyCode !== def.keyCode) {
       Object.defineProperty(up, 'keyCode', { get: () => def.keyCode })
     }
-    textarea.dispatchEvent(down)
-    textarea.dispatchEvent(up)
+    target.dispatchEvent(down)
+    target.dispatchEvent(up)
     vibrate()
   }
 
@@ -291,10 +299,10 @@ export function createMobileKeypad(options: MobileKeypadOptions): MobileKeypadCo
   /** 单击立即发一次;按住不放(350ms 后)以 110ms 间隔连发。 */
   function pressArrow(dir: ArrowDir, btn: HTMLDivElement): void {
     setPressedVisual(btn, true)
-    dispatchArrow(ARROWS[dir])
+    dispatchKey(ARROWS[dir])
     stopRepeat()
     longpressTimer = setTimeout(() => {
-      repeatTimer = setInterval(() => dispatchArrow(ARROWS[dir]), REPEAT_INTERVAL_MS)
+      repeatTimer = setInterval(() => dispatchKey(ARROWS[dir]), REPEAT_INTERVAL_MS)
     }, LONGPRESS_DELAY_MS)
   }
 
@@ -424,7 +432,8 @@ export function createMobileKeypad(options: MobileKeypadOptions): MobileKeypadCo
   // ── 显隐刷新 ─────────────────────────────────────────────────────────────
   function refresh(): void {
     if (destroyed) return
-    const shouldShow = isMobileViewport() && findVisibleTerminalTextarea() !== null
+    // 是否终端界面由宿主 API 的标签类型判定(tabType === 'terminal'),不扫 DOM
+    const shouldShow = isMobileViewport() && options.getActiveTabType() === 'terminal'
     if (shouldShow === shown) return
     shown = shouldShow
     root.classList.toggle('mk-hidden', !shouldShow)
@@ -439,24 +448,9 @@ export function createMobileKeypad(options: MobileKeypadOptions): MobileKeypadCo
     })
   }
 
-  const observer = new MutationObserver((records) => {
-    // 排除自身子树的变化,避免展开/收起、拖动定位触发自我循环
-    for (const record of records) {
-      if (!root.contains(record.target)) {
-        scheduleRefresh()
-        return
-      }
-    }
-  })
-  observer.observe(document.body, {
-    childList: true,
-    subtree: true,
-    attributes: true,
-    attributeFilter: ['style', 'class', 'hidden'],
-  })
-
   window.addEventListener('resize', handleViewportChange, { passive: true })
   window.visualViewport?.addEventListener('resize', handleViewportChange)
+  const tabActivatedDisposable = options.subscribeTabActivated(() => scheduleRefresh())
   const tabClosedDisposable = options.subscribeTabClosed(() => scheduleRefresh())
 
   /** 视口尺寸变化(旋转/软键盘弹出收起):刷新显隐,并把越界的球拉回可视区。 */
@@ -483,9 +477,9 @@ export function createMobileKeypad(options: MobileKeypadOptions): MobileKeypadCo
         cancelAnimationFrame(rafId)
         rafId = null
       }
-      observer.disconnect()
       window.removeEventListener('resize', handleViewportChange)
       window.visualViewport?.removeEventListener('resize', handleViewportChange)
+      tabActivatedDisposable.dispose()
       tabClosedDisposable.dispose()
       root.remove()
     },
