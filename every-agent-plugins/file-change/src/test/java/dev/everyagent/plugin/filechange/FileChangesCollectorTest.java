@@ -21,7 +21,7 @@ class FileChangesCollectorTest {
     private final FileChangesCollector c = new FileChangesCollector();
 
     private void save(String path, String before, String after, String type) {
-        c.onFileSaved("main", path, before, after, type);
+        c.onFileSaved("main", FileChangesCollector.Source.MAIN, path, before, after, type);
     }
 
     @Test
@@ -75,5 +75,17 @@ class FileChangesCollectorTest {
         assertEquals(item.path("filePath"), light0.path("filePath"));
         assertEquals(item.path("saveCount"), light0.path("saveCount"));
         assertFalse(light0.has("beforeContent"), "轻量摘要不含全文字段");
+    }
+
+    @Test
+    void metadataLabelsMainAndSubAgentSource() {
+        c.onFileSaved("main", FileChangesCollector.Source.MAIN, "/a.md", "", "A", "created");
+        c.onFileSaved("sub1", FileChangesCollector.Source.SUB_AGENT, "/b.md", "", "B", "created");
+        JsonNode changes = c.buildMetadata().path("changes");
+        assertEquals(2, changes.size());
+        assertEquals("MAIN", changes.get(0).path("source").asString());
+        assertEquals("main", changes.get(0).path("agentId").asString());
+        assertEquals("SUB_AGENT", changes.get(1).path("source").asString());
+        assertEquals("sub1", changes.get(1).path("agentId").asString());
     }
 }

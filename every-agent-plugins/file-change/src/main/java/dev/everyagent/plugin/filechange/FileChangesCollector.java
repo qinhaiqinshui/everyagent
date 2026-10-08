@@ -23,10 +23,11 @@ import java.util.concurrent.ConcurrentHashMap;
  * {@code file-changes/<roundId>.json})。不再发 kind='file_changes' 的 task.trace。
  * 与 node 侧一致:删除是终态(本版文件工具无 delete 工具,保留分支防御)。
  *
- * <p>生命周期:主 agent 每次 {@code runner.run(main)} 前由 FileChangeAdvisor 新建并置入
- * {@link TaskEntry#fileChanges},run 收口(含异常/取消)后填充 light/full 槽并置空。主 agent 与子 agent 的
- * 工具调用均经 FileChangeAdvisor 记录到同一实例(子 agent 在主 agent run 内部递归执行),
- * 因此聚合器必须线程安全(子 agent 并行写文件)。
+ * <p>生命周期:collector 由 FileChangeAdvisorProvider 维护为任务级共享实例——主 agent 与
+ * 全部子 agent 的 advisor 经 {@code execution().subjectId()} 定位到同一实例记录;主 agent
+ * run 收口后暂存回 provider,由 {@code RoundClosedListener} 回调写
+ * {@code file-changes/<roundId>.json}。主 agent 与子 agent 可能并行写(子 agent 跑在虚拟线程),
+ * 因此聚合器必须线程安全。
  */
 public final class FileChangesCollector {
 
@@ -67,8 +68,12 @@ public final class FileChangesCollector {
     /** 同轮事件去重集合(并发安全)。 */
     private final Set<String> dedupeKeys = ConcurrentHashMap.newKeySet();
 
-    /** 记录一次文件保存;同轮内 (agentId, path, type, before, after) 完全相同的保存去重。 */
-    public void onFileSaved(String agentId, String filePath, String before, String after,
+    /**
+     * 记录一次文件保存;同轮内 (agentId, path, type, before, after) 完全相同的保存去重。
+     *
+     * @param source 保存来源(MAIN=主 agent / SUB_AGENT=子 agent,调用方按 agentId==mainAgentId 判定)
+     */
+    public void onFileSaved(String agentId, Source source, String filePath, String before, String after,
             String changeType) {
         if (agentId == null || agentId.isEmpty() || filePath == null || filePath.isEmpty()) {
             return;
@@ -85,7 +90,7 @@ public final class FileChangesCollector {
         }
         long now = System.currentTimeMillis();
         Entry entry = new Entry(java.util.UUID.randomUUID().toString(),
-                agentId, Source.MAIN, path, fileNameOf(path),
+                agentId, source == null ? Source.MAIN : source, path, fileNameOf(path),
                 before == null ? "" : before, after == null ? "" : after,
                 changeType == null ? "modified" : changeType, now);
         synchronized (this) {
