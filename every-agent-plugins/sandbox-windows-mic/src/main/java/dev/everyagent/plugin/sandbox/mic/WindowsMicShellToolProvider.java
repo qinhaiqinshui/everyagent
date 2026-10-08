@@ -50,18 +50,19 @@ public class WindowsMicShellToolProvider implements ToolProvider {
             return List.of();
         }
         ShellExecutor exec = rgDir != null ? withRgInPath(base, rgDir) : base;
+        // 描述全量自报(2026-12 第三批:核心零默认,提供者必传):用途/工作目录两句随移交由本
+        // 后端自写。通用常识类条目(stdin 语义、非 ASCII 已解码、Out-String 收口、连接符版本)
+        // 均已按用户决策从描述删除(沿革见 ARCHITECTURE §7.10),后端不得在此私自加回。
         // rg 可用性按解析结果条件化(§7.10 硬约束):rgDir==null 时 withRgInPath 不执行,
         // 若仍宣称「已在 PATH」,模型会把「命令不存在」误读成「无匹配、结果正常」——此处曾是
-        // 该约束在四后端中的最后一个漏项(codex/direct 上一轮已修)。
-        // 搜索无路径读空 stdin、Out-String 收口、连接符版本等通用常识已按 2026-12 决策从
-        // 描述移除(沿革见 ARCHITECTURE §7.10),四后端一律不再追加;措辞与 codex/direct/wsl 同口径。
+        // 该约束在四后端中的最后一个漏项(codex/direct 上一轮已修);措辞与 codex/direct/wsl 同口径。
         String rgNote = rgDir != null
                 ? "内容搜索用 rg(已在 PATH,尊重 .gitignore,全仓递归远快于 findstr);"
                 : "rg 不可用,内容搜索改用 Select-String;";
-        return List.of(ShellTool.powershell(exec)
-                .appendDescription(rgNote
-                        + "中文等非 ASCII 输出已正确解码,无需手动处理编码。")
-                .callback());
+        return List.of(ShellTool.powershell("在系统上用 PowerShell 执行真实 OS 命令;"
+                        + "命令工作目录默认为任务工作区根;"
+                        + rgNote,
+                exec).callback());
     }
 
     /**

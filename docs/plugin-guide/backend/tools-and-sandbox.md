@@ -101,10 +101,10 @@ public String run_agent(
 
 ### 1.4 工具怎么写：复用 ShellTool（命令类工具）
 
-要做「跑命令」类工具不要自己拼 `ProcessBuilder`：`ToolContext.shellExecutor()` 已把 **PermissionGate 授权 + 沙箱 + 输出护栏** 内建好（`every-agent-worker/src/main/java/dev/everyagent/worker/plugin/ToolContextImpl.java:106-118`），plugin-api 提供 `ShellTool` 工厂（底层是 Spring AI `FunctionToolCallback.builder`，`every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/shell/ShellTool.java:53-88`）。范例：
+要做「跑命令」类工具不要自己拼 `ProcessBuilder`：`ToolContext.shellExecutor()` 已把 **PermissionGate 授权 + 沙箱 + 输出护栏** 内建好（`every-agent-worker/src/main/java/dev/everyagent/worker/plugin/ToolContextImpl.java:106-118`），plugin-api 提供 `ShellTool` 工厂（底层是 Spring AI `FunctionToolCallback.builder`，`every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/shell/ShellTool.java:41-49`）。**描述必传（2026-12 决策：核心零默认）**——`powershell(String description, ShellExecutor)` / `bash(String description, ShellExecutor)`，工具用途、工作目录、rg 可用性、实际 shell 等一律由提供者按自身事实全量声明，null/空串运行期拒绝；写漏描述不会被核心的模板兜底（模板与后端事实脱节正是谎报之源，见 ARCHITECTURE §7.10「描述精简的第三批」）。范例：
 
 ```java
-// every-agent-plugins/sandbox-windows-mic/src/main/java/dev/everyagent/plugin/sandbox/mic/WindowsMicShellToolProvider.java:41-60（节选）
+// every-agent-plugins/sandbox-windows-mic/src/main/java/dev/everyagent/plugin/sandbox/mic/WindowsMicShellToolProvider.java:41-65（节选）
     @Override
     public boolean appliesTo(ToolContext ctx) {
         // 只在当前生效沙箱后端是 windows-mic 时贡献工具（§7.10 约定判据）
@@ -116,7 +116,9 @@ public String run_agent(
         ShellExecutor base = ctx.shellExecutor();
         if (base == null) { return List.of(); }   // 拿不到执行器就不注册，绝不自己另起炉灶
         ShellExecutor exec = rgDir != null ? withRgInPath(base, rgDir) : base; // rg 注入 PATH 自己包一层
-        return List.of(ShellTool.powershell(exec).appendDescription("rg 已加入 PATH,...").callback());
+        // 描述全量自写（核心零默认）：用途/工作目录/rg 可用性按本后端事实声明
+        return List.of(ShellTool.powershell("在系统上用 PowerShell 执行真实 OS 命令;"
+                + "命令工作目录默认为任务工作区根;" + rgNote, exec).callback());
     }
 ```
 

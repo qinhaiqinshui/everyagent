@@ -58,8 +58,9 @@ public class WslUbuntuBashToolProvider implements ToolProvider {
         Path workspaceRoot = ctx.workspaceRoot() != null ? Path.of(ctx.workspaceRoot()) : null;
         WslUbuntuCommandExecutor exec = new WslUbuntuCommandExecutor(props, workspaceRoot,
                 workspaces, pluginDir, taskNetworkBlocked(ctx.subjectId()));
-        // 通用常识类提示(搜索无路径读空 stdin、Out-String 收口、连接符版本)已按 2026-12
-        // 决策从描述移除(沿革见 ARCHITECTURE §7.10),四后端一律不再追加;这里只留本沙箱
+        // 描述全量自报(2026-12 第三批:核心零默认,提供者必传):用途/工作目录两句随移交由本
+        // 后端自写;通用常识类条目(stdin 语义、Out-String 收口、连接符版本)已按用户决策从
+        // 描述删除(沿革见 ARCHITECTURE §7.10),后端不得在此私自加回。这里只留本沙箱
         // 特有事实,bash 语境下对照命令是 grep 而非 findstr。
         //
         // rg 描述条件化(§7.10「WSL 侧 rg 另有一套判据」,四后端里最后一个漏项):判据见
@@ -71,9 +72,10 @@ public class WslUbuntuBashToolProvider implements ToolProvider {
                 ? "内容搜索用 rg(已在 PATH,尊重 .gitignore,全仓递归远快于 grep -r);"
                 : "内容搜索优先 rg(非托管发行版,是否预装 rg 未探测;"
                         + "报 command not found 就改用 grep);";
-        return List.of(ShellTool.bash(exec::execute)
-                .appendDescription(rgNote)
-                .callback());
+        return List.of(ShellTool.bash("在系统上用 bash 执行真实 OS 命令;"
+                        + "命令工作目录默认为任务工作区根;"
+                        + rgNote,
+                exec::execute).callback());
     }
 
     /**

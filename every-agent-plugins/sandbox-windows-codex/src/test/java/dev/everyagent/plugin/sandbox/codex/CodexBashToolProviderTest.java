@@ -67,32 +67,30 @@ class CodexBashToolProviderTest {
     }
 
     /**
-     * 2026-12 精简后：搜索无路径惯例、连接符版本细则、{@code Out-String} 框架收口提示等已从
-     * {@link ShellTool} 基线移除（理由与残余风险见 ARCHITECTURE §7.10），后端追加层<b>同样不得
-     * 把它们加回来</b>——否则已删内容会以「各后端自行补」的形式复活，正是当初要上收基线以避免的
-     * 分散重复；恢复提示的前提是先读 §7.10 的处置优先级，不是在此新增。
+     * 2026-12 第三批（描述权移交提供者）后：stdin 语义、{@code -join}/{@code $OFS}、
+     * 「非 ASCII 已正确解码」等条目已从描述删除（理由与残余风险见 ARCHITECTURE §7.10），
+     * 提供者<b>不得把它们加回来</b>——否则已删内容会以「各后端自行补」的形式复活；
+     * 恢复提示的前提是先读 §7.10 的处置优先级，不是在此新增。用途/工作目录两句随基线
+     * 删除改由本后端自写，同样在此守护。
      */
     @Test
     void backendDoesNotReAddPrunedBaselineClaims() {
         String desc = provider(new CodexRg.Rg(tempDir.resolve("rg.exe"), true))
                 .createTools(TestFixtures.ctx("codex", tempDir, null))
                 .get(0).getToolDefinition().description();
-        assertTrue(desc.contains("stdin 无输入可用"), "保留项:stdin 语义仍由基线提供");
-        assertEquals(1, countOf(desc, "stdin 无输入可用"), "stdin 语义只声明一次");
+        assertTrue(desc.startsWith("在系统上用 PowerShell 执行真实 OS 命令;"),
+                "基线删除后,开头用途句由本后端自写");
+        assertTrue(desc.contains("命令工作目录默认为任务工作区根;"), "工作目录事实保留");
+        assertFalse(desc.contains("stdin 无输入可用"), "已删(第三批):stdin 语义");
+        assertFalse(desc.contains("无法交互输入"), "已删(第三批):stdin 语义");
+        assertFalse(desc.contains("-join"), "已删(第三批):-join/$OFS 条");
+        assertFalse(desc.contains("$OFS"), "已删(第三批):-join/$OFS 条");
+        assertFalse(desc.contains("非 ASCII"), "已删(第三批):编码已解码句");
         assertFalse(desc.contains("搜索请始终显式给出路径"), "已删条目不得由后端加回");
         assertFalse(desc.contains("当搜索源"), "已删条目不得由后端加回");
         assertFalse(desc.contains("Out-String"), "已删条目不得由后端加回");
         assertFalse(desc.contains("null 设备"), "旧措辞不得回归");
         assertFalse(desc.contains("静默过滤 null stdin"), "旧措辞不得回归");
-    }
-
-    /** needle 在 hay 中出现次数。 */
-    private static int countOf(String hay, String needle) {
-        int n = 0;
-        for (int i = hay.indexOf(needle); i >= 0; i = hay.indexOf(needle, i + needle.length())) {
-            n++;
-        }
-        return n;
     }
 
     /** 描述报出探测到的 shell 可执行名:版本相关语法(&& / ||)能否用交给模型判断。 */

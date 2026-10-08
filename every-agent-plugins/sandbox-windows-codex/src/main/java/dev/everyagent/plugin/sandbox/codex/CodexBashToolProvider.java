@@ -56,19 +56,20 @@ public class CodexBashToolProvider implements ToolProvider {
     public List<ToolCallback> createTools(ToolContext ctx) {
         Path workspaceRoot = ctx.workspaceRoot() != null ? Path.of(ctx.workspaceRoot()) : null;
         CodexCommandExecutor exec = new CodexCommandExecutor(manager, workspaceRoot, rg.injectPath());
-        // rg 提示按解析结果条件化(详见类注释):三档皆无时如实说明,不谎报「已加入 PATH」。
-        // 追加层只留「本沙箱特有」事实;搜索无路径读空 stdin、Out-String 收口、连接符版本等
-        // 通用常识/框架细节均已按 2026-12 用户决策从描述移除(沿革见 ARCHITECTURE §7.10),
-        // 后端不得在此私自加回。rg 优势保留但压到一行,给可信的区分依据而非空喊「性能更好」。
+        // 描述全量自报(2026-12 第三批:核心零默认,提供者必传):用途/工作目录两句随移交由本
+        // 后端自写。通用常识类条目(stdin 语义、-join/$OFS、非 ASCII 已解码、Out-String 收口、
+        // 连接符版本)均已按用户决策从描述删除(沿革与残余风险见 ARCHITECTURE §7.10),
+        // 后端不得在此私自加回。rg 提示按解析结果条件化(详见类注释):三档皆无时如实说明,
+        // 不谎报「已加入 PATH」;优势压到一行,给可信的区分依据而非空喊「性能更好」。
         // 「实际执行 shell=<exe>」保留:#4 连接符版本细则删除后,版本判断依据只剩这一处。
         String rgNote = rg.available()
                 ? "内容搜索用 rg(已在 PATH,尊重 .gitignore,全仓递归远快于 findstr);"
                 : "rg 不可用,内容搜索改用 Select-String;";
-        return List.of(ShellTool.powershell(exec::execute)
-                .appendDescription(rgNote
+        return List.of(ShellTool.powershell("在系统上用 PowerShell 执行真实 OS 命令;"
+                        + "命令工作目录默认为任务工作区根;"
+                        + rgNote
                         + "实际执行 shell=" + CodexCommandExecutor.detectShell().exe + ";"
-                        + "中文等非 ASCII 输出已正确解码;"
-                        + "git 不读宿主全局配置,提交须带 -c user.name=<名> -c user.email=<邮箱>。")
-                .callback());
+                        + "git 不读宿主全局配置,提交须带 -c user.name=<名> -c user.email=<邮箱>。",
+                exec::execute).callback());
     }
 }
