@@ -65,11 +65,19 @@ import java.util.regex.PatternSyntaxException;
  * <p><b>SearchProvider 增补聚合(§8.5)</b>:插件经 {@code ctx.registerSearchProvider}
  * 注册的搜索后端不替换内置 rg——本方法在内置 rg 结果之后按 order() 升序
  * (同 order 保持注册先后)追加各 provider 的
- * {@code searchTasks} 结果(按 {@code taskId+roundIndex+field+matchIndex} 去重、仍受
- * maxResults 触顶约束,见 {@link #mergeProviderResults});provider 抛异常/超出超时预算
- * 仅 WARN 跳过(超时预算 {@code worker.search.provider-timeout-ms},默认 0 不限时,见
+ * {@code searchTasks} 结果(按 {@code kind}+位置键去重(task 沿用
+ * {@code taskId+roundIndex+field+matchIndex},未声明 kind 按 task.search 归一为 task,
+ * 跨 kind 不判重)、仍受 maxResults 触顶约束,见 {@link #mergeProviderResults});
+ * provider 抛异常/超出超时预算仅 WARN 跳过(超时预算
+ * {@code worker.search.provider-timeout-ms},默认 0 不限时,见
  * {@link WorkerProperties.Search});注册表为空时零额外行为;rg 不可用但注册了 provider 时
  * 跳过内置 rg、仅聚合 provider 结果。
+ *
+ * <p><b>统一搜索结果模型(§8.5)</b>:任务结果项在既有字段之外携带三个可选增补字段
+ * {@code kind}(开放集合,缺省语义 = task)/{@code providerId}(来源;内置 rg 固定
+ * {@code builtin.rg},provider 项聚合时填 {@code provider.id()},自带则尊重不覆盖)/
+ * {@code score}(仅排序提示,worker 不依它重排;内置不设)。老客户端按 must-ignore
+ * 忽略未知字段零影响(§5.6)。
  */
 @Component
 public class TaskSearchService {
@@ -202,12 +210,7 @@ public class TaskSearchService {
                 truncated = true;
             }
             if (!matches.isEmpty()) {
-                ObjectNode taskNode = Json.obj()
-                        .put("taskId", st.taskId())
-                        .put("title", st.summary().path("title").asString("任务 " + st.taskId()))
-                        .put("workspace", st.summary().path("workspace").asString(""))
-                        .put("workspaceId", st.workspaceId() == null ? "" : st.workspaceId())
-                        .put("status", st.summary().path("status").asString(""));
+                ObjectNode taskNode = builtinTaskNode(st);
                 ArrayNode arr = Json.arr();
                 for (ObjectNode m : matches) {
                     arr.add(m);
@@ -226,17 +229,41 @@ public class TaskSearchService {
         return new SearchOutcome(files, count, truncated);
     }
 
+    /**
+     * 内置 rg 任务项(元数据五字段 + matches 由调用方补):统一搜索结果模型(§8.5)标记
+     * {@code kind=task}、{@code providerId=builtin.rg}(score 内置不设);包级可见供单测
+     * 钉住内置标记。
+     */
+    static ObjectNode builtinTaskNode(TaskStore.StoredTask st) {
+        return Json.obj()
+                .put("taskId", st.taskId())
+                .put("title", st.summary().path("title").asString("任务 " + st.taskId()))
+                .put("workspace", st.summary().path("workspace").asString(""))
+                .put("workspaceId", st.workspaceId() == null ? "" : st.workspaceId())
+                .put("status", st.summary().path("status").asString(""))
+                .put("kind", SearchProvider.KIND_TASK)
+                .put("providerId", SearchProvider.BUILTIN_PROVIDER_ID);
+    }
+
     // ---- SearchProvider 增补聚合 ----
 
     /**
      * 把插件 SearchProvider 的任务搜索结果增补聚合进内置 rg 结果(§8.5):注册表为空或
      * 内置结果已触顶(maxResults)时原样返回——零行为变化;provider 结果按 order() 升序
      * (同 order 保持注册先后)追加在
-     * 内置结果之后,按位置键 {@code taskId+roundIndex+field+matchIndex} 去重(多引擎命中
-     * 同一轮同一字段同一位置只计一条);合并后仍受 maxResults 触顶约束(触顶置 truncated
-     * 并终止 provider 循环);单个 provider 抛异常/超出超时预算({@code providerTimeoutMs},
-     * 0 不限时)仅 WARN 跳过(经 {@link SearchProviderInvoker} 护栏),不影响其余结果与
-     * 应答;provider 返回 null/空列表(或全部命中被去重)不加任务项。
+     * 内置结果之后,按 {@code kind}+位置键 {@code kind+taskId+roundIndex+field+matchIndex}
+     * 去重(kind 缺省按 task.search 归一为 task,多引擎命中同 kind 同一轮同一字段同一位置
+     * 只计一条;跨 kind 不判重——worker 只按 kind+位置键判重,不解释新 kind 的键语义);
+     * 合并后仍受 maxResults 触顶约束(触顶置 truncated 并终止 provider 循环);单个
+     * provider 抛异常/超出超时预算({@code providerTimeoutMs},0 不限时)仅 WARN 跳过
+     * (经 {@link SearchProviderInvoker} 护栏),不影响其余结果与应答;provider 返回
+     * null/空列表(或全部命中被去重)不加任务项。
+     *
+     * <p><b>统一模型增补字段(§8.5)</b>:新建任务项标记 {@code kind}(归一后)与
+     * {@code providerId}(结果项自带则尊重不覆盖,否则填 {@code provider.id()})与
+     * {@code score}(仅 provider 提供时携带);并入既有任务项时不改写其既有标记(首次
+     * 写入者定来源)。内置 rg 任务项由 {@link #builtinTaskNode} 标记
+     * {@code kind=task}+{@code providerId=builtin.rg}。
      */
     static SearchOutcome mergeProviderResults(SearchOutcome builtIn, SearchProviderRegistry registry,
             SearchProvider.TaskSearchRequest req, int maxResults, long providerTimeoutMs) {
@@ -248,8 +275,9 @@ public class TaskSearchService {
         Set<String> seen = new HashSet<>();
         for (ObjectNode task : files.values()) {
             String taskId = task.path("taskId").asString();
+            String kind = task.path("kind").asString(SearchProvider.KIND_TASK);
             for (JsonNode m : task.path("matches")) {
-                seen.add(taskId + "\u0000" + m.path("roundIndex").asInt() + "\u0000"
+                seen.add(kind + "\u0000" + taskId + "\u0000" + m.path("roundIndex").asInt() + "\u0000"
                         + m.path("field").asString() + "\u0000" + m.path("matchIndex").asInt());
             }
         }
@@ -268,6 +296,8 @@ public class TaskSearchService {
                 if (hit.matches() == null || hit.matches().isEmpty()) {
                     continue;
                 }
+                String kind = SearchProvider.normalizeKind(hit.kind(), SearchProvider.KIND_TASK);
+                String providerId = SearchProvider.providerIdOr(hit.providerId(), provider.id());
                 // 先筛本任务可追加的命中(全被去重的任务不产出空任务项),再惰性建任务项
                 List<SearchProvider.TaskSearchResult.Match> fresh = new ArrayList<>();
                 boolean capped = false;
@@ -276,13 +306,13 @@ public class TaskSearchService {
                         capped = true; // 全局预算耗尽,本任务命中未全量消费
                         break;
                     }
-                    if (seen.add(hit.taskId() + "\u0000" + m.roundIndex() + "\u0000" + m.field()
-                            + "\u0000" + m.matchIndex())) {
+                    if (seen.add(kind + "\u0000" + hit.taskId() + "\u0000" + m.roundIndex() + "\u0000"
+                            + m.field() + "\u0000" + m.matchIndex())) {
                         fresh.add(m);
                     }
                 }
                 if (!fresh.isEmpty()) {
-                    appendProviderTaskHits(files, hit, fresh);
+                    appendProviderTaskHits(files, hit, fresh, kind, providerId);
                     count += fresh.size();
                 }
                 if (capped) {
@@ -294,9 +324,14 @@ public class TaskSearchService {
         return new SearchOutcome(files, Math.min(count, maxResults), truncated);
     }
 
-    /** 把一个 provider 任务结果的(去重后)命中追加进 files 聚合,任务项不存在则按元数据建。 */
+    /**
+     * 把一个 provider 任务结果的(去重后)命中追加进 files 聚合,任务项不存在则按元数据建
+     * (新建项携带统一模型(§8.5)的 kind/providerId/score 增补字段;并入既有任务项时
+     * 不改写其既有标记——首次写入者定来源)。
+     */
     private static void appendProviderTaskHits(LinkedHashMap<String, ObjectNode> files,
-            SearchProvider.TaskSearchResult hit, List<SearchProvider.TaskSearchResult.Match> fresh) {
+            SearchProvider.TaskSearchResult hit, List<SearchProvider.TaskSearchResult.Match> fresh,
+            String kind, String providerId) {
         ObjectNode task = files.get(hit.taskId());
         if (task == null) {
             task = Json.obj()
@@ -304,7 +339,12 @@ public class TaskSearchService {
                     .put("title", hit.title() == null ? "" : hit.title())
                     .put("workspace", hit.workspace() == null ? "" : hit.workspace())
                     .put("workspaceId", hit.workspaceId() == null ? "" : hit.workspaceId())
-                    .put("status", hit.status() == null ? "" : hit.status());
+                    .put("status", hit.status() == null ? "" : hit.status())
+                    .put("kind", kind)
+                    .put("providerId", providerId);
+            if (hit.score() != null) {
+                task.put("score", hit.score());
+            }
             task.set("matches", Json.arr());
             files.put(hit.taskId(), task);
         }

@@ -4,6 +4,7 @@ import java.io.IOException;
 import dev.everyagent.plugin.api.slash.SlashCommandItem;
 import dev.everyagent.plugin.api.slash.SlashSelectionResult;
 import dev.everyagent.plugin.api.slash.SlashTokenEncoder;
+import dev.everyagent.plugin.api.spi.SearchProvider;
 import dev.everyagent.plugin.api.spi.SuggestionProvider;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
@@ -367,6 +368,11 @@ public class SlashMethods {
      * ({@code providerTimeoutMs},0 不限时)仅 WARN 跳过(经 {@link SearchProviderInvoker}
      * 护栏,与 fs.search 增补聚合同款接缝/默认值),不影响其余结果与应答;provider 返回
      * null/空列表(或全部建议被去重)不加项。
+     *
+     * <p><b>统一模型增补字段(§8.5)</b>:provider 建议条目标记 {@code providerId}
+     * (建议项自带则尊重不覆盖,否则填 {@code provider.id()})与 {@code score}(仅
+     * provider 提供时携带);kind 由建议项自带(缺省归一 file)。内置四档打分条目不带
+     * 增补字段(形态不变)。
      */
     static void appendProviderSuggestions(ArrayNode entries, SearchProviderRegistry registry,
             SuggestionProvider.SuggestRequest req, int limit, long providerTimeoutMs) {
@@ -397,22 +403,31 @@ public class SlashMethods {
                 if (!seen.add(s.kind() + "\u0000" + s.path())) {
                     continue;
                 }
-                entries.add(suggestionEntry(s.path(), s.kind()));
+                entries.add(suggestionEntry(s.path(), s.kind(),
+                        SearchProvider.providerIdOr(s.providerId(), provider.id()), s.score()));
             }
         }
     }
 
     /**
      * provider 建议的结果条目:形状与内置 {@link #entry} 一致({@code name} 取自 path
-     * 末段、{@code fullPath} = {@code /}+path);不探测磁盘存在性——索引型 provider 可
+     * 末段、{@code fullPath} = {@code /}+path);统一模型(§8.5)增补字段
+     * {@code providerId}(聚合方填 provider 声明 id,建议项自带则尊重)与 {@code score}
+     * (仅 provider 提供时携带)非空才输出;不探测磁盘存在性——索引型 provider 可
      * 建议近期/未落盘路径,kind 由建议项自带(缺省 file)。
      */
-    private static ObjectNode suggestionEntry(String rel, String kind) {
+    private static ObjectNode suggestionEntry(String rel, String kind, String providerId, Double score) {
         ObjectNode o = Json.obj();
         o.put("path", rel);
         o.put("name", rel.contains("/") ? rel.substring(rel.lastIndexOf('/') + 1) : rel);
         o.put("kind", kind);
         o.put("fullPath", "/" + rel);
+        if (providerId != null && !providerId.isBlank()) {
+            o.put("providerId", providerId);
+        }
+        if (score != null) {
+            o.put("score", score);
+        }
         return o;
     }
 

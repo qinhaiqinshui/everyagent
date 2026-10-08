@@ -71,11 +71,18 @@ import java.util.regex.PatternSyntaxException;
  * <p><b>SearchProvider 增补聚合(§8.5)</b>:插件经 {@code ctx.registerSearchProvider}
  * 注册的搜索后端不替换内置 rg——fs.search 在内置 rg 结果之后按 order() 升序
  * (同 order 保持注册先后)追加各 provider
- * 结果(按 {@code path+lineNumber+matchIndex} 去重、仍受 maxResults 触顶约束,见
+ * 结果(按 {@code kind}+位置键去重(file 沿用 {@code path+lineNumber+matchIndex},
+ * 未声明 kind 按 fs.search 归一为 file,跨 kind 不判重)、仍受 maxResults 触顶约束,见
  * {@link #mergeProviderResults});provider 抛异常/超出超时预算仅 WARN 跳过(超时预算
  * {@code worker.search.provider-timeout-ms},默认 0 不限时,见
  * {@link WorkerProperties.Search});注册表为空时零额外行为;rg 不可用但注册了 provider
  * 时跳过内置 rg、仅聚合 provider 结果。
+ *
+ * <p><b>统一搜索结果模型(§8.5)</b>:结果项在既有字段之外携带三个可选增补字段
+ * {@code kind}(开放集合,缺省语义 = file)/{@code providerId}(来源;内置 rg 固定
+ * {@code builtin.rg},provider 项聚合时填 {@code provider.id()},自带则尊重不覆盖)/
+ * {@code score}(仅排序提示,worker 不依它重排;内置不设)。老客户端按 must-ignore
+ * 忽略未知字段零影响(§5.6)。
  *
  * <p><b>能力接口扩展(§8.5)</b>:fs.find 的增补聚合消费 {@link FileNameSearchProvider}
  * 能力接口({@code findFiles},registry 按 instanceof 分派),语义与护栏与 fs.search
@@ -260,11 +267,21 @@ public class FsSearchService {
             if (!nameRegex.matcher(base).find()) {
                 return true;
             }
-            files.put(rel, Json.obj().put("path", rel));
+            files.put(rel, builtinFileEntry(rel));
             return files.size() < maxResults;
         });
         boolean truncated = finishTruncated(r, files.size(), "fs.find");
         return new SearchOutcome(files, files.size(), truncated);
+    }
+
+    /**
+     * 内置 rg --files 文件项:统一搜索结果模型(§8.5)标记 {@code kind=file}、
+     * {@code providerId=builtin.rg}(score 内置不设);包级可见供单测钉住内置标记。
+     */
+    static ObjectNode builtinFileEntry(String rel) {
+        return Json.obj().put("path", rel)
+                .put("kind", SearchProvider.KIND_FILE)
+                .put("providerId", SearchProvider.BUILTIN_PROVIDER_ID);
     }
 
     // ---- SearchProvider 增补聚合 ----
@@ -272,12 +289,18 @@ public class FsSearchService {
     /**
      * 把插件 SearchProvider 的结果增补聚合进内置 rg 结果(§8.5):注册表为空或内置结果已
      * 触顶(maxResults)时原样返回——零行为变化;provider 结果按 order() 升序
-     * (同 order 保持注册先后)追加在内置结果之后,
-     * 按位置键 {@code path+lineNumber+matchIndex} 去重(多引擎命中同一位置只计一条);
-     * 合并后仍受 maxResults 触顶约束(触顶置 truncated 并终止 provider 循环);单个
-     * provider 抛异常/超出超时预算({@code providerTimeoutMs},0 不限时)仅 WARN 跳过
-     * (经 {@link SearchProviderInvoker} 护栏),不影响其余结果与应答;provider 返回
-     * null/空列表不加项。
+     * (同 order 保持注册先后)追加在内置结果之后,按 {@code kind}+位置键
+     * {@code kind+path+lineNumber+matchIndex} 去重(kind 缺省按 fs.search 归一为 file,
+     * 多引擎命中同 kind 同位置只计一条;跨 kind 不判重——worker 只按 kind+位置键判重,
+     * 不解释新 kind 的键语义);合并后仍受 maxResults 触顶约束(触顶置 truncated 并终止
+     * provider 循环);单个 provider 抛异常/超出超时预算({@code providerTimeoutMs},0
+     * 不限时)仅 WARN 跳过(经 {@link SearchProviderInvoker} 护栏),不影响其余结果与应答;
+     * provider 返回 null/空列表不加项。
+     *
+     * <p><b>统一模型增补字段(§8.5)</b>:provider 命中项标记 {@code kind}(归一后)与
+     * {@code providerId}(结果项自带则尊重不覆盖,否则填 {@code provider.id()}),
+     * {@code score} 仅在 provider 提供时携带;内置 rg 结果项由 {@link #append} 标记
+     * {@code kind=file}+{@code providerId=builtin.rg}。
      */
     static SearchOutcome mergeProviderResults(SearchOutcome builtIn, SearchProviderRegistry registry,
             SearchProvider.SearchRequest req, int maxResults, long providerTimeoutMs) {
@@ -289,7 +312,8 @@ public class FsSearchService {
         Set<String> seen = new HashSet<>();
         for (ObjectNode file : files.values()) {
             for (JsonNode m : file.path("matches")) {
-                seen.add(file.path("path").asString() + "\u0000" + m.path("lineNumber").asInt()
+                seen.add(m.path("kind").asString(SearchProvider.KIND_FILE) + "\u0000"
+                        + file.path("path").asString() + "\u0000" + m.path("lineNumber").asInt()
                         + "\u0000" + m.path("matchIndex").asInt());
             }
         }
@@ -309,30 +333,43 @@ public class FsSearchService {
                     truncated = true;
                     break outer;
                 }
-                if (!seen.add(hit.path() + "\u0000" + hit.lineNumber() + "\u0000" + hit.matchIndex())) {
+                String kind = SearchProvider.normalizeKind(hit.kind(), SearchProvider.KIND_FILE);
+                if (!seen.add(kind + "\u0000" + hit.path() + "\u0000" + hit.lineNumber() + "\u0000"
+                        + hit.matchIndex())) {
                     continue;
                 }
-                appendProviderHit(files, hit);
+                appendProviderHit(files, hit, kind,
+                        SearchProvider.providerIdOr(hit.providerId(), provider.id()));
                 count++;
             }
         }
         return new SearchOutcome(files, count, truncated);
     }
 
-    /** provider 命中追加进 files 聚合(同文件命中并入同一文件项,形状与 {@link #append} 一致)。 */
+    /**
+     * provider 命中追加进 files 聚合(同文件命中并入同一文件项,形状与 {@link #append}
+     * 一致);统一模型(§8.5)字段:kind 归一后恒标记、providerId 为 provider 声明 id
+     * (结果项自带则尊重)、score 仅在 provider 提供时携带(内置不设)。
+     */
     private static void appendProviderHit(LinkedHashMap<String, ObjectNode> files,
-            SearchProvider.SearchResult hit) {
+            SearchProvider.SearchResult hit, String kind, String providerId) {
         ObjectNode file = files.get(hit.path());
         if (file == null) {
             file = Json.obj().put("path", hit.path());
             file.set("matches", Json.arr());
             files.put(hit.path(), file);
         }
-        ((ArrayNode) file.get("matches")).add(Json.obj()
+        ObjectNode m = Json.obj()
                 .put("lineNumber", hit.lineNumber())
                 .put("line", hit.line())
                 .put("matchIndex", hit.matchIndex())
-                .put("matchText", hit.matchText()));
+                .put("matchText", hit.matchText())
+                .put("kind", kind)
+                .put("providerId", providerId);
+        if (hit.score() != null) {
+            m.put("score", hit.score());
+        }
+        ((ArrayNode) file.get("matches")).add(m);
     }
 
     // ---- FileNameSearchProvider 增补聚合(fs.find) ----
@@ -341,12 +378,17 @@ public class FsSearchService {
      * 把插件 {@link FileNameSearchProvider}(§8.5 能力接口)的文件名搜索结果增补聚合进
      * 内置 rg --files 结果:实现该能力接口的 provider 为空或内置结果已触顶(maxResults)
      * 时原样返回——零行为变化;provider 结果按 order() 升序(同 order 保持注册先后)追加
-     * 在内置结果之后,按 {@code kind=file}+{@code path} 去重(find 结果恒为文件,即按
-     * path 去重——files 聚合以 path 为键,天然一文件一项);合并后仍受 maxResults 触顶
-     * 约束(触顶置 truncated 并终止 provider 循环);单个 provider 抛异常/超出超时预算
-     * ({@code providerTimeoutMs},0 不限时)仅 WARN 跳过(经 {@link SearchProviderInvoker}
-     * 护栏,与 search() 同款接缝/默认值),不影响其余结果与应答;provider 返回 null/空
-     * 列表(或全部命中被去重)不加项。
+     * 在内置结果之后,按 {@code kind}+{@code path} 去重(kind 缺省归一 {@code file},find
+     * 结果恒为文件即按 path 去重;跨 kind 不判重,非 file 类别以 kind+path 复合键并存、
+     * 不覆盖同路径的文件项);合并后仍受 maxResults 触顶约束(触顶置 truncated 并终止
+     * provider 循环);单个 provider 抛异常/超出超时预算({@code providerTimeoutMs},0
+     * 不限时)仅 WARN 跳过(经 {@link SearchProviderInvoker} 护栏,与 search() 同款接缝/
+     * 默认值),不影响其余结果与应答;provider 返回 null/空列表(或全部命中被去重)不加项。
+     *
+     * <p><b>统一模型增补字段(§8.5)</b>:provider 结果项标记 {@code kind}(归一后)与
+     * {@code providerId}(结果项自带则尊重不覆盖,否则填 {@code provider.id()}),
+     * {@code score} 仅在 provider 提供时携带;内置 rg 文件项由 {@link #builtinFileEntry}
+     * 标记 {@code kind=file}+{@code providerId=builtin.rg}。
      */
     static SearchOutcome mergeFindProviderResults(SearchOutcome builtIn, SearchProviderRegistry registry,
             FileNameSearchProvider.FindRequest req, int maxResults, long providerTimeoutMs) {
@@ -355,6 +397,11 @@ public class FsSearchService {
             return builtIn;
         }
         LinkedHashMap<String, ObjectNode> files = new LinkedHashMap<>(builtIn.files());
+        Set<String> seen = new HashSet<>();
+        for (ObjectNode f : files.values()) {
+            seen.add(f.path("kind").asString(SearchProvider.KIND_FILE) + "\u0000"
+                    + f.path("path").asString());
+        }
         int count = builtIn.matchCount();
         boolean truncated = builtIn.truncated();
         // 护栏(§8.5):单个 provider 抛异常/超出超时预算仅 WARN 跳过,不影响其余结果
@@ -371,11 +418,24 @@ public class FsSearchService {
                     truncated = true;
                     break outer;
                 }
-                if (hit == null || hit.path() == null || hit.path().isBlank()
-                        || files.containsKey(hit.path())) {
-                    continue; // path 去重(kind=file+path;find 结果恒为文件)
+                if (hit == null || hit.path() == null || hit.path().isBlank()) {
+                    continue;
                 }
-                files.put(hit.path(), Json.obj().put("path", hit.path()));
+                String kind = SearchProvider.normalizeKind(hit.kind(), SearchProvider.KIND_FILE);
+                if (!seen.add(kind + "\u0000" + hit.path())) {
+                    continue; // kind+path 去重(同 kind 同路径;跨 kind 不判重)
+                }
+                ObjectNode entry = Json.obj()
+                        .put("path", hit.path())
+                        .put("kind", kind)
+                        .put("providerId", SearchProvider.providerIdOr(hit.providerId(), provider.id()));
+                if (hit.score() != null) {
+                    entry.put("score", hit.score());
+                }
+                // kind=file 沿用裸 path 为聚合键(与内置一致);跨 kind 同路径不判重 →
+                // 非 file 类别以 kind+path 复合键落位,不覆盖同路径的文件项
+                files.put(SearchProvider.KIND_FILE.equals(kind) ? hit.path()
+                        : kind + "\u0000" + hit.path(), entry);
                 count++;
             }
         }
@@ -543,19 +603,29 @@ public class FsSearchService {
         return raw.replace('\\', '/');
     }
 
-    /** 同一文件的多个命中聚合进同一 files 项(LinkedHashMap 保持 rg 输出顺序)。 */
-    private static void append(LinkedHashMap<String, ObjectNode> files, String path, RawHit hit) {
+    /** 同一文件的多个命中聚合进同一 files 项(LinkedHashMap 保持 rg 输出顺序);包级可见供单测钉住内置标记。 */
+    static void append(LinkedHashMap<String, ObjectNode> files, String path, RawHit hit) {
         ObjectNode file = files.get(path);
         if (file == null) {
             file = Json.obj().put("path", path);
             file.set("matches", Json.arr());
             files.put(path, file);
         }
-        ((ArrayNode) file.get("matches")).add(Json.obj()
+        ((ArrayNode) file.get("matches")).add(builtinMatchEntry(hit));
+    }
+
+    /**
+     * 内置 rg 命中条目:统一搜索结果模型(§8.5)标记 {@code kind=file}、
+     * {@code providerId=builtin.rg}(score 内置不设);包级可见供单测钉住内置标记。
+     */
+    static ObjectNode builtinMatchEntry(RawHit hit) {
+        return Json.obj()
                 .put("lineNumber", hit.lineNumber())
                 .put("line", hit.line())
                 .put("matchIndex", hit.matchIndex())
-                .put("matchText", hit.matchText()));
+                .put("matchText", hit.matchText())
+                .put("kind", SearchProvider.KIND_FILE)
+                .put("providerId", SearchProvider.BUILTIN_PROVIDER_ID);
     }
 
     // ---- argv 拼接(纯函数,单测钉住契约)----

@@ -1,5 +1,8 @@
 package dev.everyagent.plugin.api.spi;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.annotation.JsonInclude;
+
 import java.nio.file.Path;
 import java.util.List;
 
@@ -39,7 +42,18 @@ public interface FileNameSearchProvider extends SearchProvider {
 
     /**
      * 文件名搜索结果项:{@code path} 为工作区相对 posix 路径,形状与 {@code fs.find}
-     * 应答项一致(单文件一项,无 matches 字段)。
+     * 应答项一致(单文件一项,无 matches 字段)。统一搜索结果模型(§8.5)的三个可选
+     * 增补字段 {@code kind}(开放集合,本 RPC 缺省 {@code file})/{@code providerId}
+     * (缺省视为 {@code builtin.rg},聚合时由 worker 填 {@code provider.id()})/
+     * {@code score}(仅排序提示)均可空,null 时序列化省略。
      */
-    record FileResult(String path) {}
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    record FileResult(String path, String kind, String providerId, Double score) {
+
+        /** 兼容构造:不带统一搜索结果模型(§8.5)增补字段(kind/providerId/score = null)。 */
+        public FileResult(String path) {
+            this(path, null, null, null);
+        }
+    }
 }

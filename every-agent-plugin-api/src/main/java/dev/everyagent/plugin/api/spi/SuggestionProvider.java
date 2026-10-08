@@ -1,5 +1,8 @@
 package dev.everyagent.plugin.api.spi;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.annotation.JsonInclude;
+
 import java.nio.file.Path;
 import java.util.List;
 
@@ -40,14 +43,23 @@ public interface SuggestionProvider extends SearchProvider {
     /**
      * 建议项:{@code path} 为工作区相对 posix 路径(应答派生 {@code name}/{@code fullPath},
      * 不要求文件当前在磁盘上存在——索引型 provider 可建议近期路径);{@code kind} 缺省
-     * 归一为 {@code "file"}(去重键 = {@code kind}+{@code path})。
+     * 归一为 {@code "file"}(去重键 = {@code kind}+{@code path})。统一搜索结果模型(§8.5)
+     * 的可选增补字段 {@code providerId}(聚合时由 worker 填 {@code provider.id()},自带则
+     * 尊重不覆盖)与 {@code score}(仅排序提示)均可空,null 时序列化省略。
      */
-    record Suggestion(String path, String kind) {
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    record Suggestion(String path, String kind, String providerId, Double score) {
 
         public Suggestion {
             if (kind == null || kind.isBlank()) {
                 kind = "file";
             }
+        }
+
+        /** 兼容构造:kind + 不带统一增补字段(providerId/score = null)。 */
+        public Suggestion(String path, String kind) {
+            this(path, kind, null, null);
         }
 
         /** 便捷构造:kind 取缺省 {@code file}。 */
