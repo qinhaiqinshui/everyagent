@@ -180,8 +180,23 @@ public class ChatModelFactory {
     }
 
     /** 完整请求参数快照:baseUrl/apiKey/model/流式与采样参数,随 prompt 逐轮透传。 */
-    public OpenAiChatOptions options(ResolvedConfig cfg) {        OpenAiChatOptions.Builder b = OpenAiChatOptions.builder()
-                .baseUrl(cfg.snapshot().baseUrl())
+    public OpenAiChatOptions options(ResolvedConfig cfg) {
+        // fullUrl 优先:用户指定完整端点 URL(如 https://api.deepseek.com/chat/completions),
+        // SDK 会在此基础上拼接 /chat/completions,故剥离该后缀反推 SDK 所需的 baseUrl,
+        // 使 SDK 拼接后正好命中用户指定的完整 URL。后缀不匹配时按字面用作 baseUrl(兼容非标准路径)。
+        String baseUrl = cfg.snapshot().baseUrl();
+        String fullUrl = cfg.snapshot().fullUrl();
+        if (fullUrl != null && !fullUrl.isBlank()) {
+            String trimmed = fullUrl.trim();
+            String suffix = "/chat/completions";
+            if (trimmed.endsWith(suffix)) {
+                baseUrl = trimmed.substring(0, trimmed.length() - suffix.length());
+            } else {
+                baseUrl = trimmed;
+            }
+        }
+        OpenAiChatOptions.Builder b = OpenAiChatOptions.builder()
+                .baseUrl(baseUrl)
                 .apiKey(cfg.apiKey())
                 .model(cfg.snapshot().model())
                 .streamUsage(true)

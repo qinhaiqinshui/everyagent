@@ -52,7 +52,7 @@ public class ConfigStore {
         JsonNode paramsNode = (params == null || params.isEmpty()) ? null : Json.toJson(params);
         String provider = m.getProvider() == null ? "" : m.getProvider().trim();
         String configId = m.getConfigId().trim();
-        return new ModelConfig(configId, provider, m.getBaseUrl(),
+        return new ModelConfig(configId, provider, m.getBaseUrl(), m.getFullUrl(),
                 m.getModel() == null ? "" : m.getModel(), m.getApiKey(), paramsNode, m.getIsDefault());
     }
 
@@ -121,6 +121,10 @@ public class ConfigStore {
                 Object baseUrl = m.get("base-url");
                 if (baseUrl != null) {
                     model.setBaseUrl(String.valueOf(baseUrl));
+                }
+                Object fullUrl = m.get("full-url");
+                if (fullUrl != null) {
+                    model.setFullUrl(String.valueOf(fullUrl));
                 }
                 Object modelField = m.get("model");
                 if (modelField != null) {
@@ -231,7 +235,7 @@ public class ConfigStore {
     private ResolvedConfig resolveConfig(ModelConfig c) {
         dev.everyagent.plugin.api.model.ModelConfig snap =
                 new dev.everyagent.plugin.api.model.ModelConfig(c.configId(), c.provider(),
-                c.baseUrl(), c.model(), c.params());
+                c.baseUrl(), c.fullUrl(), c.model(), c.params());
         return new ResolvedConfig(snap, apiKeyOf(c));
     }
 

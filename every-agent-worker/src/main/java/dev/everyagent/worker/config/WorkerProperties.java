@@ -75,6 +75,8 @@ public class WorkerProperties implements WorkerConfig {
         private String configId;
         private String provider;
         private String baseUrl;
+        /** 完整端点 URL(如 https://api.deepseek.com/chat/completions);非空时优先于 baseUrl,SDK 剥离后缀反推 baseUrl。 */
+        private String fullUrl;
         private String model;
         private String apiKey;
         private Map<String, Object> params = new java.util.LinkedHashMap<>();
@@ -105,6 +107,14 @@ public class WorkerProperties implements WorkerConfig {
 
         public void setBaseUrl(String baseUrl) {
             this.baseUrl = baseUrl;
+        }
+
+        public String getFullUrl() {
+            return fullUrl;
+        }
+
+        public void setFullUrl(String fullUrl) {
+            this.fullUrl = fullUrl;
         }
 
         public String getModel() {

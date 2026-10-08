@@ -56,7 +56,7 @@ public class ConfigRpcHandler {
     private void rpcConfigGet(RpcContext ctx) {
         ArrayNode arr = Json.arr();
         for (ModelConfig c : configs.list()) {
-            ModelConfig safe = new ModelConfig(c.configId(), c.provider(), c.baseUrl(),
+            ModelConfig safe = new ModelConfig(c.configId(), c.provider(), c.baseUrl(), c.fullUrl(),
                     c.model(), c.apiKey() == null || c.apiKey().isEmpty() ? null : "******",
                     c.params(), c.isDefault());
             arr.add(Json.toJson(safe));

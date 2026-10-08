@@ -14,7 +14,8 @@ public final class ConfigDtos {
     }
 
     /**
-     * 模型配置:provider + baseUrl + model,params 为自由 JSON(temperature 等)。apiKey 仅存 worker 侧。
+     * 模型配置:provider + baseUrl + fullUrl + model,params 为自由 JSON(temperature 等)。apiKey 仅存 worker 侧。
+     * fullUrl 为完整端点 URL(如 https://api.deepseek.com/chat/completions),非空时优先于 baseUrl。
      */
     @JsonIgnoreProperties(ignoreUnknown = true)
     @JsonInclude(JsonInclude.Include.NON_NULL)
@@ -22,10 +23,17 @@ public final class ConfigDtos {
             String configId,
             String provider,
             String baseUrl,
+            String fullUrl,
             String model,
             String apiKey,
             JsonNode params,
             Boolean isDefault) {
+
+        /** 兼容旧调用方:fullUrl 为 null(未配置完整 URL)。 */
+        public ModelConfig(String configId, String provider, String baseUrl,
+                           String model, String apiKey, JsonNode params, Boolean isDefault) {
+            this(configId, provider, baseUrl, null, model, apiKey, params, isDefault);
+        }
     }
 
     /** worker 运行配置(sys.info 上报;任务永久保留,无 retention 概念)。 */
