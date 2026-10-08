@@ -11,13 +11,17 @@
  *
  * 展开态工具名后的文件路径为可点击 chip，点击经 useWorkspaceShell().openGlobalFileTab
  * 打开文件标签页（readwrite 模式，方便用户直接改 AI 写的文件）；workspaceRoot 缺失时
- * 降级为纯文本不可点，避免历史/未关联工作区场景报错。
+ * 降级为纯文本不可点，避免历史/未关联工作区场景报错。点击前先校验文件存在性，
+ * 缺失（已删除/移动）时以 toast 友好提示，避免用户看到原始 RPC [NOT_FOUND] 错误
+ * （与 FileDiffPanel.handleOpenFileInTab 同口径）。
  */
 
 import React from 'react'
 import { WrenchIcon, ChevronDownIcon, ChevronRightIcon } from '@/components/shared/AppGlyphs'
 import { useWorkspaceShell } from '@/components/app/WorkspaceShellContext'
+import { useAppUi } from '@/components/app/AppUiContext'
 import { toBusinessAbsolutePath } from '@/platform/fs/pathUtils'
+import { workspaceGateway } from '@/platform/fs/workspaceGateway'
 import { useTaskWorkspaceRoot } from '../TaskWorkspaceContext'
 import { extractFileName, hasActiveTextSelection } from './helpers'
 import type { AggregatedToolDetail } from './types'
@@ -63,6 +67,7 @@ export function FileToolEntry({ detail, inlineExtras }: FileToolEntryProps) {
 
   const workspaceRoot = useTaskWorkspaceRoot()
   const { openGlobalFileTab } = useWorkspaceShell()
+  const { showToast } = useAppUi()
 
   const hasError = detail.status === 'error'
   const result = detail.result
@@ -71,10 +76,17 @@ export function FileToolEntry({ detail, inlineExtras }: FileToolEntryProps) {
   const argLines = flattenArgs(args)
   const [open, setOpen] = React.useState(false)
 
-  const handleOpenFile = React.useCallback(() => {
+  const handleOpenFile = React.useCallback(async () => {
     if (!businessPath || !workspaceRoot || !openGlobalFileTab) return
+    // 任务历史中的文件可能已被删除/移动:先校验存在性,缺失时给可读提示,
+    // 避免用户看到原始 RPC [NOT_FOUND] 错误(与 FileDiffPanel 同口径)。
+    const stat = await workspaceGateway.stat(workspaceRoot, businessPath).catch(() => null)
+    if (!stat || stat.isDirectory) {
+      showToast(`文件已不存在于工作区（可能已被删除或移动），无法打开：${businessPath}`, 'error')
+      return
+    }
     openGlobalFileTab({ workspaceRoot, filePath: businessPath }, { mode: 'readwrite' })
-  }, [businessPath, workspaceRoot, openGlobalFileTab])
+  }, [businessPath, workspaceRoot, openGlobalFileTab, showToast])
 
   const canOpen = Boolean(businessPath && workspaceRoot && openGlobalFileTab)
 
