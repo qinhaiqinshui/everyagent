@@ -14,8 +14,10 @@ import java.util.Objects;
  *   <li>命令授权({@link Kind#COMMAND}):command + 授权决议字段;</li>
  *   <li>提权授权({@link Kind#PRIVILEGE}/{@link Kind#PRIVILEGE_EXEC}):command 或 execPath;</li>
  * </ul>
- * realPath 为「授权根粒度」的 realpath(目标提升到父目录后),WorkspaceAllowCheck /
- * OverBroadRootCheck 以此判定;wsLex/wsReal 为工作区词法根/realpath。
+ * realPath 为「最深已存在祖先目录」的 realpath(链节点 WorkspaceAllowCheck /
+ * OverBroadRootCheck / SkillsReadAllowCheck / ExternalRootAllowCheck 以此做前缀判定,
+ * 同时也是沙箱可达根的来源);<b>授权判定用的 key 是独立的 {@code grantKey}</b>
+ * (文件工具链 = 目标路径本身的授权单元,§7.8);wsLex/wsReal 为工作区词法根/realpath。
  *
  * <p>域中性(§6.4):不携带 worker {@code TaskEntry}——路径判定用 {@code workspaceRoot}
  * 字符串,授权决议字段经 {@code authReq}(AuthorizationRequest,内含 ExecContext)

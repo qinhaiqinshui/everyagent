@@ -90,6 +90,12 @@ public class PermissionGate {
      * (含系统目录 / 程序目录 / skills,均已放开)→ 走授权决议链(弹窗或 AI 审议),
      * 拒绝/超时抛 {@link PermissionDeniedException}。过度宽泛授权根(盘根/工作区祖先)
      * 静默拒收交沙箱兜底。
+     *
+     * <p><b>授权单元 = 目标路径本身</b>(§7.8):已存在文件不再提升到父目录,故一次
+     * 「新建/覆写单个文件」的授权不会静默扩大到该目录下其它文件(同目录兄弟文件 =
+     * 另一个单元 = 另一次授权;同一路径重复访问仍共用同一把 key)。链节点判定与沙箱可达根
+     * 仍按「最深已存在目录」(授权判定始终在 gate 逐次执行,key 精确匹配,可达根只是路径
+     * 解析边界、不构成授权——同时保住「破坏性操作不得作用于授权根本身」等既有语义)。
      */
     public void requirePath(ExecContext t, String agentId, String rel, Op op) throws IOException {
         Root ws = workspaces.resolve(t.workspaceRoot());
@@ -98,13 +104,15 @@ public class PermissionGate {
         if (anchor == null) {
             return; // 连盘符根都不存在,交给 Sandbox/IO 层报错
         }
-        anchor = PathSupport.grantRootOf(anchor);
-        Path real = anchor.toRealPath();
-        Path lexical = anchor.normalize();
+        Path unit = PathSupport.grantUnitOf(norm, anchor); // 授权单元(判定与文案同源)
+        Path rootAnchor = PathSupport.grantRootOf(anchor); // 链节点判定/沙箱可达根:最深已存在目录
+        Path real = rootAnchor.toRealPath();
+        Path lexical = rootAnchor.normalize();
         List<Path> roots = lexical.equals(real) ? List.of(real) : List.of(real, lexical);
-        String grantKey = PathSupport.pathKey(real, op);
+        String grantKey = PathSupport.pathKey(unit, op);
         String prompt = "AI 请求" + PathSupport.opDesc(op) + "工作区外路径: " + norm + "\n"
-                + "授权范围: " + real + " 及其子目录内的" + PathSupport.opDesc(op) + "操作。";
+                + "授权范围: " + unit + PathSupport.scopeNote(norm, anchor)
+                + "同一路径重复访问不再询问。";
         PermissionContext ctx = PermissionContext.builder()
                 .kind(PermissionContext.Kind.PATH)
                 .workspaceRoot(t.workspaceRoot())
@@ -116,7 +124,7 @@ public class PermissionGate {
                 .realPath(real)
                 .wsLex(ws.path())
                 .wsReal(ws.realPath())
-                .grantKey(PathSupport.pathKey(real, op))
+                .grantKey(grantKey)
                 .prompt(prompt)
                 .rootsOnGrant(roots)
                 .execRootsOnGrant(List.of())

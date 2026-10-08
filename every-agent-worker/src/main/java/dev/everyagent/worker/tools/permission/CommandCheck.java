@@ -113,7 +113,8 @@ public class CommandCheck implements PermissionCheck {
                     continue;
                 }
                 String prompt = "AI 请求在命令中访问工作区外路径: " + PathSupport.abbreviate(command) + "\n"
-                        + "授权范围: " + real + " 及其子目录内的命令访问。";
+                        + "授权范围: " + real + " 目录(命令中引用该目录下的路径不再询问;"
+                        + "引用其子目录中的路径需另行授权)。";
                 grants.authorize(ctx.authRequest(PathSupport.pathKey(real, Op.EXEC), prompt),
                         List.of(), List.of(real));
             }
