@@ -15,16 +15,24 @@
  * 参数缺失（oldcontent/content 非字符串）时回退为参数块渲染（超长值截断，
  * 避免整篇正文占据展开区），保证异常/历史调用仍可诊断。
  *
+ * 展开态路径 chip 点击时**遍历注册表工作区根定位文件实际所属工作区**再打开
+ * （ctx.sdk.workspace.rootPath 是插件加载时 sys.info 回填的 worker 默认工作区根，
+ * 任务改动的文件绝大多数不在默认工作区下，直接用它打开必得 [NOT_FOUND]）——
+ * 与核心 FileToolEntry.resolveFileWorkspace 同口径，见 handleOpenFile 注释。
+ *
  * 结构与 FileToolEntry 同构（复用 chatPanel.css 的 nagent-tool__* 类与插件内
  * helpers 的选区守卫/文件名提取），独立演进不反向侵入核心。
  */
 
 import React from 'react'
+import { App } from 'antd'
 import type { PluginToolCallDetail } from '@everyagent/plugin-api'
 import { WrenchIcon, ChevronDownIcon, ChevronRightIcon } from './icons'
 import { getPluginContext } from './pluginRuntime'
 import {
   toBusinessAbsolutePath,
+  basename,
+  dirname,
   extractFileName,
   hasActiveTextSelection,
   buildLineDiff,
@@ -60,7 +68,8 @@ function UpdateFileEntry({ detail }: { detail: PluginToolCallDetail }) {
   const diffArgs = extractDiffArgs(args)
 
   const ctx = getPluginContext()
-  const workspaceRoot = ctx.sdk.workspace.rootPath
+  // antd App 上下文轻提示（宿主整树包在 <AntApp> 内；与 git 插件 GitSidebarPanel 同模式）。
+  const { message } = App.useApp()
 
   const hasError = detail.status === 'error'
   const result = detail.result
@@ -80,12 +89,49 @@ function UpdateFileEntry({ detail }: { detail: PluginToolCallDetail }) {
     }
   }, [diffArgs])
 
-  const handleOpenFile = React.useCallback(() => {
-    if (!businessPath || !workspaceRoot) return
-    ctx.ui.openFileTab(workspaceRoot, businessPath, { mode: 'readwrite' })
-  }, [ctx, businessPath, workspaceRoot])
+  /**
+   * 解析文件实际所属的工作区根（与核心 FileToolEntry.resolveFileWorkspace 同口径）。
+   *
+   * 插件拿不到任务工作区根——`ctx.sdk.workspace.rootPath` 是插件加载时 sys.info
+   * 回填的 worker **默认工作区根**（见 plugin-guide/web/context-api.md §sdk.workspace），
+   * 任务改动的文件绝大多数不在默认工作区下，直接拿它打开文件标签页必得
+   * `[NOT_FOUND] 路径不存在`。改为遍历注册表全部工作区根，用 fs.listDir 探测
+   * 目标所在父目录，返回第一个能找到该文件（非目录）的工作区根；注册表按最后
+   * 活动时间排序，刚跑过任务的工作区天然靠前。
+   */
+  const resolveFileWorkspaceRoot = React.useCallback(async (): Promise<string | null> => {
+    const parent = dirname(fullPath)
+    const fileName = basename(fullPath)
+    if (!fileName) return null
+    let entries: Awaited<ReturnType<typeof ctx.sdk.workspace.list>> = []
+    try {
+      entries = await ctx.sdk.workspace.list()
+    } catch {
+      return null
+    }
+    for (const entry of entries) {
+      if (!entry.root || entry.missing) continue
+      try {
+        const rows = await ctx.fs.listDir(entry.root, parent)
+        if (rows.some((row) => row.name === fileName && !row.isDirectory)) {
+          return entry.root
+        }
+      } catch {
+        // 该工作区根下不存在（或不可达），继续尝试下一个。
+      }
+    }
+    return null
+  }, [ctx, fullPath])
 
-  const canOpen = Boolean(businessPath && workspaceRoot)
+  const handleOpenFile = React.useCallback(async () => {
+    if (!businessPath) return
+    const root = await resolveFileWorkspaceRoot()
+    if (!root) {
+      message.error(`未能在已注册工作区中找到该文件：${businessPath}`)
+      return
+    }
+    ctx.ui.openFileTab(root, businessPath, { mode: 'readwrite' })
+  }, [businessPath, ctx, message, resolveFileWorkspaceRoot])
 
   return (
     <div className={`nagent-tool nagent-tool--filewrite${open ? ' is-open' : ''}`}>
@@ -125,21 +171,17 @@ function UpdateFileEntry({ detail }: { detail: PluginToolCallDetail }) {
               <WrenchIcon size={12} className={`nagent-tool__icon${hasError ? ' nagent-tool__icon--error' : ''}`} />
               <span className="nagent-tool__name">{detail.toolName || 'update_file'}</span>
               {businessPath ? (
-                canOpen ? (
-                  <button
-                    type="button"
-                    className="nagent-tool__detail-path"
-                    title={`打开文件：${businessPath}`}
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      handleOpenFile()
-                    }}
-                  >
-                    {businessPath}
-                  </button>
-                ) : (
-                  <span className="nagent-tool__detail-path nagent-tool__detail-path--static" title="未关联工作区，无法打开">{businessPath}</span>
-                )
+                <button
+                  type="button"
+                  className="nagent-tool__detail-path"
+                  title={`打开文件：${businessPath}`}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    void handleOpenFile()
+                  }}
+                >
+                  {businessPath}
+                </button>
               ) : null}
             </div>
             {diff ? (

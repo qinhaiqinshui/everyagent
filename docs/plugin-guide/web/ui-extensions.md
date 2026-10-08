@@ -221,6 +221,7 @@ ctx.ui.registerToolCallView(def)
 消费链：消息线程渲染工具调用时 `getToolView(toolName)`（`ToolCallView.tsx:98`）按优先级解析——**插件注册的视图 > 内置目录注册表（import.meta.glob）> DefaultToolView**（`every-agent-web/src/components/task/toolViews/registry.ts:42-50`，注释 `:37-41`）。同名 `toolName` 多个插件注册时**先注册者胜**（for 循环首个命中，`:43-48`）。
 
 - **坑**：接管是全量的——折叠摘要、展开详情、错误态都要自己画；`plugin-api` 的最小化 props 与核心 `ToolViewProps` 运行时同形，注册侧安全强转（`registry.ts:45-47` 注释）。
+- **坑**：视图里点击路径打开**任务改动的文件**时，别拿 `sdk.workspace.rootPath` 当该文件的工作区根——它是插件加载时 `sys.info` 回填的 worker **默认工作区根**（见 [context-api §sdk.workspace](context-api.md)），任务文件绝大多数不在默认工作区下，用它打开必得 `[NOT_FOUND] 路径不存在`。正确姿势：`sdk.workspace.list()` 拿注册表全部工作区根 + `fs.listDir` 逐个探测定位文件实际所属根（update-file-view `UpdateFileToolView.tsx` 的 `resolveFileWorkspaceRoot` 同款；核心内置视图 `FileToolEntry` 同口径）。
 - **内置范例**：update-file-view（`every-agent-plugins/update-file-view/web/index.ts:19-26`，接管 `update_file`：折叠态文件名+变更统计、展开态行级 diff）。
 
 ## 8. `ui.user_message_actions` —— 用户消息动作

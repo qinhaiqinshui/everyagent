@@ -334,3 +334,17 @@ export function normalizeWorkspaceRelativePath(value: string): string {
 export function toBusinessAbsolutePath(value: string): string {
   return WORKSPACE_ROOT + normalizeWorkspaceRelativePath(value)
 }
+
+/** 取父目录（工作区相对路径；根级返回空串）。复制自宿主 workspaceGateway，插件不引用宿主模块。 */
+export function dirname(path: string): string {
+  const normalized = normalizeWorkspaceRelativePath(path)
+  const index = normalized.lastIndexOf('/')
+  return index < 0 ? '' : normalized.slice(0, index)
+}
+
+/** 取末段文件名（按规范化后路径）。复制自宿主 workspaceGateway，插件不引用宿主模块。 */
+export function basename(path: string): string {
+  const normalized = normalizeWorkspaceRelativePath(path)
+  const index = normalized.lastIndexOf('/')
+  return index < 0 ? normalized : normalized.slice(index + 1)
+}
