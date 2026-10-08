@@ -82,8 +82,8 @@ class CodexBashToolProviderTest {
         String desc = provider(new CodexRg.Rg(tempDir.resolve("rg.exe"), true))
                 .createTools(TestFixtures.ctx("codex", tempDir, null))
                 .get(0).getToolDefinition().description();
-        assertTrue(desc.startsWith("在系统上用 PowerShell 执行真实 OS 命令;"),
-                "基线删除后,开头用途句由本后端自写");
+        assertTrue(desc.startsWith("在系统上用 " + CodexCommandExecutor.shellDisplay() + " 执行真实 OS 命令;"),
+                "首句含探测得到的 shell 名称+版本(第五批:cmd 兜底时如实报 cmd,不硬编码)");
         assertTrue(desc.contains("命令工作目录默认为任务工作区根;"), "工作目录事实保留");
         assertFalse(desc.contains("stdin 无输入可用"), "已删(第三批):stdin 语义");
         assertFalse(desc.contains("无法交互输入"), "已删(第三批):stdin 语义");
@@ -94,18 +94,21 @@ class CodexBashToolProviderTest {
         assertFalse(desc.contains("当搜索源"), "早期整句形态不得回归(恢复项为 §7.10 紧凑措辞)");
         assertFalse(desc.contains("提交须带"), "已退役(第四批):git 身份由执行器 env 注入,描述不再指引 -c");
         assertFalse(desc.contains("user.name"), "已退役(第四批):描述不再含 git 身份字样");
+        assertFalse(desc.contains("实际执行 shell"), "已退役(第五批):shell 身份(名称+版本)并入首句");
         assertFalse(desc.contains("Out-String"), "已删条目不得由后端加回");
         assertFalse(desc.contains("null 设备"), "旧措辞不得回归");
         assertFalse(desc.contains("静默过滤 null stdin"), "旧措辞不得回归");
     }
 
-    /** 描述报出探测到的 shell 可执行名:版本相关语法(&& / ||)能否用交给模型判断。 */
+    /** 描述首句报出探测得到的 shell 身份(名称+版本):版本相关语法(&& / ||)能否用交给模型判断;
+     * 独立子句「实际执行 shell=<exe>」已随第五批退役。 */
     @Test
-    void descriptionReportsActualShellBinary() {
+    void descriptionReportsShellIdentityInOpening() {
         String desc = provider(new CodexRg.Rg(null, true))
                 .createTools(TestFixtures.ctx("codex", tempDir, null))
                 .get(0).getToolDefinition().description();
-        assertTrue(desc.contains("实际执行 shell=" + CodexCommandExecutor.detectShell().exe),
-                "描述含实际 shell 名");
+        assertTrue(desc.contains("在系统上用 " + CodexCommandExecutor.shellDisplay() + " 执行真实 OS 命令"),
+                "首句含探测展示名(PowerShell <版本> 或 cmd)");
+        assertFalse(desc.contains("实际执行 shell="), "独立 shell 子句已退役(第五批)");
     }
 }

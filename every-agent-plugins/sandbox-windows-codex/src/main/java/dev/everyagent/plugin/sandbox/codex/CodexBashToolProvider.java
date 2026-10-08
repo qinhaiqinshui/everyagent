@@ -62,18 +62,21 @@ public class CodexBashToolProvider implements ToolProvider {
         // 后端不得在此私自加回——唯一例外:搜索显式路径子句经 §7.10 恢复协议由用户决策
         // 恢复(2026-12),四后端同口径。rg 提示按解析结果条件化(详见类注释):三档皆无时
         // 如实说明,不谎报「已加入 PATH」;优势压到一行,给可信的区分依据而非空喊「性能更好」。
-        // 「实际执行 shell=<exe>」保留:#4 连接符版本细则删除后,版本判断依据只剩这一处。
+        // shell 身份(名称+版本)并入描述首句(§7.10 第五批,2026-12):独立子句「实际执行
+        // shell=<exe>」退役;首句 shell 名不硬编码——探测兜底到 cmd 时如实报 cmd(cmd 是
+        // 执行器真实分支),PowerShell 时报名称+版本(一次 spawn 探测,失败降级 7+/5.1),
+        // &&/|| 等版本判断依据对模型仍可见。
         String rgNote = rg.available()
                 ? "内容搜索用 rg(已在 PATH,尊重 .gitignore,全仓递归远快于 findstr;"
-                        + "未给文件参数时会改读空 stdin,务必显式给出路径如 rg <pattern> .);"
-                : "rg 不可用,内容搜索改用 Select-String;";
+                        + "未给文件参数时会改读空 stdin,务必显式给出路径如 rg <pattern> .)"
+                : "rg 不可用,内容搜索改用 Select-String";
         // git 身份提示已随第四批退役(2026-12):执行器 injectGitConfig 经 GIT_CONFIG env
         // 注入 user.name/user.email,裸 git commit 直接成功——描述不再携带任何 git 指引
         // (护栏:backendDoesNotReAddPrunedBaselineClaims 断言「提交须带」「user.name」不在场)。
-        return List.of(ShellTool.powershell("在系统上用 PowerShell 执行真实 OS 命令;"
-                        + "命令工作目录默认为任务工作区根;"
-                        + rgNote
-                        + "实际执行 shell=" + CodexCommandExecutor.detectShell().exe + "。",
+        return List.of(ShellTool.powershell("在系统上用 "
+                        + CodexCommandExecutor.shellDisplay()
+                        + " 执行真实 OS 命令;命令工作目录默认为任务工作区根;"
+                        + rgNote + "。",
                 exec::execute).callback());
     }
 }

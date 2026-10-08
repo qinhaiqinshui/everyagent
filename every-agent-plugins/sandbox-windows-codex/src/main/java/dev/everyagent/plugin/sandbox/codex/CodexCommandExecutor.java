@@ -30,6 +30,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 /**
  * codex 沙箱自己的命令执行器（设计文档 §2.8/§5，形态对照 WslUbuntuCommandExecutor）。
@@ -650,8 +651,75 @@ public final class CodexCommandExecutor {
         }
     }
 
+    /**
+     * 探测 shell 的展示名(名称+版本,进程级缓存)——描述首句用(§7.10 第五批),首句不得
+     * 硬编码 "PowerShell"。pwsh/powershell → {@code "PowerShell <major.minor>"}(版本经
+     * 一次 spawn 探测 {@code $PSVersionTable},失败降级保守标注 pwsh→7+ / powershell→5.1);
+     * cmd → {@code "cmd"}(无版本概念;cmd 兜底是执行器真实分支,isPowerShell=false 走
+     * 原生 argv 路径,如实报 cmd 防止模型按 PowerShell 语法写命令)。
+     */
+    static String shellDisplay() {
+        String cached = cachedDisplay;
+        if (cached != null) {
+            return cached;
+        }
+        synchronized (CodexCommandExecutor.class) {
+            if (cachedDisplay != null) {
+                return cachedDisplay;
+            }
+            ShellChoice choice = detectShell();
+            String display;
+            if (choice.isPowerShell) {
+                String version = probeShellVersion(choice);
+                display = "PowerShell " + (version != null ? version
+                        : choice == ShellChoice.PWSH ? "7+" : "5.1");
+            } else {
+                display = "cmd";
+            }
+            cachedDisplay = display;
+            LOG.log(System.Logger.Level.INFO, "[shell] display: {0}", display);
+            return display;
+        }
+    }
+
+    /** 一次 spawn 探测 PS 版本(major.minor,如 7.5.0→7.5);未找到/超时/失败 → null(降级由 shellDisplay 处理)。 */
+    private static String probeShellVersion(ShellChoice choice) {
+        String exePath = findInPath(choice.exe);
+        if (exePath == null) {
+            return null;
+        }
+        Process p = null;
+        try {
+            p = new ProcessBuilder(exePath, "-NoProfile", "-NoLogo", "-NonInteractive",
+                    "-Command", "$PSVersionTable.PSVersion.ToString()")
+                    .redirectErrorStream(true).start();
+            if (!p.waitFor(10, TimeUnit.SECONDS) || p.exitValue() != 0) {
+                return null;
+            }
+            String raw = new String(p.getInputStream().readAllBytes(), StandardCharsets.UTF_8).trim();
+            String[] parts = raw.split("\\.");
+            if (parts.length >= 2 && parts[0].matches("\\d+") && parts[1].matches("\\d+")) {
+                return parts[0] + "." + parts[1];
+            }
+            return null;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return null;
+        } catch (Exception e) {
+            LOG.log(System.Logger.Level.WARNING, "[shell] 版本探测失败,降级保守标注: {0}", e.toString());
+            return null;
+        } finally {
+            if (p != null && p.isAlive()) {
+                p.destroyForcibly();
+            }
+        }
+    }
+
     /** 探测缓存（volatile 双检锁；static 全进程只探测一次）。 */
     private static volatile ShellChoice cachedShell;
+
+    /** shell 展示名缓存(名称+版本,与 cachedShell 同生命周期)。 */
+    private static volatile String cachedDisplay;
 
     /** PATH 中查找可执行文件；找到返回绝对路径，未找到返回 null。 */
     static String findInPath(String name) {
