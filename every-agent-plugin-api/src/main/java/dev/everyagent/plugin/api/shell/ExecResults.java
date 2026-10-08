@@ -64,8 +64,8 @@ public final class ExecResults {
      * 默认 <b>120 列</b>折行,外层拿到的是<b>已折好的字符串</b>、宽度再大也救不回来（实测同一
      * 200 字符属性：不加 guard 内层 maxLineLen=120、加 guard=200）。本项把默认宽直接对齐
      * {@link #OUT_STRING_WIDTH},使「加不加都完整」,于是描述<b>无需再提醒模型别自加</b>——
-     * 提示语与框架机制打架时,正解是在框架侧免疫而非往描述里加禁令(该决策已把提示删掉,见
-     * {@code ShellTool.POWERSHELL_BASELINE} javadoc)。值由 {@link #OUT_STRING_WIDTH} 派生
+     * 提示语与框架机制打架时,正解是在框架侧免疫而非往描述里加禁令(该决策已把提示删掉;原锚点
+     * {@code ShellTool.POWERSHELL_BASELINE} 已随「描述精简第三批」删除,记录现存 ARCHITECTURE §7.10)。值由 {@link #OUT_STRING_WIDTH} 派生
      * (编译期常量内联,不存在两处硬编码漂移);用户显式 {@code -Width} 仍优先,不覆盖其意图。
      * 位置在 PREFIX 独立行内,<b>不占用户命令行号</b>,故不影响 PositionMessage 定位质量。
      *
