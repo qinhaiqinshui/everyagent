@@ -19,6 +19,12 @@ import { ChevronDownIcon, CloseIcon } from '../shared/AppGlyphs'
 import SearchResultsTree from './SearchResultsTree'
 import TaskSearchResultsTree from './TaskSearchResultsTree'
 import { useWorkspaceSearch } from './useWorkspaceSearch'
+import {
+  FILES_TARGET_ID,
+  TASKS_TARGET_ID,
+  SEARCH_TARGETS,
+  resolveSearchTarget,
+} from './targets'
 
 /** 打开信号过期阈值:距上次打开超过该时长,认为搜索框内容已过期需清空。 */
 const SEARCH_PANEL_STALE_MS = 5 * 60 * 1000
@@ -118,8 +124,8 @@ export default function SearchPanel({
   const [scopeOpen, setScopeOpen] = React.useState(false)
   /** 搜索范围输入草稿（展开时初始化为当前范围，回车提交后生效）。 */
   const [scopeDraft, setScopeDraft] = React.useState('')
-  /** 搜索目标：files = 工作区文件内容（默认），tasks = 任务内容。 */
-  const [searchTarget, setSearchTarget] = React.useState<'files' | 'tasks'>('files')
+  /** 搜索目标 id：files = 工作区文件内容（默认），tasks = 任务内容；行为查注册表（targets/）。 */
+  const [searchTarget, setSearchTarget] = React.useState<string>(FILES_TARGET_ID)
   /** 折叠态的分组键集合（files 模式 = 文件路径，tasks 模式 = 任务 ID；FS 结果树展开策略由面板统一持有）。 */
   const [collapsedKeys, setCollapsedKeys] = React.useState<Set<string>>(new Set())
   const searchInputRef = React.useRef<InputRef | null>(null)
@@ -156,8 +162,12 @@ export default function SearchPanel({
     () => workspaceRegistry.workspacesOf(workerId).find((entry) => entry.root === workspaceRoot)?.id ?? '',
     [workerId, workspaceRoot, registry],
   )
-  /** 是否为任务内容搜索模式（该模式下隐藏文件语义的范围/过滤器选项）。 */
-  const isTasks = searchTarget === 'tasks'
+  /** 当前搜索目标定义（注册表查表；状态里的 id 异常时回落 files）。 */
+  const targetDefinition = resolveSearchTarget(searchTarget)
+  /** 目标能力快照：驱动选项显隐（替代原 isTasks 二值判定）。 */
+  const supportsFileNameMode = targetDefinition.supports.fileNameMode
+  const supportsScope = targetDefinition.supports.scope
+  const supportsGlobs = targetDefinition.supports.globs
 
   /** worker 下拉选项：label=workerId；事件预填的未注册 worker 补「（未注册）」占位展示。 */
   const workerSelectOptions = React.useMemo(() => {
@@ -247,24 +257,12 @@ export default function SearchPanel({
   /**
    * 发起搜索：以当前输入区全部选项与解析后的范围调用状态机（绑定未选齐时守卫不发起）。
    * rootPathOverride 用于范围输入框提交时按新范围立即搜索（绕过 React 状态异步更新的闭包旧值）。
-   * 任务内容模式走 worker 侧 task.search：范围沿用当前 worker + 当前工作区（workspaceId）。
+   * 全部选项原样交给状态机，由目标定义（targets/）的 buildParams 按需取用：任务目标
+   * 走 worker 侧 task.search（范围沿用当前 worker + 当前工作区 workspaceId，忽略文件
+   * 语义的范围/过滤器/文件名模式）；文件目标走 fs.search / fs.find。
    */
   const runSearch = React.useCallback((rootPathOverride?: string) => {
     if (!bindingReady) return
-    if (isTasks) {
-      void search.run({
-        pattern: query,
-        useRegex,
-        caseSensitive,
-        wholeWord,
-        workspaceRoot,
-        rootPath: '',
-        target: 'tasks',
-        workerId,
-        workspaceId: currentWorkspaceId,
-      })
-      return
-    }
     void search.run({
       pattern: query,
       useRegex,
@@ -274,10 +272,12 @@ export default function SearchPanel({
       excludePatterns: excludePatterns.trim() || undefined,
       workspaceRoot,
       rootPath: rootPathOverride ?? scopeRootPath,
-      target: 'files',
+      target: searchTarget,
       matchMode: nameOnly ? 'name' : 'content',
+      workerId,
+      workspaceId: currentWorkspaceId,
     })
-  }, [bindingReady, caseSensitive, currentWorkspaceId, excludePatterns, includePatterns, isTasks, nameOnly, query, scopeRootPath, search, useRegex, workerId, workspaceRoot])
+  }, [bindingReady, caseSensitive, currentWorkspaceId, excludePatterns, includePatterns, nameOnly, query, scopeRootPath, search, searchTarget, useRegex, workerId, workspaceRoot])
 
   /** 是否存在已生效的非根范围（范围行据此展示，菜单项据此切换「添加/移除」）。 */
   const hasScope = Boolean(activeScope && scopeRootPath)
@@ -307,31 +307,37 @@ export default function SearchPanel({
 
   /**
    * 「更多」菜单项：目标切换 + 添加/移除搜索范围与包含/排除过滤器。
-   * - 首项「搜索任务内容 / 搜索工作区文件」切换目标（任务模式高亮）；
-   * - 文件模式附加范围与两个过滤器项（三项相互独立：范围项在「已设置范围 / 展开输入框」
-   *   时切换为移除，过滤器两项各自切换对应输入区的显隐）。
+   * - 目标切换项按注册表（SEARCH_TARGETS）渲染当前目标之外的其余目标，label 取目标
+   *   定义；当前目标的 highlightMenuWhenCurrent 决定切换项高亮（任务模式高亮的既有
+   *   语义）；切到不支持范围/glob 的目标时对应输入区随之收起（搜索范围保留由
+   *   runSearch 忽略）；
+   * - 支持文件语义选项的目标（supports.scope / supports.globs）附加范围与两个过滤器
+   *   项（三项相互独立：范围项在「已设置范围 / 展开输入框」时切换为移除，过滤器两项
+   *   各自切换对应输入区的显隐）。
    */
   const moreItems: MoreActionItem[] = [
-    {
-      key: 'target',
-      label: isTasks ? '搜索工作区文件' : '搜索任务内容',
-      active: isTasks,
-      onSelect: () => {
-        const next = searchTarget === 'tasks' ? 'files' : 'tasks'
-        if (next === 'tasks') {
-          // 切到任务模式：文件语义的范围/过滤器输入随之收起（搜索范围保留由 runSearch 忽略）。
-          setScopeOpen(false)
-          setIncludeOpen(false)
-          setExcludeOpen(false)
-        }
-        setSearchTarget(next)
-        // 清空旧目标的结果/错误/在途查询：两种目标的结果对象形状不同，混用渲染会错乱。
-        searchReset()
-      },
-    },
-    ...(isTasks
-      ? []
-      : [
+    ...SEARCH_TARGETS
+      .filter((target) => target.id !== targetDefinition.id)
+      .map((target): MoreActionItem => ({
+        key: `target-${target.id}`,
+        label: target.label,
+        active: targetDefinition.highlightMenuWhenCurrent,
+        onSelect: () => {
+          // 切到不支持文件语义选项的目标：对应输入区随之收起（搜索范围保留由 runSearch 忽略）。
+          if (!target.supports.scope) {
+            setScopeOpen(false)
+          }
+          if (!target.supports.globs) {
+            setIncludeOpen(false)
+            setExcludeOpen(false)
+          }
+          setSearchTarget(target.id)
+          // 清空旧目标的结果/错误/在途查询：不同目标的结果对象形状不同，混用渲染会错乱。
+          searchReset()
+        },
+      })),
+    ...(supportsScope
+      ? [
         {
           key: 'scope',
           label: hasScope || scopeOpen ? '移除搜索范围' : '添加搜索范围',
@@ -348,6 +354,10 @@ export default function SearchPanel({
             }
           },
         },
+      ]
+      : []),
+    ...(supportsGlobs
+      ? [
         {
           key: 'include-filter',
           label: includeOpen ? '移除包含过滤器' : '添加包含过滤器',
@@ -360,13 +370,14 @@ export default function SearchPanel({
           active: excludeOpen,
           onSelect: () => setExcludeOpen((current) => !current),
         },
-      ]),
+      ]
+      : []),
   ]
 
   /**
    * 新结果落地时重置折叠策略：
    * 命中数 > 10 的分组默认折叠；全部结果只有 1 个分组且命中 < 50 时全部展开。
-   * files 模式分组键 = 文件路径，tasks 模式分组键 = 任务 ID。
+   * 分组键由目标定义提取：files = 文件路径，tasks = 任务 ID。
    */
   React.useEffect(() => {
     const result = search.result
@@ -378,22 +389,12 @@ export default function SearchPanel({
       setCollapsedKeys(new Set())
       return
     }
-    if (isTasks) {
-      const taskResult = result as TaskContentSearchResult
-      setCollapsedKeys(new Set(
-        taskResult.files
-          .filter((task) => (task.matches?.length ?? 0) > 10)
-          .map((task) => task.taskId),
-      ))
-    } else {
-      const fileResult = result as WorkspaceContentSearchResult
-      setCollapsedKeys(new Set(
-        fileResult.files
-          .filter((file) => (file.matches?.length ?? 0) > 10)
-          .map((file) => file.path),
-      ))
-    }
-  }, [isTasks, search.result])
+    setCollapsedKeys(new Set(
+      targetDefinition.resultGroups(result)
+        .filter((group) => group.matches > 10)
+        .map((group) => group.key),
+    ))
+  }, [search.result, targetDefinition])
 
   const workspaceRootRef = React.useRef(workspaceRoot)
   workspaceRootRef.current = workspaceRoot
@@ -428,7 +429,7 @@ export default function SearchPanel({
       if (!task?.workerId || !task.workspace) return false
       setWorkerId(task.workerId)
       setWorkspaceRoot(task.workspace)
-      setSearchTarget('tasks')
+      setSearchTarget(TASKS_TARGET_ID)
       // 任务模式:范围/包含/排除过滤器属文件语义,一并收起清空。
       setScope(null)
       setScopeOpen(false)
@@ -442,7 +443,7 @@ export default function SearchPanel({
       if (!fileWorkerId) return false
       setWorkerId(fileWorkerId)
       setWorkspaceRoot(tab.workspaceRoot)
-      setSearchTarget('files')
+      setSearchTarget(FILES_TARGET_ID)
       setScope(null)
       setScopeOpen(false)
       searchReset()
@@ -451,7 +452,7 @@ export default function SearchPanel({
     if (tab.tabType === 'terminal') {
       setWorkerId(tab.workerId)
       setWorkspaceRoot(tab.workspaceRoot)
-      setSearchTarget('files')
+      setSearchTarget(FILES_TARGET_ID)
       setScope(null)
       setScopeOpen(false)
       searchReset()
@@ -504,25 +505,27 @@ export default function SearchPanel({
   /**
    * 资源管理器跳转:以事件为准同时落定 worker/工作区绑定与搜索范围并聚焦输入框
    * (worker/root 不在候选里也保留,下拉补「(未注册)」选项展示)。
+   * 事件 target 放宽为 string:接收处查注册表校验,未知/缺省 id 回落 files
+   * (发射方零改动);不支持范围的目标走文件语义选项收起清空分支。
    */
   React.useEffect(() => {
     if (!listenWorkspaceSearchRequested) return
     const unsubscribe = domainEventBus.subscribe(
       DOMAIN_EVENTS.WORKSPACE_SEARCH_PANEL_REQUESTED,
       ({ workerId: requestedWorkerId, workspaceRoot: requestedWorkspaceRoot, rootPath, label, target }) => {
+        const requestedDefinition = resolveSearchTarget(target)
         setWorkerId(requestedWorkerId)
         setWorkspaceRoot(requestedWorkspaceRoot)
-        if (target === 'tasks') {
-          // 任务内容搜索目标:范围/包含/排除过滤器属文件语义,一并收起清空。
-          setSearchTarget('tasks')
+        setSearchTarget(requestedDefinition.id)
+        if (requestedDefinition.supports.scope) {
+          setScope({ workspaceRoot: requestedWorkspaceRoot, rootPath, label })
+          setScopeOpen(false)
+        } else {
+          // 该目标不支持文件语义的范围:范围/包含/排除过滤器一并收起清空。
           setScope(null)
           setScopeOpen(false)
           setIncludeOpen(false)
           setExcludeOpen(false)
-        } else {
-          setSearchTarget('files')
-          setScope({ workspaceRoot: requestedWorkspaceRoot, rootPath, label })
-          setScopeOpen(false)
         }
         // 绑定随事件变化，旧工作区结果作废。
         searchReset()
@@ -575,12 +578,9 @@ export default function SearchPanel({
     setCollapsedKeys((current) => {
       const result = search.result
       if (!result) return current
-      if (isTasks) {
-        return new Set((result as TaskContentSearchResult).files.map((task) => task.taskId))
-      }
-      return new Set((result as WorkspaceContentSearchResult).files.map((file) => file.path))
+      return new Set(targetDefinition.resultGroups(result).map((group) => group.key))
     })
-  }, [isTasks, search.result])
+  }, [search.result, targetDefinition])
 
   const expandAll = React.useCallback(() => {
     setCollapsedKeys(new Set())
@@ -619,7 +619,7 @@ export default function SearchPanel({
         setUseRegex((current) => !current)
         return
       }
-      if (key === 'n' && !isTasks) {
+      if (key === 'n' && supportsFileNameMode) {
         event.preventDefault()
         setNameOnly((current) => !current)
         return
@@ -635,7 +635,7 @@ export default function SearchPanel({
   const showNoMatch = search.status === 'done' && result !== null && result.matchCount === 0
   const showSearchingHint = searching && !result
   const showIntroHint = !bindingReady || (search.status === 'idle' && !result)
-  /** 空态引导文案：区分「暂无 worker/工作区」与「输入关键词搜索」。 */
+  /** 空态引导文案：区分「暂无 worker/工作区」与目标定义的输入引导。 */
   const introHint = !bindingReady
     ? (!workerOptions.length && !workerId
       ? '暂无可搜索的 worker，连接并注册工作区后可搜索。'
@@ -644,11 +644,7 @@ export default function SearchPanel({
         : workspaceOptions.length
           ? '请先选择工作区。'
           : '暂无可搜索的工作区。')
-    : isTasks
-      ? '输入关键词搜索当前工作区的任务内容'
-      : nameOnly
-        ? '输入关键词搜索工作区文件名'
-        : '输入关键词搜索工作区文件内容'
+    : targetDefinition.introHint({ nameOnly })
 
   return (
     <div style={panelStyle}>
@@ -682,11 +678,7 @@ export default function SearchPanel({
             value={query}
             placeholder={!bindingReady
               ? '请先选择 worker 与工作区'
-              : isTasks
-                ? '搜索任务内容（支持正则）'
-                : nameOnly
-                  ? '搜索文件名（支持正则）'
-                  : '搜索（支持正则）'}
+              : targetDefinition.placeholder({ nameOnly })}
             status={search.regexInvalid ? 'error' : undefined}
             onChange={(event) => setQuery(event.target.value)}
             onKeyDown={handleSearchInputKeyDown}
@@ -711,7 +703,7 @@ export default function SearchPanel({
                   active={useRegex}
                   onClick={() => setUseRegex((current) => !current)}
                 />
-                {!isTasks ? (
+                {supportsFileNameMode ? (
                   <SearchToggleButton
                     label="fn"
                     title="仅搜索文件名 (Alt+N)"
@@ -739,7 +731,7 @@ export default function SearchPanel({
           )}
         </div>
 
-        {!isTasks && (scopeOpen || includeOpen || excludeOpen) ? (
+        {(supportsScope && scopeOpen) || (supportsGlobs && (includeOpen || excludeOpen)) ? (
           <div style={filtersStyle}>
             {scopeOpen ? (
               <Input
@@ -793,7 +785,7 @@ export default function SearchPanel({
           </div>
         ) : null}
 
-        {!isTasks && activeScope && scopeRootPath ? (
+        {supportsScope && activeScope && scopeRootPath ? (
           <div style={scopeRowStyle} title={`${activeScope.workspaceRoot}${toBusinessAbsolutePath(scopeRootPath)}`}>
             <span style={scopeLabelStyle}>搜索范围：{scopeRootPath}</span>
             <IconButton
@@ -815,7 +807,7 @@ export default function SearchPanel({
         {showSearchingHint ? <div style={centerHintStyle}>搜索中…</div> : null}
         {showNoMatch ? <div style={centerHintStyle}>未找到匹配</div> : null}
         {result && result.matchCount > 0 ? (
-          isTasks ? (
+          targetDefinition.resultTree === 'tasks' ? (
             <TaskSearchResultsTree
               result={result as TaskContentSearchResult}
               collapsedTasks={collapsedKeys}

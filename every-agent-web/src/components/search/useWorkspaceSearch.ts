@@ -1,8 +1,7 @@
 import React from 'react'
 import { type WorkspaceContentSearchResult } from '@/query/workspaceContentSearch'
-import { workspaceGateway } from '@/platform/fs/workspaceGateway'
-import { INTERNAL_DIR_NAMES, normalizeWorkspaceRelativePath } from '@/platform/fs/pathUtils'
-import { searchTasksContent, type TaskContentSearchResult } from '@/query/taskContentSearch'
+import { type TaskContentSearchResult } from '@/query/taskContentSearch'
+import { getSearchTarget, type SearchTargetDefinition } from './targets'
 
 /** 搜索执行状态机：未搜索 / 搜索中 / 完成 / 出错。 */
 export type WorkspaceSearchStatus = 'idle' | 'searching' | 'done' | 'error'
@@ -27,8 +26,8 @@ export interface WorkspaceSearchRunOptions {
   rootPath: string
   /** 是否枚举内部保留目录（默认 false，与资源管理器默认一致）。 */
   includeInternalFiles?: boolean
-  /** 搜索目标：files = 工作区文件内容（默认），tasks = 任务内容。 */
-  target?: 'files' | 'tasks'
+  /** 搜索目标 id:files = 工作区文件内容(默认),tasks = 任务内容;查注册表(targets/)路由,未知 id 报错。 */
+  target?: string
   /** 匹配维度：content = 逐行搜内容（默认），name = 仅按文件名匹配（不读内容）。仅 files 模式生效。 */
   matchMode?: 'content' | 'name'
   /** 任务内容搜索目标 worker（仅 tasks 模式；files 模式忽略）。 */
@@ -41,9 +40,6 @@ export interface WorkspaceSearchRunOptions {
 export type WorkspaceSearchResultShape = WorkspaceContentSearchResult | TaskContentSearchResult
 
 const REGEX_META_PATTERN = /[.*+?^${}()|[\]\\]/g
-
-/** 内部保留目录(如 .git)的逗号串:搜索路径追加进 excludeGlobs(rg --hidden 会进 .git)。 */
-const INTERNAL_DIR_GLOBS = Array.from(INTERNAL_DIR_NAMES).join(',')
 
 /**
  * 编译搜索正则。
@@ -70,13 +66,15 @@ export function buildWorkspaceSearchRegExp(
 /**
  * 工作区内容搜索状态 Hook（仿 VSCode 搜索面板的状态机）。
  *
- * - 状态：idle / searching / done / error，结果为算法层的 WorkspaceContentSearchResult；
+ * - 状态：idle / searching / done / error，结果为目标定义声明的统一结果形状；
  * - 查询代际取消：每次发起/取消递增 generation ref，结果落地前核对代际、过期丢弃
  *   （不覆盖新查询或取消后的状态）；rpc 层无现成取消机制（hub-client 只有超时与
  *   断连 failPending），在途查询同样按代际丢弃；
- * - 数据源：worker 内置 rg 的 fs.search（内容）/ fs.find（文件名），搜索范围
- *   （rootPath）经可选 path 参数下推给 rg（缺省整根）；前端不编译正则、不逐目录
- *   walk，不保留纯前端降级路径（需 worker ≥ fs.find 版本）。
+ * - 目标路由查注册表（./targets）：参数组装（buildParams）与 RPC 选择（execute，
+ *   worker 内置 rg 的 fs.search 内容 / fs.find 文件名、task.search 任务内容）均由
+ *   SearchTargetDefinition 承担，本 Hook 不再按 target 二值分支；搜索范围（rootPath）
+ *   经可选 path 参数下推给 rg（缺省整根）；前端不编译正则、不逐目录 walk，不保留
+ *   纯前端降级路径（需 worker ≥ fs.find 版本）。
  */
 export function useWorkspaceSearch() {
   const [status, setStatus] = React.useState<WorkspaceSearchStatus>('idle')
@@ -91,6 +89,8 @@ export function useWorkspaceSearch() {
   resultRef.current = result
   /** 最近完成搜索的匹配维度（摘要文案区分「结果/文件」）；与 setResult 同一轮更新，memo 以 result 变化触发重算。 */
   const resultMatchModeRef = React.useRef<'content' | 'name'>('content')
+  /** 最近完成搜索的目标定义（摘要文案按目标 summarize 生成）；与 setResult 同一轮更新。 */
+  const resultTargetRef = React.useRef<SearchTargetDefinition | null>(null)
 
   const run = React.useCallback(async (options: WorkspaceSearchRunOptions) => {
     const pattern = options.pattern.trim()
@@ -113,71 +113,27 @@ export function useWorkspaceSearch() {
     generationRef.current = generation
     setStatus('searching')
     try {
-      // 任务内容搜索：worker 侧 task.search（rg + 后处理），不走文件 walk/fs.search。
-      if ((options.target ?? 'files') === 'tasks') {
-        if (!options.workerId) {
-          setError('请先选择 worker')
-          setStatus('error')
-          return
-        }
-        if (!options.workspaceId) {
-          setError('当前工作区不支持任务内容搜索（缺少 workspaceId）')
-          setStatus('error')
-          return
-        }
-        try {
-          const taskResult = await searchTasksContent(options.workerId, {
-            workspaceId: options.workspaceId,
-            pattern,
-            isRegex: options.useRegex,
-            caseSensitive: options.caseSensitive,
-            wholeWord: options.wholeWord,
-            maxResults: 500,
-          })
-          if (generationRef.current !== generation) {
-            return
-          }
-          setResult(taskResult)
-          setStatus('done')
-        } catch (taskError) {
-          if (generationRef.current !== generation) {
-            return
-          }
-          setResult(null)
-          setError(taskError instanceof Error ? taskError.message : String(taskError))
-          setStatus('error')
-        }
+      // 目标路由查注册表(targets/):参数组装与 RPC 选择由目标定义承担,状态机只管
+      // 代际取消与结果落地;缺省 target 视为 files,未知 id 报错不发起。
+      const definition = getSearchTarget(options.target ?? 'files')
+      if (!definition) {
+        setError(`未知搜索目标：${options.target}`)
+        setStatus('error')
         return
       }
-      const matchMode = options.matchMode ?? 'content'
-      // 文件搜索统一走 worker 内置 rg（架构 §7 契约表）：内容 = fs.search、文件名 =
-      // fs.find；搜索范围（rootPath，业务绝对形态先归一为工作区相对路径）经可选 path
-      // 参数下推给 rg（缺省整根），不再前端逐目录 walk（原路径中型仓库即数千次串行
-      // fs.list RPC，且单个不可读条目会整树报错）。pattern 与开关原样透传，由 worker
-      // 侧 rg / Java 正则语义解释（字面量 --fixed-strings / 全字 \b 包裹）；非法正则
-      // 已在前面的预检拦下。includeInternalFiles=false 时内部保留目录（如 .git）追加
-      // 进排除 glob（rg --hidden 会进 .git）。
-      const searchParams = {
-        pattern,
-        isRegex: options.useRegex,
-        caseSensitive: options.caseSensitive,
-        wholeWord: options.wholeWord,
-        includeGlobs: options.includePatterns,
-        excludeGlobs: options.includeInternalFiles
-          ? options.excludePatterns
-          : [options.excludePatterns, INTERNAL_DIR_GLOBS].filter(Boolean).join(','),
-        // 命中上限与内容搜索一致（文件名搜索按文件计）。
-        maxResults: 1000,
-        path: normalizeWorkspaceRelativePath(options.rootPath),
+      const execution = definition.buildParams(options)
+      if ('error' in execution) {
+        setError(execution.error)
+        setStatus('error')
+        return
       }
-      const nextResult: WorkspaceContentSearchResult = matchMode === 'name'
-        ? await workspaceGateway.findNames(options.workspaceRoot, searchParams)
-        : await workspaceGateway.search(options.workspaceRoot, searchParams)
+      const nextResult = await definition.execute(execution)
       if (generationRef.current !== generation) {
         // 过期查询（已取消 / 已被新查询取代），丢弃结果。
         return
       }
-      resultMatchModeRef.current = matchMode
+      resultMatchModeRef.current = options.matchMode ?? 'content'
+      resultTargetRef.current = definition
       setResult(nextResult)
       setStatus('done')
     } catch (runError) {
@@ -214,7 +170,7 @@ export function useWorkspaceSearch() {
     setStatus('idle')
   }, [])
 
-  /** 摘要文案：搜索中提示 / 完成后的「N 个结果 · M 个文件（截断说明）」。 */
+  /** 摘要文案：搜索中提示 / 完成后由目标定义 summarize 生成（「N 个结果 · M 个文件（截断说明）」等）。 */
   const summary = React.useMemo(() => {
     if (status === 'searching') {
       return '搜索中…'
@@ -222,12 +178,11 @@ export function useWorkspaceSearch() {
     if (status !== 'done' || !result) {
       return ''
     }
-    const truncatedSuffix = result.truncated ? '（已达上限，结果被截断）' : ''
-    // 文件名搜索：每个命中即一个文件（fs.find 结果项无 matches），摘要以「N 个文件」表述。
-    if (resultMatchModeRef.current === 'name') {
-      return `${result.files.length} 个文件${truncatedSuffix}`
+    const definition = resultTargetRef.current
+    if (!definition) {
+      return ''
     }
-    return `${result.matchCount} 个结果 · ${result.files.length} 个文件${truncatedSuffix}`
+    return definition.summarize(result, resultMatchModeRef.current)
   }, [result, status])
 
   return {

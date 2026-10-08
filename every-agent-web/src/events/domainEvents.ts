@@ -117,8 +117,8 @@ export type DomainEventMap = {
     rootPath: string
     /** 范围显示名（目录名或「工作区根目录」）。 */
     label: string
-    /** 搜索目标：files = 工作区文件（默认，资源管理器跳转）；tasks = 任务内容（任务列表工作区组跳转）。 */
-    target?: 'files' | 'tasks'
+    /** 搜索目标 id：files = 工作区文件（默认，资源管理器跳转）；tasks = 任务内容（任务列表工作区组跳转）。未知 id 由接收方查注册表校验后回落 files。 */
+    target?: string
   }
   [DOMAIN_EVENTS.WORKSPACE_REGISTRY_CHANGED]: {
     /** 默认工作区根(worker 机器上的绝对路径,始终在册)。 */
