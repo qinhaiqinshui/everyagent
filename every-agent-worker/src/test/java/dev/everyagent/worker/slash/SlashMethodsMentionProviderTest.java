@@ -74,7 +74,8 @@ class SlashMethodsMentionProviderTest {
                 new WorkspaceManager.Root(ws, ws.toRealPath()));
         registry = new SearchProviderRegistry();
         new SlashMethods(dispatcher, new SlashCommandRegistry(), workspaces,
-                mock(SlashTaskScopeStore.class), registry);
+                mock(SlashTaskScopeStore.class), registry,
+                new dev.everyagent.worker.config.WorkerProperties());
     }
 
     // ---- 帮助:桩 / 收发 ----

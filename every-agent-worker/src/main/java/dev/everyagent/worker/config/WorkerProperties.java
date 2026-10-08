@@ -66,6 +66,8 @@ public class WorkerProperties implements WorkerConfig {
     private Tools tools = new Tools();
     /** 模型配置(只读,config.get 的唯一数据源):默认在 application.yml,用户可在 application-worker.yaml 覆盖整表。 */
     private List<Model> models = new ArrayList<>();
+    /** 搜索限制配置(架构 §8.5「搜索限制配置化」,键 worker.search.*)。 */
+    private Search search = new Search();
 
     /**
      * 模型配置项(Spring 配置绑定用可变 POJO;ConfigStore 启动时转为不可变快照)。
@@ -1448,6 +1450,14 @@ public class WorkerProperties implements WorkerConfig {
         this.tools = tools;
     }
 
+    public Search getSearch() {
+        return search;
+    }
+
+    public void setSearch(Search search) {
+        this.search = search == null ? new Search() : search;
+    }
+
     public List<Model> getModels() {
         return models;
     }
@@ -1470,6 +1480,89 @@ public class WorkerProperties implements WorkerConfig {
 
         public void setRgPath(String rgPath) {
             this.rgPath = rgPath;
+        }
+    }
+
+    /**
+     * 搜索限制配置(架构 §8.5「搜索限制配置化」/§7.17):搜索相关限制由服务内散落常量
+     * 收编为本配置(与 {@code worker.models}/{@code worker.sandbox} 同一命名空间),
+     * <b>默认值与既有行为完全一致</b>;键清单 {@code worker.search.*}。
+     */
+    public static class Search {
+        /** rg 进程超时(ms):超时强杀,返回已完成部分并置 truncated。默认 60000。 */
+        private long rgTimeoutMs = 60_000;
+        /**
+         * 文件结果上限缺省({@code fs.search}/{@code fs.find} 的 maxResults 入参缺省值;
+         * 触顶即 kill rg 置 truncated)。默认 1000。
+         */
+        private int fileMaxResults = 1000;
+        /** 任务结果上限缺省({@code task.search} 的 maxResults 入参缺省值)。默认 500。 */
+        private int taskMaxResults = 500;
+        /**
+         * 应答内联阈值(字节):搜索应答序列化总字节数不超过该值即整包内联进 rpc.ok。
+         * 默认 262144(与 fs.read 的 {@code FsService.INLINE_MAX} 同值,复用其 rpc.data
+         * 口径 §5.4;<b>仅作用于搜索应答</b>,fs.read 自身行为不变)。
+         */
+        private int inlineMaxBytes = 262144;
+        /**
+         * 切批阈值(字节):搜索应答超过内联阈值时按该值切批走 rpc.data(批项 = 完整
+         * 文件/任务项,不撕裂;复用 fs.read 口径 §5.4;<b>仅作用于搜索应答</b>,
+         * fs.read 自身行为不变)。默认 196608。
+         */
+        private int chunkBytes = 196608;
+        /**
+         * 单 provider 超时预算(ms):fs.search/fs.find/task.search/mention.query 的插件
+         * SearchProvider 系能力调用护栏(SearchProviderInvoker)。0 = 不限时(仅异常护栏,
+         * 与机制引入前的行为一致);超时按异常同款处理 WARN 跳过。默认 0。
+         */
+        private long providerTimeoutMs = 0;
+
+        public long getRgTimeoutMs() {
+            return rgTimeoutMs;
+        }
+
+        public void setRgTimeoutMs(long rgTimeoutMs) {
+            this.rgTimeoutMs = rgTimeoutMs;
+        }
+
+        public int getFileMaxResults() {
+            return fileMaxResults;
+        }
+
+        public void setFileMaxResults(int fileMaxResults) {
+            this.fileMaxResults = fileMaxResults;
+        }
+
+        public int getTaskMaxResults() {
+            return taskMaxResults;
+        }
+
+        public void setTaskMaxResults(int taskMaxResults) {
+            this.taskMaxResults = taskMaxResults;
+        }
+
+        public int getInlineMaxBytes() {
+            return inlineMaxBytes;
+        }
+
+        public void setInlineMaxBytes(int inlineMaxBytes) {
+            this.inlineMaxBytes = inlineMaxBytes;
+        }
+
+        public int getChunkBytes() {
+            return chunkBytes;
+        }
+
+        public void setChunkBytes(int chunkBytes) {
+            this.chunkBytes = chunkBytes;
+        }
+
+        public long getProviderTimeoutMs() {
+            return providerTimeoutMs;
+        }
+
+        public void setProviderTimeoutMs(long providerTimeoutMs) {
+            this.providerTimeoutMs = providerTimeoutMs;
         }
     }
 

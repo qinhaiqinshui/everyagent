@@ -68,6 +68,9 @@ class FsSearchServiceTest {
     private boolean ready;
     private Path ws;
 
+    /** 不限时 provider 预算(0 = 仅异常护栏;与 worker.search.provider-timeout-ms 默认一致)。 */
+    private static final long NO_TIMEOUT = 0;
+
     @BeforeEach
     void setUp() throws Exception {
         // 环境栅栏:沙箱 TEMP 可能落在某个 git 工作树内,rg 会向上继承其 .gitignore
@@ -92,7 +95,7 @@ class FsSearchServiceTest {
                 provider, new dev.everyagent.worker.os.SandboxPathRegistry(new dev.everyagent.worker.os.OsSandbox(props, null)));
         workspaces.init();
         registry = new SearchProviderRegistry();
-        service = new FsSearchService(dispatcher, workspaces, new RipgrepBinary(props), registry);
+        service = new FsSearchService(dispatcher, workspaces, new RipgrepBinary(props), registry, props);
     }
 
     /** 测试环境 rg 定位:程序根 runtime/bin(IDE/打包)→ 模块父目录(maven,user.dir=模块)→ PATH。 */
@@ -572,7 +575,7 @@ class FsSearchServiceTest {
         WorkerProperties props = new WorkerProperties();
         props.getTools().setRgPath(tempDir.resolve("no-such-rg").toString());
         RpcDispatcher d = new RpcDispatcher(null, new WorkerProperties());
-        new FsSearchService(d, workspaces, new RipgrepBinary(props), new SearchProviderRegistry());
+        new FsSearchService(d, workspaces, new RipgrepBinary(props), new SearchProviderRegistry(), props);
         CountDownLatch replied = new CountDownLatch(1);
         List<Object[]> frames = new ArrayList<>();
         HubLink link = mock(HubLink.class);
@@ -696,7 +699,7 @@ class FsSearchServiceTest {
                 hit("b.md", 2, 4)))); // 新文件 → 新文件项
 
         FsSearchService.SearchOutcome merged = FsSearchService.mergeProviderResults(
-                builtIn, registry, anyReq(), 1000, FsSearchService.PROVIDER_TIMEOUT_MS);
+                builtIn, registry, anyReq(), 1000, NO_TIMEOUT);
 
         assertEquals(4, merged.matchCount(), "内置 2 + 新增 2(去重 1)");
         assertFalse(merged.truncated());
@@ -718,7 +721,7 @@ class FsSearchServiceTest {
                 hit("a.txt", 10, 0), hit("a.txt", 11, 0), hit("a.txt", 12, 0))));
 
         FsSearchService.SearchOutcome merged = FsSearchService.mergeProviderResults(
-                builtIn, registry, anyReq(), 3, FsSearchService.PROVIDER_TIMEOUT_MS);
+                builtIn, registry, anyReq(), 3, NO_TIMEOUT);
 
         assertEquals(3, merged.matchCount(), "触顶截断到 maxResults");
         assertTrue(merged.truncated(), "provider 命中未全量消费应置 truncated");
@@ -730,7 +733,7 @@ class FsSearchServiceTest {
     void emptyRegistryReturnsOutcomeUnchanged() {
         FsSearchService.SearchOutcome builtIn = outcomeOf("a.txt", 1);
         FsSearchService.SearchOutcome merged = FsSearchService.mergeProviderResults(
-                builtIn, new SearchProviderRegistry(), anyReq(), 1000, FsSearchService.PROVIDER_TIMEOUT_MS);
+                builtIn, new SearchProviderRegistry(), anyReq(), 1000, NO_TIMEOUT);
         assertSame(builtIn, merged, "无 provider 注册时原样返回(零行为变化)");
     }
 
@@ -740,7 +743,7 @@ class FsSearchServiceTest {
         SearchProviderRegistry registry = new SearchProviderRegistry();
         registry.register(new StubProvider("p1", List.of(hit("a.txt", 9, 0))));
         FsSearchService.SearchOutcome merged = FsSearchService.mergeProviderResults(
-                builtIn, registry, anyReq(), 2, FsSearchService.PROVIDER_TIMEOUT_MS);
+                builtIn, registry, anyReq(), 2, NO_TIMEOUT);
         assertSame(builtIn, merged, "内置已触顶时无预算可加,跳过 provider");
     }
 
@@ -750,7 +753,7 @@ class FsSearchServiceTest {
         registry.register(new StubProvider("bad", List.of(), new RuntimeException("boom")));
         registry.register(new StubProvider("good", List.of(hit("b.md", 5, 0))));
         FsSearchService.SearchOutcome merged = FsSearchService.mergeProviderResults(
-                outcomeOf("a.txt", 1), registry, anyReq(), 1000, FsSearchService.PROVIDER_TIMEOUT_MS);
+                outcomeOf("a.txt", 1), registry, anyReq(), 1000, NO_TIMEOUT);
         assertEquals(2, merged.matchCount(), "坏 provider 跳过,好 provider 照常合并");
         assertTrue(merged.files().containsKey("b.md"));
     }
@@ -762,7 +765,7 @@ class FsSearchServiceTest {
         registry.register(new StubProvider("empty", List.of()));
         FsSearchService.SearchOutcome builtIn = outcomeOf("a.txt", 1, 2);
         FsSearchService.SearchOutcome merged = FsSearchService.mergeProviderResults(
-                builtIn, registry, anyReq(), 1000, FsSearchService.PROVIDER_TIMEOUT_MS);
+                builtIn, registry, anyReq(), 1000, NO_TIMEOUT);
         assertEquals(2, merged.matchCount());
         assertEquals(1, merged.files().size(), "空/null 结果不产出文件项");
         assertFalse(merged.truncated());
@@ -794,7 +797,7 @@ class FsSearchServiceTest {
         registry.register(new StubProvider("slow", List.of(hit("slow.md", 5, 0)), 200));
 
         FsSearchService.SearchOutcome merged = FsSearchService.mergeProviderResults(
-                outcomeOf("a.txt", 1), registry, anyReq(), 1000, FsSearchService.PROVIDER_TIMEOUT_MS);
+                outcomeOf("a.txt", 1), registry, anyReq(), 1000, NO_TIMEOUT);
 
         assertEquals(2, merged.matchCount(), "不限时路径完整等待慢 provider: " + merged.matchCount());
         assertTrue(merged.files().containsKey("slow.md"));
@@ -825,7 +828,7 @@ class FsSearchServiceTest {
         RpcDispatcher d = new RpcDispatcher(null, new WorkerProperties());
         SearchProviderRegistry registry = new SearchProviderRegistry();
         registry.register(new StubProvider("p1", List.of(hit("doc/x.md", 4, 2))));
-        new FsSearchService(d, workspaces, new RipgrepBinary(props), registry);
+        new FsSearchService(d, workspaces, new RipgrepBinary(props), registry, props);
         CountDownLatch replied = new CountDownLatch(1);
         List<Object[]> frames = new ArrayList<>();
         HubLink link = mock(HubLink.class);
@@ -927,7 +930,7 @@ class FsSearchServiceTest {
                 found("generated/idx.md"))));
 
         FsSearchService.SearchOutcome merged = FsSearchService.mergeFindProviderResults(
-                builtIn, registry, anyFindReq(), 1000, FsSearchService.PROVIDER_TIMEOUT_MS);
+                builtIn, registry, anyFindReq(), 1000, NO_TIMEOUT);
 
         assertEquals(3, merged.matchCount(), "内置 2 + 新增 1(path 去重 2)");
         assertFalse(merged.truncated());
@@ -947,7 +950,7 @@ class FsSearchServiceTest {
                 found("a.md"), found("b.md"), found("c.md"))));
 
         FsSearchService.SearchOutcome merged = FsSearchService.mergeFindProviderResults(
-                builtIn, registry, anyFindReq(), 2, FsSearchService.PROVIDER_TIMEOUT_MS);
+                builtIn, registry, anyFindReq(), 2, NO_TIMEOUT);
 
         assertEquals(2, merged.matchCount(), "触顶截断到 maxResults");
         assertTrue(merged.truncated(), "provider 结果未全量消费应置 truncated");
@@ -962,12 +965,12 @@ class FsSearchServiceTest {
         // 空注册表:原样返回(零行为变化)
         assertSame(builtIn, FsSearchService.mergeFindProviderResults(
                 builtIn, new SearchProviderRegistry(), anyFindReq(), 1000,
-                FsSearchService.PROVIDER_TIMEOUT_MS));
+                NO_TIMEOUT));
         // 仅注册基接口实现(无 findFiles 能力):fs.find 不消费 → 原样返回
         SearchProviderRegistry baseOnly = new SearchProviderRegistry();
         baseOnly.register(new StubProvider("es", List.of()));
         assertSame(builtIn, FsSearchService.mergeFindProviderResults(
-                builtIn, baseOnly, anyFindReq(), 1000, FsSearchService.PROVIDER_TIMEOUT_MS));
+                builtIn, baseOnly, anyFindReq(), 1000, NO_TIMEOUT));
     }
 
     @Test
@@ -976,7 +979,7 @@ class FsSearchServiceTest {
         SearchProviderRegistry registry = new SearchProviderRegistry();
         registry.register(new StubNameProvider("p1", List.of(found("c.md"))));
         assertSame(builtIn, FsSearchService.mergeFindProviderResults(
-                builtIn, registry, anyFindReq(), 2, FsSearchService.PROVIDER_TIMEOUT_MS),
+                builtIn, registry, anyFindReq(), 2, NO_TIMEOUT),
                 "内置已触顶时无预算可加,跳过 provider");
     }
 
@@ -987,7 +990,7 @@ class FsSearchServiceTest {
         registry.register(new StubNameProvider("good", List.of(found("g.md"))));
         FsSearchService.SearchOutcome merged = FsSearchService.mergeFindProviderResults(
                 findOutcomeOf("a.txt"), registry, anyFindReq(), 1000,
-                FsSearchService.PROVIDER_TIMEOUT_MS);
+                NO_TIMEOUT);
         assertEquals(2, merged.matchCount(), "坏 provider 跳过,好 provider 照常合并");
         assertTrue(merged.files().containsKey("g.md"));
         assertFalse(merged.truncated());
@@ -1000,7 +1003,7 @@ class FsSearchServiceTest {
         registry.register(new StubNameProvider("empty", List.of()));
         FsSearchService.SearchOutcome builtIn = findOutcomeOf("a.txt");
         FsSearchService.SearchOutcome merged = FsSearchService.mergeFindProviderResults(
-                builtIn, registry, anyFindReq(), 1000, FsSearchService.PROVIDER_TIMEOUT_MS);
+                builtIn, registry, anyFindReq(), 1000, NO_TIMEOUT);
         assertEquals(1, merged.matchCount(), "空/null 结果不加项");
         assertFalse(merged.truncated());
     }
@@ -1046,7 +1049,7 @@ class FsSearchServiceTest {
         RpcDispatcher d = new RpcDispatcher(null, new WorkerProperties());
         SearchProviderRegistry reg = new SearchProviderRegistry();
         reg.register(new StubNameProvider("idx", List.of(found("doc/x.md"))));
-        new FsSearchService(d, workspaces, new RipgrepBinary(props), reg);
+        new FsSearchService(d, workspaces, new RipgrepBinary(props), reg, props);
         CountDownLatch replied = new CountDownLatch(1);
         List<Object[]> frames = new ArrayList<>();
         HubLink link = mock(HubLink.class);

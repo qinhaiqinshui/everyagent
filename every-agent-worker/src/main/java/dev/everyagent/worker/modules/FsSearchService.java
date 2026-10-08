@@ -1,6 +1,7 @@
 package dev.everyagent.worker.modules;
 
 import dev.everyagent.contract.json.Json;
+import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.proto.RpcMethods;
 import dev.everyagent.plugin.api.exception.BadParamsException;
 import dev.everyagent.plugin.api.spi.FileNameSearchProvider;
@@ -73,7 +74,7 @@ import java.util.regex.PatternSyntaxException;
  * 结果(按 {@code path+lineNumber+matchIndex} 去重、仍受 maxResults 触顶约束,见
  * {@link #mergeProviderResults});provider 抛异常/超出超时预算仅 WARN 跳过(超时预算
  * {@code worker.search.provider-timeout-ms},默认 0 不限时,见
- * {@link #PROVIDER_TIMEOUT_MS});注册表为空时零额外行为;rg 不可用但注册了 provider
+ * {@link WorkerProperties.Search});注册表为空时零额外行为;rg 不可用但注册了 provider
  * 时跳过内置 rg、仅聚合 provider 结果。
  *
  * <p><b>能力接口扩展(§8.5)</b>:fs.find 的增补聚合消费 {@link FileNameSearchProvider}
@@ -87,15 +88,9 @@ public class FsSearchService {
 
     private static final Logger log = LoggerFactory.getLogger(FsSearchService.class);
 
-    /** rg 进程超时(ms):超时强杀,返回已完成部分并置 truncated=true。 */
-    private static final long TIMEOUT_MS = 60_000;
-
     /** rg 正常退出码:0 = 无匹配、1 = 有匹配;其余(2 等)为错误。 */
     private static final int EXIT_NO_MATCH = 0;
     private static final int EXIT_MATCH = 1;
-
-    /** 触顶截断的默认命中上限(maxResults 缺省值;触顶即 kill rg,置 truncated)。 */
-    private static final int DEFAULT_MAX_RESULTS = 1000;
 
     /** 子进程 stdin 的 null 设备(命令 stdin 契约 §7.10,与 OsSandbox 同款):
      * 保持默认管道会让 rg 在无路径参数时误读 stdin;这里路径恒 {@code .} 不受影响,
@@ -108,29 +103,31 @@ public class FsSearchService {
     private final RipgrepBinary rg;
     private final SearchProviderRegistry searchProviders;
 
+    /** 搜索限制配置(架构 §8.5,worker.search.*):rg 超时/结果上限缺省/应答内联与切批阈值。 */
+    private final WorkerProperties.Search searchCfg;
+
     /**
-     * SearchProvider 单 provider 超时预算缺省(ms):0 = 不限时(仅异常护栏,与机制引入
-     * 前的行为一致)。配置键 {@code worker.search.provider-timeout-ms} 由后续配置装配
-     * 步骤接入 yml,本步以内部常量 + 可注入字段承载(见 {@link #providerTimeoutMs})。
+     * 当前生效的 provider 超时预算(ms);缺省取 {@code worker.search.provider-timeout-ms}
+     * (0 = 不限时,仅异常护栏,与机制引入前的行为一致)。
      */
-    static final long PROVIDER_TIMEOUT_MS = 0;
-
-    /** 当前生效的 provider 超时预算(ms);缺省 {@link #PROVIDER_TIMEOUT_MS}。 */
-    private long providerTimeoutMs = PROVIDER_TIMEOUT_MS;
+    private long providerTimeoutMs;
 
     /**
-     * 包级可见:注入 provider 超时预算(单测设小值验证预算机制;后续配置装配步骤接线)。
-     * ≤ 0 恢复不限时(同步直调,仅异常护栏)。
+     * 包级可见:覆盖 provider 超时预算(单测设小值验证预算机制;生产路径由
+     * {@code worker.search.provider-timeout-ms} 配置装配进构造)。≤ 0 恢复不限时
+     * (同步直调,仅异常护栏)。
      */
     void setProviderTimeoutMs(long providerTimeoutMs) {
         this.providerTimeoutMs = providerTimeoutMs;
     }
 
     public FsSearchService(RpcDispatcher dispatcher, WorkspaceManager workspaces, RipgrepBinary rg,
-            SearchProviderRegistry searchProviders) {
+            SearchProviderRegistry searchProviders, WorkerProperties props) {
         this.workspaces = workspaces;
         this.rg = rg;
         this.searchProviders = searchProviders;
+        this.searchCfg = props == null ? new WorkerProperties.Search() : props.getSearch();
+        this.providerTimeoutMs = searchCfg.getProviderTimeoutMs();
         dispatcher.register(RpcMethods.FS_SEARCH, this::search);
         dispatcher.register(RpcMethods.FS_FIND, this::find);
     }
@@ -152,7 +149,7 @@ public class FsSearchService {
         boolean wholeWord = boolParam(ctx, "wholeWord");
         List<String> include = splitGlobs(ctx.optStrParam("includeGlobs", ""));
         List<String> exclude = splitGlobs(ctx.optStrParam("excludeGlobs", ""));
-        long rawMax = ctx.optLongParam("maxResults", DEFAULT_MAX_RESULTS);
+        long rawMax = ctx.optLongParam("maxResults", searchCfg.getFileMaxResults());
         if (rawMax < 1) {
             throw new BadParamsException("maxResults 必须 ≥ 1: " + rawMax);
         }
@@ -199,7 +196,7 @@ public class FsSearchService {
         boolean wholeWord = boolParam(ctx, "wholeWord");
         List<String> include = splitGlobs(ctx.optStrParam("includeGlobs", ""));
         List<String> exclude = splitGlobs(ctx.optStrParam("excludeGlobs", ""));
-        long rawMax = ctx.optLongParam("maxResults", DEFAULT_MAX_RESULTS);
+        long rawMax = ctx.optLongParam("maxResults", searchCfg.getFileMaxResults());
         if (rawMax < 1) {
             throw new BadParamsException("maxResults 必须 ≥ 1: " + rawMax);
         }
@@ -400,7 +397,8 @@ public class FsSearchService {
      * <ul>
      *   <li>stderr 并发抽干:rg 只写不读会写满管道缓冲卡死进程(与 OsSandbox 同款教训),
      *       单写线程 + join 后读取,无并发写;</li>
-     *   <li>超时({@link #TIMEOUT_MS})看门狗线程强杀 → stdout 管道 EOF → 消费循环自然收尾,
+     *   <li>超时({@code worker.search.rg-timeout-ms},见 {@link WorkerProperties.Search})
+     *       看门狗线程强杀 → stdout 管道 EOF → 消费循环自然收尾,
      *       返回已完成部分并置 truncated(readLine 阻塞期间无法检查 deadline,故须独立线程);</li>
      *   <li>消费者返回 false(解析端计数触顶)立即停止消费、强杀 rg(rg 不再扫盘,
      *       不用 --max-count,由本侧计数控制);</li>
@@ -440,7 +438,7 @@ public class FsSearchService {
         AtomicBoolean timedOut = new AtomicBoolean(false);
         Thread watchdog = Thread.ofVirtual().start(() -> {
             try {
-                if (!p.waitFor(TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
+                if (!p.waitFor(searchCfg.getRgTimeoutMs(), TimeUnit.MILLISECONDS)) {
                     timedOut.set(true);
                     p.destroyForcibly();
                 }
@@ -488,7 +486,7 @@ public class FsSearchService {
      */
     private boolean finishTruncated(StreamOutcome r, int count, String tag) throws IOException {
         if (r.timedOut()) {
-            log.warn("[{}] rg 超时(>{}ms)已强杀,返回已完成部分({} 项)", tag, TIMEOUT_MS, count);
+            log.warn("[{}] rg 超时(>{}ms)已强杀,返回已完成部分({} 项)", tag, searchCfg.getRgTimeoutMs(), count);
             return true;
         }
         if (r.truncated()) {
@@ -737,9 +735,10 @@ public class FsSearchService {
     // ---- 应答 ----
 
     /**
-     * 应答:结果序列化后 ≤单帧内联上限(同 fs.read)直接内联 ok;超限按文件边界切批
-     * rpc.data 回传(批项 = 完整文件项,不撕裂;单文件项超 CHUNK 时独占一批),末帧
-     * ok 只带汇总(matchCount/truncated/fileCount,同 fs.read 末帧只带 path/size)。
+     * 应答:结果序列化后 ≤单帧内联上限({@code worker.search.inline-max-bytes},默认同
+     * fs.read)直接内联 ok;超限按文件边界切批 rpc.data 回传({@code
+     * worker.search.chunk-bytes};批项 = 完整文件项,不撕裂;单文件项超阈值时独占一批),
+     * 末帧 ok 只带汇总(matchCount/truncated/fileCount,同 fs.read 末帧只带 path/size)。
      */
     private void reply(RpcContext ctx, SearchOutcome out) {
         ArrayNode filesArr = Json.arr();
@@ -748,7 +747,7 @@ public class FsSearchService {
                 .put("matchCount", out.matchCount())
                 .put("truncated", out.truncated());
         full.set("files", filesArr);
-        if (Json.write(full).getBytes(StandardCharsets.UTF_8).length <= FsService.INLINE_MAX) {
+        if (Json.write(full).getBytes(StandardCharsets.UTF_8).length <= searchCfg.getInlineMaxBytes()) {
             ctx.ok(full);
             return;
         }
@@ -756,7 +755,7 @@ public class FsSearchService {
         int bytes = 0;
         for (JsonNode f : filesArr) {
             int size = Json.write(f).getBytes(StandardCharsets.UTF_8).length;
-            if (!batch.isEmpty() && bytes + size > FsService.CHUNK) {
+            if (!batch.isEmpty() && bytes + size > searchCfg.getChunkBytes()) {
                 ctx.data(List.copyOf(batch), true);
                 batch = new ArrayList<>();
                 bytes = 0;

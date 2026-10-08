@@ -60,6 +60,9 @@ class TaskSearchServiceTest {
     /** rg 是否可用(不可用则真实进程用例跳过)。 */
     private boolean ready;
 
+    /** 不限时 provider 预算(0 = 仅异常护栏;与 worker.search.provider-timeout-ms 默认一致)。 */
+    private static final long NO_TIMEOUT = 0;
+
     @BeforeEach
     void setUp() throws Exception {
         WorkerProperties props = new WorkerProperties();
@@ -73,7 +76,7 @@ class TaskSearchServiceTest {
         dispatcher = new RpcDispatcher(null, new WorkerProperties());
         store = new TaskStore(props);
         registry = new SearchProviderRegistry();
-        service = new TaskSearchService(dispatcher, store, new RipgrepBinary(props), registry);
+        service = new TaskSearchService(dispatcher, store, new RipgrepBinary(props), registry, props);
     }
 
     /** 测试环境 rg 定位:程序根 runtime/bin(IDE/打包)→ 模块父目录(maven,user.dir=模块)→ PATH。 */
@@ -402,7 +405,7 @@ class TaskSearchServiceTest {
                 taskHit("t9", tmatch(1, "user", 0)))));       // 新任务 → 新任务项
 
         TaskSearchService.SearchOutcome merged = TaskSearchService.mergeProviderResults(
-                builtIn, registry, anyTaskReq(), 500, TaskSearchService.PROVIDER_TIMEOUT_MS);
+                builtIn, registry, anyTaskReq(), 500, NO_TIMEOUT);
 
         assertEquals(4, merged.matchCount(), "内置 2 + 新增 2(去重 1)");
         assertFalse(merged.truncated());
@@ -422,7 +425,7 @@ class TaskSearchServiceTest {
                 taskHit("t2", tmatch(1, "user", 0), tmatch(2, "finalReply", 0), tmatch(3, "user", 0)))));
 
         TaskSearchService.SearchOutcome merged = TaskSearchService.mergeProviderResults(
-                builtIn, registry, anyTaskReq(), 3, TaskSearchService.PROVIDER_TIMEOUT_MS);
+                builtIn, registry, anyTaskReq(), 3, NO_TIMEOUT);
 
         assertEquals(3, merged.matchCount(), "触顶截断到 maxResults");
         assertTrue(merged.truncated(), "命中未全量消费应置 truncated");
@@ -434,7 +437,7 @@ class TaskSearchServiceTest {
         TaskSearchService.SearchOutcome builtIn = taskOutcomeOf("t1", "user");
         TaskSearchService.SearchOutcome merged = TaskSearchService.mergeProviderResults(
                 builtIn, new SearchProviderRegistry(), anyTaskReq(), 500,
-                TaskSearchService.PROVIDER_TIMEOUT_MS);
+                NO_TIMEOUT);
         assertSame(builtIn, merged, "无 provider 注册时原样返回(零行为变化)");
     }
 
@@ -445,7 +448,7 @@ class TaskSearchServiceTest {
         registry.register(new StubProvider("good", List.of(taskHit("t7", tmatch(1, "user", 0)))));
         TaskSearchService.SearchOutcome merged = TaskSearchService.mergeProviderResults(
                 taskOutcomeOf("t1", "user"), registry, anyTaskReq(), 500,
-                TaskSearchService.PROVIDER_TIMEOUT_MS);
+                NO_TIMEOUT);
         assertEquals(2, merged.matchCount(), "坏 provider 跳过,好 provider 照常合并");
         assertTrue(merged.files().containsKey("t7"));
     }
@@ -458,7 +461,7 @@ class TaskSearchServiceTest {
         registry.register(new StubProvider("emptyMatches", List.of(taskHit("t8"))));
         TaskSearchService.SearchOutcome builtIn = taskOutcomeOf("t1", "user", "finalReply");
         TaskSearchService.SearchOutcome merged = TaskSearchService.mergeProviderResults(
-                builtIn, registry, anyTaskReq(), 500, TaskSearchService.PROVIDER_TIMEOUT_MS);
+                builtIn, registry, anyTaskReq(), 500, NO_TIMEOUT);
         assertEquals(2, merged.matchCount());
         assertEquals(1, merged.files().size(), "空/null/零命中任务不产出空任务项");
         assertFalse(merged.truncated());
@@ -491,7 +494,7 @@ class TaskSearchServiceTest {
 
         TaskSearchService.SearchOutcome merged = TaskSearchService.mergeProviderResults(
                 taskOutcomeOf("t1", "user"), registry, anyTaskReq(), 500,
-                TaskSearchService.PROVIDER_TIMEOUT_MS);
+                NO_TIMEOUT);
 
         assertEquals(2, merged.matchCount(), "不限时路径完整等待慢 provider: " + merged.matchCount());
         assertTrue(merged.files().containsKey("tSlow"));

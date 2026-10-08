@@ -24,6 +24,7 @@ import org.springframework.stereotype.Component;
 
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.contract.rpc.Rpc;
+import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.modules.Sandbox;
 import dev.everyagent.worker.modules.WorkspaceManager;
 import dev.everyagent.worker.plugin.registry.SearchProviderInvoker;
@@ -78,18 +79,15 @@ public class SlashMethods {
     private final SearchProviderRegistry searchProviders;
 
     /**
-     * SuggestionProvider 单 provider 超时预算缺省(ms):0 = 不限时(仅异常护栏,与
-     * {@code FsSearchService.PROVIDER_TIMEOUT_MS} 同款接缝/默认值)。配置键
-     * {@code worker.search.provider-timeout-ms} 由后续配置装配步骤接入 yml。
+     * 当前生效的 provider 超时预算(ms);缺省取 {@code worker.search.provider-timeout-ms}
+     * (0 = 不限时,仅异常护栏,与 fs.search/task.search 同款护栏接缝)。
      */
-    static final long PROVIDER_TIMEOUT_MS = 0;
-
-    /** 当前生效的 provider 超时预算(ms);缺省 {@link #PROVIDER_TIMEOUT_MS}。 */
-    private long providerTimeoutMs = PROVIDER_TIMEOUT_MS;
+    private long providerTimeoutMs;
 
     /**
-     * 包级可见:注入 provider 超时预算(单测设小值验证预算机制;后续配置装配步骤接线)。
-     * ≤ 0 恢复不限时(同步直调,仅异常护栏)。
+     * 包级可见:覆盖 provider 超时预算(单测设小值验证预算机制;生产路径由
+     * {@code worker.search.provider-timeout-ms} 配置装配进构造)。≤ 0 恢复不限时
+     * (同步直调,仅异常护栏)。
      */
     void setProviderTimeoutMs(long providerTimeoutMs) {
         this.providerTimeoutMs = providerTimeoutMs;
@@ -97,11 +95,14 @@ public class SlashMethods {
 
     public SlashMethods(RpcDispatcher dispatcher, SlashCommandRegistry registry,
             WorkspaceManager workspaces, SlashTaskScopeStore scopeStore,
-            SearchProviderRegistry searchProviders) {
+            SearchProviderRegistry searchProviders, WorkerProperties props) {
         this.registry = registry;
         this.workspaces = workspaces;
         this.scopeStore = scopeStore;
         this.searchProviders = searchProviders;
+        this.providerTimeoutMs = props == null
+                ? new WorkerProperties.Search().getProviderTimeoutMs()
+                : props.getSearch().getProviderTimeoutMs();
 
         dispatcher.register(RpcMethods.SLASH_LIST, ctx -> ctx.ok(listItems()));
         dispatcher.register(RpcMethods.SLASH_SELECT, this::selectItem);

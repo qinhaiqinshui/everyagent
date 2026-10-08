@@ -1,8 +1,8 @@
 package dev.everyagent.worker.task;
 
 import dev.everyagent.contract.json.Json;
+import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.modules.FsSearchService;
-import dev.everyagent.worker.modules.FsService;
 import dev.everyagent.worker.proto.RpcMethods;
 import dev.everyagent.plugin.api.exception.BadParamsException;
 import dev.everyagent.plugin.api.spi.SearchProvider;
@@ -68,19 +68,13 @@ import java.util.regex.PatternSyntaxException;
  * {@code searchTasks} 结果(按 {@code taskId+roundIndex+field+matchIndex} 去重、仍受
  * maxResults 触顶约束,见 {@link #mergeProviderResults});provider 抛异常/超出超时预算
  * 仅 WARN 跳过(超时预算 {@code worker.search.provider-timeout-ms},默认 0 不限时,见
- * {@link #PROVIDER_TIMEOUT_MS});注册表为空时零额外行为;rg 不可用但注册了 provider 时
+ * {@link WorkerProperties.Search});注册表为空时零额外行为;rg 不可用但注册了 provider 时
  * 跳过内置 rg、仅聚合 provider 结果。
  */
 @Component
 public class TaskSearchService {
 
     private static final Logger log = LoggerFactory.getLogger(TaskSearchService.class);
-
-    /** rg 进程超时(ms):超时强杀,返回已完成部分并置 truncated=true(与 fs.search 同款)。 */
-    private static final long TIMEOUT_MS = 60_000;
-
-    /** 触顶截断的默认命中上限(maxResults 缺省值;任务内容搜索默认比 fs.search 小)。 */
-    private static final int DEFAULT_MAX_RESULTS = 500;
 
     /** rg 正常退出码:0 = 无匹配、1 = 有匹配;其余(2 等)为错误。 */
     private static final int EXIT_NO_MATCH = 0;
@@ -95,29 +89,31 @@ public class TaskSearchService {
     private final RipgrepBinary rg;
     private final SearchProviderRegistry searchProviders;
 
+    /** 搜索限制配置(架构 §8.5,worker.search.*):rg 超时/结果上限缺省/应答内联与切批阈值。 */
+    private final WorkerProperties.Search searchCfg;
+
     /**
-     * SearchProvider 单 provider 超时预算缺省(ms):0 = 不限时(仅异常护栏,与机制引入
-     * 前的行为一致)。配置键 {@code worker.search.provider-timeout-ms} 由后续配置装配
-     * 步骤接入 yml,本步以内部常量 + 可注入字段承载(见 {@link #providerTimeoutMs})。
+     * 当前生效的 provider 超时预算(ms);缺省取 {@code worker.search.provider-timeout-ms}
+     * (0 = 不限时,仅异常护栏,与机制引入前的行为一致)。
      */
-    static final long PROVIDER_TIMEOUT_MS = 0;
-
-    /** 当前生效的 provider 超时预算(ms);缺省 {@link #PROVIDER_TIMEOUT_MS}。 */
-    private long providerTimeoutMs = PROVIDER_TIMEOUT_MS;
+    private long providerTimeoutMs;
 
     /**
-     * 包级可见:注入 provider 超时预算(单测设小值验证预算机制;后续配置装配步骤接线)。
-     * ≤ 0 恢复不限时(同步直调,仅异常护栏)。
+     * 包级可见:覆盖 provider 超时预算(单测设小值验证预算机制;生产路径由
+     * {@code worker.search.provider-timeout-ms} 配置装配进构造)。≤ 0 恢复不限时
+     * (同步直调,仅异常护栏)。
      */
     void setProviderTimeoutMs(long providerTimeoutMs) {
         this.providerTimeoutMs = providerTimeoutMs;
     }
 
     public TaskSearchService(RpcDispatcher dispatcher, TaskStore store, RipgrepBinary rg,
-            SearchProviderRegistry searchProviders) {
+            SearchProviderRegistry searchProviders, WorkerProperties props) {
         this.store = store;
         this.rg = rg;
         this.searchProviders = searchProviders;
+        this.searchCfg = props == null ? new WorkerProperties.Search() : props.getSearch();
+        this.providerTimeoutMs = searchCfg.getProviderTimeoutMs();
         dispatcher.register(RpcMethods.TASK_SEARCH, this::search);
     }
 
@@ -143,7 +139,7 @@ public class TaskSearchService {
         boolean isRegex = boolParam(ctx, "isRegex");
         boolean caseSensitive = boolParam(ctx, "caseSensitive");
         boolean wholeWord = boolParam(ctx, "wholeWord");
-        long rawMax = ctx.optLongParam("maxResults", DEFAULT_MAX_RESULTS);
+        long rawMax = ctx.optLongParam("maxResults", searchCfg.getTaskMaxResults());
         if (rawMax < 1) {
             throw new BadParamsException("maxResults 必须 ≥ 1: " + rawMax);
         }
@@ -362,7 +358,7 @@ public class TaskSearchService {
         AtomicBoolean timedOut = new AtomicBoolean(false);
         Thread watchdog = Thread.ofVirtual().start(() -> {
             try {
-                if (!p.waitFor(TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
+                if (!p.waitFor(searchCfg.getRgTimeoutMs(), TimeUnit.MILLISECONDS)) {
                     timedOut.set(true);
                     p.destroyForcibly();
                 }
@@ -424,7 +420,7 @@ public class TaskSearchService {
             }
         } else if (timedOut.get()) {
             truncated = true;
-            log.warn("[task.search] rg 超时(>{}ms)已强杀,返回已完成部分({} 项)", TIMEOUT_MS, matches.size());
+            log.warn("[task.search] rg 超时(>{}ms)已强杀,返回已完成部分({} 项)", searchCfg.getRgTimeoutMs(), matches.size());
         } else {
             // 触顶 kill:稍候进程收尾即可(退出码无意义)
             p.waitFor(2, TimeUnit.SECONDS);
@@ -492,8 +488,9 @@ public class TaskSearchService {
     // ---- 应答 ----
 
     /**
-     * 应答:结果序列化后 ≤单帧内联上限(同 fs.search)直接内联 ok;超限按任务边界切批
-     * rpc.data 回传(批项 = 完整任务项,不撕裂),末帧 ok 只带汇总。
+     * 应答:结果序列化后 ≤单帧内联上限({@code worker.search.inline-max-bytes},默认同
+     * fs.search/fs.read)直接内联 ok;超限按任务边界切批 rpc.data 回传({@code
+     * worker.search.chunk-bytes};批项 = 完整任务项,不撕裂),末帧 ok 只带汇总。
      */
     private void reply(RpcContext ctx, SearchOutcome out) {
         ArrayNode filesArr = Json.arr();
@@ -502,7 +499,7 @@ public class TaskSearchService {
                 .put("matchCount", out.matchCount())
                 .put("truncated", out.truncated());
         full.set("files", filesArr);
-        if (Json.write(full).getBytes(StandardCharsets.UTF_8).length <= FsService.INLINE_MAX) {
+        if (Json.write(full).getBytes(StandardCharsets.UTF_8).length <= searchCfg.getInlineMaxBytes()) {
             ctx.ok(full);
             return;
         }
@@ -510,7 +507,7 @@ public class TaskSearchService {
         int bytes = 0;
         for (JsonNode f : filesArr) {
             int size = Json.write(f).getBytes(StandardCharsets.UTF_8).length;
-            if (!batch.isEmpty() && bytes + size > FsService.CHUNK) {
+            if (!batch.isEmpty() && bytes + size > searchCfg.getChunkBytes()) {
                 ctx.data(List.copyOf(batch), true);
                 batch = new ArrayList<>();
                 bytes = 0;
