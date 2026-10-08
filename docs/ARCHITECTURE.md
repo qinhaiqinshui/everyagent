@@ -497,6 +497,12 @@ ask 管道承载第二类阻塞请求:**危险操作授权**。`PermissionGate` 
 
 **授权粒度**:文件工具链按**授权单元 = 目标路径本身**(已存在前缀取 realpath;已存在文件不再提升到父目录)——`p::write::<目标文件>` 只覆盖该文件本身,「新建/覆写一个文件」的授权不会放大成该目录下其它文件的写权限(同目录兄弟文件 = 另一把 key = 另一次授权;同一路径重复访问才免弹);链节点与沙箱可达根仍按「最深已存在祖先目录」(授权判定始终在 gate 逐次执行,key 精确匹配,可达根只是路径解析边界、不构成授权)。命令链的 EXEC 根另按「已存在目标提升到父目录」(命令串只能静态看到已存在路径,按所在目录归并)。动词类按规范化动词。**弹窗文案与判定同源**(`PathSupport.scopeNote`,不得比实际宽——曾写「及其子目录」而判定是精确匹配,既误导人类授权者又让 AI 审议员按更宽的范围放行);同 key 并发只弹一张卡(inFlight future)。
 
+**授权下发沙箱(沙箱可访问范围 = 授权范围)**:授权落定时把随附的**沙箱范围根**交给 `SandboxPathRegistry`(owner=`grants:<subjectId>`),由它跨主体聚合后**差量** `grant`/`revoke`(§7.10)。三条约束:
+- **不放大(P5)**:只有**确实存在**的授权单元才下发(目录 → 目录;已存在文件 → 单文件)——「新建一个文件」需要父目录写权限,无法在请求粒度落地,**故不下发**(该路径仍可经 file 工具通道访问),绝不悄悄放宽到父目录。命令链的越界路径授权本就按「所在目录」归并(`grantRootOf`),随附该目录。
+- **回收按主体生命周期**:run 档清空(新用户输入)/ 主体驱逐(`untrack`)→ 该 owner 集合收敛 → 无人期望的根被 `revoke`;**仍有主体期望的根不被回收**(聚合在账本层)。进程重启由 `grants.json`(v2,持久化 `sandboxRoots`)重放。
+- **访问语义按 key**:`p::read::` → 只读,写 / EXEC → 读写。
+- **已知缺口**:读根目前只授给**组 SID**(无 per-root cap SID),`revoke` 后 ACE 仍在且组 SID 恒在令牌中 → **读授权的物理回收尚未生效**(规划:read cap SID)。写侧已有效(cap SID 不再进新令牌,陈旧 ACE 天然失效)。
+
 **拒绝语义**:抛 `PermissionDeniedException` → 统一转「[工具执行失败]」文本回灌模型,agent 循环不中断。
 
 **授权决议链契约(域中性,§7.20/§14.11)**:决议请求 `AuthorizationRequest(ExecContext context, agentId, grantKey, prompt)`——链节点(Unattended/AiReview/Human)只见 ExecContext 槽位(`metadata()` 判策略开关、`interaction()` 弹窗(subjectId 已绑定)、`agentFactory()` 建审议 agent、`emitter()` 落审计),不接触 `TaskEntry/TaskRuntime/TaskInfo`;`GrantRegistry` 按 `subjectId()` 分区授权状态、`dataDir()` 落盘 grants.json(今天二者=taskId/任务数据目录)。未来工作流层构造自己的 ExecContext 即走同一条链,链代码零改动。
@@ -522,43 +528,47 @@ ask 管道承载第二类阻塞请求:**危险操作授权**。`PermissionGate` 
 
 ### 7.10 命令沙箱(插件化,多后端)
 
-沙箱后端已从 worker 核心抽离为独立插件(`every-agent-plugins/sandbox-windows-codex/`、`every-agent-plugins/sandbox-windows-mic/`、`every-agent-plugins/sandbox-wsl-ubuntu/`)。`SandboxBackend` SPI 极简化为**挂载 + 工作区生命周期 + 标识**三个方法,不执行命令、不翻译路径、不涉及工具注册、不涉及授权策略。
+沙箱后端已从 worker 核心抽离为独立插件(`every-agent-plugins/sandbox-windows-codex/`、`every-agent-plugins/sandbox-windows-mic/`、`every-agent-plugins/sandbox-wsl-ubuntu/`)。`SandboxBackend` SPI 只表达**「对沙箱做了什么」+「路径在沙箱世界里长什么样」**,不执行命令、不涉及工具注册、不做授权策略判定;核心不感知任何后端细节。
 
-**SandboxBackend SPI(极简):**
-- `id()` — 后端标识。
-- `mount(List<MountRequest>)` — 批量挂载宿主路径到沙箱内,返回 {宿主路径 → 沙箱内路径} 映射表。DIRECT/windows-mic 返回原路径(不挂载);wsl-ubuntu 做 drvfs 挂载返回 `/c/...` 形态。幂等:重复调用相同路径不重复挂载。
-- `onWorkspaceRemoved(Path)` — 工作区删除时 best-effort 清理挂载等。DIRECT/windows-mic no-op;wsl-ubuntu 做 umount。
+**SandboxBackend SPI(效果 2 + 查询 2 + 标识):**
+- `id()` — 后端标识(也是 `SandboxPathRegistry` 判「后端切换 → 整批重放」的键)。
+- `grant(List<PathGrant>)` — 声明这些宿主路径在沙箱内**可访问**(建立权限 + 映射基准)。幂等、可重放。**best-effort 且不放大(§7.8 P5)**:无法在请求粒度落地时(典型:待建文件——创建需父目录写权限)**跳过并记日志,绝不放大到父目录**。
+- `revoke(List<Path>)` — 撤销权限与映射。幂等;**只带路径,不带任务/工作区语义**(是否还有人需要该根由上层聚合判断)。
+- `toSandbox(Path)` / `toHost(String)` — **纯查询、无副作用、默认恒等**;上层无条件调用一次,不需要判断「这个后端是否需要翻译」。翻译是沙箱世界的属性,且**由 grant 确立的映射基准派生**(wsl 的 drvfs 挂载天然两者兼得;codex 只涉权限,映射恒等)。
+- `mount`/`MountRequest`/`onWorkspaceRemoved` 已 `@Deprecated`(迁移期保留):前者兼两职导致触发时机错位与粒度错位,后者的工作区语义违反「沙箱不感知领域」。
 
-| 后端 | id | priority | mount 行为 | 说明 |
-|---|---|---|---|---|
-| **WSL Ubuntu** | `wsl-ubuntu` | 10 | 批量 drvfs 挂载 → `/c/...` | 原 wsl-direct 改名,独立插件;**plugin.json 默认 enabled=false** |
-| **Windows Codex** | `codex` | Windows?8:0 | 返回原路径(挂载概念不适用) | Windows 原生强隔离(双本地账户 `EACodexOffline`/`EACodexOnline` + 组 `EACodexSandboxUsers` + WRITE_RESTRICTED 受限令牌 + capability SID + 防火墙/WFP);工作区树经 capability SID ACE 可写、区外只读;**默认启用,即 Windows 出厂默认后端**(优先级低于 wsl-ubuntu,但后者默认禁用;setup 延迟到首次 `create()` 才做、弹一次 UAC) |
-| **Windows MIC** | `windows-mic` | 5 | 返回原路径 | 命令跑在宿主上(Medium IL),独立插件;**plugin.json 默认 enabled=false** |
-| **DIRECT(兜底沙箱)** | `direct` | — | 返回原路径 | OsSandbox 自身,无 Provider;auto 下无任何可用后端插件时兜底 |
+| 后端 | id | priority | grant/revoke | toSandbox | 说明 |
+|---|---|---|---|---|---|
+| **WSL Ubuntu** | `wsl-ubuntu` | 10 | 批量 drvfs 挂载(READ_ONLY → `-o ro`)/ best-effort umount | 已授权根 → `/c/...`(`WslPathView` 纯映射;未授权路径原样不谎报) | 原 wsl-direct 改名,独立插件;**plugin.json 默认 enabled=false** |
+| **Windows Codex** | `codex` | Windows?8:0 | 登记/注销写根(cap SID + preflight 刷 ACE)与读根 | 恒等(命令跑宿主路径) | Windows 原生强隔离(双本地账户 `EACodexOffline`/`EACodexOnline` + 组 `EACodexSandboxUsers` + WRITE_RESTRICTED 受限令牌 + capability SID + 防火墙/WFP);工作区树经 capability SID ACE 可写、区外只读;**默认启用,即 Windows 出厂默认后端**(优先级低于 wsl-ubuntu,但后者默认禁用;setup 延迟到首次 `create()` 才做、弹一次 UAC) |
+| **Windows MIC** | `windows-mic` | 5 | SPI 默认(no-op) | SPI 默认(恒等) | 命令跑在宿主上(Medium IL),独立插件;**plugin.json 默认 enabled=false** |
+| **DIRECT(兜底沙箱)** | `direct` | — | SPI 默认(no-op) | SPI 默认(恒等) | OsSandbox 自身,无 Provider;auto 下无任何可用后端插件时兜底 |
+
+**效果与时机分离(§7.8)**:沙箱只表达效果,**何时授权/回收由上层决定**——`PermissionGate`/`GrantRegistry` 是唯一翻译点(见 §7.8「授权下发沙箱」),故沙箱插件**不订阅任何领域事件**,也不需要事件总线。
 
 **后端选择时机(时序红线)**:`SandboxProvider` 全部由插件在 `PluginLoader` 的 `@PostConstruct` 里注册,而 `PluginLoader → WorkerServices → OsSandbox` 的构造依赖链决定了 **OsSandbox 一定先于插件激活完成初始化**。因此后端**不得在 `@PostConstruct` 一次性定论**:
-- `OsSandbox` 的 delegate 按 **`SandboxProviderRegistry` 代次(generation,每次注册/注销自增)惰性解析**:首次访问(`id()`/`mount()`/`onWorkspaceRemoved()`)或代次变化时重新 `select()`,解析结果(含「无可用后端」的 null)按代次缓存,不产生每次调用的重复探测;
+- `OsSandbox` 的 delegate 按 **`SandboxProviderRegistry` 代次(generation,每次注册/注销自增)惰性解析**:首次访问(`id()`/`grant()`/`revoke()`/`toSandbox()`/`toHost()`)或代次变化时重新 `select()`,解析结果(含「无可用后端」的 null)按代次缓存,不产生每次调用的重复探测;
 - 选择规则不变:`select()` 先按 `isAvailable()` 过滤候选,再对胜出者 `create()`——重副作用(如 codex 的 UAC setup)只可能发生在胜出时刻,不因探测而提前;
 - 启动期日志只陈述「配置 + 候选清单(不探测、不 create)」,后端**定论推迟**到首次真正访问 delegate 时;生效后打一条 INFO(后端切换时带原 id),解析不到时打 WARN 并附候选 id/priority;
-- `mount()`/`onWorkspaceRemoved()` 由 OsSandbox **必须转发给 delegate**(delegate 为 null 才走 SPI 默认的原路径/no-op)——门面自己吞掉挂载会让 wsl 系列的 drvfs 挂载整体失效。
+- `grant()/revoke()/toSandbox()/toHost()` 由 OsSandbox **必须转发给 delegate**(delegate 为 null 才走 SPI 默认的 no-op/恒等)——门面自己吞掉会让 wsl 的 drvfs 挂载与路径翻译整体失效。
 
-**核心路径翻译中间人(SandboxPathRegistry):** worker 核心内部 `@Component`,管理 {宿主路径 → 沙箱内路径} 映射表。核心调 `sandbox.mount()` 拿到映射关系后自己查表翻译,不依赖沙箱。
+**核心授权账本与下发适配(SandboxPathRegistry):** worker 核心内部 `@Component`,只做两件事——**聚合账本**(按 owner 分组登记「期望可访问的宿主路径」,跨 owner 去重、读写语义覆盖只读)+ **差量下发**(并集变化时只把差量交给 `grant`/`revoke`);**不再持有映射表**,`toSandboxPath`/`toHostPath` 直接转发沙箱纯查询。
 
-**意图登记 / 映射物化两段式**(否则「注册即挂载」会把 `wsl.exe` 进程开销压进启动路径,且启动期后端尚未定论):
-- `register(owner, path, access)` / `sync(owner, requests)` — **只登记挂载意图**(按 owner 分组的幂等集合,零 IO);`sync` 为**覆盖式对齐**(该 owner 的差集自动撤销),`unregister(owner, path)` 撤销单条。
-- **物化惰性**于首次翻译查询:按当前生效后端把全部意图**一次批量** `mount()`,代次键 = (后端 id, 意图版本);任一变化即整表重建——后端切换(如 mic → wsl-ubuntu)不会残留旧形态映射,插件热插拔同理自愈。
-- `toSandboxPath(Path)` — 宿主路径 → AI 可见路径:命中意图根取其视图,否则**最长前缀根**推导子路径;无映射原样返回(DIRECT 场景)。
-- `toHostPath(String)` — AI 视角路径 → 宿主路径:同样最长前缀反推;**无映射返回 null**(注册表外路径,调用方原样交给 Java NIO 自然报错,AI 改用沙箱命令工具)。
-- 前缀比较两侧统一 `'/'` 归一 + Windows 下大小写不敏感;返回的宿主路径一律由登记的原始形态拼接(不丢大小写)。
-- `onWorkspaceRemoved(Path)` — 通知沙箱清理 + 从意图表与映射表移除该根。
+- `register(owner, grants)` — 追加(幂等);`sync(owner, grants)` — **覆盖式对齐**(该 owner 的差集自动撤销);`unregister(owner, path)` / `unregisterOwner(owner)` — 撤销;`onWorkspaceRemoved(path)` — 从**全部** owner 移除该根,若再无 owner 期望则触发回收。
+- **下发**只发差量(新增 / 权限提升 → `grant`;已无人期望 → `revoke`);**后端 id 变化**(插件晚注册 / 后端切换)即**整批重放**——同时用首次翻译查询兜底,覆盖「账本早已登记、但下发时后端尚未就绪」的启动期时序。
+- 下发失败只 WARN 并保留旧快照,下次记账 / 翻译时自然重试,**不阻断任务线程**。
+- `toSandboxPath(Path)` / `toHostPath(String)` — 转发后端;后端异常时前者退化为原路径、后者返回 null(调用方原样交给 Java NIO 自然报错)。
 
 **登记方(owner 分组,谁的路径谁登记):**
 | owner | 登记方 | 内容 | 时机 |
 |---|---|---|---|
 | `workspaces` | `WorkspaceManager` | 全部在册工作区根 + 各工作区 `externalRoots`(READ_WRITE) | 注册表变更(`broadcastRegistry` 单一收口点:启动载入、新增/注册、外部授权根新增、移除、失效清理) |
 | `skills` | `BuiltInSkills` | 系统技能目录根(READ_WRITE,§7.17 读写挂入) | `@PostConstruct` 物化知识包时 |
+| `grants:<subjectId>` | `GrantRegistry` | 该主体的**单次授权根**(§7.8:授权范围 = 沙箱可访问范围;P5 不放大) | 授权落定(run/task 档)、`beginRun` 清 run 档、`untrack` 主体终态、磁盘重载 |
 
-**任务级授权不进意图表**:单次 EXEC/READ 授权(grant)只在**授权决议链**(`PermissionGate`/`GrantRegistry`)层面放行文件工具,不经常规意图表扩挂进沙箱——命令侧挂载清单由各沙箱插件每次执行自行推导(wsl-ubuntu = `WorkspaceManager.pruneStaleAndListMountRoots()` + skills 目录),避免 run 档授权经持久 drvfs 挂载泄漏成跨任务可读根。
+**授权根的回收语义**:回收走账本差量——run 档清空(新用户输入)/ 主体驱逐 → 该 owner 的集合收敛 → 无人期望的根被 `revoke`;**跨主体共享的根在仍有主体期望时不被回收**(聚合在账本层完成,SPI 只带路径)。写侧回收**物理有效**(codex:cap SID 不再进新令牌,陈旧 ACE 天然失效)。**已知缺口**:读根目前只授给**组 SID**(无 per-root cap SID),`revoke` 后 ACE 仍在且组 SID 恒在令牌中 → **读授权的物理回收尚未生效**(规划中:引入 read cap SID,镜像 codex `windows_sandbox_read_grants`)。
+
+**任务级授权不进意图表(历史约束,现已被上面的 `grants:` owner supersede)**:原设计为避免 run 档授权经持久 drvfs 挂载泄漏成跨任务可读根,曾规定「单次授权只在授权决议层放行、不进沙箱」。现改为**路径级、无语义的 grant/revoke 通道**:沙箱侧只见到路径,由 worker 聚合账本按主体生命周期增删,故 run 档授权不会沉淀(主体边界即回收边界);wsl 侧仍是持久 drvfs 挂载,但其可见性由同一份账本驱动。
 
 **核心宿主访问工具与沙箱命令工具共存:**
 - **核心的命令工具**(windows-mic / DIRECT 后端):核心自带,Windows 上 PowerShellTool 以 `powershell` 工具名注册;Linux 上 BashTool 以 `bash` 工具名注册。直接 ProcessBuilder 执行,走自己的授权链。
@@ -567,9 +577,10 @@ ask 管道承载第二类阻塞请求:**危险操作授权**。`PermissionGate` 
 - **只有某后端才做得到的隔离能力,其命令与状态一律归该插件**:wsl-ubuntu 的 `/禁用网络` 由 `sandbox-wsl-ubuntu` 自己经 `registerSlashProvider`/`registerSlashTokenResolver` 注册、状态写任务 `metadata`,并在自己的 CommandExecutor 里读取生效;worker 核心不持有该开关,也不为做不到断网的后端预留同名命令。
 
 **路径翻译流程:**
-1. 路径提供方注册 → `SandboxPathRegistry.register()` → 核心调 `sandbox.mount()` → 沙箱返回沙箱内路径 → 核心保存映射表。
-2. 工具参数翻译:`FsToolSupport` 收到 AI 传的路径后调 `pathRegistry.toHostPath()` 翻译为宿主路径;无映射原样保留让 Java NIO 自然报错。
-3. 非工具路径翻译:`SkillAdvisor`(知识包路径)和 `ExternalFileTokenResolver`(@ 引用)直接调 `pathRegistry.toSandboxPath()`。
+1. 路径提供方登记 → `SandboxPathRegistry.register/sync()` → 账本差量经 `sandbox.grant()` 下发(建立权限 + 映射基准)。
+2. 工具参数翻译:`FsToolSupport` 收到 AI 传的路径后调 `pathRegistry.toHostPath()` → 转发 `sandbox.toHost()`;无映射返回 null,原样保留让 Java NIO 自然报错。
+3. 非工具路径翻译:`SkillAdvisor`(知识包路径)和 `ExternalFileTokenResolver`(@ 引用)直接调 `pathRegistry.toSandboxPath()` → 转发 `sandbox.toSandbox()`(默认恒等)。
+4. 命令组装翻译:由各后端自持(wsl 用 `WslPathView` 的挂载表把已授权根及其子路径映射为 `/c/...`;codex/mic 恒等,命令本就跑宿主路径)。
 
 - `worker.sandbox.type`: `auto`(默认)| `wsl-ubuntu` | `windows-mic` | `none`。归一化别名:旧值 `wsl-direct`/`direct` → `wsl-ubuntu`(静默兼容);`wsl-bwrap`/`wsl`/`bwrap` → 归一为 `auto` 并 WARN;`acl`/`mic` → `windows-mic`;未知/空 → `auto`。WSL 专属配置(distro/tarball 等)与 codex 专属配置(`codex.home`/`codex.account-prefix`/`codex.network-policy`(auto|offline|online)/`codex.proxy-ports`/`codex.allow-local-binding`/`codex.java-home`)均由各插件通过 plugin.json `contributes.config` 自管。
 - **WSL 发行版可用性由 sandbox-wsl-ubuntu 插件全责保证(desktop 零参与,2026-10 移交)**:发行版探测与自动导入(`wsl -l -q` 探测 → 缺失时 sha256 校验 + `wsl --import EveryAgent` → 重探)全部住在 `WslUbuntuSandboxProvider.isAvailable()` 内,由上述后端选择时机的首次 `select()` 惰性触发——插件未启用/未注册即全链路零 WSL 调用。desktop 主进程**不做任何 WSL 探测**(曾有的启动期 utilityProcess preflight 硬编码了插件领域知识——发行版名/镜像文件名/导入语义——且与插件启用开关脱节,禁用插件后仍 spawn wsl.exe,已删除)。插件自带资源(rootfs 镜像、eagent-run.py)按三级链定位:`<pluginDir>/wsl/`(.eap 安装/源码开发态)→ `WorkerConfig.resolveRuntimeDir()/wsl/`(打包 desktop 态,镜像经插件 `runtime/` 目录并入程序根 runtime/,见 §7.17 程序附属文件;插件 `enabled=false` 时不进安装包)→ 配置 `worker.sandbox.wsl.tarball`(手动场景,相对系统目录解析)。
@@ -1383,7 +1394,7 @@ docker-compose 一键:`HUB_KEY=你的密钥 docker-compose up --build`;数据落
 3. **RPC 生命周期**:reqId 连接内唯一,ok/err 已出则后续同 reqId 帧忽略;未知 method → UNKNOWN_METHOD;参数不合法 → BAD_PARAMS;超时是纯客户端语义(SDK 默认 30s),要中断须显式 rpc.cancel;task.run 新建支持 idempotencyKey(10 分钟窗口去重);task.delete 是任务唯一删除路径,无任何自动清理。
 4. **错误码两个命名空间,勿混用**:hub `error` = NOT_AUTHENTICATED/VERSION_MISMATCH(断开)、ACL_DENIED/FRAME_TOO_LARGE/RATE_LIMITED(单帧拒绝);`rpc.err` = UNKNOWN_METHOD/BAD_PARAMS/NOT_FOUND/SANDBOX_DENIED/BUSY/INTERNAL/AUTH_REQUIRED。
 5. **并发与上限**:maxConcurrentTasks(20)超限 task.run 新建 → BUSY(不排队);maxConcurrentSubs 超限 run_agent 返回错误文本由模型自决;maxEventsPerTask(50 万)超限抛 LogOverflow(磁盘 jsonl 全量不受影响);续跑放行不查并发上限。队列插件启用时超限任务排队等待（QueueAdmissionNode order=40, Semaphore fair）而非 BUSY 拒绝；无队列插件时保持 ERR_BUSY 硬拒绝。
-6. **沙箱(插件化)**:SandboxBackend SPI 极简化为 mount + onWorkspaceRemoved + id;路径翻译由核心 SandboxPathRegistry 中间人承担;沙箱插件提供自己的 CommandExecutor 和 ToolProvider;PermissionGate 不暴露到 plugin-api(核心内部保留);路径必须先规范化(realpath)再校验 workspace 根前缀,拒绝 `..`、绝对路径逃逸与符号链接逃逸;授权护的是「工作区外」,不是删除动作本身;不得绕过 PermissionGate 直接放行越界 IO;windows-mic 后端沙箱进程运行在 Medium IL,不对文件系统做标注或 ACL 修改;codex 后端(默认)仅按 capability SID ACE 给工作区树注入可写授权(工作区外只读),setup 产物(账户/组/防火墙/WFP)有配套卸载清理;git 凭证只存 worker 本机加密文件,不经协议传输,注入走 env(askpass) 不经 shell 参数;
+6. **沙箱(插件化)**:SandboxBackend SPI = 效果 2(`grant`/`revoke`,路径级、无语义、幂等可重放)+ 查询 2(`toSandbox`/`toHost`,纯函数、默认恒等)+ `id`;**效果与时机分离——何时授权/回收由上层决定**(PermissionGate/GrantRegistry 是唯一翻译点,沙箱不感知任务/工作区、不订阅领域事件);授权下发遵循**不放大原则**(无法在请求粒度落地则不下发,绝不放宽到父目录);回收是路径级且按主体生命周期收敛,跨主体共享的根在仍有主体期望时保留;沙箱插件提供自己的 CommandExecutor 和 ToolProvider;PermissionGate 不暴露到 plugin-api(核心内部保留);路径必须先规范化(realpath)再校验 workspace 根前缀,拒绝 `..`、绝对路径逃逸与符号链接逃逸;授权护的是「工作区外」,不是删除动作本身;不得绕过 PermissionGate 直接放行越界 IO;windows-mic 后端沙箱进程运行在 Medium IL,不对文件系统做标注或 ACL 修改;codex 后端(默认)仅按 capability SID ACE 给工作区树注入可写授权(工作区外只读),setup 产物(账户/组/防火墙/WFP)有配套卸载清理;git 凭证只存 worker 本机加密文件,不经协议传输,注入走 env(askpass) 不经 shell 参数;
 7. **生命周期**:终态任务收到 task.run{taskId} = 冷启动一次普通运行;worker 优雅停机(SIGTERM)受影响任务标 failed 再关连接;6102 仅绑定 127.0.0.1;worker 每条 hub 连接建立即 sub 该命名空间 cmd + input 两个频道,从不订阅 per-task 频道。
 8. **复用 Spring AI,禁止重复造轮子**:agent 执行必须走 ChatClient + Advisor 生态,不得手搓 agent 循环、工具循环、响应聚合、system 拼接;执行链只能是很薄一层;新增 agent 能力优先做成 Advisor;一个 Advisor 只负责一个功能;事件发射等需挂钩工具循环的增强通过继承 ToolCallingAdvisor 并重写受保护 hook 实现;主/子 agent 共用同一运行入口与 Advisor 链,仅 agentId 不同。
 9. **插件零 worker 依赖**:插件的 pom 中不得出现对 `every-agent-worker` 的依赖,compile/provided/runtime/test 任何 scope 一律禁止;插件测试需要任务/agent/配置等桩时,在测试源码内自建实现 plugin-api 接口的等价桩类,不得把 worker 具体实现类(TaskEntry/AgentEntity/WorkerProperties/SlashCommandRegistry 等)当测试脚手架;类型确实需要跨 worker 与插件共享时,先下沉到 plugin-api(§1.1,文档先行)。
