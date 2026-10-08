@@ -47,7 +47,7 @@ mvn -f every-agent-plugins\<id>\pom.xml package -q             # 静默模式，
 
 ### 2.1 插件不进根 reactor：证据与含义
 
-根 `pom.xml:20-26` 的 `<modules>` 全集只有 5 项：`every-agent-contract`、`every-agent-hub`、`every-agent-plugin-api`、`every-agent-plugins/task-edit-resend`、`every-agent-worker`——**26 个内置插件中仅 `task-edit-resend` 一个在 reactor 内**（它被 worker 的测试依赖，是历史特例），其余插件目录一概不在。三个直接推论：
+根 `pom.xml:20-26` 的 `<modules>` 全集只有 5 项：`every-agent-contract`、`every-agent-hub`、`every-agent-plugin-api`、`every-agent-plugins/task-edit-resend`、`every-agent-worker`——**27 个内置插件中仅 `task-edit-resend` 一个在 reactor 内**（它被 worker 的测试依赖，是历史特例），其余插件目录一概不在。三个直接推论：
 
 1. 仓库根裸跑 `mvn package` **不会**构建你的插件，你的插件编译错了也不会让根构建变红；
 2. 构建插件必须 `-f every-agent-plugins\<id>\pom.xml` 单独指过去（或 `cd` 进插件目录），这就是 §1.1 矩阵里所有 mvn 命令带 `-f` 的原因；

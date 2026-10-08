@@ -19,7 +19,7 @@ Every Agent 是一套「**公网可及、本机执行**」的 AI Agent 系统:AI
 | `every-agent-web` | 前端:React + TS,内置 TS 客户端 SDK,经 hub 遥控 worker | 5174(dev) |
 | `every-agent-contract` | 纯协议契约:帧信封 / RPC 信封 / 通用错误码 / 身份哈希(Java DTO + TS 类型) | — |
 | `every-agent-plugin-api` | 插件 API 契约:ExecContext(统一执行上下文) / EventEmitter / EmitEvent / ChatModelEnhancer / ModelConfig / TaskLifecycleNode 等接口(纯类型,插件与 worker 共用) | — |
-| `every-agent-plugins` | 内置插件集(26 个,清单见 plugin-guide `reference/builtin-plugins.md`):sandbox-windows-codex(Windows 原生沙箱,**默认启用**)、sandbox-windows-mic / sandbox-wsl-ubuntu(可选沙箱,默认禁用)、model-rate-limit(限流) / task-queue(并发排队) / task-input-queue(输入队列) / subagent / git / ai-review / ask-user / empty-response-retry / transient-error-retry / context-compression / model-length-guard / adaptive-max-tokens / model-pool / file-change / agents-md / system-info / image-vision / task-edit-resend / unattended / secret-redaction(默认禁用) / plugin-manager / pdf-viewer / update-file-view | — |
+| `every-agent-plugins` | 内置插件集(27 个,清单见 plugin-guide `reference/builtin-plugins.md`):sandbox-windows-codex(Windows 原生沙箱,**默认启用**)、sandbox-windows-mic / sandbox-wsl-ubuntu(可选沙箱,默认禁用)、model-rate-limit(限流) / task-queue(并发排队) / task-input-queue(输入队列) / subagent / git / ai-review / ask-user / empty-response-retry / transient-error-retry / context-compression / model-length-guard / adaptive-max-tokens / model-pool / file-change / agents-md / system-info / image-vision / mobile-keyboard(移动端终端键盘悬浮球) / task-edit-resend / unattended / secret-redaction(默认禁用) / plugin-manager / pdf-viewer / update-file-view | — |
 | `every-agent-desktop` | Electron 桌面版:web + hub + worker 一体打包(Windows x64 便携/安装包) | 本地 6101/6102 |
 
 ### 1.1 设计理念
@@ -759,7 +759,7 @@ worker 的两条运行期责任链迁移为与任务洋葱同一的 filter 形�
 
 ### 7.14.4 任务队列插件（Phase 5）
 
-任务队列插件将「并发上限即拒 ERR_BUSY」语义替换为「排队等待」语义。插件实现 `EveryAgentPlugin.activate(WorkerPluginContext)`，在 activate 里经 `ctx.register*` 注册（全仓 26 个内置插件源码零 `@Component`，插件由 `URLClassLoader` 加载、非 Spring 托管；git 插件同类先例是 `GitPlugin`）。
+任务队列插件将「并发上限即拒 ERR_BUSY」语义替换为「排队等待」语义。插件实现 `EveryAgentPlugin.activate(WorkerPluginContext)`，在 activate 里经 `ctx.register*` 注册（全仓 27 个内置插件源码零 `@Component`，插件由 `URLClassLoader` 加载、非 Spring 托管；git 插件同类先例是 `GitPlugin`）。
 
 - **`QueueAdmissionNode`**（order=40，形态三 try/finally 成对节点）：落在洋葱 RPC 线程段 `queue.dispatch`(15) 之后不远处，介于 `taskid.generate`(30) 与 `taskentry.create`(50) 之间（31 节点全表见插件指南 `docs/plugin-guide/backend/task-and-rpc.md` §2.3）。下行段 `acquire(taskId)` 获取运行许可（`Semaphore` fair 模式，permits=maxConcurrentTasks），并发满时虚拟线程 park 阻塞（零线程开销）；finally 段 `release(taskId)` 释放许可并唤醒下一个等待者。下行抛异常时 release 不执行（未进入不收口语义）。
 - **`TaskAdmissionPolicy` SPI**（plugin-api）：RPC 边缘预检扩展点。队列插件注册 `TaskQueueAdmissionPolicy`（always-admit）后，`TaskManager.rpcTaskRun` 不再硬拒绝 ERR_BUSY，而是放任务进入洋葱由 `QueueAdmissionNode` 排队处理。无注册策略时保持原有行为。

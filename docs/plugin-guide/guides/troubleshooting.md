@@ -82,7 +82,7 @@ has_children: false
 | `[plugins-builtin] 内置插件源码目录不存在,跳过扫描: {}(桌面安装包出现此行 = 打包未含 every-agent-plugins)`（WARN） | worker 启动目录（user.dir）下没有 `every-agent-plugins/`——**从哪个目录启动决定能不能扫到**；或 `worker.builtin-plugins-dir` 配置指错。桌面安装包见此行 = 打包缺目录（文案自证） | 对照日志里打印的**绝对路径** | 从仓库根启动 worker，或把 `worker.builtin-plugins-dir` 指到正确目录 | [打包与安装](packaging-and-install.md) §3.3 |
 | `[plugins] 未扫描到任何插件`（INFO） | 两个扫描器都空手而归：目录不存在 / 目录里全没有 plugin.json / 内置全被 `enabled=false` 拦 | 先看上一行那两条 WARN/INFO 出现没有 | 按上面两行修复后重启 | [持久化与状态](../backend/persistence-and-state.md) §4.3 |
 | `[plugins] 插件 {} 的 lib 目录不可读,跳过: {}`（WARN） | 外部插件目录缺 `lib/` 子目录（或无权限列举） | `Get-ChildItem "$HOME\.everyagent\plugins\<id>\"` | 建 `lib/` 并放入 jar，重启 | [打包与安装](packaging-and-install.md) §3.2 |
-| `[plugins] 加载完成: 24/26 个插件成功加载`（分子 ≠ 分母） | 有插件没加载成——往上翻启动日志逐条核对本表 WARN 行 | `Select-String -Path <日志> -Pattern "\[plugins"` | 按 WARN 对应行修复 | [调试与测试](debugging-and-testing.md) §3.2 |
+| `[plugins] 加载完成: 25/27 个插件成功加载`（分子 ≠ 分母） | 有插件没加载成——往上翻启动日志逐条核对本表 WARN 行 | `Select-String -Path <日志> -Pattern "\[plugins"` | 按 WARN 对应行修复 | [调试与测试](debugging-and-testing.md) §3.2 |
 | worker **启动直接失败**，堆栈是 Jackson 异常；此前可见 `[plugins-builtin] 解析 plugin.json 失败,视为已启用: {}`（WARN） | plugin.json 语法错（尾逗号、`//` 注释、括号不配）：jackson 解析异常是非受检 `JacksonException`，穿透只 `catch (IOException)` 的加载分支，冒出 `@PostConstruct`（异常类型实测；启动失败复现未实测） | 打开报错路径的 plugin.json 查语法 | 修成严格 JSON 后重启 | [清单参考](../plugin-manifest.md) §7 |
 | `[plugins-builtin] 扫描内置插件目录失败: {}` / `[plugins] 插件扫描器 {} 扫描失败,跳过: {}` 等扫描器级 WARN | IO / 权限类环境问题（单个扫描器失败不影响其他扫描器） | 看跟随的堆栈 | 修文件系统访问后重启 | [后端总览](../backend/overview.md) §8.1 |
 

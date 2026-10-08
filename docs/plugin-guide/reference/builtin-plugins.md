@@ -7,7 +7,7 @@ has_children: false
 
 # 内置插件范例索引
 
-**一句话定位**：`every-agent-plugins/` 下的 26 个内置插件是**活教材**——每种扩展点、每种形态、每种 order 档位在仓内都有真实可抄的范本。本篇告诉你「想学某个扩展点，去抄哪个插件」：先查总表（§2）定位插件，再用反查表（§3）按扩展点直达推荐范本，写代码前扫一眼 order 占用表（§4）避开已占档位。
+**一句话定位**：`every-agent-plugins/` 下的 27 个内置插件是**活教材**——每种扩展点、每种形态、每种 order 档位在仓内都有真实可抄的范本。本篇告诉你「想学某个扩展点，去抄哪个插件」：先查总表（§2）定位插件，再用反查表（§3）按扩展点直达推荐范本，写代码前扫一眼 order 占用表（§4）避开已占档位。
 
 所有路径相对仓库根；表格内为省篇幅，`every-agent-plugins/` 前缀在 §5 各小节统一省略为 `~plugins/`。全部数据来自源码逐文件取证（本篇成文前按行复核过关键行号，见文末口径说明）。
 
@@ -18,7 +18,7 @@ has_children: false
 - **形态选择**：不知道该做纯 Java、纯 Web 还是混合？看 §2「形态」列，然后读 [plugin.json 字段参考](../plugin-manifest.md) §3 的三形态实例。
 - 本篇只做索引与点评，**不讲 API 细节**：注册方法的签名与生命周期见 [后端模型总览](../backend/overview.md)、[Advisor 指南](../backend/advisors.md)、[任务与 RPC](../backend/task-and-rpc.md)、[UI 扩展点](../web/ui-extensions.md)；已知偏差集中登记在 [已知问题与现状偏差](known-issues.md)。
 
-## 2. 总表（26 个内置插件）
+## 2. 总表（27 个内置插件）
 
 缩写：**DO** = `ToolCallingAdvisor.DEFAULT_ORDER`（−2147483348）；**HP** = `Ordered.HIGHEST_PRECEDENCE`（−2147483648）。「代码量级」= 入口文件（`main` 指向的 Java 类 / `web/index.ts`）行数，量级仅供参考。
 
@@ -33,6 +33,7 @@ has_children: false
 | file-change | 文件变更跟踪 | both | AdvisorProvider + `addRoundClosedListener`；RPC `task.fileChanges` | `ui.round_tail_panels` | HP+301 | 入口 132 行 + web 35 行 |
 | git | Git 操作 | both | AdvisorProvider + SlashProvider + SlashTokenResolver；RPC ×13（`git.*`） | `ui.sidebar_items` + `ui.workspace_tab_types` + `ui.file_explorer_actions` | HP+140；侧边栏 5 | 入口 56 行 + web 57 行 |
 | image-vision | 图片识别 | java | FileReferenceHandler | — | — | 入口 34 行 |
+| mobile-keyboard | 移动端键盘增强 | web | —（无 Java） | —（自挂 DOM 悬浮球，不走 register\*） | — | 入口 30 行 + web 300 行 |
 | model-length-guard | 模型输出预算耗尽护栏 | java | AdvisorProvider | — | DO+300 | 入口 23 行 |
 | model-pool | 模型池容灾 | java | ChatModelEnhancer | — | — | 入口 29 行 |
 | model-rate-limit | 模型限流 | java | TokenEstimator + AdvisorProvider ×2 | — | 校准 0；限流 DO+500 | 入口 47 行 |
@@ -111,6 +112,7 @@ has_children: false
 | `ui.file_content_editors`（文件内容编辑器） | pdf-viewer | `every-agent-plugins/pdf-viewer/web/index.ts:14-19` | 唯一使用者 + web-only 形态最小样本（无 pom 无 src） |
 | `ui.file_explorer_actions`（文件树右键动作） | git | `every-agent-plugins/git/web/index.ts:42-53` | 唯一注册者；动作追加到文件树右键菜单内置项尾部（[UI §13](../web/ui-extensions.md)） |
 | `ui.round_tail_panels`（轮次尾面板） | file-change | `every-agent-plugins/file-change/web/index.ts:22` | 唯一使用者；配套 `ctx.events.on('task-round-closed')` 缓存作废范式 |
+| 扩展点之外的自绘全局 UI（悬浮球等） | mobile-keyboard | `every-agent-plugins/mobile-keyboard/web/floatball.ts` | 唯一直接操作 `document.body` 的插件：12 个扩展点没有全局覆盖层位时，挂自有根元素 + 自管生命周期与可见性 |
 
 另有非 register\* 的服务通道 `WorkerServices.addRoundClosedListener`（`every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/WorkerServices.java:80`），唯一使用者 file-change（`FileChangePlugin.java:33`）。
 
@@ -227,6 +229,12 @@ has_children: false
 `@` 引用图片 → 压缩 → base64 dataURL 注入视觉模型。
 - 关键文件：`~plugins/image-vision/src/main/java/dev/everyagent/plugin/imagevision/ImageVisionPlugin.java:29-30`；`~plugins/image-vision/plugin.json:8-26`。
 - 值得看：**唯一实现 FileReferenceHandler 的插件**；`contributes.config` 3 键 → `ctx.config()` 的消费链活样本。
+
+### mobile-keyboard（移动端键盘增强）
+
+移动端 + 终端界面可见时，显示 AssistiveTouch 风格悬浮球，点开是方向键小键盘，按键以合成 KeyboardEvent 派发进 xterm；web-only 形态。
+- 关键文件：`~plugins/mobile-keyboard/web/index.ts`（入口）、`~plugins/mobile-keyboard/web/floatball.ts`（悬浮球控制器）、`~plugins/mobile-keyboard/web/floatball.css`（样式，经 esbuild 抽取注入）。
+- 值得看：**扩展点之外的自绘全局 UI** 全仓唯一范例——悬浮球拖拽/边缘吸附/位置持久化（`ctx.storage`）、「可见的 `.xterm` + 视口 ≤768px」双条件显隐（MutationObserver + resize + `workspace-tab-closed`）、向 `.xterm-helper-textarea` 派发带 legacy `keyCode` 的合成 `KeyboardEvent` 让 xterm 自行生成 `\x1b[A/B/C/D` 转义序列（xterm 不检查 `isTrusted`，已核实其 keydown 链路）。
 
 ### model-length-guard（模型输出预算耗尽护栏）
 
