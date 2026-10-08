@@ -124,7 +124,7 @@ Maven 模块 `every-agent-plugins/sandbox-windows-codex`,包根 `dev.everyagent.
 | `ProcThreadAttr` | InitializeProcThreadAttributeList/UpdateProcThreadAttribute:JOB_LIST(0x2000D,失败即拒绝 spawn)、HANDLE_LIST(0x2002,只继承 stdio 管道) | proc_thread_attr.rs |
 | `PrivateDesktop` | CreateDesktopW(随机名 `EveryAgentCodexDesktop-<hex>`)+ 同 logon SID 授 DESKTOP_ALL_ACCESS;每会话新建不复用(会话数少,复用键策略暂缓) | desktop.rs |
 | `ChildProcess` | CreateProcessAsUserW(受限令牌 + lpDesktop + CREATE_NO_WINDOW\|CREATE_UNICODE_ENVIRONMENT)、3 匿名管道、句柄白名单、8KiB ReadFile 循环 | process.rs |
-| `EnvBlock` | env 规范化(/dev/null→NUL、PAGER=more.com、PATH/PATHEXT 继承、GIT_CONFIG safe.directory 注入)、key 大小写不敏感排序的 UTF-16 环境块 | env.rs / process.rs |
+| `EnvBlock` | env 规范化(/dev/null→NUL、PAGER=more.com、PATH/PATHEXT 继承、GIT_CONFIG 注入——safe.directory 信任树根 + agent 提交身份 user.name/email(§7.10 第四批,描述里的 git -c 提示随之退役))、key 大小写不敏感排序的 UTF-16 环境块 | env.rs / process.rs |
 
 ### 2.7 `broker`/`runner` — 双进程 IPC
 

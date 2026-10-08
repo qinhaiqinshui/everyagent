@@ -67,11 +67,13 @@ public class CodexBashToolProvider implements ToolProvider {
                 ? "内容搜索用 rg(已在 PATH,尊重 .gitignore,全仓递归远快于 findstr;"
                         + "未给文件参数时会改读空 stdin,务必显式给出路径如 rg <pattern> .);"
                 : "rg 不可用,内容搜索改用 Select-String;";
+        // git 身份提示已随第四批退役(2026-12):执行器 injectGitConfig 经 GIT_CONFIG env
+        // 注入 user.name/user.email,裸 git commit 直接成功——描述不再携带任何 git 指引
+        // (护栏:backendDoesNotReAddPrunedBaselineClaims 断言「提交须带」「user.name」不在场)。
         return List.of(ShellTool.powershell("在系统上用 PowerShell 执行真实 OS 命令;"
                         + "命令工作目录默认为任务工作区根;"
                         + rgNote
-                        + "实际执行 shell=" + CodexCommandExecutor.detectShell().exe + ";"
-                        + "git 不读宿主全局配置,提交须带 -c user.name=<名> -c user.email=<邮箱>。",
+                        + "实际执行 shell=" + CodexCommandExecutor.detectShell().exe + "。",
                 exec::execute).callback());
     }
 }

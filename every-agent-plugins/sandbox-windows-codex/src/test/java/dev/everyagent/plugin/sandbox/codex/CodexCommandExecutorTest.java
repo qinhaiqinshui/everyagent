@@ -258,17 +258,42 @@ class CodexCommandExecutorTest {
                         + "断言消息全损);注入后中文探针 stdout/stderr 全对");
     }
 
+    /**
+     * 测试 JVM 自身可能携带外层注入的 GIT_CONFIG_*(如在 codex 沙箱会话里跑 mvn:部署中的
+     * 执行器已为当前仓库注入 safe.directory 两条,surefire 子进程照单继承)——产品契约是
+     * 「已存 GIT_CONFIG_COUNT 时在其后追加」(codex 同款),因此断言必须按外层基址相对校验,
+     * 不能假设干净环境。本方法返回外层基址;干净环境下为 0,行为与旧断言等价。
+     */
+    private static int gitConfigBase() {
+        String v = System.getenv("GIT_CONFIG_COUNT");
+        if (v == null) {
+            return 0;
+        }
+        try {
+            return Integer.parseInt(v);
+        } catch (NumberFormatException ignore) {
+            return 0; // 与执行器同款宽容:非法基址从 0 起追加
+        }
+    }
+
     @Test
-    void childEnvInjectsGitSafeDirectoryForRepoRoot() throws IOException {
+    void childEnvInjectsGitConfigForRepoRoot() throws IOException {
         Path ws = tempDir.resolve("ws-git");
         Files.createDirectories(ws.resolve(".git"));
         Map<String, String> env = CodexCommandExecutor.childEnv(null, ws, null);
         String root = ws.toAbsolutePath().normalize().toString().replace('\\', '/');
-        assertEquals("2", env.get("GIT_CONFIG_COUNT"), "树根+嵌套两条,对齐 codex");
-        assertEquals("safe.directory", env.get("GIT_CONFIG_KEY_0"));
-        assertEquals(root, env.get("GIT_CONFIG_VALUE_0"), "路径用 / (git 口径)");
-        assertEquals("safe.directory", env.get("GIT_CONFIG_KEY_1"));
-        assertEquals(root + "/*", env.get("GIT_CONFIG_VALUE_1"), "嵌套仓库/子模块一并信任");
+        int n = gitConfigBase();
+        assertEquals(String.valueOf(n + 4), env.get("GIT_CONFIG_COUNT"),
+                "树根+嵌套+提交身份两条(在外层基址后追加,外层条目原样保留)");
+        assertEquals("safe.directory", env.get("GIT_CONFIG_KEY_" + n));
+        assertEquals(root, env.get("GIT_CONFIG_VALUE_" + n), "路径用 / (git 口径)");
+        assertEquals("safe.directory", env.get("GIT_CONFIG_KEY_" + (n + 1)));
+        assertEquals(root + "/*", env.get("GIT_CONFIG_VALUE_" + (n + 1)), "嵌套仓库/子模块一并信任");
+        assertEquals("user.name", env.get("GIT_CONFIG_KEY_" + (n + 2)));
+        assertEquals("EveryAgent", env.get("GIT_CONFIG_VALUE_" + (n + 2)),
+                "提交身份注入:沙箱 profile 无全局配置,裸 commit 否则 fatal(实测 128)");
+        assertEquals("user.email", env.get("GIT_CONFIG_KEY_" + (n + 3)));
+        assertEquals("everyagent@localhost", env.get("GIT_CONFIG_VALUE_" + (n + 3)));
     }
 
     @Test
@@ -279,8 +304,9 @@ class CodexCommandExecutorTest {
         Files.createDirectories(nested);
         Map<String, String> env = CodexCommandExecutor.childEnv(null, nested, null);
         String root = ws.toAbsolutePath().normalize().toString().replace('\\', '/');
-        assertEquals(root, env.get("GIT_CONFIG_VALUE_0"),
-                "workspaceRoot 在仓库子目录时向上找到树根(codex 同款语义)");
+        int n = gitConfigBase();
+        assertEquals(root, env.get("GIT_CONFIG_VALUE_" + n),
+                "workspaceRoot 在仓库子目录时向上找到树根(codex 同款语义;槽位按外层基址相对)");
     }
 
     @Test

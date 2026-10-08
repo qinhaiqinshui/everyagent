@@ -92,6 +92,8 @@ class CodexBashToolProviderTest {
         assertFalse(desc.contains("非 ASCII"), "已删(第三批):编码已解码句");
         assertFalse(desc.contains("搜索请始终显式给出路径"), "早期整句形态不得回归(恢复项为 §7.10 紧凑措辞)");
         assertFalse(desc.contains("当搜索源"), "早期整句形态不得回归(恢复项为 §7.10 紧凑措辞)");
+        assertFalse(desc.contains("提交须带"), "已退役(第四批):git 身份由执行器 env 注入,描述不再指引 -c");
+        assertFalse(desc.contains("user.name"), "已退役(第四批):描述不再含 git 身份字样");
         assertFalse(desc.contains("Out-String"), "已删条目不得由后端加回");
         assertFalse(desc.contains("null 设备"), "旧措辞不得回归");
         assertFalse(desc.contains("静默过滤 null stdin"), "旧措辞不得回归");

@@ -743,25 +743,40 @@ public final class CodexCommandExecutor {
             env.put("LOCALAPPDATA", profileDir.resolve("AppData").resolve("Local").toString());
         }
         if (workspaceRoot != null) {
-            injectGitSafeDirectory(env, workspaceRoot);
+            injectGitConfig(env, workspaceRoot);
         }
         return env;
     }
 
+    /** git 提交身份(env 注入用):工作区由 agent 操作,署名恒为 agent 身份(§7.10 第四批,
+     * 描述里的「提交须带 -c user.name=...」提示随之退役——此前模型各自发挥,同一会话出现过
+     * 三个不同邮箱)。env 配置属 command 作用域,压过仓库本地 user.*,属有意选择。 */
+    private static final String GIT_IDENTITY_NAME = "EveryAgent";
+
+    private static final String GIT_IDENTITY_EMAIL = "everyagent@localhost";
+
     /**
-     * git safe.directory 注入（对齐 codex 原生 {@code sandbox_utils::inject_git_safe_directory}，
-     * 逐语义移植）：从 workspaceRoot 向上找含 {@code .git} 的树根（{@code Files.exists}——
-     * worktree/子模块的 {@code .git} 是文件），经 git 的 env 配置机制
-     * {@code GIT_CONFIG_COUNT/KEY_n/VALUE_n} 注入 {@code safe.directory=<root>} 与
-     * {@code <root>/*}（嵌套仓库一并信任）。
-     * <p>为什么必须：仓库属主是宿主用户而命令跑在沙箱账户下,git ≥2.35.2 的 ownership
-     * 保护直接 fatal（实测）；沙箱 profile 切断了对宿主 {@code .gitconfig} 的借读后,
-     * 宿主曾有的 {@code safe.directory=*} 豁免不再可见（那本就是意外依赖+泄露面）。
-     * <p>为什么这样而非写 {@code ~/.gitconfig}：env 注入零落盘、每次 spawn 按当时
+     * git env 配置注入(safe.directory 对齐 codex 原生 {@code sandbox_utils::inject_git_safe_directory}
+     * 逐语义移植;提交身份为我们的扩展,§7.10 第四批):从 workspaceRoot 向上找含 {@code .git}
+     * 的树根({@code Files.exists}——worktree/子模块的 {@code .git} 是文件),经 git 的 env
+     * 配置机制 {@code GIT_CONFIG_COUNT/KEY_n/VALUE_n} 注入两组配置:
+     * <ul>
+     *   <li>{@code safe.directory=<root>} 与 {@code <root>/*}(嵌套仓库一并信任)——仓库属主
+     *       是宿主用户而命令跑在沙箱账户下,git ≥2.35.2 的 ownership 保护直接 fatal(实测);
+     *       沙箱 profile 切断宿主 {@code .gitconfig} 借读后,宿主的 {@code safe.directory=*}
+     *       豁免不再可见(那本就是意外依赖+泄露面)。</li>
+     *   <li>{@code user.name}/{@code user.email}=agent 身份——沙箱 profile 下宿主全局配置与
+     *       自动猜测(${@code 沙箱账户@主机.(none)})双双落空,裸 commit 会 fatal(实测 exit 128);
+     *       注入后模型无需 {@code -c} 携带身份。<b>优先级</b>:env 配置属 command 作用域,
+     *       <b>压过仓库本地 user.*</b>(实测)——工作区提交由 agent 操作,署名恒为 agent 属
+     *       诚实归因,有意如此。</li>
+     * </ul>
+     * <p>为什么这样而非写 {@code ~/.gitconfig}:env 注入零落盘、每次 spawn 按当时
      * workspaceRoot 重算、且精确到本仓库树——比宿主原来的 {@code *} 更收紧。已存
-     * {@code GIT_CONFIG_COUNT} 时在其后追加（codex 同款）。路径用 {@code /}（git 口径）。
+     * {@code GIT_CONFIG_COUNT} 时在其后追加(codex 同款)。路径用 {@code /}(git 口径)。
+     * 无 .git 树根时整体不注入(不碰非 git 语境)。
      */
-    private static void injectGitSafeDirectory(Map<String, String> env, Path workspaceRoot) {
+    private static void injectGitConfig(Map<String, String> env, Path workspaceRoot) {
         Path cur = workspaceRoot.toAbsolutePath().normalize();
         while (cur != null) {
             if (Files.exists(cur.resolve(".git"))) {
@@ -776,7 +791,11 @@ public final class CodexCommandExecutor {
                 env.put("GIT_CONFIG_VALUE_" + n, root);
                 env.put("GIT_CONFIG_KEY_" + (n + 1), "safe.directory");
                 env.put("GIT_CONFIG_VALUE_" + (n + 1), root + "/*");
-                env.put("GIT_CONFIG_COUNT", String.valueOf(n + 2));
+                env.put("GIT_CONFIG_KEY_" + (n + 2), "user.name");
+                env.put("GIT_CONFIG_VALUE_" + (n + 2), GIT_IDENTITY_NAME);
+                env.put("GIT_CONFIG_KEY_" + (n + 3), "user.email");
+                env.put("GIT_CONFIG_VALUE_" + (n + 3), GIT_IDENTITY_EMAIL);
+                env.put("GIT_CONFIG_COUNT", String.valueOf(n + 4));
                 return;
             }
             cur = cur.getParent();
