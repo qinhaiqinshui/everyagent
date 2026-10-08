@@ -7,9 +7,10 @@
 # 本脚本只负责收割历史残留；deny-Everyone 封掉 READ_CONTROL 后非管理员无法自救，
 # 这是 Windows 语义（属主隐式权利压不过显式 deny），故必须以管理员运行。
 #
-# 用法（在仓库根或任意目录）：
-#   powershell -ExecutionPolicy Bypass -File every-agent-plugins/sandbox-windows-codex/scripts/clean-bricked-tmp.ps1 `
-#       -TmpRoot <工作区>/.everyagent/tmp
+# 用法（必须管理员 PowerShell；执行策略对未签名脚本默认是拦的，务必带 -ExecutionPolicy Bypass）：
+#   powershell -ExecutionPolicy Bypass -File every-agent-plugins/sandbox-windows-codex/scripts/clean-bricked-tmp.ps1
+# 指定别的工作区 tmp 根时：
+#   powershell -ExecutionPolicy Bypass -File every-agent-plugins/sandbox-windows-codex/scripts/clean-bricked-tmp.ps1 -TmpRoot <工作区>\.everyagent\tmp
 #Requires -RunAsAdministrator
 param(
     # 砖目录所在的工作区 tmp 根（跑过 mvn 测试的工作区各跑一次）
