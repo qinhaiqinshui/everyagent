@@ -501,7 +501,7 @@ ask 管道承载第二类阻塞请求:**危险操作授权**。`PermissionGate` 
 - **不放大(P5)**:只有**确实存在**的授权单元才下发(目录 → 目录;已存在文件 → 单文件)——「新建一个文件」需要父目录写权限,无法在请求粒度落地,**故不下发**(该路径仍可经 file 工具通道访问),绝不悄悄放宽到父目录。命令链的越界路径授权本就按「所在目录」归并(`grantRootOf`),随附该目录。
 - **回收按主体生命周期**:run 档清空(新用户输入)/ 主体驱逐(`untrack`)→ 该 owner 集合收敛 → 无人期望的根被 `revoke`;**仍有主体期望的根不被回收**(聚合在账本层)。进程重启由 `grants.json`(v2,持久化 `sandboxRoots`)重放。
 - **访问语义按 key**:`p::read::` → 只读,写 / EXEC → 读写。
-- **已知缺口**:读根目前只授给**组 SID**(无 per-root cap SID),`revoke` 后 ACE 仍在且组 SID 恒在令牌中 → **读授权的物理回收尚未生效**(规划:read cap SID)。写侧已有效(cap SID 不再进新令牌,陈旧 ACE 天然失效)。
+- **回收的物理机制**(与令牌模型绑定,细节见 §7.10「授权根的回收语义」):**写**靠 cap SID 不再进新令牌(陈旧 ACE 刻意保留,因物理撤销会打断存活子进程);**读**无门控手段,靠 `ReadGrantState` 账本 + preflight 差量 `revokeAce` 物理撤销(当前写根 / deny-read 目标只遗忘不撤)。
 
 **拒绝语义**:抛 `PermissionDeniedException` → 统一转「[工具执行失败]」文本回灌模型,agent 循环不中断。
 
@@ -535,7 +535,7 @@ ask 管道承载第二类阻塞请求:**危险操作授权**。`PermissionGate` 
 - `grant(List<PathGrant>)` — 声明这些宿主路径在沙箱内**可访问**(建立权限 + 映射基准)。幂等、可重放。**best-effort 且不放大(§7.8 P5)**:无法在请求粒度落地时(典型:待建文件——创建需父目录写权限)**跳过并记日志,绝不放大到父目录**。
 - `revoke(List<Path>)` — 撤销权限与映射。幂等;**只带路径,不带任务/工作区语义**(是否还有人需要该根由上层聚合判断)。
 - `toSandbox(Path)` / `toHost(String)` — **纯查询、无副作用、默认恒等**;上层无条件调用一次,不需要判断「这个后端是否需要翻译」。翻译是沙箱世界的属性,且**由 grant 确立的映射基准派生**(wsl 的 drvfs 挂载天然两者兼得;codex 只涉权限,映射恒等)。
-- `mount`/`MountRequest`/`onWorkspaceRemoved` 已 `@Deprecated`(迁移期保留):前者兼两职导致触发时机错位与粒度错位,后者的工作区语义违反「沙箱不感知领域」。
+- `mount`/`MountRequest`/`onWorkspaceRemoved` **已删除**(迁移期结束后清理):前者兼两职导致触发时机错位与粒度错位,后者的工作区语义违反「沙箱不感知领域」。**SPI 现为 4 个方法 + `id`**。
 
 | 后端 | id | priority | grant/revoke | toSandbox | 说明 |
 |---|---|---|---|---|---|
@@ -566,7 +566,17 @@ ask 管道承载第二类阻塞请求:**危险操作授权**。`PermissionGate` 
 | `skills` | `BuiltInSkills` | 系统技能目录根(READ_WRITE,§7.17 读写挂入) | `@PostConstruct` 物化知识包时 |
 | `grants:<subjectId>` | `GrantRegistry` | 该主体的**单次授权根**(§7.8:授权范围 = 沙箱可访问范围;P5 不放大) | 授权落定(run/task 档)、`beginRun` 清 run 档、`untrack` 主体终态、磁盘重载 |
 
-**授权根的回收语义**:回收走账本差量——run 档清空(新用户输入)/ 主体驱逐 → 该 owner 的集合收敛 → 无人期望的根被 `revoke`;**跨主体共享的根在仍有主体期望时不被回收**(聚合在账本层完成,SPI 只带路径)。写侧回收**物理有效**(codex:cap SID 不再进新令牌,陈旧 ACE 天然失效)。**已知缺口**:读根目前只授给**组 SID**(无 per-root cap SID),`revoke` 后 ACE 仍在且组 SID 恒在令牌中 → **读授权的物理回收尚未生效**(规划中:引入 read cap SID,镜像 codex `windows_sandbox_read_grants`)。
+**授权根的回收语义**:回收走账本差量——run 档清空(新用户输入)/ 主体驱逐 → 该 owner 的集合收敛 → 无人期望的根被 `revoke`;**跨主体共享的根在仍有主体期望时不被回收**(聚合在账本层完成,SPI 只带路径)。
+
+两侧的物理回收机制**不同,原因是令牌模型**:
+
+| | 授权 ACE 主体 | 回收机制 | 生效性 |
+|---|---|---|---|
+| **写** | 组 SID + **该根 cap SID** | cap SID 是 **restricting SID**(`CreateRestrictedToken` + `WRITE_RESTRICTED`),`revoke` 后不再进新令牌 → 写检查(DACL ∩ restricting SIDs)不匹配 | ✅ 立即失效;磁盘 ACE **刻意不撤** |
+| **读** | 组 SID(**不能**用 cap SID) | restricting SID **只参与写检查**,读检查看令牌普通组;若把读 ACE 授给 cap SID 则根本读不了 → 读只能授组 SID,而组 SID 恒在令牌中 | ✅ 靠 **`ReadGrantState` 账本 + 物理撤 ACE**(preflight 差量对账) |
+
+- **写侧为何不撤 ACE**:cap SID 门控已让陈旧 ACE 失效(**安全已达标**);而物理撤销会打断**仍持有该 SID 的存活子进程**(命令可起后台进程,活得比 launcher 久)——codex 原生正因此选择「ACL 留在原地 + SID 门控」,本仓同构。
+- **读侧为何必须撤**:无门控手段可用;`ReadGrantState`(`<sandbox>/.sandbox/read_grants_state.json`,按组 SID 分区)记录「我们施过读授权的路径」,每次 preflight 先补齐/确认当前读根,再对本轮不再是读根的旧路径 `revokeAce`(下一条命令启动前完成 → 即刻系统级拒绝)。两条保护:①**当前写根**只遗忘不撤(写 ACE 是组+cap 双主体,撤组会连带丢掉读;且写根本身可能由读根升级而来);②**当前 deny-read 目标**只遗忘不撤(`revokeAce` 删该 SID 全部显式 ACE,会连带删掉 deny → 反而放宽)。系统本就放行读的路径(Everyone/Users/Authenticated Users 已持 RX)不入账——我们没施加任何东西。
 
 **任务级授权不进意图表(历史约束,现已被上面的 `grants:` owner supersede)**:原设计为避免 run 档授权经持久 drvfs 挂载泄漏成跨任务可读根,曾规定「单次授权只在授权决议层放行、不进沙箱」。现改为**路径级、无语义的 grant/revoke 通道**:沙箱侧只见到路径,由 worker 聚合账本按主体生命周期增删,故 run 档授权不会沉淀(主体边界即回收边界);wsl 侧仍是持久 drvfs 挂载,但其可见性由同一份账本驱动。
 

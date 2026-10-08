@@ -13,7 +13,6 @@ import org.junit.jupiter.api.Test;
 
 import java.nio.file.Path;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -61,7 +60,7 @@ class OsSandboxBackendSelectTest {
         }
     }
 
-    /** 挂载语义可断言的假后端:沙箱内路径统一加 "/sbx" 前缀。 */
+    /** 效果可断言的假后端:沙箱内路径统一加 "/sbx" 前缀,并记录 grant/revoke。 */
     private static final class FakeBackend implements SandboxBackend {
         private final String id;
 
@@ -75,8 +74,8 @@ class OsSandboxBackendSelectTest {
         }
 
         @Override
-        public Map<Path, String> mount(List<MountRequest> requests) {
-            return Map.of(requests.get(0).hostPath(), "/sbx" + requests.get(0).hostPath());
+        public String toSandbox(Path hostPath) {
+            return "/sbx" + hostPath;
         }
     }
 
@@ -119,21 +118,79 @@ class OsSandboxBackendSelectTest {
     }
 
     @Test
-    void mountForwardedToSpiBackend() {
+    void translationForwardedToSpiBackend() {
         SandboxProviderRegistry registry = new SandboxProviderRegistry();
         OsSandbox sandbox = new OsSandbox(props(true), registry);
         registry.register(new FakeProvider("wsl-ubuntu", 10));
 
         Path host = Path.of("/c/Users/dev/workspace");
-        SandboxBackend.MountRequest req =
-                new SandboxBackend.MountRequest(host, SandboxBackend.Access.READ_WRITE);
-        Map<Path, String> mounted = sandbox.mount(List.of(req));
+        assertEquals("/sbx" + host, sandbox.toSandbox(host), "翻译必须转发给 SPI 后端,不能吞成原路径");
 
-        assertEquals("/sbx" + host, mounted.get(host), "mount 必须转发给 SPI 后端,不能吞成原路径");
-
-        // 无 SPI 后端时退化为 SPI 默认实现(原路径直通)
+        // 无 SPI 后端时退化为 SPI 默认实现(恒等)
         OsSandbox direct = new OsSandbox(props(true), new SandboxProviderRegistry());
-        assertEquals(host.toString(), direct.mount(List.of(req)).get(host), "DIRECT 下 mount 原样直通");
+        assertEquals(host.toString(), direct.toSandbox(host), "DIRECT 下恒等");
+    }
+
+    /** grant/revoke 转发:门面吞掉会让沙箱授权整体失效。 */
+    @Test
+    void grantAndRevokeForwardedToSpiBackend() {
+        SandboxProviderRegistry registry = new SandboxProviderRegistry();
+        OsSandbox sandbox = new OsSandbox(props(true), registry);
+        RecordingProvider provider = new RecordingProvider();
+        registry.register(provider);
+        Path host = Path.of("/c/Users/dev/out");
+
+        sandbox.grant(List.of(new SandboxBackend.PathGrant(host, SandboxBackend.Access.READ_WRITE)));
+        sandbox.revoke(List.of(host));
+
+        assertEquals(List.of(host), provider.granted, "grant 必须转发给生效后端");
+        assertEquals(List.of(host), provider.revoked, "revoke 必须转发给生效后端");
+
+        // 无 SPI 后端:no-op(不抛)
+        OsSandbox direct = new OsSandbox(props(true), new SandboxProviderRegistry());
+        direct.grant(List.of(new SandboxBackend.PathGrant(host, SandboxBackend.Access.READ_ONLY)));
+        direct.revoke(List.of(host));
+    }
+
+    /** 记录 grant/revoke 的 provider(顺带覆盖 DIRECT 形态的默认 no-op)。 */
+    private static final class RecordingProvider implements SandboxProvider {
+        final List<Path> granted = new java.util.ArrayList<>();
+        final List<Path> revoked = new java.util.ArrayList<>();
+
+        @Override
+        public String id() {
+            return "recording";
+        }
+
+        @Override
+        public int priority() {
+            return 20;
+        }
+
+        @Override
+        public boolean isAvailable() {
+            return true;
+        }
+
+        @Override
+        public SandboxBackend create(SandboxProvider.SandboxConfig config) {
+            return new SandboxBackend() {
+                @Override
+                public String id() {
+                    return "recording";
+                }
+
+                @Override
+                public void grant(List<SandboxBackend.PathGrant> grants) {
+                    grants.forEach(g -> granted.add(g.hostPath()));
+                }
+
+                @Override
+                public void revoke(List<Path> hostPaths) {
+                    revoked.addAll(hostPaths);
+                }
+            };
+        }
     }
 
     @Test

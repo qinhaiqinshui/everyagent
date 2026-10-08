@@ -141,32 +141,6 @@ public final class OsSandbox implements SandboxBackend, NativeExec {
     }
 
     /**
-     * 挂载转发（迁移期兼容）。
-     *
-     * @deprecated 见 {@link SandboxBackend#mount}；改用 {@link #grant} + {@link #toSandbox}。
-     */
-    @Deprecated(since = "refactor/grant-revoke", forRemoval = true)
-    @Override
-    public Map<Path, String> mount(List<SandboxBackend.MountRequest> requests) {
-        SandboxBackend d = backend();
-        return d != null ? d.mount(requests) : SandboxBackend.super.mount(requests);
-    }
-
-    /**
-     * 工作区移除清理转发（迁移期兼容）。
-     *
-     * @deprecated 见 {@link SandboxBackend#onWorkspaceRemoved}；改用路径级 {@link #revoke}。
-     */
-    @Deprecated(since = "refactor/grant-revoke", forRemoval = true)
-    @Override
-    public void onWorkspaceRemoved(Path root) {
-        SandboxBackend d = backend();
-        if (d != null) {
-            d.onWorkspaceRemoved(root);
-        }
-    }
-
-    /**
      * 按注册表代次惰性解析 SPI 后端委托。
      *
      * <p>代次未变（含解析结果为 null）直接复用缓存,不重复探测；沙箱未启用或无注册表恒为 null。

@@ -37,6 +37,59 @@ class ProvisioningAclTest {
     }
 
     @Test
+    void readGrantIsRecordedAndStaleReadRootIsRevokedAcrossPreflights() throws IOException {
+        Path ws = Files.createDirectories(tmp.resolve("workspace"));
+        Path extraRead = Files.createDirectories(tmp.resolve("extra-read"));
+        RecordingAclOperations ops = new RecordingAclOperations();
+        ProvisioningAcl acl = new ProvisioningAcl(ops);
+
+        // 第一次 preflight:授权读 extraRead
+        acl.applyProvisioning(request(ws).readRoots(List.of(extraRead.toString())).build());
+        assertTrue(ops.calls.stream().anyMatch(c -> c.op().equals("readExec")
+                        && c.path().equals(extraRead)), "读根应施加组 RX");
+        assertEquals(List.of(extraRead.toString()), DenyReadState
+                .load(ReadGrantState.stateFile(tmp.resolve(".sandbox"))).get(GROUP),
+                "读授权必须入账(否则撤销无据可依)");
+
+        // 第二次 preflight:读根集合不再包含它 → 物理回收
+        ops.calls.clear();
+        acl.applyProvisioning(request(ws).build());
+        assertEquals(List.of(extraRead), ops.calls.stream()
+                        .filter(c -> c.op().equals("revoke")).map(RecordingAclOperations.Call::path).toList(),
+                "陈旧读根必须在 preflight 被撤销(读授权无法靠 cap SID 门控)");
+    }
+
+    @Test
+    void writeRootIsNeverRevokedByReadReconcile() throws IOException {
+        Path ws = Files.createDirectories(tmp.resolve("workspace"));
+        RecordingAclOperations ops = new RecordingAclOperations();
+        ProvisioningAcl acl = new ProvisioningAcl(ops);
+
+        // 曾作为读根施加过
+        acl.applyProvisioning(request(ws).readRoots(List.of(ws.toString())).build());
+        ops.calls.clear();
+
+        // 本轮不再列读根(它是写根):保护集命中 → 不得撤组 ACE(否则连带丢掉读)
+        acl.applyProvisioning(request(ws).build());
+        assertTrue(ops.calls.stream().noneMatch(c -> c.op().equals("revoke")),
+                "写根的组 ACE 不得被读回收逻辑撤销: " + ops.calls);
+    }
+
+    @Test
+    void builtinReadablePathIsNotLedgered() throws IOException {
+        Path ws = Files.createDirectories(tmp.resolve("workspace"));
+        Path systemDir = Files.createDirectories(tmp.resolve("system"));
+        RecordingAclOperations ops = new RecordingAclOperations();
+        ops.maskAllows = true; // 模拟内建主体已持 RX(C:\Windows 形态)
+
+        new ProvisioningAcl(ops).applyProvisioning(
+                request(ws).readRoots(List.of(systemDir.toString())).build());
+
+        assertFalse(DenyReadState.load(ReadGrantState.stateFile(tmp.resolve(".sandbox")))
+                .containsKey(GROUP), "系统本就放行的路径不入账(我们没施加任何东西)");
+    }
+
+    @Test
     void appliesInCodexOrderDenyReadFirst() throws IOException {
         Path ws = Files.createDirectories(tmp.resolve("workspace"));
         Path secret = Files.writeString(tmp.resolve("secret.env"), "s");

@@ -25,9 +25,10 @@ import java.util.Set;
  *       按重叠 cap 选择（根包含路径或路径包含根；无命中回退全部活动根）、
  *       逐 SID {@code add_deny_write_ace}；</li>
  *   <li><b>read 根组授权</b>：内建主体（Everyone/Users/Authenticated Users）已持
- *       完整 RX 则跳过，组已持则跳过，否则组 RX allow（SET_ACCESS、OI|CI）。
- *       （codex 把读授权放后台 ReadAclsOnly helper 渐进收敛；此处同步执行——
- *       首期规模小，语义等价、时序更保守。）</li>
+ *       完整 RX 则跳过（也不入账），组已持则确认记账，否则组 RX allow（SET_ACCESS、OI|CI）
+ *       并记账；随后按 {@link ReadGrantState} 对账<b>物理撤销</b>陈旧读授权
+ *       （读授权无法靠 capability SID 门控——restricting SID 只参与写检查；
+ *       写根与 deny-read 目标只遗忘不撤）。</li>
  * </ol>
  *
  * <p>错误语义对齐：deny-read 失败 → 抛出（fail-closed）；deny-write 物化失败 → 抛出；
@@ -118,8 +119,9 @@ public final class ProvisioningAcl {
             }
         }
 
-        // 4) read 根组授权（内建已持 → 组已持 → 组 allow）
+        // 4) read 根组授权（内建已持 → 组已持 → 组 allow）+ 陈旧读授权物理回收
         Set<String> seenRead = new LinkedHashSet<>();
+        List<Path> appliedRead = new ArrayList<>();
         for (String readRoot : req.readRoots()) {
             if (!seenRead.add(WorkspaceProtect.canonicalKey(Path.of(readRoot)))) {
                 continue;
@@ -131,16 +133,31 @@ public final class ProvisioningAcl {
             try {
                 if (ops.pathMaskAllows(rootPath, BUILTIN_RX_SIDS, AclMasks.READ_EXECUTE_MASK,
                         true)) {
-                    continue; // 系统本就放行（如 C:\Windows），不触碰系统 ACL
+                    continue; // 系统本就放行（如 C:\Windows），不触碰系统 ACL 也不入账
                 }
-                if (ops.pathMaskAllows(rootPath, List.of(req.groupSid()),
+                if (!ops.pathMaskAllows(rootPath, List.of(req.groupSid()),
                         AclMasks.READ_EXECUTE_MASK, true)) {
-                    continue;
+                    ops.ensureReadExecuteAces(rootPath, List.of(req.groupSid()));
                 }
-                ops.ensureReadExecuteAces(rootPath, List.of(req.groupSid()));
+                // 无论本次新增还是既有确认，都归本主体的读授权账本——撤销时才有据可撤
+                appliedRead.add(rootPath);
             } catch (IOException e) {
                 errors.add("read ACE failed on " + rootPath + ": " + e.getMessage());
             }
+        }
+        // 读授权无法靠 capability SID 门控（restricting SID 只参与写检查），只能物理撤 ACE：
+        // 账本差量回收陈旧读根。写根与 deny-read 目标只遗忘不撤（否则连带丢掉读 / 删掉 deny）。
+        try {
+            Set<String> neverRevoke = new LinkedHashSet<>();
+            for (String writeRoot : req.writeRoots()) {
+                neverRevoke.add(DenyReadPlanner.lexicalPathKey(Path.of(writeRoot)));
+            }
+            for (String denyRead : req.denyReadPaths()) {
+                neverRevoke.add(DenyReadPlanner.lexicalPathKey(Path.of(denyRead)));
+            }
+            ReadGrantState.sync(req.stateRoot(), req.groupSid(), appliedRead, neverRevoke, ops);
+        } catch (IOException e) {
+            errors.add("read grant reconcile failed: " + e.getMessage());
         }
         if (!errors.isEmpty()) {
             // 尽力而为语义（对齐 Full 模式 refresh_errors 不 bail）：记录告警不抛出；

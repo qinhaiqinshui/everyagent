@@ -63,37 +63,7 @@ public interface SandboxBackend {
         return Path.of(sandboxPath);
     }
 
-    // ── 兼容层（迁移期保留，阶段 C 删除） ───────────────────────────────
-
-    /**
-     * 批量挂载宿主路径到沙箱内，返回映射表。
-     *
-     * @deprecated 兼两职（路径映射 + 权限登记）导致触发时机错位与粒度错位；
-     *             改用 {@link #grant}（效果）+ {@link #toSandbox}（查询）。
-     *             迁移期保留，待全部消费者迁移后删除。
-     */
-    @Deprecated(since = "refactor/grant-revoke", forRemoval = true)
-    default Map<Path, String> mount(List<MountRequest> requests) {
-        Map<Path, String> result = new LinkedHashMap<>();
-        for (MountRequest req : requests) {
-            result.put(req.hostPath(), req.hostPath().toString());
-        }
-        return result;
-    }
-
-    /**
-     * 工作区被删除时调用;后端 best-effort 清理挂载等;默认 no-op。
-     *
-     * @deprecated 工作区语义 + 只有单根清理；改用路径级、无语义的 {@link #revoke}。
-     */
-    @Deprecated(since = "refactor/grant-revoke", forRemoval = true)
-    default void onWorkspaceRemoved(Path root) {
-    }
-
-    /** 单个挂载请求。 */
-    @Deprecated(since = "refactor/grant-revoke", forRemoval = true)
-    record MountRequest(Path hostPath, Access access) {
-    }
+    // ── 值类型 ──────────────────────────────────────────────────
 
     /** 单个授权声明：宿主路径 + 访问语义。 */
     record PathGrant(Path hostPath, Access access) {
