@@ -59,11 +59,13 @@ public class CodexBashToolProvider implements ToolProvider {
         // 描述全量自报(2026-12 第三批:核心零默认,提供者必传):用途/工作目录两句随移交由本
         // 后端自写。通用常识类条目(stdin 语义、-join/$OFS、非 ASCII 已解码、Out-String 收口、
         // 连接符版本)均已按用户决策从描述删除(沿革与残余风险见 ARCHITECTURE §7.10),
-        // 后端不得在此私自加回。rg 提示按解析结果条件化(详见类注释):三档皆无时如实说明,
-        // 不谎报「已加入 PATH」;优势压到一行,给可信的区分依据而非空喊「性能更好」。
+        // 后端不得在此私自加回——唯一例外:搜索显式路径子句经 §7.10 恢复协议由用户决策
+        // 恢复(2026-12),四后端同口径。rg 提示按解析结果条件化(详见类注释):三档皆无时
+        // 如实说明,不谎报「已加入 PATH」;优势压到一行,给可信的区分依据而非空喊「性能更好」。
         // 「实际执行 shell=<exe>」保留:#4 连接符版本细则删除后,版本判断依据只剩这一处。
         String rgNote = rg.available()
-                ? "内容搜索用 rg(已在 PATH,尊重 .gitignore,全仓递归远快于 findstr);"
+                ? "内容搜索用 rg(已在 PATH,尊重 .gitignore,全仓递归远快于 findstr;"
+                        + "未给文件参数时会改读空 stdin,务必显式给出路径如 rg <pattern> .);"
                 : "rg 不可用,内容搜索改用 Select-String;";
         return List.of(ShellTool.powershell("在系统上用 PowerShell 执行真实 OS 命令;"
                         + "命令工作目录默认为任务工作区根;"

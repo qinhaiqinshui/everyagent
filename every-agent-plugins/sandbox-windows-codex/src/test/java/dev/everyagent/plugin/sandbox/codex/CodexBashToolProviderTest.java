@@ -53,6 +53,7 @@ class CodexBashToolProviderTest {
         assertEquals("powershell", tools.get(0).getToolDefinition().name());
         String desc = tools.get(0).getToolDefinition().description();
         assertTrue(desc.contains("已在 PATH"), "rg 可用 → 描述声明 rg 可用");
+        assertTrue(desc.contains("务必显式给出路径"), "§7.10 恢复项:无路径陷阱子句必须在场");
         assertFalse(desc.contains("rg 不可用"), "rg 可用时不得混入「不可用」提示");
     }
 
@@ -63,6 +64,7 @@ class CodexBashToolProviderTest {
                 .createTools(TestFixtures.ctx("codex", tempDir, null))
                 .get(0).getToolDefinition().description();
         assertFalse(desc.contains("已在 PATH"), "rg 不可用不得谎报可用");
+        assertFalse(desc.contains("务必显式给出路径"), "rg 子句只随 rg 可用分支携带");
         assertTrue(desc.contains("rg 不可用"), "如实声明 rg 不可用");
     }
 
@@ -71,7 +73,9 @@ class CodexBashToolProviderTest {
      * 「非 ASCII 已正确解码」等条目已从描述删除（理由与残余风险见 ARCHITECTURE §7.10），
      * 提供者<b>不得把它们加回来</b>——否则已删内容会以「各后端自行补」的形式复活；
      * 恢复提示的前提是先读 §7.10 的处置优先级，不是在此新增。用途/工作目录两句随基线
-     * 删除改由本后端自写，同样在此守护。
+     * 删除改由本后端自写，同样在此守护。唯一已恢复项：搜索显式路径子句（§7.10 恢复协议
+     * 走完「核对→决策」后按用户决策恢复，由 createsSinglePowerShellTool 正向断言在场）；
+     * 下两条断言防的是更早期的<b>整句形态</b>复活，恢复项用的是记录在案的紧凑措辞。
      */
     @Test
     void backendDoesNotReAddPrunedBaselineClaims() {
@@ -86,8 +90,8 @@ class CodexBashToolProviderTest {
         assertFalse(desc.contains("-join"), "已删(第三批):-join/$OFS 条");
         assertFalse(desc.contains("$OFS"), "已删(第三批):-join/$OFS 条");
         assertFalse(desc.contains("非 ASCII"), "已删(第三批):编码已解码句");
-        assertFalse(desc.contains("搜索请始终显式给出路径"), "已删条目不得由后端加回");
-        assertFalse(desc.contains("当搜索源"), "已删条目不得由后端加回");
+        assertFalse(desc.contains("搜索请始终显式给出路径"), "早期整句形态不得回归(恢复项为 §7.10 紧凑措辞)");
+        assertFalse(desc.contains("当搜索源"), "早期整句形态不得回归(恢复项为 §7.10 紧凑措辞)");
         assertFalse(desc.contains("Out-String"), "已删条目不得由后端加回");
         assertFalse(desc.contains("null 设备"), "旧措辞不得回归");
         assertFalse(desc.contains("静默过滤 null stdin"), "旧措辞不得回归");

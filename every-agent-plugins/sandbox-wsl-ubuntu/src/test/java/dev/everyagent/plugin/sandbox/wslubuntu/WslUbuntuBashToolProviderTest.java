@@ -117,6 +117,7 @@ class WslUbuntuBashToolProviderTest {
     void managedImageReportsRgAvailable() {
         String desc = description(provider("", true));
         assertTrue(desc.contains("已在 PATH"), "托管镜像预装 rg → 描述声明 rg 可用");
+        assertTrue(desc.contains("务必显式给出路径"), "§7.10 恢复项:无路径陷阱子句在场");
         assertFalse(desc.contains("未探测"), "可用分支不得混入中性降级措辞");
         assertFalse(desc.contains("rg 不可用"), "可用分支不得混入「不可用」提示");
     }
@@ -134,6 +135,7 @@ class WslUbuntuBashToolProviderTest {
     void customDistroNeverClaimsRgInPath() {
         String desc = description(provider("Ubuntu-24.04", true));
         assertFalse(desc.contains("已在 PATH"), "非托管发行版不得谎报 rg 已在 PATH");
+        assertFalse(desc.contains("务必显式给出路径"), "rg 子句只随可用分支携带");
         assertFalse(desc.contains("rg 不可用"),
                 "也不得反向断言不可用(自装发行版里 rg 常在位,那是无法验证的降级)");
         assertTrue(desc.contains("未探测"), "如实说明未探测");

@@ -57,7 +57,8 @@ public class WindowsMicShellToolProvider implements ToolProvider {
         // 若仍宣称「已在 PATH」,模型会把「命令不存在」误读成「无匹配、结果正常」——此处曾是
         // 该约束在四后端中的最后一个漏项(codex/direct 上一轮已修);措辞与 codex/direct/wsl 同口径。
         String rgNote = rgDir != null
-                ? "内容搜索用 rg(已在 PATH,尊重 .gitignore,全仓递归远快于 findstr);"
+                ? "内容搜索用 rg(已在 PATH,尊重 .gitignore,全仓递归远快于 findstr;"
+                        + "未给文件参数时会改读空 stdin,务必显式给出路径如 rg <pattern> .);"
                 : "rg 不可用,内容搜索改用 Select-String;";
         return List.of(ShellTool.powershell("在系统上用 PowerShell 执行真实 OS 命令;"
                         + "命令工作目录默认为任务工作区根;"

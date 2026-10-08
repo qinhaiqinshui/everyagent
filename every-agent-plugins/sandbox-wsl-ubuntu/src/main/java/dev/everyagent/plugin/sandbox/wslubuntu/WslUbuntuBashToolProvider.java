@@ -69,7 +69,8 @@ public class WslUbuntuBashToolProvider implements ToolProvider {
         // 里 rg 常常在位,写了就把它无据摘掉);只交代未探测 + 回退命令。bash 下命令不存在报
         // command not found(rc=127),与「无匹配」(rc=1)可分辨,不触发 §7.10 那类最恶劣误读。
         String rgNote = rgDeclaredByManagedImage()
-                ? "内容搜索用 rg(已在 PATH,尊重 .gitignore,全仓递归远快于 grep -r);"
+                ? "内容搜索用 rg(已在 PATH,尊重 .gitignore,全仓递归远快于 grep -r;"
+                        + "未给文件参数时会改读空 stdin,务必显式给出路径如 rg <pattern> .);"
                 : "内容搜索优先 rg(非托管发行版,是否预装 rg 未探测;"
                         + "报 command not found 就改用 grep);";
         return List.of(ShellTool.bash("在系统上用 bash 执行真实 OS 命令;"
