@@ -14,6 +14,7 @@ import dev.everyagent.plugin.api.model.EventEmitter;
 import dev.everyagent.plugin.api.model.ModelConfig;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.ai.chat.messages.AssistantMessage;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.node.ObjectNode;
 
@@ -26,6 +27,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -79,8 +81,17 @@ class AiAuthReviewerTest {
         when(mockBuild.title(anyString())).thenReturn(mockBuild);
         when(mockBuild.creator(anyString())).thenReturn(mockBuild);
         when(mockBuild.tools(any(), any())).thenReturn(mockBuild);
-        when(mockBuild.systemPrompt(anyString())).thenReturn(mockBuild);
-        when(mockBuild.userInput(anyString())).thenReturn(mockBuild);
+        // 复刻 worker AgentBuilder 的会话语义:systemPrompt/userInput 在 build() 时进会话内存。
+        // 桩若不落会话,「复用续跑前 assistant 已在场」这条不变量就测不出来(审议会话跨请求
+        // 复用,assistant 回写由 AiAuthReviewer.doReview 负责,不是 build() 的活)。
+        when(mockBuild.systemPrompt(anyString())).thenAnswer(inv -> {
+            pendingSystemPrompt.set(inv.getArgument(0));
+            return mockBuild;
+        });
+        when(mockBuild.userInput(anyString())).thenAnswer(inv -> {
+            pendingUserInput.set(inv.getArgument(0));
+            return mockBuild;
+        });
         when(mockBuild.options(any())).thenReturn(mockBuild);
         when(mockBuild.build()).thenAnswer(inv -> {
             // 返回一个 mock Agent,由 reviewer(ChatModel model) 设置 lastText
@@ -89,8 +100,17 @@ class AiAuthReviewerTest {
             when(agent.agentId()).thenReturn(id);
             when(agent.title()).thenReturn("AI 安全审议");
             when(agent.creator()).thenReturn("ai-review");
-            when(agent.lastText()).thenReturn(lastTextHolder.get());
-            when(agent.conversation()).thenReturn(new ArrayList<>());
+            when(agent.lastText()).thenAnswer(ltInv -> lastTextHolder.get());
+            List<org.springframework.ai.chat.messages.Message> conversation = new ArrayList<>();
+            if (pendingSystemPrompt.get() != null) {
+                conversation.add(new org.springframework.ai.chat.messages.SystemMessage(
+                        pendingSystemPrompt.get()));
+            }
+            if (pendingUserInput.get() != null) {
+                conversation.add(new org.springframework.ai.chat.messages.UserMessage(
+                        pendingUserInput.get()));
+            }
+            when(agent.conversation()).thenReturn(conversation);
             org.mockito.Mockito.doAnswer(runInv -> {
                 // 模拟 run:如果有 error,抛异常;否则正常完成
                 Runnable r = runAction.get();
@@ -104,6 +124,12 @@ class AiAuthReviewerTest {
     }
 
     private final java.util.concurrent.atomic.AtomicReference<String> lastCreatedAgentId =
+            new java.util.concurrent.atomic.AtomicReference<>();
+
+    /** 桩内暂存 build() 的 system/user 入参(复刻 worker AgentBuilder 的会话装配语义)。 */
+    private final java.util.concurrent.atomic.AtomicReference<String> pendingSystemPrompt =
+            new java.util.concurrent.atomic.AtomicReference<>();
+    private final java.util.concurrent.atomic.AtomicReference<String> pendingUserInput =
             new java.util.concurrent.atomic.AtomicReference<>();
 
     private final java.util.concurrent.atomic.AtomicReference<String> lastTextHolder = new java.util.concurrent.atomic.AtomicReference<>("");
@@ -297,9 +323,81 @@ class AiAuthReviewerTest {
         org.mockito.Mockito.verify(agentFactory, org.mockito.Mockito.times(1))
                 .create(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.any());
         org.mockito.Mockito.verify(first, org.mockito.Mockito.times(1)).resetForRerun();
-        assertEquals(1, first.conversation().size(), "续跑应向原会话追加一条新授权请求 user 消息");
-        assertTrue(first.conversation().get(0) instanceof org.springframework.ai.chat.messages.UserMessage);
+        // 会话必须 user/assistant 严格交替:[system, user1, assistant1, user2, assistant2]。
+        // 缺 assistant 回写时审议员会看到两条连续未答复的 user,把历史请求一并作答
+        // (多对象输出 → 解析失败 fail-closed 误拒 / 旧结论被当本轮结论用)。
+        List<org.springframework.ai.chat.messages.Message> conv = first.conversation();
+        assertEquals(5, conv.size(), "会话应为 [system, user1, assistant1, user2, assistant2]");
+        assertInstanceOf(org.springframework.ai.chat.messages.SystemMessage.class, conv.get(0));
+        assertInstanceOf(org.springframework.ai.chat.messages.UserMessage.class, conv.get(1));
+        AssistantMessage firstVerdict = assertInstanceOf(AssistantMessage.class, conv.get(2));
+        assertEquals("{\"decision\":\"ALLOW\"}", firstVerdict.getText(),
+                "第一轮审议结论应原样回写为 assistant 轮(审议员下一轮才看得见既往决策)");
+        assertInstanceOf(org.springframework.ai.chat.messages.UserMessage.class, conv.get(3));
+        AssistantMessage secondVerdict = assertInstanceOf(AssistantMessage.class, conv.get(4));
+        assertEquals("{\"decision\":\"DENY\",\"reason\":\"危险\"}", secondVerdict.getText(),
+                "第二轮审议结论同样回写");
         assertSame(first, task.agents().get("review-t-1"), "注册表应仍指向同一审议 agent 实例");
+    }
+
+    /** 审议调用失败(异常)路径同样回写占位 assistant 轮,不破坏 user/assistant 交替。 */
+    @Test
+    void failedReviewStillAppendsPlaceholderAssistantTurn() {
+        when(props.permissions().reviewDenyOnError()).thenReturn(true);
+        failReviewer().review(req("c::del", "AI 请求"));
+
+        Agent reviewAgent = (Agent) task.agents().get("review-t-1");
+        assertNotNull(reviewAgent, "异常路径也应已创建审议 agent");
+        List<org.springframework.ai.chat.messages.Message> conv = reviewAgent.conversation();
+        assertEquals(3, conv.size(), "会话应为 [system, user1, assistant占位]");
+        AssistantMessage placeholder = assertInstanceOf(AssistantMessage.class, conv.get(2));
+        assertEquals("(本轮审议未产出结论)", placeholder.getText(),
+                "空结论路径回写占位轮,防下一轮审议员再看到连续未答复的 user");
+    }
+
+    // ---- 多决策对象/对象数组(模型把历史请求一并作答)→ fail-closed,绝不取首段当本轮结论 ----
+
+    @Test
+    void multipleDecisionObjectsDefaultsToDeny() {
+        ReviewDecision d = reviewer("""
+                {"decision":"ALLOW","reason":"读取 win.ini 安全"} {"decision":"ALLOW","reason":"写入 Temp 安全"}
+                """).review(req("p::write::C:\\\\Users\\\\haigui\\\\AppData\\\\Local\\\\Temp",
+                "AI 请求写入工作区外路径"));
+        assertEquals(ReviewDecision.Verdict.DENY, d.verdict());
+        assertFalse(d.fallback());
+        assertTrue(d.reason().contains("多个决策对象"), d.reason());
+    }
+
+    @Test
+    void decisionArrayInsideFenceDefaultsToDeny() {
+        ReviewDecision d = reviewer("""
+                ```json
+                [
+                  {"decision":"ALLOW","reason":"a"},
+                  {"decision":"ALLOW","reason":"b"}
+                ]
+                ```
+                """).review(req("p::read::C:\\\\Windows", "AI 请求读取工作区外路径"));
+        assertEquals(ReviewDecision.Verdict.DENY, d.verdict());
+        assertFalse(d.fallback());
+        assertTrue(d.reason().contains("多个决策对象"), d.reason());
+    }
+
+    /** 单对象 + 无花括号的尾随说明:保留原有宽容度(不因尾随散文误拒)。 */
+    @Test
+    void trailingProseKeepsSingleDecisionAllowed() {
+        ReviewDecision d = reviewer("{\"decision\":\"ALLOW\",\"reason\":\"ok\"} 以上为唯一结论。")
+                .review(req("c::del", "AI 请求"));
+        assertEquals(ReviewDecision.Verdict.ALLOW, d.verdict());
+    }
+
+    /** reason 文案内含花括号不误判轮次边界(字符串感知的花括号配对计数)。 */
+    @Test
+    void bracesInsideReasonStillParses() {
+        ReviewDecision d = reviewer("{\"decision\":\"ALLOW\",\"reason\":\"模板 ${x} 与 } 无害\"}")
+                .review(req("c::del", "AI 请求"));
+        assertEquals(ReviewDecision.Verdict.ALLOW, d.verdict());
+        assertEquals("模板 ${x} 与 } 无害", d.reason());
     }
 
     // ---- 辅助:读取桩内记录的 auth.review trace ----

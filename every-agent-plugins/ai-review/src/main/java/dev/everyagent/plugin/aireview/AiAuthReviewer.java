@@ -12,6 +12,7 @@ import dev.everyagent.plugin.api.proto.SnowflakeId;
 import dev.everyagent.plugin.api.util.RootCause;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import tools.jackson.databind.JsonNode;
 
@@ -48,6 +49,13 @@ import java.util.concurrent.TimeoutException;
  * {@code ctx.agentFactory()}(S5 起 AgentFactory 依赖删除);不新建任务实体/事件日志,
  * 事件全部经 {@code ctx.emitter()} 落主体 jsonl。
  *
+ * <p><b>复用方必须自己维持 user/assistant 交替</b>:agent 执行链不回写会话内存
+ * ({@code WorkerToolEventAdvisor} 只发 message 事件、{@code AgentRunner} 只把会话副本交给
+ * ChatClient),故每轮审议结束由 {@link #doReview} 把本轮结论作为 assistant 轮补回会话——
+ * 与 task 层 {@code ConversationLoader.catchUpRuntime} 同一条不变量。缺了这一步,审议员
+ * 看到的是「N 条连续未答复的 user」,会把历史授权请求一并作答(多对象/数组输出 →
+ * 解析失败 fail-closed 误拒,或把上一条请求的旧结论当本轮结论用)。
+ *
  * <p>时效双层控制:<ul>
  * <li>内层:{@code options.timeout = review-timeout-ms},仅约束单次 HTTP 调用;</li>
  * <li>外层:独立 executor 提交审议调用,{@code future.get(review-timeout-ms)} 为<b>总预算硬闸</b>
@@ -55,8 +63,9 @@ import java.util.concurrent.TimeoutException;
  * </ul>
  *
  * <p>结果解析容错:模型输出应为 {@code {decision:"ALLOW"|"DENY"|"ESCALATE", confidence,
- * reason}},宽容解析(容忍 markdown 代码块与前导/尾随空白);非 JSON / 缺 decision 字段 →
- * 默认 DENY(fail-closed);decision 值不区分大小写。
+ * reason}},宽容解析(容忍 markdown 代码块与前导/尾随空白);非 JSON / 缺 decision 字段 /
+ * 尾随再出现决策对象(模型把多条历史请求一并作答)→ 默认 DENY(fail-closed);
+ * decision 值不区分大小写。
  *
  * <p>异常/超时回退(信号约定,步骤 6 用):<ul>
  * <li>{@code review-deny-on-error=true}(默认)→ 返回 {@code ReviewDecision.deny(reason)},
@@ -99,6 +108,12 @@ public class AiAuthReviewer {
             {"decision": "ALLOW" 或 "DENY" 或 "ESCALATE", "confidence": 0~1 或字符串, "reason": "简要说明"}
             ALLOW=安全可授权;DENY=不安全拒绝;ESCALATE=不确定(交由人工弹窗授权,仅在确有需要时使用)。
             放宽原则:除非明确知道会损坏系统,否则允许操作;无法判断时返回 ALLOW。""";
+
+    /**
+     * 审议调用未产出正文(异常/中断)时回写会话的占位 assistant 轮:保持会话内
+     * user/assistant 严格交替,防下一轮审议员看到多条连续未答复的 user。
+     */
+    private static final String NO_VERDICT_PLACEHOLDER = "(本轮审议未产出结论)";
 
     private final WorkerConfig props;
 
@@ -161,9 +176,23 @@ public class AiAuthReviewer {
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 throw new RuntimeException("审议调用被中断", e);
+            } finally {
+                // 会话配对回写(与 task 层 ConversationLoader.catchUpRuntime 同一条不变量:
+                // 「append 新 user 之前 assistant 必须在场」)。审议会话跨请求复用,而 agent
+                // 执行链**不回写会话内存**——WorkerToolEventAdvisor 只发 message 事件、
+                // 明确「不再触碰会话内存」,AgentRunner 也只把会话副本交给 ChatClient。
+                // 故复用方必须自己把本轮结论作为 assistant 轮补回会话,否则下一轮审议员看到的
+                // 是「N 条连续未答复的 user」,会把历史授权请求一并作答(多对象/数组输出):
+                // 轻则解析失败 fail-closed 误拒,重则把上一条请求的旧结论当本轮结论放行。
+                // 异常/中断路径同样回写(空则记占位),保证 user/assistant 严格交替。
+                String verdictText = reviewAgent.lastText();
+                reviewAgent.conversation().add(AssistantMessage.builder()
+                        .content(verdictText == null || verdictText.isBlank()
+                                ? NO_VERDICT_PLACEHOLDER : verdictText)
+                        .build());
             }
+            return parse(reviewAgent.lastText());
         }
-        return parse(reviewAgent.lastText());
     }
 
     /**
@@ -222,20 +251,29 @@ public class AiAuthReviewer {
         return "授权请求(grantKey=" + grantKey + "):\n" + prompt;
     }
 
-    /** 宽容解析:模型输出 JSON;容忍 markdown 代码块、前后空白。非 JSON / 缺 decision → DENY。 */
+    /**
+     * 宽容解析:模型输出 JSON;容忍 markdown 代码块、前后空白。
+     * 非 JSON / 缺 decision / **多个决策对象** → DENY(fail-closed)。
+     */
     static ReviewDecision parse(String content) {
         if (content == null || content.isBlank()) {
             return ReviewDecision.deny("模型返回空响应");
         }
         String candidate = stripFence(content).trim();
-        int start = candidate.indexOf('{');
-        int end = candidate.lastIndexOf('}');
-        if (start < 0 || end <= start) {
+        int[] span = firstJsonObjectSpan(candidate);
+        if (span == null) {
             return ReviewDecision.deny("非 JSON 输出: 未找到对象边界");
+        }
+        // 首个对象之后又出现花括号 = 模型输出了多个决策对象/对象数组(把多条历史授权请求
+        // 一并作答)。此时首个对象未必对应本轮请求,取首段解析等于把旧结论当本轮结论用 →
+        // 一律 fail-closed 拒绝(不猜「哪个才是本轮」)。
+        String tail = candidate.substring(span[1]).trim();
+        if (tail.indexOf('{') >= 0 || tail.indexOf('}') >= 0) {
+            return ReviewDecision.deny("非 JSON 输出: 存在多个决策对象(疑似把历史授权请求一并作答)");
         }
         JsonNode node;
         try {
-            node = Json.parse(candidate.substring(start, end + 1));
+            node = Json.parse(candidate.substring(span[0], span[1]));
         } catch (RuntimeException e) {
             return ReviewDecision.deny("非 JSON 输入: " + RootCause.summary(e));
         }
@@ -258,6 +296,48 @@ public class AiAuthReviewer {
         double confidence = parseConfidence(node.path("confidence"));
         String reason = node.path("reason").asString("");
         return ReviewDecision.of(verdict, confidence, reason);
+    }
+
+    /**
+     * 取首个 JSON 对象的 [起, 止) 下标(含字符串/转义感知的花括号配对计数,
+     * reason 文案里的花括号不会误判轮次边界);无对象返回 null。
+     */
+    private static int[] firstJsonObjectSpan(String s) {
+        int start = -1;
+        int depth = 0;
+        boolean inString = false;
+        boolean escaped = false;
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (start < 0) {
+                if (c == '{') {
+                    start = i;
+                    depth = 1;
+                }
+                continue;
+            }
+            if (inString) {
+                if (escaped) {
+                    escaped = false;
+                } else if (c == '\\') {
+                    escaped = true;
+                } else if (c == '"') {
+                    inString = false;
+                }
+                continue;
+            }
+            if (c == '"') {
+                inString = true;
+            } else if (c == '{') {
+                depth++;
+            } else if (c == '}') {
+                depth--;
+                if (depth == 0) {
+                    return new int[]{start, i + 1};
+                }
+            }
+        }
+        return null;
     }
 
     /** 剥除 markdown 代码围栏(```json 或 ``` 起止)。 */
