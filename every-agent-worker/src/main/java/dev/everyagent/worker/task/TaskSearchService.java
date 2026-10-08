@@ -62,7 +62,8 @@ import java.util.regex.PatternSyntaxException;
  * 大结果复用 rpc.data 分批 + 末帧 ok 汇总。
  *
  * <p><b>SearchProvider 增补聚合(§8.5)</b>:插件经 {@code ctx.registerSearchProvider}
- * 注册的搜索后端不替换内置 rg——本方法在内置 rg 结果之后按注册序追加各 provider 的
+ * 注册的搜索后端不替换内置 rg——本方法在内置 rg 结果之后按 order() 升序
+ * (同 order 保持注册先后)追加各 provider 的
  * {@code searchTasks} 结果(按 {@code taskId+roundIndex+field+matchIndex} 去重、仍受
  * maxResults 触顶约束,见 {@link #mergeProviderResults});provider 异常仅 WARN 跳过;
  * 注册表为空时零额外行为;rg 不可用但注册了 provider 时跳过内置 rg、仅聚合 provider 结果。
@@ -211,7 +212,8 @@ public class TaskSearchService {
 
     /**
      * 把插件 SearchProvider 的任务搜索结果增补聚合进内置 rg 结果(§8.5):注册表为空或
-     * 内置结果已触顶(maxResults)时原样返回——零行为变化;provider 结果按注册序追加在
+     * 内置结果已触顶(maxResults)时原样返回——零行为变化;provider 结果按 order() 升序
+     * (同 order 保持注册先后)追加在
      * 内置结果之后,按位置键 {@code taskId+roundIndex+field+matchIndex} 去重(多引擎命中
      * 同一轮同一字段同一位置只计一条);合并后仍受 maxResults 触顶约束(触顶置 truncated
      * 并终止 provider 循环);单个 provider 抛异常仅 WARN 跳过,不影响其余结果与应答;

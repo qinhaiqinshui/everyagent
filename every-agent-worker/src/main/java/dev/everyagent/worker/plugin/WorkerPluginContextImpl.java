@@ -42,6 +42,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -71,6 +72,14 @@ public class WorkerPluginContextImpl implements WorkerPluginContext {
     private final WorkerServices services;
     private final PluginConfig config;
     private final ApplicationContext applicationContext;
+
+    /**
+     * 本插件经此上下文注册的 SearchProvider 登记清单(pluginId → providers 映射的
+     * pluginId 侧:每个上下文绑定唯一插件 id,实例内清单即该插件的映射值)。
+     * 插件停用时由 PluginLoader 调 {@link #unregisterSearchProviders()} 批量反注册,
+     * 防止禁用/卸载后 provider 在注册表残留。
+     */
+    private final List<SearchProvider> registeredSearchProviders = new CopyOnWriteArrayList<>();
 
     public WorkerPluginContextImpl(String pluginId,
             Path pluginDir,
@@ -140,6 +149,20 @@ public class WorkerPluginContextImpl implements WorkerPluginContext {
     @Override
     public void registerSearchProvider(SearchProvider provider) {
         searchRegistry.register(provider);
+        registeredSearchProviders.add(provider);
+    }
+
+    /**
+     * 反注册本插件经此上下文注册的全部 SearchProvider(worker 优雅关闭时由
+     * PluginLoader 在插件 deactivate() 之后兜底调用,防止 provider 残留)。
+     * 重复调用安全(登记清单清空后为 no-op)。
+     */
+    public void unregisterSearchProviders() {
+        if (registeredSearchProviders.isEmpty()) {
+            return;
+        }
+        searchRegistry.unregisterAll(registeredSearchProviders);
+        registeredSearchProviders.clear();
     }
 
     @Override

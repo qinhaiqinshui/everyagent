@@ -247,7 +247,7 @@ public interface SkillContributor {
 
 ## 6. SearchProvider —— 搜索后端（已接线：fs.search / task.search 增补聚合）
 
-**机制**：插件经 `ctx.registerSearchProvider` 注册的搜索后端由 worker 的两条搜索 RPC 消费——`fs.search`（文件，`searchFiles`）与 `task.search`（任务，`searchTasks`）。聚合语义是**增补而非替换**：内置 ripgrep 结果在前，各 provider 按注册序追加在后，按位置键去重（文件 `path+lineNumber+matchIndex` / 任务 `taskId+roundIndex+field+matchIndex`），合并后仍受 `maxResults` 触顶约束（触顶置 `truncated`）。实现住在两个入口服务里：`FsSearchService.mergeProviderResults`（`every-agent-worker/src/main/java/dev/everyagent/worker/modules/FsSearchService.java`）与 `TaskSearchService.mergeProviderResults`（`.../task/TaskSearchService.java`），[`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) §7 两条 RPC 行与 §8.5 为契约口径。
+**机制**：插件经 `ctx.registerSearchProvider` 注册的搜索后端由 worker 的两条搜索 RPC 消费——`fs.search`（文件，`searchFiles`）与 `task.search`（任务，`searchTasks`）。聚合语义是**增补而非替换**：内置 ripgrep 结果在前，各 provider 按 `order()` 升序（同 order 保持注册先后）追加在后，按位置键去重（文件 `path+lineNumber+matchIndex` / 任务 `taskId+roundIndex+field+matchIndex`），合并后仍受 `maxResults` 触顶约束（触顶置 `truncated`）。实现住在两个入口服务里：`FsSearchService.mergeProviderResults`（`every-agent-worker/src/main/java/dev/everyagent/worker/modules/FsSearchService.java`）与 `TaskSearchService.mergeProviderResults`（`.../task/TaskSearchService.java`），[`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) §7 两条 RPC 行与 §8.5 为契约口径。
 
 **无害性保证**（写插件时可以依赖的行为契约）：
 
@@ -259,8 +259,14 @@ public interface SkillContributor {
 **实现要点**（`every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/spi/SearchProvider.java:22-65`）：
 
 - `id()` + `searchFiles(SearchRequest)` + `searchTasks(TaskSearchRequest)`；请求带 `workspaceId`（工作区未注册进注册表时可能为 null）+ `workspaceRoot` + 完整 pattern 语义（`isRegex/caseSensitive/wholeWord/includeGlobs/excludeGlobs/maxResults`）。
+- `order()`（`default 0f`，可选覆写）：聚合顺序权重——**值小者先执行、结果先并入聚合**（升序 = 执行/返回序，与 `AuthorizationHandler#order()` 坐标约定一致，float 允许任意插位）。见下「顺序与生命周期」。
 - 结果形状与两条 RPC 的应答项一致：`SearchResult.path` 为工作区相对 posix 路径；`TaskSearchResult.Match.line` 为命中字段的**干净文本**（与 `task.search` 应答的 `line` 一致，非行号——行内定位用 `matchIndex`）。
 - 典型场景：search-es（ElasticSearch）、search-vector（向量检索）等在工作区外维护索引的引擎，把索引命中补充进前端搜索结果。
+
+**顺序与生命周期**（`order()` + 卸载自动反注册，`SearchProviderRegistry` 为实现侧）：
+
+- **排序**：注册表在注册时按 `order()` 升序**有序插入**，同 order 保持注册先后（稳定排序）；`fs.search` / `task.search` 直接按该序列增补聚合，消费代码零排序逻辑。全部插件都不覆写 `order()` 时保持原有注册序，行为不变。插位建议：低权重（如 `-10f`）给「快而粗」的先返回引擎，高权重给「慢而全」的兜底引擎。
+- **生命周期（卸载自动反注册）**：`WorkerPluginContextImpl` 按插件维护「已注册 providers」登记清单（每个上下文绑定唯一插件 id，即 pluginId → providers 映射）；worker 优雅关闭时 `PluginLoader` 在 `@PreDestroy` 逐插件调用 `deactivate()` 之后**兜底反注册**其注册的全部 SearchProvider（`SearchProviderRegistry.unregisterAll(Collection)` 批量移除，返回实际移除数），provider 不残留、重复调用幂等。注意：运行期 `plugin.disable` / `plugin.uninstall` 只改禁用名单/删除目录，**不触发运行时反注册**——已激活插件的贡献留在注册表直到 worker 重启（与 `PluginStateStore`「重启 worker 后生效」口径一致，契约见 [`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) §8.5「registry 顺序与生命周期」）。排序与批量反注册行为由 `SearchProviderRegistryTest` / `WorkerPluginContextSearchUnregisterTest` 钉住。
 
 **范例**：暂无内置插件注册（26 个内置插件零使用）；聚合/去重/触顶/异常跳过行为由 `FsSearchServiceTest` / `TaskSearchServiceTest` 的 StubProvider 用例钉住。若接线前曾按旧 Javadoc 期待「ripgrep 变为默认插件 search-ripgrep、provider 替换后端」——现行语义是增补聚合，不替换。
 

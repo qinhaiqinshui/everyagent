@@ -4,7 +4,6 @@ import dev.everyagent.contract.json.Json;
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.plugin.api.EveryAgentPlugin;
 import dev.everyagent.worker.plugin.PluginConfigImpl;
-import dev.everyagent.plugin.api.WorkerPluginContext;
 import dev.everyagent.worker.plugin.WorkerPluginContextImpl;
 import dev.everyagent.plugin.api.WorkerServices;
 import dev.everyagent.worker.plugin.registry.AdvisorProviderRegistry;
@@ -81,8 +80,9 @@ import java.util.stream.Stream;
  * </ul>
  *
  * <p>销毁阶段(@PreDestroy):遍历「已成功激活」的插件逐个调用 {@code deactivate()}
- * (激活失败/被禁用/声明式插件从未成功 activate,跳过不调);单个插件停用抛异常
- * 只 WARN,不影响其余插件。
+ * (激活失败/被禁用/声明式插件从未成功 activate,跳过不调),随后<b>兜底反注册</b>
+ * 该插件经上下文注册的全部 SearchProvider(WorkerPluginContextImpl 按插件维护
+ * 登记清单,防 provider 残留);单个插件停用/反注册抛异常只 WARN,不影响其余插件。
  */
 @Component
 public class PluginLoader {
@@ -113,8 +113,11 @@ public class PluginLoader {
     /** 已加载的插件清单（供 plugin.list RPC 查询）。 */
     private final List<LoadedPlugin> loadedPlugins = new ArrayList<>();
 
-    /** 已成功激活的插件实例（仅 activate() 正常返回者），销毁阶段逐个调用 deactivate()。 */
-    private final List<EveryAgentPlugin> activatedPlugins = new ArrayList<>();
+    /** 已成功激活的插件对(仅 activate() 正常返回者),销毁阶段逐个 deactivate + 反注册其 SearchProvider。 */
+    private final List<ActivatedPlugin> activatedPlugins = new ArrayList<>();
+
+    /** 已成功激活的插件对:插件实例 + 其专属上下文(停用时兜底反注册上下文登记的 SearchProvider)。 */
+    private record ActivatedPlugin(EveryAgentPlugin plugin, WorkerPluginContextImpl context) {}
 
     public PluginLoader(WorkerProperties props,
             List<PluginScanner> pluginScanners,
@@ -162,9 +165,10 @@ public class PluginLoader {
     }
 
     /**
-     * worker 关闭时的销毁钩点:遍历已成功激活的插件逐个调用 {@link EveryAgentPlugin#deactivate()}。
-     * 激活失败的插件(activate 抛过异常)从未成功激活,跳过不调;单个插件停用抛异常
-     * 只 WARN,不影响其余插件的停用。
+     * worker 关闭时的销毁钩点:遍历已成功激活的插件逐个调用 {@link EveryAgentPlugin#deactivate()},
+     * 再兜底反注册该插件经上下文注册的全部 SearchProvider(provider 不残留)。
+     * 激活失败的插件(activate 抛过异常)从未成功激活,跳过不调;单个插件停用/反注册
+     * 抛异常只 WARN,不影响其余插件的停用。
      */
     @PreDestroy
     void shutdown() {
@@ -172,11 +176,17 @@ public class PluginLoader {
             return;
         }
         log.info("[plugins] worker 关闭,开始停用 {} 个已激活插件", activatedPlugins.size());
-        for (EveryAgentPlugin plugin : activatedPlugins) {
+        for (ActivatedPlugin ap : activatedPlugins) {
             try {
-                plugin.deactivate();
+                ap.plugin().deactivate();
             } catch (Exception e) {
-                log.warn("[plugins] 插件 {} 停用失败,继续停用其余插件: {}", plugin.id(), e.getMessage(), e);
+                log.warn("[plugins] 插件 {} 停用失败,继续停用其余插件: {}", ap.plugin().id(), e.getMessage(), e);
+            }
+            // 兜底反注册: deactivate 抛异常也不跳过,保证 provider 不残留
+            try {
+                ap.context().unregisterSearchProviders();
+            } catch (Exception e) {
+                log.warn("[plugins] 插件 {} 的 SearchProvider 反注册失败: {}", ap.plugin().id(), e.getMessage(), e);
             }
         }
         log.info("[plugins] 插件停用完成");
@@ -368,7 +378,7 @@ public class PluginLoader {
             EveryAgentPlugin plugin = (EveryAgentPlugin) clazz.getDeclaredConstructor().newInstance();
 
             // 构造 WorkerPluginContext
-            WorkerPluginContext ctx = new WorkerPluginContextImpl(id,
+            WorkerPluginContextImpl ctx = new WorkerPluginContextImpl(id,
                     pluginDir,
                     advisorRegistry, toolRegistry, sandboxRegistry,
                     searchRegistry,
@@ -382,7 +392,7 @@ public class PluginLoader {
             // 调用 activate()
             plugin.activate(ctx);
             // activate 成功才登记进停用清单(销毁阶段只停用已成功激活的插件)
-            activatedPlugins.add(plugin);
+            activatedPlugins.add(new ActivatedPlugin(plugin, ctx));
 
             loadedPlugins.add(new LoadedPlugin(id, name, version, description, author,
                     pluginDir, source, true, builtin ? "已激活(内置)" : "已激活", entryClass, webMain,

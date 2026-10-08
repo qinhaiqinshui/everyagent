@@ -66,7 +66,8 @@ import java.util.regex.PatternSyntaxException;
  * 分批(代码简单;maxResults 默认 1000 兜住聚合内存)。
  *
  * <p><b>SearchProvider 增补聚合(§8.5)</b>:插件经 {@code ctx.registerSearchProvider}
- * 注册的搜索后端不替换内置 rg——fs.search 在内置 rg 结果之后按注册序追加各 provider
+ * 注册的搜索后端不替换内置 rg——fs.search 在内置 rg 结果之后按 order() 升序
+ * (同 order 保持注册先后)追加各 provider
  * 结果(按 {@code path+lineNumber+matchIndex} 去重、仍受 maxResults 触顶约束,见
  * {@link #mergeProviderResults});provider 异常仅 WARN 跳过;注册表为空时零额外行为;
  * rg 不可用但注册了 provider 时跳过内置 rg、仅聚合 provider 结果。
@@ -234,7 +235,8 @@ public class FsSearchService {
 
     /**
      * 把插件 SearchProvider 的结果增补聚合进内置 rg 结果(§8.5):注册表为空或内置结果已
-     * 触顶(maxResults)时原样返回——零行为变化;provider 结果按注册序追加在内置结果之后,
+     * 触顶(maxResults)时原样返回——零行为变化;provider 结果按 order() 升序
+     * (同 order 保持注册先后)追加在内置结果之后,
      * 按位置键 {@code path+lineNumber+matchIndex} 去重(多引擎命中同一位置只计一条);
      * 合并后仍受 maxResults 触顶约束(触顶置 truncated 并终止 provider 循环);单个
      * provider 抛异常仅 WARN 跳过,不影响其余结果与应答;provider 返回 null/空列表不加项。
