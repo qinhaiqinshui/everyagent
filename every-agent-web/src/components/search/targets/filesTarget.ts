@@ -23,6 +23,7 @@ export const filesTarget: SearchTargetDefinition = {
   supports: { regex: true, wholeWord: true, fileNameMode: true, globs: true, scope: true },
   highlightMenuWhenCurrent: false,
   resultTree: 'files',
+  consumableKinds: ['file'],
   placeholder: (state) => (state.nameOnly ? '搜索文件名（支持正则）' : '搜索（支持正则）'),
   introHint: (state) => (state.nameOnly ? '输入关键词搜索工作区文件名' : '输入关键词搜索工作区文件内容'),
   buildParams(state) {

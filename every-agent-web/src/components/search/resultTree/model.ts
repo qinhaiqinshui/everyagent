@@ -30,6 +30,13 @@ export interface SearchResultGroupDetail {
   grow?: boolean
 }
 
+/**
+ * 内置 rg 搜索的 provider id(worker 对内置结果恒标记该值)。
+ * 组头来源标记的静默哨兵:providerId 缺省或等于该值时不显示任何标记,
+ * 保持内置搜索界面零变化;插件 provider 用其自身 id,组头显示轻量来源标记。
+ */
+export const BUILTIN_RG_PROVIDER_ID = 'builtin.rg'
+
 /** 组头渲染数据(路径 / 任务标题 + 状态)。 */
 export interface SearchResultGroupHeader {
   /** 组头悬停提示(文件全路径 / 任务标题)。 */
@@ -40,6 +47,12 @@ export interface SearchResultGroupHeader {
   detail?: SearchResultGroupDetail
   /** 组头图标(可选)。 */
   icon?: SearchResultGroupIcon
+  /**
+   * 结果来源 provider id(可选,由结果树的适配层从结果项映射):内置 rg
+   * (BUILTIN_RG_PROVIDER_ID)或缺省时组头不显示来源标记;外部 provider id 时
+   * 在 detail 区尾部显示轻量来源 tag(title 提示完整来源)。
+   */
+  providerId?: string
 }
 
 /** 命中行前缀标记(右对齐灰字:文件 = 行号,任务 = 轮次 + 字段)。 */

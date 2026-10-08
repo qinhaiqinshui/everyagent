@@ -1,11 +1,12 @@
 /**
  * 通用搜索结果树原语 · 视图组件。
  *
- * 按 SearchResultGroup[] 渲染「组头(折叠切换 + 图标 + 主名 + 次要信息 + 命中数
- * 徽章)+ 命中行(前缀标记 + 高亮正文)」,是 SearchResultsTree(文件)与
+ * 按 SearchResultGroup[] 渲染「组头(折叠切换 + 图标 + 主名 + 次要信息 + 来源
+ * 标记 + 命中数徽章)+ 命中行(前缀标记 + 高亮正文)」,是 SearchResultsTree(文件)与
  * TaskSearchResultsTree(任务)共用的渲染实现:树容器 / 分组 / 组头 / 命中行 /
  * 高亮样式在此单点,目标间的小差异(文件图标 vs 无、目录 grow vs 状态标签、行号
- * vs 轮次前缀)全部体现在模型(header / prefix)上,不在本组件分支。
+ * vs 轮次前缀)全部体现在模型(header / prefix)上,不在本组件分支。外部
+ * provider 来源标记同样由 header.providerId 驱动(缺省/内置 rg 静默不显示)。
  * 折叠状态由调用方(SearchPanel)统一持有,键 = SearchResultGroup.key。
  */
 import React from 'react'
@@ -13,6 +14,7 @@ import { ChevronDownIcon } from '../../shared/AppGlyphs'
 import { FileTypeIcon } from '../../shared/FileTypeGlyphs'
 import HighlightedMatchLine from './HighlightedMatchLine'
 import type { SearchResultGroup, SearchResultHit, SearchResultHitPrefix } from './model'
+import { BUILTIN_RG_PROVIDER_ID } from './model'
 
 export interface SearchResultTreeViewProps {
   /** 分组列表(顺序即展示顺序)。 */
@@ -99,6 +101,11 @@ function ResultGroupView({
         {header.detail ? (
           <span style={header.detail.grow ? detailGrowStyle : detailStyle}>
             {header.detail.text}
+          </span>
+        ) : null}
+        {header.providerId && header.providerId !== BUILTIN_RG_PROVIDER_ID ? (
+          <span style={providerTagStyle} title={header.providerId}>
+            {header.providerId}
           </span>
         ) : null}
         <span style={countStyle}>{group.hits.length}</span>
@@ -216,6 +223,27 @@ const detailGrowStyle: React.CSSProperties = {
   whiteSpace: 'nowrap',
   flex: 1,
   minWidth: 0,
+}
+
+/**
+ * 组头来源标记(detail 区尾部的小 tag,贴合 antd Tag 的轻量观感):
+ * 仅外部 provider 结果显示;providerId 缺省或为内置 rg 时不渲染任何标记。
+ * 悬停 title 提示完整来源 id(覆盖组头默认 title,悬停在该 tag 上时生效)。
+ */
+const providerTagStyle: React.CSSProperties = {
+  flexShrink: 0,
+  fontSize: 'var(--text-xs)',
+  lineHeight: 1.5,
+  padding: '0 4px',
+  borderRadius: 4,
+  border: '1px solid var(--border)',
+  color: 'var(--text-muted)',
+  background: 'var(--bg-tertiary)',
+  maxWidth: 120,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+  cursor: 'pointer',
 }
 
 const countStyle: React.CSSProperties = {

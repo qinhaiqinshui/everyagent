@@ -85,6 +85,12 @@ export interface SearchTargetDefinition {
   highlightMenuWhenCurrent: boolean
   /** 结果树选择:files → SearchResultsTree,tasks → TaskSearchResultsTree。 */
   resultTree: 'files' | 'tasks'
+  /**
+   * 本目标可消费的结果项 kind 集合(结果来源统一模型的可选增补字段,如 files 目标
+   * ["file"]、tasks 目标 ["task"]):未来按 kind 过滤/分发混合来源结果的挂点,
+   * 本期仅声明、不实现过滤 UI(结果项 kind 缺省仍按现有结构解释)。
+   */
+  consumableKinds?: string[]
   /** 输入框占位文案(绑定就绪时)。 */
   placeholder(state: SearchTargetTextState): string
   /** 空态引导文案(绑定就绪、输入为空时)。 */

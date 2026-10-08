@@ -57,6 +57,8 @@ function toFileGroups(
         name: fileName,
         detail: dirPath ? { text: dirPath, grow: true } : undefined,
         icon: { kind: 'file', fileName },
+        // 来源 provider id 透传(缺省/内置 rg 由通用视图静默,外部 provider 显示来源标记)。
+        ...(file.providerId ? { providerId: file.providerId } : {}),
       },
       hits: matches.map((hit) => ({
         label: hit.line,

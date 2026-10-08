@@ -35,6 +35,18 @@ export interface WorkspaceContentSearchFileResult {
   path: string
   /** content 模式下的命中列表；name 模式无此字段。 */
   matches?: WorkspaceContentSearchHit[]
+  /**
+   * 结果项种类(开放集合,如 "file"):结果来源统一模型的可选增补字段。
+   * 未知值必须容忍忽略;缺省按现有结构解释(即文件结果)。
+   */
+  kind?: string
+  /**
+   * 结果来源 provider id:内置 rg 恒为 "builtin.rg",插件 provider 用其 id。
+   * 可选增补字段,缺省视为内置来源(UI 不显示来源标记)。
+   */
+  providerId?: string
+  /** 可选排序提示分;仅排序提示,前端不依它重排。 */
+  score?: number
 }
 
 /** 搜索结果。 */

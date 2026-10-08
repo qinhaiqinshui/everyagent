@@ -62,6 +62,8 @@ function toTaskGroups(
         title: task.title,
         name: task.title,
         detail: task.status ? { text: statusLabel(task.status) } : undefined,
+        // 来源 provider id 透传(缺省/内置 rg 由通用视图静默,外部 provider 显示来源标记)。
+        ...(task.providerId ? { providerId: task.providerId } : {}),
       },
       hits: matches.map((hit) => ({
         label: hit.line,

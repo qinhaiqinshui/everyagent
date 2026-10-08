@@ -18,6 +18,7 @@ export const tasksTarget: SearchTargetDefinition = {
   supports: { regex: true, wholeWord: true, fileNameMode: false, globs: false, scope: false },
   highlightMenuWhenCurrent: true,
   resultTree: 'tasks',
+  consumableKinds: ['task'],
   placeholder: () => '搜索任务内容（支持正则）',
   introHint: () => '输入关键词搜索当前工作区的任务内容',
   buildParams(state) {

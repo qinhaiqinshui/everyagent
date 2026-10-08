@@ -80,6 +80,10 @@ interface FsSearchFileItem {
     matchIndex?: number
     matchText?: string
   }>
+  /** 结果来源统一模型的可选增补字段(开放集合,未知 kind 容忍透传不报错)。 */
+  kind?: string
+  providerId?: string
+  score?: number
 }
 
 /** worker 文件项 → 前端搜索结果形状(字段同名,显式映射让类型检查钳住契约漂移)。 */
@@ -90,7 +94,13 @@ function toSearchFileResult(item: FsSearchFileItem): WorkspaceContentSearchFileR
     matchIndex: hit.matchIndex,
     matchText: hit.matchText,
   }))
-  return { path: item.path, matches }
+  return {
+    path: item.path,
+    matches,
+    kind: item.kind,
+    providerId: item.providerId,
+    score: item.score,
+  }
 }
 
 /**

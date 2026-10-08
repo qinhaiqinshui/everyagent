@@ -38,6 +38,18 @@ export interface TaskContentSearchTaskResult {
   /** worker 原始状态串(done/running/...)。 */
   status: string
   matches: TaskContentSearchHit[]
+  /**
+   * 结果项种类(开放集合,如 "task"):结果来源统一模型的可选增补字段。
+   * 未知值必须容忍忽略;缺省按现有结构解释(即任务结果)。
+   */
+  kind?: string
+  /**
+   * 结果来源 provider id:内置 rg 恒为 "builtin.rg",插件 provider 用其 id。
+   * 可选增补字段,缺省视为内置来源(UI 不显示来源标记)。
+   */
+  providerId?: string
+  /** 可选排序提示分;仅排序提示,前端不依它重排。 */
+  score?: number
 }
 
 /** 搜索结果(与 WorkspaceContentSearchResult 同构,files 语义 = 任务)。 */
@@ -77,6 +89,10 @@ interface TaskSearchFileItemWire {
     matchIndex?: number
     matchText?: string
   }>
+  /** 结果来源统一模型的可选增补字段(开放集合,未知 kind 容忍透传不报错)。 */
+  kind?: string
+  providerId?: string
+  score?: number
 }
 
 /** worker 任务项 → 前端搜索结果形状(字段同名映射,钳住契约漂移;field 非法时忽略该条)。 */
@@ -97,6 +113,9 @@ function toTaskResult(item: TaskSearchFileItemWire): TaskContentSearchTaskResult
     workspaceId: item.workspaceId,
     status: item.status,
     matches,
+    kind: item.kind,
+    providerId: item.providerId,
+    score: item.score,
   }
 }
 
