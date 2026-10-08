@@ -287,6 +287,30 @@ public final class ExecResults {
         return Charset.defaultCharset();
     }
 
+    // ---- ANSI/VT 转义序列剥离（ISSUES 四.8：stderr 直出着色残留） ----
+
+    /**
+     * ANSI/VT 转义序列：CSI（着色/光标，pwsh 7 错误流直出主要形态）、OSC（终端标题等，
+     * BEL 或 {@code ESC\} 终止，容忍串尾截断）、其余两字符 ESC 序列（{@code ESC M} 等）。
+     * 正文（含中文）不属于任何分支,不受影响。
+     */
+    private static final java.util.regex.Pattern VT_ESCAPE = java.util.regex.Pattern.compile(
+            "\u001B(?:\\[[0-9;:<=>?]*[ -/]*[@-~]"
+                    + "|\\][^\u0007\u001B]*(?:\u0007|\u001B\\\\|$)"
+                    + "|[@-Z\\-_])");
+
+    /**
+     * 剥离文本中的 ANSI/VT 转义序列。pwsh 7.x 错误流<b>直出</b>（不经 {@code 2>&1} 合并）
+     * 时 stderr 携带 VT 着色码，解码链不剥则模型收到原始 {@code ESC[31;1m} 噪声——
+     * 不吞信息但污染输出。仅动控制序列，不动正文；无 ESC 字节时零开销直返。
+     */
+    public static String stripAnsi(String s) {
+        if (s == null || s.isEmpty() || s.indexOf('\u001B') < 0) {
+            return s == null ? "" : s;
+        }
+        return VT_ESCAPE.matcher(s).replaceAll("");
+    }
+
     // ---- CLIXML 流记录还原（BUG-2：错误文本不得静默丢失） ----
 
     /** CLIXML 整段：{@code #< CLIXML} 头 + {@code <Objs …>…</Objs>}（DOTALL，非贪婪）。 */
@@ -322,12 +346,17 @@ public final class ExecResults {
      * Write-Error 实测),故 codex 后端执行器聚合处与 worker DIRECT 路径都已接入本方法。
      * 抽不到任何文本时返回空段(纯 progress 噪声)。
      *
+     * <p><b>VT 剥离（ISSUES 四.8）</b>：本方法是 stderr 解码链的统一出口（codex 聚合处
+     * 与 worker DIRECT 路径都汇入此处），故所有返回路径一律过 {@link #stripAnsi}——
+     * pwsh 7.x 错误流直出携带的 {@code ESC[31;1m} 等着色残留在此剥净；stdout 不经过
+     * 本方法,不受影响。
+     *
      * @param s stderr 原文（可为 null / 空 / 不含 CLIXML）
-     * @return 还原后的 stderr 文本；无 CLIXML 时原样返回
+     * @return 还原后的 stderr 文本（VT 序列已剥）；无 CLIXML 时除剥离外原样返回
      */
     public static String decodeClixml(String s) {
         if (s == null || s.isEmpty() || s.indexOf("CLIXML") < 0) {
-            return s == null ? "" : s;
+            return stripAnsi(s == null ? "" : s);
         }
         StringBuilder out = new StringBuilder();
         java.util.regex.Matcher m = CLIXML_BLOCK.matcher(s);
@@ -347,7 +376,7 @@ public final class ExecResults {
             }
         }
         out.append(s, last, s.length());
-        return out.toString().replaceAll("\n{3,}", "\n\n").strip();
+        return stripAnsi(out.toString().replaceAll("\n{3,}", "\n\n").strip());
     }
 
     /** 从一段 CLIXML 中抽出全部流记录文本（去内嵌标签、还原 XML 实体与换行转义）。 */
