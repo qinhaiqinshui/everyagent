@@ -5,6 +5,7 @@ import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.hub.HubLink;
 import dev.everyagent.worker.hub.HubPool;
 import dev.everyagent.plugin.api.event.Channels;
+import dev.everyagent.plugin.api.spi.FileNameSearchProvider;
 import dev.everyagent.plugin.api.spi.SearchProvider;
 import dev.everyagent.worker.plugin.registry.SearchProviderRegistry;
 import dev.everyagent.worker.proto.RpcMethods;
@@ -853,6 +854,227 @@ class FsSearchServiceTest {
         JsonNode result = ((JsonNode) last[3]).path("result");
         assertEquals(1, result.path("matchCount").asInt());
         assertEquals(4, result.path("files").path(0).path("matches").path(0).path("lineNumber").asInt());
+        assertFalse(result.path("truncated").asBoolean());
+    }
+
+    // ---- ⑥ FileNameSearchProvider 增补聚合(fs.find,§8.5 能力接口) ----
+
+    /** 造一条内置 rg --files 形态的 find outcome:给定 path 各一个文件项({path},无 matches)。 */
+    private static FsSearchService.SearchOutcome findOutcomeOf(String... paths) {
+        LinkedHashMap<String, ObjectNode> files = new LinkedHashMap<>();
+        for (String p : paths) {
+            files.put(p, Json.obj().put("path", p));
+        }
+        return new FsSearchService.SearchOutcome(files, paths.length, false);
+    }
+
+    private static FileNameSearchProvider.FindRequest anyFindReq() {
+        return new FileNameSearchProvider.FindRequest("ws1", Path.of("."), "x", false, false,
+                false, List.of(), List.of(), ".", 1000);
+    }
+
+    private static FileNameSearchProvider.FileResult found(String path) {
+        return new FileNameSearchProvider.FileResult(path);
+    }
+
+    /** 桩文件名 provider(§8.5 能力接口):固定返回路径列表,或构造时给 error 则每次调用抛出。 */
+    private static final class StubNameProvider implements FileNameSearchProvider {
+        private final String id;
+        private final List<FileResult> files;
+        private final RuntimeException error;
+
+        StubNameProvider(String id, List<FileResult> files) {
+            this(id, files, null);
+        }
+
+        StubNameProvider(String id, List<FileResult> files, RuntimeException error) {
+            this.id = id;
+            this.files = files;
+            this.error = error;
+        }
+
+        @Override
+        public String id() {
+            return id;
+        }
+
+        @Override
+        public List<SearchResult> searchFiles(SearchRequest req) {
+            return List.of(); // 基能力不参与本桩行为
+        }
+
+        @Override
+        public List<TaskSearchResult> searchTasks(TaskSearchRequest req) {
+            return List.of();
+        }
+
+        @Override
+        public List<FileResult> findFiles(FindRequest req) {
+            if (error != null) {
+                throw error;
+            }
+            return files;
+        }
+    }
+
+    @Test
+    void findProviderResultsAppendedAfterBuiltinWithPathDedup() {
+        FsSearchService.SearchOutcome builtIn = findOutcomeOf("needle.txt", "sub/NEEDLE-log.md");
+        SearchProviderRegistry registry = new SearchProviderRegistry();
+        registry.register(new StubNameProvider("p1", List.of(
+                found("needle.txt"),        // 与内置重复(同 path)→ 去重
+                found("generated/idx.md"),  // 新路径 → 新文件项
+                found("generated/idx.md"))));
+
+        FsSearchService.SearchOutcome merged = FsSearchService.mergeFindProviderResults(
+                builtIn, registry, anyFindReq(), 1000, FsSearchService.PROVIDER_TIMEOUT_MS);
+
+        assertEquals(3, merged.matchCount(), "内置 2 + 新增 1(path 去重 2)");
+        assertFalse(merged.truncated());
+        assertEquals(3, merged.files().size());
+        assertTrue(merged.files().containsKey("generated/idx.md"));
+        // 内置顺序在前:needle.txt 首位
+        assertEquals("needle.txt", merged.files().keySet().iterator().next());
+        assertTrue(merged.files().get("needle.txt").path("matches").isMissingNode(),
+                "find 结果项无 matches 字段");
+    }
+
+    @Test
+    void findProviderCappedAtMaxResultsMarksTruncated() {
+        FsSearchService.SearchOutcome builtIn = findOutcomeOf("needle.txt");
+        SearchProviderRegistry registry = new SearchProviderRegistry();
+        registry.register(new StubNameProvider("p1", List.of(
+                found("a.md"), found("b.md"), found("c.md"))));
+
+        FsSearchService.SearchOutcome merged = FsSearchService.mergeFindProviderResults(
+                builtIn, registry, anyFindReq(), 2, FsSearchService.PROVIDER_TIMEOUT_MS);
+
+        assertEquals(2, merged.matchCount(), "触顶截断到 maxResults");
+        assertTrue(merged.truncated(), "provider 结果未全量消费应置 truncated");
+        assertEquals(2, merged.files().size());
+        assertTrue(merged.files().containsKey("a.md"), "只追加第 2 项(a.md)");
+        assertFalse(merged.files().containsKey("b.md"));
+    }
+
+    @Test
+    void findRegistryEmptyOrBaseOnlyProvidersReturnsUnchanged() {
+        FsSearchService.SearchOutcome builtIn = findOutcomeOf("needle.txt");
+        // 空注册表:原样返回(零行为变化)
+        assertSame(builtIn, FsSearchService.mergeFindProviderResults(
+                builtIn, new SearchProviderRegistry(), anyFindReq(), 1000,
+                FsSearchService.PROVIDER_TIMEOUT_MS));
+        // 仅注册基接口实现(无 findFiles 能力):fs.find 不消费 → 原样返回
+        SearchProviderRegistry baseOnly = new SearchProviderRegistry();
+        baseOnly.register(new StubProvider("es", List.of()));
+        assertSame(builtIn, FsSearchService.mergeFindProviderResults(
+                builtIn, baseOnly, anyFindReq(), 1000, FsSearchService.PROVIDER_TIMEOUT_MS));
+    }
+
+    @Test
+    void findBuiltinAtCapSkipsProvidersEntirely() {
+        FsSearchService.SearchOutcome builtIn = findOutcomeOf("a.txt", "b.txt");
+        SearchProviderRegistry registry = new SearchProviderRegistry();
+        registry.register(new StubNameProvider("p1", List.of(found("c.md"))));
+        assertSame(builtIn, FsSearchService.mergeFindProviderResults(
+                builtIn, registry, anyFindReq(), 2, FsSearchService.PROVIDER_TIMEOUT_MS),
+                "内置已触顶时无预算可加,跳过 provider");
+    }
+
+    @Test
+    void findProviderFailureSkippedOthersStillMerged() {
+        SearchProviderRegistry registry = new SearchProviderRegistry();
+        registry.register(new StubNameProvider("bad", List.of(), new RuntimeException("boom")));
+        registry.register(new StubNameProvider("good", List.of(found("g.md"))));
+        FsSearchService.SearchOutcome merged = FsSearchService.mergeFindProviderResults(
+                findOutcomeOf("a.txt"), registry, anyFindReq(), 1000,
+                FsSearchService.PROVIDER_TIMEOUT_MS);
+        assertEquals(2, merged.matchCount(), "坏 provider 跳过,好 provider 照常合并");
+        assertTrue(merged.files().containsKey("g.md"));
+        assertFalse(merged.truncated());
+    }
+
+    @Test
+    void findProviderNullAndEmptyResultsNoop() {
+        SearchProviderRegistry registry = new SearchProviderRegistry();
+        registry.register(new StubNameProvider("nullish", null));
+        registry.register(new StubNameProvider("empty", List.of()));
+        FsSearchService.SearchOutcome builtIn = findOutcomeOf("a.txt");
+        FsSearchService.SearchOutcome merged = FsSearchService.mergeFindProviderResults(
+                builtIn, registry, anyFindReq(), 1000, FsSearchService.PROVIDER_TIMEOUT_MS);
+        assertEquals(1, merged.matchCount(), "空/null 结果不加项");
+        assertFalse(merged.truncated());
+    }
+
+    @Test
+    void findRpcAppendsProviderResultsAndDedups() throws Exception {
+        Assumptions.assumeTrue(ready, "环境无 rg,跳过真实进程用例");
+        seedNames();
+        registry.register(new StubNameProvider("idx", List.of(
+                found("needle.txt"),        // 与内置重复 → 去重
+                found("generated/idx.md"))));
+        Map<String, JsonNode> files = inlineFiles(RpcMethods.FS_FIND, params(ws, "needle"));
+        assertTrue(files.containsKey("needle.txt"), files.keySet().toString());
+        assertTrue(files.containsKey("sub/NEEDLE-log.md"), "内置结果完整保留: " + files.keySet());
+        assertTrue(files.containsKey("generated/idx.md"), "provider 增补路径并入应答: " + files.keySet());
+        assertEquals(3, files.size(), files.keySet().toString());
+        JsonNode reply = call(RpcMethods.FS_FIND, params(ws, "needle"), new ArrayList<>());
+        assertEquals("rpc.ok", reply.path("event").asString(), reply.toString());
+        assertEquals(3, reply.path("payload").path("result").path("matchCount").asInt());
+        assertFalse(reply.path("payload").path("result").path("truncated").asBoolean());
+    }
+
+    @Test
+    void findRpcWithoutProvidersUnchanged() throws Exception {
+        // 未注册能力 provider:输出与现状完全一致(既有序率即覆盖,这里补一条 maxResults 触顶对照)
+        Assumptions.assumeTrue(ready, "环境无 rg,跳过真实进程用例");
+        seedNames();
+        JsonNode reply = call(RpcMethods.FS_FIND, params(ws, "needle").put("maxResults", 1),
+                new ArrayList<>());
+        assertEquals("rpc.ok", reply.path("event").asString(), reply.toString());
+        JsonNode result = reply.path("payload").path("result");
+        assertTrue(result.path("truncated").asBoolean());
+        assertEquals(1, result.path("matchCount").asInt());
+        assertEquals(1, result.path("files").size());
+    }
+
+    @Test
+    void findRgMissingWithFindProvidersServesProviderResultsOnly() throws Exception {
+        // rg 不可用但注册了 FileNameSearchProvider:跳过内置 rg 仅聚合 provider 结果(与 fs.search 同款)
+        Files.createDirectories(ws);
+        WorkerProperties props = new WorkerProperties();
+        props.getTools().setRgPath(tempDir.resolve("no-such-rg-find").toString());
+        RpcDispatcher d = new RpcDispatcher(null, new WorkerProperties());
+        SearchProviderRegistry reg = new SearchProviderRegistry();
+        reg.register(new StubNameProvider("idx", List.of(found("doc/x.md"))));
+        new FsSearchService(d, workspaces, new RipgrepBinary(props), reg);
+        CountDownLatch replied = new CountDownLatch(1);
+        List<Object[]> frames = new ArrayList<>();
+        HubLink link = mock(HubLink.class);
+        when(link.k()).thenReturn("k");
+        when(link.workerId()).thenReturn("w");
+        doAnswer(inv -> {
+            synchronized (frames) {
+                frames.add(inv.getArguments());
+            }
+            replied.countDown();
+            return null;
+        }).when(link).pub(any(), any(), any(), any(), any());
+        ObjectNode payload = Json.obj().put("reqId", "req-find").put("method", RpcMethods.FS_FIND);
+        payload.set("params", params(ws, "x"));
+        ObjectNode frame = Json.obj()
+                .put("channel", Channels.workerCmd("k", "w"))
+                .put("event", "rpc");
+        frame.set("payload", payload);
+        d.onHubMessage(link, frame);
+        assertTrue(replied.await(10, TimeUnit.SECONDS));
+        Object[] last;
+        synchronized (frames) {
+            last = frames.get(frames.size() - 1);
+        }
+        assertEquals("rpc.ok", last[1], "有 find 能力 provider 时 rg 缺失不再报错");
+        JsonNode result = ((JsonNode) last[3]).path("result");
+        assertEquals(1, result.path("matchCount").asInt());
+        assertEquals("doc/x.md", result.path("files").path(0).path("path").asString());
         assertFalse(result.path("truncated").asBoolean());
     }
 }

@@ -17,7 +17,7 @@ has_children: false
 | `ChatModelEnhancer` | `model` | `registerChatModelEnhancer`（:66） | `ChatModelEnhancerRegistry` | `ChatModelFactory` 构建期委托 | model-pool（唯一） |
 | `TokenEstimator` | `spi` | `registerTokenEstimator`（:63） | 无（直接替换 `WorkerServicesImpl` 持有实例） | `WorkerServices.tokenEstimator()` 的全部调用方 | model-rate-limit |
 | `SkillContributor` | `skill` | `registerSkillContributor`（:60） | `SkillContributorRegistry` | `SkillAdvisor` 合流进 system prompt + `SkillSlashProvider` 并入 `/` 菜单 | subagent（唯一） |
-| `SearchProvider` | `spi` | `registerSearchProvider`（:51） | `SearchProviderRegistry` | `fs.search` / `task.search` 增补聚合（§6） | **无** |
+| `SearchProvider` | `spi` | `registerSearchProvider`（:51） | `SearchProviderRegistry` | `fs.search` / `task.search` 增补聚合；能力接口 `FileNameSearchProvider`（fs.find）/ `SuggestionProvider`（mention.query）（§6） | **无** |
 | `AuthorizationHandler` | `permission` | `registerAuthorizationHandler`（:54） | `AuthorizationHandlerRegistry` | `GrantRegistry` 授权决议链 | ai-review、unattended |
 
 所有注册方法的 worker 实现（`every-agent-worker/src/main/java/dev/everyagent/worker/plugin/WorkerPluginContextImpl.java:131,141,146,161,171,177`）都只是往注册表 `add` 一行（TokenEstimator 例外：调 `WorkerServicesImpl.replaceTokenEstimator` 原位换实例）。
@@ -245,7 +245,7 @@ public interface SkillContributor {
 1. ~~`/` 菜单数据源不含 `SkillContributorRegistry`~~ **（已并入）**：`SkillSlashProvider` 现按「内置（`BuiltInSkills.getAllSkills()`）→ 插件 SPI（`SkillContributorRegistry.getSkills()`）→ 外部（`ExternalSkillScanner.scan()`）」三路合并进 `/` 菜单（`every-agent-worker/src/main/java/dev/everyagent/worker/slash/SkillSlashProvider.java` 的 `load()`），同 id 去重、优先级 **内置 > 插件 SPI > 外部扫描**——SPI 是插件自己的声明（title/description 完整），外部扫描捞到同 id 只是知识包物化的副产品，不重复出菜单。插件条目与内置同 group（Skills）/icon/opaque token（`system.skill`，选中执行路径与内置完全一致），仅副标题带「插件 · 」前缀区分来源；无插件贡献时菜单与两路合并时代完全一致（零回归）。subagent 的 `agent-dispatch` 现经 SPI 以完整标题（「子 Agent」）进菜单（此前靠 `ExternalSkillScanner` 以目录名形态捞进菜单）；其知识包物化到 skillsDir 的行为**保留**——那是 AI 能 `read_file` 知识包的必要条件，与进菜单与否无关。
 2. `skill.md` 的 id 规则与菜单副标题提取等扫描约定见 [`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) §7.12「skill 目录结构与外部 skill」；本篇不展开。
 
-## 6. SearchProvider —— 搜索后端（已接线：fs.search / task.search 增补聚合）
+## 6. SearchProvider —— 搜索后端（已接线：fs.search / task.search / fs.find / mention.query 增补聚合）
 
 **机制**：插件经 `ctx.registerSearchProvider` 注册的搜索后端由 worker 的两条搜索 RPC 消费——`fs.search`（文件，`searchFiles`）与 `task.search`（任务，`searchTasks`）。聚合语义是**增补而非替换**：内置 ripgrep 结果在前，各 provider 按 `order()` 升序（同 order 保持注册先后）追加在后，按位置键去重（文件 `path+lineNumber+matchIndex` / 任务 `taskId+roundIndex+field+matchIndex`），合并后仍受 `maxResults` 触顶约束（触顶置 `truncated`）。实现住在两个入口服务里：`FsSearchService.mergeProviderResults`（`every-agent-worker/src/main/java/dev/everyagent/worker/modules/FsSearchService.java`）与 `TaskSearchService.mergeProviderResults`（`.../task/TaskSearchService.java`），[`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) §7 两条 RPC 行与 §8.5 为契约口径。
 
@@ -269,6 +269,62 @@ public interface SkillContributor {
 - **生命周期（卸载自动反注册）**：`WorkerPluginContextImpl` 按插件维护「已注册 providers」登记清单（每个上下文绑定唯一插件 id，即 pluginId → providers 映射）；worker 优雅关闭时 `PluginLoader` 在 `@PreDestroy` 逐插件调用 `deactivate()` 之后**兜底反注册**其注册的全部 SearchProvider（`SearchProviderRegistry.unregisterAll(Collection)` 批量移除，返回实际移除数），provider 不残留、重复调用幂等。注意：运行期 `plugin.disable` / `plugin.uninstall` 只改禁用名单/删除目录，**不触发运行时反注册**——已激活插件的贡献留在注册表直到 worker 重启（与 `PluginStateStore`「重启 worker 后生效」口径一致，契约见 [`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) §8.5「registry 顺序与生命周期」）。排序与批量反注册行为由 `SearchProviderRegistryTest` / `WorkerPluginContextSearchUnregisterTest` 钉住。
 
 **范例**：暂无内置插件注册（26 个内置插件零使用）；聚合/去重/触顶/异常跳过行为由 `FsSearchServiceTest` / `TaskSearchServiceTest` 的 StubProvider 用例钉住。若接线前曾按旧 Javadoc 期待「ripgrep 变为默认插件 search-ripgrep、provider 替换后端」——现行语义是增补聚合，不替换。
+
+### 6.1 能力接口扩展：FileNameSearchProvider / SuggestionProvider（已接线：fs.find / mention.query 增补聚合）
+
+**机制**（[`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) §8.5「能力接口扩展」）：`FileNameSearchProvider`（`findFiles` → `fs.find`）与 `SuggestionProvider`（`suggest` → `mention.query`）是 `SearchProvider` 的**子接口**，与基接口同住 spi 包、**同样经 `ctx.registerSearchProvider` 注册**——注册/反注册生命周期零改动（`WorkerPluginContextImpl` 的登记清单与 `unregisterAll` 兜底原样覆盖）。registry 按**接口分派**能力：`SearchProviderRegistry.getFileNameProviders()` / `getSuggestionProviders()` 从**同一份** order 有序存储按 `instanceof` 过滤（不另建第二份存储，order/快照语义与 `getProviders()` 一致），因此**一个 provider 对象可同时实现多个能力接口**（例：同一「最近文件索引」对象既补 fs.find 又补 @ 建议）。
+
+- `fs.find` 增补语义：内置 `rg --files` + basename 匹配结果在前，各 provider 按 `order()` 升序追加，按 `kind=file`+`path` 去重（find 结果恒为文件，即按 path 去重），合并后仍受 `maxResults` 触顶约束（触顶置 `truncated`）；rg 不可用但注册了该能力 provider 时跳过内置 rg、仅聚合 provider 结果（与 fs.search 同款）。实现：`FsSearchService.mergeFindProviderResults`。
+- `mention.query` 增补语义：**仅搜索模式**（非空 query）在内置四档打分排序结果之后按 `order()` 升序追加，按 `kind`+`path` 去重（kind 缺省归一 `file`），总条数仍截断 10 条（mention 应答无 `truncated` 标志，与内置静默截断一致）；浏览模式（空 query 列目录顶层）不经 provider。实现：`SlashMethods.appendProviderSuggestions`。
+- 护栏与 fs.search/task.search 完全同款：单个 provider 抛异常/超出超时预算（`worker.search.provider-timeout-ms`，默认 0 不限时）仅 WARN 跳过（共用 `SearchProviderInvoker`）；未注册任何实现该能力接口的对象时零额外行为；只实现基接口的 provider 对这两条 RPC 零影响（instanceof 过滤不命中）。
+
+**实现要点**（`every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/spi/FileNameSearchProvider.java` 与 `.../spi/SuggestionProvider.java`）：
+
+- `FileNameSearchProvider`：`id()` + `order()`（继承）+ 基接口两方法（可不实现逻辑，返回空列表）+ `findFiles(FindRequest)`。`FindRequest` 与 `fs.find` 入参同族（`pattern/isRegex/caseSensitive/wholeWord/includeGlobs/excludeGlobs/maxResults` + `path` 搜索范围）；`FileResult(path)` 为工作区相对 posix 路径（单文件一项，无 matches 字段）。
+- `SuggestionProvider`：`suggest(SuggestRequest)`；`SuggestRequest(workspaceId, workspaceRoot, query, path)`（`query` 为用户已输入的 @ 搜索词）；`Suggestion(path, kind)`（`kind` 缺省归一 `file`，有 `Suggestion(path)` 便捷构造；建议项排序由 provider 自理——调用方按返回序并入聚合）。
+
+**示例**（同一对象实现两个能力接口，注册一次即可）：
+
+```java
+public final class RecentFilesPlugin implements FileNameSearchProvider, SuggestionProvider {
+
+    @Override
+    public String id() { return "recent-files"; }
+
+    @Override
+    public float order() { return -10f; } // 「快而粗」的索引命中先返回
+
+    // ---- 基接口（本插件不参与内容搜索，空实现即可） ----
+
+    @Override
+    public List<SearchResult> searchFiles(SearchRequest req) { return List.of(); }
+
+    @Override
+    public List<TaskSearchResult> searchTasks(TaskSearchRequest req) { return List.of(); }
+
+    // ---- 能力接口：fs.find 增补 ----
+
+    @Override
+    public List<FileResult> findFiles(FindRequest req) {
+        // basename 命中最近打开索引（含被 .gitignore 剪掉、rg 枚举不到的文件）
+        return index.matchNames(req.pattern(), req.isRegex(), req.maxResults())
+                .stream().map(FileResult::new).toList();
+    }
+
+    // ---- 能力接口：mention.query 增补 ----
+
+    @Override
+    public List<Suggestion> suggest(SuggestRequest req) {
+        return index.fuzzy(req.query(), 10)
+                .stream().map(p -> new Suggestion(p)).toList(); // kind 缺省 file
+    }
+}
+
+// activate() 里注册一次，两条能力同时生效（反注册生命周期与基接口一致）：
+ctx.registerSearchProvider(new RecentFilesPlugin());
+```
+
+聚合/去重/截断/异常跳过行为由 `FsSearchServiceTest`（StubNameProvider 用例）/ `SlashMethodsMentionProviderTest`（StubSuggester 用例）/ `SearchProviderRegistryTest`（capabilityDispatch 用例）钉住。
 
 ## 7. AuthorizationHandler —— 授权决议链节点
 

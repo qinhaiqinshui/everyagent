@@ -3,6 +3,7 @@ package dev.everyagent.worker.modules;
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.worker.proto.RpcMethods;
 import dev.everyagent.plugin.api.exception.BadParamsException;
+import dev.everyagent.plugin.api.spi.FileNameSearchProvider;
 import dev.everyagent.plugin.api.spi.SearchProvider;
 import dev.everyagent.worker.plugin.registry.SearchProviderInvoker;
 import dev.everyagent.worker.plugin.registry.SearchProviderRegistry;
@@ -74,6 +75,12 @@ import java.util.regex.PatternSyntaxException;
  * {@code worker.search.provider-timeout-ms},默认 0 不限时,见
  * {@link #PROVIDER_TIMEOUT_MS});注册表为空时零额外行为;rg 不可用但注册了 provider
  * 时跳过内置 rg、仅聚合 provider 结果。
+ *
+ * <p><b>能力接口扩展(§8.5)</b>:fs.find 的增补聚合消费 {@link FileNameSearchProvider}
+ * 能力接口({@code findFiles},registry 按 instanceof 分派),语义与护栏与 fs.search
+ * 同款——内置在前、按 order() 升序追加、按 {@code kind=file}+{@code path} 去重(find
+ * 结果恒为文件,即按 path 去重)、仍受 maxResults 触顶(见
+ * {@link #mergeFindProviderResults})。
  */
 @Component
 public class FsSearchService {
@@ -173,9 +180,14 @@ public class FsSearchService {
     /**
      * fs.find:文件名搜索(架构 §7 契约表)。参数与 fs.search 同族;basename 匹配在
      * worker 侧完成(Java Pattern,非 rg),pattern 非法在入口即拦成可读的 rpc.err。
+     * 内置 rg 结果之后按 order() 升序增补聚合 {@link FileNameSearchProvider} 能力
+     * 接口的 {@code findFiles} 结果(§8.5 能力接口扩展,见
+     * {@link #mergeFindProviderResults});rg 不可用但注册了该能力 provider 时跳过内置
+     * rg 仅聚合 provider 结果(与 fs.search 同款)。
      */
     private void find(RpcContext ctx) throws IOException, InterruptedException {
-        if (!rg.available()) {
+        boolean findProvidersRegistered = !searchProviders.getFileNameProviders().isEmpty();
+        if (!rg.available() && !findProvidersRegistered) {
             throw new IOException("rg 不可用: 未找到内置 ripgrep(<程序根>/runtime/bin/ 或"
                     + " worker.tools.rg-path),无法执行工作区搜索");
         }
@@ -198,8 +210,14 @@ public class FsSearchService {
         } catch (PatternSyntaxException e) {
             throw new BadParamsException("正则表达式非法: " + e.getMessage());
         }
-        SearchOutcome out = runFind(root,
-                buildFileArgs(include, exclude, resolveScope(ctx, sb)), nameRegex, maxResults);
+        String scope = resolveScope(ctx, sb);
+        // 内置 rg 枚举(rg 不可用但已注册 FileNameSearchProvider 时跳过,仅聚合 provider 结果,§8.5)
+        SearchOutcome out = rg.available()
+                ? runFind(root, buildFileArgs(include, exclude, scope), nameRegex, maxResults)
+                : new SearchOutcome(new LinkedHashMap<>(), 0, false);
+        out = mergeFindProviderResults(out, searchProviders, new FileNameSearchProvider.FindRequest(
+                workspaces.idOfRoot(root.toString()), root, pattern, isRegex, caseSensitive,
+                wholeWord, include, exclude, scope, maxResults), maxResults, providerTimeoutMs);
         reply(ctx, out);
     }
 
@@ -318,6 +336,53 @@ public class FsSearchService {
                 .put("line", hit.line())
                 .put("matchIndex", hit.matchIndex())
                 .put("matchText", hit.matchText()));
+    }
+
+    // ---- FileNameSearchProvider 增补聚合(fs.find) ----
+
+    /**
+     * 把插件 {@link FileNameSearchProvider}(§8.5 能力接口)的文件名搜索结果增补聚合进
+     * 内置 rg --files 结果:实现该能力接口的 provider 为空或内置结果已触顶(maxResults)
+     * 时原样返回——零行为变化;provider 结果按 order() 升序(同 order 保持注册先后)追加
+     * 在内置结果之后,按 {@code kind=file}+{@code path} 去重(find 结果恒为文件,即按
+     * path 去重——files 聚合以 path 为键,天然一文件一项);合并后仍受 maxResults 触顶
+     * 约束(触顶置 truncated 并终止 provider 循环);单个 provider 抛异常/超出超时预算
+     * ({@code providerTimeoutMs},0 不限时)仅 WARN 跳过(经 {@link SearchProviderInvoker}
+     * 护栏,与 search() 同款接缝/默认值),不影响其余结果与应答;provider 返回 null/空
+     * 列表(或全部命中被去重)不加项。
+     */
+    static SearchOutcome mergeFindProviderResults(SearchOutcome builtIn, SearchProviderRegistry registry,
+            FileNameSearchProvider.FindRequest req, int maxResults, long providerTimeoutMs) {
+        List<FileNameSearchProvider> providers = registry.getFileNameProviders();
+        if (providers.isEmpty() || builtIn.matchCount() >= maxResults) {
+            return builtIn;
+        }
+        LinkedHashMap<String, ObjectNode> files = new LinkedHashMap<>(builtIn.files());
+        int count = builtIn.matchCount();
+        boolean truncated = builtIn.truncated();
+        // 护栏(§8.5):单个 provider 抛异常/超出超时预算仅 WARN 跳过,不影响其余结果
+        SearchProviderInvoker invoker = new SearchProviderInvoker("fs.find", providerTimeoutMs);
+        outer:
+        for (FileNameSearchProvider provider : providers) {
+            List<FileNameSearchProvider.FileResult> hits = invoker.invoke(provider,
+                    () -> provider.findFiles(req));
+            if (hits == null) {
+                continue; // 护栏跳过(异常/超时)或 provider 合法返回 null
+            }
+            for (FileNameSearchProvider.FileResult hit : hits) {
+                if (count >= maxResults) {
+                    truncated = true;
+                    break outer;
+                }
+                if (hit == null || hit.path() == null || hit.path().isBlank()
+                        || files.containsKey(hit.path())) {
+                    continue; // path 去重(kind=file+path;find 结果恒为文件)
+                }
+                files.put(hit.path(), Json.obj().put("path", hit.path()));
+                count++;
+            }
+        }
+        return new SearchOutcome(files, count, truncated);
     }
 
     /** execRg 的逐行消费者:返回 true 继续消费,false = 触顶停止(外层 kill rg)。 */
