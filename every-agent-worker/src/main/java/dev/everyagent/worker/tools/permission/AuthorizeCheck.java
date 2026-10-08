@@ -27,7 +27,7 @@ public class AuthorizeCheck implements PermissionCheck {
         try {
             AuthorizationRequest req = ctx.authReq() != null ? ctx.authReq()
                     : new AuthorizationRequest(null, ctx.agentId(), ctx.grantKey(), ctx.prompt());
-            grants.authorize(req, ctx.rootsOnGrant(), ctx.execRootsOnGrant());
+            grants.authorize(req, ctx.rootsOnGrant(), ctx.execRootsOnGrant(), ctx.sandboxRootsOnGrant());
             return PermissionDecision.allow("授权放行");
         } catch (PermissionDeniedException e) {
             return PermissionDecision.deny(e);

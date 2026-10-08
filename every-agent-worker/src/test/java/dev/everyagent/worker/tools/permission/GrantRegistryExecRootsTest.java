@@ -67,13 +67,13 @@ class GrantRegistryExecRootsTest {
         GrantRegistry grants = new GrantRegistry(asksTaskScope(), new WorkerProperties(),
                 stubWorkspaceManager(wsReal,
                         List.of(extRoot.toRealPath(), wsParent, granted.toRealPath())),
-                new AuthorizationHandlerRegistry());
+                new AuthorizationHandlerRegistry(), null);
         TaskEntry t = task(ws);
 
         // 用户对 granted 授权 EXEC(随附旧宽根 fsRoot 模拟历史 grants.json 载入的 C:\ 形态)
         Path fsRoot = wsReal.getRoot();
         grants.authorize(req(t, "main-agent", "p::exec::" + granted.toRealPath(), "读目录"),
-                List.of(), List.of(granted.toRealPath(), fsRoot));
+                List.of(), List.of(granted.toRealPath(), fsRoot), List.of());
 
         // 并入 extRoot;拒收 fsRoot(盘根)与 wsParent(工作区祖先);granted 与 externalRoots
         // 重叠出现一次(去重);EXEC 根在前、外部根在后
@@ -86,7 +86,8 @@ class GrantRegistryExecRootsTest {
         Path wsReal = ws.toRealPath();
         Path extRoot = Files.createDirectories(tempDir.resolve("only").resolve("ext"));
         GrantRegistry grants = new GrantRegistry(asksTaskScope(), new WorkerProperties(),
-                stubWorkspaceManager(wsReal, List.of(extRoot.toRealPath())), new AuthorizationHandlerRegistry());
+                stubWorkspaceManager(wsReal, List.of(extRoot.toRealPath())), new AuthorizationHandlerRegistry(),
+                null);
         TaskEntry t = task(ws);
 
         // 无任何 EXEC 授权:视图仍含外部授权根(命令侧按 §7.17 直接生效)
@@ -98,11 +99,11 @@ class GrantRegistryExecRootsTest {
         Path wsReal = ws.toRealPath();
         Path granted = Files.createDirectories(tempDir.resolve("legacy").resolve("g"));
         GrantRegistry grants = new GrantRegistry(asksTaskScope(), new WorkerProperties(),
-                stubWorkspaceManager(wsReal, List.of()), new AuthorizationHandlerRegistry());
+                stubWorkspaceManager(wsReal, List.of()), new AuthorizationHandlerRegistry(), null);
         TaskEntry t = task(ws);
 
         grants.authorize(req(t, "main-agent", "p::exec::" + granted.toRealPath(), "读目录"),
-                List.of(), List.of(granted.toRealPath()));
+                List.of(), List.of(granted.toRealPath()), List.of());
         // 无外部根:与既有行为一致,只含过滤后的 EXEC 根
         assertEquals(List.of(granted.toRealPath()), grants.execRootsSandboxed(t.workspaceRoot(), "t-1"));
     }

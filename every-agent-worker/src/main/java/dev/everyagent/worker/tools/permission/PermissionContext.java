@@ -42,6 +42,8 @@ public final class PermissionContext {
     private final String prompt;
     private final List<Path> rootsOnGrant;
     private final List<Path> execRootsOnGrant;
+    /** 授权后下发给沙箱的根(§7.8:沙箱可访问范围 = 授权范围;不放大 P5)。 */
+    private final List<Path> sandboxRootsOnGrant;
     private final String command;
     private final String execPath;
 
@@ -60,6 +62,8 @@ public final class PermissionContext {
         this.prompt = b.prompt;
         this.rootsOnGrant = b.rootsOnGrant == null ? List.of() : List.copyOf(b.rootsOnGrant);
         this.execRootsOnGrant = b.execRootsOnGrant == null ? List.of() : List.copyOf(b.execRootsOnGrant);
+        this.sandboxRootsOnGrant =
+                b.sandboxRootsOnGrant == null ? List.of() : List.copyOf(b.sandboxRootsOnGrant);
         this.command = b.command;
         this.execPath = b.execPath;
     }
@@ -80,6 +84,13 @@ public final class PermissionContext {
     public String prompt() { return prompt; }
     public List<Path> rootsOnGrant() { return rootsOnGrant; }
     public List<Path> execRootsOnGrant() { return execRootsOnGrant; }
+    /**
+     * 授权后下发给沙箱后端的根(路径级,§7.8)。与 {@link #rootsOnGrant()} 的区别:
+     * 后者是「AI 可访问区域」的逻辑允许名单(目录级,供路径校验),本项是<b>真正下发给沙箱
+     * 内核机制</b>的范围,按 <b>P5 不放大</b> 计算——需创建新文件时无法在请求粒度落地,
+     * 故选空(不下发),绝不放大到父目录。
+     */
+    public List<Path> sandboxRootsOnGrant() { return sandboxRootsOnGrant; }
     public String command() { return command; }
     public String execPath() { return execPath; }
 
@@ -113,6 +124,7 @@ public final class PermissionContext {
         private String prompt;
         private List<Path> rootsOnGrant;
         private List<Path> execRootsOnGrant;
+        private List<Path> sandboxRootsOnGrant;
         private String command;
         private String execPath;
 
@@ -130,6 +142,7 @@ public final class PermissionContext {
         public Builder prompt(String prompt) { this.prompt = prompt; return this; }
         public Builder rootsOnGrant(List<Path> rootsOnGrant) { this.rootsOnGrant = rootsOnGrant; return this; }
         public Builder execRootsOnGrant(List<Path> execRootsOnGrant) { this.execRootsOnGrant = execRootsOnGrant; return this; }
+        public Builder sandboxRootsOnGrant(List<Path> roots) { this.sandboxRootsOnGrant = roots; return this; }
         public Builder command(String command) { this.command = command; return this; }
         public Builder execPath(String execPath) { this.execPath = execPath; return this; }
 

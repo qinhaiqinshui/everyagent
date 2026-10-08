@@ -21,6 +21,7 @@ import dev.everyagent.worker.tools.permission.WorkspaceAllowCheck;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 
@@ -109,6 +110,13 @@ public class PermissionGate {
         Path real = rootAnchor.toRealPath();
         Path lexical = rootAnchor.normalize();
         List<Path> roots = lexical.equals(real) ? List.of(real) : List.of(real, lexical);
+        // 下发给沙箱的范围(§7.8 P5 不放大):授权单元确实存在时可按请求粒度落地
+        // (目录 → 目录;已存在文件 → 单文件);待建目标无法在不放大到父目录的前提下
+        // 落地创建权限,故不下发(该路径仍可经 file 工具通道访问)。
+        List<Path> sandboxRoots = List.of();
+        if (Files.exists(unit) && !OverBroadRootCheck.isOverBroadRoot(unit, ws.path(), ws.realPath())) {
+            sandboxRoots = List.of(unit);
+        }
         String grantKey = PathSupport.pathKey(unit, op);
         String prompt = "AI 请求" + PathSupport.opDesc(op) + "工作区外路径: " + norm + "\n"
                 + "授权范围: " + unit + PathSupport.scopeNote(norm, anchor)
@@ -128,6 +136,7 @@ public class PermissionGate {
                 .prompt(prompt)
                 .rootsOnGrant(roots)
                 .execRootsOnGrant(List.of())
+                .sandboxRootsOnGrant(sandboxRoots)
                 .build();
         handle(pathChain.proceed(ctx));
     }

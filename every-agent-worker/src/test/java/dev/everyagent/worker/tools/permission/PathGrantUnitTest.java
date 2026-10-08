@@ -197,7 +197,7 @@ class PathGrantUnitTest {
         AuthorizationHandlerRegistry registry = new AuthorizationHandlerRegistry();
         registry.register(counter);
         GrantRegistry grants = new GrantRegistry(mock(dev.everyagent.plugin.api.interaction.InteractionService.class),
-                props, wm, registry);
+                props, wm, registry, null);
         return new PermissionGate(wm, grants, new WorkspaceAllowCheck(), new MissingPathCheck(),
                 new SkillsReadAllowCheck(props), new ExternalRootAllowCheck(wm),
                 new OverBroadRootCheck(), new AuthorizeCheck(grants),

@@ -90,7 +90,7 @@ public class CommandCheck implements PermissionCheck {
                                 + "命令类别: " + verb + "(删除/破坏类动词)。"
                                 + "授权后同类命令(" + verb + ")在所选范围内不再询问。";
                         grants.authorize(ctx.authRequest(PathSupport.verbKey(verb), prompt),
-                                List.of(), List.of());
+                                List.of(), List.of(), List.of());
                     }
                 }
             }
@@ -116,7 +116,7 @@ public class CommandCheck implements PermissionCheck {
                         + "授权范围: " + real + " 目录(命令中引用该目录下的路径不再询问;"
                         + "引用其子目录中的路径需另行授权)。";
                 grants.authorize(ctx.authRequest(PathSupport.pathKey(real, Op.EXEC), prompt),
-                        List.of(), List.of(real));
+                        List.of(), List.of(real), List.of(real));
             }
             return PermissionDecision.allow("命令授权检查通过");
         } catch (PermissionDeniedException e) {

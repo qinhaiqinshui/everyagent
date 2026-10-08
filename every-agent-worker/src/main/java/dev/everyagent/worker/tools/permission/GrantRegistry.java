@@ -5,11 +5,14 @@ import dev.everyagent.plugin.api.permission.AuthorizationHandler;
 import dev.everyagent.plugin.api.util.AtomicFiles;
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.modules.WorkspaceManager;
+import dev.everyagent.worker.os.SandboxPathRegistry;
 import dev.everyagent.worker.plugin.registry.AuthorizationHandlerRegistry;
 import dev.everyagent.plugin.api.exception.AgentCancelledException;
 import dev.everyagent.plugin.api.execution.ExecContext;
 import dev.everyagent.plugin.api.interaction.InteractionService;
 import dev.everyagent.plugin.api.permission.AuthorizationHandler.AuthorizationRequest;
+import dev.everyagent.plugin.api.spi.SandboxBackend.Access;
+import dev.everyagent.plugin.api.spi.SandboxBackend.PathGrant;
 import dev.everyagent.worker.tools.PermissionDeniedException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -22,6 +25,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -39,27 +43,37 @@ import java.util.concurrent.ConcurrentHashMap;
  * 后来者 join 共享结论)。授权两档:run(内存,下一条用户输入清)/ task(grants.json,随任务删除)。
  *
  * <p>核心不感知任何具体 handler 节点(如 AI 审议、无人值守等),只遍历 handler 列表。
- * handler 的注册与排序由 Spring 自动收集 + {@link AuthorizationHandler#order()} 完成。
+ *
+ * <p><b>沙箱下发</b>(§7.8):授权落定时把随附的「沙箱范围根」交给
+ * {@link SandboxPathRegistry}(owner={@code grants:<subjectId>})——由它跨主体聚合后
+ * 差量下发给沙箱后端,故 run 档清空 / 主体驱逐 / 磁盘重载都会自然触发回收;
+ * 沙箱侧只见到路径,不知道它们来自哪个任务。
  */
 @Component
 public class GrantRegistry {
 
     private static final Logger log = LoggerFactory.getLogger(GrantRegistry.class);
 
+    /** 沙箱授权账本的 owner 前缀(每个授权主体一个:grants:<subjectId>)。 */
+    private static final String SANDBOX_OWNER_PREFIX = "grants:";
+
     private final InteractionService asks;
     private final WorkerProperties props;
     private final WorkspaceManager workspaces;
     /** 授权决议链节点注册表(按 order 排序);零节点 → 直接放行。 */
     private final AuthorizationHandlerRegistry authHandlerRegistry;
+    /** 沙箱授权账本(可为 null:单测直构场景 → 不下发,仅内存授权)。 */
+    private final SandboxPathRegistry sandboxPaths;
 
     private final Map<String, TaskGrants> byTask = new ConcurrentHashMap<>();
 
     public GrantRegistry(InteractionService asks, WorkerProperties props, WorkspaceManager workspaces,
-            AuthorizationHandlerRegistry authHandlerRegistry) {
+            AuthorizationHandlerRegistry authHandlerRegistry, SandboxPathRegistry sandboxPaths) {
         this.asks = asks;
         this.props = props;
         this.workspaces = workspaces;
         this.authHandlerRegistry = authHandlerRegistry;
+        this.sandboxPaths = sandboxPaths;
     }
 
     // ---- 生命周期 ---- 
@@ -71,12 +85,18 @@ public class GrantRegistry {
             g.runGrants.clear();
             g.runRoots.clear();
             g.runExecRoots.clear();
+            g.runSandboxRoots.clear();
+            syncSandboxGrants(subjectId, g); // 本轮授权失效 → 沙箱侧同步回收
         }
     }
 
     /** 主体终态:内存驱逐(任务级授权已在磁盘,再运行时 lazy 重载)。subjectId=执行主体 ID(今天=taskId)。 */
     public void untrack(String subjectId) {
         byTask.remove(subjectId);
+        // 主体消失 → 该主体的沙箱授权账本整体撤销(其他主体仍期望的根由聚合层保留)
+        if (sandboxPaths != null) {
+            sandboxPaths.unregisterOwner(SANDBOX_OWNER_PREFIX + subjectId);
+        }
     }
 
     /** 已授权外部根(realpath + 词法形态),供 Sandbox 附加放行。subjectId=执行主体 ID(今天=taskId)。 */
@@ -172,9 +192,10 @@ public class GrantRegistry {
      * 第一个 applies 的 handler 返回 ALLOW → 自动授权(RUN 档);DENY → 抛
      * {@link PermissionDeniedException};全部 PASS 或零节点 → 直接放行(RUN 档)。
      * rootsOnGrant 为该授权随附的 Sandbox 附加根;execRootsOnGrant 为命令 EXEC 授权随附的
-     * Low 完整性标注根。
+     * Low 完整性标注根;sandboxRootsOnGrant 为下发给沙箱内核机制的范围(§7.8 P5)。
      */
-    public void authorize(AuthorizationRequest req, List<Path> rootsOnGrant, List<Path> execRootsOnGrant) {
+    public void authorize(AuthorizationRequest req, List<Path> rootsOnGrant, List<Path> execRootsOnGrant,
+            List<Path> sandboxRootsOnGrant) {
         ExecContext ctx = req.context();
         String subjectId = ctx.subjectId(); // 授权状态分区键(今天=taskId,未来=workflowId)
         Path dataDir = ctx.dataDir();       // grants.json 落盘目录(ExecContext 数据目录槽位)
@@ -207,7 +228,7 @@ public class GrantRegistry {
         try {
             GrantScope scope = resolveScope(req);
             future.complete(scope);
-            record(dataDir, g, grantKey, scope, rootsOnGrant, execRootsOnGrant);
+            record(dataDir, g, subjectId, grantKey, scope, rootsOnGrant, execRootsOnGrant, sandboxRootsOnGrant);
         } catch (Throwable e) {
             future.complete(GrantScope.DENY); // 分派异常结束(审议/弹窗):后来者按拒绝处理
             throw e;
@@ -256,21 +277,63 @@ public class GrantRegistry {
     }
 
     /** 按档位记录授权(DENY 抛 PermissionDeniedException)。dataDir=grants.json 落盘目录(ExecContext.dataDir)。 */
-    private void record(Path dataDir, TaskGrants g, String grantKey, GrantScope scope,
-            List<Path> rootsOnGrant, List<Path> execRootsOnGrant) {
+    private void record(Path dataDir, TaskGrants g, String subjectId, String grantKey, GrantScope scope,
+            List<Path> rootsOnGrant, List<Path> execRootsOnGrant, List<Path> sandboxRootsOnGrant) {
+        boolean rw = sandboxAccessIsWrite(grantKey);
         switch (scope) {
             case RUN -> {
                 g.runGrants.add(grantKey);
                 g.runRoots.addAll(rootsOnGrant);
                 g.runExecRoots.addAll(execRootsOnGrant);
+                sandboxRootsOnGrant.forEach(p -> widen(g.runSandboxRoots, p, rw));
             }
             case TASK -> {
                 g.taskGrants.add(grantKey);
                 g.taskRoots.addAll(rootsOnGrant);
                 g.taskExecRoots.addAll(execRootsOnGrant);
+                sandboxRootsOnGrant.forEach(p -> widen(g.taskSandboxRoots, p, rw));
                 persistGrants(dataDir, g);
             }
             case DENY -> throw denyException();
+        }
+        syncSandboxGrants(subjectId, g);
+    }
+
+    /**
+     * 授权 key 的访问语义:读 → 只读,写 / 命令执行 → 读写。
+     * key 形态 {@code p::<op>::<path>}(见 {@code PathSupport.pathKey}),动词类是
+     * {@code v::<verb>} / {@code priv::<name>} 等无路径形态(不下发沙箱根,故无影响)。
+     */
+    private static boolean sandboxAccessIsWrite(String grantKey) {
+        return !grantKey.startsWith("p::read::");
+    }
+
+    /** 同路径取最宽语义(读写覆盖只读)。 */
+    private static void widen(Map<Path, Boolean> target, Path root, boolean rw) {
+        target.merge(root, rw, (a, b) -> a || b);
+    }
+
+    /**
+     * 把该主体的沙箱授权根交给 {@link SandboxPathRegistry}(owner=grants:&lt;subjectId&gt;)
+     * 覆盖式对齐——由聚合层跨主体去重后差量下发,主体范围内减少的根(如 run 档清空)
+     * 自然被收敛为 {@code revoke}。
+     */
+    private void syncSandboxGrants(String subjectId, TaskGrants g) {
+        if (sandboxPaths == null) {
+            return; // 单测直构场景:无沙箱账本,授权仅内存生效
+        }
+        Map<Path, Boolean> merged = new LinkedHashMap<>(g.taskSandboxRoots);
+        g.runSandboxRoots.forEach((p, rw) -> widen(merged, p, rw));
+        List<PathGrant> grants = new ArrayList<>(merged.size());
+        for (Map.Entry<Path, Boolean> e : merged.entrySet()) {
+            grants.add(new PathGrant(e.getKey(),
+                    e.getValue() ? Access.READ_WRITE : Access.READ_ONLY));
+        }
+        try {
+            sandboxPaths.sync(SANDBOX_OWNER_PREFIX + subjectId, grants);
+        } catch (RuntimeException e) {
+            log.warn("[gate] 沙箱授权根下发失败(授权仍在内存生效)subject={}: {}",
+                    subjectId, e.toString());
         }
     }
 
@@ -291,6 +354,9 @@ public class GrantRegistry {
         /** run/task 档各自的命令 EXEC 根(Windows Low 完整性标注用,§13.6)。 */
         final Set<Path> runExecRoots = ConcurrentHashMap.newKeySet();
         final Set<Path> taskExecRoots = ConcurrentHashMap.newKeySet();
+        /** run/task 档各自下发给沙箱的授权根(§7.8);值 = 是否读写。 */
+        final Map<Path, Boolean> runSandboxRoots = new ConcurrentHashMap<>();
+        final Map<Path, Boolean> taskSandboxRoots = new ConcurrentHashMap<>();
         final Map<String, CompletableFuture<GrantScope>> inFlight = new ConcurrentHashMap<>();
         volatile boolean diskLoaded;
 
@@ -306,6 +372,8 @@ public class GrantRegistry {
                 if (!g.diskLoaded) {
                     loadDiskGrants(subjectId, dataDir, g);
                     g.diskLoaded = true;
+                    // 磁盘载入的任务级授权同样要下发沙箱(进程重启后沙箱侧需重放)
+                    syncSandboxGrants(subjectId, g);
                 }
             }
         }
@@ -349,6 +417,17 @@ public class GrantRegistry {
                     }
                 }
             }
+            // v2 起:下发给沙箱的授权根(§7.8);旧文件无该键 → 空(仅内存走授权,不下发)
+            for (JsonNode n : root.path("sandboxRoots")) {
+                String s = n.path("path").asString("");
+                if (!s.isEmpty()) {
+                    try {
+                        widen(g.taskSandboxRoots, Path.of(s), n.path("rw").asBoolean(false));
+                    } catch (RuntimeException ignore) {
+                        // 同上:形态不兼容忽略
+                    }
+                }
+            }
         } catch (IOException | RuntimeException e) {
             log.warn("任务级授权读取失败 subject={}(按无授权处理)", subjectId, e);
         }
@@ -373,6 +452,13 @@ public class GrantRegistry {
             ArrayNode execRoots = root.putArray("execRoots");
             for (Path p : g.taskExecRoots) {
                 execRoots.add(p.toString());
+            }
+            // 下发给沙箱的授权根(§7.8):进程重启后据此重放,沙箱侧不留真相
+            ArrayNode sbx = root.putArray("sandboxRoots");
+            for (Map.Entry<Path, Boolean> e : g.taskSandboxRoots.entrySet()) {
+                sbx.addObject()
+                        .put("path", e.getKey().toString())
+                        .put("rw", e.getValue());
             }
             Path f = dir.resolve("grants.json");
             Path tmp = dir.resolve("grants.json.tmp");
