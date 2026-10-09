@@ -84,8 +84,8 @@
 
 ## 5. 顺带发现的两个小问题（可复现，非严重）
 
-1. **`content=""` 删除时会留下一个空行**：把 `R05 原始行内容` 换成空串后，该位置变成空行（原 10 行仍为 10 行）。若期望「整行删除」，需调用方把 `oldcontent` 连同行尾一起给出，或工具支持整行删除语义。
-2. **错误信息可更精确**：`oldcontent` 不存在时报「未找到旧内容(oldcontent)」；不唯一时报「oldcontent 在文档中出现多次,不唯一,无法确定替换位置」。建议在「未找到」时附带**最相近的行号/片段**，便于定位（尤其对长文档）。
+1. **`content=""` 删除时会留下一个空行**：把 `R05 原始行内容` 换成空串后，该位置变成空行（原 10 行仍为 10 行）。若期望「整行删除」，需调用方把 `oldcontent` 连同行尾一起给出，或工具支持整行删除语义。**（未修复；属语义取舍，非缺陷。）**
+2. **「未找到 oldcontent」的错误信息可更精确**：原实现只报「未找到旧内容(oldcontent)」。**✅ 已修复**（见 §8.5 第 5 项）：现附带最相近的行号与片段，覆盖四种情形——首行匹配但后续不一致（含文件提前结束）／首行多处出现／仅空白-缩进差异／完全无相近内容（退化到最长公共前缀最接近的一行）。
 
 ---
 
@@ -152,12 +152,15 @@ Files.writeString(target, finalText, StandardCharsets.UTF_8);   // CREATE + TRUN
 
 `FileTools`：
 4. **匹配器修复**：`findUniqueEolAgnostic` 原先「先跳过换行位置再匹配」，导致 **oldcontent 以换行开头**（或在 CRLF 的 `\n` 处起）**永远匹配不到**，误报「未找到旧内容」。改为「主导行尾统计」与「逐下标匹配」解耦——匹配起点不再跳过换行。
+5. **「未找到」诊断增强**（§5.2 建议落地）：新增 `FileTools.describeNotFound(existing, oldcontent)`，报错时附带最相近行号/片段，覆盖：首行匹配但后续不一致（含文件提前结束）/ 首行多处出现 / 仅空白-缩进差异 / 完全无相近内容（退化到最长公共前缀最接近的一行）。示例报错：
+   `未找到旧内容(oldcontent)。oldcontent 首行匹配第 3 行,但从第 4 行起不一致:期望「l4 original」,实际「l4 changed」`
 
 ### 8.6 新增回归测试
 - `FileToolsUpdateMatchTest`（8 例）：主导行尾判定、行尾宽容匹配（LF 的 oldcontent 匹配 CRLF 文件）、**以换行开头的 oldcontent**、未找到→null、重复/重叠→报错、替换区间外逐字节保留。
+- `FileToolsNotFoundHintTest`（6 例）：诊断信息的四种情形 + 经 `update_file` 端到端校验报错文案携带行号与片段。
 - `FsWriteAtomicityTest`（3 例）：**写期间不得暴露半截文件**、不留 `.tmp` 残留、**并发 `update_file` 不丢更新**。
 
-结果：`mvn -o -pl every-agent-worker test -Dtest=FileToolsUpdateMatchTest,FsWriteAtomicityTest,FileToolsReadTruncateTest,AtomicFilesTest` → **18/18 通过**。
+结果：`mvn -o -pl every-agent-worker test -Dtest=FileToolsNotFoundHintTest,FileToolsUpdateMatchTest,FsWriteAtomicityTest,FileToolsReadTruncateTest` → **22/22 通过**。
 
 ### 8.7 仍建议（未做，供决策）
 - **跨进程**同时写同一文件仍靠原子替换兜底（不丢完整性，但可能丢更新）；如需强一致可加 OS 级文件锁（`FileChannel.lock`）——代价与复杂度较高，本次未做。

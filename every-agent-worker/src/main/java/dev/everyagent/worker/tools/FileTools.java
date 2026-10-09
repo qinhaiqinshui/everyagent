@@ -273,7 +273,7 @@ public class FileTools {
             // 源文件其余部分逐字节保留,混合行尾/孤立 CR 不被改写
             int[] span = findUniqueEolAgnostic(existing, oldcontent);
             if (span == null) {
-                throw new IllegalArgumentException("未找到旧内容(oldcontent)");
+                throw new IllegalArgumentException("未找到旧内容(oldcontent)。" + describeNotFound(existing, oldcontent));
             }
             int start = span[0];
             int end = span[1];
@@ -285,5 +285,85 @@ public class FileTools {
         } finally {
             lock.unlock();
         }
+    }
+
+    /** 片段截断:去首尾空白,超长则截断并加省略号,避免诊断信息过长。 */
+    private static String snippet(String s, int max) {
+        String t = s == null ? "" : s.strip();
+        return t.length() <= max ? t : t.substring(0, max) + "…";
+    }
+
+    /**
+     * 构造「未找到 oldcontent」的定位诊断:指出最相近的行号与片段,便于长文档排查。
+     * 依次覆盖:首行匹配但后续不一致(含文件提前结束)/ 首行多处出现 / 仅空白-缩进差异 /
+     * 完全无相近内容(退化为最长公共前缀最接近的一行)。
+     */
+    static String describeNotFound(String existing, String oldcontent) {
+        String[] fileLines = existing.split("\n", -1);
+        String[] needLines = oldcontent.split("\n", -1);
+        String firstNeedle = null;
+        for (String l : needLines) {
+            if (!l.strip().isEmpty()) {
+                firstNeedle = l.strip();
+                break;
+            }
+        }
+        if (firstNeedle == null) {
+            return "（oldcontent 无有效内容行）";
+        }
+        List<Integer> hits = new ArrayList<>();
+        for (int i = 0; i < fileLines.length && hits.size() < 5; i++) {
+            if (fileLines[i].strip().equals(firstNeedle)) {
+                hits.add(i);
+            }
+        }
+        if (hits.size() == 1) {
+            int idx = hits.get(0);
+            for (int j = 1; j < needLines.length; j++) {
+                String want = needLines[j].strip();
+                if (idx + j >= fileLines.length) {
+                    return "oldcontent 首行匹配第 " + (idx + 1) + " 行,但文件在该处提前结束(oldcontent 需 "
+                            + needLines.length + " 行,该处仅剩 " + (fileLines.length - idx) + " 行)";
+                }
+                String got = fileLines[idx + j].strip();
+                if (!want.equals(got)) {
+                    return "oldcontent 首行匹配第 " + (idx + 1) + " 行,但从第 " + (idx + j + 1)
+                            + " 行起不一致:期望「" + snippet(want, 80) + "」,实际「" + snippet(got, 80) + "」";
+                }
+            }
+            return "oldcontent 与第 " + (idx + 1) + " 行起内容高度接近,但仍有差异(请核对不可见空白/字符)";
+        }
+        if (hits.size() > 1) {
+            StringBuilder sb = new StringBuilder("oldcontent 首行在多处出现(第 ");
+            for (int k = 0; k < hits.size(); k++) {
+                if (k > 0) {
+                    sb.append("、");
+                }
+                sb.append(hits.get(k) + 1);
+            }
+            return sb.append(" 行),请补足上下文以唯一定位").toString();
+        }
+        if (!oldcontent.isBlank() && existing.replaceAll("\\s+", "").contains(oldcontent.replaceAll("\\s+", ""))) {
+            return "内容存在,但空白/缩进不一致(文件可能用制表符或多空格),请核对缩进";
+        }
+        int bestIdx = -1;
+        int bestCommon = 0;
+        for (int i = 0; i < fileLines.length; i++) {
+            String cand = fileLines[i].strip();
+            int lim = Math.min(cand.length(), firstNeedle.length());
+            int c = 0;
+            while (c < lim && cand.charAt(c) == firstNeedle.charAt(c)) {
+                c++;
+            }
+            if (c > bestCommon) {
+                bestCommon = c;
+                bestIdx = i;
+            }
+        }
+        if (bestIdx >= 0 && bestCommon >= 3) {
+            return "最相近的是第 " + (bestIdx + 1) + " 行:「" + snippet(fileLines[bestIdx], 80)
+                    + "」,与 oldcontent 首行前 " + bestCommon + " 个字符相同";
+        }
+        return "oldcontent 首行为「" + snippet(firstNeedle, 80) + "」,文件中无相近内容";
     }
 }
