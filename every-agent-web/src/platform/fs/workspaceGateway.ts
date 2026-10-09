@@ -26,13 +26,21 @@ import { normalizeWorkspaceRelativePath, isAbsoluteBusinessPath, toBusinessAbsol
 
 /**
  * 把文件标签页的业务路径(workspaceRoot + filePath)还原为机器绝对路径。
- * - 工作区外绝对路径(如 `/C:/Users/...`):去前导 / 即机器绝对路径;
- * - 工作区相对路径(如 `src/main.ts`):拼 workspaceRoot + '/' + rel → 机器绝对路径。
+ * - Windows 外部(业务形式 `/C:/Users/...`):去前导 / → `C:/Users/...`
+ * - Unix 外部(业务形式 `//home/user/...`):去一个 / → `/home/user/...`
+ * - 工作区相对(如 `src/main.ts`):拼 workspaceRoot + '/' + rel → 机器绝对路径
  */
 function resolveMachinePath(workspaceRoot: string, filePath: string): string {
+  const normalized = filePath.replace(/\\/g, '/')
+  // Unix 外部路径:业务形式以 // 开头,去一个 / 还原为机器绝对路径
+  if (normalized.startsWith('//')) {
+    return '/' + normalizeWorkspaceRelativePath(filePath)
+  }
+  // Windows 外部路径:业务形式 /C:/...,normalizeWorkspaceRelativePath 剥前导 / 即盘符路径
   if (isAbsoluteBusinessPath(filePath)) {
     return normalizeWorkspaceRelativePath(filePath)
   }
+  // 工作区相对路径:拼 workspaceRoot
   const rel = normalizeWorkspaceRelativePath(filePath)
   return rel ? `${workspaceRoot.replace(/[\\/]+$/, '')}/${rel}` : workspaceRoot
 }
@@ -607,7 +615,7 @@ export const workspaceGateway = {
     }
     const name = result.name ?? absPath.split(/[\\/]/).pop() ?? ''
     return {
-      path: isAbsoluteBusinessPath(path) ? path : toBusinessAbsolutePath(path),
+      path,
       name,
       isDirectory: result.dir === true,
       size: result.size ?? 0,
