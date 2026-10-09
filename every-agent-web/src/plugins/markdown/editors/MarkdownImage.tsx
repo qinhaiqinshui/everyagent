@@ -4,7 +4,7 @@
  * 渲染 `![alt](src)`:
  * - `http(s):`/`data:` 等外部 URL 直接作为 <img src>;
  * - 其余按「相对当前 md 文件所在目录」解析为工作区相对路径,经 workspaceGateway
- *   读取二进制 → data URL 后渲染(与图片文件编辑器同一 MIME/上限体系)。
+ *   读取二进制(fs.readRaw,不经沙箱;用户操作非 AI 工具) → data URL 后渲染
  * - 无 workspace 上下文时(且非外部 URL)显示无法加载提示,不抛错。
  */
 import React from 'react'
@@ -57,7 +57,7 @@ export default function MarkdownImage({ src, alt, workspaceRoot, baseDir }: Mark
     }
 
     setState({ status: 'loading' })
-    workspaceGateway.readBinaryFile(workspaceRoot, rel)
+    workspaceGateway.readBytesRaw(workspaceRoot, rel)
       .then((bytes) => {
         if (cancelled) return
         setState({ status: 'ready', url: bytesToDataUrl(bytes, imageMimeOf(rel)) })

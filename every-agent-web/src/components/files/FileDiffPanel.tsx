@@ -113,7 +113,7 @@ export default function FileDiffPanel({ fileChange, workspaceRoot: diffWorkspace
       onOk: async () => {
         setRestoring(true)
         try {
-          await workspaceGateway.writeTextFile(workspaceRoot, fileChange.filePath, restoreContent)
+          await workspaceGateway.writeTextFileRaw(workspaceRoot, fileChange.filePath, restoreContent)
           showToast(isDeleted ? '已恢复被删除的文件' : '已恢复此版本', 'success')
         } catch (restoreError) {
           showToast(restoreError instanceof Error ? restoreError.message : String(restoreError), 'error')

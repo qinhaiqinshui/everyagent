@@ -95,7 +95,7 @@ const MarkdownPreview = React.forwardRef<MarkdownPreviewHandle, MarkdownPreviewP
       showToast(`缺少工作区上下文，无法打开文件链接：${businessPath}`, 'error')
       return
     }
-    void workspaceGateway.stat(workspaceRoot, rel)
+    void workspaceGateway.statRaw(workspaceRoot, rel)
       .then((stat) => {
         if (stat.isDirectory) {
           showToast(`链接指向的是目录而非文件：${businessPath}`, 'error')

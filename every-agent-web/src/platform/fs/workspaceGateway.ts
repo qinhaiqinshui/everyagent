@@ -276,6 +276,12 @@ export const workspaceGateway = {
     return stat !== null
   },
 
+  /** exists 的 raw 版本(不经沙箱;用户操作)。 */
+  async existsRaw(workspaceRoot: string, path: string): Promise<boolean> {
+    const stat = await this.statRaw(workspaceRoot, path).catch(() => null)
+    return stat !== null
+  },
+
   async ensureDir(workspaceRoot: string, path: string): Promise<void> {
     wireFsChanged()
     const normalized = normalizeWorkspaceRelativePath(path)
@@ -565,20 +571,22 @@ export const workspaceGateway = {
     return bytesToText(await this.readBytesRaw(workspaceRoot, path))
   },
 
+  /** writeTextFileRaw 的字节版本(同 writeBytes 与 writeTextFile 的关系)。 */
+  async writeBytesRaw(workspaceRoot: string, path: string, content: Uint8Array): Promise<void> {
+    const absPath = resolveMachinePath(workspaceRoot, path)
+    const workerId = workspaceRegistry.workerIdOfRoot(workspaceRoot) ?? workspaceRegistry.primaryWorkerId()
+    if (!workerId) throw new Error('无法确定该文件所属 worker(工作区未注册或 worker 离线)')
+    await hubSession.rpcTo(workerId, 'fs.writeRaw', { path: absPath, contentBase64: bytesToBase64(content) }, {
+      timeoutMs: 120_000,
+    })
+  },
+
   /**
    * 按机器绝对路径写入文件(不经 workspace 沙箱;文件标签页用户保存专用)。
    * 调 worker 的 fs.writeRaw,应答形态与 fs.write 一致。参数同 writeTextFile。
    */
   async writeTextFileRaw(workspaceRoot: string, path: string, content: string): Promise<void> {
-    wireFsChanged()
-    const absPath = resolveMachinePath(workspaceRoot, path)
-    const workerId = workspaceRegistry.workerIdOfRoot(workspaceRoot) ?? workspaceRegistry.primaryWorkerId()
-    if (!workerId) throw new Error('无法确定该文件所属 worker(工作区未注册或 worker 离线)')
-    await hubSession.rpcTo(workerId, 'fs.writeRaw', { path: absPath, contentBase64: bytesToBase64(textToBytes(content)) }, {
-      timeoutMs: 120_000,
-    })
-    // 不广播 WORKSPACE_FILE_CHANGED:raw 写不经沙箱,工作区内写由 writeTextFile 的 emit 覆盖,
-    // 工作区外写不属任何工作区;标签页自身 dirty/content 状态由 FileTabPage.handleSave 管理。
+    await this.writeBytesRaw(workspaceRoot, path, textToBytes(content))
   },
 
   /**

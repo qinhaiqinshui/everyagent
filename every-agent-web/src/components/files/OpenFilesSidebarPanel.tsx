@@ -716,7 +716,7 @@ function WorkspaceGroupPanel({
       textStatsRequestKeyRef.current = requestKey
       setPropertiesTextStats(null)
       const relPath = normalizeWorkspaceRelativePath(target.path)
-      void workspaceGateway.readTextFile(target.workspaceRoot, relPath)
+      void workspaceGateway.readTextFileRaw(target.workspaceRoot, relPath)
         .then((content) => {
           // 过期响应丢弃:用户已切换查看其它节点。
           if (textStatsRequestKeyRef.current !== requestKey) return

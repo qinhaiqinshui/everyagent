@@ -138,7 +138,7 @@ export async function buildTokenForPastedFile(file: File, workspaceRoot: string)
   const relativePath = `${PASTED_ATTACHMENT_DIR}/${storageName}`
   const bytes = new Uint8Array(await file.arrayBuffer())
   await workspaceGateway.ensureDir(workspaceRoot, PASTED_ATTACHMENT_DIR)
-  await workspaceGateway.writeBinaryFile(workspaceRoot, relativePath, bytes)
+  await workspaceGateway.writeBytesRaw(workspaceRoot, relativePath, bytes)
   return buildWorkspaceFileToken({
     path: relativePath,
     // 胶囊 label 用原始文件名（截图为 image.png 等通用名时退回落盘名，便于在文件树里找回）。
