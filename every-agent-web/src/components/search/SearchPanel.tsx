@@ -1,69 +1,72 @@
 import React from 'react'
-import { Input, Select } from 'antd'
-import type { InputRef, RefSelectProps } from 'antd'
+import { Input, InputNumber, Radio, Select } from 'antd'
+import type { InputRef } from 'antd'
+import type { SearchFilterField } from '@everyagent/plugin-api'
 import { useWorkspaceShell } from '../app/WorkspaceShellContext'
 import { domainEventBus, DOMAIN_EVENTS } from '@/events/eventBus'
-import { hubSession, type WorkerInfo } from '@/hub/session'
 import { workspaceRegistry } from '@/hub/workspaceRegistry'
 import { taskStore } from '@/task/taskStore'
 import { DRAFT_TASK_ID } from '@/components/task/taskChatDraft'
 import { readRecentSelection } from '@/utils/textSelection'
 import { normalizeWorkspaceRelativePath, toBusinessAbsolutePath } from '@/platform/fs/pathUtils'
-import type { WorkspaceContentSearchHit, WorkspaceContentSearchResult } from '@/query/workspaceContentSearch'
-import type { TaskContentSearchResult, TaskContentSearchTaskResult } from '@/query/taskContentSearch'
+import { searchWorkerIdOf } from '@/query/search'
 import type { WorkspaceTab } from '@/types'
+import type { UiSearchTypeDefinition } from '@/plugin/types'
+import { pluginDispatcher } from '@/plugin/PluginDispatcher'
 import SidebarScrollArea from '../shared/SidebarScrollArea'
 import { IconButton, InlineSpinner } from '@/components/shared/ui'
 import MoreActionsButton, { type MoreActionItem } from '../shared/MoreActionsButton'
 import { ChevronDownIcon, CloseIcon } from '../shared/AppGlyphs'
-import SearchResultsTree from './SearchResultsTree'
-import TaskSearchResultsTree from './TaskSearchResultsTree'
+import SearchResultsView from './SearchResultsView'
 import { useWorkspaceSearch } from './useWorkspaceSearch'
+import { buildSearchResultGroups } from './searchTypes/groupAdapter'
 import {
-  FILES_TARGET_ID,
-  TASKS_TARGET_ID,
-  SEARCH_TARGETS,
-  resolveSearchTarget,
-} from './targets'
+  ALL_SEARCH_TYPE_ID,
+  FILE_CONTENT_KIND,
+  TASK_KIND,
+  isAllSearchType,
+  listSearchTypes,
+  mapKindsToTypes,
+  normalizeSearchTypeId,
+  resolveSearchType,
+} from './searchTypes'
 
-/** 打开信号过期阈值:距上次打开超过该时长,认为搜索框内容已过期需清空。 */
+/** 打开信号过期阈值：距上次打开超过该时长，认为搜索框内容已过期需清空。 */
 const SEARCH_PANEL_STALE_MS = 5 * 60 * 1000
 
 /**
  * 搜索面板核心组件。
  *
- * 侧边栏与双击 Shift 弹窗共用本组件,各自独立实例:内部状态(绑定/搜索词/
- * 结果树)与「上次打开时间」均按实例隔离。
+ * 侧边栏与双击 Shift 弹窗共用本组件，各自独立实例（内部状态与「上次打开时间」按
+ * 实例隔离），仅 `variant` 决定类型选择器的呈现形态（侧边栏下拉 / 弹窗无边框按钮行）。
  *
- * 宿主每次「打开」面板时递增 openSignal,驱动 on-open 流程:
- * 1. 距上次打开超过 5 分钟 → 清空搜索词并重置结果;
- * 2. 更新本实例上次打开时间;
- * 3. 若搜索框为空(或即将用选区填充)→ 按当前激活标签页自动识别 worker / 工作区 /
- *    搜索类型(任务标签 → 搜索任务内容;文件 / 终端 → 搜索工作区文件,文件标签不预填范围);
- * 4. 若存在有效选区(当前 DOM 选区优先,否则 5s 内记录到的最近选区)→ 原样填入搜索框,
- *    不触发搜索;
- * 5. 聚焦:已有工作区绑定时聚焦搜索框,否则聚焦 worker 下拉(引导先完成绑定)。
+ * 重构要点（搜索类型注册表 + 统一 search）：
+ * - 类型来自注册表（内置三类 + 插件经 `ui.search_types` 注册），「全部」伪类型的
+ *   `kinds` 为空 = 不传 = 全部已注册类型（含任务）；
+ * - **无 worker 选择器**：worker 由 `workspaceRegistry.workerIdOfRoot(workspaceRoot)`
+ *   反查，无归属时报可读错误、禁止发起；
+ * - 过滤区**按当前类型的 `filters` schema 渲染**（核心默认渲染器按 `type` 出控件；
+ *   `section:'more'` 收在「更多」菜单；类型提供 `FilterView` 时整块交给插件）；
+ *   值按 `${kind}.${field}` 装进不透明 `filters` 袋透传，核心不再追加 `.git`、不拼 glob；
+ * - 结果区：默认适配器把平铺命中项按 `(kind, groupKey)` 分组交给通用结果树；类型提供
+ *   `ResultView` 时该类型区块交给插件组件渲染。
  */
 interface SearchPanelProps {
-  /** 打开信号:宿主每次「打开」面板时递增;初始 0 不触发。 */
+  /** 打开信号：宿主每次「打开」面板时递增；初始 0 不触发。 */
   openSignal?: number
-  /** 提供时(弹窗模式)命中跳转打开文件/任务后请求关闭宿主。 */
+  /** 提供时（弹窗模式）命中跳转打开文件/任务后请求关闭宿主。 */
   onRequestClose?: () => void
-  /** 是否监听资源管理器右键「搜索」跳转事件(仅侧边栏实例为 true)。 */
+  /** 是否监听资源管理器右键「搜索」跳转事件（仅侧边栏实例为 true）。 */
   listenWorkspaceSearchRequested?: boolean
+  /** 呈现形态：侧边栏（类型下拉）/ 弹窗（无边框按钮行）。 */
+  variant?: 'sidebar' | 'modal'
 }
 
-/**
- * 搜索范围：资源管理器右键目录「搜索」跳转过来时预填；
- * null = 当前选中工作区的根目录。
- */
-interface SearchScope {
-  /** 范围所属工作区根（worker 机器绝对路径）。 */
-  workspaceRoot: string
-  /** 搜索根路径（业务绝对形态；空串表示工作区根）。 */
-  rootPath: string
-  /** 范围显示名（目录名或「工作区根目录」）。 */
-  label: string
+/** 命名字段绑定：类型 + 字段声明 + 命名空间键（`${kind}.${field}`）。 */
+interface FieldBinding {
+  type: UiSearchTypeDefinition
+  field: SearchFilterField
+  nsKey: string
 }
 
 /** 下拉选项里展示的工作区短名：取路径末段（盘符根/斜杠根退化为全路径）。 */
@@ -72,340 +75,253 @@ function displayRootLabel(root: string): string {
   return trimmed.split(/[\\/]/).pop() || trimmed
 }
 
-/**
- * 搜索面板（仿 VSCode 搜索面板）。
- *
- * - 绑定：顶部 worker / 工作区两个必选下拉（多 worker 显式归属，注册表就绪后自动
- *   落定默认项），未选齐前搜索不可发起；
- * - 输入区：搜索词 + Aa（大小写）/ ab|（全字）/ .*（正则）三个开关（聚焦时支持
- *   Alt+C / Alt+W / Alt+R 切换）；搜索完全由回车触发，右侧「更多」按钮弹出菜单，
- *   其中「添加搜索范围 / 添加包含过滤器 / 添加排除过滤器」三项相互独立：范围项展开
- *   输入框让用户主动输入目录（回车生效并立即搜索），过滤器两项各自切换对应 glob 输入区；
- * - 非法正则：输入框红框 + 错误提示，不触发搜索；
- * - 范围：当前选中工作区根；可由「更多」菜单主动添加目录，或由资源管理器右键「搜索」
- *   经 WORKSPACE_SEARCH_PANEL_REQUESTED 事件跳转预填 worker/工作区/目录，可「×」恢复为工作区根；
- * - 结果树：SearchResultsTree 按文件分组渲染，命中行点击打开文件并定位到行。
- */
+/** 字段命名空间键：`${kind}.${field}`（类型多 kind 时取首个 kind，与后端 provider 约定一致）。 */
+function nsKeyOf(type: UiSearchTypeDefinition, field: SearchFilterField): string {
+  return `${type.kinds[0] ?? type.id}.${field.key}`
+}
+
+/** 空值判定（空串 / null / undefined 视为未设置）。 */
+function isEmptyFilterValue(value: unknown): boolean {
+  return value === '' || value === null || value === undefined
+}
+
 export default function SearchPanel({
   openSignal = 0,
   onRequestClose,
   listenWorkspaceSearchRequested = false,
+  variant = 'sidebar',
 }: SearchPanelProps) {
   const { openGlobalFileTab, openTaskChatTab, activeWorkspaceTab } = useWorkspaceShell()
   const [registry, setRegistry] = React.useState(workspaceRegistry.current)
-  /** worker 目录快照（与设置页同款订阅）：worker 下拉的候选来源与排序基准。 */
-  const [directory, setDirectory] = React.useState<WorkerInfo[]>(hubSession.directory)
 
   React.useEffect(() => workspaceRegistry.subscribe(setRegistry), [])
-  React.useEffect(() => {
-    const unsubscribe = hubSession.onDirectory(setDirectory)
-    return () => {
-      unsubscribe()
-    }
-  }, [])
 
-  /** 显式选中的 worker / 工作区绑定（必选；不再用注册表首项隐式兜底）。 */
-  const [workerId, setWorkerId] = React.useState('')
+  /** 订阅插件扩展点版本号：插件注册搜索类型即上屏（`listSearchTypes` 现读注册表）。 */
+  const pluginExtensionsVersion = React.useSyncExternalStore(
+    pluginDispatcher.subscribeExtensionsChanged,
+    pluginDispatcher.getExtensionsVersion,
+  )
+  const searchTypes = React.useMemo(() => listSearchTypes(), [pluginExtensionsVersion])
+
+  /** 选中工作区根（worker 与 workspaceId 均由注册表反查/交给后端）。 */
   const [workspaceRoot, setWorkspaceRoot] = React.useState('')
-  const [scope, setScope] = React.useState<SearchScope | null>(null)
+  /** 选中类型 id（默认「全部」）。 */
+  const [typeId, setTypeId] = React.useState(ALL_SEARCH_TYPE_ID)
   const [query, setQuery] = React.useState('')
-  const [caseSensitive, setCaseSensitive] = React.useState(false)
-  const [wholeWord, setWholeWord] = React.useState(false)
-  const [useRegex, setUseRegex] = React.useState(false)
-  /** 仅搜索文件名：开启后只匹配文件名不读文件内容（仅 files 模式生效）。 */
-  const [nameOnly, setNameOnly] = React.useState(false)
-  const [includePatterns, setIncludePatterns] = React.useState('')
-  const [excludePatterns, setExcludePatterns] = React.useState('')
-  /** 包含过滤器输入区独立展开态。 */
-  const [includeOpen, setIncludeOpen] = React.useState(false)
-  /** 排除过滤器输入区独立展开态。 */
-  const [excludeOpen, setExcludeOpen] = React.useState(false)
-  /** 搜索范围输入区独立展开态。 */
-  const [scopeOpen, setScopeOpen] = React.useState(false)
-  /** 搜索范围输入草稿（展开时初始化为当前范围，回车提交后生效）。 */
-  const [scopeDraft, setScopeDraft] = React.useState('')
-  /** 搜索目标 id：files = 工作区文件内容（默认），tasks = 任务内容；行为查注册表（targets/）。 */
-  const [searchTarget, setSearchTarget] = React.useState<string>(FILES_TARGET_ID)
-  /** 折叠态的分组键集合（files 模式 = 文件路径，tasks 模式 = 任务 ID；FS 结果树展开策略由面板统一持有）。 */
+  /** 过滤值（键 = `${kind}.${field}` 命名空间）。 */
+  const [filterValues, setFilterValues] = React.useState<Record<string, unknown>>({})
+  /** 「更多」菜单里已展开的字段（键 = 命名空间键）。 */
+  const [openMoreFields, setOpenMoreFields] = React.useState<Set<string>>(new Set())
+  /** 折叠态分组键集合。 */
   const [collapsedKeys, setCollapsedKeys] = React.useState<Set<string>>(new Set())
   const searchInputRef = React.useRef<InputRef | null>(null)
-  const workerSelectRef = React.useRef<RefSelectProps | null>(null)
 
   const search = useWorkspaceSearch()
-  /** hook 内 useCallback 的稳定引用：切换绑定/事件预填时清旧结果。 */
   const searchReset = search.reset
   const searching = search.status === 'searching'
 
-  /**
-   * worker 候选：目录里拥有至少一个非 missing 工作区的 worker（注册表镜像只含已连
-   * worker，离线/禁用的天然不在内），顺序跟随目录；registry 快照仅作重算触发信号。
-   */
-  const workerOptions = React.useMemo(
-    () => directory.filter((worker) =>
-      workspaceRegistry.workspacesOf(worker.workerId).some((entry) => !entry.missing)),
-    [directory, registry],
-  )
-
-  /** 当前 worker 的可搜索工作区（过滤 missing；registry 快照仅作重算触发信号）。 */
+  /** 工作区候选：全部非 missing 已注册工作区（多 worker 合并）。 */
   const workspaceOptions = React.useMemo(
-    () => (workerId ? workspaceRegistry.workspacesOf(workerId).filter((entry) => !entry.missing) : []),
-    [registry, workerId],
+    () => (registry?.workspaces ?? [])
+      .filter((entry) => !entry.missing)
+      .map((entry) => ({ value: entry.root, label: displayRootLabel(entry.root), title: entry.root })),
+    [registry],
   )
 
-  /** scope 必须落在当前选中工作区内，否则视为绑定切换残留的脏数据，不生效。 */
-  const activeScope = scope && scope.workspaceRoot === workspaceRoot ? scope : null
-  const scopeRootPath = activeScope && activeScope.rootPath && activeScope.rootPath !== '/' ? activeScope.rootPath : ''
-  /** 必选约束：worker 与工作区都选中后才可发起搜索。 */
-  const bindingReady = Boolean(workerId && workspaceRoot)
-  /** 当前选中工作区的稳定 id（任务内容搜索的定位键；注册表缺失时（旧 worker）为空）。 */
-  const currentWorkspaceId = React.useMemo(
-    () => workspaceRegistry.workspacesOf(workerId).find((entry) => entry.root === workspaceRoot)?.id ?? '',
-    [workerId, workspaceRoot, registry],
+  /** worker 反查：由当前选中工作区根判定归属，无归属即不可搜索（报可读错误）。 */
+  const workspaceWorkerId = React.useMemo(
+    () => (workspaceRoot ? searchWorkerIdOf(workspaceRoot) : undefined),
+    [workspaceRoot, registry, pluginExtensionsVersion],
   )
-  /** 当前搜索目标定义（注册表查表；状态里的 id 异常时回落 files）。 */
-  const targetDefinition = resolveSearchTarget(searchTarget)
-  /** 目标能力快照：驱动选项显隐（替代原 isTasks 二值判定）。 */
-  const supportsFileNameMode = targetDefinition.supports.fileNameMode
-  const supportsScope = targetDefinition.supports.scope
-  const supportsGlobs = targetDefinition.supports.globs
+  /** 必选约束：选中工作区且其归属 worker 可解析后才可发起搜索。 */
+  const bindingReady = Boolean(workspaceRoot && workspaceWorkerId)
 
-  /** worker 下拉选项：label=workerId；事件预填的未注册 worker 补「（未注册）」占位展示。 */
-  const workerSelectOptions = React.useMemo(() => {
-    const options = workerOptions.map((worker) => ({ value: worker.workerId, label: worker.workerId }))
-    if (workerId && !workerOptions.some((worker) => worker.workerId === workerId)) {
-      options.push({ value: workerId, label: `${workerId}（未注册）` })
-    }
-    return options
-  }, [workerId, workerOptions])
-
-  /** 工作区下拉选项：label=路径末段短名、title=全路径；未注册选中值同样补占位。 */
-  const workspaceSelectOptions = React.useMemo(() => {
-    const options = workspaceOptions.map((entry) => ({
-      value: entry.root,
-      label: displayRootLabel(entry.root),
-      title: entry.root,
-    }))
-    if (workspaceRoot && !workspaceOptions.some((entry) => entry.root === workspaceRoot)) {
-      options.push({
-        value: workspaceRoot,
-        label: `${displayRootLabel(workspaceRoot)}（未注册）`,
-        title: workspaceRoot,
-      })
-    }
-    return options
-  }, [workspaceOptions, workspaceRoot])
-
-  /** 指定 worker 的首个非 missing 工作区根（默认落定与切换时的重置目标）。 */
-  const firstRootOf = React.useCallback(
-    (id: string) => workspaceRegistry.workspacesOf(id).find((entry) => !entry.missing)?.root ?? '',
-    [],
+  /** 当前选中类型定义（未知 id 回落「全部」）。 */
+  const selectedType = React.useMemo(
+    () => resolveSearchType(typeId, searchTypes),
+    [typeId, searchTypes],
   )
+  const allSelected = isAllSearchType(selectedType)
 
-  /**
-   * 默认落定与失效切换：
-   * - 绑定为空（未选过）时自动选中首个候选 worker + 其首个非 missing 工作区，只在
-   *   空值时补齐，不覆盖用户手动选择；
-   * - 当前选中 worker 的工作区全部失效（上一轮可选、本轮不可选）时，自动切换到下
-   *   一个可用 worker（全无则清空待选）；事件预填的未注册 worker 从未「可选」，保持原样。
-   */
-  const prevWorkerCandidateIdsRef = React.useRef<Set<string>>(new Set())
+  /** 默认落定与失效切换：未选 / 失效则落首个候选工作区并清旧结果。 */
   React.useEffect(() => {
-    const candidateIds = new Set(workerOptions.map((worker) => worker.workerId))
-    const prev = prevWorkerCandidateIdsRef.current
-    prevWorkerCandidateIdsRef.current = candidateIds
-    if (!workerId) {
-      const firstWorkerId = workerOptions[0]?.workerId ?? ''
-      if (firstWorkerId) {
-        setWorkerId(firstWorkerId)
-        setWorkspaceRoot(firstRootOf(firstWorkerId))
+    if (workspaceOptions.length === 0) {
+      if (workspaceRoot) {
+        setWorkspaceRoot('')
+        searchReset()
       }
       return
     }
-    if (prev.has(workerId) && !candidateIds.has(workerId)) {
-      const nextWorkerId = workerOptions[0]?.workerId ?? ''
-      setWorkerId(nextWorkerId)
-      setWorkspaceRoot(nextWorkerId ? firstRootOf(nextWorkerId) : '')
-      setScope(null)
+    if (!workspaceRoot || !workspaceOptions.some((option) => option.value === workspaceRoot)) {
+      setWorkspaceRoot(workspaceOptions[0].value)
       searchReset()
-      return
     }
-    if (!workspaceRoot && candidateIds.has(workerId)) {
-      const firstRoot = firstRootOf(workerId)
-      if (firstRoot) setWorkspaceRoot(firstRoot)
+  }, [workspaceOptions, workspaceRoot, searchReset])
+
+  /** 过滤区参与渲染的类型组（「全部」= 全部有字段声明的类型；单类型 = 该类型）。 */
+  const activeTypeGroups = React.useMemo(() => {
+    if (allSelected) {
+      return searchTypes.filter((type) => (
+        type.id !== ALL_SEARCH_TYPE_ID && ((type.filters?.length ?? 0) > 0 || Boolean(type.FilterView))
+      ))
     }
-  }, [firstRootOf, registry, searchReset, workerId, workerOptions, workspaceRoot])
+    return (selectedType.filters?.length ?? 0) > 0 || selectedType.FilterView ? [selectedType] : []
+  }, [allSelected, searchTypes, selectedType])
 
-  /** 手动切换 worker：工作区重置为该 worker 首个非 missing 工作区，范围与旧结果清空。 */
-  const handleWorkerChange = React.useCallback((nextWorkerId: string) => {
-    if (!nextWorkerId || nextWorkerId === workerId) return
-    setWorkerId(nextWorkerId)
-    setWorkspaceRoot(firstRootOf(nextWorkerId))
-    setScope(null)
-    setScopeOpen(false)
-    searchReset()
-  }, [firstRootOf, searchReset, workerId])
+  /** 走默认渲染器的类型组（无 FilterView）。 */
+  const groupsWithDefault = React.useMemo(
+    () => activeTypeGroups.filter((type) => !type.FilterView),
+    [activeTypeGroups],
+  )
+  /** 走插件 FilterView 的类型组。 */
+  const groupsWithCustomView = React.useMemo(
+    () => activeTypeGroups.filter((type) => Boolean(type.FilterView)),
+    [activeTypeGroups],
+  )
 
-  /** 手动切换工作区：子目录范围与旧结果清空。 */
+  const inlineBindings = React.useMemo<FieldBinding[]>(
+    () => groupsWithDefault.flatMap((type) => (type.filters ?? [])
+      .filter((field) => (field.section ?? 'inline') !== 'more')
+      .map((field) => ({ type, field, nsKey: nsKeyOf(type, field) }))),
+    [groupsWithDefault],
+  )
+  const moreBindings = React.useMemo<FieldBinding[]>(
+    () => groupsWithDefault.flatMap((type) => (type.filters ?? [])
+      .filter((field) => field.section === 'more')
+      .map((field) => ({ type, field, nsKey: nsKeyOf(type, field) }))),
+    [groupsWithDefault],
+  )
+
+  const setFieldValue = React.useCallback((nsKey: string, value: unknown) => {
+    setFilterValues((current) => ({ ...current, [nsKey]: value }))
+  }, [])
+
+  /** 组装不透明 `filters` 袋（核心不解释内容；path 字段归一为工作区相对路径）。 */
+  const effectiveFilters = React.useMemo(() => {
+    const out: Record<string, unknown> = {}
+    for (const binding of [...inlineBindings, ...moreBindings]) {
+      const raw = filterValues[binding.nsKey]
+      if (isEmptyFilterValue(raw)) continue
+      if (binding.field.type === 'boolean' && raw === false) continue
+      const value = binding.field.type === 'path' ? normalizeWorkspaceRelativePath(String(raw)) : raw
+      if (value === '') continue
+      out[binding.nsKey] = value
+    }
+    // FilterView 自定义字段：值原样透传（插件自行处理语义与归一）。
+    for (const type of groupsWithCustomView) {
+      for (const kind of type.kinds) {
+        const prefix = `${kind}.`
+        for (const [key, value] of Object.entries(filterValues)) {
+          if (key.startsWith(prefix) && !isEmptyFilterValue(value) && value !== false) {
+            out[key] = value
+          }
+        }
+      }
+    }
+    return out
+  }, [filterValues, inlineBindings, moreBindings, groupsWithCustomView])
+
+  /** 命中词是否按正则解释（任一字段声明 `isRegex` 为真）；用于非法正则预检。 */
+  const regexEnabled = React.useMemo(() => {
+    const byBinding = [...inlineBindings, ...moreBindings]
+      .some((binding) => binding.field.key === 'isRegex' && Boolean(filterValues[binding.nsKey]))
+    const byView = groupsWithCustomView
+      .some((type) => type.kinds.some((kind) => Boolean(filterValues[`${kind}.isRegex`])))
+    return byBinding || byView
+  }, [filterValues, inlineBindings, moreBindings, groupsWithCustomView])
+
+  /** kind → 拥有它的类型（结果分组归属与 `ResultView` 派发）。 */
+  const typeByKind = React.useMemo(() => mapKindsToTypes(searchTypes), [searchTypes])
+
+  /**
+   * 发起搜索：以当前选中工作区、类型 kinds、过滤袋调用统一状态机。
+   * 「全部」不传 kinds（= 全部已注册类型，含任务）；单类型只传该类型 kinds。
+   */
+  const runSearch = React.useCallback(() => {
+    if (!bindingReady) return
+    void search.run({
+      workspace: workspaceRoot,
+      pattern: query,
+      kinds: allSelected ? undefined : selectedType.kinds,
+      filters: effectiveFilters,
+      regex: regexEnabled,
+    })
+  }, [allSelected, bindingReady, effectiveFilters, query, regexEnabled, search, selectedType, workspaceRoot])
+
+  /** 切换工作区：清理旧结果（范围/过滤值保留，键按 kind 命名空间隔离）。 */
   const handleWorkspaceChange = React.useCallback((nextRoot: string) => {
     if (!nextRoot || nextRoot === workspaceRoot) return
     setWorkspaceRoot(nextRoot)
-    setScope(null)
-    setScopeOpen(false)
     searchReset()
   }, [searchReset, workspaceRoot])
 
-  /**
-   * 发起搜索：以当前输入区全部选项与解析后的范围调用状态机（绑定未选齐时守卫不发起）。
-   * rootPathOverride 用于范围输入框提交时按新范围立即搜索（绕过 React 状态异步更新的闭包旧值）。
-   * 全部选项原样交给状态机，由目标定义（targets/）的 buildParams 按需取用：任务目标
-   * 走 worker 侧 task.search（范围沿用当前 worker + 当前工作区 workspaceId，忽略文件
-   * 语义的范围/过滤器/文件名模式）；文件目标走 fs.search / fs.find。
-   */
-  const runSearch = React.useCallback((rootPathOverride?: string) => {
-    if (!bindingReady) return
-    void search.run({
-      pattern: query,
-      useRegex,
-      caseSensitive,
-      wholeWord,
-      includePatterns: includePatterns.trim() || undefined,
-      excludePatterns: excludePatterns.trim() || undefined,
-      workspaceRoot,
-      rootPath: rootPathOverride ?? scopeRootPath,
-      target: searchTarget,
-      matchMode: nameOnly ? 'name' : 'content',
-      workerId,
-      workspaceId: currentWorkspaceId,
-    })
-  }, [bindingReady, caseSensitive, currentWorkspaceId, excludePatterns, includePatterns, nameOnly, query, scopeRootPath, search, searchTarget, useRegex, workerId, workspaceRoot])
+  /** 切换类型：清理旧结果；「更多」展开态随之收敛到仍存在的字段。 */
+  const handleTypeChange = React.useCallback((nextTypeId: string) => {
+    if (!nextTypeId || nextTypeId === typeId) return
+    setTypeId(nextTypeId)
+    searchReset()
+  }, [searchReset, typeId])
 
-  /** 是否存在已生效的非根范围（范围行据此展示，菜单项据此切换「添加/移除」）。 */
-  const hasScope = Boolean(activeScope && scopeRootPath)
-
-  /**
-   * 提交搜索范围：把用户输入规范化为业务绝对路径（前导 `/`），空输入/仅根视为恢复工作区根；
-   * 设置范围后收起输入区，并按新范围立即发起搜索。
-   */
-  const commitScope = React.useCallback((raw: string) => {
-    const normalized = normalizeWorkspaceRelativePath(raw)
-    const nextRootPath = normalized ? toBusinessAbsolutePath(normalized) : ''
-    setScopeOpen(false)
-    if (!normalized) {
-      setScope(null)
-    } else {
-      setScope({
-        workspaceRoot,
-        rootPath: nextRootPath,
-        label: normalized.split('/').pop() || '工作区根目录',
-      })
-    }
-    // 已有搜索词时按新范围立即搜索；否则仅落定范围，待用户输入关键词后回车触发。
-    if (query.trim()) {
-      runSearch(nextRootPath)
-    }
-  }, [query, runSearch, workspaceRoot])
-
-  /**
-   * 「更多」菜单项：目标切换 + 添加/移除搜索范围与包含/排除过滤器。
-   * - 目标切换项按注册表（SEARCH_TARGETS）渲染当前目标之外的其余目标，label 取目标
-   *   定义；当前目标的 highlightMenuWhenCurrent 决定切换项高亮（任务模式高亮的既有
-   *   语义）；切到不支持范围/glob 的目标时对应输入区随之收起（搜索范围保留由
-   *   runSearch 忽略）；
-   * - 支持文件语义选项的目标（supports.scope / supports.globs）附加范围与两个过滤器
-   *   项（三项相互独立：范围项在「已设置范围 / 展开输入框」时切换为移除，过滤器两项
-   *   各自切换对应输入区的显隐）。
-   */
+  /** 「更多」菜单：`section:'more'` 字段开关 + 清除全部过滤。 */
+  const hasAnyFilterValue = React.useMemo(
+    () => Object.values(filterValues).some((value) => !isEmptyFilterValue(value) && value !== false),
+    [filterValues],
+  )
   const moreItems: MoreActionItem[] = [
-    ...SEARCH_TARGETS
-      .filter((target) => target.id !== targetDefinition.id)
-      .map((target): MoreActionItem => ({
-        key: `target-${target.id}`,
-        label: target.label,
-        active: targetDefinition.highlightMenuWhenCurrent,
-        onSelect: () => {
-          // 切到不支持文件语义选项的目标：对应输入区随之收起（搜索范围保留由 runSearch 忽略）。
-          if (!target.supports.scope) {
-            setScopeOpen(false)
-          }
-          if (!target.supports.globs) {
-            setIncludeOpen(false)
-            setExcludeOpen(false)
-          }
-          setSearchTarget(target.id)
-          // 清空旧目标的结果/错误/在途查询：不同目标的结果对象形状不同，混用渲染会错乱。
-          searchReset()
-        },
-      })),
-    ...(supportsScope
-      ? [
-        {
-          key: 'scope',
-          label: hasScope || scopeOpen ? '移除搜索范围' : '添加搜索范围',
-          active: hasScope || scopeOpen,
-          onSelect: () => {
-            if (hasScope) {
-              setScope(null)
-              setScopeOpen(false)
-            } else if (scopeOpen) {
-              setScopeOpen(false)
-            } else {
-              setScopeDraft(scopeRootPath)
-              setScopeOpen(true)
-            }
-          },
-        },
-      ]
+    ...(hasAnyFilterValue
+      ? [{
+        key: 'clear-filters',
+        label: '清除全部过滤',
+        onSelect: () => setFilterValues({}),
+      }]
       : []),
-    ...(supportsGlobs
-      ? [
-        {
-          key: 'include-filter',
-          label: includeOpen ? '移除包含过滤器' : '添加包含过滤器',
-          active: includeOpen,
-          onSelect: () => setIncludeOpen((current) => !current),
-        },
-        {
-          key: 'exclude-filter',
-          label: excludeOpen ? '移除排除过滤器' : '添加排除过滤器',
-          active: excludeOpen,
-          onSelect: () => setExcludeOpen((current) => !current),
-        },
-      ]
-      : []),
+    ...moreBindings.map((binding): MoreActionItem => ({
+      key: `more-${binding.nsKey}`,
+      label: (allSelected ? `${binding.type.label} · ` : '') + binding.field.label,
+      active: openMoreFields.has(binding.nsKey),
+      onSelect: () => setOpenMoreFields((current) => {
+        const next = new Set(current)
+        if (next.has(binding.nsKey)) {
+          next.delete(binding.nsKey)
+        } else {
+          next.add(binding.nsKey)
+        }
+        return next
+      }),
+    })),
   ]
 
-  /**
-   * 新结果落地时重置折叠策略：
-   * 命中数 > 10 的分组默认折叠；全部结果只有 1 个分组且命中 < 50 时全部展开。
-   * 分组键由目标定义提取：files = 文件路径，tasks = 任务 ID。
-   */
+  /** 默认结果分组（仅不含 `ResultView` 的 kind），供折叠策略与「折叠/展开全部」使用。 */
+  const defaultGroups = React.useMemo(() => {
+    if (!search.result) return []
+    return buildSearchResultGroups(search.result.items, { openFile: () => {}, openTask: () => {} })
+      .filter((group) => !typeByKind.get(group.kind ?? '')?.ResultView)
+  }, [search.result, typeByKind])
+
+  /** 新结果落地时重置折叠策略：命中 > 10 的分组默认折叠；单组且 < 50 全部展开。 */
   React.useEffect(() => {
     const result = search.result
     if (!result) {
       setCollapsedKeys(new Set())
       return
     }
-    if (result.files.length === 1 && result.matchCount < 50) {
+    if (defaultGroups.length === 1 && defaultGroups[0].hits.length < 50) {
       setCollapsedKeys(new Set())
       return
     }
     setCollapsedKeys(new Set(
-      targetDefinition.resultGroups(result)
-        .filter((group) => group.matches > 10)
-        .map((group) => group.key),
+      defaultGroups.filter((group) => group.hits.length > 10).map((group) => group.key),
     ))
-  }, [search.result, targetDefinition])
+  }, [search.result, defaultGroups])
 
-  const workspaceRootRef = React.useRef(workspaceRoot)
-  workspaceRootRef.current = workspaceRoot
-  /** 搜索词实时快照:openSignal 回调/事件处理器中读取最新值,避免闭包旧值。 */
+  /** 搜索词实时快照：openSignal 回调/事件处理器中读取最新值，避免闭包旧值。 */
   const queryRef = React.useRef(query)
   queryRef.current = query
-  /** 激活标签页实时快照:on-open 自动识别时读取最新值。 */
+  /** 激活标签页实时快照：on-open 自动识别时读取最新值。 */
   const activeWorkspaceTabRef = React.useRef<WorkspaceTab | null>(activeWorkspaceTab)
   activeWorkspaceTabRef.current = activeWorkspaceTab
 
-  /** 聚焦搜索框(rAF 等待宿主完成显示/挂载)。 */
+  /** 聚焦搜索框（rAF 等待宿主完成显示/挂载）。 */
   const focusInput = React.useCallback(() => {
     requestAnimationFrame(() => {
       searchInputRef.current?.focus()
@@ -413,12 +329,11 @@ export default function SearchPanel({
   }, [])
 
   /**
-   * 按当前激活标签页自动识别搜索上下文:
-   * - 任务标签(非草稿):取任务所属 worker / 工作区,搜索类型切为「任务内容」;
-   * - 文件标签:取文件工作区并反查所属 worker,搜索类型切为「工作区文件」,不预填范围;
-   * - 终端标签:直接用自带 worker / 工作区,搜索类型切为「工作区文件」;
-   * - 其他标签/无激活标签:不动现有绑定,走「空绑定自动落定首个 worker+工作区」兜底。
-   * 返回值:是否落定了非空工作区绑定(供打开流程决定聚焦目标,setState 异步无法即时读到)。
+   * 按当前激活标签页自动识别搜索上下文：
+   * - 任务标签（非草稿）：取任务所属工作区，类型切「任务内容」；
+   * - 文件标签：取文件工作区，类型切「文本文件内容」；
+   * - 终端标签：直接用自带工作区，类型切「文本文件内容」；
+   * - 其他/无激活标签：不动现有绑定。
    */
   const applyActiveTabContext = React.useCallback((): boolean => {
     const tab = activeWorkspaceTabRef.current
@@ -427,34 +342,21 @@ export default function SearchPanel({
       if (tab.taskId === DRAFT_TASK_ID) return false
       const task = taskStore.get(tab.taskId)
       if (!task?.workerId || !task.workspace) return false
-      setWorkerId(task.workerId)
       setWorkspaceRoot(task.workspace)
-      setSearchTarget(TASKS_TARGET_ID)
-      // 任务模式:范围/包含/排除过滤器属文件语义,一并收起清空。
-      setScope(null)
-      setScopeOpen(false)
-      setIncludeOpen(false)
-      setExcludeOpen(false)
+      setTypeId(TASK_KIND)
       searchReset()
       return true
     }
     if (tab.tabType === 'file') {
-      const fileWorkerId = workspaceRegistry.workerIdOfRoot(tab.workspaceRoot) ?? ''
-      if (!fileWorkerId) return false
-      setWorkerId(fileWorkerId)
+      if (!workspaceRegistry.workerIdOfRoot(tab.workspaceRoot)) return false
       setWorkspaceRoot(tab.workspaceRoot)
-      setSearchTarget(FILES_TARGET_ID)
-      setScope(null)
-      setScopeOpen(false)
+      setTypeId(FILE_CONTENT_KIND)
       searchReset()
       return true
     }
     if (tab.tabType === 'terminal') {
-      setWorkerId(tab.workerId)
       setWorkspaceRoot(tab.workspaceRoot)
-      setSearchTarget(FILES_TARGET_ID)
-      setScope(null)
-      setScopeOpen(false)
+      setTypeId(FILE_CONTENT_KIND)
       searchReset()
       return Boolean(tab.workspaceRoot)
     }
@@ -462,15 +364,14 @@ export default function SearchPanel({
   }, [searchReset])
 
   /**
-   * on-open 流程(由 openSignal 驱动):
-   * 1. 距上次打开超 5 分钟 → 清空搜索词并重置结果;
-   * 2. 更新本实例上次打开时间;
-   * 3. 搜索框为空(或即将用选区填充)→ 自动识别 worker/工作区/搜索类型;
-   * 4. 存在有效选区 → 原样填入搜索框,不触发搜索;
-   * 5. 聚焦搜索框(无工作区绑定时聚焦 worker 下拉)。
+   * on-open 流程（由 openSignal 驱动）：
+   * 1. 距上次打开超 5 分钟 → 清空搜索词并重置结果；
+   * 2. 更新本实例上次打开时间；
+   * 3. 搜索框为空（或即将用选区填充）→ 自动识别工作区/类型；
+   * 4. 存在有效选区 → 原样填入搜索框，不触发搜索；
+   * 5. 聚焦搜索框。
    */
   const lastOpenedAtRef = React.useRef(0)
-  /** 已消费的 openSignal:初始 0,组件带着 >0 的信号挂载(弹窗首开)同样视为一次打开。 */
   const prevOpenSignalRef = React.useRef(0)
   React.useEffect(() => {
     if (openSignal === prevOpenSignalRef.current) return
@@ -485,83 +386,59 @@ export default function SearchPanel({
     }
     const selection = readRecentSelection()
     const willFillSelection = selection.trim().length > 0
-    let appliedWorkspaceBinding = false
     if (queryRef.current.trim() === '' || willFillSelection) {
-      appliedWorkspaceBinding = applyActiveTabContext()
+      applyActiveTabContext()
     }
     if (willFillSelection) {
       setQuery(selection)
       queryRef.current = selection
     }
-    if (workspaceRootRef.current || appliedWorkspaceBinding) {
-      focusInput()
-    } else {
-      requestAnimationFrame(() => {
-        workerSelectRef.current?.focus()
-      })
-    }
+    focusInput()
   }, [applyActiveTabContext, focusInput, openSignal, searchReset])
 
   /**
-   * 资源管理器跳转:以事件为准同时落定 worker/工作区绑定与搜索范围并聚焦输入框
-   * (worker/root 不在候选里也保留,下拉补「(未注册)」选项展示)。
-   * 事件 target 放宽为 string:接收处查注册表校验,未知/缺省 id 回落 files
-   * (发射方零改动);不支持范围的目标走文件语义选项收起清空分支。
+   * 资源管理器跳转：以事件为准落定工作区绑定与类型（旧 `target` 值 files/tasks
+   * 兼容映射到新类型 id），并把事件携带的目录写入该类型 `scope` 字段（`type:'path'`）。
    */
   React.useEffect(() => {
     if (!listenWorkspaceSearchRequested) return
     const unsubscribe = domainEventBus.subscribe(
       DOMAIN_EVENTS.WORKSPACE_SEARCH_PANEL_REQUESTED,
-      ({ workerId: requestedWorkerId, workspaceRoot: requestedWorkspaceRoot, rootPath, label, target }) => {
-        const requestedDefinition = resolveSearchTarget(target)
-        setWorkerId(requestedWorkerId)
+      ({ workspaceRoot: requestedWorkspaceRoot, rootPath, target }) => {
+        const requestedTypeId = normalizeSearchTypeId(target ?? FILE_CONTENT_KIND)
+        const requestedType = resolveSearchType(requestedTypeId, listSearchTypes())
         setWorkspaceRoot(requestedWorkspaceRoot)
-        setSearchTarget(requestedDefinition.id)
-        if (requestedDefinition.supports.scope) {
-          setScope({ workspaceRoot: requestedWorkspaceRoot, rootPath, label })
-          setScopeOpen(false)
-        } else {
-          // 该目标不支持文件语义的范围:范围/包含/排除过滤器一并收起清空。
-          setScope(null)
-          setScopeOpen(false)
-          setIncludeOpen(false)
-          setExcludeOpen(false)
+        setTypeId(requestedType.id)
+        // 目录范围下推：写入该类型 `scope` 字段（文件类声明了该字段；任务类无则忽略）。
+        const scopeField = (requestedType.filters ?? []).find((field) => field.key === 'scope')
+        if (scopeField && rootPath) {
+          setFieldValue(nsKeyOf(requestedType, scopeField), toBusinessAbsolutePath(normalizeWorkspaceRelativePath(rootPath)))
         }
-        // 绑定随事件变化，旧工作区结果作废。
         searchReset()
         focusInput()
       },
     )
     return unsubscribe
-  }, [focusInput, listenWorkspaceSearchRequested, searchReset])
+  }, [focusInput, listenWorkspaceSearchRequested, searchReset, setFieldValue])
 
-  /** 命中行点击：打开文件并定位到行（与资源管理器打开文件同一通道）；弹窗模式随之关闭。 */
-  const handleOpenHit = React.useCallback((filePath: string, hit: WorkspaceContentSearchHit) => {
+  /** 打开文件（可选定位到行）；弹窗模式随之关闭。 */
+  const handleOpenFile = React.useCallback((filePath: string, lineNumber?: number) => {
     if (!workspaceRoot) return
+    const businessPath = toBusinessAbsolutePath(normalizeWorkspaceRelativePath(filePath))
     openGlobalFileTab(
-      { workspaceRoot, filePath: toBusinessAbsolutePath(filePath) },
-      { mode: 'readwrite', lineNumber: hit.lineNumber },
+      { workspaceRoot, filePath: businessPath },
+      lineNumber !== undefined ? { mode: 'readwrite', lineNumber } : { mode: 'readwrite' },
     )
     onRequestClose?.()
   }, [onRequestClose, openGlobalFileTab, workspaceRoot])
 
-  /** 文件名搜索命中点击：打开文件（不定位到行）；弹窗模式随之关闭。 */
-  const handleOpenFile = React.useCallback((filePath: string) => {
-    if (!workspaceRoot) return
-    openGlobalFileTab(
-      { workspaceRoot, filePath: toBusinessAbsolutePath(filePath) },
-      { mode: 'readwrite' },
-    )
-    onRequestClose?.()
-  }, [onRequestClose, openGlobalFileTab, workspaceRoot])
-
-  /** 任务命中点击：打开对应任务聊天页（基础版，暂不定位到具体消息）；弹窗模式随之关闭。 */
-  const handleOpenTask = React.useCallback((task: TaskContentSearchTaskResult) => {
-    openTaskChatTab({ taskId: task.taskId, title: task.title || `任务 ${task.taskId.slice(0, 8)}` })
+  /** 打开任务聊天页；弹窗模式随之关闭。 */
+  const handleOpenTask = React.useCallback((taskId: string, title?: string) => {
+    openTaskChatTab({ taskId, title: title || `任务 ${taskId.slice(0, 8)}` })
     onRequestClose?.()
   }, [onRequestClose, openTaskChatTab])
 
-  /** 分组折叠切换：files 模式键 = 文件路径，tasks 模式键 = 任务 ID（共用同一状态集）。 */
+  /** 分组折叠切换（键 = SearchResultGroup.key）。 */
   const toggleGroupCollapsed = React.useCallback((key: string) => {
     setCollapsedKeys((current) => {
       const next = new Set(current)
@@ -575,22 +452,13 @@ export default function SearchPanel({
   }, [])
 
   const collapseAll = React.useCallback(() => {
-    setCollapsedKeys((current) => {
-      const result = search.result
-      if (!result) return current
-      return new Set(targetDefinition.resultGroups(result).map((group) => group.key))
-    })
-  }, [search.result, targetDefinition])
+    setCollapsedKeys(new Set(defaultGroups.map((group) => group.key)))
+  }, [defaultGroups])
 
   const expandAll = React.useCallback(() => {
     setCollapsedKeys(new Set())
   }, [])
 
-  /**
-   * 全部折叠/全部展开合并为单个切换按钮：
-   * 存在任意被折叠的分组 → 当前可执行「展开全部」；否则 → 「折叠全部」。
-   * 新结果落地时的默认折叠策略会预置部分折叠分组，按钮语义随状态自动切换。
-   */
   const hasCollapsedGroups = collapsedKeys.size > 0
   const toggleCollapseAll = React.useCallback(() => {
     if (hasCollapsedGroups) {
@@ -600,28 +468,31 @@ export default function SearchPanel({
     }
   }, [collapseAll, expandAll, hasCollapsedGroups])
 
-  /** 输入框键盘：Enter 触发搜索；聚焦时 Alt+C / Alt+W / Alt+R 切换三个匹配开关。 */
+  /** 输入框键盘：Enter 触发搜索；聚焦时 Alt+C / Alt+W / Alt+R 切换对应布尔字段。 */
+  const toggleBooleanFieldByKey = React.useCallback((fieldKey: string) => {
+    const binding = [...inlineBindings, ...moreBindings]
+      .find((item) => item.field.key === fieldKey && item.field.type === 'boolean')
+    if (binding) {
+      setFieldValue(binding.nsKey, !Boolean(filterValues[binding.nsKey]))
+    }
+  }, [filterValues, inlineBindings, moreBindings, setFieldValue])
+
   const handleSearchInputKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
     if (event.altKey && !event.ctrlKey && !event.metaKey) {
       const key = event.key.toLowerCase()
       if (key === 'c') {
         event.preventDefault()
-        setCaseSensitive((current) => !current)
+        toggleBooleanFieldByKey('caseSensitive')
         return
       }
       if (key === 'w') {
         event.preventDefault()
-        setWholeWord((current) => !current)
+        toggleBooleanFieldByKey('wholeWord')
         return
       }
       if (key === 'r') {
         event.preventDefault()
-        setUseRegex((current) => !current)
-        return
-      }
-      if (key === 'n' && supportsFileNameMode) {
-        event.preventDefault()
-        setNameOnly((current) => !current)
+        toggleBooleanFieldByKey('isRegex')
         return
       }
     }
@@ -631,44 +502,150 @@ export default function SearchPanel({
     }
   }
 
+  /** 默认渲染器：按字段 `type` 出对应控件（值收集进 `filters` 袋）。 */
+  const renderFieldControl = (binding: FieldBinding): React.ReactNode => {
+    const { field, nsKey } = binding
+    const value = filterValues[nsKey]
+    const ariaLabel = field.label
+    switch (field.type) {
+      case 'boolean':
+        return (
+          <SearchToggleButton
+            key={nsKey}
+            label={field.label}
+            title={field.help ?? field.label}
+            active={Boolean(value)}
+            onClick={() => setFieldValue(nsKey, !Boolean(value))}
+          />
+        )
+      case 'select':
+        return (
+          <Select
+            key={nsKey}
+            aria-label={ariaLabel}
+            size="small"
+            allowClear
+            value={value === undefined || value === '' ? undefined : value as string}
+            placeholder={field.placeholder ?? field.label}
+            options={field.options}
+            onChange={(next) => setFieldValue(nsKey, next ?? '')}
+            style={fieldControlSelectStyle}
+          />
+        )
+      case 'radio':
+        return (
+          <Radio.Group
+            key={nsKey}
+            aria-label={ariaLabel}
+            size="small"
+            value={value as string | undefined}
+            options={field.options}
+            onChange={(event) => setFieldValue(nsKey, event.target.value)}
+          />
+        )
+      case 'number':
+        return (
+          <InputNumber
+            key={nsKey}
+            aria-label={ariaLabel}
+            size="small"
+            value={typeof value === 'number' ? value : undefined}
+            placeholder={field.placeholder ?? field.label}
+            onChange={(next) => setFieldValue(nsKey, next ?? '')}
+            style={fieldControlNumberStyle}
+          />
+        )
+      case 'textarea':
+        return (
+          <Input.TextArea
+            key={nsKey}
+            aria-label={ariaLabel}
+            autoSize={{ minRows: 1, maxRows: 4 }}
+            value={value === undefined ? '' : String(value)}
+            placeholder={field.placeholder ?? field.label}
+            onChange={(event) => setFieldValue(nsKey, event.target.value)}
+            style={filterInputStyle}
+          />
+        )
+      case 'path':
+      case 'text':
+      default:
+        return (
+          <Input
+            key={nsKey}
+            aria-label={ariaLabel}
+            type="text"
+            value={value === undefined ? '' : String(value)}
+            placeholder={field.placeholder ?? field.label}
+            onChange={(event) => setFieldValue(nsKey, event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault()
+                runSearch()
+              }
+            }}
+            style={filterInputStyle}
+          />
+        )
+    }
+  }
+
   const result = search.result
-  const showNoMatch = search.status === 'done' && result !== null && result.matchCount === 0
+  const showNoMatch = search.status === 'done' && result !== null && result.items.length === 0
   const showSearchingHint = searching && !result
   const showIntroHint = !bindingReady || (search.status === 'idle' && !result)
-  /** 空态引导文案：区分「暂无 worker/工作区」与目标定义的输入引导。 */
-  const introHint = !bindingReady
-    ? (!workerOptions.length && !workerId
-      ? '暂无可搜索的 worker，连接并注册工作区后可搜索。'
-      : !workerId
-        ? '请先选择 worker。'
-        : workspaceOptions.length
-          ? '请先选择工作区。'
-          : '暂无可搜索的工作区。')
-    : targetDefinition.introHint({ nameOnly })
+  /** 空态引导文案：区分「无工作区」「工作区无归属」「输入引导」。 */
+  const introHint = !workspaceRoot
+    ? (workspaceOptions.length ? '请先选择工作区。' : '暂无可搜索的工作区，连接并注册工作区后可搜索。')
+    : !workspaceWorkerId
+      ? '该工作区未注册或所属 worker 离线，无法搜索。'
+      : `输入关键词搜索「${selectedType.label}」`
+
+  /** 弹窗形态：无边框、无背景色的类型按钮行。 */
+  const typeButtonRow = (
+    <div style={typeButtonRowStyle}>
+      {searchTypes.map((type) => (
+        <button
+          key={type.id}
+          type="button"
+          aria-pressed={type.id === selectedType.id}
+          onClick={() => handleTypeChange(type.id)}
+          style={{
+            ...typeButtonStyle,
+            ...(type.id === selectedType.id ? typeButtonActiveStyle : null),
+          }}
+        >
+          {type.label}
+        </button>
+      ))}
+    </div>
+  )
 
   return (
     <div style={panelStyle}>
       <div style={selectAreaStyle}>
         <Select
-          ref={workerSelectRef}
-          aria-label="worker"
-          value={workerId || undefined}
-          placeholder={workerOptions.length ? '选择 worker' : '暂无可搜索的 worker'}
-          popupMatchSelectWidth={false}
-          onChange={handleWorkerChange}
-          options={workerSelectOptions}
-          style={selectStyle}
-        />
-        <Select
           aria-label="工作区"
           value={workspaceRoot || undefined}
-          placeholder="选择工作区"
+          placeholder={workspaceOptions.length ? '选择工作区' : '暂无可搜索的工作区'}
           popupMatchSelectWidth={false}
           onChange={handleWorkspaceChange}
-          options={workspaceSelectOptions}
-          style={selectStyle}
+          options={workspaceOptions}
+          style={variant === 'modal' ? modalSelectStyle : selectStyle}
         />
+        {variant === 'sidebar' ? (
+          <Select
+            aria-label="搜索类型"
+            value={selectedType.id}
+            popupMatchSelectWidth={false}
+            onChange={handleTypeChange}
+            options={searchTypes.map((type) => ({ value: type.id, label: type.label }))}
+            style={selectStyle}
+          />
+        ) : null}
       </div>
+
+      {variant === 'modal' ? typeButtonRow : null}
 
       <div style={inputAreaStyle}>
         <div style={inputRowStyle}>
@@ -677,42 +654,12 @@ export default function SearchPanel({
             type="text"
             value={query}
             placeholder={!bindingReady
-              ? '请先选择 worker 与工作区'
-              : targetDefinition.placeholder({ nameOnly })}
+              ? '请先选择工作区'
+              : `搜索「${selectedType.label}」`}
             status={search.regexInvalid ? 'error' : undefined}
             onChange={(event) => setQuery(event.target.value)}
             onKeyDown={handleSearchInputKeyDown}
             style={searchInputStyle}
-            suffix={(
-              <span style={inputTogglesStyle}>
-                <SearchToggleButton
-                  label="Aa"
-                  title="区分大小写 (Alt+C)"
-                  active={caseSensitive}
-                  onClick={() => setCaseSensitive((current) => !current)}
-                />
-                <SearchToggleButton
-                  label="ab|"
-                  title="全字匹配 (Alt+W)"
-                  active={wholeWord}
-                  onClick={() => setWholeWord((current) => !current)}
-                />
-                <SearchToggleButton
-                  label=".*"
-                  title="使用正则表达式 (Alt+R)"
-                  active={useRegex}
-                  onClick={() => setUseRegex((current) => !current)}
-                />
-                {supportsFileNameMode ? (
-                  <SearchToggleButton
-                    label="fn"
-                    title="仅搜索文件名 (Alt+N)"
-                    active={nameOnly}
-                    onClick={() => setNameOnly((current) => !current)}
-                  />
-                ) : null}
-              </span>
-            )}
           />
           {searching ? (
             <>
@@ -731,71 +678,49 @@ export default function SearchPanel({
           )}
         </div>
 
-        {(supportsScope && scopeOpen) || (supportsGlobs && (includeOpen || excludeOpen)) ? (
-          <div style={filtersStyle}>
-            {scopeOpen ? (
-              <Input
-                autoFocus
-                type="text"
-                aria-label="搜索范围"
-                placeholder="搜索范围目录，例：/src 或 src/components（回车生效，留空为工作区根）"
-                value={scopeDraft}
-                onChange={(event) => setScopeDraft(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter') {
-                    event.preventDefault()
-                    commitScope(scopeDraft)
-                  }
-                }}
-                style={filterInputStyle}
-              />
-            ) : null}
-            {includeOpen ? (
-              <Input
-                type="text"
-                aria-label="包含的文件"
-                placeholder="包含的文件，例：*.ts, src/**"
-                value={includePatterns}
-                onChange={(event) => setIncludePatterns(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter') {
-                    event.preventDefault()
-                    runSearch()
-                  }
-                }}
-                style={filterInputStyle}
-              />
-            ) : null}
-            {excludeOpen ? (
-              <Input
-                type="text"
-                aria-label="排除的文件"
-                placeholder="排除的文件，例：*.css, dist/**"
-                value={excludePatterns}
-                onChange={(event) => setExcludePatterns(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter') {
-                    event.preventDefault()
-                    runSearch()
-                  }
-                }}
-                style={filterInputStyle}
-              />
-            ) : null}
+        {(inlineBindings.length > 0 || groupsWithCustomView.length > 0) ? (
+          <div style={optionsRowStyle}>
+            {activeTypeGroups.map((type) => {
+              if (type.FilterView) {
+                const FilterView = type.FilterView
+                return (
+                  <FilterView
+                    key={type.id}
+                    fields={type.filters ?? []}
+                    values={filterValues}
+                    setValue={setFieldValue}
+                    workspaceRoot={workspaceRoot}
+                  />
+                )
+              }
+              const inline = (type.filters ?? []).filter((field) => (field.section ?? 'inline') !== 'more')
+              if (inline.length === 0) return null
+              return (
+                <div key={type.id} style={optionsGroupStyle}>
+                  {allSelected ? <span style={optionsGroupLabelStyle}>{type.label}</span> : null}
+                  {inline.map((field) => renderFieldControl({ type, field, nsKey: nsKeyOf(type, field) }))}
+                </div>
+              )
+            })}
           </div>
         ) : null}
 
-        {supportsScope && activeScope && scopeRootPath ? (
-          <div style={scopeRowStyle} title={`${activeScope.workspaceRoot}${toBusinessAbsolutePath(scopeRootPath)}`}>
-            <span style={scopeLabelStyle}>搜索范围：{scopeRootPath}</span>
-            <IconButton
-              variant="ghost"
-              size="sm"
-              icon={<CloseIcon size={12} />}
-              aria-label="恢复为工作区根"
-              title="恢复为工作区根"
-              onClick={() => setScope(null)}
-            />
+        {moreBindings.some((binding) => openMoreFields.has(binding.nsKey)) ? (
+          <div style={filtersStyle}>
+            {activeTypeGroups.map((type) => {
+              if (type.FilterView) return null
+              const open = (type.filters ?? [])
+                .filter((field) => field.section === 'more')
+                .map((field) => ({ type, field, nsKey: nsKeyOf(type, field) }))
+                .filter((binding) => openMoreFields.has(binding.nsKey))
+              if (open.length === 0) return null
+              return (
+                <div key={type.id} style={optionsGroupStyle}>
+                  {allSelected ? <span style={optionsGroupLabelStyle}>{type.label}</span> : null}
+                  {open.map((binding) => renderFieldControl(binding))}
+                </div>
+              )
+            })}
           </div>
         ) : null}
 
@@ -806,24 +731,17 @@ export default function SearchPanel({
         {showIntroHint ? <div style={centerHintStyle}>{introHint}</div> : null}
         {showSearchingHint ? <div style={centerHintStyle}>搜索中…</div> : null}
         {showNoMatch ? <div style={centerHintStyle}>未找到匹配</div> : null}
-        {result && result.matchCount > 0 ? (
-          targetDefinition.resultTree === 'tasks' ? (
-            <TaskSearchResultsTree
-              result={result as TaskContentSearchResult}
-              collapsedTasks={collapsedKeys}
-              onToggleTask={toggleGroupCollapsed}
-              onOpenTask={handleOpenTask}
-            />
-          ) : (
-            <SearchResultsTree
-              result={result as WorkspaceContentSearchResult}
-              collapsedFiles={collapsedKeys}
-              onToggleFile={toggleGroupCollapsed}
-              onOpenHit={handleOpenHit}
-              nameMode={nameOnly}
-              onOpenFile={handleOpenFile}
-            />
-          )
+        {result && result.items.length > 0 ? (
+          <SearchResultsView
+            items={result.items}
+            types={searchTypes}
+            collapsedKeys={collapsedKeys}
+            onToggleGroup={toggleGroupCollapsed}
+            openFile={handleOpenFile}
+            openTask={handleOpenTask}
+            pattern={query}
+            workspaceRoot={workspaceRoot}
+          />
         ) : null}
       </SidebarScrollArea>
 
@@ -845,7 +763,7 @@ export default function SearchPanel({
 }
 
 /**
- * 输入框内嵌的小型开关按钮（Aa / ab| / .*）。
+ * 输入框内嵌的小型开关按钮（布尔字段默认渲染器）。
  * onMouseDown 阻止默认行为，点击后焦点留在输入框内（Enter 可继续触发搜索）。
  */
 function SearchToggleButton({
@@ -894,12 +812,48 @@ const selectAreaStyle: React.CSSProperties = {
   flexShrink: 0,
 }
 
-/** worker 与工作区同行并排:各占一半(flex:1),minWidth:0 允许长名截断省略。 */
+/** 工作区与类型选择器同行并排：各占一半（flex:1），minWidth:0 允许长名截断省略。 */
 const selectStyle: React.CSSProperties = {
   flex: 1,
   width: 'auto',
   minWidth: 0,
   fontSize: 'var(--text-xs)',
+}
+
+/** 弹窗形态：工作区选择器整行宽度（类型走按钮行）。 */
+const modalSelectStyle: React.CSSProperties = {
+  flex: 1,
+  width: 'auto',
+  minWidth: 0,
+  fontSize: 'var(--text-xs)',
+}
+
+/** 弹窗类型按钮行：无边框、无背景色。 */
+const typeButtonRowStyle: React.CSSProperties = {
+  display: 'flex',
+  flexDirection: 'row',
+  flexWrap: 'wrap',
+  alignItems: 'center',
+  gap: 2,
+  padding: '6px 10px 0',
+  flexShrink: 0,
+}
+
+const typeButtonStyle: React.CSSProperties = {
+  border: 'none',
+  background: 'transparent',
+  color: 'var(--text-muted)',
+  fontSize: 'var(--text-xs)',
+  lineHeight: 1.5,
+  padding: '2px 6px',
+  borderRadius: 'var(--radius-sm)',
+  cursor: 'pointer',
+  whiteSpace: 'nowrap',
+}
+
+const typeButtonActiveStyle: React.CSSProperties = {
+  color: 'var(--accent-blue)',
+  fontWeight: 700,
 }
 
 const inputAreaStyle: React.CSSProperties = {
@@ -923,10 +877,26 @@ const searchInputStyle: React.CSSProperties = {
   fontSize: 'var(--text-xs)',
 }
 
-const inputTogglesStyle: React.CSSProperties = {
-  display: 'inline-flex',
+/** 选项行（inline 字段）：按类型分组。 */
+const optionsRowStyle: React.CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 4,
+}
+
+const optionsGroupStyle: React.CSSProperties = {
+  display: 'flex',
+  flexDirection: 'row',
+  flexWrap: 'wrap',
   alignItems: 'center',
-  gap: 2,
+  gap: 4,
+  minWidth: 0,
+}
+
+const optionsGroupLabelStyle: React.CSSProperties = {
+  fontSize: 'var(--text-xs)',
+  color: 'var(--text-muted)',
+  flexShrink: 0,
 }
 
 const toggleButtonStyle: React.CSSProperties = {
@@ -957,28 +927,17 @@ const filtersStyle: React.CSSProperties = {
 
 const filterInputStyle: React.CSSProperties = {
   fontSize: 'var(--text-xs)',
+  minWidth: 160,
 }
 
-const scopeRowStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 4,
-  padding: '2px 6px',
-  borderRadius: 'var(--radius-sm)',
-  border: '1px solid var(--border-light)',
-  background: 'var(--bg-primary)',
-  minWidth: 0,
-}
-
-const scopeLabelStyle: React.CSSProperties = {
-  flex: 1,
-  minWidth: 0,
+const fieldControlSelectStyle: React.CSSProperties = {
+  minWidth: 120,
   fontSize: 'var(--text-xs)',
-  color: 'var(--text-secondary)',
-  fontFamily: 'var(--font-mono)',
-  overflow: 'hidden',
-  textOverflow: 'ellipsis',
-  whiteSpace: 'nowrap',
+}
+
+const fieldControlNumberStyle: React.CSSProperties = {
+  width: 120,
+  fontSize: 'var(--text-xs)',
 }
 
 const errorStyle: React.CSSProperties = {

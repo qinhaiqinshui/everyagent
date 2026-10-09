@@ -38,7 +38,7 @@ has_children: false
 | 3 | `void registerSandboxProvider(SandboxProvider p)` | [工具 §3](../backend/tools-and-sandbox.md#3-sandboxprovider--沙箱后端) | sandbox-wsl-ubuntu(priority 10)、codex(8)、mic(5) |
 | 4 | `void registerFileReferenceHandler(FileReferenceHandler h)` | [工具 §4](../backend/tools-and-sandbox.md#4-filereferencehandler--用户输入里的文件引用) | image-vision（唯一） |
 | 5 | `void registerAdvisorProvider(AdvisorProvider p)` | [advisors §1](../backend/advisors.md#1-advisorprovider--向-agent-链注入-advisor) | 12 插件 13 provider（system-info、git、context-compression…） |
-| 6 | `void registerSearchProvider(SearchProvider p)` | [advisors §6](../backend/advisors.md#6-searchprovider--搜索后端已接线fssearch--tasksearch-增补聚合) | 已接线：`fs.search` / `task.search` 增补聚合（无内置插件范例） |
+| 6 | `void registerSearchProvider(SearchProvider p)` | [advisors §6](../backend/advisors.md#6-searchprovider--搜索后端统一-search-聚合--mentionquery-能力接口) | 统一 `search` 聚合（内置 `file-content`/`file-name`/`task` 三 provider 与插件 provider 同权，按 `order` 升序聚合）；能力接口 `SuggestionProvider`（mention.query）；无内置插件范例 |
 | 7 | `void registerAuthorizationHandler(AuthorizationHandler h)` | [advisors §7](../backend/advisors.md#7-authorizationhandler--授权决议链节点) | ai-review(100f)、unattended(200f)；内置 human=300f 终结 |
 | 8 | `void registerSkillContributor(SkillContributor c)` | [advisors §5](../backend/advisors.md#5-skillcontributor--贡献-skill) | subagent（skill 同时进 system prompt 与 `/` 菜单，菜单副标题带「插件 · 」来源标记） |
 | 9 | `void registerTokenEstimator(TokenEstimator e)` | [advisors §4](../backend/advisors.md#4-tokenestimator--替换-token-估算器) | model-rate-limit |
@@ -138,13 +138,13 @@ has_children: false
 | `ctx.sdk` | `PluginSdk` | RPC + 工作区快照 + workerId（§2.3） | [ctx §3](../web/context-api.md#3-ctxsdk--rpc-与工作区) |
 | `ctx.storage` | `PluginStorage`（§2.5） | localStorage，键前缀 `plugin:<id>:` | [ctx §4](../web/context-api.md#4-ctxstorage--本地键值存储) |
 | `ctx.commands` | `CommandRegistry`（§2.5） | 本插件私有命令表，不跨插件 | [ctx §5](../web/context-api.md#5-ctxcommands--命令注册表) |
-| `ctx.ui` | `UiRegistry`（§2.2） | 12 register + 5 动作 | [UI §1](../web/ui-extensions.md#1-十二个扩展点总览) |
+| `ctx.ui` | `UiRegistry`（§2.2） | 13 register + 5 动作 | [UI §1](../web/ui-extensions.md#1-十三个扩展点总览) |
 | `ctx.events` | `PluginEvents`（§2.4） | 宿主进程内事件总线的最薄委托 | [ctx §7](../web/context-api.md#7-ctxevents--领域事件总线) |
 | `ctx.fs` | `PluginFs`（§2.5） | `listDir`/`delete`，jail 到工作区根 | [ctx §6](../web/context-api.md#6-ctxfs--工作区文件系统网关) |
 
-### 2.2 `UiRegistry` —— 12 个 register + 5 个动作
+### 2.2 `UiRegistry` —— 13 个 register + 5 个动作
 
-两张总览：[加载链路 §4.1](../web/overview-and-loading.md#41-12-个-ctxuiregister全部返回真清理的-disposable)、[UI 扩展点 §1](../web/ui-extensions.md#1-十二个扩展点总览)。所有 register 返回 Disposable（`registerOutputBlock`/`registerTraceType` 两个假 dispose 例外，见 [UI §16](../web/ui-extensions.md#16-disposable-与刷新)）。
+两张总览：[加载链路 §4.1](../web/overview-and-loading.md#41-13-个-ctxuiregister全部返回真清理的-disposable)、[UI 扩展点 §1](../web/ui-extensions.md#1-十三个扩展点总览)。所有 register 返回 Disposable（`registerOutputBlock`/`registerTraceType` 两个假 dispose 例外，见 [UI §17](../web/ui-extensions.md#17-disposable-与刷新)）。
 
 | 扩展点 | 方法（一行签名） | 详解 | 范例 |
 |---|---|---|---|
@@ -160,8 +160,9 @@ has_children: false
 | `ui.file_content_editors` | `registerFileContentEditor(desc)` | [UI §12](../web/ui-extensions.md#12-uifile_content_editors--文件内容编辑器) | pdf-viewer（.pdf） |
 | `ui.file_explorer_actions` | `registerFileExplorerAction(action)` | [UI §13](../web/ui-extensions.md#13-uifile_explorer_actions--文件树右键菜单) | git「显示 Git 历史」（追加到内置右键菜单尾部） |
 | `ui.round_tail_panels` | `registerRoundTailPanel(def)` | [UI §14](../web/ui-extensions.md#14-uiround_tail_panels--轮末展示区) | file-change |
+| `ui.search_types` | `registerSearchType(def)` | [UI §15](../web/ui-extensions.md#15-uisearch_types--搜索类型注册) | ⚠️ 无内置范例（内置三类型不走此扩展点） |
 
-动作方法（不注册、只驱动宿主；桥未注入时静默降级）：详解全部在 [UI §15](../web/ui-extensions.md#15-uiregistry-动作方法5-个)。
+动作方法（不注册、只驱动宿主；桥未注入时静默降级）：详解全部在 [UI §16](../web/ui-extensions.md#16-uiregistry-动作方法5-个)。
 
 | 方法 | 一行签名 | 范例 |
 |---|---|---|
@@ -211,7 +212,7 @@ has_children: false
 | `PluginStorage` | `get<T>(key: string, defaultValue?: T): T \| undefined`；`set(key, value)`；`delete(key)` | [ctx §4](../web/context-api.md#4-ctxstorage--本地键值存储) | 内置插件零调用（残留坑见同篇 §11） |
 | `PluginFs` | `listDir(workspaceRoot, dir): Promise<PluginFileStat[]>`；`delete(workspaceRoot, path): Promise<void>` | [ctx §6](../web/context-api.md#6-ctxfs--工作区文件系统网关) | git（唯一使用者） |
 | `CommandRegistry` | `registerCommand(id, handler): Disposable`；`executeCommand(id, ...args): Promise<unknown>` | [ctx §5](../web/context-api.md#5-ctxcommands--命令注册表) | 内置插件零调用 |
-| `Disposable` | `dispose(): void` | [UI §16](../web/ui-extensions.md#16-disposable-与刷新)、[ctx §9](../web/context-api.md#9-寿命与清理) | 刷新即全丢；跨刷新用 storage |
+| `Disposable` | `dispose(): void` | [UI §17](../web/ui-extensions.md#17-disposable-与刷新)、[ctx §9](../web/context-api.md#9-寿命与清理) | 刷新即全丢；跨刷新用 storage |
 
 ## 3. plugin.json 字段速查
 

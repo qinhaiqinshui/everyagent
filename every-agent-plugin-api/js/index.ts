@@ -614,6 +614,124 @@ export interface FileExplorerAction {
   invoke?: (ctx: FileExplorerActionContext) => void
 }
 
+// ─── 搜索类型扩展点（ui.search_types） ─────────────────────────────────────
+
+/**
+ * 最小化统一搜索结果项（替代 web 内部 `UnifiedSearchItem`）。
+ *
+ * 统一 `search` RPC 的命中项为**平铺**列表，`kind` 判别类别；其余字段随 kind
+ * 不同，插件按需强转读取。核心不解释字段内容。
+ */
+export interface PluginSearchItem {
+  /** 结果类别（开放集合：`file-content` / `file-name` / `task` / 插件自定）。 */
+  kind: string
+  /** 结果来源 provider id（缺省/`builtin.*` 内置静默，插件用其自身 id）。 */
+  providerId?: string
+  /** 可选相关性分数（仅排序提示，无语义承诺）。 */
+  score?: number
+  /** 文件类命中：文件路径（工作区相对）。 */
+  path?: string
+  /** 内容类命中：1-based 行号。 */
+  lineNumber?: number
+  /** 内容类命中：命中行正文。 */
+  line?: string
+  /** 命中片段在行内的起始列（0-based）。 */
+  matchIndex?: number
+  /** 命中片段文本。 */
+  matchText?: string
+  /** 任务类命中：任务 ID。 */
+  taskId?: string
+  /** 任务类命中：任务标题。 */
+  title?: string
+  /** 任务类命中：状态串。 */
+  status?: string
+  /** 组头显示名（可选，覆盖默认 key）。 */
+  groupLabel?: string
+  /** 任务类命中：轮次序号。 */
+  roundIndex?: number
+  /** 任务类命中：命中字段。 */
+  field?: string
+  /** 其余字段随 kind 不同（插件 provider 自定义）。 */
+  [key: string]: unknown
+}
+
+/**
+ * 搜索过滤字段声明（核心默认渲染器按 `type` 出控件，收集值进不透明 `filters` 袋）。
+ *
+ * 值与键的约定：运行时键为 `${kind}.${field.key}`（命名空间隔离）；核心不解释值。
+ */
+export interface SearchFilterField {
+  /** 字段 key（同类型内唯一；运行时以 `${kind}.${key}` 装袋）。 */
+  key: string
+  /** 字段展示名（控件 label / 菜单项文案）。 */
+  label: string
+  /** 控件类型（核心按此选择默认渲染控件）。 */
+  type: 'text' | 'textarea' | 'boolean' | 'select' | 'radio' | 'number' | 'path'
+  /** select / radio 的候选项。 */
+  options?: Array<{ label: string; value: string }>
+  /** 默认值（缺省空）。 */
+  default?: unknown
+  /** 占位提示。 */
+  placeholder?: string
+  /** 帮助文本（悬停提示）。 */
+  help?: string
+  /** 展示位置：`inline` 显示在选项行，`more` 收在「更多」菜单（缺省 `inline`）。 */
+  section?: 'inline' | 'more'
+}
+
+/** 自定义过滤区渲染组件的 props（`FilterView`：整块替换某类型的字段区）。 */
+export interface SearchFilterViewProps {
+  /** 当前类型声明的过滤字段。 */
+  fields: SearchFilterField[]
+  /** 当前过滤值（键为 `${kind}.${field}` 命名空间）。 */
+  values: Record<string, unknown>
+  /** 更新某字段值（键为命名空间键）。 */
+  setValue: (key: string, value: unknown) => void
+  /** 当前选中工作区根。 */
+  workspaceRoot: string
+}
+
+/** 自定义结果渲染组件的 props（`ResultView`：该类型区块交给插件组件渲染）。 */
+export interface SearchTypeResultViewProps {
+  /** 本类型的命中项（平铺）。 */
+  items: PluginSearchItem[]
+  /** 当前搜索词。 */
+  pattern: string
+  /** 当前选中工作区根。 */
+  workspaceRoot: string
+  /** 打开文件（工作区相对/业务路径 + 可选行号）。 */
+  openFile: (path: string, lineNumber?: number) => void
+  /** 打开任务聊天页。 */
+  openTask: (taskId: string, title?: string) => void
+}
+
+/**
+ * 搜索类型定义（由 `ui.search_types` 扩展点产出）。
+ *
+ * 一个搜索类型 = 类型选择器里的一项（如「文本文件内容」「文件名」「任务内容」，
+ * 或插件自定的「图片」）。核心面板遍历注册表渲染类型选择器与过滤区，并按
+ * `kinds` 组装统一 `search` RPC 入参；插件可经 `FilterView` / `ResultView`
+ * 自定义渲染（不自定义则用核心默认渲染器 / 默认结果树）。
+ */
+export interface SearchTypeDefinition {
+  /** 类型 id（唯一；作为类型选择器 value）。 */
+  id: string
+  /** 类型选择器文案（如「文本文件内容」）。 */
+  label: string
+  /** 提供方：内置填 'core'，插件填插件 id。 */
+  pluginId: string
+  /** 排序字段（float，升序混排；缺省 100，内置占用小值）。 */
+  order?: number
+  /** 该类型向统一 `search` 声明要搜的 kinds（后端 provider 的 kind 声明）。 */
+  kinds: string[]
+  /** 过滤字段声明式 schema（核心按 type 默认渲染）。 */
+  filters?: SearchFilterField[]
+  /** 可选：整块自定义过滤区渲染（取代核心默认渲染器）。 */
+  FilterView?: ComponentType<SearchFilterViewProps>
+  /** 可选：自定义结果渲染（缺省用核心默认结果树）。 */
+  ResultView?: ComponentType<SearchTypeResultViewProps>
+}
+
 // ─── UI 注册表 ────────────────────────────────────────────────────────────
 
 export interface UiRegistry {
@@ -630,6 +748,8 @@ export interface UiRegistry {
   registerFileExplorerAction(action: FileExplorerAction): Disposable
   /** 注册轮末展示区组件（由 `ui.round_tail_panels` 扩展点产出）。 */
   registerRoundTailPanel(def: UiRoundTailPanelDefinition): Disposable
+  /** 注册搜索类型（由 `ui.search_types` 扩展点产出）。 */
+  registerSearchType(def: SearchTypeDefinition): Disposable
   /**
    * 查询当前激活的工作区标签（同步读宿主壳层镜像）；无激活标签时返回 null。
    * 变更通知请配 `workspace-tab-activated` / `workspace-tab-closed` 领域事件。

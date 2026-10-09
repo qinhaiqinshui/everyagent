@@ -37,7 +37,7 @@ import static org.mockito.Mockito.when;
 /**
  * mention.query 的 SuggestionProvider 增补聚合测试(架构 §8.5「能力接口扩展」),
  * 不依赖 Spring/真实 hub:真实 RpcDispatcher 分发 + mock HubLink 捕获出站帧
- * (FsSearchServiceTest 同款)。锁死四条语义:
+ * (SearchServiceTest 同款)。锁死四条语义:
  * <ol>
  *   <li>纯函数聚合({@link SlashMethods#appendProviderSuggestions}):内置在前、provider
  *       按 order() 升序追加(乱序注册同样得到升序)、按 {@code kind}+{@code path} 去重
@@ -107,16 +107,6 @@ class SlashMethodsMentionProviderTest {
         @Override
         public float order() {
             return order;
-        }
-
-        @Override
-        public List<SearchResult> searchFiles(SearchRequest req) {
-            return List.of(); // 基能力不参与本桩行为
-        }
-
-        @Override
-        public List<TaskSearchResult> searchTasks(TaskSearchRequest req) {
-            return List.of();
         }
 
         @Override

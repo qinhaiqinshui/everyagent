@@ -918,7 +918,7 @@ public class TaskStore implements TaskStoreService {
         return Json.write(line);
     }
 
-    /** 一行 jsonl → Round;解析失败返回 null(撕行/坏行)。公开:task.search 按命中行解析轮次。 */
+    /** 一行 jsonl → Round;解析失败返回 null(撕行/坏行)。公开:search 按命中行解析轮次。 */
     public static RoundIndex.Round parseRoundLine(String line) {
         try {
             JsonNode n = Json.parse(line);

@@ -133,7 +133,7 @@ export interface PluginEvents {
 | `user-interaction-cleared` | `{taskId, agentId, interactionId}`（`:303-310`） | ask 落定（提交/超时/取消）移除卡片时（`askStore.ts:306`；回放期间从未广播过的跳过） | 中低。同上 |
 | `workspace-open-user-interaction-requested` | `{interactionId}`（`:311-314`） | 通知卡片/悬浮菜单被点击，请求把交互请求带到前台（`askStore.ts:203`、`BrowserNotificationHost.tsx:43`、`PendingUserInteractionIndicator.tsx:73`；消费方 `UserInteractionHost.tsx:111`） | 低。宿主内部导航协议 |
 | `workspace-focus-task-requested` | `{taskId}`（`:212-214`） | 浏览器系统通知被点击时（`BrowserNotificationHost.tsx:65`；消费方 `Layout.tsx:743`） | 中。**插件也可以 emit 它**让宿主聚焦某任务标签——这是单边接线事件里反向可用的一类（§3.2 说明） |
-| `workspace-search-panel-requested` | `{workerId, workspaceRoot, rootPath, label, target?}`（`:259-270`） | 文件树右键「搜索」/任务列表工作区组「搜索」（`OpenFilesSidebarPanel.tsx:681-688`、`TasksPanel.tsx:381-388`；消费方内置 `SearchPanel.tsx:510-511`） | 低。宿主内部跳转协议，插件没有搜索面板可接 |
+| `workspace-search-panel-requested` | `{workerId, workspaceRoot, rootPath, label, target?}`（`:259-270`） | 文件树右键「搜索」/任务列表工作区组「搜索」（`OpenFilesSidebarPanel.tsx:681-688`、`TasksPanel.tsx:381-388`；消费方内置 `SearchPanel.tsx:510-511`） | 低。宿主内部跳转协议；`target` 现为搜索类型 id（旧 `files`/`tasks` 值保留一轮兼容）。插件可经 `ui.search_types`（[UI 扩展点](ui-extensions.md) §15）贡献搜索**类型**，但没有「接管整个搜索面板」的扩展点 |
 | `task-created` | `{taskId}`（`domainEvents.ts` `TASK_CREATED`） | worker 任务频道 `task.created` 帧入库时（`taskStore.ts` onFrame 处理，emit 于 upsert 之后；本端与其它端创建同权——**首拉列表/翻页不触发**） | 中。新任务感知/按 taskId 预取数据（known-issues #4 修复后接线） |
 | `task-deleted` | `{taskId}`（`domainEvents.ts` `TASK_DELETED`） | 任务删除唯一路径 `taskStore.remove()`（worker `task.deleted` 帧 → 删除镜像成功即 emit） | 中。作废该任务相关缓存的标准信号——file-change 插件的死订阅陷阱已随本条接线修复（known-issues #4） |
 | `plugins-loaded` | `{count}`（`domainEvents.ts` `PLUGINS_LOADED`） | 每轮 `loadPlugins()` 流程结束时（`pluginLoader.ts` doLoadPlugins 末尾，count 为当前已装载总数） | 低。宿主插件就绪脉冲；⚠️ fire-and-forget 无重放——晚于本轮 emit 才激活的插件收不到它（known-issues #4 修复后接线） |
@@ -144,7 +144,7 @@ export interface PluginEvents {
 
 | 事件名 | 载荷（声明） | 等待方（订阅者） | 用法 |
 |---|---|---|---|
-| `workspace-open-file-requested` | `{filePath, workspaceRoot?, startNameEditing?, mode?, lineNumber?}` | `Layout.tsx:689`（打开文件标签） | 插件 emit 它驱动宿主打开文件标签（等效 `ctx.ui.openFileTab`，见 [UI 扩展点](ui-extensions.md) §15） |
+| `workspace-open-file-requested` | `{filePath, workspaceRoot?, startNameEditing?, mode?, lineNumber?}` | `Layout.tsx:689`（打开文件标签） | 插件 emit 它驱动宿主打开文件标签（等效 `ctx.ui.openFileTab`，见 [UI 扩展点](ui-extensions.md) §16） |
 | `workspace-close-file-requested` | `{filePath?, fileTabId?, force?}` | `Layout.tsx:706` | 插件关标签的请求通道 |
 | `workspace-reload-all-files-requested` | `{force?}` | `Layout.tsx:746`、`OpenFilesSidebarPanel.tsx:260` | 请求宿主重载全部文件标签 |
 | `runtime-config-error` | `{message}` | `Layout.tsx:686`（弹错误提示） | 插件 emit 会让宿主弹一条错误横幅（慎用） |
@@ -329,6 +329,6 @@ export default function MyPanel(): React.ReactElement {
 ## 8. 下一步读
 
 - 事件挂探针、typecheck 与构建自检的调试流程：[调试与测试](../guides/debugging-and-testing.md)
-- 用事件做面板懒刷新的另一半——12 个 UI 扩展点：[前端 UI 扩展点](ui-extensions.md)
+- 用事件做面板懒刷新的另一半——13 个 UI 扩展点：[前端 UI 扩展点](ui-extensions.md)
 - `ctx.events` 在 ctx 全家桶里的位置与 `storage`/`sdk` 细节：[前端 ctx API](context-api.md)
 - 事件名为什么必须「不含业务语义」（§7.15.2 轮末旁路数据约定）：[后端持久化与状态](../backend/persistence-and-state.md)

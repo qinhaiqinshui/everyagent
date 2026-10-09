@@ -1490,13 +1490,13 @@ public class WorkerProperties implements WorkerConfig {
      */
     public static class Search {
         /** rg 进程超时(ms):超时强杀,返回已完成部分并置 truncated。默认 60000。 */
-        private long rgTimeoutMs = 60_000;
+                private long rgTimeoutMs = 60_000;
         /**
-         * 文件结果上限缺省({@code fs.search}/{@code fs.find} 的 maxResults 入参缺省值;
-         * 触顶即 kill rg 置 truncated)。默认 1000。
+         * 文件类 provider(file-content / file-name)自持的结果上限:统一 search 核心契约
+         * 不含 maxResults,上限归各 provider 自己;触顶即 kill rg 置 truncated。默认 1000。
          */
         private int fileMaxResults = 1000;
-        /** 任务结果上限缺省({@code task.search} 的 maxResults 入参缺省值)。默认 500。 */
+        /** task provider 自持的结果上限(统一 search 核心契约不含 maxResults)。默认 500。 */
         private int taskMaxResults = 500;
         /**
          * 应答内联阈值(字节):搜索应答序列化总字节数不超过该值即整包内联进 rpc.ok。
@@ -1509,14 +1509,12 @@ public class WorkerProperties implements WorkerConfig {
          * 文件/任务项,不撕裂;复用 fs.read 口径 §5.4;<b>仅作用于搜索应答</b>,
          * fs.read 自身行为不变)。默认 196608。
          */
-        private int chunkBytes = 196608;
+                private int chunkBytes = 196608;
         /**
-         * 单 provider 超时预算(ms):fs.search/fs.find/task.search/mention.query 的插件
-         * SearchProvider 系能力调用护栏(SearchProviderInvoker)。0 = 不限时(仅异常护栏,
-         * 与机制引入前的行为一致);超时按异常同款处理 WARN 跳过。默认 0。
+         * 单 provider 超时预算(ms):统一 search / mention.query 的 SearchProvider 调用护栏
+         * (SearchProviderInvoker)。0 = 不限时(仅异常护栏);超时按异常同款处理 WARN 跳过。默认 0。
          */
         private long providerTimeoutMs = 0;
-
         public long getRgTimeoutMs() {
             return rgTimeoutMs;
         }

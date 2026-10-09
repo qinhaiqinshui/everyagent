@@ -127,15 +127,11 @@ worker:
   search:
     # rg 进程超时(ms):超时强杀,返回已完成部分并置 truncated。
     rg-timeout-ms: 60000
-    # fs.search/fs.find 的 maxResults 入参缺省(触顶即 kill rg 置 truncated)。
-    file-max-results: 1000
-    # task.search 的 maxResults 入参缺省。
-    task-max-results: 500
+    
     # 应答内联阈值(字节):搜索应答总字节数不超过即整包内联进 rpc.ok(复用 fs.read
     # 口径 §5.4;仅作用于搜索应答,fs.read 自身不受本配置影响)。
     inline-max-bytes: 262144
-    # 切批阈值(字节):超过内联阈值按此切批走 rpc.data(批项 = 完整文件/任务项,不撕裂)。
-    chunk-bytes: 196608
+    
     # 单 provider 超时预算(ms):0 = 不限时,仅异常护栏;超时按异常同款 WARN 跳过该 provider。
     provider-timeout-ms: 0
   permissions:

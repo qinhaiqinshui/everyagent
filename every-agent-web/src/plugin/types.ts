@@ -14,6 +14,7 @@
  */
 
 import type { ComponentType, ReactNode } from 'react'
+import type { SearchTypeDefinition } from '@everyagent/plugin-api'
 import type { ToolViewProps } from '@/components/task/toolViews/types'
 import type {
   ChatComposerDraftState,
@@ -282,3 +283,12 @@ export interface UiRoundTailPanelDefinition {
   /** 渲染组件。 */
   Component: ComponentType<RoundTailPanelProps>
 }
+
+/**
+ * 搜索类型定义（web 内部类型，对齐 plugin-api 的 `SearchTypeDefinition`）。
+ *
+ * 内置三类型与插件贡献同用此形状；检索注册表合并、按 `order` 升序混排。
+ * 过滤字段（`filters`）与自定义渲染（`FilterView` / `ResultView`）均来自此定义，
+ * 核心面板不硬编码任何类型字段。
+ */
+export type UiSearchTypeDefinition = SearchTypeDefinition

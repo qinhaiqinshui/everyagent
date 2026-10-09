@@ -17,7 +17,7 @@ has_children: false
 | `ChatModelEnhancer` | `model` | `registerChatModelEnhancer`（:66） | `ChatModelEnhancerRegistry` | `ChatModelFactory` 构建期委托 | model-pool（唯一） |
 | `TokenEstimator` | `spi` | `registerTokenEstimator`（:63） | 无（直接替换 `WorkerServicesImpl` 持有实例） | `WorkerServices.tokenEstimator()` 的全部调用方 | model-rate-limit |
 | `SkillContributor` | `skill` | `registerSkillContributor`（:60） | `SkillContributorRegistry` | `SkillAdvisor` 合流进 system prompt + `SkillSlashProvider` 并入 `/` 菜单 | subagent（唯一） |
-| `SearchProvider` | `spi` | `registerSearchProvider`（:51） | `SearchProviderRegistry` | `fs.search` / `task.search` 增补聚合；能力接口 `FileNameSearchProvider`（fs.find）/ `SuggestionProvider`（mention.query）（§6） | **无** |
+| `SearchProvider` | `spi` | `registerSearchProvider`（:51） | `SearchProviderRegistry` | 统一 `search` 聚合（内置 `file-content`/`file-name`/`task` 三 provider 与插件 provider 同权，按 `order` 升序聚合）；能力接口 `SuggestionProvider`（mention.query，`SearchProvider` 子接口）（§6） | **无** |
 | `AuthorizationHandler` | `permission` | `registerAuthorizationHandler`（:54） | `AuthorizationHandlerRegistry` | `GrantRegistry` 授权决议链 | ai-review、unattended |
 
 所有注册方法的 worker 实现（`every-agent-worker/src/main/java/dev/everyagent/worker/plugin/WorkerPluginContextImpl.java:131,141,146,161,171,177`）都只是往注册表 `add` 一行（TokenEstimator 例外：调 `WorkerServicesImpl.replaceTokenEstimator` 原位换实例）。
@@ -245,48 +245,48 @@ public interface SkillContributor {
 1. ~~`/` 菜单数据源不含 `SkillContributorRegistry`~~ **（已并入）**：`SkillSlashProvider` 现按「内置（`BuiltInSkills.getAllSkills()`）→ 插件 SPI（`SkillContributorRegistry.getSkills()`）→ 外部（`ExternalSkillScanner.scan()`）」三路合并进 `/` 菜单（`every-agent-worker/src/main/java/dev/everyagent/worker/slash/SkillSlashProvider.java` 的 `load()`），同 id 去重、优先级 **内置 > 插件 SPI > 外部扫描**——SPI 是插件自己的声明（title/description 完整），外部扫描捞到同 id 只是知识包物化的副产品，不重复出菜单。插件条目与内置同 group（Skills）/icon/opaque token（`system.skill`，选中执行路径与内置完全一致），仅副标题带「插件 · 」前缀区分来源；无插件贡献时菜单与两路合并时代完全一致（零回归）。subagent 的 `agent-dispatch` 现经 SPI 以完整标题（「子 Agent」）进菜单（此前靠 `ExternalSkillScanner` 以目录名形态捞进菜单）；其知识包物化到 skillsDir 的行为**保留**——那是 AI 能 `read_file` 知识包的必要条件，与进菜单与否无关。
 2. `skill.md` 的 id 规则与菜单副标题提取等扫描约定见 [`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) §7.12「skill 目录结构与外部 skill」；本篇不展开。
 
-## 6. SearchProvider —— 搜索后端（已接线：fs.search / task.search / fs.find / mention.query 增补聚合）
+## 6. SearchProvider —— 搜索后端（统一 search 聚合 + mention.query 能力接口）
 
-**机制**：插件经 `ctx.registerSearchProvider` 注册的搜索后端由 worker 的两条搜索 RPC 消费——`fs.search`（文件，`searchFiles`）与 `task.search`（任务，`searchTasks`）。聚合语义是**增补而非替换**：内置 ripgrep 结果在前，各 provider 按 `order()` 升序（同 order 保持注册先后）追加在后，按位置键去重（文件 `path+lineNumber+matchIndex` / 任务 `taskId+roundIndex+field+matchIndex`），合并后仍受 `maxResults` 触顶约束（触顶置 `truncated`）。实现住在两个入口服务里：`FsSearchService.mergeProviderResults`（`every-agent-worker/src/main/java/dev/everyagent/worker/modules/FsSearchService.java`）与 `TaskSearchService.mergeProviderResults`（`.../task/TaskSearchService.java`），[`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) §7 两条 RPC 行与 §8.5 为契约口径。
+**机制**：worker 只提供**一个**统一 `search` RPC（取代旧 `fs.search` / `fs.find` / `task.search`，[`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) §5.5 / §8.5 为契约口径），核心**零类型感知**——只「遍历 `SearchProviderRegistry`（可选按 `kinds` 过滤）→ 触发 provider → 聚合」。插件经 `ctx.registerSearchProvider` 注册的搜索后端（ElasticSearch/向量检索等）与**内置三引擎**（`file-content` / `file-name` / `task`，均实现 `SearchProvider`、启动装配期注册）**同权**：各 provider 按 `order()` 升序（同 order 保持注册先后）参与聚合，按位置键去重（`file-content` 沿用 `path+lineNumber+matchIndex` / `task` 沿用 `taskId+roundIndex+field+matchIndex` / `file-name` 按 `path`）。**核心不解释** `pattern` 与不透明 `filters` 袋，也不含 `maxResults`/`isRegex`/`include`/`exclude`/`scope` 等具名字段——它们是各 provider 自己声明的过滤字段（§6.1）。实现入口在 worker 侧的 `SearchProviderRegistry.getProviders()` + `SearchProviderInvoker`（`every-agent-worker/src/main/java/dev/everyagent/worker/plugin/registry/SearchProviderRegistry.java`）。
 
 **无害性保证**（写插件时可以依赖的行为契约）：
 
-- 注册表为空 → 两条 RPC 行为与无插件时**完全一致**（聚合入口直接原样返回内置结果）；
+- 注册表为空 → 统一 `search` 行为与无插件时**完全一致**（聚合入口直接原样返回内置结果）；
 - provider 返回 `null`/空列表 → 不加任何项、不报错；
 - 单个 provider 抛异常 → 仅 WARN 跳过，其余 provider 与整体应答不受影响；
 - 内置 rg 不可用但注册了 provider → 跳过内置 rg、仅聚合 provider 结果（无 provider 时保持原「rg 不可用」可读报错）。
 
 **实现要点**（`every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/spi/SearchProvider.java:22-65`）：
 
-- `id()` + `searchFiles(SearchRequest)` + `searchTasks(TaskSearchRequest)`；请求带 `workspaceId`（工作区未注册进注册表时可能为 null）+ `workspaceRoot` + 完整 pattern 语义（`isRegex/caseSensitive/wholeWord/includeGlobs/excludeGlobs/maxResults`）。
+- `id()`（providerId）+ `order()`（`default 0f`，可选覆写）+ `kinds()`（`default` 空集合 = 不参与统一 `search`，供核心按请求 `kinds` 数据过滤）+ `search(SearchRequest)`（**唯一统一入口**，`default` 空实现）；`SearchRequest(workspaceId, workspaceRoot, pattern, filters, kinds)` 带工作区 id（工作区未注册进注册表时可能为 null）+ 工作区根 + 搜索词 + 不透明 `filters` 袋 + 请求 kinds；**过滤字段（`isRegex`/`caseSensitive`/`wholeWord`/`include`/`exclude`/`scope`…）由各 provider 自持、经 `filters` 袋按 `${kind}.${field}` 命名空间透传**，**核心 RPC 契约无 `maxResults`**（结果上限由 provider 自持）。
 - `order()`（`default 0f`，可选覆写）：聚合顺序权重——**值小者先执行、结果先并入聚合**（升序 = 执行/返回序，与 `AuthorizationHandler#order()` 坐标约定一致，float 允许任意插位）。见下「顺序与生命周期」。
-- 结果形状与两条 RPC 的应答项一致：`SearchResult.path` 为工作区相对 posix 路径；`TaskSearchResult.Match.line` 为命中字段的**干净文本**（与 `task.search` 应答的 `line` 一致，非行号——行内定位用 `matchIndex`）。
+- 结果形状：`search` 返回 `SearchResult(items, truncated)`，项为通用 `SearchResultItem(kind, providerId, score, positionKey, fields)`；`fields` 为展示字段袋（`file-content` 带 `path/lineNumber/line/matchIndex/matchText`，`task` 带 `taskId/title/status/roundIndex/field/line/matchIndex/matchText`，`file-name` 只带 `path`），核心原样透传（`task` 的 `line` 为命中字段的**干净文本**，行内定位用 `matchIndex`）；`positionKey` 为**该 kind 内的位置键、由 provider 自持**（`file-content` = `path+lineNumber+matchIndex`、`file-name` = `path`、`task` = `taskId+roundIndex+field+matchIndex`），核心按 `kind`+`positionKey` 去重；`truncated` = 本 provider 自身触顶（结果上限）标志，聚合方取各 provider 的「或」。结果项可选增补字段 `providerId`/`score` 语义见 §8.5（自带 `providerId` 则尊重不覆盖，否则由聚合方填 `id()`）。
 - 典型场景：search-es（ElasticSearch）、search-vector（向量检索）等在工作区外维护索引的引擎，把索引命中补充进前端搜索结果。
 
 **顺序与生命周期**（`order()` + 卸载自动反注册，`SearchProviderRegistry` 为实现侧）：
 
-- **排序**：注册表在注册时按 `order()` 升序**有序插入**，同 order 保持注册先后（稳定排序）；`fs.search` / `task.search` 直接按该序列增补聚合，消费代码零排序逻辑。全部插件都不覆写 `order()` 时保持原有注册序，行为不变。插位建议：低权重（如 `-10f`）给「快而粗」的先返回引擎，高权重给「慢而全」的兜底引擎。
+- **排序**：注册表在注册时按 `order()` 升序**有序插入**，同 order 保持注册先后（稳定排序）；统一 `search` 直接按该序列聚合，消费代码零排序逻辑。全部插件都不覆写 `order()` 时保持原有注册序，行为不变。插位建议：低权重（如 `-10f`）给「快而粗」的先返回引擎，高权重给「慢而全」的兜底引擎。
 - **生命周期（卸载自动反注册）**：`WorkerPluginContextImpl` 按插件维护「已注册 providers」登记清单（每个上下文绑定唯一插件 id，即 pluginId → providers 映射）；worker 优雅关闭时 `PluginLoader` 在 `@PreDestroy` 逐插件调用 `deactivate()` 之后**兜底反注册**其注册的全部 SearchProvider（`SearchProviderRegistry.unregisterAll(Collection)` 批量移除，返回实际移除数），provider 不残留、重复调用幂等。注意：运行期 `plugin.disable` / `plugin.uninstall` 只改禁用名单/删除目录，**不触发运行时反注册**——已激活插件的贡献留在注册表直到 worker 重启（与 `PluginStateStore`「重启 worker 后生效」口径一致，契约见 [`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) §8.5「registry 顺序与生命周期」）。排序与批量反注册行为由 `SearchProviderRegistryTest` / `WorkerPluginContextSearchUnregisterTest` 钉住。
 
-**范例**：暂无内置插件注册（26 个内置插件零使用）；聚合/去重/触顶/异常跳过行为由 `FsSearchServiceTest` / `TaskSearchServiceTest` 的 StubProvider 用例钉住。若接线前曾按旧 Javadoc 期待「ripgrep 变为默认插件 search-ripgrep、provider 替换后端」——现行语义是增补聚合，不替换。
+**范例**：暂无插件注册（内置插件零使用）；聚合/去重/触顶/异常跳过行为由搜索相关单测（`SearchProviderRegistryTest` 等）的 StubProvider 用例钉住。**注意**：内置 `file-content` / `file-name` / `task` 三引擎本身就是按 `SearchProvider` 落地的内置 provider，插件 provider 与它们同权聚合——**不替换后端**。
 
-### 6.1 能力接口扩展：FileNameSearchProvider / SuggestionProvider（已接线：fs.find / mention.query 增补聚合）
+### 6.1 能力接口扩展：SuggestionProvider（mention.query）
 
-**机制**（[`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) §8.5「能力接口扩展」）：`FileNameSearchProvider`（`findFiles` → `fs.find`）与 `SuggestionProvider`（`suggest` → `mention.query`）是 `SearchProvider` 的**子接口**，与基接口同住 spi 包、**同样经 `ctx.registerSearchProvider` 注册**——注册/反注册生命周期零改动（`WorkerPluginContextImpl` 的登记清单与 `unregisterAll` 兜底原样覆盖）。registry 按**接口分派**能力：`SearchProviderRegistry.getFileNameProviders()` / `getSuggestionProviders()` 从**同一份** order 有序存储按 `instanceof` 过滤（不另建第二份存储，order/快照语义与 `getProviders()` 一致），因此**一个 provider 对象可同时实现多个能力接口**（例：同一「最近文件索引」对象既补 fs.find 又补 @ 建议）。
+**机制**（[`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) §8.5「能力接口扩展」）：`SuggestionProvider`（`suggest(SuggestRequest)`，供 `mention.query` 的 @ 建议增补）是 `SearchProvider` 的**子接口**，与基接口同住 spi 包、**同样经 `ctx.registerSearchProvider` 注册**——注册/反注册生命周期零改动（`WorkerPluginContextImpl` 的登记清单与 `unregisterAll` 兜底原样覆盖）。registry 按**接口分派**能力：`SearchProviderRegistry.getSuggestionProviders()` 从**同一份** order 有序存储按 `instanceof` 过滤（不另建第二份存储，order/快照语义与 `getProviders()` 一致）。**注意**：旧的 `FileNameSearchProvider`（`findFiles`）能力接口与 `SearchProviderRegistry.getFileNameProviders()` **已删除**——「文件名搜索」现只是内置 provider 的一个 kind（`file-name`），不再是独立能力接口。
 
-- `fs.find` 增补语义：内置 `rg --files` + basename 匹配结果在前，各 provider 按 `order()` 升序追加，按 `kind=file`+`path` 去重（find 结果恒为文件，即按 path 去重），合并后仍受 `maxResults` 触顶约束（触顶置 `truncated`）；rg 不可用但注册了该能力 provider 时跳过内置 rg、仅聚合 provider 结果（与 fs.search 同款）。实现：`FsSearchService.mergeFindProviderResults`。
 - `mention.query` 增补语义：**仅搜索模式**（非空 query）在内置四档打分排序结果之后按 `order()` 升序追加，按 `kind`+`path` 去重（kind 缺省归一 `file`），总条数仍截断 10 条（mention 应答无 `truncated` 标志，与内置静默截断一致）；浏览模式（空 query 列目录顶层）不经 provider。实现：`SlashMethods.appendProviderSuggestions`。
-- 护栏与 fs.search/task.search 完全同款：单个 provider 抛异常/超出超时预算（`worker.search.provider-timeout-ms`，默认 0 不限时）仅 WARN 跳过（共用 `SearchProviderInvoker`）；未注册任何实现该能力接口的对象时零额外行为；只实现基接口的 provider 对这两条 RPC 零影响（instanceof 过滤不命中）。
+- 护栏与统一 `search` 完全同款：单个 provider 抛异常/超出超时预算（`worker.search.provider-timeout-ms`，默认 0 不限时）仅 WARN 跳过（共用 `SearchProviderInvoker`）；未注册任何实现该能力接口的对象时零额外行为；只实现基接口的 provider 对该链路零影响（instanceof 过滤不命中）。
 
-**实现要点**（`every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/spi/FileNameSearchProvider.java` 与 `.../spi/SuggestionProvider.java`）：
+**实现要点**（`every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/spi/SuggestionProvider.java`）：
 
-- `FileNameSearchProvider`：`id()` + `order()`（继承）+ 基接口两方法（可不实现逻辑，返回空列表）+ `findFiles(FindRequest)`。`FindRequest` 与 `fs.find` 入参同族（`pattern/isRegex/caseSensitive/wholeWord/includeGlobs/excludeGlobs/maxResults` + `path` 搜索范围）；`FileResult(path)` 为工作区相对 posix 路径（单文件一项，无 matches 字段）。
-- `SuggestionProvider`：`suggest(SuggestRequest)`；`SuggestRequest(workspaceId, workspaceRoot, query, path)`（`query` 为用户已输入的 @ 搜索词）；`Suggestion(path, kind)`（`kind` 缺省归一 `file`，有 `Suggestion(path)` 便捷构造；建议项排序由 provider 自理——调用方按返回序并入聚合）。
+- `SuggestionProvider extends SearchProvider`：只新增 `suggest(SuggestRequest)`；基接口的 `search` / `kinds` 用**缺省空实现**（不覆写即不参与统一 `search`，`kinds` 缺省空集合）；`id()` 仍为必实现（结果项聚合时作 `providerId` 兜底）。
+- `SuggestRequest(workspaceId, workspaceRoot, query, path)`：`query` 为用户已输入的 @ 搜索词（非空，已 trim）、`path` 为浏览基准目录的工作区相对 posix 路径（缺省 `.` = 根）、`workspaceId` 在工作区未注册进注册表时可能为 null。
+- `Suggestion(path, kind, providerId, score)`：`path` 为工作区相对 posix 路径（应答派生 `name`，不要求文件当前在磁盘上存在）；`kind` 缺省归一 `file`（去重键 `kind`+`path`）；可选增补字段 `providerId`（聚合时由 worker 填 `provider.id()`，自带则尊重不覆盖）与 `score`（仅排序提示）可空、null 时序列化省略；有 `Suggestion(path, kind)` / `Suggestion(path)` 两个便捷构造；建议项排序由 provider 自理——调用方按返回序并入聚合。
 
-**示例**（同一对象实现两个能力接口，注册一次即可）：
+**示例**（只实现 `SuggestionProvider`，注册一次即可）：
 
 ```java
-public final class RecentFilesPlugin implements FileNameSearchProvider, SuggestionProvider {
+public final class RecentFilesPlugin implements SuggestionProvider {
 
     @Override
     public String id() { return "recent-files"; }
@@ -294,37 +294,21 @@ public final class RecentFilesPlugin implements FileNameSearchProvider, Suggesti
     @Override
     public float order() { return -10f; } // 「快而粗」的索引命中先返回
 
-    // ---- 基接口（本插件不参与内容搜索，空实现即可） ----
-
-    @Override
-    public List<SearchResult> searchFiles(SearchRequest req) { return List.of(); }
-
-    @Override
-    public List<TaskSearchResult> searchTasks(TaskSearchRequest req) { return List.of(); }
-
-    // ---- 能力接口：fs.find 增补 ----
-
-    @Override
-    public List<FileResult> findFiles(FindRequest req) {
-        // basename 命中最近打开索引（含被 .gitignore 剪掉、rg 枚举不到的文件）
-        return index.matchNames(req.pattern(), req.isRegex(), req.maxResults())
-                .stream().map(FileResult::new).toList();
-    }
-
-    // ---- 能力接口：mention.query 增补 ----
+    // ---- mention.query 能力接口（search / kinds 用基接口缺省空实现，不参与统一 search） ----
 
     @Override
     public List<Suggestion> suggest(SuggestRequest req) {
+        // basename 命中最近打开索引（含被 .gitignore 剪掉、rg 枚举不到的文件）
         return index.fuzzy(req.query(), 10)
                 .stream().map(p -> new Suggestion(p)).toList(); // kind 缺省 file
     }
 }
 
-// activate() 里注册一次，两条能力同时生效（反注册生命周期与基接口一致）：
+// activate() 里注册一次，mention.query 增补生效（反注册生命周期与基接口一致）：
 ctx.registerSearchProvider(new RecentFilesPlugin());
 ```
 
-聚合/去重/截断/异常跳过行为由 `FsSearchServiceTest`（StubNameProvider 用例）/ `SlashMethodsMentionProviderTest`（StubSuggester 用例）/ `SearchProviderRegistryTest`（capabilityDispatch 用例）钉住。
+聚合/去重/截断/异常跳过行为由 `SearchServiceTest`（统一 search 聚合用例）/ `SearchProviderRegistryTest`（聚合 + capabilityDispatch 用例）/ `SlashMethodsMentionProviderTest`（StubSuggester 用例）钉住。
 
 ## 7. AuthorizationHandler —— 授权决议链节点
 

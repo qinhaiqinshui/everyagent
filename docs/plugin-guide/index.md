@@ -39,7 +39,7 @@ has_children: false
 | [backend/persistence-and-state.md](backend/persistence-and-state.md) | 插件私有数据的合法存放（`pluginDir()` + 自注册 RPC）、两种禁用机制 | **已成文** |
 | [web/overview-and-loading.md](web/overview-and-loading.md) | 前端加载链路、bare import 白名单、为何必须 `import type` | **已成文** |
 | [web/context-api.md](web/context-api.md) | `ctx.ui / sdk / events / fs / storage / commands` 逐个方法与 Disposable 语义 | **已成文** |
-| [web/ui-extensions.md](web/ui-extensions.md) | 12 个 UI 扩展点逐个成节：字段表 + 注册代码 + 排序规则 | **已成文** |
+| [web/ui-extensions.md](web/ui-extensions.md) | 13 个 UI 扩展点逐个成节：字段表 + 注册代码 + 排序规则 | **已成文** |
 | [web/events.md](web/events.md) | 宿主事件全集与 plugin-api 具名事件、`subscribe` / `getExtensionsVersion` 快照机制 | **已成文** |
 | [guides/build-and-run.md](guides/build-and-run.md) | 三形态构建矩阵、插件不进 reactor 的独立构建、cwd 决定内置插件是否被加载 | **已成文** |
 | [guides/packaging-and-install.md](guides/packaging-and-install.md) | `.eap` 包内部布局、6 个 `plugin.*` RPC 现状、手工安装目录布局 | **已成文** |
@@ -98,7 +98,7 @@ worker 侧的判定规则（`every-agent-worker/src/main/java/dev/everyagent/wor
 |---|---|---|---|
 | 后端 | `WorkerPluginContext` 自身的 `register*` 方法 | 13 | 下表分组 |
 | 后端 | 继承自 `TaskPluginContext` 的 `register*` | 2 | [任务生命周期与 RPC](backend/task-and-rpc.md) |
-| 前端 | `ctx.ui` 的 `register*` 扩展点 | 12 | [UI 扩展点](web/ui-extensions.md) |
+| 前端 | `ctx.ui` 的 `register*` 扩展点 | 13 | [UI 扩展点](web/ui-extensions.md) |
 | 前端 | `ctx.ui` 的动作方法（开 tab / 开文件 / 开 diff / 写 composer） | 5 | [PluginContext API](web/context-api.md) |
 | 前端 | `ctx` 能力域（`ui` / `sdk` / `events` / `fs` / `storage` / `commands`） | 6 | [PluginContext API](web/context-api.md) |
 | 前端 | `PluginDomainEvent` 具名事件（其余靠 `(string & {})` 兜底） | 9 | [事件](web/events.md) |

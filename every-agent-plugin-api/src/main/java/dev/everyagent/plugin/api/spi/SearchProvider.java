@@ -1,145 +1,110 @@
 package dev.everyagent.plugin.api.spi;
 
-import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
-import com.fasterxml.jackson.annotation.JsonInclude;
-
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 /**
- * 搜索后端提供者 SPI —— 插件实现此接口提供不同搜索引擎。
+ * 统一搜索后端 SPI —— 插件/内置引擎实现此接口提供一个搜索"类型(kind)"的后端。
  *
- * <p><b>接线语义(增补聚合,架构 §8.5)</b>:插件经 {@code ctx.registerSearchProvider}
- * 注册的后端由 worker 的 {@code fs.search}({@link #searchFiles})与
- * {@code task.search}({@link #searchTasks})在完成内置 ripgrep 搜索后按
- * {@link #order()} 升序(同 order 保持注册先后)<b>增补聚合</b>——内置结果在前、
- * 各 provider 结果追加在后,按 {@code kind}+该 kind 位置键去重(file 沿用
- * {@code path+lineNumber+matchIndex} / task 沿用 {@code taskId+roundIndex+field+matchIndex},
- * 未声明 kind 的结果按所在 RPC 归一,跨 kind 不判重),合并后仍受 {@code maxResults}
- * 触顶约束;单个 provider 抛异常仅 WARN 跳过;注册表为空时零额外行为。结果形状与
- * 两条 RPC 的应答项一致(如 {@code SearchResult.path} 为工作区相对 posix 路径),
- * 且适用统一搜索结果模型(§8.5)的三个可选增补字段 {@code kind}/{@code providerId}/
- * {@code score}(见 {@link SearchResult});聚合时 provider 结果项由 worker 填
- * {@code providerId=provider.id()}(自带则尊重不覆盖),内置 rg 结果项标记
- * {@link #BUILTIN_PROVIDER_ID}。{@code SearchRequest.workspaceId} 在工作区未注册进
- * 注册表时可能为 null。
+ * <p><b>统一 search 语义(架构 §8.5)</b>:worker 的统一 {@code search} RPC 核心<b>零类型感知</b>
+ * ——它只做「遍历 SearchProvider 注册表(可选按请求 {@code kinds} 数据过滤)→ 逐个
+ * {@link #search}({@link SearchRequest}) 触发 → 按 {@code kind}+位置键去重聚合」。核心
+ * <b>不 import、不 switch</b> 任何具体类型:它不知道有哪些 kind、也不知道 kind→方法 的映射。
+ * 每个 provider 通过 {@link #kinds()} 声明自己服务的 kind 集合,供核心按请求 {@code kinds} 过滤。
  *
- * <p>典型场景:search-es(ElasticSearch 后端)、search-vector(向量搜索)等在工作区
- * 外维护索引的引擎,经本 SPI 把索引命中补充进前端搜索结果。
+ * <p><b>入参(核心四要素)</b>:统一 search RPC 入参只有 {@code workspace} / {@code pattern} /
+ * {@code kinds?} / {@code filters?};核心<b>不解释</b> {@code pattern} 与 {@code filters} 的内容,
+ * 原样透传给各 provider。{@link SearchRequest#filters()} 是<b>不透明参数袋</b>(key→value 的 Map),
+ * key 约定为 {@code ${kind}.${field}} 命名空间(如 {@code file-content.isRegex}、
+ * {@code file-content.include}、{@code task.wholeWord});<b>由各 provider 按自身 kind 前缀读取</b>,
+ * 核心只透传整个袋、绝不解释其 key/value。过滤字段的解释(正则/大小写/全字/包含/排除/范围)与
+ * 各自的结果上限、默认排除目录等职责,一律属 provider。
+ *
+ * <p><b>结果项</b>:{@link SearchResultItem} 是通用结果项 —— 至少携带 {@link SearchResultItem#kind()}
+ * (provider 自持类别)与 {@link SearchResultItem#positionKey()}(该 kind 内的位置键,用于跨 provider
+ * 同 kind 同位置去重);展示字段放进 {@link SearchResultItem#fields()} 袋(如 file-content 的
+ * {@code path/lineNumber/line/matchIndex/matchText}、task 的 {@code taskId/title/status/roundIndex/field/...}),
+ * 核心不解释字段语义、原样透传。可选增补字段 {@code providerId}/{@code score} 语义与旧统一模型一致:
+ * {@code providerId} 结果项自带则尊重不覆盖、否则由聚合方填 {@link #id()};{@code score} 仅排序提示,
+ * worker 不依它重排。
+ *
+ * <p><b>护栏</b>:单个 provider 抛异常/超出超时预算仅 WARN 跳过,不影响其余结果与应答;
+ * {@link SearchResult#truncated()} 为该 provider 自身触顶(结果上限)标志,聚合方取各 provider 的「或」。
+ *
+ * <p><b>能力接口</b>:{@link SuggestionProvider}({@code mention.query} 的 {@code @} 建议,独立于搜索面板)
+ * 是 {@link SearchProvider} 的子接口,同样经 {@code ctx.registerSearchProvider} 注册;
+ * 其 {@code suggest} 与统一 search 无关,故 {@link #search} / {@link #kinds()} 均为默认空实现。
  */
 public interface SearchProvider {
 
-    /**
-     * 统一搜索结果模型(§8.5)的内置 rg 来源 id:worker 内置 ripgrep 引擎产出的结果项
-     * 固定标记此值;providerId 缺省亦视为来源 builtin.rg。
-     */
-    String BUILTIN_PROVIDER_ID = "builtin.rg";
-
-    /** 统一搜索结果模型(§8.5)kind 开放集合的内置类别:fs.search / fs.find 结果项。 */
-    String KIND_FILE = "file";
-
-    /** 统一搜索结果模型(§8.5)kind 开放集合的内置类别:task.search 结果项。 */
-    String KIND_TASK = "task";
-
-    /** 引擎 id(provider 结果项聚合时由 worker 填入 providerId,自带则尊重不覆盖)。 */
+    /** 引擎 id(结果项聚合时由 worker 填入 providerId,结果项自带则尊重不覆盖)。 */
     String id();
 
     /**
-     * kind 归一(§8.5):null/空白回退到所在 RPC 的缺省类别(fs.search / fs.find →
-     * {@link #KIND_FILE},task.search → {@link #KIND_TASK})。仅用于聚合去重键与应答
-     * 标记——记录字段本身保持可空(null = 缺省语义,序列化省略),保证未声明 kind 的
-     * provider 与现状完全一致。
-     */
-    static String normalizeKind(String kind, String defaultKind) {
-        return kind == null || kind.isBlank() ? defaultKind : kind;
-    }
-
-    /**
-     * providerId 补齐(§8.5):结果项已自带非空 providerId 时尊重不覆盖,否则回退
-     * 聚合方传入的来源 id(调用方传 {@link #id()})。
-     */
-    static String providerIdOr(String providerId, String fallback) {
-        return providerId == null || providerId.isBlank() ? fallback : providerId;
-    }
-
-    /**
      * 聚合顺序权重:值小者先执行、结果先并入聚合(升序 = 执行/返回序)。
-     * 与 {@link dev.everyagent.plugin.api.permission.AuthorizationHandler#order()}
-     * 坐标约定一致,float 允许任意插位;同 order 的 provider 保持注册先后(稳定排序)。
+     * 内置引擎占很小的值(排在插件 provider 之前)。同 order 保持注册先后(稳定排序)。
      */
     default float order() {
         return 0f;
     }
 
     /**
-     * 文件内容搜索。
-     *
-     * @param req 搜索请求
-     * @return 搜索结果列表
+     * 本 provider 服务的 kind 集合(如内置 {@code file-content}/{@code file-name}/{@code task};
+     * 插件自定义 {@code image} 等)。统一 search 核心按请求 {@code kinds} 与本次集合取交集过滤
+     * 要跑的 provider;<b>缺省空集合</b>表示本 provider 不参与统一 search(如仅 {@code suggest} 的
+     * {@link SuggestionProvider})。
      */
-    List<SearchResult> searchFiles(SearchRequest req);
+    default Set<String> kinds() {
+        return Set.of();
+    }
 
     /**
-     * 任务内容搜索。
-     *
-     * @param req 任务搜索请求
-     * @return 任务搜索结果列表
+     * 统一搜索入口:{@code req} 携带工作区根/工作区 id/搜索词/不透明过滤袋/请求 kinds;
+     * 返回本 provider(其自身 {@link #kinds()} 声明的 kind)的扁平结果项 + 自身触顶标志。
+     * <b>缺省空实现</b>(仅能力接口 {@link SuggestionProvider} 不参与统一 search)。
      */
-    List<TaskSearchResult> searchTasks(TaskSearchRequest req);
+    default SearchResult search(SearchRequest req) {
+        return SearchResult.empty();
+    }
 
-    /** 文件搜索请求。 */
+    /**
+     * providerId 补齐:{@code providerId} 已自带非空时尊重不覆盖,否则回退聚合方传入的
+     * 来源 id(调用方传 {@link #id()})。
+     */
+    static String providerIdOr(String providerId, String fallback) {
+        return providerId == null || providerId.isBlank() ? fallback : providerId;
+    }
+
+    /**
+     * 统一 search 入参(核心四要素的载体):{@code workspaceRoot}/{@code workspaceId} 由核心经
+     * 沙箱 jailed 落定;{@code pattern} 与 {@code filters} 核心不解释;{@code kinds} 为请求过滤
+     * (缺省空 = 全部已注册 provider)。{@code workspaceId} 在工作区未注册进注册表时可能为 null。
+     */
     record SearchRequest(String workspaceId, Path workspaceRoot, String pattern,
-            boolean isRegex, boolean caseSensitive, boolean wholeWord,
-            List<String> includeGlobs, List<String> excludeGlobs, int maxResults) {}
+            Map<String, Object> filters, List<String> kinds) {
+    }
 
-    /**
-     * 文件搜索结果项。统一搜索结果模型(§8.5)的三个可选增补字段 {@code kind}(开放集合,
-     * 本 RPC 缺省 {@code file})/{@code providerId}(缺省视为 {@code builtin.rg},聚合时由
-     * worker 填 {@code provider.id()})/{@code score}(仅排序提示,worker 不依它重排)均可空,
-     * null 时序列化省略。
-     */
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    @JsonInclude(JsonInclude.Include.NON_NULL)
-    record SearchResult(String path, int lineNumber, String line, int matchIndex, String matchText,
-            String kind, String providerId, Double score) {
+    /** provider 搜索应答:{@code items} 扁平结果项;{@code truncated} = 本 provider 自身触顶标志。 */
+    record SearchResult(List<SearchResultItem> items, boolean truncated) {
 
-        /**
-         * 兼容构造:不带统一搜索结果模型(§8.5)的三个可选增补字段
-         * (kind/providerId/score = null,序列化省略,与旧版结构一致)。
-         */
-        public SearchResult(String path, int lineNumber, String line, int matchIndex, String matchText) {
-            this(path, lineNumber, line, matchIndex, matchText, null, null, null);
+        /** 空结果(无项、未触顶)。 */
+        public static SearchResult empty() {
+            return new SearchResult(List.of(), false);
         }
     }
 
-    /** 任务搜索请求。 */
-    record TaskSearchRequest(String workspaceId, String pattern,
-            boolean isRegex, boolean caseSensitive, boolean wholeWord, int maxResults) {}
-
     /**
-     * 任务搜索结果项。统一搜索结果模型(§8.5)的三个可选增补字段 {@code kind}(开放集合,
-     * 本 RPC 缺省 {@code task})/{@code providerId}(缺省视为 {@code builtin.rg},聚合时由
-     * worker 填 {@code provider.id()})/{@code score}(仅排序提示,worker 不依它重排)均可空,
-     * null 时序列化省略。
+     * 通用结果项:
+     * <ul>
+     *   <li>{@code kind} —— provider 自持类别(file-content / file-name / task / 插件自定义),必填;</li>
+     *   <li>{@code providerId}/{@code score} —— 可选增补字段(自带 providerId 则尊重不覆盖;score 仅排序提示);</li>
+     *   <li>{@code positionKey} —— 该 kind 内的位置键(同 kind 跨 provider 同位置去重),provider 自持;</li>
+     *   <li>{@code fields} —— 展示字段袋(如 path/lineNumber/... 或 taskId/roundIndex/...),核心原样透传。</li>
+     * </ul>
      */
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    @JsonInclude(JsonInclude.Include.NON_NULL)
-    record TaskSearchResult(String taskId, String title, String workspace, String workspaceId,
-            String status, List<Match> matches, String kind, String providerId, Double score) {
-
-        /**
-         * 兼容构造:不带统一搜索结果模型(§8.5)的三个可选增补字段
-         * (kind/providerId/score = null,序列化省略,与旧版结构一致)。
-         */
-        public TaskSearchResult(String taskId, String title, String workspace, String workspaceId,
-                String status, List<Match> matches) {
-            this(taskId, title, workspace, workspaceId, status, matches, null, null, null);
-        }
-
-        /**
-         * 单条命中:{@code line} 为命中字段的干净文本(与 {@code task.search} 应答项的
-         * {@code line} 一致,非行号;行内定位用 {@code matchIndex})。
-         */
-        public record Match(int roundIndex, String field, String line, int matchIndex, String matchText) {}
+    record SearchResultItem(String kind, String providerId, Double score, String positionKey,
+            Map<String, Object> fields) {
     }
 }

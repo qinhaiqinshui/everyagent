@@ -7,16 +7,16 @@ has_children: false
 
 # 前端 UI 扩展点
 
-**一句话定位**：`ctx.ui`（`UiRegistry`）是前端插件往宿主 UI 里「贡献界面」的唯一通道——12 个 `register*` 扩展点 + 5 个动作方法。本文逐扩展点给出 Definition 字段表（抄自纯类型包 `every-agent-plugin-api/js/index.ts`）、注册代码、宿主消费链与坑；每条断言附宿主源码行号。`ctx.ui` 的宿主实现是单例 `pluginDispatcher`（接入方式见[前端 ctx API](context-api.md) §8）。
+**一句话定位**：`ctx.ui`（`UiRegistry`）是前端插件往宿主 UI 里「贡献界面」的唯一通道——13 个 `register*` 扩展点 + 5 个动作方法。本文逐扩展点给出 Definition 字段表（抄自纯类型包 `every-agent-plugin-api/js/index.ts`）、注册代码、宿主消费链与坑；每条断言附宿主源码行号。`ctx.ui` 的宿主实现是单例 `pluginDispatcher`（接入方式见[前端 ctx API](context-api.md) §8）。
 
 ## 0. 读前须知：所有扩展点共用的四条机制
 
-1. **注册即入表，Disposable 真清理**：每个 `register*` 落到对应扩展点的 `ListExtensionRegistry`（普通数组 push，`every-agent-web/src/plugin/ExtensionRegistry.ts:45-56`），dispose 从数组 splice 并通知订阅者。注意 dispatcher 调 `register('', def)` 时**忽略 pluginId 形参**、一律传空串（`every-agent-web/src/plugin/PluginDispatcher.ts:241-242` 等 12 处）。
+1. **注册即入表，Disposable 真清理**：每个 `register*` 落到对应扩展点的 `ListExtensionRegistry`（普通数组 push，`every-agent-web/src/plugin/ExtensionRegistry.ts:45-56`），dispose 从数组 splice 并通知订阅者。注意 dispatcher 调 `register('', def)` 时**忽略 pluginId 形参**、一律传空串（`every-agent-web/src/plugin/PluginDispatcher.ts:241-242` 等 13 处）。
 2. **注册晚于首屏，宿主靠版本号重渲染**：插件 `activate()` 是异步的。宿主用 `React.useSyncExternalStore(pluginDispatcher.subscribeExtensionsChanged, pluginDispatcher.getExtensionsVersion)` 感知注册（`every-agent-web/src/components/app/Layout.tsx:139-141`、`every-agent-web/src/components/task/TaskChat.tsx:818-821`），注册后贡献立即上屏，**无需刷新页面**。
 3. **两条读取通道**：异步 `dispatch('ui.xxx')` / `get*()`（仅文件页侧栏在用，`FileTabPage.tsx:166`）与同步 `listRegistered*()`（其余消费点的实际用法，下文逐个给出）。
 4. **示例代码约束**（详见[加载链路](overview-and-loading.md)）：入口 `web/index.ts` 只能 `import type ... from '@everyagent/plugin-api'` + 白名单 bare import（react / react-dom / react/jsx-runtime / antd / @ant-design/icons）；`.ts` 文件里用 `React.createElement`，组件放 `.tsx` 可用 JSX。
 
-## 1. 十二个扩展点总览
+## 1. 十三个扩展点总览
 
 | 扩展点（dispatch 名） | register 方法 | 一句话 | 内置范例 |
 |---|---|---|---|
@@ -32,6 +32,7 @@ has_children: false
 | `ui.file_content_editors` | `registerFileContentEditor` | 按扩展名注册文件编辑器 | pdf-viewer（.pdf） |
 | `ui.file_explorer_actions` | `registerFileExplorerAction` | 文件树右键菜单项 | git（「显示 Git 历史」，追加在内置项尾部，见 §13） |
 | `ui.round_tail_panels` | `registerRoundTailPanel` | 任务轮末展示区 | file-change |
+| `ui.search_types` | `registerSearchType` | 注册搜索类型（id/label/kinds/filters/ResultView…） | ⚠️ 无内置范例（内置三类型不走此扩展点） |
 
 ## 2. `ui.sidebar_items` —— 侧边栏活动栏项
 
@@ -91,7 +92,7 @@ float 升序**统一混排**，不再有「内置在前、插件在后」的注�
 | 10 | 内置 settings「设置」 | `Layout.tsx:1078` |
 | 100 | 缺省 `DEFAULT_SIDEBAR_ORDER` | `Layout.tsx:1064` |
 
-注意 5 与 9 是**插件**取值不是内置位——插手别处请避开 1/2/3/10 四个内置占用；4（3 与 5 之间）、6~8、11~99 都是空位。其余 11 个扩展点**没有 order 字段**，一律「插件在前、按注册顺序」合并（§4/§7/§12 各自证据）。
+注意 5 与 9 是**插件**取值不是内置位——插手别处请避开 1/2/3/10 四个内置占用；4（3 与 5 之间）、6~8、11~99 都是空位。其余 12 个扩展点**没有 order 字段**，一律「插件在前、按注册顺序」合并（§4/§7/§12 各自证据）。
 
 ## 4. `ui.workspace_tab_types` —— 工作区标签类型
 
@@ -401,7 +402,55 @@ ctx.ui.registerRoundTailPanel(def)
 - **坑**：渲染 key 是 `pluginId`（`:437`）——同一插件注册两个轮末面板会 React key 冲突，一个插件只应注册一个。
 - **内置范例**：file-change（`every-agent-plugins/file-change/web/index.ts:15-26`，轮末文件变更视图 + 订阅 `task-round-closed`/`task-deleted` 作废缓存）。
 
-## 15. UiRegistry 动作方法（5 个）
+## 15. `ui.search_types` —— 搜索类型注册
+
+### 15.1 Definition 字段表（`SearchTypeDefinition`，`every-agent-plugin-api/js/index.ts:716-733`）
+
+| 字段 | 类型 | 必填 | 消费位置（宿主） | 说明 |
+|---|---|---|---|---|
+| `id` | `string` | ✅ | 搜索类型注册表 key | 类型 id（内置 `file-content` / `file-name` / `task`；插件自定，如 `image`） |
+| `label` | `string` | ✅ | 类型选择器（侧边栏下拉 / 双击 Shift 弹窗按钮行） | 类型文案 |
+| `pluginId` | `string` | ✅ | 归属展示 | 插件填插件 id；内置填 `core` |
+| `order` | `number?` | — | 类型列表合并排序 | 缺省 100（内置占用小值），与 sidebar order 同款升序混排口径 |
+| `kinds` | `string[]` | ✅ | 组装统一 `search` 的入参 | 该类型要向统一 `search` 要搜的 kinds（「全部」伪类型不传 `kinds`） |
+| `filters` | `SearchFilterField[]?` | — | 过滤区默认渲染器 | 声明式过滤字段 schema（见下） |
+| `FilterView` | `ComponentType<SearchFilterViewProps>?` | — | 过滤区 | 整块自定义过滤区渲染；不提供则用默认渲染器 |
+| `ResultView` | `ComponentType<SearchTypeResultViewProps>?` | — | 结果区 | 自定义结果渲染；不提供则用默认结果树 `SearchResultTreeView` |
+
+`SearchFilterField = { key, label, type:'text'|'textarea'|'boolean'|'select'|'radio'|'number'|'path', options?: Array<{label, value}>, default?, placeholder?, help?, section?:'inline'|'more' }`——核心按 `type` 用默认渲染器出控件（文本框/下拉/单选/开关/数字/路径选择），收集到的值进 `filters[`${kind}.${key}`]`；`section:'more'` 的字段收在「更多」菜单。自定义渲染组件的 props：`SearchFilterViewProps{fields, values, setValue, workspaceRoot}`、`SearchTypeResultViewProps{items, pattern, workspaceRoot, openFile, openTask}`；命中项类型为 `PluginSearchItem`（`kind` + 随 kind 而变的平铺字段袋，核心不解释）。
+
+### 15.2 注册示例
+
+```ts
+import type { SearchTypeDefinition } from '@everyagent/plugin-api'
+import { ImageResultView } from './ImageResultView'
+
+const imageType: SearchTypeDefinition = {
+  id: 'image',
+  label: '图片',
+  pluginId: 'my-plugin',
+  order: 20,
+  kinds: ['image'],                 // 后端 provider 需声明同 kind
+  filters: [
+    { key: 'ext', label: '格式', type: 'select', options: [{ label: 'PNG', value: 'png' }, { label: 'JPG', value: 'jpg' }, { label: 'WebP', value: 'webp' }], section: 'inline' },
+    { key: 'minWidth', label: '最小宽度', type: 'number', section: 'more' },
+  ],
+  ResultView: ImageResultView,       // 可选：自定义结果渲染（不写则用默认结果树）
+}
+// activate 里：
+ctx.ui.registerSearchType(imageType)
+```
+
+### 15.3 消费链与坑
+
+- 注册经 `pluginDispatcher.registerSearchType` / `listRegisteredSearchTypes`（扩展点常量 `ui.search_types`，契约见 [`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) §8.5）；宿主搜索面板（侧边栏下拉 + 双击 Shift 弹窗按钮行）用 `useSyncExternalStore(pluginDispatcher.subscribeExtensionsChanged, getExtensionsVersion)` 感知，注册即上屏（同 §0 第 2 条）。
+- 内置 `file-content` / `file-name` / `task` 三类型与插件类型按 `order` 升序**混排**；「全部」为**不带 `kinds`** 的伪类型（含任务，结果平铺聚合、靠组头 `providerId` 来源标记区分）。
+- **过滤字段两侧 key 要人工对齐**：`filters` 的 `field.key` 是前端声明，worker 侧 provider 按运行时键 `${kind}.${field.key}` 从 `filters` 袋读值（见 `FilterBag.raw`）——核心不解释字段名、无法替你校验（两侧不一致 = provider 永远读不到该值）；「全部」模式按类型分组展示、`key` 以 `${kind}.${key}` 命名空间隔离避免互相污染。
+- **`kinds` 必须有后端 provider 落地**：类型声明的 `kinds` 需有声明同 kind 的后端 `SearchProvider` 才有结果——只注册前端类型、后端无 provider 就永远空结果（本轮**不做**纯前端索引，`execute` 钩子列为后续预留）。
+- `FilterView` / `ResultView` 是**整块替换**（不是单字段替换）；组件只能依赖 plugin-api 类型 + `ctx` 能力，**不引宿主 `@/` 模块**（§0 第 4 条）。`ResultView` 里若要打开结果对应的文件，别拿 `sdk.workspace.rootPath` 当工作区根（见 §7 同坑）。
+- 搜索面板**没有** worker 选择器——worker 由「当前工作区根」经 `sdk.workspace.workerIdOfRoot(root)` 反查；无归属时报可读错误。
+
+## 16. UiRegistry 动作方法（5 个）
 
 动作方法不注册 UI，而是**驱动宿主**。实现链统一：`pluginDispatcher` 同步委托模块级 holder 桥（`pluginRuntimeBridge.ts`），宿主组件挂载时注入、未注入时静默降级（`:11-15` 注释）。
 
@@ -427,14 +476,14 @@ ctx.ui.appendComposerText('\n\n（追加一段）')
 
 注意两个时序坑：① 页面刚加载、`Layout`/`TaskChat` 尚未挂载时桥为 null，动作**静默丢失**（不抛错）；② 草稿桥只在**激活标签页**持有写权（`TaskChat.tsx:710-718` 注释解释竞态），多任务标签并存时写入的是当前激活的那个。
 
-## 16. Disposable 与刷新
+## 17. Disposable 与刷新
 
 - **dispose 语义是真的**：`ListExtensionRegistry.register` 返回的 Disposable 从数组 splice 并通知宿主重渲染（`ExtensionRegistry.ts:45-56`）——`ctx.events.on`、`ctx.commands.registerCommand` 同理（见[前端 ctx API](context-api.md) §9）。`registerTraceType` / `registerOutputBlock` 的 dispose 也已补齐侧路注销（`traceTypeRegistry.unregisterTraceType` / `outputBlockRegistry.unregister`，known-issues #3 修复前曾是不清真实消费方的假 Disposable）。
 - **宿主收集并在页面卸载时统一 dispose**：激活时 `ctx.ui` 等注册表都包了收集代理（`pluginLoader.ts` 的 `trackDisposables`），注册返回的 Disposable 全部进该插件的 `disposables`；页面卸载（`pagehide`）时宿主先调 `deactivate` 再逆序 dispose 全部注册项并移除插件 CSS（known-issues #8 修复前 disposables 恒为空数组、`deactivate` 零调用）。运行期没有热卸载——中途注销仍需自己持有 Disposable 调 dispose。
 - **刷新即丢**：注册表、订阅、blob 模块全是内存态，页面刷新全部清零并重新走加载链路（[加载链路](overview-and-loading.md)）；跨刷新要保留的状态用 `ctx.storage`（localStorage）。
 - **同一会话内的「更新」= 重新加载页面**：改了插件 web 代码要重跑 `npm run build:plugins` 再刷新（该脚本不在任何流水线内）；后端启停/装卸一律重启 worker（[plugin.json 字段参考](../plugin-manifest.md) §6；扩展面板「重新加载」按钮**仅在有待生效变更时显示**，待生效变更涉及含 `main` 的插件时会弹确认并自动完成重启 + 刷新）。
 
-## 17. 下一步读
+## 18. 下一步读
 
 - `ctx.ui` 之外的能力（rpc/storage/events/fs/commands）：[前端 ctx API](context-api.md)
 - 加载链路与 bare import 白名单：[加载链路](overview-and-loading.md)

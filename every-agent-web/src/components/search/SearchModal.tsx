@@ -53,7 +53,7 @@ export default function SearchModal({ open, onClose }: SearchModalProps) {
       }}
     >
       <div style={dialogStyle}>
-        <SearchPanel openSignal={openSignal} onRequestClose={onClose} />
+        <SearchPanel openSignal={openSignal} onRequestClose={onClose} variant="modal" />
       </div>
     </div>
   )

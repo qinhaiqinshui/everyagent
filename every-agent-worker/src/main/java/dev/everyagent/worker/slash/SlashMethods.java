@@ -81,7 +81,7 @@ public class SlashMethods {
 
     /**
      * 当前生效的 provider 超时预算(ms);缺省取 {@code worker.search.provider-timeout-ms}
-     * (0 = 不限时,仅异常护栏,与 fs.search/task.search 同款护栏接缝)。
+     * (0 = 不限时,仅异常护栏,与 search/search 同款护栏接缝)。
      */
     private long providerTimeoutMs;
 
@@ -366,7 +366,7 @@ public class SlashMethods {
      * 只计一条),总条数仍受截断约束(截断即终止 provider 循环——mention.query 应答无
      * truncated 标志,与内置静默截断一致);单个 provider 抛异常/超出超时预算
      * ({@code providerTimeoutMs},0 不限时)仅 WARN 跳过(经 {@link SearchProviderInvoker}
-     * 护栏,与 fs.search 增补聚合同款接缝/默认值),不影响其余结果与应答;provider 返回
+     * 护栏,与 search 增补聚合同款接缝/默认值),不影响其余结果与应答;provider 返回
      * null/空列表(或全部建议被去重)不加项。
      *
      * <p><b>统一模型增补字段(§8.5)</b>:provider 建议条目标记 {@code providerId}

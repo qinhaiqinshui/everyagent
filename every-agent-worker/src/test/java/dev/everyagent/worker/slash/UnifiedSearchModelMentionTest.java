@@ -32,27 +32,17 @@ class UnifiedSearchModelMentionTest {
         StubSuggester(String id, List<Suggestion> suggestions) {
             this.id = id;
             this.suggestions = suggestions;
-        }
+    }
 
-        @Override
-        public String id() {
-            return id;
-        }
+    @Override
+    public String id() {
+        return id;
+    }
 
-        @Override
-        public List<SearchResult> searchFiles(SearchRequest req) {
-            return List.of();
-        }
-
-        @Override
-        public List<TaskSearchResult> searchTasks(TaskSearchRequest req) {
-            return List.of();
-        }
-
-        @Override
-        public List<Suggestion> suggest(SuggestRequest req) {
-            return suggestions;
-        }
+    @Override
+    public List<Suggestion> suggest(SuggestRequest req) {
+        return suggestions;
+    }
     }
 
     /** 造一条内置形态的 entries 条目(kind 缺省 file)。 */

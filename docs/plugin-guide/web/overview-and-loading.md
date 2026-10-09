@@ -7,7 +7,7 @@ has_children: false
 
 # 前端插件总览与加载链路
 
-**一句话定位**：本文讲清「一个前端插件从 `web/index.ts` 源码到出现在屏幕上」的完整链路——esbuild 预编译 → `plugin.webSource` RPC 拉取 → bare import 改写 → blob URL 动态 `import()` → `activate(ctx)` 注册贡献 → 宿主订阅重渲染，并给出这条链上每一步的失败症状与六条硬约定。`ctx` 各成员的 API 细节见 [前端 ctx API](context-api.md)，12 个扩展点的字段表见 [UI 扩展点](ui-extensions.md)。
+**一句话定位**：本文讲清「一个前端插件从 `web/index.ts` 源码到出现在屏幕上」的完整链路——esbuild 预编译 → `plugin.webSource` RPC 拉取 → bare import 改写 → blob URL 动态 `import()` → `activate(ctx)` 注册贡献 → 宿主订阅重渲染，并给出这条链上每一步的失败症状与六条硬约定。`ctx` 各成员的 API 细节见 [前端 ctx API](context-api.md)，13 个扩展点的字段表见 [UI 扩展点](ui-extensions.md)。
 
 ## 1. 一图流：从 `web/index.ts` 到上屏
 
@@ -163,7 +163,7 @@ export default plugin
 
 前端插件能注册/调用的一切。常量名定义在 `every-agent-web/src/plugin/PluginDispatcher.ts:33-44`，类型声明在 `every-agent-plugin-api/js/index.ts:607-634`；逐扩展点字段表与注册代码见 [UI 扩展点](ui-extensions.md)。
 
-### 4.1 12 个 `ctx.ui.register*`（全部返回真清理的 Disposable）
+### 4.1 13 个 `ctx.ui.register*`（全部返回真清理的 Disposable）
 
 | 扩展点常量名 | register 方法 | 一句话 | 状态 |
 |---|---|---|---|
@@ -179,8 +179,9 @@ export default plugin
 | `ui.file_content_editors` | `registerFileContentEditor` | 按扩展名注册文件编辑器（可覆盖内置） | 正常 |
 | `ui.file_explorer_actions` | `registerFileExplorerAction` | 文件树右键动作 | git「显示 Git 历史」（known-issues #1 修复前曾为死扩展点） |
 | `ui.round_tail_panels` | `registerRoundTailPanel` | 任务轮末展示区组件 | 正常 |
+| `ui.search_types` | `registerSearchType` | 注册搜索类型（id/label/kinds/filters/ResultView…） | 正常 |
 
-注：`dispatch()` 的 switch 只列前述 10 个 `ui.*`/`task.*` 常量（`PluginDispatcher.ts:197-226`）；`ui.trace_types` / `ui.output_blocks` 走侧路注册表，不影响使用。
+注：`dispatch()` 的 switch 只列前述 11 个 `ui.*`/`task.*` 常量（`PluginDispatcher.ts:197-226`）；`ui.trace_types` / `ui.output_blocks` 走侧路注册表，不影响使用。
 
 ### 4.2 `ctx.ui` 的 5 个动作方法（触发宿主动作，不注册东西）
 
@@ -232,7 +233,7 @@ export default plugin
 4. **`git/web/index.ts:2` 自称「纯 Web 插件」**，实际其 `plugin.json` 同时有 `main`（java+web 混合形态），注释失真。
 5. ~~**`plugins-loaded` 是死事件**~~：known-issues #4 修复后 `loadPlugins()` 每轮流程末尾 emit `{count}`——可订阅它感知本轮装载完成；仍要注意 fire-and-forget（晚激活的插件收不到早于自己的 emit）。
 6. ~~**两个「注册了也不显示」的死贡献**~~：`ui.file_explorer_actions`（文件树右键菜单）与 `UiSidebarItemDefinition.Badge`（活动栏角标组件）均已接线（known-issues #1/#2 修复）——git 的「显示 Git 历史」右键项与 `GitChangeBadge` 角标现均生效。
-7. **`register(pluginId, …)` 的 pluginId 形参被忽略**：接口带该参数（`ExtensionRegistry.ts:18,45`）但实现只 `items.push(item)`（`:46`），`PluginDispatcher` 12 个 register 一律传 `''`（如 `:242,245,248`）——注册项无法按插件归属过滤。
+7. **`register(pluginId, …)` 的 pluginId 形参被忽略**：接口带该参数（`ExtensionRegistry.ts:18,45`）但实现只 `items.push(item)`（`:46`），`PluginDispatcher` 13 个 register 一律传 `''`（如 `:242,245,248`）——注册项无法按插件归属过滤。
 8. **`build:plugins` 流水线口径**：web 侧 `dev`/`build` 确实不含它；但桌面 `build:assets` **会**经 `scripts/build-plugins.py` 间接调用（`every-agent-desktop/package.json:11,16` → `scripts/build-plugins.py:219`），与「不在任何流水线」的旧说法不符——本文以代码为准。
 
 ## 7. 验证：确认插件真的被加载
@@ -262,7 +263,7 @@ npm.cmd run typecheck
 ## 8. 下一步读
 
 - `ctx` 各成员（sdk/storage/commands/events/fs）的签名与坑：[前端 ctx API](context-api.md)
-- 12 个扩展点逐个字段表 + 注册代码：[UI 扩展点](ui-extensions.md)
+- 13 个扩展点逐个字段表 + 注册代码：[UI 扩展点](ui-extensions.md)
 - 21 个宿主事件与 8 个具名事件：[事件](events.md)
 - `webMain`/`hasWebMain`/禁用机制在清单侧的口径：[plugin.json 字段参考](../plugin-manifest.md)
 - 三形态构建矩阵与 cwd 陷阱：[构建与运行](../guides/build-and-run.md)

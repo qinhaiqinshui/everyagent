@@ -1,10 +1,6 @@
 package dev.everyagent.worker.plugin;
 
 import dev.everyagent.plugin.api.spi.SearchProvider;
-import dev.everyagent.plugin.api.spi.SearchProvider.SearchRequest;
-import dev.everyagent.plugin.api.spi.SearchProvider.SearchResult;
-import dev.everyagent.plugin.api.spi.SearchProvider.TaskSearchRequest;
-import dev.everyagent.plugin.api.spi.SearchProvider.TaskSearchResult;
 import dev.everyagent.worker.plugin.registry.SearchProviderRegistry;
 
 import org.junit.jupiter.api.Test;
@@ -58,7 +54,7 @@ class WorkerPluginContextSearchUnregisterTest {
                 null, null, null, null, null, null, null, null, null);
     }
 
-    /** 最小 stub:只关心 id/order,两个搜索方法恒返回空列表。 */
+    /** 最小 stub:只关心 id/order(kinds/search 用接口缺省空实现)。 */
     private static SearchProvider stub(String id, float order) {
         return new SearchProvider() {
             @Override
@@ -69,16 +65,6 @@ class WorkerPluginContextSearchUnregisterTest {
             @Override
             public float order() {
                 return order;
-            }
-
-            @Override
-            public List<SearchResult> searchFiles(SearchRequest req) {
-                return List.of();
-            }
-
-            @Override
-            public List<TaskSearchResult> searchTasks(TaskSearchRequest req) {
-                return List.of();
             }
         };
     }

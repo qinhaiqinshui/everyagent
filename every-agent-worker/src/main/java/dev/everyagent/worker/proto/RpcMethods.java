@@ -65,16 +65,9 @@ public final class RpcMethods {
     public static final String TERM_RESIZE = "term.resize";
     /** 关闭终端会话:termId。 */
     public static final String TERM_CLOSE = "term.close";
-    /** 工作区文本内容搜索(内置 rg,架构 §5.10):jailed 到工作区根,JSON lines 解析为
-     * 结构化结果;大结果复用 fs.read 的 rpc.data 分批 + 末帧 ok 汇总。 */
-    public static final String FS_SEARCH = "fs.search";
-    /** 工作区文件名搜索(内置 rg --files + worker 侧 basename 正则):入参与 fs.search 同族
-     * + 可选 path(子目录范围);结果 {matchCount, truncated, files:[{path}]},大结果同款
-     * rpc.data 分批。替代前端逐目录 fs.list 递归 walk(数千次串行 RPC 且不容错)。 */
-    public static final String FS_FIND = "fs.find";
-    /** 任务内容搜索(内置 rg + worker 后处理):按 workspaceId 枚举任务,搜索 rounds.jsonl
-     * 轮次索引,解析 JSON 后对 user/finalReply 干净文本二次匹配消除字段名噪音。 */
-    public static final String TASK_SEARCH = "task.search";
+
+    /** 统一搜索(架构 §5.5/§8.5):入参仅 workspace(必填,jailed)/pattern/kinds?(可选 string[],缺省=全部已注册 provider)/filters?(不透明参数袋,核心不解释);核心遍历 SearchProvider 注册表(按 kinds 数据过滤)→ 触发 → 按 kind+位置键去重聚合,应答 {matchCount, truncated, items:[...]},大结果复用 fs.read 的 rpc.data 分批 + 末帧 ok 汇总。 */
+    public static final String SEARCH = "search";
     /** 斜杠命令清单(动态注册,数据来源下沉 worker;前端只负责渲染与插入)。 */
     public static final String SLASH_LIST = "slash.list";
     /** 斜杠命令选中:携带 token 与 taskId 触发条目 selectHandler(taskId 可空=草稿态,不写任务 meta)。 */

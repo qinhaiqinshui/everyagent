@@ -36,7 +36,7 @@ has_children: false
 - **现象（修复前）**：`registerOutputBlock` 的 dispose 只清**无人读**的 `outputBlocksMap`，真实消费方 `RichMessageContent.tsx` 走的 `outputBlockRegistry` **不清**；`registerTraceType` 返回的 disposable 只清主 registry，不清 `TaskThread.tsx` 消费的 `traceTypeRegistry` 侧路。
 - **影响（修复前）**：调了 dispose 之后 UI 仍可能继续用旧 handler 渲染，造成「以为注销了其实还在」的错觉。
 - **修复**：dispose 补齐侧路 unregister——`outputBlockRegistry` 新增 `unregister(tag)`、`traceTypeRegistry` 新增 `unregisterTraceType(kind)`，`PluginDispatcher` 两个注册方法的 Disposable 同时清理真实消费方；无人读的 `outputBlocksMap` 已删除。
-- **后续**：两个扩展点的 dispose 均可依赖；[UI 扩展点](../web/ui-extensions.md) §10/§11/§16 已按新口径更新。
+- **后续**：两个扩展点的 dispose 均可依赖；[UI 扩展点](../web/ui-extensions.md) §10/§11/§17 已按新口径更新。
 
 ### #4 24 个零 emit 死事件 + `task-deleted` 死订阅陷阱（✅ 已修复）
 
@@ -74,7 +74,7 @@ has_children: false
 
 - **现象（修复前）**：注册方法存在，registry 的 `getDefault`/`getById`/`getProviders` 在 worker 主代码**零调用**；27 个内置插件零注册；`docs/ARCHITECTURE.md` 也零提及该 SPI。
 - **影响（修复前）**：注册 SearchProvider **没有任何运行期效果**（比死扩展点更彻底：连消费候选点都没有）。
-- **修复**：`fs.search` / `task.search` 两条既有 RPC **增补聚合**——内置 rg 结果之后按注册序追加各 provider 结果，按位置键去重（文件 `path+lineNumber+matchIndex` / 任务 `taskId+roundIndex+field+matchIndex`），仍受 `maxResults` 触顶；注册表为空 → 零行为变化，单个 provider 异常仅 WARN 跳过，rg 不可用但有 provider 时可独立供数（SPI 真正可单独供数的路径）。**取舍**：消费链路选既有 RPC 而非 Advisor——搜索结果是给用户的、不是给模型上下文的；零新 RPC，`ARCHITECTURE.md` §7/§8.5 与 [Advisor 与模型链](../backend/advisors.md) §6、api-index、builtin-plugins 状态行同步。附带修正 SPI `TaskSearchResult.Match.line` 类型（`int`→`String`，与 wire「干净文本」语义一致；此前零实现无兼容负担）。提交 `aa936bd9`；`FsSearchServiceTest` 32 + `TaskSearchServiceTest` 16 全过（含 rg 缺失回退用例）。
+- **修复**：搜索后端经**统一 `search` RPC 聚合**——内置三 provider（`file-content` / `file-name` / `task`）与插件 provider **同权**，遍历 `SearchProviderRegistry` 按 `order()` 升序逐个触发、按 `kind`+位置键去重（`file-content` = `path+lineNumber+matchIndex` / `file-name` = `path` / `task` = `taskId+roundIndex+field+matchIndex`），受各 provider 自持上限触顶；注册表为空 → 零行为变化，单个 provider 异常仅 WARN 跳过，rg 不可用但有 provider 时可独立供数（SPI 真正可单独供数的路径）。**取舍**：消费链路选 RPC 而非 Advisor——搜索结果是给用户的、不是给模型上下文的；`ARCHITECTURE.md` §5.5/§8.5 与 [Advisor 与模型链](../backend/advisors.md) §6、api-index、builtin-plugins 状态行同步。附带修正结果项 `line` 字段类型（`int`→`String`，与 wire「干净文本」语义一致）。**注**：接入之初挂在旧 `fs.search` / `task.search` 两条 RPC 上（提交 `aa936bd9`），后随「统一 search + 插件化搜索类型」重构合并为单一 `search` RPC（`FsSearchService` / `TaskSearchService` 已删除，逻辑抽取进三个内置 provider + `RgSearchEngine`；`SearchServiceTest` / `TaskSearchProviderTest` 钉住统一 search）。
 - **后续**：未新增注册 SearchProvider 的示例内置插件（会与内置 rg 重复供数、无真实价值），聚合语义由单测钉住；将来做 search-es / search-vector 类插件时 SPI 契约已就绪。
 
 ### #11 `SkillContributor` 半接线（✅ 已修复）

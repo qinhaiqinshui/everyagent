@@ -17,11 +17,6 @@ import { channels } from '@every-agent/client'
 import { domainEventBus, DOMAIN_EVENTS } from '@/events/eventBus'
 import { hubSession } from '@/hub/session'
 import { workspaceRegistry } from '@/hub/workspaceRegistry'
-import type {
-  WorkspaceContentSearchFileResult,
-  WorkspaceContentSearchHit,
-  WorkspaceContentSearchResult,
-} from '@/query/workspaceContentSearch'
 import { normalizeWorkspaceRelativePath, isAbsoluteBusinessPath, toBusinessAbsolutePath } from './pathUtils'
 
 /**
@@ -70,97 +65,6 @@ interface FsReadResult {
   size?: number
   base64?: string
   offset?: number
-}
-
-/** fs.search / fs.find 入参(架构 §7 契约表):pattern 语义由 isRegex 决定,前端不编译正则。 */
-export interface WorkspaceSearchParams {
-  /** 搜索词:isRegex=true 按正则解释,否则按字面量(worker 侧 --fixed-strings / fs.find 本侧转义)。 */
-  pattern: string
-  /** 正则模式。 */
-  isRegex: boolean
-  /** 大小写敏感。 */
-  caseSensitive: boolean
-  /** 全字匹配(worker 侧包 `\b(?:...)\b`)。 */
-  wholeWord: boolean
-  /** 包含 glob 串(逗号分隔,原样透传给 worker 的 -g 放行)。 */
-  includeGlobs?: string
-  /** 排除 glob 串(逗号分隔,原样透传给 worker 的 -g 排除)。 */
-  excludeGlobs?: string
-  /** 命中上限,触顶置 truncated,默认 1000。 */
-  maxResults?: number
-  /** 搜索范围:工作区相对子目录(缺省/空 = 整个工作区根;worker 侧作为 rg 的搜索路径参数)。 */
-  path?: string
-}
-
-/** fs.search 应答的文件项形态(worker 输出,与 WorkspaceContentSearchFileResult 同构)。 */
-interface FsSearchFileItem {
-  path: string
-  matches?: Array<{
-    lineNumber: number
-    line: string
-    matchIndex?: number
-    matchText?: string
-  }>
-  /** 结果来源统一模型的可选增补字段(开放集合,未知 kind 容忍透传不报错)。 */
-  kind?: string
-  providerId?: string
-  score?: number
-}
-
-/** worker 文件项 → 前端搜索结果形状(字段同名,显式映射让类型检查钳住契约漂移)。 */
-function toSearchFileResult(item: FsSearchFileItem): WorkspaceContentSearchFileResult {
-  const matches: WorkspaceContentSearchHit[] = (item.matches ?? []).map((hit) => ({
-    lineNumber: hit.lineNumber,
-    line: hit.line,
-    matchIndex: hit.matchIndex,
-    matchText: hit.matchText,
-  }))
-  return {
-    path: item.path,
-    matches,
-    kind: item.kind,
-    providerId: item.providerId,
-    score: item.score,
-  }
-}
-
-/**
- * fs.search / fs.find 的 RPC 发起与两形态应答归一(同 fs.read 的 rpc.data 分批模式,§5.4):
- * - 小结果:ok 直接内联 `{matchCount, truncated, files}`;
- * - 大结果:文件项按序列化大小切批经 rpc.data 回传(批项 = 完整文件项,onData 按
- *   到达顺序累计合并),末帧 ok 只带 `{matchCount, truncated, fileCount}` 汇总;
- * 以「末帧应答是否带 files 数组」区分两形态(worker 实现保证互斥)。fs.find 的
- * 文件项无 matches 字段(命中即整个文件)。path 为可选子目录范围(缺省整根)。
- */
-async function searchRpc(workspaceRoot: string, method: 'fs.search' | 'fs.find',
-  params: WorkspaceSearchParams): Promise<WorkspaceContentSearchResult> {
-  // rpc.data 批次项为文件数组片段,按序累计;大结果的真实 files 全在这里
-  const batchedFiles: WorkspaceContentSearchFileResult[] = []
-  const result = await rpcForWorkspace(workspaceRoot, method, {
-    pattern: params.pattern,
-    isRegex: params.isRegex,
-    caseSensitive: params.caseSensitive,
-    wholeWord: params.wholeWord,
-    includeGlobs: params.includeGlobs ?? '',
-    excludeGlobs: params.excludeGlobs ?? '',
-    maxResults: params.maxResults ?? 1000,
-    ...(params.path ? { path: params.path } : {}),
-  }, {
-    timeoutMs: 120_000,
-    onData: (batch) => {
-      for (const item of batch as FsSearchFileItem[]) {
-        batchedFiles.push(toSearchFileResult(item))
-      }
-    },
-  }) as { matchCount?: number; truncated?: boolean; files?: FsSearchFileItem[] }
-  const files = Array.isArray(result.files)
-    ? result.files.map(toSearchFileResult)
-    : batchedFiles
-  return {
-    matchCount: typeof result.matchCount === 'number' ? result.matchCount : 0,
-    truncated: result.truncated === true,
-    files,
-  }
 }
 
 /** fs.browse(includeFiles=true) 应答形态:目录/文件混合条目 + worker 能力标记。 */
@@ -338,24 +242,6 @@ export const workspaceGateway = {
 
   async readBinaryFile(workspaceRoot: string, path: string): Promise<Uint8Array> {
     return this.readBytes(workspaceRoot, path)
-  },
-
-  /**
-   * 工作区内容搜索(fs.search,架构 §7 契约表):worker 侧内置 rg 执行,前端只透传
-   * pattern 与匹配开关、不编译正则(非法正则的预检由调用方负责;漏检时 worker 的
-   * PatternSyntaxException 也会以 rpc.err 返回)。应答归一见 searchRpc。
-   */
-  async search(workspaceRoot: string, params: WorkspaceSearchParams): Promise<WorkspaceContentSearchResult> {
-    return searchRpc(workspaceRoot, 'fs.search', params)
-  },
-
-  /**
-   * 工作区文件名搜索(fs.find,架构 §7 契约表):worker 侧 `rg --files` 枚举 + 本侧
-   * basename 正则匹配,只看文件名、不读内容;入参与 search 同族(含可选 path 子目录
-   * 范围)。结果文件项只有 path(matches 恒为空数组),matchCount = 命中文件数。
-   */
-  async findNames(workspaceRoot: string, params: WorkspaceSearchParams): Promise<WorkspaceContentSearchResult> {
-    return searchRpc(workspaceRoot, 'fs.find', params)
   },
 
   async writeBytes(workspaceRoot: string, path: string, content: Uint8Array): Promise<void> {

@@ -14,7 +14,7 @@ import { ChevronDownIcon } from '../../shared/AppGlyphs'
 import { FileTypeIcon } from '../../shared/FileTypeGlyphs'
 import HighlightedMatchLine from './HighlightedMatchLine'
 import type { SearchResultGroup, SearchResultHit, SearchResultHitPrefix } from './model'
-import { BUILTIN_RG_PROVIDER_ID } from './model'
+import { isBuiltinProviderId } from './model'
 
 export interface SearchResultTreeViewProps {
   /** 分组列表(顺序即展示顺序)。 */
@@ -68,6 +68,52 @@ function ResultGroupView({
   const [hovered, setHovered] = React.useState(false)
   const { header } = group
 
+  // 叶子组(无命中行,如 file-name):组头本身即条目(可点击打开),无折叠箭头与命中数徽章。
+  if (group.hits.length === 0) {
+    const clickable = typeof header.onOpen === 'function'
+    return (
+      <div style={groupStyle}>
+        <div
+          role={clickable ? 'button' : undefined}
+          tabIndex={clickable ? 0 : undefined}
+          title={header.title}
+          style={{
+            ...headerStyle,
+            background: hovered && clickable ? 'var(--bg-hover)' : 'transparent',
+            cursor: clickable ? 'pointer' : 'default',
+          }}
+          onClick={clickable ? header.onOpen : undefined}
+          onKeyDown={clickable ? (event) => {
+            if (event.key === 'Enter') {
+              event.preventDefault()
+              header.onOpen?.()
+            }
+          } : undefined}
+          onMouseEnter={() => setHovered(true)}
+          onMouseLeave={() => setHovered(false)}
+        >
+          <span style={leafIndentStyle} />
+          {header.icon ? (
+            <span style={iconStyle}>
+              <FileTypeIcon fileName={header.icon.fileName} size={14} />
+            </span>
+          ) : null}
+          <span style={nameStyle}>{header.name}</span>
+          {header.detail ? (
+            <span style={header.detail.grow ? detailGrowStyle : detailStyle}>
+              {header.detail.text}
+            </span>
+          ) : null}
+          {!isBuiltinProviderId(header.providerId) ? (
+            <span style={providerTagStyle} title={header.providerId}>
+              {header.providerId}
+            </span>
+          ) : null}
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div style={groupStyle}>
       <div
@@ -103,7 +149,7 @@ function ResultGroupView({
             {header.detail.text}
           </span>
         ) : null}
-        {header.providerId && header.providerId !== BUILTIN_RG_PROVIDER_ID ? (
+        {!isBuiltinProviderId(header.providerId) ? (
           <span style={providerTagStyle} title={header.providerId}>
             {header.providerId}
           </span>
@@ -188,6 +234,13 @@ const chevronStyle: React.CSSProperties = {
 
 const chevronCollapsedStyle: React.CSSProperties = {
   transform: 'rotate(-90deg)',
+}
+
+/** 叶子组无折叠箭头,用等宽占位对齐图标缩进(与非叶子组组头对齐)。 */
+const leafIndentStyle: React.CSSProperties = {
+  display: 'inline-block',
+  width: 13,
+  flexShrink: 0,
 }
 
 const iconStyle: React.CSSProperties = {

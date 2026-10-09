@@ -1,11 +1,6 @@
 package dev.everyagent.worker.plugin.registry;
 
-import dev.everyagent.plugin.api.spi.FileNameSearchProvider;
 import dev.everyagent.plugin.api.spi.SearchProvider;
-import dev.everyagent.plugin.api.spi.SearchProvider.SearchRequest;
-import dev.everyagent.plugin.api.spi.SearchProvider.SearchResult;
-import dev.everyagent.plugin.api.spi.SearchProvider.TaskSearchRequest;
-import dev.everyagent.plugin.api.spi.SearchProvider.TaskSearchResult;
 import dev.everyagent.plugin.api.spi.SuggestionProvider;
 
 import org.junit.jupiter.api.Test;
@@ -18,12 +13,12 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * SearchProviderRegistry「有序插入 + 反注册」的回归测试。
+ * SearchProviderRegistry「有序插入 + 反注册 + 能力分派」的回归测试。
  *
  * <p>锁死三条语义:
  * <ol>
  *   <li>注册时按 {@code order()} 升序<b>有序插入</b>(乱序注册也得到升序快照,
- *       消费方 fs.search / task.search 增补聚合直接按列表序执行);</li>
+ *       消费方统一 {@code search} 聚合直接按列表序执行;内置引擎占小负值排在插件之前);</li>
  *   <li>同 order 保持注册先后(稳定排序);{@code getDefault} 取 order 最小的先注册者;</li>
  *   <li>反注册(单个/批量)后未涉及项保留且顺序不变,清空后查询为空;
  *       批量反注册对已移除项幂等(返回 0)。</li>
@@ -44,6 +39,17 @@ class SearchProviderRegistryTest {
     }
 
     @Test
+    void builtinOrderSortsBeforePluginDefault() {
+        SearchProviderRegistry registry = new SearchProviderRegistry();
+        registry.register(stub("plugin", 0f));
+        registry.register(stub("builtin.task", -998f));
+        registry.register(stub("builtin.file-content", -1000f));
+        registry.register(stub("builtin.file-name", -999f));
+        assertEquals(List.of("builtin.file-content", "builtin.file-name", "builtin.task", "plugin"),
+                ids(registry));
+    }
+
+    @Test
     void sameOrderKeepsRegistrationSequence() {
         SearchProviderRegistry registry = new SearchProviderRegistry();
         registry.register(stub("a", 0f));
@@ -51,11 +57,9 @@ class SearchProviderRegistryTest {
         registry.register(stub("c", 0f));
         assertEquals(List.of("a", "b", "c"), ids(registry));
 
-        // 后注册的同 order 项追加在既有同 order 项之后(稳定)
         registry.register(stub("d", 0f));
         assertEquals(List.of("a", "b", "c", "d"), ids(registry));
 
-        // order 更小者插到整组之前
         registry.register(stub("x", -1f));
         assertEquals(List.of("x", "a", "b", "c", "d"), ids(registry));
         assertEquals("x", registry.getDefault().id());
@@ -90,7 +94,6 @@ class SearchProviderRegistryTest {
         assertEquals(2, registry.unregisterAll(List.of(a, c)));
         assertEquals(List.of("b"), ids(registry));
 
-        // 已移除项重复批量反注册返回 0(幂等);空集合为 no-op;未注册项忽略
         assertEquals(0, registry.unregisterAll(List.of(a, c)));
         assertEquals(0, registry.unregisterAll(List.of()));
         assertEquals(1, registry.unregisterAll(List.of(b, stub("ghost", 0f))));
@@ -102,52 +105,6 @@ class SearchProviderRegistryTest {
 
     private static List<String> ids(SearchProviderRegistry registry) {
         return registry.getProviders().stream().map(SearchProvider::id).toList();
-    }
-
-    /** 能力查询的 id 视图(getFileNameProviders / getSuggestionProviders 共用)。 */
-    private static List<String> capabilityIds(List<? extends SearchProvider> providers) {
-        return providers.stream().map(SearchProvider::id).toList();
-    }
-
-    /** 多能力桩:同一对象同时实现 FileNameSearchProvider 与 SuggestionProvider(基两方法恒空)。 */
-    private static final class MultiCapabilityStub implements FileNameSearchProvider, SuggestionProvider {
-        private final String id;
-        private final float order;
-
-        MultiCapabilityStub(String id, float order) {
-            this.id = id;
-            this.order = order;
-        }
-
-        @Override
-        public String id() {
-            return id;
-        }
-
-        @Override
-        public float order() {
-            return order;
-        }
-
-        @Override
-        public List<SearchResult> searchFiles(SearchRequest req) {
-            return List.of();
-        }
-
-        @Override
-        public List<TaskSearchResult> searchTasks(TaskSearchRequest req) {
-            return List.of();
-        }
-
-        @Override
-        public List<FileNameSearchProvider.FileResult> findFiles(FileNameSearchProvider.FindRequest req) {
-            return List.of();
-        }
-
-        @Override
-        public List<Suggestion> suggest(SuggestRequest req) {
-            return List.of();
-        }
     }
 
     /** 仅 SuggestionProvider 能力的桩(乱序注册验证能力查询的 order 语义)。 */
@@ -171,13 +128,34 @@ class SearchProviderRegistryTest {
         }
 
         @Override
-        public List<SearchResult> searchFiles(SearchRequest req) {
+        public List<Suggestion> suggest(SuggestRequest req) {
             return List.of();
+        }
+    }
+
+    /** 多能力桩:同时是统一搜索 provider(声明 kind)+ SuggestionProvider。 */
+    private static final class MultiCapabilityStub implements SuggestionProvider {
+        private final String id;
+        private final float order;
+
+        MultiCapabilityStub(String id, float order) {
+            this.id = id;
+            this.order = order;
         }
 
         @Override
-        public List<TaskSearchResult> searchTasks(TaskSearchRequest req) {
-            return List.of();
+        public String id() {
+            return id;
+        }
+
+        @Override
+        public float order() {
+            return order;
+        }
+
+        @Override
+        public java.util.Set<String> kinds() {
+            return java.util.Set.of("image");
         }
 
         @Override
@@ -186,31 +164,8 @@ class SearchProviderRegistryTest {
         }
     }
 
-    /** 仅 FileNameSearchProvider 能力的桩(乱序注册验证能力查询的 order 语义)。 */
-    private record NameOnlyStub(String id, float order) implements FileNameSearchProvider {
-        @Override
-        public List<SearchResult> searchFiles(SearchRequest req) {
-            return List.of();
-        }
-
-        @Override
-        public List<TaskSearchResult> searchTasks(TaskSearchRequest req) {
-            return List.of();
-        }
-
-        @Override
-        public List<FileNameSearchProvider.FileResult> findFiles(FileNameSearchProvider.FindRequest req) {
-            return List.of();
-        }
-
-        @Override
-        public float order() {
-            return order;
-        }
-    }
-
     /**
-     * 能力分派查询(§8.5 能力接口扩展):同一对象实现多个能力接口时两个查询都能拿到;
+     * 能力分派查询(§8.5):同一对象实现 SuggestionProvider 能力接口时该查询能拿到;
      * instanceof 过滤不混入仅基接口的实现;保持 order 升序(乱序注册同样得到升序);
      * 反注册走同一份存储(能力查询同步消失,无第二份残留)。
      */
@@ -220,29 +175,22 @@ class SearchProviderRegistryTest {
         SearchProvider plain = stub("plain", 0f);
         SearchProvider multi = new MultiCapabilityStub("multi", 10f);
         SearchProvider suggestOnly = new SuggestOnlyStub("suggest", 5f);
-        SearchProvider nameOnly = new NameOnlyStub("name", -5f);
-        // 乱序注册:能力查询仍按 order 升序(name -5 → plain 0 → suggest 5 → multi 10)
         registry.register(multi);
         registry.register(suggestOnly);
         registry.register(plain);
-        registry.register(nameOnly);
 
-        assertEquals(List.of("name", "plain", "suggest", "multi"), ids(registry));
-        // 同一对象实现多能力接口:两个查询都能拿到
-        assertEquals(List.of("name", "multi"), capabilityIds(registry.getFileNameProviders()));
-        assertEquals(List.of("suggest", "multi"), capabilityIds(registry.getSuggestionProviders()));
-        // 仅基接口实现不混入任何能力查询
-        assertFalse(capabilityIds(registry.getFileNameProviders()).contains("plain"));
-        assertFalse(capabilityIds(registry.getSuggestionProviders()).contains("plain"));
+        assertEquals(List.of("plain", "suggest", "multi"), ids(registry));
+        assertEquals(List.of("suggest", "multi"),
+                registry.getSuggestionProviders().stream().map(SearchProvider::id).toList());
+        assertFalse(registry.getSuggestionProviders().stream().map(SearchProvider::id).toList()
+                .contains("plain"));
 
-        // 反注册走同一份存储:能力查询同步消失(无第二份残留)
         registry.unregister(multi);
-        assertTrue(registry.getFileNameProviders().contains(nameOnly));
-        assertEquals(List.of("name"), capabilityIds(registry.getFileNameProviders()));
-        assertEquals(List.of("suggest"), capabilityIds(registry.getSuggestionProviders()));
+        assertEquals(List.of("suggest"),
+                registry.getSuggestionProviders().stream().map(SearchProvider::id).toList());
     }
 
-    /** 最小 stub:只关心 id/order,两个搜索方法恒返回空列表。 */
+    /** 最小 stub:只关心 id/order(kinds/search 用接口缺省空实现)。 */
     static SearchProvider stub(String id, float order) {
         return new SearchProvider() {
             @Override
@@ -253,16 +201,6 @@ class SearchProviderRegistryTest {
             @Override
             public float order() {
                 return order;
-            }
-
-            @Override
-            public List<SearchResult> searchFiles(SearchRequest req) {
-                return List.of();
-            }
-
-            @Override
-            public List<TaskSearchResult> searchTasks(TaskSearchRequest req) {
-                return List.of();
             }
         };
     }

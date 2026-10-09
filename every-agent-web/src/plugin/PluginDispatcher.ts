@@ -17,6 +17,7 @@ import type {
   FileExplorerAction,
   PluginDiffTabInput,
   PluginActiveTabInfo,
+  SearchTypeDefinition,
 } from '@everyagent/plugin-api'
 import { getComposerBridge, getShellBridge } from './pluginRuntimeBridge'
 import { activeTabMirror } from './activeTabMirror'
@@ -53,6 +54,7 @@ const EXT_UI_FILE_EXPLORER_ACTIONS = 'ui.file_explorer_actions'
 const EXT_UI_ROUND_TAIL_PANELS = 'ui.round_tail_panels'
 const EXT_UI_TRACE_TYPES = 'ui.trace_types'
 const EXT_UI_OUTPUT_BLOCKS = 'ui.output_blocks'
+const EXT_UI_SEARCH_TYPES = 'ui.search_types'
 
 // ── 扩展点注册表管理 ──
 
@@ -170,6 +172,10 @@ export interface RealPluginDispatcher {
   registerRoundTailPanel: (def: UiRoundTailPanelDefinition) => Disposable
   /** 同步获取已注册的轮末展示区组件列表。 */
   listRegisteredRoundTailPanels: () => UiRoundTailPanelDefinition[]
+  /** 注册搜索类型（由 `ui.search_types` 扩展点产出）。 */
+  registerSearchType: (def: SearchTypeDefinition) => Disposable
+  /** 同步获取插件注册的搜索类型列表（供搜索类型注册表合并）。 */
+  listRegisteredSearchTypes: () => SearchTypeDefinition[]
   /** 同步获取插件注册的输入框上方面板列表（供 TaskChat 渲染合并）。 */
   listRegisteredComposerAbovePanels: () => UiComposerAbovePanelDefinition[]
   /** 查询当前激活的工作区标签（读宿主壳层镜像；无激活标签返回 null）。 */
@@ -219,6 +225,8 @@ export const pluginDispatcher: RealPluginDispatcher = {
       case EXT_UI_FILE_EXPLORER_ACTIONS:
         return getRegistry<T>(extensionPoint).getAll()
       case EXT_UI_ROUND_TAIL_PANELS:
+        return getRegistry<T>(extensionPoint).getAll()
+      case EXT_UI_SEARCH_TYPES:
         return getRegistry<T>(extensionPoint).getAll()
       default:
         return []
@@ -314,6 +322,12 @@ export const pluginDispatcher: RealPluginDispatcher = {
   },
   registerRoundTailPanel(def) {
     return getRegistry<UiRoundTailPanelDefinition>(EXT_UI_ROUND_TAIL_PANELS).register('', def)
+  },
+  registerSearchType(def) {
+    return getRegistry<SearchTypeDefinition>(EXT_UI_SEARCH_TYPES).register('', def)
+  },
+  listRegisteredSearchTypes() {
+    return getRegistry<SearchTypeDefinition>(EXT_UI_SEARCH_TYPES).getAll()
   },
   getActiveTab() {
     return activeTabMirror.current
