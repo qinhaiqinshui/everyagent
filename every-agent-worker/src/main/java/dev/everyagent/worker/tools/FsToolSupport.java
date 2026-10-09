@@ -11,6 +11,7 @@ import dev.everyagent.worker.os.SandboxPathRegistry;
 
 import dev.everyagent.plugin.api.execution.ExecContext;
 import dev.everyagent.plugin.api.exception.NotFoundException;
+import dev.everyagent.plugin.api.util.AtomicFiles;
 import dev.everyagent.worker.rpc.SandboxViolationException;
 import tools.jackson.databind.node.ObjectNode;
 
@@ -27,6 +28,8 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * 工具层共享的文件能力(移植自 novel_agent-n 的 fileAccessGateway):
@@ -58,6 +61,13 @@ public class FsToolSupport {
 
     /** 系统技能目录只读附加根解析(skills 读免授权,§13.8;懒解析、共享实现)。 */
     private final SkillsReadonlyRoots skillsReadonlyRoots;
+
+    /**
+     * 同进程内「按路径串行」的写锁:read-modify-write(update_file)必须整体串行,
+     * 否则两个写入者(主 agent 与派生 agent 并发、多个工具调用并发)会各自读到旧快照、
+     * 各写一份,造成丢失更新 / 截断。键为规范化路径串;仅本进程内有效(跨进程由原子替换兜底)。
+     */
+    private final ConcurrentHashMap<String, ReentrantLock> pathLocks = new ConcurrentHashMap<>();
 
     public FsToolSupport(WorkspaceManager workspaces, WorkerProperties props, HubPool pool,
             PermissionGate gate) {
@@ -144,6 +154,20 @@ public class FsToolSupport {
         return sandbox(t).resolveTarget(resolved);
     }
 
+    /**
+     * 取某路径对应的进程内写锁(供 read-modify-write 使用:读取→修改→写回需整体串行)。
+     * 键取规范化后的沙箱→宿主翻译路径,同一文件的不同书写形式(如 ./a.md 与 a.md)也收敛到同一把锁。
+     */
+    public ReentrantLock pathLock(String rel) {
+        String key = rel == null ? "" : rel;
+        try {
+            key = java.nio.file.Path.of(resolveSandboxPath(key)).normalize().toString();
+        } catch (RuntimeException ignore) {
+            // 非法路径:退回原始串作键(仍能串行化同名请求,不影响正确性)
+        }
+        return pathLocks.computeIfAbsent(key, k -> new ReentrantLock());
+    }
+
     public String readText(ExecContext t, String agentId, String rel, PermissionGate.Op op)
             throws IOException {
         Path f = resolveExistingAuthorized(t, agentId, rel, op);
@@ -201,7 +225,27 @@ public class FsToolSupport {
         }
         Path target = resolveTargetAuthorized(t, agentId, rel, PermissionGate.Op.WRITE);
         Files.createDirectories(target.getParent());
-        Files.writeString(target, finalText, StandardCharsets.UTF_8);
+        // 原子写:先写同目录临时文件,再原子替换。禁止 truncate 后原地重写——一旦写入被中断
+        // (取消/崩溃/AV 与索引短暂持锁)或并发写入者交错,原地写会暴露「截断/空的部分文件」,
+        // 而调用方仍可能视作成功,下一次读取就把截断态固化下来。与 TaskStore / GrantRegistry /
+        // AgentLedger 同一惯例。(回归:`FsWriteAtomicityTest.atomicWriteNeverExposesPartialContent`
+        // 已验证:改回原地写即会读到 0 字符的半截文件。)
+        Path tmp = Files.createTempFile(target.getParent(),
+                "." + target.getFileName().toString() + ".", ".tmp");
+        try {
+            Files.writeString(tmp, finalText, StandardCharsets.UTF_8);
+            AtomicFiles.replace(tmp, target);
+        } finally {
+            Files.deleteIfExists(tmp); // 成功时 tmp 已被 move 走;失败时清理残留
+        }
+        // 写后校验:落盘内容必须与预期逐字符一致。把「静默截断 / 并发覆盖」变成显式失败,
+        // 而不是留下一个没人发现的短文件。
+        String landed = Files.readString(target, StandardCharsets.UTF_8);
+        if (!landed.equals(finalText)) {
+            throw new IOException("写入校验失败:落盘内容与预期不一致(疑似写入中断或并发修改): "
+                    + sb.display(target) + "(期望 " + finalText.length()
+                    + " 字符,实际 " + landed.length() + " 字符)");
+        }
         changed(t, sb.display(target), "write");
     }
 

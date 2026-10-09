@@ -11,6 +11,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * 文件工具(read_file / create_file / update_file),移植自 novel_agent-n 的
@@ -105,29 +106,30 @@ public class FileTools {
      * 行尾宽容查找 oldcontent 的首次出现,并确认全局唯一(单次扫描,顺带统计主导行尾)。
      * 返回 [start, end, eolCode],eolCode: 0=LF, 1=CRLF;未找到返回 null;
      * 出现多次(含重叠)抛 IllegalArgumentException("不唯一")。
+     *
+     * <p>主导行尾统计与匹配扫描**解耦**:匹配起点遍历每个下标(不再跳过换行位置),
+     * 因此 oldcontent 以换行开头(或在 CRLF 的 '\n' 处起)也能正确匹配;原实现先
+     * {@code continue} 掉换行再匹配,导致这类 oldcontent 永远「未找到旧内容」。
      */
     private static int[] findUniqueEolAgnostic(String haystack, String needle) {
-        int firstStart = -1;
-        int firstEnd = -1;
+        // 第一遍:统计主导行尾(CRLF 计 crlf,独立 \n 计 lf,孤立 \r 不计入)
         int crlf = 0;
         int lf = 0;
-        int h = 0;
-        while (h < haystack.length()) {
-            // 统计主导行尾(与旧 dominantEol 同口径: CRLF 计 crlf,独立 \n 计 lf,孤立 \r 不计入)
-            char c = haystack.charAt(h);
+        for (int i = 0; i < haystack.length(); i++) {
+            char c = haystack.charAt(i);
             if (c == '\r') {
-                if (h + 1 < haystack.length() && haystack.charAt(h + 1) == '\n') {
+                if (i + 1 < haystack.length() && haystack.charAt(i + 1) == '\n') {
                     crlf++;
-                    h += 2;
-                    continue;
+                    i++;
                 }
-                h++; // 孤立 \r:不计入 crlf / lf
-                continue;
             } else if (c == '\n') {
                 lf++;
-                h++;
-                continue;
             }
+        }
+        // 第二遍:逐下标尝试匹配(起点含换行位置),顺带校验唯一
+        int firstStart = -1;
+        int firstEnd = -1;
+        for (int h = 0; h < haystack.length(); h++) {
             int end = matchAt(haystack, needle, h);
             if (end >= 0) {
                 if (firstStart < 0) {
@@ -138,7 +140,6 @@ public class FileTools {
                             "oldcontent 在文档中出现多次,不唯一,无法确定替换位置");
                 }
             }
-            h++;
         }
         if (firstStart < 0) {
             return null;
@@ -216,21 +217,29 @@ public class FileTools {
         if (path == null || path.trim().isEmpty()) {
             throw new IllegalArgumentException("path 不能为空");
         }
-        if (fs.exists(task, path)) {
-            throw new IllegalArgumentException("文件已存在,如需修改请用 update_file");
-        }
         String finalContent = content == null ? "" : content;
         if (finalContent.indexOf('\0') >= 0) {
             throw new IllegalArgumentException("内容疑似二进制(含 NUL 字节),不支持文本写入");
         }
         finalContent = toLf(finalContent); // 新文件默认 LF,与 read_file 输出一致
-        fs.writeText(task, agentId, path, finalContent, false);
+        // 加锁并二次校验存在性:「不存在才创建」在并发下必须原子,否则两个 create_file 会互相覆盖
+        ReentrantLock lock = fs.pathLock(path);
+        lock.lock();
+        try {
+            if (fs.exists(task, path)) {
+                throw new IllegalArgumentException("文件已存在,如需修改请用 update_file");
+            }
+            fs.writeText(task, agentId, path, finalContent, false);
+        } finally {
+            lock.unlock();
+        }
         return "已创建并保存到：" + path;
     }
 
     @Tool(description = "更新已有文件:把文件中唯一出现的 oldcontent 整体原位替换为 content。"
             + "文件不存在、oldcontent 缺失或不唯一时均报错。匹配对行尾(CRLF/LF)宽容,"
-            + "插入内容按文件主导行尾转写,源文件其余部分逐字节保留。")
+            + "插入内容按文件主导行尾转写,源文件其余部分逐字节保留。"
+            + "写入为原子替换并做落盘校验,不会因中断留下截断文件。")
     public String update_file(
             @ToolParam(description = "文件路径(相对任务工作区根)") String path,
             @ToolParam(description = "文件中被整体替换为 content 的旧内容,必须在文件中唯一出现") String oldcontent,
@@ -244,29 +253,37 @@ public class FileTools {
         if (oldcontent == null || oldcontent.isEmpty()) {
             throw new IllegalArgumentException("oldcontent 不能为空");
         }
-        // 单次读即覆盖「存在性 + 写前读」:按写授权档(WRITE)一次弹窗;
-        // 文件不存在 -> NotFoundException 转 create_file 提示,省去 exists()+readText 双解析
-        String existing;
+        // read-modify-write 整体串行:并发写入者(主/派发 agent、并发工具调用)不得各自基于旧快照
+        // 写回,否则会丢失更新甚至写回截断内容。
+        ReentrantLock lock = fs.pathLock(path);
+        lock.lock();
         try {
-            existing = fs.readText(task, agentId, path, PermissionGate.Op.WRITE);
-        } catch (NotFoundException e) {
-            throw new IllegalArgumentException("文件不存在,如需新建请用 create_file");
+            // 单次读即覆盖「存在性 + 写前读」:按写授权档(WRITE)一次弹窗;
+            // 文件不存在 -> NotFoundException 转 create_file 提示,省去 exists()+readText 双解析
+            String existing;
+            try {
+                existing = fs.readText(task, agentId, path, PermissionGate.Op.WRITE);
+            } catch (NotFoundException e) {
+                throw new IllegalArgumentException("文件不存在,如需新建请用 create_file");
+            }
+            if (existing.indexOf('\0') >= 0) {
+                throw new IllegalArgumentException("文件疑似二进制(含 NUL 字节),不支持文本更新");
+            }
+            // 行尾宽容定位唯一 oldcontent(不劈开 CRLF),并顺带得出主导行尾;
+            // 源文件其余部分逐字节保留,混合行尾/孤立 CR 不被改写
+            int[] span = findUniqueEolAgnostic(existing, oldcontent);
+            if (span == null) {
+                throw new IllegalArgumentException("未找到旧内容(oldcontent)");
+            }
+            int start = span[0];
+            int end = span[1];
+            String eol = span[2] == 1 ? "\r\n" : "\n";
+            String newContent = fromLf(toLf(content == null ? "" : content), eol);
+            String replaced = existing.substring(0, start) + newContent + existing.substring(end);
+            fs.writeText(task, agentId, path, replaced, false);
+            return "已更新到：" + path;
+        } finally {
+            lock.unlock();
         }
-        if (existing.indexOf('\0') >= 0) {
-            throw new IllegalArgumentException("文件疑似二进制(含 NUL 字节),不支持文本更新");
-        }
-        // 单次扫描:行尾宽容定位唯一 oldcontent(不劈开 CRLF),并顺带得出主导行尾;
-        // 源文件其余部分逐字节保留,混合行尾/孤立 CR 不被改写
-        int[] span = findUniqueEolAgnostic(existing, oldcontent);
-        if (span == null) {
-            throw new IllegalArgumentException("未找到旧内容(oldcontent)");
-        }
-        int start = span[0];
-        int end = span[1];
-        String eol = span[2] == 1 ? "\r\n" : "\n";
-        String newContent = fromLf(toLf(content == null ? "" : content), eol);
-        String replaced = existing.substring(0, start) + newContent + existing.substring(end);
-        fs.writeText(task, agentId, path, replaced, false);
-        return "已更新到：" + path;
     }
 }
