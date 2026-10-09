@@ -12,9 +12,9 @@
  * 展开态工具名后的文件路径为可点击 chip，点击经 useWorkspaceShell().openGlobalFileTab
  * 打开文件标签页（readwrite 模式，方便用户直接改 AI 写的文件）；workspaceRoot 缺失时
  * 降级为纯文本不可点，避免历史/未关联工作区场景报错。点击时遍历注册表工作区根
- * 定位文件实际所属工作区（AI 可能经授权操作了工作区外的文件），找到后打开；
- * 探测未命中且为工作区外绝对路径时以读写模式打开(文件标签页读取走 fs.readRaw
- * 不经沙箱,用户操作非 AI 工具,直接按机器绝对路径读盘);相对路径未命中才 toast。
+ * 用 statRaw 探测文件实际所属工作区（不经沙箱，用户操作），找到后打开；
+ * 探测未命中且为工作区外绝对路径时也以读写模式打开（文件标签页读取统一走
+ * fs.readRaw 不经沙箱，用户操作非 AI 工具，直接按机器绝对路径读盘）;相对路径未命中才 toast。
  *
  * 路径**展示**一律用工具参数里的原始 `args.path`（与折叠态同一份文本：工作区相对路径
  * 就是相对路径、盘符路径就是盘符路径），不得把 businessPath 当展示文本——businessPath
@@ -26,7 +26,7 @@ import React from 'react'
 import { WrenchIcon, ChevronDownIcon, ChevronRightIcon } from '@/components/shared/AppGlyphs'
 import { useWorkspaceShell } from '@/components/app/WorkspaceShellContext'
 import { useAppUi } from '@/components/app/AppUiContext'
-import { toBusinessAbsolutePath, isAbsoluteBusinessPath } from '@/platform/fs/pathUtils'
+import { toBusinessAbsolutePath } from '@/platform/fs/pathUtils'
 import { workspaceGateway } from '@/platform/fs/workspaceGateway'
 import { workspaceRegistry } from '@/hub/workspaceRegistry'
 import { useTaskWorkspaceRoot } from '../TaskWorkspaceContext'
@@ -90,7 +90,7 @@ export function FileToolEntry({ detail, inlineExtras }: FileToolEntryProps) {
   /**
    * 查找文件实际所属的工作区根。任务工作区根不一定包含该文件（AI 可能经授权
    * 操作了工作区外的文件，或任务工作区根与文件实际位置不一致）。遍历注册表
-   * 中所有工作区根，用 stat 逐个探测，返回第一个能找到文件的工作区根。
+   * 中所有工作区根，用 statRaw 逐个探测（不经沙箱，用户操作），返回第一个能找到文件的工作区根。
    */
   const resolveFileWorkspace = React.useCallback(async (): Promise<string | null> => {
     const candidates: string[] = []
@@ -102,7 +102,7 @@ export function FileToolEntry({ detail, inlineExtras }: FileToolEntryProps) {
       }
     }
     for (const root of candidates) {
-      const stat = await workspaceGateway.stat(root, businessPath).catch(() => null)
+      const stat = await workspaceGateway.statRaw(root, businessPath).catch(() => null)
       if (stat && !stat.isDirectory) {
         return root
       }
@@ -117,9 +117,9 @@ export function FileToolEntry({ detail, inlineExtras }: FileToolEntryProps) {
       openGlobalFileTab({ workspaceRoot: root, filePath: businessPath }, { mode: 'readwrite' })
       return
     }
-    // 探测未命中且为工作区外绝对路径:文件标签页读取走 fs.readRaw(不经沙箱,
-    // 用户操作非 AI 工具,直接按机器绝对路径读盘);保存走 fs.writeRaw 同源。
-    if (isAbsoluteBusinessPath(businessPath) && fallbackWorkspaceRoot) {
+    // 探测未命中:文件标签页读取统一走 fs.readRaw(不经沙箱,用户操作),
+    // 外部绝对路径也能打开;相对路径未命中(工作区内文件不存在)才 toast。
+    if (fallbackWorkspaceRoot) {
       openGlobalFileTab({ workspaceRoot: fallbackWorkspaceRoot, filePath: businessPath }, { mode: 'readwrite' })
       return
     }

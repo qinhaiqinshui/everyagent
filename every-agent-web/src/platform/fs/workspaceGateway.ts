@@ -22,15 +22,19 @@ import type {
   WorkspaceContentSearchHit,
   WorkspaceContentSearchResult,
 } from '@/query/workspaceContentSearch'
-import { normalizeWorkspaceRelativePath, toBusinessAbsolutePath } from './pathUtils'
+import { normalizeWorkspaceRelativePath, isAbsoluteBusinessPath, toBusinessAbsolutePath } from './pathUtils'
 
 /**
- * 把带前导 / 的业务绝对路径还原为机器绝对路径。
- * toBusinessAbsolutePath 给工作区外路径加了前导 / (如 `/C:/Users/...`),worker
- * 的 fs.readRaw / fs.writeRaw 按机器绝对路径(如 `C:/Users/...`)读取,需去掉前导 /。
+ * 把文件标签页的业务路径(workspaceRoot + filePath)还原为机器绝对路径。
+ * - 工作区外绝对路径(如 `/C:/Users/...`):去前导 / 即机器绝对路径;
+ * - 工作区相对路径(如 `src/main.ts`):拼 workspaceRoot + '/' + rel → 机器绝对路径。
  */
-function toMachineAbsolutePath(businessPath: string): string {
-  return normalizeWorkspaceRelativePath(businessPath)
+function resolveMachinePath(workspaceRoot: string, filePath: string): string {
+  if (isAbsoluteBusinessPath(filePath)) {
+    return normalizeWorkspaceRelativePath(filePath)
+  }
+  const rel = normalizeWorkspaceRelativePath(filePath)
+  return rel ? `${workspaceRoot.replace(/[\\/]+$/, '')}/${rel}` : workspaceRoot
 }
 
 /** 按工作区根反查来源 worker 后定向 RPC(多 worker 并行,fs.* 必带 workspace)。 */
@@ -521,11 +525,13 @@ export const workspaceGateway = {
   /**
    * 按机器绝对路径读取文件(不经 workspace 沙箱;文件标签页用户操作专用)。
    * 调 worker 的 fs.readRaw,应答形态与 fs.read 一致(小文件内联 base64、大文件分批)。
-   * absPath 为业务绝对路径(带前导 /,如 `/C:/Users/...`),内部还原为机器绝对路径。
+   * 参数同 readBytes(workspaceRoot + path),内部解析为机器绝对路径后按绝对路径读盘。
    */
-  async readBytesRaw(workerId: string, businessPath: string): Promise<Uint8Array> {
+  async readBytesRaw(workspaceRoot: string, path: string): Promise<Uint8Array> {
     wireFsChanged()
-    const absPath = toMachineAbsolutePath(businessPath)
+    const absPath = resolveMachinePath(workspaceRoot, path)
+    const workerId = workspaceRegistry.workerIdOfRoot(workspaceRoot) ?? workspaceRegistry.primaryWorkerId()
+    if (!workerId) throw new Error('无法确定该文件所属 worker(工作区未注册或 worker 离线)')
     const parts: { offset: number; data: Uint8Array }[] = []
     const result = await hubSession.rpcTo(workerId, 'fs.readRaw', { path: absPath }, {
       timeoutMs: 120_000,
@@ -555,22 +561,24 @@ export const workspaceGateway = {
   },
 
   /** readBytesRaw 的文本包装(同 readTextFile 与 readBytes 的关系)。 */
-  async readTextFileRaw(workerId: string, businessPath: string): Promise<string> {
-    return bytesToText(await this.readBytesRaw(workerId, businessPath))
+  async readTextFileRaw(workspaceRoot: string, path: string): Promise<string> {
+    return bytesToText(await this.readBytesRaw(workspaceRoot, path))
   },
 
   /**
    * 按机器绝对路径写入文件(不经 workspace 沙箱;文件标签页用户保存专用)。
-   * 调 worker 的 fs.writeRaw,应答形态与 fs.write 一致。absPath 同 readBytesRaw。
+   * 调 worker 的 fs.writeRaw,应答形态与 fs.write 一致。参数同 writeTextFile。
    */
-  async writeTextFileRaw(workerId: string, businessPath: string, content: string): Promise<void> {
+  async writeTextFileRaw(workspaceRoot: string, path: string, content: string): Promise<void> {
     wireFsChanged()
-    const absPath = toMachineAbsolutePath(businessPath)
+    const absPath = resolveMachinePath(workspaceRoot, path)
+    const workerId = workspaceRegistry.workerIdOfRoot(workspaceRoot) ?? workspaceRegistry.primaryWorkerId()
+    if (!workerId) throw new Error('无法确定该文件所属 worker(工作区未注册或 worker 离线)')
     await hubSession.rpcTo(workerId, 'fs.writeRaw', { path: absPath, contentBase64: bytesToBase64(textToBytes(content)) }, {
       timeoutMs: 120_000,
     })
-    // 不广播 WORKSPACE_FILE_CHANGED:外部文件不属于任何工作区,文件树不关心;
-    // 标签页自身的 dirty/content 状态由 FileTabPage.handleSave 管理刷新。
+    // 不广播 WORKSPACE_FILE_CHANGED:raw 写不经沙箱,工作区内写由 writeTextFile 的 emit 覆盖,
+    // 工作区外写不属任何工作区;标签页自身 dirty/content 状态由 FileTabPage.handleSave 管理。
   },
 
   /**
@@ -578,8 +586,10 @@ export const workspaceGateway = {
    * 调 worker 的 fs.statRaw,返回与 stat 同构的 WorkspaceFileStat。
    * 外部文件无工作区根,listDir 推导不可用,需专用 RPC 直接 stat。
    */
-  async statRaw(workerId: string, businessPath: string): Promise<WorkspaceFileStat> {
-    const absPath = toMachineAbsolutePath(businessPath)
+  async statRaw(workspaceRoot: string, path: string): Promise<WorkspaceFileStat> {
+    const absPath = resolveMachinePath(workspaceRoot, path)
+    const workerId = workspaceRegistry.workerIdOfRoot(workspaceRoot) ?? workspaceRegistry.primaryWorkerId()
+    if (!workerId) throw new Error('无法确定该文件所属 worker(工作区未注册或 worker 离线)')
     const result = await hubSession.rpcTo(workerId, 'fs.statRaw', { path: absPath }) as {
       name?: string
       dir?: boolean
@@ -589,7 +599,7 @@ export const workspaceGateway = {
     }
     const name = result.name ?? absPath.split(/[\\/]/).pop() ?? ''
     return {
-      path: businessPath,
+      path: isAbsoluteBusinessPath(path) ? path : toBusinessAbsolutePath(path),
       name,
       isDirectory: result.dir === true,
       size: result.size ?? 0,

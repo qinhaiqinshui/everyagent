@@ -8,7 +8,6 @@ import { useAppUi } from '@/components/app/AppUiContext'
 import { App } from 'antd'
 import { workspaceRegistry } from '@/hub/workspaceRegistry'
 import { workspaceGateway } from '@/platform/fs/workspaceGateway'
-import { isAbsoluteBusinessPath } from '@/platform/fs/pathUtils'
 import { FilesIcon } from '@/components/icon'
 import './fileDiff.css'
 
@@ -74,21 +73,13 @@ export default function FileDiffPanel({ fileChange, workspaceRoot: diffWorkspace
     }
     // 差异可能是已删除文件:磁盘上已无该路径,直接打开会进一个报 NOT_FOUND 的空标签。
     // 先校验存在性,缺失时给可读提示,避免用户看到原始 RPC 错误。
-    // 工作区外绝对路径走 fs.readRaw(不经沙箱,用户操作非 AI 工具),无 stat 兜底;
-    // 直接打开标签页,读盘失败时在标签页内呈现错误(与文件标签页的容错一致)。
-    if (isAbsoluteBusinessPath(fileChange.filePath)) {
-      openGlobalFileTab({ workspaceRoot, filePath: fileChange.filePath }, { mode: 'readwrite' })
-      return
-    }
-    const stat = await workspaceGateway.stat(workspaceRoot, fileChange.filePath).catch(() => null)
+    // 工作区外绝对路径也经 fs.statRaw 校验(不经沙箱,用户操作非 AI 工具)。
+    const stat = await workspaceGateway.statRaw(workspaceRoot, fileChange.filePath).catch(() => null)
     if (!stat || stat.isDirectory) {
       showToast(`文件已不存在于工作区（可能已被删除），无法打开：${fileChange.filePath}`, 'error')
       return
     }
-    openGlobalFileTab({
-      workspaceRoot,
-      filePath: fileChange.filePath,
-    }, { mode: 'readwrite' })
+    openGlobalFileTab({ workspaceRoot, filePath: fileChange.filePath }, { mode: 'readwrite' })
   }, [diffWorkspaceRoot, fileChange.filePath, openGlobalFileTab, showToast])
 
   /**

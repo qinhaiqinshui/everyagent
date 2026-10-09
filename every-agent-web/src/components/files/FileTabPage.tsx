@@ -14,8 +14,7 @@ import { fileTabQueryService } from '@/query/fileTabQueryService'
 import { clearFileTabDirtyState, setFileTabDirtyState } from '@/services/fileDirtyStateRegistry'
 import { fileTabCommandService } from '@/services/fileTabCommandService'
 import { workspaceGateway, type WorkspaceFileStat } from '@/platform/fs/workspaceGateway'
-import { normalizeWorkspaceRelativePath, isAbsoluteBusinessPath } from '@/platform/fs/pathUtils'
-import { workspaceRegistry } from '@/hub/workspaceRegistry'
+import { normalizeWorkspaceRelativePath } from '@/platform/fs/pathUtils'
 import PropertiesDialog, { type PropertyItem } from '../shared/PropertiesDialog'
 import {
   countPlainTextChars,
@@ -377,15 +376,8 @@ export default function FileTabPage({
     setPropertiesOpen(true)
     setFileStat(null)
     // 实时获取磁盘属性(FileTabResource 不含 size/时间;每次打开都重新 stat,不缓存)。
-    // 工作区外绝对路径走 fs.statRaw(不经沙箱),工作区内走 fs.stat(经父目录 list 推导)。
-    const statPromise = isAbsoluteBusinessPath(file.filePath)
-      ? (() => {
-        const workerId = workspaceRegistry.workerIdOfRoot(file.workspaceRoot) ?? workspaceRegistry.primaryWorkerId()
-        if (!workerId) return Promise.reject(new Error('无法确定该文件所属 worker'))
-        return workspaceGateway.statRaw(workerId, file.filePath)
-      })()
-      : workspaceGateway.stat(file.workspaceRoot, file.filePath)
-    void statPromise
+    // 文件标签页是用户操作,不经沙箱,统一走 fs.statRaw。
+    void workspaceGateway.statRaw(file.workspaceRoot, file.filePath)
       .then((stat) => setFileStat(stat))
       .catch(() => setFileStat(null))
   }, [file])
