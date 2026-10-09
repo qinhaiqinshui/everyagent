@@ -50,6 +50,8 @@ public final class RpcMethods {
     public static final String FS_READ_RAW = "fs.readRaw";
     /** 按机器绝对路径写入文件(不经 workspace 沙箱;文件标签页用户操作,非 AI 工具调用,不走权限链路)。 */
     public static final String FS_WRITE_RAW = "fs.writeRaw";
+    /** 按机器绝对路径获取文件属性(不经 workspace 沙箱;文件标签页用户操作专用)。 */
+    public static final String FS_STAT_RAW = "fs.statRaw";
 
     // ---- 内嵌终端(§7.18) ----
 

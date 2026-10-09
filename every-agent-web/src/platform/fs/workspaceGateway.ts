@@ -572,4 +572,29 @@ export const workspaceGateway = {
     // 不广播 WORKSPACE_FILE_CHANGED:外部文件不属于任何工作区,文件树不关心;
     // 标签页自身的 dirty/content 状态由 FileTabPage.handleSave 管理刷新。
   },
+
+  /**
+   * 按机器绝对路径获取文件属性(不经 workspace 沙箱;文件标签页用户操作专用)。
+   * 调 worker 的 fs.statRaw,返回与 stat 同构的 WorkspaceFileStat。
+   * 外部文件无工作区根,listDir 推导不可用,需专用 RPC 直接 stat。
+   */
+  async statRaw(workerId: string, businessPath: string): Promise<WorkspaceFileStat> {
+    const absPath = toMachineAbsolutePath(businessPath)
+    const result = await hubSession.rpcTo(workerId, 'fs.statRaw', { path: absPath }) as {
+      name?: string
+      dir?: boolean
+      size?: number
+      modifiedTs?: number
+      createdTs?: number
+    }
+    const name = result.name ?? absPath.split(/[\\/]/).pop() ?? ''
+    return {
+      path: businessPath,
+      name,
+      isDirectory: result.dir === true,
+      size: result.size ?? 0,
+      mtimeMs: result.modifiedTs ?? 0,
+      createdTs: result.createdTs ?? 0,
+    }
+  },
 }

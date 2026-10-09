@@ -75,6 +75,27 @@ public class FsService {
         dispatcher.register(RpcMethods.FS_BROWSE, this::browse);
         dispatcher.register(RpcMethods.FS_READ_RAW, this::readRaw);
         dispatcher.register(RpcMethods.FS_WRITE_RAW, this::writeRaw);
+        dispatcher.register(RpcMethods.FS_STAT_RAW, this::statRaw);
+    }
+
+    /**
+     * 按机器绝对路径获取文件属性(不经 workspace 沙箱;文件标签页用户操作专用)。
+     * 与 fs.readRaw 同源:人工行为不走 PermissionGate/沙箱授权链路。
+     * 返回与 fs.list 条目同构的字段(name/dir/size/modifiedTs/createdTs)。
+     */
+    private void statRaw(RpcContext ctx) throws IOException {
+        Path file = Path.of(ctx.strParam("path")).toAbsolutePath().normalize();
+        if (!Files.exists(file)) {
+            throw new NotFoundException("文件不存在: " + file);
+        }
+        BasicFileAttributes attrs = statEntry(file);
+        ObjectNode o = Json.obj();
+        o.put("name", file.getFileName().toString());
+        o.put("dir", attrs != null && attrs.isDirectory());
+        o.put("size", attrs == null || attrs.isDirectory() ? 0 : attrs.size());
+        o.put("modifiedTs", attrs != null ? attrs.lastModifiedTime().toMillis() : 0L);
+        o.put("createdTs", attrs != null ? attrs.creationTime().toMillis() : 0L);
+        ctx.ok(o);
     }
 
     // ---- 方法实现 ----
