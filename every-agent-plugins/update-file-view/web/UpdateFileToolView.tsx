@@ -20,6 +20,11 @@
  * 任务改动的文件绝大多数不在默认工作区下，直接用它打开必得 [NOT_FOUND]）——
  * 与核心 FileToolEntry.resolveFileWorkspace 同口径，见 handleOpenFile 注释。
  *
+ * 路径**展示**一律用工具参数里的原始 `args.path`（与折叠态同一份文本：工作区相对路径
+ * 就是相对路径、盘符路径就是盘符路径），不得把 businessPath 当展示文本——businessPath
+ * 是统一加前导 `/` 的内部坐标（工作区外绝对路径会变成 `/C:/Users/...`），只用于
+ * fs 探测与 openFileTab，直接展示会凭空空出一个 `/` 前缀。
+ *
  * 结构与 FileToolEntry 同构（复用 chatPanel.css 的 nagent-tool__* 类与插件内
  * helpers 的选区守卫/文件名提取），独立演进不反向侵入核心。
  */
@@ -64,6 +69,8 @@ function formatArgLines(args: Record<string, unknown>): string[] {
 /** 单条 update_file 调用的接管视图。 */
 function UpdateFileEntry({ detail }: { detail: PluginToolCallDetail }) {
   const args = (detail.arguments ?? {}) as Record<string, unknown>
+  // fullPath = 工具参数原样路径（折叠态/展开态 chip 的展示文本，也是探测入参）；
+  // businessPath = 统一加前导 `/` 的内部坐标，仅供 fs 探测与 openFileTab，不展示。
   const fullPath = typeof args.path === 'string' ? args.path : ''
   const businessPath = fullPath ? toBusinessAbsolutePath(fullPath) : ''
   const diffArgs = extractDiffArgs(args)
@@ -138,8 +145,8 @@ function UpdateFileEntry({ detail }: { detail: PluginToolCallDetail }) {
       ctx.ui.openFileTab(ctx.sdk.workspace.rootPath, businessPath, { mode: 'readonly' })
       return
     }
-    message.error(`未能在已注册工作区中找到该文件：${businessPath}`)
-  }, [businessPath, ctx, message, resolveFileWorkspaceRoot])
+    message.error(`未能在已注册工作区中找到该文件：${fullPath}`)
+  }, [businessPath, ctx, fullPath, message, resolveFileWorkspaceRoot])
 
   return (
     <div className={`nagent-tool nagent-tool--filewrite${open ? ' is-open' : ''}`}>
@@ -178,17 +185,17 @@ function UpdateFileEntry({ detail }: { detail: PluginToolCallDetail }) {
             <div className="nagent-tool__result-item-head">
               <WrenchIcon size={12} className={`nagent-tool__icon${hasError ? ' nagent-tool__icon--error' : ''}`} />
               <span className="nagent-tool__name">{detail.toolName || 'update_file'}</span>
-              {businessPath ? (
+              {fullPath ? (
                 <button
                   type="button"
                   className="nagent-tool__detail-path"
-                  title={`打开文件：${businessPath}`}
+                  title={`打开文件：${fullPath}`}
                   onClick={(e) => {
                     e.stopPropagation()
                     void handleOpenFile()
                   }}
                 >
-                  {businessPath}
+                  {fullPath}
                 </button>
               ) : null}
             </div>

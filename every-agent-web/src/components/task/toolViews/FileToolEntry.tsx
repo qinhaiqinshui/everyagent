@@ -15,6 +15,11 @@
  * 定位文件实际所属工作区（AI 可能经授权操作了工作区外的文件），找到后打开；
  * 探测未命中且为工作区外绝对路径时以读写模式打开(文件标签页读取走 fs.readRaw
  * 不经沙箱,用户操作非 AI 工具,直接按机器绝对路径读盘);相对路径未命中才 toast。
+ *
+ * 路径**展示**一律用工具参数里的原始 `args.path`（与折叠态同一份文本：工作区相对路径
+ * 就是相对路径、盘符路径就是盘符路径），不得把 businessPath 当展示文本——businessPath
+ * 是统一加前导 `/` 的内部坐标（工作区外绝对路径会变成 `/C:/Users/...`），只用于
+ * 网关探测与 openGlobalFileTab，直接展示会凭空空出一个 `/` 前缀。
  */
 
 import React from 'react'
@@ -64,6 +69,8 @@ export interface FileToolEntryProps {
 
 export function FileToolEntry({ detail, inlineExtras }: FileToolEntryProps) {
   const args = (detail.arguments ?? {}) as Record<string, unknown>
+  // fullPath = 工具参数原样路径,既作展示文本(折叠态/展开态 chip 同源),也作探测入参;
+  // businessPath = 统一加前导 `/` 的内部坐标(仅网关探测与 openGlobalFileTab 使用,不展示)。
   const fullPath = typeof args.path === 'string' ? args.path : ''
   const businessPath = fullPath ? toBusinessAbsolutePath(fullPath) : ''
 
@@ -116,8 +123,8 @@ export function FileToolEntry({ detail, inlineExtras }: FileToolEntryProps) {
       openGlobalFileTab({ workspaceRoot: fallbackWorkspaceRoot, filePath: businessPath }, { mode: 'readwrite' })
       return
     }
-    showToast(`未能在已注册工作区中找到该文件：${businessPath}`, 'error')
-  }, [businessPath, fallbackWorkspaceRoot, openGlobalFileTab, resolveFileWorkspace, showToast])
+    showToast(`未能在已注册工作区中找到该文件：${fullPath}`, 'error')
+  }, [businessPath, fallbackWorkspaceRoot, fullPath, openGlobalFileTab, resolveFileWorkspace, showToast])
 
   const canOpen = Boolean(businessPath && fallbackWorkspaceRoot && openGlobalFileTab)
 
@@ -158,21 +165,21 @@ export function FileToolEntry({ detail, inlineExtras }: FileToolEntryProps) {
             <div className="nagent-tool__result-item-head">
               <WrenchIcon size={12} className={`nagent-tool__icon${hasError ? ' nagent-tool__icon--error' : ''}`} />
               <span className="nagent-tool__name">{detail.toolName || '文件工具'}</span>
-              {businessPath ? (
+              {fullPath ? (
                 canOpen ? (
                   <button
                     type="button"
                     className="nagent-tool__detail-path"
-                    title={`打开文件：${businessPath}`}
+                    title={`打开文件：${fullPath}`}
                     onClick={(e) => {
                       e.stopPropagation()
                       handleOpenFile()
                     }}
                   >
-                    {businessPath}
+                    {fullPath}
                   </button>
                 ) : (
-                  <span className="nagent-tool__detail-path nagent-tool__detail-path--static" title="未关联工作区，无法打开">{businessPath}</span>
+                  <span className="nagent-tool__detail-path nagent-tool__detail-path--static" title="未关联工作区，无法打开">{fullPath}</span>
                 )
               ) : null}
             </div>
