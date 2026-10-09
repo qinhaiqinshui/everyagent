@@ -24,6 +24,15 @@ import type {
 } from '@/query/workspaceContentSearch'
 import { normalizeWorkspaceRelativePath, toBusinessAbsolutePath } from './pathUtils'
 
+/**
+ * 把带前导 / 的业务绝对路径还原为机器绝对路径。
+ * toBusinessAbsolutePath 给工作区外路径加了前导 / (如 `/C:/Users/...`),worker
+ * 的 fs.readRaw / fs.writeRaw 按机器绝对路径(如 `C:/Users/...`)读取,需去掉前导 /。
+ */
+function toMachineAbsolutePath(businessPath: string): string {
+  return normalizeWorkspaceRelativePath(businessPath)
+}
+
 /** 按工作区根反查来源 worker 后定向 RPC(多 worker 并行,fs.* 必带 workspace)。 */
 function rpcForWorkspace(workspace: string, method: string, params: Record<string, unknown>, opts?: { timeoutMs?: number; onData?: (batch: any[], hasMore: boolean) => void }): Promise<any> {
   const workerId = workspaceRegistry.workerIdOfRoot(workspace)
@@ -507,5 +516,60 @@ export const workspaceGateway = {
       })),
       supportsFiles: result.supportsFiles === true,
     }
+  },
+
+  /**
+   * 按机器绝对路径读取文件(不经 workspace 沙箱;文件标签页用户操作专用)。
+   * 调 worker 的 fs.readRaw,应答形态与 fs.read 一致(小文件内联 base64、大文件分批)。
+   * absPath 为业务绝对路径(带前导 /,如 `/C:/Users/...`),内部还原为机器绝对路径。
+   */
+  async readBytesRaw(workerId: string, businessPath: string): Promise<Uint8Array> {
+    wireFsChanged()
+    const absPath = toMachineAbsolutePath(businessPath)
+    const parts: { offset: number; data: Uint8Array }[] = []
+    const result = await hubSession.rpcTo(workerId, 'fs.readRaw', { path: absPath }, {
+      timeoutMs: 120_000,
+      onData: (batch) => {
+        for (const item of batch as FsReadResult[]) {
+          if (item.base64 !== undefined) {
+            parts.push({ offset: item.offset ?? 0, data: base64ToBytes(item.base64) })
+          }
+        }
+      },
+    }) as FsReadResult
+    if (result.base64 !== undefined) {
+      return base64ToBytes(result.base64)
+    }
+    if (parts.length === 0) {
+      throw new Error(`读取文件失败: ${absPath}`)
+    }
+    parts.sort((a, b) => a.offset - b.offset)
+    const total = parts.reduce((sum, part) => sum + part.data.length, 0)
+    const merged = new Uint8Array(total)
+    let cursor = 0
+    for (const part of parts) {
+      merged.set(part.data, cursor)
+      cursor += part.data.length
+    }
+    return merged
+  },
+
+  /** readBytesRaw 的文本包装(同 readTextFile 与 readBytes 的关系)。 */
+  async readTextFileRaw(workerId: string, businessPath: string): Promise<string> {
+    return bytesToText(await this.readBytesRaw(workerId, businessPath))
+  },
+
+  /**
+   * 按机器绝对路径写入文件(不经 workspace 沙箱;文件标签页用户保存专用)。
+   * 调 worker 的 fs.writeRaw,应答形态与 fs.write 一致。absPath 同 readBytesRaw。
+   */
+  async writeTextFileRaw(workerId: string, businessPath: string, content: string): Promise<void> {
+    wireFsChanged()
+    const absPath = toMachineAbsolutePath(businessPath)
+    await hubSession.rpcTo(workerId, 'fs.writeRaw', { path: absPath, contentBase64: bytesToBase64(textToBytes(content)) }, {
+      timeoutMs: 120_000,
+    })
+    // 不广播 WORKSPACE_FILE_CHANGED:外部文件不属于任何工作区,文件树不关心;
+    // 标签页自身的 dirty/content 状态由 FileTabPage.handleSave 管理刷新。
   },
 }

@@ -1,4 +1,6 @@
 import { workspaceGateway } from '@/platform/fs/workspaceGateway'
+import { isAbsoluteBusinessPath } from '@/platform/fs/pathUtils'
+import { workspaceRegistry } from '@/hub/workspaceRegistry'
 import type { FileTabResource } from '@/types/fileTabs'
 
 /**
@@ -27,11 +29,21 @@ export interface FileTabSaveResult {
   content: string
 }
 
+/** 文件标签页当前文件所在 worker ID(按 workspaceRoot 反查;外部文件用注册表首项兜底)。 */
+function workerIdForFile(file: FileTabResource): string {
+  const workerId = workspaceRegistry.workerIdOfRoot(file.workspaceRoot)
+  if (workerId) return workerId
+  const primary = workspaceRegistry.primaryWorkerId()
+  if (primary) return primary
+  throw new Error('无法确定该文件所属 worker(工作区未注册或 worker 离线)')
+}
+
 /**
  * 文件页命令服务。
  * 统一承接文件保存、重命名等写操作。
  * 工作区模型下文件以 `filePath`（完整业务路径）为唯一身份；写入经远程网关
  * (fs.* RPC 落盘 worker 侧),网关在成功后统一广播 WORKSPACE_FILE_CHANGED。
+ * 工作区外绝对路径(如 `/C:/Users/...`)走 fs.writeRaw/fs.moveRaw(不经沙箱,用户操作)。
  */
 export const fileTabCommandService = {
   /**
@@ -48,7 +60,11 @@ export const fileTabCommandService = {
       resolvedFileName = renameResult.fileName
     }
 
-    await workspaceGateway.writeTextFile(file.workspaceRoot, nextFilePath, nextContent)
+    if (isAbsoluteBusinessPath(nextFilePath)) {
+      await workspaceGateway.writeTextFileRaw(workerIdForFile(file), nextFilePath, nextContent)
+    } else {
+      await workspaceGateway.writeTextFile(file.workspaceRoot, nextFilePath, nextContent)
+    }
 
     return {
       filePath: nextFilePath,
@@ -60,8 +76,12 @@ export const fileTabCommandService = {
 
 /**
  * 执行文件重命名（移动到同目录下的新文件名）。
+ * 工作区外绝对路径暂不支持重命名(需 worker 补 fs.moveRaw,当前 v1 先跳过)。
  */
 async function renameFile(file: FileTabResource, nextFileName: string): Promise<{ filePath: string; fileName: string }> {
+  if (isAbsoluteBusinessPath(file.filePath)) {
+    throw new Error('工作区外文件暂不支持重命名')
+  }
   const parentPath = getParentPath(file.filePath)
   const currentExtension = getExtension(file.fileName)
   const normalizedName = appendExtensionIfMissing(sanitizePathSegment(nextFileName), currentExtension)

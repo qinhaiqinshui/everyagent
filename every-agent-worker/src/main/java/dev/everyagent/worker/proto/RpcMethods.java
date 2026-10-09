@@ -46,6 +46,10 @@ public final class RpcMethods {
     public static final String FS_DELETE = "fs.delete";
     /** 浏览目录(方案 B:列盘符/根,再逐层列子目录;不经 workspace 沙箱,依赖 worker 进程权限)。 */
     public static final String FS_BROWSE = "fs.browse";
+    /** 按机器绝对路径读取文件(不经 workspace 沙箱;文件标签页用户操作,非 AI 工具调用,不走权限链路)。 */
+    public static final String FS_READ_RAW = "fs.readRaw";
+    /** 按机器绝对路径写入文件(不经 workspace 沙箱;文件标签页用户操作,非 AI 工具调用,不走权限链路)。 */
+    public static final String FS_WRITE_RAW = "fs.writeRaw";
 
     // ---- 内嵌终端(§7.18) ----
 

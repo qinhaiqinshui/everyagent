@@ -73,6 +73,8 @@ public class FsService {
         dispatcher.register(RpcMethods.FS_MOVE, this::move);
         dispatcher.register(RpcMethods.FS_DELETE, this::delete);
         dispatcher.register(RpcMethods.FS_BROWSE, this::browse);
+        dispatcher.register(RpcMethods.FS_READ_RAW, this::readRaw);
+        dispatcher.register(RpcMethods.FS_WRITE_RAW, this::writeRaw);
     }
 
     // ---- 方法实现 ----
@@ -152,6 +154,59 @@ public class FsService {
             res.put("supportsFiles", true);
         }
         ctx.ok(res.set("entries", entries));
+    }
+
+    /**
+     * 按机器绝对路径读取文件(不经 workspace 沙箱)。专供文件标签页的用户操作:
+     * 用户点击工具调用里的文件路径 chip 打开文件页,是人工行为而非 AI 工具调用,
+     * 不走 PermissionGate/沙箱授权链路(与 fs.browse 同源,依赖 worker 进程文件系统权限)。
+     * 应答形态与 fs.read 完全一致(小文件内联 base64、大文件 rpc.data 分批)。
+     */
+    private void readRaw(RpcContext ctx) throws IOException {
+        Path file = Path.of(ctx.strParam("path")).toAbsolutePath().normalize();
+        if (!Files.exists(file)) {
+            throw new NotFoundException("文件不存在: " + file);
+        }
+        if (!Files.isRegularFile(file)) {
+            throw new NotFoundException("不是文件: " + file);
+        }
+        byte[] bytes = Files.readAllBytes(file);
+        if (bytes.length <= INLINE_MAX) {
+            ctx.ok(Json.obj()
+                    .put("path", file.toString())
+                    .put("size", bytes.length)
+                    .put("base64", Base64.getEncoder().encodeToString(bytes)));
+            return;
+        }
+        Base64.Encoder enc = Base64.getEncoder();
+        for (int off = 0; off < bytes.length; off += CHUNK) {
+            int len = Math.min(CHUNK, bytes.length - off);
+            ObjectNode part = Json.obj()
+                    .put("offset", off)
+                    .put("size", len)
+                    .put("base64", enc.encodeToString(java.util.Arrays.copyOfRange(bytes, off, off + len)));
+            ctx.data(List.of(part), off + len < bytes.length);
+        }
+        ctx.ok(Json.obj().put("path", file.toString()).put("size", bytes.length));
+    }
+
+    /**
+     * 按机器绝对路径写入文件(不经 workspace 沙箱)。专供文件标签页的用户保存操作,
+     * 与 fs.readRaw 同源:人工行为不走 PermissionGate/沙箱授权链路。
+     * 应答形态与 fs.write 一致(返回 path + size);写后广播 fs.changed(workspace 字段
+     * 置空,前端文件树按 workspaceRoot 过滤自然忽略,不影响标签页自身)。
+     */
+    private void writeRaw(RpcContext ctx) throws IOException {
+        Path target = Path.of(ctx.strParam("path")).toAbsolutePath().normalize();
+        byte[] content = decode(ctx.optStrParam("contentBase64", ""));
+        if (content.length > MAX_WRITE) {
+            throw new BadParamsException("单次写入超过上限 " + MAX_WRITE + " 字节");
+        }
+        if (target.getParent() != null) {
+            Files.createDirectories(target.getParent());
+        }
+        Files.write(target, content);
+        ctx.ok(Json.obj().put("path", target.toString()).put("size", content.length));
     }
 
     /**
