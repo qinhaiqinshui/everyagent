@@ -794,7 +794,6 @@ public class WorkspaceManager implements dev.everyagent.plugin.api.spi.Workspace
     /** 原子写注册表(临时文件 + ATOMIC_MOVE);条目带 id / lastActivityTs 字段。 */
     private void persistRegistry() throws IOException {
         Path f = props.resolveWorkspacesDir().resolve("workspaces.json");
-        Path tmp = f.resolveSibling("workspaces.json.tmp");
         List<Registered> sorted = list();
         ArrayNode arr = Json.arr();
         for (Registered r : sorted) {
@@ -812,7 +811,6 @@ public class WorkspaceManager implements dev.everyagent.plugin.api.spi.Workspace
             }
             arr.add(o);
         }
-        Files.writeString(tmp, Json.write(arr));
-        AtomicFiles.replace(tmp, f); // 原子替换(失败已清理 tmp 后抛出,不残留垃圾)
+        AtomicFiles.writeText(f, Json.write(arr)); // 唯一名 tmp + 原子替换(失败已清理,不残留垃圾)
     }
 }

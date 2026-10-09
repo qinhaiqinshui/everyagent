@@ -1165,22 +1165,10 @@ public class TaskStore implements TaskStoreService {
     }
 
     /**
-     * 原子写文件:先在**同目录**创建**唯一名**临时文件(前缀/后缀保证与目标同目录同文件系统,
-     * 使 ATOMIC_MOVE 可用),写入后经 {@link AtomicFiles#replace} 替换目标,最后清理残留 tmp。
-     *
-     * <p>临时文件必须用唯一名(而非固定名如 {@code meta.json.tmp}):并发写同一目标时,固定名会让
-     * 两个写入者写同一个 tmp 再各自 move,可能把**半截内容**替换进目标;唯一名使每个写入者各有
-     * 独立 tmp,配合原子 move 保证「先完成的完整内容」胜出,绝不出现半截。
+     * 原子写文件:委托 {@link AtomicFiles#writeText}(同目录唯一名 tmp → 原子替换 → 清理残留)。
      */
     private static void writeAtomically(Path target, String content) throws IOException {
-        Path tmp = Files.createTempFile(target.getParent(),
-                "." + target.getFileName() + ".", ".tmp");
-        try {
-            Files.writeString(tmp, content, StandardCharsets.UTF_8);
-            AtomicFiles.replace(tmp, target); // 原子替换(失败已清理 tmp 后抛出,不残留垃圾)
-        } finally {
-            Files.deleteIfExists(tmp); // 成功已被 move;写失败时清理,避免唯一名孤儿堆积
-        }
+        AtomicFiles.writeText(target, content);
     }
 
     /** 原子写 meta(临时文件 + ATOMIC_MOVE)。公开:slash 层在终态任务(未运行)路径改写磁盘 meta.json。 */

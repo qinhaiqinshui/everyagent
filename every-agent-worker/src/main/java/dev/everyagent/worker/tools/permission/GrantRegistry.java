@@ -461,9 +461,7 @@ public class GrantRegistry {
                         .put("rw", e.getValue());
             }
             Path f = dir.resolve("grants.json");
-            Path tmp = dir.resolve("grants.json.tmp");
-            Files.writeString(tmp, Json.write(root));
-            AtomicFiles.replace(tmp, f); // 原子替换(失败已清理 tmp 后抛出,不残留垃圾)
+            AtomicFiles.writeText(f, Json.write(root)); // 唯一名 tmp + 原子替换(失败已清理,不残留垃圾)
         } catch (IOException e) {
             log.warn("任务级授权落盘失败 dir={}(继续内存生效)", dataDir, e);
         }

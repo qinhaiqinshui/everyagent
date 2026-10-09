@@ -23,7 +23,8 @@ import java.nio.file.StandardCopyOption;
  *   <li>最终失败清理残留 tmp 后抛出(调用方按各自语义 catch / fire-and-forget)。</li>
  * </ol>
  *
- * <p>约定:调用方负责先写好 tmp(内容已 flush 到 OS),本类只负责 move + 失败清理;
+ * <p>约定:{@link #replace} 只负责 move —— 调用方负责先写好 tmp(内容已 flush 到 OS);
+ * 或直接用 {@link #writeText}(会自动创建唯一名 tmp、写入、替换并清理),避免各自手搓 tmp 命名。
  * 成功时 tmp 已被 move 走,失败时删除残留,故不会留下 {@code *.tmp} 垃圾。
  */
 public final class AtomicFiles {
@@ -78,5 +79,35 @@ public final class AtomicFiles {
             throw last;
         }
         throw new IOException("原子替换失败(无原始异常): " + tmp + " -> " + target);
+    }
+
+    /**
+     * 原子写文本:在同目录创建**唯一名**临时文件 → 写入 UTF-8 内容 → {@link #replace} 原子替换 →
+     * 清理残留 tmp。**不要用固定名 tmp**(如 {@code meta.json.tmp}):并发写同一目标时,两个写入者会
+     * 写同一个 tmp 再各自 move,可能把半截内容替换进目标;唯一名让每个写入者各有独立 tmp,配合原子
+     * move 保证「先完成的完整内容」胜出,绝不出现半截。
+     *
+     * <p>tmp 必须与 target 同目录(同文件系统,ATOMIC_MOVE 才可用),故不接受跨目录目标语义。
+     * 目录不存在时抛出(与 {@link Files#createTempFile} 一致);调用方负责先建目录。
+     *
+     * @param target  目标文件(不存在则创建;存在则整体替换)
+     * @param content 完整的新内容(UTF-8)
+     * @throws IOException 写入或替换失败(此时 tmp 已被尽力清理,不残留垃圾)
+     */
+    public static void writeText(Path target, String content) throws IOException {
+        Path tmp = Files.createTempFile(target.getParent(),
+                "." + target.getFileName() + ".", ".tmp");
+        try {
+            Files.writeString(tmp, content, java.nio.charset.StandardCharsets.UTF_8);
+            replace(tmp, target);
+        } finally {
+            // 成功时 tmp 已被 move 走(replace 内部);replace 失败时它已清理;此处兜底写失败的情形,
+            // 避免唯一名 tmp 变成永不清理的孤儿。
+            try {
+                Files.deleteIfExists(tmp);
+            } catch (IOException ignore) {
+                // 清理失败不掩盖原始异常
+            }
+        }
     }
 }

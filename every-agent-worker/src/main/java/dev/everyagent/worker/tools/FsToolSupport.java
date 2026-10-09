@@ -225,19 +225,10 @@ public class FsToolSupport {
         }
         Path target = resolveTargetAuthorized(t, agentId, rel, PermissionGate.Op.WRITE);
         Files.createDirectories(target.getParent());
-        // 原子写:先写同目录临时文件,再原子替换。禁止 truncate 后原地重写——一旦写入被中断
-        // (取消/崩溃/AV 与索引短暂持锁)或并发写入者交错,原地写会暴露「截断/空的部分文件」,
-        // 而调用方仍可能视作成功,下一次读取就把截断态固化下来。与 TaskStore / GrantRegistry /
-        // AgentLedger 同一惯例。(回归:`FsWriteAtomicityTest.atomicWriteNeverExposesPartialContent`
-        // 已验证:改回原地写即会读到 0 字符的半截文件。)
-        Path tmp = Files.createTempFile(target.getParent(),
-                "." + target.getFileName().toString() + ".", ".tmp");
-        try {
-            Files.writeString(tmp, finalText, StandardCharsets.UTF_8);
-            AtomicFiles.replace(tmp, target);
-        } finally {
-            Files.deleteIfExists(tmp); // 成功时 tmp 已被 move 走;失败时清理残留
-        }
+        // 原子写:委托 AtomicFiles.writeText(同目录唯一名 tmp → 原子替换 → 清理残留)。禁止 truncate 后
+        // 原地重写——一旦写入被中断(取消/崩溃/AV 与索引短暂持锁)或并发写入者交错,原地写会暴露
+        // 「截断/空的部分文件」,而调用方仍可能视作成功,下一次读取就把截断态固化下来。
+        AtomicFiles.writeText(target, finalText);
         // 写后校验:落盘内容必须与预期逐字符一致。把「静默截断 / 并发覆盖」变成显式失败,
         // 而不是留下一个没人发现的短文件。
         String landed = Files.readString(target, StandardCharsets.UTF_8);

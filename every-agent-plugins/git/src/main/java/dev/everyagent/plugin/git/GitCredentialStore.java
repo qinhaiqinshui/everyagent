@@ -139,9 +139,7 @@ public class GitCredentialStore {
     }
 
     private void atomicWrite(Path file, String content) throws java.io.IOException {
-        Path tmp = file.resolveSibling(FILE_NAME + ".tmp");
-        Files.writeString(tmp, content, StandardCharsets.UTF_8);
-        AtomicFiles.replace(tmp, file); // 原子替换(失败已清理 tmp 后抛出,不残留垃圾)
+        AtomicFiles.writeText(file, content); // 唯一名 tmp + 原子替换(失败已清理,不残留垃圾)
     }
 
     /** 自动生成/加载某工作区的 AES-256 密钥(Base64 落盘 <workspaceRoot>/.everyagent/.git-credential.key)。 */

@@ -1,6 +1,7 @@
 package dev.everyagent.worker.modules;
 
 import dev.everyagent.contract.json.Json;
+import dev.everyagent.plugin.api.util.AtomicFiles;
 import dev.everyagent.worker.config.WorkerProperties;
 import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
@@ -12,7 +13,6 @@ import tools.jackson.databind.node.ObjectNode;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -103,10 +103,7 @@ public class UserPreferenceStore {
             for (var entry : prefs.entrySet()) {
                 root.put(entry.getKey(), entry.getValue());
             }
-            Path tmp = dir.resolve("preferences.json.tmp");
-            Files.writeString(tmp, Json.write(root));
-            Files.move(tmp, filePath, StandardCopyOption.REPLACE_EXISTING,
-                    StandardCopyOption.ATOMIC_MOVE);
+            AtomicFiles.writeText(filePath, Json.write(root)); // 唯一名 tmp + 原子替换(失败已清理,不残留垃圾)
         } catch (IOException e) {
             log.error("[prefs] 写入 preferences.json 失败: {}", e.getMessage(), e);
             throw new IllegalStateException("写入用户偏好失败: " + e.getMessage(), e);

@@ -245,9 +245,7 @@ public class BuiltinTokenEstimator implements TokenEstimator {
             o.put("consecutiveGood", s.consecutiveGood());
         });
         try {
-            Path tmp = file.resolveSibling(file.getFileName() + ".tmp");
-            Files.writeString(tmp, Json.write(root), StandardCharsets.UTF_8);
-            AtomicFiles.replace(tmp, file);
+            AtomicFiles.writeText(file, Json.write(root)); // 唯一名 tmp + 原子替换(失败已清理)
         } catch (IOException e) {
             log.warn("[token-estimator] 状态落盘失败(不影响运行): {}", e.toString());
         }

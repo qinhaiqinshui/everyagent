@@ -403,9 +403,7 @@ public class AgentLedger {
             ArrayNode arr = Json.arr();
             agents.forEach(arr::add);
             root.set("agents", arr);
-            Path tmp = dir.resolve("agents.json.tmp");
-            Files.writeString(tmp, Json.write(root), StandardCharsets.UTF_8);
-            AtomicFiles.replace(tmp, f); // 原子替换
+            AtomicFiles.writeText(f, Json.write(root)); // 唯一名 tmp + 原子替换
         } catch (IOException | RuntimeException e) {
             log.warn("agents.json 写入失败 dir={}", dir, e);
         }
