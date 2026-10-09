@@ -13,8 +13,10 @@
  * 打开文件标签页（readwrite 模式，方便用户直接改 AI 写的文件）；workspaceRoot 缺失时
  * 降级为纯文本不可点，避免历史/未关联工作区场景报错。点击时遍历注册表工作区根
  * 定位文件实际所属工作区（AI 可能经授权操作了工作区外的文件），找到后打开；
- * 探测未命中且为工作区外绝对路径时以任务/注册表根只读兜底打开（worker 只读沙箱
- * 放行在途授权根/技能根，读不到时标签页内呈现 worker 错误）；相对路径未命中才 toast。
+ * 探测未命中且为工作区外绝对路径时,弹授权确认框(§7.17「用户显式选择=已授权」)
+ * 将其所在目录注册为该工作区外部授权根后打开——AI 本任务的在途授权根会随任务收口
+ * evict 失效,工作区级外部授权根则长期有效,使文件标签页此后始终可读可写;
+ * 相对路径未命中才 toast。
  */
 
 import React from 'react'
@@ -24,6 +26,7 @@ import { useAppUi } from '@/components/app/AppUiContext'
 import { toBusinessAbsolutePath, isAbsoluteBusinessPath } from '@/platform/fs/pathUtils'
 import { workspaceGateway } from '@/platform/fs/workspaceGateway'
 import { workspaceRegistry } from '@/hub/workspaceRegistry'
+import { antdConfirm } from '@/utils/appAntdBridge'
 import { useTaskWorkspaceRoot } from '../TaskWorkspaceContext'
 import { extractFileName, hasActiveTextSelection } from './helpers'
 import type { AggregatedToolDetail } from './types'
@@ -110,16 +113,28 @@ export function FileToolEntry({ detail, inlineExtras }: FileToolEntryProps) {
       openGlobalFileTab({ workspaceRoot: root, filePath: businessPath }, { mode: 'readwrite' })
       return
     }
-    // 探测未命中且为工作区外绝对路径:AI 可能经 PermissionGate 授权读过(worker 只读
-    // 沙箱放行在途授权根,按文件授权授父目录;任务收口 gate.evict 驱逐后失效)——直接
-    // 以任务/注册表根打开:能读则展示,读不到时标签页内呈现 worker 错误。readonly:
-    // 前端写沙箱不含授权根,避免注定失败的保存。
+    // 探测未命中且为工作区外绝对路径:授权其所在目录为该工作区外部授权根(§7.17,
+    // 用户显式确认=已授权)后打开。AI 本任务的在途授权根会在任务收口 evict 失效,
+    // 故此处注册工作区级授权根,使文件标签页此后始终可读可写。
     if (isAbsoluteBusinessPath(businessPath) && fallbackWorkspaceRoot) {
-      openGlobalFileTab({ workspaceRoot: fallbackWorkspaceRoot, filePath: businessPath }, { mode: 'readonly' })
+      const workerId = workspaceRegistry.workerIdOfRoot(fallbackWorkspaceRoot)
+      if (!workerId) {
+        showToast('无法确定该工作区所属 worker(工作区未注册或 worker 离线)', 'error')
+        return
+      }
+      const authorized = await confirmExternalAuthorization(businessPath)
+      if (!authorized) return
+      try {
+        await workspaceRegistry.addExternalRoot(workerId, fallbackWorkspaceRoot, fullPath || businessPath)
+      } catch (grantError) {
+        showToast(`授权失败：${grantError instanceof Error ? grantError.message : String(grantError)}`, 'error')
+        return
+      }
+      openGlobalFileTab({ workspaceRoot: fallbackWorkspaceRoot, filePath: businessPath }, { mode: 'readwrite' })
       return
     }
     showToast(`未能在已注册工作区中找到该文件：${businessPath}`, 'error')
-  }, [businessPath, fallbackWorkspaceRoot, openGlobalFileTab, resolveFileWorkspace, showToast])
+  }, [businessPath, fullPath, fallbackWorkspaceRoot, openGlobalFileTab, resolveFileWorkspace, showToast])
 
   const canOpen = Boolean(businessPath && fallbackWorkspaceRoot && openGlobalFileTab)
 
@@ -209,4 +224,31 @@ export function FileToolEntry({ detail, inlineExtras }: FileToolEntryProps) {
       ) : null}
     </div>
   )
+}
+
+/**
+ * 工作区外文件打开前的授权确认(antd Modal.confirm 的 Promise 封装):
+ * 确认 = 显式授权该文件所在目录为工作区外部授权根(§7.17,完全读写,工作区级长期有效);
+ * 取消 = 不打开。antdConfirm 无 Promise 返回值,此处以 onOk/onCancel 回传布尔结论。
+ */
+function confirmExternalAuthorization(businessPath: string): Promise<boolean> {
+  const normalized = businessPath.replace(/\\/g, '/').replace(/^\/+/, '')
+  const idx = normalized.lastIndexOf('/')
+  const parentDir = idx > 0 ? normalized.slice(0, idx) : normalized
+  return new Promise((resolve) => {
+    antdConfirm({
+      title: '打开工作区外文件',
+      content: (
+        <div style={{ whiteSpace: 'pre-wrap' }}>
+          该文件位于工作区之外。授权后将允许读写其所在目录（工作区级，长期有效）：{'\n'}
+          {parentDir}
+          {'\n\n'}是否授权并打开？
+        </div>
+      ),
+      okText: '授权并打开',
+      cancelText: '取消',
+      onOk: () => resolve(true),
+      onCancel: () => resolve(false),
+    })
+  })
 }
