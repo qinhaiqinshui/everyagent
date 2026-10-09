@@ -10,6 +10,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.List;
+import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -26,6 +27,16 @@ class TaskStoreRoundsTest {
     Path dataDir;
 
     private static final String SUB = "sub_x9";
+
+    /** 原子写用唯一名 tmp,断言「目录内不残留任何 .tmp」,比旧断言(固定名 rounds.jsonl.tmp)更强。 */
+    private static void assertNoTempLeftover(Path dir) throws Exception {
+        try (Stream<Path> s = Files.list(dir)) {
+            List<String> leftovers = s.map(p -> p.getFileName().toString())
+                    .filter(n -> n.endsWith(".tmp"))
+                    .toList();
+            assertEquals(List.of(), leftovers, "原子写后不应残留任何 .tmp 文件");
+        }
+    }
 
     private Path t1dir() {
         return dataDir.resolve("workspaces").resolve("defaultworkspace").resolve("tasks").resolve("t1");
@@ -138,7 +149,7 @@ class TaskStoreRoundsTest {
         assertEquals("补完之答", second.finalReply());
         assertEquals(40, second.agentRanges().get(0).endSeq().longValue());
         assertEquals(30, store.lastRoundStartSeq(dir), "锚点不受改写影响");
-        assertTrue(!Files.exists(dir.resolve("rounds.jsonl.tmp")), "临时文件已清理");
+        assertNoTempLeftover(dir);
     }
 
     @Test
@@ -151,7 +162,7 @@ class TaskStoreRoundsTest {
         RoundIndex.Round stranger = new RoundIndex.Round("round_test", 9L, 999L, 1000L, "陌生轮", "答", List.of(), 0L, 0L, null);
         assertFalse(store.rewriteRound("t1", stranger), "无 startSeq 匹配行返回 false");
         assertEquals(before, Files.readString(dir.resolve("rounds.jsonl")), "文件未动");
-        assertTrue(!Files.exists(dir.resolve("rounds.jsonl.tmp")));
+        assertNoTempLeftover(dir);
     }
 
     @Test

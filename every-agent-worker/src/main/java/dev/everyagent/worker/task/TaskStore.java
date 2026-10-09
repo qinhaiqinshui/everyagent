@@ -258,14 +258,12 @@ public class TaskStore implements TaskStoreService {
                     kept.add(line); // 保留原行(seq < target)
                 }
             }
-            // 原子重写文件
-            Path tmp = f.resolveSibling(f.getFileName() + ".tmp");
+            // 原子重写文件(唯一名 tmp,避免并发写同一目标时踩踏同一 tmp)
             StringBuilder sb = new StringBuilder();
             for (String l : kept) {
                 sb.append(l).append('\n');
             }
-            Files.writeString(tmp, sb.toString(), StandardCharsets.UTF_8);
-            AtomicFiles.replace(tmp, f);
+            writeAtomically(f, sb.toString());
         }
         // 截断 rounds.jsonl:只保留 startSeq < targetSeq 的轮次(编辑点之前的轮次)。
         // 不能整个删除——那样会丢失编辑点之前的轮次,前端刷新后只显示新轮。
@@ -285,13 +283,11 @@ public class TaskStore implements TaskStoreService {
                 log.warn("rounds 截断读取失败 {} {}", dir, e);
             }
             try {
-                Path tmp = rf.resolveSibling(rf.getFileName() + ".tmp");
                 StringBuilder sb = new StringBuilder();
                 for (String l : keptRounds) {
                     sb.append(l).append('\n');
                 }
-                Files.writeString(tmp, sb.toString(), StandardCharsets.UTF_8);
-                AtomicFiles.replace(tmp, rf);
+                writeAtomically(rf, sb.toString()); // 唯一名 tmp,避免并发写同一目标时踩踏
             } catch (IOException e) {
                 log.warn("rounds 截断写入失败 {} {}", dir, e);
             }
@@ -846,9 +842,7 @@ public class TaskStore implements TaskStoreService {
             if (!replaced) {
                 return false;
             }
-            Path tmp = dir.resolve("rounds.jsonl.tmp");
-            Files.writeString(tmp, sb.toString(), StandardCharsets.UTF_8);
-            AtomicFiles.replace(tmp, f); // 原子替换(失败已清理 tmp 后抛出,不残留垃圾)
+            writeAtomically(f, sb.toString()); // 原子替换(失败已清理 tmp 后抛出,不残留垃圾)
             return true;
         }
     }
@@ -1030,7 +1024,6 @@ public class TaskStore implements TaskStoreService {
     /** 整写 queue.jsonl(临时文件 + ATOMIC_MOVE,同 writeMeta 惯例);空列表也覆盖写空文件。 */
     public void writeQueue(Path dir, List<UserInput> items) throws IOException {
         Path f = dir.resolve("queue.jsonl");
-        Path tmp = dir.resolve("queue.jsonl.tmp");
         StringBuilder sb = new StringBuilder();
         for (UserInput item : items) {
             ObjectNode line = Json.obj().put("text", item.text());
@@ -1039,8 +1032,7 @@ public class TaskStore implements TaskStoreService {
             }
             sb.append(Json.write(line)).append('\n');
         }
-        Files.writeString(tmp, sb.toString(), StandardCharsets.UTF_8);
-        AtomicFiles.replace(tmp, f); // 原子替换(失败已清理 tmp 后抛出,不残留垃圾)
+        writeAtomically(f, sb.toString()); // 原子替换(失败已清理 tmp 后抛出,不残留垃圾)
     }
 
     /** 删除 queue.jsonl(不存在则忽略;其他 IO 异常记日志)。 */
@@ -1172,13 +1164,29 @@ public class TaskStore implements TaskStoreService {
         t.writers.clear();
     }
 
+    /**
+     * 原子写文件:先在**同目录**创建**唯一名**临时文件(前缀/后缀保证与目标同目录同文件系统,
+     * 使 ATOMIC_MOVE 可用),写入后经 {@link AtomicFiles#replace} 替换目标,最后清理残留 tmp。
+     *
+     * <p>临时文件必须用唯一名(而非固定名如 {@code meta.json.tmp}):并发写同一目标时,固定名会让
+     * 两个写入者写同一个 tmp 再各自 move,可能把**半截内容**替换进目标;唯一名使每个写入者各有
+     * 独立 tmp,配合原子 move 保证「先完成的完整内容」胜出,绝不出现半截。
+     */
+    private static void writeAtomically(Path target, String content) throws IOException {
+        Path tmp = Files.createTempFile(target.getParent(),
+                "." + target.getFileName() + ".", ".tmp");
+        try {
+            Files.writeString(tmp, content, StandardCharsets.UTF_8);
+            AtomicFiles.replace(tmp, target); // 原子替换(失败已清理 tmp 后抛出,不残留垃圾)
+        } finally {
+            Files.deleteIfExists(tmp); // 成功已被 move;写失败时清理,避免唯一名孤儿堆积
+        }
+    }
+
     /** 原子写 meta(临时文件 + ATOMIC_MOVE)。公开:slash 层在终态任务(未运行)路径改写磁盘 meta.json。 */
     @Override
     public void writeMeta(Path dir, ObjectNode summary) throws IOException {
-        Path f = dir.resolve("meta.json");
-        Path tmp = dir.resolve("meta.json.tmp");
-        Files.writeString(tmp, Json.write(summary));
-        AtomicFiles.replace(tmp, f); // 原子替换(失败已清理 tmp 后抛出,不残留垃圾)
+        writeAtomically(dir.resolve("meta.json"), Json.write(summary));
     }
 
     private static EventRecord parseLine(String line) {
