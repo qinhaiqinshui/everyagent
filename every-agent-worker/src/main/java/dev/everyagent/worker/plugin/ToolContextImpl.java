@@ -143,6 +143,24 @@ public class ToolContextImpl implements ToolContext {
         return cmd::execute;
     }
 
+    /**
+     * 命令授权门禁:后端自建命令执行器的插件在 spawn 前调用,行为与 worker 内置
+     * {@link CommandExecutor} 的门禁一致(危险动词 + 越界路径逐项授权;拒绝抛异常回灌模型)。
+     *
+     * <p>授权通过后 {@code GrantRegistry} 会把授权范围下发给沙箱(§7.8),
+     * 故插件无需自行落地权限。
+     */
+    @Override
+    public dev.everyagent.plugin.api.spi.CommandGate commandGate() {
+        return command -> {
+            try {
+                gate.requireCommand(this, agentId, command);
+            } catch (java.io.IOException e) {
+                throw new RuntimeException("execute: 授权检查失败 " + e.getMessage(), e);
+            }
+        };
+    }
+
     /** 内置适配器专用：权限门具体实现（接口方法返回 SPI 接口类型）。 */
     public PermissionGate gateImpl() {
         return gate;

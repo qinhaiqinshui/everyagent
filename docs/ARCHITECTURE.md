@@ -546,6 +546,17 @@ ask 管道承载第二类阻塞请求:**危险操作授权**。`PermissionGate` 
 
 **效果与时机分离(§7.8)**:沙箱只表达效果,**何时授权/回收由上层决定**——`PermissionGate`/`GrantRegistry` 是唯一翻译点(见 §7.8「授权下发沙箱」),故沙箱插件**不订阅任何领域事件**,也不需要事件总线。
 
+**命令门禁由插件主动调用(`ToolContext.commandGate()`)**:危险动词 / 工作区外路径引用的授权判定归 worker(`PermissionGate.requireCommand`),但**命令串只在插件自己的执行器里**——worker 无法在不侵入后端的前提下拦截。故经 `ToolContext.commandGate()` 下发一个窄接口({@code CommandGate.authorize(command)}),后端自建执行器的插件**必须**在 spawn 前先过门禁:
+
+```java
+ShellExecutor gated = (cmd, shell) -> { ctx.commandGate().authorize(cmd); return exec.execute(cmd, shell); };
+```
+
+- 授权通过后 worker **同步把授权范围下发沙箱**(§7.8),插件无需自行落地权限;
+- 拒绝 → 抛异常(消息回灌模型),命令不执行;
+- **不接门禁的后果**:该后端的命令永远不会触发授权 → 「授权 → 下发沙箱」链路根本不启动,表现为工作区外读写被 OS 直接拒绝且**从不弹窗**(难以从表象归因,故列为插件契约硬要求);
+- 现状:codex / wsl-ubuntu 自建执行器 → 已接门禁;windows-mic 使用 `ctx.shellExecutor()`(= worker 的 `CommandExecutor`,门禁内建)→ 无需重复包装;DIRECT(`DirectShellToolProvider`)同 mic。
+
 **后端选择时机(时序红线)**:`SandboxProvider` 全部由插件在 `PluginLoader` 的 `@PostConstruct` 里注册,而 `PluginLoader → WorkerServices → OsSandbox` 的构造依赖链决定了 **OsSandbox 一定先于插件激活完成初始化**。因此后端**不得在 `@PostConstruct` 一次性定论**:
 - `OsSandbox` 的 delegate 按 **`SandboxProviderRegistry` 代次(generation,每次注册/注销自增)惰性解析**:首次访问(`id()`/`grant()`/`revoke()`/`toSandbox()`/`toHost()`)或代次变化时重新 `select()`,解析结果(含「无可用后端」的 null)按代次缓存,不产生每次调用的重复探测;
 - 选择规则不变:`select()` 先按 `isAvailable()` 过滤候选,再对胜出者 `create()`——重副作用(如 codex 的 UAC setup)只可能发生在胜出时刻,不因探测而提前;

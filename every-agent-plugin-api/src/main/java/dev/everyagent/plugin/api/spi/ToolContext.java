@@ -38,4 +38,19 @@ public interface ToolContext extends ExecContext {
     default ShellExecutor shellExecutor() {
         return null;
     }
+
+    /**
+     * 命令授权门禁 —— 沙箱插件在 spawn 前调用（{@link CommandGate#authorize}），
+     * 把危险动词 / 工作区外路径引用交给 worker 的授权决议链（弹窗 / AI 审议）。
+     *
+     * <p>后端自建命令执行器时<b>必须</b>先过本门禁：worker 只对自己内置的
+     * {@code CommandExecutor} 做了门禁，插件的执行器若不过门禁，则「授权 → 下发沙箱」
+     * 这条链根本不会启动（表现为工作区外写操作被 OS 直接拒绝且从不弹窗）。
+     *
+     * <p>默认实现放行（无门禁）——仅供不走沙箱 / 不需要授权的极端场景。
+     */
+    default CommandGate commandGate() {
+        return command -> {
+        };
+    }
 }

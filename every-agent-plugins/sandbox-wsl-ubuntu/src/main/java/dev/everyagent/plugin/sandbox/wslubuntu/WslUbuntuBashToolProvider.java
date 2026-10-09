@@ -76,7 +76,23 @@ public class WslUbuntuBashToolProvider implements ToolProvider {
         return List.of(ShellTool.bash("在系统上用 bash 执行真实 OS 命令;"
                         + "命令工作目录默认为任务工作区根;"
                         + rgNote,
-                exec::execute).callback());
+                gated(ctx.commandGate(), exec::execute)).callback());
+    }
+
+    /**
+     * 门禁包装：先授权、再执行（授权拒绝 → 命令不执行，异常回灌模型）。
+     *
+     * <p>本插件的命令执行器自建，worker 无法拦命令串，故必须在此过 worker 的授权门禁——
+     * 否则「工作区外路径授权 → 下发沙箱」这条链根本不会启动。授权通过后 worker 会同步把
+     * 授权范围下发沙箱（§7.8），本类无需自行落地权限。
+     */
+    static dev.everyagent.plugin.api.shell.ShellExecutor gated(
+            dev.everyagent.plugin.api.spi.CommandGate gate,
+            dev.everyagent.plugin.api.shell.ShellExecutor delegate) {
+        return (command, shell) -> {
+            gate.authorize(command);
+            return delegate.execute(command, shell);
+        };
     }
 
     /**

@@ -1,6 +1,8 @@
 package dev.everyagent.plugin.sandbox.codex;
 
+import dev.everyagent.plugin.api.shell.ShellExecutor;
 import dev.everyagent.plugin.api.shell.ShellTool;
+import dev.everyagent.plugin.api.spi.CommandGate;
 import dev.everyagent.plugin.api.spi.ToolContext;
 import dev.everyagent.plugin.api.spi.ToolProvider;
 
@@ -56,6 +58,10 @@ public class CodexBashToolProvider implements ToolProvider {
     public List<ToolCallback> createTools(ToolContext ctx) {
         Path workspaceRoot = ctx.workspaceRoot() != null ? Path.of(ctx.workspaceRoot()) : null;
         CodexCommandExecutor exec = new CodexCommandExecutor(manager, workspaceRoot, rg.injectPath());
+        // 门禁接入(§7.8):后端的命令执行器归本插件所有,worker 无法拦命令串,故由本插件
+        // 在 spawn 前先过 worker 的授权门禁——否则「工作区外路径授权 → 下发沙箱」这条链
+        // 根本不会启动(表现为被 OS 直接拒绝且从不弹窗)。授权通过后 worker 同步把授权范围
+        // 下发给沙箱,故此处无需自行落地权限。
         // 描述全量自报(2026-12 第三批:核心零默认,提供者必传):用途/工作目录两句随移交由本
         // 后端自写。通用常识类条目(stdin 语义、-join/$OFS、非 ASCII 已解码、Out-String 收口、
         // 连接符版本)均已按用户决策从描述删除(沿革与残余风险见 ARCHITECTURE §7.10),
@@ -77,6 +83,18 @@ public class CodexBashToolProvider implements ToolProvider {
                         + CodexCommandExecutor.shellDisplay()
                         + " 执行真实 OS 命令;命令工作目录默认为任务工作区根;"
                         + rgNote + "。",
-                exec::execute).callback());
+                gated(ctx.commandGate(), exec::execute)).callback());
+    }
+
+    /**
+     * 门禁包装:先授权、再执行(授权拒绝 → 命令不执行,异常回灌模型)。
+     *
+     * <p>抽取为静态方法便于单测钉住「门禁先于执行、且拒绝即短路」这条契约。
+     */
+    static ShellExecutor gated(CommandGate gate, ShellExecutor delegate) {
+        return (command, shell) -> {
+            gate.authorize(command);
+            return delegate.execute(command, shell);
+        };
     }
 }
