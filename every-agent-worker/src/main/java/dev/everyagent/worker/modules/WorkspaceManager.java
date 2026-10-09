@@ -308,9 +308,6 @@ public class WorkspaceManager implements dev.everyagent.plugin.api.spi.Workspace
         registry.put(key, new Registered(entry.id(), key, entry.addedAt(), entry.lastActivityAt(),
                 merged.stream().map(Path::toString).toList()));
         persistRegistry();
-        // 外部授权根新增是注册表变更(§5.9 广播收口点):对齐沙箱授权账本 + 广播 workspaces.changed,
-        // 使沙箱后端立即挂载/放行新根、前端注册表即时校准。
-        onRegistryChanged();
         return new ExternalRootsUpdate(action, merged);
     }
 

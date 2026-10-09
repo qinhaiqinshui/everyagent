@@ -180,15 +180,6 @@ class WorkspaceRegistryService {
   }
 
   /**
-   * 注册工作区外部授权根(架构 §7.17):用户显式打开/选择工作区外文件时,
-   * 授权其所在目录(文件→父目录)为该工作区的「完全读写」授权根。
-   * worker 端幂等注册并立即落盘 + 广播 workspaces.changed(本服务经 wire 订阅自动校准)。
-   */
-  async addExternalRoot(workerId: string, workspaceRoot: string, externalPath: string): Promise<void> {
-    await hubSession.rpcTo(workerId, 'workspaces.addExternalRoot', { workspace: workspaceRoot, path: externalPath })
-  }
-
-  /**
    * 启动自检缺失工作区落定(worker 端 workspaces.resolveMissing):
    * - action=delete:删除注册 + 级联删除挂靠任务数据(默认工作区不可删除);
    * - action=redirect:纠正注册到用户移动后的新目录(newRoot 必填),并迁移任务归属。
