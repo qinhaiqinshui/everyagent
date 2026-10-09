@@ -23,7 +23,7 @@ has_children: false
 | `ui.sidebar_items` | `registerSidebarItem` | 左侧活动栏入口 + 面板 | git、plugin-manager |
 | `ui.workspace_tab_types` | `registerWorkspaceTabType` | 自定义工作区标签类型 | git（git-history） |
 | `ui.file_sidebar_panels` | `registerFileSidebarPanel` | 文件页右侧栏面板 | **无** |
-| `ui.composer_above_panel`（**单数**） | `registerComposerAbovePanel` | 输入框上方面板 | subagent、task-input-queue |
+| `ui.composer_above_panel`（**单数**） | `registerComposerAbovePanel` | 输入框上方面板 | task-input-queue |
 | `ui.tool_call_views` | `registerToolCallView` | 按工具名整体接管工具调用渲染 | update-file-view |
 | `ui.user_message_actions` | `registerUserMessageAction` | 用户消息气泡旁的动作按钮 | task-edit-resend |
 | `task.submit_contributions` | `registerTaskRunSubmitContributionProvider` | 提交前向 task.run 追加 metadata/改按钮 | task-edit-resend |
@@ -194,7 +194,7 @@ ctx.ui.registerComposerAbovePanel({ id: 'my-plugin-toolbar', Component: MyToolba
 消费链：`TaskChat` 用扩展点版本号订阅后同步 `listRegisteredComposerAbovePanels()`（`TaskChat.tsx:818-829`），渲染在输入框上方堆栈、内置 `AgentListPanel` 之后（`:944-947`）。
 
 - **坑**：① **常量名单数** `'ui.composer_above_panel'`（`PluginDispatcher.ts:45`），其余扩展点全是复数——dispatch 字符串写复数会静默返回空数组（`PluginDispatcher.ts:197-220` switch 无此 case）；② 无 `order` 字段，多面板按注册顺序渲染；③ 公共 ctx **不带插件专有数据**（`TaskChat.tsx:830-831` 注释），面板要自持数据源（RPC 拉取 + 信号刷新，见 task-input-queue 范例）。
-- **内置范例**：subagent（`every-agent-plugins/subagent/web/index.ts:11-16`，注意其面板尚未消费自家 `task.agents` RPC，`SubAgentListPanel.tsx:13` 为 TODO）、task-input-queue（`every-agent-plugins/task-input-queue/web/index.ts:15-21`，自持快照数据源的正面教材）。
+- **内置范例**：task-input-queue（`every-agent-plugins/task-input-queue/web/index.ts:15-21`，自持快照数据源的正面教材）。（subagent 的原同名注册已随插件去 web 退役，agent 胶囊列表由 web 核心 `TaskChat` + `AgentListPanel` 渲染。）
 
 ## 7. `ui.tool_call_views` —— 工具调用视图接管
 

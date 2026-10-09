@@ -43,7 +43,7 @@ has_children: false
 | sandbox-windows-mic | Windows MIC 沙箱 | java（`enabled:false`） | SandboxProvider + ToolProvider | — | priority 5 | 入口 34 行 |
 | sandbox-wsl-ubuntu | WSL Ubuntu 沙箱 | java（`enabled:false`） | SandboxProvider + ToolProvider + SlashProvider + SlashTokenResolver | — | priority 10 | 入口 47 行 |
 | secret-redaction | 凭据输出脱敏 | java | ToolExecutionInterceptor | — | — | 入口 24 行 |
-| subagent | 子 Agent | both | ToolProvider + SkillContributor + TaskLifecycleNode；RPC `task.agents` | `ui.composer_above_panel` | 节点 950 | 入口 47 行 + web 19 行 |
+| subagent | 子 Agent | java | ToolProvider + SkillContributor + TaskLifecycleNode | — | 节点 950 | 入口 47 行 |
 | system-info | 系统环境信息注入 | java | AdvisorProvider | — | HP+50 | 入口 19 行 |
 | task-edit-resend | 编辑重发 | both | TaskLifecycleNode | `ui.user_message_actions` + `task.submit_contributions` | 节点 877 | 入口 27 行 + web 26 行 |
 | task-input-queue | 任务输入队列 | both | TaskLifecycleNode ×2 + AdvisorProvider；RPC ×3（`task.queue*`） | `ui.composer_above_panel` | 节点 15 / 870；Advisor DO+30 | 入口 38 行 + web 24 行 |
@@ -54,7 +54,7 @@ has_children: false
 
 ### 2.1 全体共性（读任何一个插件前先知道）
 
-- 形态分布：java-only 17 / both 6 / web-only 3；**没有纯声明式插件**（每个都至少有一侧入口）。
+- 形态分布：java-only 18 / both 5 / web-only 3；**没有纯声明式插件**（每个都至少有一侧入口）。
 - 清单字段全体一致：`id/name/version/description/author` + `enabled`，version 一律 `0.1.0`、author 一律 `everyagent`；含 Java 的 23 个另有 `main`，含前端的 9 个另有 `webMain`（值全部写 `web/index.ts`，宿主实际加载的是构建产物 `web/index.js`，见 [plugin.json 字段参考](../plugin-manifest.md) §5）。
 - 用 `contributes.config` 的只有 2 个：image-vision（3 键）、sandbox-windows-codex（6 键）。
 - `enabled:false` 的只有 2 个：sandbox-windows-mic、sandbox-wsl-ubuntu（内置扫描期整目录跳过）。
@@ -103,7 +103,7 @@ has_children: false
 | `ui.sidebar_items`（活动栏项） | plugin-manager | `every-agent-plugins/plugin-manager/web/index.ts:18-25` | web-only 最小范本：一个 `registerSidebarItem` + `ctx.sdk.rpc` 调后端；带 Badge/图标/多面板的进阶版看 git |
 | `ui.workspace_tab_types`（工作区标签类型） | git | `every-agent-plugins/git/web/index.ts:39` | 唯一使用者；配套 `ctx.ui.openPluginTab` / `openDiffTab` 动作方法可一并抄 |
 | `ui.file_sidebar_panels` | **无内置范例** | — | 扩展点已声明但零使用，接线情况见 [已知问题](known-issues.md) |
-| `ui.composer_above_panel`（输入框上方面板） | task-input-queue | `every-agent-plugins/task-input-queue/web/index.ts:17-20` | 三行注册 + 面板组件全交互（rpc 拉快照 / 广播刷新）齐全；subagent 的同名注册是「未接线面板」反例（⚠️ 见 §5） |
+| `ui.composer_above_panel`（输入框上方面板） | task-input-queue | `every-agent-plugins/task-input-queue/web/index.ts:17-20` | 三行注册 + 面板组件全交互（rpc 拉快照 / 广播刷新）齐全 |
 | `ui.tool_call_views`（工具调用视图接管） | update-file-view | `every-agent-plugins/update-file-view/web/index.ts:20-25` | 唯一使用者，整体接管 `update_file` 工具的渲染 |
 | `ui.user_message_actions`（用户消息动作） | task-edit-resend | `every-agent-plugins/task-edit-resend/web/index.ts:18-21` | 唯一使用者；配套 `setComposerRawContent` / `appendComposerText` 回写输入框 |
 | `task.submit_contributions`（提交期贡献） | task-edit-resend | `every-agent-plugins/task-edit-resend/web/index.ts:22` | 唯一使用者，与后端节点配合完整链路 |
@@ -293,9 +293,9 @@ WSL Ubuntu 沙箱 + bash 工具 + network slash 开关。
 
 ### subagent（子 Agent）
 
-子 Agent 工具 + 技能贡献 + 收口等待节点 + 前端面板。
+子 Agent 工具 + 技能贡献 + 收口等待节点。
 - 关键文件：`~plugins/subagent/src/main/java/dev/everyagent/plugin/subagent/SubAgentPlugin.java:31-44`；节点 order=950 见 `SubAgentSpawnedAwaitNode.java:29`。
-- ⚠️ `web/SubAgentListPanel.tsx:13` 为 TODO，面板尚未消费自家 `task.agents` RPC（当前渲染 null）。
+- 插件**已无 web 前端功能**：原 `ui.composer_above_panel` 子 agent 面板退役，agent 胶囊列表由 web 核心 `TaskChat` + `AgentListPanel` 渲染；`task.agents` RPC 已收回 task 域（`TaskManager` 注册），不再由本插件提供。
 - 值得看：一插件多 SPI 组合；主/子 Agent 共用同一运行入口的对接点。
 
 ### system-info（系统环境信息注入）

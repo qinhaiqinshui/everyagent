@@ -71,7 +71,7 @@ every-agent-plugins/<id>/
 └─ web/
    ├─ index.ts            # 入口：export default PluginModule
    │                      # ⚠️ 入口是 .ts：esbuild 的 ts loader 不解析 JSX，
-   │                      # JSX 组件放同级 .tsx（仓内 9 个含 web 的插件全部如此）
+   │                      # JSX 组件放同级 .tsx（仓内 8 个含 web 的插件全部如此）
    ├─ SomePanel.tsx       # 组件 / 图标 / 工具模块（jsx:automatic）
    ├─ index.js|index.css  # esbuild 产物（gitignored），构建后才存在
    └─ *.map               # sourcemap（同样 gitignored）
@@ -125,7 +125,7 @@ export default plugin
 ### 约定 1：入口契约 —— `webMain: "web/index.ts"` 非空 + `export default { activate(ctx) }`
 
 - **为什么**：`webMain` 非空决定 `hasWebMain` 真假（`PluginRpcMethods.java`），其**值也被前端消费**——产物路径 = `webMain` 去扩展名拼 `.js`（`pluginLoader.ts` 的 `webEntryJsPath`，空值/旧 worker 回退 `web/index.js`；known-issues #5 修复前该值不被消费、路径硬编码）。加载后取 `mod.default ?? mod`，所以入口必须 default 导出一个带 `activate` 的对象（类型声明 `every-agent-plugin-api/js/index.ts`）。
-- **怎么做**：`plugin.json` 写 `"webMain": "web/index.ts"`（仓内 9 个含 web 的插件全是这个值，与 `build-plugins.mjs` 的产物位换算一致）；入口 `export default plugin`，`activate(ctx)` 里注册全部贡献。
+- **怎么做**：`plugin.json` 写 `"webMain": "web/index.ts"`（仓内 8 个含 web 的插件全是这个值，与 `build-plugins.mjs` 的产物位换算一致）；入口 `export default plugin`，`activate(ctx)` 里注册全部贡献。
 - **违反症状**：`webMain` 空 → 插件在前端**静默消失**；没 default 导出 / default 无 `activate` → **静默跳过，控制台无输出**；`webMain` 写了非约定路径而产物仍落在 `web/index.js` → `plugin.webSource` 读不到文件，加载失败。
 
 ### 约定 2：类型只能 `import type`

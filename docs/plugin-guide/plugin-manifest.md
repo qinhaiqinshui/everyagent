@@ -188,7 +188,7 @@ worker 启动（@PostConstruct，全程只读一次）
 
 由此推出三条硬约束：
 
-1. **`webMain` 必须非空**（否则 `hasWebMain=false`，插件在前端根本不出现）。仓内约定值是 **源码路径 `"web/index.ts"`**（9 个含 web 的插件全都这么写，例 `every-agent-plugins/git/plugin.json`）。
+1. **`webMain` 必须非空**（否则 `hasWebMain=false`，插件在前端根本不出现）。仓内约定值是 **源码路径 `"web/index.ts"`**（8 个含 web 的插件全都这么写，例 `every-agent-plugins/git/plugin.json`）。
 2. **产物必须落在 `webMain` 换算出的路径**：`build-plugins.mjs` 固定扫 `every-agent-plugins/<id>/web/index.ts` 并输出 `<id>/web/index.js`——照约定写 `"web/index.ts"` 时换算结果与产物天然一致；若把 `webMain` 改成别的源码路径，就必须让产物也落在同名 `.js` 上，否则 `plugin.webSource` 读不到该文件抛错（前端打日志 `[plugins] 插件 <id> 加载失败` 后跳过）。构建命令（PowerShell 下 `npm` 被执行策略拦截时用 `npm.cmd`）：
 
    ```powershell

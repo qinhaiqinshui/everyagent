@@ -65,8 +65,8 @@ has_children: false
 ### #9 陈旧注释与未完成 TODO（✅ 已修复）
 
 - **现象（修复前）**：① 4 个插件注释仍引用**已删除**的 `builtInPlugins.ts`；② `git/web/index.ts` 自称「纯 Web 插件」，实际 plugin.json 有 `main`（both 形态）；③ `subagent/web/SubAgentListPanel.tsx` 为 TODO，面板尚未消费自家 `task.agents` RPC（当前渲染 null）。
-- **修复**：①② 已更正——4 处头注释统一改为真实链路口径「经 worker `plugin.list` 发现、`plugin.webSource` RPC 拉取 esbuild 预编译产物动态加载」，git 插件自述改为 both 形态；rg 复核 `builtInPlugins` 全仓零残留（提交 `b416c3ac`）。③ 经核对**与代码现状一致**（面板仍渲染 null、`task.agents` 确未消费），属真实功能待办而非陈旧注释，按「宁缺毋滥」原则未动。
-- **后续**：注释债已清零；③ 的 subagent 面板消费 `task.agents` 属功能开发，单独排期（反查台账见 [内置插件](builtin-plugins.md) §5）。
+- **修复**：①② 已更正——4 处头注释统一改为真实链路口径「经 worker `plugin.list` 发现、`plugin.webSource` RPC 拉取 esbuild 预编译产物动态加载」，git 插件自述改为 both 形态；rg 复核 `builtInPlugins` 全仓零残留（提交 `b416c3ac`）。③ 已随「subagent 插件去 web」终结——子 agent 面板整体退役，`task.agents` RPC 收回 task 域（`TaskManager` 注册），agent 胶囊列表由 web 核心 `TaskChat` + `AgentListPanel` 渲染（见 [`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) §5.5/§7.14）。
+- **后续**：注释债已清零；原 ③ 的「面板消费 `task.agents`」不再需要（面板已删，RPC 归 task 域）。
 
 ## B. 后端 worker
 

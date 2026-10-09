@@ -13,7 +13,7 @@ has_children: false
 |---|---|---|---|
 | `registerTaskAdmissionPolicy` | `TaskPluginContext.java:17` | `TaskAdmissionPolicyRegistry`（至多一个，AtomicReference） | task-queue（唯一） |
 | `registerTaskLifecycleNode` | `TaskPluginContext.java:24` | `TaskLifecycleRegistry` → `TaskLifecycleExecutor` | task-input-queue ×2、task-queue、task-edit-resend、subagent（4 插件 5 节点） |
-| `registerRpcMethod` | `WorkerPluginContext.java:79` | `RpcDispatcher`（方法表 ConcurrentHashMap） | git ×13、task-input-queue ×3、subagent、task-queue、file-change（共 19 个方法） |
+| `registerRpcMethod` | `WorkerPluginContext.java:79` | `RpcDispatcher`（方法表 ConcurrentHashMap） | git ×13、task-input-queue ×3、task-queue、file-change（共 18 个方法） |
 | `registerSlashProvider` | `WorkerPluginContext.java:87` | `SlashCommandRegistry`（→ `slash.list` RPC） | ai-review、git、sandbox-wsl-ubuntu、unattended（4 处） |
 | `registerSlashTokenResolver` | `WorkerPluginContext.java:94` | `SlashTokenHandler`（同上 4 插件各自的 resolver） | 同上 4 插件 |
 
@@ -264,19 +264,18 @@ void registerRpcMethod(String method, RpcMethod handler);
 
 **方法表是插件与 worker 内置共用的一张表**（`RpcDispatcher.java:39`）：`tasks.list`、`task.run`、`task.poll`（[`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) §7.13 的统一读取 RPC）等内置方法与插件的 `git.status` 完全平权；`put` 语义意味着**同名方法后注册者覆盖先注册者**——worker 内置注册与插件激活的先后由 Spring 启动序决定（未实测具体先后），插件应避开内置方法名（§3.3）。
 
-### 3.3 方法名命名空间现状（19 个插件方法归纳）
+### 3.3 方法名命名空间现状（18 个插件方法归纳）
 
-内置插件注册的全部 RPC 方法（rg 复核，共 19 个）：
+内置插件注册的全部 RPC 方法（rg 复核，共 18 个）：
 
 | 前缀 | 方法 | 注册方 |
 |---|---|---|
 | `git.` | `git.status` `git.log` `git.diff` `git.show` `git.commit` `git.pull` `git.push` `git.discard` `git.init` `git.clone` `git.remote.add` `git.remote.list` `git.credential.save`（13 个） | git（`GitRpcMethods.java:4-16`，常量类；注册 `GitPlugin.java:42-54`） |
 | `task.` | `task.queueList` | task-queue（`TaskQueuePlugin.java:29`） |
 | `task.` | `task.queueRemove` `task.queueMove` `task.queueSnapshot` | task-input-queue（`TaskInputQueuePlugin.java:33-35`） |
-| `task.` | `task.agents` | subagent（`SubAgentPlugin.java:35`） |
 | `task.` | `task.fileChanges` | file-change（`FileChangePlugin.java:35`） |
 
-规律：全部是 `域.动作` 或 `域.对象.动作` 形态（worker 内置同款：`tasks.list`、`fs.read`、`slash.list`），与 §5.5 扩展规则一致——**协议固定交互形状，`method` 只是字符串命名空间；新功能 = 注册新 method，零改协议、零改 hub；method 只加不改，breaking 用新名，老客户端靠 `sys.methods` 发现能力**（[`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) §5.5）。⚠️ `task.*` 前缀已被 worker 内置（`task.run`/`task.poll`/`task.rounds`…）和多个插件共用，没有按插件 id 隔离的强制规则——新插件建议用自己独有的域前缀（如 `myplugin.action`）避免撞名；方法名常量住插件侧、task 核心不感知（§14.11 对 `task.agents`/`task.fileChanges` 的既有约定）。
+规律：全部是 `域.动作` 或 `域.对象.动作` 形态（worker 内置同款：`tasks.list`、`fs.read`、`slash.list`），与 §5.5 扩展规则一致——**协议固定交互形状，`method` 只是字符串命名空间；新功能 = 注册新 method，零改协议、零改 hub；method 只加不改，breaking 用新名，老客户端靠 `sys.methods` 发现能力**（[`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) §5.5）。⚠️ `task.*` 前缀已被 worker 内置（`task.run`/`task.poll`/`task.rounds`…）和多个插件共用，没有按插件 id 隔离的强制规则——新插件建议用自己独有的域前缀（如 `myplugin.action`）避免撞名；方法名常量住插件侧、task 核心不感知（§14.11 对 `task.fileChanges` 的既有约定）。注：`task.agents` 已收回 task 域（worker 内置注册，见 [`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) §5.5），不再由任何插件注册。
 
 ### 3.4 ACL 与频道边界（插件 RPC 的暴露面，结论）
 

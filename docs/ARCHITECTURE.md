@@ -175,6 +175,8 @@ hub 对频道名不解释业务语义:它只做"前缀必须匹配本连接命�
 
 事件分**持久**(落盘 + 回放)与**瞬态**(只存内存 EventLog 尾部,消费 seq 但不落盘)。任务流事件双通道:实时增量由 worker 定向推送到 stream 频道,历史回放/上滚/区间/兜底统一经 RPC `task.poll` 拉取——两路读同一本日志、同一 seq 空间,前端按 seq 去重归并。
 
+> **落盘 ≠ 出网(出网投影层)**:「是否落盘」与「是否下发客户端」是两个正交维度——事件照进 `EventLog`(落盘不动),而**一切客户端可见形态**(事件与轮次)必须经**单点出网投影器 `EgressProjector`**(worker `ship` 包,域中性,与 `DataPusher` 同域)转换后才出网。出网口共 **4 个**:stream 推送(`DataPusher.push`)、`task.poll`、`task.roundTail`(事件级)与 `task.rounds`(轮次级),全部复用同一投影器与同一 filter 链;原 `wireEvent`(`TaskEvents.wireEvent` 与 `EventWireFormatter`)不再是公共 API,实现内聚进投影器(唯一出网转换者,新出网口在类型层面无法绕过)。投影器内跑**可插拔出网过滤链**(`EventEgressFilter`/`RoundEgressFilter`,按 `order` 排序,仿 `ToolExecutionInterceptorRegistry`):filter 作用于 **pre-wire 的 `EventRecord`**,可丢弃(返回 null,**事件仍已落盘**)或改写 payload;**不得改动 `ext`**(ext 是落盘态镜像),加密等改写须在 `payload` 内自成信封;filter 域中性,只带 `subjectId`(task→taskId,workflow→workflowId)。这样「AI 审议过程不出网」只作用于出网侧,落盘与 seq 空间完全不变(§5.4/§7.1/§14.13)。
+
 | 频道 | 事件 | 持久 | payload 要点 |
 |---|---|---|---|
 | cmd | `rpc` | — | `reqId, method, params` |
@@ -207,6 +209,7 @@ hub 对频道名不解释业务语义:它只做"前缀必须匹配本连接命�
 
 - `seq` 由 worker 按任务**从 1 单调递增分配**,写入事件日志的瞬间确定;**跨运行延续**(再运行从上次水位接续)。
 - **瞬态事件也消耗 seq**(delta/thinking 等消费序号但不落盘)→ **磁盘回放的 seq 有洞是合法状态**;seq 仍严格递增、从不复用。
+- **出网被过滤的事件也造成客户端所见 seq 洞**:事件已落盘(运行中日志永不修剪),但被出网过滤链丢弃(§5.3)→ 客户端按 seq 看到的序列因而有洞,与「瞬态占号不落盘」同属合法状态;seq 空间本身不变、仍严格递增,前端按 seq 去重归并照常工作。
 - **`seq` 属于任务流事件空间**(每任务一个),wire 上以**字符串**传输(`String.valueOf(seq)`):seq 是 64 位 Snowflake(≈10^17),远超 JS `Number.MAX_SAFE_INTEGER(2^53)`;按 number 输出会在浏览器 `JSON.parse` 丢精度。前端 `compareSeq` 按「位数优先 + 字典序」比较字符串,等价数值序且不丢精度。
 - 实时与历史来自同一本日志、同一 seq 空间 → 前端按 seq 去重、排序;游标 lastSeq 取自事件项的 seq 字符串。
 - cmd/evt 频道的 rpc 帧不携带 seq(seq 只属于任务流事件空间)。
@@ -219,10 +222,10 @@ worker 端 `RpcDispatcher` 注册方法;应答回**请求来源连接**的 `evt`
 |---|---|
 | `tasks.list` | 任务列表快照(内存运行中 + 磁盘索引合并;可选 `workspace`/`limit`/`offset`/`taskIds`) |
 | `task.run` / `task.cancel` / `task.delete` | 运行任务(**创建/续跑合一**):不传 taskId=新建(必带 workspace)并开跑;传 taskId=载入老任务历史续跑(运行中则入队)。`metadata` 为一次性插件参数(经 `runParams` 下传、不落盘),队列插件认 `{insert:true, index}`=队列项「插入到当前对话」(§7.16)。delete = 唯一删除路径(运行中拒绝) |
-| `task.poll` | 任务流纯拉取:历史(磁盘)∪ 实时(内存尾部)按 seq 归并;支持 afterSeq/beforeSeq/区间/mode('events'/'rounds')/waitMs 长轮询 |
-| `task.rounds` | 轮次索引拉取(rounds.jsonl 全部行 + 运行中未闭合轮 open;旧任务首次惰性全量生成落盘) |
-| `task.roundTail` | 按轮起点(startSeq)取该轮末尾 limit 条事件,用于初始渲染 |
-| `task.agents` | 子 agent 台账一次性拉取(前端打开任务详情、建子 agent 胶囊列表的唯一取数口;live 任务取内存台账,磁盘路径 agents.json 优先、旧任务回退 meta.json 的 agents 数组只读;按 createdAt 升序;**按顶级 `creator=subagent` 过滤(旧条目无顶级 creator 时回退 `metadata.creator`,两者皆空视为旧格式子 agent 保留)——审议 agent 等 creator≠subagent 的条目不出现在子 agent 列表;主 agent 条目恒保留(前端 `agentMeta['']` 的 title/usage/context 冷启动基线只认台账,§7.20.1**;应答 `{agents:[台账项], mainAgentId}`);方法由 subagent 插件注册,方法名常量跟注册方走(住插件侧,§14.11) |
+| `task.poll` | 任务流纯拉取:历史(磁盘)∪ 实时(内存尾部)按 seq 归并,**经 `EgressProjector` 投影后**下发(§5.3);支持 afterSeq/beforeSeq/区间/mode('events'/'rounds')/waitMs 长轮询;应答新增**字符串字段 `nextSeq`** = **未过滤口径**的推进游标(批尾原始 seq,供客户端分页,避免「过滤后空批=取完」的误判),`hasMore`/`firstSeq`/`lastSeq` 保持 raw 语义 |
+| `task.rounds` | 轮次索引拉取(rounds.jsonl 全部行 + 运行中未闭合轮 open;旧任务首次惰性全量生成落盘),**经 `EgressProjector` 轮次级投影后**下发(§5.3) |
+| `task.roundTail` | 按轮起点(startSeq)取该轮末尾 limit 条事件,用于初始渲染,**经 `EgressProjector` 投影后**下发(§5.3) |
+| `task.agents` | 任务下**全部** agent 台账一次性拉取(**task 域 RPC**:常量入 `RpcMethods.TASK_AGENTS`,由 `TaskManager` 注册实现,不再属 subagent 插件;前端打开任务详情、建 agent 胶囊列表的唯一取数口;语义 = 主 agent + 各来源派生 agent(含 `creator=ai-review` 审议 agent),**无 creator 过滤**;数据源 live 优先 `AgentLedger.getLiveAgents`,冷任务读 agents.json,旧任务回退 meta.json 的 agents 数组只读;按 createdAt 升序;应答 `{agents:[台账项], mainAgentId}`)。注:`list_agents`/`wait_agents`/`run_agent` 等**工具**仍属 subagent 插件(执行域能力),不迁移(§7.14/§7.20.1) |
 | `task.fileChanges` | **file-change 插件注册的 RPC**(方法名常量与语义全住插件侧,task 核心不感知,§14.11/§7.15.2):带 `roundId` → 该轮变更全文 `file-changes/<roundId>.json` 的 `{changes:[...]}`(含 beforeContent/afterContent);**省略 `roundId`** → 全任务各轮轻量摘要 `{rounds:[{roundId, changes:[{filePath,fileName,changeType,saveCount}]}]}`(前端轮末面板一次拉全,不做逐轮 N 次 RPC) |
 | `task.search` | 任务内容搜索(内置 rg + worker 后处理):`workspaceId` 必填且必须是稳定 id 形态(`defaultworkspace` / `w_xxxxx`,拒绝路径穿越),按 `workspaces/<workspaceId>/tasks/<taskId>/` 枚举任务目录,复用 rg 搜索 `rounds.jsonl`(每行一轮,含 user/finalReply 正文);入参 `pattern` / `isRegex` / `caseSensitive` / `wholeWord` / `maxResults`(默认 500),pattern 语义与 `fs.search` 共用 `buildMatchArgs`;rg 命中 JSON 原始行后由 worker `parseRoundLine` 解析、对 user/finalReply 干净文本二次匹配(消除字段名/转义噪音,同时得到准确 `matchIndex`/`matchText`);结果项 `{taskId, title, workspace, workspaceId, status, matches:[{roundIndex, field:'user'|'finalReply', line, matchIndex, matchText}]}`,按任务聚合;大结果复用 `rpc.data` 分批 + 末帧 `ok` 汇总(§5.4);插件经 `ctx.registerSearchProvider` 注册的 SearchProvider 的 `searchTasks` 结果**增补聚合**进本应答(§8.5:内置结果在前、provider 按 `order()` 升序追加,按 `kind`+该 kind 位置键去重(task 沿用 `taskId+roundIndex+field+matchIndex`),仍受 `maxResults` 触顶约束;单个 provider 抛异常/超时仅 WARN 跳过;rg 不可用但注册了 provider 时跳过内置 rg 仅聚合 provider 结果);结果项可带统一可选增补字段 `kind`/`providerId`/`score`(§8.5 统一搜索结果模型;must-ignore,老客户端零影响,§5.6) |
 | `task.queueList` | 当前运行许可/排队快照 `{availablePermits, queueLength, queue:[taskId...]}`(task-queue 插件注册,§7.14.4) |
@@ -288,20 +291,22 @@ wss 强制 + 证书;hello 失败限速(防 key 枚举,60 次/分/单 IP);单帧�
 
 ## 7. Worker 执行层(every-agent-worker)
 
-### 7.1 出口路径:本地事件日志先行(解耦的根基)
+### 7.1 出口路径:本地事件日志先行(一进三出,解耦的根基)
 
 ```
 任务虚拟线程 ──append──→ 内存事件日志(每任务,分配 seq)──异步──→ 磁盘 *.jsonl(按 agent 分文件)
                               │                                      ↑
-                              │ DataPusher(按已订阅前端定向推送)        │
                               ↓                                      │
-              stream 频道(ext.target=sessionId,实时增量)          task.poll 拉取
-                                          (内存尾部 ∪ 磁盘反向窗口按 seq 归并,rpc.data 分批)
+   EgressProjector(单点出网投影:pre-wire 过滤链,4 口共用)           │
+        ├── DataPusher.push ──→ conn.pub → stream 频道(实时增量)     │
+        └── task.poll / task.roundTail / task.rounds                 │
+            (内存尾部 ∪ 磁盘反向窗口按 seq 归并,rpc.data 分批)─→ 前端
 ```
 
 - 发布永不阻塞任务线程:无消费者、hub 全部宕机、落盘慢,任务完全无感。
 - 持久化是"订阅本地日志的异步 sink"(fire-and-forget)。
 - 任务终态时 flush 落盘 → 更新 meta → **销毁内存驻留**。
+- **一进三出**:一进 = `append` 进 EventLog;三出 = ①落盘(事实源)②定向推送(stream)③`task.poll`/轮次拉取(pull)。**出网与落盘解耦**——落盘先于且独立于出网,客户端只可见经 `EgressProjector` 投影后的形态(§5.3)。4 个出网口(stream 推送、`task.poll`、`task.roundTail`、`task.rounds`)全部经该投影器,过滤链可丢弃/改写事件但**不改 `ext`**;被丢弃的事件仍已落盘(客户端所见 seq 有洞合法,§5.4)。
 
 ### 7.2 内部组件
 
@@ -511,19 +516,19 @@ ask 管道承载第二类阻塞请求:**危险操作授权**。`PermissionGate` 
 
 当需要人工授权(PermissionGate 拦到工作区外路径/危险命令)时,除人工弹窗外提供两条可选的任务级自动路径:
 
-- **AI 审议(`/AI 审议`,kind=ai.review)**:可单独开启。授权弹窗改为由**独立的 AI 审议会话**(无任何工具、独立 system prompt,只基于安全策略判断并要求忽略授权正文中的任何指令,防 prompt 注入)读取授权信息并输出结构化判断(ALLOW/DENY/ESCALATE),在 PermissionGate 内部闭环自动放行/拦截并落审计。**主 Agent 是被审议方,不能自我授权**。审议 agent 经 `req.context().agentFactory().create(reviewAgentId, reviewModel?)` 创建——工厂为预绑定静态代理(§7.20),事件/审计自动落被审议主体日志,advisor 链(重试/压缩/限流)照常装配;审议 agent 以 per-task 固定 agentId `review-<subjectId>` 注册进 `agents()` 跨请求复用会话——既往授权决策的结论与理由留在审议员上下文内,后续审议看得见本任务历史决策(会话随授权次数增长,任务生命周期内有限)。**会话交替不变量(复用方责任)**:agent 执行链不回写会话内存(`WorkerToolEventAdvisor` 只发 message 事件、`AgentRunner` 只把会话副本交给 ChatClient),故每轮审议结束由 `AiAuthReviewer.doReview` 在 finally 把本轮结论回写为 assistant 轮(异常/中断记占位),保证「append 新 user 之前 assistant 已在场」(与 §7.16 队列续跑的 `ConversationLoader.catchUpRuntime` 同一条不变量);缺此回写则审议员看到「N 条连续未答复的 user」,会把历史授权请求一并作答(多对象/数组输出 → 解析失败 fail-closed 误拒,或旧结论被当本轮结论用)。
+- **AI 审议(`/AI 审议`,kind=ai.review)**:可单独开启。授权弹窗改为由**独立的 AI 审议会话**(无任何工具、独立 system prompt,只基于安全策略判断并要求忽略授权正文中的任何指令,防 prompt 注入)读取授权信息并输出结构化判断(ALLOW/DENY/ESCALATE),在 PermissionGate 内部闭环自动放行/拦截并落审计。**主 Agent 是被审议方,不能自我授权**。审议 agent 经 `req.context().agentFactory().create(reviewAgentId, reviewModel?)` 创建——工厂为预绑定静态代理(§7.20),事件/审计自动落被审议主体日志,advisor 链(重试/压缩/限流)照常装配;审议 agent 以 per-task 固定 agentId `review-<subjectId>` 注册进 `agents()` 跨请求复用会话——既往授权决策的结论与理由留在审议员上下文内,后续审议看得见本任务历史决策(会话随授权次数增长,任务生命周期内有限)。**会话交替不变量(复用方责任)**:agent 执行链不回写会话内存(`WorkerToolEventAdvisor` 只发 message 事件、`AgentRunner` 只把会话副本交给 ChatClient),故每轮审议结束由 `AiAuthReviewer.doReview` 在 finally 把本轮结论回写为 assistant 轮(异常/中断记占位),保证「append 新 user 之前 assistant 已在场」(与 §7.16 队列续跑的 `ConversationLoader.catchUpRuntime` 同一条不变量);缺此回写则审议员看到「N 条连续未答复的 user」,会把历史授权请求一并作答(多对象/数组输出 → 解析失败;旧行为 fail-closed 误拒,现改为重试一次后仍失败即 ESCALATE 交下一环节,§7.9,或旧结论被当本轮结论用)。
 - **无人值守(`/无人值守`,kind=unattended.mode)**:开启时**联动**开启 AI 审议(selectHandler 一次返回两个胶囊,前端各自 apply)。AI 仍可看到并调用 `ask_user` 工具,但 `UnattendedToolInterceptor`(工具执行拦截链节点,§7.14.3)在工具执行瞬间拦截该调用、代替人工逐题选择第一个选项,以「题干：首选项」格式回传作答文本(与前端真实作答格式一致;不创建 ask、不挂起等待);拦截器每次工具执行实时读 `ctx.metadata()` 的 unattended 标记(`ToolExecutionContext extends ExecContext`,域中性直读槽位,§7.20),运行中点胶囊开/关即时生效。两胶囊 ✕ 独立,开启时联动、事后可拆分。
 
 **授权拦截链**(`PermissionGate.ensureGranted` 内、发起人工弹窗前短路,两条独立环节互不相关):
 
 | 拦截链环节 | 判定依据 | 行为 |
 |---|---|---|
-| ① AI 审议 | 任务级 `aiReview`(开启且审议器在位) | ALLOW → 自动授权(RUN 档);DENY → 拒绝;ESCALATE/审议失败 → 落下一环节 |
+| ① AI 审议 | 任务级 `aiReview`(开启且审议器在位) | ALLOW → 自动授权(RUN 档);DENY → 拒绝;ESCALATE(含解析失败重试后仍失败)→ 落下一环节;超时/异常 → 按 fail-closed 默认 DENY |
 | ② 无人值守 | 任务级 `unattended` | 开启 → 授权直接拒绝(无人工可弹);未开 → 正常人工弹窗 |
 
 - 审议路径不发 `ask.create/ask.state` → 任务保持 RUNNING(不误转 waiting-user)。
-- 审议异常/超时/输出非 JSON/缺字段 → 默认 DENY(fail-closed);**审议失败绝不自动放行**。
-- 审计:`task.trace(kind=auth.review)` 持久落盘,metadata 含 decision/confidence/reason/scope/grantKey/prompt/taskId/审议 agentId;审议链的重试/容灾 trace 同入审计。
+- **审议输出解析失败**(非 JSON / 缺 decision / 多决策对象 / 空响应)→ **重试一次**要求模型纠正;**仍失败 → ESCALATE**(交下一节点/人工),**不再直接 DENY**——fail-closed 仅保留给**超时/异常**路径(默认 DENY;`review-deny-on-error` 控制)。**审议失败绝不自动放行**。
+- 审计:`task.trace(kind=auth.review)` 持久落盘,metadata 含 decision/confidence/reason/scope/grantKey/prompt/taskId/审议 agentId;审议链的重试/容灾 trace 同入审计。结果 trace 以**审议 agent 自身身份**(`AgentContext.emitter()`)发射——审议 agent 的过程事件(思考/正文/usage/生命周期/工具结果,按 ai-review 插件自持的 `review-` agentId 前缀约定判定)被该插件注册的出网 filter 丢弃(§5.3/§14.13),而 `auth.review` 结果 trace 走审议 agent 身份发出、保持客户端可见(前端仍显示「允许 置信度 90%」)。
 - 配置:`worker.permissions.review-timeout-ms`(默认 60s,总预算硬闸)、`review-deny-on-error`(默认 true)、`review-model`(可选,审议专用模型 configId,空则用任务当前模型)。
 
 ### 7.10 命令沙箱(插件化,多后端)
@@ -680,7 +685,7 @@ wsl-bwrap 后端的 seccomp 内核级提权拦截已随 bwrap 后端删除而移
 
 ### 7.13 任务流传输(混合模型:定向推送 + 拉取)
 
-**实时增量 = worker 定向推送**(DataPusher):前端 sub `u.K.worker.<id>.task.<taskId>.stream` → hub 按频道名的 worker 段向**那一台** worker 发 `subscriber.join{sessionId,taskId}`(无 worker 段时退化为投该命名空间全部在线 worker)→ DataPusherManager 校验归属后按 (sessionId,taskId) 建推送器;推送器虚拟线程把运行中任务内存 EventLog 增量(含瞬态 delta/thinking)推到 stream 频道,`ext={target:sessionId, operate, initial}`。
+**实时增量 = worker 定向推送**(DataPusher):前端 sub `u.K.worker.<id>.task.<taskId>.stream` → hub 按频道名的 worker 段向**那一台** worker 发 `subscriber.join{sessionId,taskId}`(无 worker 段时退化为投该命名空间全部在线 worker)→ DataPusherManager 校验归属后按 (sessionId,taskId) 建推送器;推送器虚拟线程把运行中任务内存 EventLog 增量(含瞬态 delta/thinking)经**单点出网投影器 `EgressProjector.projectEvent`** 投影后推到 stream 频道,`ext={target:sessionId, operate, initial}`(投影只作用于 payload 与是否出网,不碰 `ext`)。
 
 - **归属自检(硬约束)**:worker 收到 join/leave 时,先比对频道名里的 worker 段与自身 `worker.worker-id`;**不相等一律丢弃,不建也不销推送器**。这条自检与 hub 的定向投递构成双保险:同 apiKey 两台 worker 下,非寻址那台绝不会凭空建起 DataPusher——否则它的推送器收不到前端 ack(ack 只发到寻址那台的 input 频道),credit 窗口(128)永不释放,`beginTurn` 永久阻塞,白占出站队列与虚拟线程。
 
@@ -697,6 +702,7 @@ wsl-bwrap 后端的 seccomp 内核级提权拦截已随 bwrap 后端删除而移
 - `mode='events'`:按 afterSeq(增量)/beforeSeq(上滚)+ limit 精确窗口;afterSeq+beforeSeq 同给 = 开区间查询(前端展开轮次按 startSeq/endSeq 一次拉全一轮)。
 - `waitMs>0` 无增量时挂起虚拟线程等新事件(长轮询,与 askuser 同款底座)。
 - 回放只含持久事件(瞬态从未落盘):`message` 事件自带整轮 thinking + toolCalls,由它直接组装完成态。
+- **出网投影 + 分页游标(4 出网口之一)**:`task.poll`/`task.roundTail`/`task.rounds` 与 stream 推送一样,客户端可见形态经单点 `EgressProjector` 投影后下发(§5.3);`task.poll` 应答新增字符串字段 **`nextSeq`**——**未过滤口径**的推进游标(批尾原始 seq),供客户端分页推进,避免「过滤后空批 = 取完」的误判导致轮详情静默丢内容;`hasMore`/`firstSeq`/`lastSeq` 仍为 raw 语义。
 
 ### 7.14 子 Agent(进程内,模型工具)
 
@@ -710,6 +716,8 @@ wsl-bwrap 后端的 seccomp 内核级提权拦截已随 bwrap 后端删除而移
 | `list_agents()` | 列出本任务下全部子 agent(agentId/title/createdAt/status/latestActivity,不回灌完整历史) |
 | `wait_agents(agentId?, timeoutMs?)` | 等待子 agent 完成/超时 |
 | `stop_agent(agentId)` | 停止指定子 agent |
+
+> **归属与前端**:`task.agents` **RPC 已收回 task 域**(常量 `RpcMethods.TASK_AGENTS`、由 `TaskManager` 注册实现,语义 = 任务下**全部** agent、无 creator 过滤,§5.5/§7.20.1)——subagent 插件**不再提供该 RPC,也不再提供 web 前端功能**(原 `ui.composer_above_panel` 的子 agent 面板退役);前端 agent 胶囊列表由 web 核心 `TaskChat` + `AgentListPanel` 直接渲染(§8.1)。上表四个 `run_agent`/`list_agents`/`wait_agents`/`stop_agent` **工具**仍属 subagent 插件(执行域能力,不迁移)。
 
 **运行语义**:
 
@@ -751,7 +759,7 @@ TaskManager 构造参数从 23 降至 15（SubAgentManager 从 11 降至 4），
 | `TaskMessageRouter` + `TaskInputHandler` | 基础设施 | worker 输入频道订阅与消息路由（TASK_INPUT/DIALOG_INSERT/ASK_REPLY）；接口在基础设施层定义、TaskManager 实现——依赖方向与 AgentContext 相同 |
 | `StreamSourceRegistry`（洋葱节点直持） | 基础设施 | PersistenceTrack/UntrackNode 直接 attach/detach 流源 |
 
-**分层与核心边界**：工作区 → task 层/工作流层（平级编排）→ agent 层 → 基础设施层；**下层不知道上层**。`PendingAsks` 归基础设施层（askuser 交互能力），洋葱 CascadeStopNode 直持。留在 TaskManager 的 `workspaces`（任务创建注册工作区）与 `gate`（每轮授权失效 beginRun）是 task 编排活依赖。事件三条出路（落盘=TaskStore 监听 EventLog、实时推送=DataPusher 经 StreamSourceRegistry 取 EventLog 定向推、历史拉取=task.poll 磁盘窗口∪内存尾部归并）与广播（EventSink.fanout → hub 只投已订阅连接）对 task 层与未来工作流层完全同构。**执行上下文同构**:执行数据经 `ExecContext`(plugin-api,§14.11)显式类型化——task 层构造(`TaskEntry` 即其实现,subjectId=taskId)并预绑定 `agentFactory()`/`emitter()` 往下传,agent 层/工具链/授权链只见 ExecContext 槽位,未来工作流层实现 `WorkflowRuntime implements ExecContext` 即复用全部横切基础设施;事件管道与执行上下文管道双通道同构。
+**分层与核心边界**：工作区 → task 层/工作流层（平级编排）→ agent 层 → 基础设施层；**下层不知道上层**。`PendingAsks` 归基础设施层（askuser 交互能力），洋葱 CascadeStopNode 直持。留在 TaskManager 的 `workspaces`（任务创建注册工作区）与 `gate`（每轮授权失效 beginRun）是 task 编排活依赖。事件三条出路（落盘=TaskStore 监听 EventLog、实时推送=DataPusher 经 StreamSourceRegistry 取 EventLog 定向推、历史拉取=task.poll 磁盘窗口∪内存尾部归并；推送与拉取均经 `EgressProjector` 投影,§5.3）与广播（EventSink.fanout → hub 只投已订阅连接）对 task 层与未来工作流层完全同构。**执行上下文同构**:执行数据经 `ExecContext`(plugin-api,§14.11)显式类型化——task 层构造(`TaskEntry` 即其实现,subjectId=taskId)并预绑定 `agentFactory()`/`emitter()` 往下传,agent 层/工具链/授权链只见 ExecContext 槽位,未来工作流层实现 `WorkflowRuntime implements ExecContext` 即复用全部横切基础设施;事件管道与执行上下文管道双通道同构。
 
 ### 7.14.3 拦截链范式统一（Phase 3）
 
@@ -1114,7 +1122,7 @@ advisor 链
 - **终态发射顺序固定** `error? → agent.done → agent.status{终态}`：台账的 `agent.done` 分支无条件写 `status=completed`，终态 status 必须后发才不被改判。
 - **台账收编 worker core `AgentLedger`**：原 subagent 插件 `SubAgentLedger` 退役。`AgentLedger`（worker agent 层，`@Component`）订阅主体 EventLog 的 agent.started/done/status/usage/message/error 事件，维护 per-subject 内存台账（agentId → 摘要），经 `AtomicFiles` 自行读写 `ctx.dataDir().resolve("agents.json")`（30s 定时 + 终态 persistFinal 两路径），冷启动从 agents.json 恢复（running/waiting-user → stopped 归一，旧任务回退 meta.agents）。
 - **per-run 语义下 `agent.started` 在台账侧是「合并」不是「整项替换」**：同一 agentId 每轮都发 started，`createdAt`/`usage`/`context`/`latestActivity` 是跨轮累积资产，替换会把它们抹零并把排序键 `createdAt` 重置成本轮时刻（复用子 agent 跳到列表末尾）；合并只刷 `status=running` 与 title/creator/metadata。
-- **`AgentContext.creator()` 槽位**（plugin-api，default 返回 null）：**顶级字段**（不再是 `agentMetadata` 里的约定键），取值 `task`（主 agent）/ `subagent` / `ai-review`，由 `AgentBuilder.creator(String)` 设定，经 `agent.started` 事件 payload 投影进台账**顶级 `creator` 字段**随 agents.json 落盘。`agentMetadata()` Map 保留给其他元数据。**是否可见是消费方决策**——`list_agents` 工具与 `task.agents` RPC 只取 `creator=subagent`（旧条目无顶级 creator 时回退 `metadata.creator`，两者皆空视为旧格式子 agent 保留）；审议 agent（`creator=ai-review`）不出现在子 agent 列表；`task.agents` 另恒保留 `agentId == mainAgentId` 的条目（前端 `agentMeta['']` 的 title/usage/context 基线在冷启动时只认台账这一个数据源）。
+- **`AgentContext.creator()` 槽位**（plugin-api，default 返回 null）：**顶级字段**（不再是 `agentMetadata` 里的约定键），取值 `task`（主 agent）/ `subagent` / `ai-review`，由 `AgentBuilder.creator(String)` 设定，经 `agent.started` 事件 payload 投影进台账**顶级 `creator` 字段**随 agents.json 落盘。`agentMetadata()` Map 保留给其他元数据。**是否可见是消费方决策**——`list_agents` **工具**只取 `creator=subagent`（旧条目无顶级 creator 时回退 `metadata.creator`，两者皆空视为旧格式子 agent 保留）；而 **`task.agents` RPC 已收回 task 域**，语义改为「任务下**全部** agent」——返回主 agent + 各来源派生 agent（含 `creator=ai-review` 审议 agent），**删除原按 `creator=subagent` 过滤**；数据源 live 优先 `AgentLedger.getLiveAgents`，冷任务读 agents.json，旧任务回退 `meta.agents`（§5.5/§7.20.6）。主 agent（`agentId == mainAgentId`）条目恒保留——前端 `agentMeta['']` 的 title/usage/context 冷启动基线只认台账这一个数据源。
 
 #### 7.20.2 TaskRuntime 与 TaskInfo
 
@@ -1159,8 +1167,8 @@ public interface AgentFactory {
 
 - advisor：`AgentContext.execution()`（`AgentEntity` 字段替换为 execution）；`AdvisorContext extends ExecContext`，槽位委托 `agentEntity.execution()`（§7.20.5）。
 - 工具 provider：`ToolContext`/`ToolExecutionContext` 本身即 ExecContext（`extends`，`execution()` 槽位已删、直读槽位；`ToolContextImpl.taskEntry()` 已删，§7.20.5）；`InterceptingToolCallingManager` per-run 实例构造参数直持 ExecContext（不依赖 ThreadLocal——reactive 流工具执行可能切 boundedElastic 线程）。
-- subagent 插件：全面中性化（§7.14）——Manager 零服务依赖收 ExecContext、**台账收编 worker core `AgentLedger`（`SubAgentLedger` 退役，agents.json 读写/事件投影/冷启动恢复全部由 worker agent 层承担）**、`TaskStoreService` agents 段退役、生命周期节点壳核分离、`task.agents` RPC 壳留 task 面（mainAgentId/meta.json 是任务概念，读侧按顶级 `creator=subagent` 过滤 + 恒保留主 agent 条目，§7.20.1）、方法名常量 TASK_AGENTS 跟注册方走（住插件侧）；SubAgentManager 创建子 agent 时设 `creator("subagent")`、移除手动 put（由 `build()` 自动完成）与**全部 agent.* 事件手搓发射**（含复用路径的 `agent.started` 补发）；`TaskStore.truncateAfterSeq` 编辑重发截断只动 *.jsonl/rounds.jsonl，**不删任何插件数据文件**（agents.json/file-changes 残留陈旧条目被接受；后续可增加 `task.truncated` 截断事件通知由插件自清——开放项，task 核心永不知晓插件文件名）。
-- AI 审议 agent：per-task 固定 agentId `review-<subjectId>` 注册进 `agents()` 跨请求复用会话（§7.9）——`agents().get(id)` 命中即续跑（复用路径不补发 `agent.started`——advisor 链每轮 run() 自动发）；未命中经 `ctx.agentFactory().create(id, reviewModel)` 创建，设 `creator("ai-review")` 后 `build()` 自动注册（台账按 creator 过滤不出现在子 agent 列表）。
+- subagent 插件：全面中性化（§7.14）——Manager 零服务依赖收 ExecContext、**台账收编 worker core `AgentLedger`（`SubAgentLedger` 退役，agents.json 读写/事件投影/冷启动恢复全部由 worker agent 层承担）**、`TaskStoreService` agents 段退役、生命周期节点壳核分离、`task.agents` RPC **已收回 task 域**（常量 `RpcMethods.TASK_AGENTS`、由 `TaskManager` 注册实现，语义=任务下全部 agent、无 creator 过滤，主 agent 条目恒保留，§5.5/§7.20.1）、subagent 插件**不再提供该 RPC 与 web 前端功能**（原 `ui.composer_above_panel` 面板退役，agent 胶囊列表归 web 核心 `TaskChat` + `AgentListPanel`）；SubAgentManager 创建子 agent 时设 `creator("subagent")`、移除手动 put（由 `build()` 自动完成）与**全部 agent.* 事件手搓发射**（含复用路径的 `agent.started` 补发）；`TaskStore.truncateAfterSeq` 编辑重发截断只动 *.jsonl/rounds.jsonl，**不删任何插件数据文件**（agents.json/file-changes 残留陈旧条目被接受；后续可增加 `task.truncated` 截断事件通知由插件自清——开放项，task 核心永不知晓插件文件名）。
+- AI 审议 agent：per-task 固定 agentId `review-<subjectId>` 注册进 `agents()` 跨请求复用会话（§7.9）——`agents().get(id)` 命中即续跑（复用路径不补发 `agent.started`——advisor 链每轮 run() 自动发）；未命中经 `ctx.agentFactory().create(id, reviewModel)` 创建，设 `creator("ai-review")` 后 `build()` 自动注册（台账记录其条目；`list_agents` **工具**按 `creator=subagent` 过滤故不可见，而 `task.agents` RPC 现返回全部 agent、包含审议 agent 条目）。
 - `InteractionService` ask 的 context map `"taskId"` 键保留（值=subjectId，今天相等，前端兼容）；`SubjectBoundInteractionService` 静态代理在键缺失时自动补填，替代各处手动组装。
 
 #### 7.20.7 工作流复用终态
@@ -1177,7 +1185,7 @@ public interface AgentFactory {
 
 - **HubClient** — connect / hello / sub / pub / 自动重连(重连后自动重订阅 desiredSubs + 广播 onReconnect 供上层重拉校准);应用层心跳——5s 周期仅空闲时(本周期无任何帧到达)发 ping 探测,ping 后 15s 无帧判死,判死后零退避首试重连(§5.1);`rpc(workerId, method, params)` 按 reqId 匹配 ok/err/data/progress,默认 30s 超时。
 - **订阅次序约束** — 对任一 worker:**先 sub 其 `evt` 频道,再发 `cmd`**(rpc 应答全部落在 evt 频道)。
-- **TaskPacketView** — 数据包模式:打开任务 = 先 sub stream 频道(worker 据 join 建推送器收到实时增量)→ `task.rounds` + `task.roundTail` + `task.agents`(子 agent 台账,在 task.rounds 之后调用)拉初始 → 之后仅靠定向推送收流式(帧与拉取帧同一路 seq 去重/排序聚合);帧消费后回 `stream.ack` 释放背压窗口(§7.13);上滚 `loadBefore(beforeSeq)` 拉更早轮次;`resync()` = 重订阅 + 重拉。`task.agents` 应答灌入 eventFolder 新状态 `agentMeta`(键:主 agent=''、子 agent=子 id;流事件 usage/agent.started/agent.done 实时覆盖合并);AgentListPanel 胶囊列表数据源从「items 派生」扩展为 **items ∪ agentMeta**,悬停胶囊显示信息卡(标题/状态/创建时间/模型/累计 tokens/上下文用量),子 agent 胶囊底部边框内一条 2px 用量线(比例 = 最近一轮 prompt/上下文窗口,父级 overflow:hidden 裁剪不越圆角)。
+- **TaskPacketView** — 数据包模式:打开任务 = 先 sub stream 频道(worker 据 join 建推送器收到实时增量)→ `task.rounds` + `task.roundTail` + `task.agents`(agent 台账:主 agent + 各来源派生 agent,在 task.rounds 之后调用)拉初始 → 之后仅靠定向推送收流式(帧与拉取帧同一路 seq 去重/排序聚合);帧消费后回 `stream.ack` 释放背压窗口(§7.13);上滚 `loadBefore(beforeSeq)` 拉更早轮次;`resync()` = 重订阅 + 重拉。`task.agents` 应答灌入 eventFolder 新状态 `agentMeta`(键:主 agent=''、派生 agent=其 id;流事件 usage/agent.started/agent.done 实时覆盖合并);AgentListPanel 胶囊列表数据源从「items 派生」扩展为 **items ∪ agentMeta**,悬停胶囊显示信息卡(标题/状态/创建时间/模型/累计 tokens/上下文用量),子 agent 胶囊底部边框内一条 2px 用量线(比例 = 最近一轮 prompt/上下文窗口,父级 overflow:hidden 裁剪不越圆角)。
 - **channels / ownerKey** — 频道名构造与 sha256 身份,与 Java 契约逐字对齐。
 
 ### 8.2 多 worker 聚合(单连模式)
@@ -1249,7 +1257,7 @@ Electron 将 web + hub + worker **一体打包**为 Windows x64 便携(portable)
  │←─u.K.worker.<id>.tasks: task.created{taskId,workerId}│
  │─sub u.K.worker.<id>.task.<taskId>.stream─────────→│(hub 按 worker 段定向通知那一台:join)
  │                                                      │ DataPusherManager 自检归属后建定向推送器
- │─cmd: rpc{task.rounds + task.roundTail + task.agents}→│ 初始渲染(轮次 + 尾段 + 子 agent 台账)
+ │─cmd: rpc{task.rounds + task.roundTail + task.agents}→│ 初始渲染(轮次 + 尾段 + agent 台账)
  │←─evt: rpc.data / rpc.ok────────────────────────────│
  │←─msg: stream 频道定向推送(delta/thinking/message)──│ 实时增量(ext.target=本会话)
  │           消费后回 stream.ack 释放背压窗口          │
@@ -1390,6 +1398,8 @@ docker-compose 一键:`HUB_KEY=你的密钥 docker-compose up --build`;数据落
 | D28 | AI 审议与无人值守为独立任务级开关,开启时联动、事后可拆分 | 分别满足"无人监督但有把关"与"全流程无人值守"两种需求 |
 | D29 | **统一执行上下文 ExecContext**:黑盒 properties 四件套(taskEntry/taskId/workspaceRoot/configId)显式类型化为 plugin-api 接口槽位(仅主体必然具备的核心属性与端口,含 agents 活动实体注册表=主+各插件派生 agent;configId 无独立槽);三预绑定端口 `emitter()/agentFactory()/interaction()`(静态代理)经 ctx 下传;`TaskInfo` 退役;授权请求收编为 `AuthorizationRequest(ExecContext,agentId,grantKey,prompt)`;fileChanges 等插件功能槽位留 TaskRuntime;subagent 作为执行域能力插件全面中性化(零服务依赖/生命周期壳核分离;**台账后续收编 worker core `AgentLedger`——原 `SubAgentLedger` IO 自持已退役,`AgentBuilder.build()` 自动注册+发 `agent.started`,见 §7.20.1**);task 核心去插件概念(截断不删插件数据文件);审议 agent per-task 固定 id 复用会话;各横切 Context 接口(ToolContext/AdvisorContext/FileReferenceContext/ToolExecutionContext/TaskLifecycleContext)收编为 `extends ExecContext`(重复字段与 execution() 槽位删除,消费侧直读槽位、主体 ID 一律 subjectId(),§7.20.5) | 授权链与全部横切层(advisor/工具/子 agent/审议)域中性,subagent 无 task 只有 workflow 亦可复用;未来工作流实现 ExecContext 即零改动复用;20+ 处强转消失;详见 docs/design-exec-context.md 与 §7.20 |
 | D30 | **任务事件与任务流频道加 worker 段**（`u.<K>.worker.<id>.tasks` / `u.<K>.worker.<id>.task.<id>.stream`）+ 任务摘要 payload 带 `workerId`；**切换启用 worker 时 worker 级客户端状态整体失效并关闭全部 `task:*` 标签** | apiKey 即身份 ⇒ 同一 apiKey 下多台 worker 共用一个命名空间。此前 tasks/流频道只到 ownerKey、归属靠前端「按帧来源推断」，两个后果：① 一台的任务混进另一台的列表，点开按被启用那台的 RPC 寻址必报「任务不存在」；② 推断结果一旦落库就永不纠正，切换 worker 后详情按已断开的连接取数、失败还全静默（空白页，只有刷新才好）。归属改成 wire 事实 + 作用域化失效，见 §4.3/§5.2/§8.2/§14.12；协议 v3→4 |
+| D31 | **出网投影单点(EgressProjector)**:客户端可见事件/轮次必须经单点投影器(worker `ship` 包,域中性,与 `DataPusher` 同域)转换;4 出网口(stream 推送 / `task.poll` / `task.roundTail` / `task.rounds`)共用同一投影器与 filter 链;pre-wire 出网过滤链可丢弃(返回 null)/改写 payload,**不改 `ext`**;`wireEvent` 不再是公共 API | 把「不可展示」当**出网(egress)问题**而非产生问题:事件照旧落盘(事实源与 seq 空间不变),出网收敛到单点即实现层无法绕过,从而落地「AI 审议过程不出网、但落盘保留」;「已落盘但不出网」的 seq 洞合法(与「瞬态占号不落盘」并列);详见 §5.3/§14.13 |
+| D32 | **`task.agents` 收回 task 域 + subagent 插件去 web**:方法常量入 `RpcMethods.TASK_AGENTS`、`TaskManager` 注册实现,语义=任务下**全部** agent(主 + 各来源派生,含 `creator=ai-review`),删除按 `creator=subagent` 过滤;subagent 插件不再提供该 RPC 与前端的 `ui.composer_above_panel` 面板,agent 胶囊列表归 web 核心 `TaskChat` + `AgentListPanel` 渲染;`list_agents`/`wait_agents`/`run_agent`/`stop_agent` 工具仍属 subagent 插件 | `task.*` 前缀本就属 task 域;「任务下全部 agent」是任务概念,原按 `creator=subagent` 过滤会漏掉审议 agent 的归属;前端列表收口到核心、插件去 web 减少迁移中间态;详见 §5.5/§7.14/§7.20.1 |
 
 ---
 
@@ -1407,6 +1417,7 @@ docker-compose 一键:`HUB_KEY=你的密钥 docker-compose up --build`;数据落
    - **插件/底层(最内层)**:发语义事件(`EventEmitter.emit(EmitEvent.TraceData.transientOf("model_rate_wait", ...))`),只知道事件名 + payload + persist 标志,不知道 agentId/taskId/seq/wire 格式/前端展示方式。
    - **agent 层**:填 agentId(包装 payload 或附加参数),不知道 taskId/seq/wire 格式。
    - **task 层**(或以后的工作流层):语义事件→wire 事件映射(如 `model_rate_wait` → `task.trace` + kind/tile/summary/status/createdAt;`delta` → `delta`;`error` → `error`)、分配 seq、按 persist 落盘 jsonl。
+   - **出网投影层(EgressProjector)**:task 层 wire 映射后、推送/拉取前,把落盘态 `EventRecord` 投影为客户端可见形态——pre-wire 出网过滤链可丢弃(返回 null)/改写 payload,**不改 `ext`**;4 个出网口(stream 推送 / `task.poll` / `task.roundTail` / `task.rounds`)共用同一投影器(§5.3/§14.13)。
    - **推送层(WebSocketEmitter)**:背压 + 定向推送到前端 websocket,不感知事件语义。
    - **前端(最外层)**:按 wire 事件名 + payload 字段映射为 trace/消息/状态等展示组件。
    - **改造纪律**:后续把 `AgentEventChannel` 的 30 个具体方法逐步迁移到 `EventEmitter.emit(EmitEvent)` 时,每迁一个方法:插件/底层只发强类型 `EmitEvent` 载荷,task 层用 `instanceof` 判断类型做映射,推送层和前端不变。以后工作流层实现自己的映射(task.trace → wf.trace,自己的包装格式),自己的推送管道,前端按工作流 wire 格式解析。**插件永远不感知 task 层语义(wire 事件名、traceId、seq 等)。**
@@ -1424,7 +1435,7 @@ docker-compose 一键:`HUB_KEY=你的密钥 docker-compose up --build`;数据落
     - **槽位判据**:ExecContext 槽位 = 任何执行主体都必然具备的核心属性与端口(subjectId/workspaceRoot/workspaceId/snapshot/emitter/agentFactory/interaction/metadata/dataDir/terminal/agents 活动实体注册表;configId 不设独立槽,经 snapshot().configId() 取);**插件功能与主体特有槽位不进核心接口**——file-change 插件的 collector 连 `TaskRuntime` 都不进(留 provider 任务级共享 collector——主/子 agent 同实例,§7.15.2——+ `RoundClosedListener` 落盘 + 插件自注册 RPC 读),metadata 只承载随 meta.json 落盘的持久策略标记(不混入运行时瞬态数据);agents() 收纳主体上下文内全部 agent(主 agent + 各插件派生:子 agent、审议 agent),由 `AgentBuilder.build()` 自动注册(只 put,**不发事件**),插件不再手动 put/emit;`AgentContext.creator()` 槽位(task/subagent/ai-review 来源标记,**顶级字段**,非 ExecContext 槽位)随 `agent.started` 持久化进台账顶级 creator,消费方按 creator 决定展示范围;`agent.*` 生命周期事件的发射单点是 `AgentEntity`(per-run 状态机),触发源 = `AgentStatusAdvisor` 流生命周期 + 交互层 ask 生命周期(§7.20.1);无子 agent 是正常形态。
     - **task 层构造并预绑定**:`TaskEntry implements TaskRuntime extends ExecContext`(subjectId=taskId);三预绑定端口同范式(静态代理,worker 内部实现,可链式套娃)——`emitter()`(主体事件口)、`agentFactory()`(主体 agent 装配,`create(agentId)` 单参)、`interaction()`(主体交互口,ask 的 context map 自动填 subjectId)——**上层预绑定能力往下传,不传裸工厂/裸服务、不传任务域对象**。
     - **agent 层/工具链唯一取数口**:`AgentContext.execution()`;`ToolContext`/`ToolExecutionContext`/`AdvisorContext`/`FileReferenceContext`/`TaskLifecycleContext` 一律 `extends ExecContext`(重复字段与 `execution()` 槽位已删,消费侧直读槽位、横切层取主体 ID 一律 `subjectId()`,§7.20.5;`InterceptingToolCallingManager` per-run 构造参数直持 ExecContext,不依赖 ThreadLocal);`properties` 黑盒 map 与 `get("taskEntry")` 强转**禁止再现**。
-    - **advisor 只取槽位**:`snapshot()`(模型配置,configId 经 snapshot().configId())、`subjectId()`(审计)、`emitter()`(事件)、`terminal()`(leak-guard)——不 import 任务域类型;**agent.生命周期事件发射单点(§7.20.1)**:`agent.started`/`agent.status`/`agent.done`/agent 级 `error` 一律由 `AgentEntity`(per-run 状态机 + CAS)发射,触发源是 `AgentStatusAdvisor` 的流生命周期信号与交互层的 ask 生命周期;task 层(StatusNode/TaskLifecycleContext.agentStatus)与插件(SubAgentManager/AiAuthReviewer)不得再手搓这四个事件的 EmitEvent——插件唯一允许的调用是兜底 `Agent.claimTerminal(...)`,CAS 保证与 advisor 终态互斥;**subagent 是执行域能力插件(非任务域),全面中性化**:SubAgentManager 零服务依赖(方法收 ExecContext、监视器内部化、`agents()` 槽位替代 task.agents)、创建子 agent 时设 `creator("subagent")` 交由 `AgentBuilder.build()` 自动注册(插件不再手动 put)、agent.* 生命周期事件由 advisor 链统一发射(插件不再 emit、只在运行体从未启动的兜底路径调 `claimTerminal`)、台账 agents.json 由 worker core `AgentLedger` 收编(`SubAgentLedger` 退役;事件投影+原子读写+冷启动恢复,§7.20.1)、生命周期节点壳留 task 面/逻辑取 ExecContext 槽位、`task.agents` RPC 壳留 task 面(mainAgentId 是任务概念,读侧按 creator 过滤);**task 核心不依赖插件**:编辑重发截断只动 *.jsonl/rounds.jsonl 不删插件数据文件(agents.json/file-changes 残留被接受,事件通知自清为开放项),`task.agents` 方法名常量住插件侧;AI 审议 agent 以 per-task 固定 agentId(creator=ai-review)注册进 agents() 跨请求复用会话(既往授权决策留在审议员上下文),每轮审议同样走 advisor 链的 per-run 出生/终态事件;任务域插件(file-change/edit-resend/git)经 `TaskService`/`taskRuntime()` 取 `TaskRuntime` 是合法本职依赖。
+    - **advisor 只取槽位**:`snapshot()`(模型配置,configId 经 snapshot().configId())、`subjectId()`(审计)、`emitter()`(事件)、`terminal()`(leak-guard)——不 import 任务域类型;**agent.生命周期事件发射单点(§7.20.1)**:`agent.started`/`agent.status`/`agent.done`/agent 级 `error` 一律由 `AgentEntity`(per-run 状态机 + CAS)发射,触发源是 `AgentStatusAdvisor` 的流生命周期信号与交互层的 ask 生命周期;task 层(StatusNode/TaskLifecycleContext.agentStatus)与插件(SubAgentManager/AiAuthReviewer)不得再手搓这四个事件的 EmitEvent——插件唯一允许的调用是兜底 `Agent.claimTerminal(...)`,CAS 保证与 advisor 终态互斥;**subagent 是执行域能力插件(非任务域),全面中性化**:SubAgentManager 零服务依赖(方法收 ExecContext、监视器内部化、`agents()` 槽位替代 task.agents)、创建子 agent 时设 `creator("subagent")` 交由 `AgentBuilder.build()` 自动注册(插件不再手动 put)、agent.* 生命周期事件由 advisor 链统一发射(插件不再 emit、只在运行体从未启动的兜底路径调 `claimTerminal`)、台账 agents.json 由 worker core `AgentLedger` 收编(`SubAgentLedger` 退役;事件投影+原子读写+冷启动恢复,§7.20.1)、生命周期节点壳留 task 面/逻辑取 ExecContext 槽位、`task.agents` RPC **已收回 task 域**(常量 `RpcMethods.TASK_AGENTS`、由 `TaskManager` 注册实现,语义=任务下全部 agent、无 creator 过滤,§5.5/§7.20.1);**task 核心不依赖插件**:编辑重发截断只动 *.jsonl/rounds.jsonl 不删插件数据文件(agents.json/file-changes 残留被接受,事件通知自清为开放项),`task.fileChanges` 方法名常量住插件侧;AI 审议 agent 以 per-task 固定 agentId(creator=ai-review)注册进 agents() 跨请求复用会话(既往授权决策留在审议员上下文),每轮审议同样走 advisor 链的 per-run 出生/终态事件;任务域插件(file-change/edit-resend/git)经 `TaskService`/`taskRuntime()` 取 `TaskRuntime` 是合法本职依赖。
     - **授权请求域中性**:`AuthorizationRequest(ExecContext, agentId, grantKey, prompt)`;GrantRegistry 按 `subjectId()` 分区、`dataDir()` 落盘;`InteractionService` ask 的 context map `"taskId"` 键保留(值=subjectId,前端兼容)。
     - **禁止**:横切层 import `TaskEntry/TaskRuntime/TaskInfo`;绕过 `ctx.agentFactory()` 手工组装四件套 map;绕过 `ctx.interaction()` 手动填 taskId context;worker 侧新增 properties 透传通道。工作流层实现 `WorkflowRuntime implements ExecContext` 后,同一条授权链、同一批 advisor、同一工具链零改动复用。
 12. **worker 归属是 wire 事实,禁止客户端推断(与 §4.3/§5.2/§8.2 同口径)**:
@@ -1434,3 +1445,8 @@ docker-compose 一键:`HUB_KEY=你的密钥 docker-compose up --build`;数据落
     - **worker**:收到 `subscriber.join` 时若频道 worker 段非本机、或该 taskId 本机不可见(内存/磁盘索引/任务目录均无),**一律不建定向推送器**。否则该推送器永远等不到前端 ack(ack 只发到被点名那台的 input 频道),背压窗口 128 永不释放 → 白占虚拟线程与出站队列。
     - **hub**:定向投递 join 只允许「按频道名解析出 worker 段 → 查现成的 `findWorker(ownerKey, workerId)` 索引」,仍属路由;不得新增任何订阅簿或状态(§6.1/§14.2 零状态红线不破)。
     - **客户端状态生命周期**:worker 数据连接是任务列表/详情/RPC/模型配置/插件的**作用域**;连接集合一变(`hubSession.onWorkerConnectionsChanged`),所有按 worker 缓存的状态必须由各自持有方失效,且全部 `task:*` 标签关闭 —— 禁止只换连接不清状态(那会留下指向已断开连接的陈旧句柄,表现为空白且不自愈)。
+13. **出网投影单点(EgressProjector,与 §14.0 事件管道同构)**:客户端可见的事件与轮次**必须**经单点投影器 `EgressProjector`(worker `ship` 包,域中性,与 `DataPusher` 同域)转换后才出网,**不得绕过**。出网口共 **4 个**:stream 推送(`DataPusher.push`)、`task.poll`、`task.roundTail`、`task.rounds`,全部复用同一投影器与同一 filter 链;`wireEvent` 实现内聚进投影器、不再是公共 API(实现层无第二条出网路径)。
+    - **过滤链**:投影器内跑可插拔出网过滤链(`EventEgressFilter`/`RoundEgressFilter`,按 `order` 排序);filter 作用于 **pre-wire 的 `EventRecord`**,可丢弃(返回 null,**事件仍已落盘**)或改写 payload;**不得改动 `ext`**(ext 是落盘态镜像),加密等改写须在 `payload` 内自成信封;filter 域中性,只带 `subjectId`(task→taskId,workflow→workflowId)。ai-review 插件据此丢弃审议 agent 的**过程事件**(思考/正文/usage/生命周期/工具结果),而 `auth.review` 结果 trace 以审议 agent 身份发射、保持可见(§7.9)。
+    - **seq 洞合法**:「**已落盘但不出网**」造成的客户端所见 seq 洞合法,与既有「瞬态占号不落盘」并列(§5.4);事件落盘(事实源)与出网(可投影视图)解耦,落盘永不因出网过滤而变更。`task.poll` 另以字符串字段 `nextSeq`(未过滤口径推进游标)支持客户端分页(§7.13)。
+    - **task.agents 归属**:`task.agents` RPC 属 task 域(常量 `RpcMethods.TASK_AGENTS`,`TaskManager` 注册实现),语义 = 任务下**全部** agent(含 `creator=ai-review`),**无 creator 过滤**;subagent 插件不再提供该 RPC 与 web 前端功能,`list_agents`/`wait_agents`/`run_agent`/`stop_agent` 工具仍属 subagent 插件(§7.14/§7.20.1)。
+    - **AI 审议解析容错**:审议输出**解析失败**(非 JSON / 缺 decision / 多决策对象 / 空响应)→ 重试一次要求模型纠正;**仍失败 → ESCALATE**(交下一节点/人工),**不再 DENY**;fail-closed(DENY)仅保留给超时/异常路径(§7.9)。

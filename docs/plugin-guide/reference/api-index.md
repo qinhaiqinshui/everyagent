@@ -43,7 +43,7 @@ has_children: false
 | 8 | `void registerSkillContributor(SkillContributor c)` | [advisors §5](../backend/advisors.md#5-skillcontributor--贡献-skill) | subagent（skill 同时进 system prompt 与 `/` 菜单，菜单副标题带「插件 · 」来源标记） |
 | 9 | `void registerTokenEstimator(TokenEstimator e)` | [advisors §4](../backend/advisors.md#4-tokenestimator--替换-token-估算器) | model-rate-limit |
 | 10 | `void registerChatModelEnhancer(ChatModelEnhancer e)` | [advisors §3](../backend/advisors.md#3-chatmodelenhancer--模型构建期介入) | model-pool |
-| 11 | `void registerRpcMethod(String method, RpcMethod h)` | [任务 §3](../backend/task-and-rpc.md#3-registerrpcmethod--自注册-rpc) | git×13、task-input-queue×3、task-queue/subagent/file-change 各 1 |
+| 11 | `void registerRpcMethod(String method, RpcMethod h)` | [任务 §3](../backend/task-and-rpc.md#3-registerrpcmethod--自注册-rpc) | git×13、task-input-queue×3、task-queue/file-change 各 1 |
 | 12 | `void registerSlashProvider(String id, SlashProvider p)` | [任务 §4.1](../backend/task-and-rpc.md#41-接口签名) | unattended、git、ai-review、sandbox-wsl-ubuntu |
 | 13 | `void registerSlashTokenResolver(SlashTokenResolver r)` | [任务 §4.1](../backend/task-and-rpc.md#41-接口签名) | 同上四家 |
 | 14 | `void registerTaskAdmissionPolicy(TaskAdmissionPolicy p)`（`TaskPluginContext.java:17`） | [任务 §1](../backend/task-and-rpc.md#1-taskadmissionpolicy--任务创建准入预检) | task-queue（全仓唯一） |
@@ -151,7 +151,7 @@ has_children: false
 | `ui.sidebar_items` | `registerSidebarItem(def: UiSidebarItemDefinition)` | [UI §2](../web/ui-extensions.md#2-uisidebar_items--侧边栏活动栏项) | git(order 5)、plugin-manager(9) |
 | `ui.workspace_tab_types` | `registerWorkspaceTabType(def)` | [UI §4](../web/ui-extensions.md#4-uiworkspace_tab_types--工作区标签类型) | git（git-history） |
 | `ui.file_sidebar_panels` | `registerFileSidebarPanel(def)` | [UI §5](../web/ui-extensions.md#5-uifile_sidebar_panels--文件页侧栏面板) | ⚠️ 无内置范例（仅脚手架模板用） |
-| `ui.composer_above_panel` | `registerComposerAbovePanel(def)`（单数） | [UI §6](../web/ui-extensions.md#6-uicomposer_above_panel--输入框上方面板注意单数) | subagent、task-input-queue |
+| `ui.composer_above_panel` | `registerComposerAbovePanel(def)`（单数） | [UI §6](../web/ui-extensions.md#6-uicomposer_above_panel--输入框上方面板注意单数) | task-input-queue |
 | `ui.tool_call_views` | `registerToolCallView(def)` | [UI §7](../web/ui-extensions.md#7-uitool_call_views--工具调用视图接管) | update-file-view（update_file） |
 | `ui.user_message_actions` | `registerUserMessageAction(def)` | [UI §8](../web/ui-extensions.md#8-uiuser_message_actions--用户消息动作) | task-edit-resend |
 | `task.submit_contributions` | `registerTaskRunSubmitContributionProvider(p)` | [UI §9](../web/ui-extensions.md#9-tasksubmit_contributions--taskrun-提交贡献) | task-edit-resend |
@@ -252,7 +252,7 @@ has_children: false
 
 ### 4.3 RPC 方法名前缀现状
 
-内置插件注册的 19 个方法全在两个前缀下：`git.`×13、`task.`×6。`task.*` 与 worker 内置方法（`task.run`/`task.poll`…）共用一张方法表、无按插件 id 隔离的强制规则；新插件建议用自己独有的域前缀（如 `myplugin.action`）避免撞名。详解：[任务 §3.3](../backend/task-and-rpc.md#33-方法名命名空间现状19-个插件方法归纳)。
+内置插件注册的 18 个方法全在两个前缀下：`git.`×13、`task.`×5。`task.*` 与 worker 内置方法（`task.run`/`task.poll`…）共用一张方法表、无按插件 id 隔离的强制规则；新插件建议用自己独有的域前缀（如 `myplugin.action`）避免撞名。详解：[任务 §3.3](../backend/task-and-rpc.md#33-方法名命名空间现状18-个插件方法归纳)。
 
 ### 4.4 后端三套 order 坐标系（互不相干，勿混用）
 

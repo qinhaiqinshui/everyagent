@@ -201,7 +201,7 @@ public class MyFirstPlugin implements EveryAgentPlugin {
 | 8 | `registerSkillContributor`（`:60`） | `SkillContributor` | 向 system prompt 与 `/` 菜单贡献 skill | [advisors.md](advisors.md) | subagent（`SubAgentPlugin.java:44`） |
 | 9 | `registerTokenEstimator`（`:63`） | `TokenEstimator` | 替换内置 Token 估算器 | [advisors.md](advisors.md) | model-rate-limit（`ModelRateLimitPlugin.java:35`） |
 | 10 | `registerChatModelEnhancer`（`:66`） | `ChatModelEnhancer` | 模型构建增强（如模型池容灾） | [advisors.md](advisors.md) | model-pool（`ModelPoolPlugin.java:26`） |
-| 11 | `registerRpcMethod`（`:79`） | `RpcMethod` | 自定义 RPC 方法（`域.动作` 命名） | [task-and-rpc.md](task-and-rpc.md) | git（`GitPlugin.java:42-54`，13 个）、task-queue（`:29`）、subagent（`:35`）、file-change（`:35`） |
+| 11 | `registerRpcMethod`（`:79`） | `RpcMethod` | 自定义 RPC 方法（`域.动作` 命名） | [task-and-rpc.md](task-and-rpc.md) | git（`GitPlugin.java:42-54`，13 个）、task-queue（`:29`）、file-change（`:35`） |
 | 12 | `registerSlashProvider`（`:87`） | `SlashProvider` | `/` 菜单命令提供者 | [task-and-rpc.md](task-and-rpc.md) | unattended（`:26`）、git（`:36`）、ai-review（`:27`）、sandbox-wsl-ubuntu（`:44`） |
 | 13 | `registerSlashTokenResolver`（`:94`） | `SlashTokenResolver` | slash token 提交解析 | [task-and-rpc.md](task-and-rpc.md) | 同上四者（unattended `:30` / git `:39` / ai-review `:31` / wsl `:45`） |
 | 14 | `registerTaskAdmissionPolicy`（`TaskPluginContext.java:17`） | `TaskAdmissionPolicy` | task.run RPC 边缘预检（如放行排队代替 ERR_BUSY） | [task-and-rpc.md](task-and-rpc.md) | task-queue（`TaskQueuePlugin.java:25`） |
