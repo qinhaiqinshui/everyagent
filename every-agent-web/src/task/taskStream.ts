@@ -98,6 +98,8 @@ export interface TaskStreamHandle {
    * 懒加载·前向续拉一轮过程(闭合轮展开 / 终态未闭合尾轮):**先查 items 缓存**——该轮区间
    * (afterSeq, endSeq] 已由真实事件完整覆盖则直接返回 fromCache(不 RPC);部分覆盖则自动把
    * afterSeq 提升到已覆盖点从缺口续拉。返回 {lastSeq, hasMore, fromCache} 供 UI 更新游标。
+   * lastSeq 为未过滤口径续拉游标(worker nextSeq,缺省回退批尾 wire seq);hasMore 亦为未过滤
+   * 口径——整页被出网过滤 ≠ 取完,UI 只据 !hasMore 判 done(fromCache 命中即视为本轮拉全)。
    */
   loadRoundForward(page: {
     startSeq: number | string
@@ -108,7 +110,8 @@ export interface TaskStreamHandle {
   /**
    * 懒加载·后向续拉(运行中尾轮往上翻历史):**先查 items 缓存**——[startSeq, beforeSeq) 已连到
    * 轮起点则直接返回 fromCache+reachedStart(不 RPC);部分覆盖则从缺口继续向前。返回
-   * {firstSeq, reachedStart, fromCache}。
+   * {firstSeq, reachedStart, fromCache}。firstSeq 为未过滤口径续拉游标(worker nextSeq,缺省回退
+   * 批内最早 wire seq)——整页被出网过滤时批为空,仍能向前推进游标(不卡在同一 beforeSeq)。
    */
   loadRoundBackward(page: {
     startSeq: number | string
@@ -321,6 +324,8 @@ class ManagedStream {
    * 懒加载·前向续拉一轮过程:等 open 完成后,<b>先查 items 缓存</b>(该轮区间已由真实事件
    * 完整覆盖则 fromCache 返回,不 RPC;部分覆盖则提升 afterSeq 从缺口续拉),再经
    * view.loadForwardPage 单页区间拉取折入。返回 {lastSeq, hasMore, fromCache}。
+   * lastSeq/hasMore 为未过滤口径(view 内已用 result.nextSeq 推进游标、hasMore 只依赖 worker 判定):
+   * 整页被出网过滤(batch 为空)时 hasMore 仍可为 true、游标仍推进,不会误判取完而丢轮详情。
    */
   async loadRoundForward(page: {
     startSeq: number | string
@@ -358,6 +363,8 @@ class ManagedStream {
    * 懒加载·后向续拉(运行中尾轮往上翻历史):<b>先查 items 缓存</b>([startSeq, beforeSeq) 已连到
    * 轮起点则 fromCache+reachedStart 返回;有更早真实数据则把 beforeSeq 提升到最小已覆盖点
    * 从缺口继续向前),再经 view.loadBackwardPage 单页拉取折入。返回 {firstSeq, reachedStart, fromCache}。
+   * firstSeq 为未过滤口径续拉游标(view 内已用 result.nextSeq):整页被出网过滤时仍能向前推进,
+   * 不会卡在同一 beforeSeq 反复空拉。
    */
   async loadRoundBackward(page: {
     startSeq: number | string

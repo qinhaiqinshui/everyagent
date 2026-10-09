@@ -8,6 +8,7 @@ import dev.everyagent.plugin.api.event.EventLogReader;
 import dev.everyagent.worker.agent.AgentBuilder;
 import dev.everyagent.worker.agent.AgentEntity;
 import dev.everyagent.worker.agent.AgentFactoryImpl;
+import dev.everyagent.worker.agent.AgentLedger;
 import dev.everyagent.worker.agent.AgentRunner;
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.config.ChatModelFactory;
@@ -23,6 +24,7 @@ import dev.everyagent.plugin.api.proto.ShortIds;
 import dev.everyagent.worker.proto.TaskDtos.TaskStatus;
 import dev.everyagent.worker.rpc.RpcContext;
 import dev.everyagent.worker.rpc.RpcDispatcher;
+import dev.everyagent.worker.ship.EgressProjector;
 import dev.everyagent.worker.ship.TaskInputHandler;
 import dev.everyagent.worker.interaction.EmitterLookup;
 import dev.everyagent.worker.interaction.InteractionServiceImpl;
@@ -109,6 +111,10 @@ public class TaskManager implements TaskInputHandler, InteractionServiceImpl.Sta
     private final TaskLifecycleRegistry lifecycleRegistry;
     /** 任务准入策略注册表：队列插件注册后接管并发上限检查（always-admit → 排队）。 */
     private final TaskAdmissionPolicyRegistry admissionPolicyRegistry;
+    /** 出网单点投影器:task.poll / task.roundTail / task.rounds 事件与轮次出网的唯一转换者。 */
+    private final EgressProjector projector;
+    /** Agent 台账:task.agents RPC 的 live 取数口(冷任务回退 agents.json / meta.agents)。 */
+    private final AgentLedger agentLedger;
 
     /** 热任务(运行中驻留内存;finish 即驱逐)。 */
     private final Map<String, TaskEntry> tasks = new ConcurrentHashMap<>();
@@ -138,7 +144,8 @@ public class TaskManager implements TaskInputHandler, InteractionServiceImpl.Sta
             TaskStore store, RoundIndexStore roundIndexStore,
             TaskLifecycleContextFactory lifecycleContextFactory,
             TaskLifecycleExecutor lifecycleExecutor, TaskLifecycleRegistry lifecycleRegistry,
-            TaskAdmissionPolicyRegistry admissionPolicyRegistry) {
+            TaskAdmissionPolicyRegistry admissionPolicyRegistry,
+            EgressProjector projector, AgentLedger agentLedger) {
         this.eventSink = eventSink;
         this.agentBuilder = agentBuilder;
         this.runner = runner;
@@ -155,6 +162,8 @@ public class TaskManager implements TaskInputHandler, InteractionServiceImpl.Sta
         this.lifecycleExecutor = lifecycleExecutor;
         this.lifecycleRegistry = lifecycleRegistry;
         this.admissionPolicyRegistry = admissionPolicyRegistry;
+        this.projector = projector;
+        this.agentLedger = agentLedger;
     }
 
     @PostConstruct
@@ -227,6 +236,7 @@ public class TaskManager implements TaskInputHandler, InteractionServiceImpl.Sta
         dispatcher.register(RpcMethods.TASK_POLL, this::rpcTaskPoll);
         dispatcher.register(RpcMethods.TASK_ROUNDS, this::rpcTaskRounds);
         dispatcher.register(RpcMethods.TASK_ROUND_TAIL, this::rpcTaskRoundTail);
+        dispatcher.register(RpcMethods.TASK_AGENTS, this::rpcTaskAgents);
         dispatcher.register(RpcMethods.TASK_RUN, this::rpcTaskRun);
         dispatcher.register(RpcMethods.TASK_CANCEL, this::rpcTaskCancel);
         dispatcher.register(RpcMethods.TASK_DELETE, this::rpcTaskDelete);
@@ -407,6 +417,9 @@ public class TaskManager implements TaskInputHandler, InteractionServiceImpl.Sta
             m = readPollMerged(dir, live, mainAgentId, rounds, afterSeq, beforeSeq, count, effLimit);
             // 长轮询:仅 events 增量(afterSeq 语义,beforeSeq==0)、waitMs>0、初查为空、
             // 且热任务非终态——挂起等待新事件,超时放行后重读一次。
+            // 长轮询判定用<b>未过滤</b>的原始批次(m.events 是 readPollMerged 的原始归并结果,
+            // 过滤发生在下方 batch 组装)。若误用过滤后批次:「过滤前非空、过滤后空」会被判为空而不当挂起,
+            // 前端永远拿不到 nextSeq 推进游标 → 静默丢内容。
             boolean canWait = !rounds && beforeSeq == 0 && waitMs > 0 && m.events.isEmpty()
                     && live != null && !live.status.terminal();
             if (canWait) {
@@ -431,18 +444,32 @@ public class TaskManager implements TaskInputHandler, InteractionServiceImpl.Sta
             return;
         }
 
+        // 出网投影:逐条经单点投影器跑出网过滤链(丢弃的条目不入批;游标按未过滤口径推进)。
         List<JsonNode> batch = new ArrayList<>(m.events.size());
         for (EventRecord r : m.events) {
-            batch.add(TaskEvents.wireEvent(r, mainAgentId));
+            ObjectNode wire = projector.projectEvent(taskId, mainAgentId, r);
+            if (wire != null) {
+                batch.add(wire);
+            }
         }
         boolean isLive = live != null && !live.status.terminal();
         String status = taskStatusOf(taskId, live, meta);
+        // nextSeq = 未过滤口径的推进游标(原始批次 seq 字符串化):前端分页据它推进游标。
+        // 方向自适应:向后翻页(beforeSeq>0 且 afterSeq<=0,取批头 seq,配合 beforeSeq 往前推进);
+        // 增量/区间(afterSeq 语义,取批尾 seq,配合 afterSeq 往后推进)。若按过滤后批次算,
+        // 被丢弃的事件会让游标停滞 → 反复拉取/历史静默丢失。lastSeq/firstSeq/hasMore 保持原始(raw)语义。
+        // 空批(未过滤口径)则不提供 nextSeq:前端据此判定「无更多」而非被 "0" 误导。
         ObjectNode result = Json.obj()
                 .put("hasMore", m.hasMore)
                 .put("firstSeq", m.events.isEmpty() ? 0 : m.events.get(0).seq())
                 .put("lastSeq", m.events.isEmpty() ? 0 : m.events.get(m.events.size() - 1).seq())
                 .set("task", Json.obj().put("status", status))
                 .put("live", isLive);
+        if (!rounds && !m.events.isEmpty()) {
+            boolean backward = beforeSeq > 0 && afterSeq <= 0;
+            long rawCursor = backward ? m.events.get(0).seq() : m.events.get(m.events.size() - 1).seq();
+            result.put("nextSeq", String.valueOf(rawCursor));
+        }
         // 先 data 后 ok:空批次也发 data(空)+ok,保持前端契约稳定
         ctx.data(batch, false);
         ctx.ok(result);
@@ -575,7 +602,11 @@ public class TaskManager implements TaskInputHandler, InteractionServiceImpl.Sta
             List<RoundIndex.Round> roundList = store.readRounds(dir);
             ArrayNode rounds = Json.arr();
             for (RoundIndex.Round r : roundList) {
-                rounds.add(wireRound(r));
+                // 出网投影:跑轮次级过滤链(如裁剪审议 agent 的 agentRanges)后再 wire;丢弃的轮不入应答。
+                ObjectNode wire = projector.projectRound(taskId, mainAgentId, r);
+                if (wire != null) {
+                    rounds.add(wire);
+                }
             }
             ObjectNode open = null;
             if (isLive) {
@@ -651,9 +682,13 @@ public class TaskManager implements TaskInputHandler, InteractionServiceImpl.Sta
             return;
         }
 
+        // 出网投影:逐条经单点投影器跑出网过滤链(丢弃的条目不入批)。
         List<JsonNode> batch = new ArrayList<>(tail.size());
         for (EventRecord r : tail) {
-            batch.add(TaskEvents.wireEvent(r, mainAgentId));
+            ObjectNode wire = projector.projectEvent(taskId, mainAgentId, r);
+            if (wire != null) {
+                batch.add(wire);
+            }
         }
         boolean isLive = live != null && !live.status.terminal();
         String status = taskStatusOf(taskId, live, meta);
@@ -818,31 +853,57 @@ public class TaskManager implements TaskInputHandler, InteractionServiceImpl.Sta
         return openNode;
     }
 
-    /** Round → wire 形态(seq 一律字符串;endSeq 未闭合为 "";durationMs 数值;roundId 非空才写;subs 恒数组;与 rounds.jsonl 行格式一致)。 */
-    private static ObjectNode wireRound(RoundIndex.Round r) {
-        ObjectNode n = Json.obj()
-                .put("index", r.index())
-                .put("startSeq", String.valueOf(r.startSeq()))
-                .put("endSeq", r.endSeq() == null ? "" : String.valueOf(r.endSeq()))
-                .put("user", r.user())
-                .put("finalReply", r.finalReply())
-                .put("durationMs", r.durationMs());
-        if (r.roundId() != null && !r.roundId().isBlank()) {
-            n.put("roundId", r.roundId()); // roundId 稳定主键:缺失(旧行)不写
+    /**
+     * task.agents:任务下<b>全部 agent</b> 台账拉取(主 agent + 全部派生 agent,含 creator=ai-review 的审议 agent)。
+     * 参数:taskId 必填。应答:{agents:[...], mainAgentId};agents 按 createdAt 升序稳定排序。
+     * 取数:live 任务优先读内存台账({@link AgentLedger#getLiveAgents},漏挂时回退磁盘);冷任务读
+     * agents.json({@link AgentLedger#readAgents}),缺失回退 meta.agents(旧任务兼容)。任务不存在 → NOT_FOUND。
+     */
+    private void rpcTaskAgents(RpcContext ctx) {
+        String taskId = ctx.strParam("taskId");
+        // 存在性:与 task.poll / task.rounds 同口径(目录在盘 或 内存任务/磁盘索引可见任一即存在)
+        boolean known = store.taskDirExists(taskId) || tasks.containsKey(taskId) || diskTasks.containsKey(taskId);
+        if (!known) {
+            ctx.err(Rpc.ERR_NOT_FOUND, "task 不存在: " + taskId);
+            return;
         }
-        if (r.userMessage() != null) {
-            n.set("userMessage", r.userMessage()); // 完整 user.message payload:懒加载骨架起点(旧行缺失不写)
+        Path dir = store.dirOf(taskId); // known → 已登记或已 scan,dirOf 不抛
+        TaskEntry live = tasks.get(taskId);
+        ObjectNode meta = live == null ? store.readMeta(dir) : null;
+        String mainAgentId = live != null ? live.mainAgentId
+                : (meta != null ? meta.path("mainAgentId").asString(null) : null);
+        if (mainAgentId == null) {
+            mainAgentId = "";
         }
-        ArrayNode agentRanges = Json.arr();
-        for (RoundIndex.AgentRange s : r.agentRanges()) {
-            agentRanges.add(Json.obj()
-                    .put("agentId", s.agentId())
-                    .put("title", s.title())
-                    .put("startSeq", s.startSeq() == null ? "" : String.valueOf(s.startSeq()))
-                    .put("endSeq", s.endSeq() == null ? "" : String.valueOf(s.endSeq())));
+
+        List<ObjectNode> agents = null;
+        if (live != null) {
+            agents = agentLedger.getLiveAgents(taskId); // live 优先:内存台账
         }
-        n.set("agentRanges", agentRanges);
-        return n;
+        if (agents == null) {
+            List<ObjectNode> disk = agentLedger.readAgents(dir); // 冷任务:agents.json
+            if (disk != null) {
+                agents = new ArrayList<>(disk);
+            } else if (meta != null) {
+                JsonNode legacy = meta.path("agents"); // 旧任务兼容:meta.agents
+                if (legacy.isArray()) {
+                    agents = new ArrayList<>();
+                    for (JsonNode a : legacy) {
+                        if (a.isObject()) {
+                            agents.add(((ObjectNode) a).deepCopy());
+                        }
+                    }
+                }
+            }
+        }
+        if (agents == null) {
+            agents = new ArrayList<>();
+        }
+        // 不按 creator 过滤:返回主 agent + 全部派生 agent(含审议 agent)。
+        agents.sort(Comparator.comparingLong(a -> a.path("createdAt").asLong(0)));
+        ArrayNode arr = Json.arr();
+        agents.forEach(arr::add);
+        ctx.ok(Json.obj().set("agents", arr).put("mainAgentId", mainAgentId));
     }
 
     /**
@@ -866,6 +927,8 @@ public class TaskManager implements TaskInputHandler, InteractionServiceImpl.Sta
         throw new IllegalStateException("无法生成唯一 taskId(连续 " + MAX_TASKID_ATTEMPTS + " 次冲突)");
     }
 
+    
+     
     /**
      * task.run:创建/续跑合一——无 taskId=新建(workspace 必填),有 taskId=运行中入队/终态冷启动续跑。
      * RPC 线程启动洋葱链（order 10~80），ThreadSubmitNode 切换到虚拟线程执行后续节点。

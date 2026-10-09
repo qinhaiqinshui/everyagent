@@ -18,12 +18,14 @@
  *   TaskPacketBuffer 按 seq 插入已支持),通知 handler,返回 {earliestSeq} 供 UI 判断是否还有更早。
  * - fetchRoundEvents(startSeq, endSeq):按轮次 seq 区间一次性拉全一轮原始事件(plan-rounds-jsonl
  *   步骤 5,rounds 轮详情用)——task.poll 的 afterSeq+beforeSeq 开区间查询,闭合轮 [startSeq,endSeq]
- *   两端各外扩 1 恰为整轮,未闭合轮以 Long.MAX 哨兵为上界拉到当前末尾;hasMore 时以批尾 seq 推进
- *   afterSeq 分批续拉,seq 升序去重后返回 {seq,event,agentId,payload,ts} 数组供折叠器消费。
- *   无副作用原始拉取:不折入本视图缓冲、不回调 handler、不动游标。
+ *   两端各外扩 1 恰为整轮,未闭合轮以 Long.MAX 哨兵为上界拉到当前末尾;hasMore 时以 result.nextSeq
+ *   (未过滤口径字符串游标)推进 afterSeq 分批续拉,seq 升序去重后返回 {seq,event,agentId,payload,ts}
+ *   数组供折叠器消费。无副作用原始拉取:不折入本视图缓冲、不回调 handler、不动游标。
  *
  * 游标 lastSeq 用事件自带 seq(wire 字符串,精确)经 compareSeq 取大推进——推送帧与历史拉取批次
- * 共用;rpc.ok 的 result.lastSeq 是 JSON 数值(雪花 ID 超 2^53 丢精度),不作游标。
+ * 共用;rpc.ok 的 result.lastSeq 是 JSON 数值(雪花 ID 超 2^53 丢精度),不作游标。分页续拉游标统一
+ * 改用 result.nextSeq(未过滤口径字符串 raw seq,规避「AI 审议过程事件」被过滤后整页为空导致的游标
+ * 不推进/误判取完),缺省时回退批内 wire 事件自带 seq 的旧逻辑。
  */
 import { channels } from '../sdk/channels'
 import { HubClient } from '../sdk/hub-client'
@@ -80,6 +82,24 @@ function dedupeBySeq(items: TaskPollWireEvent[]): TaskPollWireEvent[] {
     }
   }
   return out
+}
+
+/**
+ * 分页续拉游标(未过滤口径):优先用 task.poll 应答新增的字符串字段 {@link TaskPollResult.nextSeq}
+ * ——worker 按**未过滤的原始 seq** 计算,避免「AI 审议过程事件」被出网过滤后整页为空导致游标不推进
+ * (=误判取完);字符串携带规避雪花 ID 超 2^53 的精度丢失。
+ * nextSeq 缺省(后端尚未提供)时回退旧逻辑:批内 wire 事件自带 seq(dir='tail' 取批尾、dir='head'
+ * 取批头);批为空且无 nextSeq → null,由调用方据 hasMore / 旧值决定停或回退。
+ */
+function resolvePageCursor(
+  result: TaskPollResult,
+  batch: TaskPollWireEvent[],
+  dir: 'tail' | 'head',
+): string | null {
+  const ns = result.nextSeq
+  if (ns != null && String(ns).trim() !== '') return String(ns)
+  if (batch.length === 0) return null
+  return String(dir === 'tail' ? batch[batch.length - 1].seq : batch[0].seq)
 }
 
 export class TaskPacketView {
@@ -156,15 +176,18 @@ export class TaskPacketView {
       { initial: true },
     )
     if (res == null) return { earliestSeq: null }
-    return { earliestSeq: res.result.firstSeq ?? null }
+    // 未过滤口径游标优先(result.nextSeq 为字符串 raw seq;上游整批被过滤为空时仍能推进);
+    // 缺省回退 raw firstSeq(worker 的 firstSeq/lastSeq 同为未过滤口径)。
+    return { earliestSeq: res.result.nextSeq ?? res.result.firstSeq ?? null }
   }
 
   /**
    * 懒加载·单页前向拉取(轮过程内容):task.poll 区间查询 (afterSeq, beforeSeq) 开区间、
-   * 升序取头部 limit 条。首拉调用方传 afterSeq=startSeq-1;续拉传上一页批尾 seq。
+   * 升序取头部 limit 条。首拉调用方传 afterSeq=startSeq-1;续拉传上一页续拉游标。
    * endSeq 非空(闭合轮)→ beforeSeq=endSeq+1 恰含权威最终回复;endSeq 为空(未闭合)→
    * Long.MAX 哨兵取到当前末尾。无副作用:不折入本视图缓冲、不回调 handler、不动游标。
-   * 返回去重后的升序事件、批尾 seq(续拉游标)与 hasMore(worker 粗判)。
+   * 返回去重后的升序事件、续拉游标(优先未过滤口径 nextSeq,缺省回退批尾 wire seq)与
+   * hasMore(未过滤口径,整页被过滤时仍可 true)。
    */
   async loadForwardPage(opts: {
     startSeq: number | string
@@ -189,14 +212,18 @@ export class TaskPacketView {
       },
     })) as TaskPollResult
     const events = dedupeBySeq(batch)
-    const lastSeq = events.length > 0 ? events[events.length - 1].seq : opts.afterSeq
-    return { events, lastSeq, hasMore: result.hasMore && events.length > 0 }
+    // 续拉游标改用未过滤口径的字符串 nextSeq:filtered batch 可能整页为空(事件被出网过滤),
+    // 此时按批尾 wire seq 取游标会不推进 → 上层据 hasMore 误判「取完」。缺省回退旧逻辑(批尾 seq)。
+    const lastSeq = resolvePageCursor(result, batch, 'tail') ?? opts.afterSeq
+    // hasMore 只依赖 worker 的未过滤口径判定:整页被过滤 ≠ 取完(events 为空仍可能有更多)。
+    return { events, lastSeq, hasMore: result.hasMore }
   }
 
   /**
    * 懒加载·单页后向拉取(运行中尾轮往上翻历史):task.poll beforeSeq 向前翻页,返回
    * seq < beforeSeq 的「最近 limit 条」(升序)。reachedStart = 本页已含 seq <= startSeq
    * 的起点 user.message(往后拉到轮起点即可停)。无副作用,同 loadForwardPage。
+   * firstSeq(续拉游标)优先未过滤口径 nextSeq(整页被过滤为空时仍能向前推进),缺省回退批内最早 seq。
    */
   async loadBackwardPage(opts: {
     startSeq: number | string
@@ -205,7 +232,7 @@ export class TaskPacketView {
   }): Promise<{ events: TaskPollWireEvent[]; firstSeq: number | string; reachedStart: boolean }> {
     const limit = opts.limit && opts.limit > 0 ? opts.limit : POLL_PAGE_LIMIT
     const batch: TaskPollWireEvent[] = []
-    await this.client.rpc(this.workerId, 'task.poll', {
+    const result = (await this.client.rpc(this.workerId, 'task.poll', {
       taskId: this.taskId,
       beforeSeq: opts.beforeSeq,
       limit,
@@ -213,9 +240,10 @@ export class TaskPacketView {
       onData: (items: TaskPollWireEvent[]) => {
         batch.push(...items)
       },
-    })
+    })) as TaskPollResult
     const events = dedupeBySeq(batch)
-    const firstSeq = events.length > 0 ? events[0].seq : opts.beforeSeq
+    // 续拉游标用未过滤口径 nextSeq(整页被过滤时批为空,仍能向前推进);缺省回退批内最早事件 seq。
+    const firstSeq = resolvePageCursor(result, batch, 'head') ?? opts.beforeSeq
     const reachedStart = events.some((e) => compareSeq(e.seq, opts.startSeq) <= 0)
     return { events, firstSeq, reachedStart }
   }
@@ -226,9 +254,10 @@ export class TaskPacketView {
    * 闭合轮闭区间 [startSeq, endSeq] 两端各外扩 1(雪花 ID 远离 0/上限,±1 安全)后恰好取整轮
    * (含轮起点的 user.message、轮终点的最终回复与全部子 Agent 事件);
    * endSeq 为空串/null/0(未闭合轮)→ 以 Long.MAX 哨兵为上界拉到当前末尾,之后的新事件由调用方走实时增量。
-   * 内部处理 hasMore 分批续拉:以批尾 wire 事件的 seq(字符串)推进 afterSeq——result.lastSeq 是
-   * JSON 数值,雪花 ID 超 2^53 会丢精度,不能用;单页 limit 沿用历史拉取页上限(POLL_PAGE_LIMIT)。
-   * 跨页按 seq 去重(worker hasMore 为粗判,可能多报一页空批;空批即取完,防自旋)。
+   * 内部处理 hasMore 分批续拉:以 result.nextSeq(未过滤口径字符串游标)推进 afterSeq——批尾
+   * wire seq 在整页被出网过滤时为空、无法推进,且 result.lastSeq 是 JSON 数值(雪花 ID 超 2^53
+   * 丢精度),均不能用;缺省回退批尾 wire seq(兼容旧后端)。单页 limit 沿用历史拉取页上限。
+   * 跨页按 seq 去重;仅据 hasMore 判停(整页被过滤 ≠ 取完),游标不推进则退出防自旋。
    * 无副作用原始拉取:不折入本视图缓冲、不回调 handler、不动游标;事件按 seq 升序返回
    * ({seq,event,agentId,payload,ts} wire 形态)供轮详情折叠器消费。
    * 任务不存在 → RpcError(NOT_FOUND);传输错误原样抛出。
@@ -260,10 +289,12 @@ export class TaskPacketView {
         const key = String(item.seq)
         if (!bySeq.has(key)) bySeq.set(key, item) // 跨页按 seq 去重,保持升序
       }
-      // hasMore 为粗判可能多报:空批即取完,防自旋
-      if (!result.hasMore || batch.length === 0) break
-      // hasMore=true 且本页非空 → 以批尾事件 seq(字符串)推进游标续拉
-      afterCursor = String(batch[batch.length - 1].seq)
+      // hasMore 为未过滤口径:整页被过滤(批为空)≠ 取完,只据 hasMore 判停
+      if (!result.hasMore) break
+      // 以未过滤口径 nextSeq 推进续拉游标(缺省回退批尾 seq);游标不推进则退出防自旋
+      const nextCursor = resolvePageCursor(result, batch, 'tail')
+      if (nextCursor == null || nextCursor === afterCursor) break
+      afterCursor = nextCursor
     }
     if (page >= ROUND_RANGE_MAX_PAGES) {
       console.warn(
@@ -278,10 +309,11 @@ export class TaskPacketView {
    * 基于 task.poll 的 taskId+roundId+limit(events 模式)查询,worker roundId 分支已按轮
    * 返回该轮全部事件(含轮起点 user.message 与轮终点最终回复 message,seq 升序、hasMore
    * 分批),不再需要旧 seq 区间的 ±1 端点外扩哨兵;未闭合轮同样按 roundId 取到当前末尾。
-   * 内部处理 hasMore 分批续拉:以批尾 wire 事件的 seq(字符串)推进 afterSeq——result.lastSeq
-   * 是 JSON 数值,雪花 ID 超 2^53 会丢精度,不能用;单页 limit 沿用历史拉取页上限
-   * (POLL_PAGE_LIMIT)。跨页按 seq 去重(worker hasMore 为粗判,可能多报一页空批;空批即取完,
-   * 防自旋)。无副作用原始拉取:不折入本视图缓冲、不回调 handler、不动游标;事件按 seq 升序返回
+   * 内部处理 hasMore 分批续拉:以 result.nextSeq(未过滤口径字符串游标)推进 afterSeq——批尾
+   * wire seq 在整页被出网过滤时为空、无法推进,且 result.lastSeq 是 JSON 数值(雪花 ID 超 2^53
+   * 丢精度),均不能用;缺省回退批尾 wire seq(兼容旧后端)。单页 limit 沿用历史拉取页上限
+   * (POLL_PAGE_LIMIT)。跨页按 seq 去重;仅据 hasMore 判停(整页被过滤 ≠ 取完),游标不推进则退出
+   * 防自旋。无副作用原始拉取:不折入本视图缓冲、不回调 handler、不动游标;事件按 seq 升序返回
    * ({seq,event,agentId,payload,ts} wire 形态)供轮详情折叠器消费。
    * 任务或轮次不存在 → RpcError(NOT_FOUND);传输错误原样抛出。
    */
@@ -305,10 +337,12 @@ export class TaskPacketView {
         const key = String(item.seq)
         if (!bySeq.has(key)) bySeq.set(key, item) // 跨页按 seq 去重,保持升序
       }
-      // hasMore 为粗判可能多报:空批即取完,防自旋
-      if (!result.hasMore || batch.length === 0) break
-      // hasMore=true 且本页非空 → 以批尾事件 seq(字符串)推进游标续拉
-      afterCursor = String(batch[batch.length - 1].seq)
+      // hasMore 为未过滤口径:整页被过滤(批为空)≠ 取完,只据 hasMore 判停
+      if (!result.hasMore) break
+      // 以未过滤口径 nextSeq 推进续拉游标(缺省回退批尾 seq);游标不推进则退出防自旋
+      const nextCursor = resolvePageCursor(result, batch, 'tail')
+      if (nextCursor == null || nextCursor === afterCursor) break
+      afterCursor = nextCursor
     }
     if (page >= ROUND_RANGE_MAX_PAGES) {
       console.warn(

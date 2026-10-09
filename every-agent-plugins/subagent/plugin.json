@@ -2,9 +2,8 @@
   "id": "subagent",
   "name": "子 Agent",
   "version": "0.1.0",
-  "description": "子 Agent 插件（工具 + Skill + task.agents RPC + 前端列表 + 台账投影）",
+  "description": "子 Agent 插件（run_agent/wait_agents/list_agents 工具 + Skill + 台账投影）",
   "author": "everyagent",
   "main": "dev.everyagent.plugin.subagent.SubAgentPlugin",
-  "webMain": "web/index.ts",
   "enabled": true
 }

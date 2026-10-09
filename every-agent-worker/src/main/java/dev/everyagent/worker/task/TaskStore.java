@@ -429,55 +429,12 @@ public class TaskStore implements TaskStoreService {
         }
     }
 
-    /**
-     * 从磁盘读 seq &gt; afterSeq 的事件(wire 形,与 task.sync 批次一致):
-     * 全部 *.jsonl 按 seq 归并(瞬态占 seq → 文件内有洞;agent 数 ≤ 个位数,线性归并够用)。
-     * 旧 events.jsonl 天然命中同一 glob(旧行无 agentId → 主线程)。撕行静默跳过。
-     */
-    public List<ObjectNode> readEvents(Path dir, String mainAgentId, long afterSeq, int max)
-            throws IOException {
-        record Entry(long seq, ObjectNode wire) {
-        }
-        List<Entry> all = new ArrayList<>();
-        for (Path f : agentFiles(dir)) {
-            try (BufferedReader br = Files.newBufferedReader(f, StandardCharsets.UTF_8)) {
-                String line;
-                while ((line = br.readLine()) != null) {
-                    if (line.length() < 30) {
-                        continue; // 快速跳过明显残行
-                    }
-                    long seq = seqOf(line);
-                    if (seq <= 0) {
-                        continue; // 无 seq 前缀:不整行解析直接弃(撕行/异构行)
-                    }
-                    if (seq <= afterSeq) {
-                        continue;
-                    }
-                    EventRecord r = parseLine(line);
-                    if (r == null) {
-                        continue; // 撕行
-                    }
-                    all.add(new Entry(r.seq(), TaskEvents.wireEvent(r, mainAgentId)));
-                }
-            }
-        }
-        all.sort(Comparator.comparingLong(Entry::seq));
-        List<ObjectNode> out = new ArrayList<>(Math.min(all.size(), max));
-        for (Entry e : all) {
-            if (out.size() >= max) {
-                break;
-            }
-            out.add(e.wire);
-        }
-        return out;
-    }
-
     @Override
     public List<Message> loadConversation(Path dir, String mainAgentId) {
         return ConversationLoader.load(this, dir, mainAgentId);
     }
 
-    // ---- 高效读路径(反向随机访问分块扫描;只加能力,不动既有 readEvents/推流链路)----
+    
 
     /**
      * 增量读:seq &gt; afterSeq 的持久事件(升序,最多 limit 条)。每个 *.jsonl 从文件尾反向,

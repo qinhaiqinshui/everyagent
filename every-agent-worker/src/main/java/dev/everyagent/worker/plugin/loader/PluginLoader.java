@@ -18,6 +18,8 @@ import dev.everyagent.worker.plugin.registry.ToolExecutionInterceptorRegistry;
 import dev.everyagent.worker.plugin.registry.ToolProviderRegistry;
 import dev.everyagent.worker.plugin.registry.TaskLifecycleRegistry;
 import dev.everyagent.worker.plugin.registry.TaskAdmissionPolicyRegistry;
+import dev.everyagent.worker.ship.EventEgressFilterRegistry;
+import dev.everyagent.worker.ship.RoundEgressFilterRegistry;
 import dev.everyagent.worker.plugin.scanner.BuiltInPluginScanner;
 import dev.everyagent.worker.plugin.scanner.PluginScanner;
 import dev.everyagent.worker.plugin.scanner.PluginScanner.ScannedPlugin;
@@ -102,6 +104,8 @@ public class PluginLoader {
     private final TaskAdmissionPolicyRegistry admissionPolicyRegistry;
     private final SkillContributorRegistry skillContributorRegistry;
     private final FileReferenceHandlerRegistry fileReferenceHandlerRegistry;
+    private final EventEgressFilterRegistry eventEgressFilterRegistry;
+    private final RoundEgressFilterRegistry roundEgressFilterRegistry;
     /** 禁用名单真相源:被禁用的插件核心不调 activate,不注册任何贡献。 */
     private final PluginStateStore pluginStates;
     private final RpcDispatcher rpcDispatcher;
@@ -132,6 +136,8 @@ public class PluginLoader {
             TaskAdmissionPolicyRegistry admissionPolicyRegistry,
             SkillContributorRegistry skillContributorRegistry,
             FileReferenceHandlerRegistry fileReferenceHandlerRegistry,
+            EventEgressFilterRegistry eventEgressFilterRegistry,
+            RoundEgressFilterRegistry roundEgressFilterRegistry,
             PluginStateStore pluginStates,
             RpcDispatcher rpcDispatcher,
             SlashCommandRegistry slashRegistry,
@@ -151,6 +157,8 @@ public class PluginLoader {
         this.admissionPolicyRegistry = admissionPolicyRegistry;
         this.skillContributorRegistry = skillContributorRegistry;
         this.fileReferenceHandlerRegistry = fileReferenceHandlerRegistry;
+        this.eventEgressFilterRegistry = eventEgressFilterRegistry;
+        this.roundEgressFilterRegistry = roundEgressFilterRegistry;
         this.pluginStates = pluginStates;
         this.rpcDispatcher = rpcDispatcher;
         this.slashRegistry = slashRegistry;
@@ -387,6 +395,7 @@ public class PluginLoader {
                     admissionPolicyRegistry,
                     skillContributorRegistry,
                     fileReferenceHandlerRegistry,
+                    eventEgressFilterRegistry, roundEgressFilterRegistry,
                     rpcDispatcher, slashRegistry, slashTokenHandler, services, config, applicationContext);
 
             // 调用 activate()

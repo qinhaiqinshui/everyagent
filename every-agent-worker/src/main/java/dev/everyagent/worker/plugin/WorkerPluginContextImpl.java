@@ -3,6 +3,8 @@ package dev.everyagent.worker.plugin;
 import dev.everyagent.plugin.api.WorkerPluginContext;
 import dev.everyagent.plugin.api.WorkerServices;
 import dev.everyagent.plugin.api.PluginConfig;
+import dev.everyagent.plugin.api.event.EventEgressFilter;
+import dev.everyagent.plugin.api.event.RoundEgressFilter;
 import dev.everyagent.plugin.api.permission.AuthorizationHandler;
 import dev.everyagent.plugin.api.rpc.RpcMethod;
 import dev.everyagent.plugin.api.skill.SkillContributor;
@@ -30,6 +32,8 @@ import dev.everyagent.worker.plugin.registry.TaskLifecycleRegistry;
 import dev.everyagent.worker.plugin.registry.ToolExecutionInterceptorRegistry;
 import dev.everyagent.worker.plugin.registry.ToolProviderRegistry;
 import dev.everyagent.worker.rpc.RpcDispatcher;
+import dev.everyagent.worker.ship.EventEgressFilterRegistry;
+import dev.everyagent.worker.ship.RoundEgressFilterRegistry;
 import dev.everyagent.worker.slash.SlashCommandRegistry;
 import dev.everyagent.plugin.api.slash.SlashCommandItem;
 import dev.everyagent.worker.slash.SlashTokenHandler;
@@ -66,6 +70,8 @@ public class WorkerPluginContextImpl implements WorkerPluginContext {
     private final TaskAdmissionPolicyRegistry admissionPolicyRegistry;
     private final SkillContributorRegistry skillContributorRegistry;
     private final FileReferenceHandlerRegistry fileReferenceHandlerRegistry;
+    private final EventEgressFilterRegistry eventEgressFilterRegistry;
+    private final RoundEgressFilterRegistry roundEgressFilterRegistry;
     private final RpcDispatcher rpcDispatcher;
     private final SlashCommandRegistry slashRegistry;
     private final SlashTokenHandler slashTokenHandler;
@@ -94,6 +100,8 @@ public class WorkerPluginContextImpl implements WorkerPluginContext {
             TaskAdmissionPolicyRegistry admissionPolicyRegistry,
             SkillContributorRegistry skillContributorRegistry,
             FileReferenceHandlerRegistry fileReferenceHandlerRegistry,
+            EventEgressFilterRegistry eventEgressFilterRegistry,
+            RoundEgressFilterRegistry roundEgressFilterRegistry,
             RpcDispatcher rpcDispatcher,
             SlashCommandRegistry slashRegistry,
             SlashTokenHandler slashTokenHandler,
@@ -113,6 +121,8 @@ public class WorkerPluginContextImpl implements WorkerPluginContext {
         this.admissionPolicyRegistry = admissionPolicyRegistry;
         this.skillContributorRegistry = skillContributorRegistry;
         this.fileReferenceHandlerRegistry = fileReferenceHandlerRegistry;
+        this.eventEgressFilterRegistry = eventEgressFilterRegistry;
+        this.roundEgressFilterRegistry = roundEgressFilterRegistry;
         this.rpcDispatcher = rpcDispatcher;
         this.slashRegistry = slashRegistry;
         this.slashTokenHandler = slashTokenHandler;
@@ -204,6 +214,16 @@ public class WorkerPluginContextImpl implements WorkerPluginContext {
     @Override
     public void registerFileReferenceHandler(FileReferenceHandler handler) {
         fileReferenceHandlerRegistry.register(handler);
+    }
+
+    @Override
+    public void registerEventEgressFilter(EventEgressFilter filter) {
+        eventEgressFilterRegistry.register(filter);
+    }
+
+    @Override
+    public void registerRoundEgressFilter(RoundEgressFilter filter) {
+        roundEgressFilterRegistry.register(filter);
     }
 
     @Override

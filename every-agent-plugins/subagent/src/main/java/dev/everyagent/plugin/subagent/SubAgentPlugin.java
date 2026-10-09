@@ -11,9 +11,10 @@ import dev.everyagent.plugin.api.config.WorkerConfig;
  * <ul>
  *   <li>SubAgentToolsProvider → ToolProviderRegistry</li>
  *   <li>SubAgentSkillContributor → SkillContributorRegistry</li>
- *   <li>task.agents RPC → RpcDispatcher</li>
- *   <li>4 个 TaskLifecycleNode → TaskLifecycleRegistry（ledger track/untrack/persist、spawned.await）</li>
+ *   <li>TaskLifecycleNode → TaskLifecycleRegistry（spawned.await）</li>
  * </ul>
+ *
+ * <p>task.agents RPC 已收回 task 域（worker TaskManager.rpcTaskAgents），本插件不再注册该 RPC。
  */
 public class SubAgentPlugin implements EveryAgentPlugin {
 
@@ -30,15 +31,11 @@ public class SubAgentPlugin implements EveryAgentPlugin {
         // 1. 注册工具提供者(工具入口绑 ToolContext.execution() 整个上下文句柄)
         ctx.registerToolProvider(new SubAgentToolsProvider(subAgentManager));
 
-        // 2. 注册 task.agents RPC（store 仅 RpcHandler 的 task 壳:readMeta/dirOf/taskDirExists）
-        SubAgentRpcHandler rpcHandler = new SubAgentRpcHandler(ctx.services().store());
-        ctx.registerRpcMethod(SubAgentRpcHandler.TASK_AGENTS, rpcHandler::handleTaskAgents);
-
-        // 3. 注册生命周期节点
+        // 2. 注册生命周期节点
         // 任务收口前等待全部子 agent（超时级联停）
         ctx.registerTaskLifecycleNode(new SubAgentSpawnedAwaitNode(subAgentManager));
 
-        // 4. 注册 Skill 贡献者
+        // 3. 注册 Skill 贡献者
         WorkerConfig props = ctx.services().config();
         SubAgentSkillContributor skillContributor = new SubAgentSkillContributor(props);
         ctx.registerSkillContributor(skillContributor);

@@ -14,6 +14,8 @@ public final class RpcMethods {
     public static final String TASK_ROUNDS = "task.rounds";
     /** 轮尾一次性拉取:按轮起点(startSeq)取该轮末尾 limit 条事件用于初始渲染(磁盘∪内存,同 seq 以内存为准、同 seq 组不拆批)。 */
     public static final String TASK_ROUND_TAIL = "task.roundTail";
+    /** 任务下全部 agent 台账拉取(主 agent + 全部派生 agent,含审议 agent;live 读内存台账、冷任务读 agents.json)。 */
+    public static final String TASK_AGENTS = "task.agents";
     public static final String TASK_CANCEL = "task.cancel";
     public static final String TASK_DELETE = "task.delete";
     /** 队列快照拉取：返回当前排队中的任务列表及位置。 */

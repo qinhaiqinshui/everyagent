@@ -82,6 +82,8 @@ class PluginLoaderDisabledTest {
                 mock(TaskAdmissionPolicyRegistry.class),
                 mock(SkillContributorRegistry.class),
                 mock(FileReferenceHandlerRegistry.class),
+                mock(dev.everyagent.worker.ship.EventEgressFilterRegistry.class),
+                mock(dev.everyagent.worker.ship.RoundEgressFilterRegistry.class),
                 states,
                 mock(RpcDispatcher.class),
                 mock(SlashCommandRegistry.class),

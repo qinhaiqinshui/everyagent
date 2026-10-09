@@ -55,6 +55,8 @@ public class DataPusher implements EventLogReader.Listener {
     private final StreamSourceRegistry streamSources;
     /** 被动推送管道：背压控制 + 定向推送（替代原 acquireCredit/onAck/conn.pub 内联逻辑）。 */
     private final WebSocketEmitter wsEmitter;
+    /** 出网单点投影器:事件 wire + 出网过滤链(隐藏不可展示事件的唯一收敛点)。 */
+    private final EgressProjector projector;
 
     private final AtomicBoolean running = new AtomicBoolean(true);
     private final Semaphore wake = new Semaphore(0);
@@ -65,16 +67,17 @@ public class DataPusher implements EventLogReader.Listener {
     private volatile int replayEnd;
     /** 当前挂接监听的日志(停止时摘除;再运行换挂新日志时先摘旧)。 */
     private volatile EventLogReader liveLog;
-    /** 挂接时记主 agentId(payload 组装用,wireEvent 同 task.poll 口径)。 */
+    
     private volatile String mainAgentId;
 
     public DataPusher(String sessionId, String taskId, String channel, HubLink conn,
-                      StreamSourceRegistry streamSources) {
+                      StreamSourceRegistry streamSources, EgressProjector projector) {
         this.sessionId = sessionId;
         this.taskId = taskId;
         this.channel = channel;
         this.conn = conn;
         this.streamSources = streamSources;
+        this.projector = projector;
         this.wsEmitter = new WebSocketEmitter(sessionId, taskId, conn);
     }
 
@@ -227,8 +230,9 @@ public class DataPusher implements EventLogReader.Listener {
     /**
      * 推送一条内存记录:ext = target(定向) + operate(delta/thinking=append,其余=replace)
      * + 回放帧 initial=true(前端 askStore 静默依赖)+ 原事件 ext 字段合并(如 persist=false);
-     * payload 走 {@link EventWireFormatter#wireEvent} 同 task.poll wire 口径(子 agent 事件把
-     * agentId 注入 payload,前端折叠器据以分流主/子线程)。
+     * payload 走出网单点投影器 {@link EgressProjector#projectEvent} 同 task.poll wire 口径
+     * (先跑出网过滤链;子 agent 事件把 agentId 注入 payload,前端折叠器据以分流主/子线程)。
+     * 被过滤链丢弃(返回 null)时<b>跳过推送但游标仍推进</b>(pushFrom 的 pos++ 不依赖本方法)。
      */
     private void push(EventRecord r, boolean replay) {
         String operate = OPERATE_REPLACE; // 缺省
@@ -250,7 +254,11 @@ public class DataPusher implements EventLogReader.Listener {
                 ext.set(k, src.get(k));
             }
         }
-        JsonNode payload = EventWireFormatter.wireEvent(r, mainAgentId).path("payload");
+        ObjectNode wire = projector.projectEvent(taskId, mainAgentId, r);
+        if (wire == null) {
+            return; // 出网过滤丢弃:跳过推送(游标仍推进)
+        }
+        JsonNode payload = wire.path("payload");
         wsEmitter.push(channel, r.event(), r.seq(), r.ts(),
                 payload, ext);
     }

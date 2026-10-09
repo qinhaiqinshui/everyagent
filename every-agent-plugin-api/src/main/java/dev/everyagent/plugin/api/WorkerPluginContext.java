@@ -1,5 +1,7 @@
 package dev.everyagent.plugin.api;
 
+import dev.everyagent.plugin.api.event.EventEgressFilter;
+import dev.everyagent.plugin.api.event.RoundEgressFilter;
 import dev.everyagent.plugin.api.permission.AuthorizationHandler;
 import dev.everyagent.plugin.api.rpc.RpcMethod;
 import dev.everyagent.plugin.api.skill.SkillContributor;
@@ -67,6 +69,23 @@ public interface WorkerPluginContext extends TaskPluginContext {
 
     /** 注册 FileReferenceHandler（文件引用处理器，按扩展名处理 @ 文件引用）。 */
     void registerFileReferenceHandler(FileReferenceHandler handler);
+
+    /**
+     * 注册 EventEgressFilter（事件级出网过滤链节点）。
+     *
+     * <p>作用于 pre-wire 的单条事件记录:可改写 payload 内展示内容或返回 null 丢弃该事件
+     * (事件仍照常落盘)。所有出网口(stream 推送 / task.poll / task.roundTail)统一经单点投影器
+     * 跑本链,故「隐藏不可展示事件」等策略只需注册一个过滤器。
+     */
+    void registerEventEgressFilter(EventEgressFilter filter);
+
+    /**
+     * 注册 RoundEgressFilter（轮次级出网过滤链节点）。
+     *
+     * <p>作用于 pre-wire 的轮次 JSON 视图:可裁剪 agentRanges 等字段或返回 null 丢弃该轮;
+     * task.rounds 出网口统一经单点投影器跑本链。
+     */
+    void registerRoundEgressFilter(RoundEgressFilter filter);
 
     // ── 通用扩展注册 ──
 

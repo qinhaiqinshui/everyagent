@@ -232,7 +232,7 @@ class WorkerDataPusherTest {
         String taskId = create("SUB:子代理增量");
         sub(fe, streamCh(taskId));
 
-        // 主 agent 的 delta 帧无 agentId;子 agent 增量经 wireEvent 注入 payload.agentId
+        
         String frame = fe.await(t -> t.contains(streamCh(taskId))
                 && t.contains("\"event\":\"delta\"") && t.contains("\"agentId\""),
                 "子 agent delta 帧带 payload.agentId");

@@ -33,6 +33,13 @@ export interface TaskPollResult {
   hasMore: boolean;
   firstSeq: number | string;
   lastSeq: number | string;
+  /**
+   * 未过滤口径的推进游标(字符串,雪花 ID 超 2^53 必须用字符串携带):
+   * worker 会把「AI 审议过程事件」等不可展示事件从 batch 里过滤掉(出网投影),但游标按**未过滤的
+   * 原始 seq** 推进。客户端分页必须改用它——否则某一页整页被过滤(batch 为空)时会误判「取完」
+   * 而静默丢失轮详情。缺省(后端尚未提供)时消费方回退到批内 wire 事件自带 seq 的旧逻辑。
+   */
+  nextSeq?: string;
   task?: { status: string };
   pendingAsk?: unknown;
   /** 任务是否运行中（前端据此决定是否继续轮询）。 */

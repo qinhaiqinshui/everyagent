@@ -36,15 +36,19 @@ public class DataPusherManager implements HubPool.Listener, StreamSourceListener
 
     private final HubPool pool;
     private final StreamSourceRegistry streamSources;
+    /** 出网单点投影器:建 DataPusher 时传入(事件 wire + 出网过滤链的唯一收敛点)。 */
+    private final EgressProjector projector;
     /** 归属查询口(task 层实现);ObjectProvider 延迟解析,避免与 TaskManager 构造循环依赖。 */
     private final org.springframework.beans.factory.ObjectProvider<TaskOwnership> ownership;
     private final Map<String, DataPusher> pushers = new ConcurrentHashMap<>();
 
     public DataPusherManager(HubPool pool,
                              StreamSourceRegistry streamSources,
+                             EgressProjector projector,
                              org.springframework.beans.factory.ObjectProvider<TaskOwnership> ownership) {
         this.pool = pool;
         this.streamSources = streamSources;
+        this.projector = projector;
         this.ownership = ownership;
     }
 
@@ -119,7 +123,7 @@ public class DataPusherManager implements HubPool.Listener, StreamSourceListener
                 return;
             }
             pushers.computeIfAbsent(key, k -> {
-                DataPusher p = new DataPusher(sessionId, taskId, channel, conn, streamSources);
+                DataPusher p = new DataPusher(sessionId, taskId, channel, conn, streamSources, projector);
                 p.start();
                 log.debug("定向推送器已建立 session={} task={}", sessionId, taskId);
                 return p;

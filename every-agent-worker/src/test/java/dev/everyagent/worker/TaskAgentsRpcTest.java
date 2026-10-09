@@ -17,7 +17,6 @@ import dev.everyagent.worker.task.TaskStore;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -44,16 +43,15 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * task.agents 集成测试(前端打开任务详情拉取子 agent 台账的唯一取数口)。
+ * task.agents 集成测试(task 域取数口:任务下全部 agent 台账——主 agent + 全部派生 agent)。
  * 覆盖:不存在任务 NOT_FOUND / 缺 taskId BAD_PARAMS;
  * 终态(已驱逐出内存的磁盘)任务读 agents.json(2 个子 agent,含 usage+context+lastText 透传、
  * 按 createdAt 升序稳定排序、mainAgentId 正确);
  * 旧任务回退(目录只有 meta.json 带 agents 数组、无 agents.json → 返回 meta.agents 内容);
- * live 任务读内存台账(waiting-user 任务驻留内存,Phase 4 迁至 subagent 插件,
- * 本测试已禁用)。
+ * live 任务读内存台账(AgentLedger.getLiveAgents;无子 agent 的任务也应含主 agent)。
+ * 语义:不按 creator 过滤——返回主 agent + 全部派生 agent(含 creator=ai-review 的审议 agent)。
  * 复用 WorkerTaskPollTest / TaskRoundsRpcTest 的测试基建(FakeHub + FakeChatModel + WsTestClient)。
  */
-@Disabled("Phase 4: task.agents RPC 迁至 subagent 插件")
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.DEFINED_PORT)
 class TaskAgentsRpcTest {
 
@@ -227,8 +225,9 @@ class TaskAgentsRpcTest {
         awaitEvicted(taskId); // finish 全部完成(flush/驱逐),磁盘为完整真相源,live=null 走磁盘路径
         Path dir = store.dirOf(taskId);
         Path agentsFile = dir.resolve("agents.json");
-        assertTrue(Files.isRegularFile(agentsFile) == false,
-                "无子 agent 的任务不应有 agents.json(空台账不落盘): " + agentsFile);
+        // 新语义:主 agent 也进台账 → 无子 agent 的任务 agents.json 仍落盘(仅主 agent 一条)。
+        assertTrue(Files.isRegularFile(agentsFile),
+                "主 agent 进台账 → agents.json 应落盘: " + agentsFile);
 
         // 手工写 agents.json:故意把 createdAt 较大的放前面,验证应答按 createdAt 升序稳定排序。
         // 一个带 usage+context+lastText,一个只有基础字段(可选字段省略透传)。
@@ -289,6 +288,8 @@ class TaskAgentsRpcTest {
         String taskId = create("你好,旧任务台账");
         awaitEvicted(taskId);
         Path dir = store.dirOf(taskId);
+        // 旧任务形态:无 agents.json(主 agent 也进台账会落盘 agents.json,故删除以模拟旧布局)
+        Files.deleteIfExists(dir.resolve("agents.json"));
         assertTrue(!Files.isRegularFile(dir.resolve("agents.json")),
                 "无 agents.json 才触发旧格式回退: " + dir);
 
@@ -317,21 +318,28 @@ class TaskAgentsRpcTest {
     }
 
     @Test
-    void noAgentsReturnsEmptyArray() throws java.io.IOException {
+    void noSubAgentTaskReturnsMainOnlyArray() throws java.io.IOException {
         String taskId = create("你好,无子agent任务");
         awaitEvicted(taskId);
         RpcResp r = call("task.agents", "{\"taskId\":\"" + taskId + "\"}");
         assertFalse(r.isErr(), String.valueOf(r.err()));
         JsonNode agents = r.result().path("agents");
-        assertTrue(agents.isArray() && agents.isEmpty(), "无子 agent → agents=[](非 null): " + r.result());
-        assertTrue(r.result().path("mainAgentId").isTextual(), "mainAgentId 恒为字符串: " + r.result());
+        assertTrue(agents.isArray(), "agents 应为数组(非 null): " + r.result());
+        String mainAgentId = r.result().path("mainAgentId").asString("");
+        assertFalse(mainAgentId.isEmpty(), "mainAgentId 应非空: " + r.result());
+        // 新语义:无子 agent 的任务也含主 agent 一条(不按 creator 过滤)
+        boolean hasMain = false;
+        for (JsonNode a : agents) {
+            if (mainAgentId.equals(a.path("agentId").asString())) {
+                hasMain = true;
+            }
+        }
+        assertTrue(hasMain, "无子 agent 的任务应含主 agent: " + agents);
     }
 
     @Test
     void liveTaskReadsInMemoryLedger() {
-        // live 路径:waiting-user 任务驻留内存(finish 未发生、未驱逐)。
-        // Phase 4: agentLedger 已从 TaskEntry 迁至 subagent 插件的 SubAgentLedger,
-        // 本测试已禁用,保留方法骨架以备后续在 subagent 插件模块重写。
+        // live 路径:waiting-user 任务驻留内存(finish 未发生、未驱逐)→ 走 AgentLedger.getLiveAgents。
         String taskId = create("ASK:继续吗");
         fe.await(t -> t.contains("\"event\":\"task.updated\"")
                 && t.contains("\"status\":\"waiting-user\"") && t.contains(taskId), "等待用户输入(waiting-user)");
@@ -341,10 +349,17 @@ class TaskAgentsRpcTest {
         RpcResp r = call("task.agents", "{\"taskId\":\"" + taskId + "\"}");
         assertFalse(r.isErr(), String.valueOf(r.err()));
         JsonNode agents = r.result().path("agents");
-        assertEquals(0, agents.size(), "无子 agent → agents=[]: " + agents);
+        // 新语义:无子 agent 的 live 任务也应含主 agent(内存台账里有 agent.started 记录)。
         assertEquals(live.mainAgentId, r.result().path("mainAgentId").asString(),
                 "live 任务 mainAgentId 取内存字段: " + r.result());
         assertFalse(r.result().path("mainAgentId").asString("").isEmpty());
+        boolean hasMain = false;
+        for (JsonNode a : agents) {
+            if (live.mainAgentId.equals(a.path("agentId").asString())) {
+                hasMain = true;
+            }
+        }
+        assertTrue(hasMain, "live 任务内存台账应含主 agent: " + agents);
 
         // 清理:取消并等待终态驱逐,释放并发槽位
         RpcResp cancel = call("task.cancel", "{\"taskId\":\"" + taskId + "\"}");

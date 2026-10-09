@@ -136,13 +136,14 @@ class TaskStoreTest {
         }
         assertEquals(seqUsage, store.diskLastSeq(dirA), "瞬态占 seq:磁盘 seq 有洞但 lastSeq 覆盖");
 
-        // merge 读序:全部文件按 seq 归并;wire 形主事件无 payload.agentId、子事件有
-        List<ObjectNode> events = store.readEvents(dirA, MAIN, 0, 100);
+        
+        // merge 读序:全部文件按 seq 归并(本层回原始记录;wire 出网统一走 EgressProjector)
+        List<EventRecord> events = store.readSince(dirA, MAIN, 0, 100);
         assertEquals(List.of(seqUser, seqMsg, seqToolResult, seqSubMsg, seqUsage),
-                events.stream().map(e -> e.path("seq").asLong()).toList(), "按 seq 归并跨文件");
-        assertNull(events.get(0).path("payload").path("agentId").asString(null), "主 agent 事件 wire 无 agentId");
-        assertEquals(SUB, events.get(3).path("payload").path("agentId").asString(), "子事件并入 payload.agentId");
-        assertEquals(3, store.readEvents(dirA, MAIN, seqMsg, 100).size(), "afterSeq=message 只回其后持久事件");
+                events.stream().map(EventRecord::seq).toList(), "按 seq 归并跨文件");
+        assertEquals(MAIN, events.get(0).agentId(), "主 agent 事件 agentId=main");
+        assertEquals(SUB, events.get(3).agentId(), "子事件 agentId=子 agent");
+        assertEquals(3, store.readSince(dirA, MAIN, seqMsg, 100).size(), "afterSeq=message 只回其后更晚事件");
         JsonNode msg = Json.parse(mainLines.get(1));
         assertEquals("思考全文", msg.path("payload").path("data").path("thinking").asString(), "message 行含完整 thinking");
         assertEquals("call-1", msg.path("payload").path("data").path("toolCalls").get(0).path("id").asString(),
@@ -226,7 +227,7 @@ class TaskStoreTest {
 
     @Test
     void legacyEventsJsonlReadable() throws Exception {
-        // 旧单文件布局的任务目录:readEvents 天然兼容(行无 agentId → 主线程 wire)
+        
         Path dir = tasksRoot().resolve("told");
         Files.createDirectories(dir);
         Files.writeString(dir.resolve("events.jsonl"), """
@@ -236,9 +237,10 @@ class TaskStoreTest {
                 """);
         Files.writeString(dir.resolve("meta.json"),
                 Json.write(Json.obj().put("taskId", "told").put("status", "done")));
-        List<ObjectNode> events = store.readEvents(dir, null, 0, 100);
-        assertEquals(List.of(1L, 2L, 3L), events.stream().map(e -> e.path("seq").asLong()).toList());
-        assertNull(events.get(0).path("payload").path("agentId").asString(null), "旧行 wire 无 agentId");
+        
+        List<EventRecord> events = store.readSince(dir, null, 0, 100);
+        assertEquals(List.of(1L, 2L, 3L), events.stream().map(EventRecord::seq).toList());
+        assertNull(events.get(0).agentId(), "旧行无 agentId");
         assertEquals(3, store.diskLastSeq(dir));
         assertTrue(store.scan().stream().anyMatch(s -> s.taskId().equals("told")), "旧任务可被索引");
         assertTrue(ConversationLoader.load(store, dir, "").isEmpty(), "旧格式无可重建会话(mainAgentId 空)");
@@ -256,7 +258,8 @@ class TaskStoreTest {
         Files.writeString(tasksRoot().resolve("t1").resolve(MAIN + ".jsonl"),
                 "{\"seq\":3,\"ts\":1,\"event\":\"del", java.nio.file.StandardOpenOption.APPEND);
         Path dir = tasksRoot().resolve("t1");
-        assertEquals(2, store.readEvents(dir, MAIN, 0, 100).size(), "撕行被跳过");
+        
+        assertEquals(2, store.readSince(dir, MAIN, 0, 100).size(), "撕行被跳过");
         assertEquals(seqB, store.diskLastSeq(dir), "撕行不计入 lastSeq");
         assertTrue(seqB > seqA, "雪花 ID 进程内递增");
     }

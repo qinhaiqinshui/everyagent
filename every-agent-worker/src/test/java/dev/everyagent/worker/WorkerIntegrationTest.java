@@ -273,8 +273,7 @@ class WorkerIntegrationTest {
         assertTrue(usageEv != null && usageEv.path("payload").has("total"), "usage 事件带 total 用量");
 
         // 磁盘布局:按 agent 分文件;每行带 agentId,无 ext null 字段。
-        // 注意:瞬态事件(如 thinking/delta)占 seq 但以短占位行 {"seq":N} 落盘(续号用,<30 字符),
-        // 读侧(readEvents)跳过短行 → 回放只见完整事件;故"完整事件行数 == 回放数",而非"总行数 == 回放数"。
+        
         JsonNode meta = readMeta(taskId);
         String mainAgentId = meta.path("mainAgentId").asString();
         assertTrue(mainAgentId.startsWith("a_"), mainAgentId);

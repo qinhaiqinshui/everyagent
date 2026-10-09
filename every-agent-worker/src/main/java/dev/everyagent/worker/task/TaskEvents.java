@@ -1,10 +1,8 @@
 package dev.everyagent.worker.task;
 
 import dev.everyagent.contract.json.Json;
-import dev.everyagent.plugin.api.event.EventRecord;
 import dev.everyagent.plugin.api.model.EmitEvent;
 import dev.everyagent.plugin.api.model.EventEmitter;
-import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.node.ObjectNode;
 
 /**
@@ -12,9 +10,8 @@ import tools.jackson.databind.node.ObjectNode;
  * 统一事件模型后零状态——所有事件经 {@link #emit(EmitEvent)} 单一入口,
  * 产生方自行管理 id / kind / mode / persist。
  *
- * <p>wire 形态:主 agent 事件不带 payload.agentId(前端以缺省识别主线程),
- * 子 agent 事件必带(wireEvent 按 mainAgentId 注入)。
- * seq 序列化为字符串(64 位 Snowflake &gt; JS Number.MAX_SAFE_INTEGER,wire 传输必须字符串)。
+ * <p>wire 形态(客户端可见形态)统一由出网单点投影器 {@code EgressProjector} 产出:
+ * 主 agent 事件不带 payload.agentId(前端以缺省识别主线程),子 agent 事件必带。
  */
 public final class TaskEvents implements EventEmitter {
 
@@ -61,28 +58,5 @@ public final class TaskEvents implements EventEmitter {
         ext.put("operate", e.mode() == EmitEvent.Mode.APPEND ? "append" : "replace");
 
         return log.append(e.id(), e.kind(), payload, agentId, ext, !e.persist()).seq();
-    }
-
-    /**
-     * 单条记录 → 前端可合并的事件 JSON:子 agent 事件把 agentId 并入 payload;
-     * 主 agent 事件(agentId == mainAgentId)不并入——前端以 payload.agentId 缺省识别主线程。
-     * seq 序列化为字符串(64 位 Snowflake > JS Number.MAX_SAFE_INTEGER,wire 传输必须字符串,
-     * 否则前端 JSON.parse 丢精度会把相邻事件判为同 seq 丢弃;与 Frames.wirePub 同口径)。
-     */
-    public static ObjectNode wireEvent(EventRecord r, String mainAgentId) {
-        ObjectNode e = Json.obj();
-        e.put("seq", String.valueOf(r.seq()));
-        e.put("ts", r.ts());
-        e.put("event", r.event());
-        JsonNode payload = r.payload();
-        if (r.agentId() != null && !r.agentId().equals(mainAgentId)
-                && payload != null && payload.isObject()) {
-            ObjectNode merged = ((ObjectNode) payload).deepCopy();
-            merged.put("agentId", r.agentId());
-            e.set("payload", merged);
-        } else {
-            e.set("payload", payload == null ? Json.obj() : payload);
-        }
-        return e;
     }
 }
