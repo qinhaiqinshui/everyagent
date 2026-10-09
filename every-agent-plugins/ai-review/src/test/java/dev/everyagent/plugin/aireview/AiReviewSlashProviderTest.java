@@ -1,9 +1,7 @@
 package dev.everyagent.plugin.aireview;
 
 import dev.everyagent.plugin.api.WorkerServices;
-import dev.everyagent.plugin.api.agent.AgentContext;
-import dev.everyagent.plugin.api.execution.ExecContext;
-import dev.everyagent.plugin.api.model.ModelConfig;
+import dev.everyagent.plugin.api.task.TaskRuntime;
 import dev.everyagent.plugin.api.task.TaskService;
 import dev.everyagent.plugin.api.slash.SlashCommandItem;
 import dev.everyagent.plugin.api.slash.SlashDisplayPosition;
@@ -12,7 +10,6 @@ import dev.everyagent.plugin.api.slash.SlashTokenEncoder;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -41,13 +38,16 @@ class AiReviewSlashProviderTest {
 
     private WorkerServices services;
     private TaskService taskService;
-    private StubExecContext task;
+    private TaskRuntime task;
+    private final Map<String, Object> taskMetadata = new HashMap<>();
 
     @BeforeEach
     void setUp() {
         services = mock(WorkerServices.class);
         taskService = mock(TaskService.class);
-        task = new StubExecContext();
+        // TaskService.get 返回 TaskRuntime(继承 ExecContext);provider 只读写 metadata()。
+        task = mock(TaskRuntime.class);
+        when(task.metadata()).thenReturn(taskMetadata);
         when(services.task()).thenReturn(taskService);
         doReturn(task).when(taskService).get("t-1");
     }
@@ -115,24 +115,6 @@ class AiReviewSlashProviderTest {
         verify(taskService).publishUpdated("t-1");
     }
 
-    // ---- 自建等价桩(实现 plugin-api 接口;§14.9) ----
-
-    /** ExecContext 最小桩(原借 worker TaskEntry):provider 只读写 metadata()。 */
-    private static final class StubExecContext implements ExecContext {
-        private final Map<String, Object> metadata = new HashMap<>();
-
-        @Override public String subjectId() { return "t-1"; }
-        @Override public String workspaceRoot() { return "ws"; }
-        @Override public String workspaceId() { return "defaultworkspace"; }
-        @Override public ModelConfig snapshot() {
-            return new ModelConfig("cfg", "openai-compat", "http://localhost:9999/v1", "m", null);
-        }
-        @Override public dev.everyagent.plugin.api.model.EventEmitter emitter() { return e -> e.id(); }
-        @Override public dev.everyagent.plugin.api.agent.AgentFactory agentFactory() { return null; }
-        @Override public Map<String, Object> metadata() { return metadata; }
-        @Override public Path dataDir() { return Path.of("workspaces", "defaultworkspace", "tasks", "t-1"); }
-        @Override public boolean terminal() { return false; }
-        @Override public dev.everyagent.plugin.api.interaction.InteractionService interaction() { return null; }
-        @Override public Map<String, AgentContext> agents() { return new HashMap<>(); }
-    }
+    // TaskRuntime 由 Mockito 桩(仅 stub metadata()):TaskService.get 返回 TaskRuntime,
+    // 而 provider 只读写任务级 metadata 业务标记,无需引 worker 任务域类型(§14.9)。
 }

@@ -23,11 +23,15 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -37,10 +41,10 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 /**
- * AiAuthReviewer 单测:审议三态解析 / 非 JSON 与缺字段回退 DENY /
+ * AiAuthReviewer 单测:审议三态解析 / <b>解析失败全集 → 重试一次 → 仍失败 ESCALATE</b>(不再 DENY)/
  * review-model 缺省用任务 configId / 总预算超时(外层 future.get 到点 → cancel +
  * DENY 或回退,审计 trace 附 reason=timeout)/ 组件不注册任何工具 / 不新建任务实体 /
- * 审计 trace persist 落盘。模型调用全部用 mock Agent 模拟预设 lastText。
+ * 审计 trace persist 落盘、以审议 agent 自身身份发射。模型调用全部用 mock Agent 模拟预设输出。
  *
  * <p>约束(§14.9):插件对 worker 任何 scope 零依赖,测试桩在本类内自建——
  * {@link RecordingExecContext} 复刻 worker TaskEvents 的 EmitEvent→EventRecord
@@ -112,11 +116,24 @@ class AiAuthReviewerTest {
             }
             when(agent.conversation()).thenReturn(conversation);
             org.mockito.Mockito.doAnswer(runInv -> {
-                // 模拟 run:如果有 error,抛异常;否则正常完成
+                // 模拟 run:按脚本逐轮推进本轮输出(scriptedTexts 非空时逐轮取;空则沿用 lastTextHolder),
+                // 再执行 runAction(挂起/抛错桩用)——复刻「run() 产出 lastText()」的真实语义。
+                java.util.List<String> script = scriptedTexts.get();
+                if (!script.isEmpty()) {
+                    int i = runIndex.getAndIncrement();
+                    lastTextHolder.set(script.get(Math.min(i, script.size() - 1)));
+                }
                 Runnable r = runAction.get();
                 if (r != null) r.run();
                 return null;
             }).when(agent).run();
+            // 复刻 worker AgentEntity 的 agent 层包装 emitter:emit 时把 EmitEvent.agentId 填为本 agent 的
+            // agentId(review-<subjectId>)——emitAuthTrace 以「审议 agent 自身身份」发射结果 trace。
+            when(agent.emitter()).thenAnswer(emInv -> (EventEmitter) e -> {
+                String filled = (e.agentId() == null || e.agentId().isEmpty()) ? id : e.agentId();
+                task.records.add(toRecord(e, filled));
+                return e.id();
+            });
             // build() 自动注册(与 worker AgentBuilder 同语义)
             task.agents().put(id, agent);
             return agent;
@@ -135,6 +152,11 @@ class AiAuthReviewerTest {
     private final java.util.concurrent.atomic.AtomicReference<String> lastTextHolder = new java.util.concurrent.atomic.AtomicReference<>("");
     private final java.util.concurrent.atomic.AtomicReference<Runnable> runAction = new java.util.concurrent.atomic.AtomicReference<>();
 
+    /** 逐轮输出脚本(非空 → 每次 run() 逐轮取,超出重复末条);重试用例:首轮失败、次轮成功。 */
+    private final AtomicReference<List<String>> scriptedTexts = new AtomicReference<>(List.of());
+    /** 脚本推进下标(每次 run() 递增)。 */
+    private final AtomicInteger runIndex = new AtomicInteger(0);
+
     private RecordingExecContext newTask(String cfgId) {
         ModelConfig snap = new ModelConfig(cfgId, "openai-compat",
                 "http://localhost:9999/v1", "task-model", null);
@@ -147,12 +169,25 @@ class AiAuthReviewerTest {
     }
 
     private AiAuthReviewer reviewer(String content) {
+        scriptedTexts.set(List.of());
+        runIndex.set(0);
         lastTextHolder.set(content);
         runAction.set(null);
         return new AiAuthReviewer(props);
     }
 
+    /** 逐轮输出脚本:第一次 run() 用 texts[0]、第二次用 texts[1]…(重试用例)。 */
+    private AiAuthReviewer sequenceReviewer(String... texts) {
+        scriptedTexts.set(List.of(texts));
+        runIndex.set(0);
+        lastTextHolder.set(texts[0]);
+        runAction.set(null);
+        return new AiAuthReviewer(props);
+    }
+
     private AiAuthReviewer hangReviewer(long sleepMs) {
+        scriptedTexts.set(List.of());
+        runIndex.set(0);
         lastTextHolder.set("{\"decision\":\"ALLOW\"}");
         runAction.set(() -> {
             try { Thread.sleep(sleepMs); } catch (InterruptedException e) {
@@ -164,6 +199,8 @@ class AiAuthReviewerTest {
     }
 
     private AiAuthReviewer failReviewer() {
+        scriptedTexts.set(List.of());
+        runIndex.set(0);
         lastTextHolder.set("");
         runAction.set(() -> { throw new RuntimeException("模拟审议模型故障"); });
         return new AiAuthReviewer(props);
@@ -212,38 +249,86 @@ class AiAuthReviewerTest {
         assertEquals(ReviewDecision.Verdict.ALLOW, d.verdict());
     }
 
-    // ---- 非 JSON / 缺字段 → 默认 DENY(fail-closed) ----
+    // ---- 解析失败全集(空响应/非 JSON/多决策对象/缺或非法 decision)→ 重试一次 → 仍失败 ESCALATE ----
 
     @Test
-    void nonJsonDefaultsToDeny() {
+    void nonJsonEscalatesAfterRetry() {
         ReviewDecision d = reviewer("不好意思我无法判断").review(req("c::del", "AI 请求"));
-        assertEquals(ReviewDecision.Verdict.DENY, d.verdict());
+        assertEquals(ReviewDecision.Verdict.ESCALATE, d.verdict());
         assertFalse(d.fallback());
-        assertTrue(d.reason().contains("非 JSON"), d.reason());
-        assertAuthTrace("DENY", null);
+        assertTrue(d.reason().contains("已重试"), d.reason());
+        assertAuthTrace("ESCALATE", null);
     }
 
     @Test
-    void emptyResponseDefaultsToDeny() {
+    void emptyResponseEscalatesAfterRetry() {
         ReviewDecision d = reviewer("").review(req("c::del", "AI 请求"));
-        assertEquals(ReviewDecision.Verdict.DENY, d.verdict());
-        assertTrue(d.reason().contains("空响应"), d.reason());
-        assertAuthTrace("DENY", null);
+        assertEquals(ReviewDecision.Verdict.ESCALATE, d.verdict());
+        assertTrue(d.reason().contains("已重试"), d.reason());
+        assertAuthTrace("ESCALATE", null);
     }
 
     @Test
-    void missingDecisionFieldDefaultsToDeny() {
+    void missingDecisionFieldEscalatesAfterRetry() {
         ReviewDecision d = reviewer("{\"confidence\":0.9,\"reason\":\"无结论\"}").review(req("c::del", "AI 请求"));
-        assertEquals(ReviewDecision.Verdict.DENY, d.verdict());
+        assertEquals(ReviewDecision.Verdict.ESCALATE, d.verdict());
         assertFalse(d.fallback());
-        assertTrue(d.reason().contains("缺 decision"), d.reason());
+        assertTrue(d.reason().contains("已重试"), d.reason());
     }
 
     @Test
-    void illegalDecisionValueDefaultsToDeny() {
+    void illegalDecisionValueEscalatesAfterRetry() {
         ReviewDecision d = reviewer("{\"decision\":\"MAYBE\"}").review(req("c::del", "AI 请求"));
-        assertEquals(ReviewDecision.Verdict.DENY, d.verdict());
-        assertTrue(d.reason().contains("非法 decision"), d.reason());
+        assertEquals(ReviewDecision.Verdict.ESCALATE, d.verdict());
+        assertTrue(d.reason().contains("已重试"), d.reason());
+    }
+
+    // ---- 解析失败 → 补回 assistant + 追加「纠正」user → 重试一次:成功则按本轮结论(ALLOW) ----
+
+    @Test
+    void parseFailureThenRetrySucceedsAllows() {
+        AiAuthReviewer r = sequenceReviewer("我无法判断",
+                "{\"decision\":\"ALLOW\",\"confidence\":0.9,\"reason\":\"安全\"}");
+        ReviewDecision d = r.review(req("c::del", "AI 请求删除工作区外文件"));
+        assertEquals(ReviewDecision.Verdict.ALLOW, d.verdict());
+        assertFalse(d.fallback());
+        assertEquals(0.9, d.confidence());
+        assertEquals("安全", d.reason());
+        assertAuthTrace("ALLOW", "安全");
+        // 重试后的会话严格 user→assistant→user(纠正)→assistant,共 5 条。
+        assertRetryConversation("我无法判断",
+                "{\"decision\":\"ALLOW\",\"confidence\":0.9,\"reason\":\"安全\"}");
+    }
+
+    // ---- 两次都解析失败 → ESCALATE(绝不 DENY) ----
+
+    @Test
+    void parseFailureTwiceEscalatesNotDeny() {
+        AiAuthReviewer r = sequenceReviewer("非JSON-A", "非JSON-B");
+        ReviewDecision d = r.review(req("c::del", "AI 请求"));
+        assertEquals(ReviewDecision.Verdict.ESCALATE, d.verdict());
+        assertNotEquals(ReviewDecision.Verdict.DENY, d.verdict(), "两次解析失败绝不 DENY");
+        assertFalse(d.fallback());
+        assertTrue(d.reason().contains("已重试"), d.reason());
+        assertAuthTrace("ESCALATE", null);
+        assertRetryConversation("非JSON-A", "非JSON-B");
+    }
+
+    /** 断言重试后会话为 [system, user1, assistant1, user2(纠正), assistant2](严格交替,§7.9)。 */
+    private void assertRetryConversation(String firstVerdict, String secondVerdict) {
+        Agent reviewAgent = (Agent) task.agents().get("review-t-1");
+        assertNotNull(reviewAgent, "重试路径也应已创建审议 agent");
+        List<org.springframework.ai.chat.messages.Message> conv = reviewAgent.conversation();
+        assertEquals(5, conv.size(), "会话应为 [system, user1, assistant1, user2(纠正), assistant2]");
+        assertInstanceOf(org.springframework.ai.chat.messages.SystemMessage.class, conv.get(0));
+        assertInstanceOf(org.springframework.ai.chat.messages.UserMessage.class, conv.get(1));
+        assertEquals(firstVerdict, assertInstanceOf(AssistantMessage.class, conv.get(2)).getText(),
+                "首轮输出应原样补回为 assistant 轮");
+        org.springframework.ai.chat.messages.UserMessage correction =
+                assertInstanceOf(org.springframework.ai.chat.messages.UserMessage.class, conv.get(3));
+        assertTrue(correction.getText().contains("合法 JSON"), "纠正轮应要求模型只输出合法 JSON");
+        assertEquals(secondVerdict, assertInstanceOf(AssistantMessage.class, conv.get(4)).getText(),
+                "重试轮输出同样补回为 assistant 轮");
     }
 
     // ---- 总预算超时:future.get 到点 → cancel + DENY/回退,审计 trace 附 reason=timeout ----
@@ -306,6 +391,14 @@ class AiAuthReviewerTest {
                 "persist=true 落盘 trace 的 ext.persist 应为 true(非瞬态)");
     }
 
+    /** 结果 trace 以「审议 agent 自身身份」发射(§7.9):去除了「主体级 emitter + 手写子 agent id」的混用。 */
+    @Test
+    void reviewTraceEmittedWithReviewAgentIdentity() {
+        reviewer("{\"decision\":\"ALLOW\"}").review(req("c::del", "AI 请求"));
+        assertEquals("review-t-1", authTraceEvent().agentId(),
+                "auth.review trace 应挂审议 agent 自身 agentId(包装层自填,插件传 null)");
+    }
+
     // ---- 固定 per-task agentId 复用会话(§8.3):两次 review 同一 ctx,第二次命中注册表续跑 ----
 
     @Test
@@ -355,21 +448,21 @@ class AiAuthReviewerTest {
                 "空结论路径回写占位轮,防下一轮审议员再看到连续未答复的 user");
     }
 
-    // ---- 多决策对象/对象数组(模型把历史请求一并作答)→ fail-closed,绝不取首段当本轮结论 ----
+    // ---- 多决策对象/对象数组(模型把历史请求一并作答)→ 解析失败 → 重试 → 仍失败 ESCALATE,绝不取首段当本轮结论 ----
 
     @Test
-    void multipleDecisionObjectsDefaultsToDeny() {
+    void multipleDecisionObjectsEscalatesAfterRetry() {
         ReviewDecision d = reviewer("""
                 {"decision":"ALLOW","reason":"读取 win.ini 安全"} {"decision":"ALLOW","reason":"写入 Temp 安全"}
                 """).review(req("p::write::C:\\\\Users\\\\haigui\\\\AppData\\\\Local\\\\Temp",
                 "AI 请求写入工作区外路径"));
-        assertEquals(ReviewDecision.Verdict.DENY, d.verdict());
+        assertEquals(ReviewDecision.Verdict.ESCALATE, d.verdict());
         assertFalse(d.fallback());
-        assertTrue(d.reason().contains("多个决策对象"), d.reason());
+        assertTrue(d.reason().contains("已重试"), d.reason());
     }
 
     @Test
-    void decisionArrayInsideFenceDefaultsToDeny() {
+    void decisionArrayInsideFenceEscalatesAfterRetry() {
         ReviewDecision d = reviewer("""
                 ```json
                 [
@@ -378,9 +471,9 @@ class AiAuthReviewerTest {
                 ]
                 ```
                 """).review(req("p::read::C:\\\\Windows", "AI 请求读取工作区外路径"));
-        assertEquals(ReviewDecision.Verdict.DENY, d.verdict());
+        assertEquals(ReviewDecision.Verdict.ESCALATE, d.verdict());
         assertFalse(d.fallback());
-        assertTrue(d.reason().contains("多个决策对象"), d.reason());
+        assertTrue(d.reason().contains("已重试"), d.reason());
     }
 
     /** 单对象 + 无花括号的尾随说明:保留原有宽容度(不因尾随散文误拒)。 */
@@ -435,7 +528,37 @@ class AiAuthReviewerTest {
                 "审议结论 persist=true 落盘,ext.persist 应为 true");
     }
 
+    
+
     // ---- 自建等价桩(实现 plugin-api 接口;§14.9) ----
+
+    /**
+     * EmitEvent → EventRecord 的 wire 口径复刻(event=kind,
+     * payload{title,summary,content,status,data},ext{persist,operate});agentId 由调用方给定
+     * (复刻 TaskEvents / AgentEntity 的 agentId 兜底填充语义)。
+     */
+    private static EventRecord toRecord(EmitEvent e, String agentId) {
+        ObjectNode payload = Json.obj();
+        if (e.title() != null && !e.title().isEmpty()) {
+            payload.put("title", e.title());
+        }
+        if (e.summary() != null && !e.summary().isEmpty()) {
+            payload.put("summary", e.summary());
+        }
+        if (e.content() != null && !e.content().isEmpty()) {
+            payload.put("content", e.content());
+        }
+        if (e.status() != null && !e.status().isEmpty()) {
+            payload.put("status", e.status());
+        }
+        if (e.data() != null) {
+            payload.set("data", Json.toJson(e.data()));
+        }
+        ObjectNode ext = Json.obj();
+        ext.put("persist", e.persist());
+        ext.put("operate", e.mode() == EmitEvent.Mode.APPEND ? "append" : "replace");
+        return new EventRecord(e.id(), System.currentTimeMillis(), e.kind(), agentId, payload, ext);
+    }
 
     /**
      * ExecContext 记录桩(原借 worker TaskEntry + TaskEvents):
@@ -446,7 +569,9 @@ class AiAuthReviewerTest {
     private static final class RecordingExecContext implements ExecContext {
         private final String subjectId;
         private final ModelConfig snapshot;
-        private final Map<String, AgentContext> agentsMap = new HashMap<>();
+        // agents 注册表用并发 Map:超时用例里 executor 线程注册审议 agent、主线程读，
+        // 复用真实并发语义(AgentBuilder.build() 注册 → emitAuthTrace 回退判定)。
+        private final Map<String, AgentContext> agentsMap = new ConcurrentHashMap<>();
         private final List<EventRecord> records = new CopyOnWriteArrayList<>();
 
         private final AgentFactory agentFactory;
@@ -458,27 +583,7 @@ class AiAuthReviewerTest {
         }
 
         private final EventEmitter emitter = e -> {
-            ObjectNode payload = Json.obj();
-            if (e.title() != null && !e.title().isEmpty()) {
-                payload.put("title", e.title());
-            }
-            if (e.summary() != null && !e.summary().isEmpty()) {
-                payload.put("summary", e.summary());
-            }
-            if (e.content() != null && !e.content().isEmpty()) {
-                payload.put("content", e.content());
-            }
-            if (e.status() != null && !e.status().isEmpty()) {
-                payload.put("status", e.status());
-            }
-            if (e.data() != null) {
-                payload.set("data", Json.toJson(e.data()));
-            }
-            ObjectNode ext = Json.obj();
-            ext.put("persist", e.persist());
-            ext.put("operate", e.mode() == EmitEvent.Mode.APPEND ? "append" : "replace");
-            records.add(new EventRecord(e.id(), System.currentTimeMillis(), e.kind(),
-                    e.agentId(), payload, ext));
+            records.add(toRecord(e, e.agentId()));
             return e.id();
         };
 
