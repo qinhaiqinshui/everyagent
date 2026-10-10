@@ -21,12 +21,14 @@ import { loadThemeMode } from './settings/localSettings'
 import { installGlobalErrorHandlers } from './utils/globalErrorHandler'
 import { GlobalErrorBoundary } from './components/shared/GlobalErrorBoundary'
 import { initializeTraceTypes } from './plugin/traceTypeRegistry'
-import { registerAuthReviewTraceType } from './plugins/auth-review'
+import { loadPlugins } from './plugin/pluginLoader'
 import { wireFsChanged } from './platform/fs/workspaceGateway'
 import { workspaceRegistry } from './hub/workspaceRegistry'
 import { modelConfigs } from './hub/modelConfigs'
+import { userPreferences } from './settings/userPreferences'
 import { registerRemoteSlashProvider } from './slash/remoteSlashProvider'
 import { applyDesktopBootstrapIfPresent, isDesktop } from '@/platform/desktopBootstrap'
+import { hubSession } from './hub/session'
 import { setNotificationAdapter } from '@/notification'
 import { createBrowserNotificationAdapter } from '@/notification/browserAdapter'
 
@@ -41,8 +43,8 @@ if (isDesktop()) {
 
 // 核心 trace 类型注册(子任务/错误/系统提示;未注册 kind 走降级渲染)。
 initializeTraceTypes()
-// AI 安全审议 trace 渲染注册(worker 端每次审议结论发 kind='auth.review' 的 task.trace)。
-registerAuthReviewTraceType()
+// 统一插件加载：plugin.list RPC 驱动发现，worker 不可达时静默降级。
+void loadPlugins()
 
 // fs.changed(worker evt 频道)→ 前端文件刷新事件。进程内只接一次。
 wireFsChanged()
@@ -53,8 +55,23 @@ workspaceRegistry.wire()
 // 模型配置列表跟踪(config.get 校准 + config.changed{models} 感知)。
 modelConfigs.wire()
 
+// 用户偏好同步(主题等;pref.get 校准 + config.changed{preferences} 感知)。
+userPreferences.wire()
+
 // `/` 斜杠命令数据源下沉 worker(slash.list RPC,动态注册)。
 registerRemoteSlashProvider()
+
+// Web 插件启动：worker 连接就绪后从 worker 拉取已激活插件清单并动态加载。
+// onReconnect 在每次 worker 连接（含重连）时触发，loadPlugins 幂等（重复调用安全）。
+hubSession.onReconnect(() => {
+  void loadPlugins()
+})
+// 切换/禁用 worker = 换了作用域:按新 worker 的插件清单再拉一次(loadPlugins 对已加载 id 幂等跳过,
+// 新 worker 独有的插件因此得以补上;旧 worker 独有而新 worker 没有的插件不影响功能正确性,
+// 其 RPC 路由已改为调用期解析,见 pluginLoader.resolvePluginWorkerId)。
+hubSession.onWorkerConnectionsChanged(() => {
+  void loadPlugins()
+})
 
 const initialThemeMode: ThemeMode = loadThemeMode()
 document.documentElement.setAttribute('data-theme', initialThemeMode)

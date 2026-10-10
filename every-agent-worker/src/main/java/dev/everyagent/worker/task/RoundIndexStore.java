@@ -1,7 +1,11 @@
 package dev.everyagent.worker.task;
 
-import dev.everyagent.worker.proto.Events;
-import dev.everyagent.worker.proto.ShortIds;
+import dev.everyagent.plugin.api.event.EventLogReader;
+import dev.everyagent.plugin.api.event.Events;
+import dev.everyagent.plugin.api.event.EventRecord;
+import dev.everyagent.plugin.api.proto.ShortIds;
+import dev.everyagent.plugin.api.task.RoundClosedInfo;
+import dev.everyagent.plugin.api.task.RoundClosedListener;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -29,16 +33,28 @@ import java.util.TreeMap;
  *     (该行已在开轮时以 endSeq="" 落盘,续跑补出最终回复后由增量路径原位改写闭合);</li>
  * <li>中间过程事件(delta/thinking/message 带 toolCalls/tool.result/agent.status/task.trace/usage/
  *     ask 系列/error/cancelled 等)不单独成轮、不进轮记录正文,只用于子 agent 区间判断;</li>
- * <li>子 agent 归入「它 started 时所在」的当前轮:agent.started 开始一条 SubRange,
+ * <li>子 agent 归入「它 started 时所在」的当前轮:agent.started 开始一条 AgentRange,
  *     同 id 的 agent.done 关闭;到扫描窗口末尾仍未 done 则 endSeq 为 null;</li>
- * <li>一轮内可有多个子 agent,subs 按出现顺序;尚无主 agent 轮时的子 agent 事件忽略;
+ * <li>一轮内可有多个子 agent,agentRanges 按出现顺序;尚无主 agent 轮时的子 agent 事件忽略;
  *     agentId 缺失的旧 events.jsonl 行视为主线程(wireEvent 同口径)。</li>
  * </ul>
  */
 @Component
 public class RoundIndexStore {
 
+    private final TaskStore taskStore;
+    private final java.util.List<RoundClosedListener> roundClosedListeners = new java.util.concurrent.CopyOnWriteArrayList<>();
+
     private static final Logger LOG = LoggerFactory.getLogger(RoundIndexStore.class);
+
+    public RoundIndexStore(TaskStore taskStore) {
+        this.taskStore = taskStore;
+    }
+
+    /** 注册轮闭合监听器（由 WorkerServicesImpl 转发）。 */
+    public void addRoundClosedListener(RoundClosedListener listener) {
+        roundClosedListeners.add(listener);
+    }
 
     /** 增量闭合的单次扫描窗口上限(记录数;内存日志护栏 50 万,一轮远小于此,超限由 task.rounds 惰性重建兜底)。 */
     private static final int PERSIST_WINDOW_MAX = 20_000;
@@ -54,7 +70,7 @@ public class RoundIndexStore {
         Long endSeq;
         String user;
         String finalReply = "";
-        final List<SubBuilder> subs = new ArrayList<>();
+        final List<AgentRangeBuilder> agentRanges = new ArrayList<>();
 
         RoundBuilder(long index, long startSeq, String user, JsonNode userMessage) {
             this.index = index;
@@ -64,29 +80,28 @@ public class RoundIndexStore {
         }
 
         RoundIndex.Round toRound() {
-            // durationMs/startedAt 扫描阶段均未知为 0(闭合行耗时由 applyRounds 从磁盘 prior.startedAt 算);
-            // fileChanges 扫描阶段未知为 null(由 applyRounds 按轻量摘要写入闭合行)。
+            // durationMs/startedAt 扫描阶段均未知为 0(闭合行耗时由 applyRounds 从磁盘 prior.startedAt 算)。
             return new RoundIndex.Round(roundId, index, startSeq, endSeq, user, finalReply,
-                    subs.stream().map(SubBuilder::toSubRange).toList(), 0L, 0L, null,
+                    agentRanges.stream().map(AgentRangeBuilder::toAgentRange).toList(), 0L, 0L,
                     userMessage);
         }
     }
 
     /** 一轮内单个子 agent 区间(未 done 时 endSeq 为 null)。 */
-    private static final class SubBuilder {
+    private static final class AgentRangeBuilder {
         final String agentId;
         final String title;
         final Long startSeq;
         Long endSeq;
 
-        SubBuilder(String agentId, String title, Long startSeq) {
+        AgentRangeBuilder(String agentId, String title, Long startSeq) {
             this.agentId = agentId == null ? "" : agentId;
             this.title = title == null ? "" : title;
             this.startSeq = startSeq;
         }
 
-        RoundIndex.SubRange toSubRange() {
-            return new RoundIndex.SubRange(agentId, title, startSeq, endSeq);
+        RoundIndex.AgentRange toAgentRange() {
+            return new RoundIndex.AgentRange(agentId, title, startSeq, endSeq);
         }
     }
 
@@ -104,7 +119,7 @@ public class RoundIndexStore {
         List<RoundBuilder> builders = new ArrayList<>();
         RoundBuilder current = null;
         // sub agentId → 当前轮内子区间(跨轮保留:done 可能在 started 所在轮之后才到达)
-        Map<String, SubBuilder> openSubs = new LinkedHashMap<>();
+        Map<String, AgentRangeBuilder> openAgentRanges = new LinkedHashMap<>();
 
         for (EventRecord r : events) {
             String event = r.event() == null ? "" : r.event();
@@ -128,13 +143,13 @@ public class RoundIndexStore {
                 if (current == null) {
                     continue; // 尚无主 agent 轮:异常,忽略
                 }
-                SubBuilder sub = new SubBuilder(subAgentId(r), subTitle(r), r.seq());
-                current.subs.add(sub);
-                openSubs.put(sub.agentId, sub);
+                AgentRangeBuilder agentRange = new AgentRangeBuilder(subAgentId(r), subTitle(r), r.seq());
+                current.agentRanges.add(agentRange);
+                openAgentRanges.put(agentRange.agentId, agentRange);
             } else if (subLifecycle && Events.AGENT_DONE.equals(event)) {
-                SubBuilder sub = openSubs.remove(subAgentId(r));
-                if (sub != null) {
-                    sub.endSeq = r.seq();
+                AgentRangeBuilder agentRange = openAgentRanges.remove(subAgentId(r));
+                if (agentRange != null) {
+                    agentRange.endSeq = r.seq();
                 }
             }
             // 其余过程事件(delta/thinking/带 toolCalls 的 message/tool.result/trace/usage/ask/error 等)
@@ -145,7 +160,7 @@ public class RoundIndexStore {
 
     /**
      * 整体重排 index:把每轮 index 加 baseIndex(例如磁盘已有 N 行,新轮从 N+1 起)。
-     * 轮内容(roundId/startSeq/endSeq/user/finalReply/subs/fileChanges)原样保留。
+     * 轮内容(roundId/startSeq/endSeq/user/finalReply/agentRanges)原样保留。
      */
     public List<RoundIndex.Round> reindex(List<RoundIndex.Round> rounds, long baseIndex) {
         if (rounds == null || rounds.isEmpty()) {
@@ -154,8 +169,8 @@ public class RoundIndexStore {
         List<RoundIndex.Round> out = new ArrayList<>(rounds.size());
         for (RoundIndex.Round r : rounds) {
             out.add(new RoundIndex.Round(r.roundId(), r.index() + baseIndex, r.startSeq(),
-                    r.endSeq(), r.user(), r.finalReply(), r.subs(),
-                    r.durationMs(), r.startedAt(), r.fileChanges(), r.userMessage()));
+                    r.endSeq(), r.user(), r.finalReply(), r.agentRanges(),
+                    r.durationMs(), r.startedAt(), r.userMessage()));
         }
         return out;
     }
@@ -175,11 +190,10 @@ public class RoundIndexStore {
      *
      * @return true=真的追加了新行(新开一轮);false=沿用未闭合尾行未写或写盘失败
      */
-    public boolean openRoundAtStart(TaskStore store, String taskId, long startSeq, String user,
+    public boolean openRoundAtStart(Path dir, String taskId, long startSeq, String user,
             JsonNode userMessage) {
         try {
-            Path dir = store.dirOf(taskId);
-            List<RoundIndex.Round> existing = store.readRounds(dir);
+            List<RoundIndex.Round> existing = taskStore.readRounds(dir);
             RoundIndex.Round last = existing.isEmpty() ? null : existing.get(existing.size() - 1);
             if (last != null && !last.closed()) {
                 return false; // 沿用当前未闭合轮(roundId 已存在,不重生成)
@@ -187,8 +201,8 @@ public class RoundIndexStore {
             long index = last == null ? 1 : last.index() + 1;
             String roundId = ShortIds.next("round");
             long startedAt = System.currentTimeMillis(); // 开始时间随开轮落盘,耗时从磁盘计算
-            store.appendRound(taskId, new RoundIndex.Round(roundId, index, startSeq, null, user, "",
-                    List.of(), 0L, startedAt, null, userMessage));
+            taskStore.appendRound(taskId, new RoundIndex.Round(roundId, index, startSeq, null, user, "",
+                    List.of(), 0L, startedAt, userMessage));
             return true;
         } catch (IOException | RuntimeException e) {
             LOG.warn("开轮落盘失败 task={}(不影响任务运行)", taskId, e);
@@ -205,21 +219,17 @@ public class RoundIndexStore {
      * rounds.jsonl 缺失时另由 {@code task.rounds} 首次惰性全量生成兜底。异常全部吞掉
      * (仅记日志),绝不阻断模型流的 doOnComplete。
      *
-     * @param store 落盘组件(rounds.jsonl 读写)
+     * @param dir   任务数据目录(定位 rounds.jsonl 及 agent 事件文件)
      * @param log   任务内存事件日志(当前 run 的全部事件;冷启动后 EventLog 只含本次运行)
      * @param taskId 任务 id(定位任务目录)
      * @param mainAgentId 主 agent id
-     * @param fileChangesLight 本轮文件变更轻量摘要数组(随闭合行内联进 rounds.jsonl;无变更 null)
-     * @param fileChangesFull  本轮文件变更全文({changes:[...]};非 null 时对每个新闭合轮写
-     *                         {@code file-changes/<roundId>.json},失败仅记日志不阻断)
      * @return 本次实际「新闭合」的轮(幂等跳过与未闭合沿用不计入;失败为空列表)
      */
-    public List<RoundIndex.Round> persistClosedRounds(TaskStore store, EventLog log,
-            String taskId, String mainAgentId, JsonNode fileChangesLight, JsonNode fileChangesFull) {
+    public List<RoundIndex.Round> persistClosedRounds(Path dir, EventLogReader log,
+            String taskId, String mainAgentId) {
         try {
-            Path dir = store.dirOf(taskId);
-            long anchor = store.lastRoundStartSeq(dir);
-            List<EventRecord> window = mergedWindow(store, log, dir, mainAgentId, anchor);
+            long anchor = taskStore.lastRoundStartSeq(dir);
+            List<EventRecord> window = mergedWindow(log, dir, mainAgentId, anchor);
             if (window.isEmpty()) {
                 return List.of();
             }
@@ -228,14 +238,8 @@ public class RoundIndexStore {
                 return List.of();
             }
             List<RoundIndex.Round> newlyClosed =
-                    applyRounds(store, taskId, store.readRounds(dir), found, fileChangesLight);
-            if (fileChangesFull != null) {
-                for (RoundIndex.Round r : newlyClosed) {
-                    if (r.roundId() != null && !r.roundId().isBlank()) {
-                        store.writeRoundFileChanges(taskId, r.roundId(), fileChangesFull);
-                    }
-                }
-            }
+                    applyRounds(taskId, taskStore.readRounds(dir), found);
+            notifyRoundClosedListeners(taskId, dir, newlyClosed);
             return newlyClosed;
         } catch (IOException | RuntimeException e) {
             LOG.warn("轮次索引增量补写失败 task={}(不影响任务运行)", taskId, e);
@@ -248,7 +252,7 @@ public class RoundIndexStore {
      * <ul>
      * <li>磁盘已存在且已闭合 → 跳过(幂等);</li>
      * <li>磁盘已存在且未闭合(开轮路径已落盘)→ 扫描为闭合轮时<b>原地改写该行</b>为闭合
-     *     (endSeq/finalReply/subs 更新,index 沿用原行;续跑补出最终回复即闭合),
+     *     (endSeq/finalReply/agentRanges 更新,index 沿用原行;续跑补出最终回复即闭合),
      *     扫描仍未闭合则跳过(行已在,不重复);</li>
      * <li>磁盘不存在 → 跳过,不补写(开轮路径负责落盘,不做自愈/对账)。</li>
      * </ul>
@@ -261,9 +265,8 @@ public class RoundIndexStore {
      * @return 本次实际<b>新闭合</b>的轮(含 startSeq/endSeq/finalReply,供 round.closed 事件发射;
      *         幂等跳过与双双未闭合不计入)
      */
-    private static List<RoundIndex.Round> applyRounds(TaskStore store, String taskId,
-            List<RoundIndex.Round> existing, List<RoundIndex.Round> found,
-            JsonNode fileChangesLight) throws IOException {
+    private List<RoundIndex.Round> applyRounds(String taskId,
+            List<RoundIndex.Round> existing, List<RoundIndex.Round> found) throws IOException {
         Map<Long, RoundIndex.Round> byStart = new LinkedHashMap<>();
         for (RoundIndex.Round r : existing) {
             byStart.putIfAbsent(r.startSeq(), r); // 撕行已由 readRounds 过滤,不参与对账
@@ -280,7 +283,7 @@ public class RoundIndexStore {
             if (r.closed()) {
                 // 未闭合尾行 → 闭合行:原地改写(index 沿用磁盘行;roundId 沿用 prior 的稳定主键,
                 // 不新生成;耗时随行内联——prior 已有耗时(>0)不覆盖,未知(≤0)且 prior.startedAt
-                // 有效时取「当前时间 − 磁盘 startedAt」;fileChanges 写入本轮轻量摘要)
+                // 有效时取「当前时间 − 磁盘 startedAt」)
                 long dur = prior.durationMs() > 0
                         ? prior.durationMs()
                         : (prior.startedAt() > 0
@@ -288,9 +291,9 @@ public class RoundIndexStore {
                                 : 0L);
                 RoundIndex.Round closed = new RoundIndex.Round(prior.roundId(), prior.index(),
                         r.startSeq(), r.endSeq(), r.user(), r.finalReply(),
-                        r.subs(), dur, prior.startedAt(), fileChangesLight,
+                        r.agentRanges(), dur, prior.startedAt(),
                         r.userMessage() != null ? r.userMessage() : prior.userMessage());
-                if (store.rewriteRound(taskId, closed)) {
+                if (taskStore.rewriteRound(taskId, closed)) {
                     newlyClosed.add(closed); // 磁盘闭合成功才算「本轮新闭合」(带正确 roundId,供全文落盘)
                 }
                 byStart.put(r.startSeq(), closed);
@@ -306,10 +309,10 @@ public class RoundIndexStore {
      * (同 rpcTaskPoll 的 readSince(start-1) 惯例):未闭合尾行 startSeq 的开轮 user.message
      * 事件本身要进窗口,开着的轮才能被重扫并闭合。
      */
-    private List<EventRecord> mergedWindow(TaskStore store, EventLog log, Path dir,
+    private List<EventRecord> mergedWindow(EventLogReader log, Path dir,
             String mainAgentId, long anchor) throws IOException {
         Map<Long, EventRecord> merged = new TreeMap<>();
-        for (EventRecord r : store.readSince(dir, mainAgentId, anchor - 1, PERSIST_WINDOW_MAX)) {
+        for (EventRecord r : taskStore.readSince(dir, mainAgentId, anchor - 1, PERSIST_WINDOW_MAX)) {
             merged.put(r.seq(), r);
         }
         for (EventRecord r : log.readAfterSeq(anchor - 1, PERSIST_WINDOW_MAX)) {
@@ -320,27 +323,27 @@ public class RoundIndexStore {
         window.sort(Comparator.comparingLong(EventRecord::seq));
         return window;
     }
-    /** 最终回复判定:主 agent message 且 toolCalls 缺失/空数组 且 text 非空。 */
+    /** 最终回复判定:主 agent message 且 data.toolCalls 缺失/空数组 且 content 非空。 */
     private static boolean isFinalReply(JsonNode payload) {
         if (payload == null || !payload.isObject()) {
             return false;
         }
-        JsonNode tc = payload.path("toolCalls");
+        JsonNode tc = payload.path("data").path("toolCalls");
         boolean noToolCalls = tc.isMissingNode() || tc.isNull() || (tc.isArray() && tc.isEmpty());
         if (!noToolCalls) {
             return false;
         }
         // 与前端 fold 口径一致:content.trim() 非空才算有正文(纯空白不算)。
-        JsonNode text = payload.path("text");
+        JsonNode text = payload.path("content");
         return text.isTextual() && !text.asString().isBlank();
     }
 
-    /** payload.text(缺省空串)。 */
+    /** payload.content(缺省空串)。 */
     private static String textOf(JsonNode payload) {
         if (payload == null) {
             return "";
         }
-        JsonNode t = payload.path("text");
+        JsonNode t = payload.path("content");
         return t.isTextual() ? t.asString() : "";
     }
 
@@ -363,5 +366,22 @@ public class RoundIndexStore {
             return p.path("title").asString();
         }
         return "";
+    }
+
+    /** 通知已注册的轮闭合监听器（异常自吞，不阻断）。 */
+    private void notifyRoundClosedListeners(String taskId, Path dir, List<RoundIndex.Round> newlyClosed) {
+        if (roundClosedListeners.isEmpty() || newlyClosed.isEmpty()) {
+            return;
+        }
+        List<RoundClosedInfo> infos = newlyClosed.stream()
+                .map(r -> new RoundClosedInfo(r.roundId(), r.startSeq(), r.endSeq(), r.index()))
+                .toList();
+        for (RoundClosedListener listener : roundClosedListeners) {
+            try {
+                listener.onRoundsClosed(taskId, dir, infos);
+            } catch (Exception e) {
+                LOG.warn("轮闭合监听器回调异常 listener={}", listener.getClass().getSimpleName(), e);
+            }
+        }
     }
 }

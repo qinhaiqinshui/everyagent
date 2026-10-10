@@ -1,9 +1,10 @@
 import React from 'react'
-import type { TaskStatus } from '@/types'
+import type { TaskStatus } from '@/task/types'
 import {
   AlertTriangleIcon,
   CheckIcon,
   CircleIcon,
+  QuestionMarkIcon,
   StopIcon,
 } from '../shared/AppGlyphs'
 import { InlineSpinner } from '@/components/shared/ui'
@@ -36,6 +37,7 @@ function formatStatusIcon(status: TaskStatus, size: number): React.ReactNode {
     case 'completed': return <CheckIcon size={size} />
     case 'stopped': return <StopIcon size={Math.max(8, size - 1)} />
     case 'error': return <AlertTriangleIcon size={size} />
+    case 'waiting-user': return <QuestionMarkIcon size={size} />
     default: return <CircleIcon size={size} />
   }
 }
@@ -51,9 +53,11 @@ export function buildStatusDotStyle(
       ? { color: 'var(--accent-red)', background: 'var(--accent-red-dim)' }
       : status === 'stopped'
         ? { color: 'var(--accent-red)', background: 'var(--accent-red-dim)' }
-        : status === 'running' || isRunning
-          ? { color: 'var(--accent-blue)', background: 'var(--accent-blue-dim)' }
-          : { color: 'var(--text-muted)', background: 'var(--bg-tertiary)' }
+        : status === 'waiting-user'
+          ? { color: 'var(--accent-amber)', background: 'var(--accent-amber-dim)' }
+          : status === 'running' || isRunning
+            ? { color: 'var(--accent-blue)', background: 'var(--accent-blue-dim)' }
+            : { color: 'var(--text-muted)', background: 'var(--bg-tertiary)' }
 
   return {
     width: size,

@@ -1,7 +1,7 @@
 /**
  * 浏览器系统通知宿主。
  *
- * 订阅全局任务镜像(taskStore)与用户交互事件(domainEventBus),在以下时机
+ * 订阅领域事件(domainEventBus),在以下时机
  * 且「页面不在前台」时发送系统通知:
  * - 任务运行完成(completed);
  * - 任务出错(error);
@@ -14,10 +14,8 @@
  * 本组件不自行请求权限:权限申请入口在设置页与 BrowserNotificationGuide。
  */
 import React from 'react'
-import type { TaskListEntry } from '@/hub/taskStore'
-import { taskStore } from '@/hub/taskStore'
 import { domainEventBus, DOMAIN_EVENTS } from '@/events/eventBus'
-import type { TaskStatus, UserInteractionRequest } from '@/types'
+import type { UserInteractionRequest } from '@/types'
 import { showSystemNotification } from '@/notification'
 import { loadBrowserNotificationsEnabled } from '@/settings/browserNotifications'
 
@@ -27,38 +25,18 @@ function shouldNotify(): boolean {
 }
 
 /** 是否是需要系统通知的终态(仅 completed / error;stopped 不通知)。 */
-function isNotifiableTerminal(status: TaskStatus): boolean {
+function isNotifiableTerminal(status: string): boolean {
   return status === 'completed' || status === 'error'
-}
-
-function fireTaskNotification(entry: TaskListEntry, previous: TaskStatus): void {
-  if (!shouldNotify() || !isNotifiableTerminal(entry.status)) return
-  if (isNotifiableTerminal(previous)) return
-  const isError = entry.status === 'error'
-  const body = isError && entry.error
-    ? `${entry.title}\n${entry.error}`
-    : entry.title
-  showSystemNotification({
-    title: isError ? '任务出错' : '任务完成',
-    body,
-    tag: `task-${entry.taskId}`,
-    onClick: () => {
-      domainEventBus.emit(DOMAIN_EVENTS.WORKSPACE_FOCUS_TASK_REQUESTED, {
-        taskId: entry.taskId,
-      })
-    },
-  })
 }
 
 function fireInteractionNotification(request: UserInteractionRequest): void {
   if (!shouldNotify()) return
-  const isAuthorization = request.responseMode === 'authorization'
   const body = request.prompt
     || request.details
     || request.questions?.[0]?.prompt
     || ''
   showSystemNotification({
-    title: isAuthorization ? 'AI 请求授权' : 'AI 等待你的回答',
+    title: 'AI 等待你的回答',
     body,
     tag: `ask-${request.id}`,
     onClick: () => {
@@ -70,21 +48,25 @@ function fireInteractionNotification(request: UserInteractionRequest): void {
 }
 
 export default function BrowserNotificationHost() {
-  const prevStatusesRef = React.useRef<Map<string, TaskStatus>>(new Map())
-
   React.useEffect(() => {
-    const unsubscribeTask = taskStore.subscribe((entries) => {
-      const prev = prevStatusesRef.current
-      for (const entry of entries) {
-        const previous = prev.get(entry.taskId)
-        prev.set(entry.taskId, entry.status)
-        // 首次见到(含全量校准回放)不通知,避免历史终态任务在刷新时重复弹通知。
-        if (!previous) continue
-        if (!isNotifiableTerminal(previous) && isNotifiableTerminal(entry.status)) {
-          fireTaskNotification(entry, previous)
-        }
-      }
-    })
+    const unsubscribeTask = domainEventBus.subscribe(
+      DOMAIN_EVENTS.TASK_STATUS_CHANGED,
+      ({ taskId, status, error, displayTitle }) => {
+        if (!shouldNotify() || !isNotifiableTerminal(status)) return
+        const isError = status === 'error'
+        const body = isError && error
+          ? `${displayTitle}\n${error}`
+          : displayTitle
+        showSystemNotification({
+          title: isError ? '任务出错' : '任务完成',
+          body,
+          tag: `task-${taskId}`,
+          onClick: () => {
+            domainEventBus.emit(DOMAIN_EVENTS.WORKSPACE_FOCUS_TASK_REQUESTED, { taskId })
+          },
+        })
+      },
+    )
     const unsubscribeInteraction = domainEventBus.subscribe(
       DOMAIN_EVENTS.USER_INTERACTION_REQUESTED,
       ({ request }) => {

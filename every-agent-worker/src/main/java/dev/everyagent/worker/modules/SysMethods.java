@@ -24,9 +24,7 @@ public class SysMethods {
     private static ObjectNode info(WorkerProperties props, HubPool pool, WorkspaceManager workspaces) {
         WorkerLimits limits = new WorkerLimits(
                 props.getLimits().getMaxConcurrentTasks(),
-                props.getLimits().getMaxConcurrentSubs(),
-                props.getLimits().getAskTimeoutMs(),
-                props.getLimits().getSubWaitTimeoutMs());
+                props.getLimits().getAskTimeoutMs());
         ObjectNode o = Json.obj();
         o.put("workerId", props.getWorkerId());
         o.put("hubConnected", pool.anyConnected());

@@ -27,6 +27,7 @@ const MIME_BY_EXT: Record<string, string> = {
   '.ico': 'image/x-icon',
   '.bmp': 'image/bmp',
   '.avif': 'image/avif',
+  '.pdf': 'application/pdf',
 }
 
 /** 按文件名(或路径)推断图片 MIME;未知扩展名回退 image/png。 */
@@ -35,6 +36,17 @@ export function imageMimeOf(fileName: string): string {
   const dotIndex = lower.lastIndexOf('.')
   const ext = dotIndex >= 0 ? lower.slice(dotIndex) : ''
   return MIME_BY_EXT[ext] ?? 'image/png'
+}
+
+/**
+ * 按文件名(或路径)推断通用二进制 MIME(图片/PDF 等);
+ * 未知扩展名回退 application/octet-stream。
+ */
+export function mimeOf(fileName: string): string {
+  const lower = fileName.toLowerCase()
+  const dotIndex = lower.lastIndexOf('.')
+  const ext = dotIndex >= 0 ? lower.slice(dotIndex) : ''
+  return MIME_BY_EXT[ext] ?? 'application/octet-stream'
 }
 
 /** 判断文件名是否为受支持的图片(文件树/标签页/Markdown 统一判定)。 */

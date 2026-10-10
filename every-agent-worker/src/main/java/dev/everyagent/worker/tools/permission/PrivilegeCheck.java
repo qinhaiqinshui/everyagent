@@ -1,5 +1,6 @@
 package dev.everyagent.worker.tools.permission;
 
+import dev.everyagent.plugin.api.permission.AuthorizationHandler.AuthorizationRequest;
 import dev.everyagent.worker.tools.PermissionDeniedException;
 
 import org.springframework.stereotype.Component;
@@ -29,10 +30,10 @@ public class PrivilegeCheck implements PermissionCheck {
     }
 
     @Override
-    public PermissionDecision check(PermissionContext ctx) {
+    public PermissionDecision invoke(PermissionContext ctx, PermissionChain next) {
         try {
             if (ctx.kind() == PermissionContext.Kind.PRIVILEGE_EXEC) {
-                return checkExec(ctx);
+                return checkExec(ctx, next);
             }
             return checkCommand(ctx);
         } catch (PermissionDeniedException e) {
@@ -53,27 +54,25 @@ public class PrivilegeCheck implements PermissionCheck {
         String prompt = "AI 请求以管理员/root 权限执行命令: " + PathSupport.abbreviate(command) + "\n"
                 + "提权类别: " + verb + "(sudo/su 等提权动词)。"
                 + "授权后同类提权命令(" + verb + ")在所选范围内不再询问。";
-        grants.authorize(ctx.task(), ctx.agentId(), PathSupport.privKey(verb),
-                prompt, List.of(), List.of());
+        grants.authorize(ctx.authRequest(PathSupport.privKey(verb), prompt), List.of(), List.of(), List.of());
         return PermissionDecision.allow("提权授权通过");
     }
 
     /** seccomp 内核级提权(requirePrivilegeExec 场景):由 exec 路径提取 basename 作为 grant key。 */
-    private PermissionDecision checkExec(PermissionContext ctx) {
+    private PermissionDecision checkExec(PermissionContext ctx, PermissionChain next) {
         String execPath = ctx.execPath();
         if (execPath == null || execPath.isBlank()) {
-            return PermissionDecision.skip();
+            return next.proceed(ctx);
         }
         String name = baseName(execPath);
         if (name.isEmpty()) {
-            return PermissionDecision.skip();
+            return next.proceed(ctx);
         }
         String prompt = "AI 请求以管理员/root 权限执行 setuid 程序: " + execPath + "\n"
                 + "提权类别: " + name + "(setuid 提权)。"
                 + "授权后将以 WSL root 在发行版内执行该命令(沙箱内提权不可行);"
                 + "同类提权程序(" + name + ")在所选范围内不再询问。";
-        grants.authorize(ctx.task(), ctx.agentId(), PathSupport.privKey(name),
-                prompt, List.of(), List.of());
+        grants.authorize(ctx.authRequest(PathSupport.privKey(name), prompt), List.of(), List.of(), List.of());
         return PermissionDecision.allow("提权授权通过");
     }
 

@@ -1,6 +1,8 @@
 package dev.everyagent.worker.task;
 
-import dev.everyagent.worker.proto.SnowflakeId;
+import dev.everyagent.plugin.api.event.EventLogReader;
+import dev.everyagent.plugin.api.event.EventRecord;
+import dev.everyagent.plugin.api.proto.SnowflakeId;
 import tools.jackson.databind.JsonNode;
 
 import java.util.ArrayDeque;
@@ -17,9 +19,9 @@ import java.util.concurrent.CopyOnWriteArrayList;
  * 超过 maxEvents 抛 LogOverflowException(RAM 护栏;磁盘不受影响)。
  * <p>计数口径:只对<b>持久</b>(落盘)事件计数。流式瞬态事件(delta/thinking 及
  * {@code ext.persist=false} 的 trace)虽仍进内存缓冲供实时推送,但不占用 maxEvents 护栏——
- * 护栏只保护落盘事件;瞬态风暴由流护栏({@code ModelLengthGuardAdvisor})治理(§13.5)。
+ * 护栏只保护落盘事件;瞬态风暴由流护栏({@code model-length-guard 插件})治理(§13.5)。
  */
-public final class EventLog {
+public final class EventLog implements EventLogReader {
 
     /** 事件日志超过上限(§13.5)。 */
     public static final class LogOverflowException extends RuntimeException {
@@ -28,13 +30,10 @@ public final class EventLog {
         }
     }
 
-    public interface Listener {
-        void onAppend();
-    }
 
     private final long maxEvents;
     private final ArrayDeque<EventRecord> records = new ArrayDeque<>();
-    private final CopyOnWriteArrayList<Listener> listeners = new CopyOnWriteArrayList<>();
+    private final CopyOnWriteArrayList<EventLogReader.Listener> listeners = new CopyOnWriteArrayList<>();
     /** 已追加的持久(落盘)事件数——maxEvents 护栏只按此计数,瞬态事件不计入。 */
     private long persistentSize = 0;
 
@@ -64,7 +63,7 @@ public final class EventLog {
      * 带瞬态标记的自动分配 seq 追加:{@code transientEvent=true} 的事件(流式
      * delta/thinking、瞬态 trace 等)只进内存缓冲供实时推送,<b>不占用</b>
      * {@code maxEvents} 护栏计数——护栏只保护落盘(持久)事件,瞬态风暴由
-     * {@code ModelLengthGuardAdvisor} 等流护栏治理。仍占 seq(磁盘 seq 有洞合法)。
+     * {@code model-length-guard 插件} 等流护栏治理。仍占 seq(磁盘 seq 有洞合法)。
      */
     public EventRecord append(String event, JsonNode payload, String agentId, JsonNode ext,
             boolean transientEvent) {
@@ -86,7 +85,7 @@ public final class EventLog {
                 persistentSize++;
             }
         }
-        for (Listener l : listeners) {
+        for (EventLogReader.Listener l : listeners) {
             l.onAppend(); // 仅信号,微秒级,不阻塞任务线程
         }
         return record;
@@ -125,7 +124,7 @@ public final class EventLog {
                 persistentSize++;
             }
         }
-        for (Listener l : listeners) {
+        for (EventLogReader.Listener l : listeners) {
             l.onAppend(); // 仅信号,微秒级,不阻塞任务线程
         }
         return record;
@@ -275,11 +274,11 @@ public final class EventLog {
         }
     }
 
-    public void addListener(Listener l) {
+    public void addListener(EventLogReader.Listener l) {
         listeners.add(l);
     }
 
-    public void removeListener(Listener l) {
+    public void removeListener(EventLogReader.Listener l) {
         listeners.remove(l);
     }
 }

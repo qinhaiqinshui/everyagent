@@ -1,6 +1,7 @@
 package dev.everyagent.worker.proto;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import dev.everyagent.plugin.api.proto.ShortIds;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -30,7 +31,7 @@ class ShortIdsTest {
     @Test
     void prefixes_areStable() {
         assertTrue(ShortIds.mainAgentId().startsWith("a_"));
-        assertTrue(ShortIds.subAgentId().startsWith("sub_"));
+        assertTrue(ShortIds.next("sub").startsWith("sub"));
         assertTrue(ShortIds.askId().startsWith("q_"));
         assertEquals("m", ShortIds.mid().substring(0, 1));
     }

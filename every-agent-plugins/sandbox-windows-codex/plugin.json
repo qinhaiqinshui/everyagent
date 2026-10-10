@@ -1,0 +1,43 @@
+{
+  "id": "sandbox-windows-codex",
+  "name": "Windows Codex 沙箱",
+  "version": "0.1.0",
+  "description": "Codex 机制 Windows 原生沙箱（双本地账户 + WRITE_RESTRICTED 受限令牌 + capability SID + 防火墙/WFP）",
+  "author": "everyagent",
+  "main": "dev.everyagent.plugin.sandbox.codex.CodexSandboxPlugin",
+  "contributes": {
+    "config": {
+      "codex.home": {
+        "type": "string",
+        "default": "",
+        "description": "codex 状态根目录（.sandbox/.sandbox-secrets/.sandbox-bin/cap_sid 之父）；空 = <沙箱持久根>/codex"
+      },
+      "codex.account-prefix": {
+        "type": "string",
+        "default": "EACodex",
+        "description": "沙箱账户/组前缀：账户 <前缀>Offline/<前缀>Online（≤20字符），组 <前缀>SandboxUsers"
+      },
+      "codex.network-policy": {
+        "type": "string",
+        "default": "auto",
+        "description": "网络身份：auto（随 worker 全局 allow-network）/ offline / online 强制"
+      },
+      "codex.proxy-ports": {
+        "type": "string",
+        "default": "",
+        "description": "offline 账户放行的环回 TCP 代理端口列表（逗号分隔，如 8080,3128）"
+      },
+      "codex.allow-local-binding": {
+        "type": "boolean",
+        "default": false,
+        "description": "true = setup 时移除环回 block 规则（允许本地绑定）"
+      },
+      "codex.java-home": {
+        "type": "string",
+        "default": "",
+        "description": "runner JVM 的 java.exe 根目录；空 = 当前 JVM 的 java.home"
+      }
+    }
+  },
+  "enabled": true
+}

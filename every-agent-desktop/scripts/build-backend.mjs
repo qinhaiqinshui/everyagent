@@ -43,17 +43,13 @@ function run(cmd, args) {
 }
 
 /**
- * 定位 mvn:优先 MAVEN_HOME,其次 PATH;都不在时探测本机常见安装位置。
- * (AGENTS.md 已知安装:D:\maven、D:\Program Files\apache-maven-3.9.15)
+ * 定位 mvn:优先 MAVEN_HOME,其次 PATH。找不到即报错退出——
+ * 不做写死路径探测,不同机器的安装位置不可枚举。
  */
 function resolveMaven(cmd) {
   if (process.env.MAVEN_HOME) return join(process.env.MAVEN_HOME, 'bin', cmd)
   const onPath = spawnSync(cmd, ['-v'], { shell: process.platform === 'win32', encoding: 'utf8' })
   if (onPath.status === 0) return cmd
-  const candidates = ['D:\\maven', 'D:\\Program Files\\apache-maven-3.9.15']
-  for (const dir of candidates) {
-    if (existsSync(join(dir, 'bin', cmd))) return join(dir, 'bin', cmd)
-  }
   console.error(`[build-backend] 找不到 ${cmd}:请设置 MAVEN_HOME 或将 maven 加入 PATH`)
   process.exit(1)
 }

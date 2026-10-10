@@ -1,14 +1,9 @@
 package dev.everyagent.worker.ship;
 
 import dev.everyagent.contract.json.Json;
+import dev.everyagent.plugin.api.event.EventLogReader;
+import dev.everyagent.plugin.api.event.EventRecord;
 import dev.everyagent.worker.hub.HubLink;
-import dev.everyagent.worker.proto.Channels;
-import dev.everyagent.worker.proto.Events;
-import dev.everyagent.worker.task.EventLog;
-import dev.everyagent.worker.task.EventRecord;
-import dev.everyagent.worker.task.TaskEntry;
-import dev.everyagent.worker.task.TaskManager;
-import dev.everyagent.worker.task.TaskEvents;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import tools.jackson.databind.JsonNode;
@@ -35,7 +30,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * 到该 hub);pub 非阻塞,出站队列满即丢帧(事件日志是事实源,前端 3s 兜底轮询/重连 resync
  * 自愈)。前端 unsub/断线(leave)时销毁。
  */
-public class DataPusher implements EventLog.Listener {
+public class DataPusher implements EventLogReader.Listener {
 
     private static final Logger log = LoggerFactory.getLogger(DataPusher.class);
     /** 单批推送记录数(与 task.poll 批上限同量级)。 */
@@ -50,43 +45,40 @@ public class DataPusher implements EventLog.Listener {
     private static final String EXT_OPERATE = "operate";
     private static final String EXT_INITIAL = "initial";
     private static final String OPERATE_REPLACE = "replace";
-    private static final String OPERATE_APPEND = "append";
-    /**
-     * 背压窗口:未确认帧上限;保证 N 个同屏满速任务总积压 N×128 &lt; hub 前端连接出口队列
-     * 1000(§4.2.2 防线 2)——前端冻结时每路最多积压 128 帧即阻塞,不会塞爆队列强制断连;
-     * 前端活着时 ack 滚动,窗口不触顶,128 对正常吞吐无感。
-     */
-    private static final int CREDIT_WINDOW = 128;
-    /** 阻塞轮询步长(ms)。 */
-    private static final long ACK_WAIT_STEP_MS = 250;
 
     private final String sessionId;
     private final String taskId;
+    /** 推送目标频道名（从 hub subscriber.join 帧透传，不自己构造）。 */
+    private final String channel;
     private final HubLink conn;
-    private final TaskManager tasks;
+    /** 流源注册表:优先经此取 EventLogReader（反转后正向依赖基础设施层）。 */
+    private final StreamSourceRegistry streamSources;
+    /** 被动推送管道：背压控制 + 定向推送（替代原 acquireCredit/onAck/conn.pub 内联逻辑）。 */
+    private final WebSocketEmitter wsEmitter;
+    /** 出网单点投影器:事件 wire + 出网过滤链(隐藏不可展示事件的唯一收敛点)。 */
+    private final EgressProjector projector;
 
     private final AtomicBoolean running = new AtomicBoolean(true);
     private final Semaphore wake = new Semaphore(0);
-    private final Object creditLock = new Object();
-    /** 已推送帧序号(每推一帧 +1;credit 语义自增,不用 seq——同轮流式帧共享 seq 无法逐帧计数)。 */
-    private long nextPushIndex = 0;
-    /** 前端已确认的最大 pushIndex(初始 -1)。 */
-    private volatile long ackedIndex = -1;
     private volatile Thread thread;
     /** 内存日志已消费的记录位置游标(readFrom 位置口径:共享 seq 轮组内 seq 无法区分组内帧)。 */
     private volatile int cursor;
     /** 首挂回扫边界:位置 &lt; replayEnd 的帧标 initial=true(前端 ask 卡片静默);换挂(再运行)归零。 */
     private volatile int replayEnd;
-    /** 当前挂接监听的日志(停止时摘除;再运行换挂新 TaskEntry 的日志时先摘旧)。 */
-    private volatile EventLog liveLog;
-    /** 挂接时记主 agentId(payload 组装用,wireEvent 同 task.poll 口径)。 */
+    /** 当前挂接监听的日志(停止时摘除;再运行换挂新日志时先摘旧)。 */
+    private volatile EventLogReader liveLog;
+    
     private volatile String mainAgentId;
 
-    public DataPusher(String sessionId, String taskId, HubLink conn, TaskManager tasks) {
+    public DataPusher(String sessionId, String taskId, String channel, HubLink conn,
+                      StreamSourceRegistry streamSources, EgressProjector projector) {
         this.sessionId = sessionId;
         this.taskId = taskId;
+        this.channel = channel;
         this.conn = conn;
-        this.tasks = tasks;
+        this.streamSources = streamSources;
+        this.projector = projector;
+        this.wsEmitter = new WebSocketEmitter(sessionId, taskId, conn);
     }
 
     public void start() {
@@ -103,6 +95,11 @@ public class DataPusher implements EventLog.Listener {
         return taskId;
     }
 
+    /** 被动推送管道(DataPusherManager 路由 stream.ack)。 */
+    WebSocketEmitter wsEmitter() {
+        return wsEmitter;
+    }
+
     /** 立即唤醒对账循环(任务被再运行时由 DataPusherManager 调用,不等 1s 轮询)。 */
     void wake() {
         wake.release();
@@ -115,9 +112,7 @@ public class DataPusher implements EventLog.Listener {
         }
         detach();
         wake.release();
-        synchronized (creditLock) {
-            creditLock.notifyAll(); // 唤醒可能阻塞在 acquireCredit 的推送线程
-        }
+        wsEmitter.stop(); // 唤醒可能阻塞在 acquireCredit 的推送线程
         Thread th = thread;
         if (th != null) {
             th.interrupt();
@@ -133,14 +128,12 @@ public class DataPusher implements EventLog.Listener {
             log.warn("定向推送异常 task={} session={}: {}", taskId, sessionId, e.toString());
         } finally {
             detach();
-            synchronized (creditLock) {
-                creditLock.notifyAll(); // 收口/异常退出时释放阻塞线程
-            }
+            wsEmitter.stop(); // 收口/异常退出时释放阻塞线程
         }
     }
 
     /**
-     * 推送主循环(单虚拟线程):每拍对账 tasks 表,确保挂在「当前」TaskEntry 的 EventLog 上
+     * 推送主循环(单虚拟线程):每拍对账 StreamSourceRegistry,确保挂在「当前」流源上
      * 推送增量,并等 onAppend 唤醒(带 1s 兜底轮询,保证无人唤醒也最终对账)。
      */
     private void runLive() throws InterruptedException {
@@ -151,54 +144,53 @@ public class DataPusher implements EventLog.Listener {
     }
 
     /**
-     * 对账一次:任务在内存且非终态 → 确保挂在其日志上并推送增量;任务已终态但日志还挂着 →
-     * 收尾排水一次(finish 先置终态、agent.status 等尾事件后追加,不排会丢尾);任务不在内存
-     * (终态已驱逐/尚未创建)→ 若 liveLog 仍挂着,做一次最终排水再 detach(防止子 agent 完成事件
-     * 在上一次 pushFrom 返回与 finish 驱逐之间追加、因 tasks.get 返回 null 而永不推送);
-     * 无 liveLog(尚未创建/已 detach)→ 空转等待(历史与终态数据走 task.poll 拉取,本推送器不负责)。
+     * 对账一次:从 StreamSourceRegistry 取日志(正向依赖基础设施层)。
+     *
+     * <p>流源路径:streamLog 非空 → 确保挂在其上推送增量(换挂=再运行,从头推,seq 去重无害)。
+     * 无流源(尚未 track/已 detach)→ liveLog 仍挂着则做一次最终排水再 detach
+     * (防止子 agent 完成事件在最后一次 pushFrom 返回与 untrack 之间追加、
+     * 因 getReader 返回 null 而永不推送);无 liveLog → 空转等待
+     * (历史与终态数据走 task.poll 拉取,本推送器不负责)。
      */
     private void reconcileLive() {
-        TaskEntry t = tasks.get(taskId);
-        if (t == null) {
-            // 任务已被驱逐(finish 移除):liveLog 仍引用旧 EventLog(对象未 GC),
-            // 推一次尾排水把可能在上次 pushFrom 返回与驱逐之间追加的事件(子 agent done/status)
-            // 推给前端,然后 detach 防止后续空轮询反复读已空的旧日志。
-            if (liveLog != null) {
-                cursor = pushFrom(liveLog, cursor);
-                detach();
+        EventLogReader streamLog = streamSources.getReader(taskId);
+        if (streamLog != null) {
+            if (liveLog != streamLog) {
+                attachLog(streamLog);
             }
+            cursor = pushFrom(streamLog, cursor);
             return;
         }
-        if (t.status.terminal()) {
-            if (liveLog == t.log) {
-                cursor = pushFrom(t.log, cursor);
-            }
-            return;
+        // 流源注册表无此任务（尚未 track/已 detach）:
+        // liveLog 仍引用旧日志(对象未 GC),推一次尾排水把可能在上次 pushFrom 返回
+        // 与 untrack 之间追加的事件(子 agent done/status)推给前端,然后 detach 防止
+        // 后续空轮询反复读已空的旧日志。
+        if (liveLog != null) {
+            cursor = pushFrom(liveLog, cursor);
+            detach();
         }
-        if (liveLog != t.log) {
-            attachLog(t);
-        }
-        cursor = pushFrom(t.log, cursor);
     }
 
     /**
-     * 挂接到指定 TaskEntry 的日志:首次挂接回扫尾部存量(上限 {@link #FIRST_SWEEP_MAX},
-     * 标 initial 回放);换挂(再运行)从头推——新日志本推送器从未消费过,已落盘部分前端
-     * 按 seq 去重,重复推送无害,不从头推则会漏掉本推送器未推送的记录。
+     * 挂接到指定 EventLogReader(经 StreamSourceRegistry 取得):首次挂接回扫尾部存量(上限
+     * {@link #FIRST_SWEEP_MAX},标 initial 回放);换挂(再运行)从头推——新日志本推送器从未
+     * 消费过,已落盘部分前端按 seq 去重,重复推送无害,不从头推则会漏掉本推送器未推送的记录。
+     * mainAgentId:从 StreamSourceRegistry 获取(同 taskId mainAgentId 不变,已缓存则沿用)。
      */
-    private void attachLog(TaskEntry t) {
-        EventLog old = liveLog;
+    private void attachLog(EventLogReader reader) {
+        EventLogReader old = liveLog;
         if (old != null) {
             old.removeListener(this);
             log.debug("换挂任务日志 task={} (再运行续跑)", taskId);
         }
-        EventLog elog = t.log;
-        liveLog = elog;
-        mainAgentId = t.mainAgentId;
-        elog.addListener(this);
+        liveLog = reader;
+        if (mainAgentId == null) {
+            mainAgentId = streamSources.getMainAgentId(taskId);
+        }
+        reader.addListener(this);
         if (old == null) {
             // 首挂:回扫订阅时已在内存的尾部存量(与前端首拉重叠,seq 去重吸收)
-            int size = elog.size();
+            int size = reader.size();
             replayEnd = size;
             cursor = Math.max(0, size - FIRST_SWEEP_MAX);
         } else {
@@ -209,7 +201,7 @@ public class DataPusher implements EventLog.Listener {
 
     /** 摘除当前日志监听(run 收口/stop/换挂共用)。 */
     private void detach() {
-        EventLog l = liveLog;
+        EventLogReader l = liveLog;
         if (l != null) {
             l.removeListener(this);
         }
@@ -217,7 +209,7 @@ public class DataPusher implements EventLog.Listener {
     }
 
     /** 从记录位置 from 起把日志推一段,返回新的已消费位置。 */
-    private int pushFrom(EventLog log, int from) {
+    private int pushFrom(EventLogReader log, int from) {
         int pos = from;
         while (running.get()) {
             List<EventRecord> batch = log.readFrom(pos, BATCH);
@@ -238,12 +230,18 @@ public class DataPusher implements EventLog.Listener {
     /**
      * 推送一条内存记录:ext = target(定向) + operate(delta/thinking=append,其余=replace)
      * + 回放帧 initial=true(前端 askStore 静默依赖)+ 原事件 ext 字段合并(如 persist=false);
-     * payload 走 {@link TaskEvents#wireEvent} 同 task.poll wire 口径(子 agent 事件把
-     * agentId 注入 payload,前端折叠器据以分流主/子线程)。
+     * payload 走出网单点投影器 {@link EgressProjector#projectEvent} 同 task.poll wire 口径
+     * (先跑出网过滤链;子 agent 事件把 agentId 注入 payload,前端折叠器据以分流主/子线程)。
+     * 被过滤链丢弃(返回 null)时<b>跳过推送但游标仍推进</b>(pushFrom 的 pos++ 不依赖本方法)。
      */
     private void push(EventRecord r, boolean replay) {
-        String operate = Events.DELTA.equals(r.event()) || Events.THINKING.equals(r.event())
-                ? OPERATE_APPEND : OPERATE_REPLACE;
+        String operate = OPERATE_REPLACE; // 缺省
+        if (r.ext() != null && r.ext().isObject()) {
+            JsonNode opNode = r.ext().path("operate");
+            if (opNode.isTextual()) {
+                operate = opNode.asText();
+            }
+        }
         ObjectNode ext = Json.obj();
         ext.put(EXT_TARGET, sessionId);
         ext.put(EXT_OPERATE, operate);
@@ -256,40 +254,13 @@ public class DataPusher implements EventLog.Listener {
                 ext.set(k, src.get(k));
             }
         }
-        JsonNode payload = TaskEvents.wireEvent(r, mainAgentId).path("payload");
-        long creditIndex = acquireCredit();
-        ext.put("credit", true);
-        ext.put("creditIndex", creditIndex);
-        conn.pub(Channels.taskStream(conn.k(), taskId), r.event(), r.seq(), r.ts(), payload, ext);
-    }
-
-    /**
-     * 申请一帧推送额度:未确认窗口满({@code nextPushIndex - ackedIndex >= CREDIT_WINDOW})
-     * 即持续阻塞,直到前端 ack / 推送器销毁(stop);全链端统一升级,无老前端兼容负担(§4.2.2 防线 1)。
-     * 返回本帧 creditIndex(该帧推送后自增)。
-     */
-    private long acquireCredit() {
-        synchronized (creditLock) {
-            while (running.get() && nextPushIndex - ackedIndex >= CREDIT_WINDOW) {
-                try {
-                    creditLock.wait(ACK_WAIT_STEP_MS);
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    break;
-                }
-            }
-            return nextPushIndex++;
+        ObjectNode wire = projector.projectEvent(taskId, mainAgentId, r);
+        if (wire == null) {
+            return; // 出网过滤丢弃:跳过推送(游标仍推进)
         }
-    }
-
-    /** 前端回报消费进度:推进已确认游标并唤醒等待中的推送线程。 */
-    public void onAck(long creditIndex) {
-        synchronized (creditLock) {
-            if (creditIndex > ackedIndex) {
-                ackedIndex = creditIndex;
-            }
-            creditLock.notifyAll();
-        }
+        JsonNode payload = wire.path("payload");
+        wsEmitter.push(channel, r.event(), r.seq(), r.ts(),
+                payload, ext);
     }
 
     @Override

@@ -1,15 +1,18 @@
 package dev.everyagent.worker.tools.permission;
 
 import dev.everyagent.contract.json.Json;
-import dev.everyagent.worker.AtomicFiles;
-import dev.everyagent.worker.authreview.AiAuthReviewer;
-import dev.everyagent.worker.authreview.ReviewDecision;
+import dev.everyagent.plugin.api.permission.AuthorizationHandler;
+import dev.everyagent.plugin.api.util.AtomicFiles;
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.modules.WorkspaceManager;
-import dev.everyagent.worker.task.AgentCancelledException;
-import dev.everyagent.worker.task.PendingAsks;
-import dev.everyagent.worker.task.TaskEntry;
-import dev.everyagent.worker.task.TaskStore;
+import dev.everyagent.worker.os.SandboxPathRegistry;
+import dev.everyagent.worker.plugin.registry.AuthorizationHandlerRegistry;
+import dev.everyagent.plugin.api.exception.AgentCancelledException;
+import dev.everyagent.plugin.api.execution.ExecContext;
+import dev.everyagent.plugin.api.interaction.InteractionService;
+import dev.everyagent.plugin.api.permission.AuthorizationHandler.AuthorizationRequest;
+import dev.everyagent.plugin.api.spi.SandboxBackend.Access;
+import dev.everyagent.plugin.api.spi.SandboxBackend.PathGrant;
 import dev.everyagent.worker.tools.PermissionDeniedException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -22,6 +25,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -30,60 +34,74 @@ import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 授权状态 + 授权决议链宿主(架构 §5.5,自 PermissionGate 拆分):
- * 维护 per-task 授权状态(run/task 两档、inFlight 去重、grants.json 持久化),
- * 并提供「授权决议链」——同一请求沿 AI 审议 → 无人值守 → 人工弹窗 三条独立环节
- * 顺序判定,任一环节给出 ALLOW/DENY 即收口,全部无法处理(SKIP)才落到下一环节;
- * 拒绝/超时抛 {@link PermissionDeniedException} 回灌模型(agent 循环不中断)。
+ * 维护 per-task 授权状态(run/task 两档、inFlight 去重、grants.json 持久化),授权决议
+ * 沿 AuthorizationHandler 责任链遍历(按 order 排序),任一环节给出 ALLOW/DENY 即收口,
+ * 全部 PASS 则直接放行;拒绝/超时抛 {@link PermissionDeniedException} 回灌模型
+ * (agent 循环不中断)。
  *
  * <p>主/子 agent 按 taskId 共享授权;并发同 grantKey 只弹一张卡(inFlight future 去重,
  * 后来者 join 共享结论)。授权两档:run(内存,下一条用户输入清)/ task(grants.json,随任务删除)。
+ *
+ * <p>核心不感知任何具体 handler 节点(如 AI 审议、无人值守等),只遍历 handler 列表。
+ *
+ * <p><b>沙箱下发</b>(§7.8):授权落定时把随附的「沙箱范围根」交给
+ * {@link SandboxPathRegistry}(owner={@code grants:<subjectId>})——由它跨主体聚合后
+ * 差量下发给沙箱后端,故 run 档清空 / 主体驱逐 / 磁盘重载都会自然触发回收;
+ * 沙箱侧只见到路径,不知道它们来自哪个任务。
  */
 @Component
 public class GrantRegistry {
 
-    /** 授权弹窗三选项文案(前端按文案/稳定 token 均可回传,见 parseScope)。 */
-    static final List<String> AUTHORIZE_OPTIONS = List.of("本轮运行内允许", "本任务全程允许", "拒绝");
-
     private static final Logger log = LoggerFactory.getLogger(GrantRegistry.class);
 
-    private final PendingAsks asks;
+    /** 沙箱授权账本的 owner 前缀(每个授权主体一个:grants:<subjectId>)。 */
+    private static final String SANDBOX_OWNER_PREFIX = "grants:";
+
+    private final InteractionService asks;
     private final WorkerProperties props;
     private final WorkspaceManager workspaces;
-    private final TaskStore store;
-    /** AI 安全审议器;判空兜底:未注入时回退人工弹窗。 */
-    private final AiAuthReviewer aiReviewer;
+    /** 授权决议链节点注册表(按 order 排序);零节点 → 直接放行。 */
+    private final AuthorizationHandlerRegistry authHandlerRegistry;
+    /** 沙箱授权账本(可为 null:单测直构场景 → 不下发,仅内存授权)。 */
+    private final SandboxPathRegistry sandboxPaths;
 
     private final Map<String, TaskGrants> byTask = new ConcurrentHashMap<>();
 
-    public GrantRegistry(PendingAsks asks, WorkerProperties props, WorkspaceManager workspaces,
-            TaskStore store, AiAuthReviewer aiReviewer) {
+    public GrantRegistry(InteractionService asks, WorkerProperties props, WorkspaceManager workspaces,
+            AuthorizationHandlerRegistry authHandlerRegistry, SandboxPathRegistry sandboxPaths) {
         this.asks = asks;
         this.props = props;
         this.workspaces = workspaces;
-        this.store = store;
-        this.aiReviewer = aiReviewer;
+        this.authHandlerRegistry = authHandlerRegistry;
+        this.sandboxPaths = sandboxPaths;
     }
 
     // ---- 生命周期 ---- 
 
-    /** 新一条用户输入到达:本轮(run)授权即失效(任务级不受影响)。 */
-    public void beginRun(String taskId) {
-        TaskGrants g = byTask.get(taskId);
+    /** 新一条用户输入到达:本轮(run)授权即失效(任务级不受影响)。subjectId=执行主体 ID(今天=taskId)。 */
+    public void beginRun(String subjectId) {
+        TaskGrants g = byTask.get(subjectId);
         if (g != null) {
             g.runGrants.clear();
             g.runRoots.clear();
             g.runExecRoots.clear();
+            g.runSandboxRoots.clear();
+            syncSandboxGrants(subjectId, g); // 本轮授权失效 → 沙箱侧同步回收
         }
     }
 
-    /** 任务终态:内存驱逐(任务级授权已在磁盘,再运行时 lazy 重载)。 */
-    public void untrack(String taskId) {
-        byTask.remove(taskId);
+    /** 主体终态:内存驱逐(任务级授权已在磁盘,再运行时 lazy 重载)。subjectId=执行主体 ID(今天=taskId)。 */
+    public void untrack(String subjectId) {
+        byTask.remove(subjectId);
+        // 主体消失 → 该主体的沙箱授权账本整体撤销(其他主体仍期望的根由聚合层保留)
+        if (sandboxPaths != null) {
+            sandboxPaths.unregisterOwner(SANDBOX_OWNER_PREFIX + subjectId);
+        }
     }
 
-    /** 已授权外部根(realpath + 词法形态),供 Sandbox 附加放行。 */
-    public List<Path> extraRoots(String taskId) {
-        TaskGrants g = byTask.get(taskId);
+    /** 已授权外部根(realpath + 词法形态),供 Sandbox 附加放行。subjectId=执行主体 ID(今天=taskId)。 */
+    public List<Path> extraRoots(String subjectId) {
+        TaskGrants g = byTask.get(subjectId);
         if (g == null) {
             return List.of();
         }
@@ -93,9 +111,27 @@ public class GrantRegistry {
         return out;
     }
 
-    /** 已授权的命令 EXEC 根(realpath),供命令执行器做 Windows Low 完整性标注(§13.6)。 */
-    public List<Path> execRoots(String taskId) {
-        TaskGrants g = byTask.get(taskId);
+    /**
+     * 全部在途主体的已授权外部根并集(任务级 + 本轮级),供前端只读 RPC 沙箱
+     * ({@code FsService.readSandbox})放行「AI 本任务经授权读过的文件」——用户点开
+     * 工具调用里的工作区外路径 chip 时与 read_file 同源可读;主体驱逐(gate.evict,
+     * 任务收口)后自然失效,授权生命周期跟随任务。前端写沙箱不并入(不因此获得越界写)。
+     */
+    public List<Path> allExtraRoots() {
+        if (byTask.isEmpty()) {
+            return List.of();
+        }
+        List<Path> out = new ArrayList<>();
+        for (TaskGrants g : byTask.values()) {
+            out.addAll(g.taskRoots);
+            out.addAll(g.runRoots);
+        }
+        return out;
+    }
+
+    /** 已授权的命令 EXEC 根(realpath),供命令执行器做 Windows Low 完整性标注(§13.6)。subjectId=执行主体 ID(今天=taskId)。 */
+    public List<Path> execRoots(String subjectId) {
+        TaskGrants g = byTask.get(subjectId);
         if (g == null) {
             return List.of();
         }
@@ -116,32 +152,32 @@ public class GrantRegistry {
      * 完全读写)同样进入本视图——注册时已过宽根滤过,这里按同一谓词再滤一遍(纵深),
      * 与已授权 EXEC 根去重后拼接。
      */
-    public List<Path> execRootsSandboxed(TaskEntry t) {
+    public List<Path> execRootsSandboxed(String workspaceRoot, String subjectId) {
         Path wsLex = null;
         Path wsReal = null;
         try {
-            WorkspaceManager.Root ws = workspaces.resolve(t.workspaceRoot);
+            WorkspaceManager.Root ws = workspaces.resolve(workspaceRoot);
             wsLex = ws.path();
             wsReal = ws.realPath();
         } catch (IOException e) {
-            log.warn("[gate] 工作区解析失败,EXEC 根过滤退化为仅文件系统根判定 task={}", t.taskId, e);
+            log.warn("[gate] 工作区解析失败,EXEC 根过滤退化为仅文件系统根判定 subject={}", subjectId, e);
         }
         List<Path> out = new ArrayList<>();
-        for (Path root : execRoots(t.taskId)) {
+        for (Path root : execRoots(subjectId)) {
             if (OverBroadRootCheck.isOverBroadRoot(root, wsLex, wsReal)) {
-                log.warn("[gate] L2 拒收过度宽泛 EXEC 根(不进沙箱/标注/ACL)task={} root={}",
-                        t.taskId, root);
+                log.warn("[gate] L2 拒收过度宽泛 EXEC 根(不进沙箱/标注/ACL)subject={} root={}",
+                        subjectId, root);
                 continue;
             }
             out.add(root);
         }
-        for (Path root : workspaces.externalRootsOf(t.workspaceRoot)) {
+        for (Path root : workspaces.externalRootsOf(workspaceRoot)) {
             if (out.contains(root)) {
                 continue; // 与已授权 EXEC 根重叠:去重
             }
             if (OverBroadRootCheck.isOverBroadRoot(root, wsLex, wsReal)) {
-                log.warn("[gate] L2 拒收过度宽泛外部授权根(不进沙箱/标注/ACL)task={} root={}",
-                        t.taskId, root);
+                log.warn("[gate] L2 拒收过度宽泛外部授权根(不进沙箱/标注/ACL)subject={} root={}",
+                        subjectId, root);
                 continue;
             }
             out.add(root);
@@ -149,18 +185,22 @@ public class GrantRegistry {
         return out;
     }
 
-    // ---- 授权决议链(责任链一环:AI 审议 → 无人值守 → 人工弹窗) ----
+    // ---- 授权决议链(AuthorizationHandler 责任链遍历) ----
 
     /**
-     * 授权决议入口:grant 已存在直接放行;否则沿决议链分派(阻塞虚拟线程):
-     * {@code aiReview=false}(或审议器未注入)→ 人工弹窗;{@code aiReview=true} →
-     * AiAuthReviewer 审议短路(不弹窗)。拒绝/超时抛 {@link PermissionDeniedException}。
+     * 授权决议入口:grant 已存在直接放行;否则沿决议链遍历 authHandlers(阻塞虚拟线程):
+     * 第一个 applies 的 handler 返回 ALLOW → 自动授权(RUN 档);DENY → 抛
+     * {@link PermissionDeniedException};全部 PASS 或零节点 → 直接放行(RUN 档)。
      * rootsOnGrant 为该授权随附的 Sandbox 附加根;execRootsOnGrant 为命令 EXEC 授权随附的
-     * Low 完整性标注根。
+     * Low 完整性标注根;sandboxRootsOnGrant 为下发给沙箱内核机制的范围(§7.8 P5)。
      */
-    public void authorize(TaskEntry t, String agentId, String grantKey, String prompt,
-            List<Path> rootsOnGrant, List<Path> execRootsOnGrant) {
-        TaskGrants g = grantsOf(t.taskId);
+    public void authorize(AuthorizationRequest req, List<Path> rootsOnGrant, List<Path> execRootsOnGrant,
+            List<Path> sandboxRootsOnGrant) {
+        ExecContext ctx = req.context();
+        String subjectId = ctx.subjectId(); // 授权状态分区键(今天=taskId,未来=workflowId)
+        Path dataDir = ctx.dataDir();       // grants.json 落盘目录(ExecContext 数据目录槽位)
+        String grantKey = req.grantKey();
+        TaskGrants g = grantsOf(subjectId, dataDir);
         if (g.hasGrant(grantKey)) {
             return;
         }
@@ -186,9 +226,9 @@ public class GrantRegistry {
             return; // 授权者已记录,后来者直接放行
         }
         try {
-            GrantScope scope = resolveScope(t, agentId, prompt, grantKey);
+            GrantScope scope = resolveScope(req);
             future.complete(scope);
-            record(t, g, grantKey, scope, prompt, rootsOnGrant, execRootsOnGrant);
+            record(dataDir, g, subjectId, grantKey, scope, rootsOnGrant, execRootsOnGrant, sandboxRootsOnGrant);
         } catch (Throwable e) {
             future.complete(GrantScope.DENY); // 分派异常结束(审议/弹窗):后来者按拒绝处理
             throw e;
@@ -209,74 +249,19 @@ public class GrantRegistry {
     }
 
     /**
-     * 授权决议链(责任链一环):三条独立环节顺序生效、互不相关——
-     * ① AI 安全审议(只看任务级 {@code t.aiReview}):ALLOW → 自动授权(RUN 档)、DENY →
-     * 拒绝、ESCALATE(不确定)→ 不直接拒绝、落到下一环节弹窗人工授权;审议失败且
-     * review-deny-on-error=false(fallback=true)→ 同样落到下一环节(绝不因审议失败放行)。
-     * ② 无人值守拦截(只看任务级 {@code t.unattended}):无人值守开启时无人工可弹,直接拒绝;
-     * 未开 → ③ 人工弹窗 askUser。本方法只出「授权范围」结论;future.complete 与 record
-     * 由 {@link #authorize} owner 路径统一执行,后来者 join 共享同一结论。
+     * 授权决议链(责任链遍历):通过 {@link AuthorizationChainExecutor} 折叠 authHandlers
+     * (按 order 排序)为嵌套链;任一节点返回 ALLOW → 放行(RUN 档);DENY → 抛
+     * {@link PermissionDeniedException};全部 PASS 或零节点 → 链尾兜底放行(RUN 档)。
+     * 核心不感知任何具体节点(AI 审议、无人值守、人工弹窗等均由各 handler 自行判断)。
+     * future.complete 与 record 由 {@link #authorize} owner 路径统一执行,后来者 join 共享同一结论。
      */
-    private GrantScope resolveScope(TaskEntry t, String agentId, String prompt, String grantKey) {
-        // 环节 1:AI 安全审议(独立功能,只看 t.aiReview;未开/无审议器则跳过)
-        if (usesAiReview(t)) {
-            ReviewDecision d;
-            try {
-                d = aiReviewer.review(t, grantKey, prompt);
-            } catch (RuntimeException e) {
-                // 审议组件本身崩溃(不应发生):绝不静默放行,按 deny-on-error 语义对待
-                log.warn("AI 审议异常 task={}(按 deny-on-error 处理)", t.taskId, e);
-                d = props.getPermissions().isReviewDenyOnError()
-                        ? ReviewDecision.deny("error: " + e)
-                        : ReviewDecision.fallback("error: " + e);
-            }
-            if (!d.fallback()) {
-                log.info("AI 审议结论 task={} grantKey={} verdict={} confidence={} reason={}",
-                        t.taskId, grantKey, d.verdict(), d.confidence(), d.reason());
-                switch (d.verdict()) {
-                    case ALLOW -> {
-                        return GrantScope.RUN; // 审议放行,按 RUN 档自动授权(不弹窗)
-                    }
-                    case DENY -> {
-                        throw denyException(); // 审议拒绝:错误文本回灌模型,与人工拒绝一致
-                    }
-                    case ESCALATE -> {
-                        // 不确定:不直接拒绝,落到下一环节弹窗人工授权(不在此拦截)
-                    }
-                }
-            }
-            // fallback=true(审议失败且 deny-on-error=false)或 ESCALATE:继续向下
-        }
-        // 环节 2:无人值守拦截(独立功能,只看 t.unattended)
-        if (t.unattended) {
-            throw denyException(); // 无人值守:无人工可弹,授权请求直接拒绝
-        }
-        // 环节 3:正常人工弹窗
-        return askUser(t, agentId, prompt);
-    }
-
-    /** aiReview 开关开启且审议器在位才走 AI 审议;否则(含未注入兜底)维持人工弹窗。 */
-    private boolean usesAiReview(TaskEntry t) {
-        return t.aiReview && aiReviewer != null;
-    }
-
-    /** 发起 authorization ask 并解析答案(阻塞;timeout/cancelled 视为拒绝)。 */
-    private GrantScope askUser(TaskEntry t, String agentId, String prompt) {
-        // 题目 id 由 PendingAsks.ask 以真实 askId 派生,占位即可
-        List<PendingAsks.AskQuestion> questions = List.of(
-                new PendingAsks.AskQuestion("", prompt, AUTHORIZE_OPTIONS));
-        PendingAsks.AskAnswer ans;
-        try {
-            ans = asks.ask(t.events, t.taskId, agentId, "authorization", questions,
-                    props.getPermissions().getAuthTimeoutMs());
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new AgentCancelledException("task cancelled");
-        }
-        if (!"answered".equals(ans.status())) {
-            throw denyException();
-        }
-        return parseScope(ans.text());
+    private GrantScope resolveScope(AuthorizationRequest req) {
+        AuthorizationHandler.AuthorizationDecision d = new AuthorizationChainExecutor()
+                .run(authHandlerRegistry.sorted(), req);
+        return switch (d.type()) {
+            case ALLOW, PASS -> GrantScope.RUN;
+            case DENY -> throw denyException();
+        };
     }
 
     /** 宽容解析:稳定 token 优先,退文案关键词;未识别按拒绝(安全缺省,兼容任意回传文本)。 */
@@ -291,22 +276,64 @@ public class GrantRegistry {
         return GrantScope.DENY;
     }
 
-    /** 按档位记录授权(DENY 抛 PermissionDeniedException)。 */
-    private void record(TaskEntry t, TaskGrants g, String grantKey, GrantScope scope, String prompt,
-            List<Path> rootsOnGrant, List<Path> execRootsOnGrant) {
+    /** 按档位记录授权(DENY 抛 PermissionDeniedException)。dataDir=grants.json 落盘目录(ExecContext.dataDir)。 */
+    private void record(Path dataDir, TaskGrants g, String subjectId, String grantKey, GrantScope scope,
+            List<Path> rootsOnGrant, List<Path> execRootsOnGrant, List<Path> sandboxRootsOnGrant) {
+        boolean rw = sandboxAccessIsWrite(grantKey);
         switch (scope) {
             case RUN -> {
                 g.runGrants.add(grantKey);
                 g.runRoots.addAll(rootsOnGrant);
                 g.runExecRoots.addAll(execRootsOnGrant);
+                sandboxRootsOnGrant.forEach(p -> widen(g.runSandboxRoots, p, rw));
             }
             case TASK -> {
                 g.taskGrants.add(grantKey);
                 g.taskRoots.addAll(rootsOnGrant);
                 g.taskExecRoots.addAll(execRootsOnGrant);
-                persistTaskGrants(t, g);
+                sandboxRootsOnGrant.forEach(p -> widen(g.taskSandboxRoots, p, rw));
+                persistGrants(dataDir, g);
             }
             case DENY -> throw denyException();
+        }
+        syncSandboxGrants(subjectId, g);
+    }
+
+    /**
+     * 授权 key 的访问语义:读 → 只读,写 / 命令执行 → 读写。
+     * key 形态 {@code p::<op>::<path>}(见 {@code PathSupport.pathKey}),动词类是
+     * {@code v::<verb>} / {@code priv::<name>} 等无路径形态(不下发沙箱根,故无影响)。
+     */
+    private static boolean sandboxAccessIsWrite(String grantKey) {
+        return !grantKey.startsWith("p::read::");
+    }
+
+    /** 同路径取最宽语义(读写覆盖只读)。 */
+    private static void widen(Map<Path, Boolean> target, Path root, boolean rw) {
+        target.merge(root, rw, (a, b) -> a || b);
+    }
+
+    /**
+     * 把该主体的沙箱授权根交给 {@link SandboxPathRegistry}(owner=grants:&lt;subjectId&gt;)
+     * 覆盖式对齐——由聚合层跨主体去重后差量下发,主体范围内减少的根(如 run 档清空)
+     * 自然被收敛为 {@code revoke}。
+     */
+    private void syncSandboxGrants(String subjectId, TaskGrants g) {
+        if (sandboxPaths == null) {
+            return; // 单测直构场景:无沙箱账本,授权仅内存生效
+        }
+        Map<Path, Boolean> merged = new LinkedHashMap<>(g.taskSandboxRoots);
+        g.runSandboxRoots.forEach((p, rw) -> widen(merged, p, rw));
+        List<PathGrant> grants = new ArrayList<>(merged.size());
+        for (Map.Entry<Path, Boolean> e : merged.entrySet()) {
+            grants.add(new PathGrant(e.getKey(),
+                    e.getValue() ? Access.READ_WRITE : Access.READ_ONLY));
+        }
+        try {
+            sandboxPaths.sync(SANDBOX_OWNER_PREFIX + subjectId, grants);
+        } catch (RuntimeException e) {
+            log.warn("[gate] 沙箱授权根下发失败(授权仍在内存生效)subject={}: {}",
+                    subjectId, e.toString());
         }
     }
 
@@ -327,6 +354,9 @@ public class GrantRegistry {
         /** run/task 档各自的命令 EXEC 根(Windows Low 完整性标注用,§13.6)。 */
         final Set<Path> runExecRoots = ConcurrentHashMap.newKeySet();
         final Set<Path> taskExecRoots = ConcurrentHashMap.newKeySet();
+        /** run/task 档各自下发给沙箱的授权根(§7.8);值 = 是否读写。 */
+        final Map<Path, Boolean> runSandboxRoots = new ConcurrentHashMap<>();
+        final Map<Path, Boolean> taskSandboxRoots = new ConcurrentHashMap<>();
         final Map<String, CompletableFuture<GrantScope>> inFlight = new ConcurrentHashMap<>();
         volatile boolean diskLoaded;
 
@@ -335,23 +365,28 @@ public class GrantRegistry {
         }
     }
 
-    private TaskGrants grantsOf(String taskId) {
-        TaskGrants g = byTask.computeIfAbsent(taskId, k -> new TaskGrants());
+    private TaskGrants grantsOf(String subjectId, Path dataDir) {
+        TaskGrants g = byTask.computeIfAbsent(subjectId, k -> new TaskGrants());
         if (!g.diskLoaded) {
             synchronized (g) {
                 if (!g.diskLoaded) {
-                    loadDiskGrants(taskId, g);
+                    loadDiskGrants(subjectId, dataDir, g);
                     g.diskLoaded = true;
+                    // 磁盘载入的任务级授权同样要下发沙箱(进程重启后沙箱侧需重放)
+                    syncSandboxGrants(subjectId, g);
                 }
             }
         }
         return g;
     }
 
-    /** 任务级授权 lazy 载入(首次过 gate 时;startRerun 冷启动后自然恢复)。 */
-    private void loadDiskGrants(String taskId, TaskGrants g) {
+    /** 任务级授权 lazy 载入(首次过 gate 时;startRerun 冷启动后自然恢复)。dataDir 来自 ExecContext 槽位。 */
+    private void loadDiskGrants(String subjectId, Path dataDir, TaskGrants g) {
+        if (dataDir == null) {
+            return; // 上下文未携带数据目录(单测直构场景):按无磁盘授权处理
+        }
         try {
-            Path f = store.dirOf(taskId).resolve("grants.json");
+            Path f = dataDir.resolve("grants.json");
             if (!Files.isRegularFile(f)) {
                 return;
             }
@@ -382,15 +417,30 @@ public class GrantRegistry {
                     }
                 }
             }
+            // v2 起:下发给沙箱的授权根(§7.8);旧文件无该键 → 空(仅内存走授权,不下发)
+            for (JsonNode n : root.path("sandboxRoots")) {
+                String s = n.path("path").asString("");
+                if (!s.isEmpty()) {
+                    try {
+                        widen(g.taskSandboxRoots, Path.of(s), n.path("rw").asBoolean(false));
+                    } catch (RuntimeException ignore) {
+                        // 同上:形态不兼容忽略
+                    }
+                }
+            }
         } catch (IOException | RuntimeException e) {
-            log.warn("任务级授权读取失败 task={}(按无授权处理)", taskId, e);
+            log.warn("任务级授权读取失败 subject={}(按无授权处理)", subjectId, e);
         }
     }
 
-    /** 任务级授权落盘(tmp + ATOMIC_MOVE;仅用户点「本任务」时发生,频率极低)。 */
-    private void persistTaskGrants(TaskEntry t, TaskGrants g) {
+    /** 任务级授权落盘(tmp + ATOMIC_MOVE;仅用户点「本任务」时发生,频率极低)。dataDir 来自 ExecContext 槽位。 */
+    private void persistGrants(Path dataDir, TaskGrants g) {
+        if (dataDir == null) {
+            log.warn("任务级授权落盘失败(上下文未携带数据目录,继续内存生效)");
+            return;
+        }
         try {
-            Path dir = store.dirOf(t.taskId);
+            Path dir = dataDir;
             Files.createDirectories(dir);
             ObjectNode root = Json.obj().put("version", 1);
             ArrayNode grants = root.putArray("taskGrants");
@@ -403,12 +453,17 @@ public class GrantRegistry {
             for (Path p : g.taskExecRoots) {
                 execRoots.add(p.toString());
             }
+            // 下发给沙箱的授权根(§7.8):进程重启后据此重放,沙箱侧不留真相
+            ArrayNode sbx = root.putArray("sandboxRoots");
+            for (Map.Entry<Path, Boolean> e : g.taskSandboxRoots.entrySet()) {
+                sbx.addObject()
+                        .put("path", e.getKey().toString())
+                        .put("rw", e.getValue());
+            }
             Path f = dir.resolve("grants.json");
-            Path tmp = dir.resolve("grants.json.tmp");
-            Files.writeString(tmp, Json.write(root));
-            AtomicFiles.replace(tmp, f); // 原子替换(失败已清理 tmp 后抛出,不残留垃圾)
+            AtomicFiles.writeText(f, Json.write(root)); // 唯一名 tmp + 原子替换(失败已清理,不残留垃圾)
         } catch (IOException e) {
-            log.warn("任务级授权落盘失败 task={}(继续内存生效)", t.taskId, e);
+            log.warn("任务级授权落盘失败 dir={}(继续内存生效)", dataDir, e);
         }
     }
 }

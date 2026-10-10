@@ -61,7 +61,7 @@ export const workspaceExplorerCommandService = {
     if (normalizedTargetDir === oldPath || normalizedTargetDir.startsWith(`${oldPath}/`)) {
       throw new Error('不能移动到自身或其子目录下')
     }
-    if (await workspaceGateway.exists(workspaceRoot, newPath)) {
+    if (await workspaceGateway.existsRaw(workspaceRoot, newPath)) {
       throw new Error('目标位置已存在同名文件或目录')
     }
 
@@ -75,10 +75,10 @@ export const workspaceExplorerCommandService = {
    */
   async createFile(workspaceRoot: string, parentPath: string, name: string): Promise<string> {
     const fullPath = joinWorkspacePath(parentPath, name)
-    if (await workspaceGateway.exists(workspaceRoot, fullPath)) {
+    if (await workspaceGateway.existsRaw(workspaceRoot, fullPath)) {
       throw new Error('同名文件或目录已存在')
     }
-    await workspaceGateway.writeTextFile(workspaceRoot, fullPath, '')
+    await workspaceGateway.writeTextFileRaw(workspaceRoot, fullPath, '')
     return fullPath
   },
 
@@ -88,7 +88,7 @@ export const workspaceExplorerCommandService = {
    */
   async createDirectory(workspaceRoot: string, parentPath: string, name: string): Promise<string> {
     const fullPath = joinWorkspacePath(parentPath, name)
-    if (await workspaceGateway.exists(workspaceRoot, fullPath)) {
+    if (await workspaceGateway.existsRaw(workspaceRoot, fullPath)) {
       throw new Error('同名文件或目录已存在')
     }
     await workspaceGateway.ensureDir(workspaceRoot, fullPath)
@@ -101,9 +101,9 @@ export const workspaceExplorerCommandService = {
    * 内部保留目录（如 .git）会被过滤，与资源管理器树展示保持一致。
    */
   async downloadPath(workspaceRoot: string, path: string): Promise<void> {
-    const stat = await workspaceGateway.stat(workspaceRoot, path)
+    const stat = await workspaceGateway.statRaw(workspaceRoot, path)
     if (!stat.isDirectory) {
-      const content = await workspaceGateway.readBinaryFile(workspaceRoot, path)
+      const content = await workspaceGateway.readBytesRaw(workspaceRoot, path)
       downloadBlob(new Blob([toArrayBuffer(content)]), stat.name)
       return
     }
@@ -132,7 +132,7 @@ export const workspaceExplorerCommandService = {
       const relativePath = getFileRelativePath(file)
       const targetFilePath = targetPath ? `${targetPath}/${relativePath}` : relativePath
       const buffer = new Uint8Array(await file.arrayBuffer())
-      await workspaceGateway.writeBytes(workspaceRoot, targetFilePath, buffer)
+      await workspaceGateway.writeBytesRaw(workspaceRoot, targetFilePath, buffer)
     }
   },
 }
@@ -162,7 +162,7 @@ async function collectFilesIntoZip(workspaceRoot: string, zip: JSZip, fsPath: st
       await collectFilesIntoZip(workspaceRoot, zip, row.path, entryZipPath)
       continue
     }
-    const content = await workspaceGateway.readBinaryFile(workspaceRoot, row.path)
+    const content = await workspaceGateway.readBytesRaw(workspaceRoot, row.path)
     zip.file(entryZipPath, toArrayBuffer(content))
   }
 }

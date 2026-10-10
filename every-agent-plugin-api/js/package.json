@@ -1,0 +1,9 @@
+{
+  "name": "@everyagent/plugin-api",
+  "version": "1.0.0",
+  "description": "Every Agent 前端插件 API 类型包（对标 @types/vscode）",
+  "types": "index.ts",
+  "peerDependencies": {
+    "react": "^18.0.0"
+  }
+}

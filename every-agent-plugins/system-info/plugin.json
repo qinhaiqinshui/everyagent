@@ -1,0 +1,9 @@
+{
+  "id": "system-info",
+  "name": "系统环境信息注入",
+  "version": "0.1.0",
+  "description": "把当前工作区/操作系统/沙箱环境信息注入 system prompt",
+  "author": "everyagent",
+  "main": "dev.everyagent.plugin.sysinfo.SystemInfoPlugin",
+  "enabled": true
+}

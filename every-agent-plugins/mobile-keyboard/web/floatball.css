@@ -1,0 +1,131 @@
+/**
+ * 移动端键盘增强悬浮球样式——仿 iOS AssistiveTouch:
+ * 半透明毛玻璃圆球 + 同材质展开面板,明暗主题通用(中性灰白调)。
+ *
+ * 布局约定:球与面板均以「中心点」坐标定位(left/top = 中心,translate(-50%,-50%)
+ * 由 transform 完成);根层 pointer-events:none,仅球与面板自身可交互,不遮挡宿主 UI。
+ */
+
+/* 根容器:覆盖全屏但不拦截任何指针事件,仅作显隐开关与生命周期容器 */
+.mk-root {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 980; /* 低于 antd 弹层(1000+),高于普通内容 */
+}
+
+.mk-root.mk-hidden {
+  display: none;
+}
+
+/* ── 悬浮球 ─────────────────────────────────────────────────────────────── */
+
+.mk-ball {
+  position: absolute;
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: auto;
+  color: #2c2c2e;
+  background: rgba(130, 130, 138, 0.3);
+  backdrop-filter: blur(14px) saturate(180%);
+  -webkit-backdrop-filter: blur(14px) saturate(180%);
+  box-shadow:
+    0 4px 14px rgba(0, 0, 0, 0.28),
+    inset 0 0 0 0.5px rgba(255, 255, 255, 0.45);
+  cursor: pointer;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.mk-ball.mk-dragging {
+  opacity: 0.85;
+}
+
+/* 松手吸附边缘时的位移动画(拖动跟随期间不带 transition) */
+.mk-ball.mk-snapping {
+  transition:
+    left 0.25s ease-out,
+    top 0.25s ease-out;
+}
+
+/* ── 方向键面板 ─────────────────────────────────────────────────────────── */
+
+.mk-panel {
+  position: absolute;
+  display: grid;
+  grid-template-columns: repeat(3, 56px);
+  grid-template-rows: repeat(3, 56px);
+  gap: 10px;
+  padding: 12px;
+  border-radius: 26px;
+  transform: translate(-50%, -50%);
+  pointer-events: auto;
+  background: rgba(130, 130, 138, 0.26);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.3),
+    inset 0 0 0 0.5px rgba(255, 255, 255, 0.4);
+  animation: mk-pop 0.16s ease-out;
+}
+
+.mk-panel.mk-hidden {
+  display: none;
+}
+
+/* 按键:半透明白色圆角块,按压时加深并轻微缩小 */
+.mk-key {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.42);
+  color: #1f1f24;
+  box-shadow: inset 0 0 0 0.5px rgba(255, 255, 255, 0.5);
+  cursor: pointer;
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  transition:
+    transform 0.06s ease-out,
+    background-color 0.06s ease-out;
+}
+
+.mk-key.mk-pressed {
+  background: rgba(255, 255, 255, 0.85);
+  transform: scale(0.9);
+}
+
+/* 中心收起键:略小于方向键,弱化视觉 */
+.mk-key.mk-collapse {
+  background: rgba(255, 255, 255, 0.26);
+  color: rgba(31, 31, 36, 0.72);
+}
+
+.mk-key.mk-collapse.mk-pressed {
+  background: rgba(255, 255, 255, 0.6);
+}
+
+/* 十字布局的四个空角:仅占位,不可交互 */
+.mk-cell.mk-blank {
+  pointer-events: none;
+}
+
+@keyframes mk-pop {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.65);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+}

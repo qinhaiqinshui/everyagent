@@ -15,11 +15,8 @@ worker 运行时以**字面相对路径 `./runtime`** 按 `user.dir` **只读引
 | 路径 | 用途 | 消费方 |
 |---|---|---|
 | `bin/rg.exe`（Windows）/ `bin/rg`（Linux, musl 静态） | ripgrep，注入 bash/powershell 子进程 `PATH` 供 AI 直接执行 `rg` | `RipgrepBinary`（定位 `./runtime/bin/`） |
-| `wsl/eagent-run.py` | WSL 发行版侧启动器（stdin 载荷 → bwrap / root 直连） | `WslBwrapSandbox.resolveRunner()` / `WslDirectSandbox`（定位 `./runtime/wsl/`） |
-| `wsl/eagent-rootfs.tar.gz` + `.sha256` | 托管发行版 `EveryAgent` 镜像，发行版缺失时自动 `wsl --import` | `WslBwrapSandbox.tarballFor()` / desktop preflight（定位 `./runtime/wsl/`） |
 
-> 镜像与 rg 二进制体积大，不入 git（见仓库根 `.gitignore` 的 `runtime/wsl/eagent-rootfs.tar.gz*`）；
-> `eagent-run.py` 随源码入 git。
+> ripgrep 二进制体积大，不入 git。
 
 ## ripgrep（rg）二进制
 
@@ -43,30 +40,24 @@ worker 运行时以**字面相对路径 `./runtime`** 按 `user.dir` **只读引
 
 ## WSL 托管发行版镜像
 
-生成方式（仓库根目录执行，二选一）：
+WSL 沙箱镜像由 `sandbox-wsl-ubuntu` 插件自己管理。镜像构建脚本输出到
+插件自己的 `runtime/wsl/` 目录，由 `copy-plugin-runtime.mjs`（通用插件
+资源打包脚本）自动复制到共享 `runtime/wsl/`。
 
-```powershell
-# 直接构建到仓库根 runtime/wsl/
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\wsl-rootfs-build.ps1 -OutDir .\runtime\wsl
-```
+插件被禁用（`plugin.json` 中 `enabled: false`）时，镜像不会被复制，
+已有的残留会被清理——不会打进安装包。
 
-或（构建到 dist 再由 build:wsl 复制到仓库根 runtime/wsl/）：
+| 路径 | 用途 | 消费方 |
+|---|---|---|
+| `wsl/eagent-run.py` | WSL 发行版侧启动器（stdin 载荷 → root 直连） | `WslCommon.resolveRunner()`（定位 `<pluginDir>/wsl/`） |
+| `wsl/eagent-rootfs.tar.gz` + `.sha256` | 托管发行版 `EveryAgent` 镜像，发行版缺失时自动 `wsl --import` | `WslCommon.tarballFor()`（定位 `<pluginDir>/wsl/`） |
 
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\wsl-rootfs-build.ps1 -OutDir .\dist
-cd every-agent-desktop; npm run build:wsl
-```
+> 镜像体积大，不入 git；`eagent-run.py` 随源码入 git。
 
-Linux/CI：
+生成方式（仓库根目录执行）：
 
 ```bash
-scripts/wsl-rootfs-build.sh ./runtime/wsl
+every-agent-plugins/sandbox-wsl-ubuntu/scripts/wsl-rootfs-build.ps1
+# 产物输出到 every-agent-plugins/sandbox-wsl-ubuntu/runtime/wsl/
+# npm run dist 时由 build:plugin-runtime 自动复制到共享 runtime/wsl/
 ```
-
-打包：`electron-builder.yml` 的 `extraResources`（`from: ../runtime`）把本目录原样搬进
-`<resourcesPath>/runtime`。运行时 desktop preflight 直接用该目录镜像自动 `wsl --import EveryAgent`
-（不再复制到 `~/.everyagent/wsl/`）；worker 探测的 `tarballFor()` 也优先读
-`./runtime/wsl/eagent-rootfs.tar.gz`。
-
-> 若不打包镜像（目录里无 rootfs 文件），desktop 仍可启动，但 wsl-direct 后端会因缺发行版
-> 回退 windows-mic，需手动构建/放置镜像后重启。

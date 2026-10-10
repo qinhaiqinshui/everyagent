@@ -23,7 +23,7 @@
     "agentIdField": { "agentId": { "type": "string", "description": "子 agent 事件必带;主 agent 省略(事件名不分主/子,归属由此字段决定)" } },
     "streamEvent": {
       "properties": {
-        "channel": { "pattern": "^u\\.[0-9a-f]{64}\\.task\\.[a-z0-9-]+\\.stream$" },
+        "channel": { "pattern": "^u\\.[0-9a-f]{64}\\.worker\\.[a-z0-9._-]+\\.task\\.[a-z0-9-]+\\.stream$" },
         "event": {
           "enum": [
             "user.message", "delta", "thinking", "message", "usage",
@@ -62,10 +62,9 @@
       },
       "askCreate": {
         "type": "object",
-        "required": ["askId", "kind"],
+        "required": ["askId"],
         "properties": {
           "askId": { "type": "string" },
-          "kind": { "type": "string", "enum": ["question", "authorization"] },
           "questions": {
             "type": "array",
             "items": {
@@ -74,7 +73,18 @@
               "properties": {
                 "id": { "type": "string" },
                 "prompt": { "type": "string" },
-                "options": { "type": "array", "items": { "type": "string" } }
+                "options": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": ["label", "value", "type"],
+                    "properties": {
+                      "label": { "type": "string" },
+                      "value": { "type": "string" },
+                      "type": { "enum": ["radio", "input"] }
+                    }
+                  }
+                }
               }
             }
           },
@@ -111,7 +121,7 @@
     },
     "tasksEvent": {
       "properties": {
-        "channel": { "pattern": "^u\\.[0-9a-f]{64}\\.tasks$" },
+        "channel": { "pattern": "^u\\.[0-9a-f]{64}\\.worker\\.[a-z0-9._-]+\\.tasks$" },
         "event": { "enum": ["task.created", "task.updated"] },
         "payload": {
           "type": "object",
@@ -130,14 +140,13 @@
     },
     "inputEvent": {
       "properties": {
-        "channel": { "pattern": "^u\\.[0-9a-f]{64}\\.task\\.[a-z0-9-]+\\.input$" },
-        "event": { "enum": ["task.input", "task.dialogInsert", "ask.reply"] },
+        "channel": { "pattern": "^u\\.[0-9a-f]{64}\\.worker\\.[a-z0-9._-]+\\.input$" },
+        "event": { "enum": ["task.input", "ask.reply"] },
         "payload": {
           "type": "object",
           "properties": {
             "text": { "type": "string" },
             "taskId": { "type": "string" },
-            "index": { "type": "integer", "description": "task.dialogInsert 的队列下标(可选,供 worker 移除该项)" },
             "askId": { "type": "string" },
             "answer": { "type": "string" }
           }

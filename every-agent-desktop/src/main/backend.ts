@@ -6,9 +6,9 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, mkdirSync, openSync } from 'node:fs'
 import { join } from 'node:path'
-import { app, utilityProcess } from 'electron'
+import { app } from 'electron'
 import type { DesktopConfig, DesktopPaths } from './config'
-import { runtimeDir, programRoot, hubJar, jreJavaExe, jreJavaExeFallback, workerJar } from './paths'
+import { programRoot, hubJar, jreJavaExe, jreJavaExeFallback, workerJar } from './paths'
 
 export interface BackendHandles {
   /** hub 子进程(始终由 desktop 启动,退出时一并停止)。 */
@@ -178,19 +178,23 @@ function spawnJava(
   logPath: string,
   env: NodeJS.ProcessEnv,
   cwd: string,
+  extraJvmProps: string[] = [],
 ): ChildProcess {
   const { exe, windowsHide } = resolveJavaExe()
   console.info(`[desktop] ${label} 进程启动: ${exe} -jar ${jar} ${args.join(' ')} (cwd=${cwd})`)
   console.info(`[desktop] ${label} stdout/stderr -> ${logPath}`)
   const outFd = openSync(logPath, 'a')
   // stdio:忽略 stdin,stdout/stderr 写入同一日志文件(主进程不持有其内容,文件即真相源)。
-  // cwd 设为程序根:worker 以字面相对路径 ./runtime 按 user.dir 定位程序附属文件。
+  // cwd 禁止指向安装目录:Windows 下任何进程的 CWD 所在目录不可删除,hub/worker 若以
+  // resources 为 CWD,卸载/覆盖安装时该目录将永远删不掉(实证过的 bug)。统一以
+  // EVERYAGENT_HOME 为 CWD;程序根经 -Deveryagent.program-dir 显式告知 worker。
   // JVM 系统属性:限制 Reactor 线程池大小(默认 10×CPU 核 → 28 核机器创建 280 线程)。
   const jvmProps = label === 'worker' ? [
     '-Dreactor.schedulers.default.bounded-elastic.size=16',
     '-Dreactor.schedulers.default.bounded-elastic.ttl=60s',
     '-Dreactor.schedulers.default.poolSize=8',
-  ] : []
+    ...extraJvmProps,
+  ] : extraJvmProps
   const child = spawn(exe, [...jvmProps, '-jar', jar, ...args], {
     windowsHide,
     env,
@@ -329,30 +333,9 @@ export async function startBackend(
 
   log(`创建日志目录: ${paths.logsDir}`)
   mkdirSync(paths.logsDir, { recursive: true })
-
-  // 发行版 preflight:worker 需要 wsl-direct 的托管发行版(EveryAgent)。
-  // 在独立 utilityProcess 中执行(主进程不直接 spawn wsl.exe,规避 native 崩溃风险);
-  // fire-and-forget:任何异常都不影响 hub/worker 启动(worker 自身 autoImport 兜底)。
-  const wslCheck = utilityProcess.fork(join(__dirname, 'wsl-check-entry.js'), [], {
-    serviceName: 'wsl-distro-check',
-  })
-  wslCheck.on('message', (msg) => {
-    const m = msg as { type?: string; line?: string; result?: { detail?: string } }
-    if (m.type === 'log' && m.line) log(`[wsl检查] ${m.line}`)
-    else if (m.type === 'result') log(`[wsl检查] ${m.result?.detail ?? '完成'}`)
-  })
-  wslCheck.on('exit', (code) => {
-    log(`[wsl检查] 子进程退出 code=${code}`)
-  })
-  try {
-    wslCheck.postMessage({
-      home: paths.home,
-      distro: 'EveryAgent',
-      bundledDir: runtimeDir(),
-    })
-  } catch (error) {
-    log(`[wsl检查] 下发任务失败(忽略): ${(error as Error).message}`)
-  }
+  // 子进程 CWD:统一 EVERYAGENT_HOME(安装目录之外的稳定可写目录,退出/卸载不残留锁)。
+  const childCwd = paths.home
+  mkdirSync(childCwd, { recursive: true })
 
   const env: NodeJS.ProcessEnv = { ...process.env, EVERYAGENT_HOME: paths.home }
   const hubLog = join(paths.logsDir, 'hub.out.log')
@@ -370,7 +353,7 @@ export async function startBackend(
     )
   }
   log(`启动 hub (${hubJarPath}) ...`)
-  const hub = spawnJava('hub', hubJarPath, [], hubLog, env, programRoot())
+  const hub = spawnJava('hub', hubJarPath, [], hubLog, env, childCwd)
   log(`等待 hub 健康检查 ${hubHealthUrl} (30s)...`)
   await waitHttp(hubHealthUrl, 30000, 'hub', hub)
   log('hub 健康检查通过')
@@ -411,8 +394,11 @@ export async function startBackend(
   } else {
     log(`启动 worker (${workerJarPath}) ...`)
     // 程序附属文件(rg、eagent-run.py、镜像)随安装包分发到 <程序根>/runtime;
-    // worker 以字面相对路径 ./runtime 按 user.dir 定位,故这里把 cwd 设为程序根。
-    worker = spawnJava('worker', workerJarPath, [], workerLog, env, programRoot())
+    // 程序根经 -Deveryagent.program-dir 显式注入(worker 侧 resolveRuntimeDir 优先读它),
+    // cwd 落在 EVERYAGENT_HOME——绝不能落在安装目录内(CWD 会把目录锁死,卸载删不掉)。
+    worker = spawnJava('worker', workerJarPath, [], workerLog, env, childCwd, [
+      `-Deveryagent.program-dir=${programRoot()}`,
+    ])
     // 启动顺序关键:必须等到 worker 就绪(健康检查通过且 hub 连接建立)再加载前端,
     // 否则前端首屏 tasks.list 落在 worker 尚未订阅 cmd 频道的窗口,任务列表恒为空,
     // 只能去设置页手动「保存并连接」重建连接后才恢复。

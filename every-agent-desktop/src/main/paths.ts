@@ -11,8 +11,9 @@ import { join, resolve } from 'node:path'
  * 程序根目录(内含 runtime/ 程序附属文件;worker/hub 的 cwd 也设为此)。
  * 打包态 = resourcesPath(extraResources 把 runtime 原样放到 <resourcesPath>/runtime);
  * 开发态 = 仓库根(every-agent-desktop 的上一级)。
- * 程序附属文件(rg、eagent-run.py、WSL 镜像)随安装包分发到 <程序根>/runtime/,worker 以
- * 字面相对路径 ./runtime 按 user.dir 解析,故 spawn 时把 cwd 设为本目录。
+ * 程序附属文件(核心 rg 二进制;插件附属资源由各插件 runtime/ 经构建链并入)随安装包
+ * 分发到 <程序根>/runtime/,worker 以字面相对路径 ./runtime 按 user.dir 解析,
+ * 故 spawn 时把 cwd 设为本目录。
  */
 export function programRoot(): string {
   if (app.isPackaged) {
@@ -60,7 +61,7 @@ export function jreJavaExeFallback(): string {
   return join(jreDir(), 'bin', 'java.exe')
 }
 
-/** 程序附属文件目录(rg 二进制、eagent-run.py、托管发行版镜像;随安装/解压分发、运行时只读引用)。 */
+/** 程序附属文件目录(rg 二进制等核心附属文件;插件附属资源由各插件 runtime/ 经构建链并入)。 */
 export function runtimeDir(): string {
   return join(programRoot(), 'runtime')
 }
@@ -68,19 +69,4 @@ export function runtimeDir(): string {
 /** ripgrep 二进制(Windows)。 */
 export function runtimeRgExe(): string {
   return join(runtimeDir(), 'bin', 'rg.exe')
-}
-
-/** WSL 发行版启动器脚本。 */
-export function runtimeRunnerPy(): string {
-  return join(runtimeDir(), 'wsl', 'eagent-run.py')
-}
-
-/** 打包随附的托管发行版镜像 tar.gz 路径。 */
-export function runtimeRootfs(): string {
-  return join(runtimeDir(), 'wsl', 'eagent-rootfs.tar.gz')
-}
-
-/** 打包随附的托管发行版镜像 sha256 伴生文件路径。 */
-export function runtimeRootfsSha256(): string {
-  return join(runtimeDir(), 'wsl', 'eagent-rootfs.tar.gz.sha256')
 }

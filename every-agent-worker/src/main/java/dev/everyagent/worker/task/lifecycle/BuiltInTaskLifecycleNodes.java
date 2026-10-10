@@ -1,0 +1,97 @@
+package dev.everyagent.worker.task.lifecycle;
+
+import dev.everyagent.worker.hub.HubPool;
+import dev.everyagent.worker.agent.AgentLedger;
+import dev.everyagent.worker.modules.WorkspaceActivityTracker;
+import dev.everyagent.worker.plugin.registry.FileReferenceHandlerRegistry;
+import dev.everyagent.worker.plugin.registry.TaskLifecycleRegistry;
+import dev.everyagent.worker.ship.StreamSourceRegistry;
+import dev.everyagent.worker.interaction.InteractionServiceImpl;
+import dev.everyagent.worker.task.TaskStore;
+import dev.everyagent.worker.tools.PermissionGate;
+import jakarta.annotation.PostConstruct;
+import org.springframework.stereotype.Component;
+
+/**
+ * 内置任务生命周期节点装配：Spring 启动时实例化全部节点并注册到 TaskLifecycleRegistry。
+ * 节点顺序由各自的 order() 决定，注册顺序仅影响同 order 的稳定排序。
+ * <p>收敛后基线（§11）：
+ * 下行: idempotency.check(10) → workspace.resolve(20) → taskid.generate(30)
+ *   → queue.admission(40) → taskentry.create(50) → rerun.restore(55)
+ *   → response.ack(70) → thread.submit(80)
+ *   → persistence.track(100) → task.wires(200) → model.switch.trace(310)
+ *   → main.agent(390) → status.down(840)
+ * 轮次循环段(临界段内侧,每轮重入;任务级收口节点全部在循环外侧只执行一次):
+ *   queue.loop(870,task-input-queue 插件) 包裹 [ file.reference.process(875)
+ *   → edit.resend(877,task-edit-resend 插件) → consume.input(880) → 内核 runner.run 一次 ]
+ * 上行(整轮任务一次): spawned.await(950) → cascade.stop(900) → ledger.persist(860)
+ *   → [临界段: status(840) → concurrency.release(800) → log.flush(750)
+ *      → status.persist(650) → disk.index(550)
+ *      → persistence.untrack(500) → gate.evict(450) → registry.remove(420)]
+ *   → workspace.activity(350)
+ */
+@Component
+public class BuiltInTaskLifecycleNodes {
+
+    private final TaskLifecycleRegistry registry;
+    private final TaskStore store;
+    private final HubPool pool;
+    private final StreamSourceRegistry streamSources;
+    private final PermissionGate gate;
+    private final InteractionServiceImpl asks;
+    private final WorkspaceActivityTracker activityTracker;
+    private final FileReferenceHandlerRegistry fileReferenceHandlerRegistry;
+    private final AgentLedger agentLedger;
+
+    public BuiltInTaskLifecycleNodes(
+            TaskLifecycleRegistry registry,
+            TaskStore store,
+            HubPool pool,
+            StreamSourceRegistry streamSources,
+            PermissionGate gate,
+            InteractionServiceImpl asks,
+            WorkspaceActivityTracker activityTracker,
+            FileReferenceHandlerRegistry fileReferenceHandlerRegistry,
+            AgentLedger agentLedger) {
+        this.registry = registry;
+        this.store = store;
+        this.pool = pool;
+        this.streamSources = streamSources;
+        this.gate = gate;
+        this.asks = asks;
+        this.activityTracker = activityTracker;
+        this.fileReferenceHandlerRegistry = fileReferenceHandlerRegistry;
+        this.agentLedger = agentLedger;
+    }
+
+    @PostConstruct
+    void registerAll() {
+        // 下行节点（order 升序）
+        registry.register(new RerunRestoreNode(), "worker");
+        registry.register(new PersistenceTrackNode(store, streamSources), "worker");
+        // agent 台账生命周期节点（收编自 subagent 插件）
+        registry.register(new AgentLedgerTrackNode(agentLedger), "worker");  // order=150
+        registry.register(new TaskWiresNode(pool), "worker");
+        registry.register(new ModelSwitchTraceNode(), "worker");
+        registry.register(new MainAgentNode(), "worker");
+        // 轮次循环段（临界段内侧、每轮重入：queue.loop=870 插件节点在此之后切入）
+        registry.register(new FileReferenceProcessNode(fileReferenceHandlerRegistry), "worker");  // order=875
+        registry.register(new ConsumeInputNode(), "worker");  // order=880
+        // 成对节点（下行在段边界外、上行在临界段内）
+        registry.register(new StatusNode(pool), "worker");       // order=840
+        // 上行节点（段外，按 order 从高到低注册，仅影响同 order 的稳定排序兜底）
+        registry.register(new AgentLedgerPersistNode(agentLedger), "worker");  // order=860
+        registry.register(new CascadeStopNode(asks), "worker");
+        // 临界段内纯上行节点（UpstreamNode，order ∈ [420,850]）
+        registry.register(new ConcurrencyReleaseNode(), "worker");
+        registry.register(new LogFlushNode(store), "worker");
+        registry.register(new StatusPersistNode(store), "worker");
+        registry.register(new DiskIndexNode(store), "worker");
+        registry.register(new PersistenceUntrackNode(store, streamSources), "worker");
+        registry.register(new GateEvictNode(gate), "worker");
+        registry.register(new RegistryRemoveNode(), "worker");
+        // 段外尾部
+        registry.register(new AgentLedgerUntrackNode(agentLedger), "worker");  // order=340
+        registry.register(new WorkspaceActivityNode(activityTracker), "worker");
+    }
+}

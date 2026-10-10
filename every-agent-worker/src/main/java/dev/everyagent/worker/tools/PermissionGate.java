@@ -1,8 +1,9 @@
 package dev.everyagent.worker.tools;
 
+import dev.everyagent.plugin.api.execution.ExecContext;
+import dev.everyagent.plugin.api.permission.AuthorizationHandler.AuthorizationRequest;
 import dev.everyagent.worker.modules.WorkspaceManager;
 import dev.everyagent.worker.modules.WorkspaceManager.Root;
-import dev.everyagent.worker.task.TaskEntry;
 import dev.everyagent.worker.tools.permission.AuthorizeCheck;
 import dev.everyagent.worker.tools.permission.CommandCheck;
 import dev.everyagent.worker.tools.permission.ExternalRootAllowCheck;
@@ -10,7 +11,7 @@ import dev.everyagent.worker.tools.permission.GrantRegistry;
 import dev.everyagent.worker.tools.permission.MissingPathCheck;
 import dev.everyagent.worker.tools.permission.OverBroadRootCheck;
 import dev.everyagent.worker.tools.permission.PathSupport;
-import dev.everyagent.worker.tools.permission.PermissionChain;
+import dev.everyagent.worker.tools.permission.PermissionChainImpl;
 import dev.everyagent.worker.tools.permission.PermissionContext;
 import dev.everyagent.worker.tools.permission.PermissionDecision;
 import dev.everyagent.worker.tools.permission.PrivilegeCheck;
@@ -20,6 +21,7 @@ import dev.everyagent.worker.tools.permission.WorkspaceAllowCheck;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 
@@ -47,7 +49,11 @@ import java.util.List;
  * skills 目录只读内容经 {@link SkillsReadAllowCheck} 直接放行(其余操作仍走授权决议链);
  * 工作区外部授权根(用户经 @ 弹窗显式选择,§7.17)经 {@link ExternalRootAllowCheck}
  * 放行环直接放行(完全读写,不再弹窗)。
- * 主/子 agent 按 taskId 共享授权。
+ * 主/子 agent 按 subjectId(今天=taskId)共享授权。
+ *
+ * <p>域中性(S3):入口签名收 {@link ExecContext}(任务或未来工作流),不再接触
+ * worker {@code TaskEntry};授权请求经 {@link AuthorizationRequest} 透传给
+ * {@link GrantRegistry}。
  */
 @Component
 public class PermissionGate {
@@ -60,9 +66,9 @@ public class PermissionGate {
     private final WorkspaceManager workspaces;
     private final GrantRegistry grants;
 
-    private final PermissionChain pathChain;
-    private final PermissionChain cmdChain;
-    private final PermissionChain privChain;
+    private final PermissionChainImpl pathChain;
+    private final PermissionChainImpl cmdChain;
+    private final PermissionChainImpl privChain;
 
     public PermissionGate(WorkspaceManager workspaces, GrantRegistry grants,
             WorkspaceAllowCheck workspaceAllow, MissingPathCheck missing,
@@ -72,10 +78,10 @@ public class PermissionGate {
             CommandCheck commandCheck, PrivilegeCheck privilegeCheck) {
         this.workspaces = workspaces;
         this.grants = grants;
-        this.pathChain = new PermissionChain(
+        this.pathChain = new PermissionChainImpl(
                 List.of(workspaceAllow, missing, skillsRead, externalRoots, overBroad, authorize));
-        this.cmdChain = new PermissionChain(List.of(commandCheck));
-        this.privChain = new PermissionChain(List.of(privilegeCheck));
+        this.cmdChain = new PermissionChainImpl(List.of(commandCheck));
+        this.privChain = new PermissionChainImpl(List.of(privilegeCheck));
     }
 
     // ---- 判定入口 ----
@@ -85,23 +91,40 @@ public class PermissionGate {
      * (含系统目录 / 程序目录 / skills,均已放开)→ 走授权决议链(弹窗或 AI 审议),
      * 拒绝/超时抛 {@link PermissionDeniedException}。过度宽泛授权根(盘根/工作区祖先)
      * 静默拒收交沙箱兜底。
+     *
+     * <p><b>授权单元 = 目标路径本身</b>(§7.8):已存在文件不再提升到父目录,故一次
+     * 「新建/覆写单个文件」的授权不会静默扩大到该目录下其它文件(同目录兄弟文件 =
+     * 另一个单元 = 另一次授权;同一路径重复访问仍共用同一把 key)。链节点判定与沙箱可达根
+     * 仍按「最深已存在目录」(授权判定始终在 gate 逐次执行,key 精确匹配,可达根只是路径
+     * 解析边界、不构成授权——同时保住「破坏性操作不得作用于授权根本身」等既有语义)。
      */
-    public void requirePath(TaskEntry t, String agentId, String rel, Op op) throws IOException {
-        Root ws = workspaces.resolve(t.workspaceRoot);
+    public void requirePath(ExecContext t, String agentId, String rel, Op op) throws IOException {
+        Root ws = workspaces.resolve(t.workspaceRoot());
         Path norm = ws.path().resolve(rel).normalize();
         Path anchor = PathSupport.deepestExisting(norm);
         if (anchor == null) {
             return; // 连盘符根都不存在,交给 Sandbox/IO 层报错
         }
-        anchor = PathSupport.grantRootOf(anchor);
-        Path real = anchor.toRealPath();
-        Path lexical = anchor.normalize();
+        Path unit = PathSupport.grantUnitOf(norm, anchor); // 授权单元(判定与文案同源)
+        Path rootAnchor = PathSupport.grantRootOf(anchor); // 链节点判定/沙箱可达根:最深已存在目录
+        Path real = rootAnchor.toRealPath();
+        Path lexical = rootAnchor.normalize();
         List<Path> roots = lexical.equals(real) ? List.of(real) : List.of(real, lexical);
+        // 下发给沙箱的范围(§7.8 P5 不放大):授权单元确实存在时可按请求粒度落地
+        // (目录 → 目录;已存在文件 → 单文件);待建目标无法在不放大到父目录的前提下
+        // 落地创建权限,故不下发(该路径仍可经 file 工具通道访问)。
+        List<Path> sandboxRoots = List.of();
+        if (Files.exists(unit) && !OverBroadRootCheck.isOverBroadRoot(unit, ws.path(), ws.realPath())) {
+            sandboxRoots = List.of(unit);
+        }
+        String grantKey = PathSupport.pathKey(unit, op);
         String prompt = "AI 请求" + PathSupport.opDesc(op) + "工作区外路径: " + norm + "\n"
-                + "授权范围: " + real + " 及其子目录内的" + PathSupport.opDesc(op) + "操作。";
+                + "授权范围: " + unit + PathSupport.scopeNote(norm, anchor)
+                + "同一路径重复访问不再询问。";
         PermissionContext ctx = PermissionContext.builder()
                 .kind(PermissionContext.Kind.PATH)
-                .task(t)
+                .workspaceRoot(t.workspaceRoot())
+                .authReq(new AuthorizationRequest(t, agentId, grantKey, prompt))
                 .agentId(agentId)
                 .op(op)
                 .rel(rel)
@@ -109,48 +132,52 @@ public class PermissionGate {
                 .realPath(real)
                 .wsLex(ws.path())
                 .wsReal(ws.realPath())
-                .grantKey(PathSupport.pathKey(real, op))
+                .grantKey(grantKey)
                 .prompt(prompt)
                 .rootsOnGrant(roots)
                 .execRootsOnGrant(List.of())
+                .sandboxRootsOnGrant(sandboxRoots)
                 .build();
-        handle(pathChain.evaluate(ctx));
+        handle(pathChain.proceed(ctx));
     }
 
     /**
      * 命令执行门禁(bash / powershell 在 spawn 之前):危险动词仅在工作区外引用时才需授权;
      * 越界已存在路径(含系统目录)逐个授权;拒绝/超时抛 {@link PermissionDeniedException}。
      */
-    public void requireCommand(TaskEntry t, String agentId, String command) throws IOException {
+    public void requireCommand(ExecContext t, String agentId, String command) throws IOException {
         PermissionContext ctx = PermissionContext.builder()
                 .kind(PermissionContext.Kind.COMMAND)
-                .task(t)
+                .workspaceRoot(t.workspaceRoot())
+                .authReq(new AuthorizationRequest(t, agentId, null, null))
                 .agentId(agentId)
                 .command(command)
                 .build();
-        handle(cmdChain.evaluate(ctx));
+        handle(cmdChain.proceed(ctx));
     }
 
     /** 命令含提权动词时授权(默认拒、按命令弹窗;worker 全局放行时不走到这里)。 */
-    public void requirePrivilege(TaskEntry t, String agentId, String command) {
+    public void requirePrivilege(ExecContext t, String agentId, String command) {
         PermissionContext ctx = PermissionContext.builder()
                 .kind(PermissionContext.Kind.PRIVILEGE)
-                .task(t)
+                .workspaceRoot(t.workspaceRoot())
+                .authReq(new AuthorizationRequest(t, agentId, null, null))
                 .agentId(agentId)
                 .command(command)
                 .build();
-        handle(privChain.evaluate(ctx));
+        handle(privChain.proceed(ctx));
     }
 
     /** seccomp 内核级提权(setuid exec):与 {@link #requirePrivilege} 同一授权链。 */
-    public void requirePrivilegeExec(TaskEntry t, String agentId, String execPath) {
+    public void requirePrivilegeExec(ExecContext t, String agentId, String execPath) {
         PermissionContext ctx = PermissionContext.builder()
                 .kind(PermissionContext.Kind.PRIVILEGE_EXEC)
-                .task(t)
+                .workspaceRoot(t.workspaceRoot())
+                .authReq(new AuthorizationRequest(t, agentId, null, null))
                 .agentId(agentId)
                 .execPath(execPath)
                 .build();
-        handle(privChain.evaluate(ctx));
+        handle(privChain.proceed(ctx));
     }
 
     /** 命令是否含提权动词(词边界;g 供给 CommandExecutor 决定是否走 requirePrivilege)。 */
@@ -165,29 +192,29 @@ public class PermissionGate {
 
     // ---- 授权状态委托(GrantRegistry) ----
 
-    /** 新一条用户输入到达:本轮(run)授权即失效(任务级不受影响)。 */
-    public void beginRun(String taskId) {
-        grants.beginRun(taskId);
+    /** 新一条用户输入到达:本轮(run)授权即失效(任务级不受影响)。subjectId=执行主体 ID(今天=taskId)。 */
+    public void beginRun(String subjectId) {
+        grants.beginRun(subjectId);
     }
 
-    /** 任务终态:内存驱逐(任务级授权已在磁盘,再运行时 lazy 重载)。 */
-    public void untrack(String taskId) {
-        grants.untrack(taskId);
+    /** 主体终态:内存驱逐(任务级授权已在磁盘,再运行时 lazy 重载)。subjectId=执行主体 ID(今天=taskId)。 */
+    public void untrack(String subjectId) {
+        grants.untrack(subjectId);
     }
 
-    /** 已授权外部根(realpath + 词法形态),供 Sandbox 附加放行。 */
-    public List<Path> extraRoots(String taskId) {
-        return grants.extraRoots(taskId);
+    /** 已授权外部根(realpath + 词法形态),供 Sandbox 附加放行。subjectId=执行主体 ID(今天=taskId)。 */
+    public List<Path> extraRoots(String subjectId) {
+        return grants.extraRoots(subjectId);
     }
 
     /** 已授权的命令 EXEC 根(realpath),供命令执行器做 Windows Low 完整性标注(§13.6)。 */
-    public List<Path> execRoots(String taskId) {
-        return grants.execRoots(taskId);
+    public List<Path> execRoots(String subjectId) {
+        return grants.execRoots(subjectId);
     }
 
     /** EXEC 根安全过滤视图(单点谓词见 {@link OverBroadRootCheck#isOverBroadRoot})。 */
-    public List<Path> execRootsSandboxed(TaskEntry t) {
-        return grants.execRootsSandboxed(t);
+    public List<Path> execRootsSandboxed(String workspaceRoot, String subjectId) {
+        return grants.execRootsSandboxed(workspaceRoot, subjectId);
     }
 
     // ---- 决策收口 ----

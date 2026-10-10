@@ -1,0 +1,10 @@
+{
+  "id": "ai-review",
+  "name": "AI 审议",
+  "version": "0.1.0",
+  "description": "AI 审议插件:授权弹窗改 AI 安全审议",
+  "author": "everyagent",
+  "main": "dev.everyagent.plugin.aireview.AiReviewPlugin",
+  "webMain": "web/index.ts",
+  "enabled": true
+}

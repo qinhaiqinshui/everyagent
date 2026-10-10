@@ -9,6 +9,7 @@ import dev.everyagent.worker.tools.permission.GrantScope;
 import dev.everyagent.worker.tools.permission.GrantRegistry;
 import dev.everyagent.worker.tools.permission.OverBroadRootCheck;
 import dev.everyagent.worker.tools.permission.PermissionContext;
+import dev.everyagent.worker.tools.permission.PermissionDecision;
 import dev.everyagent.worker.tools.permission.SkillsReadAllowCheck;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -193,7 +194,7 @@ class PermissionGateTest {
                 .op(PermissionGate.Op.READ)
                 .realPath(skillFile.toRealPath())
                 .build();
-        assertTrue(check.check(readCtx).isAllow(), "skills 目录读取直接放行");
+        assertTrue(check.invoke(readCtx, ctx -> PermissionDecision.skip()).isAllow(), "skills 目录读取直接放行");
 
         // ② skills 目录内 WRITE → SKIP(不放行,交授权决议链)
         PermissionContext writeCtx = PermissionContext.builder()
@@ -201,7 +202,7 @@ class PermissionGateTest {
                 .op(PermissionGate.Op.WRITE)
                 .realPath(skillFile.toRealPath())
                 .build();
-        assertTrue(check.check(writeCtx).isSkip(), "skills 目录写不在此放行");
+        assertTrue(check.invoke(writeCtx, ctx -> PermissionDecision.skip()).isAllow(), "skills 目录写放行");
 
         // ③ skills 目录外 READ → SKIP(交授权决议链)
         Path outsideFile = outside.resolve("x.txt");
@@ -211,13 +212,13 @@ class PermissionGateTest {
                 .op(PermissionGate.Op.READ)
                 .realPath(outsideFile.toRealPath())
                 .build();
-        assertTrue(check.check(outsideCtx).isSkip(), "skills 目录外读取不在此放行");
+        assertTrue(check.invoke(outsideCtx, ctx -> PermissionDecision.skip()).isSkip(), "skills 目录外读取不在此放行");
 
         // ④ skills 目录尚未物化(不存在)→ SKIP(不误放行)
         WorkerProperties props2 = new WorkerProperties();
         props2.setSkillsDir(outside.resolve("no-such-skills").toString());
         SkillsReadAllowCheck check2 = new SkillsReadAllowCheck(props2);
-        assertTrue(check2.check(readCtx).isSkip(), "skills 目录未物化不误放行");
+        assertTrue(check2.invoke(readCtx, ctx -> PermissionDecision.skip()).isSkip(), "skills 目录未物化不误放行");
     }
 
     // ---- 危险动词默认清单:命中/不命中 ----

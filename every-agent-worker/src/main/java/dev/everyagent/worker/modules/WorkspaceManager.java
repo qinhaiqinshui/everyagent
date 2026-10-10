@@ -1,18 +1,19 @@
 package dev.everyagent.worker.modules;
 
 import dev.everyagent.contract.json.Json;
-import dev.everyagent.worker.AtomicFiles;
+import dev.everyagent.plugin.api.spi.SandboxBackend.Access;
+import dev.everyagent.plugin.api.spi.SandboxBackend.PathGrant;
+import dev.everyagent.plugin.api.util.AtomicFiles;
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.hub.HubPool;
-import dev.everyagent.worker.os.wsl.WslUmounter;
+import dev.everyagent.worker.os.SandboxPathRegistry;
 import dev.everyagent.worker.proto.RpcMethods;
-import dev.everyagent.worker.proto.ShortIds;
+import dev.everyagent.plugin.api.proto.ShortIds;
 import dev.everyagent.worker.tools.permission.OverBroadRootCheck;
-import dev.everyagent.worker.rpc.BadParamsException;
+import dev.everyagent.plugin.api.exception.BadParamsException;
 import dev.everyagent.worker.rpc.RpcDispatcher;
 import dev.everyagent.worker.rpc.RpcContext;
 import dev.everyagent.worker.rpc.SandboxViolationException;
-import dev.everyagent.worker.task.TaskManager;
 import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -49,7 +50,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * (任务/fs/git 无法在其上运行,避免沙箱挂载失败或新建空目录掩盖数据丢失)。
  */
 @Component
-public class WorkspaceManager {
+public class WorkspaceManager implements dev.everyagent.plugin.api.spi.WorkspaceManager {
 
     private static final Logger log = LoggerFactory.getLogger(WorkspaceManager.class);
 
@@ -82,15 +83,15 @@ public class WorkspaceManager {
     private final RpcDispatcher dispatcher;
     private final HubPool pool;
     /**
-     * TaskManager 依赖本类(TaskManager 构造器注入 WorkspaceManager),若本类构造器直接注入
-     * TaskManager 会构成构造器循环。用 ObjectProvider 懒解析,仅 workspaces.remove 级联删除时取用。
+     * TaskManager 传递依赖本类(经 TaskBootstrap 构造器注入 WorkspaceManager),若本类构造器
+     * 直接注入 TaskManager 会构成构造器循环。用 ObjectProvider 懒解析,仅 workspaces.remove
+     * 级联删除时取用。
      */
-    private final ObjectProvider<TaskManager> taskManagers;
+    private final ObjectProvider<WorkspaceCascadePort> cascadePorts;
     /**
-     * 外部授权根级联 umount 收口(独立组件,不注入 OsSandbox——后者构造注入了本类,
-     * 反向依赖会构成构造循环);仅删除工作区时 best-effort 调用,失败不阻塞删除流程。
+     * 路径翻译中间人,工作区删除时通知沙箱清理挂载 + 清理映射表。
      */
-    private final WslUmounter umounter;
+    private final SandboxPathRegistry pathRegistry;
 
     private Path systemDir;
     private Path defaultRoot;
@@ -106,12 +107,12 @@ public class WorkspaceManager {
     private final Set<String> missing = ConcurrentHashMap.newKeySet();
 
     public WorkspaceManager(WorkerProperties props, RpcDispatcher dispatcher, HubPool pool,
-            ObjectProvider<TaskManager> taskManagers, WslUmounter umounter) {
+            ObjectProvider<WorkspaceCascadePort> cascadePorts, SandboxPathRegistry pathRegistry) {
         this.props = props;
         this.dispatcher = dispatcher;
         this.pool = pool;
-        this.taskManagers = taskManagers;
-        this.umounter = umounter;
+        this.cascadePorts = cascadePorts;
+        this.pathRegistry = pathRegistry;
         dispatcher.register(RpcMethods.WORKSPACES_LIST, this::rpcList);
         dispatcher.register(RpcMethods.WORKSPACES_ADD, this::rpcAdd);
         dispatcher.register(RpcMethods.WORKSPACES_ADD_EXTERNAL_ROOT, this::rpcAddExternalRoot);
@@ -179,6 +180,12 @@ public class WorkspaceManager {
         return root;
     }
 
+    /** plugin-api {@link dev.everyagent.plugin.api.spi.WorkspaceManager#sandboxFor}:解析工作区根并绑定路径沙箱。 */
+    @Override
+    public dev.everyagent.plugin.api.spi.WorkspaceSandbox sandboxFor(String raw) throws IOException {
+        return new Sandbox(resolve(raw));
+    }
+
     /** 注册表快照(按注册时间升序)。 */
     public List<Registered> list() {
         List<Registered> out = new ArrayList<>(registry.values());
@@ -211,7 +218,7 @@ public class WorkspaceManager {
         } catch (IOException e) {
             log.warn("工作区最后活动时间落盘失败(不影响收口): {}", key, e);
         }
-        broadcastRegistry();
+        onRegistryChanged();
     }
 
     public Path systemDir() {
@@ -341,6 +348,7 @@ public class WorkspaceManager {
      * 不触发级联 umount——任务数据保留在系统目录,目录复活后仍可重新注册/纠正;
      * umount 由 runner 幂等 _ensure_mount 兜底,无需主动卸载已失效挂载点。
      */
+    @Override
     public synchronized List<Path> pruneStaleAndListMountRoots() {
         boolean changed = false;
 
@@ -387,7 +395,7 @@ public class WorkspaceManager {
             } catch (IOException e) {
                 log.warn("清理失效挂载源后注册表落盘失败: {}", e.getMessage());
             }
-            broadcastRegistry();
+            onRegistryChanged();
         }
 
         // ③ 返回存活列表(注册工作区根 + 外部授权根,Path 去重)
@@ -444,11 +452,11 @@ public class WorkspaceManager {
         missing.remove(key);
         cache.remove(key);
         persistRegistry();
-        broadcastRegistry();
+        onRegistryChanged();
         // 级联删除该工作区下的任务数据(任务落盘 workspaces/<wsId>/tasks/<taskId>/,与用户目录无关)。
-        TaskManager taskManager = taskManagers.getIfAvailable();
-        if (taskManager != null) {
-            taskManager.deleteByWorkspaceId(removed.id());
+        WorkspaceCascadePort port = cascadePorts.getIfAvailable();
+        if (port != null) {
+            port.deleteByWorkspaceId(removed.id());
         }
         // 任务目录删完后,幂等清理工作区任务根目录剩余(空 tasks/ 与 workspaces/<wsId>/ 本身)。
         deleteWorkspaceDir(removed.id());
@@ -487,10 +495,10 @@ public class WorkspaceManager {
         missing.remove(key);
         cache.remove(key);
         persistRegistry();
-        broadcastRegistry();
-        TaskManager taskManager = taskManagers.getIfAvailable();
-        if (taskManager != null) {
-            taskManager.deleteByWorkspaceId(removed.id());
+        onRegistryChanged();
+        WorkspaceCascadePort port = cascadePorts.getIfAvailable();
+        if (port != null) {
+            port.deleteByWorkspaceId(removed.id());
         }
         // 任务目录删完后,幂等清理工作区任务根目录剩余(空 tasks/ 与 workspaces/<wsId>/ 本身)。
         deleteWorkspaceDir(removed.id());
@@ -522,10 +530,10 @@ public class WorkspaceManager {
             defaultRoot = newRoot.path();
         }
         persistRegistry();
-        broadcastRegistry();
-        TaskManager taskManager = taskManagers.getIfAvailable();
-        if (taskManager != null) {
-            taskManager.redirectWorkspace(key, newKey);
+        onRegistryChanged();
+        WorkspaceCascadePort port = cascadePorts.getIfAvailable();
+        if (port != null) {
+            port.redirectWorkspace(key, newKey);
         }
         ctx.ok(snapshot());
     }
@@ -535,7 +543,7 @@ public class WorkspaceManager {
     /**
      * 删除工作区后级联 umount 其「独有」外部授权根:收集其余在册工作区仍引用的根
      * (realpath 对比;后代也算引用——候选根之下还有别人的挂载点时一并保留,防孤儿
-     * 挂载),无人引用的交 {@link WslUmounter} best-effort 卸载(wsl 系后端才实际
+     * 挂载),无人引用的交 {@link SandboxPathRegistry} best-effort 清理(沙箱后端才实际
      * 执行)。失败仅告警,绝不阻塞删除流程。
      */
     private void unmountExclusiveExternalRoots(Registered removed) {
@@ -553,7 +561,7 @@ public class WorkspaceManager {
             boolean shared = stillUsed.stream().anyMatch(p -> covers(root, p));
             if (!shared) {
                 try {
-                    umounter.umountQuietly(root);
+                    pathRegistry.onWorkspaceRemoved(root);
                 } catch (RuntimeException e) {
                     log.warn("外部授权根级联卸载异常(不影响工作区删除): {} - {}", root, e.getMessage());
                 }
@@ -597,7 +605,7 @@ public class WorkspaceManager {
         registry.put(key, new Registered(ShortIds.next("w"), key,
                 System.currentTimeMillis(), System.currentTimeMillis(), List.of()));
         persistRegistry();
-        broadcastRegistry(); // task.create 注册新工作区时,前端资源管理器即时感知
+        onRegistryChanged(); // task.create 注册新工作区时,前端资源管理器即时感知
     }
 
     /**
@@ -612,14 +620,14 @@ public class WorkspaceManager {
                 registry.put(key, new Registered(DEFAULT_WORKSPACE_ID, key,
                         existing.addedAt(), existing.lastActivityAt(), existing.externalRoots()));
                 persistRegistry();
-                broadcastRegistry();
+                onRegistryChanged();
             }
             return;
         }
         registry.put(key, new Registered(DEFAULT_WORKSPACE_ID, key,
                 System.currentTimeMillis(), System.currentTimeMillis(), List.of()));
         persistRegistry();
-        broadcastRegistry();
+        onRegistryChanged();
     }
 
     /**
@@ -677,12 +685,41 @@ public class WorkspaceManager {
         return Json.obj().put("defaultRoot", defaultRoot.toString()).set("workspaces", arr);
     }
 
-    /** 注册表变化广播(各连接的 evt 频道);全断时安静跳过,前端重连后经 list 校准。 */
-    private void broadcastRegistry() {
+    /**
+     * 注册表变化收口点（各结构变更路径的唯一出口）：
+     * ① 广播 {@code workspaces.changed} 给前端（全断时安静跳过，重连后经 list 校准）；
+     * ② 把「AI 可见根」意图覆盖式对齐进 {@link SandboxPathRegistry}（owner={@code workspaces}：
+     * 全部在册工作区根 + 各工作区外部授权根）。
+     *
+     * <p>②把「AI 可见根」集合覆盖式对齐进 {@link SandboxPathRegistry}（owner={@code workspaces}：
+     * 全部在册工作区根 + 各工作区外部授权根），由它按差量下发到生效沙箱后端；
+     * 集合未变则零下发，故本收口点被高频调用（含 task.run 注册新工作区、启动载入、失效清理）也无开销。
+     */
+    private void onRegistryChanged() {
+        syncSandboxRoots();
         try {
             pool.broadcastEvt("workspaces.changed", snapshot());
         } catch (RuntimeException e) {
             log.debug("workspaces.changed 广播失败(hub 未连接?): {}", e.getMessage());
+        }
+    }
+
+    /**
+     * 在册工作区根 + 各工作区外部授权根（READ_WRITE）覆盖式对齐进授权账本。
+     * 集合取自 {@link #list()}（已含 externalRoots），与既有集合相同则不下发。
+     */
+    private void syncSandboxRoots() {
+        List<PathGrant> grants = new ArrayList<>();
+        for (Registered r : list()) {
+            grants.add(new PathGrant(Path.of(r.root()), Access.READ_WRITE));
+            for (String raw : r.externalRoots()) {
+                grants.add(new PathGrant(Path.of(raw), Access.READ_WRITE));
+            }
+        }
+        try {
+            pathRegistry.sync(SandboxPathRegistry.OWNER_WORKSPACES, grants);
+        } catch (RuntimeException e) {
+            log.warn("沙箱授权根对齐失败(不影响注册表广播): {}", e.getMessage());
         }
     }
 
@@ -757,7 +794,6 @@ public class WorkspaceManager {
     /** 原子写注册表(临时文件 + ATOMIC_MOVE);条目带 id / lastActivityTs 字段。 */
     private void persistRegistry() throws IOException {
         Path f = props.resolveWorkspacesDir().resolve("workspaces.json");
-        Path tmp = f.resolveSibling("workspaces.json.tmp");
         List<Registered> sorted = list();
         ArrayNode arr = Json.arr();
         for (Registered r : sorted) {
@@ -775,7 +811,6 @@ public class WorkspaceManager {
             }
             arr.add(o);
         }
-        Files.writeString(tmp, Json.write(arr));
-        AtomicFiles.replace(tmp, f); // 原子替换(失败已清理 tmp 后抛出,不残留垃圾)
+        AtomicFiles.writeText(f, Json.write(arr)); // 唯一名 tmp + 原子替换(失败已清理,不残留垃圾)
     }
 }

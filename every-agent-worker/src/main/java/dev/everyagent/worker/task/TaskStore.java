@@ -1,13 +1,18 @@
 package dev.everyagent.worker.task;
 
 import dev.everyagent.contract.json.Json;
-import dev.everyagent.worker.AtomicFiles;
+import dev.everyagent.plugin.api.event.EventRecord;
+import dev.everyagent.plugin.api.task.StoredTaskInfo;
+import dev.everyagent.plugin.api.task.TaskStoreService;
+import dev.everyagent.plugin.api.task.UserInput;
+import dev.everyagent.plugin.api.util.AtomicFiles;
 import dev.everyagent.worker.config.WorkerProperties;
-import dev.everyagent.worker.proto.Events;
+import dev.everyagent.plugin.api.event.Events;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.ai.chat.messages.Message;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.node.ArrayNode;
@@ -26,12 +31,10 @@ import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
@@ -51,10 +54,11 @@ import java.util.function.Supplier;
  * workspaces/&lt;workspaceId&gt;/tasks/&lt;taskId&gt;/，不做旧布局迁移。
  */
 @Component
-public class TaskStore {
+public class TaskStore implements TaskStoreService {
 
     /** 磁盘上的一个任务目录(scan/恢复/索引的单位)。 */
-    public record StoredTask(String taskId, Path dir, ObjectNode summary, String workspaceId) {
+    public record StoredTask(String taskId, Path dir, ObjectNode summary, String workspaceId)
+            implements StoredTaskInfo {
         /** 兼容旧 3 参构造(无 workspaceId;从 summary.workspaceId 提取,缺失为 null;新代码请用 4 参)。 */
         public StoredTask(String taskId, Path dir, ObjectNode summary) {
             this(taskId, dir, summary,
@@ -65,9 +69,6 @@ public class TaskStore {
     /** flush(taskId) 最长等待(超时放行,meta 仍非终态 → 重启自愈)。 */
     private static final long FLUSH_TIMEOUT_MS = 30_000;
     private static final int DRAIN_BATCH = 1000;
-    /** 瞬态事件(只发前端不落盘;占 seq → 磁盘 seq 有洞;主/子同名,按名跳过即可)。 */
-    private static final Set<String> PERSIST_SKIP = Set.of(
-            Events.DELTA, Events.THINKING);
     /** 事件帧 ext 标记:task.trace 的瞬态实例(如每秒倒计时的重试进度)由该标记识别,不落盘。 */
     private static final String EXT_PERSIST = "persist";
     /** agentId 缺失时的兜底文件名(旧运行时数据防御;新数据恒非空)。 */
@@ -130,18 +131,32 @@ public class TaskStore {
 
     // ---- 写路径 ----
 
+    /**
+     * 预登记 taskId → workspaceId 映射(不建目录、不写 meta)。
+     * 在 TaskEntryCreateNode(order=50)创建 TaskEntry 后立即调用,
+     * 使 RPC 应答(ResponseAckNode order=70)发出后、track(order=100,VT 异步)执行前,
+     * {@link #dirOf(String)} 即可定位任务目录(供 slash.taskTokens.apply 等竞态 RPC 使用)。
+     * track() 后续会用 putIfAbsent 覆盖,语义幂等。
+     */
+    public void registerWorkspace(String taskId, String workspaceId) {
+        taskWorkspace.putIfAbsent(taskId, workspaceId);
+    }
+
     /** 开始落盘一个任务:建目录、写初始 meta、挂日志监听(writer 按 agent 懒开)。 */
     public synchronized void track(String taskId, String workspaceId, EventLog log,
             Supplier<ObjectNode> meta) throws IOException {
         if (tracked.containsKey(taskId)) {
+            TaskStore.log.debug("[store] track 跳过(已跟踪) task={} workspace={}", taskId, workspaceId);
             return;
         }
         Path dir = dirOf(taskId, workspaceId);
+        TaskStore.log.debug("[store] track 开始 task={} workspace={} dir={}", taskId, workspaceId, dir);
         Files.createDirectories(dir);
         writeMeta(dir, meta.get());
         Tracked t = new Tracked(taskId, log, meta, dir);
         tracked.put(taskId, t);
-        taskWorkspace.put(taskId, workspaceId);
+        taskWorkspace.putIfAbsent(taskId, workspaceId);
+        TaskStore.log.debug("[store] track 完成 task={} dir={} (目录已建,taskWorkspace 已登记)", taskId, dir);
         log.addListener(() -> wake.release());
         wake.release();
     }
@@ -202,7 +217,12 @@ public class TaskStore {
      * 丢弃 seq > target 的所有事件;不修改 target 处的 user.message 内容
      * (新内容由后续 consumeInput 写新的 user.message)。
      * 原子重写每个 jsonl 文件(整读→过滤→临时文件+ATOMIC_MOVE)。
-     * 截断 rounds.jsonl(保留 startSeq &lt; targetSeq 的轮次)、清理 file-changes/、agents.json。
+     * 截断 rounds.jsonl(保留 startSeq &lt; targetSeq 的轮次)。
+     *
+     * <p>只动事件 jsonl 与 rounds.jsonl,<b>不删任何插件数据文件</b>
+     * (file-changes/、agents.json 等):task 核心不知晓插件文件名;
+     * 截断后插件数据残留陈旧条目被接受(台账/轮详情展示陈旧数据,无正确性影响)。
+     * 开放项:后续增加截断事件通知(如 task.truncated 领域事件),插件自行决定清理。
      *
      * @return true 如果找到 target seq 处的 user.message 事件;false 表示未找到(调用方应报错)
      */
@@ -238,14 +258,12 @@ public class TaskStore {
                     kept.add(line); // 保留原行(seq < target)
                 }
             }
-            // 原子重写文件
-            Path tmp = f.resolveSibling(f.getFileName() + ".tmp");
+            // 原子重写文件(唯一名 tmp,避免并发写同一目标时踩踏同一 tmp)
             StringBuilder sb = new StringBuilder();
             for (String l : kept) {
                 sb.append(l).append('\n');
             }
-            Files.writeString(tmp, sb.toString(), StandardCharsets.UTF_8);
-            AtomicFiles.replace(tmp, f);
+            writeAtomically(f, sb.toString());
         }
         // 截断 rounds.jsonl:只保留 startSeq < targetSeq 的轮次(编辑点之前的轮次)。
         // 不能整个删除——那样会丢失编辑点之前的轮次,前端刷新后只显示新轮。
@@ -265,28 +283,17 @@ public class TaskStore {
                 log.warn("rounds 截断读取失败 {} {}", dir, e);
             }
             try {
-                Path tmp = rf.resolveSibling(rf.getFileName() + ".tmp");
                 StringBuilder sb = new StringBuilder();
                 for (String l : keptRounds) {
                     sb.append(l).append('\n');
                 }
-                Files.writeString(tmp, sb.toString(), StandardCharsets.UTF_8);
-                AtomicFiles.replace(tmp, rf);
+                writeAtomically(rf, sb.toString()); // 唯一名 tmp,避免并发写同一目标时踩踏
             } catch (IOException e) {
                 log.warn("rounds 截断写入失败 {} {}", dir, e);
             }
         }
-        // 清理 file-changes/ 目录
-        Path fc = dir.resolve("file-changes");
-        if (Files.isDirectory(fc)) {
-            try {
-                deleteRecursively(fc);
-            } catch (IOException e) {
-                log.warn("file-changes 目录清理失败 {}", fc, e);
-            }
-        }
-        // 清理 agents.json(将重新生成)
-        Files.deleteIfExists(dir.resolve("agents.json"));
+        // 插件数据文件(file-changes/、agents.json 等)不清理:截断只动事件空间
+        // (§8.5③)。残留陈旧条目被接受;开放项 = 后续 task.truncated 事件通知插件自清。
         return found;
     }
 
@@ -418,106 +425,12 @@ public class TaskStore {
         }
     }
 
-    /**
-     * 读 agents.json(子 agent 台账独立落盘,冷启动恢复供体;形状 {@code {"agents":[...]}})。
-     * 文件不存在/损坏/形状不符返回 null(损坏记 debug;null = 调用方回退旧格式 meta.agents)。
-     */
-    public List<ObjectNode> readAgents(Path dir) {
-        Path f = dir.resolve("agents.json");
-        if (!Files.isRegularFile(f)) {
-            return null;
-        }
-        try {
-            JsonNode agents = Json.parse(Files.readString(f)).path("agents");
-            if (!agents.isArray()) {
-                log.debug("agents.json 形状异常(无 agents 数组): {}", f);
-                return null;
-            }
-            List<ObjectNode> out = new ArrayList<>();
-            for (JsonNode a : agents) {
-                if (a.isObject()) {
-                    out.add((ObjectNode) a);
-                }
-            }
-            return out;
-        } catch (IOException | RuntimeException e) {
-            log.debug("agents.json 读取失败 {}", f, e);
-            return null;
-        }
+    @Override
+    public List<Message> loadConversation(Path dir, String mainAgentId) {
+        return ConversationLoader.load(this, dir, mainAgentId);
     }
 
-    /**
-     * 写 agents.json(临时文件 + 原子 move,同 writeMeta 惯例):子 agent 台账从 meta.json
-     * 拆出独立落盘,减轻 tasks.list 读 meta 的任务列表数据。目录解析与 updateMeta 同口径
-     * (优先 track 登记目录,否则 dirOf 映射/懒发现)。
-     * 空台账时删除已存在的 agents.json(避免遗留脏数据;无文件则 no-op,不写空数组占位)。
-     * 失败仅 warn 不抛(台账非真相源,下一轮 persist/30s 定时会重写)。
-     */
-    public void writeAgents(String taskId, Collection<ObjectNode> agents) {
-        try {
-            Tracked t = tracked.get(taskId);
-            Path dir = t != null ? t.dir : dirOf(taskId);
-            Path f = dir.resolve("agents.json");
-            if (agents == null || agents.isEmpty()) {
-                Files.deleteIfExists(f);
-                return;
-            }
-            ObjectNode root = Json.obj();
-            ArrayNode arr = Json.arr();
-            agents.forEach(arr::add);
-            root.set("agents", arr);
-            Path tmp = dir.resolve("agents.json.tmp");
-            Files.writeString(tmp, Json.write(root));
-            AtomicFiles.replace(tmp, f); // 原子替换(失败已清理 tmp 后抛出,不残留垃圾)
-        } catch (IOException | RuntimeException e) {
-            log.warn("agents.json 写入失败 task={}", taskId, e);
-        }
-    }
-
-    /**
-     * 从磁盘读 seq &gt; afterSeq 的事件(wire 形,与 task.sync 批次一致):
-     * 全部 *.jsonl 按 seq 归并(瞬态占 seq → 文件内有洞;agent 数 ≤ 个位数,线性归并够用)。
-     * 旧 events.jsonl 天然命中同一 glob(旧行无 agentId → 主线程)。撕行静默跳过。
-     */
-    public List<ObjectNode> readEvents(Path dir, String mainAgentId, long afterSeq, int max)
-            throws IOException {
-        record Entry(long seq, ObjectNode wire) {
-        }
-        List<Entry> all = new ArrayList<>();
-        for (Path f : agentFiles(dir)) {
-            try (BufferedReader br = Files.newBufferedReader(f, StandardCharsets.UTF_8)) {
-                String line;
-                while ((line = br.readLine()) != null) {
-                    if (line.length() < 30) {
-                        continue; // 快速跳过明显残行
-                    }
-                    long seq = seqOf(line);
-                    if (seq <= 0) {
-                        continue; // 无 seq 前缀:不整行解析直接弃(撕行/异构行)
-                    }
-                    if (seq <= afterSeq) {
-                        continue;
-                    }
-                    EventRecord r = parseLine(line);
-                    if (r == null) {
-                        continue; // 撕行
-                    }
-                    all.add(new Entry(r.seq(), TaskEvents.wireEvent(r, mainAgentId)));
-                }
-            }
-        }
-        all.sort(Comparator.comparingLong(Entry::seq));
-        List<ObjectNode> out = new ArrayList<>(Math.min(all.size(), max));
-        for (Entry e : all) {
-            if (out.size() >= max) {
-                break;
-            }
-            out.add(e.wire);
-        }
-        return out;
-    }
-
-    // ---- 高效读路径(反向随机访问分块扫描;只加能力,不动既有 readEvents/推流链路)----
+    
 
     /**
      * 增量读:seq &gt; afterSeq 的持久事件(升序,最多 limit 条)。每个 *.jsonl 从文件尾反向,
@@ -803,10 +716,12 @@ public class TaskStore {
             workspaceId = discoverWorkspace(taskId);
             if (workspaceId != null) {
                 taskWorkspace.put(taskId, workspaceId);
+                log.debug("[store] dirOf 懒发现命中 task={} workspace={}", taskId, workspaceId);
                 return dirOf(taskId, workspaceId);
             }
             throw new IllegalStateException(
-                    "任务未登记 workspaceId 且磁盘未发现对应目录,无法定位: " + taskId);
+                    "任务未登记 workspaceId 且磁盘未发现对应目录,无法定位: " + taskId
+                            + " (已扫描 workspaces 根: " + props.resolveWorkspacesDir() + ")");
         }
         return dirOf(taskId, workspaceId);
     }
@@ -847,7 +762,7 @@ public class TaskStore {
     }
 
     // ---- 轮次索引 rounds.jsonl(与 meta.json、<agentId>.jsonl 同级;seq 一律字符串防 JS 精度)----
-    // 每行一轮:{index,startSeq,endSeq,user,finalReply,durationMs,startedAt,subs:[{agentId,title,startSeq,endSeq}],userMessage?};
+    // 每行一轮:{index,startSeq,endSeq,user,finalReply,durationMs,startedAt,agentRanges:[{agentId,title,startSeq,endSeq}],userMessage?};
     // endSeq 为 "" 表示未闭合;
     // startedAt = 开轮落盘时刻(epoch 毫秒;旧行缺失=0 未知,闭合时不据此计耗时);
     // userMessage = 完整 user.message payload(懒加载骨架起点;旧行缺失不写);
@@ -927,9 +842,7 @@ public class TaskStore {
             if (!replaced) {
                 return false;
             }
-            Path tmp = dir.resolve("rounds.jsonl.tmp");
-            Files.writeString(tmp, sb.toString(), StandardCharsets.UTF_8);
-            AtomicFiles.replace(tmp, f); // 原子替换(失败已清理 tmp 后抛出,不残留垃圾)
+            writeAtomically(f, sb.toString()); // 原子替换(失败已清理 tmp 后抛出,不残留垃圾)
             return true;
         }
     }
@@ -970,44 +883,7 @@ public class TaskStore {
     }
 
     /**
-     * 写本轮文件变更全文:<任务目录>/file-changes/<roundId>.json(内容即 fullContent,UTF-8)。
-     * 失败只记日志不抛(与 rounds 写盘同风格),绝不阻塞任务流。
-     */
-    public void writeRoundFileChanges(String taskId, String roundId, JsonNode fullContent) {
-        if (roundId == null || roundId.isBlank() || fullContent == null) {
-            return;
-        }
-        try {
-            Path dir = dirOf(taskId);
-            Path sub = dir.resolve("file-changes");
-            Files.createDirectories(sub);
-            Path f = sub.resolve(roundId + ".json");
-            Files.writeString(f, Json.write(fullContent), StandardCharsets.UTF_8);
-        } catch (IOException | RuntimeException e) {
-            log.warn("轮次文件变更全文写盘失败 task={} round={}(不影响任务运行)", taskId, roundId, e);
-        }
-    }
-
-    /**
-     * 读本轮文件变更全文(file-changes/<roundId>.json):文件不存在返回 null;解析失败返回 null 并 warn。
-     */
-    public JsonNode readRoundFileChanges(String taskId, String roundId) {
-        if (roundId == null || roundId.isBlank()) {
-            return null;
-        }
-        try {
-            Path f = dirOf(taskId).resolve("file-changes").resolve(roundId + ".json");
-            if (!Files.isRegularFile(f)) {
-                return null;
-            }
-            return Json.parse(Files.readString(f, StandardCharsets.UTF_8));
-        } catch (IOException | RuntimeException e) {
-            log.warn("轮次文件变更全文读取失败 task={} round={}", taskId, roundId, e);
-            return null;
-        }
-    }
-
-    /** 一行 Round → jsonl 行(seq 全字符串;endSeq null → "";subs 恒为数组)。 */
+    /** 一行 Round → jsonl 行(seq 全字符串;endSeq null → "";agentRanges 恒为数组)。 */
     private static String roundLine(RoundIndex.Round round) {
         ObjectNode line = Json.obj()
                 .put("index", round.index())
@@ -1020,26 +896,23 @@ public class TaskStore {
         if (round.roundId() != null && !round.roundId().isBlank()) {
             line.put("roundId", round.roundId()); // roundId 稳定主键:缺失(旧行)不写
         }
-        if (round.fileChanges() != null) {
-            line.set("fileChanges", round.fileChanges()); // 本轮文件变更轻量摘要:无变更不写
-        }
         if (round.userMessage() != null) {
             line.set("userMessage", round.userMessage()); // 完整 user.message payload(懒加载骨架起点;旧行缺失=null)
         }
-        ArrayNode subs = Json.arr();
-        for (RoundIndex.SubRange sub : round.subs()) {
+        ArrayNode agentRanges = Json.arr();
+        for (RoundIndex.AgentRange agentRange : round.agentRanges()) {
             ObjectNode s = Json.obj()
-                    .put("agentId", safeText(sub.agentId()))
-                    .put("title", safeText(sub.title()))
-                    .put("startSeq", sub.startSeq() == null ? "" : String.valueOf(sub.startSeq()));
-            s.put("endSeq", sub.endSeq() == null ? "" : String.valueOf(sub.endSeq()));
-            subs.add(s);
+                    .put("agentId", safeText(agentRange.agentId()))
+                    .put("title", safeText(agentRange.title()))
+                    .put("startSeq", agentRange.startSeq() == null ? "" : String.valueOf(agentRange.startSeq()));
+            s.put("endSeq", agentRange.endSeq() == null ? "" : String.valueOf(agentRange.endSeq()));
+            agentRanges.add(s);
         }
-        line.set("subs", subs);
+        line.set("agentRanges", agentRanges);
         return Json.write(line);
     }
 
-    /** 一行 jsonl → Round;解析失败返回 null(撕行/坏行)。公开:task.search 按命中行解析轮次。 */
+    /** 一行 jsonl → Round;解析失败返回 null(撕行/坏行)。公开:search 按命中行解析轮次。 */
     public static RoundIndex.Round parseRoundLine(String line) {
         try {
             JsonNode n = Json.parse(line);
@@ -1057,29 +930,29 @@ public class TaskStore {
             long durationMs = n.path("durationMs").asLong(0); // 旧行缺失 → 0(未记录耗时)
             long startedAt = n.path("startedAt").asLong(0); // 旧行缺失 → 0(未知,闭合时不据此计耗时)
             String roundId = n.path("roundId").asString(null); // 旧行缺失 → null
-            JsonNode fileChanges = n.path("fileChanges"); // 缺失/null → null;存在则按 JsonNode 原样读入
-            if (fileChanges.isMissingNode() || fileChanges.isNull()) {
-                fileChanges = null;
-            }
             JsonNode userMessage = n.path("userMessage"); // 缺失/null → null(旧行);存在则按 JsonNode 原样读入
             if (userMessage.isMissingNode() || userMessage.isNull()) {
                 userMessage = null;
             }
-            List<RoundIndex.SubRange> subs = new ArrayList<>();
-            JsonNode subsNode = n.path("subs");
-            if (subsNode.isArray()) {
-                for (JsonNode sn : subsNode) {
+            List<RoundIndex.AgentRange> agentRanges = new ArrayList<>();
+            // 兼容旧名:agentRanges 不存在时尝试读 subs
+            JsonNode agentRangesNode = n.path("agentRanges");
+            if (agentRangesNode.isMissingNode()) {
+                agentRangesNode = n.path("subs");
+            }
+            if (agentRangesNode.isArray()) {
+                for (JsonNode sn : agentRangesNode) {
                     Long subStart = parseSeqFieldOrNull(sn, "startSeq");
                     if (subStart == null) {
                         return null; // 子区间关键字段缺失:整行弃
                     }
                     Long subEnd = parseSeqFieldOrNull(sn, "endSeq");
-                    subs.add(new RoundIndex.SubRange(sn.path("agentId").asString(""),
+                    agentRanges.add(new RoundIndex.AgentRange(sn.path("agentId").asString(""),
                             sn.path("title").asString(""), subStart, subEnd));
                 }
             }
             return new RoundIndex.Round(roundId, index, startSeq, endSeq, user, finalReply,
-                    subs, durationMs, startedAt, fileChanges, userMessage);
+                    agentRanges, durationMs, startedAt, userMessage);
         } catch (RuntimeException e) {
             return null; // 撕行
         }
@@ -1151,7 +1024,6 @@ public class TaskStore {
     /** 整写 queue.jsonl(临时文件 + ATOMIC_MOVE,同 writeMeta 惯例);空列表也覆盖写空文件。 */
     public void writeQueue(Path dir, List<UserInput> items) throws IOException {
         Path f = dir.resolve("queue.jsonl");
-        Path tmp = dir.resolve("queue.jsonl.tmp");
         StringBuilder sb = new StringBuilder();
         for (UserInput item : items) {
             ObjectNode line = Json.obj().put("text", item.text());
@@ -1160,8 +1032,7 @@ public class TaskStore {
             }
             sb.append(Json.write(line)).append('\n');
         }
-        Files.writeString(tmp, sb.toString(), StandardCharsets.UTF_8);
-        AtomicFiles.replace(tmp, f); // 原子替换(失败已清理 tmp 后抛出,不残留垃圾)
+        writeAtomically(f, sb.toString()); // 原子替换(失败已清理 tmp 后抛出,不残留垃圾)
     }
 
     /** 删除 queue.jsonl(不存在则忽略;其他 IO 异常记日志)。 */
@@ -1218,7 +1089,7 @@ public class TaskStore {
                 break;
             }
             for (EventRecord r : batch) {
-                if (PERSIST_SKIP.contains(r.event()) || isTransientExt(r)) {
+                if (isTransientExt(r)) {
                     // 瞬态事件不落盘也不写占位行,只推进游标:含瞬态的最高 seq 水位由
                     // updateMeta 持久化到 meta.json 的 seqLast,重启续号从该水位起步;
                     // 磁盘 lastSeq 可能落后于内存 lastSeq,读侧按 seq 归并 + 前端
@@ -1293,12 +1164,17 @@ public class TaskStore {
         t.writers.clear();
     }
 
+    /**
+     * 原子写文件:委托 {@link AtomicFiles#writeText}(同目录唯一名 tmp → 原子替换 → 清理残留)。
+     */
+    private static void writeAtomically(Path target, String content) throws IOException {
+        AtomicFiles.writeText(target, content);
+    }
+
     /** 原子写 meta(临时文件 + ATOMIC_MOVE)。公开:slash 层在终态任务(未运行)路径改写磁盘 meta.json。 */
-    public static void writeMeta(Path dir, ObjectNode summary) throws IOException {
-        Path f = dir.resolve("meta.json");
-        Path tmp = dir.resolve("meta.json.tmp");
-        Files.writeString(tmp, Json.write(summary));
-        AtomicFiles.replace(tmp, f); // 原子替换(失败已清理 tmp 后抛出,不残留垃圾)
+    @Override
+    public void writeMeta(Path dir, ObjectNode summary) throws IOException {
+        writeAtomically(dir.resolve("meta.json"), Json.write(summary));
     }
 
     private static EventRecord parseLine(String line) {

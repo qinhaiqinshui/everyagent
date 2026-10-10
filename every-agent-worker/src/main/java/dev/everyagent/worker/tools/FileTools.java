@@ -1,8 +1,8 @@
 package dev.everyagent.worker.tools;
 
-import dev.everyagent.worker.task.TaskEntry;
 
-import dev.everyagent.worker.rpc.NotFoundException;
+import dev.everyagent.plugin.api.execution.ExecContext;
+import dev.everyagent.plugin.api.exception.NotFoundException;
 
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
@@ -11,6 +11,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * 文件工具(read_file / create_file / update_file),移植自 novel_agent-n 的
@@ -23,11 +24,14 @@ import java.util.List;
  */
 public class FileTools {
 
+    /** 无参全量读取时的字符上限(约 30k 字符);超过则截断到完整行并附带提示。 */
+    static final int READ_FILE_AUTO_TRUNCATE_CHARS = 30_000;
+
     private final FsToolSupport fs;
-    private final TaskEntry task;
+    private final ExecContext task;
     private final String agentId;
 
-    public FileTools(FsToolSupport fs, TaskEntry task, String agentId) {
+    public FileTools(FsToolSupport fs, ExecContext task, String agentId) {
         this.fs = fs;
         this.task = task;
         this.agentId = agentId;
@@ -102,29 +106,30 @@ public class FileTools {
      * 行尾宽容查找 oldcontent 的首次出现,并确认全局唯一(单次扫描,顺带统计主导行尾)。
      * 返回 [start, end, eolCode],eolCode: 0=LF, 1=CRLF;未找到返回 null;
      * 出现多次(含重叠)抛 IllegalArgumentException("不唯一")。
+     *
+     * <p>主导行尾统计与匹配扫描**解耦**:匹配起点遍历每个下标(不再跳过换行位置),
+     * 因此 oldcontent 以换行开头(或在 CRLF 的 '\n' 处起)也能正确匹配;原实现先
+     * {@code continue} 掉换行再匹配,导致这类 oldcontent 永远「未找到旧内容」。
      */
     private static int[] findUniqueEolAgnostic(String haystack, String needle) {
-        int firstStart = -1;
-        int firstEnd = -1;
+        // 第一遍:统计主导行尾(CRLF 计 crlf,独立 \n 计 lf,孤立 \r 不计入)
         int crlf = 0;
         int lf = 0;
-        int h = 0;
-        while (h < haystack.length()) {
-            // 统计主导行尾(与旧 dominantEol 同口径: CRLF 计 crlf,独立 \n 计 lf,孤立 \r 不计入)
-            char c = haystack.charAt(h);
+        for (int i = 0; i < haystack.length(); i++) {
+            char c = haystack.charAt(i);
             if (c == '\r') {
-                if (h + 1 < haystack.length() && haystack.charAt(h + 1) == '\n') {
+                if (i + 1 < haystack.length() && haystack.charAt(i + 1) == '\n') {
                     crlf++;
-                    h += 2;
-                    continue;
+                    i++;
                 }
-                h++; // 孤立 \r:不计入 crlf / lf
-                continue;
             } else if (c == '\n') {
                 lf++;
-                h++;
-                continue;
             }
+        }
+        // 第二遍:逐下标尝试匹配(起点含换行位置),顺带校验唯一
+        int firstStart = -1;
+        int firstEnd = -1;
+        for (int h = 0; h < haystack.length(); h++) {
             int end = matchAt(haystack, needle, h);
             if (end >= 0) {
                 if (firstStart < 0) {
@@ -135,7 +140,6 @@ public class FileTools {
                             "oldcontent 在文档中出现多次,不唯一,无法确定替换位置");
                 }
             }
-            h++;
         }
         if (firstStart < 0) {
             return null;
@@ -144,7 +148,8 @@ public class FileTools {
     }
 
     @Tool(description = "读取文件的内容。支持可选 line_start / line_end 按 1-based 行区间读取(省略则全量返回),"
-            + "直接返回文件文本内容(纯文本),不附加行号等元信息包装。")
+            + "直接返回文件文本内容(纯文本),不附加行号等元信息包装。"
+            + "当未指定 line_start/line_end 且文件内容超过阈值时,自动截断到完整行并返回提示。")
     public String read_file(
             @ToolParam(description = "文件路径(相对任务工作区根)") String path,
             @ToolParam(description = "1-based 起始行(含);省略从首行开始", required = false) Integer line_start,
@@ -162,6 +167,28 @@ public class FileTools {
         if (total == 0) {
             return "";
         }
+
+        // 模型未指定行区间且内容过长时,自动截断到完整行(保证不截断半行)并附带提示
+        if (line_start == null && line_end == null
+                && content.length() > READ_FILE_AUTO_TRUNCATE_CHARS) {
+            int acc = 0;   // 已累积字符数(含换行)
+            int cutLine = 0; // 已纳入的行数
+            for (int i = 0; i < total; i++) {
+                int lineLen = lines.get(i).length() + 1; // +1 for \n
+                if (acc + lineLen > READ_FILE_AUTO_TRUNCATE_CHARS && i > 0) {
+                    break; // 加入本行会超限,且已有至少 1 行 → 停
+                }
+                acc += lineLen;
+                cutLine = i + 1;
+            }
+            if (cutLine < total) {
+                String truncated = String.join("\n", lines.subList(0, cutLine));
+                return "[警告] 内容过长，当前只返回前 " + cutLine + " 行，总行数 " + total
+                        + "。如果确认需要读取全部行数，请明确传入 line_start、line_end 参数。\n\n"
+                        + truncated;
+            }
+        }
+
         int start = line_start != null ? line_start : 1;
         if (start < 1) {
             start = 1;
@@ -190,21 +217,29 @@ public class FileTools {
         if (path == null || path.trim().isEmpty()) {
             throw new IllegalArgumentException("path 不能为空");
         }
-        if (fs.exists(task, path)) {
-            throw new IllegalArgumentException("文件已存在,如需修改请用 update_file");
-        }
         String finalContent = content == null ? "" : content;
         if (finalContent.indexOf('\0') >= 0) {
             throw new IllegalArgumentException("内容疑似二进制(含 NUL 字节),不支持文本写入");
         }
         finalContent = toLf(finalContent); // 新文件默认 LF,与 read_file 输出一致
-        fs.writeText(task, agentId, path, finalContent, false);
+        // 加锁并二次校验存在性:「不存在才创建」在并发下必须原子,否则两个 create_file 会互相覆盖
+        ReentrantLock lock = fs.pathLock(path);
+        lock.lock();
+        try {
+            if (fs.exists(task, path)) {
+                throw new IllegalArgumentException("文件已存在,如需修改请用 update_file");
+            }
+            fs.writeText(task, agentId, path, finalContent, false);
+        } finally {
+            lock.unlock();
+        }
         return "已创建并保存到：" + path;
     }
 
     @Tool(description = "更新已有文件:把文件中唯一出现的 oldcontent 整体原位替换为 content。"
             + "文件不存在、oldcontent 缺失或不唯一时均报错。匹配对行尾(CRLF/LF)宽容,"
-            + "插入内容按文件主导行尾转写,源文件其余部分逐字节保留。")
+            + "插入内容按文件主导行尾转写,源文件其余部分逐字节保留。"
+            + "写入为原子替换并做落盘校验,不会因中断留下截断文件。")
     public String update_file(
             @ToolParam(description = "文件路径(相对任务工作区根)") String path,
             @ToolParam(description = "文件中被整体替换为 content 的旧内容,必须在文件中唯一出现") String oldcontent,
@@ -218,29 +253,117 @@ public class FileTools {
         if (oldcontent == null || oldcontent.isEmpty()) {
             throw new IllegalArgumentException("oldcontent 不能为空");
         }
-        // 单次读即覆盖「存在性 + 写前读」:按写授权档(WRITE)一次弹窗;
-        // 文件不存在 -> NotFoundException 转 create_file 提示,省去 exists()+readText 双解析
-        String existing;
+        // read-modify-write 整体串行:并发写入者(主/派发 agent、并发工具调用)不得各自基于旧快照
+        // 写回,否则会丢失更新甚至写回截断内容。
+        ReentrantLock lock = fs.pathLock(path);
+        lock.lock();
         try {
-            existing = fs.readText(task, agentId, path, PermissionGate.Op.WRITE);
-        } catch (NotFoundException e) {
-            throw new IllegalArgumentException("文件不存在,如需新建请用 create_file");
+            // 单次读即覆盖「存在性 + 写前读」:按写授权档(WRITE)一次弹窗;
+            // 文件不存在 -> NotFoundException 转 create_file 提示,省去 exists()+readText 双解析
+            String existing;
+            try {
+                existing = fs.readText(task, agentId, path, PermissionGate.Op.WRITE);
+            } catch (NotFoundException e) {
+                throw new IllegalArgumentException("文件不存在,如需新建请用 create_file");
+            }
+            if (existing.indexOf('\0') >= 0) {
+                throw new IllegalArgumentException("文件疑似二进制(含 NUL 字节),不支持文本更新");
+            }
+            // 行尾宽容定位唯一 oldcontent(不劈开 CRLF),并顺带得出主导行尾;
+            // 源文件其余部分逐字节保留,混合行尾/孤立 CR 不被改写
+            int[] span = findUniqueEolAgnostic(existing, oldcontent);
+            if (span == null) {
+                throw new IllegalArgumentException("未找到旧内容(oldcontent)。" + describeNotFound(existing, oldcontent));
+            }
+            int start = span[0];
+            int end = span[1];
+            String eol = span[2] == 1 ? "\r\n" : "\n";
+            String newContent = fromLf(toLf(content == null ? "" : content), eol);
+            String replaced = existing.substring(0, start) + newContent + existing.substring(end);
+            fs.writeText(task, agentId, path, replaced, false);
+            return "已更新到：" + path;
+        } finally {
+            lock.unlock();
         }
-        if (existing.indexOf('\0') >= 0) {
-            throw new IllegalArgumentException("文件疑似二进制(含 NUL 字节),不支持文本更新");
+    }
+
+    /** 片段截断:去首尾空白,超长则截断并加省略号,避免诊断信息过长。 */
+    private static String snippet(String s, int max) {
+        String t = s == null ? "" : s.strip();
+        return t.length() <= max ? t : t.substring(0, max) + "…";
+    }
+
+    /**
+     * 构造「未找到 oldcontent」的定位诊断:指出最相近的行号与片段,便于长文档排查。
+     * 依次覆盖:首行匹配但后续不一致(含文件提前结束)/ 首行多处出现 / 仅空白-缩进差异 /
+     * 完全无相近内容(退化为最长公共前缀最接近的一行)。
+     */
+    static String describeNotFound(String existing, String oldcontent) {
+        String[] fileLines = existing.split("\n", -1);
+        String[] needLines = oldcontent.split("\n", -1);
+        String firstNeedle = null;
+        for (String l : needLines) {
+            if (!l.strip().isEmpty()) {
+                firstNeedle = l.strip();
+                break;
+            }
         }
-        // 单次扫描:行尾宽容定位唯一 oldcontent(不劈开 CRLF),并顺带得出主导行尾;
-        // 源文件其余部分逐字节保留,混合行尾/孤立 CR 不被改写
-        int[] span = findUniqueEolAgnostic(existing, oldcontent);
-        if (span == null) {
-            throw new IllegalArgumentException("未找到旧内容(oldcontent)");
+        if (firstNeedle == null) {
+            return "（oldcontent 无有效内容行）";
         }
-        int start = span[0];
-        int end = span[1];
-        String eol = span[2] == 1 ? "\r\n" : "\n";
-        String newContent = fromLf(toLf(content == null ? "" : content), eol);
-        String replaced = existing.substring(0, start) + newContent + existing.substring(end);
-        fs.writeText(task, agentId, path, replaced, false);
-        return "已更新到：" + path;
+        List<Integer> hits = new ArrayList<>();
+        for (int i = 0; i < fileLines.length && hits.size() < 5; i++) {
+            if (fileLines[i].strip().equals(firstNeedle)) {
+                hits.add(i);
+            }
+        }
+        if (hits.size() == 1) {
+            int idx = hits.get(0);
+            for (int j = 1; j < needLines.length; j++) {
+                String want = needLines[j].strip();
+                if (idx + j >= fileLines.length) {
+                    return "oldcontent 首行匹配第 " + (idx + 1) + " 行,但文件在该处提前结束(oldcontent 需 "
+                            + needLines.length + " 行,该处仅剩 " + (fileLines.length - idx) + " 行)";
+                }
+                String got = fileLines[idx + j].strip();
+                if (!want.equals(got)) {
+                    return "oldcontent 首行匹配第 " + (idx + 1) + " 行,但从第 " + (idx + j + 1)
+                            + " 行起不一致:期望「" + snippet(want, 80) + "」,实际「" + snippet(got, 80) + "」";
+                }
+            }
+            return "oldcontent 与第 " + (idx + 1) + " 行起内容高度接近,但仍有差异(请核对不可见空白/字符)";
+        }
+        if (hits.size() > 1) {
+            StringBuilder sb = new StringBuilder("oldcontent 首行在多处出现(第 ");
+            for (int k = 0; k < hits.size(); k++) {
+                if (k > 0) {
+                    sb.append("、");
+                }
+                sb.append(hits.get(k) + 1);
+            }
+            return sb.append(" 行),请补足上下文以唯一定位").toString();
+        }
+        if (!oldcontent.isBlank() && existing.replaceAll("\\s+", "").contains(oldcontent.replaceAll("\\s+", ""))) {
+            return "内容存在,但空白/缩进不一致(文件可能用制表符或多空格),请核对缩进";
+        }
+        int bestIdx = -1;
+        int bestCommon = 0;
+        for (int i = 0; i < fileLines.length; i++) {
+            String cand = fileLines[i].strip();
+            int lim = Math.min(cand.length(), firstNeedle.length());
+            int c = 0;
+            while (c < lim && cand.charAt(c) == firstNeedle.charAt(c)) {
+                c++;
+            }
+            if (c > bestCommon) {
+                bestCommon = c;
+                bestIdx = i;
+            }
+        }
+        if (bestIdx >= 0 && bestCommon >= 3) {
+            return "最相近的是第 " + (bestIdx + 1) + " 行:「" + snippet(fileLines[bestIdx], 80)
+                    + "」,与 oldcontent 首行前 " + bestCommon + " 个字符相同";
+        }
+        return "oldcontent 首行为「" + snippet(firstNeedle, 80) + "」,文件中无相近内容";
     }
 }

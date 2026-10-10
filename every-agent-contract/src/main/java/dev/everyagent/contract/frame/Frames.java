@@ -37,8 +37,8 @@ public final class Frames {
     public static final String SUBSCRIBER_JOIN = "subscriber.join";
     public static final String SUBSCRIBER_LEAVE = "subscriber.leave";
 
-    /** v3:新增应用层 ping/pong 心跳帧。 */
-    public static final int PROTOCOL_VERSION = 3;
+    /** v4:任务事件与任务流频道加 worker 段(归属物理隔离,架构 §5.2);v3 新增应用层 ping/pong 心跳帧。 */
+    public static final int PROTOCOL_VERSION = 4;
 
     private Frames() {
     }

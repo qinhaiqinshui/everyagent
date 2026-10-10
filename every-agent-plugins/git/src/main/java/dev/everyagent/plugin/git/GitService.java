@@ -1,0 +1,858 @@
+package dev.everyagent.plugin.git;
+
+import dev.everyagent.contract.json.Json;
+import dev.everyagent.plugin.git.NativeGit.CredentialSpec;
+import dev.everyagent.plugin.git.NativeGit.NativeResult;
+import dev.everyagent.plugin.git.NativeGit.StatusData;
+import dev.everyagent.plugin.api.exception.AuthRequiredException;
+import dev.everyagent.plugin.api.exception.BadParamsException;
+import dev.everyagent.plugin.api.exception.NotFoundException;
+import dev.everyagent.plugin.api.rpc.RpcContext;
+import dev.everyagent.plugin.api.spi.WorkspaceManager;
+import dev.everyagent.plugin.api.spi.WorkspaceSandbox;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.node.ArrayNode;
+import tools.jackson.databind.node.ObjectNode;
+
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * 工作区 git 模块(架构 §5.4 表):status/log/diff/commit/pull/push 快操作。
+ * 实现由 JGit 迁移为<b>原生 git argv 直传</b>(docs/GIT_NATIVE_MIGRATION.md §7.12):
+ * 每个 RPC 构造 git 参数 → {@link NativeGit} 在宿主 OS 执行(经 OsSandbox.spawnNative) →
+ * 解析 stdout 为现有契约 JSON。前半的沙箱 jail、workspace 绑定、凭证链语义全部保留。
+ * clone/大型迁移按文档建为 Task,不在本模块;push/pull 凭证走原生 git 全套凭证体系
+ * (本机 credential.helper / ssh-agent / ~/.ssh + 工作区加密凭证,不经协议)。
+ */
+public class GitService {
+
+    private static final int LOG_MAX = 200;
+
+    private final WorkspaceManager workspaces;
+    private final GitCredentialStore credentials;
+    private final NativeGit git;
+
+    public GitService(WorkspaceManager workspaces,
+            GitCredentialStore credentials, NativeGit git) {
+        this.workspaces = workspaces;
+        this.credentials = credentials;
+        this.git = git;
+    }
+
+    void status(RpcContext ctx) throws IOException {
+        WorkspaceSandbox sb = sandbox(ctx);
+        StatusData s = statusData(sb);
+        ObjectNode o = Json.obj();
+        o.put("branch", branch(sb));
+        o.set("added", arr(s.added()));
+        o.set("changed", arr(s.changed()));
+        o.set("modified", arr(s.modified()));
+        o.set("removed", arr(s.removed()));
+        o.set("missing", arr(s.missing()));
+        o.set("untracked", arr(s.untracked()));
+        o.set("conflicting", arr(s.conflicting()));
+        int[] aheadBehind = aheadBehind(sb);
+        o.put("ahead", aheadBehind[0]);
+        o.put("behind", aheadBehind[1]);
+        ctx.ok(o);
+    }
+
+    void log(RpcContext ctx) throws IOException {
+        int max = (int) Math.min(ctx.optLongParam("max", 50), LOG_MAX);
+        WorkspaceSandbox sb = sandbox(ctx);
+        List<String> args = new ArrayList<>(List.of(
+                "log", "-n", String.valueOf(max), "-z",
+                "--format=%H%x1f%h%x1f%an%x1f%ae%x1f%ct%x1f%s"));
+        // 可选 path:只返回影响该路径的提交(git log -- <path>,文件级历史/目录历史)。
+        // 用 resolveLoose 校验沙箱不越界——历史路径可能已删除,不要求文件真实存在。
+        String path = ctx.optStrParam("path", null);
+        if (path != null && !path.isEmpty()) {
+            sb.resolveLoose(path);
+            args.add("--");
+            args.add(path);
+        }
+        NativeResult r = git.runRead(sb.root(), args, CredentialSpec.none());
+        if (r.exitCode() != 0) {
+            if (NativeGit.isNotRepo(r)) {
+                throw new NotFoundException("工作区不是 git 仓库");
+            }
+            throw new RuntimeException("git.log 失败: " + (r.stderr() == null ? "" : r.stderr()));
+        }
+        ArrayNode commits = Json.arr();
+        for (String rec : r.stdout().split("\0", -1)) {
+            if (rec.isEmpty()) {
+                continue;
+            }
+            String[] f = rec.split("\u001f", -1);
+            if (f.length < 6) {
+                continue;
+            }
+            ObjectNode n = Json.obj();
+            n.put("id", f[0]);
+            n.put("shortId", f[1]);
+            n.put("author", f[2]);
+            n.put("email", f[3]);
+            try {
+                n.put("ts", Long.parseLong(f[4]) * 1000L);
+            } catch (NumberFormatException e) {
+                n.put("ts", 0L);
+            }
+            n.put("message", f[5]);
+            commits.add(n);
+        }
+        ctx.ok(Json.obj().set("commits", commits));
+    }
+
+    /**
+     * 读取某次提交的变更文件清单与全文(历史详情 / 恢复此版本)。
+     * - 变更清单:git diff-tree --name-status -r -z <commit>(A/M/D/R/C/T);
+     * - 二进制判定:git diff-tree --numstat -r -z <commit> 的 `-\t-`;
+     * - 每个文本文件读父版本 git show <commit>^:<path> 与本提交版本 git show <commit>:<path>。
+     * 必带 commit(commitId 或 shortId);路径为提交内相对路径,用 resolveLoose 校验沙箱不越界
+     * (历史路径可能已删除,不要求文件真实存在)。
+     */
+    void show(RpcContext ctx) throws IOException {
+        WorkspaceSandbox sb = sandbox(ctx);
+        String commit = ctx.strParam("commit");
+        if (commit == null || commit.isEmpty()) {
+            throw new BadParamsException("git.show 需要 commit 参数");
+        }
+        // 归一化为完整 id(不存在/非提交抛错误)
+        NativeResult rev = git.runRead(sb.root(), List.of("rev-parse", "--verify", commit + "^{commit}"),
+                CredentialSpec.none());
+        if (rev.exitCode() != 0) {
+            if (NativeGit.isNotRepo(rev)) {
+                throw new NotFoundException("工作区不是 git 仓库");
+            }
+            throw new BadParamsException("提交不存在: " + commit);
+        }
+        String fullId = rev.stdout().trim();
+
+        // 变更文件清单 name-status(--root:根提交也显示其新增文件)
+        NativeResult ns = git.runRead(sb.root(), List.of(
+                "diff-tree", "--no-commit-id", "--name-status", "-r", "-z", "--root", fullId),
+                CredentialSpec.none());
+        if (ns.exitCode() != 0) {
+            if (NativeGit.isNotRepo(ns)) {
+                throw new NotFoundException("工作区不是 git 仓库");
+            }
+            throw new RuntimeException("git.show 读取变更清单失败: " + (ns.stderr() == null ? "" : ns.stderr()));
+        }
+        List<String> paths = new ArrayList<>();
+        List<String> changeTypes = new ArrayList<>();
+        parseNameStatus(ns.stdout(), paths, changeTypes);
+
+        // 二进制判定 numstat(--root:根提交的 numstat 也输出;按 path 匹配,不依赖顺序)
+        NativeResult num = git.runRead(sb.root(), List.of(
+                "diff-tree", "--no-commit-id", "--numstat", "-r", "-z", "--root", fullId),
+                CredentialSpec.none());
+        java.util.Set<String> binaryPaths = parseBinaryPaths(num.exitCode() == 0 ? num.stdout() : "");
+
+        ArrayNode files = Json.arr();
+        for (int i = 0; i < paths.size(); i++) {
+            String path = paths.get(i);
+            sb.resolveLoose(path); // 越界校验(历史路径可能已删除)
+            boolean binary = binaryPaths.contains(path);
+            ObjectNode n = Json.obj()
+                    .put("path", path)
+                    .put("changeType", changeTypes.get(i))
+                    .put("binary", binary);
+            if (!binary) {
+                // before = 父提交版本(根提交无父 → 空)
+                NativeResult beforeR = git.runRead(sb.root(),
+                        List.of("show", fullId + "^:" + path), CredentialSpec.none());
+                String before = beforeR.exitCode() == 0 ? beforeR.stdout() : "";
+                // after = 本提交版本(删除 → git show 失败 → 空)
+                NativeResult afterR = git.runRead(sb.root(),
+                        List.of("show", fullId + ":" + path), CredentialSpec.none());
+                String after = afterR.exitCode() == 0 ? afterR.stdout() : "";
+                n.put("beforeContent", before);
+                n.put("afterContent", after);
+            }
+            files.add(n);
+        }
+        ctx.ok(Json.obj().put("commit", fullId).set("files", files));
+    }
+
+    /**
+     * 解析 `git diff-tree --name-status -r -z` 输出为路径与变更类型列表(与 numstat 同序)。
+     * 输出形态:status 与 path 交替以 NUL 结尾,如 `M\0a.txt\0A\0c.txt\0`;
+     * 默认不检测 rename(diff-tree 未加 -M),rename 表现为 D+old / A+new 两条记录。
+     */
+    private static void parseNameStatus(String stdout, List<String> paths, List<String> changeTypes) {
+        if (stdout == null || stdout.isEmpty()) {
+            return;
+        }
+        String[] parts = stdout.split("\0", -1);
+        for (int i = 0; i < parts.length; i += 2) {
+            String status = parts[i];
+            if (status.isEmpty()) {
+                break; // 尾空段
+            }
+            char code = status.charAt(0);
+            String path = (i + 1 < parts.length) ? parts[i + 1] : "";
+            if (path.isEmpty()) {
+                break;
+            }
+            paths.add(path);
+            changeTypes.add(statusToChangeType(code));
+        }
+    }
+
+    /** name-status 状态字母 → 前端 changeType(A=created,D=deleted,其余=updated)。 */
+    private static String statusToChangeType(char status) {
+        if (status == 'A') {
+            return "created";
+        }
+        if (status == 'D') {
+            return "deleted";
+        }
+        return "updated"; // M/R/C/T
+    }
+
+    /**
+     * 解析 `git diff-tree --numstat -r -z` 输出为二进制路径集合。
+     * 输出形态:每条记录以 NUL 结尾,内部为 `加行\t删行\t路径`,二进制为 `-\t-\t路径`
+     * (与 name-status 的 `状态\0路径\0` 不同,numstat 整条记录一段)。
+     */
+    private static java.util.Set<String> parseBinaryPaths(String stdout) {
+        java.util.Set<String> binaries = new java.util.HashSet<>();
+        if (stdout == null || stdout.isEmpty()) {
+            return binaries;
+        }
+        for (String rec : stdout.split("\0", -1)) {
+            if (rec.isEmpty()) {
+                continue;
+            }
+            String[] f = rec.split("\t", -1);
+            if (f.length < 3) {
+                continue;
+            }
+            if ("-".equals(f[0]) && "-".equals(f[1])) {
+                binaries.add(f[2]);
+            }
+        }
+        return binaries;
+    }
+
+    /**
+     * 读取某文件相对 HEAD 的完整变更内容(before = HEAD blob 文本,after = 工作区文件文本)。
+     * 对齐 old 链路:直接读两份全文,`git show HEAD:<path>` 拿 before(新文件 = HEAD 无 blob → created)。
+     */
+    void diff(RpcContext ctx) throws IOException {
+        WorkspaceSandbox sb = sandbox(ctx);
+        String path = ctx.optStrParam("path", null);
+        if (path == null || path.isEmpty()) {
+            throw new BadParamsException("git.diff 需要 path 参数");
+        }
+        Path worktreePath = sb.resolveExisting(path); // 沙箱内真实路径(同时校验不越界)
+        String before = "";
+        NativeResult show = git.runRead(sb.root(), List.of("show", "HEAD:" + path), CredentialSpec.none());
+        if (show.exitCode() == 0) {
+            before = show.stdout();
+        } else if (NativeGit.isNotRepo(show)) {
+            throw new NotFoundException("工作区不是 git 仓库");
+        }
+        // before 空 = 新文件(HEAD 无该 blob 或仓库尚无提交)
+        String changeType = before.isEmpty() ? "created" : "updated";
+        String after = Files.exists(worktreePath) && !Files.isDirectory(worktreePath)
+                ? Files.readString(worktreePath, StandardCharsets.UTF_8)
+                : "";
+        ctx.ok(Json.obj()
+                .put("filePath", path)
+                .put("changeType", changeType)
+                .put("beforeContent", before)
+                .put("afterContent", after)
+                .put("empty", before.equals(after)));
+    }
+
+    void commit(RpcContext ctx) throws IOException {
+        WorkspaceSandbox sb = sandbox(ctx);
+        String message = ctx.strParam("message");
+        JsonNode pathsNode = ctx.params().path("paths");
+        List<String> paths = new ArrayList<>();
+        if (pathsNode.isArray()) {
+            pathsNode.forEach(n -> paths.add(n.asString()));
+        }
+        List<String> addArgs = new ArrayList<>(List.of("add", "-A", "--"));
+        if (paths.isEmpty()) {
+            addArgs.add(".");
+        } else {
+            for (String p : paths) {
+                sb.resolveLoose(p); // 已删除(缺失)文件也允许提交删除,仅校验沙箱不越界
+            }
+            // 与当前变更集求交集后再 add:已无变更的陈旧路径(如勾选后被删除的
+            // 未跟踪文件,git status 中彻底消失)对本次提交是 no-op,直接跳过——
+            // 否则 git add 会因 unmatched pathspec 整体失败、提交被阻断。
+            java.util.Set<String> changed = statusData(sb).allChanged();
+            for (String p : paths) {
+                if (changed.contains(normalizeRel(p))) {
+                    addArgs.add(p);
+                }
+            }
+            if (addArgs.size() == 3) { // 仍只有 ["add","-A","--"] = 交集为空
+                throw new BadParamsException("选中的文件均已无变更(可能已被删除或提交),请刷新更改列表后重试");
+            }
+        }
+        NativeResult add = git.runWrite(sb.root(), addArgs, CredentialSpec.none());
+        if (!add.ok()) {
+            if (NativeGit.isNotRepo(add)) {
+                throw new NotFoundException("工作区不是 git 仓库");
+            }
+            throw new RuntimeException("git add 失败: " + (add.stderr() == null ? "" : add.stderr()));
+        }
+        NativeResult c = git.runWrite(sb.root(), List.of("commit", "-m", message), CredentialSpec.none());
+        if (c.exitCode() != 0) {
+            if (NativeGit.isNotRepo(c)) {
+                throw new NotFoundException("工作区不是 git 仓库");
+            }
+            throw new RuntimeException("git commit 失败: " + (c.stderr() == null ? "" : c.stderr()));
+        }
+        NativeResult head = git.runRead(sb.root(), List.of("rev-parse", "HEAD"), CredentialSpec.none());
+        String fullId = head.ok() ? head.stdout().trim() : "";
+        ctx.ok(Json.obj()
+                .put("commitId", fullId)
+                .put("shortId", fullId.length() > 8 ? fullId.substring(0, 8) : fullId)
+                .put("message", message));
+    }
+
+    void pull(RpcContext ctx) throws IOException {
+        WorkspaceSandbox sb = sandbox(ctx);
+        String url = originUrl(sb);
+        NativeResult r = withAuth(ctx, sb, url, List.of("pull", "--no-rebase"));
+        if (r.exitCode() != 0 && NativeGit.isNotRepo(r)) {
+            throw new NotFoundException("工作区不是 git 仓库");
+        }
+        boolean conflicting = hasConflicts(sb);
+        ObjectNode o = Json.obj();
+        o.put("successful", r.exitCode() == 0 && !conflicting);
+        o.put("mergeStatus", conflicting ? "CONFLICTING"
+                : (r.exitCode() == 0 ? "MERGED" : "FAILED"));
+        o.put("fetchMessages", firstLine(r.stdout()));
+        ctx.ok(o);
+    }
+
+    void push(RpcContext ctx) throws IOException {
+        WorkspaceSandbox sb = sandbox(ctx);
+        java.util.LinkedHashMap<String, String> remotes = remoteMap(sb);
+        if (remotes.isEmpty()) {
+            throw new RuntimeException("git.push 失败: 未配置任何远程仓库");
+        }
+        String branch = branch(sb);
+        if (branch.isEmpty()) {
+            throw new RuntimeException("git.push 失败: 当前处于 detached HEAD,无法推送");
+        }
+        ArrayNode arr = Json.arr();
+        List<String> errors = new ArrayList<>();
+        // 无 upstream 时首个远端加 --set-upstream 建立跟踪,后续远端仅推送
+        boolean needsSetUpstream = !hasUpstream(sb);
+        for (var entry : remotes.entrySet()) {
+            String name = entry.getKey();
+            String url = entry.getValue();
+            List<String> args = new ArrayList<>();
+            args.add("push");
+            args.add("--porcelain");
+            if (needsSetUpstream) {
+                args.add("--set-upstream");
+            }
+            args.add(name);
+            args.add(branch);
+            // withAuth 可能抛 AuthRequiredException → 透传给前端弹窗收集凭证后重试
+            NativeResult r = withAuth(ctx, sb, url, args);
+            if (r.exitCode() != 0) {
+                errors.add(name + ": " + (r.stderr() == null ? "" : r.stderr()));
+                continue;
+            }
+            needsSetUpstream = false; // 首个远端已设置 upstream,后续不再重复
+            for (NativeGit.PushUpdate u : NativeGit.parsePushUpdates(r.stdout())) {
+                arr.add(Json.obj().put("remote", name).put("ref", u.ref()).put("status", u.status()));
+            }
+        }
+        if (!errors.isEmpty()) {
+            throw new RuntimeException("git.push 部分失败: " + String.join("; ", errors));
+        }
+        ctx.ok(Json.obj().set("updates", arr));
+    }
+
+    /**
+     * 放弃指定路径的更改:已跟踪的变更文件恢复为 HEAD 内容(equivalent to
+     * {@code git restore --source=HEAD --staged --worktree}),未跟踪(untracked)与
+     * 已暂存新增(added)跳过——对齐 VS Code:未跟踪文件没有「放弃更改」,只有删除。
+     */
+    void discard(RpcContext ctx) throws IOException {
+        WorkspaceSandbox sb = sandbox(ctx);
+        JsonNode pathsNode = ctx.params().path("paths");
+        List<String> paths = new ArrayList<>();
+        if (pathsNode.isArray()) {
+            pathsNode.forEach(n -> paths.add(n.asString()));
+        }
+        if (paths.isEmpty()) {
+            throw new BadParamsException("放弃更改需要指定文件路径");
+        }
+        java.util.Set<String> trackedChanged = statusData(sb).trackedChanged();
+        ArrayNode discarded = Json.arr();
+        ArrayNode skipped = Json.arr();
+        for (String p : paths) {
+            sb.resolveLoose(p); // 已删除/丢失文件需能被 restore 恢复,仅校验沙箱不越界
+            if (!trackedChanged.contains(normalizeRel(p))) {
+                skipped.add(p);
+                continue;
+            }
+            NativeResult r = git.runWrite(sb.root(), List.of(
+                    "restore", "--source=HEAD", "--staged", "--worktree", "--", p), CredentialSpec.none());
+            if (!r.ok()) {
+                throw new RuntimeException("git.discard 失败: " + (r.stderr() == null ? "" : r.stderr()));
+            }
+            discarded.add(p);
+        }
+        ctx.ok(Json.obj().set("discarded", discarded).set("skipped", skipped));
+    }
+
+    /** 在工作区根初始化本地仓库(可指定初始分支名;git init + symbolic-ref 全版本兼容)。 */
+    void init(RpcContext ctx) throws IOException {
+        WorkspaceSandbox sb = sandbox(ctx);
+        String initialBranch = ctx.optStrParam("initialBranch", null);
+        String branch = initialBranch == null || initialBranch.isEmpty() ? "main" : initialBranch;
+        Path root = sb.root();
+        if (Files.exists(root.resolve(".git"))) {
+            throw new BadParamsException("工作区已是 git 仓库");
+        }
+        NativeResult r = git.runWrite(sb.root(), List.of("init"), CredentialSpec.none());
+        if (!r.ok()) {
+            throw new RuntimeException("git init 失败: " + (r.stderr() == null ? "" : r.stderr()));
+        }
+        NativeResult sr = git.runWrite(sb.root(), List.of("symbolic-ref", "HEAD", "refs/heads/" + branch),
+                CredentialSpec.none());
+        if (!sr.ok()) {
+            throw new RuntimeException("初始化初始分支失败: " + (sr.stderr() == null ? "" : sr.stderr()));
+        }
+        ctx.ok(Json.obj().put("initialized", true).put("branch", branch));
+    }
+
+    /**
+     * 克隆远程仓库到工作区内指定目录(默认工作区根)。dir 必须是工作区内的空目录,
+     * 否则拒绝(对齐 VS Code:克隆到非空目录不允许)。凭证走完整解析链。
+     */
+    void clone(RpcContext ctx) throws IOException {
+        WorkspaceSandbox sb = sandbox(ctx);
+        String url = ctx.strParam("url");
+        if (url == null || url.trim().isEmpty()) {
+            throw new BadParamsException("克隆需要远端 URL");
+        }
+        String dirParam = ctx.optStrParam("dir", "");
+        Path target = dirParam == null || dirParam.isEmpty()
+                ? sb.root()
+                : sb.resolveTarget(dirParam);
+        if (!Files.exists(target)) {
+            // 允许克隆到不存在的子目录(git 会创建),但必须是沙箱内。
+            sb.requireNotRoot(target);
+        } else {
+            if (!Files.isDirectory(target)) {
+                throw new BadParamsException("目标不是目录");
+            }
+            try (var stream = Files.newDirectoryStream(target)) {
+                if (stream.iterator().hasNext()) {
+                    throw new BadParamsException("目标目录非空,无法克隆(请用空目录)");
+                }
+            }
+        }
+        NativeResult r = withAuth(ctx, sb, url, List.of("clone", url.trim(), target.toString()));
+        if (!r.ok()) {
+            throw new RuntimeException("git.clone 失败: " + (r.stderr() == null ? "" : r.stderr()));
+        }
+        ctx.ok(Json.obj().put("cloned", true).put("dir", sb.display(target)));
+    }
+
+    /** 关联远程仓库(推送前若无远程,前端引导填入)。 */
+    void remoteAdd(RpcContext ctx) throws IOException {
+        WorkspaceSandbox sb = sandbox(ctx);
+        String name = ctx.optStrParam("name", "origin");
+        String url = ctx.strParam("url");
+        if (url == null || url.trim().isEmpty()) {
+            throw new BadParamsException("关联远程需要 URL");
+        }
+        NativeResult r = git.runWrite(sb.root(), List.of("remote", "add", name, url.trim()),
+                CredentialSpec.none());
+        if (!r.ok()) {
+            throw new RuntimeException("git.remote.add 失败: " + (r.stderr() == null ? "" : r.stderr()));
+        }
+        ctx.ok(Json.obj().put("added", true).put("name", name).put("url", url.trim()));
+    }
+
+    /** 列出已关联远程(供前端判断是否需要引导关联)。 */
+    void remoteList(RpcContext ctx) throws IOException {
+        WorkspaceSandbox sb = sandbox(ctx);
+        ArrayNode remotes = Json.arr();
+        remoteMap(sb).forEach((n, u) -> remotes.add(Json.obj().put("name", n).put("url", u)));
+        ctx.ok(Json.obj().set("remotes", remotes));
+    }
+
+    /**
+     * 保存 git 远端凭证(加密落盘工作区 .everyagent/.git-credentials.enc,仅写不读回;见
+     * docs/ARCHITECTURE.md §7.12)。前端在 AUTH_REQUIRED 弹窗里勾选保存后调用,
+     * 后续 clone/pull/push 由凭证解析链自动复用(经 askpass env 注入,不经协议)。
+     */
+    void credentialSave(RpcContext ctx) throws IOException {
+        WorkspaceSandbox sb = sandbox(ctx);
+        String username = ctx.strParam("username");
+        String password = ctx.strParam("password");
+        String host = ctx.optStrParam("host", null);
+        if (host == null || host.isEmpty()) {
+            host = hostOf(ctx.strParam("url"));
+        }
+        if (host == null || host.isEmpty()) {
+            throw new BadParamsException("无法确定凭证 host(请传 host 或 url)");
+        }
+        try {
+            credentials.save(sb.root(), host, username, password);
+            ctx.ok(Json.obj().put("saved", true).put("host", host));
+        } catch (Exception e) {
+            throw new RuntimeException("git.credential.save 失败: " + e.getMessage(), e);
+        }
+    }
+
+    // ---- 凭证解析链(架构 §7.12) ----
+
+    /**
+     * 带认证兜底的远端操作(clone/pull/push 公共路径):
+     * ① RPC 临时凭证参数(username/password,前端重试未勾选保存时带)直接注入 askpass;
+     * ② 否则本机默认档(不注入,git 自行走 credential.helper / credential manager /
+     *    ssh-agent / ~/.ssh);
+     * ③ 认证失败 → 读工作区加密凭证(.git-credentials.enc)对应 host 条目重试一次;
+     * ④ 仍失败/无凭证 → 抛 {@link AuthRequiredException} → rpc.err code=AUTH_REQUIRED
+     *    (消息带 host),前端据此弹窗收集账号密码。
+     */
+    private NativeResult withAuth(RpcContext ctx, WorkspaceSandbox sb, String url, List<String> args)
+            throws IOException {
+        String username = ctx.optStrParam("username", null);
+        String password = ctx.optStrParam("password", null);
+        String host = url == null ? null : hostOf(url);
+        // ① RPC 临时凭证
+        if (username != null && password != null) {
+            NativeResult r = git.runWrite(sb.root(), args, CredentialSpec.of(username, password));
+            if (!NativeGit.isAuthFailure(r)) {
+                return r;
+            }
+        } else {
+            // ② 本机默认(不注入凭证)
+            NativeResult r = git.runWrite(sb.root(), args, CredentialSpec.none());
+            if (!NativeGit.isAuthFailure(r)) {
+                return r;
+            }
+        }
+        // ③ 工作区加密凭证兜底
+        if (host != null && !host.isEmpty()) {
+            var stored = credentials.load(sb.root(), host);
+            if (stored.isPresent()) {
+                NativeResult r = git.runWrite(sb.root(), args,
+                        CredentialSpec.of(stored.get().username(), stored.get().password()));
+                if (!NativeGit.isAuthFailure(r)) {
+                    return r;
+                }
+            }
+        }
+        // ④ 抛 AUTH_REQUIRED(透传:由 RpcDispatcher 转 rpc.err code=AUTH_REQUIRED 前端弹窗)
+        throw new AuthRequiredException(host == null ? url : host);
+    }
+
+    /** 自动同步静默档凭证:本机默认(credential.helper/ssh-agent)优先,工作区加密凭证兜底。不弹窗。 */
+    private CredentialSpec silentCredential(WorkspaceSandbox sb, String url) {
+        if (url != null) {
+            String host = hostOf(url);
+            if (host != null) {
+                var stored = credentials.load(sb.root(), host);
+                if (stored.isPresent()) {
+                    return CredentialSpec.of(stored.get().username(), stored.get().password());
+                }
+            }
+        }
+        return CredentialSpec.none();
+    }
+
+    /** 从远程 URL 提取 host(http(s) 与 scp 语法 user@host:path 统一;失败返回 null)。 */
+    private static String hostOf(String url) {
+        if (url == null) {
+            return null;
+        }
+        String s = url.trim();
+        String rest;
+        if (s.startsWith("http://") || s.startsWith("https://")) {
+            rest = s.substring(s.indexOf("://") + 3);
+        } else if (s.startsWith("ssh://")) {
+            rest = s.substring(6);
+        } else {
+            // scp 语法 [user@]host:path
+            int at = s.indexOf('@');
+            if (at >= 0) {
+                s = s.substring(at + 1);
+            }
+            int colon = s.indexOf(':');
+            return colon > 0 ? s.substring(0, colon) : null;
+        }
+        int slash = rest.indexOf('/');
+        String hostPort = slash >= 0 ? rest.substring(0, slash) : rest;
+        int at = hostPort.lastIndexOf('@');
+        if (at >= 0) {
+            hostPort = hostPort.substring(at + 1);
+        }
+        int colon = hostPort.lastIndexOf(':');
+        String host = colon >= 0 ? hostPort.substring(0, colon) : hostPort;
+        return host.isEmpty() ? null : host;
+    }
+
+    /**
+     * 列出所有已配置远程(name → url,按 {@code git remote -v} 顺序)。
+     * 非 git 仓库抛 {@link NotFoundException};其他失败抛 {@link RuntimeException}。
+     */
+    private java.util.LinkedHashMap<String, String> remoteMap(WorkspaceSandbox sb) throws IOException {
+        NativeResult r = git.runRead(sb.root(), List.of("remote", "-v"), CredentialSpec.none());
+        if (r.exitCode() != 0) {
+            if (NativeGit.isNotRepo(r)) {
+                throw new NotFoundException("工作区不是 git 仓库");
+            }
+            throw new RuntimeException("git remote -v 失败: " + (r.stderr() == null ? "" : r.stderr()));
+        }
+        java.util.LinkedHashMap<String, String> seen = new java.util.LinkedHashMap<>();
+        for (String line : r.stdout().split("\n")) {
+            int tab = line.indexOf('\t');
+            if (tab < 0) {
+                continue;
+            }
+            String name = line.substring(0, tab);
+            String rest = line.substring(tab + 1);
+            int sp = rest.lastIndexOf(' ');
+            String url = sp > 0 ? rest.substring(0, sp) : rest;
+            seen.putIfAbsent(name, url.trim());
+        }
+        return seen;
+    }
+
+    /** 当前仓库 origin 远程 URL(未关联远程返回 null)。 */
+    private String originUrl(WorkspaceSandbox sb) {
+        try {
+            NativeResult r = git.runRead(sb.root(), List.of("remote", "get-url", "origin"),
+                    CredentialSpec.none());
+            return r.ok() ? r.stdout().trim() : null;
+        } catch (IOException e) {
+            return null;
+        }
+    }
+
+    // ---- 内部 ----
+
+    /** 按调用的 workspace 参数(必填)绑定沙箱。 */
+    private WorkspaceSandbox sandbox(RpcContext ctx) throws IOException {
+        return workspaces.sandboxFor(ctx.strParam("workspace"));
+    }
+
+    /** 当前分支名(非 git 仓库 / detached 返回空串;不因分支获取失败使 status 失败)。 */
+    private String branch(WorkspaceSandbox sb) {
+        try {
+            NativeResult r = git.runRead(sb.root(), List.of("symbolic-ref", "--short", "-q", "HEAD"),
+                    CredentialSpec.none());
+            return r.ok() ? r.stdout().trim() : "";
+        } catch (IOException e) {
+            return "";
+        }
+    }
+
+    /** status 数据(非 git 仓库抛 NotFoundException)。 */
+    private StatusData statusData(WorkspaceSandbox sb) throws IOException {
+        NativeResult r = git.runRead(sb.root(), List.of(
+                "status", "--porcelain=v1", "-z", "--untracked-files=all"), CredentialSpec.none());
+        if (r.exitCode() != 0) {
+            if (NativeGit.isNotRepo(r)) {
+                throw new NotFoundException("工作区不是 git 仓库");
+            }
+            throw new RuntimeException("git.status 失败: " + (r.stderr() == null ? "" : r.stderr()));
+        }
+        return NativeGit.parseStatus(r.stdout());
+    }
+
+    /** 当前分支是否有上游跟踪分支(纯本地,不触网)。 */
+    private boolean hasUpstream(WorkspaceSandbox sb) {
+        try {
+            NativeResult r = git.runRead(sb.root(), List.of(
+                    "rev-parse", "--abbrev-ref", "@{upstream}"), CredentialSpec.none());
+            return r.ok() && !r.stdout().trim().isEmpty();
+        } catch (IOException e) {
+            return false;
+        }
+    }
+
+    /**
+     * 当前分支相对上游跟踪分支的 ahead/behind 提交数(纯本地,不触网)。
+     * 未配置上游(如刚 init + remote add 尚未 push)或 detached 返回 0/0——
+     * 角标只表达「有已提交未推送到远端」,无上游时无法判定,不猜测。
+     * 实现:git rev-list --left-right --count @{upstream}...HEAD → 输出「behind ahead」。
+     */
+    private int[] aheadBehind(WorkspaceSandbox sb) {
+        try {
+            NativeResult r = git.runRead(sb.root(), List.of(
+                    "rev-list", "--left-right", "--count", "@{upstream}...HEAD"), CredentialSpec.none());
+            if (r.exitCode() != 0) {
+                return new int[] { 0, 0 };
+            }
+            String[] parts = r.stdout().trim().split("\\s+");
+            int behind = parts.length > 0 ? parseCount(parts[0]) : 0;
+            int ahead = parts.length > 1 ? parseCount(parts[1]) : 0;
+            return new int[] { ahead, behind };
+        } catch (IOException e) {
+            return new int[] { 0, 0 };
+        }
+    }
+
+    private static int parseCount(String s) {
+        try {
+            return (int) Long.parseLong(s.trim());
+        } catch (NumberFormatException e) {
+            return 0;
+        }
+    }
+
+    /** 是否有未合并冲突(porcelain 存在 unmerged 状态码)。 */
+    private boolean hasConflicts(WorkspaceSandbox sb) throws IOException {
+        NativeResult r = git.runRead(sb.root(), List.of("status", "--porcelain=v1", "-z"),
+                CredentialSpec.none());
+        return !NativeGit.parseStatus(r.stdout()).conflicting().isEmpty();
+    }
+
+    private static String normalizeRel(String p) {
+        return p == null ? null : p.replace('\\', '/');
+    }
+
+    private static String firstLine(String s) {
+        if (s == null) {
+            return null;
+        }
+        int nl = s.indexOf('\n');
+        return nl >= 0 ? s.substring(0, nl) : s;
+    }
+
+    private static ArrayNode arr(java.util.Collection<String> items) {
+        ArrayNode a = Json.arr();
+        items.forEach(a::add);
+        return a;
+    }
+
+    // ---- 自动同步(对齐 old /自动同步 的 syncGitRemote)----
+
+    /** 自动同步结果状态(语义对齐 old GitSyncResult.status)。 */
+    public enum GitSyncStatus {
+        /** 工作区不是 git 仓库,跳过。 */
+        NOT_INITIALIZED,
+        /** 未配置 origin 远端,仅本地提交即止。 */
+        NO_REMOTE,
+        /** 已提交(并推送)成功。 */
+        SUCCESS,
+        /** 无变更 / 仅本地提交无其他动作,正常跳过。 */
+        NOOP,
+        /** 拉取产生冲突,已中止合并、未推送。 */
+        CONFLICT,
+        /** 拉取 / 推送 / 其他异常。 */
+        ERROR
+    }
+
+    /** 自动同步结果(id + 人类可读消息)。 */
+    public record SyncResult(GitSyncStatus status, String message) {
+    }
+
+    /**
+     * 任务完成后自动同步(对齐 old {@code syncGitRemote} 的静默分支,最佳努力、绝不抛出):
+     * <ol>
+     *   <li>非 git 仓库 → {@link GitSyncStatus#NOT_INITIALIZED};</li>
+     *   <li>有本地变更 → add -A 全部(含删除) + commit(自动消息);</li>
+     *   <li>未配置任何远端 → 仅本地提交返回({@code NO_REMOTE} / {@code SUCCESS});</li>
+     *   <li>有远端 → 从 origin 拉取(--no-rebase;冲突则 {@code reset --hard} 中止合并、
+     *       保留本地提交、跳过推送)→ 推送到<b>所有</b>已配置远端。</li>
+     * </ol>
+     * 凭证走静默档(本机默认 + 工作区加密凭证),无 UI 弹窗;任一异常兜为
+     * {@link GitSyncStatus#ERROR},不影响调用方(任务终态)。
+     *
+     * @param workspaceRoot 工作区根(worker 机器绝对路径,与 fs/git RPC 的 workspace 同义)。
+     * @param commitMessage 本次自动提交消息。
+     */
+    public SyncResult syncRemote(String workspaceRoot, String commitMessage) {
+        try {
+            WorkspaceSandbox sb = workspaces.sandboxFor(workspaceRoot);
+            NativeResult gitDir = git.runRead(sb.root(), List.of("rev-parse", "--git-dir"),
+                    CredentialSpec.none());
+            if (gitDir.exitCode() != 0) {
+                return new SyncResult(GitSyncStatus.NOT_INITIALIZED, "工作区不是 git 仓库");
+            }
+            java.util.LinkedHashMap<String, String> remotes = remoteMap(sb);
+            boolean hasRemote = !remotes.isEmpty();
+            StatusData st = statusData(sb);
+            boolean dirty = !st.clean();
+            if (dirty) {
+                NativeResult add = git.runWrite(sb.root(), List.of("add", "-A", "--", "."),
+                        CredentialSpec.none());
+                if (!add.ok()) {
+                    return new SyncResult(GitSyncStatus.ERROR, "自动同步 add 失败: " + add.stderr());
+                }
+                NativeResult commit = git.runWrite(sb.root(), List.of("commit", "-m", commitMessage),
+                        CredentialSpec.none());
+                if (commit.exitCode() != 0) {
+                    return new SyncResult(GitSyncStatus.ERROR, "自动提交失败: " + commit.stderr());
+                }
+            }
+            if (!hasRemote) {
+                return dirty
+                        ? new SyncResult(GitSyncStatus.SUCCESS, "本地提交完成；当前仓库未配置远端")
+                        : new SyncResult(GitSyncStatus.NOOP, "无本地未提交更改且未配置远端");
+            }
+            // 从 origin 拉取(若配置了 origin)
+            String origin = remotes.get("origin");
+            if (origin != null) {
+                CredentialSpec silent = silentCredential(sb, origin);
+                NativeResult pull = git.runWrite(sb.root(), List.of("pull", "--no-rebase"), silent);
+                if (pull.exitCode() != 0) {
+                    boolean conflicted = hasConflicts(sb);
+                    if (conflicted) {
+                        git.runWrite(sb.root(), List.of("reset", "--hard"), CredentialSpec.none());
+                        return new SyncResult(GitSyncStatus.CONFLICT,
+                                "拉取产生冲突,已中止合并并保留本地提交,未推送");
+                    }
+                    return new SyncResult(GitSyncStatus.ERROR, "拉取失败: " + pull.stderr());
+                }
+            }
+            // 推送到所有已配置远端
+            String branch = branch(sb);
+            boolean needsSetUpstream = branch.isEmpty() ? false : !hasUpstream(sb);
+            List<String> pushErrors = new ArrayList<>();
+            for (var entry : remotes.entrySet()) {
+                String name = entry.getKey();
+                String url = entry.getValue();
+                CredentialSpec silent = silentCredential(sb, url);
+                List<String> pushArgs = new ArrayList<>();
+                pushArgs.add("push");
+                pushArgs.add("--porcelain");
+                if (needsSetUpstream) {
+                    pushArgs.add("--set-upstream");
+                }
+                pushArgs.add(name);
+                if (!branch.isEmpty()) {
+                    pushArgs.add(branch);
+                }
+                NativeResult push = git.runWrite(sb.root(), pushArgs, silent);
+                if (!push.ok()) {
+                    pushErrors.add(name);
+                }
+                needsSetUpstream = false;
+            }
+            if (!pushErrors.isEmpty()) {
+                return new SyncResult(GitSyncStatus.ERROR,
+                        "推送失败(远程: " + String.join(", ", pushErrors) + ")");
+            }
+            return new SyncResult(GitSyncStatus.SUCCESS,
+                    "已提交并推送到所有远端(" + String.join(", ", remotes.keySet()) + ")");
+        } catch (Exception e) {
+            return new SyncResult(GitSyncStatus.ERROR, "自动同步失败: " + e.getMessage());
+        }
+    }
+}

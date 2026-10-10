@@ -4,17 +4,9 @@
 // 装载已下沉 worker,worker agent 输出以 markdown 为主——注册表保持空,
 // RichMessageContent 对未注册标签走纯文本降级渲染。
 
-import type { ReactNode } from 'react'
+import type { OutputBlockContext, OutputBlockHandler } from '@everyagent/plugin-api'
 
-export interface OutputBlockContext {
-  taskId?: string
-  messageId?: string
-}
-
-export type OutputBlockHandler = (
-  content: string,
-  context: OutputBlockContext,
-) => ReactNode
+export type { OutputBlockContext, OutputBlockHandler }
 
 const handlers = new Map<string, OutputBlockHandler>()
 
@@ -28,6 +20,9 @@ export const outputBlockRegistry = {
       throw new Error(`重复注册的输出块标签：${normalizedTag}`)
     }
     handlers.set(normalizedTag, handler)
+  },
+  unregister(tag: string): boolean {
+    return handlers.delete(tag.trim().toLowerCase())
   },
   get(tag: string): OutputBlockHandler | undefined {
     return handlers.get(tag.toLowerCase())

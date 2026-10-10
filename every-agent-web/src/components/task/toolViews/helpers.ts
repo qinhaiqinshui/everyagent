@@ -86,6 +86,15 @@ export function buildAggregatedToolDetailFromCall(
   }
 }
 
+/**
+ * 从任意形态路径（POSIX `/` 与 Windows `\` 分隔符可混合）提取末段文件名。
+ * 末尾分隔符（目录路径）会被剥掉；无有效片段（空串 / 纯分隔符）时回退原字符串。
+ */
+export function extractFileName(path: string): string {
+  const segments = path.split(/[\\/]+/).filter(Boolean)
+  return segments.length > 0 ? segments[segments.length - 1] : path
+}
+
 export function truncateInlineText(text: string, maxLength = 160): string {
   if (text.length <= maxLength) {
     return text

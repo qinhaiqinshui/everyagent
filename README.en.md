@@ -15,14 +15,42 @@
 
 [简体中文](README.md) | **English**
 
+## 📑 Table of Contents
+
+- [✨ Highlights](#-highlights)
+  - [🌍 Multi-device control — truly "usable anywhere"](#-multi-device-control--truly-usable-anywhere)
+  - [🔒 Data never leaves your machine — dual-key authentication is safer](#-data-never-leaves-your-machine--dual-key-authentication-is-safer)
+  - [📡 Resumable playback — progress is never lost](#-resumable-playback--progress-is-never-lost)
+  - [🤖 Full AI visibility](#-full-ai-visibility)
+  - [🛡️ Security sandbox + human-AI collaboration guardrails](#-security-sandbox--human-ai-collaboration-guardrails)
+  - [🔌 Plug in any model, with built-in failover](#-plug-in-any-model-with-built-in-failover)
+  - [🧱 Plugin-based architecture — everything is pluggable](#-plugin-based-architecture--everything-is-pluggable)
+  - [🖥️ Desktop edition works out of the box](#-desktop-edition-works-out-of-the-box)
+  - [🧩 Four modules, freely combinable for deployment](#-four-modules-freely-combinable-for-deployment)
+  - [🏢 Intranet deployment for companies — integrate with existing systems with zero friction](#-intranet-deployment-for-companies--integrate-with-existing-systems-with-zero-friction)
+- [📸 Screenshots](#-screenshots)
+- [🏗️ Architecture Overview](#-architecture-overview)
+- [🚀 Quick Start](#-quick-start)
+  - [Option 1: Desktop Edition (recommended — zero dependencies · zero config)](#option-1-desktop-edition-recommended--zero-dependencies--zero-config)
+  - [Option 2: Docker (self-host hub + worker + web)](#option-2-docker-self-host-hub--worker--web)
+  - [Option 3: Build from source / development](#option-3-build-from-source--development)
+- [⚙️ Configure Models (Required)](#-configure-models-required)
+- [📱 Multi-Device Access (Core Scenario)](#-multi-device-access-core-scenario)
+- [🛠️ Common Configuration Quick Reference](#-common-configuration-quick-reference)
+- [🧩 Capabilities Overview](#-capabilities-overview)
+- [📦 Tech Stack](#-tech-stack)
+- [📄 License](#-license)
+- [🙌 Contributing](#-contributing)
+
 **Every Agent** is a "reachable from anywhere, executing locally" AI agent system — in one sentence: **your own agent, usable anywhere**.
 
 - ✅ **Open source · free · self-hosted**: all code, files, and data stay on your own computer, never passing through any third-party server. Ideal for privacy-conscious individual developers and small teams.
 - ✅ **Remote control without a public IP**: no need to worry about NAT, routers, or public IPs — the worker only needs to make one **outbound WebSocket** encrypted long connection, and browsers from all over the world can remotely control it (phone, tablet, office computer, Electron desktop).
 - ✅ **Multi-device sync, resumable playback**: close the browser and the task keeps running; reopen it and the full history from start to current is visible, streaming continues, nothing is lost.
 - ✅ **Built-in safety guardrails**: commands run in a sandbox, out-of-bounds operations require popup authorization, optional **AI review / unattended** auto-adjudication.
+- ✅ **Plugin-based architecture — everything is pluggable**: sandboxes, git, model pool, sub-agents, and more (26 built-in plugins) all run on one plugin system — 15 backend + 12 frontend extension points, zero host-code changes; scaffold a new plugin in 5 minutes and install a `.eap` with one click from the Extensions panel.
 
-**Tech keywords**: Spring Boot · Spring AI · Java 25 virtual threads · WebSocket · React · TypeScript · Electron · OpenAI-compatible models · model pool failover · multi-workspace · sub-agent orchestration.
+**Tech keywords**: Spring Boot · Spring AI · Java 25 virtual threads · WebSocket · React · TypeScript · Electron · OpenAI-compatible models · model pool failover · multi-workspace · sub-agent orchestration · plugin system.
 
 ---
 
@@ -51,7 +79,7 @@
 - Per-round token usage and context consumption are clear at a glance.
 
 ### 🛡️ Security sandbox + human-AI collaboration guardrails
-- Commands run in a **sandbox**: on Windows it defaults to a WSL2 managed distribution (a disposable system that can be fully reinstalled); host drives **outside the workspace are invisible**. Network is allowed by default and can be disabled per-task via `/disable-network`.
+- Commands run in a **sandbox**: on Windows it defaults to a **Codex-style native sandbox** (dual local accounts + WRITE_RESTRICTED token + capability SIDs + firewall/WFP; outside the workspace everything is read-only); alternatively a **WSL2 Ubuntu distribution sandbox** (a disposable system that can be fully reinstalled, where host drives outside the workspace are completely invisible) or a **Windows restricted-token sandbox** — all three backends are **pluggable sandbox plugins**, switchable via one line of `worker.sandbox.type`. Network is allowed by default and can be disabled per-task via `/disable-network` (this command ships with the wsl-ubuntu sandbox plugin — it is the only backend that can truly cut the network via `unshare -n`).
 - Out-of-workspace operations / dangerous commands always require **popup authorization** (reject / this round / this task), with optional **AI review** for auto-adjudication or **unattended mode** to run fully automatically.
 - Git credentials are AES-GCM encrypted and stored locally, never transmitted over the network.
 
@@ -59,6 +87,14 @@
 - Any **OpenAI-compatible** provider: OpenAI, DeepSeek, Qwen, GLM, local vLLM/Ollama… just change one line of config.
 - **Model pool**: a task can be configured with multiple models; if the primary fails, it automatically switches to the next without interrupting the task.
 - 💸 **A boon for free-model users**: the project was developed in its later stages entirely on **free models** — thanks to **SenseNova** for its generous free model quotas and to **OpenRouter** for its free model endpoints. Even when a free quota runs out or a model goes down, the model pool auto-switches to the next available one so development never stops. Today, Every Agent can **develop itself using Every Agent** (dogfooding).
+
+### 🧱 Plugin-based architecture — everything is pluggable
+- Many "core capabilities" you're using — sandboxes, git, model pool failover, sub-agents, context compression, AI review, unattended mode, task queues — are **not hard-coded in the host**; they are all implemented as plugins. The repo ships **26 built-in plugins**, each a living example you can copy from.
+- **15 backend extension points** (tools / sandbox backends / Advisors / model enhancement / task lifecycle / custom RPC / slash commands) + **12 frontend UI extension points** (sidebar panels / workspace tabs / tool-call views / file editors / message actions…) — add capabilities to the whole system without touching a single line of hub / worker / web host code.
+- **Three plugin forms**: Java-only / web-only / Java+web hybrid, decided by a single `plugin.json`; the `create-everyagent-plugin` scaffold gets your first plugin running in 5 minutes.
+- Package as **`.eap`** and install with one click from the frontend "Extensions" panel (takes effect after a worker restart); plugins depend only on the lightweight `every-agent-plugin-api` and are class-loading-isolated via `URLClassLoader`, never touching worker internals.
+
+> Full plugin development manual: **[docs/plugin-guide/](docs/plugin-guide/index.md)** (scaffold quick start, plugin.json fields, extension-point reference, build & distribution, troubleshooting).
 
 ### 🖥️ Desktop edition works out of the box
 - Windows x64 **installer / portable edition**: bundles frontend + hub + worker + a slim JRE; double-click to use, no need to install Java / Node / Docker.
@@ -72,6 +108,11 @@ The four modules — web / hub / worker / desktop — are **decoupled and each s
 - **Desktop also supports multi-hub** → the worker bundled in the desktop edition is a full worker; configure multiple `worker.hubs` entries in `~/.everyagent/application-worker.yaml` to register this "desktop worker" to both a local hub and a remote public hub — "out-of-the-box single machine" and "remote control from anywhere" hold simultaneously.
 
 > Tip: `worker.hubs` is a list and is **replaced as a whole** — to keep both local and remote entries in an override file, you must write both entries.
+
+### 🏢 Intranet deployment for companies — integrate with existing systems with zero friction
+- **A single server is all it takes**: deploy hub + worker inside the company, and employees simply open a browser to start using it — all data stays on the company's own servers and never leaves the intranet;
+- **OA systems / mini-programs / WeCom (WeChat Work) can all plug in**: to upstream systems, the platform is just WebSocket + RPC (the protocol contract `every-agent-contract` is fully open); the web frontend is only "one of the official clients" — OA portals, office systems, mini-programs, and WeCom apps, any client that can speak WebSocket can integrate directly;
+- **Auth is deliberately apikey-only — no user-account model**: the platform has no sign-up, no login, no user tables. When a company connects its existing user system (SSO / OA / WeCom), it only needs to map employee identities to apikeys at the integration layer — no need to migrate the user system into the platform, keeping integration cost minimal.
 
 ---
 
@@ -104,11 +145,11 @@ The four modules — web / hub / worker / desktop — are **decoupled and each s
 
 | Module | Responsibility | Port |
 |---|---|---|
-| `every-agent-hub` | Public message hub: pure relay WebSocket, zero state, zero buffer, zero business logic | 9100 |
-| `every-agent-worker` | Executor: Spring Boot + Spring AI 2, manages tasks/models/workspace/sandbox | 9200 (local health only) |
+| `every-agent-hub` | Public message hub: pure relay WebSocket, zero state, zero buffer, zero business logic | 6101 |
+| `every-agent-worker` | Executor: Spring Boot + Spring AI 2, manages tasks/models/workspace/sandbox | 6102 (local health only) |
 | `every-agent-web` | Frontend: React + TS, built-in TS client SDK, remotely controls worker via hub | 5174 (dev) |
 | `every-agent-contract` | Pure protocol contract: frames/RPC envelopes/error codes/identity hashing (Java + TS) | — |
-| `every-agent-desktop` | Electron desktop edition: bundles web + hub + worker (Windows x64) | local 9100/9200 |
+| `every-agent-desktop` | Electron desktop edition: bundles web + hub + worker (Windows x64) | local 6101/6102 |
 
 **Deployment topology matrix** — four modules can be freely combined; three typical forms:
 
@@ -121,6 +162,8 @@ The four modules — web / hub / worker / desktop — are **decoupled and each s
 > Tip: `worker.hubs` is a list and is **replaced as a whole** — to keep both local and remote entries in an override file, you must write both entries.
 
 > For detailed design, see **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** (the single source of truth for architecture: protocol, data model, security model, implementation red lines).
+
+> Plugin development guide → [docs/plugin-guide/](docs/plugin-guide/index.md) (scaffold quick start, extension-point reference, build & distribution, troubleshooting).
 
 ---
 
@@ -160,7 +203,7 @@ Save and **restart the desktop edition** (the worker loads model config at start
 HUB_KEY=your-hub-key docker-compose up --build
 ```
 
-- Hub: `ws://<host>:9100/ws` (health check `GET :9100/health`)
+- Hub: `ws://<host>:6101/ws` (health check `GET :6101/health`)
 - Worker: inside the container it connects outbound to the hub; workspace/data is stored in named volumes
 - Frontend: open `http://<host>:5174` in a browser, fill in the hub address and hub key in the Settings page to discover the worker; then fill in the worker's apiKey to remotely control its data
 
@@ -168,7 +211,7 @@ HUB_KEY=your-hub-key docker-compose up --build
 
 ```bash
 # Java (requires JDK 25; Spring Boot 4.1 / Spring AI 2 are pinned by the root pom)
-mvn -pl every-agent-hub spring-boot:run          # hub @ 9100
+mvn -pl every-agent-hub spring-boot:run          # hub @ 6101
 mvn -pl every-agent-worker spring-boot:run       # worker, connects outbound to hub
 
 # Frontend
@@ -220,10 +263,10 @@ worker:
 | Config | Description |
 |---|---|
 | `worker.hubs[].url / api-key / hub-key` | The only entry point for worker-to-hub connection (multi-hub list); if not configured, the worker doesn't connect to any hub |
-| `HUB_KEY` (env var) | Hub key in plaintext; if not set, the hub refuses to start (sha256 computed at startup) |
+| `HUB_KEY` (env var) | Hub key in plaintext (sha256 computed at startup); falls back to a built-in dev key when unset (local testing only) — an explicitly empty value refuses to start; **public deployments must set a strong key** |
 | `WORKER_ID` (env var) | Worker identity; the frontend addresses by this |
 | `EVERYAGENT_HOME` | System directory (model config / default workspace / data), default `~/.everyagent` |
-| `worker.sandbox.type` | `auto` (Windows defaults to wsl-direct) / `wsl-bwrap` / `windows-mic` / `none` |
+| `worker.sandbox.type` | `auto` (default; picks the highest-priority available sandbox plugin) / `wsl-ubuntu` / `windows-mic` / `none` (legacy values `wsl-direct` / `wsl-bwrap` are auto-normalized) |
 | `worker.permissions.*` | Dangerous operation authorization, AI review timeout, etc. (see Architecture §7.8–§7.9) |
 
 ---
@@ -234,6 +277,7 @@ worker:
 - **Sub-agents**: `run_agent` / `list_agents` / `wait_agents` / `stop_agent`; in-process nesting, context isolation, concurrent execution.
 - **Files & git**: workspace file tree (lazy loading), read/write/move/delete, git status/log/diff/commit/pull/push/clone, encrypted credential storage.
 - **Multi-workspace**: one worker manages multiple projects in parallel, tasks grouped by workspace.
+- **Plugins**: 15 backend extension points (tools / sandbox backends / Advisors / task lifecycle / RPC / slash commands) + 12 frontend UI extension points; one-click `.eap` install and enable/disable from the Extensions panel (takes effect after worker restart); 26 built-in plugins out of the box.
 - **Notifications**: task completion/errors, AI questions, authorization requests — browser and desktop system notifications.
 
 ---
@@ -259,10 +303,6 @@ This project is licensed under the [Apache License 2.0](LICENSE), © 2026 Every 
 
 ## 🙌 Contributing
 
-Issues and PRs are welcome. Before starting, please read:
-
-- [Contributing Guide](CONTRIBUTING.md): development environment, PR process, code and commit conventions;
-- [Code of Conduct](CODE_OF_CONDUCT.md): community behavior expectations;
-- [Security Policy](SECURITY.md): how to responsibly report vulnerabilities.
+Issues and PRs are welcome. Before starting, please read the [Contributing Guide](CONTRIBUTING.md) (development environment, PR process, code and commit conventions).
 
 Development conventions: commit messages in Chinese, one commit per change; before making changes, please read the red-line checklist in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) (especially Spring AI reuse, hub zero-business, disk as single source of truth, etc.).

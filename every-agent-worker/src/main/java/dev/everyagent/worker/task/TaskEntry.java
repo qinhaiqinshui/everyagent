@@ -1,32 +1,47 @@
 package dev.everyagent.worker.task;
 
+import dev.everyagent.plugin.api.agent.AgentContext;
+import dev.everyagent.plugin.api.agent.AgentFactory;
+import dev.everyagent.plugin.api.event.EventLogReader;
+import dev.everyagent.plugin.api.event.EventRecord;
+import dev.everyagent.plugin.api.event.Events;
+import dev.everyagent.plugin.api.interaction.InteractionService;
+import dev.everyagent.plugin.api.task.TaskRuntime;
 import dev.everyagent.contract.json.Json;
-import dev.everyagent.worker.proto.TaskDtos.ModelSnapshot;
+import dev.everyagent.plugin.api.model.EventEmitter;
+import dev.everyagent.plugin.api.model.ModelConfig;
+import dev.everyagent.worker.agent.AgentEntity;
+import dev.everyagent.worker.agent.AgentFactoryImpl;
+import dev.everyagent.worker.interaction.SubjectBoundInteractionService;
 import dev.everyagent.worker.proto.TaskDtos.TaskStatus;
 import dev.everyagent.worker.proto.TaskDtos.TaskSummary;
-import dev.everyagent.worker.proto.TaskDtos.Usage;
+import dev.everyagent.plugin.api.event.Usage;
 import dev.everyagent.worker.proto.TaskDtos.UsageSummary;
 import tools.jackson.databind.JsonNode;
-import tools.jackson.databind.node.ArrayNode;
 import tools.jackson.databind.node.ObjectNode;
 
+import java.nio.file.Path;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
+import dev.everyagent.plugin.api.config.WorkerConfig;
 
 /**
  * 任务运行时(架构 §5.8):快照 + 事件日志 + 输入队列 + agent 集合。
  * 运行完成即销毁(finish 里 untrack + tasks.remove),磁盘是唯一真相源;
  * 再运行 = 同 taskId 新建本对象(冷启动,mainAgentId 沿用 → 同一 jsonl 文件续写)。
+ *
+ * <p>S2 起 implements {@link TaskRuntime}(extends ExecContext):预绑定端口
+ * agentFactory()/interaction() 见下方懒加载实现;S3 授权链收编 ExecContext 后,
+ * 原 permission {@code TaskInfo} 过渡实现已退役删除。
  */
-public final class TaskEntry {
+public final class TaskEntry implements TaskRuntime {
 
     public final String taskId;
     public final String title;
-    public final ModelSnapshot snapshot;
-    /** 内存持有,永不写入事件日志或频段。 */
-    public final String apiKey;
+    public final ModelConfig snapshot;
     /**
      * 工作区根(meta.workspace;挂靠关系,任务数据存 workspaces/&lt;workspaceId&gt;/tasks 不随之迁移)。
      * 非 final:workspaces.resolveMissing 纠正路径时整体改挂到新目录(见
@@ -45,18 +60,20 @@ public final class TaskEntry {
     public final TaskEvents events;
 
     /**
-     * 最近一轮主 agent 实测 usage(上下文窗口占用口径,随 meta.json 持久化;无则 null)。
-     * 由 WorkerToolEventAdvisor 在每次主 agent 模型调用末帧写入,子 agent 用量忽略
-     * (与前端聊天页电池口径一致:主 agent 最近一轮 inputTokens / contextWindowTokens)。
+     * 任务级上下文占用聚合(随 meta.json 持久化;无则 null)。
+     * 由 usage 投影器从本主体事件流的 {@code usage} 事件维护——聚合任务下所有 agent
+     * 的「最近一轮上下文占用」:Σ inputTokens / Σ contextWindowTokens(每 agent 取其
+     * 最近一轮;已终局 agent 保留最后快照,截断不回滚,新事件自然覆盖)。
+     * 与前端电池口径一致(任务上下文总压力,非单 agent 占用)。
      */
     private volatile Usage lastUsage;
-    /** 最近一次携带的上下文窗口上限(模型/任务快照配置)。 */
+    /** 聚合窗口上限:各 agent 最近一轮 contextWindowTokens 之和(usage 事件载荷)。 */
     private volatile Long contextWindowTokens;
-    /** 最近一轮所用模型名(usage 事件携带)。 */
+    /** 最近一轮所用模型名(usage 事件载荷)。 */
     private volatile String usageModel = "";
     /**
-     * 每轮主 agent usage 后触发:TaskManager 注入的 task.updated 实时广播(终态后不再触发)。
-     * 弱引用语义:广播失败不阻塞任务线程。
+     * 每条 usage 事件投影后触发:task.wires 节点注入的 task.updated 实时广播
+     * (钩子自身判终态并吞异常)。弱引用语义:广播失败不阻塞任务线程。
      */
     public volatile Runnable onUsageBroadcast;
 
@@ -71,124 +88,213 @@ public final class TaskEntry {
     public volatile boolean finalized;
 
     /**
-     * 用户请求停止后置位:阻止主 agent 在取消竞态窗口内再启动新的子 agent。
-     * 由 rpcTaskCancel 在取消子 future 前置位;任务终态/再运行重建 TaskEntry 后自然复位。
+     * 通用任务级持久化数据（替代原 taskFlags，Map<String, Boolean>）。
+     * 插件用字符串 key 存取任意类型值（如 "ai-review"→Boolean、"unattended"→Boolean），
+     * 核心不感知具体 key/value 类型。
+     * 随 {@link #summaryJson()} 落盘 meta.json、再运行仍保持。旧格式自动迁移（见 TaskManager）。
      */
-    public volatile boolean stopRequested;
+    public final java.util.Map<String, Object> metadata = new java.util.concurrent.ConcurrentHashMap<>();
 
-    /**
-     * AI 审议开关(任务级,plan-unattended-ai-auth §关键设计决策):开启后授权弹窗改
-     * AI 安全审议(拦截弹窗),随 {@link #summaryJson()} 落盘 meta.json、再运行仍保持。
-     * 由 {@code AiReviewSlashProvider} 的 onSelect/onCancel 置位复位并落盘;可单独开启
-     * (不依赖无人值守)。真正的授权分派由 {@code PermissionGate} 读本字段(步骤 6)。
-     */
-    public volatile boolean aiReview;
+    // ---- TaskRuntime 域中性槽位实现 ----
 
-    /**
-     * 无人值守开关(任务级,plan-unattended-ai-auth §关键设计决策):开启后 AI 调用
-     * ask_user 时被 {@code UnattendedAskUserCallback} 装饰器拦截、代替人工逐题选择
-     * 第一个选项并以「题干：首选项」格式回传作答文本,不挂起等待;
-     * 随 {@link #summaryJson()} 落盘 meta.json、再运行仍保持。
-     * 由 {@code UnattendedSlashProvider} 的 onSelect/onCancel 置位复位并落盘;
-     * 开启无人值守时联动开启 AI 审议(由 selectHandler 一次返回两个胶囊,前端各自 apply)。
-     * 装饰器在 call() 中实时读本字段(volatile),运行中点胶囊开/关即时生效。
-     */
-    public volatile boolean unattended;
-
-    /**
-     * 禁网开关(任务级):开启后本任务后续所有命令禁止访问网络(覆盖 worker 级
-     * {@code sandbox.allow-network=true} 默认放行),随 {@link #summaryJson()} 落盘
-     * meta.json、再运行仍保持。由 {@code NetworkSlashProvider}(/禁用网络)的 onSelect/onCancel
-     * 置位复位并落盘。默认 false = 继承全局默认(放行),用户选 /禁用网络 显式关闭。
-     */
-    public volatile boolean networkBlocked;
-
-    /**
-     * 启用 powershell 开关(任务级):开启后主/子 agent 工具集在 bash 之外<b>追加</b>
-     * {@code powershell} 工具(WSL 后端经发行版内 pwsh 执行),让 AI 同时拥有 powershell
-     * 与 bash 两个命令工具;随 {@link #summaryJson()} 落盘 meta.json、再运行仍保持。
-     * 由 {@code PowerShellEnableSlashProvider}(/允许AI访问电脑)的 onSelect/onCancel
-     * 置位复位并落盘;buildMainAgent/buildAgent 每次运行构建工具集时实时读本字段
-     * (选中/取消从下一轮或再运行起生效)。
-     * 仅 WSL+Linux 沙箱后端注册该斜杠条目;windows-mic(Windows+ACL)后端命令工具本就
-     * 是 PowerShellTool,不注册,本开关在该后端无意义(默认 false)。
-     */
-    public volatile boolean powershellEnabled;
-
-    /**
-     * slash 任务级 token 槽:自包含 opaque token 串数组,仅 slash 层存储、业务方不读。
-     * 新任务由 task.run 的 taskTokens 入参写入,随 meta.json 的 slashTaskTokens 落盘,
-     * 冷启动续跑(startRerun)回读恢复。线程安全(CopyOnWriteArrayList),快照读。
-     */
-    private final java.util.concurrent.CopyOnWriteArrayList<String> slashTaskTokens =
-            new java.util.concurrent.CopyOnWriteArrayList<>();
-
-    /** 追加一条 slash 任务级 opaque token(判空、去重:重复或空/null 忽略)。 */
-    public void addSlashTaskToken(String opaque) {
-        if (opaque == null || opaque.isEmpty()) {
-            return;
-        }
-        if (!slashTaskTokens.contains(opaque)) {
-            slashTaskTokens.add(opaque);
-        }
+    @Override
+    public String taskId() {
+        return taskId;
     }
 
-    /** 移除一条 slash 任务级 opaque token。 */
-    public void removeSlashTaskToken(String opaque) {
-        if (opaque == null) {
-            return;
+    @Override
+    public String status() {
+        return status.wire();
+    }
+
+    @Override
+    public boolean terminal() {
+        return status.terminal();
+    }
+
+    @Override
+    public Map<String, Object> metadata() {
+        return metadata;
+    }
+
+    /** 任务数据目录路径（由 TaskStore 定位，创建时注入）。 */
+    private volatile Path taskDir;
+
+    /** 注入任务数据目录路径（TaskEntryCreateNode 创建后调用）。 */
+    public void taskDir(Path dir) {
+        this.taskDir = dir;
+    }
+
+    @Override
+    public Path taskDir() {
+        return taskDir;
+    }
+
+    // ---- ExecContext 槽位显式实现(原 TaskRuntime default 桥接显式化,语义不变;§4.3) ----
+
+    /** 执行主体 ID:任务域即 taskId。 */
+    @Override
+    public String subjectId() {
+        return taskId;
+    }
+
+    /** 任务级事件口:桥接 {@link #events()}。 */
+    @Override
+    public EventEmitter emitter() {
+        return events();
+    }
+
+    /** 数据目录:桥接 {@link #taskDir()}。 */
+    @Override
+    public Path dataDir() {
+        return taskDir();
+    }
+
+    // ---- ExecContext 预绑定端口(agentFactory / interaction,§4.1;懒加载 + 裸依赖注入) ----
+
+    /** 绑定 Agent 工厂的裸依赖(TaskManager → TaskEntryCreateNode 组装时注入)。 */
+    private volatile AgentFactoryImpl agentFactoryImpl;
+    /** 绑定交互口的裸依赖(TaskManager → TaskEntryCreateNode 组装时注入)。 */
+    private volatile InteractionService interactionService;
+    /** 懒加载缓存:agentFactoryImpl.bind(this)(TaskBoundAgentFactory,worker.agent 包内类型)。 */
+    private volatile AgentFactory boundAgentFactory;
+    /** 懒加载缓存:new SubjectBoundInteractionService(interactionService, taskId)。 */
+    private volatile InteractionService boundInteraction;
+
+    /**
+     * 注入预绑定端口的裸依赖(TaskEntryCreateNode 创建本对象后调用,与 taskDir 注入同风格)。
+     * 未注入时 agentFactory()/interaction() 返回 null(单测直构场景)。
+     */
+    public void bindExecPorts(AgentFactoryImpl agentFactory, InteractionService interaction) {
+        this.agentFactoryImpl = agentFactory;
+        this.interactionService = interaction;
+    }
+
+    /** 已绑定本任务的 Agent 工厂(TaskBoundAgentFactory 静态代理;唯一获取口,§4.5)。 */
+    @Override
+    public AgentFactory agentFactory() {
+        AgentFactory bound = boundAgentFactory;
+        if (bound != null) {
+            return bound;
         }
-        slashTaskTokens.remove(opaque);
+        AgentFactoryImpl impl = agentFactoryImpl;
+        if (impl == null) {
+            return null;
+        }
+        bound = impl.bind(this);
+        boundAgentFactory = bound;
+        return bound;
     }
 
-    /** slash 任务级 token 快照(不可变;供 summaryJson 序列化与建后回调遍历)。 */
-    public List<String> slashTaskTokens() {
-        return List.copyOf(slashTaskTokens);
+    /** 已绑定本任务的交互口(SubjectBoundInteractionService:ask 自动填 taskId,§4.1)。 */
+    @Override
+    public InteractionService interaction() {
+        InteractionService bound = boundInteraction;
+        if (bound != null) {
+            return bound;
+        }
+        InteractionService raw = interactionService;
+        if (raw == null) {
+            return null;
+        }
+        bound = new SubjectBoundInteractionService(raw, taskId);
+        boundInteraction = bound;
+        return bound;
     }
 
-    public final InputQueue inputQueue = new InputQueue();
+    // ---- AgentContext 接口已删除，以下为 TaskEntry 自身方法 ----
 
-    public final Map<String, AgentEntity> subs = new ConcurrentHashMap<>();
-    public final Map<String, java.util.concurrent.Future<?>> subFutures = new ConcurrentHashMap<>();
+    /** 工作区根路径。 */
+    public String workspaceRoot() {
+        return workspaceRoot;
+    }
+
+    // ---- TaskRuntime 接口方法 ----
+
+    @Override
+    public String workspaceId() {
+        return workspaceId;
+    }
+
+    @Override
+    public String mainAgentId() {
+        return mainAgentId;
+    }
+
+    @Override
+    public ModelConfig snapshot() {
+        return snapshot;
+    }
+
+    @Override
+    public EventEmitter events() {
+        return events;
+    }
+
+    @Override
+    @SuppressWarnings("unchecked")
+    public Map<String, AgentContext> agents() {
+        return (Map<String, AgentContext>) (Map) agents;
+    }
+
+    @Override
+    public AgentContext main() {
+        return main;
+    }
+
+    @Override
+    public EventLogReader log() {
+        return log;
+    }
+
+    @Override
+    public long startedAt() {
+        Long v = startedAt;
+        return v != null ? v : 0;
+    }
+
+    @Override
+    public long endedAt() {
+        Long v = endedAt;
+        return v != null ? v : 0;
+    }
+
+    @Override
+    public void touch() {
+        lastActivityMs.set(System.currentTimeMillis());
+    }
+
+    // summaryJson() 已存在，自然满足 TaskRuntime.summaryJson() 接口方法
+
+    @Override
+    public void truncateLogAfter(long targetSeq) {
+        log.truncateAfter(targetSeq);
+    }
+
+    public final Map<String, AgentEntity> agents = new ConcurrentHashMap<>();
     public volatile java.util.concurrent.Future<?> runFuture;
-    /**
-     * 当前回合文件改动收集器:FileChangeAdvisor 在主 agent 首次 adviseStream 时新建、
-     * 工具循环最后一轮收口后置空;主/子 agent 的工具调用均经 FileChangeAdvisor 记录到本槽
-     * (子 agent 在主 agent run 内部递归执行,其保存同样归入当前回合)。运行期状态,不落盘。
-     */
-    public volatile FileChangesCollector fileChanges;
 
-    /**
-     * 本轮文件改动轻量摘要(FileChangeAdvisor 收口时写,RoundIndexAdvisor 消费后清空):
-     * 仅 filePath/fileName/changeType/saveCount 的数组,随 rounds.jsonl 每轮行内联落盘。
-     */
-    public volatile JsonNode fileChangesLight;
-
-    /**
-     * 本轮文件改动全文(FileChangeAdvisor 收口时写,RoundIndexAdvisor 消费后清空):
-     * 形状为 { changes:[{filePath,fileName,changeType,beforeContent,afterContent,saveCount}] },
-     * 由 RoundIndexStore 写到 {@code file-changes/<roundId>.json}。
-     */
-    public volatile JsonNode fileChangesFull;
-
-    private final AtomicLong lastActivityMs = new AtomicLong(createdAt);
+    private final java.util.concurrent.atomic.AtomicLong lastActivityMs;
 
     public TaskEntry(String taskId, String title,
-            ModelSnapshot snapshot, String apiKey, String workspaceRoot, String workspaceId, String mainAgentId,
+            ModelConfig snapshot, String workspaceRoot, String workspaceId, String mainAgentId,
             long maxEvents) {
         this.taskId = taskId;
         this.title = title;
         this.snapshot = snapshot;
-        this.apiKey = apiKey;
         this.workspaceRoot = workspaceRoot;
         this.workspaceId = workspaceId;
         this.mainAgentId = mainAgentId;
+        this.lastActivityMs = new java.util.concurrent.atomic.AtomicLong(createdAt);
         this.log = new EventLog(maxEvents);
         this.events = new TaskEvents(log, mainAgentId);
-    }
-
-    public void touch() {
-        lastActivityMs.set(System.currentTimeMillis());
+        // usage 投影:订阅自身事件流(构造期日志必为空,首条事件必然晚于订阅;§5.2 事件先行)。
+        this.log.addListener(new EventLogReader.Listener() {
+            @Override
+            public void onAppend() {
+                projectUsage();
+            }
+        });
     }
 
     /** 再运行时保留原创建时间。 */
@@ -203,13 +309,13 @@ public final class TaskEntry {
     }
 
     /** 主 + 子 agent 的 usage 合计。 */
-    public Usage totalUsage(AgentEntity main) {
+    public Usage totalUsage() {
         Usage total = Usage.zero();
         if (main != null) {
             total = total.plus(main.usage());
         }
-        for (AgentEntity sub : subs.values()) {
-            total = total.plus(sub.usage());
+        for (AgentEntity a : agents.values()) {
+            total = total.plus(a.usage());
         }
         return total;
     }
@@ -218,35 +324,11 @@ public final class TaskEntry {
     public volatile AgentEntity main;
 
     /**
-     * 子 agent 元数据台账(agentId → AgentEntity.toSummary 序列化):
-     * 创建/复用/终态收口/每轮 usage 时同步刷新,由 TaskStore.writeAgents 独立落盘 agents.json
-     * (从 meta.json 拆出,减轻 tasks.list 任务列表数据);
-     * 冷启动续跑时恢复,list_agents/wait_agents 据此在无运行实体时仍返回历史摘要。
-     * ConcurrentHashMap:子 agent 线程收口写、主 agent 线程遍历读(并发安全,弱一致)。
-     * 展示顺序由 list_agents 按 createdAt 稳定排序,不依赖遍历序。
+     * 记录最近一轮实测 usage(上下文窗口占用口径)。
+     * 由 usage 投影器内部调用(见 {@link #projectUsage()};再运行冷启动基线由
+     * {@link #seedUsageMeta} 从 meta.usage 恢复,新事件到达后自然接续覆盖)。
      */
-    public final Map<String, ObjectNode> agentLedger = new ConcurrentHashMap<>();
-
-    /** agent 台账变化后的持久化钩子(TaskManager 注入 store.writeAgents;失败不阻塞任务)。 */
-    public volatile Runnable persistHook;
-
-    /** 触发 agent 台账持久化(收口/定时轮询共用;终态由 finish 统一落盘)。 */
-    public void persist() {
-        Runnable h = persistHook;
-        if (h != null) {
-            try {
-                h.run();
-            } catch (RuntimeException ignored) {
-                // 持久化失败不阻塞 agent 执行
-            }
-        }
-    }
-
-    /**
-     * 记录最近一轮主 agent 实测 usage(上下文窗口占用口径)。
-     * 由 WorkerToolEventAdvisor 在主 agent 模型调用末帧调用;子 agent 用量忽略。
-     */
-    public void recordUsage(Usage round, Long ctxWindow, String model) {
+    private void recordUsage(Usage round, Long ctxWindow, String model) {
         if (round == null) {
             return;
         }
@@ -256,6 +338,101 @@ public final class TaskEntry {
         }
         if (model != null && !model.isEmpty()) {
             usageModel = model;
+        }
+    }
+
+    // ---- usage 事件投影(事件三条出路对 task 层同构,§5.2;原 advisor 主动下探迁此) ----
+
+    private static final org.slf4j.Logger LOG =
+            org.slf4j.LoggerFactory.getLogger(TaskEntry.class);
+
+    /** 投影串行锁:并发 agent 轮的 onAppend 信号排队处理,保证投影与广播恰好一次。 */
+    private final Object usageProjectionLock = new Object();
+    /** 已投影到的最后一条事件 seq(readAfterSeq 游标;usage 事件为独立雪花 seq,无共享组)。 */
+    private long usageCursor;
+    /** 各 agent 最近一轮 usage(聚合口径数据基;空串键 = 主 agent)。 */
+    private final Map<String, Usage> usageRoundByAgent = new LinkedHashMap<>();
+    /** 各 agent 最近一轮上下文窗口(与 usageRoundByAgent 同步维护)。 */
+    private final Map<String, Long> usageWindowByAgent = new LinkedHashMap<>();
+
+    /**
+     * 订阅本主体事件流,把新增事件中的 {@code usage} 投影为任务级最近一轮占用。
+     * EventLog 的 onAppend 在发射线程内联触发(与 AgentLedger 同机制),投影时序与
+     * 原 advisor 内联调用等价;游标只进不退,编辑重发截断后新事件(新雪花 seq)天然续读。
+     */
+    private void projectUsage() {
+        synchronized (usageProjectionLock) {
+            while (true) {
+                List<EventRecord> batch = log.readAfterSeq(usageCursor, 100);
+                if (batch.isEmpty()) {
+                    return;
+                }
+                for (EventRecord r : batch) {
+                    if (Events.USAGE.equals(r.event())) {
+                        try {
+                            onUsageEvent(r);
+                        } catch (RuntimeException e) {
+                            LOG.debug("usage 事件投影失败 task={} seq={}", taskId, r.seq(), e);
+                        }
+                    }
+                    usageCursor = r.seq();
+                }
+                if (batch.size() < 100) {
+                    return;
+                }
+            }
+        }
+    }
+
+    /**
+     * 单条 usage 事件 → 任务级聚合占用 + task.updated 广播。
+     * 聚合口径:任务电池 = 任务下所有 agent「最近一轮上下文占用」之和——
+     * Σ inputTokens / Σ contextWindowTokens,每 agent 取其最近一轮(新轮覆盖旧轮;
+     * 已终局 agent 保留最后快照;截断不回滚,后续新事件自然覆盖)。model 取最近写者。
+     * 载荷形态:{@code {data: {model, contextWindowTokens, round: {inputTokens,
+     * outputTokens, totalTokens}}}}(EmitEvent.data → payload.data)。
+     */
+    private void onUsageEvent(EventRecord r) {
+        JsonNode data = r.payload() == null ? null : r.payload().path("data");
+        if (data == null || !data.isObject()) {
+            return;
+        }
+        JsonNode round = data.path("round");
+        long in = round.path("inputTokens").asLong(0);
+        long out = round.path("outputTokens").asLong(0);
+        if (in == 0 && out == 0) {
+            return; // 防御:发射侧保证 round 非零,异常形态直接丢弃
+        }
+        long total = round.path("totalTokens").asLong(0);
+        long ctxWindow = data.path("contextWindowTokens").asLong(0);
+        String model = data.path("model").asString("");
+        String agentId = r.agentId() == null ? "" : r.agentId();
+        // 每 agent 最近一轮 → 任务级聚合(锁内单线程维护,投影串行)
+        usageRoundByAgent.put(agentId, new Usage(in, out, total > 0 ? total : in + out));
+        usageWindowByAgent.put(agentId,
+                ctxWindow > 0 ? ctxWindow : WorkerConfig.DEFAULT_CONTEXT_WINDOW_TOKENS);
+        long sumIn = 0;
+        long sumOut = 0;
+        long sumTotal = 0;
+        for (Usage u : usageRoundByAgent.values()) {
+            sumIn += u.inputTokens();
+            sumOut += u.outputTokens();
+            sumTotal += u.totalTokens();
+        }
+        long sumWindow = 0;
+        for (Long w : usageWindowByAgent.values()) {
+            sumWindow += w;
+        }
+        recordUsage(new Usage(sumIn, sumOut, sumTotal), sumWindow,
+                model.isEmpty() ? null : model);
+        // 先更新后广播:钩子内组装 runtimeSummaryJson(此刻已含本轮占用)再 fanout tasks 频道。
+        Runnable broadcast = onUsageBroadcast;
+        if (broadcast != null) {
+            try {
+                broadcast.run();
+            } catch (RuntimeException e) {
+                LOG.debug("usage 广播失败 task={} seq={}", taskId, r.seq(), e);
+            }
         }
     }
 
@@ -303,53 +480,24 @@ public final class TaskEntry {
         ObjectNode n = (ObjectNode) Json.toJson(s);
         // 稳定工作区 id(磁盘存储维度;TaskSummary record 保持不动,wire/meta 上额外携带)。
         n.put("workspaceId", workspaceId);
-        // 任务级开关随 meta 落盘:缺失 = false,再运行据此保持开启(磁盘是唯一真相源)。
-        if (aiReview) {
-            n.put("aiReview", true);
-        }
-        if (unattended) {
-            n.put("unattended", true);
-        }
-        if (networkBlocked) {
-            n.put("networkBlocked", true);
-        }
-        if (powershellEnabled) {
-            n.put("powershellEnabled", true);
-        }
-        // 子 agent 台账不随 meta 落盘:独立写 agents.json(TaskStore.writeAgents),
-        // 避免任务列表(tasks.list 读 meta)携带全量子 agent 摘要导致数据膨胀。
-        // slash 任务级 token(仅 slash 层存储、业务方不读;随 meta 落盘,冷启动续跑回读)。
-        List<String> slashTokens = slashTaskTokens();
-        if (!slashTokens.isEmpty()) {
-            ArrayNode tokArr = Json.arr();
-            for (String tok : slashTokens) {
-                tokArr.add(tok);
-            }
-            n.set("slashTaskTokens", tokArr);
+        // 任务级持久化数据随 meta 落盘:metadata Map 序列化(缺失 = 空 map,再运行据此保持)。
+        if (!metadata.isEmpty()) {
+            var metaObj = n.putObject("metadata");
+            metadata.forEach((k, v) -> metaObj.set(k, Json.toJson(v)));
         }
         return n;
-    }
-
-    /** 待消费输入快照(弱一致只读;运行时态,不落盘不进 TaskSummary)。 */
-    public List<String> pendingInputs() {
-        return inputQueue.snapshot();
     }
 
     /**
-     * wire 专用组装:summary + pendingInputs 快照(架构 §3.3)。
-     * 仅用于发布/tasks.list 内存行等线上组装点;meta.json 供体保持 {@link #summaryJson()},
-     * 磁盘与运行时队列零污染。
+     * wire 专用组装:summary（无 pendingInputs —— 队列概念已插件化，核心不持有）。
+     * 队列插件经 task.updated 广播时自行在 payload 中补充 pendingInputs。
      */
     public ObjectNode runtimeSummaryJson() {
-        ObjectNode n = summaryJson();
-        ArrayNode q = Json.arr();
-        pendingInputs().forEach(q::add);
-        n.set("pendingInputs", q);
-        return n;
+        return summaryJson();
     }
 
-    /** 当前挂起的 ask 数(worker 内部状态推算 waiting-user)。 */
-    public List<AgentEntity> subList() {
-        return List.copyOf(subs.values());
+    /** 当前挂起的所有 agent 实体列表。 */
+    public List<AgentEntity> agentList() {
+        return List.copyOf(agents.values());
     }
 }

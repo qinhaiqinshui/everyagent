@@ -5,12 +5,13 @@ import dev.everyagent.contract.rpc.Rpc;
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.hub.HubPool;
 import dev.everyagent.worker.os.OsReveal;
-import dev.everyagent.worker.proto.Channels;
+import dev.everyagent.plugin.api.event.Channels;
 import dev.everyagent.worker.proto.RpcMethods;
-import dev.everyagent.worker.rpc.BadParamsException;
-import dev.everyagent.worker.rpc.NotFoundException;
+import dev.everyagent.plugin.api.exception.BadParamsException;
+import dev.everyagent.plugin.api.exception.NotFoundException;
 import dev.everyagent.worker.rpc.RpcDispatcher;
 import dev.everyagent.worker.rpc.RpcContext;
+import dev.everyagent.worker.tools.permission.GrantRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -19,9 +20,12 @@ import tools.jackson.databind.node.ArrayNode;
 import tools.jackson.databind.node.ObjectNode;
 
 import java.io.IOException;
+import java.nio.file.AccessDeniedException;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Comparator;
@@ -37,10 +41,10 @@ public class FsService {
 
     private static final Logger log = LoggerFactory.getLogger(FsService.class);
 
-    /** 单帧内联上限:超过则 rpc.data 分批回传(架构 §5.4);fs.search 分批复用同款阈值(包私有共享)。 */
-    static final int INLINE_MAX = 256 * 1024;
-    /** rpc.data 单批大小上限(基础值);fs.search 按文件边界切批,单文件项可超出(不撕裂文件项)。 */
-    static final int CHUNK = 192 * 1024;
+    /** 单帧内联上限:超过则 rpc.data 分批回传(架构 §5.4);search 分批复用同款阈值(包私有共享)。 */
+    public static final int INLINE_MAX = 256 * 1024;
+    /** rpc.data 单批大小上限(基础值);search 按文件边界切批,单文件项可超出(不撕裂文件项)。 */
+    public static final int CHUNK = 192 * 1024;
     /** 单次写入上限,防协议滥用。 */
     private static final int MAX_WRITE = 16 * 1024 * 1024;
 
@@ -49,13 +53,16 @@ public class FsService {
     private final WorkerProperties props;
     /** 系统技能目录只读附加根解析(skills 读免授权,§13.8;只读操作消费)。 */
     private final SkillsReadonlyRoots skillsReadonlyRoots;
+    /** 授权根注册表:只读沙箱并入在途授权根(前端文件页读 AI 本任务经授权读过的文件)。 */
+    private final GrantRegistry grants;
 
     public FsService(RpcDispatcher dispatcher, WorkspaceManager workspaces, HubPool pool,
-            WorkerProperties props) {
+            WorkerProperties props, GrantRegistry grants) {
         this.workspaces = workspaces;
         this.pool = pool;
         this.props = props;
         this.skillsReadonlyRoots = new SkillsReadonlyRoots(props);
+        this.grants = grants;
 
         dispatcher.register(RpcMethods.FS_LIST, this::list);
         dispatcher.register(RpcMethods.FS_REVEAL, this::reveal);
@@ -66,6 +73,29 @@ public class FsService {
         dispatcher.register(RpcMethods.FS_MOVE, this::move);
         dispatcher.register(RpcMethods.FS_DELETE, this::delete);
         dispatcher.register(RpcMethods.FS_BROWSE, this::browse);
+        dispatcher.register(RpcMethods.FS_READ_RAW, this::readRaw);
+        dispatcher.register(RpcMethods.FS_WRITE_RAW, this::writeRaw);
+        dispatcher.register(RpcMethods.FS_STAT_RAW, this::statRaw);
+    }
+
+    /**
+     * 按机器绝对路径获取文件属性(不经 workspace 沙箱;文件标签页用户操作专用)。
+     * 与 fs.readRaw 同源:人工行为不走 PermissionGate/沙箱授权链路。
+     * 返回与 fs.list 条目同构的字段(name/dir/size/modifiedTs/createdTs)。
+     */
+    private void statRaw(RpcContext ctx) throws IOException {
+        Path file = Path.of(ctx.strParam("path")).toAbsolutePath().normalize();
+        if (!Files.exists(file)) {
+            throw new NotFoundException("文件不存在: " + file);
+        }
+        BasicFileAttributes attrs = statEntry(file);
+        ObjectNode o = Json.obj();
+        o.put("name", file.getFileName().toString());
+        o.put("dir", attrs != null && attrs.isDirectory());
+        o.put("size", attrs == null || attrs.isDirectory() ? 0 : attrs.size());
+        o.put("modifiedTs", attrs != null ? attrs.lastModifiedTime().toMillis() : 0L);
+        o.put("createdTs", attrs != null ? attrs.creationTime().toMillis() : 0L);
+        ctx.ok(o);
     }
 
     // ---- 方法实现 ----
@@ -145,6 +175,59 @@ public class FsService {
             res.put("supportsFiles", true);
         }
         ctx.ok(res.set("entries", entries));
+    }
+
+    /**
+     * 按机器绝对路径读取文件(不经 workspace 沙箱)。专供文件标签页的用户操作:
+     * 用户点击工具调用里的文件路径 chip 打开文件页,是人工行为而非 AI 工具调用,
+     * 不走 PermissionGate/沙箱授权链路(与 fs.browse 同源,依赖 worker 进程文件系统权限)。
+     * 应答形态与 fs.read 完全一致(小文件内联 base64、大文件 rpc.data 分批)。
+     */
+    private void readRaw(RpcContext ctx) throws IOException {
+        Path file = Path.of(ctx.strParam("path")).toAbsolutePath().normalize();
+        if (!Files.exists(file)) {
+            throw new NotFoundException("文件不存在: " + file);
+        }
+        if (!Files.isRegularFile(file)) {
+            throw new NotFoundException("不是文件: " + file);
+        }
+        byte[] bytes = Files.readAllBytes(file);
+        if (bytes.length <= INLINE_MAX) {
+            ctx.ok(Json.obj()
+                    .put("path", file.toString())
+                    .put("size", bytes.length)
+                    .put("base64", Base64.getEncoder().encodeToString(bytes)));
+            return;
+        }
+        Base64.Encoder enc = Base64.getEncoder();
+        for (int off = 0; off < bytes.length; off += CHUNK) {
+            int len = Math.min(CHUNK, bytes.length - off);
+            ObjectNode part = Json.obj()
+                    .put("offset", off)
+                    .put("size", len)
+                    .put("base64", enc.encodeToString(java.util.Arrays.copyOfRange(bytes, off, off + len)));
+            ctx.data(List.of(part), off + len < bytes.length);
+        }
+        ctx.ok(Json.obj().put("path", file.toString()).put("size", bytes.length));
+    }
+
+    /**
+     * 按机器绝对路径写入文件(不经 workspace 沙箱)。专供文件标签页的用户保存操作,
+     * 与 fs.readRaw 同源:人工行为不走 PermissionGate/沙箱授权链路。
+     * 应答形态与 fs.write 一致(返回 path + size);写后广播 fs.changed(workspace 字段
+     * 置空,前端文件树按 workspaceRoot 过滤自然忽略,不影响标签页自身)。
+     */
+    private void writeRaw(RpcContext ctx) throws IOException {
+        Path target = Path.of(ctx.strParam("path")).toAbsolutePath().normalize();
+        byte[] content = decode(ctx.optStrParam("contentBase64", ""));
+        if (content.length > MAX_WRITE) {
+            throw new BadParamsException("单次写入超过上限 " + MAX_WRITE + " 字节");
+        }
+        if (target.getParent() != null) {
+            Files.createDirectories(target.getParent());
+        }
+        Files.write(target, content);
+        ctx.ok(Json.obj().put("path", target.toString()).put("size", content.length));
     }
 
     /**
@@ -257,23 +340,27 @@ public class FsService {
 
     /**
      * 只读操作(read/list/reveal)沙箱:工作区根 + 该工作区外部授权根(externalRoots,
-     * 用户显式选择=已授权,§7.17)+ 系统技能目录只读根(skills 读免授权,§13.8)。
-     * 前端「打开文件」标签页读取 AI 已读的 skill/外部授权文件时经此放行,与 read_file 同源。
+     * 用户显式选择=已授权,§7.17)+ 系统技能目录只读根(skills 读免授权,§13.8)
+     * + PermissionGate 在途授权根(全主体并集;任务收口 gate.evict 驱逐即失效)。
+     * 前端「打开文件」标签页读取 AI 已读的 skill/外部授权/本任务经授权读过的文件
+     * (如工具调用里的工作区外路径 chip)时经此放行,与 read_file 同源(ARCHITECTURE §7 fs.* 行)。
      */
     private Sandbox readSandbox(RpcContext ctx) throws IOException {
         WorkspaceManager.Root root = workspaces.resolve(ctx.strParam("workspace"));
         List<Path> roots = new ArrayList<>(workspaces.externalRootsOf(root.path().toString()));
         roots.addAll(skillsReadonlyRoots.get());
+        roots.addAll(grants.allExtraRoots());
         return new Sandbox(root, roots);
     }
 
     /**
      * 写操作(write/mkdir/move/delete)沙箱:工作区根 + 外部授权根(externalRoots 语义 =
-     * 完全读写,§7.17)。系统技能目录只读根<b>不并入</b>——skills 只读免授权,写不开放(§13.8)。
+     * 完全读写,§7.17)+ 系统技能目录(skills 读写放行,§13.8)。
      */
     private Sandbox sandbox(RpcContext ctx) throws IOException {
         WorkspaceManager.Root root = workspaces.resolve(ctx.strParam("workspace"));
         List<Path> roots = new ArrayList<>(workspaces.externalRootsOf(root.path().toString()));
+        roots.addAll(skillsReadonlyRoots.get());
         return new Sandbox(root, roots);
     }
 
@@ -293,26 +380,61 @@ public class FsService {
                 }
             }
         }
-        Files.deleteIfExists(p);
+        deleteOne(p);
     }
 
-    private ObjectNode entry(Path p) throws IOException {
+    /**
+     * 删除单个文件/空目录。Windows 上带只读属性的文件(典型如 git pack 的 .idx/.pack/.rev,
+     * git 默认置只读)DeleteFile 会抛 AccessDeniedException,导致整棵含 .git 的目录无法删除;
+     * 此处捕获后清掉只读属性重试一次,仍失败则抛回原异常。非 DOS 文件系统无 dos:readonly 视图,
+     * 清属性抛 UnsupportedOperationException/IOException 时同样回退抛原异常。
+     */
+    private static void deleteOne(Path p) throws IOException {
+        try {
+            Files.deleteIfExists(p);
+        } catch (AccessDeniedException e) {
+            try {
+                Files.setAttribute(p, "dos:readonly", false);
+            } catch (UnsupportedOperationException | IOException ignored) {
+                throw e;
+            }
+            Files.deleteIfExists(p);
+        }
+    }
+
+    /**
+     * 目录条目 stat。单条目属性不可读时容错降级,不拖垮整个目录枚举:典型场景是
+     * Windows 上不可解析的 reparse 点(如 WSL/npm 生成的 LX symlink,Win32 跟随
+     * 链接读属性报 ERROR_CANT_ACCESS_FILE「系统无法访问此文件」,曾把整个 fs.list
+     * 打成 INTERNAL 错误、搜索侧边栏文件名搜索整树报错)。跟随读失败先回退
+     * NOFOLLOW 读链接自身属性(悬空/坏链接仍有真实的 size/mtime),仍失败按
+     * dir=false、时间戳 0 的普通文件条目返回(前端按「未知」展示)。
+     */
+    private ObjectNode entry(Path p) {
+        BasicFileAttributes a = statEntry(p);
         ObjectNode o = Json.obj();
         o.put("name", p.getFileName().toString());
-        o.put("dir", Files.isDirectory(p));
-        o.put("size", Files.isDirectory(p) ? 0 : Files.size(p));
-        o.put("modifiedTs", Files.getLastModifiedTime(p).toMillis());
-        o.put("createdTs", createdTs(p));
+        o.put("dir", a != null && a.isDirectory());
+        o.put("size", a == null || a.isDirectory() ? 0 : a.size());
+        o.put("modifiedTs", a != null ? a.lastModifiedTime().toMillis() : 0L);
+        o.put("createdTs", a != null ? a.creationTime().toMillis() : 0L);
         return o;
     }
 
-    /** 读取创建时间;平台/文件系统不支持(如部分 POSIX 无 birth time)时返回 0,前端按「未知」处理。 */
-    private long createdTs(Path p) {
+    /**
+     * 跟随链接读基本属性;失败(悬空链接/不可解析 reparse 点)回退 NOFOLLOW 读
+     * 链接自身,仍失败返回 null(调用方按「未知」降级)。部分平台无 birth time 时
+     * creationTime 返回纪元 0,同样由前端按「未知」处理。
+     */
+    private static BasicFileAttributes statEntry(Path p) {
         try {
-            return Files.readAttributes(p, java.nio.file.attribute.BasicFileAttributes.class)
-                    .creationTime().toMillis();
-        } catch (Exception e) {
-            return 0L;
+            return Files.readAttributes(p, BasicFileAttributes.class);
+        } catch (IOException e) {
+            try {
+                return Files.readAttributes(p, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+            } catch (IOException e2) {
+                return null;
+            }
         }
     }
 

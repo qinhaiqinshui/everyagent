@@ -1,0 +1,9 @@
+{
+  "id": "adaptive-max-tokens",
+  "name": "自适应输出预算",
+  "version": "0.1.0",
+  "description": "检测 finish_reason=length 帧后自动放大 maxTokens 重试,达 ceiling 放弃",
+  "author": "everyagent",
+  "main": "dev.everyagent.plugin.adaptivemaxtokens.AdaptiveMaxTokensPlugin",
+  "enabled": true
+}

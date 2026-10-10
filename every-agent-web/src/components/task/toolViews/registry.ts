@@ -10,6 +10,7 @@
 import type { ComponentType } from 'react'
 import DefaultToolView from './DefaultToolView'
 import type { ToolViewDefinition, ToolViewModuleDefinition, ToolViewProps } from './types'
+import { pluginDispatcher } from '@/plugin/PluginDispatcher'
 
 const modules = import.meta.glob<ToolViewModuleDefinition>('./*.tsx', { eager: true })
 
@@ -31,12 +32,27 @@ for (const mod of Object.values(modules)) {
   }
 }
 
-/** 按工具名取美化视图组件；未注册则返回默认视图。 */
+/**
+ * 按工具名取美化视图组件；未注册则返回默认视图。
+ *
+ * 解析优先级：插件注册的视图（`ui.tool_call_views` 扩展点，整体接管折叠态
+ * + 展开态）> 本目录内置注册表 > DefaultToolView。与 pdf-viewer 注册文件
+ * 编辑器、核心编辑器注册表合并同一模式——核心只做优先级合并，不写业务分支。
+ */
 export function getToolView(toolName: string): ComponentType<ToolViewProps> {
+  for (const def of pluginDispatcher.listRegisteredToolCallViews()) {
+    if (def.toolName === toolName) {
+      // plugin-api 最小化 props 契约与核心 ToolViewProps 运行时同形，注册侧已强转。
+      return def.Component as unknown as ComponentType<ToolViewProps>
+    }
+  }
   return registry.get(toolName) ?? DefaultToolView
 }
 
-/** 判断某工具是否注册了专用美化视图。 */
+/** 判断某工具是否注册了专用美化视图（含插件注册的接管视图）。 */
 export function hasToolView(toolName: string): boolean {
+  if (pluginDispatcher.listRegisteredToolCallViews().some((def) => def.toolName === toolName)) {
+    return true
+  }
   return registry.has(toolName)
 }

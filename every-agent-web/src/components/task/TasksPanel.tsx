@@ -1,16 +1,17 @@
 import React from 'react'
 import { taskQueryService, type TaskListItemSnapshot } from '@/query/taskQueryService'
+import { isTaskActive } from '@/task/taskStatusPresentation'
 import SidebarScrollArea from '@/components/shared/SidebarScrollArea'
 import { getDefaultRuntimeService } from '@/task'
-import { taskStore } from '@/hub/taskStore'
+import { taskStore } from '@/task/taskStore'
 import { workspaceRegistry } from '@/hub/workspaceRegistry'
 import { domainEventBus, DOMAIN_EVENTS } from '@/events/eventBus'
 import { useWorkspaceShell } from '@/components/app/WorkspaceShellContext'
 import ListRowActions, { type ListRowActionsHandle } from '@/components/shared/ui/ListRowActions'
 import { useResponsiveViewport } from '@/hooks/useResponsiveViewport'
 import { useLongPress } from '@/hooks/useLongPress'
-import type { TaskListGroup } from '@/plugin/types'
 import ContextBattery from '@/components/task/ContextBattery'
+import type { AgentListItem } from '@/components/task/AgentListPanel'
 import { ChevronDownIcon, MagnifierCheckIcon, MoreHorizontalIcon, PlusIcon } from '@/components/shared/AppGlyphs'
 import { Button, IconButton } from '@/components/shared/ui'
 import ActionMenu from '@/components/shared/ui/ActionMenu'
@@ -18,6 +19,23 @@ import ConfirmDialog from '@/components/shared/ConfirmDialog'
 import { Checkbox } from 'antd'
 
 const runtimeService = getDefaultRuntimeService()
+
+/** 任务列表组级动作（如"在此工作区新建任务"）。 */
+interface TaskListGroupAction {
+  id: string
+  label: string
+  onSelect: () => void
+}
+
+/** 任务列表分组（按 workspace 分组，由 TasksPanel 内置分组器产出）。 */
+interface TaskListGroup<T> {
+  key: string
+  label: string
+  title?: string
+  tasks: T[]
+  actions?: TaskListGroupAction[]
+  defaultCollapsed?: boolean
+}
 
 
 
@@ -73,6 +91,37 @@ interface TaskListSelection {
   taskId: string
   /** 展示标题。 */
   displayTitle: string
+}
+
+/**
+ * 任务列表行电池详情卡数据:把 TaskListItemSnapshot 整形为任务级汇总项
+ * (与聊天页电池详情卡同构,卡片信息与样式完全复用 AgentInfoHoverCard)。
+ * contextUsage 本就是 worker usage 投影器的任务级聚合(任务下所有 agent 最近一轮
+ * 上下文占用/窗口逐 agent 累加),创建时间用任务创建时间;列表行无 agentMeta 台账,
+ * 累计 tokens 缺失,由卡片显示「—」(聊天页打开建流后由 agentMeta 求和补齐)。
+ */
+function toBatteryAgentItem(task: TaskListItemSnapshot): AgentListItem | null {
+  const usage = task.contextUsage
+  if (!usage) {
+    return null
+  }
+  const used = usage.promptTokens ?? usage.totalTokens ?? 0
+  const windowTokens = usage.maxTokens
+  return {
+    agentId: task.mainAgentId ?? '',
+    title: '全部 agent',
+    status: task.status,
+    isMain: true,
+    meta: {
+      agentId: task.mainAgentId ?? '',
+      createdAt: task.createdAt > 0 ? task.createdAt : undefined,
+      model: usage.model,
+      contextUsed: used,
+      contextWindow: windowTokens > 0 ? windowTokens : undefined,
+      updatedAt: usage.lastUpdatedAt,
+    },
+    contextRatio: windowTokens > 0 ? Math.min(1, Math.max(0, used / windowTokens)) : undefined,
+  }
 }
 
 /**
@@ -155,7 +204,7 @@ export default function TasksPanel({
   React.useEffect(() => {
     setSelectedTaskIds((current) => current.filter((taskId) => {
       const task = tasks.find((item) => item.taskId === taskId)
-      return Boolean(task && task.status !== 'running')
+      return Boolean(task && !isTaskActive(task.status))
     }))
   }, [tasks])
 
@@ -228,7 +277,7 @@ export default function TasksPanel({
 
   /** 当前批删组内可删除（非 running）的任务。 */
   const batchGroupSelectableTasks = React.useMemo(
-    () => batchGroup?.tasks.filter((task) => task.status !== 'running') ?? [],
+    () => batchGroup?.tasks.filter((task) => !isTaskActive(task.status)) ?? [],
     [batchGroup],
   )
 
@@ -261,7 +310,7 @@ export default function TasksPanel({
   }, [batchGroupSelectableTasks])
 
   const handleToggleTask = React.useCallback((task: TaskListItemSnapshot) => {
-    if (task.status === 'running') {
+    if (isTaskActive(task.status)) {
       return
     }
     setSelectedTaskIds((current) => (
@@ -409,15 +458,15 @@ export default function TasksPanel({
           <label
             style={{
               ...taskCheckboxLabelStyle,
-              ...(task.status === 'running' ? disabledCheckboxLabelStyle : null),
+              ...(isTaskActive(task.status) ? disabledCheckboxLabelStyle : null),
             }}
           >
             <Checkbox
               checked={selectedTaskIds.includes(task.taskId)}
-              disabled={task.status === 'running' || deleting}
+              disabled={isTaskActive(task.status) || deleting}
               onChange={() => handleToggleTask(task)}
             />
-            <span>{task.status === 'running' ? '进行中不可删除' : '选择删除'}</span>
+            <span>{isTaskActive(task.status) ? '进行中不可删除' : '选择删除'}</span>
           </label>
           <Button
             variant="ghost"
@@ -446,7 +495,7 @@ export default function TasksPanel({
                   key: 'delete',
                   label: '删除',
                   danger: true,
-                  disabled: task.status === 'running' || deleting,
+                  disabled: isTaskActive(task.status) || deleting,
                   onSelect: () => setSingleDeleteTarget(task),
                 },
               ]}
@@ -478,20 +527,26 @@ export default function TasksPanel({
             ...statusPillStyle,
             ...(task.statusTone === 'active'
               ? activeStatusPillStyle
-              : task.statusTone === 'completed'
-                ? completedStatusPillStyle
-                : task.statusTone === 'stopped'
-                ? stoppedStatusPillStyle
-                : task.statusTone === 'error'
-                ? errorStatusPillStyle
-                : idleStatusPillStyle),
+              : task.statusTone === 'waiting'
+                ? waitingStatusPillStyle
+                : task.statusTone === 'completed'
+                  ? completedStatusPillStyle
+                  : task.statusTone === 'stopped'
+                    ? stoppedStatusPillStyle
+                    : task.statusTone === 'error'
+                      ? errorStatusPillStyle
+                      : idleStatusPillStyle),
           }}
         >
           {task.statusLabel}
         </span>
         {task.contextUsage ? (
           <span style={ctxIndicatorStyle}>
-            <ContextBattery taskId={task.taskId} monitor={task.contextUsage} />
+            <ContextBattery
+              taskId={task.taskId}
+              monitor={task.contextUsage}
+              agentItem={toBatteryAgentItem(task)}
+            />
           </span>
         ) : null}
       </div>
@@ -627,7 +682,7 @@ export default function TasksPanel({
                           key: 'batch-delete',
                           label: '批量删除',
                           danger: true,
-                          disabled: group.tasks.every((task) => task.status === 'running')
+                          disabled: group.tasks.every((task) => isTaskActive(task.status))
                             || deleting
                             || batchGroupKey !== null,
                           onSelect: () => {
@@ -936,6 +991,10 @@ const statusPillStyle: React.CSSProperties = {
 
 const activeStatusPillStyle: React.CSSProperties = {
   color: 'var(--accent-blue)',
+}
+
+const waitingStatusPillStyle: React.CSSProperties = {
+  color: 'var(--accent-amber)',
 }
 
 const idleStatusPillStyle: React.CSSProperties = {

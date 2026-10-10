@@ -8,6 +8,8 @@ bump-version.py —— 一键统一升级各模块版本号
   - every-agent-contract/pom.xml  (parent 引用版本 + 自身版本)
   - every-agent-hub/pom.xml       (parent 引用版本 + 自身版本)
   - every-agent-worker/pom.xml    (parent 引用版本 + 自身版本)
+  - every-agent-plugin-api/pom.xml  (parent 引用版本 + 自身版本)
+  - every-agent-plugins/*/pom.xml    (parent 引用版本 + 自身版本, 动态发现)
   - every-agent-desktop/package.json  (version 字段)
   - every-agent-web/package.json      (version 字段)
 
@@ -53,16 +55,35 @@ _POM_CONTRACT_PROP = re.compile(r"(<every-agent-contract\.version>)([^<]+)(</eve
 _POM_CONTRACT_SELF = re.compile(r"(<version>)([^<]+)(</version>\s*<artifactId>every-agent-contract</artifactId>)")
 _POM_HUB_SELF = re.compile(r"(<version>)([^<]+)(</version>\s*<artifactId>every-agent-hub</artifactId>)")
 _POM_WORKER_SELF = re.compile(r"(<version>)([^<]+)(</version>\s*<artifactId>every-agent-worker</artifactId>)")
+# plugin-api 自身版本位于 artifactId 之后(标准 Maven 顺序)
+_POM_PLUGIN_API_SELF = re.compile(r"(<artifactId>every-agent-plugin-api</artifactId>\s*<version>)([^<]+)(</version>)")
+# 插件子模块自身版本位于 </parent> 之后(统一模式,动态发现)
+_POM_PLUGIN_SELF = re.compile(r"(</parent>\s*<version>)([^<]+)(</version>)")
 _JSON_VERSION = re.compile(r'("version"\s*:\s*")([^"]+)(")')
 
+# 静态槽位: 核心模块 + 前端
 SLOTS = [
     ("pom.xml", [_POM_PARENT, _POM_CONTRACT_PROP]),
     ("every-agent-contract/pom.xml", [_POM_PARENT, _POM_CONTRACT_SELF]),
     ("every-agent-hub/pom.xml", [_POM_PARENT, _POM_HUB_SELF]),
     ("every-agent-worker/pom.xml", [_POM_PARENT, _POM_WORKER_SELF]),
+    ("every-agent-plugin-api/pom.xml", [_POM_PARENT, _POM_PLUGIN_API_SELF]),
+    ("every-agent-plugin-api/js/package.json", [_JSON_VERSION]),
     ("every-agent-desktop/package.json", [_JSON_VERSION]),
     ("every-agent-web/package.json", [_JSON_VERSION]),
 ]
+
+
+def discover_plugin_slots():
+    """动态发现 every-agent-plugins/ 下所有含 pom.xml 的子目录,返回 [(rel_path, [patterns]), ...]"""
+    plugins_dir = ROOT / "every-agent-plugins"
+    if not plugins_dir.is_dir():
+        return []
+    slots = []
+    for pom in sorted(plugins_dir.glob("*/pom.xml")):
+        rel = str(pom.relative_to(ROOT)).replace("\\", "/")
+        slots.append((rel, [_POM_PARENT, _POM_PLUGIN_SELF]))
+    return slots
 
 
 def die(msg: str) -> None:
@@ -108,8 +129,9 @@ def validate_version(ver: str) -> None:
 
 def collect_slots():
     """读取所有槽位文件,校验每个正则唯一匹配,返回 {路径: (原始文本, [(pattern, 当前版本), ...])}"""
+    all_slots = SLOTS + discover_plugin_slots()
     result = {}
-    for rel, patterns in SLOTS:
+    for rel, patterns in all_slots:
         path = ROOT / rel
         text = read_text(path)
         entries = []

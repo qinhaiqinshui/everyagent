@@ -17,12 +17,28 @@ import { channels } from '@every-agent/client'
 import { domainEventBus, DOMAIN_EVENTS } from '@/events/eventBus'
 import { hubSession } from '@/hub/session'
 import { workspaceRegistry } from '@/hub/workspaceRegistry'
-import type {
-  WorkspaceContentSearchFileResult,
-  WorkspaceContentSearchHit,
-  WorkspaceContentSearchResult,
-} from '@/query/workspaceContentSearch'
-import { normalizeWorkspaceRelativePath, toBusinessAbsolutePath } from './pathUtils'
+import { normalizeWorkspaceRelativePath, isAbsoluteBusinessPath, toBusinessAbsolutePath } from './pathUtils'
+
+/**
+ * 把文件标签页的业务路径(workspaceRoot + filePath)还原为机器绝对路径。
+ * - Windows 外部(业务形式 `/C:/Users/...`):去前导 / → `C:/Users/...`
+ * - Unix 外部(业务形式 `//home/user/...`):去一个 / → `/home/user/...`
+ * - 工作区相对(如 `src/main.ts`):拼 workspaceRoot + '/' + rel → 机器绝对路径
+ */
+function resolveMachinePath(workspaceRoot: string, filePath: string): string {
+  const normalized = filePath.replace(/\\/g, '/')
+  // Unix 外部路径:业务形式以 // 开头,去一个 / 还原为机器绝对路径
+  if (normalized.startsWith('//')) {
+    return '/' + normalizeWorkspaceRelativePath(filePath)
+  }
+  // Windows 外部路径:业务形式 /C:/...,normalizeWorkspaceRelativePath 剥前导 / 即盘符路径
+  if (isAbsoluteBusinessPath(filePath)) {
+    return normalizeWorkspaceRelativePath(filePath)
+  }
+  // 工作区相对路径:拼 workspaceRoot
+  const rel = normalizeWorkspaceRelativePath(filePath)
+  return rel ? `${workspaceRoot.replace(/[\\/]+$/, '')}/${rel}` : workspaceRoot
+}
 
 /** 按工作区根反查来源 worker 后定向 RPC(多 worker 并行,fs.* 必带 workspace)。 */
 function rpcForWorkspace(workspace: string, method: string, params: Record<string, unknown>, opts?: { timeoutMs?: number; onData?: (batch: any[], hasMore: boolean) => void }): Promise<any> {
@@ -49,46 +65,6 @@ interface FsReadResult {
   size?: number
   base64?: string
   offset?: number
-}
-
-/** fs.search 入参(架构 §7 契约表):pattern 语义由 isRegex 决定,前端不编译正则。 */
-export interface WorkspaceSearchParams {
-  /** 搜索词:isRegex=true 按正则解释,否则按字面量(worker 侧 --fixed-strings)。 */
-  pattern: string
-  /** 正则模式。 */
-  isRegex: boolean
-  /** 大小写敏感。 */
-  caseSensitive: boolean
-  /** 全字匹配(worker 侧包 `\b(?:...)\b`)。 */
-  wholeWord: boolean
-  /** 包含 glob 串(逗号分隔,原样透传给 worker 的 -g 放行)。 */
-  includeGlobs?: string
-  /** 排除 glob 串(逗号分隔,原样透传给 worker 的 -g 排除)。 */
-  excludeGlobs?: string
-  /** 命中上限,触顶置 truncated,默认 1000(与纯前端搜索路径一致)。 */
-  maxResults?: number
-}
-
-/** fs.search 应答的文件项形态(worker 输出,与 WorkspaceContentSearchFileResult 同构)。 */
-interface FsSearchFileItem {
-  path: string
-  matches?: Array<{
-    lineNumber: number
-    line: string
-    matchIndex?: number
-    matchText?: string
-  }>
-}
-
-/** worker 文件项 → 前端搜索结果形状(字段同名,显式映射让类型检查钳住契约漂移)。 */
-function toSearchFileResult(item: FsSearchFileItem): WorkspaceContentSearchFileResult {
-  const matches: WorkspaceContentSearchHit[] = (item.matches ?? []).map((hit) => ({
-    lineNumber: hit.lineNumber,
-    line: hit.line,
-    matchIndex: hit.matchIndex,
-    matchText: hit.matchText,
-  }))
-  return { path: item.path, matches }
 }
 
 /** fs.browse(includeFiles=true) 应答形态:目录/文件混合条目 + worker 能力标记。 */
@@ -212,6 +188,12 @@ export const workspaceGateway = {
     return stat !== null
   },
 
+  /** exists 的 raw 版本(不经沙箱;用户操作)。 */
+  async existsRaw(workspaceRoot: string, path: string): Promise<boolean> {
+    const stat = await this.statRaw(workspaceRoot, path).catch(() => null)
+    return stat !== null
+  },
+
   async ensureDir(workspaceRoot: string, path: string): Promise<void> {
     wireFsChanged()
     const normalized = normalizeWorkspaceRelativePath(path)
@@ -260,47 +242,6 @@ export const workspaceGateway = {
 
   async readBinaryFile(workspaceRoot: string, path: string): Promise<Uint8Array> {
     return this.readBytes(workspaceRoot, path)
-  },
-
-  /**
-   * 工作区内容搜索(fs.search,架构 §7 契约表):worker 侧内置 rg 在工作区根执行,
-   * 前端只透传 pattern 与匹配开关、不编译正则(非法正则的预检由调用方负责;
-   * 漏检时 worker 的 PatternSyntaxException 也会以 rpc.err 返回)。
-   *
-   * 应答两形态在此归一(同 fs.read 的 rpc.data 分批模式,§5.4):
-   * - 小结果:ok 直接内联 `{matchCount, truncated, files}`;
-   * - 大结果:文件项按序列化大小切批经 rpc.data 回传(批项 = 完整文件项,onData 按
-   *   到达顺序累计合并),末帧 ok 只带 `{matchCount, truncated, fileCount}` 汇总;
-   * 以「末帧应答是否带 files 数组」区分两形态(worker 实现保证互斥),最终产出与纯
-   * 前端搜索同构的 WorkspaceContentSearchResult(UI 与降级路径零差别)。
-   */
-  async search(workspaceRoot: string, params: WorkspaceSearchParams): Promise<WorkspaceContentSearchResult> {
-    // rpc.data 批次项为文件数组片段,按序累计;大结果的真实 files 全在这里
-    const batchedFiles: WorkspaceContentSearchFileResult[] = []
-    const result = await rpcForWorkspace(workspaceRoot, 'fs.search', {
-      pattern: params.pattern,
-      isRegex: params.isRegex,
-      caseSensitive: params.caseSensitive,
-      wholeWord: params.wholeWord,
-      includeGlobs: params.includeGlobs ?? '',
-      excludeGlobs: params.excludeGlobs ?? '',
-      maxResults: params.maxResults ?? 1000,
-    }, {
-      timeoutMs: 120_000,
-      onData: (batch) => {
-        for (const item of batch as FsSearchFileItem[]) {
-          batchedFiles.push(toSearchFileResult(item))
-        }
-      },
-    }) as { matchCount?: number; truncated?: boolean; files?: FsSearchFileItem[] }
-    const files = Array.isArray(result.files)
-      ? result.files.map(toSearchFileResult)
-      : batchedFiles
-    return {
-      matchCount: typeof result.matchCount === 'number' ? result.matchCount : 0,
-      truncated: result.truncated === true,
-      files,
-    }
   },
 
   async writeBytes(workspaceRoot: string, path: string, content: Uint8Array): Promise<void> {
@@ -478,6 +419,94 @@ export const workspaceGateway = {
         kind: entry.kind === 'file' || entry.kind === 'directory' ? entry.kind : undefined,
       })),
       supportsFiles: result.supportsFiles === true,
+    }
+  },
+
+  /**
+   * 按机器绝对路径读取文件(不经 workspace 沙箱;文件标签页用户操作专用)。
+   * 调 worker 的 fs.readRaw,应答形态与 fs.read 一致(小文件内联 base64、大文件分批)。
+   * 参数同 readBytes(workspaceRoot + path),内部解析为机器绝对路径后按绝对路径读盘。
+   */
+  async readBytesRaw(workspaceRoot: string, path: string): Promise<Uint8Array> {
+    wireFsChanged()
+    const absPath = resolveMachinePath(workspaceRoot, path)
+    const workerId = workspaceRegistry.workerIdOfRoot(workspaceRoot) ?? workspaceRegistry.primaryWorkerId()
+    if (!workerId) throw new Error('无法确定该文件所属 worker(工作区未注册或 worker 离线)')
+    const parts: { offset: number; data: Uint8Array }[] = []
+    const result = await hubSession.rpcTo(workerId, 'fs.readRaw', { path: absPath }, {
+      timeoutMs: 120_000,
+      onData: (batch) => {
+        for (const item of batch as FsReadResult[]) {
+          if (item.base64 !== undefined) {
+            parts.push({ offset: item.offset ?? 0, data: base64ToBytes(item.base64) })
+          }
+        }
+      },
+    }) as FsReadResult
+    if (result.base64 !== undefined) {
+      return base64ToBytes(result.base64)
+    }
+    if (parts.length === 0) {
+      throw new Error(`读取文件失败: ${absPath}`)
+    }
+    parts.sort((a, b) => a.offset - b.offset)
+    const total = parts.reduce((sum, part) => sum + part.data.length, 0)
+    const merged = new Uint8Array(total)
+    let cursor = 0
+    for (const part of parts) {
+      merged.set(part.data, cursor)
+      cursor += part.data.length
+    }
+    return merged
+  },
+
+  /** readBytesRaw 的文本包装(同 readTextFile 与 readBytes 的关系)。 */
+  async readTextFileRaw(workspaceRoot: string, path: string): Promise<string> {
+    return bytesToText(await this.readBytesRaw(workspaceRoot, path))
+  },
+
+  /** writeTextFileRaw 的字节版本(同 writeBytes 与 writeTextFile 的关系)。 */
+  async writeBytesRaw(workspaceRoot: string, path: string, content: Uint8Array): Promise<void> {
+    const absPath = resolveMachinePath(workspaceRoot, path)
+    const workerId = workspaceRegistry.workerIdOfRoot(workspaceRoot) ?? workspaceRegistry.primaryWorkerId()
+    if (!workerId) throw new Error('无法确定该文件所属 worker(工作区未注册或 worker 离线)')
+    await hubSession.rpcTo(workerId, 'fs.writeRaw', { path: absPath, contentBase64: bytesToBase64(content) }, {
+      timeoutMs: 120_000,
+    })
+  },
+
+  /**
+   * 按机器绝对路径写入文件(不经 workspace 沙箱;文件标签页用户保存专用)。
+   * 调 worker 的 fs.writeRaw,应答形态与 fs.write 一致。参数同 writeTextFile。
+   */
+  async writeTextFileRaw(workspaceRoot: string, path: string, content: string): Promise<void> {
+    await this.writeBytesRaw(workspaceRoot, path, textToBytes(content))
+  },
+
+  /**
+   * 按机器绝对路径获取文件属性(不经 workspace 沙箱;文件标签页用户操作专用)。
+   * 调 worker 的 fs.statRaw,返回与 stat 同构的 WorkspaceFileStat。
+   * 外部文件无工作区根,listDir 推导不可用,需专用 RPC 直接 stat。
+   */
+  async statRaw(workspaceRoot: string, path: string): Promise<WorkspaceFileStat> {
+    const absPath = resolveMachinePath(workspaceRoot, path)
+    const workerId = workspaceRegistry.workerIdOfRoot(workspaceRoot) ?? workspaceRegistry.primaryWorkerId()
+    if (!workerId) throw new Error('无法确定该文件所属 worker(工作区未注册或 worker 离线)')
+    const result = await hubSession.rpcTo(workerId, 'fs.statRaw', { path: absPath }) as {
+      name?: string
+      dir?: boolean
+      size?: number
+      modifiedTs?: number
+      createdTs?: number
+    }
+    const name = result.name ?? absPath.split(/[\\/]/).pop() ?? ''
+    return {
+      path,
+      name,
+      isDirectory: result.dir === true,
+      size: result.size ?? 0,
+      mtimeMs: result.modifiedTs ?? 0,
+      createdTs: result.createdTs ?? 0,
     }
   },
 }

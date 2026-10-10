@@ -1,5 +1,6 @@
 package dev.everyagent.worker.tools.permission;
 
+import dev.everyagent.plugin.api.permission.AuthorizationHandler.AuthorizationRequest;
 import dev.everyagent.worker.tools.PermissionDeniedException;
 
 import org.springframework.stereotype.Component;
@@ -19,13 +20,14 @@ public class AuthorizeCheck implements PermissionCheck {
     }
 
     @Override
-    public PermissionDecision check(PermissionContext ctx) {
+    public PermissionDecision invoke(PermissionContext ctx, PermissionChain next) {
         if (ctx.grantKey() == null || ctx.grantKey().isBlank()) {
-            return PermissionDecision.skip();
+            return next.proceed(ctx);
         }
         try {
-            grants.authorize(ctx.task(), ctx.agentId(), ctx.grantKey(), ctx.prompt(),
-                    ctx.rootsOnGrant(), ctx.execRootsOnGrant());
+            AuthorizationRequest req = ctx.authReq() != null ? ctx.authReq()
+                    : new AuthorizationRequest(null, ctx.agentId(), ctx.grantKey(), ctx.prompt());
+            grants.authorize(req, ctx.rootsOnGrant(), ctx.execRootsOnGrant(), ctx.sandboxRootsOnGrant());
             return PermissionDecision.allow("授权放行");
         } catch (PermissionDeniedException e) {
             return PermissionDecision.deny(e);

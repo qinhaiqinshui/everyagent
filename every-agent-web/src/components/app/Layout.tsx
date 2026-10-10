@@ -3,7 +3,7 @@
  *
  * 职责保持 n 的边界:维护壳层 UI 状态(标签/侧边栏/滚动保持),业务数据
  * 读取留给子组件。相比 n 的变化:
- * - 启动台/日志/扩展页移除(运行时已下沉 worker);顶层页只剩 设置/Git;
+ * - 启动台/日志/扩展页移除(运行时已下沉 worker);顶层页只剩 设置;
  * - 任务入口从「启动台聚焦」改为直接打开任务聊天标签;
  * - 新建任务 = 打开草稿标签(见 TaskChat 的草稿态);
  * - 启动引导从浏览器运行时初始化(zero-FS bootstrap)换成 hub 连接。
@@ -13,22 +13,22 @@ import { App as AntApp, ConfigProvider } from 'antd'
 import type {
   OpenWorkspaceFileOptions,
   SidebarPanelId,
-  TaskChatTabInput,
   ThemeMode,
   TopLevelPageId,
   WorkspaceTab,
   WorkspaceTaskChatTab,
   WorkspaceTerminalTab,
 } from '@/types'
+import type { TaskChatTabInput } from '@/task/types'
 import { getAntdTheme } from '@/theme/antdTheme'
 import {
   FilesIcon,
-  GitIcon,
+  
   SearchSidebarIcon,
   SettingsIcon,
   TaskChatIcon,
 } from '@/components/icon'
-import SidebarActivityBar from './SidebarActivityBar'
+import SidebarActivityBar, { type SidebarActivityItem } from './SidebarActivityBar'
 import ResizableSidebarContainer from './ResizableSidebarContainer'
 import TitleBar from './TitleBar'
 import AntdAppBridge from './AntdAppBridge'
@@ -41,11 +41,14 @@ import BrowserNotificationGuide from './BrowserNotificationGuide'
 import ReconnectionModal from './ReconnectionModal'
 import MissingWorkspaceRepairHost from './MissingWorkspaceRepairHost'
 import { WorkspaceShellProvider } from './WorkspaceShellContext'
+import { setShellBridge } from '@/plugin/pluginRuntimeBridge'
 import { domainEventBus, DOMAIN_EVENTS } from '@/events/eventBus'
+import { setActiveTabMirror } from '@/plugin/activeTabMirror'
 import { AppUiProvider, useAppUi } from './AppUiContext'
 import { useThemeMode } from '@/hooks/useThemeMode'
 import { useResponsiveViewport } from '@/hooks/useResponsiveViewport'
 import type { WorkspaceTabRenderContext } from '@/plugin/types'
+import { pluginDispatcher } from '@/plugin/PluginDispatcher'
 import { getTabDefinition, getWorkspaceTabTypeDefinition, loadWorkspaceTabTypeDefinitions } from '@/plugin/workspaceTabTypes'
 import {
   setWorkspaceFileTabMode,
@@ -55,7 +58,6 @@ import {
   createWorkspacePluginTab,
   createWorkspaceDiffTab,
   createWorkspacePageTab,
-  createWorkspaceGitHistoryTab,
   filterWorkspaceTabs,
   removeWorkspaceTab,
   upsertWorkspaceTab,
@@ -65,16 +67,16 @@ import { createLazyRouteComponent, scheduleLazyRoutePreload } from '@/components
 import { useHub } from '@/hub/HubProvider'
 import { hubSession } from '@/hub/session'
 import { randomUUID } from '@/utils/uuid'
-import { taskStore } from '@/hub/taskStore'
-import { taskStreamManager } from '@/hub/taskStream'
+import { taskStore } from '@/task/taskStore'
 import { workspaceRegistry } from '@/hub/workspaceRegistry'
-import { gitGateway } from '@/platform/git/gitGateway'
 import { DRAFT_TASK_ID, setDraftPreset } from '@/components/task/taskChatDraft'
 
 const LazyTasksPanel = createLazyRouteComponent(() => import('@/components/task/TasksPanel'))
 const LazyOpenFilesSidebarPanel = createLazyRouteComponent(() => import('@/components/files/OpenFilesSidebarPanel'))
-const LazyGitSidebarPanel = createLazyRouteComponent(() => import('@/components/git/GitSidebarPanel'))
 const LazySearchSidebarPanel = createLazyRouteComponent(() => import('@/components/search/SearchSidebarPanel'))
+// 全局搜索是浮层,挂在 .workspace-layout(flex row)直接子节点上:加载期不能渲染占位 div,
+// 否则它作为 flex item 抢掉半行宽度,chunk 到齐后又收回 → 首屏内容横向跳动(logo 先偏后居中)。
+const LazySearchModal = createLazyRouteComponent(() => import('@/components/search/SearchModal'), { fallback: null })
 
 /**
  * 计算移动端侧边栏允许的最大高度。
@@ -122,13 +124,23 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
 
   const [sidebarOpen, setSidebarOpen] = React.useState(false)
   const [activeSidebarPanelId, setActiveSidebarPanelId] = React.useState<SidebarPanelId>('tasks')
-  const [gitChangeCount, setGitChangeCount] = React.useState(0)
   const [desktopSidebarWidth, setDesktopSidebarWidth] = React.useState(264)
   const [mobileSidebarHeight, setMobileSidebarHeight] = React.useState(() => getMobileSidebarDefaultHeight())
   const [workspaceTabs, setWorkspaceTabs] = React.useState<WorkspaceTab[]>([])
   const [activeWorkspaceTabId, setActiveWorkspaceTabId] = React.useState<WorkspaceTab['id'] | null>(null)
   const [selectedFilePath, setSelectedFilePath] = React.useState<string | null>(null)
   const [workspaceFileLocateRequest, setWorkspaceFileLocateRequest] = React.useState<{ filePath: string; workspaceRoot: string | null; requestedAt: number } | null>(null)
+  /** 双击 Shift 呼出的全局搜索弹窗开关。 */
+  const [searchModalOpen, setSearchModalOpen] = React.useState(false)
+  /**
+   * 插件扩展点版本号:插件在 `activate()` 里注册的贡献(侧边栏项等)晚于本组件首屏渲染,
+   * 光靠渲染期读 `listRegisteredSidebarItems()` 快照会漏掉它们,直到别处 setState 触发
+   * 重渲染才「顺带」显示。订阅版本变化,保证注册即上屏。
+   */
+  const pluginExtensionsVersion = React.useSyncExternalStore(
+    pluginDispatcher.subscribeExtensionsChanged,
+    pluginDispatcher.getExtensionsVersion,
+  )
   const prevIsMobileRef = React.useRef(isMobile)
 
   /**
@@ -177,6 +189,27 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
     openTopLevelPageIds,
   } = workspaceTabView
 
+  /**
+   * 激活标签变化 → 同步插件侧镜像并广播领域事件：
+   * 镜像回答「此刻激活的标签是什么」（ctx.ui.getActiveTab()，同步查询），
+   * `workspace-tab-activated` 事件供插件响应式刷新（如按标签类型显隐 UI）。
+   * 所有标签关闭时 activeWorkspaceTab 为 null：只清镜像不 emit（用
+   * workspace-tab-closed 兜底感知）。
+   */
+  React.useEffect(() => {
+    setActiveTabMirror(
+      activeWorkspaceTab
+        ? { id: activeWorkspaceTab.id, tabType: activeWorkspaceTab.tabType }
+        : null,
+    )
+    if (activeWorkspaceTab) {
+      domainEventBus.emit(DOMAIN_EVENTS.WORKSPACE_TAB_ACTIVATED, {
+        tabId: activeWorkspaceTab.id,
+        tabType: activeWorkspaceTab.tabType,
+      })
+    }
+  }, [activeWorkspaceTab])
+
   /** 侧边栏任务高亮 = 当前激活的任务聊天标签。 */
   const activeTaskId = activeWorkspaceTab?.tabType === 'task' && activeWorkspaceTab.taskId !== DRAFT_TASK_ID
     ? activeWorkspaceTab.taskId
@@ -216,51 +249,61 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
   }, [])
 
   /**
-   * 活动栏「源代码管理」徽标:全部注册工作区变更数之和(D16 无"当前工作区";
-   * 未初始化/未连 worker 归零,单根失败按 0)。面板自身持有完整 status,
-   * 此处只取计数供活动栏角标,不重复渲染 diff。
+   * 双击 Shift(两次 keydown 间隔 ≤400ms,于第二次**松开**时)呼出/关闭全局搜索弹窗。
+   * - 仅 Shift 单键生效:按住产生的 repeat、附带其他修饰键(Ctrl/Alt/Meta)、
+   *   或两次之间按下其他键,均不触发(避免与 Shift+字母快捷键冲突);
+   * - 触发时机在第二次 Shift 的 keyup 而非 keydown:按下瞬间不弹窗,
+   *   避免抢焦点打断用户按键节奏(如双击后紧接输入);
+   * - toggle 语义:已打开时再次双击则关闭。
    */
   React.useEffect(() => {
-    let cancelled = false
-    const refreshGitBadge = async () => {
-      const roots = workspaceRegistry.current?.workspaces.map((entry) => entry.root) ?? []
-      if (roots.length === 0 || !connected || !hasWorker) {
-        if (!cancelled) setGitChangeCount(0)
+    let lastShiftAt = 0
+    /** 第二次 Shift 已按下、等待其 keyup 时才真正触发。 */
+    let pendingToggle = false
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Shift') {
+        if (event.repeat || event.ctrlKey || event.altKey || event.metaKey) {
+          lastShiftAt = 0
+          return
+        }
+        const now = Date.now()
+        if (now - lastShiftAt <= 400) {
+          // 判定双击成立:暂存待触发,等本次 Shift 松开(keyup)再 toggle。
+          lastShiftAt = 0
+          pendingToggle = true
+        } else {
+          lastShiftAt = now
+        }
         return
       }
-      try {
-        const counts = await Promise.all(roots.map(async (root) => {
-          try {
-            const status = await gitGateway.status(root)
-            return (['added', 'changed', 'modified', 'removed', 'missing', 'untracked', 'conflicting'] as const)
-              .reduce((sum, key) => sum + (status[key]?.length ?? 0), 0)
-          } catch {
-            return 0
-          }
-        }))
-        if (cancelled) return
-        setGitChangeCount(counts.reduce((sum, count) => sum + count, 0))
-      } catch {
-        if (!cancelled) setGitChangeCount(0)
-      }
+      // 两次 Shift 之间按下了其他键:重置计时并取消待触发,打断双击序列。
+      lastShiftAt = 0
+      pendingToggle = false
     }
-    void refreshGitBadge()
-    const unsubRegistry = domainEventBus.subscribe(DOMAIN_EVENTS.WORKSPACE_REGISTRY_CHANGED, () => {
-      void refreshGitBadge()
-    })
+    const handleKeyUp = (event: KeyboardEvent) => {
+      if (event.key !== 'Shift' || !pendingToggle) return
+      pendingToggle = false
+      // 松开时已带上其他修饰键(如按住 Ctrl 再松 Shift):视为组合键操作,不触发。
+      if (event.ctrlKey || event.altKey || event.metaKey) return
+      setSearchModalOpen((current) => !current)
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    window.addEventListener('keyup', handleKeyUp)
     return () => {
-      cancelled = true
-      unsubRegistry()
+      window.removeEventListener('keydown', handleKeyDown)
+      window.removeEventListener('keyup', handleKeyUp)
     }
-  }, [connected, hasWorker, hub.reconnectVersion])
+  }, [])
+
+  /**
 
   /** 首屏渲染后空闲预加载后续页面资源。 */
   React.useEffect(() => (
     scheduleLazyRoutePreload([
       LazyTasksPanel.preload,
       LazyOpenFilesSidebarPanel.preload,
-      LazyGitSidebarPanel.preload,
       LazySearchSidebarPanel.preload,
+      LazySearchModal.preload,
       () => import('@/components/system/SettingsPanel'),
       () => import('@/components/files/FileTabPage'),
       () => import('@/components/task/TaskChat'),
@@ -268,11 +311,14 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
   ), [])
 
   React.useEffect(() => {
-    const validPanelIds = new Set<SidebarPanelId>(['tasks', 'files', 'git', 'search'])
+    const validPanelIds = new Set<SidebarPanelId>(['tasks', 'files', 'search'])
+    for (const def of pluginDispatcher.listRegisteredSidebarItems()) {
+      validPanelIds.add(def.id as SidebarPanelId)
+    }
     if (!validPanelIds.has(activeSidebarPanelId)) {
       setActiveSidebarPanelId('tasks')
     }
-  }, [activeSidebarPanelId])
+  }, [activeSidebarPanelId, pluginExtensionsVersion])
 
   const setActiveSidebarPanel = React.useCallback((panelId: SidebarPanelId) => {
     setActiveSidebarPanelId(panelId)
@@ -377,10 +423,8 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
   }, [activateWorkspaceTab])
 
   const closeWorkspaceTabNow = React.useCallback((tabId: WorkspaceTab['id']) => {
-    // 关闭任务标签页:退订该任务 stream 频道(hub 通知 worker 销毁 DataPusher,释放资源)。
-    if (tabId.startsWith('task:')) {
-      taskStreamManager.close(tabId.slice('task:'.length))
-    }
+    // 关闭任务标签页:发事件让 task 层自行退订 stream 频道。
+    domainEventBus.emit(DOMAIN_EVENTS.WORKSPACE_TAB_CLOSED, { tabId })
     setWorkspaceTabs((current) => {
       const index = current.findIndex((item) => item.id === tabId)
       if (index < 0) return current
@@ -406,6 +450,32 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
       closeWorkspaceTabNow(`task:${taskId}`)
     }
   }, [closeWorkspaceTabNow])
+
+  /**
+   * 切换 / 禁用 / 移除 worker(= worker 数据连接集合变化)→ **关闭全部 `task:*` 标签页**。
+   *
+   * <p>为什么必须关:任务标签的作用域就是那条 worker 数据连接(任务详情、RPC、stream 订阅、
+   * 模型下拉全挂在它上面)。连接一换,留下的标签指向的是已不可寻址的 worker —— 既拉不到数据
+   * 也收不到推送,留着只会误导用户(这正是 bug1 的现场)。项目/文件/终端/设置等标签不受影响:
+   * fs/git 按调用携带 workspace 参数、与 worker 身份无关。
+   *
+   * <p>走 `closeWorkspaceTabNow`(而非 `closeWorkspaceTab`):绕过任务标签的关闭守卫,
+   * 与"任务已删除"同源处理。草稿标签一并关(正文由 taskChatDraft 自持,不会丢),
+   * 并清空其 worker 预设,避免带着已断开 worker 的预设继续新建任务。
+   */
+  const workspaceTabsRef = React.useRef(workspaceTabs)
+  workspaceTabsRef.current = workspaceTabs
+  React.useEffect(() => {
+    return hubSession.onWorkerConnectionsChanged(() => {
+      const taskTabs = workspaceTabsRef.current.filter((tab) => tab.tabType === 'task')
+      for (const tab of taskTabs) {
+        closeWorkspaceTabNowRef.current(tab.id)
+      }
+      if (taskTabs.length > 0) {
+        setDraftPreset({ workspace: '', workerId: '' })
+      }
+    })
+  }, [])
 
   const openGlobalFileTab = React.useCallback((
     target: {
@@ -504,24 +574,6 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
     return nextTab.id
   }, [openWorkspaceTab])
 
-  const openGitHistoryTab = React.useCallback((input: {
-    workspaceRoot: string
-    path: string
-    name: string
-    title?: string
-  }): string => {
-    const tabTitle = input.title && input.title.trim()
-      ? input.title.trim()
-      : `Git 历史：${input.name}`
-    const nextTab = createWorkspaceGitHistoryTab({
-      workspaceRoot: input.workspaceRoot,
-      path: input.path,
-      name: input.name,
-      title: tabTitle,
-    })
-    openWorkspaceTab(nextTab)
-    return nextTab.id
-  }, [openWorkspaceTab])
 
   const openTerminalTab = React.useCallback((input: {
     workspaceRoot: string
@@ -759,6 +811,22 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
     }
   }, [activeWorkspaceTabId, updateSelectedFilePath])
 
+  // 插件壳层桥接：把 WorkspaceShellContext 的导航能力注入非 React 模块 holder，
+  // 供插件 ctx.ui.openPluginTab / openFileTab / openDiffTab 同步调用。
+  React.useEffect(() => {
+    setShellBridge({
+      openPluginTab: openPluginTab,
+      openFileTab: (workspaceRoot, filePath, options) => {
+        openGlobalFileTab(
+          { workspaceRoot, filePath },
+          options?.mode ? { mode: options.mode as 'readwrite' | 'readonly' } : undefined,
+        )
+      },
+      openDiffTab: (input) => openDiffTab(input),
+    })
+    return () => setShellBridge(null)
+  }, [openGlobalFileTab, openDiffTab, openPluginTab])
+
   const shellValue = React.useMemo(() => ({
     sidebarOpen,
     activeSidebarPanelId,
@@ -784,7 +852,6 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
     openTaskChatTab,
     openPluginTab,
     openDiffTab,
-    openGitHistoryTab,
     openTerminalTab,
   }), [
     activeSidebarPanelId,
@@ -796,7 +863,6 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
     openGlobalFileTab,
     openPluginTab,
     openDiffTab,
-    openGitHistoryTab,
     openTerminalTab,
     renameFileTabs,
     selectedFilePath,
@@ -815,25 +881,64 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
   ])
 
   const activeActivityItemIds = React.useMemo(() => {
-    const nextIds: Array<SidebarPanelId | 'git' | 'settings'> = []
+    const nextIds: Array<SidebarPanelId | 'settings'> = []
     if (sidebarOpen) {
       nextIds.push(activeSidebarPanelId)
     }
     // 各面板图标(任务/文件/搜索/源代码管理)的选中态必须互斥,只跟随当前展开的面板。
     // 激活标签映射的活动项仅对非面板项(如设置页)生效,避免任务聊天页激活时
     // 把「任务」面板图标也点亮,破坏面板图标的互斥。
+    const panelActivityIds = new Set<string>(['tasks', 'files', 'search'])
+    for (const def of pluginDispatcher.listRegisteredSidebarItems()) {
+      panelActivityIds.add(def.id)
+    }
     const workspaceActivityItemId = activeWorkspaceTab
       ? getTabDefinition(activeWorkspaceTab)?.getSidebarActivityId?.(activeWorkspaceTab) ?? null
       : null
     if (
       workspaceActivityItemId
-      && !SIDEBAR_PANEL_ACTIVITY_IDS.has(workspaceActivityItemId)
+      && !panelActivityIds.has(workspaceActivityItemId)
       && !nextIds.includes(workspaceActivityItemId)
     ) {
       nextIds.push(workspaceActivityItemId)
     }
     return nextIds
-  }, [activeSidebarPanelId, activeWorkspaceTab, sidebarOpen])
+  }, [activeSidebarPanelId, activeWorkspaceTab, pluginExtensionsVersion, sidebarOpen])
+
+  /**
+   * 侧边栏面板描述符：合并内置面板与插件注册的面板。
+   * 内置面板用 children（现有懒加载组件），插件面板用 Panel 组件。
+   * 所有面板常驻 DOM，仅通过 visible 控制显隐（保留滚动/草稿等内部状态）。
+   * 插件项在此渲染期读取，靠 `pluginExtensionsVersion` 变化触发本组件重渲染来保证注册即出现。
+   */
+  const sidebarPanels: Array<{
+    id: string
+    children?: React.ReactNode
+    Panel?: React.ComponentType
+  }> = [
+    {
+      id: 'tasks',
+      children: (
+        <LazyTasksPanel
+          embedded
+          activeTaskId={activeTaskId ?? undefined}
+          onCreateNewTask={(preset) => {
+            openDraftTaskTab(preset)
+          }}
+          onSelect={(task) => {
+            openTaskChatTab({ taskId: task.taskId, title: task.displayTitle })
+          }}
+          onDeletedTasks={closeDeletedTaskTabs}
+        />
+      ),
+    },
+    { id: 'files', children: <LazyOpenFilesSidebarPanel /> },
+    { id: 'search', children: <LazySearchSidebarPanel /> },
+    ...pluginDispatcher.listRegisteredSidebarItems().map((def) => ({
+      id: def.id,
+      Panel: def.Panel,
+    })),
+  ]
 
   return (
     <ConfigProvider theme={getAntdTheme(themeMode)}>
@@ -890,7 +995,6 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
                 openTopLevelPage('settings')
                 return
               }
-              // git 与 tasks/files 一样是侧边栏面板(源代码管理),点击切换面板而非开页面。
               const nextPanelId = itemId as SidebarPanelId
               if (activeSidebarPanelId === nextPanelId) {
                 setSidebarOpen(!sidebarOpen)
@@ -909,28 +1013,16 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
             onMobileSizeChange={setMobileSidebarHeight}
           >
             <div style={sidebarPanelSlotStyle}>
-              <SidebarPanelHost panelId="tasks" visible={activeSidebarPanelId === 'tasks'}>
-                <LazyTasksPanel
-                  embedded
-                  activeTaskId={activeTaskId ?? undefined}
-                  onCreateNewTask={(preset) => {
-                    openDraftTaskTab(preset)
-                  }}
-                  onSelect={(task) => {
-                    openTaskChatTab({ taskId: task.taskId, title: task.displayTitle })
-                  }}
-                  onDeletedTasks={closeDeletedTaskTabs}
-                />
-              </SidebarPanelHost>
-              <SidebarPanelHost panelId="files" visible={activeSidebarPanelId === 'files'}>
-                <LazyOpenFilesSidebarPanel />
-              </SidebarPanelHost>
-              <SidebarPanelHost panelId="search" visible={activeSidebarPanelId === 'search'}>
-                <LazySearchSidebarPanel />
-              </SidebarPanelHost>
-              <SidebarPanelHost panelId="git" visible={activeSidebarPanelId === 'git'}>
-                <LazyGitSidebarPanel embedded />
-              </SidebarPanelHost>
+              {sidebarPanels.map((panel) => (
+                <SidebarPanelHost
+                  key={panel.id}
+                  panelId={panel.id}
+                  visible={activeSidebarPanelId === panel.id}
+                  Panel={panel.Panel}
+                >
+                  {panel.children}
+                </SidebarPanelHost>
+              ))}
             </div>
           </ResizableSidebarContainer>
         </div>
@@ -984,6 +1076,7 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
         <BrowserNotificationGuide />
         <ReconnectionModal />
         <MissingWorkspaceRepairHost />
+        <LazySearchModal open={searchModalOpen} onClose={() => setSearchModalOpen(false)} />
           </div>
         </WorkspaceShellProvider>
       </AntApp>
@@ -1000,17 +1093,36 @@ function renderWorkspaceTabContent(
   return def.renderTab(tab, ctx)
 }
 
-/** 侧边栏各面板图标(id)的选中态必须互斥,只由当前展开的面板决定。 */
-const SIDEBAR_PANEL_ACTIVITY_IDS: ReadonlySet<string> = new Set(['tasks', 'files', 'git', 'search'])
+/**
+ * 侧边栏入口排序字段缺省值：未声明 `order` 的贡献排在所有已声明项之后
+ * （内置项 order 均 < 100），同 order 之间保持贡献先后。与 plugin-api
+ * `UiSidebarItemDefinition.order` 的文档约定一致。
+ */
+const DEFAULT_SIDEBAR_ORDER = 100
 
-function buildSidebarActivityItems(openTopLevelPageIds: TopLevelPageId[]) {
-  return [
-    { id: 'tasks', label: '任务', icon: <TaskChatIcon /> },
-    { id: 'files', label: '文件', icon: <FilesIcon /> },
-    { id: 'search', label: '搜索', icon: <SearchSidebarIcon /> },
-    { id: 'git', label: '源代码管理', icon: <GitIcon /> },
-    { id: 'settings', label: '设置', icon: <SettingsIcon />, badgeCount: openTopLevelPageIds.includes('settings') ? 1 : undefined },
+/**
+ * 构建活动栏条目：内置项与插件注册的侧边栏项**统一按 order 升序混排**（不再依赖注册顺序）。
+ * 内置项含 tasks/files/search/settings；插件项来自 pluginDispatcher.listRegisteredSidebarItems()。
+ * order 为 float，内置项占 1(任务)/2(文件)/3(搜索)/10(设置)，中间空位（如 git 5、扩展 9）留给插件插队。
+ * 在渲染期读取快照，由调用方（LayoutContent）订阅 `pluginExtensionsVersion` 保证注册后立刻重算。
+ * 排序稳定：order 相同者按「内置项在前、插件按注册顺序」排列（Array.prototype.sort 自 ES2019 起保证稳定）。
+ */
+function buildSidebarActivityItems(openTopLevelPageIds: TopLevelPageId[]): SidebarActivityItem[] {
+  const builtinItems: Array<SidebarActivityItem & { order: number }> = [
+    { id: 'tasks', label: '任务', icon: <TaskChatIcon />, order: 1 },
+    { id: 'files', label: '文件', icon: <FilesIcon />, order: 2 },
+    { id: 'search', label: '搜索', icon: <SearchSidebarIcon />, order: 3 },
+    { id: 'settings', label: '设置', icon: <SettingsIcon />, order: 10, badgeCount: openTopLevelPageIds.includes('settings') ? 1 : undefined },
   ]
+  const pluginItems: Array<SidebarActivityItem & { order: number }> = pluginDispatcher.listRegisteredSidebarItems().map((def) => ({
+    id: def.id,
+    label: def.title,
+    icon: def.icon,
+    badgeCount: def.badgeCount,
+    Badge: def.Badge,
+    order: def.order ?? DEFAULT_SIDEBAR_ORDER,
+  }))
+  return [...builtinItems, ...pluginItems].sort((a, b) => a.order - b.order)
 }
 
 /**
@@ -1022,10 +1134,12 @@ function SidebarPanelHost({
   panelId,
   visible,
   children,
+  Panel,
 }: {
   panelId: string
   visible: boolean
-  children: React.ReactNode
+  children?: React.ReactNode
+  Panel?: React.ComponentType
 }) {
   const prevVisibleRef = React.useRef(visible)
 
@@ -1049,7 +1163,7 @@ function SidebarPanelHost({
         overflow: 'hidden',
       }}
     >
-      {children}
+      {children ?? (Panel ? <Panel /> : null)}
     </div>
   )
 }

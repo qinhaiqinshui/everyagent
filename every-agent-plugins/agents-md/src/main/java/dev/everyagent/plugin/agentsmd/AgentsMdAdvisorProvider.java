@@ -1,0 +1,33 @@
+package dev.everyagent.plugin.agentsmd;
+
+import dev.everyagent.plugin.api.agent.AgentContext;
+import dev.everyagent.plugin.api.spi.AdvisorContext;
+import dev.everyagent.plugin.api.spi.AdvisorProvider;
+import dev.everyagent.plugin.api.execution.ExecContext;
+import org.springframework.ai.chat.client.advisor.api.Advisor;
+import org.springframework.core.Ordered;
+
+/**
+ * {@link AgentsMdAdvisor} 适配器。
+ *
+ * <p>order = {@link Ordered#HIGHEST_PRECEDENCE} + 60。每 run 新建实例。
+ */
+public class AgentsMdAdvisorProvider implements AdvisorProvider {
+
+    @Override
+    public String pluginId() {
+        return "builtin.agents-md";
+    }
+
+    @Override
+    public int order() {
+        return Ordered.HIGHEST_PRECEDENCE + 60;
+    }
+
+    @Override
+    public Advisor create(AdvisorContext ctx) {
+        AgentContext a = ctx.agentEntity();
+        ExecContext exec = a.execution();
+        return new AgentsMdAdvisor(exec.workspaceRoot());
+    }
+}

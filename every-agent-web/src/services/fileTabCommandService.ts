@@ -30,8 +30,9 @@ export interface FileTabSaveResult {
 /**
  * 文件页命令服务。
  * 统一承接文件保存、重命名等写操作。
- * 工作区模型下文件以 `filePath`（完整业务路径）为唯一身份；写入经远程网关
- * (fs.* RPC 落盘 worker 侧),网关在成功后统一广播 WORKSPACE_FILE_CHANGED。
+ * 文件标签页是用户操作(非 AI 工具调用),不经沙箱/权限链路,统一走 fs.writeRaw
+ * (网关内部解析 workspaceRoot + path 为机器绝对路径)。
+ * 工作区外绝对路径暂不支持重命名(需 worker 补 fs.moveRaw,v1 先跳过)。
  */
 export const fileTabCommandService = {
   /**
@@ -48,7 +49,7 @@ export const fileTabCommandService = {
       resolvedFileName = renameResult.fileName
     }
 
-    await workspaceGateway.writeTextFile(file.workspaceRoot, nextFilePath, nextContent)
+    await workspaceGateway.writeTextFileRaw(file.workspaceRoot, nextFilePath, nextContent)
 
     return {
       filePath: nextFilePath,
@@ -60,8 +61,12 @@ export const fileTabCommandService = {
 
 /**
  * 执行文件重命名（移动到同目录下的新文件名）。
+ * 工作区外绝对路径暂不支持重命名(需 worker 补 fs.moveRaw,v1 先跳过)。
  */
 async function renameFile(file: FileTabResource, nextFileName: string): Promise<{ filePath: string; fileName: string }> {
+  if (/^[A-Za-z]:\//.test(file.filePath.replace(/^\/+/, ''))) {
+    throw new Error('工作区外文件暂不支持重命名')
+  }
   const parentPath = getParentPath(file.filePath)
   const currentExtension = getExtension(file.fileName)
   const normalizedName = appendExtensionIfMissing(sanitizePathSegment(nextFileName), currentExtension)

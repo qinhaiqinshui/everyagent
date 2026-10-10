@@ -1,6 +1,7 @@
 package dev.everyagent.worker.modules;
 
-import dev.everyagent.worker.rpc.NotFoundException;
+import dev.everyagent.plugin.api.exception.NotFoundException;
+import dev.everyagent.plugin.api.spi.WorkspaceSandbox;
 import dev.everyagent.worker.rpc.SandboxViolationException;
 
 import java.io.IOException;
@@ -20,7 +21,7 @@ import java.util.List;
  * 沙箱只管防逃逸。沙箱不可变、按调用构造,授权发生在上一次调用的阻塞期间,
  * 后续调用自然看到新根。
  */
-public final class Sandbox {
+public final class Sandbox implements WorkspaceSandbox {
 
     private final WorkspaceManager.Root root;
     private final List<Path> extraRoots;

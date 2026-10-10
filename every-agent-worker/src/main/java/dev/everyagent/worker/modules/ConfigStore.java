@@ -4,8 +4,7 @@ import dev.everyagent.contract.json.Json;
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.hub.HubPool;
 import dev.everyagent.worker.proto.ConfigDtos.ModelConfig;
-import dev.everyagent.worker.proto.TaskDtos.ModelSnapshot;
-import dev.everyagent.worker.rpc.NotFoundException;
+import dev.everyagent.plugin.api.exception.NotFoundException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -27,26 +26,14 @@ import java.util.Map;
  * 模型配置是系统功能,不进工作区、不随工作区切换;任务创建时解析为不可变快照
  * (apiKey 只留内存,不入事件日志)。本类不再持久化、不再提供写入口(前端只读)。
  *
- * <p>{@code provider: model-pool} 是「容灾池」配置:其 {@code model} 字段为逗号分隔的
- * 池成员 configId 列表(首个 = 主模型),{@link #resolve} 时解析出各成员的
- * {@link ResolvedConfig} 填入 {@link ResolvedConfig#poolMembers()},供
- * {@code ChatModelFactory} 构建 {@code ModelPoolChatModel}。池成员必须是普通模型(禁池套池)。
+ * <p>组合 provider(如 model-pool)的成员解析由插件自行调用 {@link #resolveOrNull} 完成,
+ * ConfigStore 不再感知「池」概念,统一按普通模型处理。
  */
 @Component
 public class ConfigStore {
 
-    /** 容灾池专用 provider 取值。 */
-    public static final String POOL_PROVIDER = "model-pool";
-
-    public record ResolvedConfig(ModelSnapshot snapshot, String apiKey, List<ResolvedConfig> poolMembers) {
-        public ResolvedConfig(ModelSnapshot snapshot, String apiKey) {
-            this(snapshot, apiKey, List.of());
-        }
-
-        /** 是否为容灾池配置(provider=model-pool 且已解析出成员)。 */
-        public boolean isPool() {
-            return POOL_PROVIDER.equals(snapshot.provider()) && !poolMembers.isEmpty();
-        }
+    public record ResolvedConfig(dev.everyagent.plugin.api.model.ModelConfig snapshot,
+            String apiKey) {
     }
 
     private static final Logger log = LoggerFactory.getLogger(ConfigStore.class);
@@ -65,70 +52,10 @@ public class ConfigStore {
         JsonNode paramsNode = (params == null || params.isEmpty()) ? null : Json.toJson(params);
         String provider = m.getProvider() == null ? "" : m.getProvider().trim();
         String configId = m.getConfigId().trim();
-        if (POOL_PROVIDER.equals(provider)) {
-            List<String> members = parsePoolMembers(m, index);
-            // 池外壳只声明成员列表、自身不配 params;「有效参数」= 主模型(首成员)。
-            // 此处继承首成员 params 到池 ModelConfig/config.get 视图,保证窗口大小
-            // (contextWindowTokens)等实际生效参数在池配置上可读,与运行时快照一致;
-            // 池外壳显式配置了 params 时以其为准(用户显式覆盖整个池)。
-            if (paramsNode == null && !members.isEmpty()) {
-                WorkerProperties.Model primary = index.get(members.get(0));
-                if (primary != null && primary.getParams() != null && !primary.getParams().isEmpty()) {
-                    paramsNode = Json.toJson(primary.getParams());
-                }
-            }
-            return new ModelConfig(configId, provider, m.getBaseUrl(),
-                    m.getModel(), m.getApiKey(), paramsNode, m.getIsDefault(), members);
-        }
-        if (m.getModel() == null || m.getModel().isBlank()) {
-            throw new IllegalStateException("worker.models[" + configId + "] 普通模型缺 model");
-        }
-        return new ModelConfig(configId, provider, m.getBaseUrl(),
-                m.getModel(), m.getApiKey(), paramsNode, m.getIsDefault(), null);
+        return new ModelConfig(configId, provider, m.getBaseUrl(), m.getFullUrl(),
+                m.getModel() == null ? "" : m.getModel(), m.getApiKey(), paramsNode, m.getIsDefault());
     }
 
-    /** 解析池成员 configId 列表(逗号分隔,trim/去空/去重,顺序保持;首个 = 主模型)。
-     *  成员 config-id 不存在(笔误/漏配)为<b>非致命</b>配置错误:跳过该成员并 error 告警,
-     *  仅当池因此无任何有效成员时才抛 IllegalStateException(见下方)。 */
-    private static List<String> parsePoolMembers(WorkerProperties.Model m,
-            Map<String, WorkerProperties.Model> index) {
-        String configId = m.getConfigId().trim();
-        String raw = m.getModel();
-        if (raw == null || raw.isBlank()) {
-            throw new IllegalStateException("worker.models[" + configId
-                    + "] 池配置缺 model(逗号分隔的池成员 configId 列表)");
-        }
-        List<String> members = new ArrayList<>();
-        for (String part : raw.split(",")) {
-            String id = part.trim();
-            if (id.isEmpty()) {
-                continue;
-            }
-            WorkerProperties.Model member = index.get(id);
-            if (member == null) {
-                // 池成员 config-id 不存在(笔误/漏配)= 非致命配置错误:跳过该成员并 error 告警,
-                // 让 worker 仍可启动(容灾池本意即「单成员不可用不影响整体」);仅当池因此无任何
-                // 有效成员时才拒绝启动(见下方 members.isEmpty() 分支)。避免一个成员笔误崩掉整个
-                // worker、连配置修复界面都进不去的死循环。
-                log.error("[config] worker.models[{}] 池成员 config-id 不存在,已跳过: {}",
-                        configId, id);
-                continue;
-            }
-            String mp = member.getProvider() == null ? "" : member.getProvider().trim();
-            if (POOL_PROVIDER.equals(mp)) {
-                throw new IllegalStateException("worker.models[" + configId
-                        + "] 池成员不得是池配置(禁池套池): " + id);
-            }
-            if (members.contains(id)) {
-                continue; // 去重
-            }
-            members.add(id);
-        }
-        if (members.isEmpty()) {
-            throw new IllegalStateException("worker.models[" + configId + "] 池配置无有效成员");
-        }
-        return members;
-    }
 
     public synchronized List<ModelConfig> list() {
         return new ArrayList<>(configs);
@@ -194,6 +121,10 @@ public class ConfigStore {
                 Object baseUrl = m.get("base-url");
                 if (baseUrl != null) {
                     model.setBaseUrl(String.valueOf(baseUrl));
+                }
+                Object fullUrl = m.get("full-url");
+                if (fullUrl != null) {
+                    model.setFullUrl(String.valueOf(fullUrl));
                 }
                 Object modelField = m.get("model");
                 if (modelField != null) {
@@ -277,22 +208,34 @@ public class ConfigStore {
         return resolveConfig(hit);
     }
 
-    /** 由 ModelConfig 构造 ResolvedConfig;池配置递归解析各成员。 */
-    private ResolvedConfig resolveConfig(ModelConfig c) {
-        // 池配置(provider=model-pool)的 params 已在 toConfig 继承主模型(首成员)的
-        // 有效参数(contextWindowTokens 等),此处直接用 ModelConfig.params() 即可。
-        ModelSnapshot snap = new ModelSnapshot(c.configId(), c.provider(),
-                c.baseUrl(), c.model(), c.params());
-        if (c.members() != null && !c.members().isEmpty()) {
-            List<ResolvedConfig> members = new ArrayList<>(c.members().size());
-            for (String id : c.members()) {
-                ModelConfig mc = byId.get(id);
-                if (mc != null) {
-                    members.add(resolveConfig(mc));
+    /** 类似 {@link #resolve},但找不到配置时返回 null 而非抛异常。供插件 resolveMember 使用。 */
+    public synchronized ResolvedConfig resolveOrNull(String configId) {
+        ModelConfig hit = null;
+        for (ModelConfig c : configs) {
+            if (configId == null || configId.isEmpty()) {
+                if (Boolean.TRUE.equals(c.isDefault())) {
+                    hit = c;
+                    break;
                 }
+            } else if (c.configId().equals(configId)) {
+                hit = c;
+                break;
             }
-            return new ResolvedConfig(snap, apiKeyOf(c), members);
         }
+        if (hit == null && (configId == null || configId.isEmpty())) {
+            hit = configs.isEmpty() ? null : configs.get(0);
+        }
+        if (hit == null) {
+            return null;
+        }
+        return resolveConfig(hit);
+    }
+
+    /** 由 ModelConfig 构造 ResolvedConfig。 */
+    private ResolvedConfig resolveConfig(ModelConfig c) {
+        dev.everyagent.plugin.api.model.ModelConfig snap =
+                new dev.everyagent.plugin.api.model.ModelConfig(c.configId(), c.provider(),
+                c.baseUrl(), c.fullUrl(), c.model(), c.params());
         return new ResolvedConfig(snap, apiKeyOf(c));
     }
 

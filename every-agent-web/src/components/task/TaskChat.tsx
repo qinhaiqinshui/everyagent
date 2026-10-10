@@ -10,7 +10,7 @@
  * 懒加载折入的事件共用同一份 items 并按 seq 去重排序。
  * taskStream 同时承担实时信号链:ask 卡片(全局 UserInteractionHost)、
  * agent 列表状态(agentStates)、上下文电池(usage)、taskModel、输入入队
- * (sendInput)/停止(cancel)与重连校准。
+ * (cancel)与重连校准。
  * 输入 = 纯文本(task.run 新建 / 运行中 task.input 入队 / 终态 task.run 续跑)。
  *
  * 草稿态:taskId 为 DRAFT_TASK_ID 时渲染 TaskDraftComposerPanel(与 n 版
@@ -22,7 +22,6 @@ import type { ChatComposerDraftState, ChatComposerToken, LLMConfigProfile } from
 import ChatShell from './ChatShell'
 import TaskRoundsPanel from './TaskRoundsPanel'
 import ContextBattery from './ContextBattery'
-import TaskQueuePanel from './TaskQueuePanel'
 import AgentListPanel, { type AgentListItem } from './AgentListPanel'
 import TaskDraftComposerPanel from '@/components/taskComposer/TaskDraftComposerPanel'
 import TaskComposerSurface, { applyComposerDraftChange, type ComposerDraftChange } from '@/components/taskComposer/TaskComposerSurface'
@@ -30,21 +29,26 @@ import TaskModelControls from '@/components/taskComposer/TaskModelControls'
 import HScrollArea from '@/components/shared/HScrollArea'
 import { ArrowDownIcon, ArrowRightIcon, StopIcon } from '../shared/AppGlyphs'
 import { Button, InlineSpinner } from '@/components/shared/ui'
-import { UserMessageEditContext, type UserMessageEditContextValue } from './userMessageEditContext'
+import { pluginDispatcher } from '@/plugin/PluginDispatcher'
+import type { TaskRunSubmitContribution, TaskRunSubmitContributionProvider, ComposerPanelCtx } from '@/plugin/types'
+import { ComposerDraftBridgeContext, type ComposerDraftBridgeValue } from '@/plugin/composerDraftBridge'
+import { setComposerBridge } from '@/plugin/pluginRuntimeBridge'
 import { useWorkspaceShell } from '@/components/app/WorkspaceShellContext'
 import { useResponsiveViewport } from '@/hooks/useResponsiveViewport'
 import { parseOpaqueTokenText, replaceComposerTokensForSubmission } from '@/composerToken/composerOpaqueToken'
-import { parseTaskScopeTokens, upsertTaskToken, removeTaskToken, applyTaskToken, cancelTaskToken, extractSlashId } from '@/slash/taskScopedTokens'
+import { parseTaskScopeTokens, upsertTaskToken, removeTaskToken, applyTaskToken, cancelTaskToken, extractSlashId, listTaskTokens } from '@/slash/taskScopedTokens'
 import { slashCommandRegistry } from '@/slash/slashCommandRegistry'
 import { createSnowflakeId } from '@/utils/snowflakeId'
 import { taskQueryService } from '@/query/taskQueryService'
-import type { TaskThreadItem } from '@/task/eventFolder'
-import { taskStore } from '@/hub/taskStore'
-import { taskStreamManager, type TaskStreamHandle } from '@/hub/taskStream'
+import { isTaskActive } from '@/task/taskStatusPresentation'
+import type { AgentMetaSnapshot, TaskThreadItem } from '@/task/eventFolder'
+import { taskStore } from '@/task/taskStore'
+import { taskStreamManager, type TaskStreamHandle } from '@/task/taskStream'
 import { workspaceRegistry, type WorkspaceEntry } from '@/hub/workspaceRegistry'
 import { modelConfigs, type ModelConfigInfo } from '@/hub/modelConfigs'
 import { useHub } from '@/hub/HubProvider'
 import type { WorkerInfo } from '@/hub/session'
+import { hubSession } from '@/hub/session'
 import { DRAFT_TASK_ID, getDraftPreset, subscribeDraftPreset } from './taskChatDraft'
 import '@/components/task/chatPanel.css'
 
@@ -220,22 +224,42 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
     rawContent: '',
     tokens: [],
   })
-  // 任务级底部 token（胶囊）：草稿态本地持有；真实任务乐观更新 + RPC 落盘，随
-  // worker task.updated 广播从 taskStore 镜像回显（parseTaskScopeTokens 内部去重）。
+  // 任务级底部 token（胶囊）：草稿态本地持有；真实任务从 slash.taskTokens.list
+  // 拉取 + apply/cancel RPC 返回值 + slash.tokens.changed stream 事件更新。
   const [scopeTokens, setScopeTokens] = React.useState<ChatComposerToken[]>([])
-  // 队列面板「编辑」回填回调:纯文本替换草稿(清空胶囊 token,回到普通输入态)。
-  const handleEditQueuedDraft = React.useCallback((text: string) => {
-    setDraft({ text, rawContent: text, tokens: [], activeTokenId: undefined })
-  }, [])
+  // 队列面板「编辑」的回填不走这里:插件经自己的 ctx.ui.appendComposerText /
+  // setComposerRawContent 回填(宿主已实现该 ui 契约,与 task-edit-resend 同一条路)。
+  // 曾在此留一个 handleEditQueuedDraft 纯文本回调,但从未接线到 ComposerPanelCtx——
+  // 注释让人误以为宿主已代劳,面板于是只删不回填;死代码已随该 bug 修复移除。
   const [submitting, setSubmitting] = React.useState(false)
   const [stopping, setStopping] = React.useState(false)
   const [error, setError] = React.useState('')
   // agent 选中态(点击输入框上方 agent 长条切换):非空时轮次视图按该 agent 过滤
   // (仅过滤已加载内容,不触发拉取,见 TaskRoundsPanel matches 谓词)。
   const [filterAgentId, setFilterAgentId] = React.useState('')
-  // 消息编辑:editTarget 非空=编辑模式(内容已追加到输入框);
-  // 点发送时直接走正常流程(携带 editSeq),不弹确认窗。
-  const [editTarget, setEditTarget] = React.useState<{ seq: string } | null>(null)
+
+  // 插件提交贡献（如编辑重发的 editSeq metadata）：订阅各 provider 的变化通知，
+  // 贡献变化（进入/退出编辑模式等）即重渲染以刷新提交按钮文案/样式。
+  const [submitContributionVersion, setSubmitContributionVersion] = React.useState(0)
+  React.useEffect(() => {
+    const providers = pluginDispatcher.listRegisteredTaskRunSubmitContributionProviders()
+    const unsubs = providers.map((provider) => provider.subscribe(() => setSubmitContributionVersion((v) => v + 1)))
+    return () => {
+      for (const unsub of unsubs) unsub()
+    }
+  }, [])
+  // 提交按钮展示覆盖：取首个声明了 submitLabel/submitDanger 的贡献（核心不感知业务语义）。
+  const submitOverride = React.useMemo(() => {
+    if (isDraft) return null
+    void submitContributionVersion
+    for (const provider of pluginDispatcher.listRegisteredTaskRunSubmitContributionProviders()) {
+      const contribution = provider.getContribution(effectiveTaskId)
+      if (contribution && (contribution.submitLabel || contribution.submitDanger)) {
+        return contribution
+      }
+    }
+    return null
+  }, [isDraft, effectiveTaskId, submitContributionVersion])
 
   // 实时信号链:订阅 taskStream(agentStates/contextUsage/taskModel/ask 等状态信号
   // 折叠推进即重渲染)。items 不再驱动线程渲染(旧首拉渲染路径已删除),只用于
@@ -251,21 +275,38 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
   const activeWorkerId = isDraft ? draftWorkerId : (entry?.workerId ?? '')
   const ownerWorkerId = !isDraft ? (entry?.workerId ?? taskStore.get(effectiveTaskId)?.workerId ?? '') : ''
 
-  // 任务级底部 token 回显：草稿态清空（草稿只本地持有）；真实任务从 taskStore 镜像
-  // 的 meta.slashTaskTokens 解析。task.updated 广播后 entry 引用/字段变化即同步刷新。
+  // 任务级底部 token 回显：草稿态清空（草稿只本地持有）；真实任务从
+  // slash.taskTokens.list 拉取初始值，apply/cancel RPC 返回值更新，
+  // slash.tokens.changed stream 事件实时同步。
   React.useEffect(() => {
     if (isDraft) {
       setScopeTokens([])
       return
     }
-    setScopeTokens(parseTaskScopeTokens(entry?.slashTaskTokens))
-  }, [isDraft, entry?.slashTaskTokens])
+    // 优先用 stream 推送的 slashTokens（slash.tokens.changed 事件）；
+    // stream 尚未推送时从 listTaskTokens RPC 拉取初始值。
+    if (stream?.state.slashTokens) {
+      setScopeTokens(parseTaskScopeTokens(stream.state.slashTokens))
+      return
+    }
+    let cancelled = false
+    void listTaskTokens(effectiveTaskId).then((tokens) => {
+      if (cancelled) return
+      // stream 推送可能在此期间到达并已更新，避免覆盖
+      if (!stream?.state.slashTokens) {
+        setScopeTokens(parseTaskScopeTokens(tokens))
+      }
+    }).catch((error) => {
+      console.warn('[slash] listTaskTokens 失败', error)
+    })
+    return () => { cancelled = true }
+  }, [isDraft, effectiveTaskId, stream?.state.slashTokens])
 
   /**
    * 新建任务时默认选中的 `/` 项（defaultSelected=true）：草稿进入 / 切换 worker 时
    * 按 slash 候选的该字段预置任务级底部 token（bottom 结果进 scopeTokens，用户仍可 ✕ 取消）。
    * 走与用户点击相同的 item.select(item)（草稿态无 taskId → 不触发业务 onSelect 置位），
-   * 提交时随 taskTokens 进 task.run，由 worker 建后回调真正生效。
+   * 提交时随 task.run 建后逐个 apply（slash 层自管存储）。
    */
   React.useEffect(() => {
     if (!isDraft || !draftWorkerId) {
@@ -288,7 +329,7 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
             if (result.position !== 'bottom') {
               continue
             }
-            const scopeToken = buildScopeToken(result.token)
+            const scopeToken = buildScopeToken(result.token, result.id ?? item.id)
             if (scopeToken) {
               setScopeTokens((cur) => upsertTaskToken(cur, scopeToken))
             }
@@ -310,7 +351,7 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
    * RPC 的 meta 写竞态（worker 端 SlashTaskScopeStore 亦按任务串行化,双保险）。
    */
   const handleAddTaskScopeToken = React.useCallback(({ id, token }: { id: string; token: string }) => {
-    const scopeToken = buildScopeToken(token)
+    const scopeToken = buildScopeToken(token, id)
     if (!scopeToken) {
       return
     }
@@ -319,7 +360,10 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
       return
     }
     setScopeTokens((cur) => upsertTaskToken(cur, scopeToken))
-    return applyTaskToken({ taskId: effectiveTaskId, id, token }).catch((applyError) => {
+    return applyTaskToken({ taskId: effectiveTaskId, id, token }).then((tokens) => {
+      // RPC 返回最新 token 列表，直接同步（覆盖乐观更新）
+      setScopeTokens(parseTaskScopeTokens(tokens))
+    }).catch((applyError) => {
       setError(applyError instanceof Error ? applyError.message : '应用任务级 token 失败')
     })
   }, [isDraft, effectiveTaskId])
@@ -331,7 +375,10 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
       void cancelTaskToken({ id, token })
       return
     }
-    void cancelTaskToken({ id, token, taskId: effectiveTaskId })
+    void cancelTaskToken({ id, token, taskId: effectiveTaskId }).then(({ tokens }) => {
+      // RPC 返回最新 token 列表，直接同步（覆盖乐观更新）
+      setScopeTokens(parseTaskScopeTokens(tokens))
+    })
   }, [isDraft, effectiveTaskId])
 
   // 模型配置列表(worker config.get 校准 + config.changed 感知;apiKey 恒为掩码)。
@@ -390,22 +437,38 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
   // 主 agent 稳定 Id(taskStore 透传 worker TaskSummary.mainAgentId):agent 列表首项标识、
   // 归一线程内主 agent 消息的映射键(线程内主 agent 消息 agentId 为空串,见 agents 派生)。
   const mainAgentId = entry?.mainAgentId ?? ''
-  // 当前任务是否处于运行中：决定右下角按钮是「停止」还是「发送」（两者合并为同一按钮位）。
+  /**
+   * 派生用主 agent id:记住最近一次解析到的非空值。
+   *
+   * 任务生命周期内主 agent id 恒定(worker meta 里的 stable id),但 taskStore 镜像每次全量
+   * 校准(`refresh()` 先 `tasks.clear()` 再回填;worker presence / 工作区注册表变更都会触发)
+   * 都可能让 `entry` 瞬间缺失 → mainAgentId 塌成空串。agent 名单与「只看该 agent」的选中键
+   * 都以此为锚:一旦塌空,主胶囊连带消失、名单长度跌破 2 → 整行卸载重建,选中描边一闪而逝
+   * (2026-10 排查:运行中子 agent 胶囊点不出稳定选中态)。这里只做展示/过滤键的兜底,
+   * 不改写镜像。
+   */
+  const mainAgentIdRef = React.useRef('')
+  if (mainAgentId) {
+    mainAgentIdRef.current = mainAgentId
+  }
+  const stableMainAgentId = mainAgentId || mainAgentIdRef.current
+  // 当前任务是否处于活动态(running/waiting-user)：决定右下角按钮是「停止」还是「发送」（两者合并为同一按钮位）。
   // 终态任务直接发送即可继续对话(worker 冷启动再运行,状态自动翻回 running)。
-  const isTaskRunning = status === 'running'
+  const isTaskRunning = isTaskActive(status)
 
   // ── 单一真相源消息区 ────────────────────────────────────────────────
   // 线程渲染数据只来自 useTaskStream 返回的 items(store.state.items 实时快照),
   // 已闭合轮的合成 user/final、未闭合尾轮尾段事件、worker 定向推送的流式事件
   // 全部由 taskStream 折入同一份 items 并按 seq 去重排序。
 
-  // 续跑校准:任务状态从非 running 翻回 running(发送续跑 / 他端续跑)时——
+  // 续跑校准:任务状态从非活动态翻回活动态(发送续跑 / 他端续跑)时——
   // 实时信号链重开(stream.resync:重拉 rounds + 重新订阅推送,续喂
   // agentStates/usage/ask 等状态信号,并按 live 续轮询)。消息区只消费
   // useTaskStream 返回的 items 单一真相源,resync 会让 store 重新建齐 items。
+  // running ⇄ waiting-user 属于活动态内部翻转(ask 挂起/回答),不触发 resync。
   const prevStatusRef = React.useRef(status)
   React.useEffect(() => {
-    if (prevStatusRef.current !== 'running' && status === 'running') {
+    if (!isTaskActive(prevStatusRef.current) && isTaskActive(status)) {
       void stream?.resync().catch(() => {
         // 校准失败不打断界面:后续事件驱动刷新会自然收敛。
       })
@@ -520,35 +583,6 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
     if (!aiText) {
       return
     }
-    // 编辑模式:点编辑按钮后内容已追加到输入框,用户修改完毕点发送 →
-    // 直接走正常 task.run/sendInput 流程(携带 editSeq 标记),不弹确认窗。
-    if (editTarget) {
-      const editAiText = replaceComposerTokensForSubmission(draft.rawContent, draft.tokens).trim()
-      if (!editAiText) return
-      setSubmitting(true)
-      userControllRef.current = false
-      void (async () => {
-        try {
-          if (isTaskRunning) {
-            stream!.sendInput(editAiText, draft.rawContent, editTarget.seq)
-          } else {
-            await taskQueryService.runTask(editAiText, {
-              taskId: effectiveTaskId,
-              configId: selectedForTask || undefined,
-              rawContent: draft.rawContent,
-              editSeq: editTarget.seq,
-            })
-          }
-          setEditTarget(null)
-          setDraft({ text: '', rawContent: '', tokens: [], activeTokenId: undefined })
-        } catch (editError) {
-          setError(editError instanceof Error ? editError.message : '消息编辑失败')
-        } finally {
-          setSubmitting(false)
-        }
-      })()
-      return
-    }
     if (isDraft && !draftWorkerId) {
       setError('请先选择 worker')
       return
@@ -567,22 +601,39 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
     // 发送即恢复自动跟随：用户可能此前手动上滚接管了滚动（userControll=true）。
     // 一旦发送新消息，立即置回 false，确保本轮用户消息与后续回复都能自动滚入视图。
     userControllRef.current = false
+    // 插件提交贡献（如编辑重发的 editSeq metadata）：提交时实时收集，核心透传不解释。
+    const submitContributions = isDraft ? [] : collectTaskRunSubmitContributions(effectiveTaskId)
+    const mergedMetadata = Object.assign(
+      {},
+      ...submitContributions.map(({ contribution }) => contribution.metadata ?? {}),
+    ) as Record<string, unknown>
+    const contributionMetadata = Object.keys(mergedMetadata).length > 0 ? mergedMetadata : undefined
     void (async () => {
       try {
         if (isDraft) {
           // 草稿首次发送：建任务（worker 立即开跑），替换草稿标签。
           // workspace 必填:草稿选择器的有效值(显式选择/预设 > 注册表首选根)。
-          // 任务级底部 token 随 task.run 提交（仅新建分支携带），worker 写入 meta。
+          // 任务级底部 token 在任务创建后通过 slash.taskTokens.apply 逐个写入
+          // (slash 层自管 slash-tokens.json,不走 task.run 参数)。
           const newTaskId = await taskQueryService.runTask(aiText, {
             title: aiText.slice(0, 40),
             configId: selectedLlmConfigId || undefined,
             workspace: effectiveDraftWorkspace || undefined,
             workerId: draftWorkerId,
-            taskTokens: scopeTokens.map((t) => t.opaqueText).filter((token) => token.length > 0),
             rawContent,
           })
+          // 任务创建后，把草稿态持有的 scope token 逐个 apply 到新任务
+          for (const t of scopeTokens) {
+            if (t.opaqueText && t.opaqueText.length > 0) {
+              try {
+                await applyTaskToken({ taskId: newTaskId, id: t.slashId ?? extractSlashId(t.opaqueText) ?? '', token: t.opaqueText })
+              } catch (e) {
+                console.warn('[slash] 建后 apply 任务级 token 失败', e)
+              }
+            }
+          }
           setDraft({ text: '', rawContent: '', tokens: [], activeTokenId: undefined })
-          // 新任务页回显由其任务页 entry 负责（task.updated 广播镜像 slashTaskTokens）。
+          // 新任务页回显由其任务页的 listTaskTokens / slash.tokens.changed 负责。
           setScopeTokens([])
           // 先关草稿标签、再打开真实任务标签并激活:顺序不能反——若先 openTaskChatTab,
           // 紧接着 closeWorkspaceTab 关闭草稿时,内部按旧闭包 activeWorkspaceTabId(草稿)
@@ -592,8 +643,13 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
           return
         }
         if (isTaskRunning) {
-          // 运行中:task.input 入队(输入框上方队列面板实时可见,轮次间消费)。
-          stream!.sendInput(aiText, rawContent)
+          // 运行中:task.run{taskId} 入队(输入框上方队列面板实时可见,轮次间消费)。
+          await taskQueryService.runTask(aiText, {
+            taskId: effectiveTaskId,
+            configId: selectedForTask || undefined,
+            rawContent,
+            metadata: contributionMetadata,
+          })
         } else {
           // 终态:task.run{taskId} 冷启动续跑(载入历史,状态翻回 running)。
           // 带上当前输入框选定的模型,使旧任务也能切换到其他模型。
@@ -601,7 +657,12 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
             taskId: effectiveTaskId,
             configId: selectedForTask || undefined,
             rawContent,
+            metadata: contributionMetadata,
           })
+        }
+        // 提交成功：通知各贡献 provider（如编辑重发清除编辑目标）。
+        for (const { provider } of submitContributions) {
+          provider.onSubmitted?.(effectiveTaskId)
         }
         setDraft({ text: '', rawContent: '', tokens: [], activeTokenId: undefined })
       } catch (submitError) {
@@ -610,7 +671,7 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
         setSubmitting(false)
       }
     })()
-  }, [draft, isDraft, draftWorkerId, selectedLlmConfigId, submitting, stream, shell, effectiveDraftWorkspace, isTaskRunning, effectiveTaskId, selectedForTask, scopeTokens, editTarget])
+  }, [draft, isDraft, draftWorkerId, selectedLlmConfigId, submitting, stream, shell, effectiveDraftWorkspace, isTaskRunning, effectiveTaskId, selectedForTask, scopeTokens])
 
   /**
    * 停止当前 Task。
@@ -631,44 +692,58 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
   }, [isTaskRunning, stopping, stream])
 
   /**
-   * 用户消息编辑:点击编辑按钮 → 把原消息内容追加到输入框已有内容末尾,记录编辑目标(seq)。
-   * 运行中也可编辑(入队时 worker 先截断再正常运行)。
+   * 输入框草稿桥接：提供给插件（如编辑重发按钮）回填草稿的通用能力，
+   * 核心不感知具体业务。
    */
-  const handleEditUserMessage = React.useCallback(
-    (seq: number | string, text: string, rawContent?: string) => {
+  const composerDraftBridge = React.useMemo<ComposerDraftBridgeValue>(() => ({
+    appendText: (text: string) => {
       setError('')
-      const appendText = text && text.length ? text : ''
-      const newRawContent = (draft.rawContent ?? '') + appendText
-      setDraft({
-        text: newRawContent,
-        rawContent: newRawContent,
-        tokens: [],
-        activeTokenId: undefined,
+      setDraft((current) => {
+        const next = (current.rawContent ?? '') + (text || '')
+        return { text: next, rawContent: next, tokens: [], activeTokenId: undefined }
       })
-      setEditTarget({ seq: String(seq) })
     },
-    [draft.rawContent],
-  )
+    setRawContent: (rawContent: string) => {
+      setError('')
+      setDraft({ text: rawContent, rawContent, tokens: [], activeTokenId: undefined })
+    },
+  }), [])
 
-  /** 取消编辑:清除编辑标记,不删除输入框内容。 */
-  const handleCancelEdit = React.useCallback(() => {
-    setEditTarget(null)
-  }, [])
+  // 插件草稿桥接：把输入框草稿写能力注入非 React 模块 holder，
+  // 供插件 ctx.ui.appendComposerText 同步调用（替代 ComposerDraftBridgeContext 直接读取）。
+  // 仅在标签页激活时注入：多个任务标签页并存时，composerBridge 是模块级单例，
+  // 只有当前激活的 TaskChat 才应持有写权——否则切换标签后 bridge 仍指向旧实例，
+  // 编辑重发回填会写入非激活标签的 draft，激活标签的输入框不更新。
+  // 无 cleanup：不活跃时不清空 bridge，而是让下一个激活标签的 effect 覆盖写入，
+  // 避免「A 清空→B 写入」与「B 写入→A 清空」两种树序下 bridge 结果不一致的竞态。
+  React.useEffect(() => {
+    if (!isActive) return
+    setComposerBridge(composerDraftBridge)
+  }, [composerDraftBridge, isActive])
 
   // 从线程派生 agent 列表:主 agent(mainAgentId)恒在首位,子 agent 按首次出现顺序。
   // 线程内主 agent 消息 agentId 为空串(缺省=主线程),此处归一到 mainAgentId 供列表/过滤使用。
   // 除 items 外还并入 agentMeta 的子 agent 键(task.agents 台账 seed):历史任务过程内容
   // 未懒加载、items 尚无子 agent 消息时,胶囊列表也能显示全部子 agent(items 派生优先,
   // meta 补齐追加在后;title 取 resolveAgentTitle 优先,兜底 meta.title)。
+  //
+  // ── 名单「只增不减」 ──────────────────────────────────────────
+  // 上面两个数据源在运行中会**整瞬间清空**:任务状态从非活动翻回活动时聊天页会 stream.resync()
+  // (= open → folder.reset(),items/agentStates/agentMeta 全清后重拉),task.agents 台账也是
+  // 异步补回。名单一旦塌成只剩主 agent,AgentListPanel 按「≤1 个 agent 不渲染」整行卸载,
+  // 胶囊连同刚点上的选中描边一起消失、DOM 节点被拆掉后点击还会落空——这正是「选中效果一闪
+  // 而逝」。一个任务的 agent 集合只会新增、不会消失,故此处按 agentId 单调累积名单:
+  // **成员与顺序冻结**,标题/状态/用量仍每帧取实时值(见 agentListItems)。
   const agentMeta = stream?.state.agentMeta
+  const agentRosterRef = React.useRef<Map<string, string>>(new Map())
   const agents = React.useMemo(() => {
     const seen = new Map<string, string>()
-    if (mainAgentId) {
-      seen.set(mainAgentId, '主 agent')
+    if (stableMainAgentId) {
+      seen.set(stableMainAgentId, '主 agent')
     }
     for (const item of items) {
       const rawKey = item.type === 'agent_message' ? item.message.agentId : (item.trace.agentId ?? '')
-      const agentKey = rawKey || mainAgentId
+      const agentKey = rawKey || stableMainAgentId
       if (agentKey && !seen.has(agentKey)) {
         seen.set(agentKey, stream?.resolveAgentTitle(rawKey) ?? rawKey)
       }
@@ -682,8 +757,15 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
         seen.set(agentId, stream?.resolveAgentTitle(agentId) ?? meta.title ?? agentId)
       }
     }
+    // 并入既往已见但本轮数据缺席的 agent(resync reset / 台账晚到的空窗期)。
+    for (const [agentId, title] of agentRosterRef.current) {
+      if (!seen.has(agentId)) {
+        seen.set(agentId, title)
+      }
+    }
+    agentRosterRef.current = seen
     return [...seen.entries()].map(([agentId, title]) => ({ agentId, title }))
-  }, [items, stream, mainAgentId, agentMeta])
+  }, [items, stream, stableMainAgentId, agentMeta])
 
   // agent 长条列表项:状态来自事件折叠器的 agentStates(主 agent 键为空串 '';子 agent 键 = 子 id);
   // meta 同源(键:主 = '',子 = 子 id)→ 悬停信息卡数据 + 子 agent 胶囊底部上下文用量线
@@ -691,8 +773,11 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
   const agentListItems = React.useMemo<AgentListItem[]>(() => {
     const states = stream?.state.agentStates ?? {}
     const metas = agentMeta ?? {}
+    const entryStatus = entry?.status ?? 'idle'
+    // 任务终态判定:completed/stopped/error 时,任务状态是主 agent 的权威状态。
+    const entryStatusTerminaled = entryStatus === 'completed' || entryStatus === 'stopped' || entryStatus === 'error'
     return agents.map((agent) => {
-      const isMain = agent.agentId === mainAgentId
+      const isMain = agent.agentId === stableMainAgentId
       const meta = metas[isMain ? '' : agent.agentId]
       const contextUsed = meta?.contextUsed
       const contextWindow = meta?.contextWindow
@@ -703,30 +788,130 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
         agentId: agent.agentId,
         title: agent.title,
         status: isMain
-          // 主 agent:流事件状态优先;终态任务刷新后 agent.status 不随 rounds 骨架折入,
-          // 用任务状态兜底(词表同为 idle/running/completed/stopped/error),避免胶囊灰化。
-          ? (states[''] ?? (entry?.status ?? 'idle'))
+          // 主 agent:任务终态时,任务状态(entry.status)是权威——流事件 agentStates['']
+          // 可能因 resync reset 后丢失、或被 cancelled 等事件设为 stopped 而与实际任务
+          // 终态(completed)不一致;非终态时流事件优先(反映 running/waiting-user 实时状态)。
+          ? (entryStatusTerminaled
+            ? entryStatus
+            : (states[''] ?? (entryStatus ?? 'idle')))
           : (states[agent.agentId] ?? 'idle'),
         isMain,
         meta,
         contextRatio,
       }
     })
-  }, [agents, mainAgentId, stream, agentMeta, entry?.status])
+  }, [agents, stableMainAgentId, stream, agentMeta, entry?.status])
+
+  // 电池详情卡数据(任务级汇总):任务下全部 agent(主 + 子)聚合——累计 tokens
+  // (输入/输出/合计,每 agent 累计值)与上下文占用/窗口(每 agent 最近一轮)逐 agent
+  // 累加;创建时间用任务创建时间(entry.createdAt);模型取各 agent 快照去重拼接。
+  // 上下文占用优先取 worker 聚合快照(entry.contextUsage,与电池填充同源同值),
+  // 缺省(未建流/旧数据)时回退 agentMeta 逐项求和;无任何数据时返回 null,电池内部
+  // 由 monitor 快照兜底构造。
+  const batteryItem = React.useMemo<AgentListItem | null>(() => {
+    const mainItem = agentListItems.find((item) => item.isMain) ?? null
+    const metas = agentListItems
+      .map((item) => item.meta)
+      .filter((meta): meta is AgentMetaSnapshot => Boolean(meta))
+    const usage = entry?.contextUsage
+    if (metas.length === 0 && !usage) {
+      return null
+    }
+    const sumMeta = (pick: (meta: AgentMetaSnapshot) => number | undefined): number | undefined => {
+      let total = 0
+      let hasValue = false
+      for (const meta of metas) {
+        const value = pick(meta)
+        if (value != null) {
+          total += value
+          hasValue = true
+        }
+      }
+      return hasValue ? total : undefined
+    }
+    const models: string[] = []
+    for (const meta of metas) {
+      if (meta.model && !models.includes(meta.model)) {
+        models.push(meta.model)
+      }
+    }
+    const contextUsed = usage
+      ? (usage.promptTokens ?? usage.totalTokens ?? 0)
+      : sumMeta((meta) => meta.contextUsed)
+    const contextWindow = usage && usage.maxTokens > 0
+      ? usage.maxTokens
+      : sumMeta((meta) => meta.contextWindow)
+    const agentId = mainItem?.agentId ?? stableMainAgentId ?? ''
+    return {
+      agentId,
+      title: '全部 agent',
+      status: mainItem?.status ?? 'idle',
+      isMain: true,
+      meta: {
+        agentId,
+        createdAt: entry?.createdAt && entry.createdAt > 0 ? entry.createdAt : undefined,
+        model: models.length > 0 ? models.join(' / ') : (usage?.model || undefined),
+        inputTokens: sumMeta((meta) => meta.inputTokens),
+        outputTokens: sumMeta((meta) => meta.outputTokens),
+        totalTokens: sumMeta((meta) => meta.totalTokens),
+        contextUsed,
+        contextWindow,
+        updatedAt: usage?.lastUpdatedAt ?? sumMeta((meta) => meta.updatedAt),
+      },
+      contextRatio: contextUsed != null && contextWindow != null && contextWindow > 0
+        ? Math.min(1, Math.max(0, contextUsed / contextWindow))
+        : undefined,
+    }
+  }, [agentListItems, entry, stableMainAgentId])
 
   /** 点击 agent 长条:切换选中态(再点同一 agent 由面板回传 '' 恢复全部;轮次视图下仅高亮)。 */
   const handleSelectAgent = React.useCallback((agentId: string) => {
     setFilterAgentId(agentId)
   }, [])
 
-  const submitDisabled = Boolean(!draft.text.trim() || submitting || (isDraft && !draftWorkerId) || (isDraft && !effectiveDraftWorkspace))
+  // 插件扩展点版本：注册/注销时递增，驱动插件面板重渲染。
+  const pluginExtVersion = React.useSyncExternalStore(
+    pluginDispatcher.subscribeExtensionsChanged,
+    pluginDispatcher.getExtensionsVersion,
+  )
+  // 插件注册的输入框上方面板（每个 Component 接收 ComposerPanelCtx）。
+  const composerAbovePanels = React.useMemo(
+    () => pluginDispatcher.listRegisteredComposerAbovePanels(),
+    // pluginExtVersion 变化时重新读取快照（注册/注销后立即出现/消失）。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [pluginExtVersion],
+  )
+  // 为插件面板构建 ComposerPanelCtx（每次渲染新建，保持引用最新）。
+  // 公共上下文不携带任何插件专有数据（如队列插件的 pendingInputs）——
+  // 插件面板自持数据源（经 ctx.rpc 拉取 + subscribeTaskEvents 信号刷新）。
+  const composerPanelCtx = React.useMemo<ComposerPanelCtx>(() => ({
+    taskId: effectiveTaskId,
+    draft: draft as ComposerPanelCtx['draft'],
+    isRunning: isTaskActive(entry?.status ?? 'idle'),
+    selectAgent: (agentId: string | null) => {
+      if (agentId) handleSelectAgent(agentId)
+    },
+    rpc: (method: string, params: Record<string, unknown>) => {
+      const ownerW = ownerWorkerId || taskStore.get(effectiveTaskId)?.workerId || ''
+      return hubSession.rpcTo(ownerW, method, params)
+    },
+    subscribeTaskEvents: (handler) => {
+      // taskStore 变更（task.updated 广播：status/usage 及插件附带的扩展字段等）
+      const unsubStore = taskStore.subscribe(() => {
+        handler('task.updated', null, null)
+      })
+      // task stream 变更（agent.*、usage 等流式事件）
+      const unsubStream = stream?.subscribe(() => {
+        handler('task.stream', null, null)
+      })
+      return () => {
+        unsubStore()
+        unsubStream?.()
+      }
+    },
+  }), [effectiveTaskId, draft, entry?.status, handleSelectAgent, hubSession, ownerWorkerId, stream])
 
-  // 用户消息编辑 Context(非草稿态才有编辑能力)
-  const editContextValue: UserMessageEditContextValue = {
-    editingUserSeq: editTarget?.seq ?? null,
-    onEditUserMessage: handleEditUserMessage,
-    onCancelEditUserMessage: handleCancelEdit,
-  }
+  const submitDisabled = Boolean(!draft.text.trim() || submitting || (isDraft && !draftWorkerId) || (isDraft && !effectiveDraftWorkspace))
 
   // 草稿态：渲染与 n 版启动台一致的草稿面板（BrandMark 顶栏 + 空线程 + 输入区）。
   // 模型配置来自 worker(config.get),选中项经 task.create 的 configId 冻结进任务快照。
@@ -759,7 +944,7 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
   }
 
   return (
-    <UserMessageEditContext.Provider value={editContextValue}>
+    <ComposerDraftBridgeContext.Provider value={composerDraftBridge}>
     <>
     <ChatShell
       // 工作区 chip 已迁移至输入框底部(电池图标左侧),顶部不再重复展示。
@@ -784,7 +969,7 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
           isGenerating={isTaskRunning}
           scrollRoot={threadScrollRefNode.current}
           filterAgentId={filterAgentId}
-          mainAgentId={mainAgentId}
+          mainAgentId={stableMainAgentId}
         />
       )}
       composer={(
@@ -811,7 +996,10 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
                   filterAgentId={filterAgentId}
                   onSelect={handleSelectAgent}
                 />
-                <TaskQueuePanel taskId={effectiveTaskId} onEditDraft={handleEditQueuedDraft} />
+                {composerAbovePanels.map((def) => {
+                  const Component = def.Component as React.ComponentType<ComposerPanelCtx>
+                  return <Component key={def.id} {...composerPanelCtx} />
+                })}
               </div>
             )}
             submitLabel={submitting ? '发送中...' : '发送'}
@@ -836,10 +1024,16 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
                         >✕</span>
                       </span>
                     ))}
-                    {/* 实时流折叠到 usage 事件优先;老任务/终态任务无尾段事件可折入时,
-                        回退到 taskStore 的 TaskSummary.usage 持久化快照(与 taskQueryService
-                        listTaskListItems 的电池兜底口径一致),保证打开老任务电池也显示最近一轮用量。 */}
-                    <ContextBattery taskId={effectiveTaskId} monitor={stream?.state.contextUsage ?? entry?.contextUsage ?? null} />
+                    {/* 上下文电池统一消费 taskStore 的 TaskSummary.usage(worker usage
+                        投影器聚合任务下所有 agent 最近一轮占用,task.updated 每轮实时推送;
+                        聊天页与任务列表同源同值,流内不再单独维护)。
+                        详情卡数据 = 任务级汇总项(任务下全部 agent 聚合,创建时间用任务
+                        创建时间,上下文占用/窗口逐 agent 累加)。 */}
+                    <ContextBattery
+                      taskId={effectiveTaskId}
+                      monitor={entry?.contextUsage ?? null}
+                      agentItem={batteryItem}
+                    />
                   </div>
                   <div className="task-composer-footer__controls">
                     <TaskModelControls
@@ -866,7 +1060,7 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
                   </Button>
                 ) : (
                   <Button
-                    variant={editTarget ? 'danger' : 'primary'}
+                    variant={submitOverride?.submitDanger ? 'danger' : 'primary'}
                     size="sm"
                     onClick={handleSubmit}
                     disabled={submitDisabled}
@@ -878,7 +1072,7 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
                       <ArrowRightIcon size={14} />
                     )}
                     <span className="task-composer-footer__send-label">
-                      {submitting ? (editTarget ? '重新发送中...' : '发送中...') : (editTarget ? '重新发送' : '发送')}
+                      {submitting ? (submitOverride?.submittingLabel ?? '发送中...') : (submitOverride?.submitLabel ?? '发送')}
                     </span>
                   </Button>
                 )}
@@ -892,7 +1086,7 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
       )}
     />
     </>
-    </UserMessageEditContext.Provider>
+    </ComposerDraftBridgeContext.Provider>
   )
 }
 
@@ -900,7 +1094,7 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
  * 订阅任务实时流(折叠推进触发重渲染)。
  *
  * 返回 [stream, items]:stream 是共享句柄(含可变 state,供 taskModel/contextUsage/
- * agentStates/resolveAgentTitle/sendInput/cancel 等消费);items 是**每次折叠推进都
+ * agentStates/resolveAgentTitle/cancel 等消费);items 是**每次折叠推进都
  * 换引用的线程项副本**——既供 TaskRoundsPanel 消息区,也供派生 agent 列表(agents)。
  *
  * 关键:hub 的 TaskEventFolder.fold 对 state.items 做原地 push / 原地 mutate
@@ -957,10 +1151,28 @@ function getDistanceFromBottom(target: HTMLElement): number {
 }
 
 /**
+ * 收集某任务当前的 task.run 提交贡献（扩展点 `task.submit_contributions`）。
+ * 返回 provider 与贡献的配对（提交成功后需按 provider 回调 onSubmitted）。
+ */
+function collectTaskRunSubmitContributions(taskId: string): Array<{
+  provider: TaskRunSubmitContributionProvider
+  contribution: TaskRunSubmitContribution
+}> {
+  const result: Array<{ provider: TaskRunSubmitContributionProvider; contribution: TaskRunSubmitContribution }> = []
+  for (const provider of pluginDispatcher.listRegisteredTaskRunSubmitContributionProviders()) {
+    const contribution = provider.getContribution(taskId)
+    if (contribution) {
+      result.push({ provider, contribution })
+    }
+  }
+  return result
+}
+
+/**
  * 把 opaque token 串解析为任务级底部 token（ChatComposerToken）。
  * 非法串（非 opaque token）返回 null，由调用方跳过。
  */
-function buildScopeToken(opaque: string): ChatComposerToken | null {
+function buildScopeToken(opaque: string, slashId?: string): ChatComposerToken | null {
   const parsed = parseOpaqueTokenText(opaque)
   if (!parsed) {
     return null
@@ -971,6 +1183,7 @@ function buildScopeToken(opaque: string): ChatComposerToken | null {
     label: parsed.label ?? '',
     summary: parsed.summary,
     opaqueText: opaque,
+    slashId,
   }
 }
 

@@ -1,6 +1,6 @@
 package dev.everyagent.worker.tools.permission;
 
-import dev.everyagent.worker.rpc.NotFoundException;
+import dev.everyagent.plugin.api.exception.NotFoundException;
 import dev.everyagent.worker.tools.PermissionGate.Op;
 
 import java.nio.file.Files;
@@ -15,10 +15,10 @@ import org.springframework.stereotype.Component;
 public class MissingPathCheck implements PermissionCheck {
 
     @Override
-    public PermissionDecision check(PermissionContext ctx) {
+    public PermissionDecision invoke(PermissionContext ctx, PermissionChain next) {
         if (ctx.op() == Op.READ && ctx.norm() != null && !Files.exists(ctx.norm())) {
             return PermissionDecision.deny(new NotFoundException("路径不存在: " + ctx.rel()));
         }
-        return PermissionDecision.skip();
+        return next.proceed(ctx);
     }
 }

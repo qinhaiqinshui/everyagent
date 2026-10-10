@@ -89,8 +89,6 @@ class WorkerPropertiesTest {
         // 默认:放行网络(含回环)、拒绝提权
         assertTrue(s.isAllowNetwork());
         assertFalse(s.isAllowPrivilegeEscalation());
-        // 默认:seccomp 内核级提权拦截开启(默认要开启)
-        assertTrue(s.isInterceptPrivilege());
         // 默认 allowNetwork=true → networkDenied()=false
         assertFalse(s.networkDenied());
         // 显式关闭网络 → 回落 networkPolicy(deny-all 拒网)

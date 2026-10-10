@@ -1,11 +1,12 @@
 package dev.everyagent.worker.ship;
 
 import dev.everyagent.contract.frame.Frames;
+import dev.everyagent.contract.frame.StreamChannelParser;
 import dev.everyagent.worker.hub.HubLink;
 import dev.everyagent.worker.hub.HubPool;
-import dev.everyagent.worker.proto.Events;
-import dev.everyagent.worker.task.TaskManager;
-import dev.everyagent.worker.task.TaskStore;
+import dev.everyagent.plugin.api.event.EventLogReader;
+import dev.everyagent.plugin.api.event.Events;
+import dev.everyagent.plugin.api.event.StreamSourceListener;
 import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -22,42 +23,60 @@ import java.util.concurrent.ConcurrentHashMap;
  * 幂等不重复创建;多 hub 时通知来自哪条连接就用哪条连接推送(ext.target=sessionId 定向到
  * 该 hub 上的前端会话)。连接断开时清理该连接的推送器。
  *
- * <p>兜底路径:worker 重启后内存推送器表清空,而前端页面未刷新(WS 未断、仍订阅着 stream
- * 频道)就不会再收到 subscriber.join 通知——若前端继续发 task.input,任务照跑但该前端永远
- * 收不到增量。因此在收到前端 task.input 时也按 sessionId|taskId 兜底补建推送器,与
- * subscriber.join 同源幂等(sessionId 由 hub 在转发帧的 from.sessionId 附上)。
+ * <p>流源通知:实现 {@link StreamSourceListener},经 {@link StreamSourceRegistry}
+ * 感知流源挂接/摘除,不再反向依赖 {@code TaskManager}。
+ *
+ * <p>归属自检:stream 频道名带 worker 段(§5.2),通知里点名的是别的 worker 时直接丢弃,
+ * 不为非自身任务建推送器——否则该推送器收不到前端 ack,背压窗口永不释放而永久阻塞(§7.13)。
  */
 @Component
-public class DataPusherManager implements HubPool.Listener, TaskManager.TaskResumeListener {
+public class DataPusherManager implements HubPool.Listener, StreamSourceListener {
 
     private static final Logger log = LoggerFactory.getLogger(DataPusherManager.class);
 
     private final HubPool pool;
-    private final TaskManager tasks;
-    private final TaskStore store;
+    private final StreamSourceRegistry streamSources;
+    /** 出网单点投影器:建 DataPusher 时传入(事件 wire + 出网过滤链的唯一收敛点)。 */
+    private final EgressProjector projector;
+    /** 归属查询口(task 层实现);ObjectProvider 延迟解析,避免与 TaskManager 构造循环依赖。 */
+    private final org.springframework.beans.factory.ObjectProvider<TaskOwnership> ownership;
     private final Map<String, DataPusher> pushers = new ConcurrentHashMap<>();
 
-    public DataPusherManager(HubPool pool, TaskManager tasks, TaskStore store) {
+    public DataPusherManager(HubPool pool,
+                             StreamSourceRegistry streamSources,
+                             EgressProjector projector,
+                             org.springframework.beans.factory.ObjectProvider<TaskOwnership> ownership) {
         this.pool = pool;
-        this.tasks = tasks;
-        this.store = store;
+        this.streamSources = streamSources;
+        this.projector = projector;
+        this.ownership = ownership;
     }
 
     @PostConstruct
     void init() {
         pool.addListener(this);
-        tasks.addResumeListener(this);
+        streamSources.addListener(this);
     }
 
     /**
-     * 任务被再运行(冷启动续跑,新 TaskEntry 已入 tasks):唤醒该任务的全部定向推送器立即
-     * 对账挂接新日志。纯轮询(1s)在极快续跑(两次轮询间完成并驱逐)时会漏推整轮——即
-     * 「终态任务再运行后前端看不到新输出」的根因,这里用事件驱动补上。
+     * 流源挂接（新任务 track 或再运行）：唤醒该任务的全部定向推送器立即对账挂接新日志。
      */
     @Override
-    public void onTaskResumed(String taskId) {
+    public void onAttach(String streamKey, EventLogReader log) {
         for (DataPusher p : pushers.values()) {
-            if (taskId.equals(p.taskId())) {
+            if (streamKey.equals(p.taskId())) {
+                p.wake();
+            }
+        }
+    }
+
+    /**
+     * 流源摘除（终态 untrack）：唤醒该任务的推送器排水并 detach。
+     */
+    @Override
+    public void onDetach(String streamKey) {
+        for (DataPusher p : pushers.values()) {
+            if (streamKey.equals(p.taskId())) {
                 p.wake();
             }
         }
@@ -72,29 +91,39 @@ public class DataPusherManager implements HubPool.Listener, TaskManager.TaskResu
             routeAck(frame);
             return;
         }
-        // 兜底建推送器:worker 重启后前端不刷新,内存推送器表为空且不会再收到 subscriber.join;
-        // 前端继续发 task.input 时以「消息到达」为触发器补建,否则任务照跑但该前端永远收不到增量。
-        if (Events.TASK_INPUT.equals(event)) {
-            ensurePusherForTaskInput(conn, frame);
+        // 频道解析统一委托 contract 的 StreamChannelParser(与 hub 同一份频道命名知识,不分叉)。
+        StreamChannelParser.StreamRef ref = StreamChannelParser.parse(channel);
+        if (ref == null) {
+            return; // 非任务流频道通知,与本管理器无关
+        }
+        // 归属自检:频道名带 worker 段且不是本机 worker → 一律丢弃。
+        // 同 apiKey 两台 worker 时,hub 若仍把 subscriber.join 广播给全部在线 worker,
+        // 非寻址那台一旦建起推送器就永远收不到前端 ack(ack 只发到寻址那台的 input 频道),
+        // credit 窗口 128 永不释放 → beginTurn 永久阻塞,白占出站队列与虚拟线程(§7.13)。
+        String addressee = ref.workerId();
+        if (addressee != null && !addressee.equals(pool.workerId())) {
+            log.debug("subscriber 通知归属非本机 worker,丢弃:worker={} task={} event={}",
+                    addressee, ref.taskId(), event);
             return;
         }
-        String taskId = taskIdOf(channel);
-        if (taskId == null) {
-            return; // 非 stream 频道通知,与本管理器无关
-        }
+        String taskId = ref.taskId();
         String sessionId = frame.path("payload").path("sessionId").asString("");
         if (sessionId.isEmpty()) {
             return;
         }
         String key = sessionId + "|" + taskId;
         if (Frames.SUBSCRIBER_JOIN.equals(event)) {
-            // 校验 taskId 属于本 worker:内存运行中或磁盘目录存在(否则可能是别的 worker 的任务)
-            if (tasks.get(taskId) == null && !store.taskDirExists(taskId)) {
-                log.debug("忽略非本 worker 任务的订阅通知 channel={}", channel);
+            // 归属校验(第二道,按任务):任务不属于本 worker(内存/磁盘索引/任务目录均无)时
+            // 不建推送器 —— 否则一次指向不存在任务的订阅就永久占住一个虚拟线程推送器,
+            // 且它的背压窗口等不到 ack(前端不会再为这个任务发帧)。
+            // leave 分支不过滤:移除不存在的键本就是幂等空操作。
+            TaskOwnership index = ownership.getIfAvailable();
+            if (index != null && !index.ownsTask(taskId)) {
+                log.debug("subscriber.join 的任务不属于本 worker,忽略:task={} session={}", taskId, sessionId);
                 return;
             }
             pushers.computeIfAbsent(key, k -> {
-                DataPusher p = new DataPusher(sessionId, taskId, conn, tasks);
+                DataPusher p = new DataPusher(sessionId, taskId, channel, conn, streamSources, projector);
                 p.start();
                 log.debug("定向推送器已建立 session={} task={}", sessionId, taskId);
                 return p;
@@ -121,40 +150,10 @@ public class DataPusherManager implements HubPool.Listener, TaskManager.TaskResu
         }
         DataPusher p = pushers.get(sessionId + "|" + taskId);
         if (p != null) {
-            p.onAck(creditIndex);
+            p.wsEmitter().onAck(creditIndex);
         } else {
             log.debug("stream.ack 无对应推送器 session={} task={}", sessionId, taskId);
         }
-    }
-
-    /**
-     * 前端在某任务页发送输入(task.input)时兜底补建推送器:worker 重启后前端未刷新、不再有
-     * subscriber.join,但任务增量仍须推到该前端。sessionId 由 hub 在转发帧的 from.sessionId
-     * 附上(前端 pub 原帧无 sessionId,否则无法定向)。与 subscriber.join 同源幂等去重
-     * (key=sessionId|taskId);任务不在本 worker(内存/磁盘均无)则忽略。
-     */
-    private void ensurePusherForTaskInput(HubLink conn, JsonNode frame) {
-        JsonNode from = frame.path("from");
-        if (!"frontend".equals(from.path("role").asString(""))) {
-            return; // 只对前端消息兜底(worker 自身不会发 task.input 到自己的输入频道)
-        }
-        String sessionId = from.path("sessionId").asString("");
-        String taskId = frame.path("payload").path("taskId").asString("");
-        if (sessionId.isEmpty() || taskId.isEmpty()) {
-            return;
-        }
-        if (tasks.get(taskId) == null && !store.taskDirExists(taskId)) {
-            log.debug("忽略非本 worker 任务的任务输入通知 task={}", taskId);
-            return;
-        }
-        String key = sessionId + "|" + taskId;
-        pushers.computeIfAbsent(key, k -> {
-            DataPusher p = new DataPusher(sessionId, taskId, conn, tasks);
-            p.start();
-            log.debug("定向推送器已建立(任务输入兜底:worker 重启后前端未刷新) session={} task={}",
-                    sessionId, taskId);
-            return p;
-        });
     }
 
     /** 来源连接断开:其订阅通知(leave)不会再到达,就地清理该连接上的推送器防泄漏。 */
@@ -172,22 +171,5 @@ public class DataPusherManager implements HubPool.Listener, TaskManager.TaskResu
     /** 活跃推送器数(测试可观测)。 */
     public int pusherCount() {
         return pushers.size();
-    }
-
-    /** 从 stream 频道解析 taskId;非 stream 频道返回 null。 */
-    private static String taskIdOf(String channel) {
-        if (channel == null || !channel.startsWith("u.")) {
-            return null;
-        }
-        int ownerEnd = channel.indexOf('.', 2);
-        if (ownerEnd < 0) {
-            return null;
-        }
-        String rest = channel.substring(ownerEnd + 1);
-        if (!rest.startsWith("task.") || !rest.endsWith(".stream")) {
-            return null;
-        }
-        String taskId = rest.substring("task.".length(), rest.length() - ".stream".length());
-        return taskId.isEmpty() ? null : taskId;
     }
 }

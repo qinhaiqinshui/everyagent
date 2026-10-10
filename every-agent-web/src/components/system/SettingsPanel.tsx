@@ -2,7 +2,7 @@
  * 设置页(hub 版,双道鉴权 + 多 worker)。
  *
  * - Hub 连接区:hubUrl + hubKey(hub 级凭证,前端与 worker 都要带)。
- * - Worker 列表区:目录发现的 worker,各自输入其 apiKey、启用/禁用开关。
+ * - Worker 列表区:见 WorkerList(状态收敛 + 单主按钮 + 别名)。
  *
  * 模型配置/技能/权限在 worker 侧,不在此编辑;工作区注册表在资源管理器侧栏管理。
  */
@@ -24,38 +24,18 @@ import {
   saveBrowserNotificationsEnabled,
 } from '@/settings/browserNotifications'
 import { hubSession } from '@/hub/session'
-import { taskStore } from '@/hub/taskStore'
-import { workspaceRegistry } from '@/hub/workspaceRegistry'
-import type { WorkerInfo } from '@/hub/session'
+import { domainEventBus, DOMAIN_EVENTS } from '@/events/eventBus'
+import ConfirmDialog from '@/components/shared/ConfirmDialog'
+import WorkerList from '@/components/system/WorkerList'
 import { APP_NAME, APP_VERSION, APP_COPYRIGHT, APP_LICENSE } from '@/appInfo'
-
-function workerStatusLabel(worker: WorkerInfo): string {
-  if (worker.error) return '连接失败 · ' + worker.error.code
-  if (worker.connecting) return '连接中…'
-  if (!worker.online) return '离线'
-  if (worker.connected) return '已连接'
-  if (!worker.hasApiKey) return '未配置'
-  if (!worker.enabled) return '已禁用'
-  return '未连接'
-}
-
-function workerStatusColor(worker: WorkerInfo): string {
-  if (worker.error) return 'var(--accent-red)'
-  if (worker.connecting) return 'var(--accent-amber)'
-  if (!worker.online) return 'var(--text-muted)'
-  if (worker.connected) return 'var(--accent-green)'
-  return 'var(--text-muted)'
-}
 
 export default function SettingsPanel() {
   const hub = useHub()
   const themeMode = useThemeMode(loadThemeMode())
   const { showToast } = useAppUi()
 
-  const [hubUrl, setHubUrl] = React.useState(hub.config?.hubUrl ?? 'ws://localhost:9100/ws')
+  const [hubUrl, setHubUrl] = React.useState(hub.config?.hubUrl ?? 'ws://localhost:6101/ws')
   const [hubKey, setHubKey] = React.useState(hub.config?.hubKey ?? '')
-  const [workerKeys, setWorkerKeys] = React.useState<Map<string, string>>(new Map())
-  const [savingWorker, setSavingWorker] = React.useState('')
   const [saving, setSaving] = React.useState(false)
   const [message, setMessage] = React.useState('')
   const [messageTone, setMessageTone] = React.useState<'ok' | 'error'>('ok')
@@ -68,6 +48,10 @@ export default function SettingsPanel() {
   const [reloadingSkills, setReloadingSkills] = React.useState(false)
   const [skillReloadHint, setSkillReloadHint] = React.useState('')
   const [skillReloadTone, setSkillReloadTone] = React.useState<'ok' | 'error'>('ok')
+  const [restartingWorkers, setRestartingWorkers] = React.useState(false)
+  const [restartConfirmOpen, setRestartConfirmOpen] = React.useState(false)
+  const [restartHint, setRestartHint] = React.useState('')
+  const [restartTone, setRestartTone] = React.useState<'ok' | 'error'>('ok')
   const isDesktopNotification = getNotificationAdapter()?.source === 'desktop'
 
   const connected = hub.state === 'open'
@@ -88,7 +72,7 @@ export default function SettingsPanel() {
         hubKey: hubKey.trim(),
         workers: hub.config?.workers ?? [],
       })
-      await taskStore.refresh()
+      domainEventBus.emit(DOMAIN_EVENTS.WORKER_DATA_CHANGED, {})
       setMessage('已连接 hub')
       setMessageTone('ok')
     } catch (error) {
@@ -103,79 +87,6 @@ export default function SettingsPanel() {
     hub.disconnect()
     setMessage('已断开')
     setMessageTone('ok')
-  }
-
-  const handleSaveWorkerKey = async (workerId: string) => {
-    if (savingWorker) return
-    const apiKey = (workerKeys.get(workerId) ?? '').trim()
-    if (!apiKey) {
-      setMessage('请输入 worker ' + workerId + ' 的 apiKey')
-      setMessageTone('error')
-      return
-    }
-    setSavingWorker(workerId)
-    setMessage('')
-    try {
-      const result = await hub.setWorkerApiKey(workerId, apiKey)
-      setWorkerKeys((prev) => {
-        const next = new Map(prev)
-        next.delete(workerId)
-        return next
-      })
-      if (result.ok) {
-        await taskStore.refresh()
-        await workspaceRegistry.refresh()
-        setMessage(
-          result.online
-            ? '已连接 worker ' + workerId
-            : '已保存 worker ' + workerId + ' 的 apiKey(worker 当前离线)',
-        )
-        setMessageTone('ok')
-      } else {
-        const detail = result.error?.detail || result.error?.code || '未知错误'
-        setMessage('连接 worker ' + workerId + ' 失败：' + detail)
-        setMessageTone('error')
-      }
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : '保存 worker apiKey 失败')
-      setMessageTone('error')
-    } finally {
-      setSavingWorker('')
-    }
-  }
-
-  const handleToggleWorker = async (workerId: string, enabled: boolean) => {
-    setMessage('')
-    try {
-      const result = await hub.setWorkerEnabled(workerId, enabled)
-      if (!result.ok) {
-        const detail = result.error?.detail || result.error?.code || '未知错误'
-        setMessage((enabled ? '启用' : '禁用') + ' worker ' + workerId + ' 失败：' + detail)
-        setMessageTone('error')
-        return
-      }
-      if (enabled) {
-        await taskStore.refresh()
-        await workspaceRegistry.refresh()
-        setMessage(
-          result.online
-            ? '已连接 worker ' + workerId
-            : '已启用 worker ' + workerId + '(worker 当前离线)',
-        )
-      } else {
-        void taskStore.refresh()
-        void workspaceRegistry.refresh()
-        setMessage('已禁用 worker ' + workerId)
-      }
-      setMessageTone('ok')
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : '启用/禁用 worker 失败')
-      setMessageTone('error')
-    }
-  }
-
-  const handleRefreshWorkers = () => {
-    void taskStore.refresh().then(() => workspaceRegistry.refresh())
   }
 
   const handleToggleNotifications = (checked: boolean) => {
@@ -269,6 +180,47 @@ export default function SettingsPanel() {
     }
   }
 
+  const handleRestartWorkers = async () => {
+    setRestartConfirmOpen(false)
+    if (restartingWorkers) return
+    const connectedWorkers: string[] = []
+    hub.directory.forEach((w) => {
+      if (w.connected) connectedWorkers.push(w.workerId)
+    })
+    if (connectedWorkers.length === 0) {
+      setRestartHint('无已连接的 worker')
+      setRestartTone('error')
+      return
+    }
+    setRestartingWorkers(true)
+    setRestartHint('')
+    try {
+      const results = await Promise.allSettled(
+        connectedWorkers.map((id) => hubSession.rpcTo(id, 'worker.restart')),
+      )
+      const succeeded: string[] = []
+      const failed: string[] = []
+      results.forEach((r, i) => {
+        if (r.status === 'fulfilled') {
+          succeeded.push(connectedWorkers[i])
+        } else {
+          failed.push(connectedWorkers[i])
+        }
+      })
+      if (succeeded.length > 0) {
+        setRestartHint('已向 ' + succeeded.length + ' 台 worker 发送重启指令,worker 将短暂离线后自动恢复')
+        setRestartTone('ok')
+      }
+      if (failed.length > 0) {
+        const failedText = failed.length + ' 台重启失败(' + failed.join(', ') + ',老 worker 不含此方法或无法重启)'
+        setRestartHint((prev) => (prev ? prev + ';' : '') + failedText)
+        setRestartTone('error')
+      }
+    } finally {
+      setRestartingWorkers(false)
+    }
+  }
+
   const handleRequestNotification = async () => {
     if (requestingNotification) return
     setRequestingNotification(true)
@@ -320,7 +272,7 @@ export default function SettingsPanel() {
             style={inputStyle}
             value={hubUrl}
             onChange={(event) => setHubUrl(event.target.value)}
-            placeholder="ws://your-pc:9100/ws"
+            placeholder="ws://your-pc:6101/ws"
             spellCheck={false}
           />
         </div>
@@ -377,67 +329,10 @@ export default function SettingsPanel() {
       <section style={sectionStyle}>
         <h3 style={sectionTitleStyle}>Worker</h3>
         <p style={hintStyle}>
-          连接 hub 后发现其下的全部 worker。请为每台 worker 输入它自己的 apiKey 并启用;
-          任务列表与工作区会合并所有已启用 worker 的数据。
+          连接 hub 后发现其下的全部 worker。为每台 worker 输入它自己的 apiKey 并连接;
+          任务列表与工作区会合并所有已连接 worker 的数据。
         </p>
-        {hub.directory.length === 0 ? (
-          <p style={hintStyle}>暂未发现 worker——请确认 worker 已启动并连到该 hub(使用正确的 hub key)。</p>
-        ) : (
-          <div style={workerListStyle}>
-            {hub.directory.map((worker) => {
-              const keyValue = workerKeys.get(worker.workerId) ?? ''
-              return (
-                <div key={worker.workerId} style={workerRowStyle}>
-                  <span style={statusDotStyle(workerStatusColor(worker))} />
-                  <span style={workerIdStyle} title={worker.workerId}>{worker.workerId}</span>
-                  <span
-                    style={{ ...workerStatusStyle, color: workerStatusColor(worker) }}
-                    title={worker.error ? (worker.error.detail || worker.error.code) : undefined}
-                  >
-                    {workerStatusLabel(worker)}
-                  </span>
-                  <TextInput
-                    style={workerKeyInputStyle}
-                    type="password"
-                    value={keyValue}
-                    onChange={(event) => {
-                      const next = new Map(workerKeys)
-                      next.set(worker.workerId, event.target.value)
-                      setWorkerKeys(next)
-                    }}
-                    placeholder={worker.hasApiKey ? 'apiKey 已保存(输入可覆盖)' : '输入该 worker 的 apiKey'}
-                    spellCheck={false}
-                  />
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    style={secondaryButtonStyle}
-                    onClick={() => void handleSaveWorkerKey(worker.workerId)}
-                    disabled={savingWorker === worker.workerId}
-                  >
-                    {savingWorker === worker.workerId ? '保存中…' : '保存'}
-                  </Button>
-                  <Checkbox
-                    checked={worker.enabled}
-                    disabled={!worker.hasApiKey}
-                    onChange={(event) => void handleToggleWorker(worker.workerId, event.target.checked)}
-                    label="启用"
-                  />
-                  {worker.error ? (
-                    <span style={errorStyle} title={worker.error.code}>
-                      {worker.error.detail || worker.error.code}
-                    </span>
-                  ) : null}
-                </div>
-              )
-            })}
-          </div>
-        )}
-        <div style={actionsStyle}>
-          <Button type="button" variant="secondary" style={secondaryButtonStyle} onClick={handleRefreshWorkers}>
-            刷新
-          </Button>
-        </div>
+        <WorkerList />
       </section>
 
       <section style={sectionStyle}>
@@ -485,13 +380,48 @@ export default function SettingsPanel() {
       </section>
 
       <section style={sectionStyle}>
+        <h3 style={sectionTitleStyle}>重启 Worker</h3>
+        <p style={hintStyle}>
+          重启 worker 进程(自重启:优雅关闭后自动重新拉起,无需外部看护)。运行中的任务会被中断,
+          重启后由 worker 标记为「worker 重启中断」,任务数据不丢;worker 短暂离线后会自动恢复连接。
+          模型配置与 skill 列表优先用上方「重新读取」热加载,仅在热加载无效时才需要重启。
+        </p>
+        <div style={actionsStyle}>
+          <Button
+            type="button"
+            variant="secondary"
+            style={secondaryButtonStyle}
+            onClick={() => setRestartConfirmOpen(true)}
+            disabled={restartingWorkers}
+          >
+            {restartingWorkers ? '发送中…' : '重启 Worker'}
+          </Button>
+          {restartHint ? (
+            <span style={restartTone === 'error' ? errorStyle : okStyle}>{restartHint}</span>
+          ) : null}
+        </div>
+        <ConfirmDialog
+          open={restartConfirmOpen}
+          title="重启 worker"
+          message={
+            '将向全部已连接的 worker 发送重启指令。运行中的任务会被中断(重启后标记为「worker 重启中断」),' +
+            '任务数据不丢;worker 短暂离线后自动恢复。确定重启?'
+          }
+          confirmLabel="重启"
+          danger
+          onConfirm={() => void handleRestartWorkers()}
+          onCancel={() => setRestartConfirmOpen(false)}
+        />
+      </section>
+
+      <section style={sectionStyle}>
         <h3 style={sectionTitleStyle}>外观</h3>
         <div style={actionsStyle}>
           <Button
             type="button"
             variant="secondary"
             style={secondaryButtonStyle}
-            onClick={() => saveThemeMode(themeMode === 'dark' ? 'light' : 'dark')}
+            onClick={() => void saveThemeMode(themeMode === 'dark' ? 'light' : 'dark')}
           >
             {themeMode === 'dark' ? '切换到浅色' : '切换到深色'}
           </Button>
@@ -651,14 +581,6 @@ const statusTextStyle: React.CSSProperties = {
   color: 'var(--text-muted)',
 }
 
-const workerStatusStyle: React.CSSProperties = {
-  fontSize: 'var(--text-xs)',
-  fontWeight: 700,
-  whiteSpace: 'nowrap',
-  minWidth: 72,
-  flexShrink: 0,
-}
-
 const okStyle: React.CSSProperties = {
   fontSize: 'var(--text-xs)',
   color: 'var(--accent-green)',
@@ -683,44 +605,6 @@ const hintStyle: React.CSSProperties = {
   margin: 0,
   fontSize: 'var(--text-xs)',
   color: 'var(--text-muted)',
-}
-
-const workerListStyle: React.CSSProperties = {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 6,
-  maxWidth: 720,
-}
-
-const workerRowStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 8,
-  padding: '6px 8px',
-  border: '1px solid var(--border)',
-  borderRadius: 'var(--radius-md)',
-}
-
-const workerIdStyle: React.CSSProperties = {
-  fontFamily: 'var(--font-mono, monospace)',
-  fontSize: 'var(--text-xs)',
-  overflow: 'hidden',
-  textOverflow: 'ellipsis',
-  whiteSpace: 'nowrap',
-  minWidth: 0,
-  maxWidth: 180,
-}
-
-const workerKeyInputStyle: React.CSSProperties = {
-  border: '1px solid var(--border)',
-  borderRadius: 'var(--radius-md)',
-  background: 'var(--bg-primary)',
-  color: 'var(--text-primary)',
-  padding: '6px 8px',
-  fontSize: 'var(--text-xs)',
-  fontFamily: 'var(--font-mono, monospace)',
-  flex: 1,
-  minWidth: 160,
 }
 
 const aboutGridStyle: React.CSSProperties = {

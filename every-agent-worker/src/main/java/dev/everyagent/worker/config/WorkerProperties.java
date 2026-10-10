@@ -4,6 +4,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
+import dev.everyagent.plugin.api.config.WorkerConfig;
+
 import java.util.ArrayList;import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -16,7 +18,7 @@ import java.util.Map;
  * 工作区注册表与任务数据统一存 workspaces/(不存在顶层 worker.api-key——apiKey 按 hub 条目各自配置)。
  */
 @ConfigurationProperties("worker")
-public class WorkerProperties {
+public class WorkerProperties implements WorkerConfig {
 
     private static final Logger log = LoggerFactory.getLogger(WorkerProperties.class);
 
@@ -29,11 +31,16 @@ public class WorkerProperties {
     private String workspaceRoot = "";
     /** 系统技能目录(skill 知识包;空 = <系统目录>/skills)。AI 工具只读访问,写一律拒绝。 */
     private String skillsDir = "";
+    /** 插件目录(外部 + 内置物化;空 = <系统目录>/plugins)。 */
+    private String pluginsDir = "";
+    /** 内置插件源码根目录(空 = 工作目录下 every-agent-plugins/;支持 ~ 开头)。 */
+    private String builtinPluginsDir = "";
     /**
      * 程序资源根(仅用于授权忽略前缀等,不再是程序附属文件的定位基础):
-     * 程序附属文件(rg、eagent-run.py、WSL 托管镜像)统一随安装/解压分发到
-     * {@code <程序根>/runtime/},worker 以字面相对路径 {@code ./runtime} 按 JVM 工作目录
-     * (user.dir)解析(见 {@link #resolveRuntimeDir()}),与本字段无关。
+     * 程序附属文件(核心 rg 二进制;插件附属资源如 eagent-run.py、WSL 托管镜像由各插件
+     * runtime/ 子目录经构建链并入)统一随安装/解压分发到 {@code <程序根>/runtime/},
+     * worker 按 {@code everyagent.program-dir} 属性(缺省 user.dir)解析
+     * (见 {@link #resolveRuntimeDir()}),与本字段无关。
      * 空 = 用 codeSource 定位 jar 所在目录;desktop 打包态由 desktop 注入(仅影响授权忽略前缀)。
      */
     private String programDir = "";
@@ -59,17 +66,19 @@ public class WorkerProperties {
     private Tools tools = new Tools();
     /** 模型配置(只读,config.get 的唯一数据源):默认在 application.yml,用户可在 application-worker.yaml 覆盖整表。 */
     private List<Model> models = new ArrayList<>();
+    /** 搜索限制配置(架构 §8.5「搜索限制配置化」,键 worker.search.*)。 */
+    private Search search = new Search();
 
     /**
      * 模型配置项(Spring 配置绑定用可变 POJO;ConfigStore 启动时转为不可变快照)。
      * 字段对应 ConfigDtos.ModelConfig;params 为自由 JSON 结构(temperature 等)。
-     * provider = model-pool 时该条是「容灾池」:model 字段用逗号分隔的池成员 configId
-     * 列表(首个 = 主模型),无 baseUrl/apiKey/模型名,实际请求由各成员模型发出。
      */
     public static class Model {
         private String configId;
         private String provider;
         private String baseUrl;
+        /** 完整端点 URL(如 https://api.deepseek.com/chat/completions);非空时优先于 baseUrl,SDK 剥离后缀反推 baseUrl。 */
+        private String fullUrl;
         private String model;
         private String apiKey;
         private Map<String, Object> params = new java.util.LinkedHashMap<>();
@@ -100,6 +109,14 @@ public class WorkerProperties {
 
         public void setBaseUrl(String baseUrl) {
             this.baseUrl = baseUrl;
+        }
+
+        public String getFullUrl() {
+            return fullUrl;
+        }
+
+        public void setFullUrl(String fullUrl) {
+            this.fullUrl = fullUrl;
         }
 
         public String getModel() {
@@ -239,6 +256,33 @@ public class WorkerProperties {
                 .toAbsolutePath().normalize();
     }
 
+    /** 插件目录绝对路径;配置为空时取 <系统目录>/plugins。 */
+    public java.nio.file.Path resolvePluginsDir() {
+        String p = pluginsDir == null || pluginsDir.isBlank() ? null : pluginsDir.trim();
+        return (p == null ? resolveHomeDir().resolve("plugins") : java.nio.file.Path.of(p))
+                .toAbsolutePath().normalize();
+    }
+
+    /**
+     * 内置插件源码根目录绝对路径;配置为空时取程序根下 every-agent-plugins/
+     * (程序根优先取 {@code everyagent.program-dir} 属性,缺省回退工作目录 user.dir)。
+     * 配置值支持 ~ 开头(展开为 user.home);非空时按字面路径解析后取绝对路径。
+     */
+    public java.nio.file.Path resolveBuiltinPluginsDir() {
+        String p = builtinPluginsDir == null || builtinPluginsDir.isBlank() ? null : builtinPluginsDir.trim();
+        if (p == null) {
+            String root = programDirOverride();
+            if (root != null) {
+                return java.nio.file.Path.of(root).toAbsolutePath().normalize().resolve("every-agent-plugins");
+            }
+            return java.nio.file.Path.of("every-agent-plugins").toAbsolutePath().normalize();
+        }
+        if (p.startsWith("~")) {
+            p = System.getProperty("user.home") + p.substring(1);
+        }
+        return java.nio.file.Path.of(p).toAbsolutePath().normalize();
+    }
+
     /**
      * 程序资源根绝对路径;配置为空时用 codeSource 定位本类所在 jar 的目录(裸 jar 场景)。
      * desktop 已不再注入 {@code --worker.program-dir}(程序附属文件定位走 ./runtime)。
@@ -269,26 +313,42 @@ public class WorkerProperties {
     }
 
     /**
-     * 程序附属文件目录绝对路径;恒为 {@code <程序根>/runtime}(程序根 = JVM 工作目录 user.dir)。
-     * 程序附属文件(rg、eagent-run.py、WSL 托管镜像)随安装/解压分发到程序根下 runtime/,
-     * worker 以字面相对路径 {@code ./runtime} 按 user.dir 解析——开发态(IDE 工作目录 = 仓库根)
-     * 与打包态(desktop spawn 时 cwd = 程序根 resources 目录)都命中同一布局,与 program-dir 无关。
+     * 程序根覆盖(system property {@code everyagent.program-dir},由 desktop/启动脚本注入)。
+     *
+     * <p>背景:worker 曾以「cwd = 程序根 + 字面 {@code ./runtime} 相对解析」定位程序附属文件,
+     * 但打包态程序根 = 安装目录 resources —— hub/worker 全程把安装目录当 CWD,
+     * Windows 下「任何进程 CWD 所在目录不可删除」,导致卸载后 resources 空目录残留、
+     * 覆盖安装失败(须提权)。修复:启动方把 cwd 设为 EVERYAGENT_HOME 等安装目录之外的位置,
+     * 并经本属性显式告知程序根;属性缺省时行为不变(字面相对 user.dir,兼容开发态/裸 bat)。
+     */
+    private static String programDirOverride() {
+        String v = System.getProperty("everyagent.program-dir");
+        return v == null || v.isBlank() ? null : v.trim();
+    }
+
+    /**
+     * 程序附属文件目录绝对路径;恒为 {@code <程序根>/runtime}。
+     * 程序根优先取 {@code everyagent.program-dir} 属性(desktop/启动脚本注入);
+     * 缺省回退 JVM 工作目录(user.dir)——开发态(IDE 工作目录 = 仓库根)与打包态
+     * 显式注入都命中同一布局。
      */
     public java.nio.file.Path resolveRuntimeDir() {
+        String root = programDirOverride();
+        if (root != null) {
+            return java.nio.file.Path.of(root).toAbsolutePath().normalize().resolve("runtime");
+        }
         return java.nio.file.Path.of("runtime").toAbsolutePath().normalize();
     }
 
     /** 任务永久保留(用户删除是唯一出口),无 retention/trim 概念。 */
-    public static class Limits {
+    public static class Limits implements WorkerConfig.Limits {
         private int maxConcurrentTasks = 20;
-        private int maxConcurrentSubs = 8;
         private long askTimeoutMs = 1_800_000;
-        private long subWaitTimeoutMs = 300_000;
         private long maxEventsPerTask = 500_000;
         private long shipStallMs = 60_000;
         /**
          * 模型流「无输出」判定窗口(ms):流在超过该时长无任何 chunk(思考/正文)时触发
-         * {@code ModelLengthGuardAdvisor} 的 finish_reason=length 判定(若自估输出 token
+         * {@code model-length-guard 插件} 的 finish_reason=length 判定(若自估输出 token
          * 已≈maxTokens)。须短于 model-timeout-ms(默认 10 分钟)才能避免空等读超时。默认 120s。
          */
         private long modelLengthStallMs = 120_000;
@@ -323,7 +383,7 @@ public class WorkerProperties {
          * 模型请求限流全局默认(per-model 的 rpm/max-concurrency/tpm 在 worker.models[].params 配置;
          * 这里统一排队与估算参数,见 docs/design-model-rate-limit.md)。
          */
-        private ModelRate modelRate = new ModelRate();
+        private ModelRate modelRate = new WorkerProperties.ModelRate();
         /**
          * 是否启用「上轮实测 offset 校准」:true = 用上一轮实测用量校准上下文估算,
          * false = 回退纯 reserve 估算。默认 true。
@@ -339,6 +399,29 @@ public class WorkerProperties {
          */
         private int contextMaxToolResultChars = 40000;
 
+        // ---- Token 估算器校准参数 ----
+
+        /** 收敛阈值:误差 < 该值视为收敛。默认 0.02(2%)。 */
+        private double tokenEstimatorConvergenceThreshold = 0.02;
+        /** 收敛所需连续达标次数。默认 3。 */
+        private int tokenEstimatorConvergenceSamples = 3;
+        /** 漂移重置阈值:converged 后误差 > 该值重置继续校准。默认 0.05(5%)。 */
+        private double tokenEstimatorDriftThreshold = 0.05;
+
+        /**
+         * 自适应输出预算配置(adaptive-max-tokens 插件):
+         * 检测 finish_reason=length 帧后自动放大 maxTokens 重试。
+         */
+        private AdaptiveMaxTokens adaptiveMaxTokens = new AdaptiveMaxTokens();
+
+        public AdaptiveMaxTokens getAdaptiveMaxTokens() {
+            return adaptiveMaxTokens;
+        }
+
+        public void setAdaptiveMaxTokens(AdaptiveMaxTokens v) {
+            this.adaptiveMaxTokens = v == null ? new AdaptiveMaxTokens() : v;
+        }
+
         public int getMaxConcurrentTasks() {
             return maxConcurrentTasks;
         }
@@ -347,28 +430,12 @@ public class WorkerProperties {
             this.maxConcurrentTasks = maxConcurrentTasks;
         }
 
-        public int getMaxConcurrentSubs() {
-            return maxConcurrentSubs;
-        }
-
-        public void setMaxConcurrentSubs(int maxConcurrentSubs) {
-            this.maxConcurrentSubs = maxConcurrentSubs;
-        }
-
         public long getAskTimeoutMs() {
             return askTimeoutMs;
         }
 
         public void setAskTimeoutMs(long askTimeoutMs) {
             this.askTimeoutMs = askTimeoutMs;
-        }
-
-        public long getSubWaitTimeoutMs() {
-            return subWaitTimeoutMs;
-        }
-
-        public void setSubWaitTimeoutMs(long subWaitTimeoutMs) {
-            this.subWaitTimeoutMs = subWaitTimeoutMs;
         }
 
         public long getMaxEventsPerTask() {
@@ -483,12 +550,187 @@ public class WorkerProperties {
             this.contextMaxToolResultChars = contextMaxToolResultChars;
         }
 
+        public double getTokenEstimatorConvergenceThreshold() {
+            return tokenEstimatorConvergenceThreshold;
+        }
+
+        public void setTokenEstimatorConvergenceThreshold(double v) {
+            this.tokenEstimatorConvergenceThreshold = v;
+        }
+
+        public int getTokenEstimatorConvergenceSamples() {
+            return tokenEstimatorConvergenceSamples;
+        }
+
+        public void setTokenEstimatorConvergenceSamples(int v) {
+            this.tokenEstimatorConvergenceSamples = v;
+        }
+
+        public double getTokenEstimatorDriftThreshold() {
+            return tokenEstimatorDriftThreshold;
+        }
+
+        public void setTokenEstimatorDriftThreshold(double v) {
+            this.tokenEstimatorDriftThreshold = v;
+        }
+
+        // ---- WorkerConfig.Limits delegate methods ----
+
+        @Override
+        public WorkerConfig.Limits.AdaptiveMaxTokens adaptiveMaxTokens() { return getAdaptiveMaxTokens(); }
+
+        @Override
+        public int maxConcurrentTasks() { return getMaxConcurrentTasks(); }
+
+        @Override
+        public long askTimeoutMs() { return getAskTimeoutMs(); }
+
+        @Override
+        public long modelLengthStallMs() { return getModelLengthStallMs(); }
+
+        @Override
+        public long lengthDisconnectMinTokens() { return getLengthDisconnectMinTokens(); }
+
+        @Override
+        public WorkerConfig.Limits.ModelRate modelRate() { return getModelRate(); }
+
+        @Override
+        public boolean contextCompressionEnabled() { return isContextCompressionEnabled(); }
+
+        @Override
+        public double contextTriggerRatio() { return getContextTriggerRatio(); }
+
+        @Override
+        public double contextTargetRatio() { return getContextTargetRatio(); }
+
+        @Override
+        public double contextSafetyRatio() { return getContextSafetyRatio(); }
+
+        @Override
+        public long contextToolReserveTokens() { return getContextToolReserveTokens(); }
+
+        @Override
+        public int contextMaxToolResultChars() { return getContextMaxToolResultChars(); }
+
+        @Override
+        public boolean contextOffsetEnabled() { return isContextOffsetEnabled(); }
+
+        @Override
+        public boolean contextSummaryEnabled() { return isContextSummaryEnabled(); }
+
+        @Override
+        public int contextSummaryMaxTokens() { return getContextSummaryMaxTokens(); }
+
+        @Override
+        public double tokenEstimatorConvergenceThreshold() { return getTokenEstimatorConvergenceThreshold(); }
+
+        @Override
+        public int tokenEstimatorConvergenceSamples() { return getTokenEstimatorConvergenceSamples(); }
+
+        @Override
+        public double tokenEstimatorDriftThreshold() { return getTokenEstimatorDriftThreshold(); }
+
+        /**
+         * 自适应输出预算配置(adaptive-max-tokens 插件):
+         * 检测 finish_reason=length 帧后自动放大 maxTokens 重试,达 ceiling 放弃。
+         *
+         * <p>配置键 {@code worker.limits.adaptive-max-tokens.*};
+         * 模型级可用 {@code params.maxTokensCeiling} 覆盖 ceiling(厂商真实上限)。
+         */
+        public static class AdaptiveMaxTokens implements WorkerConfig.Limits.AdaptiveMaxTokens {
+            /** 是否启用自适应输出预算。false = 直通。默认 true。 */
+            private boolean enabled = true;
+            /**
+             * ceiling 硬上限(tokens):2025 年主流商用模型输出上限包络值
+             * (GPT-5.2/o3 256K、Claude 4.5 128K、Gemini 3 Pro 128K 等)。
+             * 超出模型真实上限时厂商返回 400,由插件捕获后一次性回退。
+             * 默认 262144(256K)。
+             */
+            private long ceiling = 262144;
+            /** 升级倍率:budget = min(base × multiplier^attempt, ceiling)。默认 2.0。 */
+            private double multiplier = 2.0;
+            /** 最大重试次数。默认 2。 */
+            private int maxRetries = 2;
+            /** 低水位回落比例:连续 N 轮输出 < budget × ratio → 衰减回 base。默认 0.5。 */
+            private double fallbackRatio = 0.5;
+            /** 低水位回落所需连续轮次。默认 3。 */
+            private int fallbackRounds = 3;
+
+            public boolean isEnabled() {
+                return enabled;
+            }
+
+            public void setEnabled(boolean enabled) {
+                this.enabled = enabled;
+            }
+
+            public long getCeiling() {
+                return ceiling;
+            }
+
+            public void setCeiling(long ceiling) {
+                this.ceiling = ceiling;
+            }
+
+            public double getMultiplier() {
+                return multiplier;
+            }
+
+            public void setMultiplier(double multiplier) {
+                this.multiplier = multiplier;
+            }
+
+            public int getMaxRetries() {
+                return maxRetries;
+            }
+
+            public void setMaxRetries(int maxRetries) {
+                this.maxRetries = maxRetries;
+            }
+
+            public double getFallbackRatio() {
+                return fallbackRatio;
+            }
+
+            public void setFallbackRatio(double fallbackRatio) {
+                this.fallbackRatio = fallbackRatio;
+            }
+
+            public int getFallbackRounds() {
+                return fallbackRounds;
+            }
+
+            public void setFallbackRounds(int fallbackRounds) {
+                this.fallbackRounds = fallbackRounds;
+            }
+
+            // ---- WorkerConfig.Limits.AdaptiveMaxTokens delegate methods ----
+
+            @Override
+            public boolean enabled() { return isEnabled(); }
+
+            @Override
+            public long ceiling() { return getCeiling(); }
+
+            @Override
+            public double multiplier() { return getMultiplier(); }
+
+            @Override
+            public int maxRetries() { return getMaxRetries(); }
+
+            @Override
+            public double fallbackRatio() { return getFallbackRatio(); }
+
+            @Override
+            public int fallbackRounds() { return getFallbackRounds(); }
+        }
+
         public ModelRate getModelRate() {
             return modelRate;
         }
 
         public void setModelRate(ModelRate modelRate) {
-            this.modelRate = modelRate == null ? new ModelRate() : modelRate;
+            this.modelRate = modelRate == null ? new WorkerProperties.ModelRate() : modelRate;
         }
     }
 
@@ -497,7 +739,7 @@ public class WorkerProperties {
      * per-model 的 rpm / max-concurrency / tpm 在 {@code worker.models[].params} 各自配置;
      * 这里统一排队、tpm 估算与 EMA 校准的全局参数。
      */
-    public static class ModelRate {
+    public static class ModelRate implements WorkerConfig.Limits.ModelRate {
         /** 每模型等待队列容量:同时在等的请求超过该值 → 立即转 ModelRateLimitException(不再排队)。 */
         private int queueCapacity = 8;
         /** 排队最长等待时间(ms);超时仍未放行 → ModelRateLimitException。 */
@@ -608,13 +850,45 @@ public class WorkerProperties {
         public void setDefaultTpm(long defaultTpm) {
             this.defaultTpm = defaultTpm;
         }
+
+        // ---- WorkerConfig.Limits.ModelRate delegate methods ----
+
+        @Override
+        public int queueCapacity() { return getQueueCapacity(); }
+
+        @Override
+        public long waitTimeoutMs() { return getWaitTimeoutMs(); }
+
+        @Override
+        public long estWindowSec() { return getEstWindowSec(); }
+
+        @Override
+        public double estSafetyRatio() { return getEstSafetyRatio(); }
+
+        @Override
+        public double estEmaAlpha() { return getEstEmaAlpha(); }
+
+        @Override
+        public double estFactorMin() { return getEstFactorMin(); }
+
+        @Override
+        public double estFactorMax() { return getEstFactorMax(); }
+
+        @Override
+        public int defaultRpm() { return getDefaultRpm(); }
+
+        @Override
+        public int defaultMaxConcurrency() { return getDefaultMaxConcurrency(); }
+
+        @Override
+        public long defaultTpm() { return getDefaultTpm(); }
     }
 
     /**
      * 模型调用重试(空响应重试 + 瞬时错误退避重试,分别由两个 advisor 消费;
      * 退避算法由 {@link #strategy} 选择,两类重试共享同一算法)。
      */
-    public static class Retry {
+    public static class Retry implements WorkerConfig.Retry {
         /** 策略常量:固定间隔退避(默认)——每次重试恒等 {@code backoffBaseMs}。 */
         public static final String STRATEGY_FIXED = "fixed";
         /** 策略常量:指数退避——base * factor^(attempt-1)(与 n 的 computeRetryDelayMs 同式)。 */
@@ -687,6 +961,14 @@ public class WorkerProperties {
         public void setStrategy(String strategy) {
             this.strategy = strategy;
         }
+
+        // ---- WorkerConfig.Retry delegate methods ----
+
+        @Override
+        public int maxEmptyResponseRetries() { return getMaxEmptyResponseRetries(); }
+
+        @Override
+        public int maxRequestRetries() { return getMaxRequestRetries(); }
     }
 
     public String getWorkerId() {
@@ -727,6 +1009,22 @@ public class WorkerProperties {
 
     public void setSkillsDir(String skillsDir) {
         this.skillsDir = skillsDir;
+    }
+
+    public String getPluginsDir() {
+        return pluginsDir;
+    }
+
+    public void setPluginsDir(String pluginsDir) {
+        this.pluginsDir = pluginsDir;
+    }
+
+    public String getBuiltinPluginsDir() {
+        return builtinPluginsDir;
+    }
+
+    public void setBuiltinPluginsDir(String builtinPluginsDir) {
+        this.builtinPluginsDir = builtinPluginsDir;
     }
 
     public String getProgramDir() {
@@ -778,7 +1076,7 @@ public class WorkerProperties {
     }
 
     /** 进程沙箱配置。 */
-    public static class Sandbox {
+    public static class Sandbox implements WorkerConfig.Sandbox {
         /** 是否启用 OS 级沙箱;关闭则 exec 直接 spawn(仅超时/输出上限护栏)。 */
         private boolean enabled = true;
         /** 单命令看门狗超时(ms);超时中止子进程。 */
@@ -833,18 +1131,11 @@ public class WorkerProperties {
          */
         private boolean allowPrivilegeEscalation = false;
         /**
-         * 是否启用 seccomp 内核级提权拦截(仅 wsl-bwrap 后端生效,见
-         * docs/ARCHITECTURE.md §7.11):true 时命令内 exec setuid 二进制
-         * (sudo/su 等)会先经 PermissionGate 授权(AI 审议优先 → 无人值守拒绝 → 人工弹窗),
-         * 拒绝则该次 exec 返回 EPERM。默认 true;seccomp 不可用(旧内核/权限不足)时
-         * 由 eagent-run.py 探测并退化为无拦截 + 日志告警。
-         */
-        private boolean interceptPrivilege = true;
-        /**
          * 是否允许沙箱内命令访问网络。默认 true = 放行(含回环 127.0.0.1 与出站;
          * wsl-bwrap 不加 {@code --unshare-net} / wsl-direct 不 unshare / direct/mic 不剥代理 env)。
          * false 回落到 networkPolicy(deny-all 硬/软拒,audit-only 放行)。
-         * 任务级更细粒度:保持 true,用户对某个任务选 /禁用网络 斜杠命令即可单独关闭该任务网络。
+         * 任务级更细粒度:保持 true;任务级 /禁用网络 由 wsl-ubuntu 沙箱插件自带(只有它能在
+         * 发行版内 unshare -n 真断网),用户对某个任务选中该命令即单独关闭本任务网络。
          */
         private boolean allowNetwork = true;
         /**
@@ -876,83 +1167,35 @@ public class WorkerProperties {
          * 非 Windows 平台任何取值都退化为直接 spawn(本版无内核级沙箱,配置无意义)。
          */
         private String type = "auto";
-        /** WSL 后端专属配置。 */
+        /** WSL 后端专属配置（由 sandbox-wsl-ubuntu 插件消费）。 */
         private Wsl wsl = new Wsl();
 
-        /** WSL(wsl-bwrap)后端配置:发行版/只读岛/pwsh。 */
-        public static class Wsl {
-            /**
-             * 发行版名:空(默认)= WSL 默认发行版(wsl -l -v 带 * 者,开发机通常即 Ubuntu)
-             * ——机器无关的「已有可用」,免配置即可探测通过。生产托管路径:wsl --import
-             * 导入 {@code EveryAgent} 后显式配置(零污染基础层、interop 关闭)。
-             * 须已安装 python3 与 bwrap(探测把关,失败断因见 {@code WslBwrapSandbox.probe})。
-             */
+        /** WSL(wsl-ubuntu)后端配置:发行版/只读岛/pwsh。 */
+        public static class Wsl implements WorkerConfig.Sandbox.Wsl {
             private String distro = "";
-            /**
-             * 托管发行版镜像路径(tar.gz,相对 worker 系统目录或绝对):仅作<b>兜底</b>——
-             * 优先使用程序根 {@code ./runtime/wsl/eagent-rootfs.tar.gz}(随安装包
-             * 分发、只读引用,见 {@code WslBwrapSandbox.tarballFor});此处配置在程序根
-             * 无镜像时生效(兼容旧/手动放置)。文件在位且发行版缺失时,启动探测自动
-             * {@code wsl --import EveryAgent}(免管理员、离线;sha256 以同目录 {@code <镜像名>.sha256}
-             * 把关,缺失/不符拒绝导入)。默认指向打包含义下的旧约定位置——开发机无此文件即
-             * 自动关闭,零打扰;置空串显式关闭。
-             */
             private String tarball = "wsl/eagent-rootfs.tar.gz";
-            /**
-             * 工作区内只读岛(工作区相对路径列表):可写区内的 ro 子路径(后挂载遮蔽先挂载)。
-             * 默认空——agent 需要正常提交,.git 不默认保护(设计文档 §4.3 的修正)。
-             */
             private List<String> roIslands = new ArrayList<>();
-            /** 发行版内提供 pwsh(powershell 方言);默认 false,bash 为唯一方言。 */
             private boolean pwshEnabled = false;
-            /**
-             * bash 命令以登录 shell 执行(bash -lc):true 时每条命令自动加载 /etc/profile
-             * 与 ~/.profile(即 ~/.bash_profile / ~/.profile),使 profile 里 export 的环境变量
-             * 对每条命令持久生效。默认 true(自动加载 profile,环境变量持久生效);白名单环境
-             * 重建仍保留,profile 里的 export 允许覆盖部分白名单变量。置 false 恢复
-             * 纯白名单确定性(bash -c,不加载 profile)。
-             */
             private boolean loginShell = true;
 
-            public String getDistro() {
-                return distro;
-            }
+            public String getDistro() { return distro; }
+            public void setDistro(String distro) { this.distro = distro; }
+            public String getTarball() { return tarball; }
+            public void setTarball(String tarball) { this.tarball = tarball; }
+            public List<String> getRoIslands() { return roIslands; }
+            public void setRoIslands(List<String> roIslands) { this.roIslands = roIslands; }
+            public boolean isPwshEnabled() { return pwshEnabled; }
+            public void setPwshEnabled(boolean pwshEnabled) { this.pwshEnabled = pwshEnabled; }
+            public boolean isLoginShell() { return loginShell; }
+            public void setLoginShell(boolean loginShell) { this.loginShell = loginShell; }
 
-            public void setDistro(String distro) {
-                this.distro = distro;
-            }
+            // ---- WorkerConfig.Sandbox.Wsl delegate methods ----
 
-            public String getTarball() {
-                return tarball;
-            }
+            @Override
+            public String distro() { return getDistro(); }
 
-            public void setTarball(String tarball) {
-                this.tarball = tarball;
-            }
-
-            public List<String> getRoIslands() {
-                return roIslands;
-            }
-
-            public void setRoIslands(List<String> roIslands) {
-                this.roIslands = roIslands;
-            }
-
-            public boolean isPwshEnabled() {
-                return pwshEnabled;
-            }
-
-            public void setPwshEnabled(boolean pwshEnabled) {
-                this.pwshEnabled = pwshEnabled;
-            }
-
-            public boolean isLoginShell() {
-                return loginShell;
-            }
-
-            public void setLoginShell(boolean loginShell) {
-                this.loginShell = loginShell;
-            }
+            @Override
+            public String tarball() { return getTarball(); }
         }
 
         public String getType() {
@@ -1064,14 +1307,6 @@ public class WorkerProperties {
             this.allowPrivilegeEscalation = allowPrivilegeEscalation;
         }
 
-        public boolean isInterceptPrivilege() {
-            return interceptPrivilege;
-        }
-
-        public void setInterceptPrivilege(boolean interceptPrivilege) {
-            this.interceptPrivilege = interceptPrivilege;
-        }
-
         public boolean isAllowNetwork() {
             return allowNetwork;
         }
@@ -1096,6 +1331,31 @@ public class WorkerProperties {
             this.persistentRoot = persistentRoot;
         }
 
+        // ---- WorkerConfig.Sandbox delegate methods ----
+
+        @Override
+        public boolean enabled() { return isEnabled(); }
+
+        @Override
+        public long timeoutMs() { return getTimeoutMs(); }
+
+        // resolveMemoryLimitMb() already matches WorkerConfig.Sandbox.resolveMemoryLimitMb()
+
+        @Override
+        public int cpuHardCapPercent() { return getCpuHardCapPercent(); }
+
+        @Override
+        public int activeProcessLimit() { return getActiveProcessLimit(); }
+
+        @Override
+        public boolean allowNetwork() { return isAllowNetwork(); }
+
+        @Override
+        public String type() { return getType(); }
+
+        @Override
+        public WorkerConfig.Sandbox.Wsl wsl() { return getWsl(); }
+
         /**
          * 统一网络判定:allowNetwork(默认 true = 放行)显式放行;否则回落 networkPolicy,
          * 仅 deny-all 视为拒网(direct/mic 剥代理 env,wsl-bwrap 加 --unshare-net)。
@@ -1110,7 +1370,7 @@ public class WorkerProperties {
      * 不经 wsl/mic 沙箱后端——git 是前端按钮触发的平台受控操作,见
      * docs/GIT_NATIVE_MIGRATION.md §2)。本配置承载可执行文件定位与命令超时。
      */
-    public static class Git {
+    public static class Git implements WorkerConfig.Git {
         /** git 可执行文件绝对路径(如 C:\\Program Files\\Git\\bin\\git.exe);空 = 自动探测(常见安装路径 + PATH)。 */
         private String executable = "";
         /** 单个 git 命令超时(ms);clone/pull/push 大仓库可能较慢,默认 5 分钟。 */
@@ -1131,6 +1391,14 @@ public class WorkerProperties {
         public void setTimeoutMs(long timeoutMs) {
             this.timeoutMs = timeoutMs;
         }
+
+        // ---- WorkerConfig.Git delegate methods ----
+
+        @Override
+        public String executable() { return getExecutable(); }
+
+        @Override
+        public long timeoutMs() { return getTimeoutMs(); }
     }
 
     public Sandbox getSandbox() {
@@ -1157,12 +1425,37 @@ public class WorkerProperties {
         this.permissions = permissions;
     }
 
+    // ---- WorkerConfig delegate methods (no-prefix, plugin-api 契约) ----
+
+    @Override
+    public WorkerConfig.Limits limits() { return getLimits(); }
+
+    @Override
+    public WorkerConfig.Retry retry() { return getRetry(); }
+
+    @Override
+    public WorkerConfig.Sandbox sandbox() { return getSandbox(); }
+
+    @Override
+    public WorkerConfig.Permissions permissions() { return getPermissions(); }
+
+    @Override
+    public WorkerConfig.Git git() { return getGit(); }
+
     public Tools getTools() {
         return tools;
     }
 
     public void setTools(Tools tools) {
         this.tools = tools;
+    }
+
+    public Search getSearch() {
+        return search;
+    }
+
+    public void setSearch(Search search) {
+        this.search = search == null ? new Search() : search;
     }
 
     public List<Model> getModels() {
@@ -1191,11 +1484,92 @@ public class WorkerProperties {
     }
 
     /**
+     * 搜索限制配置(架构 §8.5「搜索限制配置化」/§7.17):搜索相关限制由服务内散落常量
+     * 收编为本配置(与 {@code worker.models}/{@code worker.sandbox} 同一命名空间),
+     * <b>默认值与既有行为完全一致</b>;键清单 {@code worker.search.*}。
+     */
+    public static class Search {
+        /** rg 进程超时(ms):超时强杀,返回已完成部分并置 truncated。默认 60000。 */
+                private long rgTimeoutMs = 60_000;
+        /**
+         * 文件类 provider(file-content / file-name)自持的结果上限:统一 search 核心契约
+         * 不含 maxResults,上限归各 provider 自己;触顶即 kill rg 置 truncated。默认 1000。
+         */
+        private int fileMaxResults = 1000;
+        /** task provider 自持的结果上限(统一 search 核心契约不含 maxResults)。默认 500。 */
+        private int taskMaxResults = 500;
+        /**
+         * 应答内联阈值(字节):搜索应答序列化总字节数不超过该值即整包内联进 rpc.ok。
+         * 默认 262144(与 fs.read 的 {@code FsService.INLINE_MAX} 同值,复用其 rpc.data
+         * 口径 §5.4;<b>仅作用于搜索应答</b>,fs.read 自身行为不变)。
+         */
+        private int inlineMaxBytes = 262144;
+        /**
+         * 切批阈值(字节):搜索应答超过内联阈值时按该值切批走 rpc.data(批项 = 完整
+         * 文件/任务项,不撕裂;复用 fs.read 口径 §5.4;<b>仅作用于搜索应答</b>,
+         * fs.read 自身行为不变)。默认 196608。
+         */
+                private int chunkBytes = 196608;
+        /**
+         * 单 provider 超时预算(ms):统一 search / mention.query 的 SearchProvider 调用护栏
+         * (SearchProviderInvoker)。0 = 不限时(仅异常护栏);超时按异常同款处理 WARN 跳过。默认 0。
+         */
+        private long providerTimeoutMs = 0;
+        public long getRgTimeoutMs() {
+            return rgTimeoutMs;
+        }
+
+        public void setRgTimeoutMs(long rgTimeoutMs) {
+            this.rgTimeoutMs = rgTimeoutMs;
+        }
+
+        public int getFileMaxResults() {
+            return fileMaxResults;
+        }
+
+        public void setFileMaxResults(int fileMaxResults) {
+            this.fileMaxResults = fileMaxResults;
+        }
+
+        public int getTaskMaxResults() {
+            return taskMaxResults;
+        }
+
+        public void setTaskMaxResults(int taskMaxResults) {
+            this.taskMaxResults = taskMaxResults;
+        }
+
+        public int getInlineMaxBytes() {
+            return inlineMaxBytes;
+        }
+
+        public void setInlineMaxBytes(int inlineMaxBytes) {
+            this.inlineMaxBytes = inlineMaxBytes;
+        }
+
+        public int getChunkBytes() {
+            return chunkBytes;
+        }
+
+        public void setChunkBytes(int chunkBytes) {
+            this.chunkBytes = chunkBytes;
+        }
+
+        public long getProviderTimeoutMs() {
+            return providerTimeoutMs;
+        }
+
+        public void setProviderTimeoutMs(long providerTimeoutMs) {
+            this.providerTimeoutMs = providerTimeoutMs;
+        }
+    }
+
+    /**
      * 危险操作授权(PermissionGate,架构 §5.5 authorization 形态):
      * AI 工具的工作区外文件访问与危险命令(删除类等)须用户弹窗授权,
      * 拒绝/超时以错误文本回灌模型(循环不中断)。授权两档:本轮运行(内存)/本任务(grants.json)。
      */
-    public static class Permissions {
+    public static class Permissions implements WorkerConfig.Permissions {
         /**
          * 危险命令正则(大小写不敏感,在剥除引号段后的命令文本上匹配任意位置);命中即需授权。
          * 覆盖 cmd / PowerShell / POSIX 的删除类与磁盘破坏类动词。
@@ -1270,5 +1644,16 @@ public class WorkerProperties {
         public void setReviewModel(String reviewModel) {
             this.reviewModel = reviewModel;
         }
+
+        // ---- WorkerConfig.Permissions delegate methods ----
+
+        @Override
+        public long reviewTimeoutMs() { return getReviewTimeoutMs(); }
+
+        @Override
+        public String reviewModel() { return getReviewModel(); }
+
+        @Override
+        public boolean reviewDenyOnError() { return isReviewDenyOnError(); }
     }
 }

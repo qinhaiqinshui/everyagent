@@ -1,22 +1,350 @@
 /**
- * 插件调度器——v1 空壳。
+ * 插件调度器——真实实现。
  *
- * n 分支的插件底座(扩展点收集/技能/斜杠命令)属于浏览器内 agent 运行时,
- * 已随运行时下沉到 worker。搬运过来的 UI 组件仍有少量扩展点调用
- * (ui.sidebar_items / ui.file_sidebar_panels 等),
- * 这里统一返回空结果:对应 UI 区域(更多操作/插件侧栏)自然不渲染,
- * 组件本身零改动。若未来前端插件体系回归,以真实实现替换本文件即可。
+ * 扩展点注册表 + 分发逻辑：插件在 activate() 时通过 ctx.ui.register* 注册
+ * 扩展点实现，核心在 dispatch(extPoint) 时遍历所有已注册实现并返回结果数组。
+ *
+ * 注册表变更对外可订阅（subscribeExtensionsChanged / getExtensionsVersion）：
+ * activate 是异步的、晚于宿主首屏渲染，宿主必须订阅变更才会重渲染并显示插件贡献。
+ *
+ * 对标 VSCode 的 extension host：核心不写业务分支，只收集与分发。
  */
 
-import type { UiSidebarItemDefinition } from './types'
+import type {
+  Disposable,
+  TraceTypeDefinition,
+  OutputBlockHandler,
+  FileExplorerAction,
+  PluginDiffTabInput,
+  PluginActiveTabInfo,
+  SearchTypeDefinition,
+} from '@everyagent/plugin-api'
+import { getComposerBridge, getShellBridge } from './pluginRuntimeBridge'
+import { activeTabMirror } from './activeTabMirror'
+import type {
+  UiSidebarItemDefinition,
+  UiWorkspaceTabTypeDefinition,
+  UiFileSidebarPanelDefinition,
+  UiComposerAbovePanelDefinition,
+  ToolCallViewDefinition,
+  UiUserMessageActionDefinition,
+  TaskRunSubmitContributionProvider,
+  UiRoundTailPanelDefinition,
+} from './types'
+import type { FileContentEditorDescriptor } from '@/components/files/file-tab-types'
+import { registerTraceType as registerToTraceRegistry, unregisterTraceType as unregisterFromTraceRegistry } from './traceTypeRegistry'
+import { outputBlockRegistry } from './outputBlockRegistry'
+import {
+  ExtensionRegistry,
+  ExtensionRegistryFactory,
+  DefaultExtensionRegistryFactory,
+} from './ExtensionRegistry'
 
-interface HollowDispatcher {
-  /** 所有扩展点分发:一律空结果。 */
-  dispatch: <T>(_extensionPoint: string) => Promise<T[]>
-  /** 侧边栏项单独留类型(调用方直接用 dispatch 的场景也已覆盖)。 */
-  getSidebarItems?: () => Promise<UiSidebarItemDefinition[]>
+// ── 扩展点名常量 ──
+
+const EXT_UI_SIDEBAR_ITEMS = 'ui.sidebar_items'
+const EXT_UI_WORKSPACE_TAB_TYPES = 'ui.workspace_tab_types'
+const EXT_UI_FILE_SIDEBAR_PANELS = 'ui.file_sidebar_panels'
+const EXT_UI_COMPOSER_ABOVE_PANEL = 'ui.composer_above_panel'
+const EXT_UI_TOOL_CALL_VIEWS = 'ui.tool_call_views'
+const EXT_UI_USER_MESSAGE_ACTIONS = 'ui.user_message_actions'
+const EXT_TASK_SUBMIT_CONTRIBUTIONS = 'task.submit_contributions'
+const EXT_UI_FILE_CONTENT_EDITORS = 'ui.file_content_editors'
+const EXT_UI_FILE_EXPLORER_ACTIONS = 'ui.file_explorer_actions'
+const EXT_UI_ROUND_TAIL_PANELS = 'ui.round_tail_panels'
+const EXT_UI_TRACE_TYPES = 'ui.trace_types'
+const EXT_UI_OUTPUT_BLOCKS = 'ui.output_blocks'
+const EXT_UI_SEARCH_TYPES = 'ui.search_types'
+
+// ── 扩展点注册表管理 ──
+
+let registryFactory: ExtensionRegistryFactory = new DefaultExtensionRegistryFactory()
+let factoryLocked = false
+
+const registries = new Map<string, ExtensionRegistry<any>>()
+
+// ── 扩展点变更通知（供 React 等宿主订阅）──
+
+/**
+ * 全局扩展点版本号：任一扩展点注册表发生注册/注销即递增。
+ * 递增计数而非直接给出数组，是为了让 `useSyncExternalStore` 的 getSnapshot
+ * 返回稳定值（引用每次新建的数组会让 React 判定快照不一致而无限重渲染）。
+ */
+let extensionsVersion = 0
+
+const extensionChangeListeners = new Set<() => void>()
+
+function notifyExtensionsChanged() {
+  extensionsVersion += 1
+  for (const listener of [...extensionChangeListeners]) listener()
 }
 
-export const pluginDispatcher: HollowDispatcher = {
-  dispatch: async <T,>() => [] as T[],
+/**
+ * 订阅「插件扩展点发生变化」（任一变即通知，不区分具体扩展点）。
+ * 宿主据此重渲染，使插件在 `activate()` 中注册的贡献立即上屏。
+ */
+function subscribeExtensionsChanged(listener: () => void): () => void {
+  extensionChangeListeners.add(listener)
+  return () => {
+    extensionChangeListeners.delete(listener)
+  }
+}
+
+/** 当前扩展点版本号（订阅快照用；内容变化才变，同一版本内返回值恒定）。 */
+function getExtensionsVersion(): number {
+  return extensionsVersion
+}
+
+function getRegistry<T>(extensionPoint: string): ExtensionRegistry<T> {
+  let reg = registries.get(extensionPoint)
+  if (!reg) {
+    reg = registryFactory.create<T>(extensionPoint)
+    // 注册表内容一变就升版本并通知宿主（注册表实例与模块同生命周期，不退订）。
+    reg.subscribe(notifyExtensionsChanged)
+    registries.set(extensionPoint, reg)
+  }
+  return reg as ExtensionRegistry<T>
+}
+
+// 特殊处理：traceTypes 和 outputBlocks 除了走 ExtensionRegistry 外，
+// 还需要同步到 traceTypeRegistry / outputBlockRegistry（真实消费方），
+// dispose 时两侧都要注销（ExtensionRegistry 的 Disposable 只清自己那侧）。
+
+// ── PluginDispatcher 真实实现 ──
+
+export interface RealPluginDispatcher {
+  /** 设置扩展点注册表工厂（仅允许插件激活前调用一次）。 */
+  setExtensionRegistryFactory: (factory: ExtensionRegistryFactory) => void
+  /**
+   * 订阅扩展点变更（插件注册/注销任一扩展点实现时触发），返回取消订阅函数。
+   * 与 `getExtensionsVersion` 配对，可直接交给 `React.useSyncExternalStore`。
+   */
+  subscribeExtensionsChanged: (listener: () => void) => () => void
+  /** 扩展点变更版本号（每次注册/注销递增），作为外部 store 的稳定快照。 */
+  getExtensionsVersion: () => number
+  /** 通用扩展点分发（按扩展点名查询）。 */
+  dispatch: <T>(extensionPoint: string) => Promise<T[]>
+  /** 侧边栏项。 */
+  getSidebarItems: () => Promise<UiSidebarItemDefinition[]>
+  /** 工作区标签类型。 */
+  getWorkspaceTabTypes: () => Promise<UiWorkspaceTabTypeDefinition[]>
+  /** 文件页侧栏面板。 */
+  getFileSidebarPanels: () => Promise<UiFileSidebarPanelDefinition[]>
+  /** 输入框上方面板。 */
+  getComposerAbovePanels: () => Promise<UiComposerAbovePanelDefinition[]>
+  /** 已注册的工具调用视图接管（供 toolViews 注册表解析合并，同步）。 */
+  listRegisteredToolCallViews: () => ToolCallViewDefinition[]
+  /** 注册侧边栏项。 */
+  registerSidebarItem: (def: UiSidebarItemDefinition) => Disposable
+  /** 注册工作区标签类型。 */
+  registerWorkspaceTabType: (def: UiWorkspaceTabTypeDefinition) => Disposable
+  /** 注册文件页侧栏面板。 */
+  registerFileSidebarPanel: (def: UiFileSidebarPanelDefinition) => Disposable
+  /** 注册输入框上方面板。 */
+  registerComposerAbovePanel: (def: UiComposerAbovePanelDefinition) => Disposable
+  /** 注册工具调用视图接管。 */
+  registerToolCallView: (def: ToolCallViewDefinition) => Disposable
+  /** 注册用户消息动作。 */
+  registerUserMessageAction: (def: UiUserMessageActionDefinition) => Disposable
+  /** 同步获取插件注册的用户消息动作列表（供消息线程渲染合并）。 */
+  listRegisteredUserMessageActions: () => UiUserMessageActionDefinition[]
+  /** 注册 task.run 提交贡献 provider。 */
+  registerTaskRunSubmitContributionProvider: (provider: TaskRunSubmitContributionProvider) => Disposable
+  /** 同步获取已注册的 task.run 提交贡献 provider 列表（供提交流程收集）。 */
+  listRegisteredTaskRunSubmitContributionProviders: () => TaskRunSubmitContributionProvider[]
+  /** 注册 trace 类型。 */
+  registerTraceType: (def: TraceTypeDefinition) => Disposable
+  /** 注册输出块渲染。 */
+  registerOutputBlock: (tag: string, handler: OutputBlockHandler) => Disposable
+  /** 注册文件内容编辑器（插件扩展点）。 */
+  registerFileContentEditor: (def: FileContentEditorDescriptor) => Disposable
+  /** 同步获取插件注册的文件内容编辑器列表（供编辑器注册表合并）。 */
+  listRegisteredFileContentEditors: () => FileContentEditorDescriptor[]
+  /** 同步获取插件注册的侧边栏项列表（供活动栏合并）。 */
+  listRegisteredSidebarItems: () => UiSidebarItemDefinition[]
+  /** 同步获取插件注册的工作区标签类型列表（供标签注册表合并）。 */
+  listRegisteredWorkspaceTabTypes: () => UiWorkspaceTabTypeDefinition[]
+  /** 同步获取插件注册的文件树右键菜单动作列表（供右键菜单合并）。 */
+  listRegisteredFileExplorerActions: () => FileExplorerAction[]
+  /** 注册文件树右键菜单动作。 */
+  registerFileExplorerAction: (action: FileExplorerAction) => Disposable
+  /** 注册轮末展示区组件。 */
+  registerRoundTailPanel: (def: UiRoundTailPanelDefinition) => Disposable
+  /** 同步获取已注册的轮末展示区组件列表。 */
+  listRegisteredRoundTailPanels: () => UiRoundTailPanelDefinition[]
+  /** 注册搜索类型（由 `ui.search_types` 扩展点产出）。 */
+  registerSearchType: (def: SearchTypeDefinition) => Disposable
+  /** 同步获取插件注册的搜索类型列表（供搜索类型注册表合并）。 */
+  listRegisteredSearchTypes: () => SearchTypeDefinition[]
+  /** 同步获取插件注册的输入框上方面板列表（供 TaskChat 渲染合并）。 */
+  listRegisteredComposerAbovePanels: () => UiComposerAbovePanelDefinition[]
+  /** 查询当前激活的工作区标签（读宿主壳层镜像；无激活标签返回 null）。 */
+  getActiveTab: () => PluginActiveTabInfo | null
+  /** 打开插件自定义标签（委托宿主 WorkspaceShellContext）。 */
+  openPluginTab: (type: string, data: Record<string, string>, title?: string) => void  /** 打开顶层文件标签（委托宿主 WorkspaceShellContext）。 */
+  openFileTab: (workspaceRoot: string, filePath: string, options?: { mode?: string }) => void
+  /** 打开顶层 diff 对比标签（委托宿主 WorkspaceShellContext）。 */
+  openDiffTab: (input: PluginDiffTabInput) => void
+  /** 向当前输入框草稿末尾追加纯文本（委托宿主 ComposerDraftBridge）。 */
+  appendComposerText: (text: string) => void
+  /** 用 rawContent（可能含 opaque token 串）替换整个草稿（编辑重发回填用）。 */
+  setComposerRawContent: (rawContent: string) => void
+}
+
+export const pluginDispatcher: RealPluginDispatcher = {
+  setExtensionRegistryFactory(factory: ExtensionRegistryFactory) {
+    if (factoryLocked) {
+      throw new Error('ExtensionRegistryFactory has already been set and locked')
+    }
+    registryFactory = factory
+    factoryLocked = true
+  },
+
+  subscribeExtensionsChanged,
+  getExtensionsVersion,
+
+  async dispatch<T>(extensionPoint: string): Promise<T[]> {
+    // 按扩展点名分发到对应注册表
+    switch (extensionPoint) {
+      case EXT_UI_SIDEBAR_ITEMS:
+        return getRegistry<T>(extensionPoint).getAll()
+      case EXT_UI_WORKSPACE_TAB_TYPES:
+        return getRegistry<T>(extensionPoint).getAll()
+      case EXT_UI_FILE_SIDEBAR_PANELS:
+        return getRegistry<T>(extensionPoint).getAll()
+      case EXT_UI_COMPOSER_ABOVE_PANEL:
+        return getRegistry<T>(extensionPoint).getAll()
+      case EXT_UI_TOOL_CALL_VIEWS:
+        return getRegistry<T>(extensionPoint).getAll()
+      case EXT_UI_USER_MESSAGE_ACTIONS:
+        return getRegistry<T>(extensionPoint).getAll()
+      case EXT_TASK_SUBMIT_CONTRIBUTIONS:
+        return getRegistry<T>(extensionPoint).getAll()
+      case EXT_UI_FILE_CONTENT_EDITORS:
+        return getRegistry<T>(extensionPoint).getAll()
+      case EXT_UI_FILE_EXPLORER_ACTIONS:
+        return getRegistry<T>(extensionPoint).getAll()
+      case EXT_UI_ROUND_TAIL_PANELS:
+        return getRegistry<T>(extensionPoint).getAll()
+      case EXT_UI_SEARCH_TYPES:
+        return getRegistry<T>(extensionPoint).getAll()
+      default:
+        return []
+    }
+  },
+
+  async getSidebarItems() {
+    return getRegistry<UiSidebarItemDefinition>(EXT_UI_SIDEBAR_ITEMS).getAll()
+  },
+  async getWorkspaceTabTypes() {
+    return getRegistry<UiWorkspaceTabTypeDefinition>(EXT_UI_WORKSPACE_TAB_TYPES).getAll()
+  },
+  async getFileSidebarPanels() {
+    return getRegistry<UiFileSidebarPanelDefinition>(EXT_UI_FILE_SIDEBAR_PANELS).getAll()
+  },
+  async getComposerAbovePanels() {
+    return getRegistry<UiComposerAbovePanelDefinition>(EXT_UI_COMPOSER_ABOVE_PANEL).getAll()
+  },
+  listRegisteredToolCallViews() {
+    return getRegistry<ToolCallViewDefinition>(EXT_UI_TOOL_CALL_VIEWS).getAll()
+  },
+
+  registerSidebarItem(def) {
+    return getRegistry<UiSidebarItemDefinition>(EXT_UI_SIDEBAR_ITEMS).register('', def)
+  },
+  registerWorkspaceTabType(def) {
+    return getRegistry<UiWorkspaceTabTypeDefinition>(EXT_UI_WORKSPACE_TAB_TYPES).register('', def)
+  },
+  registerFileSidebarPanel(def) {
+    return getRegistry<UiFileSidebarPanelDefinition>(EXT_UI_FILE_SIDEBAR_PANELS).register('', def)
+  },
+  registerComposerAbovePanel(def) {
+    return getRegistry<UiComposerAbovePanelDefinition>(EXT_UI_COMPOSER_ABOVE_PANEL).register('', def)
+  },
+  registerToolCallView(def) {
+    return getRegistry<ToolCallViewDefinition>(EXT_UI_TOOL_CALL_VIEWS).register('', def)
+  },
+  registerUserMessageAction(def) {
+    return getRegistry<UiUserMessageActionDefinition>(EXT_UI_USER_MESSAGE_ACTIONS).register('', def)
+  },
+  listRegisteredUserMessageActions() {
+    return getRegistry<UiUserMessageActionDefinition>(EXT_UI_USER_MESSAGE_ACTIONS).getAll()
+  },
+  registerTaskRunSubmitContributionProvider(provider) {
+    return getRegistry<TaskRunSubmitContributionProvider>(EXT_TASK_SUBMIT_CONTRIBUTIONS).register('', provider)
+  },
+  listRegisteredTaskRunSubmitContributionProviders() {
+    return getRegistry<TaskRunSubmitContributionProvider>(EXT_TASK_SUBMIT_CONTRIBUTIONS).getAll()
+  },
+  registerTraceType(def) {
+    const disposable = getRegistry<TraceTypeDefinition>(EXT_UI_TRACE_TYPES).register('', def)
+    // 同时注册到 traceTypeRegistry（真实消费方，TaskTraceShell 按 kind 查表）
+    registerToTraceRegistry(def)
+    return {
+      dispose() {
+        disposable.dispose()
+        unregisterFromTraceRegistry(def.kind)
+      },
+    }
+  },
+  registerOutputBlock(tag, handler) {
+    // 直接注册到 outputBlockRegistry（真实消费方，RichMessageContent 按 tag 查表）
+    outputBlockRegistry.register(tag, handler)
+    return {
+      dispose() {
+        outputBlockRegistry.unregister(tag)
+      },
+    }
+  },
+  registerFileContentEditor(def) {
+    return getRegistry<FileContentEditorDescriptor>(EXT_UI_FILE_CONTENT_EDITORS).register('', def)
+  },
+  listRegisteredFileContentEditors() {
+    return getRegistry<FileContentEditorDescriptor>(EXT_UI_FILE_CONTENT_EDITORS).getAll()
+  },
+  listRegisteredSidebarItems() {
+    return getRegistry<UiSidebarItemDefinition>(EXT_UI_SIDEBAR_ITEMS).getAll()
+  },
+  listRegisteredWorkspaceTabTypes() {
+    return getRegistry<UiWorkspaceTabTypeDefinition>(EXT_UI_WORKSPACE_TAB_TYPES).getAll()
+  },
+  listRegisteredFileExplorerActions() {
+    return getRegistry<FileExplorerAction>(EXT_UI_FILE_EXPLORER_ACTIONS).getAll()
+  },
+  registerFileExplorerAction(action) {
+    return getRegistry<FileExplorerAction>(EXT_UI_FILE_EXPLORER_ACTIONS).register('', action)
+  },
+  listRegisteredRoundTailPanels() {
+    return getRegistry<UiRoundTailPanelDefinition>(EXT_UI_ROUND_TAIL_PANELS).getAll()
+  },
+  listRegisteredComposerAbovePanels() {
+    return getRegistry<UiComposerAbovePanelDefinition>(EXT_UI_COMPOSER_ABOVE_PANEL).getAll()
+  },
+  registerRoundTailPanel(def) {
+    return getRegistry<UiRoundTailPanelDefinition>(EXT_UI_ROUND_TAIL_PANELS).register('', def)
+  },
+  registerSearchType(def) {
+    return getRegistry<SearchTypeDefinition>(EXT_UI_SEARCH_TYPES).register('', def)
+  },
+  listRegisteredSearchTypes() {
+    return getRegistry<SearchTypeDefinition>(EXT_UI_SEARCH_TYPES).getAll()
+  },
+  getActiveTab() {
+    return activeTabMirror.current
+  },
+  openPluginTab(type, data, title) {
+    getShellBridge()?.openPluginTab(type, data, title)
+  },
+  openFileTab(workspaceRoot, filePath, options) {
+    getShellBridge()?.openFileTab(workspaceRoot, filePath, options)
+  },
+  openDiffTab(input) {
+    getShellBridge()?.openDiffTab(input)
+  },
+  appendComposerText(text) {
+    getComposerBridge()?.appendText(text)
+  },
+  setComposerRawContent(rawContent) {
+    getComposerBridge()?.setRawContent(rawContent)
+  },
 }

@@ -3,7 +3,7 @@ package dev.everyagent.worker.hub;
 import dev.everyagent.contract.frame.Frames;
 import dev.everyagent.contract.ids.Ids;
 import dev.everyagent.contract.json.Json;
-import dev.everyagent.worker.proto.ShortIds;
+import dev.everyagent.plugin.api.proto.ShortIds;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import tools.jackson.databind.JsonNode;

@@ -3,12 +3,14 @@ package dev.everyagent.worker;
 import dev.everyagent.contract.frame.Frames;
 import dev.everyagent.contract.ids.Ids;
 import dev.everyagent.contract.json.Json;
+import dev.everyagent.plugin.api.spi.TokenEstimator;
 import dev.everyagent.worker.config.WorkerProperties;
-import dev.everyagent.worker.task.ModelRateLimiterRegistry;
+import dev.everyagent.worker.plugin.registry.ChatModelEnhancerRegistry;
 import dev.everyagent.worker.hub.HubPool;
+import dev.everyagent.worker.modules.ConfigStore;
 import dev.everyagent.worker.modules.ConfigStore.ResolvedConfig;
-import dev.everyagent.worker.proto.Channels;
-import dev.everyagent.worker.task.ChatModelFactory;
+import dev.everyagent.plugin.api.event.Channels;
+import dev.everyagent.worker.config.ChatModelFactory;
 import dev.everyagent.worker.task.TaskManager;
 import dev.everyagent.worker.task.TaskStore;
 import org.junit.jupiter.api.AfterAll;
@@ -24,8 +26,6 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.web.socket.server.standard.ServerEndpointExporter;
 import tools.jackson.databind.JsonNode;
-import tools.jackson.databind.node.ArrayNode;
-import tools.jackson.databind.node.ObjectNode;
 
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
@@ -50,6 +50,30 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.DEFINED_PORT)
 class TaskRoundsRpcTest {
+
+    /** 测试用 TokenEstimator 桩:与原 ModelRateLimiter.estimateTokens 同口径,factor 恒 1.0。 */
+    private static final TokenEstimator STUB_ESTIMATOR = new TokenEstimator() {
+        @Override public long estimate(String text, String configId) { return rawTokens(text); }
+        @Override public void calibrate(String configId, long estimatedTokens, long actualTokens) { }
+        @Override public double factorOf(String configId) { return 1.0; }
+        @Override public long sampleCountOf(String configId) { return 0; }
+        private static long rawTokens(String s) {
+            if (s == null || s.isEmpty()) { return 0; }
+            long cjk = 0, other = 0;
+            for (int i = 0; i < s.length(); ) {
+                int cp = s.codePointAt(i);
+                i += Character.charCount(cp);
+                Character.UnicodeScript sc = Character.UnicodeScript.of(cp);
+                boolean isCjk = sc == Character.UnicodeScript.HAN
+                        || sc == Character.UnicodeScript.HIRAGANA
+                        || sc == Character.UnicodeScript.KATAKANA
+                        || sc == Character.UnicodeScript.HANGUL;
+                if (isCjk) { cjk++; }
+                else if (!Character.isWhitespace(cp) && !Character.isISOControl(cp)) { other++; }
+            }
+            return cjk + (other + 3) / 4;
+        }
+    };
 
     private static final String KEY = "test-key-rounds";
     private static final AtomicLong REQ = new AtomicLong();
@@ -81,15 +105,17 @@ class TaskRoundsRpcTest {
 
         @Bean
         @Primary
-        ChatModelFactory fakeModelFactory(WorkerProperties props) {
-            return new ChatModelFactory(props, new ModelRateLimiterRegistry(props)) {
+        ChatModelFactory fakeModelFactory(WorkerProperties props,
+                ChatModelEnhancerRegistry enhancerRegistry,
+                ConfigStore configStore) {
+            return new ChatModelFactory(props, enhancerRegistry, configStore) {
                 // 覆写带 events 的 4 参重载:buildAgentModel 普通模型路径实际分派到这里
                 // (模型限流改造引入该路径后,仅覆写 3 参重载拦不到 agent 装配,
                 // 任务会打到假 base-url 上 UnknownHostException)。
                 @Override
                 public org.springframework.ai.chat.model.ChatModel build(ResolvedConfig cfg,
                         org.springframework.ai.openai.OpenAiChatOptions options, String agentId,
-                        dev.everyagent.worker.task.TaskEvents events) {
+                        dev.everyagent.plugin.api.model.EventEmitter events) {
                     return new FakeChatModel();
                 }
 
@@ -150,7 +176,7 @@ class TaskRoundsRpcTest {
         }
         fe = WsTestClient.connect(URI.create("ws://127.0.0.1:" + PORT + "/fakehub"));
         hello(fe);
-        sub(fe, Channels.tasks(k));
+        sub(fe, Channels.tasks(k, workerProps.getWorkerId()));
         sub(fe, Channels.workerEvt(k, workerProps.getWorkerId()));
     }
 
@@ -201,13 +227,13 @@ class TaskRoundsRpcTest {
         assertTrue(r0.path("finalReply").asString().contains("回声"),
                 "finalReply 应为 AI 最终回复: " + r0.path("finalReply").asString());
         assertTrue(r0.path("finalReply").asString().contains("你好"));
-        // wire:seq 一律字符串;闭合轮 endSeq 为非空字符串且 > startSeq;subs 恒数组
+        // wire:seq 一律字符串;闭合轮 endSeq 为非空字符串且 > startSeq;agentRanges 恒数组
         assertTrue(r0.path("startSeq").isString(), "startSeq 应为字符串(wire 口径)");
         long startSeq = Long.parseLong(r0.path("startSeq").asString());
         long endSeq = Long.parseLong(r0.path("endSeq").asString());
         assertTrue(startSeq > 0 && endSeq > startSeq, "闭合轮 endSeq > startSeq");
-        assertTrue(r0.path("subs").isArray());
-        assertTrue(r0.path("subs").isEmpty(), "无子 agent: " + r0.path("subs"));
+        assertTrue(r0.path("agentRanges").isArray());
+        assertTrue(r0.path("agentRanges").isEmpty(), "无子 agent: " + r0.path("agentRanges"));
         assertEquals("done", first.result().path("status").asString());
         assertFalse(first.result().path("live").asBoolean(false));
         assertTrue(first.result().path("open").isNull(), "终态 open=null");
@@ -345,10 +371,10 @@ class TaskRoundsRpcTest {
         awaitEvicted(taskId);
     }
 
-    // ---- 返工(文件变更迁移):roundId + fileChanges wire、task.fileChanges RPC ----
+    // ---- 返工:roundId wire ----
 
     @Test
-    void roundsResponseCarriesRoundIdAndFileChanges() throws java.io.IOException {
+    void roundsResponseCarriesRoundId() throws java.io.IOException {
         String taskId = create("你好,轮次测试");
         awaitEvicted(taskId); // finish 全部完成,磁盘为完整真相源
         Path dir = store.dirOf(taskId);
@@ -360,12 +386,11 @@ class TaskRoundsRpcTest {
         assertTrue(r0.path("roundId").isTextual() && !r0.path("roundId").asString().isBlank(),
                 "开轮生成的 roundId 应随 rounds 应答返回: " + r0);
 
-        // 预置带轻量摘要的一行(roundId + fileChanges)→ 应答原样携带两字段
+        // 预置带 roundId 的一行 → 应答原样携带
         String rid = "round_seeded_1";
         String line = "{\"index\":1,\"startSeq\":\"" + r0.path("startSeq").asString()
                 + "\",\"endSeq\":\"" + r0.path("endSeq").asString()
                 + "\",\"roundId\":\"" + rid + "\","
-                + "\"fileChanges\":[{\"filePath\":\"/a.md\",\"fileName\":\"a.md\",\"changeType\":\"updated\",\"saveCount\":1}],"
                 + "\"subs\":[]}\n";
         Files.writeString(dir.resolve("rounds.jsonl"), line, StandardCharsets.UTF_8);
 
@@ -373,55 +398,7 @@ class TaskRoundsRpcTest {
         assertFalse(second.isErr(), String.valueOf(second.err()));
         JsonNode seeded = second.result().path("rounds").get(0);
         assertEquals(rid, seeded.path("roundId").asString(), "roundId 随应答携带");
-        assertTrue(seeded.path("fileChanges").isArray() && seeded.path("fileChanges").size() == 1,
-                "fileChanges 轻量摘要数组随应答携带: " + seeded);
-        assertEquals("/a.md", seeded.path("fileChanges").get(0).path("filePath").asString());
-        assertEquals("updated", seeded.path("fileChanges").get(0).path("changeType").asString());
-        assertEquals(1, seeded.path("fileChanges").get(0).path("saveCount").asInt());
         assertEquals("done", second.result().path("status").asString());
-    }
-
-    @Test
-    void taskFileChangesReturnsFullContent() throws java.io.IOException {
-        String taskId = create("你好,轮次测试");
-        awaitEvicted(taskId);
-        String rid = "round_fc_1";
-        ObjectNode full = Json.obj();
-        ArrayNode changesArr = Json.arr();
-        changesArr.addObject()
-                .put("filePath", "/a.md").put("fileName", "a.md")
-                .put("changeType", "updated").put("beforeContent", "旧")
-                .put("afterContent", "新").put("saveCount", 1);
-        full.set("changes", changesArr);
-        store.writeRoundFileChanges(taskId, rid, full);
-
-        RpcResp r = call("task.fileChanges", "{\"taskId\":\"" + taskId + "\",\"roundId\":\"" + rid + "\"}");
-        assertFalse(r.isErr(), String.valueOf(r.err()));
-        JsonNode changes = r.result().path("changes");
-        assertTrue(changes.isArray() && changes.size() == 1, "返回全文 changes 数组: " + r.result());
-        assertEquals("/a.md", changes.get(0).path("filePath").asString());
-        assertEquals("新", changes.get(0).path("afterContent").asString());
-        assertEquals("updated", changes.get(0).path("changeType").asString());
-        assertEquals(1, changes.get(0).path("saveCount").asInt());
-    }
-
-    @Test
-    void taskFileChangesMissingFileReturnsEmptyChanges() throws java.io.IOException {
-        String taskId = create("你好,轮次测试");
-        awaitEvicted(taskId);
-        RpcResp r = call("task.fileChanges", "{\"taskId\":\"" + taskId + "\",\"roundId\":\"round_no_file\"}");
-        assertFalse(r.isErr(), "无全文文件应返回空 changes 而非报错: " + String.valueOf(r.err()));
-        assertTrue(r.result().path("changes").isArray() && r.result().path("changes").isEmpty(),
-                "无文件 → {changes:[]}: " + r.result());
-    }
-
-    @Test
-    void taskFileChangesUnknownTaskIsNotFound() {
-        RpcResp r = call("task.fileChanges", "{\"taskId\":\"t_nonexistent\",\"roundId\":\"round_x\"}");
-        assertTrue(r.isErr(), "不存在任务应 NOT_FOUND");
-        assertEquals("NOT_FOUND", r.err().path("code").asString());
-        assertTrue(r.err().path("message").asString().contains("t_nonexistent"),
-                "错误信息应含 taskId: " + r.err());
     }
 
     // ---- 帮助方法 ----

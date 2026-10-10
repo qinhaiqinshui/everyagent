@@ -6,7 +6,7 @@ services:
       context: .
       dockerfile: every-agent-hub/Dockerfile
     ports:
-      - "9100:9100"
+      - "6101:6101"
     environment:
       # 必填:原始 hub key;hub 启动时自行计算 sha256,未配置拒绝启动
       HUB_KEY: ${HUB_KEY:-}

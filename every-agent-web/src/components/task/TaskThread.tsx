@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import type { TaskThreadItem } from '@/query/taskQueryService'
-import type { AgentMessageRecord, TaskTraceRecord } from '@/types'
+import type { AgentMessageRecord } from '@/types'
+import type { TaskTraceRecord } from '@/task/types'
 import { BrandMark } from '@/components/shared/BrandLoadingBlock'
 import { getTraceType, resolveTraceIcon, stringifyTraceContent } from '@/plugin/traceTypeRegistry'
 import AgentMessageThread from '../task/AgentMessageThread'

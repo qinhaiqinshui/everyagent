@@ -3,7 +3,7 @@
  *
  * 内置「顶层页面」标签类型定义(hub 版):page:settings。
  * n 的启动台/日志/扩展页已随运行时下沉与插件底座裁剪移除;
- * git 已收敛到左侧「源代码管理」侧边栏面板(见 GitSidebarPanel),不再作为顶层页。
+ * git 已收敛到插件(源代码管理侧边栏面板),不再作为顶层页。
  */
 
 import type { ReactNode } from 'react'

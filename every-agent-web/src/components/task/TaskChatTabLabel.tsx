@@ -11,7 +11,7 @@
  */
 
 import React from 'react'
-import { taskStore } from '@/hub/taskStore'
+import { taskStore } from '@/task/taskStore'
 import TaskStatusDot from '@/components/task/TaskStatusDot'
 
 /**

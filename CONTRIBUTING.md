@@ -13,6 +13,7 @@ Every Agent 是一套「公网可及、本机执行」的个人 AI Agent 系统�
 - [报告 Bug](#报告-bug)
 - [提出功能建议](#提出功能建议)
 - [开发环境搭建](#开发环境搭建)
+- [开发一个插件](#开发一个插件)
 - [提交 Pull Request](#提交-pull-request)
 - [代码与提交规范](#代码与提交规范)
 
@@ -60,7 +61,7 @@ Every Agent 是一套「公网可及、本机执行」的个人 AI Agent 系统�
 # - Node.js 18+（仅前端 / 桌面版）
 
 # Java 模块
-mvn -pl every-agent-hub spring-boot:run        # hub @ 9100
+mvn -pl every-agent-hub spring-boot:run        # hub @ 6101
 mvn -pl every-agent-worker spring-boot:run     # worker，出站连 hub
 
 # 前端
@@ -72,6 +73,16 @@ cd every-agent-web && npm run typecheck
 ```
 
 更多细节见 [README「快速开始」](README.md#-快速开始)。
+
+## 开发一个插件
+
+给 Every Agent 加能力（工具、沙箱、Advisor、任务生命周期、UI 扩展点、RPC）不需要动宿主代码，也不必从零搭目录——脚手架一条命令生成完整工程：
+
+```bash
+node create-everyagent-plugin <id>    # java / web / full 三种形态，交互式问答
+```
+
+从 [docs/plugin-guide/getting-started.md](docs/plugin-guide/getting-started.md) 开始（全站入口 [docs/plugin-guide/index.md](docs/plugin-guide/index.md)）。两条红线务必先读：插件**零 `every-agent-worker` 依赖**（[架构文档](docs/ARCHITECTURE.md) §14.9，唯一允许的实现依赖是 `every-agent-plugin-api`）；前端插件**禁止 `@/` 引用宿主模块**（§8.5，类型包只能 `import type`）。
 
 ## 提交 Pull Request
 

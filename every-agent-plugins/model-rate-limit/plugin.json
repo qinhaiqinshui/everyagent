@@ -1,0 +1,9 @@
+{
+  "id": "model-rate-limit",
+  "name": "模型限流",
+  "version": "0.1.0",
+  "description": "模型限流插件:经 Advisor 注入限流逻辑",
+  "author": "everyagent",
+  "main": "dev.everyagent.plugin.modelratelimit.ModelRateLimitPlugin",
+  "enabled": true
+}

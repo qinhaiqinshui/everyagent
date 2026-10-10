@@ -8,6 +8,8 @@ export type SidebarActivityItem = {
   label: string
   icon: React.ReactNode
   badgeCount?: number
+  /** 可选角标组件（插件侧自管订阅与刷新；git 变更角标先例）。缺省不渲染。 */
+  Badge?: React.ComponentType
 }
 
 export type SidebarActivityBarProps = {
@@ -137,6 +139,13 @@ export default function SidebarActivityBar({
                       {item.badgeCount > 99 ? '99+' : item.badgeCount}
                     </span>
                   ) : null}
+                  {/* 插件自定义角标组件:由宿主统一锚定位置(pluginBadgeAnchorStyle,右上角),
+                      插件组件只渲染内容与配色、自身决定显隐(空内容时容器零尺寸不可见)。 */}
+                  {item.Badge ? (
+                    <span className="sidebar-activity-bar__plugin-badge" style={pluginBadgeAnchorStyle}>
+                      <item.Badge />
+                    </span>
+                  ) : null}
                 </span>
               )}
               style={isActive ? resolvedActiveActivityButtonStyle : resolvedActivityButtonStyle}
@@ -249,4 +258,15 @@ const activityBadgeStyle: React.CSSProperties = {
   lineHeight: 1,
   fontWeight: 600,
   boxShadow: '0 0 0 2px color-mix(in srgb, var(--bg-secondary) 88%, #111)',
+}
+
+/** 插件自定义角标的统一锚点:定位几何由宿主收口,插件组件只管内容与配色。 */
+const pluginBadgeAnchorStyle: React.CSSProperties = {
+  position: 'absolute',
+  top: -4,
+  right: -2,
+  color: 'var(--accent-red)',
+  fontSize: 12,
+  fontWeight: 600,
+  lineHeight: 1,
 }

@@ -18,12 +18,12 @@ import org.springframework.stereotype.Component;
 public class OverBroadRootCheck implements PermissionCheck {
 
     @Override
-    public PermissionDecision check(PermissionContext ctx) {
+    public PermissionDecision invoke(PermissionContext ctx, PermissionChain next) {
         if (ctx.realPath() != null
                 && isOverBroadRoot(ctx.realPath(), ctx.wsLex(), ctx.wsReal())) {
             return PermissionDecision.denySilently("过度宽泛授权根拒收: " + ctx.realPath());
         }
-        return PermissionDecision.skip();
+        return next.proceed(ctx);
     }
 
     /**

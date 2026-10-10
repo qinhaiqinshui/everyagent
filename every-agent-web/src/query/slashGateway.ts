@@ -7,7 +7,7 @@
  * `slash.list` RPC 提供,前端零命令定义、零 token 构造逻辑。
  */
 import { hubSession } from '@/hub/session'
-import { taskStore } from '@/hub/taskStore'
+import { taskStore } from '@/task/taskStore'
 
 /** worker `slash.list` 返回的单个候选项。 */
 export interface RemoteSlashItem {
@@ -87,30 +87,32 @@ export async function selectRemoteSlashItem(
   }
 }
 
-/** 应用一个任务级 token（底部胶囊）到指定任务。 */
+/** 应用一个任务级 token（底部胶囊）到指定任务，返回最新 token 列表。 */
 export async function applyRemoteTaskToken(params: {
   taskId: string
   id: string
   token: string
-}): Promise<{ applied: boolean }> {
+}): Promise<{ applied: boolean; tokens: string[] }> {
   const owner = taskStore.get(params.taskId)?.workerId
   if (!owner) throw new Error('无法确定任务所属 worker')
   const result = await hubSession.rpcTo(owner, 'slash.taskTokens.apply', params) as {
     applied?: boolean
+    tokens?: string[]
   }
-  return { applied: result.applied === true }
+  return { applied: result.applied === true, tokens: result.tokens ?? [] }
 }
 
-/** 取消一个已选中的 `/` 项（普通候选或任务级 token）。 */
+/** 取消一个已选中的 `/` 项（普通候选或任务级 token），返回最新 token 列表。 */
 export async function cancelRemoteSlashItem(params: {
   id?: string
   token: string
   taskId?: string
-}): Promise<{ removed: boolean }> {
+}): Promise<{ removed: boolean; tokens: string[] }> {
   const owner = params.taskId ? taskStore.get(params.taskId)?.workerId : undefined
   if (!owner) throw new Error('无法确定任务所属 worker')
   const result = await hubSession.rpcTo(owner, 'slash.cancel', params) as {
     removed?: boolean
+    tokens?: string[]
   }
-  return { removed: result.removed === true }
+  return { removed: result.removed === true, tokens: result.tokens ?? [] }
 }

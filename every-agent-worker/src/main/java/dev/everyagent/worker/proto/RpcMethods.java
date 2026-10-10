@@ -14,13 +14,12 @@ public final class RpcMethods {
     public static final String TASK_ROUNDS = "task.rounds";
     /** 轮尾一次性拉取:按轮起点(startSeq)取该轮末尾 limit 条事件用于初始渲染(磁盘∪内存,同 seq 以内存为准、同 seq 组不拆批)。 */
     public static final String TASK_ROUND_TAIL = "task.roundTail";
-    /** 单轮文件变更全文拉取:参数 taskId+roundId,返回 file-changes/<roundId>.json 的 {changes:[...]}。 */
-    public static final String TASK_FILE_CHANGES = "task.fileChanges";
-    /** 子 agent 台账一次性拉取:前端打开任务详情建子 agent 胶囊列表的唯一取数口;
-     * 台账 agents.json 独立落盘,meta.agents 仅旧任务回退。 */
+    /** 任务下全部 agent 台账拉取(主 agent + 全部派生 agent,含审议 agent;live 读内存台账、冷任务读 agents.json)。 */
     public static final String TASK_AGENTS = "task.agents";
     public static final String TASK_CANCEL = "task.cancel";
     public static final String TASK_DELETE = "task.delete";
+    /** 队列快照拉取：返回当前排队中的任务列表及位置。 */
+    public static final String TASK_QUEUE_LIST = "task.queueList";
     /** 删除某条队列输入(参数 taskId, index)。 */
     public static final String TASK_QUEUE_REMOVE = "task.queueRemove";
     /** 移动(重排)某条队列输入(参数 taskId, fromIndex, toIndex)。 */
@@ -49,6 +48,12 @@ public final class RpcMethods {
     public static final String FS_DELETE = "fs.delete";
     /** 浏览目录(方案 B:列盘符/根,再逐层列子目录;不经 workspace 沙箱,依赖 worker 进程权限)。 */
     public static final String FS_BROWSE = "fs.browse";
+    /** 按机器绝对路径读取文件(不经 workspace 沙箱;文件标签页用户操作,非 AI 工具调用,不走权限链路)。 */
+    public static final String FS_READ_RAW = "fs.readRaw";
+    /** 按机器绝对路径写入文件(不经 workspace 沙箱;文件标签页用户操作,非 AI 工具调用,不走权限链路)。 */
+    public static final String FS_WRITE_RAW = "fs.writeRaw";
+    /** 按机器绝对路径获取文件属性(不经 workspace 沙箱;文件标签页用户操作专用)。 */
+    public static final String FS_STAT_RAW = "fs.statRaw";
 
     // ---- 内嵌终端(§7.18) ----
 
@@ -60,12 +65,9 @@ public final class RpcMethods {
     public static final String TERM_RESIZE = "term.resize";
     /** 关闭终端会话:termId。 */
     public static final String TERM_CLOSE = "term.close";
-    /** 工作区文本内容搜索(内置 rg,架构 §5.10):jailed 到工作区根,JSON lines 解析为
-     * 结构化结果;大结果复用 fs.read 的 rpc.data 分批 + 末帧 ok 汇总。 */
-    public static final String FS_SEARCH = "fs.search";
-    /** 任务内容搜索(内置 rg + worker 后处理):按 workspaceId 枚举任务,搜索 rounds.jsonl
-     * 轮次索引,解析 JSON 后对 user/finalReply 干净文本二次匹配消除字段名噪音。 */
-    public static final String TASK_SEARCH = "task.search";
+
+    /** 统一搜索(架构 §5.5/§8.5):入参仅 workspace(必填,jailed)/pattern/kinds?(可选 string[],缺省=全部已注册 provider)/filters?(不透明参数袋,核心不解释);核心遍历 SearchProvider 注册表(按 kinds 数据过滤)→ 触发 → 按 kind+位置键去重聚合,应答 {matchCount, truncated, items:[...]},大结果复用 fs.read 的 rpc.data 分批 + 末帧 ok 汇总。 */
+    public static final String SEARCH = "search";
     /** 斜杠命令清单(动态注册,数据来源下沉 worker;前端只负责渲染与插入)。 */
     public static final String SLASH_LIST = "slash.list";
     /** 斜杠命令选中:携带 token 与 taskId 触发条目 selectHandler(taskId 可空=草稿态,不写任务 meta)。 */
@@ -74,26 +76,35 @@ public final class RpcMethods {
     public static final String SLASH_CANCEL = "slash.cancel";
     /** 把任务相关 opaque token 以其 payload 注入(按 payload 落地/还原 token 携带的数据)。 */
     public static final String SLASH_TASK_TOKENS_APPLY = "slash.taskTokens.apply";
+    /** 拉取任务的全部 slash 任务级 token(返回 { tokens: [...] })。 */
+    public static final String SLASH_TASK_TOKENS_LIST = "slash.taskTokens.list";
     /** @ 文件搜索(后端做子序列模糊匹配 + 隐藏规则 + 截断 10 条,前端零递归)。 */
     public static final String MENTION_QUERY = "mention.query";
-    public static final String GIT_STATUS = "git.status";
-    public static final String GIT_LOG = "git.log";
-    public static final String GIT_DIFF = "git.diff";
-    /** 读取某次提交的变更文件清单与全文(历史详情/恢复此版本;必带 commit)。 */
-    public static final String GIT_SHOW = "git.show";
-    public static final String GIT_COMMIT = "git.commit";
-    public static final String GIT_PULL = "git.pull";
-    public static final String GIT_PUSH = "git.push";
-    /** 放弃指定路径的更改(恢复为 HEAD 内容;未跟踪/已暂存新增跳过)。 */
-    public static final String GIT_DISCARD = "git.discard";
-    public static final String GIT_CLONE = "git.clone";
-    public static final String GIT_INIT = "git.init";
-    public static final String GIT_REMOTE_ADD = "git.remote.add";
-    public static final String GIT_REMOTE_LIST = "git.remote.list";
-    /** 保存 git 远端凭证(加密落盘工作区 .git-credentials.enc;仅写不读回)。 */
-    public static final String GIT_CREDENTIAL_SAVE = "git.credential.save";
     public static final String SYS_METHODS = "sys.methods";
     public static final String SYS_INFO = "sys.info";
+    /** 重启 worker 进程(自重启:优雅关闭后以重建的启动命令重新拉起,架构 §5.5)。 */
+    public static final String WORKER_RESTART = "worker.restart";
+
+    /** 读取用户偏好(全部 key-value,如主题等;落盘 preferences.json)。 */
+    public static final String PREF_GET = "pref.get";
+    /** 写入用户偏好(参数 key + value;写盘后广播 config.changed{keys:["preferences"]})。 */
+    public static final String PREF_SET = "pref.set";
+
+    // ── 插件管理 ──
+    /** 列出已加载的插件清单。 */
+    public static final String PLUGIN_LIST = "plugin.list";
+    /** 安装插件（从 .eap 文件解压到 plugins 目录）。 */
+    public static final String PLUGIN_INSTALL = "plugin.install";
+    /** 卸载插件（从 plugins 目录删除，内置插件不可卸载）。 */
+    public static final String PLUGIN_UNINSTALL = "plugin.uninstall";
+    /** 启用插件。 */
+    public static final String PLUGIN_ENABLE = "plugin.enable";
+    /** 禁用插件。 */
+    public static final String PLUGIN_DISABLE = "plugin.disable";
+    /** 读取外部插件源码文件（参数 pluginId + path）。 */
+    public static final String PLUGIN_WEB_SOURCE = "plugin.webSource";
+    /** 读取插件目录内二进制资源（扩展图标等，参数 pluginId + path，返回 mime + base64）。 */
+    public static final String PLUGIN_ASSET = "plugin.asset";
 
     private RpcMethods() {
     }

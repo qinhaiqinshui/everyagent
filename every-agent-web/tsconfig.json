@@ -18,9 +18,19 @@
     "baseUrl": ".",
     "paths": {
       "@/*": ["src/*"],
-      "@every-agent/client": ["src/sdk/index.ts"]
+      "@every-agent/client": ["src/sdk/index.ts"],
+      "@everyagent/plugin-api": ["../every-agent-plugin-api/js/index.ts"],
+      "@plugins/*": ["../every-agent-plugins/*"],
+      "react": ["./node_modules/@types/react"],
+      "react-dom": ["./node_modules/@types/react-dom"],
+      "@ant-design/icons": ["./node_modules/@ant-design/icons/lib"],
+      "antd": ["./node_modules/antd"],
+      "antd/*": ["./node_modules/antd/*"],
+      "react/jsx-runtime": ["./node_modules/@types/react/jsx-runtime"],
+      "react-markdown": ["./node_modules/react-markdown"],
+      "remark-gfm": ["./node_modules/remark-gfm"]
     }
   },
-  "include": ["src"],
+  "include": ["src", "../every-agent-plugins/*/web"],
   "exclude": ["src/sdk/**/*.test.ts"]
 }

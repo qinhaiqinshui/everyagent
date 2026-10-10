@@ -3,14 +3,17 @@ package dev.everyagent.worker;
 import dev.everyagent.contract.frame.Frames;
 import dev.everyagent.contract.ids.Ids;
 import dev.everyagent.contract.json.Json;
+import dev.everyagent.plugin.api.spi.TokenEstimator;
 import dev.everyagent.worker.config.WorkerProperties;
-import dev.everyagent.worker.task.ModelRateLimiterRegistry;
+import dev.everyagent.worker.plugin.registry.ChatModelEnhancerRegistry;
 import dev.everyagent.worker.hub.HubPool;
+import dev.everyagent.worker.modules.ConfigStore;
 import dev.everyagent.worker.modules.ConfigStore.ResolvedConfig;
-import dev.everyagent.worker.proto.Channels;
-import dev.everyagent.worker.task.ChatModelFactory;
+import dev.everyagent.plugin.api.event.Channels;
+import dev.everyagent.worker.config.ChatModelFactory;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.MethodOrderer;
@@ -50,6 +53,30 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 class FsGitModuleTest {
 
+    /** 测试用 TokenEstimator 桩:与原 ModelRateLimiter.estimateTokens 同口径,factor 恒 1.0。 */
+    private static final TokenEstimator STUB_ESTIMATOR = new TokenEstimator() {
+        @Override public long estimate(String text, String configId) { return rawTokens(text); }
+        @Override public void calibrate(String configId, long estimatedTokens, long actualTokens) { }
+        @Override public double factorOf(String configId) { return 1.0; }
+        @Override public long sampleCountOf(String configId) { return 0; }
+        private static long rawTokens(String s) {
+            if (s == null || s.isEmpty()) { return 0; }
+            long cjk = 0, other = 0;
+            for (int i = 0; i < s.length(); ) {
+                int cp = s.codePointAt(i);
+                i += Character.charCount(cp);
+                Character.UnicodeScript sc = Character.UnicodeScript.of(cp);
+                boolean isCjk = sc == Character.UnicodeScript.HAN
+                        || sc == Character.UnicodeScript.HIRAGANA
+                        || sc == Character.UnicodeScript.KATAKANA
+                        || sc == Character.UnicodeScript.HANGUL;
+                if (isCjk) { cjk++; }
+                else if (!Character.isWhitespace(cp) && !Character.isISOControl(cp)) { other++; }
+            }
+            return cjk + (other + 3) / 4;
+        }
+    };
+
     private static final String KEY = "test-key-fsgit";
     /** 每次运行唯一目录:避免清理旧 .git 的 Windows 删除竞态(init 对已存在 .git 会跳过骨架写入)。 */
     private static final Path WS = TestCleanup.register(
@@ -84,8 +111,10 @@ class FsGitModuleTest {
 
         @Bean
         @Primary
-        ChatModelFactory fakeModelFactory(WorkerProperties props) {
-            return new ChatModelFactory(props, new ModelRateLimiterRegistry(props)) {
+        ChatModelFactory fakeModelFactory(WorkerProperties props,
+                ChatModelEnhancerRegistry enhancerRegistry,
+                ConfigStore configStore) {
+            return new ChatModelFactory(props, enhancerRegistry, configStore) {
                 @Override
                 public org.springframework.ai.chat.model.ChatModel build(ResolvedConfig cfg,
                         org.springframework.ai.openai.OpenAiChatOptions options, String agentId) {
@@ -174,6 +203,30 @@ class FsGitModuleTest {
 
         String l = rpc("fs.list", p("{\"path\":\"docs\"}"));
         assertTrue(l.contains("hello.txt"), l);
+        assertTrue(l.contains("\"dir\":false"), l);
+    }
+
+    /**
+     * fs.list 条目 stat 容错(回归:Windows 上 WSL/npm 生成的 LX symlink reparse 点,
+     * Win32 跟随链接读属性报「系统无法访问此文件」,曾把整个 fs.list 打成 INTERNAL、
+     * 搜索侧边栏文件名搜索整树报错):跟随读失败的条目不再拖垮枚举——回退 NOFOLLOW
+     * 读链接自身,按 dir:false 普通文件条目返回。用悬空符号链接构造同类失败(跟随读
+     * 抛 NoSuchFileException);无符号链接权限的环境(Windows 非开发者模式)跳过。
+     */
+    @Test
+    @Order(13)
+    void fsListToleratesUnreadableEntry() throws Exception {
+        Path dir = WS.resolve("broken-links");
+        Files.createDirectories(dir);
+        Files.writeString(dir.resolve("ok.txt"), "x");
+        try {
+            Files.createSymbolicLink(dir.resolve("dangling"), dir.resolve("missing-target"));
+        } catch (java.io.IOException | UnsupportedOperationException e) {
+            Assumptions.abort("当前环境无符号链接权限: " + e);
+        }
+        String l = rpc("fs.list", p("{\"path\":\"broken-links\"}"));
+        assertTrue(l.contains("rpc.ok"), l);
+        assertTrue(l.contains("ok.txt") && l.contains("dangling"), l);
         assertTrue(l.contains("\"dir\":false"), l);
     }
 

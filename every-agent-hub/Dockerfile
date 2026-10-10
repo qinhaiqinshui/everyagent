@@ -14,5 +14,5 @@ RUN mvn -B -pl every-agent-hub -am package -Dmaven.test.skip=true
 FROM eclipse-temurin:25-jre
 WORKDIR /app
 COPY --from=build /src/every-agent-hub/target/every-agent-hub-*-exec.jar app.jar
-EXPOSE 9100
+EXPOSE 6101
 ENTRYPOINT ["java", "-jar", "app.jar"]

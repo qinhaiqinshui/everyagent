@@ -73,6 +73,11 @@ class WorkspaceRegistryService {
     return this.current?.workspaces[0]?.root ?? null
   }
 
+  /** 首个注册工作区所属 worker(外部文件标签页等无 workspaceRoot 场景兜底)。 */
+  primaryWorkerId(): string | null {
+    return this.current?.workspaces[0]?.workerId ?? null
+  }
+
   /** 按工作区根反查来源 worker(多 worker 合并后按归属定向 RPC);未找到返回 null。 */
   workerIdOfRoot(root: string): string | null {
     for (const [workerId, registry] of this.byWorker) {

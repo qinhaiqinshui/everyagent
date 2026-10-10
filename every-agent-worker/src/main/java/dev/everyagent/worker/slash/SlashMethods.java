@@ -1,6 +1,11 @@
 package dev.everyagent.worker.slash;
 
 import java.io.IOException;
+import dev.everyagent.plugin.api.slash.SlashCommandItem;
+import dev.everyagent.plugin.api.slash.SlashSelectionResult;
+import dev.everyagent.plugin.api.slash.SlashTokenEncoder;
+import dev.everyagent.plugin.api.spi.SearchProvider;
+import dev.everyagent.plugin.api.spi.SuggestionProvider;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -9,8 +14,10 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.Deque;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -18,10 +25,13 @@ import org.springframework.stereotype.Component;
 
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.contract.rpc.Rpc;
+import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.modules.Sandbox;
 import dev.everyagent.worker.modules.WorkspaceManager;
+import dev.everyagent.worker.plugin.registry.SearchProviderInvoker;
+import dev.everyagent.worker.plugin.registry.SearchProviderRegistry;
 import dev.everyagent.worker.proto.RpcMethods;
-import dev.everyagent.worker.rpc.NotFoundException;
+import dev.everyagent.plugin.api.exception.NotFoundException;
 import dev.everyagent.worker.rpc.RpcContext;
 import dev.everyagent.worker.rpc.RpcDispatcher;
 import tools.jackson.databind.JsonNode;
@@ -37,12 +47,14 @@ import tools.jackson.databind.node.ObjectNode;
  *       收集后按匹配质量排序(文件名连续命中 &gt; 路径连续命中 &gt; 子序列;前缀/词首
  *       加成,子序列按跨度扣分),隐藏规则对齐前端
  *       {@code shouldHideWorkspacePath}(/plugins、.git),返回最多 10 条
- *       (用户约束,避免传多余数据)。</li>
+ *       (用户约束,避免传多余数据)。搜索模式在内置四档打分结果之后按 order() 升序
+ *       增补聚合插件 {@code SuggestionProvider} 的 {@code suggest} 建议(§8.5 能力
+ *       接口扩展,去重键 kind+path、总条数仍截断 10;浏览模式不经 provider)。</li>
  *   <li>{@code slash.select}:按条目 id 触发该条目的 selectHandler(业务 onSelect),循环消费
  *       返回的多个 {@link SlashSelectionResult},把各 result 的 {@code payload.slashId} 注入
  *       返回的 opaque token 后下发(未指定 id 回退父条目 id),响应 {@code { results: [...] }}。</li>
  *   <li>{@code slash.cancel}:用户取消胶囊(底部 ❌ 或内联 ✕)时,有 taskId 先从任务 meta
- *       的 {@code slashTaskTokens} 移除自己的 token,再触发条目 cancelHandler(业务 onCancel)。</li>
+ *       的 {@code slash-tokens.json} 移除自己的 token,再触发条目 cancelHandler(业务 onCancel)。</li>
  * </ul>
  *
  * <p>路径语义(与前端 pathUtils 一致):{@code path} 为工作区相对路径(空/缺省=根,经
@@ -64,16 +76,39 @@ public class SlashMethods {
     private final WorkspaceManager workspaces;
     /** slash 任务级 token 公共存储(slash.taskTokens.apply 写入 token 并经它落盘/广播)。 */
     private final SlashTaskScopeStore scopeStore;
+    /** SearchProvider 注册表:mention.query 消费其中的 SuggestionProvider 能力接口(§8.5)。 */
+    private final SearchProviderRegistry searchProviders;
+
+    /**
+     * 当前生效的 provider 超时预算(ms);缺省取 {@code worker.search.provider-timeout-ms}
+     * (0 = 不限时,仅异常护栏,与 search/search 同款护栏接缝)。
+     */
+    private long providerTimeoutMs;
+
+    /**
+     * 包级可见:覆盖 provider 超时预算(单测设小值验证预算机制;生产路径由
+     * {@code worker.search.provider-timeout-ms} 配置装配进构造)。≤ 0 恢复不限时
+     * (同步直调,仅异常护栏)。
+     */
+    void setProviderTimeoutMs(long providerTimeoutMs) {
+        this.providerTimeoutMs = providerTimeoutMs;
+    }
 
     public SlashMethods(RpcDispatcher dispatcher, SlashCommandRegistry registry,
-            WorkspaceManager workspaces, SlashTaskScopeStore scopeStore) {
+            WorkspaceManager workspaces, SlashTaskScopeStore scopeStore,
+            SearchProviderRegistry searchProviders, WorkerProperties props) {
         this.registry = registry;
         this.workspaces = workspaces;
         this.scopeStore = scopeStore;
+        this.searchProviders = searchProviders;
+        this.providerTimeoutMs = props == null
+                ? new WorkerProperties.Search().getProviderTimeoutMs()
+                : props.getSearch().getProviderTimeoutMs();
 
         dispatcher.register(RpcMethods.SLASH_LIST, ctx -> ctx.ok(listItems()));
         dispatcher.register(RpcMethods.SLASH_SELECT, this::selectItem);
         dispatcher.register(RpcMethods.SLASH_TASK_TOKENS_APPLY, this::applyTaskToken);
+        dispatcher.register(RpcMethods.SLASH_TASK_TOKENS_LIST, this::listTaskTokens);
         dispatcher.register(RpcMethods.SLASH_CANCEL, this::cancelItem);
         dispatcher.register(RpcMethods.MENTION_QUERY, this::mentionQuery);
     }
@@ -156,7 +191,7 @@ public class SlashMethods {
 
     /**
      * slash.taskTokens.apply:把返回的 bottom token 写入任务级 scope(slash 层公共存储,
-     * 字段 slashTaskTokens 仅 slash 层读写),随后调业务 onSelect 让注册方写自己的业务标记
+     * 字段 slash-tokens.json 仅 slash 层读写),随后调业务 onSelect 让注册方写自己的业务标记
      * (注册方自己实现;异常仅记日志,不阻塞 RPC 应答)。
      * 流程:查条目(未知 id → NotFound)→ 公共存储写入(不存在/无权 → NOT_FOUND)→ 业务 onSelect → ok。
      */
@@ -176,10 +211,24 @@ public class SlashMethods {
         } catch (RuntimeException e) {
             log.warn("slash 任务 token 业务 onSelect 失败 id={} task={}", id, taskId, e);
         }
+        List<String> latestTokens = scopeStore.tokensOf(taskId);
         ctx.ok(Json.obj()
                 .put("applied", true)
                 .put("taskId", taskId)
-                .put("token", token));
+                .put("token", token)
+                .set("tokens", Json.toJson(latestTokens)));
+    }
+
+    // ---- slash.taskTokens.list ----
+
+    /**
+     * slash.taskTokens.list:返回任务当前的全部 slash 任务级 token(slash 层公共存储,
+     * 自管 slash-tokens.json)。参数 taskId 必填,应答 { tokens: [...] }。
+     */
+    private void listTaskTokens(RpcContext ctx) {
+        String taskId = ctx.strParam("taskId");
+        List<String> tokens = scopeStore.tokensOf(taskId);
+        ctx.ok(Json.obj().set("tokens", Json.toJson(tokens)));
     }
 
     // ---- slash.cancel ----
@@ -188,7 +237,7 @@ public class SlashMethods {
      * slash.cancel:用户取消 slash 胶囊(底部 ❌ 或内联 ✕)时触发。
      * 流程:
      * 1. resolveItem(id, token) 反查条目(仅用于业务 onCancel;解析不到为 null,绝不让 RPC 失败);
-     * 2. 有 taskId 时先从任务 meta 的 slashTaskTokens 移除自身 token(scopeStore.remove
+     * 2. 有 taskId 时先从 slash-tokens.json 移除自身 token(scopeStore.remove
      *    内部落盘 + 广播 task.updated);任务不存在/非归属 → removed=false 降级应答,不抛错;
      * 3. 无 taskId(草稿取消/内联 ✕)→ 不碰 meta,removed=false;
      * 4. 条目非空才调业务 cancelHandler(onCancel),异常仅记日志,不阻塞应答;
@@ -215,7 +264,11 @@ public class SlashMethods {
                 log.warn("slash cancel 业务回调失败 id={} task={}", id, taskId, e);
             }
         }
-        ctx.ok(Json.obj().put("removed", removed));
+        List<String> latestTokens = (taskId != null && !taskId.isEmpty())
+                ? scopeStore.tokensOf(taskId) : List.of();
+        ctx.ok(Json.obj()
+                .put("removed", removed)
+                .set("tokens", Json.toJson(latestTokens)));
     }
 
     /**
@@ -294,8 +347,88 @@ public class SlashMethods {
             for (int i = 0; i < hits.size() && i < MENTION_LIMIT; i++) {
                 entries.add(hits.get(i).entry());
             }
+            // SuggestionProvider 增补聚合(§8.5):内置四档打分结果之后追加插件建议
+            appendProviderSuggestions(entries, searchProviders, new SuggestionProvider.SuggestRequest(
+                    workspaces.idOfRoot(sb.root().toString()), sb.root(), query, sb.display(dir)),
+                    MENTION_LIMIT, providerTimeoutMs);
         }
         ctx.ok(Json.obj().set("entries", entries));
+    }
+
+    // ---- SuggestionProvider 增补聚合(§8.5 能力接口) ----
+
+    /**
+     * 把插件 {@link SuggestionProvider} 的建议增补聚合进内置 @ 搜索结果(§8.5):实现该
+     * 能力接口的 provider 为空或内置结果已达上限({@code limit})时原样返回——零行为
+     * 变化;provider 建议按 order() 升序(同 order 保持注册先后)追加在内置四档打分
+     * 结果之后(调用方按 provider 各自返回序并入,建议项排序由 provider 自理),按
+     * {@code kind}+{@code path} 去重(kind 缺省归一 {@code file};多引擎命中同一路径
+     * 只计一条),总条数仍受截断约束(截断即终止 provider 循环——mention.query 应答无
+     * truncated 标志,与内置静默截断一致);单个 provider 抛异常/超出超时预算
+     * ({@code providerTimeoutMs},0 不限时)仅 WARN 跳过(经 {@link SearchProviderInvoker}
+     * 护栏,与 search 增补聚合同款接缝/默认值),不影响其余结果与应答;provider 返回
+     * null/空列表(或全部建议被去重)不加项。
+     *
+     * <p><b>统一模型增补字段(§8.5)</b>:provider 建议条目标记 {@code providerId}
+     * (建议项自带则尊重不覆盖,否则填 {@code provider.id()})与 {@code score}(仅
+     * provider 提供时携带);kind 由建议项自带(缺省归一 file)。内置四档打分条目不带
+     * 增补字段(形态不变)。
+     */
+    static void appendProviderSuggestions(ArrayNode entries, SearchProviderRegistry registry,
+            SuggestionProvider.SuggestRequest req, int limit, long providerTimeoutMs) {
+        List<SuggestionProvider> providers = registry.getSuggestionProviders();
+        if (providers.isEmpty() || entries.size() >= limit) {
+            return;
+        }
+        Set<String> seen = new HashSet<>();
+        for (JsonNode e : entries) {
+            seen.add(e.path("kind").asString("file") + "\u0000" + e.path("path").asString());
+        }
+        // 护栏(§8.5):单个 provider 抛异常/超出超时预算仅 WARN 跳过,不影响其余结果
+        SearchProviderInvoker invoker = new SearchProviderInvoker("mention.query", providerTimeoutMs);
+        outer:
+        for (SuggestionProvider provider : providers) {
+            List<SuggestionProvider.Suggestion> suggestions = invoker.invoke(provider,
+                    () -> provider.suggest(req));
+            if (suggestions == null) {
+                continue; // 护栏跳过(异常/超时)或 provider 合法返回 null
+            }
+            for (SuggestionProvider.Suggestion s : suggestions) {
+                if (s == null || s.path() == null || s.path().isBlank()) {
+                    continue;
+                }
+                if (entries.size() >= limit) {
+                    break outer; // 总条数仍截断(与内置静默截断一致,无标志位)
+                }
+                if (!seen.add(s.kind() + "\u0000" + s.path())) {
+                    continue;
+                }
+                entries.add(suggestionEntry(s.path(), s.kind(),
+                        SearchProvider.providerIdOr(s.providerId(), provider.id()), s.score()));
+            }
+        }
+    }
+
+    /**
+     * provider 建议的结果条目:形状与内置 {@link #entry} 一致({@code name} 取自 path
+     * 末段、{@code fullPath} = {@code /}+path);统一模型(§8.5)增补字段
+     * {@code providerId}(聚合方填 provider 声明 id,建议项自带则尊重)与 {@code score}
+     * (仅 provider 提供时携带)非空才输出;不探测磁盘存在性——索引型 provider 可
+     * 建议近期/未落盘路径,kind 由建议项自带(缺省 file)。
+     */
+    private static ObjectNode suggestionEntry(String rel, String kind, String providerId, Double score) {
+        ObjectNode o = Json.obj();
+        o.put("path", rel);
+        o.put("name", rel.contains("/") ? rel.substring(rel.lastIndexOf('/') + 1) : rel);
+        o.put("kind", kind);
+        o.put("fullPath", "/" + rel);
+        if (providerId != null && !providerId.isBlank()) {
+            o.put("providerId", providerId);
+        }
+        if (score != null) {
+            o.put("score", score);
+        }
+        return o;
     }
 
     /** 单条结果:工作区相对 path + name + kind + 业务绝对 fullPath(前端形态)。 */

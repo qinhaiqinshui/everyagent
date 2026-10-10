@@ -14,6 +14,12 @@ export type MarkdownComponentOptions = {
   resolveHeadingId?: (line: number) => string | undefined
   /** 图片渲染器；缺省时回退为原生 <img>。仅 preview 场景需要工作区上下文图片。 */
   renderImage?: (src: string, alt: string) => React.ReactNode
+  /**
+   * 链接点击接管：返回 true 表示已处理，渲染器拦截默认导航（改 hash / 新开标签页）。
+   * 仅无修饰键的左键单击回调（中键 / Ctrl 等修饰键保留浏览器原生行为，便于复制链接、新开标签）。
+   * 缺省时保持默认行为：页内锚点禁用跳转，其余链接按外部链接新窗口打开。
+   */
+  onLinkClick?: (href: string) => boolean
 }
 
 /** 统计列宽前剥离内联 markdown 语法（图片取 alt），避免语法符号干扰字符数占比。 */
@@ -188,19 +194,6 @@ const taskCheckedStyle: React.CSSProperties = {
   marginTop: 1,
 }
 
-const taskUncheckedStyle: React.CSSProperties = {
-  flexShrink: 0,
-  display: 'inline-flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  width: '1.2em',
-  height: '1.2em',
-  marginTop: 2,
-  borderRadius: 3,
-  border: '1.5px solid var(--border-strong, #888)',
-  boxSizing: 'border-box',
-}
-
 const previewHeadingStyles: Record<number, React.CSSProperties> = {
   1: { margin: '24px 0 12px', fontSize: 'var(--text-2xl)', fontWeight: 600, lineHeight: 1.3, color: 'var(--text-primary)', borderBottom: '1px solid var(--border)', paddingBottom: 8 },
   2: { margin: '20px 0 10px', fontSize: 'var(--text-xl)', fontWeight: 600, lineHeight: 1.35, color: 'var(--text-primary)' },
@@ -280,8 +273,17 @@ function buildWrapStyle(wrapLines: boolean | undefined): React.CSSProperties {
     : { whiteSpace: 'normal', wordBreak: 'break-word', overflowWrap: 'anywhere' }
 }
 
+/** 仅无修饰键的左键单击才接管链接导航；中键/修饰键保留浏览器原生行为。 */
+function isPlainLeftClick(event: React.MouseEvent<HTMLAnchorElement>): boolean {
+  return event.button === 0
+    && !event.metaKey
+    && !event.ctrlKey
+    && !event.shiftKey
+    && !event.altKey
+}
+
 export function buildMarkdownComponents(options: MarkdownComponentOptions): Components {
-  const { variant, wrapLines = true, resolveHeadingId, renderImage } = options
+  const { variant, wrapLines = true, resolveHeadingId, renderImage, onLinkClick } = options
   const s = variantStyles[variant]
   const wrap = buildWrapStyle(wrapLines)
 
@@ -391,14 +393,9 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
           </li>
         )
       }
-      // GFM 任务列表项：react-markdown 渲染成 <input type="checkbox" disabled checked>，
-      // 替换为彩色 ✓/◻ 图标，过滤掉原生 checkbox。
-      const childArray = React.Children.toArray(children)
-      const checkboxEl = childArray.find(
-        (child) => React.isValidElement(child) && (child as React.ReactElement<{ type?: string }>).props?.type === 'checkbox',
-      ) as React.ReactElement<{ checked?: boolean }> | undefined
-      const isChecked = checkboxEl?.props?.checked === true
-      const contentNodes = childArray.filter((child) => child !== checkboxEl)
+      // GFM 任务列表项：checkbox 由 input 渲染器统一替换为 ⬜/✅，
+      // 此处只负责去掉项目符号并按 flex 排列（紧凑列表时 checkbox 是 li 直接子节点，
+      // 松散列表时 checkbox 包在 li > p 内，两种情况都成立）。
       return (
         <li
           {...rest}
@@ -412,14 +409,18 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
             gap: 6,
           }}
         >
-          <span style={isChecked ? taskCheckedStyle : taskUncheckedStyle}>
-            {isChecked ? '✅' : ''}
-          </span>
-          <span style={{ flex: 1, minWidth: 0 }}>
-            {contentNodes}
-          </span>
+          {children}
         </li>
       )
+    },
+    input: (props: IntrinsicProps<'input'>) => {
+      const { type, checked } = props
+      const rest = stripNode(props)
+      // GFM 任务列表 checkbox：原生 disabled 样式是灰框灰勾，替换为 ⬜/✅ emoji。
+      if (type === 'checkbox') {
+        return <span style={taskCheckedStyle}>{checked ? '✅' : '⬜'}</span>
+      }
+      return <input {...rest} />
     },
     pre: PreBlock,
     code: (props: IntrinsicProps<'code'>) => {
@@ -437,21 +438,41 @@ export function buildMarkdownComponents(options: MarkdownComponentOptions): Comp
     a: (props: IntrinsicProps<'a'>) => {
       const { children, href } = props
       const rest = stripNode(props)
-      // 页内锚点链接(如目录 #xxx)：禁用点击跳转，导航由大纲面板承担；
-      // 否则 href="#xxx" 会被当外部链接开新窗口。
+      // 页内锚点链接(如目录 #xxx)：一律拦截浏览器默认跳转(改 hash 会扰动 SPA 路由)，
+      // 是否真正导航由 onLinkClick 决定(未提供时点击无动作，与旧行为一致——导航由大纲面板承担)。
       if (typeof href === 'string' && href.startsWith('#')) {
         return (
           <a
             {...rest}
             href={href}
-            style={{ ...baseLinkStyle, cursor: 'text' }}
-            onClick={(event) => event.preventDefault()}
+            style={{ ...baseLinkStyle, cursor: onLinkClick ? 'pointer' : 'text' }}
+            onClick={(event) => {
+              event.preventDefault()
+              if (!onLinkClick || !isPlainLeftClick(event)) return
+              onLinkClick(href)
+            }}
           >
             {children}
           </a>
         )
       }
-      return <a {...rest} href={href} target="_blank" rel="noopener noreferrer nofollow" style={baseLinkStyle}>{children}</a>
+      return (
+        <a
+          {...rest}
+          href={href}
+          target="_blank"
+          rel="noopener noreferrer nofollow"
+          style={baseLinkStyle}
+          onClick={(event) => {
+            if (!onLinkClick) return
+            if (typeof href !== 'string' || !href || !isPlainLeftClick(event)) return
+            // 接管方(如工作区文件链接)已处理时拦截默认新开标签页；未处理(返回 false)走浏览器默认。
+            if (onLinkClick(href)) event.preventDefault()
+          }}
+        >
+          {children}
+        </a>
+      )
     },
     strong: (props: IntrinsicProps<'strong'>) => {
       const { children } = props

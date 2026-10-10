@@ -1,38 +1,15 @@
 import React from 'react'
-import type { TaskTraceContent, TaskTraceRecord } from '@/types'
+import type { TraceContentRenderContext, TraceTypeDefinition } from '@everyagent/plugin-api'
 import { FileTextIcon, ShieldCheckIcon, type AppGlyphProps } from '@/components/shared/AppGlyphs'
 
-/** trace 详情渲染上下文。 */
-export interface TraceContentRenderContext {
-  /** 当前任务 ID。 */
-  taskId: string
-}
-
-/** trace 类型定义。 */
-export interface TraceTypeDefinition {
-  /** trace 类型 key。 */
-  kind: string
-  /** 渲染展开态内容。 */
-  renderContent?: (trace: TaskTraceRecord, ctx: TraceContentRenderContext) => React.ReactNode
-  /** 旧数据摘要适配器。 */
-  getSummary?: (trace: TaskTraceRecord) => string | undefined
-  /** 旧数据图标适配器。 */
-  getIcon?: (trace: TaskTraceRecord) => string | undefined
-  /** 收起态不渲染 title(如 request_retry:title 固定「请求重试」,与 summary 语义重复)。 */
-  hideTitle?: boolean
-  /**
-   * 是否允许展开(缺省 = trace.content 非空)。
-   * 数据承载在 metadata、content 为空但仍需展开卡片的 kind(如 auth.review)置 true。
-   */
-  canExpand?: (trace: TaskTraceRecord) => boolean
-}
+export type { TraceContentRenderContext, TraceTypeDefinition }
 
 const traceTypes = new Map<string, TraceTypeDefinition>()
 
 /** 判断值是否为可展示的结构化对象。 */
 function isStructuredContent(
-  content: TaskTraceContent | null | undefined,
-): content is Exclude<TaskTraceContent, string> {
+  content: unknown,
+): content is Record<string, unknown> {
   return typeof content === 'object' && content !== null
 }
 
@@ -59,7 +36,7 @@ export function resolveTraceIcon(icon?: string): React.ReactNode {
 }
 
 /** 把 trace content 转成通用文本；content 缺省时返回空串。 */
-export function stringifyTraceContent(content: TaskTraceContent | null | undefined): string {
+export function stringifyTraceContent(content: unknown): string {
   if (content == null) {
     return ''
   }
@@ -77,7 +54,10 @@ export function stringifyTraceContent(content: TaskTraceContent | null | undefin
 }
 
 /** 通用展开态渲染器。 */
-function renderFallbackContent(trace: TaskTraceRecord): React.ReactNode {
+function renderFallbackContent(trace: {
+  content?: unknown
+  summary?: string
+}): React.ReactNode {
   const text = stringifyTraceContent(trace.content).trim()
   if (!text) {
     return <span className="nagent-trace-shell__empty">（空追踪）</span>
@@ -105,6 +85,14 @@ export function registerTraceType(definition: TraceTypeDefinition): void {
     throw new Error('trace 类型 kind 不能为空')
   }
   traceTypes.set(definition.kind, definition)
+}
+
+/** 按 kind 注销 trace 类型（插件 dispose 侧路清理用）；返回是否确实移除。 */
+export function unregisterTraceType(kind: string): boolean {
+  if (!kind.trim()) {
+    return false
+  }
+  return traceTypes.delete(kind)
 }
 
 /** 按 kind 获取 trace 类型定义。 */

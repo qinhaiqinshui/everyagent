@@ -3,14 +3,18 @@ package dev.everyagent.worker;
 import dev.everyagent.contract.frame.Frames;
 import dev.everyagent.contract.ids.Ids;
 import dev.everyagent.contract.json.Json;
+import dev.everyagent.plugin.api.spi.TokenEstimator;
 import dev.everyagent.worker.config.WorkerProperties;
-import dev.everyagent.worker.task.ModelRateLimiterRegistry;
+import dev.everyagent.worker.plugin.registry.ChatModelEnhancerRegistry;
 import dev.everyagent.worker.hub.HubPool;
-import dev.everyagent.worker.network.NetworkToken;
+import dev.everyagent.plugin.api.slash.SlashCancelHandler;
+import dev.everyagent.plugin.api.slash.SlashCommandItem;
+import dev.everyagent.plugin.api.slash.SlashSelectionResult;
+import dev.everyagent.worker.modules.ConfigStore;
 import dev.everyagent.worker.modules.ConfigStore.ResolvedConfig;
-import dev.everyagent.worker.proto.Channels;
-import dev.everyagent.worker.slash.SlashTokenEncoder;
-import dev.everyagent.worker.task.ChatModelFactory;
+import dev.everyagent.plugin.api.event.Channels;
+import dev.everyagent.plugin.api.slash.SlashTokenEncoder;
+import dev.everyagent.worker.config.ChatModelFactory;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -44,6 +48,30 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.DEFINED_PORT)
 class WorkerIntegrationTest {
+
+    /** 测试用 TokenEstimator 桩:与原 ModelRateLimiter.estimateTokens 同口径,factor 恒 1.0。 */
+    private static final TokenEstimator STUB_ESTIMATOR = new TokenEstimator() {
+        @Override public long estimate(String text, String configId) { return rawTokens(text); }
+        @Override public void calibrate(String configId, long estimatedTokens, long actualTokens) { }
+        @Override public double factorOf(String configId) { return 1.0; }
+        @Override public long sampleCountOf(String configId) { return 0; }
+        private static long rawTokens(String s) {
+            if (s == null || s.isEmpty()) { return 0; }
+            long cjk = 0, other = 0;
+            for (int i = 0; i < s.length(); ) {
+                int cp = s.codePointAt(i);
+                i += Character.charCount(cp);
+                Character.UnicodeScript sc = Character.UnicodeScript.of(cp);
+                boolean isCjk = sc == Character.UnicodeScript.HAN
+                        || sc == Character.UnicodeScript.HIRAGANA
+                        || sc == Character.UnicodeScript.KATAKANA
+                        || sc == Character.UnicodeScript.HANGUL;
+                if (isCjk) { cjk++; }
+                else if (!Character.isWhitespace(cp) && !Character.isISOControl(cp)) { other++; }
+            }
+            return cjk + (other + 3) / 4;
+        }
+    };
 
     private static final String KEY = "test-key-1";
     private static final AtomicLong REQ = new AtomicLong();
@@ -79,8 +107,10 @@ class WorkerIntegrationTest {
 
         @Bean
         @Primary
-        ChatModelFactory fakeModelFactory(WorkerProperties props) {
-            return new ChatModelFactory(props, new ModelRateLimiterRegistry(props)) {
+        ChatModelFactory fakeModelFactory(WorkerProperties props,
+                ChatModelEnhancerRegistry enhancerRegistry,
+                ConfigStore configStore) {
+            return new ChatModelFactory(props, enhancerRegistry, configStore) {
                 @Override
                 public org.springframework.ai.chat.model.ChatModel build(ResolvedConfig cfg,
                         org.springframework.ai.openai.OpenAiChatOptions options, String agentId) {
@@ -170,6 +200,9 @@ class WorkerIntegrationTest {
     @Autowired
     HubPool pool;
 
+    @Autowired
+    dev.everyagent.worker.slash.SlashCommandRegistry slashRegistry;
+
     private final String k = Ids.ownerKey(KEY);
     private WsTestClient fe;
 
@@ -182,7 +215,7 @@ class WorkerIntegrationTest {
         }
         fe = WsTestClient.connect(URI.create("ws://127.0.0.1:" + PORT + "/fakehub"));
         hello(fe);
-        sub(fe, Channels.tasks(k));
+        sub(fe, Channels.tasks(k, workerProps.getWorkerId()));
         sub(fe, Channels.workerEvt(k, workerProps.getWorkerId()));
     }
 
@@ -213,11 +246,16 @@ class WorkerIntegrationTest {
 
         // done 后内存驱逐,sync = 纯磁盘回放:只有持久事件,seq 有洞(瞬态占 seq 不落盘)
         // 耗时不再发 task_duration trace,改为回填 rounds.jsonl(由 TaskRoundsRpcTest 覆盖)。
+        // per-run 生命周期(§7.20.1):agent.* 事件全部由 advisor 链在**本轮模型流**边界发射,
+        // 故 user.message(consumeInput 在内核之前消费输入)先于 agent.started;
+        // 终态顺序固定 error? → agent.done → agent.status{done}(台账 done 写 completed,
+        // 终态 status 必须后发才不被改判)。
         List<JsonNode> events = sync(taskId, 0);
         List<String> names = events.stream().map(e -> e.path("event").asString()).toList();
-        assertEquals(List.of("agent.status", "user.message", "message", "usage", "agent.status"),
+        assertEquals(List.of("user.message", "agent.started", "agent.status",
+                        "message", "usage", "agent.done", "agent.status"),
                 names,
-                "磁盘只留持久事件(agent.status 主 agent 开跑/终态,无耗时 trace): "
+                "磁盘只留持久事件(主 agent 一轮:输入→出生→running→message→usage→done→终态 status): "
                         + names);
         List<Long> seqs = events.stream().map(e -> e.path("seq").asLong()).toList();
         // seq 为雪花 ID(非自增从 1 起):只断言为正与严格递增;瞬态占 seq 不落盘 → 磁盘回放 seq 有洞合法。
@@ -235,8 +273,7 @@ class WorkerIntegrationTest {
         assertTrue(usageEv != null && usageEv.path("payload").has("total"), "usage 事件带 total 用量");
 
         // 磁盘布局:按 agent 分文件;每行带 agentId,无 ext null 字段。
-        // 注意:瞬态事件(如 thinking/delta)占 seq 但以短占位行 {"seq":N} 落盘(续号用,<30 字符),
-        // 读侧(readEvents)跳过短行 → 回放只见完整事件;故"完整事件行数 == 回放数",而非"总行数 == 回放数"。
+        
         JsonNode meta = readMeta(taskId);
         String mainAgentId = meta.path("mainAgentId").asString();
         assertTrue(mainAgentId.startsWith("a_"), mainAgentId);
@@ -334,8 +371,12 @@ class WorkerIntegrationTest {
     @Test
     void subAgentFlow() {
         String taskId = create("SUB:帮我查资料");
+        // 主 agent 现在也发 agent.started(per-run 出生,§7.20.1),所以取子 agent 的出生事件
+        // 必须按 payload.agentId 前缀筛——主 agent 的 wire payload 不带 agentId。
         JsonNode subStarted = syncUntil(taskId,
-                e -> e.path("event").asString().equals("agent.started"), "agent.started");
+                e -> e.path("event").asString().equals("agent.started")
+                        && e.path("payload").path("agentId").asString("").startsWith("sub_"),
+                "子 agent agent.started");
         String subId = subStarted.path("payload").path("agentId").asString();
         assertTrue(subId.startsWith("sub_"), subId);
         // 子 agent 权威输出 message(与主同名,靠 payload.agentId 区分归属;瞬态 delta 在快子
@@ -355,7 +396,9 @@ class WorkerIntegrationTest {
         assertNotNull(runAgentMsg, "主 message 带 run_agent 工具调用下发");
         String callId = runAgentMsg.path("payload").path("toolCalls").path(0).path("id").asString();
         JsonNode subDone = events.stream()
-                .filter(e -> e.path("event").asString().equals("agent.done")).findFirst().orElseThrow();
+                .filter(e -> e.path("event").asString().equals("agent.done")
+                        && subId.equals(e.path("payload").path("agentId").asString()))
+                .findFirst().orElseThrow();
         assertEquals(subId, subDone.path("payload").path("agentId").asString());
         JsonNode subMsg = events.stream()
                 .filter(e -> e.path("event").asString().equals("message")
@@ -754,55 +797,84 @@ class WorkerIntegrationTest {
                 "网络错误不得切换到池内模型(不得出现回声)");
     }
 
+    /** 合成 slash 条目的 id 与 kind(基础设施验收用,不绑任何业务命令)。 */
+    private static final String ITEST_ID = "itest:demo";
+    private static final String ITEST_KIND = "itest.demo";
+
+    /**
+     * slash 任务级 token 的 select → apply → cancel 往返(纯 slash 基础设施验收,与具体业务
+     * 命令解耦):测试自己向 {@code SlashCommandRegistry} 注册合成条目 {@code itest:demo}
+     * 「/禁用网络」这类业务命令现由各沙箱/功能插件自带,核心只提供注册与存储机制。
+     */
     @Test
     void slashTaskTokensApplyCancelRoundTrip() {
-        // 1. slash.list 应含 network:on 条目(入口存在)
-        String list = rpc("slash.list", "{}");
-        assertTrue(list.contains("\"network:on\""), "slash.list 缺少 network:on: " + list);
+        // 0. 注册合成条目(select 返回 bottom 胶囊,与业务插件命令同形态)
+        String opaque = SlashTokenEncoder.buildToken(ITEST_KIND, "测试命令", "合成条目",
+                Json.obj().put("enabled", true));
+        slashRegistry.registerProvider("itest", () -> List.of(new SlashCommandItem(
+                ITEST_ID, "测试命令", null, null, null, opaque,
+                (item, taskId) -> List.of(SlashSelectionResult.bottom(item.insertText())),
+                SlashCancelHandler.NOOP)));
 
-        // 2. 建真实任务并等终态落盘(meta 走磁盘真相源路径)
+        // 1. slash.list 应含合成条目(入口存在)
+        String list = rpc("slash.list", "{}");
+        assertTrue(list.contains("\"" + ITEST_ID + "\""), "slash.list 缺少 " + ITEST_ID + ": " + list);
+
+        // 2. 建真实任务并等终态落盘
         String taskId = create("你好,slash 任务");
         fe.await(t -> t.contains("\"event\":\"task.updated\"") && t.contains("\"status\":\"done\"")
                 && t.contains(taskId), "任务完成");
-        assertFalse(readMeta(taskId).has("slashTaskTokens")
-                        || readMeta(taskId).path("slashTaskTokens").size() > 0,
-                "初始任务不应有 slash 任务 token: " + readMeta(taskId));
+        assertTrue(readSlashTokens(taskId).isEmpty(),
+                "初始任务不应有 slash 任务 token: " + readSlashTokens(taskId));
 
         // 3. slash.select 不带 taskId → token + position=bottom;token payload 注入 slashId
-        String select = rpc("slash.select", Json.write(Json.obj().put("id", "network:on")));
+        String select = rpc("slash.select", Json.write(Json.obj().put("id", ITEST_ID)));
         JsonNode selectRes = Json.parse(select).path("payload").path("result").path("results").path(0);
         assertEquals("bottom", selectRes.path("position").asString(), "slash.select 应返回 bottom 位置: " + select);
         String token = selectRes.path("token").asString();
         assertNotNull(token, "slash.select 应返回 token: " + select);
         SlashTokenEncoder.ParsedToken parsed = SlashTokenEncoder.parseToken(token);
         assertNotNull(parsed, "返回的 token 应为合法 opaque: " + token);
-        assertEquals("network.access", parsed.kind(), "kind 应为 network.access");
-        assertEquals("network:on", parsed.payload().path("slashId").asString(),
+        assertEquals(ITEST_KIND, parsed.kind(), "kind 应为 " + ITEST_KIND);
+        assertEquals(ITEST_ID, parsed.payload().path("slashId").asString(),
                 "token payload 应注入 slashId: " + parsed.payload());
 
-        // 4. slash.taskTokens.apply 挂到任务 → applied=true
+        // 4. slash.taskTokens.apply 挂到任务 → applied=true + tokens 含该 token
         String apply = rpc("slash.taskTokens.apply", Json.write(Json.obj()
-                .put("taskId", taskId).put("id", "network:on").put("token", token)));
+                .put("taskId", taskId).put("id", ITEST_ID).put("token", token)));
         JsonNode applyRes = Json.parse(apply).path("payload").path("result");
         assertTrue(applyRes.path("applied").asBoolean(false), "apply 应 applied=true: " + apply);
+        JsonNode applyTokens = applyRes.path("tokens");
+        assertTrue(applyTokens.isArray() && applyTokens.size() == 1
+                        && token.equals(applyTokens.path(0).asString()),
+                "apply 返回 tokens 应恰好含该 token: " + applyTokens);
 
-        // 5. meta.slashTaskTokens 包含该 token(apply 落盘后 readMeta 即见)
-        JsonNode metaTokens = readMeta(taskId).path("slashTaskTokens");
-        assertTrue(metaTokens.isArray() && metaTokens.size() == 1
-                        && token.equals(metaTokens.path(0).asString()),
-                "meta 应恰好含该 token: " + metaTokens);
+        // 5. slash-tokens.json 包含该 token(apply 落盘后 readSlashTokens 即见)
+        JsonNode fileTokens = readSlashTokens(taskId);
+        assertTrue(fileTokens.isArray() && fileTokens.size() == 1
+                        && token.equals(fileTokens.path(0).asString()),
+                "slash-tokens.json 应恰好含该 token: " + fileTokens);
 
-        // 6. slash.cancel 移除 → removed=true
+        // 5b. slash.taskTokens.list 返回 tokens 含该 token
+        String listTokens = rpc("slash.taskTokens.list", Json.write(Json.obj().put("taskId", taskId)));
+        JsonNode listRes = Json.parse(listTokens).path("payload").path("result").path("tokens");
+        assertTrue(listRes.isArray() && listRes.size() == 1
+                        && token.equals(listRes.path(0).asString()),
+                "slash.taskTokens.list 应返回含该 token 的列表: " + listRes);
+
+        // 6. slash.cancel 移除 → removed=true + tokens 为空
         String cancel = rpc("slash.cancel", Json.write(Json.obj()
-                .put("id", "network:on").put("token", token).put("taskId", taskId)));
+                .put("id", ITEST_ID).put("token", token).put("taskId", taskId)));
         JsonNode cancelRes = Json.parse(cancel).path("payload").path("result");
         assertTrue(cancelRes.path("removed").asBoolean(false), "cancel 应 removed=true: " + cancel);
+        JsonNode cancelTokens = cancelRes.path("tokens");
+        assertTrue(cancelTokens.isArray() && cancelTokens.isEmpty(),
+                "cancel 返回 tokens 应为空: " + cancelTokens);
 
-        // 7. meta 不再含该 token(空数组字段会被移除更干净)
-        JsonNode meta2 = readMeta(taskId);
-        assertFalse(meta2.path("slashTaskTokens").isArray()
-                        && meta2.path("slashTaskTokens").size() > 0,
-                "取消后 meta 不应再有 slash 任务 token: " + meta2.path("slashTaskTokens"));
+        // 7. slash-tokens.json 不再含该 token
+        JsonNode fileTokens2 = readSlashTokens(taskId);
+        assertFalse(fileTokens2.isArray() && fileTokens2.size() > 0,
+                "取消后 slash-tokens.json 不应再有 slash 任务 token: " + fileTokens2);
     }
 
     // ---- 帮助方法 ----
@@ -962,6 +1034,19 @@ class WorkerIntegrationTest {
                     taskStore.dirOf(taskId).resolve("meta.json")));
         } catch (java.io.IOException e) {
             throw new AssertionError("meta 读取失败 task=" + taskId, e);
+        }
+    }
+
+    /** 读取 slash-tokens.json(slash 层自管存储;文件不存在视为空数组)。 */
+    private JsonNode readSlashTokens(String taskId) {
+        try {
+            java.nio.file.Path file = taskStore.dirOf(taskId).resolve("slash-tokens.json");
+            if (!Files.exists(file)) {
+                return Json.arr();
+            }
+            return Json.parse(Files.readString(file));
+        } catch (java.io.IOException e) {
+            throw new AssertionError("slash-tokens 读取失败 task=" + taskId, e);
         }
     }
 

@@ -1,0 +1,9 @@
+{
+  "id": "sandbox-windows-mic",
+  "name": "Windows MIC 沙箱",
+  "version": "0.1.0",
+  "description": "Windows 原生进程沙箱（Restricted Token + Medium IL + Job Object）",
+  "author": "everyagent",
+  "main": "dev.everyagent.plugin.sandbox.mic.WindowsMicSandboxPlugin",
+  "enabled": false
+}

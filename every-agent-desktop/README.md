@@ -50,6 +50,31 @@
 - hub → `<EVERYAGENT_HOME>/logs/hub.log`(由主进程生成的 desktop-hub.yml 指定 `logging.file.name`)
 - 进程 stdout/stderr → `<EVERYAGENT_HOME>/logs/{hub,worker}.out.log`(为空通常表示 java 进程未真正启动,
   需配合 `desktop.log` 查看 spawn 是否失败/健康检查是否超时)
+- **安装/卸载器 → `<EVERYAGENT_HOME>/logs/uninstall.log`(安装与卸载共用,追加式)**:
+  `build/installer.nsh` 在 NSIS 安装/卸载器的各阶段(`customInit`/`customUnInstallCheck`/`customInstall`/
+  `customInstallmode`/`customUnInit`/`customRemoveFiles`/`customUnInstall`)各写一行带时间戳的日志,
+  用于排查「卸载器一秒内退出并提示成功,但安装目录/快捷方式/沙箱账户全部残留」的问题。解读:
+  - 卸载后**没有任何 `uninstaller un.onInit done` 新行** → 卸载器进程在初始化完成前就异常退出
+    (NSIS 自拷贝到 `%TEMP%\~nsu.tmp` 或壳层阶段失败;可配合「事件查看器 → Windows 日志 → 应用程序」的
+    应用错误/WER 记录与杀软排查)。
+  - 有 `un.onInit done` 但没有 `un.install section` 行 → 向导页面中途退出(用户取消/模式选择页异常)。
+  - 有 `removing files` 且 `INSTDIR STILL CONTAINS FILES` → 删除被文件占用打断(如 worker javaw 未退出)。
+  - 卸载务必走「设置→应用→卸载」或安装目录下的 `Uninstall Every Agent.exe` 直接双击,不要自带参数。
+  - `delete-probe` 行:卸载器初始化时对 INSTDIR 做真实删除权探针;`FAILED -> relaunching ELEVATED` 表示检测到
+    「管理员身份安装 + 普通身份卸载」错配,已自动弹 UAC 以管理员重跑;`FAILED even after elevated retry` 则强烈
+    提示有安全软件在拦截删除操作(此时请查杀软的拦截记录)。
+  - `forensic walk` 行:RMDir 失败后逐项枚举 INSTDIR 顶层条目并记录前 30 个删除失败项,用于区分「被锁」与「拒绝访问」。
+  - `installer account type`:安装时若为 Admin(提权安装),产物文件/快捷方式/注册表将归 Administrators 所有,
+    是「卸载删不动」一类问题的常见源头。
+  - `installer real user`:安装器进程令牌里的真实用户名(UserInfo::GetName,免疫环境变量伪装)。若与当前登录
+    用户不符,说明安装器跑在别的账户/沙箱上下文里,注册表与快捷方式会写进那个账户——对当前用户即表现为
+    「装完了却什么都没有」。
+  - `registry write probe`:安装开始时对安装注册表键做真实写读测试;失败且非静默、非提权时,安装器会带
+    `/eaNoElevate` 守护参数自动弹 UAC 提权重跑一次(自愈「普通安装静默丢失注册表/快捷方式」)。
+  - 已知坑:管理员身份装过的版本,其文件归 Administrators 所有,之后普通身份覆盖安装会因无法写入旧文件而失败
+    (典型报错:无法写入 Uninstall Every Agent.exe)。处理:先用管理员卸载旧版本,再普通安装即可;此后一直用普通
+    安装则不会再遇到。
+
 
 ## 构建与打包
 

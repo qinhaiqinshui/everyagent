@@ -1,7 +1,6 @@
 package dev.everyagent.worker.tools.permission;
 
 import dev.everyagent.worker.modules.WorkspaceManager;
-import dev.everyagent.worker.task.TaskEntry;
 
 import org.springframework.stereotype.Component;
 
@@ -29,17 +28,16 @@ public class ExternalRootAllowCheck implements PermissionCheck {
     }
 
     @Override
-    public PermissionDecision check(PermissionContext ctx) {
-        if (ctx.realPath() == null || ctx.task() == null) {
-            return PermissionDecision.skip();
+    public PermissionDecision invoke(PermissionContext ctx, PermissionChain next) {
+        if (ctx.realPath() == null || ctx.workspaceRoot() == null) {
+            return next.proceed(ctx);
         }
-        TaskEntry t = ctx.task();
-        List<Path> roots = workspaces.externalRootsOf(t.workspaceRoot); // 未注册返回空列表
+        List<Path> roots = workspaces.externalRootsOf(ctx.workspaceRoot()); // 未注册返回空列表
         for (Path root : roots) {
             if (ctx.realPath().startsWith(root)) {
                 return PermissionDecision.allow("外部授权根放行: " + root);
             }
         }
-        return PermissionDecision.skip();
+        return next.proceed(ctx);
     }
 }

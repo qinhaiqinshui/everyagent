@@ -21,9 +21,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class EventsSchemaTest {
 
-    /** 合法 stream 频道:u.<64 位 hex>.task.<workerId>.stream。 */
+    /** 合法 stream 频道:u.&lt;64 位 hex&gt;.worker.&lt;workerId&gt;.task.&lt;taskId&gt;.stream(worker 段 = 归属隔离)。 */
     private static final String STREAM_CHANNEL =
-            "u." + "0123456789abcdef".repeat(4) + ".task.demo.stream";
+            "u." + "0123456789abcdef".repeat(4) + ".worker.company-pc.task.demo.stream";
+
+    /** 合法 tasks 频道:u.&lt;64 位 hex&gt;.worker.&lt;workerId&gt;.tasks。 */
+    private static final String TASKS_CHANNEL =
+            "u." + "0123456789abcdef".repeat(4) + ".worker.company-pc.tasks";
 
     private static Schema schema() {
         try (InputStream in = EventsSchemaTest.class
@@ -140,5 +144,70 @@ class EventsSchemaTest {
                 }
                 """.formatted(STREAM_CHANNEL);
         assertFalse(validate(json).isEmpty(), "缺 traceId/kind 的 task.trace 应校验失败");
+    }
+
+    @Test
+    void taskUpdatedWithWorkerIdPasses() {
+        // tasks 事件:worker 段频道 + payload.workerId 必填(架构 §5.2/§5.3)
+        String json = """
+                {
+                  "channel": "%s",
+                  "event": "task.updated",
+                  "payload": {
+                    "taskId": "t_k3f0",
+                    "workerId": "company-pc",
+                    "status": "running",
+                    "createdAt": 1756000000000
+                  }
+                }
+                """.formatted(TASKS_CHANNEL);
+        List<Error> errors = validate(json);
+        assertTrue(errors.isEmpty(), "合法 task.updated 应通过校验: " + errors);
+    }
+
+    @Test
+    void taskUpdatedMissingWorkerIdFails() {
+        // payload 缺 workerId → 归属不可判定,必须拒绝(worker 实现曾漏发该字段)
+        String json = """
+                {
+                  "channel": "%s",
+                  "event": "task.updated",
+                  "payload": { "taskId": "t_k3f0", "status": "running", "createdAt": 1756000000000 }
+                }
+                """.formatted(TASKS_CHANNEL);
+        assertFalse(validate(json).isEmpty(), "缺 workerId 的 task.updated 应校验失败");
+    }
+
+    @Test
+    void ownerKeyLevelTasksChannelRejected() {
+        // 回归锁:旧形态 u.<K>.tasks(无 worker 段)不再合法 —— 同 apiKey 两台 worker 会互相串台
+        String legacyChannel = "u." + "0123456789abcdef".repeat(4) + ".tasks";
+        String json = """
+                {
+                  "channel": "%s",
+                  "event": "task.updated",
+                  "payload": {
+                    "taskId": "t_k3f0",
+                    "workerId": "company-pc",
+                    "status": "running",
+                    "createdAt": 1756000000000
+                  }
+                }
+                """.formatted(legacyChannel);
+        assertFalse(validate(json).isEmpty(), "无 worker 段的 tasks 频道应校验失败");
+    }
+
+    @Test
+    void streamChannelWithoutWorkerSegmentRejected() {
+        // 回归锁:旧形态 u.<K>.task.<id>.stream(无 worker 段)不再合法 —— hub 的订阅通知无法定向
+        String legacyChannel = "u." + "0123456789abcdef".repeat(4) + ".task.demo.stream";
+        String json = """
+                {
+                  "channel": "%s",
+                  "event": "message",
+                  "payload": { "text": "hi" }
+                }
+                """.formatted(legacyChannel);
+        assertFalse(validate(json).isEmpty(), "无 worker 段的 stream 频道应校验失败");
     }
 }

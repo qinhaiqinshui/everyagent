@@ -12,7 +12,6 @@ import {
   submitRuntimeUserInteractionResult,
 } from '@/hub/askStore'
 import {
-  USER_INTERACTION_OTHER_OPTION_ID,
   type UserInteractionOption,
   type UserInteractionQuestion,
   type UserInteractionQuestionAnswer,
@@ -23,12 +22,10 @@ import {
  * 全局用户交互宿主。
  * 负责承接 ask_user 这类系统级交互请求，并把回答提交回运行时。
  *
- * 支持的交互形态：
- * - 多问题单选题（request.questions）：一次交互逐题展示（每弹窗只显示一题），每题单选，均含「其他」输入框；
- * - 单问题单选题（responseMode single_choice + options）：内部确认场景（如超限询问，无「其他」）；
- * - 确认（responseMode confirm）：内部授权场景。
- * - 授权（responseMode authorization）：危险操作授权三选一（拒绝 / 本轮运行内允许 / 本任务全程允许），
- *   答案以稳定 token（deny/run/task）经 ask.reply 回传 worker PermissionGate。
+ * 支持的交互形态（纯数据驱动，按 option.type 渲染）：
+ * - 多问题单选题（request.questions）：一次交互逐题展示（每弹窗只显示一题），每题单选；
+ *   选项 type="radio" 为单选项，type="input" 选中后显示自由输入框。
+ * - 旧格式兼容（磁盘回放）：question + options(string[]) 合成单问题，自动追加 input 类型「其他」。
  */
 export default function UserInteractionHost() {
   const { showToast } = useAppUi()
@@ -49,25 +46,11 @@ export default function UserInteractionHost() {
   const [submitting, setSubmitting] = React.useState(false)
 
   /**
-   * 解析出待渲染的单选题列表：
-   * - questions 存在 → 多问题单选题（ask_user 主路径）；
-   * - 否则 single_choice → 合成单问题（内部「继续/中止」等确认场景，options 不含「其他」）。
-   * authorization（危险操作授权）不走问题表单，返回空（底部三按钮直接作答）。
+   * 解析出待渲染的单选题列表：只走 questions 路径（新协议纯数据驱动）。
    */
   const resolveQuestions = React.useCallback((currentRequest: UserInteractionRequest): UserInteractionQuestion[] => {
-    if (currentRequest.responseMode === 'authorization') {
-      return []
-    }
     if (currentRequest.questions && currentRequest.questions.length > 0) {
       return currentRequest.questions
-    }
-    if (currentRequest.responseMode === 'single_choice') {
-      return [{
-        id: 'question_1',
-        prompt: currentRequest.prompt,
-        details: currentRequest.details,
-        options: currentRequest.options ?? [],
-      }]
     }
     return []
   }, [])
@@ -187,8 +170,12 @@ export default function UserInteractionHost() {
       const selectedOptions = selectedIds
         .map((id) => question.options.find((option) => option.id === id))
         .filter((option): option is UserInteractionOption => Boolean(option))
-        .map((option) => ({ id: option.id, label: option.label, description: option.description }))
-      const otherSelected = selectedIds.includes(USER_INTERACTION_OTHER_OPTION_ID)
+        .map((option) => ({ id: option.id, label: option.label, value: option.value, description: option.description }))
+      // input 类型选项被选中 → otherSelected
+      const otherSelected = selectedOptions.some((option) => {
+        const full = question.options.find((o) => o.id === option.id)
+        return full?.type === 'input'
+      })
       return {
         questionId: question.id,
         prompt: question.prompt,
@@ -201,14 +188,19 @@ export default function UserInteractionHost() {
   }, [questionOtherTexts, questionSelections, resolveQuestions])
 
   /**
-   * 判断单个问题是否已完整作答：必须已选一项；选「其他」时必须填写自定义内容。
+   * 判断单个问题是否已完整作答：必须已选一项；选 input 类型选项时必须填写自定义内容。
    */
   const isQuestionAnswered = React.useCallback((question: UserInteractionQuestion): boolean => {
     const selectedIds = questionSelections[question.id] ?? []
     if (selectedIds.length === 0) {
       return false
     }
-    if (selectedIds.includes(USER_INTERACTION_OTHER_OPTION_ID) && !(questionOtherTexts[question.id] ?? '').trim()) {
+    // 检查是否有 input 类型选项被选中
+    const inputSelected = selectedIds.some((id) => {
+      const opt = question.options.find((o) => o.id === id)
+      return opt?.type === 'input'
+    })
+    if (inputSelected && !(questionOtherTexts[question.id] ?? '').trim()) {
       return false
     }
     return true
@@ -224,41 +216,12 @@ export default function UserInteractionHost() {
   /**
    * 提交当前交互结果。
    */
-  const submitCurrentRequest = React.useCallback(async (override?: { confirmed?: boolean; authorizeOption?: string }) => {
+  const submitCurrentRequest = React.useCallback(async () => {
     if (!request || !activeInteractionId) {
       return
     }
     try {
       setSubmitting(true)
-      // 确认模式：走 override 的确认结果
-      if (request.responseMode === 'confirm') {
-        if (typeof override?.confirmed !== 'boolean') {
-          throw new Error('缺少确认结果')
-        }
-        submitRuntimeUserInteractionResult(activeInteractionId, {
-          responseMode: 'confirm',
-          confirmed: override.confirmed,
-          raw: {
-            confirmed: override.confirmed,
-          },
-        })
-        closeDialog()
-        return
-      }
-      // 授权模式：三选一(run/task/deny),以稳定 token 回传
-      if (request.responseMode === 'authorization') {
-        const optionId = override?.authorizeOption ?? 'deny'
-        submitRuntimeUserInteractionResult(activeInteractionId, {
-          responseMode: 'authorization',
-          selectedOptionIds: [optionId],
-          raw: {
-            authorizeOption: optionId,
-          },
-        })
-        closeDialog()
-        return
-      }
-
       // 选择题（单问题/多问题）
       const questions = resolveQuestions(request)
       if (questions.length === 0) {
@@ -278,18 +241,9 @@ export default function UserInteractionHost() {
         return
       }
       const answers = buildAnswers(request)
-      // 内部单问题单选题（如超限「继续/中止」）读 selectedOptionIds 判断，需回填兼容
-      const isLegacySingleChoice = questions.length === 1 && request.responseMode === 'single_choice'
       submitRuntimeUserInteractionResult(activeInteractionId, {
-        ...(isLegacySingleChoice ? {
-          responseMode: request.responseMode,
-          selectedOptionIds: answers[0].selectedOptionIds,
-        } : {}),
         answers,
-        raw: {
-          ...(isLegacySingleChoice ? { selectedOptionIds: answers[0].selectedOptionIds } : {}),
-          answers,
-        },
+        raw: { answers },
       })
       closeDialog()
     } catch (error) {
@@ -313,23 +267,6 @@ export default function UserInteractionHost() {
     setCurrentQuestionIndex((index) => index + 1)
   }, [])
 
-  /**
-   * 主按钮动作（选择题路径）：
-   * - 多问题且非最后一题 → 直接进入下一题（不强制作答当前题）；
-   * - 最后一题 / 单问题 → 提交整个交互（提交时统一校验所有题）。
-   */
-  const handlePrimaryAction = React.useCallback(() => {
-    if (!request) {
-      return
-    }
-    const questions = resolveQuestions(request)
-    if (questions.length > 1 && currentQuestionIndex < questions.length - 1) {
-      setCurrentQuestionIndex((index) => index + 1)
-      return
-    }
-    void submitCurrentRequest()
-  }, [currentQuestionIndex, request, resolveQuestions, submitCurrentRequest])
-
   if (!request) {
     return null
   }
@@ -337,24 +274,18 @@ export default function UserInteractionHost() {
   const questions = resolveQuestions(request)
   const dialogTitle = request.prompt || questions[0]?.prompt || 'AI 等待你的回答'
   const currentQuestion = questions[currentQuestionIndex] ?? null
-  // 选择题路径：头部标题展示当前题目的问题文本；确认/授权等无 questions 时回落为请求主问题。
+  // 头部标题展示当前题目的问题文本。
   const headerTitle = currentQuestion ? currentQuestion.prompt : dialogTitle
   // 多问题逐题展示：问题进度放在头部标题行右侧。
   const headerExtra = questions.length > 1
     ? `问题 ${currentQuestionIndex + 1} / ${questions.length}`
     : undefined
-  const isConfirmMode = request.responseMode === 'confirm'
-  const isAuthorizationMode = request.responseMode === 'authorization'
-  const authOption = (id: 'deny' | 'run' | 'task') =>
-    request.options?.find((option) => option.id === id)
   const currentSelectedIds = currentQuestion ? (questionSelections[currentQuestion.id] ?? []) : []
-  const otherSelected = currentSelectedIds.includes(USER_INTERACTION_OTHER_OPTION_ID)
-  const otherOption = currentQuestion?.options.find((option) => option.id === USER_INTERACTION_OTHER_OPTION_ID)
+  // input 类型选项被选中 → 显示输入框
+  const selectedOption = currentQuestion?.options.find((o) => currentSelectedIds.includes(o.id))
+  const otherSelected = selectedOption?.type === 'input'
+  const otherOption = currentQuestion?.options.find((option) => option.type === 'input')
   const isLastQuestion = currentQuestionIndex >= questions.length - 1
-  // 多问题逐题展示：非最后一题主按钮为「下一题」，最后一题/单问题为「提交回答」
-  const primaryLabel = isConfirmMode
-    ? (request.submitLabel ?? '确认')
-    : (questions.length > 1 && !isLastQuestion ? '下一题' : (request.submitLabel ?? '提交回答'))
 
   return (
     <ConfirmDialog
@@ -362,62 +293,12 @@ export default function UserInteractionHost() {
       title={headerTitle}
       headerExtra={headerExtra}
       icon={<QuestionMarkIcon size={16} />}
-      subtitle={isAuthorizationMode ? '请选择授权生效范围（拒绝即取消该操作）' : undefined}
       message={request.details}
-      confirmLabel={primaryLabel}
-      cancelLabel="稍后再答"
       hideDefaultMessageBlock={!request.details}
       onCancel={closeDialog}
-      onConfirm={isConfirmMode ? () => submitCurrentRequest() : handlePrimaryAction}
-      actions={isConfirmMode ? (
-        <div style={confirmActionRowStyle}>
-          <Button variant="secondary" onClick={closeDialog}>
-            稍后再答
-          </Button>
-          <Button
-            variant="secondary"
-            onClick={() => { void submitCurrentRequest({ confirmed: false }) }}
-            disabled={submitting}
-          >
-            否
-          </Button>
-          <Button
-            variant="primary"
-            onClick={() => { void submitCurrentRequest({ confirmed: true }) }}
-            disabled={submitting}
-          >
-            {request.submitLabel ?? '确认'}
-          </Button>
-        </div>
-      ) : isAuthorizationMode ? (
-        <div style={confirmActionRowStyle}>
-          <Button variant="secondary" onClick={closeDialog}>
-            稍后再答
-          </Button>
-          <Button
-            variant="danger"
-            onClick={() => { void submitCurrentRequest({ authorizeOption: 'deny' }) }}
-            disabled={submitting}
-          >
-            {authOption('deny')?.label ?? '拒绝'}
-          </Button>
-          <Button
-            variant="secondary"
-            onClick={() => { void submitCurrentRequest({ authorizeOption: 'run' }) }}
-            disabled={submitting}
-          >
-            {authOption('run')?.label ?? '本轮运行内允许'}
-          </Button>
-          <Button
-            variant="primary"
-            onClick={() => { void submitCurrentRequest({ authorizeOption: 'task' }) }}
-            disabled={submitting}
-          >
-            {authOption('task')?.label ?? '本任务全程允许'}
-          </Button>
-        </div>
-      ) : questions.length > 1 ? (
-        // 多问题逐题展示：可自由切换上一题/下一题（不校验当前题是否已答），最后一题提交时统一校验。
+      confirmLabel={request.submitLabel ?? '提交回答'}
+      onConfirm={() => { void submitCurrentRequest() }}
+      actions={
         <div style={questionNavRowStyle}>
           <Button variant="secondary" onClick={closeDialog} disabled={submitting}>
             稍后再答
@@ -444,7 +325,7 @@ export default function UserInteractionHost() {
             </Button>
           )}
         </div>
-      ) : undefined}
+      }
       body={(
         <div style={bodyStyle}>
           {request.constraints && request.constraints.length > 0 ? (
@@ -459,6 +340,13 @@ export default function UserInteractionHost() {
           {currentQuestion ? (
             <React.Fragment key={currentQuestion.id}>
               {currentQuestion.details ? <div style={questionDetailsStyle}>{currentQuestion.details}</div> : null}
+              {currentQuestion.fields && Object.keys(currentQuestion.fields).length > 0 ? (
+                <div style={infoBlockStyle}>
+                  {Object.entries(currentQuestion.fields).map(([label, value]) => (
+                    <div key={label} style={infoLineStyle}>{label}: {value}</div>
+                  ))}
+                </div>
+              ) : null}
               <div style={optionListStyle}>
                 {currentQuestion.options.map((option) => {
                   const checked = currentSelectedIds.includes(option.id)
@@ -482,7 +370,7 @@ export default function UserInteractionHost() {
                   type="text"
                   value={questionOtherTexts[currentQuestion.id] ?? ''}
                   onChange={(event) => updateQuestionOtherText(currentQuestion.id, event.target.value)}
-                  placeholder={currentQuestion.otherPlaceholder ?? `请输入${otherOption?.label ?? '其他'}内容`}
+                  placeholder={`请输入${otherOption?.label ?? '其他'}内容`}
                 />
               ) : null}
             </React.Fragment>
@@ -561,13 +449,6 @@ const optionDescriptionStyle: React.CSSProperties = {
   fontSize: 'var(--text-xs)',
   lineHeight: 1.6,
   color: 'var(--text-secondary)',
-}
-
-const confirmActionRowStyle: React.CSSProperties = {
-  display: 'flex',
-  justifyContent: 'flex-end',
-  gap: 10,
-  width: '100%',
 }
 
 const questionNavRowStyle: React.CSSProperties = {

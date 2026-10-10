@@ -3,7 +3,7 @@ package dev.everyagent.worker.modules;
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.hub.HubLink;
-import dev.everyagent.worker.proto.Channels;
+import dev.everyagent.plugin.api.event.Channels;
 import dev.everyagent.worker.proto.RpcMethods;
 import dev.everyagent.worker.rpc.RpcDispatcher;
 import org.junit.jupiter.api.BeforeEach;
@@ -43,9 +43,9 @@ class FsBrowseTest {
 
     @BeforeEach
     void setUp() {
-        // browse 不经 workspace 沙箱,WorkspaceManager/HubPool 不参与(FsService 构造仅注册方法)
+        // browse 不经 workspace 沙箱,WorkspaceManager/HubPool/GrantRegistry 不参与(FsService 构造仅注册方法)
         dispatcher = new RpcDispatcher(null, new WorkerProperties());
-        new FsService(dispatcher, null, null, new WorkerProperties());
+        new FsService(dispatcher, null, null, new WorkerProperties(), null);
     }
 
     /** 造一个含 2 个子目录 + 2 个文件的目录,文件名穿插在目录名之间以验证按文件名混排。 */

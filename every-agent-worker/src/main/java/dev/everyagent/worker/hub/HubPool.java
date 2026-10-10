@@ -1,7 +1,7 @@
 package dev.everyagent.worker.hub;
 
 import dev.everyagent.worker.config.WorkerProperties;
-import dev.everyagent.worker.proto.Channels;
+import dev.everyagent.plugin.api.event.Channels;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
@@ -11,21 +11,24 @@ import tools.jackson.databind.JsonNode;
 
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.Function;
 
 /**
  * 多 hub 注册池:worker 可同时挂到 N 个 hub(每 {url, apiKey, hubKey} 一条独立连接/重连循环)。
  *
  * <p>输出路由(hub 不感知业务,路由在 worker 侧):
  * <ul>
- * <li>任务事件(tasks 通知/stream)→ {@link #pubAllTasks}:广播到所有连接的 tasks 频道
- *     (apiKey 只认证、不决定业务归属,不做 owner 隔离);</li>
+ * <li>任务事件(tasks 通知/stream)→ {@link #pubAllTasks}:广播到所有连接的
+ *     <b>本 worker 的</b> tasks 频道 {@code u.<K>.worker.<workerId>.tasks}
+ *     (apiKey 只认证、不决定业务归属,不做 owner 隔离;但 worker 段必填 ——
+ *     同一 apiKey 下多台 worker 各归各的频道,前端才能无歧义判定归属,§5.2);</li>
  * <li>RPC 应答 → 请求来源连接(RpcContext 绑定 conn,前端只听自己 hub 的 evt 频道);</li>
  * <li>evt 频道通知(config/fs/workspaces.changed)→ {@link #broadcastEvt}:每条连接各自的 evt 频道。</li>
  * </ul>
  * 单连接故障不影响其余;全断时任务照跑落盘(磁盘是真相源),重连后前端 sync 补齐。
  */
 @Component
-public class HubPool {
+public class HubPool implements EventSink {
 
     /** 池级监听器:回调携带来源连接。 */
     public interface Listener {
@@ -138,28 +141,49 @@ public class HubPool {
         }
     }
 
-    /** 任务事件广播:发到每条连接各自的 tasks 频道(全部连接可见,不做 owner 扇出)。 */
-    public void pubAllTasks(String event, Long seq, JsonNode payload, JsonNode ext) {
-        for (HubLink c : conns) {
-            c.pub(Channels.tasks(c.k()), event, seq, payload, ext);
-        }
+    /**
+     * 本机 workerId(= 与 hub 握手 hello 的 clientId,见 {@link HubLink})。
+     *
+     * <p>发布者身份,供 {@code fanout} 的 channelNamer 构造带 worker 段的频道
+     * ({@code Channels.tasks(k, workerId())}):同一 apiKey 下多台 worker 的任务事件
+     * 因此各归各的频道,不再混进彼此的前端列表(架构 §4.3/§5.2)。
+     */
+    @Override
+    public String workerId() {
+        return props.getWorkerId();
     }
 
-    /** evt 频道通知:每条连接各自命名空间下的 worker evt 频道(任意 hub 上的前端都能收到)。 */
-    public void broadcastEvt(String event, JsonNode payload) {
+    /** 通用扇出:对每条连接,用其 ownerKey 经 channelNamer 构造频道名后发送(见 {@link EventSink})。 */
+    @Override
+    public void fanout(Function<String, String> channelNamer, String event, Long seq, JsonNode payload, JsonNode ext) {
         for (HubLink c : conns) {
-            c.pub(Channels.workerEvt(c.k(), c.workerId()), event, null, payload, null);
+            c.pub(channelNamer.apply(c.k()), event, seq, payload, ext);
         }
     }
 
     /**
-     * 任务 stream 频道广播:发到每条连接各自命名空间下的 task stream 频道
-     * (所有已订阅该任务 stream 的前端都能收到;不设 ext.target = 非定向,全量投递)。
+     * 任务事件广播:发到每条连接各自命名空间下的 **本 worker 的** tasks 频道
+     * ({@code u.<K>.worker.<workerId>.tasks};跨 hub 全连接可见,不做 owner 扇出)。
+     */
+    public void pubAllTasks(String event, Long seq, JsonNode payload, JsonNode ext) {
+        String wid = props.getWorkerId();
+        fanout(k -> Channels.tasks(k, wid), event, seq, payload, ext);
+    }
+
+    /** evt 频道通知:每条连接各自命名空间下的 worker evt 频道(任意 hub 上的前端都能收到)。 */
+    public void broadcastEvt(String event, JsonNode payload) {
+        String wid = props.getWorkerId();
+        fanout(k -> Channels.workerEvt(k, wid), event, null, payload, null);
+    }
+
+    /**
+     * 任务 stream 频道广播:发到每条连接各自命名空间下、**本 worker 的** task stream 频道
+     * ({@code u.<K>.worker.<workerId>.task.<taskId>.stream};所有已订阅该任务 stream 的前端都能收到,
+     * 不设 ext.target = 非定向,全量投递)。
      * 用于消息编辑等同步事件(任务非运行时无 DataPusher,直接 pub)。
      */
     public void pubTaskStream(String taskId, String event, JsonNode payload) {
-        for (HubLink c : conns) {
-            c.pub(Channels.taskStream(c.k(), taskId), event, null, payload, null);
-        }
+        String wid = props.getWorkerId();
+        fanout(k -> Channels.taskStream(k, wid, taskId), event, null, payload, null);
     }
 }

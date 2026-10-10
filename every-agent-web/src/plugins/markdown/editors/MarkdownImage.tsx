@@ -4,12 +4,12 @@
  * 渲染 `![alt](src)`:
  * - `http(s):`/`data:` 等外部 URL 直接作为 <img src>;
  * - 其余按「相对当前 md 文件所在目录」解析为工作区相对路径,经 workspaceGateway
- *   读取二进制 → data URL 后渲染(与图片文件编辑器同一 MIME/上限体系)。
+ *   读取二进制(fs.readRaw,不经沙箱;用户操作非 AI 工具) → data URL 后渲染
  * - 无 workspace 上下文时(且非外部 URL)显示无法加载提示,不抛错。
  */
 import React from 'react'
 import { workspaceGateway } from '@/platform/fs/workspaceGateway'
-import { normalizeWorkspaceRelativePath } from '@/platform/fs/pathUtils'
+import { resolveWorkspaceRelativePath } from '@/platform/fs/pathUtils'
 import { bytesToDataUrl, imageMimeOf, isImageFileName } from '@/utils/imageAsset'
 
 type MarkdownImageProps = {
@@ -57,7 +57,7 @@ export default function MarkdownImage({ src, alt, workspaceRoot, baseDir }: Mark
     }
 
     setState({ status: 'loading' })
-    workspaceGateway.readBinaryFile(workspaceRoot, rel)
+    workspaceGateway.readBytesRaw(workspaceRoot, rel)
       .then((bytes) => {
         if (cancelled) return
         setState({ status: 'ready', url: bytesToDataUrl(bytes, imageMimeOf(rel)) })
@@ -97,22 +97,8 @@ export default function MarkdownImage({ src, alt, workspaceRoot, baseDir }: Mark
   )
 }
 
-/**
- * 把「baseDir 相对 src」合并为工作区相对路径,并防 `..` 越出工作区根。
- * 路径坐标系统一为工作区相对路径(无前导 /)。
- */
-function resolveWorkspaceRelativePath(baseDir: string, target: string): string {
-  const segments = normalizeWorkspaceRelativePath(baseDir).split('/').filter(Boolean)
-  for (const part of normalizeWorkspaceRelativePath(target).split('/').filter(Boolean)) {
-    if (part === '.') continue
-    if (part === '..') {
-      segments.pop()
-      continue
-    }
-    segments.push(part)
-  }
-  return segments.join('/')
-}
+// 相对路径合并(resolveWorkspaceRelativePath)已抽出至 @/platform/fs/pathUtils,
+// 与 markdown 文件链接共用同一解析。
 
 const imageStyle: React.CSSProperties = {
   maxWidth: '100%',

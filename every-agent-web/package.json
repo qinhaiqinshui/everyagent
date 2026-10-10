@@ -1,11 +1,13 @@
 {
   "name": "every-agent-web",
-  "version": "0.11.0",
+  "version": "1.0.0",
   "private": true,
   "description": "every-agent 前端:n 分支 UI 壳接入 hub 管道(任务/文件树/git)",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "build": "tsc && vite build",
+    "build:plugins": "node scripts/build-plugins.mjs",
+    "watch:plugins": "node scripts/build-plugins.mjs --watch",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit"
   },
@@ -38,10 +40,12 @@
     "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
+    "@everyagent/plugin-api": "file:../every-agent-plugin-api/js",
     "@types/prismjs": "^1.26.6",
     "@types/react": "^18.2.66",
     "@types/react-dom": "^18.2.22",
     "@vitejs/plugin-react": "^4.2.1",
+    "esbuild": "0.21.5",
     "typescript": "^5.2.2",
     "vite": "^5.2.0"
   }

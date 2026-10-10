@@ -3,12 +3,14 @@ package dev.everyagent.worker;
 import dev.everyagent.contract.frame.Frames;
 import dev.everyagent.contract.ids.Ids;
 import dev.everyagent.contract.json.Json;
+import dev.everyagent.plugin.api.spi.TokenEstimator;
 import dev.everyagent.worker.config.WorkerProperties;
-import dev.everyagent.worker.task.ModelRateLimiterRegistry;
+import dev.everyagent.worker.plugin.registry.ChatModelEnhancerRegistry;
 import dev.everyagent.worker.hub.HubPool;
+import dev.everyagent.worker.modules.ConfigStore;
 import dev.everyagent.worker.modules.ConfigStore.ResolvedConfig;
-import dev.everyagent.worker.proto.Channels;
-import dev.everyagent.worker.task.ChatModelFactory;
+import dev.everyagent.plugin.api.event.Channels;
+import dev.everyagent.worker.config.ChatModelFactory;
 import dev.everyagent.worker.task.TaskEntry;
 import dev.everyagent.worker.task.TaskManager;
 import dev.everyagent.worker.task.TaskStore;
@@ -41,17 +43,41 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * task.agents 集成测试(前端打开任务详情拉取子 agent 台账的唯一取数口)。
+ * task.agents 集成测试(task 域取数口:任务下全部 agent 台账——主 agent + 全部派生 agent)。
  * 覆盖:不存在任务 NOT_FOUND / 缺 taskId BAD_PARAMS;
  * 终态(已驱逐出内存的磁盘)任务读 agents.json(2 个子 agent,含 usage+context+lastText 透传、
  * 按 createdAt 升序稳定排序、mainAgentId 正确);
  * 旧任务回退(目录只有 meta.json 带 agents 数组、无 agents.json → 返回 meta.agents 内容);
- * live 任务读内存 agentLedger(waiting-user 任务驻留内存,直接往 ledger 放摘要模拟运行中台账,
- * 免去真实子 agent 的构造成本)。
+ * live 任务读内存台账(AgentLedger.getLiveAgents;无子 agent 的任务也应含主 agent)。
+ * 语义:不按 creator 过滤——返回主 agent + 全部派生 agent(含 creator=ai-review 的审议 agent)。
  * 复用 WorkerTaskPollTest / TaskRoundsRpcTest 的测试基建(FakeHub + FakeChatModel + WsTestClient)。
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.DEFINED_PORT)
 class TaskAgentsRpcTest {
+
+    /** 测试用 TokenEstimator 桩:与原 ModelRateLimiter.estimateTokens 同口径,factor 恒 1.0。 */
+    private static final TokenEstimator STUB_ESTIMATOR = new TokenEstimator() {
+        @Override public long estimate(String text, String configId) { return rawTokens(text); }
+        @Override public void calibrate(String configId, long estimatedTokens, long actualTokens) { }
+        @Override public double factorOf(String configId) { return 1.0; }
+        @Override public long sampleCountOf(String configId) { return 0; }
+        private static long rawTokens(String s) {
+            if (s == null || s.isEmpty()) { return 0; }
+            long cjk = 0, other = 0;
+            for (int i = 0; i < s.length(); ) {
+                int cp = s.codePointAt(i);
+                i += Character.charCount(cp);
+                Character.UnicodeScript sc = Character.UnicodeScript.of(cp);
+                boolean isCjk = sc == Character.UnicodeScript.HAN
+                        || sc == Character.UnicodeScript.HIRAGANA
+                        || sc == Character.UnicodeScript.KATAKANA
+                        || sc == Character.UnicodeScript.HANGUL;
+                if (isCjk) { cjk++; }
+                else if (!Character.isWhitespace(cp) && !Character.isISOControl(cp)) { other++; }
+            }
+            return cjk + (other + 3) / 4;
+        }
+    };
 
     private static final String KEY = "test-key-agents";
     private static final AtomicLong REQ = new AtomicLong();
@@ -83,14 +109,16 @@ class TaskAgentsRpcTest {
 
         @Bean
         @Primary
-        ChatModelFactory fakeModelFactory(WorkerProperties props) {
-            return new ChatModelFactory(props, new ModelRateLimiterRegistry(props)) {
+        ChatModelFactory fakeModelFactory(WorkerProperties props,
+                ChatModelEnhancerRegistry enhancerRegistry,
+                ConfigStore configStore) {
+            return new ChatModelFactory(props, enhancerRegistry, configStore) {
                 // 覆写带 events 的 4 参重载:buildAgentModel 普通模型路径实际分派到这里
                 // (3 参重载只是兼容入口,拦不到 agent 装配)。
                 @Override
                 public org.springframework.ai.chat.model.ChatModel build(ResolvedConfig cfg,
                         org.springframework.ai.openai.OpenAiChatOptions options, String agentId,
-                        dev.everyagent.worker.task.TaskEvents events) {
+                        dev.everyagent.plugin.api.model.EventEmitter events) {
                     return new FakeChatModel();
                 }
 
@@ -159,7 +187,7 @@ class TaskAgentsRpcTest {
         }
         fe = WsTestClient.connect(URI.create("ws://127.0.0.1:" + PORT + "/fakehub"));
         hello(fe);
-        sub(fe, Channels.tasks(k));
+        sub(fe, Channels.tasks(k, workerProps.getWorkerId()));
         sub(fe, Channels.workerEvt(k, workerProps.getWorkerId()));
     }
 
@@ -197,8 +225,9 @@ class TaskAgentsRpcTest {
         awaitEvicted(taskId); // finish 全部完成(flush/驱逐),磁盘为完整真相源,live=null 走磁盘路径
         Path dir = store.dirOf(taskId);
         Path agentsFile = dir.resolve("agents.json");
-        assertTrue(Files.isRegularFile(agentsFile) == false,
-                "无子 agent 的任务不应有 agents.json(空台账不落盘): " + agentsFile);
+        // 新语义:主 agent 也进台账 → 无子 agent 的任务 agents.json 仍落盘(仅主 agent 一条)。
+        assertTrue(Files.isRegularFile(agentsFile),
+                "主 agent 进台账 → agents.json 应落盘: " + agentsFile);
 
         // 手工写 agents.json:故意把 createdAt 较大的放前面,验证应答按 createdAt 升序稳定排序。
         // 一个带 usage+context+lastText,一个只有基础字段(可选字段省略透传)。
@@ -259,6 +288,8 @@ class TaskAgentsRpcTest {
         String taskId = create("你好,旧任务台账");
         awaitEvicted(taskId);
         Path dir = store.dirOf(taskId);
+        // 旧任务形态:无 agents.json(主 agent 也进台账会落盘 agents.json,故删除以模拟旧布局)
+        Files.deleteIfExists(dir.resolve("agents.json"));
         assertTrue(!Files.isRegularFile(dir.resolve("agents.json")),
                 "无 agents.json 才触发旧格式回退: " + dir);
 
@@ -287,44 +318,48 @@ class TaskAgentsRpcTest {
     }
 
     @Test
-    void noAgentsReturnsEmptyArray() throws java.io.IOException {
+    void noSubAgentTaskReturnsMainOnlyArray() throws java.io.IOException {
         String taskId = create("你好,无子agent任务");
         awaitEvicted(taskId);
         RpcResp r = call("task.agents", "{\"taskId\":\"" + taskId + "\"}");
         assertFalse(r.isErr(), String.valueOf(r.err()));
         JsonNode agents = r.result().path("agents");
-        assertTrue(agents.isArray() && agents.isEmpty(), "无子 agent → agents=[](非 null): " + r.result());
-        assertTrue(r.result().path("mainAgentId").isTextual(), "mainAgentId 恒为字符串: " + r.result());
+        assertTrue(agents.isArray(), "agents 应为数组(非 null): " + r.result());
+        String mainAgentId = r.result().path("mainAgentId").asString("");
+        assertFalse(mainAgentId.isEmpty(), "mainAgentId 应非空: " + r.result());
+        // 新语义:无子 agent 的任务也含主 agent 一条(不按 creator 过滤)
+        boolean hasMain = false;
+        for (JsonNode a : agents) {
+            if (mainAgentId.equals(a.path("agentId").asString())) {
+                hasMain = true;
+            }
+        }
+        assertTrue(hasMain, "无子 agent 的任务应含主 agent: " + agents);
     }
 
     @Test
     void liveTaskReadsInMemoryLedger() {
-        // live 路径:waiting-user 任务驻留内存(finish 未发生、未驱逐)。
-        // 真实子 agent 需要完整 AgentRunner 回合,构造成本高;agentLedger 是 TaskEntry 公开字段,
-        // 直接放摘要即等价于「活实体已实时刷新进台账」的状态(与 SubAgentManager 写入口径相同)。
+        // live 路径:waiting-user 任务驻留内存(finish 未发生、未驱逐)→ 走 AgentLedger.getLiveAgents。
         String taskId = create("ASK:继续吗");
         fe.await(t -> t.contains("\"event\":\"task.updated\"")
                 && t.contains("\"status\":\"waiting-user\"") && t.contains(taskId), "等待用户输入(waiting-user)");
         TaskEntry live = mgr.get(taskId);
         assertFalse(live == null, "waiting-user 任务应在内存");
-        live.agentLedger.put("sub_live_b", Json.obj()
-                .put("agentId", "sub_live_b").put("kind", "sub").put("title", "live B")
-                .put("createdAt", 5000L).put("status", "running").put("lastText", "b 进行中"));
-        live.agentLedger.put("sub_live_a", Json.obj()
-                .put("agentId", "sub_live_a").put("kind", "sub").put("title", "live A")
-                .put("createdAt", 4000L).put("status", "completed"));
 
         RpcResp r = call("task.agents", "{\"taskId\":\"" + taskId + "\"}");
         assertFalse(r.isErr(), String.valueOf(r.err()));
         JsonNode agents = r.result().path("agents");
-        assertEquals(2, agents.size(), "live 任务取内存台账: " + agents);
-        assertEquals("sub_live_a", agents.get(0).path("agentId").asString(), "createdAt 升序: " + agents);
-        assertEquals("sub_live_b", agents.get(1).path("agentId").asString(), "createdAt 升序: " + agents);
-        assertEquals("running", agents.get(1).path("status").asString());
-        assertEquals("b 进行中", agents.get(1).path("lastText").asString());
+        // 新语义:无子 agent 的 live 任务也应含主 agent(内存台账里有 agent.started 记录)。
         assertEquals(live.mainAgentId, r.result().path("mainAgentId").asString(),
                 "live 任务 mainAgentId 取内存字段: " + r.result());
         assertFalse(r.result().path("mainAgentId").asString("").isEmpty());
+        boolean hasMain = false;
+        for (JsonNode a : agents) {
+            if (live.mainAgentId.equals(a.path("agentId").asString())) {
+                hasMain = true;
+            }
+        }
+        assertTrue(hasMain, "live 任务内存台账应含主 agent: " + agents);
 
         // 清理:取消并等待终态驱逐,释放并发槽位
         RpcResp cancel = call("task.cancel", "{\"taskId\":\"" + taskId + "\"}");

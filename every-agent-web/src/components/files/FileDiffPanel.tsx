@@ -1,5 +1,5 @@
 import React from 'react'
-import type { TaskFileChange } from '@/types'
+import type { TaskFileChange } from '@/task/types'
 import { useResponsiveViewport } from '@/hooks/useResponsiveViewport'
 import { buildLineDiff, buildSideBySideRows, type SideBySideDiffRow } from '@/utils/textDiff';
 import { Button } from '@/components/shared/ui'
@@ -73,15 +73,13 @@ export default function FileDiffPanel({ fileChange, workspaceRoot: diffWorkspace
     }
     // 差异可能是已删除文件:磁盘上已无该路径,直接打开会进一个报 NOT_FOUND 的空标签。
     // 先校验存在性,缺失时给可读提示,避免用户看到原始 RPC 错误。
-    const stat = await workspaceGateway.stat(workspaceRoot, fileChange.filePath).catch(() => null)
+    // 工作区外绝对路径也经 fs.statRaw 校验(不经沙箱,用户操作非 AI 工具)。
+    const stat = await workspaceGateway.statRaw(workspaceRoot, fileChange.filePath).catch(() => null)
     if (!stat || stat.isDirectory) {
       showToast(`文件已不存在于工作区（可能已被删除），无法打开：${fileChange.filePath}`, 'error')
       return
     }
-    openGlobalFileTab({
-      workspaceRoot,
-      filePath: fileChange.filePath,
-    }, { mode: 'readwrite' })
+    openGlobalFileTab({ workspaceRoot, filePath: fileChange.filePath }, { mode: 'readwrite' })
   }, [diffWorkspaceRoot, fileChange.filePath, openGlobalFileTab, showToast])
 
   /**
@@ -115,7 +113,7 @@ export default function FileDiffPanel({ fileChange, workspaceRoot: diffWorkspace
       onOk: async () => {
         setRestoring(true)
         try {
-          await workspaceGateway.writeTextFile(workspaceRoot, fileChange.filePath, restoreContent)
+          await workspaceGateway.writeTextFileRaw(workspaceRoot, fileChange.filePath, restoreContent)
           showToast(isDeleted ? '已恢复被删除的文件' : '已恢复此版本', 'success')
         } catch (restoreError) {
           showToast(restoreError instanceof Error ? restoreError.message : String(restoreError), 'error')

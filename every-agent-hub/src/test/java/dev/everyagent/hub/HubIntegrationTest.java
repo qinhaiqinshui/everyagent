@@ -258,6 +258,58 @@ class HubIntegrationTest {
         }
     }
 
+    /**
+     * worker 段频道(架构 §5.2)的定向性 —— 同 apiKey 两台 worker 的物理隔离:
+     * <ul>
+     * <li>前端 sub {@code u.K.worker.<wid>.task.<tid>.stream} → subscriber.join 只投那台 worker,
+     * 同 ownerKey 的另一台收不到(否则它会凭空建 DataPusher,且因收不到 ack 而永久阻塞);</li>
+     * <li>频道里点名的 worker 不在线 → 无人收到 join,不抛错、不降级广播;</li>
+     * <li>tasks 频道按 worker 段隔离:订阅 B 频道的前端收不到 A 频道的任务事件。</li>
+     * </ul>
+     */
+    @Test
+    void workerSegmentChannelsAreRoutedToThatWorkerOnly() {
+        try (WsTestClient fe = connect(); WsTestClient wA = connect(); WsTestClient wB = connect()) {
+            hello(fe, "frontend", KEY_A, "fe-1");
+            hello(wA, "worker", KEY_A, "pc-a");
+            hello(wB, "worker", KEY_A, "pc-b");
+
+            String streamA = ch("worker.pc-a.task.t100.stream");
+            sub(fe, streamA);
+            String join = wA.awaitEvent("subscriber.join");
+            assertTrue(join.contains("\"channel\":\"" + streamA + "\""), join);
+            assertTrue(join.contains("\"taskId\":\"t100\""), join);
+            // 同 apiKey 的另一台 worker 不该收到 —— 它没有这个任务,建了推送器就永远等不到 ack
+            assertNoFrame(wB, "subscriber.join", 500);
+
+            fe.send("{\"type\":\"unsub\",\"channel\":\"" + streamA + "\"}");
+            String leave = wA.awaitEvent("subscriber.leave");
+            assertTrue(leave.contains("\"taskId\":\"t100\""), leave);
+            assertNoFrame(wB, "subscriber.leave", 500);
+
+            // 频道点名一台不在线的 worker:不投递、不报错、也不退化成广播
+            sub(fe, ch("worker.pc-gone.task.t101.stream"));
+            assertNoFrame(wA, "subscriber.join", 500);
+            assertNoFrame(wB, "subscriber.join", 500);
+
+            // tasks 频道按 worker 段隔离:A 的任务事件不会进订阅 B 频道的前端
+            WsTestClient feB = connect();
+            try {
+                hello(feB, "frontend", KEY_A, "fe-2");
+                sub(feB, ch("worker.pc-b.tasks"));
+                sub(fe, ch("worker.pc-a.tasks"));
+                pub(wA, ch("worker.pc-a.tasks"), "task.updated",
+                        "{\"taskId\":\"t7\",\"workerId\":\"pc-a\",\"status\":\"done\",\"createdAt\":1}");
+                String got = fe.await(t -> t.contains("\"event\":\"task.updated\"") && t.contains("t7"),
+                        "订阅 A 的 tasks 频道应收到 A 的事件");
+                assertTrue(got.contains("\"channel\":\"" + ch("worker.pc-a.tasks") + "\""), got);
+                assertNoFrame(feB, "task.updated", 500);
+            } finally {
+                feB.close();
+            }
+        }
+    }
+
     /** 负向断言:ms 内不应出现含 needle 的帧(排空式,同 differentKeysAreIsolated)。 */
     private static void assertNoFrame(WsTestClient c, String needle, long ms) {
         long deadline = System.currentTimeMillis() + ms;

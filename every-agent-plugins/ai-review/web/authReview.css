@@ -1,0 +1,92 @@
+/* AI 安全审议 trace 展开态：只读判断卡。 */
+.auth-review-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 4px;
+  font-size: var(--text-sm, 13px);
+  line-height: 1.5;
+}
+
+.auth-review-card__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.auth-review-card__badge {
+  flex: 0 0 auto;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: var(--text-xs, 12px);
+  font-weight: 700;
+}
+
+.auth-review-card__badge--allow {
+  background: var(--accent-green-dim);
+  color: var(--accent-green);
+}
+
+.auth-review-card__badge--deny {
+  background: var(--accent-red-dim);
+  color: var(--accent-red);
+}
+
+.auth-review-card__badge--escalate {
+  background: var(--accent-amber-dim);
+  color: var(--accent-amber);
+}
+
+.auth-review-card__badge--unknown {
+  background: var(--accent-blue-dim);
+  color: var(--accent-blue);
+}
+
+.auth-review-card__confidence {
+  color: var(--text-muted);
+  font-size: var(--text-xs, 12px);
+}
+
+.auth-review-card__body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.auth-review-card__row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* 长文本字段（理由 / 授权请求）：标签在上、值在下整块换行。 */
+.auth-review-card__row--block {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+}
+
+.auth-review-card__label {
+  flex: 0 0 auto;
+  min-width: 56px;
+  color: var(--text-faint, var(--text-muted));
+  font-size: var(--text-xs, 12px);
+}
+
+.auth-review-card__value {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--text-secondary);
+  word-break: break-word;
+}
+
+.auth-review-card__value--mono {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs, 12px);
+}
+
+.auth-review-card__value--block {
+  white-space: pre-wrap;
+}

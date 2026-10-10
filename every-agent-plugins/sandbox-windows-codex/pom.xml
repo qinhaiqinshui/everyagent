@@ -1,0 +1,117 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>dev.everyagent</groupId>
+        <artifactId>every-agent-parent</artifactId>
+        <version>1.0.0</version>
+        <relativePath>../../pom.xml</relativePath>
+    </parent>
+    <version>1.0.0</version>
+
+    <artifactId>sandbox-windows-codex</artifactId>
+    <name>sandbox-windows-codex</name>
+    <description>Windows Codex 沙箱插件（双账户 + WRITE_RESTRICTED 受限令牌 + capability SID + WFP/防火墙）</description>
+
+    <build>
+        <plugins>
+            <!-- 将插件根目录的 plugin.json 复制到 classpath 根目录，供 PluginRegistry 扫描 -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-resources-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>copy-plugin-manifest</id>
+                        <phase>process-resources</phase>
+                        <goals>
+                            <goal>copy-resources</goal>
+                        </goals>
+                        <configuration>
+                            <outputDirectory>${project.build.outputDirectory}</outputDirectory>
+                            <resources>
+                                <resource>
+                                    <directory>${project.basedir}</directory>
+                                    <includes>
+                                        <include>plugin.json</include>
+                                    </includes>
+                                </resource>
+                            </resources>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <!-- 把 slf4j-simple 复制进 target/：runner 物化 classpath 需要它,但它不在
+                 worker 依赖图里(builtin 模式父委派借不到),findTargetJars 会连它一起
+                 加载进插件 classloader,RunnerMaterializer 从 classloader URLs 物化 -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-dependency-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>copy-slf4j-simple-for-runner</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>copy</goal>
+                        </goals>
+                        <configuration>
+                            <artifactItems>
+                                <artifactItem>
+                                    <groupId>org.slf4j</groupId>
+                                    <artifactId>slf4j-simple</artifactId>
+                                    <version>${slf4j.version}</version>
+                                    <destFileName>slf4j-simple-${slf4j.version}.jar</destFileName>
+                                </artifactItem>
+                            </artifactItems>
+                            <outputDirectory>${project.build.directory}</outputDirectory>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+
+    <dependencies>
+        <dependency>
+            <groupId>dev.everyagent</groupId>
+            <artifactId>every-agent-plugin-api</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <!-- Windows 原生沙箱:JNA Win32 API + win 绑定层补齐原语（设计文档 §3） -->
+        <dependency>
+            <groupId>net.java.dev.jna</groupId>
+            <artifactId>jna</artifactId>
+            <version>5.16.0</version>
+        </dependency>
+        <dependency>
+            <groupId>net.java.dev.jna</groupId>
+            <artifactId>jna-platform</artifactId>
+            <version>5.16.0</version>
+        </dependency>
+        <!-- runner IPC 帧协议 JSON 编解码（设计文档 §2.7）；版本由 Spring Boot parent BOM 管理 -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+        </dependency>
+        <!-- runner 进程日志:统一 slf4j 门面;runner 脱离主进程日志配置,用 simple 绑定落
+             System.err(installStderrTee → runner-stderr.log),cacheOutputStream=false 保证
+             写的是 tee 后的新流;默认 info,排查性能问题加 defaultLogLevel=debug。
+             注意:simple 不在 worker 的依赖图里(builtin 模式靠父委派借 worker classpath,
+             external 模式 lib/ 由打包产出),故下方 dependency-plugin 显式复制进 target/,
+             由 findTargetJars 连同插件 jar 一起进插件 classloader,物化源才捞得到。 -->
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-simple</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+</project>

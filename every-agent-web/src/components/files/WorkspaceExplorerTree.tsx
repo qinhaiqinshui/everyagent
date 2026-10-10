@@ -6,6 +6,7 @@ import { ChevronDownIcon, ChevronRightIcon, FolderIcon } from '../shared/AppGlyp
 import { FileTypeIcon } from '../shared/FileTypeGlyphs'
 import type { ListRowActionItem } from '../shared/ui/ListRowActions'
 import { Checkbox } from '../shared/ui'
+import { MenuList } from '../shared/ui/Menu'
 import { useResponsiveViewport } from '@/hooks/useResponsiveViewport'
 import { useLongPress } from '@/hooks/useLongPress'
 import type {
@@ -132,22 +133,12 @@ export default function WorkspaceExplorerTree({
           },
         ]
       : customItems
-    // 树行右键菜单统一走 antd Dropdown(trigger=contextMenu)：把自定义动作项映射成 antd Menu items，
-    // 由 antd 负责弹层定位/关闭/键盘等，业务动作仍通过原 onSelect 回调触发(目标即当前行 target)。
-    const menuItems: MenuProps['items'] = allItems.map((item) => ({
-      key: item.key,
-      label: item.label,
-      icon: item.icon,
-      danger: item.danger,
-      disabled: item.disabled,
-      onClick: () => item.onSelect?.(),
-    }))
 
     return (
       <TreeNodeRow
         node={node}
         target={target}
-        menuItems={menuItems}
+        items={allItems}
         open={openMenuPath === node.path}
         onOpenChange={(next) => setOpenMenuPath(next ? node.path : null)}
         isMobile={isMobile}
@@ -226,16 +217,21 @@ export default function WorkspaceExplorerTree({
 }
 
 /**
- * 单行树节点主体：每行独立持有 open(菜单开关)/长按状态，右键菜单用 antd Dropdown(trigger=contextMenu) 实现。
+ * 单行树节点主体：每行独立持有 open(菜单开关)/长按状态。
+ *
+ * 桌面端右键菜单用 antd Dropdown(trigger=contextMenu) 实现，由 rc-trigger 用自己的
+ * onContextMenu 拿到鼠标坐标做对齐，再配合本组件的 offset/maxHeight 计算保证不溢出。
+ * 移动端长按菜单改走 MenuList（portal 到 body、position:fixed、实测尺寸后夹紧视口内），
+ * 不依赖 rc-trigger 的对齐，因为长按是定时器触发、并不经过 rc-trigger 的 contextmenu 处理。
  *
  * 背景：此前右键/长按菜单是组件级单个共享 actionsRef(ListRowActions)，所有 titleRender 行
  * 都挂同一个 ref，React 会让它最终指向最后一个挂载的行 → 无论右键哪一行，菜单都绑定到
- * 目录最后一个文件。改为每行独立组件后，动作项命中当前行 target，右键菜单由 antd 管理(定位/关闭/键盘)。
+ * 目录最后一个文件。改为每行独立组件后，动作项命中当前行 target。
  */
 function TreeNodeRow({
   node,
   target,
-  menuItems,
+  items,
   open,
   onOpenChange,
   isMobile,
@@ -248,7 +244,8 @@ function TreeNodeRow({
 }: {
   node: WorkspaceExplorerNode
   target: WorkspaceExplorerContextTarget
-  menuItems: MenuProps['items']
+  /** 行级动作项（含删除等）。桌面端映射为 antd Menu items；移动端直接交给 MenuList。 */
+  items: ListRowActionItem[]
   /** 是否打开右键菜单(由父级统一控制：同一时刻只有一个右键菜单打开)。 */
   open: boolean
   onOpenChange: (next: boolean) => void
@@ -269,37 +266,22 @@ function TreeNodeRow({
       : metaMode === 'modified'
         ? formatMtime(node.mtimeMs)
         : ''
-  // 右键菜单锚点:记录鼠标右键坐标(桌面)或长按触摸点坐标(移动端),用于计算弹层 offset 和 maxHeight
+  // 右键菜单锚点:记录鼠标右键坐标(桌面)或长按触摸点坐标(移动端)。
+  // 移动端这里作为 MenuList 的 anchorPoint 使用。
   const [mousePos, setMousePos] = React.useState<{ x: number; y: number } | null>(null)
-  // 长按打开菜单的时间戳,用于「关闭守卫」(见 handleMobileOpenChange)
-  const longPressOpenedAtRef = React.useRef(0)
+  // 移动端长按的行元素(MenuList 的 anchor,用于「点在触发元素上不关闭」判定)。
+  const [anchorEl, setAnchorEl] = React.useState<HTMLElement | null>(null)
 
-  // 移动端长按弹出右键菜单：直接控制受控 Dropdown 的 open；桌面端处理器为空操作。
-  // 注意:长按由定时器触发,早于(或独立于)浏览器 contextmenu 事件,
-  // 必须用 useLongPress 回传的触摸点坐标设置 mousePos,否则 menuAlign 缺锚点、菜单按默认位置溢出视口。
+  // 移动端长按弹出右键菜单：记录触摸点与行元素并打开菜单；桌面端处理器为空操作。
   const { wasLongPressed, ...longPressHandlers } = useLongPress({
     isMobile,
     delay: 500,
-    onLongPress: (_target, point) => {
+    onLongPress: (target, point) => {
       setMousePos(point)
-      longPressOpenedAtRef.current = Date.now()
+      setAnchorEl(target)
       onOpenChange(true)
     },
   })
-
-  // 移动端 Dropdown 的 openChange 包装:长按打开后的短暂窗口内忽略 trigger 来源的关闭请求。
-  // 原因:部分移动端浏览器(Android Chrome)会在长按定时器触发之后再派发原生 contextmenu,
-  // rc-trigger 的 window 级监听(useWinClick)会把它当作「外部操作」立即关闭刚打开的菜单。
-  // 菜单项点击关闭(source='menu')不受影响,保证点了动作项菜单正常关闭。
-  const handleMobileOpenChange = React.useCallback(
-    (next: boolean, info?: { source?: string }) => {
-      if (!next && info?.source !== 'menu' && Date.now() - longPressOpenedAtRef.current < 250) {
-        return
-      }
-      onOpenChange(next)
-    },
-    [onOpenChange],
-  )
 
   // 监听 contextmenu 事件记录鼠标坐标(在 Dropdown 的 onOpenChange 之前触发)
   const handleContextMenu = React.useCallback((e: React.MouseEvent) => {
@@ -307,11 +289,11 @@ function TreeNodeRow({
     longPressHandlers.onContextMenu(e)
   }, [longPressHandlers])
 
-  // 根据鼠标位置和预估菜单高度计算 align offset 和 maxHeight。
+  // 桌面端:根据鼠标位置和预估菜单高度计算 align offset 和 maxHeight。
   // autoAdjustOverflow=false 后,rc-trigger 不做翻转/shift,菜单始终从鼠标点向下展开(bottomLeft)。
   // 我们通过 align.offset 上移菜单确保不溢出底部视口;
   // 上下都不够时通过 styles.root.maxHeight 出滚动条。
-  const itemCount = menuItems?.length ?? 0
+  const itemCount = items?.length ?? 0
   const menuEstimatedHeight = itemCount * MENU_ITEM_HEIGHT + MENU_PADDING
 
   const menuAlign = React.useMemo<AlignType | undefined>(() => {
@@ -456,56 +438,47 @@ function TreeNodeRow({
     </div>
   )
 
-  if (!menuItems?.length) {
+  if (!items?.length) {
     return content
   }
 
-  // 移动端:Dropdown 不包裹行,改为锚定到「触摸点处的 0×0 虚拟锚点」span。
-  // 原因:移动端长按由定时器打开菜单,浏览器不一定派发原生 contextmenu 事件
-  // (iOS Safari 在 -webkit-touch-callout:none 下不派发)。此时 rc-trigger 内部
-  // alignPoint 锚点(仅由其自身 onContextMenu 设置)为 null,对齐目标退化为
-  // targetEle——若 targetEle 是整行元素,偏移坐标系与「以触摸点为原点」的
-  // 防溢出计算错位,菜单会被甩出屏幕(右缘长按时整体溢出左缘)。
-  // 虚拟锚点永不收到 contextmenu(pointer-events:none),trigger 内部锚点恒为 null,
-  // 对齐目标恒定 = 锚点 span 的 0×0 rect(即触摸点),与桌面端右键的坐标系完全一致。
-  // trigger=['contextMenu'] 仅为让 clickToHide 生效(点击外部/别处长按可关闭菜单),
-  // 虚拟锚点自身不会收到该事件。
+  // 移动端长按菜单走 MenuList:portal 到 document.body + position:fixed + 实测尺寸后
+  // 夹紧视口内,不依赖 rc-trigger 对齐。长按是定时器触发、不经过 rc-trigger 的
+  // contextmenu 处理,因此不能复用桌面端 Dropdown 的对齐路径。
   if (isMobile) {
     return (
       <>
         {content}
-        <Dropdown
-          open={open}
-          onOpenChange={handleMobileOpenChange}
-          trigger={['contextMenu']}
-          menu={{ items: menuItems }}
-          autoAdjustOverflow={false}
-          align={menuAlign}
-          styles={menuRootStyle ? { root: menuRootStyle } : undefined}
-          rootClassName="ws-context-menu"
-        >
-          <span
-            aria-hidden
-            style={{
-              position: 'fixed',
-              left: mousePos?.x ?? 0,
-              top: mousePos?.y ?? 0,
-              width: 0,
-              height: 0,
-              pointerEvents: 'none',
-            }}
+        {open && anchorEl ? (
+          <MenuList
+            items={items}
+            anchor={anchorEl}
+            anchorPoint={mousePos}
+            anchorPointMode="center"
+            onClose={() => onOpenChange(false)}
+            title="更多操作"
           />
-        </Dropdown>
+        ) : null}
       </>
     )
   }
+
+  // 桌面端右键:映射为 antd Menu items,交给 Dropdown(trigger=contextMenu) 定位。
+  const antdMenuItems: MenuProps['items'] = items.map((item) => ({
+    key: item.key,
+    label: item.label,
+    icon: item.icon,
+    danger: item.danger,
+    disabled: item.disabled,
+    onClick: () => item.onSelect?.(),
+  }))
 
   return (
     <Dropdown
       open={open}
       onOpenChange={onOpenChange}
       trigger={['contextMenu']}
-      menu={{ items: menuItems }}
+      menu={{ items: antdMenuItems }}
       // 完全禁用 antd 自动翻转/位置调整。
       // rc-trigger 对齐逻辑(useAlign)中,adjustY=false → needAdjustY=false → 不翻转;
       // shiftY=undefined → 不 shift。位置完全由 align.offset 控制,行为确定性。

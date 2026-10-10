@@ -17,16 +17,31 @@ export function LazyRouteFallback() {
   return <div style={fallbackStyle} aria-hidden="true" />
 }
 
+/**
+ * 懒加载页面的可选项。
+ */
+type LazyRouteOptions = {
+  /**
+   * 加载期占位节点，默认为 `<LazyRouteFallback />`（撑满所在 flex 槽位，切页不塌陷）。
+   * 弹窗/浮层类页面必须显式传 `null`：这类组件挂在布局容器的**直接子节点**上，
+   * 占位 div 会作为 flex item 真实参与布局（例如把主区挤成半宽），chunk 到齐后又消失，
+   * 表现为首屏内容"先偏后跳"的布局抖动。传 null 即加载期什么都不渲染。
+   */
+  fallback?: React.ReactNode
+}
+
 /** 创建带预加载能力的懒加载页面组件。 */
 export function createLazyRouteComponent<TProps extends object>(
   loader: LazyComponentLoader<TProps>,
+  options: LazyRouteOptions = {},
 ) {
   const LazyComponent = React.lazy(loader) as unknown as React.ComponentType<Record<string, unknown>>
+  const fallback = 'fallback' in options ? options.fallback : <LazyRouteFallback />
 
   /** 渲染懒加载组件，并统一套 Suspense。 */
   function LazyRouteComponent(props: TProps) {
     return (
-      <React.Suspense fallback={<LazyRouteFallback />}>
+      <React.Suspense fallback={fallback}>
         <LazyComponent {...(props as Record<string, unknown>)} />
       </React.Suspense>
     )

@@ -2,10 +2,13 @@ package dev.everyagent.worker.rpc;
 
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.contract.rpc.Rpc;
+import dev.everyagent.plugin.api.exception.AuthRequiredException;
+import dev.everyagent.plugin.api.exception.BadParamsException;
+import dev.everyagent.plugin.api.exception.NotFoundException;
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.hub.HubLink;
 import dev.everyagent.worker.hub.HubPool;
-import dev.everyagent.worker.proto.Channels;
+import dev.everyagent.plugin.api.event.Channels;
 import dev.everyagent.worker.proto.RpcMethods;
 import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;

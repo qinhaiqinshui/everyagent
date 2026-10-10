@@ -2,8 +2,9 @@ package dev.everyagent.worker.rpc;
 
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.contract.rpc.Rpc;
+import dev.everyagent.plugin.api.exception.BadParamsException;
 import dev.everyagent.worker.hub.HubLink;
-import dev.everyagent.worker.proto.Channels;
+import dev.everyagent.plugin.api.event.Channels;
 import tools.jackson.databind.JsonNode;
 
 import java.util.List;
@@ -12,8 +13,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
 /**
  * 单次 RPC 的上下文:应答回请求来源连接的 evt 频道(多 hub 下前端只听自己 hub);
  * 同一 reqId 至多一次 ok/err(§13.3)。ownerKey() = 连接命名空间 K(连接层身份;任务域不再据此做归属校验)。
+ * 实现 plugin-api 的 {@link dev.everyagent.plugin.api.rpc.RpcContext} 接口,供插件通过接口处理 RPC 请求。
  */
-public final class RpcContext {
+public final class RpcContext implements dev.everyagent.plugin.api.rpc.RpcContext {
 
     private final HubLink conn;
     private final String reqId;
@@ -46,10 +48,12 @@ public final class RpcContext {
         return method;
     }
 
+    @Override
     public JsonNode params() {
         return params;
     }
 
+    @Override
     public void ok(JsonNode result) {
         if (answered.compareAndSet(false, true)) {
             conn.pub(Channels.workerEvt(conn.k(), conn.workerId()), "rpc.ok", null,
@@ -57,6 +61,7 @@ public final class RpcContext {
         }
     }
 
+    @Override
     public void err(String code, String message) {
         if (answered.compareAndSet(false, true)) {
             conn.pub(Channels.workerEvt(conn.k(), conn.workerId()), "rpc.err", null,
@@ -82,6 +87,7 @@ public final class RpcContext {
 
     // ---- 参数读取帮助 ----
 
+    @Override
     public String strParam(String name) {
         JsonNode n = params.path(name);
         if (n.isMissingNode() || n.isNull() || n.asString().isEmpty()) {
@@ -90,11 +96,13 @@ public final class RpcContext {
         return n.asString();
     }
 
+    @Override
     public String optStrParam(String name, String def) {
         JsonNode n = params.path(name);
         return n.isMissingNode() || n.isNull() ? def : n.asString();
     }
 
+    @Override
     public long optLongParam(String name, long def) {
         JsonNode n = params.path(name);
         return n.isMissingNode() || n.isNull() ? def : n.asLong(def);

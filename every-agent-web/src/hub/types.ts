@@ -19,7 +19,7 @@ export interface WorkerCredential {
 }
 
 export interface HubConnectionConfig {
-  /** hub WebSocket 地址,如 wss://hub.example.com:9100/ws 或 ws://192.168.1.10:9100/ws。 */
+  /** hub WebSocket 地址,如 wss://hub.example.com:6101/ws 或 ws://192.168.1.10:6101/ws。 */
   hubUrl: string
   /** hub 级连接凭证(保护 hub);前端与 worker 进程都必须携带。 */
   hubKey: string

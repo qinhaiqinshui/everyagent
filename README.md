@@ -15,16 +15,44 @@
 
 [简体中文](README.md) | [English](README.en.md)
 
+## 📑 目录
+
+- [✨ 亮点](#-亮点)
+  - [🌍 多端控制,真正的「哪里都可以用」](#-多端控制真正的哪里都可以用)
+  - [🔒 数据不出本机,双道鉴权更安全](#-数据不出本机双道鉴权更安全)
+  - [📡 断线续播,永不丢进度](#-断线续播永不丢进度)
+  - [🤖 AI 全程可视化](#-ai-全程可视化)
+  - [🛡️ 安全沙箱 + 人机协作护栏](#-安全沙箱--人机协作护栏)
+  - [🔌 模型随便换,自带容灾](#-模型随便换自带容灾)
+  - [🧱 插件化架构:一切能力皆可插拔](#-插件化架构一切能力皆可插拔)
+  - [🖥️ 桌面版开箱即用](#-桌面版开箱即用)
+  - [🧩 四个模块,自由组合部署](#-四个模块自由组合部署)
+  - [🏢 企业内部部署,接入已有系统零负担](#-企业内部部署接入已有系统零负担)
+- [📸 界面预览](#-界面预览)
+- [🏗️ 架构速览](#-架构速览)
+- [🚀 快速开始](#-快速开始)
+  - [方式一:桌面版(推荐,零依赖 · 零配置)](#方式一桌面版推荐零依赖--零配置)
+  - [方式二:Docker(自己托管 hub + worker + web)](#方式二docker自己托管-hub--worker--web)
+  - [方式三:源码构建 / 开发](#方式三源码构建--开发)
+- [⚙️ 配置模型(必需)](#-配置模型必需)
+- [📱 多端访问(核心场景)](#-多端访问核心场景)
+- [🛠️ 常用配置速查](#-常用配置速查)
+- [🧩 能力一览](#-能力一览)
+- [📦 技术栈](#-技术栈)
+- [📄 License](#-license)
+- [🙌 参与贡献](#-参与贡献)
+
 **Every Agent** 是一套「**公网可及、本机执行**」的 AI Agent 系统 —— 一句话:**自己的 Agent,哪里都能用**。
 
 - ✅ **开源 · 免费 · 自托管(self-hosted)**:代码、文件、数据全部留在你自己的电脑上,不经过任何第三方服务器,适合重视隐私与数据主权的个人开发者和小团队;
 - ✅ **远程控制,不需要公网 IP**:NAT、路由器、无公网 IP 都不用操心 —— worker 只需「打出去」一条 **WebSocket** 加密长连接,世界各地的浏览器都能遥控它(手机、平板、办公电脑、Electron 桌面版);
 - ✅ **多端同步、断线续播**:关掉浏览器任务照跑,重开后从头到当前完整可见、继续流式输出,一次都没落下;
-- ✅ **自带安全护栏**:命令在沙箱中执行、越界操作弹窗授权,可选 **AI 审议 / 无人值守**自动裁决。
+- ✅ **自带安全护栏**:命令在沙箱中执行、越界操作弹窗授权,可选 **AI 审议 / 无人值守**自动裁决;
+- ✅ **插件化架构,一切能力皆可插拔**:沙箱 / git / 模型池 / 子 Agent 等 26 个内置插件全部跑在同一套插件体系上——后端 15 个扩展点 + 前端 12 个 UI 扩展点,不改 hub / worker / web 一行宿主代码;脚手架 5 分钟起步,`.eap` 经「扩展」面板一键安装。
 
-**技术关键词**:Spring Boot · Spring AI · Java 25 虚拟线程 · WebSocket · React · TypeScript · Electron · OpenAI 兼容模型 · 模型池容灾 · 多工作区 · 子 Agent 编排。
+**技术关键词**:Spring Boot · Spring AI · Java 25 虚拟线程 · WebSocket · React · TypeScript · Electron · OpenAI 兼容模型 · 模型池容灾 · 多工作区 · 子 Agent 编排 · 插件体系。
 
-> **English summary** — Every Agent is an open-source, self-hosted AI agent platform. Run AI tasks on your own PC and control them from any device (phone, tablet, or desktop browser) over an outbound WebSocket connection — no public IP, no port forwarding, and your data never leaves your machine. Highlights: remote multi-device control · NAT traversal · real-time streaming with resume · sandboxed execution · permission gating · AI safety review / unattended mode · OpenAI-compatible models with automatic failover · multi-workspace · sub-agent orchestration. **Free-model friendly**: the project itself was developed on free models — many thanks to SenseNova (商汤「日日新」) for its generous free model quotas and to OpenRouter for its free model endpoints; when a quota runs out or a model goes down, the model pool auto-fails-over to the next available one so development never stops. Today, Every Agent is used to develop Every Agent itself (dogfooding).
+> **English summary** — Every Agent is an open-source, self-hosted AI agent platform. Run AI tasks on your own PC and control them from any device (phone, tablet, or desktop browser) over an outbound WebSocket connection — no public IP, no port forwarding, and your data never leaves your machine. Highlights: remote multi-device control · NAT traversal · real-time streaming with resume · sandboxed execution · permission gating · AI safety review / unattended mode · OpenAI-compatible models with automatic failover · multi-workspace · sub-agent orchestration · plugin system (26 built-in plugins, 15 backend + 12 frontend extension points). **Free-model friendly**: the project itself was developed on free models — many thanks to SenseNova (商汤「日日新」) for its generous free model quotas and to OpenRouter for its free model endpoints; when a quota runs out or a model goes down, the model pool auto-fails-over to the next available one so development never stops. Today, Every Agent is used to develop Every Agent itself (dogfooding).
 
 ---
 
@@ -53,7 +81,7 @@
 - 每轮 token 用量、上下文占用一目了然。
 
 ### 🛡️ 安全沙箱 + 人机协作护栏
-- 命令在**沙箱**中执行:Windows 默认走 WSL2 托管发行版(可整体重装的可丢弃系统),工作区之外的宿主盘**不可见**;网络默认放行,可在任务内用 `/禁用网络` 单独关闭;
+- 命令在**沙箱**中执行:Windows 默认走 **Codex 机制原生沙箱**(双本地账户 + WRITE_RESTRICTED 受限令牌 + capability SID + 防火墙/WFP,工作区之外只读不可写);另备 **WSL2 Ubuntu 发行版沙箱**(可整体重装的可丢弃系统,工作区之外的宿主盘完全不可见)与 **Windows 受限令牌沙箱**可选——三种后端全部是**可插拔的沙箱插件**,`worker.sandbox.type` 一行切换;网络默认放行,可在任务内用 `/禁用网络` 单独关闭(这条命令由 wsl-ubuntu 沙箱插件自带——只有它能在发行版内 `unshare -n` 真断网,其他后端不挂这个开关);
 - 工作区外操作 / 危险命令一律先**弹窗授权**(拒绝 / 本轮 / 本任务三档),可开 **AI 审议**自动裁决,亦可开 **无人值守**全自动跑完;
 - git 凭证 AES-GCM 加密存本机,不经网络传输。
 
@@ -61,6 +89,14 @@
 - 任意 **OpenAI 兼容** provider:OpenAI、DeepSeek、Qwen、GLM、本地 vLLM/Ollama…改一行配置即可;
 - **模型池**:一个任务可配置多个模型,主模型失败自动切换下一个,任务不中断;
 - 💸 **白嫖党的福音**:项目后期就是靠**白嫖免费模型**开发出来的——感谢**商汤「日日新」(SenseNova)** 提供众多免费模型额度,以及 **OpenRouter** 开放的免费模型端点;就算免费额度用完、主模型罢工,模型池自动切换下一个还能用的,开发不中断。如今这个项目,已经能**用 Every Agent 自己开发 Every Agent** 了。
+
+### 🧱 插件化架构:一切能力皆可插拔
+- 你正在用的很多「核心能力」——沙箱、git、模型池容灾、子 Agent、上下文压缩、AI 审议、无人值守、任务队列——**没有一样写死在宿主里**,全部以插件形式实现;仓内自带 **26 个内置插件**,每个都是可直接照抄的活教材;
+- **后端 15 个扩展点**(工具 / 沙箱后端 / Advisor / 模型增强 / 任务生命周期 / 自定义 RPC / 斜杠命令)+ **前端 12 个 UI 扩展点**(侧边栏面板 / 工作区标签 / 工具调用视图 / 文件编辑器 / 消息动作…),不改一行宿主代码就能给整个系统加能力;
+- **三种插件形态**:纯 Java / 纯 Web / Java+Web 混合,一个 `plugin.json` 定形态;`create-everyagent-plugin` 脚手架 5 分钟跑通第一个插件;
+- 打包成 **`.eap`**,经前端「扩展」面板一键安装(重启 worker 生效);插件只依赖轻量 `every-agent-plugin-api`,经 `URLClassLoader` 类加载隔离,不碰 worker 内部实现。
+
+> 插件开发全手册:**[docs/plugin-guide/](docs/plugin-guide/index.md)**(脚手架上手、plugin.json 字段、扩展点手册、构建分发、故障排查)。
 
 ### 🖥️ 桌面版开箱即用
 - Windows x64 **安装包 / 便携版**:内置前端 + hub + worker + 精简 JRE,双击即用,无需装 Java / Node / Docker。
@@ -74,9 +110,12 @@ web / hub / worker / desktop 四个模块**互相解耦、物尽其用**,可按�
 - **desktop 也能多 hub** → 桌面版内置的 worker 是完整的 worker,在 `~/.everyagent/application-worker.yaml` 里配多个 `worker.hubs` 条目,即可把这份「桌面 worker」同时注册到本地 hub 和远端公网 hub——「开箱即用的单机」与「到哪都能遥控的远程」同步成立。
 
 > 提示:`worker.hubs` 为列表且**整表替换**——覆盖文件里想同时保留本地与远端,需把两个条目都写上。
-> 
-### 给AI的提示词非常少！没有那么多限制，一切交给AI！
-要想自己添加更多系统提示词，就在工作区根目录agents.md文档中编辑。
+
+### 🏢 企业内部部署,接入已有系统零负担
+- **一台服务器即可私有化**:公司内部部署 hub + worker,员工打开浏览器就能用——数据全程留在企业自己的服务器上,不出内网;
+- **OA / 小程序 / 企业微信皆可接入**:对上游系统而言,平台就是 WebSocket + RPC(协议契约 `every-agent-contract` 完全开放),web 前端只是「官方客户端之一」——OA、办公门户、小程序、企业微信应用,任何能发 WS 的客户端都能直接集成;
+- **认证故意只做 apikey,不做用户账号模型**:平台不设注册/登录/用户表——企业接入已有用户系统(SSO / OA / 企业微信)时,只需在接入层把员工身份映射为 apikey 即可,不必把用户体系搬进平台,集成成本极低。
+
 ---
 
 ## 📸 界面预览
@@ -106,11 +145,11 @@ web / hub / worker / desktop 四个模块**互相解耦、物尽其用**,可按�
 
 | 模块 | 职责 | 端口 |
 |---|---|---|
-| `every-agent-hub` | 公网消息中心:纯中转 WebSocket,零状态、零缓冲、零业务逻辑 | 9100 |
-| `every-agent-worker` | 执行器:Spring Boot + Spring AI 2,托管任务/模型/workspace/沙箱 | 9200(仅本地健康) |
+| `every-agent-hub` | 公网消息中心:纯中转 WebSocket,零状态、零缓冲、零业务逻辑 | 6101 |
+| `every-agent-worker` | 执行器:Spring Boot + Spring AI 2,托管任务/模型/workspace/沙箱 | 6102(仅本地健康) |
 | `every-agent-web` | 前端:React + TS,内置 TS 客户端 SDK,经 hub 遥控 worker | 5174(dev) |
 | `every-agent-contract` | 纯协议契约:帧/RPC 信封/错误码/身份哈希(Java + TS) | — |
-| `every-agent-desktop` | Electron 桌面版:web + hub + worker 一体打包(Windows x64) | 本地 9100/9200 |
+| `every-agent-desktop` | Electron 桌面版:web + hub + worker 一体打包(Windows x64) | 本地 6101/6102 |
 
 **部署拓扑矩阵** —— 四模块可自由组合,三种典型形态:
 
@@ -123,6 +162,8 @@ web / hub / worker / desktop 四个模块**互相解耦、物尽其用**,可按�
 > 提示:`worker.hubs` 为列表且**整表替换**——覆盖文件里想同时保留本地与远端,需把两个条目都写上。
 
 > 详细设计见 **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**(唯一架构事实源,协议、数据模型、安全模型、实现红线)。
+
+> 插件开发见 **[docs/plugin-guide/](docs/plugin-guide/index.md)**(脚手架快速上手、plugin.json 字段、扩展点手册、构建分发、故障排查)。
 
 ---
 
@@ -162,7 +203,7 @@ worker:
 HUB_KEY=你的hub密钥 docker-compose up --build
 ```
 
-- hub:`ws://<主机>:9100/ws`(健康检查 `GET :9100/health`)
+- hub:`ws://<主机>:6101/ws`(健康检查 `GET :6101/health`)
 - worker:容器内出站连 hub,workspace/数据落在 named volume
 - 前端:浏览器打开 `http://<主机>:5174`,在「设置」页填 hub 地址与 hub key 即可发现 worker;再填 worker 的 apiKey 才能遥控其数据
 
@@ -170,7 +211,7 @@ HUB_KEY=你的hub密钥 docker-compose up --build
 
 ```bash
 # Java 部分(需 JDK 25,Spring Boot 4.1 / Spring AI 2 由根 pom 锁定)
-mvn -pl every-agent-hub spring-boot:run          # hub @ 9100
+mvn -pl every-agent-hub spring-boot:run          # hub @ 6101
 mvn -pl every-agent-worker spring-boot:run       # worker,出站连 hub
 
 # 前端
@@ -222,10 +263,10 @@ worker:
 | 配置 | 说明 |
 |---|---|
 | `worker.hubs[].url / api-key / hub-key` | worker 连 hub 的唯一入口(多 hub 列表);不配置则 worker 不连任何 hub |
-| `HUB_KEY`(环境变量) | hub key 原文,未配置 hub 拒绝启动(启动时自算 sha256) |
+| `HUB_KEY`(环境变量) | hub key 原文(启动时自算 sha256);缺省回退 jar 内置开发默认密钥(仅限本机试玩),显式置空才拒绝启动——**公网部署必须显式配置强密钥** |
 | `WORKER_ID`(环境变量) | worker 身份,前端按此寻址 |
 | `EVERYAGENT_HOME` | 系统目录(模型配置/默认工作区/数据),默认 `~/.everyagent` |
-| `worker.sandbox.type` | `auto`(Windows 默认 wsl-direct) / `wsl-bwrap` / `windows-mic` / `none` |
+| `worker.sandbox.type` | `auto`(默认,取可用沙箱插件中优先级最高者) / `wsl-ubuntu` / `windows-mic` / `none`(旧值 `wsl-direct`、`wsl-bwrap` 自动归一) |
 | `worker.permissions.*` | 危险操作授权、AI 审议超时等(见架构文档 §7.8–§7.9) |
 
 ---
@@ -236,6 +277,7 @@ worker:
 - **子 Agent**:`run_agent` / `list_agents` / `wait_agents` / `stop_agent`,进程内嵌套、上下文隔离、并发运行;
 - **文件与 git**:工作区文件树(懒加载)、读写/移动/删除、git status/log/diff/commit/pull/push/clone、凭证加密保存;
 - **多工作区**:一台 worker 并行管理多个项目,任务按工作区分组;
+- **插件**:后端 15 个扩展点(工具 / 沙箱后端 / Advisor / 任务生命周期 / RPC / 斜杠命令)+ 前端 12 个 UI 扩展点;`.eap` 经「扩展」面板一键安装、启停(重启 worker 生效),仓内 26 个内置插件开箱即用;
 - **通知**:任务完成/错误、AI 提问、授权请求,浏览器与桌面系统通知。
 
 ---
@@ -261,10 +303,6 @@ worker:
 
 ## 🙌 参与贡献
 
-欢迎提交 Issue / PR。开始前请先阅读:
-
-- [贡献指南](CONTRIBUTING.md):开发环境、PR 流程、代码与提交规范;
-- [行为准则](CODE_OF_CONDUCT.md):社区行为约定;
-- [安全政策](SECURITY.md):如何负责任地报告漏洞。
+欢迎提交 Issue / PR。开始前请先阅读 [贡献指南](CONTRIBUTING.md)(开发环境、PR 流程、代码与提交规范)。
 
 开发约定:提交信息用中文、一次一事;改动前请先阅读 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) 的红线清单(尤其 Spring AI 复用、hub 零业务、磁盘唯一事实源等约束)。

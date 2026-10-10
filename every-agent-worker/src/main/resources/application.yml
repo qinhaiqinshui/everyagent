@@ -14,8 +14,9 @@ worker:
       # 原始密钥须与目标 hub 的 hub.hub-key(存其 sha256)对应,缺失该条目 worker 拒绝启动
       hub-key: ${HUB_KEY:sljlw23948LKS}
   # 系统目录(架构 §5.9):默认工作区 defaultworkspace/、workspaces/(注册表+任务数据)、
-  # sandbox/ 顶级(沙箱持久状态);空 = ~/.everyagent
-  home-dir: ${EVERYAGENT_HOME:}
+  # sandbox/ 顶级(沙箱持久状态);默认 ~/.everyagent(EVERYAGENT_HOME 优先)。
+  # 默认值保持非空——logback 的日志目录经 springProperty 读本配置,空串会破坏回退链。
+  home-dir: ${EVERYAGENT_HOME:${user.home}/.everyagent}
   # 模型配置(只读,config.get 的唯一数据源):默认用 OpenAI 兼容占位符,真实 provider/apiKey
   # 由 ~/.everyagent/application-worker.yaml(或开发环境 application-dev.yaml)覆盖,不进 jar/git。
   # 注意:列表属性整表替换——覆盖文件里写 worker.models 会完整替换本默认表。
@@ -28,7 +29,7 @@ worker:
     sub-wait-timeout-ms: 300000
     max-events-per-task: 500000
     ship-stall-ms: 60000
-    # 模型流「无输出」判定窗口(ms):ModelLengthGuardAdvisor 据此把「长时间无输出 + 自估输出
+    # 模型流「无输出」判定窗口(ms):model-length-guard 插件 据此把「长时间无输出 + 自估输出
     # ≈ maxTokens」判定为 finish_reason=length,避免空等 10 分钟读超时(须短于 model-timeout-ms)。
     length-stall-ms: 120000
     # 「输出已达上限」绝对阈值兜底(tokens):模型配置未显式设置 maxTokens 时,流中断(stall/
@@ -93,7 +94,8 @@ worker:
     # 是否允许沙箱内命令访问网络。默认 true(放行:含回环与出站;wsl-bwrap 不加 --unshare-net、
     # wsl-direct 不 unshare、direct/mic 不剥代理 env)。
     #   false 回落到 network-policy(deny-all 硬/软拒,audit-only 放行)。
-    #   任务级更细粒度:保持 true,用户对某个任务选 /禁用网络 斜杠命令即可单独关闭该任务网络。
+    #   任务级更细粒度:保持 true;`/禁用网络` 由 wsl-ubuntu 沙箱插件自带(只有它能在发行版内
+    #   unshare -n 真断网),用户对某个任务选中该命令即单独关闭本任务网络。
     allow-network: true
     # 是否启用 worker 级共享持久状态(装一次、处处可用)。默认 true。
     #   true 时 wsl-bwrap 把 <persistent-root> 下的 home/opt/usr-local/resolv.conf 读写挂入沙箱,
@@ -120,6 +122,18 @@ worker:
   # 模型调用超时(ms):spring-ai OpenAiChatOptions 默认 60s,reasoning 模型深度思考期间
   # 长时间无 chunk 会被 okhttp 超时主动 CANCEL 流;默认 10 分钟,过长可调小。
   model-timeout-ms: 600000
+  # 搜索限制(架构 §8.5「搜索限制配置化」):搜索相关限制的显式默认(与代码默认一致),
+  # 可在 ~/.everyagent/application-worker.yaml 覆盖。
+  search:
+    # rg 进程超时(ms):超时强杀,返回已完成部分并置 truncated。
+    rg-timeout-ms: 60000
+    
+    # 应答内联阈值(字节):搜索应答总字节数不超过即整包内联进 rpc.ok(复用 fs.read
+    # 口径 §5.4;仅作用于搜索应答,fs.read 自身不受本配置影响)。
+    inline-max-bytes: 262144
+    
+    # 单 provider 超时预算(ms):0 = 不限时,仅异常护栏;超时按异常同款 WARN 跳过该 provider。
+    provider-timeout-ms: 0
   permissions:
     auth-timeout-ms: 300000
     # AI 审议超时(ms):privilege 授权走 AiAuthReviewer 时单次 HTTP options.timeout + 外层总预算硬闸的窗口。
@@ -164,7 +178,7 @@ logging:
     # AI 请求原始内容打印(排除 apiKey),走 DEBUG 级别:
     # 由 HttpRequestLoggingInterceptor 在 HTTP 层打印(真实报文,含 skill 渐进式披露索引等全部注入)。
     # 开发期设为 DEBUG 开启控制台打印,生产环境保持 INFO 即静默。
-    dev.everyagent.worker.task.HttpRequestLoggingInterceptor: info
+    dev.everyagent.worker.http.HttpRequestLoggingInterceptor: info
 
     dev.everyagent.worker.tools: DEBUG
     dev.everyagent.worker.os: DEBUG

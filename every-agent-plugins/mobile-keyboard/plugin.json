@@ -1,0 +1,9 @@
+{
+  "id": "mobile-keyboard",
+  "name": "移动端键盘增强",
+  "version": "0.1.0",
+  "description": "移动端终端键盘增强悬浮球（纯 Web 插件）：仿 AssistiveTouch 悬浮球，仅移动端且终端界面可见时出现，点开后提供方向键小键盘，按键模拟输入终端的上下左右方向键",
+  "author": "everyagent",
+  "webMain": "web/index.ts",
+  "enabled": true
+}

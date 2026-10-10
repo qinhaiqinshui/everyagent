@@ -1,21 +1,20 @@
 /**
  * src/slash/taskScopedTokens.ts
  *
- * 任务级 token（底部胶囊）辅助模块：负责把任务 meta 里的 `slashTaskTokens`
- * （一组自包含 opaque token 串）解析为 ChatComposerToken，并提供
- * 去重 / 增删 / apply / cancel 的纯函数与 RPC 出口。
+ * 任务级 token（底部胶囊）辅助模块：负责把 slash 层自管存储的
+ * `slash-tokens.json`（一组自包含 opaque token 串）解析为 ChatComposerToken，
+ * 并提供去重 / 增删 / apply / cancel / list 的纯函数与 RPC 出口。
  *
- * 说明：本模块不涉及任务存储写入（taskStore 镜像里的 slashTaskTokens 由
- * 后续步骤接线），只提供「解析数组 + 操作本地 token 列表 + 调 RPC」能力。
+ * 说明：本模块不涉及任务存储写入，只提供「解析数组 + 操作本地 token 列表 + 调 RPC」能力。
  */
 import type { ChatComposerToken } from '@/types'
 import { parseOpaqueTokenText } from '@/composerToken/composerOpaqueToken'
 import { hubSession } from '@/hub/session'
-import { taskStore } from '@/hub/taskStore'
+import { taskStore } from '@/task/taskStore'
 import { createSnowflakeId } from '@/utils/snowflakeId'
 
 /**
- * 把任务 meta 的 `slashTaskTokens: string[]` 解析为 ChatComposerToken[]。
+ * 把任务级 token 字符串数组解析为 ChatComposerToken[]。
  * - 每项先用 parseOpaqueTokenText 校验，非法串直接跳过；
  * - 合法项构造 ChatComposerToken（id 用 createSnowflakeId('composer_token')，
  *   kind/label/summary 取自解析结果，opaqueText 为原始串）；
@@ -95,41 +94,54 @@ export function removeTaskToken(
   })
 }
 
-/** 把任务级 token 应用到指定任务（RPC `slash.taskTokens.apply`）。 */
+/** 把任务级 token 应用到指定任务（RPC `slash.taskTokens.apply`），返回最新 token 列表。 */
 export async function applyTaskToken(params: {
   taskId: string
   id: string
   token: string
-}): Promise<void> {
+}): Promise<string[]> {
   const owner = taskStore.get(params.taskId)?.workerId
   if (!owner) throw new Error('无法确定任务所属 worker')
   const result = await hubSession.rpcTo(owner, 'slash.taskTokens.apply', params) as {
     applied?: boolean
+    tokens?: string[]
   }
   if (result.applied !== true) {
     throw new Error(`应用任务级 token 失败：worker 未确认（applied !== true，id=${params.id}）`)
   }
+  return result.tokens ?? []
 }
 
 /**
- * 取消一个任务级 token（RPC `slash.cancel`）。
- * 取消是用户主动动作，失败不应卡 UI：RPC 抛错/离线时返回 { removed: false }
+ * 取消一个任务级 token（RPC `slash.cancel`），返回最新 token 列表。
+ * 取消是用户主动动作，失败不应卡 UI：RPC 抛错/离线时返回空列表
  * 并 console.warn，不向上抛。
  */
 export async function cancelTaskToken(params: {
   id?: string
   token: string
   taskId?: string
-}): Promise<{ removed: boolean }> {
+}): Promise<{ removed: boolean; tokens: string[] }> {
   try {
     const owner = params.taskId ? taskStore.get(params.taskId)?.workerId : undefined
     if (!owner) throw new Error('无法确定任务所属 worker')
     const result = await hubSession.rpcTo(owner, 'slash.cancel', params) as {
       removed?: boolean
+      tokens?: string[]
     }
-    return { removed: result.removed === true }
+    return { removed: result.removed === true, tokens: result.tokens ?? [] }
   } catch (error) {
     console.warn('[slash] cancelTaskToken 失败：', error)
-    return { removed: false }
+    return { removed: false, tokens: [] }
   }
+}
+
+/** 拉取任务的全部 slash 任务级 token（RPC `slash.taskTokens.list`）。 */
+export async function listTaskTokens(taskId: string): Promise<string[]> {
+  const owner = taskStore.get(taskId)?.workerId
+  if (!owner) throw new Error('无法确定任务所属 worker')
+  const result = await hubSession.rpcTo(owner, 'slash.taskTokens.list', { taskId }) as {
+    tokens?: string[]
+  }
+  return result.tokens ?? []
 }

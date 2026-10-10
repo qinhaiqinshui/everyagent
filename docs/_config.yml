@@ -1,0 +1,17 @@
+# Every Agent · docs/ 站点配置
+#
+# 用途：把本目录发布为 GitHub Pages 站点
+#   Settings → Pages → Build and deployment →
+#   Source: Deploy from a branch → Branch: main / folder: /docs
+#
+# 主题：just-the-docs（remote_theme 方式，无需本地安装 gem）。
+# docs/plugin-guide/ 各篇 front-matter 里的 nav_order / parent 即为该主题的
+# 侧栏导航约定（换 VitePress/MkDocs 时正文不动，只加各自配置）。
+remote_theme: just-the-docs/just-the-docs
+
+title: Every Agent
+description: Every Agent 架构文档与插件开发指南
+
+# 无 front-matter 的文档（如 ARCHITECTURE.md）不会被主题收录进侧栏，仍可直链访问：
+#   /docs/ARCHITECTURE.md → https://<user>.github.io/<repo>/ARCHITECTURE.html
+

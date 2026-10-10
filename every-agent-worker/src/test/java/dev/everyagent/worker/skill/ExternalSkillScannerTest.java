@@ -77,7 +77,7 @@ class ExternalSkillScannerTest {
     @Test
     void builtinIdSkipped(@TempDir Path tmp) throws Exception {
         Path skillsDir = Files.createDirectory(tmp.resolve("skills"));
-        Path dir = Files.createDirectory(skillsDir.resolve("agent-dispatch"));
+        Path dir = Files.createDirectory(skillsDir.resolve("plan"));
         Files.writeString(dir.resolve("skill.md"), "假装是内置 skill 的外部目录\n");
         ExternalSkillScanner scanner = newScanner(skillsDir);
         assertTrue(scanner.scan().isEmpty());

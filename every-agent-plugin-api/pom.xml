@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>dev.everyagent</groupId>
+        <artifactId>every-agent-parent</artifactId>
+        <version>1.0.0</version>
+    </parent>
+    <artifactId>every-agent-plugin-api</artifactId>
+    <version>1.0.0</version>
+    <name>every-agent-plugin-api</name>
+    <description>插件 API 面（纯接口与契约，零业务逻辑，仅依赖 spring-ai 核心类型）</description>
+
+    <dependencies>
+        <!-- 契约层 JSON 工具（EventPayloads / SlashTokenEncoder / FileChangesCollector 等引用） -->
+        <dependency>
+            <groupId>dev.everyagent</groupId>
+            <artifactId>every-agent-contract</artifactId>
+        </dependency>
+        <!-- Spring AI 核心模型抽象（ToolCallback / ToolCallingManager / Prompt / ChatResponse 等） -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-model</artifactId>
+        </dependency>
+        <!-- Spring AI 客户端抽象（Advisor / ChatClient） -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-client-chat</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+</project>

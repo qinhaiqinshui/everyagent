@@ -2,6 +2,7 @@ import React from 'react'
 import { useWorkspaceShell } from '../app/WorkspaceShellContext'
 import { useAppUi } from '@/components/app/AppUiContext'
 import { domainEventBus, DOMAIN_EVENTS } from '@/events/eventBus'
+import { pluginDispatcher } from '@/plugin/PluginDispatcher'
 import { WORKSPACE_EXPLORER_ROOT_LABEL, workspaceExplorerQueryService } from '@/query/workspaceExplorerQueryService'
 import { findExplorerNode, mergeExplorerChildrenPreservingLoaded, upsertExplorerChildren } from '@/query/workspaceExplorerTreeUtils'
 import { workspaceRegistry, workspaceActivity, type WorkspaceEntry } from '@/hub/workspaceRegistry'
@@ -88,7 +89,6 @@ function WorkspaceGroupPanel({
     openGlobalFileTab,
     renameFileTabs,
     setActiveSidebarPanel,
-    openGitHistoryTab,
     openTerminalTab,
   } = useWorkspaceShell()
   const { showToast } = useAppUi()
@@ -702,15 +702,6 @@ function WorkspaceGroupPanel({
     void reloadTree(showInternalFiles)
   }, [reloadTree, showInternalFiles])
 
-  /** 打开 Git 历史标签页（按路径 git log -- <path>，文件/目录均支持）。 */
-  const handleRequestGitHistory = React.useCallback((target: WorkspaceExplorerContextTarget) => {
-    openGitHistoryTab({
-      workspaceRoot: target.workspaceRoot,
-      // 资源树 node.path 是带前导 / 的业务绝对路径,git log 需要无前导 / 的工作区相对路径。
-      path: normalizeWorkspaceRelativePath(target.path),
-      name: target.name,
-    })
-  }, [openGitHistoryTab])
 
   const toggleInternalFiles = React.useCallback(() => {
     setShowInternalFiles((current) => !current)
@@ -725,7 +716,7 @@ function WorkspaceGroupPanel({
       textStatsRequestKeyRef.current = requestKey
       setPropertiesTextStats(null)
       const relPath = normalizeWorkspaceRelativePath(target.path)
-      void workspaceGateway.readTextFile(target.workspaceRoot, relPath)
+      void workspaceGateway.readTextFileRaw(target.workspaceRoot, relPath)
         .then((content) => {
           // 过期响应丢弃:用户已切换查看其它节点。
           if (textStatsRequestKeyRef.current !== requestKey) return
@@ -744,6 +735,13 @@ function WorkspaceGroupPanel({
       setPropertiesTextStats(null)
     }
   }, [])
+
+  // 插件扩展点注册表版本(ui.file_explorer_actions 等):插件注册/注销右键动作后
+  // 订阅版本变化触发重渲染,菜单在 titleRender 重新构建时即时反映最新注册项。
+  React.useSyncExternalStore(
+    pluginDispatcher.subscribeExtensionsChanged,
+    pluginDispatcher.getExtensionsVersion,
+  )
 
   const getFileActionItems = React.useCallback((target: WorkspaceExplorerContextTarget): ListRowActionItem[] => {
     const items: ListRowActionItem[] = []
@@ -791,12 +789,6 @@ function WorkspaceGroupPanel({
       label: '显示大小',
       onSelect: () => setMetaMode('size'),
     })
-    // 显示 Git 历史:打开主区历史标签页,按路径调原生 git log -- <path>。
-    items.push({
-      key: 'git-history',
-      label: '显示 Git 历史',
-      onSelect: () => handleRequestGitHistory(target),
-    })
     items.push({
       key: 'properties',
       label: '属性',
@@ -836,8 +828,25 @@ function WorkspaceGroupPanel({
       icon: <FolderArrowOutIcon size={13} />,
       onSelect: () => handleRequestRevealInOs(target),
     })
+    // 插件注册的文件树右键动作(ui.file_explorer_actions 扩展点):
+    // 按 isVisible 过滤后追加到内置菜单项尾部(与 FileExplorerAction 类型注释的约定一致)。
+    const pluginActionCtx = {
+      workspaceRoot: target.workspaceRoot,
+      path: target.path,
+      name: target.name,
+      type: target.type,
+    }
+    for (const action of pluginDispatcher.listRegisteredFileExplorerActions()) {
+      if (action.isVisible && !action.isVisible(pluginActionCtx)) continue
+      items.push({
+        key: `plugin:${action.id}`,
+        label: action.label,
+        icon: action.icon,
+        onSelect: () => action.invoke?.(pluginActionCtx),
+      })
+    }
    return items
-  }, [handleOpenFile, handleRequestCreate, handleRequestDownload, handleRequestGitHistory, handleRequestMove, handleRequestOpenTerminal, handleRequestProperties, handleRequestRenameTarget, handleRequestRevealInOs, handleRequestSearch, handleRequestUpload])
+  }, [handleOpenFile, handleRequestCreate, handleRequestDownload, handleRequestMove, handleRequestOpenTerminal, handleRequestProperties, handleRequestRenameTarget, handleRequestRevealInOs, handleRequestSearch, handleRequestUpload])
 
   const rootMoreActionItems = React.useMemo<MoreActionItem[]>(() => [
     {

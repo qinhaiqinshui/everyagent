@@ -8,12 +8,12 @@
  */
 import { formatTaskStatus, resolveTaskStatusTone, type TaskStatusTone } from '@/task/taskStatusPresentation'
 import type { TaskThreadItem } from '@/task/eventFolder'
-import type { AgentMessageRecord, ContextMonitorSnapshot, TaskStatus, TaskTraceRecord } from '@/types'
-import { taskStore, type TaskListEntry } from '@/hub/taskStore'
-import { taskStreamManager } from '@/hub/taskStream'
+import type { AgentMessageRecord, ContextMonitorSnapshot } from '@/types'
+import type { TaskStatus, TaskTraceRecord } from '@/task/types'
+import { taskStore, type TaskListEntry } from '@/task/taskStore'
+import { taskStreamManager } from '@/task/taskStream'
 import { hubSession } from '@/hub/session'
 import { workspaceRegistry } from '@/hub/workspaceRegistry'
-import { channels } from '@every-agent/client'
 
 export type { TaskThreadItem }
 
@@ -53,6 +53,10 @@ export interface TaskListItemSnapshot {
   statusLabel: string
   statusTone: TaskStatusTone
   contextUsage?: ContextMonitorSnapshot | null
+  /** 主 agent 稳定 ID(worker TaskSummary 透传;电池详情卡数据源)。 */
+  mainAgentId?: string
+  /** 任务创建时间(worker TaskSummary.createdAt;电池详情卡「创建时间」行数据源)。 */
+  createdAt: number
   /** 任务挂靠的工作区根(TasksPanel 按工作区分组)。 */
   workspace?: string
   /** 任务归属 worker(TasksPanel 组内「加载更多」按 worker 定向续拉)。 */
@@ -75,9 +79,11 @@ function toListItem(entry: TaskListEntry): TaskListItemSnapshot {
     attachedSkillLabel: '',
     statusLabel: formatTaskStatus(entry.status),
     statusTone: resolveTaskStatusTone(entry.status),
-    // 直接消费 worker TaskSummary.usage(任务列表随 tasks.list/task.updated 携带,
-    // 不再依赖打开聊天页建流;聊天页流折叠到实时值后优先实时)。
-    contextUsage: taskStreamManager.peekState(entry.taskId)?.contextUsage ?? entry.contextUsage ?? null,
+    // 直接消费 worker TaskSummary.usage(usage 投影器聚合任务下所有 agent 最近一轮占用,
+    // 随 tasks.list/task.updated 携带;不依赖打开聊天页建流,聊天页与列表页电池同源同值)。
+    contextUsage: entry.contextUsage ?? null,
+    mainAgentId: entry.mainAgentId || undefined,
+    createdAt: entry.createdAt,
     workspace: entry.workspace,
     workerId: entry.workerId,
   }
@@ -130,7 +136,7 @@ export const taskQueryService = {
       },
       header: { displayTitle: entry.title, workspace: entry.workspace },
       thread: this.getTaskThread(taskId),
-      contextUsage: taskStreamManager.peekState(taskId)?.contextUsage ?? entry.contextUsage ?? null,
+      contextUsage: entry.contextUsage ?? null,
     }
   },
 
@@ -150,12 +156,10 @@ export const taskQueryService = {
     configId?: string
     /** 任务挂靠的工作区根(新建必填;草稿选择器指定,缺省用注册表首选根)。 */
     workspace?: string
-    /** 任务级 slash token(仅新建时传;worker 写入 meta.slashTaskTokens 并触发建后回调)。 */
-    taskTokens?: string[]
     /** 原始输入(含 opaque token 串,仅用于 user.message 回放还原胶囊;缺省=纯文本输入)。 */
     rawContent?: string
-    /** 编辑重发:被编辑消息的 seq(字符串雪花ID);worker 收到后先截断后续事件再正常运行。 */
-    editSeq?: string
+    /** 通用 metadata(透传到 task.run RPC params;如 { insert: true } 表示插入当前对话、{ editSeq } 表示编辑重发)。 */
+    metadata?: Record<string, unknown>
   }): Promise<string> {
     if (opts?.taskId) {
       // 续跑/入队:透传当前选定的模型 configId(旧任务可切换模型);不传则 worker 沿用任务冻结模型。
@@ -169,7 +173,7 @@ export const taskQueryService = {
         input,
         configId: opts.configId || undefined,
         ...(opts.rawContent ? { rawContent: opts.rawContent } : {}),
-        ...(opts.editSeq ? { editSeq: opts.editSeq } : {}),
+        ...(opts.metadata ? { metadata: opts.metadata } : {}),
       })
       return opts.taskId
     }
@@ -177,20 +181,18 @@ export const taskQueryService = {
       throw new Error('请先选择 worker')
     }
     const workspace = opts?.workspace?.trim() || await resolveWorkspaceRoot()
-    const taskTokens = opts?.taskTokens?.filter((token) => token?.length > 0) ?? []
     const result = await hubSession.rpcTo(opts.workerId, 'task.run', {
       input,
       title: opts?.title,
       idempotencyKey: opts?.idempotencyKey,
       workspace,
       configId: opts?.configId || undefined,
-      // 仅新建分支携带;为空不传,保持与现状一致。
-      ...(taskTokens.length > 0 ? { taskTokens } : {}),
       ...(opts.rawContent ? { rawContent: opts.rawContent } : {}),
+      ...(opts.metadata ? { metadata: opts.metadata } : {}),
     })
     const taskId = String(result?.taskId ?? '')
     if (!taskId) throw new Error('worker 未返回 taskId')
-    taskStore.trackCreated(taskId, opts?.title || input.slice(0, 40), workspace)
+    taskStore.trackCreated(taskId, opts?.title || input.slice(0, 40), workspace, opts.workerId)
     return taskId
   },
 
@@ -226,33 +228,6 @@ export const taskQueryService = {
     }
   },
 
-  /**
-   * 把任务队列第 index 条用户输入立即插入到正在进行的 AI 对话循环
-   * (worker 级 input 频道 `task.dialogInsert` 事件,fire-and-forget)。
-   * worker 侧 DialogInsertAdvisor 收到后,会在工具循环把工具结果交回 AI 时
-   * 把该输入以 role=user 随工具结果一并提交给模型,并发射 user.message 事件
-   * (前端右侧用户消息区可见、落盘回放完整);worker 同时按 index 从 pendingInputs 移除该项。
-   * 成功无返回值;失败抛可读错误。
-   */
-  async insertQueuedInput(taskId: string, index: number, text: string): Promise<void> {
-    try {
-      const ownerWorkerId = taskStore.get(taskId)?.workerId
-      if (!ownerWorkerId) {
-        throw new Error('无法确定任务所属 worker(任务数据不可用)')
-      }
-      const client = hubSession.workerClient(ownerWorkerId)
-      if (!client) {
-        throw new Error('worker ' + ownerWorkerId + ' 未连接')
-      }
-      client.pub(
-        channels.workerInput(client.k, ownerWorkerId),
-        'task.dialogInsert',
-        { taskId, index, text },
-      )
-    } catch (e) {
-      throw new Error(e instanceof Error ? e.message : '队列插入失败')
-    }
-  },
 }
 
 /**

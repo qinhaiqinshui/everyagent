@@ -376,7 +376,8 @@ export default function FileTabPage({
     setPropertiesOpen(true)
     setFileStat(null)
     // 实时获取磁盘属性(FileTabResource 不含 size/时间;每次打开都重新 stat,不缓存)。
-    void workspaceGateway.stat(file.workspaceRoot, file.filePath)
+    // 文件标签页是用户操作,不经沙箱,统一走 fs.statRaw。
+    void workspaceGateway.statRaw(file.workspaceRoot, file.filePath)
       .then((stat) => setFileStat(stat))
       .catch(() => setFileStat(null))
   }, [file])

@@ -1,5 +1,4 @@
 import type {
-  TaskChatTabInput,
   TopLevelPageId,
   WorkspaceTaskChatTab,
   WorkspaceFileTab,
@@ -7,9 +6,9 @@ import type {
   WorkspacePluginTab,
   WorkspacePageTab,
   WorkspaceDiffTab,
-  WorkspaceGitHistoryTab,
   WorkspaceTab,
 } from '@/types'
+import type { TaskChatTabInput } from '@/task/types'
 
 /**
  * 工作区标签状态的纯函数工具。
@@ -119,17 +118,6 @@ export function createWorkspaceDiffTab(tab: Omit<WorkspaceDiffTab, 'tabType' | '
 }
 
 /**
- * 创建顶级 Git 历史标签（id 由 `git-history:${path}:${workspaceRoot}` 确定性构造——同一路径恒为同一标签）。
- */
-export function createWorkspaceGitHistoryTab(
-  tab: Omit<WorkspaceGitHistoryTab, 'tabType' | 'id'>,
-): WorkspaceGitHistoryTab {
-  return {
-    ...tab,
-    id: `git-history:${tab.path}:${tab.workspaceRoot}` as const,
-    tabType: 'git-history',
-  }
-}
 
 /**
  * 仅当 id 命中且确为文件标签时，更新其编辑模式。
