@@ -48,6 +48,7 @@ try {
 
 let mainWindow: BrowserWindow | null = null
 let tray: Tray | null = null
+let quitProgressWindow: BrowserWindow | null = null
 let backend: BackendHandles | null = null
 let staticServer: StaticServer | null = null
 let bootstrap: DesktopBootstrap | null = null
@@ -311,6 +312,77 @@ function showMainWindow(): void {
   }
 }
 
+/** 退出进度模态框:点击「全部退出」后立即弹出,展示后端停止进度,避免用户面对无响应空窗。 */
+function showQuitProgress(): void {
+  if (quitProgressWindow && !quitProgressWindow.isDestroyed()) {
+    quitProgressWindow.focus()
+    return
+  }
+  const win = new BrowserWindow({
+    width: 480,
+    height: 320,
+    frame: false,
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    alwaysOnTop: true,
+    center: true,
+    show: true,
+    backgroundColor: '#fafafa',
+    webPreferences: {
+      preload: join(__dirname, '..', 'preload', 'index.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+    },
+  })
+  quitProgressWindow = win
+  win.on('closed', () => {
+    quitProgressWindow = null
+  })
+  void win.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(quittingPage()))
+}
+
+function quittingPage(): string {
+  return `<!doctype html>
+<meta charset="utf-8">
+<style>
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0}
+  body{font-family:system-ui;background:#fafafa;color:#333;display:flex;flex-direction:column;overflow:hidden;border:1px solid #ddd;border-radius:8px}
+  h1{font-size:14px;font-weight:600;margin:0;padding:14px 20px 10px;display:flex;align-items:center;gap:8px}
+  .spinner{width:16px;height:16px;border:2px solid #ddd;border-top-color:#4a90d9;border-radius:50%;animation:spin .8s linear infinite;flex-shrink:0}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  #log{flex:1;min-height:0;list-style:none;margin:0;padding:8px 20px 16px;background:#fff;border-top:1px solid #eee;overflow:auto;font:12px/1.6 ui-monospace,Consolas,monospace}
+  #log li{white-space:pre-wrap;word-break:break-all}
+</style>
+<h1><span class="spinner"></span>正在退出 Every Agent…</h1>
+<ul id="log"></ul>
+<script>
+  (async function () {
+    var logEl = document.getElementById('log');
+    function add(line) {
+      var li = document.createElement('li');
+      li.textContent = line;
+      logEl.appendChild(li);
+      while (logEl.children.length > 200) logEl.removeChild(logEl.firstChild);
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+    try {
+      var api = window.everyAgentDesktop;
+      if (api && api.getStartupStatus) {
+        var lines = await api.getStartupStatus();
+        // 只显示最近 30 行(启动历史大部分与退出无关,避免刷屏)。
+        lines.slice(-30).forEach(add);
+        if (api.onStartupStatus) api.onStartupStatus(function (line) { add(line); });
+      }
+    } catch (e) {
+      add('无法读取退出状态: ' + e);
+    }
+  })();
+</script>`
+}
+
 /** 创建系统托盘:后台运行时的恢复入口与真正退出入口。 */
 function createTray(): void {
   try {
@@ -344,6 +416,9 @@ function createTray(): void {
           click: () => {
             pushStatus('托盘菜单:全部退出(停止 hub/worker)')
             quitScope = 'all'
+            // 立即隐藏主窗口并弹出退出进度模态框,避免用户面对无响应窗口等待。
+            if (mainWindow && !mainWindow.isDestroyed()) mainWindow.hide()
+            showQuitProgress()
             app.quit()
           },
         },
