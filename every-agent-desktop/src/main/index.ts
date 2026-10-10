@@ -452,17 +452,18 @@ function startingPage(): string {
   return `<!doctype html>
 <meta charset="utf-8">
 <style>
-  body{font-family:system-ui;background:#fafafa;color:#333;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;padding-top:32px}
-  .card{width:min(680px,90vw)}
-  h1{font-size:18px;font-weight:600;margin:0 0 12px}
-  #log{list-style:none;margin:0;padding:10px 12px;background:#fff;border:1px solid #eee;border-radius:8px;max-height:55vh;overflow:auto;font:12px/1.6 ui-monospace,Consolas,monospace}
+  /* 日志区占满整个窗口:body 为纵向 flex 布局并隐藏自身滚动条,
+     页面级只保留 #log 一个滚动条(box-sizing 防止 padding-top 撑出窗口滚动条)。 */
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{font-family:system-ui;background:#fafafa;color:#333;margin:0;padding-top:32px;display:flex;flex-direction:column;overflow:hidden}
+  h1{font-size:16px;font-weight:600;margin:0;padding:12px 16px 10px}
+  #log{flex:1;min-height:0;list-style:none;margin:0;padding:8px 16px 12px;background:#fff;border-top:1px solid #eee;overflow:auto;font:12px/1.6 ui-monospace,Consolas,monospace}
   #log li{white-space:pre-wrap;word-break:break-all}
 </style>
 ${windowControlsSnippet()}
-<div class="card">
-  <h1>Every Agent 正在启动…</h1>
-  <ul id="log"></ul>
-</div>
+<h1>Every Agent 正在启动…</h1>
+<ul id="log"></ul>
 <script>
   (async function () {
     var logEl = document.getElementById('log');
@@ -471,6 +472,8 @@ ${windowControlsSnippet()}
       li.textContent = line;
       logEl.appendChild(li);
       while (logEl.children.length > 200) logEl.removeChild(logEl.firstChild);
+      // 新日志自动滚到底部,保持最新进度可见。
+      logEl.scrollTop = logEl.scrollHeight;
     }
     try {
       var api = window.everyAgentDesktop;
@@ -492,7 +495,7 @@ function errorPage(message: string, logsDir: string): string {
   const desktopTail = readTail(join(logsDir, 'desktop.log'), 4000)
   return (
     `<meta charset="utf-8">` +
-    `<style>body{font-family:system-ui;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;color:#888;background:#fafafa;padding-top:32px}</style>` +
+    `<style>*{box-sizing:border-box}body{font-family:system-ui;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;color:#888;background:#fafafa;padding-top:32px}</style>` +
     windowControlsSnippet() +
     `<div style="max-width:90vw;width:900px;text-align:left"><h2 style="color:#c00">Every Agent 启动失败</h2>` +
     `<pre style="color:#c00;white-space:pre-wrap;text-align:left;background:#fff;border:1px solid #f0c0c0;border-radius:8px;padding:12px">${escapeHtml(message)}</pre>` +
