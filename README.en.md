@@ -28,6 +28,7 @@
   - [🖥️ Desktop edition works out of the box](#-desktop-edition-works-out-of-the-box)
   - [🧩 Four modules, freely combinable for deployment](#-four-modules-freely-combinable-for-deployment)
   - [🏢 Intranet deployment for companies — integrate with existing systems with zero friction](#-intranet-deployment-for-companies--integrate-with-existing-systems-with-zero-friction)
+- [🛡️ System-Level Sandbox: Codex-Inspired, Real Isolation](#-system-level-sandbox-codex-inspired-real-isolation)
 - [📸 Screenshots](#-screenshots)
 - [🏗️ Architecture Overview](#-architecture-overview)
 - [🚀 Quick Start](#-quick-start)
@@ -79,9 +80,8 @@
 - Per-round token usage and context consumption are clear at a glance.
 
 ### 🛡️ Security sandbox + human-AI collaboration guardrails
-- Commands run in a **sandbox**: on Windows it defaults to a **Codex-style native sandbox** (dual local accounts + WRITE_RESTRICTED token + capability SIDs + firewall/WFP; outside the workspace everything is read-only); alternatively a **WSL2 Ubuntu distribution sandbox** (a disposable system that can be fully reinstalled, where host drives outside the workspace are completely invisible) or a **Windows restricted-token sandbox** — all three backends are **pluggable sandbox plugins**, switchable via one line of `worker.sandbox.type`. Network is allowed by default and can be disabled per-task via `/disable-network` (this command ships with the wsl-ubuntu sandbox plugin — it is the only backend that can truly cut the network via `unshare -n`).
-- Out-of-workspace operations / dangerous commands always require **popup authorization** (reject / this round / this task), with optional **AI review** for auto-adjudication or **unattended mode** to run fully automatically.
-- Git credentials are AES-GCM encrypted and stored locally, never transmitted over the network.
+- Commands run in a **system-level sandbox** — not application-layer path checking, but **OS-level isolation**: Codex-style dual local accounts + restricted tokens; outside the workspace, the file system is physically read-only. Three pluggable backends (`sandbox-windows-codex` / `wsl-ubuntu` / `windows-mic`), switchable via one line of `worker.sandbox.type`. This is a true sandbox most coding agents don't have — see the [🛡️ System-Level Sandbox section](#-system-level-sandbox-codex-inspired-real-isolation) below.
+- Out-of-workspace operations / dangerous commands always require **popup authorization**, with optional **AI review** / **unattended mode** for auto-adjudication; git credentials are AES-GCM encrypted and stored locally.
 
 ### 🔌 Plug in any model, with built-in failover
 - Any **OpenAI-compatible** provider: OpenAI, DeepSeek, Qwen, GLM, local vLLM/Ollama… just change one line of config.
@@ -116,6 +116,54 @@ The four modules — web / hub / worker / desktop — are **decoupled and each s
 
 ---
 
+---
+
+## 🛡️ System-Level Sandbox: Codex-Inspired, Real Isolation
+
+Most coding agents either have no sandbox at all or rely on `cwd` locks + path-prefix validation as a "soft isolation" — this can't stop arbitrary writes after a `cd /`, nor can it prevent process escape. Every Agent is different: **the sandbox is system-level, enforced by the operating system's native mechanisms, not an application-layer simulation.**
+
+> The approach is inspired by OpenAI Codex's dual-account + restricted-token design, using native OS capabilities on Windows for true process-level isolation.
+
+### Why a "real sandbox" matters
+
+| | Typical coding agent (no sandbox / soft isolation) | Every Agent (system-level sandbox) |
+|---|---|---|
+| Writes outside the workspace | Relies on path checks — a `cd` bypasses it | **Blocked at the OS level** — the process literally has no write permission outside |
+| Process escape | No protection | Restricted tokens / separate distribution — attack surface drastically reduced |
+| System files / user directories | AI can accidentally delete them | **Read-only** — accidental deletion is physically impossible |
+| Recoverability | Leftover junk requires manual cleanup | WSL distro can be reinstalled in one step; host drives are invisible |
+
+### Three pluggable sandbox backends — switch with one line of `worker.sandbox.type`
+
+1. **`sandbox-windows-codex` (default)** — Codex-inspired native sandbox:
+   - Dual local accounts: task processes run under a **dedicated low-privilege account**, physically isolated from your daily-use account;
+   - **WRITE_RESTRICTED restricted token**: the process receives a "stripped" token — write privileges are stripped by the OS; outside the workspace directory, everything is **read-only**;
+   - **Capability SID**: the process lacks sensitive capabilities and cannot initiate system-level operations;
+   - Firewall / WFP rules can optionally tighten network access;
+   - No WSL, no VM — pure Windows native mechanisms; fast startup, low overhead.
+
+2. **`wsl-ubuntu`** — disposable full Linux sandbox:
+   - Tasks run inside a **WSL2 Ubuntu distribution**; host Windows drives outside the workspace are **completely invisible**;
+   - The distribution can be **fully reinstalled** (`wsl --unregister` → re-init) — use-and-discard, back to a clean state in one step;
+   - The only backend that can **truly cut the network**: the in-task `/disable-network` command runs `unshare -n` inside the distro, physically isolating the network.
+
+3. **`windows-mic`** — Windows Medium IL restricted-token sandbox: lightweight de-privilege, between codex and no sandbox.
+
+> When no sandbox plugin is present, the system falls back to `DIRECT` (running directly on the host), but the PermissionGate chain still intercepts out-of-bounds writes — **even if the user deliberately disables the sandbox, writes outside the workspace are not allowed** and must be authorized.
+
+### Human-AI collaboration guardrails (on top of the sandbox)
+
+The sandbox controls "can it write"; guardrails control "should it do this":
+
+- Out-of-workspace path access / dangerous command verbs → **PermissionGate popup authorization**: reject / this round / this task (three levels);
+- **AI review** can be enabled: the model automatically judges whether a dangerous operation is safe; falls back to human on timeout;
+- **Unattended mode** can be enabled: authorization is fully auto-approved, ideal for long-running tasks when no one is watching;
+- Git credentials are **AES-GCM encrypted** and stored locally, never transmitted over the network.
+
+In one sentence: **the sandbox ensures the AI can't break your system; the guardrails ensure the AI doesn't do things you don't want it to do behind your back.**
+
+---
+
 ## 📸 Screenshots
 - Web frontend (connected to the same worker)
 ![Main overview](screenshots/1.png)
@@ -128,6 +176,9 @@ The four modules — web / hub / worker / desktop — are **decoupled and each s
 
 - Sub-agents and task queue
 ![Main overview 6](screenshots/5.png)
+
+- v1.0.0 plugin system + feature plugins
+  ![Plugin system](screenshots/6.png)
 
 ---
 

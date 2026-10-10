@@ -177,6 +177,8 @@ web / hub / worker / desktop 四个模块**互相解耦、物尽其用**,可按�
 - 子Agent 和 任务队列
 ![主界面总览6](screenshots/5.png)
 
+- v 1.0.0 插件系统+功能插件化
+  ![插件系统](screenshots/6.png)
 ---
 
 ## 🏗️ 架构速览
