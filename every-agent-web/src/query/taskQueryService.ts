@@ -53,8 +53,6 @@ export interface TaskListItemSnapshot {
   statusLabel: string
   statusTone: TaskStatusTone
   contextUsage?: ContextMonitorSnapshot | null
-  /** 主 agent 稳定 ID(worker TaskSummary 透传;电池详情卡数据源)。 */
-  mainAgentId?: string
   /** 任务创建时间(worker TaskSummary.createdAt;电池详情卡「创建时间」行数据源)。 */
   createdAt: number
   /** 任务挂靠的工作区根(TasksPanel 按工作区分组)。 */
@@ -82,7 +80,6 @@ function toListItem(entry: TaskListEntry): TaskListItemSnapshot {
     // 直接消费 worker TaskSummary.usage(usage 投影器聚合任务下所有 agent 最近一轮占用,
     // 随 tasks.list/task.updated 携带;不依赖打开聊天页建流,聊天页与列表页电池同源同值)。
     contextUsage: entry.contextUsage ?? null,
-    mainAgentId: entry.mainAgentId || undefined,
     createdAt: entry.createdAt,
     workspace: entry.workspace,
     workerId: entry.workerId,

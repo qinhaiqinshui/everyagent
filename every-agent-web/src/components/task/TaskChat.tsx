@@ -808,6 +808,12 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
   // 上下文占用优先取 worker 聚合快照(entry.contextUsage,与电池填充同源同值),
   // 缺省(未建流/旧数据)时回退 agentMeta 逐项求和;无任何数据时返回 null,电池内部
   // 由 monitor 快照兜底构造。
+  //
+  // 该项**不代表任何单个 agent**(isAggregate=true → 卡片标「全部 agent」+ 任务级汇总
+  // 徽标、不渲染 agentId 行):此前这里借主 agent 的 agentId/isMain 整形,电池详情卡因此
+  // 长得像主 agent 的卡片、把「Σ 全部 agent」读成主 agent 自己的用量(2026-10 修复)。
+  // 主 agent 卡片(agentListItems 中的 isMain 项)只显示其自身用量,数据源与子 agent
+  // 一致(agentMeta[''] ← 台账 + 流内 usage 事件)。
   const batteryItem = React.useMemo<AgentListItem | null>(() => {
     const mainItem = agentListItems.find((item) => item.isMain) ?? null
     const metas = agentListItems
@@ -841,14 +847,15 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
     const contextWindow = usage && usage.maxTokens > 0
       ? usage.maxTokens
       : sumMeta((meta) => meta.contextWindow)
-    const agentId = mainItem?.agentId ?? stableMainAgentId ?? ''
+    // 汇总项无 agent 身份:agentId 留空(卡片渲染为「全部 agent」+ 任务级汇总徽标),
+    // 状态/创建时间仍取任务口径(主 agent 的权威状态即任务状态、创建时间 = 任务创建时间)。
     return {
-      agentId,
+      agentId: '',
       title: '全部 agent',
       status: mainItem?.status ?? 'idle',
-      isMain: true,
+      isAggregate: true,
       meta: {
-        agentId,
+        agentId: '',
         createdAt: entry?.createdAt && entry.createdAt > 0 ? entry.createdAt : undefined,
         model: models.length > 0 ? models.join(' / ') : (usage?.model || undefined),
         inputTokens: sumMeta((meta) => meta.inputTokens),
@@ -862,7 +869,7 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
         ? Math.min(1, Math.max(0, contextUsed / contextWindow))
         : undefined,
     }
-  }, [agentListItems, entry, stableMainAgentId])
+  }, [agentListItems, entry])
 
   /** 点击 agent 长条:切换选中态(再点同一 agent 由面板回传 '' 恢复全部;轮次视图下仅高亮)。 */
   const handleSelectAgent = React.useCallback((agentId: string) => {
@@ -1028,7 +1035,7 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
                         投影器聚合任务下所有 agent 最近一轮占用,task.updated 每轮实时推送;
                         聊天页与任务列表同源同值,流内不再单独维护)。
                         详情卡数据 = 任务级汇总项(任务下全部 agent 聚合,创建时间用任务
-                        创建时间,上下文占用/窗口逐 agent 累加)。 */}
+                        创建时间,上下文占用/窗口逐 agent 累加;不是主 agent 自己的用量)。 */}
                     <ContextBattery
                       taskId={effectiveTaskId}
                       monitor={entry?.contextUsage ?? null}

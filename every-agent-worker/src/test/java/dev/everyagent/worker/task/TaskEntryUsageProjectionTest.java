@@ -13,6 +13,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * TaskEntry usage 事件投影回归(§5.2/§7.20):advisor 发射 usage 事件后,任务级
@@ -21,7 +22,8 @@ import static org.junit.jupiter.api.Assertions.assertNull;
  *   <li>聚合口径:任务下所有 agent「最近一轮上下文占用」之和(Σ input / Σ window),
  *       每 agent 取最近一轮(新轮覆盖旧轮),任务电池数据源;</li>
  *   <li>每条 usage 事件先更新聚合再触发广播(恰好一次);</li>
- *   <li>再运行冷启动 seedUsageMeta 基线不被非 usage 事件冲掉;</li>
+ *   <li>再运行冷启动 seedUsageMeta + seedUsageRounds 成对回灌,基线不被非 usage 事件冲掉,
+ *       且续跑后第一轮新 usage 不会把聚合重算成「仅本次运行出现过的 agent」;</li>
  *   <li>编辑重发截断后新 usage 事件(新雪花 seq)天然续读。</li>
  * </ul>
  */
@@ -107,6 +109,66 @@ class TaskEntryUsageProjectionTest {
         var s = t.usageSummary();
         assertNotNull(s);
         assertEquals(300, s.inputTokens(), "冷启动基线由 seedUsageMeta 提供,非 usage 事件不覆盖");
+        assertEquals(200_000L, s.contextWindowTokens());
+    }
+
+    @Test
+    void summaryCarriesPerAgentBaseForRerunRestore() {
+        TaskEntry t = entry(null);
+        emitUsage(t, "main-1", 100, 20, 256_000, "gpt-x");
+        emitUsage(t, "sub-2", 500, 80, 128_000, "gpt-y");
+
+        var byAgent = t.summaryJson().path("usageByAgent");
+        assertTrue(byAgent.isObject(), "聚合口径的 per-agent 数据基随 meta 落盘: " + t.summaryJson());
+        assertEquals(100, byAgent.path("main-1").path("inputTokens").asLong());
+        assertEquals(256_000L, byAgent.path("main-1").path("contextWindowTokens").asLong());
+        assertEquals(500, byAgent.path("sub-2").path("inputTokens").asLong());
+        assertEquals(128_000L, byAgent.path("sub-2").path("contextWindowTokens").asLong());
+    }
+
+    /**
+     * 续跑(再运行冷启动)必须保住上一轮其他 agent 的最近快照:只回灌聚合值时,续跑后第一条
+     * usage 事件会把聚合重算成「仅本次运行出现过的 agent」,电池随之从「Σ 全部 agent」塌成
+     * 「主 agent 自己」。
+     */
+    @Test
+    void rerunKeepsOtherAgentsLastRoundInAggregate() {
+        TaskEntry first = entry(null);
+        emitUsage(first, "main-1", 100, 20, 256_000, "gpt-x");
+        emitUsage(first, "sub-2", 500, 80, 128_000, "gpt-y");
+        assertEquals(600, first.usageSummary().inputTokens());
+
+        // 续跑:同 taskId 全新 TaskEntry(新 EventLog),meta 里的聚合值与 per-agent 数据基成对回灌
+        TaskEntry second = entry(null);
+        second.seedUsageMeta(Json.parse(Json.write(first.summaryJson())).path("usage"));
+        second.seedUsageRounds(Json.parse(Json.write(first.summaryJson())).path("usageByAgent"));
+
+        // 未跑任何一轮:聚合与上一轮结束一致(sub(resume) 前列表/电池值不缩水)
+        assertEquals(600, second.usageSummary().inputTokens(), "续跑未跑轮前聚合不缩水");
+        assertEquals(384_000L, second.usageSummary().contextWindowTokens());
+
+        // 主 agent 新一轮:只覆盖主 agent 条目,子 agent 最近快照保留
+        emitUsage(second, "main-1", 900, 50, 256_000, "gpt-x");
+        var s = second.usageSummary();
+        assertEquals(1400, s.inputTokens(), "续跑后聚合 = 主 900 + 子 500(不丢其他 agent)");
+        assertEquals(130, s.outputTokens());
+        assertEquals(384_000L, s.contextWindowTokens(), "窗口仍为 Σ 各 agent 窗口");
+    }
+
+    /** 无 per-agent 数据基(旧任务 meta)时,续跑仅沿用聚合基线(优雅降级,不清零)。 */
+    @Test
+    void rerunWithoutPerAgentBaseKeepsAggregateBaseline() {
+        TaskEntry t = entry(null);
+        t.seedUsageMeta(Json.parse("{\"inputTokens\":300,\"outputTokens\":40,\"totalTokens\":340,"
+                + "\"contextWindowTokens\":200000,\"model\":\"gpt-old\"}"));
+        t.seedUsageRounds(null);
+        t.seedUsageRounds(Json.parse("{}"));
+        // 形状异常(顶层键值不是对象)/零值条目一律不入数据基,更不触发空基重算
+        t.seedUsageRounds(Json.parse("{\"inputTokens\":300,\"contextWindowTokens\":200000}"));
+
+        var s = t.usageSummary();
+        assertNotNull(s, "无数据基时聚合基线原样保留: " + s);
+        assertEquals(300, s.inputTokens());
         assertEquals(200_000L, s.contextWindowTokens());
     }
 

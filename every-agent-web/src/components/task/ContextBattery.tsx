@@ -24,7 +24,9 @@ export type ContextBatteryProps = {
   /**
    * 详情卡数据（任务级汇总项；缺省时由 monitor 快照兜底构造）。
    * 聊天页传任务下全部 agent 的聚合项（batteryItem：累计 tokens/上下文占用逐 agent
-   * 累加、创建时间 = 任务创建时间），任务列表行按 contextUsage + 任务创建时间整形。
+   * 累加、创建时间 = 任务创建时间、isAggregate=true），任务列表行按 contextUsage +
+   * 任务创建时间整形。**不传主 agent 自己的列表项**——主 agent 卡片在 agent 列表里
+   * 只显示其自身用量，电池详情卡只显示任务级汇总，两者数据源不同、不混同。
    */
   agentItem?: AgentListItem | null
 }
@@ -36,9 +38,10 @@ type UsageLevel = 'ok' | 'warn' | 'danger'
  *
  * - 电池格内已用部分按用量着色（绿 / 黄 / 红），剩余部分为轨道底色。
  * - 点击电池弹出详情卡：与子 agent 悬停信息卡共用 AgentInfoHoverCard（信息与样式
- *   完全一致——状态/标题/完整 agentId/创建时间/模型/累计 tokens 与上下文用量）；
- *   数据为**任务级汇总**——任务下所有 agent 聚合（创建时间 = 任务创建时间，
- *   累计 tokens 与上下文占用/窗口逐 agent 累加）。
+ *   完全一致——状态/标题/创建时间/模型/累计 tokens 与上下文用量）；数据为**任务级汇总**
+ *   ——任务下所有 agent 聚合（创建时间 = 任务创建时间，累计 tokens 与上下文占用/窗口
+ *   逐 agent 累加），卡片标「全部 agent」+「任务级汇总」徽标、**不显示 agentId**：
+ *   电池口径是任务级，绝不冒充主 agent 自己的用量（主 agent 卡片只显示其自身用量）。
  * - 数据经 `monitor` prop 镜像更新（任务流 usage 快照随 taskStore/taskStream 刷新）。
  */
 export default function ContextBattery({ monitor, agentItem }: ContextBatteryProps) {
@@ -99,11 +102,12 @@ export default function ContextBattery({ monitor, agentItem }: ContextBatteryPro
   // 详情卡数据:优先调用方传入的任务级汇总项;缺省时由 monitor 快照兜底构造
   // (如聊天页 entry/流未就绪的短暂窗口,monitor 本就是 worker 聚合的
   // Σ inputTokens / Σ 窗口上限),缺失字段由卡片显示「—」。
+  // 兜底项同样标 isAggregate:电池详情卡始终是任务级汇总,不冒充某个 agent(尤其主 agent)。
   const cardItem: AgentListItem = agentItem ?? {
     agentId: '',
     title: '全部 agent',
     status: 'idle',
-    isMain: true,
+    isAggregate: true,
     meta: hasData
       ? {
           agentId: '',

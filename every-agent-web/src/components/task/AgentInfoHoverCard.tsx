@@ -6,8 +6,9 @@
  *
  * 定位:向上优先、空间不足向下、视口 8px margin 钳制,捕获阶段监听 scroll / resize
  * 实时贴合触发元素(胶囊或电池按钮)。
- * 内容:头部(状态圆点 + 短 ID + 主 agent 徽标 + 标题)与明细行(完整 agentId 等宽
- * 可折行、状态、创建时间、模型、累计 tokens 入/出/合计、上下文用量 + 4px 进度条)。
+ * 内容:头部(状态圆点 + 短 ID + 标题;任务级汇总项为「全部 agent」+ 任务级汇总徽标)
+ * 与明细行(agentId 等宽可折行 —— 汇总项不渲染该行、状态、创建时间、模型、累计 tokens
+ * 入/出/合计、上下文用量 + 4px 进度条)。
  *
  * 触发方式由调用方决定:
  * - 胶囊场景:onMouseEnter/onMouseLeave 接入防抖关闭(openCard/scheduleClose)。
@@ -25,14 +26,20 @@ import './AgentListPanel.css'
 
 /** agent 列表项(胶囊 + 悬停信息卡共用数据形状)。 */
 export interface AgentListItem {
-  /** 展示用 agentId(主 = task.mainAgentId,子 = 子 agent id)。 */
+  /** 展示用 agentId(主 = task.mainAgentId,子 = 子 agent id;任务级汇总项无 agentId → '')。 */
   agentId: string
   /** 会话标题(子 agent 有 title;主 agent 固定「主 agent」)。 */
   title: string
   /** 当前状态(主 agent 由任务状态映射,子 agent 由事件状态机提供)。 */
   status: AgentStatus
-  /** 是否主 agent:悬停卡标「主 agent」徽标;主 agent 胶囊不渲染底部用量线。 */
+  /** 是否主 agent:主 agent 胶囊不渲染底部用量线。 */
   isMain?: boolean
+  /**
+   * 是否任务级汇总项(上下文电池详情卡专用):数据 = 任务下**全部 agent** 聚合(Σ)。
+   * 卡片据此把标题行渲染为「全部 agent」+ 任务级汇总徽标,且不渲染 agentId 行——
+   * 避免被读成某个 agent(尤其主 agent)自己的用量;单个 agent 的卡片只显示其自身用量。
+   */
+  isAggregate?: boolean
   /** 元数据快照(悬停信息卡数据源;主 agent 取键 '',子 agent 取键 = agentId)。 */
   meta?: AgentMetaSnapshot
   /** 上下文窗口占比(0~1,clamp;无数据 undefined)→ 子 agent 胶囊底部用量线。 */
@@ -85,7 +92,7 @@ export function AgentInfoHoverCard({ item, anchorEl, onMouseEnter, onMouseLeave 
   const cardRef = React.useRef<HTMLDivElement>(null)
   const [position, setPosition] = React.useState<{ top: number; left: number } | null>(null)
 
-  const label = shortAgentId(item.agentId)
+  const label = item.isAggregate ? (item.title || '全部 agent') : shortAgentId(item.agentId)
   const meta = item.meta
   const contextUsed = meta?.contextUsed
   const contextWindow = meta?.contextWindow
@@ -151,15 +158,21 @@ export function AgentInfoHoverCard({ item, anchorEl, onMouseEnter, onMouseLeave 
           aria-hidden="true"
         />
         <span className="nagent-agent-card__id">{label}</span>
-        {item.title && item.title !== item.agentId && item.title !== label ? (
+        {item.isAggregate ? (
+          <span className="nagent-agent-card__badge">任务级汇总</span>
+        ) : null}
+        {!item.isAggregate && item.title && item.title !== item.agentId && item.title !== label ? (
           <span className="nagent-agent-card__title" title={item.title}>{item.title}</span>
         ) : null}
       </div>
       <dl className="nagent-agent-card__rows">
-        <div className="nagent-agent-card__row nagent-agent-card__row--id">
-          <dt>agentId</dt>
-          <dd>{item.agentId}</dd>
-        </div>
+        {/* 任务级汇总项不对应单个 agent:不渲染 agentId 行,避免与主 agent 自己的用量混同。 */}
+        {item.isAggregate ? null : (
+          <div className="nagent-agent-card__row nagent-agent-card__row--id">
+            <dt>agentId</dt>
+            <dd>{item.agentId}</dd>
+          </div>
+        )}
         <div className="nagent-agent-card__row">
           <dt>状态</dt>
           <dd>{AGENT_STATUS_TEXT[item.status] ?? item.status}</dd>
