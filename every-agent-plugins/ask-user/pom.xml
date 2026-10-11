@@ -13,7 +13,7 @@
         <version>1.0.0</version>
         <relativePath>../../pom.xml</relativePath>
     </parent>
-    <version>0.1.0</version>
+    <version>1.0.0</version>
 
     <artifactId>ask-user</artifactId>
     <name>用户提问</name>
@@ -51,12 +51,12 @@
     </build>
 
     <dependencies>
-        <!-- 插件 API（编译期纯接口；版本显式 1.0.0，与根 parent 的 plugin-api 模块同版本；
-             不能写 ${project.version}：本工程默认版本是 0.1.0（新插件起点），而 plugin-api 是 1.0.0） -->
+        <!-- 插件 API（编译期纯接口；版本随 ${project.version}，与仓库内插件统一管理，
+             见根 scripts/bump-version.py 的插件槽位） -->
         <dependency>
             <groupId>dev.everyagent</groupId>
             <artifactId>every-agent-plugin-api</artifactId>
-            <version>1.0.0</version>
+            <version>${project.version}</version>
         </dependency>
         <!-- Jackson: AskUserTool 容错反序列化（LenientString/List），版本随 parent（同 sandbox-wsl-ubuntu 写法） -->
         <dependency>
