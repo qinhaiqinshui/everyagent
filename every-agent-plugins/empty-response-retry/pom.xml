@@ -6,10 +6,10 @@
     <parent>
         <groupId>dev.everyagent</groupId>
         <artifactId>every-agent-parent</artifactId>
-        <version>1.0.0</version>
+        <version>${revision}</version>
         <relativePath>../../pom.xml</relativePath>
     </parent>
-    <version>1.0.0</version>
+    <version>0.1.0</version>
 
     <artifactId>empty-response-retry</artifactId>
     <name>empty-response-retry</name>
@@ -49,7 +49,6 @@
         <dependency>
             <groupId>dev.everyagent</groupId>
             <artifactId>every-agent-plugin-api</artifactId>
-            <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>

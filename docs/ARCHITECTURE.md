@@ -86,7 +86,7 @@ Every Agent 是一套「**公网可及、本机执行**」的 AI Agent 系统:AI
 | contract | 纯协议:帧/RPC 信封/错误码/身份哈希(Java DTO + TS 类型) | — |
 | desktop | Electron(随包内置 Node 运行时),spawn 本地 hub/worker 子进程(jlink 精简 JRE 25) | 本地 6101/6102 |
 
-版本统一由仓库根父 pom 锁定(Spring Boot 4.1.x / Spring AI 2.0.x),各模块不得各自升版本。
+版本统一由仓库根父 pom 锁定(Spring Boot 4.1.x / Spring AI 2.0.x),各模块不得各自升版本。**工程版本单点源**:根 pom 的 `<properties><revision>` 是全仓唯一 Maven 版本写点(CI-friendly versions),contract / hub / worker / plugin-api 及根 reactor 内的 `task-edit-resend` 都不写自身 `<version>`,一律继承 `${revision}`;跨模块引用写 `${revision}`,**不得写 `${project.version}`**——它解析的是「消费方自己」的版本,在插件(自身版本与工程版本不同号)里会静默指错坐标。**仅由 `PluginLoader` 运行时加载的内置插件各自持有自己的版本(与它自己的 `plugin.json` 的 `version` 同号),不随工程版本走**,故升级工程版本时插件 pom 零改动。install/deploy 侧由 `flatten-maven-plugin`(`resolveCiFriendliesOnly`)把 `${revision}` 解析成实际版本:否则装进本地仓库/发到 Central 的 pom 里仍是表达式,仓库外消费者解析 parent 直接失败(`Could not find artifact every-agent-parent:pom:${revision}`;**实测** `-Drevision=<v>` 也救不回来,只能靠 flatten)。改版本跑两个脚本:`scripts/bump-version.py`(工程版本 + 三处 package.json,并体检残留硬编码)与 `scripts/sync-plugin-template-versions.ps1`(脚手架模板与文档站字面量)。
 
 ---
 

@@ -10,7 +10,7 @@
     <parent>
         <groupId>dev.everyagent</groupId>
         <artifactId>every-agent-parent</artifactId>
-        <version>1.0.0</version>
+        <version>${revision}</version>
         <relativePath>../../pom.xml</relativePath>
     </parent>
     <version>{{version}}</version>
@@ -51,12 +51,12 @@
     </build>
 
     <dependencies>
-        <!-- 插件 API（编译期纯接口；版本显式 1.0.0，与根 parent 的 plugin-api 模块同版本；
-             不能写 ${project.version}：本工程默认版本是 0.1.0（新插件起点），而 plugin-api 是 1.0.0） -->
+        <!-- 插件 API（编译期纯接口）。版本不在这里写：由根 pom 的 dependencyManagement 统一管理
+             （= ${revision}）。不要写 ${project.version} —— 本工程自身版本与工程版本不同号
+             （见本 pom 的 <version>），${project.version} 会解析成本插件自己的版本。 -->
         <dependency>
             <groupId>dev.everyagent</groupId>
             <artifactId>every-agent-plugin-api</artifactId>
-            <version>1.0.0</version>
         </dependency>
         <!-- 测试：JUnit 5（经 spring-boot-starter-test 传递）。红线 §14.9：不得依赖 every-agent-worker -->
         <dependency>

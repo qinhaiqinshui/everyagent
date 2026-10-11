@@ -1,31 +1,32 @@
 ﻿<#
 .SYNOPSIS
-根 pom 版本属性 → 脚手架模板 / 插件文档站版本引用 一键同步（known-issues #23「缺统一 bump 脚本」项）。
+版本单点源 → 脚手架模板 / 插件文档站版本引用 一键同步（known-issues #23「缺统一 bump 脚本」项）。
 
 .DESCRIPTION
 改根 pom 的版本属性（spring-boot-starter-parent 父版本 / java.version / spring-ai.version /
-every-agent-parent 工程版本）或 plugin-api / worker 模块版本后运行本脚本，把下列位置的版本
-字面量同步成 pom 当前值（对当前值执行 = 幂等无变更）：
+<revision> 工程版本）后运行本脚本，把下列位置的版本字面量同步成根 pom 当前值
+（对当前值执行 = 幂等无变更）：
 
-  槽位               值来源（只读）                            同步目标（写入）
-  -----------------  ----------------------------------------  ------------------------------------------
-  spring-boot        根 pom parent spring-boot-starter-parent  java/full-standalone pom.xml.tpl 的
-                                                                <spring-boot.version> 属性与两处注释
-  java.version       根 pom <properties>java.version           standalone 模板 <maven.compiler.release>、
-                                                                模板/文档中「Java NN / JDK NN」字样
-  every-agent-parent 根 pom 工程版本                           java/full-builtin 模板 parent 块版本、
-                                                                文档 every-agent-parent:<v> 引用
-  plugin-api         every-agent-plugin-api/pom.xml            四份 pom 模板 API 依赖版本（含注释）、
-                                                                文档 every-agent-plugin-api(:jar)：<v> 引用
-  worker             every-agent-worker/pom.xml                文档 every-agent-worker-<v>-exec.jar 文件名
-  spring-ai          根 pom <properties>spring-ai.version      文档 spring-ai-client-chat <v> 引用
+  槽位         值来源（只读）                               同步目标（写入）
+  -----------  -------------------------------------------  ----------------------------------------------
+  spring-boot  根 pom parent spring-boot-starter-parent     java/full-standalone pom.xml.tpl 的
+                                                            <spring-boot.version> 属性与两处注释
+  java.version 根 pom <properties>java.version              standalone 模板 <maven.compiler.release>、
+                                                            模板/文档中「Java NN / JDK NN」字样
+  revision     根 pom <properties>revision（工程版本单点源） 文档 every-agent-parent:<v> /
+               every-agent-parent、plugin-api、worker        every-agent-plugin-api(:jar)：<v> /
+               三者的版本都等于它                              every-agent-worker-<v>-exec.jar 引用；
+                                                            java/full-standalone 模板 API 依赖版本与注释
+  spring-ai    根 pom <properties>spring-ai.version         文档 spring-ai-client-chat <v> 引用
 
 铁律（不破并行协作与红线）：
   - 文档站 docs/plugin-guide/web/ 子目录与 reference/known-issues.md 永不写入（另有归属）；
     本脚本的文档目标全部显式登记在下方规则表里；
+  - 内置形态模板（java-builtin / full-builtin）刻意**不进**规则表：它们的 parent 写 ${revision}、
+    plugin-api 依赖不写版本（继承根 pom 的 dependencyManagement），在这里写死版本会破坏版本单点源；
   - 脚手架 vendor 类型副本（index.d.ts.raw）是内容同步不是版本同步，不归本脚本管；
   - @everyagent/plugin-api js 包版本（every-agent-plugin-api/js/package.json）归
-    scripts/bump-version.py 统一管理（known-issues #23 收口后两侧已对齐 1.0.0）。
+    scripts/bump-version.py 统一管理（与 <revision> 同号）。
 
 人工后置项（脚本只改版本字样，会打印提醒）：
   - spring-boot 槽位变化时，standalone 模板显式钉死的 maven-compiler / maven-resources 插件版本
@@ -101,16 +102,15 @@ if (-not (Test-Path $rootPomPath)) { Write-Error "找不到根 pom：$rootPomPat
 
 $rootPom = (Read-TextPreserveBom $rootPomPath).Text
 $springBootNew = Get-CoordinateVersion -Xml $rootPom -Artifact 'spring-boot-starter-parent'
-$parentNew = Get-CoordinateVersion -Xml $rootPom -Artifact 'every-agent-parent'
 $javaNew = Get-PropertyValue -Xml $rootPom -Name 'java.version'
 $springAiNew = Get-PropertyValue -Xml $rootPom -Name 'spring-ai.version'
 
-$apiPomPath = Join-Path $root 'every-agent-plugin-api/pom.xml'
-$workerPomPath = Join-Path $root 'every-agent-worker/pom.xml'
-$apiNew = $null
-$workerNew = $null
-if (Test-Path $apiPomPath) { $apiNew = Get-CoordinateVersion -Xml (Read-TextPreserveBom $apiPomPath).Text -Artifact 'every-agent-plugin-api' }
-if (Test-Path $workerPomPath) { $workerNew = Get-CoordinateVersion -Xml (Read-TextPreserveBom $workerPomPath).Text -Artifact 'every-agent-worker' }
+# 工程版本单点源：根 pom 的 <revision>（Maven CI-friendly versions）。
+# every-agent-parent / every-agent-plugin-api / every-agent-worker 的版本都等于它 —— 三者自身已不写
+# <version>（继承 ${revision}），所以不能再从各自 pom 抓「坐标版本」（抓到的会是 ${revision} 字面量）。
+$parentNew = Get-PropertyValue -Xml $rootPom -Name 'revision'
+$apiNew = $parentNew
+$workerNew = $parentNew
 
 $missing = @()
 foreach ($pair in @(
@@ -142,11 +142,8 @@ $tplStandalone = @(
     'create-everyagent-plugin/templates/overlay/java-standalone/pom.xml.tpl',
     'create-everyagent-plugin/templates/overlay/full-standalone/pom.xml.tpl'
 )
-$tplBuiltin = @(
-    'create-everyagent-plugin/templates/overlay/java-builtin/pom.xml.tpl',
-    'create-everyagent-plugin/templates/overlay/full-builtin/pom.xml.tpl'
-)
-$tplAll = @($tplStandalone + $tplBuiltin)
+# 内置形态模板（java-builtin / full-builtin）不在规则表内：它们的 parent 写 ${revision}、
+# plugin-api 依赖不写版本，任何版本字面量写入都会破坏版本单点源（详见文件头「铁律」）。
 
 $rules = @()
 foreach ($f in $tplStandalone) {
@@ -171,17 +168,6 @@ foreach ($f in $tplStandalone) {
     $rules += @{ File = $f; Slot = 'plugin-api'; Name = '注释「把 <v> 装进本地仓库」'
         Pattern = '(?<![\w.])把 [\d][\w.]*(?= 装进本地仓库)'
         Replacement = ("把 {0}" -f $apiNew) }
-}
-foreach ($f in $tplBuiltin) {
-    $rules += @{ File = $f; Slot = 'every-agent-parent'; Name = 'parent 块 <version>'
-        Pattern = '(?s)(<artifactId>every-agent-parent</artifactId>\s*<version>)[^<]+(</version>)'
-        Replacement = ('${1}' + $parentNew + '${2}') }
-    $rules += @{ File = $f; Slot = 'plugin-api'; Name = 'every-agent-plugin-api 依赖 <version>'
-        Pattern = '(?s)(<artifactId>every-agent-plugin-api</artifactId>\s*<version>)[^<]+(</version>)'
-        Replacement = ('${1}' + $apiNew + '${2}') }
-    $rules += @{ File = $f; Slot = 'plugin-api'; Name = '注释「版本显式 <v>」'
-        Pattern = '(?<![\w.])版本显式 [\d][\w.]*'
-        Replacement = ("版本显式 {0}" -f $apiNew) }
 }
 $rules += @{ File = 'create-everyagent-plugin/README.md'; Slot = 'java.version'; Name = '「Java NN」字样'
     Pattern = '(?<![\w.])Java \d{1,3}(?![\d.])'

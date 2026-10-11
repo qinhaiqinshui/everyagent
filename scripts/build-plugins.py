@@ -18,8 +18,9 @@ build-plugins.py —— 一条命令重建全部内置插件(前端 bundle + 插
 
 本脚本不重复实现任何构建逻辑:web 侧直接调用既有的 build-plugins.mjs(唯一事实源),
 Java 侧逐插件调 mvn -f <id>/pom.xml,与 mvn -pl/-am 的 reactor 语义互不干扰;
-plugin-api 虽在根 reactor 内,但插件以固定版本从本地仓库解析它——java 构建前
-先自动 mvn install 一次,保证仓库 jar 与源码同步(否则撞「找不到符号」)。
+plugin-api 虽在根 reactor 内,但插件单独构建时从本地仓库解析它(插件不写 API 版本,
+继承根 pom 的 dependencyManagement = ${revision})——java 构建前先自动 mvn install 一次,
+保证仓库 jar 与源码同步(否则撞「找不到符号」)。
 
 插件清单动态发现(与 scripts/bump-version.py 同一套扫描口径):
   - Java 插件: every-agent-plugins/*/pom.xml
@@ -236,9 +237,9 @@ def default_repo_local() -> str | None:
 def build_plugin_api(ctx: dict) -> bool:
     """先把 every-agent-plugin-api 源码 install 到本地仓库。
 
-    插件 pom 以固定版本(如 1.0.0)依赖 plugin-api,逐插件单独编译时从本地
-    仓库解析 jar;plugin-api 源码新增方法后若忘记 install,插件即报
-    「找不到符号」。故 java 构建前先刷新一次,保证仓库 jar 与源码同步。
+    插件 pom 不写 plugin-api 版本(继承根 pom 的 dependencyManagement = ${revision}),
+    逐插件单独编译时从本地仓库解析 jar;plugin-api 源码新增方法后若忘记 install,
+    插件即报「找不到符号」。故 java 构建前先刷新一次,保证仓库 jar 与源码同步。
     """
     api_pom = ROOT / "every-agent-plugin-api" / "pom.xml"
     if not api_pom.is_file():

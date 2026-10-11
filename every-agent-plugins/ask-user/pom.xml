@@ -10,10 +10,10 @@
     <parent>
         <groupId>dev.everyagent</groupId>
         <artifactId>every-agent-parent</artifactId>
-        <version>1.0.0</version>
+        <version>${revision}</version>
         <relativePath>../../pom.xml</relativePath>
     </parent>
-    <version>1.0.0</version>
+    <version>0.1.0</version>
 
     <artifactId>ask-user</artifactId>
     <name>用户提问</name>
@@ -51,12 +51,13 @@
     </build>
 
     <dependencies>
-        <!-- 插件 API（编译期纯接口；版本随 ${project.version}，与仓库内插件统一管理，
-             见根 scripts/bump-version.py 的插件槽位） -->
+        <!-- 插件 API（编译期纯接口）。版本不在这里写：由根 pom 的 dependencyManagement 统一管理
+             （= ${revision}）。注意不要写 ${project.version} —— 本工程自身版本与工程版本不同号
+             （见本 pom 的 <version>），${project.version} 会被解析成本插件自己的版本。
+             版本口径见根 pom 的 <revision> 单点源说明。 -->
         <dependency>
             <groupId>dev.everyagent</groupId>
             <artifactId>every-agent-plugin-api</artifactId>
-            <version>${project.version}</version>
         </dependency>
         <!-- Jackson: AskUserTool 容错反序列化（LenientString/List），版本随 parent（同 sandbox-wsl-ubuntu 写法） -->
         <dependency>

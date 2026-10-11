@@ -6,10 +6,10 @@
     <parent>
         <groupId>dev.everyagent</groupId>
         <artifactId>every-agent-parent</artifactId>
-        <version>1.0.0</version>
+        <version>${revision}</version>
         <relativePath>../../pom.xml</relativePath>
     </parent>
-    <version>1.0.0</version>
+    <version>0.1.0</version>
 
     <artifactId>sandbox-windows-codex</artifactId>
     <name>sandbox-windows-codex</name>
@@ -76,7 +76,6 @@
         <dependency>
             <groupId>dev.everyagent</groupId>
             <artifactId>every-agent-plugin-api</artifactId>
-            <version>${project.version}</version>
         </dependency>
         <!-- Windows 原生沙箱:JNA Win32 API + win 绑定层补齐原语（设计文档 §3） -->
         <dependency>

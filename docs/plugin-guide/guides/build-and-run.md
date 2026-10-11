@@ -53,7 +53,7 @@ mvn -f every-agent-plugins\<id>\pom.xml package -q             # 静默模式，
 2. 构建插件必须 `-f every-agent-plugins\<id>\pom.xml` 单独指过去（或 `cd` 进插件目录），这就是 §1.1 矩阵里所有 mvn 命令带 `-f` 的原因；
 3. 构建宿主（如 `mvn -pl every-agent-worker -am package`）同样不带任何插件（`task-edit-resend` 除外）——宿主与插件是两条构建线。
 
-插件 pom 的 parent 是 `dev.everyagent:every-agent-parent:1.0.0`（即根 pom，靠 `relativePath ../../pom.xml` 在磁盘上定位），依赖只有 `every-agent-plugin-api` + `spring-boot-starter-test`（test），**零 worker 依赖**——清单与字段逐项见[plugin.json 字段参考](../plugin-manifest.md)与[后端模型总览](../backend/overview.md)。
+插件 pom 的 parent 是 `dev.everyagent:every-agent-parent:1.0.0`（坐标版本即根 pom 的工程版本，见根 pom 的 `<properties><revision>`；pom 里写的是 `${revision}` 表达式，靠 `relativePath ../../pom.xml` 在磁盘上定位，所以插件能脱离根 reactor 单独构建），依赖只有 `every-agent-plugin-api`（**不写 `<version>`**，继承根 pom 的 `dependencyManagement` = `${revision}`）+ `spring-boot-starter-test`（test），**零 worker 依赖**。⚠️ 插件的自身版本与工程版本**不同号**（脚手架默认给新插件 `0.1.0`），所以依赖里**不要写 `${project.version}`**——它解析的是本插件自己的版本。清单与字段逐项见[plugin.json 字段参考](../plugin-manifest.md)与[后端模型总览](../backend/overview.md)。
 
 ### 2.2 首次准备：`install` plugin-api（为什么不能省）
 

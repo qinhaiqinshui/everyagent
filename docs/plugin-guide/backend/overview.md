@@ -105,7 +105,7 @@ every-agent-plugins/
 │  │  └─ SystemInfoAdvisor.java
 │  └─ target/                       # mvn package 产物（被 git 忽略）
 │     ├─ classes/plugin.json        # ← 加载期实际读的 manifest（resolveManifestPath 优先它）
-│     └─ system-info-1.0.0.jar      # ← URLClassLoader 的 jar 来源
+│     └─ system-info-0.1.0.jar      # ← URLClassLoader 的 jar 来源（内置插件版本 = 自己 plugin.json 的 version，不随工程版本走）
 ├─ pdf-viewer/                      # 纯 web：只有 plugin.json + web/，无 target/ 也纳入
 └─ git/                             # java+web：main + webMain 并存
 
