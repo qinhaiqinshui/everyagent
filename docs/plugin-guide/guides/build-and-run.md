@@ -53,7 +53,7 @@ mvn -f every-agent-plugins\<id>\pom.xml package -q             # 静默模式，
 2. 构建插件必须 `-f every-agent-plugins\<id>\pom.xml` 单独指过去（或 `cd` 进插件目录），这就是 §1.1 矩阵里所有 mvn 命令带 `-f` 的原因；
 3. 构建宿主（如 `mvn -pl every-agent-worker -am package`）同样不带任何插件（`task-edit-resend` 除外）——宿主与插件是两条构建线。
 
-插件 pom 的 parent 是 `dev.everyagent:every-agent-parent:1.0.0`（坐标版本即根 pom 的工程版本，见根 pom 的 `<properties><revision>`；pom 里写的是 `${revision}` 表达式，靠 `relativePath ../../pom.xml` 在磁盘上定位，所以插件能脱离根 reactor 单独构建），依赖只有 `every-agent-plugin-api`（**不写 `<version>`**，继承根 pom 的 `dependencyManagement` = `${revision}`）+ `spring-boot-starter-test`（test），**零 worker 依赖**。⚠️ 插件的自身版本与工程版本**不同号**（脚手架默认给新插件 `0.1.0`），所以依赖里**不要写 `${project.version}`**——它解析的是本插件自己的版本。清单与字段逐项见[plugin.json 字段参考](../plugin-manifest.md)与[后端模型总览](../backend/overview.md)。
+插件 pom 的 parent 是 `dev.everyagent:every-agent-parent:1.0.1`（坐标版本即根 pom 的工程版本，见根 pom 的 `<properties><revision>`；pom 里写的是 `${revision}` 表达式，靠 `relativePath ../../pom.xml` 在磁盘上定位，所以插件能脱离根 reactor 单独构建），依赖只有 `every-agent-plugin-api`（**不写 `<version>`**，继承根 pom 的 `dependencyManagement` = `${revision}`）+ `spring-boot-starter-test`（test），**零 worker 依赖**。⚠️ 插件的自身版本与工程版本**不同号**（脚手架默认给新插件 `0.1.0`），所以依赖里**不要写 `${project.version}`**——它解析的是本插件自己的版本。清单与字段逐项见[plugin.json 字段参考](../plugin-manifest.md)与[后端模型总览](../backend/overview.md)。
 
 ### 2.2 首次准备：`install` plugin-api（为什么不能省）
 
@@ -141,7 +141,7 @@ node scripts\build-plugins.mjs --only <你的id> --watch     # 组合：只盯�
 
 | 方式 | 命令 / 入口 | 说明 |
 | --- | --- | --- |
-| 终端跑 exec jar | 仓库根：`java -jar every-agent-worker\target\every-agent-worker-1.0.0-exec.jar` | 可执行 jar（classifier=`exec`，`every-agent-worker/pom.xml:88-107` repackage 配置）；文件名版本随根 pom 演进，以 `target/` 下实际 `*-exec.jar` 为准 |
+| 终端跑 exec jar | 仓库根：`java -jar every-agent-worker\target\every-agent-worker-1.0.1-exec.jar` | 可执行 jar（classifier=`exec`，`every-agent-worker/pom.xml:88-107` repackage 配置）；文件名版本随根 pom 演进，以 `target/` 下实际 `*-exec.jar` 为准 |
 | Maven 直跑 | 仓库根：`mvn -f every-agent-worker\pom.xml spring-boot:run` | 免手动先 package；工作目录 = 执行目录 |
 | IDE | 主类 `dev.everyagent.worker.WorkerApplication`（声明于 `every-agent-worker/pom.xml:94`） | 务必核对运行配置的**工作目录**（§4.2） |
 | 桌面版 | Electron 拉起 | cwd = 安装包 resourcesPath，见 §7 |
@@ -176,7 +176,7 @@ Select-String -Path "$HOME\.everyagent\logs\worker.log" -Pattern '扫描到.*插
 目录覆盖除了 `-D` 系统属性，跟在 `java -jar` 后面的程序参数同样生效（Spring 命令行参数优先级更高，适合临时指定）：
 
 ```powershell
-java -jar every-agent-worker\target\every-agent-worker-1.0.0-exec.jar --worker.builtin-plugins-dir=<仓库根>\every-agent-plugins
+java -jar every-agent-worker\target\every-agent-worker-1.0.1-exec.jar --worker.builtin-plugins-dir=<仓库根>\every-agent-plugins
 ```
 
 ### 4.3 home-dir：正确覆盖方式（⚠️ 修正口径①）
@@ -186,10 +186,10 @@ java -jar every-agent-worker\target\every-agent-worker-1.0.0-exec.jar --worker.b
 ```powershell
 # 方式一：环境变量（yml 占位符直读）
 $env:EVERYAGENT_HOME = '<专用目录>'
-java -jar every-agent-worker\target\every-agent-worker-1.0.0-exec.jar
+java -jar every-agent-worker\target\every-agent-worker-1.0.1-exec.jar
 
 # 方式二：系统属性（规范键 worker.home-dir）
-java -Dworker.home-dir=<专用目录> -jar every-agent-worker\target\every-agent-worker-1.0.0-exec.jar
+java -Dworker.home-dir=<专用目录> -jar every-agent-worker\target\every-agent-worker-1.0.1-exec.jar
 ```
 
 > ⚠️ **修正口径①（步骤 8 真机实测）**：`-Deveryagent.worker.home-dir=...` **不绑定**——不存在 `everyagent.worker.*` 这个命名空间，该写法被静默忽略，worker 继续用默认 `~/.everyagent`。同理，所有 worker 配置（`sandbox.*`、`plugins-dir`、`builtin-plugins-dir`……）的键都是 `worker.` 前缀，别给它再包一层 `everyagent.`。
@@ -253,7 +253,7 @@ dev profile 用 8100 / 8200（`application-dev.yml:5,13`），步骤 8 的隔离
 $env:WORKER_ID       = 'verify-1'        # 别用默认 company-pc（防抢占）
 $env:EVERYAGENT_HOME = '<专用目录>'       # 隔离系统目录：日志/外部插件/workspaces 全部与日常实例分家
 java '-Dworker.hubs[0].url=ws://localhost:6111/ws' '-Dserver.port=6112' `
-     -jar every-agent-worker\target\every-agent-worker-1.0.0-exec.jar
+     -jar every-agent-worker\target\every-agent-worker-1.0.1-exec.jar
 ```
 
 （hub 连不上也没关系——§4.5 第 1 条，纯插件验证可以不起 hub。）

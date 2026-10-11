@@ -67,11 +67,11 @@
         <!-- 插件 API（编译期纯接口）。注意：every-agent-plugin-api 尚未发布到 Maven Central
              （repo1 上 dev/everyagent/ 目录 404）。先在 everyagent 仓库根执行：
                  mvn -pl every-agent-plugin-api -am install -DskipTests
-             把 1.0.0 装进本地仓库；等官方发布到 Central 后把下面版本号改成发布号即可。 -->
+             把 1.0.1 装进本地仓库；等官方发布到 Central 后把下面版本号改成发布号即可。 -->
         <dependency>
             <groupId>dev.everyagent</groupId>
             <artifactId>every-agent-plugin-api</artifactId>
-            <version>1.0.0</version>
+            <version>1.0.1</version>
         </dependency>
         <!-- 测试：JUnit 5（经 spring-boot-starter-test 传递）。红线 §14.9：不得依赖 every-agent-worker -->
         <dependency>

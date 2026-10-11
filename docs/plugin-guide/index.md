@@ -58,7 +58,7 @@ has_children: false
 ```
 every-agent-plugins/<id>/
 ├── plugin.json                      # 唯一清单：id / name / version / description / author / enabled + main / webMain
-├── pom.xml                          # 仅 java 形态需要；parent = dev.everyagent:every-agent-parent:1.0.0
+├── pom.xml                          # 仅 java 形态需要；parent = dev.everyagent:every-agent-parent:1.0.1
 ├── src/main/java/…/<Id>Plugin.java  # 实现 EveryAgentPlugin，activate(ctx) 里注册一切能力
 ├── web/
 │   ├── index.ts                     # 前端入口（源码）
