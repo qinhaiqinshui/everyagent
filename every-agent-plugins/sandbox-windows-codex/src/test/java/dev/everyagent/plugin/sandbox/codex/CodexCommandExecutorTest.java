@@ -516,6 +516,19 @@ class CodexCommandExecutorTest {
         assertTrue(up.endsWith(capture.cfg.username()),
                 "offline 会话 env 指向本账户 profile(修 sandboxProfileDir 恒取 online 的错配):"
                         + up);
+        // 老式拼法 %HOMEDRIVE%%HOMEPATH% 须与现代变量同源(修从宿主继承导致的「脑裂」:
+        // 读侧静默借读宿主 .gitconfig/.ssh,写侧受限令牌 EPERM)。非 Windows 单测无
+        // 此约定(HOMEPATH 为 null),仅 Windows 断言。
+        String homePath = capture.spec.env().get("HOMEPATH");
+        if (homePath != null) {
+            String drive = capture.spec.env().get("HOMEDRIVE");
+            assertNotNull(drive, "HOMEPATH 存在则 HOMEDRIVE 必存在");
+            assertTrue(homePath.endsWith(capture.cfg.username()),
+                    "HOMEPATH 指向本账户 profile:" + homePath);
+            assertEquals(Path.of(up).normalize().toString(),
+                    Path.of(drive + homePath).normalize().toString(),
+                    "%HOMEDRIVE%%HOMEPATH% 拼接须与 USERPROFILE 同一目录");
+        }
         assertTrue(capture.prefetchedRoots.stream().anyMatch(r -> r.getFileName() != null
                         && r.getFileName().toString().endsWith(capture.cfg.username())),
                 "offline 会话写根含本账户 profile 树:" + capture.prefetchedRoots);

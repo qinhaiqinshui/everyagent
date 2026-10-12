@@ -809,6 +809,19 @@ public final class CodexCommandExecutor {
             env.put("HOME", profileDir.toString());
             env.put("APPDATA", profileDir.resolve("AppData").resolve("Roaming").toString());
             env.put("LOCALAPPDATA", profileDir.resolve("AppData").resolve("Local").toString());
+            // 老式拼法 %HOMEDRIVE%%HOMEPATH% 与现代变量必须同源:NT 时代登录进程设置的
+            // 这对变量仍被少数老工具(unix 移植脚本/Perl/老批处理)拼用来定位 home;沙箱
+            // 进程链从宿主继承的值(C: + \Users\<宿主用户>)若不覆盖,则与现代变量重定向
+            // 后的沙箱 profile 形成「脑裂」——读侧静默借读宿主 .gitconfig/.npmrc/.ssh
+            // (区外只读不报错,泄露面),写侧受限令牌 EPERM。取值对齐真实
+            // LOGON_WITH_PROFILE 登录:HOMEDRIVE 带尾分隔符("C:\"),拼接后出现重复
+            // 分隔符属原生形态,Windows 容忍。profileDir 无根(非 Windows 单测相对
+            // 路径)时跳过——该平台本无此约定。
+            Path profileRootDir = profileDir.getRoot();
+            if (profileRootDir != null) {
+                env.put("HOMEDRIVE", profileRootDir.toString());
+                env.put("HOMEPATH", "\\" + profileRootDir.relativize(profileDir));
+            }
         }
         if (workspaceRoot != null) {
             injectGitConfig(env, workspaceRoot);
