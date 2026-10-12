@@ -14,7 +14,7 @@ has_children: false
 | `ToolProvider` | `registerToolProvider`（`every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/WorkerPluginContext.java:42`） | `ToolProviderRegistry` | `AgentBuilder` 装配期聚合 | subagent、sandbox-windows-mic、sandbox-wsl-ubuntu、sandbox-windows-codex |
 | `ToolExecutionInterceptor` | `registerToolExecutionInterceptor`（`WorkerPluginContext.java:57`） | `ToolExecutionInterceptorRegistry` | per-run `InterceptingToolCallingManager` | secret-redaction、unattended |
 | `SandboxProvider` | `registerSandboxProvider`（`WorkerPluginContext.java:48`） | `SandboxProviderRegistry` | `OsSandbox` 惰性解析 + `SandboxPathRegistry` | sandbox-windows-mic、sandbox-wsl-ubuntu、sandbox-windows-codex |
-| `FileReferenceHandler` | `registerFileReferenceHandler`（`WorkerPluginContext.java:69`） | `FileReferenceHandlerRegistry` | 任务生命周期节点 `FileReferenceProcessNode` | image-vision（唯一） |
+| `FileReferenceHandler` | `registerFileReferenceHandler`（`WorkerPluginContext.java:69`） | `FileReferenceHandlerRegistry` | 用户输入物化服务 `UserInputMaterializer`（轮次节点 `FileReferenceProcessNode`(875) 与队列「插入到当前对话」共用） | image-vision（唯一） |
 
 所有注册方法的 worker 实现(`every-agent-worker/src/main/java/dev/everyagent/worker/plugin/WorkerPluginContextImpl.java:126,136,151,182`)都只是往对应注册表 `add` 一行——**注册即生效、无过滤、无校验**。
 
@@ -286,7 +286,7 @@ public void activate(WorkerPluginContext ctx) throws Exception {
 
 ### 4.1 处理什么输入形态
 
-用户在前端输入框用 `@` 挂文件时，rawContent 里是 **opaque token**（4 连方括号定界 + base64url payload，kind 为 `system.workspace_file` / `system.external_file`，与前端 composer 胶囊同格式）。核心生命周期节点 `FileReferenceProcessNode` 把它解析成 `FileReference`：
+用户在前端输入框用 `@` 挂文件时，rawContent 里是 **opaque token**（4 连方括号定界 + base64url payload，kind 为 `system.workspace_file` / `system.external_file`，与前端 composer 胶囊同格式）。核心用户输入物化服务 `UserInputMaterializer`（`every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/attachment/UserInputMaterializer.java`）把它解析成 `FileReference`：
 
 ```java
 // every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/spi/FileReference.java
@@ -319,15 +319,22 @@ public interface FileReferenceHandler {
 ### 4.3 消费链路
 
 ```
-任务输入处理（轮次循环段）
-  └─ FileReferenceProcessNode（TaskLifecycleNode，order=875，consume.input=880 之前）
-       every-agent-worker/src/main/java/dev/everyagent/worker/task/lifecycle/FileReferenceProcessNode.java:43-76
-       ├─ 正则解析 rawContent 中的 [[[[...]]]] token（复用 SlashTokenEncoder）    :83-100
-       ├─ handlers.find(扩展名) → 未命中直接跳过（保持路径文本）                   :103
-       ├─ handler.process(new ContextView(ctx), ref)；异常 catch 记 WARN 不阻断  :109-114
-       ├─ replacementText 改写 ctx.input()；attachments 并入 metadata.attachments :117-133,167-190
-       └─ FileAttachmentAdvisor 后续统一把 attachments 注入模型
+用户输入物化（核心服务，凡「把一条用户输入投给模型」的入口都走它）
+  └─ UserInputMaterializer（接口在 plugin-api attachment/，实现在 worker attachment/UserInputMaterializerImpl）
+       ├─ 正则解析 rawContent 中的 [[[[...]]]] token（复用 SlashTokenEncoder）
+       ├─ handlers.find(扩展名) → 未命中直接跳过（保持路径文本）
+       ├─ handler.process(refCtx, ref)；异常 catch 记 WARN 不阻断
+       ├─ replacementText 改写正文；attachments 并入 metadata.attachments
+       └─ attachments 转 Spring AI Media 装配消息（AttachmentMedia —— 附件 map → Media 单点）
+     两个调用点（同一条实现）：
+       ├─ 轮次路径：FileReferenceProcessNode（TaskLifecycleNode，order=875，consume.input=880 之前）
+       │    只取物化后的正文（消息由 consume.input 重建），媒体由 FileAttachmentAdvisor 从
+       │    metadata.attachments 注入模型
+       └─ 队列「插入到当前对话」：DialogInsertAdvisor（task-input-queue 插件）在工具循环下行
+            drain 插入项时物化，媒体随本条消息直接进本轮模型调用（该轮 metadata 注入时机已过）
 ```
+
+> 历史坑（勿重演）：插入路径曾直接投 `queued.input()`（跳过物化）→ @ 图片退化成裸路径文本，AI 只看到路径、转而去 `read_file` 图片失败。任何新的「输入投递」入口都应调 `WorkerServices.userInputMaterializer()`，不要自己拼正文。
 
 注册表按扩展名一对一映射，**同扩展名后注册覆盖先注册并打 WARN**（`every-agent-worker/src/main/java/dev/everyagent/worker/plugin/registry/FileReferenceHandlerRegistry.java:30-45`）。
 
@@ -360,7 +367,7 @@ return new FileReferenceResult("（附图：" + ref.fileName() + "）", List.of(
 
 | 坑 | 说明 |
 |---|---|
-| 扩展名大小写/缺点 | 注册键统一**小写含点**（`.png`）；查表侧也做了 lowercase（`FileReferenceHandlerRegistry.java:34-41`、`FileReferenceProcessNode.java:246-254`） |
+| 扩展名大小写/缺点 | 注册键统一**小写含点**（`.png`）；查表侧也做了 lowercase（`FileReferenceHandlerRegistry.java:34-41`、`UserInputMaterializerImpl` 的 `extensionOf`） |
 | 处理器里做重活阻塞输入链 | 节点在任务输入处理临界段内同步执行；读大文件前设上限（image-vision 设 256MB 硬上限，`ImageReferenceHandler.java:51`） |
 | 以为早期槽位都有值 | `FileReferenceContext` 是早期节点：任务未创建时 `snapshot()/emitter()/interaction()/dataDir()` 等可为 null，`subjectId()/workspaceId()/workspaceRoot()` 由早期回退字段供给（`every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/spi/FileReferenceContext.java:14-20`） |
 | 自己改写 input / 拼持久化 | 核心已做 input 改写与 metadata 合并，handler 只返回结果；别的持久化走 `pluginDir()` + 自注册 RPC（[持久化与插件私有状态](persistence-and-state.md)） |
@@ -389,12 +396,12 @@ return new FileReferenceResult("（附图：" + ref.fileName() + "）", List.of(
 | `snapshot()` | `ModelConfig` | 完整模型配置快照（configId 经 `snapshot().configId()` 取，**无独立槽**） | advisor 装配模型参数 | §14.11 明文 |
 | `emitter()` | `EventEmitter` | 已绑定本主体的事件口（trace/审计） | secret-redaction 发 `task.trace`（`SecretRedactionInterceptor.java:140-160`） | 只发语义 EmitEvent，不感知 wire 事件名/seq（§14.0） |
 | `agentFactory()` | `AgentFactory` | 预绑定 Agent 工厂（`create(agentId)`） | 子 agent / 审议 agent 创建 | §14.11「不传裸工厂/裸服务/任务域对象」 |
-| `metadata()` | `Map<String,Object>` | 随 meta.json 落盘的持久策略标记（unattended/ai-review/attachments） | `UnattendedToolInterceptor.java:35` 读 `unattended` 标记；`FileReferenceProcessNode` 写 `attachments` | 只承载持久策略标记，不混运行时瞬态（§14.11） |
+| `metadata()` | `Map<String,Object>` | 随 meta.json 落盘的持久策略标记（unattended/ai-review/attachments） | `UnattendedToolInterceptor.java:35` 读 `unattended` 标记；`UserInputMaterializerImpl` 写 `attachments` | 只承载持久策略标记，不混运行时瞬态（§14.11） |
 | `dataDir()` | `Path` | 主体数据目录（grants.json 等落盘） | 授权链 | — |
 | `terminal()` | `boolean` | 主体是否已收口 | leak-guard：终态后不再发射事件 | — |
 | `interaction()` | `InteractionService` | 预绑定交互口（ask 的 context 自动补 subjectId） | image-vision 外部文件授权弹窗（`ImageReferenceHandler.java:136-150`） | §14.11「绕过 ctx.interaction() 手动填 taskId context」禁止 |
 | `agents()` | `Map<String,AgentContext>` | 本主体活动 agent 注册表（主 agent + 各插件派生） | `AgentBuilder.build()` 自动 put（`:333`，不发事件） | §14.11「插件不再手动 put/emit」 |
-| `METADATA_ATTACHMENTS_KEY` | 常量 `"attachments"` | metadata 中附件列表键名 | `FileReferenceProcessNode`/`FileAttachmentAdvisor` | — |
+| `METADATA_ATTACHMENTS_KEY` | 常量 `"attachments"` | metadata 中附件列表键名 | `UserInputMaterializerImpl`/`FileAttachmentAdvisor` | — |
 
 ### 5.3 「命令跑在哪个环境/目录」到底由什么决定
 

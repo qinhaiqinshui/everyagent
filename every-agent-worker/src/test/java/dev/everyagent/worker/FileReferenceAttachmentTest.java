@@ -32,17 +32,24 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Predicate;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * `@` 文件引用（图片）端到端验收：rawContent 里的 {@code system.workspace_file} opaque token
- * 必须被 {@code file.reference.process}(875) 处理成「（附图：xxx）」+ metadata.attachments，
- * 且**队列轮**（运行中输入入队 → queue.loop 续跑）与首轮同权。
+ * 必须被物化成「（附图：xxx）」正文 + 图片附件，三条投递路径同权：
+ * <ol>
+ *   <li>首轮（{@code file.reference.process} 875 → consume.input）；</li>
+ *   <li>队列轮（运行中输入入队 → queue.loop 续跑 → 同一节点链）；</li>
+ *   <li>「插入到当前对话」（输入队列项 → QueueDispatchNode 转投插入队列 → DialogInsertAdvisor
+ *       在工具循环下行 drain 直接投给模型，不经过 875 节点——此处必须与轮次路径同一条物化实现）。</li>
+ * </ol>
  *
  * <p>与 WorkerIntegrationTest 同款 harness（FakeHub + WsTestClient + FakeChatModel），差异：
  * 显式把 {@code worker.builtin-plugins-dir} 指向仓库 {@code every-agent-plugins}，
- * 让 image-vision（FileReferenceHandler）与 task-input-queue（queue.loop）真正参与运行。
+ * 让 image-vision（FileReferenceHandler）与 task-input-queue（queue.loop / 插入对话）真正参与运行；
+ * 模型替身额外录制每次请求的 Prompt，断言「图片确实以 Media 形态到了模型手里」。
  *
  * <p>同时看护 token payload 解码：用例取<b>中文名</b>文件（`图.png`）——其 UTF-8 payload 的
  * base64 命中 URL-safe 62/63 号字符（`-`/`_`），历史上 {@link SlashTokenEncoder#fromBase64Url}
@@ -61,6 +68,9 @@ class FileReferenceAttachmentTest {
     /** 独立工作区（每次运行唯一，@AfterAll 清理）：@ 引用的图片放在工作区根。 */
     private static final Path WS = TestCleanup.register(
             Path.of("target/test-ws-fileref-" + System.nanoTime()).toAbsolutePath().normalize());
+
+    /** 工作区根图片的原始字节（内容不重要：image-vision 未超限直接读字节转 base64，不解码）。 */
+    private static final byte[] IMAGE_BYTES = "fake-png-bytes".getBytes(StandardCharsets.UTF_8);
 
     private static final Path HOME_DIR = TestCleanup.register(
             Path.of("target/test-home-fileref-" + System.nanoTime()).toAbsolutePath().normalize());
@@ -88,6 +98,27 @@ class FileReferenceAttachmentTest {
         throw new IllegalStateException("未找到 every-agent-plugins（内置插件目录）");
     }
 
+    /** 模型替身：录制每次请求的 Prompt（断言「图片以 Media 形态到了模型」的唯一手段）。 */
+    static final List<org.springframework.ai.chat.prompt.Prompt> SEEN_PROMPTS =
+            java.util.Collections.synchronizedList(new ArrayList<>());
+
+    /** 录制型 FakeChatModel（FakeChatModel 的 fixed 脚本 + 请求录制）。 */
+    static class RecordingChatModel extends FakeChatModel {
+        @Override
+        public reactor.core.publisher.Flux<org.springframework.ai.chat.model.ChatResponse> stream(
+                org.springframework.ai.chat.prompt.Prompt prompt) {
+            SEEN_PROMPTS.add(prompt);
+            return super.stream(prompt);
+        }
+
+        @Override
+        public org.springframework.ai.chat.model.ChatResponse call(
+                org.springframework.ai.chat.prompt.Prompt prompt) {
+            SEEN_PROMPTS.add(prompt);
+            return super.call(prompt);
+        }
+    }
+
     @TestConfiguration(proxyBeanMethods = false)
     static class Cfg {
         @Bean
@@ -112,7 +143,7 @@ class FileReferenceAttachmentTest {
                 public org.springframework.ai.chat.model.ChatModel build(
                         dev.everyagent.worker.modules.ConfigStore.ResolvedConfig cfg,
                         org.springframework.ai.openai.OpenAiChatOptions options, String agentId) {
-                    return new FakeChatModel();
+                    return new RecordingChatModel();
                 }
 
                 // agent 装配走 4 参重载（buildAgentModel 直接调它），必须一并覆盖。
@@ -121,7 +152,7 @@ class FileReferenceAttachmentTest {
                         dev.everyagent.worker.modules.ConfigStore.ResolvedConfig cfg,
                         org.springframework.ai.openai.OpenAiChatOptions options, String agentId,
                         dev.everyagent.plugin.api.model.EventEmitter events) {
-                    return new FakeChatModel();
+                    return new RecordingChatModel();
                 }
             };
         }
@@ -129,7 +160,7 @@ class FileReferenceAttachmentTest {
         @Bean
         @Primary
         org.springframework.ai.chat.model.ChatModel fakeChatModel() {
-            return new FakeChatModel();
+            return new RecordingChatModel();
         }
     }
 
@@ -184,9 +215,10 @@ class FileReferenceAttachmentTest {
         hello(fe);
         sub(fe, Channels.tasks(k, workerProps.getWorkerId()));
         sub(fe, Channels.workerEvt(k, workerProps.getWorkerId()));
+        SEEN_PROMPTS.clear();
         // 工作区根放一张图（内容不重要：image-vision 直接读字节转 base64）
         Files.createDirectories(WS);
-        Files.write(WS.resolve("图.png"), "fake-png-bytes".getBytes(StandardCharsets.UTF_8));
+        Files.write(WS.resolve("图.png"), IMAGE_BYTES);
     }
 
     @AfterEach
@@ -235,7 +267,91 @@ class FileReferenceAttachmentTest {
         assertImageAttachment(taskId);
     }
 
+    /**
+     * 「插入到当前对话」：输入队列项经「插入即消费」转投插入对话队列 → DialogInsertAdvisor 在
+     * 工具循环下行 drain（**不经过 file.reference.process 875 节点**，直接投给模型）。
+     * 该路径必须与轮次路径同一条物化实现：正文改写成「（附图：图.png）」、图片以 Media 进模型、
+     * 附件并进 metadata.attachments。
+     */
+    @Test
+    void dialogInsertImageReferenceAttaches() {
+        // 任务停在 ask_user 上（waiting-user），留出「入队 + 插入」的确定窗口；
+        // 回答 ask 后工具结果回灌 → 工具循环续跑 → 插入项在这一轮的下行被 drain。
+        String taskId = create("ASK:占位问题");
+        JsonNode askCreate = syncUntil(taskId,
+                e -> "ask.create".equals(e.path("event").asString()), "ask.create");
+        String askId = askCreate.path("payload").path("data").path("askId").asString();
+        assertTrue(askId.startsWith("q_"), "askId 应取到: " + askCreate);
+
+        // ① 运行中提交带图片 token 的输入 → 输入队列（前端队列面板的 pending 项）
+        String queued = rpc("task.run", Json.write(Json.obj()
+                .put("taskId", taskId)
+                .put("input", "图.png 图里有什么内容")
+                .put("rawContent", rawContentForImage())
+                .put("configId", MODEL_ID)
+                .put("workspace", WS.toString())));
+        assertTrue(queued.contains("rpc.ok"), "运行中提交应入队成功: " + queued);
+
+        // ② 队列面板点「插入」→ 该项从输入队列摘出、转投插入对话队列
+        String inserted = rpc("task.run", Json.write(Json.obj()
+                .put("taskId", taskId)
+                .put("input", "图.png 图里有什么内容")
+                .set("metadata", Json.obj().put("insert", true).put("index", 0))
+                .put("workspace", WS.toString())));
+        assertTrue(inserted.contains("rpc.ok"), "插入当前对话应成功: " + inserted);
+
+        // ③ 回答 ask → 工具结果回灌模型 → 工具循环续跑
+        fe.send(pub(Channels.workerInput(k, workerProps.getWorkerId()), "ask.reply",
+                "{\"askId\":\"" + askId + "\",\"answer\":\"占位问题：是\"}"));
+        awaitDone(taskId);
+
+        // 用户消息区：正文改写为附图提示（不是裸路径），rawContent 仍在（前端还原胶囊）
+        JsonNode userMessage = userMessage(taskId, "图里有什么内容");
+        assertTrue(userMessage.path("payload").path("content").asString().contains("（附图：图.png）"),
+                "插入项正文应改写为附图提示（不是裸路径）: " + userMessage);
+        assertFalse(userMessage.path("payload").path("content").asString().contains(" 图.png "),
+                "正文不该残留裸路径: " + userMessage);
+        assertImageAttachment(taskId);
+
+        // 模型侧：插入项那一次请求必须带图片 Media（只改正文不投图 = AI 仍看不到图）
+        org.springframework.ai.chat.messages.UserMessage seen = insertedUserMessageAtModel();
+        assertNotNull(seen, "插入项必须以多模态消息（带 Media）投喂模型；实收请求: " + seenPromptTail());
+        assertTrue(seen.getText().contains("（附图：图.png）"),
+                "模型侧正文应为附图提示: " + seen.getText());
+        assertTrue(String.valueOf(seen.getMedia().get(0).getData())
+                        .contains(java.util.Base64.getEncoder().encodeToString(IMAGE_BYTES)),
+                "Media 应携带该图片的 base64: " + seen.getMedia().get(0).getData());
+    }
+
     // ---- 帮助方法 ----
+
+    /** 录制的请求里含图片 Media 的那条 user 消息（无则 null）。 */
+    private org.springframework.ai.chat.messages.UserMessage insertedUserMessageAtModel() {
+        String base64 = java.util.Base64.getEncoder().encodeToString(IMAGE_BYTES);
+        for (org.springframework.ai.chat.prompt.Prompt prompt : List.copyOf(SEEN_PROMPTS)) {
+            for (org.springframework.ai.chat.messages.Message m : prompt.getInstructions()) {
+                if (m instanceof org.springframework.ai.chat.messages.UserMessage um
+                        && !um.getMedia().isEmpty()
+                        && String.valueOf(um.getMedia().get(0).getData()).contains(base64)) {
+                    return um;
+                }
+            }
+        }
+        return null;
+    }
+
+    /** 录制请求的尾部消息快照（断言失败时给人看现场）。 */
+    private String seenPromptTail() {
+        StringBuilder sb = new StringBuilder();
+        for (org.springframework.ai.chat.prompt.Prompt prompt : List.copyOf(SEEN_PROMPTS)) {
+            List<org.springframework.ai.chat.messages.Message> ms = prompt.getInstructions();
+            sb.append("--- 请求(").append(ms.size()).append(" 条消息) 末条: ")
+                    .append(ms.isEmpty() ? "(空)" : ms.get(ms.size() - 1).getClass().getSimpleName()
+                            + "=" + ms.get(ms.size() - 1).getText())
+                    .append('\n');
+        }
+        return sb.toString();
+    }
 
     private String runImageTask(Path workspace) {
         String resp = rpc("task.run", Json.write(Json.obj()

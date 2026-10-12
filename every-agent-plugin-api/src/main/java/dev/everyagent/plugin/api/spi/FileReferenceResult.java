@@ -6,12 +6,13 @@ import java.util.Map;
 /**
  * 文件引用处理结果 —— {@link FileReferenceHandler#process} 的返回值。
  *
- * <p>核心节点（{@code FileReferenceProcessNode}）据此做两件事：
+ * <p>核心节点（{@code FileReferenceProcessNode}）与「插入到当前对话」路径（{@code DialogInsertAdvisor}）
+ * 都经核心用户输入物化服务（{@code UserInputMaterializer}）消费本结果，据此做两件事：
  * <ol>
- *   <li>用 {@link #replacementText()} 改写 {@code ctx.input()} 中对应的路径文本
+ *   <li>用 {@link #replacementText()} 改写输入中对应的路径文本
  *       （为 null 时保持 input 原样）；</li>
  *   <li>把 {@link #attachments()} 追加进 {@code TaskEntry.metadata.attachments}
- *       （持久化，跨轮可读），由核心 {@code FileAttachmentAdvisor} 统一注入模型。</li>
+ *       （持久化，跨轮可读），由核心 {@code FileAttachmentAdvisor} 注入模型。</li>
  * </ol>
  *
  * <p>attachments 项约定结构：{@code {type: "image", dataUrl, fileName, mimeType}}

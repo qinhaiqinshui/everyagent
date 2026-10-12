@@ -6,7 +6,8 @@ import java.util.Set;
  * 文件引用处理器 SPI —— 插件按扩展名注册处理器，处理用户输入中的文件引用
  * （{@code system.workspace_file} / {@code system.external_file} opaque token）。
  *
- * <p>核心 {@code FileReferenceProcessNode}（任务生命周期节点，consume.input 之前）
+ * <p>核心 {@code UserInputMaterializer}（用户输入物化服务，轮次路径的
+ * {@code FileReferenceProcessNode}(875) 与「插入到当前对话」共用）
  * 解析 rawContent 中的文件引用 token，按扩展名分发到本 SPI 的实现；
  * 未命中 handler 的引用保持现有行为（路径文本进 AI），核心对具体文件类型零感知。
  *

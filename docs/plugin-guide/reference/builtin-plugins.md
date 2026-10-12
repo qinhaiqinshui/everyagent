@@ -314,7 +314,7 @@ WSL Ubuntu 沙箱 + bash 工具 + network slash 开关。
 
 输入框排队待发（多轮意图排成队列逐个派发）。
 - 关键文件：`~plugins/task-input-queue/src/main/java/dev/everyagent/plugin/inputqueue/TaskInputQueuePlugin.java:27-35`；order 见 `QueueDispatchNode.java:46`（15）、`QueueLoopNode.java:54`（870）、`DialogInsertAdvisorProvider.java:34`（DO+30）。
-- 值得看：**TaskLifecycleNode 多节点编排**；面板直连自家 3 个 RPC、以 `task.updated` 广播为刷新信号的写法。
+- 值得看：**TaskLifecycleNode 多节点编排**；面板直连自家 3 个 RPC、以 `task.updated` 广播为刷新信号的写法；「插入到当前对话」drain 前经核心 `WorkerServices.userInputMaterializer()` 物化输入（@ 文件引用与轮次路径同一条实现，见 [工具 §4.3](../backend/tools-and-sandbox.md#43-消费链路)）。
 
 ### task-queue（任务队列）
 

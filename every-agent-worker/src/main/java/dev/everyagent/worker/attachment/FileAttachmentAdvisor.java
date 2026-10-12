@@ -1,8 +1,6 @@
 package dev.everyagent.worker.attachment;
 
 import dev.everyagent.plugin.api.execution.ExecContext;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClientRequest;
 import org.springframework.ai.chat.client.ChatClientResponse;
 import org.springframework.ai.chat.client.advisor.api.AdvisorChain;
@@ -12,8 +10,6 @@ import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.content.Media;
 import org.springframework.core.Ordered;
-import org.springframework.util.MimeType;
-import org.springframework.util.MimeTypeUtils;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -29,14 +25,13 @@ import java.util.Map;
  *
  * <p>本 Advisor 不感知「图片」业务（不读文件、不压缩、不解析 token）——处理逻辑在各
  * 插件注册的 {@code FileReferenceHandler}；未来 PDF/Word 插件复用同一 Advisor，
- * 按需扩展 type 支持即可。
+ * 按需扩展 type 支持即可（附件 map → Media 的转换在 {@link AttachmentMedia}，
+ * 与 {@code UserInputMaterializerImpl} 共用同一份实现）。
  *
  * <p>attachments 随 meta.json 持久化，多轮持续注入（便于追问）；token 消耗随轮次累积，
  * 「仅当轮」语义可后续细化。
  */
 public class FileAttachmentAdvisor implements BaseAdvisor {
-
-    private static final Logger log = LoggerFactory.getLogger(FileAttachmentAdvisor.class);
 
     /** 执行上下文（只读引用）；为 null（如子 agent 无 taskEntry 属性）时恒放行。 */
     private final ExecContext exec;
@@ -101,43 +96,14 @@ public class FileAttachmentAdvisor implements BaseAdvisor {
         if (!(attachments instanceof List<?> list) || list.isEmpty()) {
             return List.of();
         }
-        List<Media> media = new ArrayList<>();
+        List<Map<String, Object>> maps = new ArrayList<>(list.size());
         for (Object item : list) {
-            if (!(item instanceof Map<?, ?> map)) {
-                continue;
-            }
-            if (!"image".equals(map.get("type"))) {
-                continue;
-            }
-            Object dataUrl = map.get("dataUrl");
-            if (!(dataUrl instanceof String data) || data.isEmpty()) {
-                continue;
-            }
-            try {
-                var builder = Media.builder()
-                        .mimeType(parseMimeType(map.get("mimeType")))
-                        .data(data);
-                Object fileName = map.get("fileName");
-                if (fileName instanceof String name && !name.isEmpty()) {
-                    builder.name(name);
-                }
-                media.add(builder.build());
-            } catch (RuntimeException e) {
-                log.warn("[attachment] 附件转 Media 失败，已跳过: {}", e.toString());
+            if (item instanceof Map<?, ?> map) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> typed = (Map<String, Object>) map;
+                maps.add(typed);
             }
         }
-        return media;
-    }
-
-    /** 解析附件 mimeType；缺失/非法时兜底 image/png。 */
-    private static MimeType parseMimeType(Object mimeType) {
-        if (mimeType instanceof String value && !value.isEmpty()) {
-            try {
-                return MimeTypeUtils.parseMimeType(value);
-            } catch (RuntimeException ignored) {
-                // 落兜底
-            }
-        }
-        return MimeTypeUtils.IMAGE_PNG;
+        return AttachmentMedia.toMedia(maps);
     }
 }
