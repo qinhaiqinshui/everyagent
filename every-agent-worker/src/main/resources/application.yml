@@ -17,6 +17,12 @@ worker:
   # sandbox/ 顶级(沙箱持久状态);默认 ~/.everyagent(EVERYAGENT_HOME 优先)。
   # 默认值保持非空——logback 的日志目录经 springProperty 读本配置,空串会破坏回退链。
   home-dir: ${EVERYAGENT_HOME:${user.home}/.everyagent}
+  # 控制台(CONSOLE appender)日志门槛:OFF=完全静默,本文件即「打包默认」。desktop 把 worker 的
+  # stdout/stderr 重定向进 ~/.everyagent/logs/worker.out.log 且永不轮转,CONSOLE 开着会与
+  # worker.log 双份落盘、无限膨胀(实测 5 周 313MB);正式日志走 FILE(每日滚动,保留 7 天)。
+  # IDE/开发运行由 application-dev.yml 置 INFO 恢复;打包环境临时排障:
+  #   -Dworker.console-log-threshold=INFO
+  console-log-threshold: OFF
   # 模型配置(只读,config.get 的唯一数据源):默认用 OpenAI 兼容占位符,真实 provider/apiKey
   # 由 ~/.everyagent/application-worker.yaml(或开发环境 application-dev.yaml)覆盖,不进 jar/git。
   # 注意:列表属性整表替换——覆盖文件里写 worker.models 会完整替换本默认表。
@@ -151,6 +157,10 @@ server:
 spring:
   application:
     name: every-agent-worker
+  main:
+    # banner 走 stdout:desktop 重定向下会追加进永不轮转的 worker.out.log,默认关闭;
+    # dev profile 置 console 恢复 IDE 启动横幅(与 console-log-threshold 同理)
+    banner-mode: "off"
   # 用户配置覆盖:存在 ~/.everyagent/application-worker.yaml 则覆盖本文件默认值(后加载、优先级更高);
   # optional: 前缀 = 文件不存在自动忽略,无自定义则零配置文件(hub/worker 不感知部署方式)。
   # 注意必须用 spring.config.import 而非 additional-location:后者只在定位配置文件之前从

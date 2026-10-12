@@ -24,7 +24,7 @@
 |---|---|---|
 | 构建流程 | `mvn package` 未 clean 时,已安装的旧插件 jar 在类路径按字典序遮蔽新构建类——#1 的温床(ARCHITECTURE.md §635 已记风险,此处登记为**流程待办**:构建强制 `clean package`,启动日志打印沙箱插件 jar 指纹) | 待办 |
 | `WorkerToolEventAdvisor:257` | `exec.terminal()`(停止任务)时跳过 tool.result 事件发射,冷启动回放以「[上一轮被中断,无结果]」占位——属可接受的停止语义,登记备查 | 备查(不修) |
-| worker 日志 | `worker.out.log` 无轮转,实测已达 318MB | 待办 |
+| worker 日志 | `worker.out.log` 无轮转,实测已达 318MB | **已修(2026-10-12)**:根因是 CONSOLE appender 输出被 desktop 重定向进该文件、与 worker.log 双份落盘。worker 的 `logback-spring.xml` 改为本地定义 CONSOLE + ThresholdFilter 门控(`worker.console-log-threshold`,默认 **OFF**),`application.yml` 默认关控制台并关 banner(`spring.main.banner-mode=off`);dev profile 恢复 INFO/console;打包临时排障 `-Dworker.console-log-threshold=INFO`。stdio 重定向保留(JVM 原生崩溃输出仍落该文件作现场证据),正常情况下近零大小 |
 | codex 沙箱 ACL | 历史手工 grant 的 cap SID ACE 残留永不回收(ACL 噪声);已由「profile 树纳入每会话写根」修复(2b918304)绕开依赖,但残留清理无机制 | 待办 |
 
 ## 三、护栏与红线
