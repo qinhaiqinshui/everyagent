@@ -304,6 +304,24 @@ worker:
 
 1. Deploy hub + frontend static site on a **public server** (see `docker-compose.yml` / `deploy.py`; production requires wss + TLS, LB WebSocket idle timeout ≥ 60s);
 2. Run worker on your **home/office PC**; in `application-worker.yaml`, set `worker.hubs` `url` to point to the public hub (each entry needs `url + api-key + hub-key`; multi-hub redundancy supported);
+
+   <details>
+   <summary><code>application-worker.yaml</code> — multi-hub redundancy example</summary>
+
+   ```yaml
+   worker:
+     hubs:
+       # Primary hub (public server A)
+       - url: wss://hub-a.example.com/ws
+         api-key: wk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+         hub-key: hk-yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy
+       # Backup hub (public server B, takes over automatically when primary goes down)
+       - url: wss://hub-b.example.com/ws
+         api-key: wk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx  # Same apiKey = same data ownership
+         hub-key: hk-zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz
+   ```
+
+   </details>
 3. Open the frontend on any device → fill in the hub address and hub key → select the worker and enter its apiKey → **see all tasks on your home computer**;
 4. Start/view tasks from your phone, reply to AI questions, review authorization popups — exactly as if you were sitting in front of your home computer.
 
