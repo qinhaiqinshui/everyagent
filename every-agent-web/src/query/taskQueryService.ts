@@ -175,7 +175,7 @@ export const taskQueryService = {
       return opts.taskId
     }
     if (!opts?.workerId) {
-      throw new Error('请先选择 worker')
+      throw new Error('尚未连接 worker')
     }
     const workspace = opts?.workspace?.trim() || await resolveWorkspaceRoot()
     const result = await hubSession.rpcTo(opts.workerId, 'task.run', {

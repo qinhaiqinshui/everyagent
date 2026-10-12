@@ -49,7 +49,7 @@ export interface RemoteSlashSelectResult {
 
 /** 从 worker 拉取全部 `/` 候选项。 */
 export async function listRemoteSlashItems(workerId: string): Promise<RemoteSlashItem[]> {
-  if (!workerId) throw new Error('请先选择 worker')
+  if (!workerId) throw new Error('尚未连接 worker')
   const result = await hubSession.rpcTo(workerId, 'slash.list', {}) as {
     items?: RemoteSlashItem[]
   }
@@ -68,7 +68,7 @@ export async function selectRemoteSlashItem(
     if (!owner) throw new Error('无法确定任务所属 worker')
     workerId = owner
   }
-  if (!workerId) throw new Error('请先选择 worker')
+  if (!workerId) throw new Error('尚未连接 worker')
   const result = await hubSession.rpcTo(workerId, 'slash.select', { id, taskId: taskId || undefined }) as {
     results?: RemoteSlashSelectEntry[]
     token?: string

@@ -19,7 +19,7 @@ interface TaskWorkspacePickerProps {
   onSelect?: (root: string) => void
   /** 浏览弹窗确认待选目录(尚未注册;注册延迟到任务创建时的 task.run)。 */
   onPickExternal?: (path: string) => void
-  /** 浏览目录定向 worker(新建草稿所选 worker;缺省为空时浏览接口抛「请先选择 worker」)。 */
+  /** 浏览目录定向 worker(当前已连接的 worker;缺省为空时浏览接口抛「尚未连接 worker」)。 */
   workerId?: string
 }
 

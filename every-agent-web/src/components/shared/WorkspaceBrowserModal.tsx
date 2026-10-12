@@ -32,7 +32,7 @@ export default function WorkspaceBrowserModal({
 
   const loadDir = React.useCallback(async (dirPath: string) => {
     if (!workerId) {
-      setError('请先选择 worker')
+      setError('尚未连接 worker')
       setChildren([])
       setCurrentPath('')
       setLoading(false)

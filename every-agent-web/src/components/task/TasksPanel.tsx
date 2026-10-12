@@ -139,7 +139,7 @@ export default function TasksPanel({
   activeTaskId,
 }: {
   onSelect: (task: TaskListSelection) => void
-  onCreateNewTask?: (preset?: { workspace?: string; workerId?: string }) => void
+  onCreateNewTask?: (preset?: { workspace?: string }) => void
   onDeletedTasks?: (taskIds: string[]) => void
   embedded?: boolean
   activeTaskId?: string
@@ -240,7 +240,7 @@ export default function TasksPanel({
               actions: [{
                 id: `new:${entry.root}`,
                 label: '在此工作区新建任务',
-                onSelect: () => onCreateNewTask({ workspace: entry.root, workerId: entry.workerId }),
+                onSelect: () => onCreateNewTask({ workspace: entry.root }),
               }],
             }
           : null),

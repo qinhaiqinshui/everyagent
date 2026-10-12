@@ -10,13 +10,11 @@ import { ArrowRightIcon } from '../shared/AppGlyphs'
 import HScrollArea from '../shared/HScrollArea'
 import TaskModelControls from './TaskModelControls'
 import TaskWorkspacePicker from './TaskWorkspacePicker'
-import TaskWorkerPicker from './TaskWorkerPicker'
 import TaskComposerSurface from './TaskComposerSurface'
 import { extractSlashId } from '@/slash/taskScopedTokens'
 import ChatShell from '@/components/task/ChatShell'
 import { Button } from '@/components/shared/ui'
 import type { WorkspaceEntry } from '@/hub/workspaceRegistry'
-import type { WorkerInfo } from '@/hub/session'
 
 /**
  * Task 启动台草稿面板属性。
@@ -30,12 +28,6 @@ export interface TaskDraftComposerPanelProps {
   llmProfiles: LLMConfigProfile[]
   /** 当前任务草稿状态。 */
   draft: ChatComposerDraftState
-  /** 可选 worker 候选(已由调用方筛好「已连接可用」)。 */
-  workers?: WorkerInfo[]
-  /** 当前选中的 worker(空 = 未选择,提交被禁用)。 */
-  selectedWorker?: string
-  /** 切换草稿 worker。 */
-  onSelectWorker?: (workerId: string) => void
   /** 可选工作区注册表(新任务挂靠目录,多工作区并行)。 */
   workspaces?: WorkspaceEntry[]
   /** 当前选中的工作区根(空 = 未选择,提交被禁用)。 */
@@ -44,7 +36,7 @@ export interface TaskDraftComposerPanelProps {
   onSelectWorkspace?: (root: string) => void
   /** 浏览弹窗确认待选目录(未注册;注册延迟到任务创建时的 task.run)。 */
   onPickWorkspace?: (path: string) => void
-  /** 当前所选 worker(透传:slash 定向 + 浏览目录定向)。 */
+  /** 当前连接的 worker(单 worker 模型,由宿主自动解析;透传:slash 定向 + 浏览目录定向)。 */
   workerId?: string
   /** 提交按钮文案。 */
   submitLabel: string
@@ -93,9 +85,6 @@ export default function TaskDraftComposerPanel({
   selectedLlmConfigId,
   llmProfiles,
   draft,
-  workers = [],
-  selectedWorker = '',
-  onSelectWorker,
   workspaces = [],
   selectedWorkspace = '',
   onSelectWorkspace,
@@ -145,11 +134,6 @@ export default function TaskDraftComposerPanel({
               <div className="task-composer-footer">
                 <HScrollArea className="task-composer-footer__scroll">
                   <div className="task-composer-footer__controls">
-                    <TaskWorkerPicker
-                      workers={workers}
-                      selected={selectedWorker}
-                      onSelect={onSelectWorker}
-                    />
                     <TaskWorkspacePicker
                       workspaces={workspaces}
                       selected={selectedWorkspace}

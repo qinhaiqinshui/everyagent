@@ -94,7 +94,7 @@ export interface TaskComposerSurfaceProps {
   taskId?: string
   /** `@` 文件引用的工作区根(任务自身工作区/草稿选择值;缺省由查询服务取注册表首选根)。 */
   workspace?: string
-  /** 新建任务(草稿态)所选 worker,用于 / 命令按所选 worker 定向;老任务不传(按 taskId 归属)。 */
+  /** 当前 worker(草稿态 = 当前唯一已连接的 worker;任务态 = 任务归属 worker),用于 / 命令与浏览定向。 */
   workerId?: string
   /** 提交按钮文案。 */
   submitLabel: string
@@ -327,7 +327,9 @@ export default function TaskComposerSurface({
 
   // `/` 菜单候选项：打开时从注册中心加载（与 task 解耦，只取一次）。
   React.useEffect(() => {
-    if (!slashOpen) {
+    // 无 worker（尚未连接）时不请求：候选来自 worker 的 slash.list，空 workerId 只会抛错
+    // （单 worker 模型下草稿 worker 自动解析，未连接时 / 菜单为空即可）。
+    if (!slashOpen || !workerId) {
       setSlashItems([])
       setSlashLoading(false)
       return
