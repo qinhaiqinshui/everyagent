@@ -4,7 +4,7 @@
 build-plugins.py —— 一条命令重建全部内置插件(前端 bundle + 插件 jar)
 
 背景(见 docs/ARCHITECTURE.md §内置插件装载前置):
-  - 内置插件不进根 reactor:根 pom 的 <modules> 只有 contract/plugin-api/hub/worker;
+  - 内置插件不进根 reactor:根 pom 的 <modules> 只有 contract/plugin-parent/plugin-api/hub/worker;
   - deploy.py 只打 `-pl every-agent-hub,every-agent-worker -am package`,同样不带插件;
   - BuiltInPluginScanner 要求 every-agent-plugins/<id>/target/classes/plugin.json 且
     target/ 下存在非 sources/javadoc 的 jar,否则 WARN「内置插件未构建」并跳过;
@@ -12,15 +12,16 @@ build-plugins.py —— 一条命令重建全部内置插件(前端 bundle + 插
     URLClassLoader → 残留旧版本 jar 会遮蔽新类(表现为「改了没生效」),
     所以重建必须带 clean;
   - 纯 web 插件的 bundle 由 every-agent-web/scripts/build-plugins.mjs(esbuild)产出,
-    web/index.js 与 index.css 不打进 jar(插件 pom 的 resources 只拷 plugin.json):
+    web/index.js 与 index.css 不打进 jar(plugin.json 的打包由 SDK parent 的
+    <build><resources> 统一提供):
     前端经 plugin.webSource RPC 从插件目录按相对路径读取,因此顺序必须是
     「先 web bundle,后 mvn package」,桌面打包另由 copy-plugins.mjs 搬运 web 产物。
 
 本脚本不重复实现任何构建逻辑:web 侧直接调用既有的 build-plugins.mjs(唯一事实源),
 Java 侧逐插件调 mvn -f <id>/pom.xml,与 mvn -pl/-am 的 reactor 语义互不干扰;
-plugin-api 虽在根 reactor 内,但插件单独构建时从本地仓库解析它(插件不写 API 版本,
-继承根 pom 的 dependencyManagement = ${revision})——java 构建前先自动 mvn install 一次,
-保证仓库 jar 与源码同步(否则撞「找不到符号」)。
+plugin-parent / plugin-api 虽在根 reactor 内,但插件单独构建时从本地仓库解析它们
+(插件继承 every-agent-plugin-parent、且不写 API 版本)——java 构建前先自动 mvn install 一次,
+保证仓库 jar 与源码同步(否则撞「找不到符号」/「找不到 every-agent-plugin-parent」)。
 
 插件清单动态发现(与 scripts/bump-version.py 同一套扫描口径):
   - Java 插件: every-agent-plugins/*/pom.xml
@@ -235,20 +236,29 @@ def default_repo_local() -> str | None:
 
 
 def build_plugin_api(ctx: dict) -> bool:
-    """先把 every-agent-plugin-api 源码 install 到本地仓库。
+    """先把插件 SDK 的源码模块(plugin-parent / plugin-api)install 到本地仓库。
 
-    插件 pom 不写 plugin-api 版本(继承根 pom 的 dependencyManagement = ${revision}),
-    逐插件单独编译时从本地仓库解析 jar;plugin-api 源码新增方法后若忘记 install,
-    插件即报「找不到符号」。故 java 构建前先刷新一次,保证仓库 jar 与源码同步。
+    插件 pom 继承 every-agent-plugin-parent、且不写 plugin-api 版本(两者都由 SDK 管理),
+    逐插件单独编译时这两者都从本地仓库解析;源码新增方法后若忘记 install,
+    插件即报「找不到符号」或「找不到 every-agent-plugin-parent」。故 java 构建前先刷新一次。
     """
-    api_pom = ROOT / "every-agent-plugin-api" / "pom.xml"
-    if not api_pom.is_file():
-        log("[java] plugin-api: 源码模块不存在,跳过 install")
+    sdk_poms = [
+        ROOT / "every-agent-plugin-parent" / "pom.xml",
+        ROOT / "every-agent-plugin-api" / "pom.xml",
+    ]
+    missing = [p for p in sdk_poms if not p.is_file()]
+    if missing:
+        log(f"[java] SDK 模块不存在,跳过 install: {', '.join(str(p) for p in missing)}")
         return True
-    cmd = [ctx["mvn"], "-B", "-f", str(api_pom), "install", "-Dmaven.test.skip=true"]
+    # 用根 pom + -pl/-am:一次把 plugin-parent、plugin-api 及其依赖(contract 等)装好
+    modules = ",".join(p.parent.name for p in sdk_poms)
+    cmd = [
+        ctx["mvn"], "-B", "-f", str(ROOT / "pom.xml"),
+        "-pl", modules, "-am", "install", "-Dmaven.test.skip=true",
+    ]
     if ctx["repo_local"]:
         cmd.append(f"-Dmaven.repo.local={ctx['repo_local']}")
-    log("[java] plugin-api: mvn install(刷新本地仓库依赖)")
+    log(f"[java] SDK({modules}): mvn install(刷新本地仓库依赖)")
     if ctx["dry_run"]:
         log(f"    $ {' '.join(cmd)}")
         return True
@@ -259,7 +269,7 @@ def build_plugin_api(ctx: dict) -> bool:
         if not ctx["follow"] and "Could not create local repository" in (out or ""):
             fallback = ctx["repo_local"] or default_repo_local()
             if fallback:
-                log(f"[java] plugin-api: 本地仓库路径异常,改用 -Dmaven.repo.local={fallback} 重试")
+                log(f"[java] SDK: 本地仓库路径异常,改用 -Dmaven.repo.local={fallback} 重试")
                 rc, _ = run(
                     cmd + [f"-Dmaven.repo.local={fallback}"],
                     cwd=ROOT, env=ctx["env"], follow=ctx["follow"],
@@ -267,9 +277,9 @@ def build_plugin_api(ctx: dict) -> bool:
                 if rc == 0:
                     ctx["repo_local"] = fallback
         if rc != 0:
-            log(f"[java] plugin-api: ✗ install 失败(退出码 {rc})")
+            log(f"[java] SDK: ✗ install 失败(退出码 {rc})")
             return False
-    log(f"[java] plugin-api: ✓ {time.perf_counter() - t0:.1f}s")
+    log(f"[java] SDK: ✓ {time.perf_counter() - t0:.1f}s")
     return True
 
 

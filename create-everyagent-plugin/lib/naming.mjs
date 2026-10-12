@@ -18,12 +18,20 @@
  *   {{entryClass}}  = {{className}} + "Plugin"      （入口类简名）
  *   {{mainClass}}   = {{package}} + "." + {{entryClass}}（plugin.json 的 main 字段值）
  *   {{camelName}}   = camelCase(id)
+ *   {{pluginParentVersion}}        = 插件 SDK parent 的版本
+ *                                    builtin 形态为字面量 `${revision}`（跟随工程版本，升级零改动）
+ *                                    standalone 形态为生成时的实际版本（外部工程解析不了 ${revision}）
+ *   {{pluginParentRelativePath}}   = SDK parent 的相对路径
+ *                                    builtin = ../../every-agent-plugin-parent/pom.xml
+ *                                    standalone = 空（从本地仓库解析，需先 mvn install）
  *
  * 中文 / 特殊字符处理：分词时只保留 ASCII 字母与数字，其余（中文、下划线、点、
  * 空格、全角符号）一律视为分隔符剔除；剔除后若没有任何 ASCII 字母数字，或派生的
  * 类名以数字开头（不是合法 Java 标识符），则由 validatePluginId 直接报错，不静默兜底。
  */
 
+import fs from 'node:fs'
+import path from 'node:path'
 import { ValidationError } from './errors.mjs'
 
 /** id 长度下限 / 上限。 */
@@ -46,6 +54,64 @@ export const DEFAULT_VERSION = '0.1.0'
 
 /** author 缺省值。 */
 export const DEFAULT_AUTHOR = 'everyagent'
+
+/** 插件 SDK parent 的 artifactId（模板与文档共用）。 */
+export const PLUGIN_PARENT_ARTIFACT = 'every-agent-plugin-parent'
+
+/** 内置形态下 SDK parent 的仓库内相对路径（插件位于 every-agent-plugins/<id>/）。 */
+export const PLUGIN_PARENT_RELATIVE_PATH = '../../every-agent-plugin-parent/pom.xml'
+
+/** 外部形态读不到工程版本时的兜底值（几乎不会走到，仅保证生成不中断）。 */
+export const PLUGIN_PARENT_FALLBACK_VERSION = '1.0.0'
+
+/**
+ * 读取仓库根 pom 的 <revision>（工程版本单点源）。
+ * @param {string|null} repoRoot
+ * @returns {string|null}
+ */
+export function readRepoRevision(repoRoot) {
+  if (!repoRoot) return null
+  try {
+    const raw = fs.readFileSync(path.join(repoRoot, 'pom.xml'), 'utf8')
+    const m = raw.match(/<revision>([^<]+)<\/revision>/)
+    return m ? m[1].trim() : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * 推导插件 SDK parent 的模板变量。
+ *
+ * 内置形态（仓库内）写 `${revision}` + relativePath：升级工程版本时插件 pom 零改动。
+ * 外部形态（仓库外）写实际版本 + 空 relativePath：外部工程无法解析 `${revision}`，
+ * 只能钉住生成当时的 SDK 版本（即该插件的编译基线），并从本地仓库解析 parent。
+ *
+ * @param {object} input
+ * @param {string} input.mode builtin | standalone
+ * @param {string|null} [input.repoRoot]
+ * @param {(msg: string) => void} [input.warn]
+ * @returns {{pluginParentVersion: string, pluginParentRelativePath: string}}
+ */
+export function pluginParentVars({ mode, repoRoot, warn } = {}) {
+  if (mode === 'builtin') {
+    return {
+      pluginParentVersion: '${revision}',
+      pluginParentRelativePath: PLUGIN_PARENT_RELATIVE_PATH,
+    }
+  }
+  const revision = readRepoRevision(repoRoot)
+  if (!revision && typeof warn === 'function') {
+    warn(
+      `未能从仓库根 pom.xml 读到 <revision>，插件 pom 的 parent 版本回退为 ` +
+        `${PLUGIN_PARENT_FALLBACK_VERSION}，请自行核对。`,
+    )
+  }
+  return {
+    pluginParentVersion: revision || PLUGIN_PARENT_FALLBACK_VERSION,
+    pluginParentRelativePath: '',
+  }
+}
 
 /**
  * 把 id 切成单词：只认 ASCII 字母数字，其余字符一律作分隔符并丢弃。
@@ -248,4 +314,6 @@ export const VAR_KEYS = [
   'camelName',
   'entryClass',
   'mainClass',
+  'pluginParentVersion',
+  'pluginParentRelativePath',
 ]

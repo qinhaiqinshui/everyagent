@@ -29,7 +29,7 @@ has_children: false
 
 ### 1.2 一次性准备（按序）
 
-1. **java / full 形态**：仓库根先执行一次 `mvn -pl every-agent-plugin-api -am install -DskipTests`（为什么必须：见 §2.2）。
+1. **java / full 形态**：仓库根先执行一次 `mvn -pl every-agent-plugin-parent,every-agent-plugin-api -am install -DskipTests`（为什么必须：见 §2.2）。
 2. **web / full 形态（builtin）**：`cd every-agent-web; npm.cmd install` —— `build:plugins` / `typecheck` 分别依赖 `node_modules` 里的 esbuild 与 typescript（`every-agent-web/package.json:42-48` 的 devDependencies），没装过跑不起来。npm cache 不可写（受限环境）时加 `--cache "$env:TEMP\npm-cache"`。
 3. 之后进入日常循环：改代码 → §1.1 对应命令 → 按 §5 的生效边界重启 worker / 刷新页面。
 
@@ -53,18 +53,18 @@ mvn -f every-agent-plugins\<id>\pom.xml package -q             # 静默模式，
 2. 构建插件必须 `-f every-agent-plugins\<id>\pom.xml` 单独指过去（或 `cd` 进插件目录），这就是 §1.1 矩阵里所有 mvn 命令带 `-f` 的原因；
 3. 构建宿主（如 `mvn -pl every-agent-worker -am package`）同样不带任何插件（`task-edit-resend` 除外）——宿主与插件是两条构建线。
 
-插件 pom 的 parent 是 `dev.everyagent:every-agent-parent:1.0.1`（坐标版本即根 pom 的工程版本，见根 pom 的 `<properties><revision>`；pom 里写的是 `${revision}` 表达式，靠 `relativePath ../../pom.xml` 在磁盘上定位，所以插件能脱离根 reactor 单独构建），依赖只有 `every-agent-plugin-api`（**不写 `<version>`**，继承根 pom 的 `dependencyManagement` = `${revision}`）+ `spring-boot-starter-test`（test），**零 worker 依赖**。⚠️ 插件的自身版本与工程版本**不同号**（脚手架默认给新插件 `0.1.0`），所以依赖里**不要写 `${project.version}`**——它解析的是本插件自己的版本。清单与字段逐项见[plugin.json 字段参考](../plugin-manifest.md)与[后端模型总览](../backend/overview.md)。
+插件 pom 的 parent 是 `dev.everyagent:every-agent-plugin-parent:1.0.1`（**插件 SDK parent**，坐标版本即根 pom 的工程版本，见根 pom 的 `<properties><revision>`；pom 里写的是 `${revision}` 表达式，靠 `relativePath ../../every-agent-plugin-parent/pom.xml` 在磁盘上定位，所以插件能脱离根 reactor 单独构建）。Java 版本 / 编码 / 依赖版本管理 / `plugin.json` 打包 / 测试栈全由它提供，所以插件 pom 只剩「坐标 + 自己额外需要的依赖」——通常整个 `<dependencies>` 只有 `every-agent-plugin-api`（**不写 `<version>`**，由 SDK parent 的 `dependencyManagement` 管），**零 worker 依赖**。⚠️ 插件的自身版本与工程版本**不同号**（脚手架默认给新插件 `0.1.0`），所以依赖里**不要写 `${project.version}`**——它解析的是本插件自己的版本。清单与字段逐项见[plugin.json 字段参考](../plugin-manifest.md)与[后端模型总览](../backend/overview.md)。
 
-### 2.2 首次准备：`install` plugin-api（为什么不能省）
+### 2.2 首次准备：`install` plugin-parent 与 plugin-api（为什么不能省）
 
-`dev.everyagent:every-agent-plugin-api` **未发布到 Maven Central**（repo1 上 `dev/everyagent/` 目录 404，实测）。`-f` 单独构建插件时，Maven 解析这个依赖只会去**本地仓库**找——新 clone 的机器上没有它，构建直接失败（Maven 标准报错形态：`Could not resolve artifact dev.everyagent:every-agent-plugin-api ...`；此前尝试过联网解析的机器还可能残留 `.lastUpdated` 失败缓存，执行下面的 `install` 即一并解决）。所以一次性执行：
+`dev.everyagent:every-agent-plugin-parent`（插件 SDK parent）与 `dev.everyagent:every-agent-plugin-api` **都未发布到 Maven Central**（repo1 上 `dev/everyagent/` 目录 404，实测）。`-f` 单独构建插件时，Maven 解析这两者只会去**本地仓库**找——新 clone 的机器上没有它们，构建直接失败（Maven 标准报错形态：`Could not resolve artifact dev.everyagent:every-agent-plugin-parent ...`；此前尝试过联网解析的机器还可能残留 `.lastUpdated` 失败缓存，执行下面的 `install` 即一并解决）。所以一次性执行：
 
 ```powershell
-# 仓库根，一次性：把 plugin-api（连同它依赖的 reactor 上游）装进本地 ~/.m2
-mvn -pl every-agent-plugin-api -am install -DskipTests
+# 仓库根，一次性：把插件 SDK parent 与 API（连同它们的 reactor 上游）装进本地 ~/.m2
+mvn -pl every-agent-plugin-parent,every-agent-plugin-api -am install -DskipTests
 ```
 
-`-pl` 指到 `every-agent-plugin-api`（根 pom.xml:23，它在 reactor 内所以 `-pl` 可用），`-am` 顺带构建其上游。正常环境执行这一次即可；`install` 会写 `~/.m2`，在写受限的环境里见下节替代方案。standalone 形态（仓库外工程）同样依赖这一步——API jar 只能这样本地供给，没有第二来源。
+`-pl` 指到 `every-agent-plugin-parent` 与 `every-agent-plugin-api`（都在 reactor 内所以 `-pl` 可用），`-am` 顺带构建其上游。正常环境执行这一次即可；`install` 会写 `~/.m2`，在写受限的环境里见下节替代方案。standalone 形态（仓库外工程）同样依赖这一步——SDK parent 与 API jar 只能这样本地供给，没有第二来源。
 
 ### 2.3 离线 / 受限环境配方（技巧，非必需）
 

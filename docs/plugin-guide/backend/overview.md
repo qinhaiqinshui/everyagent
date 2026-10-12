@@ -98,7 +98,7 @@ worker 启动（Spring 容器装配完成 → PluginLoader.init() @PostConstruct
 every-agent-plugins/
 ├─ system-info/                     # java-only：最小形态
 │  ├─ plugin.json                   # 清单（enabled 在扫描期读的是这一份）
-│  ├─ pom.xml                       # parent=every-agent-parent，内联 maven-resources-plugin 复制清单
+│  ├─ pom.xml                       # parent=every-agent-plugin-parent（SDK parent，plugin.json 打包由它提供）
 │  ├─ src/main/java/dev/everyagent/plugin/sysinfo/
 │  │  ├─ SystemInfoPlugin.java      # main 指向的入口类
 │  │  ├─ SystemInfoAdvisorProvider.java

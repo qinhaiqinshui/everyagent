@@ -9,29 +9,25 @@
 
   槽位         值来源（只读）                               同步目标（写入）
   -----------  -------------------------------------------  ----------------------------------------------
-  spring-boot  根 pom parent spring-boot-starter-parent     java/full-standalone pom.xml.tpl 的
-                                                            <spring-boot.version> 属性与两处注释
-  java.version 根 pom <properties>java.version              standalone 模板 <maven.compiler.release>、
-                                                            模板/文档中「Java NN / JDK NN」字样
+  java.version 根 pom <properties>java.version              模板/文档中「Java NN / JDK NN」字样
   revision     根 pom <properties>revision（工程版本单点源） 文档 every-agent-parent:<v> /
                every-agent-parent、plugin-api、worker        every-agent-plugin-api(:jar)：<v> /
-               三者的版本都等于它                              every-agent-worker-<v>-exec.jar 引用；
-                                                            java/full-standalone 模板 API 依赖版本与注释
+               三者的版本都等于它                              every-agent-worker-<v>-exec.jar 引用
   spring-ai    根 pom <properties>spring-ai.version         文档 spring-ai-client-chat <v> 引用
 
 铁律（不破并行协作与红线）：
   - 文档站 docs/plugin-guide/web/ 子目录与 reference/known-issues.md 永不写入（另有归属）；
     本脚本的文档目标全部显式登记在下方规则表里；
-  - 内置形态模板（java-builtin / full-builtin）刻意**不进**规则表：它们的 parent 写 ${revision}、
-    plugin-api 依赖不写版本（继承根 pom 的 dependencyManagement），在这里写死版本会破坏版本单点源；
+  - **pom 模板不在规则表内**：脚手架只有一份 pom 模板
+    （create-everyagent-plugin/templates/java/pom.xml.tpl），它继承插件 SDK parent，
+    Java 版本 / 编码 / 依赖版本管理 / 打包 全由 parent 提供，模板里没有任何版本字面量
+    （内置形态的 parent 版本写 ${revision}、外部形态由生成器读根 pom 填实际版本）。
+    往这里写死版本会破坏版本单点源；
   - 脚手架 vendor 类型副本（index.d.ts.raw）是内容同步不是版本同步，不归本脚本管；
   - @everyagent/plugin-api js 包版本（every-agent-plugin-api/js/package.json）归
     scripts/bump-version.py 统一管理（与 <revision> 同号）。
 
 人工后置项（脚本只改版本字样，会打印提醒）：
-  - spring-boot 槽位变化时，standalone 模板显式钉死的 maven-compiler / maven-resources 插件版本
-    （取自旧版 spring-boot-dependencies 的管理值）不会自动跟随，需 `mvn help:effective-pom`
-    复核后手工更新模板；
   - spring-ai 槽位变化时，文档里「javap 实测」的常量值（ToolCallingAdvisor.DEFAULT_ORDER 等）
     必须重新测量。
 
@@ -137,38 +133,9 @@ Write-Host ''
 # 说明：
 #   - 替换串用 ${1}/${2} 引用捕获组（后跟数字也安全），版本值已校验不含 $；
 #   - 文档目标全部显式列出，web/ 与 reference/known-issues.md 永不进表。
-
-$tplStandalone = @(
-    'create-everyagent-plugin/templates/overlay/java-standalone/pom.xml.tpl',
-    'create-everyagent-plugin/templates/overlay/full-standalone/pom.xml.tpl'
-)
-# 内置形态模板（java-builtin / full-builtin）不在规则表内：它们的 parent 写 ${revision}、
-# plugin-api 依赖不写版本，任何版本字面量写入都会破坏版本单点源（详见文件头「铁律」）。
+#   - pom 模板已不进规则表：脚手架只有一份 pom.xml.tpl，且不含任何版本字面量（详见文件头「铁律」）。
 
 $rules = @()
-foreach ($f in $tplStandalone) {
-    $rules += @{ File = $f; Slot = 'spring-boot'; Name = '<spring-boot.version> 属性'
-        Pattern = '(?<![\w.])(<spring-boot\.version>)[^<]+(</spring-boot\.version>)'
-        Replacement = ("<spring-boot.version>{0}</spring-boot.version>" -f $springBootNew) }
-    $rules += @{ File = $f; Slot = 'spring-boot'; Name = '注释「Spring Boot <v>」'
-        Pattern = '(?<![\w.])Spring Boot [\d][\w.]*'
-        Replacement = ("Spring Boot {0}" -f $springBootNew) }
-    $rules += @{ File = $f; Slot = 'spring-boot'; Name = '注释「spring-boot-dependencies <v>」'
-        Pattern = '(?<![\w.])spring-boot-dependencies [\d][\w.]*'
-        Replacement = ("spring-boot-dependencies {0}" -f $springBootNew) }
-    $rules += @{ File = $f; Slot = 'java.version'; Name = '<maven.compiler.release>'
-        Pattern = '(?<![\w.])(<maven\.compiler\.release>)[^<]+(</maven\.compiler\.release>)'
-        Replacement = ("<maven.compiler.release>{0}</maven.compiler.release>" -f $javaNew) }
-    $rules += @{ File = $f; Slot = 'java.version'; Name = '注释「Java NN」'
-        Pattern = '(?<![\w.])Java \d{1,3}(?![\d.])'
-        Replacement = ("Java {0}" -f $javaNew) }
-    $rules += @{ File = $f; Slot = 'plugin-api'; Name = 'every-agent-plugin-api 依赖 <version>'
-        Pattern = '(?s)(<artifactId>every-agent-plugin-api</artifactId>\s*<version>)[^<]+(</version>)'
-        Replacement = ('${1}' + $apiNew + '${2}') }
-    $rules += @{ File = $f; Slot = 'plugin-api'; Name = '注释「把 <v> 装进本地仓库」'
-        Pattern = '(?<![\w.])把 [\d][\w.]*(?= 装进本地仓库)'
-        Replacement = ("把 {0}" -f $apiNew) }
-}
 $rules += @{ File = 'create-everyagent-plugin/README.md'; Slot = 'java.version'; Name = '「Java NN」字样'
     Pattern = '(?<![\w.])Java \d{1,3}(?![\d.])'
     Replacement = ("Java {0}" -f $javaNew) }
@@ -184,9 +151,9 @@ foreach ($f in @('docs/plugin-guide/getting-started.md',
         Replacement = ("Java {0}" -f $javaNew) }
 }
 foreach ($f in @('docs/plugin-guide/index.md', 'docs/plugin-guide/guides/build-and-run.md')) {
-    $rules += @{ File = $f; Slot = 'every-agent-parent'; Name = '「every-agent-parent:<v>」引用'
-        Pattern = 'every-agent-parent:[\d.]+'
-        Replacement = ("every-agent-parent:{0}" -f $parentNew) }
+    $rules += @{ File = $f; Slot = 'every-agent-parent'; Name = '「every-agent-plugin-parent:<v>」引用'
+        Pattern = 'every-agent-plugin-parent:[\d.]+'
+        Replacement = ("every-agent-plugin-parent:{0}" -f $parentNew) }
 }
 $rules += @{ File = 'docs/plugin-guide/guides/debugging-and-testing.md'; Slot = 'plugin-api'; Name = '「every-agent-plugin-api:<v>」引用'
     Pattern = 'every-agent-plugin-api:[\d.]+'

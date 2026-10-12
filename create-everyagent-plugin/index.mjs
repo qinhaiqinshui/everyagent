@@ -16,7 +16,7 @@ import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from './lib/args.mjs'
 import { CanceledError, EXIT, UsageError, isCliError } from './lib/errors.mjs'
-import { DEFAULT_VERSION, deriveVars } from './lib/naming.mjs'
+import { DEFAULT_VERSION, deriveVars, pluginParentVars } from './lib/naming.mjs'
 import { fillDefaults, isInteractive, promptSpec } from './lib/prompts.mjs'
 import { PACKAGE_DIR, planRender, writeFiles } from './lib/render.mjs'
 import { formatPlan } from './lib/tree.mjs'
@@ -104,10 +104,10 @@ export function formatNextSteps({ spec, vars, relTarget, absTarget }) {
 
   if (spec.mode === 'builtin') {
     if (spec.kind === 'java' || spec.kind === 'full') {
-      lines.push('1) 构建后端 jar（插件不进根 reactor，必须 -f 单独构建；需要先装好 plugin-api）')
+      lines.push('1) 构建后端 jar（插件不进根 reactor，必须 -f 单独构建；需要先装好 plugin-parent 与 plugin-api）')
       lines.push('   ' + pomCmd)
-      lines.push('   首次构建若报找不到 dev.everyagent:every-agent-plugin-api，先在仓库根执行：')
-      lines.push('   mvn -pl every-agent-plugin-api -am install -DskipTests')
+      lines.push('   首次构建若报找不到 dev.everyagent:every-agent-plugin-parent，先在仓库根执行：')
+      lines.push('   mvn -pl every-agent-plugin-parent,every-agent-plugin-api -am install -DskipTests')
       lines.push('')
     }
     if (spec.kind === 'web' || spec.kind === 'full') {
@@ -129,9 +129,9 @@ export function formatNextSteps({ spec, vars, relTarget, absTarget }) {
   lines.push('standalone 形态（仓库外独立工程）后续步骤：')
   lines.push('')
   if (spec.kind === 'java' || spec.kind === 'full') {
-    lines.push('1) 构建后端 jar。注意 every-agent-plugin-api 未发布到 Maven 中央仓库，')
-    lines.push('   需先在宿主仓库根把 API 装进本地仓库，再构建本工程：')
-    lines.push('   mvn -pl every-agent-plugin-api -am install -DskipTests')
+    lines.push('1) 构建后端 jar。注意 every-agent-plugin-parent 与 every-agent-plugin-api')
+    lines.push('   均未发布到 Maven 中央仓库，需先在宿主仓库根把它们装进本地仓库，再构建本工程：')
+    lines.push('   mvn -pl every-agent-plugin-parent,every-agent-plugin-api -am install -DskipTests')
     lines.push('   ' + pomCmd)
     lines.push('')
   }
@@ -226,6 +226,11 @@ export async function main(argv = process.argv.slice(2), io = process) {
     cwd: process.cwd(),
     searchStarts: [process.cwd(), PACKAGE_DIR],
   })
+  // 插件 SDK parent 变量：与 mode 相关（内置写 ${revision}，外部钉生成时的实际版本）
+  Object.assign(
+    vars,
+    pluginParentVars({ mode: spec.mode, repoRoot, warn: (m) => io.stderr.write(`警告：${m}\n`) }),
+  )
   const relTarget = displayPath(target, { repoRoot, cwd: process.cwd() })
 
   // 渲染

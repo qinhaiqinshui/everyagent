@@ -38,14 +38,14 @@ builtin 形态（在**仓库根**执行；插件不进根 reactor，必须 `-f` 
 
 ```powershell
 mvn -f every-agent-plugins/{{pluginId}}/pom.xml package
-# 首次构建若报找不到 dev.everyagent:every-agent-plugin-api，先在仓库根执行一次：
-mvn -pl every-agent-plugin-api -am install -DskipTests
+# 首次构建若报找不到 dev.everyagent:every-agent-plugin-parent，先在仓库根执行一次：
+mvn -pl every-agent-plugin-parent,every-agent-plugin-api -am install -DskipTests
 ```
 
-standalone 形态（在**本目录**执行；every-agent-plugin-api 未发布到 Maven Central，需先从宿主仓库装进本地仓库）：
+standalone 形态（在**本目录**执行；插件 SDK parent 与 API 均未发布到 Maven Central，需先从宿主仓库装进本地仓库）：
 
 ```powershell
-mvn -pl every-agent-plugin-api -am install -DskipTests   # 宿主 everyagent 仓库根，仅需一次
+mvn -pl every-agent-plugin-parent,every-agent-plugin-api -am install -DskipTests   # 宿主 everyagent 仓库根，仅需一次
 mvn package                                              # 本插件目录
 ```
 

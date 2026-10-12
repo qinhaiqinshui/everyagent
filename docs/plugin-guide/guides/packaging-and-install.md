@@ -73,7 +73,7 @@ sha256sum -c my-tool-0.1.0.eap.sha256
 
 | 清单字段 | 判定 | 缺产物时的报错（原文） |
 | --- | --- | --- |
-| 有 `main` | 收 `target/` 下全部非 sources/javadoc 的 `*.jar` 进 `lib/` | `清单声明了 main（java/full 形态），但 target/ 下没有可打包的 jar（sources/javadoc jar 不算）：<targetDir>`，提示先跑 `mvn -f "<pom.xml 路径>" package`（standalone 工程还提示先在宿主仓库根执行 `mvn -pl every-agent-plugin-api -am install -DskipTests`） |
+| 有 `main` | 收 `target/` 下全部非 sources/javadoc 的 `*.jar` 进 `lib/` | `清单声明了 main（java/full 形态），但 target/ 下没有可打包的 jar（sources/javadoc jar 不算）：<targetDir>`，提示先跑 `mvn -f "<pom.xml 路径>" package`（standalone 工程还提示先在宿主仓库根执行 `mvn -pl every-agent-plugin-parent,every-agent-plugin-api -am install -DskipTests`） |
 | 有 `webMain` | 必须存在 `web/index.js`；`web/` 递归收 `index.js` / `index.css` / `*.map`（跳过 `node_modules`） | `清单声明了 webMain（web/full 形态），但 web/index.js 不存在：<web/index.js 路径>`，提示先跑 `npm run build:plugins`（PowerShell 被执行策略拦截时用 `npm.cmd`）或 standalone 的 `node scripts/build.mjs` |
 | 两者都无 | 直接拒绝 | `plugin.json 既无 main 也无 webMain，无法判定打包形态` |
 

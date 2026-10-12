@@ -5,9 +5,9 @@
 
     <parent>
         <groupId>dev.everyagent</groupId>
-        <artifactId>every-agent-parent</artifactId>
+        <artifactId>every-agent-plugin-parent</artifactId>
         <version>${revision}</version>
-        <relativePath>../../pom.xml</relativePath>
+        <relativePath>../../every-agent-plugin-parent/pom.xml</relativePath>
     </parent>
     <version>0.1.0</version>
 
@@ -15,35 +15,6 @@
     <name>sandbox-windows-mic</name>
     <description>Windows MIC 沙箱插件（Restricted Token + Medium IL + Job Object）</description>
 
-    <build>
-        <plugins>
-            <!-- 将插件根目录的 plugin.json 复制到 classpath 根目录，供 PluginRegistry 扫描 -->
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-resources-plugin</artifactId>
-                <executions>
-                    <execution>
-                        <id>copy-plugin-manifest</id>
-                        <phase>process-resources</phase>
-                        <goals>
-                            <goal>copy-resources</goal>
-                        </goals>
-                        <configuration>
-                            <outputDirectory>${project.build.outputDirectory}</outputDirectory>
-                            <resources>
-                                <resource>
-                                    <directory>${project.basedir}</directory>
-                                    <includes>
-                                        <include>plugin.json</include>
-                                    </includes>
-                                </resource>
-                            </resources>
-                        </configuration>
-                    </execution>
-                </executions>
-            </plugin>
-        </plugins>
-    </build>
 
     <dependencies>
         <dependency>
@@ -60,11 +31,6 @@
             <groupId>net.java.dev.jna</groupId>
             <artifactId>jna-platform</artifactId>
             <version>5.16.0</version>
-        </dependency>
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-test</artifactId>
-            <scope>test</scope>
         </dependency>
     </dependencies>
 </project>

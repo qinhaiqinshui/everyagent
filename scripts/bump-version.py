@@ -75,10 +75,20 @@ SLOTS = [
 # ---------------------------------------------------------------------------
 # 体检用锚点
 # ---------------------------------------------------------------------------
-_PARENT_REF = re.compile(r"(<artifactId>every-agent-parent</artifactId>\s*<version>)([^<]+)(</version>)")
+_PARENT_BLOCK = re.compile(r"(?s)<parent>(.*?)</parent>")
+_PARENT_ARTIFACT = re.compile(r"<artifactId>([^<]+)</artifactId>")
+_PARENT_VERSION = re.compile(r"<version>([^<]+)</version>")
+# 允许的 parent：核心模块/插件 SDK 自身 → every-agent-parent；插件 → every-agent-plugin-parent
+ALLOWED_PARENTS = {"every-agent-parent", "every-agent-plugin-parent"}
 _VERSION_LINE = re.compile(r"(?m)^[ \t]*<version>([^<]+)</version>[ \t]*\r?$")
 
-CORE_MODULES = ["every-agent-contract", "every-agent-hub", "every-agent-worker", "every-agent-plugin-api"]
+CORE_MODULES = [
+    "every-agent-contract",
+    "every-agent-hub",
+    "every-agent-plugin-parent",
+    "every-agent-plugin-api",
+    "every-agent-worker",
+]
 
 
 def die(msg: str) -> None:
@@ -127,11 +137,21 @@ def audit(app_versions):
         is_root = pom.parent == ROOT
 
         if not is_root:
-            m = _PARENT_REF.search(text)
-            if not m:
-                problems.append(f"{rel}: 未找到 every-agent-parent 的 parent 版本引用")
-            elif m.group(2).strip() != "${revision}":
-                problems.append(f"{rel}: parent 版本写死为 {m.group(2).strip()}(应为 ${{revision}})")
+            block = _PARENT_BLOCK.search(text)
+            if not block:
+                problems.append(f"{rel}: 未找到 <parent> 块")
+            else:
+                inner = block.group(1)
+                art = _PARENT_ARTIFACT.search(inner)
+                ver = _PARENT_VERSION.search(inner)
+                name = art.group(1).strip() if art else "?"
+                value = ver.group(1).strip() if ver else None
+                if name not in ALLOWED_PARENTS:
+                    problems.append(f"{rel}: parent 为 {name}(应为 every-agent-parent 或 every-agent-plugin-parent)")
+                if value is None:
+                    problems.append(f"{rel}: parent 缺 <version>")
+                elif value != "${revision}":
+                    problems.append(f"{rel}: parent 版本写死为 {value}(应为 ${{revision}})")
 
         # 插件「紧跟 </parent> 的自身版本行」是有意为之,不算残留
         own_line_pos = None

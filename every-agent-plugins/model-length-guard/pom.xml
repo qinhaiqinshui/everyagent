@@ -5,9 +5,9 @@
 
     <parent>
         <groupId>dev.everyagent</groupId>
-        <artifactId>every-agent-parent</artifactId>
+        <artifactId>every-agent-plugin-parent</artifactId>
         <version>${revision}</version>
-        <relativePath>../../pom.xml</relativePath>
+        <relativePath>../../every-agent-plugin-parent/pom.xml</relativePath>
     </parent>
     <version>0.1.0</version>
 
@@ -15,35 +15,6 @@
     <name>model-length-guard</name>
     <description>模型输出预算耗尽护栏插件:finish_reason=length 检测与合成帧信号</description>
 
-    <build>
-        <plugins>
-            <!-- 将插件根目录的 plugin.json 复制到 classpath 根目录，供 PluginRegistry 扫描 -->
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-resources-plugin</artifactId>
-                <executions>
-                    <execution>
-                        <id>copy-plugin-manifest</id>
-                        <phase>process-resources</phase>
-                        <goals>
-                            <goal>copy-resources</goal>
-                        </goals>
-                        <configuration>
-                            <outputDirectory>${project.build.outputDirectory}</outputDirectory>
-                            <resources>
-                                <resource>
-                                    <directory>${project.basedir}</directory>
-                                    <includes>
-                                        <include>plugin.json</include>
-                                    </includes>
-                                </resource>
-                            </resources>
-                        </configuration>
-                    </execution>
-                </executions>
-            </plugin>
-        </plugins>
-    </build>
 
     <dependencies>
         <dependency>
@@ -53,11 +24,6 @@
         <dependency>
             <groupId>org.springframework.ai</groupId>
             <artifactId>spring-ai-openai</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-test</artifactId>
-            <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>io.projectreactor</groupId>
