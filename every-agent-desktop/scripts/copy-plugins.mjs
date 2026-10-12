@@ -30,6 +30,11 @@
  * 用法:
  *   npm run copy:plugins                  # 全量(由 build:assets 调用)
  *   node scripts/copy-plugins.mjs --only pdf-viewer,secret-redaction   # 本地小范围验证
+ *   node scripts/copy-plugins.mjs --out=<dir>   # 输出到指定目录(缺省 = 桌面 resources/)
+ *
+ * `--out` 供服务端部署复用同一套 staging 规则:`deploy.py` 把内置插件产物直接产出到本次
+ * release 的 `worker/every-agent-plugins/`——worker 打包态 cwd 就是那里,故布局与桌面安装包
+ * 完全一致,部署侧不再重复实现一份“哪些文件该搬”的判定。
  */
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
@@ -40,7 +45,11 @@ const desktopRoot = resolve(__dirname, '..')
 const repoRoot = resolve(desktopRoot, '..')
 
 const pluginsDir = join(repoRoot, 'every-agent-plugins')
-const stagingDir = join(desktopRoot, 'resources', 'every-agent-plugins')
+
+/** --out=<dir>:staging 输出目录(缺省 = 桌面 resources/)。deploy.py 借它把同一套 staging
+ *  规则直接产出到本次 release 的 worker/every-agent-plugins/(= 服务端 worker 的启动目录)。 */
+const outArg = process.argv.find((a) => a.startsWith('--out='))?.slice('--out='.length)
+const stagingDir = outArg ? resolve(outArg) : join(desktopRoot, 'resources', 'every-agent-plugins')
 
 /** 与 BuiltInPluginScanner.findTargetJars 同口径:排除 sources/javadoc。 */
 function findTargetJars(pluginDir) {

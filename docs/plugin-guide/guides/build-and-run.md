@@ -266,7 +266,9 @@ java '-Dworker.hubs[0].url=ws://localhost:6111/ws' '-Dserver.port=6112' `
 
 - `every-agent-desktop/package.json:16` 的 `build:assets` 依次执行 `build:backend && build:plugins && copy:plugins && build:web && build:jre && build:plugin-runtime`；
 - 其中 `build:plugins` = `python ../scripts/build-plugins.py`（`every-agent-desktop/package.json:11`），该包装脚本统一驱动 java 侧（`every-agent-plugins/*/pom.xml`）与 web 侧（`:219` 以 `run([node, WEB_BUNDLE_SCRIPT], cwd=WEB_DIR)` 调用 web 的 `build-plugins.mjs`，即 §3 的同一脚本——**唯一事实源，不重复实现**）；
-- `copy:plugins`（`every-agent-desktop/scripts/copy-plugins.mjs:1-6` 头注释）把插件产物 staging 到 `every-agent-desktop/resources/every-agent-plugins/`，经 electron-builder `extraResources` 进安装包的 `<resourcesPath>/every-agent-plugins/`；worker 打包态 cwd = resourcesPath 且不传 `builtin-plugins-dir`，§4.2 的默认解析正好命中；jar / manifest / bundle 任缺即报错中止（fail-fast，绝不带病打包）。
+- `copy:plugins`（`every-agent-desktop/scripts/copy-plugins.mjs:1-6` 头注释）把插件产物 staging 到 `every-agent-desktop/resources/every-agent-plugins/`，经 electron-builder `extraResources` 进安装包的 `<resourcesPath>/every-agent-plugins/`；worker 打包态 cwd = resourcesPath 且不传 `builtin-plugins-dir`，§4.2 的默认解析正好命中；jar / manifest / bundle 任缺即报错中止（fail-fast，绝不带病打包）。该脚本另支持 `--out=<dir>` 指定 staging 输出目录（缺省仍是桌面 `resources/`），供服务端部署复用同一套搬运规则。
+
+**服务端部署同一命门**：`deploy.py` 部署 **worker** 时也已接上这条链——先 `python scripts/build-plugins.py` 构建全部内置插件，再 `node every-agent-desktop/scripts/copy-plugins.mjs --out=<release>/worker/every-agent-plugins` staging 后随 release 上传（`--skip-plugins` 可关，关掉后服务端 worker 扫不到任何插件）；host 模式的 systemd 单元 `WorkingDirectory=<remote>/current/worker`，正好命中 §4.2 的 cwd 默认解析。**反向的坑**：只跑 `deploy.py webapp` 只会换前端 dist，**对插件行为零影响**——插件 web 产物由 worker 经 `plugin.webSource` 读**自己磁盘上的** `every-agent-plugins/<id>/web/index.js`，改了插件就必须让 worker 侧拿到新产物（重新部署 worker、重跑 `npm run dist` 重装桌面版，或直接替换该文件后刷新页面——worker 每次 RPC 现读，无需重启）。
 
 **未实测声明**：桌面安装包端到端是否随包分发并在用户机器上加载全部内置插件——本文未跑 `dist` 链验证，按「未实测」登记，不断言；设计意图即上述链路，另一个佐证是 `BuiltInPluginScanner.java:60` 的 WARN 文案专门点名了桌面安装包场景。现状登记见[已知问题与现状偏差](../reference/known-issues.md)。
 
