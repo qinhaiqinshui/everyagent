@@ -297,10 +297,14 @@ worker:
 
 ## 📱 多端访问(核心场景)
 
+**"我让 AI 干活,但我不想守在电脑前"** —— 这是 Every Agent 的立身之本。
+
 1. **公网服务器**上部署 hub + 前端静态站(见 `docker-compose.yml` / `deploy.py`;生产强制 wss + TLS,LB 的 WS 空闲超时 ≥ 60s);
 2. **家里/办公室的 PC** 上运行 worker,在 `application-worker.yaml` 的 `worker.hubs` 里把 `url` 指向公网 hub(每项 `url + api-key + hub-key` 必填,支持多 hub 冗余);
 3. 任何设备打开前端 → 填 hub 地址与 hub key → 选择 worker 填入其 apiKey → **看到家中电脑上的全部任务**;
 4. 手机端发起/查看任务、回复 AI 提问、审阅授权弹窗——和坐在家里电脑前完全一样。
+
+> 💡 **典型场景**:晚上在书房 PC 上扔给 Every Agent 一个"重构这个模块并跑通测试"的任务,然后去客厅沙发上躺着用手机看进度。中途 AI 遇到一个工作区外的写入,弹授权窗——你在手机上点"本任务放行"即可,不用走回书房。第二天早上通勤路上,用平板查看最终的 diff,顺手 merge。
 
 > 双道鉴权:hub key 管「连上 hub」,worker apiKey 管「动这台 worker 的数据」。密钥 = 身份,公网使用务必妥善保管并走 wss。
 
