@@ -300,10 +300,14 @@ worker:
 
 ## 📱 Multi-Device Access (Core Scenario)
 
+**"I want the AI to do the work, but I don't want to babysit the computer"** — this is the founding principle of Every Agent.
+
 1. Deploy hub + frontend static site on a **public server** (see `docker-compose.yml` / `deploy.py`; production requires wss + TLS, LB WebSocket idle timeout ≥ 60s);
 2. Run worker on your **home/office PC**; in `application-worker.yaml`, set `worker.hubs` `url` to point to the public hub (each entry needs `url + api-key + hub-key`; multi-hub redundancy supported);
 3. Open the frontend on any device → fill in the hub address and hub key → select the worker and enter its apiKey → **see all tasks on your home computer**;
 4. Start/view tasks from your phone, reply to AI questions, review authorization popups — exactly as if you were sitting in front of your home computer.
+
+> 💡 **Typical scenario**: In the evening, you throw a "refactor this module and pass the tests" task at Every Agent on your study PC, then go lounge on the couch in the living room and check progress on your phone. Midway, the AI hits an out-of-workspace write and pops an authorization dialog — you tap "allow for this task" on your phone, no need to walk back to the study. The next morning on your commute, you pull out your tablet to review the final diff and merge it.
 
 > Dual-key auth: the hub key controls "connecting to the hub," and the worker apiKey controls "manipulating this worker's data." Keys = identity; for public use, keep them safe and use wss.
 
