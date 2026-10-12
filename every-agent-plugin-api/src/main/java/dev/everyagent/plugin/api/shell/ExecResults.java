@@ -476,6 +476,12 @@ public final class ExecResults {
         if (r.exitCode() != 0) {
             sb.append(sb.isEmpty() ? "" : "\n").append("[exit code: ").append(r.exitCode()).append("]");
         }
+        // 空串歧义消解：rc=0 且无任何输出/标志时返回显式占位。此前空串既表示
+        // 「合法无输出」也表示「输出被上游吞掉」，二者对模型不可区分；占位后
+        // 残余的吞输出路径（顶层对象断流、管道读线程异常等）会以本占位顶替而当场显形
+        if (sb.isEmpty()) {
+            sb.append("[命令执行完成(无输出)]");
+        }
         return sb.toString();
     }
 
@@ -514,6 +520,10 @@ public final class ExecResults {
         if (exitCode != 0) {
             sb.append(sb.isEmpty() ? "" : "\n")
                     .append("[exit code: ").append(exitCode).append("]");
+        }
+        // 与 format(ExecResult) 同源的空串歧义消解：rc=0 且无输出/标志 → 显式占位
+        if (sb.isEmpty()) {
+            sb.append("[命令执行完成(无输出)]");
         }
         return sb.toString();
     }
