@@ -302,8 +302,8 @@ worker:
 1. **公网服务器**上部署 hub + 前端静态站(见 `docker-compose.yml` / `deploy.py`;生产强制 wss + TLS,LB 的 WS 空闲超时 ≥ 60s);
 2. **家里/办公室的 PC** 上运行 worker,在 `application-worker.yaml` 的 `worker.hubs` 里把 `url` 指向公网 hub(每项 `url + api-key + hub-key` 必填,支持多 hub 冗余);
 
-   <details>
-   <summary><code>application-worker.yaml</code> — 多 hub 冗余配置示例</summary>
+  
+   application-worker.yaml — 多 hub 配置示例
 
    ```yaml
    worker:
@@ -318,7 +318,6 @@ worker:
          hub-key: hk-zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz
    ```
 
-   </details>
 3. 任何设备打开前端 → 填 hub 地址与 hub key → 选择 worker 填入其 apiKey → **看到家中电脑上的全部任务**;
 4. 手机端发起/查看任务、回复 AI 提问、审阅授权弹窗——和坐在家里电脑前完全一样。
 
