@@ -108,8 +108,9 @@ public class CommandExecutor {
         }
         // powershell 专属(Windows 原生域):授权检查之后以 ExecResults.buildPowerShellScript
         // 组装完整脚本——UTF-8 编码偏好 + 非成功流抑制前缀(权限检查与审计日志始终是用户
-        // 原始命令)、PS-003 顶层对象输出断流修复(&{} | Out-String 包裹,见其 javadoc)、
-        // 退出码传导尾部。前缀先于用户命令执行,用户若显式设置该偏好,后写覆盖本前缀。
+        // 原始命令)、PS-003 顶层对象输出断流修复 + PS-004 异常终止丢输出(&{} | Out-String
+        // -Stream 包裹,见其 javadoc)、退出码传导尾部。前缀先于用户命令执行,用户若显式设置
+        // 该偏好,后写覆盖本前缀。
         // 真正的非 ASCII 正确性由「输出文件承载」保证(见 OsSandbox#spawnToFileRedirected),
         // 前缀只负责编码偏好与噪声抑制。
         String spawnCmd = powershell ? ExecResults.buildPowerShellScript(command) : command;

@@ -67,7 +67,10 @@ public final class ExecResults {
      * 提示语与框架机制打架时,正解是在框架侧免疫而非往描述里加禁令(该决策已把提示删掉;原锚点
      * {@code ShellTool.POWERSHELL_BASELINE} 已随「描述精简第三批」删除,记录现存 ARCHITECTURE §7.10)。值由 {@link #OUT_STRING_WIDTH} 派生
      * (编译期常量内联,不存在两处硬编码漂移);用户显式 {@code -Width} 仍优先,不覆盖其意图。
-     * 位置在 PREFIX 独立行内,<b>不占用户命令行号</b>,故不影响 PositionMessage 定位质量。
+     * 位置在 PREFIX 独立行内,<b>不占用户命令行号</b>,故不影响 PositionMessage 定位质量;
+     * 外层收口改成 {@code -Stream}（PS-004）后本项<b>照样生效</b>——行宽由
+     * {@code Out-String:Width} 统一决定,与是否 {@code -Stream} 无关,故「模型自加
+     * {@code | Out-String} 被 120 列折断」的免疫不因 PS-004 修复而回退。
      *
      * <p><b>2. 非成功流静默化</b>：静默 progress/information/warning/verbose/debug 流，
      * 避免个别 cmdlet / 模块显式 Write-Progress 等刷屏（不影响真实 stdout 数据与真实 stderr 错误）。
@@ -115,31 +118,48 @@ public final class ExecResults {
      * {@code $Host.UI.RawUI} 均不能救）。结果就是 AI 敲 {@code Get-Location} 得到空输出、
      * 且无从分辨「命令失败」与「没有输出」。
      *
-     * <p><b>修复</b>：用户命令包进 {@code & { … } | Out-String -Width 4096}——对象文本化在
-     * <b>管道内</b>完成,而管道内的 {@code Format-Table}/{@code Out-String} 路径实测健康,
-     * 坏的只是「顶层隐式 Out-Default」路径。
+     * <p><b>修复</b>：用户命令包进 {@code & { … } | Out-String -Stream -Width 4096}——对象
+     * 文本化在<b>管道内</b>完成,而管道内的 {@code Format-Table}/{@code Out-String} 路径实测
+     * 健康,坏的只是「顶层隐式 Out-Default」路径。
+     *
+     * <p><b>{@code -Stream} 是必需的（2026-12,PS-004 异常终止丢输出）</b>：{@code Out-String}
+     * <b>不带</b> {@code -Stream} 时把脚本块的成功流<b>整段收进一个字符串、管道结束时才吐</b>;
+     * 一旦脚本因 {@code exit N}（含 {@code exit 0}）、{@code throw} 或 {@code -ErrorAction Stop}
+     * 这类<b>终止性中断</b>而离开管道,缓冲未 flush、<b>已产生的输出全丢</b>——实测
+     * {@code Write-Output "X"; exit 2} 只剩 {@code [exit code: 2]}、{@code Write-Output "X"; exit 0}
+     * 只剩「无输出」占位;而 {@code Write-Host}/{@code [Console]::Out}（直写继承句柄）与原生
+     * 命令的退出码不受影响,正是「成功流被整体缓冲」的指纹(用户侧表现为「先打印再 exit」的
+     * 合法命令一律空结果)。加 {@code -Stream} 后逐条即出,异常路径下已产生的行照常到达 stdout。
+     * 两种宿主（PS 5.1 / pwsh 7）实测:{@code -Stream} 对裸对象(PS-003)修复、{@code exit}/
+     * {@code throw} 前输出保留、{@code Out-String:Width} 免疫<b>三者同时成立</b>,唯一差别是
+     * 空输出块不再多一个尾随空行(更贴合 {@link #format} 的空串占位语义)。
      *
      * <p><b>形态</b>（四行,行边界各自承担职责）：
      * <pre>
      * &lt;POWERSHELL_PREFIX&gt;
      * &amp; {
      * &lt;用户命令&gt;
-     * } | Out-String -Width 4096&lt;POWERSHELL_EXIT_TAIL&gt;
+     * } | Out-String -Stream -Width 4096&lt;POWERSHELL_EXIT_TAIL&gt;
      * </pre>
      * 用户命令独占一行既保持 PS 报错 PositionMessage 精确引用用户代码（codex 2026-10
      * 实测的定位质量),又保护用户命令末尾的 {@code # 注释}不被 {@code }} 吞掉——单行式
      * {@code & { cmd # comment }} 的闭合括号会落进注释里导致语法错误。
      *
      * <p><b>语义实测不变</b>：块内 {@code exit N} 终止整个进程且码 N(尾部不执行,与原
-     * 行为一致);{@code $LASTEXITCODE} 传导({@code cmd /c exit 3} → rc=3);空输出块仅多
-     * 一个空行;{@code Write-Error} 等错误流照旧走 stderr + CLIXML 还原;赋值/控制流语句在
-     * 块内自洽(块作用域仅隔离变量导出,单命令内无影响)。
+     * 行为一致);{@code $LASTEXITCODE} 传导({@code cmd /c exit 3} → rc=3);空输出块零字节
+     * ({@link #format} 据此落「无输出」占位,不再是一个尾随空行);{@code Write-Error} 等错误
+     * 流照旧走 stderr + CLIXML 还原;赋值/控制流语句在块内自洽(块作用域仅隔离变量导出,
+     * 单命令内无影响)。
+     *
+     * <p><b>输出产生于终止性中断之前时照常到达</b>（PS-004）:{@code -Stream} 逐条即出,
+     * 故 {@code Write-Output 'X'; exit 2} 的 {@code X} 与 {@code [exit code: 2]} 并存,
+     * {@code throw} / {@code -ErrorAction Stop} 同理(此前只剩 stderr 与退出码)。
      *
      * @param command 用户命令原文（不转写、不拆分,整段嵌入）
      * @return 完整 .ps1 脚本内容（调用方负责 UTF-8 BOM 落盘）
      */
     public static String buildPowerShellScript(String command) {
-        return POWERSHELL_PREFIX + "\n& {\n" + command + "\n} | Out-String -Width "
+        return POWERSHELL_PREFIX + "\n& {\n" + command + "\n} | Out-String -Stream -Width "
                 + OUT_STRING_WIDTH + POWERSHELL_EXIT_TAIL;
     }
 

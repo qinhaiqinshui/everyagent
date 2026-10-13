@@ -32,3 +32,11 @@
 - **让失败可见若需新增 IPC 字段,必须同步 `.sandbox-bin` 物化清单**,否则即制造 #1 的复发形态(ARCHITECTURE.md 红线原文)。
 - #3 的正解:为 CLIXML 抽取补**端到端护栏测试**(真实产物驱动,防正则模式漂移),不是改降噪逻辑。
 - 空串歧义已收口(2026-10-12,253ea483):rc=0 且全空时返回显式占位 `[命令执行完成(无输出)]`——上表任一待修项的实际吞输出将**以占位显形**而非伪装成「命令未执行」。
+
+## 四、2026-12 登记(工具输出通道,来自两轮任务日志 w_lrx1/t_hjd2、w_vlq1/t_lrxe 的排查)
+
+| # | 位置 | 环节 | 性质与状态 |
+|---|---|---|---|
+| 8 | `every-agent-plugin-api` `ExecResults.buildPowerShellScript` | 收口用**不带 `-Stream`** 的 `Out-String -Width 4096`——它把脚本块成功流整段缓冲、管道收尾才吐;脚本因 `exit N`(**含 `exit 0`**)/`throw`/`-ErrorAction Stop` **终止性中断**离开管道时缓冲未 flush,已产生的 `Write-Output` **全丢**(rc、`Write-Host`/`[Console]::Out`、最后一条原生命令的退出码均不受影响) | **已修(PS-004,2026-12)**。收口改 `Out-String -Stream -Width 4096`,逐条即出;两宿主(PS 5.1 / pwsh 7.6.6)实测三契约同时成立(PS-003 断流修复不变 / 异常路径输出保留 / `Out-String:Width` 免疫不变),空输出块由「一个尾随空行」变为「零字节」(更贴合 `format` 空串占位语义)。护栏 `ExecResultsScriptTest.outputBeforeTerminatingExitSurvives` / `outputBeforeThrowSurvives`;机理与判据见 ARCHITECTURE §7.10 PS-004 |
+| 9 | 会话级工具结果投递 | 间歇性「工具结果**整包为空**」:连 `[命令执行完成(无输出)]` 占位、stderr、exit code 都没有,且**同时波及 `read_file`**(不经 pwsh 的通道);受影响命令的**副作用全部生效** | **未复现/待观察**。已排除命令形态因素(大输出 / 中文 / 长耗时 / 并行双调用 / `-Raw` 均正常返回),偏向会话/请求级传输或投递层偶发丢弃;无稳定复现条件,登记备查(无从客户端侧下手) |
+| 10 | 会话内批量替换脚本「替换 0 处」现象(t_lrxe #136/#138) | 同一脚本先 `Rename-Item` 改名(**生效**)、再 `Get-Content -Raw` → `.Replace` → `Set-Content -Encoding utf8NoBOM`,逐文件报「替换 0 处」;随后 `rg` 复查(同轮 #137/#139)证明文件里旧 token **原样存在**;再往后宿主 `update_file` 逐处替换 32 处**全部命中** | **当前不可复现**。**已定性排除**:①字符不同——日志里脚本 key 与事后 `oldContent` 的码点逐字符一致;②读取编码——实测在**生产同款 PREFIX** 下(PS 5.1 与 pwsh 7.6.6 × 文件带/不带 BOM)`Get-Content -Raw` 均正确读出中文(`containsOld=True`),故「GBK 误读致乱码」不成立;③脚本形态——本地以同形脚本复现**均正常命中**;④后端已确认为 **codex(pwsh 7)**(依据:该任务工具输出里出现 `.everyagent/tmp/ea-codex-out/err-*.tmp` 承载文件),故「PS 5.1 不支持 `-Encoding utf8NoBOM` 报错」这条也不适用。**剩余解释**:当轮会话存在**通道级故障**——同一 agent 在其后续盘查中自述「本会话里每一条 powershell 结果都是 `(no output)`」,即**该轮的 stdout 通道整体不可信**;「替换 0 处」很可能是通道故障期间的产物,而「文件确未变更」由事后 `rg` + 宿主 `update_file` 双向证实(这部分结论仍有效)。**规避**:批量读写中文文件恒显式 `-Encoding`;不把 `Rename-Item` 改名与「按新名 `-LiteralPath` 读写」放进同一条命令;凡以「无输出」判「无匹配」的结论一律视为**未验证** |

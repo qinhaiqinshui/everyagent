@@ -7,7 +7,8 @@ import org.junit.jupiter.api.Test;
 
 /**
  * {@link ExecResults#buildPowerShellScript} 的脚本形态测试（PS-003 顶层对象输出断流
- * 修复的回归护栏：四行结构、用户命令原样独占一行、Out-String 收口、exit 尾部在末尾）。
+ * 修复与 PS-004 异常终止丢输出的回归护栏：四行结构、用户命令原样独占一行、
+ * {@code Out-String -Stream} 收口、exit 尾部在末尾）。
  */
 class ExecResultsScriptTest {
 
@@ -19,8 +20,8 @@ class ExecResultsScriptTest {
         assertEquals(ExecResults.POWERSHELL_PREFIX.trim(), lines[0].trim(), "第 1 行=前缀");
         assertEquals("& {", lines[1], "第 2 行=脚本块开");
         assertEquals("Get-Location", lines[2], "第 3 行=用户命令原样独占一行");
-        assertTrue(lines[3].startsWith("} | Out-String -Width " + ExecResults.OUT_STRING_WIDTH),
-                "第 4 行=Out-String 收口: " + lines[3]);
+        assertTrue(lines[3].startsWith("} | Out-String -Stream -Width " + ExecResults.OUT_STRING_WIDTH),
+                "第 4 行=Out-String -Stream 收口(PS-003 断流修复 + PS-004 异常路径不停吞): " + lines[3]);
         assertTrue(lines[3].endsWith(ExecResults.POWERSHELL_EXIT_TAIL),
                 "第 4 行同含退出码尾部");
     }
@@ -105,6 +106,26 @@ class ExecResultsScriptTest {
                 "裸对象之后的 PS 渲染输出不得断流(PS-003 回归) → §7.10:" + out);
         assertTrue(out.contains("Path"),
                 "裸对象(PathInfo 表格)自身输出不得消失 → §7.10:" + out);
+    }
+
+    @Test
+    void outputBeforeTerminatingExitSurvives() throws Exception {
+        String out = runRealScript("Write-Output 'BEFORE_EXIT_MARKER'; exit 2");
+        assertTrue(out.contains("BEFORE_EXIT_MARKER"),
+                "exit 之前的 Write-Output 不得丢失(PS-004 回归)。不带 -Stream 的 Out-String 会把"
+                        + "成功流整段缓冲、脚本 exit 时未 flush → 此处只剩 [exit code: 2] → §7.10:" + out);
+    }
+
+    /**
+     * 端到端验证 PS-004 的另一条异常路径:{@code throw} 终止时,抛出之前的成功流输出同样到达
+     * (此前只剩 stderr + 退出码),且 stderr 仍正常透出。
+     */
+    @Test
+    void outputBeforeThrowSurvives() throws Exception {
+        String out = runRealScript("Write-Output 'BEFORE_THROW_MARKER'; throw 'boom'");
+        assertTrue(out.contains("BEFORE_THROW_MARKER"),
+                "throw 之前的 Write-Output 不得丢失(PS-004 回归) → §7.10:" + out);
+        assertTrue(out.contains("boom"), "stderr 的错误文本仍须透出:" + out);
     }
 
     @Test
