@@ -1,7 +1,7 @@
 ---
 title: 前端 UI 扩展点
 nav_order: 11
-parent: web
+parent: 前端插件开发
 has_children: false
 ---
 

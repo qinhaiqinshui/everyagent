@@ -1,7 +1,7 @@
 ---
 title: 调试与测试
 nav_order: 15
-parent: guides
+parent: 构建 · 调试 · 分发
 has_children: false
 ---
 

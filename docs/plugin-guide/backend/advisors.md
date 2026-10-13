@@ -1,7 +1,7 @@
 ---
 title: Advisor 与模型增强扩展点
 nav_order: 6
-parent: backend
+parent: 后端插件开发
 has_children: false
 ---
 

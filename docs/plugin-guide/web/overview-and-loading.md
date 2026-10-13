@@ -1,7 +1,7 @@
 ---
 title: 前端插件总览与加载链路
 nav_order: 9
-parent: web
+parent: 前端插件开发
 has_children: false
 ---
 

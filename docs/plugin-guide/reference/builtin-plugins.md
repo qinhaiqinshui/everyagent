@@ -1,7 +1,7 @@
 ---
 title: 内置插件范例索引
 nav_order: 17
-parent: reference
+parent: 参考
 has_children: false
 ---
 

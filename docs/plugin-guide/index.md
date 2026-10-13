@@ -1,6 +1,6 @@
 ---
 title: 插件开发指南
-nav_order: 1
+nav_order: 4
 has_children: false
 ---
 
@@ -49,7 +49,7 @@ has_children: false
 | [reference/api-index.md](reference/api-index.md) | 后端注册点 + 前端类型包导出的一屏索引表 | **已成文** |
 | [reference/known-issues.md](reference/known-issues.md) | 现状偏差、API 包未发布等：现象 / 影响 / 修复·规避 / 待办（#1~#5 已修复） | **已成文** |
 
-> 目录由本文件冻结：`nav_order` 按上表顺序 1~19 递增，`parent` 为所在子目录名（`backend` / `web` / `guides` / `reference`），首页无 `parent`。新增页面要同时改本表、本条编号与 §1 阅读路径。
+> 目录由本文件冻结：正文按上表顺序阅读，`nav_order` 全局唯一、同级递增——本站首页 1、[架构说明](../ARCHITECTURE.md) 2、[架构全景图](../架构.md) 3、本页 4、[快速上手](getting-started.md) 5、[plugin.json 字段参考](plugin-manifest.md) 6；`backend` / `web` / `guides` / `reference` 四组各由一页**分组页**在侧栏折叠（`backend/index.md`「后端插件开发」7 / `web/index.md`「前端插件开发」9 / `guides/index.md`「构建 · 调试 · 分发」13 / `reference/index.md`「参考」17，均带 `has_children: true`），组内成员沿用 4~19 的相对顺序。各篇 `parent` 必须**精确等于**分组页 `title`。新增页面要同时改本表、本条编号与 §1 阅读路径。
 
 ## 3. 5 分钟速览：一个插件由哪些部分组成
 

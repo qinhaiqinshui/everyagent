@@ -1,3 +1,9 @@
+---
+title: 架构说明（唯一事实源）
+nav_order: 2
+has_children: false
+---
+
 # Every Agent — 架构说明
 
 > **哪里都可以使用的 Agent**:worker 执行器运行在本地局域网的个人电脑上,任务里的 agent 在其中运行,进度从任何地方查看。

@@ -1,7 +1,7 @@
 ---
 title: 前端 ctx API
 nav_order: 10
-parent: web
+parent: 前端插件开发
 has_children: false
 ---
 
