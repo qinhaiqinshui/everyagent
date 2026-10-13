@@ -8,7 +8,8 @@
  *         若命令首行是注释（意图说明），内联预览拆分为「正文样式注释 + 等宽命令」两段，
  *         注释以 AI 正文样式（无衬线 + 正文色）呈现，与等宽 muted 的命令体形成层次。
  *         工具执行失败时扳手图标转红（detail.status === 'error'，来自 worker
- *         tool.result 事件的 data.status；见 ExecResults.looksFailed）。
+ *         tool.result 事件的 data.status；由 worker 按结构化结果记账判定
+ *         （shell 退出码 / 超时 / 工具抛异常，见 plugin-api ToolOutcomeLog））。
  * 展开态：先展示参数块（完整命令，折叠行内联预览被截断时可在此看全量），
  *         再显示工具返回结果（stdout/stderr 合并文本，按原始换行渲染）。
  *         stderr 已由 worker 合并进结果文本（以 [stderr] 段标记），此处不再单独分支。

@@ -34,6 +34,21 @@ public interface ToolContext extends ExecContext {
         return null;
     }
 
+    /**
+     * per-run 工具执行结果账本（{@link ToolOutcomeLog}）—— 工具结果「成功 / 失败」的结构化通道。
+     *
+     * <p>自建命令执行器的后端（如 codex / windows-mic / wsl-ubuntu）必须在拿到执行结局处
+     * 调用 {@code ctx.toolOutcomes().recordShellExit(toolName, command, exitCode, aborted)}：
+     * worker 的 {@code tool.result} 事件据此下发 {@code data.status}，前端把非零退出码 / 超时中止
+     * 的工具块标红。<b>不得</b>改走「匹配错误文案」——那会把「读/grep 到该文案源码」的命令
+     * 自指误判为失败（详见 {@link ToolOutcomeLog}）。
+     *
+     * <p>默认返回 {@code null}（未接入 → 该工具的结果只按「是否抛异常」判定）。
+     */
+    default ToolOutcomeLog toolOutcomes() {
+        return null;
+    }
+
     /** 已组装好的 shell 执行器（授权 + 沙箱已内建），插件用它注册 ShellTool。 */
     default ShellExecutor shellExecutor() {
         return null;

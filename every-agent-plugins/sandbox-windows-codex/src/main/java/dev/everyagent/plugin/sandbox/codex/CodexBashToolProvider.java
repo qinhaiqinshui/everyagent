@@ -57,7 +57,8 @@ public class CodexBashToolProvider implements ToolProvider {
     @Override
     public List<ToolCallback> createTools(ToolContext ctx) {
         Path workspaceRoot = ctx.workspaceRoot() != null ? Path.of(ctx.workspaceRoot()) : null;
-        CodexCommandExecutor exec = new CodexCommandExecutor(manager, workspaceRoot, rg.injectPath());
+        CodexCommandExecutor exec = new CodexCommandExecutor(manager, workspaceRoot,
+                rg.injectPath(), ctx.toolOutcomes());
         // 门禁接入(§7.8):后端的命令执行器归本插件所有,worker 无法拦命令串,故由本插件
         // 在 spawn 前先过 worker 的授权门禁——否则「工作区外路径授权 → 下发沙箱」这条链
         // 根本不会启动(表现为被 OS 直接拒绝且从不弹窗)。授权通过后 worker 同步把授权范围

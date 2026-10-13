@@ -7,6 +7,7 @@ import dev.everyagent.plugin.api.model.EmitEvent;
 import dev.everyagent.plugin.api.event.Events;
 import dev.everyagent.plugin.api.event.Usage;
 import dev.everyagent.plugin.api.proto.SnowflakeId;
+import dev.everyagent.plugin.api.spi.ToolOutcomeLog;
 import dev.everyagent.plugin.api.agent.Agent;
 import dev.everyagent.plugin.api.agent.AgentActivity;
 import org.springframework.ai.chat.client.ChatClient;
@@ -114,6 +115,15 @@ public final class AgentEntity implements Agent {
     /** 最近活动快照(list_agents/wait_agents 契约;WorkerToolEventAdvisor 每轮合并写)。 */
     private final AtomicReference<AgentActivity> activity =
             new AtomicReference<>(new AgentActivity(null, null, null, null, null));
+
+    /**
+     * 本 agent 的 per-run 工具执行结果账本({@code tool.result} 事件 status 的结构化判定源)。
+     *
+     * <p>由 {@code AgentBuilder} 在装配时创建(同一实例同时交给 {@link dev.everyagent.plugin.api.spi.ToolContext#toolOutcomes()}
+     * 供插件执行器记账、交给 per-call 工具回调包装器记异常、并由本实体供 advisor 查账),
+     * 随 run 结束回收。单元测试等直接 new 本类的场景可能为 null,使用方须判空。
+     */
+    public volatile ToolOutcomeLog toolOutcomes;
 
     public AgentEntity(String agentId, String title, ChatModel chatModel,
             OpenAiChatOptions options, List<ToolCallback> tools,

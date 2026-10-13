@@ -57,7 +57,7 @@ public class WslUbuntuBashToolProvider implements ToolProvider {
     public List<ToolCallback> createTools(ToolContext ctx) {
         Path workspaceRoot = ctx.workspaceRoot() != null ? Path.of(ctx.workspaceRoot()) : null;
         WslUbuntuCommandExecutor exec = new WslUbuntuCommandExecutor(props, workspaceRoot,
-                workspaces, pluginDir, taskNetworkBlocked(ctx.subjectId()));
+                workspaces, pluginDir, taskNetworkBlocked(ctx.subjectId()), ctx.toolOutcomes());
         // 描述全量自报(2026-12 第三批:核心零默认,提供者必传):用途/工作目录两句随移交由本
         // 后端自写;通用常识类条目(stdin 语义、Out-String 收口、连接符版本)已按用户决策从
         // 描述删除(沿革见 ARCHITECTURE §7.10),后端不得在此私自加回。这里只留本沙箱

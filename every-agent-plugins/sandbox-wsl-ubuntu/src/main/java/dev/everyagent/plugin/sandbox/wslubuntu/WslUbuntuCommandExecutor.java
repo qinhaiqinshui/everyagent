@@ -3,6 +3,7 @@ package dev.everyagent.plugin.sandbox.wslubuntu;
 import dev.everyagent.plugin.api.config.WorkerConfig;
 import dev.everyagent.plugin.api.shell.ExecResults;
 import dev.everyagent.plugin.api.spi.ExecResult;
+import dev.everyagent.plugin.api.spi.ToolOutcomeLog;
 import dev.everyagent.plugin.api.spi.WorkspaceManager;
 
 import org.slf4j.Logger;
@@ -34,15 +35,19 @@ public class WslUbuntuCommandExecutor {
     private final Path pluginDir;
     /** 任务级禁网开关读取器(可空 = 无任务上下文,恒放行)。 */
     private final BooleanSupplier networkBlocked;
+    /** per-run 工具结果账本(可空):命令执行后按结构化退出码记账,供 tool.result.status 判定。 */
+    private final ToolOutcomeLog outcomes;
     private final ExecutorService exec = Executors.newVirtualThreadPerTaskExecutor();
 
     public WslUbuntuCommandExecutor(WorkerConfig props, Path workspaceRoot,
-            WorkspaceManager workspaces, Path pluginDir, BooleanSupplier networkBlocked) {
+            WorkspaceManager workspaces, Path pluginDir, BooleanSupplier networkBlocked,
+            ToolOutcomeLog outcomes) {
         this.props = props;
         this.workspaceRoot = workspaceRoot;
         this.workspaces = workspaces;
         this.pluginDir = pluginDir;
         this.networkBlocked = networkBlocked;
+        this.outcomes = outcomes;
     }
 
     /**
@@ -64,6 +69,9 @@ public class WslUbuntuCommandExecutor {
 
         log.info("[exec] wsl-ubuntu rc={} aborted={} cmd={}", r.exitCode(), r.aborted(),
                 ExecResults.truncate(command, 200));
+        if (outcomes != null) {
+            outcomes.recordShellExit(shell, command, r.exitCode(), r.aborted());
+        }
         return format(r);
     }
 

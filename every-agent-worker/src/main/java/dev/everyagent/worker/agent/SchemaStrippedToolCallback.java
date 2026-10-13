@@ -1,5 +1,6 @@
 package dev.everyagent.worker.agent;
 
+import dev.everyagent.plugin.api.spi.ToolOutcomeLog;
 import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.definition.ToolDefinition;
@@ -30,9 +31,15 @@ public class SchemaStrippedToolCallback implements ToolCallback {
     private static final ObjectMapper MAPPER = JacksonUtils.getDefaultJsonMapper();
 
     private final ToolCallback delegate;
+    private final ToolOutcomeLog toolOutcomes;
 
     public SchemaStrippedToolCallback(ToolCallback delegate) {
+        this(delegate, null);
+    }
+
+    public SchemaStrippedToolCallback(ToolCallback delegate, ToolOutcomeLog toolOutcomes) {
         this.delegate = delegate;
+        this.toolOutcomes = toolOutcomes;
     }
 
     @Override
@@ -73,11 +80,38 @@ public class SchemaStrippedToolCallback implements ToolCallback {
 
     @Override
     public String call(String toolInput) {
-        return delegate.call(toolInput);
+        try {
+            return delegate.call(toolInput);
+        } catch (RuntimeException e) {
+            recordThrow(toolInput);
+            throw e;
+        }
     }
 
     @Override
     public String call(String toolInput, ToolContext toolContext) {
-        return delegate.call(toolInput, toolContext);
+        try {
+            return delegate.call(toolInput, toolContext);
+        } catch (RuntimeException e) {
+            recordThrow(toolInput);
+            throw e;
+        }
+    }
+
+    /**
+     * 记账「本次工具调用抛异常」——{@code tool.result} 的 {@code data.status} 结构化判定源之一
+     * (另一源是 shell 执行器的退出码记账)。框架不给工具层工具调用 id,故以
+     * 「工具名 + 入参原串」为键;该入参串与 {@code ToolCall.arguments()} 同源,发射侧可按同一键查账。
+     * 正常返回不记账(查不到即视为成功)。
+     */
+    private void recordThrow(String toolInput) {
+        if (toolOutcomes == null) {
+            return;
+        }
+        try {
+            toolOutcomes.recordToolThrow(delegate.getToolDefinition().name(), toolInput);
+        } catch (RuntimeException ignored) {
+            // 记账是旁路:工具定义取不到时不影响异常继续抛出。
+        }
     }
 }

@@ -59,30 +59,14 @@ function dataOf(event: FoldableTaskEvent): Record<string, unknown> | undefined {
 // ---- 工具结果状态 ----
 
 /**
- * 与 worker 侧同源的失败文案标记（worker `ExecResults`：`TOOL_FAILURE_PREFIX` /
- * `TIMEOUT_NOTE`）。**改动 worker 文案时必须同步此处**——这里只用于旧记录兜底。
- */
-const TOOL_FAILURE_MARKERS = ['[工具执行失败]', '[命令被沙箱超时中止]']
-
-/** `marker` 是否作为某行的行首出现（与 worker `ExecResults.atLineStart` 同口径）。 */
-function atLineStart(text: string, marker: string): boolean {
-  for (let idx = text.indexOf(marker); idx >= 0; idx = text.indexOf(marker, idx + 1)) {
-    if (idx === 0 || text[idx - 1] === '\n' || text[idx - 1] === '\r') return true
-  }
-  return false
-}
-
-/**
- * 工具结果状态：worker 下发的 `data.status` 为权威（判定收口在 worker 单点），
- * 缺失（本改动之前落盘的历史记录）时回退到与 worker 同源的失败文案启发式。
+ * 工具结果状态：worker 在 `tool.result` 的 `data.status` 里下发（判定收口在 worker 的单点：
+ * shell 退出码 / 超时 / 工具抛异常走结构化记账，见 plugin-api `ToolOutcomeLog`）。
  *
- * 锚行首而非 `includes`：读/grep 到承载该文案的源码时，原文会进结果文本，
- * `includes` 会让「查失败文案」的命令自己被标成失败（自指误报）。
+ * 无该字段（本改动之前落盘的历史记录）一律按成功——**不做文案匹配推断**：
+ * 那会让「读/grep 到失败文案源码」的命令被自指误判为失败（实测复现过）。
  */
-function readToolStatus(rawStatus: unknown, content: string): 'success' | 'error' {
-  if (rawStatus === 'error') return 'error'
-  if (rawStatus === 'success') return 'success'
-  return TOOL_FAILURE_MARKERS.some((marker) => atLineStart(content, marker)) ? 'error' : 'success'
+function readToolStatus(rawStatus: unknown): 'success' | 'error' {
+  return rawStatus === 'error' ? 'error' : 'success'
 }
 
 // ---- 默认 handler（未注册 kind 的降级） ----
@@ -185,9 +169,8 @@ registerEventKind('tool.result', {
       sequence: Number(event.seq),
       toolCallId: callId,
       toolName: folder.getToolName(callId),
-      // 权威状态来自 worker 的 data.status（失败判定收口在 worker 单点）；
-      // 无该字段的旧记录回退到同源失败文案启发式。
-      status: readToolStatus(data?.status, content),
+      // 权威状态来自 worker 的 data.status（判定收口在 worker：退出码/超时/抛异常的结构化记账）。
+      status: readToolStatus(data?.status),
     }, seqKey)
     return true
   },

@@ -60,7 +60,7 @@ public class DirectShellToolProvider implements ToolProvider {
                 ? rgBinary.path().getParent() : null;
         ToolContextImpl impl = (ToolContextImpl) ctx;
         CommandExecutor exec = new CommandExecutor(sandbox, ctx,
-                impl.gateImpl(), ctx.agentId(), rgDir);
+                impl.gateImpl(), ctx.agentId(), rgDir, impl.toolOutcomes());
         boolean win = isWindows();
         // 描述全量自报(2026-12 第三批:核心零默认,提供者必传):用途/工作目录两句随移交由本
         // 提供者自写;通用常识类条目(stdin 语义、非 ASCII 已解码、Out-String 收口、连接符版本)

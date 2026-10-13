@@ -195,7 +195,7 @@ hub 对频道名不解释业务语义:它只做"前缀必须匹配本连接命�
 | task.poll / stream | `user.message` | ✓ | 用户输入入日志:`{content, data:{rawContent?}}`(统一事件模型,content=AI 可见明文;rawContent=原始输入含 opaque token 串,仅用于前端回放还原胶囊,在 `data` 内、非顶层) |
 | task.poll / stream | `delta` / `thinking` | ✗ 瞬态 | 逐 token / 推理增量(主/子同名,子带 agentId) |
 | task.poll / stream | `message` | ✓ | **每轮权威完成记录**:`{thinking, text, toolCalls:[{id,name,arguments}], agentId?}` |
-| task.poll / stream | `tool.result` | ✓ | `{callId, name, summary, status}`(工具结果文本 = `ToolResponseMessage.responseData` 原文,**事件侧不截断**:事件/落盘/推送不再复加损失;`status` = `success`/`error`,由 worker 单点判定——Spring AI 的 `ToolResponseMessage` 无 error 位,判据只能是自产文案,收口于 `ExecResults.looksFailed`(失败前缀 `[工具执行失败]` / 超时尾注 `[命令被沙箱超时中止]`,**须落在行首**——否则「读/grep 到该文案源码」的命令会被自指误判为失败;**非零 exit code 不算失败**,`rg` 无匹配=1 是正常语义),前端据此把失败工具块标红,无该字段的旧记录按同源文案启发式兜底) |
+| task.poll / stream | `tool.result` | ✓ | `{callId, name, summary, status}`(工具结果文本 = `ToolResponseMessage.responseData` 原文,**事件侧不截断**:事件/落盘/推送不再复加损失;`status` = `success`/`error`,由 worker 按**结构化结果账本**判定——Spring AI 的类型层没有失败位(`ToolResponseMessage.ToolResponse` 只有 id/name/responseData,`ToolExecutionException` 只带 `ToolDefinition`,框架也不把工具调用 id 交给工具层),故由执行侧在知道结局处记账:`ToolOutcomeLog` 的 shell 退出码/超时(各后端执行器写,**非零退出码即失败**)+ 工具抛异常(per-call 回调包装器写),发射侧按「工具名 + 该次调用可复现载荷」查账;**不解析结果文本**——文案匹配会让「读/grep 到失败文案源码」的命令自指误判为失败),前端据此把失败工具块标红;无该字段的历史记录按成功处理 |
 | task.poll / stream | `usage` | ✓ | 每轮模型 token 实测用量 + 累计 |
 | task.poll / stream | `ask.create` / `ask.state` / `ask.resolved` | ✓ | 见 §7.8 |
 | task.poll / stream | `agent.started` / `agent.done` | ✓ | agent per-run 生命周期(主/子统一,§7.20.1);started 携带 title/creator/metadata,done 携带 usage+末轮正文 |

@@ -3,6 +3,7 @@ package dev.everyagent.worker.tools;
 import dev.everyagent.plugin.api.execution.ExecContext;
 import dev.everyagent.plugin.api.shell.ExecResults;
 import dev.everyagent.plugin.api.spi.ExecResult;
+import dev.everyagent.plugin.api.spi.ToolOutcomeLog;
 import dev.everyagent.worker.os.OsSandbox;
 
 import java.nio.file.Path;
@@ -49,17 +50,29 @@ public class CommandExecutor {
     private final String agentId;
     /** 打包 rg 二进制所在目录(可空);非空时 bash/powershell 子进程把它注入 PATH。 */
     private final Path rgBinDir;
+    /**
+     * per-run 工具结果账本(可空):每次命令执行后按结构化退出码记账,供
+     * {@code tool.result} 事件的 {@code data.status} 判定(非零退出码 / 超时 → 前端标红)。
+     */
+    private final ToolOutcomeLog toolOutcomes;
+
     public CommandExecutor(OsSandbox sandbox, ExecContext task, PermissionGate gate, String agentId) {
-        this(sandbox, task, gate, agentId, null);
+        this(sandbox, task, gate, agentId, null, null);
     }
 
     public CommandExecutor(OsSandbox sandbox, ExecContext task, PermissionGate gate, String agentId,
                            Path rgBinDir) {
+        this(sandbox, task, gate, agentId, rgBinDir, null);
+    }
+
+    public CommandExecutor(OsSandbox sandbox, ExecContext task, PermissionGate gate, String agentId,
+                           Path rgBinDir, ToolOutcomeLog toolOutcomes) {
         this.sandbox = sandbox;
         this.task = task;
         this.gate = gate;
         this.agentId = agentId;
         this.rgBinDir = rgBinDir;
+        this.toolOutcomes = toolOutcomes;
     }
 
     /**
@@ -152,6 +165,11 @@ public class CommandExecutor {
         log.info("[exec] task={} backend={} rc={} aborted={} cmd={}", task.subjectId(),
                 sandbox.id(),
                 r.exitCode(), r.aborted(), ExecResults.truncate(command, 200));
+        // 结构化结果记账(判定不依赖结果文本):shell 参数即工具名(ShellTool 回调传入 name),
+        // 与发射侧按工具名 + 命令原文查账同键。
+        if (toolOutcomes != null) {
+            toolOutcomes.recordShellExit(shell, command, r.exitCode(), r.aborted());
+        }
         return ExecResults.format(r);
     }
 
