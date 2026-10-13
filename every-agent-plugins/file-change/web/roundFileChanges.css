@@ -8,14 +8,18 @@
   gap: 4px;
 }
 
-/* 默认折叠:汇总头(「文件变更」+ 数量),点击展开/收起文件行列表。 */
+/* 默认折叠:汇总头(「文件变更」+ 数量),点击展开/收起文件行列表。
+   高度锚定核心统一约束 token --round-tail-pill-height(定义在 ui-tokens.css,经 :root
+   继承到此):与同排的核心「复制」按钮恒等高,不再靠各自内边距/行高凑高度。 */
 .task-file-changes__toggle {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   align-self: flex-start;
   margin: 0;
-  padding: 4px 9px;
+  height: var(--round-tail-pill-height);
+  box-sizing: border-box;
+  padding: 0 9px;
   border: none;
   border-radius: 999px;
   background: transparent;

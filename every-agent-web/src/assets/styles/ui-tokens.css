@@ -115,6 +115,13 @@
   --page-safe-left: env(safe-area-inset-left, 0px);
   --page-safe-right: env(safe-area-inset-right, 0px);
 
+  /* ── 轮末工具栏(轮结束尾工具栏 pill 统一高度)─────────────
+   * 真相源:轮末工具栏里并排的 pill(核心「复制」按钮、插件面板汇总头)统一高度。
+   * 取值 = 文本行盒(--text-xs × 1.5) + 上下内边距(2 × --space-1) = 26px;
+   * 由其推导而非写死,随字号 token 变更自动同步。两枚 pill 都锚定它,
+   * 高度一致由构造保证,不再靠各自 padding/行高/图标尺寸「碰巧」凑成一样高。 */
+  --round-tail-pill-height: calc(var(--text-xs) * 1.5 + 2 * var(--space-1));
+
   /* ── Task Launcher 派生表面（基于上述 token） ───────── */
   --task-launcher-page-bg: var(--bg-primary);
   --task-launcher-surface-bg: var(--bg-secondary);

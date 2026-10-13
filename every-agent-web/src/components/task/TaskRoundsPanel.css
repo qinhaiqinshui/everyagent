@@ -80,9 +80,13 @@
   margin-top: 4px;
 }
 
-/* 插件面板的中立包装:host 负责栅格 —— 撑满剩余宽度并允许收缩,
-   否则 flex 行内 nowrap 的长文件路径会按 max-content 撑爆宽度导致横向溢出。 */
+/* 插件面板 / 核心按钮的中立包装:host 负责栅格 —— 撑满剩余宽度并允许收缩,
+   否则 flex 行内 nowrap 的长文件路径会按 max-content 撑爆宽度导致横向溢出。
+   纵向 flex:让包装内的内容(核心按钮是 inline-flex、插件面板是块级根)贴顶排布 ——
+   否则 inline 级元素按基线排版会被半行距往下推几像素,与同行另一枚 pill 顶不齐。 */
 .nagent-round-collapse__tail-item {
+  display: flex;
+  flex-direction: column;
   flex: 1 1 auto;
   min-width: 0;
 }
@@ -93,13 +97,17 @@
   flex: 0 0 auto;
 }
 
-/* 复制按钮:与左邻的轮末 pill 同款外观(同 padding/圆角/无边框/hover 底色),并排才像工具栏。 */
+/* 复制按钮:与左邻的轮末 pill 同款外观(同 padding/圆角/无边框/hover 底色),并排才像工具栏。
+   高度锚定核心统一约束 token --round-tail-pill-height(见 ui-tokens.css),
+   与插件面板汇总头恒等高、顶对齐;纵向不再吃 padding,内容由 flex 居中。 */
 .nagent-round-collapse__copy {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   flex: 0 0 auto;
-  padding: 4px 9px;
+  height: var(--round-tail-pill-height);
+  box-sizing: border-box;
+  padding: 0 9px;
   border: none;
   border-radius: 999px;
   background: transparent;
