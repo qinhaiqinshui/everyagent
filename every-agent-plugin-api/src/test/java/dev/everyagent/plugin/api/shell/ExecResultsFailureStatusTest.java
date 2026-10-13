@@ -10,7 +10,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * {@link ExecResults#looksFailed} 判据单测：工具结果「成功 / 失败」判定是 worker
  * {@code tool.result} 事件 {@code data.status} 的唯一来源（前端据此把工具块标红），
  * 判据漂移会让失败静默显示成成功，故在此钉死三类边界：
- * 命中的强失败文案、被框架/链上改写包一层后仍命中、以及**不得**误判的正常语义（非零退出码）。
+ * 命中的强失败文案（行首锚定）、**不得**误判的自指场景（读到该文案的源码/回显）、
+ * 以及**不得**误判的正常语义（非零退出码）。
  */
 class ExecResultsFailureStatusTest {
 
@@ -23,13 +24,20 @@ class ExecResultsFailureStatusTest {
 
     @Test
     void 超时尾注命中() {
+        assertTrue(ExecResults.looksFailed(ExecResults.TIMEOUT_NOTE));
         assertTrue(ExecResults.looksFailed("部分输出\n" + ExecResults.TIMEOUT_NOTE));
+        assertTrue(ExecResults.looksFailed("部分输出\r\n" + ExecResults.TIMEOUT_NOTE));
     }
 
     @Test
-    void 前缀被包一层也能命中() {
-        // contains 语义:responseData 可能被框架/链上改写(如 secret-redaction)包一层
-        assertTrue(ExecResults.looksFailed("Error: " + ExecResults.TOOL_FAILURE_PREFIX + " boom"));
+    void 非行首出现不命中() {
+        // 自指误报回归:读/grep 到承载该文案的源码时,原文会进结果文本
+        assertFalse(ExecResults.looksFailed(
+                "218:    public static final String TOOL_FAILURE_PREFIX = \"[工具执行失败]\";"));
+        assertFalse(ExecResults.looksFailed(
+                "const TOOL_FAILURE_MARKERS = ['[工具执行失败]', '[命令被沙箱超时中止]']"));
+        assertFalse(ExecResults.looksFailed(
+                "echo 出错时会附 " + ExecResults.TOOL_FAILURE_PREFIX + " 前缀"));
     }
 
     @Test

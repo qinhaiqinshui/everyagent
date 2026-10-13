@@ -64,14 +64,25 @@ function dataOf(event: FoldableTaskEvent): Record<string, unknown> | undefined {
  */
 const TOOL_FAILURE_MARKERS = ['[工具执行失败]', '[命令被沙箱超时中止]']
 
+/** `marker` 是否作为某行的行首出现（与 worker `ExecResults.atLineStart` 同口径）。 */
+function atLineStart(text: string, marker: string): boolean {
+  for (let idx = text.indexOf(marker); idx >= 0; idx = text.indexOf(marker, idx + 1)) {
+    if (idx === 0 || text[idx - 1] === '\n' || text[idx - 1] === '\r') return true
+  }
+  return false
+}
+
 /**
  * 工具结果状态：worker 下发的 `data.status` 为权威（判定收口在 worker 单点），
  * 缺失（本改动之前落盘的历史记录）时回退到与 worker 同源的失败文案启发式。
+ *
+ * 锚行首而非 `includes`：读/grep 到承载该文案的源码时，原文会进结果文本，
+ * `includes` 会让「查失败文案」的命令自己被标成失败（自指误报）。
  */
 function readToolStatus(rawStatus: unknown, content: string): 'success' | 'error' {
   if (rawStatus === 'error') return 'error'
   if (rawStatus === 'success') return 'success'
-  return TOOL_FAILURE_MARKERS.some((marker) => content.includes(marker)) ? 'error' : 'success'
+  return TOOL_FAILURE_MARKERS.some((marker) => atLineStart(content, marker)) ? 'error' : 'success'
 }
 
 // ---- 默认 handler（未注册 kind 的降级） ----

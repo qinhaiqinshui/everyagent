@@ -215,9 +215,14 @@ public final class ExecResults {
      * 结果文本是否表示工具执行失败（{@code tool.result} 事件的 {@code data.status} 判定源）。
      *
      * <p>判据只有两类强标记：异常回灌前缀 {@link #TOOL_FAILURE_PREFIX} 与超时尾注
-     * {@link #TIMEOUT_NOTE}。用 {@code contains} 而非 {@code startsWith}——responseData
-     * 可能被框架/链上改写（如 {@code secret-redaction}）包一层，前缀未必在首字符；
-     * 「命令输出恰好含该文案」的概率可忽略，误报代价远小于漏报。
+     * {@link #TIMEOUT_NOTE}，且必须<b>落在某行的行首</b>（首字符，或紧跟换行）。
+     *
+     * <p><b>为什么必须锚行首</b>：这两个字面量出现在工具输出里是常态——读/grep 到承载它们的
+     * 源码（本类常量声明、前端 {@code TOOL_FAILURE_MARKERS}）、或命令自身回显该文案时，原文
+     * 就会被打进结果文本。曾用 {@code contains}（原以为链上改写会包一层，实际
+     * {@code secret-redaction} 只做原位掩码、不改变文本位置），结果「查失败文案」的命令自己
+     * 被判成失败（自指误报，实测复现）。行首锚定对真实场景无损：异常文本整段以该前缀开头；
+     * 超时尾注由 {@link #format} 置于末行行首。
      *
      * <p><b>不把「非零 exit code」当失败</b>：{@code rg} 用 1 表示「无匹配」、{@code grep}
      * / {@code diff} 同理，把非零退出码当错误会让「搜不到」被误报成红色错误。
@@ -226,7 +231,17 @@ public final class ExecResults {
         if (text == null || text.isEmpty()) {
             return false;
         }
-        return text.contains(TOOL_FAILURE_PREFIX) || text.contains(TIMEOUT_NOTE);
+        return atLineStart(text, TOOL_FAILURE_PREFIX) || atLineStart(text, TIMEOUT_NOTE);
+    }
+
+    /** {@code marker} 是否作为某行的行首出现（下标 0，或前一字符为 CR/LF）。 */
+    private static boolean atLineStart(String text, String marker) {
+        for (int idx = text.indexOf(marker); idx >= 0; idx = text.indexOf(marker, idx + 1)) {
+            if (idx == 0 || text.charAt(idx - 1) == '\n' || text.charAt(idx - 1) == '\r') {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
