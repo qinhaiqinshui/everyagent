@@ -4,7 +4,7 @@ import type { RoundSummary, TaskRoundsResult } from '@/task/types'
 import type { TaskStreamHandle } from '@/task/taskStream'
 import type { TaskThreadItem } from '@/task/eventFolder'
 import { BrandMark } from '@/components/shared/BrandLoadingBlock'
-import { ChevronDownIcon, ChevronRightIcon } from '../shared/AppGlyphs'
+import { ChevronDownIcon, ChevronRightIcon, CopyIcon, CheckIcon } from '../shared/AppGlyphs'
 import { InlineSpinner } from '@/components/shared/ui'
 import AgentMessageThread from './AgentMessageThread'
 import TaskThread from './TaskThread'
@@ -12,6 +12,7 @@ import RoundDetail from './RoundDetail'
 import LazyLoadSentinel from './LazyLoadSentinel'
 import { pluginDispatcher } from '@/plugin/PluginDispatcher'
 import { taskStore } from '@/task/taskStore'
+import { copyText } from '@/utils/clipboard'
 import { TaskWorkspaceProvider } from './TaskWorkspaceContext'
 import './TaskRoundsPanel.css'
 
@@ -446,8 +447,49 @@ function ClosedRoundView({
               )
             })
           : null}
+        {/* 轮结果复制：整轮内容末尾的 action bar，复制折叠态所见最终回复纯正文（不含思考）。 */}
+        <div className="nagent-round-collapse__actions">
+          <RoundCopyButton text={round.finalReply} roundIndex={round.index} />
+        </div>
       </div>
     </>
+  )
+}
+
+/**
+ * 轮结果复制按钮：点击把该轮最终回复纯正文写入剪贴板，成功后短暂切「已复制」（1.5s 复原）。
+ * 文案为空时禁用（如失败/无正文的轮）。复制失败不误报「已复制」。
+ */
+function RoundCopyButton({ text, roundIndex }: { text: string; roundIndex: number }): React.ReactNode {
+  const [copied, setCopied] = React.useState(false)
+  const timerRef = React.useRef<number | undefined>(undefined)
+  // 组件卸载时清理待触发的「已复制」回退计时器，避免对已卸载组件 setState。
+  React.useEffect(() => () => window.clearTimeout(timerRef.current), [])
+
+  const disabled = !text.trim()
+  const handleCopy = React.useCallback(() => {
+    if (disabled) return
+    copyText(text)
+      .then(() => {
+        setCopied(true)
+        window.clearTimeout(timerRef.current)
+        timerRef.current = window.setTimeout(() => setCopied(false), 1500)
+      })
+      .catch(() => setCopied(false))
+  }, [text, disabled])
+
+  return (
+    <button
+      type="button"
+      className={`nagent-round-collapse__copy${copied ? ' nagent-round-collapse__copy--done' : ''}`}
+      onClick={handleCopy}
+      disabled={disabled}
+      aria-label={copied ? `已复制第 ${roundIndex} 轮结果` : `复制第 ${roundIndex} 轮结果`}
+      title={copied ? '已复制' : `复制第 ${roundIndex} 轮结果`}
+    >
+      {copied ? <CheckIcon size={13} /> : <CopyIcon size={13} />}
+      <span>{copied ? '已复制' : '复制'}</span>
+    </button>
   )
 }
 

@@ -69,3 +69,43 @@
   color: var(--text-primary);
   background: var(--bg-hover);
 }
+/* ===== 轮结果复制按钮(ClosedRoundView 整轮内容末尾) =====
+   折叠/展开两态共用恒定在该轮最后的 action bar:右对齐,只放一个复制按钮。 */
+.nagent-round-collapse__actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 4px;
+}
+
+.nagent-round-collapse__copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 9px;
+  border: 1px solid var(--border-light);
+  border-radius: 999px;
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  cursor: pointer;
+  transition: color 0.15s ease, background 0.15s ease, border-color 0.15s ease;
+}
+
+.nagent-round-collapse__copy:hover:not(:disabled) {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+}
+
+.nagent-round-collapse__copy:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* 复制成功态:绿色勾选提示,1.5s 后复原。 */
+.nagent-round-collapse__copy--done {
+  color: var(--accent-green);
+  border-color: var(--accent-green-dim);
+  background: var(--accent-green-dim);
+}
