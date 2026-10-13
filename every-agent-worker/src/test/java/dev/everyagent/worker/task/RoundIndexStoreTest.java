@@ -52,9 +52,10 @@ class RoundIndexStoreTest {
     @Test
     void singleClosedRound() {
         List<EventRecord> events = List.of(
-                rec(1, Events.USER_MESSAGE, MAIN, payload("text", "你好")),
-                rec(2, Events.THINKING, MAIN, payload("text", "思考中")),
-                rec(3, Events.MESSAGE, MAIN, payload("thinking", "思考全文", "text", "回复正文")));
+                rec(1, Events.USER_MESSAGE, MAIN, payload("content", "你好")),
+                rec(2, Events.THINKING, MAIN, payload("content", "思考中")),
+                rec(3, Events.MESSAGE, MAIN, payload("content", "回复正文",
+                        "data", Json.obj().put("thinking", "思考全文"))));
         List<RoundIndex.Round> rounds = store.scan(events, MAIN);
         assertEquals(1, rounds.size());
         RoundIndex.Round r = rounds.get(0);
@@ -69,10 +70,10 @@ class RoundIndexStoreTest {
     @Test
     void multipleRoundsIndexedSequentially() {
         List<EventRecord> events = List.of(
-                rec(1, Events.USER_MESSAGE, MAIN, payload("text", "第一问")),
-                rec(2, Events.MESSAGE, MAIN, payload("text", "第一答")),
-                rec(3, Events.USER_MESSAGE, MAIN, payload("text", "第二问")),
-                rec(4, Events.MESSAGE, MAIN, payload("text", "第二答")));
+                rec(1, Events.USER_MESSAGE, MAIN, payload("content", "第一问")),
+                rec(2, Events.MESSAGE, MAIN, payload("content", "第一答")),
+                rec(3, Events.USER_MESSAGE, MAIN, payload("content", "第二问")),
+                rec(4, Events.MESSAGE, MAIN, payload("content", "第二答")));
         List<RoundIndex.Round> rounds = store.scan(events, MAIN);
         assertEquals(2, rounds.size());
         RoundIndex.Round r1 = rounds.get(0);
@@ -92,9 +93,9 @@ class RoundIndexStoreTest {
     @Test
     void unclosedTailRound() {
         List<EventRecord> events = List.of(
-                rec(1, Events.USER_MESSAGE, MAIN, payload("text", "第一问")),
-                rec(2, Events.MESSAGE, MAIN, payload("text", "第一答")),
-                rec(3, Events.USER_MESSAGE, MAIN, payload("text", "未答之问")));
+                rec(1, Events.USER_MESSAGE, MAIN, payload("content", "第一问")),
+                rec(2, Events.MESSAGE, MAIN, payload("content", "第一答")),
+                rec(3, Events.USER_MESSAGE, MAIN, payload("content", "未答之问")));
         List<RoundIndex.Round> rounds = store.scan(events, MAIN);
         assertEquals(2, rounds.size());
         RoundIndex.Round open = rounds.get(1);
@@ -108,11 +109,11 @@ class RoundIndexStoreTest {
     @Test
     void subAgentStartedDoneWithinRound() {
         List<EventRecord> events = List.of(
-                rec(1, Events.USER_MESSAGE, MAIN, payload("text", "让子任务处理")),
+                rec(1, Events.USER_MESSAGE, MAIN, payload("content", "让子任务处理")),
                 rec(2, Events.AGENT_STARTED, SUB,
                         payload("agentId", SUB, "title", "子任务·代码", "input", "写个函数")),
                 rec(3, Events.AGENT_DONE, SUB, payload("agentId", SUB, "result", "完成")),
-                rec(4, Events.MESSAGE, MAIN, payload("text", "子任务已完成")));
+                rec(4, Events.MESSAGE, MAIN, payload("content", "子任务已完成")));
         List<RoundIndex.Round> rounds = store.scan(events, MAIN);
         assertEquals(1, rounds.size());
         RoundIndex.Round r = rounds.get(0);
@@ -128,10 +129,10 @@ class RoundIndexStoreTest {
     @Test
     void subAgentNotDoneKeepsNullEndSeq() {
         List<EventRecord> events = List.of(
-                rec(1, Events.USER_MESSAGE, MAIN, payload("text", "派子任务")),
+                rec(1, Events.USER_MESSAGE, MAIN, payload("content", "派子任务")),
                 rec(2, Events.AGENT_STARTED, SUB,
                         payload("agentId", SUB, "title", "未收尾子任务")),
-                rec(3, Events.MESSAGE, MAIN, payload("text", "主 agent 先回")));
+                rec(3, Events.MESSAGE, MAIN, payload("content", "主 agent 先回")));
         List<RoundIndex.Round> rounds = store.scan(events, MAIN);
         assertEquals(1, rounds.size());
         RoundIndex.AgentRange sub = rounds.get(0).agentRanges().get(0);
@@ -142,17 +143,18 @@ class RoundIndexStoreTest {
     @Test
     void processEventsDoNotInterfereWithRound() {
         List<EventRecord> events = List.of(
-                rec(1, Events.USER_MESSAGE, MAIN, payload("text", "问")),
-                rec(2, Events.DELTA, MAIN, payload("text", "流")),
-                rec(3, Events.THINKING, MAIN, payload("text", "思")),
-                rec(4, Events.TOOL_RESULT, MAIN, payload("callId", "c1", "summary", "ok")),
+                rec(1, Events.USER_MESSAGE, MAIN, payload("content", "问")),
+                rec(2, Events.DELTA, MAIN, payload("content", "流")),
+                rec(3, Events.THINKING, MAIN, payload("content", "思")),
+                rec(4, Events.TOOL_RESULT, MAIN,
+                        payload("summary", "ok", "data", Json.obj().put("callId", "c1"))),
                 rec(5, Events.AGENT_STATUS, MAIN, payload("status", "running")),
                 rec(6, Events.TASK_TRACE, MAIN, payload("traceId", "t1", "kind", "request_retry")),
                 rec(7, Events.USAGE, MAIN, payload("model", "m")),
                 rec(8, Events.ASK_CREATE, MAIN, payload("askId", "a1", "kind", "choice")),
                 rec(9, Events.ERROR, MAIN, payload("message", "瞬时错误")),
                 rec(10, Events.CANCELLED, MAIN, payload("by", "user")),
-                rec(11, Events.MESSAGE, MAIN, payload("text", "最终回复")));
+                rec(11, Events.MESSAGE, MAIN, payload("content", "最终回复")));
         List<RoundIndex.Round> rounds = store.scan(events, MAIN);
         assertEquals(1, rounds.size(), "过程事件不单独成轮");
         RoundIndex.Round r = rounds.get(0);
@@ -164,12 +166,13 @@ class RoundIndexStoreTest {
     @Test
     void messageWithToolCallsIsNotFinalReply() {
         List<EventRecord> events = List.of(
-                rec(1, Events.USER_MESSAGE, MAIN, payload("text", "问")),
-                rec(2, Events.MESSAGE, MAIN, payload("thinking", "想", "text", "调工具",
-                        "toolCalls", Json.arr().addObject().put("id", "c1").put("name", "bash")
-                                .put("arguments", "{}"))),
-                rec(3, Events.TOOL_RESULT, MAIN, payload("callId", "c1", "summary", "ok")),
-                rec(4, Events.MESSAGE, MAIN, payload("text", "最终回复")));
+                rec(1, Events.USER_MESSAGE, MAIN, payload("content", "问")),
+                rec(2, Events.MESSAGE, MAIN, payload("content", "调工具", "data",
+                        Json.obj().put("thinking", "想").set("toolCalls", Json.arr().addObject()
+                                .put("id", "c1").put("name", "bash").put("arguments", "{}")))),
+                rec(3, Events.TOOL_RESULT, MAIN,
+                        payload("summary", "ok", "data", Json.obj().put("callId", "c1"))),
+                rec(4, Events.MESSAGE, MAIN, payload("content", "最终回复")));
         List<RoundIndex.Round> rounds = store.scan(events, MAIN);
         assertEquals(1, rounds.size(), "带 toolCalls 的 message 不算最终回复,不成第二轮");
         RoundIndex.Round r = rounds.get(0);
@@ -180,10 +183,10 @@ class RoundIndexStoreTest {
     @Test
     void messageWithoutTextIsNotFinalReply() {
         List<EventRecord> events = List.of(
-                rec(1, Events.USER_MESSAGE, MAIN, payload("text", "问")),
-                rec(2, Events.MESSAGE, MAIN, payload("thinking", "空正文轮")), // 无 text 字段
-                rec(3, Events.MESSAGE, MAIN, payload("text", "")), // text 空串
-                rec(4, Events.MESSAGE, MAIN, payload("text", "真正回复")));
+                rec(1, Events.USER_MESSAGE, MAIN, payload("content", "问")),
+                rec(2, Events.MESSAGE, MAIN, payload("data", Json.obj().put("thinking", "空正文轮"))), // 无 content
+                rec(3, Events.MESSAGE, MAIN, payload("content", "")), // content 空串
+                rec(4, Events.MESSAGE, MAIN, payload("content", "真正回复")));
         List<RoundIndex.Round> rounds = store.scan(events, MAIN);
         assertEquals(1, rounds.size(), "无正文的 message 不算最终回复");
         assertEquals(4, rounds.get(0).endSeq());
@@ -195,8 +198,8 @@ class RoundIndexStoreTest {
         List<EventRecord> events = List.of(
                 rec(1, Events.AGENT_STARTED, SUB, payload("agentId", SUB, "title", "孤儿子任务")),
                 rec(2, Events.AGENT_DONE, SUB, payload("agentId", SUB, "result", "x")),
-                rec(3, Events.USER_MESSAGE, MAIN, payload("text", "问")),
-                rec(4, Events.MESSAGE, MAIN, payload("text", "答")));
+                rec(3, Events.USER_MESSAGE, MAIN, payload("content", "问")),
+                rec(4, Events.MESSAGE, MAIN, payload("content", "答")));
         List<RoundIndex.Round> rounds = store.scan(events, MAIN);
         assertEquals(1, rounds.size(), "主 agent 轮之前的子事件被忽略");
         assertTrue(rounds.get(0).agentRanges().isEmpty());
@@ -205,8 +208,8 @@ class RoundIndexStoreTest {
     @Test
     void reindexShiftsIndexByBase() {
         List<RoundIndex.Round> scanned = store.scan(List.of(
-                rec(1, Events.USER_MESSAGE, MAIN, payload("text", "问")),
-                rec(2, Events.MESSAGE, MAIN, payload("text", "答"))), MAIN);
+                rec(1, Events.USER_MESSAGE, MAIN, payload("content", "问")),
+                rec(2, Events.MESSAGE, MAIN, payload("content", "答"))), MAIN);
         List<RoundIndex.Round> shifted = store.reindex(scanned, 5);
         assertEquals(1, shifted.size(), "扫描窗口内只有 1 轮");
         assertEquals(6, shifted.get(0).index(), "已有 5 行 → 新轮从 6 起");
@@ -221,14 +224,15 @@ class RoundIndexStoreTest {
     void intermediateUserMessageMergesIntoCurrentRound() {
         // 一轮内夹第二条用户输入(授权回复/中断后补充):不开新轮,归当前轮过程
         List<RoundIndex.Round> rounds = store.scan(List.of(
-                rec(1, Events.USER_MESSAGE, MAIN, payload("text", "第一问")),
-                rec(2, Events.MESSAGE, MAIN, payload("thinking", "想", "text", "先调工具",
-                        "toolCalls", Json.arr().addObject().put("id", "c1").put("name", "bash")
-                                .put("arguments", "{}"))),
-                rec(3, Events.TOOL_RESULT, MAIN, payload("callId", "c1", "summary", "ok")),
-                rec(4, Events.USER_MESSAGE, MAIN, payload("text", "中间补充输入")),
-                rec(5, Events.DELTA, MAIN, payload("text", "续答")),
-                rec(6, Events.MESSAGE, MAIN, payload("text", "最终回复"))), MAIN);
+                rec(1, Events.USER_MESSAGE, MAIN, payload("content", "第一问")),
+                rec(2, Events.MESSAGE, MAIN, payload("content", "先调工具", "data",
+                        Json.obj().put("thinking", "想").set("toolCalls", Json.arr().addObject()
+                                .put("id", "c1").put("name", "bash").put("arguments", "{}")))),
+                rec(3, Events.TOOL_RESULT, MAIN,
+                        payload("summary", "ok", "data", Json.obj().put("callId", "c1"))),
+                rec(4, Events.USER_MESSAGE, MAIN, payload("content", "中间补充输入")),
+                rec(5, Events.DELTA, MAIN, payload("content", "续答")),
+                rec(6, Events.MESSAGE, MAIN, payload("content", "最终回复"))), MAIN);
         assertEquals(1, rounds.size(), "中间 user.message 不开新轮");
         RoundIndex.Round r = rounds.get(0);
         assertEquals(1, r.startSeq());
@@ -240,11 +244,11 @@ class RoundIndexStoreTest {
     @Test
     void intermediateInputBeforeFinalReplyKeepsSingleRoundAcrossSubAgent() {
         List<RoundIndex.Round> rounds = store.scan(List.of(
-                rec(1, Events.USER_MESSAGE, MAIN, payload("text", "主问")),
+                rec(1, Events.USER_MESSAGE, MAIN, payload("content", "主问")),
                 rec(2, Events.AGENT_STARTED, SUB, payload("agentId", SUB, "title", "子任务")),
-                rec(3, Events.USER_MESSAGE, MAIN, payload("text", "授权回复")),
+                rec(3, Events.USER_MESSAGE, MAIN, payload("content", "授权回复")),
                 rec(4, Events.AGENT_DONE, SUB, payload("agentId", SUB, "result", "ok")),
-                rec(5, Events.MESSAGE, MAIN, payload("text", "答"))), MAIN);
+                rec(5, Events.MESSAGE, MAIN, payload("content", "答"))), MAIN);
         assertEquals(1, rounds.size());
         assertEquals("主问", rounds.get(0).user());
         assertEquals(1, rounds.get(0).agentRanges().size());
@@ -254,10 +258,10 @@ class RoundIndexStoreTest {
     void unclosedRoundAfterIntermediateInputStaysSingleOpenRound() {
         // 中间输入后直到末尾都没有最终回复:仍只有开轮那一个未闭合轮
         List<RoundIndex.Round> rounds = store.scan(List.of(
-                rec(1, Events.USER_MESSAGE, MAIN, payload("text", "第一问")),
-                rec(2, Events.DELTA, MAIN, payload("text", "半截")),
-                rec(3, Events.USER_MESSAGE, MAIN, payload("text", "中间补充")),
-                rec(4, Events.DELTA, MAIN, payload("text", "又半截"))), MAIN);
+                rec(1, Events.USER_MESSAGE, MAIN, payload("content", "第一问")),
+                rec(2, Events.DELTA, MAIN, payload("content", "半截")),
+                rec(3, Events.USER_MESSAGE, MAIN, payload("content", "中间补充")),
+                rec(4, Events.DELTA, MAIN, payload("content", "又半截"))), MAIN);
         assertEquals(1, rounds.size(), "中间输入不开新轮,尾部未闭合仍是一轮");
         RoundIndex.Round open = rounds.get(0);
         assertNull(open.endSeq());
