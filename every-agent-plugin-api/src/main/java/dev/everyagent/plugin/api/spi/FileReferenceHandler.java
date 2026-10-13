@@ -29,6 +29,8 @@ public interface FileReferenceHandler {
      * @param ctx 任务上下文
      * @param ref 文件引用
      * @return 处理结果；返回 null 等价于「放弃处理」（保持现有路径文本行为）
+     * @throws RuntimeException 处理失败时抛出，终止任务（降级为纯路径文本没有意义：
+     *         AI 无法处理裸路径，任务照样出错；不如 fail-fast 让用户直接看到失败原因）
      */
     FileReferenceResult process(FileReferenceContext ctx, FileReference ref);
 }

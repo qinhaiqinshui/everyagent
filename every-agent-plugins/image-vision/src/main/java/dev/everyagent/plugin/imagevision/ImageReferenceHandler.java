@@ -6,8 +6,6 @@ import dev.everyagent.plugin.api.spi.FileReferenceContext;
 import dev.everyagent.plugin.api.spi.FileReferenceHandler;
 import dev.everyagent.plugin.api.spi.FileReferenceResult;
 import dev.everyagent.plugin.api.spi.WorkspaceSandbox;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -27,19 +25,18 @@ import java.util.Set;
  *   <li>解析文件路径：workspace_file 走工作区根路径沙箱
  *       （{@code workspaces().sandboxFor(...).resolveExisting(...)}，词法 + realpath 双校验）；
  *       external_file 直接 realpath 解析（用户 {@code @} 引用行为本身即视为已授权，
- *       无需额外授权链）；异常则<b>降级为纯路径文本</b>（返回 null）并记日志；</li>
+ *       无需额外授权链）；异常则<b>抛异常终止任务</b>；</li>
  *   <li>压缩：原图 base64 后 ≤ 上限直接用；超限经 {@link ImageCompressor} 逐步缩放；</li>
  *   <li>转 base64 dataURL → 返回 {@code replacementText="（附图：{displayPath}）"} +
  *       {@code attachments=[{type:"image", dataUrl, fileName, mimeType}]}。
  *       displayPath 为工作区相对路径（工作区内）或完整绝对路径（工作区外）。</li>
  * </ol>
  *
- * <p>压到最小仍超限 / 无法解码 → 返回提示文本 + 空 attachments（错误文本随 input 进会话，
- * 由 AI 转告用户），记 warn 日志，不阻断任务。任何读取失败均降级不阻断。
+ * <p>压到最小仍超限 / 无法解码 / 读取失败 → <b>抛异常终止任务</b>。
+ * 降级为纯路径文本没有意义：AI 无法处理裸路径，任务照样出错；
+ * 不如 fail-fast，让用户直接看到明确的失败原因。
  */
 public class ImageReferenceHandler implements FileReferenceHandler {
-
-    private static final Logger log = LoggerFactory.getLogger(ImageReferenceHandler.class);
 
     /** 读入内存的硬上限（256MB）：超出直接按「过大」处理，防超大文件撑爆内存。 */
     private static final long HARD_READ_CAP_BYTES = 256L * 1024 * 1024;
@@ -68,15 +65,7 @@ public class ImageReferenceHandler implements FileReferenceHandler {
             return null; // 注入开关关闭：放弃处理，保持纯路径文本
         }
         Path file = resolveFile(ctx, ref);
-        if (file == null) {
-            return null; // 降级为纯路径文本（各分支已记日志）
-        }
-        try {
-            return buildResult(file, ref);
-        } catch (IOException | RuntimeException e) {
-            log.warn("[image-vision] 读取图片失败，降级为路径文本: {} - {}", ref.fullPath(), e.toString());
-            return null;
-        }
+        return buildResult(file, ref);
     }
 
     // ---- 路径解析 ----
@@ -84,23 +73,24 @@ public class ImageReferenceHandler implements FileReferenceHandler {
     /**
      * 解析目标文件路径。用户 {@code @} 引用行为本身即视为已授权，无需额外授权链。
      *
-     * @return 可读取的真实路径；null = 降级为纯路径文本（越界/不存在）
+     * @return 可读取的真实路径
+     * @throws RuntimeException 越界/不存在/非普通文件
      */
     private Path resolveFile(FileReferenceContext ctx, FileReference ref) {
         if (!ref.external()) {
-            // workspace_file：jailed 到工作区根（词数 + realpath 双校验，防符号链接逃逸）。
+            // workspace_file：jailed 到工作区根（词法 + realpath 双校验，防符号链接逃逸）。
             if (ctx.workspaceRoot() == null) {
-                log.warn("[image-vision] 工作区根不可用，降级为路径文本: {}", ref.path());
-                return null;
+                throw new RuntimeException("工作区根不可用，无法解析图片引用: " + ref.path());
             }
             try {
                 WorkspaceSandbox sandbox = services.workspaces().sandboxFor(ctx.workspaceRoot());
                 Path real = sandbox.resolveExisting(ref.path());
-                return Files.isRegularFile(real) ? real : null;
+                if (!Files.isRegularFile(real)) {
+                    throw new RuntimeException("图片引用不是普通文件: " + ref.path());
+                }
+                return real;
             } catch (IOException | RuntimeException e) {
-                log.warn("[image-vision] 工作区图片解析失败（越界/不存在），降级为路径文本: {} - {}",
-                        ref.path(), e.toString());
-                return null;
+                throw new RuntimeException("工作区图片解析失败: " + ref.path() + " - " + e.getMessage(), e);
             }
         }
         // external_file：用户 @ 引用即授权，直接 realpath 解析。
@@ -108,12 +98,10 @@ public class ImageReferenceHandler implements FileReferenceHandler {
         try {
             real = Path.of(ref.fullPath().trim()).toRealPath();
         } catch (IOException | RuntimeException e) {
-            log.warn("[image-vision] 外部图片已失效，降级为路径文本: {}", ref.fullPath());
-            return null;
+            throw new RuntimeException("外部图片已失效: " + ref.fullPath(), e);
         }
         if (!Files.isRegularFile(real)) {
-            log.warn("[image-vision] 外部引用不是普通文件，降级为路径文本: {}", ref.fullPath());
-            return null;
+            throw new RuntimeException("外部引用不是普通文件: " + ref.fullPath());
         }
         return real;
     }
@@ -127,13 +115,23 @@ public class ImageReferenceHandler implements FileReferenceHandler {
         return ref.external() ? ref.fullPath() : ref.path();
     }
 
-    private FileReferenceResult buildResult(Path file, FileReference ref) throws IOException {
-        long size = Files.size(file);
-        if (size > HARD_READ_CAP_BYTES) {
-            log.warn("[image-vision] 图片超过读入硬上限(256MB): {} ({} bytes)", ref.fullPath(), size);
-            return tooLarge(ref);
+    private FileReferenceResult buildResult(Path file, FileReference ref) {
+        long size;
+        try {
+            size = Files.size(file);
+        } catch (IOException e) {
+            throw new RuntimeException("无法读取图片大小: " + displayPath(ref), e);
         }
-        byte[] raw = Files.readAllBytes(file);
+        if (size > HARD_READ_CAP_BYTES) {
+            throw new RuntimeException(
+                    "图片超过读入硬上限(256MB): " + displayPath(ref) + " (" + size + " bytes)");
+        }
+        byte[] raw;
+        try {
+            raw = Files.readAllBytes(file);
+        } catch (IOException e) {
+            throw new RuntimeException("读取图片失败: " + displayPath(ref), e);
+        }
         byte[] payload;
         String mimeType;
         if (ImageCompressor.base64Length(raw.length) <= settings.maxBase64Bytes()) {
@@ -146,15 +144,11 @@ public class ImageReferenceHandler implements FileReferenceHandler {
                     payload = compressed.data();
                     mimeType = compressed.mimeType();
                 }
-                case TOO_LARGE -> {
-                    log.warn("[image-vision] 图片压到最小尺寸仍超限: {} ({} bytes)", ref.fullPath(), size);
-                    return tooLarge(ref);
-                }
-                default -> {
-                    log.warn("[image-vision] 图片无法解析: {}", ref.fullPath());
-                    return new FileReferenceResult(
-                            "（图片无法解析：" + displayPath(ref) + "）", List.of());
-                }
+                case TOO_LARGE ->
+                        throw new RuntimeException(
+                                "图片过大，压缩到最小尺寸仍超限: " + displayPath(ref) + "，请缩小后重试");
+                default ->
+                        throw new RuntimeException("图片无法解析: " + displayPath(ref));
             }
         }
         String dataUrl = "data:" + mimeType + ";base64," + Base64.getEncoder().encodeToString(payload);
@@ -164,12 +158,6 @@ public class ImageReferenceHandler implements FileReferenceHandler {
         attachment.put("fileName", ref.fileName());
         attachment.put("mimeType", mimeType);
         return new FileReferenceResult("（附图：" + displayPath(ref) + "）", List.of(attachment));
-    }
-
-    /** 压到最小仍超限：提示文本进会话（由 AI 转告用户），空 attachments，不阻断任务。 */
-    private static FileReferenceResult tooLarge(FileReference ref) {
-        return new FileReferenceResult(
-                "（图片过大，无法处理：" + displayPath(ref) + "，请缩小后重试）", List.of());
     }
 
     /** 按扩展名推断 mimeType；未知兜底 image/png。 */

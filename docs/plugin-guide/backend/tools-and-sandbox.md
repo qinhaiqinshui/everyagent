@@ -309,7 +309,7 @@ public interface FileReferenceHandler {
     /** 支持的扩展名集合（小写含点，如 {".png", ".jpg"}）。 */
     Set<String> extensions();
 
-    /** 处理一个文件引用；返回 null 等价于「放弃处理」（保持现有路径文本行为）。 */
+    /** 处理一个文件引用；返回 null 等价于「放弃处理」；处理失败抛异常终止任务。 */
     FileReferenceResult process(FileReferenceContext ctx, FileReference ref);
 }
 ```
@@ -323,7 +323,7 @@ public interface FileReferenceHandler {
   └─ UserInputMaterializer（接口在 plugin-api attachment/，实现在 worker attachment/UserInputMaterializerImpl）
        ├─ 正则解析 rawContent 中的 [[[[...]]]] token（复用 SlashTokenEncoder）
        ├─ handlers.find(扩展名) → 未命中直接跳过（保持路径文本）
-       ├─ handler.process(refCtx, ref)；异常 catch 记 WARN 不阻断
+       ├─ handler.process(refCtx, ref)；异常抛出终止任务（不降级：AI 无法处理裸路径，降级了任务照样出错）
        ├─ replacementText 改写正文；attachments 并入 metadata.attachments
        └─ attachments 转 Spring AI Media 装配消息（AttachmentMedia —— 附件 map → Media 单点）
      两个调用点（同一条实现）：
@@ -345,13 +345,11 @@ public interface FileReferenceHandler {
 处理主流程关键片段（`every-agent-plugins/image-vision/src/main/java/dev/everyagent/plugin/imagevision/ImageReferenceHandler.java`）：
 
 ```java
-// process：开关 + 路径解析，任何失败都降级为纯路径文本
+// process：开关 + 路径解析，失败抛异常终止任务（不降级）
 public FileReferenceResult process(FileReferenceContext ctx, FileReference ref) {
     if (!settings.enabled()) { return null; }          // 关闭 = 放弃处理
-    Path file = resolveFile(ctx, ref);
-    if (file == null) { return null; }                  // 越界/不存在 → 降级
-    try { return buildResult(file, ref); }
-    catch (IOException | RuntimeException e) { return null; }  // 读取失败也降级，不阻断任务
+    Path file = resolveFile(ctx, ref);                   // 越界/不存在 → 抛异常
+    return buildResult(file, ref);                       // 读取/压缩失败 → 抛异常
 }
 
 // 组装结果：超限自动缩放压缩，转 base64 dataUrl

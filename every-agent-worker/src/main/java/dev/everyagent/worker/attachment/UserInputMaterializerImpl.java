@@ -28,8 +28,9 @@ import java.util.regex.Pattern;
  * 改写正文（{@code replacementText}）+ 附件合并进 {@code ExecContext.metadata().attachments}
  * （随 meta.json 持久化，跨轮可读）→ 附件转 {@link org.springframework.ai.content.Media} 装配消息。
  *
- * <p>rawContent 本身不改写（前端回放仍用原 token 还原胶囊）。任何一步失败（未命中处理器 /
- * 处理器返回 null / 抛异常）都只跳过该引用，绝不阻断任务。
+ * <p>rawContent 本身不改写（前端回放仍用原 token 还原胶囊）。
+ * 处理器返回 null（关闭/放弃处理）则跳过该引用；处理器抛异常则<b>终止任务</b>
+ * （降级为纯路径文本没有意义：AI 无法处理裸路径，任务照样出错）。
  */
 @Component
 public class UserInputMaterializerImpl implements UserInputMaterializer {
@@ -73,14 +74,7 @@ public class UserInputMaterializerImpl implements UserInputMaterializer {
             if (handler == null) {
                 continue;
             }
-            FileReferenceResult result;
-            try {
-                result = handler.process(refCtx, ref);
-            } catch (Exception e) {
-                log.warn("[fileref] 处理器 {} 处理 {} 失败，保持路径文本: {}",
-                        handler.pluginId(), ref.fullPath(), e.toString());
-                continue;
-            }
+            FileReferenceResult result = handler.process(refCtx, ref);
             if (result == null) {
                 continue;
             }

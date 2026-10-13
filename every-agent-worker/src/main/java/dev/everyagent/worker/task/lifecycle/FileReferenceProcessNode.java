@@ -30,8 +30,10 @@ import java.util.Map;
  * <p>本节点只需改写后的正文：消息本身由 {@code consume.input} 从 {@code ctx.input()} + metadata 重建，
  * 故物化结果的消息形态不予使用。
  *
- * <p>未命中 handler / handler 返回 null / 处理抛异常 → 不改 input（路径文本保持现有行为），
- * 绝不阻断任务。rawContent 不改写（前端回放仍用原 token 还原胶囊）。
+ * <p>未命中 handler → 不改 input（路径文本保持现有行为）；
+ * handler 返回 null → 跳过该引用；handler 抛异常 → <b>终止任务</b>
+ * （降级为纯路径文本没有意义：AI 无法处理裸路径，任务照样出错）。
+ * rawContent 不改写（前端回放仍用原 token 还原胶囊）。
  */
 public final class FileReferenceProcessNode implements TaskLifecycleNode {
 
