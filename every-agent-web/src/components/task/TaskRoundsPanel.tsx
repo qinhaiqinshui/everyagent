@@ -431,25 +431,26 @@ function ClosedRoundView({
             <AgentMessageThread message={finalMessage} taskId={taskId} />
           </div>
         )}
-        {/* 轮末展示区：折叠/展开两态共用，恒在该轮最后展示（通用扩展点，插件自行注册）。 */}
-        {roundTailPanels.length > 0
-          ? roundTailPanels.map((panel) => {
-              const Component = panel.Component
-              return (
+        {/* 轮末工具栏：内置「复制」按钮 + 插件轮末展示区（ui.round_tail_panels）并排一行，
+            折叠/展开两态共用、恒在该轮最后；插件面板（如文件变更）自身展开的列表落在本行下方。
+            复制折叠态所见最终回复纯正文（不含思考）。
+            栅格由 host 负责（__tail-item 中立包装），插件只渲染自己的内容、不感知同行还有谁。 */}
+        <div className="nagent-round-collapse__tail">
+          <RoundCopyButton text={round.finalReply} roundIndex={round.index} />
+          {roundTailPanels.map((panel) => {
+            const Component = panel.Component
+            return (
+              <div className="nagent-round-collapse__tail-item" key={panel.pluginId}>
                 <Component
-                  key={panel.pluginId}
                   taskId={taskId}
                   roundId={round.roundId}
                   workerId={workerId}
                   workspaceRoot={workspaceRoot}
                   round={round}
                 />
-              )
-            })
-          : null}
-        {/* 轮结果复制：整轮内容末尾的 action bar，复制折叠态所见最终回复纯正文（不含思考）。 */}
-        <div className="nagent-round-collapse__actions">
-          <RoundCopyButton text={round.finalReply} roundIndex={round.index} />
+              </div>
+            )
+          })}
         </div>
       </div>
     </>

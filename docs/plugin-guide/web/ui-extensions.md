@@ -384,8 +384,8 @@ ctx.ui.registerFileContentEditor(descriptor)
 
 | 字段 | 类型 | 必填 | 消费位置（宿主） | 说明 |
 |---|---|---|---|---|
-| `pluginId` | `string` | ✅ | `TaskRoundsPanel.tsx:439` | 渲染 key（也用于归属） |
-| `Component` | `ComponentType<RoundTailPanelProps>` | ✅ | `TaskRoundsPanel.tsx:438-445` | 渲染在该轮最后 |
+| `pluginId` | `string` | ✅ | `TaskRoundsPanel.tsx:443` | 渲染 key（也用于归属） |
+| `Component` | `ComponentType<RoundTailPanelProps>` | ✅ | `TaskRoundsPanel.tsx:444-450` | 渲染在该轮最末的**轮末工具栏行内**，与内置「复制」按钮同行（面板在按钮右侧） |
 
 props：`taskId`、`roundId`、`workerId?`、`workspaceRoot?`、`round: unknown`（轮次数据，核心不感知结构，插件自行强转取字段）。
 
@@ -397,9 +397,13 @@ const def: UiRoundTailPanelDefinition = { pluginId: 'my-plugin', Component: MyRo
 ctx.ui.registerRoundTailPanel(def)
 ```
 
-消费链：每轮渲染时同步 `listRegisteredRoundTailPanels()`（`TaskRoundsPanel.tsx:381`），**折叠/展开两态共用、恒在该轮末尾**渲染（`:433-446`）。
+消费链：每轮渲染时同步 `listRegisteredRoundTailPanels()`（`TaskRoundsPanel.tsx:382`），**折叠/展开两态共用、恒在该轮末尾**渲染（`:434-454`）——但不再是独占整行的纵向堆叠，而是渲染在轮末工具栏 `<div.nagent-round-collapse__tail>` 行内：内置「复制」按钮在左（`:439`），各插件面板经中立包装 `<div.nagent-round-collapse__tail-item>`（`:443`）排在右侧，`flex: 1 1 auto; min-width: 0` 撑满剩余宽度。
 
-- **坑**：渲染 key 是 `pluginId`（`:437`）——同一插件注册两个轮末面板会 React key 冲突，一个插件只应注册一个。
+- 面板的**排版职责分工**：host 负责这一行的栅格与行间距（`.nagent-round-collapse__tail` 提供 `margin-top`/`gap`），插件只渲染自己的内容。因此插件面板**不要自带顶层上间距**（`padding-top`/`margin-top`），否则会比同一行的内置按钮低一档、视觉上不齐（file-change 的 `.task-file-changes` 即按此约定去掉了 `padding-top`）。
+- 面板自身展开的列表（如文件变更的文件行列表）留在面板内部，自然落在工具栏本行下方。
+- 无插件面板时（如某轮无文件变更），该行只剩内置复制按钮，左对齐。
+
+- **坑**：渲染 key 是 `pluginId`（`:443`）——同一插件注册两个轮末面板会 React key 冲突，一个插件只应注册一个。
 - **内置范例**：file-change（`every-agent-plugins/file-change/web/index.ts:15-26`，轮末文件变更视图 + 订阅 `task-round-closed`/`task-deleted` 作废缓存）。
 
 ## 15. `ui.search_types` —— 搜索类型注册

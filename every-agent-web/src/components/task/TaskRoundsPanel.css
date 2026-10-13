@@ -69,33 +69,45 @@
   color: var(--text-primary);
   background: var(--bg-hover);
 }
-/* ===== 轮结果复制按钮(ClosedRoundView 整轮内容末尾) =====
-   折叠/展开两态共用恒定在该轮最后的 action bar:右对齐,只放一个复制按钮。 */
-.nagent-round-collapse__actions {
+/* ===== 轮末工具栏(ClosedRoundView 整轮内容末尾) =====
+   折叠/展开两态恒在该轮最后的同一行:内置「复制」按钮在左,插件轮末面板(如文件变更)在右,
+   视觉上是一条工具栏。插件面板自行展开的列表仍落在本行下方。 */
+.nagent-round-collapse__tail {
   display: flex;
-  justify-content: flex-end;
+  align-items: flex-start;
+  gap: 8px;
+  flex-wrap: wrap;
   margin-top: 4px;
 }
 
+/* 插件面板的中立包装:host 负责栅格 —— 撑满剩余宽度并允许收缩,
+   否则 flex 行内 nowrap 的长文件路径会按 max-content 撑爆宽度导致横向溢出。 */
+.nagent-round-collapse__tail-item {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* 复制按钮:与左邻的轮末 pill 同款外观(同 padding/圆角/无边框/hover 底色),并排才像工具栏。 */
 .nagent-round-collapse__copy {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 3px 9px;
-  border: 1px solid var(--border-light);
+  gap: 6px;
+  flex: 0 0 auto;
+  padding: 4px 9px;
+  border: none;
   border-radius: 999px;
-  background: var(--bg-tertiary);
+  background: transparent;
   color: var(--text-muted);
   font-size: var(--text-xs);
+  font-weight: 600;
   line-height: 1.5;
   cursor: pointer;
-  transition: color 0.15s ease, background 0.15s ease, border-color 0.15s ease;
+  transition: color 0.15s ease, background 0.15s ease;
 }
 
 .nagent-round-collapse__copy:hover:not(:disabled) {
   color: var(--text-primary);
   background: var(--bg-hover);
-  border-color: var(--border-strong);
 }
 
 .nagent-round-collapse__copy:disabled {
@@ -106,6 +118,5 @@
 /* 复制成功态:绿色勾选提示,1.5s 后复原。 */
 .nagent-round-collapse__copy--done {
   color: var(--accent-green);
-  border-color: var(--accent-green-dim);
   background: var(--accent-green-dim);
 }

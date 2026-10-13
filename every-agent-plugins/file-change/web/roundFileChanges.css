@@ -1,8 +1,11 @@
+/* 轮末文件变更面板。
+   不设上间距:本面板渲染在宿主轮末工具栏行内(与内置「复制」按钮同一行),
+   行间距由宿主容器 .nagent-round-collapse__tail 统一提供,自带 padding-top 会让
+   汇总头比左侧按钮低一档、同一行里对不齐。 */
 .task-file-changes {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  padding-top: 4px;
 }
 
 /* 默认折叠:汇总头(「文件变更」+ 数量),点击展开/收起文件行列表。 */
