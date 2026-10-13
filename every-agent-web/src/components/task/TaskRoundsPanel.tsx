@@ -11,7 +11,6 @@ import TaskThread from './TaskThread'
 import RoundDetail from './RoundDetail'
 import LazyLoadSentinel from './LazyLoadSentinel'
 import { pluginDispatcher } from '@/plugin/PluginDispatcher'
-import { CORE_ROUND_COPY_PANEL_ID } from '@/plugin/coreRoundTailPanels'
 import { taskStore } from '@/task/taskStore'
 import { TaskWorkspaceProvider } from './TaskWorkspaceContext'
 import './TaskRoundsPanel.css'
@@ -432,28 +431,24 @@ function ClosedRoundView({
           </div>
         )}
         {/* 轮末工具栏：`ui.round_tail_panels` 的全部贡献者（含核心内置的「复制」按钮）并排一行，
-            折叠/展开两态共用、恒在该轮最后；插件面板（如文件变更）自身展开的列表落在本行下方。
-            核心「复制」与插件面板同走这一条渲染路径，不在此硬编码任何一块内容。
-            栅格由 host 负责（__tail-item 中立包装），插件只渲染自己的内容、不感知同行还有谁。 */}
+            折叠/展开两态共用、恒在该轮最后。核心「复制」与插件面板同走这一条渲染路径，
+            不在此硬编码任何一块内容。
+            栅格：本行是一条 wrap flex 行，贡献者的**根元素直接落进本行**（宿主不再包一层
+            中立包装）——面板因此能把「汇总头」与「展开详情」拆成两个并列项：汇总头按内容宽度
+            留在标签行，详情写 `flex: 1 1 100%` 必然另起一行、通栏占满整行宽度（标签页式：
+            上行为标签、下行详情区）。宿主只兜底 `min-width: 0`，防 nowrap 长内容撑破行宽。 */}
         <div className="nagent-round-collapse__tail">
           {roundTailPanels.map((panel) => {
             const Component = panel.Component
-            // 核心「复制」是按钮而非面板：不参与拉伸/压缩（--hug），否则 flex 分配会把它挤没
-            // 或被插件面板（长路径撑出的 max-content）带着一起变形。
-            const hug = panel.pluginId === CORE_ROUND_COPY_PANEL_ID
             return (
-              <div
-                className={`nagent-round-collapse__tail-item${hug ? ' nagent-round-collapse__tail-item--hug' : ''}`}
+              <Component
                 key={panel.pluginId}
-              >
-                <Component
-                  taskId={taskId}
-                  roundId={round.roundId}
-                  workerId={workerId}
-                  workspaceRoot={workspaceRoot}
-                  round={round}
-                />
-              </div>
+                taskId={taskId}
+                roundId={round.roundId}
+                workerId={workerId}
+                workspaceRoot={workspaceRoot}
+                round={round}
+              />
             )
           })}
         </div>

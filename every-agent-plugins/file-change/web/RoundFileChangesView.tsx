@@ -55,6 +55,11 @@ function toDisplayPath(filePath: string): string {
  * 点击某行时按 roundId 经 task.fileChanges 拉全文(含 beforeContent/afterContent),
  * 再开 diff 标签对比。
  *
+ * **布局**:本组件不包根容器,汇总头 pill 与展开的文件行列表是宿主轮末工具栏行
+ * (`.nagent-round-collapse__tail`,一条 wrap flex 行)的两个并列 flex 项——点击汇总头
+ * 像切标签页:标签行(复制 / 文件变更)原地不动,详情列表另起一行**通栏占满整行宽度**
+ * (见 roundFileChanges.css 的 `.task-file-changes__list { flex: 1 1 100% }`)。
+ *
  * 数据不来自轮行(轮行不含插件业务字段,架构 §7.15.2),而来自插件自持的 roundChangesStore:
  * 真相源是本插件落盘的 `file-changes/<roundId>.json`,一次 RPC 拉全任务各轮轻量摘要按 taskId
  * 缓存,宿主 `task-round-closed` 领域事件(在 index.ts activate 里订阅)触发作废重拉;
@@ -104,7 +109,7 @@ export default function RoundFileChangesView({
   }
 
   return (
-    <div className="task-file-changes">
+    <>
       <button
         type="button"
         className="task-file-changes__toggle"
@@ -147,6 +152,6 @@ export default function RoundFileChangesView({
           })}
         </div>
       ) : null}
-    </div>
+    </>
   )
 }

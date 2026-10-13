@@ -18,7 +18,7 @@ import RoundCopyPanel from '@/components/task/RoundCopyPanel'
 
 /**
  * 核心「复制本轮结果」面板的 pluginId。
- * 同时用作 React key 与 host 侧栅格判定（该面板是按钮而非面板，见 TaskRoundsPanel）。
+ * 同时用作 React key（轮末工具栏行里各贡献者根元素直接并列，见 TaskRoundsPanel）。
  */
 export const CORE_ROUND_COPY_PANEL_ID = 'core.round-copy'
 

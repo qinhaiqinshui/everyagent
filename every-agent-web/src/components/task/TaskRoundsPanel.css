@@ -71,7 +71,10 @@
 }
 /* ===== 轮末工具栏(ClosedRoundView 整轮内容末尾) =====
    折叠/展开两态恒在该轮最后的同一行:内置「复制」按钮在左,插件轮末面板(如文件变更)在右,
-   视觉上是一条工具栏。插件面板自行展开的列表仍落在本行下方。 */
+   视觉上是一条工具栏。行是一条 wrap flex 行,**贡献者(面板)的根元素直接落进本行**——
+   宿主不再包一层栅格包装,面板因此能把「汇总头」与「展开详情」拆成两个并列 flex 项:
+   汇总头 hug 在标签行,详情 `flex: 1 1 100%` 必然另起一行、通栏占满整行宽度
+   (标签页式:上行为标签、下行为详情区)。行间距与 gap 仍由宿主统一提供。 */
 .nagent-round-collapse__tail {
   display: flex;
   align-items: flex-start;
@@ -80,21 +83,10 @@
   margin-top: 4px;
 }
 
-/* 插件面板 / 核心按钮的中立包装:host 负责栅格 —— 撑满剩余宽度并允许收缩,
-   否则 flex 行内 nowrap 的长文件路径会按 max-content 撑爆宽度导致横向溢出。
-   纵向 flex:让包装内的内容(核心按钮是 inline-flex、插件面板是块级根)贴顶排布 ——
-   否则 inline 级元素按基线排版会被半行距往下推几像素,与同行另一枚 pill 顶不齐。 */
-.nagent-round-collapse__tail-item {
-  display: flex;
-  flex-direction: column;
-  flex: 1 1 auto;
+/* 宿主对面板只兜底一条:不许被 nowrap 长内容(如完整文件路径)按 max-content 撑破行宽。
+   占宽策略(hug / 撑满剩余 / 换行通栏)由各面板自己的 CSS 决定。 */
+.nagent-round-collapse__tail > * {
   min-width: 0;
-}
-
-/* 内置「复制」按钮的包装:它是按钮不是面板,不参与拉伸/压缩 —— 恒按内容宽度,
-   避免被同排插件面板的长内容(max-content)挤压变形,也不会占掉插件面板的可用宽度。 */
-.nagent-round-collapse__tail-item--hug {
-  flex: 0 0 auto;
 }
 
 /* 复制按钮:与左邻的轮末 pill 同款外观(同 padding/圆角/无边框/hover 底色),并排才像工具栏。
