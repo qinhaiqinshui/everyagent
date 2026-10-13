@@ -195,7 +195,7 @@ hub 对频道名不解释业务语义:它只做"前缀必须匹配本连接命�
 | task.poll / stream | `user.message` | ✓ | 用户输入入日志:`{content, data:{rawContent?}}`(统一事件模型,content=AI 可见明文;rawContent=原始输入含 opaque token 串,仅用于前端回放还原胶囊,在 `data` 内、非顶层) |
 | task.poll / stream | `delta` / `thinking` | ✗ 瞬态 | 逐 token / 推理增量(主/子同名,子带 agentId) |
 | task.poll / stream | `message` | ✓ | **每轮权威完成记录**:`{thinking, text, toolCalls:[{id,name,arguments}], agentId?}` |
-| task.poll / stream | `tool.result` | ✓ | `{callId, name, summary, truncated?}` |
+| task.poll / stream | `tool.result` | ✓ | `{callId, name, summary}`(工具结果文本 = `ToolResponseMessage.responseData` 原文,**事件侧不截断**:事件/落盘/推送不再复加损失) |
 | task.poll / stream | `usage` | ✓ | 每轮模型 token 实测用量 + 累计 |
 | task.poll / stream | `ask.create` / `ask.state` / `ask.resolved` | ✓ | 见 §7.8 |
 | task.poll / stream | `agent.started` / `agent.done` | ✓ | agent per-run 生命周期(主/子统一,§7.20.1);started 携带 title/creator/metadata,done 携带 usage+末轮正文 |
@@ -210,7 +210,7 @@ hub 对频道名不解释业务语义:它只做"前缀必须匹配本连接命�
 
 > **线上 wire 形态**:事件名不分主/子 agent(delta/message/error 同名),归属由 `agentId` 决定——主 agent payload 不带 agentId,子 agent 必带;磁盘 jsonl 每行必记 agentId。`agent.started`/`agent.done`/`agent.status` 为 agent 生命周期专用名:**状态 = per-run() 生命周期**——每一轮 `Agent.run()` 是一个完整周期 `agent.started → agent.status{running} → [agent.status{waiting-user} ⇄ running]* → error? → agent.done → agent.status{done|failed|stopped}`,队列取下一条输入/复用续跑即开新一轮(again `started`)。四类事件由 advisor 链驱动、由 agent 实体一处发射(`AgentStatusAdvisor` 把流生命周期信号翻译成 `AgentEntity` 的 per-run 状态机方法,§7.20.1),**主 agent 与各插件派生 agent 一视同仁**;task 层与插件不再手搓 agent.* 事件(插件仅在「运行体从未进入流生命周期」的兜底路径调 `claimTerminal`,CAS 保证不重复)。task 级状态(`task.updated`,由 StatusNode/TaskManager.setStatus 驱动)与 agent 级状态分属两个维度,不互相替代。
 
-单帧上限默认 16 MiB(可配 `hub.max-frame-bytes`);超大工具结果截断为 `summary + truncated:true`。
+单帧上限默认 16 MiB(可配 `hub.max-frame-bytes`);工具结果事件**不在事件侧截断**(原样携带 `ToolResponseMessage.responseData`,不设独立字符上限),其体量上界由执行侧输出上限保证。注意模型侧另有独立的上下文压缩闸门(`worker.limits.context-max-tool-result-chars`,默认 40000,order = `ToolCallingAdvisor.DEFAULT_ORDER + 400` 即每轮模型请求前生效):超大结果发给模型前会被首尾保留截断,故「前端所见」以事件原文为准,与模型最终读到的压缩文本不承诺逐字相同(前者是后者的输入)。
 
 ### 5.4 seq 规则(协议的秩序根基)
 

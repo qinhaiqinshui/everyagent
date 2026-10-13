@@ -49,7 +49,8 @@ import java.util.concurrent.atomic.AtomicReference;
  *       并把本轮正文写入 {@link AgentEntity#lastText}(最终轮即全文)。</li>
  *   <li>{@link #doGetNextInstructionsForToolCallStream}:工具执行完毕后,只从结果历史里挑出
  *       「本轮刚下发」(callId 命中本轮 message.toolCalls)的 {@link ToolResponseMessage} 发
- *       {@code tool.result}(落盘,callId 配对),历史轮次结果不重复发射。</li>
+ *       {@code tool.result}(落盘,callId 配对),历史轮次结果不重复发射;结果文本**原样**发射
+ *       (事件侧不做任何截断),事件路径不再追加损失。</li>
  * </ul>
  *
  * <p>设计纪律:本类不持有任何 per-task 可变状态(仅持有 {@link AgentEntity} 引用,运行期只读其
@@ -66,9 +67,6 @@ import java.util.concurrent.atomic.AtomicReference;
 public class WorkerToolEventAdvisor extends ToolCallingAdvisor {
 
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(WorkerToolEventAdvisor.class);
-
-    /** 工具返回事件侧截断阈值;返回给模型的仍是完整结果(与 AgentRunner 同源语义)。 */
-    private static final int MAX_TOOL_EVENT_CHARS = 100_000;
 
     private final AgentEntity a;
     /** 思考累积值追踪(跨轮差分,防串轮;adviseStream tap 与 doAfterStream 共用)。 */
@@ -257,15 +255,14 @@ public class WorkerToolEventAdvisor extends ToolCallingAdvisor {
                         if (exec.terminal()) {
                             continue;
                         }
+                        // 事件侧不截断:原样发射 ToolResponseMessage.responseData——它与工具循环交回模型的
+                        // 是同一份对象(secret-redaction 等链上改写对二者同时生效),事件/落盘/推送路径
+                        // 不再追加损失。体量上界由执行侧输出上限兜底(ExecResults/OsSandbox);模型侧若启用
+                        // 上下文压缩,发给模型的是压缩后文本(§5.3),不影响本事件的原样性。
                         String summary = r.responseData() == null ? "(无返回)" : r.responseData();
-                        boolean truncated = summary.length() > MAX_TOOL_EVENT_CHARS;
-                        if (truncated) {
-                            summary = summary.substring(0, MAX_TOOL_EVENT_CHARS) + "…(截断)";
-                        }
                         ObjectNode toolResultData = Json.obj();
                         toolResultData.put("callId", r.id());
                         toolResultData.put("name", r.name());
-                        toolResultData.put("truncated", truncated);
                         a.emitter.emit(EmitEvent.of(SnowflakeId.next(), Events.TOOL_RESULT,
                                 null, null, summary, null, null, toolResultData,
                                 EmitEvent.Mode.REPLACE));

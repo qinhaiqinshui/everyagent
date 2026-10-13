@@ -156,7 +156,6 @@ registerEventKind('tool.result', {
       toolCallId: callId,
       toolName: folder.getToolName(callId),
       status: 'success',
-      metadata: data?.truncated ? { truncated: true } : undefined,
     }, seqKey)
     return true
   },

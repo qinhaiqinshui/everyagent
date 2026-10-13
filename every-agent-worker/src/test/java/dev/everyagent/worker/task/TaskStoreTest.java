@@ -93,7 +93,6 @@ class TaskStoreTest {
         ObjectNode toolResultData = Json.obj();
         toolResultData.put("callId", "call-1");
         toolResultData.put("name", "ask_user");
-        toolResultData.put("truncated", false);
         long seqToolResult = evA.emit(EmitEvent.of(SnowflakeId.next(),
                 Events.TOOL_RESULT, MAIN, null, "答案", null, null,
                 toolResultData, EmitEvent.Mode.REPLACE)); // 落盘
