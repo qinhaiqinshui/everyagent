@@ -87,6 +87,12 @@
   min-width: 0;
 }
 
+/* 内置「复制」按钮的包装:它是按钮不是面板,不参与拉伸/压缩 —— 恒按内容宽度,
+   避免被同排插件面板的长内容(max-content)挤压变形,也不会占掉插件面板的可用宽度。 */
+.nagent-round-collapse__tail-item--hug {
+  flex: 0 0 auto;
+}
+
 /* 复制按钮:与左邻的轮末 pill 同款外观(同 padding/圆角/无边框/hover 底色),并排才像工具栏。 */
 .nagent-round-collapse__copy {
   display: inline-flex;

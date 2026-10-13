@@ -21,6 +21,7 @@ import { loadThemeMode } from './settings/localSettings'
 import { installGlobalErrorHandlers } from './utils/globalErrorHandler'
 import { GlobalErrorBoundary } from './components/shared/GlobalErrorBoundary'
 import { initializeTraceTypes } from './plugin/traceTypeRegistry'
+import { initializeCoreRoundTailPanels } from './plugin/coreRoundTailPanels'
 import { loadPlugins } from './plugin/pluginLoader'
 import { wireFsChanged } from './platform/fs/workspaceGateway'
 import { workspaceRegistry } from './hub/workspaceRegistry'
@@ -43,6 +44,9 @@ if (isDesktop()) {
 
 // 核心 trace 类型注册(子任务/错误/系统提示;未注册 kind 走降级渲染)。
 initializeTraceTypes()
+// 核心内置轮末面板(「复制本轮结果」按钮)注册进 ui.round_tail_panels 扩展点。
+// 必须在 loadPlugins() 之前同步完成:核心贡献先入册,恒排在插件面板之前(工具栏最左)。
+initializeCoreRoundTailPanels()
 // 统一插件加载：plugin.list RPC 驱动发现，worker 不可达时静默降级。
 void loadPlugins()
 

@@ -4,15 +4,15 @@ import type { RoundSummary, TaskRoundsResult } from '@/task/types'
 import type { TaskStreamHandle } from '@/task/taskStream'
 import type { TaskThreadItem } from '@/task/eventFolder'
 import { BrandMark } from '@/components/shared/BrandLoadingBlock'
-import { ChevronDownIcon, ChevronRightIcon, CopyIcon, CheckIcon } from '../shared/AppGlyphs'
+import { ChevronDownIcon, ChevronRightIcon } from '../shared/AppGlyphs'
 import { InlineSpinner } from '@/components/shared/ui'
 import AgentMessageThread from './AgentMessageThread'
 import TaskThread from './TaskThread'
 import RoundDetail from './RoundDetail'
 import LazyLoadSentinel from './LazyLoadSentinel'
 import { pluginDispatcher } from '@/plugin/PluginDispatcher'
+import { CORE_ROUND_COPY_PANEL_ID } from '@/plugin/coreRoundTailPanels'
 import { taskStore } from '@/task/taskStore'
-import { copyText } from '@/utils/clipboard'
 import { TaskWorkspaceProvider } from './TaskWorkspaceContext'
 import './TaskRoundsPanel.css'
 
@@ -431,16 +431,21 @@ function ClosedRoundView({
             <AgentMessageThread message={finalMessage} taskId={taskId} />
           </div>
         )}
-        {/* 轮末工具栏：内置「复制」按钮 + 插件轮末展示区（ui.round_tail_panels）并排一行，
+        {/* 轮末工具栏：`ui.round_tail_panels` 的全部贡献者（含核心内置的「复制」按钮）并排一行，
             折叠/展开两态共用、恒在该轮最后；插件面板（如文件变更）自身展开的列表落在本行下方。
-            复制折叠态所见最终回复纯正文（不含思考）。
+            核心「复制」与插件面板同走这一条渲染路径，不在此硬编码任何一块内容。
             栅格由 host 负责（__tail-item 中立包装），插件只渲染自己的内容、不感知同行还有谁。 */}
         <div className="nagent-round-collapse__tail">
-          <RoundCopyButton text={round.finalReply} roundIndex={round.index} />
           {roundTailPanels.map((panel) => {
             const Component = panel.Component
+            // 核心「复制」是按钮而非面板：不参与拉伸/压缩（--hug），否则 flex 分配会把它挤没
+            // 或被插件面板（长路径撑出的 max-content）带着一起变形。
+            const hug = panel.pluginId === CORE_ROUND_COPY_PANEL_ID
             return (
-              <div className="nagent-round-collapse__tail-item" key={panel.pluginId}>
+              <div
+                className={`nagent-round-collapse__tail-item${hug ? ' nagent-round-collapse__tail-item--hug' : ''}`}
+                key={panel.pluginId}
+              >
                 <Component
                   taskId={taskId}
                   roundId={round.roundId}
@@ -454,43 +459,6 @@ function ClosedRoundView({
         </div>
       </div>
     </>
-  )
-}
-
-/**
- * 轮结果复制按钮：点击把该轮最终回复纯正文写入剪贴板，成功后短暂切「已复制」（1.5s 复原）。
- * 文案为空时禁用（如失败/无正文的轮）。复制失败不误报「已复制」。
- */
-function RoundCopyButton({ text, roundIndex }: { text: string; roundIndex: number }): React.ReactNode {
-  const [copied, setCopied] = React.useState(false)
-  const timerRef = React.useRef<number | undefined>(undefined)
-  // 组件卸载时清理待触发的「已复制」回退计时器，避免对已卸载组件 setState。
-  React.useEffect(() => () => window.clearTimeout(timerRef.current), [])
-
-  const disabled = !text.trim()
-  const handleCopy = React.useCallback(() => {
-    if (disabled) return
-    copyText(text)
-      .then(() => {
-        setCopied(true)
-        window.clearTimeout(timerRef.current)
-        timerRef.current = window.setTimeout(() => setCopied(false), 1500)
-      })
-      .catch(() => setCopied(false))
-  }, [text, disabled])
-
-  return (
-    <button
-      type="button"
-      className={`nagent-round-collapse__copy${copied ? ' nagent-round-collapse__copy--done' : ''}`}
-      onClick={handleCopy}
-      disabled={disabled}
-      aria-label={copied ? `已复制第 ${roundIndex} 轮结果` : `复制第 ${roundIndex} 轮结果`}
-      title={copied ? '已复制' : `复制第 ${roundIndex} 轮结果`}
-    >
-      {copied ? <CheckIcon size={13} /> : <CopyIcon size={13} />}
-      <span>{copied ? '已复制' : '复制'}</span>
-    </button>
   )
 }
 
