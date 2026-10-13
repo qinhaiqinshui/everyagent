@@ -345,23 +345,24 @@ public interface FileReferenceHandler {
 处理主流程关键片段（`every-agent-plugins/image-vision/src/main/java/dev/everyagent/plugin/imagevision/ImageReferenceHandler.java`）：
 
 ```java
-// ImageReferenceHandler.java:76-91 —— process：开关 + 路径解析，任何失败都降级为纯路径文本
+// process：开关 + 路径解析，任何失败都降级为纯路径文本
 public FileReferenceResult process(FileReferenceContext ctx, FileReference ref) {
     if (!settings.enabled()) { return null; }          // 关闭 = 放弃处理
-    Path file = resolveAuthorized(ctx, ref);
-    if (file == null) { return null; }                  // 越界/不存在/未授权 → 降级
+    Path file = resolveFile(ctx, ref);
+    if (file == null) { return null; }                  // 越界/不存在 → 降级
     try { return buildResult(file, ref); }
     catch (IOException | RuntimeException e) { return null; }  // 读取失败也降级，不阻断任务
 }
 
-// ImageReferenceHandler.java:196-206 —— 组装结果：超限自动缩放压缩，转 base64 dataUrl
+// 组装结果：超限自动缩放压缩，转 base64 dataUrl
 String dataUrl = "data:" + mimeType + ";base64," + Base64.getEncoder().encodeToString(payload);
 attachment.put("type", "image"); attachment.put("dataUrl", dataUrl);
 attachment.put("fileName", ref.fileName()); attachment.put("mimeType", mimeType);
-return new FileReferenceResult("（附图：" + ref.fileName() + "）", List.of(attachment));
+// replacementText 用 displayPath（工作区内=相对路径，工作区外=绝对路径）
+return new FileReferenceResult("（附图：" + displayPath(ref) + "）", List.of(attachment));
 ```
 
-工作区外引用（`external_file`）的授权路径：先 `toRealPath()`，再经 `ctx.interaction().ask(...)` 弹**与 PermissionGate 同款的三档授权弹窗**（本轮运行/本任务/拒绝），拒绝/超时/异常一律按拒绝降级为路径文本（`ImageReferenceHandler.java:117-165`）。
+用户 `@` 引用行为本身即视为已授权，`resolveFile` 不再走授权链；`displayPath` 工作区内返回 `ref.path()`（相对路径），工作区外返回 `ref.fullPath()`（绝对路径）。
 
 ### 4.5 常见坑
 
@@ -399,7 +400,7 @@ return new FileReferenceResult("（附图：" + ref.fileName() + "）", List.of(
 | `metadata()` | `Map<String,Object>` | 随 meta.json 落盘的持久策略标记（unattended/ai-review/attachments） | `UnattendedToolInterceptor.java:35` 读 `unattended` 标记；`UserInputMaterializerImpl` 写 `attachments` | 只承载持久策略标记，不混运行时瞬态（§14.11） |
 | `dataDir()` | `Path` | 主体数据目录（grants.json 等落盘） | 授权链 | — |
 | `terminal()` | `boolean` | 主体是否已收口 | leak-guard：终态后不再发射事件 | — |
-| `interaction()` | `InteractionService` | 预绑定交互口（ask 的 context 自动补 subjectId） | image-vision 外部文件授权弹窗（`ImageReferenceHandler.java:136-150`） | §14.11「绕过 ctx.interaction() 手动填 taskId context」禁止 |
+| `interaction()` | `InteractionService` | 预绑定交互口（ask 的 context 自动补 subjectId） | human-authorization 授权弹窗、AskUserTool 等（image-vision 已移除授权链，用户 `@` 引用即授权） | §14.11「绕过 ctx.interaction() 手动填 taskId context」禁止 |
 | `agents()` | `Map<String,AgentContext>` | 本主体活动 agent 注册表（主 agent + 各插件派生） | `AgentBuilder.build()` 自动 put（`:333`，不发事件） | §14.11「插件不再手动 put/emit」 |
 | `METADATA_ATTACHMENTS_KEY` | 常量 `"attachments"` | metadata 中附件列表键名 | `UserInputMaterializerImpl`/`FileAttachmentAdvisor` | — |
 
