@@ -3,6 +3,7 @@ package dev.everyagent.worker.tools;
 
 import dev.everyagent.plugin.api.execution.ExecContext;
 import dev.everyagent.plugin.api.exception.NotFoundException;
+import dev.everyagent.plugin.api.tool.PlainTextToolCallResultConverter;
 
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
@@ -149,7 +150,8 @@ public class FileTools {
 
     @Tool(description = "读取文件的内容。支持可选 line_start / line_end 按 1-based 行区间读取(省略则全量返回),"
             + "直接返回文件文本内容(纯文本),不附加行号等元信息包装。"
-            + "当未指定 line_start/line_end 且文件内容超过阈值时,自动截断到完整行并返回提示。")
+            + "当未指定 line_start/line_end 且文件内容超过阈值时,自动截断到完整行并返回提示。",
+            resultConverter = PlainTextToolCallResultConverter.class)
     public String read_file(
             @ToolParam(description = "文件路径(相对任务工作区根)") String path,
             @ToolParam(description = "1-based 起始行(含);省略从首行开始", required = false) Integer line_start,
@@ -210,7 +212,8 @@ public class FileTools {
     }
 
     @Tool(description = "新建文件并写入内容:文件不存在时创建;文件已存在则报错(不覆盖)。"
-            + "写入统一为 LF 行尾。")
+            + "写入统一为 LF 行尾。",
+            resultConverter = PlainTextToolCallResultConverter.class)
     public String create_file(
             @ToolParam(description = "文件路径(相对任务工作区根)") String path,
             @ToolParam(description = "要写入文件的新内容") String content) throws IOException {
@@ -239,7 +242,8 @@ public class FileTools {
     @Tool(description = "更新已有文件:把文件中唯一出现的 oldcontent 整体原位替换为 content。"
             + "文件不存在、oldcontent 缺失或不唯一时均报错。匹配对行尾(CRLF/LF)宽容,"
             + "插入内容按文件主导行尾转写,源文件其余部分逐字节保留。"
-            + "写入为原子替换并做落盘校验,不会因中断留下截断文件。")
+            + "写入为原子替换并做落盘校验,不会因中断留下截断文件。",
+            resultConverter = PlainTextToolCallResultConverter.class)
     public String update_file(
             @ToolParam(description = "文件路径(相对任务工作区根)") String path,
             @ToolParam(description = "文件中被整体替换为 content 的旧内容,必须在文件中唯一出现") String oldcontent,

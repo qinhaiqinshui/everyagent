@@ -11,6 +11,7 @@ import dev.everyagent.plugin.api.exception.AgentCancelledException;
 import dev.everyagent.plugin.api.interaction.AskOption;
 import dev.everyagent.plugin.api.interaction.AskQuestion;
 import dev.everyagent.plugin.api.interaction.AskResult;
+import dev.everyagent.plugin.api.tool.PlainTextToolCallResultConverter;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 
@@ -108,7 +109,8 @@ public class AskUserTool {
     }
 
     @Tool(description = "向用户提出一个或多个单选题并等待回答。适用于信息不足、需要用户抉择时。"
-            + "示例:{\"questions\":[{\"question\":\"主角性别?\",\"options\":[\"男\",\"女\"]}]}")
+            + "示例:{\"questions\":[{\"question\":\"主角性别?\",\"options\":[\"男\",\"女\"]}]}",
+            resultConverter = PlainTextToolCallResultConverter.class)
     public String ask_user(
             @ToolParam(description = "问题列表") List<AskQuestionInput> questions) {
         try {
