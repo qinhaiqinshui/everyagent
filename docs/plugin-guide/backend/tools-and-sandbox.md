@@ -1,7 +1,7 @@
 ---
 title: 工具与沙箱扩展点
 nav_order: 5
-parent: backend
+parent: 后端插件开发
 has_children: false
 ---
 

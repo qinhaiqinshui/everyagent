@@ -1,3 +1,8 @@
+---
+title: 设计稿 · 多 worker 身份隔离与切换失效
+nav_exclude: true
+---
+
 # 多 worker 身份隔离与切换失效
 
 ## 目标

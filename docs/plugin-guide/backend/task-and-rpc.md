@@ -1,7 +1,7 @@
 ---
 title: 任务生命周期与 RPC
 nav_order: 7
-parent: backend
+parent: 后端插件开发
 has_children: false
 ---
 

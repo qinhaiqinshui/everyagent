@@ -1,7 +1,7 @@
 ---
 title: 已知问题与开放项
 nav_order: 19
-parent: reference
+parent: 参考
 has_children: false
 ---
 

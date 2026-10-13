@@ -4,14 +4,30 @@
 #   Settings → Pages → Build and deployment →
 #   Source: Deploy from a branch → Branch: main / folder: /docs
 #
+# ⚠️ 发布源必须是 main 分支的 /docs 目录，且本目录下**必须有 index.md**：
+#    Jekyll 由 docs/index.md 生成站点根的 index.html，缺少它时访问站点根
+#    https://<user>.github.io/<repo>/ 会命中 GitHub Pages 的 404
+#    （「For root URLs … you must provide an index.html file」）。
+#
 # 主题：just-the-docs（remote_theme 方式，无需本地安装 gem）。
-# docs/plugin-guide/ 各篇 front-matter 里的 nav_order / parent 即为该主题的
-# 侧栏导航约定（换 VitePress/MkDocs 时正文不动，只加各自配置）。
+# 各篇 front-matter 里的 nav_order / parent 即为该主题的侧栏导航约定
+# （换 VitePress/MkDocs 时正文不动，只加各自配置）：
+#   - nav_order：全局唯一、同级递增（首页 1、架构说明 2、架构全景图 3、插件开发指南 4 起）；
+#   - parent：必须**精确等于**父页面的 title；本站用 plugin-guide/{backend,web,guides,reference}/
+#     index.md 四个「分组页」做侧栏折叠，父页面需带 has_children: true。
+#
+# 链接约定：正文一律写 .md 相对链接。GitHub Pages 默认启用 jekyll-relative-links，
+# 发布时自动改写为对应 .html（如 getting-started.md → getting-started.html）。
 remote_theme: just-the-docs/just-the-docs
 
 title: Every Agent
 description: Every Agent 架构文档与插件开发指南
 
-# 无 front-matter 的文档（如 ARCHITECTURE.md）不会被主题收录进侧栏，仍可直链访问：
-#   /docs/ARCHITECTURE.md → https://<user>.github.io/<repo>/ARCHITECTURE.html
+# 所有页面统一套用主题的 default 布局（首页 index.md 在自身 front-matter 里覆盖为 default），
+# 这样即使某篇忘了写 layout，也不会退化成没有主题外壳的裸 HTML。
+defaults:
+  - scope:
+      path: ""
+    values:
+      layout: default
 

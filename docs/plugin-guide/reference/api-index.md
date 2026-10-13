@@ -1,7 +1,7 @@
 ---
 title: API 索引
 nav_order: 18
-parent: reference
+parent: 参考
 has_children: false
 ---
 

@@ -1,7 +1,7 @@
 ---
 title: 后端插件总览
 nav_order: 4
-parent: backend
+parent: 后端插件开发
 has_children: false
 ---
 

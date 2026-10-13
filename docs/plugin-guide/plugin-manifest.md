@@ -1,6 +1,6 @@
 ---
 title: plugin.json 字段参考
-nav_order: 3
+nav_order: 6
 ---
 
 # plugin.json 字段参考

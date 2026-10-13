@@ -1,7 +1,7 @@
 ---
 title: 构建与运行
 nav_order: 13
-parent: guides
+parent: 构建 · 调试 · 分发
 has_children: false
 ---
 
