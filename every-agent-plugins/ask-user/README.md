@@ -14,7 +14,7 @@
 | 文件 | 作用 |
 | --- | --- |
 | `plugin.json` | 插件清单（id/name/version/description/author/main/enabled），宿主扫描与加载的唯一依据 |
-| `pom.xml` | Maven 构建（parent=every-agent-parent；内联 maven-resources-plugin 把 plugin.json 复制进 `target/classes`） |
+| `pom.xml` | Maven 构建（parent=插件 SDK parent `every-agent-plugin-parent`；`plugin.json` 的打包由它的 `<build><resources>` 统一提供，本 pom 无 `<build>` 段） |
 | `src/main/java/dev/everyagent/plugin/askuser/AskUserPlugin.java` | 后端入口类，实现 `EveryAgentPlugin`，`activate()` 里经 `WorkerPluginContext` 注册扩展点 |
 | `src/main/resources/` | 插件资源（打进 jar），初始为空（`.gitkeep` 占位） |
 | `src/test/java/dev/everyagent/plugin/askuser/AskUserPluginSmokeTest.java` | JUnit 5 冒烟测试：只依赖 every-agent-plugin-api，不依赖 worker（§14.9 红线） |
@@ -27,8 +27,8 @@
 
 ```powershell
 mvn -f every-agent-plugins/ask-user/pom.xml package
-# 首次构建若报找不到 dev.everyagent:every-agent-plugin-api，先在仓库根执行一次：
-mvn -pl every-agent-plugin-api -am install -DskipTests
+# 首次构建若报找不到 dev.everyagent:every-agent-plugin-parent，先在仓库根执行一次：
+mvn -pl every-agent-plugin-parent,every-agent-plugin-api -am install -DskipTests
 ```
 
 验证：`package` 已包含冒烟测试（`target/surefire-reports/`）；产物为 `target/*.jar`，jar 内须含 `plugin.json`（`jar tf target/*.jar | findstr plugin.json`）。

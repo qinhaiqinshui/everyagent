@@ -379,7 +379,7 @@ export const workspaceGateway = {
    * 依赖运行 worker 进程的文件系统权限;无权限/路径非法时抛 RPC 错误。
    */
   async browseRoots(workerId: string): Promise<Array<{ path: string; name: string }>> {
-    if (!workerId) throw new Error('请先选择 worker')
+    if (!workerId) throw new Error('尚未连接 worker')
     const result = await hubSession.rpcTo(workerId, 'fs.browse', {}) as {
       entries?: Array<{ path: string; name: string }>
     }

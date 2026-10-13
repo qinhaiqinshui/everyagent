@@ -6,7 +6,7 @@ import type {
   FileContentHeaderAction,
   FileContentEditorProps,
 } from '@/components/files/editors/types'
-import { IMAGE_EXTENSIONS } from '@/utils/imageAsset'
+import { IMAGE_EXTENSIONS, dataUrlToBlob } from '@/utils/imageAsset'
 
 type FitMode = 'contain' | 'actual'
 
@@ -24,7 +24,8 @@ function ImageFileEditor({
     if (!content) return
     try {
       // 现代浏览器可直接把图片(data URL)作为 ClipboardItem 写入剪贴板。
-      const blob = await (await fetch(content)).blob()
+      // 手工解码 data URL:CSP connect-src 不放行 data:,fetch(dataUrl) 会被拦截。
+      const blob = dataUrlToBlob(content)
       await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })])
       setCopied(true)
     } catch {

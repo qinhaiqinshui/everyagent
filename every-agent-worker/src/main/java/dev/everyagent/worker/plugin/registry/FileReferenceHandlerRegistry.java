@@ -16,7 +16,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * activate() 时经 {@code WorkerPluginContext.registerFileReferenceHandler} 注册。
  * 扩展名 → handler 一对一映射（小写含点），同扩展名后注册覆盖先注册并打 WARN。
  *
- * <p>消费方：{@code FileReferenceProcessNode} 按文件扩展名分发文件引用。
+ * <p>消费方：{@code UserInputMaterializerImpl}（用户输入物化服务）按文件扩展名分发文件引用——轮次路径（{@code FileReferenceProcessNode}）与「插入到当前对话」路径共用该实现。
  */
 @Component
 public class FileReferenceHandlerRegistry {

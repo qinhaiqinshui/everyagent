@@ -165,7 +165,7 @@ worker 内置节点分两处注册：RPC 线程段 6 个在 `TaskManager.registe
 | **840** | `status` | **临界段**（成对：down 在段外） | 终态事件广播 | worker | `StatusNode.java:36` |
 | 860 | `ledger.persist` | Upstream | 台账落盘 agents.json | worker | `AgentLedgerPersistNode.java:28` |
 | **870** | `queue.loop` | 普通 | 轮次循环：重复 next.proceed 续跑队列项 | **task-input-queue** | `QueueLoopNode.java:54` |
-| 875 | `file.reference.process` | 普通 | `@` 文件引用预处理（每轮） | worker | `FileReferenceProcessNode.java:71-72` |
+| 875 | `file.reference.process` | 普通 | `@` 文件引用预处理（每轮；薄壳委托核心 `UserInputMaterializer` 物化） | worker | `FileReferenceProcessNode.java:71-72` |
 | **877** | `edit.resend` | 普通 | 编辑重发截断（每轮） | **task-edit-resend** | `EditResendNode.java:32` |
 | 880 | `consume.input` | 普通 | 消费当前轮输入（每轮） | worker | `ConsumeInputNode.java:24` |
 | 900 | `cascade.stop` | Upstream | 逐轮失败级联停 | worker | `CascadeStopNode.java:33` |

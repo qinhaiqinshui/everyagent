@@ -94,11 +94,13 @@ interface TaskListSelection {
 }
 
 /**
- * 任务列表行电池详情卡数据:把 TaskListItemSnapshot 整形为任务级汇总项
+ * 任务列表行电池详情卡数据:把 TaskListItemSnapshot 整形为**任务级汇总项**
  * (与聊天页电池详情卡同构,卡片信息与样式完全复用 AgentInfoHoverCard)。
  * contextUsage 本就是 worker usage 投影器的任务级聚合(任务下所有 agent 最近一轮
  * 上下文占用/窗口逐 agent 累加),创建时间用任务创建时间;列表行无 agentMeta 台账,
  * 累计 tokens 缺失,由卡片显示「—」(聊天页打开建流后由 agentMeta 求和补齐)。
+ * 汇总项不带任何 agent 身份(isAggregate=true,不填主 agent 的 agentId)——电池详情卡
+ * 只显示任务级汇总,主 agent 自己的用量只在任务详情的 agent 列表里显示。
  */
 function toBatteryAgentItem(task: TaskListItemSnapshot): AgentListItem | null {
   const usage = task.contextUsage
@@ -108,12 +110,12 @@ function toBatteryAgentItem(task: TaskListItemSnapshot): AgentListItem | null {
   const used = usage.promptTokens ?? usage.totalTokens ?? 0
   const windowTokens = usage.maxTokens
   return {
-    agentId: task.mainAgentId ?? '',
+    agentId: '',
     title: '全部 agent',
     status: task.status,
-    isMain: true,
+    isAggregate: true,
     meta: {
-      agentId: task.mainAgentId ?? '',
+      agentId: '',
       createdAt: task.createdAt > 0 ? task.createdAt : undefined,
       model: usage.model,
       contextUsed: used,
@@ -137,7 +139,7 @@ export default function TasksPanel({
   activeTaskId,
 }: {
   onSelect: (task: TaskListSelection) => void
-  onCreateNewTask?: (preset?: { workspace?: string; workerId?: string }) => void
+  onCreateNewTask?: (preset?: { workspace?: string }) => void
   onDeletedTasks?: (taskIds: string[]) => void
   embedded?: boolean
   activeTaskId?: string
@@ -238,7 +240,7 @@ export default function TasksPanel({
               actions: [{
                 id: `new:${entry.root}`,
                 label: '在此工作区新建任务',
-                onSelect: () => onCreateNewTask({ workspace: entry.root, workerId: entry.workerId }),
+                onSelect: () => onCreateNewTask({ workspace: entry.root }),
               }],
             }
           : null),

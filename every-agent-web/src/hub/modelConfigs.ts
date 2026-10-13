@@ -142,7 +142,7 @@ class ModelConfigsService {
    * 避免首屏/重连校准失败后将空列表永久钉在 UI(旧任务下拉因此为空)。
    */
   async refreshFor(workerId: string): Promise<void> {
-    if (!workerId) throw new Error('请先选择 worker')
+    if (!workerId) throw new Error('尚未连接 worker')
     const inFlight = this.refreshInFlight.get(workerId)
     if (inFlight) return inFlight
     const promise = (async () => {

@@ -127,7 +127,22 @@ public final class SlashTokenEncoder {
                 .encodeToString(value.getBytes(StandardCharsets.UTF_8));
     }
 
-    /** base64url 解码(补 = 填充)。 */
+    /**
+     * base64url 解码(补 = 填充)。
+     *
+     * <p><b>两种字母表都要能吃下</b>:URL-safe(`-`/`_`,与前端 {@code composerOpaqueToken.toBase64Url}
+     * 及本类 {@link #toBase64Url} 产出一致)与标准(`+`/`/`,手工构造/第三方来源)。
+     * 实现先把 URL-safe 字符归一到标准字符,再用<b>标准解码器</b>解码——不能用
+     * {@code getUrlDecoder()}:它只认 `-`/`_`,归一后的 `+`/`/` 会被判非法。
+     *
+     * <p>历史缺陷(2026-10 修复):原实现「归一化为标准字符 + {@code getUrlDecoder()}」,
+     * payload 的 base64 一旦含 `-`/`_`(即字母表 62/63 号字符;非 ASCII 内容必现——如
+     * 中文文件名 `图.png` 的 UTF-8 字节)就抛 {@code IllegalArgumentException},被
+     * {@link #parseToken} 的兜底 catch 吞成空 payload:token 解析出 kind/label 却拿不到
+     * path/扩展名,`@` 引用中文名图片因此不入附件、正文里的路径也不被改写;而纯 ASCII
+     * payload(如粘贴生成的 `paste-*.png`)不含 `-`/`_`,恒好——故表现为「粘贴能识别、
+     * `@` 引用失效」。
+     */
     public static String fromBase64Url(String value) {
         String normalized = value.replace('-', '+').replace('_', '/');
         int pad = (4 - (normalized.length() % 4)) % 4;
@@ -135,6 +150,6 @@ public final class SlashTokenEncoder {
         for (int i = 0; i < pad; i++) {
             sb.append('=');
         }
-        return new String(Base64.getUrlDecoder().decode(sb.toString()), StandardCharsets.UTF_8);
+        return new String(Base64.getDecoder().decode(sb.toString()), StandardCharsets.UTF_8);
     }
 }

@@ -368,7 +368,7 @@ function collectFiles(absPlugin, manifest) {
         {
           hints: [
             `先构建后端 jar：mvn -f "${path.join(absPlugin, 'pom.xml')}" package`,
-            'standalone 工程首次构建前，需先在宿主仓库根执行：mvn -pl every-agent-plugin-api -am install -DskipTests',
+            'standalone 工程首次构建前，需先在宿主仓库根执行：mvn -pl every-agent-plugin-parent,every-agent-plugin-api -am install -DskipTests',
           ],
         },
       )

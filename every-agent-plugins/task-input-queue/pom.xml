@@ -5,45 +5,16 @@
 
     <parent>
         <groupId>dev.everyagent</groupId>
-        <artifactId>every-agent-parent</artifactId>
-        <version>1.0.0</version>
-        <relativePath>../../pom.xml</relativePath>
+        <artifactId>every-agent-plugin-parent</artifactId>
+        <version>${revision}</version>
+        <relativePath>../../every-agent-plugin-parent/pom.xml</relativePath>
     </parent>
-    <version>1.0.0</version>
+    <version>0.1.0</version>
 
     <artifactId>task-input-queue</artifactId>
     <name>task-input-queue</name>
     <description>任务内输入队列插件（队列续跑 + 插入对话 + task.queueRemove/move RPC + 前端队列面板）</description>
 
-    <build>
-        <plugins>
-            <!-- 将插件根目录的 plugin.json 复制到 classpath 根目录，供 PluginRegistry 扫描 -->
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-resources-plugin</artifactId>
-                <executions>
-                    <execution>
-                        <id>copy-plugin-manifest</id>
-                        <phase>process-resources</phase>
-                        <goals>
-                            <goal>copy-resources</goal>
-                        </goals>
-                        <configuration>
-                            <outputDirectory>${project.build.outputDirectory}</outputDirectory>
-                            <resources>
-                                <resource>
-                                    <directory>${project.basedir}</directory>
-                                    <includes>
-                                        <include>plugin.json</include>
-                                    </includes>
-                                </resource>
-                            </resources>
-                        </configuration>
-                    </execution>
-                </executions>
-            </plugin>
-        </plugins>
-    </build>
 
     <dependencies>
         <dependency>
@@ -53,11 +24,6 @@
         <dependency>
             <groupId>dev.everyagent</groupId>
             <artifactId>every-agent-contract</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-test</artifactId>
-            <scope>test</scope>
         </dependency>
     </dependencies>
 </project>

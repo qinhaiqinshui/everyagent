@@ -1,5 +1,6 @@
 package dev.everyagent.worker.task.lifecycle;
 
+import dev.everyagent.plugin.api.attachment.UserInputMaterializer;
 import dev.everyagent.worker.hub.HubPool;
 import dev.everyagent.worker.agent.AgentLedger;
 import dev.everyagent.worker.modules.WorkspaceActivityTracker;
@@ -41,6 +42,7 @@ public class BuiltInTaskLifecycleNodes {
     private final InteractionServiceImpl asks;
     private final WorkspaceActivityTracker activityTracker;
     private final FileReferenceHandlerRegistry fileReferenceHandlerRegistry;
+    private final UserInputMaterializer userInputMaterializer;
     private final AgentLedger agentLedger;
 
     public BuiltInTaskLifecycleNodes(
@@ -52,6 +54,7 @@ public class BuiltInTaskLifecycleNodes {
             InteractionServiceImpl asks,
             WorkspaceActivityTracker activityTracker,
             FileReferenceHandlerRegistry fileReferenceHandlerRegistry,
+            UserInputMaterializer userInputMaterializer,
             AgentLedger agentLedger) {
         this.registry = registry;
         this.store = store;
@@ -61,6 +64,7 @@ public class BuiltInTaskLifecycleNodes {
         this.asks = asks;
         this.activityTracker = activityTracker;
         this.fileReferenceHandlerRegistry = fileReferenceHandlerRegistry;
+        this.userInputMaterializer = userInputMaterializer;
         this.agentLedger = agentLedger;
     }
 
@@ -75,7 +79,7 @@ public class BuiltInTaskLifecycleNodes {
         registry.register(new ModelSwitchTraceNode(), "worker");
         registry.register(new MainAgentNode(), "worker");
         // 轮次循环段（临界段内侧、每轮重入：queue.loop=870 插件节点在此之后切入）
-        registry.register(new FileReferenceProcessNode(fileReferenceHandlerRegistry), "worker");  // order=875
+        registry.register(new FileReferenceProcessNode(userInputMaterializer, fileReferenceHandlerRegistry), "worker");  // order=875
         registry.register(new ConsumeInputNode(), "worker");  // order=880
         // 成对节点（下行在段边界外、上行在临界段内）
         registry.register(new StatusNode(pool), "worker");       // order=840

@@ -73,7 +73,7 @@ sha256sum -c my-tool-0.1.0.eap.sha256
 
 | 清单字段 | 判定 | 缺产物时的报错（原文） |
 | --- | --- | --- |
-| 有 `main` | 收 `target/` 下全部非 sources/javadoc 的 `*.jar` 进 `lib/` | `清单声明了 main（java/full 形态），但 target/ 下没有可打包的 jar（sources/javadoc jar 不算）：<targetDir>`，提示先跑 `mvn -f "<pom.xml 路径>" package`（standalone 工程还提示先在宿主仓库根执行 `mvn -pl every-agent-plugin-api -am install -DskipTests`） |
+| 有 `main` | 收 `target/` 下全部非 sources/javadoc 的 `*.jar` 进 `lib/` | `清单声明了 main（java/full 形态），但 target/ 下没有可打包的 jar（sources/javadoc jar 不算）：<targetDir>`，提示先跑 `mvn -f "<pom.xml 路径>" package`（standalone 工程还提示先在宿主仓库根执行 `mvn -pl every-agent-plugin-parent,every-agent-plugin-api -am install -DskipTests`） |
 | 有 `webMain` | 必须存在 `web/index.js`；`web/` 递归收 `index.js` / `index.css` / `*.map`（跳过 `node_modules`） | `清单声明了 webMain（web/full 形态），但 web/index.js 不存在：<web/index.js 路径>`，提示先跑 `npm run build:plugins`（PowerShell 被执行策略拦截时用 `npm.cmd`）或 standalone 的 `node scripts/build.mjs` |
 | 两者都无 | 直接拒绝 | `plugin.json 既无 main 也无 webMain，无法判定打包形态` |
 
@@ -252,7 +252,7 @@ sandbox-wsl-ubuntu
 - `plugin.install` 对同 id 重复调用就是覆盖（`REPLACE_EXISTING`，`:231`）；手工路径则直接覆盖 `~/.everyagent/plugins/<id>/` 下的文件。
 - ⚠️ **运行中的 worker 可能锁着旧 jar**（Windows 上 `URLClassLoader` 打开过的文件删除/覆盖未必成功；未实测）。稳妥顺序：先 `plugin.disable` 或停 worker → 替换文件 → 重启。
 
-**版本的两套来源**：`.eap` 文件名 `<id>-<version>.eap` 取自 `plugin.json` 的 `version`；jar 文件名（`lib/<artifactId>-<pomVersion>.jar`）取自 pom 的 `<version>`。两者**互不校验、可以不一致**——worker 加载时不做任何版本比较或选择，`version` 字段只是给人看与 `plugin.list` 显示用。发布前自己保证一致（builtin 模板的 pom 版本已与清单同用 `{{version}}` 占位）。
+**版本的两套来源**：`.eap` 文件名 `<id>-<version>.eap` 取自 `plugin.json` 的 `version`；jar 文件名（`lib/<artifactId>-<pomVersion>.jar`）取自 pom 的 `<version>`。两者**互不校验**——worker 加载时不做任何版本比较或选择，`version` 字段只是给人看与 `plugin.list` 显示用。**仓库内插件（builtin 形态）两者同号**：插件 pom 的自身版本就取它自己的 `plugin.json` 的 version（脚手架内置模板的 `{{version}}` 占位即此意），故 `git-0.1.0.eap` ↔ `git-0.1.0.jar`。**唯一例外** `task-edit-resend`：它是根 reactor 模块、被 worker 以 test scope 编译期依赖（`<version>${revision}</version>`），自身版本随工程版本走，故包名取清单 `task-edit-resend-0.1.0.eap`、内含 `task-edit-resend-<工程版本>.jar`——仍无害。**插件自身版本与工程版本是两条线**：工程版本是根 pom 的 `<properties><revision>`（全仓唯一 Maven 版本写点，见 [ARCHITECTURE §3](../../ARCHITECTURE.md)），升级工程版本**不需要动任何插件 pom**，插件的 jar 名也不会跟着变——`scripts/bump-version.py` 只管工程版本与 js 包/前端版本，插件版本各归各。
 
 **无依赖解析 ⇒ 同名冲突风险**：`.eap` 不携带依赖元数据，worker 也不做解析。java 插件的隔离靠**每插件一个 `URLClassLoader`**（parent = worker 自身类加载器，插件之间互不可见，同名类冲突、依赖版本互踩在插件之间被物理隔开——见[后端总览](../backend/overview.md) §7.1）。两个例外要知道：① 插件与 worker 之间的同名类走 parent 委派，worker 侧优先；② **同名插件 id** 冲突时内置优先、外部被去重跳过（`PluginLoader` 收集结果按 source 稳定排序）——外部插件别取与内置重名的 id。
 

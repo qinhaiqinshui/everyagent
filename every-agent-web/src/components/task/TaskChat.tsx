@@ -47,7 +47,6 @@ import { taskStreamManager, type TaskStreamHandle } from '@/task/taskStream'
 import { workspaceRegistry, type WorkspaceEntry } from '@/hub/workspaceRegistry'
 import { modelConfigs, type ModelConfigInfo } from '@/hub/modelConfigs'
 import { useHub } from '@/hub/HubProvider'
-import type { WorkerInfo } from '@/hub/session'
 import { hubSession } from '@/hub/session'
 import { DRAFT_TASK_ID, getDraftPreset, subscribeDraftPreset } from './taskChatDraft'
 import '@/components/task/chatPanel.css'
@@ -268,10 +267,12 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
   // 任务状态/标题：订阅 taskStore 镜像。
   const entry = useTaskEntry(isDraft ? null : effectiveTaskId)
 
-  // 多 worker 定向:草稿态由用户显式选择 worker;老任务按任务归属 worker 定向。
-  // activeWorkerId 决定模型列表/工作区等数据源;ownerWorkerId 决定老任务 slash/续跑定向。
-  // 「在此工作区新建任务」会预置所属 worker,草稿挂载时直接读取预设。
-  const [draftWorkerId, setDraftWorkerId] = React.useState(getDraftPreset().workerId)
+  // 单 worker 连接模型:同一时刻只保留一条 worker 数据连接(hubSession 启用某台 worker 时
+  // 先断开并禁用其他 worker,见 session.disconnectOtherWorkers),故草稿态没有「选 worker」
+  // 这一步——草稿 worker 恒取目录里当前唯一 connected 的那台(在线 presence + 数据连接 open)。
+  // 它决定草稿的模型列表/工作区/slash/浏览目录数据源;老任务不参与(按任务归属 worker 定向,
+  // 见 ownerWorkerId)。历史遗留配置(多台同时 enabled)下目录可能有多台 connected,取首个。
+  const draftWorkerId = hub.directory.find((worker) => worker.connected)?.workerId ?? ''
   const activeWorkerId = isDraft ? draftWorkerId : (entry?.workerId ?? '')
   const ownerWorkerId = !isDraft ? (entry?.workerId ?? taskStore.get(effectiveTaskId)?.workerId ?? '') : ''
 
@@ -542,23 +543,13 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
   // 点其他组的"+"也能即时切换,草稿文本保留);未选时默认注册表首选根。
   const [draftWorkspaceOverride, setDraftWorkspaceOverride] = React.useState(getDraftPreset().workspace)
   React.useEffect(() => subscribeDraftPreset((preset) => {
-    if (preset.workerId) setDraftWorkerId(preset.workerId)
     if (preset.workspace) setDraftWorkspaceOverride(preset.workspace)
   }), [])
-  // 草稿可用 worker 候选:已连接 + 启用 + 已填 apiKey + 无连接错误 + 未在连接中。
-  const availableWorkers: WorkerInfo[] = hub.directory.filter(
-    (worker) => worker.online && worker.enabled && worker.hasApiKey && !worker.error && !worker.connecting,
-  )
-  // 草稿态工作区按所选 worker 定向;老任务用任务归属 worker,此处不参与。
+  // 草稿态工作区按当前连接 worker 定向;老任务用任务归属 worker,此处不参与。
   const draftWorkspaces: WorkspaceEntry[] = draftWorkerId ? workspaceRegistry.workspacesOf(draftWorkerId) : []
-  // 有效草稿工作区:显式选择 > 所选 worker 的首个工作区 > 全局首选根(未选 worker 时兜底)。
+  // 有效草稿工作区:显式选择 > 当前连接 worker 的首个工作区 > 全局首选根(无 worker 时兜底)。
   const effectiveDraftWorkspace = draftWorkspaceOverride
     || (draftWorkerId ? workspaceRegistry.workspacesOf(draftWorkerId)[0]?.root ?? '' : workspaceRegistry.primaryRoot() || '')
-  const handleSelectDraftWorker = React.useCallback((workerId: string) => {
-    setDraftWorkerId(workerId)
-    // 切换 worker 时清空旧工作区残留:否则旧 worker 的目录会沿用过来。
-    setDraftWorkspaceOverride('')
-  }, [])
   const handleSelectDraftWorkspace = React.useCallback((root: string) => {
     setDraftWorkspaceOverride(root)
   }, [])
@@ -584,7 +575,7 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
       return
     }
     if (isDraft && !draftWorkerId) {
-      setError('请先选择 worker')
+      setError('尚未连接 worker:请在设置页连接一台 worker 后再新建任务')
       return
     }
     if (isDraft && !effectiveDraftWorkspace) {
@@ -808,6 +799,12 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
   // 上下文占用优先取 worker 聚合快照(entry.contextUsage,与电池填充同源同值),
   // 缺省(未建流/旧数据)时回退 agentMeta 逐项求和;无任何数据时返回 null,电池内部
   // 由 monitor 快照兜底构造。
+  //
+  // 该项**不代表任何单个 agent**(isAggregate=true → 卡片标「全部 agent」+ 任务级汇总
+  // 徽标、不渲染 agentId 行):此前这里借主 agent 的 agentId/isMain 整形,电池详情卡因此
+  // 长得像主 agent 的卡片、把「Σ 全部 agent」读成主 agent 自己的用量(2026-10 修复)。
+  // 主 agent 卡片(agentListItems 中的 isMain 项)只显示其自身用量,数据源与子 agent
+  // 一致(agentMeta[''] ← 台账 + 流内 usage 事件)。
   const batteryItem = React.useMemo<AgentListItem | null>(() => {
     const mainItem = agentListItems.find((item) => item.isMain) ?? null
     const metas = agentListItems
@@ -841,14 +838,15 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
     const contextWindow = usage && usage.maxTokens > 0
       ? usage.maxTokens
       : sumMeta((meta) => meta.contextWindow)
-    const agentId = mainItem?.agentId ?? stableMainAgentId ?? ''
+    // 汇总项无 agent 身份:agentId 留空(卡片渲染为「全部 agent」+ 任务级汇总徽标),
+    // 状态/创建时间仍取任务口径(主 agent 的权威状态即任务状态、创建时间 = 任务创建时间)。
     return {
-      agentId,
+      agentId: '',
       title: '全部 agent',
       status: mainItem?.status ?? 'idle',
-      isMain: true,
+      isAggregate: true,
       meta: {
-        agentId,
+        agentId: '',
         createdAt: entry?.createdAt && entry.createdAt > 0 ? entry.createdAt : undefined,
         model: models.length > 0 ? models.join(' / ') : (usage?.model || undefined),
         inputTokens: sumMeta((meta) => meta.inputTokens),
@@ -862,7 +860,7 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
         ? Math.min(1, Math.max(0, contextUsed / contextWindow))
         : undefined,
     }
-  }, [agentListItems, entry, stableMainAgentId])
+  }, [agentListItems, entry])
 
   /** 点击 agent 长条:切换选中态(再点同一 agent 由面板回传 '' 恢复全部;轮次视图下仅高亮)。 */
   const handleSelectAgent = React.useCallback((agentId: string) => {
@@ -913,6 +911,17 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
 
   const submitDisabled = Boolean(!draft.text.trim() || submitting || (isDraft && !draftWorkerId) || (isDraft && !effectiveDraftWorkspace))
 
+  /**
+   * 草稿态「无 worker」提示:单 worker 模型下草稿 worker 自动解析,解析不到只有一个原因——
+   * 没有已连接的 worker。数据连接建连中(目录已发现该 worker,还在握手)不提示:那是瞬态,
+   * 按钮禁用即可,免得红字一闪而过;真正连不上(未配置/离线/鉴权失败)才引导去设置页。
+   */
+  const draftWorkerNotice = React.useMemo(() => {
+    if (!isDraft || draftWorkerId) return ''
+    if (hub.directory.some((worker) => worker.connecting)) return ''
+    return '尚未连接 worker:请在设置页连接一台 worker 后再新建任务'
+  }, [isDraft, draftWorkerId, hub.directory])
+
   // 草稿态：渲染与 n 版启动台一致的草稿面板（BrandMark 顶栏 + 空线程 + 输入区）。
   // 模型配置来自 worker(config.get),选中项经 task.create 的 configId 冻结进任务快照。
   if (isDraft) {
@@ -922,9 +931,6 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
         selectedLlmConfigId={selectedLlmConfigId}
         llmProfiles={llmProfiles}
         draft={draft}
-        workers={availableWorkers}
-        selectedWorker={draftWorkerId}
-        onSelectWorker={handleSelectDraftWorker}
         workerId={draftWorkerId}
         workspaces={draftWorkspaces}
         selectedWorkspace={effectiveDraftWorkspace}
@@ -932,7 +938,7 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
         onPickWorkspace={handlePickDraftWorkspace}
         submitLabel={submitting ? '发送中...' : '发送'}
         submitDisabled={submitDisabled}
-        error={error}
+        error={error || draftWorkerNotice}
         onChangeDraft={handleChangeDraft}
         onSelectLlmConfig={handleSelectLlmConfig}
         taskScopeTokens={scopeTokens}
@@ -1028,7 +1034,7 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
                         投影器聚合任务下所有 agent 最近一轮占用,task.updated 每轮实时推送;
                         聊天页与任务列表同源同值,流内不再单独维护)。
                         详情卡数据 = 任务级汇总项(任务下全部 agent 聚合,创建时间用任务
-                        创建时间,上下文占用/窗口逐 agent 累加)。 */}
+                        创建时间,上下文占用/窗口逐 agent 累加;不是主 agent 自己的用量)。 */}
                     <ContextBattery
                       taskId={effectiveTaskId}
                       monitor={entry?.contextUsage ?? null}

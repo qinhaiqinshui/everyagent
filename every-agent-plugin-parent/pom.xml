@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- ea: 插件 SDK parent —— 内置插件与外部插件共用的构建约定。
+
+     插件只继承本 pom，不继承应用的 every-agent-parent：
+       · Java 版本 / 编码 / 依赖版本管理（plugin-api、spring-ai-bom、Spring Boot BOM）来自
+         every-agent-parent，这里的插件继承链保证这些版本仍是单点源；
+       · 本 pom 额外提供「插件才需要」的东西：plugin.json 打包、测试栈、插件依赖管理。
+     本模块不引入 hub / worker 的任何东西，也不声明任何插件运行期依赖。
+     plugin-api 版本随工程版本（${revision}），插件 pom 一律不写版本。 -->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>dev.everyagent</groupId>
+        <artifactId>every-agent-parent</artifactId>
+        <version>${revision}</version>
+        <relativePath>../pom.xml</relativePath>
+    </parent>
+
+    <artifactId>every-agent-plugin-parent</artifactId>
+    <packaging>pom</packaging>
+    <name>every-agent-plugin-parent</name>
+    <description>插件 SDK parent：内置与外部插件共用的构建约定（Java 25 / 依赖版本管理 / plugin.json 打包 / 测试栈）</description>
+
+    <dependencyManagement>
+        <dependencies>
+            <!-- 插件唯一需要面向的 API。版本随工程版本（= ${revision}），指向本 SDK 的编译基线；
+                 插件 pom 里不写版本，升级工程版本时插件零改动。 -->
+            <dependency>
+                <groupId>dev.everyagent</groupId>
+                <artifactId>every-agent-plugin-api</artifactId>
+                <version>${revision}</version>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <dependencies>
+        <!-- 插件测试栈（test 作用域，子模块自动继承）：JUnit 5 / Mockito / AssertJ。
+             每个插件都会生成冒烟测试，故由 SDK 统一提供，插件 pom 不必重复声明。 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <!-- 把插件根目录的 plugin.json 复制进 classpath 根（target/classes 与 jar），
+             供 PluginLoader / BuiltInPluginScanner 发现。子模块零配置即可获得；
+             默认的 src/main/resources 同时保留（二者是并列的 resource，不是覆盖）。 -->
+        <resources>
+            <resource>
+                <directory>src/main/resources</directory>
+            </resource>
+            <resource>
+                <directory>${project.basedir}</directory>
+                <includes>
+                    <include>plugin.json</include>
+                </includes>
+            </resource>
+        </resources>
+    </build>
+</project>

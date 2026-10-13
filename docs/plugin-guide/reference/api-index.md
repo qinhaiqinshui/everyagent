@@ -63,7 +63,7 @@ has_children: false
 
 `WorkerPluginContext extends TaskPluginContext`，该父接口只声明上表 #14/#15 两个注册方法（`every-agent-plugin-api/.../task/TaskPluginContext.java:17,24`）。详解：[准入预检](../backend/task-and-rpc.md#1-taskadmissionpolicy--任务创建准入预检)、[洋葱节点](../backend/task-and-rpc.md#2-tasklifecyclenode--洋葱模型)。
 
-### 1.5 `WorkerServices` —— 服务清单（13 项）
+### 1.5 `WorkerServices` —— 服务清单（14 项）
 
 > 本表摘自 [后端总览 §6.3](../backend/overview.md#63-workerservices能取到什么逐个列)（逐项声明行号见该篇）；声明：`every-agent-plugin-api/.../WorkerServices.java`。插件只面向此接口编程，不依赖 worker 实现类。
 
@@ -74,6 +74,7 @@ has_children: false
 | `workspaces()` | 多工作区注册表、jailed 路径解析 | git（每方法首行 `sandboxFor`） |
 | `tokenEstimator()` | token 估算器（内置或插件注册版） | model-rate-limit |
 | `interaction()` | 用户交互服务（ask 提问 / 授权弹窗） | ai-review、image-vision |
+| `userInputMaterializer()` | 用户输入物化（@ 文件引用 → 「（附图:xxx）」正文 + 附件 Media；输入投递入口必用） | task-input-queue（插入对话） |
 | `config()` | worker 全局 `worker.*` 只读视图（≠ `ctx.config()`） | task-queue |
 | `ids()` | ID 生成器（单调递增 long + 短 ID） | — |
 | `stream()` | 事件扇出口（向 hub 连接广播，如 task.updated） | — |

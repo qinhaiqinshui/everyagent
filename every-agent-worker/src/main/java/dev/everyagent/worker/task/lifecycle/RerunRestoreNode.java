@@ -59,6 +59,10 @@ public final class RerunRestoreNode implements TaskLifecycleNode {
                 });
             }
             t.seedUsageMeta(meta.path("usage")); // 恢复最近一轮上下文用量(续跑后列表/电池数据不丢)
+            // 聚合口径的 per-agent 数据基一并恢复:只回灌聚合值(上一行)时,本轮第一条 usage
+            // 事件会把聚合重算成「仅本次运行出现过的 agent」,已终局子 agent 的快照被抹掉——
+            // 电池从「Σ 任务下全部 agent」塌成「主 agent 自己」(2026-10 修复)。
+            t.seedUsageRounds(meta.path("usageByAgent"));
             // 新事件从 meta.seqLast 水位续号(含瞬态占位水位,磁盘不再写占位行)
             t.log.seed(impl.rerunSeqLast());
         }

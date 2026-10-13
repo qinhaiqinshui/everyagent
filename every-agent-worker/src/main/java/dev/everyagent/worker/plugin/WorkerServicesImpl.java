@@ -1,6 +1,7 @@
 package dev.everyagent.worker.plugin;
 
 import dev.everyagent.plugin.api.WorkerServices;
+import dev.everyagent.plugin.api.attachment.UserInputMaterializer;
 import dev.everyagent.plugin.api.config.WorkerConfig;
 import dev.everyagent.plugin.api.event.StreamEmitter;
 import dev.everyagent.plugin.api.interaction.InteractionService;
@@ -48,6 +49,7 @@ public class WorkerServicesImpl implements WorkerServices {
     private final EventSink eventSink;
     private final IdGenerator idGenerator;
     private final StreamSourceRegistry streamSources;
+    private final UserInputMaterializer userInputMaterializer;
 
     public WorkerServicesImpl(OsSandbox sandbox, SandboxPathRegistry pathRegistry,
             WorkspaceManager workspaces,
@@ -56,7 +58,8 @@ public class WorkerServicesImpl implements WorkerServices {
             RoundIndexStore roundIndexStore,
             InteractionServiceImpl interaction,
             WorkerProperties workerProperties, EventSink eventSink,
-            StreamSourceRegistry streamSources) {
+            StreamSourceRegistry streamSources,
+            UserInputMaterializer userInputMaterializer) {
         this.sandbox = sandbox;
         this.pathRegistry = pathRegistry;
         this.workspaces = workspaces;
@@ -68,6 +71,7 @@ public class WorkerServicesImpl implements WorkerServices {
         this.workerProperties = workerProperties;
         this.eventSink = eventSink;
         this.streamSources = streamSources;
+        this.userInputMaterializer = userInputMaterializer;
         this.idGenerator = new IdGenerator() {
             @Override
             public long next() {
@@ -134,6 +138,11 @@ public class WorkerServicesImpl implements WorkerServices {
     @Override
     public InteractionService interaction() {
         return interaction;
+    }
+
+    @Override
+    public UserInputMaterializer userInputMaterializer() {
+        return userInputMaterializer;
     }
 
     @Override

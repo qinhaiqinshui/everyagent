@@ -80,12 +80,12 @@ stdin 不是 TTY 且没有 `--yes` 时，若连 id 都无法确定则直接报�
 
 | 组合 | 文件数 | 产物清单（相对插件根） |
 | --- | --- | --- |
-| java × builtin | 7 | `plugin.json`（含 main）、`pom.xml`（parent=every-agent-parent，relativePath `../../pom.xml`）、`README.md`、`.gitignore`、`src/main/java/<包路径>/<入口类>.java`、`src/main/resources/.gitkeep`、`src/test/java/<包路径>/<入口类>SmokeTest.java` |
-| java × standalone | 7 | 同上，唯 `pom.xml` 为无 parent 版（自带 groupId / 编码 / Java 25 属性与显式版本） |
+| java × builtin | 7 | `plugin.json`（含 main）、`pom.xml`（parent=every-agent-plugin-parent，relativePath `../../every-agent-plugin-parent/pom.xml`）、`README.md`、`.gitignore`、`src/main/java/<包路径>/<入口类>.java`、`src/main/resources/.gitkeep`、`src/test/java/<包路径>/<入口类>SmokeTest.java` |
+| java × standalone | 7 | 同上，唯 `pom.xml` 的 parent 块换成「实际 SDK 版本 + 空 relativePath」（外部工程解析不了 `${revision}`，改从本地仓库解析） |
 | web × builtin | 4 | `plugin.json`（仅 webMain）、`web/index.ts`、`README.md`、`.gitignore` —— 无 pom、无 npm 文件（类型检查与构建复用宿主） |
 | web × standalone | 8 | web × builtin 的 4 项 + npm 工具链 4 件：`package.json`、`tsconfig.json`、`scripts/build.mjs`、`vendor/@everyagent/plugin-api/index.d.ts`（无 pom） |
 | full × builtin | 8 | java × builtin 全套 + `web/index.ts`，其中 `plugin.json` 被替换为**同时含 main 与 webMain** 的合并版（overlay/full 覆盖 web 基础层那份，覆盖不增文件数）；无 npm 文件 |
-| full × standalone | 12 | java × standalone 全套（pom 为无 parent 版）+ `web/index.ts` + npm 工具链 4 件，`plugin.json` 同为 main + webMain 合并版 |
+| full × standalone | 12 | java × standalone 全套（pom 同为 SDK parent + 实际版本）+ `web/index.ts` + npm 工具链 4 件，`plugin.json` 同为 main + webMain 合并版 |
 
 命名推导（`lib/naming.mjs` 唯一事实源）：`{{package}}` = `dev.everyagent.plugin.<camelCase(id)>`；入口类简名 = PascalCase(id) + `Plugin`；`main` = 二者拼接。示例：id `pdf-viewer` → 包 `dev.everyagent.plugin.pdfViewer` → 入口 `dev.everyagent.plugin.pdfViewer.PdfViewerPlugin`。
 
@@ -108,7 +108,7 @@ stdin 不是 TTY 且没有 `--yes` 时，若连 id 都无法确定则直接报�
   L2  web/                    kind ∈ {web,  full} 时叠加
   L3  overlay/<kind>/         kind 整合层：overlay/java | overlay/web | overlay/full
   L4  overlay/<mode>/         mode 通用层：overlay/builtin | overlay/standalone
-  L5  overlay/<kind>-<mode>/  最特异层：overlay/web-standalone、overlay/full-builtin …
+  L5  overlay/<kind>-<mode>/  最特异层：overlay/web-standalone、overlay/full-standalone …
   不存在的层自动跳过（不必创建全部目录）；模板根不存在或一层都没命中 → 报错。
 
 三、冲突语义
@@ -170,24 +170,23 @@ templates/
 ├── web/                                       L2 kind ∈ {web, full}
 │   ├── plugin.json.tpl                        仅 webMain 的清单
 │   └── web/index.ts.tpl                       前端入口（PluginModule + 侧边栏项示例）
+├── java/pom.xml.tpl                           L2 kind ∈ {java, full}：唯一一份 pom 模板，
+│                                              继承插件 SDK parent；内置与外部形态的差异
+│                                              （parent 版本表达式 / relativePath）由生成器填变量
 └── overlay/
     ├── java/plugin.json.tpl                   L3 含 main 的清单
     ├── full/plugin.json.tpl                   L3 同时含 main + webMain（覆盖 web/ 基础层那份）
-    ├── java-builtin/pom.xml.tpl               L5 parent=every-agent-parent（relativePath ../../pom.xml）
-    ├── java-standalone/pom.xml.tpl            L5 无 parent，自带属性与显式版本
     ├── web-standalone/                        L5 npm 工具链 4 件
     │   ├── package.json.tpl
     │   ├── tsconfig.json.tpl
     │   ├── scripts/build.mjs.tpl              esbuild 选项与宿主 build-plugins.mjs 逐项一致
     │   └── vendor/@everyagent/plugin-api/index.d.ts.raw   类型副本（.raw 逐字节复制）
-    ├── full-builtin/pom.xml.tpl               L5 = java-builtin 版逐份拷贝
-    └── full-standalone/                       L5 = java-standalone 版 pom + web-standalone 版 npm 4 件拷贝
-        ├── pom.xml.tpl
+    └── full-standalone/                       L5 web-standalone 那 4 件的拷贝
         ├── package.json.tpl / tsconfig.json.tpl / scripts/build.mjs.tpl
         └── vendor/@everyagent/plugin-api/index.d.ts.raw
 ```
 
-pom 的四份（java-builtin / java-standalone / full-builtin / full-standalone）与 npm 的两套（web-standalone / full-standalone）是**逐字节拷贝**关系，文件内注释互相指向；改公共段落时必须同步改所有拷贝。
+pom 只有 **一份**（`java/pom.xml.tpl`，java 与 full 共用基础层），内置/外部两种形态的差异只是父坐标的写法，由生成器按 mode 填 `{{pluginParentVersion}}` / `{{pluginParentRelativePath}}`；npm 的两套（web-standalone / full-standalone）仍是**逐字节拷贝**关系，改一处要同步另一处。
 
 ## `.eap` 打包（`pack` 子命令）
 

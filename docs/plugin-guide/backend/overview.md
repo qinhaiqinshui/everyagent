@@ -98,14 +98,14 @@ worker 启动（Spring 容器装配完成 → PluginLoader.init() @PostConstruct
 every-agent-plugins/
 ├─ system-info/                     # java-only：最小形态
 │  ├─ plugin.json                   # 清单（enabled 在扫描期读的是这一份）
-│  ├─ pom.xml                       # parent=every-agent-parent，内联 maven-resources-plugin 复制清单
+│  ├─ pom.xml                       # parent=every-agent-plugin-parent（SDK parent，plugin.json 打包由它提供）
 │  ├─ src/main/java/dev/everyagent/plugin/sysinfo/
 │  │  ├─ SystemInfoPlugin.java      # main 指向的入口类
 │  │  ├─ SystemInfoAdvisorProvider.java
 │  │  └─ SystemInfoAdvisor.java
 │  └─ target/                       # mvn package 产物（被 git 忽略）
 │     ├─ classes/plugin.json        # ← 加载期实际读的 manifest（resolveManifestPath 优先它）
-│     └─ system-info-1.0.0.jar      # ← URLClassLoader 的 jar 来源
+│     └─ system-info-0.1.0.jar      # ← URLClassLoader 的 jar 来源（内置插件版本 = 自己 plugin.json 的 version，不随工程版本走）
 ├─ pdf-viewer/                      # 纯 web：只有 plugin.json + web/，无 target/ 也纳入
 └─ git/                             # java+web：main + webMain 并存
 
@@ -228,6 +228,7 @@ public class MyFirstPlugin implements EveryAgentPlugin {
 | `workspaces()` | `:35` | 工作区管理器（多工作区注册表、jailed 路径解析） |
 | `tokenEstimator()` | `:38` | Token 估算器（内置或插件注册的自定义实现） |
 | `interaction()` | `:41` | 用户交互服务（ask 提问 / 授权弹窗） |
+| `userInputMaterializer()` | `:52` | 用户输入物化服务（正文 + rawContent 里的 @ 文件引用 → 投喂模型就绪的多模态消息；**任何「把用户输入投给模型」的入口都走它**，详见 [工具 §4.3](tools-and-sandbox.md#43-消费链路)） |
 | `config()` | `:44` | worker 全局配置只读视图（`WorkerConfig`，即 `worker.*`；≠ `ctx.config()`） |
 | `ids()` | `:47` | ID 生成器（单调递增 long + 短 ID） |
 | `stream()` | `:50` | 事件扇出口（向 hub 连接广播） |

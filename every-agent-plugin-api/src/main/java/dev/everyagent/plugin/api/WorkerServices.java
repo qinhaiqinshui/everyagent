@@ -3,6 +3,7 @@ package dev.everyagent.plugin.api;
 import java.nio.file.Path;
 
 import dev.everyagent.plugin.api.config.WorkerConfig;
+import dev.everyagent.plugin.api.attachment.UserInputMaterializer;
 import dev.everyagent.plugin.api.event.StreamEmitter;
 import dev.everyagent.plugin.api.interaction.InteractionService;
 import dev.everyagent.plugin.api.model.EventEmitter;
@@ -39,6 +40,16 @@ public interface WorkerServices extends TaskServices {
 
     /** 用户交互服务（向用户发起提问/授权，同步或异步）。 */
     InteractionService interaction();
+
+    /**
+     * 用户输入物化服务：把一轮「正文 + rawContent（含文件引用 token）」输入物化为可投喂模型的
+     * {@code UserMessage}（token 解析 → {@code FileReferenceHandler} 分发 → 正文改写 → 附件
+     * 合并进任务 metadata + 转 Media），与任务轮次的输入预处理同一条实现。
+     *
+     * <p>任何「把一条用户输入投给模型」的插件入口（如任务队列「插入到当前对话」）都应经本服务，
+     * 不得自行拼装正文——否则 @ 文件引用会退化成裸路径文本（图片不进模型）。
+     */
+    UserInputMaterializer userInputMaterializer();
 
     /** Worker 配置只读视图（插件面向 WorkerConfig 接口编程）。 */
     WorkerConfig config();

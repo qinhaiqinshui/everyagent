@@ -15,7 +15,7 @@
  *   L2  web/                    kind ∈ {web,  full} 时叠加
  *   L3  overlay/<kind>/         kind 整合层：overlay/java | overlay/web | overlay/full
  *   L4  overlay/<mode>/         mode 通用层：overlay/builtin | overlay/standalone
- *   L5  overlay/<kind>-<mode>/  最特异层：overlay/web-standalone、overlay/full-builtin …
+ *   L5  overlay/<kind>-<mode>/  最特异层：overlay/web-standalone、overlay/full-standalone
  *   不存在的层自动跳过（不必创建全部目录）；模板根不存在或一层都没命中 → 报错。
  *
  * 三、冲突语义

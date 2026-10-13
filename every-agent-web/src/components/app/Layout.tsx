@@ -472,7 +472,7 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
         closeWorkspaceTabNowRef.current(tab.id)
       }
       if (taskTabs.length > 0) {
-        setDraftPreset({ workspace: '', workerId: '' })
+        setDraftPreset({ workspace: '' })
       }
     })
   }, [])
@@ -545,15 +545,15 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
     return nextTaskTab.id
   }, [openWorkspaceTab])
 
-  /** 新建任务:复用唯一草稿标签(已存在则激活);带预设工作区/worker 先切草稿预设(草稿文本保留)。
-   *  无预设(左侧栏/空首页通用新建入口)时清空预设,保持手动选择 worker/工作区。 */
+  /** 新建任务:复用唯一草稿标签(已存在则激活);带预设工作区先切草稿预设(草稿文本保留)。
+   *  无预设(左侧栏/空首页通用新建入口)时清空预设,保持手动选择工作区。 */
   const openDraftTaskTab = React.useCallback((
-    preset?: { workspace?: string; workerId?: string },
+    preset?: { workspace?: string },
   ): WorkspaceTaskChatTab['id'] => {
-    if (preset && (preset.workspace || preset.workerId)) {
+    if (preset?.workspace) {
       setDraftPreset(preset)
     } else {
-      setDraftPreset({ workspace: '', workerId: '' })
+      setDraftPreset({ workspace: '' })
     }
     return openTaskChatTab({ taskId: DRAFT_TASK_ID, title: '新任务' })
   }, [openTaskChatTab])

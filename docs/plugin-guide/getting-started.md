@@ -20,7 +20,7 @@ has_children: false
 | Every Agent 仓库 | 已克隆到本地 | builtin 形态（生成进 `every-agent-plugins/`）；standalone 形态只需能跑到脚手架目录 | — |
 
 - 脚手架 CLI 就在仓库根的 `create-everyagent-plugin/` 目录，**零运行时依赖**（只用 `node:*` 内置模块），不需要先 `npm install` 就能跑。
-- java / full 形态首次构建前需要在仓库根执行一次 `mvn -pl every-agent-plugin-api -am install -DskipTests`（把插件唯一允许的实现依赖装进本地 Maven 仓库；正常环境一次性，详见 §5）。
+- java / full 形态首次构建前需要在仓库根执行一次 `mvn -pl every-agent-plugin-parent,every-agent-plugin-api -am install -DskipTests`（把插件依赖的 SDK parent 与 API 装进本地 Maven 仓库；正常环境一次性，详见 §5）。
 
 ### 1.2 Windows PowerShell 的两个坑
 
@@ -144,8 +144,8 @@ sample-web/
 
 | 组合 | 文件数 | 生成什么 | 适合谁 | 下一步构建命令 |
 |---|---|---|---|---|
-| java × builtin | 7 | `plugin.json`（含 `main`）、`pom.xml`（parent=every-agent-parent）、入口类 + 冒烟测试 + 空 resources、README、`.gitignore` | 要给 agent 加后端能力（工具 / Advisor / RPC），且在宿主仓库内开发 | `mvn -f every-agent-plugins/<id>/pom.xml package` |
-| java × standalone | 7 | 同上，唯 `pom.xml` 为无 parent 版（自带 groupId / 编码 / Java 25 属性与显式版本） | 后端插件想在仓库外独立维护，产物走 `.eap` 分发 | 先 `mvn -pl every-agent-plugin-api -am install -DskipTests`（宿主仓库根，一次），再在插件目录 `mvn package` |
+| java × builtin | 7 | `plugin.json`（含 `main`）、`pom.xml`（parent=every-agent-plugin-parent）、入口类 + 冒烟测试 + 空 resources、README、`.gitignore` | 要给 agent 加后端能力（工具 / Advisor / RPC），且在宿主仓库内开发 | `mvn -f every-agent-plugins/<id>/pom.xml package` |
+| java × standalone | 7 | 同上，唯 `pom.xml` 的 parent 块换成「实际 SDK 版本 + 空 relativePath」（外部工程解析不了 `${revision}`，改从本地仓库解析） | 后端插件想在仓库外独立维护，产物走 `.eap` 分发 | 先 `mvn -pl every-agent-plugin-parent,every-agent-plugin-api -am install -DskipTests`（宿主仓库根，一次），再在插件目录 `mvn package` |
 | web × builtin | 4 | `plugin.json`（仅 `webMain`）、`web/index.ts`、README、`.gitignore`——无 pom、无 npm 文件 | 只要界面（侧边栏 / 视图），不动后端；**最快路径，本篇 §4 主线** | `cd every-agent-web` → `npm.cmd run build:plugins` |
 | web × standalone | 8 | web × builtin 的 4 项 + npm 工具链 4 件：`package.json`、`tsconfig.json`、`scripts/build.mjs`、`vendor/@everyagent/plugin-api/index.d.ts` | 前端插件在独立仓库开发（`@everyagent/plugin-api` 未发布 npm，自带类型副本） | 插件目录：`npm.cmd install` → `npm.cmd run build` |
 | full × builtin | 8 | java × builtin 全套 + `web/index.ts`；`plugin.json` 为**同时含 `main` 与 `webMain`** 的合并版（覆盖不增文件数） | 前后端联动（如前端调自注册 RPC），仓库内一体化开发 | mvn 与 build:plugins 两条都要（§5 + §4 步骤 3） |
@@ -230,11 +230,11 @@ npm.cmd run build:plugins
 java 与 full 的后端部分完全一致（full 只是多了 `web/index.ts` 与合并版 `plugin.json`）。要点：
 
 - **插件不进根 reactor**：根 `pom.xml` 的 `<modules>` 不包含 `every-agent-plugins/*`，所以必须 `-f` 单独构建，不能在仓库根裸跑 `mvn package` 指望带上网罗。
-- **首次需要装 plugin-api**：`dev.everyagent:every-agent-plugin-api` 未发布到 Maven Central（实测 404），本地仓库里得先有它。正常环境在仓库根执行一次即可：
+- **首次需要装 plugin-parent 与 plugin-api**：`dev.everyagent:every-agent-plugin-parent` 与 `dev.everyagent:every-agent-plugin-api` 均未发布到 Maven Central（实测 404），本地仓库里得先有它们。正常环境在仓库根执行一次即可：
 
 ```powershell
-# ① 仓库根，一次性：把插件唯一允许的实现依赖装进本地仓库
-mvn -pl every-agent-plugin-api -am install -DskipTests
+# ① 仓库根，一次性：把插件 SDK parent 与 API 装进本地仓库
+mvn -pl every-agent-plugin-parent,every-agent-plugin-api -am install -DskipTests
 
 # ② 单独构建插件（-f 指向插件 pom；冒烟测试随 package 一起跑，报告在 target/surefire-reports/）
 mvn -f every-agent-plugins/sample-java/pom.xml package
@@ -269,7 +269,7 @@ npm.cmd run build                # 即 node scripts/build.mjs，产物 web/index
 
 - **`tsc --noEmit` 开箱全绿**是修复后的状态：早期模板的 tsconfig 缺 react 类型映射会报错（计划步骤 9 发现的 P1），现已把 `react` / `react-dom` / `react/jsx-runtime` 的 paths 指向 `package.json` 预置的 `@types/react(-dom)`（web-standalone 与 full-standalone 两份模板同步修复），`npm install` 后零配置通过。被 PowerShell 拦截时用 `npx.cmd`。
 - **vendor 类型副本的升级方式**：`@everyagent/plugin-api` 未发布 npm，副本逐字节复制自宿主 `every-agent-plugin-api/js/index.ts`；宿主 API 升级后，重新把该文件复制覆盖 `vendor/@everyagent/plugin-api/index.d.ts` 即可。
-- **standalone 插件不会被内置扫描发现**（在仓库外），分发安装走 [打包与安装](guides/packaging-and-install.md)：`node <宿主仓库根>\create-everyagent-plugin pack .` 打出 `<id>-<version>.eap`，或手工把产物放进 worker 机器的 `~/.everyagent/plugins/<id>/`（jar 在 `lib/`、bundle 在 `web/index.js`、`plugin.json` 在顶层），重启 worker 生效。java × standalone 的 Maven 部分见 §5（同样需要先 `mvn -pl every-agent-plugin-api -am install -DskipTests` 装好本地依赖）。
+- **standalone 插件不会被内置扫描发现**（在仓库外），分发安装走 [打包与安装](guides/packaging-and-install.md)：`node <宿主仓库根>\create-everyagent-plugin pack .` 打出 `<id>-<version>.eap`，或手工把产物放进 worker 机器的 `~/.everyagent/plugins/<id>/`（jar 在 `lib/`、bundle 在 `web/index.js`、`plugin.json` 在顶层），重启 worker 生效。java × standalone 的 Maven 部分见 §5（同样需要先 `mvn -pl every-agent-plugin-parent,every-agent-plugin-api -am install -DskipTests` 装好本地依赖）。
 
 ## 7. 改点什么先试试（三个最小实验）
 

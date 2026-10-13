@@ -1,7 +1,30 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <configuration>
     <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
-    <include resource="org/springframework/boot/logging/logback/console-appender.xml"/>
+
+    <!--
+      CONSOLE appender 本地定义(不复用 Spring Boot console-appender.xml),经 ThresholdFilter
+      由 worker.console-log-threshold 门控,默认 OFF(完全静默):
+      desktop 打包版把 worker 进程 stdout/stderr 重定向进 ~/.everyagent/logs/worker.out.log
+      且永不轮转,CONSOLE 若保持开启,每条日志会与 worker.log 双份落盘、该文件无限膨胀
+      (2026-10 实测 5 周 313MB)。正式日志通道是下方 FILE(每日滚动、保留 7 天)。
+      - dev profile(application-dev.yml)置 INFO,IDE 运行恢复控制台输出;
+      - 打包环境临时排障:启动参数 -Dworker.console-log-threshold=INFO;
+      - JVM 原生崩溃输出(hs_err/OutOfMemoryError 到 stderr)不经本配置,仍落
+        worker.out.log 兜底——正常情况下该文件保持近零大小,仅作崩溃现场证据。
+      ThresholdFilter 取 OFF 时任何事件级别都达不到门槛 → 全部 DENY,stdout 零输出。
+    -->
+    <springProperty name="EA_CONSOLE_THRESHOLD" source="worker.console-log-threshold" defaultValue="OFF"/>
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <filter class="ch.qos.logback.classic.filter.ThresholdFilter">
+            <level>${EA_CONSOLE_THRESHOLD}</level>
+        </filter>
+        <encoder>
+            <pattern>${CONSOLE_LOG_PATTERN}</pattern>
+            <charset>${CONSOLE_LOG_CHARSET}</charset>
+        </encoder>
+    </appender>
+
 
     <!--
       日志目录解析链(优先级从高到低):

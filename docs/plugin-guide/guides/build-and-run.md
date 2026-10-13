@@ -29,7 +29,7 @@ has_children: false
 
 ### 1.2 一次性准备（按序）
 
-1. **java / full 形态**：仓库根先执行一次 `mvn -pl every-agent-plugin-api -am install -DskipTests`（为什么必须：见 §2.2）。
+1. **java / full 形态**：仓库根先执行一次 `mvn -pl every-agent-plugin-parent,every-agent-plugin-api -am install -DskipTests`（为什么必须：见 §2.2）。
 2. **web / full 形态（builtin）**：`cd every-agent-web; npm.cmd install` —— `build:plugins` / `typecheck` 分别依赖 `node_modules` 里的 esbuild 与 typescript（`every-agent-web/package.json:42-48` 的 devDependencies），没装过跑不起来。npm cache 不可写（受限环境）时加 `--cache "$env:TEMP\npm-cache"`。
 3. 之后进入日常循环：改代码 → §1.1 对应命令 → 按 §5 的生效边界重启 worker / 刷新页面。
 
@@ -53,18 +53,18 @@ mvn -f every-agent-plugins\<id>\pom.xml package -q             # 静默模式，
 2. 构建插件必须 `-f every-agent-plugins\<id>\pom.xml` 单独指过去（或 `cd` 进插件目录），这就是 §1.1 矩阵里所有 mvn 命令带 `-f` 的原因；
 3. 构建宿主（如 `mvn -pl every-agent-worker -am package`）同样不带任何插件（`task-edit-resend` 除外）——宿主与插件是两条构建线。
 
-插件 pom 的 parent 是 `dev.everyagent:every-agent-parent:1.0.0`（即根 pom，靠 `relativePath ../../pom.xml` 在磁盘上定位），依赖只有 `every-agent-plugin-api` + `spring-boot-starter-test`（test），**零 worker 依赖**——清单与字段逐项见[plugin.json 字段参考](../plugin-manifest.md)与[后端模型总览](../backend/overview.md)。
+插件 pom 的 parent 是 `dev.everyagent:every-agent-plugin-parent:1.0.1`（**插件 SDK parent**，坐标版本即根 pom 的工程版本，见根 pom 的 `<properties><revision>`；pom 里写的是 `${revision}` 表达式，靠 `relativePath ../../every-agent-plugin-parent/pom.xml` 在磁盘上定位，所以插件能脱离根 reactor 单独构建）。Java 版本 / 编码 / 依赖版本管理 / `plugin.json` 打包 / 测试栈全由它提供，所以插件 pom 只剩「坐标 + 自己额外需要的依赖」——通常整个 `<dependencies>` 只有 `every-agent-plugin-api`（**不写 `<version>`**，由 SDK parent 的 `dependencyManagement` 管），**零 worker 依赖**。⚠️ 插件的自身版本与工程版本**不同号**（脚手架默认给新插件 `0.1.0`），所以依赖里**不要写 `${project.version}`**——它解析的是本插件自己的版本。清单与字段逐项见[plugin.json 字段参考](../plugin-manifest.md)与[后端模型总览](../backend/overview.md)。
 
-### 2.2 首次准备：`install` plugin-api（为什么不能省）
+### 2.2 首次准备：`install` plugin-parent 与 plugin-api（为什么不能省）
 
-`dev.everyagent:every-agent-plugin-api` **未发布到 Maven Central**（repo1 上 `dev/everyagent/` 目录 404，实测）。`-f` 单独构建插件时，Maven 解析这个依赖只会去**本地仓库**找——新 clone 的机器上没有它，构建直接失败（Maven 标准报错形态：`Could not resolve artifact dev.everyagent:every-agent-plugin-api ...`；此前尝试过联网解析的机器还可能残留 `.lastUpdated` 失败缓存，执行下面的 `install` 即一并解决）。所以一次性执行：
+`dev.everyagent:every-agent-plugin-parent`（插件 SDK parent）与 `dev.everyagent:every-agent-plugin-api` **都未发布到 Maven Central**（repo1 上 `dev/everyagent/` 目录 404，实测）。`-f` 单独构建插件时，Maven 解析这两者只会去**本地仓库**找——新 clone 的机器上没有它们，构建直接失败（Maven 标准报错形态：`Could not resolve artifact dev.everyagent:every-agent-plugin-parent ...`；此前尝试过联网解析的机器还可能残留 `.lastUpdated` 失败缓存，执行下面的 `install` 即一并解决）。所以一次性执行：
 
 ```powershell
-# 仓库根，一次性：把 plugin-api（连同它依赖的 reactor 上游）装进本地 ~/.m2
-mvn -pl every-agent-plugin-api -am install -DskipTests
+# 仓库根，一次性：把插件 SDK parent 与 API（连同它们的 reactor 上游）装进本地 ~/.m2
+mvn -pl every-agent-plugin-parent,every-agent-plugin-api -am install -DskipTests
 ```
 
-`-pl` 指到 `every-agent-plugin-api`（根 pom.xml:23，它在 reactor 内所以 `-pl` 可用），`-am` 顺带构建其上游。正常环境执行这一次即可；`install` 会写 `~/.m2`，在写受限的环境里见下节替代方案。standalone 形态（仓库外工程）同样依赖这一步——API jar 只能这样本地供给，没有第二来源。
+`-pl` 指到 `every-agent-plugin-parent` 与 `every-agent-plugin-api`（都在 reactor 内所以 `-pl` 可用），`-am` 顺带构建其上游。正常环境执行这一次即可；`install` 会写 `~/.m2`，在写受限的环境里见下节替代方案。standalone 形态（仓库外工程）同样依赖这一步——SDK parent 与 API jar 只能这样本地供给，没有第二来源。
 
 ### 2.3 离线 / 受限环境配方（技巧，非必需）
 
@@ -141,7 +141,7 @@ node scripts\build-plugins.mjs --only <你的id> --watch     # 组合：只盯�
 
 | 方式 | 命令 / 入口 | 说明 |
 | --- | --- | --- |
-| 终端跑 exec jar | 仓库根：`java -jar every-agent-worker\target\every-agent-worker-1.0.0-exec.jar` | 可执行 jar（classifier=`exec`，`every-agent-worker/pom.xml:88-107` repackage 配置）；文件名版本随根 pom 演进，以 `target/` 下实际 `*-exec.jar` 为准 |
+| 终端跑 exec jar | 仓库根：`java -jar every-agent-worker\target\every-agent-worker-1.0.1-exec.jar` | 可执行 jar（classifier=`exec`，`every-agent-worker/pom.xml:88-107` repackage 配置）；文件名版本随根 pom 演进，以 `target/` 下实际 `*-exec.jar` 为准 |
 | Maven 直跑 | 仓库根：`mvn -f every-agent-worker\pom.xml spring-boot:run` | 免手动先 package；工作目录 = 执行目录 |
 | IDE | 主类 `dev.everyagent.worker.WorkerApplication`（声明于 `every-agent-worker/pom.xml:94`） | 务必核对运行配置的**工作目录**（§4.2） |
 | 桌面版 | Electron 拉起 | cwd = 安装包 resourcesPath，见 §7 |
@@ -176,7 +176,7 @@ Select-String -Path "$HOME\.everyagent\logs\worker.log" -Pattern '扫描到.*插
 目录覆盖除了 `-D` 系统属性，跟在 `java -jar` 后面的程序参数同样生效（Spring 命令行参数优先级更高，适合临时指定）：
 
 ```powershell
-java -jar every-agent-worker\target\every-agent-worker-1.0.0-exec.jar --worker.builtin-plugins-dir=<仓库根>\every-agent-plugins
+java -jar every-agent-worker\target\every-agent-worker-1.0.1-exec.jar --worker.builtin-plugins-dir=<仓库根>\every-agent-plugins
 ```
 
 ### 4.3 home-dir：正确覆盖方式（⚠️ 修正口径①）
@@ -186,10 +186,10 @@ java -jar every-agent-worker\target\every-agent-worker-1.0.0-exec.jar --worker.b
 ```powershell
 # 方式一：环境变量（yml 占位符直读）
 $env:EVERYAGENT_HOME = '<专用目录>'
-java -jar every-agent-worker\target\every-agent-worker-1.0.0-exec.jar
+java -jar every-agent-worker\target\every-agent-worker-1.0.1-exec.jar
 
 # 方式二：系统属性（规范键 worker.home-dir）
-java -Dworker.home-dir=<专用目录> -jar every-agent-worker\target\every-agent-worker-1.0.0-exec.jar
+java -Dworker.home-dir=<专用目录> -jar every-agent-worker\target\every-agent-worker-1.0.1-exec.jar
 ```
 
 > ⚠️ **修正口径①（步骤 8 真机实测）**：`-Deveryagent.worker.home-dir=...` **不绑定**——不存在 `everyagent.worker.*` 这个命名空间，该写法被静默忽略，worker 继续用默认 `~/.everyagent`。同理，所有 worker 配置（`sandbox.*`、`plugins-dir`、`builtin-plugins-dir`……）的键都是 `worker.` 前缀，别给它再包一层 `everyagent.`。
@@ -253,7 +253,7 @@ dev profile 用 8100 / 8200（`application-dev.yml:5,13`），步骤 8 的隔离
 $env:WORKER_ID       = 'verify-1'        # 别用默认 company-pc（防抢占）
 $env:EVERYAGENT_HOME = '<专用目录>'       # 隔离系统目录：日志/外部插件/workspaces 全部与日常实例分家
 java '-Dworker.hubs[0].url=ws://localhost:6111/ws' '-Dserver.port=6112' `
-     -jar every-agent-worker\target\every-agent-worker-1.0.0-exec.jar
+     -jar every-agent-worker\target\every-agent-worker-1.0.1-exec.jar
 ```
 
 （hub 连不上也没关系——§4.5 第 1 条，纯插件验证可以不起 hub。）
@@ -266,7 +266,9 @@ java '-Dworker.hubs[0].url=ws://localhost:6111/ws' '-Dserver.port=6112' `
 
 - `every-agent-desktop/package.json:16` 的 `build:assets` 依次执行 `build:backend && build:plugins && copy:plugins && build:web && build:jre && build:plugin-runtime`；
 - 其中 `build:plugins` = `python ../scripts/build-plugins.py`（`every-agent-desktop/package.json:11`），该包装脚本统一驱动 java 侧（`every-agent-plugins/*/pom.xml`）与 web 侧（`:219` 以 `run([node, WEB_BUNDLE_SCRIPT], cwd=WEB_DIR)` 调用 web 的 `build-plugins.mjs`，即 §3 的同一脚本——**唯一事实源，不重复实现**）；
-- `copy:plugins`（`every-agent-desktop/scripts/copy-plugins.mjs:1-6` 头注释）把插件产物 staging 到 `every-agent-desktop/resources/every-agent-plugins/`，经 electron-builder `extraResources` 进安装包的 `<resourcesPath>/every-agent-plugins/`；worker 打包态 cwd = resourcesPath 且不传 `builtin-plugins-dir`，§4.2 的默认解析正好命中；jar / manifest / bundle 任缺即报错中止（fail-fast，绝不带病打包）。
+- `copy:plugins`（`every-agent-desktop/scripts/copy-plugins.mjs:1-6` 头注释）把插件产物 staging 到 `every-agent-desktop/resources/every-agent-plugins/`，经 electron-builder `extraResources` 进安装包的 `<resourcesPath>/every-agent-plugins/`；worker 打包态 cwd = resourcesPath 且不传 `builtin-plugins-dir`，§4.2 的默认解析正好命中；jar / manifest / bundle 任缺即报错中止（fail-fast，绝不带病打包）。该脚本另支持 `--out=<dir>` 指定 staging 输出目录（缺省仍是桌面 `resources/`），供服务端部署复用同一套搬运规则。
+
+**服务端部署同一命门**：`deploy.py` 部署 **worker** 时也已接上这条链——先 `python scripts/build-plugins.py` 构建全部内置插件，再 `node every-agent-desktop/scripts/copy-plugins.mjs --out=<release>/worker/every-agent-plugins` staging 后随 release 上传（`--skip-plugins` 可关，关掉后服务端 worker 扫不到任何插件）；host 模式的 systemd 单元 `WorkingDirectory=<remote>/current/worker`，正好命中 §4.2 的 cwd 默认解析。**反向的坑**：只跑 `deploy.py webapp` 只会换前端 dist，**对插件行为零影响**——插件 web 产物由 worker 经 `plugin.webSource` 读**自己磁盘上的** `every-agent-plugins/<id>/web/index.js`，改了插件就必须让 worker 侧拿到新产物（重新部署 worker、重跑 `npm run dist` 重装桌面版，或直接替换该文件后刷新页面——worker 每次 RPC 现读，无需重启）。
 
 **未实测声明**：桌面安装包端到端是否随包分发并在用户机器上加载全部内置插件——本文未跑 `dist` 链验证，按「未实测」登记，不断言；设计意图即上述链路，另一个佐证是 `BuiltInPluginScanner.java:60` 的 WARN 文案专门点名了桌面安装包场景。现状登记见[已知问题与现状偏差](../reference/known-issues.md)。
 

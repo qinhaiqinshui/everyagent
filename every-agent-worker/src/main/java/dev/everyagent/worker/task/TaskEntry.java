@@ -411,6 +411,27 @@ public final class TaskEntry implements TaskRuntime {
         usageRoundByAgent.put(agentId, new Usage(in, out, total > 0 ? total : in + out));
         usageWindowByAgent.put(agentId,
                 ctxWindow > 0 ? ctxWindow : WorkerConfig.DEFAULT_CONTEXT_WINDOW_TOKENS);
+        recomputeAggregate(model.isEmpty() ? null : model);
+        // 先更新后广播:钩子内组装 runtimeSummaryJson(此刻已含本轮占用)再 fanout tasks 频道。
+        Runnable broadcast = onUsageBroadcast;
+        if (broadcast != null) {
+            try {
+                broadcast.run();
+            } catch (RuntimeException e) {
+                LOG.debug("usage 广播失败 task={} seq={}", taskId, r.seq(), e);
+            }
+        }
+    }
+
+    /**
+     * 由「各 agent 最近一轮」数据基重算任务级聚合占用:Σ inputTokens / Σ outputTokens /
+     * Σ totalTokens / Σ contextWindowTokens(model 由调用方给:usage 事件取本事件模型,
+     * 冷启动回灌不覆盖已恢复的模型名)。空基时各和为 0、窗口为 0(recordUsage 对 0 窗口不落值)。
+     *
+     * <p>只在 {@link #usageProjectionLock} 内被调用(投影串行;锁可重入,summaryJson 由投影
+     * 线程经广播钩子回调时亦在本锁内)。
+     */
+    private void recomputeAggregate(String model) {
         long sumIn = 0;
         long sumOut = 0;
         long sumTotal = 0;
@@ -423,15 +444,74 @@ public final class TaskEntry implements TaskRuntime {
         for (Long w : usageWindowByAgent.values()) {
             sumWindow += w;
         }
-        recordUsage(new Usage(sumIn, sumOut, sumTotal), sumWindow,
-                model.isEmpty() ? null : model);
-        // 先更新后广播:钩子内组装 runtimeSummaryJson(此刻已含本轮占用)再 fanout tasks 频道。
-        Runnable broadcast = onUsageBroadcast;
-        if (broadcast != null) {
-            try {
-                broadcast.run();
-            } catch (RuntimeException e) {
-                LOG.debug("usage 广播失败 task={} seq={}", taskId, r.seq(), e);
+        recordUsage(new Usage(sumIn, sumOut, sumTotal), sumWindow, model);
+    }
+
+    /**
+     * 各 agent 最近一轮用量快照(任务级聚合口径的数据基)→ 随 meta.json 落盘的
+     * {@code usageByAgent} 字段;空基返回 null(不写字段)。
+     *
+     * <p>键 = worker 日志里的真实 agentId(主 agent = mainAgentId,子/审议 agent = 各自 id),
+     * 与台账 agents.json 的 agentId 同口径;值 = 该 agent 最近一轮的 round 用量 + 窗口上限。
+     */
+    private ObjectNode usageByAgentJson() {
+        synchronized (usageProjectionLock) {
+            if (usageRoundByAgent.isEmpty()) {
+                return null;
+            }
+            ObjectNode root = Json.obj();
+            for (Map.Entry<String, Usage> e : usageRoundByAgent.entrySet()) {
+                Usage u = e.getValue();
+                ObjectNode item = root.putObject(e.getKey());
+                item.put("inputTokens", u.inputTokens());
+                item.put("outputTokens", u.outputTokens());
+                item.put("totalTokens", u.totalTokens());
+                Long w = usageWindowByAgent.get(e.getKey());
+                if (w != null && w > 0) {
+                    item.put("contextWindowTokens", w);
+                }
+            }
+            return root;
+        }
+    }
+
+    /**
+     * 再运行冷启动:从 meta.usageByAgent 恢复「各 agent 最近一轮上下文占用」数据基。
+     *
+     * <p>必须与 {@link #seedUsageMeta(JsonNode)} 成对恢复:{@code seedUsageMeta} 只回灌
+     * **聚合值**,不带 per-agent 数据基时,续跑后第一条 usage 事件会经
+     * {@link #recomputeAggregate} 把聚合重算成「仅本次运行出现过的 agent」——上一轮已终局的
+     * 子 agent 快照被整段抹掉,电池从「Σ 任务下全部 agent」塌成「主 agent 自己」
+     * (2026-10 修复:续跑后电池丢失其他子 agent 用量)。恢复后各 agent 仍由新 usage 事件
+     * 逐条覆盖(新轮覆盖旧轮),口径与单次运行内一致。
+     */
+    public void seedUsageRounds(JsonNode byAgent) {
+        if (byAgent == null || !byAgent.isObject()) {
+            return;
+        }
+        synchronized (usageProjectionLock) {
+            boolean seeded = false;
+            for (Map.Entry<String, JsonNode> e : byAgent.properties()) {
+                JsonNode item = e.getValue();
+                if (item == null || !item.isObject()) {
+                    continue;
+                }
+                long in = item.path("inputTokens").asLong(0);
+                long out = item.path("outputTokens").asLong(0);
+                if (in == 0 && out == 0) {
+                    continue; // 防御:无用量快照的条目不入数据基
+                }
+                long total = item.path("totalTokens").asLong(0);
+                long window = item.path("contextWindowTokens").asLong(0);
+                usageRoundByAgent.put(e.getKey(), new Usage(in, out, total > 0 ? total : in + out));
+                usageWindowByAgent.put(e.getKey(),
+                        window > 0 ? window : WorkerConfig.DEFAULT_CONTEXT_WINDOW_TOKENS);
+                seeded = true;
+            }
+            // 一条都没恢复(旧任务 meta 无该字段/形状异常):保持 seedUsageMeta 的聚合基线原样,
+            // 绝不把基线清零(空基重算会让电池塌回「暂无数据」)。
+            if (seeded) {
+                recomputeAggregate(null); // model 保持 seedUsageMeta 恢复值(本层不覆盖)
             }
         }
     }
@@ -480,6 +560,12 @@ public final class TaskEntry implements TaskRuntime {
         ObjectNode n = (ObjectNode) Json.toJson(s);
         // 稳定工作区 id(磁盘存储维度;TaskSummary record 保持不动,wire/meta 上额外携带)。
         n.put("workspaceId", workspaceId);
+        // 任务级聚合口径的 per-agent 数据基(再运行冷启动回灌,见 seedUsageRounds):
+        // 只随 meta 落盘(供续跑延续「Σ 全部 agent」),aggregate 值本身仍在 usage 字段。
+        ObjectNode byAgent = usageByAgentJson();
+        if (byAgent != null) {
+            n.set("usageByAgent", byAgent);
+        }
         // 任务级持久化数据随 meta 落盘:metadata Map 序列化(缺失 = 空 map,再运行据此保持)。
         if (!metadata.isEmpty()) {
             var metaObj = n.putObject("metadata");

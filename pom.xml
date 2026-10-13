@@ -12,7 +12,7 @@
 
     <groupId>dev.everyagent</groupId>
     <artifactId>every-agent-parent</artifactId>
-    <version>1.0.0</version>
+    <version>${revision}</version>
     <packaging>pom</packaging>
     <name>every-agent</name>
     <description>哪里都可以使用的 Agent —— worker 执行器 + hub 消息中心 + client SDK</description>
@@ -20,6 +20,7 @@
     <modules>
         <module>every-agent-contract</module>
         <module>every-agent-hub</module>
+        <module>every-agent-plugin-parent</module>
         <module>every-agent-plugin-api</module>
         <module>every-agent-plugins/task-edit-resend</module>
         <module>every-agent-worker</module>
@@ -28,8 +29,12 @@
     <properties>
         <java.version>25</java.version>
         <spring-ai.version>2.0.1</spring-ai.version>
-        <!-- 模块版本独立演进:contract(协议,低频)由该属性统一引用;worker/hub 版本见各自 pom -->
-        <every-agent-contract.version>1.0.0</every-agent-contract.version>
+        <!-- 全仓唯一版本源（CI-friendly versions）：升级只改这一行。
+             ① 各模块（contract/hub/worker/plugin-api 及根 reactor 内的插件）一律不写自身 <version>，继承本属性；
+             ② 仅运行时加载的内置插件各自持有自己的版本（与它自己的 plugin.json 的 version 同号）；
+             ③ 跨模块引用一律写 ${revision}，不要写 ${project.version} —— 后者解析的是「消费方自己」的版本，
+                在插件（自身版本与工程版本不同号）里会静默指错坐标。 -->
+        <revision>1.0.1</revision>
     </properties>
 
     <dependencyManagement>
@@ -44,13 +49,48 @@
             <dependency>
                 <groupId>dev.everyagent</groupId>
                 <artifactId>every-agent-contract</artifactId>
-                <version>${every-agent-contract.version}</version>
+                <version>${revision}</version>
             </dependency>
             <dependency>
                 <groupId>dev.everyagent</groupId>
                 <artifactId>every-agent-plugin-api</artifactId>
-                <version>${project.version}</version>
+                <version>${revision}</version>
             </dependency>
         </dependencies>
     </dependencyManagement>
+
+    <build>
+        <plugins>
+            <!-- CI-friendly versions 的官方搭配：install/deploy 用的 pom 把 ${revision} 解析成实际版本。
+                 不加它的话，装进本地仓库/发布出去的 pom 里仍是 ${revision}，仓库外消费者（脚手架 standalone
+                 工程、将来的 Maven Central 用户）解析 parent 会直接失败：
+                 「Could not find artifact every-agent-parent:pom:${revision}」。
+                 resolveCiFriendliesOnly：只解析 revision/sha1/changelist，其余内容原样保留。 -->
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>flatten-maven-plugin</artifactId>
+                <version>1.7.3</version>
+                <configuration>
+                    <updatePomFile>true</updatePomFile>
+                    <flattenMode>resolveCiFriendliesOnly</flattenMode>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>flatten</id>
+                        <phase>process-resources</phase>
+                        <goals>
+                            <goal>flatten</goal>
+                        </goals>
+                    </execution>
+                    <execution>
+                        <id>flatten.clean</id>
+                        <phase>clean</phase>
+                        <goals>
+                            <goal>clean</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
 </project>

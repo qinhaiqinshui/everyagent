@@ -11,10 +11,15 @@
   docker 旧模式：上传产物 + 运行时 docker-compose.yml，服务器用官方镜像挂载运行。
 
 本地都先编译：maven 打 hub/worker 可运行 jar，npm 打 webapp 的 dist；
+部署 worker 时还会一并构建内置插件（scripts/build-plugins.py：web bundle + 逐插件 mvn clean
+package），并用桌面打包链同一套 staging 规则（every-agent-desktop/scripts/copy-plugins.mjs
+--out）把产物放到本次 release 的 worker/every-agent-plugins/ —— worker 打包态 cwd 就是那里，
+BuiltInPluginScanner 按 cwd 扫内置插件。不要这步时加 --skip-plugins（那位 worker 将无任何插件）。
 再把产物上传到服务器（默认 ~/every-agent/releases/<ts>，软链 current）。
 
 依赖：paramiko   （pip install paramiko；--list / --dry-run 不需要）
-本地前置：能跑 mvn（Java 25）与 npm（Node 22）以产出 jar / dist
+本地前置：能跑 mvn（Java 25）、npm（Node 22）与 node 以产出 jar / dist / 插件产物；
+          worker 侧的内置插件 jar 被运行中的 worker 锁定时 clean 会失败——构建前请先停掉本机 worker。
 服务器前置（host 模式）：nginx（已装）、systemd；Java 25 需可用——可手动预装
           openjdk-25-jre-headless，或由脚本在缺失时 apt 安装（幂等，已装则跳过）。
           hub 端口 6101 由 nginx 反代（/hub/）对外暴露，防火墙只需开 80（默认）。需 sudo（建议免密）。
@@ -385,6 +390,52 @@ def find_worker_jar() -> Path:
     return sorted(cands)[-1]
 
 
+def build_builtin_plugins(cfg) -> None:
+    """构建全部内置插件（web bundle + 逐插件 mvn clean package）。
+
+    复用唯一入口 scripts/build-plugins.py（与桌面打包链同一份构建逻辑），不另起一套。
+    """
+    script = REPO_ROOT / "scripts" / "build-plugins.py"
+    if not script.is_file():
+        raise FileNotFoundError(f"未找到插件构建脚本: {script}")
+
+    jdk_bin = "java.exe" if os.name == "nt" else "java"
+    if not cfg.java_home or not Path(cfg.java_home, "bin", jdk_bin).exists():
+        sys.exit(f"java_home 无效: {cfg.java_home!r} —— 内置插件的 mvn 构建需要 JDK 25，"
+                 f"请用 --java-home / DEPLOY_JAVA_HOME 指向 JDK 25")
+    java_env = dict(os.environ)
+    java_env["JAVA_HOME"] = cfg.java_home
+    java_env["PATH"] = cfg.java_home + os.sep + "bin" + os.pathsep + java_env.get("PATH", "")
+
+    # build-plugins.py 内部按 PATH 找 node（它没有 --node 参数）：--node 给的是绝对路径时，
+    # 显式把其所在目录塞进 PATH，避免「node 可用但不在 PATH」时构建失败。
+    node = (getattr(cfg, "node", "") or "node").strip() or "node"
+    node_path = Path(node)
+    if node_path.is_absolute() and node_path.parent.is_dir():
+        java_env["PATH"] = str(node_path.parent) + os.pathsep + java_env["PATH"]
+
+    python = sys.executable or "python"
+    cmd = (f'"{python}" "{script}" --maven "{cfg.mvn}" --java-home "{cfg.java_home}"')
+    # 单插件失败由脚本自己汇总退出码；这里是确定性构建，不做退避重试。
+    run_local(cmd, REPO_ROOT, env=java_env, retries=0)
+
+
+def stage_builtin_plugins(cfg, out_dir: Path) -> int:
+    """把内置插件产物 staging 到 out_dir，返回插件目录数。
+
+    结构规则复用 every-agent-desktop/scripts/copy-plugins.mjs（与桌面安装包同一套：
+    根 plugin.json + Java 插件的 target/{classes/plugin.json,*.jar} + web 产物 + README + bin/，
+    enabled=false 不搬），故服务端 worker 看到的插件布局与发行版一致。--out 指到本次
+    release 的 worker/every-agent-plugins/。
+    """
+    script = REPO_ROOT / "every-agent-desktop" / "scripts" / "copy-plugins.mjs"
+    if not script.is_file():
+        raise FileNotFoundError(f"未找到插件 staging 脚本: {script}")
+    node = (getattr(cfg, "node", "") or "node").strip() or "node"
+    run_local(f'"{node}" "{script}" --out="{out_dir}"', REPO_ROOT, retries=0)
+    return sum(1 for p in out_dir.iterdir() if p.is_dir()) if out_dir.is_dir() else 0
+
+
 def build_artifacts(cfg, services) -> Path:
     staging = Path(tempfile.mkdtemp(prefix="eadeploy-"))
     log(f"本地构建产物到临时目录: {staging}")
@@ -419,6 +470,18 @@ def build_artifacts(cfg, services) -> Path:
         d.mkdir(parents=True, exist_ok=True)
         shutil.copy(find_worker_jar(), d / "app.jar")
         log("已暂存 worker 产物 -> worker/app.jar")
+        # 内置插件必须随 worker 一起发：插件 jar 与 web 产物都不在 worker jar 内，
+        # BuiltInPluginScanner 按 cwd 扫 <cwd>/every-agent-plugins/（systemd 单元的
+        # WorkingDirectory=current/worker，正好命中这里）。只发 jar 的话服务端 worker
+        # 一个插件都扫不到；而改了插件 web 产物只跑 `deploy.py webapp` 更不会生效
+        # （webapp 只传前端 dist，插件 bundle 由 worker 经 plugin.webSource 从磁盘读）。
+        if getattr(cfg, "skip_plugins", False):
+            log("[警告] --skip-plugins: 跳过内置插件构建/上传，服务端 worker 将不含任何内置插件")
+        else:
+            log("内置插件: 与 worker 一起构建并上传（scripts/build-plugins.py + copy-plugins.mjs --out）")
+            build_builtin_plugins(cfg)
+            count = stage_builtin_plugins(cfg, d / "every-agent-plugins")
+            log(f"已暂存 {count} 个内置插件 -> worker/every-agent-plugins/")
     if "webapp" in services:
         src = REPO_ROOT / "every-agent-web" / "dist"
         if not src.is_dir():
@@ -656,6 +719,9 @@ def deploy(cfg, services) -> None:
         if java:
             mods = ",".join(f"every-agent-{s}" for s in java)
             print(f"  mvn -B -pl {mods} -am package -Dmaven.test.skip=true")
+        if "worker" in services and not getattr(cfg, "skip_plugins", False):
+            print("  python scripts/build-plugins.py --maven <mvn> --java-home <JDK25>   # 内置插件：web bundle + 逐插件 mvn")
+            print("  node every-agent-desktop/scripts/copy-plugins.mjs --out=<staging>/worker/every-agent-plugins")
         if "webapp" in services:
             print("  (cd every-agent-web && npm run build)  # 不执行 npm install，直接打包")
         print("\n---- 上传内容 ----")
@@ -664,6 +730,10 @@ def deploy(cfg, services) -> None:
                 print("  hub/app.jar")
             elif s == "worker":
                 print("  worker/app.jar")
+                if getattr(cfg, "skip_plugins", False):
+                    print("  (worker/every-agent-plugins/ 已由 --skip-plugins 跳过)")
+                else:
+                    print("  worker/every-agent-plugins/   # 内置插件产物（worker 按 cwd 扫描）")
             elif s == "webapp":
                 print("  webapp/dist/")
         mode = getattr(cfg, "mode", "host")
@@ -761,6 +831,10 @@ def parse_args(argv):
     p.add_argument("--no-deps", action="store_true", help="部署时不连带拉起所依赖的服务")
     p.add_argument("--pull", action="store_true", help="up 时强制拉取最新官方镜像")
     p.add_argument("--prune", action="store_true", help="部署后执行 docker image prune -f")
+    p.add_argument("--node", help="本地 node 可执行文件（默认 node / DEPLOY_NODE；内置插件 staging 用）")
+    p.add_argument("--skip-plugins", action="store_true",
+                   help="部署 worker 时跳过内置插件（every-agent-plugins/）的构建与上传；"
+                        "注意服务端 worker 将扫不到任何内置插件（前端插件 UI 全缺）")
     p.add_argument("--skip-install", action="store_true", help="跳过远端 apt-get 安装（Java/nginx）；需已手动安装好这些包，用于避开 dpkg 锁冲突等问题")
     p.add_argument("--dry-run", action="store_true", help="仅本地预览，不构建/不上传/不连接服务器")
     p.add_argument("--list", action="store_true", help="列出可部署服务后退出")
@@ -797,6 +871,7 @@ def parse_args(argv):
     args.mvn = args.mvn or os.environ.get("DEPLOY_MVN") or local.get("DEPLOY_MVN", "mvn")
     args.npm = args.npm or os.environ.get("DEPLOY_NPM") or local.get("DEPLOY_NPM", "npm")
     args.java_home = args.java_home or os.environ.get("DEPLOY_JAVA_HOME") or local.get("DEPLOY_JAVA_HOME") or os.environ.get("JAVA_HOME", "")
+    args.node = args.node or os.environ.get("DEPLOY_NODE") or local.get("DEPLOY_NODE", "node")
     args.workspace_root = args.workspace_root or os.environ.get("DEPLOY_WORKSPACE_ROOT") or local.get("WORKSPACE_ROOT", "")
     args.hub_key = args.hub_key or os.environ.get("DEPLOY_HUB_KEY") or local.get("HUB_KEY", "")
     args.web_port = args.web_port or int(os.environ.get("DEPLOY_WEB_PORT") or local.get("DEPLOY_WEB_PORT", "80"))
@@ -828,7 +903,7 @@ def main():
         log("模式: DRY RUN（不连接服务器）")
     else:
         log(f"服务器: {args.user}@{args.host}:{args.port}  远端目录: {args.remote_dir}")
-        log(f"本地工具链: mvn={args.mvn}  npm={args.npm}")
+        log(f"本地工具链: mvn={args.mvn}  npm={args.npm}  node={args.node}")
     deploy(args, args.services)
 
 

@@ -318,7 +318,8 @@ public final class CodexCommandExecutor {
     private SessionRun runInSession(String command, CodexSandboxOptions options)
             throws IOException {
         Path home = options.codexHome();
-        List<Path> roots = sessionWriteRoots();
+        NetworkIdentity identity = options.networkIdentity(manager.networkDenied());
+        List<Path> roots = withSandboxProfileRoot(sessionWriteRoots(), identity);
         Map<String, String> capSids = new LinkedHashMap<>();
         List<RootPolicy.WriteRoot> writeRoots = new ArrayList<>();
         for (Path root : roots) {
@@ -332,7 +333,6 @@ public final class CodexCommandExecutor {
         preflight.refresh(options, capSids, roots, manager.readRoots());
         long tPreflight = System.nanoTime();
 
-        NetworkIdentity identity = options.networkIdentity(manager.networkDenied());
         String username = SandboxAccounts.usernameFor(options.accountPrefix(), identity);
         RunnerClient.RunnerConfig cfg = runnerConfigFactory.create(options, username);
         long tConfig = System.nanoTime();
@@ -375,7 +375,7 @@ public final class CodexCommandExecutor {
         }
         CodexSandboxSession.SessionSpec spec = new CodexSandboxSession.SessionSpec(
                 argv, workspaceRoot.toString(),
-                childEnv(rgBinary, workspaceRoot, sandboxProfileDir()),
+                childEnv(rgBinary, workspaceRoot, sandboxProfileDir(identity)),
                 timeoutMs > 0 ? timeoutMs : null, policy.writeRoots(), List.of(),
                 CapSids.workspaceCapSidForCwd(home, workspaceRoot),
                 wireName(identity), false, null);
@@ -809,6 +809,19 @@ public final class CodexCommandExecutor {
             env.put("HOME", profileDir.toString());
             env.put("APPDATA", profileDir.resolve("AppData").resolve("Roaming").toString());
             env.put("LOCALAPPDATA", profileDir.resolve("AppData").resolve("Local").toString());
+            // 老式拼法 %HOMEDRIVE%%HOMEPATH% 与现代变量必须同源:NT 时代登录进程设置的
+            // 这对变量仍被少数老工具(unix 移植脚本/Perl/老批处理)拼用来定位 home;沙箱
+            // 进程链从宿主继承的值(C: + \Users\<宿主用户>)若不覆盖,则与现代变量重定向
+            // 后的沙箱 profile 形成「脑裂」——读侧静默借读宿主 .gitconfig/.npmrc/.ssh
+            // (区外只读不报错,泄露面),写侧受限令牌 EPERM。取值对齐真实
+            // LOGON_WITH_PROFILE 登录:HOMEDRIVE 带尾分隔符("C:\"),拼接后出现重复
+            // 分隔符属原生形态,Windows 容忍。profileDir 无根(非 Windows 单测相对
+            // 路径)时跳过——该平台本无此约定。
+            Path profileRootDir = profileDir.getRoot();
+            if (profileRootDir != null) {
+                env.put("HOMEDRIVE", profileRootDir.toString());
+                env.put("HOMEPATH", "\\" + profileRootDir.relativize(profileDir));
+            }
         }
         if (workspaceRoot != null) {
             injectGitConfig(env, workspaceRoot);
@@ -878,6 +891,44 @@ public final class CodexCommandExecutor {
         String prefix = manager.options().accountPrefix();
         String username = SandboxAccounts.onlineUsername(prefix);
         return Path.of(System.getenv().getOrDefault("SystemDrive", "C:"), "Users", username);
+    }
+
+    /**
+     * 按网络身份推导 profile 目录：env 重定向（USERPROFILE/APPDATA/LOCALAPPDATA）与
+     * runner 登录账户必须同源——此前恒取 online 账户,offline 会话里令牌是 Offline
+     * 账户而 env 指向 Online 的 profile,受限令牌下用户级缓存（npm/pip/m2/gradle）
+     * 写入全拒。本会话 identity 见 {@link #runInSession}。
+     */
+    Path sandboxProfileDir(NetworkIdentity identity) {
+        String prefix = manager.options().accountPrefix();
+        String username = SandboxAccounts.usernameFor(prefix, identity);
+        return Path.of(System.getenv().getOrDefault("SystemDrive", "C:"), "Users", username);
+    }
+
+    /**
+     * 沙箱账户 profile 树补为本会话写根。childEnv 已把 USERPROFILE/HOME/APPDATA/
+     * LOCALAPPDATA 指向该目录,npm/pip 等包管理器的默认缓存全部落在此树内;而
+     * WRITE_RESTRICTED 受限令牌下唯有预配了「组+cap」双主体 ACE 的写根可写——
+     * profile 不进写根集合则用户级缓存一律 EPERM（历史上曾靠手工逐目录 grant 打
+     * 补丁,残留 cap ACE 为证）。与工作区根同机制（同源 cap、同 preflight 预配）,
+     * 仅覆盖沙箱账户自己的 profile,宿主用户目录边界不变。仅在 Windows 附加,按
+     * canonical key 去重;profile 目录尚未创建（首启前）时 preflight 落 ACE 为
+     * best-effort 失败,不阻塞执行,runner 首启创建后自然生效。
+     */
+    List<Path> withSandboxProfileRoot(List<Path> roots, NetworkIdentity identity) {
+        if (!WINDOWS) {
+            return roots; // 非 Windows 单测/探测路径 no-op
+        }
+        Path profileRoot = sandboxProfileDir(identity);
+        String key = CapSids.canonicalPathKey(profileRoot);
+        boolean present = roots.stream()
+                .anyMatch(r -> CapSids.canonicalPathKey(r).equals(key));
+        if (present) {
+            return roots;
+        }
+        List<Path> merged = new ArrayList<>(roots);
+        merged.add(profileRoot);
+        return merged;
     }
 
     /** 父环境继承 + 凭据剔除（审计只打变量名，绝不打值）；同口径供 runner 复用。 */

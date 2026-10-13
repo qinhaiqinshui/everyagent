@@ -58,7 +58,7 @@ has_children: false
 ```
 every-agent-plugins/<id>/
 ├── plugin.json                      # 唯一清单：id / name / version / description / author / enabled + main / webMain
-├── pom.xml                          # 仅 java 形态需要；parent = dev.everyagent:every-agent-parent:1.0.0
+├── pom.xml                          # 仅 java 形态需要；parent = dev.everyagent:every-agent-plugin-parent:1.0.1
 ├── src/main/java/…/<Id>Plugin.java  # 实现 EveryAgentPlugin，activate(ctx) 里注册一切能力
 ├── web/
 │   ├── index.ts                     # 前端入口（源码）
@@ -88,7 +88,7 @@ worker 侧的判定规则（`every-agent-worker/src/main/java/dev/everyagent/wor
 | bare import 白名单只有 7 项：`react`、`react-dom`、`react/jsx-runtime`、`antd`、`@ant-design/icons`、`react-markdown`、`remark-gfm`，运行时改写为 7 个 `window.__EA_*` 全局 | 同上 §4 |
 | 仓库内插件的 `web/*.ts` 由宿主 `every-agent-web/tsconfig.json` 的 `include` 覆盖，**无需自带 tsconfig** | `every-agent-web/tsconfig.json` |
 | `enable` / `disable` / `install` / `uninstall` 一律**重启 worker 才生效**（无热重载；`deactivate` 仅在 worker 优雅关闭时调用） | `../ARCHITECTURE.md` §8.5 |
-| `@everyagent/plugin-api`（js 与 Java，均已对齐 1.0.0）**均未发布**到公共仓库（npm / Maven Central 实测 404），故仓库外开发需自带类型副本 | `.everyagent/plan-plugin-scaffold-docs.md` |
+| `@everyagent/plugin-api`（js 与 Java 两侧同号，都随根 pom 的 `<revision>` 单点源走）**均未发布**到公共仓库（npm / Maven Central 实测 404），故仓库外开发需自带类型副本 | `.everyagent/plan-plugin-scaffold-docs.md` |
 
 ## 4. 能力面速查与术语
 

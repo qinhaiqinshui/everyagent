@@ -481,9 +481,57 @@ class CodexCommandExecutorTest {
         assertFalse(capture.spec.writeRoots().isEmpty(), "至少含工作区根");
         assertTrue(capture.spec.workspaceCapSid().startsWith("S-1-5-21-"),
                 "workspace cap SID 惰性创建");
-        assertEquals(1, capture.prefetchedRoots.size(), "preflight 收到会话写根");
+        assertEquals(2, capture.prefetchedRoots.size(),
+                "preflight 收到会话写根(工作区+沙箱账户 profile)");
+        assertTrue(capture.prefetchedRoots.stream().anyMatch(r -> r.getFileName() != null
+                        && r.getFileName().toString().endsWith(capture.cfg.username())),
+                "profile 树纳入写根(env 已指向它,npm/pip 等用户级缓存落此树内,"
+                        + "不预配则受限令牌下全拒):" + capture.prefetchedRoots);
         assertTrue(capture.cfg.username().endsWith("Online"),
                 "auto+未断网 → Online 账户");
+    }
+
+    @Test
+    void offlineSessionEnvAndProfileMatchIdentity() {
+        FakeSession session = new FakeSession(new FramedMessage(6, new Exit(0, false)));
+        Capture capture = new Capture(session);
+        CodexSandboxManager manager = new CodexSandboxManager(
+                new CodexSandboxOptions(tempDir, null,
+                        CodexSandboxOptions.POLICY_OFFLINE, null, false, null), 30_000);
+        new CodexCommandExecutor(manager, tempDir.resolve("ws"), null, false,
+                (cfg, spec) -> {
+                    capture.cfg = cfg;
+                    capture.spec = spec;
+                    return session;
+                },
+                (options, capSids, writeRoots, readRoots) -> capture.prefetchedRoots =
+                        new ArrayList<>(writeRoots),
+                (options, username) -> new RunnerClient.RunnerConfig(
+                        options.codexHome(), username, "pw", "cp", "java.home", "cwd"))
+                        .execute("dir", "powershell");
+        assertTrue(capture.cfg.username().endsWith("Offline"),
+                "offline 策略 → Offline 账户");
+        String up = capture.spec.env().get("USERPROFILE");
+        assertNotNull(up, "env 含 USERPROFILE");
+        assertTrue(up.endsWith(capture.cfg.username()),
+                "offline 会话 env 指向本账户 profile(修 sandboxProfileDir 恒取 online 的错配):"
+                        + up);
+        // 老式拼法 %HOMEDRIVE%%HOMEPATH% 须与现代变量同源(修从宿主继承导致的「脑裂」:
+        // 读侧静默借读宿主 .gitconfig/.ssh,写侧受限令牌 EPERM)。非 Windows 单测无
+        // 此约定(HOMEPATH 为 null),仅 Windows 断言。
+        String homePath = capture.spec.env().get("HOMEPATH");
+        if (homePath != null) {
+            String drive = capture.spec.env().get("HOMEDRIVE");
+            assertNotNull(drive, "HOMEPATH 存在则 HOMEDRIVE 必存在");
+            assertTrue(homePath.endsWith(capture.cfg.username()),
+                    "HOMEPATH 指向本账户 profile:" + homePath);
+            assertEquals(Path.of(up).normalize().toString(),
+                    Path.of(drive + homePath).normalize().toString(),
+                    "%HOMEDRIVE%%HOMEPATH% 拼接须与 USERPROFILE 同一目录");
+        }
+        assertTrue(capture.prefetchedRoots.stream().anyMatch(r -> r.getFileName() != null
+                        && r.getFileName().toString().endsWith(capture.cfg.username())),
+                "offline 会话写根含本账户 profile 树:" + capture.prefetchedRoots);
     }
 
     @Test
