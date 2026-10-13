@@ -56,6 +56,24 @@ function dataOf(event: FoldableTaskEvent): Record<string, unknown> | undefined {
   return undefined
 }
 
+// ---- 工具结果状态 ----
+
+/**
+ * 与 worker 侧同源的失败文案标记（worker `ExecResults`：`TOOL_FAILURE_PREFIX` /
+ * `TIMEOUT_NOTE`）。**改动 worker 文案时必须同步此处**——这里只用于旧记录兜底。
+ */
+const TOOL_FAILURE_MARKERS = ['[工具执行失败]', '[命令被沙箱超时中止]']
+
+/**
+ * 工具结果状态：worker 下发的 `data.status` 为权威（判定收口在 worker 单点），
+ * 缺失（本改动之前落盘的历史记录）时回退到与 worker 同源的失败文案启发式。
+ */
+function readToolStatus(rawStatus: unknown, content: string): 'success' | 'error' {
+  if (rawStatus === 'error') return 'error'
+  if (rawStatus === 'success') return 'success'
+  return TOOL_FAILURE_MARKERS.some((marker) => content.includes(marker)) ? 'error' : 'success'
+}
+
 // ---- 默认 handler（未注册 kind 的降级） ----
 
 /**
@@ -143,19 +161,22 @@ registerEventKind('tool.result', {
     const ts = tsOf(event)
     const data = dataOf(event)
     const callId = String(data?.callId ?? '')
+    const content = String(event.payload?.content ?? event.payload?.summary ?? '')
     folder.closeStreamingByAgent(agentKey)
     folder.insertMessage(agentKey, {
       messageId: `m-${event.seq}`,
       agentId: agentKey,
       role: 'tool',
-      content: String(event.payload?.content ?? event.payload?.summary ?? ''),
+      content,
       historyMode: 'thread_only',
       createdAt: ts,
       updatedAt: ts,
       sequence: Number(event.seq),
       toolCallId: callId,
       toolName: folder.getToolName(callId),
-      status: 'success',
+      // 权威状态来自 worker 的 data.status（失败判定收口在 worker 单点）；
+      // 无该字段的旧记录回退到同源失败文案启发式。
+      status: readToolStatus(data?.status, content),
     }, seqKey)
     return true
   },

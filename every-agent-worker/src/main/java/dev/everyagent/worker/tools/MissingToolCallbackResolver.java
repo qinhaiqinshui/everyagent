@@ -1,5 +1,6 @@
 package dev.everyagent.worker.tools;
 
+import dev.everyagent.plugin.api.shell.ExecResults;
 import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.definition.ToolDefinition;
@@ -64,7 +65,8 @@ public final class MissingToolCallbackResolver implements ToolCallbackResolver {
         }
 
         private String message() {
-            return "[工具执行失败] No ToolCallback found for tool name: " + toolName
+            // 前缀取自 ExecResults 单点常量:与 tool.result 的 data.status 判定源同源。
+            return ExecResults.TOOL_FAILURE_PREFIX + " No ToolCallback found for tool name: " + toolName
                     + "。该工具未在当前 agent 注册，请改用其它已注册工具完成目标，或修正工具名后重试。";
         }
     }

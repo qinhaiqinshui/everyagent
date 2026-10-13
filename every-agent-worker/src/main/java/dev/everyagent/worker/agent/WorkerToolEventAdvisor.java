@@ -10,6 +10,7 @@ import dev.everyagent.plugin.api.model.ModelConfig;
 import dev.everyagent.plugin.api.event.Events;
 import dev.everyagent.plugin.api.event.Events.ToolCallPart;
 import dev.everyagent.plugin.api.proto.SnowflakeId;
+import dev.everyagent.plugin.api.shell.ExecResults;
 import dev.everyagent.plugin.api.event.Usage;
 import org.springframework.ai.chat.client.ChatClientRequest;
 import org.springframework.ai.chat.client.ChatClientResponse;
@@ -50,7 +51,9 @@ import java.util.concurrent.atomic.AtomicReference;
  *   <li>{@link #doGetNextInstructionsForToolCallStream}:工具执行完毕后,只从结果历史里挑出
  *       「本轮刚下发」(callId 命中本轮 message.toolCalls)的 {@link ToolResponseMessage} 发
  *       {@code tool.result}(落盘,callId 配对),历史轮次结果不重复发射;结果文本**原样**发射
- *       (事件侧不做任何截断),事件路径不再追加损失。</li>
+ *       (事件侧不做任何截断),事件路径不再追加损失;并以 {@code data.status}
+ *       ({@code success}/{@code error},判据收于 {@code ExecResults.looksFailed})把工具执行的
+ *       成功/失败一并下发,供前端把失败工具块标红。</li>
  * </ul>
  *
  * <p>设计纪律:本类不持有任何 per-task 可变状态(仅持有 {@link AgentEntity} 引用,运行期只读其
@@ -263,6 +266,12 @@ public class WorkerToolEventAdvisor extends ToolCallingAdvisor {
                         ObjectNode toolResultData = Json.obj();
                         toolResultData.put("callId", r.id());
                         toolResultData.put("name", r.name());
+                        // 成功/失败判定收口于此(worker 唯一结果发射点)并落 data.status:
+                        // Spring AI 的 ToolResponseMessage.ToolResponse 无 error 位,失败只能由
+                        // 自产文案判定,判据收于 ExecResults.looksFailed(与文案常量同处维护)。
+                        // 前端据此把工具块标红(旧记录无该字段时按同源文案启发式兜底)。
+                        toolResultData.put("status",
+                                ExecResults.looksFailed(summary) ? "error" : "success");
                         a.emitter.emit(EmitEvent.of(SnowflakeId.next(), Events.TOOL_RESULT,
                                 null, null, summary, null, null, toolResultData,
                                 EmitEvent.Mode.REPLACE));

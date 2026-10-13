@@ -7,6 +7,7 @@ import dev.everyagent.worker.plugin.registry.ToolExecutionInterceptorRegistry;
 import dev.everyagent.worker.skill.BuiltInSkills;
 import dev.everyagent.worker.skill.SkillAdvisor;
 import dev.everyagent.plugin.api.exception.AgentCancelledException;
+import dev.everyagent.plugin.api.shell.ExecResults;
 import dev.everyagent.worker.tools.MissingToolCallbackResolver;
 import org.springframework.ai.model.tool.ToolCallingManager;
 import org.springframework.ai.tool.execution.ToolExecutionException;
@@ -35,7 +36,9 @@ public class WorkerBeanConfiguration {
             throw ace;
         }
         String msg = cause == null ? ex.getMessage() : cause.getMessage();
-        return "[工具执行失败] " + (msg == null ? cause.getClass().getSimpleName() : msg);
+        // 前缀取自 ExecResults 单点常量:tool.result 的 data.status 判定源即此文案。
+        return ExecResults.TOOL_FAILURE_PREFIX + " "
+                + (msg == null ? cause.getClass().getSimpleName() : msg);
     };
 
     /**

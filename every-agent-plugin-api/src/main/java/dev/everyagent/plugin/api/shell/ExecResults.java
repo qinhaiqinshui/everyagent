@@ -10,7 +10,7 @@ import java.nio.charset.StandardCharsets;
 
 /**
  * 命令执行结果的公共静态逻辑：格式化（format）、审计截断（truncate）、
- * PowerShell 前缀常量与输出上限常量。
+ * PowerShell 前缀常量与输出上限常量、工具结果失败判定（{@link #looksFailed}）。
  *
  * <p>从 worker {@code CommandExecutor} 与各沙箱插件执行器中逐字对齐下沉，
  * 取代三处重复实现（worker / codex / wsl-ubuntu），执行机制差异仍留各后端。
@@ -192,6 +192,42 @@ public final class ExecResults {
 
     /** PowerShell 命令脚本文件承载失败、回退 -EncodedCommand（报错定位质量回退）。 */
     public static final String SCRIPT_FALLBACK_NOTE = "[降级:脚本承载失败,报错行号可能不准]";
+
+    // ---- 工具结果「成功 / 失败」判定（status 单点）----
+    //
+    // Spring AI 2.0 的类型层面拿不到失败位：ToolResponseMessage.ToolResponse 只有
+    // (id, name, responseData)，工具抛出的异常已被 ToolExecutionExceptionProcessor 转成
+    // 文本回灌，成功与失败在 responseData 上同形。故「失败」只能依据 worker 自产的
+    // **强失败文案**判定，且必须收口为单点——文案一改、判定即失效，两者必须同处维护。
+    // plugin-api 是唯一能同时被 worker 与各沙箱插件引用的层，故判定放这里；
+    // 前端（TS）另有一份同源文案的兜底启发式（旧记录无 status 字段时用），改动文案需同步。
+
+    /** 工具执行失败的统一前缀：worker 异常处理器（{@code WorkerBeanConfiguration}）与缺工具兜底（{@code MissingToolCallbackResolver}）共用。 */
+    public static final String TOOL_FAILURE_PREFIX = "[工具执行失败]";
+
+    /**
+     * 沙箱超时中止尾注（{@link #format} 在 {@code aborted}/{@code timedOut} 时追加）。
+     * 超时视为失败：命令未跑完、输出不完整，模型与用户都必须能一眼看出。
+     */
+    public static final String TIMEOUT_NOTE = "[命令被沙箱超时中止]";
+
+    /**
+     * 结果文本是否表示工具执行失败（{@code tool.result} 事件的 {@code data.status} 判定源）。
+     *
+     * <p>判据只有两类强标记：异常回灌前缀 {@link #TOOL_FAILURE_PREFIX} 与超时尾注
+     * {@link #TIMEOUT_NOTE}。用 {@code contains} 而非 {@code startsWith}——responseData
+     * 可能被框架/链上改写（如 {@code secret-redaction}）包一层，前缀未必在首字符；
+     * 「命令输出恰好含该文案」的概率可忽略，误报代价远小于漏报。
+     *
+     * <p><b>不把「非零 exit code」当失败</b>：{@code rg} 用 1 表示「无匹配」、{@code grep}
+     * / {@code diff} 同理，把非零退出码当错误会让「搜不到」被误报成红色错误。
+     */
+    public static boolean looksFailed(String text) {
+        if (text == null || text.isEmpty()) {
+            return false;
+        }
+        return text.contains(TOOL_FAILURE_PREFIX) || text.contains(TIMEOUT_NOTE);
+    }
 
     /**
      * 把单行提示追加到结果文本尾部：原文末尾缺换行先补、提示独立成行并以换行收尾，
@@ -473,7 +509,7 @@ public final class ExecResults {
      *
      * <p>各段间以 {@code \n} 连接，空输出不产生前导换行：
      * stdout 在前；stderr 非空时以 {@code [stderr]\n} 独立成段附后；
-     * aborted 时追加 {@code [命令被沙箱超时中止]}；exitCode 非零追加 {@code [exit code: N]}。
+     * aborted 时追加 {@link #TIMEOUT_NOTE}；exitCode 非零追加 {@code [exit code: N]}。
      *
      * @param r 沙箱命令执行结果
      * @return 格式化文本
@@ -489,7 +525,7 @@ public final class ExecResults {
             sb.append(sb.isEmpty() ? "" : "\n").append("[stderr]\n").append(r.stderr());
         }
         if (r.aborted()) {
-            sb.append(sb.isEmpty() ? "" : "\n").append("[命令被沙箱超时中止]");
+            sb.append(sb.isEmpty() ? "" : "\n").append(TIMEOUT_NOTE);
         }
         // exit code 尾注仅在非零时附加：0（成功）是噪音；非零（尤其 rg 无匹配=exit 1）
         // 是 AI 判读语义的关键信号，必须保留
@@ -528,7 +564,7 @@ public final class ExecResults {
             sb.append(sb.isEmpty() ? "" : "\n").append("[stderr]\n").append(stderr);
         }
         if (timedOut) {
-            sb.append(sb.isEmpty() ? "" : "\n").append("[命令被沙箱超时中止]");
+            sb.append(sb.isEmpty() ? "" : "\n").append(TIMEOUT_NOTE);
         }
         if (interrupted) {
             sb.append(sb.isEmpty() ? "" : "\n").append("[runner 管道在 exit 帧前关闭]");

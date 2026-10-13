@@ -70,11 +70,12 @@ class RoundIndexPersistTest {
         return d;
     }
 
-    /** tool.result 事件的 data(与 wire 形态一致:callId + name,结果文本走 summary 字段、事件侧不截断)。 */
+    /** tool.result 事件的 data(与 wire 形态一致:callId + name + status,结果文本走 summary 字段、事件侧不截断)。 */
     private static ObjectNode toolResultData(String callId, String name) {
         ObjectNode d = Json.obj();
         d.put("callId", callId);
         d.put("name", name);
+        d.put("status", "success");
         return d;
     }
 
