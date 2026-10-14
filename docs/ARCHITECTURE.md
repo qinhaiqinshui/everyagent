@@ -240,7 +240,6 @@ worker 端 `RpcDispatcher` 注册方法;应答回**请求来源连接**的 `evt`
 | `task.run{taskId, metadata:{editSeq}}`(消息编辑重发) | 编辑已发送的用户消息:**无独立 RPC**(历史方法 `task.message.edit` 已退役),统一走 `task.run` 携带 `metadata.editSeq`,由 task-edit-resend 插件的 `EditResendNode`(order=877,§7.14.1)截断 seq > 该消息的所有磁盘事件(仅 *.jsonl/rounds.jsonl,**不删插件数据文件**——agents.json/file-changes/ 残留陈旧条目被接受,task 核心不感知插件文件名;后续可增加截断事件通知由插件自清)、原地更新该消息内容、广播 `message.edited` 同步事件、冷启动重跑(不写新 user.message,对话历史已含编辑后的消息);任务运行中拒绝 |
 | `config.get` | 模型配置只读(Spring 配置承载,见 §7.17) |
 | `config.reload` | 重新读取模型配置(重新解析 worker.models,应用用户在外部 YAML 中的修改);广播 `config.changed{keys:["models"]}` |
-| `skill.reload` | 重新读取 skill 列表(用户在系统技能目录下增删 skill 目录、或误改/误删了内置包后热加载):①内置技能包幂等重物化(`BuiltInSkillPacks.materialize()`,复原为 worker 版本,内容一致则零写入)②重扫 `skillsDir` 目录(`SkillCatalog.reload()`)③广播 `config.changed{keys:["skills"]}`,前端 `/` 菜单下次打开即拉取最新列表(§7.17) |
 | `skill.list` | 该 worker 的全量 skill 清单 `[{id, name, description, knowledgePath, excludedWorkspaces:[...]}]`——数据源 = `skillsDir` 目录扫描(唯一真相源),每项附各自的按工作区排除表;供设置页「Skill 列表」表格(按 worker 分组展示,不同 worker 的 skillsDir 不同、同名 id 非同一 skill,不跨 worker 合并;§7.17) |
 | `skill.exclusions.set` | 设置某 skill 的「不自动暴露工作区」黑名单(参数 `skillId` + `workspaces:[root,...]`):`skillId` 须在当前目录扫描结果内(否则 `NOT_FOUND`),`workspaces` 逐项须为该 worker 已注册工作区 root(normalize 后字符串相等,未注册项 `BAD_PARAMS` 拒绝,防拼写错配出永不生效的排除),空数组 = 恢复全部暴露;`AtomicFiles` 原子落盘 `<homeDir>/skill-exclusions.json` 后广播 `config.changed{keys:["skills"]}`。`/` 菜单不受影响(永远全量);运行中任务不受影响(skill 注入发生在 run 开始;§7.17) |
 | `workspaces.list` / `workspaces.add` / `workspaces.remove` / `workspaces.addExternalRoot` | 工作区注册表 CRUD(多工作区并行);addExternalRoot = 注册工作区外部授权根(`@` 弹窗 `+` 显式选择路径,§7.17) |
@@ -768,7 +767,7 @@ TaskManager 构造参数从 23 降至 15（SubAgentManager 从 11 降至 4），
 | 承接组件 | 层 | 职责 |
 |---|---|---|
 | `AgentFactory`（agent 层） | agent 层 | 主/子 agent 装配（模型/工具/沙箱/权限聚合） |
-| `ConfigRpcHandler` | 基础设施 | config.get / config.reload / skill.reload / skill.list / skill.exclusions.set RPC（自注册） |
+| `ConfigRpcHandler` | 基础设施 | config.get / config.reload / skill.list / skill.exclusions.set RPC（自注册） |
 | `SlashTaskCallbacks` | 基础设施 | slash 任务 token 建后回调 |
 | `EventSink`（接口） | 基础设施 | `fanout(channelNamer, event, ...)` 扇出发布——无调用者语义，HubPool 实现；task 层广播任务状态、未来工作流层广播流状态共用 |
 | `TaskMessageRouter` + `TaskInputHandler` | 基础设施 | worker 输入频道订阅与消息路由（TASK_INPUT/DIALOG_INSERT/ASK_REPLY）；接口在基础设施层定义、TaskManager 实现——依赖方向与 AgentContext 相同 |
@@ -969,7 +968,7 @@ Input:  queued → consumed | discarded(任务取消)
 
 **skill 目录结构与唯一真相源**:skill 的唯一真相源 = 系统技能目录 `skillsDir` 一路——每个 skill = 一个一级子目录 + 目录下的 `skill.md`;**不存在代码注册通道**(内置 Java 清单与插件 SPI 声明均已删除):内置包与插件包只是**安装方式不同**,经物化落盘后与用户自制 skill 完全同权,统一由目录扫描进入 prompt 与 `/` 菜单。
 
-**安装(物化)与两个资源根**:worker 内置技能包住 classpath `builtin-skill/<id>/skill.md`,由 `BuiltInSkillPacks`(`@PostConstruct`)经 plugin-api 物化工具类 `SkillMaterializer.materializeAll(skillsDir, cl, BUILTIN_SKILL_ROOT)` 落盘为 `<skillsDir>/<id>/skill.md`;插件技能包住插件 jar 的 `skill/<id>/skill.md`,插件在 `activate()` 里调 `SkillMaterializer.materializeAllFromClasspath(skillsDir, cl)`(默认根 = `skill/`)。**两个资源根刻意不同**:`PluginLoader` 的插件 classloader 以 worker loader 为 parent,若共用一个根,插件侧 `classpath*:` 扫描会经父委派看到 worker 的技能包、把内置包错当自己的代装(实测复现)——根名隔离(`builtin-skill/` vs `skill/`)让「每个包只物化自己的 skill」零运行时成本成立,谁放错根,启动日志的物化 id 清单立即可见。物化语义:幂等(与 classpath 内容**逐字节一致**则零写入;不一致则覆盖——判据是内容而非文件大小,"大小恰好相同"的等长升级不会被漏掉)、原子写入(`AtomicFiles.replace` 临时文件 + 原子替换,杜绝扫描读到半截文件)、并清理旧扁平 `<id>.md` 残留;资源缺失/IO 失败抛 `IOException` 由调用方 WARN 降级、不阻断启动——**代价:该 skill 整体消失**(缓解:启动 WARN + `skill.reload` 重试复原)。
+**安装(物化)与两个资源根**:worker 内置技能包住 classpath `builtin-skill/<id>/skill.md`,由 `BuiltInSkillPacks`(`@PostConstruct`)经 plugin-api 物化工具类 `SkillMaterializer.materializeAll(skillsDir, cl, BUILTIN_SKILL_ROOT)` 落盘为 `<skillsDir>/<id>/skill.md`;插件技能包住插件 jar 的 `skill/<id>/skill.md`,插件在 `activate()` 里调 `SkillMaterializer.materializeAllFromClasspath(skillsDir, cl)`(默认根 = `skill/`)。**两个资源根刻意不同**:`PluginLoader` 的插件 classloader 以 worker loader 为 parent,若共用一个根,插件侧 `classpath*:` 扫描会经父委派看到 worker 的技能包、把内置包错当自己的代装(实测复现)——根名隔离(`builtin-skill/` vs `skill/`)让「每个包只物化自己的 skill」零运行时成本成立,谁放错根,启动日志的物化 id 清单立即可见。物化语义:幂等(与 classpath 内容**逐字节一致**则零写入;不一致则覆盖——判据是内容而非文件大小,"大小恰好相同"的等长升级不会被漏掉)、原子写入(`AtomicFiles.replace` 临时文件 + 原子替换,杜绝扫描读到半截文件)、并清理旧扁平 `<id>.md` 残留;资源缺失/IO 失败抛 `IOException` 由调用方 WARN 降级、不阻断启动——**代价:该 skill 整体消失**(缓解:启动 WARN + 重启 worker 重试复原)。
 
 **frontmatter(仅展示元数据,只有两个键)**:`skill.md` 首部允许一个 `---` 定界的元数据块(允许 UTF-8 BOM;缺块/未闭合 → 视为无元数据)。行语法 = `key: value` 最小子集(键 `[A-Za-z][A-Za-z0-9_-]*`、大小写不敏感;值去首尾空白、剥离成对引号;整行 `#` 开头视为注释;未知键忽略记 debug、`key:` 空值 = 未提供;**不支持**多行折叠/嵌套/列表,**不引入 YAML 依赖**)。已知键只有两个、都**只影响展示**:`name` = 展示标题(`/` 菜单 title、prompt 条目标题、设置页表格 name 列),缺省或空值回落目录名——**不与目录名做一致性校验**(内置 id 是英文标识、`name` 是人读标题,如 `plan` → 「计划模式」,不一致是常态而非异常);`description` = 一句话「何时用」(渐进式披露索引、`/` 菜单副标题、设置页表格描述列),单行截断 200 字符,缺省回落「首个非空且非 `#` 的**正文**行」(必须跳过 frontmatter 块本身;兼容未迁移的第三方 skill),再缺省为空串。**暴露控制不在 frontmatter**:是否进 system prompt 由 worker 侧按工作区排除配置决定(见下),`skill.md` 不含此信息、也无法声明它;第三方 skill 落盘即默认全部工作区自动暴露 + 进 `/` 菜单,要收敛由用户在设置页按工作区排除。
 
@@ -980,8 +979,6 @@ Input:  queued → consumed | discarded(任务取消)
 **暴露控制(按工作区排除,默认全部暴露)**:默认「全部 skill 在全部工作区自动暴露(进 system prompt)」;用户在设置页按 skill 勾选「不自动暴露的工作区」(黑名单语义),**不配置 = 全部暴露**;`/` 菜单不受此配置影响(永远全量)。存储 = worker 侧 `<homeDir>/skill-exclusions.json`(见上表;每台 worker 各自一份——**排除配置随 worker 而非全局**,换 worker 需重配),身份键 = 工作区根路径(它是工作区的身份键;代价:工作区移动/改名后旧排除项失效、该 skill 在新路径恢复暴露,残留项不清理、不生效但无害)。RPC:`skill.list`(全量 skill + 各自 `excludedWorkspaces`,设置页表格数据源,按 worker 分组展示)/`skill.exclusions.set`(校验与广播语义见 §5.5;已注册但后来被删的工作区留在配置里不报错,前端展示时过滤、保存时原样保留)。
 
 **prompt 注入与菜单(同一份数据)**:`SkillAdvisor` **per-run 装配**——provider 的 `create(ctx)` 按每次运行的 `ctx.workspaceRoot()` 现取排除配置实例化(SkillAdvisor 无状态,per-run 零成本;排除过滤需要 workspaceRoot,共享单例拿不到)。注入集合 = `SkillCatalog.scan()` 剔除当前工作区被排除项(**无配置 = 全部注入**,含全部用户自制 skill——默认全量暴露使每轮 prompt 变大,这正是本设计的语义,嫌大就按工作区排除;`workspaceRoot` 为 null/空白时放行注入并记 WARN,宁多勿漏),知识包路径按当前沙箱后端翻译注入(见上节)。`/` 菜单(`SkillSlashProvider`)同一份 `SkillCatalog.scan()` 全量列出——全部 skill 一律自动成为菜单项,不再按来源区分,选中走 `SkillSlashTokenResolver` 链路(token 解析为「请使用技能:`<title>`。知识包路径:`<skillPath>`」),AI 按需 `read_file` 知识包。**「一次目录扫描 = prompt 与菜单的同一份数据」是本节核心不变量**:不存在「对模型可见但对用户不可见」(或反之)的 skill,二者差别只剩暴露过滤。子 agent 同规则注入(与主 agent 共用执行入口,其 workspaceRoot 即所属任务的工作区)。
-
-**skill.reload 新语义**(设置页「重新读取 Skill 列表」):① `BuiltInSkillPacks.materialize()` 幂等复原内置包(用户/AI 误改误删 `<id>/skill.md` 时复原为 worker 版本;**内置包内容随 worker 版本走**,重启同样复原——设置页详情列以只读标签页打开 skill.md 正为此;内容一致则零写入);② `catalog.reload()` 重扫目录;③ 广播 `config.changed{keys:["skills"]}`。插件包物化发生在插件 activate 时,不由该 RPC 复原(重装/重启插件即复原);插件禁用/卸载后 `<skillsDir>/<id>/` 残留、skill 继续可见——「按插件登记清单 + 卸载时清理」本次不做,登记在案。
 
 **不兼容变更**:skill 代码注册通道删除是破坏性变更,第三方插件需改为「把 `skill/<id>/skill.md` 打进 jar + `activate()` 里调一次 `SkillMaterializer`」。
 

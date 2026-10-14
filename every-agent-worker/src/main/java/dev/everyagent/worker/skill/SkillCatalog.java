@@ -89,17 +89,6 @@ public class SkillCatalog {
         return List.copyOf(result);
     }
 
-    /**
-     * 重扫一次并返回当前 skill 数量(热加载入口,{@code skill.reload} RPC 调用)。
-     * 因 {@link #scan()} 本就不缓存,本方法只是「实扫一次」的语义化封装;
-     * 变更广播({@code config.changed{keys:["skills"]}})由调用方 ConfigRpcHandler 负责。
-     *
-     * @return 本次扫描到的 skill 总数(内置 + 插件包 + 用户自制)
-     */
-    public int reload() {
-        return scan().size();
-    }
-
     /** 扫描单个一级子目录(不合法即跳过,绝不因单个目录畸形导致整体失败)。 */
     private void scanOne(Path dir, Path rootReal, List<Skill> result) {
         String id = dir.getFileName().toString();

@@ -26,7 +26,6 @@ import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.hub.HubLink;
 import dev.everyagent.worker.hub.HubPool;
 import dev.everyagent.worker.rpc.RpcDispatcher;
-import dev.everyagent.worker.skill.BuiltInSkillPacks;
 import dev.everyagent.worker.skill.SkillCatalog;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.node.ArrayNode;
@@ -91,7 +90,6 @@ class ConfigRpcHandlerSkillRpcTest {
         handler = new ConfigRpcHandler(
                 mock(ConfigStore.class),
                 new SkillCatalog(props),
-                mock(BuiltInSkillPacks.class),
                 store,
                 workspaces,
                 mock(UserPreferenceStore.class),

@@ -19,14 +19,14 @@ import org.springframework.stereotype.Component;
  * <p><b>不持有任何 title/description/清单</b>:目录即真相源,内置包与插件包、
  * 用户自制 skill 落盘后一律由 {@link SkillCatalog} 扫描发现;本类只负责「把 worker
  * 自带的包写到盘上」。物化幂等(与磁盘逐字节比较,一致零写入)、被删/被改坏可经
- * 再次调用复原({@code skill.reload} 即此语义)。
+ * 重启 worker 复原。
  *
  * <p>资源根用 {@code builtin-skill/}(而非插件的 {@code skill/}):插件 classloader
  * 以 worker classloader 为 parent,同根会让任意插件把 worker 的内置包错当自己的代装
  * (父委派泄漏,实测复现过),两个根是隔离手段——详见 {@link SkillMaterializer} javadoc。
  *
  * <p>失败策略:物化异常 WARN 降级、不阻断启动(代价是内置 skill 整体消失,
- * 可经 {@code skill.reload} 重试复原)。
+ * 可重启 worker 后重试复原)。
  */
 @Component
 public class BuiltInSkillPacks {
@@ -59,7 +59,7 @@ public class BuiltInSkillPacks {
             log.info("内置技能包物化完成: {}", installed);
             return installed;
         } catch (IOException e) {
-            log.warn("内置技能包物化失败,降级为跳过(不阻断启动;可经 skill.reload 重试复原)", e);
+            log.warn("内置技能包物化失败,降级为跳过(不阻断启动;可重启 worker 后重试复原)", e);
             return List.of();
         }
     }

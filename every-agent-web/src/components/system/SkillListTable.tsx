@@ -144,7 +144,7 @@ export default function SkillListTable() {
   }, [workerSetKey, loadWorkerSkills])
 
   // config.changed{keys:["skills"]} 广播 → 定向刷新来源 worker(机制同 modelConfigs);
-  // skill.reload / 本页保存 / 其他端修改都会触发该广播。卸载时清理订阅。
+  // 本页保存 / 其他端修改都会触发该广播。卸载时清理订阅。
   React.useEffect(() => {
     const unsubscribe = hubSession.onFrame((frame) => {
       if (frame.event !== 'config.changed') return

@@ -18,7 +18,7 @@ import dev.everyagent.worker.config.WorkerProperties;
 /**
  * SkillCatalog 单测:目录即真相源的扫描规则——正常扫描、缺 skill.md 跳过、非法目录名、
  * realpath 越界(符号链接/junction 逃逸)、frontmatter 元数据、缺 frontmatter 回落、
- * 非递归、reload() 后新增可见。
+ * 非递归、scan() 每次实扫(不缓存,新增目录立即可见)。
  *
  * <p>路径断言一律用 {@link Path} 语义(修掉旧 {@code endsWith("code-review/skill.md")}
  * 字符串断言在 Windows 上恒假的缺陷)。{@code @TempDir} 构造自定义 skillsDir,
@@ -153,14 +153,13 @@ class SkillCatalogTest {
     }
 
     @Test
-    void reloadSeesNewlyAddedSkill(@TempDir Path tmp) throws Exception {
+    void scanSeesNewlyAddedSkill(@TempDir Path tmp) throws Exception {
         Path skillsDir = Files.createDirectory(tmp.resolve("skills"));
         writeSkill(skillsDir, "one", "# one\n第一条\n");
         SkillCatalog catalog = newCatalog(skillsDir);
         assertEquals(1, catalog.scan().size());
 
         writeSkill(skillsDir, "two", "# two\n第二条\n");
-        assertEquals(2, catalog.reload(), "reload() 实扫一次并返回当前数量");
         assertEquals(2, catalog.scan().size(), "不缓存:scan() 每次实扫,新增目录立即可见");
     }
 
@@ -169,7 +168,6 @@ class SkillCatalogTest {
         SkillCatalog catalog = newCatalog(tmp.resolve("does-not-exist"));
         assertNotNull(catalog.scan());
         assertTrue(catalog.scan().isEmpty());
-        assertEquals(0, catalog.reload());
     }
 
     private static void writeSkill(Path skillsDir, String id, String content) throws IOException {

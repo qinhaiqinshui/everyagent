@@ -10,7 +10,6 @@ import dev.everyagent.plugin.api.exception.NotFoundException;
 import dev.everyagent.worker.proto.RpcMethods;
 import dev.everyagent.worker.rpc.RpcContext;
 import dev.everyagent.worker.rpc.RpcDispatcher;
-import dev.everyagent.worker.skill.BuiltInSkillPacks;
 import dev.everyagent.worker.skill.Skill;
 import dev.everyagent.worker.skill.SkillCatalog;
 import jakarta.annotation.PostConstruct;
@@ -29,7 +28,7 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * 配置与技能 RPC（基础设施层）：config.get / config.reload / skill.reload /
+ * 配置与技能 RPC（基础设施层）：config.get / config.reload /
  * skill.list / skill.exclusions.set / pref.get / pref.set。
  * 从 TaskManager 迁出——这些 RPC 与任务编排无关，属基础设施的配置面。
  * 自己在 @PostConstruct 中注册到 RpcDispatcher（与 task.* 平权注册）。
@@ -45,7 +44,6 @@ public class ConfigRpcHandler {
 
     private final ConfigStore configs;
     private final SkillCatalog skillCatalog;
-    private final BuiltInSkillPacks builtInSkillPacks;
     private final SkillExclusionStore skillExclusions;
     private final WorkspaceManager workspaces;
     private final UserPreferenceStore preferences;
@@ -54,7 +52,6 @@ public class ConfigRpcHandler {
 
     public ConfigRpcHandler(ConfigStore configs,
                             SkillCatalog skillCatalog,
-                            BuiltInSkillPacks builtInSkillPacks,
                             SkillExclusionStore skillExclusions,
                             WorkspaceManager workspaces,
                             UserPreferenceStore preferences,
@@ -62,7 +59,6 @@ public class ConfigRpcHandler {
                             RpcDispatcher dispatcher) {
         this.configs = configs;
         this.skillCatalog = skillCatalog;
-        this.builtInSkillPacks = builtInSkillPacks;
         this.skillExclusions = skillExclusions;
         this.workspaces = workspaces;
         this.preferences = preferences;
@@ -74,7 +70,6 @@ public class ConfigRpcHandler {
     void init() {
         dispatcher.register(RpcMethods.CONFIG_GET, this::rpcConfigGet);
         dispatcher.register(RpcMethods.CONFIG_RELOAD, this::rpcConfigReload);
-        dispatcher.register(RpcMethods.SKILL_RELOAD, this::rpcSkillReload);
         dispatcher.register(RpcMethods.SKILL_LIST, this::rpcSkillList);
         dispatcher.register(RpcMethods.SKILL_EXCLUSIONS_SET, this::rpcSkillExclusionsSet);
         dispatcher.register(RpcMethods.PREF_GET, this::rpcPrefGet);
@@ -110,40 +105,6 @@ public class ConfigRpcHandler {
                 Json.toJson(new Events.ConfigChanged(List.of("models"))));
         log.info("config.reload 完成:模型配置已重新加载,共 {} 条", count);
         ctx.ok(Json.obj().put("models", count));
-    }
-
-    /**
-     * skill.reload:重新读取 skill 列表(架构 §7.17)。
-     * 用户在系统技能目录下增删 skill 目录后,点击「重新读取」即可让 worker 热加载,
-     * 无需重启。广播 {@code config.changed{keys:["skills"]}} 通知前端刷新 `/` 菜单。
-     * 运行中任务不受影响(skill 列表只在新建任务的 `/` 菜单与 SkillAdvisor 注入时读取)。
-     */
-    private void rpcSkillReload(RpcContext ctx) {
-        int count = reloadSkills();
-        pool.broadcastEvt(Events.CONFIG_CHANGED,
-                Json.toJson(new Events.ConfigChanged(List.of("skills"))));
-        log.info("skill.reload 完成:内置技能包已复原,系统技能目录已重新扫描,共 {} 个", count);
-        ctx.ok(Json.obj().put("skills", count));
-    }
-
-    /**
-     * skill.reload 的实际动作(独立于 RPC 壳,便于单测直接调用)。
-     *
-     * <ol>
-     *   <li><b>复原内置技能包</b>:{@link BuiltInSkillPacks#materialize()} 幂等重物化——用户在系统技能目录
-     *       下误改/误删了 {@code <id>/skill.md}(或 AI 经 skill-creator 改坏了它)时,点一次「重新读取」
-     *       即恢复为 worker 自带版本,不必重启 worker;内容本就一致则零写入。这是「重新读取 skill 列表」
-     *       对内置 skill 的对应语义(内置知识包随 worker 版本,classpath 内容在运行期不会变);
-     *       插件贡献的知识包由插件自己在 activate 时物化。</li>
-     *   <li><b>重扫系统技能目录</b>:{@link SkillCatalog#reload()} 实扫一次并返回当前数量
-     *       (目录即真相源,内置/插件包与用户自制 skill 一并计入;广播由本 RPC 壳负责)。</li>
-     * </ol>
-     *
-     * @return 本次扫描到的 skill 总数(内置 + 插件包 + 用户自制)
-     */
-    int reloadSkills() {
-        builtInSkillPacks.materialize();
-        return skillCatalog.reload();
     }
 
     /**

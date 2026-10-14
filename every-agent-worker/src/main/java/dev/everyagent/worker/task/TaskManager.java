@@ -240,7 +240,7 @@ public class TaskManager implements TaskInputHandler, InteractionServiceImpl.Sta
         dispatcher.register(RpcMethods.TASK_RUN, this::rpcTaskRun);
         dispatcher.register(RpcMethods.TASK_CANCEL, this::rpcTaskCancel);
         dispatcher.register(RpcMethods.TASK_DELETE, this::rpcTaskDelete);
-        // config.get / config.reload / skill.reload 已迁 ConfigRpcHandler(基础设施·配置面,自行注册)。
+        // config.get / config.reload 已迁 ConfigRpcHandler(基础设施·配置面,自行注册)。
     }
 
     /**
@@ -1123,7 +1123,7 @@ public class TaskManager implements TaskInputHandler, InteractionServiceImpl.Sta
         return moved;
     }
 
-    // config.get / config.reload / skill.reload 已迁 ConfigRpcHandler(方法体原样搬移)。
+    // config.get / config.reload 已迁 ConfigRpcHandler(方法体原样搬移)。
 
     // ---- 任务内核 ----
 
