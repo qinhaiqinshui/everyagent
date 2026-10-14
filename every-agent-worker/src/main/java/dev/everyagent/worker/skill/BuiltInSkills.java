@@ -1,11 +1,10 @@
 package dev.everyagent.worker.skill;
 
 import java.io.IOException;
-import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 import dev.everyagent.worker.config.WorkerProperties;
@@ -78,7 +77,7 @@ public class BuiltInSkills {
         this.allSkills = List.copyOf(all);
     }
 
-    /** 启动时一次性物化(幂等;worker 升级知识包时按大小不一致覆盖)。 */
+    /** 启动时一次性物化(幂等;worker 升级知识包时按内容不一致覆盖)。 */
     @PostConstruct
     void init() {
         materialize();
@@ -111,8 +110,9 @@ public class BuiltInSkills {
      * 使 AI 能按 {@link Skill#knowledgePath()} 直接 {@code read_file} 读取(系统技能目录
      * 经 PermissionGate READ 窄例外 + Sandbox 只读附加根对工具放行,物化是知识包可被
      * 工具读到的唯一通道)。主动与被动 skill 均物化——被动 skill 虽不进 prompt,
-     * 但用户从 `/` 菜单选用后 AI 仍需 read_file 读取,故必须落盘。幂等:目标已存在且
-     * 大小一致则跳过;不一致(worker 升级知识包)则覆盖,保证与 worker 版本同步。
+     * 但用户从 `/` 菜单选用后 AI 仍需 read_file 读取,故必须落盘。幂等:目标内容与
+     * classpath 逐字节一致则跳过;不一致(worker 升级知识包,或知识包被用户/AI 误改)
+     * 则覆盖,保证与 worker 版本同步。
      * 失败仅记日志降级——提示词中的路径指引仍在,不阻断 worker 启动。
      */
     public void materialize() {
@@ -137,15 +137,25 @@ public class BuiltInSkills {
                     continue;
                 }
                 Files.createDirectories(target.getParent());
-                if (Files.isRegularFile(target) && Files.size(target) == res.contentLength()) {
-                    continue; // 幂等:已存在且大小一致(内容即 worker 版本)
+                // 幂等判据用内容而非大小:大小恰好相同的改动(如 worker 升级时等长改写)
+                // 在旧判据下会被静默跳过,知识包停在旧版本。
+                byte[] content = res.getContentAsByteArray();
+                if (sameContent(target, content)) {
+                    continue; // 已存在且与 classpath 逐字节一致(内容即 worker 版本)
                 }
-                try (InputStream in = res.getInputStream()) {
-                    Files.copy(in, target, StandardCopyOption.REPLACE_EXISTING);
-                }
+                Files.write(target, content);
             } catch (IOException e) {
                 log.warn("内置 skill 知识包物化失败 skill={} target={}", s.id(), s.knowledgePath(), e);
             }
+        }
+    }
+
+    /** 目标文件内容是否已是给定字节(逐字节比较;目标不存在/不可读视为「否」→ 走覆盖写)。 */
+    private static boolean sameContent(Path target, byte[] content) {
+        try {
+            return Files.isRegularFile(target) && Arrays.equals(Files.readAllBytes(target), content);
+        } catch (IOException e) {
+            return false; // 读不到按不一致处理,覆盖写失败会在上面的写路径记录
         }
     }
 }

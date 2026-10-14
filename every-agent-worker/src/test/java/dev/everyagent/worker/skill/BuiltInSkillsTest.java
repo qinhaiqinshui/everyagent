@@ -1,5 +1,6 @@
 package dev.everyagent.worker.skill;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -80,6 +81,46 @@ class BuiltInSkillsTest {
         assertFalse(Files.exists(legacyPlan), "旧扁平 plan.md 应被清理");
         // 目录形态产物存在
         assertTrue(Files.isRegularFile(skillsDir.resolve("plan").resolve("skill.md")));
+    }
+
+    @Test
+    void materializeOverwritesSameSizeContentChange(@TempDir Path tmp) throws Exception {
+        Path skillsDir = Files.createDirectory(tmp.resolve("skills"));
+        BuiltInSkills bis = newBuiltInSkills(skillsDir);
+
+        bis.materialize();
+        Path planMd = skillsDir.resolve("plan").resolve("skill.md");
+        byte[] expected = Files.readAllBytes(planMd);
+
+        // 篡改一个字节:长度不变、内容变化(旧「大小一致则跳过」判据会漏掉这种改动)
+        byte[] tampered = expected.clone();
+        int idx = tampered.length / 2;
+        tampered[idx] = (byte) (tampered[idx] ^ 0x01);
+        Files.write(planMd, tampered);
+        assertEquals(tampered.length, expected.length, "篡改后长度不变");
+        assertFalse(java.util.Arrays.equals(expected, Files.readAllBytes(planMd)));
+
+        bis.materialize();
+
+        // 内容不一致必须覆盖 → 复原为 classpath(worker)版本
+        assertArrayEquals(expected, Files.readAllBytes(planMd),
+                "大小相同但内容不同时必须覆盖(判据是内容,不是大小)");
+    }
+
+    @Test
+    void materializeRestoresDeletedKnowledgePack(@TempDir Path tmp) throws Exception {
+        Path skillsDir = Files.createDirectory(tmp.resolve("skills"));
+        BuiltInSkills bis = newBuiltInSkills(skillsDir);
+
+        bis.materialize();
+        Path planMd = skillsDir.resolve("plan").resolve("skill.md");
+        byte[] expected = Files.readAllBytes(planMd);
+
+        // 知识包被用户/AI 误删后,再物化一次即复原(与 skill.reload 的复原语义配套)
+        Files.delete(planMd);
+        bis.materialize();
+
+        assertArrayEquals(expected, Files.readAllBytes(planMd), "被删除的知识包应被重新物化");
     }
 
     @Test

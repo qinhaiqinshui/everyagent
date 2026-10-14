@@ -8,17 +8,16 @@ import org.slf4j.LoggerFactory;
 import org.springframework.core.io.ClassPathResource;
 
 import java.io.IOException;
-import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
+import java.util.Arrays;
 import java.util.List;
 
 /**
  * 贡献「子 Agent」skill（agent-dispatch）。
  *
  * <p>从 worker BuiltInSkills 迁出。知识包 classpath:skill/agent-dispatch.md
- * 物化到系统技能目录（与 BuiltInSkills.materialize 同模式）。
+ * 物化到系统技能目录(与 BuiltInSkills.materialize 同模式:内容逐字节一致则跳过)。
  */
 public class SubAgentSkillContributor implements SkillContributor {
 
@@ -48,12 +47,10 @@ public class SubAgentSkillContributor implements SkillContributor {
                 return;
             }
             Files.createDirectories(target.getParent());
-            if (Files.isRegularFile(target) && Files.size(target) == res.contentLength()) {
-                // 幂等：已存在且大小一致
-            } else {
-                try (InputStream in = res.getInputStream()) {
-                    Files.copy(in, target, StandardCopyOption.REPLACE_EXISTING);
-                }
+            byte[] content = res.getContentAsByteArray();
+            if (!sameContent(target, content)) {
+                // 内容不一致(升级知识包,或知识包被误改)则覆盖;一致则跳过(幂等)
+                Files.write(target, content);
             }
             cachedSkill = new PluginSkill(
                     "agent-dispatch",
@@ -66,6 +63,15 @@ public class SubAgentSkillContributor implements SkillContributor {
                     List.of("run_agent", "list_agents", "wait_agents", "stop_agent"));
         } catch (IOException e) {
             log.warn("subagent 插件 skill 知识包物化失败", e);
+        }
+    }
+
+    /** 目标文件内容是否已是给定字节(逐字节比较,与 BuiltInSkills.sameContent 同判据)。 */
+    private static boolean sameContent(Path target, byte[] content) {
+        try {
+            return Files.isRegularFile(target) && Arrays.equals(Files.readAllBytes(target), content);
+        } catch (IOException e) {
+            return false; // 读不到按不一致处理,覆盖写失败会在上面的 catch 记录
         }
     }
 
