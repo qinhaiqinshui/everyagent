@@ -2,6 +2,8 @@ package dev.everyagent.worker.modules;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
@@ -13,6 +15,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -25,17 +28,21 @@ import dev.everyagent.plugin.api.event.Channels;
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.hub.HubLink;
 import dev.everyagent.worker.hub.HubPool;
+import dev.everyagent.worker.modules.SkillExposureStore.ExposureConfig;
 import dev.everyagent.worker.rpc.RpcDispatcher;
 import dev.everyagent.worker.skill.SkillCatalog;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.node.ArrayNode;
 
 /**
- * {@code skill.list} / {@code skill.exclusions.set} 的 RPC 端到端测试:
+ * {@code skill.list} / {@code skill.exposure.set} 的 RPC 端到端测试:
  * 经<b>真实</b> {@link RpcDispatcher} 分发(覆盖式注册进方法表 + 异常→错误码映射),
  * mock {@link HubLink} 捕获 wire 帧——钉 wire 形状与 NOT_FOUND/BAD_PARAMS 语义,
  * 而非只测内部方法。skill 目录用临时 skillsDir 造两类条目:
  * 带 frontmatter 的与<b>无 frontmatter 回落</b>(title=目录名、description=正文首行)的。
+ *
+ * <p>新模型:blacklist(除列出外全部暴露)/ whitelist(仅列出暴露),
+ * 无配置 = 全部暴露(不携带 exposureMode/exposureWorkspaces 字段)。
  */
 class ConfigRpcHandlerSkillRpcTest {
 
@@ -53,7 +60,7 @@ class ConfigRpcHandlerSkillRpcTest {
 
     private HubPool pool;
     private RpcDispatcher dispatcher;
-    private SkillExclusionStore store;
+    private SkillExposureStore store;
     private ConfigRpcHandler handler;
     private WorkspaceManager workspaces;
     /** 可变注册表:测试中途可注销工作区,模拟「排除项对应的工作区已被删」。 */
@@ -84,7 +91,7 @@ class ConfigRpcHandlerSkillRpcTest {
         WorkerProperties props = new WorkerProperties();
         props.setHomeDir(home.toString());
         props.setSkillsDir(skillsDir.toString());
-        store = new SkillExclusionStore(props);
+        store = new SkillExposureStore(props);
         store.init();
 
         handler = new ConfigRpcHandler(
@@ -95,7 +102,7 @@ class ConfigRpcHandlerSkillRpcTest {
                 mock(UserPreferenceStore.class),
                 pool,
                 dispatcher);
-        handler.init(); // @PostConstruct:把 skill.list / skill.exclusions.set 注册进方法表
+        handler.init(); // @PostConstruct:把 skill.list / skill.exposure.set 注册进方法表
     }
 
     // ---- 调用辅助:经真实 dispatcher 分发,捕获 wire 应答帧 ----
@@ -127,12 +134,16 @@ class ConfigRpcHandlerSkillRpcTest {
         return rpc(method, params, "rpc.err");
     }
 
-    private JsonNode callExclusionsSet(String skillId, String... roots) {
+    /** 调用 skill.exposure.set,返回 ok 应答的 result 体。 */
+    private JsonNode callExposureSet(String skillId, String mode, String... roots) {
         ArrayNode arr = Json.arr();
         for (String r : roots) {
             arr.add(r);
         }
-        return rpcOk("skill.exclusions.set", Json.obj().put("skillId", skillId).set("workspaces", arr));
+        return rpcOk("skill.exposure.set", Json.obj()
+                .put("skillId", skillId)
+                .put("mode", mode)
+                .set("workspaces", arr));
     }
 
     private static JsonNode byId(JsonNode list, String id) {
@@ -156,7 +167,9 @@ class ConfigRpcHandlerSkillRpcTest {
         assertEquals("计划模式", plan.path("name").asString(), "wire 字段名用 name(取自 Skill.title/frontmatter)");
         assertEquals("当任务复杂需拆步骤执行时，使用本技能。", plan.path("description").asString());
         assertEquals(skillsDir.resolve("plan").resolve("skill.md"), Path.of(plan.path("knowledgePath").asString()));
-        assertEquals(0, plan.path("excludedWorkspaces").size(), "无配置时排除表为空数组(= 全部暴露)");
+        // 无配置时不携带 exposureMode/exposureWorkspaces 字段(前端按默认 = 全部暴露渲染)
+        assertTrue(plan.path("exposureMode").isMissingNode(), "无配置时不携带 exposureMode 字段: " + plan);
+        assertTrue(plan.path("exposureWorkspaces").isMissingNode(), "无配置时不携带 exposureWorkspaces 字段: " + plan);
 
         JsonNode legacy = byId(list, "legacy-tool");
         assertEquals("legacy-tool", legacy.path("name").asString(), "无 frontmatter:title 回落目录名");
@@ -164,108 +177,163 @@ class ConfigRpcHandlerSkillRpcTest {
                 "无 frontmatter:description 回落正文首个非 # 行");
         assertEquals(skillsDir.resolve("legacy-tool").resolve("skill.md"),
                 Path.of(legacy.path("knowledgePath").asString()));
-        assertTrue(legacy.path("excludedWorkspaces").isArray());
+        assertTrue(legacy.path("exposureMode").isMissingNode());
+        assertTrue(legacy.path("exposureWorkspaces").isMissingNode());
     }
 
-    // ---- skill.exclusions.set:校验分支 ----
+    // ---- skill.exposure.set:校验分支 ----
 
     @Test
-    void exclusionsSetUnknownSkillIdIsNotFound() {
-        JsonNode err = rpcErr("skill.exclusions.set",
-                Json.obj().put("skillId", "no-such-skill").set("workspaces", Json.arr().add(wsA.toString())));
+    void exposureSetUnknownSkillIdIsNotFound() {
+        JsonNode err = rpcErr("skill.exposure.set",
+                Json.obj().put("skillId", "no-such-skill")
+                        .put("mode", "blacklist")
+                        .set("workspaces", Json.arr().add(wsA.toString())));
         assertEquals("NOT_FOUND", err.path("code").asString(), "未知 skillId → NOT_FOUND: " + err);
         assertTrue(store.snapshot().isEmpty(), "拒绝后不落盘");
     }
 
     @Test
-    void exclusionsSetUnregisteredRootIsBadParams() {
-        JsonNode err = rpcErr("skill.exclusions.set",
-                Json.obj().put("skillId", "plan").set("workspaces", Json.arr().add("C:\\nowhere\\ws")));
+    void exposureSetMissingModeIsBadParams() {
+        JsonNode err = rpcErr("skill.exposure.set",
+                Json.obj().put("skillId", "plan")
+                        .set("workspaces", Json.arr().add(wsA.toString())));
+        assertEquals("BAD_PARAMS", err.path("code").asString(), "缺少 mode → BAD_PARAMS: " + err);
+        assertTrue(store.snapshot().isEmpty(), "拒绝后不落盘");
+    }
+
+    @Test
+    void exposureSetInvalidModeIsBadParams() {
+        JsonNode err = rpcErr("skill.exposure.set",
+                Json.obj().put("skillId", "plan")
+                        .put("mode", "grey")
+                        .set("workspaces", Json.arr().add(wsA.toString())));
+        assertEquals("BAD_PARAMS", err.path("code").asString(), "非法 mode → BAD_PARAMS: " + err);
+        assertTrue(store.snapshot().isEmpty(), "拒绝后不落盘");
+    }
+
+    @Test
+    void exposureSetUnregisteredRootIsBadParams() {
+        JsonNode err = rpcErr("skill.exposure.set",
+                Json.obj().put("skillId", "plan")
+                        .put("mode", "blacklist")
+                        .set("workspaces", Json.arr().add("C:\\nowhere\\ws")));
         assertEquals("BAD_PARAMS", err.path("code").asString(), "未注册 workspace root → BAD_PARAMS: " + err);
         assertTrue(store.snapshot().isEmpty(), "拒绝后不落盘");
     }
 
     @Test
-    void exclusionsSetStaleRootAlreadyExcludedSurvivesRoundTripAfterWorkspaceRemoved() {
+    void exposureSetStaleRootAlreadyInConfigSurvivesRoundTripAfterWorkspaceRemoved() {
         // 前端「保存时原样保留旧排除项」的回写不能被注册校验卡死:
         // 排除 wsA → 工作区被删(注销) → 携带 wsA 再保存(原样保留)必须成功
-        callExclusionsSet("plan", wsA.toString());
+        callExposureSet("plan", "blacklist", wsA.toString());
         registeredNow.removeIf(r -> r.root().equals(wsA.toString()));
-        JsonNode result = callExclusionsSet("plan", wsA.toString());
-        assertEquals(1, result.path("excludedWorkspaces").size(), "旧排除项回写成功: " + result);
-        assertTrue(store.excludedWorkspaces("plan").contains(
+        JsonNode result = callExposureSet("plan", "blacklist", wsA.toString());
+        assertEquals(1, result.path("workspaces").size(), "旧排除项回写成功: " + result);
+        assertTrue(store.getConfig("plan").workspaces().contains(
                 wsA.toAbsolutePath().normalize().toString()), "stale root 仍在排除表");
         // 不再携带即清除(唯一的移除途径,不能被校验拦住)
-        callExclusionsSet("plan");
-        assertTrue(store.excludedWorkspaces("plan").isEmpty(), "省略 stale root 即清除");
+        callExposureSet("plan", "blacklist");
+        assertNull(store.getConfig("plan"), "省略 stale root 即清除(blacklist + 空 = 删键)");
     }
 
     @Test
-    void exclusionsSetNewUnregisteredRootStillRejectedWhileStaleAllowed() {
-        callExclusionsSet("plan", wsA.toString());
+    void exposureSetNewUnregisteredRootStillRejectedWhileStaleAllowed() {
+        callExposureSet("plan", "blacklist", wsA.toString());
         registeredNow.removeIf(r -> r.root().equals(wsA.toString()));
         // 混入全新的未注册 root 仍须拒绝(防拼写错配的校验不因放行 stale 而失效)
-        JsonNode err = rpcErr("skill.exclusions.set",
+        JsonNode err = rpcErr("skill.exposure.set",
                 Json.obj().put("skillId", "plan")
+                        .put("mode", "blacklist")
                         .set("workspaces", Json.arr().add(wsA.toString()).add("C:\\nowhere\\ws")));
         assertEquals("BAD_PARAMS", err.path("code").asString(), "新增未注册 root 仍拒绝: " + err);
     }
 
     @Test
-    void exclusionsSetRelativeRootIsBadParams() {
-        JsonNode err = rpcErr("skill.exclusions.set",
-                Json.obj().put("skillId", "plan").set("workspaces", Json.arr().add("relative/path")));
+    void exposureSetRelativeRootIsBadParams() {
+        JsonNode err = rpcErr("skill.exposure.set",
+                Json.obj().put("skillId", "plan")
+                        .put("mode", "blacklist")
+                        .set("workspaces", Json.arr().add("relative/path")));
         assertEquals("BAD_PARAMS", err.path("code").asString(), "相对路径不是工作区根 → BAD_PARAMS: " + err);
     }
 
     @Test
-    void exclusionsSetMissingWorkspacesParamIsBadParams() {
-        JsonNode err = rpcErr("skill.exclusions.set", Json.obj().put("skillId", "plan"));
+    void exposureSetMissingWorkspacesParamIsBadParams() {
+        JsonNode err = rpcErr("skill.exposure.set",
+                Json.obj().put("skillId", "plan")
+                        .put("mode", "blacklist"));
         assertEquals("BAD_PARAMS", err.path("code").asString(), "缺 workspaces 数组 → BAD_PARAMS: " + err);
     }
 
-    // ---- skill.exclusions.set:成功路径 ----
+    // ---- skill.exposure.set:成功路径 ----
 
     @Test
-    void exclusionsSetNormalizesRootAndIsVisibleInSubsequentList() {
+    void exposureSetNormalizesRootAndIsVisibleInSubsequentList() {
         // 传未规范化变体(尾段 "."):与注册表 normalize 后字符串相等才放行,落盘为规范化形态
-        JsonNode result = callExclusionsSet("plan", wsA.toString() + "/.", wsB.toString());
+        JsonNode result = callExposureSet("plan", "blacklist", wsA.toString() + "/.", wsB.toString());
 
         assertEquals("plan", result.path("skillId").asString());
-        assertEquals(2, result.path("excludedWorkspaces").size(), "应答回显规范化后的排除表: " + result);
+        assertEquals("blacklist", result.path("mode").asString());
+        assertEquals(2, result.path("workspaces").size(), "应答回显规范化后的排除表: " + result);
         // 逐元素断言(JSON 字符串含转义反斜杠,不能对整串 contains)
-        assertEquals(wsA.toString(), result.path("excludedWorkspaces").get(0).asString(),
+        assertEquals(wsA.toString(), result.path("workspaces").get(0).asString(),
                 "落盘/应答均为 normalize 后的 root(无 /. 后缀)");
-        assertEquals(wsB.toString(), result.path("excludedWorkspaces").get(1).asString());
+        assertEquals(wsB.toString(), result.path("workspaces").get(1).asString());
 
         // 随后的 skill.list 可见(同一次扫描 + 同一 store)
         JsonNode list = rpcOk("skill.list", Json.obj());
-        JsonNode excluded = byId(list, "plan").path("excludedWorkspaces");
-        assertEquals(2, excluded.size());
-        assertEquals(wsA.toString(), excluded.path(0).asString());
-        assertEquals(wsB.toString(), excluded.path(1).asString());
-        assertEquals(0, byId(list, "legacy-tool").path("excludedWorkspaces").size(), "其余 skill 不受影响");
+        JsonNode planEntry = byId(list, "plan");
+        assertEquals("blacklist", planEntry.path("exposureMode").asString());
+        JsonNode exposed = planEntry.path("exposureWorkspaces");
+        assertEquals(2, exposed.size());
+        assertEquals(wsA.toString(), exposed.path(0).asString());
+        assertEquals(wsB.toString(), exposed.path(1).asString());
+        // 其余 skill 不受影响(无配置,不携带 exposure 字段)
+        assertTrue(byId(list, "legacy-tool").path("exposureMode").isMissingNode());
 
         // 已落盘(重启可恢复)
-        assertEquals(java.util.Set.of(wsA.toString(), wsB.toString()), store.excludedWorkspaces("plan"));
+        ExposureConfig cfg = store.getConfig("plan");
+        assertNotNull(cfg);
+        assertEquals(Set.of(wsA.toString(), wsB.toString()), cfg.workspaces());
     }
 
     @Test
-    void exclusionsSetEmptyArrayClearsAndRestoresFullExposure() {
-        callExclusionsSet("plan", wsA.toString());
-        assertEquals(1, byId(rpcOk("skill.list", Json.obj()), "plan").path("excludedWorkspaces").size());
+    void exposureSetWhitelistModeOnlyExposesListedWorkspaces() {
+        JsonNode result = callExposureSet("plan", "whitelist", wsA.toString());
 
-        JsonNode result = callExclusionsSet("plan"); // 空数组 = 恢复全部暴露
+        assertEquals("plan", result.path("skillId").asString());
+        assertEquals("whitelist", result.path("mode").asString());
+        assertEquals(1, result.path("workspaces").size());
+        assertEquals(wsA.toString(), result.path("workspaces").get(0).asString());
 
-        assertEquals(0, result.path("excludedWorkspaces").size(), "应答回显空排除表: " + result);
-        assertEquals(0, byId(rpcOk("skill.list", Json.obj()), "plan").path("excludedWorkspaces").size(),
-                "skill.list 恢复为空排除表");
+        // skill.list 可见
+        JsonNode list = rpcOk("skill.list", Json.obj());
+        JsonNode planEntry = byId(list, "plan");
+        assertEquals("whitelist", planEntry.path("exposureMode").asString());
+        assertEquals(1, planEntry.path("exposureWorkspaces").size());
+        assertEquals(wsA.toString(), planEntry.path("exposureWorkspaces").path(0).asString());
+    }
+
+    @Test
+    void exposureSetBlacklistEmptyClearsConfig() {
+        callExposureSet("plan", "blacklist", wsA.toString());
+        assertEquals(1, byId(rpcOk("skill.list", Json.obj()), "plan").path("exposureWorkspaces").size());
+
+        JsonNode result = callExposureSet("plan", "blacklist"); // 空数组 = 恢复默认(全部暴露)
+
+        assertEquals("blacklist", result.path("mode").asString());
+        assertEquals(0, result.path("workspaces").size(), "应答回显空排除表: " + result);
+        // skill.list 不再携带 exposure 字段(配置已清除)
+        JsonNode planEntry = byId(rpcOk("skill.list", Json.obj()), "plan");
+        assertTrue(planEntry.path("exposureMode").isMissingNode(), "配置已清除,不携带 exposureMode: " + planEntry);
+        assertTrue(planEntry.path("exposureWorkspaces").isMissingNode(), "配置已清除,不携带 exposureWorkspaces: " + planEntry);
         assertFalse(store.snapshot().containsKey("plan"), "store 中该 skill 的键已删除");
     }
 
     @Test
-    void exclusionsSetSuccessBroadcastsConfigChangedSkills() {
-        callExclusionsSet("plan", wsA.toString());
+    void exposureSetSuccessBroadcastsConfigChangedSkills() {
+        callExposureSet("plan", "blacklist", wsA.toString());
 
         ArgumentCaptor<JsonNode> payload = ArgumentCaptor.forClass(JsonNode.class);
         verify(pool, org.mockito.Mockito.timeout(10_000))
