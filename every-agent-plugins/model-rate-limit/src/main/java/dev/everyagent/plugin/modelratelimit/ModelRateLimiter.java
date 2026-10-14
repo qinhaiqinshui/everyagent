@@ -2,8 +2,10 @@ package dev.everyagent.plugin.modelratelimit;
 
 import dev.everyagent.plugin.api.spi.TokenEstimator;
 import dev.everyagent.plugin.api.config.WorkerConfig;
+import dev.everyagent.plugin.api.util.OutputTokenAccumulator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.ai.chat.messages.AssistantMessage;
 
 import java.util.ArrayDeque;
 import java.util.function.BiConsumer;
@@ -223,16 +225,25 @@ public final class ModelRateLimiter {
     public final class Permit {
         private boolean done = false;
         private long estAcc = 0;
+        /** 输出估算累加器:与校准侧同口径(正文 + 思考差分 + 工具调用参数)。 */
+        private final OutputTokenAccumulator acc = new OutputTokenAccumulator(estimator, configId);
 
         private Permit() {
         }
 
-        /** 流中逐 chunk 累计估算输出(仅 stream 路径调用;call 路径由 usage 精确记账)。 */
-        public void onChunk(String text) {
-            if (text == null || text.isEmpty()) {
+        /**
+         * 流中逐 chunk 累计估算输出(仅 stream 路径调用;call 路径由 usage 精确记账)。
+         *
+         * <p>口径与 {@code TokenCalibrationAdvisor} 统一走 {@link OutputTokenAccumulator}
+         * (含工具调用参数)。估算在锁外完成(累加器非线程安全、per-Permit 独占),累加进共享计数在锁内。
+         */
+        public void onChunk(AssistantMessage out) {
+            if (out == null) {
                 return;
             }
-            long e = estimator.estimate(text, configId);
+            long before = acc.tokens();
+            acc.accept(out);
+            long e = acc.tokens() - before;
             if (e <= 0) {
                 return;
             }

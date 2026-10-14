@@ -157,13 +157,13 @@ class ModelRateLimiterTest {
         ModelRateLimitConfig cfg = new ModelRateLimitConfig(0, 0, 1_000_000, 1.0);
         ModelRateLimiter limiter = new ModelRateLimiter("m", cfg, defaults(1000), STUB_ESTIMATOR);
         ModelRateLimiter.Permit p1 = limiter.acquire();
-        p1.onChunk("你好世界"); // est=4
+        p1.onChunk(new org.springframework.ai.chat.messages.AssistantMessage("你好世界")); // est=4
         p1.complete(8);          // actual=8 → ratio=2.0 → factor=0.9*1.0+0.1*2.0=1.1
         assertEquals(1.1, STUB_ESTIMATOR.factorOf("m"), 1e-9);
         assertEquals(1L, STUB_ESTIMATOR.sampleCountOf("m"));
 
         ModelRateLimiter.Permit p2 = limiter.acquire();
-        p2.onChunk("你好世界"); // est=4
+        p2.onChunk(new org.springframework.ai.chat.messages.AssistantMessage("你好世界")); // est=4
         p2.complete(8);          // ratio=2.0 → factor=0.9*1.1+0.1*2.0=1.19
         assertEquals(1.19, STUB_ESTIMATOR.factorOf("m"), 1e-9);
         assertEquals(2L, STUB_ESTIMATOR.sampleCountOf("m"));

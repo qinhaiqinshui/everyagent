@@ -13,6 +13,7 @@ import org.springframework.ai.chat.client.advisor.api.CallAdvisor;
 import org.springframework.ai.chat.client.advisor.api.CallAdvisorChain;
 import org.springframework.ai.chat.client.advisor.api.StreamAdvisor;
 import org.springframework.ai.chat.client.advisor.api.StreamAdvisorChain;
+import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.ai.chat.model.ChatResponse;
 import reactor.core.publisher.Flux;
@@ -136,10 +137,10 @@ public class RateLimitAdvisor implements CallAdvisor, StreamAdvisor {
 
             return chain.nextStream(request)
                     .doOnNext(chunk -> {
-                        // chunk 估算：逐 chunk 累计估算输出 token
-                        String text = chunkText(chunk);
-                        if (text != null && !text.isEmpty()) {
-                            permit.onChunk(text);
+                        // chunk 估算：交给 permit 用统一口径累加（正文 + 思考 + 工具调用参数）
+                        AssistantMessage out = outputOf(chunk);
+                        if (out != null) {
+                            permit.onChunk(out);
                         }
                         // usage 记账：检测到 usage 帧时用真实 completionTokens complete
                         long actual = outputTokensOf(chunk);
@@ -169,13 +170,12 @@ public class RateLimitAdvisor implements CallAdvisor, StreamAdvisor {
         return usage.getCompletionTokens();
     }
 
-    /** 从 chunk 的 AssistantMessage 提取文本（正文 + 思考）用于估算。 */
-    private static String chunkText(ChatClientResponse chunk) {
+    /** 从 chunk 提取 {@code AssistantMessage}（正文 / 思考 / 工具调用参数的统一入口）。 */
+    private static AssistantMessage outputOf(ChatClientResponse chunk) {
         if (chunk == null || chunk.chatResponse() == null
-                || chunk.chatResponse().getResult() == null
-                || chunk.chatResponse().getResult().getOutput() == null) {
+                || chunk.chatResponse().getResult() == null) {
             return null;
         }
-        return chunk.chatResponse().getResult().getOutput().getText();
+        return chunk.chatResponse().getResult().getOutput();
     }
 }
