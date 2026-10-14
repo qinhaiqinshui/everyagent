@@ -32,17 +32,26 @@ import dev.everyagent.worker.config.WorkerProperties;
 class BuiltInSkillPacksTest {
 
     /**
-     * 迁移钉子:两包去 frontmatter 后正文(行尾按仓库策略归一为 LF)的 SHA-256
-     * (= 旧扁平资源 skill/plan.md、skill/skill-creator.md 的正文 hash)。
+     * 迁移钉子:两包去 frontmatter 后正文(行尾按仓库策略归一为 LF)的 SHA-256。
      * 迁移只加了头部,正文内容一字未动;hash 前做 CRLF→LF 归一是因仓库
      * {@code .gitattributes} 统一 {@code eol=crlf}(索引存 LF、checkout 转 CRLF),
      * 不归一的话同一份文件在 LF/CRLF 工作区会算出不同 hash。
      * 若日后有意修改正文,请连同此常量一起更新。
+     *
+     * <p>两包的钉子基线不同:
+     * <ul>
+     *   <li>{@code plan}:自旧扁平资源 {@code skill/plan.md} 迁移以来正文从未改动,
+     *       hash = 迁移前(旧资源)正文 hash;「只加头部、正文不动」的回归护栏。</li>
+     *   <li>{@code skill-creator}:迁移时同样只加头部;但其知识包正文在文档收尾步
+     *       (教 AI 新 frontmatter 写法:仅 name/description、无暴露字段)被<b>有意整体改写</b>,
+     *       故此处置换为改写后正文的 hash——钉住「现状正文」,此后任何再改动(无论有意
+     *       或误改)都须显式连此常量一起更新,误改即红灯。</li>
+     * </ul>
      */
     private static final String PLAN_BODY_SHA256 =
             "4E48F7A4DED1281625E86BA82C2BC6DEF14BCA24443127707CC77A7E5301B489";
     private static final String SKILL_CREATOR_BODY_SHA256 =
-            "06CDF6E37A1F33173CC61A98F4D9D7AB5AB4CAA5334A88FCBB20AB2D25A9B834";
+            "AFEA1E076D8F124072E8C50AAD26B4C169C92BFD0ACE995691C87CBB41BECA53";
 
     private static BuiltInSkillPacks newPacks(Path skillsDir) {
         WorkerProperties props = new WorkerProperties();
@@ -163,8 +172,9 @@ class BuiltInSkillPacksTest {
 
     /**
      * 迁移钉子:物化产物 = classpath 源逐字节一致;且去掉 frontmatter 头后的正文
-     * (行尾归一)SHA-256 与迁移前(旧扁平资源)完全一致——「只加头部、正文不动」的
-     * 回归护栏。行尾归一理由见常量 javadoc。
+     * (行尾归一)SHA-256 与钉子常量一致——plan 钉「迁移前正文」(只加头部、正文不动
+     * 的回归护栏),skill-creator 钉「知识包有意改写后的现状正文」(见常量 javadoc)。
+     * 行尾归一理由见常量 javadoc。
      */
     @Test
     void bodiesByteIdenticalToPreMigration(@TempDir Path tmp) throws Exception {
