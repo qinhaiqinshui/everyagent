@@ -43,6 +43,23 @@ class PermissionGateTest {
         assertEquals(GrantScope.RUN, GrantRegistry.parseScope(" RUN "));
     }
 
+    /**
+     * 回归:前端把作答统一折成「题干：值」回传(不再按 kind 特判,选项 value 为稳定 token)
+     * ——授权弹窗实际作答形如「是否授权?：task」,必须正确解析为对应档位,而非误拒。
+     */
+    @Test
+    void parseScopeWrappedByFrontendPromptPrefix() {
+        assertEquals(GrantScope.RUN, GrantRegistry.parseScope("是否授权?：run"));
+        assertEquals(GrantScope.TASK, GrantRegistry.parseScope("是否授权?：task"));
+        assertEquals(GrantScope.DENY, GrantRegistry.parseScope("是否授权?：deny"));
+        // 值段回传选项文案(旧/兜底形态)同样识别
+        assertEquals(GrantScope.RUN, GrantRegistry.parseScope("是否授权?：本轮运行内允许"));
+        assertEquals(GrantScope.TASK, GrantRegistry.parseScope("是否授权?：本任务全程允许"));
+        assertEquals(GrantScope.DENY, GrantRegistry.parseScope("是否授权?：拒绝"));
+        // 空值段(未选即提交)不得误判为放行
+        assertEquals(GrantScope.DENY, GrantRegistry.parseScope("是否授权?："));
+    }
+
     @Test
     void parseScopeUnrecognizedIsNullOrEmptyIsDeny() {
         assertEquals(GrantScope.DENY, GrantRegistry.parseScope("deny"));

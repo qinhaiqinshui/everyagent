@@ -264,9 +264,30 @@ public class GrantRegistry {
         };
     }
 
-    /** 宽容解析:稳定 token 优先,退文案关键词;未识别按拒绝(安全缺省,兼容任意回传文本)。 */
+    /**
+     * 宽容解析:稳定 token 优先,退文案关键词;未识别按拒绝(安全缺省,兼容任意回传文本)。
+     *
+     * <p><b>作答形态</b>:前端把选择题作答统一折成「题干：值」文本回传(前端纯数据驱动、
+     * 不再按 kind 特判,架构 §5.4),授权弹窗的实际作答形如 {@code 是否授权?：task}
+     * (radio 回传选项 {@code value} 稳定 token)或 {@code 是否授权?：本任务全程允许}
+     * (回传选项文案)。故先折去「题干：」包装,只判值段;同时兼容裸 token / 文案
+     * (旧协议、无人值守拦截、磁盘回放)。
+     */
     public static GrantScope parseScope(String answer) {
         String a = answer == null ? "" : answer.trim().toLowerCase();
+        if (a.isEmpty()) {
+            return GrantScope.DENY;
+        }
+        // 折去前端「题干：值」包装:取最后一处「：」之后的值段(题干为「是否授权?」,
+        // 不含冒号;值段本身可能是稳定 token 或选项文案)。多行作答(多题)取末段足够——
+        // 授权弹窗恒为单题。
+        int sep = a.lastIndexOf('：');
+        if (sep >= 0) {
+            String value = a.substring(sep + 1).trim();
+            if (!value.isEmpty()) {
+                a = value;
+            }
+        }
         if (a.equals("run") || a.contains("本轮")) {
             return GrantScope.RUN;
         }

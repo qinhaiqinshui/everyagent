@@ -502,7 +502,7 @@ ask 管道承载第二类阻塞请求:**危险操作授权**。`PermissionGate` 
 
 **用户显式选择=已授权(工作区外部授权根)**:经 `@` 弹窗 `+` 图标显式选择的工作区外路径由 worker 侧注册为**工作区外部授权根**(§7.17,语义 = 完全读写 READ+WRITE+EXEC)——该选择本身就是授权动作,后续工具访问经文件路径责任链的 `ExternalRootAllowCheck` 放行环直接放行,PermissionGate **不再弹 `kind=authorization` ask**。这是与人工弹窗/AI 审议并列的授权来源,不是绕过 gate:全链 SKIP 兜底、过宽根拒收、命令危险动词拦截面等语义不变。
 
-**弹窗形态**:`ask.create{kind:"authorization"}` 三选项(拒绝 / 本轮运行内允许 / 本任务全程允许),答案回传稳定 token `deny`/`run`/`task`;未识别/超时/取消一律按拒绝(安全缺省)。
+**弹窗形态**:经 `ask.create` 发一条单题选择题(问题文案「是否授权?」),三选项 `label` = 拒绝 / 本轮运行内允许 / 本任务全程允许,`value` = 稳定 token `deny`/`run`/`task`(ask 载荷不带 `kind`:前端纯数据驱动渲染,不按语义特判)。前端把作答统一折成「题干：值」文本回传(radio 回传选项 `value`),故实际到达 worker 的答案形如「是否授权?：task」;`GrantRegistry.parseScope` **先折去「题干：」包装、只判值段**(兼容裸 token/文案:旧协议、无人值守拦截、磁盘回放),未识别/超时/取消一律按拒绝(安全缺省)。
 
 **AskQuestion 结构化信息槽(§7.20)**:`AskQuestion(id, prompt, options, fields)` 第四字段为「标签→值」键值对——授权弹窗的机器可读字段(目录、授权类型等)与人类可读文案分离,前端在 prompt 下、options 上渲染「标签: 值」信息块;wire 序列化对空 map 省略该字段(must-ignore 双向兼容:老前端忽略未知字段,老 worker 不带该字段,前端判空跳过);仅展示增强,不改 ask 协议语义与回答解析。
 
