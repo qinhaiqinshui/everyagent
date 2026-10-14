@@ -11,6 +11,7 @@ import static org.mockito.Mockito.when;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -55,6 +56,9 @@ class ConfigRpcHandlerSkillRpcTest {
     private RpcDispatcher dispatcher;
     private SkillExclusionStore store;
     private ConfigRpcHandler handler;
+    private WorkspaceManager workspaces;
+    /** 可变注册表:测试中途可注销工作区,模拟「排除项对应的工作区已被删」。 */
+    private final List<WorkspaceManager.Registered> registeredNow = new ArrayList<>();
 
     @BeforeEach
     void setUp() throws Exception {
@@ -73,10 +77,10 @@ class ConfigRpcHandlerSkillRpcTest {
         pool = mock(HubPool.class);
         dispatcher = new RpcDispatcher(pool, new WorkerProperties());
 
-        WorkspaceManager workspaces = mock(WorkspaceManager.class);
-        when(workspaces.list()).thenReturn(List.of(
-                new WorkspaceManager.Registered("w_a", wsA.toString(), 1L, 1L, List.of()),
-                new WorkspaceManager.Registered("w_b", wsB.toString(), 2L, 2L, List.of())));
+        workspaces = mock(WorkspaceManager.class);
+        registeredNow.add(new WorkspaceManager.Registered("w_a", wsA.toString(), 1L, 1L, List.of()));
+        registeredNow.add(new WorkspaceManager.Registered("w_b", wsB.toString(), 2L, 2L, List.of()));
+        when(workspaces.list()).thenAnswer(inv -> List.copyOf(registeredNow));
 
         WorkerProperties props = new WorkerProperties();
         props.setHomeDir(home.toString());
@@ -181,6 +185,32 @@ class ConfigRpcHandlerSkillRpcTest {
                 Json.obj().put("skillId", "plan").set("workspaces", Json.arr().add("C:\\nowhere\\ws")));
         assertEquals("BAD_PARAMS", err.path("code").asString(), "未注册 workspace root → BAD_PARAMS: " + err);
         assertTrue(store.snapshot().isEmpty(), "拒绝后不落盘");
+    }
+
+    @Test
+    void exclusionsSetStaleRootAlreadyExcludedSurvivesRoundTripAfterWorkspaceRemoved() {
+        // 前端「保存时原样保留旧排除项」的回写不能被注册校验卡死:
+        // 排除 wsA → 工作区被删(注销) → 携带 wsA 再保存(原样保留)必须成功
+        callExclusionsSet("plan", wsA.toString());
+        registeredNow.removeIf(r -> r.root().equals(wsA.toString()));
+        JsonNode result = callExclusionsSet("plan", wsA.toString());
+        assertEquals(1, result.path("excludedWorkspaces").size(), "旧排除项回写成功: " + result);
+        assertTrue(store.excludedWorkspaces("plan").contains(
+                wsA.toAbsolutePath().normalize().toString()), "stale root 仍在排除表");
+        // 不再携带即清除(唯一的移除途径,不能被校验拦住)
+        callExclusionsSet("plan");
+        assertTrue(store.excludedWorkspaces("plan").isEmpty(), "省略 stale root 即清除");
+    }
+
+    @Test
+    void exclusionsSetNewUnregisteredRootStillRejectedWhileStaleAllowed() {
+        callExclusionsSet("plan", wsA.toString());
+        registeredNow.removeIf(r -> r.root().equals(wsA.toString()));
+        // 混入全新的未注册 root 仍须拒绝(防拼写错配的校验不因放行 stale 而失效)
+        JsonNode err = rpcErr("skill.exclusions.set",
+                Json.obj().put("skillId", "plan")
+                        .set("workspaces", Json.arr().add(wsA.toString()).add("C:\\nowhere\\ws")));
+        assertEquals("BAD_PARAMS", err.path("code").asString(), "新增未注册 root 仍拒绝: " + err);
     }
 
     @Test

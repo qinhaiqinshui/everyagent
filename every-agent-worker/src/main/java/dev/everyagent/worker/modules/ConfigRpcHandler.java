@@ -183,7 +183,10 @@ public class ConfigRpcHandler {
      *       不存在 → {@link NotFoundException}(NOT_FOUND);</li>
      *   <li>{@code workspaces} 每项必须是该 worker <b>已注册</b>的工作区 root
      *       ({@link WorkspaceManager#list()} 比对,两边 {@code toAbsolutePath().normalize()}
-     *       后字符串相等),未注册项 → {@link BadParamsException}(BAD_PARAMS)。</li>
+     *       后字符串相等),未注册项 → {@link BadParamsException}(BAD_PARAMS)——防拼写错配出
+     *       「永不生效的排除」;<b>例外</b>:已存在于该 skill 当前排除表中的 root 放行
+     *       (工作区被删后前端「保存时原样保留旧排除项」的回写不能被卡死,旧项可再次
+     *       落盘也可通过不再携带而清除)。</li>
      * </ul>
      * 已注册但后来被删的工作区留在配置里不报错(不生效但无害,前端展示时过滤)。
      * normalize 后的 root 才落盘,与 {@code WorkspaceManager} 注册表键同形态。
@@ -203,6 +206,7 @@ public class ConfigRpcHandler {
             registered.add(Path.of(r.root()).toAbsolutePath().normalize().toString());
         }
         List<String> roots = new ArrayList<>();
+        Set<String> current = skillExclusions.excludedWorkspaces(skillId);
         for (JsonNode n : wsParam) {
             if (!n.isTextual() || n.asString().isBlank()) {
                 throw new BadParamsException("workspaces 每项须为非空的工作区根路径字符串: " + n);
@@ -218,7 +222,7 @@ public class ConfigRpcHandler {
                 throw new BadParamsException("工作区必须是 worker 所在机器的绝对路径: " + raw);
             }
             String norm = in.toAbsolutePath().normalize().toString();
-            if (!registered.contains(norm)) {
+            if (!registered.contains(norm) && !current.contains(norm)) {
                 throw new BadParamsException("工作区未注册(排除不会生效): " + raw);
             }
             if (!roots.contains(norm)) {
