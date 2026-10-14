@@ -3,6 +3,12 @@ package dev.everyagent.plugin.subagent;
 import dev.everyagent.plugin.api.EveryAgentPlugin;
 import dev.everyagent.plugin.api.WorkerPluginContext;
 import dev.everyagent.plugin.api.config.WorkerConfig;
+import dev.everyagent.plugin.api.skill.SkillMaterializer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.io.IOException;
+import java.util.List;
 
 /**
  * subagent 插件入口。
@@ -10,13 +16,16 @@ import dev.everyagent.plugin.api.config.WorkerConfig;
  * <p>activate() 中注册：
  * <ul>
  *   <li>SubAgentToolsProvider → ToolProviderRegistry</li>
- *   <li>SubAgentSkillContributor → SkillContributorRegistry</li>
  *   <li>TaskLifecycleNode → TaskLifecycleRegistry（spawned.await）</li>
+ *   <li>技能包物化：{@code skill/agent-dispatch/skill.md} → {@code <skillsDir>/agent-dispatch/skill.md}
+ *       （skill 目录唯一真相源——落盘后由 worker 侧目录扫描统一发现，不再走代码注册通道）</li>
  * </ul>
  *
  * <p>task.agents RPC 已收回 task 域（worker TaskManager.rpcTaskAgents），本插件不再注册该 RPC。
  */
 public class SubAgentPlugin implements EveryAgentPlugin {
+
+    private static final Logger log = LoggerFactory.getLogger(SubAgentPlugin.class);
 
     @Override
     public String id() { return "subagent"; }
@@ -35,10 +44,16 @@ public class SubAgentPlugin implements EveryAgentPlugin {
         // 任务收口前等待全部子 agent（超时级联停）
         ctx.registerTaskLifecycleNode(new SubAgentSpawnedAwaitNode(subAgentManager));
 
-        // 3. 注册 Skill 贡献者
+        // 3. 物化安装技能包(扫本插件根 skill/*/skill.md;父委派链上无同名根,
+        //    不会代装 worker 内置包)。IO 失败 WARN 降级,不阻断 activate 其余部分
+        //    (代价是该 skill 暂时消失,可经 skill 重载重试复原)。
         WorkerConfig props = ctx.services().config();
-        SubAgentSkillContributor skillContributor = new SubAgentSkillContributor(props);
-        ctx.registerSkillContributor(skillContributor);
-        skillContributor.init();
+        try {
+            List<String> installed = SkillMaterializer.materializeAllFromClasspath(
+                    props.resolveSkillsDir(), getClass().getClassLoader());
+            log.info("subagent 插件物化技能包: {}", installed);
+        } catch (IOException e) {
+            log.warn("subagent 插件技能包物化失败(不阻断激活,可经 skill 重载重试)", e);
+        }
     }
 }
