@@ -5,22 +5,32 @@ import dev.everyagent.worker.hub.HubPool;
 import dev.everyagent.worker.modules.UserPreferenceStore;
 import dev.everyagent.worker.proto.ConfigDtos.ModelConfig;
 import dev.everyagent.plugin.api.event.Events;
+import dev.everyagent.plugin.api.exception.BadParamsException;
+import dev.everyagent.plugin.api.exception.NotFoundException;
 import dev.everyagent.worker.proto.RpcMethods;
 import dev.everyagent.worker.rpc.RpcContext;
 import dev.everyagent.worker.rpc.RpcDispatcher;
 import dev.everyagent.worker.skill.BuiltInSkillPacks;
+import dev.everyagent.worker.skill.Skill;
 import dev.everyagent.worker.skill.SkillCatalog;
 import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
+import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.node.ArrayNode;
 import tools.jackson.databind.node.ObjectNode;
 
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 /**
- * 配置与技能 RPC（基础设施层）：config.get / config.reload / skill.reload。
+ * 配置与技能 RPC（基础设施层）：config.get / config.reload / skill.reload /
+ * skill.list / skill.exclusions.set / pref.get / pref.set。
  * 从 TaskManager 迁出——这些 RPC 与任务编排无关，属基础设施的配置面。
  * 自己在 @PostConstruct 中注册到 RpcDispatcher（与 task.* 平权注册）。
  *
@@ -36,6 +46,8 @@ public class ConfigRpcHandler {
     private final ConfigStore configs;
     private final SkillCatalog skillCatalog;
     private final BuiltInSkillPacks builtInSkillPacks;
+    private final SkillExclusionStore skillExclusions;
+    private final WorkspaceManager workspaces;
     private final UserPreferenceStore preferences;
     private final HubPool pool;
     private final RpcDispatcher dispatcher;
@@ -43,12 +55,16 @@ public class ConfigRpcHandler {
     public ConfigRpcHandler(ConfigStore configs,
                             SkillCatalog skillCatalog,
                             BuiltInSkillPacks builtInSkillPacks,
+                            SkillExclusionStore skillExclusions,
+                            WorkspaceManager workspaces,
                             UserPreferenceStore preferences,
                             HubPool pool,
                             RpcDispatcher dispatcher) {
         this.configs = configs;
         this.skillCatalog = skillCatalog;
         this.builtInSkillPacks = builtInSkillPacks;
+        this.skillExclusions = skillExclusions;
+        this.workspaces = workspaces;
         this.preferences = preferences;
         this.pool = pool;
         this.dispatcher = dispatcher;
@@ -59,6 +75,8 @@ public class ConfigRpcHandler {
         dispatcher.register(RpcMethods.CONFIG_GET, this::rpcConfigGet);
         dispatcher.register(RpcMethods.CONFIG_RELOAD, this::rpcConfigReload);
         dispatcher.register(RpcMethods.SKILL_RELOAD, this::rpcSkillReload);
+        dispatcher.register(RpcMethods.SKILL_LIST, this::rpcSkillList);
+        dispatcher.register(RpcMethods.SKILL_EXCLUSIONS_SET, this::rpcSkillExclusionsSet);
         dispatcher.register(RpcMethods.PREF_GET, this::rpcPrefGet);
         dispatcher.register(RpcMethods.PREF_SET, this::rpcPrefSet);
     }
@@ -126,6 +144,95 @@ public class ConfigRpcHandler {
     int reloadSkills() {
         builtInSkillPacks.materialize();
         return skillCatalog.reload();
+    }
+
+    /**
+     * skill.list:返回该 worker 的全量 skill(数据源 {@link SkillCatalog#scan()},目录即真相源,
+     * 内置/插件包与用户自制一并计入)+ 各自「不自动暴露的工作区」排除表
+     * (数据源 {@link SkillExclusionStore#snapshot()})。设置页「Skill 列表」表格的数据源。
+     *
+     * <p>wire 形态(注意 name 对应 {@link Skill#title()} 记录字段——wire 字段名以计划为准用 name):
+     * {@code [{id, name, description, knowledgePath, excludedWorkspaces:[...]}]}。
+     * 排除表只描述「不自动暴露的工作区」,不影响 {@code /} 菜单(菜单永远全量)。
+     */
+    void rpcSkillList(RpcContext ctx) {
+        Map<String, Set<String>> snap = skillExclusions.snapshot();
+        ArrayNode skills = Json.arr();
+        for (Skill s : skillCatalog.scan()) {
+            ArrayNode excluded = Json.arr();
+            snap.getOrDefault(s.id(), Set.of()).forEach(excluded::add);
+            skills.add(Json.obj()
+                    .put("id", s.id())
+                    .put("name", s.title())
+                    .put("description", s.description())
+                    .put("knowledgePath", s.knowledgePath())
+                    .set("excludedWorkspaces", excluded));
+        }
+        ctx.ok(skills);
+    }
+
+    /**
+     * skill.exclusions.set(架构 §7.17 暴露控制,参数 {@code skillId} + {@code workspaces:[root,...]}):
+     * 覆盖式设置某 skill「不自动暴露的工作区」黑名单并原子落盘,成功后广播
+     * {@code config.changed{keys:["skills"]}}(前端表格与 {@code /} 菜单刷新;运行中任务不受
+     * 影响——skill 注入发生在 run 开始时)。<b>空数组 = 恢复全部工作区暴露</b>。
+     *
+     * <p>校验(防「永不生效的排除」):
+     * <ul>
+     *   <li>{@code skillId} 必须存在于当前 catalog(实时 {@link SkillCatalog#scan()} 比对),
+     *       不存在 → {@link NotFoundException}(NOT_FOUND);</li>
+     *   <li>{@code workspaces} 每项必须是该 worker <b>已注册</b>的工作区 root
+     *       ({@link WorkspaceManager#list()} 比对,两边 {@code toAbsolutePath().normalize()}
+     *       后字符串相等),未注册项 → {@link BadParamsException}(BAD_PARAMS)。</li>
+     * </ul>
+     * 已注册但后来被删的工作区留在配置里不报错(不生效但无害,前端展示时过滤)。
+     * normalize 后的 root 才落盘,与 {@code WorkspaceManager} 注册表键同形态。
+     */
+    void rpcSkillExclusionsSet(RpcContext ctx) {
+        String skillId = ctx.strParam("skillId");
+        JsonNode wsParam = ctx.params().path("workspaces");
+        if (!wsParam.isArray()) {
+            throw new BadParamsException("缺少参数 workspaces(工作区根路径数组)");
+        }
+        boolean known = skillCatalog.scan().stream().anyMatch(s -> skillId.equals(s.id()));
+        if (!known) {
+            throw new NotFoundException("skill 不存在: " + skillId);
+        }
+        Set<String> registered = new HashSet<>();
+        for (WorkspaceManager.Registered r : workspaces.list()) {
+            registered.add(Path.of(r.root()).toAbsolutePath().normalize().toString());
+        }
+        List<String> roots = new ArrayList<>();
+        for (JsonNode n : wsParam) {
+            if (!n.isTextual() || n.asString().isBlank()) {
+                throw new BadParamsException("workspaces 每项须为非空的工作区根路径字符串: " + n);
+            }
+            String raw = n.asString().trim();
+            Path in;
+            try {
+                in = Path.of(raw);
+            } catch (RuntimeException e) {
+                throw new BadParamsException("工作区路径非法: " + raw);
+            }
+            if (!in.isAbsolute()) {
+                throw new BadParamsException("工作区必须是 worker 所在机器的绝对路径: " + raw);
+            }
+            String norm = in.toAbsolutePath().normalize().toString();
+            if (!registered.contains(norm)) {
+                throw new BadParamsException("工作区未注册(排除不会生效): " + raw);
+            }
+            if (!roots.contains(norm)) {
+                roots.add(norm);
+            }
+        }
+        skillExclusions.setExcludedWorkspaces(skillId, roots);
+        pool.broadcastEvt(Events.CONFIG_CHANGED,
+                Json.toJson(new Events.ConfigChanged(List.of("skills"))));
+        ArrayNode excluded = Json.arr();
+        skillExclusions.excludedWorkspaces(skillId).forEach(excluded::add);
+        log.info("skill.exclusions.set 完成: {} 排除 {} 个工作区(已写入 skill-exclusions.json)",
+                skillId, excluded.size());
+        ctx.ok(Json.obj().put("skillId", skillId).set("excludedWorkspaces", excluded));
     }
 
     /**

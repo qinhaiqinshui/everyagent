@@ -47,6 +47,8 @@ class ConfigRpcHandlerSkillReloadTest {
                 mock(ConfigStore.class),
                 catalog,
                 packs,
+                mock(SkillExclusionStore.class),
+                mock(WorkspaceManager.class),
                 mock(UserPreferenceStore.class),
                 mock(HubPool.class),
                 mock(RpcDispatcher.class));

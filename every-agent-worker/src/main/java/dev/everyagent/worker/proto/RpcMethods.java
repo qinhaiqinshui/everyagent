@@ -29,6 +29,10 @@ public final class RpcMethods {
     public static final String CONFIG_RELOAD = "config.reload";
     /** 重新扫描外部 skill 列表(用户在系统技能目录下增删 skill 目录后热加载)。 */
     public static final String SKILL_RELOAD = "skill.reload";
+    /** 全量 skill 清单(目录扫描) + 各自「不自动暴露的工作区」排除表(设置页表格数据源)。 */
+    public static final String SKILL_LIST = "skill.list";
+    /** 覆盖式设置某 skill 的排除工作区清单(参数 skillId + workspaces:[root,...];空数组=恢复全部暴露)。 */
+    public static final String SKILL_EXCLUSIONS_SET = "skill.exclusions.set";
     public static final String WORKSPACES_LIST = "workspaces.list";
     public static final String WORKSPACES_ADD = "workspaces.add";
     public static final String WORKSPACES_REMOVE = "workspaces.remove";
