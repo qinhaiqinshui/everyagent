@@ -81,7 +81,7 @@ class FsBrowseTest {
         dispatcher.onHubMessage(link, frame);
 
         assertTrue(replied.await(5, TimeUnit.SECONDS), "fs.browse 未在 5s 内应答");
-        Object[] args = out.get(0); // 同一 reqId 至多一次 ok/err(§13.3)
+        Object[] args = out.get(0); // 同一 reqId 至多一次 ok/err(§14.3)
         return Json.obj().put("event", (String) args[1]).set("payload", (JsonNode) args[3]);
     }
 

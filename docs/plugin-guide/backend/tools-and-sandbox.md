@@ -11,12 +11,12 @@ has_children: false
 
 | SPI | 注册方法 | worker 侧注册表 | 消费点（详见各节） | 内置范例插件 |
 |---|---|---|---|---|
-| `ToolProvider` | `registerToolProvider`（`every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/WorkerPluginContext.java:42`） | `ToolProviderRegistry` | `AgentBuilder` 装配期聚合 | subagent、sandbox-windows-mic、sandbox-wsl-ubuntu、sandbox-windows-codex |
-| `ToolExecutionInterceptor` | `registerToolExecutionInterceptor`（`WorkerPluginContext.java:57`） | `ToolExecutionInterceptorRegistry` | per-run `InterceptingToolCallingManager` | secret-redaction、unattended |
-| `SandboxProvider` | `registerSandboxProvider`（`WorkerPluginContext.java:48`） | `SandboxProviderRegistry` | `OsSandbox` 惰性解析 + `SandboxPathRegistry` | sandbox-windows-mic、sandbox-wsl-ubuntu、sandbox-windows-codex |
-| `FileReferenceHandler` | `registerFileReferenceHandler`（`WorkerPluginContext.java:69`） | `FileReferenceHandlerRegistry` | 用户输入物化服务 `UserInputMaterializer`（轮次节点 `FileReferenceProcessNode`(875) 与队列「插入到当前对话」共用） | image-vision（唯一） |
+| `ToolProvider` | `registerToolProvider`（`every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/WorkerPluginContext.java:43`） | `ToolProviderRegistry` | `AgentBuilder` 装配期聚合 | subagent、sandbox-windows-mic、sandbox-wsl-ubuntu、sandbox-windows-codex |
+| `ToolExecutionInterceptor` | `registerToolExecutionInterceptor`（`WorkerPluginContext.java:58`） | `ToolExecutionInterceptorRegistry` | per-run `InterceptingToolCallingManager` | secret-redaction、unattended |
+| `SandboxProvider` | `registerSandboxProvider`（`WorkerPluginContext.java:49`） | `SandboxProviderRegistry` | `OsSandbox` 惰性解析 + `SandboxPathRegistry` | sandbox-windows-mic、sandbox-wsl-ubuntu、sandbox-windows-codex |
+| `FileReferenceHandler` | `registerFileReferenceHandler`（`WorkerPluginContext.java:67`） | `FileReferenceHandlerRegistry` | 用户输入物化服务 `UserInputMaterializer`（轮次节点 `FileReferenceProcessNode`(875) 与队列「插入到当前对话」共用） | image-vision（唯一） |
 
-所有注册方法的 worker 实现(`every-agent-worker/src/main/java/dev/everyagent/worker/plugin/WorkerPluginContextImpl.java:126,136,151,182`)都只是往对应注册表 `add` 一行——**注册即生效、无过滤、无校验**。
+所有注册方法的 worker 实现(`every-agent-worker/src/main/java/dev/everyagent/worker/plugin/WorkerPluginContextImpl.java:140,150,179,205`)都只是往对应注册表 `add` 一行——**注册即生效、无过滤、无校验**。
 
 ## 1. ToolProvider —— 给 AI 注入工具
 
@@ -58,7 +58,7 @@ worker **复用 Spring AI 框架**，不手搓工具循环（根 `AGENTS.md` 红
 ```
 插件 activate(ctx)
   └─ ctx.registerToolProvider(p) → ToolProviderRegistry.register
-     （WorkerPluginContextImpl.java:126；注册表 CopyOnWriteArrayList，ToolProviderRegistry.java:19-23）
+     （WorkerPluginContextImpl.java:140；注册表 CopyOnWriteArrayList，ToolProviderRegistry.java:19-23）
 每轮 agent 装配（AgentBuilder.create()，每次 build 重新聚合，构造 ToolContextImpl）
   ├─ for (p : toolRegistry.getProviders()) if (p.appliesTo(toolCtx)) → createTools 并入
   │    证据：AgentBuilder.java:125-133；Build.tools(list, ModifyMode) 可增删改 :223-236
@@ -97,7 +97,7 @@ public String run_agent(
         @ToolParam(description = "指定复用的 agentId", required = false) String agentId) { ... }
 ```
 
-要点：**描述写给模型看**，直接决定模型会不会用、怎么用；可缺省参数标 `required = false`；需要 per-run 状态（如 ExecContext）就在 `createTools` 里 `new` 进工具实例（工具对象每次装配新建）。注册就是 activate 里的一行：`ctx.registerToolProvider(new SubAgentToolsProvider(subAgentManager))`（`SubAgentPlugin.java:31`）。
+要点：**描述写给模型看**，直接决定模型会不会用、怎么用；可缺省参数标 `required = false`；需要 per-run 状态（如 ExecContext）就在 `createTools` 里 `new` 进工具实例（工具对象每次装配新建）。注册就是 activate 里的一行：`ctx.registerToolProvider(new SubAgentToolsProvider(subAgentManager))`（`SubAgentPlugin.java:41`）。
 
 ### 1.4 工具怎么写：复用 ShellTool（命令类工具）
 
@@ -199,7 +199,7 @@ ChatClient.prompt(...).stream()
 | 1 | `SandboxProviderRegistry`（`@Component`）：`register`/`unregister`/`select`/`describeProviders`/`generation` | `every-agent-worker/src/main/java/dev/everyagent/worker/plugin/registry/SandboxProviderRegistry.java:26-137` |
 | 2 | `OsSandbox.backend()` 按注册表**代次惰性解析** delegate，解析结果（含 null→DIRECT）按代次缓存；`id()`/`mount()`/`onWorkspaceRemoved()` 一律转发给 delegate | `every-agent-worker/src/main/java/dev/everyagent/worker/os/OsSandbox.java:102-161` |
 | 3 | `AgentBuilder.createToolContext` 把 `OsSandbox` 门面塞进 `ToolContextImpl.sandbox()`，供所有插件的 `appliesTo(ctx.sandbox().id())` 判定 | `AgentBuilder.java:135-139`、`ToolContextImpl.java:39-53,74-77` |
-| 4 | `SandboxPathRegistry` 把注册意图按当前生效后端**物化**为 `mount()` 映射表（宿主路径 ↔ 沙箱内路径），advisor/工具链查表翻译 | 架构 §7.10；登记点 `AgentBuilder.registerSandboxPaths`（`AgentBuilder.java:146-173`）、`WorkerBeanConfiguration.skillAdvisor`（`WorkerBeanConfiguration.java:63-70`） |
+| 4 | `SandboxPathRegistry` 把注册意图按当前生效后端**物化**为 `mount()` 映射表（宿主路径 ↔ 沙箱内路径），advisor/工具链查表翻译 | 架构 §7.10；登记点 `AgentBuilder.registerSandboxPaths`（`AgentBuilder.java:157-`）、`WorkerBeanConfiguration.skillAdvisorProvider`（`WorkerBeanConfiguration.java:76-82`） |
 
 ### 3.2 接口定义（原码摘录）
 

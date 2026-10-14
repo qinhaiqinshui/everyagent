@@ -164,7 +164,7 @@ templates/
 │   └── gitignore.tpl                          渲染成 .gitignore（target/、web 产物、node_modules/、dist/）
 ├── java/                                      L2 kind ∈ {java, full}
 │   └── src/
-│       ├── main/java/{{packagePath}}/{{entryClass}}.java.tpl      入口类（15 个注册方法目录 + 注释版 ToolProvider 示例）
+│       ├── main/java/{{packagePath}}/{{entryClass}}.java.tpl      入口类（16 个注册方法目录 + 注释版 ToolProvider 示例）
 │       ├── main/resources/gitkeep.tpl                             空资源目录占位 → .gitkeep
 │       └── test/java/{{packagePath}}/{{entryClass}}SmokeTest.java.tpl  JUnit5 冒烟测试（仅依赖 plugin-api）
 ├── web/                                       L2 kind ∈ {web, full}

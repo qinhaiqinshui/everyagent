@@ -98,7 +98,7 @@ public class ConfigRpcHandler {
     }
 
     /**
-     * config.reload:重新读取模型配置(架构 §5.10)。
+     * config.reload:重新读取模型配置(架构 §5.5)。
      * 从 {@code <系统目录>/application-worker.yaml} 重新解析 worker.models,
      * 成功后广播 config.changed{keys:["models"]} 通知前端刷新。
      * 仅影响后续新建任务的模型解析;运行中任务使用创建时冻结的快照,不受影响。

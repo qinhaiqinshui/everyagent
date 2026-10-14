@@ -146,7 +146,7 @@ class PermissionGateTest {
         assertTrue(c2.contains("C:\\"), c2.toString());
     }
 
-    // ---- §13.3 修复 B:isOverBroadRoot 谓词(只拒盘根/工作区祖先;§13.8 放开后系统目录可授权) ----
+    // ---- isOverBroadRoot 谓词(只拒盘根/工作区祖先;系统目录不在拒收之列,可正常走授权,§7.17) ----
 
     @Test
     void overBroadRootPredicateMatrix(@TempDir Path ws) throws IOException {
@@ -169,14 +169,14 @@ class PermissionGateTest {
         assertFalse(OverBroadRootCheck.isOverBroadRoot(null, null, null));
         assertFalse(OverBroadRootCheck.isOverBroadRoot(sibling, null, null),
                 "无上下文时不误伤");
-        // §13.8 放开:系统目录/home 不再视为「过度宽泛根」,与普通工作区外目录同权走授权链
+        // 系统目录/home 不再视为「过度宽泛根」,与普通工作区外目录同权走授权链(§7.17)
         Path homeDir = wsReal.resolveSibling("home-" + System.nanoTime());
         Files.createDirectories(homeDir);
         assertFalse(OverBroadRootCheck.isOverBroadRoot(homeDir, wsReal, wsReal),
                 "系统目录可授权(不再拒收)");
     }
 
-    // ---- §13.8:SkillsReadAllowCheck——读取 skills 目录内容直接放行 ----
+    // ---- SkillsReadAllowCheck——skills 目录读写直接放行(§7.17「skill 读写放行」) ----
 
     @Test
     void skillsReadAllowCheckAllowsReadOnlyInsideSkillsDir(@TempDir Path skills, @TempDir Path outside)

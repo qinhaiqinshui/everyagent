@@ -10,8 +10,8 @@ worker 侧（Java）插件能力手册，共 5 篇，建议按顺序读：先看
 
 | 文档 | 讲什么 |
 |---|---|
-| [后端插件总览](overview.md) | `EveryAgentPlugin` 生命周期、每插件一个 `URLClassLoader` 隔离、扫描 → 激活全链路、15 个 `ctx.register*` 注册点 |
+| [后端插件总览](overview.md) | `EveryAgentPlugin` 生命周期、每插件一个 `URLClassLoader` 隔离、扫描 → 激活全链路、16 个 `ctx.register*` 注册点 |
 | [工具与沙箱扩展点](tools-and-sandbox.md) | ToolProvider / ToolExecutionInterceptor / SandboxProvider / FileReferenceHandler，以及与 PermissionGate、jail 的关系 |
-| [Advisor 与模型增强扩展点](advisors.md) | AdvisorProvider / ChatModelEnhancer / TokenEstimator / SkillContributor / SearchProvider / AuthorizationHandler + Advisor 链 order 坐标 |
+| [Advisor 与模型增强扩展点](advisors.md) | AdvisorProvider / ChatModelEnhancer / TokenEstimator / SearchProvider / AuthorizationHandler + Advisor 链 order 坐标 + 技能包物化（SkillMaterializer） |
 | [任务生命周期与 RPC](task-and-rpc.md) | TaskAdmissionPolicy / TaskLifecycleNode、`registerRpcMethod` 命名与 ACL、Slash 候选与 token 解析 |
 | [持久化与状态](persistence-and-state.md) | 插件私有数据的合法存放（`pluginDir()` + 自注册 RPC）、两种禁用机制 |

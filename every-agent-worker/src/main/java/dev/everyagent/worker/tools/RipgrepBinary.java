@@ -10,7 +10,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 
 /**
- * ripgrep 二进制定位器(程序附属文件,架构 §5.10)。
+ * ripgrep 二进制定位器(程序附属文件,架构 §7.17「程序附属文件」)。
  *
  * <p>定位顺序:
  * <ol>

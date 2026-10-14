@@ -21,7 +21,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 模型配置存储(架构 §5.10,config.get 只读):数据源 = Spring 配置 {@code worker.models}
+ * 模型配置存储(架构 §5.5「config.get」/§7.17「配置分层」):数据源 = Spring 配置 {@code worker.models}
  * (jar 内 application.yml 默认 + ~/.everyagent/application-worker.yaml 用户覆盖)。
  * 模型配置是系统功能,不进工作区、不随工作区切换;任务创建时解析为不可变快照
  * (apiKey 只留内存,不入事件日志)。本类不再持久化、不再提供写入口(前端只读)。
@@ -62,7 +62,7 @@ public class ConfigStore {
     }
 
     /**
-     * 重新读取模型配置(架构 §5.10):
+     * 重新读取模型配置(架构 §5.5「config.reload」):
      * 从 {@code <系统目录>/application-worker.yaml} 重新解析 {@code worker.models},
      * 如文件不存在或不含 models 段则保持当前配置不变(不因文件缺失而清空)。
      * 调用方负责在成功后广播 {@code config.changed} 事件通知前端刷新。

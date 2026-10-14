@@ -27,9 +27,9 @@ has_children: false
 | `void activate(WorkerPluginContext ctx)` | 一切注册发生在此；抛异常只废自己一个插件 | 同上 | 同上 |
 | `default void deactivate()` | 停机钩子：worker 优雅关闭时由 PluginLoader 调用（运行期禁用/卸载不触发） | [总览 §3.2](../backend/overview.md#32-deactivate-只在-worker-关闭时调用改动--重启-worker) | — |
 
-### 1.2 `WorkerPluginContext` —— 15 个注册方法
+### 1.2 `WorkerPluginContext` —— 16 个注册方法
 
-13 个声明于 `every-agent-plugin-api/.../WorkerPluginContext.java:42-94`，末 2 个在父接口 `TaskPluginContext`（表中 #14/#15）。注册即生效：worker 侧只往注册表 `add` 一行，无校验、无过滤（[总览 §6.1](../backend/overview.md#61-注册方法15-个)）。
+14 个声明于 `every-agent-plugin-api/.../WorkerPluginContext.java:43-109`（11 个 SPI + 3 个通用），末 2 个在父接口 `TaskPluginContext`（表中 #15/#16）。注册即生效：worker 侧只往注册表 `add` 一行，无校验、无过滤（[总览 §6.1](../backend/overview.md#61-注册方法16-个)）。另有 2 个事件出网过滤注册（表中 #8/#9）暂无本站专篇，契约见[架构说明 §8.5](../../ARCHITECTURE.md#85-插件系统统一加载架构)。skill 贡献**不在此表**——代码注册通道已删除，插件 skill 走 [advisors §5](../backend/advisors.md#5-技能包物化skillmaterializer-插件贡献-skill-的唯一方式) 的物化落盘。
 
 | # | 注册方法（一行签名） | 详解 | 内置范例 |
 |---|---|---|---|
@@ -40,14 +40,15 @@ has_children: false
 | 5 | `void registerAdvisorProvider(AdvisorProvider p)` | [advisors §1](../backend/advisors.md#1-advisorprovider--向-agent-链注入-advisor) | 12 插件 13 provider（system-info、git、context-compression…） |
 | 6 | `void registerSearchProvider(SearchProvider p)` | [advisors §6](../backend/advisors.md#6-searchprovider--搜索后端统一-search-聚合--mentionquery-能力接口) | 统一 `search` 聚合（内置 `file-content`/`file-name`/`task` 三 provider 与插件 provider 同权，按 `order` 升序聚合）；能力接口 `SuggestionProvider`（mention.query）；无内置插件范例 |
 | 7 | `void registerAuthorizationHandler(AuthorizationHandler h)` | [advisors §7](../backend/advisors.md#7-authorizationhandler--授权决议链节点) | ai-review(100f)、unattended(200f)；内置 human=300f 终结 |
-| 8 | `void registerSkillContributor(SkillContributor c)` | [advisors §5](../backend/advisors.md#5-skillcontributor--贡献-skill) | subagent（skill 同时进 system prompt 与 `/` 菜单，菜单副标题带「插件 · 」来源标记） |
-| 9 | `void registerTokenEstimator(TokenEstimator e)` | [advisors §4](../backend/advisors.md#4-tokenestimator--替换-token-估算器) | model-rate-limit |
-| 10 | `void registerChatModelEnhancer(ChatModelEnhancer e)` | [advisors §3](../backend/advisors.md#3-chatmodelenhancer--模型构建期介入) | model-pool |
-| 11 | `void registerRpcMethod(String method, RpcMethod h)` | [任务 §3](../backend/task-and-rpc.md#3-registerrpcmethod--自注册-rpc) | git×13、task-input-queue×3、task-queue/file-change 各 1 |
-| 12 | `void registerSlashProvider(String id, SlashProvider p)` | [任务 §4.1](../backend/task-and-rpc.md#41-接口签名) | unattended、git、ai-review、sandbox-wsl-ubuntu |
-| 13 | `void registerSlashTokenResolver(SlashTokenResolver r)` | [任务 §4.1](../backend/task-and-rpc.md#41-接口签名) | 同上四家 |
-| 14 | `void registerTaskAdmissionPolicy(TaskAdmissionPolicy p)`（`TaskPluginContext.java:17`） | [任务 §1](../backend/task-and-rpc.md#1-taskadmissionpolicy--任务创建准入预检) | task-queue（全仓唯一） |
-| 15 | `void registerTaskLifecycleNode(TaskLifecycleNode n)`（`TaskPluginContext.java:24`） | [任务 §2](../backend/task-and-rpc.md#2-tasklifecyclenode--洋葱模型) | 4 插件 5 节点（order 15/40/870/877/950） |
+| 8 | `void registerEventEgressFilter(EventEgressFilter f)` | [架构 §8.5](../../ARCHITECTURE.md#85-插件系统统一加载架构)（暂无专篇：出网投影器的事件级过滤链，可丢弃/改写 payload，事件仍落盘） | ai-review（丢弃审议 agent 过程事件） |
+| 9 | `void registerRoundEgressFilter(RoundEgressFilter r)` | 同上（轮次级出网过滤链） | ai-review |
+| 10 | `void registerTokenEstimator(TokenEstimator e)` | [advisors §4](../backend/advisors.md#4-tokenestimator--替换-token-估算器) | model-rate-limit |
+| 11 | `void registerChatModelEnhancer(ChatModelEnhancer e)` | [advisors §3](../backend/advisors.md#3-chatmodelenhancer--模型构建期介入) | model-pool |
+| 12 | `void registerRpcMethod(String method, RpcMethod h)` | [任务 §3](../backend/task-and-rpc.md#3-registerrpcmethod--自注册-rpc) | git×13、task-input-queue×3、task-queue/file-change 各 1 |
+| 13 | `void registerSlashProvider(String id, SlashProvider p)` | [任务 §4.1](../backend/task-and-rpc.md#41-接口签名) | unattended、git、ai-review、sandbox-wsl-ubuntu |
+| 14 | `void registerSlashTokenResolver(SlashTokenResolver r)` | [任务 §4.1](../backend/task-and-rpc.md#41-接口签名) | 同上四家 |
+| 15 | `void registerTaskAdmissionPolicy(TaskAdmissionPolicy p)`（`TaskPluginContext.java:17`） | [任务 §1](../backend/task-and-rpc.md#1-taskadmissionpolicy--任务创建准入预检) | task-queue（全仓唯一） |
+| 16 | `void registerTaskLifecycleNode(TaskLifecycleNode n)`（`TaskPluginContext.java:24`） | [任务 §2](../backend/task-and-rpc.md#2-tasklifecyclenode--洋葱模型) | 4 插件 5 节点（order 15/40/870/877/950） |
 
 ### 1.3 `WorkerPluginContext` —— 5 个辅助方法（不注册、只取数）
 
@@ -61,7 +62,7 @@ has_children: false
 
 ### 1.4 `TaskPluginContext` —— 父接口（2 方法）
 
-`WorkerPluginContext extends TaskPluginContext`，该父接口只声明上表 #14/#15 两个注册方法（`every-agent-plugin-api/.../task/TaskPluginContext.java:17,24`）。详解：[准入预检](../backend/task-and-rpc.md#1-taskadmissionpolicy--任务创建准入预检)、[洋葱节点](../backend/task-and-rpc.md#2-tasklifecyclenode--洋葱模型)。
+`WorkerPluginContext extends TaskPluginContext`，该父接口只声明上表 #15/#16 两个注册方法（`every-agent-plugin-api/.../task/TaskPluginContext.java:17,24`）。详解：[准入预检](../backend/task-and-rpc.md#1-taskadmissionpolicy--任务创建准入预检)、[洋葱节点](../backend/task-and-rpc.md#2-tasklifecyclenode--洋葱模型)。
 
 ### 1.5 `WorkerServices` —— 服务清单（14 项）
 

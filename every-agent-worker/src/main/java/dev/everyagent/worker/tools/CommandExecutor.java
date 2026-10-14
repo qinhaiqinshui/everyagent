@@ -128,7 +128,7 @@ public class CommandExecutor {
         // 前缀只负责编码偏好与噪声抑制。
         String spawnCmd = powershell ? ExecResults.buildPowerShellScript(command) : command;
         // wsl-bwrap 后端:已授权 EXEC 根随调用挂载进沙箱(授权=绑定,撤销=下次不绑,零宿主状态);
-        // 走 execRootsSandboxed(§13.3 L2 过滤)——过度宽泛根(如历史 C:\\)不得进 --bind 白名单,
+        // 走 execRootsSandboxed(§7.8 过宽根过滤)——过度宽泛根(如历史 C:\\)不得进 --bind 白名单,
         // 否则整个 /mnt/c 会被读写挂进沙箱,读隔离被击穿。wsl-direct 不建 bwrap 命名空间,
         // 授权根由动态 ensureMount 承担,此参数为空。powershell 走 Windows 原生,
         // 附加根 prepareWritableRoots 已空体(Medium IL 无需标注);不参与 bwrap 挂载。

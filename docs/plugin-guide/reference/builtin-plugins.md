@@ -43,7 +43,7 @@ has_children: false
 | sandbox-windows-mic | Windows MIC 沙箱 | java（`enabled:false`） | SandboxProvider + ToolProvider | — | priority 5 | 入口 34 行 |
 | sandbox-wsl-ubuntu | WSL Ubuntu 沙箱 | java（`enabled:false`） | SandboxProvider + ToolProvider + SlashProvider + SlashTokenResolver | — | priority 10 | 入口 47 行 |
 | secret-redaction | 凭据输出脱敏 | java | ToolExecutionInterceptor | — | — | 入口 24 行 |
-| subagent | 子 Agent | java | ToolProvider + SkillContributor + TaskLifecycleNode | — | 节点 950 | 入口 47 行 |
+| subagent | 子 Agent | java | ToolProvider + 技能包物化（SkillMaterializer）+ TaskLifecycleNode | — | 节点 950 | 入口 59 行 |
 | system-info | 系统环境信息注入 | java | AdvisorProvider | — | HP+50 | 入口 19 行 |
 | task-edit-resend | 编辑重发 | both | TaskLifecycleNode | `ui.user_message_actions` + `task.submit_contributions` | 节点 877 | 入口 27 行 + web 26 行 |
 | task-input-queue | 任务输入队列 | both | TaskLifecycleNode ×2 + AdvisorProvider；RPC ×3（`task.queue*`） | `ui.composer_above_panel` | 节点 15 / 870；Advisor DO+30 | 入口 38 行 + web 24 行 |
@@ -66,17 +66,18 @@ has_children: false
 
 按扩展点组织。「推荐范本」优先选**体量最小、最典型**的插件；一行一句话说明为什么。
 
-### 3.1 后端 SPI（`WorkerPluginContext` 10 个）
+### 3.1 后端 SPI（`WorkerPluginContext` 11 个 + 技能包物化）
 
 | 想实现 | 推荐范本 | 源码相对路径 | 为什么推荐 |
 |---|---|---|---|
-| ToolProvider（给模型加工具） | sandbox-windows-mic | `every-agent-plugins/sandbox-windows-mic/src/main/java/dev/everyagent/plugin/sandbox/mic/WindowsMicSandboxPlugin.java:31` | 入口仅 34 行，注册即用；更典型的工具型实现看 subagent（`SubAgentPlugin.java:31`） |
+| ToolProvider（给模型加工具） | sandbox-windows-mic | `every-agent-plugins/sandbox-windows-mic/src/main/java/dev/everyagent/plugin/sandbox/mic/WindowsMicSandboxPlugin.java:31` | 入口仅 34 行，注册即用；更典型的工具型实现看 subagent（`SubAgentPlugin.java:41`） |
 | AdvisorProvider（请求/响应链增强） | system-info | `every-agent-plugins/system-info/src/main/java/dev/everyagent/plugin/sysinfo/SystemInfoAdvisorProvider.java` | 全仓最小 Advisor 范例（入口 19 行），只做请求前 system prompt 注入 |
 | SandboxProvider（自定义沙箱） | sandbox-windows-mic | `every-agent-plugins/sandbox-windows-mic/src/main/java/dev/everyagent/plugin/sandbox/mic/WindowsMicSandboxProvider.java:38-39` | 三实现中依赖最少（仅 jna）；优先级取值坐标参考 sandbox-wsl-ubuntu（priority=10） |
-| SearchProvider | **无内置范例** | —（声明：`every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/WorkerPluginContext.java:51`） | 内置插件零使用，别照抄空气；SPI 已接线（统一 `search` 聚合——内置 `file-content`/`file-name`/`task` 三引擎本身就是内置 provider、与插件 provider 同权，见 [advisors §6](../backend/advisors.md)） |
+| SearchProvider | **无内置范例** | —（声明：`every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/WorkerPluginContext.java:52`） | 内置插件零使用，别照抄空气；SPI 已接线（统一 `search` 聚合——内置 `file-content`/`file-name`/`task` 三引擎本身就是内置 provider、与插件 provider 同权，见 [advisors §6](../backend/advisors.md)） |
 | AuthorizationHandler（接管授权闸门） | unattended | `every-agent-plugins/unattended/src/main/java/dev/everyagent/plugin/unattended/UnattendedPlugin.java:23` | 逻辑最短；带评审模型的进阶版看 ai-review（`AiReviewPlugin.java:24`） |
 | ToolExecutionInterceptor（拦截工具调用） | secret-redaction | `every-agent-plugins/secret-redaction/src/main/java/dev/everyagent/plugin/secretredaction/SecretRedactionPlugin.java:22` | 唯一「单 SPI 极简」实现（入口 24 行），上行掩码单向拦截 |
-| SkillContributor（贡献技能） | subagent | `every-agent-plugins/subagent/src/main/java/dev/everyagent/plugin/subagent/SubAgentPlugin.java:44` | 全仓唯一实现，别无分号 |
+| 事件出网过滤（隐藏/改写某类事件的出网形态；事件仍落盘） | ai-review | `every-agent-plugins/ai-review/src/main/java/dev/everyagent/plugin/aireview/AiReviewPlugin.java:37-38` | 全仓唯一实现：事件级 + 轮次级两条链都注册，丢弃审议 agent 过程事件 |
+| 技能包物化（给插件带 skill 知识包；**非 SPI**——`activate()` 里一次物化调用） | subagent | `every-agent-plugins/subagent/src/main/java/dev/everyagent/plugin/subagent/SubAgentPlugin.java:52` | 全仓唯一先例：jar 内 `skill/agent-dispatch/skill.md` 物化到 skillsDir，落盘后与用户自制 skill 同权（[advisors §5](../backend/advisors.md)） |
 | TokenEstimator（token 估算） | model-rate-limit | `every-agent-plugins/model-rate-limit/src/main/java/dev/everyagent/plugin/modelratelimit/ModelRateLimitPlugin.java:35` | 全仓唯一实现（BuiltinTokenEstimator），同时示范估算器被 Advisor 消费的接线 |
 | ChatModelEnhancer（模型增强/容灾） | model-pool | `every-agent-plugins/model-pool/src/main/java/dev/everyagent/plugin/modelpool/ModelPoolPlugin.java:26` | 全仓唯一实现：组合 ChatModel 做主备切换 |
 | FileReferenceHandler（@ 文件引用处理） | image-vision | `every-agent-plugins/image-vision/src/main/java/dev/everyagent/plugin/imagevision/ImageVisionPlugin.java:30` | 全仓唯一实现，且是 `contributes.config` → `ctx.config()` 消费链的活样本 |
@@ -293,8 +294,8 @@ WSL Ubuntu 沙箱 + bash 工具 + network slash 开关。
 
 ### subagent（子 Agent）
 
-子 Agent 工具 + 技能贡献 + 收口等待节点。
-- 关键文件：`~plugins/subagent/src/main/java/dev/everyagent/plugin/subagent/SubAgentPlugin.java:31-44`；节点 order=950 见 `SubAgentSpawnedAwaitNode.java:29`。
+子 Agent 工具 + 技能包物化 + 收口等待节点。
+- 关键文件：`~plugins/subagent/src/main/java/dev/everyagent/plugin/subagent/SubAgentPlugin.java:41-57`；节点 order=950 见 `SubAgentSpawnedAwaitNode.java:29`。
 - 插件**已无 web 前端功能**：原 `ui.composer_above_panel` 子 agent 面板退役，agent 胶囊列表由 web 核心 `TaskChat` + `AgentListPanel` 渲染；`task.agents` RPC 已收回 task 域（`TaskManager` 注册），不再由本插件提供。
 - 值得看：一插件多 SPI 组合；主/子 Agent 共用同一运行入口的对接点。
 

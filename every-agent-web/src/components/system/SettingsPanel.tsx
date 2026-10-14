@@ -364,7 +364,8 @@ export default function SettingsPanel() {
         <p style={hintStyle}>
           外部 skill 放置在 worker 系统技能目录下(每个 skill 一个子目录,内含 skill.md)。增删 skill 目录后点击「重新读取」即可热加载,
           无需重启;同时会把内置知识包(如 plan、skill-creator)复原为 worker 自带版本(误改/误删后用同一按钮修回)。
-          仅影响后续新建任务的 `/` 菜单,运行中任务不受影响。自动暴露按工作区配置,默认全部工作区自动暴露。
+          仅影响后续新建任务的 `/` 菜单,运行中任务不受影响。自动暴露按工作区配置,默认全部工作区自动暴露;
+          skill.md 头部 frontmatter 仅 name/description 两个展示键(标题与一句话描述),不含暴露控制字段。
         </p>
         <div style={actionsStyle}>
           <Button

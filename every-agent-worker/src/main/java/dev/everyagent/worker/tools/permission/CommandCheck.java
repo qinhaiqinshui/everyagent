@@ -106,7 +106,7 @@ public class CommandCheck implements PermissionCheck {
                     continue; // 工作区内放行
                 }
                 if (OverBroadRootCheck.isOverBroadRoot(real, ws.path(), ws.realPath())) {
-                    // §13.3 修复 B L1:真实需求不存在「授权整个盘/覆盖工作区的大根」——
+                    // §7.8 过宽根拒收:真实需求不存在「授权整个盘/覆盖工作区的大根」——
                     // 出现必为解析残渣或模型构造的越权试探,候选丢弃,不弹窗/不进审议
                     log.warn("[gate] L1 拒收过度宽泛授权根(候选丢弃)root={} cmd={}", real,
                             PathSupport.abbreviate(command));

@@ -12,7 +12,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * 单次 RPC 的上下文:应答回请求来源连接的 evt 频道(多 hub 下前端只听自己 hub);
- * 同一 reqId 至多一次 ok/err(§13.3)。ownerKey() = 连接命名空间 K(连接层身份;任务域不再据此做归属校验)。
+ * 同一 reqId 至多一次 ok/err(§14.3)。ownerKey() = 连接命名空间 K(连接层身份;任务域不再据此做归属校验)。
  * 实现 plugin-api 的 {@link dev.everyagent.plugin.api.rpc.RpcContext} 接口,供插件通过接口处理 RPC 请求。
  */
 public final class RpcContext implements dev.everyagent.plugin.api.rpc.RpcContext {

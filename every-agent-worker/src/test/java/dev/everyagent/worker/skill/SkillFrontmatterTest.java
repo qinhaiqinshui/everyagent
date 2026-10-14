@@ -8,7 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 
 /**
  * {@link SkillFrontmatter} 纯单测(无 Spring):逐条钉住计划「skill 目录唯一真相源」步骤 3 的
- * 解析规格——有/无/未闭合块、BOM、引号与空值、注释行、未知键忽略(auto-expose 等历史/外来键)、
+ * 解析规格——有/无/未闭合块、BOM、引号与空值、注释行、未知键忽略(历史遗留的暴露控制键等外来键)、
  * description 截断 200、name 回落目录名,以及易错点「description 回落必须跳过 frontmatter 块本身」。
  */
 class SkillFrontmatterTest {
@@ -116,12 +116,12 @@ class SkillFrontmatterTest {
         assertEquals("值中的 # 不是注释", fm.description());
     }
 
-    // 6a. 未知键忽略不报错:auto-expose 等历史/外来键静默丢弃,已知键照常解析
+    // 6a. 未知键忽略不报错:历史遗留的暴露控制键等外来键静默丢弃,已知键照常解析
     @Test
     void unknownKeysIgnoredSilently() {
         String md = """
                 ---
-                auto-expose: true
+                legacy-expose: true
                 version: 1.2.3
                 name: 已知键
                 description: 未知键被忽略

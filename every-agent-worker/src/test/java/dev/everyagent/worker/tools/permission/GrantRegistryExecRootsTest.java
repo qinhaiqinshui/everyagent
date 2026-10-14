@@ -26,7 +26,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 /**
- * {@link GrantRegistry#execRootsSandboxed} 单测(§7.17 + §13.3 L2 纵深):外部授权根
+ * {@link GrantRegistry#execRootsSandboxed} 单测(§7.17 + §7.8 纵深):外部授权根
  * 并入视图、过度宽泛根(盘根/工作区祖先)拒收、与已授权 EXEC 根去重。授权经真实
  * authorize(AuthorizationRequest) 决议链落档(弹窗打桩答「本任务」),WorkspaceManager
  * 打桩供给 resolve/externalRootsOf;grants.json 落盘目录经 TaskEntry.dataDir() 槽位注入。

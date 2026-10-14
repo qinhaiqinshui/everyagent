@@ -142,7 +142,7 @@ public class GrantRegistry {
     }
 
     /**
-     * EXEC 根的<b>安全过滤视图</b>(§13.3 修复 B L2,消费层防御纵深):按
+     * EXEC 根的<b>安全过滤视图</b>(§7.8 责任链,消费层防御纵深):按
      * {@link OverBroadRootCheck#isOverBroadRoot} 过滤后返回,过度宽泛根(盘根/工作区祖先)
      * 一律拒收——含历史 grants.json 载入的旧宽根(修复前落盘的 {@code C:\} 等)。
      * 命令执行器两后端共用:windows-mic 侧不进 Low 标注/ACL,wsl-bwrap 侧不进 --bind

@@ -74,17 +74,18 @@ task-queue 测的是 `TaskQueue`（纯计数/事件广播）与 `QueueAdmissionN
 
 如实登记：**plugin-api 不附带任何 `WorkerPluginContext` 的 fake / 测试实现**。plugin-api 自己的 `src/test` 只有两个与插件无关的自测（`shell/ExecResultsClixmlTest.java`、`util/SecretPatternsTest.java`）；全仓 27 个内置插件的测试里 `implements WorkerPluginContext` **零命中**——因为它们全都绕开 ctx，直接测被注册的类本体（§1.2/§1.3 的做法）。
 
-但有一个场景绕不开 ctx：**你想断言「`activate()` 到底注册了什么」**（注册没走到 = 插件没生效的最常见根因，见 §4 剧本 a）。此时手写一个记录型 stub，把每次注册记进集合，测试直接断言集合内容。完整代码如下（已对本地 Maven 仓库的 `dev.everyagent:every-agent-plugin-api:1.0.1` jar 用 `javac` 编译验证通过；接口签名与 `WorkerPluginContext.java:42-94` + `TaskPluginContext.java:17,24` 的 15 个注册方法逐一核对）：
+但有一个场景绕不开 ctx：**你想断言「`activate()` 到底注册了什么」**（注册没走到 = 插件没生效的最常见根因，见 §4 剧本 a）。此时手写一个记录型 stub，把每次注册记进集合，测试直接断言集合内容。完整代码如下（已对本地 `every-agent-plugin-api/target/classes` 构建产物用 `javac` 编译验证通过；接口签名与 `WorkerPluginContext.java:43-109` + `TaskPluginContext.java:17,24` 的 16 个注册方法逐一核对）：
 
 ```java
 // 放进你插件的 src/test/java 下任意包；用不到的记录项可删，但接口方法必须全实现
 import dev.everyagent.plugin.api.PluginConfig;
 import dev.everyagent.plugin.api.WorkerPluginContext;
 import dev.everyagent.plugin.api.WorkerServices;
+import dev.everyagent.plugin.api.event.EventEgressFilter;
+import dev.everyagent.plugin.api.event.RoundEgressFilter;
 import dev.everyagent.plugin.api.model.ChatModelEnhancer;
 import dev.everyagent.plugin.api.permission.AuthorizationHandler;
 import dev.everyagent.plugin.api.rpc.RpcMethod;
-import dev.everyagent.plugin.api.skill.SkillContributor;
 import dev.everyagent.plugin.api.slash.SlashProvider;
 import dev.everyagent.plugin.api.slash.SlashTokenResolver;
 import dev.everyagent.plugin.api.spi.AdvisorProvider;
@@ -128,10 +129,11 @@ class RecordingPluginContext implements WorkerPluginContext {
     @Override public void registerSearchProvider(SearchProvider provider) { /* 按需记录 */ }
     @Override public void registerAuthorizationHandler(AuthorizationHandler handler) { authorizationHandlers.add(handler); }
     @Override public void registerToolExecutionInterceptor(ToolExecutionInterceptor interceptor) { toolInterceptors.add(interceptor); }
-    @Override public void registerSkillContributor(SkillContributor contributor) { }
     @Override public void registerTokenEstimator(TokenEstimator estimator) { }
     @Override public void registerChatModelEnhancer(ChatModelEnhancer enhancer) { }
     @Override public void registerFileReferenceHandler(FileReferenceHandler handler) { }
+    @Override public void registerEventEgressFilter(EventEgressFilter filter) { }
+    @Override public void registerRoundEgressFilter(RoundEgressFilter filter) { }
     @Override public void registerRpcMethod(String method, RpcMethod handler) { rpcMethods.put(method, handler); }
     @Override public void registerSlashProvider(String id, SlashProvider provider) { slashProviders.put(id, provider); }
     @Override public void registerSlashTokenResolver(SlashTokenResolver resolver) { }

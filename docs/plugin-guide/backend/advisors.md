@@ -7,20 +7,19 @@ has_children: false
 
 # Advisor 与模型增强扩展点
 
-**一句话定位**：本篇讲挂在「模型调用链」与「模型构建」上的 6 个后端扩展点——向 agent 链注入 Advisor（`AdvisorProvider`）、在模型工厂构建期介入（`ChatModelEnhancer`）、替换 token 估算器（`TokenEstimator`）、贡献 skill（`SkillContributor`）、提供搜索后端（`SearchProvider`）、参与授权决议链（`AuthorizationHandler`）。核心交付物是 **Advisor order 坐标图**（§2）——想给 agent 链插一个自己的 Advisor，先看那张表再选位置。
+**一句话定位**：本篇讲挂在「模型调用链」与「模型构建」上的 5 个后端扩展点——向 agent 链注入 Advisor（`AdvisorProvider`）、在模型工厂构建期介入（`ChatModelEnhancer`）、替换 token 估算器（`TokenEstimator`）、提供搜索后端（`SearchProvider`）、参与授权决议链（`AuthorizationHandler`），外加插件的**技能包物化**（`SkillMaterializer`，§5——不是注册方法，是 `activate()` 里的一次落盘调用）。核心交付物是 **Advisor order 坐标图**（§2）——想给 agent 链插一个自己的 Advisor，先看那张表再选位置。
 
-注册方法全集见 [plugin.json 字段参考](../plugin-manifest.md) 与后端总览；本篇 6 个 SPI 的注册入口都是 `activate(ctx)` 里的 `ctx.register*` 一行。
+注册方法全集见 [plugin.json 字段参考](../plugin-manifest.md) 与后端总览；本篇 5 个 SPI 的注册入口都是 `activate(ctx)` 里的 `ctx.register*` 一行。
 
 | SPI | 包 | 注册方法（`WorkerPluginContext.java` 行号） | worker 侧注册表 | 消费点（详见各节） | 内置范例插件 |
 |---|---|---|---|---|---|
-| `AdvisorProvider` | `spi` | `registerAdvisorProvider`（:45） | `AdvisorProviderRegistry` | `AgentBuilder` 每轮装配聚合 | 11 个插件（12 个 Advisor，§2 全表） |
-| `ChatModelEnhancer` | `model` | `registerChatModelEnhancer`（:66） | `ChatModelEnhancerRegistry` | `ChatModelFactory` 构建期委托 | model-pool（唯一） |
-| `TokenEstimator` | `spi` | `registerTokenEstimator`（:63） | 无（直接替换 `WorkerServicesImpl` 持有实例） | `WorkerServices.tokenEstimator()` 的全部调用方 | model-rate-limit |
-| `SkillContributor` | `skill` | `registerSkillContributor`（:60） | `SkillContributorRegistry` | `SkillAdvisor` 合流进 system prompt + `SkillSlashProvider` 并入 `/` 菜单 | subagent（唯一） |
-| `SearchProvider` | `spi` | `registerSearchProvider`（:51） | `SearchProviderRegistry` | 统一 `search` 聚合（内置 `file-content`/`file-name`/`task` 三 provider 与插件 provider 同权，按 `order` 升序聚合）；能力接口 `SuggestionProvider`（mention.query，`SearchProvider` 子接口）（§6） | **无** |
-| `AuthorizationHandler` | `permission` | `registerAuthorizationHandler`（:54） | `AuthorizationHandlerRegistry` | `GrantRegistry` 授权决议链 | ai-review、unattended |
+| `AdvisorProvider` | `spi` | `registerAdvisorProvider`（:46） | `AdvisorProviderRegistry` | `AgentBuilder` 每轮装配聚合 | 11 个插件（12 个 Advisor，§2 全表） |
+| `ChatModelEnhancer` | `model` | `registerChatModelEnhancer`（:64） | `ChatModelEnhancerRegistry` | `ChatModelFactory` 构建期委托 | model-pool（唯一） |
+| `TokenEstimator` | `spi` | `registerTokenEstimator`（:61） | 无（直接替换 `WorkerServicesImpl` 持有实例） | `WorkerServices.tokenEstimator()` 的全部调用方 | model-rate-limit |
+| `SearchProvider` | `spi` | `registerSearchProvider`（:52） | `SearchProviderRegistry` | 统一 `search` 聚合（内置 `file-content`/`file-name`/`task` 三 provider 与插件 provider 同权，按 `order` 升序聚合）；能力接口 `SuggestionProvider`（mention.query，`SearchProvider` 子接口）（§6） | **无** |
+| `AuthorizationHandler` | `permission` | `registerAuthorizationHandler`（:55） | `AuthorizationHandlerRegistry` | `GrantRegistry` 授权决议链 | ai-review、unattended |
 
-所有注册方法的 worker 实现（`every-agent-worker/src/main/java/dev/everyagent/worker/plugin/WorkerPluginContextImpl.java:131,141,146,161,171,177`）都只是往注册表 `add` 一行（TokenEstimator 例外：调 `WorkerServicesImpl.replaceTokenEstimator` 原位换实例）。
+所有注册方法的 worker 实现（`every-agent-worker/src/main/java/dev/everyagent/worker/plugin/WorkerPluginContextImpl.java:140-238`）都只是往注册表 `add` 一行（TokenEstimator 例外：调 `WorkerServicesImpl.replaceTokenEstimator` 原位换实例）。skill 贡献**不在**这张表里——代码注册通道已删除，插件 skill 走 §5 的物化落盘。
 
 ## 1. AdvisorProvider —— 向 agent 链注入 Advisor
 
@@ -64,7 +63,7 @@ public interface AdvisorProvider {
 ```
 插件 activate(ctx)
   └─ ctx.registerAdvisorProvider(p) → AdvisorProviderRegistry.register
-     （WorkerPluginContextImpl.java:131；CopyOnWriteArrayList，AdvisorProviderRegistry.java:14-24，
+     （WorkerPluginContextImpl.java:145；CopyOnWriteArrayList，AdvisorProviderRegistry.java:14-24，
        注册零校验——order 冲突/越界都不会被拒绝，全靠插件自己选位）
 每轮 agent 装配（AgentBuilder.build()，per-run）
   ├─ 创建 AdvisorContextImpl（entity + tcm + configId）            AgentBuilder.java:301
@@ -130,7 +129,7 @@ public class AgentsMdAdvisorProvider implements AdvisorProvider {
 | 2 | `HP + 10` | -2147483638 | RoundIndexAdvisor | worker | 轮次索引开/闭轮落盘 + 耗时 | `every-agent-worker/src/main/java/dev/everyagent/worker/task/RoundIndexAdvisor.java:59-62` |
 | 3 | `HP + 50` | -2147483598 | SystemInfoAdvisor | system-info | 系统信息注入 prompt | `every-agent-plugins/system-info/src/main/java/dev/everyagent/plugin/sysinfo/SystemInfoAdvisorProvider.java:38-40` |
 | 4 | `HP + 60` | -2147483588 | AgentsMdAdvisor | agents-md | AGENTS.md 约束注入 | `every-agent-plugins/agents-md/src/main/java/dev/everyagent/plugin/agentsmd/AgentsMdAdvisorProvider.java:23-25` |
-| 5 | `HP + 100` | -2147483548 | SkillAdvisor | worker | skill 渐进式披露索引（含插件贡献，§5） | `every-agent-worker/src/main/java/dev/everyagent/worker/skill/SkillAdvisor.java:99-102` |
+| 5 | `HP + 100` | -2147483548 | SkillAdvisor | worker | skill 渐进式披露索引（skillsDir 目录扫描，§5） | `every-agent-worker/src/main/java/dev/everyagent/worker/skill/SkillAdvisor.java:99-102` |
 | 6 | `HP + 140` | -2147483508 | GitAutoSyncAdvisor | git | 本轮开始前 git 自动同步 | `every-agent-plugins/git/src/main/java/dev/everyagent/plugin/git/GitAutoSyncAdvisorProvider.java:28-30` |
 | 7 | `HP + 150` | -2147483498 | SlashTokenResolveAdvisor | worker | composer opaque token 解析改写 | `every-agent-worker/src/main/java/dev/everyagent/worker/skill/SlashTokenResolveAdvisor.java:57-59` |
 | 8 | `HP + 160` | -2147483488 | FileAttachmentAdvisor | worker | metadata.attachments → 末位多模态消息 | `every-agent-worker/src/main/java/dev/everyagent/worker/attachment/FileAttachmentAdvisor.java:54-56` |
@@ -219,31 +218,33 @@ public interface TokenEstimator {
 }
 ```
 
-**默认实现与覆盖关系**：worker 内置 fallback `SimpleTokenEstimator`（`@Component`，CJK≈1 token、其余≈4 字符 1 token，factor 恒 1.0、不校准；`every-agent-worker/src/main/java/dev/everyagent/worker/plugin/adapters/SimpleTokenEstimator.java:16-58`）。`ctx.registerTokenEstimator(estimator)` **原位替换** `WorkerServicesImpl` 持有的实例（`WorkerPluginContextImpl.java:171-174` → `WorkerServicesImpl.replaceTokenEstimator`，`every-agent-worker/src/main/java/dev/everyagent/worker/plugin/WorkerServicesImpl.java:84-86`）；消费方经 `ctx.services().tokenEstimator()` 取**当前生效**实例（plugin-api `WorkerServices.java:38`）——model-length-guard 插件持 `AtomicReference` 包一层，后注册的估算器自动跟随（`ModelLengthGuardAdvisorProvider.java:19-20,46`）。
+**默认实现与覆盖关系**：worker 内置 fallback `SimpleTokenEstimator`（`@Component`，CJK≈1 token、其余≈4 字符 1 token，factor 恒 1.0、不校准；`every-agent-worker/src/main/java/dev/everyagent/worker/plugin/adapters/SimpleTokenEstimator.java:16-58`）。`ctx.registerTokenEstimator(estimator)` **原位替换** `WorkerServicesImpl` 持有的实例（`WorkerPluginContextImpl.java:199-202` → `WorkerServicesImpl.replaceTokenEstimator`，`every-agent-worker/src/main/java/dev/everyagent/worker/plugin/WorkerServicesImpl.java:84-86`）；消费方经 `ctx.services().tokenEstimator()` 取**当前生效**实例（plugin-api `WorkerServices.java:38`）——model-length-guard 插件持 `AtomicReference` 包一层，后注册的估算器自动跟随（`ModelLengthGuardAdvisorProvider.java:19-20,46`）。
 
 **范例（rg `registerTokenEstimator` 唯一命中）**：model-rate-limit 的 `BuiltinTokenEstimator`——EMA 校准系数按 configId 隔离、收敛（默认 2%）后停采、漂移（默认 5%）自动恢复，持久化 `<homeDir>/model-rate-state.json` 重启接续（`BuiltinTokenEstimator.java:34-45`；阈值配置 `WorkerProperties.java:517-537`）。注册三件套共享同一实例：估算器 + TokenCalibrationAdvisor（§2.5）+ RateLimitAdvisorProvider（`ModelRateLimitPlugin.java:33-46`）。
 
-## 5. SkillContributor —— 贡献 skill
+## 5. 技能包物化（SkillMaterializer）—— 插件贡献 skill 的唯一方式
 
-**机制**：接口只声明 skill 元数据，知识注入交给 `SkillAdvisor`（红线：skill 的知识注入与工具授权一律交给 advisor/tool 原语，`SkillContributor.java:14-20`）。
+**机制**：skill 的唯一真相源是 worker 系统技能目录 `skillsDir`（一目录一 skill，目录下必有带 frontmatter 的 `skill.md`）——**不存在代码注册通道**（旧版 skill 贡献 SPI 已整体删除，不兼容变更，见本节末尾迁移说明）。插件贡献 skill = 把 `skill/<id>/skill.md` 打进 jar，`activate()` 里调一次 plugin-api 的物化工具类落盘：
 
 ```java
-// every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/skill/SkillContributor.java:14-25
-public interface SkillContributor {
-    String pluginId();                 // 与 plugin.json 一致
-    List<PluginSkill> skills();        // id/title/description/knowledgePath/toolIds（PluginSkill.java:19-31）
-}
+// 插件资源布局（根固定为 skill/，一级目录名 = skill id，仅允许 [a-z0-9][a-z0-9-]*）：
+//   src/main/resources/skill/agent-dispatch/skill.md
+WorkerConfig props = ctx.services().config();
+List<String> installed = SkillMaterializer.materializeAllFromClasspath(
+        props.resolveSkillsDir(), getClass().getClassLoader());   // 默认扫本插件 classpath 的 skill/*/skill.md
 ```
 
-**与 worker skill 扫描如何合流**：`SkillAdvisor.mergedSkills()`（HP+100）每轮 `before()` 合并两条源——`BuiltInSkills.getActiveSkills()`（worker 内置主动 skill）优先，`SkillContributorRegistry.getSkills()`（全部插件贡献，按注册序拼接）随后，按 skill id 去重（内置赢）（`every-agent-worker/src/main/java/dev/everyagent/worker/skill/SkillAdvisor.java:67-90`）。合并结果以「标题 + 一句话描述 + 知识包绝对路径」的索引 `SystemMessage` 注入 system 区，正文由 AI 按需 `read_file`（渐进式披露）。知识包目录的沙箱可见性由 worker 侧统一登记：`WorkerBeanConfiguration.skillAdvisor` 把 `skillsDir` 以 READ_WRITE 登记挂载意图（`every-agent-worker/src/main/java/dev/everyagent/worker/config/WorkerBeanConfiguration.java:63-70`），注入路径按生效沙箱后端翻译（[`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) §7.12「skill 知识包路径的沙箱注入」）。
+物化语义（`every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/skill/SkillMaterializer.java`）：幂等（与 classpath 内容**逐字节一致**则零写入，不一致覆盖）、原子写（`AtomicFiles.replace` 临时文件 + 原子替换，杜绝扫描读到半截文件）、并清理旧扁平 `<id>.md` 残留；资源缺失 / IO 失败抛 `IOException`，由插件 WARN 降级——不阻断 `activate()` 其余部分，代价是该 skill 暂时消失，可经设置页「重新读取 Skill 列表」或重装插件复原。
 
-**`/` 菜单侧同源并入**：`SkillSlashProvider.load()` 按「内置全部（主动+被动）→ 插件 SPI → 外部扫描」三路合并（见下方 ⚠️ 第 1 条），两条通道自此等价——SPI 贡献的 skill 同时对模型（system prompt 索引）与用户（`/` 菜单条目，经 `slash.list` 出网）可见。
+**落盘后与用户自制 skill 完全同权**：worker 的 `SkillCatalog` 扫 `skillsDir` 全部一级子目录（每次实扫、无缓存、不排除任何 id），统一进入 system prompt（`SkillAdvisor`，HP+100，渐进式披露索引——「标题 + 一句话描述 + 知识包绝对路径」，正文由 AI 按需 `read_file`）与 `/` 菜单（`SkillSlashProvider`，经 `slash.list` 出网；全部 skill 一律自动成为菜单项，无来源标记）。**两条通道同一份目录扫描数据**：不存在「对模型可见但对用户不可见」的 skill。是否进 system prompt 由 worker 侧**按工作区排除配置**决定（默认全部工作区自动暴露，用户在设置页按 skill 勾选「不自动暴露的工作区」；`/` 菜单不受该配置影响）——这是 worker 配置域，与插件无关，插件侧无从也无需干预。
 
-**范例（rg 唯一命中）**：subagent 的 `SubAgentSkillContributor`——把 `classpath:skill/agent-dispatch.md` 物化到 `<skillsDir>/agent-dispatch/skill.md`（幂等：内容逐字节一致跳过；路径越界跳过），再返回 `PluginSkill("agent-dispatch", "子 Agent", …, toolIds=[run_agent/list_agents/wait_agents/stop_agent])`（`every-agent-plugins/subagent/src/main/java/dev/everyagent/plugin/subagent/SubAgentSkillContributor.java:37-88`）；`init()` 物化在注册后显式调用（`SubAgentPlugin.java:43-45`）。
+**两个资源根刻意不同（父委派隔离）**：插件技能包住 `skill/<id>/skill.md`；worker 内置技能包住 `builtin-skill/<id>/skill.md`（由 worker 的 `BuiltInSkillPacks` 在启动时物化，不经插件）。`PluginLoader` 的插件 classloader 以 worker loader 为 parent——若共用一个根，插件侧 `classpath*:` 扫描会经父委派看到 worker 的技能包、把内置包错当自己的代装（实测复现过）；根名隔离（`skill/` vs `builtin-skill/`）让「每个包只物化自己的 skill」零运行时成本成立，谁放错根，启动日志的物化 id 清单立即可见。**插件不要把技能包放进 `builtin-skill/` 根**——那是 worker 专用位。
 
-⚠️ **一处与直觉不符的现状**（如实登记）：
-1. ~~`/` 菜单数据源不含 `SkillContributorRegistry`~~ **（已并入）**：`SkillSlashProvider` 现按「内置（`BuiltInSkills.getAllSkills()`）→ 插件 SPI（`SkillContributorRegistry.getSkills()`）→ 外部（`ExternalSkillScanner.scan()`）」三路合并进 `/` 菜单（`every-agent-worker/src/main/java/dev/everyagent/worker/slash/SkillSlashProvider.java` 的 `load()`），同 id 去重、优先级 **内置 > 插件 SPI > 外部扫描**——SPI 是插件自己的声明（title/description 完整），外部扫描捞到同 id 只是知识包物化的副产品，不重复出菜单。插件条目与内置同 group（Skills）/icon/opaque token（`system.skill`，选中执行路径与内置完全一致），仅副标题带「插件 · 」前缀区分来源；无插件贡献时菜单与两路合并时代完全一致（零回归）。subagent 的 `agent-dispatch` 现经 SPI 以完整标题（「子 Agent」）进菜单（此前靠 `ExternalSkillScanner` 以目录名形态捞进菜单）；其知识包物化到 skillsDir 的行为**保留**——那是 AI 能 `read_file` 知识包的必要条件，与进菜单与否无关。
-2. `skill.md` 的 id 规则与菜单副标题提取等扫描约定见 [`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) §7.12「skill 目录结构与外部 skill」；本篇不展开。
+**`skill.md` frontmatter（仅展示元数据，只有两个键）**：首部允许一个 `---` 定界的元数据块，已知键只有 `name` / `description`、都**只影响展示**——`name` = 展示标题（`/` 菜单 title、prompt 条目标题、设置页表格 name 列；缺省回落目录名。**不与目录名做一致性校验**：id 是英文标识、`name` 是人读标题，如 `agent-dispatch` → 「子 Agent」，不一致是常态）；`description` = 一句话「何时用」（单行截断 200 字符，`/` 菜单副标题与 prompt 索引行）。**暴露控制不在 frontmatter**：`skill.md` 不含也无法声明「是否自动暴露」——那是 worker 侧按工作区的排除配置（见上一段）。
+
+**范例（rg `materializeAllFromClasspath` 唯一命中）**：subagent——jar 内 `skill/agent-dispatch/skill.md`（frontmatter `name: 子 Agent` + 一句话 `description`），`activate()` 里物化一行 + IO 失败 WARN 降级（`every-agent-plugins/subagent/src/main/java/dev/everyagent/plugin/subagent/SubAgentPlugin.java:47-57`）。
+
+**不兼容迁移（写给曾用旧版 skill 注册 SPI 的第三方插件）**：plugin-api 中「插件向 worker 声明 skill 元数据」的那组接口（贡献者接口、skill 声明 record、`WorkerPluginContext` 上的对应注册方法）已整体删除。迁移 = ① 资源搬到 `src/main/resources/skill/<id>/skill.md`；② frontmatter 写 `name` + `description`（原声明里的 title/description 迁入；`toolIds` 之类声明字段无承接方——本就被零消费）；③ `activate()` 里调 `SkillMaterializer.materializeAllFromClasspath(props.resolveSkillsDir(), getClass().getClassLoader())`。统一口径见 [`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) §7.17「skill 目录结构与唯一真相源」。
 
 ## 6. SearchProvider —— 搜索后端（统一 search 聚合 + mention.query 能力接口）
 
@@ -342,7 +343,7 @@ public interface AuthorizationHandler {
 
 > **复用 Spring AI,禁止重复造轮子**:agent 执行必须走 ChatClient + Advisor 生态,不得手搓 agent 循环、工具循环、响应聚合、system 拼接;执行链只能是很薄一层;新增 agent 能力优先做成 Advisor;**一个 Advisor 只负责一个功能**;事件发射等需挂钩工具循环的增强**通过继承 ToolCallingAdvisor 并重写受保护 hook 实现**;主/子 agent 共用同一运行入口与 Advisor 链,仅 agentId 不同。
 
-落到本篇的三个可检验判据：① 新增强优先做成 `AdvisorProvider`（薄适配器）而不是改执行核心；② 单一职责——每个 Advisor 一个功能，不要把「注入 skill + 发事件 + 护栏」塞进同一个类（对照 `TokenCalibrationAdvisor.java:22` 类注释自证纪律）；③ 挂钩工具循环 = 继承 `ToolCallingAdvisor` 重写 `doAfterStream`/`doGetNextInstructionsForToolCallStream` 等受保护 hook，不得另起包裹层或重复实现递归循环（范例 `WorkerToolEventAdvisor.java:66,92-95`）。另注意 §14.9：插件 pom 任何 scope 不得依赖 `every-agent-worker`——本篇 6 个 SPI 的类型全部住在 plugin-api。
+落到本篇的三个可检验判据：① 新增强优先做成 `AdvisorProvider`（薄适配器）而不是改执行核心；② 单一职责——每个 Advisor 一个功能，不要把「注入 skill + 发事件 + 护栏」塞进同一个类（对照 `TokenCalibrationAdvisor.java:22` 类注释自证纪律）；③ 挂钩工具循环 = 继承 `ToolCallingAdvisor` 重写 `doAfterStream`/`doGetNextInstructionsForToolCallStream` 等受保护 hook，不得另起包裹层或重复实现递归循环（范例 `WorkerToolEventAdvisor.java:66,92-95`）。另注意 §14.9：插件 pom 任何 scope 不得依赖 `every-agent-worker`——本篇 5 个 SPI 的类型全部住在 plugin-api（技能包物化的 `SkillMaterializer` 亦然）。
 
 ## 下一步读
 
