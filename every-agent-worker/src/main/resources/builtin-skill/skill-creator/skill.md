@@ -1,3 +1,8 @@
+---
+name: Skill 创建器
+description: 当用户要求创建一个新的 skill 时，按以下规范操作。
+---
+
 # Skill 创建器
 
 当用户要求创建一个新的 skill 时，按以下规范操作。

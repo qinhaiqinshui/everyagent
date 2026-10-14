@@ -8,8 +8,8 @@ import dev.everyagent.plugin.api.event.Events;
 import dev.everyagent.worker.proto.RpcMethods;
 import dev.everyagent.worker.rpc.RpcContext;
 import dev.everyagent.worker.rpc.RpcDispatcher;
-import dev.everyagent.worker.skill.BuiltInSkills;
-import dev.everyagent.worker.skill.ExternalSkillScanner;
+import dev.everyagent.worker.skill.BuiltInSkillPacks;
+import dev.everyagent.worker.skill.SkillCatalog;
 import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -34,21 +34,21 @@ public class ConfigRpcHandler {
     private static final Logger log = LoggerFactory.getLogger(ConfigRpcHandler.class);
 
     private final ConfigStore configs;
-    private final ExternalSkillScanner externalSkillScanner;
-    private final BuiltInSkills builtInSkills;
+    private final SkillCatalog skillCatalog;
+    private final BuiltInSkillPacks builtInSkillPacks;
     private final UserPreferenceStore preferences;
     private final HubPool pool;
     private final RpcDispatcher dispatcher;
 
     public ConfigRpcHandler(ConfigStore configs,
-                            ExternalSkillScanner externalSkillScanner,
-                            BuiltInSkills builtInSkills,
+                            SkillCatalog skillCatalog,
+                            BuiltInSkillPacks builtInSkillPacks,
                             UserPreferenceStore preferences,
                             HubPool pool,
                             RpcDispatcher dispatcher) {
         this.configs = configs;
-        this.externalSkillScanner = externalSkillScanner;
-        this.builtInSkills = builtInSkills;
+        this.skillCatalog = skillCatalog;
+        this.builtInSkillPacks = builtInSkillPacks;
         this.preferences = preferences;
         this.pool = pool;
         this.dispatcher = dispatcher;
@@ -104,7 +104,7 @@ public class ConfigRpcHandler {
         int count = reloadSkills();
         pool.broadcastEvt(Events.CONFIG_CHANGED,
                 Json.toJson(new Events.ConfigChanged(List.of("skills"))));
-        log.info("skill.reload 完成:内置知识包已复原,外部 skill 已重新扫描,共 {} 个", count);
+        log.info("skill.reload 完成:内置技能包已复原,系统技能目录已重新扫描,共 {} 个", count);
         ctx.ok(Json.obj().put("skills", count));
     }
 
@@ -112,19 +112,20 @@ public class ConfigRpcHandler {
      * skill.reload 的实际动作(独立于 RPC 壳,便于单测直接调用)。
      *
      * <ol>
-     *   <li><b>复原内置知识包</b>:{@link BuiltInSkills#materialize()} 幂等重物化——用户在系统技能目录
+     *   <li><b>复原内置技能包</b>:{@link BuiltInSkillPacks#materialize()} 幂等重物化——用户在系统技能目录
      *       下误改/误删了 {@code <id>/skill.md}(或 AI 经 skill-creator 改坏了它)时,点一次「重新读取」
      *       即恢复为 worker 自带版本,不必重启 worker;内容本就一致则零写入。这是「重新读取 skill 列表」
      *       对内置 skill 的对应语义(内置知识包随 worker 版本,classpath 内容在运行期不会变);
-     *       插件贡献的知识包由插件自己在 activate 时物化(SPI 只声明元数据,不负责物化)。</li>
-     *   <li><b>重扫外部 skill</b>:重新扫描 {@code skillsDir} 并替换缓存。</li>
+     *       插件贡献的知识包由插件自己在 activate 时物化。</li>
+     *   <li><b>重扫系统技能目录</b>:{@link SkillCatalog#reload()} 实扫一次并返回当前数量
+     *       (目录即真相源,内置/插件包与用户自制 skill 一并计入;广播由本 RPC 壳负责)。</li>
      * </ol>
      *
-     * @return 本次扫描到的外部 skill 数量
+     * @return 本次扫描到的 skill 总数(内置 + 插件包 + 用户自制)
      */
     int reloadSkills() {
-        builtInSkills.materialize();
-        return externalSkillScanner.reload();
+        builtInSkillPacks.materialize();
+        return skillCatalog.reload();
     }
 
     /**

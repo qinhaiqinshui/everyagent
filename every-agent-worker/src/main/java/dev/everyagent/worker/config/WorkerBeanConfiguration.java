@@ -4,8 +4,8 @@ import dev.everyagent.plugin.api.spi.SandboxBackend.Access;
 import dev.everyagent.worker.os.SandboxPathRegistry;
 import dev.everyagent.worker.plugin.registry.SkillContributorRegistry;
 import dev.everyagent.worker.plugin.registry.ToolExecutionInterceptorRegistry;
-import dev.everyagent.worker.skill.BuiltInSkills;
 import dev.everyagent.worker.skill.SkillAdvisor;
+import dev.everyagent.worker.skill.SkillCatalog;
 import dev.everyagent.plugin.api.exception.AgentCancelledException;
 import dev.everyagent.plugin.api.shell.ExecResults;
 import dev.everyagent.worker.tools.MissingToolCallbackResolver;
@@ -61,14 +61,16 @@ public class WorkerBeanConfiguration {
      * skill 渐进式披露索引注入 advisor（无状态可共享单例）。
      *
      * <p>顺带在此完成「skills 目录初始化时」的沙箱挂载意图登记（架构 §7.10）：系统技能目录
-     * 是 AI 免授权可读写、且 {@link SkillAdvisor} 要注入其沙箱内可见路径的唯一根，归此登记；
-     * {@code register} 只记账、随后由 {@link SandboxPathRegistry} 下发到生效沙箱后端。
+     * （{@code props.resolveSkillsDir()}）是 AI 免授权可读写、且 {@link SkillAdvisor} 要注入
+     * 其沙箱内可见路径的唯一根，归此登记；{@code register} 只记账、随后由
+     * {@link SandboxPathRegistry} 下发到生效沙箱后端。
      */
     @Bean
-    public SkillAdvisor skillAdvisor(BuiltInSkills builtInSkills,
-            SkillContributorRegistry skillContributorRegistry, SandboxPathRegistry pathRegistry) {
+    public SkillAdvisor skillAdvisor(WorkerProperties props,
+            SkillCatalog catalog, SkillContributorRegistry skillContributorRegistry,
+            SandboxPathRegistry pathRegistry) {
         pathRegistry.register(SandboxPathRegistry.OWNER_SKILLS,
-                builtInSkills.getKnowledgeRoot(), Access.READ_WRITE);
-        return new SkillAdvisor(builtInSkills, skillContributorRegistry, pathRegistry);
+                props.resolveSkillsDir(), Access.READ_WRITE);
+        return new SkillAdvisor(catalog, skillContributorRegistry, pathRegistry);
     }
 }

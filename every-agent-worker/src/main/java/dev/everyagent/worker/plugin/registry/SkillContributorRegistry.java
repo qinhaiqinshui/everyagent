@@ -18,8 +18,8 @@ import java.util.concurrent.CopyOnWriteArrayList;
  * 注册时机：内置插件在 Spring 启动时（@Component 构造器或 @PostConstruct）注册；
  * 外部插件在 activate() 时经 WorkerPluginContext.registerSkillContributor 注册。
  *
- * <p>SkillAdvisor 合并 BuiltInSkills.getActiveSkills() + 本注册表的 skills()，
- * 按 pluginId + skillId 去重（内置优先）。
+ * <p>SkillAdvisor 合并 SkillCatalog.scan() + 本注册表的 skills()，
+ * 按 skillId 去重（目录条目优先）。
  */
 @Component
 public class SkillContributorRegistry {
