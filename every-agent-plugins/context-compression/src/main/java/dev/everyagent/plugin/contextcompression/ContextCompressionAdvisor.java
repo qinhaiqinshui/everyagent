@@ -106,22 +106,21 @@ public class ContextCompressionAdvisor implements CallAdvisor, StreamAdvisor {
         long reserve = limits.contextToolReserveTokens();
         int maxToolChars = limits.contextMaxToolResultChars();
 
-        // offset 校准:用「上轮实测 inputTokens - 上轮估算 lastSent」作为隐藏开销,校正
-        // tokenizer 差异/注入提示/服务商计数误差;首轮、无实测或换模型时回退为固定 reserve。
+        // offset 校准:用「上轮实测 inputTokens − 上轮估算 lastSent」作为净修正项,抵消粗估
+        // 与 provider 实测的系统性差异;首轮/无实测/换模型时回退固定 reserve。
+        // 双向采纳(正=漏算隐藏开销、负=粗估高估),见 ContextCompressor.calibratedOverhead。
         long overhead = reserve;
         if (limits.contextOffsetEnabled()) {
             Usage last = a.lastRound();
             String lastModel = a.lastModel();
             String currentModel = a.currentModel();
-            if (last != null && last.inputTokens() > 0
+            if (last != null
                     && lastSent != null && !lastSent.isEmpty()
                     && lastModel != null && !lastModel.isEmpty()
                     && currentModel != null && !currentModel.isEmpty()
                     && lastModel.equals(currentModel)) {
-                long offset = last.inputTokens() - ContextCompressor.estimateTokens(lastSent);
-                if (offset > 0) {
-                    overhead = Math.max(reserve, offset);
-                }
+                overhead = ContextCompressor.calibratedOverhead(
+                        last.inputTokens(), ContextCompressor.estimateTokens(lastSent), reserve);
             }
         }
 

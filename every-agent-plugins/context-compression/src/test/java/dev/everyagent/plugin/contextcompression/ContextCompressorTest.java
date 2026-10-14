@@ -324,4 +324,43 @@ class ContextCompressorTest {
         assertTrue(r.messages().stream().anyMatch(m -> m instanceof SystemMessage),
                 "system 消息作为前缀恒保留");
     }
+
+    // ---- offset 校准(双向) ----
+
+    @Test
+    void calibratedOverheadAcceptsPositiveOffset() {
+        // 实测 > 粗估(粗估漏算工具定义/模板/分词差异)→ 抬升 overhead,防漏触发。
+        assertEquals(30_000L, ContextCompressor.calibratedOverhead(50_000L, 20_000L, 4096L));
+    }
+
+    @Test
+    void calibratedOverheadAcceptsNegativeOffset() {
+        // 回归 2026-10 t_ra74:实测 8.4 万 < 粗估 22.9 万(bytes/3 对代码正文高估)→ 必须负向
+        // 采纳为 -14.5 万;旧实现 `if (offset > 0) overhead = max(reserve, offset)` 会丢弃它、
+        // 回退 reserve,使阈值退化为「粗估 × ratio」,上下文远未真实占满即触发压缩。
+        assertEquals(-145_000L, ContextCompressor.calibratedOverhead(84_000L, 229_000L, 4096L));
+    }
+
+    @Test
+    void calibratedOverheadFallsBackToReserveWhenNoMeasurement() {
+        assertEquals(4096L, ContextCompressor.calibratedOverhead(0L, 20_000L, 4096L), "无实测回退 reserve");
+        assertEquals(4096L, ContextCompressor.calibratedOverhead(50_000L, 0L, 4096L), "无粗估基线回退 reserve");
+    }
+
+    @Test
+    void negativeOverheadSuppressesFalseTrigger() {
+        // 粗估严重高估场景:overhead 为负后,同一批消息不应再判定为超阈值。
+        List<Message> msgs = new ArrayList<>();
+        msgs.add(user("q" + txt(900)));
+        msgs.add(assistant("a" + txt(900)));
+        long est = ContextCompressor.estimateTokens(msgs); // ~600
+
+        // 无校准(overhead=reserve 正向)时:est + reserve > trigger → 误触发压缩
+        assertTrue(ContextCompressor.compress(msgs, est + 10, est + 10, 50).compressed());
+
+        // 实测仅 est 的一半、负 offset 校正后:est + (-est/2) < trigger → 不触发
+        long overhead = ContextCompressor.calibratedOverhead(est / 2, est, 50);
+        assertFalse(ContextCompressor.compress(msgs, est + 10, est + 10, overhead).compressed(),
+                "负 offset 应压低 precheck,消除粗估高估造成的假触发");
+    }
 }
