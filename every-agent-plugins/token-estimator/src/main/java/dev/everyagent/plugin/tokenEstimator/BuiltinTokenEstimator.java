@@ -1,4 +1,4 @@
-package dev.everyagent.plugin.modelratelimit;
+package dev.everyagent.plugin.tokenEstimator;
 
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.plugin.api.spi.TokenEstimator;
@@ -50,8 +50,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
  *
  * <p><b>接口边界</b>：本类只把 {@link #estimate} 暴露为 {@link TokenEstimator} SPI；
  * {@link #calibrate} / {@link #factorOf} / {@link #sampleCountOf} 是<b>本插件内部</b>方法
- * （供同插件的 {@code TokenCalibrationAdvisor} 校准与测试断言使用），不属于 SPI——SPI 上不再
- * 承诺校准接缝，避免第三方实现替换后校准灌进旧实例、新实现永不被校准。
+ * （本插件内 {@link BuiltinTokenEstimator} 与 {@code TokenCalibrationAdvisor} 之间的接缝，
+ * 也供单元测试断言使用），不属于 SPI——SPI 上不再承诺校准接缝，避免第三方实现替换后
+ * 校准灌进旧实例、新实现永不被校准。
  */
 public class BuiltinTokenEstimator implements TokenEstimator {
 
@@ -111,7 +112,7 @@ public class BuiltinTokenEstimator implements TokenEstimator {
 
     /**
      * 用真实 usage 校准估算系数（EMA）——<b>本插件内部方法，不属于 {@link TokenEstimator} SPI</b>。
-     * 唯一调用方是同插件的 {@code TokenCalibrationAdvisor}。
+     * 唯一调用方是同插件的 {@code TokenCalibrationAdvisor}（两者同属本插件 token-estimator）。
      *
      * <p>入参 {@code estimatedTokens} 是调用方逐 chunk 累计、<b>已乘当前系数</b>的估算值；
      * 实现内先除回旧系数得到 raw 原始估算，再以 {@code ratio = actual / raw} 更新因子。

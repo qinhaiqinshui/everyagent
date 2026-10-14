@@ -1,4 +1,4 @@
-package dev.everyagent.plugin.modelratelimit;
+package dev.everyagent.plugin.tokenEstimator;
 
 import dev.everyagent.plugin.api.spi.AdvisorContext;
 import dev.everyagent.plugin.api.spi.AdvisorProvider;

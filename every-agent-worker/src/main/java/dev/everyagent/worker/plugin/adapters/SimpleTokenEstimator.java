@@ -9,7 +9,7 @@ import org.springframework.stereotype.Component;
  * <p><b>无校准的纯粗估</b>：CJK 字符 ≈ 1 token、其余 ≈ 4 字符 1 token（无 tokenizer 粗估），
  * factor 恒 1.0、不做在线校准、不持久化。
  *
- * <p>当 model-rate-limit 插件加载时，其 {@code BuiltinTokenEstimator} 经
+ * <p>当 token-estimator 插件加载时，其 {@code BuiltinTokenEstimator} 经
  * {@code WorkerPluginContext.registerTokenEstimator()} 替换此实例（见 {@link WorkerServicesImpl}）。
  */
 @Component

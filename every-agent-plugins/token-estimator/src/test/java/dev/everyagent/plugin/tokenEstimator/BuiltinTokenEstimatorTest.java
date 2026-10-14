@@ -1,4 +1,4 @@
-package dev.everyagent.plugin.modelratelimit;
+package dev.everyagent.plugin.tokenEstimator;
 
 import dev.everyagent.plugin.api.config.WorkerConfig;
 import org.junit.jupiter.api.Test;

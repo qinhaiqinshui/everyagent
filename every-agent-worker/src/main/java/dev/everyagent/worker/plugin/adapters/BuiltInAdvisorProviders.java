@@ -48,7 +48,7 @@ public class BuiltInAdvisorProviders {
         registry.register(new AgentStatusAdvisorProvider());
 
         // 核心基础设施（0─99）
-        // TokenCalibrationAdvisor 已迁至 model-rate-limit 插件（步骤 4），不再在此注册。
+        // TokenCalibrationAdvisor 已迁至 token-estimator 插件（自 model-rate-limit 拆出），不再在此注册。
         // SystemInfoAdvisor 已迁入 system-info 插件模块，由插件自行注册。
         // AgentsMdAdvisor 已迁入 agents-md 插件模块，由插件自行注册。
         registry.register(new RoundIndexAdvisorProvider(roundIndexStore));

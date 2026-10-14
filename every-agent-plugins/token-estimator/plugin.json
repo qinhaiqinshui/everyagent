@@ -1,0 +1,9 @@
+{
+  "id": "token-estimator",
+  "name": "Token 估算与校准",
+  "version": "0.1.0",
+  "description": "Token 估算器 SPI 实现与在线校准(自 model-rate-limit 拆出)",
+  "author": "everyagent",
+  "main": "dev.everyagent.plugin.tokenEstimator.TokenEstimatorPlugin",
+  "enabled": true
+}
