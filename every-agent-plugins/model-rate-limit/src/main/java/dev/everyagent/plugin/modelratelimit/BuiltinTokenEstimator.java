@@ -95,6 +95,10 @@ public class BuiltinTokenEstimator implements TokenEstimator {
 
     // ---- TokenEstimator SPI ----
 
+    /**
+     * 估算文本 token 数。同文本恒得同值（分词与方向无关）；系数取该 configId 已收敛的值
+     * （无记录则 1.0）。
+     */
     @Override
     public long estimate(String text, String configId) {
         if (text == null || text.isEmpty()) {
@@ -104,15 +108,6 @@ public class BuiltinTokenEstimator implements TokenEstimator {
         EstState s = states.get(configId);
         double f = (s == null) ? 1.0 : s.factor;
         return Math.max(0, Math.round(raw * f));
-    }
-
-    /**
-     * 输入(prompt)口径估算：不套输出 token 校准系数（见 {@link TokenEstimator#estimateInput}）。
-     * 上下文压缩的预检走此路径——其阈值是「窗口占用」，属输入口径，套用输出系数会约 2 倍高估。
-     */
-    @Override
-    public long estimateInput(String text) {
-        return rawTokens(text);
     }
 
     @Override

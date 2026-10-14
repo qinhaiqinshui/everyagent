@@ -6,8 +6,8 @@ import org.springframework.stereotype.Component;
 /**
  * Fallback Token 估算器（插件未加载 BuiltinTokenEstimator 时使用）。
  *
- * <p>基础估算：CJK 字符 ≈ 1 token、其余 ≈ 4 字符 1 token（无 tokenizer 粗估）。
- * 不做在线校准（factor 恒 1.0）、不持久化。
+ * <p><b>无校准的纯粗估</b>：CJK 字符 ≈ 1 token、其余 ≈ 4 字符 1 token（无 tokenizer 粗估），
+ * factor 恒 1.0、不做在线校准、不持久化。
  *
  * <p>当 model-rate-limit 插件加载时，其 {@code BuiltinTokenEstimator} 经
  * {@code WorkerPluginContext.registerTokenEstimator()} 替换此实例（见 {@link WorkerServicesImpl}）。
@@ -21,12 +21,6 @@ public class SimpleTokenEstimator implements TokenEstimator {
             return 0;
         }
         return rawTokens(text);
-    }
-
-    /** 输入口径估算：本实现不校准，与 {@link #estimate(String, String)} 同值。 */
-    @Override
-    public long estimateInput(String text) {
-        return estimate(text, "");
     }
 
     @Override

@@ -38,9 +38,9 @@ import java.util.Set;
  * 与「offset 校准」两种含义,<b>可为负</b>(负 = 粗估高估正文,压低 precheck;见
  * {@link #calibratedOverhead});四参入口的 overhead 仍只表示固定预留,等价于原 reserve。
  *
- * <p>token 估算:口径可注入({@link TextTokens})——生产环境由全局 {@code TokenEstimator}
- * 的<b>输入口径</b>({@link dev.everyagent.plugin.api.spi.TokenEstimator#estimateInput})提供
- * (CJK≈1/字符、其余≈4 字符),使压缩与限流/长度护栏共用同一分词口径;未注入时回退内置
+ * <p>token 估算:口径可注入({@link TextTokens})——生产环境由全局
+ * {@link dev.everyagent.plugin.api.spi.TokenEstimator#estimate} 提供(单一口径,
+ * CJK≈1/其余≈4 字符),使压缩与限流/长度护栏共用同一分词口径;未注入时回退内置
  * UTF-8 bytes/3 粗估。阈值比较的统一形式为 {@code estimateTokens(x) + overhead}。
  */
 public final class ContextCompressor {
@@ -88,8 +88,8 @@ public final class ContextCompressor {
      * offset 校准(可为负,见 {@link #calibratedOverhead});summarizer 非空时,阶段 C 用其
      * 生成「历史摘要」,失败/缺失时降级为「更早历史」user 截断简版。
      *
-     * @param tokens token 估算口径;为空回退内置 bytes/3(生产由全局 {@code TokenEstimator}
-     *               的输入口径提供,见插件 provider)
+     * @param tokens token 估算口径;为空回退内置 bytes/3(生产由全局
+     *               {@code TokenEstimator#estimate} 提供,见插件 provider)
      */
     public static Result compress(List<Message> messages, long trigger, long target, long overhead,
             ContextSummarizer summarizer) {
@@ -280,8 +280,8 @@ public final class ContextCompressor {
     // ---- token 估算 ----
 
     /**
-     * 文本 → token 估算函数(估算口径注入点)。生产环境由全局 {@code TokenEstimator} 提供
-     * (见 provider);为空时回退内置 UTF-8 bytes/3 粗估。
+     * 文本 → token 估算函数(估算口径注入点)。生产环境由全局 {@code TokenEstimator#estimate}
+     * 提供(见 provider);为空时回退内置 UTF-8 bytes/3 粗估。
      *
      * <p>入参可能为 {@code null}/空串,实现须容忍并返回 0。
      */
