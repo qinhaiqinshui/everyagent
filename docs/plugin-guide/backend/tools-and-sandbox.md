@@ -158,7 +158,7 @@ public interface ToolExecutionInterceptor {
 
 | 时机 | 写法 | 能力 | 内置范例 |
 |---|---|---|---|
-| 下行（`next.proceed` 之前） | 不调 `next` 直接 `return` 合成结果 | **阻断执行**：模型收到你合成的 `ToolExecutionResult`，真实工具不跑（对照：调 `next` 即放行，unattended 非无人值守时直接放行，`:34-36`） | unattended 对「纯 ask_user 轮」合成自动回答短路（`every-agent-plugins/unattended/src/main/java/dev/everyagent/plugin/unattended/UnattendedToolInterceptor.java:73-80`） |
+| 下行（`next.proceed` 之前） | 不调 `next` 直接 `return` 合成结果 | **阻断执行**：模型收到你合成的 `ToolExecutionResult`，真实工具不跑（对照：调 `next` 即放行；unattended 经 `WorkerServices.slashTokens().hasKind(ctx.subjectId(), "unattended.mode")` 判任务级 slash token，非无人值守时直接放行，`:34-36`） | unattended 对「纯 ask_user 轮」合成自动回答短路（`every-agent-plugins/unattended/src/main/java/dev/everyagent/plugin/unattended/UnattendedToolInterceptor.java:73-80`） |
 | 下行改写入参 | `next.proceed(包装后的 ctx)` | 想改真实执行所见的 prompt/chatResponse，就包一个新 `ToolExecutionContext` 传下去——链尾用的是**你传下去的那个 ctx**（`delegate.executeToolCalls(c.prompt(), c.chatResponse())`，`ToolExecutionChainExecutor.java:34`） | **无内置范例，未实测** |
 | 上行（`next.proceed` 返回之后） | 拿返回的 `ToolExecutionResult` 重建 | **改写结果**：重建 `conversationHistory` 里的 `ToolResponseMessage` 后返回新结果——落盘/推送/回灌模型三路全覆盖 | secret-redaction 掩码凭据（`every-agent-plugins/secret-redaction/src/main/java/dev/everyagent/plugin/secretredaction/SecretRedactionInterceptor.java:62-130`） |
 
@@ -395,7 +395,7 @@ return new FileReferenceResult("（附图：" + displayPath(ref) + "）", List.o
 | `snapshot()` | `ModelConfig` | 完整模型配置快照（configId 经 `snapshot().configId()` 取，**无独立槽**） | advisor 装配模型参数 | §14.11 明文 |
 | `emitter()` | `EventEmitter` | 已绑定本主体的事件口（trace/审计） | secret-redaction 发 `task.trace`（`SecretRedactionInterceptor.java:140-160`） | 只发语义 EmitEvent，不感知 wire 事件名/seq（§14.0） |
 | `agentFactory()` | `AgentFactory` | 预绑定 Agent 工厂（`create(agentId)`） | 子 agent / 审议 agent 创建 | §14.11「不传裸工厂/裸服务/任务域对象」 |
-| `metadata()` | `Map<String,Object>` | 随 meta.json 落盘的持久策略标记（unattended/ai-review/attachments） | `UnattendedToolInterceptor.java:35` 读 `unattended` 标记；`UserInputMaterializerImpl` 写 `attachments` | 只承载持久策略标记，不混运行时瞬态（§14.11） |
+| `metadata()` | `Map<String,Object>` | 随 meta.json 落盘的持久数据（如 attachments）；**任务级开关不走 metadata**，其真相源是 `slash-tokens.json`（`WorkerServices.slashTokens()` 查询） | `UserInputMaterializerImpl` 写 `attachments` | 只承载持久数据，不混运行时瞬态（§14.11） |
 | `dataDir()` | `Path` | 主体数据目录（grants.json 等落盘） | 授权链 | — |
 | `terminal()` | `boolean` | 主体是否已收口 | leak-guard：终态后不再发射事件 | — |
 | `interaction()` | `InteractionService` | 预绑定交互口（ask 的 context 自动补 subjectId） | human-authorization 授权弹窗、AskUserTool 等（image-vision 已移除授权链，用户 `@` 引用即授权） | §14.11「绕过 ctx.interaction() 手动填 taskId context」禁止 |

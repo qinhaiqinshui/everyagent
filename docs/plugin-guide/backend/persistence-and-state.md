@@ -63,7 +63,7 @@ rg 全部 26 个内置插件对 `pluginDir()` 的使用（排除 `target/`），
 
 §7.15.2（`:759-765`）进一步定死读写两侧：写侧「`RoundIndexStore` 闭合轮后经 `RoundClosedListener` 回调按 roundId 写全文分片 `file-changes/<roundId>.json`(轻量摘要与全文同在该文件,不落 rounds.jsonl 行)」；读侧「唯一取数口是插件自己的 `task.fileChanges` RPC」。task 核心零 fileChanges 概念（§14.11 槽位判据：插件功能不进核心接口，collector 连 TaskRuntime 都不进，[`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) §14.11）。
 
-`WorkerServices` 也不是插件 KV 存储。`store()`（继承自 `TaskServices`，`every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/task/TaskServices.java:15-16`）暴露的 `TaskStoreService` 只收录「插件实际需要的 TaskStore 方法」（悬空队列 queue.jsonl、截断、meta 读写、会话重建，`every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/task/TaskStoreService.java:20-87`）——`readMeta/writeMeta` 是给确实要改 TaskSummary 字段的场景（如 metadata 持久策略标记），拿 meta.json 当插件状态抽屉会污染 worker 的任务列表 schema。两个硬事实约束自持文件的生命周期：
+`WorkerServices` 也不是插件 KV 存储。`store()`（继承自 `TaskServices`，`every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/task/TaskServices.java:15-16`）暴露的 `TaskStoreService` 只收录「插件实际需要的 TaskStore 方法」（悬空队列 queue.jsonl、截断、meta 读写、会话重建，`every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/task/TaskStoreService.java:20-87`）——`readMeta/writeMeta` 是给确实要改 TaskSummary 字段的场景（如 metadata 持久数据，例如 `attachments`），拿 meta.json 当插件状态抽屉会污染 worker 的任务列表 schema。（注：任务级**开关**类状态——AI 审议 / 无人值守 / 禁用网络——不进 metadata，其真相源是任务目录下的 `slash-tokens.json`，经 `WorkerServices.slashTokens()` 查询。）两个硬事实约束自持文件的生命周期：
 
 - **编辑重发截断不删插件文件**：`truncateAfterSeq` 原文「只动事件 jsonl，不删任何插件数据文件——file-changes/、agents.json 等插件自有数据残留陈旧条目被接受，后续经截断事件通知（如 task.truncated）由插件自行清理，开放项」（`TaskStoreService.java:38-45`）——陈旧分片清理由插件自己负责；
 - **内存状态不跨重启**：per-run 状态放 advisor/节点的实例字段（[advisors.md](advisors.md) §1.5「provider 里存 per-run 状态」坑位），进程重启即失；要跨重启就得落成文件。

@@ -23,8 +23,8 @@ public class AiReviewPlugin implements EveryAgentPlugin {
         // 1. 实例化 AI 审议器(仅 WorkerConfig;agent 装配经 req.context().agentFactory(),§8.3)
         AiAuthReviewer reviewer = new AiAuthReviewer(ctx.services().config());
 
-        // 2. 注册授权链节点
-        ctx.registerAuthorizationHandler(new AiReviewAuthHandler(reviewer));
+        // 2. 注册授权链节点(经 WorkerServices.slashTokens() 查任务级 slash token 判定开关)
+        ctx.registerAuthorizationHandler(new AiReviewAuthHandler(reviewer, ctx.services()));
 
         // 3. 注册 /AI 审议 命令提供者
         ctx.registerSlashProvider("ai-review", () ->

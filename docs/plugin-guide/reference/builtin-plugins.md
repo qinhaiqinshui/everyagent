@@ -334,7 +334,7 @@ WSL Ubuntu 沙箱 + bash 工具 + network slash 开关。
 
 无人值守模式（自动放行授权 + 拦截交互式工具）。
 - 关键文件：`~plugins/unattended/src/main/java/dev/everyagent/plugin/unattended/UnattendedPlugin.java:20-30`。
-- 值得看：**一插件注册 4 种扩展点**的组合示范；slash 全家桶最小实现（入口 32 行）。
+- 值得看：**一插件注册 4 种扩展点**的组合示范；slash 全家桶最小实现（入口 32 行）；选中「无人值守」的 slash 条目声明 `chainIds=["ai-review:on"]`，一次选中联动挂上「无人值守」+「AI 审议」两个底部胶囊（跨插件零耦合；开关真相源 = `slash-tokens.json` 的 `unattended.mode` token）。
 
 ### update-file-view（文件更新视图）
 

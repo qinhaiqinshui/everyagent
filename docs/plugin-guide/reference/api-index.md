@@ -64,7 +64,7 @@ has_children: false
 
 `WorkerPluginContext extends TaskPluginContext`，该父接口只声明上表 #15/#16 两个注册方法（`every-agent-plugin-api/.../task/TaskPluginContext.java:17,24`）。详解：[准入预检](../backend/task-and-rpc.md#1-taskadmissionpolicy--任务创建准入预检)、[洋葱节点](../backend/task-and-rpc.md#2-tasklifecyclenode--洋葱模型)。
 
-### 1.5 `WorkerServices` —— 服务清单（14 项）
+### 1.5 `WorkerServices` —— 服务清单（15 项）
 
 > 本表摘自 [后端总览 §6.3](../backend/overview.md#63-workerservices能取到什么逐个列)（逐项声明行号见该篇）；声明：`every-agent-plugin-api/.../WorkerServices.java`。插件只面向此接口编程，不依赖 worker 实现类。
 
@@ -74,6 +74,7 @@ has_children: false
 | `nativeExec()` | 宿主原生进程执行器（argv 直传 + 超时 + 输出上限） | git |
 | `workspaces()` | 多工作区注册表、jailed 路径解析 | git（每方法首行 `sandboxFor`） |
 | `tokenEstimator()` | token 估算器（内置或插件注册版） | model-rate-limit |
+| `SlashTokenService slashTokens()` | 任务级 slash token 只读查询：任务级开关的真相源读取口（`tokensOf(taskId)` / `hasKind(taskId, kind)`，见 `SlashTokenService`） | ai-review、unattended |
 | `interaction()` | 用户交互服务（ask 提问 / 授权弹窗） | ai-review、image-vision |
 | `userInputMaterializer()` | 用户输入物化（@ 文件引用 → 「（附图:xxx）」正文 + 附件 Media；输入投递入口必用） | task-input-queue（插入对话） |
 | `config()` | worker 全局 `worker.*` 只读视图（≠ `ctx.config()`） | task-queue |
@@ -97,7 +98,7 @@ has_children: false
 | `ModelConfig snapshot()` | 完整模型配置快照；configId 经它取，无独立槽 | advisor 装配 |
 | `EventEmitter emitter()` | 已绑定本主体的事件口（trace/审计） | secret-redaction |
 | `AgentFactory agentFactory()` | 预绑定 Agent 工厂（`create(agentId)`） | subagent |
-| `Map<String,Object> metadata()` | 持久策略标记（随 meta.json 落盘，不混瞬态） | unattended、attachments |
+| `Map<String,Object> metadata()` | 持久数据（如 attachments）；任务级开关不走 metadata（真相源 = slash token） | attachments |
 | `Path dataDir()` | 主体数据目录（grants.json 等落盘） | 授权链 |
 | `boolean terminal()` | 主体是否已收口（终态后不再发射） | leak-guard |
 | `InteractionService interaction()` | 预绑定交互口（ask 自动补 subjectId） | image-vision |

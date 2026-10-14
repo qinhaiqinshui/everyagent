@@ -1,5 +1,6 @@
 package dev.everyagent.plugin.unattended;
 
+import dev.everyagent.plugin.api.WorkerServices;
 import dev.everyagent.plugin.api.spi.ToolExecutionChain;
 import dev.everyagent.plugin.api.spi.ToolExecutionContext;
 import dev.everyagent.plugin.api.spi.ToolExecutionInterceptor;
@@ -17,11 +18,21 @@ import tools.jackson.databind.ObjectMapper;
 import java.util.ArrayList;
 import java.util.List;
 
+/**
+ * 无人值守工具执行拦截器:任务级开关开启时拦截本轮 {@code ask_user} 调用并自动作答。
+ *
+ * <p>开关判定按任务级 {@code unattended.mode} slash token(见 {@link UnattendedToken#KIND})
+ * —— 经 {@link WorkerServices#slashTokens()} 以磁盘为准查询,不再读任务 {@code metadata} 副本。
+ * 命中且本轮为纯 {@code ask_user} 轮时,合成「题干：首选项」作答文本短路返回;否则放行。
+ */
 public class UnattendedToolInterceptor implements ToolExecutionInterceptor {
 
     private static final ObjectMapper MAPPER = JacksonUtils.getDefaultJsonMapper();
 
-    public UnattendedToolInterceptor() {
+    private final WorkerServices services;
+
+    public UnattendedToolInterceptor(WorkerServices services) {
+        this.services = services;
     }
 
     @Override
@@ -32,7 +43,8 @@ public class UnattendedToolInterceptor implements ToolExecutionInterceptor {
 
     @Override
     public ToolExecutionResult invoke(ToolExecutionContext ctx, ToolExecutionChain next) throws Exception {
-        if (!Boolean.TRUE.equals(ctx.metadata().getOrDefault("unattended", false))) {
+        // 开关真相源 = 任务级 unattended.mode token(磁盘为准,运行中/终态/重启一致)
+        if (services == null || !services.slashTokens().hasKind(ctx.subjectId(), UnattendedToken.KIND)) {
             return next.proceed(ctx); // 不是无人值守模式，放行
         }
         Prompt prompt = ctx.prompt();

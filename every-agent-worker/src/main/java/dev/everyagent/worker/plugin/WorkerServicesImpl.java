@@ -9,6 +9,7 @@ import dev.everyagent.plugin.api.spi.IdGenerator;
 import dev.everyagent.plugin.api.spi.NativeExec;
 import dev.everyagent.plugin.api.spi.SandboxBackend;
 import dev.everyagent.plugin.api.spi.TokenEstimator;
+import dev.everyagent.plugin.api.slash.SlashTokenService;
 import dev.everyagent.plugin.api.proto.ShortIds;
 import dev.everyagent.plugin.api.proto.SnowflakeId;
 import dev.everyagent.plugin.api.task.StoredTaskInfo;
@@ -26,6 +27,7 @@ import dev.everyagent.worker.task.TaskManager;
 import dev.everyagent.worker.task.RoundIndexStore;
 import dev.everyagent.worker.task.TaskStore;
 import dev.everyagent.worker.ship.StreamSourceRegistry;
+import dev.everyagent.worker.slash.SlashTaskScopeStore;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Component;
 
@@ -50,6 +52,8 @@ public class WorkerServicesImpl implements WorkerServices {
     private final IdGenerator idGenerator;
     private final StreamSourceRegistry streamSources;
     private final UserInputMaterializer userInputMaterializer;
+    /** slash 任务级 token 存储:构造器依赖 WorkerServices(本类),用 @Lazy 打断循环依赖。 */
+    private final SlashTaskScopeStore slashStore;
 
     public WorkerServicesImpl(OsSandbox sandbox, SandboxPathRegistry pathRegistry,
             WorkspaceManager workspaces,
@@ -59,7 +63,8 @@ public class WorkerServicesImpl implements WorkerServices {
             InteractionServiceImpl interaction,
             WorkerProperties workerProperties, EventSink eventSink,
             StreamSourceRegistry streamSources,
-            UserInputMaterializer userInputMaterializer) {
+            UserInputMaterializer userInputMaterializer,
+            @Lazy SlashTaskScopeStore slashStore) {
         this.sandbox = sandbox;
         this.pathRegistry = pathRegistry;
         this.workspaces = workspaces;
@@ -72,6 +77,7 @@ public class WorkerServicesImpl implements WorkerServices {
         this.eventSink = eventSink;
         this.streamSources = streamSources;
         this.userInputMaterializer = userInputMaterializer;
+        this.slashStore = slashStore;
         this.idGenerator = new IdGenerator() {
             @Override
             public long next() {
@@ -169,6 +175,22 @@ public class WorkerServicesImpl implements WorkerServices {
     public dev.everyagent.plugin.api.model.EventEmitter emitterOf(String subjectId) {
         dev.everyagent.worker.task.TaskEntry t = taskManager.runningTask(subjectId);
         return t != null ? t.events() : null;
+    }
+
+    /** 任务级 slash token 只读查询:委托斜杠层的 SlashTaskScopeStore(其恒以磁盘为真相源)。 */
+    @Override
+    public SlashTokenService slashTokens() {
+        return new SlashTokenService() {
+            @Override
+            public java.util.List<String> tokensOf(String taskId) {
+                return slashStore.tokensOf(taskId);
+            }
+
+            @Override
+            public boolean hasKind(String taskId, String kind) {
+                return slashStore.hasKind(taskId, kind);
+            }
+        };
     }
 
     @Override

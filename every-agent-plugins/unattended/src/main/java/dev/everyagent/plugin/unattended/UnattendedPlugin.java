@@ -17,10 +17,10 @@ public class UnattendedPlugin implements EveryAgentPlugin {
     @Override
     public void activate(WorkerPluginContext ctx) {
         // 1. 注册工具执行拦截器（ask_user 自动作答）
-        ctx.registerToolExecutionInterceptor(new UnattendedToolInterceptor());
+        ctx.registerToolExecutionInterceptor(new UnattendedToolInterceptor(ctx.services()));
 
         // 2. 注册授权链节点（授权一律拒绝）
-        ctx.registerAuthorizationHandler(new UnattendedAuthHandler());
+        ctx.registerAuthorizationHandler(new UnattendedAuthHandler(ctx.services()));
 
         // 3. 注册 /无人值守 命令提供者
         ctx.registerSlashProvider("unattended", () ->

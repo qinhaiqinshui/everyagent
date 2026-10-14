@@ -337,8 +337,8 @@ public interface AuthorizationHandler {
 
 | order | id | 来源 | 行为 | 证据 |
 |---|---|---|---|---|
-| `100f` | `ai-review-auth` | ai-review 插件 | `metadata.ai-review=true` 时交 AI 审议员决议；ESCALATE/超时 → PASS 下放 | `every-agent-plugins/ai-review/src/main/java/dev/everyagent/plugin/aireview/AiReviewAuthHandler.java:6-38`；注册 `AiReviewPlugin.java:24` |
-| `200f` | `unattended-auth` | unattended 插件 | `metadata.unattended=true`（无人值守）时直接 DENY | `every-agent-plugins/unattended/src/main/java/dev/everyagent/plugin/unattended/UnattendedAuthHandler.java:6-19`；注册 `UnattendedPlugin.java:23` |
+| `100f` | `ai-review-auth` | ai-review 插件 | 任务级 `ai.review` slash token 存在时交 AI 审议员决议；ESCALATE/超时 → PASS 下放 | `every-agent-plugins/ai-review/src/main/java/dev/everyagent/plugin/aireview/AiReviewAuthHandler.java:6-38`；注册 `AiReviewPlugin.java:24` |
+| `200f` | `unattended-auth` | unattended 插件 | 任务级 `unattended.mode` slash token 存在时直接 DENY | `every-agent-plugins/unattended/src/main/java/dev/everyagent/plugin/unattended/UnattendedAuthHandler.java:6-19`；注册 `UnattendedPlugin.java:23` |
 | `300f` | `human-authorization` | worker 内置（`@PostConstruct` 自注册） | 弹三档授权卡（本轮运行/本任务/拒绝）→ `ALLOW+RUN` / `ALLOW+TASK` / `DENY`，**链终结节点**（从不 PASS） | `every-agent-worker/src/main/java/dev/everyagent/worker/tools/permission/HumanAuthorizationHandler.java` |
 
 排序与折叠：`AuthorizationHandlerRegistry.sorted()` 按 `order` 升序（`every-agent-worker/src/main/java/dev/everyagent/worker/plugin/registry/AuthorizationHandlerRegistry.java:31-34`）→ `AuthorizationChainExecutor.run`（`every-agent-worker/src/main/java/dev/everyagent/worker/tools/permission/AuthorizationChainExecutor.java:24-40`）。插件插位建议：< 100（比 AI 审议更外，先做策略性拒绝/放行）或 100~300 之间（float 任意值，如 `150f`：审议之后、人工弹窗之前，适合「自动批准白名单」类增强；插在 300 之后无意义——human 是终结节点）。

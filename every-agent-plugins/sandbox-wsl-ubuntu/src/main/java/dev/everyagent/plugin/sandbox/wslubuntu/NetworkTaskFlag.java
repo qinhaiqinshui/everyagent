@@ -1,40 +1,35 @@
 package dev.everyagent.plugin.sandbox.wslubuntu;
 
-import dev.everyagent.plugin.api.execution.ExecContext;
+import dev.everyagent.plugin.api.WorkerServices;
 
 /**
- * 「本任务禁用网络」开关的唯一读写入口(任务级状态,归本插件自管)。
+ * 「本任务禁用网络」开关的只读入口(任务级状态,归本插件自管)。
  *
- * <p>状态存在执行上下文通用任务槽 {@code ExecContext.metadata()} 里,key =
- * {@link #META_KEY},随任务 meta.json 落盘、再运行仍保持;worker 核心不感知该 key,
- * 也不持有禁网状态 —— 因为只有 wsl-ubuntu 后端能在发行版内 {@code unshare -n}
- * 真正断网,这个能力整体归本插件(架构 §7.10 网络策略)。
+ * <p><b>唯一真相源</b>是任务级 {@code network.access} slash token(落盘于任务目录下的
+ * {@code slash-tokens.json},由 slash 层写入 / 移除):选中 /禁用网络 即写入该 token
+ * (开关开),✕ 取消即移除(开关关)。读取经 {@link WorkerServices#slashTokens()} 按 kind
+ * 查询,恒以磁盘为准 —— 运行中 / 终态 / 进程重启后一致,不依赖任何内存态任务。
  *
- * <p>写:{@link NetworkSlashProvider} 的 onSelect/onCancel;
- * 读:{@link WslUbuntuCommandExecutor} 每次 spawn 实时读(故运行中选中/取消
+ * <p>worker 核心不感知该 token 语义,也不持有禁网状态 —— 只有 wsl-ubuntu 后端能在发行版内
+ * {@code unshare -n} 真正断网,这个能力整体归本插件(架构 §7.10 网络策略)。
+ *
+ * <p>读:{@link WslUbuntuCommandExecutor} 每次 spawn 经本类实时读(故运行中选中/取消
  * 对本轮后续命令即时生效)。
  */
 public final class NetworkTaskFlag {
 
-    /** 任务 metadata 中的键(Boolean;缺失或 false = 放行网络)。 */
-    public static final String META_KEY = "networkBlocked";
-
     private NetworkTaskFlag() {
     }
 
-    /** 读:该任务是否已开启禁网(task 为 null = 任务不可寻,按未开启处理)。 */
-    public static boolean isOn(ExecContext task) {
-        return task != null && Boolean.TRUE.equals(task.metadata().get(META_KEY));
-    }
-
     /**
-     * 写:置位/复位任务级禁网开关并广播 {@code task.updated}(meta 由 slash 层与任务
-     * 生命周期统一落盘)。taskId 为空(草稿态)或任务不可寻时不做任何写入。
+     * 读:该任务是否已开启禁网 —— 查任务级 {@code network.access} token 是否存在。
+     *
+     * <p>services 或 subjectId 缺失(草稿态 / 无任务上下文)按未开启处理,绝不 NPE。
      */
-    public static void set(ExecContext ctx, boolean blocked) {
-        if (ctx == null) {
-            return;
+    public static boolean isOn(WorkerServices services, String subjectId) {
+        if (services == null || subjectId == null || subjectId.isBlank()) {
+            return false;
         }
-        ctx.metadata().put(META_KEY, blocked);
+        return services.slashTokens().hasKind(subjectId, NetworkToken.KIND);
     }
 }

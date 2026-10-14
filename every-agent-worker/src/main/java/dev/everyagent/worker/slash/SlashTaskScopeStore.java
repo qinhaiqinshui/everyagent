@@ -17,6 +17,7 @@ import dev.everyagent.plugin.api.model.EmitEvent;
 import dev.everyagent.plugin.api.model.EventEmitter;
 import dev.everyagent.plugin.api.proto.SnowflakeId;
 import dev.everyagent.plugin.api.slash.SlashTokenEncoder;
+import dev.everyagent.plugin.api.slash.SlashTokenService;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.node.ArrayNode;
 
@@ -31,7 +32,7 @@ import tools.jackson.databind.node.ArrayNode;
  * 业务 onSelect 由调用方(SlashMethods.applyTaskToken)在 token 写入后另行触发。
  */
 @Component
-public class SlashTaskScopeStore {
+public class SlashTaskScopeStore implements SlashTokenService {
 
     private static final Logger log = LoggerFactory.getLogger(SlashTaskScopeStore.class);
 
@@ -102,12 +103,34 @@ public class SlashTaskScopeStore {
     }
 
     /** 当前任务已存储的 slash 任务级 token 快照(只读)。 */
+    @Override
     public List<String> tokensOf(String taskId) {
         Path dir = workerServices.dataDirOf(taskId);
         if (dir == null) {
             return List.of();
         }
         return readTokens(dir);
+    }
+
+    /**
+     * 该任务是否挂了指定 kind 的 slash 任务级 token —— 任务级开关的<b>唯一真相源</b>:
+     * token 存在即开关开启,恒以磁盘 {@code slash-tokens.json} 为准,无内存态依赖。
+     *
+     * <p>kind 为空/空白直接判 false;解析失败的 token(非合法 opaque)跳过,
+     * 均未命中则返回 false(不抛异常)。
+     */
+    @Override
+    public boolean hasKind(String taskId, String kind) {
+        if (kind == null || kind.isBlank()) {
+            return false;
+        }
+        for (String token : tokensOf(taskId)) {
+            SlashTokenEncoder.ParsedToken parsed = SlashTokenEncoder.parseToken(token);
+            if (parsed != null && kind.equals(parsed.kind())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     // ---- 内部 ----

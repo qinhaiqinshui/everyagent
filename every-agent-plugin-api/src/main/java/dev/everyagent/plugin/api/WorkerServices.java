@@ -7,6 +7,7 @@ import dev.everyagent.plugin.api.attachment.UserInputMaterializer;
 import dev.everyagent.plugin.api.event.StreamEmitter;
 import dev.everyagent.plugin.api.interaction.InteractionService;
 import dev.everyagent.plugin.api.model.EventEmitter;
+import dev.everyagent.plugin.api.slash.SlashTokenService;
 import dev.everyagent.plugin.api.spi.IdGenerator;
 import dev.everyagent.plugin.api.spi.NativeExec;
 import dev.everyagent.plugin.api.spi.SandboxBackend;
@@ -37,6 +38,9 @@ public interface WorkerServices extends TaskServices {
 
     /** Token 估算器（内置或插件注册的自定义实现）。 */
     TokenEstimator tokenEstimator();
+
+    /** 任务级 slash token 只读查询（任务级开关的唯一真相源，见 {@link SlashTokenService}）。 */
+    SlashTokenService slashTokens();
 
     /** 用户交互服务（向用户发起提问/授权，同步或异步）。 */
     InteractionService interaction();

@@ -18,11 +18,13 @@ import dev.everyagent.plugin.api.slash.SlashTokenEncoder;
  *
  * <p>本 token 是任务级 bottom 开关的触发标记,不承载任何需 AI 理解的内容;提交解析
  * (从 AI 上下文剥离)由 {@code AiReviewSlashResolver} 接管:本 kind 解析为 {@code ""},
- * token 被清空、不注入模型上下文。真正的「授权弹窗改 AI 审议」由
- * {@code PermissionGate} 按任务级 {@code TaskEntry.aiReview} 分派(步骤 6 实现)。
+ * token 被清空、不注入模型上下文。真正的「授权弹窗改 AI 审议」分派:开关真相源是任务级
+ * {@code ai.review} slash token,由 {@code AiReviewAuthHandler} 经
+ * {@code WorkerServices.slashTokens().hasKind(...)} 判定。
  *
- * <p>本次任务有效:选中 /AI 审议 即开启任务级开关(写入任务 meta.json 落盘),
- * 之后本任务所有轮次持续生效、再运行仍保持,直至 ✕ 取消。
+ * <p>本次任务有效:选中 /AI 审议 即开启任务级开关(该 token 由 slash 层写入任务目录
+ * {@code slash-tokens.json}),之后本任务所有轮次持续生效、再运行仍保持,直至 ✕ 取消
+ * (移除该 token)。
  */
 public final class AiReviewToken {
 

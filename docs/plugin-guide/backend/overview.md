@@ -229,8 +229,9 @@ public class MyFirstPlugin implements EveryAgentPlugin {
 | `sandbox()` | `:29` | 沙箱门面（SandboxBackend）：查 `id()` 判后端、委托挂载 |
 | `nativeExec()` | `:32` | 宿主原生进程执行器（argv 直传 + 超时 + 输出上限；git 等受控操作用） |
 | `workspaces()` | `:35` | 工作区管理器（多工作区注册表、jailed 路径解析） |
-| `tokenEstimator()` | `:38` | Token 估算器（内置或插件注册的自定义实现） |
-| `interaction()` | `:41` | 用户交互服务（ask 提问 / 授权弹窗） |
+| `tokenEstimator()` | `:40` | Token 估算器（内置或插件注册的自定义实现） |
+| `slashTokens()` | `:43` | 任务级 slash token 只读查询（任务级开关的**真相源**读取口：`tokensOf(taskId)` / `hasKind(taskId, kind)`，见 `SlashTokenService`；AI 审议 / 无人值守 / 禁用网络的开关判定都经此，不再走 `metadata`） |
+| `interaction()` | `:46` | 用户交互服务（ask 提问 / 授权弹窗） |
 | `userInputMaterializer()` | `:52` | 用户输入物化服务（正文 + rawContent 里的 @ 文件引用 → 投喂模型就绪的多模态消息；**任何「把用户输入投给模型」的入口都走它**，详见 [工具 §4.3](tools-and-sandbox.md#43-消费链路)） |
 | `config()` | `:44` | worker 全局配置只读视图（`WorkerConfig`，即 `worker.*`；≠ `ctx.config()`） |
 | `ids()` | `:47` | ID 生成器（单调递增 long + 短 ID） |

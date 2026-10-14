@@ -340,6 +340,8 @@ public interface SlashTokenResolver {
 
 `SlashCommandItem` 是 record：`id`（全局唯一，React key 与跨 provider 去重）/`title`（必填）/`subtitle`/`icon`（内联 SVG）/`group`（分组标题）/`insertText`（opaque token 串或纯文本）/`selectHandler`/`cancelHandler`（可空，空则用默认实现：insertText 原地 INLINE 插入）/`defaultSelected`（`every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/slash/SlashCommandItem.java:33-42,102-109`）。
 
+**多结果与联动（`SlashSelectionResult`）**：`selectHandler.onSelect(item, taskId)` 返回 `List<SlashSelectionResult>`——`position=INLINE` 原地插入、`position=BOTTOM` 挂底部胶囊（字段 `token`（opaque 串）+ `id`（归属条目 id））。第 4 字段 `chainIds`（默认空 `List.of()`，3 参便捷构造零改动）声明本次选中**额外联动应用的已注册条目 id**：worker 斜杠层 `SlashMethods.expandChains(registry, results)` 逐个 id 经 `SlashCommandRegistry.itemById(id)` 取该条目**自身** `insertText` 追加为额外 bottom 结果（token 由归属插件构造，**跨插件零耦合**；未注册则跳过、降级为单胶囊，展开结果不再带 `chainIds`、不递归）。范例：`UnattendedSlashProvider` 选中「无人值守」时声明 `chainIds=["ai-review:on"]` → 一次选中挂上「无人值守」+「AI 审议」两个底部胶囊，而 unattended 插件**不依赖** ai-review 插件（`every-agent-plugin-api/.../slash/SlashSelectionResult.java:14-41`；`SlashMethods.java:148-205`）。
+
 ### 4.2 `/` 菜单怎么进来
 
 ```
@@ -360,8 +362,8 @@ worker 内置同路注册：SkillSlashProvider 构造器里 registry.registerPro
 
 | 插件 | registerSlashProvider | 条目 | resolver |
 |---|---|---|---|
-| unattended | `("unattended", () -> UnattendedSlashProvider.items(ctx.services()))`（`UnattendedPlugin.java:26-27`） | id=`unattended:on`「无人值守」，分组「授权」；selectHandler 写 `metadata["unattended"]=true` 并 `publishUpdated`，返回 bottom 胶囊（`UnattendedSlashProvider.java:44-69`） | `UnattendedSlashResolver`：kind=`unattended.mode`，`resolveSubmissionText` 返回**空串**——纯触发标记不注入模型（`UnattendedSlashResolver.java:20-24`） |
-| ai-review | `("ai-review", …)`（`AiReviewPlugin.java:27-28`） | id=`ai-review:on`「AI 审议」 | `AiReviewSlashResolver`（`:31`） |
+| unattended | `("unattended", () -> UnattendedSlashProvider.items(ctx.services()))`（`UnattendedPlugin.java:26-27`） | id=`unattended:on`「无人值守」，分组「授权」；selectHandler 只返回 bottom 胶囊并声明 `chainIds=["ai-review:on"]`（联动挂 AI 审议胶囊，跨插件零耦合）；开关真相源 = `slash-tokens.json` 的 `unattended.mode` token（`UnattendedSlashProvider.java:44-69`） | `UnattendedSlashResolver`：kind=`unattended.mode`，`resolveSubmissionText` 返回**空串**——纯触发标记不注入模型（`UnattendedSlashResolver.java:20-24`） |
+| ai-review | `("ai-review", …)`（`AiReviewPlugin.java:27-28`） | id=`ai-review:on`「AI 审议」，开关 = `ai.review` slash token | `AiReviewSlashResolver`（`:31`） |
 | git | `("git-auto-sync", GitAutoSyncSlashProvider::items)`（`GitPlugin.java:36`） | id=`git-auto-sync:on`「自动同步」 | `GitAutoSyncSlashResolver`（`:39`） |
 | sandbox-wsl-ubuntu | `("network", …)`（`WslUbuntuSandboxPlugin.java:44`） | 「禁用网络」 | `NetworkSlashResolver`（`:45`） |
 

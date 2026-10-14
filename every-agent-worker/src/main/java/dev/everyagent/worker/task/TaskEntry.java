@@ -88,10 +88,12 @@ public final class TaskEntry implements TaskRuntime {
     public volatile boolean finalized;
 
     /**
-     * 通用任务级持久化数据（替代原 taskFlags，Map<String, Boolean>）。
-     * 插件用字符串 key 存取任意类型值（如 "ai-review"→Boolean、"unattended"→Boolean），
+     * 通用任务级持久化数据（随 meta.json 落盘）。
+     * 插件用字符串 key 存取任意类型值（如 "attachments"→List&lt;Map&gt;），
      * 核心不感知具体 key/value 类型。
-     * 随 {@link #summaryJson()} 落盘 meta.json、再运行仍保持。旧格式自动迁移（见 TaskManager）。
+     * 任务级「开关」类状态（AI 审议/无人值守/禁用网络等）不再走 metadata，
+     * 其真相源是 slash-tokens.json（经 {@code WorkerServices.slashTokens()} 查询）。
+     * 随 {@link #summaryJson()} 落盘 meta.json、再运行仍保持。
      */
     public final java.util.Map<String, Object> metadata = new java.util.concurrent.ConcurrentHashMap<>();
 

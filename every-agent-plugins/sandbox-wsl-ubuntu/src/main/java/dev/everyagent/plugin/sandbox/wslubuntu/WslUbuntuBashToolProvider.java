@@ -25,8 +25,9 @@ import java.util.function.BooleanSupplier;
  * {@link #rgDeclaredByManagedImage()}（托管镜像出处），工具描述按该判据<b>条件化生成</b>——
  * 判据不成立时如实说明未探测、回退 grep，绝不无条件宣称「已在 PATH」（§7.10 硬约束）。
  *
- * <p>禁网开关按 taskId 实时读取(每条命令执行瞬间查任务
- * {@code metadata[networkBlocked]}),故运行中用户选中/取消 /禁用网络 对本轮后续命令即时生效。
+ * <p>禁网开关按 taskId 实时读取(每条命令执行瞬间查任务级 {@code network.access} token,
+ * 恒以磁盘 {@code slash-tokens.json} 为准,见 {@link NetworkTaskFlag#isOn}),故运行中用户
+ * 选中/取消 /禁用网络 对本轮后续命令即时生效。
  */
 public class WslUbuntuBashToolProvider implements ToolProvider {
 
@@ -121,11 +122,11 @@ public class WslUbuntuBashToolProvider implements ToolProvider {
                 && WslCommon.tarballFor(props, pluginDir) != null;
     }
 
-    /** 任务级禁网开关读取器(每次调用实时查任务 metadata;任务服务缺失时恒 false)。 */
+    /** 任务级禁网开关读取器(每次调用实时查任务级 network.access token;services 缺失时恒 false)。 */
     private BooleanSupplier taskNetworkBlocked(String subjectId) {
-        if (services == null || services.task() == null) {
+        if (services == null) {
             return () -> false;
         }
-        return () -> NetworkTaskFlag.isOn(services.task().get(subjectId));
+        return () -> NetworkTaskFlag.isOn(services, subjectId);
     }
 }
