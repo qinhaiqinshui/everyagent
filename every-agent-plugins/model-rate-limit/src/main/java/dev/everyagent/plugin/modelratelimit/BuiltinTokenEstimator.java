@@ -44,6 +44,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * dirty 标记 + 原子替换）；重启后接续，避免冷启动系数回退默认。读写失败静默降级，
  * 绝不阻塞模型调用。
  *
+ * <p><b>状态文件版本</b>（{@value #STATE_VERSION}）：版本号 = 估算/校准口径版本。
+ * 口径变更（如本次「纳入工具调用参数、修正 ratio 语义」）后旧系数不再可比，故载入时若
+ * 版本不符（含缺失）即丢弃旧状态、从空开始重新标定——而非延续被污染的错误系数。
+ *
  * <p>去重：同一轮模型调用可能被 {@code RateLimitNode}（限流路径）和
  * {@code TokenCalibrationAdvisor}（advisor 路径）同时观察到 usage，{@link #calibrate}
  * 内部用最近样本指纹去重，同一 (configId, estimated, actual) 三元组短时间不重复校准。
@@ -52,6 +56,12 @@ public class BuiltinTokenEstimator implements TokenEstimator {
 
     private static final Logger log = LoggerFactory.getLogger(BuiltinTokenEstimator.class);
     private static final String FILE_NAME = "model-rate-state.json";
+
+    /**
+     * 状态文件口径版本:口径变更(估算纳入口径、ratio 语义)后旧系数不再可比,
+     * 载入时版本不符即丢弃。
+     */
+    private static final int STATE_VERSION = 2;
 
     /** 内存单条状态。 */
     private record EstState(double factor, long sampleCount, boolean converged,
@@ -234,7 +244,14 @@ public class BuiltinTokenEstimator implements TokenEstimator {
                 return;
             }
             JsonNode root = Json.parse(Files.readString(file, StandardCharsets.UTF_8));
-            JsonNode models = root == null ? null : root.path("models");
+            // 口径版本校验:缺失或不为当前版本 → 旧系数不可比,丢弃重标定。
+            int version = root == null ? -1 : root.path("version").asInt(-1);
+            if (version != STATE_VERSION) {
+                log.warn("[token-estimator] 状态文件口径版本不符(期望 {},实为 {}),丢弃旧校准状态,重新标定",
+                        STATE_VERSION, version);
+                return;
+            }
+            JsonNode models = root.path("models");
             if (models == null || !models.isObject()) {
                 return;
             }
@@ -261,6 +278,7 @@ public class BuiltinTokenEstimator implements TokenEstimator {
     private void flush() {
         dirty.set(false);
         ObjectNode root = Json.obj();
+        root.put("version", STATE_VERSION);
         ObjectNode models = root.putObject("models");
         states.forEach((id, s) -> {
             ObjectNode o = models.putObject(id);

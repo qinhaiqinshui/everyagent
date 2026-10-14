@@ -4,6 +4,9 @@ import dev.everyagent.plugin.api.config.WorkerConfig;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -91,5 +94,33 @@ class BuiltinTokenEstimatorTest {
         // 已 converged → 停止校准:即使喂入非重复样本(绕过样本指纹去重)样本数也不增长。
         estimator.calibrate(id, 1040, actual); // 不同样本键,误差 ~0.95% < 漂移阈值 5%
         assertEquals(samples, estimator.sampleCountOf(id), "已 converged,应停止校准(样本数冻结)");
+    }
+
+    /** 旧口径状态文件(无 version,系数 2.5)必须被丢弃,不得载入污染系数。 */
+    @Test
+    void discardsLegacyStateWithoutVersion(@TempDir Path home) throws IOException {
+        Files.writeString(home.resolve("model-rate-state.json"),
+                "{\"models\":{\"cfg\":{\"tokenEstFactor\":2.5,\"sampleCount\":100,"
+                        + "\"lastUpdated\":1,\"converged\":false,\"consecutiveGood\":0}}}",
+                StandardCharsets.UTF_8);
+
+        BuiltinTokenEstimator estimator = new BuiltinTokenEstimator(stubConfig(home));
+
+        assertEquals(1.0, estimator.factorOf("cfg"), 1e-9, "旧口径(无 version)系数应被丢弃");
+        assertEquals(0L, estimator.sampleCountOf("cfg"), "旧口径样本数应清零");
+    }
+
+    /** 当前口径版本(version=2)的状态文件应正常载入。 */
+    @Test
+    void loadsCurrentVersionState(@TempDir Path home) throws IOException {
+        Files.writeString(home.resolve("model-rate-state.json"),
+                "{\"version\":2,\"models\":{\"cfg\":{\"tokenEstFactor\":1.5,\"sampleCount\":7,"
+                        + "\"lastUpdated\":1,\"converged\":true,\"consecutiveGood\":3}}}",
+                StandardCharsets.UTF_8);
+
+        BuiltinTokenEstimator estimator = new BuiltinTokenEstimator(stubConfig(home));
+
+        assertEquals(1.5, estimator.factorOf("cfg"), 1e-9, "当前版本系数应载入");
+        assertEquals(7L, estimator.sampleCountOf("cfg"), "当前版本样本数应载入");
     }
 }
