@@ -22,10 +22,14 @@ import dev.everyagent.worker.config.WorkerProperties;
  *
  * <p>内置包({@link BuiltInSkillPacks} 物化)、插件包(插件 {@code activate()} 经
  * plugin-api 的 {@code SkillMaterializer} 物化)与用户自制 skill 落盘后<b>统一</b>由
- * 本类发现:<b>不排除任何 id</b>、<b>不缓存</b>——{@link #scan()} 每次实扫目录并读取
- * 每个 {@code skill.md} 的文件头。去缓存是刻意取舍:物化(BuiltInSkillPacks 启动、
- * 插件 activate 晚于两者)与任何快照之间都存在时序耦合,快照必然漏项;当前量级
- * (个位数 skill)的目录列举 + 读文件头开销可忽略。
+ * 本类发现。<b>首次 {@link #scan()} 时扫描目录并缓存,此后只读快照</b>。
+ * 缓存的取舍:skill 目录变更(增删 skill 目录)需要重启 worker 才能生效——skill 变更
+ * 是低频运维操作,重启成本可接受;换来的是消费方({@link SkillAdvisor} 每 run 注入、
+ * {@code SkillSlashProvider} 每次菜单打开、RPC 层 skill.list)零 IO 开销。
+ *
+ * <p>懒加载天然解决时序问题:{@link BuiltInSkillPacks} 的 {@code @PostConstruct}
+ * 物化内置包,而 {@link #scan()} 的首次调用一定发生在 worker 完全启动之后
+ * (任务请求或菜单请求),那时物化早已完成。
  *
  * <p>扫描规则:
  * <ol>
@@ -54,19 +58,37 @@ public class SkillCatalog {
 
     private final Path skillsDir;
 
+    /** 首次 scan() 后缓存的不可变快照;null 表示尚未扫描。 */
+    private volatile List<Skill> cached;
+
     public SkillCatalog(WorkerProperties props) {
         this.skillsDir = props.resolveSkillsDir();
     }
 
     /**
-     * 实扫一次系统技能目录,返回全部 skill(按 id 升序)。
-     * 不缓存:每次调用重新扫描(开销 = 一次目录列举 + 每 skill 读一个文件头)。
+     * 返回 skill 列表。首次调用时实扫目录并缓存,此后只读快照。
      *
      * @return 不可变列表,目录不存在/扫描失败时为空列表(不返回 null)
      */
     public List<Skill> scan() {
+        List<Skill> snapshot = cached;
+        if (snapshot == null) {
+            synchronized (this) {
+                snapshot = cached;
+                if (snapshot == null) {
+                    snapshot = doScan();
+                    cached = snapshot;
+                    log.info("skill 目录扫描完成,缓存 {} 个 skill", snapshot.size());
+                }
+            }
+        }
+        return snapshot;
+    }
+
+    /** 实扫一次系统技能目录,返回全部 skill(按 id 升序)。仅在首次 {@link #scan()} 时调用。 */
+    private List<Skill> doScan() {
         if (!Files.isDirectory(skillsDir)) {
-            // 启动早期(内置包物化前)或全新安装:正常形态,降级为空列表即可
+            // 全新安装或目录尚未物化:降级为空列表即可
             log.debug("系统技能目录不存在,本次扫描返回空: {}", skillsDir);
             return List.of();
         }

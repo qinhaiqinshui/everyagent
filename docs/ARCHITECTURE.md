@@ -974,7 +974,7 @@ Input:  queued → consumed | discarded(任务取消)
 
 **id 规则**:目录名即 skill id,仅允许 `[a-z0-9][a-z0-9-]*`;realpath 必须仍在 `skillsDir` 内(拒绝符号链接越界);`name` 只作展示、不参与去重——单目录扫描下目录名天然唯一,同名冲突只剩物理不可能的「同名目录」。
 
-**目录扫描(去缓存)**:`SkillCatalog` 扫 `skillsDir` 全部一级子目录(**不排除任何 id、不递归**)产出 `Skill`(id, title, description, knowledgePath)——记录无暴露字段(暴露是 skill × 工作区的关系,存排除配置,注入时组合)。**每次调用实扫目录与文件头、无缓存**:「加目录即生效」,并根除「启动期快照早于内置物化/插件 activate」的时序耦合;每轮 prompt 与每次开菜单各扫一遍,当前量级(个位数)开销可忽略。**已知上限**:skill 上百或目录在慢盘时应引入「目录 mtime 变化才重扫」的失效缓存(本次不做,登记在案)。
+**目录扫描(首次懒加载缓存)**:`SkillCatalog` 扫 `skillsDir` 全部一级子目录(**不排除任何 id、不递归**)产出 `Skill`(id, title, description, knowledgePath)——记录无暴露字段(暴露是 skill × 工作区的关系,存排除配置,注入时组合)。**首次 `scan()` 时实扫目录并缓存,此后只读内存快照**;懒加载天然解决时序问题:`BuiltInSkillPacks` 的 `@PostConstruct` 物化内置包,而 `scan()` 的首次调用一定发生在 worker 完全启动之后(任务请求或菜单请求),那时物化早已完成。skill 目录变更(增删 skill 目录)需重启 worker 才能生效——skill 变更是低频运维操作,重启成本可接受。
 
 **暴露控制(按工作区排除,默认全部暴露)**:默认「全部 skill 在全部工作区自动暴露(进 system prompt)」;用户在设置页按 skill 勾选「不自动暴露的工作区」(黑名单语义),**不配置 = 全部暴露**;`/` 菜单不受此配置影响(永远全量)。存储 = worker 侧 `<homeDir>/skill-exclusions.json`(见上表;每台 worker 各自一份——**排除配置随 worker 而非全局**,换 worker 需重配),身份键 = 工作区根路径(它是工作区的身份键;代价:工作区移动/改名后旧排除项失效、该 skill 在新路径恢复暴露,残留项不清理、不生效但无害)。RPC:`skill.list`(全量 skill + 各自 `excludedWorkspaces`,设置页表格数据源,按 worker 分组展示)/`skill.exclusions.set`(校验与广播语义见 §5.5;已注册但后来被删的工作区留在配置里不报错,前端展示时过滤、保存时原样保留)。
 
@@ -982,7 +982,7 @@ Input:  queued → consumed | discarded(任务取消)
 
 **不兼容变更**:skill 代码注册通道删除是破坏性变更,第三方插件需改为「把 `skill/<id>/skill.md` 打进 jar + `activate()` 里调一次 `SkillMaterializer`」。
 
-**明确不做**:目录监听/watch、脚本注册为独立 AI 工具(脚本一律由 AI 用对应解释器执行——bash/python/node 等不限语言,复用现有沙箱与 PermissionGate)、完整 YAML 语法支持(frontmatter 只取 `key: value` 最小子集)、跨 worker 全局排除配置、目录 mtime 失效缓存(量级到上百再立项)。
+**明确不做**:目录监听/watch、脚本注册为独立 AI 工具(脚本一律由 AI 用对应解释器执行——bash/python/node 等不限语言,复用现有沙箱与 PermissionGate)、完整 YAML 语法支持(frontmatter 只取 `key: value` 最小子集)、跨 worker 全局排除配置。
 
 ### 7.18 内嵌终端(term.*)
 
