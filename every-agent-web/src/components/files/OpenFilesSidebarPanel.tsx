@@ -5,7 +5,7 @@ import { domainEventBus, DOMAIN_EVENTS } from '@/events/eventBus'
 import { pluginDispatcher } from '@/plugin/PluginDispatcher'
 import { WORKSPACE_EXPLORER_ROOT_LABEL, workspaceExplorerQueryService } from '@/query/workspaceExplorerQueryService'
 import { findExplorerNode, mergeExplorerChildrenPreservingLoaded, upsertExplorerChildren } from '@/query/workspaceExplorerTreeUtils'
-import { workspaceRegistry, workspaceActivity, type WorkspaceEntry } from '@/hub/workspaceRegistry'
+import { workspaceRegistry, type WorkspaceEntry } from '@/hub/workspaceRegistry'
 import { antdConfirm } from '@/utils/appAntdBridge'
 import { normalizeWorkspaceRelativePath, toBusinessAbsolutePath } from '@/platform/fs/pathUtils'
 import { workspaceGateway } from '@/platform/fs/workspaceGateway'
@@ -20,6 +20,7 @@ import {
 } from './filePropertyUtils'
 import ConfirmDialog from '../shared/ConfirmDialog'
 import PropertiesDialog, { type PropertyItem } from '../shared/PropertiesDialog'
+import { buildWorkspacePropertyItems, getWorkspaceDisplayName } from '../shared/workspacePropertyUtils'
 import MoreActionsButton, { type MoreActionItem } from '../shared/MoreActionsButton'
 import { DownloadIcon, FilePlusIcon, FileTextIcon, FolderArrowOutIcon, FolderPlusIcon, MagnifierCheckIcon, UploadIcon, ChevronDownIcon, CheckIcon, TerminalIcon } from '../shared/AppGlyphs'
 import SidebarScrollArea from '../shared/SidebarScrollArea'
@@ -1208,13 +1209,6 @@ async function handleRemoveWorkspace(entry: WorkspaceEntry): Promise<void> {
   }
 }
 
-/** 工作区显示名:根路径最后一段(如 D:\projects\novel → novel)。 */
-function getWorkspaceDisplayName(root: string): string {
-  const normalized = root.replace(/[\\/]+$/, '')
-  const index = Math.max(normalized.lastIndexOf('/'), normalized.lastIndexOf('\\'))
-  return index >= 0 ? normalized.slice(index + 1) : normalized
-}
-
 function isPathWithinTarget(path: string, target: WorkspaceExplorerContextTarget): boolean {
   if (target.type === 'file') {
     return path === target.path
@@ -1301,16 +1295,6 @@ function buildPropertyItems(
     }
   }
   return items
-}
-
-/** 组装工作区属性弹窗条目:名称/根路径/Id/最后活动时间。 */
-function buildWorkspacePropertyItems(entry: WorkspaceEntry): PropertyItem[] {
-  return [
-    { label: '名称', value: getWorkspaceDisplayName(entry.root) },
-    { label: '根路径', value: entry.root },
-    { label: 'Id', value: entry.id ?? '—' },
-    { label: '最后活动时间', value: formatPropertyTime(workspaceActivity(entry)) },
-  ]
 }
 
 /** 删除确认弹窗副标题。 */
