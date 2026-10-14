@@ -4,7 +4,8 @@
  * - Hub 连接区:hubUrl + hubKey(hub 级凭证,前端与 worker 都要带)。
  * - Worker 列表区:见 WorkerList(状态收敛 + 单主按钮 + 别名)。
  *
- * 模型配置/技能/权限在 worker 侧,不在此编辑;工作区注册表在资源管理器侧栏管理。
+ * 模型配置在 worker 侧,不在此编辑;skill 列表只读展示(见 SkillListTable,
+ * 自动暴露按工作区排除配置在此设置);工作区注册表在资源管理器侧栏管理。
  */
 import React from 'react'
 import WorkspacePageShell from '@/components/shared/WorkspacePageShell'
@@ -27,6 +28,7 @@ import { hubSession } from '@/hub/session'
 import { domainEventBus, DOMAIN_EVENTS } from '@/events/eventBus'
 import ConfirmDialog from '@/components/shared/ConfirmDialog'
 import WorkerList from '@/components/system/WorkerList'
+import SkillListTable from '@/components/system/SkillListTable'
 import { APP_NAME, APP_VERSION, APP_COPYRIGHT, APP_LICENSE } from '@/appInfo'
 
 export default function SettingsPanel() {
@@ -362,7 +364,7 @@ export default function SettingsPanel() {
         <p style={hintStyle}>
           外部 skill 放置在 worker 系统技能目录下(每个 skill 一个子目录,内含 skill.md)。增删 skill 目录后点击「重新读取」即可热加载,
           无需重启;同时会把内置知识包(如 plan、skill-creator)复原为 worker 自带版本(误改/误删后用同一按钮修回)。
-          仅影响后续新建任务的 `/` 菜单,运行中任务不受影响。
+          仅影响后续新建任务的 `/` 菜单,运行中任务不受影响。自动暴露按工作区配置,默认全部工作区自动暴露。
         </p>
         <div style={actionsStyle}>
           <Button
@@ -378,6 +380,7 @@ export default function SettingsPanel() {
             <span style={skillReloadTone === 'error' ? errorStyle : okStyle}>{skillReloadHint}</span>
           ) : null}
         </div>
+        <SkillListTable />
       </section>
 
       <section style={sectionStyle}>
