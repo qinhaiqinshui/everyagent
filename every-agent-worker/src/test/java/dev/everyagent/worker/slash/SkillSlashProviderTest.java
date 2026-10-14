@@ -1,6 +1,7 @@
 package dev.everyagent.worker.slash;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
@@ -17,7 +18,7 @@ import org.junit.jupiter.api.io.TempDir;
 import dev.everyagent.plugin.api.slash.SlashCommandItem;
 import dev.everyagent.plugin.api.slash.SlashTokenEncoder;
 import dev.everyagent.worker.config.WorkerProperties;
-import dev.everyagent.worker.modules.SkillExclusionStore;
+import dev.everyagent.worker.modules.SkillExposureStore;
 import dev.everyagent.worker.skill.Skill;
 import dev.everyagent.worker.skill.SkillCatalog;
 
@@ -28,14 +29,14 @@ import dev.everyagent.worker.skill.SkillCatalog;
  * <p>两条关键钉子:
  * <ol>
  *   <li><b>菜单不受排除配置影响</b>——provider 构造签名只有
- *       {@code (SlashCommandRegistry, SkillCatalog)},不接 SkillExclusionStore;
+ *       {@code (SlashCommandRegistry, SkillCatalog)},不接 SkillExposureStore;
  *       即使存在「plan 在某工作区不自动暴露」的有效配置(真实 store 落盘),
  *       plan 仍在菜单里(排除只过滤 prompt 注入,不过滤菜单);</li>
  *   <li><b>无 SPI 来源前缀</b>——SPI 合并分支已删,副标题就是 description 原文,
  *       不出现「插件 · 」badge,条目数也不会超出 catalog。</li>
  * </ol>
  *
- * <p>SkillCatalog 用 Mockito mock(不依赖磁盘);排除配置用真实 SkillExclusionStore
+ * <p>SkillCatalog 用 Mockito mock(不依赖磁盘);排除配置用真实 SkillExposureStore
  * 落盘到临时 homeDir。
  */
 class SkillSlashProviderTest {
@@ -62,14 +63,14 @@ class SkillSlashProviderTest {
     }
 
     /**
-     * 真实 SkillExclusionStore(落盘临时 homeDir)。{@code init()} 是 @PostConstruct
+     * 真实 SkillExposureStore(落盘临时 homeDir)。{@code init()} 是 @PostConstruct
      * 的包内可见方法(在 modules 包),测试经反射以同款入口初始化。
      */
-    private SkillExclusionStore realStore(Path home) throws Exception {
+    private SkillExposureStore realStore(Path home) throws Exception {
         WorkerProperties props = new WorkerProperties();
         props.setHomeDir(home.toString());
-        SkillExclusionStore store = new SkillExclusionStore(props);
-        Method init = SkillExclusionStore.class.getDeclaredMethod("init");
+        SkillExposureStore store = new SkillExposureStore(props);
+        Method init = SkillExposureStore.class.getDeclaredMethod("init");
         init.setAccessible(true);
         init.invoke(store);
         return store;
@@ -111,14 +112,14 @@ class SkillSlashProviderTest {
     @Test
     void excludedSkillStillAppearsInMenu() throws Exception {
         Path home = Files.createDirectory(tmp.resolve("home"));
-        SkillExclusionStore store = realStore(home);
+        SkillExposureStore store = realStore(home);
         String wsRoot = Path.of("C:", "ws", "alpha").toAbsolutePath().normalize().toString();
-        store.setExcludedWorkspaces("plan", List.of(wsRoot));
+        store.setConfig("plan", List.of(wsRoot), List.of());
         // 前置自检:排除配置真实存在且可读(prompt 注入侧会据此过滤 plan)
-        assertTrue(store.excludedWorkspaces("plan").contains(wsRoot),
+        assertFalse(store.isExposed("plan", wsRoot),
                 "前置:plan 已配置在该工作区不自动暴露");
 
-        // provider 构造签名 (registry, catalog) —— 不接 SkillExclusionStore,
+        // provider 构造签名 (registry, catalog) —— 不接 SkillExposureStore,
         // 菜单数据源与排除配置零关联:plan 仍在菜单(用户显式点名调用不被静默拦掉)
         SlashCommandRegistry registry = new SlashCommandRegistry();
         new SkillSlashProvider(registry, mockCatalog(catalogSkills()));

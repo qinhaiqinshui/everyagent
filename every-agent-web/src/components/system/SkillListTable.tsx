@@ -1,12 +1,12 @@
 /**
  * 设置页「Skill 列表」表格(架构 §7.17 暴露控制)。
  *
- * - 数据源:对每台已连 worker 并发 `skill.list` → `[{id,name,description,knowledgePath,excludedWorkspaces}]`,
+ * - 数据源:对每台已连 worker 并发 `skill.list` → `[{id,name,description,knowledgePath,blacklist?,whitelist?}]`,
  *   **按 worker 分组展示**(不同 worker 的 skillsDir 不同,同名 id 不是同一个 skill,不跨 worker 合并);
- * - 自动暴露列:单元格显示「全部工作区 / 已排除 N 个」,点击弹配置框勾选「不自动暴露的工作区」
- *   (数据来自 workspaceRegistry 中该 worker 来源的条目,missing 标灰禁用),
- *   确定 → 该 worker 的 `skill.exclusions.set`(空数组 = 恢复全部暴露);
- *   未注册但存在于排除配置中的工作区不展示、保存时原样保留(防打开一次弹窗就清掉历史配置);
+ * - 自动暴露列:单元格显示「全部工作区 / 排除 N 个 / 仅限 N 个 / 排除N 仅限M」,点击弹配置框,
+ *   同时显示黑名单和白名单两组勾选列表(黑名单=勾选的工作区不自动暴露;白名单=非空时仅勾选的暴露),
+ *   黑名单优先(同时命中时按黑名单处理),确定 → 该 worker 的 `skill.exposure.set`(blacklist + whitelist);
+ *   未注册但存在于配置中的工作区不展示、保存时原样保留(防打开一次弹窗就清掉历史配置);
  * - 详情列:经 `openGlobalFileTab` 以**只读**标签页打开 skill.md(物化产物,写回会被覆盖;
  *   读取走既有 fs.readRaw 绝对路径通道,workspaceRoot 仅作 tab 组织锚点);
  * - 刷新:`config.changed{keys:["skills"]}` 广播定向刷新来源 worker(机制同 modelConfigs),
@@ -30,8 +30,10 @@ interface SkillInfo {
   description: string
   /** skill.md 的 worker 机器绝对路径。 */
   knowledgePath: string
-  /** 不自动暴露的工作区根路径列表(黑名单语义,空 = 全部工作区自动暴露)。 */
-  excludedWorkspaces: string[]
+  /** 黑名单:列出的工作区不自动暴露该 skill。 */
+  blacklist?: string[]
+  /** 白名单:非空时仅列出的工作区自动暴露,其余不暴露;空=不限制。 */
+  whitelist?: string[]
 }
 
 /** 单台 worker 的 skill 分组状态。 */
@@ -59,9 +61,12 @@ function parseSkillList(result: unknown): SkillInfo[] {
       name: typeof rec.name === 'string' ? rec.name : '',
       description: typeof rec.description === 'string' ? rec.description : '',
       knowledgePath: typeof rec.knowledgePath === 'string' ? rec.knowledgePath : '',
-      excludedWorkspaces: Array.isArray(rec.excludedWorkspaces)
-        ? rec.excludedWorkspaces.filter((root): root is string => typeof root === 'string')
-        : [],
+      blacklist: Array.isArray(rec.blacklist)
+        ? rec.blacklist.filter((root): root is string => typeof root === 'string')
+        : undefined,
+      whitelist: Array.isArray(rec.whitelist)
+        ? rec.whitelist.filter((root): root is string => typeof root === 'string')
+        : undefined,
     })
   }
   return out
@@ -86,8 +91,10 @@ export default function SkillListTable() {
   const [groups, setGroups] = React.useState<Record<string, SkillGroupState>>({})
   /** 打开中的自动暴露配置框(workerId + skill 快照)。 */
   const [dialog, setDialog] = React.useState<{ workerId: string; skill: SkillInfo } | null>(null)
-  /** 配置框勾选态(「不自动暴露」的工作区根集合)。 */
-  const [checkedRoots, setCheckedRoots] = React.useState<Set<string>>(new Set())
+  /** 配置框黑名单勾选态(已勾选的工作区根集合=不暴露)。 */
+  const [checkedBlacklist, setCheckedBlacklist] = React.useState<Set<string>>(new Set())
+  /** 配置框白名单勾选态(已勾选的工作区根集合=仅暴露)。 */
+  const [checkedWhitelist, setCheckedWhitelist] = React.useState<Set<string>>(new Set())
   const [savingExclusions, setSavingExclusions] = React.useState(false)
 
   // 别名/注册表是组件外单例:订阅变化触发重渲染(组头显示名、配置框工作区列表)。
@@ -175,21 +182,30 @@ export default function SkillListTable() {
   // ---- 自动暴露配置框 ----
 
   const openExclusionDialog = (workerId: string, skill: SkillInfo) => {
-    // 打开时勾选态 = 当前排除表 ∩ 展示的已注册工作区;
-    // 不在展示列表内的排除项(已删/未注册)不展示,保存时原样保留。
+    // 打开时:勾选态 = 当前配置的工作区 ∩ 展示的已注册工作区;
+    // 不在展示列表内的配置项(已删/未注册)不展示,保存时原样保留。
     const displayedRoots = new Set(displayedWorkspacesOf(workerId).map((entry) => entry.root))
-    setCheckedRoots(new Set(skill.excludedWorkspaces.filter((root) => displayedRoots.has(root))))
+    const currentBlacklist = skill.blacklist ?? []
+    const currentWhitelist = skill.whitelist ?? []
+    setCheckedBlacklist(new Set(currentBlacklist.filter((root) => displayedRoots.has(root))))
+    setCheckedWhitelist(new Set(currentWhitelist.filter((root) => displayedRoots.has(root))))
     setDialog({ workerId, skill })
   }
 
-  const toggleRoot = (root: string, checked: boolean) => {
-    setCheckedRoots((prev) => {
+  const toggleBlacklistRoot = (root: string, checked: boolean) => {
+    setCheckedBlacklist((prev) => {
       const next = new Set(prev)
-      if (checked) {
-        next.add(root)
-      } else {
-        next.delete(root)
-      }
+      if (checked) next.add(root)
+      else next.delete(root)
+      return next
+    })
+  }
+
+  const toggleWhitelistRoot = (root: string, checked: boolean) => {
+    setCheckedWhitelist((prev) => {
+      const next = new Set(prev)
+      if (checked) next.add(root)
+      else next.delete(root)
       return next
     })
   }
@@ -198,14 +214,17 @@ export default function SkillListTable() {
     if (!dialog || savingExclusions) return
     const { workerId, skill } = dialog
     const displayedRoots = new Set(displayedWorkspacesOf(workerId).map((entry) => entry.root))
-    // 保存的 workspaces = 勾选项 ∪ 当前排除表中不在展示列表内的项(原样保留,防清掉历史配置)。
-    const preserved = skill.excludedWorkspaces.filter((root) => !displayedRoots.has(root))
-    const workspaces = [...checkedRoots, ...preserved]
+    // 保存时:勾选项 ∪ 当前配置中不在展示列表内的项(原样保留,防清掉历史配置)。
+    const preservedBlack = (skill.blacklist ?? []).filter((root) => !displayedRoots.has(root))
+    const preservedWhite = (skill.whitelist ?? []).filter((root) => !displayedRoots.has(root))
+    const blacklist = [...checkedBlacklist, ...preservedBlack]
+    const whitelist = [...checkedWhitelist, ...preservedWhite]
     setSavingExclusions(true)
     try {
-      await hubSession.rpcTo(workerId, 'skill.exclusions.set', {
+      await hubSession.rpcTo(workerId, 'skill.exposure.set', {
         skillId: skill.id,
-        workspaces,
+        blacklist,
+        whitelist,
       })
       showToast('已保存「' + skillLabel(skill) + '」的自动暴露配置', 'success')
       setDialog(null)
@@ -227,21 +246,51 @@ export default function SkillListTable() {
       )
     }
     return (
-      <div style={wsListStyle}>
-        {workspaces.map((entry) => {
-          const missing = Boolean(entry.missing)
-          return (
-            <label key={entry.root} style={wsRowStyle(missing)} title={entry.root}>
-              <Checkbox
-                checked={checkedRoots.has(entry.root)}
-                disabled={missing || savingExclusions}
-                onChange={(event) => toggleRoot(entry.root, event.target.checked)}
-              />
-              <span style={wsRootStyle(missing)}>{entry.root}</span>
-              {missing ? <span style={wsMissingBadgeStyle}>目录缺失,不可选</span> : null}
-            </label>
-          )
-        })}
+      <div style={dialogBodyStyle}>
+        <div style={sectionStyle}>
+          <div style={sectionHeaderStyle}>
+            <span style={sectionTitleStyle}>黑名单</span>
+            <span style={sectionHintStyle}>勾选的工作区不自动暴露该 skill(黑名单优先)</span>
+          </div>
+          <div style={wsListStyle}>
+            {workspaces.map((entry) => {
+              const missing = Boolean(entry.missing)
+              return (
+                <label key={entry.root} style={wsRowStyle(missing)} title={entry.root}>
+                  <Checkbox
+                    checked={checkedBlacklist.has(entry.root)}
+                    disabled={missing || savingExclusions}
+                    onChange={(event) => toggleBlacklistRoot(entry.root, event.target.checked)}
+                  />
+                  <span style={wsRootStyle(missing)}>{entry.root}</span>
+                  {missing ? <span style={wsMissingBadgeStyle}>目录缺失,不可选</span> : null}
+                </label>
+              )
+            })}
+          </div>
+        </div>
+        <div style={sectionStyle}>
+          <div style={sectionHeaderStyle}>
+            <span style={sectionTitleStyle}>白名单</span>
+            <span style={sectionHintStyle}>非空时仅勾选的工作区自动暴露;空 = 不限制</span>
+          </div>
+          <div style={wsListStyle}>
+            {workspaces.map((entry) => {
+              const missing = Boolean(entry.missing)
+              return (
+                <label key={entry.root} style={wsRowStyle(missing)} title={entry.root}>
+                  <Checkbox
+                    checked={checkedWhitelist.has(entry.root)}
+                    disabled={missing || savingExclusions}
+                    onChange={(event) => toggleWhitelistRoot(entry.root, event.target.checked)}
+                  />
+                  <span style={wsRootStyle(missing)}>{entry.root}</span>
+                  {missing ? <span style={wsMissingBadgeStyle}>目录缺失,不可选</span> : null}
+                </label>
+              )
+            })}
+          </div>
+        </div>
       </div>
     )
   }
@@ -295,6 +344,7 @@ export default function SkillListTable() {
       return <p style={hintStyle}>该 worker 暂无 skill(系统技能目录为空)。</p>
     }
     return (
+      <div style={tableWrapStyle}>
       <table style={tableStyle}>
         <thead>
           <tr>
@@ -307,7 +357,28 @@ export default function SkillListTable() {
         </thead>
         <tbody>
           {group.skills.map((skill) => {
-            const excluded = skill.excludedWorkspaces
+            const bl = skill.blacklist ?? []
+            const wl = skill.whitelist ?? []
+            const hasConfig = (skill.blacklist !== undefined || skill.whitelist !== undefined)
+              && (bl.length > 0 || wl.length > 0)
+            const blCount = bl.length
+            const wlCount = wl.length
+            let label: string
+            let title: string
+            if (!hasConfig) {
+              label = '全部工作区'
+              title = '全部工作区自动暴露;点击配置'
+            } else {
+              const parts: string[] = []
+              if (blCount > 0) parts.push('排除 ' + blCount + ' 个')
+              if (wlCount > 0) parts.push('仅限 ' + wlCount + ' 个')
+              label = parts.join(' / ') || '全部工作区'
+              const detailParts: string[] = []
+              if (blCount > 0) detailParts.push('黑名单(不暴露):\n' + bl.join('\n'))
+              if (wlCount > 0) detailParts.push('白名单(仅暴露):\n' + wl.join('\n'))
+              title = detailParts.join('\n\n')
+            }
+            const isActive = hasConfig
             return (
               <tr key={skill.id}>
                 <td style={idTdStyle} title={skill.id}>{skill.id}</td>
@@ -318,15 +389,11 @@ export default function SkillListTable() {
                 <td style={cellTdStyle}>
                   <button
                     type="button"
-                    style={excluded.length > 0 ? exposureActiveStyle : exposureIdleStyle}
-                    title={
-                      excluded.length > 0
-                        ? '不自动暴露的工作区:\n' + excluded.join('\n')
-                        : '全部工作区自动暴露;点击配置不自动暴露的工作区'
-                    }
+                    style={isActive ? exposureActiveStyle : exposureIdleStyle}
+                    title={title}
                     onClick={() => openExclusionDialog(workerId, skill)}
                   >
-                    {excluded.length > 0 ? '已排除 ' + excluded.length + ' 个' : '全部工作区'}
+                    {label}
                   </button>
                 </td>
                 <td style={cellTdStyle}>
@@ -344,6 +411,7 @@ export default function SkillListTable() {
           })}
         </tbody>
       </table>
+      </div>
     )
   }
 
@@ -371,7 +439,7 @@ export default function SkillListTable() {
       <ConfirmDialog
         open={Boolean(dialog)}
         title={'配置自动暴露:' + (dialog ? skillLabel(dialog.skill) : '')}
-        subtitle="勾选「不自动暴露」的工作区;未勾选的工作区默认自动暴露。(`/` 菜单不受影响,永远全量。)"
+        subtitle="黑名单=勾选的工作区不暴露(优先);白名单=非空时仅勾选的暴露。两个清单可同时使用。(`/` 菜单不受影响,永远全量。)"
         confirmLabel={savingExclusions ? '保存中…' : '保存'}
         hideDefaultMessageBlock
         body={renderDialogBody()}
@@ -444,9 +512,15 @@ const groupErrorStyle: React.CSSProperties = {
   lineHeight: 1.5,
 }
 
+const tableWrapStyle: React.CSSProperties = {
+  overflowX: 'auto',
+  maxWidth: '100%',
+}
+
 const tableStyle: React.CSSProperties = {
   borderCollapse: 'collapse',
   width: '100%',
+  minWidth: 600,
   tableLayout: 'fixed',
 }
 
@@ -534,6 +608,40 @@ const wsListStyle: React.CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
   gap: 2,
+}
+
+const dialogBodyStyle: React.CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 10,
+}
+
+const sectionStyle: React.CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 6,
+  padding: '8px 10px',
+  borderRadius: 'var(--radius-md)',
+  border: '1px solid var(--border-light)',
+  background: 'var(--bg-secondary, transparent)',
+}
+
+const sectionHeaderStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'baseline',
+  gap: 8,
+}
+
+const sectionTitleStyle: React.CSSProperties = {
+  fontSize: 'var(--text-xs)',
+  fontWeight: 700,
+  color: 'var(--text-primary)',
+  whiteSpace: 'nowrap',
+}
+
+const sectionHintStyle: React.CSSProperties = {
+  fontSize: 'var(--text-xs)',
+  color: 'var(--text-muted)',
 }
 
 const wsRowStyle = (missing: boolean): React.CSSProperties => ({

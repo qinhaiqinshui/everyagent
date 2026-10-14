@@ -15,7 +15,7 @@ import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.core.Ordered;
 
-import dev.everyagent.worker.modules.SkillExclusionStore;
+import dev.everyagent.worker.modules.SkillExposureStore;
 import dev.everyagent.worker.os.SandboxPathRegistry;
 
 /**
@@ -24,9 +24,9 @@ import dev.everyagent.worker.os.SandboxPathRegistry;
  *
  * <p>数据源<b>唯一</b>(目录即真相源,§7.17):{@link SkillCatalog#scan()} 实扫系统
  * 技能目录——内置包、插件物化包与用户自制 skill 落盘后统一由此进入,<b>默认全部
- * 注入</b>;仅剔除「当前工作区被排除」的 skill(暴露控制 = 按工作区的排除配置,
- * {@link SkillExclusionStore};不配置 = 全部工作区暴露)。{@code /} 菜单不受该
- * 配置影响(菜单永远全量,见 SkillSlashProvider)。
+ * 注入</b>;仅按当前工作区的暴露配置过滤({@link SkillExposureStore},黑白名单并存模式;
+ * 不配置 = 全部工作区暴露)。{@code /} 菜单不受该配置影响(菜单永远全量,
+ * 见 SkillSlashProvider)。
  *
  * <p><b>per-run 实例</b>:排除过滤需要「本次 run 所属工作区根」,共享单例拿不到——
  * 由 {@code SkillAdvisorProvider.create(ctx)} 按每次 {@code ctx.workspaceRoot()}
@@ -48,7 +48,7 @@ public class SkillAdvisor implements BaseAdvisor {
     private static final Logger log = LoggerFactory.getLogger(SkillAdvisor.class);
 
     private final SkillCatalog catalog;
-    private final SkillExclusionStore exclusions;
+    private final SkillExposureStore exposureStore;
     private final SandboxPathRegistry pathRegistry;
 
     /**
@@ -59,18 +59,18 @@ public class SkillAdvisor implements BaseAdvisor {
 
     /**
      * @param workspaceRoot 本 run 所属工作区根({@code AdvisorContext.workspaceRoot()}
-     *        直取的 String);normalize 口径与 RPC 层({@code skill.exclusions.set})
+     *        直取的 String);normalize 口径与 RPC 层({@code skill.exposure.set})
      *        一致:{@code Path.of(raw).toAbsolutePath().normalize().toString()}
-     *        ——排除清单落盘前已按同款 normalize 加工,两边字符串相等即命中。
+     *        ——暴露配置落盘前已按同款 normalize 加工,两边字符串相等即命中。
      *        null/空白时不过滤(全部注入,宁多勿漏)。
      */
-    public SkillAdvisor(SkillCatalog catalog, SkillExclusionStore exclusions,
+    public SkillAdvisor(SkillCatalog catalog, SkillExposureStore exposureStore,
             SandboxPathRegistry pathRegistry, String workspaceRoot) {
         this.catalog = catalog;
-        this.exclusions = exclusions;
+        this.exposureStore = exposureStore;
         this.pathRegistry = pathRegistry;
         if (workspaceRoot == null || workspaceRoot.isBlank()) {
-            log.warn("workspaceRoot 缺失(null/空白),skill 排除过滤跳过,全部注入(宁多勿漏)");
+            log.warn("workspaceRoot 缺失(null/空白),skill 暴露过滤跳过,全部注入(宁多勿漏)");
             this.workspaceRoot = null;
         } else {
             this.workspaceRoot = normalize(workspaceRoot);
@@ -78,7 +78,7 @@ public class SkillAdvisor implements BaseAdvisor {
     }
 
     /**
-     * 与 RPC 层({@code skill.exclusions.set})同款的 root normalize:
+     * 与 RPC 层({@code skill.exposure.set})同款的 root normalize:
      * {@code toAbsolutePath().normalize()} 后取字符串。极端非法路径(无法 Path.of)
      * 降级为 trim 后原串比对——过滤口径宁松勿紧。
      */
@@ -92,8 +92,8 @@ public class SkillAdvisor implements BaseAdvisor {
     }
 
     /**
-     * 目录扫描(唯一真相源)→ 剔除当前工作区被排除的 skill。
-     * 无排除配置 = 全部注入;workspaceRoot 缺失 = 不过滤(决策:宁多勿漏)。
+     * 目录扫描(唯一真相源)→ 按当前工作区的暴露配置过滤。
+     * 无暴露配置 = 全部注入;workspaceRoot 缺失 = 不过滤(决策:宁多勿漏)。
      */
     private List<Skill> visibleSkills() {
         List<Skill> skills = catalog.scan();
@@ -102,7 +102,7 @@ public class SkillAdvisor implements BaseAdvisor {
         }
         List<Skill> visible = new ArrayList<>(skills.size());
         for (Skill s : skills) {
-            if (!exclusions.excludedWorkspaces(s.id()).contains(workspaceRoot)) {
+            if (exposureStore.isExposed(s.id(), workspaceRoot)) {
                 visible.add(s);
             }
         }

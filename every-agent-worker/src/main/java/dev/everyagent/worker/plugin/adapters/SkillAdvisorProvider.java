@@ -2,7 +2,7 @@ package dev.everyagent.worker.plugin.adapters;
 
 import dev.everyagent.plugin.api.spi.AdvisorContext;
 import dev.everyagent.plugin.api.spi.AdvisorProvider;
-import dev.everyagent.worker.modules.SkillExclusionStore;
+import dev.everyagent.worker.modules.SkillExposureStore;
 import dev.everyagent.worker.os.SandboxPathRegistry;
 import dev.everyagent.worker.skill.SkillAdvisor;
 import dev.everyagent.worker.skill.SkillCatalog;
@@ -12,9 +12,9 @@ import org.springframework.core.Ordered;
 /**
  * {@link SkillAdvisor} 适配器 —— <b>per-run 装配</b>。
  *
- * <p>provider 本身是持共享依赖({@link SkillCatalog} / {@link SkillExclusionStore} /
+ * <p>provider 本身是持共享依赖({@link SkillCatalog} / {@link SkillExposureStore} /
  * {@link SandboxPathRegistry})的无状态单例;{@link #create} 每次 new 一个携带本次
- * {@link AdvisorContext#workspaceRoot()} 的 {@link SkillAdvisor}——按工作区的排除
+ * {@link AdvisorContext#workspaceRoot()} 的 {@link SkillAdvisor}——按工作区的暴露
  * 过滤需要「当前 run 所属工作区根」,共享 advisor 单例拿不到;SkillAdvisor 无状态,
  * per-run 实例零成本。
  *
@@ -27,13 +27,13 @@ import org.springframework.core.Ordered;
 public class SkillAdvisorProvider implements AdvisorProvider {
 
     private final SkillCatalog catalog;
-    private final SkillExclusionStore exclusions;
+    private final SkillExposureStore exposureStore;
     private final SandboxPathRegistry pathRegistry;
 
-    public SkillAdvisorProvider(SkillCatalog catalog, SkillExclusionStore exclusions,
+    public SkillAdvisorProvider(SkillCatalog catalog, SkillExposureStore exposureStore,
             SandboxPathRegistry pathRegistry) {
         this.catalog = catalog;
-        this.exclusions = exclusions;
+        this.exposureStore = exposureStore;
         this.pathRegistry = pathRegistry;
     }
 
@@ -49,7 +49,7 @@ public class SkillAdvisorProvider implements AdvisorProvider {
 
     @Override
     public Advisor create(AdvisorContext ctx) {
-        return new SkillAdvisor(catalog, exclusions, pathRegistry, ctx.workspaceRoot());
+        return new SkillAdvisor(catalog, exposureStore, pathRegistry, ctx.workspaceRoot());
     }
 }
 

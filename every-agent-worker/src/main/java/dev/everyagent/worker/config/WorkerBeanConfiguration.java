@@ -1,7 +1,7 @@
 package dev.everyagent.worker.config;
 
 import dev.everyagent.plugin.api.spi.SandboxBackend.Access;
-import dev.everyagent.worker.modules.SkillExclusionStore;
+import dev.everyagent.worker.modules.SkillExposureStore;
 import dev.everyagent.worker.os.SandboxPathRegistry;
 import dev.everyagent.worker.plugin.adapters.SkillAdvisorProvider;
 import dev.everyagent.worker.plugin.registry.ToolExecutionInterceptorRegistry;
@@ -61,9 +61,9 @@ public class WorkerBeanConfiguration {
     /**
      * skill 渐进式披露索引注入的 AdvisorProvider —— per-run 装配入口。
      *
-     * <p>provider 是持 SkillCatalog / SkillExclusionStore / SandboxPathRegistry 三个
+     * <p>provider 是持 SkillCatalog / SkillExposureStore / SandboxPathRegistry 三个
      * 共享依赖的单例；{@code create(ctx)} 每次按 {@code ctx.workspaceRoot()} 新建无状态
-     * {@code SkillAdvisor}（按工作区的排除过滤需要每 run 可得的工作区根，共享 advisor
+     * {@code SkillAdvisor}（按工作区的暴露过滤需要每 run 可得的工作区根，共享 advisor
      * 单例拿不到）。SkillAdvisor 的 @Bean 已取消：主链装配统一走 AdvisorProviderRegistry
      * （BuiltInAdvisorProviders 注册本 provider），worker 内无其他消费方、测试直接
      * new SkillAdvisor 构造。
@@ -75,9 +75,9 @@ public class WorkerBeanConfiguration {
      */
     @Bean
     public SkillAdvisorProvider skillAdvisorProvider(WorkerProperties props,
-            SkillCatalog catalog, SkillExclusionStore exclusions, SandboxPathRegistry pathRegistry) {
+            SkillCatalog catalog, SkillExposureStore exposureStore, SandboxPathRegistry pathRegistry) {
         pathRegistry.register(SandboxPathRegistry.OWNER_SKILLS,
                 props.resolveSkillsDir(), Access.READ_WRITE);
-        return new SkillAdvisorProvider(catalog, exclusions, pathRegistry);
+        return new SkillAdvisorProvider(catalog, exposureStore, pathRegistry);
     }
 }

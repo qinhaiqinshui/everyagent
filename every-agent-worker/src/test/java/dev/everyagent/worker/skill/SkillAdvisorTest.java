@@ -29,7 +29,7 @@ import org.springframework.core.Ordered;
 
 import dev.everyagent.plugin.api.spi.AdvisorContext;
 import dev.everyagent.worker.config.WorkerProperties;
-import dev.everyagent.worker.modules.SkillExclusionStore;
+import dev.everyagent.worker.modules.SkillExposureStore;
 import dev.everyagent.worker.plugin.adapters.SkillAdvisorProvider;
 
 /**
@@ -45,7 +45,7 @@ import dev.everyagent.worker.plugin.adapters.SkillAdvisorProvider;
  * </ol>
  *
  * <p>catalog 用真实 {@link SkillCatalog} 实扫临时 skillsDir(内置两包 + 一个无
- * frontmatter 的外部 skill);排除配置用真实 {@link SkillExclusionStore} 落盘;
+ * frontmatter 的外部 skill);排除配置用真实 {@link SkillExposureStore} 落盘;
  * pathRegistry 传 null(无映射时原样返回,DIRECT 场景同款语义)。
  */
 class SkillAdvisorTest {
@@ -80,14 +80,14 @@ class SkillAdvisorTest {
     }
 
     /**
-     * 真实 SkillExclusionStore(落盘临时 homeDir)。{@code init()} 是 @PostConstruct
+     * 真实 SkillExposureStore(落盘临时 homeDir)。{@code init()} 是 @PostConstruct
      * 的包内可见方法(在 modules 包),测试经反射以同款入口初始化。
      */
-    private SkillExclusionStore store() throws Exception {
+    private SkillExposureStore store() throws Exception {
         WorkerProperties props = new WorkerProperties();
         props.setHomeDir(homeDir.toString());
-        SkillExclusionStore store = new SkillExclusionStore(props);
-        Method init = SkillExclusionStore.class.getDeclaredMethod("init");
+        SkillExposureStore store = new SkillExposureStore(props);
+        Method init = SkillExposureStore.class.getDeclaredMethod("init");
         init.setAccessible(true);
         init.invoke(store);
         return store;
@@ -151,9 +151,9 @@ class SkillAdvisorTest {
     void excludedPlanVanishesOthersRemain() throws Exception {
         Path ws = Files.createDirectory(tmp.resolve("ws"));
         String storedRoot = ws.toAbsolutePath().normalize().toString();
-        SkillExclusionStore exclusions = store();
-        // RPC 层(skill.exclusions.set)落盘前已按 toAbsolutePath().normalize() 加工
-        exclusions.setExcludedWorkspaces("plan", List.of(storedRoot));
+        SkillExposureStore exclusions = store();
+        // RPC 层(skill.exposure.set)落盘前已按 toAbsolutePath().normalize() 加工
+        exclusions.setConfig("plan", List.of(storedRoot), List.of());
 
         // advisor 拿到的 root 是非 normalize 形态(尾分隔符)——过滤前须做同款 normalize
         SkillAdvisor advisor = new SkillAdvisor(catalog(), exclusions, null,
@@ -170,9 +170,9 @@ class SkillAdvisorTest {
 
     @Test
     void nullOrBlankRootInjectsAllWithoutFiltering() throws Exception {
-        SkillExclusionStore exclusions = store();
+        SkillExposureStore exclusions = store();
         // 即便存在排除配置(且任何 root 都可能被排除),root 缺失也不过滤
-        exclusions.setExcludedWorkspaces("plan", List.of("C:\\nonexistent-ws"));
+        exclusions.setConfig("plan", List.of("C:\\nonexistent-ws"), List.of());
 
         for (String root : new String[] { null, "  ", "" }) {
             SkillAdvisor advisor = new SkillAdvisor(catalog(), exclusions, null, root);
@@ -190,9 +190,10 @@ class SkillAdvisorTest {
     void providerCreatesIndependentPerRootInstances() throws Exception {
         Path wsA = Files.createDirectory(tmp.resolve("ws-a"));
         Path wsB = Files.createDirectory(tmp.resolve("ws-b"));
-        SkillExclusionStore exclusions = store();
-        exclusions.setExcludedWorkspaces("plan",
-                List.of(wsA.toAbsolutePath().normalize().toString()));
+        SkillExposureStore exclusions = store();
+        exclusions.setConfig("plan",
+                List.of(wsA.toAbsolutePath().normalize().toString()),
+                List.of());
 
         SkillAdvisorProvider provider = new SkillAdvisorProvider(catalog(), exclusions, null);
         Advisor advisorA = provider.create(ctxWithRoot(wsA.toString()));
