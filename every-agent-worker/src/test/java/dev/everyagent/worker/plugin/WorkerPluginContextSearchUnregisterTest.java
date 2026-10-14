@@ -50,7 +50,7 @@ class WorkerPluginContextSearchUnregisterTest {
     private static WorkerPluginContextImpl newContext(String pluginId, SearchProviderRegistry registry) {
         return new WorkerPluginContextImpl(pluginId, null,
                 null, null, null, registry,
-                null, null, null, null, null, null,
+                null, null, null, null, null,
                 null, null, null, null, null, null, null, null, null);
     }
 

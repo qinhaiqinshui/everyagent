@@ -55,8 +55,9 @@ import java.util.regex.Pattern;
  *       (代价是该 skill 整体消失,可经 skill 重载重试复原)。</li>
  * </ul>
  *
- * <p>与旧代码注册通道({@code SkillContributor} / {@code PluginSkill})的关系:本类是其替代物,
- * 落盘后由 worker 侧目录扫描统一发现;旧通道按重构计划另行删除。
+ * <p>技能包一律经本类物化落盘,再由 worker 侧目录扫描统一发现;历史上的代码注册通道
+ * (插件经上下文向 system prompt 与 {@code /} 菜单直接声明 skill 元数据的 SPI)已整体删除,
+ * 不再存在绕过落盘的旁路。
  */
 public final class SkillMaterializer {
 

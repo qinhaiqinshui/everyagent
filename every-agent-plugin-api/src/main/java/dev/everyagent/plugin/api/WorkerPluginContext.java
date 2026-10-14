@@ -4,7 +4,6 @@ import dev.everyagent.plugin.api.event.EventEgressFilter;
 import dev.everyagent.plugin.api.event.RoundEgressFilter;
 import dev.everyagent.plugin.api.permission.AuthorizationHandler;
 import dev.everyagent.plugin.api.rpc.RpcMethod;
-import dev.everyagent.plugin.api.skill.SkillContributor;
 import dev.everyagent.plugin.api.slash.SlashProvider;
 import dev.everyagent.plugin.api.slash.SlashTokenResolver;
 import dev.everyagent.plugin.api.spi.AdvisorProvider;
@@ -57,9 +56,6 @@ public interface WorkerPluginContext extends TaskPluginContext {
 
     /** 注册 ToolExecutionInterceptor（工具执行拦截链节点）。 */
     void registerToolExecutionInterceptor(ToolExecutionInterceptor interceptor);
-
-    /** 注册 SkillContributor（skill 贡献者，向 system prompt 与 / 菜单贡献 skill）。 */
-    void registerSkillContributor(SkillContributor contributor);
 
     /** 注册 TokenEstimator（Token 估算器，替换内置实现）。 */
     void registerTokenEstimator(TokenEstimator estimator);

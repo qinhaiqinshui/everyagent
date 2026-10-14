@@ -12,7 +12,7 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * FileReferenceHandler SPI 注册表。
  *
- * <p>模式同 SkillContributorRegistry / ToolProviderRegistry：注册时机为插件
+ * <p>模式同 ToolProviderRegistry：注册时机为插件
  * activate() 时经 {@code WorkerPluginContext.registerFileReferenceHandler} 注册。
  * 扩展名 → handler 一对一映射（小写含点），同扩展名后注册覆盖先注册并打 WARN。
  *
