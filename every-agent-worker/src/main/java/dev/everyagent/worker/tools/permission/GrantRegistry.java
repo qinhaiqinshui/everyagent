@@ -189,8 +189,9 @@ public class GrantRegistry {
 
     /**
      * 授权决议入口:grant 已存在直接放行;否则沿决议链遍历 authHandlers(阻塞虚拟线程):
-     * 第一个 applies 的 handler 返回 ALLOW → 自动授权(RUN 档);DENY → 抛
-     * {@link PermissionDeniedException};全部 PASS 或零节点 → 直接放行(RUN 档)。
+     * 第一个返回 ALLOW 的 handler 即放行,档位取其
+     * {@link AuthorizationHandler.AuthorizationDecision#scope()}(未声明按 RUN);
+     * DENY → 抛 {@link PermissionDeniedException};全部 PASS 或零节点 → 直接放行(RUN 档)。
      * rootsOnGrant 为该授权随附的 Sandbox 附加根;execRootsOnGrant 为命令 EXEC 授权随附的
      * Low 完整性标注根;sandboxRootsOnGrant 为下发给沙箱内核机制的范围(§7.8 P5)。
      */
@@ -250,8 +251,8 @@ public class GrantRegistry {
 
     /**
      * 授权决议链(责任链遍历):通过 {@link AuthorizationChainExecutor} 折叠 authHandlers
-     * (按 order 排序)为嵌套链;任一节点返回 ALLOW → 放行(RUN 档);DENY → 抛
-     * {@link PermissionDeniedException};全部 PASS 或零节点 → 链尾兜底放行(RUN 档)。
+     * (按 order 排序)为嵌套链;任一节点返回 ALLOW → 放行(档位见 {@link #grantScopeOf});
+     * DENY → 抛 {@link PermissionDeniedException};全部 PASS 或零节点 → 链尾兜底放行(RUN 档)。
      * 核心不感知任何具体节点(AI 审议、无人值守、人工弹窗等均由各 handler 自行判断)。
      * future.complete 与 record 由 {@link #authorize} owner 路径统一执行,后来者 join 共享同一结论。
      */
@@ -259,9 +260,21 @@ public class GrantRegistry {
         AuthorizationHandler.AuthorizationDecision d = new AuthorizationChainExecutor()
                 .run(authHandlerRegistry.sorted(), req);
         return switch (d.type()) {
-            case ALLOW, PASS -> GrantScope.RUN;
+            case ALLOW -> grantScopeOf(d);
+            case PASS -> GrantScope.RUN;
             case DENY -> throw denyException();
         };
+    }
+
+    /**
+     * 决议档位映射:节点未指定档位(第三方插件、链尾兜底)一律按 RUN(本轮),
+     * 只有显式声明 {@link AuthorizationHandler.AuthorizationDecision.Scope#TASK} 的节点
+     * (人工弹窗「本任务全程允许」)才落 TASK 档(写 grants.json、跨轮次/重启保留)。
+     * null 容错按 RUN 处理(record 的规范构造允许传 null)。
+     */
+    private static GrantScope grantScopeOf(AuthorizationHandler.AuthorizationDecision d) {
+        return AuthorizationHandler.AuthorizationDecision.Scope.TASK == d.scope()
+                ? GrantScope.TASK : GrantScope.RUN;
     }
 
     /**

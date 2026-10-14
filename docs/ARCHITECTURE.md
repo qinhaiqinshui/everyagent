@@ -506,7 +506,7 @@ ask 管道承载第二类阻塞请求:**危险操作授权**。`PermissionGate` 
 
 **AskQuestion 结构化信息槽(§7.20)**:`AskQuestion(id, prompt, options, fields)` 第四字段为「标签→值」键值对——授权弹窗的机器可读字段(目录、授权类型等)与人类可读文案分离,前端在 prompt 下、options 上渲染「标签: 值」信息块;wire 序列化对空 map 省略该字段(must-ignore 双向兼容:老前端忽略未知字段,老 worker 不带该字段,前端判空跳过);仅展示增强,不改 ask 协议语义与回答解析。
 
-**两档生效**:`run` 档纯内存,本轮输入处理完即清;`task` 档持久化 `workspaces/<workspaceId>/tasks/<taskId>/grants.json`,冷启动再运行恢复。
+**两档生效**:`run` 档纯内存,本轮输入处理完即清;`task` 档持久化 `workspaces/<workspaceId>/tasks/<taskId>/grants.json`,冷启动再运行恢复。**档位由决议节点随结论带出链外**(`AuthorizationDecision.Scope`:ALLOW+RUN / ALLOW+TASK),`GrantRegistry.record` 照档落盘——自动放行节点(AI 审议、第三方白名单)只能用默认 RUN(不得替用户做「本任务全程」的持久化承诺),只有真正问过用户的人工弹窗才可返回 TASK;`GrantRegistry` 不得把 ALLOW 一律收成 RUN(曾如此:弹窗「本任务全程允许」被静默降级为「本轮」,既不落盘也不跨轮保留)。
 
 **授权粒度**:文件工具链按**授权单元 = 目标路径本身**(已存在前缀取 realpath;已存在文件不再提升到父目录)——`p::write::<目标文件>` 只覆盖该文件本身,「新建/覆写一个文件」的授权不会放大成该目录下其它文件的写权限(同目录兄弟文件 = 另一把 key = 另一次授权;同一路径重复访问才免弹);链节点与沙箱可达根仍按「最深已存在祖先目录」(授权判定始终在 gate 逐次执行,key 精确匹配,可达根只是路径解析边界、不构成授权)。命令链的 EXEC 根另按「已存在目标提升到父目录」(命令串只能静态看到已存在路径,按所在目录归并)。动词类按规范化动词。**弹窗文案与判定同源**(`PathSupport.scopeNote`,不得比实际宽——曾写「及其子目录」而判定是精确匹配,既误导人类授权者又让 AI 审议员按更宽的范围放行);同 key 并发只弹一张卡(inFlight future)。
 
@@ -531,8 +531,9 @@ ask 管道承载第二类阻塞请求:**危险操作授权**。`PermissionGate` 
 
 | 拦截链环节 | 判定依据 | 行为 |
 |---|---|---|
-| ① AI 审议 | 任务级 `aiReview`(开启且审议器在位) | ALLOW → 自动授权(RUN 档);DENY → 拒绝;ESCALATE(含解析失败重试后仍失败)→ 落下一环节;超时/异常 → 按 fail-closed 默认 DENY |
+| ① AI 审议 | 任务级 `aiReview`(开启且审议器在位) | ALLOW → 自动授权(**RUN 档**,决议用 `AuthorizationDecision` 默认档位);DENY → 拒绝;ESCALATE(含解析失败重试后仍失败)→ 落下一环节;超时/异常 → 按 fail-closed 默认 DENY |
 | ② 无人值守 | 任务级 `unattended` | 开启 → 授权直接拒绝(无人工可弹);未开 → 正常人工弹窗 |
+| ③ 人工弹窗 | (链终结节点,从不 PASS) | 用户选「本轮运行内允许」→ ALLOW+RUN;「本任务全程允许」→ **ALLOW+TASK**(落盘 grants.json,跨轮次/重启保留);拒绝/超时/未识别 → DENY |
 
 - 审议路径不发 `ask.create/ask.state` → 任务保持 RUNNING(不误转 waiting-user)。
 - **审议输出解析失败**(非 JSON / 缺 decision / 多决策对象 / 空响应)→ **重试一次**要求模型纠正;**仍失败 → ESCALATE**(交下一节点/人工),**不再直接 DENY**——fail-closed 仅保留给**超时/异常**路径(默认 DENY;`review-deny-on-error` 控制)。**审议失败绝不自动放行**。

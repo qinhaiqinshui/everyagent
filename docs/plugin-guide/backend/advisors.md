@@ -313,17 +313,23 @@ ctx.registerSearchProvider(new RecentFilesPlugin());
 
 ## 7. AuthorizationHandler —— 授权决议链节点
 
-**链位置与 PermissionGate（§7.8）的关系**：PermissionGate 责任链（路径检查 → 危险动词 → `AuthorizeCheck`）判定「这次操作需要授权」且 grant 未命中时，进入 `GrantRegistry.authorize`——它沿**授权决议链**遍历全部 `AuthorizationHandler`（按 order 升序折叠为嵌套链）：任一节点 ALLOW → 自动授权（RUN 档）；DENY → 抛 `PermissionDeniedException` 回灌模型；全部 PASS 或空链 → 兜底放行（`every-agent-worker/src/main/java/dev/everyagent/worker/tools/permission/GrantRegistry.java:159-227`）。同 grantKey 并发授权共享同一 future，不弹第二张卡（`:165-215`）。
+**链位置与 PermissionGate（§7.8）的关系**：PermissionGate 责任链（路径检查 → 危险动词 → `AuthorizeCheck`）判定「这次操作需要授权」且 grant 未命中时，进入 `GrantRegistry.authorize`——它沿**授权决议链**遍历全部 `AuthorizationHandler`（按 order 升序折叠为嵌套链）：任一节点 ALLOW → 放行，档位取该决议的 `scope`（未声明按 RUN）；DENY → 抛 `PermissionDeniedException` 回灌模型；全部 PASS 或空链 → 兜底放行（RUN 档）（`every-agent-worker/src/main/java/dev/everyagent/worker/tools/permission/GrantRegistry.java`）。同 grantKey 并发授权共享同一 future，不弹第二张卡。
+
+**档位（scope）**：`ALLOW` 的档位决定授权落地形态——`RUN`=本轮运行内（纯内存，下一条用户输入即清）；`TASK`=本任务全程（落盘 `grants.json`，跨轮次/重启保留）。**只有真正问过用户的节点才能返回 `TASK`**；自动放行节点（AI 审议、自动批准白名单等）一律用默认 RUN，不得替用户做持久化承诺。
 
 ```java
-// every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/permission/AuthorizationHandler.java:13-43（签名节选）
+// every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/permission/AuthorizationHandler.java（签名节选）
 public interface AuthorizationHandler {
     String id();
     float order();   // 链上位置：升序 = 执行序。float 允许任意插位
     AuthorizationDecision invoke(AuthorizationRequest req, AuthorizationChain next) throws Exception;
     // 不处理 = next.proceed(req)；决议短路 = return ALLOW/DENY；上行段 = 审计/升级/宽限期
     record AuthorizationRequest(ExecContext context, String agentId, String grantKey, String prompt) {}
-    record AuthorizationDecision(Type type, String reason) { public enum Type { ALLOW, DENY, PASS } }
+    record AuthorizationDecision(Type type, String reason, Scope scope) {
+        public enum Type { ALLOW, DENY, PASS }
+        public enum Scope { RUN, TASK }   // 仅 ALLOW 有意义；默认 RUN
+        public AuthorizationDecision(Type type, String reason) { this(type, reason, Scope.RUN); } // 便利构造
+    }
 }
 ```
 
@@ -333,7 +339,7 @@ public interface AuthorizationHandler {
 |---|---|---|---|---|
 | `100f` | `ai-review-auth` | ai-review 插件 | `metadata.ai-review=true` 时交 AI 审议员决议；ESCALATE/超时 → PASS 下放 | `every-agent-plugins/ai-review/src/main/java/dev/everyagent/plugin/aireview/AiReviewAuthHandler.java:6-38`；注册 `AiReviewPlugin.java:24` |
 | `200f` | `unattended-auth` | unattended 插件 | `metadata.unattended=true`（无人值守）时直接 DENY | `every-agent-plugins/unattended/src/main/java/dev/everyagent/plugin/unattended/UnattendedAuthHandler.java:6-19`；注册 `UnattendedPlugin.java:23` |
-| `300f` | `human-authorization` | worker 内置（`@PostConstruct` 自注册） | 弹三档授权卡（本轮运行/本任务/拒绝），**链终结节点**（从不 PASS） | `every-agent-worker/src/main/java/dev/everyagent/worker/tools/permission/HumanAuthorizationHandler.java:31,58-76` |
+| `300f` | `human-authorization` | worker 内置（`@PostConstruct` 自注册） | 弹三档授权卡（本轮运行/本任务/拒绝）→ `ALLOW+RUN` / `ALLOW+TASK` / `DENY`，**链终结节点**（从不 PASS） | `every-agent-worker/src/main/java/dev/everyagent/worker/tools/permission/HumanAuthorizationHandler.java` |
 
 排序与折叠：`AuthorizationHandlerRegistry.sorted()` 按 `order` 升序（`every-agent-worker/src/main/java/dev/everyagent/worker/plugin/registry/AuthorizationHandlerRegistry.java:31-34`）→ `AuthorizationChainExecutor.run`（`every-agent-worker/src/main/java/dev/everyagent/worker/tools/permission/AuthorizationChainExecutor.java:24-40`）。插件插位建议：< 100（比 AI 审议更外，先做策略性拒绝/放行）或 100~300 之间（float 任意值，如 `150f`：审议之后、人工弹窗之前，适合「自动批准白名单」类增强；插在 300 之后无意义——human 是终结节点）。
 
