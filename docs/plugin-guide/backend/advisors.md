@@ -15,7 +15,7 @@ has_children: false
 |---|---|---|---|---|---|
 | `AdvisorProvider` | `spi` | `registerAdvisorProvider`（:46） | `AdvisorProviderRegistry` | `AgentBuilder` 每轮装配聚合 | 11 个插件（12 个 Advisor，§2 全表） |
 | `ChatModelEnhancer` | `model` | `registerChatModelEnhancer`（:64） | `ChatModelEnhancerRegistry` | `ChatModelFactory` 构建期委托 | model-pool（唯一） |
-| `TokenEstimator` | `spi` | `registerTokenEstimator`（:61） | 无（直接替换 `WorkerServicesImpl` 持有实例） | `WorkerServices.tokenEstimator()` 的全部调用方 | model-rate-limit |
+| `TokenEstimator` | `spi` | `registerTokenEstimator`（:61） | 无（直接替换 `WorkerServicesImpl` 持有实例） | `WorkerServices.tokenEstimator()` 的全部调用方 | token-estimator |
 | `SearchProvider` | `spi` | `registerSearchProvider`（:52） | `SearchProviderRegistry` | 统一 `search` 聚合（内置 `file-content`/`file-name`/`task` 三 provider 与插件 provider 同权，按 `order` 升序聚合）；能力接口 `SuggestionProvider`（mention.query，`SearchProvider` 子接口）（§6） | **无** |
 | `AuthorizationHandler` | `permission` | `registerAuthorizationHandler`（:55） | `AuthorizationHandlerRegistry` | `GrantRegistry` 授权决议链 | ai-review、unattended |
 
@@ -105,7 +105,7 @@ public class AgentsMdAdvisorProvider implements AdvisorProvider {
 
 | 坑 | 说明 | 证据 |
 |---|---|---|
-| order 写成绝对正数/0 | 内置链全部是 `HIGHEST_PRECEDENCE + N`（约 -21.47 亿），绝对 0 会排到整条链**最内端**（数值最大）；TokenCalibrationAdvisor 就是现成案例（§2.5） | §2.5；`TokenCalibrationAdvisor.java:56-59` |
+| order 写成绝对正数/0 | 内置链全部是 `HIGHEST_PRECEDENCE + N`（约 -21.47 亿），绝对 0 会排到整条链**最内端**（数值最大）；TokenCalibrationAdvisor 就是现成案例（§2.5） | §2.5；`TokenCalibrationAdvisor.java:60-63` |
 | provider 与 advisor 的 order 不一致 | `AgentBuilder` 按 provider 的 `order()` 排序聚合，Spring AI 链又按 advisor 自己的 `getOrder()` 重排——两个值**必须写同一个数**（仓库内所有实现均成对一致，如 `RateLimitAdvisorProvider.java:31-33` 与 `RateLimitAdvisor.java:63`） | `AgentBuilder.java:303-312`；`DefaultAroundAdvisorChain`（spring-ai-client-chat 2.0.1）`reOrder()` 用 `OrderComparator` 重排 |
 | 在 provider 里存 per-run 状态 | `create()` 每次 agent 装配都会调用，provider 是长生命周期对象；per-run 状态放 `create` 里 new 出的 advisor 实例字段（git/file-change 均如此，`GitAutoSyncAdvisorProvider.java:12` 注释） | `AgentBuilder.java:303-312` |
 | 一个 advisor 塞多个职责 | §14.8 红线：**一个 Advisor 只负责一个功能**；要挂钩工具循环的增强必须继承 `ToolCallingAdvisor` 重写受保护 hook，**不得另起一层包裹**或重复实现递归循环 | [`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) §14.8（本篇 §8 原文） |
@@ -142,7 +142,7 @@ public class AgentsMdAdvisorProvider implements AdvisorProvider {
 | 15 | `TCA + 300`（= `HP + 600`） | -2147483048 | ModelLengthGuardAdvisor | model-length-guard | 输出预算耗尽护栏（finish_reason=length） | `every-agent-plugins/model-length-guard/src/main/java/dev/everyagent/plugin/modellengthguard/ModelLengthGuardAdvisorProvider.java:38-40` |
 | 16 | `TCA + 400`（= `HP + 700`） | -2147482948 | ContextCompressionAdvisor | context-compression | 上下文压缩（只改发给模型的视图） | `every-agent-plugins/context-compression/src/main/java/dev/everyagent/plugin/contextcompression/ContextCompressionAdvisorProvider.java:30-32` |
 | 17 | `TCA + 500`（= `HP + 800`） | -2147482848 | RateLimitAdvisor | model-rate-limit | 模型请求限流（rpm/并发/tpm） | `every-agent-plugins/model-rate-limit/src/main/java/dev/everyagent/plugin/modelratelimit/RateLimitAdvisorProvider.java:31-33` |
-| 18 | `0`（**绝对值**，非 HP 系） | 0 | TokenCalibrationAdvisor | model-rate-limit | token 估算 EMA 校准（⚠️ 见 §2.5） | `every-agent-plugins/model-rate-limit/src/main/java/dev/everyagent/plugin/modelratelimit/TokenCalibrationAdvisor.java:56-59,180-182` |
+| 18 | `0`（**绝对值**，非 HP 系） | 0 | TokenCalibrationAdvisor | token-estimator | token 估算 EMA 校准（⚠️ 见 §2.5） | `every-agent-plugins/token-estimator/src/main/java/dev/everyagent/plugin/tokenEstimator/TokenCalibrationAdvisor.java:60-63,141-144` |
 
 worker 适配器的注册顺序（先/后）不影响链位置——`AdvisorProviderRegistry` 输出后统一按 `order()` 排序（`BuiltInAdvisorProviders.java:22-24` 注释明示）。
 
@@ -171,9 +171,9 @@ worker 适配器的注册顺序（先/后）不影响链位置——`AdvisorProv
 
 ⇒ 插件选 Advisor 位置时**无需**避让任何区间，只需避开 §2.2 表中已占用的锚点；`[420, 850]` 禁插段是 `TaskLifecycleNode` 的约束，详见 [任务生命周期与 RPC](task-and-rpc.md)。
 
-### 2.5 ⚠️ TokenCalibrationAdvisor 的 order=0 是已知不一致
+### 2.5 ⚠️ TokenCalibrationAdvisor 的 order=0 是非 HP 系的绝对值写法
 
-`TokenCalibrationAdvisor` 自带注释称「order = 0（核心基础设施层），在 advisor 链最外层」（`TokenCalibrationAdvisor.java:29-31,56-59`），Provider 也是 `return 0`（`:180-182`）。但按 §2.1 的排序语义，绝对值 0 **大于**全部 `HP + N` 值 ⇒ 它实际排在整条链**最内端**（比 RateLimitAdvisor `HP + 800` 更内）。成因推测：`BuiltInAdvisorProviders` 的分区注释以 HP 相对偏移描述「核心基础设施（0─99）」（`BuiltInAdvisorProviders.java:52`），该类从 worker 迁入插件时把 0 写成了绝对值而非 `HP + 0`（推测，未实测运行时表现）。功能上不受影响——最内层同样能看到每轮模型调用的原始 chunk，校准目的仍达成；但**插件不要模仿这种写法**，一律用 `HP + N` / `TCA + N` 对齐坐标系。
+`TokenCalibrationAdvisor` 用 order = 0（绝对值，非 HP+N 系），Provider 同样 `return 0`（`every-agent-plugins/token-estimator/src/main/java/dev/everyagent/plugin/tokenEstimator/TokenCalibrationAdvisor.java:60-63,141-144`）。其类注释已如实说明「绝对值 0 数值上大于全链所有 `HP + N` ⇒ 实际排在整条链**最内端**（比 RateLimitAdvisor `HP + 800` 更内）」（`:29-34`）。成因推测：该类从 worker 迁入插件时把 HP 相对偏移「核心基础设施（0─99）」（`BuiltInAdvisorProviders.java:52`）写成了绝对值而非 `HP + 0`（推测，未实测运行时表现）。功能上不受影响——最内层同样能看到每轮模型调用的原始 chunk（含工具循环递归各轮），校准目的仍达成；但**插件不要模仿这种绝对值写法**，一律用 `HP + N` / `TCA + N` 对齐坐标系。
 
 ### 2.6 可用空档推荐
 
@@ -206,24 +206,22 @@ public interface ChatModelEnhancer {
 
 ## 4. TokenEstimator —— 替换 token 估算器
 
-**估计什么**：无精确 tokenizer 场景下的文本 token 数 + 按模型配置（configId）隔离的在线校准。消费方有三：`ModelLengthGuardAdvisor`（输出预算耗尽判定）、模型限流器 tpm 记账（[`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) §7.4.1）——两者用**输出口径**；`ContextCompressionAdvisor`（上下文压缩预检，§7.5）用**输入口径**。
+**估计什么**：无精确 tokenizer 场景下的文本 token 数 + 按模型配置（configId）隔离的在线校准。消费方有三：`ModelLengthGuardAdvisor`（输出预算耗尽判定）、模型限流器 tpm 记账（[`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) §7.4.1）、`ContextCompressionAdvisor`（上下文压缩预检，§7.5）——三处共用同一估算函数。
 
 ```java
 // every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/spi/TokenEstimator.java（签名节选）
 public interface TokenEstimator {
-    long estimate(String text, String configId);   // 输出口径：估算 token 数（用 configId 的校准系数，无记录则 factor=1.0）
-    long estimateInput(String text);               // 输入口径：同一分词式，不套校准系数（default = estimate(text, "")）
-    void calibrate(String configId, long estimatedTokens, long actualTokens); // 真实 usage EMA 校准
-    double factorOf(String configId);             // 当前校准系数（诊断用）
-    long sampleCountOf(String configId);          // 校准样本数（诊断用）
+    long estimate(String text, String configId);   // 唯一方法：估算 token 数（用 configId 的校准系数，无记录则 factor=1.0）
 }
 ```
 
-> **两个口径别用错**：`calibrate` 的系数是让「估算输出」逼近 `completionTokens` 的乘数，属**输出**口径；`estimateInput` 供「prompt 占用」类判断（上下文压缩阈值）。实测某任务全量历史：基础式 28.9 万 ≈ 真实输入 33.9 万，而套上当时的输出系数（2.34）后变 67.4 万（≈2 倍高估）——用它做压缩闸门会在真实占用远未达阈值时就触发。新增消费方先问自己：我估的是「输入」还是「输出」。
+> **单一口径**：估算函数**方向盲**——同一段文本无论将来当输入还是当输出，分词完全相同（系数取该 configId 已收敛的值），故不再有「输入/输出」两套口径。输入侧（prompt 占用）的残余偏差由**调用方对账**承担：上下文压缩用 `overhead = 上一轮实测 inputTokens − 上一轮发送视图粗估`（offset 校准，加性、逐 agent、每轮重算、可正可负）自行修正（§7.5）。新增消费方直接用 `estimate(text, configId)` 即可。
 
-**默认实现与覆盖关系**：worker 内置 fallback `SimpleTokenEstimator`（`@Component`，CJK≈1 token、其余≈4 字符 1 token，factor 恒 1.0、不校准；`every-agent-worker/src/main/java/dev/everyagent/worker/plugin/adapters/SimpleTokenEstimator.java`）。`ctx.registerTokenEstimator(estimator)` **原位替换** `WorkerServicesImpl` 持有的实例（`WorkerPluginContextImpl.java:199-202` → `WorkerServicesImpl.replaceTokenEstimator`）；消费方经 `ctx.services().tokenEstimator()` 取**当前生效**实例（plugin-api `WorkerServices.java:38`）——model-length-guard 与 context-compression 两个插件都持 `WorkerServices` 延迟解析（每次 `create()` 取一次），后注册的估算器自动跟随。
+**默认实现与覆盖关系**：worker 内置 fallback `SimpleTokenEstimator`（`@Component`，**只实现 `estimate`**：CJK≈1 token、其余≈4 字符 1 token，无校准；`every-agent-worker/src/main/java/dev/everyagent/worker/plugin/adapters/SimpleTokenEstimator.java`）——token-estimator 插件被禁用时三处消费方拿到的就是它，退化为「无校准粗估」。`ctx.registerTokenEstimator(estimator)` **原位替换** `WorkerServicesImpl` 持有的实例（`WorkerPluginContextImpl.java:199-202` → `WorkerServicesImpl.java:95-97`）；消费方经 `ctx.services().tokenEstimator()` 取**当前生效**实例（plugin-api `WorkerServices.java:40`）并**延迟解析**（每次 `create()` 取一次）——model-length-guard / context-compression / model-rate-limit 三处都持 `WorkerServices` 延迟解析，后注册的估算器自动跟随。
 
-**范例（rg `registerTokenEstimator` 唯一命中）**：model-rate-limit 的 `BuiltinTokenEstimator`——EMA 校准系数按 configId 隔离、收敛（默认 2%）后停采、漂移（默认 5%）自动恢复，持久化 `<homeDir>/model-rate-state.json` 重启接续（`BuiltinTokenEstimator.java:34-45`；阈值配置 `WorkerProperties.java:517-537`）。注册三件套共享同一实例：估算器 + TokenCalibrationAdvisor（§2.5）+ RateLimitAdvisorProvider（`ModelRateLimitPlugin.java:33-46`）。
+**范例（rg `registerTokenEstimator` 唯一命中）**：独立插件 `token-estimator`——`activate()` 注册两个扩展点、共享同一 `BuiltinTokenEstimator` 实例（`every-agent-plugins/token-estimator/src/main/java/dev/everyagent/plugin/tokenEstimator/TokenEstimatorPlugin.java:35,43-47`）：① `ctx.registerTokenEstimator(estimator)`——全仓唯一 `TokenEstimator` 实现，EMA 校准系数按 configId 隔离、收敛（默认 2% 连续 3 次）后停采、漂移（默认 5%）重置，异步落盘 `<homeDir>/model-rate-state.json` 重启接续；② `ctx.registerAdvisorProvider(new TokenCalibrationAdvisor.Provider(estimator))`——用真实 `completionTokens` 在线校准①（§2.5）。状态文件带**口径版本 `version:2`**（`BuiltinTokenEstimator.java:66`），版本缺失或 ≠2 即丢弃旧状态从空重标定（旧系数 2.33/2.57/2.34/1.29 是在错误口径下攒的）。阈值配置 `WorkerProperties.java:405-409`。
+
+**设计决策：`calibrate` / `factorOf` / `sampleCountOf` 不上 SPI**——三者降为 `BuiltinTokenEstimator` 的**插件内部 public 方法**，`TokenEstimator` SPI 只留 `estimate`。放 SPI 上会导致「第三方插件换实现后，校准仍灌进旧实例、新实现永不被校准」的错位（`calibrate` 的唯一调用方是同插件的 `TokenCalibrationAdvisor`，外部消费方只用 `estimate`）。另注 `calibrate` 入参是**已乘系数**的估算值，实现内先除回旧系数得 raw 再算 `ratio = actual / raw`——若不除回，`ratio = actual/estimated` 的迭代不动点解为 √(实际比值)（自反馈），系数被系统性抬到上界。
 
 ## 5. 技能包物化（SkillMaterializer）—— 插件贡献 skill 的唯一方式
 
@@ -352,7 +350,7 @@ public interface AuthorizationHandler {
 
 > **复用 Spring AI,禁止重复造轮子**:agent 执行必须走 ChatClient + Advisor 生态,不得手搓 agent 循环、工具循环、响应聚合、system 拼接;执行链只能是很薄一层;新增 agent 能力优先做成 Advisor;**一个 Advisor 只负责一个功能**;事件发射等需挂钩工具循环的增强**通过继承 ToolCallingAdvisor 并重写受保护 hook 实现**;主/子 agent 共用同一运行入口与 Advisor 链,仅 agentId 不同。
 
-落到本篇的三个可检验判据：① 新增强优先做成 `AdvisorProvider`（薄适配器）而不是改执行核心；② 单一职责——每个 Advisor 一个功能，不要把「注入 skill + 发事件 + 护栏」塞进同一个类（对照 `TokenCalibrationAdvisor.java:22` 类注释自证纪律）；③ 挂钩工具循环 = 继承 `ToolCallingAdvisor` 重写 `doAfterStream`/`doGetNextInstructionsForToolCallStream` 等受保护 hook，不得另起包裹层或重复实现递归循环（范例 `WorkerToolEventAdvisor.java:66,92-95`）。另注意 §14.9：插件 pom 任何 scope 不得依赖 `every-agent-worker`——本篇 5 个 SPI 的类型全部住在 plugin-api（技能包物化的 `SkillMaterializer` 亦然）。
+落到本篇的三个可检验判据：① 新增强优先做成 `AdvisorProvider`（薄适配器）而不是改执行核心；② 单一职责——每个 Advisor 一个功能，不要把「注入 skill + 发事件 + 护栏」塞进同一个类（对照 `TokenCalibrationAdvisor.java:18` 类注释自证纪律）；③ 挂钩工具循环 = 继承 `ToolCallingAdvisor` 重写 `doAfterStream`/`doGetNextInstructionsForToolCallStream` 等受保护 hook，不得另起包裹层或重复实现递归循环（范例 `WorkerToolEventAdvisor.java:66,92-95`）。另注意 §14.9：插件 pom 任何 scope 不得依赖 `every-agent-worker`——本篇 5 个 SPI 的类型全部住在 plugin-api（技能包物化的 `SkillMaterializer` 亦然）。
 
 ## 下一步读
 

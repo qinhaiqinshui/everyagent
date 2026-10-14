@@ -26,7 +26,7 @@ Every Agent 是一套「**公网可及、本机执行**」的 AI Agent 系统:AI
 | `every-agent-contract` | 纯协议契约:帧信封 / RPC 信封 / 通用错误码 / 身份哈希(Java DTO + TS 类型) | — |
 | `every-agent-plugin-api` | 插件 API 契约:ExecContext(统一执行上下文) / EventEmitter / EmitEvent / ChatModelEnhancer / ModelConfig / TaskLifecycleNode 等接口 + 少量工具类(`util/AtomicFiles` 原子写、`util/SecretPatterns` 凭据模式、`slash/SlashTokenEncoder`、`tool/PlainTextToolCallResultConverter`、`skill/SkillMaterializer` 技能包物化;并非纯类型模块,显式依赖 `spring-core`,插件与 worker 共用) | — |
 | `every-agent-plugin-parent` | **插件 SDK parent**(仅 `pom.xml`):内置与外部插件共用的构建约定——Java 25 / 编码 / 插件依赖版本管理 / `plugin.json` 打包 / 测试栈。插件只继承它,**不继承应用的 every-agent-parent** | — |
-| `every-agent-plugins` | 内置插件集(27 个,清单见 plugin-guide `reference/builtin-plugins.md`):sandbox-windows-codex(Windows 原生沙箱,**默认启用**)、sandbox-windows-mic / sandbox-wsl-ubuntu(可选沙箱,默认禁用)、model-rate-limit(限流) / task-queue(并发排队) / task-input-queue(输入队列) / subagent / git / ai-review / ask-user / empty-response-retry / transient-error-retry / context-compression / model-length-guard / adaptive-max-tokens / model-pool / file-change / agents-md / system-info / image-vision / mobile-keyboard(移动端终端键盘悬浮球) / task-edit-resend / unattended / secret-redaction(默认禁用) / plugin-manager / pdf-viewer / update-file-view | — |
+| `every-agent-plugins` | 内置插件集(28 个,清单见 plugin-guide `reference/builtin-plugins.md`):sandbox-windows-codex(Windows 原生沙箱,**默认启用**)、sandbox-windows-mic / sandbox-wsl-ubuntu(可选沙箱,默认禁用)、model-rate-limit(限流) / token-estimator(token 估算与校准) / task-queue(并发排队) / task-input-queue(输入队列) / subagent / git / ai-review / ask-user / empty-response-retry / transient-error-retry / context-compression / model-length-guard / adaptive-max-tokens / model-pool / file-change / agents-md / system-info / image-vision / mobile-keyboard(移动端终端键盘悬浮球) / task-edit-resend / unattended / secret-redaction(默认禁用) / plugin-manager / pdf-viewer / update-file-view | — |
 | `every-agent-desktop` | Electron 桌面版:web + hub + worker 一体打包(Windows x64 便携/安装包) | 本地 6101/6102 |
 
 ### 1.1 设计理念
@@ -347,7 +347,7 @@ AgentStatusAdvisor(agent 生命周期事件,HP+5,最外层) → RoundIndexAdviso
 → [工具循环外侧重试/护栏层] DialogInsertAdvisor(队列项「插入到当前对话」,主 agent 专属,task-input-queue 插件,DEF+30) → EmptyResponseRetryAdvisor(空响应重调,独立插件,DEF+100)
 → TransientErrorRetryAdvisor(瞬时错误退避,独立插件,DEF+200) → AdaptiveMaxTokensAdvisor(自适应输出预算,独立插件,DEF+250,Guard 外侧)
 → ModelLengthGuardAdvisor(输出预算耗尽护栏,独立插件 model-length-guard,finish_reason=length,DEF+300)
-→ ContextCompressionAdvisor(上下文压缩,独立插件,DEF+400) → RateLimitAdvisor(模型请求限流,独立插件,DEF+500) → TokenCalibrationAdvisor(限流插件 token 估算校准记账,order=0 绝对值=全链最内层)
+→ ContextCompressionAdvisor(上下文压缩,独立插件,DEF+400) → RateLimitAdvisor(模型请求限流,独立插件,DEF+500) → TokenCalibrationAdvisor(token-estimator 插件 token 估算校准记账,order=0 绝对值=全链最内层)
 ```
 
 - agent 生命周期事件由 `AgentStatusAdvisor`（全链最外层，`StreamAdvisor`）驱动 `AgentEntity` 的 per-run 状态机发射：`adviseStream` 入口 → `beginRun()`（`agent.started` + `agent.status{running}`）；`doOnComplete`/`doOnError`/`doOnCancel` → `claimTerminal(completed|error|stopped, 附言)`，终态发射顺序固定 `error? → agent.done → agent.status{终态}`。它**不继承** `ToolCallingAdvisor`——只需「整轮一次」的流生命周期信号，而工具循环递归只重入比自己更内层的 advisor，故挂在外侧恰好每次 `AgentRunner.run()` 进一次；最外层还保证终态晚于 message/usage 与 rounds 闭合落盘（前端以主 agent 终态 `agent.status` 为拉 rounds 的触发点）。详见 §7.20.1。
@@ -400,11 +400,11 @@ AgentStatusAdvisor(agent 生命周期事件,HP+5,最外层) → RoundIndexAdviso
 
 **机制**(`model-rate-limit` 插件的 `RateLimitAdvisor` 实现 `CallAdvisor`/`StreamAdvisor`,经 Advisor 链注入(order=工具循环+500,最内层);主/子/AI 审议/池成员全部自动生效):
 
-- 每模型独立配置(`worker.models[].params`):`rpm`(每分钟发起数,滑动窗口)、`max-concurrency`(同时 in-flight 上限,**长思考重叠的核心闸门**)、`tpm`(可选参考线)、`token-est-factor`(估算系数初始值)。**缺省回退全局默认限流,不是裸奔不限流**(Java 默认 rpm=60 / max-concurrency=4 / tpm=0;jar 内 `application.yml` 出厂值为 rpm=120 / max-concurrency=6 / tpm=0);某模型要关闭某维度,在其 params 显式设 0。
+- 每模型独立配置(`worker.models[].params`):`rpm`(每分钟发起数,滑动窗口)、`max-concurrency`(同时 in-flight 上限,**长思考重叠的核心闸门**)、`tpm`(可选参考线)。(另有历史遗留字段 `token-est-factor`:仍被解析但已无消费方——校准系数由 `token-estimator` 插件的持久化状态提供,见下。) **缺省回退全局默认限流,不是裸奔不限流**(Java 默认 rpm=60 / max-concurrency=4 / tpm=0;jar 内 `application.yml` 出厂值为 rpm=120 / max-concurrency=6 / tpm=0);某模型要关闭某维度,在其 params 显式设 0。
 - 请求起步经 `ModelRateLimiter.acquire` 排队等放行:rpm 窗口 / 并发信号量 / tpm 压力三关;超限进有界等待队列(默认队列 8、等 5 分钟),**正常排队不报错**,仅队列满 + 超时才抛 `ModelRateLimitException`(非重试,文案含「减少并发派发/调大配置」建议)。阻塞等待发生在虚拟线程上(park,零线程开销)。
-- **tpm 记账**:流中无协议级 usage(OpenAI 兼容只在末帧带),故流中用自算文本 token 粗估(CJK≈1、其余≈4 字符 1 token)累计;请求完成后用厂商真实 usage 记账入 60s 窗口,并 EMA 反向校准估算系数(`token-est-factor`,每模型独立,持久化 `~/.everyagent/model-rate-state.json`,重启接续)。token 估算经 Advisor 的 `doOnNext`/`doOnComplete` 回调驱动。
+- **tpm 记账**:流中无协议级 usage(OpenAI 兼容只在末帧带),故流中用自算文本 token 粗估(CJK≈1、其余≈4 字符 1 token)累计,估算经 `OutputTokenAccumulator` 统一口径(**正文增量 + 思考累积值差分 + 工具调用参数按 callId 累积**);**必须含工具调用参数**——厂商真实 `completionTokens` 也计入它,漏计会让校准比值 `actual/estimated` 系统性偏高、把系数抬到上界(只统计「无工具调用」轮次时 median 实测/估算 ≈1.05,证明估算公式本身误差仅 5~7%,坏的是统计口径)。请求完成后用厂商真实 usage 记账入 60s 窗口;校准由 **`token-estimator` 插件的 `TokenCalibrationAdvisor`** 完成(用真实 `completionTokens` 的 EMA 校准估算系数,每模型独立,持久化 `~/.everyagent/model-rate-state.json`,重启接续)——状态文件带**口径版本 `version:2`**,口径变更(如本次纳入工具调用参数、修正 ratio 语义)后旧系数不再可比,载入时版本不符即丢弃、从空重新标定。token 估算经 Advisor 的 `doOnNext`(chunk 估算)/`doOnComplete`(真实记账)回调驱动。
 - 全局默认:`worker.limits.model-rate.{queue-capacity, wait-timeout-ms, est-window-sec, est-safety-ratio, est-ema-alpha, default-rpm, default-max-concurrency, default-tpm}`。
-- **观测**:排队等待经 `EventEmitter.emit(EmitEvent.TraceData.transientOf("model_rate_wait", null, "模型排队中", null, "waiting"))` 发语义事件,task 层映射为瞬态 `task.trace(kind=model_rate_wait)`(前端展示「模型正在排队」,§7.19);插件未加载时无限流 Advisor → 直通 → 不限流,worker 保留 fallback `SimpleTokenEstimator` 供 `model-length-guard` 插件(§7.3)使用。
+- **观测**:排队等待经 `EventEmitter.emit(EmitEvent.TraceData.transientOf("model_rate_wait", null, "模型排队中", null, "waiting"))` 发语义事件,task 层映射为瞬态 `task.trace(kind=model_rate_wait)`(前端展示「模型正在排队」,§7.19);插件未加载时无限流 Advisor → 直通 → 不限流;worker 保留 fallback `SimpleTokenEstimator`(只实现 `estimate`、无校准),即 token-estimator 插件被禁用时三处消费方(model-length-guard / context-compression / model-rate-limit)的兜底,退化为「无校准粗估」。
 - **插件不耦合内核**:`RateLimitAdvisor` 只依赖 `ModelConfig` + `EventEmitter`,不耦合 `ChatModel`/`Prompt`/`ChatResponse`/`Flux`/`TaskEvents`/`agentId`/`taskId`/`DataPusher`。`ConfigRpcHandler.rateStatus` 返回空数组(插件后续自行注册 RPC 上报限流运行态)。
 
 ### 7.4.2 模型 HTTP 超时语义(callTimeout 解除,流式长思考不限总时长)
@@ -422,7 +422,7 @@ AgentStatusAdvisor(agent 生命周期事件,HP+5,最外层) → RoundIndexAdviso
 **上下文压缩**(`ContextCompressionAdvisor`,主/子同挂、最内层):只改写**发送给模型的 instructions 视图**,内存 conversation 与磁盘事件日志始终全量。
 
 - **offset 校准(双向)**:每轮现场重算常数修正项 = 上一轮 provider 实测 `inputTokens − 粗估算值`,抵消无 tokenizer 粗估与实测的系统性差异。**必须双向采纳**:offset > 0(粗估漏算工具定义/系统模板/分词差异)→ 抬升 precheck 防漏触发;offset < 0(粗估**高估**正文,`bytes/3` 对 ASCII/代码正文实测可达 1.5~3 倍)→ 同样压低 precheck,否则阈值退化为「粗估 × ratio」而非「实测 × ratio」,上下文远未真实占满即触发压缩(2026-10 t_ra74 实锤:估算 22.9 万、实测 8.4 万却反复压缩)。
-- **token 估算口径复用全局 `TokenEstimator`**:压缩预检走 `TokenEstimator.estimateInput`(输入/prompt 口径,即"基础分词式、不套输出校准系数"),经 provider 延迟解析(同 model-length-guard 写法,`registerTokenEstimator` 换实现后自动跟随);估算器缺失时回退内置 UTF-8 bytes/3。**为何不套 `estimate`(带校准系数)**:该系数由 `completionTokens` 收敛而来,属输出口径,套到 prompt 上会约 2 倍高估(实测某任务全量历史:基础式 28.9 万 ≈ 真实输入 33.9 万,套上系数 2.34 后变 67.4 万),会让压缩在真实占用远未达阈值时触发。
+- **token 估算口径复用全局 `TokenEstimator`**:压缩预检走 `TokenEstimator.estimate`(单一估算口径),经 provider 延迟解析(同 model-length-guard 写法,`registerTokenEstimator` 换实现后自动跟随);估算器缺失时回退内置 UTF-8 bytes/3。**单一口径**——估算函数方向盲:同一段文本无论将来当输入还是当输出,分词完全相同,故无需分设输入与输出两套口径;输出侧系数在修掉「漏计工具调用参数」与「自反馈」后误差 ≈5~7%,对输入同样适用。**输入侧残余偏差由压缩自身的 offset 校准承担**(`overhead = 上一轮实测 inputTokens − 上一轮发送视图粗估`,加性、逐 agent、每轮重算、可正可负),不再需要独立的输入侧常数。
 - **累积式裁剪**:per-run 状态化,首次压缩后持有「压缩基线 baseline + 已吸收源消息数 absorbed」,后续轮只把新增消息 delta 接到基线上做增量裁剪。
 - **摘要压缩**:阶段 C 丢弃历史轮前,调用 `LlmContextSummarizer`(默认复用当前 agent 的 chatModel)生成要点摘要;失败退化为「保留该轮 user 截断简版」防永久失忆;单条超大工具结果做首尾保留的确定性截断。
 - 配置:`worker.limits.context-compression-enabled`(关闭则整体关)、`context-offset-enabled`(默认 true)、`context-summary-enabled`(默认 true)、`context-summary-max-tokens`(默认 512)、`context-max-tool-result-chars`(默认 40000)、`context-trigger-ratio`(0.95)/`context-target-ratio`(0.50)。
@@ -795,7 +795,7 @@ worker 的两条运行期责任链迁移为与任务洋葱同一的 filter 形�
 
 ### 7.14.4 任务队列插件（Phase 5）
 
-任务队列插件将「并发上限即拒 ERR_BUSY」语义替换为「排队等待」语义。插件实现 `EveryAgentPlugin.activate(WorkerPluginContext)`，在 activate 里经 `ctx.register*` 注册（全仓 27 个内置插件源码零 `@Component`，插件由 `URLClassLoader` 加载、非 Spring 托管；git 插件同类先例是 `GitPlugin`）。
+任务队列插件将「并发上限即拒 ERR_BUSY」语义替换为「排队等待」语义。插件实现 `EveryAgentPlugin.activate(WorkerPluginContext)`，在 activate 里经 `ctx.register*` 注册（全仓 28 个内置插件源码零 `@Component`，插件由 `URLClassLoader` 加载、非 Spring 托管；git 插件同类先例是 `GitPlugin`）。
 
 - **`QueueAdmissionNode`**（order=40，形态三 try/finally 成对节点）：落在洋葱 RPC 线程段 `queue.dispatch`(15) 之后不远处，介于 `taskid.generate`(30) 与 `taskentry.create`(50) 之间（31 节点全表见插件指南 `docs/plugin-guide/backend/task-and-rpc.md` §2.3）。下行段 `acquire(taskId)` 获取运行许可（`Semaphore` fair 模式，permits=maxConcurrentTasks），并发满时虚拟线程 park 阻塞（零线程开销）；finally 段 `release(taskId)` 释放许可并唤醒下一个等待者。下行抛异常时 release 不执行（未进入不收口语义）。
 - **`TaskAdmissionPolicy` SPI**（plugin-api）：RPC 边缘预检扩展点。队列插件注册 `TaskQueueAdmissionPolicy`（always-admit）后，`TaskManager.rpcTaskRun` 不再硬拒绝 ERR_BUSY，而是放任务进入洋葱由 `QueueAdmissionNode` 排队处理。无注册策略时保持原有行为。
@@ -1052,11 +1052,11 @@ EventLog → DataPusher.readFrom → WebSocketEmitter.push → conn.pub → 前�
 - **`RateLimitAdvisor` implements `CallAdvisor, StreamAdvisor`**:order=`ToolCallingAdvisor.DEFAULT_ORDER+500`(最内层,ContextCompression +400 之后),对主/子/AI 审议/池成员全部自动生效。
 - `adviseCall`/`adviseStream` 中经 `a.snapshot()` 查 limiter:无限流配置 → 直通下一层;有配置 → `acquire()` 排队等待(虚拟线程 park,零线程开销),等待期间经 `a.emitter().emit(EmitEvent.transientOf(...))` 发语义事件(`AdvisorContext extends ExecContext`,直读槽位,§7.20)。
 - 通过 Reactor 操作符(`doOnNext`/`doOnCancel`/`doOnError`/`doOnComplete`)绑定 Permit 生命周期:`doOnNext` 驱动流中 token 估算(`permit::onChunk`),`doOnComplete` 驱动事后精确记账与信号量释放(`permit::complete`),`doOnError`/`doOnCancel` 驱动取消与释放(`permit::cancel`)。不再经 `ModelRequestContext` 回调,直接在 Advisor 链操作。
-- **限流类驻插件包**:`ModelRateLimiter` / `RateLimitAdvisor` / `RateLimitAdvisorProvider` / `ModelRateLimitConfig` / `ModelRateLimiterRegistry` / `BuiltinTokenEstimator` / `TokenCalibrationAdvisor`(+ Provider);测试一并随插件。
+- **限流类驻插件包**:`ModelRateLimiter` / `RateLimitAdvisor` / `RateLimitAdvisorProvider` / `ModelRateLimitConfig` / `ModelRateLimiterRegistry`;测试一并随插件。**token 估算与在线校准已拆到独立插件 `token-estimator`**(`BuiltinTokenEstimator` + `TokenCalibrationAdvisor`),`model-rate-limit` 只保留限流,经 `ctx.services().tokenEstimator()` **延迟解析**消费估算器(装载顺序:按目录名字典序,`model-rate-limit` 排在 `token-estimator` 之前激活,故经 `Supplier` 在按 configId 缓存的 `computeIfAbsent` 内取值,不固化 activate 期间的旧实例)。
 - **不耦合内核**:插件只依赖 `ModelConfig` + `EventEmitter`,不耦合 `ChatModel`/`Prompt`/`ChatResponse`/`Flux`/`TaskEvents`/`agentId`/`taskId`/`DataPusher`。
-- **worker 核心清理**:无限流器引用;`ConfigRpcHandler.rateStatus` 返回空数组(插件后续自行注册 RPC);fallback `SimpleTokenEstimator` 就位(供 `model-length-guard` 插件使用)。
+- **worker 核心清理**:无限流器引用;`ConfigRpcHandler.rateStatus` 返回空数组(插件后续自行注册 RPC);fallback `SimpleTokenEstimator`(只实现 `estimate`、无校准)就位——token-estimator 插件被禁用时,供 model-length-guard / context-compression / model-rate-limit 三处消费方兜底。
 - **回退**:插件未加载时无限流 Advisor → 直通 → 不限流;WebSocketEmitter 未建立时(无前端订阅)`emit` 仍写 EventLog,不推前端。
-- `WorkerProperties.ModelRate` 配置类留 worker(全局配置项);`TokenEstimator` SPI 接口留 plugin-api(`model-length-guard` 插件也依赖);插件经 `AdvisorProvider` 注册 Advisor。
+- `WorkerProperties.ModelRate` 配置类留 worker(全局配置项);`TokenEstimator` SPI 接口留 plugin-api(现只含 `estimate` 一个方法;`model-length-guard` 插件也依赖);插件经 `AdvisorProvider` 注册 Advisor。
 
 #### 7.19.4 后续迁移路径
 
@@ -1365,7 +1365,7 @@ worker                         hub                    前端(可能 0 个在线)
 ├── every-agent-contract/          # 纯协议契约:帧信封 / RPC 信封 / 错误码 / 身份哈希(Java DTO + TS 类型)
 ├── every-agent-plugin-api/        # 插件 API 契约:ExecContext(统一执行上下文) / EventEmitter / EmitEvent / ChatModelEnhancer / ModelConfig / TaskLifecycleNode 等接口(纯类型,插件与 worker 共用)
 ├── every-agent-plugin-parent/     # 插件 SDK parent(仅 pom):Java 25 / 编码 / 插件依赖版本管理 / plugin.json 打包 / 测试栈,内置与外部插件共用
-├── every-agent-plugins/           # 内置插件:model-rate-limit(限流) / task-queue(队列) / subagent / git / ai-review / empty-response-retry(空响应重试) / transient-error-retry(瞬时错误重试) / context-compression(上下文压缩) / ...
+├── every-agent-plugins/           # 内置插件:model-rate-limit(限流) / token-estimator(token 估算与校准) / task-queue(队列) / subagent / git / ai-review / empty-response-retry(空响应重试) / transient-error-retry(瞬时错误重试) / context-compression(上下文压缩) / ...
 ├── create-everyagent-plugin/      # 插件工程脚手架 CLI(node create-everyagent-plugin <id>,java/web/full 模板 + .eap 打包)
 ├── every-agent-desktop/           # Electron 桌面打包
 ├── runtime/                       # 程序附属文件(核心 rg 二进制;插件附属资源由各插件 runtime/ 子目录并入)

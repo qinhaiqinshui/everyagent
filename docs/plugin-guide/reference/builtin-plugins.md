@@ -7,7 +7,7 @@ has_children: false
 
 # 内置插件范例索引
 
-**一句话定位**：`every-agent-plugins/` 下的 27 个内置插件是**活教材**——每种扩展点、每种形态、每种 order 档位在仓内都有真实可抄的范本。本篇告诉你「想学某个扩展点，去抄哪个插件」：先查总表（§2）定位插件，再用反查表（§3）按扩展点直达推荐范本，写代码前扫一眼 order 占用表（§4）避开已占档位。
+**一句话定位**：`every-agent-plugins/` 下的 28 个内置插件是**活教材**——每种扩展点、每种形态、每种 order 档位在仓内都有真实可抄的范本。本篇告诉你「想学某个扩展点，去抄哪个插件」：先查总表（§2）定位插件，再用反查表（§3）按扩展点直达推荐范本，写代码前扫一眼 order 占用表（§4）避开已占档位。
 
 所有路径相对仓库根；表格内为省篇幅，`every-agent-plugins/` 前缀在 §5 各小节统一省略为 `~plugins/`。全部数据来自源码逐文件取证（本篇成文前按行复核过关键行号，见文末口径说明）。
 
@@ -18,7 +18,7 @@ has_children: false
 - **形态选择**：不知道该做纯 Java、纯 Web 还是混合？看 §2「形态」列，然后读 [plugin.json 字段参考](../plugin-manifest.md) §3 的三形态实例。
 - 本篇只做索引与点评，**不讲 API 细节**：注册方法的签名与生命周期见 [后端模型总览](../backend/overview.md)、[Advisor 指南](../backend/advisors.md)、[任务与 RPC](../backend/task-and-rpc.md)、[UI 扩展点](../web/ui-extensions.md)；已知偏差集中登记在 [已知问题与现状偏差](known-issues.md)。
 
-## 2. 总表（27 个内置插件）
+## 2. 总表（28 个内置插件）
 
 缩写：**DO** = `ToolCallingAdvisor.DEFAULT_ORDER`（−2147483348）；**HP** = `Ordered.HIGHEST_PRECEDENCE`（−2147483648）。「代码量级」= 入口文件（`main` 指向的 Java 类 / `web/index.ts`）行数，量级仅供参考。
 
@@ -36,7 +36,7 @@ has_children: false
 | mobile-keyboard | 移动端键盘增强 | web | —（无 Java） | —（自挂 DOM 悬浮球，不走 register\*） | — | 入口 30 行 + web 300 行 |
 | model-length-guard | 模型输出预算耗尽护栏 | java | AdvisorProvider | — | DO+300 | 入口 23 行 |
 | model-pool | 模型池容灾 | java | ChatModelEnhancer | — | — | 入口 29 行 |
-| model-rate-limit | 模型限流 | java | TokenEstimator + AdvisorProvider ×2 | — | 校准 0；限流 DO+500 | 入口 47 行 |
+| model-rate-limit | 模型限流 | java | AdvisorProvider ×1（限流） | — | DO+500 | 入口 40 行 |
 | pdf-viewer | PDF 预览 | web | —（无 Java） | `ui.file_content_editors` | — | web 22 行 |
 | plugin-manager | 插件管理 | web | —（无 Java；调 `plugin.list/enable/disable` RPC） | `ui.sidebar_items` | 侧边栏 9 | web 37 行 |
 | sandbox-windows-codex | Windows Codex 沙箱 | java | SandboxProvider + ToolProvider | — | priority 8（非 Windows 为 0） | 入口 59 行 |
@@ -48,17 +48,18 @@ has_children: false
 | task-edit-resend | 编辑重发 | both | TaskLifecycleNode | `ui.user_message_actions` + `task.submit_contributions` | 节点 877 | 入口 27 行 + web 26 行 |
 | task-input-queue | 任务输入队列 | both | TaskLifecycleNode ×2 + AdvisorProvider；RPC ×3（`task.queue*`） | `ui.composer_above_panel` | 节点 15 / 870；Advisor DO+30 | 入口 38 行 + web 24 行 |
 | task-queue | 任务队列 | java | TaskLifecycleNode + TaskAdmissionPolicy；RPC `task.queueList` | — | 节点 40 ⚠️ | 入口 31 行 |
+| token-estimator | Token 估算与校准 | java | TokenEstimator + AdvisorProvider ×1（校准） | — | 校准 0 | 入口 50 行 |
 | transient-error-retry | 瞬时错误退避重试 | java | AdvisorProvider | — | DO+200 | 入口 21 行 |
 | unattended | 无人值守 | java | ToolExecutionInterceptor + AuthorizationHandler + SlashProvider + SlashTokenResolver | — | — | 入口 32 行 |
 | update-file-view | 文件更新视图 | web | —（无 Java） | `ui.tool_call_views` | — | web 29 行 |
 
 ### 2.1 全体共性（读任何一个插件前先知道）
 
-- 形态分布：java-only 18 / both 5 / web-only 3；**没有纯声明式插件**（每个都至少有一侧入口）。
-- 清单字段全体一致：`id/name/version/description/author` + `enabled`，version 一律 `0.1.0`、author 一律 `everyagent`；含 Java 的 23 个另有 `main`，含前端的 9 个另有 `webMain`（值全部写 `web/index.ts`，宿主实际加载的是构建产物 `web/index.js`，见 [plugin.json 字段参考](../plugin-manifest.md) §5）。
+- 形态分布：java-only 19 / both 5 / web-only 4；**没有纯声明式插件**（每个都至少有一侧入口）。
+- 清单字段全体一致：`id/name/version/description/author` + `enabled`，version 一律 `0.1.0`、author 一律 `everyagent`；含 Java 的 24 个另有 `main`，含前端的 9 个另有 `webMain`（值全部写 `web/index.ts`，宿主实际加载的是构建产物 `web/index.js`，见 [plugin.json 字段参考](../plugin-manifest.md) §5）。
 - 用 `contributes.config` 的只有 2 个：image-vision（3 键）、sandbox-windows-codex（6 键）。
 - `enabled:false` 的只有 2 个：sandbox-windows-mic、sandbox-wsl-ubuntu（内置扫描期整目录跳过）。
-- 依赖红线干净：全部 23 个 pom **零 `every-agent-worker` 依赖**；`task-edit-resend`、`task-input-queue` 额外依赖 `every-agent-contract` 属共享契约层，合规（[架构文档](../../ARCHITECTURE.md) §14.9）。
+- 依赖红线干净：全部 24 个 pom **零 `every-agent-worker` 依赖**；`task-edit-resend`、`task-input-queue` 额外依赖 `every-agent-contract` 属共享契约层，合规（[架构文档](../../ARCHITECTURE.md) §14.9）。
 - 全部插件源码零 Spring 容器注解：插件经 `URLClassLoader` 加载、不在 Spring 容器中，取服务只能 `ctx.services()` / `getService(Class)`。
 - 每个 Java 入口都实现 `dev.everyagent.plugin.api.EveryAgentPlugin` 的 `activate(WorkerPluginContext ctx)`；改完 Java 要重跑 `mvn package`、改完 web 要重跑 `npm run build:plugins`（均需重启 worker，见 [构建与运行](../guides/build-and-run.md)）。
 
@@ -78,7 +79,7 @@ has_children: false
 | ToolExecutionInterceptor（拦截工具调用） | secret-redaction | `every-agent-plugins/secret-redaction/src/main/java/dev/everyagent/plugin/secretredaction/SecretRedactionPlugin.java:22` | 唯一「单 SPI 极简」实现（入口 24 行），上行掩码单向拦截 |
 | 事件出网过滤（隐藏/改写某类事件的出网形态；事件仍落盘） | ai-review | `every-agent-plugins/ai-review/src/main/java/dev/everyagent/plugin/aireview/AiReviewPlugin.java:37-38` | 全仓唯一实现：事件级 + 轮次级两条链都注册，丢弃审议 agent 的**会话内容**事件（思考/正文/工具结果/错误/`agent.done`）；状态与用量（`agent.started`/`agent.status`/`usage`）与结果 trace 保留出网（前端 agent 胶囊列表实时数据源） |
 | 技能包物化（给插件带 skill 知识包；**非 SPI**——`activate()` 里一次物化调用） | subagent | `every-agent-plugins/subagent/src/main/java/dev/everyagent/plugin/subagent/SubAgentPlugin.java:52` | 全仓唯一先例：jar 内 `skill/agent-dispatch/skill.md` 物化到 skillsDir，落盘后与用户自制 skill 同权（[advisors §5](../backend/advisors.md)） |
-| TokenEstimator（token 估算） | model-rate-limit | `every-agent-plugins/model-rate-limit/src/main/java/dev/everyagent/plugin/modelratelimit/ModelRateLimitPlugin.java:35` | 全仓唯一实现（BuiltinTokenEstimator），同时示范估算器被 Advisor 消费的接线 |
+| TokenEstimator（token 估算） | token-estimator | `every-agent-plugins/token-estimator/src/main/java/dev/everyagent/plugin/tokenEstimator/TokenEstimatorPlugin.java:44` | 全仓唯一实现（BuiltinTokenEstimator）；`calibrate` 等已降为插件内部方法，不再上 SPI |
 | ChatModelEnhancer（模型增强/容灾） | model-pool | `every-agent-plugins/model-pool/src/main/java/dev/everyagent/plugin/modelpool/ModelPoolPlugin.java:26` | 全仓唯一实现：组合 ChatModel 做主备切换 |
 | FileReferenceHandler（@ 文件引用处理） | image-vision | `every-agent-plugins/image-vision/src/main/java/dev/everyagent/plugin/imagevision/ImageVisionPlugin.java:30` | 全仓唯一实现，且是 `contributes.config` → `ctx.config()` 消费链的活样本 |
 
@@ -137,7 +138,7 @@ has_children: false
 | −2147483048 | DO+300 | model-length-guard | `every-agent-plugins/model-length-guard/src/main/java/dev/everyagent/plugin/modellengthguard/ModelLengthGuardAdvisorProvider.java:38-39` |
 | −2147482948 | DO+400 | context-compression | `every-agent-plugins/context-compression/src/main/java/dev/everyagent/plugin/contextcompression/ContextCompressionAdvisorProvider.java:30-31` |
 | −2147482848 | DO+500 | model-rate-limit（限流） | `every-agent-plugins/model-rate-limit/src/main/java/dev/everyagent/plugin/modelratelimit/RateLimitAdvisorProvider.java:31-32` |
-| 0 | — | model-rate-limit（token 校准） | `every-agent-plugins/model-rate-limit/src/main/java/dev/everyagent/plugin/modelratelimit/TokenCalibrationAdvisor.java:180-181` |
+| 0 | — | token-estimator（token 校准） | `every-agent-plugins/token-estimator/src/main/java/dev/everyagent/plugin/tokenEstimator/TokenCalibrationAdvisor.java:60-63,142-143` |
 
 ### 4.2 后端 TaskLifecycleNode（`order()` 为 float）
 
@@ -251,9 +252,9 @@ has_children: false
 
 ### model-rate-limit（模型限流）
 
-token 估算 + 校准 Advisor + 限流 Advisor 三件套。
-- 关键文件：`~plugins/model-rate-limit/src/main/java/dev/everyagent/plugin/modelratelimit/ModelRateLimitPlugin.java:35-44`；order 见 `TokenCalibrationAdvisor.java:180-181`（0）与 `RateLimitAdvisorProvider.java:31-32`（DO+500）。
-- 值得看：**同插件注册多个 AdvisorProvider** 的全仓唯一范例；TokenEstimator 唯一实现，示范估算器被 Advisor 消费的接线。
+只做限流（tpm/rpm 压力控制）；token 估算与在线校准已拆到独立插件 `token-estimator`，本插件改经 SPI 消费 `ctx.services().tokenEstimator()`。
+- 关键文件：`~plugins/model-rate-limit/src/main/java/dev/everyagent/plugin/modelratelimit/ModelRateLimitPlugin.java:37`；order 见 `RateLimitAdvisorProvider.java:31-32`（DO+500）。
+- 值得看：限流用的估算器经 `ModelRateLimiterRegistry` **延迟解析**（`ctx.services()::tokenEstimator`）——内置插件按目录名字典序激活，`model-rate-limit` 排在 `token-estimator` 之前，故在按 configId 缓存的 `computeIfAbsent` 内取值，避免固化到 activate 期间的旧值。
 
 ### pdf-viewer（PDF 预览）
 
@@ -324,6 +325,13 @@ WSL Ubuntu 沙箱 + bash 工具 + network slash 开关。
 - ⚠️ `QueueAdmissionNode.java:12` 类注释写 `order=250`，代码实际 `return 40`（`:31`），**以代码为准**（本表 §4.2 已按 40 登记）。
 - 值得看：`TaskAdmissionPolicy` 全仓唯一使用者；try/finally 成对节点形态；java-only 最小全功能样本。
 
+### token-estimator（Token 估算与校准）
+
+Token 估算器（全仓唯一实现 BuiltinTokenEstimator）+ 在线校准 Advisor；从限流插件拆出的独立插件。
+- 插件 id `token-estimator`，入口 `~plugins/token-estimator/src/main/java/dev/everyagent/plugin/tokenEstimator/TokenEstimatorPlugin.java:44,47`（50 行）；注册两个扩展点：`registerTokenEstimator`（`TokenEstimator` SPI 唯一实现）+ `registerAdvisorProvider`（`TokenCalibrationAdvisor`，order = `0` 绝对值 = 链最内层），两者共享同一 `BuiltinTokenEstimator` 实例。
+- 关键文件：`~plugins/token-estimator/src/main/java/dev/everyagent/plugin/tokenEstimator/BuiltinTokenEstimator.java`（`estimate(text, configId)` 的 CJK≈1 / 其余≈4 字符粗估 + 按 configId 的 EMA 在线校准）；状态文件落 `<homeDir>/model-rate-state.json`，含**口径版本** `version:2`（载入时版本缺失或 ≠2 即丢弃旧状态重新标定，`BuiltinTokenEstimator.java:66,251-253`）。
+- 值得看：估算/校准职责拆出限流后的独立插件样本；**只依赖 `every-agent-plugin-api`**；`calibrate` / `factorOf` / `sampleCountOf` 已降为插件内部方法，不再上 SPI。
+
 ### transient-error-retry（瞬时错误退避重试）
 
 瞬时错误指数退避重试。
@@ -352,4 +360,4 @@ WSL Ubuntu 沙箱 + bash 工具 + network slash 开关。
 
 ---
 
-**数据口径**：本篇所有注册调用、RPC 方法名、order/priority 数值、行号均于成文时对源码逐行复核（含 git、file-change、task-queue、model-rate-limit、subagent、pdf-viewer、plugin-manager、task-input-queue 等关键行抽查）；行数为入口文件当前值，会随后续提交漂移，定位以文件名 + 方法名为准。
+**数据口径**：本篇所有注册调用、RPC 方法名、order/priority 数值、行号均于成文时对源码逐行复核（含 git、file-change、task-queue、model-rate-limit、token-estimator、subagent、pdf-viewer、plugin-manager、task-input-queue 等关键行抽查；token 估算/校准拆分与单方法 SPI 收敛由 `plan-token-estimator-校准修正与接口收敛.md` 收口，本次复核了 token-estimator / model-rate-limit 两插件入口与 advisor 行号）；行数为入口文件当前值，会随后续提交漂移，定位以文件名 + 方法名为准。

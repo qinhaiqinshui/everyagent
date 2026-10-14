@@ -200,7 +200,7 @@ public class MyFirstPlugin implements EveryAgentPlugin {
 | 7 | `registerAuthorizationHandler`（`:55`） | `AuthorizationHandler` | 授权决议链节点（无人值守 / AI 审议） | [advisors.md](advisors.md) | unattended（`UnattendedPlugin.java:23`）、ai-review（`:24`） |
 | 8 | `registerEventEgressFilter`（`:76`） | `EventEgressFilter` | 事件级出网过滤（可丢弃/改写 payload，事件仍落盘；出网投影单点 `EgressProjector`） | [架构 §8.5](../../ARCHITECTURE.md#85-插件系统统一加载架构)（暂无专篇） | ai-review（`AiReviewPlugin.java:37`） |
 | 9 | `registerRoundEgressFilter`（`:84`） | `RoundEgressFilter` | 轮次级出网过滤（裁剪/丢弃轮次 JSON 视图） | 同上 | ai-review（`AiReviewPlugin.java:38`） |
-| 10 | `registerTokenEstimator`（`:61`） | `TokenEstimator` | 替换内置 Token 估算器 | [advisors.md](advisors.md) | model-rate-limit（`ModelRateLimitPlugin.java:35`） |
+| 10 | `registerTokenEstimator`（`:61`） | `TokenEstimator` | 替换内置 Token 估算器 | [advisors.md](advisors.md) | token-estimator（`TokenEstimatorPlugin.java:44`） |
 | 11 | `registerChatModelEnhancer`（`:64`） | `ChatModelEnhancer` | 模型构建增强（如模型池容灾） | [advisors.md](advisors.md) | model-pool（`ModelPoolPlugin.java:26`） |
 | 12 | `registerRpcMethod`（`:94`） | `RpcMethod` | 自定义 RPC 方法（`域.动作` 命名） | [task-and-rpc.md](task-and-rpc.md) | git（`GitPlugin.java:42-54`，13 个）、task-queue（`:29`）、file-change（`:35`） |
 | 13 | `registerSlashProvider`（`:102`） | `SlashProvider` | `/` 菜单命令提供者 | [task-and-rpc.md](task-and-rpc.md) | unattended（`:26`）、git（`:36`）、ai-review（`:27`）、sandbox-wsl-ubuntu（`:44`） |
@@ -229,7 +229,7 @@ public class MyFirstPlugin implements EveryAgentPlugin {
 | `sandbox()` | `:29` | 沙箱门面（SandboxBackend）：查 `id()` 判后端、委托挂载 |
 | `nativeExec()` | `:32` | 宿主原生进程执行器（argv 直传 + 超时 + 输出上限；git 等受控操作用） |
 | `workspaces()` | `:35` | 工作区管理器（多工作区注册表、jailed 路径解析） |
-| `tokenEstimator()` | `:40` | Token 估算器（内置或插件注册的自定义实现） |
+| `tokenEstimator()` | `:40` | Token 估算器（内置或插件注册的自定义实现）；`TokenEstimator` SPI 只含 `estimate(text, configId)` 一个方法 |
 | `slashTokens()` | `:43` | 任务级 slash token 只读查询（任务级开关的**真相源**读取口：`tokensOf(taskId)` / `hasKind(taskId, kind)`，见 `SlashTokenService`；AI 审议 / 无人值守 / 禁用网络的开关判定都经此，不再走 `metadata`） |
 | `interaction()` | `:46` | 用户交互服务（ask 提问 / 授权弹窗） |
 | `userInputMaterializer()` | `:52` | 用户输入物化服务（正文 + rawContent 里的 @ 文件引用 → 投喂模型就绪的多模态消息；**任何「把用户输入投给模型」的入口都走它**，详见 [工具 §4.3](tools-and-sandbox.md#43-消费链路)） |
@@ -325,7 +325,7 @@ worker 的内部类在 parent 链上**技术可见**，但架构红线明令禁�
 rg "@Component|@Service|@Autowired|@Bean" every-agent-plugins --glob "*.java"   # → 0 命中
 ```
 
-26 个内置插件源码（26 份 plugin.json 对应目录）**零 Spring 注解**：插件类由 `URLClassLoader` 反射 `newInstance()` 创建（`PluginLoader.java:318`），不进 Spring 容器，没有依赖注入、没有 `@Value`、没有 AOP。因此：
+28 个内置插件源码（28 份 plugin.json 对应目录）**零 Spring 注解**：插件类由 `URLClassLoader` 反射 `newInstance()` 创建（`PluginLoader.java:318`），不进 Spring 容器，没有依赖注入、没有 `@Value`、没有 AOP。因此：
 
 - 需要什么依赖，就在 `activate(ctx)` 里用 `ctx.services()` / `ctx.getService(Class)` **手工取**，构造器里 `new` 出自己的对象图（§6.4 两个范例的标准姿势）；
 - 插件内部想用 Spring 类型的静态工具（如 `ToolCallbacks.from`）没问题——那是普通类调用，不是容器托管。
@@ -384,7 +384,7 @@ rg "@Component|@Service|@Autowired|@Bean" every-agent-plugins --glob "*.java"   
 
 ## 10. ⚠️ 与架构文档 §7.14.4 的差异
 
-[`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) §7.14.4（行 704-705）写「任务队列插件……以 `@Component` + 构造器注入 worker 注册表的模式注册（同 git 插件 `GitPluginRegistrar` 先例）」。**以代码为准，该表述已过时**：task-queue 实际经 `EveryAgentPlugin.activate()` + `ctx.register*` 注册（`TaskQueuePlugin.java:14-30`，本篇 §6.4 摘录），全仓 26 个内置插件**零 `@Component`**（§7.3 rg 自证）。架构文档的更正由专门的收口步骤统一处理，本篇不改动它；读到 §7.14.4 时请以本节口径为准。
+[`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) §7.14.4（行 704-705）写「任务队列插件……以 `@Component` + 构造器注入 worker 注册表的模式注册（同 git 插件 `GitPluginRegistrar` 先例）」。**以代码为准，该表述已过时**：task-queue 实际经 `EveryAgentPlugin.activate()` + `ctx.register*` 注册（`TaskQueuePlugin.java:14-30`，本篇 §6.4 摘录），全仓 28 个内置插件**零 `@Component`**（§7.3 rg 自证）。架构文档的更正由专门的收口步骤统一处理，本篇不改动它；读到 §7.14.4 时请以本节口径为准。
 
 ## 下一步读
 
