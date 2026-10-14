@@ -49,7 +49,9 @@ class ModelRateLimiterTest {
             states.compute(configId, (k, v) -> {
                 double oldFactor = (v == null) ? 1.0 : v[0];
                 long samples = (v == null) ? 0 : (long) v[1];
-                double ratio = (double) actualTokens / (double) estimatedTokens;
+                // 入参 estimatedTokens 是「已乘系数」的估算值 → 除回 raw 后算 ratio（消除自反馈）。
+                double raw = estimatedTokens / oldFactor;
+                double ratio = (double) actualTokens / raw;
                 double nextFactor = 0.9 * oldFactor + 0.1 * ratio;
                 return new double[]{nextFactor, samples + 1};
             });
@@ -157,15 +159,15 @@ class ModelRateLimiterTest {
         ModelRateLimitConfig cfg = new ModelRateLimitConfig(0, 0, 1_000_000, 1.0);
         ModelRateLimiter limiter = new ModelRateLimiter("m", cfg, defaults(1000), STUB_ESTIMATOR);
         ModelRateLimiter.Permit p1 = limiter.acquire();
-        p1.onChunk(new org.springframework.ai.chat.messages.AssistantMessage("你好世界")); // est=4
-        p1.complete(8);          // actual=8 → ratio=2.0 → factor=0.9*1.0+0.1*2.0=1.1
+        p1.onChunk(new org.springframework.ai.chat.messages.AssistantMessage("你好世界")); // est=round(4*1.0)=4
+        p1.complete(8);          // raw=4/1.0=4, ratio=8/4=2.0 → factor=0.9*1.0+0.1*2.0=1.1
         assertEquals(1.1, STUB_ESTIMATOR.factorOf("m"), 1e-9);
         assertEquals(1L, STUB_ESTIMATOR.sampleCountOf("m"));
 
         ModelRateLimiter.Permit p2 = limiter.acquire();
-        p2.onChunk(new org.springframework.ai.chat.messages.AssistantMessage("你好世界")); // est=4
-        p2.complete(8);          // ratio=2.0 → factor=0.9*1.1+0.1*2.0=1.19
-        assertEquals(1.19, STUB_ESTIMATOR.factorOf("m"), 1e-9);
+        p2.onChunk(new org.springframework.ai.chat.messages.AssistantMessage("你好世界")); // est=round(4*1.1)=4
+        p2.complete(8);          // raw=4/1.1≈3.636, ratio=8/3.636≈2.2 → factor=0.9*1.1+0.1*2.2=1.21
+        assertEquals(1.21, STUB_ESTIMATOR.factorOf("m"), 1e-9);
         assertEquals(2L, STUB_ESTIMATOR.sampleCountOf("m"));
         p2.complete(0); // 幂等
     }

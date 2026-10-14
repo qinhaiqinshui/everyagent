@@ -26,8 +26,17 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * <p>基础估算：CJK 字符 ≈ 1 token、其余 ≈ 4 字符 1 token（无 tokenizer 粗估，
  * 与原 {@code ModelRateLimiter.estimateTokens} / {@code ModelLengthGuardAdvisor} 同口径）。
  *
- * <p>在线校准（EMA）：每次模型调用完成后，用真实 {@code completionTokens} 与估算值
- * 的比值更新 {@code factor}（每 configId 独立）。误差持续 &lt; 收敛阈值（默认 2%）
+ * <p><b>估计口径</b>：输出口径 = <b>含工具调用参数</b>的 token（正文 + 思考差分 + 工具调用
+ * 参数的 name/arguments，由 {@code OutputTokenAccumulator} 在限流与校准两侧统一累计），
+ * 与厂商真实 {@code completionTokens} 对齐。
+ *
+ * <p><b>ratio 语义</b>：{@link #calibrate} 的入参 {@code estimatedTokens} 是<b>已乘当前系数</b>
+ * 的估算值（调用方口径不变）；实现内先除回旧系数得到 raw 原始估算，再以
+ * {@code ratio = actual / raw} 更新因子。若不除回，则 {@code ratio = actual / estimated} 的
+ * 迭代不动点解为 {@code √(实际比值)} 而非实际比值（自反馈），系数被系统性抬到上界。
+ *
+ * <p>在线校准（EMA）：每次模型调用完成后，用真实 {@code completionTokens} 与估算值的
+ * 比值更新 {@code factor}（每 configId 独立）。误差持续 &lt; 收敛阈值（默认 2%）
  * 连续 N 次（默认 3）后停止校准；converged 后误差 &gt; 漂移阈值（默认 5%）时重置继续。
  * 系数上下界 [0.3, 3.0]，防止异常样本拉飞。
  *
@@ -123,7 +132,15 @@ public class BuiltinTokenEstimator implements TokenEstimator {
             int consecutiveGood = (cur == null) ? 0 : cur.consecutiveGood;
             long samples = (cur == null) ? 0 : cur.sampleCount;
 
-            double error = Math.abs((double) estimatedTokens - (double) actualTokens)
+            // 调用方传入的是「已乘系数」的估算值，除回旧系数得到 raw 原始估算，
+            // ratio 才是无自反馈的真实比值（否则不动点解成 √(实际比值)）。
+            double raw = (double) estimatedTokens / oldFactor;
+            if (raw <= 0) {
+                return cur;
+            }
+            // 收敛/漂移判据用 raw 口径对齐：等价于 |estimated − actual| / actual
+            //（语义＝「当前系数下估算与实测的偏差」），与更新方向一致。
+            double error = Math.abs(raw * oldFactor - (double) actualTokens)
                     / (double) actualTokens;
 
             // 漂移重置：converged 后误差超漂移阈值 → 重置继续校准。
@@ -139,8 +156,8 @@ public class BuiltinTokenEstimator implements TokenEstimator {
                 return cur;
             }
 
-            // EMA 更新 factor。
-            double ratio = (double) actualTokens / (double) estimatedTokens;
+            // EMA 更新 factor：ratio = actual / raw（无自反馈）。α=0.1 表示约 10 个样本收敛，合理。
+            double ratio = (double) actualTokens / raw;
             double nextFactor = (1 - alpha) * oldFactor + alpha * ratio;
             nextFactor = Math.max(factorMin, Math.min(factorMax, nextFactor));
 
