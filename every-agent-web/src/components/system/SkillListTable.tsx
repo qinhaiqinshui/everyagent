@@ -7,8 +7,14 @@
  *   同时显示黑名单和白名单两组勾选列表(黑名单=勾选的工作区不自动暴露;白名单=非空时仅勾选的暴露),
  *   黑名单优先(同时命中时按黑名单处理),确定 → 该 worker 的 `skill.exposure.set`(blacklist + whitelist);
  *   未注册但存在于配置中的工作区不展示、保存时原样保留(防打开一次弹窗就清掉历史配置);
- * - 详情列:经 `openGlobalFileTab` 以**只读**标签页打开 skill.md(物化产物,写回会被覆盖;
- *   读取走既有 fs.readRaw 绝对路径通道,workspaceRoot 仅作 tab 组织锚点);
+ * - 详情列:经 `openGlobalFileTab` 以**可编辑**(`mode: 'readwrite'`)标签页打开 skill.md——
+ *   用户点「打开」即可直接改正文/脚本引用,不经二次点「编辑」;读写走既有 fs.readRaw/fs.writeRaw
+ *   绝对路径通道(人工行为,不经沙箱/权限门,`skills/` 本身也是免授权读写例外,§7.17),
+ *   workspaceRoot 仅作 tab 组织锚点。同一 skill.md 的标签已存在时按同 id upsert,模式被本次
+ *   打开覆盖为 readwrite(从别处只读打开过也能就地升级);
+ *   注意:内置/插件包是物化产物,worker 重启/插件 activate 时按内容逐字节比对会**覆盖**掉人工
+ *   修改(用户自制 skill 目录不受影响);表格的 name/描述列来自 `SkillCatalog` 首次扫描的内存
+ *   快照,改 frontmatter 后要重启 worker 才会在表格/`/` 菜单上体现(正文改动立即生效,AI 按需读盘);
  * - 刷新:`config.changed{keys:["skills"]}` 广播定向刷新来源 worker(机制同 modelConfigs),
  *   worker 连接集合变化时全量重载;组件卸载时清理全部订阅。
  */
@@ -299,16 +305,17 @@ export default function SkillListTable() {
 
   const handleOpenKnowledge = (workerId: string, skill: SkillInfo) => {
     const entries = displayedWorkspacesOf(workerId)
-    // workspaceRoot 只作文件标签页的组织锚点(读取走 fs.readRaw 绝对路径),取任一已注册
+    // workspaceRoot 只作文件标签页的组织锚点(读写走 fs.readRaw/fs.writeRaw 绝对路径),取任一已注册
     // 工作区即可;优先非 missing 的工作区。无任何已注册工作区时无法打开。
     const anchor = entries.find((entry) => !entry.missing) ?? entries[0]
     if (!anchor) {
       showToast('该 worker 没有已注册的工作区,无法打开 skill 详情', 'error')
       return
     }
+    // 以可编辑模式打开:详情页即编辑位(改正文/改 frontmatter 一处完成),不再要求先点标签页里的「编辑」。
     openGlobalFileTab(
       { workspaceRoot: anchor.root, filePath: skill.knowledgePath },
-      { mode: 'readonly' },
+      { mode: 'readwrite' },
     )
   }
 
@@ -400,7 +407,7 @@ export default function SkillListTable() {
                   <button
                     type="button"
                     style={linkButtonStyle}
-                    title={skill.knowledgePath || undefined}
+                    title={(skill.knowledgePath ? skill.knowledgePath + '\n' : '') + '以可编辑模式打开 skill.md'}
                     onClick={() => handleOpenKnowledge(workerId, skill)}
                   >
                     打开
