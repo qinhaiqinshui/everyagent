@@ -10,13 +10,19 @@
     </parent>
     <artifactId>every-agent-plugin-api</artifactId>
     <name>every-agent-plugin-api</name>
-    <description>插件 API 面（纯接口与契约，零业务逻辑，仅依赖 spring-ai 核心类型）</description>
+    <description>插件 API 面（接口与契约为主，含少量共用工具类：AtomicFiles / SkillMaterializer / SecretPatterns 等；依赖 spring-ai 核心类型与 spring-core）</description>
 
     <dependencies>
         <!-- 契约层 JSON 工具（EventPayloads / SlashTokenEncoder / FileChangesCollector 等引用） -->
         <dependency>
             <groupId>dev.everyagent</groupId>
             <artifactId>every-agent-contract</artifactId>
+        </dependency>
+        <!-- Spring 核心（SkillMaterializer 的 PathMatchingResourcePatternResolver 等）；版本由
+             spring-boot-starter-parent 的 dependencyManagement 统一管理，不在此写版本号 -->
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-core</artifactId>
         </dependency>
         <!-- Spring AI 核心模型抽象（ToolCallback / ToolCallingManager / Prompt / ChatResponse 等） -->
         <dependency>
