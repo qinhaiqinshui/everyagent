@@ -536,7 +536,7 @@ ask 管道承载第二类阻塞请求:**危险操作授权**。`PermissionGate` 
 
 - 审议路径不发 `ask.create/ask.state` → 任务保持 RUNNING(不误转 waiting-user)。
 - **审议输出解析失败**(非 JSON / 缺 decision / 多决策对象 / 空响应)→ **重试一次**要求模型纠正;**仍失败 → ESCALATE**(交下一节点/人工),**不再直接 DENY**——fail-closed 仅保留给**超时/异常**路径(默认 DENY;`review-deny-on-error` 控制)。**审议失败绝不自动放行**。
-- 审计:`task.trace(kind=auth.review)` 持久落盘,metadata 含 decision/confidence/reason/scope/grantKey/prompt/taskId/审议 agentId;审议链的重试/容灾 trace 同入审计。结果 trace 以**审议 agent 自身身份**(`AgentContext.emitter()`)发射——审议 agent 的过程事件(思考/正文/usage/生命周期/工具结果,按 ai-review 插件自持的 `review-` agentId 前缀约定判定)被该插件注册的出网 filter 丢弃(§5.3/§14.13),而 `auth.review` 结果 trace 走审议 agent 身份发出、保持客户端可见(前端仍显示「允许 置信度 90%」)。
+- 审计:`task.trace(kind=auth.review)` 持久落盘,metadata 含 decision/confidence/reason/scope/grantKey/prompt/taskId/审议 agentId;审议链的重试/容灾 trace 同入审计。结果 trace 以**审议 agent 自身身份**(`AgentContext.emitter()`)发射——审议 agent 的**会话内容**事件(思考/正文/工具结果/错误/`agent.done`,按 ai-review 插件自持的 `review-` agentId 前缀约定判定)被该插件注册的出网 filter 丢弃(§5.3/§14.13),而**状态与用量**(`agent.started`/`agent.status`/`usage`)与 `auth.review` 结果 trace 走审议 agent 身份发出、保持客户端可见:前端「允许 置信度 90%」照常显示,且**输入框上方 agent 胶囊列表**的审议胶囊在运行中即有实时状态与用量(若把状态/用量一并丢弃,胶囊整轮只能停在「空闲 + 无用量」,直到任务收口后重拉台账才补齐)。
 - 配置:`worker.permissions.review-timeout-ms`(默认 60s,总预算硬闸)、`review-deny-on-error`(默认 true)、`review-model`(可选,审议专用模型 configId,空则用任务当前模型)。
 
 ### 7.10 命令沙箱(插件化,多后端)
@@ -1484,7 +1484,7 @@ docker-compose 一键:`HUB_KEY=你的密钥 docker-compose up --build`;数据落
     - **hub**:定向投递 join 只允许「按频道名解析出 worker 段 → 查现成的 `findWorker(ownerKey, workerId)` 索引」,仍属路由;不得新增任何订阅簿或状态(§6.1/§14.2 零状态红线不破)。
     - **客户端状态生命周期**:worker 数据连接是任务列表/详情/RPC/模型配置/插件的**作用域**;连接集合一变(`hubSession.onWorkerConnectionsChanged`),所有按 worker 缓存的状态必须由各自持有方失效,且全部 `task:*` 标签关闭 —— 禁止只换连接不清状态(那会留下指向已断开连接的陈旧句柄,表现为空白且不自愈)。
 13. **出网投影单点(EgressProjector,与 §14.0 事件管道同构)**:客户端可见的事件与轮次**必须**经单点投影器 `EgressProjector`(worker `ship` 包,域中性,与 `DataPusher` 同域)转换后才出网,**不得绕过**。出网口共 **4 个**:stream 推送(`DataPusher.push`)、`task.poll`、`task.roundTail`、`task.rounds`,全部复用同一投影器与同一 filter 链;`wireEvent` 实现内聚进投影器、不再是公共 API(实现层无第二条出网路径)。
-    - **过滤链**:投影器内跑可插拔出网过滤链(`EventEgressFilter`/`RoundEgressFilter`,按 `order` 排序);filter 作用于 **pre-wire 的 `EventRecord`**,可丢弃(返回 null,**事件仍已落盘**)或改写 payload;**不得改动 `ext`**(ext 是落盘态镜像),加密等改写须在 `payload` 内自成信封;filter 域中性,只带 `subjectId`(task→taskId,workflow→workflowId)。ai-review 插件据此丢弃审议 agent 的**过程事件**(思考/正文/usage/生命周期/工具结果),而 `auth.review` 结果 trace 以审议 agent 身份发射、保持可见(§7.9)。
+    - **过滤链**:投影器内跑可插拔出网过滤链(`EventEgressFilter`/`RoundEgressFilter`,按 `order` 排序);filter 作用于 **pre-wire 的 `EventRecord`**,可丢弃(返回 null,**事件仍已落盘**)或改写 payload;**不得改动 `ext`**(ext 是落盘态镜像),加密等改写须在 `payload` 内自成信封;filter 域中性,只带 `subjectId`(task→taskId,workflow→workflowId)。ai-review 插件据此丢弃审议 agent 的**会话内容**事件(思考/正文/工具结果/错误/`agent.done`),而审议 agent 的**状态与用量**(`agent.started`/`agent.status`/`usage`)与 `auth.review` 结果 trace 以审议 agent 身份发射、保持可见(前者是前端 agent 胶囊列表的实时数据源,后者仍显示「允许 置信度 90%」;§7.9)。
     - **seq 洞合法**:「**已落盘但不出网**」造成的客户端所见 seq 洞合法,与既有「瞬态占号不落盘」并列(§5.4);事件落盘(事实源)与出网(可投影视图)解耦,落盘永不因出网过滤而变更。`task.poll` 另以字符串字段 `nextSeq`(未过滤口径推进游标)支持客户端分页(§7.13)。
     - **task.agents 归属**:`task.agents` RPC 属 task 域(常量 `RpcMethods.TASK_AGENTS`,`TaskManager` 注册实现),语义 = 任务下**全部** agent(含 `creator=ai-review`),**无 creator 过滤**;subagent 插件不再提供该 RPC 与 web 前端功能,`list_agents`/`wait_agents`/`run_agent`/`stop_agent` 工具仍属 subagent 插件(§7.14/§7.20.1)。
     - **AI 审议解析容错**:审议输出**解析失败**(非 JSON / 缺 decision / 多决策对象 / 空响应)→ 重试一次要求模型纠正;**仍失败 → ESCALATE**(交下一节点/人工),**不再 DENY**;fail-closed(DENY)仅保留给超时/异常路径(§7.9)。

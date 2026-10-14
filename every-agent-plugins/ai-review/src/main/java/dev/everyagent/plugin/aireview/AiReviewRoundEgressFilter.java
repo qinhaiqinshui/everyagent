@@ -9,7 +9,7 @@ import tools.jackson.databind.node.ObjectNode;
 
 /**
  * 轮次级出网过滤器:从轮次视图的 {@code agentRanges} 中移除 AI 审议 agent 的进出区间,
- * 使「AI 审议过程」不出现在前端的轮次/子 agent 轨里(§5.3/§14.13)。
+ * 使「AI 审议会话内容」不出现在前端的轮次/子 agent 轨里(§5.3/§14.13)。
  *
  * <p>轮次视图是 plugin-api 约定的<b>域中性 JSON 视图</b>(运行时 {@code ObjectNode},见
  * {@link RoundEgressFilter}),含可选 {@code agentRanges:[{agentId,title,startSeq,endSeq}]}。
@@ -17,7 +17,8 @@ import tools.jackson.databind.node.ObjectNode;
  * {@code agentRanges} 或为空则原样返回。返回视图(原样或裁剪后)= 放行整轮;不丢整轮。
  *
  * <p>与事件级 filter({@link AiReviewEventEgressFilter})同源:两者都按「审议 agentId 前缀约定」
- * 判定,共同保证审议 agent 不在任何出网口露出,而轮本身(用户/最终回复)照常下发。
+ * 判定。分界不同——轮次轨是<b>内容视图</b>(审议轮区间属会话内容,一律裁掉);事件级则只丢「会话内容」
+ * 事件,放行状态/用量(agent.started/agent.status/usage,前端 agent 胶囊列表的数据源)与结果 trace。
  */
 public class AiReviewRoundEgressFilter implements RoundEgressFilter {
 

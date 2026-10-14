@@ -36,11 +36,13 @@ import java.util.concurrent.TimeoutException;
  *
  * <p>审议请求链路:走 {@link AgentFactory#create} 自动获得全套 Advisor 链
  * (重试/压缩/限流等),<b>不挂</b>工具循环 /
- * 技能 / 系统信息 / 无人值守 advisor——审议无工具。<b>过程事件照发</b>(思考 delta/thinking、正文
+ * 技能 / 系统信息 / 无人值守 advisor——审议无工具。<b>事件照发</b>(思考 delta/thinking、正文
  * message、usage、per-run 生命周期、工具结果由 advisor 链以审议 agent 自身身份落原任务 jsonl),
  * 但由 ai-review 插件注册的出网 filter {@link AiReviewEventEgressFilter} 在<b>出网侧</b>丢弃
- * (落盘不动、客户端不可见;过程事件不出网)。审议结果 trace(kind={@code auth.review})不属过程:
- * 以审议 agent 自身身份发射并保持可见({@link #emitAuthTrace})。
+ * <b>会话内容</b>事件(思考/正文/工具结果/错误/agent.done),落盘不动、客户端不可见;
+ * 状态与用量(agent.started/agent.status/usage)与审议结果 trace(kind={@code auth.review})保持出网
+ * ——前者是前端 agent 胶囊列表的状态/用量数据源({@link #emitAuthTrace} 之外的唯一实时供体),
+ * 后者以审议 agent 自身身份发射并保持可见。
  * <b>容灾在模型层</b>:审议模型经 AgentFactory 内部构建,若为
  * {@code provider: model-pool} 池配置,chatModel 即 {@code ModelPoolChatModel}(自动换池容灾)。
  *
@@ -132,7 +134,7 @@ public class AiAuthReviewer {
     /** 审议 agentId 派生前缀(§8.3):审议 agent 以 {@code review-<subjectId>} 固定 agentId 注册。 */
     public static final String REVIEW_AGENT_PREFIX = "review-";
 
-    /** 审议结果审计 trace 的事件 kind。出网侧据此豁免(过程事件丢弃,结果 trace 保留可见)。 */
+    /** 审议结果审计 trace 的事件 kind。出网侧据此豁免(会话内容丢弃,结果 trace 保留可见)。 */
     public static final String AUTH_REVIEW_KIND = "auth.review";
 
     /**
@@ -463,7 +465,7 @@ public class AiAuthReviewer {
             //   - 拿不到(超时路径下审议 agent 可能尚未创建,或桩未提供 emitter)→ 回退主体级 emitter,
             //     agentId 仍传 null(归主线显示)。两条路径都发射——审计 trace 绝不丢。
             // EmitEvent.agentId 一律传 null:身份交由 emitter 包装层补齐,插件不再手写子 agent id。
-            // (出网侧:AiReviewEventEgressFilter 对 auth.review 豁免,过程事件丢弃、结果 trace 保留可见。)
+            // (出网侧:AiReviewEventEgressFilter 对 auth.review 豁免——会话内容丢弃、结果 trace 保留可见。)
             EmitEvent ev = EmitEvent.of(SnowflakeId.next(), AUTH_REVIEW_KIND, null,
                     "AI 安全审议", summary, null, "done", authData, EmitEvent.Mode.REPLACE);
             AgentContext reviewAgent = ctx.agents() == null ? null : ctx.agents().get(reviewAgentId);

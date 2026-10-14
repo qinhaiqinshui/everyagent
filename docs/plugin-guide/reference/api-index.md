@@ -40,7 +40,7 @@ has_children: false
 | 5 | `void registerAdvisorProvider(AdvisorProvider p)` | [advisors §1](../backend/advisors.md#1-advisorprovider--向-agent-链注入-advisor) | 12 插件 13 provider（system-info、git、context-compression…） |
 | 6 | `void registerSearchProvider(SearchProvider p)` | [advisors §6](../backend/advisors.md#6-searchprovider--搜索后端统一-search-聚合--mentionquery-能力接口) | 统一 `search` 聚合（内置 `file-content`/`file-name`/`task` 三 provider 与插件 provider 同权，按 `order` 升序聚合）；能力接口 `SuggestionProvider`（mention.query）；无内置插件范例 |
 | 7 | `void registerAuthorizationHandler(AuthorizationHandler h)` | [advisors §7](../backend/advisors.md#7-authorizationhandler--授权决议链节点) | ai-review(100f)、unattended(200f)；内置 human=300f 终结 |
-| 8 | `void registerEventEgressFilter(EventEgressFilter f)` | [架构 §8.5](../../ARCHITECTURE.md#85-插件系统统一加载架构)（暂无专篇：出网投影器的事件级过滤链，可丢弃/改写 payload，事件仍落盘） | ai-review（丢弃审议 agent 过程事件） |
+| 8 | `void registerEventEgressFilter(EventEgressFilter f)` | [架构 §8.5](../../ARCHITECTURE.md#85-插件系统统一加载架构)（暂无专篇：出网投影器的事件级过滤链，可丢弃/改写 payload，事件仍落盘） | ai-review（丢弃审议 agent 会话内容事件） |
 | 9 | `void registerRoundEgressFilter(RoundEgressFilter r)` | 同上（轮次级出网过滤链） | ai-review |
 | 10 | `void registerTokenEstimator(TokenEstimator e)` | [advisors §4](../backend/advisors.md#4-tokenestimator--替换-token-估算器) | model-rate-limit |
 | 11 | `void registerChatModelEnhancer(ChatModelEnhancer e)` | [advisors §3](../backend/advisors.md#3-chatmodelenhancer--模型构建期介入) | model-pool |
