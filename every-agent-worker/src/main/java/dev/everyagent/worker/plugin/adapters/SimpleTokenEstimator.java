@@ -23,6 +23,12 @@ public class SimpleTokenEstimator implements TokenEstimator {
         return rawTokens(text);
     }
 
+    /** 输入口径估算：本实现不校准，与 {@link #estimate(String, String)} 同值。 */
+    @Override
+    public long estimateInput(String text) {
+        return estimate(text, "");
+    }
+
     @Override
     public void calibrate(String configId, long estimatedTokens, long actualTokens) {
         // 不校准

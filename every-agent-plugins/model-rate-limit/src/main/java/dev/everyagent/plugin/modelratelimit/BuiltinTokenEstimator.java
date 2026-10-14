@@ -87,6 +87,15 @@ public class BuiltinTokenEstimator implements TokenEstimator {
         return Math.max(0, Math.round(raw * f));
     }
 
+    /**
+     * 输入(prompt)口径估算：不套输出 token 校准系数（见 {@link TokenEstimator#estimateInput}）。
+     * 上下文压缩的预检走此路径——其阈值是「窗口占用」，属输入口径，套用输出系数会约 2 倍高估。
+     */
+    @Override
+    public long estimateInput(String text) {
+        return rawTokens(text);
+    }
+
     @Override
     public void calibrate(String configId, long estimatedTokens, long actualTokens) {
         if (actualTokens <= 0 || estimatedTokens <= 0) {

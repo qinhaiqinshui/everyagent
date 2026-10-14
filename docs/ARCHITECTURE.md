@@ -422,6 +422,7 @@ AgentStatusAdvisor(agent 生命周期事件,HP+5,最外层) → RoundIndexAdviso
 **上下文压缩**(`ContextCompressionAdvisor`,主/子同挂、最内层):只改写**发送给模型的 instructions 视图**,内存 conversation 与磁盘事件日志始终全量。
 
 - **offset 校准(双向)**:每轮现场重算常数修正项 = 上一轮 provider 实测 `inputTokens − 粗估算值`,抵消无 tokenizer 粗估与实测的系统性差异。**必须双向采纳**:offset > 0(粗估漏算工具定义/系统模板/分词差异)→ 抬升 precheck 防漏触发;offset < 0(粗估**高估**正文,`bytes/3` 对 ASCII/代码正文实测可达 1.5~3 倍)→ 同样压低 precheck,否则阈值退化为「粗估 × ratio」而非「实测 × ratio」,上下文远未真实占满即触发压缩(2026-10 t_ra74 实锤:估算 22.9 万、实测 8.4 万却反复压缩)。
+- **token 估算口径复用全局 `TokenEstimator`**:压缩预检走 `TokenEstimator.estimateInput`(输入/prompt 口径,即"基础分词式、不套输出校准系数"),经 provider 延迟解析(同 model-length-guard 写法,`registerTokenEstimator` 换实现后自动跟随);估算器缺失时回退内置 UTF-8 bytes/3。**为何不套 `estimate`(带校准系数)**:该系数由 `completionTokens` 收敛而来,属输出口径,套到 prompt 上会约 2 倍高估(实测某任务全量历史:基础式 28.9 万 ≈ 真实输入 33.9 万,套上系数 2.34 后变 67.4 万),会让压缩在真实占用远未达阈值时触发。
 - **累积式裁剪**:per-run 状态化,首次压缩后持有「压缩基线 baseline + 已吸收源消息数 absorbed」,后续轮只把新增消息 delta 接到基线上做增量裁剪。
 - **摘要压缩**:阶段 C 丢弃历史轮前,调用 `LlmContextSummarizer`(默认复用当前 agent 的 chatModel)生成要点摘要;失败退化为「保留该轮 user 截断简版」防永久失忆;单条超大工具结果做首尾保留的确定性截断。
 - 配置:`worker.limits.context-compression-enabled`(关闭则整体关)、`context-offset-enabled`(默认 true)、`context-summary-enabled`(默认 true)、`context-summary-max-tokens`(默认 512)、`context-max-tool-result-chars`(默认 40000)、`context-trigger-ratio`(0.95)/`context-target-ratio`(0.50)。

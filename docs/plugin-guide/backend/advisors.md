@@ -206,19 +206,22 @@ public interface ChatModelEnhancer {
 
 ## 4. TokenEstimator —— 替换 token 估算器
 
-**估计什么**：无精确 tokenizer 场景下的文本 token 数 + 按模型配置（configId）隔离的在线校准。两个消费方：`ModelLengthGuardAdvisor`（输出预算耗尽判定）与模型限流器 tpm 记账（[`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) §7.4.1）。
+**估计什么**：无精确 tokenizer 场景下的文本 token 数 + 按模型配置（configId）隔离的在线校准。消费方有三：`ModelLengthGuardAdvisor`（输出预算耗尽判定）、模型限流器 tpm 记账（[`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) §7.4.1）——两者用**输出口径**；`ContextCompressionAdvisor`（上下文压缩预检，§7.5）用**输入口径**。
 
 ```java
-// every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/spi/TokenEstimator.java:14-52（签名节选）
+// every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/spi/TokenEstimator.java（签名节选）
 public interface TokenEstimator {
-    long estimate(String text, String configId);   // 估算 token 数（用 configId 的校准系数，无记录则 factor=1.0）
+    long estimate(String text, String configId);   // 输出口径：估算 token 数（用 configId 的校准系数，无记录则 factor=1.0）
+    long estimateInput(String text);               // 输入口径：同一分词式，不套校准系数（default = estimate(text, "")）
     void calibrate(String configId, long estimatedTokens, long actualTokens); // 真实 usage EMA 校准
     double factorOf(String configId);             // 当前校准系数（诊断用）
     long sampleCountOf(String configId);          // 校准样本数（诊断用）
 }
 ```
 
-**默认实现与覆盖关系**：worker 内置 fallback `SimpleTokenEstimator`（`@Component`，CJK≈1 token、其余≈4 字符 1 token，factor 恒 1.0、不校准；`every-agent-worker/src/main/java/dev/everyagent/worker/plugin/adapters/SimpleTokenEstimator.java:16-58`）。`ctx.registerTokenEstimator(estimator)` **原位替换** `WorkerServicesImpl` 持有的实例（`WorkerPluginContextImpl.java:199-202` → `WorkerServicesImpl.replaceTokenEstimator`，`every-agent-worker/src/main/java/dev/everyagent/worker/plugin/WorkerServicesImpl.java:84-86`）；消费方经 `ctx.services().tokenEstimator()` 取**当前生效**实例（plugin-api `WorkerServices.java:38`）——model-length-guard 插件持 `AtomicReference` 包一层，后注册的估算器自动跟随（`ModelLengthGuardAdvisorProvider.java:19-20,46`）。
+> **两个口径别用错**：`calibrate` 的系数是让「估算输出」逼近 `completionTokens` 的乘数，属**输出**口径；`estimateInput` 供「prompt 占用」类判断（上下文压缩阈值）。实测某任务全量历史：基础式 28.9 万 ≈ 真实输入 33.9 万，而套上当时的输出系数（2.34）后变 67.4 万（≈2 倍高估）——用它做压缩闸门会在真实占用远未达阈值时就触发。新增消费方先问自己：我估的是「输入」还是「输出」。
+
+**默认实现与覆盖关系**：worker 内置 fallback `SimpleTokenEstimator`（`@Component`，CJK≈1 token、其余≈4 字符 1 token，factor 恒 1.0、不校准；`every-agent-worker/src/main/java/dev/everyagent/worker/plugin/adapters/SimpleTokenEstimator.java`）。`ctx.registerTokenEstimator(estimator)` **原位替换** `WorkerServicesImpl` 持有的实例（`WorkerPluginContextImpl.java:199-202` → `WorkerServicesImpl.replaceTokenEstimator`）；消费方经 `ctx.services().tokenEstimator()` 取**当前生效**实例（plugin-api `WorkerServices.java:38`）——model-length-guard 与 context-compression 两个插件都持 `WorkerServices` 延迟解析（每次 `create()` 取一次），后注册的估算器自动跟随。
 
 **范例（rg `registerTokenEstimator` 唯一命中）**：model-rate-limit 的 `BuiltinTokenEstimator`——EMA 校准系数按 configId 隔离、收敛（默认 2%）后停采、漂移（默认 5%）自动恢复，持久化 `<homeDir>/model-rate-state.json` 重启接续（`BuiltinTokenEstimator.java:34-45`；阈值配置 `WorkerProperties.java:517-537`）。注册三件套共享同一实例：估算器 + TokenCalibrationAdvisor（§2.5）+ RateLimitAdvisorProvider（`ModelRateLimitPlugin.java:33-46`）。
 
