@@ -8,6 +8,7 @@ import dev.everyagent.plugin.api.event.Events;
 import dev.everyagent.worker.proto.RpcMethods;
 import dev.everyagent.worker.rpc.RpcContext;
 import dev.everyagent.worker.rpc.RpcDispatcher;
+import dev.everyagent.worker.skill.BuiltInSkills;
 import dev.everyagent.worker.skill.ExternalSkillScanner;
 import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
@@ -34,17 +35,20 @@ public class ConfigRpcHandler {
 
     private final ConfigStore configs;
     private final ExternalSkillScanner externalSkillScanner;
+    private final BuiltInSkills builtInSkills;
     private final UserPreferenceStore preferences;
     private final HubPool pool;
     private final RpcDispatcher dispatcher;
 
     public ConfigRpcHandler(ConfigStore configs,
                             ExternalSkillScanner externalSkillScanner,
+                            BuiltInSkills builtInSkills,
                             UserPreferenceStore preferences,
                             HubPool pool,
                             RpcDispatcher dispatcher) {
         this.configs = configs;
         this.externalSkillScanner = externalSkillScanner;
+        this.builtInSkills = builtInSkills;
         this.preferences = preferences;
         this.pool = pool;
         this.dispatcher = dispatcher;
@@ -91,17 +95,36 @@ public class ConfigRpcHandler {
     }
 
     /**
-     * skill.reload:重新扫描外部 skill 列表(架构 §7.17)。
+     * skill.reload:重新读取 skill 列表(架构 §7.17)。
      * 用户在系统技能目录下增删 skill 目录后,点击「重新读取」即可让 worker 热加载,
      * 无需重启。广播 {@code config.changed{keys:["skills"]}} 通知前端刷新 `/` 菜单。
      * 运行中任务不受影响(skill 列表只在新建任务的 `/` 菜单与 SkillAdvisor 注入时读取)。
      */
     private void rpcSkillReload(RpcContext ctx) {
-        int count = externalSkillScanner.reload();
+        int count = reloadSkills();
         pool.broadcastEvt(Events.CONFIG_CHANGED,
                 Json.toJson(new Events.ConfigChanged(List.of("skills"))));
-        log.info("skill.reload 完成:外部 skill 已重新扫描,共 {} 个", count);
+        log.info("skill.reload 完成:内置知识包已复原,外部 skill 已重新扫描,共 {} 个", count);
         ctx.ok(Json.obj().put("skills", count));
+    }
+
+    /**
+     * skill.reload 的实际动作(独立于 RPC 壳,便于单测直接调用)。
+     *
+     * <ol>
+     *   <li><b>复原内置知识包</b>:{@link BuiltInSkills#materialize()} 幂等重物化——用户在系统技能目录
+     *       下误改/误删了 {@code <id>/skill.md}(或 AI 经 skill-creator 改坏了它)时,点一次「重新读取」
+     *       即恢复为 worker 自带版本,不必重启 worker;内容本就一致则零写入。这是「重新读取 skill 列表」
+     *       对内置 skill 的对应语义(内置知识包随 worker 版本,classpath 内容在运行期不会变);
+     *       插件贡献的知识包由插件自己在 activate 时物化(SPI 只声明元数据,不负责物化)。</li>
+     *   <li><b>重扫外部 skill</b>:重新扫描 {@code skillsDir} 并替换缓存。</li>
+     * </ol>
+     *
+     * @return 本次扫描到的外部 skill 数量
+     */
+    int reloadSkills() {
+        builtInSkills.materialize();
+        return externalSkillScanner.reload();
     }
 
     /**
