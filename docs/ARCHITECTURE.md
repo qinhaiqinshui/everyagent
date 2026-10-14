@@ -489,17 +489,19 @@ ask 管道承载第二类阻塞请求:**危险操作授权**。`PermissionGate` 
 
 1. 文件工具目标在**工作区外**(realpath 判定,符号链接逃逸同判;read/list/stat → READ,write/move/remove → WRITE);
 2. 命令串中的**危险动词**(del/erase/rmdir/Remove-Item/rm/shred 等,`worker.permissions.dangerous-patterns` 可配)——**仅当命令引用可能落在工作区外的路径时**才需授权;工作区内增删改查直接放行(授权护的是「工作区外」,不是删除动作本身;cwd 锁定 + 沙箱可写性契约兜底);
-3. 命令串中引用的已存在工作区外路径(EXEC 权限)。
+3. 命令串中引用的已存在工作区外路径(EXEC 权限)——落在该工作区**外部授权根**内者除外(用户 `@` 显式选择 = 已授权,§7.17)。
 
 **权限责任链**(worker `tools/permission/`):节点接口产出三态 `ALLOW|DENY|SKIP`,链上顺序执行,任一 ALLOW/DENY 即短路;全链 SKIP 按拒绝兜底。
 
 | 入口 | 链(顺序) |
 |---|---|
 | 文件路径 | `WorkspaceAllowCheck`(工作区内放行)→ `MissingPathCheck`(读不存在 NotFound)→ `SkillsReadAllowCheck`(skills 目录读写放行,§7.17)→ `ExternalRootAllowCheck`(工作区外部授权根放行环:realpath 落在该工作区 externalRoots 内即 ALLOW,§7.17)→ `OverBroadRootCheck`(盘根/工作区祖先拒收)→ `AuthorizeCheck`(委托授权决议) |
-| 命令 | `CommandCheck`(危险动词 + 越界已存在路径逐项授权,系统目录同权) |
+| 命令 | `CommandCheck`(危险动词 + 越界已存在路径逐项授权,系统目录同权;**工作区外部授权根内的引用视同已授权**,§7.17) |
 | 提权 | `PrivilegeCheck`(提权动词 / seccomp setuid exec,§7.11) |
 
 **用户显式选择=已授权(工作区外部授权根)**:经 `@` 弹窗 `+` 图标显式选择的工作区外路径由 worker 侧注册为**工作区外部授权根**(§7.17,语义 = 完全读写 READ+WRITE+EXEC)——该选择本身就是授权动作,后续工具访问经文件路径责任链的 `ExternalRootAllowCheck` 放行环直接放行,PermissionGate **不再弹 `kind=authorization` ask**。这是与人工弹窗/AI 审议并列的授权来源,不是绕过 gate:全链 SKIP 兜底、过宽根拒收、命令危险动词拦截面等语义不变。
+
+**放行环两链同源(2026-10-14 修复)**:外部授权根放行谓词 `ExternalRootAllowCheck.grantingRoot(roots, real)` 是单点实现,除文件路径链外**命令链同样消费**(§7.17)——命令串中引用的路径落在该工作区 externalRoots 内 → 判为「不越界」,既不触发危险动词授权,也不触发 EXEC 路径授权(已存在目标按 realpath、待建目标按最深已存在祖先判定归属)。曾漏接:外部根只在文件路径链上,于是「用户 `@` 引用过的目录」文件工具读得进、而一句 `Get-ChildItem <该目录>` 照样弹授权(任务开着 AI 审议时又白烧一轮审议),与「用户显式选择 = 已授权」及沙箱侧把 externalRoots 并入 EXEC 根的口径自相矛盾。
 
 **弹窗形态**:经 `ask.create` 发一条单题选择题(问题文案「是否授权?」),三选项 `label` = 拒绝 / 本轮运行内允许 / 本任务全程允许,`value` = 稳定 token `deny`/`run`/`task`(ask 载荷不带 `kind`:前端纯数据驱动渲染,不按语义特判)。前端把作答统一折成「题干：值」文本回传(radio 回传选项 `value`),故实际到达 worker 的答案形如「是否授权?：task」;`GrantRegistry.parseScope` **先折去「题干：」包装、只判值段**(兼容裸 token/文案:旧协议、无人值守拦截、磁盘回放),未识别/超时/取消一律按拒绝(安全缺省)。
 
@@ -958,7 +960,7 @@ Input:  queued → consumed | discarded(任务取消)
 
 **多工作区并行**:注册表 `workspaces/workspaces.json` 条目 `{id, root, addedTs, lastActivityTs?, externalRoots?}`,引入**稳定 workspaceId**——默认工作区 id 恒为 `defaultworkspace`;其它工作区首次注册用 ShortIds 生成 `w_xxxxx` 短 id,落盘进注册表 `id` 字段,此后不变。默认工作区根默认 `<home>/defaultworkspace` 并自动注册进注册表(id=defaultworkspace),始终在册、不可移除。`fs.*`/`git.*`/`task.run`(新建)每次调用**必带 `workspace` 参数**(绝对路径),沙箱根在调用时按该参数解析;注册表变化广播 `workspaces.changed`(`workspaces.list` 与快照每项带 `id`、`addedAt`、`lastActivityAt`(任务收口刷新,旧条目回退注册时间),仍带 `defaultRoot`;缺失项含缺失标记 `missing`);写操作广播 `fs.changed{workspace,path,kind}`,前端按工作区分组刷新。**任务收口按「最后活动时间」倒序渲染**:收口路径(`TaskManager.finish`)经独立组件 `WorkspaceActivityTracker` 刷新任务挂靠工作区的 `lastActivityTs` 并广播(失败不阻塞收口);前端 `workspaceRegistry` 合并后按 `lastActivityAt ?? addedAt` 倒序,任务面板 / 文件管理器 / 源代码管理器渲染工作区顺序一致地对齐「最近活动的在最上面」。
 
-**工作区外部授权根(externalRoots)**:工作区条目的 `externalRoots` 字段(realpath 规范化路径数组)承载用户经 `@` 弹窗 `+` 图标显式选择的工作区外路径(§7.16),授权语义 = **完全读写(READ+WRITE+EXEC)**——「用户显式选择=已授权」:文件路径责任链 `ExternalRootAllowCheck` 放行环直接放行、不弹授权 ask(§7.8),各沙箱后端按 §7.10 消费。**注册规则**:目录=自身、文件=父目录;去重与包含吸收(新根被已有根包含 → 跳过,已有根被新根包含 → 替换);复用 `OverBroadRootCheck` 语义拒收过宽根(盘根、工作区祖先/工作区自身)。**生命周期为工作区级**(跟工作区走,非任务级);`workspaces.remove` 删除工作区时级联清理:仅 wsl-direct 后端,对该工作区**独有**(其余工作区 externalRoots 的 realpath 均未引用)的根 best-effort umount——`wsl.exe -d EveryAgent -u root -e umount <挂载点>`(挂载点 = `WslPathMapper.toDirectMount(原生路径)`),失败 lazy umount 兜底,仍失败仅 WARN 不阻塞删除;bwrap 按次 bind 天然跟随,mic 零副作用天然跟随。
+**工作区外部授权根(externalRoots)**:工作区条目的 `externalRoots` 字段(realpath 规范化路径数组)承载用户经 `@` 弹窗 `+` 图标显式选择的工作区外路径(§7.16),授权语义 = **完全读写(READ+WRITE+EXEC)**——「用户显式选择=已授权」:文件路径责任链 `ExternalRootAllowCheck` 放行环直接放行、不弹授权 ask(§7.8);**命令链同源消费**(§7.8:命令串中引用的路径落在授权根内 → 判为不越界,危险动词与 EXEC 路径授权均不再触发),各沙箱后端按 §7.10 消费。**注册规则**:目录=自身、文件=父目录;去重与包含吸收(新根被已有根包含 → 跳过,已有根被新根包含 → 替换);复用 `OverBroadRootCheck` 语义拒收过宽根(盘根、工作区祖先/工作区自身)。**生命周期为工作区级**(跟工作区走,非任务级);`workspaces.remove` 删除工作区时级联清理:仅 wsl-direct 后端,对该工作区**独有**(其余工作区 externalRoots 的 realpath 均未引用)的根 best-effort umount——`wsl.exe -d EveryAgent -u root -e umount <挂载点>`(挂载点 = `WslPathMapper.toDirectMount(原生路径)`),失败 lazy umount 兜底,仍失败仅 WARN 不阻塞删除;bwrap 按次 bind 天然跟随,mic 零副作用天然跟随。
 
 **启动自检(工作区被移动/删除)**:worker 启动时校验 `workspaces/workspaces.json` 载入的已注册目录,缺失者(用户移动/删除目录后重启)在注册表快照标记 `missing`并广播,前端弹窗要求二选一——`workspaces.resolveMissing {action:"delete"}` 删除注册并**直接删 `workspaces/<wsId>/` 整个目录(任务数据随删)**,或 `{action:"redirect",newRoot}` 纠正到移动后的新目录——**保留 `id`、只改 `root` 并迁移挂靠任务的 `meta.workspace`,任务目录不搬**;默认工作区不可删除、只可纠正(纠正后的根直接写回 `workspaces.json` 中 id=defaultworkspace 条目的 `root`,重启读回,不再需要 `workspace-default.json` 覆盖文件)。未落定的缺失工作区 `resolve` 拒绝,避免沙箱挂载失败或静默新建空目录掩盖数据丢失。
 

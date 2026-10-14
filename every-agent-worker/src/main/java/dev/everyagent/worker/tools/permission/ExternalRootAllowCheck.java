@@ -17,6 +17,11 @@ import java.util.List;
  * <p>这是 gate 链上的<b>显式放行环而非绕过 gate</b>:与人工弹窗、AI 审议并列的授权来源;
  * 全链 SKIP 兜底、过宽根拒收、命令危险动词拦截面等其余节点语义不变(§7.8)。
  * 沙箱侧消费(文件工具附加根 / 命令 EXEC 根 / wsl-direct 挂载)由消费方另行并入。
+ *
+ * <p>命令链的同源消费(§7.17):{@code CommandCheck} 用同一谓词
+ * ({@link #grantingRoot})把「命令串中引用的路径落在外部授权根内」判为不越界——否则
+ * 用户 {@code @} 引用过的目录,文件工具读得进、而一句 {@code Get-ChildItem <该目录>}
+ * 仍会弹授权 ask(与「用户显式选择 = 已授权」及沙箱侧 EXEC 根口径不一致)。
  */
 @Component
 public class ExternalRootAllowCheck implements PermissionCheck {
@@ -32,12 +37,27 @@ public class ExternalRootAllowCheck implements PermissionCheck {
         if (ctx.realPath() == null || ctx.workspaceRoot() == null) {
             return next.proceed(ctx);
         }
-        List<Path> roots = workspaces.externalRootsOf(ctx.workspaceRoot()); // 未注册返回空列表
+        Path hit = grantingRoot(workspaces.externalRootsOf(ctx.workspaceRoot()), ctx.realPath());
+        return hit == null ? next.proceed(ctx) : PermissionDecision.allow("外部授权根放行: " + hit);
+    }
+
+    /**
+     * 外部授权根放行谓词(<b>单点实现</b>,§7.17):{@code real}(realpath 形态)落在任一
+     * 外部授权根内 → 返回命中的根,否则 null。
+     *
+     * <p>两处同源消费:本节点的文件路径链放行环;以及命令链
+     * ({@code CommandCheck})——外部根语义 = 完全读写 READ+WRITE+EXEC,命令串中引用的
+     * 路径落在授权根内即「不越界」,既不触发危险动词授权,也不触发 EXEC 路径授权。
+     */
+    public static Path grantingRoot(List<Path> roots, Path real) {
+        if (roots == null || real == null) {
+            return null;
+        }
         for (Path root : roots) {
-            if (ctx.realPath().startsWith(root)) {
-                return PermissionDecision.allow("外部授权根放行: " + root);
+            if (real.startsWith(root)) {
+                return root;
             }
         }
-        return next.proceed(ctx);
+        return null;
     }
 }

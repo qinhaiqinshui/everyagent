@@ -40,7 +40,8 @@ import java.util.List;
  *       {@link SkillsReadAllowCheck}(skills 目录只读放行)→
  *       {@link ExternalRootAllowCheck}(工作区外部授权根放行环,用户显式选择=已授权,
  *       §7.8/§7.17)→ {@link OverBroadRootCheck} → {@link AuthorizeCheck};</li>
- *   <li>命令链:{@link CommandCheck}(危险动词 + 越界路径逐项授权);</li>
+ *   <li>命令链:{@link CommandCheck}(危险动词 + 越界路径逐项授权;工作区外部授权根内的
+ *       引用视同已授权,同 {@link ExternalRootAllowCheck} 谓词,§7.17);</li>
  *   <li>提权链:{@link PrivilegeCheck}(提权动词 / seccomp setuid exec)。</li>
  * </ul>
  *
@@ -48,7 +49,8 @@ import java.util.List;
  * 系统目录 / 程序目录与普通工作区外目录同权,全部走授权决议链,不再有硬拒不弹窗;
  * skills 目录只读内容经 {@link SkillsReadAllowCheck} 直接放行(其余操作仍走授权决议链);
  * 工作区外部授权根(用户经 @ 弹窗显式选择,§7.17)经 {@link ExternalRootAllowCheck}
- * 放行环直接放行(完全读写,不再弹窗)。
+ * 放行环直接放行(完全读写,不再弹窗;命令串中引用的路径落在其内同样放行,见
+ * {@link CommandCheck})。
  * 主/子 agent 按 subjectId(今天=taskId)共享授权。
  *
  * <p>域中性(S3):入口签名收 {@link ExecContext}(任务或未来工作流),不再接触

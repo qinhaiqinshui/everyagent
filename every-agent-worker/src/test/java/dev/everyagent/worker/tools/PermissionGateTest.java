@@ -112,7 +112,8 @@ class PermissionGateTest {
         assertTrue(c.contains(realWs.toString()), "工作区路径完整提取: " + c);
         // 全部候选均不越界 → touchesOutside=false → 危险动词放行、② 无弹窗输入
         Root root = new Root(realWs, realWs);
-        assertFalse(CommandCheck.referencesOutsideWorkspace(root, c), "工作区内命令零授权: " + c);
+        assertFalse(CommandCheck.referencesOutsideWorkspace(root, c, List.of()),
+                "工作区内命令零授权: " + c);
     }
 
     /** G2:引号内工作区相对路径正常提取且不算越界。 */
@@ -121,7 +122,7 @@ class PermissionGateTest {
         List<String> c = CommandCheck.extractPathCandidates("rg -n \"foo\\bar\" .");
         assertTrue(c.contains("foo\\bar"), c.toString());
         Root root = new Root(ws, ws.toRealPath());
-        assertFalse(CommandCheck.referencesOutsideWorkspace(root, c));
+        assertFalse(CommandCheck.referencesOutsideWorkspace(root, c, List.of()));
     }
 
     /** 转义折叠:双引号串内 \" 与 "" 与 `"(PowerShell)是字面引号,不得切断引号段。 */
@@ -270,16 +271,44 @@ class PermissionGateTest {
 
         // 工作区内绝对路径 → false(危险动词放行)
         assertFalse(CommandCheck.referencesOutsideWorkspace(root,
-                List.of(inAbs)), "工作区内已存在目标不算越界");
+                List.of(inAbs), List.of()), "工作区内已存在目标不算越界");
         // 工作区外已存在 → true(危险动词须授权)
         assertTrue(CommandCheck.referencesOutsideWorkspace(root,
-                List.of(outAbs)), "工作区外已存在目标算越界");
+                List.of(outAbs), List.of()), "工作区外已存在目标算越界");
         // 相对 .. 逃逸(词法已在工作区外,即使不存在)→ true
         assertTrue(CommandCheck.referencesOutsideWorkspace(root,
-                List.of("..\\escape\\x.txt")), "相对 .. 逃逸算越界");
+                List.of("..\\escape\\x.txt"), List.of()), "相对 .. 逃逸算越界");
         // 工作区内相对路径(不存在)→ false
         assertFalse(CommandCheck.referencesOutsideWorkspace(root,
-                List.of("sub\\new.txt")), "工作区内相对路径不算越界");
+                List.of("sub\\new.txt"), List.of()), "工作区内相对路径不算越界");
+    }
+
+    /**
+     * §7.17 外部授权根(用户 {@code @} 显式选择 = 已授权,完全读写 READ+WRITE+EXEC):
+     * 落在其内的候选不算越界 → 危险动词不再触发授权(回归:用户 @ 引用过的目录,
+     * 命令里引用它仍弹窗/进 AI 审议)。
+     */
+    @Test
+    void referencesOutsideWorkspaceYieldsToExternalRoots(@TempDir Path ws, @TempDir Path ext)
+            throws IOException {
+        Root root = new Root(ws, ws.toRealPath());
+        Path extReal = ext.toRealPath();
+        Path existing = Files.writeString(ext.resolve("a.txt"), "x");
+        assertTrue(CommandCheck.referencesOutsideWorkspace(root, List.of(extReal.toString()), List.of()),
+                "无外部授权根时越界");
+        assertFalse(CommandCheck.referencesOutsideWorkspace(root,
+                List.of(extReal.toString()), List.of(extReal)), "外部授权根自身已授权");
+        assertFalse(CommandCheck.referencesOutsideWorkspace(root,
+                List.of(existing.toString()), List.of(extReal)), "根内已存在文件已授权");
+        // 待建目标:按最深已存在祖先判定归属
+        assertFalse(CommandCheck.referencesOutsideWorkspace(root,
+                List.of(extReal.resolve("sub").resolve("new.txt").toString()), List.of(extReal)),
+                "根内待建目标已授权");
+        // 根外兄弟目录不因授权根而放行
+        Path sibling = ext.resolveSibling("sib-" + System.nanoTime());
+        Files.createDirectories(sibling);
+        assertTrue(CommandCheck.referencesOutsideWorkspace(root,
+                List.of(sibling.toRealPath().toString()), List.of(extReal)), "授权根外仍越界");
     }
 
     @Test

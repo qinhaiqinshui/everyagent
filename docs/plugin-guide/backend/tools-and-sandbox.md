@@ -417,7 +417,7 @@ return new FileReferenceResult("（附图：" + displayPath(ref) + "）", List.o
 
 | 红线 | 出处 | 与本篇四个 SPI 的关系 |
 |---|---|---|
-| **PermissionGate**：危险操作必须经用户授权——AI 工具的工作区外路径访问先弹 `kind=authorization` 的 ask（拒绝/本轮运行/本任务三档）；命令中的危险动词**仅当命令引用可能落在工作区外**时才需授权，工作区内增删改查直接放行（cwd 锁定 + 沙箱可写性契约兜底）；拒绝抛异常回灌模型 | §7.8 | 用 `ctx.shellExecutor()` 就自动带上；自己碰文件系统要走 `ctx.workspaces()` 的 jailed 解析；**不得绕过 gate 直接放行越界 IO** |
+| **PermissionGate**：危险操作必须经用户授权——AI 工具的工作区外路径访问先弹 `kind=authorization` 的 ask（拒绝/本轮运行/本任务三档）；命令中的危险动词**仅当命令引用可能落在工作区外**时才需授权，工作区内增删改查直接放行（cwd 锁定 + 沙箱可写性契约兜底）；**用户 `@` 显式选择的工作区外部授权根 = 已授权**（完全读写 READ+WRITE+EXEC），文件工具与命令串中引用其内的路径都不再弹窗（§7.17）；拒绝抛异常回灌模型 | §7.8 / §7.17 | 用 `ctx.shellExecutor()` 就自动带上；自己碰文件系统要走 `ctx.workspaces()` 的 jailed 解析；**不得绕过 gate 直接放行越界 IO** |
 | **沙箱契约（windows-mic）**：沙箱进程 Medium IL（Restricted Token 去特权但不降级），天然可写工作区与已授权目录，零文件系统标注、零 ACL 修改、零残留；越界写拦截由 PermissionGate 责任链承担，无 OS 级写隔离兜底 | §7.10 | SandboxProvider 实现者不要试图靠改 ACL/打标记做隔离；隔离做不到的部分交给授权链 |
 | **ExecContext 管道**：横切层只见 ExecContext 槽位，不见 `TaskEntry/TaskRuntime/TaskInfo`；禁止 properties 黑盒 map 与强转再现；插件功能与主体特有槽位不进核心接口 | §14.11 | 四个 SPI 的 ctx 全部 `extends ExecContext`；插件代码 import 任务域类型即违红线 |
 
