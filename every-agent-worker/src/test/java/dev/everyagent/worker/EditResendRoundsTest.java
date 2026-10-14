@@ -48,12 +48,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.DEFINED_PORT)
 class EditResendRoundsTest {
 
-    /** 测试用 TokenEstimator 桩:与原 ModelRateLimiter.estimateTokens 同口径,factor 恒 1.0。 */
+    /** 测试用 TokenEstimator 桩:factor 恒 1.0 的粗估桩(与原 ModelRateLimiter.estimateTokens 同口径)。 */
     private static final TokenEstimator STUB_ESTIMATOR = new TokenEstimator() {
         @Override public long estimate(String text, String configId) { return rawTokens(text); }
-        @Override public void calibrate(String configId, long estimatedTokens, long actualTokens) { }
-        @Override public double factorOf(String configId) { return 1.0; }
-        @Override public long sampleCountOf(String configId) { return 0; }
         private static long rawTokens(String s) {
             if (s == null || s.isEmpty()) { return 0; }
             long cjk = 0, other = 0;

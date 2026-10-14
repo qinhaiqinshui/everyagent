@@ -1,6 +1,5 @@
 package dev.everyagent.plugin.modelratelimit;
 
-import dev.everyagent.plugin.api.spi.TokenEstimator;
 import dev.everyagent.plugin.api.spi.AdvisorContext;
 import dev.everyagent.plugin.api.spi.AdvisorProvider;
 import dev.everyagent.plugin.api.util.OutputTokenAccumulator;
@@ -19,8 +18,8 @@ import reactor.core.publisher.Flux;
  * Token 估算校准 Advisor（红线：一个 advisor 只负责一个功能）。
  *
  * <p>职责（单一）：在每次模型调用完成后，用真实 {@code completionTokens} 校准
- * {@link TokenEstimator} 的估算系数。逐 chunk 累计估算输出 token，
- * 检测到 usage 帧（{@code completionTokens > 0}）时调 {@link TokenEstimator#calibrate}
+ * {@link BuiltinTokenEstimator} 的估算系数。逐 chunk 累计估算输出 token，
+ * 检测到 usage 帧（{@code completionTokens > 0}）时调 {@link BuiltinTokenEstimator#calibrate}
  * 并重置累加器，为下一轮模型调用做准备。
  *
  * <p>估算口径含<b>工具调用参数</b>（与真实 {@code completionTokens} 对齐），统一走
@@ -37,17 +36,17 @@ import reactor.core.publisher.Flux;
  * <p>思考差分：Spring AI 2.0.1 的 OpenAiChatModel 在每个 chunk 的 metadata 里带
  * reasoningContent 累积值，需做前缀差分取增量（与 {@code WorkerToolEventAdvisor} 同纪律）。
  *
- * <p>去重：{@link TokenEstimator#calibrate} 内部用样本指纹去重，同一轮若
- * {@code RateLimitNode}（限流路径）也调了 calibrate 不会重复校准。
+ * <p>校准入口唯一：本 advisor 是 {@link BuiltinTokenEstimator#calibrate} 的唯一调用方
+ * （限流器的 {@code Permit.complete} 不再自行校准）。
  */
 public class TokenCalibrationAdvisor implements CallAdvisor, StreamAdvisor {
 
     private static final Logger log = LoggerFactory.getLogger(TokenCalibrationAdvisor.class);
 
-    private final TokenEstimator estimator;
+    private final BuiltinTokenEstimator estimator;
     private final String configId;
 
-    public TokenCalibrationAdvisor(String configId, TokenEstimator estimator) {
+    public TokenCalibrationAdvisor(String configId, BuiltinTokenEstimator estimator) {
         this.configId = configId;
         this.estimator = estimator;
     }
@@ -128,9 +127,9 @@ public class TokenCalibrationAdvisor implements CallAdvisor, StreamAdvisor {
      */
     public static class Provider implements AdvisorProvider {
 
-        private final TokenEstimator estimator;
+        private final BuiltinTokenEstimator estimator;
 
-        public Provider(TokenEstimator estimator) {
+        public Provider(BuiltinTokenEstimator estimator) {
             this.estimator = estimator;
         }
 

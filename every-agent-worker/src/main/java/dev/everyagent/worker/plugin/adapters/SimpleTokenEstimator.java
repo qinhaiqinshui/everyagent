@@ -23,21 +23,6 @@ public class SimpleTokenEstimator implements TokenEstimator {
         return rawTokens(text);
     }
 
-    @Override
-    public void calibrate(String configId, long estimatedTokens, long actualTokens) {
-        // 不校准
-    }
-
-    @Override
-    public double factorOf(String configId) {
-        return 1.0;
-    }
-
-    @Override
-    public long sampleCountOf(String configId) {
-        return 0;
-    }
-
     static long rawTokens(String s) {
         if (s == null || s.isEmpty()) {
             return 0;

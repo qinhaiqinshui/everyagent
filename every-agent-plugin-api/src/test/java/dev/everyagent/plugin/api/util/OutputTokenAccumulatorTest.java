@@ -21,9 +21,6 @@ class OutputTokenAccumulatorTest {
     /** factor 恒 1.0 的估算器桩:CJK≈1 token、其余≈4 字符 1 token(与既有口径一致)。 */
     private static final TokenEstimator STUB = new TokenEstimator() {
         @Override public long estimate(String text, String configId) { return rawTokens(text); }
-        @Override public void calibrate(String configId, long estimatedTokens, long actualTokens) { }
-        @Override public double factorOf(String configId) { return 1.0; }
-        @Override public long sampleCountOf(String configId) { return 0; }
     };
 
     private static long rawTokens(String s) {

@@ -48,9 +48,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * 口径变更（如本次「纳入工具调用参数、修正 ratio 语义」）后旧系数不再可比，故载入时若
  * 版本不符（含缺失）即丢弃旧状态、从空开始重新标定——而非延续被污染的错误系数。
  *
- * <p>去重：同一轮模型调用可能被 {@code RateLimitNode}（限流路径）和
- * {@code TokenCalibrationAdvisor}（advisor 路径）同时观察到 usage，{@link #calibrate}
- * 内部用最近样本指纹去重，同一 (configId, estimated, actual) 三元组短时间不重复校准。
+ * <p><b>接口边界</b>：本类只把 {@link #estimate} 暴露为 {@link TokenEstimator} SPI；
+ * {@link #calibrate} / {@link #factorOf} / {@link #sampleCountOf} 是<b>本插件内部</b>方法
+ * （供同插件的 {@code TokenCalibrationAdvisor} 校准与测试断言使用），不属于 SPI——SPI 上不再
+ * 承诺校准接缝，避免第三方实现替换后校准灌进旧实例、新实现永不被校准。
  */
 public class BuiltinTokenEstimator implements TokenEstimator {
 
@@ -74,9 +75,6 @@ public class BuiltinTokenEstimator implements TokenEstimator {
     private final ExecutorService writer;
     private final WorkerConfig config;
 
-    /** 去重：最近一次校准样本指纹（configId → "estimated:actual"）。 */
-    private final Map<String, String> lastSampleKey = new ConcurrentHashMap<>();
-
     public BuiltinTokenEstimator(WorkerConfig config) {
         this.config = config;
         this.file = config.resolveHomeDir().resolve(FILE_NAME);
@@ -96,8 +94,9 @@ public class BuiltinTokenEstimator implements TokenEstimator {
     // ---- TokenEstimator SPI ----
 
     /**
-     * 估算文本 token 数。同文本恒得同值（分词与方向无关）；系数取该 configId 已收敛的值
-     * （无记录则 1.0）。
+     * 估算文本 token 数（{@link TokenEstimator} SPI 的唯一方法）。
+     *
+     * <p>同文本恒得同值（分词与方向无关）；系数取该 configId 已收敛的值（无记录则 1.0）。
      */
     @Override
     public long estimate(String text, String configId) {
@@ -110,16 +109,19 @@ public class BuiltinTokenEstimator implements TokenEstimator {
         return Math.max(0, Math.round(raw * f));
     }
 
-    @Override
+    /**
+     * 用真实 usage 校准估算系数（EMA）——<b>本插件内部方法，不属于 {@link TokenEstimator} SPI</b>。
+     * 唯一调用方是同插件的 {@code TokenCalibrationAdvisor}。
+     *
+     * <p>入参 {@code estimatedTokens} 是调用方逐 chunk 累计、<b>已乘当前系数</b>的估算值；
+     * 实现内先除回旧系数得到 raw 原始估算，再以 {@code ratio = actual / raw} 更新因子。
+     *
+     * @param configId        模型配置 ID
+     * @param estimatedTokens 本次模型调用的估算输出 token 总量（已乘当前系数）
+     * @param actualTokens    模型返回的真实 completionTokens
+     */
     public void calibrate(String configId, long estimatedTokens, long actualTokens) {
         if (actualTokens <= 0 || estimatedTokens <= 0) {
-            return;
-        }
-
-        // 去重：同一 (configId, estimated, actual) 短时间不重复校准。
-        String sampleKey = estimatedTokens + ":" + actualTokens;
-        String prev = lastSampleKey.put(configId, sampleKey);
-        if (prev != null && prev.equals(sampleKey)) {
             return;
         }
 
@@ -194,13 +196,17 @@ public class BuiltinTokenEstimator implements TokenEstimator {
         });
     }
 
-    @Override
+    /**
+     * 当前校准系数（<b>插件内部</b>诊断/断言用，不属于 {@link TokenEstimator} SPI；无记录返回 1.0）。
+     */
     public double factorOf(String configId) {
         EstState s = states.get(configId);
         return s == null ? 1.0 : s.factor;
     }
 
-    @Override
+    /**
+     * 校准样本数（<b>插件内部</b>诊断/断言用，不属于 {@link TokenEstimator} SPI；无记录返回 0）。
+     */
     public long sampleCountOf(String configId) {
         EstState s = states.get(configId);
         return s == null ? 0 : s.sampleCount;

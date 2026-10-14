@@ -37,14 +37,18 @@ class ModelRateLimiterTest {
         };
     }
 
-    /** 测试用 TokenEstimator 桩:CJK 估算同口径,带简单 EMA 校准(α=0.1,无收敛/漂移逻辑)。 */
-    private static final TokenEstimator STUB_ESTIMATOR = new TokenEstimator() {
+    /**
+     * 测试用 TokenEstimator 桩:factor 恒 1.0 的粗估桩 + 简单 EMA 校准(α=0.1,无收敛/漂移逻辑)。
+     * 作为 SPI 实现只暴露 {@code estimate};{@code calibrate/factor/samples} 是桩自身的公开状态
+     * 方法,供断言读取(限流器已不再自行校准,校准入口是 TokenCalibrationAdvisor)。
+     */
+    private static final class StubEstimator implements TokenEstimator {
         private final java.util.Map<String, double[]> states = new java.util.concurrent.ConcurrentHashMap<>();
         @Override public long estimate(String text, String configId) {
             if (text == null || text.isEmpty()) { return 0; }
-            return Math.max(0, Math.round(rawTokens(text) * factorOf(configId)));
+            return Math.max(0, Math.round(rawTokens(text) * factor(configId)));
         }
-        @Override public void calibrate(String configId, long estimatedTokens, long actualTokens) {
+        void calibrate(String configId, long estimatedTokens, long actualTokens) {
             if (actualTokens <= 0 || estimatedTokens <= 0) { return; }
             states.compute(configId, (k, v) -> {
                 double oldFactor = (v == null) ? 1.0 : v[0];
@@ -56,11 +60,11 @@ class ModelRateLimiterTest {
                 return new double[]{nextFactor, samples + 1};
             });
         }
-        @Override public double factorOf(String configId) {
+        double factor(String configId) {
             double[] v = states.get(configId);
             return (v == null) ? 1.0 : v[0];
         }
-        @Override public long sampleCountOf(String configId) {
+        long samples(String configId) {
             double[] v = states.get(configId);
             return (v == null) ? 0 : (long) v[1];
         }
@@ -80,7 +84,9 @@ class ModelRateLimiterTest {
             }
             return cjk + (other + 3) / 4;
         }
-    };
+    }
+
+    private static final StubEstimator STUB_ESTIMATOR = new StubEstimator();
 
     @Test
     void estimateTokensCjkAndOther() {
@@ -159,16 +165,18 @@ class ModelRateLimiterTest {
         ModelRateLimitConfig cfg = new ModelRateLimitConfig(0, 0, 1_000_000, 1.0);
         ModelRateLimiter limiter = new ModelRateLimiter("m", cfg, defaults(1000), STUB_ESTIMATOR);
         ModelRateLimiter.Permit p1 = limiter.acquire();
-        p1.onChunk(new org.springframework.ai.chat.messages.AssistantMessage("你好世界")); // est=round(4*1.0)=4
-        p1.complete(8);          // raw=4/1.0=4, ratio=8/4=2.0 → factor=0.9*1.0+0.1*2.0=1.1
-        assertEquals(1.1, STUB_ESTIMATOR.factorOf("m"), 1e-9);
-        assertEquals(1L, STUB_ESTIMATOR.sampleCountOf("m"));
+        p1.onChunk(new org.springframework.ai.chat.messages.AssistantMessage("你好世界")); // 流中估算 est=round(4*1.0)=4
+        p1.complete(8); // 限流器只做 tpm 记账;校准入口是 TokenCalibrationAdvisor(此处直接喂桩)
+        STUB_ESTIMATOR.calibrate("m", STUB_ESTIMATOR.estimate("你好世界", "m"), 8); // raw=4/1.0=4, ratio=8/4=2.0 → factor=0.9*1.0+0.1*2.0=1.1
+        assertEquals(1.1, STUB_ESTIMATOR.factor("m"), 1e-9);
+        assertEquals(1L, STUB_ESTIMATOR.samples("m"));
 
         ModelRateLimiter.Permit p2 = limiter.acquire();
         p2.onChunk(new org.springframework.ai.chat.messages.AssistantMessage("你好世界")); // est=round(4*1.1)=4
-        p2.complete(8);          // raw=4/1.1≈3.636, ratio=8/3.636≈2.2 → factor=0.9*1.1+0.1*2.2=1.21
-        assertEquals(1.21, STUB_ESTIMATOR.factorOf("m"), 1e-9);
-        assertEquals(2L, STUB_ESTIMATOR.sampleCountOf("m"));
+        p2.complete(8);
+        STUB_ESTIMATOR.calibrate("m", STUB_ESTIMATOR.estimate("你好世界", "m"), 8); // raw=4/1.1≈3.636, ratio≈2.2 → factor=0.9*1.1+0.1*2.2=1.21
+        assertEquals(1.21, STUB_ESTIMATOR.factor("m"), 1e-9);
+        assertEquals(2L, STUB_ESTIMATOR.samples("m"));
         p2.complete(0); // 幂等
     }
 
