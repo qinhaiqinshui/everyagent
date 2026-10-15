@@ -1,0 +1,9 @@
+{
+  "id": "ripgrep-tool",
+  "name": "ripgrep-tool",
+  "version": "0.1.0",
+  "description": "ripgrep-tool 插件",
+  "author": "everyagent",
+  "main": "dev.everyagent.plugin.ripgrepTool.RipgrepToolPlugin",
+  "enabled": true
+}
