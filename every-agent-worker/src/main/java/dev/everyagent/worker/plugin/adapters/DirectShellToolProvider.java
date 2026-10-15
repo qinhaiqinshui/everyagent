@@ -69,9 +69,7 @@ public class DirectShellToolProvider implements ToolProvider {
         // 此时若仍宣称「已在 PATH」,模型会把「命令不存在」误读成「无匹配、结果正常」。
         // 本提供者按 OS 分叉,对照命令也必须分叉——Linux/macOS 分支提 findstr 是错的。
         String rgNote = rgDir != null
-                ? "内容搜索用 rg(已在 PATH,尊重 .gitignore,全仓递归远快于"
-                        + (win ? " findstr" : " grep -r")
-                        + ";未给文件参数时会改读空 stdin,务必显式给出路径如 rg <pattern> .);"
+                ? "内容搜索优先用 rg（已在path），速度更快。rg搜索必须显式带上路径参数;"
                 : "rg 不可用,内容搜索改用" + (win ? " Select-String;" : " grep;");
         String head = win
                 ? "在系统上用 PowerShell 执行真实 OS 命令;命令工作目录默认为任务工作区根;"

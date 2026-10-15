@@ -52,8 +52,8 @@ class CodexBashToolProviderTest {
         assertEquals(1, tools.size());
         assertEquals("powershell", tools.get(0).getToolDefinition().name());
         String desc = tools.get(0).getToolDefinition().description();
-        assertTrue(desc.contains("已在 PATH"), "rg 可用 → 描述声明 rg 可用");
-        assertTrue(desc.contains("务必显式给出路径"), "§7.10 恢复项:无路径陷阱子句必须在场");
+        assertTrue(desc.contains("已在path"), "rg 可用 → 描述声明 rg 可用");
+        assertTrue(desc.contains("必须显式带上路径参数"), "§7.10 恢复项:无路径陷阱子句必须在场");
         assertFalse(desc.contains("rg 不可用"), "rg 可用时不得混入「不可用」提示");
     }
 
@@ -63,8 +63,8 @@ class CodexBashToolProviderTest {
         String desc = provider(new CodexRg.Rg(null, false))
                 .createTools(TestFixtures.ctx("codex", tempDir, null))
                 .get(0).getToolDefinition().description();
-        assertFalse(desc.contains("已在 PATH"), "rg 不可用不得谎报可用");
-        assertFalse(desc.contains("务必显式给出路径"), "rg 子句只随 rg 可用分支携带");
+        assertFalse(desc.contains("已在path"), "rg 不可用不得谎报可用");
+        assertFalse(desc.contains("必须显式带上路径参数"), "rg 子句只随 rg 可用分支携带");
         assertTrue(desc.contains("rg 不可用"), "如实声明 rg 不可用");
     }
 

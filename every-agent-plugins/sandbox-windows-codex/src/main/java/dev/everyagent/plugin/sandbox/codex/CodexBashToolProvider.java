@@ -74,8 +74,7 @@ public class CodexBashToolProvider implements ToolProvider {
         // 执行器真实分支),PowerShell 时报名称+版本(一次 spawn 探测,失败降级 7+/5.1),
         // &&/|| 等版本判断依据对模型仍可见。
         String rgNote = rg.available()
-                ? "内容搜索用 rg(已在 PATH,尊重 .gitignore,全仓递归远快于 findstr;"
-                        + "未给文件参数时会改读空 stdin,务必显式给出路径如 rg <pattern> .)"
+                ? "内容搜索优先用 rg（已在path），速度更快。rg搜索必须显式带上路径参数"
                 : "rg 不可用,内容搜索改用 Select-String";
         // git 身份提示已随第四批退役(2026-12):执行器 injectGitConfig 经 GIT_CONFIG env
         // 注入 user.name/user.email,裸 git commit 直接成功——描述不再携带任何 git 指引

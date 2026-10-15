@@ -116,8 +116,8 @@ class WslUbuntuBashToolProviderTest {
     @Test
     void managedImageReportsRgAvailable() {
         String desc = description(provider("", true));
-        assertTrue(desc.contains("已在 PATH"), "托管镜像预装 rg → 描述声明 rg 可用");
-        assertTrue(desc.contains("务必显式给出路径"), "§7.10 恢复项:无路径陷阱子句在场");
+        assertTrue(desc.contains("已在path"), "托管镜像预装 rg → 描述声明 rg 可用");
+        assertTrue(desc.contains("必须显式带上路径参数"), "§7.10 恢复项:无路径陷阱子句在场");
         assertFalse(desc.contains("未探测"), "可用分支不得混入中性降级措辞");
         assertFalse(desc.contains("rg 不可用"), "可用分支不得混入「不可用」提示");
     }
@@ -125,7 +125,7 @@ class WslUbuntuBashToolProviderTest {
     /** 显式配置成托管名（镜像同在位）同样算托管发行版。 */
     @Test
     void explicitManagedDistroNameReportsRgAvailable() {
-        assertTrue(description(provider(WslCommon.MANAGED_DISTRO, true)).contains("已在 PATH"));
+        assertTrue(description(provider(WslCommon.MANAGED_DISTRO, true)).contains("已在path"));
     }
 
     // ---- 不可判定分支：不得谎报（§7.10 硬约束）----
@@ -134,8 +134,8 @@ class WslUbuntuBashToolProviderTest {
     @Test
     void customDistroNeverClaimsRgInPath() {
         String desc = description(provider("Ubuntu-24.04", true));
-        assertFalse(desc.contains("已在 PATH"), "非托管发行版不得谎报 rg 已在 PATH");
-        assertFalse(desc.contains("务必显式给出路径"), "rg 子句只随可用分支携带");
+        assertFalse(desc.contains("已在path"), "非托管发行版不得谎报 rg 已在path");
+        assertFalse(desc.contains("必须显式带上路径参数"), "rg 子句只随可用分支携带");
         assertFalse(desc.contains("rg 不可用"),
                 "也不得反向断言不可用(自装发行版里 rg 常在位,那是无法验证的降级)");
         assertTrue(desc.contains("未探测"), "如实说明未探测");
@@ -146,15 +146,15 @@ class WslUbuntuBashToolProviderTest {
     @Test
     void defaultDistroWithoutImageNeverClaimsRgInPath() {
         String desc = description(provider("", false));
-        assertFalse(desc.contains("已在 PATH"), "无托管镜像出处不得宣称 rg 可用");
+        assertFalse(desc.contains("已在path"), "无托管镜像出处不得宣称 rg 可用");
         assertTrue(desc.contains("改用 grep"), "中性分支保留 grep 回退");
     }
 
     /** 托管名但镜像不在位：出处链断了（可能来自别处导入的同名发行版），不据名字宣称可用。 */
     @Test
     void managedNameWithoutImageIsNotEnough() {
-        assertFalse(description(provider(WslCommon.MANAGED_DISTRO, false)).contains("已在 PATH"),
-                "无镜像锚点时托管名不足以宣称 rg 在 PATH");
+        assertFalse(description(provider(WslCommon.MANAGED_DISTRO, false)).contains("已在path"),
+                "无镜像锚点时托管名不足以宣称 rg 在path");
     }
 
     // ---- 桩 ----
