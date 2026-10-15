@@ -463,7 +463,16 @@ public final class CodexCommandExecutor {
                         continue;
                     }
                 } else {
-                    frame = session.receive();
+                    // 超时后（或无超时配置）的收尾：用 TEARDOWN_GRACE_MS 限时等 Exit 帧。
+                    // 若 runner 已卡死（TerminateJobObject 失效/管道死锁），
+                    // 无限阻塞 receive() 会导致执行线程永远无法返回。
+                    try {
+                        frame = session.receive(TEARDOWN_GRACE_MS);
+                    } catch (IOException teardownTimeout) {
+                        // 宽限期内仍无帧：runner 已不可达，当作中断处理
+                        interrupted = true;
+                        break;
+                    }
                 }
                 if (frame == null) {
                     interrupted = true;
