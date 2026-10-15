@@ -7,7 +7,7 @@
  *   同时显示黑名单和白名单两组勾选列表(黑名单=勾选的工作区不自动暴露;白名单=非空时仅勾选的暴露),
  *   黑名单优先(同时命中时按黑名单处理),确定 → 该 worker 的 `skill.exposure.set`(blacklist + whitelist);
  *   未注册但存在于配置中的工作区不展示、保存时原样保留(防打开一次弹窗就清掉历史配置);
- * - 详情列:经 `openGlobalFileTab` 以**可编辑**(`mode: 'readwrite'`)标签页打开 skill.md——
+ * - 详情入口:点击 **name 列**经 `openGlobalFileTab` 以**可编辑**(`mode: 'readwrite'`)标签页打开 skill.md(无独立「详情」列)——
  *   用户点「打开」即可直接改正文/脚本引用,不经二次点「编辑」;读写走既有 fs.readRaw/fs.writeRaw
  *   绝对路径通道(人工行为,不经沙箱/权限门,`skills/` 本身也是免授权读写例外,§7.17),
  *   workspaceRoot 仅作 tab 组织锚点。同一 skill.md 的标签已存在时按同 id upsert,模式被本次
@@ -359,7 +359,6 @@ export default function SkillListTable() {
             <th style={thStyle}>name</th>
             <th style={{ ...thStyle, width: 'auto' }}>描述</th>
             <th style={thStyle}>自动暴露</th>
-            <th style={thStyle}>详情</th>
           </tr>
         </thead>
         <tbody>
@@ -389,7 +388,16 @@ export default function SkillListTable() {
             return (
               <tr key={skill.id}>
                 <td style={idTdStyle} title={skill.id}>{skill.id}</td>
-                <td style={nameTdStyle} title={skill.name}>{skill.name || '—'}</td>
+                <td style={nameTdStyle}>
+                  <button
+                    type="button"
+                    style={nameButtonStyle}
+                    title={(skill.knowledgePath ? skill.knowledgePath + '\n' : '') + '点击打开 skill.md(可编辑)'}
+                    onClick={() => handleOpenKnowledge(workerId, skill)}
+                  >
+                    {skill.name || '—'}
+                  </button>
+                </td>
                 <td style={descTdStyle} title={skill.description || undefined}>
                   {skill.description || '—'}
                 </td>
@@ -401,16 +409,6 @@ export default function SkillListTable() {
                     onClick={() => openExclusionDialog(workerId, skill)}
                   >
                     {label}
-                  </button>
-                </td>
-                <td style={cellTdStyle}>
-                  <button
-                    type="button"
-                    style={linkButtonStyle}
-                    title={(skill.knowledgePath ? skill.knowledgePath + '\n' : '') + '以可编辑模式打开 skill.md'}
-                    onClick={() => handleOpenKnowledge(workerId, skill)}
-                  >
-                    打开
                   </button>
                 </td>
               </tr>
@@ -595,13 +593,20 @@ const exposureActiveStyle: React.CSSProperties = {
   fontWeight: 700,
 }
 
-const linkButtonStyle: React.CSSProperties = {
+const nameButtonStyle: React.CSSProperties = {
   border: 'none',
   background: 'transparent',
-  color: 'var(--accent-blue)',
+  padding: 0,
+  margin: 0,
+  fontFamily: 'inherit',
   fontSize: 'var(--text-xs)',
-  padding: '2px 6px',
-  borderRadius: 'var(--radius-sm)',
+  lineHeight: 1.4,
+  color: 'var(--accent-blue)',
+  textAlign: 'left',
+  maxWidth: '100%',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
   cursor: 'pointer',
 }
 
