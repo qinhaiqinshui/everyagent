@@ -45,16 +45,13 @@ public class CodexSandboxPlugin implements EveryAgentPlugin {
         // 1. 沙箱后端提供者（id=codex；isAvailable=Windows 平台探测，priority=8）
         ctx.registerSandboxProvider(new CodexSandboxProvider(manager));
 
-        // 2. 沙箱自己的命令工具（appliesTo=codex 后端选中时）；rg 激活时三档解析一次
-        //    （插件根 bin/ → 程序根 runtime/bin/ → 系统 PATH），runtimeDir 走 WorkerConfig
-        //    契约位定位，不对 cwd 做假设（架构 §7.10「程序附属文件」）
-        CodexRg.Rg rg = CodexRg.resolve(ctx.pluginDir(), props.resolveRuntimeDir());
-        ctx.registerToolProvider(new CodexBashToolProvider(manager, rg));
+        // 2. 沙箱自己的命令工具（appliesTo=codex 后端选中时）
+        ctx.registerToolProvider(new CodexBashToolProvider(manager));
 
         LOG.log(Level.INFO,
-                "sandbox-windows-codex 已激活（codexHome={0},账户前缀={1},网络策略={2},rg={3}；"
+                "sandbox-windows-codex 已激活（codexHome={0},账户前缀={1},网络策略={2}；"
                         + "setup 延迟到 codex 后端被选中时执行）",
                 new Object[] { options.codexHome(), options.accountPrefix(),
-                        options.networkPolicy(), rg });
+                        options.networkPolicy() });
     }
 }

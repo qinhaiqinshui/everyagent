@@ -24,8 +24,6 @@ import org.slf4j.LoggerFactory;
  *       (DIRECT 无沙箱后端,按 OS 注册 bash / powershell);</li>
  * </ul>
  *
- * <p>bash/powershell 子进程会注入打包 rg 二进制所在目录到 PATH(见 rgBinDir),方便直接调用 rg。
- *
  * <p>安全边界(与旧 execute_command 完全一致):
  * <ul>
  *   <li>cwd 锁 {@code exec.workspaceRoot()},子进程工作目录固定在工作区内;</li>
@@ -48,8 +46,6 @@ public class CommandExecutor {
     private final ExecContext task;
     private final PermissionGate gate;
     private final String agentId;
-    /** 打包 rg 二进制所在目录(可空);非空时 bash/powershell 子进程把它注入 PATH。 */
-    private final Path rgBinDir;
     /**
      * per-run 工具结果账本(可空):每次命令执行后按结构化退出码记账,供
      * {@code tool.result} 事件的 {@code data.status} 判定(非零退出码 / 超时 → 前端标红)。
@@ -57,21 +53,15 @@ public class CommandExecutor {
     private final ToolOutcomeLog toolOutcomes;
 
     public CommandExecutor(OsSandbox sandbox, ExecContext task, PermissionGate gate, String agentId) {
-        this(sandbox, task, gate, agentId, null, null);
+        this(sandbox, task, gate, agentId, null);
     }
 
     public CommandExecutor(OsSandbox sandbox, ExecContext task, PermissionGate gate, String agentId,
-                           Path rgBinDir) {
-        this(sandbox, task, gate, agentId, rgBinDir, null);
-    }
-
-    public CommandExecutor(OsSandbox sandbox, ExecContext task, PermissionGate gate, String agentId,
-                           Path rgBinDir, ToolOutcomeLog toolOutcomes) {
+                           ToolOutcomeLog toolOutcomes) {
         this.sandbox = sandbox;
         this.task = task;
         this.gate = gate;
         this.agentId = agentId;
-        this.rgBinDir = rgBinDir;
         this.toolOutcomes = toolOutcomes;
     }
 
@@ -111,14 +101,6 @@ public class CommandExecutor {
             prepareWritableRoots(cwd, powershell);
         }
         Map<String, String> env = new HashMap<>();
-        // bash/powershell 且配置了 rgBinDir 时,把打包 rg 二进制所在目录注入子进程 PATH,
-        // 使模型可直接敲 rg(其余 shell 如 cmd/auto/raw 不注入,保持原行为)。
-        // wsl 系列后端不注入:Windows 侧 rg.exe 进不了发行版,rg 由发行版自带(安装脚本/apt)
-        if (!wsl && rgBinDir != null
-                && (powershell || "bash".equalsIgnoreCase(shell))) {
-            String sysPath = System.getenv("PATH");
-            env.put("PATH", rgBinDir + java.io.File.pathSeparator + (sysPath == null ? "" : sysPath));
-        }
         // powershell 专属(Windows 原生域):授权检查之后以 ExecResults.buildPowerShellScript
         // 组装完整脚本——UTF-8 编码偏好 + 非成功流抑制前缀(权限检查与审计日志始终是用户
         // 原始命令)、PS-003 顶层对象输出断流修复 + PS-004 异常终止丢输出(&{} | Out-String

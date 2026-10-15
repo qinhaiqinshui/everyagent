@@ -108,7 +108,7 @@ class CodexCommandExecutorTest {
             long timeoutMs) {
         CodexSandboxManager manager = new CodexSandboxManager(
                 new CodexSandboxOptions(tempDir, null, null, null, false, null), timeoutMs);
-        return new CodexCommandExecutor(manager, tempDir.resolve("ws"), null, false,
+        return new CodexCommandExecutor(manager, tempDir.resolve("ws"), false,
                 (cfg, spec) -> {
                     capture.cfg = cfg;
                     capture.spec = spec;
@@ -147,7 +147,7 @@ class CodexCommandExecutorTest {
     void commandArgvIsCmdFallback() {
         CodexCommandExecutor exec = new CodexCommandExecutor(
                 new CodexSandboxManager(new CodexSandboxOptions(tempDir, null, null, null, false, null), 30_000),
-                tempDir.resolve("ws"), null, false, CodexCommandExecutor.ShellChoice.CMD,
+                tempDir.resolve("ws"), false, CodexCommandExecutor.ShellChoice.CMD,
                 (cfg, spec) -> new FakeSession(new FramedMessage(6, new Exit(0, false))),
                 (options, capSids, w, r) -> { },
                 (options, username) -> new RunnerClient.RunnerConfig(
@@ -225,19 +225,14 @@ class CodexCommandExecutorTest {
     }
 
     @Test
-    void childEnvPrependsRgDirToPath() {
-        Path rg = tempDir.resolve("bin/rg.exe");
-        Map<String, String> env = CodexCommandExecutor.childEnv(rg, null, null);
-        String key = env.containsKey("Path") ? "Path" : "PATH";
-        assertTrue(env.get(key).startsWith(rg.getParent().toString()),
-                "rg 所在目录前置进 Path:" + env.get(key));
-        Map<String, String> plain = CodexCommandExecutor.childEnv(null, null, null);
+    void childEnvInheritsScrubbedParentEnv() {
+        Map<String, String> plain = CodexCommandExecutor.childEnv(null, null);
         Map<String, String> expected = new java.util.LinkedHashMap<>(
                 dev.everyagent.plugin.api.util.SecretPatterns.scrubEnv(System.getenv()).env());
         expected.putIfAbsent("JAVA_TOOL_OPTIONS",
                 "-Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8");
         assertEquals(expected, plain,
-                "无 rg 时继承「凭据剔除后的父环境」+ JVM 流编码钉住(整块原样继承是泄露面,"
+                "继承「凭据剔除后的父环境」+ JVM 流编码钉住(整块原样继承是泄露面,"
                         + "见 SecretPatterns;JAVA_TOOL_OPTIONS 见 childEnvPinsJvmStreamEncodingToUtf8)");
         assertFalse(plain.entrySet().stream()
                         .anyMatch(e -> dev.everyagent.plugin.api.util.SecretPatterns
@@ -248,7 +243,7 @@ class CodexCommandExecutorTest {
 
     @Test
     void childEnvPinsJvmStreamEncodingToUtf8() {
-        Map<String, String> env = CodexCommandExecutor.childEnv(null, null, null);
+        Map<String, String> env = CodexCommandExecutor.childEnv(null, null);
         assertEquals("-Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8",
                 env.get("JAVA_TOOL_OPTIONS"),
                 "JDK 18+(JEP 400)重定向流默认按 native.encoding(中文机器=GBK,实测"
@@ -280,7 +275,7 @@ class CodexCommandExecutorTest {
     void childEnvInjectsGitConfigForRepoRoot() throws IOException {
         Path ws = tempDir.resolve("ws-git");
         Files.createDirectories(ws.resolve(".git"));
-        Map<String, String> env = CodexCommandExecutor.childEnv(null, ws, null);
+        Map<String, String> env = CodexCommandExecutor.childEnv(ws, null);
         String root = ws.toAbsolutePath().normalize().toString().replace('\\', '/');
         int n = gitConfigBase();
         assertEquals(String.valueOf(n + 4), env.get("GIT_CONFIG_COUNT"),
@@ -302,7 +297,7 @@ class CodexCommandExecutorTest {
         Files.createDirectories(ws.resolve(".git"));
         Path nested = ws.resolve("a").resolve("b");
         Files.createDirectories(nested);
-        Map<String, String> env = CodexCommandExecutor.childEnv(null, nested, null);
+        Map<String, String> env = CodexCommandExecutor.childEnv(nested, null);
         String root = ws.toAbsolutePath().normalize().toString().replace('\\', '/');
         int n = gitConfigBase();
         assertEquals(root, env.get("GIT_CONFIG_VALUE_" + n),
@@ -323,7 +318,7 @@ class CodexCommandExecutorTest {
             }
         }
         assumeTrue(!repoAbove, "tempDir 之上存在 git 树根时跳过(walk-up 命中属正确行为)");
-        Map<String, String> env = CodexCommandExecutor.childEnv(null, ws, null);
+        Map<String, String> env = CodexCommandExecutor.childEnv(ws, null);
         assertNull(env.get("GIT_CONFIG_COUNT"), "无 .git 树根时不注入(不碰宿主已有配置)");
     }
 
@@ -331,7 +326,7 @@ class CodexCommandExecutorTest {
     void childEnvRedirectsHomeToSandboxProfile() {
         Path ws = tempDir.resolve("ws-profile");
         Path profile = Path.of("C:", "Users", "EACodexOnline");
-        Map<String, String> env = CodexCommandExecutor.childEnv(null, ws, profile);
+        Map<String, String> env = CodexCommandExecutor.childEnv(ws, profile);
         assertEquals(profile.toString(), env.get("USERPROFILE"),
                 "env 型工具(git/npm/pip)读 USERPROFILE,必须指沙箱真 profile 而非宿主目录"
                         + "(宿主只读且 .gitconfig/.npmrc 凭据不得泄露)");
@@ -348,13 +343,13 @@ class CodexCommandExecutorTest {
     @Test
     void childEnvRedirectsTempIntoWorkspace() {
         Path ws = tempDir.resolve("ws-root");
-        Map<String, String> env = CodexCommandExecutor.childEnv(null, ws, null);
+        Map<String, String> env = CodexCommandExecutor.childEnv(ws, null);
         String expected = ws.resolve(".everyagent").resolve("tmp").toString();
         assertEquals(expected, env.get("TEMP"),
                 "命令子进程是 WRITE_RESTRICTED 受限令牌,组 ACE 对其写检查无效,"
                         + "TEMP 必须指到 capability 覆盖的工作区 .everyagent/tmp");
         assertEquals(expected, env.get("TMP"), "TMP 与 TEMP 同指一处");
-        Map<String, String> untouched = CodexCommandExecutor.childEnv(null, null, null);
+        Map<String, String> untouched = CodexCommandExecutor.childEnv(null, null);
         assertEquals(dev.everyagent.plugin.api.util.SecretPatterns.scrubEnv(System.getenv()).env()
                         .get("TEMP"),
                 untouched.get("TEMP"), "workspaceRoot 为空时不碰 TEMP(维持宿主继承)");
@@ -403,7 +398,7 @@ class CodexCommandExecutorTest {
         // ASCII 在两种编码下一致
         assertEquals("hello", ExecResults.decodeConsoleOutput(
                 "hello".getBytes(StandardCharsets.UTF_8)));
-        // UTF-8 中文：严格解码成功（外部程序 git/rg 等输出路径）
+        // UTF-8 中文：严格解码成功（外部程序 git 等输出路径）
         String cn = "你好世界，中文输出";
         assertEquals(cn, ExecResults.decodeConsoleOutput(cn.getBytes(StandardCharsets.UTF_8)));
     }
@@ -498,7 +493,7 @@ class CodexCommandExecutorTest {
         CodexSandboxManager manager = new CodexSandboxManager(
                 new CodexSandboxOptions(tempDir, null,
                         CodexSandboxOptions.POLICY_OFFLINE, null, false, null), 30_000);
-        new CodexCommandExecutor(manager, tempDir.resolve("ws"), null, false,
+        new CodexCommandExecutor(manager, tempDir.resolve("ws"), false,
                 (cfg, spec) -> {
                     capture.cfg = cfg;
                     capture.spec = spec;
@@ -600,7 +595,7 @@ class CodexCommandExecutorTest {
         CodexSandboxManager manager = new CodexSandboxManager(
                 new CodexSandboxOptions(tempDir, null, null, null, false, null), 30_000);
         CodexCommandExecutor exec = new CodexCommandExecutor(manager,
-                tempDir.resolve("ws"), null);
+                tempDir.resolve("ws"));
         String result = exec.execute("echo hi", "powershell");
         assertTrue(result.startsWith("[codex sandbox 仅在 Windows 上可用"),
                 "非 Windows 给可读错误: " + result);
@@ -613,7 +608,7 @@ class CodexCommandExecutorTest {
                 new FramedMessage(6, new Exit(0, false)));
         AtomicInteger reprovisioned = new AtomicInteger();
         CodexCommandExecutor exec = new CodexCommandExecutor(manager(),
-                tempDir.resolve("ws"), null, true,
+                tempDir.resolve("ws"), true,
                 CodexCommandExecutor.ShellChoice.POWERSHELL,
                 (cfg, spec) -> session,
                 (options, capSids, w, r) -> {
@@ -642,7 +637,7 @@ class CodexCommandExecutorTest {
     void nativeGuardHealFailureReturnsReadableError() {
         assumeTrue(Platform.isWindows(), "Windows 专属(marker 闸门)");
         CodexCommandExecutor exec = new CodexCommandExecutor(manager(),
-                tempDir.resolve("ws"), null, true,
+                tempDir.resolve("ws"), true,
                 CodexCommandExecutor.ShellChoice.POWERSHELL,
                 (cfg, spec) -> {
                     throw new IOException("unreachable");
@@ -666,7 +661,7 @@ class CodexCommandExecutorTest {
         CodexSandboxManager manager = new CodexSandboxManager(
                 new CodexSandboxOptions(tempDir, null, null, null, false, null), 30_000);
         CodexCommandExecutor exec = new CodexCommandExecutor(manager,
-                tempDir.resolve("ws"), null, false,
+                tempDir.resolve("ws"), false,
                 (cfg, spec) -> {
                     throw new IOException("pipe broken");
                 },
@@ -693,7 +688,7 @@ class CodexCommandExecutorTest {
             CodexCommandExecutor.SessionOpener opener,
             CodexCommandExecutor.Reprovisioner reprovisioner,
             CodexCommandExecutor.PreflightRefresher preflight) {
-        return new CodexCommandExecutor(manager, tempDir.resolve("ws"), null, false,
+        return new CodexCommandExecutor(manager, tempDir.resolve("ws"), false,
                 CodexCommandExecutor.ShellChoice.POWERSHELL, opener, preflight,
                 (options, username) -> new RunnerClient.RunnerConfig(
                         options.codexHome(), username, "pw", "cp", "jh", "cwd"),
@@ -857,7 +852,7 @@ class CodexCommandExecutorTest {
         AtomicInteger built = new AtomicInteger();
         AtomicInteger reprovisioned = new AtomicInteger();
         CodexCommandExecutor exec = new CodexCommandExecutor(manager(),
-                tempDir.resolve("ws"), null, false,
+                tempDir.resolve("ws"), false,
                 CodexCommandExecutor.ShellChoice.POWERSHELL,
                 (cfg, spec) -> {
                     return session;

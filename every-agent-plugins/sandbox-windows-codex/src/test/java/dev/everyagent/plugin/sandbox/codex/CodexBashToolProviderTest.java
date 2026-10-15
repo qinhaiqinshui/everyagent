@@ -22,21 +22,17 @@ class CodexBashToolProviderTest {
     Path tempDir;
 
     private CodexBashToolProvider provider() {
-        return provider(new CodexRg.Rg(null, false));
-    }
-
-    private CodexBashToolProvider provider(CodexRg.Rg rg) {
         return new CodexBashToolProvider(new CodexSandboxManager(
-                new CodexSandboxOptions(tempDir, null, null, null, false, null), 30_000), rg);
+                new CodexSandboxOptions(tempDir, null, null, null, false, null), 30_000));
     }
 
     @Test
     void appliesOnlyWhenActiveBackendIsCodex() {
-        assertTrue(provider().appliesTo(TestFixtures.ctx("codex", tempDir, null)),
+        assertTrue(provider().appliesTo(TestFixtures.ctx("codex", tempDir)),
                 "当前后端 id==codex → 提供");
-        assertFalse(provider().appliesTo(TestFixtures.ctx("wsl-ubuntu", tempDir, null)));
-        assertFalse(provider().appliesTo(TestFixtures.ctx("windows-mic", tempDir, null)));
-        assertFalse(provider().appliesTo(TestFixtures.ctx(null, tempDir, null)),
+        assertFalse(provider().appliesTo(TestFixtures.ctx("wsl-ubuntu", tempDir)));
+        assertFalse(provider().appliesTo(TestFixtures.ctx("windows-mic", tempDir)));
+        assertFalse(provider().appliesTo(TestFixtures.ctx(null, tempDir)),
                 "无后端(沙箱关闭/direct)不提供");
     }
 
@@ -47,25 +43,28 @@ class CodexBashToolProviderTest {
 
     @Test
     void createsSinglePowerShellTool() {
-        List<ToolCallback> tools = provider(new CodexRg.Rg(tempDir.resolve("rg.exe"), true))
-                .createTools(TestFixtures.ctx("codex", tempDir, null));
+        List<ToolCallback> tools = provider()
+                .createTools(TestFixtures.ctx("codex", tempDir));
         assertEquals(1, tools.size());
         assertEquals("powershell", tools.get(0).getToolDefinition().name());
         String desc = tools.get(0).getToolDefinition().description();
-        assertTrue(desc.contains("已在path"), "rg 可用 → 描述声明 rg 可用");
-        assertTrue(desc.contains("必须显式带上路径参数"), "§7.10 恢复项:无路径陷阱子句必须在场");
-        assertFalse(desc.contains("rg 不可用"), "rg 可用时不得混入「不可用」提示");
+        assertTrue(desc.contains("执行真实 OS 命令"), "用途句在场");
+        assertTrue(desc.contains("命令工作目录默认为任务工作区根"), "工作目录事实保留");
     }
 
-    /** rg 三档全未命中:描述严禁宣称 rg 可用——否则命令不存在会被误读成无匹配。 */
+    /**
+     * rg 归属已整体剥离（由独立插件 ripgrep-tool 提供）：本后端描述<b>不得出现任何
+     * rg 字样</b>，也不得加 Select-String 建议——描述谎报红线：不宣称任何本后端管不了
+     * 的搜索工具。曾经的「已在path」「rg 不可用」条件化子句随剥离一并删除。
+     */
     @Test
-    void rgUnavailableIsReportedTruthfully() {
-        String desc = provider(new CodexRg.Rg(null, false))
-                .createTools(TestFixtures.ctx("codex", tempDir, null))
+    void descriptionDoesNotMentionRg() {
+        String desc = provider()
+                .createTools(TestFixtures.ctx("codex", tempDir))
                 .get(0).getToolDefinition().description();
-        assertFalse(desc.contains("已在path"), "rg 不可用不得谎报可用");
-        assertFalse(desc.contains("必须显式带上路径参数"), "rg 子句只随 rg 可用分支携带");
-        assertTrue(desc.contains("rg 不可用"), "如实声明 rg 不可用");
+        assertFalse(desc.contains("rg"), "rg 工具由独立插件提供,后端描述不提 rg: " + desc);
+        assertFalse(desc.contains("Select-String"), "不得建议本后端管不了的搜索工具");
+        assertFalse(desc.contains("内容搜索"), "内容搜索引导句随 rg 剥离删除");
     }
 
     /**
@@ -73,14 +72,13 @@ class CodexBashToolProviderTest {
      * 「非 ASCII 已正确解码」等条目已从描述删除（理由与残余风险见 ARCHITECTURE §7.10），
      * 提供者<b>不得把它们加回来</b>——否则已删内容会以「各后端自行补」的形式复活；
      * 恢复提示的前提是先读 §7.10 的处置优先级，不是在此新增。用途/工作目录两句随基线
-     * 删除改由本后端自写，同样在此守护。唯一已恢复项：搜索显式路径子句（§7.10 恢复协议
-     * 走完「核对→决策」后按用户决策恢复，由 createsSinglePowerShellTool 正向断言在场）；
-     * 下两条断言防的是更早期的<b>整句形态</b>复活，恢复项用的是记录在案的紧凑措辞。
+     * 删除改由本后端自写，同样在此守护。内容搜索/rg 子句已随 rg 归属剥离整体删除
+     * （见 descriptionDoesNotMentionRg）。
      */
     @Test
     void backendDoesNotReAddPrunedBaselineClaims() {
-        String desc = provider(new CodexRg.Rg(tempDir.resolve("rg.exe"), true))
-                .createTools(TestFixtures.ctx("codex", tempDir, null))
+        String desc = provider()
+                .createTools(TestFixtures.ctx("codex", tempDir))
                 .get(0).getToolDefinition().description();
         assertTrue(desc.startsWith("在系统上用 " + CodexCommandExecutor.shellDisplay() + " 执行真实 OS 命令;"),
                 "首句含探测得到的 shell 名称+版本(第五批:cmd 兜底时如实报 cmd,不硬编码)");
@@ -90,8 +88,8 @@ class CodexBashToolProviderTest {
         assertFalse(desc.contains("-join"), "已删(第三批):-join/$OFS 条");
         assertFalse(desc.contains("$OFS"), "已删(第三批):-join/$OFS 条");
         assertFalse(desc.contains("非 ASCII"), "已删(第三批):编码已解码句");
-        assertFalse(desc.contains("搜索请始终显式给出路径"), "早期整句形态不得回归(恢复项为 §7.10 紧凑措辞)");
-        assertFalse(desc.contains("当搜索源"), "早期整句形态不得回归(恢复项为 §7.10 紧凑措辞)");
+        assertFalse(desc.contains("搜索请始终显式给出路径"), "搜索引导句已随 rg 剥离删除,不得回归");
+        assertFalse(desc.contains("当搜索源"), "搜索引导句已随 rg 剥离删除,不得回归");
         assertFalse(desc.contains("提交须带"), "已退役(第四批):git 身份由执行器 env 注入,描述不再指引 -c");
         assertFalse(desc.contains("user.name"), "已退役(第四批):描述不再含 git 身份字样");
         assertFalse(desc.contains("实际执行 shell"), "已退役(第五批):shell 身份(名称+版本)并入首句");
@@ -104,8 +102,8 @@ class CodexBashToolProviderTest {
      * 独立子句「实际执行 shell=<exe>」已随第五批退役。 */
     @Test
     void descriptionReportsShellIdentityInOpening() {
-        String desc = provider(new CodexRg.Rg(null, true))
-                .createTools(TestFixtures.ctx("codex", tempDir, null))
+        String desc = provider()
+                .createTools(TestFixtures.ctx("codex", tempDir))
                 .get(0).getToolDefinition().description();
         assertTrue(desc.contains("在系统上用 " + CodexCommandExecutor.shellDisplay() + " 执行真实 OS 命令"),
                 "首句含探测展示名(PowerShell <版本> 或 cmd)");

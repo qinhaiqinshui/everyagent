@@ -82,7 +82,7 @@ public final class WslCommon {
             }
         }
         if (props != null) {
-            // 打包 desktop 态:插件资源不在 staging 插件目录,而在共享 runtime(与 rg 同根)
+            // 打包 desktop 态:插件资源不在 staging 插件目录,而在共享 runtime
             Path shared = props.resolveRuntimeDir().resolve("wsl").resolve("eagent-rootfs.tar.gz");
             if (Files.isRegularFile(shared)) {
                 return shared;

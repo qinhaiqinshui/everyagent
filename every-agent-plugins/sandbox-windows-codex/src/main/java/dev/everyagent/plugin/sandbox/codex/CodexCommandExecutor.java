@@ -114,7 +114,6 @@ public final class CodexCommandExecutor {
 
     private final CodexSandboxManager manager;
     private final Path workspaceRoot;
-    private final Path rgBinary;
     private final boolean nativeGuard;
     private final SessionOpener sessionOpener;
     private final PreflightRefresher preflight;
@@ -125,9 +124,8 @@ public final class CodexCommandExecutor {
     /** 探测到的 shell（缓存，进程生命周期内只探测一次）。 */
     private final ShellChoice shell;
 
-    public CodexCommandExecutor(CodexSandboxManager manager, Path workspaceRoot,
-            Path rgBinary) {
-        this(manager, workspaceRoot, rgBinary, true, detectShell(),
+    public CodexCommandExecutor(CodexSandboxManager manager, Path workspaceRoot) {
+        this(manager, workspaceRoot, true, detectShell(),
                 (cfg, spec) -> adapt(CodexSandboxSession.open(cfg, spec)),
                 CodexCommandExecutor::refreshWriteRootAces,
                 CodexCommandExecutor::createRunnerConfig,
@@ -136,37 +134,36 @@ public final class CodexCommandExecutor {
 
     /** 生产构造：额外接入 per-run 工具结果账本（{@code ctx.toolOutcomes()}，可空）。 */
     public CodexCommandExecutor(CodexSandboxManager manager, Path workspaceRoot,
-            Path rgBinary, ToolOutcomeLog outcomes) {
-        this(manager, workspaceRoot, rgBinary);
+            ToolOutcomeLog outcomes) {
+        this(manager, workspaceRoot);
         this.outcomes = outcomes;
     }
 
     /** 测试构造：注入 fake seam；nativeGuard=false 跳过 Windows/marker 闸门。 */
-    CodexCommandExecutor(CodexSandboxManager manager, Path workspaceRoot, Path rgBinary,
+    CodexCommandExecutor(CodexSandboxManager manager, Path workspaceRoot,
             boolean nativeGuard, SessionOpener sessionOpener, PreflightRefresher preflight,
             RunnerConfigFactory runnerConfigFactory) {
-        this(manager, workspaceRoot, rgBinary, nativeGuard, ShellChoice.POWERSHELL,
+        this(manager, workspaceRoot, nativeGuard, ShellChoice.POWERSHELL,
                 sessionOpener, preflight, runnerConfigFactory,
                 CodexSetupCoordinator::rotateCredentials);
     }
 
     /** 测试构造：显式指定 shell。 */
-    CodexCommandExecutor(CodexSandboxManager manager, Path workspaceRoot, Path rgBinary,
+    CodexCommandExecutor(CodexSandboxManager manager, Path workspaceRoot,
             boolean nativeGuard, ShellChoice shell, SessionOpener sessionOpener,
             PreflightRefresher preflight, RunnerConfigFactory runnerConfigFactory) {
-        this(manager, workspaceRoot, rgBinary, nativeGuard, shell, sessionOpener,
+        this(manager, workspaceRoot, nativeGuard, shell, sessionOpener,
                 preflight, runnerConfigFactory,
                 CodexSetupCoordinator::rotateCredentials);
     }
 
     /** 测试构造：全 seam 注入（重建 = fake，验证自愈路径）。 */
-    CodexCommandExecutor(CodexSandboxManager manager, Path workspaceRoot, Path rgBinary,
+    CodexCommandExecutor(CodexSandboxManager manager, Path workspaceRoot,
             boolean nativeGuard, ShellChoice shell, SessionOpener sessionOpener,
             PreflightRefresher preflight, RunnerConfigFactory runnerConfigFactory,
             Reprovisioner reprovisioner) {
         this.manager = manager;
         this.workspaceRoot = workspaceRoot;
-        this.rgBinary = rgBinary;
         this.nativeGuard = nativeGuard;
         this.shell = shell;
         this.sessionOpener = sessionOpener;
@@ -391,7 +388,7 @@ public final class CodexCommandExecutor {
         }
         CodexSandboxSession.SessionSpec spec = new CodexSandboxSession.SessionSpec(
                 argv, workspaceRoot.toString(),
-                childEnv(rgBinary, workspaceRoot, sandboxProfileDir(identity)),
+                childEnv(workspaceRoot, sandboxProfileDir(identity)),
                 timeoutMs > 0 ? timeoutMs : null, policy.writeRoots(), List.of(),
                 CapSids.workspaceCapSidForCwd(home, workspaceRoot),
                 wireName(identity), false, null);
@@ -531,7 +528,7 @@ public final class CodexCommandExecutor {
      * UTF-8,与原生工具的 UTF-8 字节同流同码,严格解码一次通过。脚本经
      * {@code -EncodedCommand}(base64(UTF-16LE),Java getBytes 不带 BOM)投递:载荷是
      * cmd 安全字符集,免疫 {@code &}/{@code |}/引号嵌套解析;{@code /d} 跳过 AutoRun。
-     * 实测 git/rg 管道捕获与直出全净,退出码经 cmd→powershell 正确传导。
+     * 实测 git 管道捕获与直出全净,退出码经 cmd→powershell 正确传导。
      */
     List<String> commandArgv(String command) {
         if (shell.isPowerShell) {
@@ -540,7 +537,7 @@ public final class CodexCommandExecutor {
             // 脚本本体=ExecResults.buildPowerShellScript(prefix + &{}|Out-String -Stream 包裹 +
             // 退出码尾部):顶层对象输出断流修复(PS-003,断流对管道承载同样成立,实测复现)
             // 与「最后一个原生命令退出码转成 powershell.exe 进程码」(否则 Exit 帧里的退出码
-            // 恒 0,模型分不清 rg「无匹配=1」与「用错=2」)都由该方法统一承担。
+            // 恒 0,模型分不清「无匹配=1」与「用错=2」这类关键退出码差异)都由该方法统一承担。
             String script = ExecResults.buildPowerShellScript(command);
             String encoded = Base64.getEncoder()
                     .encodeToString(script.getBytes(StandardCharsets.UTF_16LE));
@@ -778,7 +775,6 @@ public final class CodexCommandExecutor {
      * 继承当前环境<b>但剔除凭据形态变量</b>（§7.17「真实 key 不进事件日志」的环境侧对应物：
      * 宿主 shell 里散落的 {@code *KEY}/{@code *TOKEN}/值像 {@code sk-ant-…} 的变量不得进入沙箱,
      * 否则沙箱内任意命令 {@code Get-ChildItem Env:} 即可窃取,再随工具输出落盘）；
-     * rgBinary 非空时其所在目录前置进 Path（Windows 键名优先）；
      * workspaceRoot 非空时 {@code TEMP}/{@code TMP} 显式指到工作区
      * {@code <workspaceRoot>/.everyagent/tmp}——落点必须 <b>capability 覆盖</b>：命令子进程
      * 跑在 {@code WRITE_RESTRICTED} 受限令牌下,写检查要求 restricting SIDs 也授权,
@@ -796,17 +792,8 @@ public final class CodexCommandExecutor {
      * 加载后自然正确。实测依据:仅授账户 Full(无组/无 capability)的目录受限令牌可写
      * (写检查=DACL 授予∩restricting SIDs,账户 user SID 两边都在)。
      */
-    static Map<String, String> childEnv(Path rgBinary, Path workspaceRoot, Path profileDir) {
+    static Map<String, String> childEnv(Path workspaceRoot, Path profileDir) {
         Map<String, String> env = new LinkedHashMap<>(inheritEnv());
-        if (rgBinary != null && rgBinary.getParent() != null) {
-            String dir = rgBinary.getParent().toString();
-            String key = env.containsKey("Path") ? "Path" : "PATH";
-            String current = env.get(key);
-            boolean present = current != null && current.toUpperCase(Locale.ROOT)
-                    .contains(dir.toUpperCase(Locale.ROOT));
-            env.put(key, current == null || current.isBlank() ? dir
-                    : present ? current : dir + ";" + current);
-        }
         if (workspaceRoot != null) {
             String tmp = workspaceRoot.resolve(".everyagent").resolve("tmp").toString();
             env.put("TEMP", tmp);

@@ -37,7 +37,7 @@ import java.util.concurrent.TimeUnit;
  *   <li>不降级完整性级别——保留 Medium IL,天然可写工作区(零文件系统副作用,详见
  *       docs/design-windows-mic-medium-il.md);</li>
  *   <li>{@code CreateJobObject} + {@code SetInformationJobObject} 设:
- *       ActiveProcessLimit(默认 32,允许 shell 内 rg/git 等有限子进程,防失控进程树)、
+ *       ActiveProcessLimit(默认 32,允许 shell 内 git 等有限子进程,防失控进程树)、
  *       JobMemoryLimit(内存上限)、KillOnJobClose(父死子亡);</li>
  *   <li>{@code CreatePipe}×2(可继承,stdout 与 stderr 各一条独立管道)→
  *       {@code CreateProcessAsUserW}(CREATE_SUSPENDED,继承两个写端)→
@@ -329,8 +329,8 @@ public final class WindowsSandbox {
         int flags = Win32Ex.JOB_OBJECT_LIMIT_ACTIVE_PROCESS | Win32Ex.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
         int activeLimit = cfg.activeProcessLimit();
         if (activeLimit > 0) {
-            // 注意:不能固定为 1。沙箱 shell 需要在内部再启 rg/git 等有限子进程
-            // (rgt 已移除,模型直接在 shell 中调 rg);这里放行有限进程树,防失控。
+            // 注意:不能固定为 1。沙箱 shell 需要在内部再启 git 等有限子进程;
+            // 这里放行有限进程树,防失控。
             info.BasicLimitInformation.ActiveProcessLimit = new WinDef.DWORD(activeLimit);
         } else {
             flags &= ~Win32Ex.JOB_OBJECT_LIMIT_ACTIVE_PROCESS; // 0 = 不限制进程数

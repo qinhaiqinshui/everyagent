@@ -112,7 +112,7 @@ setup 是**延迟触发**的——`Provider.isAvailable` 仅探测 Windows 平�
 
 | 工具 | Provider | 说明 |
 |---|---|---|
-| `cmd` | CodexBashToolProvider（appliesTo：当前后端 id==codex） | `cmd.exe /d /c <command>`，cwd=工作区根，stdin 关闭，rg 前置进 PATH；输出每流 100 万字符截断，`[stderr]`/超时/exit code 尾注与 wsl-ubuntu 同款 |
+| `cmd` | CodexBashToolProvider（appliesTo：当前后端 id==codex） | `cmd.exe /d /c <command>`，cwd=工作区根，stdin 关闭；输出每流 100 万字符截断，`[stderr]`/超时/exit code 尾注与 wsl-ubuntu 同款（rg 工具由独立插件 ripgrep-tool 提供，本后端零 rg：不自带二进制、不注入 PATH、描述不提 rg） |
 
 > setup 已移入 `CodexSandboxPlugin.activate()` 同步执行（幂等），不再以 AI 工具暴露。
 
