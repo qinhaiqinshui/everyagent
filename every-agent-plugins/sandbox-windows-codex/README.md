@@ -119,7 +119,7 @@ setup 是**延迟触发**的——`Provider.isAvailable` 仅探测 Windows 平�
 ## 7. 限制与遗留 TODO
 
 - **PrivateDesktop**：`ChildProcess` 已支持 lpDesktop，会话层尚未接线（`privateDesktopName=null`；受限令牌不设桌面时 PowerShell 会 `STATUS_DLL_INIT_FAILED`——cmd 首期不受影响）。
-- **ConPTY**：暂缓（pipe + stdio 桥；AI 命令非交互、stdin=NUL，无 TTY 需求）。
+- **ConPTY**：暂缓（pipe + stdio 桥；AI 命令非交互、stdin 无输入可用且不可交互——**实现为「关闭的 stdin 管道」而非 NUL**：NUL 虽是字符设备能读到立即 EOF，但会让 Windows CRT `_isatty()` 误判为终端、反破坏「不可交互」，见 §7.10；无 TTY 需求）。
 - **windows-admin 端到端**：setup 幂等/越界拦截/Offline 断网/卸载的端到端冒烟标记 `@Tag("windows-admin")`，需管理员 Windows 手动回归（对齐 codex `sandbox_smoketests.py` 断言面）。
 - **worker 后端词汇表**：`worker.sandbox.type=codex` 显式值尚未被 worker `normalizeBackend` 收录（当前归一 auto，靠 priority 生效）——待 worker 侧步骤扩展。
 - 未接线配置键见 §4（⏳ 行）；deny-read walker 对账与动态 deny-read 列表为二期。

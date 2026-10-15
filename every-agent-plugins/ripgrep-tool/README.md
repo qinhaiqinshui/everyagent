@@ -31,7 +31,7 @@ activate() 里 `RgResolver.resolve(pluginDir, runtimeDir)` 一次解析存字段
 
 ## 背景：rg 的 stdin 语义陷阱（path 省略为何显式归一化）
 
-ripgrep 的文档化行为：**无 path 参数且 stdin 非 tty 时搜索 stdin 而非当前目录**。本环境 shell 工具经沙箱执行，stdin 恒为空管道/NULL 设备 → shell 里裸 `rg pattern` 静默读空 stdin、零匹配 exit 1，被模型误读为「无结果」。训练语料里的 rg 几乎全跑在 tty 环境（= 无 path 就搜当前目录），模型先验稳固，工具描述压不过训练先验（实测描述带「必须显式带上路径参数」仍漏传路径），故在**调用契约层**根治：schema 的 path 省略 = 调用侧显式携带工作区根绝对路径，argv 恒以 path 参数终结、与 stdin 完全无关；`RgHintInterceptor` 是结果侧最后防线。完整留档见仓库 `docs/ARCHITECTURE.md` §7.10「rg 的 stdin 语义陷阱」与 §7.17「程序附属文件」。
+ripgrep 的文档化行为：**无 path 参数且 stdin 可读（管道 / 普通文件）时搜索 stdin 而非当前目录**。本环境 shell 工具经沙箱执行，stdin 无输入可用：在 **stdin 为管道**的后端（codex 的「关闭的管道」）→ shell 里裸 `rg pattern` 把该空管道当输入源、零匹配 exit 1，被模型误读为「无结果」；在 **stdin 为字符设备**的后端（DIRECT 的 `NUL`、wsl 的 `/dev/null`）→ rg 回退搜当前目录，**无此问题**（口径订正见 `docs/ARCHITECTURE.md` §7.10「命令 stdin 契约」）。训练语料里的 rg 几乎全跑在 tty 环境（= 无 path 就搜当前目录），模型先验稳固，工具描述压不过训练先验（实测描述带「必须显式带上路径参数」仍漏传路径），故在**调用契约层**根治：schema 的 path 省略 = 调用侧显式携带工作区根绝对路径，argv 恒以 path 参数终结、与 stdin 完全无关；`RgHintInterceptor` 是结果侧最后防线。完整留档见仓库 `docs/ARCHITECTURE.md` §7.10「rg 的 stdin 语义陷阱」与 §7.17「程序附属文件」。
 
 ## 构建与生效
 
