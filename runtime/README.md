@@ -14,7 +14,7 @@ worker 运行时以**字面相对路径 `./runtime`** 按 `user.dir` **只读引
 
 | 路径 | 用途 | 消费方 |
 |---|---|---|
-| `bin/rg.exe`（Windows）/ `bin/rg`（Linux, musl 静态） | ripgrep，注入 bash/powershell 子进程 `PATH` 供 AI 直接执行 `rg` | `RipgrepBinary`（定位 `./runtime/bin/`） |
+| `bin/rg.exe`（Windows）/ `bin/rg`（Linux, musl 静态） | ripgrep 二进制：worker 搜索模块（`RgSearchEngine`）的执行引擎，兼作 ripgrep-tool 插件 rg 工具的**第二档解析位**（插件 `bin/` 缺席时兜底） | `RipgrepBinary`（worker 搜索，定位 `./runtime/bin/`）；ripgrep-tool 插件 `RgResolver` 第二档 |
 
 > ripgrep 二进制体积大，不入 git。
 
@@ -36,7 +36,7 @@ worker 运行时以**字面相对路径 `./runtime`** 按 `user.dir` **只读引
 
 - 文件名固定不带版本号；升级 = 直接覆盖文件。
 - Linux 版需 musl 静态构建（容器内无 glibc 依赖）。
-- 开发迭代可用配置 `worker.tools.rg-path` 直接指向本机二进制，免重新打包；配置非法时 rg 不可用（不注入 PATH）。
+- 开发迭代可用配置 `worker.tools.rg-path` 直接指向本机二进制，免重新打包；配置非法时 rg 不可用（搜索模块降级，不再向 shell 子进程注入 PATH——`rg` AI 工具已由独立插件 ripgrep-tool 提供，自带三档解析：插件 `bin/` → 本目录 `bin/` → 系统 PATH）。
 
 ## WSL 托管发行版镜像
 

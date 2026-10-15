@@ -7,7 +7,7 @@ has_children: false
 
 # 内置插件范例索引
 
-**一句话定位**：`every-agent-plugins/` 下的 28 个内置插件是**活教材**——每种扩展点、每种形态、每种 order 档位在仓内都有真实可抄的范本。本篇告诉你「想学某个扩展点，去抄哪个插件」：先查总表（§2）定位插件，再用反查表（§3）按扩展点直达推荐范本，写代码前扫一眼 order 占用表（§4）避开已占档位。
+**一句话定位**：`every-agent-plugins/` 下的 29 个内置插件是**活教材**——每种扩展点、每种形态、每种 order 档位在仓内都有真实可抄的范本。本篇告诉你「想学某个扩展点，去抄哪个插件」：先查总表（§2）定位插件，再用反查表（§3）按扩展点直达推荐范本，写代码前扫一眼 order 占用表（§4）避开已占档位。
 
 所有路径相对仓库根；表格内为省篇幅，`every-agent-plugins/` 前缀在 §5 各小节统一省略为 `~plugins/`。全部数据来自源码逐文件取证（本篇成文前按行复核过关键行号，见文末口径说明）。
 
@@ -18,7 +18,7 @@ has_children: false
 - **形态选择**：不知道该做纯 Java、纯 Web 还是混合？看 §2「形态」列，然后读 [plugin.json 字段参考](../plugin-manifest.md) §3 的三形态实例。
 - 本篇只做索引与点评，**不讲 API 细节**：注册方法的签名与生命周期见 [后端模型总览](../backend/overview.md)、[Advisor 指南](../backend/advisors.md)、[任务与 RPC](../backend/task-and-rpc.md)、[UI 扩展点](../web/ui-extensions.md)；已知偏差集中登记在 [已知问题与现状偏差](known-issues.md)。
 
-## 2. 总表（28 个内置插件）
+## 2. 总表（29 个内置插件）
 
 缩写：**DO** = `ToolCallingAdvisor.DEFAULT_ORDER`（−2147483348）；**HP** = `Ordered.HIGHEST_PRECEDENCE`（−2147483648）。「代码量级」= 入口文件（`main` 指向的 Java 类 / `web/index.ts`）行数，量级仅供参考。
 
@@ -39,6 +39,7 @@ has_children: false
 | model-rate-limit | 模型限流 | java | AdvisorProvider ×1（限流） | — | DO+500 | 入口 40 行 |
 | pdf-viewer | PDF 预览 | web | —（无 Java） | `ui.file_content_editors` | — | web 22 行 |
 | plugin-manager | 插件管理 | web | —（无 Java；调 `plugin.list/enable/disable` RPC） | `ui.sidebar_items` | 侧边栏 9 | web 37 行 |
+| ripgrep-tool | ripgrep 搜索工具 | java | ToolProvider + ToolExecutionInterceptor | — | — | 入口 79 行 |
 | sandbox-windows-codex | Windows Codex 沙箱 | java | SandboxProvider + ToolProvider | — | priority 8（非 Windows 为 0） | 入口 59 行 |
 | sandbox-windows-mic | Windows MIC 沙箱 | java（`enabled:false`） | SandboxProvider + ToolProvider | — | priority 5 | 入口 34 行 |
 | sandbox-wsl-ubuntu | WSL Ubuntu 沙箱 | java（`enabled:false`） | SandboxProvider + ToolProvider + SlashProvider + SlashTokenResolver | — | priority 10 | 入口 47 行 |
@@ -55,11 +56,11 @@ has_children: false
 
 ### 2.1 全体共性（读任何一个插件前先知道）
 
-- 形态分布：java-only 19 / both 5 / web-only 4；**没有纯声明式插件**（每个都至少有一侧入口）。
-- 清单字段全体一致：`id/name/version/description/author` + `enabled`，version 一律 `0.1.0`、author 一律 `everyagent`；含 Java 的 24 个另有 `main`，含前端的 9 个另有 `webMain`（值全部写 `web/index.ts`，宿主实际加载的是构建产物 `web/index.js`，见 [plugin.json 字段参考](../plugin-manifest.md) §5）。
+- 形态分布：java-only 20 / both 5 / web-only 4；**没有纯声明式插件**（每个都至少有一侧入口）。
+- 清单字段全体一致：`id/name/version/description/author` + `enabled`，version 一律 `0.1.0`、author 一律 `everyagent`；含 Java 的 25 个另有 `main`，含前端的 9 个另有 `webMain`（值全部写 `web/index.ts`，宿主实际加载的是构建产物 `web/index.js`，见 [plugin.json 字段参考](../plugin-manifest.md) §5）。
 - 用 `contributes.config` 的只有 2 个：image-vision（3 键）、sandbox-windows-codex（6 键）。
 - `enabled:false` 的只有 2 个：sandbox-windows-mic、sandbox-wsl-ubuntu（内置扫描期整目录跳过）。
-- 依赖红线干净：全部 24 个 pom **零 `every-agent-worker` 依赖**；`task-edit-resend`、`task-input-queue` 额外依赖 `every-agent-contract` 属共享契约层，合规（[架构文档](../../ARCHITECTURE.md) §14.9）。
+- 依赖红线干净：全部 25 个 pom **零 `every-agent-worker` 依赖**；`task-edit-resend`、`task-input-queue` 额外依赖 `every-agent-contract` 属共享契约层，合规（[架构文档](../../ARCHITECTURE.md) §14.9）。
 - 全部插件源码零 Spring 容器注解：插件经 `URLClassLoader` 加载、不在 Spring 容器中，取服务只能 `ctx.services()` / `getService(Class)`。
 - 每个 Java 入口都实现 `dev.everyagent.plugin.api.EveryAgentPlugin` 的 `activate(WorkerPluginContext ctx)`；改完 Java 要重跑 `mvn package`、改完 web 要重跑 `npm run build:plugins`（均需重启 worker，见 [构建与运行](../guides/build-and-run.md)）。
 
@@ -268,6 +269,12 @@ has_children: false
 「扩展」侧栏列表 + 扩展详情标签页；web-only 形态。
 - 关键文件：`~plugins/plugin-manager/web/index.ts`（注册侧栏项 + `extension-detail` 标签类型）；列表 `PluginManagerPanel.tsx`、详情页 `ExtensionDetailPage.tsx`、共享 store `pluginStore.ts`。
 - 值得看：web-only 插件经 `ctx.sdk.rpc` 调 `plugin.list/enable/disable` 的最小完整闭环；`ctx.ui.registerWorkspaceTabType` + `openPluginTab` 打开详情标签页（宿主按 `data.id` 去重聚焦）的完整样本。
+
+### ripgrep-tool（ripgrep 搜索工具）
+
+schema 化 `rg` 工具（自带二进制三档解析）+ shell 裸 rg 空结果 hint。
+- 关键文件：`~plugins/ripgrep-tool/src/main/java/dev/everyagent/plugin/ripgrepTool/RipgrepToolPlugin.java`（入口 79 行）；三档解析 `RgResolver.java`；工具本体 `RgTools.java`；兜底拦截器 `RgHintInterceptor.java`。
+- 值得看：**ToolProvider + ToolExecutionInterceptor 组合**范本；`appliesTo` 按 `sandbox().id()` **排除**特定后端（wsl-ubuntu）的实例；自带原生二进制（`bin/rg.exe`，git 跟踪）按「插件 `bin/` → 程序根 `runtime/bin/` → 系统 PATH」解析且命中档绝对路径直跑（rg 归属从四后端剥离的终态，stdin 陷阱根因见 ARCHITECTURE §7.10）。
 
 ### sandbox-windows-codex（Windows Codex 沙箱）
 

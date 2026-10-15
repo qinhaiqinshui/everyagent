@@ -48,7 +48,7 @@ public interface ToolProvider {
 | `agentId()` | 本 agent 的 ID（主 agent = mainAgentId，子 agent = 其 agentId） | 审计/日志 |
 | `sandbox()` | 生效沙箱后端（`OsSandbox` 门面，未解析到 SPI 后端时 `id()=="direct"`） | `appliesTo` 判定生效条件 |
 | `workspaces()` | 工作区管理器（多工作区注册表） | 解析/校验路径 |
-| `rgBinary()` | ripgrep 二进制路径（搜索工具用，可能 null） | 自带搜索工具时复用 |
+| `rgBinary()` | ripgrep 二进制路径（worker 侧解析结果，可能 null；`rg` AI 工具本体由 ripgrep-tool 插件自带三档解析，不经此槽） | 自带内容搜索类工具时复用 |
 | `shellExecutor()` | 已组装好的 shell 执行器（授权 + 沙箱已内建；不含 rg 注入） | 注册 ShellTool |
 
 ### 1.2 worker 侧消费链路：工具怎么到模型手里
@@ -101,10 +101,10 @@ public String run_agent(
 
 ### 1.4 工具怎么写：复用 ShellTool（命令类工具）
 
-要做「跑命令」类工具不要自己拼 `ProcessBuilder`：`ToolContext.shellExecutor()` 已把 **PermissionGate 授权 + 沙箱 + 输出护栏** 内建好（`every-agent-worker/src/main/java/dev/everyagent/worker/plugin/ToolContextImpl.java:106-118`），plugin-api 提供 `ShellTool` 工厂（底层是 Spring AI `FunctionToolCallback.builder`，`every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/shell/ShellTool.java:41-49`）。**描述必传（2026-12 决策：核心零默认）**——`powershell(String description, ShellExecutor)` / `bash(String description, ShellExecutor)`，工具用途、工作目录、rg 可用性、实际 shell 等一律由提供者按自身事实全量声明，null/空串运行期拒绝；写漏描述不会被核心的模板兜底（模板与后端事实脱节正是谎报之源，见 ARCHITECTURE §7.10「描述精简的第三批」）。范例：
+要做「跑命令」类工具不要自己拼 `ProcessBuilder`：`ToolContext.shellExecutor()` 已把 **PermissionGate 授权 + 沙箱 + 输出护栏** 内建好（`every-agent-worker/src/main/java/dev/everyagent/worker/plugin/ToolContextImpl.java:106-118`），plugin-api 提供 `ShellTool` 工厂（底层是 Spring AI `FunctionToolCallback.builder`，`every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/shell/ShellTool.java:41-49`）。**描述必传（2026-12 决策：核心零默认）**——`powershell(String description, ShellExecutor)` / `bash(String description, ShellExecutor)`，工具用途、工作目录、实际 shell 等一律由提供者按自身事实全量声明（外部工具可用性不归后端描述宣称——rg 已收敛为独立插件 ripgrep-tool 提供，四个后端描述零 rg），null/空串运行期拒绝；写漏描述不会被核心的模板兜底（模板与后端事实脱节正是谎报之源，见 ARCHITECTURE §7.10「描述精简的第三批」）。范例：
 
 ```java
-// every-agent-plugins/sandbox-windows-mic/src/main/java/dev/everyagent/plugin/sandbox/mic/WindowsMicShellToolProvider.java:41-65（节选）
+// every-agent-plugins/sandbox-windows-mic/src/main/java/dev/everyagent/plugin/sandbox/mic/WindowsMicShellToolProvider.java:28-46（节选）
     @Override
     public boolean appliesTo(ToolContext ctx) {
         // 只在当前生效沙箱后端是 windows-mic 时贡献工具（§7.10 约定判据）
@@ -113,12 +113,12 @@ public String run_agent(
 
     @Override
     public List<ToolCallback> createTools(ToolContext ctx) {
-        ShellExecutor base = ctx.shellExecutor();
-        if (base == null) { return List.of(); }   // 拿不到执行器就不注册，绝不自己另起炉灶
-        ShellExecutor exec = rgDir != null ? withRgInPath(base, rgDir) : base; // rg 注入 PATH 自己包一层
-        // 描述全量自写（核心零默认）：用途/工作目录/rg 可用性按本后端事实声明
+        ShellExecutor exec = ctx.shellExecutor();
+        if (exec == null) { return List.of(); }   // 拿不到执行器就不注册，绝不自己另起炉灶
+        // 描述全量自写（核心零默认）：用途/工作目录按本后端事实声明；本后端不带任何
+        // 搜索工具（rg 工具由独立插件 ripgrep-tool 提供），描述不提 rg——谎报红线
         return List.of(ShellTool.powershell("在系统上用 PowerShell 执行真实 OS 命令;"
-                + "命令工作目录默认为任务工作区根;" + rgNote, exec).callback());
+                + "命令工作目录默认为任务工作区根。", exec).callback());
     }
 ```
 
@@ -269,7 +269,7 @@ public void activate(WorkerPluginContext ctx) throws Exception {
     WorkerConfig props = ctx.getService(WorkerConfig.class);
     // 沙箱后端 + 命令工具一起注册：后端只管挂载/清理，命令工具才是 AI 看得见的东西
     ctx.registerSandboxProvider(new WindowsMicSandboxProvider(props));
-    ctx.registerToolProvider(new WindowsMicShellToolProvider(rgDir));
+    ctx.registerToolProvider(new WindowsMicShellToolProvider());
 }
 ```
 

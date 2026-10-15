@@ -35,7 +35,7 @@ Path pluginDir();
 
 ### 1.2 真实插件都把数据放在哪（实例清单）
 
-rg 全部 28 个内置插件对 `pluginDir()` 的使用（排除 `target/`），结合各自的写盘点，实践分三类：
+rg 全部 29 个内置插件对 `pluginDir()` 的使用（排除 `target/`），结合各自的写盘点，实践分三类：
 
 | 插件 | 数据 | 落点 | 写侧 | 读回 |
 |---|---|---|---|---|
@@ -44,7 +44,7 @@ rg 全部 28 个内置插件对 `pluginDir()` 的使用（排除 `target/`），
 | token-estimator | token 校准系数（按 configId） | `<homeDir>/model-rate-state.json`（worker 系统目录根，非 pluginDir；含口径版本字段 `version:2`） | 单线程 writer 异步合并写（SingleThreadExecutor + dirty 标记 + 原子替换，`every-agent-plugins/token-estimator/src/main/java/dev/everyagent/plugin/tokenEstimator/BuiltinTokenEstimator.java:82,280`） | 构造时 `load()` 读回接续（同文件 `:243`，路径 = `config.resolveHomeDir().resolve(FILE_NAME)`，`:81`）；载入时校验口径版本 `version:2`，版本缺失/≠2 即丢弃旧状态重新标定（`:251-253`） |
 | subagent | skill 知识包 | `<skillsDir>/agent-dispatch/skill.md` | activate 时经 `SkillMaterializer.materializeAllFromClasspath` 把 jar 内 `skill/agent-dispatch/skill.md` 物化落盘（幂等、原子写，`SubAgentPlugin.java:47-57`） | 落盘后由 worker 的 skillsDir 目录扫描统一发现（进 system prompt 与 `/` 菜单），与用户自制 skill 完全同权（[advisors.md](advisors.md) §5） |
 | sandbox-wsl-ubuntu | 自带资源（只读） | `<pluginDir>/wsl/eagent-rootfs.tar.gz`、`<pluginDir>/wsl/eagent-run.py` | 不写，随插件分发 | `WslCommon.tarballFor/resolveRunner`（`WslCommon.java:66-72,128-137`） |
-| sandbox-windows-codex / sandbox-windows-mic | 自带 rg 二进制（只读） | `<pluginDir>/bin/rg.exe` | 不写，随插件分发 | `CodexRg.resolve`（`CodexRg.java:29-41`；系统 PATH 已有则不注入） |
+| ripgrep-tool | 自带 rg 二进制（只读） | `<pluginDir>/bin/rg.exe` | 不写，随插件分发 | `RgResolver.resolve`（`RgResolver.java:44-84`；三档：插件 `bin/` → 程序根 `runtime/bin/` → 系统 PATH，命中档绝对路径直传 rg 工具） |
 
 归纳出的选址规律（无强制，全是先例约定）：
 
