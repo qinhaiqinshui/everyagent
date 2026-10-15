@@ -19,9 +19,11 @@ build-plugins.py —— 一条命令重建全部内置插件(前端 bundle + 插
 
 本脚本不重复实现任何构建逻辑:web 侧直接调用既有的 build-plugins.mjs(唯一事实源),
 Java 侧逐插件调 mvn -f <id>/pom.xml,与 mvn -pl/-am 的 reactor 语义互不干扰;
-plugin-parent / plugin-api 虽在根 reactor 内,但插件单独构建时从本地仓库解析它们
-(插件继承 every-agent-plugin-parent、且不写 API 版本)——java 构建前先自动 mvn install 一次,
-保证仓库 jar 与源码同步(否则撞「找不到符号」/「找不到 every-agent-plugin-parent」)。
+plugin-parent / plugin-api / worker 虽在根 reactor 内,但插件单独构建时从本地仓库解析它们
+(插件继承 every-agent-plugin-parent、且不写 API 版本;部分插件的集成测试以 test scope
+依赖 worker 主 jar + test-jar)——java 构建前先自动 mvn install 一次,
+保证仓库 jar 与源码同步(否则撞「找不到符号」/「找不到 every-agent-parent」)。
+install 用 -DskipTests(编译测试类产出 test-jar,但不执行测试)。
 
 插件清单动态发现(与 scripts/bump-version.py 同一套扫描口径):
   - Java 插件: every-agent-plugins/*/pom.xml
@@ -236,15 +238,18 @@ def default_repo_local() -> str | None:
 
 
 def build_plugin_api(ctx: dict) -> bool:
-    """先把插件 SDK 的源码模块(plugin-parent / plugin-api)install 到本地仓库。
+    """先把插件 SDK 的源码模块(plugin-parent / plugin-api / worker)install 到本地仓库。
 
     插件 pom 继承 every-agent-plugin-parent、且不写 plugin-api 版本(两者都由 SDK 管理),
     逐插件单独编译时这两者都从本地仓库解析;源码新增方法后若忘记 install,
-    插件即报「找不到符号」或「找不到 every-agent-plugin-parent」。故 java 构建前先刷新一次。
+    插件即报「找不到符号」或「找不到 every-agent-plugin-parent」。worker 也一并 install
+    (含 test-jar),供以 test scope 反向依赖 worker 的插件(如 task-edit-resend)做集成测试。
+    用 -DskipTests 而非 -Dmaven.test.skip=true:前者编译测试类产出 test-jar,后者跳过编译导致空包。
     """
     sdk_poms = [
         ROOT / "every-agent-plugin-parent" / "pom.xml",
         ROOT / "every-agent-plugin-api" / "pom.xml",
+        ROOT / "every-agent-worker" / "pom.xml",
     ]
     missing = [p for p in sdk_poms if not p.is_file()]
     if missing:
@@ -254,7 +259,7 @@ def build_plugin_api(ctx: dict) -> bool:
     modules = ",".join(p.parent.name for p in sdk_poms)
     cmd = [
         ctx["mvn"], "-B", "-f", str(ROOT / "pom.xml"),
-        "-pl", modules, "-am", "install", "-Dmaven.test.skip=true",
+        "-pl", modules, "-am", "install", "-DskipTests",
     ]
     if ctx["repo_local"]:
         cmd.append(f"-Dmaven.repo.local={ctx['repo_local']}")

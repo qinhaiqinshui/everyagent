@@ -9,9 +9,10 @@
         <version>${revision}</version>
         <relativePath>../../every-agent-plugin-parent/pom.xml</relativePath>
     </parent>
-    <!-- 本插件是根 reactor 模块,且被 every-agent-worker 编译期依赖(EditResendRoundsTest 集成测试),
-         因此不写自身 <version>,与工程版本 ${revision} 同号 —— 这是内置插件里唯一的例外。
-         其余插件仅由 PluginLoader 运行时加载,各自持有自己的版本(与 plugin.json 的 version 同号)。 -->
+    <!-- 插件自身版本,与 plugin.json 的 version 同号,不随工程版本升级。
+         集成测试(EditResendRoundsTest)以 test scope 依赖 worker 主 jar + test-jar,
+         借用 worker 的宿主编排环境(FakeHub/FakeChatModel/TaskManager 等)做端到端验证。 -->
+    <version>0.1.0</version>
     <artifactId>task-edit-resend</artifactId>
     <name>task-edit-resend</name>
     <description>编辑重发插件（edit.resend 节点 395.5：从 ctx.metadata 取 editSeq 截断磁盘/内存/会话后放行 consume.input）</description>
@@ -25,6 +26,28 @@
         <dependency>
             <groupId>dev.everyagent</groupId>
             <artifactId>every-agent-contract</artifactId>
+        </dependency>
+
+        <!-- 集成测试宿主:worker 主 jar(普通 jar,classifier=exec 已把可执行 jar 分离) -->
+        <dependency>
+            <groupId>dev.everyagent</groupId>
+            <artifactId>every-agent-worker</artifactId>
+            <version>${revision}</version>
+            <scope>test</scope>
+        </dependency>
+        <!-- worker 测试夹具(FakeHub / FakeChatModel / WsTestClient / TestCleanup) -->
+        <dependency>
+            <groupId>dev.everyagent</groupId>
+            <artifactId>every-agent-worker</artifactId>
+            <version>${revision}</version>
+            <type>test-jar</type>
+            <scope>test</scope>
+        </dependency>
+        <!-- FakeHub 的 @ServerEndpoint 与测试的 ServerEndpointExporter 需要 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-websocket</artifactId>
+            <scope>test</scope>
         </dependency>
     </dependencies>
 </project>

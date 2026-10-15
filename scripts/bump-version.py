@@ -6,8 +6,7 @@ bump-version.py —— 升级 / 校验全仓版本号(单点源:根 pom 的 <rev
 版本口径(Maven CI-friendly versions)
 ------------------------------------
 Maven 侧只有一个版本写点:根 pom 的 <properties><revision>。
-  - contract / hub / worker / plugin-api,以及根 reactor 内的插件(task-edit-resend),
-    都不写自身 <version>,统一继承 ${revision};
+  - contract / hub / worker / plugin-api / plugin-parent 都不写自身 <version>,统一继承 ${revision};
   - 仅由 PluginLoader 运行时加载的内置插件各自持有自己的版本(与它自己的 plugin.json 的
     version 同号),不随工程版本升级 —— 升级时只改 <revision> 一处,插件 pom 零改动;
   - 跨模块引用一律写 ${revision},不得写 ${project.version}(后者解析的是「消费方自己」

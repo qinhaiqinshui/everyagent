@@ -11,7 +11,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.Predicate;
 
 /** 测试用最小 WS 客户端(与 hub 模块测试同款技术)。 */
-final class WsTestClient implements AutoCloseable {
+public final class WsTestClient implements AutoCloseable {
 
     record Frame(String text, boolean closed) {
     }
@@ -59,18 +59,18 @@ final class WsTestClient implements AutoCloseable {
         this.collector = collector;
     }
 
-    static WsTestClient connect(URI uri) {
+    public static WsTestClient connect(URI uri) {
         HttpClient client = HttpClient.newHttpClient();
         Collector collector = new Collector();
         WebSocket webSocket = client.newWebSocketBuilder().buildAsync(uri, collector).join();
         return new WsTestClient(webSocket, collector);
     }
 
-    void send(String text) {
+    public void send(String text) {
         ws.sendText(text, true).join();
     }
 
-    String await(Predicate<String> condition, String what) {
+    public String await(Predicate<String> condition, String what) {
         long deadline = System.currentTimeMillis() + 15_000;
         // 先查历史(sub 前错过的帧不会因消费顺序丢失)
         for (String h : seen) {
@@ -100,7 +100,7 @@ final class WsTestClient implements AutoCloseable {
         throw new AssertionError("超时,等待: " + what);
     }
 
-    String awaitEvent(String eventName) {
+    public String awaitEvent(String eventName) {
         return await(t -> t.contains("\"event\":\"" + eventName + "\""), eventName);
     }
 
@@ -108,7 +108,7 @@ final class WsTestClient implements AutoCloseable {
      * 只等新帧(不查历史):同任务多轮运行的历史 done 帧、其他测试滞留的迟到帧
      * 都不会误匹配——再运行/续跑场景的终态等待必须用本方法且谓词含 taskId。
      */
-    String awaitNew(Predicate<String> condition, String what) {
+    public String awaitNew(Predicate<String> condition, String what) {
         long deadline = System.currentTimeMillis() + 15_000;
         while (System.currentTimeMillis() < deadline) {
             Frame f = collector.frames.poll();
@@ -136,7 +136,7 @@ final class WsTestClient implements AutoCloseable {
      * 等待历史中出现第 n 条包含 needle 的帧。presence 快照会先注入一条 online,
      * 验证「真实重连」须按计数等第二条,单帧谓词的 await 区分不了两者。
      */
-    void awaitCount(int n, String needle, String what) {
+    public void awaitCount(int n, String needle, String what) {
         long deadline = System.currentTimeMillis() + 15_000;
         while (System.currentTimeMillis() < deadline) {
             Frame f = collector.frames.poll();
@@ -170,7 +170,7 @@ final class WsTestClient implements AutoCloseable {
     }
 
     /** 等待 ms 内不再出现包含 needle 的帧,返回是否始终未出现(否定断言用)。 */
-    boolean absentAfter(String needle, long ms) {
+    public boolean absentAfter(String needle, long ms) {
         long deadline = System.currentTimeMillis() + ms;
         while (System.currentTimeMillis() < deadline) {
             Frame f = collector.frames.poll();
@@ -190,7 +190,7 @@ final class WsTestClient implements AutoCloseable {
     }
 
     /** 已见帧历史里是否包含 needle(await 会把路过的帧都记入历史)。 */
-    boolean historyContains(String needle) {
+    public boolean historyContains(String needle) {
         for (String h : seen) {
             if (h.contains(needle)) {
                 return true;
@@ -199,7 +199,7 @@ final class WsTestClient implements AutoCloseable {
         return false;
     }
 
-    void drain(long ms) {
+    public void drain(long ms) {
         long deadline = System.currentTimeMillis() + ms;
         while (System.currentTimeMillis() < deadline) {
             Frame f = collector.frames.poll();

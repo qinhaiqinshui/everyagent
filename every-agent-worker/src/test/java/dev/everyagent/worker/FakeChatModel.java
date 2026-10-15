@@ -28,7 +28,7 @@ import java.util.Map;
  * - 含 "FAIL:" → 抛模型错误;含 "SLOW:" → 分片延迟输出(测取消);
  * - 其余 → 回声输出(分两个 chunk,验证 delta 流)。
  */
-class FakeChatModel implements org.springframework.ai.chat.model.ChatModel {
+public class FakeChatModel implements org.springframework.ai.chat.model.ChatModel {
 
     @Override
     public ChatResponse call(Prompt prompt) {

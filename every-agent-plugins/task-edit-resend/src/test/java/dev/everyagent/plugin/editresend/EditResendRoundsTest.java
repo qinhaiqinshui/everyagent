@@ -1,9 +1,13 @@
-package dev.everyagent.worker;
+package dev.everyagent.plugin.editresend;
 
 import dev.everyagent.contract.frame.Frames;
 import dev.everyagent.contract.ids.Ids;
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.plugin.api.spi.TokenEstimator;
+import dev.everyagent.worker.FakeChatModel;
+import dev.everyagent.worker.FakeHub;
+import dev.everyagent.worker.TestCleanup;
+import dev.everyagent.worker.WsTestClient;
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.plugin.registry.ChatModelEnhancerRegistry;
 import dev.everyagent.worker.hub.HubPool;
@@ -44,8 +48,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * 复现用户报告:发送 3 条消息(A、b、c)→ 任务完成后编辑第 3 条重发 →
  * rounds.jsonl 只剩编辑后 1 轮(index=1),刷新后历史全部丢失。
  * 覆盖冷路径(终态任务 task.run 携带 editSeq → truncateForColdEdit + startRerun)。
+ *
+ * <p>本测试住在插件模块内,以 test scope 依赖 worker 主 jar + test-jar,
+ * 借用 worker 的宿主编排环境(TaskManager/TaskStore/生命周期注册表等)
+ * 验证 EditResendNode 在真实生命周期中的截断行为。
  */
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.DEFINED_PORT)
+@SpringBootTest(classes = dev.everyagent.worker.WorkerApplication.class,
+        webEnvironment = SpringBootTest.WebEnvironment.DEFINED_PORT)
 class EditResendRoundsTest {
 
     /** 测试用 TokenEstimator 桩:factor 恒 1.0 的粗估桩(与原 ModelRateLimiter.estimateTokens 同口径)。 */
@@ -186,8 +195,8 @@ class EditResendRoundsTest {
             @Override public dev.everyagent.plugin.api.task.StoredTaskInfo diskEntry(String taskId) { return mgr.diskEntry(taskId); }
             @Override public void publishUpdated(String taskId) { mgr.publishTaskUpdated(taskId); }
         };
-        var node = new dev.everyagent.plugin.editresend.EditResendNode(
-                new dev.everyagent.plugin.editresend.EditTruncateProcessor(store, eventSink, taskService));
+        var node = new EditResendNode(
+                new EditTruncateProcessor(store, eventSink, taskService));
         lifecycleRegistry.register(node, "task-edit-resend");
     }
 
