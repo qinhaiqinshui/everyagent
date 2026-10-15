@@ -64,7 +64,7 @@ export const fileTabCommandService = {
  * 工作区外绝对路径暂不支持重命名(需 worker 补 fs.moveRaw,v1 先跳过)。
  */
 async function renameFile(file: FileTabResource, nextFileName: string): Promise<{ filePath: string; fileName: string }> {
-  if (/^[A-Za-z]:\//.test(file.filePath.replace(/^\/+/, ''))) {
+  if (isOutOfWorkspacePath(file.filePath)) {
     throw new Error('工作区外文件暂不支持重命名')
   }
   const parentPath = getParentPath(file.filePath)
@@ -86,7 +86,8 @@ async function renameFile(file: FileTabResource, nextFileName: string): Promise<
  * 获取父目录路径。
  */
 function getParentPath(path: string): string {
-  const slashIndex = path.lastIndexOf('/')
+  // 工作区外绝对路径可能带反斜杠(Windows 机器路径),须同时按 \ 切分父目录。
+  const slashIndex = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'))
   return slashIndex < 0 ? '' : path.slice(0, slashIndex)
 }
 
@@ -119,6 +120,20 @@ function sanitizePathSegment(value: string): string {
  * 从路径读取文件名。
  */
 function getFileNameFromPath(filePath: string): string {
-  const slashIndex = filePath.lastIndexOf('/')
+  // 工作区外绝对路径可能带反斜杠(Windows 机器路径),须同时按 \ 取文件名。
+  const slashIndex = Math.max(filePath.lastIndexOf('/'), filePath.lastIndexOf('\\'))
   return slashIndex >= 0 ? filePath.slice(slashIndex + 1) : filePath
+}
+
+/**
+ * 判断是否为工作区外绝对路径(Windows 盘符 / Unix 绝对)。
+ * 兼容原始机器路径(反斜杠 C:\...)与业务形式(/C:/...、//home/...),
+ * 工作区相对路径(src/main.ts、/src/main.ts)判为工作区内。
+ */
+function isOutOfWorkspacePath(filePath: string): boolean {
+  const normalized = filePath.replace(/\\/g, '/')
+  // Unix 外部路径业务形式以 // 开头
+  if (normalized.startsWith('//')) return true
+  // Windows 盘符:原始 C:/... 或业务形式 /C:/...(剥前导 / 后判盘符)
+  return /^[A-Za-z]:\//.test(normalized.replace(/^\/+/, ''))
 }
