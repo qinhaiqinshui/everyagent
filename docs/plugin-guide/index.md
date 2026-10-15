@@ -1,6 +1,6 @@
 ---
 title: 插件开发指南
-nav_order: 1
+nav_order: 4
 has_children: false
 ---
 
@@ -34,7 +34,7 @@ has_children: false
 | [plugin-manifest.md](plugin-manifest.md) | `plugin.json` 逐字段：类型 / 缺省 / 谁消费 / 踩坑 + 三形态实例 | **已成文** |
 | [backend/overview.md](backend/overview.md) | 后端模型：`EveryAgentPlugin` 生命周期、URLClassLoader 隔离、扫描→激活全链路 | **已成文** |
 | [backend/tools-and-sandbox.md](backend/tools-and-sandbox.md) | ToolProvider / ToolExecutionInterceptor / SandboxProvider / FileReferenceHandler 与 PermissionGate、jail | **已成文** |
-| [backend/advisors.md](backend/advisors.md) | AdvisorProvider / ChatModelEnhancer / TokenEstimator / SkillContributor / SearchProvider / AuthorizationHandler + Advisor 链 order 坐标 | **已成文** |
+| [backend/advisors.md](backend/advisors.md) | AdvisorProvider / ChatModelEnhancer / TokenEstimator / SearchProvider / AuthorizationHandler + Advisor 链 order 坐标 + 技能包物化（SkillMaterializer） | **已成文** |
 | [backend/task-and-rpc.md](backend/task-and-rpc.md) | TaskAdmissionPolicy / TaskLifecycleNode、`registerRpcMethod` 命名与 ACL、Slash 候选与 token 解析 | **已成文** |
 | [backend/persistence-and-state.md](backend/persistence-and-state.md) | 插件私有数据的合法存放（`pluginDir()` + 自注册 RPC）、两种禁用机制 | **已成文** |
 | [web/overview-and-loading.md](web/overview-and-loading.md) | 前端加载链路、bare import 白名单、为何必须 `import type` | **已成文** |
@@ -49,7 +49,7 @@ has_children: false
 | [reference/api-index.md](reference/api-index.md) | 后端注册点 + 前端类型包导出的一屏索引表 | **已成文** |
 | [reference/known-issues.md](reference/known-issues.md) | 现状偏差、API 包未发布等：现象 / 影响 / 修复·规避 / 待办（#1~#5 已修复） | **已成文** |
 
-> 目录由本文件冻结：`nav_order` 按上表顺序 1~19 递增，`parent` 为所在子目录名（`backend` / `web` / `guides` / `reference`），首页无 `parent`。新增页面要同时改本表、本条编号与 §1 阅读路径。
+> 目录由本文件冻结：正文按上表顺序阅读，`nav_order` 全局唯一、同级递增——本站首页 1、[架构说明](../ARCHITECTURE.md) 2、[架构全景图](../架构.md) 3、本页 4、[快速上手](getting-started.md) 5、[plugin.json 字段参考](plugin-manifest.md) 6；`backend` / `web` / `guides` / `reference` 四组各由一页**分组页**在侧栏折叠（`backend/index.md`「后端插件开发」7 / `web/index.md`「前端插件开发」9 / `guides/index.md`「构建 · 调试 · 分发」13 / `reference/index.md`「参考」17，均带 `has_children: true`），组内成员沿用 4~19 的相对顺序。各篇 `parent` 必须**精确等于**分组页 `title`。新增页面要同时改本表、本条编号与 §1 阅读路径。
 
 ## 3. 5 分钟速览：一个插件由哪些部分组成
 
@@ -96,19 +96,20 @@ worker 侧的判定规则（`every-agent-worker/src/main/java/dev/everyagent/wor
 
 | 侧 | 挂载面 | 数量 | 详解 |
 |---|---|---|---|
-| 后端 | `WorkerPluginContext` 自身的 `register*` 方法 | 13 | 下表分组 |
+| 后端 | `WorkerPluginContext` 自身的 `register*` 方法 | 14 | 下表分组 |
 | 后端 | 继承自 `TaskPluginContext` 的 `register*` | 2 | [任务生命周期与 RPC](backend/task-and-rpc.md) |
 | 前端 | `ctx.ui` 的 `register*` 扩展点 | 13 | [UI 扩展点](web/ui-extensions.md) |
 | 前端 | `ctx.ui` 的动作方法（开 tab / 开文件 / 开 diff / 写 composer） | 5 | [PluginContext API](web/context-api.md) |
 | 前端 | `ctx` 能力域（`ui` / `sdk` / `events` / `fs` / `storage` / `commands`） | 6 | [PluginContext API](web/context-api.md) |
 | 前端 | `PluginDomainEvent` 具名事件（其余靠 `(string & {})` 兜底） | 9 | [事件](web/events.md) |
 
-后端 15 个注册点的分组与归属篇（方法名逐条取自 `every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/WorkerPluginContext.java` 与 `.../api/task/TaskPluginContext.java`）：
+后端 16 个注册点的分组与归属篇（方法名逐条取自 `every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/WorkerPluginContext.java` 与 `.../api/task/TaskPluginContext.java`）。注意 skill **不在**注册点里——代码注册通道已删除，插件技能包经 `SkillMaterializer` 物化落盘（[Advisor 扩展](backend/advisors.md) §5）：
 
 | 分组 | 方法 | 详解篇 |
 |---|---|---|
 | 工具与沙箱 | `registerToolProvider` `registerToolExecutionInterceptor` `registerSandboxProvider` `registerFileReferenceHandler` | [工具与沙箱](backend/tools-and-sandbox.md) |
-| Agent 增强 | `registerAdvisorProvider` `registerChatModelEnhancer` `registerTokenEstimator` `registerSkillContributor` `registerSearchProvider` `registerAuthorizationHandler` | [Advisor 扩展](backend/advisors.md) |
+| Agent 增强 | `registerAdvisorProvider` `registerChatModelEnhancer` `registerTokenEstimator` `registerSearchProvider` `registerAuthorizationHandler` | [Advisor 扩展](backend/advisors.md) |
+| 事件出网 | `registerEventEgressFilter` `registerRoundEgressFilter`（暂无专篇，契约见[架构 §8.5](../ARCHITECTURE.md#85-插件系统统一加载架构)） | [架构说明](../ARCHITECTURE.md) |
 | 任务编排 | `registerTaskAdmissionPolicy` `registerTaskLifecycleNode` | [任务生命周期与 RPC](backend/task-and-rpc.md) |
 | 对外接口 | `registerRpcMethod` `registerSlashProvider` `registerSlashTokenResolver` | [任务生命周期与 RPC](backend/task-and-rpc.md) |
 

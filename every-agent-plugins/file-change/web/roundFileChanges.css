@@ -1,18 +1,25 @@
-.task-file-changes {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding-top: 4px;
-}
+/* 轮末文件变更面板。
+   本面板**没有根容器**:汇总头 pill 与展开的文件行列表直接是宿主轮末工具栏行
+   (.nagent-round-collapse__tail,一条 wrap flex 行)的并列 flex 项(见 RoundFileChangesView
+   返回的 Fragment)。因此两者的宽度/换行行为各自声明:
+   - 汇总头 flex: 0 0 auto —— 与内置「复制」按钮同排、按内容宽度;
+   - 展开列表 flex: 1 1 100% —— 必然另起一行并通栏占满整行宽度(标签页式:上标签行、下详情区)。
+   不设上间距:行间距由宿主容器 .nagent-round-collapse__tail 的 margin-top/gap 统一提供,
+   自带 padding-top 会让汇总头比左侧按钮低一档、同一行里对不齐。 */
 
-/* 默认折叠:汇总头(「文件变更」+ 数量),点击展开/收起文件行列表。 */
+/* 汇总头(「文件变更」+ 数量),点击展开/收起文件行列表。
+   高度锚定核心统一约束 token --round-tail-pill-height(定义在 ui-tokens.css,经 :root
+   继承到此):与同排的核心「复制」按钮恒等高,不再靠各自内边距/行高凑高度。 */
 .task-file-changes__toggle {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  align-self: flex-start;
+  /* 标签行内按内容宽度排,不拉伸不压缩(宿主行是 wrap flex,详情列表另起一行占满整行)。 */
+  flex: 0 0 auto;
   margin: 0;
-  padding: 4px 9px;
+  height: var(--round-tail-pill-height);
+  box-sizing: border-box;
+  padding: 0 9px;
   border: none;
   border-radius: 999px;
   background: transparent;
@@ -54,7 +61,11 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* 展开的文件行列表 = 标签页的「详情区」:flex-basis 100% 在 wrap 行里必然另起一行,
+   并通栏占满整行宽度(左边缘与「复制」按钮对齐,不再被同排内容挤到右侧)。 */
 .task-file-changes__list {
+  flex: 1 1 100%;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 4px;

@@ -1,4 +1,4 @@
-// ea: 插件入口类：activate() 里经 WorkerPluginContext 注册扩展点（15 个注册方法目录见类体内注释）
+// ea: 插件入口类：activate() 里经 WorkerPluginContext 注册扩展点（16 个注册方法目录见类体内注释；技能包物化不是注册方法，见文末）
 package {{package}};
 
 import dev.everyagent.plugin.api.EveryAgentPlugin;
@@ -43,16 +43,17 @@ public class {{entryClass}} implements EveryAgentPlugin {
     public void activate(WorkerPluginContext ctx) throws Exception {
         log.info("[{{pluginId}}] 已激活（{}）", ctx.pluginDir());
 
-        // ══════════ ctx.register* 全量目录（15 个）══════════
+        // ══════════ ctx.register* 全量目录（16 个）══════════
         //
-        // ── SPI 注册（10 个，WorkerPluginContext）──
+        // ── SPI 注册（11 个，WorkerPluginContext）──
         // void registerToolProvider(ToolProvider provider)                        注册 AI 工具提供者，向 agent 注入工具
         // void registerAdvisorProvider(AdvisorProvider provider)                  注册 Advisor 链提供者（system prompt / 护栏等增强）
         // void registerSandboxProvider(SandboxProvider provider)                  注册沙箱后端提供者（命令执行的隔离环境）
         // void registerSearchProvider(SearchProvider provider)                    注册搜索后端
         // void registerAuthorizationHandler(AuthorizationHandler handler)         注册授权决议链节点（PermissionGate 用户授权）
         // void registerToolExecutionInterceptor(ToolExecutionInterceptor i)       注册工具执行拦截链节点（观测 / 改写工具调用）
-        // void registerSkillContributor(SkillContributor contributor)             注册 skill 贡献者（向 system prompt 与 / 菜单贡献 skill）
+        // void registerEventEgressFilter(EventEgressFilter filter)                注册事件级出网过滤链节点（可丢弃 / 改写事件的出网形态，事件仍落盘）
+        // void registerRoundEgressFilter(RoundEgressFilter filter)                注册轮次级出网过滤链节点
         // void registerTokenEstimator(TokenEstimator estimator)                   注册 Token 估算器（替换内置实现）
         // void registerChatModelEnhancer(ChatModelEnhancer enhancer)              注册模型构建增强器（如模型池容灾）
         // void registerFileReferenceHandler(FileReferenceHandler handler)         注册文件引用处理器（按扩展名处理 @ 文件引用）
@@ -65,6 +66,11 @@ public class {{entryClass}} implements EveryAgentPlugin {
         // ── task 域注册（2 个，父接口 TaskPluginContext）──
         // void registerTaskAdmissionPolicy(TaskAdmissionPolicy policy)           注册任务准入策略（队列插件用）
         // void registerTaskLifecycleNode(TaskLifecycleNode node)                 注册任务生命周期链节点（任务流编排）
+        //
+        // ── 技能包物化（非注册方法）──
+        // 把 src/main/resources/skill/<id>/skill.md（frontmatter 仅 name + description）打进 jar，
+        // activate() 里一行物化安装到 worker 系统技能目录（唯一方式，无代码注册通道）：
+        // SkillMaterializer.materializeAllFromClasspath(ctx.services().config().resolveSkillsDir(), getClass().getClassLoader());
 
         // ── ToolProvider 最小示例（默认注释；连同文件头部注释掉的 import 一起放开即可编译）──
         // 接口真实签名（every-agent-plugin-api …/spi/ToolProvider.java）：

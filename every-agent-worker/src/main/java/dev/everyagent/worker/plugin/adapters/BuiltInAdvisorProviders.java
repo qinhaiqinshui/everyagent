@@ -1,7 +1,7 @@
 package dev.everyagent.worker.plugin.adapters;
 
+import dev.everyagent.worker.plugin.adapters.SkillAdvisorProvider;
 import dev.everyagent.worker.plugin.registry.AdvisorProviderRegistry;
-import dev.everyagent.worker.skill.SkillAdvisor;
 import dev.everyagent.worker.slash.SlashTokenHandler;
 import dev.everyagent.worker.task.RoundIndexStore;
 import jakarta.annotation.PostConstruct;
@@ -13,7 +13,7 @@ import org.springframework.stereotype.Component;
  * <p>在 {@link PostConstruct} 中将内置 Advisor 的适配器注册到
  * {@link AdvisorProviderRegistry}，替代 {@code AgentClientFactory} 原硬编码的
  * Advisor 创建与顺序。适配器持有的共享依赖（RoundIndexStore、
- * SlashTokenHandler、SkillAdvisor）由 Spring 注入；
+ * SlashTokenHandler、SkillAdvisorProvider）由 Spring 注入；
  * per-run 的 AgentEntity / ToolCallingManager 通过 {@link dev.everyagent.worker.plugin.AdvisorContextImpl}
  * 在 create() 时传递。Git 自动同步 Advisor 由 git 插件模块自行注册。
  * SystemInfoAdvisor 由 system-info 插件模块自行注册。
@@ -28,17 +28,17 @@ public class BuiltInAdvisorProviders {
     private final AdvisorProviderRegistry registry;
     private final RoundIndexStore roundIndexStore;
     private final SlashTokenHandler slashTokenHandler;
-    private final SkillAdvisor skillAdvisor;
+    private final SkillAdvisorProvider skillAdvisorProvider;
 
     public BuiltInAdvisorProviders(
             AdvisorProviderRegistry registry,
             RoundIndexStore roundIndexStore,
             SlashTokenHandler slashTokenHandler,
-            SkillAdvisor skillAdvisor) {
+            SkillAdvisorProvider skillAdvisorProvider) {
         this.registry = registry;
         this.roundIndexStore = roundIndexStore;
         this.slashTokenHandler = slashTokenHandler;
-        this.skillAdvisor = skillAdvisor;
+        this.skillAdvisorProvider = skillAdvisorProvider;
     }
 
     @PostConstruct
@@ -48,13 +48,13 @@ public class BuiltInAdvisorProviders {
         registry.register(new AgentStatusAdvisorProvider());
 
         // 核心基础设施（0─99）
-        // TokenCalibrationAdvisor 已迁至 model-rate-limit 插件（步骤 4），不再在此注册。
+        // TokenCalibrationAdvisor 已迁至 token-estimator 插件（自 model-rate-limit 拆出），不再在此注册。
         // SystemInfoAdvisor 已迁入 system-info 插件模块，由插件自行注册。
         // AgentsMdAdvisor 已迁入 agents-md 插件模块，由插件自行注册。
         registry.register(new RoundIndexAdvisorProvider(roundIndexStore));
 
         // 功能 Advisor（100─199）
-        registry.register(new SkillAdvisorProvider(skillAdvisor));
+        registry.register(skillAdvisorProvider);
         registry.register(new SlashTokenResolveAdvisorProvider(slashTokenHandler));
         // 文件附件注入（读 metadata.attachments → 末位 UserMessage 重建为多模态消息）
         registry.register(new FileAttachmentAdvisorProvider());

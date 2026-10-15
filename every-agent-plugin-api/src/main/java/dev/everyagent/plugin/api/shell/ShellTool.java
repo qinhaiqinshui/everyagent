@@ -1,5 +1,6 @@
 package dev.everyagent.plugin.api.shell;
 
+import dev.everyagent.plugin.api.tool.PlainTextToolCallResultConverter;
 import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.annotation.ToolParam;
@@ -69,12 +70,19 @@ public final class ShellTool {
     /**
      * 编程式构建工具回调（因描述可运行时定制，不用 @Tool 注解）。
      * 注册点直接 {@code tools.add(ShellTool.powershell(desc, exec).callback())}。
+     *
+     * <p>{@code toolCallResultConverter} 显式设为
+     * {@link PlainTextToolCallResultConverter}：shell 结果是 {@link ExecResults} 产出的
+     * <b>纯文本</b>（stdout 数据段 + 可选 [stderr] 段 + exit code 尾注），不得被框架默认的
+     * {@code DefaultToolCallResultConverter} JSON 字符串化——否则多行输出会压成一行
+     * {@code "…\r\n…"} 转义串回灌模型（UNC 与判定依据见该转换器 javadoc）。
      */
     public ToolCallback callback() {
         return FunctionToolCallback.builder(name,
                 (ShellCommand req, ToolContext ctx) -> exec.execute(req.command(), name))
                 .description(description)
                 .inputType(inputType)
+                .toolCallResultConverter(new PlainTextToolCallResultConverter())
                 .build();
     }
 

@@ -7,7 +7,6 @@ import dev.everyagent.plugin.api.event.EventEgressFilter;
 import dev.everyagent.plugin.api.event.RoundEgressFilter;
 import dev.everyagent.plugin.api.permission.AuthorizationHandler;
 import dev.everyagent.plugin.api.rpc.RpcMethod;
-import dev.everyagent.plugin.api.skill.SkillContributor;
 import dev.everyagent.plugin.api.slash.SlashProvider;
 import dev.everyagent.plugin.api.slash.SlashTokenResolver;
 import dev.everyagent.plugin.api.spi.AdvisorProvider;
@@ -26,7 +25,6 @@ import dev.everyagent.worker.plugin.registry.ChatModelEnhancerRegistry;
 import dev.everyagent.worker.plugin.registry.FileReferenceHandlerRegistry;
 import dev.everyagent.worker.plugin.registry.SandboxProviderRegistry;
 import dev.everyagent.worker.plugin.registry.SearchProviderRegistry;
-import dev.everyagent.worker.plugin.registry.SkillContributorRegistry;
 import dev.everyagent.worker.plugin.registry.TaskAdmissionPolicyRegistry;
 import dev.everyagent.worker.plugin.registry.TaskLifecycleRegistry;
 import dev.everyagent.worker.plugin.registry.ToolExecutionInterceptorRegistry;
@@ -68,7 +66,6 @@ public class WorkerPluginContextImpl implements WorkerPluginContext {
     private final TaskLifecycleRegistry lifecycleRegistry;
     private final ChatModelEnhancerRegistry chatModelEnhancerRegistry;
     private final TaskAdmissionPolicyRegistry admissionPolicyRegistry;
-    private final SkillContributorRegistry skillContributorRegistry;
     private final FileReferenceHandlerRegistry fileReferenceHandlerRegistry;
     private final EventEgressFilterRegistry eventEgressFilterRegistry;
     private final RoundEgressFilterRegistry roundEgressFilterRegistry;
@@ -98,7 +95,6 @@ public class WorkerPluginContextImpl implements WorkerPluginContext {
             TaskLifecycleRegistry lifecycleRegistry,
             ChatModelEnhancerRegistry chatModelEnhancerRegistry,
             TaskAdmissionPolicyRegistry admissionPolicyRegistry,
-            SkillContributorRegistry skillContributorRegistry,
             FileReferenceHandlerRegistry fileReferenceHandlerRegistry,
             EventEgressFilterRegistry eventEgressFilterRegistry,
             RoundEgressFilterRegistry roundEgressFilterRegistry,
@@ -119,7 +115,6 @@ public class WorkerPluginContextImpl implements WorkerPluginContext {
         this.lifecycleRegistry = lifecycleRegistry;
         this.chatModelEnhancerRegistry = chatModelEnhancerRegistry;
         this.admissionPolicyRegistry = admissionPolicyRegistry;
-        this.skillContributorRegistry = skillContributorRegistry;
         this.fileReferenceHandlerRegistry = fileReferenceHandlerRegistry;
         this.eventEgressFilterRegistry = eventEgressFilterRegistry;
         this.roundEgressFilterRegistry = roundEgressFilterRegistry;
@@ -204,11 +199,6 @@ public class WorkerPluginContextImpl implements WorkerPluginContext {
     public void registerTokenEstimator(TokenEstimator estimator) {
         // 外部插件注册的自定义 TokenEstimator 替换内置实现。
         ((WorkerServicesImpl) services).replaceTokenEstimator(estimator);
-    }
-
-    @Override
-    public void registerSkillContributor(SkillContributor contributor) {
-        skillContributorRegistry.register(contributor);
     }
 
     @Override

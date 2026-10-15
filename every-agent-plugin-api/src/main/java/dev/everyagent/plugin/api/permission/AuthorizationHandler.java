@@ -36,7 +36,27 @@ public interface AuthorizationHandler {
     record AuthorizationRequest(ExecContext context, String agentId,
                                 String grantKey, String prompt) {}
 
-    record AuthorizationDecision(Type type, String reason) {
+    /**
+     * 授权决议。
+     *
+     * <p>{@code scope} 仅对 {@code ALLOW} 有意义:节点自动放行(如 AI 审议、无人值守联动、
+     * 第三方白名单)一律用默认 {@link Scope#RUN}(本轮运行内),不得替用户做「本任务全程」
+     * 的持久化承诺;只有真正问过用户的节点(人工弹窗)才能返回 {@link Scope#TASK}。
+     *
+     * @param type   ALLOW=放行短路;DENY=拒绝短路;PASS=不处理,交下一环
+     * @param reason 人类可读结论(审计/回灌文案)
+     * @param scope  放行档位(仅 ALLOW 有意义)
+     */
+    record AuthorizationDecision(Type type, String reason, Scope scope) {
+
         public enum Type { ALLOW, DENY, PASS }
+
+        /** 放行档位:RUN=本轮运行内(内存,下一条用户输入即清);TASK=本任务全程(落盘 grants.json)。 */
+        public enum Scope { RUN, TASK }
+
+        /** 默认档位 RUN 的便利构造(PASS/DENY 与自动放行节点用)。 */
+        public AuthorizationDecision(Type type, String reason) {
+            this(type, reason, Scope.RUN);
+        }
     }
 }

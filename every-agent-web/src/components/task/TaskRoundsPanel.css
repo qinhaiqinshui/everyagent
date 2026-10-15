@@ -69,3 +69,60 @@
   color: var(--text-primary);
   background: var(--bg-hover);
 }
+/* ===== 轮末工具栏(ClosedRoundView 整轮内容末尾) =====
+   折叠/展开两态恒在该轮最后的同一行:内置「复制」按钮在左,插件轮末面板(如文件变更)在右,
+   视觉上是一条工具栏。行是一条 wrap flex 行,**贡献者(面板)的根元素直接落进本行**——
+   宿主不再包一层栅格包装,面板因此能把「汇总头」与「展开详情」拆成两个并列 flex 项:
+   汇总头 hug 在标签行,详情 `flex: 1 1 100%` 必然另起一行、通栏占满整行宽度
+   (标签页式:上行为标签、下行为详情区)。行间距与 gap 仍由宿主统一提供。 */
+.nagent-round-collapse__tail {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+/* 宿主对面板只兜底一条:不许被 nowrap 长内容(如完整文件路径)按 max-content 撑破行宽。
+   占宽策略(hug / 撑满剩余 / 换行通栏)由各面板自己的 CSS 决定。 */
+.nagent-round-collapse__tail > * {
+  min-width: 0;
+}
+
+/* 复制按钮:与左邻的轮末 pill 同款外观(同 padding/圆角/无边框/hover 底色),并排才像工具栏。
+   高度锚定核心统一约束 token --round-tail-pill-height(见 ui-tokens.css),
+   与插件面板汇总头恒等高、顶对齐;纵向不再吃 padding,内容由 flex 居中。 */
+.nagent-round-collapse__copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  height: var(--round-tail-pill-height);
+  box-sizing: border-box;
+  padding: 0 9px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  line-height: 1.5;
+  cursor: pointer;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.nagent-round-collapse__copy:hover:not(:disabled) {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.nagent-round-collapse__copy:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* 复制成功态:绿色勾选提示,1.5s 后复原。 */
+.nagent-round-collapse__copy--done {
+  color: var(--accent-green);
+  background: var(--accent-green-dim);
+}

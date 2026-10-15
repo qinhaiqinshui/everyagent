@@ -1,7 +1,7 @@
 ---
 title: 打包与安装
 nav_order: 14
-parent: guides
+parent: 构建 · 调试 · 分发
 has_children: false
 ---
 

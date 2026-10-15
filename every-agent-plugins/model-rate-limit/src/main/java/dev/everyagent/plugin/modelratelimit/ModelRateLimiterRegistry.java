@@ -18,18 +18,25 @@ import java.util.concurrent.ConcurrentHashMap;
  * {@link #of} 返回 empty(不限流,现状兼容)。参数在首次创建时定格(配置变更后重启生效,
  * 与 worker 其它配置一致)。
  *
+ * <p><b>估算器延迟解析</b>:内置插件按目录名字典序激活,{@code model-rate-limit} 排在
+ * {@code token-estimator} <b>之前</b>——本插件 activate 时估算器插件可能尚未激活。
+ * 故本注册表持有 {@code Supplier<TokenEstimator>} 而非估算器实例,在 {@link #of} 的
+ * {@code computeIfAbsent} 缓存 lambda 内<b>取当前生效实例</b>再构造 {@link ModelRateLimiter};
+ * 首次创建发生在真实 run 期间(此时所有插件均已激活),故拿到的一定是最终生效的估算器。
+ *
  * <p>token 估算系数的持久化由 {@link TokenEstimator} 实现自行管理,
  * 本注册表不再持有 {@code ModelRateStateStore}。
  */
 public class ModelRateLimiterRegistry {
 
     private final WorkerConfig config;
-    private final TokenEstimator estimator;
+    private final java.util.function.Supplier<TokenEstimator> estimatorSupplier;
     private final Map<String, ModelRateLimiter> limiters = new ConcurrentHashMap<>();
 
-    public ModelRateLimiterRegistry(WorkerConfig config, TokenEstimator estimator) {
+    public ModelRateLimiterRegistry(WorkerConfig config,
+            java.util.function.Supplier<TokenEstimator> estimatorSupplier) {
         this.config = config;
-        this.estimator = estimator;
+        this.estimatorSupplier = estimatorSupplier;
     }
 
     /** 获取 configId 对应限流器;最终限流值全为 0 → empty(装饰器直通)。 */
@@ -40,7 +47,8 @@ public class ModelRateLimiterRegistry {
             if (!cfg.enabled()) {
                 return null;
             }
-            return new ModelRateLimiter(id, cfg, config.limits().modelRate(), estimator);
+            // 延迟解析:此处才取当前生效的估算器(估算器插件后于本插件激活也不影响)。
+            return new ModelRateLimiter(id, cfg, config.limits().modelRate(), estimatorSupplier.get());
         }));
     }
 

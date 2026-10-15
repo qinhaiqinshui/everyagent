@@ -42,6 +42,7 @@ import java.util.List;
  *
  * <p>设计纪律:per-run 物化(持 {@link AgentContext} 仅读快照与日志归属),无跨轮可变状态,
  * 多任务并发安全。阈值与配置取自 {@link WorkerConfig.Limits}(缺省已给出合理默认)。
+ * token 估算口径经构造注入(全局 {@code TokenEstimator} 输入口径),为空回退内置 bytes/3。
  */
 public class ContextCompressionAdvisor implements CallAdvisor, StreamAdvisor {
 
@@ -50,6 +51,8 @@ public class ContextCompressionAdvisor implements CallAdvisor, StreamAdvisor {
     private final AgentContext a;
     private final WorkerConfig.Limits limits;
     private final ContextSummarizer summarizer;
+    /** token 估算口径(全局 TokenEstimator 的输入口径;为空回退内置 bytes/3)。 */
+    private final ContextCompressor.TextTokens tokens;
 
     /** 上轮实际发给模型的指令视图(含注入的提示),供下一轮 offset 校准。 */
     private List<Message> lastSent;
@@ -58,10 +61,12 @@ public class ContextCompressionAdvisor implements CallAdvisor, StreamAdvisor {
     /** 已吸收进 baseline 的「完整历史」源消息条数(下标)。 */
     private int absorbed;
 
-    public ContextCompressionAdvisor(AgentContext a, WorkerConfig.Limits limits, ContextSummarizer summarizer) {
+    public ContextCompressionAdvisor(AgentContext a, WorkerConfig.Limits limits,
+            ContextSummarizer summarizer, ContextCompressor.TextTokens tokens) {
         this.a = a;
         this.limits = limits;
         this.summarizer = summarizer;
+        this.tokens = tokens;
     }
 
     @Override
@@ -106,22 +111,21 @@ public class ContextCompressionAdvisor implements CallAdvisor, StreamAdvisor {
         long reserve = limits.contextToolReserveTokens();
         int maxToolChars = limits.contextMaxToolResultChars();
 
-        // offset 校准:用「上轮实测 inputTokens - 上轮估算 lastSent」作为隐藏开销,校正
-        // tokenizer 差异/注入提示/服务商计数误差;首轮、无实测或换模型时回退为固定 reserve。
+        // offset 校准:用「上轮实测 inputTokens − 上轮估算 lastSent」作为净修正项,抵消粗估
+        // 与 provider 实测的系统性差异;首轮/无实测/换模型时回退固定 reserve。
+        // 双向采纳(正=漏算隐藏开销、负=粗估高估),见 ContextCompressor.calibratedOverhead。
         long overhead = reserve;
         if (limits.contextOffsetEnabled()) {
             Usage last = a.lastRound();
             String lastModel = a.lastModel();
             String currentModel = a.currentModel();
-            if (last != null && last.inputTokens() > 0
+            if (last != null
                     && lastSent != null && !lastSent.isEmpty()
                     && lastModel != null && !lastModel.isEmpty()
                     && currentModel != null && !currentModel.isEmpty()
                     && lastModel.equals(currentModel)) {
-                long offset = last.inputTokens() - ContextCompressor.estimateTokens(lastSent);
-                if (offset > 0) {
-                    overhead = Math.max(reserve, offset);
-                }
+                overhead = ContextCompressor.calibratedOverhead(
+                        last.inputTokens(), ContextCompressor.estimateTokens(lastSent, tokens), reserve);
             }
         }
 
@@ -136,7 +140,7 @@ public class ContextCompressionAdvisor implements CallAdvisor, StreamAdvisor {
             working.addAll(delta);
         }
 
-        long used = ContextCompressor.estimateTokens(working) + overhead;
+        long used = ContextCompressor.estimateTokens(working, tokens) + overhead;
 
         List<Message> toSend;
         if (used <= trigger) {
@@ -149,7 +153,7 @@ public class ContextCompressionAdvisor implements CallAdvisor, StreamAdvisor {
                     EmitEvent.Mode.REPLACE));
 
             ContextSummarizer sum = limits.contextSummaryEnabled() ? summarizer : null;
-            ContextCompressor.Result r = ContextCompressor.compress(working, trigger, target, overhead, sum);
+            ContextCompressor.Result r = ContextCompressor.compress(working, trigger, target, overhead, sum, tokens);
             if (!r.compressed()) {
                 toSend = working;
                 a.emitter().emit(EmitEvent.of(compId, "context.compression", null, null,
@@ -158,7 +162,7 @@ public class ContextCompressionAdvisor implements CallAdvisor, StreamAdvisor {
                 toSend = r.messages();
                 baseline = new ArrayList<>(r.messages());
                 absorbed = full.size();
-                long after = ContextCompressor.estimateTokens(toSend) + overhead;
+                long after = ContextCompressor.estimateTokens(toSend, tokens) + overhead;
                 a.emitter().emit(EmitEvent.of(compId, "context.compression", null, null,
                         "已自动压缩上下文(" + stageName(r.stage()) + ", 消息 " + working.size() + "→"
                                 + toSend.size() + ", 约 " + used + "→" + after + " token 估算)",

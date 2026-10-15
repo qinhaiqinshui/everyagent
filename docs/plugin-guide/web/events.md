@@ -1,7 +1,7 @@
 ---
 title: 前端事件
 nav_order: 12
-parent: web
+parent: 前端插件开发
 has_children: false
 ---
 

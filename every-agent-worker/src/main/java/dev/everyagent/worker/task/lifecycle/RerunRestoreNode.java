@@ -8,8 +8,8 @@ import tools.jackson.databind.JsonNode;
 
 /**
  * 下行节点(order=50)：再运行状态恢复（一事）。
- * meta → TaskEntry 全量恢复：createdAt / metadata（含 aiReview、unattended 旧字段兼容迁移,
- * 插件自管的禁网等业务标记随 metadata 一并回读）/ seedUsageMeta / log.seed 水位续号。
+ * meta → TaskEntry 全量恢复：createdAt / metadata（随 meta.json 落盘的持久数据，如 attachments）/
+ * seedUsageMeta / log.seed 水位续号。
  * 新建任务无 rerunMeta，整体空转。
  * 必须在 persistence.track(100) 之前执行（首落盘 meta 须含恢复后的字段）。
  */
@@ -28,19 +28,7 @@ public final class RerunRestoreNode implements TaskLifecycleNode {
         if (meta != null) {
             var t = impl.taskEntryImpl();
             t.createdAt(meta.path("createdAt").asLong(0));
-            // 兼容旧格式:aiReview/unattended 布尔字段自动迁移到 metadata
-            if (meta.path("aiReview").asBoolean(false)) t.metadata.put("ai-review", true);
-            if (meta.path("unattended").asBoolean(false)) t.metadata.put("unattended", true);
-            // 旧格式 taskFlags（Map<String, Boolean>）→ 迁移到 metadata
-            var flagsNode = meta.path("taskFlags");
-            if (flagsNode.isObject()) {
-                flagsNode.properties().forEach(e -> {
-                    if (e.getValue().isBoolean()) {
-                        t.metadata.put(e.getKey(), e.getValue().asBoolean());
-                    }
-                });
-            }
-            // 新格式 metadata（Map<String, Object>）
+            // 任务级 metadata（随 meta.json 落盘的持久数据，如 attachments）
             var metaNode = meta.path("metadata");
             if (metaNode.isObject()) {
                 metaNode.properties().forEach(e -> {

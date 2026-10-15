@@ -25,8 +25,9 @@ import java.util.function.BooleanSupplier;
  * {@link #rgDeclaredByManagedImage()}（托管镜像出处），工具描述按该判据<b>条件化生成</b>——
  * 判据不成立时如实说明未探测、回退 grep，绝不无条件宣称「已在 PATH」（§7.10 硬约束）。
  *
- * <p>禁网开关按 taskId 实时读取(每条命令执行瞬间查任务
- * {@code metadata[networkBlocked]}),故运行中用户选中/取消 /禁用网络 对本轮后续命令即时生效。
+ * <p>禁网开关按 taskId 实时读取(每条命令执行瞬间查任务级 {@code network.access} token,
+ * 恒以磁盘 {@code slash-tokens.json} 为准,见 {@link NetworkTaskFlag#isOn}),故运行中用户
+ * 选中/取消 /禁用网络 对本轮后续命令即时生效。
  */
 public class WslUbuntuBashToolProvider implements ToolProvider {
 
@@ -57,7 +58,7 @@ public class WslUbuntuBashToolProvider implements ToolProvider {
     public List<ToolCallback> createTools(ToolContext ctx) {
         Path workspaceRoot = ctx.workspaceRoot() != null ? Path.of(ctx.workspaceRoot()) : null;
         WslUbuntuCommandExecutor exec = new WslUbuntuCommandExecutor(props, workspaceRoot,
-                workspaces, pluginDir, taskNetworkBlocked(ctx.subjectId()));
+                workspaces, pluginDir, taskNetworkBlocked(ctx.subjectId()), ctx.toolOutcomes());
         // 描述全量自报(2026-12 第三批:核心零默认,提供者必传):用途/工作目录两句随移交由本
         // 后端自写;通用常识类条目(stdin 语义、Out-String 收口、连接符版本)已按用户决策从
         // 描述删除(沿革见 ARCHITECTURE §7.10),后端不得在此私自加回。这里只留本沙箱
@@ -69,8 +70,7 @@ public class WslUbuntuBashToolProvider implements ToolProvider {
         // 里 rg 常常在位,写了就把它无据摘掉);只交代未探测 + 回退命令。bash 下命令不存在报
         // command not found(rc=127),与「无匹配」(rc=1)可分辨,不触发 §7.10 那类最恶劣误读。
         String rgNote = rgDeclaredByManagedImage()
-                ? "内容搜索用 rg(已在 PATH,尊重 .gitignore,全仓递归远快于 grep -r;"
-                        + "未给文件参数时会改读空 stdin,务必显式给出路径如 rg <pattern> .);"
+                ? "内容搜索优先用 rg（已在path），速度更快。rg搜索必须显式带上路径参数;"
                 : "内容搜索优先 rg(非托管发行版,是否预装 rg 未探测;"
                         + "报 command not found 就改用 grep);";
         return List.of(ShellTool.bash("在系统上用 bash 执行真实 OS 命令;"
@@ -121,11 +121,11 @@ public class WslUbuntuBashToolProvider implements ToolProvider {
                 && WslCommon.tarballFor(props, pluginDir) != null;
     }
 
-    /** 任务级禁网开关读取器(每次调用实时查任务 metadata;任务服务缺失时恒 false)。 */
+    /** 任务级禁网开关读取器(每次调用实时查任务级 network.access token;services 缺失时恒 false)。 */
     private BooleanSupplier taskNetworkBlocked(String subjectId) {
-        if (services == null || services.task() == null) {
+        if (services == null) {
             return () -> false;
         }
-        return () -> NetworkTaskFlag.isOn(services.task().get(subjectId));
+        return () -> NetworkTaskFlag.isOn(services, subjectId);
     }
 }

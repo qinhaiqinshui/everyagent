@@ -430,22 +430,28 @@ function ClosedRoundView({
             <AgentMessageThread message={finalMessage} taskId={taskId} />
           </div>
         )}
-        {/* 轮末展示区：折叠/展开两态共用，恒在该轮最后展示（通用扩展点，插件自行注册）。 */}
-        {roundTailPanels.length > 0
-          ? roundTailPanels.map((panel) => {
-              const Component = panel.Component
-              return (
-                <Component
-                  key={panel.pluginId}
-                  taskId={taskId}
-                  roundId={round.roundId}
-                  workerId={workerId}
-                  workspaceRoot={workspaceRoot}
-                  round={round}
-                />
-              )
-            })
-          : null}
+        {/* 轮末工具栏：`ui.round_tail_panels` 的全部贡献者（含核心内置的「复制」按钮）并排一行，
+            折叠/展开两态共用、恒在该轮最后。核心「复制」与插件面板同走这一条渲染路径，
+            不在此硬编码任何一块内容。
+            栅格：本行是一条 wrap flex 行，贡献者的**根元素直接落进本行**（宿主不再包一层
+            中立包装）——面板因此能把「汇总头」与「展开详情」拆成两个并列项：汇总头按内容宽度
+            留在标签行，详情写 `flex: 1 1 100%` 必然另起一行、通栏占满整行宽度（标签页式：
+            上行为标签、下行详情区）。宿主只兜底 `min-width: 0`，防 nowrap 长内容撑破行宽。 */}
+        <div className="nagent-round-collapse__tail">
+          {roundTailPanels.map((panel) => {
+            const Component = panel.Component
+            return (
+              <Component
+                key={panel.pluginId}
+                taskId={taskId}
+                roundId={round.roundId}
+                workerId={workerId}
+                workspaceRoot={workspaceRoot}
+                round={round}
+              />
+            )
+          })}
+        </div>
       </div>
     </>
   )

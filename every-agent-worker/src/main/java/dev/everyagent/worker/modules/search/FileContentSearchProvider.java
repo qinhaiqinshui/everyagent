@@ -17,7 +17,7 @@ import java.util.regex.PatternSyntaxException;
 
 /**
  * 内置「文本文件内容」搜索引擎(kind {@code file-content}):复用 {@link RgSearchEngine}
- * 的 {@code rg --json} 逐行解析(架构 §5.10),把命中行做成扁平结果项。
+ * 的 {@code rg --json} 逐行解析(架构 §5.5「统一 search」),把命中行做成扁平结果项。
  *
  * <p><b>provider 自持职责三件套</b>(核心不传):
  * <ol>

@@ -8,7 +8,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 系统技能目录只读附加根(realpath + 词法形态)的共享解析(§13.8/§7.17)。
+ * 系统技能目录只读附加根(realpath + 词法形态)的共享解析(§7.17)。
  *
  * <p>{@code skills/} 是 AI 文件工具对系统路径的唯一只读免授权例外;同时供 fs.* RPC
  * 的只读操作(read/list/reveal)消费——前端「打开文件」标签页读取 AI 已读的 skill
@@ -16,7 +16,7 @@ import java.util.List;
  * 自行决定是否把本根并入沙箱附加根。
  *
  * <p>解析成功后缓存(目录不会在运行期移动);<b>失败不缓存</b>——技能目录尚未物化
- * (BuiltInSkills.materialize 失败/延迟)时返回空列表,但不写入缓存,下次调用重试,
+ * (BuiltInSkillPacks.materialize 失败/延迟)时返回空列表,但不写入缓存,下次调用重试,
  * 使「物化晚于首次使用」能自愈(否则会永久缓存空根,直到 worker 重启)。
  */
 public final class SkillsReadonlyRoots {

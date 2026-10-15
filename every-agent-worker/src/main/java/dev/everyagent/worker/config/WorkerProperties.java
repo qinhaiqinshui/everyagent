@@ -1468,7 +1468,7 @@ public class WorkerProperties implements WorkerConfig {
 
     /**
      * 外部工具二进制配置(ripgrep 等)。rg 二进制真源在程序根 {@code <程序根>/runtime/bin/}
-     * (随安装/解压分发、运行时只读引用,见 §5.10),{@code rg-path} 仅是开发期可选覆盖项。
+     * (随安装/解压分发、运行时只读引用,见架构 §7.17「程序附属文件」),{@code rg-path} 仅是开发期可选覆盖项。
      */
     public static class Tools {
         /** ripgrep 可执行文件绝对路径(如 /opt/rg 或 C:\rg\rg.exe);为空 = 程序根 runtime/bin/ 定位。 */

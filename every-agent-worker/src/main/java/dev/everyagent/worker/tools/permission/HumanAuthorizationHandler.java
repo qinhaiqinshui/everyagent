@@ -22,7 +22,12 @@ import java.util.Map;
  * 人工弹窗授权节点（core 提供，order=300，始终 applies=true）。
  *
  * <p>发起 authorization ask 并解析答案返回 ALLOW/DENY（不返回 PASS——是链的终结节点）。
- * ask 经 {@link ExecContext#interaction()} 绑定交互口发出（context map 的
+ * 三档答案映射为「ALLOW + 档位」(见 {@link AuthorizationDecision.Scope})与「DENY」:
+ * 本轮运行内允许 → RUN;本任务全程允许 → TASK(落盘 grants.json,跨轮次/重启保留);
+ * 拒绝/超时/未识别 → DENY。档位<b>必须原样带出链外</b>——决议链只搬结论,
+ * 落地由 {@link GrantRegistry#record} 负责,节点不得把 RUN/TASK 压成一档。
+ *
+ * <p>ask 经 {@link ExecContext#interaction()} 绑定交互口发出（context map 的
  * {@code "taskId"} 键由 SubjectBoundInteractionService 自动补填，{@code "agentId"}
  * 由本节点补充）。prompt 为短问句，结构化信息走 {@link AskQuestion#fields()} 信息槽
  * （§12：grantKey 解析出授权类型/目录/类别，原长文案整段保留在 fields 供磁盘回放）。
@@ -70,9 +75,15 @@ public class HumanAuthorizationHandler implements AuthorizationHandler {
         if (!"answered".equals(ans.status())) {
             return new AuthorizationDecision(AuthorizationDecision.Type.DENY, "拒绝");
         }
+        // 档位必须原样带出链外(ALLOW + Scope):「本任务全程允许」要落盘 grants.json
+        // 并跨轮次/重启保留,与「本轮运行内允许」语义不同——决议链只搬结论,
+        // 档位由 GrantRegistry.record 落地,节点不得在此把两档压成一档。
         GrantScope scope = GrantRegistry.parseScope(ans.text());
         return switch (scope) {
-            case RUN, TASK -> new AuthorizationDecision(AuthorizationDecision.Type.ALLOW, "人工授权");
+            case RUN -> new AuthorizationDecision(AuthorizationDecision.Type.ALLOW, "人工授权",
+                    AuthorizationDecision.Scope.RUN);
+            case TASK -> new AuthorizationDecision(AuthorizationDecision.Type.ALLOW, "人工授权",
+                    AuthorizationDecision.Scope.TASK);
             case DENY -> new AuthorizationDecision(AuthorizationDecision.Type.DENY, "拒绝");
         };
     }

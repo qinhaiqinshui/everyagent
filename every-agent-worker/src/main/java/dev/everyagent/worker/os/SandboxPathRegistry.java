@@ -46,7 +46,7 @@ public class SandboxPathRegistry {
     /** 工作区根 + 外部授权根（{@code WorkspaceManager} 覆盖式维护）。 */
     public static final String OWNER_WORKSPACES = "workspaces";
 
-    /** 系统技能目录根（{@code BuiltInSkills} 维护）。 */
+    /** 系统技能目录根（worker 核心装配 WorkerBeanConfiguration 登记其沙箱挂载意图）。 */
     public static final String OWNER_SKILLS = "skills";
 
     private static final Logger log = LoggerFactory.getLogger(SandboxPathRegistry.class);

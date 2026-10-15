@@ -21,9 +21,5 @@
             <groupId>dev.everyagent</groupId>
             <artifactId>every-agent-plugin-api</artifactId>
         </dependency>
-        <dependency>
-            <groupId>jakarta.annotation</groupId>
-            <artifactId>jakarta.annotation-api</artifactId>
-        </dependency>
     </dependencies>
 </project>

@@ -20,7 +20,7 @@
 | `plugin.json` | 插件清单：id/name/version/description/author/enabled + `main`（java/full）+ `webMain`（web/full），宿主扫描与加载的唯一依据 | 全部 | 全部 |
 | `README.md` / `.gitignore` | 本说明；忽略 `target/`、`web/index.js(.map)`、`web/index.css(.map)`、`node_modules/`、`dist/` 等构建产物 | 全部 | 全部 |
 | `pom.xml` | Maven 构建（内联 maven-resources-plugin 把 plugin.json 复制进 `target/classes`） | java / full | 全部 |
-| `src/main/java/{{packagePath}}/{{entryClass}}.java` | 后端入口类：实现 `EveryAgentPlugin`，`activate()` 里经 `WorkerPluginContext` 注册扩展点（15 个注册方法目录见类内注释） | java / full | 全部 |
+| `src/main/java/{{packagePath}}/{{entryClass}}.java` | 后端入口类：实现 `EveryAgentPlugin`，`activate()` 里经 `WorkerPluginContext` 注册扩展点（16 个注册方法目录见类内注释） | java / full | 全部 |
 | `src/main/resources/` | 插件资源（打进 jar），初始为空（`.gitkeep` 占位） | java / full | 全部 |
 | `src/test/java/{{packagePath}}/{{entryClass}}SmokeTest.java` | JUnit 5 冒烟测试：只依赖 every-agent-plugin-api，不依赖 worker（§14.9 红线） | java / full | 全部 |
 | `web/index.ts` | 前端入口：默认导出 `PluginModule`，`activate(ctx)` 里经 `ctx.ui` 注册扩展点（示例注册侧边栏项） | web / full | 全部 |

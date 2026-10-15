@@ -35,10 +35,13 @@ import java.util.Set;
  * 禁止拆对(截断从不破坏 tool_call/result 配对)。
  *
  * <p>阈值比较统一使用 {@code estimateTokens(x) + overhead},其中 overhead 同时承载「固定预留」
- * 与「offset 校准」两种含义(四参入口的 overhead 仍只表示固定预留,等价于原 reserve)。
+ * 与「offset 校准」两种含义,<b>可为负</b>(负 = 粗估高估正文,压低 precheck;见
+ * {@link #calibratedOverhead});四参入口的 overhead 仍只表示固定预留,等价于原 reserve。
  *
- * <p>token 估算:无 tokenizer,用 UTF-8 bytes/3 保守粗估(中文 1 字 ≈ 1 token,英文略高估),
- * 与 {@code WorkerConfig.DEFAULT_CONTEXT_WINDOW_TOKENS} 同口径。
+ * <p>token 估算:口径可注入({@link TextTokens})——生产环境由全局
+ * {@link dev.everyagent.plugin.api.spi.TokenEstimator#estimate} 提供(单一口径,
+ * CJK≈1/其余≈4 字符),使压缩与限流/长度护栏共用同一分词口径;未注入时回退内置
+ * UTF-8 bytes/3 粗估。阈值比较的统一形式为 {@code estimateTokens(x) + overhead}。
  */
 public final class ContextCompressor {
 
@@ -72,25 +75,38 @@ public final class ContextCompressor {
     // ---- 公共入口 ----
 
     /**
-     * 四参兼容入口:等价于 {@link #compress(List, long, long, long, ContextSummarizer)}
-     * 传入 summarizer=null,其中 overhead 语义与原 reserve 一致(固定预留)。
+     * 四参兼容入口:等价于 {@link #compress(List, long, long, long, ContextSummarizer, TextTokens)}
+     * 传入 summarizer=null、tokens=null,其中 overhead 语义与原 reserve 一致(固定预留)。
      */
     public static Result compress(List<Message> messages, long trigger, long target, long overhead) {
-        return compress(messages, trigger, target, overhead, null);
+        return compress(messages, trigger, target, overhead, null, null);
     }
 
     /**
      * 按阈值检查并压缩。used + overhead ≤ trigger 时原样返回(compressed=false);
      * 否则逐级压缩到 ≤ target,返回改写后的发送视图。overhead 同时承载固定预留与
-     * offset 校准;summarizer 非空时,阶段 C 用其生成「历史摘要」,失败/缺失时降级为
-     * 「更早历史」user 截断简版(四参入口传 null,行为与无摘要器一致)。
+     * offset 校准(可为负,见 {@link #calibratedOverhead});summarizer 非空时,阶段 C 用其
+     * 生成「历史摘要」,失败/缺失时降级为「更早历史」user 截断简版。
+     *
+     * @param tokens token 估算口径;为空回退内置 bytes/3(生产由全局
+     *               {@code TokenEstimator#estimate} 提供,见插件 provider)
      */
     public static Result compress(List<Message> messages, long trigger, long target, long overhead,
             ContextSummarizer summarizer) {
+        return compress(messages, trigger, target, overhead, summarizer, null);
+    }
+
+    /**
+     * 全景入口:{@code tokens} 非空时全部阈值比较改用其口径(逐片段累加),为空时回退内置
+     * bytes/3。三阶段算法与 §7.5 描述一致,口径替换只影响「是否触发 / 是否已达 target」的判定,
+     * 不改写任何消息内容与配对。
+     */
+    public static Result compress(List<Message> messages, long trigger, long target, long overhead,
+            ContextSummarizer summarizer, TextTokens tokens) {
         if (messages == null || messages.isEmpty()) {
             return new Result(messages, 0, 0, 0, false);
         }
-        if (estimateTokens(messages) + overhead <= trigger) {
+        if (estimateTokens(messages, tokens) + overhead <= trigger) {
             return new Result(messages, 0, 0, 0, false);
         }
 
@@ -109,7 +125,7 @@ public final class ContextCompressor {
             }
         }
         aView.addAll(split.currentTurn);
-        if (estimateTokens(aView) + overhead <= target) {
+        if (estimateTokens(aView, tokens) + overhead <= target) {
             return new Result(aView, 1, 0, 0, true);
         }
 
@@ -127,7 +143,7 @@ public final class ContextCompressor {
         }
         bView.addAll(curTrimmed);
         int droppedPairs = curPairDropCount(split.currentTurn);
-        if (estimateTokens(bView) + overhead <= target) {
+        if (estimateTokens(bView, tokens) + overhead <= target) {
             return new Result(bView, 2, 0, droppedPairs, true);
         }
 
@@ -149,7 +165,7 @@ public final class ContextCompressor {
                 }
             }
             tmp.addAll(curTrimmed);
-            if (estimateTokens(tmp) + overhead <= target) {
+            if (estimateTokens(tmp, tokens) + overhead <= target) {
                 break;
             }
             dropped.add(remaining.remove(0)); // 删除最旧历史轮(移入保留摘要区)
@@ -263,44 +279,114 @@ public final class ContextCompressor {
 
     // ---- token 估算 ----
 
-    /** 估算消息列表 token(UTF-8 bytes/3,向上取整;覆盖正文/工具名/参数/工具结果)。 */
+    /**
+     * 文本 → token 估算函数(估算口径注入点)。生产环境由全局 {@code TokenEstimator#estimate}
+     * 提供(见 provider);为空时回退内置 UTF-8 bytes/3 粗估。
+     *
+     * <p>入参可能为 {@code null}/空串,实现须容忍并返回 0。
+     */
+    @FunctionalInterface
+    public interface TextTokens {
+        long of(String text);
+    }
+
+    /** 遍历一条消息的全部可计费文本片段(正文 / 工具名 / 工具参数 / 工具结果)。 */
+    private static void forEachSegment(Message m, java.util.function.Consumer<String> sink) {
+        if (m == null) {
+            return;
+        }
+        sink.accept(m.getText());
+        if (m instanceof AssistantMessage am) {
+            if (am.getToolCalls() != null) {
+                for (ToolCall tc : am.getToolCalls()) {
+                    if (tc == null) {
+                        continue;
+                    }
+                    sink.accept(tc.name());
+                    sink.accept(tc.arguments());
+                }
+            }
+        } else if (m instanceof ToolResponseMessage trm) {
+            if (trm.getResponses() != null) {
+                for (ToolResponse r : trm.getResponses()) {
+                    if (r == null) {
+                        continue;
+                    }
+                    sink.accept(r.name());
+                    sink.accept(r.responseData());
+                }
+            }
+        }
+    }
+
+    /**
+     * 估算消息列表 token(内置口径:UTF-8 bytes/3,整体向上取整一次)。
+     *
+     * <p>无注入时的回退口径,与 {@code WorkerConfig.DEFAULT_CONTEXT_WINDOW_TOKENS} 同源注释。
+     */
     public static long estimateTokens(List<Message> messages) {
         if (messages == null || messages.isEmpty()) {
             return 0;
         }
-        long bytes = 0;
+        long[] bytes = {0};
         for (Message m : messages) {
-            if (m == null) {
-                continue;
-            }
-            bytes += bytesOf(m.getText());
-            if (m instanceof AssistantMessage am) {
-                if (am.getToolCalls() != null) {
-                    for (ToolCall tc : am.getToolCalls()) {
-                        if (tc == null) {
-                            continue;
-                        }
-                        bytes += bytesOf(tc.name());
-                        bytes += bytesOf(tc.arguments());
-                    }
-                }
-            } else if (m instanceof ToolResponseMessage trm) {
-                if (trm.getResponses() != null) {
-                    for (ToolResponse r : trm.getResponses()) {
-                        if (r == null) {
-                            continue;
-                        }
-                        bytes += bytesOf(r.name());
-                        bytes += bytesOf(r.responseData());
-                    }
-                }
-            }
+            forEachSegment(m, s -> bytes[0] += bytesOf(s));
         }
-        return (bytes + 2) / 3;
+        return (bytes[0] + 2) / 3;
+    }
+
+    /**
+     * 按注入口径估算消息列表 token:逐片段累加 {@code tokens.of(segment)},覆盖正文 / 工具名 /
+     * 工具参数 / 工具结果(与 {@link #estimateTokens(List)} 遍历同一组片段)。
+     *
+     * <p>{@code tokens} 为空时回退内置 bytes/3(便于旧调用方与单测零改动)。
+     */
+    public static long estimateTokens(List<Message> messages, TextTokens tokens) {
+        if (tokens == null) {
+            return estimateTokens(messages);
+        }
+        if (messages == null || messages.isEmpty()) {
+            return 0;
+        }
+        long[] sum = {0};
+        for (Message m : messages) {
+            forEachSegment(m, s -> sum[0] += tokens.of(s));
+        }
+        return sum[0];
     }
 
     private static long bytesOf(String s) {
         return s == null || s.isEmpty() ? 0 : s.getBytes(StandardCharsets.UTF_8).length;
+    }
+
+    // ---- offset 校准 ----
+
+    /**
+     * offset 校准(双向):把「上一轮 provider 实测输入 token − 上一轮发送视图粗估算」作为
+     * 阈值比较用的净修正项 overhead,抵消粗估与实际计数的系统性差异。测量缺失(任一入参
+     * ≤0)时回退固定 {@code reserve}(首轮 / 换模型 / 无实测)。
+     *
+     * <p><b>必须双向采纳</b>:
+     * <ul>
+     *   <li>{@code offset > 0}:粗估漏算隐藏开销(工具定义、系统模板、分词差异)→ 抬升 precheck,
+     *       防漏触发;</li>
+     *   <li>{@code offset < 0}:粗估<b>高估</b>正文(UTF-8 bytes/3 对 ASCII/代码正文尤其明显,
+     *       实测可达 1.5~3 倍)→ 必须同样压低 precheck,否则阈值退化为「粗估 × ratio」而非
+     *       「实测 × ratio」,上下文远未真实占满即触发压缩(2026-10 t_ra74 实测:估算 22.9 万、
+     *       provider 实测 8.4 万,却在窗口 85.5% 线前反复压缩)。</li>
+     * </ul>
+     *
+     * @param measuredInputTokens 上一轮 provider 实测输入 token(usage.round.inputTokens)
+     * @param estimatedLastSent   上一轮实际发送视图的粗估算(与 {@link #estimateTokens} 同口径)
+     * @param reserve             无实测时的固定预留(worker.limits.context-tool-reserve-tokens)
+     * @return 阈值比较用 overhead(可为负;调用方以 {@code estimateTokens(working) + overhead}
+     *         与 trigger/target 比较)
+     */
+    public static long calibratedOverhead(long measuredInputTokens, long estimatedLastSent, long reserve) {
+        if (measuredInputTokens <= 0 || estimatedLastSent <= 0) {
+            return reserve;
+        }
+        return measuredInputTokens - estimatedLastSent;
     }
 
     // ---- 轮次切分 ----

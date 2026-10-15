@@ -4,7 +4,7 @@ import { isTaskActive } from '@/task/taskStatusPresentation'
 import SidebarScrollArea from '@/components/shared/SidebarScrollArea'
 import { getDefaultRuntimeService } from '@/task'
 import { taskStore } from '@/task/taskStore'
-import { workspaceRegistry } from '@/hub/workspaceRegistry'
+import { workspaceRegistry, type WorkspaceEntry } from '@/hub/workspaceRegistry'
 import { domainEventBus, DOMAIN_EVENTS } from '@/events/eventBus'
 import { useWorkspaceShell } from '@/components/app/WorkspaceShellContext'
 import ListRowActions, { type ListRowActionsHandle } from '@/components/shared/ui/ListRowActions'
@@ -16,6 +16,8 @@ import { ChevronDownIcon, MagnifierCheckIcon, MoreHorizontalIcon, PlusIcon } fro
 import { Button, IconButton } from '@/components/shared/ui'
 import ActionMenu from '@/components/shared/ui/ActionMenu'
 import ConfirmDialog from '@/components/shared/ConfirmDialog'
+import PropertiesDialog from '@/components/shared/PropertiesDialog'
+import { buildWorkspacePropertyItems, getWorkspaceDisplayName } from '@/components/shared/workspacePropertyUtils'
 import { Checkbox } from 'antd'
 
 const runtimeService = getDefaultRuntimeService()
@@ -38,12 +40,6 @@ interface TaskListGroup<T> {
 }
 
 
-
-/** 工作区组标签短名:根路径末段(盘符根/斜杠根退化为全路径,完整根见组头 title)。 */
-function workspaceGroupLabel(root: string): string {
-  const trimmed = root.replace(/[\\/]+$/, '')
-  return trimmed.split(/[\\/]/).pop() || trimmed
-}
 
 /**
  * 将时间戳格式化为「年-月-日 时:分:秒」,24 小时制。
@@ -153,6 +149,8 @@ export default function TasksPanel({
   const [confirmOpen, setConfirmOpen] = React.useState(false)
   /** 单任务删除确认弹窗的目标任务；null = 未打开。 */
   const [singleDeleteTarget, setSingleDeleteTarget] = React.useState<TaskListItemSnapshot | null>(null)
+  /** 工作区属性弹窗:当前查看属性的工作区条目(复用资源管理器同款弹窗);null = 关闭。 */
+  const [workspacePropertiesTarget, setWorkspacePropertiesTarget] = React.useState<WorkspaceEntry | null>(null)
 
   const reload = React.useCallback(() => {
     try {
@@ -220,21 +218,21 @@ export default function TasksPanel({
    * 任务合并于尾组「未挂靠工作区」。
    * pages 为组的分页口径(workerId+workspace 过滤;组内「加载更多」按此定向续拉)。
    */
-  const groups = React.useMemo<(TaskListGroup<TaskListItemSnapshot> & { pages: Array<{ workerId: string; workspace: string }>; workspace?: { workerId: string; root: string } })[] | null>(() => {
+  const groups = React.useMemo<(TaskListGroup<TaskListItemSnapshot> & { pages: Array<{ workerId: string; workspace: string }>; workspace?: WorkspaceEntry })[] | null>(() => {
     if (!registry) return null
     const knownRoots = new Set(registry.workspaces.map((entry) => entry.root))
-    const out: Array<TaskListGroup<TaskListItemSnapshot> & { pages: Array<{ workerId: string; workspace: string }>; workspace?: { workerId: string; root: string } }> = []
+    const out: Array<TaskListGroup<TaskListItemSnapshot> & { pages: Array<{ workerId: string; workspace: string }>; workspace?: WorkspaceEntry }> = []
     for (const entry of registry.workspaces) {
       const groupTasks = tasks.filter((task) => task.workspace === entry.root)
       if (groupTasks.length === 0) continue
       out.push({
         key: `ws:${entry.root}`,
-        label: workspaceGroupLabel(entry.root),
+        label: getWorkspaceDisplayName(entry.root),
         title: entry.root,
         tasks: groupTasks,
         pages: entry.workerId ? [{ workerId: entry.workerId, workspace: entry.root }] : [],
-        /** 组对应的工作区定位(worker + 根),供组头「搜索」跳转到搜索侧边栏预填绑定。 */
-        workspace: { workerId: entry.workerId, root: entry.root },
+        /** 组对应的工作区条目,供组头「搜索」「属性」使用(注册表条目)。 */
+        workspace: entry,
         ...(onCreateNewTask
           ? {
               actions: [{
@@ -381,13 +379,13 @@ export default function TasksPanel({
    * 工作区组「搜索」:切到搜索侧边栏(壳层统一跳转通道) + 发领域事件预填
    * worker/工作区绑定与「搜索任务内容」目标,搜索面板订阅事件落定并聚焦输入框。
    */
-  const handleSearchWorkspace = React.useCallback((workspace: { workerId: string; root: string }) => {
+  const handleSearchWorkspace = React.useCallback((workspace: WorkspaceEntry) => {
     setActiveSidebarPanel('search')
     domainEventBus.emit(DOMAIN_EVENTS.WORKSPACE_SEARCH_PANEL_REQUESTED, {
       workerId: workspace.workerId,
       workspaceRoot: workspace.root,
       rootPath: '',
-      label: workspaceGroupLabel(workspace.root),
+      label: getWorkspaceDisplayName(workspace.root),
       target: 'tasks',
     })
   }, [setActiveSidebarPanel])
@@ -681,6 +679,13 @@ export default function TasksPanel({
                           },
                         },
                         {
+                          key: 'properties',
+                          label: '属性',
+                          onSelect: () => {
+                            if (group.workspace) setWorkspacePropertiesTarget(group.workspace)
+                          },
+                        },
+                        {
                           key: 'batch-delete',
                           label: '批量删除',
                           danger: true,
@@ -736,6 +741,13 @@ export default function TasksPanel({
           }
         }}
         onCancel={() => setSingleDeleteTarget(null)}
+      />
+      <PropertiesDialog
+        open={Boolean(workspacePropertiesTarget)}
+        title="工作区属性"
+        name={workspacePropertiesTarget ? getWorkspaceDisplayName(workspacePropertiesTarget.root) : undefined}
+        items={workspacePropertiesTarget ? buildWorkspacePropertyItems(workspacePropertiesTarget) : []}
+        onClose={() => setWorkspacePropertiesTarget(null)}
       />
     </div>
   )

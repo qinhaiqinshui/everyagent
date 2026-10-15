@@ -1,6 +1,6 @@
 ---
 title: 快速上手
-nav_order: 2
+nav_order: 5
 has_children: false
 ---
 

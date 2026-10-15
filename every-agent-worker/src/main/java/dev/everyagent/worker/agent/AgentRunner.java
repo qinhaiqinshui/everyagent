@@ -39,7 +39,7 @@ public class AgentRunner {
             OpenAiChatOptions.Builder options = a.options.mutate();
             if (!a.tools.isEmpty()) {
                 options.toolCallbacks(a.tools.stream()
-                        .map(SchemaStrippedToolCallback::new)
+                        .map(tc -> new SchemaStrippedToolCallback(tc, a.toolOutcomes))
                         .toArray(ToolCallback[]::new));
             }
             Prompt prompt = new Prompt(new ArrayList<>(a.conversation), options.build());

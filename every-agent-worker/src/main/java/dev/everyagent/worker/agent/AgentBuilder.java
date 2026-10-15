@@ -14,6 +14,7 @@ import dev.everyagent.worker.plugin.registry.AdvisorProviderRegistry;
 import dev.everyagent.worker.plugin.registry.ToolProviderRegistry;
 import dev.everyagent.worker.tools.PermissionGate;
 import dev.everyagent.worker.tools.RipgrepBinary;
+import dev.everyagent.plugin.api.spi.ToolOutcomeLog;
 import dev.everyagent.worker.plugin.registry.ToolExecutionInterceptorRegistry;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.advisor.api.Advisor;
@@ -122,21 +123,26 @@ public class AgentBuilder {
         // (如 WSL 后端 C:\... → /c/...)。幂等:重复注册同一路径只首次实际挂载。
         registerSandboxPaths(exec);
 
+        // per-run 工具结果账本：插件执行器记退出码、工具回调包装器记异常、advisor 查账
+        // (tool.result 的 data.status)三者共用同一实例；键 = 工具名 + 该次调用可复现载荷。
+        ToolOutcomeLog toolOutcomes = new ToolOutcomeLog();
+
         // 聚合全部工具: 遍历 toolRegistry.getProviders() → appliesTo → createTools
-        ToolContextImpl toolCtx = createToolContext(agentId, exec);
+        ToolContextImpl toolCtx = createToolContext(agentId, exec, toolOutcomes);
         List<ToolCallback> tools = new ArrayList<>();
         for (ToolProvider p : toolRegistry.getProviders()) {
             if (p.appliesTo(toolCtx)) {
                 tools.addAll(p.createTools(toolCtx));
             }
         }
-        return new Build(agentId, chatModel, options, exec, configId, tools);
+        return new Build(agentId, chatModel, options, exec, configId, tools, toolOutcomes);
     }
 
     /** 从 exec 槽位构造 ToolContext（S2 起不再从 map 逐个 get）。 */
-    private ToolContextImpl createToolContext(String agentId, ExecContext exec) {
+    private ToolContextImpl createToolContext(String agentId, ExecContext exec,
+            ToolOutcomeLog toolOutcomes) {
         return new ToolContextImpl(exec, agentId, sandbox, gate, workspaces,
-                rgBinary != null ? rgBinary.path() : null, pathRegistry);
+                rgBinary != null ? rgBinary.path() : null, pathRegistry, toolOutcomes);
     }
 
     /**
@@ -195,6 +201,8 @@ public class AgentBuilder {
         private final ExecContext execution;
         /** 本 agent 实际解析所用的配置 ID（AdvisorContext.configId() 的供体）。 */
         private final String configId;
+        /** per-run 工具结果账本（装配时创建，转交 AgentEntity 供 advisor / 工具回调查账记账）。 */
+        private final ToolOutcomeLog toolOutcomes;
 
         // create() 时已聚合填充，后续可按模式增删改
         private List<ToolCallback> tools;
@@ -210,13 +218,14 @@ public class AgentBuilder {
 
         Build(String agentId, ChatModel chatModel, OpenAiChatOptions options,
                 ExecContext execution, String configId,
-                List<ToolCallback> tools) {
+                List<ToolCallback> tools, ToolOutcomeLog toolOutcomes) {
             this.agentId = agentId;
             this.chatModel = chatModel;
             this.options = options;
             this.execution = execution;
             this.configId = configId;
             this.tools = new ArrayList<>(tools);
+            this.toolOutcomes = toolOutcomes;
         }
 
         /** 按模式增删改工具。 */
@@ -289,6 +298,7 @@ public class AgentBuilder {
             //    上游 emitter 取 execution.emitter()（任务级事件口）
             AgentEntity entity = new AgentEntity(agentId, title, chatModel, options,
                     List.copyOf(tools), execution.emitter(), execution, creator, agentMetadata);
+            entity.toolOutcomes = toolOutcomes;
             entity.conversation.addAll(conversation);
 
             // 2. 装配 TCM：per-run InterceptingToolCallingManager（持 exec，替代 ThreadLocal）

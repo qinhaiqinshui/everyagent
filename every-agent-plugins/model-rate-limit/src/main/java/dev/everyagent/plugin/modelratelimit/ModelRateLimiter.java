@@ -2,8 +2,10 @@ package dev.everyagent.plugin.modelratelimit;
 
 import dev.everyagent.plugin.api.spi.TokenEstimator;
 import dev.everyagent.plugin.api.config.WorkerConfig;
+import dev.everyagent.plugin.api.util.OutputTokenAccumulator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.ai.chat.messages.AssistantMessage;
 
 import java.util.ArrayDeque;
 import java.util.function.BiConsumer;
@@ -16,8 +18,7 @@ import java.util.function.BiConsumer;
  *   <li><b>rpm 滑动窗口</b>(精确):60s 内发起请求数封顶;</li>
  *   <li><b>maxConcurrency 信号量</b>(精确):同时 in-flight 上限,长思考流重叠的核心闸门;</li>
  *   <li><b>输出侧流中估算</b>(近似):活跃流按 {@link TokenEstimator} 累计估算 token,接近 tpm 时延迟新起步;</li>
- *   <li><b>事后 usage 精确记账</b>(精确):请求完成后用真实 outputTokens 记入 60s tpm 窗口,
- *       并经 {@link TokenEstimator#calibrate} 反向校准估算系数(EMA,持久化)。</li>
+ *   <li><b>事后 usage 精确记账</b>(精确):请求完成后用真实 outputTokens 记入 60s tpm 窗口。</li>
  * </ol>
  *
  * <p>超限不报错:请求进入有界等待队列(monitor wait + waiters 计数),等 rpm 窗口滚出 /
@@ -27,6 +28,8 @@ import java.util.function.BiConsumer;
  *
  * <p>token 估算委托 {@link TokenEstimator}(经真实 usage 在线校准的 CJK 粗估),
  * 与 {@code ModelLengthGuardAdvisor} 共享同一校准系数,误差长期可控。
+ * 输出估算口径由 {@code OutputTokenAccumulator} 统一(正文 + 思考差分 + 工具调用参数),
+ * 校准由独立插件 token-estimator 的校准 Advisor 负责(限流插件不再持有估算器)。
  */
 public final class ModelRateLimiter {
 
@@ -74,13 +77,16 @@ public final class ModelRateLimiter {
     public Snapshot snapshot() {
         synchronized (monitor) {
             return new Snapshot(configId, cfg.enabled(), cfg.rpm(), cfg.maxConcurrency(), cfg.tpm(),
-                    inFlight, waiters, estimator.factorOf(configId), estimator.sampleCountOf(configId));
+                    inFlight, waiters);
         }
     }
 
-    /** 运行时状态(供前端 config.get 展示;P2)。 */
+    /**
+     * 运行时状态(供前端 config.get 展示;P2)。估算系数/样本数不在此暴露——SPI 不提供它们
+     * (见 {@link TokenEstimator}),且估算器已拆到独立插件 token-estimator,不再是本插件内部类型。
+     */
     public record Snapshot(String configId, boolean enabled, int rpm, int maxConcurrency, long tpm,
-            int inFlight, int waiters, double factor, long sampleCount) {
+            int inFlight, int waiters) {
     }
 
     /** 排队等待信息(每次等待轮询回调;P2 trace 内容源)。 */
@@ -223,16 +229,25 @@ public final class ModelRateLimiter {
     public final class Permit {
         private boolean done = false;
         private long estAcc = 0;
+        /** 输出估算累加器:与校准侧同口径(正文 + 思考差分 + 工具调用参数)。 */
+        private final OutputTokenAccumulator acc = new OutputTokenAccumulator(estimator, configId);
 
         private Permit() {
         }
 
-        /** 流中逐 chunk 累计估算输出(仅 stream 路径调用;call 路径由 usage 精确记账)。 */
-        public void onChunk(String text) {
-            if (text == null || text.isEmpty()) {
+        /**
+         * 流中逐 chunk 累计估算输出(仅 stream 路径调用;call 路径由 usage 精确记账)。
+         *
+         * <p>口径与 token-estimator 插件的校准 Advisor 统一走 {@link OutputTokenAccumulator}
+         * (含工具调用参数)。估算在锁外完成(累加器非线程安全、per-Permit 独占),累加进共享计数在锁内。
+         */
+        public void onChunk(AssistantMessage out) {
+            if (out == null) {
                 return;
             }
-            long e = estimator.estimate(text, configId);
+            long before = acc.tokens();
+            acc.accept(out);
+            long e = acc.tokens() - before;
             if (e <= 0) {
                 return;
             }
@@ -245,26 +260,20 @@ public final class ModelRateLimiter {
             }
         }
 
-        /** 完成:记账 tpm、校准系数、释放并发与估算。 */
+        /** 完成:记账 tpm、释放并发与估算。 */
         public void complete(long actualOutputTokens) {
-            long est;
             synchronized (monitor) {
                 if (done) {
                     return;
                 }
                 done = true;
-                est = estAcc;
-                estActiveOutput -= est;
+                estActiveOutput -= estAcc;
                 estAcc = 0;
                 inFlight = Math.max(0, inFlight - 1);
                 if (cfg.tpm() > 0) {
                     tpmWindow.addLast(new TokenSample(System.currentTimeMillis(), actualOutputTokens));
                 }
                 monitor.notifyAll();
-            }
-            // 校准委托 TokenEstimator（在锁外执行，避免持久化 IO 阻塞限流）。
-            if (actualOutputTokens > 0 && est > 0) {
-                estimator.calibrate(configId, est, actualOutputTokens);
             }
         }
 

@@ -56,6 +56,19 @@ function dataOf(event: FoldableTaskEvent): Record<string, unknown> | undefined {
   return undefined
 }
 
+// ---- 工具结果状态 ----
+
+/**
+ * 工具结果状态：worker 在 `tool.result` 的 `data.status` 里下发（判定收口在 worker 的单点：
+ * shell 退出码 / 超时 / 工具抛异常走结构化记账，见 plugin-api `ToolOutcomeLog`）。
+ *
+ * 无该字段（本改动之前落盘的历史记录）一律按成功——**不做文案匹配推断**：
+ * 那会让「读/grep 到失败文案源码」的命令被自指误判为失败（实测复现过）。
+ */
+function readToolStatus(rawStatus: unknown): 'success' | 'error' {
+  return rawStatus === 'error' ? 'error' : 'success'
+}
+
 // ---- 默认 handler（未注册 kind 的降级） ----
 
 /**
@@ -143,20 +156,21 @@ registerEventKind('tool.result', {
     const ts = tsOf(event)
     const data = dataOf(event)
     const callId = String(data?.callId ?? '')
+    const content = String(event.payload?.content ?? event.payload?.summary ?? '')
     folder.closeStreamingByAgent(agentKey)
     folder.insertMessage(agentKey, {
       messageId: `m-${event.seq}`,
       agentId: agentKey,
       role: 'tool',
-      content: String(event.payload?.content ?? event.payload?.summary ?? ''),
+      content,
       historyMode: 'thread_only',
       createdAt: ts,
       updatedAt: ts,
       sequence: Number(event.seq),
       toolCallId: callId,
       toolName: folder.getToolName(callId),
-      status: 'success',
-      metadata: data?.truncated ? { truncated: true } : undefined,
+      // 权威状态来自 worker 的 data.status（判定收口在 worker：退出码/超时/抛异常的结构化记账）。
+      status: readToolStatus(data?.status),
     }, seqKey)
     return true
   },

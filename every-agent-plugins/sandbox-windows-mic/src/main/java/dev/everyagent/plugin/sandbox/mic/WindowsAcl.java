@@ -89,7 +89,7 @@ public final class WindowsAcl {
         }
         Path norm = root.toAbsolutePath().normalize();
         if (norm.getRoot() != null && norm.getRoot().equals(norm)) {
-            // §13.3 修复 B L3(入口 fail-fast):文件系统根一律拒授——给盘根追加 Users 可写
+            // §7.8 过宽根拒收·入口 fail-fast:文件系统根一律拒授——给盘根追加 Users 可写
             // ACE 等于放开整卷增删改查(2026-08-31 实测 C:\ 根残留即此形态)。
             // ②③(工作区/系统目录祖先)由 L1/L2(gate/executor,持有上下文)判定。
             log.warn("[sandbox] L3 拒绝对文件系统根追加可写 ACL: {}", norm);

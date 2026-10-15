@@ -40,7 +40,8 @@ public class WslUbuntuSandboxPlugin implements EveryAgentPlugin {
         ctx.registerToolProvider(new WslUbuntuBashToolProvider(props, workspaces, pluginDir,
                 ctx.services()));
 
-        // 3. 注册「/禁用网络」：命令入口 + 提交期从 AI 上下文剥离 token（状态存任务 metadata）
+        // 3. 注册「/禁用网络」：命令入口 + 提交期从 AI 上下文剥离 token
+        //    （开关状态即任务级 network.access token，落盘 slash-tokens.json，唯一真相源）
         ctx.registerSlashProvider("network", () -> NetworkSlashProvider.items(ctx.services()));
         ctx.registerSlashTokenResolver(new NetworkSlashResolver());
     }

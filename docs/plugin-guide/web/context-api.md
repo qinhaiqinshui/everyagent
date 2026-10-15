@@ -1,7 +1,7 @@
 ---
 title: 前端 ctx API
 nav_order: 10
-parent: web
+parent: 前端插件开发
 has_children: false
 ---
 
@@ -144,7 +144,7 @@ export async function fetchRoundChanges(taskId: string): Promise<unknown> {
 @Override
 public void activate(WorkerPluginContext ctx) {
     // 方法名直接进 worker 的 RpcDispatcher，无前缀改写
-    // （every-agent-worker/.../plugin/WorkerPluginContextImpl.java:186-189）
+    // （every-agent-worker/.../plugin/WorkerPluginContextImpl.java:220-222）
     ctx.registerRpcMethod("task.fileChanges", this::rpcTaskFileChanges);
 }
 

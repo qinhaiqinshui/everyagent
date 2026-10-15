@@ -22,8 +22,9 @@ import dev.everyagent.plugin.api.slash.SlashTokenEncoder;
  * 由 {@code UnattendedAskUserCallback} 装饰器在工具执行瞬间按任务级
  * {@code TaskEntry.unattended} 完成。
  *
- * <p>本次任务有效:选中 /无人值守 即开启任务级开关(写入任务 meta.json 落盘),
- * 之后本任务所有轮次持续生效、再运行仍保持,直至 ✕ 取消。
+ * <p>本次任务有效:选中 /无人值守 即开启任务级开关(该 token 由 slash 层写入任务目录
+ * {@code slash-tokens.json}),之后本任务所有轮次持续生效、再运行仍保持,直至 ✕ 取消
+ * (移除该 token)。
  */
 public final class UnattendedToken {
 

@@ -22,7 +22,6 @@ import dev.everyagent.worker.plugin.registry.FileReferenceHandlerRegistry;
 import dev.everyagent.worker.plugin.registry.PluginStateStore;
 import dev.everyagent.worker.plugin.registry.SandboxProviderRegistry;
 import dev.everyagent.worker.plugin.registry.SearchProviderRegistry;
-import dev.everyagent.worker.plugin.registry.SkillContributorRegistry;
 import dev.everyagent.worker.plugin.registry.TaskAdmissionPolicyRegistry;
 import dev.everyagent.worker.plugin.registry.TaskLifecycleRegistry;
 import dev.everyagent.worker.plugin.registry.ToolExecutionInterceptorRegistry;
@@ -80,7 +79,6 @@ class PluginLoaderDisabledTest {
                 mock(TaskLifecycleRegistry.class),
                 mock(ChatModelEnhancerRegistry.class),
                 mock(TaskAdmissionPolicyRegistry.class),
-                mock(SkillContributorRegistry.class),
                 mock(FileReferenceHandlerRegistry.class),
                 mock(dev.everyagent.worker.ship.EventEgressFilterRegistry.class),
                 mock(dev.everyagent.worker.ship.RoundEgressFilterRegistry.class),

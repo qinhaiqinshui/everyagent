@@ -57,21 +57,6 @@ class ModelLengthGuardAdvisorTest {
             return rawEstimate(text);
         }
 
-        @Override
-        public void calibrate(String configId, long estimatedTokens, long actualTokens) {
-            // 测试不校准
-        }
-
-        @Override
-        public double factorOf(String configId) {
-            return 1.0;
-        }
-
-        @Override
-        public long sampleCountOf(String configId) {
-            return 0;
-        }
-
         private long rawEstimate(String s) {
             if (s == null || s.isEmpty()) {
                 return 0;

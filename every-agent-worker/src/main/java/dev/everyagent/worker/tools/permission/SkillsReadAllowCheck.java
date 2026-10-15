@@ -9,7 +9,7 @@ import java.io.IOException;
 import java.nio.file.Path;
 
 /**
- * 责任链节点:skill 目录(system skills dir,§13.8)读写放行。
+ * 责任链节点:skill 目录(system skills dir,§7.17「skill 读写放行」)读写放行。
  * READ + WRITE 均直接放行(realpath 前缀判定,符号链接逃逸自然失配);
  * EXEC 不在此放行,继续走授权决议链。
  * 沙箱侧由 FsToolSupport / FsService 把 skills 目录作为附加根加入。

@@ -1187,7 +1187,8 @@ function buildFileTabId(target: {
 }
 
 function getFileNameFromPath(filePath: string): string {
-  const slashIndex = filePath.lastIndexOf('/')
+  // 工作区外绝对路径可能带反斜杠(Windows 机器路径,如 skill.md 详情),须同时按 \ 取文件名。
+  const slashIndex = Math.max(filePath.lastIndexOf('/'), filePath.lastIndexOf('\\'))
   return slashIndex >= 0 ? filePath.slice(slashIndex + 1) : filePath
 }
 

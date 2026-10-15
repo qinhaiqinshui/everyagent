@@ -70,12 +70,12 @@ class RoundIndexPersistTest {
         return d;
     }
 
-    /** tool.result 事件的 data。 */
-    private static ObjectNode toolResultData(String callId, String name, boolean truncated) {
+    /** tool.result 事件的 data(与 wire 形态一致:callId + name + status,结果文本走 summary 字段、事件侧不截断)。 */
+    private static ObjectNode toolResultData(String callId, String name) {
         ObjectNode d = Json.obj();
         d.put("callId", callId);
         d.put("name", name);
-        d.put("truncated", truncated);
+        d.put("status", "success");
         return d;
     }
 
@@ -95,11 +95,10 @@ class RoundIndexPersistTest {
     }
 
     /** 发射 tool.result(持久)。 */
-    private void emitToolResult(String callId, String name, String summary,
-                                boolean truncated, String agentId) {
+    private void emitToolResult(String callId, String name, String summary, String agentId) {
         events.emit(EmitEvent.of(SnowflakeId.next(), Events.TOOL_RESULT, agentId,
                 null, summary, null, null,
-                toolResultData(callId, name, truncated), EmitEvent.Mode.REPLACE));
+                toolResultData(callId, name), EmitEvent.Mode.REPLACE));
     }
 
     /** 发射 delta(瞬态)。 */
@@ -130,7 +129,7 @@ class RoundIndexPersistTest {
         emitThinking(MAIN, "思考");
         emitMessage(MAIN, "思考全文", "调工具",
                 List.of(new ToolCallPart("c1", "bash", "{}")));
-        emitToolResult("c1", "bash", "ok", false, MAIN);
+        emitToolResult("c1", "bash", "ok", MAIN);
         emitDelta(MAIN, "答");
         emitMessage(MAIN, "", answer, List.of());
     }
@@ -226,7 +225,7 @@ class RoundIndexPersistTest {
         // 续跑:同一日志无新输入,补出工具轮 + 最终回复
         emitMessage(MAIN, "续跑思考", "先调工具",
                 List.of(new ToolCallPart("c9", "bash", "{}")));
-        emitToolResult("c9", "bash", "ok", false, MAIN);
+        emitToolResult("c9", "bash", "ok", MAIN);
         emitDelta(MAIN, "续答");
         emitMessage(MAIN, "", "补完之答", List.of());
         rounds.persistClosedRounds(dir(), log, "t1", MAIN); // 增量路径改判闭合
@@ -305,7 +304,7 @@ class RoundIndexPersistTest {
         rounds.openRoundAtStart(dir(), "t1", secondSeq, "第二问", null);
         emitMessage(MAIN, "想", "先调工具",
                 List.of(new ToolCallPart("c2", "bash", "{}")));
-        emitToolResult("c2", "bash", "ok", false, MAIN);
+        emitToolResult("c2", "bash", "ok", MAIN);
         // 开着的轮内第二条用户输入:openRoundAtStart 沿用当前未闭合轮,不写新行
         long midSeq = emitUserMessage("中间补充输入");
         rounds.openRoundAtStart(dir(), "t1", midSeq, "中间补充输入", null);

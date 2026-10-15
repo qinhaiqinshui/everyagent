@@ -4,7 +4,8 @@
  * - Hub 连接区:hubUrl + hubKey(hub 级凭证,前端与 worker 都要带)。
  * - Worker 列表区:见 WorkerList(状态收敛 + 单主按钮 + 别名)。
  *
- * 模型配置/技能/权限在 worker 侧,不在此编辑;工作区注册表在资源管理器侧栏管理。
+ * 模型配置在 worker 侧,不在此编辑;skill 列表只读展示(见 SkillListTable,
+ * 自动暴露按工作区排除配置在此设置);工作区注册表在资源管理器侧栏管理。
  */
 import React from 'react'
 import WorkspacePageShell from '@/components/shared/WorkspacePageShell'
@@ -27,6 +28,7 @@ import { hubSession } from '@/hub/session'
 import { domainEventBus, DOMAIN_EVENTS } from '@/events/eventBus'
 import ConfirmDialog from '@/components/shared/ConfirmDialog'
 import WorkerList from '@/components/system/WorkerList'
+import SkillListTable from '@/components/system/SkillListTable'
 import { APP_NAME, APP_VERSION, APP_COPYRIGHT, APP_LICENSE } from '@/appInfo'
 
 export default function SettingsPanel() {
@@ -45,9 +47,6 @@ export default function SettingsPanel() {
   const [reloadingModels, setReloadingModels] = React.useState(false)
   const [modelReloadHint, setModelReloadHint] = React.useState('')
   const [modelReloadTone, setModelReloadTone] = React.useState<'ok' | 'error'>('ok')
-  const [reloadingSkills, setReloadingSkills] = React.useState(false)
-  const [skillReloadHint, setSkillReloadHint] = React.useState('')
-  const [skillReloadTone, setSkillReloadTone] = React.useState<'ok' | 'error'>('ok')
   const [restartingWorkers, setRestartingWorkers] = React.useState(false)
   const [restartConfirmOpen, setRestartConfirmOpen] = React.useState(false)
   const [restartHint, setRestartHint] = React.useState('')
@@ -134,49 +133,6 @@ export default function SettingsPanel() {
       setModelReloadTone('error')
     } finally {
       setReloadingModels(false)
-    }
-  }
-
-  const handleReloadSkills = async () => {
-    if (reloadingSkills) return
-    const connectedWorkers: string[] = []
-    hub.directory.forEach((w) => {
-      if (w.connected) connectedWorkers.push(w.workerId)
-    })
-    if (connectedWorkers.length === 0) {
-      setSkillReloadHint('无已连接的 worker')
-      setSkillReloadTone('error')
-      return
-    }
-    setReloadingSkills(true)
-    setSkillReloadHint('')
-    try {
-      const results = await Promise.allSettled(
-        connectedWorkers.map((id) => hubSession.rpcTo(id, 'skill.reload')),
-      )
-      const succeeded: string[] = []
-      const failed: string[] = []
-      results.forEach((r, i) => {
-        if (r.status === 'fulfilled') {
-          succeeded.push(connectedWorkers[i])
-        } else {
-          failed.push(connectedWorkers[i])
-        }
-      })
-      if (failed.length === 0) {
-        setSkillReloadHint('已重新读取 ' + succeeded.length + ' 台 worker 的 skill 列表')
-        setSkillReloadTone('ok')
-      } else {
-        setSkillReloadHint(
-          '已重新读取 ' + succeeded.length + ' 台,' + failed.length + ' 台失败(' + failed.join(', ') + ')',
-        )
-        setSkillReloadTone('error')
-      }
-    } catch (error) {
-      setSkillReloadHint(error instanceof Error ? error.message : '重新读取 skill 列表失败')
-      setSkillReloadTone('error')
-    } finally {
-      setReloadingSkills(false)
     }
   }
 
@@ -360,23 +316,12 @@ export default function SettingsPanel() {
       <section style={sectionStyle}>
         <h3 style={sectionTitleStyle}>Skill 列表</h3>
         <p style={hintStyle}>
-          外部 skill 放置在 worker 系统技能目录下(每个 skill 一个子目录,内含 skill.md)。增删 skill 目录后点击「重新读取」即可热加载,
-          无需重启;仅影响后续新建任务的 `/` 菜单,运行中任务不受影响。
+          外部 skill 放置在 worker 系统技能目录下(每个 skill 一个子目录,内含 skill.md)。增删 skill 目录后无需重启——
+          下次新建任务或打开 `/` 菜单时自动发现(SkillCatalog 零缓存,每次实扫目录)。
+          自动暴露按工作区配置,默认全部工作区自动暴露;
+          skill.md 头部 frontmatter 仅 name/description 两个展示键(标题与一句话描述),不含暴露控制字段。
         </p>
-        <div style={actionsStyle}>
-          <Button
-            type="button"
-            variant="secondary"
-            style={secondaryButtonStyle}
-            onClick={() => void handleReloadSkills()}
-            disabled={reloadingSkills}
-          >
-            {reloadingSkills ? '重新读取中…' : '重新读取 Skill 列表'}
-          </Button>
-          {skillReloadHint ? (
-            <span style={skillReloadTone === 'error' ? errorStyle : okStyle}>{skillReloadHint}</span>
-          ) : null}
-        </div>
+        <SkillListTable />
       </section>
 
       <section style={sectionStyle}>

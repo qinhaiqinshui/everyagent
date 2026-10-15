@@ -1,8 +1,6 @@
 package dev.everyagent.plugin.aireview;
 
 import dev.everyagent.plugin.api.WorkerServices;
-import dev.everyagent.plugin.api.task.TaskRuntime;
-import dev.everyagent.plugin.api.task.TaskService;
 import dev.everyagent.plugin.api.slash.SlashCommandItem;
 import dev.everyagent.plugin.api.slash.SlashDisplayPosition;
 import dev.everyagent.plugin.api.slash.SlashSelectionResult;
@@ -10,46 +8,31 @@ import dev.everyagent.plugin.api.slash.SlashTokenEncoder;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
 
 /**
- * AiReviewSlashProvider 单测:`/` 候选 id=ai-review:on;
- * select 返回单个 bottom 结果;taskId 非空时置 metadata["ai-review"]=true 并落盘,
- * 为空时不写业务标记仍返回胶囊;cancel 复位并落盘。
+ * AiReviewSlashProvider 单测:`/` 候选 id=ai-review:on、insertText 为合法 opaque token;
+ * select 返回单个 bottom 结果且<b>不触碰任务实体 / metadata</b>(开关真相源是任务级 slash token,
+ * token 写入由 slash 层落盘);cancel 无副作用(取消时 token 由 slash 层移除)。
  *
  * <p>约束(§14.9):插件对 worker 任何 scope 零依赖——直接断言 provider 静态产物
- * (聚合是 worker SlashCommandRegistry 的职责,不在本插件测试范围),
- * 任务桩在本类内自建(实现 plugin-api ExecContext),不引用 worker TaskEntry。
+ * (聚合是 worker SlashCommandRegistry 的职责,不在本插件测试范围);
+ * WorkerServices 用 Mockito 桩,断言 provider 不再访问 task() 任务域。
  */
 class AiReviewSlashProviderTest {
 
     private WorkerServices services;
-    private TaskService taskService;
-    private TaskRuntime task;
-    private final Map<String, Object> taskMetadata = new HashMap<>();
 
     @BeforeEach
     void setUp() {
         services = mock(WorkerServices.class);
-        taskService = mock(TaskService.class);
-        // TaskService.get 返回 TaskRuntime(继承 ExecContext);provider 只读写 metadata()。
-        task = mock(TaskRuntime.class);
-        when(task.metadata()).thenReturn(taskMetadata);
-        when(services.task()).thenReturn(taskService);
-        doReturn(task).when(taskService).get("t-1");
     }
 
     private SlashCommandItem item() {
@@ -67,13 +50,16 @@ class AiReviewSlashProviderTest {
         assertEquals("ai-review:on", it.id());
         assertEquals("AI 审议", it.title());
         assertTrue(it.defaultSelected(), "AI 审议应默认选中(新建任务时预置底部胶囊)");
-        assertTrue(AiReviewToken.enabledIn(it.insertText()), "insertText 应为 AI 审议 opaque token");
+        // insertText 为合法 opaque token(kind=ai.review)
+        SlashTokenEncoder.ParsedToken tok = SlashTokenEncoder.parseToken(it.insertText());
+        assertNotNull(tok, "insertText 应为可 parse 的 opaque token");
+        assertEquals(AiReviewToken.KIND, tok.kind(), "token kind=ai.review");
     }
 
-    // ---- select:单个 bottom 胶囊 ----
+    // ---- select:单个 bottom 胶囊,不触碰任务实体 ----
 
     @Test
-    void selectReturnsSingleBottomCapsuleAndTurnsOnAiReview() {
+    void selectReturnsSingleBottomCapsuleWithoutTouchingTask() {
         SlashCommandItem it = item();
         List<SlashSelectionResult> results = it.selectHandler().onSelect(it, "t-1");
 
@@ -85,36 +71,29 @@ class AiReviewSlashProviderTest {
         assertNotNull(tok, "token 可 parse");
         assertEquals(AiReviewToken.KIND, tok.kind(), "token kind=ai.review");
 
-        verify(taskService).get("t-1");
-        assertTrue(Boolean.TRUE.equals(task.metadata().getOrDefault("ai-review", false)), "业务标记 ai-review 应置位");
-        verify(taskService).publishUpdated("t-1");
+        // 开关真相源是 slash token(token 写入由 slash 层落盘):select 回调不再查询/写入任务实体与 metadata
+        verify(services, never()).task();
     }
 
-    // ---- select:空 taskId 不写业务标记 ----
+    // ---- select:空 taskId(草稿态)仍返回胶囊,同样不触碰任务实体 ----
 
     @Test
-    void selectWithEmptyTaskIdStillReturnsCapsuleWithoutBusinessMark() {
+    void selectWithEmptyTaskIdStillReturnsCapsule() {
         SlashCommandItem it = item();
         List<SlashSelectionResult> results = it.selectHandler().onSelect(it, "");
 
         assertEquals(1, results.size(), "空 taskId(草稿态)仍返回胶囊");
         assertEquals("ai-review:on", results.get(0).id());
-        verify(taskService, never()).get(any());
-        assertFalse(Boolean.TRUE.equals(task.metadata().getOrDefault("ai-review", false)), "空 taskId 不写业务标记");
-        verify(taskService, never()).publishUpdated(any());
+        verify(services, never()).task();
     }
 
-    // ---- cancel:复位 aiReview ----
+    // ---- cancel:无副作用(取消时 token 由 slash 层移除) ----
 
     @Test
-    void cancelTurnsAiReviewOff() {
-        task.metadata().put("ai-review", true);
+    void cancelIsSideEffectFree() {
         SlashCommandItem it = item();
+        // 不挂回调 → 默认 NOOP;直接调用不抛异常且不触碰任务实体
         it.cancelHandler().onCancel(it, AiReviewToken.buildToken(), "t-1");
-        assertFalse(Boolean.TRUE.equals(task.metadata().getOrDefault("ai-review", false)), "取消 AI 审议胶囊应复位 aiReview");
-        verify(taskService).publishUpdated("t-1");
+        verify(services, never()).task();
     }
-
-    // TaskRuntime 由 Mockito 桩(仅 stub metadata()):TaskService.get 返回 TaskRuntime,
-    // 而 provider 只读写任务级 metadata 业务标记,无需引 worker 任务域类型(§14.9)。
 }

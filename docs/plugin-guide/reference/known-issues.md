@@ -1,7 +1,7 @@
 ---
 title: 已知问题与开放项
 nav_order: 19
-parent: reference
+parent: 参考
 has_children: false
 ---
 
@@ -77,7 +77,9 @@ has_children: false
 - **修复**：搜索后端经**统一 `search` RPC 聚合**——内置三 provider（`file-content` / `file-name` / `task`）与插件 provider **同权**，遍历 `SearchProviderRegistry` 按 `order()` 升序逐个触发、按 `kind`+位置键去重（`file-content` = `path+lineNumber+matchIndex` / `file-name` = `path` / `task` = `taskId+roundIndex+field+matchIndex`），受各 provider 自持上限触顶；注册表为空 → 零行为变化，单个 provider 异常仅 WARN 跳过，rg 不可用但有 provider 时可独立供数（SPI 真正可单独供数的路径）。**取舍**：消费链路选 RPC 而非 Advisor——搜索结果是给用户的、不是给模型上下文的；`ARCHITECTURE.md` §5.5/§8.5 与 [Advisor 与模型链](../backend/advisors.md) §6、api-index、builtin-plugins 状态行同步。附带修正结果项 `line` 字段类型（`int`→`String`，与 wire「干净文本」语义一致）。**注**：接入之初挂在旧 `fs.search` / `task.search` 两条 RPC 上（提交 `aa936bd9`），后随「统一 search + 插件化搜索类型」重构合并为单一 `search` RPC（`FsSearchService` / `TaskSearchService` 已删除，逻辑抽取进三个内置 provider + `RgSearchEngine`；`SearchServiceTest` / `TaskSearchProviderTest` 钉住统一 search）。
 - **后续**：未新增注册 SearchProvider 的示例内置插件（会与内置 rg 重复供数、无真实价值），聚合语义由单测钉住；将来做 search-es / search-vector 类插件时 SPI 契约已就绪。
 
-### #11 `SkillContributor` 半接线（✅ 已修复）
+### #11 `SkillContributor` 半接线（✅ 已修复 · ⛔ 结论已作废）
+
+> ⛔ **作废标注（skill 目录唯一真相源重构）**：本条所述 SPI 已随后续重构**整体删除**（skill 唯一真相源 = `skillsDir` 目录扫描；插件技能包改为 `skill/<id>/skill.md` 打包 + `activate()` 里 `SkillMaterializer` 物化落盘，见 [advisors.md](../backend/advisors.md) §5 与 [`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) §7.17）。「三路合并」及本条全部结论随之作废，以下原文仅作历史留痕，勿据此开发。
 
 - **现象（修复前）**：registry 的 `getSkills()` 只被 `SkillAdvisor.mergedSkills()` 消费（注入 system prompt）；`/` 菜单不含该 registry——subagent 的 skill 能进菜单，靠的是知识包**物化成文件**进 skillsDir 再被 `ExternalSkillScanner` 捞取。
 - **影响（修复前）**：照 SPI 语义「贡献技能」的插件，技能只对模型可见、对用户 `/` 菜单不可见——两条通道不等价。

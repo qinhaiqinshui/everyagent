@@ -17,7 +17,7 @@ import java.util.regex.PatternSyntaxException;
 
 /**
  * 内置「文件名」搜索引擎(kind {@code file-name}):复用 {@link RgSearchEngine} 的
- * {@code rg --files} 枚举 + 本侧 basename 正则匹配(架构 §5.10)。替代前端逐目录
+ * {@code rg --files} 枚举 + 本侧 basename 正则匹配(架构 §5.5「统一 search」)。替代前端逐目录
  * {@code fs.list} 递归 walk;rg 遵循 .gitignore、原生跳过不可读条目。
  *
  * <p><b>provider 自持职责三件套</b>:① 结果上限 = {@code worker.search.file-max-results};

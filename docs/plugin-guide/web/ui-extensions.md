@@ -1,7 +1,7 @@
 ---
 title: 前端 UI 扩展点
 nav_order: 11
-parent: web
+parent: 前端插件开发
 has_children: false
 ---
 
@@ -384,8 +384,8 @@ ctx.ui.registerFileContentEditor(descriptor)
 
 | 字段 | 类型 | 必填 | 消费位置（宿主） | 说明 |
 |---|---|---|---|---|
-| `pluginId` | `string` | ✅ | `TaskRoundsPanel.tsx:439` | 渲染 key（也用于归属） |
-| `Component` | `ComponentType<RoundTailPanelProps>` | ✅ | `TaskRoundsPanel.tsx:438-445` | 渲染在该轮最后 |
+| `pluginId` | `string` | ✅ | `TaskRoundsPanel.tsx:445` | 渲染 key（也用于归属判定） |
+| `Component` | `ComponentType<RoundTailPanelProps>` | ✅ | `TaskRoundsPanel.tsx:444-451` | 渲染在该轮最末的**轮末工具栏行内**，其根元素直接是该行（wrap flex 行）的 flex 项，与同行其它贡献者并排 |
 
 props：`taskId`、`roundId`、`workerId?`、`workspaceRoot?`、`round: unknown`（轮次数据，核心不感知结构，插件自行强转取字段）。
 
@@ -397,10 +397,19 @@ const def: UiRoundTailPanelDefinition = { pluginId: 'my-plugin', Component: MyRo
 ctx.ui.registerRoundTailPanel(def)
 ```
 
-消费链：每轮渲染时同步 `listRegisteredRoundTailPanels()`（`TaskRoundsPanel.tsx:381`），**折叠/展开两态共用、恒在该轮末尾**渲染（`:433-446`）。
+消费链：每轮渲染时同步 `listRegisteredRoundTailPanels()`（`TaskRoundsPanel.tsx:381`），**折叠/展开两态共用、恒在该轮末尾**渲染（`:433-454`）——渲染在轮末工具栏 `<div.nagent-round-collapse__tail>`（一条 `flex-wrap: wrap` 行）内，**贡献者组件的根元素直接落进这一行**，宿主不包任何中间层；宿主只兜底 `.nagent-round-collapse__tail > * { min-width: 0 }`，防 nowrap 长内容（如完整文件路径）按 max-content 撑破行宽。
 
-- **坑**：渲染 key 是 `pluginId`（`:437`）——同一插件注册两个轮末面板会 React key 冲突，一个插件只应注册一个。
-- **内置范例**：file-change（`every-agent-plugins/file-change/web/index.ts:15-26`，轮末文件变更视图 + 订阅 `task-round-closed`/`task-deleted` 作废缓存）。
+- **核心自身也是这个扩展点的贡献者**：内置「复制本轮结果」按钮不在 `TaskRoundsPanel` 里硬编码，而是由 `initializeCoreRoundTailPanels()`（`every-agent-web/src/plugin/coreRoundTailPanels.ts`，在 `main.tsx` 里随 `initializeTraceTypes()` 之后、`loadPlugins()` 之前同步调用）以 `pluginId: 'core.round-copy'` 注册进**同一**扩展点（组件 `components/task/RoundCopyPanel.tsx`）。与 `traceTypeRegistry` 同一范式：核心内置贡献 = 显式初始化 + 注册进插件同款扩展点，因此核心按钮与插件面板走完全相同的渲染路径与栅格。
+  - **顺序**：注册表是普通列表、按注册顺序渲染。核心注册在首屏同步完成，插件注册发生在异步的 `activate()`，故核心面板**恒在最左**（先「复制」后「文件变更」）；插件之间按 activate 先后。
+  - **占宽策略在面板自己**：宿主不替面板定 flex，各面板在自己的根元素上声明。核心「复制」按钮的 `.nagent-round-collapse__copy` 写 `flex: 0 0 auto`（hug，不参与拉伸/压缩）——免得被同排插件面板由长路径撑出的 max-content 挤变形，也不会反过来占掉面板宽度。
+- 面板的**排版职责分工**：host 负责这一行的行间距（`.nagent-round-collapse__tail` 提供 `margin-top`/`gap`）与**统一高度约束**，插件负责自己占多宽、要不要另起一行。因此插件面板**不要自带顶层上间距**（`padding-top`/`margin-top`），否则会比同一行的核心按钮低一档、视觉上不齐（file-change 的汇总头即按此约定不带 `padding-top`）。
+  - **统一高度约束**：这一行并排的 pill 高度由核心 Token 单点决定 —— `--round-tail-pill-height`（`assets/styles/ui-tokens.css`，`:root`，值 = 文本行盒 `--text-xs × 1.5` + 上下内边距 `2 × --space-1` = 26px）。核心「复制」按钮与 file-change 汇总头都用 `height: var(--round-tail-pill-height); box-sizing: border-box; padding: 0 9px`（纵向不吃 padding，内容靠 `align-items: center` 居中），故两枚 pill **等高由构造保证**，不再靠内边距/行高/图标尺寸「碰巧」凑成一样高（历史上正是此处差一点点而顶不齐）。**插件面板的汇总头 pill 请照此写法锚定该 token**（`var()` 经 `:root` 继承到此，无需 import）。
+- **坑（实测踩过）**：`web/*.css` 只是源码，宿主加载的是 esbuild 预编译产物 `web/index.css`（`plugin.webSource` RPC 从 worker 磁盘读，产物被 `.gitignore` 排除）。**只改 `roundFileChanges.css` 这类源文件而不重跑 `npm run build:plugins`，页面用的仍是旧 CSS**——表现为「改了样式毫无效果」，或「与核心按钮差 4px 对齐不上」。改完插件样式务必 `npm run build:plugins`（单插件可 `-- --only <id>`）再刷新；改后端 / `plugin.json` 才需重启 worker。
+- **展开详情要通栏占满整行（标签页式）**：面板把「汇总头」与「展开详情」渲染成**两个并列的 flex 项**（组件直接返回 Fragment、不包根容器），详情写 `flex: 1 1 100%` —— 在 wrap 行里必然另起一行并**通栏占满整行宽度**（左边缘与「复制」按钮对齐），效果即「点标签行里的汇总头 = 切到下方那块通栏详情区」；汇总头则写 `flex: 0 0 auto` 留在标签行、原地不动。file-change 即此形态（`RoundFileChangesView.tsx` 返回 Fragment + `.task-file-changes__list { flex: 1 1 100% }`）。
+- 无插件面板时（如某轮无文件变更），该行只剩核心复制按钮，左对齐。
+
+- **坑**：渲染 key 是 `pluginId`（`:445`）——同一 `pluginId` 注册两个轮末面板会 React key 冲突，一个 id 只应注册一个。
+- **内置范例**：核心 `core.round-copy`（复制本轮结果）；插件 file-change（`every-agent-plugins/file-change/web/index.ts:15-26`，轮末文件变更视图 + 订阅 `task-round-closed`/`task-deleted` 作废缓存）。
 
 ## 15. `ui.search_types` —— 搜索类型注册
 

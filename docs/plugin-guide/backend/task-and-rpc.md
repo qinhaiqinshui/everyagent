@@ -1,7 +1,7 @@
 ---
 title: 任务生命周期与 RPC
 nav_order: 7
-parent: backend
+parent: 后端插件开发
 has_children: false
 ---
 
@@ -13,9 +13,9 @@ has_children: false
 |---|---|---|---|
 | `registerTaskAdmissionPolicy` | `TaskPluginContext.java:17` | `TaskAdmissionPolicyRegistry`（至多一个，AtomicReference） | task-queue（唯一） |
 | `registerTaskLifecycleNode` | `TaskPluginContext.java:24` | `TaskLifecycleRegistry` → `TaskLifecycleExecutor` | task-input-queue ×2、task-queue、task-edit-resend、subagent（4 插件 5 节点） |
-| `registerRpcMethod` | `WorkerPluginContext.java:79` | `RpcDispatcher`（方法表 ConcurrentHashMap） | git ×13、task-input-queue ×3、task-queue、file-change（共 18 个方法） |
-| `registerSlashProvider` | `WorkerPluginContext.java:87` | `SlashCommandRegistry`（→ `slash.list` RPC） | ai-review、git、sandbox-wsl-ubuntu、unattended（4 处） |
-| `registerSlashTokenResolver` | `WorkerPluginContext.java:94` | `SlashTokenHandler`（同上 4 插件各自的 resolver） | 同上 4 插件 |
+| `registerRpcMethod` | `WorkerPluginContext.java:94` | `RpcDispatcher`（方法表 ConcurrentHashMap） | git ×13、task-input-queue ×3、task-queue、file-change（共 18 个方法） |
+| `registerSlashProvider` | `WorkerPluginContext.java:102` | `SlashCommandRegistry`（→ `slash.list` RPC） | ai-review、git、sandbox-wsl-ubuntu、unattended（4 处） |
+| `registerSlashTokenResolver` | `WorkerPluginContext.java:109` | `SlashTokenHandler`（同上 4 插件各自的 resolver） | 同上 4 插件 |
 
 两个 task 域注册点声明在父接口 `TaskPluginContext`（`every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/task/TaskPluginContext.java:17,24`），`WorkerPluginContext extends TaskPluginContext`——不需要 task 域能力的插件只依赖基础接口，不被迫传递性 import task 域类型（该接口类注释自证）。
 
@@ -248,7 +248,7 @@ void registerRpcMethod(String method, RpcMethod handler);
 ```
 插件 activate(ctx)
   └─ ctx.registerRpcMethod("git.status", gitService::status)
-     → WorkerPluginContextImpl.registerRpcMethod        WorkerPluginContextImpl.java:187-189
+     → WorkerPluginContextImpl.registerRpcMethod        WorkerPluginContextImpl.java:220-222
        → rpcDispatcher.register(method, ctx -> handler.handle(ctx))
           → methods.put(method, handler)                 RpcDispatcher.java:58-60（单张 ConcurrentHashMap，字段 :39）
 请求到达（每条 hub 连接各订阅自己的 cmd 频道，连接/重连时重放）
@@ -340,11 +340,13 @@ public interface SlashTokenResolver {
 
 `SlashCommandItem` 是 record：`id`（全局唯一，React key 与跨 provider 去重）/`title`（必填）/`subtitle`/`icon`（内联 SVG）/`group`（分组标题）/`insertText`（opaque token 串或纯文本）/`selectHandler`/`cancelHandler`（可空，空则用默认实现：insertText 原地 INLINE 插入）/`defaultSelected`（`every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/slash/SlashCommandItem.java:33-42,102-109`）。
 
+**多结果与联动（`SlashSelectionResult`）**：`selectHandler.onSelect(item, taskId)` 返回 `List<SlashSelectionResult>`——`position=INLINE` 原地插入、`position=BOTTOM` 挂底部胶囊（字段 `token`（opaque 串）+ `id`（归属条目 id））。第 4 字段 `chainIds`（默认空 `List.of()`，3 参便捷构造零改动）声明本次选中**额外联动应用的已注册条目 id**：worker 斜杠层 `SlashMethods.expandChains(registry, results)` 逐个 id 经 `SlashCommandRegistry.itemById(id)` 取该条目**自身** `insertText` 追加为额外 bottom 结果（token 由归属插件构造，**跨插件零耦合**；未注册则跳过、降级为单胶囊，展开结果不再带 `chainIds`、不递归）。范例：`UnattendedSlashProvider` 选中「无人值守」时声明 `chainIds=["ai-review:on"]` → 一次选中挂上「无人值守」+「AI 审议」两个底部胶囊，而 unattended 插件**不依赖** ai-review 插件（`every-agent-plugin-api/.../slash/SlashSelectionResult.java:14-41`；`SlashMethods.java:148-205`）。
+
 ### 4.2 `/` 菜单怎么进来
 
 ```
 插件 activate: ctx.registerSlashProvider("unattended", provider)
-  → WorkerPluginContextImpl.registerSlashProvider        WorkerPluginContextImpl.java:193-203
+  → WorkerPluginContextImpl.registerSlashProvider        WorkerPluginContextImpl.java:226-235
     → SlashCommandRegistry.registerProvider(id, loader)   SlashCommandRegistry.java:31-33（Map<String,SlashProvider>）
 worker 内置同路注册：SkillSlashProvider 构造器里 registry.registerProvider("skill", …)   SkillSlashProvider.java:43-48
 前端打开 `/` 菜单 → slash.list RPC → 聚合 SlashCommandRegistry 全部 provider 的 load()   SlashMethods.java:85-（slash.list）
@@ -354,14 +356,14 @@ worker 内置同路注册：SkillSlashProvider 构造器里 registry.registerPro
   把 token 替换为 resolveSubmissionText 的文本再进模型                                    advisors.md §2.2 #7
 ```
 
-**SkillSlashProvider 与 ExternalSkillScanner 的关系（三路合并）**：`/` 菜单的 skill 候选来自「内置 `BuiltInSkills.getAllSkills()` → 插件 `SkillContributorRegistry` → `ExternalSkillScanner.scan()`」三路合并（`SkillSlashProvider.java`），同 id 去重、优先级依次降低；插件 SPI 条目副标题带「插件 · 」来源前缀，选中执行路径（`system.skill` opaque token）与内置完全一致。`registerSkillContributor` 通道现在**同时**进 system prompt（`SkillAdvisor.mergedSkills`，[advisors.md](advisors.md) §5）与 `/` 菜单——两条通道已等价（known-issues #11 修复前 SPI 只进 prompt 不进菜单）；物化文件到 skillsDir 仍是第三条合法通道（优先级最低，subagent 先例）。
+**SkillSlashProvider 与 skill 目录唯一真相源**：`/` 菜单的 skill 候选 = worker 对 `skillsDir` 的**一路目录扫描**（`SkillCatalog.scan()`：每个一级子目录 + 目录下的 `skill.md` 即一个 skill；不排除任何 id、不递归、每次实扫）——不存在代码注册通道（内置 Java 清单与插件 SPI 声明均已删除）。内置包与插件包只是**安装方式不同**：经 `SkillMaterializer` 物化落盘后与用户自制 skill 完全同权，统一进 `/` 菜单与 system prompt（[advisors.md](advisors.md) §5）；全部条目同 group（Skills）/icon/`system.skill` opaque token（选中执行路径一致），无来源标记。菜单**永远全量**；某 skill 是否进 system prompt 由 worker 侧**按工作区排除配置**决定（默认全部工作区自动暴露，`/` 菜单不受该配置影响），统一口径见 [`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) §7.17「skill 目录结构与唯一真相源」。
 
 ### 4.3 范例（index 表 4 处注册）
 
 | 插件 | registerSlashProvider | 条目 | resolver |
 |---|---|---|---|
-| unattended | `("unattended", () -> UnattendedSlashProvider.items(ctx.services()))`（`UnattendedPlugin.java:26-27`） | id=`unattended:on`「无人值守」，分组「授权」；selectHandler 写 `metadata["unattended"]=true` 并 `publishUpdated`，返回 bottom 胶囊（`UnattendedSlashProvider.java:44-69`） | `UnattendedSlashResolver`：kind=`unattended.mode`，`resolveSubmissionText` 返回**空串**——纯触发标记不注入模型（`UnattendedSlashResolver.java:20-24`） |
-| ai-review | `("ai-review", …)`（`AiReviewPlugin.java:27-28`） | id=`ai-review:on`「AI 审议」 | `AiReviewSlashResolver`（`:31`） |
+| unattended | `("unattended", () -> UnattendedSlashProvider.items(ctx.services()))`（`UnattendedPlugin.java:26-27`） | id=`unattended:on`「无人值守」，分组「授权」；selectHandler 只返回 bottom 胶囊并声明 `chainIds=["ai-review:on"]`（联动挂 AI 审议胶囊，跨插件零耦合）；开关真相源 = `slash-tokens.json` 的 `unattended.mode` token（`UnattendedSlashProvider.java:44-69`） | `UnattendedSlashResolver`：kind=`unattended.mode`，`resolveSubmissionText` 返回**空串**——纯触发标记不注入模型（`UnattendedSlashResolver.java:20-24`） |
+| ai-review | `("ai-review", …)`（`AiReviewPlugin.java:27-28`） | id=`ai-review:on`「AI 审议」，开关 = `ai.review` slash token | `AiReviewSlashResolver`（`:31`） |
 | git | `("git-auto-sync", GitAutoSyncSlashProvider::items)`（`GitPlugin.java:36`） | id=`git-auto-sync:on`「自动同步」 | `GitAutoSyncSlashResolver`（`:39`） |
 | sandbox-wsl-ubuntu | `("network", …)`（`WslUbuntuSandboxPlugin.java:44`） | 「禁用网络」 | `NetworkSlashResolver`（`:45`） |
 

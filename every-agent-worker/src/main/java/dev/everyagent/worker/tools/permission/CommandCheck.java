@@ -25,12 +25,20 @@ import java.util.regex.Pattern;
  * 授权(verb key)→ 越界已存在路径逐个授权(EXEC key)。任一授权被拒 → DENY(命令不执行);
  * 全部通过 → ALLOW。
  *
+ * <p><b>工作区外部授权根放行</b>(§7.17,与文件路径链 {@link ExternalRootAllowCheck} 同源):
+ * 候选(已存在取 realpath;待建取最深已存在祖先)落在该工作区 {@code externalRoots} 内
+ * → 判为「不越界」——该根由用户经 {@code @} 弹窗显式选择注册,语义 = 完全读写
+ * READ+WRITE+EXEC,故其内引用既不触发危险动词授权,也不触发 EXEC 路径授权
+ * (否则「@ 引用过的目录」文件工具读得进、命令却仍弹窗,与沙箱侧 EXEC 根口径相矛盾)。
+ *
  * <p>系统目录引用不再「忽略不弹」(原 isDeniedPath 防误报分支已删):命令访问系统目录
  * 与访问普通工作区外路径同权,一律走 {@link GrantRegistry} 授权决议链(弹窗/AI 审议)。
  * 授权用用户原始命令(保留引号,搜索模式里的 delete 类关键词不误判)。
  *
  * <p>扫描工具(extractPathCandidates/scanQuoted/QuotedScan/looksLikePath/
  * referencesOutsideWorkspace/referencesHomeDirVars)为 public static,供单测直接钉住契约。
+ * {@code referencesOutsideWorkspace} 收该工作区的 {@code externalRoots}(§7.17):落在
+ * 外部授权根内的候选不算越界(已授权 = 完全读写 READ+WRITE+EXEC)。
  */
 @Component
 public class CommandCheck implements PermissionCheck {
@@ -74,10 +82,13 @@ public class CommandCheck implements PermissionCheck {
         }
         try {
             WorkspaceManager.Root ws = workspaces.resolve(ctx.workspaceRoot());
+            // 该工作区的外部授权根(用户经 @ 显式选择 = 已授权,§7.17):命令串中引用的
+            // 路径落在其内即「不越界」,不弹窗、不进审议(语义 = 完全读写 READ+WRITE+EXEC)。
+            List<Path> externalRoots = workspaces.externalRootsOf(ctx.workspaceRoot());
             List<String> candidates = extractPathCandidates(command);
             // 命令可能影响工作区外(越界路径候选 / 主目录环境变量引用)→ 危险动词才需授权;
-            // 仅工作区内(或无可识别外部引用)→ 危险动词直接放行(工作区内增删改查自由)
-            boolean touchesOutside = referencesOutsideWorkspace(ws, candidates)
+            // 仅工作区内或已授权外部根内(或无可识别外部引用)→ 危险动词直接放行(工作区内增删改查自由)
+            boolean touchesOutside = referencesOutsideWorkspace(ws, candidates, externalRoots)
                     || referencesHomeDirVars(command);
             if (touchesOutside) {
                 // ① 危险动词(引号内文案不参与,防 echo "rm 很危险" 误报)
@@ -105,8 +116,11 @@ public class CommandCheck implements PermissionCheck {
                 if (real.startsWith(ws.realPath())) {
                     continue; // 工作区内放行
                 }
+                if (ExternalRootAllowCheck.grantingRoot(externalRoots, real) != null) {
+                    continue; // §7.17 外部授权根放行环(用户 @ 显式选择 = 已授权):不弹窗/不进审议
+                }
                 if (OverBroadRootCheck.isOverBroadRoot(real, ws.path(), ws.realPath())) {
-                    // §13.3 修复 B L1:真实需求不存在「授权整个盘/覆盖工作区的大根」——
+                    // §7.8 过宽根拒收:真实需求不存在「授权整个盘/覆盖工作区的大根」——
                     // 出现必为解析残渣或模型构造的越权试探,候选丢弃,不弹窗/不进审议
                     log.warn("[gate] L1 拒收过度宽泛授权根(候选丢弃)root={} cmd={}", real,
                             PathSupport.abbreviate(command));
@@ -275,11 +289,13 @@ public class CommandCheck implements PermissionCheck {
     /**
      * 命令串的路径候选是否可能落在工作区外:已存在目标按 realpath 判定(符号链接逃逸同判),
      * 不存在目标按词法判定(相对 .. 逃逸 / 绝对路径越界);系统目录引用也计入(危险动词仍须
-     * 授权,防删除类命令波及 C:\Windows 等)。返回 false = 命令只可能落在工作区内,
+     * 授权,防删除类命令波及 C:\Windows 等)。<b>外部授权根内的候选不算越界</b>(§7.17:
+     * 用户 {@code @} 显式选择 = 已授权,完全读写 READ+WRITE+EXEC)——已存在目标按 realpath、
+     * 待建目标按最深已存在祖先判定归属。返回 false = 命令只可能落在工作区内或已授权区域,
      * 危险动词直接放行(工作区内增删改查自由)。
      */
-    public static boolean referencesOutsideWorkspace(WorkspaceManager.Root ws, List<String> candidates)
-            throws IOException {
+    public static boolean referencesOutsideWorkspace(WorkspaceManager.Root ws, List<String> candidates,
+            List<Path> externalRoots) throws IOException {
         Path wsLex = ws.path();
         Path wsReal = ws.realPath();
         for (String candidate : candidates) {
@@ -288,18 +304,39 @@ public class CommandCheck implements PermissionCheck {
                 continue;
             }
             if (Files.exists(norm)) {
+                Path real;
                 try {
-                    if (!norm.toRealPath().startsWith(wsReal)) {
-                        return true;
-                    }
+                    real = norm.toRealPath();
                 } catch (IOException e) {
                     return true; // 断链/不可解析:保守按越界
                 }
+                if (real.startsWith(wsReal)) {
+                    continue;
+                }
+                if (ExternalRootAllowCheck.grantingRoot(externalRoots, real) != null) {
+                    continue; // 外部授权根内:已授权区域
+                }
+                return true;
             } else if (!norm.startsWith(wsLex)) {
+                if (externalRootCovers(externalRoots, PathSupport.deepestExisting(norm))) {
+                    continue; // 待建目标落在外部授权根内(按最深已存在祖先归属判定)
+                }
                 return true;
             }
         }
         return false;
+    }
+
+    /** 待建目标的归属判定:最深已存在祖先的 realpath 落在外部授权根内 → 已授权(§7.17)。 */
+    private static boolean externalRootCovers(List<Path> externalRoots, Path existingAncestor) {
+        if (existingAncestor == null) {
+            return false;
+        }
+        try {
+            return ExternalRootAllowCheck.grantingRoot(externalRoots, existingAncestor.toRealPath()) != null;
+        } catch (IOException e) {
+            return false; // 不可解析:保守按未授权(仍走既有授权决议链)
+        }
     }
 
     /** 主目录/系统环境变量引用(如 %USERPROFILE% / $env:APPDATA / $HOME):命令解析器无法

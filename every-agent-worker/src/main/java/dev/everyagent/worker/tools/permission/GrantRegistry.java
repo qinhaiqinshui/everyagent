@@ -142,7 +142,7 @@ public class GrantRegistry {
     }
 
     /**
-     * EXEC 根的<b>安全过滤视图</b>(§13.3 修复 B L2,消费层防御纵深):按
+     * EXEC 根的<b>安全过滤视图</b>(§7.8 责任链,消费层防御纵深):按
      * {@link OverBroadRootCheck#isOverBroadRoot} 过滤后返回,过度宽泛根(盘根/工作区祖先)
      * 一律拒收——含历史 grants.json 载入的旧宽根(修复前落盘的 {@code C:\} 等)。
      * 命令执行器两后端共用:windows-mic 侧不进 Low 标注/ACL,wsl-bwrap 侧不进 --bind
@@ -189,8 +189,9 @@ public class GrantRegistry {
 
     /**
      * 授权决议入口:grant 已存在直接放行;否则沿决议链遍历 authHandlers(阻塞虚拟线程):
-     * 第一个 applies 的 handler 返回 ALLOW → 自动授权(RUN 档);DENY → 抛
-     * {@link PermissionDeniedException};全部 PASS 或零节点 → 直接放行(RUN 档)。
+     * 第一个返回 ALLOW 的 handler 即放行,档位取其
+     * {@link AuthorizationHandler.AuthorizationDecision#scope()}(未声明按 RUN);
+     * DENY → 抛 {@link PermissionDeniedException};全部 PASS 或零节点 → 直接放行(RUN 档)。
      * rootsOnGrant 为该授权随附的 Sandbox 附加根;execRootsOnGrant 为命令 EXEC 授权随附的
      * Low 完整性标注根;sandboxRootsOnGrant 为下发给沙箱内核机制的范围(§7.8 P5)。
      */
@@ -250,8 +251,8 @@ public class GrantRegistry {
 
     /**
      * 授权决议链(责任链遍历):通过 {@link AuthorizationChainExecutor} 折叠 authHandlers
-     * (按 order 排序)为嵌套链;任一节点返回 ALLOW → 放行(RUN 档);DENY → 抛
-     * {@link PermissionDeniedException};全部 PASS 或零节点 → 链尾兜底放行(RUN 档)。
+     * (按 order 排序)为嵌套链;任一节点返回 ALLOW → 放行(档位见 {@link #grantScopeOf});
+     * DENY → 抛 {@link PermissionDeniedException};全部 PASS 或零节点 → 链尾兜底放行(RUN 档)。
      * 核心不感知任何具体节点(AI 审议、无人值守、人工弹窗等均由各 handler 自行判断)。
      * future.complete 与 record 由 {@link #authorize} owner 路径统一执行,后来者 join 共享同一结论。
      */
@@ -259,14 +260,47 @@ public class GrantRegistry {
         AuthorizationHandler.AuthorizationDecision d = new AuthorizationChainExecutor()
                 .run(authHandlerRegistry.sorted(), req);
         return switch (d.type()) {
-            case ALLOW, PASS -> GrantScope.RUN;
+            case ALLOW -> grantScopeOf(d);
+            case PASS -> GrantScope.RUN;
             case DENY -> throw denyException();
         };
     }
 
-    /** 宽容解析:稳定 token 优先,退文案关键词;未识别按拒绝(安全缺省,兼容任意回传文本)。 */
+    /**
+     * 决议档位映射:节点未指定档位(第三方插件、链尾兜底)一律按 RUN(本轮),
+     * 只有显式声明 {@link AuthorizationHandler.AuthorizationDecision.Scope#TASK} 的节点
+     * (人工弹窗「本任务全程允许」)才落 TASK 档(写 grants.json、跨轮次/重启保留)。
+     * null 容错按 RUN 处理(record 的规范构造允许传 null)。
+     */
+    private static GrantScope grantScopeOf(AuthorizationHandler.AuthorizationDecision d) {
+        return AuthorizationHandler.AuthorizationDecision.Scope.TASK == d.scope()
+                ? GrantScope.TASK : GrantScope.RUN;
+    }
+
+    /**
+     * 宽容解析:稳定 token 优先,退文案关键词;未识别按拒绝(安全缺省,兼容任意回传文本)。
+     *
+     * <p><b>作答形态</b>:前端把选择题作答统一折成「题干：值」文本回传(前端纯数据驱动、
+     * 不再按 kind 特判,架构 §5.4),授权弹窗的实际作答形如 {@code 是否授权?：task}
+     * (radio 回传选项 {@code value} 稳定 token)或 {@code 是否授权?：本任务全程允许}
+     * (回传选项文案)。故先折去「题干：」包装,只判值段;同时兼容裸 token / 文案
+     * (旧协议、无人值守拦截、磁盘回放)。
+     */
     public static GrantScope parseScope(String answer) {
         String a = answer == null ? "" : answer.trim().toLowerCase();
+        if (a.isEmpty()) {
+            return GrantScope.DENY;
+        }
+        // 折去前端「题干：值」包装:取最后一处「：」之后的值段(题干为「是否授权?」,
+        // 不含冒号;值段本身可能是稳定 token 或选项文案)。多行作答(多题)取末段足够——
+        // 授权弹窗恒为单题。
+        int sep = a.lastIndexOf('：');
+        if (sep >= 0) {
+            String value = a.substring(sep + 1).trim();
+            if (!value.isEmpty()) {
+                a = value;
+            }
+        }
         if (a.equals("run") || a.contains("本轮")) {
             return GrantScope.RUN;
         }

@@ -1,5 +1,6 @@
 import React from 'react'
 import { highlightCode, normalizeCodeLanguage } from './codeHighlight'
+import { copyText } from '@/utils/clipboard'
 import './codeBlock.css'
 
 export type CodeBlockProps = {
@@ -58,27 +59,4 @@ export default function CodeBlock({ code, language, variant = 'preview', style }
       </pre>
     </div>
   )
-}
-
-/** 复制到剪贴板:优先 navigator.clipboard,降级 execCommand(兼容部分移动端/旧环境)。 */
-async function copyText(text: string): Promise<void> {
-  if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(text)
-    return
-  }
-  const textarea = document.createElement('textarea')
-  textarea.value = text
-  textarea.style.position = 'fixed'
-  textarea.style.opacity = '0'
-  document.body.appendChild(textarea)
-  textarea.focus()
-  textarea.select()
-  try {
-    // execCommand 返回 false 时复制实际失败,必须抛错让 UI 不误报「已复制」。
-    if (!document.execCommand('copy')) {
-      throw new Error('execCommand copy failed')
-    }
-  } finally {
-    document.body.removeChild(textarea)
-  }
 }

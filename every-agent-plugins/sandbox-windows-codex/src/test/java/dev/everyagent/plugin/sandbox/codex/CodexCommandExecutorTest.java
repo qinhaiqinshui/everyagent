@@ -166,9 +166,9 @@ class CodexCommandExecutorTest {
         assertEquals("java -version 2>&1", lines[2],
                 "用户命令独占一行:PS 报错定位引用用户命令而非内部包装前缀"
                         + "(At <脚本>:3 char:1 + java -version 2>&1),且末尾 # 注释不被 } 吞掉");
-        assertTrue(lines[3].startsWith("} | Out-String -Width " + ExecResults.OUT_STRING_WIDTH),
-                "第 4 行=Out-String 文本化收口(管道内完成,顶层隐式 Out-Default 路径断流):"
-                        + lines[3]);
+        assertTrue(lines[3].startsWith("} | Out-String -Stream -Width " + ExecResults.OUT_STRING_WIDTH),
+                "第 4 行=Out-String -Stream 文本化收口(管道内完成,顶层隐式 Out-Default 路径断流;"
+                        + "-Stream 另修 PS-004 异常终止丢输出):" + lines[3]);
         assertTrue(lines[3].endsWith(ExecResults.POWERSHELL_EXIT_TAIL),
                 "第 4 行同含 exit 传导尾部");
     }

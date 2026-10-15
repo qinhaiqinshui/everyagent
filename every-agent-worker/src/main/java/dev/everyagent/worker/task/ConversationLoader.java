@@ -79,7 +79,7 @@ public final class ConversationLoader {
                     if (pending != null) {
                         JsonNode data = p.path("data");
                         collected.add(new ToolResponse(data.path("callId").asString(""),
-                                data.path("name").asString(""), p.path("content").asString("")));
+                                data.path("name").asString(""), toolResultText(p)));
                     }
                 }
                 default -> {
@@ -89,6 +89,20 @@ public final class ConversationLoader {
         }
         flushTools(out, pending, collected);
         return out;
+    }
+
+    /**
+     * tool.result 文本:统一事件模型里工具结果写在 {@code payload.summary}——发射侧
+     * {@code WorkerToolEventAdvisor} 把 {@code responseData} 作为 summary 下发,{@code payload.content}
+     * 恒空。曾误读 content,导致冷启动/续跑重建会话时工具结果一律变成空串。兼容更早记录再回落 content。
+     */
+    private static String toolResultText(JsonNode payload) {
+        JsonNode summary = payload.path("summary");
+        if (summary.isTextual() && !summary.asString().isEmpty()) {
+            return summary.asString();
+        }
+        JsonNode content = payload.path("content");
+        return content.isTextual() ? content.asString() : "";
     }
 
     /** 上一轮 toolCalls 收口:缺 result 的补合成占位,整批转 ToolResponseMessage。 */

@@ -1,7 +1,7 @@
 ---
 title: 工具与沙箱扩展点
 nav_order: 5
-parent: backend
+parent: 后端插件开发
 has_children: false
 ---
 
@@ -11,12 +11,12 @@ has_children: false
 
 | SPI | 注册方法 | worker 侧注册表 | 消费点（详见各节） | 内置范例插件 |
 |---|---|---|---|---|
-| `ToolProvider` | `registerToolProvider`（`every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/WorkerPluginContext.java:42`） | `ToolProviderRegistry` | `AgentBuilder` 装配期聚合 | subagent、sandbox-windows-mic、sandbox-wsl-ubuntu、sandbox-windows-codex |
-| `ToolExecutionInterceptor` | `registerToolExecutionInterceptor`（`WorkerPluginContext.java:57`） | `ToolExecutionInterceptorRegistry` | per-run `InterceptingToolCallingManager` | secret-redaction、unattended |
-| `SandboxProvider` | `registerSandboxProvider`（`WorkerPluginContext.java:48`） | `SandboxProviderRegistry` | `OsSandbox` 惰性解析 + `SandboxPathRegistry` | sandbox-windows-mic、sandbox-wsl-ubuntu、sandbox-windows-codex |
-| `FileReferenceHandler` | `registerFileReferenceHandler`（`WorkerPluginContext.java:69`） | `FileReferenceHandlerRegistry` | 用户输入物化服务 `UserInputMaterializer`（轮次节点 `FileReferenceProcessNode`(875) 与队列「插入到当前对话」共用） | image-vision（唯一） |
+| `ToolProvider` | `registerToolProvider`（`every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/WorkerPluginContext.java:43`） | `ToolProviderRegistry` | `AgentBuilder` 装配期聚合 | subagent、sandbox-windows-mic、sandbox-wsl-ubuntu、sandbox-windows-codex |
+| `ToolExecutionInterceptor` | `registerToolExecutionInterceptor`（`WorkerPluginContext.java:58`） | `ToolExecutionInterceptorRegistry` | per-run `InterceptingToolCallingManager` | secret-redaction、unattended |
+| `SandboxProvider` | `registerSandboxProvider`（`WorkerPluginContext.java:49`） | `SandboxProviderRegistry` | `OsSandbox` 惰性解析 + `SandboxPathRegistry` | sandbox-windows-mic、sandbox-wsl-ubuntu、sandbox-windows-codex |
+| `FileReferenceHandler` | `registerFileReferenceHandler`（`WorkerPluginContext.java:67`） | `FileReferenceHandlerRegistry` | 用户输入物化服务 `UserInputMaterializer`（轮次节点 `FileReferenceProcessNode`(875) 与队列「插入到当前对话」共用） | image-vision（唯一） |
 
-所有注册方法的 worker 实现(`every-agent-worker/src/main/java/dev/everyagent/worker/plugin/WorkerPluginContextImpl.java:126,136,151,182`)都只是往对应注册表 `add` 一行——**注册即生效、无过滤、无校验**。
+所有注册方法的 worker 实现(`every-agent-worker/src/main/java/dev/everyagent/worker/plugin/WorkerPluginContextImpl.java:140,150,179,205`)都只是往对应注册表 `add` 一行——**注册即生效、无过滤、无校验**。
 
 ## 1. ToolProvider —— 给 AI 注入工具
 
@@ -58,7 +58,7 @@ worker **复用 Spring AI 框架**，不手搓工具循环（根 `AGENTS.md` 红
 ```
 插件 activate(ctx)
   └─ ctx.registerToolProvider(p) → ToolProviderRegistry.register
-     （WorkerPluginContextImpl.java:126；注册表 CopyOnWriteArrayList，ToolProviderRegistry.java:19-23）
+     （WorkerPluginContextImpl.java:140；注册表 CopyOnWriteArrayList，ToolProviderRegistry.java:19-23）
 每轮 agent 装配（AgentBuilder.create()，每次 build 重新聚合，构造 ToolContextImpl）
   ├─ for (p : toolRegistry.getProviders()) if (p.appliesTo(toolCtx)) → createTools 并入
   │    证据：AgentBuilder.java:125-133；Build.tools(list, ModifyMode) 可增删改 :223-236
@@ -97,7 +97,7 @@ public String run_agent(
         @ToolParam(description = "指定复用的 agentId", required = false) String agentId) { ... }
 ```
 
-要点：**描述写给模型看**，直接决定模型会不会用、怎么用；可缺省参数标 `required = false`；需要 per-run 状态（如 ExecContext）就在 `createTools` 里 `new` 进工具实例（工具对象每次装配新建）。注册就是 activate 里的一行：`ctx.registerToolProvider(new SubAgentToolsProvider(subAgentManager))`（`SubAgentPlugin.java:31`）。
+要点：**描述写给模型看**，直接决定模型会不会用、怎么用；可缺省参数标 `required = false`；需要 per-run 状态（如 ExecContext）就在 `createTools` 里 `new` 进工具实例（工具对象每次装配新建）。注册就是 activate 里的一行：`ctx.registerToolProvider(new SubAgentToolsProvider(subAgentManager))`（`SubAgentPlugin.java:41`）。
 
 ### 1.4 工具怎么写：复用 ShellTool（命令类工具）
 
@@ -158,7 +158,7 @@ public interface ToolExecutionInterceptor {
 
 | 时机 | 写法 | 能力 | 内置范例 |
 |---|---|---|---|
-| 下行（`next.proceed` 之前） | 不调 `next` 直接 `return` 合成结果 | **阻断执行**：模型收到你合成的 `ToolExecutionResult`，真实工具不跑（对照：调 `next` 即放行，unattended 非无人值守时直接放行，`:34-36`） | unattended 对「纯 ask_user 轮」合成自动回答短路（`every-agent-plugins/unattended/src/main/java/dev/everyagent/plugin/unattended/UnattendedToolInterceptor.java:73-80`） |
+| 下行（`next.proceed` 之前） | 不调 `next` 直接 `return` 合成结果 | **阻断执行**：模型收到你合成的 `ToolExecutionResult`，真实工具不跑（对照：调 `next` 即放行；unattended 经 `WorkerServices.slashTokens().hasKind(ctx.subjectId(), "unattended.mode")` 判任务级 slash token，非无人值守时直接放行，`:34-36`） | unattended 对「纯 ask_user 轮」合成自动回答短路（`every-agent-plugins/unattended/src/main/java/dev/everyagent/plugin/unattended/UnattendedToolInterceptor.java:73-80`） |
 | 下行改写入参 | `next.proceed(包装后的 ctx)` | 想改真实执行所见的 prompt/chatResponse，就包一个新 `ToolExecutionContext` 传下去——链尾用的是**你传下去的那个 ctx**（`delegate.executeToolCalls(c.prompt(), c.chatResponse())`，`ToolExecutionChainExecutor.java:34`） | **无内置范例，未实测** |
 | 上行（`next.proceed` 返回之后） | 拿返回的 `ToolExecutionResult` 重建 | **改写结果**：重建 `conversationHistory` 里的 `ToolResponseMessage` 后返回新结果——落盘/推送/回灌模型三路全覆盖 | secret-redaction 掩码凭据（`every-agent-plugins/secret-redaction/src/main/java/dev/everyagent/plugin/secretredaction/SecretRedactionInterceptor.java:62-130`） |
 
@@ -199,7 +199,7 @@ ChatClient.prompt(...).stream()
 | 1 | `SandboxProviderRegistry`（`@Component`）：`register`/`unregister`/`select`/`describeProviders`/`generation` | `every-agent-worker/src/main/java/dev/everyagent/worker/plugin/registry/SandboxProviderRegistry.java:26-137` |
 | 2 | `OsSandbox.backend()` 按注册表**代次惰性解析** delegate，解析结果（含 null→DIRECT）按代次缓存；`id()`/`mount()`/`onWorkspaceRemoved()` 一律转发给 delegate | `every-agent-worker/src/main/java/dev/everyagent/worker/os/OsSandbox.java:102-161` |
 | 3 | `AgentBuilder.createToolContext` 把 `OsSandbox` 门面塞进 `ToolContextImpl.sandbox()`，供所有插件的 `appliesTo(ctx.sandbox().id())` 判定 | `AgentBuilder.java:135-139`、`ToolContextImpl.java:39-53,74-77` |
-| 4 | `SandboxPathRegistry` 把注册意图按当前生效后端**物化**为 `mount()` 映射表（宿主路径 ↔ 沙箱内路径），advisor/工具链查表翻译 | 架构 §7.10；登记点 `AgentBuilder.registerSandboxPaths`（`AgentBuilder.java:146-173`）、`WorkerBeanConfiguration.skillAdvisor`（`WorkerBeanConfiguration.java:63-70`） |
+| 4 | `SandboxPathRegistry` 把注册意图按当前生效后端**物化**为 `mount()` 映射表（宿主路径 ↔ 沙箱内路径），advisor/工具链查表翻译 | 架构 §7.10；登记点 `AgentBuilder.registerSandboxPaths`（`AgentBuilder.java:157-`）、`WorkerBeanConfiguration.skillAdvisorProvider`（`WorkerBeanConfiguration.java:76-82`） |
 
 ### 3.2 接口定义（原码摘录）
 
@@ -395,7 +395,7 @@ return new FileReferenceResult("（附图：" + displayPath(ref) + "）", List.o
 | `snapshot()` | `ModelConfig` | 完整模型配置快照（configId 经 `snapshot().configId()` 取，**无独立槽**） | advisor 装配模型参数 | §14.11 明文 |
 | `emitter()` | `EventEmitter` | 已绑定本主体的事件口（trace/审计） | secret-redaction 发 `task.trace`（`SecretRedactionInterceptor.java:140-160`） | 只发语义 EmitEvent，不感知 wire 事件名/seq（§14.0） |
 | `agentFactory()` | `AgentFactory` | 预绑定 Agent 工厂（`create(agentId)`） | 子 agent / 审议 agent 创建 | §14.11「不传裸工厂/裸服务/任务域对象」 |
-| `metadata()` | `Map<String,Object>` | 随 meta.json 落盘的持久策略标记（unattended/ai-review/attachments） | `UnattendedToolInterceptor.java:35` 读 `unattended` 标记；`UserInputMaterializerImpl` 写 `attachments` | 只承载持久策略标记，不混运行时瞬态（§14.11） |
+| `metadata()` | `Map<String,Object>` | 随 meta.json 落盘的持久数据（如 attachments）；**任务级开关不走 metadata**，其真相源是 `slash-tokens.json`（`WorkerServices.slashTokens()` 查询） | `UserInputMaterializerImpl` 写 `attachments` | 只承载持久数据，不混运行时瞬态（§14.11） |
 | `dataDir()` | `Path` | 主体数据目录（grants.json 等落盘） | 授权链 | — |
 | `terminal()` | `boolean` | 主体是否已收口 | leak-guard：终态后不再发射事件 | — |
 | `interaction()` | `InteractionService` | 预绑定交互口（ask 的 context 自动补 subjectId） | human-authorization 授权弹窗、AskUserTool 等（image-vision 已移除授权链，用户 `@` 引用即授权） | §14.11「绕过 ctx.interaction() 手动填 taskId context」禁止 |
@@ -417,7 +417,7 @@ return new FileReferenceResult("（附图：" + displayPath(ref) + "）", List.o
 
 | 红线 | 出处 | 与本篇四个 SPI 的关系 |
 |---|---|---|
-| **PermissionGate**：危险操作必须经用户授权——AI 工具的工作区外路径访问先弹 `kind=authorization` 的 ask（拒绝/本轮运行/本任务三档）；命令中的危险动词**仅当命令引用可能落在工作区外**时才需授权，工作区内增删改查直接放行（cwd 锁定 + 沙箱可写性契约兜底）；拒绝抛异常回灌模型 | §7.8 | 用 `ctx.shellExecutor()` 就自动带上；自己碰文件系统要走 `ctx.workspaces()` 的 jailed 解析；**不得绕过 gate 直接放行越界 IO** |
+| **PermissionGate**：危险操作必须经用户授权——AI 工具的工作区外路径访问先弹 `kind=authorization` 的 ask（拒绝/本轮运行/本任务三档）；命令中的危险动词**仅当命令引用可能落在工作区外**时才需授权，工作区内增删改查直接放行（cwd 锁定 + 沙箱可写性契约兜底）；**用户 `@` 显式选择的工作区外部授权根 = 已授权**（完全读写 READ+WRITE+EXEC），文件工具与命令串中引用其内的路径都不再弹窗（§7.17）；拒绝抛异常回灌模型 | §7.8 / §7.17 | 用 `ctx.shellExecutor()` 就自动带上；自己碰文件系统要走 `ctx.workspaces()` 的 jailed 解析；**不得绕过 gate 直接放行越界 IO** |
 | **沙箱契约（windows-mic）**：沙箱进程 Medium IL（Restricted Token 去特权但不降级），天然可写工作区与已授权目录，零文件系统标注、零 ACL 修改、零残留；越界写拦截由 PermissionGate 责任链承担，无 OS 级写隔离兜底 | §7.10 | SandboxProvider 实现者不要试图靠改 ACL/打标记做隔离；隔离做不到的部分交给授权链 |
 | **ExecContext 管道**：横切层只见 ExecContext 槽位，不见 `TaskEntry/TaskRuntime/TaskInfo`；禁止 properties 黑盒 map 与强转再现；插件功能与主体特有槽位不进核心接口 | §14.11 | 四个 SPI 的 ctx 全部 `extends ExecContext`；插件代码 import 任务域类型即违红线 |
 

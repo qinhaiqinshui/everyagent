@@ -153,6 +153,8 @@ public class SlashMethods {
         if (results == null) {
             results = List.of();
         }
+        // 展开联动条目(chainIds → 额外 bottom 结果)后再统一注入 slashId
+        results = expandChains(registry, results);
         ArrayNode out = Json.arr();
         for (SlashSelectionResult result : results) {
             String resultId = (result.id() != null && !result.id().isEmpty()) ? result.id() : id;
@@ -164,6 +166,46 @@ public class SlashMethods {
             out.add(o);
         }
         ctx.ok(Json.obj().set("results", out));
+    }
+
+    /**
+     * 展开联动条目(chainIds → 额外 bottom 结果)。
+     * 逐个 chainId 从注册表反查条目,取其自身 insertText 作为 token(经 injectSlashId 注入该条目
+     * id),生成 bottom 结果追加在结果列表末尾;条目未注册(插件未启用)静默跳过,绝不抛错。
+     * 展开出的结果 chainIds 为空,避免递归联动。
+     *
+     * @param registry slash 条目注册中心(按 id 反查联动条目)。
+     * @param results  原始 select 结果(可能含 chainIds 声明;null 视为无结果)。
+     * @return 原结果 + 展开出的联动结果(顺序:原结果在前、联动结果按声明序追加)。
+     */
+    static List<SlashSelectionResult> expandChains(SlashCommandRegistry registry,
+            List<SlashSelectionResult> results) {
+        if (results == null || results.isEmpty()) {
+            return List.of();
+        }
+        List<SlashSelectionResult> expanded = new ArrayList<>(results);
+        for (SlashSelectionResult result : results) {
+            List<String> chainIds = result.chainIds();
+            if (chainIds == null || chainIds.isEmpty()) {
+                continue;
+            }
+            for (String chainId : chainIds) {
+                if (chainId == null || chainId.isEmpty()) {
+                    continue;
+                }
+                SlashCommandItem chainItem;
+                try {
+                    chainItem = registry.itemById(chainId);
+                } catch (NotFoundException e) {
+                    // 联动条目未注册(被联动插件未启用)→ 静默降级为单胶囊,绝不让 RPC 失败
+                    log.debug("slash 联动条目未注册,跳过 id={}", chainId, e);
+                    continue;
+                }
+                expanded.add(SlashSelectionResult.bottom(
+                        injectSlashId(chainItem.insertText(), chainId), chainId, List.of()));
+            }
+        }
+        return expanded;
     }
 
     /**

@@ -51,7 +51,7 @@ public class FsService {
     private final WorkspaceManager workspaces;
     private final HubPool pool;
     private final WorkerProperties props;
-    /** 系统技能目录只读附加根解析(skills 读免授权,§13.8;只读操作消费)。 */
+    /** 系统技能目录只读附加根解析(skills 免授权放行,§7.17;只读操作消费)。 */
     private final SkillsReadonlyRoots skillsReadonlyRoots;
     /** 授权根注册表:只读沙箱并入在途授权根(前端文件页读 AI 本任务经授权读过的文件)。 */
     private final GrantRegistry grants;
@@ -340,7 +340,7 @@ public class FsService {
 
     /**
      * 只读操作(read/list/reveal)沙箱:工作区根 + 该工作区外部授权根(externalRoots,
-     * 用户显式选择=已授权,§7.17)+ 系统技能目录只读根(skills 读免授权,§13.8)
+     * 用户显式选择=已授权,§7.17)+ 系统技能目录只读根(skills 免授权放行,§7.17)
      * + PermissionGate 在途授权根(全主体并集;任务收口 gate.evict 驱逐即失效)。
      * 前端「打开文件」标签页读取 AI 已读的 skill/外部授权/本任务经授权读过的文件
      * (如工具调用里的工作区外路径 chip)时经此放行,与 read_file 同源(ARCHITECTURE §7 fs.* 行)。
@@ -355,7 +355,7 @@ public class FsService {
 
     /**
      * 写操作(write/mkdir/move/delete)沙箱:工作区根 + 外部授权根(externalRoots 语义 =
-     * 完全读写,§7.17)+ 系统技能目录(skills 读写放行,§13.8)。
+     * 完全读写,§7.17)+ 系统技能目录(skills 读写放行,§7.17)。
      */
     private Sandbox sandbox(RpcContext ctx) throws IOException {
         WorkspaceManager.Root root = workspaces.resolve(ctx.strParam("workspace"));

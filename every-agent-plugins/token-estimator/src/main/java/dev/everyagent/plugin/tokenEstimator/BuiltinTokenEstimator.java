@@ -1,0 +1,299 @@
+package dev.everyagent.plugin.tokenEstimator;
+
+import dev.everyagent.contract.json.Json;
+import dev.everyagent.plugin.api.spi.TokenEstimator;
+import dev.everyagent.plugin.api.util.AtomicFiles;
+import dev.everyagent.plugin.api.config.WorkerConfig;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.node.ObjectNode;
+
+import jakarta.annotation.PreDestroy;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
+
+/**
+ * 内置 Token 估算器实现（{@link TokenEstimator} SPI）。
+ *
+ * <p>基础估算：CJK 字符 ≈ 1 token、其余 ≈ 4 字符 1 token（无 tokenizer 粗估，
+ * 与原 {@code ModelRateLimiter.estimateTokens} / {@code ModelLengthGuardAdvisor} 同口径）。
+ *
+ * <p><b>估计口径</b>：输出口径 = <b>含工具调用参数</b>的 token（正文 + 思考差分 + 工具调用
+ * 参数的 name/arguments，由 {@code OutputTokenAccumulator} 在限流与校准两侧统一累计），
+ * 与厂商真实 {@code completionTokens} 对齐。
+ *
+ * <p><b>ratio 语义</b>：{@link #calibrate} 的入参 {@code estimatedTokens} 是<b>已乘当前系数</b>
+ * 的估算值（调用方口径不变）；实现内先除回旧系数得到 raw 原始估算，再以
+ * {@code ratio = actual / raw} 更新因子。若不除回，则 {@code ratio = actual / estimated} 的
+ * 迭代不动点解为 {@code √(实际比值)} 而非实际比值（自反馈），系数被系统性抬到上界。
+ *
+ * <p>在线校准（EMA）：每次模型调用完成后，用真实 {@code completionTokens} 与估算值的
+ * 比值更新 {@code factor}（每 configId 独立）。误差持续 &lt; 收敛阈值（默认 2%）
+ * 连续 N 次（默认 3）后停止校准；converged 后误差 &gt; 漂移阈值（默认 5%）时重置继续。
+ * 系数上下界 [0.3, 3.0]，防止异常样本拉飞。
+ *
+ * <p>持久化：落盘 {@code <homeDir>/model-rate-state.json}，异步合并（单线程 writer +
+ * dirty 标记 + 原子替换）；重启后接续，避免冷启动系数回退默认。读写失败静默降级，
+ * 绝不阻塞模型调用。
+ *
+ * <p><b>状态文件版本</b>（{@value #STATE_VERSION}）：版本号 = 估算/校准口径版本。
+ * 口径变更（如本次「纳入工具调用参数、修正 ratio 语义」）后旧系数不再可比，故载入时若
+ * 版本不符（含缺失）即丢弃旧状态、从空开始重新标定——而非延续被污染的错误系数。
+ *
+ * <p><b>接口边界</b>：本类只把 {@link #estimate} 暴露为 {@link TokenEstimator} SPI；
+ * {@link #calibrate} / {@link #factorOf} / {@link #sampleCountOf} 是<b>本插件内部</b>方法
+ * （本插件内 {@link BuiltinTokenEstimator} 与 {@code TokenCalibrationAdvisor} 之间的接缝，
+ * 也供单元测试断言使用），不属于 SPI——SPI 上不再承诺校准接缝，避免第三方实现替换后
+ * 校准灌进旧实例、新实现永不被校准。
+ */
+public class BuiltinTokenEstimator implements TokenEstimator {
+
+    private static final Logger log = LoggerFactory.getLogger(BuiltinTokenEstimator.class);
+    private static final String FILE_NAME = "model-rate-state.json";
+
+    /**
+     * 状态文件口径版本:口径变更(估算纳入口径、ratio 语义)后旧系数不再可比,
+     * 载入时版本不符即丢弃。
+     */
+    private static final int STATE_VERSION = 2;
+
+    /** 内存单条状态。 */
+    private record EstState(double factor, long sampleCount, boolean converged,
+            int consecutiveGood, long lastUpdated) {
+    }
+
+    private final Path file;
+    private final Map<String, EstState> states = new ConcurrentHashMap<>();
+    private final AtomicBoolean dirty = new AtomicBoolean(false);
+    private final ExecutorService writer;
+    private final WorkerConfig config;
+
+    public BuiltinTokenEstimator(WorkerConfig config) {
+        this.config = config;
+        this.file = config.resolveHomeDir().resolve(FILE_NAME);
+        this.writer = Executors.newSingleThreadExecutor(r -> {
+            Thread t = new Thread(r, "token-estimator-writer");
+            t.setDaemon(true);
+            return t;
+        });
+        load();
+    }
+
+    @PreDestroy
+    void shutdown() {
+        writer.shutdown();
+    }
+
+    // ---- TokenEstimator SPI ----
+
+    /**
+     * 估算文本 token 数（{@link TokenEstimator} SPI 的唯一方法）。
+     *
+     * <p>同文本恒得同值（分词与方向无关）；系数取该 configId 已收敛的值（无记录则 1.0）。
+     */
+    @Override
+    public long estimate(String text, String configId) {
+        if (text == null || text.isEmpty()) {
+            return 0;
+        }
+        long raw = rawTokens(text);
+        EstState s = states.get(configId);
+        double f = (s == null) ? 1.0 : s.factor;
+        return Math.max(0, Math.round(raw * f));
+    }
+
+    /**
+     * 用真实 usage 校准估算系数（EMA）——<b>本插件内部方法，不属于 {@link TokenEstimator} SPI</b>。
+     * 唯一调用方是同插件的 {@code TokenCalibrationAdvisor}（两者同属本插件 token-estimator）。
+     *
+     * <p>入参 {@code estimatedTokens} 是调用方逐 chunk 累计、<b>已乘当前系数</b>的估算值；
+     * 实现内先除回旧系数得到 raw 原始估算，再以 {@code ratio = actual / raw} 更新因子。
+     *
+     * @param configId        模型配置 ID
+     * @param estimatedTokens 本次模型调用的估算输出 token 总量（已乘当前系数）
+     * @param actualTokens    模型返回的真实 completionTokens
+     */
+    public void calibrate(String configId, long estimatedTokens, long actualTokens) {
+        if (actualTokens <= 0 || estimatedTokens <= 0) {
+            return;
+        }
+
+        WorkerConfig.Limits.ModelRate rateDefaults = config.limits().modelRate();
+        double alpha = rateDefaults.estEmaAlpha();
+        double factorMin = rateDefaults.estFactorMin();
+        double factorMax = rateDefaults.estFactorMax();
+        double convergenceThreshold = config.limits().tokenEstimatorConvergenceThreshold();
+        int convergenceSamples = config.limits().tokenEstimatorConvergenceSamples();
+        double driftThreshold = config.limits().tokenEstimatorDriftThreshold();
+
+        states.compute(configId, (id, cur) -> {
+            double oldFactor = (cur == null) ? 1.0 : cur.factor;
+            boolean converged = (cur == null) ? false : cur.converged;
+            int consecutiveGood = (cur == null) ? 0 : cur.consecutiveGood;
+            long samples = (cur == null) ? 0 : cur.sampleCount;
+
+            // 调用方传入的是「已乘系数」的估算值，除回旧系数得到 raw 原始估算，
+            // ratio 才是无自反馈的真实比值（否则不动点解成 √(实际比值)）。
+            double raw = (double) estimatedTokens / oldFactor;
+            if (raw <= 0) {
+                return cur;
+            }
+            // 收敛/漂移判据用 raw 口径对齐：等价于 |estimated − actual| / actual
+            //（语义＝「当前系数下估算与实测的偏差」），与更新方向一致。
+            double error = Math.abs(raw * oldFactor - (double) actualTokens)
+                    / (double) actualTokens;
+
+            // 漂移重置：converged 后误差超漂移阈值 → 重置继续校准。
+            if (converged && error > driftThreshold) {
+                log.info("[token-estimator] {} 漂移检测:误差 {}% > {}%,重置校准",
+                        configId, Math.round(error * 10000) / 100.0, Math.round(driftThreshold * 10000) / 100.0);
+                converged = false;
+                consecutiveGood = 0;
+            }
+
+            // 收敛后停止校准。
+            if (converged) {
+                return cur;
+            }
+
+            // EMA 更新 factor：ratio = actual / raw（无自反馈）。α=0.1 表示约 10 个样本收敛，合理。
+            double ratio = (double) actualTokens / raw;
+            double nextFactor = (1 - alpha) * oldFactor + alpha * ratio;
+            nextFactor = Math.max(factorMin, Math.min(factorMax, nextFactor));
+
+            // 收敛检测。
+            if (error < convergenceThreshold) {
+                consecutiveGood++;
+                if (consecutiveGood >= convergenceSamples) {
+                    converged = true;
+                    log.info("[token-estimator] {} 收敛:连续 {} 次误差 < {}%,factor={}",
+                            configId, consecutiveGood, convergenceThreshold * 100,
+                            Math.round(nextFactor * 1000.0) / 1000.0);
+                }
+            } else {
+                consecutiveGood = 0;
+            }
+
+            samples++;
+
+            EstState newState = new EstState(nextFactor, samples, converged,
+                    consecutiveGood, System.currentTimeMillis());
+
+            if (Math.abs(nextFactor - oldFactor) > 1e-4 || !converged) {
+                if (dirty.compareAndSet(false, true)) {
+                    writer.submit(this::flush);
+                }
+            }
+
+            return newState;
+        });
+    }
+
+    /**
+     * 当前校准系数（<b>插件内部</b>诊断/断言用，不属于 {@link TokenEstimator} SPI；无记录返回 1.0）。
+     */
+    public double factorOf(String configId) {
+        EstState s = states.get(configId);
+        return s == null ? 1.0 : s.factor;
+    }
+
+    /**
+     * 校准样本数（<b>插件内部</b>诊断/断言用，不属于 {@link TokenEstimator} SPI；无记录返回 0）。
+     */
+    public long sampleCountOf(String configId) {
+        EstState s = states.get(configId);
+        return s == null ? 0 : s.sampleCount;
+    }
+
+    // ---- 基础估算（CJK≈1 token、其余≈4 字符 1 token）----
+
+    static long rawTokens(String s) {
+        if (s == null || s.isEmpty()) {
+            return 0;
+        }
+        long cjk = 0;
+        long other = 0;
+        for (int i = 0; i < s.length(); ) {
+            int cp = s.codePointAt(i);
+            i += Character.charCount(cp);
+            Character.UnicodeScript sc = Character.UnicodeScript.of(cp);
+            boolean isCjk = sc == Character.UnicodeScript.HAN
+                    || sc == Character.UnicodeScript.HIRAGANA
+                    || sc == Character.UnicodeScript.KATAKANA
+                    || sc == Character.UnicodeScript.HANGUL;
+            if (isCjk) {
+                cjk++;
+            } else if (!Character.isWhitespace(cp) && !Character.isISOControl(cp)) {
+                other++;
+            }
+        }
+        return cjk + (other + 3) / 4;
+    }
+
+    // ---- 持久化 ----
+
+    private void load() {
+        try {
+            if (!Files.isRegularFile(file)) {
+                return;
+            }
+            JsonNode root = Json.parse(Files.readString(file, StandardCharsets.UTF_8));
+            // 口径版本校验:缺失或不为当前版本 → 旧系数不可比,丢弃重标定。
+            int version = root == null ? -1 : root.path("version").asInt(-1);
+            if (version != STATE_VERSION) {
+                log.warn("[token-estimator] 状态文件口径版本不符(期望 {},实为 {}),丢弃旧校准状态,重新标定",
+                        STATE_VERSION, version);
+                return;
+            }
+            JsonNode models = root.path("models");
+            if (models == null || !models.isObject()) {
+                return;
+            }
+            models.forEachEntry((k, n) -> {
+                if (n == null || !n.isObject()) {
+                    return;
+                }
+                double factor = n.path("tokenEstFactor").asDouble(0);
+                long sample = n.path("sampleCount").asLong(0);
+                long updated = n.path("lastUpdated").asLong(0);
+                boolean converged = n.path("converged").asBoolean(false);
+                int consecutiveGood = n.path("consecutiveGood").asInt(0);
+                if (factor > 0) {
+                    states.put(k, new EstState(factor, sample, converged,
+                            consecutiveGood, updated));
+                }
+            });
+            log.info("[token-estimator] 已加载 {} 个模型的估算系数状态: {}", states.size(), file);
+        } catch (Exception e) {
+            log.warn("[token-estimator] 状态文件读取失败,使用默认估算系数: {}", e.toString());
+        }
+    }
+
+    private void flush() {
+        dirty.set(false);
+        ObjectNode root = Json.obj();
+        root.put("version", STATE_VERSION);
+        ObjectNode models = root.putObject("models");
+        states.forEach((id, s) -> {
+            ObjectNode o = models.putObject(id);
+            o.put("tokenEstFactor", Math.round(s.factor() * 1000.0) / 1000.0);
+            o.put("sampleCount", s.sampleCount());
+            o.put("lastUpdated", s.lastUpdated());
+            o.put("converged", s.converged());
+            o.put("consecutiveGood", s.consecutiveGood());
+        });
+        try {
+            AtomicFiles.writeText(file, Json.write(root)); // 唯一名 tmp + 原子替换(失败已清理)
+        } catch (IOException e) {
+            log.warn("[token-estimator] 状态落盘失败(不影响运行): {}", e.toString());
+        }
+    }
+}

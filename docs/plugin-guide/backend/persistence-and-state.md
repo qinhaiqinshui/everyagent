@@ -1,7 +1,7 @@
 ---
 title: 持久化与状态
 nav_order: 8
-parent: backend
+parent: 后端插件开发
 has_children: false
 ---
 
@@ -24,7 +24,7 @@ has_children: false
 Path pluginDir();
 ```
 
-实现是纯字段透传：`WorkerPluginContextImpl` 构造时存下 `pluginDir` 字段，`pluginDir()` 直接返回（`every-agent-worker/src/main/java/dev/everyagent/worker/plugin/WorkerPluginContextImpl.java:56,95,121-123`）。值的来源是扫描器产出的 `ScannedPlugin(pluginDir, source)`（`every-agent-worker/src/main/java/dev/everyagent/worker/plugin/scanner/PluginScanner.java:34`），在 `PluginLoader.loadPlugin` 里原样传给上下文构造（`every-agent-worker/src/main/java/dev/everyagent/worker/plugin/loader/PluginLoader.java:321-332`）。因此取值只由「哪个扫描器发现了它」决定：
+实现是纯字段透传：`WorkerPluginContextImpl` 构造时存下 `pluginDir` 字段，`pluginDir()` 直接返回（`every-agent-worker/src/main/java/dev/everyagent/worker/plugin/WorkerPluginContextImpl.java:59,88,108,135-136`）。值的来源是扫描器产出的 `ScannedPlugin(pluginDir, source)`（`every-agent-worker/src/main/java/dev/everyagent/worker/plugin/scanner/PluginScanner.java:34`），在 `PluginLoader.loadPlugin` 里原样传给上下文构造（`every-agent-worker/src/main/java/dev/everyagent/worker/plugin/loader/PluginLoader.java:321-332`）。因此取值只由「哪个扫描器发现了它」决定：
 
 | source | `pluginDir()` 实际指向 | 默认值来源 | 可覆盖配置 |
 |---|---|---|---|
@@ -35,21 +35,21 @@ Path pluginDir();
 
 ### 1.2 真实插件都把数据放在哪（实例清单）
 
-rg 全部 26 个内置插件对 `pluginDir()` 的使用（排除 `target/`），结合各自的写盘点，实践分三类：
+rg 全部 28 个内置插件对 `pluginDir()` 的使用（排除 `target/`），结合各自的写盘点，实践分三类：
 
 | 插件 | 数据 | 落点 | 写侧 | 读回 |
 |---|---|---|---|---|
 | file-change | 每轮文件变更全文 | 任务数据目录下 `file-changes/<roundId>.json` | `RoundClosedListener` 回调按轮写（`FileChangeAdvisorProvider.java:61,78-81`） | 自注册 RPC `task.fileChanges`（`FileChangePlugin.java:35,53-58`） |
 | git | 远端凭证（加密） | `<workspace>/.everyagent/.git-credentials.enc` + 同级密钥 `.git-credential.key` | `git.credential.save` RPC → `GitCredentialStore.save`（`GitCredentialStore.java:26-32,37,143,162-163`；`GitService.java:496-515`） | 认证失败重试时 `GitCredentialStore.load`（`GitService.java:550`） |
-| model-rate-limit | token 校准系数/限流状态 | `<homeDir>/model-rate-state.json`（worker 系统目录根，非 pluginDir） | 单线程 writer 异步合并写（`BuiltinTokenEstimator.java:34,45,249`） | 构造时 `load()` 读回接续（`BuiltinTokenEstimator.java:61-69`，路径 = `config.resolveHomeDir().resolve(FILE_NAME)`） |
-| subagent | skill 知识包 | `<skillsDir>/agent-dispatch/skill.md` | activate 后物化 classpath 资源（幂等，`SubAgentSkillContributor.java:30-33,38-55`） | 物化是 AI 能 `read_file` 知识包的必要条件；`/` 菜单条目经 `SkillContributorRegistry`（SPI）进入，不再依赖 `ExternalSkillScanner` 兜底（[advisors.md](advisors.md) §5） |
+| token-estimator | token 校准系数（按 configId） | `<homeDir>/model-rate-state.json`（worker 系统目录根，非 pluginDir；含口径版本字段 `version:2`） | 单线程 writer 异步合并写（SingleThreadExecutor + dirty 标记 + 原子替换，`every-agent-plugins/token-estimator/src/main/java/dev/everyagent/plugin/tokenEstimator/BuiltinTokenEstimator.java:82,280`） | 构造时 `load()` 读回接续（同文件 `:243`，路径 = `config.resolveHomeDir().resolve(FILE_NAME)`，`:81`）；载入时校验口径版本 `version:2`，版本缺失/≠2 即丢弃旧状态重新标定（`:251-253`） |
+| subagent | skill 知识包 | `<skillsDir>/agent-dispatch/skill.md` | activate 时经 `SkillMaterializer.materializeAllFromClasspath` 把 jar 内 `skill/agent-dispatch/skill.md` 物化落盘（幂等、原子写，`SubAgentPlugin.java:47-57`） | 落盘后由 worker 的 skillsDir 目录扫描统一发现（进 system prompt 与 `/` 菜单），与用户自制 skill 完全同权（[advisors.md](advisors.md) §5） |
 | sandbox-wsl-ubuntu | 自带资源（只读） | `<pluginDir>/wsl/eagent-rootfs.tar.gz`、`<pluginDir>/wsl/eagent-run.py` | 不写，随插件分发 | `WslCommon.tarballFor/resolveRunner`（`WslCommon.java:66-72,128-137`） |
 | sandbox-windows-codex / sandbox-windows-mic | 自带 rg 二进制（只读） | `<pluginDir>/bin/rg.exe` | 不写，随插件分发 | `CodexRg.resolve`（`CodexRg.java:29-41`；系统 PATH 已有则不注入） |
 
 归纳出的选址规律（无强制，全是先例约定）：
 
 - **插件自带只读资源** → `pluginDir()` 下（唯一有官方指定语义的位置）；
-- **跨任务的全局可写状态** → worker 系统目录（`ctx.services().config()` 即 `WorkerConfig` 的 `resolveHomeDir()`，`every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/config/WorkerConfig.java:44`）下**自己独有的文件名**（model-rate-limit 先例）；
+- **跨任务的全局可写状态** → worker 系统目录（`ctx.services().config()` 即 `WorkerConfig` 的 `resolveHomeDir()`，`every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/config/WorkerConfig.java:44`）下**自己独有的文件名**（token-estimator 先例）；
 - **任务级数据** → 任务数据目录下**自己的子目录**（`dataDirOf` 定位，file-change 的 `file-changes/` 先例）；
 - **工作区级数据** → 工作区 `.everyagent/` 下（git 凭证先例，路径经 `workspaces().sandboxFor(...)` 的 root 取得）。
 
@@ -63,7 +63,7 @@ rg 全部 26 个内置插件对 `pluginDir()` 的使用（排除 `target/`），
 
 §7.15.2（`:759-765`）进一步定死读写两侧：写侧「`RoundIndexStore` 闭合轮后经 `RoundClosedListener` 回调按 roundId 写全文分片 `file-changes/<roundId>.json`(轻量摘要与全文同在该文件,不落 rounds.jsonl 行)」；读侧「唯一取数口是插件自己的 `task.fileChanges` RPC」。task 核心零 fileChanges 概念（§14.11 槽位判据：插件功能不进核心接口，collector 连 TaskRuntime 都不进，[`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) §14.11）。
 
-`WorkerServices` 也不是插件 KV 存储。`store()`（继承自 `TaskServices`，`every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/task/TaskServices.java:15-16`）暴露的 `TaskStoreService` 只收录「插件实际需要的 TaskStore 方法」（悬空队列 queue.jsonl、截断、meta 读写、会话重建，`every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/task/TaskStoreService.java:20-87`）——`readMeta/writeMeta` 是给确实要改 TaskSummary 字段的场景（如 metadata 持久策略标记），拿 meta.json 当插件状态抽屉会污染 worker 的任务列表 schema。两个硬事实约束自持文件的生命周期：
+`WorkerServices` 也不是插件 KV 存储。`store()`（继承自 `TaskServices`，`every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/task/TaskServices.java:15-16`）暴露的 `TaskStoreService` 只收录「插件实际需要的 TaskStore 方法」（悬空队列 queue.jsonl、截断、meta 读写、会话重建，`every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/task/TaskStoreService.java:20-87`）——`readMeta/writeMeta` 是给确实要改 TaskSummary 字段的场景（如 metadata 持久数据，例如 `attachments`），拿 meta.json 当插件状态抽屉会污染 worker 的任务列表 schema。（注：任务级**开关**类状态——AI 审议 / 无人值守 / 禁用网络——不进 metadata，其真相源是任务目录下的 `slash-tokens.json`，经 `WorkerServices.slashTokens()` 查询。）两个硬事实约束自持文件的生命周期：
 
 - **编辑重发截断不删插件文件**：`truncateAfterSeq` 原文「只动事件 jsonl，不删任何插件数据文件——file-changes/、agents.json 等插件自有数据残留陈旧条目被接受，后续经截断事件通知（如 task.truncated）由插件自行清理，开放项」（`TaskStoreService.java:38-45`）——陈旧分片清理由插件自己负责；
 - **内存状态不跨重启**：per-run 状态放 advisor/节点的实例字段（[advisors.md](advisors.md) §1.5「provider 里存 per-run 状态」坑位），进程重启即失；要跨重启就得落成文件。

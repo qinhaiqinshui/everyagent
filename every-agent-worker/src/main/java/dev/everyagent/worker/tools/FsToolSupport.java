@@ -59,7 +59,7 @@ public class FsToolSupport {
     private final OsSandbox osSandbox;
     private final SandboxPathRegistry pathRegistry;
 
-    /** 系统技能目录只读附加根解析(skills 读免授权,§13.8;懒解析、共享实现)。 */
+    /** 系统技能目录只读附加根解析(skills 免授权放行,§7.17;懒解析、共享实现)。 */
     private final SkillsReadonlyRoots skillsReadonlyRoots;
 
     /**
@@ -109,7 +109,7 @@ public class FsToolSupport {
     }
 
     /**
-     * 按任务工作区根 + 已授权外部根绑定沙箱(附带系统技能目录只读根,skills 读免授权 §13.8;
+     * 按任务工作区根 + 已授权外部根绑定沙箱(附带系统技能目录只读根,skills 免授权放行 §7.17;
      * 另并入该工作区外部授权根——用户显式选择=已授权,§7.17,read_file/write_text 等
      * 经 gate 放行环后由沙箱直接放行,与 extraRoots 去重)。
      */

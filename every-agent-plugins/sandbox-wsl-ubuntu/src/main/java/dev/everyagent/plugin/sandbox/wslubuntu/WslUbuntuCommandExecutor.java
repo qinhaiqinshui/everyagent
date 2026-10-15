@@ -3,6 +3,7 @@ package dev.everyagent.plugin.sandbox.wslubuntu;
 import dev.everyagent.plugin.api.config.WorkerConfig;
 import dev.everyagent.plugin.api.shell.ExecResults;
 import dev.everyagent.plugin.api.spi.ExecResult;
+import dev.everyagent.plugin.api.spi.ToolOutcomeLog;
 import dev.everyagent.plugin.api.spi.WorkspaceManager;
 
 import org.slf4j.Logger;
@@ -21,7 +22,8 @@ import java.util.function.BooleanSupplier;
  * 完成实际执行（发行版内 root 直连、runner 脚本 trusted 阶段挂载 + seccomp + exec bash）。
  *
  * <p>网络许可两级取交集：worker 全局 {@code sandbox.allow-network} ∧ 本任务未开
- * /禁用网络（{@link NetworkTaskFlag}，每条命令执行瞬间实时读取）。 deny 由 runner 在
+ * /禁用网络（{@link NetworkTaskFlag}，查任务级 {@code network.access} token，恒以磁盘
+ * {@code slash-tokens.json} 为准，每条命令执行瞬间实时读取）。 deny 由 runner 在
  * trusted 阶段 {@code unshare -n} 新建无 eth0 的 netns 硬落地（DNS/回环全断）。
  */
 public class WslUbuntuCommandExecutor {
@@ -34,15 +36,19 @@ public class WslUbuntuCommandExecutor {
     private final Path pluginDir;
     /** 任务级禁网开关读取器(可空 = 无任务上下文,恒放行)。 */
     private final BooleanSupplier networkBlocked;
+    /** per-run 工具结果账本(可空):命令执行后按结构化退出码记账,供 tool.result.status 判定。 */
+    private final ToolOutcomeLog outcomes;
     private final ExecutorService exec = Executors.newVirtualThreadPerTaskExecutor();
 
     public WslUbuntuCommandExecutor(WorkerConfig props, Path workspaceRoot,
-            WorkspaceManager workspaces, Path pluginDir, BooleanSupplier networkBlocked) {
+            WorkspaceManager workspaces, Path pluginDir, BooleanSupplier networkBlocked,
+            ToolOutcomeLog outcomes) {
         this.props = props;
         this.workspaceRoot = workspaceRoot;
         this.workspaces = workspaces;
         this.pluginDir = pluginDir;
         this.networkBlocked = networkBlocked;
+        this.outcomes = outcomes;
     }
 
     /**
@@ -64,6 +70,9 @@ public class WslUbuntuCommandExecutor {
 
         log.info("[exec] wsl-ubuntu rc={} aborted={} cmd={}", r.exitCode(), r.aborted(),
                 ExecResults.truncate(command, 200));
+        if (outcomes != null) {
+            outcomes.recordShellExit(shell, command, r.exitCode(), r.aborted());
+        }
         return format(r);
     }
 

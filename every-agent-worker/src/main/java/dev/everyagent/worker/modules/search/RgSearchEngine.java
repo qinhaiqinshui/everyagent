@@ -27,7 +27,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.regex.Pattern;
 
 /**
- * 内置 ripgrep 搜索执行引擎(架构 §5.10):内置 file-content / file-name / task 三个
+ * 内置 ripgrep 搜索执行引擎(架构 §5.5「统一 search」):内置 file-content / file-name / task 三个
  * {@link dev.everyagent.plugin.api.spi.SearchProvider} 共用的 rg 进程管理管道与纯函数。
  *
  * <p>本类只承载「怎么跑 rg、怎么解析 rg 输出」的通用能力(进程启动、stderr 抽干、超时看门狗、

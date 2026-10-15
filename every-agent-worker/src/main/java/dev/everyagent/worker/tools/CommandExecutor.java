@@ -3,6 +3,7 @@ package dev.everyagent.worker.tools;
 import dev.everyagent.plugin.api.execution.ExecContext;
 import dev.everyagent.plugin.api.shell.ExecResults;
 import dev.everyagent.plugin.api.spi.ExecResult;
+import dev.everyagent.plugin.api.spi.ToolOutcomeLog;
 import dev.everyagent.worker.os.OsSandbox;
 
 import java.nio.file.Path;
@@ -49,17 +50,29 @@ public class CommandExecutor {
     private final String agentId;
     /** 打包 rg 二进制所在目录(可空);非空时 bash/powershell 子进程把它注入 PATH。 */
     private final Path rgBinDir;
+    /**
+     * per-run 工具结果账本(可空):每次命令执行后按结构化退出码记账,供
+     * {@code tool.result} 事件的 {@code data.status} 判定(非零退出码 / 超时 → 前端标红)。
+     */
+    private final ToolOutcomeLog toolOutcomes;
+
     public CommandExecutor(OsSandbox sandbox, ExecContext task, PermissionGate gate, String agentId) {
-        this(sandbox, task, gate, agentId, null);
+        this(sandbox, task, gate, agentId, null, null);
     }
 
     public CommandExecutor(OsSandbox sandbox, ExecContext task, PermissionGate gate, String agentId,
                            Path rgBinDir) {
+        this(sandbox, task, gate, agentId, rgBinDir, null);
+    }
+
+    public CommandExecutor(OsSandbox sandbox, ExecContext task, PermissionGate gate, String agentId,
+                           Path rgBinDir, ToolOutcomeLog toolOutcomes) {
         this.sandbox = sandbox;
         this.task = task;
         this.gate = gate;
         this.agentId = agentId;
         this.rgBinDir = rgBinDir;
+        this.toolOutcomes = toolOutcomes;
     }
 
     /**
@@ -108,13 +121,14 @@ public class CommandExecutor {
         }
         // powershell 专属(Windows 原生域):授权检查之后以 ExecResults.buildPowerShellScript
         // 组装完整脚本——UTF-8 编码偏好 + 非成功流抑制前缀(权限检查与审计日志始终是用户
-        // 原始命令)、PS-003 顶层对象输出断流修复(&{} | Out-String 包裹,见其 javadoc)、
-        // 退出码传导尾部。前缀先于用户命令执行,用户若显式设置该偏好,后写覆盖本前缀。
+        // 原始命令)、PS-003 顶层对象输出断流修复 + PS-004 异常终止丢输出(&{} | Out-String
+        // -Stream 包裹,见其 javadoc)、退出码传导尾部。前缀先于用户命令执行,用户若显式设置
+        // 该偏好,后写覆盖本前缀。
         // 真正的非 ASCII 正确性由「输出文件承载」保证(见 OsSandbox#spawnToFileRedirected),
         // 前缀只负责编码偏好与噪声抑制。
         String spawnCmd = powershell ? ExecResults.buildPowerShellScript(command) : command;
         // wsl-bwrap 后端:已授权 EXEC 根随调用挂载进沙箱(授权=绑定,撤销=下次不绑,零宿主状态);
-        // 走 execRootsSandboxed(§13.3 L2 过滤)——过度宽泛根(如历史 C:\\)不得进 --bind 白名单,
+        // 走 execRootsSandboxed(§7.8 过宽根过滤)——过度宽泛根(如历史 C:\\)不得进 --bind 白名单,
         // 否则整个 /mnt/c 会被读写挂进沙箱,读隔离被击穿。wsl-direct 不建 bwrap 命名空间,
         // 授权根由动态 ensureMount 承担,此参数为空。powershell 走 Windows 原生,
         // 附加根 prepareWritableRoots 已空体(Medium IL 无需标注);不参与 bwrap 挂载。
@@ -151,6 +165,11 @@ public class CommandExecutor {
         log.info("[exec] task={} backend={} rc={} aborted={} cmd={}", task.subjectId(),
                 sandbox.id(),
                 r.exitCode(), r.aborted(), ExecResults.truncate(command, 200));
+        // 结构化结果记账(判定不依赖结果文本):shell 参数即工具名(ShellTool 回调传入 name),
+        // 与发射侧按工具名 + 命令原文查账同键。
+        if (toolOutcomes != null) {
+            toolOutcomes.recordShellExit(shell, command, r.exitCode(), r.aborted());
+        }
         return ExecResults.format(r);
     }
 

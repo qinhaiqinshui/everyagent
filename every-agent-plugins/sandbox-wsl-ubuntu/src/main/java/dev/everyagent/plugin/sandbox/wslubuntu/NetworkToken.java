@@ -17,13 +17,14 @@ import dev.everyagent.plugin.api.slash.SlashTokenEncoder;
  *
  * <p>本 token 是任务级 bottom 开关的触发标记,不承载任何需 AI 理解的内容;提交解析
  * (从 AI 上下文剥离)由 {@link NetworkSlashResolver} 接管:本 kind 解析为 {@code ""},
- * token 被清空、不注入模型上下文。真正的禁网状态存任务
- * {@code metadata[networkBlocked]}(见 {@link NetworkTaskFlag}),由
+ * token 被清空、不注入模型上下文。真正的禁网状态即任务级 {@code network.access} slash
+ * token(落盘任务目录 {@code slash-tokens.json},见 {@link NetworkTaskFlag}),由
  * {@link WslUbuntuCommandExecutor} 每次 spawn 实时读取,在发行版内以
  * {@code unshare -n} 新建无 eth0 的 netns 落地(DNS/回环全断)。
  *
- * <p>本次任务有效:选中 /禁用网络 即开启任务级禁网开关(随任务 meta.json 落盘),
- * 之后本任务所有轮次持续生效、再运行仍保持,直至 ✕ 取消。worker 级默认
+ * <p>本次任务有效:选中 /禁用网络 即开启任务级禁网开关(即写入任务级
+ * {@code network.access} token,落盘 {@code slash-tokens.json}),之后本任务所有轮次持续
+ * 生效、再运行仍保持,直至 ✕ 取消(移除该 token)。worker 级默认
  * {@code sandbox.allow-network=true}(放行网络),本开关只对单任务收窄。
  */
 public final class NetworkToken {

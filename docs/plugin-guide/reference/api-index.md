@@ -1,7 +1,7 @@
 ---
 title: API 索引
 nav_order: 18
-parent: reference
+parent: 参考
 has_children: false
 ---
 
@@ -13,7 +13,7 @@ has_children: false
 
 - 详解列全部为站内相对链接（`.md` + 小节锚点）；「§n」指目标文档小节。
 - ⚠️ = 写了不生效 / 全仓零使用的扩展点或字段（集中登记在 [known-issues](known-issues.md)，撰写中）。
-- 范例列的插件 id 均可在[内置插件范例索引 §2](builtin-plugins.md#2-总表25-个内置插件) 查到逐行解读；「想写 X 就抄 Y」反查见[同篇 §3](builtin-plugins.md#3-想写-x-就抄-y反查表)。
+- 范例列的插件 id 均可在[内置插件范例索引 §2](builtin-plugins.md#2-总表28-个内置插件) 查到逐行解读；「想写 X 就抄 Y」反查见[同篇 §3](builtin-plugins.md#3-想写-x-就抄-y反查表)。
 
 ## 1. 后端 API 索引
 
@@ -23,13 +23,13 @@ has_children: false
 
 | 方法 | 一句话 | 详解 | 范例 |
 |---|---|---|---|
-| `String id()` | 必须与 plugin.json 的 `id` 一致（仅 `[a-z0-9-]`） | [总览 §5](../backend/overview.md#5-everyagentplugin-契约与最小入口类) | 全部 26 个 |
+| `String id()` | 必须与 plugin.json 的 `id` 一致（仅 `[a-z0-9-]`） | [总览 §5](../backend/overview.md#5-everyagentplugin-契约与最小入口类) | 全部 28 个 |
 | `void activate(WorkerPluginContext ctx)` | 一切注册发生在此；抛异常只废自己一个插件 | 同上 | 同上 |
 | `default void deactivate()` | 停机钩子：worker 优雅关闭时由 PluginLoader 调用（运行期禁用/卸载不触发） | [总览 §3.2](../backend/overview.md#32-deactivate-只在-worker-关闭时调用改动--重启-worker) | — |
 
-### 1.2 `WorkerPluginContext` —— 15 个注册方法
+### 1.2 `WorkerPluginContext` —— 16 个注册方法
 
-13 个声明于 `every-agent-plugin-api/.../WorkerPluginContext.java:42-94`，末 2 个在父接口 `TaskPluginContext`（表中 #14/#15）。注册即生效：worker 侧只往注册表 `add` 一行，无校验、无过滤（[总览 §6.1](../backend/overview.md#61-注册方法15-个)）。
+14 个声明于 `every-agent-plugin-api/.../WorkerPluginContext.java:43-109`（11 个 SPI + 3 个通用），末 2 个在父接口 `TaskPluginContext`（表中 #15/#16）。注册即生效：worker 侧只往注册表 `add` 一行，无校验、无过滤（[总览 §6.1](../backend/overview.md#61-注册方法16-个)）。另有 2 个事件出网过滤注册（表中 #8/#9）暂无本站专篇，契约见[架构说明 §8.5](../../ARCHITECTURE.md#85-插件系统统一加载架构)。skill 贡献**不在此表**——代码注册通道已删除，插件 skill 走 [advisors §5](../backend/advisors.md#5-技能包物化skillmaterializer-插件贡献-skill-的唯一方式) 的物化落盘。
 
 | # | 注册方法（一行签名） | 详解 | 内置范例 |
 |---|---|---|---|
@@ -40,14 +40,15 @@ has_children: false
 | 5 | `void registerAdvisorProvider(AdvisorProvider p)` | [advisors §1](../backend/advisors.md#1-advisorprovider--向-agent-链注入-advisor) | 12 插件 13 provider（system-info、git、context-compression…） |
 | 6 | `void registerSearchProvider(SearchProvider p)` | [advisors §6](../backend/advisors.md#6-searchprovider--搜索后端统一-search-聚合--mentionquery-能力接口) | 统一 `search` 聚合（内置 `file-content`/`file-name`/`task` 三 provider 与插件 provider 同权，按 `order` 升序聚合）；能力接口 `SuggestionProvider`（mention.query）；无内置插件范例 |
 | 7 | `void registerAuthorizationHandler(AuthorizationHandler h)` | [advisors §7](../backend/advisors.md#7-authorizationhandler--授权决议链节点) | ai-review(100f)、unattended(200f)；内置 human=300f 终结 |
-| 8 | `void registerSkillContributor(SkillContributor c)` | [advisors §5](../backend/advisors.md#5-skillcontributor--贡献-skill) | subagent（skill 同时进 system prompt 与 `/` 菜单，菜单副标题带「插件 · 」来源标记） |
-| 9 | `void registerTokenEstimator(TokenEstimator e)` | [advisors §4](../backend/advisors.md#4-tokenestimator--替换-token-估算器) | model-rate-limit |
-| 10 | `void registerChatModelEnhancer(ChatModelEnhancer e)` | [advisors §3](../backend/advisors.md#3-chatmodelenhancer--模型构建期介入) | model-pool |
-| 11 | `void registerRpcMethod(String method, RpcMethod h)` | [任务 §3](../backend/task-and-rpc.md#3-registerrpcmethod--自注册-rpc) | git×13、task-input-queue×3、task-queue/file-change 各 1 |
-| 12 | `void registerSlashProvider(String id, SlashProvider p)` | [任务 §4.1](../backend/task-and-rpc.md#41-接口签名) | unattended、git、ai-review、sandbox-wsl-ubuntu |
-| 13 | `void registerSlashTokenResolver(SlashTokenResolver r)` | [任务 §4.1](../backend/task-and-rpc.md#41-接口签名) | 同上四家 |
-| 14 | `void registerTaskAdmissionPolicy(TaskAdmissionPolicy p)`（`TaskPluginContext.java:17`） | [任务 §1](../backend/task-and-rpc.md#1-taskadmissionpolicy--任务创建准入预检) | task-queue（全仓唯一） |
-| 15 | `void registerTaskLifecycleNode(TaskLifecycleNode n)`（`TaskPluginContext.java:24`） | [任务 §2](../backend/task-and-rpc.md#2-tasklifecyclenode--洋葱模型) | 4 插件 5 节点（order 15/40/870/877/950） |
+| 8 | `void registerEventEgressFilter(EventEgressFilter f)` | [架构 §8.5](../../ARCHITECTURE.md#85-插件系统统一加载架构)（暂无专篇：出网投影器的事件级过滤链，可丢弃/改写 payload，事件仍落盘） | ai-review（丢弃审议 agent 会话内容事件） |
+| 9 | `void registerRoundEgressFilter(RoundEgressFilter r)` | 同上（轮次级出网过滤链） | ai-review |
+| 10 | `void registerTokenEstimator(TokenEstimator e)` | [advisors §4](../backend/advisors.md#4-tokenestimator--替换-token-估算器)（`TokenEstimator` SPI 仅 `estimate(text, configId)` 一个方法） | token-estimator |
+| 11 | `void registerChatModelEnhancer(ChatModelEnhancer e)` | [advisors §3](../backend/advisors.md#3-chatmodelenhancer--模型构建期介入) | model-pool |
+| 12 | `void registerRpcMethod(String method, RpcMethod h)` | [任务 §3](../backend/task-and-rpc.md#3-registerrpcmethod--自注册-rpc) | git×13、task-input-queue×3、task-queue/file-change 各 1 |
+| 13 | `void registerSlashProvider(String id, SlashProvider p)` | [任务 §4.1](../backend/task-and-rpc.md#41-接口签名) | unattended、git、ai-review、sandbox-wsl-ubuntu |
+| 14 | `void registerSlashTokenResolver(SlashTokenResolver r)` | [任务 §4.1](../backend/task-and-rpc.md#41-接口签名) | 同上四家 |
+| 15 | `void registerTaskAdmissionPolicy(TaskAdmissionPolicy p)`（`TaskPluginContext.java:17`） | [任务 §1](../backend/task-and-rpc.md#1-taskadmissionpolicy--任务创建准入预检) | task-queue（全仓唯一） |
+| 16 | `void registerTaskLifecycleNode(TaskLifecycleNode n)`（`TaskPluginContext.java:24`） | [任务 §2](../backend/task-and-rpc.md#2-tasklifecyclenode--洋葱模型) | 4 插件 5 节点（order 15/40/870/877/950） |
 
 ### 1.3 `WorkerPluginContext` —— 5 个辅助方法（不注册、只取数）
 
@@ -61,9 +62,9 @@ has_children: false
 
 ### 1.4 `TaskPluginContext` —— 父接口（2 方法）
 
-`WorkerPluginContext extends TaskPluginContext`，该父接口只声明上表 #14/#15 两个注册方法（`every-agent-plugin-api/.../task/TaskPluginContext.java:17,24`）。详解：[准入预检](../backend/task-and-rpc.md#1-taskadmissionpolicy--任务创建准入预检)、[洋葱节点](../backend/task-and-rpc.md#2-tasklifecyclenode--洋葱模型)。
+`WorkerPluginContext extends TaskPluginContext`，该父接口只声明上表 #15/#16 两个注册方法（`every-agent-plugin-api/.../task/TaskPluginContext.java:17,24`）。详解：[准入预检](../backend/task-and-rpc.md#1-taskadmissionpolicy--任务创建准入预检)、[洋葱节点](../backend/task-and-rpc.md#2-tasklifecyclenode--洋葱模型)。
 
-### 1.5 `WorkerServices` —— 服务清单（14 项）
+### 1.5 `WorkerServices` —— 服务清单（15 项）
 
 > 本表摘自 [后端总览 §6.3](../backend/overview.md#63-workerservices能取到什么逐个列)（逐项声明行号见该篇）；声明：`every-agent-plugin-api/.../WorkerServices.java`。插件只面向此接口编程，不依赖 worker 实现类。
 
@@ -72,7 +73,8 @@ has_children: false
 | `SandboxBackend sandbox()` | 沙箱门面：查后端 id、委托挂载 | sandbox 三家 |
 | `nativeExec()` | 宿主原生进程执行器（argv 直传 + 超时 + 输出上限） | git |
 | `workspaces()` | 多工作区注册表、jailed 路径解析 | git（每方法首行 `sandboxFor`） |
-| `tokenEstimator()` | token 估算器（内置或插件注册版） | model-rate-limit |
+| `tokenEstimator()` | token 估算器（内置或插件注册版） | token-estimator |
+| `SlashTokenService slashTokens()` | 任务级 slash token 只读查询：任务级开关的真相源读取口（`tokensOf(taskId)` / `hasKind(taskId, kind)`，见 `SlashTokenService`） | ai-review、unattended |
 | `interaction()` | 用户交互服务（ask 提问 / 授权弹窗） | ai-review、image-vision |
 | `userInputMaterializer()` | 用户输入物化（@ 文件引用 → 「（附图:xxx）」正文 + 附件 Media；输入投递入口必用） | task-input-queue（插入对话） |
 | `config()` | worker 全局 `worker.*` 只读视图（≠ `ctx.config()`） | task-queue |
@@ -96,14 +98,14 @@ has_children: false
 | `ModelConfig snapshot()` | 完整模型配置快照；configId 经它取，无独立槽 | advisor 装配 |
 | `EventEmitter emitter()` | 已绑定本主体的事件口（trace/审计） | secret-redaction |
 | `AgentFactory agentFactory()` | 预绑定 Agent 工厂（`create(agentId)`） | subagent |
-| `Map<String,Object> metadata()` | 持久策略标记（随 meta.json 落盘，不混瞬态） | unattended、attachments |
+| `Map<String,Object> metadata()` | 持久数据（如 attachments）；任务级开关不走 metadata（真相源 = slash token） | attachments |
 | `Path dataDir()` | 主体数据目录（grants.json 等落盘） | 授权链 |
 | `boolean terminal()` | 主体是否已收口（终态后不再发射） | leak-guard |
 | `InteractionService interaction()` | 预绑定交互口（ask 自动补 subjectId） | image-vision |
 | `Map<String,AgentContext> agents()` | 本主体活动 agent 注册表（自动维护，插件不再手动 put） | AgentBuilder |
 | 常量 `METADATA_ATTACHMENTS_KEY` | metadata 中附件列表键名（`"attachments"`） | FileReferenceProcessNode |
 
-### 1.7 四个支撑类型
+### 1.7 五个支撑类型
 
 **`RpcContext`**（`plugin-api/.../rpc/RpcContext.java:11-45`；详解 [任务 §3.1](../backend/task-and-rpc.md#31-方法签名与-rpccontext)；范例 git.status）：
 
@@ -123,6 +125,8 @@ has_children: false
 | | `String resolveSubmissionText(JsonNode payload)` | 替换文本；空串 = 从模型上下文剥离该 token |
 
 **`EmitEvent`**（record，`plugin-api/.../model/EmitEvent.java:21-31`；详解 [任务 §5](../backend/task-and-rpc.md#5-事件发射红线140)）：字段 `id/kind/agentId/title/summary/content/status/data/persist/mode`；工厂 `EmitEvent.of(...)`（持久）与 `EmitEvent.transientOf(...)`（瞬态）。插件只发语义 `EmitEvent`、不感知 wire 事件名/seq（§14.0 红线）；`agent.started/status/done` 等四个事件由 `AgentEntity` 单点发射，插件不得手搓。范例：model-rate-limit。
+
+**`OutputTokenAccumulator`**（`every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/util/OutputTokenAccumulator.java:38`）：流式输出估算累加器——把每个流式 chunk 折算成估算输出 token（正文增量 + 思考累积值差分 + 工具调用参数按 callId 累积，兼容增量拼接与累积值两种实现）；限流侧（tpm 压力估算）与校准侧共用同一口径，避免两处再次分叉。范例：model-rate-limit、token-estimator。
 
 ## 2. 前端 API 索引
 
@@ -204,7 +208,7 @@ has_children: false
 | `sidebar-panel-shown` | ✅ 活 | `task-round-closed` | ✅ 活（历史回放会补发） |
 | `task-status-changed` | ✅ 活 | `plugins-loaded` | ✅ 活（#4 接线） |
 
-插件间通信无先例：26 个内置插件 events 调用 6 处全是 `on`、零 `emit`；约定事件名用 `<pluginId>:<verb>` 前缀（[事件 §6](../web/events.md#6-插件间通信模式)）。
+插件间通信无先例：28 个内置插件 events 调用 6 处全是 `on`、零 `emit`；约定事件名用 `<pluginId>:<verb>` 前缀（[事件 §6](../web/events.md#6-插件间通信模式)）。
 
 ### 2.5 `PluginStorage` / `PluginFs` / `CommandRegistry` / `Disposable`
 
@@ -246,11 +250,11 @@ has_children: false
 
 ### 4.1 插件 id 规则
 
-`^[a-z0-9][a-z0-9-]{1,38}$` 且首尾不能是连字符（2~39 字符；脚手架校验 `create-everyagent-plugin/index.mjs:52`），26 个内置全部合规。id 的三重身份（目录名 / `.eap` 顶层目录 / localStorage 前缀）：[清单 §4](../plugin-manifest.md#4-id-的三重身份最容易踩坑处)。
+`^[a-z0-9][a-z0-9-]{1,38}$` 且首尾不能是连字符（2~39 字符；脚手架校验 `create-everyagent-plugin/index.mjs:52`），28 个内置全部合规。id 的三重身份（目录名 / `.eap` 顶层目录 / localStorage 前缀）：[清单 §4](../plugin-manifest.md#4-id-的三重身份最容易踩坑处)。
 
 ### 4.2 包名 / 入口类推导（脚手架约定）
 
-`create-everyagent-plugin/lib/naming.mjs`（唯一事实源）：包名 = `dev.everyagent.plugin.<camelCase(id)>`；入口类简名 = `PascalCase(id) + "Plugin"`；`main` = 二者拼接。例：`pdf-viewer` → `dev.everyagent.plugin.pdfViewer.PdfViewerPlugin`。⚠️ 仓内既有插件的包名并不全按此式（如 `dev.everyagent.plugin.sandbox.codex`）；硬约束只有一条——`main` 的 FQN 必须与 `src/main/java` 路径逐段一致（[清单 §8](../plugin-manifest.md#8-与-pomxml-的对应关系)）。
+`create-everyagent-plugin/lib/naming.mjs`（唯一事实源）：包名 = `dev.everyagent.plugin.<camelCase(id)>`；入口类简名 = `PascalCase(id) + "Plugin"`；`main` = 二者拼接。例：`pdf-viewer` → `dev.everyagent.plugin.pdfViewer.PdfViewerPlugin`。⚠️ 仓内既有插件的包名并不全按此式（如 `dev.everyagent.plugin.sandbox.codex`）；新增的 `token-estimator` 插件按脚手架口径落在 `dev.everyagent.plugin.tokenEstimator`；硬约束只有一条——`main` 的 FQN 必须与 `src/main/java` 路径逐段一致（[清单 §8](../plugin-manifest.md#8-与-pomxml-的对应关系)）。
 
 ### 4.3 RPC 方法名前缀现状
 

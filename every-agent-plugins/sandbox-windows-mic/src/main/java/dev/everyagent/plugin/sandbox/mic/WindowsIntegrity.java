@@ -70,7 +70,7 @@ public final class WindowsIntegrity {
         }
         Path norm = root.toAbsolutePath().normalize();
         if (norm.getRoot() != null && norm.getRoot().equals(norm)) {
-            // §13.3 修复 B L3(入口 fail-fast,防御纵深最后一道):文件系统根一律拒标——
+            // §7.8 过宽根拒收·入口 fail-fast(防御纵深最后一道):文件系统根一律拒标——
             // 标注机器(labelTree)对着盘根跑等于把整个卷打 Low,P1 事故形态。
             // ②(工作区祖先)③(系统目录祖先)需要工作区上下文,由 L1/L2(gate/executor)判定。
             log.warn("[sandbox] L3 拒绝对文件系统根标注 Low 完整性: {}", norm);

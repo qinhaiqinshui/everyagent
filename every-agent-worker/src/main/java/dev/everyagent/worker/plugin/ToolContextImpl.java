@@ -12,6 +12,7 @@ import dev.everyagent.worker.os.SandboxPathRegistry;
 import dev.everyagent.plugin.api.shell.ShellExecutor;
 import dev.everyagent.plugin.api.spi.SandboxBackend;
 import dev.everyagent.plugin.api.spi.ToolContext;
+import dev.everyagent.plugin.api.spi.ToolOutcomeLog;
 import dev.everyagent.worker.tools.CommandExecutor;
 import dev.everyagent.worker.tools.PermissionGate;
 
@@ -37,10 +38,17 @@ public class ToolContextImpl implements ToolContext {
     private final WorkspaceManager workspaces;
     private final Path rgBinary;
     private final SandboxPathRegistry pathRegistry;
+    private final ToolOutcomeLog toolOutcomes;
 
     public ToolContextImpl(ExecContext exec, String agentId, SandboxBackend sandbox,
             PermissionGate gate, WorkspaceManager workspaces, Path rgBinary,
             SandboxPathRegistry pathRegistry) {
+        this(exec, agentId, sandbox, gate, workspaces, rgBinary, pathRegistry, null);
+    }
+
+    public ToolContextImpl(ExecContext exec, String agentId, SandboxBackend sandbox,
+            PermissionGate gate, WorkspaceManager workspaces, Path rgBinary,
+            SandboxPathRegistry pathRegistry, ToolOutcomeLog toolOutcomes) {
         this.exec = exec;
         this.agentId = agentId;
         this.sandbox = sandbox;
@@ -49,6 +57,7 @@ public class ToolContextImpl implements ToolContext {
         this.workspaces = workspaces;
         this.rgBinary = rgBinary;
         this.pathRegistry = pathRegistry;
+        this.toolOutcomes = toolOutcomes;
     }
 
     // ── ExecContext 槽位（委托 exec） ──────────────────────────
@@ -130,6 +139,16 @@ public class ToolContextImpl implements ToolContext {
         return rgBinary;
     }
 
+    /**
+     * per-run 工具执行结果账本:自建命令执行器的后端(codex / windows-mic / wsl-ubuntu)在
+     * 拿到执行结局处调用 {@code recordShellExit(...)},worker 据此给 {@code tool.result}
+     * 下发 {@code data.status}(非零退出码 / 超时 → error → 前端标红)。
+     */
+    @Override
+    public ToolOutcomeLog toolOutcomes() {
+        return toolOutcomes;
+    }
+
     @Override
     public ShellExecutor shellExecutor() {
         // 不带 rg 的执行器(rgBinDir=null),服务外部插件。
@@ -139,7 +158,9 @@ public class ToolContextImpl implements ToolContext {
         if (osSandbox == null) {
             return null;
         }
-        CommandExecutor cmd = new CommandExecutor(osSandbox, this, gate, agentId);
+        // 账本随执行器下发:走本路径的后端(如 windows-mic 用 ctx.shellExecutor())与
+        // 内置 DIRECT 后端同口径记账,退出码判定不因后端不同而缺失。
+        CommandExecutor cmd = new CommandExecutor(osSandbox, this, gate, agentId, null, toolOutcomes);
         return cmd::execute;
     }
 
