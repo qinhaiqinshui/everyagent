@@ -536,34 +536,56 @@ function WorkspaceGroupPanel({
     }
   }, [applySelection, batchDeleting, closeGlobalFileTab, selectedPaths, showToast, workspaceFileTabs, workspaceRoot])
 
+  /**
+   * 移动一组路径到目标目录(批量移动弹窗与拖拽移动共用同一落盘+收尾路径)。
+   * paths 为业务绝对路径(选中集合形态);targetDir 接受相对/业务绝对两种形态,'' 表示工作区根。
+   * 返回实际移动的项数(「目标即当前父目录」的项跳过,不产生无效 RPC);出错时抛异常(已移动项保持已移动)。
+   */
+  const movePathsToDirectory = React.useCallback(async (paths: string[], targetDir: string): Promise<number> => {
+    const targetRel = normalizeWorkspaceRelativePath(targetDir)
+    const deduped = dedupeWorkspacePaths(paths)
+    // 归一为工作区相对路径后传给 movePath,使其「不能移到自身/子目录」校验真正生效。
+    const movable = deduped.filter((path) => {
+      const rel = normalizeWorkspaceRelativePath(path)
+      const parent = rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')) : ''
+      return parent !== targetRel
+    })
+    if (movable.length === 0) return 0
+    const moved: Array<{ oldPath: string; newBusinessPath: string }> = []
+    for (const path of movable) {
+      const rel = normalizeWorkspaceRelativePath(path)
+      const nextPath = await workspaceExplorerCommandService.movePath(workspaceRoot, rel, targetRel)
+      moved.push({ oldPath: path, newBusinessPath: toBusinessAbsolutePath(nextPath) })
+    }
+    let nextExpanded = expandedPathsRef.current
+    for (const { oldPath, newBusinessPath } of moved) {
+      renameFileTabs(workspaceRoot, oldPath, newBusinessPath)
+      // 移动目录后迁移展开态(逐个前缀迁移,同步 ref)。
+      nextExpanded = migrateExpandedPaths(nextExpanded, oldPath, newBusinessPath)
+    }
+    // 展开目标目录,并把目标目录(business 绝对路径)一并加入展开集合(同步 ref);
+    // 根目录('/')常驻展开,无需加入。
+    const targetBusiness = targetRel ? toBusinessAbsolutePath(targetRel) : ''
+    if (targetBusiness) {
+      nextExpanded = new Set(nextExpanded).add(targetBusiness)
+    }
+    expandedPathsRef.current = nextExpanded
+    setExpandedPaths(nextExpanded)
+    if (targetBusiness) {
+      expandDirChildren(targetBusiness)
+    }
+    // 立即整树保持展开刷新,把磁盘新路径拉回树。
+    void reloadTree(showInternalFiles, true)
+    return moved.length
+  }, [expandDirChildren, reloadTree, renameFileTabs, showInternalFiles, workspaceRoot])
+
   /** 批量移动:对已选路径按前缀去重后移动到同一目标目录,并更新打开的标签页路径。 */
   const handleBatchMove = React.useCallback(async () => {
     if (batchMoving || selectedPaths.size === 0) return
     setBatchMoving(true)
     try {
-      const paths = dedupeWorkspacePaths(Array.from(selectedPaths))
-      const moved: Array<{ oldPath: string; newPath: string }> = []
-      for (const path of paths) {
-        const nextPath = await workspaceExplorerCommandService.movePath(workspaceRoot, path, batchMoveDir)
-        moved.push({ oldPath: path, newPath: nextPath })
-      }
-      let nextExpanded = expandedPathsRef.current
-      for (const { oldPath, newPath } of moved) {
-        const newBusinessPath = toBusinessAbsolutePath(newPath)
-        renameFileTabs(workspaceRoot, oldPath, newBusinessPath)
-        // 移动目录后迁移展开态(逐个前缀迁移,同步 ref)。
-        nextExpanded = migrateExpandedPaths(nextExpanded, oldPath, newBusinessPath)
-      }
-      // 展开目标目录,并把目标目录一并加入展开集合(同步 ref)。
-      if (batchMoveDir) {
-        nextExpanded = new Set(nextExpanded).add(batchMoveDir)
-      }
-      expandedPathsRef.current = nextExpanded
-      setExpandedPaths(nextExpanded)
-      expandDirChildren(batchMoveDir)
-      // 立即整树保持展开刷新,把磁盘新路径拉回树。
-      void reloadTree(showInternalFiles, true)
-      showToast(`已移动 ${paths.length} 项`, 'success')
+      const movedCount = await movePathsToDirectory(Array.from(selectedPaths), batchMoveDir)
+      showToast(movedCount > 0 ? `已移动 ${movedCount} 项` : '所选项已在目标位置', 'success')
       // 批量操作后清空选中集合:旧路径已全部迁移,无单选可保留。
       applySelection(new Set())
       setBatchMoveOpen(false)
@@ -572,7 +594,23 @@ function WorkspaceGroupPanel({
     } finally {
       setBatchMoving(false)
     }
-  }, [applySelection, batchMoveDir, batchMoving, expandDirChildren, reloadTree, renameFileTabs, selectedPaths, showInternalFiles, showToast, workspaceRoot])
+  }, [applySelection, batchMoveDir, batchMoving, movePathsToDirectory, selectedPaths, showToast])
+
+  /** 拖拽移动落点提交:把当前选中集合移动到目标目录(business 绝对路径,'' = 工作区根)。 */
+  const handleDragMoveToDirectory = React.useCallback(async (targetDir: string) => {
+    const paths = Array.from(selectionRef.current)
+    if (paths.length === 0) return
+    try {
+      const movedCount = await movePathsToDirectory(paths, targetDir)
+      if (movedCount > 0) {
+        showToast(`已移动 ${movedCount} 项`, 'success')
+        // 移动成功后清空选中集合:旧路径已全部迁移,保留会指向失效路径。
+        applySelection(new Set())
+      }
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : String(error), 'error')
+    }
+  }, [applySelection, movePathsToDirectory, showToast])
 
   /**
    * 批量下载:对已选路径按前缀去重后逐个串行下载(不并行,避免并发下载被浏览器/worker 打乱),
@@ -1012,6 +1050,7 @@ function WorkspaceGroupPanel({
           metaMode={metaMode}
           selectedPaths={selectedPaths}
           onMultiSelectChange={applySelection}
+          onMoveToDirectory={handleDragMoveToDirectory}
           onToggleDirectory={(path) => {
             setExpandedPaths((prev) => {
               const next = new Set(prev)
