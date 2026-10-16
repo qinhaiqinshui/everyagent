@@ -481,17 +481,9 @@ function WorkspaceGroupPanel({
     })
   }, [])
 
-  /** 多选模式下切换单个路径选中态。 */
-  const handleToggleSelectedPath = React.useCallback((path: string) => {
-    setSelectedPaths((prev) => {
-      const next = new Set(prev)
-      if (next.has(path)) {
-        next.delete(path)
-      } else {
-        next.add(path)
-      }
-      return next
-    })
+  /** 多选模式下批量更新选中路径集合(点击/Ctrl/Shift/框选统一走此回调)。 */
+  const handleMultiSelectChange = React.useCallback((paths: Set<string>) => {
+    setSelectedPaths(paths)
   }, [])
 
   const handleRequestBatchDelete = React.useCallback(() => {
@@ -987,7 +979,7 @@ function WorkspaceGroupPanel({
           metaMode={metaMode}
           multiSelectMode={multiSelectMode}
           selectedPaths={selectedPaths}
-          onToggleSelectedPath={handleToggleSelectedPath}
+          onMultiSelectChange={handleMultiSelectChange}
           onToggleDirectory={(path) => {
             setExpandedPaths((prev) => {
               const next = new Set(prev)

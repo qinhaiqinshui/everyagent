@@ -5,7 +5,6 @@ import type { AlignType } from '@rc-component/trigger'
 import { ChevronDownIcon, ChevronRightIcon, FolderIcon } from '../shared/AppGlyphs'
 import { FileTypeIcon } from '../shared/FileTypeGlyphs'
 import type { ListRowActionItem } from '../shared/ui/ListRowActions'
-import { Checkbox } from '../shared/ui'
 import { MenuList } from '../shared/ui/Menu'
 import { useResponsiveViewport } from '@/hooks/useResponsiveViewport'
 import { useLongPress } from '@/hooks/useLongPress'
@@ -23,6 +22,9 @@ const MENU_PADDING = 8
 /** 菜单宽度估算值(antd 菜单按内容撑宽,无固定值),用于水平方向钳制避免溢出视口右缘。 */
 const MENU_WIDTH_ESTIMATE = 200
 
+/** 拖动框选(橡皮筋)触发的最小位移(px):超过此距离视为拖动而非单击。 */
+const RUBBER_BAND_THRESHOLD = 5
+
 export default function WorkspaceExplorerTree({
   workspaceRoot,
   nodes,
@@ -39,7 +41,7 @@ export default function WorkspaceExplorerTree({
   metaMode,
   multiSelectMode = false,
   selectedPaths,
-  onToggleSelectedPath,
+  onMultiSelectChange,
 }: {
   /** 所属工作区根(上下文菜单 target 需携带,命令落对应工作区)。 */
   workspaceRoot: string
@@ -56,12 +58,12 @@ export default function WorkspaceExplorerTree({
   getActionItems?: (target: WorkspaceExplorerContextTarget) => ListRowActionItem[]
   /** 行尾元信息显示模式：文件大小、最后编辑时间，或 none(默认隐藏)。 */
   metaMode?: 'size' | 'modified' | 'none'
-  /** 多选模式：开启后每行前置复选框，复选框切换选中，行单击不再触发单选高亮。 */
+  /** 多选模式：开启后支持 Ctrl/Shift 点击与拖动框选，选中项以高亮背景标记(类似 VSCode)。 */
   multiSelectMode?: boolean
   /** 多选模式下的已选路径集合（仅在 multiSelectMode 时使用）。 */
   selectedPaths?: Set<string>
-  /** 多选模式下切换单个路径选中态。 */
-  onToggleSelectedPath?: (path: string) => void
+  /** 多选模式下批量更新选中路径集合（点击/Ctrl/Shift/框选统一走此回调）。 */
+  onMultiSelectChange?: (paths: Set<string>) => void
 }) {
   const isMobile = useResponsiveViewport().isMobile
   const { token } = useToken()
@@ -71,6 +73,15 @@ export default function WorkspaceExplorerTree({
   const containerRef = React.useRef<HTMLDivElement | null>(null)
   // 当前打开右键菜单的行路径：同一时刻只允许一个右键菜单打开(原生右键习惯)，由各 TreeNodeRow 受控。
   const [openMenuPath, setOpenMenuPath] = React.useState<string | null>(null)
+
+  // 多选：锚点路径(Shift+Click 范围选择的起点)。
+  const anchorPathRef = React.useRef<string | null>(null)
+  // 多选：拖动框选矩形状态(null = 未在框选)。
+  const [rubberBand, setRubberBand] = React.useState<{
+    x1: number; y1: number; x2: number; y2: number
+  } | null>(null)
+  // 多选：框选结束后抑制下一次 click(防止框选误触发单选)。
+  const suppressNextClickRef = React.useRef(false)
 
   const expandedKeys = React.useMemo(() => Array.from(expandedPaths), [expandedPaths])
 
@@ -99,6 +110,135 @@ export default function WorkspaceExplorerTree({
     return () => window.clearTimeout(id)
   }, [locatePath, locateRequestedAt, onLocateApplied])
 
+  /** 获取容器内所有可见树节点路径(按 DOM 顺序；折叠子树不在 DOM 中，天然被排除)。 */
+  const getVisiblePaths = React.useCallback((): string[] => {
+    const container = containerRef.current
+    if (!container) return []
+    const paths: string[] = []
+    container.querySelectorAll('.ant-tree-treenode').forEach((el) => {
+      const content = el.querySelector('[data-key]')
+      const path = content?.getAttribute('data-key')
+      if (path) paths.push(path)
+    })
+    return paths
+  }, [])
+
+  /** Shift+Click 范围选择：返回锚点到目标之间所有可见节点路径。 */
+  const computeRangeSelection = React.useCallback((anchor: string, target: string): Set<string> => {
+    const visiblePaths = getVisiblePaths()
+    const anchorIdx = visiblePaths.indexOf(anchor)
+    const targetIdx = visiblePaths.indexOf(target)
+    if (anchorIdx === -1 || targetIdx === -1) return new Set([target])
+    const start = Math.min(anchorIdx, targetIdx)
+    const end = Math.max(anchorIdx, targetIdx)
+    return new Set(visiblePaths.slice(start, end + 1))
+  }, [getVisiblePaths])
+
+  /** 处理多选模式下的节点点击(Ctrl/Shift/普通)。 */
+  const handleMultiSelectClick = React.useCallback((path: string, e: React.MouseEvent) => {
+    if (!onMultiSelectChange) return
+    const isCtrl = e.ctrlKey || e.metaKey
+    const isShift = e.shiftKey
+
+    if (isShift && anchorPathRef.current) {
+      // Shift+Click: 范围选择
+      const rangePaths = computeRangeSelection(anchorPathRef.current, path)
+      if (isCtrl) {
+        // Ctrl+Shift+Click: 追加范围到现有选择
+        const next = new Set([...(selectedPaths ?? []), ...rangePaths])
+        onMultiSelectChange(next)
+      } else {
+        onMultiSelectChange(rangePaths)
+      }
+    } else if (isCtrl) {
+      // Ctrl+Click: 切换单个路径
+      const next = new Set(selectedPaths ?? [])
+      if (next.has(path)) next.delete(path)
+      else next.add(path)
+      onMultiSelectChange(next)
+      anchorPathRef.current = path
+    } else {
+      // 普通点击: 仅选中该路径
+      onMultiSelectChange(new Set([path]))
+      anchorPathRef.current = path
+    }
+  }, [onMultiSelectChange, selectedPaths, computeRangeSelection])
+
+  /** 容器 mousedown：开始潜在的拖动框选(多选模式下)。 */
+  const handleContainerMouseDown = React.useCallback((e: React.MouseEvent) => {
+    if (!multiSelectMode || !onMultiSelectChange) return
+    if (e.button !== 0) return // 只响应左键
+    const target = e.target as HTMLElement
+    // 点击展开/收起箭头不触发框选
+    if (target.closest('.ant-tree-switcher')) return
+
+    const container = containerRef.current
+    if (!container) return
+
+    const startClientX = e.clientX
+    const startClientY = e.clientY
+    let isDragging = false
+    const preSelection = new Set(selectedPaths ?? [])
+
+    const handleMouseMove = (moveE: MouseEvent) => {
+      const dx = moveE.clientX - startClientX
+      const dy = moveE.clientY - startClientY
+
+      if (!isDragging && (Math.abs(dx) > RUBBER_BAND_THRESHOLD || Math.abs(dy) > RUBBER_BAND_THRESHOLD)) {
+        isDragging = true
+      }
+      if (!isDragging) return
+
+      // 阻止默认文字选择行为
+      moveE.preventDefault()
+
+      const rect = container.getBoundingClientRect()
+      const x1 = startClientX - rect.left
+      const y1 = startClientY - rect.top
+      const x2 = moveE.clientX - rect.left
+      const y2 = moveE.clientY - rect.top
+
+      setRubberBand({ x1, y1, x2, y2 })
+
+      // 计算与橡皮筋矩形相交的树节点(用视口坐标)
+      const rbLeft = Math.min(moveE.clientX, startClientX)
+      const rbRight = Math.max(moveE.clientX, startClientX)
+      const rbTop = Math.min(moveE.clientY, startClientY)
+      const rbBottom = Math.max(moveE.clientY, startClientY)
+
+      const intersected: string[] = []
+      container.querySelectorAll('.ant-tree-treenode').forEach((el) => {
+        const content = el.querySelector('[data-key]')
+        const path = content?.getAttribute('data-key')
+        if (!path) return
+        const elRect = el.getBoundingClientRect()
+        if (elRect.left < rbRight && elRect.right > rbLeft && elRect.top < rbBottom && elRect.bottom > rbTop) {
+          intersected.push(path)
+        }
+      })
+
+      const isAdditive = moveE.ctrlKey || moveE.metaKey
+      const next = isAdditive
+        ? new Set([...preSelection, ...intersected])
+        : new Set(intersected)
+      onMultiSelectChange(next)
+    }
+
+    const handleMouseUp = () => {
+      document.removeEventListener('mousemove', handleMouseMove)
+      document.removeEventListener('mouseup', handleMouseUp)
+      if (isDragging) {
+        // 框选结束后抑制 click 事件,防止误触发单选
+        suppressNextClickRef.current = true
+        setTimeout(() => { suppressNextClickRef.current = false }, 0)
+      }
+      setRubberBand(null)
+    }
+
+    document.addEventListener('mousemove', handleMouseMove)
+    document.addEventListener('mouseup', handleMouseUp)
+  }, [multiSelectMode, onMultiSelectChange, selectedPaths])
+
   if (nodes.length === 0) {
     return (
       <div style={{ padding: token.paddingSM, color: token.colorTextDisabled, fontSize: token.fontSizeSM }}>
@@ -109,7 +249,7 @@ export default function WorkspaceExplorerTree({
 
   const titleRender = (dataNode: TreeDataNode) => {
     const node = (dataNode as TreeDataNode & { dataRef: WorkspaceExplorerNode }).dataRef
-    const isMultiSelect = multiSelectMode && !!onToggleSelectedPath
+    const isMultiSelect = multiSelectMode && !!onMultiSelectChange
     const isSelected = isMultiSelect && !!selectedPaths?.has(node.path)
     const target: WorkspaceExplorerContextTarget = {
       workspaceRoot,
@@ -145,15 +285,36 @@ export default function WorkspaceExplorerTree({
         isMultiSelect={isMultiSelect}
         isSelected={isSelected}
         metaMode={metaMode}
+        suppressNextClickRef={suppressNextClickRef}
         onToggleDirectory={onToggleDirectory}
         onOpenFile={onOpenFile}
-        onToggleSelectedPath={onToggleSelectedPath}
+        onMultiSelectClick={handleMultiSelectClick}
       />
     )
   }
 
+  // 橡皮筋矩形渲染参数
+  const rbRect = rubberBand ? {
+    left: Math.min(rubberBand.x1, rubberBand.x2),
+    top: Math.min(rubberBand.y1, rubberBand.y2),
+    width: Math.abs(rubberBand.x2 - rubberBand.x1),
+    height: Math.abs(rubberBand.y2 - rubberBand.y1),
+  } : null
+
   return (
-    <div ref={containerRef} style={{ padding: `0 ${token.paddingXXS}px` }}>
+    <div
+      ref={containerRef}
+      style={{ padding: `0 ${token.paddingXXS}px`, position: 'relative' }}
+      onMouseDown={handleContainerMouseDown}
+      onClickCapture={(e) => {
+        // 框选结束后抑制 click 事件,防止误触发单选
+        if (suppressNextClickRef.current) {
+          e.stopPropagation()
+          e.preventDefault()
+          suppressNextClickRef.current = false
+        }
+      }}
+    >
       <Tree.DirectoryTree
         ref={treeRef as never}
         treeData={treeData}
@@ -212,6 +373,22 @@ export default function WorkspaceExplorerTree({
         }}
         style={{ fontSize: token.fontSizeSM }}
       />
+      {rbRect && (
+        <div
+          style={{
+            position: 'absolute',
+            left: rbRect.left,
+            top: rbRect.top,
+            width: rbRect.width,
+            height: rbRect.height,
+            background: 'color-mix(in srgb, var(--accent-blue) 10%, transparent)',
+            border: '1px solid color-mix(in srgb, var(--accent-blue) 35%, transparent)',
+            borderRadius: 2,
+            pointerEvents: 'none',
+            zIndex: 1,
+          }}
+        />
+      )}
     </div>
   )
 }
@@ -238,9 +415,10 @@ function TreeNodeRow({
   isMultiSelect,
   isSelected,
   metaMode,
+  suppressNextClickRef,
   onToggleDirectory,
   onOpenFile,
-  onToggleSelectedPath,
+  onMultiSelectClick,
 }: {
   node: WorkspaceExplorerNode
   target: WorkspaceExplorerContextTarget
@@ -253,9 +431,12 @@ function TreeNodeRow({
   isMultiSelect: boolean
   isSelected: boolean
   metaMode?: 'size' | 'modified' | 'none'
+  /** 框选结束后抑制下一次 click 的共享 ref。 */
+  suppressNextClickRef?: React.MutableRefObject<boolean>
   onToggleDirectory: (path: string) => void
   onOpenFile: (target: WorkspaceExplorerOpenTarget) => void
-  onToggleSelectedPath?: (path: string) => void
+  /** 多选模式下的节点点击处理(Ctrl/Shift/普通)。 */
+  onMultiSelectClick?: (path: string, e: React.MouseEvent) => void
 }) {
   const { token } = useToken()
   const isDirectory = node.type === 'directory'
@@ -357,13 +538,23 @@ function TreeNodeRow({
         WebkitUserSelect: isMobile ? 'none' : 'text',
         // iOS Safari:长按不再弹系统「拷贝/全选」呼出菜单。
         WebkitTouchCallout: isMobile ? 'none' : undefined,
+        // 多选模式选中项:VSCode 风格高亮背景(与单选 .ant-tree-treenode-selected 同款 var(--bg-active))
         ...(isSelected ? {
-          background: 'color-mix(in srgb, var(--accent-blue-dim) 55%, transparent)',
+          background: 'var(--bg-active)',
           borderRadius: 'var(--radius-sm)',
         } : null),
       }}
-      onClick={() => {
+      onClick={(e) => {
         if (wasLongPressed()) return
+        if (suppressNextClickRef?.current) {
+          suppressNextClickRef.current = false
+          return
+        }
+        if (isMultiSelect && onMultiSelectClick) {
+          e.stopPropagation()
+          onMultiSelectClick(node.path, e)
+          return
+        }
         // 不阻止冒泡:让 antd 的 onSelect 正常触发(单击选中高亮)。
         // 目录展开/收起改由双击(onDoubleClick)或点击箭头(onExpand)触发。
       }}
@@ -389,18 +580,6 @@ function TreeNodeRow({
       onPointerLeave={longPressHandlers.onPointerLeave}
       onContextMenu={handleContextMenu}
     >
-      {isMultiSelect ? (
-        <span
-          style={{ flexShrink: 0, display: 'inline-flex', alignItems: 'center' }}
-          onClick={(event) => event.stopPropagation()}
-        >
-          <Checkbox
-            checked={isSelected}
-            onChange={() => onToggleSelectedPath?.(node.path)}
-            aria-label={`选择 ${node.name}`}
-          />
-        </span>
-      ) : null}
       {/* 名称前置类型图标:文件行按扩展名渲染语言徽章(未知退化为中性文件轮廓),
           目录行用极简描边文件夹,与 switcher 箭头列错开一级缩进。 */}
       <span style={{ flexShrink: 0, display: 'inline-flex', alignItems: 'center' }}>
