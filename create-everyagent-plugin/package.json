@@ -26,7 +26,8 @@
     "vendor"
   ],
   "scripts": {
-    "check": "node --check index.mjs && node --check lib/args.mjs && node --check lib/errors.mjs && node --check lib/naming.mjs && node --check lib/prompts.mjs && node --check lib/render.mjs && node --check lib/tree.mjs && node --check lib/validate.mjs && node --check lib/zip.mjs"
+    "check": "node --check index.mjs && node --check lib/args.mjs && node --check lib/errors.mjs && node --check lib/naming.mjs && node --check lib/prompts.mjs && node --check lib/render.mjs && node --check lib/tree.mjs && node --check lib/validate.mjs && node --check lib/zip.mjs",
+    "test": "node --test"
   },
   "dependencies": {},
   "repository": {

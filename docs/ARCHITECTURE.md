@@ -1272,7 +1272,7 @@ public interface AgentFactory {
 - **扩展点贡献变更须可订阅(否则插件 UI 入口不上屏)** — 插件在 `activate()` 里经 `ctx.ui.register*` 注册贡献,而 `activate` 由 `plugin.webSource` RPC 异步驱动,几乎必然晚于宿主首屏渲染。因此扩展点注册表(`ExtensionRegistry`)除 `register`/`getAll` 外必须提供 `subscribe(listener)`(注册与 dispose 均通知),`PluginDispatcher` 汇总为全局 `subscribeExtensionsChanged` + `getExtensionsVersion`(自增计数,作稳定快照;返回新数组会让 `useSyncExternalStore` 判为快照不一致而无限重渲染)。宿主侧边栏(活动栏图标/面板列表/选中态/合法面板 ID 校验)以 `useSyncExternalStore` 消费该版本,使 git/扩展管理等插件图标注册即显示——不在 React 里订阅而只在渲染期读 `listRegistered*()` 快照,图标会一直缺失,直到别处 `setState` 触发重渲染才"顺带"出现。
 - **侧边栏入口排序 `order`(float,统一坐标系)** — `ui.sidebar_items` 的 `UiSidebarItemDefinition.order` 是活动栏唯一的排序依据:内置项与插件贡献合并后按 `order` **升序混排**(float,同值按贡献先后稳定排列),不再隐含"内置在前、插件在后"的注册顺序假设。内置项占 `tasks=1 / files=2 / search=3 / settings=10`,中间空位留给插件插队(git=5、扩展管理=9);未声明 `order` 的贡献按 `DEFAULT_SIDEBAR_ORDER=100` 兜底,即排在所有已声明项之后。排序发生在 `Layout.tsx` 的 `buildSidebarActivityItems()`(活动栏图标与移动端底部栏共用同一条目序列),面板槽位显隐不受顺序影响,故无需同步排序。
 - **扩展点 `ui.tool_call_views`** — 按工具名**整体接管工具调用视图**(折叠态 + 展开态):插件注册 `ToolCallViewDefinition{pluginId, toolName, Component}`,`Component` 与核心内置视图同契约(`ToolViewProps`,聚合后的 `details` 数组)。解析优先级:插件注册的视图 > 内置 `toolViews/` 目录注册表 > `DefaultToolView`。插件视图完全自治(折叠行、展开头部、参数/结果/错误块均由插件渲染),但只能用 plugin-api 类型 + ctx 能力,不引宿主组件。内置 `update-file-view` 插件以此接管 `update_file`:折叠态显示文件名与变更统计徽章,展开态内嵌 oldcontent→content 行级 diff。
-- **插件开发指南与脚手架** — 动手开发全流程见插件指南 `docs/plugin-guide/index.md`(快速上手 / plugin.json 字段 / 后端与前端扩展点手册 / 构建分发 / 排查,19 篇);新插件工程用脚手架生成:`create-everyagent-plugin/`,命令 `node create-everyagent-plugin <id>`(java/web/full 模板 + `.eap` 打包),不必手搓模板。
+- **插件开发指南与脚手架** — 动手开发全流程见插件指南 `docs/plugin-guide/index.md`(快速上手 / plugin.json 字段 / 后端与前端扩展点手册 / 构建分发 / 排查,19 篇);新插件工程用脚手架生成:`create-everyagent-plugin/`,命令 `node create-everyagent-plugin --id <id>`(java/web/full 模板 + `.eap` 打包),不必手搓模板。
 
 ---
 
@@ -1374,7 +1374,7 @@ worker                         hub                    前端(可能 0 个在线)
 ├── every-agent-plugin-api/        # 插件 API 契约:ExecContext(统一执行上下文) / EventEmitter / EmitEvent / ChatModelEnhancer / ModelConfig / TaskLifecycleNode 等接口(纯类型,插件与 worker 共用)
 ├── every-agent-plugin-parent/     # 插件 SDK parent(仅 pom):Java 25 / 编码 / 插件依赖版本管理 / plugin.json 打包 / 测试栈,内置与外部插件共用
 ├── every-agent-plugins/           # 内置插件:model-rate-limit(限流) / token-estimator(token 估算与校准) / task-queue(队列) / subagent / git / ai-review / empty-response-retry(空响应重试) / transient-error-retry(瞬时错误重试) / context-compression(上下文压缩) / ...
-├── create-everyagent-plugin/      # 插件工程脚手架 CLI(node create-everyagent-plugin <id>,java/web/full 模板 + .eap 打包)
+├── create-everyagent-plugin/      # 插件工程脚手架 CLI(node create-everyagent-plugin --id <id>,java/web/full 模板 + .eap 打包)
 ├── every-agent-desktop/           # Electron 桌面打包
 ├── runtime/                       # 程序附属文件(核心 rg 二进制;插件附属资源由各插件 runtime/ 子目录并入)
 ├── docs/ARCHITECTURE.md           # 本文档(唯一架构事实源)
@@ -1398,7 +1398,7 @@ mvn test                        # contract + hub + worker(worker 含真实 hub �
 cd every-agent-web && npm run typecheck
 
 # 新建插件工程(脚手架;插件开发指南 docs/plugin-guide/index.md)
-node create-everyagent-plugin <id>
+node create-everyagent-plugin --id <id>
 ```
 
 docker-compose 一键:`HUB_KEY=你的密钥 docker-compose up --build`;数据落在 named volume。

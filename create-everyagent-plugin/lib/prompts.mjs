@@ -7,6 +7,9 @@
  *   - 回车取缺省值；无缺省值时重新提问（id 无缺省）；
  *   - kind / mode 只接受给定枚举（也接受 1/2/3 速选）；
  *   - Ctrl+C（readline 'SIGINT'）→ CanceledError，退出码 130。
+ *
+ * 另有落点确认 confirmPlacement：builtin 形态的目标目录不在 every-agent-plugins/ 下时补问一句
+ * （由 index.mjs 在落点自检不通过时调用，见 lib/validate.mjs 的 checkBuiltinPlacement）。
  */
 
 import * as readline from 'node:readline/promises'
@@ -172,6 +175,54 @@ export async function promptSpec(spec, { io = process } = {}) {
 }
 
 /**
+ * builtin 落点自检的交互确认（见 lib/validate.mjs 的 checkBuiltinPlacement）：
+ * 目标目录不在 every-agent-plugins/ 下时当场问清，回车 / y / yes → 改用仓库内默认位置；
+ * n / no → 返回 false（调用方按「用户明确拒绝」处理，退出码 130，不写任何文件）；
+ * Ctrl+C → CanceledError（退出码 130）。
+ *
+ * @param {object} input
+ * @param {object} [input.io] 读写流（默认 process）
+ * @param {string} input.target 当前目标目录
+ * @param {string} input.suggested 仓库内默认位置 <仓库根>/every-agent-plugins/<id>/
+ * @param {string} input.id 插件 id
+ * @returns {Promise<boolean>}
+ */
+export async function confirmPlacement({ io = process, target, suggested, id }) {
+  const rl = readline.createInterface({ input: io.stdin, output: io.stdout })
+  const state = { canceled: false }
+  let rejectCancel
+  const cancelPromise = new Promise((_, reject) => {
+    rejectCancel = reject
+  })
+  rl.on('SIGINT', () => {
+    state.canceled = true
+    rl.close()
+    rejectCancel(new CanceledError('已取消（Ctrl+C），未写入任何文件'))
+  })
+
+  try {
+    io.stdout.write('落点自检：builtin 工程必须放在仓库的 every-agent-plugins/ 下（否则生成的 pom 构建必失败）。\n')
+    io.stdout.write(`  当前目标目录   ${target}\n`)
+    io.stdout.write(`  仓库内默认位置 ${suggested}\n`)
+    let answer
+    try {
+      answer = await Promise.race([
+        rl.question(`改用仓库内默认位置并继续吗（插件 id ${id}）？[Y/n] > `),
+        cancelPromise,
+      ])
+    } catch (err) {
+      if (err instanceof CanceledError) throw err
+      throw new ValidationError(`读取输入失败：${err.message}`)
+    }
+    if (state.canceled) throw new CanceledError('已取消（Ctrl+C），未写入任何文件')
+    const text = normalizeAnswer(answer)
+    return text === '' || /^y(es)?$/i.test(text)
+  } finally {
+    rl.close()
+  }
+}
+
+/**
  * 非交互路径：全部取缺省值，必填项缺失直接报错。
  * @param {object} spec
  * @returns {object}
@@ -183,8 +234,8 @@ export function fillDefaults(spec) {
   if (!next.id) {
     throw new ValidationError('非交互模式（--yes 或 stdin 非 TTY）必须提供插件 id', {
       hints: [
-        '位置参数即目录名会被当作 id 缺省值：node create-everyagent-plugin my-tool --kind java --yes',
-        '或显式给出：--id my-tool',
+        '最小调用：node create-everyagent-plugin --id my-tool --kind java --yes',
+        '也可以给位置参数当「输出目录」，其目录名会当作 id 的缺省值（builtin 形态请把目录写在 every-agent-plugins/ 下）',
       ],
     })
   }

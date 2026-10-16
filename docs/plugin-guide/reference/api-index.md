@@ -250,7 +250,7 @@ has_children: false
 
 ### 4.1 插件 id 规则
 
-`^[a-z0-9][a-z0-9-]{1,38}$` 且首尾不能是连字符（2~39 字符；脚手架校验 `create-everyagent-plugin/index.mjs:52`），29 个内置全部合规。id 的三重身份（目录名 / `.eap` 顶层目录 / localStorage 前缀）：[清单 §4](../plugin-manifest.md#4-id-的三重身份最容易踩坑处)。
+`^[a-z0-9][a-z0-9-]{1,38}$` 且首尾不能是连字符（2~39 字符；脚手架校验 `create-everyagent-plugin/index.mjs:57`），29 个内置全部合规。id 的三重身份（目录名 / `.eap` 顶层目录 / localStorage 前缀）：[清单 §4](../plugin-manifest.md#4-id-的三重身份最容易踩坑处)。
 
 ### 4.2 包名 / 入口类推导（脚手架约定）
 
