@@ -209,6 +209,21 @@ templates/
 
 pom 只有 **一份**（`java/pom.xml.tpl`，java 与 full 共用基础层），内置/外部两种形态的差异只是父坐标的写法，由生成器按 mode 填 `{{pluginParentVersion}}` / `{{pluginParentRelativePath}}`；npm 的两套（web-standalone / full-standalone）仍是**逐字节拷贝**关系，改一处要同步另一处。
 
+### vendor 类型副本：单点源与同步（勿手工复制）
+
+`vendor/@everyagent/plugin-api/index.d.ts.raw` 是宿主真源码 `every-agent-plugin-api/js/index.ts` 的**逐字节镜像**
+（`.raw` = 渲染时不做占位符替换）。它由脚本维护，不要手工复制：
+
+```powershell
+# 在宿主仓库根执行
+powershell -ExecutionPolicy Bypass -File scripts\sync-plugin-api-copy.ps1 -DryRun   # 预览
+powershell -ExecutionPolicy Bypass -File scripts\sync-plugin-api-copy.ps1           # 同步（幂等）
+```
+
+- 与 `scripts/sync-plugin-template-versions.ps1` 的分工：那个管**版本字面量**（Java / Spring Boot / Spring AI / revision），本脚本管**类型副本的逐字节内容**；两个脚本各自在文件头声明「对方的事不归自己管」。
+- 漂移守卫：`test/plugin-api-copy.test.mjs`（`node --test`）断言两份副本与单点源逐字节一致，落后即失败并打印上述修复命令。**这个坑踩过两次**（`known-issues.md` #23 与 `openPluginTab` 更名），故立测试钉住。
+- 新增 standalone 模板副本时，需同步登记到该测试的 `COPIES` 清单与该脚本的 `$targetRels`。
+
 ## `.eap` 打包（`pack` 子命令）
 
 ```powershell

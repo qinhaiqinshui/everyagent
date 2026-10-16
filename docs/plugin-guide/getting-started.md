@@ -272,7 +272,14 @@ npm.cmd run build                # 即 node scripts/build.mjs，产物 web/index
 三点说明：
 
 - **`tsc --noEmit` 开箱全绿**是修复后的状态：早期模板的 tsconfig 缺 react 类型映射会报错（计划步骤 9 发现的 P1），现已把 `react` / `react-dom` / `react/jsx-runtime` 的 paths 指向 `package.json` 预置的 `@types/react(-dom)`（web-standalone 与 full-standalone 两份模板同步修复），`npm install` 后零配置通过。被 PowerShell 拦截时用 `npx.cmd`。
-- **vendor 类型副本的升级方式**：`@everyagent/plugin-api` 未发布 npm，副本逐字节复制自宿主 `every-agent-plugin-api/js/index.ts`；宿主 API 升级后，重新把该文件复制覆盖 `vendor/@everyagent/plugin-api/index.d.ts` 即可。
+- **vendor 类型副本的升级方式**：`@everyagent/plugin-api` 未发布 npm，副本逐字节复制自宿主 `every-agent-plugin-api/js/index.ts`；宿主 API 升级后，在宿主仓库根跑一键同步脚本即可（别手工复制，副本漂移不报错，只会让 standalone 插件「少一个方法」）：
+
+  ```powershell
+  powershell -ExecutionPolicy Bypass -File scripts\sync-plugin-api-copy.ps1 -DryRun   # 先预览
+  powershell -ExecutionPolicy Bypass -File scripts\sync-plugin-api-copy.ps1           # 实际同步
+  ```
+
+  两份 standalone 模板副本（web-standalone / full-standalone）由该脚本一并覆盖；漂移由守卫测试 `create-everyagent-plugin/test/plugin-api-copy.test.mjs` 钉住（在该目录 `node --test`，副本落后即失败并打印修复命令）。
 - **standalone 插件不会被内置扫描发现**（在仓库外），分发安装走 [打包与安装](guides/packaging-and-install.md)：`node <宿主仓库根>\create-everyagent-plugin pack .` 打出 `<id>-<version>.eap`，或手工把产物放进 worker 机器的 `~/.everyagent/plugins/<id>/`（jar 在 `lib/`、bundle 在 `web/index.js`、`plugin.json` 在顶层），重启 worker 生效。java × standalone 的 Maven 部分见 §5（同样需要先 `mvn -pl every-agent-plugin-parent,every-agent-plugin-api -am install -DskipTests` 装好本地依赖）。
 
 ## 7. 改点什么先试试（三个最小实验）
