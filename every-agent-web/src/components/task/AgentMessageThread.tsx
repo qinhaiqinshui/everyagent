@@ -1,11 +1,9 @@
 import React from 'react'
 import type { AgentMessageRecord, ChatComposerToken } from '@/types'
-import { splitComposerRawContent } from '@/composerToken/composerOpaqueToken'
-import { buildWorkspaceFileTabTarget, readWorkspaceFileToken } from '@/composerToken/workspaceFileToken'
+import { splitComposerRawContent, parseOpaqueTokenText } from '@/composerToken/composerOpaqueToken'
 import { getComposerChipView } from '@/composerToken/composerChipRenderer'
 import { openSlashItemDetail } from '@/components/taskComposer/SlashItemDetailPopover'
 import { pluginDispatcher } from '@/plugin/PluginDispatcher'
-import { useWorkspaceShell } from '@/components/app/WorkspaceShellContext'
 import { taskStore } from '@/task/taskStore'
 import { workspaceRegistry } from '@/hub/workspaceRegistry'
 import {
@@ -266,26 +264,35 @@ function UserMessageReplay({
   /** 当前 Task ID（点击 workspace_file 胶囊打开文件标签页时反查任务工作区根）。 */
   taskId?: string
 }) {
-  const { openGlobalFileTab } = useWorkspaceShell()
   if (segments.length === 0) {
     return null
   }
 
   /**
-   * 胶囊激活（点击/Enter/空格）：`system.workspace_file` → 打开文件标签页预览
-   * （对接 buildWorkspaceFileTabTarget 现有语义）；其它 kind（含 external_file）保持弹详情。
+   * 胶囊激活（点击/Enter/空格）：按 kind 查胶囊激活扩展点（ui.composer_chip_actions）。
+   * 命中即回调注册方行为（核心 `system.workspace_file` 亦经此扩展点注册 → 打开文件标签页）；
+   * 未命中保持现状（弹只读详情层）。
    */
   const handleChipActivate = (el: HTMLElement, token: ChatComposerToken) => {
-    const payload = readWorkspaceFileToken(token)
-    if (payload) {
-      // 工作区根：任务自身工作区优先，缺省回退注册表首选根（与 `@` 列举兜底口径一致）。
-      const workspaceRoot = (taskId ? taskStore.get(taskId)?.workspace : undefined) || workspaceRegistry.primaryRoot() || ''
-      if (workspaceRoot) {
-        const target = buildWorkspaceFileTabTarget(payload)
-        openGlobalFileTab({ workspaceRoot, filePath: target.filePath })
-        return
-      }
+    const action = pluginDispatcher.findComposerChipAction(token.kind)
+    if (action) {
+      action.onActivate({
+        token: {
+          kind: token.kind,
+          label: token.label,
+          summary: token.summary,
+          opaqueText: token.opaqueText,
+          payload: parseOpaqueTokenText(token.opaqueText)?.payload ?? {},
+        },
+        anchor: el,
+        source: 'replay',
+        // 消费侧解析工作区根：任务工作区优先、注册表首选兜底（与迁移前同口径）。
+        workspaceRoot: (taskId ? taskStore.get(taskId)?.workspace : undefined) || workspaceRegistry.primaryRoot() || '',
+        taskId,
+      })
+      return
     }
+    // 未命中 → 保持现状：弹只读详情层。
     openSlashItemDetail(el, { token })
   }
 

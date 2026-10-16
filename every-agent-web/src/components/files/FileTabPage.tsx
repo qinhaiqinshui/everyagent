@@ -14,7 +14,7 @@ import { fileTabQueryService } from '@/query/fileTabQueryService'
 import { clearFileTabDirtyState, setFileTabDirtyState } from '@/services/fileDirtyStateRegistry'
 import { fileTabCommandService } from '@/services/fileTabCommandService'
 import { workspaceGateway, type WorkspaceFileStat } from '@/platform/fs/workspaceGateway'
-import { normalizeWorkspaceRelativePath } from '@/platform/fs/pathUtils'
+import { normalizeWorkspaceRelativePath, toBusinessAbsolutePath } from '@/platform/fs/pathUtils'
 import PropertiesDialog, { type PropertyItem } from '../shared/PropertiesDialog'
 import {
   countPlainTextChars,
@@ -25,6 +25,9 @@ import {
   joinWorkspaceDiskPath,
 } from './filePropertyUtils'
 import { pluginDispatcher } from '@/plugin/PluginDispatcher'
+import { MenuList, type MenuListItem } from '@/components/shared/ui/Menu'
+import { readEditorSelection } from './editorSelection'
+import type { EditorActionContext, UiEditorContextMenuActionDefinition } from '@everyagent/plugin-api'
 import type { UiFileSidebarPanelDefinition } from '@/plugin/types'
 import type { FileTabOpenMode } from '@/types'
 import type { FileContentHeaderAction, FileTabResource } from './file-tab-types'
@@ -92,6 +95,13 @@ export default function FileTabPage({
   const canEditContent = Boolean(file && openMode === 'readwrite' && !isReadonlyEditor)
   const canRenameFile = Boolean(file && openMode === 'readwrite' && !isReadonlyEditor)
   const editorContainerRef = React.useRef<HTMLDivElement | null>(null)
+
+  /** 编辑器内容区右键菜单浮层状态（null = 关闭）。菜单项在每次右键时点同步构建。 */
+  const [editorContextMenu, setEditorContextMenu] = React.useState<{
+    items: MenuListItem[]
+    anchorPoint: { x: number; y: number }
+    anchor: HTMLElement
+  } | null>(null)
 
   // 从编辑器容器 DOM 查找 CodeMirror EditorView 实例。
   const getCmView = React.useCallback(() => {
@@ -389,6 +399,54 @@ export default function FileTabPage({
     setGlobalFileTabMode(file.id, 'readwrite')
   }, [file, isReadonlyEditor, openMode, setGlobalFileTabMode])
 
+  /**
+   * 编辑器内容区右键处理器：仅当「选中内容非空 且 过滤后至少有一项可见」时
+   * 接管（preventDefault 并弹宿主统一菜单），否则完全放行浏览器原生右键菜单（零回归）。
+   */
+  const handleEditorContextMenu = React.useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+    if (!file) return
+    const anchor = editorContainerRef.current
+    if (!anchor) return
+    // 事件时点同步读取：插件 activate() 晚于首屏，不能提前缓存快照。
+    const actions = pluginDispatcher.listRegisteredEditorContextMenuActions()
+
+    const ctx: EditorActionContext = {
+      workspaceRoot: file.workspaceRoot,
+      // filePath 原样回传（它是标签身份的一部分，归一化会导致回切标签取不到同一标签）。
+      filePath: file.filePath,
+      relativePath: normalizeWorkspaceRelativePath(file.filePath),
+      fullPath: toBusinessAbsolutePath(file.filePath),
+      fileName: file.fileName,
+      mode: openMode,
+      editorKind: selectedEditorDescriptor.kind,
+      content: openMode === 'readwrite' ? draftContent : content,
+      selection: readEditorSelection(anchor),
+      anchor,
+    }
+
+    // 选中内容为空 → 放行原生菜单。
+    if (ctx.selection.text.length === 0) return
+
+    const visibleActions = actions.filter((action) => {
+      if (!action.isVisible) return true
+      try {
+        return action.isVisible(ctx)
+      } catch (isVisibleError) {
+        console.warn('[plugin] editor context menu isVisible failed', action.id, isVisibleError)
+        return false
+      }
+    })
+    // 过滤后无可见项 → 放行原生菜单。
+    if (visibleActions.length === 0) return
+
+    event.preventDefault()
+    setEditorContextMenu({
+      items: buildEditorContextMenuItems(visibleActions, ctx),
+      anchorPoint: { x: event.clientX, y: event.clientY },
+      anchor,
+    })
+  }, [content, draftContent, file, openMode, selectedEditorDescriptor])
+
   const mobileMoreActionItems = React.useMemo<MoreActionItem[]>(() => {
     if (!isMobile) return []
 
@@ -618,7 +676,7 @@ export default function FileTabPage({
               ) : error ? (
                 <div style={emptyViewStyle}>{error}</div>
               ) : (
-                <div ref={editorContainerRef} style={editorScopeStyle}>
+                <div ref={editorContainerRef} style={editorScopeStyle} onContextMenu={handleEditorContextMenu}>
                   <selectedEditorDescriptor.Component
                     file={file}
                     mode={openMode}
@@ -654,6 +712,15 @@ export default function FileTabPage({
         items={file ? buildFileTabPropertyItems(file, fileStat, openMode === "readwrite" ? draftContent : content) : []}
         onClose={() => setPropertiesOpen(false)}
       />
+      {editorContextMenu ? (
+        <MenuList
+          items={editorContextMenu.items}
+          anchor={editorContextMenu.anchor}
+          anchorPoint={editorContextMenu.anchorPoint}
+          anchorPointMode="top-start"
+          onClose={() => setEditorContextMenu(null)}
+        />
+      ) : null}
     </>
   )
 }
@@ -777,6 +844,53 @@ function buildHeaderMoreActionItems(actions: FileContentHeaderAction[]): MoreAct
     onSelect: action.onClick,
     disabled: action.disabled,
   }))
+}
+
+/**
+ * 把插件注册的编辑器右键动作构建成 `MenuList` 菜单项。
+ *
+ * - 排序：`order ?? 100` float 升序；ES2019 起 `Array.prototype.sort` 稳定，同值保持注册先后。
+ * - 顶层项 key = `plugin:${action.id}`；同 `group` 项收进以组名为标题的子菜单
+ *   （子菜单 key = `plugin:group:${group}`，同一 group 只出现一次）。
+ * - 保持 order 序列：按排序后的列表遍历，未分组项直接成为顶层项；某 group **首次出现时
+ *   在此处插入**该子菜单（其成员按 order 顺序，因为遍历本身有序），后续同组项并入该子菜单。
+ */
+function buildEditorContextMenuItems(
+  actions: UiEditorContextMenuActionDefinition[],
+  ctx: EditorActionContext,
+): MenuListItem[] {
+  const ordered = [...actions].sort((a, b) => (a.order ?? 100) - (b.order ?? 100))
+
+  const toMenuItem = (action: UiEditorContextMenuActionDefinition): MenuListItem => ({
+    key: `plugin:${action.id}`,
+    label: action.label,
+    icon: action.icon,
+    onSelect: () => {
+      try {
+        action.invoke(ctx)
+      } catch (invokeError) {
+        console.warn('[plugin] editor context menu action failed', action.id, invokeError)
+      }
+    },
+  })
+
+  const items: MenuListItem[] = []
+  const groupItemByKey = new Map<string, MenuListItem>()
+  for (const action of ordered) {
+    if (!action.group) {
+      items.push(toMenuItem(action))
+      continue
+    }
+    const groupKey = `plugin:group:${action.group}`
+    let groupItem = groupItemByKey.get(groupKey)
+    if (!groupItem) {
+      groupItem = { key: groupKey, label: action.group, children: [] }
+      groupItemByKey.set(groupKey, groupItem)
+      items.push(groupItem)
+    }
+    groupItem.children!.push(toMenuItem(action))
+  }
+  return items
 }
 
 const emptyViewStyle: React.CSSProperties = {

@@ -72,7 +72,7 @@ $r = WslExec "command -v python3 && python3 --version"
 Check "python3" ($r[0] -eq 0) ($r[1].Trim() -replace "`n", " ")
 $r = WslExec "command -v bwrap && bwrap --version"
 Check "bubblewrap" ($r[0] -eq 0) ($r[1].Trim())
-Check "rg(建议)" ((WslExec "command -v rg")[0] -eq 0) "模型内容搜索依赖"
+Check "rg(建议)" ((WslExec "command -v rg")[0] -eq 0) "内容搜索常用,模型自行取用"
 Check "git(建议)" ((WslExec "command -v git")[0] -eq 0) ""
 
 # ---- 5. user namespace(bwrap 的地基)----

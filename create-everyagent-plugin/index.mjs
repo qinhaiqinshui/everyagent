@@ -3,8 +3,8 @@
  * create-everyagent-plugin —— Every Agent 插件工程脚手架 CLI 入口。
  *
  * 零运行时依赖（只用 node:* 内置模块），约束见 README「零依赖硬约束」节。
- * 职责很窄：解析参数 → 交互补齐 → 校验/推导命名 → 解析模板层并渲染 → 落盘或 dry-run 打印
- *          → 输出「下一步」命令块。渲染逻辑在 lib/render.mjs（模板契约也写在它顶部注释）；
+ * 职责很窄：解析参数 → 交互补齐 → 校验/推导命名 → 定位输出目录（含 builtin 落点自检）→ 解析模板层并渲染
+ *          → 落盘或 dry-run 打印 → 输出「下一步」命令块。渲染逻辑在 lib/render.mjs（模板契约也写在它顶部注释）；
  *          pack 子命令（.eap 打包，零依赖 zip）在 lib/zip.mjs，自带独立 flag 集（-o/--verify）。
  *
  * 退出码：0 成功 / 1 用法错误 / 2 参数校验失败 / 3 目标目录冲突 / 4 写盘失败 / 5 模板错误 / 130 用户取消
@@ -15,19 +15,21 @@ import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from './lib/args.mjs'
-import { CanceledError, EXIT, UsageError, isCliError } from './lib/errors.mjs'
-import { DEFAULT_VERSION, deriveVars, pluginParentVars } from './lib/naming.mjs'
-import { fillDefaults, isInteractive, promptSpec } from './lib/prompts.mjs'
+import { CanceledError, EXIT, UsageError, ValidationError, isCliError } from './lib/errors.mjs'
+import { DEFAULT_AUTHOR, DEFAULT_VERSION, deriveVars, pluginParentVars } from './lib/naming.mjs'
+import { confirmPlacement, fillDefaults, isInteractive, promptSpec } from './lib/prompts.mjs'
 import { PACKAGE_DIR, planRender, writeFiles } from './lib/render.mjs'
 import { formatPlan } from './lib/tree.mjs'
 import {
   assertKind,
   assertMode,
   assertValidId,
+  checkBuiltinPlacement,
   checkTargetConflict,
   displayPath,
   resolveTarget,
   sanitizeText,
+  PLUGINS_DIR_NAME,
 } from './lib/validate.mjs'
 import { runPack } from './lib/zip.mjs'
 
@@ -40,13 +42,16 @@ const HELP = `create-everyagent-plugin —— Every Agent 插件工程脚手架
 用法:
   node create-everyagent-plugin [dir] [选项]
   node create-everyagent-plugin pack <pluginDir> [-o <输出目录>] [--verify]   # .eap 打包
-  npm create everyagent-plugin [dir] [选项]          # 发布到 npm 后等价
+  npm create everyagent-plugin -- [选项]              # 发布到 npm 后等价（-- 之后的参数原样转给脚手架）
 
 位置参数:
-  dir                        输出目录。给了就用它；缺省时按 mode 推导：
+  dir                        输出目录 —— 不是插件 id（给 id 请用 --id）。给了就用它；缺省时按 mode 推导：
                              builtin    → <仓库根>/every-agent-plugins/<id>/
                              standalone → ./<id>/
                            仓库根 = 含 every-agent-plugins/ 的最近祖先目录（从 cwd 与包目录向上找）
+                           注意：builtin 形态的目标目录必须正好在 every-agent-plugins/ 下（内置扫描器只扫
+                           一级子目录，生成的 pom 又按 relativePath 指仓库内 SDK parent），落点不对直接
+                           报错（退出码 2）并打印正确命令；--dry-run 只警告不拦。
 
 选项:
   --id <id>                  插件 id：^[a-z0-9][a-z0-9-]{1,38}$ 且首尾不能是连字符（2~39 字符）
@@ -64,10 +69,10 @@ const HELP = `create-everyagent-plugin —— Every Agent 插件工程脚手架
   -v, --version              显示版本
 
 示例:
-  node create-everyagent-plugin my-tool --kind full --yes
+  node create-everyagent-plugin --id my-tool --kind full --yes
   node create-everyagent-plugin --id pdf-viewer --name "PDF 预览" --kind web
   node create-everyagent-plugin ../work/my-tool --kind java --mode standalone --dry-run
-  npm create everyagent-plugin my-tool
+  npm create everyagent-plugin -- --id my-tool           # 发布到 npm 后（-- 之后的参数原样转给脚手架）
   node create-everyagent-plugin pack every-agent-plugins/my-tool --verify    # 打 .eap 安装包
 
 模板目录契约见 lib/render.mjs 顶部注释；完整用法见 create-everyagent-plugin/README.md。
@@ -151,6 +156,34 @@ export function formatNextSteps({ spec, vars, relTarget, absTarget }) {
   return lines
 }
 
+/** flag 取值加引号（中文 / 空格在 PowerShell 下也安全）。 */
+function quoteFlag(value) {
+  return JSON.stringify(String(value))
+}
+
+/**
+ * 按当前 spec 拼一条「正确写法」命令（落点自检失败时打印，可直接复制重跑）。
+ * 形态：node create-everyagent-plugin --id <id> --kind <kind> --mode <mode> [自定义 name/desc/author] --yes
+ * @param {object} spec 归一化后的 spec（id/kind/mode 必有；name/desc/author 与缺省相同则省略）
+ * @returns {string}
+ */
+export function formatIdCommand(spec) {
+  const parts = [
+    'node create-everyagent-plugin',
+    '--id',
+    spec.id,
+    '--kind',
+    spec.kind,
+    '--mode',
+    spec.mode,
+  ]
+  if (spec.name && spec.name !== spec.id) parts.push('--name', quoteFlag(spec.name))
+  if (spec.desc && spec.desc !== `${spec.name} 插件`) parts.push('--desc', quoteFlag(spec.desc))
+  if (spec.author && spec.author !== DEFAULT_AUTHOR) parts.push('--author', quoteFlag(spec.author))
+  parts.push('--yes')
+  return parts.join(' ')
+}
+
 /**
  * 主流程。
  * @param {string[]} argv 已剥掉 node 与脚本路径
@@ -185,7 +218,7 @@ export async function main(argv = process.argv.slice(2), io = process) {
   const interactive = isInteractive(io) && !parsed.bools.yes
   if (!interactive && !parsed.bools.yes && !parsed.dirArg && parsed.values.id === undefined) {
     throw new UsageError('没有可交互的 stdin，也未给出任何参数', {
-      hints: ['用 --help 看用法；最小调用：node create-everyagent-plugin my-tool --kind java --yes'],
+      hints: ['用 --help 看用法；最小调用：node create-everyagent-plugin --id my-tool --kind java --yes'],
     })
   }
 
@@ -219,13 +252,53 @@ export async function main(argv = process.argv.slice(2), io = process) {
   const vars = deriveVars(spec)
 
   // 输出目录
-  const { target, repoRoot, auto } = resolveTarget({
+  let { target, repoRoot, auto } = resolveTarget({
     dirArg: parsed.dirArg,
     id: vars.pluginId,
     mode: spec.mode,
     cwd: process.cwd(),
     searchStarts: [process.cwd(), PACKAGE_DIR],
   })
+
+  // 落点自检（BUG-1 防呆）：builtin 工程落点错了「生成成功、mvn 必失败」，生成前先拦下来
+  const placement = checkBuiltinPlacement({
+    mode: spec.mode,
+    target,
+    id: vars.pluginId,
+    repoRoot,
+  })
+  if (!placement.ok) {
+    const hints = [...placement.hints]
+    if (placement.suggested) {
+      hints.unshift(`正确写法（按当前参数拼好，直接复制即可）：${formatIdCommand(spec)}`)
+    } else {
+      hints.unshift(
+        `正确写法：${formatIdCommand(spec)} —— 但它要求 cwd 在仓库内（builtin 形态要 <仓库根>/${PLUGINS_DIR_NAME}/）；` +
+          '在仓库外请改用 --mode standalone',
+      )
+    }
+    if (parsed.bools['dry-run']) {
+      // --dry-run 不落盘，降级为警告：预演与排查时仍能看到文件树
+      io.stderr.write(`警告：${placement.reason}\n`)
+      hints.forEach((line) => io.stderr.write(`  ${line}\n`))
+    } else if (interactive && placement.suggested) {
+      // 交互问答：当场问清是否改用仓库内默认位置（默认改用），避免答完 6 个问题才发现落点不对
+      const moved = await confirmPlacement({
+        io,
+        target,
+        suggested: placement.suggested,
+        id: vars.pluginId,
+      })
+      if (!moved) throw new CanceledError('已取消（未写入任何文件）', { hints })
+      target = placement.suggested
+      auto = true
+    } else {
+      throw new ValidationError(placement.reason, { hints })
+    }
+  } else if (placement.warn) {
+    io.stderr.write(`警告：${placement.warn}\n`)
+  }
+
   // 插件 SDK parent 变量：与 mode 相关（内置写 ${revision}，外部钉生成时的实际版本）
   Object.assign(
     vars,

@@ -50,7 +50,7 @@ node create-everyagent-plugin
 
 ### 2.1 交互式：逐项问答
 
-不带 `--yes` 且 stdin 是 TTY 时，按 id → kind → mode → name → desc → author 逐项问答。下面是与 CLI 的真实对话（提问文案逐字还原自 `create-everyagent-plugin/lib/prompts.mjs:99-164`；`>` 后是键入内容，行尾直接回车即取缺省）：
+不带 `--yes` 且 stdin 是 TTY 时，按 id → kind → mode → name → desc → author 逐项问答。下面是与 CLI 的真实对话（提问文案逐字还原自 `create-everyagent-plugin/lib/prompts.mjs:102-167`；`>` 后是键入内容，行尾直接回车即取缺省）：
 
 ```text
 插件 id
@@ -73,6 +73,7 @@ node create-everyagent-plugin
 交互细节：
 
 - 带目录参数启动（如 `node create-everyagent-plugin sample-web`）时，id 问题会显示缺省提示：`插件 id （回车取 "sample-web"）`，直接回车即可。
+- **落点自检**：builtin 形态下若目标目录不在 `every-agent-plugins/` 下（比如上面这条带目录参数、又选了 builtin），问答结束后会补问一句「改用仓库内默认位置 `<仓库根>/every-agent-plugins/<id>/` 吗？」——回车即改用并继续，回答 `n` 则退出码 130、不写任何文件。目录参数的准确语义见 §2.2 的「注意」。
 - kind / mode 也接受 `1/2/3` 速选（数字对应列表序号）；**flag 已给过的问题不再问**；无缺省值的 id 输错会重新提问并打印不合规原因。
 - `Ctrl+C` → 退出码 130，**不写任何文件**。
 - stdin 不是 TTY 且没有 `--yes` 时：能确定 id 就继续（全部取缺省），否则直接报错，不会挂起。
@@ -80,7 +81,7 @@ node create-everyagent-plugin
 
 ### 2.2 非交互：全 flag 一条命令
 
-CI / 脚本场景用 `--yes` 取全部缺省、其余项用 flag 给齐（README 示例原文形态：`node create-everyagent-plugin my-tool --kind full --yes`）：
+CI / 脚本场景用 `--yes` 取全部缺省、其余项用 flag 给齐（插件 id 一律走 `--id`，与 README 快速开始同形态）：
 
 ```powershell
 # 本篇主线：纯前端示例插件，builtin 形态自动落到 every-agent-plugins/sample-web/
@@ -89,11 +90,14 @@ node create-everyagent-plugin --id sample-web --kind web --yes
 # 全 flag 形态（name/desc/author 都自定义）
 node create-everyagent-plugin --id sample-web --name "示例插件" --desc "我的第一个 Every Agent 插件" --author everyagent --kind web --mode builtin --yes
 
-# 发布到 npm 后等价于（参数完全相同）
-npm create everyagent-plugin my-tool
+# 发布到 npm 后等价（npm 会把 -- 之后的参数原样转给脚手架）
+npm create everyagent-plugin -- --id sample-web --kind web --yes
 ```
 
-注意：给了位置参数 `[dir]` 就用该目录（目录名当作 id 缺省值）；**不给** `[dir]` 时才按 mode 推导缺省位置——builtin → `<仓库根>/every-agent-plugins/<id>/`，standalone → `./<id>/`。要让插件被 worker 内置扫描自动发现，请像上面第一条那样省略 `[dir]`，或显式写全 `every-agent-plugins/sample-web`。
+注意：位置参数 `[dir]` 是**输出目录**，不是插件 id（与 create-react-app / create-vite 的「位置参数 = 项目名」惯例相反）——给了就用它（目录名当作 id 的缺省值），**不给**时才按 mode 推导缺省位置：builtin → `<仓库根>/every-agent-plugins/<id>/`，standalone → `./<id>/`。由此两条口径：
+
+- **插件 id 用 `--id` 给**（本篇所有命令都这么写）；要指定输出目录才用位置参数（例：`node create-everyagent-plugin ..\work\my-tool --kind web --mode standalone`）。
+- builtin 形态的目标目录必须正好在 `every-agent-plugins/` 下：内置扫描只扫它的一级子目录，且生成的 pom 用 `relativePath ../../every-agent-plugin-parent/pom.xml` 指回仓库内的插件 SDK parent。落点不对时 CLI **拒绝生成**（退出码 2）并打印拼好的正确命令；`--dry-run` 下只警告不拦；交互问答里则补问一句是否改用仓库内默认位置。完整口径见 [`create-everyagent-plugin/README.md`](../../create-everyagent-plugin/README.md#位置参数)。
 
 ### 2.3 `--dry-run`：先预览不落盘
 
@@ -132,11 +136,11 @@ sample-web/
 |---|---|
 | 0 | 成功 |
 | 1 | 用法错误 |
-| 2 | 参数校验失败 |
+| 2 | 参数校验失败（含 builtin 落点不在 `every-agent-plugins/` 下） |
 | 3 | 目标目录冲突 |
 | 4 | 写盘失败 |
 | 5 | 模板错误 |
-| 130 | 用户取消（交互中 Ctrl+C） |
+| 130 | 用户取消（交互中 Ctrl+C / 落点确认回答 `n`） |
 
 ## 3. kind × mode：六种组合怎么选
 
@@ -249,7 +253,7 @@ jar tf every-agent-plugins\sample-java\target\sample-java-0.1.0.jar | findstr pl
 
 ## 6. standalone 形态：仓库外独立工程
 
-适用于插件不进 Every Agent 仓库的场景。在目标父目录执行（CLI 在宿主仓库里，用路径指过去；发布到 npm 后可用 `npm create everyagent-plugin my-tool`）：
+适用于插件不进 Every Agent 仓库的场景。在目标父目录执行（CLI 在宿主仓库里，用路径指过去；发布到 npm 后可用 `npm create everyagent-plugin -- --id my-tool --kind web --mode standalone`）：
 
 ```powershell
 # 在你自己的工作目录执行；缺省生成到 .\my-tool\

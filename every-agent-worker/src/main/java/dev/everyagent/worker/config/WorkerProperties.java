@@ -1079,8 +1079,8 @@ public class WorkerProperties implements WorkerConfig {
     public static class Sandbox implements WorkerConfig.Sandbox {
         /** 是否启用 OS 级沙箱;关闭则 exec 直接 spawn(仅超时/输出上限护栏)。 */
         private boolean enabled = true;
-        /** 单命令看门狗超时(ms);超时中止子进程。 */
-        private long timeoutMs = 1_800_000;
+        /** 单命令看门狗超时(ms);超时中止子进程。默认 5 分钟（1800s 对 AI agent 单条命令过长，用户体感无响应）。 */
+        private long timeoutMs = 300_000;
         /**
          * 作业对象内存上限(MB):
          * <ul>

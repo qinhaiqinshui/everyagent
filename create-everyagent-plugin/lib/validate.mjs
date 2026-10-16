@@ -1,18 +1,28 @@
 /**
  * lib/validate.mjs —— 输入字段校验、输出目录定位与冲突判定（不写盘）。
  *
- * 目录定位规则（README「输出目录」节同步）：
+ * 目录定位规则（README「位置参数」/「内置形态落点防呆」两节同步）：
  *   1. 显式给了位置参数 [dir] → 以 cwd 为基准 resolve，直接使用；
  *   2. mode=builtin 且未给 [dir] → <仓库根>/every-agent-plugins/<id>/
  *      仓库根 = 从 cwd 向上（再从 CLI 包目录向上）找到的第一个含 every-agent-plugins 子目录的祖先目录；
  *      找不到 → 报错，提示改用 --mode standalone 或显式给目录；
  *   3. mode=standalone 且未给 [dir] → ./<id>/（cwd 下一层）。
+ *
+ * 另有一道 builtin 落点自检（checkBuiltinPlacement）：「显式目录」也不是随便给 —— builtin 工程必须正好
+ * 落在某个 every-agent-plugins/ 的一级子目录里，否则生成的 pom 按 relativePath 找不到仓库内的插件 SDK
+ * parent，mvn 必失败。这是「位置参数被当成显式输出目录」这一坑的最后一道闸（BUG-1）。
  */
 
 import fs from 'node:fs'
 import path from 'path'
 import { ConflictError, ValidationError } from './errors.mjs'
-import { ID_MAX, ID_PATTERN_TEXT, validatePluginId } from './naming.mjs'
+import {
+  ID_MAX,
+  ID_PATTERN_TEXT,
+  PLUGIN_PARENT_ARTIFACT,
+  PLUGIN_PARENT_RELATIVE_PATH,
+  validatePluginId,
+} from './naming.mjs'
 
 /** 内置插件根目录名（同时也是「仓库根」的判据）。 */
 export const PLUGINS_DIR_NAME = 'every-agent-plugins'
@@ -149,6 +159,64 @@ export function resolveTarget({ dirArg, id, mode, cwd, searchStarts }) {
     return { target: path.join(repoRoot, PLUGINS_DIR_NAME, id), repoRoot, auto: true }
   }
   return { target: path.resolve(cwd, id), repoRoot, auto: true }
+}
+
+/** 目录名比较（Windows 下大小写不敏感；Linux/macOS 严格比较）。 */
+function sameDirName(a, b) {
+  return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b
+}
+
+/**
+ * builtin 形态落点自检（防呆）。
+ *
+ * 判据两条都来自宿主实现，不是偏好：
+ *   1. `BuiltInPluginScanner` 只扫 <仓库根>/every-agent-plugins/ 的**一级**子目录（深一层就不会被发现）；
+ *   2. 生成的 pom 用 relativePath `../../every-agent-plugin-parent/pom.xml` 指回仓库内的插件 SDK parent，
+ *      只有「正好落在某个 every-agent-plugins/<id>/」这个位置才解析得到。
+ * 落点错了的工程「生成成功、mvn 必失败」，所以生成前先拦下来（BUG-1）。
+ *
+ * 只对 mode=builtin 生效：standalone 工程自带 SDK parent 版本号、从本地仓库解析，落点自由。
+ *
+ * @param {object} input
+ * @param {string} input.mode builtin | standalone
+ * @param {string} input.target 绝对目标目录
+ * @param {string} input.id 插件 id（用于给出建议位置）
+ * @param {string|null} input.repoRoot 仓库根（findRepoRoot 结果，可为 null）
+ * @returns {{ok: boolean, target: string, suggested: string|null, reason?: string, hints?: string[], warn?: string}}
+ *   suggested —— 仓库内默认位置；ok=false 且非 null 时可交互确认「改用默认位置」。
+ *   warn —— 落点合法但同级找不到插件 SDK parent（照样会构建失败，只警告不拦）。
+ */
+export function checkBuiltinPlacement({ mode, target, id, repoRoot }) {
+  if (mode !== 'builtin') {
+    return { ok: true, target, suggested: null }
+  }
+  const suggested = repoRoot ? path.join(repoRoot, PLUGINS_DIR_NAME, id) : null
+  const pluginsDir = path.dirname(target)
+  if (!sameDirName(path.basename(pluginsDir), PLUGINS_DIR_NAME)) {
+    return {
+      ok: false,
+      target,
+      suggested,
+      reason: `mode=builtin 的工程必须生成在 ${PLUGINS_DIR_NAME}/ 下，当前目标是 ${target}`,
+      hints: [
+        `位置参数是「输出目录」而不是插件 id：插件 id 请用 --id 给，不给目录就由 CLI 按 mode 自动选址（builtin → <仓库根>/${PLUGINS_DIR_NAME}/<id>/）`,
+        `builtin 工程的 pom 用 relativePath ${PLUGIN_PARENT_RELATIVE_PATH} 指回仓库内的插件 SDK parent，落点不对 mvn 必失败`,
+        '要生成到仓库外请改用 --mode standalone（parent 版本钉生成时的实际值，改从本地仓库解析）',
+      ],
+    }
+  }
+  const parentPom = path.join(path.dirname(pluginsDir), PLUGIN_PARENT_ARTIFACT, 'pom.xml')
+  if (!fs.existsSync(parentPom)) {
+    return {
+      ok: true,
+      target,
+      suggested,
+      warn:
+        `同级没有 ${PLUGIN_PARENT_ARTIFACT}/pom.xml（找的是 ${parentPom}），` +
+        '生成的 pom 仍会因找不到插件 SDK parent 而构建失败',
+    }
+  }
+  return { ok: true, target, suggested }
 }
 
 /**

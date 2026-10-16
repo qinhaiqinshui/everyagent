@@ -13,7 +13,7 @@ has_children: false
 
 - 详解列全部为站内相对链接（`.md` + 小节锚点）；「§n」指目标文档小节。
 - ⚠️ = 写了不生效 / 全仓零使用的扩展点或字段（集中登记在 [known-issues](known-issues.md)，撰写中）。
-- 范例列的插件 id 均可在[内置插件范例索引 §2](builtin-plugins.md#2-总表28-个内置插件) 查到逐行解读；「想写 X 就抄 Y」反查见[同篇 §3](builtin-plugins.md#3-想写-x-就抄-y反查表)。
+- 范例列的插件 id 均可在[内置插件范例索引 §2](builtin-plugins.md#2-总表30-个内置插件) 查到逐行解读；「想写 X 就抄 Y」反查见[同篇 §3](builtin-plugins.md#3-想写-x-就抄-y反查表)。
 
 ## 1. 后端 API 索引
 
@@ -23,7 +23,7 @@ has_children: false
 
 | 方法 | 一句话 | 详解 | 范例 |
 |---|---|---|---|
-| `String id()` | 必须与 plugin.json 的 `id` 一致（仅 `[a-z0-9-]`） | [总览 §5](../backend/overview.md#5-everyagentplugin-契约与最小入口类) | 全部 28 个 |
+| `String id()` | 必须与 plugin.json 的 `id` 一致（仅 `[a-z0-9-]`） | [总览 §5](../backend/overview.md#5-everyagentplugin-契约与最小入口类) | 全部 30 个 |
 | `void activate(WorkerPluginContext ctx)` | 一切注册发生在此；抛异常只废自己一个插件 | 同上 | 同上 |
 | `default void deactivate()` | 停机钩子：worker 优雅关闭时由 PluginLoader 调用（运行期禁用/卸载不触发） | [总览 §3.2](../backend/overview.md#32-deactivate-只在-worker-关闭时调用改动--重启-worker) | — |
 
@@ -46,7 +46,7 @@ has_children: false
 | 11 | `void registerChatModelEnhancer(ChatModelEnhancer e)` | [advisors §3](../backend/advisors.md#3-chatmodelenhancer--模型构建期介入) | model-pool |
 | 12 | `void registerRpcMethod(String method, RpcMethod h)` | [任务 §3](../backend/task-and-rpc.md#3-registerrpcmethod--自注册-rpc) | git×13、task-input-queue×3、task-queue/file-change 各 1 |
 | 13 | `void registerSlashProvider(String id, SlashProvider p)` | [任务 §4.1](../backend/task-and-rpc.md#41-接口签名) | unattended、git、ai-review、sandbox-wsl-ubuntu |
-| 14 | `void registerSlashTokenResolver(SlashTokenResolver r)` | [任务 §4.1](../backend/task-and-rpc.md#41-接口签名) | 同上四家 |
+| 14 | `void registerSlashTokenResolver(SlashTokenResolver r)` | [任务 §4.1](../backend/task-and-rpc.md#41-接口签名) | 同上四家 + selection-reference（极简：仅解析器、无 SlashProvider） |
 | 15 | `void registerTaskAdmissionPolicy(TaskAdmissionPolicy p)`（`TaskPluginContext.java:17`） | [任务 §1](../backend/task-and-rpc.md#1-taskadmissionpolicy--任务创建准入预检) | task-queue（全仓唯一） |
 | 16 | `void registerTaskLifecycleNode(TaskLifecycleNode n)`（`TaskPluginContext.java:24`） | [任务 §2](../backend/task-and-rpc.md#2-tasklifecyclenode--洋葱模型) | 4 插件 5 节点（order 15/40/870/877/950） |
 
@@ -143,13 +143,13 @@ has_children: false
 | `ctx.sdk` | `PluginSdk` | RPC + 工作区快照 + workerId（§2.3） | [ctx §3](../web/context-api.md#3-ctxsdk--rpc-与工作区) |
 | `ctx.storage` | `PluginStorage`（§2.5） | localStorage，键前缀 `plugin:<id>:` | [ctx §4](../web/context-api.md#4-ctxstorage--本地键值存储) |
 | `ctx.commands` | `CommandRegistry`（§2.5） | 本插件私有命令表，不跨插件 | [ctx §5](../web/context-api.md#5-ctxcommands--命令注册表) |
-| `ctx.ui` | `UiRegistry`（§2.2） | 13 register + 5 动作 | [UI §1](../web/ui-extensions.md#1-十三个扩展点总览) |
+| `ctx.ui` | `UiRegistry`（§2.2） | 15 register + 6 动作 | [UI §1](../web/ui-extensions.md#1-十五个扩展点总览) |
 | `ctx.events` | `PluginEvents`（§2.4） | 宿主进程内事件总线的最薄委托 | [ctx §7](../web/context-api.md#7-ctxevents--领域事件总线) |
 | `ctx.fs` | `PluginFs`（§2.5） | `listDir`/`delete`，jail 到工作区根 | [ctx §6](../web/context-api.md#6-ctxfs--工作区文件系统网关) |
 
-### 2.2 `UiRegistry` —— 13 个 register + 5 个动作
+### 2.2 `UiRegistry` —— 15 个 register + 6 个动作
 
-两张总览：[加载链路 §4.1](../web/overview-and-loading.md#41-13-个-ctxuiregister全部返回真清理的-disposable)、[UI 扩展点 §1](../web/ui-extensions.md#1-十三个扩展点总览)。所有 register 返回 Disposable（`registerOutputBlock`/`registerTraceType` 两个假 dispose 例外，见 [UI §17](../web/ui-extensions.md#17-disposable-与刷新)）。
+两张总览：[加载链路 §4.1](../web/overview-and-loading.md#41-15-个-ctxuiregister全部返回真清理的-disposable)、[UI 扩展点 §1](../web/ui-extensions.md#1-十五个扩展点总览)。所有 register 返回 Disposable（`registerOutputBlock`/`registerTraceType` 两个假 dispose 例外，见 [UI §19](../web/ui-extensions.md#19-disposable-与刷新)）。
 
 | 扩展点 | 方法（一行签名） | 详解 | 范例 |
 |---|---|---|---|
@@ -166,16 +166,19 @@ has_children: false
 | `ui.file_explorer_actions` | `registerFileExplorerAction(action)` | [UI §13](../web/ui-extensions.md#13-uifile_explorer_actions--文件树右键菜单) | git「显示 Git 历史」（追加到内置右键菜单尾部） |
 | `ui.round_tail_panels` | `registerRoundTailPanel(def)` | [UI §14](../web/ui-extensions.md#14-uiround_tail_panels--轮末展示区) | file-change |
 | `ui.search_types` | `registerSearchType(def)` | [UI §15](../web/ui-extensions.md#15-uisearch_types--搜索类型注册) | ⚠️ 无内置范例（内置三类型不走此扩展点） |
+| `ui.editor_context_menu_actions` | `registerEditorContextMenuAction(def)` | [UI §16](../web/ui-extensions.md#16-uieditor_context_menu_actions--编辑器内容区右键菜单) | selection-reference（编辑器选区右键「引用到AI对话框」） |
+| `ui.composer_chip_actions` | `registerComposerChipAction(def)` | [UI §17](../web/ui-extensions.md#17-uicomposer_chip_actions--胶囊激活行为) | selection-reference；核心 `system.workspace_file` 亦经此注册 |
 
-动作方法（不注册、只驱动宿主；桥未注入时静默降级）：详解全部在 [UI §16](../web/ui-extensions.md#16-uiregistry-动作方法5-个)。
+动作方法（不注册、只驱动宿主；桥未注入时静默降级）：详解全部在 [UI §18](../web/ui-extensions.md#18-uiregistry-动作方法6-个)。
 
 | 方法 | 一行签名 | 范例 |
 |---|---|---|
 | `openPluginTab` | `(type: string, data: Record<string,string>, title?: string) => void` | git |
-| `openFileTab` | `(workspaceRoot: string, filePath: string, opts?: { mode?: 'readwrite' \| 'readonly' }) => void` | update-file-view |
+| `openFileTab` | `(workspaceRoot: string, filePath: string, opts?: { mode?: 'readwrite' \| 'readonly'; lineNumber?: number }) => void` | update-file-view |
 | `openDiffTab` | `(input: PluginDiffTabInput) => void` | git |
 | `appendComposerText` | `(text: string) => void` | task-edit-resend |
 | `setComposerRawContent` | `(raw: string) => void` | task-edit-resend |
+| `appendComposerToken` | `(input: { kind: string; label: string; summary?: string; payload?: Record<string, unknown>; spaced?: boolean }) => void` | selection-reference |
 
 ### 2.3 `PluginSdk`
 
@@ -208,7 +211,7 @@ has_children: false
 | `sidebar-panel-shown` | ✅ 活 | `task-round-closed` | ✅ 活（历史回放会补发） |
 | `task-status-changed` | ✅ 活 | `plugins-loaded` | ✅ 活（#4 接线） |
 
-插件间通信无先例：28 个内置插件 events 调用 6 处全是 `on`、零 `emit`；约定事件名用 `<pluginId>:<verb>` 前缀（[事件 §6](../web/events.md#6-插件间通信模式)）。
+插件间通信无先例：30 个内置插件 events 调用 6 处全是 `on`、零 `emit`；约定事件名用 `<pluginId>:<verb>` 前缀（[事件 §6](../web/events.md#6-插件间通信模式)）。
 
 ### 2.5 `PluginStorage` / `PluginFs` / `CommandRegistry` / `Disposable`
 
@@ -217,7 +220,7 @@ has_children: false
 | `PluginStorage` | `get<T>(key: string, defaultValue?: T): T \| undefined`；`set(key, value)`；`delete(key)` | [ctx §4](../web/context-api.md#4-ctxstorage--本地键值存储) | 内置插件零调用（残留坑见同篇 §11） |
 | `PluginFs` | `listDir(workspaceRoot, dir): Promise<PluginFileStat[]>`；`delete(workspaceRoot, path): Promise<void>` | [ctx §6](../web/context-api.md#6-ctxfs--工作区文件系统网关) | git（唯一使用者） |
 | `CommandRegistry` | `registerCommand(id, handler): Disposable`；`executeCommand(id, ...args): Promise<unknown>` | [ctx §5](../web/context-api.md#5-ctxcommands--命令注册表) | 内置插件零调用 |
-| `Disposable` | `dispose(): void` | [UI §17](../web/ui-extensions.md#17-disposable-与刷新)、[ctx §9](../web/context-api.md#9-寿命与清理) | 刷新即全丢；跨刷新用 storage |
+| `Disposable` | `dispose(): void` | [UI §19](../web/ui-extensions.md#19-disposable-与刷新)、[ctx §9](../web/context-api.md#9-寿命与清理) | 刷新即全丢；跨刷新用 storage |
 
 ## 3. plugin.json 字段速查
 
@@ -250,7 +253,7 @@ has_children: false
 
 ### 4.1 插件 id 规则
 
-`^[a-z0-9][a-z0-9-]{1,38}$` 且首尾不能是连字符（2~39 字符；脚手架校验 `create-everyagent-plugin/index.mjs:52`），28 个内置全部合规。id 的三重身份（目录名 / `.eap` 顶层目录 / localStorage 前缀）：[清单 §4](../plugin-manifest.md#4-id-的三重身份最容易踩坑处)。
+`^[a-z0-9][a-z0-9-]{1,38}$` 且首尾不能是连字符（2~39 字符；脚手架校验 `create-everyagent-plugin/index.mjs:57`），30 个内置全部合规。id 的三重身份（目录名 / `.eap` 顶层目录 / localStorage 前缀）：[清单 §4](../plugin-manifest.md#4-id-的三重身份最容易踩坑处)。
 
 ### 4.2 包名 / 入口类推导（脚手架约定）
 

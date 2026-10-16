@@ -48,7 +48,7 @@ docker run --name "$CID" "$BASE" bash -euo pipefail -c '
     # 最小预装集(只装运行时本身需要的):
     #   python3       -- 必需:eagent-run.py(runner,ctypes seccomp/process_vm_readv/ioctl)
     #   util-linux    -- 必需:mount + findmnt(seccomp 前 drvfs 挂载工作区)
-    #   ripgrep       -- 单二进制 AI 搜索工具(~2MB 无依赖树);worker BashTool 描述依赖它
+    #   ripgrep       -- 单二进制 AI 搜索工具(~2MB 无依赖树);bash 工具描述不提 rg,发行版内容搜索常用,模型自行取用
     #   ca-certificates -- 很小(几百 KB)但保证 AI 首次联网装软件即可用;极致求小可删,
     #                       AI 需要时先 apt-get install ca-certificates
     # 不预装(AI 可按需装;worker 侧 git 走宿主 JGit,不依赖发行版内 git):

@@ -356,4 +356,4 @@ public interface AuthorizationHandler {
 
 - 任务生命周期节点（真正的 `[420,850]` 禁插段所在）与自注册 RPC：[task-and-rpc.md](task-and-rpc.md)
 - 工具与沙箱扩展点（ExecContext 槽位表、工具循环的另一半）：[tools-and-sandbox.md](tools-and-sandbox.md)
-- 26 个内置插件全景（谁注册了哪些 Advisor、order 多少）：[内置插件索引](../reference/builtin-plugins.md)
+- 30 个内置插件全景（谁注册了哪些 Advisor、order 多少）：[内置插件索引](../reference/builtin-plugins.md)

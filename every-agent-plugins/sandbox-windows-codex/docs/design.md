@@ -50,7 +50,7 @@ worker JVM(真实用户)                    setup helper JVM(管理员,UAC 一�
 | registered runtime(MSIX/AppX 包身份、别名、removal.ps1) | 暂缓 | 依赖 MSIX 打包渠道,Java 发行无此形态;只做 Legacy(分析文档 §5.6.3) |
 | windows-sandbox-service(SCM 常驻服务 + provisioning 管道 + 机器策略) | 暂缓 | 用"按需提权 helper"替代:`ShellExecuteExW("runas")` 一次 UAC + marker 缓存;refresh 走不提权路径 |
 | legacy(restricted-token)后端 | **不做** | 生态位与既有 `sandbox-windows-mic` 重叠(同为宿主内受限令牌);codex legacy 本身拒绝 deny-read/受限读/托管网络(§3),单独实现只剩"降权写"价值,且 mic 的 Medium IL 契约(§7.10)已覆盖零副作用场景。本插件 = codex elevated 专精 |
-| ConPTY | 暂缓 | 首期 pipe + stdio 桥;AI 命令为非交互一次性执行,worker 契约 stdin=NUL,无 TTY 需求(§7.10) |
+| ConPTY | 暂缓 | 首期 pipe + stdio 桥;AI 命令为非交互一次性执行,worker 契约 stdin 无输入可用且不可交互(§7.10),无 TTY 需求。注:**实现为「关闭的 stdin 管道」,不是 NUL**——NUL 虽是字符设备、读到立即 EOF,但会让 Windows CRT `_isatty()` 误判为终端,反破坏「不可交互」 |
 | 环境分块传输(`--launch-payload-env`,16KiB×16MiB) | 暂缓 | payload 经管道帧(SpawnRequest.env)传递而非命令行,天然绕开 32,767 字符限制 |
 | deny-read walker 对账 | 二期 | 首期 setup 时一次性刷静态 deny-read;对账解决的是用户手删 ACE 的漂移 |
 | deny-read 动态列表 | 首期固定为空 | 读隔离主力是"账户基线无权读真实用户目录";沙箱数据目录靠组 DENY ACE |
@@ -146,7 +146,7 @@ Maven 模块 `every-agent-plugins/sandbox-windows-codex`,包根 `dev.everyagent.
 | `CodexSandboxBackend` | mount=恒等映射 + 把根登记进 `CodexSandboxManager`(供 CommandExecutor 组 RootPolicy);onWorkspaceRemoved=no-op(ACL 持久、由 state 文件对账,不在此清理;过期根 preflight 幂等跳过) |
 | `RootPolicy` | 读根/写根/deny-write 计算:RW 根=工作区根+externalRoots+skills;deny-write=codexHome 与 USERPROFILE 敏感子集 |
 | `CodexCommandExecutor` | 执行入口:readiness→preflight 刷 ACL→组 SpawnRequest→RunnerClient 会话→聚合 stdout/stderr(每流上限)→格式化(对照 WslUbuntuCommandExecutor) |
-| `CodexBashToolProvider` | ToolProvider:appliesTo=`"codex".equals(ctx.sandbox().id())`;提供 `bash` 工具(描述同 wsl 形态:rg 优先、cwd=工作区根、stdin=NUL) |
+| `CodexBashToolProvider` | ToolProvider:appliesTo=`"codex".equals(ctx.sandbox().id())`;提供 `bash` 工具(描述同 wsl 形态:rg 优先、cwd=工作区根、stdin 无输入可用且不可交互——实现为关闭的 stdin 管道,非 NUL,见 §7.10) |
 
 ## 3. JNA 需补齐的 Win32 原语(已对照 jna-platform 5.16 实测)
 

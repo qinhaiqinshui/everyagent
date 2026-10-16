@@ -61,7 +61,7 @@ apt-get update -qq
 # MINIMAL baked set (only what the runtime itself needs):
 #   python3       -- REQUIRED: eagent-run.py runner (ctypes seccomp/process_vm_readv/ioctl), bash/sh cannot do this
 #   util-linux    -- REQUIRED: mount + findmnt (drvfs workspace mount before seccomp)
-#   ripgrep       -- single-binary AI search tool (~2MB, no dep tree); worker BashTool description expects it
+#   ripgrep       -- single-binary AI search tool (~2MB, no dep tree); bash tool description does NOT mention rg, model uses it at its own discretion
 #   ca-certificates -- small (~hundreds KB) but ensures AI can install software immediately (apt/curl https).
 #                      Remove only if you accept AI must run `apt-get install ca-certificates` first.
 # NOT included (AI can install on demand, worker git runs on host via JGit not in-distro git):

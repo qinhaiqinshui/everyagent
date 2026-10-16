@@ -819,7 +819,7 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
       openFileTab: (workspaceRoot, filePath, options) => {
         openGlobalFileTab(
           { workspaceRoot, filePath },
-          options?.mode ? { mode: options.mode as 'readwrite' | 'readonly' } : undefined,
+          { mode: options?.mode as 'readwrite' | 'readonly' | undefined, lineNumber: options?.lineNumber },
         )
       },
       openDiffTab: (input) => openDiffTab(input),

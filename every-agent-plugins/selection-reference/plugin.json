@@ -1,0 +1,10 @@
+{
+  "id": "selection-reference",
+  "name": "选区引用",
+  "version": "0.1.0",
+  "description": "文件选区右键引用到 AI 对话框（选区引用胶囊 + 提交解析）",
+  "author": "everyagent",
+  "main": "dev.everyagent.plugin.selectionReference.SelectionReferencePlugin",
+  "webMain": "web/index.ts",
+  "enabled": true
+}

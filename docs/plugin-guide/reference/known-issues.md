@@ -36,7 +36,7 @@ has_children: false
 - **现象（修复前）**：`registerOutputBlock` 的 dispose 只清**无人读**的 `outputBlocksMap`，真实消费方 `RichMessageContent.tsx` 走的 `outputBlockRegistry` **不清**；`registerTraceType` 返回的 disposable 只清主 registry，不清 `TaskThread.tsx` 消费的 `traceTypeRegistry` 侧路。
 - **影响（修复前）**：调了 dispose 之后 UI 仍可能继续用旧 handler 渲染，造成「以为注销了其实还在」的错觉。
 - **修复**：dispose 补齐侧路 unregister——`outputBlockRegistry` 新增 `unregister(tag)`、`traceTypeRegistry` 新增 `unregisterTraceType(kind)`，`PluginDispatcher` 两个注册方法的 Disposable 同时清理真实消费方；无人读的 `outputBlocksMap` 已删除。
-- **后续**：两个扩展点的 dispose 均可依赖；[UI 扩展点](../web/ui-extensions.md) §10/§11/§17 已按新口径更新。
+- **后续**：两个扩展点的 dispose 均可依赖；[UI 扩展点](../web/ui-extensions.md) §10/§11/§19 已按新口径更新。
 
 ### #4 24 个零 emit 死事件 + `task-deleted` 死订阅陷阱（✅ 已修复）
 

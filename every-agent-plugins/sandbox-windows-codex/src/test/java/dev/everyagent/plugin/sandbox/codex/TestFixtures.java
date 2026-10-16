@@ -28,7 +28,7 @@ final class TestFixtures {
      * 其余返回 null / 空集合）。
      */
     record FakeToolContext(String taskId, String agentId, Path workspaceRootPath,
-            SandboxBackend sandbox, WorkspaceManager workspaces, Path rgBinary)
+            SandboxBackend sandbox, WorkspaceManager workspaces)
             implements ToolContext {
 
         @Override
@@ -91,8 +91,8 @@ final class TestFixtures {
     record FakeBackend(String id) implements SandboxBackend {
     }
 
-    static ToolContext ctx(String sandboxId, Path workspaceRoot, Path rgBinary) {
+    static ToolContext ctx(String sandboxId, Path workspaceRoot) {
         return new FakeToolContext("t1", "main", workspaceRoot,
-                sandboxId == null ? null : new FakeBackend(sandboxId), null, rgBinary);
+                sandboxId == null ? null : new FakeBackend(sandboxId), null);
     }
 }

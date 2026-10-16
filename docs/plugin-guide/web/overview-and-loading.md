@@ -7,7 +7,7 @@ has_children: false
 
 # 前端插件总览与加载链路
 
-**一句话定位**：本文讲清「一个前端插件从 `web/index.ts` 源码到出现在屏幕上」的完整链路——esbuild 预编译 → `plugin.webSource` RPC 拉取 → bare import 改写 → blob URL 动态 `import()` → `activate(ctx)` 注册贡献 → 宿主订阅重渲染，并给出这条链上每一步的失败症状与六条硬约定。`ctx` 各成员的 API 细节见 [前端 ctx API](context-api.md)，13 个扩展点的字段表见 [UI 扩展点](ui-extensions.md)。
+**一句话定位**：本文讲清「一个前端插件从 `web/index.ts` 源码到出现在屏幕上」的完整链路——esbuild 预编译 → `plugin.webSource` RPC 拉取 → bare import 改写 → blob URL 动态 `import()` → `activate(ctx)` 注册贡献 → 宿主订阅重渲染，并给出这条链上每一步的失败症状与六条硬约定。`ctx` 各成员的 API 细节见 [前端 ctx API](context-api.md)，15 个扩展点的字段表见 [UI 扩展点](ui-extensions.md)。
 
 ## 1. 一图流：从 `web/index.ts` 到上屏
 
@@ -144,7 +144,7 @@ export default plugin
 ### 约定 4：禁 `@/` 宿主内部引用，UI 与图标自带
 
 - **为什么**：`@/` 是宿主 vite alias（`every-agent-web/src/*`），宿主模块不在插件 bundle 里、也不暴露任何全局；blob 模块里 `@/...` 必然解析失败。核实：全仓 `every-agent-plugins/**/*.ts(x)` 对 `from '@/` / `from "@/` 的引用**零命中**（rg 单双引号两种均零）——这不是软建议，是仓内既有事实。
-- **怎么做**：一切宿主能力经 `ctx`（`sdk`/`ui`/`events`/`fs`/`storage`/`commands`，逐成员见 [前端 ctx API](context-api.md)）；图标用 ReactNode 自带（emoji、SVG、`@ant-design/icons` 白名单组件均可）；需要宿主动作（开标签页、写输入框）用 `ctx.ui.openPluginTab` 等 5 个动作方法（§4）。
+- **怎么做**：一切宿主能力经 `ctx`（`sdk`/`ui`/`events`/`fs`/`storage`/`commands`，逐成员见 [前端 ctx API](context-api.md)）；图标用 ReactNode 自带（emoji、SVG、`@ant-design/icons` 白名单组件均可）；需要宿主动作（开标签页、写输入框）用 `ctx.ui.openPluginTab` 等 6 个动作方法（§4）。
 - **违反症状**：构建期 `Could not resolve "@/..."`，或产物里残留不可解析 import → 激活失败。
 
 ### 约定 5：产物手工构建、不入库，且不在 web dev/build 流水线里
@@ -161,9 +161,9 @@ export default plugin
 
 ## 4. 扩展点清单（导航枢纽）
 
-前端插件能注册/调用的一切。常量名定义在 `every-agent-web/src/plugin/PluginDispatcher.ts:33-44`，类型声明在 `every-agent-plugin-api/js/index.ts:607-634`；逐扩展点字段表与注册代码见 [UI 扩展点](ui-extensions.md)。
+前端插件能注册/调用的一切。常量名定义在 `every-agent-web/src/plugin/PluginDispatcher.ts:45-62`，类型声明在 `every-agent-plugin-api/js/index.ts:808-853`；逐扩展点字段表与注册代码见 [UI 扩展点](ui-extensions.md)。
 
-### 4.1 13 个 `ctx.ui.register*`（全部返回真清理的 Disposable）
+### 4.1 15 个 `ctx.ui.register*`（全部返回真清理的 Disposable）
 
 | 扩展点常量名 | register 方法 | 一句话 | 状态 |
 |---|---|---|---|
@@ -174,18 +174,20 @@ export default plugin
 | `ui.tool_call_views` | `registerToolCallView` | 按 `toolName` 整体接管工具调用折叠/展开视图 | 正常 |
 | `ui.user_message_actions` | `registerUserMessageAction` | 用户消息上的动作组件 | 正常 |
 | `task.submit_contributions` | `registerTaskRunSubmitContributionProvider` | task.run 提交时的元数据/按钮文案贡献 | 正常 |
-| `ui.trace_types` | `registerTraceType` | trace 记录渲染类型（侧路同步进 traceTypeRegistry，`PluginDispatcher.ts:267-272`） | 正常 |
-| `ui.output_blocks` | `registerOutputBlock` | 按 tag 渲染输出块（侧路 outputBlockRegistry，`:273-284`） | 正常 |
+| `ui.trace_types` | `registerTraceType` | trace 记录渲染类型（侧路同步进 traceTypeRegistry，`PluginDispatcher.ts:307-317`） | 正常 |
+| `ui.output_blocks` | `registerOutputBlock` | 按 tag 渲染输出块（侧路 outputBlockRegistry，`:318-326`） | 正常 |
 | `ui.file_content_editors` | `registerFileContentEditor` | 按扩展名注册文件编辑器（可覆盖内置） | 正常 |
 | `ui.file_explorer_actions` | `registerFileExplorerAction` | 文件树右键动作 | git「显示 Git 历史」（known-issues #1 修复前曾为死扩展点） |
 | `ui.round_tail_panels` | `registerRoundTailPanel` | 任务轮末展示区组件 | 正常 |
 | `ui.search_types` | `registerSearchType` | 注册搜索类型（id/label/kinds/filters/ResultView…） | 正常 |
+| `ui.editor_context_menu_actions` | `registerEditorContextMenuAction` | 编辑器内容区右键菜单项（仅在有选区且有可见项时接管，否则放行原生菜单） | 正常 |
+| `ui.composer_chip_actions` | `registerComposerChipAction` | 按 kind 接管输入框/消息回放胶囊点击（先注册者胜；核心 `system.workspace_file` 亦经此注册） | 正常 |
 
-注：`dispatch()` 的 switch 只列前述 11 个 `ui.*`/`task.*` 常量（`PluginDispatcher.ts:197-226`）；`ui.trace_types` / `ui.output_blocks` 走侧路注册表，不影响使用。
+注：`dispatch()` 的 switch 只列前述 13 个 `ui.*`/`task.*` 常量（`PluginDispatcher.ts:232-262`）；`ui.trace_types` / `ui.output_blocks` 走侧路注册表，不影响使用。
 
-### 4.2 `ctx.ui` 的 5 个动作方法（触发宿主动作，不注册东西）
+### 4.2 `ctx.ui` 的 6 个动作方法（触发宿主动作，不注册东西）
 
-`openPluginTab(type, data, title?)` / `openFileTab(workspaceRoot, filePath, {mode?})` / `openDiffTab(input)` / `appendComposerText(text)` / `setComposerRawContent(raw)`（`index.ts:622-630`）。实现经模块级 holder 桥接（`every-agent-web/src/plugin/pluginRuntimeBridge.ts`）：这些能力原本只挂在 React Context 上，插件是非 React 模块拿不到 hook 结果，故由宿主组件挂载时注入——`Layout.tsx:780`（`setShellBridge`，卸载清 null `:790`）、`TaskChat.tsx:721`（`setComposerBridge`）。**未注入时静默降级**（dispatcher 里全是 `getShellBridge()?.xxx` 可选链，`pluginRuntimeBridge.ts:1-10` 注释自证「零状态、零缓冲……未注入时静默降级」）；时序上安全，因为 `activate` 总在 RPC 往返之后才执行，宿主组件通常已挂载。
+`openPluginTab(type, data, title?)` / `openFileTab(workspaceRoot, filePath, {mode?, lineNumber?})` / `openDiffTab(input)` / `appendComposerText(text)` / `appendComposerToken({kind, label, summary?, payload?, spaced?})` / `setComposerRawContent(raw)`（`index.ts:834-852`）。实现经模块级 holder 桥接（`every-agent-web/src/plugin/pluginRuntimeBridge.ts`）：这些能力原本只挂在 React Context 上，插件是非 React 模块拿不到 hook 结果，故由宿主组件挂载时注入——`Layout.tsx:817`（`setShellBridge`，卸载清 null `:827`）、`TaskChat.tsx:712`（`setComposerBridge`）。**未注入时静默降级**（dispatcher 里全是 `getShellBridge()?.xxx` 可选链，`pluginRuntimeBridge.ts:1-10` 注释自证「零状态、零缓冲……未注入时静默降级」）；时序上安全，因为 `activate` 总在 RPC 往返之后才执行，宿主组件通常已挂载。
 
 ### 4.3 `ctx` 其余成员
 
@@ -233,7 +235,7 @@ export default plugin
 4. **`git/web/index.ts:2` 自称「纯 Web 插件」**，实际其 `plugin.json` 同时有 `main`（java+web 混合形态），注释失真。
 5. ~~**`plugins-loaded` 是死事件**~~：known-issues #4 修复后 `loadPlugins()` 每轮流程末尾 emit `{count}`——可订阅它感知本轮装载完成；仍要注意 fire-and-forget（晚激活的插件收不到早于自己的 emit）。
 6. ~~**两个「注册了也不显示」的死贡献**~~：`ui.file_explorer_actions`（文件树右键菜单）与 `UiSidebarItemDefinition.Badge`（活动栏角标组件）均已接线（known-issues #1/#2 修复）——git 的「显示 Git 历史」右键项与 `GitChangeBadge` 角标现均生效。
-7. **`register(pluginId, …)` 的 pluginId 形参被忽略**：接口带该参数（`ExtensionRegistry.ts:18,45`）但实现只 `items.push(item)`（`:46`），`PluginDispatcher` 13 个 register 一律传 `''`（如 `:242,245,248`）——注册项无法按插件归属过滤。
+7. **`register(pluginId, …)` 的 pluginId 形参被忽略**：接口带该参数（`ExtensionRegistry.ts:18,45`）但实现只 `items.push(item)`（`:46`），`PluginDispatcher` 15 个 register 一律传 `''`（如 `:242,245,248`）——注册项无法按插件归属过滤。
 8. **`build:plugins` 流水线口径**：web 侧 `dev`/`build` 确实不含它；但桌面 `build:assets` **会**经 `scripts/build-plugins.py` 间接调用（`every-agent-desktop/package.json:11,16` → `scripts/build-plugins.py:219`），与「不在任何流水线」的旧说法不符——本文以代码为准。
 
 ## 7. 验证：确认插件真的被加载
@@ -263,7 +265,7 @@ npm.cmd run typecheck
 ## 8. 下一步读
 
 - `ctx` 各成员（sdk/storage/commands/events/fs）的签名与坑：[前端 ctx API](context-api.md)
-- 13 个扩展点逐个字段表 + 注册代码：[UI 扩展点](ui-extensions.md)
+- 15 个扩展点逐个字段表 + 注册代码：[UI 扩展点](ui-extensions.md)
 - 21 个宿主事件与 8 个具名事件：[事件](events.md)
 - `webMain`/`hasWebMain`/禁用机制在清单侧的口径：[plugin.json 字段参考](../plugin-manifest.md)
 - 三形态构建矩阵与 cwd 陷阱：[构建与运行](../guides/build-and-run.md)

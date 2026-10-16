@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- ea: Maven 构建 —— 继承插件 SDK parent（dev.everyagent:every-agent-plugin-parent）。
+     内置与外部插件共用这一份模板：Java 版本 / 编码 / 依赖版本管理 / plugin.json 打包 / 测试栈
+     全部由 parent 提供，插件 pom 只声明「自己额外需要的依赖」。
+     下方 parent 块是本模板唯一的形态差异，由生成器填出：
+       内置形态 → parent 版本写 ${revision}（跟随工程版本，升级零改动），relativePath 指向仓库内；
+       外部形态 → parent 版本写生成时的实际版本（外部工程解析不了 ${revision}），relativePath 置空
+                  改从本地仓库解析（需先在宿主仓库根 mvn install 一次）。 -->
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>dev.everyagent</groupId>
+        <artifactId>every-agent-plugin-parent</artifactId>
+        <version>${revision}</version>
+        <relativePath>../../every-agent-plugin-parent/pom.xml</relativePath>
+    </parent>
+
+    <version>0.1.0</version>
+    <artifactId>selection-reference</artifactId>
+    <name>选区引用</name>
+    <description>文件选区右键引用到 AI 对话框（选区引用胶囊 + 提交解析）</description>
+
+    <dependencies>
+        <!-- 插件 API（编译期纯接口）。版本由 SDK parent 的 dependencyManagement 统一管理，
+             此处不写；也不要写 ${project.version} —— 本工程自身版本与工程版本不同号。 -->
+        <dependency>
+            <groupId>dev.everyagent</groupId>
+            <artifactId>every-agent-plugin-api</artifactId>
+        </dependency>
+        <!-- 插件测试栈（JUnit 5 等）由 SDK parent 的 <dependencies> 提供，无需声明。
+             红线 §14.9：插件不得依赖 every-agent-worker；需要额外依赖时在此追加。 -->
+    </dependencies>
+</project>

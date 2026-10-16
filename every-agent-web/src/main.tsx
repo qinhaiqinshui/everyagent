@@ -22,6 +22,7 @@ import { installGlobalErrorHandlers } from './utils/globalErrorHandler'
 import { GlobalErrorBoundary } from './components/shared/GlobalErrorBoundary'
 import { initializeTraceTypes } from './plugin/traceTypeRegistry'
 import { initializeCoreRoundTailPanels } from './plugin/coreRoundTailPanels'
+import { initializeCoreComposerChipActions } from './plugin/coreComposerChipActions'
 import { loadPlugins } from './plugin/pluginLoader'
 import { wireFsChanged } from './platform/fs/workspaceGateway'
 import { workspaceRegistry } from './hub/workspaceRegistry'
@@ -47,6 +48,9 @@ initializeTraceTypes()
 // 核心内置轮末面板(「复制本轮结果」按钮)注册进 ui.round_tail_panels 扩展点。
 // 必须在 loadPlugins() 之前同步完成:核心贡献先入册,恒排在插件面板之前(工具栏最左)。
 initializeCoreRoundTailPanels()
+// 核心内置胶囊激活行为(「@」文件引用胶囊点击 → 打开文件标签页)注册进 ui.composer_chip_actions。
+// 同样必须在 loadPlugins() 之前同步完成:查表规则是「先注册者胜」,核心先注册 ⇒ 核心 kind 恒优先。
+initializeCoreComposerChipActions()
 // 统一插件加载：plugin.list RPC 驱动发现，worker 不可达时静默降级。
 void loadPlugins()
 

@@ -18,9 +18,12 @@ import type {
   PluginDiffTabInput,
   PluginActiveTabInfo,
   SearchTypeDefinition,
+  UiEditorContextMenuActionDefinition,
+  ComposerChipActionDefinition,
 } from '@everyagent/plugin-api'
 import { getComposerBridge, getShellBridge } from './pluginRuntimeBridge'
 import { activeTabMirror } from './activeTabMirror'
+import { buildOpaqueTokenText } from '@/composerToken/composerOpaqueToken'
 import type {
   UiSidebarItemDefinition,
   UiWorkspaceTabTypeDefinition,
@@ -55,6 +58,8 @@ const EXT_UI_ROUND_TAIL_PANELS = 'ui.round_tail_panels'
 const EXT_UI_TRACE_TYPES = 'ui.trace_types'
 const EXT_UI_OUTPUT_BLOCKS = 'ui.output_blocks'
 const EXT_UI_SEARCH_TYPES = 'ui.search_types'
+const EXT_UI_EDITOR_CONTEXT_MENU_ACTIONS = 'ui.editor_context_menu_actions'
+const EXT_UI_COMPOSER_CHIP_ACTIONS = 'ui.composer_chip_actions'
 
 // ── 扩展点注册表管理 ──
 
@@ -176,17 +181,36 @@ export interface RealPluginDispatcher {
   registerSearchType: (def: SearchTypeDefinition) => Disposable
   /** 同步获取插件注册的搜索类型列表（供搜索类型注册表合并）。 */
   listRegisteredSearchTypes: () => SearchTypeDefinition[]
+  /** 注册编辑器内容区右键菜单动作（由 `ui.editor_context_menu_actions` 扩展点产出）。 */
+  registerEditorContextMenuAction: (def: UiEditorContextMenuActionDefinition) => Disposable
+  /** 同步获取插件注册的编辑器右键菜单动作列表（供宿主右键菜单每次构建时读取）。 */
+  listRegisteredEditorContextMenuActions: () => UiEditorContextMenuActionDefinition[]
+  /** 注册胶囊激活动作（由 `ui.composer_chip_actions` 扩展点产出）。 */
+  registerComposerChipAction: (def: ComposerChipActionDefinition) => Disposable
+  /** 按 kind 查胶囊激活动作（先注册者胜，无命中返回 null）。 */
+  findComposerChipAction: (kind: string) => ComposerChipActionDefinition | null
   /** 同步获取插件注册的输入框上方面板列表（供 TaskChat 渲染合并）。 */
   listRegisteredComposerAbovePanels: () => UiComposerAbovePanelDefinition[]
   /** 查询当前激活的工作区标签（读宿主壳层镜像；无激活标签返回 null）。 */
   getActiveTab: () => PluginActiveTabInfo | null
   /** 打开插件自定义标签（委托宿主 WorkspaceShellContext）。 */
   openPluginTab: (type: string, data: Record<string, string>, title?: string) => void  /** 打开顶层文件标签（委托宿主 WorkspaceShellContext）。 */
-  openFileTab: (workspaceRoot: string, filePath: string, options?: { mode?: string }) => void
+  openFileTab: (workspaceRoot: string, filePath: string, options?: { mode?: string; lineNumber?: number }) => void
   /** 打开顶层 diff 对比标签（委托宿主 WorkspaceShellContext）。 */
   openDiffTab: (input: PluginDiffTabInput) => void
   /** 向当前输入框草稿末尾追加纯文本（委托宿主 ComposerDraftBridge）。 */
   appendComposerText: (text: string) => void
+  /**
+   * 结构化插入一枚胶囊：宿主单点编码 opaque token 后追加进当前激活任务草稿
+   * （未绑定草稿时静默降级）。`kind`/`label` 为空时由 `buildOpaqueTokenText` 抛错。
+   */
+  appendComposerToken: (input: {
+    kind: string
+    label: string
+    summary?: string
+    payload?: Record<string, unknown>
+    spaced?: boolean
+  }) => void
   /** 用 rawContent（可能含 opaque token 串）替换整个草稿（编辑重发回填用）。 */
   setComposerRawContent: (rawContent: string) => void
 }
@@ -227,6 +251,10 @@ export const pluginDispatcher: RealPluginDispatcher = {
       case EXT_UI_ROUND_TAIL_PANELS:
         return getRegistry<T>(extensionPoint).getAll()
       case EXT_UI_SEARCH_TYPES:
+        return getRegistry<T>(extensionPoint).getAll()
+      case EXT_UI_EDITOR_CONTEXT_MENU_ACTIONS:
+        return getRegistry<T>(extensionPoint).getAll()
+      case EXT_UI_COMPOSER_CHIP_ACTIONS:
         return getRegistry<T>(extensionPoint).getAll()
       default:
         return []
@@ -329,6 +357,19 @@ export const pluginDispatcher: RealPluginDispatcher = {
   listRegisteredSearchTypes() {
     return getRegistry<SearchTypeDefinition>(EXT_UI_SEARCH_TYPES).getAll()
   },
+  registerEditorContextMenuAction(def) {
+    return getRegistry<UiEditorContextMenuActionDefinition>(EXT_UI_EDITOR_CONTEXT_MENU_ACTIONS).register('', def)
+  },
+  listRegisteredEditorContextMenuActions() {
+    return getRegistry<UiEditorContextMenuActionDefinition>(EXT_UI_EDITOR_CONTEXT_MENU_ACTIONS).getAll()
+  },
+  registerComposerChipAction(def) {
+    return getRegistry<ComposerChipActionDefinition>(EXT_UI_COMPOSER_CHIP_ACTIONS).register('', def)
+  },
+  findComposerChipAction(kind) {
+    // 先注册者胜：核心在首屏同步注册，故核心 kind 恒优先；插件不能顶替核心 kind。
+    return getRegistry<ComposerChipActionDefinition>(EXT_UI_COMPOSER_CHIP_ACTIONS).getAll().find((item) => item.kind === kind) ?? null
+  },
   getActiveTab() {
     return activeTabMirror.current
   },
@@ -343,6 +384,16 @@ export const pluginDispatcher: RealPluginDispatcher = {
   },
   appendComposerText(text) {
     getComposerBridge()?.appendText(text)
+  },
+  appendComposerToken(input) {
+    // opaque token 编码是宿主单点职责（同源 buildOpaqueTokenText）；kind/label 为空时由它抛错。
+    const opaqueText = buildOpaqueTokenText(input.kind, {
+      label: input.label,
+      summary: input.summary,
+      payload: input.payload ?? {},
+    })
+    const spaced = input.spaced ?? true
+    getComposerBridge()?.appendText(spaced ? ` ${opaqueText} ` : opaqueText)
   },
   setComposerRawContent(rawContent) {
     getComposerBridge()?.setRawContent(rawContent)

@@ -144,7 +144,7 @@ export interface PluginEvents {
 
 | 事件名 | 载荷（声明） | 等待方（订阅者） | 用法 |
 |---|---|---|---|
-| `workspace-open-file-requested` | `{filePath, workspaceRoot?, startNameEditing?, mode?, lineNumber?}` | `Layout.tsx:689`（打开文件标签） | 插件 emit 它驱动宿主打开文件标签（等效 `ctx.ui.openFileTab`，见 [UI 扩展点](ui-extensions.md) §16） |
+| `workspace-open-file-requested` | `{filePath, workspaceRoot?, startNameEditing?, mode?, lineNumber?}` | `Layout.tsx:689`（打开文件标签） | 插件 emit 它驱动宿主打开文件标签（等效 `ctx.ui.openFileTab`，见 [UI 扩展点](ui-extensions.md) §18） |
 | `workspace-close-file-requested` | `{filePath?, fileTabId?, force?}` | `Layout.tsx:706` | 插件关标签的请求通道 |
 | `workspace-reload-all-files-requested` | `{force?}` | `Layout.tsx:746`、`OpenFilesSidebarPanel.tsx:260` | 请求宿主重载全部文件标签 |
 | `runtime-config-error` | `{message}` | `Layout.tsx:686`（弹错误提示） | 插件 emit 会让宿主弹一条错误横幅（慎用） |
@@ -329,6 +329,6 @@ export default function MyPanel(): React.ReactElement {
 ## 8. 下一步读
 
 - 事件挂探针、typecheck 与构建自检的调试流程：[调试与测试](../guides/debugging-and-testing.md)
-- 用事件做面板懒刷新的另一半——13 个 UI 扩展点：[前端 UI 扩展点](ui-extensions.md)
+- 用事件做面板懒刷新的另一半——15 个 UI 扩展点：[前端 UI 扩展点](ui-extensions.md)
 - `ctx.events` 在 ctx 全家桶里的位置与 `storage`/`sdk` 细节：[前端 ctx API](context-api.md)
 - 事件名为什么必须「不含业务语义」（§7.15.2 轮末旁路数据约定）：[后端持久化与状态](../backend/persistence-and-state.md)

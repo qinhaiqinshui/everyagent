@@ -380,6 +380,36 @@ export interface UiComposerAbovePanelDefinition {
   Component: ComponentType<ComposerPanelCtx>
 }
 
+// ─── 胶囊激活扩展点（ui.composer_chip_actions） ────────────────────────────
+
+/** 胶囊视图（宿主解码 opaque token 后给出的只读视图）。 */
+export interface ComposerChipTokenView {
+  kind: string
+  label: string
+  summary?: string
+  opaqueText: string
+  payload: Record<string, unknown>   // 宿主解码后的 payload
+}
+
+/** 胶囊激活上下文（宿主在点击胶囊时构造）。 */
+export interface ComposerChipActivationContext {
+  token: ComposerChipTokenView
+  anchor: HTMLElement
+  source: 'composer' | 'replay'      // 输入框草稿 / 消息回放
+  workspaceRoot: string              // 消费侧解析好的工作区根（任务工作区优先、注册表首选兜底）
+  taskId?: string
+}
+
+/**
+ * 胶囊激活动作（由 `ui.composer_chip_actions` 扩展点产出）。
+ * 宿主按 `kind` 查注册表（先注册者胜）；命中即回调，未命中保持现状（弹只读详情层）。
+ */
+export interface ComposerChipActionDefinition {
+  kind: string
+  pluginId: string
+  onActivate: (ctx: ComposerChipActivationContext) => void
+}
+
 // ─── 轮末展示区（ui.round_tail_panels） ─────────────────────────────────
 
 /** 轮末展示区组件的 props（通用轮次上下文，不含任何文件变更专属字段）。 */
@@ -614,6 +644,47 @@ export interface FileExplorerAction {
   invoke?: (ctx: FileExplorerActionContext) => void
 }
 
+// ─── 编辑器右键菜单扩展点（ui.editor_context_menu_actions） ────────────────
+
+/** 编辑器选区快照（右键时点采集）。 */
+export interface EditorActionSelection {
+  text: string
+  startLine: number | null   // 1-based；无法确定（非 CodeMirror 等）为 null
+  endLine: number | null
+  charCount: number
+  lineCount: number
+}
+
+/** 编辑器内容区右键菜单上下文（随每次右键构建）。 */
+export interface EditorActionContext {
+  workspaceRoot: string
+  filePath: string        // 标签身份里的原样路径（插件回切标签时应原样回传，保证命中同一标签）
+  relativePath: string    // 归一化工作区相对路径（交给 AI 的引用口径）
+  fullPath: string        // 业务绝对路径（带前导 /）
+  fileName: string
+  mode: 'readonly' | 'readwrite'
+  editorKind: string      // 当前内容编辑器 kind（如 'universal'）
+  content: string         // 当前内容快照（编辑态 = 草稿）
+  selection: EditorActionSelection
+  anchor: HTMLElement     // 触发容器（供插件定位自己的浮层）
+}
+
+/**
+ * 编辑器右键菜单动作（由 `ui.editor_context_menu_actions` 扩展点产出）。
+ * 核心在构建右键菜单时收集所有注册项，按 `order` 升序、`isVisible` 过滤后渲染。
+ */
+export interface UiEditorContextMenuActionDefinition {
+  id: string
+  label: string
+  icon?: ReactNode
+  /** 同 group 的多项由宿主收进以组名为标题的子菜单；缺省平铺在顶层。 */
+  group?: string
+  /** float 升序；缺省 100，同值按注册先后。 */
+  order?: number
+  isVisible?: (ctx: EditorActionContext) => boolean
+  invoke: (ctx: EditorActionContext) => void
+}
+
 // ─── 搜索类型扩展点（ui.search_types） ─────────────────────────────────────
 
 /**
@@ -750,6 +821,10 @@ export interface UiRegistry {
   registerRoundTailPanel(def: UiRoundTailPanelDefinition): Disposable
   /** 注册搜索类型（由 `ui.search_types` 扩展点产出）。 */
   registerSearchType(def: SearchTypeDefinition): Disposable
+  /** 注册编辑器内容区右键菜单动作（由 `ui.editor_context_menu_actions` 扩展点产出）。 */
+  registerEditorContextMenuAction(def: UiEditorContextMenuActionDefinition): Disposable
+  /** 注册胶囊激活动作（由 `ui.composer_chip_actions` 扩展点产出）。 */
+  registerComposerChipAction(def: ComposerChipActionDefinition): Disposable
   /**
    * 查询当前激活的工作区标签（同步读宿主壳层镜像）；无激活标签时返回 null。
    * 变更通知请配 `workspace-tab-activated` / `workspace-tab-closed` 领域事件。
@@ -757,12 +832,24 @@ export interface UiRegistry {
   getActiveTab(): PluginActiveTabInfo | null
   /** 打开插件自定义标签（替代宿主 useWorkspaceShell().openPluginTab）。 */
   openPluginTab(type: string, data: Record<string, string>, title?: string): void
-  /** 打开顶层文件标签（替代宿主 useWorkspaceShell().openGlobalFileTab）。 */
-  openFileTab(workspaceRoot: string, filePath: string, options?: { mode?: string }): void
+  /** 打开顶层文件标签（替代宿主 useWorkspaceShell().openGlobalFileTab；可选行号定位）。 */
+  openFileTab(workspaceRoot: string, filePath: string, options?: { mode?: 'readwrite' | 'readonly'; lineNumber?: number }): void
   /** 打开顶层 diff 对比标签（替代宿主 useWorkspaceShell().openDiffTab）。 */
   openDiffTab(input: PluginDiffTabInput): void
   /** 向当前输入框草稿末尾追加纯文本（替代宿主 composerDraftBridge）。 */
   appendComposerText(text: string): void
+  /**
+   * 结构化插入一枚胶囊：宿主单点编码 opaque token 后追加进当前激活任务草稿
+   * （未绑定草稿时静默降级）。`kind`/`label` 为空时抛错。
+   */
+  appendComposerToken(input: {
+    kind: string
+    label: string
+    summary?: string
+    payload?: Record<string, unknown>
+    /** 追加前是否补空格分隔（默认 true）。 */
+    spaced?: boolean
+  }): void
   /** 用 rawContent（可能含 opaque token 串）替换整个草稿（编辑重发回填用）。 */
   setComposerRawContent(rawContent: string): void
 }

@@ -57,7 +57,7 @@ public final class CodexSandboxSession implements AutoCloseable {
             String workspaceCapSid,
             /** 网络身份："offline"/"online"（账户选择的镜像，透传 runner）。 */
             String networkIdentity,
-            /** 是否保持子进程 stdin 打开（worker 契约 stdin=NUL 时 false）。 */
+            /** 是否保持子进程 stdin 打开（worker 命令 stdin 契约 = 无输入可用且不可交互；codex 实现为「关闭的 stdin 管道」而非 NUL，理由见 ARCHITECTURE §7.10）。 */
             boolean stdinOpen,
             /** 私有桌面名（PrivateDesktop 接线后传入；当前恒 null）。 */
             String privateDesktopName) {

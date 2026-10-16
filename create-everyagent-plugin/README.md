@@ -9,12 +9,14 @@ Every Agent 插件工程脚手架 CLI —— create-react-app / create-vite 式�
 ## 快速开始
 
 ```powershell
-# 开发期主用法（仓库内，node 直跑）
-node create-everyagent-plugin my-tool --kind full --yes
+# 开发期主用法（仓库内 node 直跑）：插件 id 交给 --id，builtin 形态自动落到 every-agent-plugins/my-tool/
+node create-everyagent-plugin --id my-tool --kind full --yes
 
-# 发布到 npm 后等价于（bin 链接，参数完全相同）
-npm create everyagent-plugin my-tool
+# 发布到 npm 后等价（bin 链接；npm 会把 -- 之后的参数原样转给脚手架）
+npm create everyagent-plugin -- --id my-tool
 ```
+
+> **⚠ 位置参数是「输出目录」，不是插件 id**——它和 create-react-app / create-vite 的「位置参数 = 项目名」惯例相反。想按直觉写 `node create-everyagent-plugin my-tool --kind java --mode builtin --yes` 时，`my-tool` 会被当成**当前目录下的输出目录**，工程落到仓库根下 `./my-tool/`；builtin 形态为此有落点防呆（见下文「内置形态落点防呆」），这种情况直接拒绝生成、退出码 2，并打印拼好的正确命令。
 
 不带 flag 时进入交互问答（id → kind → mode → name → desc → author，逐项给缺省值）；`--yes` 全取缺省。生成结束后 CLI 打印「下一步」命令块：构建后端 jar（`mvn -f … package`）→ 构建前端 bundle（`npm run build:plugins` / `node scripts/build.mjs`）→ 重启 worker 生效 → `.eap` 打包。
 
@@ -29,7 +31,24 @@ node create-everyagent-plugin pack <pluginDir> [-o <输出目录>] [--verify]   
 
 | 参数 | 说明 |
 | --- | --- |
-| `dir` | 输出目录。给了就用它（目录名会当作 `--id` 的缺省值）；缺省时按 mode 推导：builtin → `<仓库根>/every-agent-plugins/<id>/`，standalone → `./<id>/`。仓库根 = 含 `every-agent-plugins/` 的最近祖先目录（从 cwd 与 CLI 包目录向上找） |
+| `dir` | 输出目录（**不是插件 id**）。给了就用它（目录名会当作 `--id` 的缺省值）；缺省时按 mode 推导：builtin → `<仓库根>/every-agent-plugins/<id>/`，standalone → `./<id>/`。仓库根 = 含 `every-agent-plugins/` 的最近祖先目录（从 cwd 与 CLI 包目录向上找） |
+
+> **⚠ 位置参数 = 输出目录，插件 id 走 `--id`。** 本 CLI 与 create-react-app / create-vite 的「位置参数 = 项目名」惯例相反：`node create-everyagent-plugin my-tool --kind java --mode builtin --yes` 里的 `my-tool` 是**当前目录下的输出目录**，不是插件 id。
+> 该写法在 builtin 形态下会生成到仓库根 `./my-tool/`，而它的 pom 指向仓库外的 `every-agent-plugin-parent`，`mvn` 必失败——所以 CLI 有**落点防呆**（见下一节），直接拒绝并打印正确命令。
+
+### 内置形态落点防呆（builtin 落点自检）
+
+`mode=builtin` 的工程必须正好落在 `<仓库根>/every-agent-plugins/<id>/`：内置扫描器只扫该目录的一级子目录，生成的 pom 又用 `relativePath ../../every-agent-plugin-parent/pom.xml` 指回仓库内的插件 SDK parent。落点错了工程「生成成功但 `mvn` 必失败」，所以 CLI 写盘前先自检：
+
+| 情况 | 行为 |
+| --- | --- |
+| 目标目录不是某个 `every-agent-plugins/` 的一级子目录 | 拒绝生成，**退出码 2**，stderr 打印拼好的正确命令（`--id` 形态）与 `--mode standalone` 替代方案，不写任何文件 |
+| 同上，但给了 `--dry-run` | 降级为**警告**（dry-run 本就不落盘），仍打印文件树，退出码 0 |
+| 同上，但处于交互问答 | 当场补问一句「改用仓库内默认位置 `<仓库根>/every-agent-plugins/<id>/` 吗？」，回车即改用并继续；回答 `n` → 退出码 130、不写任何文件 |
+| 落点合法，但同级没有 `every-agent-plugin-parent/pom.xml` | 放行并 stderr 一条警告（该位置的 pom 仍会因 parent 找不到而构建失败） |
+| `mode=standalone` | 不做落点限制（外部工程自带 SDK parent 版本号，改从本地仓库解析） |
+
+`--force` 管的是「目录已存在且非空」，与落点自检互不影响（两者都过才写盘）。
 
 ### 选项（flags）
 
@@ -55,11 +74,11 @@ node create-everyagent-plugin pack <pluginDir> [-o <输出目录>] [--verify]   
 | --- | --- |
 | 0 | 成功 |
 | 1 | 用法错误 |
-| 2 | 参数校验失败 |
+| 2 | 参数校验失败（非法 id、kind/mode 取值非法、字段含控制字符、builtin 落点不在 `every-agent-plugins/` 下） |
 | 3 | 目标目录冲突 |
 | 4 | 写盘失败 |
 | 5 | 模板错误 |
-| 130 | 用户取消（交互中 Ctrl+C） |
+| 130 | 用户取消（交互中 Ctrl+C / 落点确认回答 `n`） |
 
 ## 交互流程
 
@@ -71,6 +90,8 @@ stdin 是 TTY 且未给 `--yes` 时，按序逐项问答；**flag 已给过的�
 4. **插件显示名 name**（缺省 = id）；
 5. **插件描述 desc**（缺省 = `<name> 插件`）；
 6. **作者 author**（缺省 everyagent）。
+
+问答结束后、写盘之前还有一道**落点自检**（见「内置形态落点防呆」）：builtin 形态的目标目录不在 `every-agent-plugins/` 下时补问一句是否改用仓库内默认位置，回车即改用并继续。
 
 stdin 不是 TTY 且没有 `--yes` 时，若连 id 都无法确定则直接报错（不会挂起）；给了 `--yes` 则全部取缺省值。Ctrl+C → 退出码 130，不写任何文件。
 
@@ -254,6 +275,7 @@ zip 由 `node:zlib` 手写（零 npm 依赖）：local file header + central dir
 
 - 交互问答走 `node:readline/promises`；
 - zip（`.eap`）走 `node:zlib` 手写条目，不引 jszip / archiver；校验和旁文件走 `node:crypto` 的 sha256；
+- 单测走 `node:test` + `node:assert` 内置运行器（`npm test` → `node --test`），不引 vitest / jest；
 - 其余全部使用 `node:fs` / `node:path` / `node:process` / `node:url` 等内置模块。
 
 原因：目标环境可能离线，且部分 Windows 沙箱的 npm cache 有 EPERM 风险——脚手架本身绝不能因为装依赖而失败。
@@ -264,6 +286,11 @@ zip 由 `node:zlib` 手写（零 npm 依赖）：local file header + central dir
 # 语法检查（无依赖，无需 npm install）
 node --check index.mjs; node --check lib/render.mjs   # …或 npm.cmd run check 一次查全部
 
+# 单测（node:test 内置运行器，零依赖；临时仓库快照建在系统临时目录，可用 EA_TMP_BASE 改到别处）
+node --test          # 或 npm.cmd test
+#   test/args.test.mjs   参数解析矩阵（位置参数 × 子命令 × flag）
+#   test/cli.test.mjs    输出目录定位 / builtin 落点自检 / 端到端矩阵与交互确认
+
 # 用独立模板根调试（不必动包内 templates/）
 $env:EA_PLUGIN_TEMPLATES = "<你的模板根绝对路径>"
 node create-everyagent-plugin .\fx --id fx --kind full --mode standalone --dry-run
@@ -271,6 +298,10 @@ Remove-Item Env:EA_PLUGIN_TEMPLATES
 
 # 六组合树逐一可打印
 kind=java,web,full × mode=builtin,standalone → 各跑一次 --dry-run 对照「六组合产物清单」表
+
+# 落点防呆的两种形态（仓库根执行：前者警告不拦，后者拒绝且退出码 2）
+node create-everyagent-plugin my-tool --kind java --mode builtin --yes --dry-run
+node create-everyagent-plugin my-tool --kind java --mode builtin --yes
 ```
 
 `--dry-run` 不写盘，树里每个文件右侧有一句话作用（来自模板 `ea:` 标记或 `lib/tree.mjs` 内置表），覆盖关系标注「(覆盖 <来源模板>)」。
