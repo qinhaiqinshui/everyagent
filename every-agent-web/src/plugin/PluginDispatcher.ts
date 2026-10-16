@@ -21,7 +21,7 @@ import type {
   UiEditorContextMenuActionDefinition,
   ComposerChipActionDefinition,
 } from '@everyagent/plugin-api'
-import { getComposerBridge, getShellBridge } from './pluginRuntimeBridge'
+import { appendComposerTextQueued, getComposerBridge, getShellBridge } from './pluginRuntimeBridge'
 import { activeTabMirror } from './activeTabMirror'
 import { buildOpaqueTokenText } from '@/composerToken/composerOpaqueToken'
 import type {
@@ -193,22 +193,11 @@ export interface RealPluginDispatcher {
   listRegisteredComposerAbovePanels: () => UiComposerAbovePanelDefinition[]
   /** 查询当前激活的工作区标签（读宿主壳层镜像；无激活标签返回 null）。 */
   getActiveTab: () => PluginActiveTabInfo | null
-  /** 打开插件自定义标签（委托宿主 WorkspaceShellContext）。 */
-  openPluginTab: (type: string, data: Record<string, string>, title?: string) => void  /** 打开顶层文件标签（委托宿主 WorkspaceShellContext）。 */
+  /** 通用标签打开入口（内置/插件统一走宿主 WorkspaceShellContext）。 */
+  openPluginTab: (type: string, data?: Record<string, string>, title?: string) => void  /** 打开顶层文件标签（委托宿主 WorkspaceShellContext）。 */
   openFileTab: (workspaceRoot: string, filePath: string, options?: { mode?: string; lineNumber?: number }) => void
   /** 打开顶层 diff 对比标签（委托宿主 WorkspaceShellContext）。 */
   openDiffTab: (input: PluginDiffTabInput) => void
-  /** 打开草稿任务标签页（新建任务）；可选预设工作区与初始胶囊（委托宿主 ShellBridge）。 */
-  openDraftTaskTab: (options?: {
-    workspace?: string
-    composerToken?: {
-      kind: string
-      label: string
-      summary?: string
-      payload?: Record<string, unknown>
-      spaced?: boolean
-    }
-  }) => void
   /** 向当前输入框草稿末尾追加纯文本（委托宿主 ComposerDraftBridge）。 */
   appendComposerText: (text: string) => void
   /**
@@ -393,11 +382,8 @@ export const pluginDispatcher: RealPluginDispatcher = {
   openDiffTab(input) {
     getShellBridge()?.openDiffTab(input)
   },
-  openDraftTaskTab(options) {
-    getShellBridge()?.openDraftTaskTab(options)
-  },
   appendComposerText(text) {
-    getComposerBridge()?.appendText(text)
+    appendComposerTextQueued(text)
   },
   appendComposerToken(input) {
     // opaque token 编码是宿主单点职责（同源 buildOpaqueTokenText）；kind/label 为空时由它抛错。
@@ -407,7 +393,7 @@ export const pluginDispatcher: RealPluginDispatcher = {
       payload: input.payload ?? {},
     })
     const spaced = input.spaced ?? true
-    getComposerBridge()?.appendText(spaced ? ` ${opaqueText} ` : opaqueText)
+    appendComposerTextQueued(spaced ? ` ${opaqueText} ` : opaqueText)
   },
   setComposerRawContent(rawContent) {
     getComposerBridge()?.setRawContent(rawContent)

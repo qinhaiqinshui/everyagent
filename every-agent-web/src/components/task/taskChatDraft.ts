@@ -18,8 +18,6 @@ export const DRAFT_TASK_ID = '__draft__'
 export interface DraftPreset {
   /** 预设工作区根(空 = 未预设,走草稿默认回退)。 */
   workspace: string
-  /** 一次性初始草稿内容(由 openDraftTaskTab 注入,TaskChat 消费后清除)。 */
-  initialDraftContent?: string
 }
 
 const presetListeners = new Set<(preset: DraftPreset) => void>()

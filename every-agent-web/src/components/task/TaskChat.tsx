@@ -48,7 +48,7 @@ import { workspaceRegistry, type WorkspaceEntry } from '@/hub/workspaceRegistry'
 import { modelConfigs, type ModelConfigInfo } from '@/hub/modelConfigs'
 import { useHub } from '@/hub/HubProvider'
 import { hubSession } from '@/hub/session'
-import { DRAFT_TASK_ID, getDraftPreset, setDraftPreset, subscribeDraftPreset } from './taskChatDraft'
+import { DRAFT_TASK_ID, getDraftPreset, subscribeDraftPreset } from './taskChatDraft'
 import '@/components/task/chatPanel.css'
 
 /** 草稿任务 ID 再导出(定义见 ./taskChatDraft,常量消费方从那里导入)。 */
@@ -218,16 +218,10 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
     }
   }, [])
 
-  // 草稿初始化：若 DraftPreset 携带了 initialDraftContent（由 openDraftTaskTab 注入，
-  // 如选区引用插件「引用到AI对话框」），直接预置到草稿中，避免 composerBridge 异步注入的时序问题。
-  const [draft, setDraft] = React.useState<ChatComposerDraftState>(() => {
-    if (isDraft) {
-      const preset = getDraftPreset()
-      if (preset.initialDraftContent) {
-        return { text: preset.initialDraftContent, rawContent: preset.initialDraftContent, tokens: [] }
-      }
-    }
-    return { text: '', rawContent: '', tokens: [] }
+  const [draft, setDraft] = React.useState<ChatComposerDraftState>({
+    text: '',
+    rawContent: '',
+    tokens: [],
   })
   // 任务级底部 token（胶囊）：草稿态本地持有；真实任务从 slash.taskTokens.list
   // 拉取 + apply/cancel RPC 返回值 + slash.tokens.changed stream 事件更新。
@@ -548,25 +542,9 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
   // 草稿显式选择的工作区:初始/切换取任务页组"+"落下的预设(草稿标签常驻复用,
   // 点其他组的"+"也能即时切换,草稿文本保留);未选时默认注册表首选根。
   const [draftWorkspaceOverride, setDraftWorkspaceOverride] = React.useState(getDraftPreset().workspace)
-  React.useEffect(() => {
-    // 首次挂载时清理已被 useState 初始化器消费的 initialDraftContent（避免残留）。
-    if (isDraft && getDraftPreset().initialDraftContent) {
-      setDraftPreset({ initialDraftContent: undefined })
-    }
-    // 订阅 preset 变化：草稿标签常驻复用，已挂载时再次调用 openDraftTaskTab 不会重新初始化 useState，
-    // 故需经订阅响应新注入的 initialDraftContent（追加到当前草稿末尾）。
-    return subscribeDraftPreset((preset) => {
-      if (preset.workspace) setDraftWorkspaceOverride(preset.workspace)
-      if (isDraft && preset.initialDraftContent) {
-        setDraft((current) => ({
-          text: (current.rawContent ?? '') + preset.initialDraftContent!,
-          rawContent: (current.rawContent ?? '') + preset.initialDraftContent!,
-          tokens: [],
-        }))
-        setDraftPreset({ initialDraftContent: undefined })
-      }
-    })
-  }, [isDraft])
+  React.useEffect(() => subscribeDraftPreset((preset) => {
+    if (preset.workspace) setDraftWorkspaceOverride(preset.workspace)
+  }), [])
   // 草稿态工作区按当前连接 worker 定向;老任务用任务归属 worker,此处不参与。
   const draftWorkspaces: WorkspaceEntry[] = draftWorkerId ? workspaceRegistry.workspacesOf(draftWorkerId) : []
   // 有效草稿工作区:显式选择 > 当前连接 worker 的首个工作区 > 全局首选根(无 worker 时兜底)。

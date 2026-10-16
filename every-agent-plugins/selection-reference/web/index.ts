@@ -55,17 +55,16 @@ const selectionReferencePlugin: PluginModule = {
           endLine: c.selection.endLine,
           text: c.selection.text, // 原文不截断
         }
-        // 打开新草稿任务标签页，并把选区以胶囊形式预置到草稿中。
-        // opaque token 编码由宿主在 openDraftTaskTab 内单点完成（本插件不碰线格式）。
-        // 展开为对象字面量以满足 Record<string, unknown> 形参
+        // 先打开新草稿任务标签页（通用入口），再把选区胶囊写入该标签页草稿。
+        // 新标签页的 TaskChat 可能尚未挂载、composerBridge 尚未注入，
+        // 由宿主 appendComposerToken → 队列兜底，bridge 注入时自动 flush。
+        ctx.ui.openPluginTab('task', { taskId: '__draft__' }, '新任务')
+        // 展开为对象字面量以满足 appendComposerToken 的 Record<string, unknown> 形参
         // （interface 无索引签名，直接传会被 TS 判为不可赋值）。
-        ctx.ui.openDraftTaskTab({
-          workspace: c.workspaceRoot,
-          composerToken: {
-            kind: SELECTION_KIND,
-            label: buildSelectionLabel(c.selection.text),
-            payload: { ...payload },
-          },
+        ctx.ui.appendComposerToken({
+          kind: SELECTION_KIND,
+          label: buildSelectionLabel(c.selection.text),
+          payload: { ...payload },
         })
       },
     }
