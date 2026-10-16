@@ -1629,10 +1629,11 @@
   padding: 1px 4px 1px 6px;
   margin: 0 1px;
   border-radius: 999px;
-  border: 1px solid var(--border-light);
-  /* 中性色：比主题背景略深一点，不使用蓝色 */
-  background: color-mix(in srgb, var(--bg-primary) 84%, #000);
-  color: var(--text-primary);
+  border: 1px solid transparent;
+  /* 与输入框底部 footer 胶囊（.nagent-inline-chip--scope）统一视觉语言：
+     accent-blue-dim 背景 + accent-blue 文字、无边框（暗/亮两套主题均通过 CSS 变量自适应）。 */
+  background: var(--accent-blue-dim);
+  color: var(--accent-blue);
   font-size: var(--text-xs);
   /* font-weight: 600; */
   line-height: 1.5;
@@ -1661,17 +1662,20 @@
   border: none;
   border-radius: 50%;
   background: transparent;
-  color: var(--text-muted);
+  color: inherit;
+  opacity: 0.6;
   font-size: var(--text-xs);
   line-height: 1;
   padding: 0;
   cursor: pointer;
-  transition: background 0.15s ease, color 0.15s ease;
+  transition: opacity 0.15s ease, background 0.15s ease, color 0.15s ease;
 }
 
+/* 与输入框底部 footer 胶囊的 ✕ 一致：accent-blue 半透明 hover 底，而非红色。 */
 .nagent-inline-chip__close:hover {
-  background: color-mix(in srgb, var(--accent-red) 18%, transparent);
-  color: var(--accent-red);
+  opacity: 1;
+  background: color-mix(in srgb, var(--accent-blue) 22%, transparent);
+  color: var(--accent-blue);
 }
 
 /* 有芯片时 textarea 减小最小高度 */
