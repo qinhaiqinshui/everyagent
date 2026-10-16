@@ -86,7 +86,7 @@
 - 工作区外操作 / 危险命令一律**弹窗授权**,可开 AI 审议 / 无人值守自动裁决;git 凭证 AES-GCM 加密存本机。
 
 ### 🔌 模型随便换,自带容灾
-- 任意 **OpenAI 兼容** provider:OpenAI、DeepSeek、Qwen、GLM、本地 vLLM/Ollama…改一行配置即可;
+- 任意 **OpenAI 兼容** provider:OpenAI、DeepSeek、Qwen、GLM、本地 vLLM/Ollama…设置页「模型配置」表格里点「添加」即可,内置厂商自动带出端点;也可直接改一行配置;
 - **模型池**:一个任务可配置多个模型,主模型失败自动切换下一个,任务不中断;
 - 💸 **白嫖党的福音**:项目后期就是靠**白嫖免费模型**开发出来的——感谢**商汤「日日新」(SenseNova)** 提供众多免费模型额度,以及 **OpenRouter** 开放的免费模型端点;就算免费额度用完、主模型罢工,模型池自动切换下一个还能用的,开发不中断。如今这个项目,已经能**用 Every Agent 自己开发 Every Agent** 了。
 
@@ -226,7 +226,9 @@ web / hub / worker / desktop 四个模块**互相解耦、物尽其用**,可按�
 
 #### 桌面版配置模型
 
-桌面版数据目录缺省为 `~/.everyagent`。用任意文本编辑器新建 `~/.everyagent/application-worker.yaml`,填入:
+无需手改配置文件:在桌面版「设置」页的「模型配置」区块点「添加」,选择内置厂商(DeepSeek / 智谱 / OpenAI / 阿里百炼 / Kimi 等)后 baseUrl / fullUrl 会自动带出,只需填 id(可中文、不可重复)、模型名与 apiKey 即可保存——配置直接写入 worker 侧 `~/.everyagent/application-worker.yaml` 并即时热加载,无需重启。也支持「其他」厂商自行填写端点。
+
+当然,也可以用任意文本编辑器直接新建 `~/.everyagent/application-worker.yaml`(桌面版数据目录缺省为 `~/.everyagent`),手动填入:
 
 ```yaml
 worker:
@@ -239,7 +241,7 @@ worker:
       is-default: true
 ```
 
-保存后**重启桌面版**(worker 启动时加载模型配置)即可新建任务开跑。
+手动修改保存后,到「设置」页点「重新读取模型配置」热加载即可(worker 启动时也会自动加载)。
 
 > 更多配置:多模型、模型池容灾、任意 OpenAI 兼容 provider 见下文「配置模型(必需)」。
 
@@ -272,7 +274,11 @@ cd every-agent-web && npm install && npm run dev # http://localhost:5174
 
 ## ⚙️ 配置模型(必需)
 
-worker 按 **OpenAI 兼容协议**调用模型。把下面内容写入 `~/.everyagent/application-worker.yaml`(桌面版 / 本地 worker 默认读这个文件;Docker 部署请挂载或注入环境变量):
+worker 按 **OpenAI 兼容协议**调用模型。两种方式维护模型配置,写同一处(`~/.everyagent/application-worker.yaml` 的 `worker.models` 段,桌面版 / 本地 worker 默认读这个文件;Docker 部署请挂载或注入环境变量):
+
+**方式 A:设置页图形化维护(推荐)** —— 「设置」页「模型配置」区块以表格列出每台 worker 的已有配置(id / 模型名 / 模型厂家 / baseUrl / fullUrl / apiKey 掩码 / 接口协议),上方「添加」「删除」按钮直接增删,保存即落盘并热加载,无需重启;添加对话框内置常见厂商(DeepSeek / 智谱 / OpenAI / 阿里百炼 / Kimi),选中自动带出 baseUrl / fullUrl,只需填 id(可中文、不可重复)、模型名与 apiKey,也可选「其他」自行填写端点;接口协议目前仅支持 OpenAI 兼容格式。
+
+**方式 B:手动编辑配置文件** —— 写入 `~/.everyagent/application-worker.yaml`:
 
 ```yaml
 worker:
@@ -284,6 +290,8 @@ worker:
       api-key: sk-xxxx          # 你的 API key,只存本机
       is-default: true
 ```
+
+手动修改保存后,在「设置」页点「重新读取模型配置」热加载生效(无需重启);仅影响后续新建任务,运行中任务使用创建时冻结的快照。
 
 **模型池容灾**(可选):主模型失败自动切换 —— 这对「白嫖党」尤其友好:本项目后期正是靠白嫖免费模型(**商汤「日日新」SenseNova** 的众多免费模型、**OpenRouter** 的免费端点等)开发出来的,额度用完或模型不可用时自动切换,开发不中断;后期已完全使用 Every Agent 自己来开发自己。
 
