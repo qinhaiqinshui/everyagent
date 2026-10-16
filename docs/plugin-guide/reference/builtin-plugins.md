@@ -99,7 +99,7 @@ has_children: false
 | `registerTaskAdmissionPolicy`（任务准入策略） | task-queue | `every-agent-plugins/task-queue/src/main/java/dev/everyagent/plugin/taskqueue/TaskQueuePlugin.java:25` | 全仓唯一使用者 |
 | `registerTaskLifecycleNode`（任务生命周期节点） | task-edit-resend | `every-agent-plugins/task-edit-resend/src/main/java/dev/everyagent/plugin/editresend/EditResendNode.java` | 单节点、职责单一（order=877）；多节点编排（15/870 双节点）看 task-input-queue，try/finally 成对形态看 task-queue 的 `QueueAdmissionNode` |
 
-### 3.4 前端扩展点（13 个）
+### 3.4 前端扩展点（15 个）
 
 | 想实现 | 推荐范本 | 源码相对路径 | 为什么推荐 |
 |---|---|---|---|
@@ -115,7 +115,7 @@ has_children: false
 | `ui.file_content_editors`（文件内容编辑器） | pdf-viewer | `every-agent-plugins/pdf-viewer/web/index.ts:14-19` | 唯一使用者 + web-only 形态最小样本（无 pom 无 src） |
 | `ui.file_explorer_actions`（文件树右键动作） | git | `every-agent-plugins/git/web/index.ts:42-53` | 唯一注册者；动作追加到文件树右键菜单内置项尾部（[UI §13](../web/ui-extensions.md)） |
 | `ui.round_tail_panels`（轮次尾面板） | file-change | `every-agent-plugins/file-change/web/index.ts:22` | 唯一使用者；配套 `ctx.events.on('task-round-closed')` 缓存作废范式 |
-| 扩展点之外的自绘全局 UI（悬浮球等） | mobile-keyboard | `every-agent-plugins/mobile-keyboard/web/floatball.ts` | 唯一直接操作 `document.body` 的插件：13 个扩展点没有全局覆盖层位时，挂自有根元素 + 自管生命周期与可见性 |
+| 扩展点之外的自绘全局 UI（悬浮球等） | mobile-keyboard | `every-agent-plugins/mobile-keyboard/web/floatball.ts` | 唯一直接操作 `document.body` 的插件：15 个扩展点没有全局覆盖层位时，挂自有根元素 + 自管生命周期与可见性 |
 
 另有非 register\* 的服务通道 `WorkerServices.addRoundClosedListener`（`every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/WorkerServices.java:80`），唯一使用者 file-change（`FileChangePlugin.java:33`）。
 
@@ -363,7 +363,7 @@ Token 估算器（全仓唯一实现 BuiltinTokenEstimator）+ 在线校准 Advi
 - 各注册方法与类型的完整清单：[API 一屏索引](api-index.md)
 - 把范例跑起来（构建命令矩阵、cwd 陷阱、`build:plugins`）：[构建与运行](../guides/build-and-run.md)
 - Advisor 链与 order 语义详解：[Advisor 指南](../backend/advisors.md)
-- 前端 13 个扩展点的注册签名与渲染管线：[UI 扩展点](../web/ui-extensions.md)
+- 前端 15 个扩展点的注册签名与渲染管线：[UI 扩展点](../web/ui-extensions.md)
 
 ---
 

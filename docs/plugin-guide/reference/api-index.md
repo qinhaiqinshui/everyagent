@@ -143,13 +143,13 @@ has_children: false
 | `ctx.sdk` | `PluginSdk` | RPC + 工作区快照 + workerId（§2.3） | [ctx §3](../web/context-api.md#3-ctxsdk--rpc-与工作区) |
 | `ctx.storage` | `PluginStorage`（§2.5） | localStorage，键前缀 `plugin:<id>:` | [ctx §4](../web/context-api.md#4-ctxstorage--本地键值存储) |
 | `ctx.commands` | `CommandRegistry`（§2.5） | 本插件私有命令表，不跨插件 | [ctx §5](../web/context-api.md#5-ctxcommands--命令注册表) |
-| `ctx.ui` | `UiRegistry`（§2.2） | 13 register + 5 动作 | [UI §1](../web/ui-extensions.md#1-十三个扩展点总览) |
+| `ctx.ui` | `UiRegistry`（§2.2） | 15 register + 6 动作 | [UI §1](../web/ui-extensions.md#1-十五个扩展点总览) |
 | `ctx.events` | `PluginEvents`（§2.4） | 宿主进程内事件总线的最薄委托 | [ctx §7](../web/context-api.md#7-ctxevents--领域事件总线) |
 | `ctx.fs` | `PluginFs`（§2.5） | `listDir`/`delete`，jail 到工作区根 | [ctx §6](../web/context-api.md#6-ctxfs--工作区文件系统网关) |
 
-### 2.2 `UiRegistry` —— 13 个 register + 5 个动作
+### 2.2 `UiRegistry` —— 15 个 register + 6 个动作
 
-两张总览：[加载链路 §4.1](../web/overview-and-loading.md#41-13-个-ctxuiregister全部返回真清理的-disposable)、[UI 扩展点 §1](../web/ui-extensions.md#1-十三个扩展点总览)。所有 register 返回 Disposable（`registerOutputBlock`/`registerTraceType` 两个假 dispose 例外，见 [UI §17](../web/ui-extensions.md#17-disposable-与刷新)）。
+两张总览：[加载链路 §4.1](../web/overview-and-loading.md#41-15-个-ctxuiregister全部返回真清理的-disposable)、[UI 扩展点 §1](../web/ui-extensions.md#1-十五个扩展点总览)。所有 register 返回 Disposable（`registerOutputBlock`/`registerTraceType` 两个假 dispose 例外，见 [UI §19](../web/ui-extensions.md#19-disposable-与刷新)）。
 
 | 扩展点 | 方法（一行签名） | 详解 | 范例 |
 |---|---|---|---|
@@ -166,16 +166,19 @@ has_children: false
 | `ui.file_explorer_actions` | `registerFileExplorerAction(action)` | [UI §13](../web/ui-extensions.md#13-uifile_explorer_actions--文件树右键菜单) | git「显示 Git 历史」（追加到内置右键菜单尾部） |
 | `ui.round_tail_panels` | `registerRoundTailPanel(def)` | [UI §14](../web/ui-extensions.md#14-uiround_tail_panels--轮末展示区) | file-change |
 | `ui.search_types` | `registerSearchType(def)` | [UI §15](../web/ui-extensions.md#15-uisearch_types--搜索类型注册) | ⚠️ 无内置范例（内置三类型不走此扩展点） |
+| `ui.editor_context_menu_actions` | `registerEditorContextMenuAction(def)` | [UI §16](../web/ui-extensions.md#16-uieditor_context_menu_actions--编辑器内容区右键菜单) | selection-reference（编辑器选区右键「引用到AI对话框」） |
+| `ui.composer_chip_actions` | `registerComposerChipAction(def)` | [UI §17](../web/ui-extensions.md#17-uicomposer_chip_actions--胶囊激活行为) | selection-reference；核心 `system.workspace_file` 亦经此注册 |
 
-动作方法（不注册、只驱动宿主；桥未注入时静默降级）：详解全部在 [UI §16](../web/ui-extensions.md#16-uiregistry-动作方法5-个)。
+动作方法（不注册、只驱动宿主；桥未注入时静默降级）：详解全部在 [UI §18](../web/ui-extensions.md#18-uiregistry-动作方法6-个)。
 
 | 方法 | 一行签名 | 范例 |
 |---|---|---|
 | `openPluginTab` | `(type: string, data: Record<string,string>, title?: string) => void` | git |
-| `openFileTab` | `(workspaceRoot: string, filePath: string, opts?: { mode?: 'readwrite' \| 'readonly' }) => void` | update-file-view |
+| `openFileTab` | `(workspaceRoot: string, filePath: string, opts?: { mode?: 'readwrite' \| 'readonly'; lineNumber?: number }) => void` | update-file-view |
 | `openDiffTab` | `(input: PluginDiffTabInput) => void` | git |
 | `appendComposerText` | `(text: string) => void` | task-edit-resend |
 | `setComposerRawContent` | `(raw: string) => void` | task-edit-resend |
+| `appendComposerToken` | `(input: { kind: string; label: string; summary?: string; payload?: Record<string, unknown>; spaced?: boolean }) => void` | selection-reference |
 
 ### 2.3 `PluginSdk`
 
@@ -217,7 +220,7 @@ has_children: false
 | `PluginStorage` | `get<T>(key: string, defaultValue?: T): T \| undefined`；`set(key, value)`；`delete(key)` | [ctx §4](../web/context-api.md#4-ctxstorage--本地键值存储) | 内置插件零调用（残留坑见同篇 §11） |
 | `PluginFs` | `listDir(workspaceRoot, dir): Promise<PluginFileStat[]>`；`delete(workspaceRoot, path): Promise<void>` | [ctx §6](../web/context-api.md#6-ctxfs--工作区文件系统网关) | git（唯一使用者） |
 | `CommandRegistry` | `registerCommand(id, handler): Disposable`；`executeCommand(id, ...args): Promise<unknown>` | [ctx §5](../web/context-api.md#5-ctxcommands--命令注册表) | 内置插件零调用 |
-| `Disposable` | `dispose(): void` | [UI §17](../web/ui-extensions.md#17-disposable-与刷新)、[ctx §9](../web/context-api.md#9-寿命与清理) | 刷新即全丢；跨刷新用 storage |
+| `Disposable` | `dispose(): void` | [UI §19](../web/ui-extensions.md#19-disposable-与刷新)、[ctx §9](../web/context-api.md#9-寿命与清理) | 刷新即全丢；跨刷新用 storage |
 
 ## 3. plugin.json 字段速查
 

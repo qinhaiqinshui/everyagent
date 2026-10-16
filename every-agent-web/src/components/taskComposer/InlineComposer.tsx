@@ -1,14 +1,10 @@
 import React from 'react'
 import type { ChatComposerToken } from '@/types'
 import { splitComposerRawContent, parseOpaqueTokenText } from '@/composerToken/composerOpaqueToken'
-import {
-  WORKSPACE_FILE_TOKEN_KIND,
-  buildWorkspaceFileTabTarget,
-  readWorkspaceFileToken,
-} from '@/composerToken/workspaceFileToken'
 import { buildTokenForPastedFile } from '@/services/pastedFileService'
 import { createSnowflakeId } from '@/utils/snowflakeId'
 import { openSlashItemDetail } from './SlashItemDetailPopover'
+import { pluginDispatcher } from '@/plugin/PluginDispatcher'
 
 /**
  * 内联富文本输入框。
@@ -111,10 +107,8 @@ export interface InlineComposerProps {
   onBlur?: () => void
   /** 移除胶囊（点击 ✕）时上报被删的 token 对象（宿主据此触发 cancelTaskToken 等外部动作）。 */
   onRemoveToken?: (token: ChatComposerToken) => void
-  /** 工作区根（worker 机器绝对路径）：粘贴文件落盘与文件胶囊打开用；空 = 不支持文件粘贴。 */
+  /** 工作区根（worker 机器绝对路径）：粘贴文件落盘与胶囊点击上下文用；空 = 不支持文件粘贴。 */
   workspaceRoot?: string
-  /** 点击 `system.workspace_file` 胶囊时打开文件标签页（对接 buildWorkspaceFileTabTarget 语义）。 */
-  onOpenWorkspaceFile?: (target: { workspaceRoot: string; filePath: string }) => void
   /** 粘贴文件处理失败上报（宿主据此 toast；单个失败不阻断其余文件与文本粘贴）。 */
   onFilePasteError?: (message: string) => void
 }
@@ -489,7 +483,6 @@ const InlineComposer = React.forwardRef<InlineComposerHandle, InlineComposerProp
     onBlur,
     onRemoveToken,
     workspaceRoot,
-    onOpenWorkspaceFile,
     onFilePasteError,
   } = props
 
@@ -513,10 +506,8 @@ const InlineComposer = React.forwardRef<InlineComposerHandle, InlineComposerProp
 
   // 文件粘贴/胶囊点击所需的宿主上下文（ref 持有最新值，供异步粘贴流程与点击回调读取）。
   const workspaceRootRef = React.useRef(workspaceRoot)
-  const onOpenWorkspaceFileRef = React.useRef(onOpenWorkspaceFile)
   const onFilePasteErrorRef = React.useRef(onFilePasteError)
   workspaceRootRef.current = workspaceRoot
-  onOpenWorkspaceFileRef.current = onOpenWorkspaceFile
   onFilePasteErrorRef.current = onFilePasteError
 
   // tokens 引用同步（序列化主要靠 data-opaque，这里仅用于点击文件胶囊定位 token 对象）。
@@ -732,20 +723,26 @@ const InlineComposer = React.forwardRef<InlineComposerHandle, InlineComposerProp
           summary: parsed.summary,
           opaqueText: opaque ?? '',
         }
-        // `system.workspace_file` 胶囊：点击打开文件标签页（对接 buildWorkspaceFileTabTarget
-        // 现有语义，fullPath 仅用于展示与点击打开）；其它 kind（含 external_file）保持弹详情。
-        if (parsed.kind === WORKSPACE_FILE_TOKEN_KIND) {
-          const payload = readWorkspaceFileToken(token)
-          const workspaceRoot = workspaceRootRef.current?.trim() ?? ''
-          const openFile = onOpenWorkspaceFileRef.current
-          if (payload && workspaceRoot && openFile) {
-            const target = buildWorkspaceFileTabTarget(payload)
-            openFile({ workspaceRoot, filePath: target.filePath })
-            reportCaret()
-            return
-          }
+        // 按 kind 查胶囊激活扩展点（ui.composer_chip_actions）：命中即回调注册方行为
+        // （核心 `system.workspace_file` 亦经此扩展点注册 → 打开文件标签页）；未命中保持现状。
+        const action = pluginDispatcher.findComposerChipAction(parsed.kind)
+        if (action) {
+          action.onActivate({
+            token: {
+              kind: parsed.kind,
+              label: parsed.label ?? '',
+              summary: parsed.summary,
+              opaqueText: opaque ?? '',
+              payload: parsed.payload,
+            },
+            anchor: chip,
+            source: 'composer',
+            workspaceRoot: workspaceRootRef.current?.trim() ?? '',
+          })
+          reportCaret()
+          return
         }
-        // 其它胶囊 → 弹详情（纯展示）。
+        // 未命中 → 保持现状：弹详情（纯展示）。
         openSlashItemDetail(chip, { token })
       }
     }

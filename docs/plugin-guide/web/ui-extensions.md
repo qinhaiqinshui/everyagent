@@ -7,16 +7,16 @@ has_children: false
 
 # 前端 UI 扩展点
 
-**一句话定位**：`ctx.ui`（`UiRegistry`）是前端插件往宿主 UI 里「贡献界面」的唯一通道——13 个 `register*` 扩展点 + 5 个动作方法。本文逐扩展点给出 Definition 字段表（抄自纯类型包 `every-agent-plugin-api/js/index.ts`）、注册代码、宿主消费链与坑；每条断言附宿主源码行号。`ctx.ui` 的宿主实现是单例 `pluginDispatcher`（接入方式见[前端 ctx API](context-api.md) §8）。
+**一句话定位**：`ctx.ui`（`UiRegistry`）是前端插件往宿主 UI 里「贡献界面」的唯一通道——15 个 `register*` 扩展点 + 6 个动作方法。本文逐扩展点给出 Definition 字段表（抄自纯类型包 `every-agent-plugin-api/js/index.ts`）、注册代码、宿主消费链与坑；每条断言附宿主源码行号。`ctx.ui` 的宿主实现是单例 `pluginDispatcher`（接入方式见[前端 ctx API](context-api.md) §8）。
 
 ## 0. 读前须知：所有扩展点共用的四条机制
 
-1. **注册即入表，Disposable 真清理**：每个 `register*` 落到对应扩展点的 `ListExtensionRegistry`（普通数组 push，`every-agent-web/src/plugin/ExtensionRegistry.ts:45-56`），dispose 从数组 splice 并通知订阅者。注意 dispatcher 调 `register('', def)` 时**忽略 pluginId 形参**、一律传空串（`every-agent-web/src/plugin/PluginDispatcher.ts:241-242` 等 13 处）。
+1. **注册即入表，Disposable 真清理**：每个 `register*` 落到对应扩展点的 `ListExtensionRegistry`（普通数组 push，`every-agent-web/src/plugin/ExtensionRegistry.ts:45-56`），dispose 从数组 splice 并通知订阅者。注意 dispatcher 调 `register('', def)` 时**忽略 pluginId 形参**、一律传空串（`every-agent-web/src/plugin/PluginDispatcher.ts:241-242` 等 15 处）。
 2. **注册晚于首屏，宿主靠版本号重渲染**：插件 `activate()` 是异步的。宿主用 `React.useSyncExternalStore(pluginDispatcher.subscribeExtensionsChanged, pluginDispatcher.getExtensionsVersion)` 感知注册（`every-agent-web/src/components/app/Layout.tsx:139-141`、`every-agent-web/src/components/task/TaskChat.tsx:818-821`），注册后贡献立即上屏，**无需刷新页面**。
 3. **两条读取通道**：异步 `dispatch('ui.xxx')` / `get*()`（仅文件页侧栏在用，`FileTabPage.tsx:166`）与同步 `listRegistered*()`（其余消费点的实际用法，下文逐个给出）。
 4. **示例代码约束**（详见[加载链路](overview-and-loading.md)）：入口 `web/index.ts` 只能 `import type ... from '@everyagent/plugin-api'` + 白名单 bare import（react / react-dom / react/jsx-runtime / antd / @ant-design/icons）；`.ts` 文件里用 `React.createElement`，组件放 `.tsx` 可用 JSX。
 
-## 1. 十三个扩展点总览
+## 1. 十五个扩展点总览
 
 | 扩展点（dispatch 名） | register 方法 | 一句话 | 内置范例 |
 |---|---|---|---|
@@ -33,6 +33,8 @@ has_children: false
 | `ui.file_explorer_actions` | `registerFileExplorerAction` | 文件树右键菜单项 | git（「显示 Git 历史」，追加在内置项尾部，见 §13） |
 | `ui.round_tail_panels` | `registerRoundTailPanel` | 任务轮末展示区 | file-change |
 | `ui.search_types` | `registerSearchType` | 注册搜索类型（id/label/kinds/filters/ResultView…） | ⚠️ 无内置范例（内置三类型不走此扩展点） |
+| `ui.editor_context_menu_actions` | `registerEditorContextMenuAction` | 文件内容区（编辑器）右键菜单项 | selection-reference |
+| `ui.composer_chip_actions` | `registerComposerChipAction` | 按 kind 接管输入框/消息回放胶囊的点击行为 | selection-reference（核心 `system.workspace_file` 亦经此扩展点注册，见 §17） |
 
 ## 2. `ui.sidebar_items` —— 侧边栏活动栏项
 
@@ -92,7 +94,7 @@ float 升序**统一混排**，不再有「内置在前、插件在后」的注�
 | 10 | 内置 settings「设置」 | `Layout.tsx:1078` |
 | 100 | 缺省 `DEFAULT_SIDEBAR_ORDER` | `Layout.tsx:1064` |
 
-注意 5 与 9 是**插件**取值不是内置位——插手别处请避开 1/2/3/10 四个内置占用；4（3 与 5 之间）、6~8、11~99 都是空位。其余 12 个扩展点**没有 order 字段**，一律「插件在前、按注册顺序」合并（§4/§7/§12 各自证据）。
+注意 5 与 9 是**插件**取值不是内置位——插手别处请避开 1/2/3/10 四个内置占用；4（3 与 5 之间）、6~8、11~99 都是空位。其余 13 个扩展点**没有 order 字段**，一律「插件在前、按注册顺序」合并（§4/§7/§12 各自证据）。
 
 ## 4. `ui.workspace_tab_types` —— 工作区标签类型
 
@@ -459,17 +461,179 @@ ctx.ui.registerSearchType(imageType)
 - `FilterView` / `ResultView` 是**整块替换**（不是单字段替换）；组件只能依赖 plugin-api 类型 + `ctx` 能力，**不引宿主 `@/` 模块**（§0 第 4 条）。`ResultView` 里若要打开结果对应的文件，别拿 `sdk.workspace.rootPath` 当工作区根（见 §7 同坑）。
 - 搜索面板**没有** worker 选择器——worker 由「当前工作区根」经 `sdk.workspace.workerIdOfRoot(root)` 反查；无归属时报可读错误。
 
-## 16. UiRegistry 动作方法（5 个）
+## 16. `ui.editor_context_menu_actions` —— 编辑器内容区右键菜单
 
-动作方法不注册 UI，而是**驱动宿主**。实现链统一：`pluginDispatcher` 同步委托模块级 holder 桥（`pluginRuntimeBridge.ts`），宿主组件挂载时注入、未注入时静默降级（`:11-15` 注释）。
+### 16.1 Definition 字段表（`UiEditorContextMenuActionDefinition`，`every-agent-plugin-api/js/index.ts:676-686`；上下文 `EditorActionContext` `:659-670`、选区快照 `EditorActionSelection` `:650-656`）
 
-| 方法 | 签名（`js/index.ts:621-631`） | 宿主实现链 | 行为 |
+| 字段 | 类型 | 必填 | 消费规则（宿主） | 说明 |
+|---|---|---|---|---|
+| `id` | `string` | ✅ | 菜单项 key（宿主统一加 `plugin:` 前缀防撞） | 全局唯一动作 id |
+| `label` | `string` | ✅ | 菜单项文案 | 用户可见名称 |
+| `icon` | `ReactNode?` | — | 菜单项图标 | 可选图标节点（须插件自带） |
+| `group` | `string?` | — | 同名项由宿主收进以组名为标题的**子菜单**；缺省平铺在顶层 | 分组标题 |
+| `order` | `number?` | — | float 升序；缺省 100，同值按注册先后 | 组内 / 顶层排序 |
+| `isVisible` | `(ctx: EditorActionContext) => boolean` | — | 右键过滤时调用；返回 false 则该上下文不出现 | 缺省恒显示 |
+| `invoke` | `(ctx: EditorActionContext) => void` | ✅ | 点击菜单项时调用；抛错由宿主 try/catch 吞并 `console.warn` | 动作实现 |
+
+右键上下文 `EditorActionContext`（右键时点在编辑器容器上采集）：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `workspaceRoot` | `string` | 所属工作区根（身份键） |
+| `filePath` | `string` | 标签身份里的**原样路径**（插件回切标签时应原样回传，保证命中同一标签） |
+| `relativePath` | `string` | 归一化工作区相对路径（交给 AI 的引用口径） |
+| `fullPath` | `string` | 业务绝对路径（带前导 `/`） |
+| `fileName` | `string` | 文件名 |
+| `mode` | `'readonly' \| 'readwrite'` | 当前标签读写态 |
+| `editorKind` | `string` | 当前内容编辑器 kind（如 `'universal'`） |
+| `content` | `string` | 当前内容快照（编辑态 = 草稿） |
+| `selection` | `EditorActionSelection` | 右键时点采集的选区快照（见下） |
+| `anchor` | `HTMLElement` | 触发容器（供插件定位自己的浮层） |
+
+选区快照 `EditorActionSelection`：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `text` | `string` | 选中原文 |
+| `startLine` | `number \| null` | 起始行（1-based）；无法确定（非 CodeMirror 等）为 null |
+| `endLine` | `number \| null` | 结束行（1-based）；无法确定为 null |
+| `charCount` | `number` | 选中字符数 |
+| `lineCount` | `number` | 选中行数 |
+
+### 16.2 注册示例（`selection-reference` 插件）
+
+```ts
+// web/index.ts —— 入口只能 import type + 白名单 bare import；.ts 里用 React.createElement
+import type { PluginModule, UiEditorContextMenuActionDefinition } from '@everyagent/plugin-api'
+import { SELECTION_KIND, buildSelectionLabel, type SelectionPayload } from './token'
+
+const referenceAction: UiEditorContextMenuActionDefinition = {
+  id: 'selection-reference.reference-to-ai',
+  label: '引用到AI对话框',
+  group: 'AI',
+  order: 100,
+  isVisible: (c) => c.selection.text.length > 0,   // 选中内容为空 → 该项不出现
+  invoke: (c) => {
+    const payload: SelectionPayload = {
+      workspaceRoot: c.workspaceRoot,
+      filePath: c.filePath,          // 原样路径：回切标签时命中同一标签
+      relativePath: c.relativePath,  // 交给 AI 的引用口径
+      fileName: c.fileName,
+      startLine: c.selection.startLine,
+      endLine: c.selection.endLine,
+      text: c.selection.text,        // 原文不截断
+    }
+    // 结构化插入胶囊：opaque token 编码由宿主单点负责，插件不碰线格式。
+    // payload 必须展开成新对象字面量：appendComposerToken 形参是 Record<string, unknown>，
+    // 插件侧 interface 无索引签名，直接传 interface 会被 TS 判为不可赋值（TS2322）。
+    ctx.ui.appendComposerToken({ kind: SELECTION_KIND, label: buildSelectionLabel(c.selection.text), payload: { ...payload } })
+  },
+}
+
+const plugin: PluginModule = {
+  activate(ctx) {
+    ctx.ui.registerEditorContextMenuAction(referenceAction)
+  },
+}
+export default plugin
+```
+
+### 16.3 宿主消费链与坑
+
+- **消费点**：文件标签页编辑器内容容器 `editorContainerRef` 挂 `onContextMenu={handleEditorContextMenu}`（`every-agent-web/src/components/files/FileTabPage.tsx:679`）→ 处理器 `handleEditorContextMenu`（`FileTabPage.tsx:406`）→ 菜单项构建器 `buildEditorContextMenuItems`（`FileTabPage.tsx:858`）→ 渲染宿主既有 `MenuList`（`FileTabPage.tsx:716-723`）。处理器在**事件时点**同步 `pluginDispatcher.listRegisteredEditorContextMenuActions()`（`FileTabPage.tsx:411`，**不缓存快照**——插件 `activate()` 晚于首屏）。
+- **接管条件（通用、零业务）**：**仅当**「`selection.text.length === 0` 不成立（`FileTabPage.tsx:428`）**且** `isVisible` 过滤后至少有一项（`FileTabPage.tsx:430-440`）」时 `preventDefault`（`FileTabPage.tsx:442`）并弹宿主统一菜单；否则三情况（无选区 / 非文本编辑器 / 过滤后无项）一律 `return`，**完全放行浏览器原生右键菜单**（零回归）。
+- **`EditorActionContext` 各字段真实来源**（宿主逐字段构造于 `FileTabPage.tsx:413-425`）：`filePath` 取 `file.filePath` **原样回传**（`:416`，它是标签身份的一部分，归一化会导致回切标签取不到同一标签）；`relativePath` 走 `normalizeWorkspaceRelativePath(...)` 归一化（`:417`，交给 AI 的引用口径）；`fullPath` 走 `toBusinessAbsolutePath(...)` 业务绝对路径（`:418`）；`editorKind` 取 `selectedEditorDescriptor.kind`（`:421`）；`content` 编辑态取草稿 `openMode === 'readwrite' ? draftContent : content`（`:422`）；`anchor` 即 `editorContainerRef.current` 触发容器（`:408,424`）。
+- **菜单渲染**：复用宿主既有 `MenuList`（portal + 视口夹紧 + Esc/外部点击关闭 + 子菜单支持），插件侧零菜单代码；`anchor` = 编辑器容器（`FileTabPage.tsx:718`）、`anchorPoint` = 右键坐标 `{x:event.clientX, y:event.clientY}`（`:445,719`）、`anchorPointMode='top-start'`（`:720`）。
+- **排序 / 分组规则**（`buildEditorContextMenuItems`，`FileTabPage.tsx:858-893`）：按 `order ?? 100` float 升序 `[...actions].sort((a,b)=>(a.order ?? 100)-(b.order ?? 100))`（`:862`，ES2019 起稳定 sort ⇒ 同值保持注册先后）；顶层项 key = `` `plugin:${action.id}` ``（`:865`）；同 `group` 收进以组名为标题的子菜单（key = `` `plugin:group:${group}` ``，`:884`），**同一 group 只出现一次**（`groupItemByKey` Map 去重，`:886-888`），且**在该组首个成员的位置插入**（遍历有序列表、首次遇到该组时 `items.push(groupItem)`，`:880-889`），组内成员按 order 顺序（遍历本身有序）。
+- **错误处理**：`isVisible` 抛错 → `console.warn('[plugin] editor context menu isVisible failed', ...)` 且视为**不可见**（`FileTabPage.tsx:434-437`）；`invoke` 抛错 → `console.warn('[plugin] editor context menu action failed', ...)` **吞掉、不炸 UI**（`:869-873`）。
+- **选区 / 行号实现**（`every-agent-web/src/components/files/editorSelection.ts`）：`readEditorSelection(root)`（`:33`）的**保护闸**——无选区 / `selection.isCollapsed` / `rangeCount === 0`（`:37`）、或选区端点不在容器内（`root.contains(range.startContainer/endContainer)` 任一不成立，`:45`）→ 返回空快照 `EMPTY_EDITOR_SELECTION`（`:17`）。行号解析**两路**（`readLineRange`，`:60`）：① 精确路径 `EditorView.findFromDOM` + `view.posAtDOM` + `doc.lineAt`（`:65-69`，不受行 DOM 是否在视口内影响）；② 兜底 `.cm-content .cm-line` 与 `.cm-lineNumbers .cm-gutterElement` 下标对齐（`:81-83`，**仅在两者等长时启用**，`range.intersectsNode` 求首末行）。两条都失败 → 行号 null（`:106`）。`lineCount` 两分支口径（`:52-54`）：行号齐 → `endLine - startLine + 1`，否则按换行计 `text.split(/\r\n|\r|\n/).length`。
+- **非 CodeMirror 编辑器不接管**：pdf iframe / 图片等编辑器里，容器内根本拿不到选区（`window.getSelection()` 端点不在容器内或 `isCollapsed`）⇒ `readEditorSelection` 返回空快照 ⇒ `selection.text.length === 0` ⇒ 自然放行原生右键菜单（零回归）。
+- **坑**：① `isVisible` 是唯一的内容级过滤闸——想只在特定文件类型出现（如仅 `.ts`）就在它里判断，别拖到 `invoke` 才拦；② `invoke` 里抛错不会炸 UI（宿主吞并 warn），但也意味着**错误静默**，需要可见反馈时自己弹提示；③ `anchor` 是右键触发容器，插件浮层定位应相对它、别假设它一定是编辑器根；④ 路径三口径别混用：回切标签用 `filePath`（原样），交给 AI 用 `relativePath`，业务绝对路径用 `fullPath`；⑤ 行号依赖 CodeMirror DOM 类名（`.cm-line`/`.cm-lineNumbers`），换编辑器则行号降级为 null、引用仍带路径与原文（功能降级不失效）。
+- **坑（`MenuList` 定位必读）**：`MenuList` 的定位 effect 首行是 `if (!anchor) return`（`every-agent-web/src/components/shared/ui/Menu.tsx:255-256`）——`anchor` **必须**传真实触发容器（宿主传编辑器容器）；传 `null` 会让 `menuPosition` 停在 `null`，菜单被渲染到 `top/left: -9999`（屏外，`Menu.tsx:462-463`）。`anchorPoint` 只提供右键坐标，**不能替代** `anchor`。
+- **内置范例**：`selection-reference`（本方案新增内置插件，编辑器选区右键「引用到AI对话框」，`invoke` 经 `appendComposerToken` 插入 `kind='file.selection'` 胶囊）。
+
+## 17. `ui.composer_chip_actions` —— 胶囊激活行为
+
+### 17.1 Definition 字段表（`ComposerChipActionDefinition`，`every-agent-plugin-api/js/index.ts:407-411`；激活上下文 `ComposerChipActivationContext` `:395-401`、胶囊视图 `ComposerChipTokenView` `:386-392`）
+
+| 字段 | 类型 | 必填 | 消费规则（宿主） | 说明 |
+|---|---|---|---|---|
+| `kind` | `string` | ✅ | 按 `kind` 查表，**先注册者胜** | 胶囊种类 key；核心在首屏同步注册，故核心 kind 恒优先、插件不能顶替 |
+| `pluginId` | `string` | ✅ | 归属展示 | 提供方插件 id；核心自身填 `'core'` |
+| `onActivate` | `(ctx: ComposerChipActivationContext) => void` | ✅ | 点击胶囊时调用；未注册的 kind 保持现状（弹只读详情层） | 点击语义实现 |
+
+激活上下文 `ComposerChipActivationContext`：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `token` | `ComposerChipTokenView` | 宿主解码后的胶囊视图（见下） |
+| `anchor` | `HTMLElement` | 触发胶囊元素（供插件定位自身浮层） |
+| `source` | `'composer' \| 'replay'` | 消费点：输入框草稿 / 消息回放 |
+| `workspaceRoot` | `string` | 消费侧解析好的工作区根（任务工作区优先、注册表首选兜底） |
+| `taskId` | `string?` | 任务 id（草稿态可能无） |
+
+胶囊视图 `ComposerChipTokenView`：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `kind` | `string` | 胶囊种类 key |
+| `label` | `string` | 胶囊显示文字 |
+| `summary` | `string?` | 可选摘要（悬浮 / 详情用） |
+| `opaqueText` | `string` | 原始 opaque token 串（自包含渲染用） |
+| `payload` | `Record<string, unknown>` | 宿主解码后的 payload（宿主只解码不解释，插件自行校验字段） |
+
+### 17.2 注册示例（`selection-reference` 插件）
+
+```ts
+// web/index.ts
+import type { PluginModule, ComposerChipActionDefinition } from '@everyagent/plugin-api'
+import { SELECTION_KIND } from './token'
+
+const chipAction: ComposerChipActionDefinition = {
+  kind: SELECTION_KIND,        // 'file.selection'
+  pluginId: 'selection-reference',
+  onActivate: (c) => {
+    // 点胶囊 → 切回原文件标签并定位选区起始行（缺行号则仅打开文件）
+    const { workspaceRoot, filePath, startLine } = c.token.payload as {
+      workspaceRoot: string
+      filePath: string
+      startLine: number | null
+    }
+    ctx.ui.openFileTab(workspaceRoot, filePath, { lineNumber: startLine ?? undefined })
+  },
+}
+
+const plugin: PluginModule = {
+  activate(ctx) {
+    ctx.ui.registerComposerChipAction(chipAction)
+  },
+}
+export default plugin
+```
+
+### 17.3 宿主消费链与坑
+
+- **两个消费点**：① 输入框草稿 `InlineComposer.handleRootClick`（`every-agent-web/src/components/taskComposer/InlineComposer.tsx:685`）——点击胶囊从 opaque 串自包含解析后按 `pluginDispatcher.findComposerChipAction(parsed.kind)`（`InlineComposer.tsx:728`）查表，命中即以 `source:'composer'`（`:739`）、`workspaceRoot` 取自组件 `workspaceRoot` prop 链路（`:740` 的 `workspaceRootRef`；prop 由 `TaskComposerSurface.tsx:819` 从 `workspace || workspaceRegistry.primaryRoot() || ''`（`TaskComposerSurface.tsx:244`）传入）回调；② 消息回放 `AgentMessageThread.UserMessageReplay.handleChipActivate`（`every-agent-web/src/components/task/AgentMessageThread.tsx:276`）——`findComposerChipAction(token.kind)`（`:277`），命中即以 `source:'replay'`（`:288`）、`workspaceRoot = (taskId ? taskStore.get(taskId)?.workspace : undefined) || workspaceRegistry.primaryRoot() || ''`（`:290`，任务工作区优先、注册表首选兜底）回调。两处**未命中 → 保持现状：弹只读详情层 `openSlashItemDetail`**（`InlineComposer.tsx:746`、`AgentMessageThread.tsx:296`）。
+- **查表规则（`findComposerChipAction`）**：注册表内按 `kind` **首个命中**（`every-agent-web/src/plugin/PluginDispatcher.ts:369-371`，`.getAll().find((item) => item.kind === kind) ?? null`）⇒ **先注册者胜**。核心的 `system.workspace_file` 行为在首屏**同步**注册（先于异步的 `loadPlugins()`），故核心恒优先——**插件不能顶替核心 kind**，同 kind 后注册的插件动作会被静默忽略（查表永远先命中核心那条）。
+- **核心已迁入**：核心自身的 `system.workspace_file` 胶囊点击行为已从两处宿主组件硬编码迁到本扩展点——`every-agent-web/src/plugin/coreComposerChipActions.ts`（`pluginId:'core'`，与 `coreRoundTailPanels` 同范式），在 `main.tsx` 里 `initializeCoreRoundTailPanels()` 之后、`void loadPlugins()` **之前**同步调用 `initializeCoreComposerChipActions()`（`every-agent-web/src/main.tsx:53`，`loadPlugins()` 在 `:55`）；`InlineComposer`/`AgentMessageThread` 里已无 kind 字面量分支。核心 action 语义：`readWorkspaceFileToken` 解析 payload（`coreComposerChipActions.ts:48`）+ `ctx.workspaceRoot` 非空 → `pluginDispatcher.openFileTab(workspaceRoot, target.filePath)`（`:50-54`）；缺任一条件则回落 `openSlashItemDetail(ctx.anchor, { token })`（`:58`）。行为与迁移前一致。
+- **降级**：未命中（无插件为该 kind 注册动作）→ 保持现状（弹只读详情层），不报错。
+- **同一 kind 两处走同一注册表**：插件用上下文里的 `source` 区分场景。
+- **坑**：① `payload` 是不透明袋——宿主只解码不解释，字段缺失 / 类型错要插件自己兜底降级（建议 payload 里自带定位所需的 `workspaceRoot`/`filePath`，别假设宿主侧解析出的工作区根一定等于原文件的工作区根）；② `source:'replay'` 时没有输入框草稿桥，只能靠 `openFileTab` 等宿主动作响应，别假设能写草稿；③ 往输入框插胶囊用 `appendComposerToken`（见 §18），别自实现 opaque 线格式。
+- **坑（`appendComposerToken` 三则）**：① `appendComposerToken` 的 `payload` 形参是 `Record<string, unknown>`，插件侧 `interface`（如 `SelectionPayload`）**无索引签名** ⇒ 直接传会被 TS 判为不可赋值（TS2322），需展开成新对象字面量 `payload: { ...payload }`（见 §16.2 示例）；② 草稿桥（`setComposerBridge`）只在**激活**任务标签注入——`TaskChat.tsx` 的注入 effect 首行有 `if (!isActive) return` 守卫（`every-agent-web/src/components/task/TaskChat.tsx:711-713`），故没有激活任务标签时（或首个 `TaskChat` 尚未挂载）`appendComposerToken`/`appendComposerText` **静默丢弃**（同 `appendComposerText` 的时序坑）；③ `kind`/`label` 为空时由宿主 `buildOpaqueTokenText` **抛错**（`every-agent-web/src/composerToken/composerOpaqueToken.ts:52-56`，插件错误立刻可见），`appendComposerToken` 自身不做 kind 业务分支。
+- **内置范例**：`selection-reference`（`kind='file.selection'`，点击经 `openFileTab(..., { lineNumber })` 切回原文件标签并定位起始行）；核心 `system.workspace_file` 亦经此扩展点注册。
+
+## 18. UiRegistry 动作方法（6 个）
+
+动作方法不注册 UI，而是**驱动宿主**。实现链统一：`pluginDispatcher` 同步委托模块级 holder 桥（`pluginRuntimeBridge.ts`），宿主组件挂载时注入、未注入时静默降级（`pluginRuntimeBridge.ts:1-10` 注释）。
+
+| 方法 | 签名（`js/index.ts:834-852`） | 宿主实现链 | 行为 |
 |---|---|---|---|
-| `openPluginTab` | `(type, data: Record<string,string>, title?) => void` | `PluginDispatcher.ts:312-314` → `Layout.tsx:779-790` 注入 → `Layout.tsx:524-538` 实现 | 打开 `tabType=type` 的插件标签：查 `getWorkspaceTabTypeDefinition(type)` 定 pluginId，`data.id ?? 首个值 ?? type` 生成标签 id，`openWorkspaceTab` 入栈。`data` 原样存进 `tab.data`，由 §4 的 `renderTab` 读回（范例 `GitHistoryTabType.tsx:19-22,27-33` 的 `getData`） |
-| `openFileTab` | `(workspaceRoot, filePath, {mode?}) => void` | `PluginDispatcher.ts:315-317` → `Layout.tsx:782-787` | 打开顶层文件标签；`mode:'readwrite'|'readonly'` 透传 |
-| `openDiffTab` | `(input: PluginDiffTabInput) => void` | `PluginDispatcher.ts:318-320` → `Layout.tsx:788` | 打开 diff 对比标签；`input` 字段见 `js/index.ts:178-199`（`filePath/fileName/changeType/beforeContent/afterContent/workspaceRoot?/title?/binary?/allowRestore?`） |
-| `appendComposerText` | `(text) => void` | `PluginDispatcher.ts:321-323` → `TaskChat.tsx:698-705` 实现、`:719-721` 注入 | 向**当前激活**任务标签的草稿末尾追加纯文本 |
-| `setComposerRawContent` | `(raw) => void` | `PluginDispatcher.ts:324-326` → `TaskChat.tsx:706-710` | 用 rawContent（可含 opaque token 串）**整体替换**草稿（编辑重发回填用） |
+| `openPluginTab` | `(type, data: Record<string,string>, title?) => void` | `PluginDispatcher.ts:376-378` → `Layout.tsx:817-828` 注入（`setShellBridge`）→ `Layout.tsx:561` 实现 | 打开 `tabType=type` 的插件标签：查 `getWorkspaceTabTypeDefinition(type)` 定 pluginId，`data.id ?? 首个值 ?? type` 生成标签 id，`openWorkspaceTab` 入栈。`data` 原样存进 `tab.data`，由 §4 的 `renderTab` 读回（范例 `GitHistoryTabType.tsx:19-22,27-33` 的 `getData`） |
+| `openFileTab` | `(workspaceRoot, filePath, {mode?, lineNumber?}) => void` | `PluginDispatcher.ts:379-381` → `Layout.tsx:819-825` 注入 → `Layout.tsx:480-504` 实现（`openGlobalFileTab`） | 打开顶层文件标签；`mode:'readwrite'|'readonly'` 与 `lineNumber`（打开到指定行）透传。**`lineNumber` 透传链**：`PluginDispatcher.openFileTab`（`PluginDispatcher.ts:379-381`）→ `pluginRuntimeBridge.ShellBridge.openFileTab`（`pluginRuntimeBridge.ts:16`）→ `Layout` 注入的 `setShellBridge.openFileTab`（`Layout.tsx:819-825`）→ `openGlobalFileTab({ mode, lineNumber })`（`Layout.tsx:480-504`）；标签已存在时保留原 `reloadKey`（仅更新行定位字段 `lineNumber`/`lineLocateRequestedAt`，`Layout.tsx:490-500`），不重新读盘、编辑器不卸载重挂 |
+| `openDiffTab` | `(input: PluginDiffTabInput) => void` | `PluginDispatcher.ts:382-384` → `Layout.tsx:825` | 打开 diff 对比标签；`input` 字段见 `js/index.ts:189-209`（`filePath/fileName/changeType/beforeContent/afterContent/workspaceRoot?/title?/binary?/allowRestore?`） |
+| `appendComposerText` | `(text) => void` | `PluginDispatcher.ts:385-387` → `TaskChat.tsx:690-696` 实现、`:711-713` 注入 | 向**当前激活**任务标签的草稿末尾追加纯文本 |
+| `setComposerRawContent` | `(raw) => void` | `PluginDispatcher.ts:398-400` → `TaskChat.tsx:697-703` | 用 rawContent（可含 opaque token 串）**整体替换**草稿（编辑重发回填用） |
+| `appendComposerToken` | `(input: {kind, label, summary?, payload?, spaced?}) => void` | `PluginDispatcher.ts:388-397` → `buildOpaqueTokenText`（`composerToken/composerOpaqueToken.ts:46`）→ `getComposerBridge()?.appendText`（`pluginRuntimeBridge.ts:45`） | 结构化插入一枚胶囊（宿主单点负责 opaque token 编码，插件不碰线格式）；`spaced ?? true` 时补两侧空格（`PluginDispatcher.ts:395-396`）；`kind`/`label` 为空由 `buildOpaqueTokenText` **抛错**（`composerOpaqueToken.ts:52-56`）；未绑定草稿（桥 null）**静默丢弃**；自身不做 kind 业务分支 |
 
 ```ts
 // 典型组合：点击工具视图里的文件名打开文件标签（update-file-view 同款，UpdateFileToolView.tsx:85）
@@ -481,18 +645,22 @@ ctx.ui.openDiffTab({ filePath, fileName, changeType: 'updated', beforeContent, a
 // 编辑重发回填（EditMessageButton.tsx:60,62 同款）
 ctx.ui.setComposerRawContent(rawContent)
 ctx.ui.appendComposerText('\n\n（追加一段）')
+// 打开文件到指定行（选区引用回跳同款）
+ctx.ui.openFileTab(workspaceRoot, filePath, { lineNumber: 42 })
+// 结构化插入一枚胶囊（宿主单点编码 opaque token；payload 需展开成对象字面量，见 §17 坑）
+ctx.ui.appendComposerToken({ kind: 'file.selection', label: 'foo.ts:3-5', payload: { ...payload } })
 ```
 
-注意两个时序坑：① 页面刚加载、`Layout`/`TaskChat` 尚未挂载时桥为 null，动作**静默丢失**（不抛错）；② 草稿桥只在**激活标签页**持有写权（`TaskChat.tsx:710-718` 注释解释竞态），多任务标签并存时写入的是当前激活的那个。
+注意两个时序坑：① 页面刚加载、`Layout`/`TaskChat` 尚未挂载时桥为 null，动作**静默丢失**（不抛错）；② 草稿桥只在**激活标签页**持有写权（`TaskChat.tsx:703-713` 注释解释竞态），多任务标签并存时写入的是当前激活的那个。
 
-## 17. Disposable 与刷新
+## 19. Disposable 与刷新
 
 - **dispose 语义是真的**：`ListExtensionRegistry.register` 返回的 Disposable 从数组 splice 并通知宿主重渲染（`ExtensionRegistry.ts:45-56`）——`ctx.events.on`、`ctx.commands.registerCommand` 同理（见[前端 ctx API](context-api.md) §9）。`registerTraceType` / `registerOutputBlock` 的 dispose 也已补齐侧路注销（`traceTypeRegistry.unregisterTraceType` / `outputBlockRegistry.unregister`，known-issues #3 修复前曾是不清真实消费方的假 Disposable）。
 - **宿主收集并在页面卸载时统一 dispose**：激活时 `ctx.ui` 等注册表都包了收集代理（`pluginLoader.ts` 的 `trackDisposables`），注册返回的 Disposable 全部进该插件的 `disposables`；页面卸载（`pagehide`）时宿主先调 `deactivate` 再逆序 dispose 全部注册项并移除插件 CSS（known-issues #8 修复前 disposables 恒为空数组、`deactivate` 零调用）。运行期没有热卸载——中途注销仍需自己持有 Disposable 调 dispose。
 - **刷新即丢**：注册表、订阅、blob 模块全是内存态，页面刷新全部清零并重新走加载链路（[加载链路](overview-and-loading.md)）；跨刷新要保留的状态用 `ctx.storage`（localStorage）。
 - **同一会话内的「更新」= 重新加载页面**：改了插件 web 代码要重跑 `npm run build:plugins` 再刷新（该脚本不在任何流水线内）；后端启停/装卸一律重启 worker（[plugin.json 字段参考](../plugin-manifest.md) §6；扩展面板「重新加载」按钮**仅在有待生效变更时显示**，待生效变更涉及含 `main` 的插件时会弹确认并自动完成重启 + 刷新）。
 
-## 18. 下一步读
+## 20. 下一步读
 
 - `ctx.ui` 之外的能力（rpc/storage/events/fs/commands）：[前端 ctx API](context-api.md)
 - 加载链路与 bare import 白名单：[加载链路](overview-and-loading.md)
