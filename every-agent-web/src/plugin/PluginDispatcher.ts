@@ -21,7 +21,7 @@ import type {
   UiEditorContextMenuActionDefinition,
   ComposerChipActionDefinition,
 } from '@everyagent/plugin-api'
-import { getComposerBridge, getShellBridge } from './pluginRuntimeBridge'
+import { appendComposerTextQueued, getComposerBridge, getShellBridge } from './pluginRuntimeBridge'
 import { activeTabMirror } from './activeTabMirror'
 import { buildOpaqueTokenText } from '@/composerToken/composerOpaqueToken'
 import type {
@@ -193,8 +193,9 @@ export interface RealPluginDispatcher {
   listRegisteredComposerAbovePanels: () => UiComposerAbovePanelDefinition[]
   /** 查询当前激活的工作区标签（读宿主壳层镜像；无激活标签返回 null）。 */
   getActiveTab: () => PluginActiveTabInfo | null
-  /** 打开插件自定义标签（委托宿主 WorkspaceShellContext）。 */
-  openPluginTab: (type: string, data: Record<string, string>, title?: string) => void  /** 打开顶层文件标签（委托宿主 WorkspaceShellContext）。 */
+  /** 通用标签打开入口（内置/插件统一走宿主 WorkspaceShellContext）。 */
+  openTab: (type: string, data?: Record<string, string>, title?: string) => void
+  /** 打开顶层文件标签（委托宿主 WorkspaceShellContext）。 */
   openFileTab: (workspaceRoot: string, filePath: string, options?: { mode?: string; lineNumber?: number }) => void
   /** 打开顶层 diff 对比标签（委托宿主 WorkspaceShellContext）。 */
   openDiffTab: (input: PluginDiffTabInput) => void
@@ -373,8 +374,8 @@ export const pluginDispatcher: RealPluginDispatcher = {
   getActiveTab() {
     return activeTabMirror.current
   },
-  openPluginTab(type, data, title) {
-    getShellBridge()?.openPluginTab(type, data, title)
+  openTab(type, data, title) {
+    getShellBridge()?.openTab(type, data, title)
   },
   openFileTab(workspaceRoot, filePath, options) {
     getShellBridge()?.openFileTab(workspaceRoot, filePath, options)
@@ -383,7 +384,7 @@ export const pluginDispatcher: RealPluginDispatcher = {
     getShellBridge()?.openDiffTab(input)
   },
   appendComposerText(text) {
-    getComposerBridge()?.appendText(text)
+    appendComposerTextQueued(text)
   },
   appendComposerToken(input) {
     // opaque token 编码是宿主单点职责（同源 buildOpaqueTokenText）；kind/label 为空时由它抛错。
@@ -393,7 +394,7 @@ export const pluginDispatcher: RealPluginDispatcher = {
       payload: input.payload ?? {},
     })
     const spaced = input.spaced ?? true
-    getComposerBridge()?.appendText(spaced ? ` ${opaqueText} ` : opaqueText)
+    appendComposerTextQueued(spaced ? ` ${opaqueText} ` : opaqueText)
   },
   setComposerRawContent(rawContent) {
     getComposerBridge()?.setRawContent(rawContent)

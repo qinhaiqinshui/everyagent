@@ -4,8 +4,9 @@
  * - Hub 连接区:hubUrl + hubKey(hub 级凭证,前端与 worker 都要带)。
  * - Worker 列表区:见 WorkerList(状态收敛 + 单主按钮 + 别名)。
  *
- * 模型配置在 worker 侧,不在此编辑;skill 列表只读展示(见 SkillListTable,
- * 自动暴露按工作区排除配置在此设置);工作区注册表在资源管理器侧栏管理。
+ * 模型配置区块见 modelConfig/ModelConfigSection(表格增删直接写 worker 侧
+ * application-worker.yaml);skill 列表见 SkillListTable(自动暴露按工作区排除配置在此设置);
+ * 工作区注册表在资源管理器侧栏管理。
  */
 import React from 'react'
 import WorkspacePageShell from '@/components/shared/WorkspacePageShell'
@@ -29,6 +30,7 @@ import { domainEventBus, DOMAIN_EVENTS } from '@/events/eventBus'
 import ConfirmDialog from '@/components/shared/ConfirmDialog'
 import WorkerList from '@/components/system/WorkerList'
 import SkillListTable from '@/components/system/SkillListTable'
+import ModelConfigSection from '@/components/system/modelConfig/ModelConfigSection'
 import { APP_NAME, APP_VERSION, APP_COPYRIGHT, APP_LICENSE } from '@/appInfo'
 
 export default function SettingsPanel() {
@@ -44,9 +46,6 @@ export default function SettingsPanel() {
   const [notificationsEnabled, setNotificationsEnabled] = React.useState<boolean>(loadBrowserNotificationsEnabled)
   const [notificationPermission, setNotificationPermission] = React.useState<NotificationPermissionState>(getSystemNotificationPermission)
   const [requestingNotification, setRequestingNotification] = React.useState(false)
-  const [reloadingModels, setReloadingModels] = React.useState(false)
-  const [modelReloadHint, setModelReloadHint] = React.useState('')
-  const [modelReloadTone, setModelReloadTone] = React.useState<'ok' | 'error'>('ok')
   const [restartingWorkers, setRestartingWorkers] = React.useState(false)
   const [restartConfirmOpen, setRestartConfirmOpen] = React.useState(false)
   const [restartHint, setRestartHint] = React.useState('')
@@ -91,49 +90,6 @@ export default function SettingsPanel() {
   const handleToggleNotifications = (checked: boolean) => {
     setNotificationsEnabled(checked)
     saveBrowserNotificationsEnabled(checked)
-  }
-
-  const handleReloadModelConfig = async () => {
-    if (reloadingModels) return
-    const connectedWorkers: string[] = []
-    hub.directory.forEach((w) => {
-      if (w.connected) connectedWorkers.push(w.workerId)
-    })
-    if (connectedWorkers.length === 0) {
-      setModelReloadHint('无已连接的 worker')
-      setModelReloadTone('error')
-      return
-    }
-    setReloadingModels(true)
-    setModelReloadHint('')
-    try {
-      const results = await Promise.allSettled(
-        connectedWorkers.map((id) => hubSession.rpcTo(id, 'config.reload')),
-      )
-      const succeeded: string[] = []
-      const failed: string[] = []
-      results.forEach((r, i) => {
-        if (r.status === 'fulfilled') {
-          succeeded.push(connectedWorkers[i])
-        } else {
-          failed.push(connectedWorkers[i])
-        }
-      })
-      if (failed.length === 0) {
-        setModelReloadHint('已重新读取 ' + succeeded.length + ' 台 worker 的模型配置')
-        setModelReloadTone('ok')
-      } else {
-        setModelReloadHint(
-          '已重新读取 ' + succeeded.length + ' 台,' + failed.length + ' 台失败(' + failed.join(', ') + ')',
-        )
-        setModelReloadTone('error')
-      }
-    } catch (error) {
-      setModelReloadHint(error instanceof Error ? error.message : '重新读取模型配置失败')
-      setModelReloadTone('error')
-    } finally {
-      setReloadingModels(false)
-    }
   }
 
   const handleRestartWorkers = async () => {
@@ -294,23 +250,11 @@ export default function SettingsPanel() {
       <section style={sectionStyle}>
         <h3 style={sectionTitleStyle}>模型配置</h3>
         <p style={hintStyle}>
-          模型配置在 worker 侧的 application-worker.yaml 中维护。修改配置文件后点击「重新读取」即可让 worker 热加载,
-          无需重启;仅影响后续新建任务,运行中任务使用创建时冻结的快照。
+          模型配置按 worker 各自维护(直接写入 worker 侧 application-worker.yaml 的 worker.models 段)。
+          表格支持添加/删除;手动改过配置文件时点「重新读取」热加载即可,无需重启。
+          所有变更仅影响后续新建任务,运行中任务使用创建时冻结的快照。
         </p>
-        <div style={actionsStyle}>
-          <Button
-            type="button"
-            variant="secondary"
-            style={secondaryButtonStyle}
-            onClick={() => void handleReloadModelConfig()}
-            disabled={reloadingModels}
-          >
-            {reloadingModels ? '重新读取中…' : '重新读取模型配置'}
-          </Button>
-          {modelReloadHint ? (
-            <span style={modelReloadTone === 'error' ? errorStyle : okStyle}>{modelReloadHint}</span>
-          ) : null}
-        </div>
+        <ModelConfigSection />
       </section>
 
       <section style={sectionStyle}>

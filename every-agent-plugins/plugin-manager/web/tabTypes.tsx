@@ -1,7 +1,7 @@
 /**
  * `extension-detail` 工作区标签类型定义。
  *
- * 侧边栏扩展面板点击行后经 ctx.ui.openPluginTab(EXTENSION_DETAIL_TAB_TYPE, { id })
+ * 侧边栏扩展面板点击行后经 ctx.ui.openTab(EXTENSION_DETAIL_TAB_TYPE, { id })
  * 打开；宿主以 data.id 构造确定性 tab id（extension-detail:<pluginId>），
  * 同一插件恒为同一标签页，重复点击聚焦不重建（对标 VSCode 编辑器区的扩展详情页）。
  */

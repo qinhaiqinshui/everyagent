@@ -102,7 +102,7 @@ float 升序**统一混排**，不再有「内置在前、插件在后」的注�
 
 | 字段 | 类型 | 必填 | 消费位置（宿主） | 说明 |
 |---|---|---|---|---|
-| `tabTypeKey` | `string` | ✅ | `workspaceTabTypes.ts:57-59` | 查表 key；也是 `ctx.ui.openPluginTab(type,…)` 的 `type`（`Layout.tsx:525`） |
+| `tabTypeKey` | `string` | ✅ | `workspaceTabTypes.ts:57-59` | 查表 key；也是 `ctx.ui.openTab(type,…)` 的 `type`（`Layout.tsx:573`） |
 | `pluginId` | `string` | ✅ | `Layout.tsx:526` | 插件填插件 id；仅用于标签归属展示 |
 | `renderTab` | `(tab, ctx) => ReactNode` | ✅ | `Layout.tsx:1054` | 渲染标签主体（工作区主区域） |
 | `renderIcon` | `(tab) => ReactNode` | ✅ | `TitleBar.tsx:101` | 标签条图标 |
@@ -138,7 +138,7 @@ export const myTabType: UiWorkspaceTabTypeDefinition = {
 
 消费链：`allDefinitions()` 合并时**插件在前**——`[...pluginDispatcher.listRegisteredWorkspaceTabTypes(), ...builtinDefinitions]`（`every-agent-web/src/plugin/workspaceTabTypes.ts:25-27`），`getWorkspaceTabTypeDefinition` 用 `find` 查表（`:57-59`）⇒ 同名 `tabTypeKey` 插件定义**覆盖内置**（内置清单见 `:15-24`，git-history 已从内置迁出、由插件注册）。
 
-- **坑**：① `renderTab` 里先做 `tabType` 判别、不匹配返回 `null`（`GitHistoryTabType.tsx:28-29` 同款兜底）；② `openPluginTab` 的 `type` 必须与 `tabTypeKey` 一致，查不到定义时 `pluginId` 会回退成 type 本身（`Layout.tsx:525-527`）；③ `PluginWorkspaceTab` 是最小化替身类型，`pluginTabType` 等字段需强转访问（`GitHistoryTabType.tsx:28`）。
+- **坑**：① `renderTab` 里先做 `tabType` 判别、不匹配返回 `null`（`GitHistoryTabType.tsx:28-29` 同款兜底）；② `openTab` 的 `type` 必须与 `tabTypeKey` 一致，查不到定义时 `pluginId` 会回退成 type 本身（`workspaceTabTypes.ts:68-77` 的 `createPluginTabFallback`）；③ `PluginWorkspaceTab` 是最小化替身类型，`pluginTabType` 等字段需强转访问（`GitHistoryTabType.tsx:28`）。
 - **内置范例**：git（`every-agent-plugins/git/web/index.ts:39`）。
 
 ## 5. `ui.file_sidebar_panels` —— 文件页侧栏面板
@@ -377,7 +377,7 @@ ctx.ui.registerFileContentEditor(descriptor)
 
 - 注册与读取 API：`registerFileExplorerAction` / `listRegisteredFileExplorerActions`（`PluginDispatcher.ts`），扩展点名 `ui.file_explorer_actions`。
 - **消费点**：文件树右键/长按菜单构建处 `OpenFilesSidebarPanel.tsx` 的 `getFileActionItems`——先收集内置项（打开/新建/上传/属性/重命名/移动/搜索/下载/终端/系统文件管理器），再把插件注册项按 `isVisible(ctx)` 过滤后**追加到内置菜单项尾部**（与 `FileExplorerAction` 类型注释的约定一致）；面板订阅 `subscribeExtensionsChanged`，插件注册/注销后菜单即时刷新。
-- **内置范例**：git 的「显示 Git 历史」（`every-agent-plugins/git/web/index.ts:42-53`，invoke 里 `ctx.ui.openPluginTab` 打开 git-history 标签）——右键文件树任意节点即可见。
+- **内置范例**：git 的「显示 Git 历史」（`every-agent-plugins/git/web/index.ts:42-53`，invoke 里 `ctx.ui.openTab` 打开 git-history 标签）——右键文件树任意节点即可见。
 - 历史欠账：该扩展点曾长期无宿主消费点（known-issues #1），已接线修复。
 
 ## 14. `ui.round_tail_panels` —— 轮末展示区
@@ -628,7 +628,7 @@ export default plugin
 
 | 方法 | 签名（`js/index.ts:834-852`） | 宿主实现链 | 行为 |
 |---|---|---|---|
-| `openPluginTab` | `(type, data: Record<string,string>, title?) => void` | `PluginDispatcher.ts:376-378` → `Layout.tsx:817-828` 注入（`setShellBridge`）→ `Layout.tsx:561` 实现 | 打开 `tabType=type` 的插件标签：查 `getWorkspaceTabTypeDefinition(type)` 定 pluginId，`data.id ?? 首个值 ?? type` 生成标签 id，`openWorkspaceTab` 入栈。`data` 原样存进 `tab.data`，由 §4 的 `renderTab` 读回（范例 `GitHistoryTabType.tsx:19-22,27-33` 的 `getData`） |
+| `openTab` | `(type: string, data?: Record<string,string>, title?: string) => void` | `PluginDispatcher.ts:377-379` → `Layout.tsx:803-813` 注入（`setShellBridge`）→ `Layout.tsx:573` 实现 | 内置/插件统一的通用标签打开入口：按 `tabTypeKey` 查注册表取创建器（内置型自带 `createTab`，插件型/未注册型走通用兜底）创建标签，`openWorkspaceTab` 入栈；`data` 可选，原样存进 `tab.data`，由 §4 的 `renderTab` 读回（范例 `GitHistoryTabType.tsx:19-22,27-33` 的 `getData`） |
 | `openFileTab` | `(workspaceRoot, filePath, {mode?, lineNumber?}) => void` | `PluginDispatcher.ts:379-381` → `Layout.tsx:819-825` 注入 → `Layout.tsx:480-504` 实现（`openGlobalFileTab`） | 打开顶层文件标签；`mode:'readwrite'|'readonly'` 与 `lineNumber`（打开到指定行）透传。**`lineNumber` 透传链**：`PluginDispatcher.openFileTab`（`PluginDispatcher.ts:379-381`）→ `pluginRuntimeBridge.ShellBridge.openFileTab`（`pluginRuntimeBridge.ts:16`）→ `Layout` 注入的 `setShellBridge.openFileTab`（`Layout.tsx:819-825`）→ `openGlobalFileTab({ mode, lineNumber })`（`Layout.tsx:480-504`）；标签已存在时保留原 `reloadKey`（仅更新行定位字段 `lineNumber`/`lineLocateRequestedAt`，`Layout.tsx:490-500`），不重新读盘、编辑器不卸载重挂 |
 | `openDiffTab` | `(input: PluginDiffTabInput) => void` | `PluginDispatcher.ts:382-384` → `Layout.tsx:825` | 打开 diff 对比标签；`input` 字段见 `js/index.ts:189-209`（`filePath/fileName/changeType/beforeContent/afterContent/workspaceRoot?/title?/binary?/allowRestore?`） |
 | `appendComposerText` | `(text) => void` | `PluginDispatcher.ts:385-387` → `TaskChat.tsx:690-696` 实现、`:711-713` 注入 | 向**当前激活**任务标签的草稿末尾追加纯文本 |
@@ -639,7 +639,7 @@ export default plugin
 // 典型组合：点击工具视图里的文件名打开文件标签（update-file-view 同款，UpdateFileToolView.tsx:85）
 ctx.ui.openFileTab(workspaceRoot, filePath, { mode: 'readonly' })
 // 打开本插件注册的 git-history 式标签（git/web/index.ts:44-49 同款）
-ctx.ui.openPluginTab('my-view', { workspaceRoot, path }, `我的视图：${name}`)
+ctx.ui.openTab('my-view', { workspaceRoot, path }, `我的视图：${name}`)
 // 打开 diff（GitSidebarPanel.tsx:400 同款）
 ctx.ui.openDiffTab({ filePath, fileName, changeType: 'updated', beforeContent, afterContent, workspaceRoot })
 // 编辑重发回填（EditMessageButton.tsx:60,62 同款）

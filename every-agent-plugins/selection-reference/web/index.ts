@@ -42,7 +42,6 @@ const selectionReferencePlugin: PluginModule = {
     const referenceAction: UiEditorContextMenuActionDefinition = {
       id: 'selection-reference.reference-to-ai',
       label: '引用到AI对话框',
-      group: 'AI',
       order: 100,
       // 无选中内容 → 该项不出现（宿主过滤后若无可见项则完全放行原生右键菜单）。
       isVisible: (c) => c.selection.text.length > 0,
@@ -56,7 +55,10 @@ const selectionReferencePlugin: PluginModule = {
           endLine: c.selection.endLine,
           text: c.selection.text, // 原文不截断
         }
-        // 结构化插入胶囊：opaque token 编码由宿主单点负责（本插件不碰线格式）。
+        // 先打开新草稿任务标签页（通用入口），再把选区胶囊写入该标签页草稿。
+        // 新标签页的 TaskChat 可能尚未挂载、composerBridge 尚未注入，
+        // 由宿主 appendComposerToken → 队列兜底，bridge 注入时自动 flush。
+        ctx.ui.openTab('task', { taskId: '__draft__' }, '新任务')
         // 展开为对象字面量以满足 appendComposerToken 的 Record<string, unknown> 形参
         // （interface 无索引签名，直接传会被 TS 判为不可赋值）。
         ctx.ui.appendComposerToken({

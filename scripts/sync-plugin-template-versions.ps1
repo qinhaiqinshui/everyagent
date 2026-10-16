@@ -23,7 +23,9 @@
     Java 版本 / 编码 / 依赖版本管理 / 打包 全由 parent 提供，模板里没有任何版本字面量
     （内置形态的 parent 版本写 ${revision}、外部形态由生成器读根 pom 填实际版本）。
     往这里写死版本会破坏版本单点源；
-  - 脚手架 vendor 类型副本（index.d.ts.raw）是内容同步不是版本同步，不归本脚本管；
+  - 脚手架 vendor 类型副本（index.d.ts.raw）是内容同步不是版本同步，不归本脚本管
+    （归 scripts/sync-plugin-api-copy.ps1 —— 它管类型副本的逐字节内容，并配
+    create-everyagent-plugin/test/plugin-api-copy.test.mjs 漂移守卫测试）；
   - @everyagent/plugin-api js 包版本（every-agent-plugin-api/js/package.json）归
     scripts/bump-version.py 统一管理（与 <revision> 同号）。
 

@@ -197,7 +197,7 @@ if (ctx.storage.get<string>('bigBlob') !== json) { /* 降级：不入库/提示 
 三条必须知道的边界（都源自同一个实现事实）：
 
 1. **注册表是每个插件私有的**：`commands: createCommandRegistry()` 在构造每个 ctx 时新建一个空 `Map`（`pluginLoader.ts:388` 调 `:167-169`）。插件 A `executeCommand` 不到插件 B 注册的命令。
-2. **没有宿主内置命令**：宿主自身不向任何插件注册表塞命令——`every-agent-web/src` 中 `registerCommand` 调用点为零（唯一出现处是注释 `every-agent-web/src/plugin/api.ts:11`）。想触发宿主动作用 `ctx.ui` 的动作方法（`openPluginTab` 等，见 [UI 扩展点](ui-extensions.md)）或 `sdk.rpc`。
+2. **没有宿主内置命令**：宿主自身不向任何插件注册表塞命令——`every-agent-web/src` 中 `registerCommand` 调用点为零（唯一出现处是注释 `every-agent-web/src/plugin/api.ts:11`）。想触发宿主动作用 `ctx.ui` 的动作方法（`openTab` 等，见 [UI 扩展点](ui-extensions.md)）或 `sdk.rpc`。
 3. **内置插件也没人用它**：`every-agent-plugins/*/web` 下 `ctx.commands` 零调用（rg 确认）。当前它是「留给你自己插件内部用的解耦点」，不是全局命令总线。
 
 插件内部解耦的标准用法（把 UI 回调与实现拆开）：
@@ -265,7 +265,7 @@ await ctx.fs.delete(workspaceRoot, 'docs/draft.md')
 
 ## 8. `ctx.ui` —— 一笔带过
 
-`UiRegistry` 有 15 个 `register*`（sidebar 项、工作区标签类型、工具调用视图、文件编辑器、编辑器右键菜单、胶囊激活……）、6 个动作方法（`openPluginTab`/`openFileTab`/`openDiffTab`/`appendComposerText`/`appendComposerToken`/`setComposerRawContent`）与 1 个查询方法（`getActiveTab()`——同步读宿主壳层维护的激活标签镜像，返回 `{id, tabType}` 或 null，变更通知配 `workspace-tab-activated`/`workspace-tab-closed` 事件），声明在 `index.ts:808-853`，宿主实现是单例 `pluginDispatcher`（ctx 里 `ui: pluginDispatcher as unknown as ...` 强转接入，`pluginLoader.ts:511`）。每个 `register*` 返回的 Disposable 都是**真清理**：`ListExtensionRegistry.register` 的 dispose 从数组 splice 并通知订阅者重渲染（`every-agent-web/src/plugin/ExtensionRegistry.ts:45-56`）。逐扩展点字段表与代码范例见 [UI 扩展点](ui-extensions.md)。
+`UiRegistry` 有 15 个 `register*`（sidebar 项、工作区标签类型、工具调用视图、文件编辑器、编辑器右键菜单、胶囊激活……）、6 个动作方法（`openTab`/`openFileTab`/`openDiffTab`/`appendComposerText`/`appendComposerToken`/`setComposerRawContent`）与 1 个查询方法（`getActiveTab()`——同步读宿主壳层维护的激活标签镜像，返回 `{id, tabType}` 或 null，变更通知配 `workspace-tab-activated`/`workspace-tab-closed` 事件），声明在 `index.ts:808-853`，宿主实现是单例 `pluginDispatcher`（ctx 里 `ui: pluginDispatcher as unknown as ...` 强转接入，`pluginLoader.ts:511`）。每个 `register*` 返回的 Disposable 都是**真清理**：`ListExtensionRegistry.register` 的 dispose 从数组 splice 并通知订阅者重渲染（`every-agent-web/src/plugin/ExtensionRegistry.ts:45-56`）。逐扩展点字段表与代码范例见 [UI 扩展点](ui-extensions.md)。
 
 ## 9. 寿命与清理
 

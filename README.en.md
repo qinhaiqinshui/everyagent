@@ -84,7 +84,7 @@
 - Out-of-workspace operations / dangerous commands always require **popup authorization**, with optional **AI review** / **unattended mode** for auto-adjudication; git credentials are AES-GCM encrypted and stored locally.
 
 ### 🔌 Plug in any model, with built-in failover
-- Any **OpenAI-compatible** provider: OpenAI, DeepSeek, Qwen, GLM, local vLLM/Ollama… just change one line of config.
+- Any **OpenAI-compatible** provider: OpenAI, DeepSeek, Qwen, GLM, local vLLM/Ollama… just click **Add** in the Settings page's Model Config table (built-in providers auto-fill endpoints), or change one line of config.
 - **Model pool**: a task can be configured with multiple models; if the primary fails, it automatically switches to the next without interrupting the task.
 - 💸 **A boon for free-model users**: the project was developed in its later stages entirely on **free models** — thanks to **SenseNova** for its generous free model quotas and to **OpenRouter** for its free model endpoints. Even when a free quota runs out or a model goes down, the model pool auto-switches to the next available one so development never stops. Today, Every Agent can **develop itself using Every Agent** (dogfooding).
 
@@ -229,7 +229,9 @@ In one sentence: **the sandbox ensures the AI can't break your system; the guard
 
 #### Configure models (desktop)
 
-The desktop edition's data directory defaults to `~/.everyagent`. Create `~/.everyagent/application-worker.yaml` with any text editor:
+No manual file editing required: in the desktop app's Settings page, under the "Model Config" block, click **Add** — pick a built-in provider (DeepSeek / Zhipu / OpenAI / Alibaba Bailian / Kimi, etc.) and baseUrl / fullUrl are auto-filled; you only need to enter an id (must be unique), model name, and apiKey. The config is written directly to the worker-side `~/.everyagent/application-worker.yaml` and hot-loaded — no restart needed. "Other" providers with custom endpoints are supported too.
+
+Alternatively, create `~/.everyagent/application-worker.yaml` with any text editor (the desktop edition's data directory defaults to `~/.everyagent`):
 
 ```yaml
 worker:
@@ -242,7 +244,7 @@ worker:
       is-default: true
 ```
 
-Save and **restart the desktop edition** (the worker loads model config at startup) to create tasks and start running.
+After saving a manual edit, click **Reload model config** in the Settings page to hot-load it (the worker also loads it at startup).
 
 > More config: multiple models, model pool failover, any OpenAI-compatible provider — see "Configure Models (Required)" below.
 
@@ -275,7 +277,11 @@ Tests: `mvn test` (contract + hub + worker full-chain E2E), `cd every-agent-web 
 
 ## ⚙️ Configure Models (Required)
 
-The worker calls models using the **OpenAI-compatible protocol**. Write the following to `~/.everyagent/application-worker.yaml` (desktop / local worker reads this file by default; for Docker deployment, mount a volume or inject environment variables):
+The worker calls models using the **OpenAI-compatible protocol**. There are two ways to maintain model configs — both write to the same place (the `worker.models` section of `~/.everyagent/application-worker.yaml`; desktop / local worker reads this file by default; for Docker deployment, mount a volume or inject environment variables):
+
+**Option A: GUI maintenance in the Settings page (recommended)** — the "Model Config" block on the Settings page lists each worker's existing configs in a table (id / model name / provider / baseUrl / fullUrl / masked apiKey / protocol), with **Add** / **Delete** buttons above it; saving writes the file and hot-loads it, no restart needed. The add dialog ships with built-in providers (DeepSeek / Zhipu / OpenAI / Alibaba Bailian / Kimi) — selecting one auto-fills baseUrl / fullUrl, so you only need the id (unique), model name, and apiKey; choose "Other" to fill in custom endpoints. The protocol is currently OpenAI-compatible only.
+
+**Option B: edit the config file manually** — write to `~/.everyagent/application-worker.yaml`:
 
 ```yaml
 worker:
@@ -287,6 +293,8 @@ worker:
       api-key: sk-xxxx          # your API key, stored locally only
       is-default: true
 ```
+
+After saving a manual edit, click **Reload model config** in the Settings page to hot-load it (no restart required); changes only affect tasks created afterwards — running tasks keep the snapshot frozen at creation time.
 
 **Model pool failover** (optional): auto-switch when the primary model fails — especially friendly for "free-model users": the project was developed in its later stages on free models (SenseNova's many free models, OpenRouter's free endpoints, etc.), auto-switching when quotas run out or models are unavailable. Today, Every Agent is used to develop itself.
 

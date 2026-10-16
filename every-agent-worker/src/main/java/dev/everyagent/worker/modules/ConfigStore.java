@@ -8,13 +8,16 @@ import dev.everyagent.plugin.api.exception.NotFoundException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
+import org.yaml.snakeyaml.DumperOptions;
 import org.yaml.snakeyaml.Yaml;
 import tools.jackson.databind.JsonNode;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -24,7 +27,9 @@ import java.util.Map;
  * 模型配置存储(架构 §5.5「config.get」/§7.17「配置分层」):数据源 = Spring 配置 {@code worker.models}
  * (jar 内 application.yml 默认 + ~/.everyagent/application-worker.yaml 用户覆盖)。
  * 模型配置是系统功能,不进工作区、不随工作区切换;任务创建时解析为不可变快照
- * (apiKey 只留内存,不入事件日志)。本类不再持久化、不再提供写入口(前端只读)。
+ * (apiKey 只留内存,不入事件日志)。写入口(设置页「模型配置」表格):addModel/removeModel
+ * 把整表落盘到 {@code <系统目录>/application-worker.yaml} 的 {@code worker.models} 段
+ * (保留文件内其他配置键),成功后热重建内存索引,由调用方广播 config.changed{keys:["models"]}。
  *
  * <p>组合 provider(如 model-pool)的成员解析由插件自行调用 {@link #resolveOrNull} 完成,
  * ConfigStore 不再感知「池」概念,统一按普通模型处理。
@@ -87,7 +92,152 @@ public class ConfigStore {
         return configs.size();
     }
 
-    /** 从外部 YAML 文件解析 worker.models 段为 WorkerProperties.Model 列表;不含该段返回 null。 */
+    /**
+     * 新增模型配置(设置页「模型配置」表格的添加入口):校验 configId 唯一后,
+     * 把「当前配置整表 + 新条目」落盘到 {@code <系统目录>/application-worker.yaml}
+     * 的 {@code worker.models} 段(保留文件内其他配置键),再热重建内存索引。
+     * 调用方负责广播 config.changed{keys:["models"]}。
+     *
+     * @return 落盘后的模型条目总数
+     * @throws IllegalArgumentException configId 为空/重复,或模型名/base-url/full-url 缺失
+     */
+    public synchronized int addModel(WorkerProperties.Model model) {
+        if (model == null || model.getConfigId() == null || model.getConfigId().isBlank()) {
+            throw new IllegalArgumentException("config-id 不能为空");
+        }
+        String id = model.getConfigId().trim();
+        model.setConfigId(id);
+        if (model.getModel() == null || model.getModel().isBlank()) {
+            throw new IllegalArgumentException("模型名不能为空");
+        }
+        if ((model.getBaseUrl() == null || model.getBaseUrl().isBlank())
+                && (model.getFullUrl() == null || model.getFullUrl().isBlank())) {
+            throw new IllegalArgumentException("base-url 与 full-url 至少填一项");
+        }
+        List<WorkerProperties.Model> current = props.getModels() == null
+                ? new ArrayList<>() : new ArrayList<>(props.getModels());
+        for (WorkerProperties.Model m : current) {
+            if (m != null && m.getConfigId() != null && m.getConfigId().trim().equals(id)) {
+                throw new IllegalArgumentException("config-id 已存在: " + id);
+            }
+        }
+        current.add(model);
+        writeModelsToExternal(current);
+        props.setModels(current);
+        rebuild(current);
+        log.info("[config] 新增模型配置: {}(共 {} 条,已落盘 application-worker.yaml)", id, current.size());
+        return current.size();
+    }
+
+    /**
+     * 删除模型配置(设置页「模型配置」表格的删除入口):把「当前配置整表 − 目标条目」
+     * 落盘到外部 YAML 并热重建。条目不存在时抛 {@link NotFoundException}。
+     * 调用方负责广播 config.changed{keys:["models"]}。
+     *
+     * @return 落盘后的模型条目总数
+     */
+    public synchronized int removeModel(String configId) {
+        String id = configId == null ? "" : configId.trim();
+        if (id.isEmpty()) {
+            throw new NotFoundException("模型配置不存在: " + configId);
+        }
+        List<WorkerProperties.Model> current = props.getModels() == null
+                ? new ArrayList<>() : new ArrayList<>(props.getModels());
+        boolean removed = current.removeIf(m -> m != null && m.getConfigId() != null && m.getConfigId().trim().equals(id));
+        if (!removed) {
+            throw new NotFoundException("模型配置不存在: " + id);
+        }
+        writeModelsToExternal(current);
+        props.setModels(current);
+        rebuild(current);
+        log.info("[config] 删除模型配置: {}(剩 {} 条,已落盘 application-worker.yaml)", id, current.size());
+        return current.size();
+    }
+
+    /**
+     * 把模型整表写入 {@code <系统目录>/application-worker.yaml} 的 {@code worker.models} 段:
+     * 文件已存在时保留其中其他配置键(注释不保留),不存在时新建;写 tmp 再原子移动落盘。
+     */
+    @SuppressWarnings("unchecked")
+    private void writeModelsToExternal(List<WorkerProperties.Model> models) {
+        Path external = props.resolveHomeDir().resolve("application-worker.yaml");
+        Map<String, Object> root = new LinkedHashMap<>();
+        if (Files.isRegularFile(external)) {
+            try (InputStream in = Files.newInputStream(external)) {
+                Object loaded = new Yaml().load(in);
+                if (loaded instanceof Map<?, ?> loadedMap) {
+                    for (Map.Entry<?, ?> e : loadedMap.entrySet()) {
+                        root.put(String.valueOf(e.getKey()), e.getValue());
+                    }
+                }
+            } catch (IOException e) {
+                log.error("[config] 读取外部配置文件失败: {}", external, e);
+                throw new IllegalStateException("读取模型配置文件失败: " + e.getMessage(), e);
+            }
+        }
+        Object workerNode = root.get("worker");
+        Map<String, Object> workerMap = new LinkedHashMap<>();
+        if (workerNode instanceof Map<?, ?> existingWorker) {
+            for (Map.Entry<?, ?> e : existingWorker.entrySet()) {
+                workerMap.put(String.valueOf(e.getKey()), e.getValue());
+            }
+        }
+        workerMap.put("models", toModelYamlList(models));
+        root.put("worker", workerMap);
+        DumperOptions options = new DumperOptions();
+        options.setDefaultFlowStyle(DumperOptions.FlowStyle.BLOCK);
+        options.setAllowUnicode(true);
+        options.setIndent(2);
+        String text = new Yaml(options).dump(root);
+        try {
+            Files.createDirectories(external.getParent());
+            Path tmp = external.resolveSibling("application-worker.yaml.tmp");
+            Files.writeString(tmp, text, StandardCharsets.UTF_8);
+            Files.move(tmp, external, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+        } catch (IOException e) {
+            log.error("[config] 写入外部配置文件失败: {}", external, e);
+            throw new IllegalStateException("写入模型配置文件失败: " + e.getMessage(), e);
+        }
+    }
+
+    /** 模型列表 → YAML 节点(kebab-case 键,与 application-worker.yaml 手写格式一致;空值键省略)。 */
+    private static List<Map<String, Object>> toModelYamlList(List<WorkerProperties.Model> models) {
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (WorkerProperties.Model m : models) {
+            if (m == null) {
+                continue;
+            }
+            Map<String, Object> node = new LinkedHashMap<>();
+            if (m.getConfigId() != null && !m.getConfigId().isBlank()) {
+                node.put("config-id", m.getConfigId());
+            }
+            if (m.getProvider() != null && !m.getProvider().isBlank()) {
+                node.put("provider", m.getProvider());
+            }
+            if (m.getBaseUrl() != null && !m.getBaseUrl().isBlank()) {
+                node.put("base-url", m.getBaseUrl());
+            }
+            if (m.getFullUrl() != null && !m.getFullUrl().isBlank()) {
+                node.put("full-url", m.getFullUrl());
+            }
+            if (m.getModel() != null && !m.getModel().isBlank()) {
+                node.put("model", m.getModel());
+            }
+            if (m.getApiKey() != null && !m.getApiKey().isEmpty()) {
+                node.put("api-key", m.getApiKey());
+            }
+            if (m.getParams() != null && !m.getParams().isEmpty()) {
+                node.put("params", new LinkedHashMap<>(m.getParams()));
+            }
+            if (m.getIsDefault() != null) {
+                node.put("is-default", m.getIsDefault());
+            }
+            out.add(node);
+        }
+        return out;
+    }
+
+
     @SuppressWarnings("unchecked")
     private List<WorkerProperties.Model> parseExternalModels(Path external) {
         try (InputStream in = Files.newInputStream(external)) {

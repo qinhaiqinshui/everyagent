@@ -2,7 +2,7 @@
  * 侧边栏「扩展」面板（VSCode 扩展视图风格列表）。
  *
  * 只负责列表：搜索 + 分组（内置/外部）+ 扩展行（图标 + 名称 + 描述 + 作者/版本/来源行
- * + 启用开关）。点击行不再在面板内展开详情，而是经 ctx.ui.openPluginTab 打开
+ * + 启用开关）。点击行不再在面板内展开详情，而是经 ctx.ui.openTab 打开
  * `extension-detail` 工作区标签页（同一插件恒为同一标签页，重复点击聚焦——对标
  * VSCode 在编辑器区打开扩展详情页）。
  *
@@ -61,7 +61,7 @@ function GroupHeader({ title, count }: { title: string; count: number }) {
 function openDetailTab(plugin: PluginEntry): void {
   const ui = getUi()
   if (!ui) return
-  ui.openPluginTab(EXTENSION_DETAIL_TAB_TYPE, { id: plugin.id }, plugin.name)
+  ui.openTab(EXTENSION_DETAIL_TAB_TYPE, { id: plugin.id }, plugin.name)
 }
 
 /** 单个扩展行（VSCode 扩展视图布局：图标 + 名称/描述/作者行 + 右侧开关）。 */

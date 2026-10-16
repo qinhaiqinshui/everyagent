@@ -5,7 +5,6 @@ import type { AlignType } from '@rc-component/trigger'
 import { ChevronDownIcon, ChevronRightIcon, FolderIcon } from '../shared/AppGlyphs'
 import { FileTypeIcon } from '../shared/FileTypeGlyphs'
 import type { ListRowActionItem } from '../shared/ui/ListRowActions'
-import { Checkbox } from '../shared/ui'
 import { MenuList } from '../shared/ui/Menu'
 import { useResponsiveViewport } from '@/hooks/useResponsiveViewport'
 import { useLongPress } from '@/hooks/useLongPress'
@@ -23,45 +22,48 @@ const MENU_PADDING = 8
 /** 菜单宽度估算值(antd 菜单按内容撑宽,无固定值),用于水平方向钳制避免溢出视口右缘。 */
 const MENU_WIDTH_ESTIMATE = 200
 
+/** 拖动框选(橡皮筋)触发的最小位移(px):超过此距离视为拖动而非单击。 */
+const RUBBER_BAND_THRESHOLD = 5
+/** 移动端长按激活拖动的等待时长(ms):与行内长按右键菜单(500ms)同窗口,长按弹菜单后继续滑动才转拖动。 */
+const TOUCH_LONG_PRESS_MS = 500
+/** 移动端长按后判定「开始拖动」的位移阈值(px):与 useLongPress 的取消阈值对齐。 */
+const TOUCH_DRAG_TOLERANCE = 10
+
 export default function WorkspaceExplorerTree({
   workspaceRoot,
   nodes,
   expandedPaths,
-  selectedPath,
   locatePath,
   locateRequestedAt,
   onLocateApplied,
   onToggleDirectory,
-  onSelectPath,
   onOpenFile,
   onRequestDelete,
   getActionItems,
   metaMode,
-  multiSelectMode = false,
   selectedPaths,
-  onToggleSelectedPath,
+  onMultiSelectChange,
+  onMoveToDirectory,
 }: {
   /** 所属工作区根(上下文菜单 target 需携带,命令落对应工作区)。 */
   workspaceRoot: string
   nodes: WorkspaceExplorerNode[]
   expandedPaths: Set<string>
-  selectedPath: string | null
   locatePath?: string | null
   locateRequestedAt?: number | null
   onLocateApplied?: () => void
   onToggleDirectory: (path: string) => void
-  onSelectPath: (path: string) => void
   onOpenFile: (target: WorkspaceExplorerOpenTarget) => void
   onRequestDelete?: (target: WorkspaceExplorerContextTarget) => void
   getActionItems?: (target: WorkspaceExplorerContextTarget) => ListRowActionItem[]
   /** 行尾元信息显示模式：文件大小、最后编辑时间，或 none(默认隐藏)。 */
   metaMode?: 'size' | 'modified' | 'none'
-  /** 多选模式：开启后每行前置复选框，复选框切换选中，行单击不再触发单选高亮。 */
-  multiSelectMode?: boolean
-  /** 多选模式下的已选路径集合（仅在 multiSelectMode 时使用）。 */
+  /** 当前选中集合(保持点击顺序)；行内自绘高亮是唯一高亮来源，不再走 antd 内置选中通道。 */
   selectedPaths?: Set<string>
-  /** 多选模式下切换单个路径选中态。 */
-  onToggleSelectedPath?: (path: string) => void
+  /** 选中集合更新入口(Ctrl/Shift 点击与空白处拖动框选统一走此回调)。 */
+  onMultiSelectChange?: (paths: Set<string>) => void
+  /** 拖拽移动落点提交:起点为已选中节点的拖动松手时回调,参数为目标目录(business 绝对路径,'' = 工作区根)。 */
+  onMoveToDirectory?: (targetDir: string) => void
 }) {
   const isMobile = useResponsiveViewport().isMobile
   const { token } = useToken()
@@ -71,6 +73,15 @@ export default function WorkspaceExplorerTree({
   const containerRef = React.useRef<HTMLDivElement | null>(null)
   // 当前打开右键菜单的行路径：同一时刻只允许一个右键菜单打开(原生右键习惯)，由各 TreeNodeRow 受控。
   const [openMenuPath, setOpenMenuPath] = React.useState<string | null>(null)
+
+  // 多选：锚点路径(Shift+Click 范围选择的起点)。
+  const anchorPathRef = React.useRef<string | null>(null)
+  // 多选：拖动框选矩形状态(null = 未在框选)。
+  const [rubberBand, setRubberBand] = React.useState<{
+    x1: number; y1: number; x2: number; y2: number
+  } | null>(null)
+  // 多选：框选结束后抑制下一次 click(防止框选误触发单选)。
+  const suppressNextClickRef = React.useRef(false)
 
   const expandedKeys = React.useMemo(() => Array.from(expandedPaths), [expandedPaths])
 
@@ -99,6 +110,336 @@ export default function WorkspaceExplorerTree({
     return () => window.clearTimeout(id)
   }, [locatePath, locateRequestedAt, onLocateApplied])
 
+  /** 获取容器内所有可见树节点路径(按 DOM 顺序；折叠子树不在 DOM 中，天然被排除)。 */
+  const getVisiblePaths = React.useCallback((): string[] => {
+    const container = containerRef.current
+    if (!container) return []
+    const paths: string[] = []
+    container.querySelectorAll('.ant-tree-treenode').forEach((el) => {
+      const content = el.querySelector('[data-key]')
+      const path = content?.getAttribute('data-key')
+      if (path) paths.push(path)
+    })
+    return paths
+  }, [])
+
+  /** Shift+Click 范围选择：返回锚点到目标之间所有可见节点路径。 */
+  const computeRangeSelection = React.useCallback((anchor: string, target: string): Set<string> => {
+    const visiblePaths = getVisiblePaths()
+    const anchorIdx = visiblePaths.indexOf(anchor)
+    const targetIdx = visiblePaths.indexOf(target)
+    if (anchorIdx === -1 || targetIdx === -1) return new Set([target])
+    const start = Math.min(anchorIdx, targetIdx)
+    const end = Math.max(anchorIdx, targetIdx)
+    return new Set(visiblePaths.slice(start, end + 1))
+  }, [getVisiblePaths])
+
+  /** 更新选中集合:处理节点点击(Ctrl/Shift/普通)。 */
+  const handleMultiSelectClick = React.useCallback((path: string, e: React.MouseEvent) => {
+    if (!onMultiSelectChange) return
+    const isCtrl = e.ctrlKey || e.metaKey
+    const isShift = e.shiftKey
+
+    if (isShift && anchorPathRef.current) {
+      // Shift+Click: 范围选择
+      const rangePaths = computeRangeSelection(anchorPathRef.current, path)
+      if (isCtrl) {
+        // Ctrl+Shift+Click: 追加范围到现有选择
+        const next = new Set([...(selectedPaths ?? []), ...rangePaths])
+        onMultiSelectChange(next)
+      } else {
+        onMultiSelectChange(rangePaths)
+      }
+    } else if (isCtrl) {
+      // Ctrl+Click: 切换单个路径
+      const next = new Set(selectedPaths ?? [])
+      if (next.has(path)) next.delete(path)
+      else next.add(path)
+      onMultiSelectChange(next)
+      anchorPathRef.current = path
+    } else {
+      // 普通点击: 仅选中该路径
+      onMultiSelectChange(new Set([path]))
+      anchorPathRef.current = path
+    }
+  }, [onMultiSelectChange, selectedPaths, computeRangeSelection])
+
+  /** 右键/长按归一选中:被操作行若不在当前选中集合内,选中集合收缩为该行;已在集合内则保持多选不变。 */
+  const normalizeSelectionForPath = React.useCallback((path: string) => {
+    if (!onMultiSelectChange) return
+    if (selectedPaths?.has(path)) return
+    // 锚点同步指向该行,避免下一次 Shift 点击从旧锚点起算。
+    anchorPathRef.current = path
+    onMultiSelectChange(new Set([path]))
+  }, [onMultiSelectChange, selectedPaths])
+
+  /**
+   * 橡皮筋框选会话:桌面 mousedown 或移动端长按激活后由触摸点驱动。
+   * 返回 update(返回是否已进入拖动)与 finish:松手时若拖动过则抑制尾随 click。
+   */
+  const createRubberBandSession = React.useCallback((startClientX: number, startClientY: number) => {
+    const container = containerRef.current
+    let isDragging = false
+    const preSelection = new Set(selectedPaths ?? [])
+
+    const update = (clientX: number, clientY: number, additive = false): boolean => {
+      const dx = clientX - startClientX
+      const dy = clientY - startClientY
+      if (!isDragging && (Math.abs(dx) > RUBBER_BAND_THRESHOLD || Math.abs(dy) > RUBBER_BAND_THRESHOLD)) {
+        isDragging = true
+      }
+      if (!isDragging || !container) return false
+
+      const rect = container.getBoundingClientRect()
+      setRubberBand({ x1: startClientX - rect.left, y1: startClientY - rect.top, x2: clientX - rect.left, y2: clientY - rect.top })
+
+      // 计算与橡皮筋矩形相交的树节点(用视口坐标)
+      const rbLeft = Math.min(clientX, startClientX)
+      const rbRight = Math.max(clientX, startClientX)
+      const rbTop = Math.min(clientY, startClientY)
+      const rbBottom = Math.max(clientY, startClientY)
+
+      const intersected: string[] = []
+      container.querySelectorAll('.ant-tree-treenode').forEach((el) => {
+        const content = el.querySelector('[data-key]')
+        const path = content?.getAttribute('data-key')
+        if (!path) return
+        const elRect = el.getBoundingClientRect()
+        if (elRect.left < rbRight && elRect.right > rbLeft && elRect.top < rbBottom && elRect.bottom > rbTop) {
+          intersected.push(path)
+        }
+      })
+
+      const next = additive ? new Set([...preSelection, ...intersected]) : new Set(intersected)
+      onMultiSelectChange?.(next)
+      return true
+    }
+
+    const finish = () => {
+      if (isDragging) {
+        // 框选结束后抑制 click 事件,防止误触发单选
+        suppressNextClickRef.current = true
+        setTimeout(() => { suppressNextClickRef.current = false }, 0)
+      }
+      setRubberBand(null)
+    }
+
+    return { update, finish }
+  }, [onMultiSelectChange, selectedPaths])
+
+  /**
+   * 拖动移动会话:起点为已选中节点时,桌面 mousedown 或移动端长按滑动触发。
+   * 松手时若存在有效落点(目标目录不等于任一被移动项、不位于其子树内)则提交 onMoveToDirectory。
+   */
+  const createMoveDragSession = React.useCallback((startClientX: number, startClientY: number, isTouch: boolean) => {
+    const container = containerRef.current
+    const movedPaths = Array.from(selectedPaths ?? [])
+    let isDragging = false
+    let ghost: HTMLDivElement | null = null
+    let hoverRow: HTMLElement | null = null
+    // 有效落点目标目录(business 绝对路径,'' = 工作区根);null = 当前无有效落点(空白/非法)
+    let targetDir: string | null = null
+
+    const clearHoverRow = () => {
+      if (hoverRow) {
+        hoverRow.style.boxShadow = ''
+        hoverRow = null
+      }
+    }
+
+    const update = (clientX: number, clientY: number): boolean => {
+      if (!isDragging) {
+        if (Math.abs(clientX - startClientX) <= RUBBER_BAND_THRESHOLD && Math.abs(clientY - startClientY) <= RUBBER_BAND_THRESHOLD) return false
+        if (!container) return false
+        isDragging = true
+        ghost = document.createElement('div')
+        ghost.style.cssText = [
+          'position:fixed',
+          'pointer-events:none',
+          'z-index:2000',
+          'padding:4px 10px',
+          'border-radius:var(--radius-sm)',
+          'border:1px solid var(--border)',
+          'background:var(--bg-primary)',
+          'color:var(--text-primary)',
+          'font-size:var(--text-xs)',
+          'box-shadow:0 4px 16px rgba(0,0,0,0.18)',
+          'white-space:nowrap',
+        ].join(';')
+        document.body.appendChild(ghost)
+      }
+      if (!ghost) return true
+      // 移动端浮层上移,避免被手指遮挡
+      ghost.style.left = `${clientX + 12}px`
+      ghost.style.top = `${clientY + (isTouch ? -44 : 16)}px`
+
+      const hitEl = document.elementFromPoint(clientX, clientY)
+      const rowEl = hitEl?.closest('.ant-tree-treenode') as HTMLElement | null
+      const content = rowEl && container?.contains(rowEl) ? rowEl.querySelector('[data-key]') : null
+      const path = content?.getAttribute('data-key') ?? null
+      if (!rowEl || !content || !path) {
+        clearHoverRow()
+        targetDir = null
+        ghost.textContent = `移动 ${movedPaths.length} 项`
+        ghost.style.color = 'var(--text-primary)'
+        return true
+      }
+      const type = content.getAttribute('data-type')
+      // 目录 → 目标为该目录;文件 → 目标为其所在目录(根级文件 → '' 表示工作区根)
+      const dir = type === 'directory' ? path : (path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '')
+      // 非法:目标等于任一被移动项,或位于其子树内(目录不能移进自己/被选中项)
+      const invalid = movedPaths.some((p) => dir === p || dir.startsWith(`${p}/`))
+
+      if (hoverRow !== rowEl) {
+        clearHoverRow()
+        hoverRow = rowEl
+      }
+      if (invalid) {
+        targetDir = null
+        ghost.textContent = '无法移动到此处'
+        ghost.style.color = 'var(--accent-red)'
+        hoverRow.style.boxShadow = 'inset 0 0 0 2px var(--accent-red)'
+      } else {
+        targetDir = dir
+        ghost.textContent = `移动 ${movedPaths.length} 项`
+        ghost.style.color = 'var(--text-primary)'
+        hoverRow.style.boxShadow = 'inset 0 0 0 2px var(--accent-blue)'
+      }
+      return true
+    }
+
+    const cleanup = () => {
+      clearHoverRow()
+      ghost?.remove()
+      ghost = null
+    }
+
+    return {
+      update,
+      /** 松手:有有效落点则提交移动;拖动过则抑制尾随 click。 */
+      finish() {
+        const dir = targetDir
+        const dragged = isDragging
+        cleanup()
+        if (dragged) {
+          suppressNextClickRef.current = true
+          setTimeout(() => { suppressNextClickRef.current = false }, 0)
+          if (dir != null) onMoveToDirectory?.(dir)
+        }
+      },
+      /** Esc / 触摸取消:清理但不提交。 */
+      cancel() { cleanup() },
+    }
+  }, [selectedPaths, onMoveToDirectory])
+
+  /** 容器 mousedown:起点在已选中节点 → 拖动移动;否则保持橡皮筋框选。 */
+  const handleContainerMouseDown = React.useCallback((e: React.MouseEvent) => {
+    if (!onMultiSelectChange) return
+    if (e.button !== 0) return // 只响应左键
+    const target = e.target as HTMLElement
+    // 点击展开/收起箭头不触发框选
+    if (target.closest('.ant-tree-switcher')) return
+    const container = containerRef.current
+    if (!container) return
+
+    // 起点在已选中节点上 → 拖动移动模式;否则保持橡皮筋框选
+    const startPath = target.closest('[data-key]')?.getAttribute('data-key') ?? null
+    const moveSession = startPath && selectedPaths?.has(startPath) && onMoveToDirectory
+      ? createMoveDragSession(e.clientX, e.clientY, false)
+      : null
+    const rubberSession = moveSession ? null : createRubberBandSession(e.clientX, e.clientY)
+
+    const handleMouseMove = (moveE: MouseEvent) => {
+      const dragging = moveSession
+        ? moveSession.update(moveE.clientX, moveE.clientY)
+        : rubberSession?.update(moveE.clientX, moveE.clientY, moveE.ctrlKey || moveE.metaKey) ?? false
+      if (dragging) {
+        // 阻止默认文字选择行为
+        moveE.preventDefault()
+      }
+    }
+    const handleMouseUp = () => {
+      document.removeEventListener('mousemove', handleMouseMove)
+      document.removeEventListener('mouseup', handleMouseUp)
+      document.removeEventListener('keydown', handleKeyDown, true)
+      moveSession?.finish()
+      rubberSession?.finish()
+    }
+    const handleKeyDown = (ke: KeyboardEvent) => {
+      if (ke.key !== 'Escape' || !moveSession) return
+      ke.preventDefault()
+      document.removeEventListener('mousemove', handleMouseMove)
+      document.removeEventListener('mouseup', handleMouseUp)
+      document.removeEventListener('keydown', handleKeyDown, true)
+      moveSession.cancel()
+    }
+
+    document.addEventListener('mousemove', handleMouseMove)
+    document.addEventListener('mouseup', handleMouseUp)
+    document.addEventListener('keydown', handleKeyDown, true)
+  }, [createMoveDragSession, createRubberBandSession, onMultiSelectChange, onMoveToDirectory, selectedPaths])
+
+  /**
+   * 移动端:长按(与行内右键菜单同 500ms 窗口)后继续滑动 → 关菜单转拖动;
+   * 起点已选中节点 → 移动,否则(未选中/空白)→ 框选。长按未就绪前的滑动交给原生滚动。
+   */
+  const handleContainerTouchStart = React.useCallback((e: React.TouchEvent) => {
+    if (!onMultiSelectChange) return
+    if (e.touches.length !== 1) return
+    const container = containerRef.current
+    if (!container) return
+    const touch = e.touches[0]
+    const startX = touch.clientX
+    const startY = touch.clientY
+    const target = touch.target as HTMLElement
+    if (target.closest('.ant-tree-switcher')) return
+
+    const startPath = target.closest('[data-key]')?.getAttribute('data-key') ?? null
+    const useMove = !!startPath && !!selectedPaths?.has(startPath) && !!onMoveToDirectory
+
+    let ready = false
+    let started = false
+    let session: { update: (x: number, y: number) => boolean; finish: () => void } | null = null
+
+    const readyTimer = window.setTimeout(() => { ready = true }, TOUCH_LONG_PRESS_MS)
+
+    const cleanup = () => {
+      window.clearTimeout(readyTimer)
+      document.removeEventListener('touchmove', handleTouchMove)
+      document.removeEventListener('touchend', handleTouchEnd)
+      document.removeEventListener('touchcancel', handleTouchCancel)
+    }
+    function handleTouchMove(ev: TouchEvent) {
+      const t = ev.touches[0]
+      if (!t) return
+      if (!ready) return // 长按未就绪:交给原生滚动与行内长按菜单
+      if (!started) {
+        if (Math.abs(t.clientX - startX) <= TOUCH_DRAG_TOLERANCE && Math.abs(t.clientY - startY) <= TOUCH_DRAG_TOLERANCE) return
+        started = true
+        // 长按可能已弹出行内右键菜单:转拖动前关闭,避免菜单遮挡落点命中与视觉冲突
+        setOpenMenuPath(null)
+        session = useMove
+          ? createMoveDragSession(startX, startY, true)
+          : createRubberBandSession(startX, startY)
+      }
+      // 拖动期间禁止页面滚动
+      ev.preventDefault()
+      session?.update(t.clientX, t.clientY)
+    }
+    function handleTouchEnd() {
+      cleanup()
+      session?.finish()
+    }
+    function handleTouchCancel() {
+      cleanup()
+      session?.finish()
+    }
+
+    document.addEventListener('touchmove', handleTouchMove, { passive: false })
+    document.addEventListener('touchend', handleTouchEnd)
+    document.addEventListener('touchcancel', handleTouchCancel)
+  }, [createMoveDragSession, createRubberBandSession, onMultiSelectChange, onMoveToDirectory, selectedPaths])
+
   if (nodes.length === 0) {
     return (
       <div style={{ padding: token.paddingSM, color: token.colorTextDisabled, fontSize: token.fontSizeSM }}>
@@ -109,7 +450,7 @@ export default function WorkspaceExplorerTree({
 
   const titleRender = (dataNode: TreeDataNode) => {
     const node = (dataNode as TreeDataNode & { dataRef: WorkspaceExplorerNode }).dataRef
-    const isMultiSelect = multiSelectMode && !!onToggleSelectedPath
+    const isMultiSelect = !!onMultiSelectChange
     const isSelected = isMultiSelect && !!selectedPaths?.has(node.path)
     const target: WorkspaceExplorerContextTarget = {
       workspaceRoot,
@@ -145,15 +486,46 @@ export default function WorkspaceExplorerTree({
         isMultiSelect={isMultiSelect}
         isSelected={isSelected}
         metaMode={metaMode}
+        suppressNextClickRef={suppressNextClickRef}
         onToggleDirectory={onToggleDirectory}
         onOpenFile={onOpenFile}
-        onToggleSelectedPath={onToggleSelectedPath}
+        onMultiSelectClick={handleMultiSelectClick}
+        onContextMenuSelect={normalizeSelectionForPath}
       />
     )
   }
 
+  // 橡皮筋矩形渲染参数
+  const rbRect = rubberBand ? {
+    left: Math.min(rubberBand.x1, rubberBand.x2),
+    top: Math.min(rubberBand.y1, rubberBand.y2),
+    width: Math.abs(rubberBand.x2 - rubberBand.x1),
+    height: Math.abs(rubberBand.y2 - rubberBand.y1),
+  } : null
+
   return (
-    <div ref={containerRef} style={{ padding: `0 ${token.paddingXXS}px` }}>
+    <div
+      ref={containerRef}
+      style={{
+        padding: `0 ${token.paddingXXS}px`,
+        position: 'relative',
+        // 框选拖动期间禁止浏览器文字选中:空白处按下拖动只产生橡皮筋选区,不产生文字选区。
+        userSelect: 'none',
+        WebkitUserSelect: 'none',
+        // iOS Safari:长按不弹系统「拷贝/全选」呼出菜单(移动端长按拖动需抑制系统选词)。
+        WebkitTouchCallout: 'none',
+      }}
+      onMouseDown={handleContainerMouseDown}
+      onTouchStart={handleContainerTouchStart}
+      onClickCapture={(e) => {
+        // 框选结束后抑制 click 事件,防止误触发单选
+        if (suppressNextClickRef.current) {
+          e.stopPropagation()
+          e.preventDefault()
+          suppressNextClickRef.current = false
+        }
+      }}
+    >
       <Tree.DirectoryTree
         ref={treeRef as never}
         treeData={treeData}
@@ -164,7 +536,8 @@ export default function WorkspaceExplorerTree({
         // 展开/收起改为:双击名称(onDoubleClick toggle) 或 单击箭头(onExpand)。
         expandAction={false}
         blockNode
-        selectable={!multiSelectMode}
+        // 选中态不交给 antd:行内自绘高亮是唯一高亮来源,避免两套选中通道互相漂移。
+        selectable={false}
         className="ws-tree"
         styles={{
           itemTitle: {
@@ -174,7 +547,6 @@ export default function WorkspaceExplorerTree({
             alignItems: 'center',
           },
         }}
-        selectedKeys={selectedPath ? [selectedPath] : []}
         expandedKeys={expandedKeys}
         defaultExpandAll={false}
         autoExpandParent={false}
@@ -189,12 +561,6 @@ export default function WorkspaceExplorerTree({
           for (const k of next) {
             if (!expandedPaths.has(k)) onToggleDirectory(k)
           }
-        }}
-        onSelect={(keys) => {
-          const key = keys[0] as string | undefined
-          if (!key) return
-          // 单击仅选中(高亮)。目录展开/收起由双击(onDoubleClick)或点击箭头(onExpand)触发。
-          onSelectPath(key)
         }}
         // 展开/收起图标 = 通用折叠箭头(收起朝右 ChevronRight,展开朝下 ChevronDown),独占一列。
         // 注意:antd 6 会把用户 switcherIcon 包进 SwitcherIconCom 再传给 rc-tree,
@@ -212,6 +578,22 @@ export default function WorkspaceExplorerTree({
         }}
         style={{ fontSize: token.fontSizeSM }}
       />
+      {rbRect && (
+        <div
+          style={{
+            position: 'absolute',
+            left: rbRect.left,
+            top: rbRect.top,
+            width: rbRect.width,
+            height: rbRect.height,
+            background: 'color-mix(in srgb, var(--accent-blue) 10%, transparent)',
+            border: '1px solid color-mix(in srgb, var(--accent-blue) 35%, transparent)',
+            borderRadius: 2,
+            pointerEvents: 'none',
+            zIndex: 1,
+          }}
+        />
+      )}
     </div>
   )
 }
@@ -238,9 +620,11 @@ function TreeNodeRow({
   isMultiSelect,
   isSelected,
   metaMode,
+  suppressNextClickRef,
   onToggleDirectory,
   onOpenFile,
-  onToggleSelectedPath,
+  onMultiSelectClick,
+  onContextMenuSelect,
 }: {
   node: WorkspaceExplorerNode
   target: WorkspaceExplorerContextTarget
@@ -253,9 +637,14 @@ function TreeNodeRow({
   isMultiSelect: boolean
   isSelected: boolean
   metaMode?: 'size' | 'modified' | 'none'
+  /** 框选结束后抑制下一次 click 的共享 ref。 */
+  suppressNextClickRef?: React.MutableRefObject<boolean>
   onToggleDirectory: (path: string) => void
   onOpenFile: (target: WorkspaceExplorerOpenTarget) => void
-  onToggleSelectedPath?: (path: string) => void
+  /** 选中集合的节点点击处理(Ctrl/Shift/普通)。 */
+  onMultiSelectClick?: (path: string, e: React.MouseEvent) => void
+  /** 右键/长按打开菜单前归一选中集合:被操作行不在选中集合内时收缩为该行,已在集合内则保持多选不变。 */
+  onContextMenuSelect?: (path: string) => void
 }) {
   const { token } = useToken()
   const isDirectory = node.type === 'directory'
@@ -272,22 +661,27 @@ function TreeNodeRow({
   // 移动端长按的行元素(MenuList 的 anchor,用于「点在触发元素上不关闭」判定)。
   const [anchorEl, setAnchorEl] = React.useState<HTMLElement | null>(null)
 
-  // 移动端长按弹出右键菜单：记录触摸点与行元素并打开菜单；桌面端处理器为空操作。
+  // 移动端长按弹出右键菜单：先归一选中集合，再记录触摸点与行元素并打开菜单；桌面端处理器为空操作。
+  // onLongPress 为每次渲染新建的内联回调，useLongPress 的 onPointerDown 依赖它并随之重建，
+  // 故长按定时器触发时读到的是最近一次渲染的 onContextMenuSelect(其依赖含选中集合，始终为最新值)。
   const { wasLongPressed, ...longPressHandlers } = useLongPress({
     isMobile,
     delay: 500,
     onLongPress: (target, point) => {
+      onContextMenuSelect?.(node.path)
       setMousePos(point)
       setAnchorEl(target)
       onOpenChange(true)
     },
   })
 
-  // 监听 contextmenu 事件记录鼠标坐标(在 Dropdown 的 onOpenChange 之前触发)
+  // 监听 contextmenu 事件记录鼠标坐标(在 Dropdown 的 onOpenChange 之前触发)；
+  // 归一选中须在记录坐标之前完成:多选区之外右键等于重新单选，多选区之内右键保持集合不变。
   const handleContextMenu = React.useCallback((e: React.MouseEvent) => {
+    onContextMenuSelect?.(node.path)
     setMousePos({ x: e.clientX, y: e.clientY })
     longPressHandlers.onContextMenu(e)
-  }, [longPressHandlers])
+  }, [longPressHandlers, node.path, onContextMenuSelect])
 
   // 桌面端:根据鼠标位置和预估菜单高度计算 align offset 和 maxHeight。
   // autoAdjustOverflow=false 后,rc-trigger 不做翻转/shift,菜单始终从鼠标点向下展开(bottomLeft)。
@@ -345,27 +739,39 @@ function TreeNodeRow({
   const content = (
     <div
       data-key={node.path}
+      // 拖动移动落点命中:区分目录(落点=该目录)与文件(落点=其所在目录)。
+      data-type={node.type}
       style={{
         display: 'flex',
         alignItems: 'center',
         gap: token.paddingXXS,
         width: '100%',
         cursor: 'default',
-        // 名称文字允许鼠标选中复制(文件/文件夹名)；
-        // 移动端禁用文字选择:避免长按触发系统选词/放大镜，与自定义长按右键菜单冲突。
-        userSelect: isMobile ? 'none' : 'text',
-        WebkitUserSelect: isMobile ? 'none' : 'text',
-        // iOS Safari:长按不再弹系统「拷贝/全选」呼出菜单。
-        WebkitTouchCallout: isMobile ? 'none' : undefined,
+        // 节点名称一律禁止浏览器文本选中:文件名的复制走「属性」弹窗与右键菜单,不靠选词,
+        // 同时避免长按触发系统选词/放大镜与自定义长按右键菜单冲突。
+        userSelect: 'none',
+        WebkitUserSelect: 'none',
+        // iOS Safari:长按不弹系统「拷贝/全选」呼出菜单。
+        WebkitTouchCallout: 'none',
+        // 选中项:VSCode 风格高亮背景(唯一高亮来源;antd 侧 selectable=false,不再产生内置 selected 态)
         ...(isSelected ? {
-          background: 'color-mix(in srgb, var(--accent-blue-dim) 55%, transparent)',
+          background: 'var(--bg-active)',
           borderRadius: 'var(--radius-sm)',
         } : null),
       }}
-      onClick={() => {
+      onClick={(e) => {
         if (wasLongPressed()) return
-        // 不阻止冒泡:让 antd 的 onSelect 正常触发(单击选中高亮)。
-        // 目录展开/收起改由双击(onDoubleClick)或点击箭头(onExpand)触发。
+        if (suppressNextClickRef?.current) {
+          suppressNextClickRef.current = false
+          return
+        }
+        if (isMultiSelect && onMultiSelectClick) {
+          e.stopPropagation()
+          onMultiSelectClick(node.path, e)
+          return
+        }
+        // 调用方未提供选中回调时不做任何副作用:
+        // 目录展开/收起由双击(onDoubleClick)或点击箭头(onExpand)触发。
       }}
       onMouseDown={(e) => {
         // 阻止浏览器「双击选中文字」的默认行为:双击打开文件/展开目录时,文件名不应被高亮选中。
@@ -389,18 +795,6 @@ function TreeNodeRow({
       onPointerLeave={longPressHandlers.onPointerLeave}
       onContextMenu={handleContextMenu}
     >
-      {isMultiSelect ? (
-        <span
-          style={{ flexShrink: 0, display: 'inline-flex', alignItems: 'center' }}
-          onClick={(event) => event.stopPropagation()}
-        >
-          <Checkbox
-            checked={isSelected}
-            onChange={() => onToggleSelectedPath?.(node.path)}
-            aria-label={`选择 ${node.name}`}
-          />
-        </span>
-      ) : null}
       {/* 名称前置类型图标:文件行按扩展名渲染语言徽章(未知退化为中性文件轮廓),
           目录行用极简描边文件夹,与 switcher 箭头列错开一级缩进。 */}
       <span style={{ flexShrink: 0, display: 'inline-flex', alignItems: 'center' }}>

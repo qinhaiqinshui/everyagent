@@ -134,7 +134,7 @@ has_children: false
 
 - **现象**：npm registry 查 `@everyagent/plugin-api` → 404；Maven Central 无 `dev/everyagent` group（2025 调查实测，见计划记录 `.everyagent/plan-plugin-scaffold-docs.md`「已核实事实」）。本地包版本：js 与 Java 两侧已对齐 `1.0.0`（#23 收口）。
 - **影响**：**仓库外**开发插件拿不到类型包与 API jar——这是插件生态的硬阻塞项。
-- **规避**：脚手架 `standalone` 模式自动生成 `vendor/everyagent-plugin-api.d.ts` 类型副本（[快速上手](../getting-started.md)）；Java 侧在仓库内 `mvn install` 到本地仓库后引用。
+- **规避**：脚手架 `standalone` 模式自动生成 `vendor/@everyagent/plugin-api/index.d.ts` 类型副本（[快速上手](../getting-started.md)）；Java 侧在仓库内 `mvn install` 到本地仓库后引用。
 - **待办**：发布双包（npm + Maven Central）；版本口径已就绪（#23 已收口对齐 1.0.0）。**优先级最高**（见文末 Top5）。
 
 ### #19 `plugin.install` / `plugin.uninstall` 前端零调用点（✅ 安装入口已修复）
@@ -171,7 +171,7 @@ has_children: false
 
 - **现象（修复前）**：`every-agent-plugin-api/js/package.json` = `0.11.0`，Java pom = `1.0.0`；`bump-version.py` 的 SLOTS 只登记 pom，js 包不在版本联动里——全仓 bump 时 js 侧静默掉队。
 - **修复**（三步收口）：① 版本审计确认模板**数字无漂移**（Spring Boot 4.1.1 / Java 25 / parent 1.0.0 / plugin-api 1.0.0；standalone 钉版经 `effective-pom` 实证为 spring-boot 管理值），真正的漂移是 vendor 类型副本落后于 `js/index.ts`，已逐字节重新复制（提交 `ca0211e7`）；② 新增 `scripts/sync-plugin-template-versions.ps1` 统一 bump 脚本——六槽位从根 pom 只读解析，一键同步四份 pom 模板与文档站版本字面量，`-DryRun` 预览、幂等与漂移修复均实测通过（提交 `3d59f738`）；③ js 包版本对齐 `1.0.0` 并入 `bump-version.py` SLOTS（锚点经 `1.0.1 --dry-run` 实证联动），文档站与 sync 脚本旧口径注释同步追平（提交 `4b65c8d4`）。
-- **后续**：版本口径统一为 `1.0.0`（js 与 Java 同号，双脚本都在联动范围）；#18 双发布前无需再处理版本分裂。
+- **后续**：版本口径统一为 `1.0.0`（js 与 Java 同号，双脚本都在联动范围）；#18 双发布前无需再处理版本分裂。**内容侧追补**：vendor 类型副本的漂移此后又复现一次（`openPluginTab` 更名 `openTab` 时副本仍留旧名），说明「手工逐字节重拷」不构成机制，故新增专用内容同步脚本 `scripts/sync-plugin-api-copy.ps1`（`-DryRun` 预览、幂等、两份 standalone 副本一并覆盖），并以守卫测试 `create-everyagent-plugin/test/plugin-api-copy.test.mjs`（`node --test`）钉住「副本 == 单点源」，落后即失败并打印修复命令。
 
 ## 已缓解项
 

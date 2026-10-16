@@ -22,12 +22,12 @@ import ConfirmDialog from '../shared/ConfirmDialog'
 import PropertiesDialog, { type PropertyItem } from '../shared/PropertiesDialog'
 import { buildWorkspacePropertyItems, getWorkspaceDisplayName } from '../shared/workspacePropertyUtils'
 import MoreActionsButton, { type MoreActionItem } from '../shared/MoreActionsButton'
-import { DownloadIcon, FilePlusIcon, FileTextIcon, FolderArrowOutIcon, FolderPlusIcon, MagnifierCheckIcon, UploadIcon, ChevronDownIcon, CheckIcon, TerminalIcon } from '../shared/AppGlyphs'
+import { DownloadIcon, FilePlusIcon, FileTextIcon, FolderArrowOutIcon, FolderPlusIcon, MagnifierCheckIcon, UploadIcon, ChevronDownIcon, TerminalIcon } from '../shared/AppGlyphs'
 import SidebarScrollArea from '../shared/SidebarScrollArea'
 import WorkspaceExplorerTree from './WorkspaceExplorerTree'
 import WorkspacePathPicker from '@/components/shared/ui/WorkspacePathPicker'
 import { pickFiles } from '@/utils/filePicker'
-import { Button, TextInput } from '@/components/shared/ui'
+import { TextInput } from '@/components/shared/ui'
 import type { ListRowActionItem } from '@/components/shared/ui/ListRowActions'
 import type {
   WorkspaceExplorerContextTarget,
@@ -98,7 +98,19 @@ function WorkspaceGroupPanel({
   const treeNodesRef = React.useRef(treeNodes)
   treeNodesRef.current = treeNodes
   const lastRevealedPathRef = React.useRef<string | null>(null)
-  const [selectedExplorerPath, setSelectedExplorerPath] = React.useState<string | null>(null)
+  /** 选中集合唯一真相源：保持点击顺序；集合只有一项时视为「单选」，供标签联动/迁移逻辑使用。 */
+  const [selectedPaths, setSelectedPaths] = React.useState<Set<string>>(new Set())
+  const selectedExplorerPath = React.useMemo(
+    () => (selectedPaths.size === 1 ? Array.from(selectedPaths)[0] : null),
+    [selectedPaths],
+  )
+  /** 最近一次选中集合,供右键动作闭包读取最新值,不依赖渲染时序。 */
+  const selectionRef = React.useRef(selectedPaths)
+  selectionRef.current = selectedPaths
+  /** 更新选中集合的唯一入口(树点击/Ctrl/Shift/框选、定位、新建、删除移动后清理统一走这里)。 */
+  const applySelection = React.useCallback((paths: Set<string>) => {
+    setSelectedPaths(paths)
+  }, [])
   const [expandedPaths, setExpandedPaths] = React.useState<Set<string>>(new Set([WORKSPACE_EXPLORER_ROOT_LABEL]))
   const expandedPathsRef = React.useRef(expandedPaths)
   expandedPathsRef.current = expandedPaths
@@ -125,15 +137,13 @@ function WorkspaceGroupPanel({
   const [metaMode, setMetaMode] = React.useState<'size' | 'modified' | 'none'>('none')
   /** 卡片折叠态:折叠时仅保留头部行(工作区名 + 更多操作),隐藏路径/搜索/文件树等内容。 */
   const [collapsed, setCollapsed] = React.useState(false)
-  /** 多选模式:开启后树行前置复选框,支持批量删除/移动。 */
-  const [multiSelectMode, setMultiSelectMode] = React.useState(false)
-  /** 多选模式下的已选路径集合。 */
-  const [selectedPaths, setSelectedPaths] = React.useState<Set<string>>(new Set())
   const [batchDeleteOpen, setBatchDeleteOpen] = React.useState(false)
   const [batchDeleting, setBatchDeleting] = React.useState(false)
   const [batchMoveOpen, setBatchMoveOpen] = React.useState(false)
   const [batchMoveDir, setBatchMoveDir] = React.useState('')
   const [batchMoving, setBatchMoving] = React.useState(false)
+  /** 批量下载进行中标记:串行下载耗时较长,用状态防重入(重复点击会打断顺序、并发下载)。 */
+  const [batchDownloading, setBatchDownloading] = React.useState(false)
   /** 属性弹窗:当前查看属性的节点目标;null = 关闭。 */
   const [propertiesTarget, setPropertiesTarget] = React.useState<WorkspaceExplorerContextTarget | null>(null)
   /** 属性弹窗中文本文件的字符统计(异步读取后填充;null = 非文本文件或尚未加载)。 */
@@ -336,36 +346,56 @@ function WorkspaceGroupPanel({
         }
         return changed ? next : prev
       })
-      setSelectedExplorerPath(targetPath)
+      applySelection(new Set([targetPath]))
       setTreeError('')
     } catch (revealError) {
       // 定位失败:保留现有树,提示错误供排查
       setTreeError(revealError instanceof Error ? revealError.message : String(revealError))
     }
-  }, [showInternalFiles, workspaceRoot])
+  }, [applySelection, showInternalFiles, workspaceRoot])
 
   React.useEffect(() => {
     const activeFileTab = activeWorkspaceTab?.tabType === 'file' ? activeWorkspaceTab : null
     if (!activeFileTab || activeFileTab.workspaceRoot !== workspaceRoot) return
     if (!selectedFilePath) return
-    setSelectedExplorerPath(selectedFilePath)
+    applySelection(new Set([selectedFilePath]))
     void revealPath(selectedFilePath)
-  }, [activeWorkspaceTab, selectedFilePath, workspaceRoot, revealPath])
+  }, [activeWorkspaceTab, selectedFilePath, workspaceRoot, revealPath, applySelection])
 
   React.useEffect(() => {
     if (!locateRequest) return
-    setSelectedExplorerPath(locateRequest.filePath)
+    applySelection(new Set([locateRequest.filePath]))
     void revealPath(locateRequest.filePath, true)
-  }, [locateRequest, revealPath])
+  }, [locateRequest, revealPath, applySelection])
 
   const handleOpenFile = React.useCallback((target: WorkspaceExplorerOpenTarget) => {
     openGlobalFileTab({ workspaceRoot: target.workspaceRoot, filePath: target.filePath }, target.options)
   }, [openGlobalFileTab])
 
-  const handleRequestDelete = React.useCallback((target: WorkspaceExplorerContextTarget) => {
-    setSelectedExplorerPath(target.path)
-    setDeleteTarget(target)
+  /** 打开批量删除确认:选中集合取 selectionRef 最新值,集合为空则忽略。 */
+  const handleRequestBatchDelete = React.useCallback(() => {
+    if (selectionRef.current.size === 0) return
+    setBatchDeleteOpen(true)
   }, [])
+
+  /** 打开批量移动确认:选中集合取 selectionRef 最新值,集合为空则忽略。 */
+  const handleRequestBatchMove = React.useCallback(() => {
+    if (selectionRef.current.size === 0) return
+    setBatchMoveDir('')
+    setBatchMoveOpen(true)
+  }, [])
+
+  const handleRequestDelete = React.useCallback((target: WorkspaceExplorerContextTarget) => {
+    const selected = selectionRef.current
+    // 多选集合内的行被右键:删除动作作用于整个选中集合,选中集合保持不变。
+    if (selected.size > 1 && selected.has(target.path)) {
+      handleRequestBatchDelete()
+      return
+    }
+    // 单选(含右键集合外行被归一为该行):维持单删确认弹窗。
+    applySelection(new Set([target.path]))
+    setDeleteTarget(target)
+  }, [applySelection, handleRequestBatchDelete])
 
   const handleDeleteFile = React.useCallback(async () => {
     if (!deleteTarget || deleting) return
@@ -387,7 +417,7 @@ function WorkspaceGroupPanel({
         setExpandedPaths(nextExpanded)
       }
       if (selectedExplorerPath === deleteTarget.path || (deleteTarget.type === 'directory' && selectedExplorerPath?.startsWith(`${deleteTarget.path}/`))) {
-        setSelectedExplorerPath(null)
+        applySelection(new Set())
       }
       showToast(deleteTarget.type === 'directory' ? '已删除文件夹' : '已删除文件', 'success')
       setDeleteTarget(null)
@@ -396,7 +426,7 @@ function WorkspaceGroupPanel({
     } finally {
       setDeleting(false)
     }
-  }, [closeGlobalFileTab, deleteTarget, deleting, selectedExplorerPath, showToast, workspaceFileTabs, workspaceRoot])
+  }, [applySelection, closeGlobalFileTab, deleteTarget, deleting, selectedExplorerPath, showToast, workspaceFileTabs, workspaceRoot])
 
   const handleRequestRenameTarget = React.useCallback((target: WorkspaceExplorerContextTarget) => {
     setRenameTarget(target)
@@ -419,7 +449,7 @@ function WorkspaceGroupPanel({
       void reloadTree(showInternalFiles, true)
       showToast('已重命名', 'success')
       if (selectedExplorerPath === renameTarget.path) {
-        setSelectedExplorerPath(nextBusinessPath)
+        applySelection(new Set([nextBusinessPath]))
       }
       setRenameTarget(null)
       setRenameValue('')
@@ -428,7 +458,7 @@ function WorkspaceGroupPanel({
     } finally {
       setRenaming(false)
     }
- }, [renameFileTabs, renameTarget, renameValue, renaming, reloadTree, selectedExplorerPath, showInternalFiles, showToast, workspaceRoot])
+ }, [applySelection, renameFileTabs, renameTarget, renameValue, renaming, reloadTree, selectedExplorerPath, showInternalFiles, showToast, workspaceRoot])
 
   const handleRequestMove = React.useCallback((target: WorkspaceExplorerContextTarget) => {
     setMoveTarget(target)
@@ -458,7 +488,7 @@ function WorkspaceGroupPanel({
         const nextSelected = selectedExplorerPath === moveTarget.path
           ? nextBusinessPath
           : `${nextBusinessPath}${selectedExplorerPath.slice(moveTarget.path.length)}`
-        setSelectedExplorerPath(nextSelected)
+        applySelection(new Set([nextSelected]))
       }
       showToast('已移动', 'success')
       setMoveTarget(null)
@@ -468,36 +498,7 @@ function WorkspaceGroupPanel({
     } finally {
       setMoving(false)
     }
-  }, [moveTarget, moveTargetDir, moving, renameFileTabs, reloadTree, selectedExplorerPath, showInternalFiles, showToast, workspaceRoot, expandDirChildren])
-
-  /** 切换多选模式;退出时清空已选集合。 */
-  const toggleMultiSelectMode = React.useCallback(() => {
-    setMultiSelectMode((current) => {
-      const next = !current
-      if (!next) {
-        setSelectedPaths(new Set())
-      }
-      return next
-    })
-  }, [])
-
-  /** 多选模式下切换单个路径选中态。 */
-  const handleToggleSelectedPath = React.useCallback((path: string) => {
-    setSelectedPaths((prev) => {
-      const next = new Set(prev)
-      if (next.has(path)) {
-        next.delete(path)
-      } else {
-        next.add(path)
-      }
-      return next
-    })
-  }, [])
-
-  const handleRequestBatchDelete = React.useCallback(() => {
-    if (selectedPaths.size === 0) return
-    setBatchDeleteOpen(true)
-  }, [selectedPaths.size])
+  }, [applySelection, moveTarget, moveTargetDir, moving, renameFileTabs, reloadTree, selectedExplorerPath, showInternalFiles, showToast, workspaceRoot, expandDirChildren])
 
   /** 批量删除:对已选路径按前缀去重后逐个删除,并关闭受影响标签页。 */
   const handleBatchDelete = React.useCallback(async () => {
@@ -524,72 +525,113 @@ function WorkspaceGroupPanel({
       }
       expandedPathsRef.current = nextExpanded
       setExpandedPaths(nextExpanded)
-      // 当前选中项若处于被删路径下,清除选中,避免指向失效路径。
-      if (selectedExplorerPath && paths.some((path) => selectedExplorerPath === path || selectedExplorerPath.startsWith(`${path}/`))) {
-        setSelectedExplorerPath(null)
-      }
       showToast(`已删除 ${paths.length} 项`, 'success')
-      setSelectedPaths(new Set())
+      // 批量操作后清空选中集合:被删路径已不存在,无单选可保留。
+      applySelection(new Set())
       setBatchDeleteOpen(false)
-      setMultiSelectMode(false)
     } catch (error) {
       showToast(error instanceof Error ? error.message : String(error), 'error')
     } finally {
       setBatchDeleting(false)
     }
-  }, [batchDeleting, closeGlobalFileTab, selectedExplorerPath, selectedPaths, showToast, workspaceFileTabs, workspaceRoot])
+  }, [applySelection, batchDeleting, closeGlobalFileTab, selectedPaths, showToast, workspaceFileTabs, workspaceRoot])
 
-  const handleRequestBatchMove = React.useCallback(() => {
-    if (selectedPaths.size === 0) return
-    setBatchMoveDir('')
-    setBatchMoveOpen(true)
-  }, [selectedPaths.size])
+  /**
+   * 移动一组路径到目标目录(批量移动弹窗与拖拽移动共用同一落盘+收尾路径)。
+   * paths 为业务绝对路径(选中集合形态);targetDir 接受相对/业务绝对两种形态,'' 表示工作区根。
+   * 返回实际移动的项数(「目标即当前父目录」的项跳过,不产生无效 RPC);出错时抛异常(已移动项保持已移动)。
+   */
+  const movePathsToDirectory = React.useCallback(async (paths: string[], targetDir: string): Promise<number> => {
+    const targetRel = normalizeWorkspaceRelativePath(targetDir)
+    const deduped = dedupeWorkspacePaths(paths)
+    // 归一为工作区相对路径后传给 movePath,使其「不能移到自身/子目录」校验真正生效。
+    const movable = deduped.filter((path) => {
+      const rel = normalizeWorkspaceRelativePath(path)
+      const parent = rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')) : ''
+      return parent !== targetRel
+    })
+    if (movable.length === 0) return 0
+    const moved: Array<{ oldPath: string; newBusinessPath: string }> = []
+    for (const path of movable) {
+      const rel = normalizeWorkspaceRelativePath(path)
+      const nextPath = await workspaceExplorerCommandService.movePath(workspaceRoot, rel, targetRel)
+      moved.push({ oldPath: path, newBusinessPath: toBusinessAbsolutePath(nextPath) })
+    }
+    let nextExpanded = expandedPathsRef.current
+    for (const { oldPath, newBusinessPath } of moved) {
+      renameFileTabs(workspaceRoot, oldPath, newBusinessPath)
+      // 移动目录后迁移展开态(逐个前缀迁移,同步 ref)。
+      nextExpanded = migrateExpandedPaths(nextExpanded, oldPath, newBusinessPath)
+    }
+    // 展开目标目录,并把目标目录(business 绝对路径)一并加入展开集合(同步 ref);
+    // 根目录('/')常驻展开,无需加入。
+    const targetBusiness = targetRel ? toBusinessAbsolutePath(targetRel) : ''
+    if (targetBusiness) {
+      nextExpanded = new Set(nextExpanded).add(targetBusiness)
+    }
+    expandedPathsRef.current = nextExpanded
+    setExpandedPaths(nextExpanded)
+    if (targetBusiness) {
+      expandDirChildren(targetBusiness)
+    }
+    // 立即整树保持展开刷新,把磁盘新路径拉回树。
+    void reloadTree(showInternalFiles, true)
+    return moved.length
+  }, [expandDirChildren, reloadTree, renameFileTabs, showInternalFiles, workspaceRoot])
 
   /** 批量移动:对已选路径按前缀去重后移动到同一目标目录,并更新打开的标签页路径。 */
   const handleBatchMove = React.useCallback(async () => {
     if (batchMoving || selectedPaths.size === 0) return
     setBatchMoving(true)
     try {
-      const paths = dedupeWorkspacePaths(Array.from(selectedPaths))
-      const moved: Array<{ oldPath: string; newPath: string }> = []
-      for (const path of paths) {
-        const nextPath = await workspaceExplorerCommandService.movePath(workspaceRoot, path, batchMoveDir)
-        moved.push({ oldPath: path, newPath: nextPath })
-      }
-      let nextExpanded = expandedPathsRef.current
-      for (const { oldPath, newPath } of moved) {
-        const newBusinessPath = toBusinessAbsolutePath(newPath)
-        renameFileTabs(workspaceRoot, oldPath, newBusinessPath)
-        // 移动目录后迁移展开态(逐个前缀迁移,同步 ref)。
-        nextExpanded = migrateExpandedPaths(nextExpanded, oldPath, newBusinessPath)
-      }
-      // 展开目标目录,并把目标目录一并加入展开集合(同步 ref)。
-      if (batchMoveDir) {
-        nextExpanded = new Set(nextExpanded).add(batchMoveDir)
-      }
-      expandedPathsRef.current = nextExpanded
-      setExpandedPaths(nextExpanded)
-      expandDirChildren(batchMoveDir)
-      // 立即整树保持展开刷新,把磁盘新路径拉回树。
-      void reloadTree(showInternalFiles, true)
-      // 选中项若在被移动路径下,跟随前缀替换,避免选中态指向失效路径。
-      if (selectedExplorerPath) {
-        const matched = moved.find(({ oldPath }) => selectedExplorerPath === oldPath || selectedExplorerPath.startsWith(`${oldPath}/`))
-        if (matched) {
-          const newBusinessPath = toBusinessAbsolutePath(matched.newPath)
-          setSelectedExplorerPath(newBusinessPath + selectedExplorerPath.slice(matched.oldPath.length))
-        }
-      }
-      showToast(`已移动 ${paths.length} 项`, 'success')
-      setSelectedPaths(new Set())
+      const movedCount = await movePathsToDirectory(Array.from(selectedPaths), batchMoveDir)
+      showToast(movedCount > 0 ? `已移动 ${movedCount} 项` : '所选项已在目标位置', 'success')
+      // 批量操作后清空选中集合:旧路径已全部迁移,无单选可保留。
+      applySelection(new Set())
       setBatchMoveOpen(false)
-      setMultiSelectMode(false)
     } catch (error) {
       showToast(error instanceof Error ? error.message : String(error), 'error')
     } finally {
       setBatchMoving(false)
     }
-  }, [batchMoveDir, batchMoving, expandDirChildren, reloadTree, renameFileTabs, selectedExplorerPath, selectedPaths, showInternalFiles, showToast, workspaceRoot])
+  }, [applySelection, batchMoveDir, batchMoving, movePathsToDirectory, selectedPaths, showToast])
+
+  /** 拖拽移动落点提交:把当前选中集合移动到目标目录(business 绝对路径,'' = 工作区根)。 */
+  const handleDragMoveToDirectory = React.useCallback(async (targetDir: string) => {
+    const paths = Array.from(selectionRef.current)
+    if (paths.length === 0) return
+    try {
+      const movedCount = await movePathsToDirectory(paths, targetDir)
+      if (movedCount > 0) {
+        showToast(`已移动 ${movedCount} 项`, 'success')
+        // 移动成功后清空选中集合:旧路径已全部迁移,保留会指向失效路径。
+        applySelection(new Set())
+      }
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : String(error), 'error')
+    }
+  }, [applySelection, movePathsToDirectory, showToast])
+
+  /**
+   * 批量下载:对已选路径按前缀去重后逐个串行下载(不并行,避免并发下载被浏览器/worker 打乱),
+   * 任一项失败即停止后续并提示错误。
+   */
+  const handleBatchDownload = React.useCallback(async () => {
+    if (batchDownloading) return
+    const paths = dedupeWorkspacePaths(Array.from(selectionRef.current))
+    if (paths.length === 0) return
+    setBatchDownloading(true)
+    try {
+      for (const path of paths) {
+        await workspaceExplorerCommandService.downloadPath(workspaceRoot, path)
+      }
+      showToast(`已下载 ${paths.length} 项`, 'success')
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : String(error), 'error')
+    } finally {
+      setBatchDownloading(false)
+    }
+  }, [batchDownloading, showToast, workspaceRoot])
 
   const handleRequestCreate = React.useCallback((mode: 'file' | 'directory', target: WorkspaceExplorerContextTarget) => {
     setCreateMode(mode)
@@ -611,7 +653,7 @@ function WorkspaceGroupPanel({
       // 展开父目录并选中新建项;根目录的展开键是 WORKSPACE_EXPLORER_ROOT_LABEL('/')。
       expandDirChildren(createParentPath ? toBusinessAbsolutePath(createParentPath) : WORKSPACE_EXPLORER_ROOT_LABEL)
       setExpandedPaths((prev) => new Set(prev).add(createParentPath ? toBusinessAbsolutePath(createParentPath) : WORKSPACE_EXPLORER_ROOT_LABEL))
-      setSelectedExplorerPath(createdBusinessPath)
+      applySelection(new Set([createdBusinessPath]))
       // 新建文件直接进入编辑(VSCode 习惯);目录只展开定位。
       if (createMode === 'file') {
         openGlobalFileTab({ workspaceRoot, filePath: createdBusinessPath }, { mode: 'readwrite' })
@@ -623,7 +665,7 @@ function WorkspaceGroupPanel({
     } finally {
       setCreating(false)
     }
- }, [createMode, creating, createParentPath, createValue, expandDirChildren, openGlobalFileTab, showToast, workspaceRoot])
+ }, [applySelection, createMode, creating, createParentPath, createValue, expandDirChildren, openGlobalFileTab, showToast, workspaceRoot])
 
   const handleRequestDownload = React.useCallback(async (target: WorkspaceExplorerContextTarget) => {
     try {
@@ -744,6 +786,28 @@ function WorkspaceGroupPanel({
     pluginDispatcher.getExtensionsVersion,
   )
 
+  /** 把选中路径解析为可执行动作的目标节点;树中查不到(懒加载未展开/已失效)时退回被右键的 target。 */
+  const resolveNodeTarget = React.useCallback((path: string, fallback: WorkspaceExplorerContextTarget): WorkspaceExplorerContextTarget => {
+    const node = findExplorerNode(treeNodesRef.current, path)
+    if (!node) return fallback
+    return {
+      workspaceRoot,
+      path: node.path,
+      name: node.name,
+      type: node.type,
+      openTarget: node.openTarget,
+      size: node.size,
+      mtimeMs: node.mtimeMs,
+      createdTs: node.createdTs,
+    }
+  }, [workspaceRoot])
+
+  /** 右键动作的「第一个选中节点」:选中集合按点击顺序取首项;空集合退回被右键 target。 */
+  const resolveActionTarget = React.useCallback((target: WorkspaceExplorerContextTarget): WorkspaceExplorerContextTarget => {
+    const first = Array.from(selectionRef.current)[0]
+    return first ? resolveNodeTarget(first, target) : target
+  }, [resolveNodeTarget])
+
   const getFileActionItems = React.useCallback((target: WorkspaceExplorerContextTarget): ListRowActionItem[] => {
     const items: ListRowActionItem[] = []
     // 文件行显式提供「打开」:双击之外的第二入口,移动端长按菜单里是唯一入口。
@@ -753,34 +817,43 @@ function WorkspaceGroupPanel({
         key: 'open',
         label: '打开',
         icon: <FileTextIcon size={13} />,
-        onSelect: () => handleOpenFile(openTarget),
+        onSelect: () => {
+          // 不支持多节点:动作落在选中集合的第一个节点上;混合选中时首项可能是目录,退回被右键 target。
+          const actionTarget = resolveActionTarget(target)
+          handleOpenFile(actionTarget.openTarget ?? openTarget)
+        },
       })
     }
     if (target.type === 'directory') {
+      // 新建/上传的父目录语义:取选中集合的第一个节点,首项不是目录时退回被右键 target,保证目标恒为目录。
+      const resolveDirTarget = (): WorkspaceExplorerContextTarget => {
+        const actionTarget = resolveActionTarget(target)
+        return actionTarget.type === 'directory' ? actionTarget : target
+      }
       items.push(
         {
           key: 'create-file',
           label: '新建文件',
           icon: <FilePlusIcon size={13} />,
-          onSelect: () => handleRequestCreate('file', target),
+          onSelect: () => handleRequestCreate('file', resolveDirTarget()),
         },
         {
           key: 'create-directory',
           label: '新建目录',
           icon: <FolderPlusIcon size={13} />,
-          onSelect: () => handleRequestCreate('directory', target),
+          onSelect: () => handleRequestCreate('directory', resolveDirTarget()),
         },
         {
           key: 'upload-file',
           label: '上传文件',
           icon: <UploadIcon size={13} />,
-          onSelect: () => handleRequestUpload('file', target),
+          onSelect: () => handleRequestUpload('file', resolveDirTarget()),
         },
         {
           key: 'upload-directory',
           label: '上传目录',
           icon: <UploadIcon size={13} />,
-          onSelect: () => handleRequestUpload('directory', target),
+          onSelect: () => handleRequestUpload('directory', resolveDirTarget()),
         },
       )
     }
@@ -793,74 +866,90 @@ function WorkspaceGroupPanel({
     items.push({
       key: 'properties',
       label: '属性',
-      onSelect: () => handleRequestProperties(target),
+      onSelect: () => handleRequestProperties(resolveActionTarget(target)),
     })
    items.push({
      key: 'rename',
      label: '重命名',
-     onSelect: () => handleRequestRenameTarget(target),
+     onSelect: () => handleRequestRenameTarget(resolveActionTarget(target)),
    })
     items.push({
       key: 'move',
       label: '移动到…',
-      onSelect: () => handleRequestMove(target),
+      onSelect: () => {
+        const selected = selectionRef.current
+        // 支持多节点:多选集合内的行被右键 → 批量移动弹窗,整个集合移到同一目标目录。
+        if (selected.size > 1 && selected.has(target.path)) {
+          handleRequestBatchMove()
+          return
+        }
+        // 单选(含右键集合外行被归一为该行):维持单移动弹窗。
+        handleRequestMove(target)
+      },
     })
     items.push({
       key: 'search',
       label: '搜索',
       icon: <MagnifierCheckIcon size={13} />,
-      onSelect: () => handleRequestSearch(target),
+      onSelect: () => handleRequestSearch(resolveActionTarget(target)),
     })
     items.push({
       key: 'download',
       label: '下载',
       icon: <DownloadIcon size={13} />,
-      onSelect: () => handleRequestDownload(target),
+      onSelect: () => {
+        const selected = selectionRef.current
+        // 支持多节点:多选集合内的行被右键 → 逐个串行下载整个集合。
+        if (selected.size > 1 && selected.has(target.path)) {
+          void handleBatchDownload()
+          return
+        }
+        // 单选(含右键集合外行被归一为该行):维持单文件/单目录下载行为与文案。
+        void handleRequestDownload(target)
+      },
     })
     items.push({
       key: 'open-terminal',
       label: '在终端中打开',
       icon: <TerminalIcon size={13} />,
-      onSelect: () => handleRequestOpenTerminal(target),
+      onSelect: () => handleRequestOpenTerminal(resolveActionTarget(target)),
     })
     items.push({
       key: 'reveal-in-os',
       label: '在系统文件管理器中显示',
       icon: <FolderArrowOutIcon size={13} />,
-      onSelect: () => handleRequestRevealInOs(target),
+      onSelect: () => handleRequestRevealInOs(resolveActionTarget(target)),
     })
     // 插件注册的文件树右键动作(ui.file_explorer_actions 扩展点):
     // 按 isVisible 过滤后追加到内置菜单项尾部(与 FileExplorerAction 类型注释的约定一致)。
-    const pluginActionCtx = {
-      workspaceRoot: target.workspaceRoot,
-      path: target.path,
-      name: target.name,
-      type: target.type,
-    }
-    for (const action of pluginDispatcher.listRegisteredFileExplorerActions()) {
-      if (action.isVisible && !action.isVisible(pluginActionCtx)) continue
-      items.push({
-        key: `plugin:${action.id}`,
-        label: action.label,
-        icon: action.icon,
-        onSelect: () => action.invoke?.(pluginActionCtx),
-      })
+    // 插件动作不支持多节点:上下文取选中集合的第一个节点;无注册动作时不解析,避免逐行建树查找。
+    const pluginActions = pluginDispatcher.listRegisteredFileExplorerActions()
+    if (pluginActions.length > 0) {
+      const pluginActionTarget = resolveActionTarget(target)
+      const pluginActionCtx = {
+        workspaceRoot: pluginActionTarget.workspaceRoot,
+        path: pluginActionTarget.path,
+        name: pluginActionTarget.name,
+        type: pluginActionTarget.type,
+      }
+      for (const action of pluginActions) {
+        if (action.isVisible && !action.isVisible(pluginActionCtx)) continue
+        items.push({
+          key: `plugin:${action.id}`,
+          label: action.label,
+          icon: action.icon,
+          onSelect: () => action.invoke?.(pluginActionCtx),
+        })
+      }
     }
    return items
-  }, [handleOpenFile, handleRequestCreate, handleRequestDownload, handleRequestMove, handleRequestOpenTerminal, handleRequestProperties, handleRequestRenameTarget, handleRequestRevealInOs, handleRequestSearch, handleRequestUpload])
+  }, [handleBatchDownload, handleOpenFile, handleRequestBatchMove, handleRequestCreate, handleRequestDownload, handleRequestMove, handleRequestOpenTerminal, handleRequestProperties, handleRequestRenameTarget, handleRequestRevealInOs, handleRequestSearch, handleRequestUpload, resolveActionTarget])
 
   const rootMoreActionItems = React.useMemo<MoreActionItem[]>(() => [
     {
       key: 'refresh',
       label: '刷新',
       onSelect: handleRequestRefresh,
-    },
-    {
-      key: 'toggle-multi-select',
-      label: multiSelectMode ? '退出多选' : '多选',
-      icon: <CheckIcon size={13} />,
-      active: multiSelectMode,
-      onSelect: toggleMultiSelectMode,
     },
     {
       key: 'create-file',
@@ -921,7 +1010,7 @@ function WorkspaceGroupPanel({
       danger: true,
       onSelect: () => void handleRemoveWorkspace(entry),
     },
-  ], [entry, handleRequestCreate, handleRequestRefresh, handleRequestRootSearch, handleRequestUpload, metaMode, multiSelectMode, showInternalFiles, toggleInternalFiles, toggleMultiSelectMode, workspaceRoot])
+  ], [entry, handleRequestCreate, handleRequestRefresh, handleRequestRootSearch, handleRequestUpload, metaMode, showInternalFiles, toggleInternalFiles, workspaceRoot])
 
   return (
     <div style={groupStyle}>
@@ -952,42 +1041,16 @@ function WorkspaceGroupPanel({
         {!collapsed && (
           <>
         {treeError ? <div style={emptyStyle}>{treeError}</div> : null}
-        {multiSelectMode ? (
-          <div style={multiSelectBarStyle}>
-            <span style={multiSelectCountStyle}>已选 {selectedPaths.size} 项</span>
-            <div style={multiSelectActionsStyle}>
-              <Button
-                type="button"
-                size="sm"
-                variant="secondary"
-                disabled={selectedPaths.size === 0 || batchDeleting || batchMoving}
-                onClick={handleRequestBatchMove}
-              >
-                移动
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                variant="danger"
-                disabled={selectedPaths.size === 0 || batchDeleting || batchMoving}
-                onClick={handleRequestBatchDelete}
-              >
-                删除
-              </Button>
-            </div>
-          </div>
-        ) : null}
         <WorkspaceExplorerTree
           workspaceRoot={workspaceRoot}
           nodes={treeNodes}
           expandedPaths={expandedPaths}
-          selectedPath={selectedExplorerPath}
           locatePath={locateRequest?.filePath ?? null}
           locateRequestedAt={locateRequest?.requestedAt ?? null}
           metaMode={metaMode}
-          multiSelectMode={multiSelectMode}
           selectedPaths={selectedPaths}
-          onToggleSelectedPath={handleToggleSelectedPath}
+          onMultiSelectChange={applySelection}
+          onMoveToDirectory={handleDragMoveToDirectory}
           onToggleDirectory={(path) => {
             setExpandedPaths((prev) => {
               const next = new Set(prev)
@@ -1001,7 +1064,6 @@ function WorkspaceGroupPanel({
               return next
             })
           }}
-          onSelectPath={setSelectedExplorerPath}
           onOpenFile={handleOpenFile}
           onRequestDelete={handleRequestDelete}
           onLocateApplied={clearWorkspaceFileLocateRequest}
@@ -1370,31 +1432,6 @@ const movePreviewStyle: React.CSSProperties = {
   lineHeight: 1.5,
 }
 
-const multiSelectBarStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'space-between',
-  gap: 8,
-  padding: '6px 8px',
-  borderRadius: 'var(--radius-md)',
-  border: '1px solid color-mix(in srgb, var(--accent-blue) 26%, var(--border))',
-  background: 'color-mix(in srgb, var(--accent-blue-dim) 45%, var(--bg-primary))',
-}
-
-const multiSelectCountStyle: React.CSSProperties = {
-  fontSize: 'var(--text-xs)',
-  fontWeight: 700,
-  color: 'var(--accent-blue)',
-  whiteSpace: 'nowrap',
-}
-
-const multiSelectActionsStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 6,
-  flexShrink: 0,
-}
-
 const batchPathListStyle: React.CSSProperties = {
   maxHeight: 160,
   overflowY: 'auto',
@@ -1415,6 +1452,10 @@ const batchPathItemStyle: React.CSSProperties = {
   textOverflow: 'ellipsis',
   whiteSpace: 'nowrap',
   lineHeight: 1.6,
+  // 禁止被压缩:子项带 overflow:hidden(为省略号截断),其 flex 自动最小尺寸解析为 0,
+  // 条目超出 batchPathListStyle 的 max-height 时会被压扁到容器内(行高塌缩、文字挤在一起)
+  // 而不是溢出出滚动条。显式 flexShrink:0 保持每行原始高度,内容溢出后容器即出现垂直滚动条。
+  flexShrink: 0,
 }
 
 const panelStyle: React.CSSProperties = {
