@@ -108,7 +108,11 @@ export default function AddModelConfigDialog({
         form={form}
         layout="vertical"
         size="middle"
-        initialValues={{ providerPreset: PROVIDER_PRESETS[0].value }}
+        initialValues={{
+          providerPreset: PROVIDER_PRESETS[0].value,
+          baseUrl: PROVIDER_PRESETS[0].baseUrl,
+          fullUrl: PROVIDER_PRESETS[0].fullUrl,
+        }}
         onValuesChange={(changed) => {
           if (Object.prototype.hasOwnProperty.call(changed, 'providerPreset')) {
             handleProviderChange(changed.providerPreset as string)
