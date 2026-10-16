@@ -1413,6 +1413,10 @@ const batchPathItemStyle: React.CSSProperties = {
   textOverflow: 'ellipsis',
   whiteSpace: 'nowrap',
   lineHeight: 1.6,
+  // 禁止被压缩:子项带 overflow:hidden(为省略号截断),其 flex 自动最小尺寸解析为 0,
+  // 条目超出 batchPathListStyle 的 max-height 时会被压扁到容器内(行高塌缩、文字挤在一起)
+  // 而不是溢出出滚动条。显式 flexShrink:0 保持每行原始高度,内容溢出后容器即出现垂直滚动条。
+  flexShrink: 0,
 }
 
 const panelStyle: React.CSSProperties = {
