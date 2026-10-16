@@ -7,7 +7,7 @@ has_children: false
 
 # 内置插件范例索引
 
-**一句话定位**：`every-agent-plugins/` 下的 29 个内置插件是**活教材**——每种扩展点、每种形态、每种 order 档位在仓内都有真实可抄的范本。本篇告诉你「想学某个扩展点，去抄哪个插件」：先查总表（§2）定位插件，再用反查表（§3）按扩展点直达推荐范本，写代码前扫一眼 order 占用表（§4）避开已占档位。
+**一句话定位**：`every-agent-plugins/` 下的 30 个内置插件是**活教材**——每种扩展点、每种形态、每种 order 档位在仓内都有真实可抄的范本。本篇告诉你「想学某个扩展点，去抄哪个插件」：先查总表（§2）定位插件，再用反查表（§3）按扩展点直达推荐范本，写代码前扫一眼 order 占用表（§4）避开已占档位。
 
 所有路径相对仓库根；表格内为省篇幅，`every-agent-plugins/` 前缀在 §5 各小节统一省略为 `~plugins/`。全部数据来自源码逐文件取证（本篇成文前按行复核过关键行号，见文末口径说明）。
 
@@ -18,7 +18,7 @@ has_children: false
 - **形态选择**：不知道该做纯 Java、纯 Web 还是混合？看 §2「形态」列，然后读 [plugin.json 字段参考](../plugin-manifest.md) §3 的三形态实例。
 - 本篇只做索引与点评，**不讲 API 细节**：注册方法的签名与生命周期见 [后端模型总览](../backend/overview.md)、[Advisor 指南](../backend/advisors.md)、[任务与 RPC](../backend/task-and-rpc.md)、[UI 扩展点](../web/ui-extensions.md)；已知偏差集中登记在 [已知问题与现状偏差](known-issues.md)。
 
-## 2. 总表（29 个内置插件）
+## 2. 总表（30 个内置插件）
 
 缩写：**DO** = `ToolCallingAdvisor.DEFAULT_ORDER`（−2147483348）；**HP** = `Ordered.HIGHEST_PRECEDENCE`（−2147483648）。「代码量级」= 入口文件（`main` 指向的 Java 类 / `web/index.ts`）行数，量级仅供参考。
 
@@ -44,6 +44,7 @@ has_children: false
 | sandbox-windows-mic | Windows MIC 沙箱 | java（`enabled:false`） | SandboxProvider + ToolProvider | — | priority 5 | 入口 34 行 |
 | sandbox-wsl-ubuntu | WSL Ubuntu 沙箱 | java（`enabled:false`） | SandboxProvider + ToolProvider + SlashProvider + SlashTokenResolver | — | priority 10 | 入口 47 行 |
 | secret-redaction | 凭据输出脱敏 | java | ToolExecutionInterceptor | — | — | 入口 24 行 |
+| selection-reference | 选区引用 | both | SlashTokenResolver | `ui.editor_context_menu_actions` + `ui.composer_chip_actions` | — | 入口 90 行 + web 94 行 |
 | subagent | 子 Agent | java | ToolProvider + 技能包物化（SkillMaterializer）+ TaskLifecycleNode | — | 节点 950 | 入口 59 行 |
 | system-info | 系统环境信息注入 | java | AdvisorProvider | — | HP+50 | 入口 19 行 |
 | task-edit-resend | 编辑重发 | both | TaskLifecycleNode | `ui.user_message_actions` + `task.submit_contributions` | 节点 877 | 入口 27 行 + web 26 行 |
@@ -56,11 +57,11 @@ has_children: false
 
 ### 2.1 全体共性（读任何一个插件前先知道）
 
-- 形态分布：java-only 20 / both 5 / web-only 4；**没有纯声明式插件**（每个都至少有一侧入口）。
-- 清单字段全体一致：`id/name/version/description/author` + `enabled`，version 一律 `0.1.0`、author 一律 `everyagent`；含 Java 的 25 个另有 `main`，含前端的 9 个另有 `webMain`（值全部写 `web/index.ts`，宿主实际加载的是构建产物 `web/index.js`，见 [plugin.json 字段参考](../plugin-manifest.md) §5）。
+- 形态分布：java-only 20 / both 6 / web-only 4；**没有纯声明式插件**（每个都至少有一侧入口）。
+- 清单字段全体一致：`id/name/version/description/author` + `enabled`，version 一律 `0.1.0`、author 一律 `everyagent`；含 Java 的 26 个另有 `main`，含前端的 10 个另有 `webMain`（值全部写 `web/index.ts`，宿主实际加载的是构建产物 `web/index.js`，见 [plugin.json 字段参考](../plugin-manifest.md) §5）。
 - 用 `contributes.config` 的只有 2 个：image-vision（3 键）、sandbox-windows-codex（6 键）。
 - `enabled:false` 的只有 2 个：sandbox-windows-mic、sandbox-wsl-ubuntu（内置扫描期整目录跳过）。
-- 依赖红线干净：全部 25 个 pom **零 `every-agent-worker` 依赖**；`task-edit-resend`、`task-input-queue` 额外依赖 `every-agent-contract` 属共享契约层，合规（[架构文档](../../ARCHITECTURE.md) §14.9）。
+- 依赖红线干净：全部 26 个 pom **零 `every-agent-worker` 依赖**；`task-edit-resend`、`task-input-queue` 额外依赖 `every-agent-contract` 属共享契约层，合规（[架构文档](../../ARCHITECTURE.md) §14.9）。
 - 全部插件源码零 Spring 容器注解：插件经 `URLClassLoader` 加载、不在 Spring 容器中，取服务只能 `ctx.services()` / `getService(Class)`。
 - 每个 Java 入口都实现 `dev.everyagent.plugin.api.EveryAgentPlugin` 的 `activate(WorkerPluginContext ctx)`；改完 Java 要重跑 `mvn package`、改完 web 要重跑 `npm run build:plugins`（均需重启 worker，见 [构建与运行](../guides/build-and-run.md)）。
 
@@ -90,7 +91,7 @@ has_children: false
 |---|---|---|---|
 | `registerRpcMethod`（注册 1 个方法） | task-queue | `every-agent-plugins/task-queue/src/main/java/dev/everyagent/plugin/taskqueue/TaskQueuePlugin.java:29` | 一行注册 + 一个 handler，最小闭环；**批量**注册 13 个方法看 git（`GitPlugin.java:42-54`，方法名常量集中在 `GitRpcMethods.java:4-16`） |
 | `registerSlashProvider`（slash 命令项） | unattended | `every-agent-plugins/unattended/src/main/java/dev/everyagent/plugin/unattended/UnattendedPlugin.java:26-27` | 4 个使用者中最小的一个；items 工厂 + 命令项 id 命名范式齐全 |
-| `registerSlashTokenResolver`（slash 记录消解） | unattended | `every-agent-plugins/unattended/src/main/java/dev/everyagent/plugin/unattended/UnattendedPlugin.java:30` | 与 SlashProvider 成对出现（4 插件全部成对），配套看同一文件即可 |
+| `registerSlashTokenResolver`（slash 记录消解） | unattended | `every-agent-plugins/unattended/src/main/java/dev/everyagent/plugin/unattended/UnattendedPlugin.java:30` | 与 SlashProvider 成对出现（4 插件全部成对），配套看同一文件即可；**极简范本**看 selection-reference（`every-agent-plugins/selection-reference/src/main/java/dev/everyagent/plugin/selectionReference/SelectionReferencePlugin.java:48`，一行注册 + 纯文本展开，无 SlashProvider / RPC / Advisor） |
 
 ### 3.3 后端任务侧注册点（`TaskPluginContext` 2 个）
 
@@ -115,6 +116,8 @@ has_children: false
 | `ui.file_content_editors`（文件内容编辑器） | pdf-viewer | `every-agent-plugins/pdf-viewer/web/index.ts:14-19` | 唯一使用者 + web-only 形态最小样本（无 pom 无 src） |
 | `ui.file_explorer_actions`（文件树右键动作） | git | `every-agent-plugins/git/web/index.ts:42-53` | 唯一注册者；动作追加到文件树右键菜单内置项尾部（[UI §13](../web/ui-extensions.md)） |
 | `ui.round_tail_panels`（轮次尾面板） | file-change | `every-agent-plugins/file-change/web/index.ts:22` | 唯一使用者；配套 `ctx.events.on('task-round-closed')` 缓存作废范式 |
+| `ui.editor_context_menu_actions`（编辑器内容区右键菜单） | selection-reference | `every-agent-plugins/selection-reference/web/index.ts:69` | 唯一使用者：仅当有选区时出现「引用到AI对话框」；`invoke` 经 `ctx.ui.appendComposerToken` 插入 `kind='file.selection'` 胶囊（opaque 编码由宿主单点负责） |
+| `ui.composer_chip_actions`（胶囊激活行为） | selection-reference | `every-agent-plugins/selection-reference/web/index.ts:75` | 插件侧样本：点击胶囊经 `ctx.ui.openFileTab(..., { lineNumber })` 切回原文件标签并定位起始行；核心 `system.workspace_file` 亦经此注册（`pluginId:'core'`） |
 | 扩展点之外的自绘全局 UI（悬浮球等） | mobile-keyboard | `every-agent-plugins/mobile-keyboard/web/floatball.ts` | 唯一直接操作 `document.body` 的插件：15 个扩展点没有全局覆盖层位时，挂自有根元素 + 自管生命周期与可见性 |
 
 另有非 register\* 的服务通道 `WorkerServices.addRoundClosedListener`（`every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/WorkerServices.java:80`），唯一使用者 file-change（`FileChangePlugin.java:33`）。
@@ -299,6 +302,12 @@ WSL Ubuntu 沙箱 + bash 工具 + network slash 开关。
 工具输出上行前掩码凭据。
 - 关键文件：`~plugins/secret-redaction/src/main/java/dev/everyagent/plugin/secretredaction/SecretRedactionPlugin.java:22`（入口 24 行）。
 - 值得看：**单 SPI 极简 ToolExecutionInterceptor**，学拦截器先抄它。
+
+### selection-reference（选区引用）
+
+编辑器文件选区右键「引用到AI对话框」→ 插入选区引用胶囊；提交时后端解析器把胶囊展开为引文；点击胶囊回跳原文件并定位选区起始行。both 形态最小样本。
+- 关键文件：`~plugins/selection-reference/src/main/java/dev/everyagent/plugin/selectionReference/SelectionReferencePlugin.java:48`；`~plugins/selection-reference/web/index.ts:69,75`。
+- 值得看：① **最小 both 形态范例**——后端只 `ctx.registerSlashTokenResolver(new SelectionSlashResolver())`（kind `file.selection`，无 RPC / 无 Advisor / 无工具 / 无生命周期节点），前端经宿主通用扩展点注册编辑器右键项 + 胶囊激活行为两处；② 插件侧**完全不碰 opaque 线格式**——胶囊插入走 `ctx.ui.appendComposerToken`（编码由宿主单点负责），右键菜单与选区数据由宿主 `ui.editor_context_menu_actions` 扩展点提供，插件零菜单代码、零 DOM 操作；③ 「引用到AI对话框」→ 胶囊回跳定位的**完整闭环**（`appendComposerToken` 插入 → `ui.composer_chip_actions` 点击 → `ctx.ui.openFileTab(..., { lineNumber })` 切回原文件标签并定位选区起始行，回跳用 payload 自带的 `workspaceRoot`+`filePath` 而非激活上下文的）；④ **降级哲学**：行号取不到（`startLine:null`）仍能引用（只开文件不定位），回跳 payload 缺 `workspaceRoot`/`filePath` 则静默 no-op（`readSelectionPayload` 返回 null 即返回，不抛错）。
 
 ### subagent（子 Agent）
 

@@ -13,7 +13,7 @@ has_children: false
 
 - 详解列全部为站内相对链接（`.md` + 小节锚点）；「§n」指目标文档小节。
 - ⚠️ = 写了不生效 / 全仓零使用的扩展点或字段（集中登记在 [known-issues](known-issues.md)，撰写中）。
-- 范例列的插件 id 均可在[内置插件范例索引 §2](builtin-plugins.md#2-总表28-个内置插件) 查到逐行解读；「想写 X 就抄 Y」反查见[同篇 §3](builtin-plugins.md#3-想写-x-就抄-y反查表)。
+- 范例列的插件 id 均可在[内置插件范例索引 §2](builtin-plugins.md#2-总表30-个内置插件) 查到逐行解读；「想写 X 就抄 Y」反查见[同篇 §3](builtin-plugins.md#3-想写-x-就抄-y反查表)。
 
 ## 1. 后端 API 索引
 
@@ -23,7 +23,7 @@ has_children: false
 
 | 方法 | 一句话 | 详解 | 范例 |
 |---|---|---|---|
-| `String id()` | 必须与 plugin.json 的 `id` 一致（仅 `[a-z0-9-]`） | [总览 §5](../backend/overview.md#5-everyagentplugin-契约与最小入口类) | 全部 29 个 |
+| `String id()` | 必须与 plugin.json 的 `id` 一致（仅 `[a-z0-9-]`） | [总览 §5](../backend/overview.md#5-everyagentplugin-契约与最小入口类) | 全部 30 个 |
 | `void activate(WorkerPluginContext ctx)` | 一切注册发生在此；抛异常只废自己一个插件 | 同上 | 同上 |
 | `default void deactivate()` | 停机钩子：worker 优雅关闭时由 PluginLoader 调用（运行期禁用/卸载不触发） | [总览 §3.2](../backend/overview.md#32-deactivate-只在-worker-关闭时调用改动--重启-worker) | — |
 
@@ -46,7 +46,7 @@ has_children: false
 | 11 | `void registerChatModelEnhancer(ChatModelEnhancer e)` | [advisors §3](../backend/advisors.md#3-chatmodelenhancer--模型构建期介入) | model-pool |
 | 12 | `void registerRpcMethod(String method, RpcMethod h)` | [任务 §3](../backend/task-and-rpc.md#3-registerrpcmethod--自注册-rpc) | git×13、task-input-queue×3、task-queue/file-change 各 1 |
 | 13 | `void registerSlashProvider(String id, SlashProvider p)` | [任务 §4.1](../backend/task-and-rpc.md#41-接口签名) | unattended、git、ai-review、sandbox-wsl-ubuntu |
-| 14 | `void registerSlashTokenResolver(SlashTokenResolver r)` | [任务 §4.1](../backend/task-and-rpc.md#41-接口签名) | 同上四家 |
+| 14 | `void registerSlashTokenResolver(SlashTokenResolver r)` | [任务 §4.1](../backend/task-and-rpc.md#41-接口签名) | 同上四家 + selection-reference（极简：仅解析器、无 SlashProvider） |
 | 15 | `void registerTaskAdmissionPolicy(TaskAdmissionPolicy p)`（`TaskPluginContext.java:17`） | [任务 §1](../backend/task-and-rpc.md#1-taskadmissionpolicy--任务创建准入预检) | task-queue（全仓唯一） |
 | 16 | `void registerTaskLifecycleNode(TaskLifecycleNode n)`（`TaskPluginContext.java:24`） | [任务 §2](../backend/task-and-rpc.md#2-tasklifecyclenode--洋葱模型) | 4 插件 5 节点（order 15/40/870/877/950） |
 
@@ -211,7 +211,7 @@ has_children: false
 | `sidebar-panel-shown` | ✅ 活 | `task-round-closed` | ✅ 活（历史回放会补发） |
 | `task-status-changed` | ✅ 活 | `plugins-loaded` | ✅ 活（#4 接线） |
 
-插件间通信无先例：29 个内置插件 events 调用 6 处全是 `on`、零 `emit`；约定事件名用 `<pluginId>:<verb>` 前缀（[事件 §6](../web/events.md#6-插件间通信模式)）。
+插件间通信无先例：30 个内置插件 events 调用 6 处全是 `on`、零 `emit`；约定事件名用 `<pluginId>:<verb>` 前缀（[事件 §6](../web/events.md#6-插件间通信模式)）。
 
 ### 2.5 `PluginStorage` / `PluginFs` / `CommandRegistry` / `Disposable`
 
@@ -253,7 +253,7 @@ has_children: false
 
 ### 4.1 插件 id 规则
 
-`^[a-z0-9][a-z0-9-]{1,38}$` 且首尾不能是连字符（2~39 字符；脚手架校验 `create-everyagent-plugin/index.mjs:57`），29 个内置全部合规。id 的三重身份（目录名 / `.eap` 顶层目录 / localStorage 前缀）：[清单 §4](../plugin-manifest.md#4-id-的三重身份最容易踩坑处)。
+`^[a-z0-9][a-z0-9-]{1,38}$` 且首尾不能是连字符（2~39 字符；脚手架校验 `create-everyagent-plugin/index.mjs:57`），30 个内置全部合规。id 的三重身份（目录名 / `.eap` 顶层目录 / localStorage 前缀）：[清单 §4](../plugin-manifest.md#4-id-的三重身份最容易踩坑处)。
 
 ### 4.2 包名 / 入口类推导（脚手架约定）
 
