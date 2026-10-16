@@ -5,5 +5,5 @@
   "description": "ripgrep-tool 插件",
   "author": "everyagent",
   "main": "dev.everyagent.plugin.ripgrepTool.RipgrepToolPlugin",
-  "enabled": true
+  "enabled": false
 }
