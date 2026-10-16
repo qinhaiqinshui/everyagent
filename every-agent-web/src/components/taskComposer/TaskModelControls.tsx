@@ -1,6 +1,7 @@
 import React from 'react'
-import { Select } from 'antd'
+import { Empty, Select } from 'antd'
 import type { LLMConfigProfile } from '@/types'
+import { useWorkspaceShell } from '@/components/app/WorkspaceShellContext'
 import './TaskModelControls.css'
 
 /**
@@ -58,6 +59,28 @@ export default function TaskModelControls({
     value: profile.id,
     label: `${profile.id} · ${profile.model}`,
   }))
+  const { openTab } = useWorkspaceShell()
+  // 空数据提示:引导用户去设置页配置模型(antd Select 空态文案)。
+  const modelNotFoundContent = (
+    <div style={{ padding: '4px 0' }}>
+      <Empty
+        image={Empty.PRESENTED_IMAGE_SIMPLE}
+        description={(
+          <span>
+            暂无模型配置,
+            <a
+              onClick={(e) => {
+                e.preventDefault()
+                openTab('page:settings')
+              }}
+            >
+              前往「设置」页配置模型
+            </a>
+          </span>
+        )}
+      />
+    </div>
+  )
   // 选中后只显示 configId(下拉列表仍展示「configId · model」便于辨识)。
   const renderSelectedModelLabel = (value?: string) => {
     if (value == null) return undefined
@@ -87,6 +110,7 @@ export default function TaskModelControls({
           value={selectedLlmConfigId || undefined}
           suffixIcon={selectedLlmConfigId ? null : undefined}
           placeholder="请选择模型配置"
+          notFoundContent={modelNotFoundContent}
           labelRender={(info) => renderSelectedModelLabel(info.value as string)}
           onChange={(value) => onSelectLlmConfig(value as string)}
           options={llmDropdownOptions}

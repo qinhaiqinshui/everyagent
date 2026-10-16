@@ -5,7 +5,9 @@
  * 覆盖),本服务经 hub 管道定向读取:
  * - config.get(按 worker 定向:连接/重连/presence 变化后逐台校准;apiKey 恒为掩码,明文不出 worker);
  * - config.changed{keys:["models"]}(按 hubSession.workerIdOfFrame 判定来源 worker 定向刷新)。
- * 模型配置**只读**:前端无新增/编辑/删除入口,也无 config.set 写路径。
+ * 写路径:设置页「模型配置」区块(components/system/modelConfig/)经 config.model.add /
+ * config.model.remove 落盘 worker 侧 application-worker.yaml,成功后由 worker 广播
+ * config.changed 触发本服务自动校准;本服务自身不直接写。
  *
  * 多 worker 语义:不同 worker 的模型配置各不相同,缓存为 workerId → ModelConfigInfo[]。
  * 新建任务选中的 configId 持久化在 localStorage(全局前端偏好,与 worker 无关),
@@ -18,6 +20,8 @@ export interface ModelConfigInfo {
   configId: string
   provider: string
   baseUrl?: string | null
+  /** 完整端点 URL(非空时优先于 baseUrl)。 */
+  fullUrl?: string | null
   model: string
   apiKey?: string | null
   params?: Record<string, unknown> | null

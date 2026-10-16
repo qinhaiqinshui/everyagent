@@ -27,6 +27,10 @@ public final class RpcMethods {
     public static final String CONFIG_GET = "config.get";
     /** 重新读取模型配置(重新解析 worker.models,应用用户在外部 YAML 中的修改)。 */
     public static final String CONFIG_RELOAD = "config.reload";
+    /** 新增模型配置(写入 application-worker.yaml 的 worker.models 并热重建;广播 config.changed{keys:["models"]})。 */
+    public static final String CONFIG_MODEL_ADD = "config.model.add";
+    /** 删除模型配置(参数 configId;同步落盘并热重建)。 */
+    public static final String CONFIG_MODEL_REMOVE = "config.model.remove";
     /** 全量 skill 清单(目录扫描) + 各自「自动暴露」配置(设置页表格数据源)。 */
     public static final String SKILL_LIST = "skill.list";
     /** 覆盖式设置某 skill 的暴露配置(参数 skillId + blacklist:[root,...] + whitelist:[root,...])。 */

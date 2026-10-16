@@ -2,6 +2,7 @@ package dev.everyagent.worker.modules;
 
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.worker.hub.HubPool;
+import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.modules.SkillExposureStore.ExposureConfig;
 import dev.everyagent.worker.modules.UserPreferenceStore;
 import dev.everyagent.worker.proto.ConfigDtos.ModelConfig;
@@ -71,6 +72,8 @@ public class ConfigRpcHandler {
     void init() {
         dispatcher.register(RpcMethods.CONFIG_GET, this::rpcConfigGet);
         dispatcher.register(RpcMethods.CONFIG_RELOAD, this::rpcConfigReload);
+        dispatcher.register(RpcMethods.CONFIG_MODEL_ADD, this::rpcConfigModelAdd);
+        dispatcher.register(RpcMethods.CONFIG_MODEL_REMOVE, this::rpcConfigModelRemove);
         dispatcher.register(RpcMethods.SKILL_LIST, this::rpcSkillList);
         dispatcher.register(RpcMethods.SKILL_EXPOSURE_SET, this::rpcSkillExposureSet);
         dispatcher.register(RpcMethods.PREF_GET, this::rpcPrefGet);
@@ -81,7 +84,7 @@ public class ConfigRpcHandler {
         ArrayNode arr = Json.arr();
         for (ModelConfig c : configs.list()) {
             ModelConfig safe = new ModelConfig(c.configId(), c.provider(), c.baseUrl(), c.fullUrl(),
-                    c.model(), c.apiKey() == null || c.apiKey().isEmpty() ? null : "******",
+                    c.model(), maskApiKey(c.apiKey()),
                     c.params(), c.isDefault());
             arr.add(Json.toJson(safe));
         }
@@ -91,6 +94,25 @@ public class ConfigRpcHandler {
         // 遗留项：插件后续自行注册 RPC 透出限流快照（步骤 5）。
         out.set("rateStatus", Json.arr());
         ctx.ok(out);
+    }
+
+    /**
+     * apiKey 掩码(仅供 config.get 展示,明文不出 worker):
+     * 长度 > 8 → 前 4 + "…" + 后 4;长度 > 4 → 前 2 + "…" + 后 2;否则 "******"。
+     * 供用户对照是否填错 key,不泄露完整密钥。
+     */
+    private static String maskApiKey(String apiKey) {
+        if (apiKey == null || apiKey.isEmpty()) {
+            return null;
+        }
+        int len = apiKey.length();
+        if (len <= 4) {
+            return "******";
+        }
+        if (len <= 8) {
+            return apiKey.substring(0, 2) + "…" + apiKey.substring(len - 2);
+        }
+        return apiKey.substring(0, 4) + "…" + apiKey.substring(len - 4);
     }
 
     /**
@@ -106,6 +128,58 @@ public class ConfigRpcHandler {
                 Json.toJson(new Events.ConfigChanged(List.of("models"))));
         log.info("config.reload 完成:模型配置已重新加载,共 {} 条", count);
         ctx.ok(Json.obj().put("models", count));
+    }
+
+    /**
+     * config.model.add:新增模型配置(设置页「模型配置」表格)。
+     * 参数:{configId, provider, baseUrl?, fullUrl?, model, apiKey?, params?, isDefault?}。
+     * 校验 configId 非空且不重复、model 非空、baseUrl/fullUrl 至少其一;
+     * 成功后落盘 application-worker.yaml 并热重建,广播 config.changed{keys:["models"]}。
+     * 仅影响后续新建任务的模型解析;运行中任务使用创建时冻结的快照,不受影响。
+     */
+    private void rpcConfigModelAdd(RpcContext ctx) {
+        JsonNode params = ctx.params();
+        WorkerProperties.Model model = new WorkerProperties.Model();
+        model.setConfigId(ctx.optStrParam("configId", "").trim());
+        model.setProvider(ctx.optStrParam("provider", "").trim());
+        String baseUrl = ctx.optStrParam("baseUrl", "").trim();
+        model.setBaseUrl(baseUrl.isEmpty() ? null : baseUrl);
+        String fullUrl = ctx.optStrParam("fullUrl", "").trim();
+        model.setFullUrl(fullUrl.isEmpty() ? null : fullUrl);
+        model.setModel(ctx.optStrParam("model", "").trim());
+        model.setApiKey(ctx.optStrParam("apiKey", ""));
+        JsonNode paramsNode = params.path("params");
+        if (paramsNode.isObject() && !paramsNode.isEmpty()) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> freeParams = Json.convert(paramsNode, Map.class);
+            model.setParams(freeParams);
+        }
+        JsonNode isDefaultNode = params.path("isDefault");
+        if (isDefaultNode.isBoolean()) {
+            model.setIsDefault(isDefaultNode.asBoolean());
+        }
+        int total;
+        try {
+            total = configs.addModel(model);
+        } catch (IllegalArgumentException e) {
+            throw new BadParamsException(e.getMessage());
+        }
+        pool.broadcastEvt(Events.CONFIG_CHANGED,
+                Json.toJson(new Events.ConfigChanged(List.of("models"))));
+        ctx.ok(Json.obj().put("models", total).put("configId", model.getConfigId()));
+    }
+
+    /**
+     * config.model.remove:删除模型配置(参数 configId)。
+     * 成功后落盘 application-worker.yaml 并热重建,广播 config.changed{keys:["models"]};
+     * 配置不存在 → NOT_FOUND。运行中任务使用创建时冻结的快照,不受影响。
+     */
+    private void rpcConfigModelRemove(RpcContext ctx) {
+        String configId = ctx.strParam("configId");
+        int total = configs.removeModel(configId);
+        pool.broadcastEvt(Events.CONFIG_CHANGED,
+                Json.toJson(new Events.ConfigChanged(List.of("models"))));
+        ctx.ok(Json.obj().put("models", total).put("configId", configId));
     }
 
     /**

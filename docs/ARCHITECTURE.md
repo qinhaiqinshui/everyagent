@@ -238,8 +238,9 @@ worker 端 `RpcDispatcher` 注册方法;应答回**请求来源连接**的 `evt`
 | `task.queueRemove` / `task.queueMove` | 删除/重排某条队列输入(task-input-queue 插件注册;运行中热队列直改内存、终态改磁盘悬空队列 queue.jsonl) |
 | `task.queueSnapshot` | 拉取队列快照 `{taskId, pendingInputs:[…), pendingInputsRaw:[…]}`(task-input-queue 插件注册;热任务取内存 InputQueue,终态任务读 queue.jsonl 悬空队列)——前端队列面板自持数据源(插件专有数据不进核心 ComposerPanelCtx/taskStore);`pendingInputsRaw` 与 `pendingInputs` 等长按位对齐(空串=无原始内容),供面板「编辑」回填还原胶囊;入队/消费/增删均广播 `task.updated`(携带 pendingInputs)驱动刷新 |
 | `task.run{taskId, metadata:{editSeq}}`(消息编辑重发) | 编辑已发送的用户消息:**无独立 RPC**(历史方法 `task.message.edit` 已退役),统一走 `task.run` 携带 `metadata.editSeq`,由 task-edit-resend 插件的 `EditResendNode`(order=877,§7.14.1)截断 seq > 该消息的所有磁盘事件(仅 *.jsonl/rounds.jsonl,**不删插件数据文件**——agents.json/file-changes/ 残留陈旧条目被接受,task 核心不感知插件文件名;后续可增加截断事件通知由插件自清)、原地更新该消息内容、广播 `message.edited` 同步事件、冷启动重跑(不写新 user.message,对话历史已含编辑后的消息);任务运行中拒绝 |
-| `config.get` | 模型配置只读(Spring 配置承载,见 §7.17) |
+| `config.get` | 模型配置读取(Spring 配置承载,见 §7.17;apiKey 恒为掩码——前 4 + `…` + 后 4,明文不出 worker) |
 | `config.reload` | 重新读取模型配置(重新解析 worker.models,应用用户在外部 YAML 中的修改);广播 `config.changed{keys:["models"]}` |
+| `config.model.add` / `config.model.remove` | 模型配置增删(设置页「模型配置」表格):add 参数 `{configId, provider, baseUrl?, fullUrl?, model, apiKey?, params?, isDefault?}`(configId 非空且不重复、model 非空、baseUrl/fullUrl 至少其一,否则 `BAD_PARAMS`),remove 参数 `configId`(不存在 → `NOT_FOUND`);把结果整表原子落盘 `<homeDir>/application-worker.yaml` 的 `worker.models` 段(保留文件内其他配置键)+ 热重建内存索引 + 广播 `config.changed{keys:["models"]}`;仅影响后续新建任务,运行中任务用创建时冻结的快照 |
 | `skill.list` | 该 worker 的全量 skill 清单 `[{id, name, description, knowledgePath, blacklist?, whitelist?}]`——数据源 = `skillsDir` 目录扫描(唯一真相源),每项附各自的按工作区暴露配置(黑白名单并存,黑名单优先);供设置页「Skill 列表」表格(按 worker 分组展示,不同 worker 的 skillsDir 不同、同名 id 非同一 skill,不跨 worker 合并;§7.17) |
 | `skill.exposure.set` | 设置某 skill 的暴露配置(参数 `skillId` + `blacklist:[root,...]` + `whitelist:[root,...]`):`skillId` 须在当前目录扫描结果内(否则 `NOT_FOUND`),`blacklist`/`whitelist` 逐项须为该 worker 已注册工作区 root(normalize 后字符串相等,未注册项 `BAD_PARAMS` 拒绝);**黑名单**:列出的工作区不暴露;**白名单**:非空时仅列出的工作区暴露;**黑名单优先**:同时命中黑白名单按黑名单处理;两个清单都空 = 恢复默认(删除键);`AtomicFiles` 原子落盘 `<homeDir>/skill-exposure.json` 后广播 `config.changed{keys:["skills"]}`。`/` 菜单不受影响(永远全量);运行中任务不受影响(skill 注入发生在 run 开始;§7.17) |
 | `workspaces.list` / `workspaces.add` / `workspaces.remove` / `workspaces.addExternalRoot` | 工作区注册表 CRUD(多工作区并行);addExternalRoot = 注册工作区外部授权根(`@` 弹窗 `+` 显式选择路径,§7.17) |
@@ -329,7 +330,7 @@ wss 强制 + 证书;hello 失败限速(防 key 枚举,60 次/分/单 IP);单帧�
 | **PendingAsks** | askId → CompletableFuture;ask 工具在此挂起(§7.8) |
 | **TaskPoll** | 应答 `task.poll` RPC:磁盘反向窗口 ∪ 内存尾部按 seq 归并,rpc.data 分批 |
 | **RpcDispatcher** | 方法注册表;每请求一个虚拟线程 |
-| **功能模块** | ConfigStore(模型配置只读)、WorkspaceManager(工作区注册表)、FsService(沙箱内文件操作)、GitService(工作区 git 快操作 RPC)、NativeGit(宿主原生 git 执行器,§7.12)、GitCredentialStore(git 凭证加密存储) |
+| **功能模块** | ConfigStore(模型配置存储,增删落盘 application-worker.yaml 并热重建)、WorkspaceManager(工作区注册表)、FsService(沙箱内文件操作)、GitService(工作区 git 快操作 RPC)、NativeGit(宿主原生 git 执行器,§7.12)、GitCredentialStore(git 凭证加密存储) |
 | **任务路由索引** | `taskId → {dir, summary}`(磁盘任务的元数据索引,boot 扫描构建) |
 
 **无修剪、无 retention**:任务永久保留。内存 EventLog 受 `maxEventsPerTask`(默认 50 万)护栏(防 RAM 失控;磁盘 jsonl 全量不受影响)。计数口径:护栏只计**持久(落盘)事件**;流式瞬态事件(delta/thinking 及 `ext.persist=false` 的 trace)虽进内存缓冲供实时推送,但不占用计数——瞬态风暴由 `ModelLengthGuardAdvisor`(§7.3)治理。
@@ -776,7 +777,7 @@ TaskManager 构造参数从 23 降至 15（SubAgentManager 从 11 降至 4），
 | 承接组件 | 层 | 职责 |
 |---|---|---|
 | `AgentFactory`（agent 层） | agent 层 | 主/子 agent 装配（模型/工具/沙箱/权限聚合） |
-| `ConfigRpcHandler` | 基础设施 | config.get / config.reload / skill.list / skill.exposure.set RPC（自注册） |
+| `ConfigRpcHandler` | 基础设施 | config.get / config.reload / config.model.add / config.model.remove / skill.list / skill.exposure.set RPC（自注册） |
 | `SlashTaskCallbacks` | 基础设施 | slash 任务 token 建后回调 |
 | `EventSink`（接口） | 基础设施 | `fanout(channelNamer, event, ...)` 扇出发布——无调用者语义，HubPool 实现；task 层广播任务状态、未来工作流层广播流状态共用 |
 | `TaskMessageRouter` + `TaskInputHandler` | 基础设施 | worker 输入频道订阅与消息路由（TASK_INPUT/DIALOG_INSERT/ASK_REPLY）；接口在基础设施层定义、TaskManager 实现——依赖方向与 AgentContext 相同 |
