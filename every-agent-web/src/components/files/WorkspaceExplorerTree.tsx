@@ -29,17 +29,14 @@ export default function WorkspaceExplorerTree({
   workspaceRoot,
   nodes,
   expandedPaths,
-  selectedPath,
   locatePath,
   locateRequestedAt,
   onLocateApplied,
   onToggleDirectory,
-  onSelectPath,
   onOpenFile,
   onRequestDelete,
   getActionItems,
   metaMode,
-  multiSelectMode = false,
   selectedPaths,
   onMultiSelectChange,
 }: {
@@ -47,22 +44,18 @@ export default function WorkspaceExplorerTree({
   workspaceRoot: string
   nodes: WorkspaceExplorerNode[]
   expandedPaths: Set<string>
-  selectedPath: string | null
   locatePath?: string | null
   locateRequestedAt?: number | null
   onLocateApplied?: () => void
   onToggleDirectory: (path: string) => void
-  onSelectPath: (path: string) => void
   onOpenFile: (target: WorkspaceExplorerOpenTarget) => void
   onRequestDelete?: (target: WorkspaceExplorerContextTarget) => void
   getActionItems?: (target: WorkspaceExplorerContextTarget) => ListRowActionItem[]
   /** 行尾元信息显示模式：文件大小、最后编辑时间，或 none(默认隐藏)。 */
   metaMode?: 'size' | 'modified' | 'none'
-  /** 多选模式：开启后支持 Ctrl/Shift 点击与拖动框选，选中项以高亮背景标记(类似 VSCode)。 */
-  multiSelectMode?: boolean
-  /** 多选模式下的已选路径集合（仅在 multiSelectMode 时使用）。 */
+  /** 当前选中集合(保持点击顺序)；行内自绘高亮是唯一高亮来源，不再走 antd 内置选中通道。 */
   selectedPaths?: Set<string>
-  /** 多选模式下批量更新选中路径集合（点击/Ctrl/Shift/框选统一走此回调）。 */
+  /** 选中集合更新入口(Ctrl/Shift 点击与空白处拖动框选统一走此回调)。 */
   onMultiSelectChange?: (paths: Set<string>) => void
 }) {
   const isMobile = useResponsiveViewport().isMobile
@@ -134,7 +127,7 @@ export default function WorkspaceExplorerTree({
     return new Set(visiblePaths.slice(start, end + 1))
   }, [getVisiblePaths])
 
-  /** 处理多选模式下的节点点击(Ctrl/Shift/普通)。 */
+  /** 更新选中集合:处理节点点击(Ctrl/Shift/普通)。 */
   const handleMultiSelectClick = React.useCallback((path: string, e: React.MouseEvent) => {
     if (!onMultiSelectChange) return
     const isCtrl = e.ctrlKey || e.metaKey
@@ -164,9 +157,18 @@ export default function WorkspaceExplorerTree({
     }
   }, [onMultiSelectChange, selectedPaths, computeRangeSelection])
 
-  /** 容器 mousedown：开始潜在的拖动框选(多选模式下)。 */
+  /** 右键/长按归一选中:被操作行若不在当前选中集合内,选中集合收缩为该行;已在集合内则保持多选不变。 */
+  const normalizeSelectionForPath = React.useCallback((path: string) => {
+    if (!onMultiSelectChange) return
+    if (selectedPaths?.has(path)) return
+    // 锚点同步指向该行,避免下一次 Shift 点击从旧锚点起算。
+    anchorPathRef.current = path
+    onMultiSelectChange(new Set([path]))
+  }, [onMultiSelectChange, selectedPaths])
+
+  /** 容器 mousedown：开始潜在的拖动框选(常态可用,无需任何开关)。 */
   const handleContainerMouseDown = React.useCallback((e: React.MouseEvent) => {
-    if (!multiSelectMode || !onMultiSelectChange) return
+    if (!onMultiSelectChange) return
     if (e.button !== 0) return // 只响应左键
     const target = e.target as HTMLElement
     // 点击展开/收起箭头不触发框选
@@ -237,7 +239,7 @@ export default function WorkspaceExplorerTree({
 
     document.addEventListener('mousemove', handleMouseMove)
     document.addEventListener('mouseup', handleMouseUp)
-  }, [multiSelectMode, onMultiSelectChange, selectedPaths])
+  }, [onMultiSelectChange, selectedPaths])
 
   if (nodes.length === 0) {
     return (
@@ -249,7 +251,7 @@ export default function WorkspaceExplorerTree({
 
   const titleRender = (dataNode: TreeDataNode) => {
     const node = (dataNode as TreeDataNode & { dataRef: WorkspaceExplorerNode }).dataRef
-    const isMultiSelect = multiSelectMode && !!onMultiSelectChange
+    const isMultiSelect = !!onMultiSelectChange
     const isSelected = isMultiSelect && !!selectedPaths?.has(node.path)
     const target: WorkspaceExplorerContextTarget = {
       workspaceRoot,
@@ -289,6 +291,7 @@ export default function WorkspaceExplorerTree({
         onToggleDirectory={onToggleDirectory}
         onOpenFile={onOpenFile}
         onMultiSelectClick={handleMultiSelectClick}
+        onContextMenuSelect={normalizeSelectionForPath}
       />
     )
   }
@@ -304,7 +307,13 @@ export default function WorkspaceExplorerTree({
   return (
     <div
       ref={containerRef}
-      style={{ padding: `0 ${token.paddingXXS}px`, position: 'relative' }}
+      style={{
+        padding: `0 ${token.paddingXXS}px`,
+        position: 'relative',
+        // 框选拖动期间禁止浏览器文字选中:空白处按下拖动只产生橡皮筋选区,不产生文字选区。
+        userSelect: 'none',
+        WebkitUserSelect: 'none',
+      }}
       onMouseDown={handleContainerMouseDown}
       onClickCapture={(e) => {
         // 框选结束后抑制 click 事件,防止误触发单选
@@ -325,7 +334,8 @@ export default function WorkspaceExplorerTree({
         // 展开/收起改为:双击名称(onDoubleClick toggle) 或 单击箭头(onExpand)。
         expandAction={false}
         blockNode
-        selectable={!multiSelectMode}
+        // 选中态不交给 antd:行内自绘高亮是唯一高亮来源,避免两套选中通道互相漂移。
+        selectable={false}
         className="ws-tree"
         styles={{
           itemTitle: {
@@ -335,7 +345,6 @@ export default function WorkspaceExplorerTree({
             alignItems: 'center',
           },
         }}
-        selectedKeys={selectedPath ? [selectedPath] : []}
         expandedKeys={expandedKeys}
         defaultExpandAll={false}
         autoExpandParent={false}
@@ -350,12 +359,6 @@ export default function WorkspaceExplorerTree({
           for (const k of next) {
             if (!expandedPaths.has(k)) onToggleDirectory(k)
           }
-        }}
-        onSelect={(keys) => {
-          const key = keys[0] as string | undefined
-          if (!key) return
-          // 单击仅选中(高亮)。目录展开/收起由双击(onDoubleClick)或点击箭头(onExpand)触发。
-          onSelectPath(key)
         }}
         // 展开/收起图标 = 通用折叠箭头(收起朝右 ChevronRight,展开朝下 ChevronDown),独占一列。
         // 注意:antd 6 会把用户 switcherIcon 包进 SwitcherIconCom 再传给 rc-tree,
@@ -419,6 +422,7 @@ function TreeNodeRow({
   onToggleDirectory,
   onOpenFile,
   onMultiSelectClick,
+  onContextMenuSelect,
 }: {
   node: WorkspaceExplorerNode
   target: WorkspaceExplorerContextTarget
@@ -435,8 +439,10 @@ function TreeNodeRow({
   suppressNextClickRef?: React.MutableRefObject<boolean>
   onToggleDirectory: (path: string) => void
   onOpenFile: (target: WorkspaceExplorerOpenTarget) => void
-  /** 多选模式下的节点点击处理(Ctrl/Shift/普通)。 */
+  /** 选中集合的节点点击处理(Ctrl/Shift/普通)。 */
   onMultiSelectClick?: (path: string, e: React.MouseEvent) => void
+  /** 右键/长按打开菜单前归一选中集合:被操作行不在选中集合内时收缩为该行,已在集合内则保持多选不变。 */
+  onContextMenuSelect?: (path: string) => void
 }) {
   const { token } = useToken()
   const isDirectory = node.type === 'directory'
@@ -453,22 +459,27 @@ function TreeNodeRow({
   // 移动端长按的行元素(MenuList 的 anchor,用于「点在触发元素上不关闭」判定)。
   const [anchorEl, setAnchorEl] = React.useState<HTMLElement | null>(null)
 
-  // 移动端长按弹出右键菜单：记录触摸点与行元素并打开菜单；桌面端处理器为空操作。
+  // 移动端长按弹出右键菜单：先归一选中集合，再记录触摸点与行元素并打开菜单；桌面端处理器为空操作。
+  // onLongPress 为每次渲染新建的内联回调，useLongPress 的 onPointerDown 依赖它并随之重建，
+  // 故长按定时器触发时读到的是最近一次渲染的 onContextMenuSelect(其依赖含选中集合，始终为最新值)。
   const { wasLongPressed, ...longPressHandlers } = useLongPress({
     isMobile,
     delay: 500,
     onLongPress: (target, point) => {
+      onContextMenuSelect?.(node.path)
       setMousePos(point)
       setAnchorEl(target)
       onOpenChange(true)
     },
   })
 
-  // 监听 contextmenu 事件记录鼠标坐标(在 Dropdown 的 onOpenChange 之前触发)
+  // 监听 contextmenu 事件记录鼠标坐标(在 Dropdown 的 onOpenChange 之前触发)；
+  // 归一选中须在记录坐标之前完成:多选区之外右键等于重新单选，多选区之内右键保持集合不变。
   const handleContextMenu = React.useCallback((e: React.MouseEvent) => {
+    onContextMenuSelect?.(node.path)
     setMousePos({ x: e.clientX, y: e.clientY })
     longPressHandlers.onContextMenu(e)
-  }, [longPressHandlers])
+  }, [longPressHandlers, node.path, onContextMenuSelect])
 
   // 桌面端:根据鼠标位置和预估菜单高度计算 align offset 和 maxHeight。
   // autoAdjustOverflow=false 后,rc-trigger 不做翻转/shift,菜单始终从鼠标点向下展开(bottomLeft)。
@@ -532,13 +543,13 @@ function TreeNodeRow({
         gap: token.paddingXXS,
         width: '100%',
         cursor: 'default',
-        // 名称文字允许鼠标选中复制(文件/文件夹名)；
-        // 移动端禁用文字选择:避免长按触发系统选词/放大镜，与自定义长按右键菜单冲突。
-        userSelect: isMobile ? 'none' : 'text',
-        WebkitUserSelect: isMobile ? 'none' : 'text',
-        // iOS Safari:长按不再弹系统「拷贝/全选」呼出菜单。
-        WebkitTouchCallout: isMobile ? 'none' : undefined,
-        // 多选模式选中项:VSCode 风格高亮背景(与单选 .ant-tree-treenode-selected 同款 var(--bg-active))
+        // 节点名称一律禁止浏览器文本选中:文件名的复制走「属性」弹窗与右键菜单,不靠选词,
+        // 同时避免长按触发系统选词/放大镜与自定义长按右键菜单冲突。
+        userSelect: 'none',
+        WebkitUserSelect: 'none',
+        // iOS Safari:长按不弹系统「拷贝/全选」呼出菜单。
+        WebkitTouchCallout: 'none',
+        // 选中项:VSCode 风格高亮背景(唯一高亮来源;antd 侧 selectable=false,不再产生内置 selected 态)
         ...(isSelected ? {
           background: 'var(--bg-active)',
           borderRadius: 'var(--radius-sm)',
@@ -555,8 +566,8 @@ function TreeNodeRow({
           onMultiSelectClick(node.path, e)
           return
         }
-        // 不阻止冒泡:让 antd 的 onSelect 正常触发(单击选中高亮)。
-        // 目录展开/收起改由双击(onDoubleClick)或点击箭头(onExpand)触发。
+        // 调用方未提供选中回调时不做任何副作用:
+        // 目录展开/收起由双击(onDoubleClick)或点击箭头(onExpand)触发。
       }}
       onMouseDown={(e) => {
         // 阻止浏览器「双击选中文字」的默认行为:双击打开文件/展开目录时,文件名不应被高亮选中。
