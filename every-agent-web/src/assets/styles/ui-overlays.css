@@ -214,32 +214,26 @@
   padding-inline: 0 !important;
 }
 
-/* 文件树（DirectoryTree）选中/悬停高亮统一为项目灰调(与 ui-list-row 的 bg-hover/bg-active 一致)。
-   根因:antd 目录树把「选中态」背景画在 .ant-tree-treenode-selected 上(默认 colorPrimary 实心蓝),
-   把「悬停态」背景画在 .ant-tree-node-content-wrapper 的 :before 伪元素上(默认 controlItemBgHover),
-   而非画在 content-wrapper 自身 background——因此需覆盖 treenode 与 :before 两处。
-   且 antd 样式为运行时 cssinjs 注入、带 hash 前缀、位于文档末尾,需 !important 压过。 */
-.ws-tree.ant-tree.ant-tree-directory .ant-tree-treenode-selected {
-  background: var(--bg-active) !important;
-}
-.ws-tree.ant-tree.ant-tree-directory .ant-tree-treenode-selected .ant-tree-node-content-wrapper,
-.ws-tree.ant-tree.ant-tree-directory .ant-tree-treenode-selected .ant-tree-node-content-wrapper:hover {
-  color: var(--text-primary) !important;
-  background: transparent !important;
-}
-.ws-tree.ant-tree.ant-tree-directory .ant-tree-treenode-selected .ant-tree-node-content-wrapper:before,
-.ws-tree.ant-tree.ant-tree-directory .ant-tree-treenode-selected .ant-tree-node-content-wrapper:hover:before {
-  background: var(--bg-active) !important;
-}
+/* 文件树高亮只有两种画法:
+   1) 悬停:antd 目录树把悬停背景画在 .ant-tree-node-content-wrapper 的 :before 伪元素上
+      (默认 controlItemBgHover),而非 wrapper 自身 background;下面两条 hover 规则把它统一为项目
+      --bg-hover 并把 wrapper 自身 background 清零。antd 样式为运行时 cssinjs 注入、带 hash 前缀、
+      位于文档末尾,需 !important 压过。
+   2) 选中:由 WorkspaceExplorerTree 的 TreeNodeRow 在行内容 div 上自绘 var(--bg-active),是唯一来源。
+      树已设 selectable={false} 且不再传 selectedKeys,antd 内置的「整行选中态」(treenode 上的 antd
+      选中类名)永远不会产生,不要再为它写规则:那种规则把高亮画在整行(含缩进列+箭头列)上,与自绘
+      高亮(从内容列起)形成两种宽度的高亮带,正是「先选中的那一行左边长出一截」的成因。
+   注:选中行被悬停时,箭头列/缩进列可能透出 --bg-hover —— antd 的悬停伪元素本来就铺满整行,这是改造前
+   既有的表现,与本次「统一选中高亮」无关,不是新引入的问题。若要连它一并统一,需要给行加上「选中」标记
+   再配合 CSS 精确覆盖,属后续独立议题。
+   不要试图给 wrapper 设 position 把 :before 的包含块收窄到内容列:那会让所有文件树行(含 git 侧栏变更树)
+   的悬停带从整行收窄成内容列,是一次需要浏览器实测才能定性的视觉回归。 */
+/* 悬停反馈(刻意保留):未选中行的高亮全靠这两条。 */
 .ws-tree.ant-tree.ant-tree-directory .ant-tree-node-content-wrapper:hover {
   background: transparent !important;
 }
 .ws-tree.ant-tree.ant-tree-directory .ant-tree-node-content-wrapper:hover:before {
   background: var(--bg-hover) !important;
-}
-/* 选中态下 switcher 箭头恢复为正文灰色(antd 默认会随选中态变白/变色)。 */
-.ws-tree.ant-tree.ant-tree-directory .ant-tree-treenode-selected .ant-tree-switcher {
-  color: var(--text-muted) !important;
 }
 
 /* 文件树:switcher(展开/收起图标)独占一列,容器改 flex 居中。
