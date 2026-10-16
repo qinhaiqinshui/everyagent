@@ -304,7 +304,12 @@ export function MenuList({ items, anchor, anchorPoint, anchorPointMode = 'center
 
     const handlePointerDown = (event: PointerEvent) => {
       const target = event.target as Node
-      if (!menuRef.current?.contains(target) && !anchor.contains(target)) {
+      // anchorPoint 模式（右键菜单 / 长按）无「触发按钮」概念：anchor 只是定位参照
+      // （往往是整个编辑器 / 列表容器），不能当作点击安全区，否则点击容器内任何位置
+      // 都被判为「点击锚点」而永不关闭菜单。仅无 anchorPoint 的按钮触发场景才把
+      // anchor（触发按钮本身）算作安全区（点击触发按钮由调用方自行切换开关）。
+      const insideAnchor = !anchorPoint && anchor.contains(target)
+      if (!menuRef.current?.contains(target) && !insideAnchor) {
         onClose()
       }
     }
