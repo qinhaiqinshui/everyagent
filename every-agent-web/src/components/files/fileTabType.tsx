@@ -11,12 +11,27 @@
 import type { ReactNode } from 'react'
 import type { WorkspaceTab, WorkspaceFileTab } from '@/types'
 import type { FileTabResource } from '@/types/fileTabs'
-import type { UiWorkspaceTabTypeDefinition, WorkspaceTabRenderContext } from '@/plugin/types'
+import type { UiWorkspaceTabTypeDefinition, WorkspaceTabCreateInput, WorkspaceTabRenderContext } from '@/plugin/types'
 import { FilesIcon } from '@/components/icon'
 import { FileTypeIcon } from '@/components/shared/FileTypeGlyphs'
 import { createLazyRouteComponent } from '@/components/shared/LazyRouteView'
+import { createWorkspaceFileTab } from '@/components/app/workspaceShellState'
 
 const LazyFileTabPage = createLazyRouteComponent(() => import('@/components/files/FileTabPage'))
+
+export function buildFileTabId(target: {
+  workspaceRoot: string
+  filePath: string
+}): `file:${string}` {
+  // 多工作区并行:同相对路径分属不同工作区的文件是两个标签。
+  return `file:${target.workspaceRoot}::${target.filePath}` as const
+}
+
+export function getFileNameFromPath(filePath: string): string {
+  // 工作区外绝对路径可能带反斜杠(Windows 机器路径,如 skill.md 详情),须同时按 \ 取文件名。
+  const slashIndex = Math.max(filePath.lastIndexOf('/'), filePath.lastIndexOf('\\'))
+  return slashIndex >= 0 ? filePath.slice(slashIndex + 1) : filePath
+}
 
 function buildFileResource(tab: WorkspaceFileTab): FileTabResource {
   return {
@@ -64,5 +79,34 @@ export const fileTabType: UiWorkspaceTabTypeDefinition = {
     if (tab.tabType === 'file') {
       ctx.setSelectedFilePath(tab.filePath)
     }
+  },
+  /**
+   * 创建文件标签。参数袋键：`workspaceRoot`、`filePath`、`mode?`('readwrite'|'readonly')、
+   * `lineNumber?`(数字字符串)、`startNameEditing?`('1')。
+   * id 由 `buildFileTabId` 确定性构造；已存在同 id 标签时保留其 mode/reloadKey。
+   */
+  createTab: (input: WorkspaceTabCreateInput): WorkspaceTab => {
+    const data = input.data
+    const workspaceRoot = data.workspaceRoot ?? ''
+    const filePath = data.filePath ?? ''
+    const fileTabId = buildFileTabId({ workspaceRoot, filePath })
+    // 标签页已存在时，保留原 reloadKey（避免重新读盘导致编辑器卸载/重挂载闪烁），
+    // 仅更新行定位字段。仅新建标签页时才设 reloadKey。
+    const existing = input.currentTabs.find(
+      (item) => item.id === fileTabId && item.tabType === 'file',
+    ) as WorkspaceFileTab | undefined
+    const mode = data.mode === 'readwrite' || data.mode === 'readonly' ? data.mode : undefined
+    const lineNumber = data.lineNumber !== undefined ? Number(data.lineNumber) : undefined
+    return createWorkspaceFileTab({
+      id: fileTabId,
+      workspaceRoot,
+      filePath,
+      fileName: getFileNameFromPath(filePath),
+      mode: mode ?? existing?.mode ?? 'readonly',
+      reloadKey: existing?.reloadKey ?? Date.now(),
+      nameEditRequestedAt: data.startNameEditing ? Date.now() : undefined,
+      lineNumber,
+      lineLocateRequestedAt: lineNumber !== undefined ? Date.now() : undefined,
+    })
   },
 }

@@ -17,7 +17,6 @@ import type {
   TopLevelPageId,
   WorkspaceTab,
   WorkspaceTaskChatTab,
-  WorkspaceTerminalTab,
 } from '@/types'
 import type { TaskChatTabInput } from '@/task/types'
 import { getAntdTheme } from '@/theme/antdTheme'
@@ -49,15 +48,11 @@ import { useThemeMode } from '@/hooks/useThemeMode'
 import { useResponsiveViewport } from '@/hooks/useResponsiveViewport'
 import type { WorkspaceTabRenderContext } from '@/plugin/types'
 import { pluginDispatcher } from '@/plugin/PluginDispatcher'
-import { getTabDefinition, getWorkspaceTabTypeDefinition, loadWorkspaceTabTypeDefinitions } from '@/plugin/workspaceTabTypes'
+import { getTabDefinition, getWorkspaceTabCreator, loadWorkspaceTabTypeDefinitions } from '@/plugin/workspaceTabTypes'
+import { buildFileTabId, getFileNameFromPath } from '@/components/files/fileTabType'
 import {
   setWorkspaceFileTabMode,
   setWorkspaceFileTabNameEditRequested,
-  createWorkspaceTaskChatTab,
-  createWorkspaceFileTab,
-  createWorkspacePluginTab,
-  createWorkspaceDiffTab,
-  createWorkspacePageTab,
   filterWorkspaceTabs,
   removeWorkspaceTab,
   upsertWorkspaceTab,
@@ -66,7 +61,6 @@ import { BrandMark } from '../shared/BrandLoadingBlock'
 import { createLazyRouteComponent, scheduleLazyRoutePreload } from '@/components/shared/LazyRouteView'
 import { useHub } from '@/hub/HubProvider'
 import { hubSession } from '@/hub/session'
-import { randomUUID } from '@/utils/uuid'
 import { taskStore } from '@/task/taskStore'
 import { workspaceRegistry } from '@/hub/workspaceRegistry'
 import { DRAFT_TASK_ID, setDraftPreset } from '@/components/task/taskChatDraft'
@@ -483,25 +477,20 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
       filePath: string
     },
     options?: OpenWorkspaceFileOptions,
-  ) => {
-    const fileTabId = buildFileTabId(target)
-    // 标签页已存在时，保留原 reloadKey（避免重新读盘导致编辑器卸载/重挂载闪烁），
-    // 仅更新行定位字段。仅新建标签页时才设 reloadKey。
-    const existingTab = workspaceTabs.find((item) => item.id === fileTabId && item.tabType === 'file') as import('@/types').WorkspaceFileTab | undefined
-    const nextFileTab = createWorkspaceFileTab({
-      id: fileTabId,
-      workspaceRoot: target.workspaceRoot,
-      filePath: target.filePath,
-      fileName: getFileNameFromPath(target.filePath),
-      mode: options?.mode ?? existingTab?.mode ?? 'readonly',
-      reloadKey: existingTab?.reloadKey ?? Date.now(),
-      nameEditRequestedAt: options?.startNameEditing ? Date.now() : undefined,
-      lineNumber: options?.lineNumber,
-      lineLocateRequestedAt: options?.lineNumber !== undefined ? Date.now() : undefined,
+  ): `file:${string}` | null => {
+    const tab = getWorkspaceTabCreator('file')({
+      data: {
+        workspaceRoot: target.workspaceRoot,
+        filePath: target.filePath,
+        ...(options?.mode ? { mode: options.mode } : {}),
+        ...(options?.lineNumber !== undefined ? { lineNumber: String(options.lineNumber) } : {}),
+        ...(options?.startNameEditing ? { startNameEditing: '1' } : {}),
+      },
+      currentTabs: workspaceTabsRef.current,
     })
-    openWorkspaceTab(nextFileTab)
-    return fileTabId
-  }, [openWorkspaceTab, workspaceTabs])
+    openWorkspaceTab(tab)
+    return tab.id as `file:${string}`
+  }, [openWorkspaceTab])
 
   const openDiffTab = React.useCallback((
     input: {
@@ -516,33 +505,42 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
       allowRestore?: boolean
     },
   ): string => {
-    const tabTitle = input.title && input.title.trim()
-      ? input.title.trim()
-      : `变更对比：${input.fileName}`
-    const nextDiffTab = createWorkspaceDiffTab({
-      filePath: input.filePath,
-      fileName: input.fileName,
-      title: tabTitle,
-      changeType: input.changeType,
-      beforeContent: input.beforeContent,
-      afterContent: input.afterContent,
-      workspaceRoot: input.workspaceRoot,
-      ...(input.binary !== undefined ? { binary: input.binary } : {}),
-      ...(input.allowRestore !== undefined ? { allowRestore: input.allowRestore } : {}),
+    const tab = getWorkspaceTabCreator('diff')({
+      data: {
+        filePath: input.filePath,
+        fileName: input.fileName,
+        changeType: input.changeType,
+        beforeContent: input.beforeContent,
+        afterContent: input.afterContent,
+        ...(input.workspaceRoot ? { workspaceRoot: input.workspaceRoot } : {}),
+        ...(input.title ? { title: input.title } : {}),
+        ...(input.binary ? { binary: '1' } : {}),
+        ...(input.allowRestore ? { allowRestore: '1' } : {}),
+      },
+      currentTabs: workspaceTabsRef.current,
     })
-    openWorkspaceTab(nextDiffTab)
-    return nextDiffTab.id
+    openWorkspaceTab(tab)
+    return tab.id
   }, [openWorkspaceTab])
 
   const openTopLevelPage = React.useCallback((pageId: TopLevelPageId) => {
-    const nextPageTab = createWorkspacePageTab(pageId)
-    openWorkspaceTab(nextPageTab)
+    openWorkspaceTab(getWorkspaceTabCreator(`page:${pageId}`)({
+      data: {},
+      currentTabs: workspaceTabsRef.current,
+    }))
   }, [openWorkspaceTab])
 
   const openTaskChatTab = React.useCallback((tab: TaskChatTabInput): WorkspaceTaskChatTab['id'] => {
-    const nextTaskTab = createWorkspaceTaskChatTab(tab)
-    openWorkspaceTab(nextTaskTab)
-    return nextTaskTab.id
+    const nextTab = getWorkspaceTabCreator('task')({
+      data: {
+        taskId: tab.taskId,
+        title: tab.title,
+        ...(tab.agentId ? { agentId: tab.agentId } : {}),
+      },
+      currentTabs: workspaceTabsRef.current,
+    })
+    openWorkspaceTab(nextTab)
+    return nextTab.id as WorkspaceTaskChatTab['id']
   }, [openWorkspaceTab])
 
   const openTerminalTab = React.useCallback((input: {
@@ -551,95 +549,36 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
     name: string
     workerId: string
   }): string => {
-    const nextTab: WorkspaceTerminalTab = {
-      id: `term:${randomUUID()}`,
-      tabType: 'terminal',
-      workspaceRoot: input.workspaceRoot,
-      workerId: input.workerId,
-      path: input.path,
-      name: input.name,
-      title: input.name,
-    }
-    openWorkspaceTab(nextTab)
-    return nextTab.id
+    const tab = getWorkspaceTabCreator('terminal')({
+      data: {
+        workspaceRoot: input.workspaceRoot,
+        path: input.path,
+        name: input.name,
+        workerId: input.workerId,
+      },
+      currentTabs: workspaceTabsRef.current,
+    })
+    openWorkspaceTab(tab)
+    return tab.id
   }, [openWorkspaceTab])
 
   /**
-   * 通用标签打开入口（内置/插件标签统一走这里）。
+   * 通用标签打开入口（内置/插件统一走这里，零类型分支）。
    *
-   * 宿主只做透明中转，不感知任何具体标签类型的参数结构：
-   * - `task`：`data.taskId` 为 `DRAFT_TASK_ID`（或空）时新建任务草稿标签（复用唯一草稿标签，
-   *   带 `data.workspace` 则先切草稿预设；否则清空预设），否则打开对应任务聊天标签；
-   * - `file`：按 `workspaceRoot` / `filePath`（可选 `mode` / `lineNumber`）打开文件标签；
-   * - `diff`：按 diff 入参打开变更对比标签；
-   * - `terminal`：按终端入参打开内嵌终端标签；
-   * - `page`：按 `pageId` 打开顶层内置页面；
-   * - 其余（插件自定义类型 key）：经 `getWorkspaceTabTypeDefinition` 查注册表后打开插件标签。
+   * 宿主只做「查表 → 建标签 → 入栈」：按 `tabTypeKey` 取自注册表的创建器
+   * （内置型自带 createTab，插件型/未注册型走通用兜底），核心不感知任何
+   * 具体标签类型的参数结构。新增内置标签类型 = 新增一个定义模块并在
+   * `builtinDefinitions` 登记一行，本文件无需改动。
    */
-  const openPluginTab = React.useCallback((tabType: string, data?: Record<string, string>, title?: string): string | null => {
-    const payload = data ?? {}
-    switch (tabType) {
-      case 'task': {
-        const taskId = payload.taskId ?? ''
-        if (!taskId || taskId === DRAFT_TASK_ID) {
-          // 新建任务：复用唯一草稿标签（已存在则激活）；带预设工作区先切草稿预设（草稿文本保留）。
-          if (payload.workspace) {
-            setDraftPreset({ workspace: payload.workspace })
-          } else {
-            setDraftPreset({ workspace: '' })
-          }
-          const draftTitle = title && title.trim() ? title.trim() : '新任务'
-          return openTaskChatTab({ taskId: DRAFT_TASK_ID, title: draftTitle })
-        }
-        const taskTitle = title && title.trim() ? title.trim() : (taskStore.get(taskId)?.title ?? `任务 ${taskId.slice(0, 8)}`)
-        return openTaskChatTab({ taskId, title: taskTitle })
-      }
-      case 'file':
-        return openGlobalFileTab(
-          { workspaceRoot: payload.workspaceRoot ?? '', filePath: payload.filePath ?? '' },
-          {
-            mode: payload.mode === 'readwrite' || payload.mode === 'readonly' ? payload.mode : undefined,
-            lineNumber: payload.lineNumber !== undefined ? Number(payload.lineNumber) : undefined,
-          },
-        )
-      case 'diff':
-        return openDiffTab({
-          filePath: payload.filePath ?? '',
-          fileName: payload.fileName ?? '',
-          changeType: (payload.changeType as 'created' | 'updated' | 'deleted') ?? 'updated',
-          beforeContent: payload.beforeContent ?? '',
-          afterContent: payload.afterContent ?? '',
-          workspaceRoot: payload.workspaceRoot,
-          title: payload.title ?? title,
-        })
-      case 'terminal':
-        return openTerminalTab({
-          workspaceRoot: payload.workspaceRoot ?? '',
-          path: payload.path ?? '',
-          name: payload.name ?? '',
-          workerId: payload.workerId ?? '',
-        })
-      case 'page':
-        openTopLevelPage(payload.pageId as TopLevelPageId)
-        return null
-      default: {
-        // 插件自定义标签类型 key：查注册表拿 pluginId（宿主不解释 data 结构）。
-        const def = getWorkspaceTabTypeDefinition(tabType)
-        const pluginId = def?.pluginId ?? tabType
-        const key = payload.id ?? Object.values(payload)[0] ?? tabType
-        const tabTitle = title && title.trim() ? title.trim() : (payload.title ?? key)
-        const nextTab = createWorkspacePluginTab({
-          id: `${tabType}:${key}` as const,
-          pluginTabType: tabType,
-          pluginId,
-          data: payload,
-          title: tabTitle,
-        })
-        openWorkspaceTab(nextTab)
-        return nextTab.id
-      }
-    }
-  }, [openDiffTab, openGlobalFileTab, openTaskChatTab, openTerminalTab, openTopLevelPage, openWorkspaceTab])
+  const openTab = React.useCallback((tabTypeKey: string, data?: Record<string, string>, title?: string): string | null => {
+    const tab = getWorkspaceTabCreator(tabTypeKey)({
+      data: data ?? {},
+      title,
+      currentTabs: workspaceTabsRef.current,
+    })
+    openWorkspaceTab(tab)
+    return tab.id
+  }, [openWorkspaceTab])
 
   const closeGlobalFileTab = React.useCallback((fileTabId: `file:${string}`) => {
     closeWorkspaceTabNow(fileTabId)
@@ -859,10 +798,10 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
   }, [activeWorkspaceTabId, updateSelectedFilePath])
 
   // 插件壳层桥接：把 WorkspaceShellContext 的导航能力注入非 React 模块 holder，
-  // 供插件 ctx.ui.openPluginTab / openFileTab / openDiffTab 同步调用。
+  // 供插件 ctx.ui.openTab / openFileTab / openDiffTab 同步调用。
   React.useEffect(() => {
     setShellBridge({
-      openPluginTab: openPluginTab,
+      openTab,
       openFileTab: (workspaceRoot, filePath, options) => {
         openGlobalFileTab(
           { workspaceRoot, filePath },
@@ -872,7 +811,7 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
       openDiffTab: (input) => openDiffTab(input),
     })
     return () => setShellBridge(null)
-  }, [openGlobalFileTab, openDiffTab, openPluginTab])
+  }, [openGlobalFileTab, openDiffTab, openTab])
 
   const shellValue = React.useMemo(() => ({
     sidebarOpen,
@@ -897,7 +836,7 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
     requestWorkspaceFileLocate,
     clearWorkspaceFileLocateRequest,
     openTaskChatTab,
-    openPluginTab,
+    openTab,
     openDiffTab,
     openTerminalTab,
   }), [
@@ -908,7 +847,7 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
     closeWorkspaceTab,
     openTaskChatTab,
     openGlobalFileTab,
-    openPluginTab,
+    openTab,
     openDiffTab,
     openTerminalTab,
     renameFileTabs,
@@ -969,7 +908,7 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
         <LazyTasksPanel
           embedded
           activeTaskId={activeTaskId ?? undefined}
-          onCreateNewTask={(preset) => { openPluginTab('task', preset?.workspace ? { taskId: DRAFT_TASK_ID, workspace: preset.workspace } : { taskId: DRAFT_TASK_ID }, '新任务') }}
+          onCreateNewTask={(preset) => { openTab('task', preset?.workspace ? { taskId: DRAFT_TASK_ID, workspace: preset.workspace } : { taskId: DRAFT_TASK_ID }, '新任务') }}
           onSelect={(task) => {
             openTaskChatTab({ taskId: task.taskId, title: task.displayTitle })
           }}
@@ -1033,7 +972,7 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
             activeItemIds={activeActivityItemIds}
             panelOpen={sidebarOpen}
             onBrandClick={() => {
-              openPluginTab('task', { taskId: DRAFT_TASK_ID }, '新任务')
+              openTab('task', { taskId: DRAFT_TASK_ID }, '新任务')
             }}
             onSelect={(itemId) => {
               if (itemId === 'settings') {
@@ -1089,7 +1028,7 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
               display: activeWorkspaceTab ? 'none' : 'flex',
             }}
           >
-            <EmptyWorkspaceHome onNewTask={() => openPluginTab('task', { taskId: DRAFT_TASK_ID }, '新任务')} />
+            <EmptyWorkspaceHome onNewTask={() => openTab('task', { taskId: DRAFT_TASK_ID }, '新任务')} />
           </div>
 
           {workspaceTabs.map((tab) => (
@@ -1221,20 +1160,6 @@ function resolveNextActiveWorkspaceTab(
   const index = currentTabs.findIndex((item) => item.id === closingTabId)
   if (index < 0) return null
   return nextTabs[Math.max(0, index - 1)] ?? nextTabs[index] ?? nextTabs[0] ?? null
-}
-
-function buildFileTabId(target: {
-  workspaceRoot: string
-  filePath: string
-}): `file:${string}` {
-  // 多工作区并行:同相对路径分属不同工作区的文件是两个标签。
-  return `file:${target.workspaceRoot}::${target.filePath}` as const
-}
-
-function getFileNameFromPath(filePath: string): string {
-  // 工作区外绝对路径可能带反斜杠(Windows 机器路径,如 skill.md 详情),须同时按 \ 取文件名。
-  const slashIndex = Math.max(filePath.lastIndexOf('/'), filePath.lastIndexOf('\\'))
-  return slashIndex >= 0 ? filePath.slice(slashIndex + 1) : filePath
 }
 
 function EmptyWorkspaceHome({ onNewTask }: { onNewTask: () => void }) {

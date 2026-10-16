@@ -173,7 +173,7 @@ has_children: false
 
 | 方法 | 一行签名 | 范例 |
 |---|---|---|
-| `openPluginTab` | `(type: string, data: Record<string,string>, title?: string) => void` | git |
+| `openTab` | `(type: string, data?: Record<string,string>, title?: string) => void` | git |
 | `openFileTab` | `(workspaceRoot: string, filePath: string, opts?: { mode?: 'readwrite' \| 'readonly'; lineNumber?: number }) => void` | update-file-view |
 | `openDiffTab` | `(input: PluginDiffTabInput) => void` | git |
 | `appendComposerText` | `(text: string) => void` | task-edit-resend |

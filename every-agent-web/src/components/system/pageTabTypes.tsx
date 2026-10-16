@@ -11,6 +11,7 @@ import type { TopLevelPageId, WorkspaceTab } from '@/types'
 import type { UiWorkspaceTabTypeDefinition, WorkspaceTabRenderContext } from '@/plugin/types'
 import { SettingsIcon } from '@/components/icon'
 import { createLazyRouteComponent } from '@/components/shared/LazyRouteView'
+import { createWorkspacePageTab } from '@/components/app/workspaceShellState'
 
 const LazySettingsPanel = createLazyRouteComponent(() => import('@/components/system/SettingsPanel'))
 
@@ -43,6 +44,8 @@ function buildPageDefinition(pageId: TopLevelPageId): UiWorkspaceTabTypeDefiniti
     getTitle: () => meta.label,
     getCloseAriaLabel: () => `关闭${meta.label}页面`,
     getSidebarActivityId: () => meta.sidebarActivityId,
+    /** 创建顶层页面标签：无业务参数袋，id 由 `page:${pageId}` 确定性构造。 */
+    createTab: () => createWorkspacePageTab(pageId),
   }
 }
 

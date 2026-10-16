@@ -2,8 +2,8 @@
  * 扩展详情标签页（VSCode 扩展详情页风格）。
  *
  * 由 index.ts 注册为 `extension-detail` 工作区标签类型，侧栏扩展面板点击行后经
- * ctx.ui.openPluginTab('extension-detail', { id }) 打开——同一插件恒为同一标签页
- * （宿主 openPluginTab 以 data.id 构造确定性 tab id，重复点击聚焦不重建）。
+ * ctx.ui.openTab('extension-detail', { id }) 打开——同一插件恒为同一标签页
+ * （宿主 openTab 以 data.id 构造确定性 tab id，重复点击聚焦不重建）。
  *
  * 布局对标 VSCode 扩展详情页：
  * - 头部：大图标 + 名称 + 作者/版本/来源 + 描述 + 分类标签 + 启用/禁用、卸载动作

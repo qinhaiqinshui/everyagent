@@ -90,6 +90,22 @@ export interface WorkspaceTabRenderContext {
 }
 
 /**
+ * 标签创建入参（统一「创建线上格式」）。
+ *
+ * 内置型与插件型共用同一入参形状：`data` 是**业务参数袋**（键约定由各标签类型
+ * 自行定义，核心不解释），`title` 为可选标题，`currentTabs` 供创建器做去重与
+ * 状态保留（如文件标签保留 reloadKey）。
+ */
+export interface WorkspaceTabCreateInput {
+  /** 业务参数袋（键约定见各标签类型 createTab 实现）。 */
+  data: Record<string, string>
+  /** 标签标题（可选；缺省由创建器兜底）。 */
+  title?: string
+  /** 当前已打开标签（供创建器去重/保留状态）。 */
+  currentTabs: WorkspaceTab[]
+}
+
+/**
  * 统一工作区标签类型定义（由 `ui.workspace_tab_types` 扩展点产出）。
  *
  * 内置标签（file / log / task / page:*）与插件标签（plugin）走**同一注册表**：
@@ -126,6 +142,15 @@ export interface UiWorkspaceTabTypeDefinition {
   onActivate?: (tab: WorkspaceTab, ctx: WorkspaceTabRenderContext) => void
   /** 可选：关闭标签时的内容清理（如任务标签停掉会话）。 */
   onClose?: (tab: WorkspaceTab, ctx: WorkspaceTabRenderContext) => void
+  /**
+   * 可选：创建该类型标签——把业务参数袋解释为标签对象（含 id 构造与状态保留）。
+   *
+   * 内置类型各自由其定义模块提供（file / diff / terminal / task / page:<pageId>）；
+   * 插件类型与未注册类型**不提供**，由核心 `createPluginTabFallback` 通用兜底
+   * （插件型创建无需类型特有知识，见 workspaceTabTypes.ts）。
+   * 单一实现原则：某类型标签的诞生只在此一处，壳层 openTab 与各便捷方法都调它。
+   */
+  createTab?: (input: WorkspaceTabCreateInput) => WorkspaceTab
 }
 
 /**

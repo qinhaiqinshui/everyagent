@@ -831,14 +831,14 @@ export interface UiRegistry {
    */
   getActiveTab(): PluginActiveTabInfo | null
   /**
-   * 通用标签打开入口（不区分内置/插件标签类型）。
+   * 通用标签打开入口（内置/插件统一）。
    *
-   * `type` 为标签类型 key：内置 `task` / `file` / `diff` / `terminal` / `page`，
+   * `type` 为标签类型 key：内置 `file` / `diff` / `terminal` / `task` / `page:<pageId>`，
    * 或插件经 `ui.workspace_tab_types` 注册的 tabTypeKey。
-   * `data` 为该标签类型的业务参数（可选，宿主透明中转、不解释结构）；
+   * `data` 为该标签类型的业务参数袋（可选，宿主透明中转、不解释结构）；
    * `title` 为标签标题（可选）。
    */
-  openPluginTab(type: string, data?: Record<string, string>, title?: string): void
+  openTab(type: string, data?: Record<string, string>, title?: string): void
   /** 打开顶层文件标签（替代宿主 useWorkspaceShell().openGlobalFileTab；可选行号定位）。 */
   openFileTab(workspaceRoot: string, filePath: string, options?: { mode?: 'readwrite' | 'readonly'; lineNumber?: number }): void
   /** 打开顶层 diff 对比标签（替代宿主 useWorkspaceShell().openDiffTab）。 */

@@ -12,9 +12,10 @@
 
 import type { ReactNode } from 'react'
 import type { WorkspaceTab, WorkspaceDiffTab } from '@/types'
-import type { UiWorkspaceTabTypeDefinition, WorkspaceTabRenderContext } from '@/plugin/types'
+import type { UiWorkspaceTabTypeDefinition, WorkspaceTabCreateInput, WorkspaceTabRenderContext } from '@/plugin/types'
 import { FilesIcon } from '@/components/icon'
 import { createLazyRouteComponent } from '@/components/shared/LazyRouteView'
+import { createWorkspaceDiffTab } from '@/components/app/workspaceShellState'
 
 const LazyFileDiffPanel = createLazyRouteComponent(() => import('@/components/files/FileDiffPanel'))
 
@@ -44,4 +45,28 @@ export const diffTabType: UiWorkspaceTabTypeDefinition = {
   getCloseAriaLabel: (tab: WorkspaceTab) =>
     (tab.tabType === 'diff' ? `关闭变更对比 ${tab.fileName}` : '关闭变更对比'),
   getSidebarActivityId: () => null,
+  /**
+   * 创建变更对比标签。参数袋键：`filePath`、`fileName`、`changeType`、
+   * `beforeContent`、`afterContent`、`workspaceRoot?`、`title?`、
+   * `binary?`('1')、`allowRestore?`('1')。
+   * id 由 `diff:${filePath}` 确定性构造；title 缺省兜底「变更对比：<fileName>」。
+   * `binary`/`allowRestore` 仅在袋中给出时设该字段。
+   */
+  createTab: (input: WorkspaceTabCreateInput): WorkspaceTab => {
+    const data = input.data
+    const fileName = data.fileName ?? ''
+    const rawTitle = (data.title ?? input.title ?? '').trim()
+    const tabTitle = rawTitle || `变更对比：${fileName}`
+    return createWorkspaceDiffTab({
+      filePath: data.filePath ?? '',
+      fileName,
+      title: tabTitle,
+      changeType: (data.changeType as 'created' | 'updated' | 'deleted') ?? 'updated',
+      beforeContent: data.beforeContent ?? '',
+      afterContent: data.afterContent ?? '',
+      workspaceRoot: data.workspaceRoot,
+      ...(data.binary !== undefined ? { binary: true } : {}),
+      ...(data.allowRestore !== undefined ? { allowRestore: true } : {}),
+    })
+  },
 }

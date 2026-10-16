@@ -105,7 +105,7 @@ has_children: false
 | 想实现 | 推荐范本 | 源码相对路径 | 为什么推荐 |
 |---|---|---|---|
 | `ui.sidebar_items`（活动栏项） | plugin-manager | `every-agent-plugins/plugin-manager/web/index.ts:18-25` | web-only 最小范本：一个 `registerSidebarItem` + `ctx.sdk.rpc` 调后端；带 Badge/图标/多面板的进阶版看 git |
-| `ui.workspace_tab_types`（工作区标签类型） | git | `every-agent-plugins/git/web/index.ts:39` | 唯一使用者；配套 `ctx.ui.openPluginTab` / `openDiffTab` 动作方法可一并抄 |
+| `ui.workspace_tab_types`（工作区标签类型） | git | `every-agent-plugins/git/web/index.ts:39` | 唯一使用者；配套 `ctx.ui.openTab` / `openDiffTab` 动作方法可一并抄 |
 | `ui.file_sidebar_panels` | **无内置范例** | — | 扩展点已声明但零使用，接线情况见 [已知问题](known-issues.md) |
 | `ui.composer_above_panel`（输入框上方面板） | task-input-queue | `every-agent-plugins/task-input-queue/web/index.ts:17-20` | 三行注册 + 面板组件全交互（rpc 拉快照 / 广播刷新）齐全 |
 | `ui.tool_call_views`（工具调用视图接管） | update-file-view | `every-agent-plugins/update-file-view/web/index.ts:20-25` | 唯一使用者，整体接管 `update_file` 工具的渲染 |
@@ -271,7 +271,7 @@ has_children: false
 
 「扩展」侧栏列表 + 扩展详情标签页；web-only 形态。
 - 关键文件：`~plugins/plugin-manager/web/index.ts`（注册侧栏项 + `extension-detail` 标签类型）；列表 `PluginManagerPanel.tsx`、详情页 `ExtensionDetailPage.tsx`、共享 store `pluginStore.ts`。
-- 值得看：web-only 插件经 `ctx.sdk.rpc` 调 `plugin.list/enable/disable` 的最小完整闭环；`ctx.ui.registerWorkspaceTabType` + `openPluginTab` 打开详情标签页（宿主按 `data.id` 去重聚焦）的完整样本。
+- 值得看：web-only 插件经 `ctx.sdk.rpc` 调 `plugin.list/enable/disable` 的最小完整闭环；`ctx.ui.registerWorkspaceTabType` + `openTab` 打开详情标签页（宿主按 `data.id` 去重聚焦）的完整样本。
 
 ### ripgrep-tool（ripgrep 搜索工具）
 

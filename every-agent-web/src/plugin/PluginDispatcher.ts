@@ -194,7 +194,8 @@ export interface RealPluginDispatcher {
   /** 查询当前激活的工作区标签（读宿主壳层镜像；无激活标签返回 null）。 */
   getActiveTab: () => PluginActiveTabInfo | null
   /** 通用标签打开入口（内置/插件统一走宿主 WorkspaceShellContext）。 */
-  openPluginTab: (type: string, data?: Record<string, string>, title?: string) => void  /** 打开顶层文件标签（委托宿主 WorkspaceShellContext）。 */
+  openTab: (type: string, data?: Record<string, string>, title?: string) => void
+  /** 打开顶层文件标签（委托宿主 WorkspaceShellContext）。 */
   openFileTab: (workspaceRoot: string, filePath: string, options?: { mode?: string; lineNumber?: number }) => void
   /** 打开顶层 diff 对比标签（委托宿主 WorkspaceShellContext）。 */
   openDiffTab: (input: PluginDiffTabInput) => void
@@ -373,8 +374,8 @@ export const pluginDispatcher: RealPluginDispatcher = {
   getActiveTab() {
     return activeTabMirror.current
   },
-  openPluginTab(type, data, title) {
-    getShellBridge()?.openPluginTab(type, data, title)
+  openTab(type, data, title) {
+    getShellBridge()?.openTab(type, data, title)
   },
   openFileTab(workspaceRoot, filePath, options) {
     getShellBridge()?.openFileTab(workspaceRoot, filePath, options)

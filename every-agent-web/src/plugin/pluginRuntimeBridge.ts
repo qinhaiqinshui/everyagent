@@ -15,7 +15,8 @@ import type { PluginDiffTabInput } from '@everyagent/plugin-api'
 
 /** 宿主壳层导航能力子集（来自 WorkspaceShellContext 的 actions）。 */
 export interface ShellBridge {
-  openPluginTab(type: string, data?: Record<string, string>, title?: string): string | null
+  /** 打开标签（内置/插件统一入口）。 */
+  openTab(type: string, data?: Record<string, string>, title?: string): string | null
   openFileTab(workspaceRoot: string, filePath: string, options?: { mode?: string; lineNumber?: number }): void
   openDiffTab(input: PluginDiffTabInput): string
 }

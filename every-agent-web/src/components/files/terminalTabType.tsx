@@ -8,10 +8,11 @@
  */
 
 import type { ReactNode } from 'react'
-import type { WorkspaceTab } from '@/types'
-import type { UiWorkspaceTabTypeDefinition, WorkspaceTabRenderContext } from '@/plugin/types'
+import type { WorkspaceTab, WorkspaceTerminalTab } from '@/types'
+import type { UiWorkspaceTabTypeDefinition, WorkspaceTabCreateInput, WorkspaceTabRenderContext } from '@/plugin/types'
 import { TerminalIcon } from '@/components/shared/AppGlyphs'
 import { createLazyRouteComponent } from '@/components/shared/LazyRouteView'
+import { randomUUID } from '@/utils/uuid'
 
 const LazyTerminalPage = createLazyRouteComponent(() => import('@/components/files/TerminalPage'))
 
@@ -39,5 +40,23 @@ export const terminalTabType: UiWorkspaceTabTypeDefinition = {
    */
   onClose: (_tab: WorkspaceTab, ctx: WorkspaceTabRenderContext) => {
     ctx.closeTab(_tab.id)
+  },
+  /**
+   * 创建内嵌终端标签。参数袋键：`workspaceRoot`、`path`、`name`、`workerId`。
+   * id 由 `term:${randomUUID()}` 生成（每次打开都是新会话）；title = name。
+   */
+  createTab: (input: WorkspaceTabCreateInput): WorkspaceTab => {
+    const data = input.data
+    const name = data.name ?? ''
+    const nextTab: WorkspaceTerminalTab = {
+      id: `term:${randomUUID()}`,
+      tabType: 'terminal',
+      workspaceRoot: data.workspaceRoot ?? '',
+      workerId: data.workerId ?? '',
+      path: data.path ?? '',
+      name,
+      title: name,
+    }
+    return nextTab
   },
 }

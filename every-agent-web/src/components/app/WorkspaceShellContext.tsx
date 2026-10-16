@@ -71,8 +71,8 @@ export interface WorkspaceShellActions {
   clearWorkspaceFileLocateRequest: () => void
   /** 打开 Task 聊天标签。 */
   openTaskChatTab: (tab: TaskChatTabInput) => WorkspaceTaskChatTab['id']
-  /** 打开标签（内置/插件通用入口）。 */
-  openPluginTab: (tabType: string, data?: Record<string, string>, title?: string) => string | null
+  /** 打开标签（内置/插件通用入口，按 tabTypeKey 查注册表）。 */
+  openTab: (tabType: string, data?: Record<string, string>, title?: string) => string | null
   /** 打开顶级文件差异对比标签（diff 面板，接受展示参数）。 */
   openDiffTab: (input: {
     /** 文件路径。 */

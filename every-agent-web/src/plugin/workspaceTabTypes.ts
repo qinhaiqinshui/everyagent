@@ -7,8 +7,9 @@
  */
 
 import type { WorkspaceTab } from '@/types'
-import type { UiWorkspaceTabTypeDefinition } from './types'
+import type { UiWorkspaceTabTypeDefinition, WorkspaceTabCreateInput } from './types'
 import { pluginDispatcher } from './PluginDispatcher'
+import { createWorkspacePluginTab } from '@/components/app/workspaceShellState'
 import { fileTabType } from '@/components/files/fileTabType'
 import { diffTabType } from '@/components/files/FileDiffTabType'
 import { terminalTabType } from '@/components/files/terminalTabType'
@@ -58,4 +59,35 @@ export function getWorkspaceTabTypeDefinition(
   tabTypeKey: string,
 ): UiWorkspaceTabTypeDefinition | undefined {
   return allDefinitions().find((def) => def.tabTypeKey === tabTypeKey)
+}
+
+/**
+ * 插件型/未注册型的通用创建兜底：标签 id 由 `${tabTypeKey}:${data.id ?? 首个值 ?? tabTypeKey}`
+ * 确定性构造（同一 key + 同一 data 恒为同一标签，重复打开即聚焦），data 原样进 `tab.data`。
+ */
+export function createPluginTabFallback(tabTypeKey: string, input: WorkspaceTabCreateInput): WorkspaceTab {
+  const data = input.data
+  const def = getWorkspaceTabTypeDefinition(tabTypeKey)
+  const pluginId = def?.pluginId ?? tabTypeKey
+  const key = data.id ?? Object.values(data)[0] ?? tabTypeKey
+  const title = input.title && input.title.trim() ? input.title.trim() : (data.title ?? key)
+  return createWorkspacePluginTab({
+    id: `${tabTypeKey}:${key}` as const,
+    pluginTabType: tabTypeKey,
+    pluginId,
+    data,
+    title,
+  })
+}
+
+/**
+ * 取某标签类型 key 的创建器（内置型取自身 createTab；插件型/未注册型走通用兜底）。
+ * 返回的创建器已绑定 tabTypeKey，调用方只需给参数袋。
+ */
+export function getWorkspaceTabCreator(tabTypeKey: string): (input: WorkspaceTabCreateInput) => WorkspaceTab {
+  const def = getWorkspaceTabTypeDefinition(tabTypeKey)
+  if (def?.createTab) {
+    return def.createTab
+  }
+  return (input) => createPluginTabFallback(tabTypeKey, input)
 }

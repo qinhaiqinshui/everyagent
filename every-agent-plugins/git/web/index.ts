@@ -6,7 +6,7 @@
  * - git-history 工作区标签类型
  * - 文件树右键「显示 Git 历史」菜单项
  *
- * 一切宿主能力经 ctx 暴露（不引用宿主 web 模块）：导航走 ctx.ui.openPluginTab，
+ * 一切宿主能力经 ctx 暴露（不引用宿主 web 模块）：导航走 ctx.ui.openTab（内置/插件统一标签入口），
  * 本插件内部组件经 pluginRuntime 的 module-level ctx 取用同一 ctx。
  */
 
@@ -45,7 +45,7 @@ const gitPlugin: PluginModule = {
       // 菜单项图标与宿主内建动作项对齐(13px);GitIcon 默认 22 是活动栏尺寸,菜单里会显大。
       icon: React.createElement(GitIcon, { size: 13 }),
       invoke: (actionCtx) => {
-        ctx.ui.openPluginTab('git-history', {
+        ctx.ui.openTab('git-history', {
           workspaceRoot: actionCtx.workspaceRoot,
           path: normalizeWorkspaceRelativePath(actionCtx.path),
           name: actionCtx.name,

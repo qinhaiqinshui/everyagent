@@ -58,7 +58,7 @@ const selectionReferencePlugin: PluginModule = {
         // 先打开新草稿任务标签页（通用入口），再把选区胶囊写入该标签页草稿。
         // 新标签页的 TaskChat 可能尚未挂载、composerBridge 尚未注入，
         // 由宿主 appendComposerToken → 队列兜底，bridge 注入时自动 flush。
-        ctx.ui.openPluginTab('task', { taskId: '__draft__' }, '新任务')
+        ctx.ui.openTab('task', { taskId: '__draft__' }, '新任务')
         // 展开为对象字面量以满足 appendComposerToken 的 Record<string, unknown> 形参
         // （interface 无索引签名，直接传会被 TS 判为不可赋值）。
         ctx.ui.appendComposerToken({
