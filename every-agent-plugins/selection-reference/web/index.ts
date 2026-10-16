@@ -42,7 +42,6 @@ const selectionReferencePlugin: PluginModule = {
     const referenceAction: UiEditorContextMenuActionDefinition = {
       id: 'selection-reference.reference-to-ai',
       label: '引用到AI对话框',
-      group: 'AI',
       order: 100,
       // 无选中内容 → 该项不出现（宿主过滤后若无可见项则完全放行原生右键菜单）。
       isVisible: (c) => c.selection.text.length > 0,
