@@ -198,6 +198,17 @@ export interface RealPluginDispatcher {
   openFileTab: (workspaceRoot: string, filePath: string, options?: { mode?: string; lineNumber?: number }) => void
   /** 打开顶层 diff 对比标签（委托宿主 WorkspaceShellContext）。 */
   openDiffTab: (input: PluginDiffTabInput) => void
+  /** 打开草稿任务标签页（新建任务）；可选预设工作区与初始胶囊（委托宿主 ShellBridge）。 */
+  openDraftTaskTab: (options?: {
+    workspace?: string
+    composerToken?: {
+      kind: string
+      label: string
+      summary?: string
+      payload?: Record<string, unknown>
+      spaced?: boolean
+    }
+  }) => void
   /** 向当前输入框草稿末尾追加纯文本（委托宿主 ComposerDraftBridge）。 */
   appendComposerText: (text: string) => void
   /**
@@ -381,6 +392,9 @@ export const pluginDispatcher: RealPluginDispatcher = {
   },
   openDiffTab(input) {
     getShellBridge()?.openDiffTab(input)
+  },
+  openDraftTaskTab(options) {
+    getShellBridge()?.openDraftTaskTab(options)
   },
   appendComposerText(text) {
     getComposerBridge()?.appendText(text)

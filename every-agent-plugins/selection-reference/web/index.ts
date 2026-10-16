@@ -55,13 +55,17 @@ const selectionReferencePlugin: PluginModule = {
           endLine: c.selection.endLine,
           text: c.selection.text, // 原文不截断
         }
-        // 结构化插入胶囊：opaque token 编码由宿主单点负责（本插件不碰线格式）。
-        // 展开为对象字面量以满足 appendComposerToken 的 Record<string, unknown> 形参
+        // 打开新草稿任务标签页，并把选区以胶囊形式预置到草稿中。
+        // opaque token 编码由宿主在 openDraftTaskTab 内单点完成（本插件不碰线格式）。
+        // 展开为对象字面量以满足 Record<string, unknown> 形参
         // （interface 无索引签名，直接传会被 TS 判为不可赋值）。
-        ctx.ui.appendComposerToken({
-          kind: SELECTION_KIND,
-          label: buildSelectionLabel(c.selection.text),
-          payload: { ...payload },
+        ctx.ui.openDraftTaskTab({
+          workspace: c.workspaceRoot,
+          composerToken: {
+            kind: SELECTION_KIND,
+            label: buildSelectionLabel(c.selection.text),
+            payload: { ...payload },
+          },
         })
       },
     }

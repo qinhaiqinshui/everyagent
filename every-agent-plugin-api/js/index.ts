@@ -836,6 +836,17 @@ export interface UiRegistry {
   openFileTab(workspaceRoot: string, filePath: string, options?: { mode?: 'readwrite' | 'readonly'; lineNumber?: number }): void
   /** 打开顶层 diff 对比标签（替代宿主 useWorkspaceShell().openDiffTab）。 */
   openDiffTab(input: PluginDiffTabInput): void
+  /** 打开草稿任务标签页（新建任务）；可选预设工作区与初始胶囊（宿主编码后预置到草稿）。 */
+  openDraftTaskTab(options?: {
+    workspace?: string
+    composerToken?: {
+      kind: string
+      label: string
+      summary?: string
+      payload?: Record<string, unknown>
+      spaced?: boolean
+    }
+  }): void
   /** 向当前输入框草稿末尾追加纯文本（替代宿主 composerDraftBridge）。 */
   appendComposerText(text: string): void
   /**

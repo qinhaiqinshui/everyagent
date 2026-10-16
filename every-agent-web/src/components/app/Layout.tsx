@@ -70,6 +70,7 @@ import { randomUUID } from '@/utils/uuid'
 import { taskStore } from '@/task/taskStore'
 import { workspaceRegistry } from '@/hub/workspaceRegistry'
 import { DRAFT_TASK_ID, setDraftPreset } from '@/components/task/taskChatDraft'
+import { buildOpaqueTokenText } from '@/composerToken/composerOpaqueToken'
 
 const LazyTasksPanel = createLazyRouteComponent(() => import('@/components/task/TasksPanel'))
 const LazyOpenFilesSidebarPanel = createLazyRouteComponent(() => import('@/components/files/OpenFilesSidebarPanel'))
@@ -546,14 +547,34 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
   }, [openWorkspaceTab])
 
   /** 新建任务:复用唯一草稿标签(已存在则激活);带预设工作区先切草稿预设(草稿文本保留)。
-   *  无预设(左侧栏/空首页通用新建入口)时清空预设,保持手动选择工作区。 */
+   *  无预设(左侧栏/空首页通用新建入口)时清空预设,保持手动选择工作区。
+   *  支持经 composerToken 预置初始草稿内容(如选区引用插件「引用到AI对话框」):
+   *  宿主编码 opaque token 后写入 DraftPreset.initialDraftContent,TaskChat 草稿态消费后清除。 */
   const openDraftTaskTab = React.useCallback((
-    preset?: { workspace?: string },
+    options?: {
+      workspace?: string
+      composerToken?: {
+        kind: string
+        label: string
+        summary?: string
+        payload?: Record<string, unknown>
+        spaced?: boolean
+      }
+    },
   ): WorkspaceTaskChatTab['id'] => {
-    if (preset?.workspace) {
-      setDraftPreset(preset)
+    if (options?.workspace) {
+      setDraftPreset({ workspace: options.workspace })
     } else {
       setDraftPreset({ workspace: '' })
+    }
+    if (options?.composerToken) {
+      const opaqueText = buildOpaqueTokenText(options.composerToken.kind, {
+        label: options.composerToken.label,
+        summary: options.composerToken.summary,
+        payload: options.composerToken.payload ?? {},
+      })
+      const spaced = options.composerToken.spaced ?? true
+      setDraftPreset({ initialDraftContent: spaced ? ` ${opaqueText} ` : opaqueText })
     }
     return openTaskChatTab({ taskId: DRAFT_TASK_ID, title: '新任务' })
   }, [openTaskChatTab])
@@ -823,9 +844,10 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
         )
       },
       openDiffTab: (input) => openDiffTab(input),
+      openDraftTaskTab: (options) => { openDraftTaskTab(options) },
     })
     return () => setShellBridge(null)
-  }, [openGlobalFileTab, openDiffTab, openPluginTab])
+  }, [openGlobalFileTab, openDiffTab, openPluginTab, openDraftTaskTab])
 
   const shellValue = React.useMemo(() => ({
     sidebarOpen,

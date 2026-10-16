@@ -15,6 +15,17 @@ export interface ShellBridge {
   openPluginTab(type: string, data: Record<string, string>, title?: string): string | null
   openFileTab(workspaceRoot: string, filePath: string, options?: { mode?: string; lineNumber?: number }): void
   openDiffTab(input: PluginDiffTabInput): string
+  /** 打开草稿任务标签页（新建任务）；可选预设工作区与初始胶囊。 */
+  openDraftTaskTab(options?: {
+    workspace?: string
+    composerToken?: {
+      kind: string
+      label: string
+      summary?: string
+      payload?: Record<string, unknown>
+      spaced?: boolean
+    }
+  }): void
 }
 
 /** 输入框草稿桥接能力子集（来自 ComposerDraftBridgeContext）。 */
