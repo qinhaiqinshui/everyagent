@@ -1,6 +1,8 @@
 package dev.everyagent.plugin.api.skill;
 
 import dev.everyagent.plugin.api.util.AtomicFiles;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.core.io.Resource;
 import org.springframework.core.io.support.PathMatchingResourcePatternResolver;
 
@@ -43,6 +45,13 @@ import java.util.regex.Pattern;
  * 第二段目录名(唯一可能的那一段);&#42;&#42; 会接受 {@code skill/a/b/skill.md} 这类深嵌套并猜出
  * 无意义的 id,故不采用。
  *
+ * <p><b>命中但 id 非法 → ERROR 后跳过(不静默)</b>:目录名不合 {@link #isValidId} 的资源(如
+ * {@code Plan}/{@code my_skill}/中文)不会被物化,但**必须留下一条 ERROR**——带推导出的 id 与
+ * 资源描述,并附规则口径。理由:加包者看到的现象只有「物化 id 清单里少了一项」,没有日志就无从
+ * 归因(是 id 写错了?还是层级放深了?还是根本没进 classpath?);ERROR 让「我的 skill 为什么
+ * 没出现」当场可判。注意深嵌套 {@code <root>/a/b/skill.md} 属于**压根扫不到**(一级 &#42; 不
+ * 匹配、不进这条日志),故加包的两个必要条件是「id 合规」+「层级恰一层」。
+ *
  * <h2>物化语义</h2>
  * <ul>
  *   <li><b>幂等</b>:与磁盘内容<b>逐字节</b>比较,一致则零写入返回 {@code false};判据是内容而非
@@ -61,8 +70,14 @@ import java.util.regex.Pattern;
  */
 public final class SkillMaterializer {
 
+    private static final Logger log = LoggerFactory.getLogger(SkillMaterializer.class);
+
     /** 技能包目录下的知识包文件名。 */
     private static final String SKILL_FILE_NAME = "skill.md";
+
+    /** id 规则的人读口径(ERROR 提醒里带上,便于加包者当场自纠)。 */
+    private static final String ID_RULE_HINT =
+            "目录名须匹配 [a-z0-9][a-z0-9-]*(仅小写字母、数字与连字符;大写、下划线、点、中文均非法)";
 
     /** 合法 skill id:[a-z0-9][a-z0-9-]*(即目录名;realpath 必须仍在 skillsDir 内)。 */
     private static final Pattern ID_PATTERN = Pattern.compile("[a-z0-9][a-z0-9-]*");
@@ -194,7 +209,8 @@ public final class SkillMaterializer {
      *
      * <p>规则:
      * <ul>
-     *   <li>id 不合 {@link #isValidId} 的资源(非法布局)跳过;</li>
+     *   <li>id 不合 {@link #isValidId} 的资源(非法布局)跳过,但**打 ERROR** 并带上资源与推导出的
+     *       id(不静默:加包者只用「物化 id 清单少了一项」无从归因,ERROR 让原因当场可见);</li>
      *   <li>同 id 多来源时后发现的胜出(实际形态为单一来源根);</li>
      *   <li>根在 classpath 上不存在 → 返回空列表(不抛;「物化 id 清单」由调用方日志呈现);</li>
      *   <li>单个资源读取失败 → 抛 {@link IOException},由调用方 WARN 降级。</li>
@@ -216,7 +232,11 @@ public final class SkillMaterializer {
         for (Resource resource : resources) {
             String id = idOf(resource);
             if (!isValidId(id)) {
-                continue; // 布局不规范的资源跳过(id 必须能作目录名)
+                // 命中但布局不合规:跳过是对的,静默是错的——加包者看不到 skill 出现时,
+                // 这条 ERROR 是唯一的归因线索(id 写错 / 目录名带非法字符 / 根本没进 classpath)。
+                log.error("技能包目录名非法,已跳过(不会物化,模型与 / 菜单都看不到它): "
+                                + "id=\"{}\",资源={} —— {}", id, resource.getDescription(), ID_RULE_HINT);
+                continue;
             }
             byId.put(id, resource);
         }

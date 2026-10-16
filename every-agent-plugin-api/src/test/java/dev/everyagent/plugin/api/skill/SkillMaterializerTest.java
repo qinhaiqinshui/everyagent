@@ -4,6 +4,12 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
+import org.slf4j.LoggerFactory;
+
 import java.io.IOException;
 import java.net.URL;
 import java.net.URLClassLoader;
@@ -30,7 +36,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * {@link SkillMaterializer}:物化语义(幂等/等长覆盖/复原/残留清理/id 防御)与 classpath 发现
- * (目录形态 / jar 形态 / 父委派隔离)。
+ * (目录形态 / jar 形态 / 父委派隔离 / 非法 id 必报 ERROR)。
  *
  * <p>fixture 全部用临时目录 + 临时 jar + {@link URLClassLoader} 构造,不依赖任何插件模块或
  * worker 模块(api 模块不能依赖它们)。
@@ -254,6 +260,55 @@ class SkillMaterializerTest {
         try (URLClassLoader cl = new URLClassLoader(new URL[]{emptyRoot.toUri().toURL()}, null)) {
             assertEquals(List.of(), SkillMaterializer.materializeAll(temp.resolve("skills"), cl, "skill"));
         }
+    }
+
+    /**
+     * 10. 命中但 id 非法的资源**不得静默跳过**:逐个打 ERROR(带推导出的 id、资源描述与 id 规则
+     * 口径),不落盘、不进已安装清单;同批合法包照常物化。
+     *
+     * <p>回归护栏:把这条 ERROR 降级为 debug/删掉,「加了包却什么都没出现」就重新变成无从归因
+     * (物化 id 清单只会少一项,分不清是 id 写错、层级放深,还是根本没进 classpath)。
+     */
+    @Test
+    void invalidIdResourceLogsErrorAndIsSkipped() throws Exception {
+        Path cpRoot = Files.createDirectories(temp.resolve("cp"));
+        write(cpRoot.resolve("skill/good/skill.md"), "good body".getBytes(UTF_8));
+        write(cpRoot.resolve("skill/Plan/skill.md"), "uppercase id".getBytes(UTF_8));
+        write(cpRoot.resolve("skill/my_skill/skill.md"), "underscore id".getBytes(UTF_8));
+
+        Logger logger = (Logger) LoggerFactory.getLogger(SkillMaterializer.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+
+        Path skills = temp.resolve("skills");
+        List<String> ids;
+        try (URLClassLoader cl = new URLClassLoader(new URL[]{cpRoot.toUri().toURL()}, null)) {
+            ids = SkillMaterializer.materializeAll(skills, cl, "skill");
+        } finally {
+            logger.detachAppender(appender);
+        }
+
+        assertEquals(List.of("good"), ids, "非法 id 不进已安装清单");
+        assertFalse(Files.exists(skills.resolve("Plan")), "非法 id 不得落盘(大写)");
+        assertFalse(Files.exists(skills.resolve("my_skill")), "非法 id 不得落盘(下划线)");
+        assertEquals("good body", Files.readString(skills.resolve("good/skill.md"), UTF_8),
+                "同批合法包照常物化");
+
+        assertEquals(2, appender.list.size(), "两个非法 id 各一条日志");
+        for (ILoggingEvent event : appender.list) {
+            assertEquals(Level.ERROR, event.getLevel(), "必须是 ERROR 级: " + event.getFormattedMessage());
+            assertTrue(event.getFormattedMessage().contains("[a-z0-9][a-z0-9-]*"),
+                    "提醒须带 id 规则口径: " + event.getFormattedMessage());
+            assertTrue(event.getFormattedMessage().contains("skill.md"),
+                    "提醒须带资源描述(能定位到是哪个包): " + event.getFormattedMessage());
+        }
+        assertTrue(appender.list.stream()
+                        .anyMatch(e -> e.getFormattedMessage().contains("id=\"Plan\"")),
+                "大写 id 必须被点名");
+        assertTrue(appender.list.stream()
+                        .anyMatch(e -> e.getFormattedMessage().contains("id=\"my_skill\"")),
+                "下划线 id 必须被点名");
     }
 
     // ---- fixture 辅助 ----

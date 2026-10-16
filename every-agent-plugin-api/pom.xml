@@ -10,13 +10,20 @@
     </parent>
     <artifactId>every-agent-plugin-api</artifactId>
     <name>every-agent-plugin-api</name>
-    <description>插件 API 面（接口与契约为主，含少量共用工具类：AtomicFiles / SkillMaterializer / SecretPatterns 等；依赖 spring-ai 核心类型与 spring-core）</description>
+    <description>插件 API 面（接口与契约为主，含少量共用工具类：AtomicFiles / SkillMaterializer / SecretPatterns 等；依赖 spring-ai 核心类型、spring-core 与 slf4j-api（日志门面，实现由宿主提供））</description>
 
     <dependencies>
         <!-- 契约层 JSON 工具（EventPayloads / SlashTokenEncoder / FileChangesCollector 等引用） -->
         <dependency>
             <groupId>dev.everyagent</groupId>
             <artifactId>every-agent-contract</artifactId>
+        </dependency>
+        <!-- 日志门面：契约层工具类的告警（如 SkillMaterializer 的「非法 id 已跳过」ERROR）走 slf4j，
+             不引入实现——worker 侧由 logback 供给，插件侧经 PluginLoader 的父委派（parent=worker
+             loader）共用同一份；显式声明为直接依赖（原先仅经 spring-ai-template-st 传递而来） -->
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
         </dependency>
         <!-- Spring 核心（SkillMaterializer 的 PathMatchingResourcePatternResolver 等）；版本由
              spring-boot-starter-parent 的 dependencyManagement 统一管理，不在此写版本号 -->
@@ -37,6 +44,14 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- 测试侧绑定 slf4j：SkillMaterializerTest 用 logback 的 ListAppender 断言「非法 id
+             必须打 ERROR」。显式声明（原先经 spring-ai-client-chat → spring-boot-starter 的
+             test 作用域传递而来），使该测试的日志绑定不依赖传递链。版本由 spring-boot 父 POM 管理 -->
+        <dependency>
+            <groupId>ch.qos.logback</groupId>
+            <artifactId>logback-classic</artifactId>
             <scope>test</scope>
         </dependency>
     </dependencies>
