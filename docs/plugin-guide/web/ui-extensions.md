@@ -550,7 +550,7 @@ export default plugin
 - **非 CodeMirror 编辑器不接管**：pdf iframe / 图片等编辑器里，容器内根本拿不到选区（`window.getSelection()` 端点不在容器内或 `isCollapsed`）⇒ `readEditorSelection` 返回空快照 ⇒ `selection.text.length === 0` ⇒ 自然放行原生右键菜单（零回归）。
 - **坑**：① `isVisible` 是唯一的内容级过滤闸——想只在特定文件类型出现（如仅 `.ts`）就在它里判断，别拖到 `invoke` 才拦；② `invoke` 里抛错不会炸 UI（宿主吞并 warn），但也意味着**错误静默**，需要可见反馈时自己弹提示；③ `anchor` 是右键触发容器，插件浮层定位应相对它、别假设它一定是编辑器根；④ 路径三口径别混用：回切标签用 `filePath`（原样），交给 AI 用 `relativePath`，业务绝对路径用 `fullPath`；⑤ 行号依赖 CodeMirror DOM 类名（`.cm-line`/`.cm-lineNumbers`），换编辑器则行号降级为 null、引用仍带路径与原文（功能降级不失效）。
 - **坑（`MenuList` 定位必读）**：`MenuList` 的定位 effect 首行是 `if (!anchor) return`（`every-agent-web/src/components/shared/ui/Menu.tsx:255-256`）——`anchor` **必须**传真实触发容器（宿主传编辑器容器）；传 `null` 会让 `menuPosition` 停在 `null`，菜单被渲染到 `top/left: -9999`（屏外，`Menu.tsx:462-463`）。`anchorPoint` 只提供右键坐标，**不能替代** `anchor`。
-- **内置范例**：`selection-reference`（本方案新增内置插件，编辑器选区右键「引用到AI对话框」，`invoke` 经 `appendComposerToken` 插入 `kind='file.selection'` 胶囊）。
+- **内置范例**：`selection-reference`（本方案新增内置插件，编辑器选区右键「引用到AI对话框」，`invoke` 先 `openTab('task', { taskId:'__draft__', workspace:c.workspaceRoot })` 打开草稿标签——`workspace` 预设 = 选区所属工作区根，新任务挂靠该工作区（与任务页组「+」同范式，缺省该参数宿主会清空预设、草稿回退注册表首选根），再经 `appendComposerToken` 插入 `kind='file.selection'` 胶囊）。
 
 ## 17. `ui.composer_chip_actions` —— 胶囊激活行为
 

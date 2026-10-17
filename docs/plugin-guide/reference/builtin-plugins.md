@@ -116,7 +116,7 @@ has_children: false
 | `ui.file_content_editors`（文件内容编辑器） | pdf-viewer | `every-agent-plugins/pdf-viewer/web/index.ts:14-19` | 唯一使用者 + web-only 形态最小样本（无 pom 无 src） |
 | `ui.file_explorer_actions`（文件树右键动作） | git | `every-agent-plugins/git/web/index.ts:42-53` | 唯一注册者；动作追加到文件树右键菜单内置项尾部（[UI §13](../web/ui-extensions.md)） |
 | `ui.round_tail_panels`（轮次尾面板） | file-change | `every-agent-plugins/file-change/web/index.ts:22` | 唯一使用者；配套 `ctx.events.on('task-round-closed')` 缓存作废范式 |
-| `ui.editor_context_menu_actions`（编辑器内容区右键菜单） | selection-reference | `every-agent-plugins/selection-reference/web/index.ts:69` | 唯一使用者：仅当有选区时出现「引用到AI对话框」；`invoke` 经 `ctx.ui.appendComposerToken` 插入 `kind='file.selection'` 胶囊（opaque 编码由宿主单点负责） |
+| `ui.editor_context_menu_actions`（编辑器内容区右键菜单） | selection-reference | `every-agent-plugins/selection-reference/web/index.ts:69` | 唯一使用者：仅当有选区时出现「引用到AI对话框」；`invoke` 经 `ctx.ui.openTab('task', { taskId:'__draft__', workspace:c.workspaceRoot })` 打开草稿标签（workspace 预设 = 选区所属工作区根，新任务挂靠该工作区），再经 `ctx.ui.appendComposerToken` 插入 `kind='file.selection'` 胶囊（opaque 编码由宿主单点负责） |
 | `ui.composer_chip_actions`（胶囊激活行为） | selection-reference | `every-agent-plugins/selection-reference/web/index.ts:75` | 插件侧样本：点击胶囊经 `ctx.ui.openFileTab(..., { lineNumber })` 切回原文件标签并定位起始行；核心 `system.workspace_file` 亦经此注册（`pluginId:'core'`） |
 | 扩展点之外的自绘全局 UI（悬浮球等） | mobile-keyboard | `every-agent-plugins/mobile-keyboard/web/floatball.ts` | 唯一直接操作 `document.body` 的插件：15 个扩展点没有全局覆盖层位时，挂自有根元素 + 自管生命周期与可见性 |
 
@@ -307,7 +307,7 @@ WSL Ubuntu 沙箱 + bash 工具 + network slash 开关。
 
 编辑器文件选区右键「引用到AI对话框」→ 插入选区引用胶囊；提交时后端解析器把胶囊展开为引文；点击胶囊回跳原文件并定位选区起始行。both 形态最小样本。
 - 关键文件：`~plugins/selection-reference/src/main/java/dev/everyagent/plugin/selectionReference/SelectionReferencePlugin.java:48`；`~plugins/selection-reference/web/index.ts:69,75`。
-- 值得看：① **最小 both 形态范例**——后端只 `ctx.registerSlashTokenResolver(new SelectionSlashResolver())`（kind `file.selection`，无 RPC / 无 Advisor / 无工具 / 无生命周期节点），前端经宿主通用扩展点注册编辑器右键项 + 胶囊激活行为两处；② 插件侧**完全不碰 opaque 线格式**——胶囊插入走 `ctx.ui.appendComposerToken`（编码由宿主单点负责），右键菜单与选区数据由宿主 `ui.editor_context_menu_actions` 扩展点提供，插件零菜单代码、零 DOM 操作；③ 「引用到AI对话框」→ 胶囊回跳定位的**完整闭环**（`appendComposerToken` 插入 → `ui.composer_chip_actions` 点击 → `ctx.ui.openFileTab(..., { lineNumber })` 切回原文件标签并定位选区起始行，回跳用 payload 自带的 `workspaceRoot`+`filePath` 而非激活上下文的）；④ **降级哲学**：行号取不到（`startLine:null`）仍能引用（只开文件不定位），回跳 payload 缺 `workspaceRoot`/`filePath` 则静默 no-op（`readSelectionPayload` 返回 null 即返回，不抛错）。
+- 值得看：① **最小 both 形态范例**——后端只 `ctx.registerSlashTokenResolver(new SelectionSlashResolver())`（kind `file.selection`，无 RPC / 无 Advisor / 无工具 / 无生命周期节点），前端经宿主通用扩展点注册编辑器右键项 + 胶囊激活行为两处；② 插件侧**完全不碰 opaque 线格式**——胶囊插入走 `ctx.ui.appendComposerToken`（编码由宿主单点负责），右键菜单与选区数据由宿主 `ui.editor_context_menu_actions` 扩展点提供，插件零菜单代码、零 DOM 操作；③ 「引用到AI对话框」→ 胶囊回跳定位的**完整闭环**（`openTab('task', { taskId:'__draft__', workspace:c.workspaceRoot })` 打开草稿标签并预设选区所属工作区（新任务挂靠该工作区，与任务页组「+」同范式）→ `appendComposerToken` 插入 → `ui.composer_chip_actions` 点击 → `ctx.ui.openFileTab(..., { lineNumber })` 切回原文件标签并定位选区起始行，回跳用 payload 自带的 `workspaceRoot`+`filePath` 而非激活上下文的）；④ **降级哲学**：行号取不到（`startLine:null`）仍能引用（只开文件不定位），回跳 payload 缺 `workspaceRoot`/`filePath` 则静默 no-op（`readSelectionPayload` 返回 null 即返回，不抛错）。
 
 ### subagent（子 Agent）
 
