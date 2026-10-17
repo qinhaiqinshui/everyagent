@@ -13,6 +13,8 @@
   inset: 0;
   pointer-events: none;
   z-index: 980; /* 低于 antd 弹层(1000+),高于普通内容 */
+  /* 焦点守卫辅助:键盘自身元素一律不进入 Tab 序列(SVG 聚焦行为浏览器间不一致) */
+  outline: none;
 }
 
 .mk-root.mk-hidden {

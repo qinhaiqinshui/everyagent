@@ -213,7 +213,8 @@ export function createMobileKeypad(options: MobileKeypadOptions): MobileKeypadCo
   const ball = document.createElement('div')
   ball.className = 'mk-ball'
   ball.setAttribute('role', 'button')
-  ball.setAttribute('tabindex', '-1')
+  // 不设 tabindex(含 -1):触屏覆盖层无需键盘可达性,且 -1 仍会被点击聚焦,
+  // 会把焦点从终端 textarea 抢走,导致方向键合成事件发错目标。
   ball.setAttribute('aria-label', '虚拟鼠标:展开')
   ball.appendChild(createMouseIcon(26))
   root.appendChild(ball)
@@ -233,6 +234,8 @@ export function createMobileKeypad(options: MobileKeypadOptions): MobileKeypadCo
     path.setAttribute('d', arcSectorPath(RING_SIZE_PX / 2, RING_SIZE_PX / 2, RING_OUTER_PX, RING_INNER_PX, a0, a1))
     path.setAttribute('class', 'mk-arc')
     path.setAttribute('role', 'button')
+    // focusable=false:阻止 Chrome(SVG2)点击聚焦 SVG 元素,防抢宿主焦点
+    path.setAttribute('focusable', 'false')
     path.setAttribute('aria-label', aria)
     ring.appendChild(path)
     return path
@@ -262,13 +265,56 @@ export function createMobileKeypad(options: MobileKeypadOptions): MobileKeypadCo
   const center = document.createElement('div')
   center.className = 'mk-center'
   center.setAttribute('role', 'button')
-  center.setAttribute('tabindex', '-1')
+  // 同 ball:不设 tabindex,避免点击时抢走宿主(终端输入框等)的焦点。
   center.setAttribute('aria-label', '拖动移动鼠标位置,点击收起')
   center.appendChild(createMouseIcon(18))
   panel.appendChild(center)
 
   root.appendChild(panel)
   document.body.appendChild(root)
+
+  // ── 焦点归还守卫 ─────────────────────────────────────────────────────────
+  // 移动端浏览器对 pointerdown.preventDefault 阻止焦点转移的支持不一致
+  // (Chrome 还会按 SVG2 规范聚焦被点击的 SVG 圆弧):点击键盘元素后焦点可能
+  // 被抢进覆盖层,之后 dispatchKey 的目标 document.activeElement 就变成了
+  // 键盘自己——终端连续按方向键失灵。capture 阶段统一守卫:pointerdown 记录
+  // 按下时的焦点,pointerup/cancel 后若焦点已落入键盘内部则归还原元素,
+  // 无论浏览器行为如何都保证「点键盘不改变页面焦点」。
+  let focusBeforePointerDown: HTMLElement | null = null
+
+  root.addEventListener('pointerdown', (e) => {
+    focusBeforePointerDown =
+      document.activeElement instanceof HTMLElement && !root.contains(document.activeElement)
+        ? document.activeElement
+        : null
+    e.preventDefault()
+  }, { capture: true })
+
+  root.addEventListener('pointerup', () => {
+    const active = document.activeElement
+    if (active instanceof HTMLElement && root.contains(active)) {
+      const toRestore = focusBeforePointerDown
+      if (toRestore && toRestore.isConnected) {
+        toRestore.focus({ preventScroll: true })
+      } else {
+        active.blur()
+      }
+    }
+    focusBeforePointerDown = null
+  }, { capture: true })
+
+  root.addEventListener('pointercancel', () => {
+    const active = document.activeElement
+    if (active instanceof HTMLElement && root.contains(active)) {
+      const toRestore = focusBeforePointerDown
+      if (toRestore && toRestore.isConnected) {
+        toRestore.focus({ preventScroll: true })
+      } else {
+        active.blur()
+      }
+    }
+    focusBeforePointerDown = null
+  }, { capture: true })
 
   // ── 状态 ─────────────────────────────────────────────────────────────────
   let shown = false
