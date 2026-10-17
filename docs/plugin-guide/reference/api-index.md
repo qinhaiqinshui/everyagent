@@ -166,7 +166,7 @@ has_children: false
 | `ui.file_explorer_actions` | `registerFileExplorerAction(action)` | [UI §13](../web/ui-extensions.md#13-uifile_explorer_actions--文件树右键菜单) | git「显示 Git 历史」（追加到内置右键菜单尾部） |
 | `ui.round_tail_panels` | `registerRoundTailPanel(def)` | [UI §14](../web/ui-extensions.md#14-uiround_tail_panels--轮末展示区) | file-change |
 | `ui.search_types` | `registerSearchType(def)` | [UI §15](../web/ui-extensions.md#15-uisearch_types--搜索类型注册) | ⚠️ 无内置范例（内置三类型不走此扩展点） |
-| `ui.editor_context_menu_actions` | `registerEditorContextMenuAction(def)` | [UI §16](../web/ui-extensions.md#16-uieditor_context_menu_actions--编辑器内容区右键菜单) | selection-reference（编辑器选区右键「引用到AI对话框」） |
+| `ui.editor_context_menu_actions` | `registerEditorContextMenuAction(def)` | [UI §16](../web/ui-extensions.md#16-uieditor_context_menu_actions--编辑器内容区右键菜单) | selection-reference（编辑器选区右键「引用到AI对话框」）；核心内置「复制」项亦经此注册（`core.copy-selection`，order=10 恒居首） |
 | `ui.composer_chip_actions` | `registerComposerChipAction(def)` | [UI §17](../web/ui-extensions.md#17-uicomposer_chip_actions--胶囊激活行为) | selection-reference；核心 `system.workspace_file` 亦经此注册 |
 
 动作方法（不注册、只驱动宿主；桥未注入时静默降级）：详解全部在 [UI §18](../web/ui-extensions.md#18-uiregistry-动作方法6-个)。

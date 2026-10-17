@@ -23,6 +23,7 @@ import { GlobalErrorBoundary } from './components/shared/GlobalErrorBoundary'
 import { initializeTraceTypes } from './plugin/traceTypeRegistry'
 import { initializeCoreRoundTailPanels } from './plugin/coreRoundTailPanels'
 import { initializeCoreComposerChipActions } from './plugin/coreComposerChipActions'
+import { initializeCoreEditorContextMenuActions } from './plugin/coreEditorContextMenuActions'
 import { loadPlugins } from './plugin/pluginLoader'
 import { wireFsChanged } from './platform/fs/workspaceGateway'
 import { workspaceRegistry } from './hub/workspaceRegistry'
@@ -51,6 +52,10 @@ initializeCoreRoundTailPanels()
 // 核心内置胶囊激活行为(「@」文件引用胶囊点击 → 打开文件标签页)注册进 ui.composer_chip_actions。
 // 同样必须在 loadPlugins() 之前同步完成:查表规则是「先注册者胜」,核心先注册 ⇒ 核心 kind 恒优先。
 initializeCoreComposerChipActions()
+// 核心内置编辑器动作菜单项(「复制」)注册进 ui.editor_context_menu_actions。
+// 同样必须在 loadPlugins() 之前同步完成:order=10 恒排在插件项(缺省 100)之前。
+// 动机:桌面右键被接管后原生复制丢失;触屏原生 callout 消失后统一菜单是唯一复制入口。
+initializeCoreEditorContextMenuActions()
 // 统一插件加载：plugin.list RPC 驱动发现，worker 不可达时静默降级。
 void loadPlugins()
 

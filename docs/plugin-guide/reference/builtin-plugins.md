@@ -305,7 +305,7 @@ WSL Ubuntu 沙箱 + bash 工具 + network slash 开关。
 
 ### selection-reference（选区引用）
 
-编辑器文件选区右键「引用到AI对话框」→ 插入选区引用胶囊；提交时后端解析器把胶囊展开为引文；点击胶囊回跳原文件并定位选区起始行。both 形态最小样本。触屏设备（iOS/Android Safari）无右键事件，宿主在选区稳定后自动弹同一菜单（双触发源见 `docs/plugin-guide/web/ui-extensions.md` §16.3），插件零改动。
+编辑器文件选区右键「引用到AI对话框」→ 插入选区引用胶囊；提交时后端解析器把胶囊展开为引文；点击胶囊回跳原文件并定位选区起始行。both 形态最小样本。触屏设备（iOS/Android Safari）无右键事件，宿主在选区稳定后自动弹同一菜单（双触发源见 `docs/plugin-guide/web/ui-extensions.md` §16.3），插件零改动；菜单里另有核心内置「复制」项（`core.copy-selection`，见同文档 §16.1），保证移动端在原生 callout 消失后仍可复制。
 - 关键文件：`~plugins/selection-reference/src/main/java/dev/everyagent/plugin/selectionReference/SelectionReferencePlugin.java:48`；`~plugins/selection-reference/web/index.ts:69,75`。
 - 值得看：① **最小 both 形态范例**——后端只 `ctx.registerSlashTokenResolver(new SelectionSlashResolver())`（kind `file.selection`，无 RPC / 无 Advisor / 无工具 / 无生命周期节点），前端经宿主通用扩展点注册编辑器右键项 + 胶囊激活行为两处；② 插件侧**完全不碰 opaque 线格式**——胶囊插入走 `ctx.ui.appendComposerToken`（编码由宿主单点负责），右键菜单与选区数据由宿主 `ui.editor_context_menu_actions` 扩展点提供，插件零菜单代码、零 DOM 操作；③ 「引用到AI对话框」→ 胶囊回跳定位的**完整闭环**（`openTab('task', { taskId:'__draft__', workspace:c.workspaceRoot })` 打开草稿标签并预设选区所属工作区（新任务挂靠该工作区，与任务页组「+」同范式）→ `appendComposerToken` 插入 → `ui.composer_chip_actions` 点击 → `ctx.ui.openFileTab(..., { lineNumber })` 切回原文件标签并定位选区起始行，回跳用 payload 自带的 `workspaceRoot`+`filePath` 而非激活上下文的）；④ **降级哲学**：行号取不到（`startLine:null`）仍能引用（只开文件不定位），回跳 payload 缺 `workspaceRoot`/`filePath` 则静默 no-op（`readSelectionPayload` 返回 null 即返回，不抛错）。
 

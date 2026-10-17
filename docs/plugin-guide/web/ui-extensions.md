@@ -33,7 +33,7 @@ has_children: false
 | `ui.file_explorer_actions` | `registerFileExplorerAction` | 文件树右键菜单项 | git（「显示 Git 历史」，追加在内置项尾部，见 §13） |
 | `ui.round_tail_panels` | `registerRoundTailPanel` | 任务轮末展示区 | file-change |
 | `ui.search_types` | `registerSearchType` | 注册搜索类型（id/label/kinds/filters/ResultView…） | ⚠️ 无内置范例（内置三类型不走此扩展点） |
-| `ui.editor_context_menu_actions` | `registerEditorContextMenuAction` | 文件内容区（编辑器）右键菜单项 | selection-reference |
+| `ui.editor_context_menu_actions` | `registerEditorContextMenuAction` | 文件内容区（编辑器）右键菜单项 | selection-reference；核心内置「复制」项（`core.copy-selection`，见 §16.1） |
 | `ui.composer_chip_actions` | `registerComposerChipAction` | 按 kind 接管输入框/消息回放胶囊的点击行为 | selection-reference（核心 `system.workspace_file` 亦经此扩展点注册，见 §17） |
 
 ## 2. `ui.sidebar_items` —— 侧边栏活动栏项
@@ -475,6 +475,8 @@ ctx.ui.registerSearchType(imageType)
 | `isVisible` | `(ctx: EditorActionContext) => boolean` | — | 右键过滤时调用；返回 false 则该上下文不出现 | 缺省恒显示 |
 | `invoke` | `(ctx: EditorActionContext) => void` | ✅ | 点击菜单项时调用；抛错由宿主 try/catch 吞并 `console.warn` | 动作实现 |
 
+**核心内置「复制」项**：`core.copy-selection`（`every-agent-web/src/plugin/coreEditorContextMenuActions.tsx`，main.tsx 在 `loadPlugins()` 之前同步注册）——以**贡献者**身份注册进本扩展点（与核心 `system.workspace_file` 胶囊同范式，宿主组件零特判），`order=10` 恒排在插件项（缺省 100）之前。动机：① 桌面右键被接管（preventDefault + 统一菜单）后原生「复制」随之丢失；② 触屏原生 callout 在滚动/交互后消失，统一菜单成为唯一入口——没有复制项移动端将无法复制选中内容。剪贴板写入优先 `navigator.clipboard.writeText`（仅安全上下文可用），非安全上下文（局域网 http 访问，手机访问开发机的典型形态）降级「临时 textarea + `execCommand('copy')`」（菜单项 onSelect 即点击手势内，iOS Safari 有效）；结果经 antd message 反馈（成功「已复制选中内容」/失败提示）。**注册后实际效果**：菜单在有选区时恒有可见项（此前依赖插件 isVisible），「过滤后无可见项 → 放行原生菜单」分支在实践中仅剩「无选区」一种触发。
+
 右键上下文 `EditorActionContext`（右键时点在编辑器容器上采集）：
 
 | 字段 | 类型 | 说明 |
@@ -551,7 +553,7 @@ export default plugin
 - **非 CodeMirror 编辑器不接管**：pdf iframe / 图片等编辑器里，容器内根本拿不到选区（`window.getSelection()` 端点不在容器内或 `isCollapsed`）⇒ `readEditorSelection` 返回空快照 ⇒ `selection.text.length === 0` ⇒ 自然放行原生右键菜单（零回归）。
 - **坑**：① `isVisible` 是唯一的内容级过滤闸——想只在特定文件类型出现（如仅 `.ts`）就在它里判断，别拖到 `invoke` 才拦；② `invoke` 里抛错不会炸 UI（宿主吞并 warn），但也意味着**错误静默**，需要可见反馈时自己弹提示；③ `anchor` 是右键触发容器，插件浮层定位应相对它、别假设它一定是编辑器根；④ 路径三口径别混用：回切标签用 `filePath`（原样），交给 AI 用 `relativePath`，业务绝对路径用 `fullPath`；⑤ 行号依赖 CodeMirror DOM 类名（`.cm-line`/`.cm-lineNumbers`），换编辑器则行号降级为 null、引用仍带路径与原文（功能降级不失效）。
 - **坑（`MenuList` 定位必读）**：`MenuList` 的定位 effect 首行是 `if (!anchor) return`（`every-agent-web/src/components/shared/ui/Menu.tsx:255-256`）——`anchor` **必须**传真实触发容器（宿主传编辑器容器）；传 `null` 会让 `menuPosition` 停在 `null`，菜单被渲染到 `top/left: -9999`（屏外，`Menu.tsx:462-463`）。`anchorPoint` 只提供右键坐标，**不能替代** `anchor`。
-- **内置范例**：`selection-reference`（本方案新增内置插件，编辑器选区右键「引用到AI对话框」，`invoke` 先 `openTab('task', { taskId:'__draft__', workspace:c.workspaceRoot })` 打开草稿标签——`workspace` 预设 = 选区所属工作区根，新任务挂靠该工作区（与任务页组「+」同范式，缺省该参数宿主会清空预设、草稿回退注册表首选根），再经 `appendComposerToken` 插入 `kind='file.selection'` 胶囊）。
+- **内置范例**：`selection-reference`（编辑器选区右键「引用到AI对话框」，`invoke` 先 `openTab('task', { taskId:'__draft__', workspace:c.workspaceRoot })` 打开草稿标签——`workspace` 预设 = 选区所属工作区根，新任务挂靠该工作区（与任务页组「+」同范式，缺省该参数宿主会清空预设、草稿回退注册表首选根），再经 `appendComposerToken` 插入 `kind='file.selection'` 胶囊）。注意：菜单里排在它之前的核心「复制」项（§16.1）不是插件范例，但它与插件项走完全相同的注册/排序/过滤路径。
 
 ## 17. `ui.composer_chip_actions` —— 胶囊激活行为
 
