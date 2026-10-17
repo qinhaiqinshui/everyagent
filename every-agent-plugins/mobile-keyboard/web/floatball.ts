@@ -325,6 +325,10 @@ export function createMobileKeypad(options: MobileKeypadOptions): MobileKeypadCo
   let dragging = false
   let downX = 0
   let downY = 0
+  // 抓取偏移:按下时手指相对球心的偏移。拖动用「手指坐标 + 抓取偏移」定位球,
+  // 保持球与手指的相对位置——起拖不瞬移;任何坐标系常数偏差也被一并抵消。
+  let grabDx = 0
+  let grabDy = 0
   // 球心(展开态 = 面板中心)视口坐标
   let ballX = 0
   let ballY = 0
@@ -454,10 +458,12 @@ export function createMobileKeypad(options: MobileKeypadOptions): MobileKeypadCo
     cursor.style.top = `${cursorY}px`
   }
 
-  /** 闲置光标位置:圆环之外斜上方;球在左半屏时放右上,右半屏放左上,避免被钳回环上。 */
+  /** 闲置光标位置:圆环之外左上方;仅当球贴近右屏(右侧内容带需要光标翻到
+   * 右侧才能点到,球停在内容左侧)时翻到右上方,其余位置恒在左侧不横跳。 */
   function resetCursorToIdle(): void {
     const d = CURSOR_IDLE_DIST_PX / Math.SQRT2
-    const dx = ballX < window.innerWidth / 2 ? d : -d
+    const nearRightEdge = window.innerWidth - ballX < CURSOR_IDLE_DIST_PX + RING_OUTER_PX
+    const dx = nearRightEdge ? d : -d
     placeCursor(ballX + dx, ballY - d)
   }
 
@@ -495,6 +501,8 @@ export function createMobileKeypad(options: MobileKeypadOptions): MobileKeypadCo
     dragging = false
     downX = e.clientX
     downY = e.clientY
+    grabDx = ballX - e.clientX
+    grabDy = ballY - e.clientY
     ball.setPointerCapture(e.pointerId)
   })
 
@@ -509,8 +517,8 @@ export function createMobileKeypad(options: MobileKeypadOptions): MobileKeypadCo
     if (dragging) {
       const margin = EDGE_MARGIN_PX + BALL_RADIUS_PX
       placeBall(
-        clamp(e.clientX, margin, Math.max(margin, window.innerWidth - margin)),
-        clamp(e.clientY, margin, Math.max(margin, window.innerHeight - margin)),
+        clamp(e.clientX + grabDx, margin, Math.max(margin, window.innerWidth - margin)),
+        clamp(e.clientY + grabDy, margin, Math.max(margin, window.innerHeight - margin)),
       )
     }
   })
@@ -541,6 +549,8 @@ export function createMobileKeypad(options: MobileKeypadOptions): MobileKeypadCo
     dragging = false
     downX = e.clientX
     downY = e.clientY
+    grabDx = ballX - e.clientX
+    grabDy = ballY - e.clientY
     center.setPointerCapture(e.pointerId)
   })
 
@@ -556,8 +566,8 @@ export function createMobileKeypad(options: MobileKeypadOptions): MobileKeypadCo
       // 展开态钳制:整个圆环保持在视口内
       const margin = EDGE_MARGIN_PX + RING_OUTER_PX
       placeBall(
-        clamp(e.clientX, margin, Math.max(margin, window.innerWidth - margin)),
-        clamp(e.clientY, margin, Math.max(margin, window.innerHeight - margin)),
+        clamp(e.clientX + grabDx, margin, Math.max(margin, window.innerWidth - margin)),
+        clamp(e.clientY + grabDy, margin, Math.max(margin, window.innerHeight - margin)),
       )
       resetCursorToIdle()
       // 纯移动鼠标位置:buttons=0,不触发选中/框选
@@ -605,6 +615,8 @@ export function createMobileKeypad(options: MobileKeypadOptions): MobileKeypadCo
     leftHeld = true
     lastFingerX = e.clientX
     lastFingerY = e.clientY
+    grabDx = ballX - e.clientX
+    grabDy = ballY - e.clientY
     setPressedVisual(arcLeft, true)
     dispatchMouseAt('mousedown', cursorX, cursorY, { button: 0, buttons: 1 })
   })
@@ -612,11 +624,11 @@ export function createMobileKeypad(options: MobileKeypadOptions): MobileKeypadCo
     if (!leftHeld) return
     lastFingerX = e.clientX
     lastFingerY = e.clientY
-    // 按住左键拖动:整个悬浮球跟随手指移动,与虚拟光标一起
+    // 按住左键拖动:整个悬浮球跟随手指移动(保持抓取偏移,起拖不瞬移),与虚拟光标一起
     const margin = EDGE_MARGIN_PX + RING_OUTER_PX
     placeBall(
-      clamp(e.clientX, margin, Math.max(margin, window.innerWidth - margin)),
-      clamp(e.clientY, margin, Math.max(margin, window.innerHeight - margin)),
+      clamp(e.clientX + grabDx, margin, Math.max(margin, window.innerWidth - margin)),
+      clamp(e.clientY + grabDy, margin, Math.max(margin, window.innerHeight - margin)),
     )
     // 光标跟随手指(向上偏移避免被手指与悬浮球遮挡),持续合成 mousemove(buttons=1)
     placeCursor(e.clientX + CURSOR_FINGER_OFFSET.dx, e.clientY + CURSOR_FINGER_OFFSET.dy)
