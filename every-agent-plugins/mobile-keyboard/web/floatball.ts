@@ -5,10 +5,10 @@
  * 自绘全局 UI 的先例,自挂 document.body 并自管生命周期):
  * - 显隐:移动端视口(宽度 <= 768,与宿主 useResponsiveViewport 同口径)即常显,
  *   不再限定终端标签;resize 时刷新显隐并把越界的球拉回可视区。
- * - 收起态:毛玻璃圆球 + 鼠标图标,可拖动、松手吸附左右屏幕边缘、位置经
- *   ctx.storage 持久化;点击展开。
- * - 展开态:四段圆弧围成圆环,中心为鼠标图标;虚拟光标箭头显示在圆环之外
- *   (斜上方,按球所在半屏自动选左/右,避免被圆环与手指遮挡):
+ * - 收起态:仅显示鼠标图标本体(无背景),可拖动、松手吸附左右屏幕边缘、
+ *   位置经 ctx.storage 持久化;点击展开。
+ * - 展开态:四段圆弧围成圆环(内缘紧贴中心键,无空白环),中心为鼠标图标;
+ *   虚拟光标箭头显示在圆环之外(斜上方,按球所在半屏自动选左/右,避免被圆环与手指遮挡):
  *   · 上/下圆弧:模拟键盘 ArrowUp/ArrowDown(合成 KeyboardEvent 派发给焦点
  *     元素;xterm 持有焦点时转成方向键转义序列发往 PTY,无人消费则无效果);
  *   · 左圆弧 = 鼠标左键:按下在光标位置合成 mousedown,手指继续滑动时光标
@@ -49,15 +49,18 @@ const POS_STORAGE_KEY = 'floatball.pos'
 /** 球心默认落点(视口右下区域,归一化坐标)。 */
 const DEFAULT_POS = { xf: 0.94, yf: 0.78 }
 
-/** 圆环面板尺寸(viewBox 200x200):外半径 / 内半径。 */
-const RING_OUTER_PX = 100
-const RING_INNER_PX = 56
-/** 收起态球半径。 */
-const BALL_RADIUS_PX = 26
+/** 圆环面板直径(viewBox 同尺寸;整体为初版的二分之一)。 */
+const RING_SIZE_PX = 100
+/** 圆环外半径(留 1.5px 给面板边沿)。 */
+const RING_OUTER_PX = 48.5
+/** 圆环内半径 = 中心键半径:圆弧内缘紧贴中心鼠标键,不留空白环。 */
+const RING_INNER_PX = 16
+/** 收起态触控半径(视觉仅为图标,无背景)。 */
+const BALL_RADIUS_PX = 22
 /** 展开态闲置时,光标离球心的距离(务必 > 圆环外半径,显示在圆弧之外)。 */
-const CURSOR_IDLE_DIST_PX = RING_OUTER_PX + 36
-/** 按住左键滑动时,光标相对手指的偏移(上移避免被手指遮挡)。 */
-const CURSOR_FINGER_OFFSET = { dx: -18, dy: -54 }
+const CURSOR_IDLE_DIST_PX = RING_OUTER_PX + 26
+/** 按住左键滑动时,光标相对手指的偏移(上移避免被手指与悬浮球遮挡)。 */
+const CURSOR_FINGER_OFFSET = { dx: -16, dy: -66 }
 
 type ArrowDir = 'up' | 'down'
 
@@ -212,7 +215,7 @@ export function createMobileKeypad(options: MobileKeypadOptions): MobileKeypadCo
   ball.setAttribute('role', 'button')
   ball.setAttribute('tabindex', '-1')
   ball.setAttribute('aria-label', '虚拟鼠标:展开')
-  ball.appendChild(createMouseIcon(30))
+  ball.appendChild(createMouseIcon(26))
   root.appendChild(ball)
 
   // 展开态圆环面板
@@ -221,13 +224,13 @@ export function createMobileKeypad(options: MobileKeypadOptions): MobileKeypadCo
   panel.setAttribute('role', 'group')
   panel.setAttribute('aria-label', '虚拟鼠标与方向键')
 
-  const ring = createSvg(200, 200, '0 0 200 200')
+  const ring = createSvg(RING_SIZE_PX, RING_SIZE_PX, `0 0 ${RING_SIZE_PX} ${RING_SIZE_PX}`)
   ring.classList.add('mk-ring')
 
   /** 在圆环上创建一段圆弧按钮,返回 path 元素。 */
   function createArc(a0: number, a1: number, aria: string): SVGPathElement {
     const path = document.createElementNS(SVG_NS, 'path')
-    path.setAttribute('d', arcSectorPath(100, 100, RING_OUTER_PX - 2, RING_INNER_PX, a0, a1))
+    path.setAttribute('d', arcSectorPath(RING_SIZE_PX / 2, RING_SIZE_PX / 2, RING_OUTER_PX, RING_INNER_PX, a0, a1))
     path.setAttribute('class', 'mk-arc')
     path.setAttribute('role', 'button')
     path.setAttribute('aria-label', aria)
@@ -237,7 +240,7 @@ export function createMobileKeypad(options: MobileKeypadOptions): MobileKeypadCo
 
   /** 在圆环某方位放置不可交互的图标(半径取环带中线)。 */
   function placeRingIcon(icon: SVGSVGElement, deg: number): void {
-    const [x, y] = polar(100, 100, (RING_OUTER_PX + RING_INNER_PX) / 2 - 1, deg)
+    const [x, y] = polar(RING_SIZE_PX / 2, RING_SIZE_PX / 2, (RING_OUTER_PX + RING_INNER_PX) / 2, deg)
     const size = Number(icon.getAttribute('width') ?? 22)
     icon.setAttribute('x', (x - size / 2).toFixed(2))
     icon.setAttribute('y', (y - size / 2).toFixed(2))
@@ -249,10 +252,10 @@ export function createMobileKeypad(options: MobileKeypadOptions): MobileKeypadCo
   const arcRight = createArc(48, 132, '鼠标右键')
   const arcDown = createArc(138, 222, ARROWS.down.aria)
   const arcLeft = createArc(228, 312, '鼠标左键')
-  placeRingIcon(createArrowIcon('up', 22), 0)
-  placeRingIcon(createMouseIcon(22, 'right'), 90)
-  placeRingIcon(createArrowIcon('down', 22), 180)
-  placeRingIcon(createMouseIcon(22, 'left'), 270)
+  placeRingIcon(createArrowIcon('up', 14), 0)
+  placeRingIcon(createMouseIcon(14, 'right'), 90)
+  placeRingIcon(createArrowIcon('down', 14), 180)
+  placeRingIcon(createMouseIcon(14, 'left'), 270)
   panel.appendChild(ring)
 
   // 中心鼠标图标:点击收起;拖动移动整个悬浮球(光标随动)
@@ -261,7 +264,7 @@ export function createMobileKeypad(options: MobileKeypadOptions): MobileKeypadCo
   center.setAttribute('role', 'button')
   center.setAttribute('tabindex', '-1')
   center.setAttribute('aria-label', '拖动移动鼠标位置,点击收起')
-  center.appendChild(createMouseIcon(28))
+  center.appendChild(createMouseIcon(18))
   panel.appendChild(center)
 
   root.appendChild(panel)
@@ -563,7 +566,13 @@ export function createMobileKeypad(options: MobileKeypadOptions): MobileKeypadCo
     if (!leftHeld) return
     lastFingerX = e.clientX
     lastFingerY = e.clientY
-    // 光标跟随手指(向上偏移避免被手指遮挡),持续合成 mousemove(buttons=1)
+    // 按住左键拖动:整个悬浮球跟随手指移动,与虚拟光标一起
+    const margin = EDGE_MARGIN_PX + RING_OUTER_PX
+    placeBall(
+      clamp(e.clientX, margin, Math.max(margin, window.innerWidth - margin)),
+      clamp(e.clientY, margin, Math.max(margin, window.innerHeight - margin)),
+    )
+    // 光标跟随手指(向上偏移避免被手指与悬浮球遮挡),持续合成 mousemove(buttons=1)
     placeCursor(e.clientX + CURSOR_FINGER_OFFSET.dx, e.clientY + CURSOR_FINGER_OFFSET.dy)
     dispatchMouseAt('mousemove', cursorX, cursorY, { button: 0, buttons: 1 })
   })
@@ -572,8 +581,9 @@ export function createMobileKeypad(options: MobileKeypadOptions): MobileKeypadCo
     leftHeld = false
     setPressedVisual(arcLeft, false)
     dispatchMouseAt('mouseup', cursorX, cursorY, { button: 0, buttons: 0 })
-    // 松手后光标回到圆环外的闲置位
+    // 松手后光标回到圆环外的闲置位;悬浮球已随手指移动,持久化新位置
     resetCursorToIdle()
+    savePosition()
   }
   arcLeft.addEventListener('pointerup', releaseLeft)
   arcLeft.addEventListener('pointercancel', releaseLeft)
