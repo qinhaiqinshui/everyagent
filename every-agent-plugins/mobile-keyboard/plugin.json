@@ -1,8 +1,8 @@
 {
   "id": "mobile-keyboard",
-  "name": "移动端键盘增强",
-  "version": "0.1.0",
-  "description": "移动端终端键盘增强悬浮球（纯 Web 插件）：仿 AssistiveTouch 悬浮球，仅移动端且终端界面可见时出现，点开后提供方向键小键盘，按键模拟输入终端的上下左右方向键",
+  "name": "移动端虚拟鼠标",
+  "version": "0.2.0",
+  "description": "移动端全局悬浮球（纯 Web 插件）：仿 AssistiveTouch 悬浮球，移动端常显；收起为鼠标图标，展开为四段圆弧圆环——上/下模拟键盘方向键（终端可用），左/右在虚拟光标位置模拟鼠标左/右键，按住左键滑动即按住拖动（框选/移动文件），中心鼠标图标拖动即移动光标位置",
   "author": "everyagent",
   "webMain": "web/index.ts",
   "enabled": true

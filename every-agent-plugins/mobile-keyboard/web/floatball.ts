@@ -1,23 +1,24 @@
 /**
- * 移动端键盘增强悬浮球控制器。
+ * 移动端悬浮球控制器(全局虚拟鼠标 + 键盘方向键)。
  *
- * 职责(与宿主 12 个 UI 扩展点无关——它们没有「全局覆盖层」扩展点,本插件是
- * 扩展点之外自绘全局 UI 的先例,自挂 document.body 并自管生命周期):
- * - 悬浮球:仿 iOS AssistiveTouch,毛玻璃圆球,可拖动、松手吸附左右屏幕边缘、
- *   位置经 ctx.storage 持久化;单击展开/收起方向键面板。
- * - 显隐条件:移动端视口(宽度 <= 768,与宿主 useResponsiveViewport 同口径)
- *   且当前激活的工作区标签类型为 terminal——经 ctx.ui.getActiveTab() 查询
- *   (宿主壳层镜像,不扫 DOM 猜组件);变更由 workspace-tab-activated /
- *   workspace-tab-closed 领域事件 + resize 触发,统一 rAF 节流刷新。
- * - 按键模拟:**不管目标是什么组件**——把合成 KeyboardEvent(keydown + keyup,
- *   携带 legacy keyCode)派发给当前焦点元素(document.activeElement,无焦点时
- *   落 document.body),剩下的交给浏览器事件流:监听该按键的组件(xterm 终端
- *   持有焦点时,其内部 textarea 即 activeElement,xterm 会把方向键转成
- *   \x1b[A/B/C/D 转义序列发往 PTY)自行消费;没人消费就什么都不会发生。
- *   单纯发按键,不感知也不移动焦点与光标。
- *   (平台限制:合成事件 isTrusted=false,不触发浏览器**默认行为**——将来扩展
- *   文本类按键(如 A)想往 input 里真正插入字符,需另配 execCommand 兜底;
- *   方向键在 xterm 场景走的是应用层监听,不受此限。)
+ * 职责(与宿主 UI 扩展点无关——扩展点没有「全局覆盖层」,本插件是扩展点之外
+ * 自绘全局 UI 的先例,自挂 document.body 并自管生命周期):
+ * - 显隐:移动端视口(宽度 <= 768,与宿主 useResponsiveViewport 同口径)即常显,
+ *   不再限定终端标签;resize 时刷新显隐并把越界的球拉回可视区。
+ * - 收起态:毛玻璃圆球 + 鼠标图标,可拖动、松手吸附左右屏幕边缘、位置经
+ *   ctx.storage 持久化;点击展开。
+ * - 展开态:四段圆弧围成圆环,中心为鼠标图标;虚拟光标箭头显示在圆环之外
+ *   (斜上方,按球所在半屏自动选左/右,避免被圆环与手指遮挡):
+ *   · 上/下圆弧:模拟键盘 ArrowUp/ArrowDown(合成 KeyboardEvent 派发给焦点
+ *     元素;xterm 持有焦点时转成方向键转义序列发往 PTY,无人消费则无效果);
+ *   · 左圆弧 = 鼠标左键:按下在光标位置合成 mousedown,手指继续滑动时光标
+ *     跟随手指(向上偏移避免被手指遮挡)并持续合成 mousemove(buttons=1),
+ *     松开合成 mouseup——宿主「按住左键拖动」(框选/拖动移动)由此驱动;
+ *   · 右圆弧 = 鼠标右键:点击在光标位置合成 contextmenu(弹宿主右键菜单);
+ *   · 中心鼠标图标:点击收起;拖动移动整个悬浮球(光标随动,只合成
+ *     buttons=0 的 mousemove——纯移动鼠标位置,不触发选中/框选)。
+ * - 合成事件 isTrusted=false,不触发浏览器默认行为;宿主组件(文件树等)的
+ *   应用层监听(React onMouseDown / document mousemove/mouseup)不受影响。
  */
 
 /** 与 PluginStorage 兼容的窄接口(结构类型,避免依赖类型包)。 */
@@ -26,19 +27,8 @@ interface KeypadStorage {
   set(key: string, value: unknown): void
 }
 
-/** 与 ctx.events.on 返回的 Disposable 兼容的窄接口。 */
-interface Unsubscribe {
-  dispose(): void
-}
-
 interface MobileKeypadOptions {
   storage: KeypadStorage
-  /** 查询当前激活的工作区标签类型(ctx.ui.getActiveTab()?.tabType;无激活标签为 null)。 */
-  getActiveTabType: () => string | null
-  /** 订阅宿主 workspace-tab-activated 领域事件(标签切换后立刻刷新显隐)。 */
-  subscribeTabActivated: (listener: () => void) => Unsubscribe
-  /** 订阅宿主 workspace-tab-closed 领域事件(标签关闭后立刻刷新显隐)。 */
-  subscribeTabClosed: (listener: () => void) => Unsubscribe
 }
 
 export interface MobileKeypadController {
@@ -49,7 +39,7 @@ export interface MobileKeypadController {
 const MOBILE_MAX_WIDTH = 768
 /** 位移超过该值才视为拖动(否则算点击)。 */
 const DRAG_THRESHOLD_PX = 8
-/** 悬浮球/面板吸附与钳制时离视口边缘的最小留白。 */
+/** 悬浮球吸附与钳制时离视口边缘的最小留白。 */
 const EDGE_MARGIN_PX = 12
 /** 长按方向键的连发启动延迟。 */
 const LONGPRESS_DELAY_MS = 350
@@ -59,26 +49,27 @@ const POS_STORAGE_KEY = 'floatball.pos'
 /** 球心默认落点(视口右下区域,归一化坐标)。 */
 const DEFAULT_POS = { xf: 0.94, yf: 0.78 }
 
-type ArrowDir = 'up' | 'down' | 'left' | 'right'
+/** 圆环面板尺寸(viewBox 200x200):外半径 / 内半径。 */
+const RING_OUTER_PX = 100
+const RING_INNER_PX = 56
+/** 收起态球半径。 */
+const BALL_RADIUS_PX = 26
+/** 展开态闲置时,光标离球心的距离(务必 > 圆环外半径,显示在圆弧之外)。 */
+const CURSOR_IDLE_DIST_PX = RING_OUTER_PX + 36
+/** 按住左键滑动时,光标相对手指的偏移(上移避免被手指遮挡)。 */
+const CURSOR_FINGER_OFFSET = { dx: -18, dy: -54 }
 
-/**
- * 可模拟按键的最小描述。将来扩展其他按键(如字母 A)时往 KEYS 表加条目即可:
- * 派发逻辑不感知按键语义,只负责把 keydown/keyup 忠实地发给焦点元素。
- */
+type ArrowDir = 'up' | 'down'
+
 interface KeyDef {
-  /** KeyboardEvent.key。 */
   key: string
-  /** legacy keyCode(xterm 等按此生成转义序列;合成事件里走 init + 实例兜底)。 */
   keyCode: number
-  /** 无障碍文案。 */
   aria: string
 }
 
 const ARROWS: Record<ArrowDir, KeyDef> = {
   up: { keyCode: 38, key: 'ArrowUp', aria: '上方向键' },
   down: { keyCode: 40, key: 'ArrowDown', aria: '下方向键' },
-  left: { keyCode: 37, key: 'ArrowLeft', aria: '左方向键' },
-  right: { keyCode: 39, key: 'ArrowRight', aria: '右方向键' },
 }
 
 /** 是否处于移动端视口(与宿主 useResponsiveViewport 同口径:宽度 <= 768)。 */
@@ -94,16 +85,24 @@ function clamp01(v: number): number {
   return clamp(v, 0.02, 0.98)
 }
 
+const SVG_NS = 'http://www.w3.org/2000/svg'
+
+function createSvg(width: number, height: number, viewBox = '0 0 24 24'): SVGSVGElement {
+  const svg = document.createElementNS(SVG_NS, 'svg')
+  svg.setAttribute('viewBox', viewBox)
+  svg.setAttribute('width', String(width))
+  svg.setAttribute('height', String(height))
+  return svg
+}
+
 /** 方向键三角箭头(SVG path,等腰三角形朝指定方向)。 */
-function arrowPath(dir: ArrowDir): string {
+function arrowPath(dir: 'up' | 'down' | 'left' | 'right'): string {
   const cx = 12
   const cy = 12
   const r = 6.5
   const half = Math.PI / 5
-  // 三个顶点:尖端 + 两个底角,按方向旋转
-  const angles: Record<ArrowDir, number> = { up: -90, right: 0, down: 90, left: 180 }
-  const deg = angles[dir]
-  const rad = (deg * Math.PI) / 180
+  const angles = { up: -90, right: 0, down: 90, left: 180 } as const
+  const rad = (angles[dir] * Math.PI) / 180
   const tipX = cx + r * Math.cos(rad)
   const tipY = cy + r * Math.sin(rad)
   const b1X = cx + r * Math.cos(rad + Math.PI - half)
@@ -113,35 +112,85 @@ function arrowPath(dir: ArrowDir): string {
   return `M ${tipX.toFixed(2)} ${tipY.toFixed(2)} L ${b1X.toFixed(2)} ${b1Y.toFixed(2)} L ${b2X.toFixed(2)} ${b2Y.toFixed(2)} Z`
 }
 
-function createArrowIcon(dir: ArrowDir): SVGSVGElement {
-  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
-  svg.setAttribute('viewBox', '0 0 24 24')
-  svg.setAttribute('width', '26')
-  svg.setAttribute('height', '26')
-  svg.classList.add('mk-arrow-icon')
-  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path')
+function createArrowIcon(dir: 'up' | 'down' | 'left' | 'right', size: number): SVGSVGElement {
+  const svg = createSvg(size, size)
+  const path = document.createElementNS(SVG_NS, 'path')
   path.setAttribute('d', arrowPath(dir))
   path.setAttribute('fill', 'currentColor')
   svg.appendChild(path)
   return svg
 }
 
-/** 悬浮球图标:四向十字箭头。 */
-function createBallIcon(): SVGSVGElement {
-  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
-  svg.setAttribute('viewBox', '0 0 24 24')
-  svg.setAttribute('width', '30')
-  svg.setAttribute('height', '30')
-  svg.classList.add('mk-ball-icon')
-  for (const dir of ['up', 'down', 'left', 'right'] as ArrowDir[]) {
-    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path')
-    // 缩小到 0.52 并平移,四个小三角组成十字
-    path.setAttribute('d', arrowPath(dir))
-    path.setAttribute('fill', 'currentColor')
-    path.setAttribute('transform', 'translate(12 12) scale(0.52) translate(-12 -12)')
-    svg.appendChild(path)
+/**
+ * 鼠标外形图标(滚轮中线 + 左右键分割线);side 指定时高亮对应按键半区,
+ * 用于左/右圆弧上的「鼠标左键 / 鼠标右键」图标。
+ */
+function createMouseIcon(size: number, side?: 'left' | 'right'): SVGSVGElement {
+  const svg = createSvg(size, size)
+  const body = document.createElementNS(SVG_NS, 'rect')
+  body.setAttribute('x', '7')
+  body.setAttribute('y', '3')
+  body.setAttribute('width', '10')
+  body.setAttribute('height', '18')
+  body.setAttribute('rx', '5')
+  body.setAttribute('fill', 'none')
+  body.setAttribute('stroke', 'currentColor')
+  body.setAttribute('stroke-width', '1.6')
+  svg.appendChild(body)
+  if (side) {
+    // 高亮按键半区:左键为左上四分之一圆角区,右键镜像
+    const fill = document.createElementNS(SVG_NS, 'path')
+    fill.setAttribute('d', side === 'left'
+      ? 'M12 3 L12 10 L7 10 L7 8 A5 5 0 0 1 12 3 Z'
+      : 'M12 3 A5 5 0 0 1 17 8 L17 10 L12 10 Z')
+    fill.setAttribute('fill', 'currentColor')
+    svg.appendChild(fill)
   }
+  const vline = document.createElementNS(SVG_NS, 'line')
+  vline.setAttribute('x1', '12')
+  vline.setAttribute('y1', '3')
+  vline.setAttribute('x2', '12')
+  vline.setAttribute('y2', '10')
+  vline.setAttribute('stroke', 'currentColor')
+  vline.setAttribute('stroke-width', '1.2')
+  svg.appendChild(vline)
+  const hline = document.createElementNS(SVG_NS, 'line')
+  hline.setAttribute('x1', '7')
+  hline.setAttribute('y1', '10')
+  hline.setAttribute('x2', '17')
+  hline.setAttribute('y2', '10')
+  hline.setAttribute('stroke', 'currentColor')
+  hline.setAttribute('stroke-width', '1.2')
+  svg.appendChild(hline)
   return svg
+}
+
+/** 虚拟光标箭头:经典鼠标指针,尖端位于 (0,0),便于按尖端坐标直接定位。 */
+function createCursorIcon(): SVGSVGElement {
+  const svg = createSvg(22, 22)
+  const path = document.createElementNS(SVG_NS, 'path')
+  path.setAttribute('d', 'M0 0 L0 17 L4.2 13.4 L7 19 L9.2 18 L6.4 12.4 L12 12.4 Z')
+  path.setAttribute('fill', '#ffffff')
+  path.setAttribute('stroke', '#111111')
+  path.setAttribute('stroke-width', '1.1')
+  svg.appendChild(path)
+  return svg
+}
+
+/** 极坐标(角度制,0° = 正上方,顺时针为正) → 直角坐标。 */
+function polar(cx: number, cy: number, r: number, deg: number): [number, number] {
+  const rad = (deg * Math.PI) / 180
+  return [cx + r * Math.sin(rad), cy - r * Math.cos(rad)]
+}
+
+/** 圆环扇区(圆弧段)路径:a0 → a1 顺时针,0° = 正上方。 */
+function arcSectorPath(cx: number, cy: number, rOuter: number, rInner: number, a0: number, a1: number): string {
+  const [x0, y0] = polar(cx, cy, rOuter, a0)
+  const [x1, y1] = polar(cx, cy, rOuter, a1)
+  const [x2, y2] = polar(cx, cy, rInner, a1)
+  const [x3, y3] = polar(cx, cy, rInner, a0)
+  const large = a1 - a0 > 180 ? 1 : 0
+  return `M ${x0.toFixed(2)} ${y0.toFixed(2)} A ${rOuter} ${rOuter} 0 ${large} 1 ${x1.toFixed(2)} ${y1.toFixed(2)} L ${x2.toFixed(2)} ${y2.toFixed(2)} A ${rInner} ${rInner} 0 ${large} 0 ${x3.toFixed(2)} ${y3.toFixed(2)} Z`
 }
 
 export function createMobileKeypad(options: MobileKeypadOptions): MobileKeypadController {
@@ -151,89 +200,69 @@ export function createMobileKeypad(options: MobileKeypadOptions): MobileKeypadCo
   const root = document.createElement('div')
   root.className = 'mk-root mk-hidden'
 
+  // 虚拟光标箭头(展开态显示在圆环之外;pointer-events:none 不参与命中)
+  const cursor = document.createElement('div')
+  cursor.className = 'mk-cursor mk-hidden'
+  cursor.appendChild(createCursorIcon())
+  root.appendChild(cursor)
+
+  // 收起态悬浮球(鼠标图标)
   const ball = document.createElement('div')
   ball.className = 'mk-ball'
   ball.setAttribute('role', 'button')
   ball.setAttribute('tabindex', '-1')
-  ball.setAttribute('aria-label', '键盘增强:展开方向键')
-  ball.appendChild(createBallIcon())
+  ball.setAttribute('aria-label', '虚拟鼠标:展开')
+  ball.appendChild(createMouseIcon(30))
   root.appendChild(ball)
 
+  // 展开态圆环面板
   const panel = document.createElement('div')
   panel.className = 'mk-panel mk-hidden'
   panel.setAttribute('role', 'group')
-  panel.setAttribute('aria-label', '方向键小键盘')
+  panel.setAttribute('aria-label', '虚拟鼠标与方向键')
 
-  const grid: Array<[number, number, 'up' | 'down' | 'left' | 'right' | 'collapse' | 'blank']> = [
-    [0, 0, 'blank'], [1, 0, 'up'], [2, 0, 'blank'],
-    [0, 1, 'blank'], [1, 1, 'collapse'], [2, 1, 'blank'],
-    [0, 2, 'blank'], [1, 2, 'down'], [2, 2, 'blank'],
-    // left/right 独立定位在 3x3 网格中行两端之外,用 grid-area 另行放置
-  ]
-  for (const [col, row, kind] of grid) {
-    if (kind === 'blank') {
-      const cell = document.createElement('div')
-      cell.className = 'mk-cell mk-blank'
-      cell.style.gridArea = `${row + 1} / ${col + 1}`
-      panel.appendChild(cell)
-      continue
-    }
-    if (kind === 'collapse') {
-      const btn = document.createElement('div')
-      btn.className = 'mk-key mk-collapse'
-      btn.setAttribute('role', 'button')
-      btn.setAttribute('aria-label', '收起键盘')
-      btn.style.gridArea = `${row + 1} / ${col + 1}`
-      const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
-      svg.setAttribute('viewBox', '0 0 24 24')
-      svg.setAttribute('width', '22')
-      svg.setAttribute('height', '22')
-      const path = document.createElementNS('http://www.w3.org/2000/svg', 'path')
-      path.setAttribute('d', arrowPath('down'))
-      path.setAttribute('fill', 'currentColor')
-      path.setAttribute('transform', 'translate(12 12) scale(0.8) translate(-12 -12)')
-      svg.appendChild(path)
-      btn.appendChild(svg)
-      btn.addEventListener('pointerdown', (e) => {
-        e.stopPropagation()
-        e.preventDefault()
-        btn.setPointerCapture(e.pointerId)
-        setPressedVisual(btn, true)
-      })
-      btn.addEventListener('pointerup', () => {
-        setPressedVisual(btn, false)
-        collapse()
-      })
-      btn.addEventListener('pointercancel', () => setPressedVisual(btn, false))
-      panel.appendChild(btn)
-      continue
-    }
-    // 方向键(上/下)
-    panel.appendChild(createArrowKey(kind, `${row + 1} / ${col + 1}`))
-  }
-  // 左右键固定在中行两端
-  panel.appendChild(createArrowKey('left', '2 / 1'))
-  panel.appendChild(createArrowKey('right', '2 / 3'))
+  const ring = createSvg(200, 200, '0 0 200 200')
+  ring.classList.add('mk-ring')
 
-  function createArrowKey(dir: ArrowDir, gridArea: string): HTMLDivElement {
-    const btn = document.createElement('div')
-    btn.className = 'mk-key'
-    btn.setAttribute('role', 'button')
-    btn.setAttribute('tabindex', '-1')
-    btn.setAttribute('aria-label', ARROWS[dir].aria)
-    btn.style.gridArea = gridArea
-    btn.appendChild(createArrowIcon(dir))
-    btn.addEventListener('pointerdown', (e) => {
-      e.stopPropagation()
-      // 阻止焦点转移:终端 textarea 保持聚焦,软键盘不因按键而收起
-      e.preventDefault()
-      btn.setPointerCapture(e.pointerId)
-      pressArrow(dir, btn)
-    })
-    btn.addEventListener('pointerup', () => releaseArrow(btn))
-    btn.addEventListener('pointercancel', () => releaseArrow(btn))
-    return btn
+  /** 在圆环上创建一段圆弧按钮,返回 path 元素。 */
+  function createArc(a0: number, a1: number, aria: string): SVGPathElement {
+    const path = document.createElementNS(SVG_NS, 'path')
+    path.setAttribute('d', arcSectorPath(100, 100, RING_OUTER_PX - 2, RING_INNER_PX, a0, a1))
+    path.setAttribute('class', 'mk-arc')
+    path.setAttribute('role', 'button')
+    path.setAttribute('aria-label', aria)
+    ring.appendChild(path)
+    return path
   }
+
+  /** 在圆环某方位放置不可交互的图标(半径取环带中线)。 */
+  function placeRingIcon(icon: SVGSVGElement, deg: number): void {
+    const [x, y] = polar(100, 100, (RING_OUTER_PX + RING_INNER_PX) / 2 - 1, deg)
+    const size = Number(icon.getAttribute('width') ?? 22)
+    icon.setAttribute('x', (x - size / 2).toFixed(2))
+    icon.setAttribute('y', (y - size / 2).toFixed(2))
+    icon.classList.add('mk-arc-icon')
+    ring.appendChild(icon)
+  }
+
+  const arcUp = createArc(-42, 42, ARROWS.up.aria)
+  const arcRight = createArc(48, 132, '鼠标右键')
+  const arcDown = createArc(138, 222, ARROWS.down.aria)
+  const arcLeft = createArc(228, 312, '鼠标左键')
+  placeRingIcon(createArrowIcon('up', 22), 0)
+  placeRingIcon(createMouseIcon(22, 'right'), 90)
+  placeRingIcon(createArrowIcon('down', 22), 180)
+  placeRingIcon(createMouseIcon(22, 'left'), 270)
+  panel.appendChild(ring)
+
+  // 中心鼠标图标:点击收起;拖动移动整个悬浮球(光标随动)
+  const center = document.createElement('div')
+  center.className = 'mk-center'
+  center.setAttribute('role', 'button')
+  center.setAttribute('tabindex', '-1')
+  center.setAttribute('aria-label', '拖动移动鼠标位置,点击收起')
+  center.appendChild(createMouseIcon(28))
+  panel.appendChild(center)
 
   root.appendChild(panel)
   document.body.appendChild(root)
@@ -241,18 +270,54 @@ export function createMobileKeypad(options: MobileKeypadOptions): MobileKeypadCo
   // ── 状态 ─────────────────────────────────────────────────────────────────
   let shown = false
   let expanded = false
-  let dragging = false
+  let destroyed = false
+  // 悬浮球(收起态/中心图标)拖动
   let pointerDown = false
+  let dragging = false
   let downX = 0
   let downY = 0
+  // 球心(展开态 = 面板中心)视口坐标
   let ballX = 0
   let ballY = 0
+  // 虚拟光标尖端视口坐标
+  let cursorX = 0
+  let cursorY = 0
+  // 左键按住状态
+  let leftHeld = false
+  let lastFingerX = 0
+  let lastFingerY = 0
   let rafId: number | null = null
   let repeatTimer: ReturnType<typeof setInterval> | null = null
   let longpressTimer: ReturnType<typeof setTimeout> | null = null
-  let destroyed = false
 
-  // ── 按键派发 ─────────────────────────────────────────────────────────────
+  // ── 合成事件派发 ──────────────────────────────────────────────────────────
+  /**
+   * 在指定视口坐标合成鼠标事件:命中元素 = elementFromPoint(光标尖端),
+   * 事件 bubbles 到 document——宿主 React onMouseDown 与 document 级
+   * mousemove/mouseup 监听(文件树拖动会话)由此被驱动。
+   */
+  function dispatchMouseAt(
+    type: 'mousedown' | 'mousemove' | 'mouseup' | 'contextmenu',
+    x: number,
+    y: number,
+    init: { button: number; buttons: number },
+  ): void {
+    const hit = document.elementFromPoint(x, y)
+    const target: EventTarget = hit ?? document.body
+    target.dispatchEvent(new MouseEvent(type, {
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+      view: window,
+      clientX: x,
+      clientY: y,
+      screenX: x,
+      screenY: y,
+      button: init.button,
+      buttons: init.buttons,
+    }))
+  }
+
   /**
    * 把一次按键(keydown + keyup)如实派发给当前焦点元素,不管那是什么组件、
    * 有没有焦点——无焦点时落到 document.body,事件沿冒泡路径走一圈,没人
@@ -271,7 +336,6 @@ export function createMobileKeypad(options: MobileKeypadOptions): MobileKeypadCo
     init.keyCode = def.keyCode
     init.which = def.keyCode
     const down = new KeyboardEvent('keydown', init)
-    // 兜底:个别引擎忽略 init 里的 legacy keyCode 时,用实例属性遮蔽原型 getter
     if (down.keyCode !== def.keyCode) {
       Object.defineProperty(down, 'keyCode', { get: () => def.keyCode })
     }
@@ -292,22 +356,22 @@ export function createMobileKeypad(options: MobileKeypadOptions): MobileKeypadCo
     }
   }
 
-  function setPressedVisual(btn: HTMLElement, pressed: boolean): void {
-    btn.classList.toggle('mk-pressed', pressed)
+  function setPressedVisual(el: Element, pressed: boolean): void {
+    el.classList.toggle('mk-pressed', pressed)
   }
 
   /** 单击立即发一次;按住不放(350ms 后)以 110ms 间隔连发。 */
-  function pressArrow(dir: ArrowDir, btn: HTMLDivElement): void {
-    setPressedVisual(btn, true)
-    dispatchKey(ARROWS[dir])
+  function pressArrow(def: KeyDef, el: Element): void {
+    setPressedVisual(el, true)
+    dispatchKey(def)
     stopRepeat()
     longpressTimer = setTimeout(() => {
-      repeatTimer = setInterval(() => dispatchKey(ARROWS[dir]), REPEAT_INTERVAL_MS)
+      repeatTimer = setInterval(() => dispatchKey(def), REPEAT_INTERVAL_MS)
     }, LONGPRESS_DELAY_MS)
   }
 
-  function releaseArrow(btn: HTMLDivElement): void {
-    setPressedVisual(btn, false)
+  function releaseArrow(el: Element): void {
+    setPressedVisual(el, false)
     stopRepeat()
   }
 
@@ -322,23 +386,30 @@ export function createMobileKeypad(options: MobileKeypadOptions): MobileKeypadCo
     }
   }
 
-  // ── 悬浮球位置与拖动 ─────────────────────────────────────────────────────
+  // ── 定位 ─────────────────────────────────────────────────────────────────
+  /** 球与面板共用同一中心点坐标(left/top = 中心,CSS translate(-50%,-50%))。 */
   function placeBall(x: number, y: number): void {
     ballX = x
     ballY = y
     ball.style.left = `${x}px`
     ball.style.top = `${y}px`
+    panel.style.left = `${x}px`
+    panel.style.top = `${y}px`
   }
 
-  function placePanelCenteredAt(x: number, y: number): void {
-    const halfW = panel.offsetWidth / 2
-    const halfH = panel.offsetHeight / 2
-    const vw = window.innerWidth
-    const vh = window.innerHeight
-    const px = clamp(x, halfW + EDGE_MARGIN_PX, Math.max(halfW + EDGE_MARGIN_PX, vw - halfW - EDGE_MARGIN_PX))
-    const py = clamp(y, halfH + EDGE_MARGIN_PX, Math.max(halfH + EDGE_MARGIN_PX, vh - halfH - EDGE_MARGIN_PX))
-    panel.style.left = `${px}px`
-    panel.style.top = `${py}px`
+  /** 光标按尖端坐标定位(箭头 SVG 尖端在 (0,0),无需额外平移)。 */
+  function placeCursor(x: number, y: number): void {
+    cursorX = clamp(x, 2, window.innerWidth - 2)
+    cursorY = clamp(y, 2, window.innerHeight - 2)
+    cursor.style.left = `${cursorX}px`
+    cursor.style.top = `${cursorY}px`
+  }
+
+  /** 闲置光标位置:圆环之外斜上方;球在左半屏时放右上,右半屏放左上,避免被钳回环上。 */
+  function resetCursorToIdle(): void {
+    const d = CURSOR_IDLE_DIST_PX / Math.SQRT2
+    const dx = ballX < window.innerWidth / 2 ? d : -d
+    placeCursor(ballX + dx, ballY - d)
   }
 
   function restorePosition(): void {
@@ -355,11 +426,11 @@ export function createMobileKeypad(options: MobileKeypadOptions): MobileKeypadCo
     })
   }
 
-  /** 松手后吸附到较近的左右屏幕边缘。 */
+  /** 松手后吸附到较近的左右屏幕边缘(收起态)。 */
   function snapToEdge(): void {
     const vw = window.innerWidth
     const vh = window.innerHeight
-    const margin = EDGE_MARGIN_PX + ball.offsetWidth / 2
+    const margin = EDGE_MARGIN_PX + BALL_RADIUS_PX
     const targetX = ballX < vw / 2 ? margin : vw - margin
     ball.classList.add('mk-snapping')
     placeBall(targetX, clamp(ballY, margin, vh - margin))
@@ -367,6 +438,7 @@ export function createMobileKeypad(options: MobileKeypadOptions): MobileKeypadCo
     savePosition()
   }
 
+  // ── 收起态悬浮球:拖动定位 / 点击展开 ─────────────────────────────────────
   ball.addEventListener('pointerdown', (e) => {
     if (!shown) return
     e.preventDefault()
@@ -386,7 +458,7 @@ export function createMobileKeypad(options: MobileKeypadOptions): MobileKeypadCo
       ball.classList.add('mk-dragging')
     }
     if (dragging) {
-      const margin = EDGE_MARGIN_PX + ball.offsetWidth / 2
+      const margin = EDGE_MARGIN_PX + BALL_RADIUS_PX
       placeBall(
         clamp(e.clientX, margin, Math.max(margin, window.innerWidth - margin)),
         clamp(e.clientY, margin, Math.max(margin, window.innerHeight - margin)),
@@ -402,9 +474,7 @@ export function createMobileKeypad(options: MobileKeypadOptions): MobileKeypadCo
       dragging = false
       snapToEdge()
     } else {
-      // 位移未超阈值:视为点击,展开/收起面板
-      if (expanded) collapse()
-      else expand()
+      expand()
     }
   })
 
@@ -414,26 +484,142 @@ export function createMobileKeypad(options: MobileKeypadOptions): MobileKeypadCo
     ball.classList.remove('mk-dragging')
   })
 
+  // ── 中心鼠标图标:拖动移动光标 / 点击收起 ─────────────────────────────────
+  center.addEventListener('pointerdown', (e) => {
+    e.preventDefault()
+    e.stopPropagation()
+    pointerDown = true
+    dragging = false
+    downX = e.clientX
+    downY = e.clientY
+    center.setPointerCapture(e.pointerId)
+  })
+
+  center.addEventListener('pointermove', (e) => {
+    if (!pointerDown) return
+    const dx = e.clientX - downX
+    const dy = e.clientY - downY
+    if (!dragging && Math.hypot(dx, dy) > DRAG_THRESHOLD_PX) {
+      dragging = true
+      center.classList.add('mk-dragging')
+    }
+    if (dragging) {
+      // 展开态钳制:整个圆环保持在视口内
+      const margin = EDGE_MARGIN_PX + RING_OUTER_PX
+      placeBall(
+        clamp(e.clientX, margin, Math.max(margin, window.innerWidth - margin)),
+        clamp(e.clientY, margin, Math.max(margin, window.innerHeight - margin)),
+      )
+      resetCursorToIdle()
+      // 纯移动鼠标位置:buttons=0,不触发选中/框选
+      dispatchMouseAt('mousemove', cursorX, cursorY, { button: 0, buttons: 0 })
+    }
+  })
+
+  center.addEventListener('pointerup', () => {
+    if (!pointerDown) return
+    pointerDown = false
+    center.classList.remove('mk-dragging')
+    if (dragging) {
+      dragging = false
+      savePosition()
+    } else {
+      collapse()
+    }
+  })
+
+  center.addEventListener('pointercancel', () => {
+    pointerDown = false
+    dragging = false
+    center.classList.remove('mk-dragging')
+  })
+
+  // ── 圆弧按键 ─────────────────────────────────────────────────────────────
+  function bindArrowArc(arc: SVGPathElement, def: KeyDef): void {
+    arc.addEventListener('pointerdown', (e) => {
+      e.stopPropagation()
+      e.preventDefault()
+      arc.setPointerCapture(e.pointerId)
+      pressArrow(def, arc)
+    })
+    arc.addEventListener('pointerup', () => releaseArrow(arc))
+    arc.addEventListener('pointercancel', () => releaseArrow(arc))
+  }
+  bindArrowArc(arcUp, ARROWS.up)
+  bindArrowArc(arcDown, ARROWS.down)
+
+  // 左圆弧 = 鼠标左键:按住后手指直接滑动即「按住左键拖动」
+  arcLeft.addEventListener('pointerdown', (e) => {
+    e.stopPropagation()
+    e.preventDefault()
+    arcLeft.setPointerCapture(e.pointerId)
+    leftHeld = true
+    lastFingerX = e.clientX
+    lastFingerY = e.clientY
+    setPressedVisual(arcLeft, true)
+    dispatchMouseAt('mousedown', cursorX, cursorY, { button: 0, buttons: 1 })
+  })
+  arcLeft.addEventListener('pointermove', (e) => {
+    if (!leftHeld) return
+    lastFingerX = e.clientX
+    lastFingerY = e.clientY
+    // 光标跟随手指(向上偏移避免被手指遮挡),持续合成 mousemove(buttons=1)
+    placeCursor(e.clientX + CURSOR_FINGER_OFFSET.dx, e.clientY + CURSOR_FINGER_OFFSET.dy)
+    dispatchMouseAt('mousemove', cursorX, cursorY, { button: 0, buttons: 1 })
+  })
+  const releaseLeft = () => {
+    if (!leftHeld) return
+    leftHeld = false
+    setPressedVisual(arcLeft, false)
+    dispatchMouseAt('mouseup', cursorX, cursorY, { button: 0, buttons: 0 })
+    // 松手后光标回到圆环外的闲置位
+    resetCursorToIdle()
+  }
+  arcLeft.addEventListener('pointerup', releaseLeft)
+  arcLeft.addEventListener('pointercancel', releaseLeft)
+
+  // 右圆弧 = 鼠标右键:点击在光标位置合成 contextmenu
+  arcRight.addEventListener('pointerdown', (e) => {
+    e.stopPropagation()
+    e.preventDefault()
+    arcRight.setPointerCapture(e.pointerId)
+    setPressedVisual(arcRight, true)
+  })
+  arcRight.addEventListener('pointerup', () => {
+    setPressedVisual(arcRight, false)
+    dispatchMouseAt('contextmenu', cursorX, cursorY, { button: 2, buttons: 2 })
+  })
+  arcRight.addEventListener('pointercancel', () => setPressedVisual(arcRight, false))
+
   // ── 展开/收起 ────────────────────────────────────────────────────────────
   function expand(): void {
     expanded = true
     stopRepeat()
-    // 先移除 display:none,offsetWidth 同步可读,再以球心为面板中心定位
+    // 展开态钳制:从收起态边缘位置展开时,把整个圆环拉回视口内
+    const margin = EDGE_MARGIN_PX + RING_OUTER_PX
+    placeBall(
+      clamp(ballX, margin, Math.max(margin, window.innerWidth - margin)),
+      clamp(ballY, margin, Math.max(margin, window.innerHeight - margin)),
+    )
+    ball.classList.add('mk-hidden')
     panel.classList.remove('mk-hidden')
-    placePanelCenteredAt(ballX, ballY)
+    cursor.classList.remove('mk-hidden')
+    resetCursorToIdle()
   }
 
   function collapse(): void {
     expanded = false
     stopRepeat()
     panel.classList.add('mk-hidden')
+    cursor.classList.add('mk-hidden')
+    ball.classList.remove('mk-hidden')
   }
 
   // ── 显隐刷新 ─────────────────────────────────────────────────────────────
   function refresh(): void {
     if (destroyed) return
-    // 是否终端界面由宿主 API 的标签类型判定(tabType === 'terminal'),不扫 DOM
-    const shouldShow = isMobileViewport() && options.getActiveTabType() === 'terminal'
+    // 全局常显:移动端视口即显示,不再限定标签类型
+    const shouldShow = isMobileViewport()
     if (shouldShow === shown) return
     shown = shouldShow
     root.classList.toggle('mk-hidden', !shouldShow)
@@ -450,19 +636,24 @@ export function createMobileKeypad(options: MobileKeypadOptions): MobileKeypadCo
 
   window.addEventListener('resize', handleViewportChange, { passive: true })
   window.visualViewport?.addEventListener('resize', handleViewportChange)
-  const tabActivatedDisposable = options.subscribeTabActivated(() => scheduleRefresh())
-  const tabClosedDisposable = options.subscribeTabClosed(() => scheduleRefresh())
 
   /** 视口尺寸变化(旋转/软键盘弹出收起):刷新显隐,并把越界的球拉回可视区。 */
   function handleViewportChange(): void {
     scheduleRefresh()
     if (!shown || destroyed) return
-    const margin = EDGE_MARGIN_PX + ball.offsetWidth / 2
+    const margin = EDGE_MARGIN_PX + (expanded ? RING_OUTER_PX : BALL_RADIUS_PX)
     const vw = window.innerWidth
     const vh = window.innerHeight
     const outOfBounds =
       ballX < margin || ballX > vw - margin || ballY < margin || ballY > vh - margin
-    if (outOfBounds) snapToEdge()
+    if (outOfBounds) {
+      if (expanded) {
+        placeBall(clamp(ballX, margin, vw - margin), clamp(ballY, margin, vh - margin))
+        resetCursorToIdle()
+      } else {
+        snapToEdge()
+      }
+    }
   }
 
   restorePosition()
@@ -479,8 +670,6 @@ export function createMobileKeypad(options: MobileKeypadOptions): MobileKeypadCo
       }
       window.removeEventListener('resize', handleViewportChange)
       window.visualViewport?.removeEventListener('resize', handleViewportChange)
-      tabActivatedDisposable.dispose()
-      tabClosedDisposable.dispose()
       root.remove()
     },
   }
