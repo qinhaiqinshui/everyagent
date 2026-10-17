@@ -24,10 +24,6 @@ const MENU_WIDTH_ESTIMATE = 200
 
 /** 拖动框选(橡皮筋)触发的最小位移(px):超过此距离视为拖动而非单击。 */
 const RUBBER_BAND_THRESHOLD = 5
-/** 移动端长按激活拖动的等待时长(ms):与行内长按右键菜单(500ms)同窗口,长按弹菜单后继续滑动才转拖动。 */
-const TOUCH_LONG_PRESS_MS = 500
-/** 移动端长按后判定「开始拖动」的位移阈值(px):与 useLongPress 的取消阈值对齐。 */
-const TOUCH_DRAG_TOLERANCE = 10
 
 export default function WorkspaceExplorerTree({
   workspaceRoot,
@@ -379,67 +375,6 @@ export default function WorkspaceExplorerTree({
     document.addEventListener('keydown', handleKeyDown, true)
   }, [createMoveDragSession, createRubberBandSession, onMultiSelectChange, onMoveToDirectory, selectedPaths])
 
-  /**
-   * 移动端:长按(与行内右键菜单同 500ms 窗口)后继续滑动 → 关菜单转拖动;
-   * 起点已选中节点 → 移动,否则(未选中/空白)→ 框选。长按未就绪前的滑动交给原生滚动。
-   */
-  const handleContainerTouchStart = React.useCallback((e: React.TouchEvent) => {
-    if (!onMultiSelectChange) return
-    if (e.touches.length !== 1) return
-    const container = containerRef.current
-    if (!container) return
-    const touch = e.touches[0]
-    const startX = touch.clientX
-    const startY = touch.clientY
-    const target = touch.target as HTMLElement
-    if (target.closest('.ant-tree-switcher')) return
-
-    const startPath = target.closest('[data-key]')?.getAttribute('data-key') ?? null
-    const useMove = !!startPath && !!selectedPaths?.has(startPath) && !!onMoveToDirectory
-
-    let ready = false
-    let started = false
-    let session: { update: (x: number, y: number) => boolean; finish: () => void } | null = null
-
-    const readyTimer = window.setTimeout(() => { ready = true }, TOUCH_LONG_PRESS_MS)
-
-    const cleanup = () => {
-      window.clearTimeout(readyTimer)
-      document.removeEventListener('touchmove', handleTouchMove)
-      document.removeEventListener('touchend', handleTouchEnd)
-      document.removeEventListener('touchcancel', handleTouchCancel)
-    }
-    function handleTouchMove(ev: TouchEvent) {
-      const t = ev.touches[0]
-      if (!t) return
-      if (!ready) return // 长按未就绪:交给原生滚动与行内长按菜单
-      if (!started) {
-        if (Math.abs(t.clientX - startX) <= TOUCH_DRAG_TOLERANCE && Math.abs(t.clientY - startY) <= TOUCH_DRAG_TOLERANCE) return
-        started = true
-        // 长按可能已弹出行内右键菜单:转拖动前关闭,避免菜单遮挡落点命中与视觉冲突
-        setOpenMenuPath(null)
-        session = useMove
-          ? createMoveDragSession(startX, startY, true)
-          : createRubberBandSession(startX, startY)
-      }
-      // 拖动期间禁止页面滚动
-      ev.preventDefault()
-      session?.update(t.clientX, t.clientY)
-    }
-    function handleTouchEnd() {
-      cleanup()
-      session?.finish()
-    }
-    function handleTouchCancel() {
-      cleanup()
-      session?.finish()
-    }
-
-    document.addEventListener('touchmove', handleTouchMove, { passive: false })
-    document.addEventListener('touchend', handleTouchEnd)
-    document.addEventListener('touchcancel', handleTouchCancel)
-  }, [createMoveDragSession, createRubberBandSession, onMultiSelectChange, onMoveToDirectory, selectedPaths])
-
   if (nodes.length === 0) {
     return (
       <div style={{ padding: token.paddingSM, color: token.colorTextDisabled, fontSize: token.fontSizeSM }}>
@@ -512,11 +447,8 @@ export default function WorkspaceExplorerTree({
         // 框选拖动期间禁止浏览器文字选中:空白处按下拖动只产生橡皮筋选区,不产生文字选区。
         userSelect: 'none',
         WebkitUserSelect: 'none',
-        // iOS Safari:长按不弹系统「拷贝/全选」呼出菜单(移动端长按拖动需抑制系统选词)。
-        WebkitTouchCallout: 'none',
       }}
       onMouseDown={handleContainerMouseDown}
-      onTouchStart={handleContainerTouchStart}
       onClickCapture={(e) => {
         // 框选结束后抑制 click 事件,防止误触发单选
         if (suppressNextClickRef.current) {
