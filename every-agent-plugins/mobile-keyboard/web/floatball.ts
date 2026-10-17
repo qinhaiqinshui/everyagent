@@ -59,6 +59,12 @@ const RING_INNER_PX = 16
 const BALL_RADIUS_PX = 22
 /** 展开态闲置时,光标离球心的距离(务必 > 圆环外半径,显示在圆弧之外)。 */
 const CURSOR_IDLE_DIST_PX = RING_OUTER_PX + 26
+/**
+ * 光标闲置位左右侧切换的滞回带(px):球距右缘 < ON 阈值时光标翻到右侧,
+ * 翻回左侧需球继续左移超出 ON 阈值 + 本滞回带——单一阈值会在切换点附近
+ * 随手指微动来回翻转,导致该区域内容无法被稳定指向。
+ */
+const CURSOR_SIDE_HYSTERESIS_PX = 72
 /** 按住左键滑动时,光标相对手指的偏移(上移避免被手指与悬浮球遮挡)。 */
 const CURSOR_FINGER_OFFSET = { dx: -16, dy: -66 }
 
@@ -490,12 +496,25 @@ export function createMobileKeypad(options: MobileKeypadOptions): MobileKeypadCo
     cursor.style.top = `${cursorY}px`
   }
 
-  /** 闲置光标位置:圆环之外左上方;仅当球贴近右屏(右侧内容带需要光标翻到
-   * 右侧才能点到,球停在内容左侧)时翻到右上方,其余位置恒在左侧不横跳。 */
+  /** 光标闲置位当前在右侧(true)/左侧(false):滞回状态,跨展开/收起保持。 */
+  let cursorOnRight = false
+
+  /**
+   * 闲置光标位置:圆环之外左上方;球贴近右屏时光标翻到右上方(指向右侧内容带)。
+   * 左右切换带滞回:翻到右侧的进入阈值小于翻回左侧的退出阈值,阈值附近往返
+   * 移动不来回翻转——箭头在右侧时需球向左移出滞回带才转回左侧。
+   */
   function resetCursorToIdle(): void {
     const d = CURSOR_IDLE_DIST_PX / Math.SQRT2
-    const nearRightEdge = window.innerWidth - ballX < CURSOR_IDLE_DIST_PX + RING_OUTER_PX
-    const dx = nearRightEdge ? d : -d
+    const distFromRight = window.innerWidth - ballX
+    if (cursorOnRight) {
+      if (distFromRight > CURSOR_IDLE_DIST_PX + RING_OUTER_PX + CURSOR_SIDE_HYSTERESIS_PX) {
+        cursorOnRight = false
+      }
+    } else if (distFromRight < CURSOR_IDLE_DIST_PX + RING_OUTER_PX) {
+      cursorOnRight = true
+    }
+    const dx = cursorOnRight ? d : -d
     placeCursor(ballX + dx, ballY - d)
   }
 
