@@ -118,6 +118,11 @@ export function getRoundChanges(taskId: string, roundId: string): RoundFileChang
   return entries.get(taskId)?.byRound.get(roundId)
 }
 
+/** 该任务的摘要缓存是否已成功拉取过一次（供组件检测「缓存已加载但本 roundId 缺席」的过期场景）。 */
+export function isRoundChangesLoaded(taskId: string): boolean {
+  return entries.get(taskId)?.loaded === true
+}
+
 /**
  * 作废某任务缓存（宿主 `task-round-closed` 领域事件 / 任务删除时调用）。
  * 只作废不重拉:重拉由组件在下一次渲染的 effect 里 ensure。

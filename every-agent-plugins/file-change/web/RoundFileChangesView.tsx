@@ -1,4 +1,4 @@
-import { useEffect, useState, useSyncExternalStore } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { RoundTailPanelProps } from '@everyagent/plugin-api'
 import { CaretDownOutlined, CaretRightOutlined } from '@ant-design/icons'
 import { getPluginContext } from './pluginRuntime'
@@ -7,6 +7,8 @@ import {
   ensureRoundChanges,
   getRoundChanges,
   getRoundChangesVersion,
+  invalidateRoundChanges,
+  isRoundChangesLoaded,
   loadRoundFullChanges,
   subscribeRoundChanges,
   type RoundFileChangeSummary,
@@ -75,9 +77,26 @@ export default function RoundFileChangesView({
   // version 同时进 effect 依赖:作废发生后条目已被删,靠下一次 effect 触发重拉(已加载/在途时
   // ensure 幂等直返,不会成环)。
   const cacheVersion = useSyncExternalStore(subscribeRoundChanges, getRoundChangesVersion, getRoundChangesVersion)
+
+  // 过期缓存自愈(roundId 粒度):本组件挂载时若缓存已加载但本 roundId 缺席,说明缓存是
+  // 该轮闭合前的旧快照(round.closed → invalidate 与 refreshRounds 完成之间可能错过
+  // 作废时机,agent.status(done) 触发的 refreshRounds 会先让本组件以旧缓存挂载)。
+  // 主动作废一次强制重拉;refetchedRef 按 roundId 记录已自愈过的轮,防止
+  // 「本轮确实无变更 → 作废 → 重拉 → 仍无 → 再作废」的自旋。
+  const refetchedRef = useRef<string | null>(null)
+
   useEffect(() => {
+    if (
+      roundId &&
+      refetchedRef.current !== roundId &&
+      isRoundChangesLoaded(taskId) &&
+      getRoundChanges(taskId, roundId) === undefined
+    ) {
+      refetchedRef.current = roundId
+      invalidateRoundChanges(taskId)
+    }
     ensureRoundChanges(taskId, workerId)
-  }, [taskId, workerId, cacheVersion])
+  }, [taskId, workerId, roundId, cacheVersion])
 
   const changes = getRoundChanges(taskId, roundId) ?? []
 
