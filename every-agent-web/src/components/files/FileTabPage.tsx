@@ -25,7 +25,7 @@ import {
   joinWorkspaceDiskPath,
 } from './filePropertyUtils'
 import { pluginDispatcher } from '@/plugin/PluginDispatcher'
-import { MenuList, type MenuListItem } from '@/components/shared/ui/Menu'
+import { MenuList, type MenuListAnchorPointMode, type MenuListItem } from '@/components/shared/ui/Menu'
 import { readEditorSelection } from './editorSelection'
 import type { EditorActionContext, UiEditorContextMenuActionDefinition } from '@everyagent/plugin-api'
 import type { UiFileSidebarPanelDefinition } from '@/plugin/types'
@@ -96,10 +96,15 @@ export default function FileTabPage({
   const canRenameFile = Boolean(file && openMode === 'readwrite' && !isReadonlyEditor)
   const editorContainerRef = React.useRef<HTMLDivElement | null>(null)
 
-  /** 编辑器内容区右键菜单浮层状态（null = 关闭）。菜单项在每次右键时点同步构建。 */
+  /**
+   * 编辑器内容区动作菜单浮层状态（null = 关闭）。菜单项在每次触发时点同步构建，
+   * 选区快照随构建闭包捕获（此后即使系统清空 DOM 选区，已捕获项的 invoke 不受影响）。
+   * 桌面右键（top-start，左上角对齐鼠标点）与触屏选区触发（center，选区下缘居中）共用。
+   */
   const [editorContextMenu, setEditorContextMenu] = React.useState<{
     items: MenuListItem[]
     anchorPoint: { x: number; y: number }
+    anchorPointMode: MenuListAnchorPointMode
     anchor: HTMLElement
   } | null>(null)
 
@@ -400,14 +405,15 @@ export default function FileTabPage({
   }, [file, isReadonlyEditor, openMode, setGlobalFileTabMode])
 
   /**
-   * 编辑器内容区右键处理器：仅当「选中内容非空 且 过滤后至少有一项可见」时
-   * 接管（preventDefault 并弹宿主统一菜单），否则完全放行浏览器原生右键菜单（零回归）。
+   * 采集并构建「编辑器内容区动作菜单」：时点同步读取选区快照与插件注册项
+   * （插件 activate() 晚于首屏，不能提前缓存快照），按 isVisible 过滤；
+   * 无选中内容或过滤后无可见项时返回 null（调用方放行浏览器原生菜单）。
+   * 桌面右键与移动端选区触发共用本采集逻辑，两端菜单内容一致；菜单项在
+   * 构建时闭包捕获 ctx（含选区快照），后续 DOM 选区变化不影响已构建项。
    */
-  const handleEditorContextMenu = React.useCallback((event: React.MouseEvent<HTMLDivElement>) => {
-    if (!file) return
+  const collectEditorActionMenu = React.useCallback((): MenuListItem[] | null => {
     const anchor = editorContainerRef.current
-    if (!anchor) return
-    // 事件时点同步读取：插件 activate() 晚于首屏，不能提前缓存快照。
+    if (!anchor || !file) return null
     const actions = pluginDispatcher.listRegisteredEditorContextMenuActions()
 
     const ctx: EditorActionContext = {
@@ -424,8 +430,8 @@ export default function FileTabPage({
       anchor,
     }
 
-    // 选中内容为空 → 放行原生菜单。
-    if (ctx.selection.text.length === 0) return
+    // 选中内容为空 → 无菜单。
+    if (ctx.selection.text.length === 0) return null
 
     const visibleActions = actions.filter((action) => {
       if (!action.isVisible) return true
@@ -436,16 +442,72 @@ export default function FileTabPage({
         return false
       }
     })
-    // 过滤后无可见项 → 放行原生菜单。
-    if (visibleActions.length === 0) return
+    // 过滤后无可见项 → 无菜单。
+    if (visibleActions.length === 0) return null
+    return buildEditorContextMenuItems(visibleActions, ctx)
+  }, [content, draftContent, file, openMode, selectedEditorDescriptor])
 
+  /**
+   * 编辑器内容区右键处理器（桌面端）：仅当「选中内容非空 且 过滤后至少有一项可见」时
+   * 接管（preventDefault 并弹宿主统一菜单），否则完全放行浏览器原生右键菜单（零回归）。
+   */
+  const handleEditorContextMenu = React.useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+    const anchor = editorContainerRef.current
+    if (!anchor) return
+    const items = collectEditorActionMenu()
+    if (!items) return
     event.preventDefault()
     setEditorContextMenu({
-      items: buildEditorContextMenuItems(visibleActions, ctx),
+      items,
       anchorPoint: { x: event.clientX, y: event.clientY },
+      anchorPointMode: 'top-start',
       anchor,
     })
-  }, [content, draftContent, file, openMode, selectedEditorDescriptor])
+  }, [collectEditorActionMenu])
+
+  /**
+   * 触屏设备兜底触发（iOS/Android Safari）：长按选中文本由系统原生 callout（拷贝/查询…）
+   * 接管，iOS Safari 不派发 contextmenu 事件，右键处理器无从触发。改为监听
+   * selectionchange：选区在编辑器内稳定（350ms 无变化）后，按同一采集管线在选区
+   * 下方居中弹出统一菜单——所有编辑器右键扩展点在移动端自动可用，插件零改动。
+   *
+   * - 判据用「无 hover + 粗指针」而非 isMobile（宽度）：iPad 宽屏不在 isMobile 内，
+   *   但触屏 Safari 同样不派发 contextmenu；触屏笔记本（有 hover）则被排除。
+   * - 选区消失时**不**主动关菜单：iOS 上点击菜单项会先清空选区再派发 click，
+   *   主动关会吞掉点击；关闭交由 MenuList 既有的「外部 pointerdown / Escape」兜底。
+   */
+  React.useEffect(() => {
+    if (!window.matchMedia('(hover: none) and (pointer: coarse)').matches) return
+    let timer: number | null = null
+    const handleSelectionChange = () => {
+      if (timer != null) window.clearTimeout(timer)
+      timer = window.setTimeout(() => {
+        timer = null
+        const anchor = editorContainerRef.current
+        if (!anchor) return
+        // collect 内部已做「选区非空且端点在编辑器容器内」的闸（readEditorSelection）。
+        const items = collectEditorActionMenu()
+        if (!items) return
+        const selection = window.getSelection()
+        const range = selection && selection.rangeCount > 0 ? selection.getRangeAt(0) : null
+        if (!range) return
+        const rect = range.getBoundingClientRect()
+        // 锚在选区下缘中点：菜单落在选区下方（center 模式由 MenuList 夹紧视口内），
+        // 避开 iOS 原生 callout（位于选区上方）。
+        setEditorContextMenu({
+          items,
+          anchorPoint: { x: rect.left + rect.width / 2, y: rect.bottom },
+          anchorPointMode: 'center',
+          anchor,
+        })
+      }, 350)
+    }
+    document.addEventListener('selectionchange', handleSelectionChange)
+    return () => {
+      document.removeEventListener('selectionchange', handleSelectionChange)
+      if (timer != null) window.clearTimeout(timer)
+    }
+  }, [collectEditorActionMenu])
 
   const mobileMoreActionItems = React.useMemo<MoreActionItem[]>(() => {
     if (!isMobile) return []
@@ -717,7 +779,7 @@ export default function FileTabPage({
           items={editorContextMenu.items}
           anchor={editorContextMenu.anchor}
           anchorPoint={editorContextMenu.anchorPoint}
-          anchorPointMode="top-start"
+          anchorPointMode={editorContextMenu.anchorPointMode}
           onClose={() => setEditorContextMenu(null)}
         />
       ) : null}
