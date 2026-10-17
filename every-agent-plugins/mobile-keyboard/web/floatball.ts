@@ -5,10 +5,12 @@
  * 自绘全局 UI 的先例,自挂 document.body 并自管生命周期):
  * - 显隐:移动端视口(宽度 <= 768,与宿主 useResponsiveViewport 同口径)即常显,
  *   不再限定终端标签;resize 时刷新显隐并把越界的球拉回可视区。
- * - 收起态:仅显示鼠标图标本体(无背景),可拖动、松手吸附左右屏幕边缘、
- *   位置经 ctx.storage 持久化;点击展开。
+ * - 禁用态(默认):视为停用——半露出屏幕右缘上部(另一半在视口外不可见,
+ *   尽可能不遮挡内容),半透明;点击后才「启用」。
+ * - 收起态(已启用):鼠标图标本体(无背景),可拖动、松手吸附左右屏幕边缘;
+ *   点击展开。
  * - 展开态:四段圆弧围成圆环(内缘紧贴中心键,无空白环),中心为鼠标图标;
- *   虚拟光标箭头显示在圆环之外(斜上方,按球所在半屏自动选左/右,避免被圆环与手指遮挡):
+ *   虚拟光标箭头显示在圆环之外(斜上方,贴近右屏时翻到右侧,带滞回):
  *   · 上/下圆弧:模拟键盘 ArrowUp/ArrowDown(合成 KeyboardEvent 派发给焦点
  *     元素;xterm 持有焦点时转成方向键转义序列发往 PTY,无人消费则无效果);
  *   · 左圆弧 = 鼠标左键:按下在光标位置合成 mousedown,手指继续滑动时光标
@@ -21,14 +23,8 @@
  *   应用层监听(React onMouseDown / document mousemove/mouseup)不受影响。
  */
 
-/** 与 PluginStorage 兼容的窄接口(结构类型,避免依赖类型包)。 */
-interface KeypadStorage {
-  get<T>(key: string, defaultValue?: T): T | undefined
-  set(key: string, value: unknown): void
-}
-
 interface MobileKeypadOptions {
-  storage: KeypadStorage
+  // 预留:暂无配置项(位置不再持久化,默认禁用态贴右缘上部)。
 }
 
 export interface MobileKeypadController {
@@ -45,9 +41,8 @@ const EDGE_MARGIN_PX = 12
 const LONGPRESS_DELAY_MS = 350
 /** 连发间隔。 */
 const REPEAT_INTERVAL_MS = 110
-const POS_STORAGE_KEY = 'floatball.pos'
-/** 球心默认落点(视口右下区域,归一化坐标)。 */
-const DEFAULT_POS = { xf: 0.94, yf: 0.78 }
+/** 禁用态半露位置:球心贴屏幕右缘,纵向取视口上部(比例)。 */
+const DISABLED_Y_FRACTION = 0.12
 
 /** 圆环面板直径(viewBox 同尺寸;整体为初版的二分之一)。 */
 const RING_SIZE_PX = 100
@@ -88,10 +83,6 @@ function isMobileViewport(): boolean {
 
 function clamp(v: number, min: number, max: number): number {
   return Math.min(Math.max(v, min), max)
-}
-
-function clamp01(v: number): number {
-  return clamp(v, 0.02, 0.98)
 }
 
 const SVG_NS = 'http://www.w3.org/2000/svg'
@@ -202,9 +193,7 @@ function arcSectorPath(cx: number, cy: number, rOuter: number, rInner: number, a
   return `M ${x0.toFixed(2)} ${y0.toFixed(2)} A ${rOuter} ${rOuter} 0 ${large} 1 ${x1.toFixed(2)} ${y1.toFixed(2)} L ${x2.toFixed(2)} ${y2.toFixed(2)} A ${rInner} ${rInner} 0 ${large} 0 ${x3.toFixed(2)} ${y3.toFixed(2)} Z`
 }
 
-export function createMobileKeypad(options: MobileKeypadOptions): MobileKeypadController {
-  const { storage } = options
-
+export function createMobileKeypad(_options: MobileKeypadOptions): MobileKeypadController {
   // ── DOM 组装 ──────────────────────────────────────────────────────────────
   const root = document.createElement('div')
   root.className = 'mk-root mk-hidden'
@@ -343,6 +332,10 @@ export function createMobileKeypad(options: MobileKeypadOptions): MobileKeypadCo
   let shown = false
   let expanded = false
   let destroyed = false
+  // 禁用/启用:默认禁用(半露右缘上部,点击启用);justEnabled 标记本次按下
+  // 恰为「启用」点击,松手时不再展开面板(启用与展开分开两次点击)。
+  let enabled = false
+  let justEnabled = false
   // 悬浮球(收起态/中心图标)拖动
   let pointerDown = false
   let dragging = false
@@ -518,18 +511,27 @@ export function createMobileKeypad(options: MobileKeypadOptions): MobileKeypadCo
     placeCursor(ballX + dx, ballY - d)
   }
 
-  function restorePosition(): void {
-    const saved = storage.get<{ xf: number; yf: number } | null>(POS_STORAGE_KEY, null)
-    const xf = saved && typeof saved.xf === 'number' ? clamp01(saved.xf) : DEFAULT_POS.xf
-    const yf = saved && typeof saved.yf === 'number' ? clamp01(saved.yf) : DEFAULT_POS.yf
-    placeBall(xf * window.innerWidth, yf * window.innerHeight)
+ /** 禁用态(默认):球心贴屏幕右缘(露一半),纵向取视口上部;半透明弱化。 */
+  function placeDisabled(): void {
+    enabled = false
+    ball.classList.add('mk-disabled')
+    const margin = EDGE_MARGIN_PX + BALL_RADIUS_PX
+    placeBall(
+      window.innerWidth,
+      clamp(window.innerHeight * DISABLED_Y_FRACTION, margin, Math.max(margin, window.innerHeight - margin)),
+    )
   }
 
-  function savePosition(): void {
-    storage.set(POS_STORAGE_KEY, {
-      xf: clamp01(ballX / window.innerWidth),
-      yf: clamp01(ballY / window.innerHeight),
-    })
+  /** 启用:球拉回完全可见,恢复常规收起态外观。 */
+  function enableBall(): void {
+    if (enabled) return
+    enabled = true
+    ball.classList.remove('mk-disabled')
+    const margin = EDGE_MARGIN_PX + BALL_RADIUS_PX
+    placeBall(
+      clamp(ballX, margin, Math.max(margin, window.innerWidth - margin)),
+      clamp(ballY, margin, Math.max(margin, window.innerHeight - margin)),
+    )
   }
 
   /** 松手后吸附到较近的左右屏幕边缘(收起态)。 */
@@ -541,13 +543,19 @@ export function createMobileKeypad(options: MobileKeypadOptions): MobileKeypadCo
     ball.classList.add('mk-snapping')
     placeBall(targetX, clamp(ballY, margin, vh - margin))
     window.setTimeout(() => ball.classList.remove('mk-snapping'), 300)
-    savePosition()
   }
 
-  // ── 收起态悬浮球:拖动定位 / 点击展开 ─────────────────────────────────────
+  // ── 收起态悬浮球:点击启用(禁用态)/拖动定位 / 点击展开 ───────────────────
   ball.addEventListener('pointerdown', (e) => {
     if (!shown) return
     e.preventDefault()
+    // 禁用态首击:先启用(球拉回完全可见),本次松手不展开
+    if (!enabled) {
+      enableBall()
+      justEnabled = true
+    } else {
+      justEnabled = false
+    }
     pointerDown = true
     dragging = false
     downX = e.clientX
@@ -581,9 +589,11 @@ export function createMobileKeypad(options: MobileKeypadOptions): MobileKeypadCo
     if (dragging) {
       dragging = false
       snapToEdge()
-    } else {
+    } else if (!justEnabled) {
+      // 已启用的普通点击:展开面板;「启用」那次点击不展开
       expand()
     }
+    justEnabled = false
   })
 
   ball.addEventListener('pointercancel', () => {
@@ -632,7 +642,6 @@ export function createMobileKeypad(options: MobileKeypadOptions): MobileKeypadCo
     center.classList.remove('mk-dragging')
     if (dragging) {
       dragging = false
-      savePosition()
     } else {
       collapse()
     }
@@ -690,9 +699,8 @@ export function createMobileKeypad(options: MobileKeypadOptions): MobileKeypadCo
     leftHeld = false
     setPressedVisual(arcLeft, false)
     dispatchMouseAt('mouseup', cursorX, cursorY, { button: 0, buttons: 0 })
-    // 松手后光标回到圆环外的闲置位;悬浮球已随手指移动,持久化新位置
+    // 松手后光标回到圆环外的闲置位
     resetCursorToIdle()
-    savePosition()
   }
   arcLeft.addEventListener('pointerup', releaseLeft)
   arcLeft.addEventListener('pointercancel', releaseLeft)
@@ -756,10 +764,15 @@ export function createMobileKeypad(options: MobileKeypadOptions): MobileKeypadCo
   window.addEventListener('resize', handleViewportChange, { passive: true })
   window.visualViewport?.addEventListener('resize', handleViewportChange)
 
-  /** 视口尺寸变化(旋转/软键盘弹出收起):刷新显隐,并把越界的球拉回可视区。 */
+  /** 视口尺寸变化(旋转/软键盘弹出收起):刷新显隐;禁用态重贴右缘上部,
+   *  启用态把越界的球拉回可视区。 */
   function handleViewportChange(): void {
     scheduleRefresh()
     if (!shown || destroyed) return
+    if (!enabled) {
+      if (!expanded) placeDisabled()
+      return
+    }
     const margin = EDGE_MARGIN_PX + (expanded ? RING_OUTER_PX : BALL_RADIUS_PX)
     const vw = window.innerWidth
     const vh = window.innerHeight
@@ -775,7 +788,7 @@ export function createMobileKeypad(options: MobileKeypadOptions): MobileKeypadCo
     }
   }
 
-  restorePosition()
+  placeDisabled()
   refresh()
 
   return {

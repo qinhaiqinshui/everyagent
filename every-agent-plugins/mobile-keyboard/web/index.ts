@@ -17,10 +17,8 @@ import './floatball.css'
 let keypad: MobileKeypadController | null = null
 
 const mobileKeyboardPlugin: PluginModule = {
-  activate(ctx) {
-    keypad = createMobileKeypad({
-      storage: ctx.storage,
-    })
+  activate() {
+    keypad = createMobileKeypad({})
   },
   deactivate() {
     keypad?.destroy()

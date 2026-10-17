@@ -62,6 +62,11 @@
   display: none;
 }
 
+/* 禁用态(默认):半露右缘 + 半透明弱化,提示「停用中」;点击启用后恢复 */
+.mk-ball.mk-disabled {
+  opacity: 0.5;
+}
+
 .mk-ball.mk-dragging {
   opacity: 0.85;
 }
