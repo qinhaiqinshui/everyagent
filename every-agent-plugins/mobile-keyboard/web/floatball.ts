@@ -281,12 +281,29 @@ export function createMobileKeypad(options: MobileKeypadOptions): MobileKeypadCo
   // 按下时的焦点,pointerup/cancel 后若焦点已落入键盘内部则归还原元素,
   // 无论浏览器行为如何都保证「点键盘不改变页面焦点」。
   let focusBeforePointerDown: HTMLElement | null = null
+  // 宿主侧最后聚焦元素(focusin 持续跟踪,排除键盘内部与 body):activeElement
+  // 被浏览器 tap 后续默认行为打到 body/键盘内部时,作为合成按键的兜底目标。
+  let lastHostFocus: HTMLElement | null = null
+
+  const handleFocusIn = (e: FocusEvent) => {
+    const el = e.target
+    if (el instanceof HTMLElement && !root.contains(el) && el !== document.body) {
+      lastHostFocus = el
+    }
+  }
+  document.addEventListener('focusin', handleFocusIn)
 
   root.addEventListener('pointerdown', (e) => {
     focusBeforePointerDown =
       document.activeElement instanceof HTMLElement && !root.contains(document.activeElement)
         ? document.activeElement
         : null
+    e.preventDefault()
+  }, { capture: true })
+
+  // tap 的 click 默认行为(在 pointerup 之后派发)会把已归还的焦点再打到 body,
+  // 捕获阶段取消之;键盘元素的点击语义全在 pointerup 上判定,取消 click 无副作用。
+  root.addEventListener('click', (e) => {
     e.preventDefault()
   }, { capture: true })
 
@@ -372,13 +389,28 @@ export function createMobileKeypad(options: MobileKeypadOptions): MobileKeypadCo
   }
 
   /**
-   * 把一次按键(keydown + keyup)如实派发给当前焦点元素,不管那是什么组件、
-   * 有没有焦点——无焦点时落到 document.body,事件沿冒泡路径走一圈,没人
-   * 消费就什么都不会发生(与真实按键落在无监听的页面上等价)。
+   * 把一次按键(keydown + keyup)如实派发给宿主焦点元素,不管那是什么组件、
+   * 有没有焦点——事件沿冒泡路径走一圈,没人消费就什么都不会发生(与真实
+   * 按键落在无监听的页面上等价)。
+   *
+   * 目标解析:activeElement 有效(键盘外且非 body)时用它;若已被浏览器 tap
+   * 后续默认行为打到 body 或键盘内部,则回退到 focusin 跟踪的宿主最后焦点
+   * ——xterm 的 keydown 监听挂在自己 textarea 上,合成事件直接派发给该元素
+   * 即被消费,不依赖它此刻真实持有焦点。
    */
+  function resolveKeyTarget(): EventTarget {
+    const active = document.activeElement
+    if (active instanceof HTMLElement && !root.contains(active) && active !== document.body) {
+      return active
+    }
+    if (lastHostFocus && lastHostFocus.isConnected) {
+      return lastHostFocus
+    }
+    return document.body
+  }
+
   function dispatchKey(def: KeyDef): void {
-    const target: EventTarget =
-      document.activeElement instanceof HTMLElement ? document.activeElement : document.body
+    const target: EventTarget = resolveKeyTarget()
     const init: KeyboardEventInit & { keyCode?: number; which?: number } = {
       key: def.key,
       code: def.key,
@@ -738,6 +770,7 @@ export function createMobileKeypad(options: MobileKeypadOptions): MobileKeypadCo
       }
       window.removeEventListener('resize', handleViewportChange)
       window.visualViewport?.removeEventListener('resize', handleViewportChange)
+      document.removeEventListener('focusin', handleFocusIn)
       root.remove()
     },
   }
