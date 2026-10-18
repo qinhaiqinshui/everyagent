@@ -444,6 +444,13 @@ export default function WorkspaceExplorerTree({
       style={{
         padding: `0 ${token.paddingXXS}px`,
         position: 'relative',
+        // 防止超长文件名撑宽侧边栏:flex 收缩链上任何一层缺 min-width:0 都会把宽度
+        // 顶到带边框的工作区容器外(antd blockNode 的行内容 wrapper 默认可被内容顶开,
+        // 由 ui-overlays.css 的 ws-tree 规则补 min-width:0 负责省略号截断)。
+        // 这里 minWidth:0 + overflowX:hidden 作最终兜底:内容再宽也裁切在容器内,
+        // 绝不向祖先层传播溢出宽度,侧边栏不出横向滚动条。
+        minWidth: 0,
+        overflowX: 'hidden',
         // 框选拖动期间禁止浏览器文字选中:空白处按下拖动只产生橡皮筋选区,不产生文字选区。
         userSelect: 'none',
         WebkitUserSelect: 'none',

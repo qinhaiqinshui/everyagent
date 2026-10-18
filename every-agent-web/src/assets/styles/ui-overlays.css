@@ -214,6 +214,19 @@
   padding-inline: 0 !important;
 }
 
+/* 文件树:行内容 wrapper / title 允许收缩到容器宽(flex item 默认 min-width:auto,
+   超长文件名会把宽度一路顶开到祖先容器外)。antd v6 blockNode 只给了
+   flex:auto 没给 min-width:0,这里补上,配合行内省略号截断(见 WorkspaceExplorerTree
+   的文件名 span),杜绝把树与侧边栏撑宽、撑出横向滚动条。
+   选择器排除 .ws-changes-tree:git 变更树保持「max-content 撑宽 + 横向滚动」的既有设计。 */
+.ws-tree.ant-tree:not(.ws-changes-tree) .ant-tree-node-content-wrapper {
+  min-width: 0;
+}
+
+.ws-tree.ant-tree:not(.ws-changes-tree) .ant-tree-title {
+  min-width: 0;
+}
+
 /* 文件树高亮只有两种画法:
    1) 悬停:antd 目录树把悬停背景画在 .ant-tree-node-content-wrapper 的 :before 伪元素上
       (默认 controlItemBgHover),而非 wrapper 自身 background;下面两条 hover 规则把它统一为项目

@@ -12,6 +12,10 @@ import React from 'react'
  * 用法：把原本 `overflowY: 'auto'` 的滚动容器替换为
  * `<SidebarScrollArea style={原滚动容器样式}>{...内容...}</SidebarScrollArea>`。
  * 原样式（flex / minHeight / padding / gap 等）会被应用到内部内容层，布局保持不变。
+ * 注意：透传的 style 不要再带 overflow(如历史残留的 overflowY:'auto')——单向 auto 会把
+ * 另一方向 visible 计算为 auto,内容层就变成双向滚动容器,超宽内容会冒出横向滚动条;
+ * 滚动职责完全归 viewport(overflow-y:auto / overflow-x:hidden)。内容层默认 minWidth:0
+ * (调用方显式指定时以调用方为准),防止内容把内容层、进而把侧边栏撑宽。
  */
 export type SidebarScrollAreaProps = {
   children: React.ReactNode
@@ -198,7 +202,7 @@ export default function SidebarScrollArea({
           onScroll?.(event)
         }}
       >
-        <div ref={contentRef} className="sidebar-scroll-area__content" style={style}>
+        <div ref={contentRef} className="sidebar-scroll-area__content" style={{ minWidth: 0, ...style }}>
           {children}
         </div>
       </div>

@@ -832,7 +832,8 @@ const listStyle: React.CSSProperties = {
   flexDirection: 'column',
   gap: 6,
   minHeight: 0,
-  overflowY: 'auto',
+  // 滚动职责归 SidebarScrollArea 的 viewport;内容层不设 overflowY
+  // (单向 auto 会把另一方向 visible 计算为 auto,内容超宽时冒出横向滚动条)。
   paddingRight: 2,
 }
 
