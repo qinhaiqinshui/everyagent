@@ -470,11 +470,13 @@ export default function FileTabPage({
    * 接管，iOS Safari 不派发 contextmenu 事件，右键处理器无从触发。改为监听
    * selectionchange：选区在编辑器内稳定（350ms 无变化）后，按同一采集管线在选区
    * 下方居中弹出统一菜单——所有编辑器右键扩展点在移动端自动可用，插件零改动。
+   * 菜单弹出后即清空 DOM 选区以隐藏系统 callout（见下），用户只看到统一菜单。
    *
    * - 判据用「无 hover + 粗指针」而非 isMobile（宽度）：iPad 宽屏不在 isMobile 内，
    *   但触屏 Safari 同样不派发 contextmenu；触屏笔记本（有 hover）则被排除。
-   * - 选区消失时**不**主动关菜单：iOS 上点击菜单项会先清空选区再派发 click，
-   *   主动关会吞掉点击；关闭交由 MenuList 既有的「外部 pointerdown / Escape」兜底。
+   * - 选区消失时**不**主动关菜单：菜单弹出时我们会主动清空选区（隐藏系统 callout），
+   *   iOS 上点击菜单项也会先清空选区再派发 click，主动关会吞掉点击；
+   *   关闭交由 MenuList 既有的「外部 pointerdown / Escape」兜底。
    */
   React.useEffect(() => {
     if (!window.matchMedia('(hover: none) and (pointer: coarse)').matches) return
@@ -489,17 +491,21 @@ export default function FileTabPage({
         const items = collectEditorActionMenu()
         if (!items) return
         const selection = window.getSelection()
-        const range = selection && selection.rangeCount > 0 ? selection.getRangeAt(0) : null
-        if (!range) return
+        if (!selection || selection.rangeCount === 0) return
+        const range = selection.getRangeAt(0)
         const rect = range.getBoundingClientRect()
-        // 锚在选区下缘中点：菜单落在选区下方（center 模式由 MenuList 夹紧视口内），
-        // 避开 iOS 原生 callout（位于选区上方）。
+        // 锚在选区下缘中点：菜单落在选区下方（center 模式由 MenuList 夹紧视口内）。
         setEditorContextMenu({
           items,
           anchorPoint: { x: rect.left + rect.width / 2, y: rect.bottom },
           anchorPointMode: 'center',
           anchor,
         })
+        // 隐藏系统原生选择菜单（iOS callout / Android 浮动工具栏）：它依附于 DOM 选区，
+        // 选区清空即随之消失，不再遮挡统一菜单。菜单项构建时已闭包捕获选区快照，
+        // 「复制」「引用到 AI 对话框」等 invoke 读取的是快照，不受清空影响；
+        // 清空触发的 selectionchange 会因选区为空走到 collect 返回 null，菜单保持打开。
+        selection.removeAllRanges()
       }, 350)
     }
     document.addEventListener('selectionchange', handleSelectionChange)
