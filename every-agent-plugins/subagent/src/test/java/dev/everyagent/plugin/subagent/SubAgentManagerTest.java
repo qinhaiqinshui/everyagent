@@ -38,8 +38,8 @@ import static org.mockito.Mockito.when;
  * AgentFactoryImpl 适配器同一装配顺序)、build() 自动把实体注册进 {@code agents()}。
  *
  * <p>跨轮场景(2026-12 bug:list_agents 下一轮返回空):{@code ctx.agents()} 是
- * per-run 注册表——每轮换新 Map(冷启动形态),同一 subjectId 共享 Manager 的
- * per-subject 状态(carry-over 快照),磁盘台账经 {@code ctx.dataDir()/agents.json} 兜底。
+ * per-run 注册表——每轮换新 Map(冷启动形态),子 agent 跨轮历史全在磁盘(指令经
+ * user.message 落盘 &lt;agentId&gt;.jsonl,重建经档案口),可见性经 {@code ctx.dataDir()/agents.json} 台账兜底。
  */
 class SubAgentManagerTest {
 
@@ -182,7 +182,7 @@ class SubAgentManagerTest {
     }
 
     /**
-     * 磁盘台账兜底(worker 重启后):carry-over 随进程丢失,agents.json 是唯一来源——
+     * 磁盘台账兜底(worker 重启后):子 agent 历史全在磁盘,进程内存无跨轮状态——
      * list_agents 经磁盘台账可见;非在场实体的 running/waiting-user 归一 stopped;
      * creator=task 的主 agent 条目不进子 agent 列表。
      */
@@ -197,7 +197,7 @@ class SubAgentManagerTest {
                 ]}
                 """);
 
-        SubAgentManager manager = new SubAgentManager(); // 新进程:无内存 carry-over
+        SubAgentManager manager = new SubAgentManager(); // 新进程:历史只在磁盘
         ExecContext ctx = execContext("t-2", new AtomicReference<>(""), null);
 
         JsonNode listed = dev.everyagent.contract.json.Json.parse(manager.list(ctx));

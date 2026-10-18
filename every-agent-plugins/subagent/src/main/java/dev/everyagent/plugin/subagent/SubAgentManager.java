@@ -376,8 +376,8 @@ public class SubAgentManager {
      * 摘要 = {agentId,title,createdAt,status,latestActivity}:status 终态为
      * completed/stopped/error,running 运行中,waiting-user 挂起等用户回答;
      * latestActivity 为最近一次 AI 返回的快照,不回灌完整历史。
-     * <p>跨轮可见:合并「本轮 live 实体 &gt; 进程内 carry-over &gt; 磁盘台账 agents.json」
-     * 三层——上一轮(乃至 worker 重启前)的子 agent 均在列表内,不随单轮收口消失。
+     * <p>跨轮可见:合并「本轮 live 实体 &gt; 磁盘台账 agents.json」两层——上一轮
+     * (乃至 worker 重启前)的子 agent 均在列表内,不随单轮收口消失(磁盘是唯一事实源)。
      */
     public String list(ExecContext ctx) throws InterruptedException {
         TaskSubState st = state(ctx);
@@ -551,7 +551,7 @@ public class SubAgentManager {
             }
             if (f == null || isTerminal(sub.status())) {
                 // 已落定(完成/停止/失败):直接返回最新摘要。
-                // 竞态封口:实体终态先于运行体 finally(回写 assistant 轮 + carry-over 快照)置位,
+                // 竞态封口:实体终态先于运行体 finally(回写 assistant 轮)置位,
                 // 此时 future 尚未 done——必须等它退场再返回,否则调用方紧接的 run_agent 续跑
                 // 会撞上「已在运行」守卫,或读到未回写完成的会话。有界等(终态已定,退场是瞬时的)。
                 if (f != null && !f.isDone()) {
