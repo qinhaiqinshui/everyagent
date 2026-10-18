@@ -66,7 +66,9 @@ public class FileChangeAdvisorProvider implements AdvisorProvider, RoundClosedLi
     @Override
     public Advisor create(AdvisorContext ctx) {
         AgentContext a = ctx.agentEntity();
-        return new FileChangeAdvisor(a, taskService, this);
+        // 工具结果账本(结构化成败判据,§7.15.2):create_file/update_file 的调用经
+        // toolThrew(工具名,入参原串) 判定成败,失败的写不记账(不解析结果文本)。
+        return new FileChangeAdvisor(a, taskService, this, ctx.toolOutcomes());
     }
 
     /** 取/建本任务的活跃共享 collector:主 agent 与全部子 agent(经 execution().subjectId())记录到同一实例。 */

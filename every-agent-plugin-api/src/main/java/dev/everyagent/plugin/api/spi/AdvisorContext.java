@@ -32,6 +32,20 @@ public interface AdvisorContext extends ExecContext {
     ToolCallingManager toolCallingManager();
 
     /**
+     * per-run 工具执行结果账本({@link ToolOutcomeLog})——advisor 侧结构化判据通道。
+     *
+     * <p>需要补判「某次工具调用是否失败」的 advisor(如 file-change 在下一轮请求入口确认
+     * 文件写工具成败)经此取账本,用非消费查询 {@code toolThrew(工具名, 入参原串)} 判定
+     * (键与 {@code ToolCall.arguments()} 同源,见 {@link ToolOutcomeLog});<b>不得</b>解析
+     * 工具结果文本判成败(自指误判,见 {@link ToolOutcomeLog} javadoc)。
+     *
+     * <p>默认返回 {@code null}(未装配——单测桩等场景),消费方须判空并保守处理。
+     */
+    default ToolOutcomeLog toolOutcomes() {
+        return null;
+    }
+
+    /**
      * 当前 agent 的上下文(plugin-api 契约接口,隐藏 worker 实现细节)。
      *
      * <p>插件经此获取 {@link AgentContext} 来读取会话内存等 agent 域成员,

@@ -7,6 +7,7 @@ import dev.everyagent.plugin.api.interaction.InteractionService;
 import dev.everyagent.plugin.api.model.EventEmitter;
 import dev.everyagent.plugin.api.model.ModelConfig;
 import dev.everyagent.plugin.api.spi.AdvisorContext;
+import dev.everyagent.plugin.api.spi.ToolOutcomeLog;
 import dev.everyagent.worker.agent.AgentEntity;
 import org.springframework.ai.model.tool.ToolCallingManager;
 
@@ -111,6 +112,12 @@ public class AdvisorContextImpl implements AdvisorContext {
     @Override
     public ToolCallingManager toolCallingManager() {
         return toolCallingManager;
+    }
+
+    /** per-run 工具结果账本(与工具回调包装器/tool.result status 判定同一实例,§7.15.2)。 */
+    @Override
+    public ToolOutcomeLog toolOutcomes() {
+        return agentEntity.toolOutcomes;
     }
 
     @Override
