@@ -12,6 +12,7 @@
  * 尚未注入时对草稿文本做一次性排队（appendComposerTextQueued），注入即按序 flush。
  */
 import type { PluginDiffTabInput } from '@everyagent/plugin-api'
+import { activeTabMirror } from './activeTabMirror'
 
 /** 宿主壳层导航能力子集（来自 WorkspaceShellContext 的 actions）。 */
 export interface ShellBridge {
@@ -41,9 +42,17 @@ const pendingComposerTexts: string[] = []
 /**
  * 追加草稿文本：桥接就绪直接写入；未就绪则排队，待 setComposerBridge 注入时按序 flush。
  * （解决「新标签页打开后 bridge 尚未注入导致 appendComposerToken 静默失败」的时序问题。）
+ *
+ * 陈旧桥接守卫：工作区标签常驻挂载（非激活仅 display:none），且 TaskChat 的桥
+ * 「仅激活时注入、不活跃时不清空」，故停留在非任务标签（如文件页）时 composerBridge
+ * 可能是**陈旧引用**——指向某个已隐藏的旧任务页。此时直写会把内容塞进错误草稿
+ * （典型现场：文件页「引用到AI对话框」先 openTab(新任务) 再 append，同步执行的
+ * 此刻新任务页尚未激活，bridge 仍指旧任务页 → 引用落进旧草稿、新标签页为空）。
+ * 因此仅当「当前激活标签是任务标签」（bridge 必属该激活页）时才直写，否则一律排队，
+ * 待目标任务页激活注入 bridge 时 flush。
  */
 export function appendComposerTextQueued(text: string): void {
-  if (composerBridge) {
+  if (composerBridge && activeTabMirror.current?.tabType === 'task') {
     composerBridge.appendText(text)
     return
   }
