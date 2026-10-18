@@ -84,7 +84,7 @@ public class FsService {
      * 返回与 fs.list 条目同构的字段(name/dir/size/modifiedTs/createdTs)。
      */
     private void statRaw(RpcContext ctx) throws IOException {
-        Path file = Path.of(ctx.strParam("path")).toAbsolutePath().normalize();
+        Path file = requireMachineAbsolute(ctx.strParam("path"));
         if (!Files.exists(file)) {
             throw new NotFoundException("文件不存在: " + file);
         }
@@ -184,7 +184,7 @@ public class FsService {
      * 应答形态与 fs.read 完全一致(小文件内联 base64、大文件 rpc.data 分批)。
      */
     private void readRaw(RpcContext ctx) throws IOException {
-        Path file = Path.of(ctx.strParam("path")).toAbsolutePath().normalize();
+        Path file = requireMachineAbsolute(ctx.strParam("path"));
         if (!Files.exists(file)) {
             throw new NotFoundException("文件不存在: " + file);
         }
@@ -218,7 +218,7 @@ public class FsService {
      * 置空,前端文件树按 workspaceRoot 过滤自然忽略,不影响标签页自身)。
      */
     private void writeRaw(RpcContext ctx) throws IOException {
-        Path target = Path.of(ctx.strParam("path")).toAbsolutePath().normalize();
+        Path target = requireMachineAbsolute(ctx.strParam("path"));
         byte[] content = decode(ctx.optStrParam("contentBase64", ""));
         if (content.length > MAX_WRITE) {
             throw new BadParamsException("单次写入超过上限 " + MAX_WRITE + " 字节");
@@ -337,6 +337,21 @@ public class FsService {
     }
 
     // ---- 内部 ----
+
+    /**
+     * readRaw/writeRaw/statRaw 契约校验:path 必须是机器绝对路径。
+     * Windows 上 {@code Path.of("/x")} 是**盘符相对路径**(相对 worker 进程当前盘),
+     * {@code toAbsolutePath()} 会静默解析成如 {@code C:\x}——曾把前端误传的
+     * {@code /.everyagent/t.txt} 静默变成 {@code C:\.everyagent\t.txt} 报 NOT_FOUND
+     * (writeRaw 更有写错盘的隐患),故非绝对路径一律显式拒绝,不靠进程 CWD 兜底。
+     */
+    private static Path requireMachineAbsolute(String raw) {
+        Path path = Path.of(raw);
+        if (!path.isAbsolute()) {
+            throw new BadParamsException("path 必须是机器绝对路径: " + raw);
+        }
+        return path.normalize();
+    }
 
     /**
      * 只读操作(read/list/reveal)沙箱:工作区根 + 该工作区外部授权根(externalRoots,
