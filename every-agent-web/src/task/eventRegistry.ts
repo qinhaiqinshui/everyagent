@@ -86,7 +86,7 @@ export function defaultHandler(event: FoldableTaskEvent, state: TaskThreadState,
 
 // ---- 注册全部现役 kind 的 handler ----
 
-/** user.message → role:'user' 消息 */
+/** user.message → role:'user' 消息(主 agent);派生 agent(子/审议)的 user.message 以 trace 形态展示 */
 registerEventKind('user.message', {
   handle(event, state, folder) {
     const seqKey = String(event.seq)
@@ -94,17 +94,25 @@ registerEventKind('user.message', {
     const data = dataOf(event)
     const rawContent = typeof data?.rawContent === 'string' && data.rawContent.length
       ? data.rawContent : content
+    const agentKey = agentKeyOf(event)
+    // 派生 agent 的指令(带 agentId,worker 侧与主 agent 同一事件名落盘):
+    // 不进主线程 user 气泡——foldRole='user' 是主线程折叠窗口语义,插入会把子 agent
+    // 指令渲染成右侧用户消息并扰乱折叠扫描/轮次骨架。以 trace 形态按 seq upsert
+    // 展示(kind=user.message,归到该 agent 名下),内容零丢失,历史回放同一路径。
+    if (agentKey) {
+      folder.upsertTraceBySeq(agentKey, 'user.message', event.payload, tsOf(event), event.seq)
+      return true
+    }
     if (folder.hasSeq(seqKey)) {
       // 真实事件后到但骨架先入(loadRoundsIntoFolder(full) 的 reset 竞态):合成骨架可被
       // 权威 payload 原地升级(骨架可能缺 data.rawContent → @文件胶囊丢失,真实事件是唯一权威)。
       return folder.upgradeSyntheticUser(seqKey, {
         content,
         rawContent,
-        agentId: agentKeyOf(event),
+        agentId: agentKey,
         ts: tsOf(event),
       })
     }
-    const agentKey = agentKeyOf(event)
     const ts = tsOf(event)
     folder.insertMessage(agentKey, {
       messageId: `m-${event.seq}`,

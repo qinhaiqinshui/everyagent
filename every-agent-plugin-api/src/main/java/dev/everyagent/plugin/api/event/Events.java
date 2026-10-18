@@ -47,14 +47,6 @@ public final class Events {
     public static final String AGENT_DONE = "agent.done";
     /** 主/子统一状态事件(必带 agentId,含主 agent):running / waiting-user / done / failed / stopped。 */
     public static final String AGENT_STATUS = "agent.status";
-    /**
-     * agent 输入指令落盘(必带 agentId):派生 agent(子 agent/AI 审议等)收到的每条
-     * user 角色指令(spawn 时的初始任务、续跑/重试的新指令)。与 {@link #USER_MESSAGE}
-     * (主 agent 任务输入,兼职轮次语义)区分:本事件不参与轮次开合/前端主线程 user 气泡,
-     * 仅使 {@code <agentId>.jsonl} 自包含(user → assistant 轮次完整),供
-     * ConversationLoader 按 agentId 中性重建该 agent 的会话内存(§5.3/§7.14)。
-     */
-    public static final String AGENT_INPUT = "agent.input";
     public static final String ERROR = "error";
     public static final String CANCELLED = "cancelled";
     /**

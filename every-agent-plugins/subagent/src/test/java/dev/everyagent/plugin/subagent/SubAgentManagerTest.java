@@ -47,7 +47,7 @@ class SubAgentManagerTest {
     private final Map<String, AgentContext> agents = new HashMap<>();
     /** 主体数据目录;null = 无磁盘台账(worker 内存态/单测常态)。 */
     private Path dataDir;
-    /** 经 ctx.emitter() 发射的事件记录(agent.input 落盘断言用)。 */
+    /** 经 ctx.emitter() 发射的事件记录(user.message 落盘断言用)。 */
     private final java.util.List<dev.everyagent.plugin.api.model.EmitEvent> emitted =
             new java.util.ArrayList<>();
 
@@ -106,7 +106,7 @@ class SubAgentManagerTest {
      * 后,新一轮冷启动(per-run agents 注册表为空 Map)——list/wait/stop 仍能看到上一轮的
      * 子 agent(磁盘台账 agents.json,收口时 AgentLedger persistFinal 落盘),run_agent 传同
      * agentId 经会话档案口(ConversationLoader 按 agentId 重建)续跑,历史完整延续;
-     * 指令经 agent.input 事件落盘(子 agent jsonl 自包含的轮次起点)。
+     * 指令以 user.message(带 agentId)落盘(子 agent jsonl 自包含的轮次起点,agent 层与主 agent 一视同仁)。
      */
     @Test
     void crossRoundVisibilityAndContinuation(@org.junit.jupiter.api.io.TempDir Path tmp) throws Exception {
@@ -170,11 +170,11 @@ class SubAgentManagerTest {
                     "跨轮续跑后仍不得出现连续 user(第 " + i + " 项)");
         }
 
-        // agent.input 落盘断言:每条指令(新建 + 续跑)都发 agent.input 事件,必带 agentId
+        // user.message 落盘断言:每条指令(新建 + 续跑)都以 user.message 落盘(带 agentId,agent 层与主 agent 一视同仁)
         java.util.List<dev.everyagent.plugin.api.model.EmitEvent> inputs = emitted.stream()
-                .filter(e -> "agent.input".equals(e.kind()))
+                .filter(e -> "user.message".equals(e.kind()))
                 .toList();
-        assertEquals(2, inputs.size(), "两轮各一条指令,各落盘一次 agent.input");
+        assertEquals(2, inputs.size(), "两轮各一条指令,各落盘一次 user.message(带 agentId)");
         assertEquals("sub-1", inputs.get(0).agentId());
         assertEquals("第一条指令", inputs.get(0).content());
         assertEquals("sub-1", inputs.get(1).agentId());

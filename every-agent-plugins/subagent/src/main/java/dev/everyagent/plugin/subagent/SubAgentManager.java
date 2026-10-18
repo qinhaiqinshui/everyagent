@@ -37,7 +37,7 @@ import java.util.concurrent.TimeUnit;
  *
  * <p><b>子 agent 是主体级(跨轮)资产,磁盘是唯一事实源</b>:{@code ctx.agents()} 是
  * per-run 注册表(主体收口即销毁),子 agent 的历史不随单轮消失——每条指令经
- * {@code agent.input} 事件落盘 {@code <agentId>.jsonl}(与主 agent 同一落盘通道),
+ * {@code user.message} 事件(必带 agentId)落盘 {@code <agentId>.jsonl}(与主 agent 同一落盘通道),
  * 工具读侧(list/wait/stop)合并「本轮 live 实体 &gt; 磁盘台账 agents.json」两层
  * (非在场实体的 running/waiting-user 一律归一 stopped,与 AgentLedger 冷启动归一同规则);
  * {@code run_agent} 传历史 agentId 时经 {@link ExecContext#conversationArchive()}
@@ -127,7 +127,7 @@ public class SubAgentManager {
      * <p>跨轮/跨重启:实体不在 {@code ctx.agents()}(per-run 注册表)→ 经
      * {@link ExecContext#conversationArchive()} 档案口按 agentId 重建会话续跑
      * (磁盘唯一事实源,worker 重启后历史照常恢复);磁盘亦无档案(凭空 id)→ 同 id 全新会话。
-     * <p>每条指令(新建/复用/重建三路径)都发 {@code agent.input} 事件落盘——
+     * <p>每条指令(新建/复用/重建三路径)都发 {@code user.message} 事件(带 agentId)落盘——
      * {@code <agentId>.jsonl} 因此自包含(user → assistant 轮次完整),是续跑重建的依据。
      */
     public String run(ExecContext ctx, String input, String title, String agentId)
@@ -192,7 +192,8 @@ public class SubAgentManager {
                 sub = buildSubAgent(ctx, id, title == null || title.isEmpty() ? "子任务" : title, input);
             }
 
-            // 指令落盘(agent.input,必带 agentId):<agentId>.jsonl 自包含的轮次起点,
+            // 指令落盘(user.message,带 agentId——agent 层与主 agent 一视同仁;
+            // 展示差异归前端按 agentId 区分):<agentId>.jsonl 自包含的轮次起点,
             // 跨轮/跨重启续跑重建的依据。新建/复用/重建三路径统一在此发射(先于子线程
             // 首个 message 事件)。失败仅 warn:日志护栏满时任务本身已无法续写,不阻断启动。
             emitInput(ctx, id, input);
@@ -262,7 +263,7 @@ public class SubAgentManager {
         return hist == null ? null : hist.path("title").asString(null);
     }
 
-    /** 发 {@code agent.input} 事件(必带 agentId;端口未绑定/发射失败仅记日志,不阻断启动)。 */
+    /** 发 {@code user.message} 事件(必带 agentId;端口未绑定/发射失败仅记日志,不阻断启动)。 */
     private static void emitInput(ExecContext ctx, String agentId, String input) {
         dev.everyagent.plugin.api.model.EventEmitter emitter = ctx.emitter();
         if (emitter == null) {
@@ -271,11 +272,11 @@ public class SubAgentManager {
         try {
             emitter.emit(dev.everyagent.plugin.api.model.EmitEvent.of(
                     dev.everyagent.plugin.api.proto.SnowflakeId.next(),
-                    dev.everyagent.plugin.api.event.Events.AGENT_INPUT,
+                    dev.everyagent.plugin.api.event.Events.USER_MESSAGE,
                     agentId, null, null, input, null, null,
                     dev.everyagent.plugin.api.model.EmitEvent.Mode.REPLACE));
         } catch (RuntimeException e) {
-            log.warn("[sub] agent.input 落盘失败(续跑重建将缺本轮指令) agentId={} subject={}",
+            log.warn("[sub] user.message(子 agent 指令)落盘失败(续跑重建将缺本轮指令) agentId={} subject={}",
                     agentId, ctx.subjectId(), e);
         }
     }

@@ -17,14 +17,15 @@ import java.util.List;
 
 /**
  * 冷启动上下文重建(按 agentId 中性,架构 §5.3):读指定 agent 的 &lt;agentId&gt;.jsonl →
- * Spring AI 会话消息序列:agent.input/user.message → UserMessage;message →
- * AssistantMessage(正文 + 工具调用,真实 id);tool.result → ToolResponseMessage;
- * 被中断的轮次(toolCalls 无配对 result)补合成结果。
+ * Spring AI 会话消息序列:user.message → UserMessage;message → AssistantMessage
+ * (正文 + 工具调用,真实 id);tool.result → ToolResponseMessage;被中断的轮次
+ * (toolCalls 无配对 result)补合成结果。
  * thinking 不进 conversation(自建 AssistantMessage 不带 reasoningContent,不回传 API)。
  * system 消息不进会话(主 agent 无预置 system;子 agent 的 system 由创建方装配时注入)。
  * <p><b>角色中性</b>:主 agent(任务冷启动)、子 agent(跨轮/跨重启续跑)、AI 审议 agent
- * 走同一谓词同一入口,仅 agentId 不同——落盘 {@code agent.input}(派生 agent 指令)与
- * {@code user.message}(主 agent 任务输入)在此统一为 UserMessage。
+ * 走同一事件名同一谓词同一入口,仅 agentId 不同——user.message 在 agent 层一视同仁
+ * (派生 agent 的指令同样以 user.message 落盘,带各自 agentId;主线程轮次语义与
+ * 前端主气泡是 task 层/展示层按 agentId 的职责,不进本回放器)。
  */
 public final class ConversationLoader {
 
@@ -54,7 +55,7 @@ public final class ConversationLoader {
         for (EventRecord r : records) {
             JsonNode p = r.payload();
             switch (r.event()) {
-                case Events.USER_MESSAGE, Events.AGENT_INPUT -> {
+                case Events.USER_MESSAGE -> {
                     flushTools(out, pending, collected);
                     pending = null;
                     out.add(new UserMessage(p.path("content").asString("")));
