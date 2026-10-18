@@ -1,6 +1,6 @@
 import React from 'react'
 import type { TraceContentRenderContext, TraceTypeDefinition } from '@everyagent/plugin-api'
-import { FileTextIcon, ShieldCheckIcon, type AppGlyphProps } from '@/components/shared/AppGlyphs'
+import { AlertTriangleIcon, FileTextIcon, ShieldCheckIcon, type AppGlyphProps } from '@/components/shared/AppGlyphs'
 
 export type { TraceContentRenderContext, TraceTypeDefinition }
 
@@ -21,6 +21,8 @@ const TRACE_ICON_COMPONENTS: Record<string, React.ComponentType<AppGlyphProps>> 
   files: FileTextIcon,
   // AI 安全审议 trace 图标(盾牌校验)。
   shield: ShieldCheckIcon,
+  // 错误 trace 缺省图标(三角警示)。
+  alert: AlertTriangleIcon,
 }
 
 /** 把 trace 图标字段（字符串 key）解析为可渲染节点；未知 key 回退为原始文本。 */
@@ -110,7 +112,7 @@ export function getTraceType(kind: string): TraceTypeDefinition {
 /** 注册核心 trace 类型。 */
 export function initializeTraceTypes(): void {
   // task_duration = 任务耗时(worker task.trace 事件);request_retry = 重试生命周期。
-  const coreKinds = ['system_notice', 'run_error', 'model_switch', 'task_duration']
+  const coreKinds = ['system_notice', 'model_switch', 'task_duration']
   for (const kind of coreKinds) {
     registerTraceType({
       kind,
@@ -119,6 +121,14 @@ export function initializeTraceTypes(): void {
       getIcon: (trace) => trace.icon,
     })
   }
+  // run_error = 任务/子任务运行错误(worker error 事件);错误色调 + 缺省三角警示图标。
+  registerTraceType({
+    kind: 'run_error',
+    renderContent: renderFallbackContent,
+    getSummary: (trace) => trace.summary?.trim() || stringifyTraceContent(trace.content),
+    getIcon: (trace) => trace.icon ?? 'alert',
+    tone: 'error',
+  })
   // request_retry:title 固定为「请求重试/已恢复/失败」,与 summary 语义重复,收起态只展示 summary。
   registerTraceType({
     kind: 'request_retry',

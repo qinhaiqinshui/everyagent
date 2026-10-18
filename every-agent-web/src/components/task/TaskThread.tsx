@@ -474,7 +474,10 @@ function TaskTraceShell({
   )
 
   return (
-    <section className={`nagent-trace-shell nagent-msg${open && expandable ? ' is-open' : ''}`} title={titleText}>
+    <section
+      className={`nagent-trace-shell nagent-msg${traceType.tone === 'error' ? ' nagent-trace-shell--error' : ''}${open && expandable ? ' is-open' : ''}`}
+      title={titleText}
+    >
       {summaryRow}
       {open && expandable ? <div className="nagent-trace-shell__content">{content}</div> : null}
     </section>
