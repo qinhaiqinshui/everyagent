@@ -71,7 +71,11 @@ export function initializeCoreEditorContextMenuActions(): void {
     icon: <CopyIcon size={13} />,
     order: 10,
     // 宿主闸已保证菜单只在有选区时构建，这里显式重复同一判据（防御性，保持自洽）。
-    isVisible: (ctx) => ctx.selection.text.length > 0,
+    // 触屏设备隐藏：移动端与系统原生选择菜单错位共存（见 FileTabPage 触屏触发逻辑），
+    // 系统菜单已自带「拷贝」，双菜单各有一个复制入口属冗余。
+    isVisible: (ctx) =>
+      ctx.selection.text.length > 0
+      && !window.matchMedia('(hover: none) and (pointer: coarse)').matches,
     invoke: (ctx) => {
       const text = ctx.selection.text
       if (text.length === 0) return

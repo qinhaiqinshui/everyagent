@@ -1,5 +1,4 @@
 import React from 'react'
-import { flushSync } from 'react-dom'
 import WorkspacePageShell from '../shared/WorkspacePageShell'
 import BrandLoadingBlock from '../shared/BrandLoadingBlock'
 import MoreActionsButton, { type MoreActionItem } from '../shared/MoreActionsButton'
@@ -469,18 +468,28 @@ export default function FileTabPage({
   /**
    * 触屏设备兜底触发（iOS/Android Safari）：长按选中文本由系统原生 callout（拷贝/查询…）
    * 接管，iOS Safari 不派发 contextmenu 事件，右键处理器无从触发。改为监听
-   * selectionchange：选区在编辑器内稳定（350ms 无变化）后，按同一采集管线在选区
-   * 下方居中弹出统一菜单——所有编辑器右键扩展点在移动端自动可用，插件零改动。
-   * 菜单弹出后即清空 DOM 选区以隐藏系统 callout（见下），用户只看到统一菜单。
+   * selectionchange：选区在编辑器内稳定（350ms 无变化）后，按同一采集管线弹出统一菜单。
+   *
+   * 与系统菜单「错位共存」（Notion 移动端 Web 同款取舍）：保留 DOM 选区不清空，
+   * 系统菜单照常弹出（选区上方；贴顶时翻转到下方），自定义菜单按启发式躲到它对面：
+   * - 上方够放系统菜单（常规）→ 自定义菜单锚在选区下缘；
+   * - 上方放不下（系统菜单被挤到选区下方）→ 锚点下移一个系统菜单估计高度，躲到它下面；
+   * - 下方放不下自定义菜单时，MenuList 自动翻到锚点上方（此时系统菜单必在下方，不冲突）。
+   * 系统菜单位置无 Web API 可探测，以上为行为启发式；极端场景（超大选区）仍可能
+   * 与系统菜单重叠，届时备选方案是菜单弹出后清空选区（callout 随选区消失）。
    *
    * - 判据用「无 hover + 粗指针」而非 isMobile（宽度）：iPad 宽屏不在 isMobile 内，
    *   但触屏 Safari 同样不派发 contextmenu；触屏笔记本（有 hover）则被排除。
-   * - 选区消失时**不**主动关菜单：菜单弹出时我们会主动清空选区（隐藏系统 callout），
-   *   iOS 上点击菜单项也会先清空选区再派发 click，主动关会吞掉点击；
-   *   关闭交由 MenuList 既有的「外部 pointerdown / Escape」兜底。
+   * - 选区变化（拖动手柄调整）会重新走本管线：菜单按新选区重建并跟随重定位。
+   * - 选区消失时**不**主动关菜单：iOS 上点击菜单项会先清空选区再派发 click，
+   *   主动关会吞掉点击；关闭交由 MenuList 既有的「外部 pointerdown / Escape」兜底。
    */
   React.useEffect(() => {
     if (!window.matchMedia('(hover: none) and (pointer: coarse)').matches) return
+    /** iOS 选中编辑菜单（callout）估计高度，用于选区贴顶时向下避让（无 API 可实测）。 */
+    const SYSTEM_MENU_HEIGHT_ESTIMATE = 56
+    /** 锚点与选区之间的纵向间隙。 */
+    const ANCHOR_GAP = 6
     let timer: number | null = null
     const handleSelectionChange = () => {
       if (timer != null) window.clearTimeout(timer)
@@ -495,28 +504,16 @@ export default function FileTabPage({
         if (!selection || selection.rangeCount === 0) return
         const range = selection.getRangeAt(0)
         const rect = range.getBoundingClientRect()
-        // 锚在选区下缘中点：菜单落在选区下方（center 模式由 MenuList 夹紧视口内）。
-        // flushSync 强制同步渲染——MenuList DOM 必须在清空选区（隐藏系统 callout）前
-        // 就绪，否则 callout 先消失、菜单后渲染，中间存在一帧「两个菜单都没有」的闪烁。
-        flushSync(() => {
-          setEditorContextMenu({
-            items,
-            anchorPoint: { x: rect.left + rect.width / 2, y: rect.bottom },
-            anchorPointMode: 'center',
-            anchor,
-          })
-        })
-        // 隐藏系统原生选择菜单（iOS callout / Android 浮动工具栏）：它依附于 DOM 选区，
-        // 选区清空即随之消失，不再遮挡统一菜单。菜单项构建时已闭包捕获选区快照，
-        // 「复制」「引用到 AI 对话框」等 invoke 读取的是快照，不受清空影响；
-        // 清空触发的 selectionchange 会因选区为空走到 collect 返回 null，菜单保持打开。
-        //
-        // 双 rAF 等待浏览器实际绘制菜单后再清选区，实现「菜单先可见 → callout 后消失」
-        // 的无缝切换；若不用 rAF 直接清，DOM 更新尚未绘制，仍有一帧空档。
-        requestAnimationFrame(() => {
-          requestAnimationFrame(() => {
-            window.getSelection()?.removeAllRanges()
-          })
+        // 错位避让：系统菜单优先出现在选区上方，上方放不下才被挤到选区下方。
+        const systemMenuBelow = rect.top < SYSTEM_MENU_HEIGHT_ESTIMATE + ANCHOR_GAP
+        const anchorY = systemMenuBelow
+          ? rect.bottom + SYSTEM_MENU_HEIGHT_ESTIMATE + ANCHOR_GAP
+          : rect.bottom + ANCHOR_GAP
+        setEditorContextMenu({
+          items,
+          anchorPoint: { x: rect.left + rect.width / 2, y: anchorY },
+          anchorPointMode: 'center',
+          anchor,
         })
       }, 350)
     }
