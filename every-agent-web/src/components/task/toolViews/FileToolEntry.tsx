@@ -26,7 +26,7 @@ import React from 'react'
 import { WrenchIcon, ChevronDownIcon, ChevronRightIcon } from '@/components/shared/AppGlyphs'
 import { useWorkspaceShell } from '@/components/app/WorkspaceShellContext'
 import { useAppUi } from '@/components/app/AppUiContext'
-import { toBusinessAbsolutePath } from '@/platform/fs/pathUtils'
+import { machinePathToBusiness } from '@/platform/fs/pathUtils'
 import { workspaceGateway } from '@/platform/fs/workspaceGateway'
 import { workspaceRegistry } from '@/hub/workspaceRegistry'
 import { useTaskWorkspaceRoot } from '../TaskWorkspaceContext'
@@ -72,7 +72,10 @@ export function FileToolEntry({ detail, inlineExtras }: FileToolEntryProps) {
   // fullPath = 工具参数原样路径,既作展示文本(折叠态/展开态 chip 同源),也作探测入参;
   // businessPath = 统一加前导 `/` 的内部坐标(仅网关探测与 openGlobalFileTab 使用,不展示)。
   const fullPath = typeof args.path === 'string' ? args.path : ''
-  const businessPath = fullPath ? toBusinessAbsolutePath(fullPath) : ''
+  // 工具参数是机器原始路径形态(相对/盘符/Unix 绝对),走 machinePathToBusiness;
+  // toBusinessAbsolutePath 只接受业务坐标(对单 / 前导输入幂等,会把 Unix 绝对
+  // 机器路径当工作区业务路径,二者字面不可区分)。
+  const businessPath = fullPath ? machinePathToBusiness(fullPath) : ''
 
   const taskWorkspaceRoot = useTaskWorkspaceRoot()
   // 任务工作区根缺失时回退到注册表首项（与 FileDiffPanel.handleOpenFileInTab 同口径）。
