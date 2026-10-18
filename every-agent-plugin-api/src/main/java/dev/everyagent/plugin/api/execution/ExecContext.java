@@ -71,6 +71,16 @@ public interface ExecContext {
     InteractionService interaction();
 
     /**
+     * 已绑定本主体的会话档案口：按 agentId 从磁盘事件档案重建该 agent 的会话内存
+     * (角色中性——主/子/审议一视同仁,见 {@link dev.everyagent.plugin.api.agent.ConversationArchive})。
+     * 跨轮续跑/冷重启后恢复派生 agent 历史上下文用;与 emitter()/agentFactory()/
+     * interaction() 同为预绑定端口。
+     */
+    default dev.everyagent.plugin.api.agent.ConversationArchive conversationArchive() {
+        return null;
+    }
+
+    /**
      * 本主体的活动 agent 注册表（可读写 Map：put/get/values/containsKey）。
      * 收纳主体上下文内创建的全部 agent：主 agent + 各插件派生的 agent
      * （subagent 的子 agent、ai-review 的审议 agent 等，由创建方插件注册）。

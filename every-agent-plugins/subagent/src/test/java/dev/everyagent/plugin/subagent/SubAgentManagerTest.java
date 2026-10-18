@@ -47,12 +47,15 @@ class SubAgentManagerTest {
     private final Map<String, AgentContext> agents = new HashMap<>();
     /** 主体数据目录;null = 无磁盘台账(worker 内存态/单测常态)。 */
     private Path dataDir;
+    /** 经 ctx.emitter() 发射的事件记录(agent.input 落盘断言用)。 */
+    private final java.util.List<dev.everyagent.plugin.api.model.EmitEvent> emitted =
+            new java.util.ArrayList<>();
 
     @Test
     void reuseRunWritesBackFinalAnswerBeforeNextInstruction() throws Exception {
         SubAgentManager manager = new SubAgentManager();
         AtomicReference<String> lastText = new AtomicReference<>("第一轮结论");
-        ExecContext ctx = execContext("t-1", lastText);
+        ExecContext ctx = execContext("t-1", lastText, null);
 
         assertEquals("子 agent 已启动(异步): sub-1", manager.run(ctx, "第一条指令", "标题", "sub-1"));
         Agent sub = (Agent) agents.get("sub-1");
@@ -85,7 +88,7 @@ class SubAgentManagerTest {
     @Test
     void interruptedRunWritesPlaceholderAssistantTurn() throws Exception {
         SubAgentManager manager = new SubAgentManager();
-        ExecContext ctx = execContext("t-1", new AtomicReference<>("")); // 无最终回答(被中断形态)
+        ExecContext ctx = execContext("t-1", new AtomicReference<>(""), null); // 无最终回答(被中断形态)
 
         manager.run(ctx, "唯一指令", "标题", "sub-2");
         Agent sub = (Agent) agents.get("sub-2");
@@ -101,22 +104,34 @@ class SubAgentManagerTest {
     /**
      * 跨轮可见性 + 跨轮续跑(bug 主场景):上一轮收口(主 agent 未 wait / 用户点停止均同路径)
      * 后,新一轮冷启动(per-run agents 注册表为空 Map)——list/wait/stop 仍能看到上一轮的
-     * 子 agent(终态),run_agent 传同 agentId 经 carry-over 重建续跑(会话完整延续)。
+     * 子 agent(磁盘台账 agents.json,收口时 AgentLedger persistFinal 落盘),run_agent 传同
+     * agentId 经会话档案口(ConversationLoader 按 agentId 重建)续跑,历史完整延续;
+     * 指令经 agent.input 事件落盘(子 agent jsonl 自包含的轮次起点)。
      */
     @Test
-    void crossRoundVisibilityAndContinuation() throws Exception {
+    void crossRoundVisibilityAndContinuation(@org.junit.jupiter.api.io.TempDir Path tmp) throws Exception {
         SubAgentManager manager = new SubAgentManager();
         AtomicReference<String> lastText = new AtomicReference<>("第一轮结论");
+        dataDir = tmp;
 
         // ---- 第一轮:派发 + 收口 ----
-        ExecContext round1 = execContext("t-1", lastText);
+        ExecContext round1 = execContext("t-1", lastText, null);
         manager.run(round1, "第一条指令", "标题", "sub-1");
         manager.waitFor(round1, "sub-1", 5_000L);
+        // 模拟收口时 AgentLedger.persistFinal 落盘台账(状态终态 completed)
+        Files.writeString(tmp.resolve("agents.json"), """
+                {"agents":[{"agentId":"sub-1","creator":"subagent","title":"标题","status":"completed","createdAt":1,
+                 "latestActivity":{"content":"第一轮结论"}}]}
+                """);
 
-        // ---- 第二轮:冷启动(新 agents 注册表;生命周期下行段 resetForRun) ----
+        // ---- 第二轮:冷启动(新 agents 注册表;生命周期下行段 resetForRun;档案口=磁盘重建) ----
         agents.clear();
         manager.resetForRun("t-1");
-        ExecContext round2 = execContext("t-1", lastText);
+        List<Message> archived = List.of(
+                new UserMessage("第一条指令"),
+                new AssistantMessage("第一轮结论"));
+        java.util.List<String> emittedInputs = new java.util.ArrayList<>();
+        ExecContext round2 = execContext("t-1", lastText, agentId -> archived);
 
         // list_agents:上一轮的 sub-1 必须在场(终态 completed),不再是空列表
         JsonNode listed = dev.everyagent.contract.json.Json.parse(manager.list(round2));
@@ -124,7 +139,7 @@ class SubAgentManagerTest {
         assertEquals(1, arr.size(), "跨轮 list_agents 应包含上一轮的子 agent,实际: " + manager.list(round2));
         assertEquals("sub-1", arr.get(0).path("agentId").asString());
         assertEquals("completed", arr.get(0).path("status").asString(), "收口后的跨轮条目应报终态");
-        assertEquals("标题", arr.get(0).path("title").asString());
+        assertEquals("标题", arr.get(0).path("title").asString(), "title 沿用台账历史(原始身份)");
 
         // wait_agents 单查:历史 agent 直接落定返回摘要
         JsonNode waited = dev.everyagent.contract.json.Json.parse(manager.waitFor(round2, "sub-1", 1_000L));
@@ -135,7 +150,7 @@ class SubAgentManagerTest {
         assertTrue(manager.stop(round2, "sub-1").contains("已结束(completed)"),
                 "历史 agent 停止请求应答已结束");
 
-        // run_agent 跨轮续跑:carry-over 重建实体,会话延续 + 新指令
+        // run_agent 跨轮续跑:档案口重建实体,会话延续 + 新指令
         lastText.set("第二轮结论");
         assertEquals("子 agent 已启动(异步): sub-1",
                 manager.run(round2, "第二条指令", null, "sub-1"));
@@ -145,7 +160,7 @@ class SubAgentManagerTest {
         List<Message> conv = rebuilt.conversation();
         assertEquals(5, conv.size(), "跨轮续跑会话应为 [system, user1, assistant1, user2, assistant2],实际轮数: "
                 + conv.size());
-        assertInstanceOf(SystemMessage.class, conv.get(0), "carry-over 快照应含原 system 轮");
+        assertInstanceOf(SystemMessage.class, conv.get(0), "档案不含 system 轮,重建时由装配注入");
         assertInstanceOf(UserMessage.class, conv.get(1));
         assertEquals("第一轮结论", ((AssistantMessage) conv.get(2)).getText());
         assertInstanceOf(UserMessage.class, conv.get(3), "新指令追加在历史之后");
@@ -154,6 +169,16 @@ class SubAgentManagerTest {
             assertTrue(!(conv.get(i) instanceof UserMessage && conv.get(i - 1) instanceof UserMessage),
                     "跨轮续跑后仍不得出现连续 user(第 " + i + " 项)");
         }
+
+        // agent.input 落盘断言:每条指令(新建 + 续跑)都发 agent.input 事件,必带 agentId
+        java.util.List<dev.everyagent.plugin.api.model.EmitEvent> inputs = emitted.stream()
+                .filter(e -> "agent.input".equals(e.kind()))
+                .toList();
+        assertEquals(2, inputs.size(), "两轮各一条指令,各落盘一次 agent.input");
+        assertEquals("sub-1", inputs.get(0).agentId());
+        assertEquals("第一条指令", inputs.get(0).content());
+        assertEquals("sub-1", inputs.get(1).agentId());
+        assertEquals("第二条指令", inputs.get(1).content(), "续跑轮的新指令同样落盘(jsonl 轮次自包含的依据)");
     }
 
     /**
@@ -173,7 +198,7 @@ class SubAgentManagerTest {
                 """);
 
         SubAgentManager manager = new SubAgentManager(); // 新进程:无内存 carry-over
-        ExecContext ctx = execContext("t-2", new AtomicReference<>(""));
+        ExecContext ctx = execContext("t-2", new AtomicReference<>(""), null);
 
         JsonNode listed = dev.everyagent.contract.json.Json.parse(manager.list(ctx));
         JsonNode arr = listed.path("agents");
@@ -191,8 +216,9 @@ class SubAgentManagerTest {
         assertTrue(manager.stop(ctx, "sub-9").contains("已结束(stopped)"));
     }
 
-    /** ExecContext 桩:subjectId/agents()/dataDir/agentFactory()/interaction 槽位,装配桩自动注册子 agent。 */
-    private ExecContext execContext(String subjectId, AtomicReference<String> lastText) {
+    /** ExecContext 桩:subjectId/agents()/dataDir/agentFactory()/interaction/档案口槽位,装配桩自动注册子 agent。 */
+    private ExecContext execContext(String subjectId, AtomicReference<String> lastText,
+            dev.everyagent.plugin.api.agent.ConversationArchive archive) {
         ExecContext ctx = mock(ExecContext.class);
         InteractionService interaction = mock(InteractionService.class);
         // 先建好桩再 stub:在 thenReturn 里现造 mock/工厂会触发 Mockito UnfinishedStubbing
@@ -202,6 +228,11 @@ class SubAgentManagerTest {
         when(ctx.dataDir()).thenAnswer(inv -> dataDir);
         when(ctx.interaction()).thenReturn(interaction);
         when(ctx.agentFactory()).thenReturn(agentFactory);
+        when(ctx.conversationArchive()).thenReturn(archive);
+        when(ctx.emitter()).thenAnswer(inv -> (dev.everyagent.plugin.api.model.EventEmitter) e -> {
+            emitted.add(e);
+            return 0L;
+        });
         return ctx;
     }
 

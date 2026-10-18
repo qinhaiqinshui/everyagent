@@ -204,6 +204,24 @@ public final class TaskEntry implements TaskRuntime {
         return bound;
     }
 
+    /** 会话档案口裸依赖(TaskManager → TaskEntryCreateNode 组装时注入;单测直构场景可缺)。 */
+    private volatile dev.everyagent.plugin.api.agent.ConversationArchive conversationArchive;
+
+    /**
+     * 已绑定本主体的会话档案口(角色中性,§5.3):按 agentId 经 TaskStore +
+     * ConversationLoader 从 {@code <agentId>.jsonl} 重建会话内存——主/子/审议 agent
+     * 一视同仁。未注入时返回 null(单测直构场景)。
+     */
+    @Override
+    public dev.everyagent.plugin.api.agent.ConversationArchive conversationArchive() {
+        return conversationArchive;
+    }
+
+    /** 注入会话档案口(TaskEntryCreateNode 创建本对象后调用)。 */
+    public void conversationArchive(dev.everyagent.plugin.api.agent.ConversationArchive archive) {
+        this.conversationArchive = archive;
+    }
+
     // ---- AgentContext 接口已删除，以下为 TaskEntry 自身方法 ----
 
     /** 工作区根路径。 */

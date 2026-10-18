@@ -115,4 +115,34 @@ class ConversationLoaderTest {
         assertTrue(ConversationLoader.load(store, dir, null).isEmpty());
         assertTrue(ConversationLoader.load(store, dir, "a_nobody").isEmpty(), "文件缺失返回空");
     }
+
+    /**
+     * 角色中性重建:子 agent 的 &lt;subId&gt;.jsonl(agent.input 指令轮 + message +
+     * tool.result)与主 agent 走同一谓词同一入口——跨轮/跨重启续跑子 agent 的依据。
+     */
+    @Test
+    void subAgentArchiveRebuildsByAgentId() throws Exception {
+        String sub = "sub-abc";
+        Files.writeString(dir.resolve(sub + ".jsonl"), String.join("\n",
+                "{\"seq\":10,\"ts\":1,\"event\":\"agent.input\",\"agentId\":\"sub-abc\",\"payload\":{\"content\":\"调研 X 库的用法\"}}",
+                "{\"seq\":11,\"ts\":2,\"event\":\"message\",\"agentId\":\"sub-abc\",\"payload\":{\"content\":\"\",\"data\":{\"toolCalls\":[{\"id\":\"c1\",\"name\":\"read_file\",\"arguments\":\"{}\"}]}}}",
+                "{\"seq\":12,\"ts\":3,\"event\":\"tool.result\",\"agentId\":\"sub-abc\",\"payload\":{\"summary\":\"文件内容\",\"data\":{\"callId\":\"c1\"}}}",
+                "{\"seq\":13,\"ts\":4,\"event\":\"message\",\"agentId\":\"sub-abc\",\"payload\":{\"content\":\"X 库结论\"}}",
+                "{\"seq\":14,\"ts\":5,\"event\":\"agent.input\",\"agentId\":\"sub-abc\",\"payload\":{\"content\":\"补充:对比 Y 库\"}}",
+                "{\"seq\":15,\"ts\":6,\"event\":\"message\",\"agentId\":\"sub-abc\",\"payload\":{\"content\":\"对比结论\"}}") + "\n");
+        List<Message> out = ConversationLoader.load(store, dir, sub);
+        assertEquals(6, out.size(), "user/assistant 两轮完整配对 + 工具轮");
+        assertEquals("调研 X 库的用法", out.get(0).getText(), "agent.input → UserMessage(与 user.message 同谓词)");
+        AssistantMessage callMsg = (AssistantMessage) out.get(1);
+        assertEquals(1, callMsg.getToolCalls().size(), "工具调用轮按真实 id 保留");
+        assertEquals("文件内容", ((ToolResponseMessage) out.get(2)).getResponses().get(0).responseData());
+        assertEquals("X 库结论", out.get(3).getText());
+        assertEquals("补充:对比 Y 库", out.get(4).getText(), "续跑指令(agent.input)同谓词折入");
+        assertEquals("对比结论", out.get(5).getText());
+        for (int i = 1; i < out.size(); i++) {
+            assertTrue(!(out.get(i) instanceof org.springframework.ai.chat.messages.UserMessage
+                    && out.get(i - 1) instanceof org.springframework.ai.chat.messages.UserMessage),
+                    "重建序列不得出现连续 user(第 " + i + " 项)");
+        }
+    }
 }

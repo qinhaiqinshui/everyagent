@@ -35,13 +35,14 @@ import java.util.concurrent.TimeUnit;
  * <p><b>监视器内部化</b>:run/stopAll 互斥不再借用任务对象监视器,改锁 Manager
  * 自有的 per-subject 状态对象 {@link TaskSubState}——对执行主体对象的锁依赖消失。
  *
- * <p><b>子 agent 是主体级(跨轮)资产</b>:{@code ctx.agents()} 是 per-run 注册表
- * (主体收口即销毁),子 agent 的可见性不随单轮结束消失——工具读侧(list/wait/stop)
- * 按「本轮 live 实体 &gt; 进程内 carry-over 会话快照 &gt; 磁盘台账 agents.json」三层合并
+ * <p><b>子 agent 是主体级(跨轮)资产,磁盘是唯一事实源</b>:{@code ctx.agents()} 是
+ * per-run 注册表(主体收口即销毁),子 agent 的历史不随单轮消失——每条指令经
+ * {@code agent.input} 事件落盘 {@code <agentId>.jsonl}(与主 agent 同一落盘通道),
+ * 工具读侧(list/wait/stop)合并「本轮 live 实体 &gt; 磁盘台账 agents.json」两层
  * (非在场实体的 running/waiting-user 一律归一 stopped,与 AgentLedger 冷启动归一同规则);
- * {@code run_agent} 传历史 agentId 时经 carry-over 重建实体续跑(会话完整延续)。
- * worker 重启后 carry-over 丢失,同 agentId 续跑=全新会话(子 agent 会话不做磁盘冷启动
- * 重建,ConversationLoader 只重建主 agent)。
+ * {@code run_agent} 传历史 agentId 时经 {@link ExecContext#conversationArchive()}
+ * 档案口按 agentId 中性重建会话续跑(主/子/审议同一条重建路径,§5.3)——进程重启后
+ * 历史照常恢复,不再依赖任何进程内存。
  *
  * <p><b>会话交替不变量</b>:子 agent 会话跨轮复用(同 agentId 的 run_agent 续跑),
  * 而 agent 执行链不回写会话内存(worker 的 {@code WorkerToolEventAdvisor} 只发
@@ -91,38 +92,6 @@ public class SubAgentManager {
     private static final class TaskSubState {
         final Map<String, Future<?>> subFutures = new ConcurrentHashMap<>();
         volatile boolean stopRequested;
-        /**
-         * 跨轮 carry-over:上一轮子 agent 的会话快照(agentId → 快照,插入序=收口序)。
-         * {@code ctx.agents()} 是 per-run 注册表,收口即销毁;本表由 {@link SubAgentManager}
-         * (进程级单例)持有,供下一轮 list/wait/stop 可见与 run_agent 跨轮续跑重建。
-         * 容量有界({@link #CARRY_LIMIT}),超限逐出最旧;worker 重启即丢(磁盘兜底见
-         * {@link #diskLedger})。
-         */
-        final java.util.LinkedHashMap<String, CarriedSub> carried = new java.util.LinkedHashMap<>();
-    }
-
-    /** carry-over 容量上限(超出按收口序逐出最旧;防长任务/多任务下会话快照无界累积)。 */
-    private static final int CARRY_LIMIT = 12;
-
-    /** 跨轮子 agent 快照:终态状态 + 活动快照 + 完整会话(含最终回答轮)。 */
-    private static final class CarriedSub {
-        final String agentId;
-        final String title;
-        final long createdAt;
-        final String status;
-        final AgentActivity activity;
-        final List<org.springframework.ai.chat.messages.Message> conversation;
-
-        CarriedSub(String agentId, String title, long createdAt, String status,
-                AgentActivity activity,
-                List<org.springframework.ai.chat.messages.Message> conversation) {
-            this.agentId = agentId;
-            this.title = title;
-            this.createdAt = createdAt;
-            this.status = status;
-            this.activity = activity;
-            this.conversation = conversation;
-        }
     }
 
     private TaskSubState state(ExecContext ctx) {
@@ -155,8 +124,11 @@ public class SubAgentManager {
      * run_agent 工具入口:返回给主 agent 的文本。
      * 同 agentId 仅在"运行中"时拒绝;已落定(完成/停止/失败)→ 复用原实体续跑
      * (原会话追加新指令,不重做已完成部分,§5.6/agent-dispatch 技能)。
-     * <p>跨轮:实体不在 {@code ctx.agents()}(per-run 注册表)但 carry-over 快照在场 →
-     * 重建实体(会话种子=快照,续跑);仅磁盘台账在场(worker 重启后)→ 同 id 全新会话。
+     * <p>跨轮/跨重启:实体不在 {@code ctx.agents()}(per-run 注册表)→ 经
+     * {@link ExecContext#conversationArchive()} 档案口按 agentId 重建会话续跑
+     * (磁盘唯一事实源,worker 重启后历史照常恢复);磁盘亦无档案(凭空 id)→ 同 id 全新会话。
+     * <p>每条指令(新建/复用/重建三路径)都发 {@code agent.input} 事件落盘——
+     * {@code <agentId>.jsonl} 因此自包含(user → assistant 轮次完整),是续跑重建的依据。
      */
     public String run(ExecContext ctx, String input, String title, String agentId)
             throws InterruptedException {
@@ -203,22 +175,27 @@ public class SubAgentManager {
                 // 复用路径不经过 build():agent.started 由 AgentStatusAdvisor 在本轮
                 // run() 的流入口自动发射(与新建路径同一发射点),此处不再手动补发。
             } else if (agentId != null && !agentId.isEmpty()) {
-                // 指定 agentId 但本轮实体不在场:上一轮的跨轮续跑,或重启后的同 id 重建
-                CarriedSub carried = st.carried.get(agentId);
-                if (carried != null) {
-                    sub = rebuildCarried(ctx, carried, input);
-                    log.info("[sub] 跨轮续跑重建 agentId={} subjectId={} 会话轮数={} 原status={}",
-                            agentId, ctx.subjectId(), carried.conversation.size(), carried.status);
+                // 指定 agentId 但本轮实体不在场:跨轮/跨重启续跑,或凭空 id 全新开始
+                List<org.springframework.ai.chat.messages.Message> prior = loadArchive(ctx, agentId);
+                if (!prior.isEmpty()) {
+                    sub = rebuildFromArchive(ctx, id, ledgerTitle(ctx, id, title), prior, input);
+                    log.info("[sub] 档案重建续跑 agentId={} subjectId={} 历史轮数={}",
+                            agentId, ctx.subjectId(), prior.size());
                 } else {
                     sub = buildSubAgent(ctx, id, title == null || title.isEmpty() ? "子任务" : title, input);
                     if (diskLedger(ctx).containsKey(agentId)) {
-                        log.info("[sub] agentId={} 仅磁盘台账在场(worker 重启或 carry-over 逐出),同 id 全新会话 subjectId={}",
+                        log.warn("[sub] agentId={} 台账在场但档案为空(jsonl 缺失/损坏),同 id 全新会话 subjectId={}",
                                 agentId, ctx.subjectId());
                     }
                 }
             } else {
                 sub = buildSubAgent(ctx, id, title == null || title.isEmpty() ? "子任务" : title, input);
             }
+
+            // 指令落盘(agent.input,必带 agentId):<agentId>.jsonl 自包含的轮次起点,
+            // 跨轮/跨重启续跑重建的依据。新建/复用/重建三路径统一在此发射(先于子线程
+            // 首个 message 事件)。失败仅 warn:日志护栏满时任务本身已无法续写,不阻断启动。
+            emitInput(ctx, id, input);
 
             // FutureTask 先入册再执行:waitFor/stop/run 守卫看到的永远是当前运行,
             // 不存在 submit 与 put 之间被查询/完成的窗口。
@@ -238,19 +215,69 @@ public class SubAgentManager {
     }
 
     /**
-     * 跨轮续跑重建:用 carry-over 快照作会话种子新建实体(新 emitter/新 ChatClient,
-     * 绑定本轮 ExecContext——直接复用旧实体会把事件发进已销毁的上一轮日志)。
-     * 快照会话含原 system 轮与上一轮最终回答轮,故不再另设 systemPrompt,只追加新指令。
+     * 跨轮/跨重启续跑重建:磁盘档案作会话种子新建实体(新 emitter/新 ChatClient,绑定
+     * 本轮 ExecContext——直接复用旧实体会把事件发进已销毁的上一轮日志)。
+     * 档案由 {@link #loadArchive} 经中性档案口取得(不含 system 轮),此处补 system +
+     * 追加新指令;档案尾是孤立 user(中断早于任何回复)时补占位 assistant,保证
+     * user/assistant 交替不变量(§7.9)。
      */
-    private Agent rebuildCarried(ExecContext ctx, CarriedSub carried, String input) {
+    private Agent rebuildFromArchive(ExecContext ctx, String agentId, String title,
+            List<org.springframework.ai.chat.messages.Message> prior, String input) {
+        List<org.springframework.ai.chat.messages.Message> seed = new ArrayList<>(prior);
+        if (!seed.isEmpty() && seed.get(seed.size() - 1) instanceof UserMessage) {
+            seed.add(AssistantMessage.builder().content(NO_FINAL_ANSWER_PLACEHOLDER).build());
+        }
         List<ToolCallback> toRemove = new ArrayList<>(List.of(ToolCallbacks.from(new SubAgentToolNames())));
-        return ctx.agentFactory().create(carried.agentId)
-                .title(carried.title == null || carried.title.isEmpty() ? "子任务" : carried.title)
+        return ctx.agentFactory().create(agentId)
+                .title(title == null || title.isEmpty() ? "子任务" : title)
                 .tools(toRemove, AgentBuilder.ModifyMode.REMOVE)
+                .systemPrompt(SUB_SYSTEM_PROMPT)
                 .creator("subagent")
-                .conversation(carried.conversation)
+                .conversation(seed)
                 .userInput(input)
                 .build();
+    }
+
+    /** 经中性档案口读 agent 会话档案(端口未绑定/IO 失败返回空表,不抛)。 */
+    private static List<org.springframework.ai.chat.messages.Message> loadArchive(ExecContext ctx, String agentId) {
+        dev.everyagent.plugin.api.agent.ConversationArchive archive = ctx.conversationArchive();
+        if (archive == null) {
+            return List.of();
+        }
+        try {
+            List<org.springframework.ai.chat.messages.Message> prior = archive.load(agentId);
+            return prior != null ? prior : List.of();
+        } catch (RuntimeException e) {
+            log.warn("[sub] 会话档案读取失败(按无历史处理) agentId={} subject={}", agentId, ctx.subjectId(), e);
+            return List.of();
+        }
+    }
+
+    /** 续跑标题:title 参数优先,缺省回退磁盘台账的历史 title(沿用原身份,不重置为「子任务」)。 */
+    private static String ledgerTitle(ExecContext ctx, String agentId, String title) {
+        if (title != null && !title.isEmpty()) {
+            return title;
+        }
+        ObjectNode hist = diskLedger(ctx).get(agentId);
+        return hist == null ? null : hist.path("title").asString(null);
+    }
+
+    /** 发 {@code agent.input} 事件(必带 agentId;端口未绑定/发射失败仅记日志,不阻断启动)。 */
+    private static void emitInput(ExecContext ctx, String agentId, String input) {
+        dev.everyagent.plugin.api.model.EventEmitter emitter = ctx.emitter();
+        if (emitter == null) {
+            return;
+        }
+        try {
+            emitter.emit(dev.everyagent.plugin.api.model.EmitEvent.of(
+                    dev.everyagent.plugin.api.proto.SnowflakeId.next(),
+                    dev.everyagent.plugin.api.event.Events.AGENT_INPUT,
+                    agentId, null, null, input, null, null,
+                    dev.everyagent.plugin.api.model.EmitEvent.Mode.REPLACE));
+        } catch (RuntimeException e) {
+            log.warn("[sub] agent.input 落盘失败(续跑重建将缺本轮指令) agentId={} subject={}",
+                    agentId, ctx.subjectId(), e);
+        }
     }
 
     /**
@@ -317,26 +344,8 @@ public class SubAgentManager {
             // 异常/中断路径同样回写(空则记占位),保证 user/assistant 严格交替。
             appendFinalAnswerTurn(sub);
             sub.finished(true);
-            // 跨轮 carry-over:快照(终态 + 活动 + 完整会话)留给下一轮的 list/wait/stop
-            // 与 run_agent 跨轮续跑(ctx.agents() 是 per-run 注册表,收口即销毁)。
-            carryOver(ctx, id, sub);
             log.debug("[sub] runSub 收口退出 id={} subStatus={} finished=true thread={}",
                     id, sub.status(), Thread.currentThread().getName());
-        }
-    }
-
-    /** 记录跨轮快照(容量有界,超限按收口序逐出最旧;同 id 重收口则刷新到最新)。 */
-    private void carryOver(ExecContext ctx, String id, Agent sub) {
-        TaskSubState st = state(ctx);
-        synchronized (st) {
-            st.carried.remove(id);
-            st.carried.put(id, new CarriedSub(id, sub.title(), sub.createdAt(), sub.status(),
-                    sub.activity(), List.copyOf(sub.conversation())));
-            while (st.carried.size() > CARRY_LIMIT) {
-                String eldest = st.carried.keySet().iterator().next();
-                st.carried.remove(eldest);
-                log.debug("[sub] carry-over 超限逐出 subjectId={} agentId={}", ctx.subjectId(), eldest);
-            }
         }
     }
 
@@ -387,11 +396,10 @@ public class SubAgentManager {
 
     /**
      * 遍历合并视图返回 subagent 创建的 agent 摘要数组:
-     * 磁盘台账(上一轮落定的终态基线,worker 重启后唯一来源)→ carry-over 快照覆盖
-     * (进程内,比磁盘新鲜)→ 本轮 live 实体覆盖(status/latestActivity 最新,createdAt
-     * /title 沿用基线——跨轮重建实体的 createdAt 是重建时刻,不能覆盖台账的原始创建时间)。
-     * 按顶级 creator=subagent 过滤(旧条目无顶级 creator 时回退 metadata.creator,
-     * 两者皆空视为旧格式子 agent 保留,§7.20.1),只展示本插件创建的子 agent。
+     * 磁盘台账(上一轮落定的终态基线,worker 重启后唯一来源)→ 本轮 live 实体覆盖
+     * (status/latestActivity 最新,createdAt/title 沿用基线——跨轮重建实体的 createdAt
+     * 是重建时刻,不能覆盖台账的原始创建时间)。按顶级 creator=subagent 过滤(旧条目无
+     * 顶级 creator 时回退 metadata.creator,两者皆空视为旧格式子 agent 保留,§7.20.1)。
      */
     private ArrayNode agentsJsonMerged(ExecContext ctx, TaskSubState st) {
         java.util.LinkedHashMap<String, ObjectNode> merged = new java.util.LinkedHashMap<>();
@@ -402,11 +410,7 @@ public class SubAgentManager {
             n.put("status", normalizeHistorical(e.getKey(), n.path("status").asString("stopped"), st, ctx));
             merged.put(e.getKey(), n);
         }
-        // 2. 进程内 carry-over 覆盖(收口即记,天然终态且比 30s 磁盘快照新鲜)
-        for (CarriedSub c : st.carried.values()) {
-            merged.put(c.agentId, carriedJson(c));
-        }
-        // 3. 本轮 live 实体覆盖
+        // 2. 本轮 live 实体覆盖
         for (AgentContext s : ctx.agents().values()) {
             // 过滤:只展示 subagent 创建的 agent
             if (!"subagent".equals(s.creator())) continue;
@@ -428,29 +432,6 @@ public class SubAgentManager {
             return status;
         }
         return "running".equals(status) || "waiting-user".equals(status) ? "stopped" : status;
-    }
-
-    /** carry-over 快照 → 工具契约摘要(终态已由收口写定,防御性再归一一次)。 */
-    private static ObjectNode carriedJson(CarriedSub c) {
-        ObjectNode n = Json.obj();
-        n.put("agentId", c.agentId);
-        if (c.title != null && !c.title.isEmpty()) {
-            n.put("title", c.title);
-        }
-        n.put("createdAt", c.createdAt);
-        String s = c.status;
-        n.put("status", "running".equals(s) || "waiting-user".equals(s) ? "stopped" : s);
-        AgentActivity act = c.activity;
-        ObjectNode la = Json.obj();
-        if (act != null) {
-            if (act.reasoning() != null) la.put("reasoning", act.reasoning());
-            if (act.content() != null) la.put("content", act.content());
-            if (act.error() != null) la.put("error", act.error());
-            if (act.createdAt() != null) la.put("createdAt", act.createdAt());
-            if (act.updatedAt() != null) la.put("updatedAt", act.updatedAt());
-        }
-        n.set("latestActivity", la);
-        return n;
     }
 
     /** live 摘要覆盖历史基线:状态/活动取 live(最新),createdAt/title 沿用基线(原始资产)。 */
@@ -479,7 +460,7 @@ public class SubAgentManager {
      * 30s 定时快照 + 收口终态快照两路径)。只保留 subagent 条目,按 agentId 索引。
      * 文件缺失/形状异常/读取失败返回空表(台账非本插件所有,读侧容错不抛)。
      */
-    private Map<String, ObjectNode> diskLedger(ExecContext ctx) {
+    private static Map<String, ObjectNode> diskLedger(ExecContext ctx) {
         java.nio.file.Path dir = ctx.dataDir();
         if (dir == null) {
             return Map.of();
@@ -519,12 +500,8 @@ public class SubAgentManager {
         return c.isEmpty() || "subagent".equals(c);
     }
 
-    /** 历史摘要查询(carry-over 优先,磁盘台账兜底;均无返回 null)——wait/stop 的跨轮入口。 */
+    /** 历史摘要查询(磁盘台账;无返回 null)——wait/stop 的跨轮入口。 */
     private ObjectNode historicalSummary(TaskSubState st, ExecContext ctx, String agentId) {
-        CarriedSub c = st.carried.get(agentId);
-        if (c != null) {
-            return carriedJson(c);
-        }
         ObjectNode disk = diskLedger(ctx).get(agentId);
         if (disk != null) {
             ObjectNode n = disk.deepCopy();

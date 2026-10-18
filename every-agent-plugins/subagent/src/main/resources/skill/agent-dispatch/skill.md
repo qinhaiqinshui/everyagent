@@ -31,8 +31,7 @@ description: 当任务可并行执行以提高效率、只需结论但自行探�
 - 若你在产出最终回复前没来得及 wait，子 Agent 会被系统等待到自然完成（约 5 分钟上限）后才收口；用户继续对话的下一轮里，你可用 `list_agents` / `wait_agents` 查看其终态与结果并汇报。
 
 ## 四、续跑 / 重启 / 重试
-- 你给 `run_agent` 传入已存在的 `agentId`，即在该 agent 上继续（复用其历史上下文，不重做已完成部分）；不传 `agentId` 则新建 agent 全新执行（此时 `title` 必填）。续跑**跨轮有效**：`list_agents` 里出现的历史 `agentId`（含用户中断、点停止后遗留的）都可以继续。
-- 注意：系统重启（worker 重启）后子 Agent 的历史上下文不可恢复，此时以同一 `agentId` 续跑等于全新开始，不要假设它记得之前做过的事。
+- 你给 `run_agent` 传入已存在的 `agentId`，即在该 agent 上继续（复用其历史上下文，不重做已完成部分）；不传 `agentId` 则新建 agent 全新执行（此时 `title` 必填）。续跑**跨轮有效**：`list_agents` 里出现的历史 `agentId`（含用户中断、点停止后遗留的）都可以继续，其历史上下文已持久化，跨轮、跨系统重启都不丢。
 - 子 Agent 卡住时：先 `stop_agent` 停止它，再以同一 `agentId` 调 `run_agent` 重启续跑。
 - 子 Agent 失败（`run_agent` 报错或 `wait_agents` 的 `agent.status` 为 `error`）时：修复 `input` 后以同一 `agentId` 重试（续跑），或不传 `agentId` 来以新的子Agent重跑该工作。
 - **错误处理优先级**：如果子 Agent 出错，为了利用子 Agent 已积累的上下文，尽量先解决问题后复用该子 Agent（传入同一 `agentId` 续跑）；否则即使重新派发新子 Agent 也会遇到同样问题。
