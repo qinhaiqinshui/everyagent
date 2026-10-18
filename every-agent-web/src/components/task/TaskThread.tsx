@@ -17,6 +17,8 @@ export interface TaskThreadProps {
   items: TaskThreadItem[]
   /** 当前是否处于加载中。 */
   loading?: boolean
+  /** 主 agent 稳定 Id（渲染层消费 agentId 区分子 agent 输入；透传给 AgentMessageThread）。 */
+  mainAgentId?: string
   /**
    * 本轮生成是否在飞（含点击发送 → 首 token 前空窗 → 流式输出 → 工具执行中 → 收口）。
    * 驱动线程底部的任务状态横幅（TaskThread.ThreadStatusBanner）：任务运行中显示、随消息被向下顶、
@@ -37,6 +39,7 @@ export default function TaskThread({
   taskId,
   items,
   loading = false,
+  mainAgentId = '',
   isGenerating = false,
   topSlot,
   bottomSlot,
@@ -54,8 +57,8 @@ export default function TaskThread({
     <div className="nagent-thread">
       {topSlot}
       {foldWindows.length > 0
-        ? renderThreadWithFoldWindows(items, taskId, foldWindows)
-        : buildMessageGroups(items, taskId)}
+        ? renderThreadWithFoldWindows(items, taskId, foldWindows, mainAgentId)
+        : buildMessageGroups(items, taskId, mainAgentId)}
       {bottomSlot}
       <ThreadStatusBanner running={isGenerating} />
     </div>
@@ -160,6 +163,7 @@ function renderMessageGroups(
   items: TaskThreadItem[],
   taskId: string,
   maps: TaskThreadToolMaps,
+  mainAgentId: string,
 ): React.ReactNode[] {
   const { toolCallNameById, toolCallPayloadById, toolResultById } = maps
   const result: React.ReactNode[] = []
@@ -211,6 +215,7 @@ function renderMessageGroups(
             key={`toolgroup:${groupMessages[0].message.messageId}`}
             message={groupMessages[0].message}
             taskId={taskId}
+            mainAgentId={mainAgentId}
             mergedToolMessages={groupMessages.map((groupItem) => groupItem.message)}
             resolveToolCallName={toolCallNameOf}
             resolveToolCallPayload={(toolCallId) => toolCallPayloadById.get(toolCallId)}
@@ -226,6 +231,7 @@ function renderMessageGroups(
           key={`message:${groupMessages[0].message.messageId}`}
           message={groupMessages[0].message}
           taskId={taskId}
+          mainAgentId={mainAgentId}
           resolveToolCallPayload={(toolCallId) => toolCallPayloadById.get(toolCallId)}
           resolveToolResult={resolveToolResult}
         />,
@@ -240,6 +246,7 @@ function renderMessageGroups(
             key={`message:${groupItem.message.messageId}`}
             message={groupItem.message}
             taskId={taskId}
+            mainAgentId={mainAgentId}
             isContinuation={idx > 0}
             resolveToolCallPayload={(toolCallId) => toolCallPayloadById.get(toolCallId)}
             resolveToolResult={resolveToolResult}
@@ -256,8 +263,9 @@ function renderMessageGroups(
 function buildMessageGroups(
   items: TaskThreadItem[],
   taskId: string,
+  mainAgentId: string,
 ): React.ReactNode[] {
-  return renderMessageGroups(items, taskId, buildToolMaps(items))
+  return renderMessageGroups(items, taskId, buildToolMaps(items), mainAgentId)
 }
 
 /** 过程性内容折叠窗口：一条用户消息到其后第一条 AI 最终回复之间构成一个窗口。 */
@@ -332,6 +340,7 @@ function renderThreadWithFoldWindows(
   items: TaskThreadItem[],
   taskId: string,
   windows: FoldWindow[],
+  mainAgentId: string,
 ): React.ReactNode[] {
   // 全线程共享同一份工具 join 索引：过程段、最终回复、窗口外片段各自渲染时，
   // 按 callId 合并工具结果都能命中同一张表。
@@ -341,7 +350,7 @@ function renderThreadWithFoldWindows(
   for (const window of windows) {
     // 窗口之前的内容（含该窗口的用户消息）照常渲染。
     if (cursor <= window.userIndex) {
-      result.push(...renderMessageGroups(items.slice(cursor, window.userIndex + 1), taskId, maps))
+      result.push(...renderMessageGroups(items.slice(cursor, window.userIndex + 1), taskId, maps, mainAgentId))
     }
     result.push(
       <CollapsibleRound
@@ -350,13 +359,14 @@ function renderThreadWithFoldWindows(
         finalItem={window.finalItem}
         processItems={window.processItems}
         maps={maps}
+        mainAgentId={mainAgentId}
       />,
     )
     cursor = window.finalReplyIndex + 1
   }
   // 最后一个窗口之后的内容照常渲染。
   if (cursor < items.length) {
-    result.push(...renderMessageGroups(items.slice(cursor), taskId, maps))
+    result.push(...renderMessageGroups(items.slice(cursor), taskId, maps, mainAgentId))
   }
   return result
 }
@@ -367,15 +377,17 @@ function CollapsibleRound({
   finalItem,
   processItems,
   maps,
+  mainAgentId,
 }: {
   taskId: string
   finalItem: Extract<TaskThreadItem, { type: 'agent_message' }>
   processItems: TaskThreadItem[]
   maps: TaskThreadToolMaps
+  mainAgentId: string
 }) {
   const [open, setOpen] = React.useState(false)
   if (processItems.length === 0) {
-    return <>{renderMessageGroups([finalItem], taskId, maps)}</>
+    return <>{renderMessageGroups([finalItem], taskId, maps, mainAgentId)}</>
   }
   return (
     <div className="nagent-round-collapse">
@@ -396,11 +408,11 @@ function CollapsibleRound({
       </button>
       {open ? (
         <div className="nagent-round-collapse__process">
-          {renderMessageGroups(processItems, taskId, maps)}
+          {renderMessageGroups(processItems, taskId, maps, mainAgentId)}
         </div>
       ) : null}
       <div className="nagent-round-collapse__final">
-        {renderMessageGroups([finalItem], taskId, maps)}
+        {renderMessageGroups([finalItem], taskId, maps, mainAgentId)}
       </div>
     </div>
   )

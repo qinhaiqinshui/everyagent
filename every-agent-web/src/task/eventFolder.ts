@@ -8,9 +8,10 @@
  *
  * 折叠规则(与 n 的写入语义对齐):
  * 事件名不分主/子 agent——同一名事件,归属由 agentId 字段决定(空 = 主线程);
- * - user.message           → 主 agent:role:'user' 消息(payload.content + payload.data.rawContent);
- *                           派生 agent(子/审议)的 user.message(worker 侧同事件名落盘)不进主线程
- *                           气泡,以 trace 形态按 seq upsert 展示(见 eventRegistry,内容零丢失)
+ * - user.message           → role:'user' 消息(payload.content + payload.data.rawContent);
+ *                           主/子 agent 共用同一事件名,foldRole='user' 仅主 agent 打标
+ *                           (折叠窗口起点);子 agent 的 user.message 同样以消息插入但不打标,
+ *                           作为过程内容落入折叠窗口内(渲染层按 agentId 区分样式与扩展点)
  * - thinking / delta       → 当前流式 assistant 消息的 reasoning / content 追加(瞬态,payload.content)
  * - message                → 一轮权威终结:完整 content/data.thinking/data.toolCalls(真实 toolCall id)
  *                           定稿该 agent 的流式消息
@@ -529,7 +530,9 @@ export class TaskEventFolder {
       type: 'agent_message',
       createdAt: message.createdAt,
       message,
-      foldRole: message.role === 'user' ? 'user' : undefined,
+      // 仅主 agent 的 user 消息标 foldRole='user'(折叠窗口起点);子 agent 的
+      // user.message 同样经此插入但不打标,作为过程内容落入折叠窗口内。
+      foldRole: message.role === 'user' && this.isMain(message.agentId || agentKey) ? 'user' : undefined,
     }
     this.insertItemBySeq(item, seqKey, seqKey)
   }

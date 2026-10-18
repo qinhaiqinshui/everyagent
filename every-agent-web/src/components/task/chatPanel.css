@@ -612,15 +612,20 @@
   margin: 16px 0;
 }
 
+/* 子 agent 输入气泡：复用用户气泡形态，背景换中性色以与真人用户消息区分，间距收窄。 */
+.nagent-msg__bubble--sub-agent {
+  background: var(--bg-tertiary);
+  margin: 8px 0;
+}
+
 /* ─── 用户消息气泡：超高折叠（无滚动条，溢出隐藏 + 渐变遮罩 + 展开按钮） ─── */
 .nagent-msg__bubble-content {
   width: 100%;
   min-width: 0;
 }
 
-/* 折叠态：内容限高 220px，溢出裁剪（不出滚动条），底部渐变淡出提示还有内容。 */
+/* 折叠态：内容限高（max-height 由 JS 内联 style 设置,支持子 agent 气泡用不同阈值），溢出裁剪（不出滚动条），底部渐变淡出提示还有内容。 */
 .nagent-msg__bubble--collapsed .nagent-msg__bubble-content {
-  max-height: 220px;
   overflow: hidden;
   -webkit-mask-image: linear-gradient(to bottom, #000 62%, transparent 96%);
   mask-image: linear-gradient(to bottom, #000 62%, transparent 96%);

@@ -30,6 +30,8 @@ export interface RoundDetailProps {
   taskId: string
   /** 是否仍在生成（驱动 TaskThread 底部运行状态横幅）。 */
   isGenerating?: boolean
+  /** 主 agent 稳定 Id（渲染层消费 agentId 区分子 agent 输入；透传给 TaskThread）。 */
+  mainAgentId?: string
   /** 外部正在一次性拉取该轮区间（显示加载提示）。 */
   loading?: boolean
   /** agent 过滤谓词（「只看该 agent」）：仅放行归属该 agent 的线程项；缺省不过滤。 */
@@ -45,6 +47,7 @@ export default function RoundDetail({
   items,
   taskId,
   isGenerating = false,
+  mainAgentId = '',
   loading = false,
   matches,
 }: RoundDetailProps): React.ReactNode {
@@ -68,7 +71,7 @@ export default function RoundDetail({
   return (
     <div className="nagent-round-detail nagent-round-collapse__process">
       {slice.length > 0 ? (
-        <TaskThread taskId={taskId} items={slice} isGenerating={isGenerating} />
+        <TaskThread taskId={taskId} items={slice} isGenerating={isGenerating} mainAgentId={mainAgentId} />
       ) : showLoading ? (
         <div className="nagent-round-detail__loading" role="status">
           <InlineSpinner size={14} />

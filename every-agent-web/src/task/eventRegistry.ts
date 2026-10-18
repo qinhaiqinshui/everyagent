@@ -91,7 +91,7 @@ export function defaultHandler(event: FoldableTaskEvent, state: TaskThreadState,
 
 // ---- 注册全部现役 kind 的 handler ----
 
-/** user.message → role:'user' 消息(主 agent);派生 agent(子/审议)的 user.message 以 trace 形态展示 */
+/** user.message → role:'user' 消息(主/子 agent 共用同一事件名;foldRole 仅主 agent 打标) */
 registerEventKind('user.message', {
   handle(event, state, folder) {
     const seqKey = String(event.seq)
@@ -100,26 +100,36 @@ registerEventKind('user.message', {
     const rawContent = typeof data?.rawContent === 'string' && data.rawContent.length
       ? data.rawContent : content
     const agentKey = agentKeyOf(event, folder)
-    // 派生 agent 的指令(worker 侧与主 agent 同一事件名落盘):不进主线程 user
-    // 气泡——foldRole='user' 是主线程折叠窗口语义,插入会把子 agent指令渲染成右侧用户
-    // 消息并扰乱折叠扫描/轮次骨架。以 trace 形态按 seq upsert 展示(kind=user.message,
-    // 归到该 agent 名下),内容零丢失,历史回放同一路径。主 agent 判据 =
-    // mainAgentId(task 层传入的固定 id),非空串魔法。
-    if (!folder.isMain(agentKey)) {
-      folder.upsertTraceBySeq(agentKey, 'user.message', event.payload, tsOf(event), event.seq)
-      return true
-    }
-    if (folder.hasSeq(seqKey)) {
-      // 真实事件后到但骨架先入(loadRoundsIntoFolder(full) 的 reset 竞态):合成骨架可被
-      // 权威 payload 原地升级(骨架可能缺 data.rawContent → @文件胶囊丢失,真实事件是唯一权威)。
-      return folder.upgradeSyntheticUser(seqKey, {
+    const ts = tsOf(event)
+    // 主 agent:user回合折叠窗口起点(foldRole='user'),有合成骨架时先升级再跳过。
+    if (folder.isMain(agentKey)) {
+      if (folder.hasSeq(seqKey)) {
+        // 真实事件后到但骨架先入(loadRoundsIntoFolder(full) 的 reset 竞态):合成骨架可被
+        // 权威 payload 原地升级(骨架可能缺 data.rawContent → @文件胶囊丢失,真实事件是唯一权威)。
+        return folder.upgradeSyntheticUser(seqKey, {
+          content,
+          rawContent,
+          agentId: agentKey,
+          ts,
+        })
+      }
+      folder.insertMessage(agentKey, {
+        messageId: `m-${event.seq}`,
+        agentId: agentKey,
+        role: 'user',
         content,
         rawContent,
-        agentId: agentKey,
-        ts: tsOf(event),
-      })
+        historyMode: 'thread_only',
+        createdAt: ts,
+        updatedAt: ts,
+        sequence: Number(event.seq),
+      }, seqKey)
+      return true
     }
-    const ts = tsOf(event)
+    // 子 agent 的输入指令:同样以 role:'user' 消息插入(与主 agent 共用渲染组件),
+    // 但 foldRole 不打标(不作为折叠窗口起点,不扰乱折叠扫描/轮次骨架)。
+    // agentId 区分主/子——渲染层据此区分样式(子 agent 气泡用低调背景色)且不带编辑重发扩展点。
+    if (folder.hasSeq(seqKey)) return false
     folder.insertMessage(agentKey, {
       messageId: `m-${event.seq}`,
       agentId: agentKey,
