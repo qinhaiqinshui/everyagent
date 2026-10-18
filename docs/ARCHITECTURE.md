@@ -736,10 +736,10 @@ wsl-bwrap 后端的 seccomp 内核级提权拦截已随 bwrap 后端删除而移
 
 | 工具 | 语义 |
 |---|---|
-| `run_agent(input, title, agentId?)` | 异步派发子 agent;无 agentId 新建(title 必填,agentId 动态生成);传 agentId 即续跑(复用其上下文,上一轮最终回答已在会话内——`SubAgentManager.appendFinalAnswerTurn` 于收口时回写 assistant 轮,维持 §7.9 同一条会话交替不变量,中断记占位);立即返回 agentId,需用 wait_agents 等待结果 |
-| `list_agents()` | 列出本任务下全部子 agent(agentId/title/createdAt/status/latestActivity,不回灌完整历史) |
-| `wait_agents(agentId?, timeoutMs?)` | 等待子 agent 完成/超时 |
-| `stop_agent(agentId)` | 停止指定子 agent |
+| `run_agent(input, title, agentId?)` | 异步派发子 agent;无 agentId 新建(title 必填,agentId 动态生成);传 agentId 即续跑(复用其上下文,上一轮最终回答已在会话内——`SubAgentManager.appendFinalAnswerTurn` 于收口时回写 assistant 轮,维持 §7.9 同一条会话交替不变量,中断记占位);**续跑跨轮有效**(见下方「跨轮可见性与续跑」);立即返回 agentId,需用 wait_agents 等待结果 |
+| `list_agents()` | 列出本主体下全部子 agent(agentId/title/createdAt/status/latestActivity,不回灌完整历史;**含此前轮次已收口的子 agent,跨轮可见**,见下方「跨轮可见性与续跑」) |
+| `wait_agents(agentId?, timeoutMs?)` | 等待子 agent 完成/超时;对已收口的历史 agentId 直接返回终态摘要(waitStatus=completed) |
+| `stop_agent(agentId)` | 停止指定子 agent;对已收口的历史 agentId 应答「已结束(终态),无需停止」 |
 
 > **归属与前端**:`task.agents` **RPC 已收回 task 域**(常量 `RpcMethods.TASK_AGENTS`、由 `TaskManager` 注册实现,语义 = 任务下**全部** agent、无 creator 过滤,§5.5/§7.20.1)——subagent 插件**不再提供该 RPC,也不再提供 web 前端功能**(原 `ui.composer_above_panel` 的子 agent 面板退役);前端 agent 胶囊列表由 web 核心 `TaskChat` + `AgentListPanel` 直接渲染(§8.1)。上表四个 `run_agent`/`list_agents`/`wait_agents`/`stop_agent` **工具**仍属 subagent 插件(执行域能力,不迁移)。
 
@@ -749,10 +749,12 @@ wsl-bwrap 后端的 seccomp 内核级提权拦截已随 bwrap 后端删除而移
 - **上下文隔离**:子 agent 只收到 input 文本与自身 system prompt,不继承父 conversation 任何历史;信息交换唯一通道 = 下行 input、上行 `agent.done` 结果。
 - **递归禁用从根源做**:子的工具集剔除全部 agent 工具 → 结构上不可能派生孙 agent(深度上限 1)。
 - **父停止级联**:父任务取消 → 全部子 agent 停止。
-- **收口前自动等待**:父任务结束前自动 wait 全部子 agent 聚合回灌;安全超时(默认 5 min)。
-- 并发守卫:运行中的 agentId 再次 run_agent 报错。
+- **收口前自动等待**:父任务结束前自动 wait 全部子 agent 聚合回灌;安全超时(默认 5 min)——主 agent 未调 wait_agents 即收口时,运行中的子 agent 被等待到自然完成,不因收口立即强停(超过安全上限才级联停)。
+- 并发守卫:运行中的 agentId 再次 run_agent 报错;`wait_agents` 报 completed 前必等运行体 future 落定(实体终态先于运行体 finally 置位,早退会让紧随的续跑撞「已在运行」守卫)。
 
-**事件与持久化**:子 agent 不建独立 Task,事件与主 agent 同名、以 agentId 字段嵌套在父任务流(spawn 生命周期为 agent.started/agent.done);**每个子 agent 一个独立会话文件 `<subAgentId>.jsonl`**;冷启动重建、断线续播、ask(带 agentId)全部复用既有机制。子 agent 台账**独立落盘任务目录 `agents.json`**(形状 `{"agents":[...]}`,临时文件 + 原子 move 写入、空台账删文件)——从 meta.json 拆出,TaskSummary 不再携带 agents 数组,`tasks.list` 读 meta 的任务列表数据因此减负;台账项 = AgentLedger 事件投影(形状与 `AgentEntity.toSummary()` 对齐):agentId/title/createdAt/status/latestActivity/**usage(累计)**/lastText/**context(最近一轮上下文快照 `{inputTokens, contextWindowTokens, model}`,有数据才写)**/**metadata(含 creator,随 agent.started 事件投影)**,前端经 `task.agents` 拉取。台账投影与 agents.json 读写由 worker core `AgentLedger` 承担(订阅 EventLog 的 agent.started/done/status/usage/message/error 事件,§7.20.1;原插件 `SubAgentLedger` 退役);agent.started/agent.done/agent.status/agent 级 error 由 advisor 链驱动、`AgentEntity` 一处发射(per-run 生命周期,主/子一视同仁,§7.20.1)——SubAgentManager 不再手动 put/emit,复用续跑路径也不补发 started。usage 事件语义:WorkerToolEventAdvisor 每轮模型调用 usage 发射前先 `addUsage` 累计进 AgentEntity——usage 事件 total 载荷 = 含本轮累计;子 agent 每轮 usage 后由 AgentLedger 刷新内存台账并触发 agents.json 落盘(30s 定时 / 终态 persistFinal 两路径)。
+**跨轮可见性与续跑(2026-12 修复)**:子 agent 是**主体级资产,不随单轮收口消失**。`ctx.agents()` 是 per-run 注册表(主体收口即销毁,下一轮冷启动为空表),工具读侧(list/wait/stop)按**三层合并**取数:① 本轮 live 实体(状态/活动最新;createdAt/title 沿用历史基线)→ ② subagent 插件进程内 **carry-over 快照**(每轮收口时记录 {终态,活动,完整会话},容量有界、同 id 重收口刷新,worker 重启即丢)→ ③ 磁盘台账 `agents.json`(读侧兜底,重启后唯一来源)。非在场实体的 running/waiting-user 一律归一 stopped(与 `AgentLedger` 冷启动归一同规则,防陈旧快照把死 agent 报成 running)。`run_agent` 传历史 agentId:carry-over 命中 → **重建实体续跑**——新 emitter/新 ChatClient 绑定**本轮** ExecContext(直接复用旧实体会把事件发进已销毁的上一轮日志),会话种子=快照(经 plugin-api `AgentBuilder.conversation()` 注入,[system, ...prior, user(新)] 形态),历史完整延续;仅磁盘台账在场(worker 重启/carry-over 逐出)→ 同 id 全新会话。**子 agent 会话不做磁盘冷启动重建**(ConversationLoader 只重建主 agent,子 agent 事件流无 user.message 轮)——此为已知边界,跨轮续跑的会话延续由进程内 carry-over 承载。
+
+**事件与持久化**:子 agent 不建独立 Task,事件与主 agent 同名、以 agentId 字段嵌套在父任务流(spawn 生命周期为 agent.started/agent.done);**每个子 agent 一个独立会话文件 `<subAgentId>.jsonl`**;断线续播、ask(带 agentId)全部复用既有机制(子 agent 会话不做磁盘冷启动重建——ConversationLoader 只重建主 agent,跨轮续跑由插件内存 carry-over 承载,见上方「跨轮可见性与续跑」)。子 agent 台账**独立落盘任务目录 `agents.json`**(形状 `{"agents":[...]}`,临时文件 + 原子 move 写入、空台账删文件)——从 meta.json 拆出,TaskSummary 不再携带 agents 数组,`tasks.list` 读 meta 的任务列表数据因此减负;台账项 = AgentLedger 事件投影(形状与 `AgentEntity.toSummary()` 对齐):agentId/title/createdAt/status/latestActivity/**usage(累计)**/lastText/**context(最近一轮上下文快照 `{inputTokens, contextWindowTokens, model}`,有数据才写)**/**metadata(含 creator,随 agent.started 事件投影)**,前端经 `task.agents` 拉取,subagent 插件工具读侧也作跨轮兜底(只读)。台账投影与 agents.json 读写由 worker core `AgentLedger` 承担(订阅 EventLog 的 agent.started/done/status/usage/message/error 事件,§7.20.1;原插件 `SubAgentLedger` 退役);agent.started/agent.done/agent.status/agent 级 error 由 advisor 链驱动、`AgentEntity` 一处发射(per-run 生命周期,主/子一视同仁,§7.20.1)——SubAgentManager 不再手动 put/emit,复用续跑路径也不补发 started。usage 事件语义:WorkerToolEventAdvisor 每轮模型调用 usage 发射前先 `addUsage` 累计进 AgentEntity——usage 事件 total 载荷 = 含本轮累计;子 agent 每轮 usage 后由 AgentLedger 刷新内存台账并触发 agents.json 落盘(30s 定时 / 终态 persistFinal 两路径)。
 
 **域中性(§7.20/§14.11)**:subagent 是**执行域能力插件**(spawn/wait/stop 子 agent 是执行域能力,不是任务域能力——没有 task 只有 workflow 的执行主体同样可用)。`SubAgentManager` 构造零服务依赖,方法收 `ExecContext`(run/list/waitFor/stop/awaitAllBeforeFinish/stopAll),工具入口绑 `ToolContext`(extends ExecContext,§7.20.5) 不再反查任务;per-subject 状态自持 `TaskSubState`(监视器内部化,对任务对象的锁依赖消失)。台账 agents.json 住主体 dataDir 下,IO 已由 worker core `AgentLedger` 收编(事件投影 + 原子读写 + 冷启动恢复,原插件 `SubAgentLedger` 退役,§7.20.1);生命周期节点(track/untrack/persist 由 AgentLedger 内置节点承担,§7.20.1)壳留 task 面、逻辑取 ExecContext 槽位,工作流落地时同一核心以同构生命周期壳挂载、零新逻辑。
 

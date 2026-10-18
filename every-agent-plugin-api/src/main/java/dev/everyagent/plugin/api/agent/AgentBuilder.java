@@ -55,6 +55,21 @@ public interface AgentBuilder {
     AgentBuilder userInput(String input);
 
     /**
+     * 设置会话种子（替换式）：以既有会话历史初始化 agent 会话内存。
+     *
+     * <p>跨轮续跑场景用（如 subagent 插件在本轮重建上一轮的子 agent）：prior 通常是
+     * 「上一轮实体会话的快照」（含其 system 轮与最终回答轮），调用方不再另设
+     * {@link #systemPrompt}，只追加新的 {@link #userInput}。
+     *
+     * <p>与 {@link #systemPrompt} / {@link #userInput} 同时设置时，装配侧把三者合并为
+     * 一条完整消息序列 {@code [system?, ...prior, user(新)?]} 后一次性注入——system 在最前、
+     * 历史居中、新指令在末尾，不会因种子的替换语义丢失或错位。
+     *
+     * @param conversation 会话历史消息（null 或空列表 = 无种子，等价于不调用）
+     */
+    AgentBuilder conversation(java.util.List<org.springframework.ai.chat.messages.Message> conversation);
+
+    /**
      * 对模型请求参数做增量修改。
      *
      * @param customizer 接收 {@link ChatOptions}，插件可调整 temperature 等参数
