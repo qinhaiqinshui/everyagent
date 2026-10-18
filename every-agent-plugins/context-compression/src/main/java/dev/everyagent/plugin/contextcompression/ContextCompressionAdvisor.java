@@ -3,8 +3,9 @@ package dev.everyagent.plugin.contextcompression;
 import dev.everyagent.plugin.api.model.EmitEvent;
 import dev.everyagent.plugin.api.config.WorkerConfig;
 import dev.everyagent.plugin.api.proto.SnowflakeId;
-import dev.everyagent.plugin.api.event.Usage;
 import dev.everyagent.plugin.api.agent.AgentContext;
+import dev.everyagent.plugin.api.agent.CompressionSeed;
+import dev.everyagent.plugin.api.event.Usage;
 import dev.everyagent.plugin.api.execution.ExecContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -31,7 +32,8 @@ import java.util.List;
  * <ul>
  *   <li><b>事前检查</b>(不等待模型报错):估算当前 {@code prompt.instructions} 用量
  *       (UTF-8 bytes/3 + 工具预留),&gt; 触发阈值(窗口 × triggerRatio × safetyRatio,
- *       默认 95%)即触发压缩;</li>
+ *       默认 95%)即触发压缩;冷启动再运行首个请求尚无运行内加性校准数据时,改用上一
+ *       运行持久化的「全量视图 实测/估算」比率折算(§7.5 冷启动种子);</li>
  *   <li>调用 {@link ContextCompressor} 三阶段压缩到 ≤ 目标阈值(默认 50%),返回改写后的
  *       instructions(压缩只是不进上下文,内存 conversation 与磁盘事件日志始终全量,数据不删除);</li>
  *   <li>压缩命中即打 INFO 日志(before/after/阶段/丢弃量),便于定位。</li>
@@ -115,6 +117,7 @@ public class ContextCompressionAdvisor implements CallAdvisor, StreamAdvisor {
         // 与 provider 实测的系统性差异;首轮/无实测/换模型时回退固定 reserve。
         // 双向采纳(正=漏算隐藏开销、负=粗估高估),见 ContextCompressor.calibratedOverhead。
         long overhead = reserve;
+        Double seedRatio = null;
         if (limits.contextOffsetEnabled()) {
             Usage last = a.lastRound();
             String lastModel = a.lastModel();
@@ -126,6 +129,25 @@ public class ContextCompressionAdvisor implements CallAdvisor, StreamAdvisor {
                     && lastModel.equals(currentModel)) {
                 overhead = ContextCompressor.calibratedOverhead(
                         last.inputTokens(), ContextCompressor.estimateTokens(lastSent, tokens), reserve);
+            } else if (lastSent == null) {
+                // 冷启动种子(再运行/冷重启的首个请求):运行内加性校准所需状态(lastSent/lastRound)
+                // 是内存态、随运行销毁,首个请求本会退回固定 reserve——粗估高估会在窗口远未占满时
+                // 误触发压缩(2026-10 t_ngj2:粗估 23~36 万、实测仅数千 token,每次再运行首轮都压
+                // 一次)。改用上一运行持久化的「全量视图 实测/估算」比率折算;换模型种子作废。
+                // 本运行首个实测 usage 回来后自动回到上方加性重算。
+                CompressionSeed seed = exec == null ? null : exec.compressionSeed(a.agentId());
+                if (seed != null && seed.usable()
+                        && currentModel != null && !currentModel.isEmpty()
+                        && seed.model() != null && !seed.model().isEmpty()
+                        && seed.model().equals(currentModel)) {
+                    seedRatio = ContextCompressor.seedRatio(
+                            seed.measuredInputTokens(), seed.estimatedSentTokens());
+                    if (seedRatio != null) {
+                        log.debug("冷启动压缩校准种子生效: task={} agent={} 实测={} 估算={} 比率={}",
+                                exec.subjectId(), a.agentId(), seed.measuredInputTokens(),
+                                seed.estimatedSentTokens(), String.format("%.3f", seedRatio));
+                    }
+                }
             }
         }
 
@@ -140,7 +162,11 @@ public class ContextCompressionAdvisor implements CallAdvisor, StreamAdvisor {
             working.addAll(delta);
         }
 
-        long used = ContextCompressor.estimateTokens(working, tokens) + overhead;
+        long est = ContextCompressor.estimateTokens(working, tokens);
+        if (seedRatio != null) {
+            overhead = Math.round(est * seedRatio) - est;
+        }
+        long used = est + overhead;
 
         List<Message> toSend;
         if (used <= trigger) {
@@ -192,6 +218,11 @@ public class ContextCompressionAdvisor implements CallAdvisor, StreamAdvisor {
 
         // 记录上轮实际发送视图(含注入提示),供下一轮 offset 校准与 provider 实测对账。
         lastSent = new ArrayList<>(finalView);
+
+        // 全量视图记账(§7.5 冷启动种子):仅未压缩视图记录发送估算(经 AgentContext 槽位,
+        // 由事件 advisor 随本轮 usage 事件落盘);压缩视图清 0——其估算/实测比率不表征
+        // 全量历史的估算偏差,落盘会污染下一运行的冷启动种子。
+        a.fullViewEstTokens(baseline == null ? ContextCompressor.estimateTokens(finalView, tokens) : 0L);
 
         return ChatClientRequest.builder()
                 .prompt(new Prompt(finalView, request.prompt().getOptions()))

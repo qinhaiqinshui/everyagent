@@ -12,6 +12,8 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -362,6 +364,47 @@ class ContextCompressorTest {
         long overhead = ContextCompressor.calibratedOverhead(est / 2, est, 50);
         assertFalse(ContextCompressor.compress(msgs, est + 10, est + 10, overhead).compressed(),
                 "负 offset 应压低 precheck,消除粗估高估造成的假触发");
+    }
+
+    // ---- 冷启动种子比率(跨运行) ----
+
+    @Test
+    void seedRatioComputesClampedRatio() {
+        // t_ngj2 量级:粗估 233413、实测 123297,比率 ≈ 0.53(未触碰边界)
+        Double r = ContextCompressor.seedRatio(123_297L, 233_413L);
+        assertNotNull(r);
+        assertEquals(0.53, r, 0.01);
+        // t_ra74 量级:粗估 229000、实测 84000,比率 ≈ 0.37(仍在下限 0.35 之上,不被夹)
+        assertEquals(0.37, ContextCompressor.seedRatio(84_000L, 229_000L), 0.01);
+        // 畸小样本 → 夹到下限 0.35(防把 precheck 压得过低漏触发)
+        assertEquals(0.35, ContextCompressor.seedRatio(100L, 100_000L));
+        // 比率 > 1(小视图固定开销占比大)→ 夹到上限 2.0
+        assertEquals(2.0, ContextCompressor.seedRatio(11_000L, 5_000L));
+    }
+
+    @Test
+    void seedRatioNullOnInvalidInput() {
+        assertNull(ContextCompressor.seedRatio(0L, 100L), "无实测 → null");
+        assertNull(ContextCompressor.seedRatio(100L, 0L), "无估算 → null");
+        assertNull(ContextCompressor.seedRatio(0L, 0L));
+        assertNull(ContextCompressor.seedRatio(-1L, 100L));
+    }
+
+    @Test
+    void seedRatioFloorsAwayFalseNonTrigger() {
+        // 冷启动粗估高估(同 negativeOverheadSuppressesFalseTrigger 场景)时,种子比率折算后
+        // 不应误触发压缩:种子来自上一运行的全量视图实测/估算对比,跨运行历史增长仍稳。
+        List<Message> msgs = new ArrayList<>();
+        msgs.add(user("q" + txt(900)));
+        msgs.add(assistant("a" + txt(900)));
+        long est = ContextCompressor.estimateTokens(msgs); // ~600
+
+        // 种子比率 0.53(实测约为粗估一半):est × 0.53 ≈ 318 < est+10 → 不触发
+        Double r = ContextCompressor.seedRatio(est / 2, est);
+        assertNotNull(r);
+        long overhead = Math.round(est * r) - est;
+        assertFalse(ContextCompressor.compress(msgs, est + 10, est + 10, overhead).compressed(),
+                "冷启动种子比率折算后应压低 precheck,消除粗估高估造成的假触发");
     }
 
     // ---- token 估算口径注入 ----

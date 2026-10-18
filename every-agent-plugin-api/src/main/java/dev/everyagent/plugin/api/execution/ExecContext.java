@@ -2,6 +2,7 @@ package dev.everyagent.plugin.api.execution;
 
 import dev.everyagent.plugin.api.agent.AgentContext;
 import dev.everyagent.plugin.api.agent.AgentFactory;
+import dev.everyagent.plugin.api.agent.CompressionSeed;
 import dev.everyagent.plugin.api.interaction.InteractionService;
 import dev.everyagent.plugin.api.model.EventEmitter;
 import dev.everyagent.plugin.api.model.ModelConfig;
@@ -77,6 +78,15 @@ public interface ExecContext {
      * interaction() 同为预绑定端口。
      */
     default dev.everyagent.plugin.api.agent.ConversationArchive conversationArchive() {
+        return null;
+    }
+
+    /**
+     * 指定 agent 的上下文压缩冷启动校准种子(再运行时从 {@code meta.usageByAgent} 回灌;无则 null)。
+     * 与 conversationArchive() 同为角色中性的按 agentId 取数口;上下文压缩 advisor 在运行内
+     * 加性 offset 校准尚无数据的首个请求据此做比率折算(§7.5)。
+     */
+    default CompressionSeed compressionSeed(String agentId) {
         return null;
     }
 
