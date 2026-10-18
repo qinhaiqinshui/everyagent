@@ -20,7 +20,7 @@
  * - tool.result            → role:'tool' 消息(TaskChat 按 callId 合并进下发块渲染)
  * - agent.started/done     → 子 agent trace(spawn 生命周期,必带 agentId);同时合并 agentMeta
  *                           (标题/创建时间/收口累计用量)
- * - error                  → trace(带 agentId = 子任务出错;缺省 = 任务出错)
+ * - error                  → trace(agentId = 事件真实归属;主/子标题按 isMain(agentKey === mainAgentId) 判定)
  * - cancelled              → trace
  * - retry / context.compression / model.failover / model.switch / auth.review / system.notice
  *                           → 统一纯显示 trace:按 seq 原地 upsert(有则覆盖内容、无则新增),

@@ -274,9 +274,12 @@ registerEventKind('error', {
     folder.insertTrace(ts, {
       traceId: `t-${event.seq}`,
       taskId: state.taskId,
-      agentId: agentKey || undefined,
+      agentId: agentKey,
       kind: 'run_error',
-      title: agentKey ? '子任务出错' : '任务出错',
+      // 主/子判定唯一依据 = isMain(agentKey === mainAgentId):wire 全事件必带真实
+      // agentId(主=mainAgentId),不允许用「键是否空串」判主(agentKeyOf 会把缺失
+      // 归一到 mainKey,mainAgentId 灌入后键恒非空,空串判据会把主错标成子)。
+      title: folder.isMain(agentKey) ? '任务出错' : '子任务出错',
       summary: message,
       content: message,
       createdAt: ts,
