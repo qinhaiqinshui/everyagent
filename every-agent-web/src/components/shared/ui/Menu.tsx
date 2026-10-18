@@ -130,8 +130,11 @@ export type MenuListAnchorPoint = { x: number; y: number }
  * 锚点坐标的对齐方式：
  * - `center`：菜单水平居中于锚点（移动端长按，菜单落在手指下方）。
  * - `top-start`：菜单左上角对齐锚点（桌面端右键，模拟原生右键菜单）。
+ * - `bottom-center`：菜单底边水平居中于锚点（菜单整体位于锚点**正上方**），
+ *   用于「锚点下方被系统浮层占用、需把菜单放到锚点上方」的场景（如移动端选区菜单
+ *   避开位于选区下方的系统原生选择菜单）。
  */
-export type MenuListAnchorPointMode = 'center' | 'top-start'
+export type MenuListAnchorPointMode = 'center' | 'top-start' | 'bottom-center'
 
 export type MenuListProps = {
   items: MenuListItem[]
@@ -274,17 +277,22 @@ export function MenuList({ items, anchor, anchorPoint, anchorPointMode = 'center
             Math.min(anchorPoint.x, viewportWidth - menuRect.width - MENU_EDGE_GAP),
           )
         } else {
-          // 移动端长按：以触摸点为锚居中定位
+          // center / bottom-center：菜单水平居中于锚点，并夹紧到视口内
           nextLeft = Math.max(
             MENU_EDGE_GAP,
             Math.min(anchorPoint.x - menuRect.width / 2, viewportWidth - menuRect.width - MENU_EDGE_GAP),
           )
         }
-        const preferBottomTop = anchorPoint.y + MENU_FLYOUT_GAP
-        const preferTopTop = anchorPoint.y - menuRect.height - MENU_FLYOUT_GAP
-        nextTop = preferBottomTop + menuRect.height <= viewportHeight - MENU_EDGE_GAP
-          ? preferBottomTop
-          : Math.max(MENU_EDGE_GAP, preferTopTop)
+        if (anchorPointMode === 'bottom-center') {
+          // 菜单整体位于锚点正上方（底边对锚点，留 flyout 间隙）；上方放不下则夹紧到视口顶缘。
+          nextTop = Math.max(MENU_EDGE_GAP, anchorPoint.y - menuRect.height - MENU_FLYOUT_GAP)
+        } else {
+          const preferBottomTop = anchorPoint.y + MENU_FLYOUT_GAP
+          const preferTopTop = anchorPoint.y - menuRect.height - MENU_FLYOUT_GAP
+          nextTop = preferBottomTop + menuRect.height <= viewportHeight - MENU_EDGE_GAP
+            ? preferBottomTop
+            : Math.max(MENU_EDGE_GAP, preferTopTop)
+        }
       } else {
         // 桌面端 / 按钮触发：以 anchor 元素 rect 定位
         const triggerRect = anchor.getBoundingClientRect()

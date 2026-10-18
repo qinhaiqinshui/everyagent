@@ -471,12 +471,11 @@ export default function FileTabPage({
    * selectionchange：选区在编辑器内稳定（350ms 无变化）后，按同一采集管线弹出统一菜单。
    *
    * 与系统菜单「错位共存」（Notion 移动端 Web 同款取舍）：保留 DOM 选区不清空，
-   * 系统菜单照常弹出（选区上方；贴顶时翻转到下方），自定义菜单按启发式躲到它对面：
-   * - 上方够放系统菜单（常规）→ 自定义菜单锚在选区下缘；
-   * - 上方放不下（系统菜单被挤到选区下方）→ 锚点下移一个系统菜单估计高度，躲到它下面；
-   * - 下方放不下自定义菜单时，MenuList 自动翻到锚点上方（此时系统菜单必在下方，不冲突）。
-   * 系统菜单位置无 Web API 可探测，以上为行为启发式；极端场景（超大选区）仍可能
-   * 与系统菜单重叠，届时备选方案是菜单弹出后清空选区（callout 随选区消失）。
+   * 系统菜单照常弹出（iOS 实测位于选区**下方**）。自定义菜单锚在选区**正上方**
+   * （bottom-center 模式：菜单底边对选区顶缘），与系统菜单分居上下、互不遮挡；
+   * 上方空间不足时由 MenuList 夹紧到视口顶缘，保证菜单落在可视区域内。
+   * 系统菜单位置无 Web API 可探测，以上为实测行为取向；若个别系统/场景系统菜单
+   * 出现在选区正上方，备选方案是菜单弹出后清空选区（callout 随选区消失）。
    *
    * - 判据用「无 hover + 粗指针」而非 isMobile（宽度）：iPad 宽屏不在 isMobile 内，
    *   但触屏 Safari 同样不派发 contextmenu；触屏笔记本（有 hover）则被排除。
@@ -486,10 +485,6 @@ export default function FileTabPage({
    */
   React.useEffect(() => {
     if (!window.matchMedia('(hover: none) and (pointer: coarse)').matches) return
-    /** iOS 选中编辑菜单（callout）估计高度，用于选区贴顶时向下避让（无 API 可实测）。 */
-    const SYSTEM_MENU_HEIGHT_ESTIMATE = 56
-    /** 锚点与选区之间的纵向间隙。 */
-    const ANCHOR_GAP = 6
     let timer: number | null = null
     const handleSelectionChange = () => {
       if (timer != null) window.clearTimeout(timer)
@@ -504,15 +499,12 @@ export default function FileTabPage({
         if (!selection || selection.rangeCount === 0) return
         const range = selection.getRangeAt(0)
         const rect = range.getBoundingClientRect()
-        // 错位避让：系统菜单优先出现在选区上方，上方放不下才被挤到选区下方。
-        const systemMenuBelow = rect.top < SYSTEM_MENU_HEIGHT_ESTIMATE + ANCHOR_GAP
-        const anchorY = systemMenuBelow
-          ? rect.bottom + SYSTEM_MENU_HEIGHT_ESTIMATE + ANCHOR_GAP
-          : rect.bottom + ANCHOR_GAP
+        // 自定义菜单锚在选区正上方（bottom-center：菜单底边对选区顶缘），
+        // 与位于选区下方的系统原生选择菜单错位共存、互不遮挡。
         setEditorContextMenu({
           items,
-          anchorPoint: { x: rect.left + rect.width / 2, y: anchorY },
-          anchorPointMode: 'center',
+          anchorPoint: { x: rect.left + rect.width / 2, y: rect.top },
+          anchorPointMode: 'bottom-center',
           anchor,
         })
       }, 350)
