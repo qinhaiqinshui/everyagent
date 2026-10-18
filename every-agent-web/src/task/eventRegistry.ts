@@ -37,9 +37,14 @@ export function getHandler(kind: string): EventHandler | undefined {
 
 // ---- 工具：从 event 提取公共字段 ----
 
-/** 从事件中提取 agentKey（agentId 字段或 payload.agentId）。 */
-function agentKeyOf(event: FoldableTaskEvent): string {
-  return event.agentId ?? (event.payload?.agentId as string | undefined) ?? ''
+/**
+ * 从 event 中提取 agent 键(主 agent = mainAgentId)。
+ * 委托 {@link TaskEventFolder#agentKeyOf}:payload.agentId 缺失(旧 wire 形态主 agent
+ * 事件不带 agentId)归一到 mainAgentId——键域统一由 task 层传入的固定 id 决定,
+ * 不使用「空串=主」魔法。
+ */
+function agentKeyOf(event: FoldableTaskEvent, folder: TaskEventFolder): string {
+  return folder.agentKeyOf(event)
 }
 
 /** 从事件中提取时间戳。 */
@@ -78,7 +83,7 @@ function readToolStatus(rawStatus: unknown): 'success' | 'error' {
  * - 效果：未来新增任何 kind → 前端零注册零改动即自动可见、内容零丢失
  */
 export function defaultHandler(event: FoldableTaskEvent, state: TaskThreadState, folder: TaskEventFolder): boolean {
-  const agentKey = agentKeyOf(event)
+  const agentKey = agentKeyOf(event, folder)
   const ts = tsOf(event)
   folder.upsertTraceBySeq(agentKey, event.event, event.payload, ts, event.seq)
   return true
@@ -94,12 +99,13 @@ registerEventKind('user.message', {
     const data = dataOf(event)
     const rawContent = typeof data?.rawContent === 'string' && data.rawContent.length
       ? data.rawContent : content
-    const agentKey = agentKeyOf(event)
-    // 派生 agent 的指令(带 agentId,worker 侧与主 agent 同一事件名落盘):
-    // 不进主线程 user 气泡——foldRole='user' 是主线程折叠窗口语义,插入会把子 agent
-    // 指令渲染成右侧用户消息并扰乱折叠扫描/轮次骨架。以 trace 形态按 seq upsert
-    // 展示(kind=user.message,归到该 agent 名下),内容零丢失,历史回放同一路径。
-    if (agentKey) {
+    const agentKey = agentKeyOf(event, folder)
+    // 派生 agent 的指令(worker 侧与主 agent 同一事件名落盘):不进主线程 user
+    // 气泡——foldRole='user' 是主线程折叠窗口语义,插入会把子 agent指令渲染成右侧用户
+    // 消息并扰乱折叠扫描/轮次骨架。以 trace 形态按 seq upsert 展示(kind=user.message,
+    // 归到该 agent 名下),内容零丢失,历史回放同一路径。主 agent 判据 =
+    // mainAgentId(task 层传入的固定 id),非空串魔法。
+    if (!folder.isMain(agentKey)) {
       folder.upsertTraceBySeq(agentKey, 'user.message', event.payload, tsOf(event), event.seq)
       return true
     }
@@ -132,7 +138,7 @@ registerEventKind('user.message', {
 /** delta → 流式追加 content */
 registerEventKind('delta', {
   handle(event, state, folder) {
-    folder.appendRoundText('delta', agentKeyOf(event), tsOf(event), event.seq,
+    folder.appendRoundText('delta', agentKeyOf(event, folder), tsOf(event), event.seq,
       String(event.payload?.content ?? ''))
     return true
   },
@@ -141,7 +147,7 @@ registerEventKind('delta', {
 /** thinking → 流式追加 reasoning */
 registerEventKind('thinking', {
   handle(event, state, folder) {
-    folder.appendRoundText('thinking', agentKeyOf(event), tsOf(event), event.seq,
+    folder.appendRoundText('thinking', agentKeyOf(event, folder), tsOf(event), event.seq,
       String(event.payload?.content ?? ''))
     return true
   },
@@ -150,7 +156,7 @@ registerEventKind('thinking', {
 /** message → 一轮权威终结：完整 content/thinking/toolCalls */
 registerEventKind('message', {
   handle(event, state, folder) {
-    folder.completeMessage(agentKeyOf(event), event.payload, tsOf(event), event.seq)
+    folder.completeMessage(agentKeyOf(event, folder), event.payload, tsOf(event), event.seq)
     return true
   },
 })
@@ -160,7 +166,7 @@ registerEventKind('tool.result', {
   handle(event, state, folder) {
     const seqKey = String(event.seq)
     if (folder.hasSeq(seqKey)) return false
-    const agentKey = agentKeyOf(event)
+    const agentKey = agentKeyOf(event, folder)
     const ts = tsOf(event)
     const data = dataOf(event)
     const callId = String(data?.callId ?? '')
@@ -187,7 +193,7 @@ registerEventKind('tool.result', {
 /** usage → 更新 agentMeta(每 agent 最近一轮占用/累计);任务级电池走 taskStore 的 worker 聚合值 */
 registerEventKind('usage', {
   handle(event, state, folder) {
-    const agentKey = agentKeyOf(event)
+    const agentKey = agentKeyOf(event, folder)
     const ts = tsOf(event)
     const data = dataOf(event) ?? {}
     const round = readUsage(data.round)
@@ -210,7 +216,7 @@ registerEventKind('agent.started', {
   handle(event, state, folder) {
     const seqKey = String(event.seq)
     if (folder.hasSeq(seqKey)) return false
-    const agentKey = agentKeyOf(event)
+    const agentKey = agentKeyOf(event, folder)
     const ts = tsOf(event)
     const title = String(event.payload?.title ?? '')
     if (agentKey) folder.setSubTitle(agentKey, title)
@@ -229,7 +235,7 @@ registerEventKind('agent.done', {
   handle(event, state, folder) {
     const seqKey = String(event.seq)
     if (folder.hasSeq(seqKey)) return false
-    const agentKey = agentKeyOf(event)
+    const agentKey = agentKeyOf(event, folder)
     const ts = tsOf(event)
     folder.closeStreamingByAgent(agentKey)
     state.agentStates[agentKey] = 'completed'
@@ -248,7 +254,7 @@ registerEventKind('agent.done', {
 /** agent.status → 更新 agentStates（权威状态事件） */
 registerEventKind('agent.status', {
   handle(event, state, folder) {
-    const agentKey = agentKeyOf(event)
+    const agentKey = agentKeyOf(event, folder)
     const mapped = mapAgentStatus(String(event.payload?.status ?? ''))
     if (mapped) state.agentStates[agentKey] = mapped
     return true
@@ -260,7 +266,7 @@ registerEventKind('error', {
   handle(event, state, folder) {
     const seqKey = String(event.seq)
     if (folder.hasSeq(seqKey)) return false
-    const agentKey = agentKeyOf(event)
+    const agentKey = agentKeyOf(event, folder)
     const ts = tsOf(event)
     const message = String(event.payload?.content ?? event.payload?.message ?? '')
     folder.closeStreamingByAgent(agentKey)
@@ -286,8 +292,8 @@ registerEventKind('cancelled', {
     if (folder.hasSeq(seqKey)) return false
     const ts = tsOf(event)
     const data = dataOf(event)
-    folder.closeStreamingByAgent('')
-    state.agentStates[''] = 'stopped'
+    folder.closeStreamingByAgent(folder.mainKey())
+    state.agentStates[folder.mainKey()] = 'stopped'
     folder.insertTrace(ts, {
       traceId: `t-${event.seq}`,
       taskId: state.taskId,
@@ -305,7 +311,7 @@ registerEventKind('cancelled', {
 /** retry → upsertBySeq trace */
 registerEventKind('retry', {
   handle(event, state, folder) {
-    folder.upsertTraceBySeq(agentKeyOf(event), event.event, event.payload, tsOf(event), event.seq)
+    folder.upsertTraceBySeq(agentKeyOf(event, folder), event.event, event.payload, tsOf(event), event.seq)
     return true
   },
 })
@@ -313,7 +319,7 @@ registerEventKind('retry', {
 /** context.compression → upsertBySeq trace */
 registerEventKind('context.compression', {
   handle(event, state, folder) {
-    folder.upsertTraceBySeq(agentKeyOf(event), event.event, event.payload, tsOf(event), event.seq)
+    folder.upsertTraceBySeq(agentKeyOf(event, folder), event.event, event.payload, tsOf(event), event.seq)
     return true
   },
 })
@@ -321,7 +327,7 @@ registerEventKind('context.compression', {
 /** model.failover → upsertBySeq trace */
 registerEventKind('model.failover', {
   handle(event, state, folder) {
-    folder.upsertTraceBySeq(agentKeyOf(event), event.event, event.payload, tsOf(event), event.seq)
+    folder.upsertTraceBySeq(agentKeyOf(event, folder), event.event, event.payload, tsOf(event), event.seq)
     return true
   },
 })
@@ -329,7 +335,7 @@ registerEventKind('model.failover', {
 /** model.switch → upsertBySeq trace */
 registerEventKind('model.switch', {
   handle(event, state, folder) {
-    folder.upsertTraceBySeq(agentKeyOf(event), event.event, event.payload, tsOf(event), event.seq)
+    folder.upsertTraceBySeq(agentKeyOf(event, folder), event.event, event.payload, tsOf(event), event.seq)
     return true
   },
 })
@@ -337,7 +343,7 @@ registerEventKind('model.switch', {
 /** auth.review → upsertBySeq trace */
 registerEventKind('auth.review', {
   handle(event, state, folder) {
-    folder.upsertTraceBySeq(agentKeyOf(event), event.event, event.payload, tsOf(event), event.seq)
+    folder.upsertTraceBySeq(agentKeyOf(event, folder), event.event, event.payload, tsOf(event), event.seq)
     return true
   },
 })
@@ -345,7 +351,7 @@ registerEventKind('auth.review', {
 /** system.notice → upsertBySeq trace */
 registerEventKind('system.notice', {
   handle(event, state, folder) {
-    folder.upsertTraceBySeq(agentKeyOf(event), event.event, event.payload, tsOf(event), event.seq)
+    folder.upsertTraceBySeq(agentKeyOf(event, folder), event.event, event.payload, tsOf(event), event.seq)
     return true
   },
 })
@@ -355,7 +361,7 @@ registerEventKind('system.notice', {
 /** ask.create → 兜底：该 agent 挂起等待用户 */
 registerEventKind('ask.create', {
   handle(event, state, folder) {
-    state.agentStates[agentKeyOf(event)] = 'waiting-user'
+    state.agentStates[agentKeyOf(event, folder)] = 'waiting-user'
     return true
   },
 })
@@ -366,7 +372,7 @@ registerEventKind('ask.resolved', {
     const data = dataOf(event)
     const resolvedStatus = String(data?.status ?? event.payload?.status ?? '')
     if (resolvedStatus !== 'cancelled') {
-      state.agentStates[agentKeyOf(event)] = 'running'
+      state.agentStates[agentKeyOf(event, folder)] = 'running'
     }
     return true
   },

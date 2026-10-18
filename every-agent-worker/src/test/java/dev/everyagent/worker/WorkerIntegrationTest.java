@@ -265,7 +265,9 @@ class WorkerIntegrationTest {
                 "message 行携带整轮 thinking");
         assertTrue(message.path("payload").path("text").asString().contains("回声:"),
                 "message 行携带完整正文");
-        assertNull(message.path("payload").path("agentId").asString(null), "主 agent wire 无 agentId");
+        assertEquals(readMeta(taskId).path("mainAgentId").asString(),
+                message.path("payload").path("agentId").asString(),
+                "主 agent wire 事件也带 agentId(= mainAgentId,前端按 task 层传入的固定 id 判主)");
         JsonNode usageEv = events.stream().filter(e -> e.path("event").asString().equals("usage")).findFirst().orElse(null);
         assertTrue(usageEv != null && usageEv.path("payload").has("total"), "usage 事件带 total 用量");
 
@@ -368,8 +370,8 @@ class WorkerIntegrationTest {
     @Test
     void subAgentFlow() {
         String taskId = create("SUB:帮我查资料");
-        // 主 agent 现在也发 agent.started(per-run 出生,§7.20.1),所以取子 agent 的出生事件
-        // 必须按 payload.agentId 前缀筛——主 agent 的 wire payload 不带 agentId。
+        // 主 agent 现在也发 agent.started(per-run 出生,§7.20.1)且 wire 事件必带
+        // payload.agentId(主 = mainAgentId),取子 agent 的出生事件按 agentId 前缀筛。
         JsonNode subStarted = syncUntil(taskId,
                 e -> e.path("event").asString().equals("agent.started")
                         && e.path("payload").path("agentId").asString("").startsWith("sub_"),
