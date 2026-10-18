@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { useEffect, useState, useSyncExternalStore } from 'react'
 import type { RoundTailPanelProps } from '@everyagent/plugin-api'
 import { CaretDownOutlined, CaretRightOutlined } from '@ant-design/icons'
 import { getPluginContext } from './pluginRuntime'
@@ -7,8 +7,6 @@ import {
   ensureRoundChanges,
   getRoundChanges,
   getRoundChangesVersion,
-  invalidateRoundChanges,
-  isRoundChangesLoaded,
   loadRoundFullChanges,
   subscribeRoundChanges,
   type RoundFileChangeSummary,
@@ -63,8 +61,9 @@ function toDisplayPath(filePath: string): string {
  * (见 roundFileChanges.css 的 `.task-file-changes__list { flex: 1 1 100% }`)。
  *
  * 数据不来自轮行(轮行不含插件业务字段,架构 §7.15.2),而来自插件自持的 roundChangesStore:
- * 真相源是本插件落盘的 `file-changes/<roundId>.json`,一次 RPC 拉全任务各轮轻量摘要按 taskId
- * 缓存,宿主 `task-round-closed` 领域事件(在 index.ts activate 里订阅)触发作废重拉;
+ * 真相源是本插件落盘的 `file-changes/<roundId>.json`,初次打开一次 RPC 拉全任务各轮轻量摘要
+ * 按 taskId 缓存;运行中轮闭合的增量由 worker 直推 `plugin.file-change.roundChanges`(经宿主
+ * `plugin-task-event` 领域事件透传,在 index.ts activate 里订阅 upsert,§7.15.2);
  * 全文按 roundId 缓存,同轮多次点击不重复 RPC。
  */
 export default function RoundFileChangesView({
@@ -73,30 +72,17 @@ export default function RoundFileChangesView({
   workerId,
   workspaceRoot,
 }: RoundTailPanelProps) {
-  // 订阅插件缓存版本:摘要拉取完成 / 轮闭合作废时重渲染本面板。
-  // version 同时进 effect 依赖:作废发生后条目已被删,靠下一次 effect 触发重拉(已加载/在途时
-  // ensure 幂等直返,不会成环)。
+  // 订阅插件缓存版本:摘要拉取完成 / 直推合入时重渲染本面板。
+  // version 同时进 effect 依赖:直推合入只建未加载条目时,靠下一次 effect 触发全量补拉
+  // (已加载/在途时 ensure 幂等直返,不会成环)。
   const cacheVersion = useSyncExternalStore(subscribeRoundChanges, getRoundChangesVersion, getRoundChangesVersion)
 
-  // 过期缓存自愈(roundId 粒度):本组件挂载时若缓存已加载但本 roundId 缺席,说明缓存是
-  // 该轮闭合前的旧快照(round.closed → invalidate 与 refreshRounds 完成之间可能错过
-  // 作废时机,agent.status(done) 触发的 refreshRounds 会先让本组件以旧缓存挂载)。
-  // 主动作废一次强制重拉;refetchedRef 按 roundId 记录已自愈过的轮,防止
-  // 「本轮确实无变更 → 作废 → 重拉 → 仍无 → 再作废」的自旋。
-  const refetchedRef = useRef<string | null>(null)
-
+  // 历史任务/初次打开的全轮摘要兜底拉取(一次拉全按 taskId 缓存);运行中轮闭合的增量
+  // 由 index.ts 订阅 plugin-task-event 直推 upsert,不在此处理——直推先于 round.closed
+  // (refreshRounds)到达,本面板挂载时缓存必已含本轮,无需过期缓存自愈补丁(§7.15.2)。
   useEffect(() => {
-    if (
-      roundId &&
-      refetchedRef.current !== roundId &&
-      isRoundChangesLoaded(taskId) &&
-      getRoundChanges(taskId, roundId) === undefined
-    ) {
-      refetchedRef.current = roundId
-      invalidateRoundChanges(taskId)
-    }
     ensureRoundChanges(taskId, workerId)
-  }, [taskId, workerId, roundId, cacheVersion])
+  }, [taskId, workerId, cacheVersion])
 
   const changes = getRoundChanges(taskId, roundId) ?? []
 

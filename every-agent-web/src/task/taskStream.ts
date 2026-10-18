@@ -15,6 +15,8 @@
  *
  * 轮次开启/闭合由后端推送 round.opened/round.closed 信号事件(不落盘、不折入 items),
  * 收到后仅触发 rounds 快照刷新(重新 task.rounds + 幂等 foldRound),前端不在本地判开/闭。
+ * 插件自定义任务事件(plugin.* 前缀,如 file-change 轮末摘要直推)同样不折入 items,
+ * 一律透传到领域事件总线由对应插件 web 端订阅消费(数据直推模型,宿主不感知业务语义,§7.15.2)。
  *
  * 实时信号链(同一折叠器状态):agentStates(agent 列表)/agentMeta(子 agent 台账+用量快照)/
  * 上下文电池(taskStore 消费 worker usage 投影聚合值,不在流内维护)/
@@ -218,18 +220,19 @@ class ManagedStream {
       this.notify()
       return
     }
+    // 插件自定义任务事件(plugin.* 前缀):不折入线程 items,透传到领域事件总线,
+    // 由对应插件 web 端订阅消费(数据直推模型,宿主不感知业务语义,§7.15.2)。
+    if (event.event.startsWith('plugin.')) {
+      domainEventBus.emit(DOMAIN_EVENTS.PLUGIN_TASK_EVENT, {
+        taskId: this.taskId,
+        workerId: this.workerId,
+        event: event.event,
+        data: event.payload?.data,
+      })
+      return
+    }
     // round.opened / round.closed 是信号事件,不折入 items;仅触发 rounds 快照刷新(重新 task.rounds + 幂等 foldRound)。
     if (event.event === 'round.opened' || event.event === 'round.closed') {
-      // round.closed 另发一条通用领域事件(名不含任何业务语义):轮末旁路数据(如 file-change 插件
-      // 按轮落盘的变更分片)由插件自持文件提供,宿主只负责通知失效,核心不感知业务(§7.15.2)。
-      if (event.event === 'round.closed') {
-        const data = event.payload?.data
-        domainEventBus.emit(DOMAIN_EVENTS.TASK_ROUND_CLOSED, {
-          taskId: this.taskId,
-          startSeq: String(data?.startSeq ?? event.payload?.startSeq ?? ''),
-          endSeq: String(data?.endSeq ?? event.payload?.endSeq ?? ''),
-        })
-      }
       void this.refreshRounds()
       return
     }
@@ -533,6 +536,11 @@ class ManagedStream {
    */
   private foldWireEvent(item: TaskPollWireEvent): void {
     const event = this.toFoldableEvent(item)
+    // plugin.* = 瞬态直推专用(不落盘,正常不会出现在历史回放);若出现则跳过不折入,
+    // 也不重发领域事件(避免回放风暴)。真相源在插件自持落盘 + 插件 RPC(§7.15.2)。
+    if (event.event.startsWith('plugin.')) {
+      return
+    }
     if (event.event === 'ask.create' || event.event === 'ask.state' || event.event === 'ask.resolved') {
       this.dispatchAskEvent({ ...event, initial: true })
     }

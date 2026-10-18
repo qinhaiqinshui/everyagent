@@ -6,9 +6,13 @@
  * - **省略 roundId** → 全任务各轮**轻量摘要**（一次拉全，避免逐轮 N 次 RPC）；
  * - **带 roundId** → 该轮**变更全文**（点开 diff 时按需拉，promise 缓存）。
  *
- * 摘要缓存按 taskId 一份；宿主收到瞬态 `round.closed` 信号时 emit 通用领域事件
- * `task-round-closed`（不含任何文件变更语义），由 index.ts 调 {@link invalidateRoundChanges}
- * 作废，组件重渲染时 {@link ensureRoundChanges} 重拉。
+ * 增量到达走**数据直推**（§7.15.2）：轮闭合落盘成功后，worker 侧 provider 立即经 stream
+ * 频道直推瞬态事件 `plugin.file-change.roundChanges`（data={roundId, changes}，不落盘），
+ * 宿主 taskStream 对 plugin.* 前缀统一透传领域事件 `plugin-task-event`，由 index.ts 订阅后调
+ * {@link upsertRoundChanges} 合入本缓存——不再经「作废→重拉」间接失效。时序保证:直推在
+ * 分片落盘之后发出（provider 回调先写盘后推送），且早于 round.closed（refreshRounds 让轮末
+ * 面板挂载）——面板挂载时缓存必已含本轮。初次打开/历史任务由 {@link ensureRoundChanges}
+ * 全量拉取兜底（推送是瞬态的,重连间隙错过属可接受降级,真相始终可从磁盘反推）。
  *
  * 组件侧只认 version 快照（`useSyncExternalStore`），内部 Map 引用不外泄，避免撕裂渲染。
  */
@@ -118,14 +122,39 @@ export function getRoundChanges(taskId: string, roundId: string): RoundFileChang
   return entries.get(taskId)?.byRound.get(roundId)
 }
 
-/** 该任务的摘要缓存是否已成功拉取过一次（供组件检测「缓存已加载但本 roundId 缺席」的过期场景）。 */
-export function isRoundChangesLoaded(taskId: string): boolean {
-  return entries.get(taskId)?.loaded === true
+/**
+ * 直推合入（领域事件 `plugin-task-event` 携带 `plugin.file-change.roundChanges` 时由 index.ts 调）:
+ * 按 roundId REPLACE 该轮摘要。已加载条目只并入不重拉（loaded 不动,后续 ensure 幂等直返）;
+ * 条目尚不存在时建未加载条目（loaded=false）——面板立即可见,历史轮仍由下一次
+ * {@link ensureRoundChanges} 全量拉取补齐（拉取自磁盘重建,天然包含本轮,替换无损）。
+ * changes 为空 = 该轮无变更:不建条目、已存在则删该轮键（无变更的轮不入表）。
+ */
+export function upsertRoundChanges(
+  taskId: string,
+  roundId: string,
+  changes: RoundFileChangeSummary[],
+): void {
+  if (!taskId || !roundId) return
+  const existing = entries.get(taskId)
+  if (!existing) {
+    if (!changes.length) return
+    entries.set(taskId, { byRound: new Map([[roundId, changes]]), loaded: false })
+    console.debug(`[file-change] 直推合入(新建条目) task=${taskId} round=${roundId} 变更数=${changes.length}`)
+    bump()
+    return
+  }
+  if (changes.length) {
+    existing.byRound.set(roundId, changes)
+  } else if (!existing.byRound.delete(roundId)) {
+    return // 原本就无该轮键:无变化不 bump
+  }
+  console.debug(`[file-change] 直推合入 task=${taskId} round=${roundId} 变更数=${changes.length}`)
+  bump()
 }
 
 /**
- * 作废某任务缓存（宿主 `task-round-closed` 领域事件 / 任务删除时调用）。
- * 只作废不重拉:重拉由组件在下一次渲染的 effect 里 ensure。
+ * 作废某任务缓存（任务删除时调用,清理内存）。
+ * 轮级增量已由直推 upsert 承载,不再在轮闭合时整缓存作废重拉。
  */
 export function invalidateRoundChanges(taskId: string): void {
   if (!taskId) return

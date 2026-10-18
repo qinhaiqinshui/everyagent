@@ -115,7 +115,7 @@ has_children: false
 | `ui.output_blocks` | **无内置范例** | — | 扩展点已声明但零使用，见 [已知问题](known-issues.md) |
 | `ui.file_content_editors`（文件内容编辑器） | pdf-viewer | `every-agent-plugins/pdf-viewer/web/index.ts:14-19` | 唯一使用者 + web-only 形态最小样本（无 pom 无 src） |
 | `ui.file_explorer_actions`（文件树右键动作） | git | `every-agent-plugins/git/web/index.ts:42-53` | 唯一注册者；动作追加到文件树右键菜单内置项尾部（[UI §13](../web/ui-extensions.md)） |
-| `ui.round_tail_panels`（轮次尾面板） | file-change | `every-agent-plugins/file-change/web/index.ts:22` | 唯一使用者；配套 `ctx.events.on('task-round-closed')` 缓存作废范式 |
+| `ui.round_tail_panels`（轮次尾面板） | file-change | `every-agent-plugins/file-change/web/index.ts:22` | 唯一使用者；配套 `ctx.events.on('plugin-task-event')` 直推 upsert 轮末摘要范式（§7.15.2） |
 | `ui.editor_context_menu_actions`（编辑器内容区右键菜单） | selection-reference | `every-agent-plugins/selection-reference/web/index.ts:69` | 唯一使用者：仅当有选区时出现「引用到AI对话框」；`invoke` 经 `ctx.ui.openTab('task', { taskId:'__draft__', workspace:c.workspaceRoot })` 打开草稿标签（workspace 预设 = 选区所属工作区根，新任务挂靠该工作区），再经 `ctx.ui.appendComposerToken` 插入 `kind='file.selection'` 胶囊（opaque 编码由宿主单点负责） |
 | `ui.composer_chip_actions`（胶囊激活行为） | selection-reference | `every-agent-plugins/selection-reference/web/index.ts:75` | 插件侧样本：点击胶囊经 `ctx.ui.openFileTab(..., { lineNumber })` 切回原文件标签并定位起始行；核心 `system.workspace_file` 亦经此注册（`pluginId:'core'`） |
 | 扩展点之外的自绘全局 UI（悬浮球等） | mobile-keyboard | `every-agent-plugins/mobile-keyboard/web/floatball.ts` | 唯一直接操作 `document.body` 的插件：15 个扩展点没有全局覆盖层位时，挂自有根元素 + 自管生命周期与可见性 |

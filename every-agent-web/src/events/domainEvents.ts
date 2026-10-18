@@ -34,7 +34,7 @@ export const DOMAIN_EVENTS = {
   USER_INTERACTION_RESOLVED: 'user-interaction-resolved',
   USER_INTERACTION_CLEARED: 'user-interaction-cleared',
   WORKSPACE_OPEN_USER_INTERACTION_REQUESTED: 'workspace-open-user-interaction-requested',
-  TASK_ROUND_CLOSED: 'task-round-closed',
+  PLUGIN_TASK_EVENT: 'plugin-task-event',
   PLUGINS_LOADED: 'plugins-loaded',
   WORKER_DATA_CHANGED: 'worker-data-changed',
   WORKSPACE_TAB_CLOSED: 'workspace-tab-closed',
@@ -155,13 +155,15 @@ export type DomainEventMap = {
     /** 需要打开的交互请求 ID。 */
     interactionId: string
   }
-  [DOMAIN_EVENTS.TASK_ROUND_CLOSED]: {
+  [DOMAIN_EVENTS.PLUGIN_TASK_EVENT]: {
     /** 所属 Task ID。 */
     taskId: string
-    /** 闭合轮起点 seq（worker round.closed 瞬态信号透传）。 */
-    startSeq: string
-    /** 闭合轮终点 seq。 */
-    endSeq: string
+    /** 归属 worker(发出该事件的任务流句柄绑定的 worker)。 */
+    workerId: string
+    /** 插件自定义事件名(恒为 plugin.* 前缀,如 file-change 的轮末摘要直推)。 */
+    event: string
+    /** 事件 data 载荷原样透传(宿主不解释语义,由对应插件 web 端按 event 名解析,§7.15.2)。 */
+    data: unknown
   }
   [DOMAIN_EVENTS.PLUGINS_LOADED]: {
     /** 已装载的插件数量（含动态插件）。 */

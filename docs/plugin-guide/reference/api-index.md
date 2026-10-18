@@ -208,7 +208,7 @@ has_children: false
 |---|---|---|---|
 | `workspace-file-changed` | ✅ 活（高频） | `task-created` | ✅ 活（#4 接线） |
 | `workspace-registry-changed` | ✅ 活 | `task-deleted` | ✅ 活（#4 接线） |
-| `sidebar-panel-shown` | ✅ 活 | `task-round-closed` | ✅ 活（历史回放会补发） |
+| `sidebar-panel-shown` | ✅ 活 | `plugin-task-event` | ✅ 活（plugin.* 直推透传,§7.15.2） |
 | `task-status-changed` | ✅ 活 | `plugins-loaded` | ✅ 活（#4 接线） |
 
 插件间通信无先例：30 个内置插件 events 调用 6 处全是 `on`、零 `emit`；约定事件名用 `<pluginId>:<verb>` 前缀（[事件 §6](../web/events.md#6-插件间通信模式)）。

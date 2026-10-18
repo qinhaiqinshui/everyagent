@@ -411,7 +411,7 @@ ctx.ui.registerRoundTailPanel(def)
 - 无插件面板时（如某轮无文件变更），该行只剩核心复制按钮，左对齐。
 
 - **坑**：渲染 key 是 `pluginId`（`:445`）——同一 `pluginId` 注册两个轮末面板会 React key 冲突，一个 id 只应注册一个。
-- **内置范例**：核心 `core.round-copy`（复制本轮结果）；插件 file-change（`every-agent-plugins/file-change/web/index.ts:15-26`，轮末文件变更视图 + 订阅 `task-round-closed`/`task-deleted` 作废缓存）。
+- **内置范例**：核心 `core.round-copy`（复制本轮结果）；插件 file-change（`every-agent-plugins/file-change/web/index.ts`，轮末文件变更视图 + 订阅 `plugin-task-event` 直推 upsert 轮末摘要/`task-deleted` 清缓存，§7.15.2）。
 
 ## 15. `ui.search_types` —— 搜索类型注册
 

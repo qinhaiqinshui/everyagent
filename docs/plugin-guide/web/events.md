@@ -85,7 +85,7 @@ class EventBus {
 | `workspace-registry-changed` | ✅ | §3.1 |
 | `sidebar-panel-shown` | ✅ | §3.1、§5.4 |
 | `task-status-changed` | ✅ | §3.1 |
-| `task-round-closed` | ✅ | §3.1 |
+| `plugin-task-event` | ✅ | §3.1 |
 | `task-created` | ✅（known-issues #4 修复后接线） | §3.1 |
 | `task-deleted` | ✅（known-issues #4 修复后接线） | §3.1 |
 | `plugins-loaded` | ✅（known-issues #4 修复后接线） | §3.1 |
@@ -101,7 +101,7 @@ export type PluginDomainEvent =
   | 'task-created'
   | 'task-deleted'
   | 'task-status-changed'
-  | 'task-round-closed'
+  | 'plugin-task-event'
   | 'plugins-loaded'
   | (string & {})    // 兜底：放行任意自定义字符串，补全仍优先提示上面 8 个
 
@@ -123,7 +123,7 @@ export interface PluginEvents {
 | `workspace-registry-changed` | `{defaultRoot, workspaces: Array<{root, addedAt}>}`（`:271-275`） | 工作区注册表 `rebuild()` 后、根集合实际变化时（`every-agent-web/src/hub/workspaceRegistry.ts:264-272`，emit 于 `:271`） | **高**。多工作区增删感知；git 插件实战在用（`every-agent-plugins/git/web/usePluginWorkspaces.ts:31`、`GitChangeBadge.tsx:31`）。宿主自身无订阅者——这条目前主要就是发给插件听的 |
 | `sidebar-panel-shown` | `{panelId: string}`（`:255-257`） | 侧边栏面板从隐藏→显示的边沿（`Layout.tsx:1107-1113` 的 `SidebarPanelHost` useEffect，emit 于 `:1112`）；`panelId` 即侧边栏项 `id`（内置 `tasks/files/search/settings` + 插件自己的 id） | **高**。「面板被用户点亮时懒刷新」标准姿势（git 在用：`GitSidebarPanel.tsx:334-339` 过滤 `panelId === 'git'`），见 §5.4 |
 | `task-status-changed` | `{taskId, status, error?, endTime?, task?, displayTitle?}`（`:167-174`） | 任务列表条目状态翻转时（`every-agent-web/src/task/taskStore.ts:497-513` 的 `upsert`，emit 于 `:505-512`；仅 `prevStatus !== entry.status` 才发）。来源是 worker 任务频道帧 | **高**。任务终态/出错感知（宿主自用：浏览器系统通知 `BrowserNotificationHost.tsx:53`） |
-| `task-round-closed` | `{taskId, startSeq, endSeq}`（seq 为字符串）（`:347-353`） | 任务流消费到 `round.closed` 信号帧时（`every-agent-web/src/task/taskStream.ts:212-226`，emit 于 `:219-224`） | **高**。轮末缓存作废的标准信号（file-change 在用：`every-agent-plugins/file-change/web/index.ts:24-27`）。⚠️ 历史回放同样会补发：`task.poll` 回放的 `round.closed` 帧走同一 `onEvent`（`task-packet-view.ts:504-522` 不区分 `initial`，`taskStream.ts:212` 无 initial 分支）——打开旧任务会按历史轮次逐轮触发，作废缓存无害，但别拿它当「刚刚有新输出」信号 |
+| `plugin-task-event` | `{taskId, workerId, event, data}`（`event` 恒为 `plugin.*` 前缀,data 原样透传） | 任务流消费到 `plugin.*` 前缀的瞬态直推帧时（`every-agent-web/src/task/taskStream.ts` `onEvent` 的 plugin.* 分支统一 emit;worker 侧插件经 `runtime.events().emit(EmitEvent.transientOf(...))` 直推,§7.15.2） | **高**。插件自定义任务直推数据的标准入口——插件 worker 侧落盘/产生旁路数据后直推轻量增量,web 侧按 `event` 名滤取后 upsert 自持缓存（file-change 在用：滤出 `plugin.file-change.roundChanges` 合入轮末摘要,不再走「作废→重拉」）。注意 `plugin.*` 瞬态不落盘、历史回放不补发（task.poll 折叠侧跳过）,错过由插件 RPC 全量拉取兜底 |
 | `settings-theme-patched` | `{themeMode: 'light'\|'dark'}`（`:197-199`） | 用户切换主题落 localStorage 时（`every-agent-web/src/settings/localSettings.ts:14-19`，emit 于 `:18`） | 中。自带 UI 想跟随宿主主题可订阅（宿主自用：`useThemeMode.ts:15`、`TerminalPage.tsx:152`） |
 | `worker-data-changed` | `Record<string, never>`（空对象）（`:359`） | worker 启用/停用/移除/重连 hub 配置后（`WorkerList.tsx:87,155,169`、`SettingsPanel.tsx:70`） | 中。worker 集合变动后提醒自家数据可能过期（taskStore 全量 refresh 的触发器，`taskStore.ts:235`） |
 | `workspace-tab-closed` | `{tabId: string}`（`:360`） | 关闭工作区标签页的瞬间（`Layout.tsx:388-390`；taskStream 据此退订任务流频道，`taskStream.ts:739`） | 中。插件若按 tabId 持有 per-tab 资源可监听清理 |
@@ -193,7 +193,7 @@ known-issues #4 清理前 38 声明 vs 14 实发不是单纯的烂尾，而是**
 
 ### 5.3 `task-deleted`：已接线（known-issues #4 修复，曾经的内置插件死订阅）
 
-file-change 插件订阅它作废轮次缓存（`every-agent-plugins/file-change/web/index.ts:28-31`）。修复前任务删除的真实路径 `TasksPanel` → `task.delete` RPC → worker 频道 `task.deleted` 帧 → `taskStore.remove()` **不发领域事件**，该作废路径永不触发；修复后 `remove()` 删除镜像成功即 emit `{taskId}`——同插件里 `task-round-closed`（活）与 `task-deleted`（修复前死、现活）的对照仍是最好的教训：**订阅前先在 §3.1 确认事件真的会响**，不要看名字合理就挂监听。
+file-change 插件订阅它清理轮次摘要缓存（`every-agent-plugins/file-change/web/index.ts`）。修复前任务删除的真实路径 `TasksPanel` → `task.delete` RPC → worker 频道 `task.deleted` 帧 → `taskStore.remove()` **不发领域事件**，该作废路径永不触发；修复后 `remove()` 删除镜像成功即 emit `{taskId}`——同插件里 `plugin-task-event`（活）与 `task-deleted`（修复前死、现活）的对照仍是最好的教训：**订阅前先在 §3.1 确认事件真的会响**，不要看名字合理就挂监听。
 
 ### 5.4 `sidebar-panel-shown` 的正确用法
 
@@ -294,10 +294,10 @@ function bindEvents(ctx: PluginContext): void {
     }),
   )
   track(
-    // ③ 轮闭合作废缓存（file-change 同款，见 §3.1）
-    ctx.events.on('task-round-closed', (payload) => {
-      const taskId = (payload as { taskId?: string })?.taskId
-      if (taskId) invalidateCache(taskId)
+    // ③ 插件任务直推数据入口:按 event 名滤取(file-change 同款,见 §3.1)
+    ctx.events.on('plugin-task-event', (payload) => {
+      const p = payload as { taskId?: string; event?: string }
+      if (p.event === 'plugin.my-plugin.something' && p.taskId) upsert(p.taskId)
     }),
   )
 }
@@ -307,7 +307,7 @@ const plugin: PluginModule = {
 }
 export default plugin
 
-function invalidateCache(_taskId: string): void { /* ... */ }
+function upsert(_taskId: string): void { /* ... */ }
 ```
 
 ```tsx
