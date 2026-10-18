@@ -1,4 +1,5 @@
 import React from 'react'
+import { flushSync } from 'react-dom'
 import WorkspacePageShell from '../shared/WorkspacePageShell'
 import BrandLoadingBlock from '../shared/BrandLoadingBlock'
 import MoreActionsButton, { type MoreActionItem } from '../shared/MoreActionsButton'
@@ -495,17 +496,28 @@ export default function FileTabPage({
         const range = selection.getRangeAt(0)
         const rect = range.getBoundingClientRect()
         // 锚在选区下缘中点：菜单落在选区下方（center 模式由 MenuList 夹紧视口内）。
-        setEditorContextMenu({
-          items,
-          anchorPoint: { x: rect.left + rect.width / 2, y: rect.bottom },
-          anchorPointMode: 'center',
-          anchor,
+        // flushSync 强制同步渲染——MenuList DOM 必须在清空选区（隐藏系统 callout）前
+        // 就绪，否则 callout 先消失、菜单后渲染，中间存在一帧「两个菜单都没有」的闪烁。
+        flushSync(() => {
+          setEditorContextMenu({
+            items,
+            anchorPoint: { x: rect.left + rect.width / 2, y: rect.bottom },
+            anchorPointMode: 'center',
+            anchor,
+          })
         })
         // 隐藏系统原生选择菜单（iOS callout / Android 浮动工具栏）：它依附于 DOM 选区，
         // 选区清空即随之消失，不再遮挡统一菜单。菜单项构建时已闭包捕获选区快照，
         // 「复制」「引用到 AI 对话框」等 invoke 读取的是快照，不受清空影响；
         // 清空触发的 selectionchange 会因选区为空走到 collect 返回 null，菜单保持打开。
-        selection.removeAllRanges()
+        //
+        // 双 rAF 等待浏览器实际绘制菜单后再清选区，实现「菜单先可见 → callout 后消失」
+        // 的无缝切换；若不用 rAF 直接清，DOM 更新尚未绘制，仍有一帧空档。
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            window.getSelection()?.removeAllRanges()
+          })
+        })
       }, 350)
     }
     document.addEventListener('selectionchange', handleSelectionChange)
