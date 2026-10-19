@@ -80,5 +80,16 @@ public interface ToolExecutionContext extends ExecContext {
 
     /** 本 run 的工具结果账本(可空);链上行按 callId 写账(见 ToolOutcomeLog)。 */
     ToolOutcomeLog toolOutcomes();
+
+    /**
+     * 当前执行 agent 的 ID(<b>per-run 归属</b>,经 RunContext 数据通道下行;主 agent =
+     * 主体 mainAgentId,子 agent = 子 agent Id;链节点据此做 MAIN/SUB_AGENT 归属等判定,
+     * 如 file-change 一阶段记账,架构 §7.15.2)。
+     *
+     * <p>{@code null} = 未携带(单测桩/裸用场景),消费方须判空并保守处理。
+     */
+    default String agentId() {
+        return null;
+    }
 }
 

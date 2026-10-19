@@ -39,15 +39,16 @@ public class AgentRunner {
             OpenAiChatOptions.Builder options = a.options.mutate();
             if (!a.tools.isEmpty()) {
                 options.toolCallbacks(a.tools.stream()
-                        .map(tc -> new SchemaStrippedToolCallback(tc, a.toolOutcomes))
+                        .map(SchemaStrippedToolCallback::new)
                         .toArray(ToolCallback[]::new));
             }
-            // per-run 三件套经框架 ToolContext map 下行(架构 §7.14.3):共享单例
-            // PerCallToolCallingManager 的切口由此取出 agent 级 emitter(agentId 包装,
-            // 链上事件自动带归属 agentId)/ExecContext/ToolOutcomeLog 构造 per-call 链 ctx;
-            // 框架 buildToolContext 原样透传,工具回调只按自己的键取值不受影响。
+            // per-run 四件套经框架 ToolContext map 下行(架构 §7.14.3):共享单例
+            // PerCallToolCallingManager 的切口由此取出 agentId(链节点 MAIN/SUB_AGENT 归属判定,
+            // file-change 一阶段记账消费)/agent 级 emitter(agentId 包装,链上事件自动带归属
+            // agentId)/ExecContext/ToolOutcomeLog 构造 per-call 链 ctx;框架 buildToolContext
+            // 原样透传,工具回调只按自己的键取值不受影响。
             options.toolContext(PerCallToolCallingManager.RUN_CONTEXT_KEY,
-                    new PerCallToolCallingManager.RunContext(a.emitter, a.execution, a.toolOutcomes));
+                    new PerCallToolCallingManager.RunContext(a.agentId, a.emitter, a.execution, a.toolOutcomes));
             Prompt prompt = new Prompt(new ArrayList<>(a.conversation), options.build());
 
             CountDownLatch done = new CountDownLatch(1);

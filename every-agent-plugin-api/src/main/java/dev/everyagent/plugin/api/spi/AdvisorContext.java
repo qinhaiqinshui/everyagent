@@ -34,10 +34,11 @@ public interface AdvisorContext extends ExecContext {
     /**
      * per-run 工具执行结果账本({@link ToolOutcomeLog})——advisor 侧结构化判据通道。
      *
-     * <p>需要补判「某次工具调用是否失败」的 advisor(如 file-change 在下一轮请求入口确认
-     * 文件写工具成败)经此取账本,用非消费查询 {@code toolThrew(工具名, 入参原串)} 判定
-     * (键与 {@code ToolCall.arguments()} 同源,见 {@link ToolOutcomeLog});<b>不得</b>解析
-     * 工具结果文本判成败(自指误判,见 {@link ToolOutcomeLog} javadoc)。
+     * <p>需要补判「某次工具调用是否失败」的 advisor 经此取账本,按 <b>callId</b> 非消费查询
+     * {@code callOutcome(callId)}(链上行发射点写账,见 {@link ToolOutcomeLog});<b>不得</b>解析
+     * 工具结果文本判成败(自指误判,见 {@link ToolOutcomeLog} javadoc)。注:文件写工具的成败
+     * 记账(file-change)已迁 per-call 工具执行拦截链上行节点,拦截器经
+     * {@code ToolExecutionContext.toolOutcomes()} 直读同一实例(架构 §7.15.2)。
      *
      * <p>默认返回 {@code null}(未装配——单测桩等场景),消费方须判空并保守处理。
      */

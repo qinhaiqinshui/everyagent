@@ -106,13 +106,14 @@ public final class ToolEventInterceptor implements ToolExecutionInterceptor {
      * <ol>
      *   <li>结果串以 {@link ExecResults#TOOL_FAILURE_PREFIX} 开头 → error(前缀约定:
      *       异常处理器 {@code CANCELLING_PROCESSOR} 与缺工具兜底 {@code MissingToolCallbackResolver}
-     *       的产出前缀);</li>
+     *       的产出前缀,工具抛异常/缺工具都由它覆盖);</li>
      *   <li>否则查结构化结果账本兜底:shell 退出码/超时(执行器按「工具名+命令」记账,
-     *       <b>非零退出码即失败</b>,2026-12 用户决策)→ 工具抛异常(回调包装器按
-     *       「工具名+入参」记账,与前缀同源的双保险);</li>
-     *   <li>都查不到 → success(执行器未接入/正常返回)。账本为 null(未装配)一律 success。</li>
+     *       <b>非零退出码即失败</b>,2026-12 用户决策——命令输出与成功同形,前缀约定探不到,
+     *       故保留此线);</li>
+     *   <li>查不到 → success(非 shell 工具/执行器未接入/正常返回)。账本为 null(未装配)一律 success。</li>
      * </ol>
-     * 不做通用文案匹配——「读/grep 到失败文案源码」的命令会自指误判为失败。
+     * 不做通用文案匹配——「读/grep 到失败文案源码」的命令会自指误判为失败。旧「工具名+入参」
+     * 抛异常记账线(consumeToolThrow)已删,其覆盖面由①前缀约定取代(步骤 4c)。
      */
     static String statusOf(ToolExecutionContext ctx, String result) {
         if (result != null && result.startsWith(ExecResults.TOOL_FAILURE_PREFIX)) {
@@ -125,10 +126,7 @@ public final class ToolEventInterceptor implements ToolExecutionInterceptor {
         String toolName = ctx.toolCall().name();
         String arguments = ctx.arguments() == null ? "" : ctx.arguments();
         ToolOutcomeLog.ShellExit exit = log.consumeShellExit(toolName, commandOf(arguments));
-        if (exit != null) {
-            return exit.failed() ? "error" : "success";
-        }
-        return log.consumeToolThrow(toolName, arguments) ? "error" : "success";
+        return exit != null && exit.failed() ? "error" : "success";
     }
 
     /**

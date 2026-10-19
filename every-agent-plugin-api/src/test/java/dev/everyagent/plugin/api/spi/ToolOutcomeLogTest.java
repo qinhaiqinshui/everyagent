@@ -65,32 +65,20 @@ class ToolOutcomeLogTest {
         assertNull(log.consumeShellExit("powershell", "echo ok"));
         assertNull(log.consumeShellExit(null, "echo ok"));
         assertNull(log.consumeShellExit("powershell", null));
-        assertFalse(log.consumeToolThrow("fs.read_file", "{}"), "查不到即视为成功");
     }
 
     @Test
-    void 抛异常记账按工具名加入参查回() {
+    void callId账按调用id查回() {
         ToolOutcomeLog log = new ToolOutcomeLog();
-        log.recordToolThrow("fs.read_file", "{\"path\":\"C:/x\"}");
+        log.recordCallOutcome("c1", true);
+        log.recordCallOutcome("c2", false);
 
-        assertTrue(log.consumeToolThrow("fs.read_file", "{\"path\":\"C:/x\"}"));
-        assertFalse(log.consumeToolThrow("fs.read_file", "{\"path\":\"C:/x\"}"), "消费后不再命中");
-        assertFalse(log.consumeToolThrow("fs.read_file", "{\"path\":\"D:/y\"}"));
-    }
-
-    @Test
-    void 非消费查询在FIFO消费后仍可命中() {
-        ToolOutcomeLog log = new ToolOutcomeLog();
-        log.recordToolThrow("create_file", "{\"path\":\"a\"}");
-
-        // 后置消费者(file-change 下一轮请求侧)的时序必然晚于首个查账者(tool.result status),
-        // FIFO 队列已被 poll 空——存在性影子集合仍可查(见 toolThrew javadoc)
-        assertTrue(log.consumeToolThrow("create_file", "{\"path\":\"a\"}"), "首个查账者消费掉 FIFO 记录");
-        assertTrue(log.toolThrew("create_file", "{\"path\":\"a\"}"), "非消费查询不受 FIFO 消费影响");
-        assertFalse(log.toolThrew("create_file", "{\"path\":\"b\"}"), "未记账的键不命中");
-        assertFalse(log.toolThrew("update_file", "{\"path\":\"a\"}"), "工具名不同不命中");
-        assertFalse(log.toolThrew(null, "{\"path\":\"a\"}"));
-        assertFalse(new ToolOutcomeLog().toolThrew("create_file", "{\"path\":\"a\"}"), "从未记账不命中");
+        assertEquals(Boolean.TRUE, log.callOutcome("c1"), "失败调用记 true");
+        assertEquals(Boolean.FALSE, log.callOutcome("c2"), "成功调用记 false");
+        assertNull(log.callOutcome("c3"), "无记账返回 null(非失败)");
+        assertNull(log.callOutcome(null), "null callId 不记账不命中");
+        // 非消费语义:后置消费者重复查同一 callId 结果一致
+        assertEquals(Boolean.TRUE, log.callOutcome("c1"), "非消费查询可重复");
     }
 
     @Test
@@ -98,10 +86,9 @@ class ToolOutcomeLogTest {
         ToolOutcomeLog log = new ToolOutcomeLog();
         log.recordShellExit(null, "cmd", 1, false);
         log.recordShellExit("bash", null, 1, false);
-        log.recordToolThrow(null, "{}");
+        log.recordCallOutcome(null, true);
 
         assertNull(log.consumeShellExit(null, "cmd"));
-        // 入参为 null 的抛异常记账按空串归一,查回时同样归一
-        assertFalse(log.consumeToolThrow("bash", null));
+        assertNull(log.callOutcome(null));
     }
 }

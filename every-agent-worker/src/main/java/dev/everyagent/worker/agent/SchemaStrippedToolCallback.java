@@ -1,6 +1,5 @@
 package dev.everyagent.worker.agent;
 
-import dev.everyagent.plugin.api.spi.ToolOutcomeLog;
 import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.definition.ToolDefinition;
@@ -25,21 +24,19 @@ import tools.jackson.databind.node.ObjectNode;
  *
  * <p>无状态、多任务并发安全;在 {@link AgentRunner} 统一包装后传入 prompt 的
  * toolCallbacks,主/子 agent 共用,不改动 {@code AgentEntity.tools} 原引用。
+ *
+ * <p><b>已退役</b>:旧版曾在此记账「本次调用抛异常」(工具名+入参键,供 {@code tool.result}
+ * status 查账)——per-call 工具执行链落地后成败判定单点收敛在链上行发射点(失败前缀约定 +
+ * callId 写账,架构 §7.14.3),回调包装层不再参与记账(步骤 4c 删除)。
  */
 public class SchemaStrippedToolCallback implements ToolCallback {
 
     private static final ObjectMapper MAPPER = JacksonUtils.getDefaultJsonMapper();
 
     private final ToolCallback delegate;
-    private final ToolOutcomeLog toolOutcomes;
 
     public SchemaStrippedToolCallback(ToolCallback delegate) {
-        this(delegate, null);
-    }
-
-    public SchemaStrippedToolCallback(ToolCallback delegate, ToolOutcomeLog toolOutcomes) {
         this.delegate = delegate;
-        this.toolOutcomes = toolOutcomes;
     }
 
     @Override
@@ -80,43 +77,11 @@ public class SchemaStrippedToolCallback implements ToolCallback {
 
     @Override
     public String call(String toolInput) {
-        try {
-            return delegate.call(toolInput);
-        } catch (RuntimeException e) {
-            recordThrow(toolInput);
-            throw e;
-        }
+        return delegate.call(toolInput);
     }
 
     @Override
     public String call(String toolInput, ToolContext toolContext) {
-        try {
-            return delegate.call(toolInput, toolContext);
-        } catch (RuntimeException e) {
-            recordThrow(toolInput);
-            throw e;
-        }
-    }
-
-    /**
-     * 记账「本次工具调用抛异常」——{@code tool.result} 的 {@code data.status} 结构化判定源之一
-     * (另一源是 shell 执行器的退出码记账)。框架不给工具层工具调用 id,故以
-     * 「工具名 + 入参原串」为键;该入参串与 {@code ToolCall.arguments()} 同源,发射侧可按同一键查账。
-     * 正常返回不记账(查不到即视为成功)。
-     *
-     * <p><b>键升级注记(架构 §7.14.3)</b>:per-call 工具执行链落地后,链上行已按 <b>callId</b>
-     * 写账({@link ToolOutcomeLog#recordCallOutcome}),status 判定单点收敛在前缀约定 +
-     * 结构化账本;本回调层的旧键记账与 {@code consumeToolThrow} 兜底查询保留至
-     * file-change 等后置消费者迁移(步骤 4c)后一并退役。
-     */
-    private void recordThrow(String toolInput) {
-        if (toolOutcomes == null) {
-            return;
-        }
-        try {
-            toolOutcomes.recordToolThrow(delegate.getToolDefinition().name(), toolInput);
-        } catch (RuntimeException ignored) {
-            // 记账是旁路:工具定义取不到时不影响异常继续抛出。
-        }
+        return delegate.call(toolInput, toolContext);
     }
 }

@@ -1,7 +1,6 @@
 package dev.everyagent.plugin.api.spi;
 
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
@@ -14,24 +13,29 @@ import java.util.concurrent.ConcurrentLinkedQueue;
  * {@code ToolContext} 只是 {@code chatOptions.getToolContext()}（不含工具调用 id），
  * {@code ToolExecutionException} 只带 {@code ToolDefinition}。曾用「匹配失败文案」兜底，
  * 结果是「读/grep 到该文案源码」的命令被自指误判为失败。故改由执行侧在<b>知道结构化结果的那一刻</b>
- * 记账（shell 退出码 / 工具抛异常），发射侧按结构化键查账。
+ * 记账，发射侧按结构化键查账。
  *
- * <p><b>键怎么定</b>：框架不把工具调用 id 交给工具层，唯一双方都能确定性复现的是
- * 「工具名 + 该次调用可复现的载荷」——shell 用命令串（执行器与工具入参都有），
- * 抛异常用入参 JSON（{@code ToolCallback.call} 收到的原串与 {@code ToolCall.arguments()} 同源）。
- * 同一轮里同键重复调用时按 FIFO 消费，与调用顺序一致。per-call 工具执行链落地后，
- * 切口握有 callId：链上行按 callId 写账（{@link #recordCallOutcome}），后置消费者
- * 直查 callId，不再依赖键拼合（见类尾 callId 段；旧键 API 保留至消费方全部迁移）。
+ * <p><b>两条记账线</b>：
+ * <ul>
+ *   <li><b>callId 账（主通道）</b>：per-call 工具执行链的切口握有工具调用 id（框架类型层不提供，
+ *       链切口独有），链上行发射点按「失败前缀约定 ∨ shell 退出码账」单点判定成败后以 callId 写账
+ *       （{@link #recordCallOutcome}）；后置消费者（file-change 一阶段记账等）按 callId 直查
+ *       （{@link #callOutcome}），不再依赖「工具名 + 载荷」的键拼合。</li>
+ *   <li><b>shell 退出码账（补充通道）</b>：shell 非零退出码/超时在 {@code responseData} 上与成功同形
+ *       （命令输出照常是文本），前缀约定探不到，故由各后端执行器在拿到 {@code ExecResult} 处按
+ *       「工具名 + 命令串」记账（{@link #recordShellExit}，执行器与工具入参都有该串），
+ *       发射侧 {@code statusOf} 按同键消费（{@link #consumeShellExit}，FIFO 与调用顺序一致）。
+ *       文件等非命令工具不走此线（失败 = 抛异常 → 异常处理器产出失败前缀文本，已被前缀约定覆盖）。</li>
+ * </ul>
+ * 旧「工具名 + 入参 JSON」的抛异常记账线（recordToolThrow/consumeToolThrow/toolThrew）已删除——
+ * 其覆盖面（工具抛异常）由失败前缀约定 + callId 账完全取代（步骤 4c，架构 §7.14.3/§7.15.2）。
  *
  * <p><b>生命周期</b>：per-run（挂在 agent 实体上，随 run 结束回收），线程安全
- * （工具执行可能切换线程，故不得用 ThreadLocal —— 见 {@code InterceptingToolCallingManager} 注释）。
+ * （工具执行可能切换线程，故不得用 ThreadLocal —— 见 {@code PerCallToolCallingManager} 注释）。
  */
 public final class ToolOutcomeLog {
 
     private final Map<String, ConcurrentLinkedQueue<ShellExit>> shellExits = new ConcurrentHashMap<>();
-    private final Map<String, ConcurrentLinkedQueue<Boolean>> toolThrows = new ConcurrentHashMap<>();
-    /** 「曾抛过异常」键影子集合(非消费存在性查询的供体,见 {@link #toolThrew})。 */
-    private final Set<String> throwMarks = ConcurrentHashMap.newKeySet();
 
     /** 命令执行的结局（结构化）：退出码 + 是否被沙箱超时中止。 */
     public record ShellExit(int exitCode, boolean aborted) {
@@ -68,55 +72,12 @@ public final class ToolOutcomeLog {
         return q == null ? null : q.poll();
     }
 
-    /**
-     * 记录一次工具调用抛出异常（由 worker 的 per-call 工具回调包装器调用）。
-     * 正常返回不记账——查不到即视为成功，避免为每条成功结果也写一份。
-     */
-    public void recordToolThrow(String toolName, String arguments) {
-        if (toolName == null) {
-            return;
-        }
-        String k = key(toolName, arguments == null ? "" : arguments);
-        queue(toolThrows, k).add(Boolean.TRUE);
-        throwMarks.add(k);
-    }
-
-    /** 取出并移除一次「该次调用抛过异常」的记录（FIFO）；{@code false} 表示未记录（=成功）。 */
-    public boolean consumeToolThrow(String toolName, String arguments) {
-        if (toolName == null) {
-            return false;
-        }
-        ConcurrentLinkedQueue<Boolean> q = toolThrows.get(key(toolName, arguments == null ? "" : arguments));
-        return q != null && q.poll() != null;
-    }
-
-    /**
-     * 非消费查询:该键在本 run 内是否曾记录过「抛异常」。
-     *
-     * <p><b>为什么需要它</b>:FIFO {@link #consumeToolThrow} 是<b>消费</b>语义,供首个查账者
-     * ({@code WorkerToolEventAdvisor} 的 {@code tool.result} status)按次精确裁决;但后置消费者
-     * (如 file-change 插件在下一轮请求入口补判工具成败)拿到的时序必然晚于首个查账者,
-     * 队列已被 poll 空——只能查「曾抛过」的存在性影子集合({@link #throwMarks},随 run 生命周期
-     * 累积,仅含抛过异常的键,量级极小)。
-     *
-     * <p><b>精度边界</b>:存在性 ≠ 按次精确。同键(工具名 + 入参逐字节相同的两次调用)一败一成时,
-     * 本查询对成功的那次也会返回 true(偏保守)。对 file-change 场景,同参数的 create_file/update_file
-     * 原样重发(失败后不改参数)概率≈0,可接受;需要按次精确裁决的消费方仍应走
-     * {@link #consumeToolThrow}。
-     */
-    public boolean toolThrew(String toolName, String arguments) {
-        if (toolName == null) {
-            return false;
-        }
-        return throwMarks.contains(key(toolName, arguments == null ? "" : arguments));
-    }
-
     // ---- callId 记账(per-call 链上行写账,架构 §7.14.3) ----
     //
     // per-call 工具执行链的切口握有工具调用 id(框架类型层不提供,链切口独有):链上行
-    // (发射 tool.result 处)按失败前缀约定 + 旧结构化键判定成败后,以 callId 写账一次——
+    // (发射 tool.result 处)按失败前缀约定 + shell 退出码账判定成败后,以 callId 写账一次——
     // 后置消费者(file-change 一阶段记账等)按 callId 直查,不再依赖「工具名+载荷」
-    // 的可复现键拼合。旧键 API(shell 退出码 / 抛异常)保留至消费方全部迁移。
+    // 的可复现键拼合。
 
     private final Map<String, Boolean> callOutcomes = new ConcurrentHashMap<>();
 
@@ -144,7 +105,7 @@ public final class ToolOutcomeLog {
         return callId == null ? null : callOutcomes.get(callId);
     }
 
-    /** 键 = 工具名 + NUL 分隔 + 载荷（NUL 不出现在工具名与命令/JSON 文本里，避免歧义拼接）。 */
+    /** 键 = 工具名 + NUL 分隔 + 载荷（NUL 不出现在工具名与命令文本里，避免歧义拼接）。 */
     private static String key(String toolName, String payload) {
         return toolName + '\u0000' + payload;
     }

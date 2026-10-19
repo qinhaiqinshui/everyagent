@@ -211,7 +211,7 @@ class PerCallToolCallingManagerTest {
             OpenAiChatOptions.Builder options = OpenAiChatOptions.builder()
                     .toolCallbacks(callbacks.toArray(new ToolCallback[0]))
                     .toolContext(PerCallToolCallingManager.RUN_CONTEXT_KEY,
-                            new PerCallToolCallingManager.RunContext(run.emitter, run, run.outcomes));
+                            new PerCallToolCallingManager.RunContext("a_main", run.emitter, run, run.outcomes));
             return new Prompt(instructions, options.build());
         }
 

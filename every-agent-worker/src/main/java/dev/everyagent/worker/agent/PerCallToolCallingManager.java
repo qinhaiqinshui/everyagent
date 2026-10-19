@@ -74,8 +74,8 @@ import java.util.Optional;
  * </ul>
  *
  * <p><b>per-run 数据通道</b>:本类是<b>共享无状态单例</b>(bean 装配,替换原
- * {@code InterceptingToolCallingManager} 的 per-run 构造)——per-run 三件套(agent 级
- * emitter + {@link ExecContext} + {@link ToolOutcomeLog})由 {@code AgentRunner} 组装
+ * {@code InterceptingToolCallingManager} 的 per-run 构造)——per-run 四件套(agentId +
+ * agent 级 emitter + {@link ExecContext} + {@link ToolOutcomeLog})由 {@code AgentRunner} 组装
  * prompt 时经 {@code options.toolContext(RUN_CONTEXT_KEY, RunContext)} 下行,框架
  * {@link #buildToolContext} 原样透传,切口从 {@code ToolContext} map 取出构造 per-call
  * ctx;map 无该键(单测/裸用)时退化为<b>纯框架路径</b>,行为与
@@ -120,10 +120,12 @@ public final class PerCallToolCallingManager implements ToolCallingManager {
     public static final String RUN_CONTEXT_KEY = "everyagent.runContext";
 
     /**
-     * per-run 三件套(agent 级 emitter(agentId 包装)/执行上下文/工具结果账本),
+     * per-run 四件套(agentId + agent 级 emitter(agentId 包装)/执行上下文/工具结果账本),
      * 经 prompt options 的 toolContext 下行——共享单例 TCM 的 per-run 数据通道。
+     * agentId 供链节点做 MAIN/SUB_AGENT 归属判定(file-change 一阶段记账消费,§7.15.2)。
      */
-    public record RunContext(EventEmitter emitter, ExecContext execution, ToolOutcomeLog toolOutcomes) {
+    public record RunContext(String agentId, EventEmitter emitter, ExecContext execution,
+            ToolOutcomeLog toolOutcomes) {
     }
 
     public PerCallToolCallingManager(ToolCallbackResolver toolCallbackResolver,
@@ -444,6 +446,7 @@ public final class PerCallToolCallingManager implements ToolCallingManager {
         @Override public long startedAt() { return startedAt; }
         @Override public void startedAt(long epochMs) { this.startedAt = epochMs; }
         @Override public ToolOutcomeLog toolOutcomes() { return run.toolOutcomes(); }
+        @Override public String agentId() { return run.agentId(); }
 
         // ── ExecContext 槽位:委托 run.execution;emitter 覆写为 agent 级包装 ──
 
