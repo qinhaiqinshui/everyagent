@@ -525,6 +525,19 @@ class ManagedStream {
     if (event.event.startsWith('plugin.')) {
       return
     }
+    // slash.tokens.changed:与实时推送 onEvent 同口径——仅更新 state.slashTokens,
+    // 不折入线程 items。瞬态事件占号不落盘,但 task.poll/task.roundTail 为磁盘∪内存
+    // 读取,新建任务建后 applyToken 的瞬态行会随 RPC 应答带回(TaskPacketView 的
+    // loadForwardPage/loadBackwardPage/fetchRoundEvents 为无副作用原始拉取,不经
+    // onEvent handler);漏拦会落 defaultHandler 折成 trace,FallbackView 以事件名 +
+    // stringify(payload) 原样回显在线程里(新建任务点发送后出现
+    // "slash.tokens.changed{...}"实锤)。多条按 REPLACE 语义逐条覆盖,末条即最新。
+    if (event.event === 'slash.tokens.changed') {
+      const tokens = event.payload?.data
+      this.folder.state.slashTokens = Array.isArray(tokens) ? tokens : null
+      this.notify()
+      return
+    }
     if (event.event === 'ask.create' || event.event === 'ask.state' || event.event === 'ask.resolved') {
       this.dispatchAskEvent({ ...event, initial: true })
     }
