@@ -93,11 +93,11 @@ describe('message 视图批壳(批壳+调用行模型)', () => {
 
   it('状态点:done ✓绿 / error ✗红 / queued 未开始;行尾权威耗时(durationMs 冻结)', () => {
     const html = renderMessage(items[0], items)
-    expect(html).toContain('nagent-tool-batch__dot--done')
-    expect(html).toContain('nagent-tool-batch__dot--error')
-    expect(html).toContain('nagent-tool-batch__dot--queued')
-    expect(html).toContain('✓')
-    expect(html).toContain('✗')
+    expect(html).toContain('nagent-tool-batch__icon--done')
+    expect(html).toContain('nagent-tool-batch__icon--error')
+    expect(html).toContain('nagent-tool-batch__icon--queued')
+    // ✓ 字符已移除,改用 WrenchIcon 绿色
+    // ✗ 字符已移除,改用 WrenchIcon 红色
     // 权威耗时:c1=1500ms → 1.5s;c2=25000ms → 25s;排队行无耗时
     expect(html).toContain('完成 · 1.5s')
     expect(html).toContain('失败 · 25s')
@@ -106,7 +106,7 @@ describe('message 视图批壳(批壳+调用行模型)', () => {
 
   it('批内同名多调用不折叠(两个 read_file 两行,无「×N」聚合徽章)', () => {
     const html = renderMessage(items[0], items)
-    expect((html.match(/nagent-tool-batch__dot--/g) ?? []).length).toBe(3)
+    expect((html.match(/nagent-tool-batch__icon--/g) ?? []).length).toBe(3)
     expect(html).not.toContain('×2')
     expect(html).not.toContain('nagent-tool-group')
   })
@@ -149,12 +149,12 @@ describe('message 视图运行态读秒与中断态', () => {
     const item = messageItem('10', { toolCalls: [callOf('c1', 'shell', '{"command":"ping"}')] })
     recordToolStarted(TASK_ID, { callId: 'c1', name: 'shell', arguments: '{}', startedAt: Date.now() - 400 })
     const html = renderMessage(item, [item])
-    expect(html).toContain('nagent-tool-batch__dot--running')
+    expect(html).toContain('nagent-tool-batch__icon--running')
     expect(html).toContain('运行中')
     // 历史回放(无瞬态)→ queued,不误点亮
     clearTaskToolStarted(TASK_ID)
     const replay = renderMessage(item, [item])
-    expect(replay).toContain('nagent-tool-batch__dot--queued')
+    expect(replay).toContain('nagent-tool-batch__icon--queued')
     expect(replay).not.toContain('运行中')
   })
 
@@ -165,9 +165,9 @@ describe('message 视图运行态读秒与中断态', () => {
       seq: '30', ts: 1, agentId: '', kind: 'cancelled', payload: { title: '任务已取消' },
     }
     const html = renderMessage(item, [item, cancelled])
-    expect(html).toContain('nagent-tool-batch__dot--interrupted')
+    expect(html).toContain('nagent-tool-batch__icon--interrupted')
     expect(html).toContain('执行中被中断')
-    expect(html).toContain('nagent-tool-batch__dot--skipped')
+    expect(html).toContain('nagent-tool-batch__icon--skipped')
     expect(html).toContain('未执行')
     expect(html).toContain('nagent-tool-batch--interrupted')
     // 终态信号到达后不再有 running/queued 读秒
@@ -182,7 +182,7 @@ describe('message 视图运行态读秒与中断态', () => {
       seq: '30', ts: 1, agentId: '', kind: 'cancelled', payload: { title: '任务已取消' },
     }
     const html = renderMessage(item, [item, result, cancelled])
-    expect(html).toContain('nagent-tool-batch__dot--done')
+    expect(html).toContain('nagent-tool-batch__icon--done')
     expect(html).toContain('完成 · 0.9s')
   })
 })

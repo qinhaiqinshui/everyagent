@@ -1320,56 +1320,49 @@
   color: var(--text-primary);
 }
 
-/* 状态点:queued 呼吸/running 主题色/done ✓绿/error ✗红/interrupted·skipped 灰 */
-.nagent-tool-batch__dot {
+/* 状态图标:统一用 WrenchIcon,以颜色+动效区分状态(替代原圆点方案) */
+.nagent-tool-batch__icon {
   flex: 0 0 auto;
   flex-shrink: 0;
   align-self: center;
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 10px;
-  font-weight: 700;
-  line-height: 1;
-  color: var(--bg-primary);
-  background: var(--text-muted);
 }
 
-.nagent-tool-batch__dot--queued {
-  background: var(--text-muted);
-  animation: nagent-tool-batch-breathe 1.6s ease-in-out infinite;
+.nagent-tool-batch__icon--queued {
+  color: var(--text-muted);
 }
 
-.nagent-tool-batch__dot--running {
-  background: var(--accent-blue);
-  animation: nagent-tool-batch-breathe 1.6s ease-in-out infinite;
+.nagent-tool-batch__icon--running {
+  color: var(--accent-blue);
+  animation: nagent-tool-batch-spin 1s linear infinite;
 }
 
-.nagent-tool-batch__dot--done {
-  background: var(--accent-green);
+.nagent-tool-batch__icon--done {
+  color: var(--accent-green);
 }
 
-.nagent-tool-batch__dot--error {
-  background: var(--accent-red);
+.nagent-tool-batch__icon--error {
+  color: var(--accent-red);
 }
 
-.nagent-tool-batch__dot--interrupted,
-.nagent-tool-batch__dot--skipped {
-  background: var(--text-muted);
+.nagent-tool-batch__icon--interrupted {
+  color: var(--accent-amber);
+}
+
+.nagent-tool-batch__icon--skipped {
+  color: var(--text-muted);
   opacity: 0.55;
 }
 
-@keyframes nagent-tool-batch-breathe {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: 0.45; transform: scale(0.72); }
+@keyframes nagent-tool-batch-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .nagent-tool-batch__dot--queued,
-  .nagent-tool-batch__dot--running {
+  .nagent-tool-batch__icon--running {
     animation: none;
   }
 }
