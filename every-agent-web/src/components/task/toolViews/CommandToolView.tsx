@@ -17,7 +17,7 @@
 
 import React from 'react'
 import { WrenchIcon, ChevronDownIcon, ChevronRightIcon } from '@/components/shared/AppGlyphs'
-import { hasActiveTextSelection, splitLeadingComment } from './helpers'
+import { hasActiveTextSelection, splitLeadingComment, toolStateClass, toolDurationText } from './helpers'
 import type { AggregatedToolDetail, ToolViewDefinition, ToolViewProps } from './types'
 
 /** 从聚合结果中提取输出文本（兼容对象与字符串两种形态）。 */
@@ -50,7 +50,7 @@ function flattenArgs(args: Record<string, unknown> | null): string[] {
     `${k}: ${v !== null && typeof v === 'object' ? JSON.stringify(v) : formatPrimitive(v)}`)
 }
 
-function ExecEntry({ detail }: { detail: AggregatedToolDetail }) {
+function ExecEntry({ detail, defaultOpen }: { detail: AggregatedToolDetail; defaultOpen?: boolean }) {
   const args = (detail.arguments ?? {}) as Record<string, unknown>
   const rawCommand = typeof args.command === 'string' ? args.command : ''
   // 首行是注释(意图说明)时拆分为「正文样式注释 + 等宽命令」两段,否则整段原样等宽。
@@ -61,7 +61,9 @@ function ExecEntry({ detail }: { detail: AggregatedToolDetail }) {
   const hasError = detail.status === 'error'
   const output = extractOutput(detail.result)
 
-  const [open, setOpen] = React.useState(false)
+  const stateClass = toolStateClass(detail)
+  const durationText = toolDurationText(detail)
+  const [open, setOpen] = React.useState(Boolean(defaultOpen))
 
   return (
     <div className={`nagent-tool nagent-tool--execmd${open ? ' is-open' : ''}`}>
@@ -75,7 +77,8 @@ function ExecEntry({ detail }: { detail: AggregatedToolDetail }) {
           setOpen((value) => !value)
         }}
       >
-        <WrenchIcon size={13} className={`nagent-tool__icon${hasError ? ' nagent-tool__icon--error' : ''}`} />
+        <WrenchIcon size={13} className={`nagent-tool__icon${stateClass ? ` ${stateClass}` : ''}`} />
+        {durationText ? <span className="nagent-tool__duration">{durationText}</span> : null}
         <span className="nagent-tool__name">{detail.toolName || '命令'}</span>
         <span className="nagent-tool__inline-preview">
           {preview ? (
@@ -118,11 +121,11 @@ function ExecEntry({ detail }: { detail: AggregatedToolDetail }) {
   )
 }
 
-function CommandToolView({ details }: ToolViewProps) {
+function CommandToolView({ details, defaultOpen }: ToolViewProps) {
   return (
     <>
       {details.map((detail, idx) => (
-        <ExecEntry key={detail.toolCallId ?? idx} detail={detail} />
+        <ExecEntry key={detail.toolCallId ?? idx} detail={detail} defaultOpen={defaultOpen} />
       ))}
     </>
   )

@@ -10,7 +10,7 @@
 import React from 'react'
 import { WrenchIcon, ChevronDownIcon, ChevronRightIcon } from '@/components/shared/AppGlyphs'
 import JsonBlock from '@/components/shared/JsonBlock'
-import { hasActiveTextSelection } from './helpers'
+import { hasActiveTextSelection, toolStateClass, toolDurationText } from './helpers'
 import type { AggregatedToolDetail, ToolViewProps } from './types'
 
 function formatPrimitive(v: unknown): string {
@@ -67,7 +67,7 @@ function truncate(text: string, max = 160): string {
   return text.length <= max ? text : `${text.slice(0, Math.max(max - 1, 1))}…`
 }
 
-function DefaultEntry({ detail }: { detail: AggregatedToolDetail }) {
+function DefaultEntry({ detail, defaultOpen }: { detail: AggregatedToolDetail; defaultOpen?: boolean }) {
   const hasError = detail.status === 'error'
   // status 为空 = 已下发但结果消息尚未到达（live 运行中态）。
   const isRunning = detail.status === undefined
@@ -86,7 +86,9 @@ function DefaultEntry({ detail }: { detail: AggregatedToolDetail }) {
       : JSON.stringify(detail.result, null, 2)
   const resultEmpty = resultText.trim().length === 0
 
-  const [open, setOpen] = React.useState(false)
+  const stateClass = toolStateClass(detail)
+  const durationText = toolDurationText(detail)
+  const [open, setOpen] = React.useState(Boolean(defaultOpen))
 
   return (
     <div className={`nagent-tool nagent-tool--call${open ? ' is-open' : ''}`}>
@@ -100,9 +102,10 @@ function DefaultEntry({ detail }: { detail: AggregatedToolDetail }) {
           setOpen((value) => !value)
         }}
       >
-        <WrenchIcon size={13} className={`nagent-tool__icon${hasError ? ' nagent-tool__icon--error' : ''}`} />
+        <WrenchIcon size={13} className={`nagent-tool__icon${stateClass ? ` ${stateClass}` : ''}`} />
+        {durationText ? <span className="nagent-tool__duration">{durationText}</span> : null}
         <span className="nagent-tool__name">{detail.toolName || '工具调用'}</span>
-        <span className="nagent-tool__inline-preview">{isRunning ? '运行中…' : inlinePreview}</span>
+        <span className="nagent-tool__inline-preview">{inlinePreview}</span>
         {open ? (
           <ChevronDownIcon size={13} className="nagent-tool__chevron" />
         ) : (
@@ -113,7 +116,7 @@ function DefaultEntry({ detail }: { detail: AggregatedToolDetail }) {
         <div className="nagent-tool__detail">
           <div className="nagent-tool__result-item">
             <div className="nagent-tool__result-item-head">
-              <WrenchIcon size={12} className={`nagent-tool__icon${hasError ? ' nagent-tool__icon--error' : ''}`} />
+              <WrenchIcon size={12} className={`nagent-tool__icon${stateClass ? ` ${stateClass}` : ''}`} />
               <span className="nagent-tool__name">{detail.toolName || '工具调用'}</span>
             </div>
             {argLines.length ? (
@@ -153,11 +156,11 @@ function DefaultEntry({ detail }: { detail: AggregatedToolDetail }) {
   )
 }
 
-export default function DefaultToolView({ details }: ToolViewProps) {
+export default function DefaultToolView({ details, defaultOpen }: ToolViewProps) {
   return (
     <>
       {details.map((detail, idx) => (
-        <DefaultEntry key={detail.toolCallId ?? idx} detail={detail} />
+        <DefaultEntry key={detail.toolCallId ?? idx} detail={detail} defaultOpen={defaultOpen} />
       ))}
     </>
   )

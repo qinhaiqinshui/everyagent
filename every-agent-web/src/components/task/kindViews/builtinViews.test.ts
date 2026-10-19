@@ -94,9 +94,9 @@ describe('message 视图批壳(批壳+调用行模型)', () => {
 
   it('状态点:done ✓绿 / error ✗红 / queued 未开始;图标后权威耗时(durationMs 冻结)', () => {
     const html = renderMessage(items[0], items)
-    expect(html).toContain('nagent-tool-batch__icon--done')
-    expect(html).toContain('nagent-tool-batch__icon--error')
-    expect(html).toContain('nagent-tool-batch__icon--queued')
+    expect(html).toContain('nagent-tool-state--done')
+    expect(html).toContain('nagent-tool-state--error')
+    expect(html).toContain('nagent-tool-state--queued')
     // ✓ 字符已移除,改用 WrenchIcon 绿色
     // ✗ 字符已移除,改用 WrenchIcon 红色
     // 权威耗时:c1=1500ms → 1.5s;c2=25000ms → 25s;排队行无耗时也不显示状态文案
@@ -107,7 +107,7 @@ describe('message 视图批壳(批壳+调用行模型)', () => {
 
   it('批内同名多调用不折叠(两个 read_file 两行,无「×N」聚合徽章)', () => {
     const html = renderMessage(items[0], items)
-    expect((html.match(/nagent-tool-batch__icon--/g) ?? []).length).toBe(3)
+    expect((html.match(/nagent-tool-state--/g) ?? []).length).toBe(3)
     expect(html).not.toContain('×2')
     expect(html).not.toContain('nagent-tool-group')
   })
@@ -146,18 +146,21 @@ describe('message 视图批壳(批壳+调用行模型)', () => {
 })
 
 describe('message 视图运行态读秒与中断态', () => {
-  it('tool.started 瞬态按 callId 直配点亮 running + 读秒行尾', () => {
+  it('tool.started 瞬态按 callId 直配点亮 running + 读秒(单调用直渲视图摘要行)', () => {
     const item = messageItem('10', { toolCalls: [callOf('c1', 'shell', '{"command":"ping"}')] })
     recordToolStarted(TASK_ID, { callId: 'c1', name: 'shell', arguments: '{}', startedAt: Date.now() - 400 })
     const html = renderMessage(item, [item])
-    expect(html).toContain('nagent-tool-batch__icon--running')
+    // 单调用不套批壳,直接渲染 per-tool 视图(DefaultToolView)
+    expect(html).not.toContain('nagent-tool-batch')
+    expect(html).toContain('nagent-tool--call')
+    expect(html).toContain('nagent-tool-state--running')
+    expect(html).toContain('nagent-tool__duration')
     // 运行中只显示时间(不显示「运行中」中文提示)
-    expect(html).toContain('nagent-tool-batch__duration')
     expect(html).not.toContain('运行中')
     // 历史回放(无瞬态)→ queued,不误点亮
     clearTaskToolStarted(TASK_ID)
     const replay = renderMessage(item, [item])
-    expect(replay).toContain('nagent-tool-batch__icon--queued')
+    expect(replay).toContain('nagent-tool-state--queued')
     expect(replay).not.toContain('运行中')
   })
 
@@ -168,8 +171,8 @@ describe('message 视图运行态读秒与中断态', () => {
       seq: '30', ts: 1, agentId: '', kind: 'cancelled', payload: { title: '任务已取消' },
     }
     const html = renderMessage(item, [item, cancelled])
-    expect(html).toContain('nagent-tool-batch__icon--interrupted')
-    expect(html).toContain('nagent-tool-batch__icon--skipped')
+    expect(html).toContain('nagent-tool-state--interrupted')
+    expect(html).toContain('nagent-tool-state--skipped')
     expect(html).toContain('nagent-tool-batch--interrupted')
     // 状态由图标颜色/动效承载,不再显示中文状态文案
     expect(html).not.toContain('执行中被中断')
@@ -185,7 +188,7 @@ describe('message 视图运行态读秒与中断态', () => {
       seq: '30', ts: 1, agentId: '', kind: 'cancelled', payload: { title: '任务已取消' },
     }
     const html = renderMessage(item, [item, result, cancelled])
-    expect(html).toContain('nagent-tool-batch__icon--done')
+    expect(html).toContain('nagent-tool-state--done')
     expect(html).toContain('0.9s')
   })
 })
@@ -323,8 +326,9 @@ describe('TaskThread 分发切换(查表 + 兜底)', () => {
     )
     // user.message 命中(user 气泡)
     expect(html).toContain('nagent-msg--user')
-    // message 命中(批壳) + 被吸收的 tool.result 不重复出块(仅 1 个结果摘要行,即批内调用行)
-    expect(html).toContain('nagent-tool-batch')
+    // message 命中(单调用直渲 per-tool 视图,不套批壳) + 被吸收的 tool.result 不重复出块
+    expect(html).not.toContain('nagent-tool-batch')
+    expect(html).toContain('nagent-tool--call')
     expect(html).toContain('1.2s')
     // 未注册 kind → FallbackView(TaskTraceShell 形状,内容零丢失)
     expect(html).toContain('nagent-trace-shell')

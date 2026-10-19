@@ -25,7 +25,7 @@ function formatLineRange(args: Record<string, unknown>): string {
   return `[${start}-${end}]`
 }
 
-function ReadFileToolView({ details }: ToolViewProps) {
+function ReadFileToolView({ details, defaultOpen }: ToolViewProps) {
   return (
     <>
       {details.map((detail, idx) => (
@@ -33,6 +33,7 @@ function ReadFileToolView({ details }: ToolViewProps) {
           key={detail.toolCallId ?? idx}
           detail={detail}
           inlineExtras={formatLineRange((detail.arguments ?? {}) as Record<string, unknown>)}
+          defaultOpen={defaultOpen}
         />
       ))}
     </>

@@ -2,16 +2,16 @@
  * `message` kind 视图(「任务线程统一条目与画板纯化」步骤 10)。
  *
  * thinking(AssistantReasoningBlock:流式且未 reasoningDone 展开、完成后自动折叠)与
- * 正文(RichMessageContent)自 AgentMessageThread 现状迁移(行为等价);工具块替换为
- * **批壳 + 调用行模型**(本步唯一有意的新行为):一次 message 的 payload.toolCalls 为
- * 一批(= 同一次 AI 接口请求),左侧竖线容器 + 批头「N 个调用」(可折叠,默认展开);
- * 调用行 = 状态点 + 等宽工具名 + per-tool 参数摘要 + 行尾状态与耗时,点击展开参数与
- * 结果(per-tool 美化视图接管)。批内同名多调用不折叠;无正文纯下发轮不加占位文案。
+ * 正文(RichMessageContent)自 AgentMessageThread 现状迁移(行为等价);工具块为
+ * **单调用直渲 / 多调用批壳**双形态:
+ * - 单调用(toolCalls.length === 1):跳过批壳,直接渲染 per-tool 美化视图(一次折叠
+ *   即见参数与结果,状态图标 + 耗时在视图摘要行上);
+ * - 多调用:批壳(左竖线容器)+ 调用行(状态图标 + 耗时 + 等宽工具名 + 参数摘要),
+ *   点击行展开详情(per-tool 美化视图接管,defaultOpen 挂载即展开,不再二次折叠)。
  *
  * 运行态读秒:`tool.started` 瞬态映射(toolStartedRuntime,按 callId 直配)点亮 running
- * + 计时 now - startedAt(批壳单一 1s tick,卸载清理);对应 tool.result 到达冻结权威
- * durationMs;历史回放无瞬态事件直接展示 durationMs;批中断(可见终态信号)灰显
- * 「执行中被中断/未执行」。
+ * + 计时 now - startedAt(单一 1s tick,卸载清理);对应 tool.result 到达冻结权威
+ * durationMs;历史回放无瞬态事件直接展示 durationMs;批中断(可见终态信号)黄/灰显。
  */
 import React from 'react'
 import type { LLMToolCall } from '@/types'
@@ -20,46 +20,46 @@ import { getToolStarted, type ToolStartedInfo } from '@/task/toolStartedRuntime'
 import { ChevronDownIcon, ChevronRightIcon, WrenchIcon } from '@/components/shared/AppGlyphs'
 import RichMessageContent from '@/components/task/RichMessageContent'
 import { getToolView } from '@/components/task/toolViews/registry'
-import type { AggregatedToolDetail } from '@/components/task/toolViews/types'
-import { buildCallInlinePreview, hasActiveTextSelection } from '@/components/task/toolViews/helpers'
+import type { AggregatedToolDetail, ToolCallState } from '@/components/task/toolViews/types'
+import {
+  buildCallInlinePreview,
+  formatToolDuration,
+  hasActiveTextSelection,
+} from '@/components/task/toolViews/helpers'
 import { useThreadBoard } from './threadBoardContext'
 import { detailOfCall, interruptedAfterMessage, resultsFor } from './toolDomain'
 import type { KindViewProps } from './registry'
 
-/** 调用行运行态(状态点 class / 行尾文案的单一来源)。 */
-export type ToolCallRowState = 'queued' | 'running' | 'done' | 'error' | 'interrupted' | 'skipped'
+export type { ToolCallState }
+export { formatToolDuration }
 
 /** 由「结果/瞬态 started/批中断」三个可见信号推导调用行状态。 */
 function rowStateOf(
   result: ToolResultPayload | null,
   started: ToolStartedInfo | undefined,
   interrupted: boolean,
-): ToolCallRowState {
+): ToolCallState {
   if (result) return result.status === 'error' ? 'error' : 'done'
   if (interrupted) return started ? 'interrupted' : 'skipped'
   return started ? 'running' : 'queued'
 }
 
-/** 紧凑耗时文案:<10s 一位小数,分钟级 m:ss 补零;非法值返回空串。 */
-export function formatToolDuration(ms: number | undefined): string {
-  if (ms == null || !Number.isFinite(ms) || ms < 0) return ''
-  const seconds = ms / 1000
-  if (seconds < 10) return `${seconds.toFixed(1)}s`
-  if (seconds < 60) return `${Math.floor(seconds)}s`
-  const minutes = Math.floor(seconds / 60)
-  const rest = Math.floor(seconds % 60)
-  return rest > 0 ? `${minutes}m${String(rest).padStart(2, '0')}s` : `${minutes}m`
-}
-
-/** per-tool 美化视图接管调用行展开详情(read_file 等专用视图 registry 不动)。 */
-function ToolDetailView({ detail }: { detail: AggregatedToolDetail }) {
+/** per-tool 美化视图接管调用详情(read_file 等专用视图 registry 不动)。 */
+function ToolDetailView({
+  detail,
+  defaultOpen,
+}: {
+  detail: AggregatedToolDetail
+  /** 挂载即展开(批壳调用行点击进入时 true,消除二次折叠)。 */
+  defaultOpen?: boolean
+}) {
   const View = getToolView(detail.toolName)
-  return <View details={[detail]} />
+  return <View details={[detail]} defaultOpen={defaultOpen} />
 }
 
 /**
- * 单个调用行:状态点 + 等宽工具名 + 参数摘要 + 行尾状态与耗时;点击展开参数与结果。
- * 状态优先级:result(权威) > started 瞬态(running/读秒) > 排队;批中断灰显。
+ * 单个调用行(多调用批壳内):状态图标 + 耗时 + 等宽工具名 + 参数摘要;点击展开详情。
+ * 状态优先级:result(权威) > started 瞬态(running/读秒) > 排队;批中断黄/灰显。
  */
 function ToolCallRow({
   call,
@@ -96,7 +96,7 @@ function ToolCallRow({
           setOpen((value) => !value)
         }}
       >
-        <WrenchIcon size={12} className={`nagent-tool-batch__icon nagent-tool-batch__icon--${state}`} aria-hidden="true" />
+        <WrenchIcon size={12} className={`nagent-tool-batch__icon nagent-tool-state--${state}`} aria-hidden="true" />
         {durationText ? (
           // 耗时置于图标与工具名之间,只显示时间。
           <span className="nagent-tool-batch__duration">{durationText}</span>
@@ -120,7 +120,11 @@ function ToolCallRow({
       </button>
       {open ? (
         <div className="nagent-tool-batch__detail">
-          <ToolDetailView detail={detail} />
+          {/* rowState/durationMs 灌入视图(状态图标色 + 耗时);defaultOpen 挂载即展开。 */}
+          <ToolDetailView
+            detail={{ ...detail, rowState: state, durationMs }}
+            defaultOpen
+          />
         </div>
       ) : null}
     </div>
@@ -128,11 +132,12 @@ function ToolCallRow({
 }
 
 /**
- * 工具批壳:一次 message 下发的 toolCalls 为一批(左竖线容器 + 批头「N 个调用」)。
- * 批内同名多调用不折叠(10 个 read_file 10 行);批头可折叠(默认展开)。
- * 读秒走批壳单一 setInterval(1s,仅存在 running 行时挂,卸载清理)。
+ * 工具调用块:一次 message 下发的 toolCalls 为一批(= 同一次 AI 接口请求)。
+ * - 单调用:跳过批壳直渲 per-tool 美化视图(一次折叠见详情);
+ * - 多调用:批壳(左竖线)+ 调用行,点击行展开 defaultOpen 详情。
+ * 读秒走本组件单一 setInterval(1s,仅存在 running 调用时挂,卸载清理)。
  */
-function ToolBatch({
+function ToolCallsBlock({
   item,
   toolCalls,
   taskId,
@@ -147,7 +152,7 @@ function ToolBatch({
   const results = resultsFor(toolCalls, items)
   const interrupted = interruptedAfterMessage(item, items, mainAgentId)
   // 每渲染直读瞬态映射(tool.started handler 返回 true → notify 重渲染,items 未必变,
-  // 不能 memo):批内按 callId 直配点亮 running。Map 查找开销可忽略。
+  // 不能 memo):按 callId 直配点亮 running。Map 查找开销可忽略。
   const startedByCall = toolCalls.map((call) => getToolStarted(taskId, call.id))
   const hasLiveRunning = !interrupted && toolCalls.some((_, i) => results[i] == null && startedByCall[i] != null)
   const [now, setNow] = React.useState(() => Date.now())
@@ -156,6 +161,19 @@ function ToolBatch({
     const timer = window.setInterval(() => setNow(Date.now()), 1000)
     return () => window.clearInterval(timer)
   }, [hasLiveRunning])
+
+  // 单调用:直渲 per-tool 美化视图,状态图标 + 耗时灌入视图摘要行(不套批壳)。
+  if (toolCalls.length === 1) {
+    const state = rowStateOf(results[0], startedByCall[0], interrupted)
+    const durationMs = results[0]?.durationMs
+      ?? (state === 'running' && startedByCall[0] ? Math.max(0, now - startedByCall[0].startedAt) : undefined)
+    return (
+      <ToolDetailView
+        detail={{ ...detailOfCall(toolCalls[0], results[0]), rowState: state, durationMs }}
+      />
+    )
+  }
+
   return (
     <div className={`nagent-tool-batch is-open${interrupted ? ' nagent-tool-batch--interrupted' : ''}`}>
       <div className="nagent-tool-batch__rows">
@@ -293,7 +311,7 @@ export function MessageView({
         ) : null}
         {toolCalls.length > 0 ? (
           <div className="nagent-msg__tool-calls">
-            <ToolBatch item={item} toolCalls={toolCalls} taskId={taskId} mainAgentId={mainAgentId} />
+            <ToolCallsBlock item={item} toolCalls={toolCalls} taskId={taskId} mainAgentId={mainAgentId} />
           </div>
         ) : null}
       </div>

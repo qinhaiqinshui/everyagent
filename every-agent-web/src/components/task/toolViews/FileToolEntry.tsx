@@ -30,7 +30,7 @@ import { machinePathToBusiness } from '@/platform/fs/pathUtils'
 import { workspaceGateway } from '@/platform/fs/workspaceGateway'
 import { workspaceRegistry } from '@/hub/workspaceRegistry'
 import { useTaskWorkspaceRoot } from '../TaskWorkspaceContext'
-import { extractFileName, hasActiveTextSelection } from './helpers'
+import { extractFileName, hasActiveTextSelection, toolStateClass, toolDurationText } from './helpers'
 import type { AggregatedToolDetail } from './types'
 
 /** content 字段始终排在参数列表最后，避免开头被巨量正文占据。 */
@@ -65,9 +65,11 @@ export interface FileToolEntryProps {
   detail: AggregatedToolDetail
   /** 折叠行附加文本（如 read_file 的 [1-80] 行号区间），渲染在文件名与完整路径之间。 */
   inlineExtras?: string
+  /** 挂载即展开(批壳调用行点击进入时 true)。 */
+  defaultOpen?: boolean
 }
 
-export function FileToolEntry({ detail, inlineExtras }: FileToolEntryProps) {
+export function FileToolEntry({ detail, inlineExtras, defaultOpen }: FileToolEntryProps) {
   const args = (detail.arguments ?? {}) as Record<string, unknown>
   // fullPath = 工具参数原样路径,既作展示文本(折叠态/展开态 chip 同源),也作探测入参;
   // businessPath = 统一加前导 `/` 的内部坐标(仅网关探测与 openGlobalFileTab 使用,不展示)。
@@ -88,7 +90,9 @@ export function FileToolEntry({ detail, inlineExtras }: FileToolEntryProps) {
   const resultText = typeof result === 'string' ? result : JSON.stringify(result, null, 2)
 
   const argLines = flattenArgs(args)
-  const [open, setOpen] = React.useState(false)
+  const stateClass = toolStateClass(detail)
+  const durationText = toolDurationText(detail)
+  const [open, setOpen] = React.useState(Boolean(defaultOpen))
 
   /**
    * 查找文件实际所属的工作区根。任务工作区根不一定包含该文件（AI 可能经授权
@@ -143,7 +147,8 @@ export function FileToolEntry({ detail, inlineExtras }: FileToolEntryProps) {
           setOpen((value) => !value)
         }}
       >
-        <WrenchIcon size={13} className={`nagent-tool__icon${hasError ? ' nagent-tool__icon--error' : ''}`} />
+        <WrenchIcon size={13} className={`nagent-tool__icon${stateClass ? ` ${stateClass}` : ''}`} />
+        {durationText ? <span className="nagent-tool__duration">{durationText}</span> : null}
         <span className="nagent-tool__name">{detail.toolName || '文件工具'}</span>
         <span className="nagent-tool__inline-preview">
           {fullPath ? (
@@ -166,7 +171,7 @@ export function FileToolEntry({ detail, inlineExtras }: FileToolEntryProps) {
         <div className="nagent-tool__detail">
           <div className="nagent-tool__result-item">
             <div className="nagent-tool__result-item-head">
-              <WrenchIcon size={12} className={`nagent-tool__icon${hasError ? ' nagent-tool__icon--error' : ''}`} />
+              <WrenchIcon size={12} className={`nagent-tool__icon${stateClass ? ` ${stateClass}` : ''}`} />
               <span className="nagent-tool__name">{detail.toolName || '文件工具'}</span>
               {fullPath ? (
                 canOpen ? (

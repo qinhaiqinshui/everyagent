@@ -3,7 +3,7 @@
  * 只依赖类型，不依赖展示层，避免循环依赖。
  */
 
-import type { AggregatedToolDetail } from './types'
+import type { AggregatedToolDetail, ToolCallState } from './types'
 
 /**
  * 解析工具调用或工具结果的 JSON 负载。
@@ -58,7 +58,7 @@ function readToolResult(content: string | undefined): unknown {
  */
 export function buildDetailFromCall(
   call: { id: string; function: { name: string; arguments: string } },
-  result: { content?: string; status?: 'success' | 'error'; toolName?: string } | null,
+  result: { content?: string; status?: 'success' | 'error'; toolName?: string; durationMs?: number } | null,
 ): AggregatedToolDetail {
   const args = parseToolPayload(call.function.arguments)
   return {
@@ -68,6 +68,7 @@ export function buildDetailFromCall(
     status: result?.status,
     arguments: Object.keys(args).length > 0 ? args : null,
     result: result ? readToolResult(result.content) : null,
+    durationMs: result?.durationMs,
   }
 }
 
@@ -153,4 +154,33 @@ export function buildCallInlinePreview(detail: AggregatedToolDetail): CallInline
     .map(([k, v]) => `${k}=${typeof v === 'string' ? v : JSON.stringify(v)}`)
     .join(' · ')
   return { kind: 'text', text: scalars ? truncateInlineText(scalars, 160) : '' }
+}
+
+/** 紧凑耗时文案:<10s 一位小数,分钟级 m:ss 补零;非法值返回空串。 */
+export function formatToolDuration(ms: number | undefined): string {
+  if (ms == null || !Number.isFinite(ms) || ms < 0) return ''
+  const seconds = ms / 1000
+  if (seconds < 10) return `${seconds.toFixed(1)}s`
+  if (seconds < 60) return `${Math.floor(seconds)}s`
+  const minutes = Math.floor(seconds / 60)
+  const rest = Math.floor(seconds % 60)
+  return rest > 0 ? `${minutes}m${String(rest).padStart(2, '0')}s` : `${minutes}m`
+}
+
+/**
+ * 详情 → 状态图标 class(nagent-tool-state--* 颜色/动效单一来源):
+ * 优先 detail.rowState(批壳/单调用直渲灌入);缺省时按 status 推导(孤儿兜底:
+ * 有结果 success→done/error→error;status 空 = 结果未到,无状态色)。
+ */
+export function toolStateClass(detail: AggregatedToolDetail): string {
+  const state: ToolCallState | null = detail.rowState
+    ?? (detail.status === 'error'
+      ? 'error'
+      : detail.status === 'success' ? 'done' : null)
+  return state ? `nagent-tool-state--${state}` : ''
+}
+
+/** 详情 → 摘要行耗时文本(detail.durationMs;非法/缺失返回空串不渲染)。 */
+export function toolDurationText(detail: AggregatedToolDetail): string {
+  return formatToolDuration(detail.durationMs)
 }

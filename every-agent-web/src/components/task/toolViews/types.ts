@@ -13,6 +13,12 @@ import type { AgentMessageRecord } from '@/types'
 export type ToolStatus = AgentMessageRecord['status']
 
 /**
+ * 调用行运行态(状态图标颜色/动效的单一来源):批壳调用行与单调用直渲共用;
+ * 由「结果/瞬态 started/批中断」三个可见信号推导(见 kindViews/messageView.rowStateOf)。
+ */
+export type ToolCallState = 'queued' | 'running' | 'done' | 'error' | 'interrupted' | 'skipped'
+
+/**
  * 按 callId 聚合后的单条工具调用 JSON。
  * 由 `helpers.buildAggregatedToolDetail` 产出，作为美化视图的唯一输入 prop。
  */
@@ -28,6 +34,10 @@ export interface AggregatedToolDetail {
   arguments: Record<string, unknown> | null
   /** 调用结果：成功且可解析为 JSON 时为对象，否则为原始文本字符串。 */
   result: unknown
+  /** 调用耗时(ms):结果载荷的权威 durationMs;运行中由调用方灌入实时读秒值。 */
+  durationMs?: number
+  /** 调用行运行态(状态图标 class 的单一来源);缺省时视图按 status 推导(done/error)。 */
+  rowState?: ToolCallState
 }
 
 /**
@@ -41,6 +51,8 @@ export interface ToolViewProps {
   record?: AgentMessageRecord
   /** 按 callId 解析下发参数的函数，供视图需要补充参数时使用。 */
   resolveToolCallPayload?: (toolCallId: string) => Record<string, unknown> | undefined
+  /** 挂载即展开:批壳调用行点击展开进入时传 true,避免行点击后还要再点一次才见详情。 */
+  defaultOpen?: boolean
 }
 
 /**

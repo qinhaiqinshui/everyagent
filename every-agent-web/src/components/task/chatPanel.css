@@ -1051,9 +1051,13 @@
   /* 返回扳手与下发扳手方向一致（flipped 镜像已移除） */
 }
 
-/* 工具调用异常：图标转红（覆盖返回青色） */
-.nagent-tool__icon--error {
-  color: var(--accent-red);
+/* 工具视图摘要行耗时(图标与工具名之间,批壳调用行同款) */
+.nagent-tool__duration {
+  flex: 0 0 auto;
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 
@@ -1276,46 +1280,47 @@
   color: var(--text-primary);
 }
 
-/* 状态图标:统一用 WrenchIcon,以颜色+动效区分状态(替代原圆点方案) */
+/* 状态图标:统一用 WrenchIcon,以颜色+动效区分状态(替代原圆点方案)。 */
 .nagent-tool-batch__icon {
   flex: 0 0 auto;
   flex-shrink: 0;
   align-self: center;
 }
 
-.nagent-tool-batch__icon--queued {
+/* 共享状态类:批壳调用行与 per-tool 美化视图的状态图标颜色/动效单一来源。 */
+.nagent-tool-state--queued {
   color: var(--text-muted);
 }
 
-.nagent-tool-batch__icon--running {
+.nagent-tool-state--running {
   color: var(--accent-blue);
-  animation: nagent-tool-batch-spin 1s linear infinite;
+  animation: nagent-tool-spin 1s linear infinite;
 }
 
-.nagent-tool-batch__icon--done {
+.nagent-tool-state--done {
   color: var(--accent-green);
 }
 
-.nagent-tool-batch__icon--error {
+.nagent-tool-state--error {
   color: var(--accent-red);
 }
 
-.nagent-tool-batch__icon--interrupted {
+.nagent-tool-state--interrupted {
   color: var(--accent-amber);
 }
 
-.nagent-tool-batch__icon--skipped {
+.nagent-tool-state--skipped {
   color: var(--text-muted);
   opacity: 0.55;
 }
 
-@keyframes nagent-tool-batch-spin {
+@keyframes nagent-tool-spin {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .nagent-tool-batch__icon--running {
+  .nagent-tool-state--running {
     animation: none;
   }
 }
