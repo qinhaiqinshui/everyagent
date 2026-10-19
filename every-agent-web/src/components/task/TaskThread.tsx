@@ -50,15 +50,10 @@ export default function TaskThread({
   if (items.length === 0 && !isGenerating) {
     return <div className="nagent-empty">当前 Task 还没有消息或追踪记录</div>
   }
-  // 过程性内容折叠:折叠窗口由 eventFolder 在折叠阶段边接收边打标(foldRole),
-  // 渲染层只消费标记,不依赖任务是否终态 → 历史回放与实时输出共用同一路径。
-  const foldWindows = buildFoldWindows(items)
   return (
     <div className="nagent-thread">
       {topSlot}
-      {foldWindows.length > 0
-        ? renderThreadWithFoldWindows(items, taskId, foldWindows, mainAgentId)
-        : buildMessageGroups(items, taskId, mainAgentId)}
+      {buildMessageGroups(items, taskId, mainAgentId)}
       {bottomSlot}
       <ThreadStatusBanner running={isGenerating} />
     </div>
@@ -266,156 +261,6 @@ function buildMessageGroups(
   mainAgentId: string,
 ): React.ReactNode[] {
   return renderMessageGroups(items, taskId, buildToolMaps(items), mainAgentId)
-}
-
-/** 过程性内容折叠窗口：一条用户消息到其后第一条 AI 最终回复之间构成一个窗口。 */
-interface FoldWindow {
-  /** 用户消息在线程中的下标（含，右侧展示）。 */
-  userIndex: number
-  /** AI 最终回复在线程中的下标（含，左侧展示）。 */
-  finalReplyIndex: number
-  /** AI 最终回复线程项。 */
-  finalItem: Extract<TaskThreadItem, { type: 'agent_message' }>
-  /** 用户消息与最终回复之间的过程性内容（折叠）。 */
-  processItems: TaskThreadItem[]
-}
-
-/**
- * 从线程中按 foldRole 标记推导折叠窗口：
- * 从每条用户消息开始往下扫，遇到其后第一条 AI 最终回复（主 agent、无工具调用且有正文）
- * 即关闭该窗口；二者之间全是过程性内容。若先扫到下一条用户消息，说明当前轮没有
- * final_reply（任务进行中 / 过滤视图缺终点），跳过该用户并继续扫后续用户消息。
- * 标记由 eventFolder 在折叠阶段边接收边写入，因此历史回放与实时输出得到一致的窗口划分。
- */
-function buildFoldWindows(items: TaskThreadItem[]): FoldWindow[] {
-  const windows: FoldWindow[] = []
-  let i = 0
-  while (i < items.length) {
-    const item = items[i]
-    if (item.type !== 'agent_message' || item.foldRole !== 'user') {
-      i += 1
-      continue
-    }
-    const userIndex = i
-    let finalReplyIndex = -1
-    for (let j = userIndex + 1; j < items.length; j++) {
-      const candidate = items[j]
-      if (candidate.type !== 'agent_message') {
-        continue
-      }
-      // 折叠窗口不跨用户：扫到下一条用户消息时，当前轮尚未出现 final_reply，
-      // 本轮不折叠，交给后续扫描处理后面已闭合的轮次。
-      if (candidate.foldRole === 'user') {
-        break
-      }
-      if (candidate.foldRole === 'final_reply') {
-        finalReplyIndex = j
-        break
-      }
-    }
-    if (finalReplyIndex < 0) {
-      // 当前用户消息之后暂无 final_reply（任务进行中，或过滤视图缺少该轮终点标记）：
-      // 仅跳过这条用户消息并继续扫后续用户消息，避免漏掉后面已经闭合的折叠窗口。
-      // 渲染是幂等的：items 推进后整线程重扫，未闭合轮次会在终点到达后被正确折叠。
-      i = userIndex + 1
-      continue
-    }
-    const processItems = items.slice(userIndex + 1, finalReplyIndex)
-    if (processItems.length > 0) {
-      windows.push({
-        userIndex,
-        finalReplyIndex,
-        finalItem: items[finalReplyIndex] as Extract<TaskThreadItem, { type: 'agent_message' }>,
-        processItems,
-      })
-    }
-    // 继续扫下一条用户消息（若 final 紧邻 user 且无过程内容，窗口被跳过，但仍越过该 final）。
-    i = finalReplyIndex + 1
-  }
-  return windows
-}
-
-/** 按折叠窗口渲染线程：窗口外的普通内容照常，窗口内仅保留用户消息与 AI 最终回复。 */
-function renderThreadWithFoldWindows(
-  items: TaskThreadItem[],
-  taskId: string,
-  windows: FoldWindow[],
-  mainAgentId: string,
-): React.ReactNode[] {
-  // 全线程共享同一份工具 join 索引：过程段、最终回复、窗口外片段各自渲染时，
-  // 按 callId 合并工具结果都能命中同一张表。
-  const maps = buildToolMaps(items)
-  const result: React.ReactNode[] = []
-  let cursor = 0
-  for (const window of windows) {
-    // 窗口之前的内容（含该窗口的用户消息）照常渲染。
-    if (cursor <= window.userIndex) {
-      result.push(...renderMessageGroups(items.slice(cursor, window.userIndex + 1), taskId, maps, mainAgentId))
-    }
-    result.push(
-      <CollapsibleRound
-        key={`round:${window.finalItem.message.messageId}`}
-        taskId={taskId}
-        finalItem={window.finalItem}
-        processItems={window.processItems}
-        maps={maps}
-        mainAgentId={mainAgentId}
-      />,
-    )
-    cursor = window.finalReplyIndex + 1
-  }
-  // 最后一个窗口之后的内容照常渲染。
-  if (cursor < items.length) {
-    result.push(...renderMessageGroups(items.slice(cursor), taskId, maps, mainAgentId))
-  }
-  return result
-}
-
-/** 折叠块：默认折叠过程内容，仅在 AI 最终回复上方保留一个折叠标记。 */
-function CollapsibleRound({
-  taskId,
-  finalItem,
-  processItems,
-  maps,
-  mainAgentId,
-}: {
-  taskId: string
-  finalItem: Extract<TaskThreadItem, { type: 'agent_message' }>
-  processItems: TaskThreadItem[]
-  maps: TaskThreadToolMaps
-  mainAgentId: string
-}) {
-  const [open, setOpen] = React.useState(false)
-  if (processItems.length === 0) {
-    return <>{renderMessageGroups([finalItem], taskId, maps, mainAgentId)}</>
-  }
-  return (
-    <div className="nagent-round-collapse">
-      <button
-        type="button"
-        className="nagent-round-collapse__marker"
-        aria-expanded={open}
-        onClick={() => setOpen((value) => !value)}
-        title={open ? '收起 AI 过程内容' : '展开 AI 过程内容'}
-      >
-        <span className="nagent-round-collapse__brand">
-          <BrandMark size={12} animated={false} />
-          <span className="nagent-round-collapse__brand-name">Every Agent</span>
-        </span>
-        <span className="nagent-round-collapse__marker-chevron" aria-hidden="true">
-          {open ? <ChevronDownIcon size={12} /> : <ChevronRightIcon size={12} />}
-        </span>
-      </button>
-      {open ? (
-        <div className="nagent-round-collapse__process">
-          {renderMessageGroups(processItems, taskId, maps, mainAgentId)}
-        </div>
-      ) : null}
-      <div className="nagent-round-collapse__final">
-        {renderMessageGroups([finalItem], taskId, maps, mainAgentId)}
-      </div>
-    </div>
-  )
 }
 
 /** 渲染单条任务 trace。 */

@@ -91,7 +91,7 @@ export function defaultHandler(event: FoldableTaskEvent, state: TaskThreadState,
 
 // ---- 注册全部现役 kind 的 handler ----
 
-/** user.message → role:'user' 消息(主/子 agent 共用同一事件名;foldRole 仅主 agent 打标) */
+/** user.message → role:'user' 消息(主/子 agent 共用同一事件名;线程项无折叠标记) */
 registerEventKind('user.message', {
   handle(event, state, folder) {
     const seqKey = String(event.seq)
@@ -101,7 +101,7 @@ registerEventKind('user.message', {
       ? data.rawContent : content
     const agentKey = agentKeyOf(event, folder)
     const ts = tsOf(event)
-    // 主 agent:user回合折叠窗口起点(foldRole='user'),有合成骨架时先升级再跳过。
+    // 主 agent:有合成骨架时先升级再跳过。
     if (folder.isMain(agentKey)) {
       if (folder.hasSeq(seqKey)) {
         // 真实事件后到但骨架先入(loadRoundsIntoFolder(full) 的 reset 竞态):合成骨架可被
@@ -126,8 +126,7 @@ registerEventKind('user.message', {
       }, seqKey)
       return true
     }
-    // 子 agent 的输入指令:同样以 role:'user' 消息插入(与主 agent 共用渲染组件),
-    // 但 foldRole 不打标(不作为折叠窗口起点,不扰乱折叠扫描/轮次骨架)。
+    // 子 agent 的输入指令:同样以 role:'user' 消息插入(与主 agent 共用渲染组件)。
     // agentId 区分主/子——渲染层据此区分样式(子 agent 气泡用低调背景色)且不带编辑重发扩展点。
     if (folder.hasSeq(seqKey)) return false
     folder.insertMessage(agentKey, {

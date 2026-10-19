@@ -2,9 +2,10 @@
  * TaskEventFolder 特征化测试(Phase 0 行为护栏,计划「任务线程统一条目与画板纯化」步骤 1)。
  *
  * 目的:锁定折叠器 + 事件注册表的**现状行为**(乱序 seq 归位/重放去重/流式聚合与定稿/
- * rounds 骨架折入升级/截断/agentMeta 台账/isMain 判定/foldRole 打标/defaultHandler 兜底/
- * final_reply 终点),为后续步骤 5/6/7(删 foldRole/拆台账/骨架出画板)提供行为基线——
- * 先锁后删,重构时同步更新断言而非绕过。
+ * rounds 骨架折入升级/截断/agentMeta 台账/isMain 判定/线程项无折叠标记/defaultHandler
+ * 兜底),为后续步骤 6/7(拆台账/骨架出画板)提供行为基线——先锁后删,
+ * 重构时同步更新断言而非绕过(foldRole 打标断言已随步骤 5「删除 foldRole 体系」移除,
+ * 口径改为线程项无 foldRole 字段)。
  *
  * 纪律:只断言现状,不改源码;事件经 fold(FoldableTaskEvent) 喂入,handler 查表分发
  * (eventRegistry.ts),不 mock 网络。
@@ -162,8 +163,8 @@ describe('thinking/delta 流式聚合与 message 权威定稿', () => {
     expect(finalized.message.toolCalls?.map((c) => c.id)).toEqual(['call-1', 'call-2'])
     expect(finalized.message.toolCalls?.[0]?.function.name).toBe('toolA')
     expect(finalized.message.metadata?.streaming).toBe(false)
-    // 带工具调用的定稿不是折叠窗口终点
-    expect(finalized.foldRole).toBeUndefined()
+    // 带工具调用的定稿:线程项无折叠标记
+    expect(finalized).not.toHaveProperty('foldRole')
 
     // message 重复帧:toolCalls 按 callId 去重追加,内容替换;thinking 缺省不覆盖
     folder.fold(ev(SEQ_100, 'message', {
@@ -209,7 +210,7 @@ describe('foldRound 骨架折入与升级', () => {
     }
   }
 
-  it('闭合轮折入合成 user + 合成 final(synthetic 标记 + foldRole 打标,按 seq 升序)', () => {
+  it('闭合轮折入合成 user + 合成 final(synthetic 标记,按 seq 升序,无折叠标记)', () => {
     const folder = newFolder(MAIN)
     expect(folder.foldRound(round())).toBe(true)
     expect(folder.state.items).toHaveLength(2)
@@ -217,12 +218,12 @@ describe('foldRound 骨架折入与升级', () => {
     expect(user.message.role).toBe('user')
     expect(user.message.content).toBe('骨架用户输入')
     expect(user.message.metadata?.synthetic).toBe(true)
-    expect(user.foldRole).toBe('user')
+    expect(user).not.toHaveProperty('foldRole')
     const final = findByMessageId(folder, `m-${SEQ_500}`)
     expect(final.message.role).toBe('assistant')
     expect(final.message.content).toBe('骨架最终回复')
     expect(final.message.metadata?.synthetic).toBe(true)
-    expect(final.foldRole).toBe('final_reply')
+    expect(final).not.toHaveProperty('foldRole')
     expect(folder.state.items.indexOf(user)).toBeLessThan(folder.state.items.indexOf(final))
     // 幂等:重复折入同轮不变化
     expect(folder.foldRound(round())).toBe(false)
@@ -256,13 +257,13 @@ describe('foldRound 骨架折入与升级', () => {
     expect(upgraded.message.content).toBe('真实用户输入')
     expect(upgraded.message.rawContent).toBe('原始输入')
     expect(upgraded.message.metadata?.synthetic).toBe(false)
-    expect(upgraded.foldRole).toBe('user')
+    expect(upgraded).not.toHaveProperty('foldRole')
     // 升级完成后再到的同 seq 事件 = 纯重复,返回 false
     expect(folder.fold(ev(SEQ_100, 'user.message', { content: '真实用户输入' }, MAIN, 2100))).toBe(false)
     expect(folder.state.items).toHaveLength(2)
   })
 
-  it('合成 final 被真实 message 覆盖(清除 synthetic,保持 final_reply)', () => {
+  it('合成 final 被真实 message 覆盖(清除 synthetic 标记)', () => {
     const folder = newFolder(MAIN)
     folder.foldRound(round())
     folder.fold(ev(SEQ_500, 'message', { content: '真实最终回复' }, MAIN, 3000))
@@ -270,7 +271,7 @@ describe('foldRound 骨架折入与升级', () => {
     const real = findByMessageId(folder, `m-${SEQ_500}`)
     expect(real.message.content).toBe('真实最终回复')
     expect(real.message.metadata?.synthetic).toBe(false)
-    expect(real.foldRole).toBe('final_reply')
+    expect(real).not.toHaveProperty('foldRole')
   })
 })
 
@@ -441,22 +442,22 @@ describe('isMain 判定与 agentKeyOf 归一', () => {
 })
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 8. 主/子 agent user.message 打标差异
+// 8. 主/子 agent user.message 插入(无折叠标记)
 // ─────────────────────────────────────────────────────────────────────────────
 
-describe('主/子 agent user.message 打标差异', () => {
-  it('主 agent 的 user.message 标 foldRole=user(折叠窗口起点);子 agent 不打标(过程内容)', () => {
+describe('主/子 agent user.message 插入(无折叠标记)', () => {
+  it('主/子 agent 的 user.message 均以 role:user 消息插入,线程项无 foldRole 字段', () => {
     const folder = newFolder(MAIN)
     folder.fold(ev(SEQ_100, 'user.message', { content: '主输入' }, MAIN))
     folder.fold(ev(SEQ_200, 'user.message', { content: '子输入' }, SUB))
     const mainItem = findByMessageId(folder, `m-${SEQ_100}`)
     const subItem = findByMessageId(folder, `m-${SEQ_200}`)
-    expect(mainItem.foldRole).toBe('user')
     expect(mainItem.message.agentId).toBe(MAIN)
     expect(mainItem.message.role).toBe('user')
-    expect(subItem.foldRole).toBeUndefined()
+    expect(mainItem).not.toHaveProperty('foldRole')
     expect(subItem.message.agentId).toBe(SUB)
     expect(subItem.message.role).toBe('user')
+    expect(subItem).not.toHaveProperty('foldRole')
   })
 })
 
@@ -513,35 +514,37 @@ describe('defaultHandler 兜底(未注册 kind)', () => {
 })
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 10. markFinalReply 折叠窗口终点
+// 10. message 定稿后线程项无折叠标记(markFinalReply 已删)
 // ─────────────────────────────────────────────────────────────────────────────
 
-describe('markFinalReply 折叠窗口终点', () => {
-  it('主 agent 无工具调用且有正文的 message 定稿 → foldRole=final_reply', () => {
+describe('message 定稿后线程项无折叠标记', () => {
+  it('主 agent 无工具调用且有正文的 message 定稿 → 无 foldRole 字段', () => {
     const folder = newFolder(MAIN)
     folder.fold(ev(SEQ_100, 'user.message', { content: '用户' }, MAIN))
     folder.fold(ev(SEQ_200, 'delta', { content: '流式正文' }, MAIN, 1200))
     folder.fold(ev(SEQ_200, 'message', { content: '最终回复正文' }, MAIN, 1300))
     const item = findByMessageId(folder, `m-${SEQ_200}`)
-    expect(item.foldRole).toBe('final_reply')
     expect(item.message.content).toBe('最终回复正文')
     expect(item.message.metadata?.streaming).toBe(false)
+    expect(item).not.toHaveProperty('foldRole')
   })
 
-  it('带 toolCalls 的 message 不定稿(折叠窗口继续)', () => {
+  it('带 toolCalls 的 message 定稿:toolCalls 记录在案且无折叠标记', () => {
     const folder = newFolder(MAIN)
     folder.fold(ev(SEQ_200, 'message', {
       content: '先调用工具',
       data: { toolCalls: [{ id: 'call-1', name: 'toolA', arguments: '{}' }] },
     }, MAIN, 1300))
-    expect(findByMessageId(folder, `m-${SEQ_200}`).foldRole).toBeUndefined()
+    const item = findByMessageId(folder, `m-${SEQ_200}`)
+    expect(item.message.toolCalls?.map((c) => c.id)).toEqual(['call-1'])
+    expect(item).not.toHaveProperty('foldRole')
   })
 
-  it('空正文与子 agent 的 message 不打 final_reply', () => {
+  it('空正文与子 agent 的 message 定稿同样插入且无折叠标记', () => {
     const folder = newFolder(MAIN)
     folder.fold(ev(SEQ_100, 'message', { content: '' }, MAIN, 1300))
     folder.fold(ev(SEQ_200, 'message', { content: '子代理回复' }, SUB, 1400))
-    expect(findByMessageId(folder, `m-${SEQ_100}`).foldRole).toBeUndefined()
-    expect(findByMessageId(folder, `m-${SEQ_200}`).foldRole).toBeUndefined()
+    expect(findByMessageId(folder, `m-${SEQ_100}`)).not.toHaveProperty('foldRole')
+    expect(findByMessageId(folder, `m-${SEQ_200}`)).not.toHaveProperty('foldRole')
   })
 })

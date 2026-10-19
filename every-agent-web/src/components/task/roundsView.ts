@@ -13,7 +13,7 @@ import type { TaskThreadItem } from '@/task/eventFolder'
 
 // ─── 切片 ────────────────────────────────────────────────────────────────────
 
-/** 从 items 切出 [startSeq 之后, endSeq]（含终点、不含起点）的线程项，并剥掉 foldRole。 */
+/** 从 items 切出 [startSeq 之后, endSeq]（含终点、不含起点）的线程项（原对象直通）。 */
 export function sliceRound(items: TaskThreadItem[], round: RoundSummary): TaskThreadItem[] {
   const startIdx = items.findIndex(
     (it) => it.type === 'agent_message' && it.message.messageId === `m-${round.startSeq}`,
@@ -26,10 +26,10 @@ export function sliceRound(items: TaskThreadItem[], round: RoundSummary): TaskTh
   }
   const from = startIdx >= 0 ? startIdx + 1 : 0
   const to = endIdx >= 0 ? endIdx + 1 : items.length
-  return items.slice(from, to).map(stripFoldRole)
+  return items.slice(from, to)
 }
 
-/** 尾轮线程项切片：从 items 中 tailStartSeq 起点开始（含 user 气泡，剥 foldRole 防折叠）。
+/** 尾轮线程项切片：从 items 中 tailStartSeq 起点开始（含 user 气泡）。
  * 过滤态：切片后按归属过滤（子 agent 过滤会滤掉 user 气泡，但外层 tailUserItem 恒显，
  * 视觉上 user 气泡不丢）。TaskRoundsPanel 的 tailItems useMemo 等价委托此处（提取不改行为）。 */
 export function sliceTailItems(
@@ -48,7 +48,7 @@ export function sliceTailItems(
     )
   }
   if (idx < 0) return []
-  return items.slice(idx).filter(matches).map(stripFoldRole)
+  return items.slice(idx).filter(matches)
 }
 
 /** 剥掉尾轮起点 user 气泡：它已由上层 userItem(tailUserItem) 单独渲染，留在 tailItems
@@ -82,13 +82,6 @@ export function firstTailEventSeq(items: TaskThreadItem[], startSeq: string): st
     if (mid.startsWith('m-')) return mid.slice(2)
   }
   return null
-}
-
-/** 剥掉线程项的 foldRole 折叠窗口标记（轮详情/尾轮实时视图要求过程内容不被折叠）。 */
-export function stripFoldRole(item: TaskThreadItem): TaskThreadItem {
-  return item.type === 'agent_message' && item.foldRole
-    ? { ...item, foldRole: undefined }
-    : item
 }
 
 // ─── agent 过滤 ──────────────────────────────────────────────────────────────

@@ -9,9 +9,8 @@
  * 折叠规则(与 n 的写入语义对齐):
  * 事件名不分主/子 agent——同一名事件,归属由 agentId 字段决定(空 = 主线程);
  * - user.message           → role:'user' 消息(payload.content + payload.data.rawContent);
- *                           主/子 agent 共用同一事件名,foldRole='user' 仅主 agent 打标
- *                           (折叠窗口起点);子 agent 的 user.message 同样以消息插入但不打标,
- *                           作为过程内容落入折叠窗口内(渲染层按 agentId 区分样式与扩展点)
+ *                           主/子 agent 共用同一事件名,均以消息插入、无折叠标记
+ *                           (折叠窗口语义归 rounds.jsonl 唯一权威);渲染层按 agentId 区分样式与扩展点
  * - thinking / delta       → 当前流式 assistant 消息的 reasoning / content 追加(瞬态,payload.content)
  * - message                → 一轮权威终结:完整 content/data.thinking/data.toolCalls(真实 toolCall id)
  *                           定稿该 agent 的流式消息
@@ -49,15 +48,11 @@ import { getHandler, defaultHandler } from './eventRegistry'
 
 /**
  * 统一线程项(与 n 的 taskQueryService 同形,聊天页聚合展示单位)。
- *
- * foldRole:折叠扫描标记(一边接收一边打标,历史回放与实时输出同一路径写入)。
- * - 'user':用户消息(折叠窗口起点,界面上右侧一条)。
- * - 'final_reply':AI 最终回复(主 agent 的 assistant 消息,无工具调用且有正文,
- *   折叠窗口终点,界面上左侧一条)。
- * - 缺省:过程性内容(折叠窗口中间被收起的内容)。
+ * 无折叠标记:折叠窗口语义归 rounds.jsonl 唯一权威(§7.15.1),线程项只是渲染素材,
+ * 轮折叠/展开由轮次骨架(TaskRoundsPanel)驱动。
  */
 export type TaskThreadItem =
-  | { type: 'agent_message'; createdAt: number; message: AgentMessageRecord; foldRole?: 'user' | 'final_reply' }
+  | { type: 'agent_message'; createdAt: number; message: AgentMessageRecord }
   | { type: 'task_trace'; createdAt: number; trace: TaskTraceRecord }
 
 /** 任务冻结的模型快照(历史上由 task.started 事件携带;当前 worker 不再发送该事件,此字段保留为兼容占位,通常为空)。 */
@@ -90,8 +85,8 @@ export interface TaskThreadState {
   slashTokens?: string[] | null
   /**
    * 主 agent 固定 id(task 层传入:task.agents 应答 / TaskSummary.mainAgentId)。
-   * 一切「主 agent」判定唯一依据(键控 agentStates/agentMeta、foldRole 折叠窗口、
-   * final_reply 打标等)——不使用「空串=主」魔法。open 早期未灌入时折叠器以
+   * 一切「主 agent」判定唯一依据(键控 agentStates/agentMeta、user.message 骨架升级判定、
+   * seedAgents 状态覆盖例外等)——不使用「空串=主」魔法。open 早期未灌入时折叠器以
    * isMain 的空串兼容回退兜底;事件缺 agentId(旧 wire 形态)归一到 mainAgentId。
    */
   mainAgentId: string
@@ -141,7 +136,7 @@ export class TaskEventFolder {
    * - 去重/定位主键:items 保持按 seq 升序,新 seq 插入按序定位;同 seq 更新原地、不移动位置。
    * - 轮事件(thinking/delta/message)同 seq 共享同一条 agent_message item,只能更新不可重复插入;
    *   非轮 item 事件同 seq 已存在 → 忽略(重连重放去重);trace 族事件自身 seq 也登记于此。
-   * - 值随 wrapper 替换(如 foldRole 打标、trace 原地 upsert)同步刷新为 items 中的当前对象。
+   * - 值随 wrapper 替换(如 trace 原地 upsert)同步刷新为 items 中的当前对象。
    */
   private bySeq = new Map<string, TaskThreadItem>()
 
@@ -246,10 +241,11 @@ export class TaskEventFolder {
   /**
    * 折叠一个轮次摘要(rounds.jsonl 的一行)为线程项:纯函数式数据入口,不引入轮询/网络。
    * 与原始 stream 事件按 seq 幂等去重,不产生重复项、items 恒按 seq 升序:
-   * - 轮起点折入合成 user 消息(messageId=`m-${startSeq}`,role='user',foldRole='user',
+   * - 轮起点折入合成 user 消息(messageId=`m-${startSeq}`,role='user',
    *   content/rawContent=round.user),由 {@link #insertMessage} 按 seq 升序定位插入;
    * - 已闭合轮(endSeq 非空)折入合成 AI 最终回复(messageId=`m-${endSeq}`,role='assistant',
-   *   content=round.finalReply,foldRole='final_reply')。
+   *   content=round.finalReply)。
+   * 两类合成项均带 metadata.synthetic=true 且无折叠标记(折叠窗口语义归 rounds.jsonl)。
    * bySeq 已有同 seq 项(原始 user.message / 权威 message / 已合成项)则跳过,绝不重复插入;
    * 二次调用同 startSeq 幂等(不改变已有项内容)。返回 true 表示状态有变化。
    */
@@ -296,13 +292,11 @@ export class TaskEventFolder {
           // 合成 final 标记:不顶真实权威 message(真实 message 折入后会被清除)。
           metadata: { synthetic: true },
         }
-        // 合成 final_reply:与 markFinalReply 后的构造方式一致,直接标 foldRole='final_reply',
-        // 并复用 insertItemBySeq 按 seq 升序精确定位、登记 bySeq。
+        // 合成 final:无折叠标记,复用 insertItemBySeq 按 seq 升序精确定位、登记 bySeq。
         const item: TaskThreadItem = {
           type: 'agent_message',
           createdAt: now,
           message: finalMessage,
-          foldRole: 'final_reply',
         }
         this.insertItemBySeq(item, round.endSeq, endSeqKey)
         changed = true
@@ -520,7 +514,7 @@ export class TaskEventFolder {
   /**
    * 插入一条 agent_message 到 items(按原始 seq 精确升序定位;bySeq 键用调用方传入的
    * 原始 seq 字符串 seqKey——Snowflake 大数转 Number 有精度损失,去重键与排序键都必须用原始串)。
-   * 用户回合边界关闭该 agent 的流式锚点;折叠扫描:用户消息标 foldRole='user'(折叠窗口起点,右侧一条)。
+   * 用户回合边界关闭该 agent 的流式锚点。线程项无折叠标记(折叠窗口语义归 rounds.jsonl)。
    */
   insertMessage(agentKey: string, message: AgentMessageRecord, seqKey: string): void {
     if (message.role === 'user') {
@@ -530,9 +524,6 @@ export class TaskEventFolder {
       type: 'agent_message',
       createdAt: message.createdAt,
       message,
-      // 仅主 agent 的 user 消息标 foldRole='user'(折叠窗口起点);子 agent 的
-      // user.message 同样经此插入但不打标,作为过程内容落入折叠窗口内。
-      foldRole: message.role === 'user' && this.isMain(message.agentId || agentKey) ? 'user' : undefined,
     }
     this.insertItemBySeq(item, seqKey, seqKey)
   }
@@ -602,7 +593,7 @@ export class TaskEventFolder {
     return 0
   }
 
-  /** wrapper 被替换(如 foldRole 打标、trace 原地 upsert)后,把 bySeq 同步到 items 中的当前对象。 */
+  /** wrapper 被替换(如 trace 原地 upsert)后,把 bySeq 同步到 items 中的当前对象。 */
   syncBySeqItem(item: TaskThreadItem): void {
     if (item.type === 'agent_message') {
       // messageId 恒为 `m-${原始 seq}`:从 messageId 反推,保留 Snowflake 大数字符串精度;
@@ -780,7 +771,7 @@ export class TaskEventFolder {
    * - 有流式锚点(delta/thinking 聚合中) → 复用锚点定稿;
    * - 无锚点但有同 seq 线程项(迟到的重复 message 帧 / 回放先到) → 更新同一条;
    * - 两者皆无(回放/冷启动) → 新建完成态插入。
-   * 完成后关闭该轮流式锚点;主 agent 无工具调用且有正文 → foldRole='final_reply' 打标。
+   * 完成后关闭该轮流式锚点。
    * thinking 是完整整轮文本(替换式),toolCalls 为模型真实 id,与 tool.result 按 callId 配对。
    */
   completeMessage(agentKey: string, payload: Record<string, unknown>, ts: number, seq: number | string): void {
@@ -841,50 +832,6 @@ export class TaskEventFolder {
     this.closeStreamingBySeq(seqKey)
     if (isNew) {
       this.insertMessage(agentKey, message, seqKey)
-    }
-    // 折叠扫描:权威 message 定稿后判定 AI 最终回复——
-    // 主 agent 的 assistant 消息,无工具调用且有正文 = 折叠窗口终点(界面上左侧一条)。
-    if (this.isMain(agentKey) && toolCalls.length === 0 && (message.content ?? '').trim().length > 0) {
-      this.markFinalReply(message)
-    }
-  }
-
-  /**
-   * 折叠扫描:把定稿的 AI 最终回复消息对应线程项标记为 foldRole='final_reply'。
-   * 打标后同步刷新 bySeq 索引(wrapper 已被替换为新对象)。
-   *
-   * 定位策略:
-   * 1. 优先引用匹配(item.message === message)——实时流式路径(appendRoundText 建锚点后
-   *    insertMessage 存同一对象)与回放新建路径(completeMessage 新建对象后 insertMessage 存
-   *    同一对象)均保持同一引用,精确无歧义;
-   * 2. 兜底按 messageId(形如 `m-${seq}`)匹配,覆盖 state 经序列化/深拷贝还原后引用
-   *    丢失的场景。兜底条件带上 agentId(避免不同 agent 同 seq 误配)与 role:'assistant'
-   *    (只打 AI 回复,不打 user/tool),保证与 markFinalReply 的调用口径一致。
-   * 从尾部向前扫,扫到即停。
-   */
-  private markFinalReply(message: AgentMessageRecord): void {
-    const agentKey = message.agentId ?? ''
-    for (let i = this.state.items.length - 1; i >= 0; i--) {
-      const item = this.state.items[i]
-      if (item.type !== 'agent_message') continue
-      // 引用优先:两条写入路径下恒为同一对象。
-      if (item.message === message) {
-        const updated: TaskThreadItem = { ...item, foldRole: 'final_reply' }
-        this.state.items[i] = updated
-        this.syncBySeqItem(updated)
-        return
-      }
-      // 兜底:引用失效(如序列化还原)时按 messageId+agentId 定位同一条权威消息。
-      if (
-        (item.message.agentId ?? '') === agentKey
-        && item.message.messageId === message.messageId
-        && item.message.role === 'assistant'
-      ) {
-        const updated: TaskThreadItem = { ...item, foldRole: 'final_reply' }
-        this.state.items[i] = updated
-        this.syncBySeqItem(updated)
-        return
-      }
     }
   }
 }

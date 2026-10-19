@@ -28,7 +28,6 @@ import {
   seqGeq,
   sliceRound,
   sliceTailItems,
-  stripFoldRole,
   syntheticUserRecord,
   tailItemsAfterUser,
   terminalTailOf,
@@ -48,11 +47,7 @@ const SEQ_500 = '7380000000000000500'
 const MAIN = 'agent-main-001'
 const SUB = 'agent-sub-001'
 
-function msgItem(
-  seq: string,
-  overrides: Partial<AgentMessageRecord> = {},
-  foldRole?: 'user' | 'final_reply',
-): TaskThreadItem {
+function msgItem(seq: string, overrides: Partial<AgentMessageRecord> = {}): TaskThreadItem {
   const message: AgentMessageRecord = {
     messageId: `m-${seq}`,
     agentId: MAIN,
@@ -64,7 +59,7 @@ function msgItem(
     sequence: Number(seq),
     ...overrides,
   }
-  return { type: 'agent_message', createdAt: 0, message, foldRole }
+  return { type: 'agent_message', createdAt: 0, message }
 }
 
 function traceItem(seq: string, agentId?: string): TaskThreadItem {
@@ -78,15 +73,6 @@ function traceItem(seq: string, agentId?: string): TaskThreadItem {
 /** items 的 id 序列(agent_message 取 messageId,task_trace 取 traceId)。 */
 function ids(items: TaskThreadItem[]): string[] {
   return items.map((it) => (it.type === 'agent_message' ? it.message.messageId : it.trace.traceId))
-}
-
-function asMsg(it: TaskThreadItem): AgentMessageRecord {
-  if (it.type !== 'agent_message') throw new Error(`期望 agent_message,实际 ${it.type}`)
-  return it.message
-}
-
-function foldRoleOf(it: TaskThreadItem): 'user' | 'final_reply' | undefined {
-  return it.type === 'agent_message' ? it.foldRole : undefined
 }
 
 function round(overrides: Partial<RoundSummary> = {}): RoundSummary {
@@ -112,29 +98,29 @@ function matchesOf(filterAgentId: string, mainAgentId: string) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('sliceRound 闭合轮切片 (startSeq, endSeq]', () => {
-  it('含终点不含起点:剥掉起点 user,终点 final 保留;返回项剥 foldRole,trace 原对象直通', () => {
+  it('含终点不含起点:剥掉起点 user,终点 final 保留;返回项原对象直通、无折叠标记', () => {
     const items: TaskThreadItem[] = [
-      msgItem(SEQ_100, { role: 'user', content: '用户输入' }, 'user'),
+      msgItem(SEQ_100, { role: 'user', content: '用户输入' }),
       msgItem(SEQ_110, { content: '过程回复' }),
       traceItem(SEQ_150),
-      msgItem(SEQ_200, { content: '最终回复' }, 'final_reply'),
+      msgItem(SEQ_200, { content: '最终回复' }),
     ]
     const slice = sliceRound(items, round())
     expect(ids(slice)).toEqual([`m-${SEQ_110}`, `t-${SEQ_150}`, `m-${SEQ_200}`])
-    for (const it of slice) expect(foldRoleOf(it)).toBeUndefined()
-    // trace 项不经克隆(map 直通)
+    // 返回项为原对象直通(不再克隆剥标),且无 foldRole 字段
+    expect(slice[0]).toBe(items[1])
     expect(slice[1]).toBe(items[2])
-    // 纯函数:入参数组与 foldRole 标记不被修改
+    expect(slice[2]).toBe(items[3])
+    for (const it of slice) expect(it).not.toHaveProperty('foldRole')
+    // 纯函数:入参数组不被修改
     expect(items).toHaveLength(4)
-    expect(foldRoleOf(items[0])).toBe('user')
-    expect(foldRoleOf(items[3])).toBe('final_reply')
   })
 
   it('startIdx 找不到(起点 user.message 不在 items)兜底 from=0:连同其他轮已加载条目一并切进', () => {
     const items: TaskThreadItem[] = [
-      msgItem(SEQ_50, { content: '上一轮 final' }, 'final_reply'),
+      msgItem(SEQ_50, { content: '上一轮 final' }),
       msgItem(SEQ_110, { content: '过程回复' }),
-      msgItem(SEQ_200, { content: '最终回复' }, 'final_reply'),
+      msgItem(SEQ_200, { content: '最终回复' }),
     ]
     // 现状:from=0 兜底会把上一轮条目(m-50)误切进来——步骤 7 改按 seq 区间比较的动因,此处锁定
     expect(ids(sliceRound(items, round()))).toEqual([`m-${SEQ_50}`, `m-${SEQ_110}`, `m-${SEQ_200}`])
@@ -142,7 +128,7 @@ describe('sliceRound 闭合轮切片 (startSeq, endSeq]', () => {
 
   it('endSeq 找不到(items 未含终点条目)切到 items 末尾', () => {
     const items: TaskThreadItem[] = [
-      msgItem(SEQ_100, { role: 'user' }, 'user'),
+      msgItem(SEQ_100, { role: 'user' }),
       msgItem(SEQ_110),
       msgItem(SEQ_150),
     ]
@@ -150,7 +136,7 @@ describe('sliceRound 闭合轮切片 (startSeq, endSeq]', () => {
   })
 
   it('endSeq 为空串(未闭合轮)同样切到 items 末尾', () => {
-    const items: TaskThreadItem[] = [msgItem(SEQ_100, { role: 'user' }, 'user'), msgItem(SEQ_110)]
+    const items: TaskThreadItem[] = [msgItem(SEQ_100, { role: 'user' }), msgItem(SEQ_110)]
     expect(ids(sliceRound(items, round({ endSeq: '' })))).toEqual([`m-${SEQ_110}`])
   })
 
@@ -160,25 +146,7 @@ describe('sliceRound 闭合轮切片 (startSeq, endSeq]', () => {
 })
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 2. stripFoldRole 剥折叠窗口标记
-// ─────────────────────────────────────────────────────────────────────────────
-
-describe('stripFoldRole 剥 foldRole', () => {
-  it('agent_message 带标记 → 克隆剥标(message 对象保留);无标记/trace → 原对象直通', () => {
-    const marked = msgItem(SEQ_100, { role: 'user' }, 'user')
-    const stripped = stripFoldRole(marked)
-    expect(stripped).not.toBe(marked)
-    expect(foldRoleOf(stripped)).toBeUndefined()
-    expect(asMsg(stripped)).toBe(asMsg(marked))
-    const unmarked = msgItem(SEQ_110)
-    expect(stripFoldRole(unmarked)).toBe(unmarked)
-    const trace = traceItem(SEQ_150)
-    expect(stripFoldRole(trace)).toBe(trace)
-  })
-})
-
-// ─────────────────────────────────────────────────────────────────────────────
-// 3. agent 过滤(itemAgentKey 归一 + matches 谓词交互)
+// 2. agent 过滤(itemAgentKey 归一 + matches 谓词交互)
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('agent 过滤(itemAgentKey 归一 + matches 谓词交互)', () => {
@@ -213,11 +181,11 @@ describe('agent 过滤(itemAgentKey 归一 + matches 谓词交互)', () => {
 })
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 4. tailItemsAfterUser 尾轮起点 user 气泡剥离(ec050499 回归)
+// 3. tailItemsAfterUser 尾轮起点 user 气泡剥离(ec050499 回归)
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('tailItemsAfterUser 尾轮起点 user 气泡剥离(ec050499 回归)', () => {
-  const roundStartUser = msgItem(SEQ_100, { role: 'user' }, 'user')
+  const roundStartUser = msgItem(SEQ_100, { role: 'user' })
 
   it('tailItems[0] 确为本轮起点 user 气泡(messageId 相等)才剥', () => {
     const tail = [roundStartUser, msgItem(SEQ_110), msgItem(SEQ_150)]
@@ -249,11 +217,11 @@ describe('tailItemsAfterUser 尾轮起点 user 气泡剥离(ec050499 回归)', (
 
   it('端到端管线:无过滤剥起点 user;过滤子 agent 后起点 user 已被滤出、子 agent 首条指令保留', () => {
     const items: TaskThreadItem[] = [
-      msgItem(SEQ_50, { content: '上一轮' }, 'final_reply'),     // 上一轮尾部(items 含其他轮)
-      msgItem(SEQ_100, { role: 'user', agentId: MAIN }, 'user'), // 尾轮起点 user
+      msgItem(SEQ_50, { content: '上一轮' }),                    // 上一轮尾部(items 含其他轮)
+      msgItem(SEQ_100, { role: 'user', agentId: MAIN }),         // 尾轮起点 user
       msgItem(SEQ_110, { agentId: SUB, role: 'user', content: '子指令' }),
       msgItem(SEQ_150, { agentId: SUB, content: '子回复' }),
-      msgItem(SEQ_200, { agentId: MAIN, content: '主回复' }, 'final_reply'),
+      msgItem(SEQ_200, { agentId: MAIN, content: '主回复' }),
     ]
     const tailUser = items[1]
     // 无过滤:切片含起点 user → afterUser 剥掉,其余保留
@@ -268,20 +236,22 @@ describe('tailItemsAfterUser 尾轮起点 user 气泡剥离(ec050499 回归)', (
 })
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 5. sliceTailItems 尾轮切片(TaskRoundsPanel tailItems)
+// 4. sliceTailItems 尾轮切片(TaskRoundsPanel tailItems)
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('sliceTailItems 尾轮切片', () => {
-  it('起点 user.message(m-${tailStartSeq})定位:从起点(含)切到 items 末尾并剥 foldRole', () => {
+  it('起点 user.message(m-${tailStartSeq})定位:从起点(含)切到 items 末尾(原对象直通、无折叠标记)', () => {
     const items: TaskThreadItem[] = [
-      msgItem(SEQ_50, { content: '上一轮 final' }, 'final_reply'), // 上一轮条目不进尾轮切片
-      msgItem(SEQ_100, { role: 'user' }, 'user'),
+      msgItem(SEQ_50, { content: '上一轮 final' }), // 上一轮条目不进尾轮切片
+      msgItem(SEQ_100, { role: 'user' }),
       msgItem(SEQ_110),
-      msgItem(SEQ_150, { content: '回复' }, 'final_reply'),
+      msgItem(SEQ_150, { content: '回复' }),
     ]
     const tail = sliceTailItems(items, SEQ_100, matchesOf('', MAIN))
     expect(ids(tail)).toEqual([`m-${SEQ_100}`, `m-${SEQ_110}`, `m-${SEQ_150}`])
-    for (const it of tail) expect(foldRoleOf(it)).toBeUndefined()
+    // 切片返回原对象直通(不再克隆剥标),且无 foldRole 字段
+    expect(tail[0]).toBe(items[1])
+    for (const it of tail) expect(it).not.toHaveProperty('foldRole')
   })
 
   it('起点缺失兜底:第一个排序 seq >= tailStartSeq 的 agent_message(trace 不命中兜底)', () => {
@@ -303,15 +273,15 @@ describe('sliceTailItems 尾轮切片', () => {
     expect(ids(sliceTailItems(items, SEQ_150, matchesOf('', MAIN)))).toEqual([`m-${SEQ_200}`])
   })
 
-  it('切片后按 matches 过滤再剥 foldRole(过滤掉的项不占位)', () => {
+  it('切片后按 matches 过滤(过滤掉的项不占位)', () => {
     const items: TaskThreadItem[] = [
-      msgItem(SEQ_100, { role: 'user', agentId: MAIN }, 'user'),
-      msgItem(SEQ_110, { agentId: SUB }, 'final_reply'),
+      msgItem(SEQ_100, { role: 'user', agentId: MAIN }),
+      msgItem(SEQ_110, { agentId: SUB }),
       msgItem(SEQ_150, { agentId: MAIN }),
     ]
     const tail = sliceTailItems(items, SEQ_100, matchesOf(SUB, MAIN))
     expect(ids(tail)).toEqual([`m-${SEQ_110}`])
-    expect(foldRoleOf(tail[0])).toBeUndefined()
+    expect(tail[0]).toBe(items[1])
   })
 
   it('tailStartSeq 空串返回空数组', () => {
@@ -324,14 +294,14 @@ describe('sliceTailItems 尾轮切片', () => {
 })
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 6. firstTailEventSeq 尾轮首过程事件 seq(backward 首拉 beforeSeq)
+// 5. firstTailEventSeq 尾轮首过程事件 seq(backward 首拉 beforeSeq)
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('firstTailEventSeq 尾轮 user 之后第一条 agent_message 的 seq', () => {
   it('跳过起点 user 与 trace,返回其后第一条 agent_message 的 seq 字符串', () => {
     const items: TaskThreadItem[] = [
       msgItem(SEQ_50),
-      msgItem(SEQ_100, { role: 'user' }, 'user'),
+      msgItem(SEQ_100, { role: 'user' }),
       traceItem(SEQ_110),
       msgItem(SEQ_150),
     ]
@@ -352,7 +322,7 @@ describe('firstTailEventSeq 尾轮 user 之后第一条 agent_message 的 seq', 
 })
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 7. seqGeq 十进制大数比较 + messageSeqOf 提取
+// 6. seqGeq 十进制大数比较 + messageSeqOf 提取
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('seqGeq 十进制大整数字符串比较', () => {
@@ -393,7 +363,7 @@ describe('messageSeqOf 线程项 seq 提取', () => {
 })
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 8. syntheticUserRecord 合成轮 user 消息(rounds.jsonl → AgentMessageRecord)
+// 7. syntheticUserRecord 合成轮 user 消息(rounds.jsonl → AgentMessageRecord)
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('syntheticUserRecord 合成轮 user 消息', () => {
@@ -431,7 +401,7 @@ describe('syntheticUserRecord 合成轮 user 消息', () => {
 })
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 9. 闭合轮/终态尾轮筛选(纯数据面)
+// 8. 闭合轮/终态尾轮筛选(纯数据面)
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('闭合轮与终态尾轮筛选', () => {

@@ -238,7 +238,7 @@ export default function TaskRoundsPanel({
     [filterAgentId, mainAgentId],
   )
 
-  /** 尾轮线程项：从 items 中 tailStartSeq 起点开始切片（含 user 气泡，剥 foldRole 防折叠）。
+  /** 尾轮线程项：从 items 中 tailStartSeq 起点开始切片（含 user 气泡）。
    * 过滤态：切片后按归属过滤（子 agent 过滤会滤掉 user 气泡，但外层 tailUserItem 恒显，
    * 视觉上 user 气泡不丢）。 */
   const tailItems = React.useMemo<TaskThreadItem[]>(
