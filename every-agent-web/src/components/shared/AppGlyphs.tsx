@@ -381,13 +381,17 @@ export function FlaskIcon({ size = 16, style }: AppGlyphProps) {
 }
 
 export function WrenchIcon({ size = 16, style, className, flipped = false }: AppGlyphProps) {
+  // viewBox 22x22;路径 Y 范围 4.4~14.7(中心 9.55),相对画布中心 11 偏上 1.45。
+  // 用 transform 整体下移 1.45 使路径垂直居中,消除 baseline/align-self:center 对齐时的视觉偏移。
   const path = (
-    <path
-      d="M13.7 4.4A4.4 4.4 0 0 0 9.1 10l-4.7 4.7a1.4 1.4 0 0 0 0 2l.9.9a1.4 1.4 0 0 0 2 0l4.7-4.7a4.4 4.4 0 0 0 5.6-4.6l-2.6 1.4-2.4-2.4 1.5-2.9Z"
-      stroke="currentColor"
-      strokeWidth="1.5"
-      strokeLinejoin="round"
-    />
+    <g transform="translate(0 1.45)">
+      <path
+        d="M13.7 4.4A4.4 4.4 0 0 0 9.1 10l-4.7 4.7a1.4 1.4 0 0 0 0 2l.9.9a1.4 1.4 0 0 0 2 0l4.7-4.7a4.4 4.4 0 0 0 5.6-4.6l-2.6 1.4-2.4-2.4 1.5-2.9Z"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinejoin="round"
+      />
+    </g>
   )
   return (
     <Svg size={size} style={style} className={className} viewBox="0 0 22 22">
