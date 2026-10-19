@@ -3,7 +3,6 @@
  * 只依赖类型，不依赖展示层，避免循环依赖。
  */
 
-import type { LLMToolCall, AgentMessageRecord } from '@/types'
 import type { AggregatedToolDetail } from './types'
 
 /**
@@ -43,46 +42,32 @@ function buildStructuredToolField(
 }
 
 /**
- * 聚合工具调用的展开详情：工具名 + 下发参数（arguments）+ 调用结果（result）。
- * arguments 来自按 toolCallId 取回的下发负载；result 来自 tool 角色消息 content。
+ * 工具结果内容 → 展示用 result 字段:JSON 可解析取解析值,否则保留原始文本字符串;
+ * 空内容返回 null。批壳调用行(detailFromCall)与孤儿结果(detailFromOrphanResult)
+ * 共用的结果解读规则(与旧聚合块的 buildStructuredToolField 同口径)。
  */
-export function buildAggregatedToolDetail(
-  message: AgentMessageRecord,
-  resolvedToolName: string,
-  args: Record<string, unknown> | null,
-): AggregatedToolDetail {
-  const structured = buildStructuredToolField(message.content, 'result', 'result') as Record<string, unknown>
-  return {
-    type: 'tool_call',
-    toolName: resolvedToolName?.trim() || message.toolName?.trim() || '工具',
-    toolCallId: message.toolCallId?.trim() || null,
-    status: message.status,
-    arguments: args,
-    result: structured.result ?? null,
-  }
+function readToolResult(content: string | undefined): unknown {
+  if (!content || !content.trim()) return null
+  return (buildStructuredToolField(content, 'result', 'result') as Record<string, unknown>).result ?? null
 }
 
 /**
- * 聚合工具调用的展开详情（下发视角）：以 assistant 的 toolCall 为锚点，
- * 把下发参数（call.function.arguments）与按 callId 匹配到的 tool 结果消息合并为同一
- * AggregatedToolDetail。与 buildAggregatedToolDetail 对称——后者以 tool 消息为锚点反查下发参数，
- * 两者产出同一形状，保证 live 下发块与历史 tool 块走同一套 View。
+ * 以 message 下发的 toolCall 为锚点聚合展示详情(ThreadItem 载荷 → 美化视图输入):
+ * 参数来自下发 arguments JSON(解析失败/为空 → null),结果/状态/耗时来自按 callId
+ * 配对到的 tool.result 载荷(未到 → null/undefined)。批壳调用行与孤儿兜底共用。
  */
-export function buildAggregatedToolDetailFromCall(
-  call: LLMToolCall,
-  resultMessage?: AgentMessageRecord | null,
+export function buildDetailFromCall(
+  call: { id: string; function: { name: string; arguments: string } },
+  result: { content?: string; status?: 'success' | 'error'; toolName?: string } | null,
 ): AggregatedToolDetail {
   const args = parseToolPayload(call.function.arguments)
-  const structured = resultMessage?.content
-    ? (buildStructuredToolField(resultMessage.content, 'result', 'result') as Record<string, unknown>)
-    : null
   return {
     type: 'tool_call',
-    toolName: resultMessage?.toolName?.trim() || call.function.name,
+    toolName: result?.toolName?.trim() || call.function.name,
     toolCallId: call.id,
-    status: resultMessage?.status,
+    status: result?.status,
     arguments: Object.keys(args).length > 0 ? args : null,
-    result: structured?.result ?? null,
+    result: result ? readToolResult(result.content) : null,
   }
 }
 
@@ -129,4 +114,43 @@ export function splitLeadingComment(command: string): { comment: string; rest: s
 export function hasActiveTextSelection(): boolean {
   const selection = typeof window !== 'undefined' ? window.getSelection() : null
   return !!selection && !selection.isCollapsed && selection.toString().length > 0
+}
+
+/** 调用行内联预览:文本(原样等宽)或「注释 + 命令」两段(注释走 AI 正文样式)。 */
+export type CallInlinePreview =
+  | { kind: 'comment'; comment: string; rest: string }
+  | { kind: 'text'; text: string }
+
+/**
+ * 调用行内联预览:取 detail 的 path / command / 文本参数摘要,无参时回退空串。
+ * command 首行是注释(意图说明)时拆分为「正文样式注释 + 等宽命令」两段,
+ * 与单条 CommandToolView 折叠态一致。原 ToolCallView 聚合壳的
+ * buildGroupInlinePreview 原位迁入(批壳调用行与孤儿兜底共用,行为不变)。
+ */
+export function buildCallInlinePreview(detail: AggregatedToolDetail): CallInlinePreview {
+  const args = (detail.arguments ?? {}) as Record<string, unknown>
+  // 优先 path(非命令工具);其次 command(bash/powershell),命中首行注释则拆分高亮。
+  const path = typeof args.path === 'string' ? args.path : ''
+  if (path.trim()) {
+    return { kind: 'text', text: truncateInlineText(path, 160) }
+  }
+  const command = typeof args.command === 'string' ? args.command : ''
+  if (command.trim()) {
+    const split = splitLeadingComment(command.trim())
+    if (split) {
+      return {
+        kind: 'comment',
+        comment: truncateInlineText(split.comment, 160),
+        rest: truncateInlineText(split.rest, 160),
+      }
+    }
+    return { kind: 'text', text: truncateInlineText(command, 160) }
+  }
+  // 退化:把若干标量参数以 "k=v · k=v" 形式铺平(够短),完全无参时给个占位。
+  const scalars = Object.entries(args)
+    .filter(([, v]) => v !== null && (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean'))
+    .slice(0, 3)
+    .map(([k, v]) => `${k}=${typeof v === 'string' ? v : JSON.stringify(v)}`)
+    .join(' · ')
+  return { kind: 'text', text: scalars ? truncateInlineText(scalars, 160) : '' }
 }

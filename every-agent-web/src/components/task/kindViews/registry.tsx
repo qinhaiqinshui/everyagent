@@ -1,15 +1,16 @@
 /**
- * kind 渲染注册表(「任务线程统一条目与画板纯化」步骤 9 基建,纯增量)。
+ * kind 渲染注册表(「任务线程统一条目与画板纯化」步骤 9 基建/步骤 10 分发切换)。
  *
- * 渲染层按 item.kind 查表分发:分发点显式写 `getKindView(item.kind) ?? FallbackView`
- * ——与 traceTypeRegistry「查不到给 fallback 定义」不同,本注册表查表未注册返回
- * **undefined**,兜底选择是分发语义,不埋进注册表。本步不接线(TaskThread 仍走
- * renderMessageGroups 分组渲染),步骤 10 分发切换时消费。
+ * 渲染层按 item.kind 查表分发:分发点(TaskThread)显式写 `getKindView(item.kind)
+ * ?? FallbackView`——与 traceTypeRegistry「查不到给 fallback 定义」不同,本注册表查表
+ * 未注册返回 **undefined**,兜底选择是分发语义,不埋进注册表。内置 kind 视图经
+ * `./builtins` 集中注册(注册即 KindPayloadMap 编译期配对),trace 族不注册专视图
+ * 自然落 FallbackView。
  *
  * KindViewProps 保持最小集(item/payload/taskId/mainAgentId):不含 items、不含
  * toolJoin 回调——视图需要兄弟行(tool.result 吸收判定/结果配对)一律经
  * useThreadBoard() context(./threadBoardContext)取,工具配对归渲染层 tool 域
- * 共享模块,核心与画板零知识。
+ * 共享模块(./toolDomain),核心与画板零知识。
  */
 import React from 'react'
 import type { KindPayloadMap, ThreadItem } from '@/task/threadItem'

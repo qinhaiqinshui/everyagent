@@ -6,7 +6,10 @@ import type { ThreadItem } from '@/task/threadItem'
 import { BrandMark } from '@/components/shared/BrandLoadingBlock'
 import { ChevronDownIcon, ChevronRightIcon } from '../shared/AppGlyphs'
 import { InlineSpinner } from '@/components/shared/ui'
-import AgentMessageThread from './AgentMessageThread'
+// 步骤 10:合成 user 气泡/最终回复改用 kindViews 共享视图组件(AgentMessageThread
+// 独立分发路径已删,合成记录与线程内 kind 视图同一渲染口径)。
+import { UserBubbleMessage } from './kindViews/userMessageView'
+import { FinalReplyMessage } from './kindViews/messageView'
 import TaskThread from './TaskThread'
 import RoundDetail from './RoundDetail'
 import LazyLoadSentinel from './LazyLoadSentinel'
@@ -419,7 +422,7 @@ function ClosedRoundView({
   // 展开态由 RoundDetail 从 items 切片渲染,即使无工具调用也能看到最终轮的思考内容。
   return (
     <>
-      <AgentMessageThread message={userMessage} seq={round.startSeq} taskId={taskId} mainAgentId={mainAgentId} />
+      <UserBubbleMessage message={userMessage} seq={round.startSeq} taskId={taskId} mainAgentId={mainAgentId} />
       <div className="nagent-round-collapse">
         <button
           type="button"
@@ -464,7 +467,7 @@ function ClosedRoundView({
           </>
         ) : (
           <div className="nagent-round-collapse__final">
-            <AgentMessageThread message={finalMessage} seq={round.endSeq} taskId={taskId} mainAgentId={mainAgentId} />
+            <FinalReplyMessage content={finalMessage.content} messageId={finalMessage.messageId} taskId={taskId} />
           </div>
         )}
         {/* 轮末工具栏：`ui.round_tail_panels` 的全部贡献者（含核心内置的「复制」按钮）并排一行，
@@ -530,7 +533,7 @@ function TailRoundView({
   return (
     <div className="nagent-tail-round">
       {userMessage ? (
-        <AgentMessageThread message={userMessage} seq={userSeq} taskId={taskId} mainAgentId={mainAgentId} />
+        <UserBubbleMessage message={userMessage} seq={userSeq} taskId={taskId} mainAgentId={mainAgentId} />
       ) : null}
       {live && pageState && !pageState.done ? (
         <LazyLoadSentinel

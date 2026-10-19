@@ -2,10 +2,10 @@
  * 单条 trace 族线程项的呈现壳(payload = trace 形状:title/summary/content/data)。
  *
  * 步骤 9(kind 渲染注册表基建)由 TaskThread.tsx **原位提取**为独立组件文件:
- * 逻辑逐字节保持(提取不改行为),TaskThread 改 import、内部消费不变;kindViews
- * 注册表侧的 FallbackView 复用本壳呈现(TaskTraceShell 形状兜底,内容零丢失)。
- * error/cancelled 的错误色调/alert 图标等旧 trace.kind 映射口径在本壳内保持,
- * 步骤 10 kind 视图迁移时统一收敛。
+ * 逻辑逐字节保持(提取不改行为);kindViews 注册表侧的 FallbackView 复用本壳呈现
+ * (TaskTraceShell 形状兜底,内容零丢失)。步骤 10 起 error/cancelled 的旧 trace.kind
+ * 映射收敛为 kind 视图直配(statusViews 以 run_error/system_notice 传入),本壳只按
+ * 传入 kind 查 traceTypeRegistry,不再做 kind 改写。
  */
 import React from 'react'
 import type { ThreadItem, TracePayload } from '@/task/threadItem'
@@ -23,10 +23,9 @@ export function TaskTraceShell({
 }) {
   const payload: TracePayload = (item.payload as TracePayload | undefined) ?? { title: '' }
   const [open, setOpen] = React.useState(false)
-  // trace 类型解析 key:error/cancelled 的渲染消费口径沿用旧 trace.kind 注册
-  // (run_error 错误色调/alert 图标、system.notice 图标),步骤 10 kind 渲染注册表
-  // 分发切换时统一收敛。
-  const traceTypeKey = item.kind === 'error' ? 'run_error' : item.kind === 'cancelled' ? 'system_notice' : item.kind
+  // trace 类型解析 key = 传入 kind 直配(步骤 10 收敛:error/cancelled 的旧 key 映射
+  // 已迁 statusViews kind 视图,本壳不再改写)。
+  const traceTypeKey = item.kind
   const traceType = getTraceType(traceTypeKey)
   // traceTypeRegistry(插件 trace 类型扩展点)消费 PluginTraceRecord 形状:
   // 由 item 五字段 + payload 合成兼容视图对象(getSummary/renderContent/canExpand/getIcon)。

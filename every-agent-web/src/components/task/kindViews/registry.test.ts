@@ -172,12 +172,16 @@ describe('FallbackView 渲染(renderToString,node 环境)', () => {
     expect(html).toContain('aria-expanded="false"')
   })
 
-  it('kind=error 保持错误色调口径(TraceShell 内旧 trace.kind 映射不变)', () => {
-    // 错误色调来自 run_error 注册项(tone:'error');应用内由 main.tsx 启动时
-    // initializeTraceTypes() 注册,测试显式镜像该启动口径(幂等 Map set)。
+  it('kind=error 的错误色调已收敛为 kind 视图直配(FallbackView 不再改写 kind)', () => {
+    // 步骤 10 收敛:error → run_error 的旧 key 映射从 TraceShell 迁入 statusViews
+    // 的 ErrorView(kind 视图);FallbackView 只按传入 kind 查表,不改写——未注册路径
+    // 的 kind=error(仅测试直构场景)不再带错误色调。真实分发下 error 恒命中 ErrorView
+    // (builtins 注册),错误色调断言见 builtinViews.test.ts。
     initializeTraceTypes()
     const html = renderFallback('error', { title: '任务失败', summary: 'boom' })
-    expect(html).toContain('nagent-trace-shell--error')
+    expect(html).toContain('nagent-trace-shell')
+    expect(html).toContain('任务失败')
+    expect(html).not.toContain('nagent-trace-shell--error')
   })
 })
 

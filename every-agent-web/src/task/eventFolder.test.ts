@@ -23,6 +23,7 @@ import {
 import type { FoldableTaskEvent } from './eventFolder'
 import type { ThreadItem, TracePayload, MessagePayload } from './threadItem'
 import { payloadAs } from './threadItem'
+import { getToolStarted } from './toolStartedRuntime'
 import type { TaskAgentLedgerItem } from './task-poll'
 
 // Snowflake 形态 seq(19 位十进制,> 2^53):Number() 会把仅末位不同的两个大数坍缩为
@@ -590,5 +591,48 @@ describe('message 定稿后线程项为五字段', () => {
     folder.fold(ev(SEQ_200, 'message', { content: '子代理回复' }, SUB, 1400))
     expect(fiveKeysOf(itemAt(folder, 0, 'message'))).toEqual(['agentId', 'kind', 'payload', 'seq', 'ts'])
     expect(fiveKeysOf(itemAt(folder, 1, 'message'))).toEqual(['agentId', 'kind', 'payload', 'seq', 'ts'])
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 12. tool.started 瞬态运行时映射(步骤 10:不进 items,记入 toolStartedRuntime)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('tool.started 瞬态运行时映射(不进 items)', () => {
+  it('fold 不产生线程项,handler 记入瞬态映射并返回 true(驱动重渲染)', () => {
+    const folder = new TaskEventFolder(emptyThreadState('task-toolstarted-a'))
+    const changed = folder.fold(ev(SEQ_100, 'tool.started', {
+      content: '',
+      data: { callId: 'call-1', name: 'read_file', arguments: '{"path":"a.md"}', startedAt: 12345 },
+    }, MAIN, 1100))
+    expect(changed).toBe(true)
+    expect(folder.state.items).toHaveLength(0)
+    const started = getToolStarted('task-toolstarted-a', 'call-1')
+    expect(started?.name).toBe('read_file')
+    expect(started?.arguments).toBe('{"path":"a.md"}')
+    expect(started?.startedAt).toBe(12345)
+  })
+
+  it('缺 callId 的事件丢弃(返回 false);startedAt 缺失回退事件 ts', () => {
+    const folder = new TaskEventFolder(emptyThreadState('task-toolstarted-b'))
+    expect(folder.fold(ev(SEQ_100, 'tool.started', { content: '' }, MAIN, 1100))).toBe(false)
+    folder.fold(ev(SEQ_200, 'tool.started', { content: '', data: { callId: 'call-9', name: 'x' } }, MAIN, 2400))
+    expect(getToolStarted('task-toolstarted-b', 'call-9')?.startedAt).toBe(2400)
+  })
+
+  it('reset 清空该任务的瞬态映射(编辑重发/全量重载);同 callId 重复到达覆盖', () => {
+    const folder = new TaskEventFolder(emptyThreadState('task-toolstarted-c'))
+    folder.fold(ev(SEQ_100, 'tool.started', {
+      content: '', data: { callId: 'call-1', name: 'a', startedAt: 1 },
+    }, MAIN, 1100))
+    folder.fold(ev(SEQ_150, 'tool.started', {
+      content: '', data: { callId: 'call-1', name: 'a2', startedAt: 2 },
+    }, MAIN, 1200))
+    expect(getToolStarted('task-toolstarted-c', 'call-1')?.name).toBe('a2')
+    folder.fold(ev(SEQ_200, 'user.message', { content: '输入' }, MAIN, 1300))
+    folder.reset()
+    expect(getToolStarted('task-toolstarted-c', 'call-1')).toBeUndefined()
+    // reset 后 items 清空(既有语义回归确认)
+    expect(folder.state.items).toHaveLength(0)
   })
 })

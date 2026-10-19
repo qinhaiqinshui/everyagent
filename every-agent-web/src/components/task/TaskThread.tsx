@@ -1,12 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react'
 import type { ThreadItem } from '@/task/threadItem'
-import { MESSAGE_KINDS, payloadAs } from '@/task/threadItem'
-import type { AgentMessageRecord } from '@/types'
 import { BrandMark } from '@/components/shared/BrandLoadingBlock'
-import AgentMessageThread from '../task/AgentMessageThread'
-// 步骤 9:TaskTraceShell 原位提取为 kindViews/TraceShell.tsx(提取不改行为),
-// FallbackView 兜底复用同一呈现;步骤 10 分发切换时本组件改查表分发。
-import { TaskTraceShell } from './kindViews/TraceShell'
+// 内置 kind 视图注册(模块级副作用,与 eventRegistry 同款范式);分发点见下方 items.map。
+import './kindViews/builtins'
+import { FallbackView, getKindView } from './kindViews/registry'
+import { ThreadBoardProvider } from './kindViews/threadBoardContext'
 
 /**
  * Task 线程组件属性。
@@ -18,7 +16,7 @@ export interface TaskThreadProps {
   items: ThreadItem[]
   /** 当前是否处于加载中。 */
   loading?: boolean
-  /** 主 agent 稳定 Id（渲染层消费 agentId 区分子 agent 输入；透传给 AgentMessageThread）。 */
+  /** 主 agent 稳定 Id（渲染层消费 agentId 区分子 agent 输入；透传给各 kind 视图）。 */
   mainAgentId?: string
   /**
    * 本轮生成是否在飞（含点击发送 → 首 token 前空窗 → 流式输出 → 工具执行中 → 收口）。
@@ -34,7 +32,11 @@ export interface TaskThreadProps {
 
 /**
  * Task 聊天线程。
- * 统一渲染 agent messages 与 task traces，采用单列流式布局。
+ * 步骤 10 定稿:**纯查表分发**——items.map 逐条 `getKindView(item.kind) ?? FallbackView`,
+ * key = item.seq(seq 即 id);外层包 ThreadBoardProvider(value = 本次渲染的 items 切片,
+ * 供视图经 useThreadBoard() 做兄弟行访问:tool.result 吸收判定/结果配对/终态信号)。
+ * 旧 renderMessageGroups 分组渲染(role 分组包裹/连续 tool 合并/buildToolMaps join 索引)
+ * 已全部删除,工具配对归 kindViews/toolDomain 渲染层共享模块。
  */
 export default function TaskThread({
   taskId,
@@ -54,7 +56,22 @@ export default function TaskThread({
   return (
     <div className="nagent-thread">
       {topSlot}
-      {buildMessageGroups(items, taskId, mainAgentId)}
+      <ThreadBoardProvider items={items}>
+        {items.map((item) => {
+          const View = getKindView(item.kind) ?? FallbackView
+          // 分发点 kind 动态 → payload 直传 item.payload(类型化取载荷 payloadAs 归
+          // 各视图内部;KindPayloadMap 编译期配对发生在注册点,见 kindViews/builtins)。
+          return (
+            <View
+              key={item.seq}
+              item={item}
+              payload={item.payload}
+              taskId={taskId}
+              mainAgentId={mainAgentId}
+            />
+          )
+        })}
+      </ThreadBoardProvider>
       {bottomSlot}
       <ThreadStatusBanner running={isGenerating} />
     </div>
@@ -114,244 +131,4 @@ function ThreadStatusBanner({ running }: { running: boolean }) {
       </span>
     </div>
   )
-}
-
-/**
- * 工具调用 join 所需的索引（callId → 名称 / 参数 / tool 结果消息）。
- * 终态折叠时，过程段与最终回复需要共享同一份索引，否则按 callId 合并结果会跨段丢失。
- */
-interface TaskThreadToolMaps {
-  toolCallNameById: Map<string, string>
-  toolCallPayloadById: Map<string, Record<string, unknown>>
-  toolResultById: Map<string, AgentMessageRecord>
-}
-
-/**
- * ThreadItem → AgentMessageThread 消息视图模型(渲染内部形状:AgentMessageRecord,
- * 从 message 族 kind 的 payload 适配;步骤 10 分发切换时随视图迁移)。
- * 消息族 kind(user.message/message/tool.result)适配;trace 族返回 null(TaskTraceShell 渲染)。
- */
-function messageViewOf(item: ThreadItem): AgentMessageRecord | null {
-  switch (item.kind) {
-    case 'user.message': {
-      const p = payloadAs(item, 'user.message')
-      return {
-        messageId: item.seq,
-        agentId: item.agentId,
-        role: 'user',
-        content: p?.content ?? '',
-        rawContent: p?.rawContent,
-        historyMode: 'thread_only',
-        createdAt: item.ts,
-        updatedAt: item.ts,
-        sequence: Number(item.seq),
-      }
-    }
-    case 'message': {
-      const p = payloadAs(item, 'message')
-      return {
-        messageId: item.seq,
-        agentId: item.agentId,
-        role: 'assistant',
-        content: p?.content ?? '',
-        reasoning: p?.thinking,
-        toolCalls: p?.toolCalls,
-        historyMode: 'thread_only',
-        createdAt: item.ts,
-        updatedAt: item.ts,
-        sequence: Number(item.seq),
-        // 折叠层帧状态(streaming/reasoningDone)→ 视图模型 metadata(消息视图消费口径)。
-        metadata: {
-          ...(p?.streaming !== undefined ? { streaming: p.streaming } : {}),
-          ...(p?.reasoningDone !== undefined ? { reasoningDone: p.reasoningDone } : {}),
-        },
-      }
-    }
-    case 'tool.result': {
-      const p = payloadAs(item, 'tool.result')
-      return {
-        messageId: item.seq,
-        agentId: item.agentId,
-        role: 'tool',
-        content: p?.content ?? '',
-        toolCallId: p?.callId,
-        toolName: p?.toolName,
-        status: p?.status,
-        historyMode: 'thread_only',
-        createdAt: item.ts,
-        updatedAt: item.ts,
-        sequence: Number(item.seq),
-      }
-    }
-    default:
-      return null
-  }
-}
-
-/** 从一段线程项中提取工具调用 join 索引。 */
-function buildToolMaps(items: ThreadItem[]): TaskThreadToolMaps {
-  const toolCallNameById = new Map<string, string>()
-  const toolCallPayloadById = new Map<string, Record<string, unknown>>()
-  // callId → tool 结果消息：供 assistant 下发块按 callId 合并结果（live/历史同一套 join）。
-  const toolResultById = new Map<string, AgentMessageRecord>()
-  for (const item of items) {
-    if (item.kind === 'message') {
-      for (const call of payloadAs(item, 'message')?.toolCalls ?? []) {
-        toolCallNameById.set(call.id, call.function.name)
-        // 仅存下发参数（callId → arguments）。结果内容在 tool.result 项的 payload.content 中，
-        // 不应覆盖此处，否则 resolveToolCallPayload 会返回结果而非参数（见 AgentMessageThread 聚合块）。
-        toolCallPayloadById.set(call.id, parseToolPayload(call.function.arguments))
-      }
-      continue
-    }
-    if (item.kind === 'tool.result') {
-      const callId = payloadAs(item, 'tool.result')?.callId?.trim()
-      const view = messageViewOf(item)
-      if (callId && view && !toolResultById.has(callId)) {
-        toolResultById.set(callId, view)
-      }
-    }
-  }
-  return { toolCallNameById, toolCallPayloadById, toolResultById }
-}
-
-/**
- * 将线程项按连续同角色消息分组渲染（使用调用方传入的工具 join 索引）。
- * 消息族 kind 与 role 一一对应(user.message→user / message→assistant / tool.result→tool),
- * 其余 kind 按 trace 族走 TaskTraceShell。
- */
-function renderMessageGroups(
-  items: ThreadItem[],
-  taskId: string,
-  maps: TaskThreadToolMaps,
-  mainAgentId: string,
-): React.ReactNode[] {
-  const { toolCallNameById, toolCallPayloadById, toolResultById } = maps
-  const result: React.ReactNode[] = []
-  const toolCallNameOf = (msg: { toolCallId?: string }): string | undefined =>
-    (msg.toolCallId?.trim() && toolCallNameById.get(msg.toolCallId.trim())) || undefined
-  const resolveToolResult = (callId: string): AgentMessageRecord | undefined =>
-    (callId?.trim() && toolResultById.get(callId.trim())) || undefined
-
-  let i = 0
-  while (i < items.length) {
-    const item = items[i]
-    if (!MESSAGE_KINDS.has(item.kind)) {
-      result.push(renderTraceItem(item, taskId))
-      i += 1
-      continue
-    }
-
-    const groupItems: ThreadItem[] = []
-
-    if (item.kind === 'tool.result') {
-      while (i < items.length) {
-        const current = items[i]
-        if (current.kind === 'tool.result') {
-          groupItems.push(current)
-          i += 1
-          continue
-        }
-        // trace 族不纳入 tool 分组，使其保持独立排序位置（落在触发它的工具调用之后）
-        break
-      }
-    } else {
-      while (i < items.length && items[i].kind === item.kind) {
-        groupItems.push(items[i])
-        i += 1
-      }
-    }
-
-    if (item.kind === 'tool.result') {
-      const first = groupItems[0]
-      const firstView = messageViewOf(first)
-      const firstCallId = payloadAs(first, 'tool.result')?.callId?.trim()
-      const hasMatchingDispatch = Boolean(firstCallId && toolCallNameById.has(firstCallId))
-      // 结果已被对应 assistant 下发块吸收（按 callId join），不再单独渲染，避免重复 block。
-      if (!hasMatchingDispatch && firstView) {
-        result.push(
-          <AgentMessageThread
-            key={`toolgroup:${first.seq}`}
-            seq={first.seq}
-            message={firstView}
-            taskId={taskId}
-            mainAgentId={mainAgentId}
-            mergedToolMessages={groupItems.map((groupItem) => messageViewOf(groupItem)).filter(Boolean) as AgentMessageRecord[]}
-            resolveToolCallName={toolCallNameOf}
-            resolveToolCallPayload={(toolCallId) => toolCallPayloadById.get(toolCallId)}
-          />,
-        )
-      }
-      continue
-    }
-
-    if (groupItems.length === 1) {
-      const first = groupItems[0]
-      result.push(
-        <AgentMessageThread
-          key={`message:${first.seq}`}
-          seq={first.seq}
-          message={messageViewOf(first)!}
-          taskId={taskId}
-          mainAgentId={mainAgentId}
-          resolveToolCallPayload={(toolCallId) => toolCallPayloadById.get(toolCallId)}
-          resolveToolResult={resolveToolResult}
-        />,
-      )
-      continue
-    }
-
-    result.push(
-      <div className="nagent-msg-group" key={`group:${groupItems[0].seq}`}>
-        {groupItems.map((groupItem, idx) => (
-          <AgentMessageThread
-            key={`message:${groupItem.seq}`}
-            seq={groupItem.seq}
-            message={messageViewOf(groupItem)!}
-            taskId={taskId}
-            mainAgentId={mainAgentId}
-            isContinuation={idx > 0}
-            resolveToolCallPayload={(toolCallId) => toolCallPayloadById.get(toolCallId)}
-            resolveToolResult={resolveToolResult}
-          />
-        ))}
-      </div>,
-    )
-  }
-
-  return result
-}
-
-/** 将线程项按连续同角色消息分组渲染（自行构建工具 join 索引）。 */
-function buildMessageGroups(
-  items: ThreadItem[],
-  taskId: string,
-  mainAgentId: string,
-): React.ReactNode[] {
-  return renderMessageGroups(items, taskId, buildToolMaps(items), mainAgentId)
-}
-
-/** 渲染单条 trace 族线程项。 */
-function renderTraceItem(
-  item: ThreadItem,
-  taskId: string,
-): React.ReactNode {
-  return <TaskTraceShell key={`trace:${item.seq}`} item={item} taskId={taskId} />
-}
-
-/** 解析工具调用 / 工具结果的 JSON 负载。 */
-function parseToolPayload(rawText: string | undefined): Record<string, unknown> {
-  const text = rawText?.trim()
-  if (!text) {
-    return {}
-  }
-  try {
-    const parsed = JSON.parse(text)
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      return parsed as Record<string, unknown>
-    }
-  } catch {
-    return {}
-  }
-  return {}
 }

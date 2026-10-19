@@ -43,6 +43,7 @@ import type { MessagePayload, ThreadItem, TracePayload } from './threadItem'
 import { MESSAGE_KINDS } from './threadItem'
 import { getHandler, defaultHandler } from './eventRegistry'
 import { AgentLedger } from './agentLedger'
+import { clearTaskToolStarted } from './toolStartedRuntime'
 
 /** 任务冻结的模型快照(历史上由 task.started 事件携带;当前 worker 不再发送该事件,此字段保留为兼容占位,通常为空)。 */
 export interface TaskModelInfo {
@@ -174,6 +175,9 @@ export class TaskEventFolder {
     this.state.items = []
     this.state.taskModel = null
     this.resetEpoch++
+    // tool.started 瞬态运行时映射一并清空:旧调用行已随 items 截断,残留 startedAt
+    // 会让同 callId 的新调用误点亮(理论不撞 id,防御性清理)。
+    clearTaskToolStarted(this.state.taskId)
     // mainAgentId 与 slashTokens 同理不参与重置:任务级身份,由 task 层(TaskSummary/
     // task.agents)传入,reset(编辑重发重拉)后不变;清掉会让随后折叠的事件回退
     // 空串键、isMain 误判。

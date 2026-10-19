@@ -105,7 +105,8 @@ export function seqGeq(a: string, b: string): boolean {
  * 参数为结构化最小形状:闭合轮传 RoundSummary,运行中尾轮传 open 轮快照
  * ({startSeq, user, userMessage})——两处 user 气泡同一口径(步骤 7 骨架出画板,
  * 尾轮不再依赖 items 含起点行)。messageId = seq(seq 即 id,m- 前缀体系已废,
- * 排序/动作键由调用方经 AgentMessageThread 的 seq prop 传入)。 */
+ * 排序/动作键由调用方经 UserBubbleMessage 的 seq prop 传入,步骤 10 起与线程内
+ * user.message kind 视图共用同一渲染组件)。 */
 export function syntheticUserRecord(round: {
   startSeq: string
   user?: string
