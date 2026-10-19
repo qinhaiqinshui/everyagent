@@ -1239,50 +1239,6 @@
   border-left-color: color-mix(in srgb, var(--text-muted) 45%, transparent);
 }
 
-.nagent-tool-batch__header {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  box-sizing: border-box;
-  width: 100%;
-  max-width: 100%;
-  min-width: 0;
-  padding: 2px 0;
-  border: none;
-  background: transparent;
-  cursor: pointer;
-  user-select: none;
-  font-size: var(--text-xs);
-  font-weight: 600;
-  color: var(--text-secondary);
-  text-align: left;
-  overflow: hidden;
-}
-
-.nagent-tool-batch__header:hover {
-  color: var(--text-primary);
-}
-
-.nagent-tool-batch__header-icon {
-  flex: 0 0 auto;
-  flex-shrink: 0;
-  color: var(--text-muted);
-}
-
-.nagent-tool-batch__header-title {
-  flex: 0 0 auto;
-  min-width: 0;
-  white-space: nowrap;
-}
-
-.nagent-tool-batch__header-chevron {
-  display: inline-flex;
-  align-items: center;
-  flex: 0 0 auto;
-  flex-shrink: 0;
-  color: var(--text-muted);
-}
-
 /* 批内调用行列表 */
 .nagent-tool-batch__rows {
   display: flex;

@@ -76,11 +76,11 @@ describe('message 视图批壳(批壳+调用行模型)', () => {
     toolResultItem('30', { callId: 'c2', content: 'boom', status: 'error', durationMs: 25000 }),
   ]
 
-  it('批头「N 个调用」可折叠,默认展开(aria-expanded=true)', () => {
+  it('批壳默认展开,直接显示调用行(无批头统计)', () => {
     const html = renderMessage(items[0], items)
     expect(html).toContain('nagent-tool-batch')
-    expect(html).toContain('3 个调用')
-    expect(html).toContain('aria-expanded="true"')
+    expect(html).not.toContain('个调用')
+    expect(html).toContain('nagent-tool-batch__rows')
   })
 
   it('调用行:等宽工具名 + per-tool 参数摘要(path/command 首行注释两段)', () => {

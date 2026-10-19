@@ -164,39 +164,20 @@ function ToolBatch({
     const timer = window.setInterval(() => setNow(Date.now()), 1000)
     return () => window.clearInterval(timer)
   }, [hasLiveRunning])
-  const [open, setOpen] = React.useState(true)
   return (
-    <div className={`nagent-tool-batch${open ? ' is-open' : ''}${interrupted ? ' nagent-tool-batch--interrupted' : ''}`}>
-      <button
-        type="button"
-        className="nagent-tool-batch__header"
-        aria-expanded={open}
-        aria-label={`共 ${toolCalls.length} 个工具调用，点击${open ? '折叠' : '展开'}`}
-        onClick={() => {
-          if (hasActiveTextSelection()) return
-          setOpen((value) => !value)
-        }}
-      >
-        <WrenchIcon size={13} className="nagent-tool-batch__header-icon" aria-hidden="true" />
-        <span className="nagent-tool-batch__header-title">{`${toolCalls.length} 个调用`}</span>
-        <span className="nagent-tool-batch__header-chevron" aria-hidden="true">
-          {open ? <ChevronDownIcon size={12} /> : <ChevronRightIcon size={12} />}
-        </span>
-      </button>
-      {open ? (
-        <div className="nagent-tool-batch__rows">
-          {toolCalls.map((call, idx) => (
-            <ToolCallRow
-              key={call.id || `call:${idx}`}
-              call={call}
-              result={results[idx]}
-              started={startedByCall[idx]}
-              interrupted={interrupted}
-              now={now}
-            />
-          ))}
-        </div>
-      ) : null}
+    <div className={`nagent-tool-batch is-open${interrupted ? ' nagent-tool-batch--interrupted' : ''}`}>
+      <div className="nagent-tool-batch__rows">
+        {toolCalls.map((call, idx) => (
+          <ToolCallRow
+            key={call.id || `call:${idx}`}
+            call={call}
+            result={results[idx]}
+            started={startedByCall[idx]}
+            interrupted={interrupted}
+            now={now}
+          />
+        ))}
+      </div>
     </div>
   )
 }
