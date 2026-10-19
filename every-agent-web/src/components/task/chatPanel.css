@@ -1358,24 +1358,6 @@
   color: var(--accent-blue);
 }
 
-/* 行尾状态(仅无耗时状态显示:排队中/执行中被中断/未执行) */
-.nagent-tool-batch__tail {
-  flex: 0 0 auto;
-  flex-shrink: 0;
-  margin-left: auto;
-  color: var(--text-muted);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-
-.nagent-tool-batch__row--error .nagent-tool-batch__tail {
-  color: var(--accent-red);
-}
-
-.nagent-tool-batch__row--error .nagent-tool-batch__tail {
-  color: var(--accent-red);
-}
-
 .nagent-tool-batch__row--interrupted .nagent-tool-batch__summary,
 .nagent-tool-batch__row--skipped .nagent-tool-batch__summary,
 .nagent-tool-batch__row--interrupted .nagent-tool-batch__name,

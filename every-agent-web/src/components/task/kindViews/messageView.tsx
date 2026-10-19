@@ -40,15 +40,6 @@ function rowStateOf(
   return started ? 'running' : 'queued'
 }
 
-const ROW_STATE_TEXT: Record<ToolCallRowState, string> = {
-  queued: '排队中',
-  running: '运行中',
-  done: '完成',
-  error: '失败',
-  interrupted: '执行中被中断',
-  skipped: '未执行',
-}
-
 /** 紧凑耗时文案:<10s 一位小数,分钟级 m:ss 补零;非法值返回空串。 */
 export function formatToolDuration(ms: number | undefined): string {
   if (ms == null || !Number.isFinite(ms) || ms < 0) return ''
@@ -107,7 +98,7 @@ function ToolCallRow({
       >
         <WrenchIcon size={12} className={`nagent-tool-batch__icon nagent-tool-batch__icon--${state}`} aria-hidden="true" />
         {durationText ? (
-          // 耗时置于图标与工具名之间,只显示时间(不带「完成/运行中」状态文案)。
+          // 耗时置于图标与工具名之间,只显示时间。
           <span className="nagent-tool-batch__duration">{durationText}</span>
         ) : null}
         <span className="nagent-tool-batch__name">{detail.toolName}</span>
@@ -121,10 +112,6 @@ function ToolCallRow({
             preview.text
           )}
         </span>
-        {!durationText ? (
-          // 无耗时状态(排队中/执行中被中断/未执行)无时间可显示,行尾保留状态文案。
-          <span className="nagent-tool-batch__tail">{ROW_STATE_TEXT[state]}</span>
-        ) : null}
         {open ? (
           <ChevronDownIcon size={12} className="nagent-tool-batch__chevron" />
         ) : (

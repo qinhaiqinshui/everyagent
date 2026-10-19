@@ -1,9 +1,10 @@
 /**
  * 内置 kind 视图单测(「任务线程统一条目与画板纯化」步骤 10,renderToString/node 口径)。
  *
- * 覆盖:message 视图批壳(批头「N 个调用」/调用行摘要/状态点 class/批折叠 aria/
+ * 覆盖:message 视图批壳(调用行摘要/WrenchIcon 状态图标 class/图标后耗时/
  * 批内同名不折叠/无正文纯下发轮无占位文案/权威耗时冻结)、运行态读秒(tool.started
- * 瞬态点亮 running)、中断态(可见终态信号灰显「执行中被中断/未执行」)、user.message
+ * 瞬态点亮 running 旋转)、中断态(可见终态信号 interrupted 黄/skipped 灰,图标
+ * 颜色承载状态,不显示中文文案)、user.message
  * 回放胶囊段与子 agent 低调样式、孤儿 tool.result 兜底、error/cancelled kind 直配
  * (run_error 错误色调/system_notice)、TaskThread 查表分发 + FallbackView 兜底。
  * 纯函数段(buildUserMessageReplaySegments)直测;渲染断言与 registry.test.ts 同款
@@ -91,17 +92,17 @@ describe('message 视图批壳(批壳+调用行模型)', () => {
     expect(html).toContain('nagent-tool-batch__preview-comment')
   })
 
-  it('状态点:done ✓绿 / error ✗红 / queued 未开始;行尾权威耗时(durationMs 冻结)', () => {
+  it('状态点:done ✓绿 / error ✗红 / queued 未开始;图标后权威耗时(durationMs 冻结)', () => {
     const html = renderMessage(items[0], items)
     expect(html).toContain('nagent-tool-batch__icon--done')
     expect(html).toContain('nagent-tool-batch__icon--error')
     expect(html).toContain('nagent-tool-batch__icon--queued')
     // ✓ 字符已移除,改用 WrenchIcon 绿色
     // ✗ 字符已移除,改用 WrenchIcon 红色
-    // 权威耗时:c1=1500ms → 1.5s;c2=25000ms → 25s;排队行无耗时
+    // 权威耗时:c1=1500ms → 1.5s;c2=25000ms → 25s;排队行无耗时也不显示状态文案
     expect(html).toContain('1.5s')
     expect(html).toContain('25s')
-    expect(html).toContain('排队中')
+    expect(html).not.toContain('排队中')
   })
 
   it('批内同名多调用不折叠(两个 read_file 两行,无「×N」聚合徽章)', () => {
@@ -160,7 +161,7 @@ describe('message 视图运行态读秒与中断态', () => {
     expect(replay).not.toContain('运行中')
   })
 
-  it('批中断(任务级 cancelled 信号):已 started 标「执行中被中断」,未 started 标「未执行」灰显', () => {
+  it('批中断(任务级 cancelled 信号):已 started 标 interrupted 黄,未 started 标 skipped 灰显', () => {
     const item = messageItem('10', { toolCalls: [callOf('c1', 'shell', '{}'), callOf('c2', 'shell', '{}')] })
     recordToolStarted(TASK_ID, { callId: 'c1', name: 'shell', arguments: '{}', startedAt: Date.now() })
     const cancelled: ThreadItem = {
@@ -168,11 +169,11 @@ describe('message 视图运行态读秒与中断态', () => {
     }
     const html = renderMessage(item, [item, cancelled])
     expect(html).toContain('nagent-tool-batch__icon--interrupted')
-    expect(html).toContain('执行中被中断')
     expect(html).toContain('nagent-tool-batch__icon--skipped')
-    expect(html).toContain('未执行')
     expect(html).toContain('nagent-tool-batch--interrupted')
-    // 终态信号到达后不再有 running/queued 读秒
+    // 状态由图标颜色/动效承载,不再显示中文状态文案
+    expect(html).not.toContain('执行中被中断')
+    expect(html).not.toContain('未执行')
     expect(html).not.toContain('运行中')
     expect(html).not.toContain('排队中')
   })
