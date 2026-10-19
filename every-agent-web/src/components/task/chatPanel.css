@@ -1345,7 +1345,20 @@
   user-select: text;
 }
 
-/* 行尾状态与耗时(queued 呼吸提示/running 读秒/完成态权威耗时/中断灰显) */
+/* 耗时(图标与工具名之间,只显示时间;running 读秒/完成态权威耗时) */
+.nagent-tool-batch__duration {
+  flex: 0 0 auto;
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.nagent-tool-batch__row--running .nagent-tool-batch__duration {
+  color: var(--accent-blue);
+}
+
+/* 行尾状态(仅无耗时状态显示:排队中/执行中被中断/未执行) */
 .nagent-tool-batch__tail {
   flex: 0 0 auto;
   flex-shrink: 0;
@@ -1355,8 +1368,8 @@
   white-space: nowrap;
 }
 
-.nagent-tool-batch__row--running .nagent-tool-batch__tail {
-  color: var(--accent-blue);
+.nagent-tool-batch__row--error .nagent-tool-batch__tail {
+  color: var(--accent-red);
 }
 
 .nagent-tool-batch__row--error .nagent-tool-batch__tail {
