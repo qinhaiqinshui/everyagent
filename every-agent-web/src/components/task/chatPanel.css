@@ -654,11 +654,6 @@
   transform: rotate(180deg);
 }
 
-/* 子 agent 输入气泡的展开/收起按钮靠右对齐（主 agent 用户消息保持居中）。 */
-.nagent-msg__bubble--sub-agent .nagent-msg__bubble-toggle {
-  align-self: flex-end;
-}
-
 /* 用户消息编辑按钮样式已迁入 task-edit-resend 插件（web/task-edit-resend.css）。 */
 
 /* ─── 用户消息动作区容器（ui.user_message_actions，统一控制显隐） ───
