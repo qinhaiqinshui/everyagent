@@ -3,6 +3,7 @@ import type { RoundSummary } from '@/task/types'
 import type { TaskThreadItem } from '@/task/eventFolder'
 import { InlineSpinner } from '@/components/shared/ui'
 import TaskThread from './TaskThread'
+import { sliceRound } from './roundsView'
 
 /**
  * 轮详情（纯视图）：按轮的 startSeq/endSeq 从「单一线程真相源 items」中切片渲染该轮过程内容。
@@ -80,27 +81,4 @@ export default function RoundDetail({
       ) : null}
     </div>
   )
-}
-
-/** 从 items 切出 [startSeq 之后, endSeq]（含终点、不含起点）的线程项，并剥掉 foldRole。 */
-function sliceRound(items: TaskThreadItem[], round: RoundSummary): TaskThreadItem[] {
-  const startIdx = items.findIndex(
-    (it) => it.type === 'agent_message' && it.message.messageId === `m-${round.startSeq}`,
-  )
-  let endIdx = -1
-  if (round.endSeq) {
-    endIdx = items.findIndex(
-      (it) => it.type === 'agent_message' && it.message.messageId === `m-${round.endSeq}`,
-    )
-  }
-  const from = startIdx >= 0 ? startIdx + 1 : 0
-  const to = endIdx >= 0 ? endIdx + 1 : items.length
-  return items.slice(from, to).map(stripFoldRole)
-}
-
-/** 剥掉 foldRole 折叠窗口标记：轮详情要求完整过程直接展开，不再被 TaskThread 折叠。 */
-function stripFoldRole(item: TaskThreadItem): TaskThreadItem {
-  return item.type === 'agent_message' && item.foldRole
-    ? { ...item, foldRole: undefined }
-    : item
 }
