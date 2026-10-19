@@ -1,45 +1,18 @@
 /**
  * 任务查询服务(hub 版)。
  *
- * n 分支同位置的服务从浏览器仓储(taskRepository 等)聚合;本前端的任务
+ * n 分支同位置的服务从浏览器仓储(taskRepository 等)聚合线程;本前端的任务
  * 真相源在 worker:列表来自 taskStore(tasks.list + tasks 频道镜像),
- * 线程来自 taskStream(事件折叠器产物)。本服务只做快照整形,保持
- * TasksPanel / TaskChat 消费的签名不变。
+ * 线程来自 taskStream(事件折叠器产物,消费方直接持 TaskStreamHandle/useTaskStream,
+ * 「与 n 同形」的线程快照 API 已随步骤 8 五字段统一删除)。本服务只做任务列表
+ * 快照整形与 task.run/队列遥控,保持 TasksPanel / TaskChat 消费的签名不变。
  */
 import { formatTaskStatus, resolveTaskStatusTone, type TaskStatusTone } from '@/task/taskStatusPresentation'
-import type { TaskThreadItem } from '@/task/eventFolder'
-import type { AgentMessageRecord, ContextMonitorSnapshot } from '@/types'
-import type { TaskStatus, TaskTraceRecord } from '@/task/types'
+import type { ContextMonitorSnapshot } from '@/types'
+import type { TaskStatus } from '@/task/types'
 import { taskStore, type TaskListEntry } from '@/task/taskStore'
-import { taskStreamManager } from '@/task/taskStream'
 import { hubSession } from '@/hub/session'
 import { workspaceRegistry } from '@/hub/workspaceRegistry'
-
-export type { TaskThreadItem }
-
-/** 聊天页头部展示快照。 */
-export interface TaskChatHeaderSnapshot {
-  displayTitle: string
-  /** 任务挂靠的工作区根(头部工作区 chip)。 */
-  workspace?: string
-}
-
-/** Task 聊天页最小运行快照。 */
-export interface TaskChatTaskSnapshot {
-  taskId: string
-  status: TaskStatus
-  /** 模型配置(worker 侧解析,前端只读展示)。 */
-  llmConfigSnapshot?: { provider: string; model: string; reasoningEffort?: string }
-  metadata?: Record<string, unknown>
-}
-
-/** Task 聊天页聚合快照。 */
-export interface TaskChatSnapshot {
-  task: TaskChatTaskSnapshot
-  header: TaskChatHeaderSnapshot
-  thread: TaskThreadItem[]
-  contextUsage: ContextMonitorSnapshot | null
-}
 
 /** Task 列表展示快照(与 n 同形,attachedSkill* 恒为空)。 */
 export interface TaskListItemSnapshot {
@@ -97,44 +70,6 @@ export const taskQueryService = {
     const entry = taskStore.get(taskId)
     if (!entry) return null
     return { status: entry.status, displayTitle: entry.title }
-  },
-
-  /** 统一显示线程(折叠器产物,缓存秒开 + sync 增量)。 */
-  getTaskThread(taskId: string): TaskThreadItem[] {
-    return taskStreamManager.get(taskId).state.items
-  },
-
-  /** 任务下全部可展示的 agent messages(从线程抽取)。 */
-  getTaskAgentMessages(taskId: string): AgentMessageRecord[] {
-    return this.getTaskThread(taskId)
-      .filter((item): item is Extract<TaskThreadItem, { type: 'agent_message' }> => item.type === 'agent_message')
-      .map((item) => item.message)
-      .filter((message) => message.role !== 'system' && message.historyMode !== 'hidden')
-  },
-
-  /** 任务下全部 trace(从线程抽取)。 */
-  getTaskTraces(taskId: string): TaskTraceRecord[] {
-    return this.getTaskThread(taskId)
-      .filter((item): item is Extract<TaskThreadItem, { type: 'task_trace' }> => item.type === 'task_trace')
-      .map((item) => item.trace)
-  },
-
-  /** 聊天页聚合快照。 */
-  getTaskChatSnapshot(taskId: string): TaskChatSnapshot {
-    const entry = taskStore.get(taskId)
-    if (!entry) {
-      throw new Error(`任务不存在:${taskId}(worker 可能已重启,任务为内存态)`)
-    }
-    return {
-      task: {
-        taskId,
-        status: entry.status,
-        metadata: { workerId: entry.workerId, error: entry.error },
-      },
-      header: { displayTitle: entry.title, workspace: entry.workspace },
-      thread: this.getTaskThread(taskId),
-      contextUsage: entry.contextUsage ?? null,
-    }
   },
 
   /**

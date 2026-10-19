@@ -1,7 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react'
-import type { TaskThreadItem } from '@/query/taskQueryService'
+import type { ThreadItem } from '@/task/threadItem'
+import type { TracePayload } from '@/task/threadItem'
+import { MESSAGE_KINDS, payloadAs } from '@/task/threadItem'
+import type { PluginTraceRecord } from '@everyagent/plugin-api'
 import type { AgentMessageRecord } from '@/types'
-import type { TaskTraceRecord } from '@/task/types'
 import { BrandMark } from '@/components/shared/BrandLoadingBlock'
 import { getTraceType, resolveTraceIcon, stringifyTraceContent } from '@/plugin/traceTypeRegistry'
 import AgentMessageThread from '../task/AgentMessageThread'
@@ -13,8 +15,8 @@ import { ChevronDownIcon, ChevronRightIcon } from '../shared/AppGlyphs'
 export interface TaskThreadProps {
   /** 当前 Task ID。 */
   taskId: string
-  /** 已按 createdAt 排序好的线程项。 */
-  items: TaskThreadItem[]
+  /** 已按 seq 升序排好的线程项(五字段 ThreadItem)。 */
+  items: ThreadItem[]
   /** 当前是否处于加载中。 */
   loading?: boolean
   /** 主 agent 稳定 Id（渲染层消费 agentId 区分子 agent 输入；透传给 AgentMessageThread）。 */
@@ -125,26 +127,89 @@ interface TaskThreadToolMaps {
   toolResultById: Map<string, AgentMessageRecord>
 }
 
+/**
+ * ThreadItem → AgentMessageThread 消息视图模型(渲染内部形状:AgentMessageRecord,
+ * 从 message 族 kind 的 payload 适配;步骤 10 分发切换时随视图迁移)。
+ * 消息族 kind(user.message/message/tool.result)适配;trace 族返回 null(TaskTraceShell 渲染)。
+ */
+function messageViewOf(item: ThreadItem): AgentMessageRecord | null {
+  switch (item.kind) {
+    case 'user.message': {
+      const p = payloadAs(item, 'user.message')
+      return {
+        messageId: item.seq,
+        agentId: item.agentId,
+        role: 'user',
+        content: p?.content ?? '',
+        rawContent: p?.rawContent,
+        historyMode: 'thread_only',
+        createdAt: item.ts,
+        updatedAt: item.ts,
+        sequence: Number(item.seq),
+      }
+    }
+    case 'message': {
+      const p = payloadAs(item, 'message')
+      return {
+        messageId: item.seq,
+        agentId: item.agentId,
+        role: 'assistant',
+        content: p?.content ?? '',
+        reasoning: p?.thinking,
+        toolCalls: p?.toolCalls,
+        historyMode: 'thread_only',
+        createdAt: item.ts,
+        updatedAt: item.ts,
+        sequence: Number(item.seq),
+        // 折叠层帧状态(streaming/reasoningDone)→ 视图模型 metadata(消息视图消费口径)。
+        metadata: {
+          ...(p?.streaming !== undefined ? { streaming: p.streaming } : {}),
+          ...(p?.reasoningDone !== undefined ? { reasoningDone: p.reasoningDone } : {}),
+        },
+      }
+    }
+    case 'tool.result': {
+      const p = payloadAs(item, 'tool.result')
+      return {
+        messageId: item.seq,
+        agentId: item.agentId,
+        role: 'tool',
+        content: p?.content ?? '',
+        toolCallId: p?.callId,
+        toolName: p?.toolName,
+        status: p?.status,
+        historyMode: 'thread_only',
+        createdAt: item.ts,
+        updatedAt: item.ts,
+        sequence: Number(item.seq),
+      }
+    }
+    default:
+      return null
+  }
+}
+
 /** 从一段线程项中提取工具调用 join 索引。 */
-function buildToolMaps(items: TaskThreadItem[]): TaskThreadToolMaps {
+function buildToolMaps(items: ThreadItem[]): TaskThreadToolMaps {
   const toolCallNameById = new Map<string, string>()
   const toolCallPayloadById = new Map<string, Record<string, unknown>>()
   // callId → tool 结果消息：供 assistant 下发块按 callId 合并结果（live/历史同一套 join）。
   const toolResultById = new Map<string, AgentMessageRecord>()
-  for (const it of items) {
-    if (it.type !== 'agent_message') {
+  for (const item of items) {
+    if (item.kind === 'message') {
+      for (const call of payloadAs(item, 'message')?.toolCalls ?? []) {
+        toolCallNameById.set(call.id, call.function.name)
+        // 仅存下发参数（callId → arguments）。结果内容在 tool.result 项的 payload.content 中，
+        // 不应覆盖此处，否则 resolveToolCallPayload 会返回结果而非参数（见 AgentMessageThread 聚合块）。
+        toolCallPayloadById.set(call.id, parseToolPayload(call.function.arguments))
+      }
       continue
     }
-    for (const call of it.message.toolCalls ?? []) {
-      toolCallNameById.set(call.id, call.function.name)
-      // 仅存下发参数（callId → arguments）。结果内容在 tool 角色消息的 content 中，
-      // 不应覆盖此处，否则 resolveToolCallPayload 会返回结果而非参数（见 AgentMessageThread 聚合块）。
-      toolCallPayloadById.set(call.id, parseToolPayload(call.function.arguments))
-    }
-    const toolCallId = it.message.toolCallId?.trim()
-    if (it.message.role === 'tool' && toolCallId) {
-      if (!toolResultById.has(toolCallId)) {
-        toolResultById.set(toolCallId, it.message)
+    if (item.kind === 'tool.result') {
+      const callId = payloadAs(item, 'tool.result')?.callId?.trim()
+      const view = messageViewOf(item)
+      if (callId && view && !toolResultById.has(callId)) {
+        toolResultById.set(callId, view)
       }
     }
   }
@@ -153,9 +218,11 @@ function buildToolMaps(items: TaskThreadItem[]): TaskThreadToolMaps {
 
 /**
  * 将线程项按连续同角色消息分组渲染（使用调用方传入的工具 join 索引）。
+ * 消息族 kind 与 role 一一对应(user.message→user / message→assistant / tool.result→tool),
+ * 其余 kind 按 trace 族走 TaskTraceShell。
  */
 function renderMessageGroups(
-  items: TaskThreadItem[],
+  items: ThreadItem[],
   taskId: string,
   maps: TaskThreadToolMaps,
   mainAgentId: string,
@@ -170,48 +237,47 @@ function renderMessageGroups(
   let i = 0
   while (i < items.length) {
     const item = items[i]
-    if (item.type !== 'agent_message') {
-      result.push(renderTaskTraceItem(item as Extract<TaskThreadItem, { type: 'task_trace' }>, taskId))
+    if (!MESSAGE_KINDS.has(item.kind)) {
+      result.push(renderTraceItem(item, taskId))
       i += 1
       continue
     }
 
-    type AgentMsgItem = Extract<TaskThreadItem, { type: 'agent_message' }>
-    const groupMessages: AgentMsgItem[] = []
-    const groupRole = (item as AgentMsgItem).message.role
+    const groupItems: ThreadItem[] = []
 
-    if (groupRole === 'tool') {
+    if (item.kind === 'tool.result') {
       while (i < items.length) {
         const current = items[i]
-        if (current.type === 'agent_message' && current.message.role === 'tool') {
-          groupMessages.push(current)
+        if (current.kind === 'tool.result') {
+          groupItems.push(current)
           i += 1
           continue
         }
-        // task_trace 不纳入 tool 分组，使其保持独立排序位置（落在触发它的工具调用之后）
+        // trace 族不纳入 tool 分组，使其保持独立排序位置（落在触发它的工具调用之后）
         break
       }
     } else {
-      while (i < items.length && items[i].type === 'agent_message' && (items[i] as AgentMsgItem).message.role === groupRole) {
-        groupMessages.push(items[i] as AgentMsgItem)
+      while (i < items.length && items[i].kind === item.kind) {
+        groupItems.push(items[i])
         i += 1
       }
     }
 
-    if (groupRole === 'tool') {
-      const firstTool = groupMessages[0]?.message
-      const hasMatchingDispatch = Boolean(
-        firstTool?.toolCallId?.trim() && toolCallNameById.has(firstTool.toolCallId.trim()),
-      )
+    if (item.kind === 'tool.result') {
+      const first = groupItems[0]
+      const firstView = messageViewOf(first)
+      const firstCallId = payloadAs(first, 'tool.result')?.callId?.trim()
+      const hasMatchingDispatch = Boolean(firstCallId && toolCallNameById.has(firstCallId))
       // 结果已被对应 assistant 下发块吸收（按 callId join），不再单独渲染，避免重复 block。
-      if (!hasMatchingDispatch) {
+      if (!hasMatchingDispatch && firstView) {
         result.push(
           <AgentMessageThread
-            key={`toolgroup:${groupMessages[0].message.messageId}`}
-            message={groupMessages[0].message}
+            key={`toolgroup:${first.seq}`}
+            seq={first.seq}
+            message={firstView}
             taskId={taskId}
             mainAgentId={mainAgentId}
-            mergedToolMessages={groupMessages.map((groupItem) => groupItem.message)}
+            mergedToolMessages={groupItems.map((groupItem) => messageViewOf(groupItem)).filter(Boolean) as AgentMessageRecord[]}
             resolveToolCallName={toolCallNameOf}
             resolveToolCallPayload={(toolCallId) => toolCallPayloadById.get(toolCallId)}
           />,
@@ -220,11 +286,13 @@ function renderMessageGroups(
       continue
     }
 
-    if (groupMessages.length === 1) {
+    if (groupItems.length === 1) {
+      const first = groupItems[0]
       result.push(
         <AgentMessageThread
-          key={`message:${groupMessages[0].message.messageId}`}
-          message={groupMessages[0].message}
+          key={`message:${first.seq}`}
+          seq={first.seq}
+          message={messageViewOf(first)!}
           taskId={taskId}
           mainAgentId={mainAgentId}
           resolveToolCallPayload={(toolCallId) => toolCallPayloadById.get(toolCallId)}
@@ -235,11 +303,12 @@ function renderMessageGroups(
     }
 
     result.push(
-      <div className="nagent-msg-group" key={`group:${groupMessages[0].message.messageId}`}>
-        {groupMessages.map((groupItem, idx) => (
+      <div className="nagent-msg-group" key={`group:${groupItems[0].seq}`}>
+        {groupItems.map((groupItem, idx) => (
           <AgentMessageThread
-            key={`message:${groupItem.message.messageId}`}
-            message={groupItem.message}
+            key={`message:${groupItem.seq}`}
+            seq={groupItem.seq}
+            message={messageViewOf(groupItem)!}
             taskId={taskId}
             mainAgentId={mainAgentId}
             isContinuation={idx > 0}
@@ -256,19 +325,19 @@ function renderMessageGroups(
 
 /** 将线程项按连续同角色消息分组渲染（自行构建工具 join 索引）。 */
 function buildMessageGroups(
-  items: TaskThreadItem[],
+  items: ThreadItem[],
   taskId: string,
   mainAgentId: string,
 ): React.ReactNode[] {
   return renderMessageGroups(items, taskId, buildToolMaps(items), mainAgentId)
 }
 
-/** 渲染单条任务 trace。 */
-function renderTaskTraceItem(
-  item: Extract<TaskThreadItem, { type: 'task_trace' }>,
+/** 渲染单条 trace 族线程项。 */
+function renderTraceItem(
+  item: ThreadItem,
   taskId: string,
 ): React.ReactNode {
-  return <TaskTraceShell key={`trace:${item.trace.traceId}`} item={item} taskId={taskId} />
+  return <TaskTraceShell key={`trace:${item.seq}`} item={item} taskId={taskId} />
 }
 
 /** 解析工具调用 / 工具结果的 JSON 负载。 */
@@ -288,24 +357,41 @@ function parseToolPayload(rawText: string | undefined): Record<string, unknown> 
   return {}
 }
 
-/** 单条 task trace 线程项。 */
+/** 单条 trace 族线程项(payload = trace 形状:title/summary/content/data)。 */
 function TaskTraceShell({
   item,
   taskId,
 }: {
-  item: Extract<TaskThreadItem, { type: 'task_trace' }>
+  item: ThreadItem
   taskId: string
 }) {
-  const { trace } = item
+  const payload: TracePayload = (item.payload as TracePayload | undefined) ?? { title: '' }
   const [open, setOpen] = React.useState(false)
-  const traceType = getTraceType(trace.kind)
+  // trace 类型解析 key:error/cancelled 的渲染消费口径沿用旧 trace.kind 注册
+  // (run_error 错误色调/alert 图标、system.notice 图标),步骤 10 kind 渲染注册表
+  // 分发切换时统一收敛。
+  const traceTypeKey = item.kind === 'error' ? 'run_error' : item.kind === 'cancelled' ? 'system_notice' : item.kind
+  const traceType = getTraceType(traceTypeKey)
+  // traceTypeRegistry(插件 trace 类型扩展点)消费 PluginTraceRecord 形状:
+  // 由 item 五字段 + payload 合成兼容视图对象(getSummary/renderContent/canExpand/getIcon)。
+  const trace: PluginTraceRecord = {
+    traceId: item.seq,
+    taskId,
+    agentId: item.agentId || undefined,
+    kind: traceTypeKey,
+    title: payload.title,
+    summary: payload.summary,
+    content: payload.content,
+    metadata: payload.data,
+    createdAt: item.ts,
+  }
   const icon = resolveTraceIcon(trace.icon ?? traceType.getIcon?.(trace))
-  const title = trace.title?.trim() || ''
+  const title = payload.title?.trim() || ''
   const showTitle = !traceType.hideTitle && !!title
   const summary = buildTraceSummary(trace, traceType.getSummary)
   const titleText = [showTitle ? title : '', summary].filter(Boolean).join(' ')
-  // 缺省仅当存在 content 时才可折叠/展开；kind 自定义 canExpand(如 auth.review 数据在 metadata)时以其结果为准。
-  const expandable = trace.content != null || traceType.canExpand?.(trace) === true
+  // 缺省仅当存在 content 时才可折叠/展开；kind 自定义 canExpand(如 auth.review 数据在 data)时以其结果为准。
+  const expandable = payload.content != null || traceType.canExpand?.(trace) === true
   const content = expandable ? (traceType.renderContent?.(trace, { taskId }) ?? null) : null
 
   const summaryRow = expandable ? (
@@ -343,12 +429,12 @@ function TaskTraceShell({
 
 /** 生成收起态摘要。 */
 function buildTraceSummary(
-  trace: TaskTraceRecord,
-  getSummary?: (trace: TaskTraceRecord) => string | undefined,
+  trace: Pick<PluginTraceRecord, 'summary' | 'content'>,
+  getSummary?: (trace: PluginTraceRecord) => string | undefined,
 ): string {
   // 已注册 getSummary 时以其结果为准（返回空即不展示摘要）；未注册的旧数据才回退派生。
   const raw = getSummary
-    ? (getSummary(trace)?.trim() ?? '')
+    ? (getSummary(trace as PluginTraceRecord)?.trim() ?? '')
     : (trace.summary?.trim() || stringifyTraceContent(trace.content).trim())
   if (!raw) {
     return ''

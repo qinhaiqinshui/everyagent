@@ -42,7 +42,7 @@ import { createSnowflakeId } from '@/utils/snowflakeId'
 import { taskQueryService } from '@/query/taskQueryService'
 import { isTaskActive } from '@/task/taskStatusPresentation'
 import type { AgentMetaSnapshot } from '@/task/agentLedger'
-import type { TaskThreadItem } from '@/task/eventFolder'
+import type { ThreadItem } from '@/task/threadItem'
 import { taskStore } from '@/task/taskStore'
 import { taskStreamManager, type TaskStreamHandle } from '@/task/taskStream'
 import { workspaceRegistry, type WorkspaceEntry } from '@/hub/workspaceRegistry'
@@ -737,7 +737,9 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
       seen.set(stableMainAgentId, '主 agent')
     }
     for (const item of items) {
-      const rawKey = item.type === 'agent_message' ? item.message.agentId : (item.trace.agentId ?? '')
+      // ThreadItem.agentId 即归属键(折叠器写入,事件缺 agentId 已在入口归一;
+      // 空串 = mainAgentId 未灌入的极早期形态,此处 || stableMainAgentId 双保险)。
+      const rawKey = item.agentId
       const agentKey = rawKey || stableMainAgentId
       if (agentKey && !seen.has(agentKey)) {
         seen.set(agentKey, stream?.resolveAgentTitle(rawKey) ?? rawKey)
@@ -1112,7 +1114,7 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
  * 新引用,保证下游 memo / effect 的 [items] 依赖能感知折叠推进(新子 agent
  * 出现/标题更新/流式 delta 到达时刷新)。
  */
-function useTaskStream(taskId: string | null): [TaskStreamHandle | null, TaskThreadItem[]] {
+function useTaskStream(taskId: string | null): [TaskStreamHandle | null, ThreadItem[]] {
   const [version, setVersion] = React.useState(0)
   const stream = React.useMemo(
     () => (taskId ? taskStreamManager.get(taskId) : null),
@@ -1124,7 +1126,7 @@ function useTaskStream(taskId: string | null): [TaskStreamHandle | null, TaskThr
     return unsubscribe
   }, [stream])
   // 每次 notify(version 变)都产生新的 items 引用,驱动下游 memo / effect 刷新。
-  const items = React.useMemo<TaskThreadItem[]>(
+  const items = React.useMemo<ThreadItem[]>(
     () => (stream ? [...stream.state.items] : []),
     [stream, version],
   )

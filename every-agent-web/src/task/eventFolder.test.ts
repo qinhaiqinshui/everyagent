@@ -2,15 +2,14 @@
  * TaskEventFolder 特征化测试(Phase 0 行为护栏,计划「任务线程统一条目与画板纯化」步骤 1)。
  *
  * 目的:锁定折叠器 + 事件注册表的**现状行为**(乱序 seq 归位/重放去重/流式聚合与定稿/
- * 截断/agent 台账镜像(folder.ledger)/isMain 判定/线程项无折叠标记/defaultHandler
- * 兜底),为后续重构提供行为基线——先锁后删,
- * 重构时同步更新断言而非绕过(foldRole 打标断言已随步骤 5「删除 foldRole 体系」移除,
- * 口径改为线程项无 foldRole 字段;台账断言已随步骤 6「agentMeta/agentStates 拆出
- * eventFolder」改指向独立台账 store folder.ledger——事件仍经 fold() 同一入口喂入,
- * 锁的是 registry handler → 台账 store 的真实写路径,语义不变;foldRound 合成折入/
- * upgradeSyntheticUser 骨架升级/metadata.synthetic 标记用例已随步骤 7「rounds 骨架
- * 出画板」删除——画板纯化为 wire 折叠产物,骨架行为不复存在,rounds 快照不再进 items;
- * 另补 roundRealFloor/roundRealCeiling 区间缓存判定用例,锁定懒加载缓存语义)。
+ * 截断/agent 台账镜像(folder.ledger)/isMain 判定/defaultHandler 兜底),为后续重构提供
+ * 行为基线——先锁后删,重构时同步更新断言而非绕过(foldRole 打标断言已随步骤 5「删除
+ * foldRole 体系」移除;台账断言已随步骤 6「agentMeta/agentStates 拆出 eventFolder」改指向
+ * 独立台账 store folder.ledger——事件仍经 fold() 同一入口喂入,锁的是 registry handler →
+ * 台账 store 的真实写路径,语义不变;foldRound 合成折入/upgradeSyntheticUser 骨架升级/
+ * metadata.synthetic 标记用例已随步骤 7「rounds 骨架出画板」删除;步骤 8「ThreadItem
+ * 五字段统一」起断言改为五字段形状——seq 即 id(m-/t- 前缀 id 体系废除)、payload 按
+ * kind 类型化读取,行为语义保持)。
  *
  * 纪律:只断言现状,不改源码;事件经 fold(FoldableTaskEvent) 喂入,handler 查表分发
  * (eventRegistry.ts),不 mock 网络。
@@ -21,7 +20,9 @@ import {
   compareSeq,
   emptyThreadState,
 } from './eventFolder'
-import type { FoldableTaskEvent, TaskThreadItem } from './eventFolder'
+import type { FoldableTaskEvent } from './eventFolder'
+import type { ThreadItem, TracePayload, MessagePayload } from './threadItem'
+import { payloadAs } from './threadItem'
 import type { TaskAgentLedgerItem } from './task-poll'
 
 // Snowflake 形态 seq(19 位十进制,> 2^53):Number() 会把仅末位不同的两个大数坍缩为
@@ -51,25 +52,23 @@ function ev(
   return { seq, ts, event, agentId, payload }
 }
 
-/** items 的 id 序列(agent_message 取 messageId,task_trace 取 traceId)。 */
-function itemIds(folder: TaskEventFolder): string[] {
-  return folder.state.items.map((it) => (it.type === 'agent_message' ? it.message.messageId : it.trace.traceId))
+/** items 的 seq 序列(seq 即 id,items 恒按 seq 升序)。 */
+function seqsOf(folder: TaskEventFolder): string[] {
+  return folder.state.items.map((it) => it.seq)
 }
 
-function agentMessageAt(folder: TaskEventFolder, index: number): Extract<TaskThreadItem, { type: 'agent_message' }> {
+/** 取 items[index] 且校验 kind(五字段统一后条目无 type 判别,kind 即分类)。 */
+function itemAt(folder: TaskEventFolder, index: number, kind: string): ThreadItem {
   const item = folder.state.items[index]
-  if (!item || item.type !== 'agent_message') {
-    throw new Error(`items[${index}] 不是 agent_message: ${JSON.stringify(item)}`)
+  if (!item || item.kind !== kind) {
+    throw new Error(`items[${index}] 不是 kind=${kind}: ${JSON.stringify(item)}`)
   }
   return item
 }
 
-function findByMessageId(folder: TaskEventFolder, messageId: string): Extract<TaskThreadItem, { type: 'agent_message' }> {
-  const item = folder.state.items.find((it) => it.type === 'agent_message' && it.message.messageId === messageId)
-  if (!item || item.type !== 'agent_message') {
-    throw new Error(`未找到 messageId=${messageId}`)
-  }
-  return item
+/** 五字段键集合(锁定条目只有 seq/ts/agentId/kind/payload,无折叠标记等额外字段)。 */
+function fiveKeysOf(item: ThreadItem): string[] {
+  return Object.keys(item).sort()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -82,10 +81,10 @@ describe('乱序到达按 seq 归位(大数精度不坍缩)', () => {
     folder.fold(ev(SEQ_200, 'user.message', { content: '第二条' }))
     folder.fold(ev(SEQ_100, 'user.message', { content: '第一条' }))
     expect(folder.state.items).toHaveLength(2)
-    expect(itemIds(folder)).toEqual([`m-${SEQ_100}`, `m-${SEQ_200}`])
+    expect(seqsOf(folder)).toEqual([SEQ_100, SEQ_200])
     // 中间 seq 迟到,插入中间位置
     folder.fold(ev(SEQ_150, 'user.message', { content: '中间条' }))
-    expect(itemIds(folder)).toEqual([`m-${SEQ_100}`, `m-${SEQ_150}`, `m-${SEQ_200}`])
+    expect(seqsOf(folder)).toEqual([SEQ_100, SEQ_150, SEQ_200])
   })
 
   it('仅末位数字不同的雪花 seq 不因 Number 精度坍缩而判重', () => {
@@ -123,12 +122,41 @@ describe('重连重放去重(seq 键控)', () => {
     expect(folder.state.items).toHaveLength(2)
   })
 
+  it('tool.result 折入 kind=tool.result + payload{callId, content, status, toolName, startedAt?, durationMs?}', () => {
+    const folder = newFolder(MAIN)
+    // 先下发 toolCalls(callId → 工具名注册表回填 toolName)
+    folder.fold(ev(SEQ_150, 'message', {
+      content: '',
+      data: { toolCalls: [{ id: 'call-1', name: 'toolA', arguments: '{"a":1}' }] },
+    }))
+    folder.fold(ev(SEQ_200, 'tool.result', {
+      content: '工具输出',
+      data: { callId: 'call-1', status: 'error', startedAt: 12345, durationMs: 678 },
+    }))
+    const item = itemAt(folder, 1, 'tool.result')
+    expect(fiveKeysOf(item)).toEqual(['agentId', 'kind', 'payload', 'seq', 'ts'])
+    const p = payloadAs(item, 'tool.result')!
+    expect(p.callId).toBe('call-1')
+    expect(p.content).toBe('工具输出')
+    expect(p.status).toBe('error')
+    expect(p.startedAt).toBe(12345)
+    expect(p.durationMs).toBe(678)
+    expect(p.toolName).toBe('toolA')
+    // 无 status/计时字段的老事件:status 缺省 success,可选字段 undefined
+    folder.fold(ev(SEQ_300, 'tool.result', { content: '旧事件输出', data: { callId: 'call-x' } }))
+    const oldP = payloadAs(itemAt(folder, 2, 'tool.result'), 'tool.result')!
+    expect(oldP.status).toBe('success')
+    expect(oldP.startedAt).toBeUndefined()
+    expect(oldP.durationMs).toBeUndefined()
+    expect(oldP.toolName).toBeUndefined()
+  })
+
   it('轮事件(message)同 seq 重复 fold 复用同一条 item(不新增、内容覆盖)', () => {
     const folder = newFolder(MAIN)
     folder.fold(ev(SEQ_100, 'message', { content: '回复' }))
     folder.fold(ev(SEQ_100, 'message', { content: '回复(重放)' }))
     expect(folder.state.items).toHaveLength(1)
-    expect(findByMessageId(folder, `m-${SEQ_100}`).message.content).toBe('回复(重放)')
+    expect(payloadAs(itemAt(folder, 0, 'message'), 'message')?.content).toBe('回复(重放)')
   })
 })
 
@@ -137,17 +165,21 @@ describe('重连重放去重(seq 键控)', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('thinking/delta 流式聚合与 message 权威定稿', () => {
-  it('同 seq 增量追加到同一条 agent_message,随后 message 权威替换并关流', () => {
+  it('同 seq 增量帧聚合进同一条 message 项 payload,随后 message 权威替换并关流', () => {
     const folder = newFolder(MAIN)
     folder.fold(ev(SEQ_100, 'thinking', { content: '思考A' }, MAIN, 1100))
     folder.fold(ev(SEQ_100, 'thinking', { content: '思考B' }, MAIN, 1200))
     folder.fold(ev(SEQ_100, 'delta', { content: '正文A' }, MAIN, 1300))
     folder.fold(ev(SEQ_100, 'delta', { content: '正文B' }, MAIN, 1400))
     expect(folder.state.items).toHaveLength(1)
-    const streaming = agentMessageAt(folder, 0)
-    expect(streaming.message.reasoning).toBe('思考A思考B')
-    expect(streaming.message.content).toBe('正文A正文B')
-    expect(streaming.message.metadata?.streaming).toBe(true)
+    const streaming = itemAt(folder, 0, 'message')
+    expect(streaming.kind).toBe('message')
+    const sp = payloadAs(streaming, 'message')!
+    expect(sp.thinking).toBe('思考A思考B')
+    expect(sp.content).toBe('正文A正文B')
+    expect(sp.streaming).toBe(true)
+    // 正文首达且已有思考 → 思考阶段结束标记置真(驱动前端思考块自动折叠)
+    expect(sp.reasoningDone).toBe(true)
 
     // message 权威定稿:content/thinking 替换、toolCalls 记录、streaming 翻 false
     folder.fold(ev(SEQ_100, 'message', {
@@ -161,14 +193,15 @@ describe('thinking/delta 流式聚合与 message 权威定稿', () => {
       },
     }, MAIN, 1500))
     expect(folder.state.items).toHaveLength(1)
-    const finalized = agentMessageAt(folder, 0)
-    expect(finalized.message.content).toBe('权威正文')
-    expect(finalized.message.reasoning).toBe('权威思考')
-    expect(finalized.message.toolCalls?.map((c) => c.id)).toEqual(['call-1', 'call-2'])
-    expect(finalized.message.toolCalls?.[0]?.function.name).toBe('toolA')
-    expect(finalized.message.metadata?.streaming).toBe(false)
-    // 带工具调用的定稿:线程项无折叠标记
-    expect(finalized).not.toHaveProperty('foldRole')
+    const finalized = itemAt(folder, 0, 'message')
+    const fp = payloadAs(finalized, 'message')!
+    expect(fp.content).toBe('权威正文')
+    expect(fp.thinking).toBe('权威思考')
+    expect(fp.toolCalls?.map((c) => c.id)).toEqual(['call-1', 'call-2'])
+    expect(fp.toolCalls?.[0]?.function.name).toBe('toolA')
+    expect(fp.streaming).toBe(false)
+    // 带工具调用的定稿:线程项为五字段,无折叠标记
+    expect(fiveKeysOf(finalized)).toEqual(['agentId', 'kind', 'payload', 'seq', 'ts'])
 
     // message 重复帧:toolCalls 按 callId 去重追加,内容替换;thinking 缺省不覆盖
     folder.fold(ev(SEQ_100, 'message', {
@@ -181,10 +214,10 @@ describe('thinking/delta 流式聚合与 message 权威定稿', () => {
       },
     }, MAIN, 1600))
     expect(folder.state.items).toHaveLength(1)
-    const refolded = agentMessageAt(folder, 0)
-    expect(refolded.message.content).toBe('权威正文2')
-    expect(refolded.message.reasoning).toBe('权威思考')
-    expect(refolded.message.toolCalls?.map((c) => c.id)).toEqual(['call-1', 'call-2', 'call-3'])
+    const refolded = payloadAs(itemAt(folder, 0, 'message'), 'message')!
+    expect(refolded.content).toBe('权威正文2')
+    expect(refolded.thinking).toBe('权威思考')
+    expect(refolded.toolCalls?.map((c) => c.id)).toEqual(['call-1', 'call-2', 'call-3'])
   })
 
   it('message 定稿后迟到的同 seq 增量帧被忽略(不叠坏权威内容)', () => {
@@ -192,16 +225,16 @@ describe('thinking/delta 流式聚合与 message 权威定稿', () => {
     folder.fold(ev(SEQ_100, 'delta', { content: '流式' }, MAIN, 1100))
     folder.fold(ev(SEQ_100, 'message', { content: '权威' }, MAIN, 1200))
     folder.fold(ev(SEQ_100, 'delta', { content: '(迟到)' }, MAIN, 1300))
-    expect(agentMessageAt(folder, 0).message.content).toBe('权威')
+    expect(payloadAs(itemAt(folder, 0, 'message'), 'message')?.content).toBe('权威')
   })
 })
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 4. roundRealFloor / roundRealCeiling 懒加载缓存判定(区间内条目皆 wire 真实事件)
+// 4. roundRealFloor / roundRealCeiling 懒加载缓存判定(只计消息族 kind)
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('roundRealFloor / roundRealCeiling 懒加载缓存判定', () => {
-  it('roundRealFloor:区间 (startSeq, endSeq] 内 agent_message 的最大 seq;endSeq null 上界 ∞;不含起点 user', () => {
+  it('roundRealFloor:区间 (startSeq, endSeq] 内消息族条目的最大 seq;endSeq null 上界 ∞;不含起点 user', () => {
     const folder = newFolder(MAIN)
     folder.fold(ev(SEQ_100, 'user.message', { content: '用户' }, MAIN))
     folder.fold(ev(SEQ_150, 'message', { content: '过程' }, MAIN))
@@ -216,10 +249,10 @@ describe('roundRealFloor / roundRealCeiling 懒加载缓存判定', () => {
     expect(folder.roundRealFloor(SEQ_300, null)).toBeNull()
   })
 
-  it('roundRealFloor:trace 项不参与(只看 agent_message);大数 seq 精确比较', () => {
+  it('roundRealFloor:trace 族条目不参与(只计 user.message/message/tool.result);大数 seq 精确比较', () => {
     const folder = newFolder(MAIN)
     folder.fold(ev(SEQ_100, 'user.message', { content: '用户' }, MAIN))
-    folder.fold(ev(SEQ_150, 'future.kind', { content: 'x' }, MAIN)) // trace(t-150)
+    folder.fold(ev(SEQ_150, 'future.kind', { content: 'x' }, MAIN)) // trace 族(defaultHandler)
     folder.fold(ev(SEQ_200, 'message', { content: '最终' }, MAIN))
     expect(Number(SEQ_150)).toBe(Number(SEQ_200)) // 前置:Number 已坍缩,比较必须走字符串
     // trace 不算覆盖终点;终点条目缺失 → 区间内最大真实 message 仍为 200
@@ -227,7 +260,7 @@ describe('roundRealFloor / roundRealCeiling 懒加载缓存判定', () => {
     expect(folder.roundRealFloor(SEQ_100, SEQ_200)).toBe(SEQ_200)
   })
 
-  it('roundRealCeiling:区间 [startSeq, beforeSeq) 内 agent_message 的最小 seq(起点 user 计入)', () => {
+  it('roundRealCeiling:区间 [startSeq, beforeSeq) 内消息族条目的最小 seq(起点 user 计入)', () => {
     const folder = newFolder(MAIN)
     folder.fold(ev(SEQ_100, 'user.message', { content: '用户' }, MAIN))
     folder.fold(ev(SEQ_150, 'message', { content: '过程' }, MAIN))
@@ -254,12 +287,12 @@ describe('truncateAfterSeq 截断', () => {
     expect(folder.state.items).toHaveLength(3)
 
     folder.truncateAfterSeq(SEQ_200)
-    expect(itemIds(folder)).toEqual([`m-${SEQ_100}`])
+    expect(seqsOf(folder)).toEqual([SEQ_100])
 
     // bySeq 已清理:同 seq 的新事件不判重,可重新折入
     expect(folder.fold(ev(SEQ_200, 'message', { content: '重发后的回复' }, MAIN))).toBe(true)
-    expect(itemIds(folder)).toEqual([`m-${SEQ_100}`, `m-${SEQ_200}`])
-    expect(findByMessageId(folder, `m-${SEQ_200}`).message.content).toBe('重发后的回复')
+    expect(seqsOf(folder)).toEqual([SEQ_100, SEQ_200])
+    expect(payloadAs(itemAt(folder, 1, 'message'), 'message')?.content).toBe('重发后的回复')
   })
 })
 
@@ -419,22 +452,34 @@ describe('isMain 判定与 agentKeyOf 归一', () => {
 })
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 8. 主/子 agent user.message 插入(无折叠标记)
+// 8. 主/子 agent user.message 插入(五字段条目)
 // ─────────────────────────────────────────────────────────────────────────────
 
-describe('主/子 agent user.message 插入(无折叠标记)', () => {
-  it('主/子 agent 的 user.message 均以 role:user 消息插入,线程项无 foldRole 字段', () => {
+describe('主/子 agent user.message 插入(五字段条目)', () => {
+  it('主/子 agent 的 user.message 均 kind=user.message 插入,payload{content, rawContent}', () => {
     const folder = newFolder(MAIN)
     folder.fold(ev(SEQ_100, 'user.message', { content: '主输入' }, MAIN))
     folder.fold(ev(SEQ_200, 'user.message', { content: '子输入' }, SUB))
-    const mainItem = findByMessageId(folder, `m-${SEQ_100}`)
-    const subItem = findByMessageId(folder, `m-${SEQ_200}`)
-    expect(mainItem.message.agentId).toBe(MAIN)
-    expect(mainItem.message.role).toBe('user')
-    expect(mainItem).not.toHaveProperty('foldRole')
-    expect(subItem.message.agentId).toBe(SUB)
-    expect(subItem.message.role).toBe('user')
-    expect(subItem).not.toHaveProperty('foldRole')
+    const mainItem = itemAt(folder, 0, 'user.message')
+    const subItem = itemAt(folder, 1, 'user.message')
+    expect(mainItem.agentId).toBe(MAIN)
+    expect(mainItem.seq).toBe(SEQ_100)
+    expect(mainItem.ts).toBe(1000)
+    expect(mainItem.payload).toEqual({ content: '主输入', rawContent: '主输入' })
+    expect(fiveKeysOf(mainItem)).toEqual(['agentId', 'kind', 'payload', 'seq', 'ts'])
+    expect(subItem.agentId).toBe(SUB)
+    expect(subItem.payload).toEqual({ content: '子输入', rawContent: '子输入' })
+    expect(fiveKeysOf(subItem)).toEqual(['agentId', 'kind', 'payload', 'seq', 'ts'])
+  })
+
+  it('data.rawContent 优先进 payload(含 opaque token 串,回放还原胶囊用)', () => {
+    const folder = newFolder(MAIN)
+    folder.fold(ev(SEQ_100, 'user.message', {
+      content: 'AI 可见明文',
+      data: { rawContent: '原始输入(token 串)' },
+    }, MAIN))
+    expect(itemAt(folder, 0, 'user.message').payload)
+      .toEqual({ content: 'AI 可见明文', rawContent: '原始输入(token 串)' })
   })
 })
 
@@ -443,7 +488,7 @@ describe('主/子 agent user.message 插入(无折叠标记)', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('defaultHandler 兜底(未注册 kind)', () => {
-  it('按 trace 形状折入(traceId=t-seq,title/summary/content 宽松读取,data→metadata)', () => {
+  it('按 trace 族折入(kind=事件名,payload{title,summary,content,data} 宽松读取)', () => {
     const folder = newFolder(MAIN)
     expect(folder.fold(ev(SEQ_100, 'future.kind', {
       title: '未来事件',
@@ -452,17 +497,16 @@ describe('defaultHandler 兜底(未注册 kind)', () => {
       data: { foo: 'bar' },
     }, MAIN, 1700))).toBe(true)
     expect(folder.state.items).toHaveLength(1)
-    const trace = folder.state.items[0]
-    expect(trace?.type).toBe('task_trace')
-    if (trace?.type === 'task_trace') {
-      expect(trace.trace.traceId).toBe(`t-${SEQ_100}`)
-      expect(trace.trace.kind).toBe('future.kind')
-      expect(trace.trace.title).toBe('未来事件')
-      expect(trace.trace.summary).toBe('摘要')
-      expect(trace.trace.content).toBe('内容')
-      expect(trace.trace.metadata).toEqual({ foo: 'bar' })
-      expect(trace.trace.agentId).toBe(MAIN)
-    }
+    const item = folder.state.items[0]!
+    expect(item.kind).toBe('future.kind')
+    expect(item.seq).toBe(SEQ_100)
+    expect(item.agentId).toBe(MAIN)
+    expect(item.ts).toBe(1700)
+    const trace = item.payload as TracePayload
+    expect(trace.title).toBe('未来事件')
+    expect(trace.summary).toBe('摘要')
+    expect(trace.content).toBe('内容')
+    expect(trace.data).toEqual({ foo: 'bar' })
   })
 
   it('同 seq 重复 upsert 原地覆盖,不新增线程项', () => {
@@ -470,58 +514,81 @@ describe('defaultHandler 兜底(未注册 kind)', () => {
     folder.fold(ev(SEQ_100, 'future.kind', { content: '第一版' }, MAIN, 1700))
     folder.fold(ev(SEQ_100, 'future.kind', { content: '第二版' }, MAIN, 1800))
     expect(folder.state.items).toHaveLength(1)
-    const trace = folder.state.items[0]
-    if (trace?.type === 'task_trace') {
-      expect(trace.trace.content).toBe('第二版')
-      expect(trace.createdAt).toBe(1800)
-    }
+    const item = folder.state.items[0]!
+    expect((item.payload as TracePayload).content).toBe('第二版')
+    expect(item.ts).toBe(1800)
   })
 
-  it('字段缺失时宽松降级(title 空串/summary 与 content undefined)', () => {
+  it('字段缺失时宽松降级(title 空串;summary/content/data undefined)', () => {
     const folder = newFolder(MAIN)
     folder.fold(ev(SEQ_100, 'future.kind', {}, MAIN, 1700))
-    const trace = folder.state.items[0]
-    if (trace?.type === 'task_trace') {
-      expect(trace.trace.title).toBe('')
-      expect(trace.trace.summary).toBeUndefined()
-      expect(trace.trace.content).toBeUndefined()
-      expect(trace.trace.metadata).toBeUndefined()
-    }
+    const trace = folder.state.items[0]!.payload as TracePayload
+    expect(trace.title).toBe('')
+    expect(trace.summary).toBeUndefined()
+    expect(trace.content).toBeUndefined()
+    expect(trace.data).toBeUndefined()
   })
 })
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 10. message 定稿后线程项无折叠标记(markFinalReply 已删)
+// 10. error / cancelled 折入(kind=error/cancelled,payload=trace 形状)
 // ─────────────────────────────────────────────────────────────────────────────
 
-describe('message 定稿后线程项无折叠标记', () => {
-  it('主 agent 无工具调用且有正文的 message 定稿 → 无 foldRole 字段', () => {
+describe('error / cancelled 折入', () => {
+  it('error → kind=error,payload{title,summary,content};title 主/子按 isMain 判定', () => {
+    const folder = newFolder(MAIN)
+    folder.fold(ev(SEQ_100, 'error', { content: 'boom' }, MAIN))
+    folder.fold(ev(SEQ_200, 'error', { message: 'sub boom' }, SUB))
+    const mainErr = itemAt(folder, 0, 'error')
+    expect(mainErr.agentId).toBe(MAIN)
+    expect(mainErr.payload).toEqual({ title: '任务出错', summary: 'boom', content: 'boom' })
+    const subErr = itemAt(folder, 1, 'error')
+    expect(subErr.agentId).toBe(SUB)
+    expect(subErr.payload).toEqual({ title: '子任务出错', summary: 'sub boom', content: 'sub boom' })
+  })
+
+  it('cancelled → kind=cancelled,payload{title,summary};归属空串(消费方归一主 agent)', () => {
+    const folder = newFolder(MAIN)
+    folder.fold(ev(SEQ_100, 'cancelled', { data: { by: 'haigui' } }, MAIN))
+    const item = itemAt(folder, 0, 'cancelled')
+    expect(item.agentId).toBe('')
+    expect(item.payload).toEqual({ title: '任务已取消', summary: '由 haigui 取消' })
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 11. message 定稿后线程项为五字段(markFinalReply 已删)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('message 定稿后线程项为五字段', () => {
+  it('主 agent 无工具调用且有正文的 message 定稿 → 五字段条目', () => {
     const folder = newFolder(MAIN)
     folder.fold(ev(SEQ_100, 'user.message', { content: '用户' }, MAIN))
     folder.fold(ev(SEQ_200, 'delta', { content: '流式正文' }, MAIN, 1200))
     folder.fold(ev(SEQ_200, 'message', { content: '最终回复正文' }, MAIN, 1300))
-    const item = findByMessageId(folder, `m-${SEQ_200}`)
-    expect(item.message.content).toBe('最终回复正文')
-    expect(item.message.metadata?.streaming).toBe(false)
-    expect(item).not.toHaveProperty('foldRole')
+    const item = itemAt(folder, 1, 'message')
+    const p = payloadAs(item, 'message') as MessagePayload
+    expect(p.content).toBe('最终回复正文')
+    expect(p.streaming).toBe(false)
+    expect(fiveKeysOf(item)).toEqual(['agentId', 'kind', 'payload', 'seq', 'ts'])
   })
 
-  it('带 toolCalls 的 message 定稿:toolCalls 记录在案且无折叠标记', () => {
+  it('带 toolCalls 的 message 定稿:toolCalls 记录在 payload,条目五字段', () => {
     const folder = newFolder(MAIN)
     folder.fold(ev(SEQ_200, 'message', {
       content: '先调用工具',
       data: { toolCalls: [{ id: 'call-1', name: 'toolA', arguments: '{}' }] },
     }, MAIN, 1300))
-    const item = findByMessageId(folder, `m-${SEQ_200}`)
-    expect(item.message.toolCalls?.map((c) => c.id)).toEqual(['call-1'])
-    expect(item).not.toHaveProperty('foldRole')
+    const item = itemAt(folder, 0, 'message')
+    expect(payloadAs(item, 'message')?.toolCalls?.map((c) => c.id)).toEqual(['call-1'])
+    expect(fiveKeysOf(item)).toEqual(['agentId', 'kind', 'payload', 'seq', 'ts'])
   })
 
-  it('空正文与子 agent 的 message 定稿同样插入且无折叠标记', () => {
+  it('空正文与子 agent 的 message 定稿同样插入且为五字段', () => {
     const folder = newFolder(MAIN)
     folder.fold(ev(SEQ_100, 'message', { content: '' }, MAIN, 1300))
     folder.fold(ev(SEQ_200, 'message', { content: '子代理回复' }, SUB, 1400))
-    expect(findByMessageId(folder, `m-${SEQ_100}`)).not.toHaveProperty('foldRole')
-    expect(findByMessageId(folder, `m-${SEQ_200}`)).not.toHaveProperty('foldRole')
+    expect(fiveKeysOf(itemAt(folder, 0, 'message'))).toEqual(['agentId', 'kind', 'payload', 'seq', 'ts'])
+    expect(fiveKeysOf(itemAt(folder, 1, 'message'))).toEqual(['agentId', 'kind', 'payload', 'seq', 'ts'])
   })
 })

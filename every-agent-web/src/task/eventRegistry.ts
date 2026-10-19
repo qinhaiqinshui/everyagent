@@ -6,8 +6,8 @@
  * 未注册 kind → defaultHandler 默认 trace 形状展示（内容零丢失）。
  *
  * handler 接口极简：接收 (event, state, folder)，返回是否状态有变化（驱动重渲染）。
- * handler 通过组合调用 folder 上的公共 helper（insertMessage/appendRoundText/
- * completeMessage/upsertTraceBySeq/insertTrace/truncateAfterSeq/closeStreamingByAgent
+ * handler 通过组合调用 folder 上的公共 helper（insertItem/appendRoundText/
+ * completeMessage/upsertTraceBySeq/truncateAfterSeq/closeStreamingByAgent
  * 等）完成折叠;agent 台账类 handler 改写组合挂载的台账 store(folder.ledger:
  * mergeAgentMeta/setStatus/setSubTitle,agentLedger.ts)。
  */
@@ -94,10 +94,8 @@ export function defaultHandler(event: FoldableTaskEvent, state: TaskThreadState,
 
 // ---- 注册全部现役 kind 的 handler ----
 
-/** user.message → role:'user' 消息(主/子 agent 共用同一事件名与同一路径;线程项无折叠标记)。
- * 骨架出画板后无 rounds.jsonl 合成骨架可升级——主/子 agent 均为「无同 seq 项则插入真实
- * 消息、有则 seq 去重跳过」一条路径;渲染层按 agentId 区分样式(子 agent 气泡低调背景色)
- * 与扩展点(子 agent 输入不带编辑重发动作)。 */
+/** user.message → kind:'user.message'(主/子 agent 共用同一事件名与同一路径;payload{content, rawContent})。
+ * 渲染层按 agentId 区分样式(子 agent 气泡低调背景色)与扩展点(子 agent 输入不带编辑重发动作)。 */
 registerEventKind('user.message', {
   handle(event, state, folder) {
     const seqKey = String(event.seq)
@@ -108,17 +106,13 @@ registerEventKind('user.message', {
       ? data.rawContent : content
     const agentKey = agentKeyOf(event, folder)
     const ts = tsOf(event)
-    folder.insertMessage(agentKey, {
-      messageId: `m-${event.seq}`,
+    folder.insertItem({
+      seq: seqKey,
+      ts,
       agentId: agentKey,
-      role: 'user',
-      content,
-      rawContent,
-      historyMode: 'thread_only',
-      createdAt: ts,
-      updatedAt: ts,
-      sequence: Number(event.seq),
-    }, seqKey)
+      kind: 'user.message',
+      payload: { content, rawContent },
+    })
     return true
   },
 })
@@ -149,7 +143,7 @@ registerEventKind('message', {
   },
 })
 
-/** tool.result → role:'tool' 消息 */
+/** tool.result → kind:'tool.result'(payload{callId, content, status?, startedAt?, durationMs?, toolName?}) */
 registerEventKind('tool.result', {
   handle(event, state, folder) {
     const seqKey = String(event.seq)
@@ -160,20 +154,23 @@ registerEventKind('tool.result', {
     const callId = String(data?.callId ?? '')
     const content = String(event.payload?.content ?? event.payload?.summary ?? '')
     folder.closeStreamingByAgent(agentKey)
-    folder.insertMessage(agentKey, {
-      messageId: `m-${event.seq}`,
+    folder.insertItem({
+      seq: seqKey,
+      ts,
       agentId: agentKey,
-      role: 'tool',
-      content,
-      historyMode: 'thread_only',
-      createdAt: ts,
-      updatedAt: ts,
-      sequence: Number(event.seq),
-      toolCallId: callId,
-      toolName: folder.getToolName(callId),
-      // 权威状态来自 worker 的 data.status（判定收口在 worker：退出码/超时/抛异常的结构化记账）。
-      status: readToolStatus(data?.status),
-    }, seqKey)
+      kind: 'tool.result',
+      payload: {
+        callId,
+        content,
+        // 权威状态来自 worker 的 data.status(判定收口在 worker:退出码/超时/抛异常的结构化记账)。
+        status: readToolStatus(data?.status),
+        // per-call 链计时字段(步骤 4 wire 增补;老事件缺失 → undefined)。
+        startedAt: typeof data?.startedAt === 'number' ? data.startedAt : undefined,
+        durationMs: typeof data?.durationMs === 'number' ? data.durationMs : undefined,
+        // callId → message.toolCalls 注册表回填(迟到/未知 callId 缺失)。
+        toolName: folder.getToolName(callId) || undefined,
+      },
+    })
     return true
   },
 })
@@ -249,7 +246,7 @@ registerEventKind('agent.status', {
   },
 })
 
-/** error → trace（run_error） */
+/** error → kind:'error'(payload{title, summary, content};title 主/子按 isMain 判定) */
 registerEventKind('error', {
   handle(event, state, folder) {
     const seqKey = String(event.seq)
@@ -259,24 +256,25 @@ registerEventKind('error', {
     const message = String(event.payload?.content ?? event.payload?.message ?? '')
     folder.closeStreamingByAgent(agentKey)
     folder.ledger.setStatus(agentKey, 'error')
-    folder.insertTrace(ts, {
-      traceId: `t-${event.seq}`,
-      taskId: state.taskId,
+    folder.insertItem({
+      seq: seqKey,
+      ts,
       agentId: agentKey,
-      kind: 'run_error',
-      // 主/子判定唯一依据 = isMain(agentKey === mainAgentId):wire 全事件必带真实
-      // agentId(主=mainAgentId),不允许用「键是否空串」判主(agentKeyOf 会把缺失
-      // 归一到 mainKey,mainAgentId 灌入后键恒非空,空串判据会把主错标成子)。
-      title: folder.isMain(agentKey) ? '任务出错' : '子任务出错',
-      summary: message,
-      content: message,
-      createdAt: ts,
-    }, event.seq)
+      kind: 'error',
+      payload: {
+        // 主/子判定唯一依据 = isMain(agentKey === mainAgentId):wire 全事件必带真实
+        // agentId(主=mainAgentId),不允许用「键是否空串」判主(agentKeyOf 会把缺失
+        // 归一到 mainKey,mainAgentId 灌入后键恒非空,空串判据会把主错标成子)。
+        title: folder.isMain(agentKey) ? '任务出错' : '子任务出错',
+        summary: message,
+        content: message,
+      },
+    })
     return true
   },
 })
 
-/** cancelled → trace（system_notice） */
+/** cancelled → kind:'cancelled'(payload{title, summary}) */
 registerEventKind('cancelled', {
   handle(event, state, folder) {
     const seqKey = String(event.seq)
@@ -285,14 +283,17 @@ registerEventKind('cancelled', {
     const data = dataOf(event)
     folder.closeStreamingByAgent(folder.mainKey())
     folder.ledger.setStatus(folder.mainKey(), 'stopped')
-    folder.insertTrace(ts, {
-      traceId: `t-${event.seq}`,
-      taskId: state.taskId,
-      kind: 'system_notice',
-      title: '任务已取消',
-      summary: `由 ${String(data?.by ?? '用户')} 取消`,
-      createdAt: ts,
-    }, event.seq)
+    folder.insertItem({
+      seq: seqKey,
+      ts,
+      // 取消恒属任务(主 agent);agentId 空串 = 未归属,消费方归一到 mainAgentId。
+      agentId: '',
+      kind: 'cancelled',
+      payload: {
+        title: '任务已取消',
+        summary: `由 ${String(data?.by ?? '用户')} 取消`,
+      },
+    })
     return true
   },
 })

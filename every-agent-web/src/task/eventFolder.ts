@@ -1,32 +1,34 @@
 /**
- * 事件折叠器(纯函数状态机):worker 任务流事件 → n 前端线程项。
+ * 事件折叠器(纯函数状态机):worker 任务流事件 → 统一线程条目(ThreadItem 五字段)。
  *
- * n 的持久化层(agentMessageRepository/taskTraceRepository)在浏览器里逐条写入;
- * 本前端没有本地持久化,改为把 worker 的数据包事件流「折叠」成同样的
- * AgentMessageRecord / TaskTraceRecord 形状,让 AgentMessageThread /
- * TraceItem 等组件零改动复用。
+ * 线程数据层(items)的唯一形状 = {@link ThreadItem}(threadItem.ts,步骤 8 定稿):
+ * `{seq, ts, agentId, kind, payload}`,seq 即 id(m-/t- 前缀 id 体系已废)。
+ * 渲染层的消息视图模型/工具聚合形状(AgentMessageRecord 视图模型、AggregatedToolDetail)
+ * 由 TaskThread 从 ThreadItem payload 适配,折叠器不再产出双形状。
  *
  * agent 台账镜像(agentStates/agentMeta)不属于线程折叠:独立 store agentLedger.ts
  * (本类以组合持有 ledger 实例,台账类事件 handler 直接改写,reset 不清台账)。
  *
- * 折叠规则(与 n 的写入语义对齐):
- * 事件名不分主/子 agent——同一名事件,归属由 agentId 字段决定(空 = 主线程);
- * - user.message           → role:'user' 消息(payload.content + payload.data.rawContent);
- *                           主/子 agent 共用同一事件名,均以消息插入、无折叠标记
- *                           (折叠窗口语义归 rounds.jsonl 唯一权威);渲染层按 agentId 区分样式与扩展点
- * - thinking / delta       → 当前流式 assistant 消息的 reasoning / content 追加(瞬态,payload.content)
- * - message                → 一轮权威终结:完整 content/data.thinking/data.toolCalls(真实 toolCall id)
- *                           定稿该 agent 的流式消息
+ * 折叠规则(kind = 事件名或语义名,payload 形状所有权归 kind):
+ * 事件名不分主/子 agent——同一名事件,归属由 agentId 字段决定(缺失归一 mainAgentId);
+ * - user.message           → kind:'user.message',payload{content, rawContent}(主/子 agent
+ *                           共用同一事件名与同一路径,渲染层按 agentId 区分样式与扩展点)
+ * - thinking / delta       → 当前流式 message 项的 payload.thinking / payload.content 追加
+ *                           (瞬态增量帧,同 seq 复用同一条 kind:'message' 项)
+ * - message                → 一轮权威终结:payload.content/thinking/toolCalls(真实 toolCall id)
+ *                           定稿该 agent 的流式消息(kind:'message')
  * - usage                  → 每 agent 最近一轮占用/累计用量/上下文快照维护台账镜像
  *                           ledger.agentMeta(不进线程);任务级上下文电池不在流内维护——
  *                           统一消费 taskStore 的 TaskSummary.usage(worker usage 投影器聚合同步,task.updated 携带)
- * - tool.result            → role:'tool' 消息(TaskChat 按 callId 合并进下发块渲染)
- * - agent.started/done     → 子 agent trace(spawn 生命周期,必带 agentId);同时合并台账镜像
- *                           ledger(标题/创建时间/收口累计用量/状态)
- * - error                  → trace(agentId = 事件真实归属;主/子标题按 isMain(agentKey === mainAgentId) 判定)
- * - cancelled              → trace
+ * - tool.result            → kind:'tool.result',payload{callId, content, status?, startedAt?,
+ *                           durationMs?, toolName?}(渲染层按 callId 合并进下发块)
+ * - agent.started/done     → 只合并台账镜像 ledger(标题/创建时间/收口累计用量/状态),不进 items
+ * - error                  → kind:'error',payload{title, summary, content}(agentId = 事件真实归属;
+ *                           主/子标题按 isMain(agentKey === mainAgentId) 判定)
+ * - cancelled              → kind:'cancelled',payload{title, summary}
  * - retry / context.compression / model.failover / model.switch / auth.review / system.notice
- *                           → 统一纯显示 trace:按 seq 原地 upsert(有则覆盖内容、无则新增),
+ *                           → 统一纯显示 trace 族:kind=事件名,payload{title, summary?,
+ *                           content?, data?};按 seq 原地 upsert(有则覆盖内容、无则新增),
  *                           见 {@link #upsertTraceBySeq}
  * - ask.*                  → 不进线程(卡片由 askStore 单独驱动)
  *
@@ -36,24 +38,11 @@
  * 并发子 agent / 重连重放下事件到达顺序可与 seq 顺序不一致,只要按 seq 定位置,
  * 任何合法旧轮(seq 更小)后到都不会被误丢,轮事件同 seq 更新同一条 item、非轮事件同 seq 去重。
  */
-import type {
-  AgentMessageRecord,
-  LLMToolCall,
-} from '@/types'
-import type {
-  TaskTraceRecord,
-} from './types'
+import type { LLMToolCall } from '@/types'
+import type { MessagePayload, ThreadItem, TracePayload } from './threadItem'
+import { MESSAGE_KINDS } from './threadItem'
 import { getHandler, defaultHandler } from './eventRegistry'
 import { AgentLedger } from './agentLedger'
-
-/**
- * 统一线程项(与 n 的 taskQueryService 同形,聊天页聚合展示单位)。
- * 无折叠标记:折叠窗口语义归 rounds.jsonl 唯一权威(§7.15.1),线程项只是渲染素材,
- * 轮折叠/展开由轮次骨架(TaskRoundsPanel)驱动。
- */
-export type TaskThreadItem =
-  | { type: 'agent_message'; createdAt: number; message: AgentMessageRecord }
-  | { type: 'task_trace'; createdAt: number; trace: TaskTraceRecord }
 
 /** 任务冻结的模型快照(历史上由 task.started 事件携带;当前 worker 不再发送该事件,此字段保留为兼容占位,通常为空)。 */
 export interface TaskModelInfo {
@@ -67,14 +56,14 @@ export interface TaskModelInfo {
  * agent 状态/元数据台账镜像不在本状态:独立 store folder.ledger(agentLedger.ts),不随 reset 清。 */
 export interface TaskThreadState {
   taskId: string
-  items: TaskThreadItem[]
+  items: ThreadItem[]
   /** 任务冻结的模型信息(当前不再由流事件填充,通常为空,见 TaskModelInfo)。 */
   taskModel?: TaskModelInfo | null
   /** slash 任务级 token(slash.tokens.changed 事件 REPLACE 更新;null=未收到)。 */
   slashTokens?: string[] | null
   /**
    * 主 agent 固定 id(task 层传入:task.agents 应答 / TaskSummary.mainAgentId)。
-   * 一切「主 agent」判定唯一依据(事件 agentId 归一、user.message 骨架升级判定、error 主/子
+   * 一切「主 agent」判定唯一依据(事件 agentId 归一、error 主/子
    * 标题等;台账 seedAgents 的主 agent 状态例外由调用方把 mainAgentId 作参数传入台账 store)
    * ——不使用「空串=主」魔法。open 早期未灌入时折叠器以
    * isMain 的空串兼容回退兜底;事件缺 agentId(旧 wire 形态)归一到 mainAgentId。
@@ -93,9 +82,9 @@ export interface FoldableTaskEvent {
 
 /** 折叠锚点(不序列化,重放时从 items 重建或留空)。 */
 interface FoldAnchors {
-  /** seq(String(event.seq)) → 该轮流式中的 assistant 消息。轮事件同 seq 复用同一锚点/同一条线程项。 */
-  streaming: Map<string, AgentMessageRecord>
-  /** callId → 工具名(tool.result 消息回填 toolName)。 */
+  /** seq(String(event.seq)) → 该轮流式中的 message 线程项(项的 payload 即聚合载体;轮事件同 seq 复用同一条)。 */
+  streaming: Map<string, ThreadItem>
+  /** callId → 工具名(tool.result payload 回填 toolName)。 */
   toolNames: Map<string, string>
 }
 
@@ -117,13 +106,12 @@ export class TaskEventFolder {
   resetEpoch = 0
   private anchors: FoldAnchors = { streaming: new Map(), toolNames: new Map() }
   /**
-   * seq 键控索引(键 = String(event.seq)) → 线程项:
+   * seq 键控索引(键 = item.seq,wire 原始字符串) → 线程项:
    * - 去重/定位主键:items 保持按 seq 升序,新 seq 插入按序定位;同 seq 更新原地、不移动位置。
-   * - 轮事件(thinking/delta/message)同 seq 共享同一条 agent_message item,只能更新不可重复插入;
+   * - 轮事件(thinking/delta/message)同 seq 共享同一条 kind:'message' item,只能更新不可重复插入;
    *   非轮 item 事件同 seq 已存在 → 忽略(重连重放去重);trace 族事件自身 seq 也登记于此。
-   * - 值随 wrapper 替换(如 trace 原地 upsert)同步刷新为 items 中的当前对象。
    */
-  private bySeq = new Map<string, TaskThreadItem>()
+  private bySeq = new Map<string, ThreadItem>()
 
 
   constructor(public state: TaskThreadState) {
@@ -199,12 +187,12 @@ export class TaskEventFolder {
    *
    * 数据包协议:一轮 AI 回复 = 1 个 seq,同轮 thinking/delta/message 同 seq(占同一条线程项);
    * 其余事件各占独立 seq。折叠器按 seq 键控增量 upsert:
-   * - 轮事件(thinking/delta/message):同 seq 已存在 → 更新同一条 item;不存在 → 新建流式
-   *   assistant 消息并按 seq 插入。message 是该轮权威整轮(定稿 content/reasoning/toolCalls)。
-   * - 非轮 item 事件(user.message/tool.result/agent.started/agent.done/error/cancelled):
+   * - 轮事件(thinking/delta/message):同 seq 已存在 → 更新同一条 kind:'message' 项;不存在 → 新建流式
+   *   message 项并按 seq 插入。message 是该轮权威整轮(定稿 content/thinking/toolCalls)。
+   * - 非轮 item 事件(user.message/tool.result/error/cancelled):
    *   同 seq 已存在 → 忽略(重连重放去重);不存在 → 新建并按 seq 插入。
-   * - trace 族(retry/context.compression/model.failover/model.switch/auth.review/system.notice):
-   *   按 seq upsert(同 seq 覆盖内容、不新增线程项)。
+   * - trace 族(retry/context.compression/model.failover/model.switch/auth.review/system.notice
+   *   及未注册 kind):按 seq upsert(同 seq 覆盖内容、不新增线程项)。
    * - usage/agent.status/ask.* 等非 item 事件幂等处理,不参与 seq 去重。
    *
    * 返回 true 表示状态有变化(UI 需重渲染)。
@@ -238,25 +226,24 @@ export class TaskEventFolder {
 
   /**
    * 线程最早一条线程项的排序 seq(供上滚续拉判断是否还有更早)。
-   * 空线程返回 null;否则取 items[0](items 恒按 seq 升序)经 seqOfItem 反解精确排序 seq
-   * (agent_message 优先从 messageId 的 `m-` 前缀取原始串,保留 Snowflake 大数精度)。
+   * 空线程返回 null;否则取 items[0](items 恒按 seq 升序)的 seq(seq 即 id,雪花大数原始串)。
    */
   earliestSeq(): number | string | null {
-    return this.state.items.length === 0 ? null : this.seqOfItem(this.state.items[0])
+    return this.state.items.length === 0 ? null : this.state.items[0].seq
   }
 
   /**
-   * 该轮区间 (startSeq, endSeq] 内已折入的 agent_message 的最大 seq(字符串)。
-   * endSeq 传 null → 上界为 ∞(未闭合轮)。无命中返回 null。
+   * 该轮区间 (startSeq, endSeq] 内已折入的**消息族**条目(user.message/message/tool.result)
+   * 的最大 seq(字符串)。endSeq 传 null → 上界为 ∞(未闭合轮)。无命中返回 null。
    * 供拉取层在 RPC 前查 items 缓存:maxReal >= endSeq 即整轮已完整覆盖
-   * (骨架出画板后区间内条目皆 wire 真实事件,无合成项跳过分支)。
+   * (骨架出画板后区间内条目皆 wire 真实事件;trace 不证明整轮覆盖——终点 message
+   * 在场才算,故只计消息族 kind,MESSAGE_KINDS)。
    */
   roundRealFloor(startSeq: string, endSeq: string | null): string | null {
     let floor: string | null = null
     for (const item of this.state.items) {
-      if (item.type !== 'agent_message') continue
-      const seq = seqFromMessageId(item.message.messageId)
-      if (!seq) continue
+      if (!MESSAGE_KINDS.has(item.kind)) continue
+      const seq = item.seq
       if (compareSeq(seq, startSeq) <= 0) continue // 不含起点 user
       if (endSeq != null && compareSeq(seq, endSeq) > 0) continue // 越过终点
       if (floor == null || compareSeq(seq, floor) > 0) floor = seq
@@ -265,16 +252,15 @@ export class TaskEventFolder {
   }
 
   /**
-   * 该轮 [startSeq, beforeSeq) 内已折入的 agent_message 的最小 seq(字符串)。
-   * 无命中返回 null。供拉取层 backward 查缓存:minReal <= startSeq 即已连到轮起点
-   * (无需再往前拉)。
+   * 该轮 [startSeq, beforeSeq) 内已折入的**消息族**条目(user.message/message/tool.result)
+   * 的最小 seq(字符串)。无命中返回 null。供拉取层 backward 查缓存:minReal <= startSeq
+   * 即已连到轮起点(无需再往前拉)。
    */
   roundRealCeiling(startSeq: string, beforeSeq: string): string | null {
     let ceiling: string | null = null
     for (const item of this.state.items) {
-      if (item.type !== 'agent_message') continue
-      const seq = seqFromMessageId(item.message.messageId)
-      if (!seq) continue
+      if (!MESSAGE_KINDS.has(item.kind)) continue
+      const seq = item.seq
       if (compareSeq(seq, startSeq) < 0) continue // 越过起点(不含 user)
       if (compareSeq(seq, beforeSeq) >= 0) continue // 不含 beforeSeq 自身
       if (ceiling == null || compareSeq(seq, ceiling) < 0) ceiling = seq
@@ -297,20 +283,15 @@ export class TaskEventFolder {
   // ---- 内部 ----
 
   /**
-   * 插入一条 agent_message 到 items(按原始 seq 精确升序定位;bySeq 键用调用方传入的
-   * 原始 seq 字符串 seqKey——Snowflake 大数转 Number 有精度损失,去重键与排序键都必须用原始串)。
-   * 用户回合边界关闭该 agent 的流式锚点。线程项无折叠标记(折叠窗口语义归 rounds.jsonl)。
+   * 插入一条线程项(按 item.seq 精确升序定位;bySeq 键 = item.seq 原始串——Snowflake
+   * 大数转 Number 有精度损失,去重键与排序键都必须用原始串)。
+   * user.message 是用户回合边界:插入时关闭该 agent 的流式锚点。
    */
-  insertMessage(agentKey: string, message: AgentMessageRecord, seqKey: string): void {
-    if (message.role === 'user') {
-      this.closeStreamingByAgent(agentKey)
+  insertItem(item: ThreadItem): void {
+    if (item.kind === 'user.message') {
+      this.closeStreamingByAgent(item.agentId)
     }
-    const item: TaskThreadItem = {
-      type: 'agent_message',
-      createdAt: message.createdAt,
-      message,
-    }
-    this.insertItemBySeq(item, seqKey, seqKey)
+    this.insertItemBySeq(item)
   }
 
   /**
@@ -321,14 +302,12 @@ export class TaskEventFolder {
     const items = this.state.items
     let i = 0
     while (i < items.length) {
-      const itemSeq = this.seqOfItem(items[i])
-      if (compareSeq(itemSeq, targetSeq) >= 0) {
+      if (compareSeq(items[i].seq, targetSeq) >= 0) {
         // 移除该项
         const removed = items.splice(i, 1)[0]
         // 清理 bySeq(该项的 seqKey)
-        const seqKey = String(itemSeq)
-        if (this.bySeq.get(seqKey) === removed) {
-          this.bySeq.delete(seqKey)
+        if (this.bySeq.get(removed.seq) === removed) {
+          this.bySeq.delete(removed.seq)
         }
       } else {
         i++
@@ -336,17 +315,10 @@ export class TaskEventFolder {
     }
   }
 
-  /** 插入一条 task_trace 到 items(按 seq 升序定位)。 */
-  insertTrace(ts: number, trace: TaskTraceRecord, seq: number | string): TaskThreadItem {
-    const item: TaskThreadItem = { type: 'task_trace', createdAt: ts, trace }
-    this.insertItemBySeq(item, seq, String(seq))
-    return item
-  }
-
-  /** 按 seq 升序把 item 插入 items,并登记 bySeq(seqKey → item)。 */
-  private insertItemBySeq(item: TaskThreadItem, orderSeq: number | string, seqKey: string): void {
-    this.state.items.splice(this.insertIndexBySeq(orderSeq), 0, item)
-    this.bySeq.set(seqKey, item)
+  /** 按 seq 升序把 item 插入 items,并登记 bySeq(item.seq → item)。 */
+  private insertItemBySeq(item: ThreadItem): void {
+    this.state.items.splice(this.insertIndexBySeq(item.seq), 0, item)
+    this.bySeq.set(item.seq, item)
   }
 
   /**
@@ -354,53 +326,19 @@ export class TaskEventFolder {
    * 比较走 compareSeq:seq 可为 Snowflake 大数字符串,Number() 会在 2^53 之上丢失
    * 精度(相邻两个大数坍缩为同一 double),必须按大整数精确比较,否则乱序到达会被排错。
    */
-  private insertIndexBySeq(seq: number | string): number {
+  private insertIndexBySeq(seq: string): number {
     const items = this.state.items
     for (let i = 0; i < items.length; i++) {
-      if (compareSeq(this.seqOfItem(items[i]), seq) > 0) return i
+      if (compareSeq(items[i].seq, seq) > 0) return i
     }
     return items.length
   }
 
   /**
-   * 线程项的精确排序 seq:agent_message 优先从 messageId(`m-` 前缀 + 原始 seq 串)反推,
-   * 保留 Snowflake 大数精度(message.sequence 只是 Number 近似值);task_trace 从 traceId
-   * (`t-` 前缀 + 原始 seq 串)反推。返回类型为 number | string,比较用 compareSeq。
-   */
-  seqOfItem(item: TaskThreadItem): number | string {
-    if (item.type === 'agent_message') {
-      const mid = item.message.messageId
-      if (mid && mid.startsWith('m-')) return mid.slice(2)
-      return item.message.sequence ?? 0
-    }
-    const tid = item.trace.traceId
-    if (tid && tid.startsWith('t-')) return tid.slice(2)
-    return 0
-  }
-
-  /** wrapper 被替换(如 trace 原地 upsert)后,把 bySeq 同步到 items 中的当前对象。 */
-  syncBySeqItem(item: TaskThreadItem): void {
-    if (item.type === 'agent_message') {
-      // messageId 恒为 `m-${原始 seq}`:从 messageId 反推,保留 Snowflake 大数字符串精度;
-      // message.sequence 只是 Number 近似值(仅展示),去重键与排序键都走原始串(见 seqOfItem)。
-      const seqKey = item.message.messageId.startsWith('m-')
-        ? item.message.messageId.slice(2)
-        : String(item.message.sequence)
-      this.bySeq.set(seqKey, item)
-      return
-    }
-    // task_trace:从 traceId(`t-${seq}`)反推 seqKey
-    const tid = item.trace.traceId
-    if (tid && tid.startsWith('t-')) {
-      this.bySeq.set(tid.slice(2), item)
-    }
-  }
-
-  /**
-   * trace 事件折叠:按 seq 原地 upsert。
-   * 同一 seq 的后续事件(如 retry.progress 每秒刷新)只覆盖内容,不新增线程项,
-   * 位置由首达 seq 固定不变;title/summary/content/status/data 由 worker 逐阶段更新。
-   * kind 现在直接用 event.event(不再从 payload.kind 读取);metadata → data(payload.data)。
+   * trace 族事件折叠:按 seq 原地 upsert(kind = 事件名,payload = trace 形状
+   * {title, summary?, content?, data?})。
+   * 同一 seq 的后续事件(如 retry.progress 每秒刷新)只覆盖 ts/payload,不新增线程项,
+   * 位置由首达 seq 固定不变;title/summary/content/data 由 worker 逐阶段更新。
    * 返回当前线程项(新建或原地更新的同一对象)。
    */
   upsertTraceBySeq(
@@ -409,54 +347,43 @@ export class TaskEventFolder {
     payload: Record<string, unknown>,
     ts: number,
     seq: number | string,
-  ): TaskThreadItem | undefined {
+  ): ThreadItem {
     const seqKey = String(seq)
-    const traceId = `t-${seq}`
     const data = (payload?.data != null && typeof payload.data === 'object' && !Array.isArray(payload.data))
       ? (payload.data as Record<string, unknown>)
       : undefined
     const rawContent = payload?.content
-    const trace: TaskTraceRecord = {
-      traceId,
-      taskId: this.state.taskId,
-      agentId: agentKey || undefined,
-      kind: eventKind,
+    const tracePayload: TracePayload = {
       title: readStr(payload?.title) ?? '',
       summary: readStr(payload?.summary),
       content: rawContent != null ? String(rawContent) : undefined,
-      createdAt: ts,
-      metadata: data,
+      data,
     }
-    // 按 seq upsert:同 seq 已有 trace → 原地更新;新 seq → 插入。
+    // 按 seq upsert:同 seq 已有线程项 → 原地覆盖(kind 语义不变);新 seq → 插入。
     const existing = this.bySeq.get(seqKey)
-    if (existing && existing.type === 'task_trace') {
-      const idx = this.state.items.indexOf(existing)
-      if (idx >= 0) {
-        const updated: TaskThreadItem = { type: 'task_trace', createdAt: ts, trace }
-        this.state.items[idx] = updated
-        this.bySeq.set(seqKey, updated)
-        return updated
-      }
+    if (existing) {
+      existing.ts = ts
+      existing.payload = tracePayload
+      return existing
     }
-    // 也检查 items 中是否有同 traceId 的 trace（防御:bySeq 可能因外部操作未同步）
-    const traceIdx = this.state.items.findIndex(
-      (it) => it.type === 'task_trace' && it.trace.traceId === traceId,
-    )
-    if (traceIdx >= 0) {
-      const updated: TaskThreadItem = { type: 'task_trace', createdAt: ts, trace }
-      this.state.items[traceIdx] = updated
-      this.syncBySeqItem(updated)
-      return updated
+    const item: ThreadItem = {
+      seq: seqKey,
+      ts,
+      agentId: agentKey,
+      kind: eventKind,
+      payload: tracePayload,
     }
-    return this.insertTrace(ts, trace, seq)
+    this.insertItemBySeq(item)
+    return item
   }
 
   /**
-   * thinking/delta(轮事件增量帧):同一 seq 只创建/更新同一条线程项,绝不重复插入。
-   * - 该 seq 有流式锚点(仍在聚合) → 原地追加 reasoning/content;
+   * thinking/delta(轮事件增量帧):同一 seq 只创建/更新同一条 kind:'message' 线程项,
+   * 绝不重复插入。
+   * - 该 seq 有流式锚点(仍在聚合) → 原地追加 payload.thinking / payload.content;
    * - 该 seq 已有线程项但无锚点(message 已权威定稿,或回放先于流式到达) → 忽略迟到增量帧,
    *   避免把权威整轮内容叠坏;
-   * - 该 seq 尚无线程项 → 新建流式 assistant 消息按 seq 插入,并登记 seq 锚点。
+   * - 该 seq 尚无线程项 → 新建流式 message 项按 seq 插入,并登记 seq 锚点。
    */
   appendRoundText(
     kind: 'thinking' | 'delta',
@@ -468,12 +395,12 @@ export class TaskEventFolder {
     const seqKey = String(seq)
     const existing = this.bySeq.get(seqKey)
     if (existing) {
-      if (existing.type !== 'agent_message') return
-      if (this.anchors.streaming.get(seqKey) === existing.message) {
-        const message = existing.message
+      if (existing.kind !== 'message') return
+      if (this.anchors.streaming.get(seqKey) === existing) {
+        const message = existing.payload as MessagePayload
         if (kind === 'thinking') {
-          message.reasoning = (message.reasoning ?? '') + text
-          // 思考仍在增长:清除「思考已结束」标记。推理模型若 reasoning/content 交织,
+          message.thinking = (message.thinking ?? '') + text
+          // 思考仍在增长:清除「思考已结束」标记。推理模型若 thinking/content 交织,
           // 正文(delta)先到会把 reasoningDone 置真,此处随后的 thinking 增量将其回退,
           // 避免把思考区提前折叠(只有思考真正停止后才折叠)。
           this.markReasoningDone(message, false)
@@ -481,57 +408,51 @@ export class TaskEventFolder {
           message.content = (message.content ?? '') + text
           // 正文首达且已有思考 → 视为思考阶段结束,驱动前端思考块自动折叠。
           // 若后续又有 thinking 增量,appendRoundText 会回退该标记(见上)。
-          if ((message.reasoning ?? '').trim().length > 0) {
+          if ((message.thinking ?? '').trim().length > 0) {
             this.markReasoningDone(message, true)
           }
         }
-        message.updatedAt = ts
       }
       return
     }
-    const message: AgentMessageRecord = {
-      messageId: `m-${seq}`,
-      agentId: agentKey,
+    const message: MessagePayload = {
       role: 'assistant',
       content: '',
-      historyMode: 'thread_only',
-      createdAt: ts,
-      updatedAt: ts,
-      sequence: Number(seq),
-      metadata: { streaming: true },
+      streaming: true,
     }
     if (kind === 'thinking') {
-      message.reasoning = (message.reasoning ?? '') + text
+      message.thinking = text
     } else {
-      message.content = (message.content ?? '') + text
+      message.content = text
     }
-    this.anchors.streaming.set(seqKey, message)
-    this.insertMessage(agentKey, message, seqKey)
+    const item: ThreadItem = {
+      seq: seqKey,
+      ts,
+      agentId: agentKey,
+      kind: 'message',
+      payload: message,
+    }
+    this.anchors.streaming.set(seqKey, item)
+    this.insertItem(item)
   }
 
   /**
    * 标记/清除「思考阶段已结束」:正文(delta)首达且已有思考时置真,思考(thinking)继续增长时回退为假。
    * 前端据此在思考完成后自动折叠思考块(正文仍继续流式),而不必等到整条消息定稿。
    */
-  private markReasoningDone(message: AgentMessageRecord, done: boolean): void {
-    if (done) {
-      message.metadata = { ...(message.metadata ?? {}), reasoningDone: true }
-    } else if (message.metadata?.reasoningDone === true) {
-      message.metadata = { ...message.metadata, reasoningDone: false }
-    }
+  private markReasoningDone(message: MessagePayload, done: boolean): void {
+    message.reasoningDone = done
   }
 
   /**
-   * 关闭指定 seq 的流式锚点(message 定稿 / finalize 调用):标记 streaming=false 并移除锚点。
+   * 关闭指定 seq 的流式锚点(message 定稿 / finalize 调用):payload.streaming 置 false 并移除锚点。
    * 线程项与 bySeq 索引不删除,后续迟到帧(如有)仍按同一条更新。
    */
   private closeStreamingBySeq(seqKey: string): void {
-    const message = this.anchors.streaming.get(seqKey)
-    if (!message) return
+    const item = this.anchors.streaming.get(seqKey)
+    if (!item) return
     this.anchors.streaming.delete(seqKey)
-    if (message.metadata) {
-      message.metadata = { ...message.metadata, streaming: false }
-    }
+    ;(item.payload as MessagePayload).streaming = false
   }
 
   /**
@@ -541,19 +462,17 @@ export class TaskEventFolder {
    */
   closeStreamingByAgent(agentKey: string): void {
     for (const seqKey of Array.from(this.anchors.streaming.keys())) {
-      const message = this.anchors.streaming.get(seqKey)
-      if (message && (message.agentId ?? '') === agentKey) {
+      const item = this.anchors.streaming.get(seqKey)
+      if (item && item.agentId === agentKey) {
         this.anchors.streaming.delete(seqKey)
-        if (message.metadata) {
-          message.metadata = { ...message.metadata, streaming: false }
-        }
+        ;(item.payload as MessagePayload).streaming = false
       }
     }
   }
 
   /**
    * message:一轮权威终结(落盘事件)。同 seq 定位复用,不重复插入:
-   * - 有流式锚点(delta/thinking 聚合中) → 复用锚点定稿;
+   * - 有流式锚点(thinking/delta 聚合中) → 复用锚点项的 payload 定稿;
    * - 无锚点但有同 seq 线程项(迟到的重复 message 帧 / 回放先到) → 更新同一条;
    * - 两者皆无(回放/冷启动) → 新建完成态插入。
    * 完成后关闭该轮流式锚点。
@@ -566,35 +485,28 @@ export class TaskEventFolder {
     const thinking = typeof data?.thinking === 'string' ? data.thinking : ''
     const text = typeof payload?.content === 'string' ? payload.content : ''
     const toolCalls = readToolCalls(data?.toolCalls)
-    let message: AgentMessageRecord
+    let message: MessagePayload
     let isNew = false
     const streaming = this.anchors.streaming.get(seqKey)
     if (streaming) {
       // 同轮流式锚点:复用同一条线程项定稿。
-      message = streaming
+      message = streaming.payload as MessagePayload
     } else {
       const existing = this.bySeq.get(seqKey)
-      if (existing && existing.type === 'agent_message') {
+      if (existing && existing.kind === 'message') {
         // 该轮 item 已存在(流式锚点被提前关闭,或 message 重复帧):更新同一条。
-        message = existing.message
+        message = existing.payload as MessagePayload
       } else {
         message = {
-          messageId: `m-${seq}`,
-          agentId: agentKey,
           role: 'assistant',
           content: '',
-          historyMode: 'thread_only',
-          createdAt: ts,
-          updatedAt: ts,
-          sequence: Number(seq),
-          metadata: {},
         }
         isNew = true
       }
     }
     if (thinking) {
       // 权威值替换(流式差分之和应与整轮 thinking 一致;丢帧时以权威为准)。
-      message.reasoning = thinking
+      message.thinking = thinking
     }
     message.content = text
     if (toolCalls.length > 0) {
@@ -608,10 +520,15 @@ export class TaskEventFolder {
         }
       }
     }
-    message.updatedAt = ts
     this.closeStreamingBySeq(seqKey)
     if (isNew) {
-      this.insertMessage(agentKey, message, seqKey)
+      this.insertItem({
+        seq: seqKey,
+        ts,
+        agentId: agentKey,
+        kind: 'message',
+        payload: message,
+      })
     }
   }
 }
@@ -634,13 +551,6 @@ export function compareSeq(a: number | string, b: number | string): number {
     if (da[i] !== db[i]) return (da[i] < db[i] ? -1 : 1) * (na ? -1 : 1)
   }
   return 0
-}
-
-/** messageId(形如 `m-${seq}`) → seq 字符串;非该形返回 null。 */
-function seqFromMessageId(messageId: string): string | null {
-  if (!messageId || !messageId.startsWith('m-')) return null
-  const seq = messageId.slice(2)
-  return seq.length > 0 ? seq : null
 }
 
 /** message.toolCalls 数组 → LLMToolCall[](模型真实 id;name 缺省补登记表)。 */

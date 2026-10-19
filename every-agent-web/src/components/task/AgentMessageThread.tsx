@@ -24,8 +24,10 @@ import ToolCallView, { renderAggregatedToolDetails } from '@/components/task/too
  * Agent 消息子块属性。
  */
 export interface AgentMessageThreadProps {
-  /** 当前消息记录。 */
+  /** 当前消息记录(渲染视图模型:由 ThreadItem payload 适配或 rounds 快照合成,seq 即 id)。 */
   message: AgentMessageRecord
+  /** 线程项排序/动作键(item.seq;合成记录传 round.startSeq/endSeq;供用户消息动作扩展点等消费)。 */
+  seq?: string
   /** 当前 Task ID，用于结构化输出块（如 `<plan>`）的执行按钮回灌。 */
   taskId?: string
   /** 主 agent 稳定 Id（判定用户消息是否子 agent 输入用；渲染层消费 agentId 区分主/子）。 */
@@ -84,6 +86,7 @@ const ROLE_META: Record<AgentMessageRecord['role'], {
  */
 export default function AgentMessageThread({
   message,
+  seq,
   taskId,
   mainAgentId = '',
   isContinuation,
@@ -131,9 +134,9 @@ export default function AgentMessageThread({
     // 子 agent 输入判定:agentId 非空且 ≠ mainAgentId(空串安全:合成骨架/mainAgentId 未灌入时落回 false)。
     const isSubAgentInput = Boolean(message.agentId) && message.agentId !== mainAgentId
     // 用户消息动作（扩展点 ui.user_message_actions，如复制原始内容/编辑重发按钮）：
-    // messageId 格式为 `m-${原始seq字符串}`,从中提取精确 seq(避免 Number 精度丢失)。
-    // 子 agent 输入不带扩展点(不可编辑重发)。
-    const userMsgSeq = message.messageId?.startsWith('m-') ? message.messageId.slice(2) : null
+    // seq 由调用方传入(item.seq 直取——seq 即 id,不再从 messageId 前缀反解;
+    // 合成记录传 round.startSeq)。子 agent 输入不带扩展点(不可编辑重发)。
+    const userMsgSeq = seq ?? null
     const userMessageActions = !isSubAgentInput && userMsgSeq != null
       ? pluginDispatcher.listRegisteredUserMessageActions() : []
     const hasUserMessageActions = userMessageActions.length > 0

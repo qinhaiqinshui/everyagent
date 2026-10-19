@@ -440,7 +440,7 @@ export interface UiRoundTailPanelDefinition {
 export interface UserMessageActionProps {
   /** 当前任务 ID。 */
   taskId?: string
-  /** 用户消息 seq（字符串雪花 ID，从 messageId `m-<seq>` 提取）。 */
+  /** 用户消息 seq（字符串雪花 ID，= 线程项 item.seq，seq 即 id）。 */
   seq: string
   /** 消息纯文本内容。 */
   content: string
@@ -523,6 +523,11 @@ export interface TraceTypeDefinition<R extends PluginTraceRecord = PluginTraceRe
   hideTitle?: boolean
   /** 是否允许展开。 */
   canExpand?: (trace: R) => boolean
+  /**
+   * 视觉色调（目前仅支持 `'error'`）：整条 trace 壳转错误色
+   * （图标/标题/摘要转红，展开态边框与底色淡红）。缺省为普通色。
+   */
+  tone?: 'error'
 }
 
 // ─── 输出块渲染 ───────────────────────────────────────────────────────────

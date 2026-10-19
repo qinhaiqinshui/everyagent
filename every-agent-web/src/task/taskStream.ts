@@ -10,7 +10,7 @@
  *   eventFolder 只负责线程折叠,agentLedger.ts);
  * - 之后 worker 定向推送(stream 频道)的流式增量(delta/thinking/message/tool/子 agent 等)
  *   实时折入同一 folder。
- * 线程数据唯一真相源 = folder.state.items(TaskThreadItem[]),按 seq 去重/排序,
+ * 线程数据唯一真相源 = folder.state.items(ThreadItem[],五字段,seq 即 id),按 seq 去重/排序,
  * 前端 TaskThread 直接消费,不做本地持久化(对话历史由 worker 落盘)。过程内容一律懒加载:
  * 闭合轮展开 / 终态未闭合尾轮走 loadRoundForward 前向分页;运行中尾轮往上翻历史走
  * loadRoundBackward 后向分页。

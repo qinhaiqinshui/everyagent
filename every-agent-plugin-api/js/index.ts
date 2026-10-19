@@ -440,7 +440,7 @@ export interface UiRoundTailPanelDefinition {
 export interface UserMessageActionProps {
   /** 当前任务 ID。 */
   taskId?: string
-  /** 用户消息 seq（字符串雪花 ID，从 messageId `m-<seq>` 提取）。 */
+  /** 用户消息 seq（字符串雪花 ID，= 线程项 item.seq，seq 即 id）。 */
   seq: string
   /** 消息纯文本内容。 */
   content: string

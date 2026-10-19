@@ -1,6 +1,6 @@
 import React from 'react'
 import type { RoundSummary } from '@/task/types'
-import type { TaskThreadItem } from '@/task/eventFolder'
+import type { ThreadItem } from '@/task/threadItem'
 import { InlineSpinner } from '@/components/shared/ui'
 import TaskThread from './TaskThread'
 import { sliceRound } from './roundsView'
@@ -26,8 +26,8 @@ import { sliceRound } from './roundsView'
 export interface RoundDetailProps {
   /** 该轮摘要（rounds.jsonl 行）。 */
   round: RoundSummary
-  /** 单一线程真相源（按 seq 升序）。 */
-  items: TaskThreadItem[]
+  /** 单一线程真相源（五字段 ThreadItem，按 seq 升序）。 */
+  items: ThreadItem[]
   /** 任务 ID。 */
   taskId: string
   /** 是否仍在生成（驱动 TaskThread 底部运行状态横幅）。 */
@@ -37,7 +37,7 @@ export interface RoundDetailProps {
   /** 外部正在一次性拉取该轮区间（显示加载提示）。 */
   loading?: boolean
   /** agent 过滤谓词（「只看该 agent」）：仅放行归属该 agent 的线程项；缺省不过滤。 */
-  matches?: (item: TaskThreadItem) => boolean
+  matches?: (item: ThreadItem) => boolean
 }
 
 /** 加载指示延迟展示阈值(ms):本地 worker / 缓存命中时轮内容几十毫秒内即达,立即渲染
@@ -53,7 +53,7 @@ export default function RoundDetail({
   loading = false,
   matches,
 }: RoundDetailProps): React.ReactNode {
-  const slice = React.useMemo<TaskThreadItem[]>(
+  const slice = React.useMemo<ThreadItem[]>(
     () => (matches ? sliceRound(items, round).filter(matches) : sliceRound(items, round)),
     [items, round.startSeq, round.endSeq, matches],
   )

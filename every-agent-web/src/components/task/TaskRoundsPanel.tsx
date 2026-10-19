@@ -2,7 +2,7 @@ import React from 'react'
 import type { AgentMessageRecord } from '@/types'
 import type { RoundSummary, TaskRoundsResult } from '@/task/types'
 import type { TaskStreamHandle } from '@/task/taskStream'
-import type { TaskThreadItem } from '@/task/eventFolder'
+import type { ThreadItem } from '@/task/threadItem'
 import { BrandMark } from '@/components/shared/BrandLoadingBlock'
 import { ChevronDownIcon, ChevronRightIcon } from '../shared/AppGlyphs'
 import { InlineSpinner } from '@/components/shared/ui'
@@ -53,8 +53,8 @@ export interface TaskRoundsPanelProps {
   taskId: string
   /** 任务流句柄（取 rounds 快照、触发懒加载分页 / 重试）。 */
   stream: TaskStreamHandle | null
-  /** 单一线程真相源（taskStream 折叠产物，按 seq 升序）。 */
-  items: TaskThreadItem[]
+  /** 单一线程真相源（taskStream 折叠产物,五字段 ThreadItem,按 seq 升序）。 */
+  items: ThreadItem[]
   /** 本轮生成是否在飞（驱动尾轮运行状态横幅）。 */
   isGenerating?: boolean
   /** 懒加载占位的 IntersectionObserver root（滚动容器；缺省用视口）。 */
@@ -264,7 +264,7 @@ export default function TaskRoundsPanel({
   /** agent 过滤谓词：'' = 不过滤（原样全过）；否则仅放行归属该 agent 的线程项。
    * 纯渲染派生，不触发任何拉取——被过滤掉的流式增量不产生 DOM 变化，不影响自动贴底。 */
   const matches = React.useCallback(
-    (it: TaskThreadItem) => matchesAgentFilter(it, filterAgentId, mainAgentId),
+    (it: ThreadItem) => matchesAgentFilter(it, filterAgentId, mainAgentId),
     [filterAgentId, mainAgentId],
   )
 
@@ -272,7 +272,7 @@ export default function TaskRoundsPanel({
    * 起点 user 气泡由区间排除在外（下方 tailUserMessage 从 rounds 快照合成单独渲染，
    * 不依赖 items 含起点行——骨架出画板）；起点之后的子 agent 首条 user.message
    * (seq 严格大于起点)天然保留。过滤态：切片后按归属过滤。 */
-  const tailItems = React.useMemo<TaskThreadItem[]>(
+  const tailItems = React.useMemo<ThreadItem[]>(
     () => sliceTailItems(items, tailStartSeq, matches),
     [items, tailStartSeq, matches],
   )
@@ -348,6 +348,7 @@ export default function TaskRoundsPanel({
           <TailRoundView
             taskId={taskId}
             userMessage={tailUserMessage}
+            userSeq={tailStartSeq}
             tailItems={tailItems}
             isGenerating={isGenerating}
             live={live}
@@ -395,7 +396,7 @@ function ClosedRoundView({
 }: {
   round: RoundSummary
   expanded: boolean
-  items: TaskThreadItem[]
+  items: ThreadItem[]
   taskId: string
   workerId?: string
   workspaceRoot?: string
@@ -403,7 +404,7 @@ function ClosedRoundView({
   pageState?: RoundPageState
   scrollRoot?: HTMLElement | null
   /** agent 过滤谓词（「只看该 agent」）：透传 RoundDetail，只作用于展开态过程内容。 */
-  matches: (item: TaskThreadItem) => boolean
+  matches: (item: ThreadItem) => boolean
   onToggle: () => void
   onLoadMore: () => void
 }): React.ReactNode {
@@ -418,7 +419,7 @@ function ClosedRoundView({
   // 展开态由 RoundDetail 从 items 切片渲染,即使无工具调用也能看到最终轮的思考内容。
   return (
     <>
-      <AgentMessageThread message={userMessage} taskId={taskId} mainAgentId={mainAgentId} />
+      <AgentMessageThread message={userMessage} seq={round.startSeq} taskId={taskId} mainAgentId={mainAgentId} />
       <div className="nagent-round-collapse">
         <button
           type="button"
@@ -463,7 +464,7 @@ function ClosedRoundView({
           </>
         ) : (
           <div className="nagent-round-collapse__final">
-            <AgentMessageThread message={finalMessage} taskId={taskId} mainAgentId={mainAgentId} />
+            <AgentMessageThread message={finalMessage} seq={round.endSeq} taskId={taskId} mainAgentId={mainAgentId} />
           </div>
         )}
         {/* 轮末工具栏：`ui.round_tail_panels` 的全部贡献者（含核心内置的「复制」按钮）并排一行，
@@ -503,6 +504,7 @@ function ClosedRoundView({
 function TailRoundView({
   taskId,
   userMessage,
+  userSeq,
   tailItems,
   isGenerating,
   live,
@@ -514,7 +516,9 @@ function TailRoundView({
 }: {
   taskId: string
   userMessage?: AgentMessageRecord
-  tailItems: TaskThreadItem[]
+  /** 尾轮起点 user 气泡的 seq(= tailStartSeq,rounds 快照合成记录的动作键)。 */
+  userSeq?: string
+  tailItems: ThreadItem[]
   isGenerating: boolean
   live: boolean
   mainAgentId?: string
@@ -526,7 +530,7 @@ function TailRoundView({
   return (
     <div className="nagent-tail-round">
       {userMessage ? (
-        <AgentMessageThread message={userMessage} taskId={taskId} mainAgentId={mainAgentId} />
+        <AgentMessageThread message={userMessage} seq={userSeq} taskId={taskId} mainAgentId={mainAgentId} />
       ) : null}
       {live && pageState && !pageState.done ? (
         <LazyLoadSentinel
