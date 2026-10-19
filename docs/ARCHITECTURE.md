@@ -1288,6 +1288,10 @@ public interface AgentFactory {
 - **扩展点 `ui.tool_call_views`** — 按工具名**整体接管工具调用视图**(折叠态 + 展开态):插件注册 `ToolCallViewDefinition{pluginId, toolName, Component}`,`Component` 与核心内置视图同契约(`ToolViewProps`,聚合后的 `details` 数组)。解析优先级:插件注册的视图 > 内置 `toolViews/` 目录注册表 > `DefaultToolView`。插件视图完全自治(折叠行、展开头部、参数/结果/错误块均由插件渲染),但只能用 plugin-api 类型 + ctx 能力,不引宿主组件。内置 `update-file-view` 插件以此接管 `update_file`:折叠态显示文件名与变更统计徽章,展开态内嵌 oldcontent→content 行级 diff。
 - **插件开发指南与脚手架** — 动手开发全流程见插件指南 `docs/plugin-guide/index.md`(快速上手 / plugin.json 字段 / 后端与前端扩展点手册 / 构建分发 / 排查,19 篇);新插件工程用脚手架生成:`create-everyagent-plugin/`,命令 `node create-everyagent-plugin --id <id>`(java/web/full 模板 + `.eap` 打包),不必手搓模板。standalone 形态自带 `vendor/@everyagent/plugin-api/index.d.ts.raw` 类型副本,是宿主真源码 `every-agent-plugin-api/js/index.ts` 的**逐字节镜像**,由 `scripts/sync-plugin-api-copy.ps1` 维护(内容同步,与管版本字面量的 `sync-plugin-template-versions.ps1` 分工明确),并由 `create-everyagent-plugin/test/plugin-api-copy.test.mjs`(`node --test`)守卫漂移——该副本曾两次落后于源码且不报错(standalone 插件只是「少一个方法」)。
 
+### 8.6 测试基建(vitest)
+
+前端测试统一走 vitest:`every-agent-web` 内 `npm test` = `vitest run`(`vitest.config.ts` 的 resolve.alias 与 vite.config.ts 锁同一套别名;node 环境,不引 jsdom;include 收敛 `src/**/*.test.ts`),`npx tsc --noEmit` 覆盖测试文件类型(测试放被测模块同目录)。Phase 0 起 `src/task/eventFolder.test.ts` 为折叠器(eventFolder + eventRegistry)的**特征化测试**:锁定乱序 seq 归位、重放去重、thinking/delta 流式聚合与 message 定稿、rounds 骨架折入/升级、截断、agentMeta 台账、isMain 判定、foldRole 打标与 defaultHandler 兜底等现状行为,作为「任务线程统一条目与画板纯化」重构的行为护栏——先锁后删,重构步骤须同步更新断言而非绕过。
+
 ---
 
 ## 9. 桌面版(every-agent-desktop)
