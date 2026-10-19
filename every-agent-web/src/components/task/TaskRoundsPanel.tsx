@@ -233,28 +233,38 @@ export default function TaskRoundsPanel({
   const tailStartSeq = openStartSeq || terminalTail?.startSeq || ''
 
   // 终态未闭合尾轮：常开视图，进入即前向首页拉取（不再有实时增量）。
+  // 同「已展开轮缺分页状态」effect：用 pageStates 当前渲染值判断存在性并纳入依赖,
+  // 避免 resetEpoch 触发 setPageStates({}) 后本 effect 因 pageStatesRef 仍指向旧值而跳过重拉。
   React.useEffect(() => {
     if (!tailStartSeq || live || !terminalTail) return
-    if (pageStatesRef.current[terminalTail.roundId]) return
+    if (pageStates[terminalTail.roundId]) return
     startForward(terminalTail)
-  }, [tailStartSeq, live, terminalTail, startForward])
+  }, [tailStartSeq, live, terminalTail, startForward, pageStates])
 
   // 已展开轮缺分页状态（初始挂载的极端时序 / resetEpoch 失效促重拉后）：重新发起首页拉取,
   // 与上方终态尾轮 effect 同款「无状态才启动」守卫(拉取层先查 items 缓存,缺才 RPC)。
+  //
+  // 关键:用 pageStates(当前渲染值)而非 pageStatesRef.current 做存在性判断,且把 pageStates
+  // 纳入依赖。否则 resetEpoch 变化触发 setPageStates({}) 时,同一渲染周期内本 effect 读取的
+  // pageStatesRef 仍指向旧值(含已展开轮的旧分页状态),条件不满足而跳过;下一渲染周期
+  // pageStates 已清空但 resetEpoch 不再变化、本 effect 不触发,已展开轮的 items 已被
+  // folder.reset() 清空却无重拉路径 → 展开态数据丢失(续跑场景)。
   React.useEffect(() => {
     for (const round of closedRounds) {
-      if (expandedSet.has(round.roundId) && !pageStatesRef.current[round.roundId]) {
+      if (expandedSet.has(round.roundId) && !pageStates[round.roundId]) {
         startForward(round)
       }
     }
-  }, [closedRounds, expandedSet, startForward, resetEpoch])
+  }, [closedRounds, expandedSet, startForward, resetEpoch, pageStates])
 
   // 运行中尾轮：原样订阅流 + 尾页起步；仅初始化 backward 分页状态（cursor=当前最早尾事件
   // seq），**不触发拉取**——真正的历史续拉等用户上滚把顶部 backward sentinel 滚入可视区
   // 经 onLoadMoreBackward 触发（懒加载语义，方案第 3 点）。
+  // 同「已展开轮缺分页状态」effect：用 pageStates 当前渲染值判断存在性并纳入依赖,
+  // 避免 resetEpoch 触发 setPageStates({}) 后本 effect 因 pageStatesRef 仍指向旧值而跳过初始化。
   React.useEffect(() => {
     if (!tailStartSeq || !live) return
-    const cur = pageStatesRef.current[openPageKey]
+    const cur = pageStates[openPageKey]
     if (cur) return
     const firstEventSeq = firstTailEventSeq(items, tailStartSeq)
     if (!firstEventSeq) {
@@ -262,7 +272,7 @@ export default function TaskRoundsPanel({
       return
     }
     updatePageState(openPageKey, { dir: 'backward', cursor: firstEventSeq, loading: false, done: false })
-  }, [tailStartSeq, live, items, updatePageState, openPageKey])
+  }, [tailStartSeq, live, items, updatePageState, openPageKey, pageStates])
 
   /** agent 过滤谓词：'' = 不过滤（原样全过）；否则仅放行归属该 agent 的线程项。
    * 纯渲染派生，不触发任何拉取——被过滤掉的流式增量不产生 DOM 变化，不影响自动贴底。 */
