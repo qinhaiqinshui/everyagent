@@ -67,7 +67,7 @@ function truncate(text: string, max = 160): string {
   return text.length <= max ? text : `${text.slice(0, Math.max(max - 1, 1))}…`
 }
 
-function DefaultEntry({ detail, defaultOpen }: { detail: AggregatedToolDetail; defaultOpen?: boolean }) {
+function DefaultEntry({ detail }: { detail: AggregatedToolDetail }) {
   const hasError = detail.status === 'error'
   // status 为空 = 已下发但结果消息尚未到达（live 运行中态）。
   const isRunning = detail.status === undefined
@@ -88,7 +88,7 @@ function DefaultEntry({ detail, defaultOpen }: { detail: AggregatedToolDetail; d
 
   const stateClass = toolStateClass(detail)
   const durationText = toolDurationText(detail)
-  const [open, setOpen] = React.useState(Boolean(defaultOpen))
+  const [open, setOpen] = React.useState(false)
 
   return (
     <div className={`nagent-tool nagent-tool--call${open ? ' is-open' : ''}`}>
@@ -156,11 +156,11 @@ function DefaultEntry({ detail, defaultOpen }: { detail: AggregatedToolDetail; d
   )
 }
 
-export default function DefaultToolView({ details, defaultOpen }: ToolViewProps) {
+export default function DefaultToolView({ details }: ToolViewProps) {
   return (
     <>
       {details.map((detail, idx) => (
-        <DefaultEntry key={detail.toolCallId ?? idx} detail={detail} defaultOpen={defaultOpen} />
+        <DefaultEntry key={detail.toolCallId ?? idx} detail={detail} />
       ))}
     </>
   )

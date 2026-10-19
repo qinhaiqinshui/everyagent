@@ -3,11 +3,11 @@
  *
  * thinking(AssistantReasoningBlock:流式且未 reasoningDone 展开、完成后自动折叠)与
  * 正文(RichMessageContent)自 AgentMessageThread 现状迁移(行为等价);工具块为
- * **单调用直渲 / 多调用批壳**双形态:
- * - 单调用(toolCalls.length === 1):跳过批壳,直接渲染 per-tool 美化视图(一次折叠
+ * **单调用直渲 / 多调用竖线容器**双形态:
+ * - 单调用(toolCalls.length === 1):无包装,直接渲染 per-tool 美化视图(一次折叠
  *   即见参数与结果,状态图标 + 耗时在视图摘要行上);
- * - 多调用:批壳(左竖线容器)+ 调用行(状态图标 + 耗时 + 等宽工具名 + 参数摘要),
- *   点击行展开详情(per-tool 美化视图接管,defaultOpen 挂载即展开,不再二次折叠)。
+ * - 多调用:仅一条左竖线容器标识「同一次请求下发」,内部平铺各调用的 per-tool
+ *   美化视图(无批壳行/无二次折叠)。
  *
  * 运行态读秒:`tool.started` 瞬态映射(toolStartedRuntime,按 callId 直配)点亮 running
  * + 计时 now - startedAt(单一 1s tick,卸载清理);对应 tool.result 到达冻结权威
@@ -17,15 +17,11 @@ import React from 'react'
 import type { LLMToolCall } from '@/types'
 import type { ThreadItem, ToolResultPayload } from '@/task/threadItem'
 import { getToolStarted, type ToolStartedInfo } from '@/task/toolStartedRuntime'
-import { ChevronDownIcon, ChevronRightIcon, WrenchIcon } from '@/components/shared/AppGlyphs'
+import { ChevronDownIcon, ChevronRightIcon } from '@/components/shared/AppGlyphs'
 import RichMessageContent from '@/components/task/RichMessageContent'
 import { getToolView } from '@/components/task/toolViews/registry'
 import type { AggregatedToolDetail, ToolCallState } from '@/components/task/toolViews/types'
-import {
-  buildCallInlinePreview,
-  formatToolDuration,
-  hasActiveTextSelection,
-} from '@/components/task/toolViews/helpers'
+import { formatToolDuration } from '@/components/task/toolViews/helpers'
 import { useThreadBoard } from './threadBoardContext'
 import { detailOfCall, interruptedAfterMessage, resultsFor } from './toolDomain'
 import type { KindViewProps } from './registry'
@@ -44,97 +40,17 @@ function rowStateOf(
   return started ? 'running' : 'queued'
 }
 
-/** per-tool 美化视图接管调用详情(read_file 等专用视图 registry 不动)。 */
-function ToolDetailView({
-  detail,
-  defaultOpen,
-}: {
-  detail: AggregatedToolDetail
-  /** 挂载即展开(批壳调用行点击进入时 true,消除二次折叠)。 */
-  defaultOpen?: boolean
-}) {
+/** per-tool 美化视图接管调用渲染(read_file 等专用视图 registry 不动)。 */
+function ToolDetailView({ detail }: { detail: AggregatedToolDetail }) {
   const View = getToolView(detail.toolName)
-  return <View details={[detail]} defaultOpen={defaultOpen} />
-}
-
-/**
- * 单个调用行(多调用批壳内):状态图标 + 耗时 + 等宽工具名 + 参数摘要;点击展开详情。
- * 状态优先级:result(权威) > started 瞬态(running/读秒) > 排队;批中断黄/灰显。
- */
-function ToolCallRow({
-  call,
-  result,
-  started,
-  interrupted,
-  now,
-}: {
-  call: LLMToolCall
-  result: ToolResultPayload | null
-  started: ToolStartedInfo | undefined
-  interrupted: boolean
-  now: number
-}) {
-  const [open, setOpen] = React.useState(false)
-  const state = rowStateOf(result, started, interrupted)
-  const detail = detailOfCall(call, result)
-  const preview = buildCallInlinePreview(detail)
-  // 耗时:result 的 durationMs 是批末冻结的权威值;running 用 now - startedAt 读秒;
-  // interrupted/queued(无起止信号)与老事件缺 durationMs 时不展示。
-  const durationMs = result?.durationMs
-    ?? (state === 'running' && started ? Math.max(0, now - started.startedAt) : undefined)
-  const durationText = formatToolDuration(durationMs)
-  return (
-    <div className={`nagent-tool-batch__row nagent-tool-batch__row--${state}`}>
-      <button
-        type="button"
-        className="nagent-tool-batch__summary"
-        aria-expanded={open}
-        aria-label={`${detail.toolName} 调用详情，点击${open ? '收起' : '展开'}`}
-        onClick={() => {
-          // 拖选参数文本(选区非空)时不切换折叠,保证参数可选中复制。
-          if (hasActiveTextSelection()) return
-          setOpen((value) => !value)
-        }}
-      >
-        <WrenchIcon size={12} className={`nagent-tool-batch__icon nagent-tool-state--${state}`} aria-hidden="true" />
-        {durationText ? (
-          // 耗时置于图标与工具名之间,只显示时间。
-          <span className="nagent-tool-batch__duration">{durationText}</span>
-        ) : null}
-        <span className="nagent-tool-batch__name">{detail.toolName}</span>
-        <span className="nagent-tool-batch__preview">
-          {preview.kind === 'comment' ? (
-            <>
-              <span className="nagent-tool-batch__preview-comment">{preview.comment}</span>
-              {preview.rest ? ` ${preview.rest}` : null}
-            </>
-          ) : (
-            preview.text
-          )}
-        </span>
-        {open ? (
-          <ChevronDownIcon size={12} className="nagent-tool-batch__chevron" />
-        ) : (
-          <ChevronRightIcon size={12} className="nagent-tool-batch__chevron" />
-        )}
-      </button>
-      {open ? (
-        <div className="nagent-tool-batch__detail">
-          {/* rowState/durationMs 灌入视图(状态图标色 + 耗时);defaultOpen 挂载即展开。 */}
-          <ToolDetailView
-            detail={{ ...detail, rowState: state, durationMs }}
-            defaultOpen
-          />
-        </div>
-      ) : null}
-    </div>
-  )
+  return <View details={[detail]} />
 }
 
 /**
  * 工具调用块:一次 message 下发的 toolCalls 为一批(= 同一次 AI 接口请求)。
- * - 单调用:跳过批壳直渲 per-tool 美化视图(一次折叠见详情);
- * - 多调用:批壳(左竖线)+ 调用行,点击行展开 defaultOpen 详情。
+ * - 单调用:直接渲染 per-tool 美化视图(无包装,一次折叠见详情);
+ * - 多调用:仅一条左竖线容器标识「同一次请求下发」,内部直接平铺各调用的
+ *   per-tool 视图(无批壳行/无二次折叠,状态图标 + 耗时在各自视图摘要行上)。
  * 读秒走本组件单一 setInterval(1s,仅存在 running 调用时挂,卸载清理)。
  */
 function ToolCallsBlock({
@@ -162,32 +78,25 @@ function ToolCallsBlock({
     return () => window.clearInterval(timer)
   }, [hasLiveRunning])
 
-  // 单调用:直渲 per-tool 美化视图,状态图标 + 耗时灌入视图摘要行(不套批壳)。
-  if (toolCalls.length === 1) {
-    const state = rowStateOf(results[0], startedByCall[0], interrupted)
-    const durationMs = results[0]?.durationMs
-      ?? (state === 'running' && startedByCall[0] ? Math.max(0, now - startedByCall[0].startedAt) : undefined)
-    return (
-      <ToolDetailView
-        detail={{ ...detailOfCall(toolCalls[0], results[0]), rowState: state, durationMs }}
-      />
-    )
+  // 调用 → 美化视图输入:状态图标 class + 耗时(权威 durationMs,running 实时读秒)。
+  const buildDetail = (idx: number): AggregatedToolDetail => {
+    const state = rowStateOf(results[idx], startedByCall[idx], interrupted)
+    const durationMs = results[idx]?.durationMs
+      ?? (state === 'running' && startedByCall[idx] ? Math.max(0, now - startedByCall[idx].startedAt) : undefined)
+    return { ...detailOfCall(toolCalls[idx], results[idx]), rowState: state, durationMs }
   }
 
+  // 单调用:无包装,直接渲染视图。
+  if (toolCalls.length === 1) {
+    return <ToolDetailView detail={buildDetail(0)} />
+  }
+
+  // 多调用:仅左竖线容器标识同批,内部平铺各调用视图。
   return (
-    <div className={`nagent-tool-batch is-open${interrupted ? ' nagent-tool-batch--interrupted' : ''}`}>
-      <div className="nagent-tool-batch__rows">
-        {toolCalls.map((call, idx) => (
-          <ToolCallRow
-            key={call.id || `call:${idx}`}
-            call={call}
-            result={results[idx]}
-            started={startedByCall[idx]}
-            interrupted={interrupted}
-            now={now}
-          />
-        ))}
-      </div>
+    <div className={`nagent-tool-batch${interrupted ? ' nagent-tool-batch--interrupted' : ''}`}>
+      {toolCalls.map((call, idx) => (
+        <ToolDetailView key={call.id || `call:${idx}`} detail={buildDetail(idx)} />
+      ))}
     </div>
   )
 }

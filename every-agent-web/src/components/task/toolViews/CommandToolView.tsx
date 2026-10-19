@@ -50,7 +50,7 @@ function flattenArgs(args: Record<string, unknown> | null): string[] {
     `${k}: ${v !== null && typeof v === 'object' ? JSON.stringify(v) : formatPrimitive(v)}`)
 }
 
-function ExecEntry({ detail, defaultOpen }: { detail: AggregatedToolDetail; defaultOpen?: boolean }) {
+function ExecEntry({ detail }: { detail: AggregatedToolDetail }) {
   const args = (detail.arguments ?? {}) as Record<string, unknown>
   const rawCommand = typeof args.command === 'string' ? args.command : ''
   // 首行是注释(意图说明)时拆分为「正文样式注释 + 等宽命令」两段,否则整段原样等宽。
@@ -63,7 +63,7 @@ function ExecEntry({ detail, defaultOpen }: { detail: AggregatedToolDetail; defa
 
   const stateClass = toolStateClass(detail)
   const durationText = toolDurationText(detail)
-  const [open, setOpen] = React.useState(Boolean(defaultOpen))
+  const [open, setOpen] = React.useState(false)
 
   return (
     <div className={`nagent-tool nagent-tool--execmd${open ? ' is-open' : ''}`}>
@@ -121,11 +121,11 @@ function ExecEntry({ detail, defaultOpen }: { detail: AggregatedToolDetail; defa
   )
 }
 
-function CommandToolView({ details, defaultOpen }: ToolViewProps) {
+function CommandToolView({ details }: ToolViewProps) {
   return (
     <>
       {details.map((detail, idx) => (
-        <ExecEntry key={detail.toolCallId ?? idx} detail={detail} defaultOpen={defaultOpen} />
+        <ExecEntry key={detail.toolCallId ?? idx} detail={detail} />
       ))}
     </>
   )

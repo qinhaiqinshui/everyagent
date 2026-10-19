@@ -10,7 +10,7 @@
  * 纯函数段(buildUserMessageReplaySegments)直测;渲染断言与 registry.test.ts 同款
  * react-dom/server 方案(零新依赖)。
  */
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import React from 'react'
 import { renderToString } from 'react-dom/server'
 import type { LLMToolCall } from '@/types'
@@ -23,6 +23,15 @@ import { ThreadBoardProvider } from './threadBoardContext'
 import { MessageView, formatToolDuration } from './messageView'
 import { UserMessageView, buildUserMessageReplaySegments } from './userMessageView'
 import { ToolResultView } from './toolResultView'
+
+// 工具视图直挂载(FileToolEntry 等)消费壳层 context;测试环境无真实 Provider,
+// hook 级 mock 最小桩(openGlobalFileTab/showToast 均 no-op)。
+vi.mock('@/components/app/WorkspaceShellContext', () => ({
+  useWorkspaceShell: () => ({ openGlobalFileTab: () => {} }),
+}))
+vi.mock('@/components/app/AppUiContext', () => ({
+  useAppUi: () => ({ toasts: [], showToast: () => {}, removeToast: () => {} }),
+}))
 import { ErrorView, CancelledView } from './statusViews'
 
 const TASK_ID = 'task-builtin-views'
@@ -62,7 +71,7 @@ afterEach(() => {
   clearTaskToolStarted(TASK_ID)
 })
 
-describe('message 视图批壳(批壳+调用行模型)', () => {
+describe('message 视图工具块(多调用竖线容器 + per-tool 视图直挂)', () => {
   const calls = [
     callOf('c1', 'read_file', '{"path":"src/a.ts"}'),
     callOf('c2', 'powershell', '{"command":"# 列出文件\\nls"}'),
@@ -77,44 +86,43 @@ describe('message 视图批壳(批壳+调用行模型)', () => {
     toolResultItem('30', { callId: 'c2', content: 'boom', status: 'error', durationMs: 25000 }),
   ]
 
-  it('批壳默认展开,直接显示调用行(无批头统计)', () => {
+  it('多调用:仅左竖线容器标识同批,内部平铺各调用视图(无批壳行/批头)', () => {
     const html = renderMessage(items[0], items)
     expect(html).toContain('nagent-tool-batch')
     expect(html).not.toContain('个调用')
-    expect(html).toContain('nagent-tool-batch__rows')
+    expect(html).not.toContain('nagent-tool-batch__')
   })
 
-  it('调用行:等宽工具名 + per-tool 参数摘要(path/command 首行注释两段)', () => {
+  it('视图直挂:read_file 走 FileToolEntry,powershell 走 CommandToolView(注释两段预览)', () => {
     const html = renderMessage(items[0], items)
     expect(html).toContain('src/a.ts')
     expect(html).toContain('列出文件')
-    expect(html).toContain('nagent-tool-batch__name')
-    expect(html).toContain('nagent-tool-batch__preview-comment')
+    expect(html).toContain('nagent-tool--filewrite')
+    expect(html).toContain('nagent-tool--execmd')
+    expect(html).toContain('nagent-tool__inline-preview-comment')
   })
 
-  it('状态点:done ✓绿 / error ✗红 / queued 未开始;图标后权威耗时(durationMs 冻结)', () => {
+  it('状态图标:done 绿 / error 红 / queued 灰;视图摘要行权威耗时(durationMs 冻结)', () => {
     const html = renderMessage(items[0], items)
     expect(html).toContain('nagent-tool-state--done')
     expect(html).toContain('nagent-tool-state--error')
     expect(html).toContain('nagent-tool-state--queued')
-    // ✓ 字符已移除,改用 WrenchIcon 绿色
-    // ✗ 字符已移除,改用 WrenchIcon 红色
     // 权威耗时:c1=1500ms → 1.5s;c2=25000ms → 25s;排队行无耗时也不显示状态文案
     expect(html).toContain('1.5s')
     expect(html).toContain('25s')
     expect(html).not.toContain('排队中')
   })
 
-  it('批内同名多调用不折叠(两个 read_file 两行,无「×N」聚合徽章)', () => {
+  it('批内同名多调用不折叠(两个 read_file 各自独立视图,无「×N」聚合徽章)', () => {
     const html = renderMessage(items[0], items)
     expect((html.match(/nagent-tool-state--/g) ?? []).length).toBe(3)
     expect(html).not.toContain('×2')
     expect(html).not.toContain('nagent-tool-group')
   })
 
-  it('无正文纯下发轮:批壳即该行全部内容,无占位文案/正文容器', () => {
+  it('无正文纯下发轮:工具块即该行全部内容,无占位文案/正文容器', () => {
     const html = renderMessage(items[0], items)
-    expect(html).toContain('nagent-tool-batch__rows')
+    expect(html).toContain('nagent-tool-batch')
     expect(html).not.toContain('nagent-msg__content')
     expect(html).not.toContain('（无文本）')
     expect(html).not.toContain('无占位')

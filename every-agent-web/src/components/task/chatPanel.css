@@ -1108,10 +1108,8 @@
 
 /* 命令首行注释(意图说明):以 AI 正文样式(无衬线 + 正文色)呈现,
    与后续命令文本(等宽 muted)形成层次。字号继承行内 --text-xs,
-   不改变 summary 的 baseline 对齐与行高;颜色走 token,明暗主题自动适配。
-   单条(CommandToolView)与工具批壳调用行(messageView)共用。 */
-.nagent-tool__inline-preview-comment,
-.nagent-tool-batch__preview-comment {
+   不改变 summary 的 baseline 对齐与行高;颜色走 token,明暗主题自动适配。 */
+.nagent-tool__inline-preview-comment {
   /* 脱离父级 --font-mono,回到正文 UI 无衬线字体(与 html/body 同一字体族)。 */
   font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI',
     'PingFang SC', 'Microsoft YaHei', 'Helvetica Neue', Arial, sans-serif;
@@ -1221,10 +1219,9 @@
   font-weight: 500;
 }
 
-/* ─── 工具批壳(批 = 一次 message 下发的 toolCalls,步骤 10 批壳+调用行模型)─────
-   左侧竖线容器 + 批头「N 个调用」(可折叠,默认展开);调用行 = 状态点 + 等宽工具名
-   + 参数摘要 + 行尾状态与耗时,点击展开参数与结果(per-tool 美化视图)。
-   (原「连续同名 ×N」聚合壳 GroupedToolCallView/nagent-tool-group 已退役删除。) */
+/* ─── 工具调用批容器(批 = 一次 message 下发的 toolCalls)─────
+   仅一条左侧竖线(2px 主题色)标识「同一次请求下发」,内部平铺各调用的
+   per-tool 美化视图(无批壳行/无二次折叠);单调用时不套本容器。 */
 .nagent-tool-batch {
   box-sizing: border-box;
   width: 100%;
@@ -1232,62 +1229,20 @@
   min-width: 0;
   margin-top: 4px;
   margin-bottom: 4px;
+  display: flex;
+  flex-direction: column;
   /* 左竖线 = 批的视觉锚点(2px 主题色) */
   border-left: 2px solid color-mix(in srgb, var(--accent-blue) 55%, transparent);
   border-radius: 0 var(--radius-sm, 6px) var(--radius-sm, 6px) 0;
   padding-left: 10px;
 }
 
-/* 中断批:竖线转灰,整批弱化(已 started「执行中被中断」/未 started「未执行」) */
+/* 中断批:竖线转灰(已 started 调用黄显/未 started 灰显由各视图状态图标承载) */
 .nagent-tool-batch--interrupted {
   border-left-color: color-mix(in srgb, var(--text-muted) 45%, transparent);
 }
 
-/* 批内调用行列表 */
-.nagent-tool-batch__rows {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
-
-.nagent-tool-batch__row {
-  min-width: 0;
-}
-
-.nagent-tool-batch__summary {
-  display: flex;
-  /* baseline 对齐消除工具名(UI 字体)与参数摘要(mono 字体)的水平错位;
-     状态点/SVG 无文字基线,由 align-self:center 单独居中。 */
-  align-items: baseline;
-  gap: 8px;
-  box-sizing: border-box;
-  width: 100%;
-  max-width: 100%;
-  min-width: 0;
-  padding: 2px 0;
-  border: none;
-  background: transparent;
-  cursor: pointer;
-  user-select: none;
-  font-size: var(--text-xs);
-  font-weight: 500;
-  color: var(--text-secondary);
-  text-align: left;
-  overflow: hidden;
-}
-
-.nagent-tool-batch__summary:hover {
-  color: var(--text-primary);
-}
-
-/* 状态图标:统一用 WrenchIcon,以颜色+动效区分状态(替代原圆点方案)。 */
-.nagent-tool-batch__icon {
-  flex: 0 0 auto;
-  flex-shrink: 0;
-  align-self: center;
-}
-
-/* 共享状态类:批壳调用行与 per-tool 美化视图的状态图标颜色/动效单一来源。 */
+/* 共享状态类:per-tool 美化视图的状态图标颜色/动效单一来源。 */
 .nagent-tool-state--queued {
   color: var(--text-muted);
 }
@@ -1323,71 +1278,6 @@
   .nagent-tool-state--running {
     animation: none;
   }
-}
-
-/* 等宽工具名:定宽不收缩,过长省略 */
-.nagent-tool-batch__name {
-  color: var(--text-secondary);
-  flex: 0 0 auto;
-  min-width: 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  font-family: var(--font-mono);
-}
-
-/* 参数摘要:占剩余空间,过长 ellipsis;允许选中复制(拖选不触发折叠由选区守卫保证) */
-.nagent-tool-batch__preview {
-  min-width: 0;
-  max-width: 100%;
-  flex: 0 1 auto;
-  color: var(--text-muted);
-  font-family: var(--font-mono);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  -webkit-user-select: text;
-  user-select: text;
-}
-
-/* 耗时(图标与工具名之间,只显示时间;running 读秒/完成态权威耗时) */
-.nagent-tool-batch__duration {
-  flex: 0 0 auto;
-  flex-shrink: 0;
-  color: var(--text-muted);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-
-.nagent-tool-batch__row--running .nagent-tool-batch__duration {
-  color: var(--accent-blue);
-}
-
-.nagent-tool-batch__row--interrupted .nagent-tool-batch__summary,
-.nagent-tool-batch__row--skipped .nagent-tool-batch__summary,
-.nagent-tool-batch__row--interrupted .nagent-tool-batch__name,
-.nagent-tool-batch__row--skipped .nagent-tool-batch__name {
-  opacity: 0.6;
-}
-
-.nagent-tool-batch__chevron {
-  color: var(--text-muted);
-  flex: 0 0 auto;
-  flex-shrink: 0;
-  align-self: center;
-}
-
-/* 调用行展开详情:per-tool 美化视图接管;长内容内部滚动(不无限撑高线程) */
-.nagent-tool-batch__detail {
-  margin: 2px 0 6px 22px;
-  padding: 6px 8px;
-  border: 1px solid var(--border-subtle, rgba(127, 127, 127, 0.18));
-  border-radius: var(--radius-sm, 6px);
-  background: color-mix(in srgb, var(--bg-secondary) 55%, transparent);
-  max-height: 340px;
-  overflow-y: auto;
-  overflow-x: hidden;
-  min-width: 0;
 }
 
 /* 结果文本：完整展开、不设高度上限，始终无竖向滚动条。
@@ -2375,11 +2265,9 @@
    便于一眼识别思考内容可展开；其余折叠块（工具调用行、trace）的展开/折叠图标
    默认隐藏。桌面鼠标设备（hover: hover + pointer: fine）悬停到折叠行或键盘聚焦时
    显示，界面更干净、可发现性不丢；触摸设备无 hover，图标保持隐藏——折叠功能
-   仍可通过点击折叠行/头部整行触发。工具批壳的批头图标常显(批是唯一入口,
-   默认展开态需要明确的折叠提示)。 */
+   仍可通过点击折叠行/头部整行触发。 */
 .nagent-msg__reasoning--system .nagent-msg__reasoning-toggle,
 .nagent-tool__chevron,
-.nagent-tool-batch__summary .nagent-tool-batch__chevron,
 .nagent-trace-shell__chevron {
   opacity: 0;
   transition: opacity 0.15s ease;
@@ -2395,8 +2283,6 @@
   .nagent-msg__reasoning--system .nagent-msg__reasoning-toggle:focus-visible,
   .nagent-tool__summary:hover .nagent-tool__chevron,
   .nagent-tool__summary:focus-visible .nagent-tool__chevron,
-  .nagent-tool-batch__summary:hover .nagent-tool-batch__chevron,
-  .nagent-tool-batch__summary:focus-visible .nagent-tool-batch__chevron,
   .nagent-trace-shell__summary:hover .nagent-trace-shell__chevron,
   .nagent-trace-shell__summary:focus-visible .nagent-trace-shell__chevron {
     opacity: 1;

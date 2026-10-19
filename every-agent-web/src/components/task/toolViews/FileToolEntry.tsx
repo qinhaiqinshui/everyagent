@@ -65,11 +65,9 @@ export interface FileToolEntryProps {
   detail: AggregatedToolDetail
   /** 折叠行附加文本（如 read_file 的 [1-80] 行号区间），渲染在文件名与完整路径之间。 */
   inlineExtras?: string
-  /** 挂载即展开(批壳调用行点击进入时 true)。 */
-  defaultOpen?: boolean
 }
 
-export function FileToolEntry({ detail, inlineExtras, defaultOpen }: FileToolEntryProps) {
+export function FileToolEntry({ detail, inlineExtras }: FileToolEntryProps) {
   const args = (detail.arguments ?? {}) as Record<string, unknown>
   // fullPath = 工具参数原样路径,既作展示文本(折叠态/展开态 chip 同源),也作探测入参;
   // businessPath = 统一加前导 `/` 的内部坐标(仅网关探测与 openGlobalFileTab 使用,不展示)。
@@ -92,7 +90,7 @@ export function FileToolEntry({ detail, inlineExtras, defaultOpen }: FileToolEnt
   const argLines = flattenArgs(args)
   const stateClass = toolStateClass(detail)
   const durationText = toolDurationText(detail)
-  const [open, setOpen] = React.useState(Boolean(defaultOpen))
+  const [open, setOpen] = React.useState(false)
 
   /**
    * 查找文件实际所属的工作区根。任务工作区根不一定包含该文件（AI 可能经授权

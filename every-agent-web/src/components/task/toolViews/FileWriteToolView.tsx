@@ -12,14 +12,13 @@
 import type { ToolViewDefinition, ToolViewProps } from './types'
 import { FileToolEntry } from './FileToolEntry'
 
-function FileWriteToolView({ details, defaultOpen }: ToolViewProps) {
+function FileWriteToolView({ details }: ToolViewProps) {
   return (
     <>
       {details.map((detail, idx) => (
         <FileToolEntry
           key={detail.toolCallId ?? idx}
           detail={detail}
-          defaultOpen={defaultOpen}
         />
       ))}
     </>

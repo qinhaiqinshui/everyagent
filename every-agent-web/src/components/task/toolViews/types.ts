@@ -51,8 +51,6 @@ export interface ToolViewProps {
   record?: AgentMessageRecord
   /** 按 callId 解析下发参数的函数，供视图需要补充参数时使用。 */
   resolveToolCallPayload?: (toolCallId: string) => Record<string, unknown> | undefined
-  /** 挂载即展开:批壳调用行点击展开进入时传 true,避免行点击后还要再点一次才见详情。 */
-  defaultOpen?: boolean
 }
 
 /**
