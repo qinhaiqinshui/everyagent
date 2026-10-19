@@ -24,6 +24,7 @@ import { initializeTraceTypes } from './plugin/traceTypeRegistry'
 import { initializeCoreRoundTailPanels } from './plugin/coreRoundTailPanels'
 import { initializeCoreComposerChipActions } from './plugin/coreComposerChipActions'
 import { initializeCoreEditorContextMenuActions } from './plugin/coreEditorContextMenuActions'
+import { initializeCoreUserMessageActions } from './plugin/coreUserMessageActions'
 import { loadPlugins } from './plugin/pluginLoader'
 import { wireFsChanged } from './platform/fs/workspaceGateway'
 import { workspaceRegistry } from './hub/workspaceRegistry'
@@ -56,6 +57,9 @@ initializeCoreComposerChipActions()
 // 同样必须在 loadPlugins() 之前同步完成:order=10 恒排在插件项(缺省 100)之前。
 // 动机:桌面右键被接管后原生复制丢失;触屏原生 callout 消失后统一菜单是唯一复制入口。
 initializeCoreEditorContextMenuActions()
+// 核心内置用户消息动作（「复制原始内容」按钮）注册进 ui.user_message_actions。
+// 同样必须在 loadPlugins() 之前同步完成：核心动作先入册，恒排在插件动作之前。
+initializeCoreUserMessageActions()
 // 统一插件加载：plugin.list RPC 驱动发现，worker 不可达时静默降级。
 void loadPlugins()
 
