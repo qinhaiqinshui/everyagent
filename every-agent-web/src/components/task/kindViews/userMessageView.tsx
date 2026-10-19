@@ -5,7 +5,7 @@
  * - 回放胶囊段:rawContent 的 opaque 串自包含切分回放(@文件胶囊等),点击经
  *   `ui.composer_chip_actions` 扩展点或只读详情层;
  * - 子 agent 输入判定 `agentId !== mainAgentId`(空串安全):低调样式 +
- *   折叠阈值 26px(普通 220px),不带用户消息动作扩展点(不可编辑重发);
+ *   折叠阈值 66px(≈3行;普通 220px),不带用户消息动作扩展点(不可编辑重发);
  * - 用户消息动作扩展点 `ui.user_message_actions`(seq = item.seq 直取)。
  *
  * TaskRoundsPanel 的合成 user 气泡(rounds 快照,渲染投影不进 items)复用同一
@@ -144,8 +144,8 @@ function UserMessageReplay({
 /** 用户消息气泡折叠阈值(px):内容高度超过该值时折叠并显示展开按钮。 */
 const USER_BUBBLE_COLLAPSE_HEIGHT = 220
 
-/** 子 agent 输入气泡折叠阈值(px):超过单行即折叠(更低调,避免抢占视觉焦点)。 */
-const SUB_AGENT_BUBBLE_COLLAPSE_HEIGHT = 26
+/** 子 agent 输入气泡折叠阈值(px):超过 3 行折叠(更低调,避免抢占视觉焦点)。 */
+const SUB_AGENT_BUBBLE_COLLAPSE_HEIGHT = 66
 
 /**
  * 用户消息气泡:内容超过最大高度时折叠(隐藏溢出部分 + 底部渐变遮罩),
