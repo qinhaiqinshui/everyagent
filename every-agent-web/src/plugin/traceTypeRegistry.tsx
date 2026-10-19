@@ -137,11 +137,12 @@ export function initializeTraceTypes(): void {
     getIcon: (trace) => trace.icon,
     hideTitle: true,
   })
-  // model_failover:模型池自动切换;worker 填 summary(「容灾切换模型:」+ 最终成功配置名 + 模型)
-  // 与 content(完整切换链「模型1 -> 模型2 -> …」),不填 title。
+  // model.failover:模型池自动切换;worker 填 summary(「容灾切换模型:」+ 最终成功配置名 + 模型)
+  // 与 content(完整切换链「模型1 -> 模型2 -> …」),不填 title。kind = 线程项 kind(事件名,
+  // 点号)——FallbackView 会把空 title 回退成 item.kind,注册命中后 hideTitle 把它隐藏,
   // 收起态只展示 summary,展开态渲染 content(完整切换链)。
   registerTraceType({
-    kind: 'model_failover',
+    kind: 'model.failover',
     renderContent: (trace) => {
       const text = stringifyTraceContent(trace.content).trim() || trace.summary?.trim() || ''
       return <pre className="nagent-trace-shell__pre">{text}</pre>

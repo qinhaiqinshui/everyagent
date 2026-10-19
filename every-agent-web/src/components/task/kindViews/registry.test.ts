@@ -183,6 +183,24 @@ describe('FallbackView 渲染(renderToString,node 环境)', () => {
     expect(html).toContain('任务失败')
     expect(html).not.toContain('nagent-trace-shell--error')
   })
+
+  it('model.failover trace:注册 kind 与线程 kind 一致(点号),hideTitle 隐藏 kind 兜底标题', () => {
+    // 回归:曾注册为下划线 model_failover(旧 task.trace DTO 口径),与折叠产出的
+    // 线程 kind=model.failover 不一致 → hideTitle 从未命中,FallbackView 把空 title
+    // 回退成 item.kind「model.failover」当标题展示。payload 形状对齐
+    // eventFolder.upsertTraceBySeq 产出(title 空串 + summary/content)。
+    initializeTraceTypes()
+    const html = renderFallback('model.failover', {
+      title: '',
+      summary: '容灾切换模型：cfg-2 m-2',
+      content: 'cfg-1 m-1 -> cfg-2 m-2',
+    })
+    // 收起态只展示 summary(容灾切换模型:…),kind 兜底标题不再出现。
+    expect(html).toContain('容灾切换模型：cfg-2 m-2')
+    expect(html).not.toContain('nagent-trace-shell__title')
+    // content 存在 → 可展开(完整切换链展开态可见)。
+    expect(html).toContain('aria-expanded="false"')
+  })
 })
 
 describe('useThreadBoard context', () => {

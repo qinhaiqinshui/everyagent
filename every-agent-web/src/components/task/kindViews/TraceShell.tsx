@@ -94,7 +94,7 @@ function buildTraceSummary(
   if (!raw) {
     return ''
   }
-  // 不截断摘要：summary 需完整展示（如 model_failover 的最后切换模型），
+  // 不截断摘要：summary 需完整展示（如 model.failover 的最后切换模型），
   // 过长时由样式层换行/省略控制。
   return raw
 }
