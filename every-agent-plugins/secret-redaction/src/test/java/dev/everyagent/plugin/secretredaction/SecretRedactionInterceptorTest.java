@@ -2,21 +2,17 @@ package dev.everyagent.plugin.secretredaction;
 
 import dev.everyagent.plugin.api.agent.AgentContext;
 import dev.everyagent.plugin.api.agent.AgentFactory;
+import dev.everyagent.plugin.api.execution.ExecContext;
 import dev.everyagent.plugin.api.interaction.InteractionService;
 import dev.everyagent.plugin.api.model.EmitEvent;
 import dev.everyagent.plugin.api.model.EventEmitter;
 import dev.everyagent.plugin.api.model.ModelConfig;
-import dev.everyagent.plugin.api.spi.ToolExecutionChain;
 import dev.everyagent.plugin.api.spi.ToolExecutionContext;
+import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.messages.AssistantMessage;
-import org.springframework.ai.chat.messages.Message;
-import org.springframework.ai.chat.messages.ToolResponseMessage;
-import org.springframework.ai.chat.messages.ToolResponseMessage.ToolResponse;
-import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.Prompt;
-import org.springframework.ai.model.tool.ToolExecutionResult;
-import org.junit.jupiter.api.Test;
+import org.springframework.ai.tool.ToolCallback;
 
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -27,99 +23,78 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * {@link SecretRedactionInterceptor}：上行段掩码本轮工具输出，且只改本轮。
+ * {@link SecretRedactionInterceptor}:per-call 上行段掩码当前调用的工具输出串。
  */
 class SecretRedactionInterceptorTest {
 
     private static final String KEY = "sk-ant-sid01-" + "Q".repeat(60) + "6280";
     private static final String CALL = "call_1";
-    private static final String OLD_CALL = "call_0";
 
     private final SecretRedactionInterceptor interceptor = new SecretRedactionInterceptor();
 
     // ---- 用例 ----
 
     @Test
-    void masksCurrentRoundToolOutput() throws Exception {
-        ToolExecutionResult result = result(
-                toolResponse(CALL, "powershell", "LangMode=ConstrainedLanguage\nkey=" + KEY));
-        Captured captured = new Captured(result);
+    void masksCurrentCallOutput() throws Exception {
+        RecordingEmitter emitter = new RecordingEmitter();
+        String out = interceptor.invoke(
+                ctx(CALL, "powershell", emitter),
+                c -> "LangMode=ConstrainedLanguage\nkey=" + KEY);
 
-        ToolExecutionResult out = interceptor.invoke(ctx(List.of(toolCall(CALL)), captured), chain(result));
-
-        assertNotSame(result, out, "有命中时必须返回新结果");
-        String data = firstResponseData(out);
-        assertFalse(data.contains(KEY), "明文必须消失: " + data);
-        assertTrue(data.contains("[len=" + KEY.length() + "]"), "保留指纹: " + data);
-        assertTrue(data.contains("LangMode=ConstrainedLanguage"), "无关内容不得被改动: " + data);
-        assertEquals(1, captured.emitter.events.size(), "必须发一条 task.trace 审计");
-        assertTrue(out.returnDirect(), "returnDirect 透传");
+        assertNotSame("LangMode=ConstrainedLanguage\nkey=" + KEY, out, "有命中时必须返回掩码串");
+        assertFalse(out.contains(KEY), "明文必须消失: " + out);
+        assertTrue(out.contains("[len=" + KEY.length() + "]"), "保留指纹: " + out);
+        assertTrue(out.contains("LangMode=ConstrainedLanguage"), "无关内容不得被改动: " + out);
+        assertEquals(1, emitter.events.size(), "必须发一条 task.trace 审计");
     }
 
     @Test
     void leavesCleanOutputUntouched() throws Exception {
-        ToolExecutionResult result = result(toolResponse(CALL, "powershell", "hello 世界"));
-        ToolExecutionResult out = interceptor.invoke(
-                ctx(List.of(toolCall(CALL)), new Captured(result)), chain(result));
-        assertSame(result, out, "无命中时原样返回同一实例(零开销路径)");
+        RecordingEmitter emitter = new RecordingEmitter();
+        String out = interceptor.invoke(
+                ctx(CALL, "powershell", emitter), c -> "hello 世界");
+        assertEquals("hello 世界", out, "无命中时返回掩码函数的原串(redact 同实例)");
+        assertTrue(emitter.events.isEmpty(), "无命中不发审计事件");
     }
 
     @Test
-    void doesNotRescanHistoryRounds() throws Exception {
-        // 历史轮在它那轮已被处理过,本轮不再重复扫描(避免每轮 O(全历史) 正则)
-        ToolExecutionResult result = new ToolResponseMessageHolder(
-                toolResponse(OLD_CALL, "powershell", KEY),
-                toolResponse(CALL, "powershell", "ok")).result();
-        ToolExecutionResult out = interceptor.invoke(
-                ctx(List.of(toolCall(CALL)), new Captured(result)), chain(result));
-        String oldData = responseData(out, OLD_CALL);
-        assertTrue(oldData.contains(KEY), "非本轮 callId 不动(设计口径)");
-    }
-
-    @Test
-    void isIdempotentAcrossRounds() throws Exception {
-        Captured captured = new Captured(
-                result(toolResponse(CALL, "powershell", "dump: " + KEY)));
-        ToolExecutionResult first = interceptor.invoke(ctx(List.of(toolCall(CALL)), captured),
-                chain(captured.result));
-        ToolExecutionResult second = interceptor.invoke(ctx(List.of(toolCall(CALL)), captured),
-                chain(first));
-        assertEquals(firstData(first), firstData(second), "二次经过链必须文本不变");
-        assertSame(first, second, "已掩码文本不再触发改写");
+    void nullAndEmptySafety() throws Exception {
+        assertNull(interceptor.invoke(ctx(CALL, "powershell", null), c -> null));
+        assertEquals("", interceptor.invoke(ctx(CALL, "powershell", null), c -> ""));
     }
 
     @Test
     void auditEventCarriesNoSecretMaterial() throws Exception {
-        Captured captured = new Captured(result(toolResponse(CALL, "powershell", KEY)));
-        interceptor.invoke(ctx(List.of(toolCall(CALL)), captured), chain(captured.result));
-        EmitEvent trace = captured.emitter.events.get(0);
+        RecordingEmitter emitter = new RecordingEmitter();
+        interceptor.invoke(ctx(CALL, "powershell", emitter), c -> "dump: " + KEY);
+        EmitEvent trace = emitter.events.get(0);
         String rendered = String.join("|", String.valueOf(trace.title()),
                 String.valueOf(trace.summary()), String.valueOf(trace.content()),
                 String.valueOf(trace.data()));
         assertFalse(rendered.contains(KEY), "审计事件不得带出凭据: " + rendered);
         assertFalse(rendered.contains("sk-ant-sid01-" + "Q".repeat(20)), "也不得带出可猜前缀片段");
-        assertInstanceOf(Map.class, trace.data());
-        assertEquals(List.of("powershell"), ((Map<?, ?>) trace.data()).get("tools"));
+        tools.jackson.databind.node.ObjectNode data =
+                assertInstanceOf(tools.jackson.databind.node.ObjectNode.class, trace.data());
+        assertEquals(List.of("powershell"), List.of(data.path("tools").get(0).asText()),
+                "审计 data.tools 只含当前调用工具名");
     }
 
     @Test
-    void nullSafety() throws Exception {
-        assertSame(null, interceptor.invoke(ctx(List.of(), new Captured(null)), chain(null)));
-        ToolExecutionResult empty = ToolExecutionResult.builder().conversationHistory(List.of()).build();
-        assertSame(empty, interceptor.invoke(ctx(List.of(toolCall(CALL)), new Captured(empty)), chain(empty)));
+    void synthesizedAnswersAreAlsoRedactedByPosition() throws Exception {
+        // 链序契约(§7.14.3):本拦截器 order=900 在发射节点(500)内侧——合成串/真实串
+        // 都先经本节点掩码再被发射;本用例锁定「本节点只改写 next 返回的串、不改别的」。
+        RecordingEmitter emitter = new RecordingEmitter();
+        String out = interceptor.invoke(ctx(CALL, "ask_user", emitter),
+                c -> "题干：sk-ant-sid01-" + "Q".repeat(60) + "6280");
+        assertFalse(out.contains("sk-ant-sid01-"), "合成答案(unattended 产出)照样被掩码: " + out);
     }
 
     // ---- 辅助 ----
-
-    private record Captured(RecordingEmitter emitter, ToolExecutionResult result) {
-        Captured(ToolExecutionResult result) {
-            this(new RecordingEmitter(), result);
-        }
-    }
 
     private static final class RecordingEmitter implements EventEmitter {
         final List<EmitEvent> events = new ArrayList<>();
@@ -131,67 +106,27 @@ class SecretRedactionInterceptorTest {
         }
     }
 
-    /** 结果容器：让测试能用两条 ToolResponseMessage 拼历史。 */
-    private record ToolResponseMessageHolder(Message... messages) {
-        ToolExecutionResult result() {
-            return ToolExecutionResult.builder()
-                    .conversationHistory(List.of(messages)).returnDirect(true).build();
-        }
-    }
-
-    private static ToolExecutionResult result(Message... messages) {
-        return ToolExecutionResult.builder()
-                .conversationHistory(new ArrayList<>(List.of(messages)))
-                .returnDirect(true)
-                .build();
-    }
-
-    private static ToolResponseMessage toolResponse(String id, String name, String data) {
-        return ToolResponseMessage.builder()
-                .responses(List.of(new ToolResponse(id, name, data))).build();
-    }
-
-    private static AssistantMessage.ToolCall toolCall(String id) {
-        return new AssistantMessage.ToolCall(id, "function", "powershell", "{}");
-    }
-
-    private static ToolExecutionChain chain(ToolExecutionResult result) {
-        return c -> result;
-    }
-
-    private static String firstResponseData(ToolExecutionResult r) {
-        return responseData(r, CALL);
-    }
-
-    private static String firstData(ToolExecutionResult r) {
-        return firstResponseData(r);
-    }
-
-    private static String responseData(ToolExecutionResult r, String callId) {
-        for (Message m : r.conversationHistory()) {
-            if (m instanceof ToolResponseMessage trm) {
-                for (ToolResponse resp : trm.getResponses()) {
-                    if (callId.equals(resp.id())) {
-                        return resp.responseData();
-                    }
-                }
-            }
-        }
-        throw new AssertionError("callId 未找到: " + callId);
-    }
-
-    /** 最小可用的执行上下文：拦截器只读 toolCalls / emitter / subjectId。 */
-    private static ToolExecutionContext ctx(List<AssistantMessage.ToolCall> toolCalls,
-            Captured captured) {
+    /** 最小 per-call ctx:拦截器只读 toolCall/subjectId/emitter。 */
+    private static ToolExecutionContext ctx(String callId, String toolName, EventEmitter emitter) {
+        AssistantMessage.ToolCall call = new AssistantMessage.ToolCall(callId, "function", toolName, "{}");
         return new ToolExecutionContext() {
             @Override public Prompt prompt() { return null; }
             @Override public ChatResponse chatResponse() { return null; }
-            @Override public List<AssistantMessage.ToolCall> toolCalls() { return toolCalls; }
+            @Override public List<AssistantMessage.ToolCall> toolCalls() { return List.of(call); }
+            @Override public AssistantMessage.ToolCall toolCall() { return call; }
+            @Override public ToolCallback toolCallback() { return null; }
+            @Override public String arguments() { return "{}"; }
+            @Override public void arguments(String arguments) { }
+            @Override public void synthesize(String result) { }
+            @Override public String synthesizedResult() { return null; }
+            @Override public long startedAt() { return 0; }
+            @Override public void startedAt(long epochMs) { }
+            @Override public dev.everyagent.plugin.api.spi.ToolOutcomeLog toolOutcomes() { return null; }
             @Override public String subjectId() { return "t_test"; }
             @Override public String workspaceRoot() { return "."; }
             @Override public String workspaceId() { return "w_test"; }
             @Override public ModelConfig snapshot() { return null; }
-            @Override public EventEmitter emitter() { return captured.emitter(); }
+            @Override public EventEmitter emitter() { return emitter; }
             @Override public AgentFactory agentFactory() { return null; }
             @Override public Map<String, Object> metadata() { return Map.of(); }
             @Override public Path dataDir() { return Path.of("."); }

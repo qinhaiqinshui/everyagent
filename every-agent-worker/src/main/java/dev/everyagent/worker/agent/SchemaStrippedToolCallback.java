@@ -103,6 +103,11 @@ public class SchemaStrippedToolCallback implements ToolCallback {
      * (另一源是 shell 执行器的退出码记账)。框架不给工具层工具调用 id,故以
      * 「工具名 + 入参原串」为键;该入参串与 {@code ToolCall.arguments()} 同源,发射侧可按同一键查账。
      * 正常返回不记账(查不到即视为成功)。
+     *
+     * <p><b>键升级注记(架构 §7.14.3)</b>:per-call 工具执行链落地后,链上行已按 <b>callId</b>
+     * 写账({@link ToolOutcomeLog#recordCallOutcome}),status 判定单点收敛在前缀约定 +
+     * 结构化账本;本回调层的旧键记账与 {@code consumeToolThrow} 兜底查询保留至
+     * file-change 等后置消费者迁移(步骤 4c)后一并退役。
      */
     private void recordThrow(String toolInput) {
         if (toolOutcomes == null) {

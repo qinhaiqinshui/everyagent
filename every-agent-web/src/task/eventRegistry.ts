@@ -417,6 +417,19 @@ registerEventKind('round.opened', {
   },
 })
 
+/**
+ * tool.started → 瞬态，不进线程（no-op 注册，架构 §5.3/§7.14.3）。
+ * 单个工具调用开始执行的事实声明（data: callId/name/arguments/startedAt 毫秒），
+ * callId 与 message.toolCalls[].id 直配；运行态消费（调用行点亮 running + 读秒
+ * now - startedAt）由 message 视图按 callId 读取（步骤 10 批壳模型），折叠层无需处理。
+ * 瞬态不落盘 → 历史回放无此事件，直接展示 tool.result 的 durationMs。
+ */
+registerEventKind('tool.started', {
+  handle() {
+    return true
+  },
+})
+
 /** round.closed → 瞬态，不进线程 */
 registerEventKind('round.closed', {
   handle() {

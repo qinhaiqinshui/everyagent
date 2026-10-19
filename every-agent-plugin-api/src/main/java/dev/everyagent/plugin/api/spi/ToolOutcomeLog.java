@@ -19,7 +19,9 @@ import java.util.concurrent.ConcurrentLinkedQueue;
  * <p><b>键怎么定</b>：框架不把工具调用 id 交给工具层，唯一双方都能确定性复现的是
  * 「工具名 + 该次调用可复现的载荷」——shell 用命令串（执行器与工具入参都有），
  * 抛异常用入参 JSON（{@code ToolCallback.call} 收到的原串与 {@code ToolCall.arguments()} 同源）。
- * 同一轮里同键重复调用时按 FIFO 消费，与调用顺序一致。
+ * 同一轮里同键重复调用时按 FIFO 消费，与调用顺序一致。per-call 工具执行链落地后，
+ * 切口握有 callId：链上行按 callId 写账（{@link #recordCallOutcome}），后置消费者
+ * 直查 callId，不再依赖键拼合（见类尾 callId 段；旧键 API 保留至消费方全部迁移）。
  *
  * <p><b>生命周期</b>：per-run（挂在 agent 实体上，随 run 结束回收），线程安全
  * （工具执行可能切换线程，故不得用 ThreadLocal —— 见 {@code InterceptingToolCallingManager} 注释）。
@@ -107,6 +109,39 @@ public final class ToolOutcomeLog {
             return false;
         }
         return throwMarks.contains(key(toolName, arguments == null ? "" : arguments));
+    }
+
+    // ---- callId 记账(per-call 链上行写账,架构 §7.14.3) ----
+    //
+    // per-call 工具执行链的切口握有工具调用 id(框架类型层不提供,链切口独有):链上行
+    // (发射 tool.result 处)按失败前缀约定 + 旧结构化键判定成败后,以 callId 写账一次——
+    // 后置消费者(file-change 一阶段记账等)按 callId 直查,不再依赖「工具名+载荷」
+    // 的可复现键拼合。旧键 API(shell 退出码 / 抛异常)保留至消费方全部迁移。
+
+    private final Map<String, Boolean> callOutcomes = new ConcurrentHashMap<>();
+
+    /**
+     * 记录一次工具调用的结局(链上行按 callId 写账;同 callId 后写覆盖——每个 callId
+     * 在一次调用生命周期内只写一次)。
+     *
+     * @param callId 工具调用 id(与 {@code message.toolCalls[].id} / {@code tool.result.callId} 同源)
+     * @param failed 成败(链上单点判定:失败前缀约定 + 结构化账本兜底)
+     */
+    public void recordCallOutcome(String callId, boolean failed) {
+        if (callId == null) {
+            return;
+        }
+        callOutcomes.put(callId, failed);
+    }
+
+    /**
+     * 非消费查询一次调用的结局(按 callId;file-change 一阶段记账等后置消费者的查询键)。
+     *
+     * @return {@code Boolean.TRUE} = 失败 / {@code Boolean.FALSE} = 成功 /
+     *         {@code null} = 无记账(该调用未经链上行——如守卫 WARN 轮合成/裸用场景)
+     */
+    public Boolean callOutcome(String callId) {
+        return callId == null ? null : callOutcomes.get(callId);
     }
 
     /** 键 = 工具名 + NUL 分隔 + 载荷（NUL 不出现在工具名与命令/JSON 文本里，避免歧义拼接）。 */
