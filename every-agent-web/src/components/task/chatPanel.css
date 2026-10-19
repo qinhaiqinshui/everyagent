@@ -598,14 +598,14 @@
   padding: 8px 12px;
   /* 容器仍靠右；左下角小圆角形成柔和尖角，无额外尾巴 */
   border-radius: 14px 14px 4px 14px;
-  background: color-mix(in srgb, var(--accent-blue) 12%, var(--bg-primary));
+  background: color-mix(in srgb, var(--accent-blue) 20%, var(--bg-primary));
   border: none;
   margin: 16px 0;
 }
 
 /* 子 agent 输入气泡：复用用户气泡形态，背景换中性色以与真人用户消息区分，间距收窄。 */
 .nagent-msg__bubble--sub-agent {
-  background: var(--bg-tertiary);
+  background: color-mix(in srgb, var(--text-muted) 12%, var(--bg-primary));
   margin: 8px 0;
 }
 
@@ -652,6 +652,11 @@
 
 .nagent-msg__bubble-toggle-icon--up {
   transform: rotate(180deg);
+}
+
+/* 子 agent 输入气泡的展开/收起按钮靠右对齐（主 agent 用户消息保持居中）。 */
+.nagent-msg__bubble--sub-agent .nagent-msg__bubble-toggle {
+  align-self: flex-end;
 }
 
 /* 用户消息编辑按钮样式已迁入 task-edit-resend 插件（web/task-edit-resend.css）。 */
