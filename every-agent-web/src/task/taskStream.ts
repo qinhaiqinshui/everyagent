@@ -5,7 +5,8 @@
  * 打开任务(open)时一次性建齐骨架:
  * - task.rounds 全量轮次 → folder.foldRound 折入 user(rounds.jsonl userMessage)与闭合轮合成 final;
  * - 运行中未闭合尾轮 → task.roundTail 拉「最后一页」(200)与流式增量接上;
- * - task.agents 拉子 agent 台账建 agentMeta(胶囊列表/悬停卡片数据源);
+ * - task.agents 拉子 agent 台账灌入独立台账 store folder.ledger(胶囊列表/悬停卡片数据源;
+ *   eventFolder 只负责线程折叠,agentLedger.ts);
  * - 之后 worker 定向推送(stream 频道)的流式增量(delta/thinking/message/tool/子 agent 等)
  *   实时折入同一 folder。
  * 线程数据唯一真相源 = folder.state.items(TaskThreadItem[]),按 seq 去重/排序,
@@ -18,7 +19,8 @@
  * 插件自定义任务事件(plugin.* 前缀,如 file-change 轮末摘要直推)同样不折入 items,
  * 一律透传到领域事件总线由对应插件 web 端订阅消费(数据直推模型,宿主不感知业务语义,§7.15.2)。
  *
- * 实时信号链(同一折叠器状态):agentStates(agent 列表)/agentMeta(子 agent 台账+用量快照)/
+ * 实时信号链:agent 台账镜像(folder.ledger:agentStates 状态/agentMeta 用量快照,
+ * agent 胶囊列表与悬停卡片数据源)/
  * 上下文电池(taskStore 消费 worker usage 投影聚合值,不在流内维护)/
  * ask 登记(askStore)/taskModel;输入/控制:cancel(task.cancel)/replyAsk。
  * 重连:hubSession.onReconnect → 对所有活跃句柄只重拉数据校准(rounds+尾段+子 agent 台账);瞬态重连
@@ -146,7 +148,7 @@ class ManagedStream {
   constructor(public taskId: string, public workerId: string) {
     this.folder = new TaskEventFolder(emptyThreadState(taskId))
     // 主 agent 固定 id 尽早灌入(任务列表早已同步的 entry 就有):折叠器一切
-    // 「主 agent」判定的唯一依据;后续 open/seedAgents 各再补灌一次(幂等)。
+    // 「主 agent」判定的唯一依据;后续 open/task.agents 拉取各再补灌一次(幂等)。
     this.folder.setMainAgentId(taskStore.get(taskId)?.mainAgentId ?? '')
   }
 
@@ -254,7 +256,7 @@ class ManagedStream {
     // ask 事件单独走卡片,不进线程。
     if (event.event === 'ask.create' || event.event === 'ask.state' || event.event === 'ask.resolved') {
       this.dispatchAskEvent(event)
-      this.folder.fold(event) // 非 item 事件幂等处理(ask.* 只更新 agentStates,不进线程)
+      this.folder.fold(event) // 非 item 事件幂等处理(ask.* 只更新台账状态,不进线程)
       return
     }
     const changed = this.folder.fold(event)
@@ -494,8 +496,9 @@ class ManagedStream {
   }
 
   /**
-   * task.agents 拉子 agent 台账建 agentMeta(胶囊列表/悬停卡片数据源):loadRoundsIntoFolder
-   * 之后顺带拉一次,seedAgents 幂等(字段级合并,实时事件后到可覆盖);失败 warn 不阻断。
+   * task.agents 拉子 agent 台账灌入 folder.ledger(胶囊列表/悬停卡片数据源,独立台账
+   * store,agentLedger.ts):loadRoundsIntoFolder 之后顺带拉一次,seedAgents 幂等
+   * (字段级合并,实时事件后到可覆盖);失败 warn 不阻断。
    * agentsSeeded 节流:同一 open 周期内只拉一次。
    */
   private async loadAgentsIntoFolder(): Promise<void> {
@@ -507,7 +510,9 @@ class ManagedStream {
     this.agentsSeeded = true
     try {
       const res = await fetchTaskAgents(client, this.workerId, { taskId: this.taskId })
-      if (this.folder.seedAgents(res.agents, res.mainAgentId)) this.notify()
+      // 主 agent 固定 id 灌入折叠器(原 seedAgents 的内联职责;幂等,空值不覆盖)。
+      this.folder.setMainAgentId(res.mainAgentId)
+      if (this.folder.ledger.seedAgents(res.agents, res.mainAgentId)) this.notify()
     } catch (error) {
       console.warn(`[taskStream] 拉取子 agent 台账失败(${this.taskId}):`, error)
     }
@@ -591,7 +596,7 @@ class ManagedStream {
         this.notify()
         console.warn(`[taskStream] 加载任务轮次失败(${this.taskId}):`, error)
       }
-      // task.agents 拉子 agent 台账建 agentMeta(胶囊列表/悬停卡片数据源);失败 warn 不阻断。
+      // task.agents 拉子 agent 台账灌 folder.ledger(胶囊列表/悬停卡片数据源);失败 warn 不阻断。
       try {
         await this.loadAgentsIntoFolder()
       } catch (error) {
@@ -682,7 +687,7 @@ class TaskStreamManager {
       },
       cancel: () => stream.ensureView().cancel(),
       resync: () => stream.open(),
-      resolveAgentTitle: (agentId) => stream.folder.resolveAgentTitle(agentId),
+      resolveAgentTitle: (agentId) => stream.folder.ledger.resolveAgentTitle(agentId),
       hasStreaming: () => stream.folder.hasStreaming(),
       rounds: () => stream.roundsSnapshot(),
       roundsError: () => stream.roundsErrorText(),

@@ -6,6 +6,9 @@
  * AgentMessageRecord / TaskTraceRecord 形状,让 AgentMessageThread /
  * TraceItem 等组件零改动复用。
  *
+ * agent 台账镜像(agentStates/agentMeta)不属于线程折叠:独立 store agentLedger.ts
+ * (本类以组合持有 ledger 实例,台账类事件 handler 直接改写,reset 不清台账)。
+ *
  * 折叠规则(与 n 的写入语义对齐):
  * 事件名不分主/子 agent——同一名事件,归属由 agentId 字段决定(空 = 主线程);
  * - user.message           → role:'user' 消息(payload.content + payload.data.rawContent);
@@ -14,12 +17,12 @@
  * - thinking / delta       → 当前流式 assistant 消息的 reasoning / content 追加(瞬态,payload.content)
  * - message                → 一轮权威终结:完整 content/data.thinking/data.toolCalls(真实 toolCall id)
  *                           定稿该 agent 的流式消息
- * - usage                  → 每 agent 最近一轮占用/累计用量/上下文快照维护 agentMeta(不进线程);
- *                           任务级上下文电池不在流内维护——统一消费 taskStore 的
- *                           TaskSummary.usage(worker usage 投影器聚合同步,task.updated 携带)
+ * - usage                  → 每 agent 最近一轮占用/累计用量/上下文快照维护台账镜像
+ *                           ledger.agentMeta(不进线程);任务级上下文电池不在流内维护——
+ *                           统一消费 taskStore 的 TaskSummary.usage(worker usage 投影器聚合同步,task.updated 携带)
  * - tool.result            → role:'tool' 消息(TaskChat 按 callId 合并进下发块渲染)
- * - agent.started/done     → 子 agent trace(spawn 生命周期,必带 agentId);同时合并 agentMeta
- *                           (标题/创建时间/收口累计用量)
+ * - agent.started/done     → 子 agent trace(spawn 生命周期,必带 agentId);同时合并台账镜像
+ *                           ledger(标题/创建时间/收口累计用量/状态)
  * - error                  → trace(agentId = 事件真实归属;主/子标题按 isMain(agentKey === mainAgentId) 判定)
  * - cancelled              → trace
  * - retry / context.compression / model.failover / model.switch / auth.review / system.notice
@@ -35,7 +38,6 @@
  */
 import type {
   AgentMessageRecord,
-  AgentStatus,
   LLMToolCall,
 } from '@/types'
 import type {
@@ -43,8 +45,8 @@ import type {
   TaskStatus,
   TaskTraceRecord,
 } from './types'
-import type { TaskAgentLedgerItem } from './task-poll'
 import { getHandler, defaultHandler } from './eventRegistry'
+import { AgentLedger } from './agentLedger'
 
 /**
  * 统一线程项(与 n 的 taskQueryService 同形,聊天页聚合展示单位)。
@@ -63,30 +65,20 @@ export interface TaskModelInfo {
 }
 
 /** 折叠器的状态结构(JSON 可序列化;当前前端不做 localStorage 缓存——历史由 worker 磁盘落盘、
- * 打开任务时经 DataPusher 全量回放重建,见 taskStream;保留可序列化形态以兼容多端/续折)。 */
+ * 打开任务时经 DataPusher 全量回放重建,见 taskStream;保留可序列化形态以兼容多端/续折)。
+ * agent 状态/元数据台账镜像不在本状态:独立 store folder.ledger(agentLedger.ts),不随 reset 清。 */
 export interface TaskThreadState {
   taskId: string
   items: TaskThreadItem[]
-  /**
-   * agent 状态表:agentId(主 agent = mainAgentId,task 层传入的固定 id) → 当前状态。
-   * 事件源:worker 的 agent.status(权威,持久);旧磁盘回放无该事件时由
-   * agent.started/done/error/cancelled/ask.* 兜底推导。驱动输入框上方 agent 圆列表。
-   */
-  agentStates: Record<string, AgentStatus>
-  /**
-   * 子 agent/主 agent 元数据快照表:键语义同 agentStates(主 agent = mainAgentId,子 = 子 id)。
-   * 基线由 task.agents 台账(seedAgents,open 时一次)灌入,实时流事件
-   * (usage/agent.started/agent.done)字段级覆盖;驱动子 agent 胶囊列表/悬停卡片。
-   */
-  agentMeta: Record<string, AgentMetaSnapshot>
   /** 任务冻结的模型信息(当前不再由流事件填充,通常为空,见 TaskModelInfo)。 */
   taskModel?: TaskModelInfo | null
   /** slash 任务级 token(slash.tokens.changed 事件 REPLACE 更新;null=未收到)。 */
   slashTokens?: string[] | null
   /**
    * 主 agent 固定 id(task 层传入:task.agents 应答 / TaskSummary.mainAgentId)。
-   * 一切「主 agent」判定唯一依据(键控 agentStates/agentMeta、user.message 骨架升级判定、
-   * seedAgents 状态覆盖例外等)——不使用「空串=主」魔法。open 早期未灌入时折叠器以
+   * 一切「主 agent」判定唯一依据(事件 agentId 归一、user.message 骨架升级判定、error 主/子
+   * 标题等;台账 seedAgents 的主 agent 状态例外由调用方把 mainAgentId 作参数传入台账 store)
+   * ——不使用「空串=主」魔法。open 早期未灌入时折叠器以
    * isMain 的空串兼容回退兜底;事件缺 agentId(旧 wire 形态)归一到 mainAgentId。
    */
   mainAgentId: string
@@ -101,36 +93,24 @@ export interface FoldableTaskEvent {
   payload: Record<string, unknown>
 }
 
-/**
- * 子 agent/主 agent 元数据快照(task.agents 台账 + 流事件实时覆盖;键:主 agent='',子=子 id)。
- * 基线由 {@link TaskEventFolder#seedAgents} 灌入(open 时一次),实时 usage/agent.started/
- * agent.done 事件字段级覆盖;驱动子 agent 胶囊列表/悬停卡片(标题 + 累计用量 + 上下文占用)。
- */
-export interface AgentMetaSnapshot {
-  agentId: string
-  title?: string
-  createdAt?: number
-  model?: string
-  inputTokens?: number      // 累计
-  outputTokens?: number
-  totalTokens?: number      // 累计
-  contextUsed?: number      // 最近一轮 prompt tokens
-  contextWindow?: number
-  updatedAt?: number
-}
-
 /** 折叠锚点(不序列化,重放时从 items 重建或留空)。 */
 interface FoldAnchors {
   /** seq(String(event.seq)) → 该轮流式中的 assistant 消息。轮事件同 seq 复用同一锚点/同一条线程项。 */
   streaming: Map<string, AgentMessageRecord>
   /** callId → 工具名(tool.result 消息回填 toolName)。 */
   toolNames: Map<string, string>
-  /** agentKey → 子 agent 标题(sub 消息的 more 栏展示)。 */
-  subTitles: Map<string, string>
 }
 
 export class TaskEventFolder {
-  private anchors: FoldAnchors = { streaming: new Map(), toolNames: new Map(), subTitles: new Map() }
+  /**
+   * agent 台账镜像 store(组合持有;步骤 6 自本类拆出的独立状态):线程折叠器不持有
+   * agent 状态——usage、agent 生命周期事件、error、cancelled、ask 族等台账类事件
+   * handler 经 eventRegistry 查表分发后直接改写本实例,task.agents 台账 seed 也灌入
+   * 这里(taskStream 调用)。reset() 不清台账:台账生命周期跟任务不跟 items 重置
+   * (与 slashTokens/mainAgentId 同理)。
+   */
+  readonly ledger: AgentLedger = new AgentLedger()
+  private anchors: FoldAnchors = { streaming: new Map(), toolNames: new Map() }
   /**
    * seq 键控索引(键 = String(event.seq)) → 线程项:
    * - 去重/定位主键:items 保持按 seq 升序,新 seq 插入按序定位;同 seq 更新原地、不移动位置。
@@ -142,15 +122,14 @@ export class TaskEventFolder {
 
 
   constructor(public state: TaskThreadState) {
-    // 防御:旧 state 形状可能缺 agentMeta(本项目前端不做持久化缓存,理论上无旧数据,
-    // 折叠器实例仍可能被灌入外部构造的旧形状 state,这里兜底补空表)。
-    if (!state.agentMeta) state.agentMeta = {}
+    // 防御:外部构造的旧形状 state 可能缺 mainAgentId(本项目前端不做持久化缓存,
+    // 理论上无旧数据),兜底补空串(open 早期空串兼容回退)。
     if (!state.mainAgentId) state.mainAgentId = ''
   }
 
   /**
    * 灌入主 agent 固定 id(task 层传入;open 流程尽早调用——TaskStream 构造/resolved
-   * 时从 TaskSummary.mainAgentId、task.agents 应答 seedAgents 时各灌一次,幂等)。
+   * 时从 TaskSummary.mainAgentId、task.agents 应答拉取时各灌一次,幂等)。
    * 空值不覆盖(防陈旧回退);一经灌入即作为 isMain 的唯一判据。
    */
   setMainAgentId(mainAgentId: string): void {
@@ -185,7 +164,7 @@ export class TaskEventFolder {
   }
 
   /**
-   * 重置:清空全部状态(items/bySeq/anchors)。
+   * 重置:清空全部线程状态(items/bySeq/anchors;agent 台账镜像 ledger 不清,见类字段注释)。
    * resync 时重新从 task.rounds 拉取并 foldRound 前调用,
    * 避免旧 items(编辑前的轮次,seq 已过期)与新轮次混排。
    * 保留 taskId,重置其余字段到空态。
@@ -193,11 +172,11 @@ export class TaskEventFolder {
    * slash.tokens.changed 事件通道(订阅初始回放会重推最新值)。若在此清空,
    * 初始打开流程中"先到的回放事件会被随后的 reset 抹掉",deps 回到 null→null
    * 消费端既不重跑也不重拉,任务级胶囊即丢失(新建任务 AI 审议胶囊消失实锤)。
+   * <p>agent 台账镜像(ledger)同理不参与重置:台账生命周期跟任务不跟 items 重置
+   * (流事件/台账 seed 按字段级合并幂等,重放自动回填),详见 agentLedger.ts。
    */
   reset(): void {
     this.state.items = []
-    this.state.agentStates = {}
-    this.state.agentMeta = {}
     this.state.taskModel = null
     // mainAgentId 与 slashTokens 同理不参与重置:任务级身份,由 task 层(TaskSummary/
     // task.agents)传入,reset(编辑重发重拉)后不变;清掉会让随后折叠的事件回退
@@ -205,7 +184,6 @@ export class TaskEventFolder {
     this.bySeq.clear()
     this.anchors.streaming.clear()
     this.anchors.toolNames.clear()
-    this.anchors.subTitles.clear()
   }
 
   /**
@@ -305,67 +283,6 @@ export class TaskEventFolder {
     return changed
   }
 
-  /**
-   * 灌入 task.agents 台账基线(open 建骨架时调用,实时事件后到可覆盖):
-   * 把应答 agents 幂等灌入 state.agentMeta。每项按 agentId 归键(worker 台账只含子
-   * agent,主 agent 键 = 空串;防御 legacy meta.agents 混入主 agent 项时归一到 '')。
-   * 合并策略 = 字段级(undefined 不覆盖已有值)、updatedAt 取较大者;同一 open 周期内
-   * 台账在尾段事件之后读取(天然不旧于已折入数据),实时事件随后仍可继续覆盖。
-   * 返回 true 表示状态有变化。
-   */
-  seedAgents(agents: TaskAgentLedgerItem[], mainAgentId: string): boolean {
-    let changed = false
-    // task 层传入的主 agent 固定 id:一经灌入即作为 isMain 的唯一判据(空值不覆盖)。
-    if (mainAgentId && mainAgentId !== this.state.mainAgentId) {
-      this.state.mainAgentId = mainAgentId
-      changed = true
-    }
-    for (const item of agents) {
-      if (!item || !item.agentId) continue
-      // 键 = 台账原生 agentId(主 agent 条目即 mainAgentId,子 = 子 id)——不再归一成
-      // 空串;「是否主 agent」一律经 isMain 判定。
-      const key = item.agentId
-      // 状态兜底:历史任务打开时流事件(agent.status)不随 rounds 骨架折入,agentStates
-      // 无该键 → 子 agent 胶囊落回灰色 idle。台账 status 落盘即权威(live 内存实时),
-      // 终态(completed/stopped/error)始终覆盖——流推送可能因 DataPusher 与 finish
-      // 驱逐的竞态丢失子 agent done 事件,台账是兜底权威;
-      // 非终态(running/waiting-user)仅在 agentStates 尚无值时填入(不覆盖流事件实时状态)。
-      //
-      // 主 agent 例外:agent 状态是 **per-run()** 的(一条输入一轮,每轮
-      // started→…→done,见 worker §7.20.1),队列连着多条输入时台账里主 agent 会是上一轮的
-      // completed 而新一轮正在 running。台账快照可能晚于实时事件到达(主 agent 终态会触发
-      // 重拉 task.agents),用它覆盖就会把正在跑的主胶囊按回「已完成」直到本轮结束。
-      // 主 agent 的状态交给流事件,兜底由 TaskChat 用任务态(entry.status)做——那里已有
-      // `states[mainAgentId] ?? entryStatus ?? 'idle'`;台账只为主 agent 提供 title/usage/context 基线。
-      if (item.status && !this.isMain(key)) {
-        const mapped = mapAgentStatus(String(item.status))
-        if (mapped && (isTerminalAgentStatus(mapped) || this.state.agentStates[key] === undefined)) {
-          if (this.state.agentStates[key] !== mapped) {
-            this.state.agentStates[key] = mapped
-            changed = true
-          }
-        }
-      }
-      const usage = readUsage(item.usage)
-      const context = item.context
-      if (this.mergeAgentMeta(key, {
-        agentId: key,
-        title: item.title && item.title.length > 0 ? item.title : undefined,
-        createdAt: item.createdAt,
-        inputTokens: usage?.inputTokens,
-        outputTokens: usage?.outputTokens,
-        totalTokens: usage?.totalTokens,
-        contextUsed: typeof context?.inputTokens === 'number' ? context.inputTokens : undefined,
-        contextWindow: typeof context?.contextWindowTokens === 'number' ? context.contextWindowTokens : undefined,
-        model: context && typeof context.model === 'string' && context.model.length > 0 ? context.model : undefined,
-        updatedAt: item.latestActivity?.updatedAt,
-      })) {
-        changed = true
-      }
-    }
-    return changed
-  }
-
   /** 任务终态:定稿全部流式消息。 */
   finalize(): void {
     for (const seqKey of Array.from(this.anchors.streaming.keys())) {
@@ -426,19 +343,6 @@ export class TaskEventFolder {
     return ceiling
   }
 
-  /**
-   * 子 agent 标题查询(agent 列表展示用):优先流事件 anchors.subTitles(agent.started),
-   * 兜底 state.agentMeta 的 title(task.agents 台账 seed;历史任务无 started 重放时命中)。
-   */
-  resolveAgentTitle(agentId: string): string | undefined {
-    return this.anchors.subTitles.get(agentId) ?? this.state.agentMeta[agentId]?.title
-  }
-
-  /** agent 状态查询(agent 圆列表用)。key 语义同线程项:主 agent = mainAgentId,子 agent = 子 id。 */
-  resolveAgentStatus(agentId: string): AgentStatus {
-    return this.state.agentStates[agentId] ?? 'idle'
-  }
-
   // ---- 公共 helper（供 eventRegistry handler 调用） ----
 
   /** 检查某 seq 是否已折入（去重判定）。 */
@@ -478,38 +382,7 @@ export class TaskEventFolder {
     return this.anchors.toolNames.get(callId) ?? ''
   }
 
-  /** 设置子 agent 标题（agent.started 事件注入）。 */
-  setSubTitle(agentId: string, title: string): void {
-    if (agentId) this.anchors.subTitles.set(agentId, title)
-  }
-
   // ---- 内部 ----
-
-  /**
-   * agentMeta 幂等合并(字段级:undefined 不覆盖已有值;updatedAt 双方都有时取较大者,
-   * 保证 task.agents 台账 seed 不回退流事件已写入的更新时间)。键语义同 agentStates/
-   * 线程项:主 agent = mainAgentId,子 agent = 子 id。返回 true 表示该键快照有变化。
-   */
-  mergeAgentMeta(agentKey: string, patch: Partial<AgentMetaSnapshot>): boolean {
-    const prev = this.state.agentMeta[agentKey]
-    const next: AgentMetaSnapshot = {
-      agentId: patch.agentId ?? prev?.agentId ?? agentKey,
-      title: patch.title ?? prev?.title,
-      createdAt: patch.createdAt ?? prev?.createdAt,
-      model: patch.model ?? prev?.model,
-      inputTokens: patch.inputTokens ?? prev?.inputTokens,
-      outputTokens: patch.outputTokens ?? prev?.outputTokens,
-      totalTokens: patch.totalTokens ?? prev?.totalTokens,
-      contextUsed: patch.contextUsed ?? prev?.contextUsed,
-      contextWindow: patch.contextWindow ?? prev?.contextWindow,
-      updatedAt: prev?.updatedAt != null && patch.updatedAt != null
-        ? Math.max(prev.updatedAt, patch.updatedAt)
-        : (patch.updatedAt ?? prev?.updatedAt),
-    }
-    if (sameAgentMeta(prev, next)) return false
-    this.state.agentMeta[agentKey] = next
-    return true
-  }
 
   /**
    * 插入一条 agent_message 到 items(按原始 seq 精确升序定位;bySeq 键用调用方传入的
@@ -907,70 +780,7 @@ export function readNum(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined
 }
 
-/** worker Usage DTO:{inputTokens,outputTokens,totalTokens}(零值视为缺失)。 */
-export function readUsage(value: unknown): { inputTokens: number; outputTokens: number; totalTokens: number } | null {
-  if (!value || typeof value !== 'object') {
-    return null
-  }
-  const v = value as Record<string, unknown>
-  const inputTokens = typeof v.inputTokens === 'number' ? v.inputTokens : 0
-  const outputTokens = typeof v.outputTokens === 'number' ? v.outputTokens : 0
-  const totalTokens = typeof v.totalTokens === 'number' ? v.totalTokens : inputTokens + outputTokens
-  if (inputTokens <= 0 && outputTokens <= 0) {
-    return null
-  }
-  return { inputTokens, outputTokens, totalTokens }
-}
-
 /** 空状态。 */
 export function emptyThreadState(taskId: string): TaskThreadState {
-  return { taskId, items: [], agentStates: {}, agentMeta: {}, slashTokens: null, mainAgentId: '' }
-}
-
-/** agentMeta 快照字段级相等判定(mergeAgentMeta 变更检测;undefined 与缺失视为同值)。 */
-function sameAgentMeta(a: AgentMetaSnapshot | undefined, b: AgentMetaSnapshot): boolean {
-  if (!a) return false
-  return a.agentId === b.agentId
-    && a.title === b.title
-    && a.createdAt === b.createdAt
-    && a.model === b.model
-    && a.inputTokens === b.inputTokens
-    && a.outputTokens === b.outputTokens
-    && a.totalTokens === b.totalTokens
-    && a.contextUsed === b.contextUsed
-    && a.contextWindow === b.contextWindow
-    && a.updatedAt === b.updatedAt
-}
-
-/**
- * worker 状态值 → n 前端 AgentStatus。覆盖两张词表:
- * - agent.status 事件(Events.AgentStatus):running / waiting-user / done / failed / stopped
- *   (主 agent 终态 done/failed/stopped 由 TaskManager.agentStatusOf 发出);
- * - task.agents 台账 status(SubAgentManager.effectiveStatus):completed / stopped / error /
- *   running / waiting-user(工具契约词表,终态词与前端同名)。
- * n 前端枚举:idle / running / waiting-user / completed / stopped / error
- * (与 taskStore.mapWorkerStatus 的映射约定一致:done→completed、failed→error)。
- * 未知/非法值返回 null → 丢弃,不污染状态表。
- */
-export function mapAgentStatus(value: string): AgentStatus | null {
-  switch (value) {
-    case 'idle':
-    case 'running':
-    case 'waiting-user':
-    case 'stopped':
-    case 'completed':
-    case 'error':
-      return value
-    case 'done':
-      return 'completed'
-    case 'failed':
-      return 'error'
-    default:
-      return null
-  }
-}
-
-/** 判断 AgentStatus 是否为终态(completed/stopped/error)。供 seedAgents 决定是否覆盖。 */
-export function isTerminalAgentStatus(s: AgentStatus): boolean {
-  return s === 'completed' || s === 'stopped' || s === 'error'
+  return { taskId, items: [], slashTokens: null, mainAgentId: '' }
 }

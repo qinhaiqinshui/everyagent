@@ -18,7 +18,7 @@
 import React from 'react'
 import { createPortal } from 'react-dom'
 import type { AgentStatus } from '@/types'
-import type { AgentMetaSnapshot } from '@/task/eventFolder'
+import type { AgentMetaSnapshot } from '@/task/agentLedger'
 import { shortAgentId } from '@/utils/shortId'
 import { formatTokenCount } from '@/utils/formatTokens'
 import { cn } from '@/components/shared/ui/cn'

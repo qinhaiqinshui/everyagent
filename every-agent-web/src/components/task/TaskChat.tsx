@@ -41,7 +41,8 @@ import { slashCommandRegistry } from '@/slash/slashCommandRegistry'
 import { createSnowflakeId } from '@/utils/snowflakeId'
 import { taskQueryService } from '@/query/taskQueryService'
 import { isTaskActive } from '@/task/taskStatusPresentation'
-import type { AgentMetaSnapshot, TaskThreadItem } from '@/task/eventFolder'
+import type { AgentMetaSnapshot } from '@/task/agentLedger'
+import type { TaskThreadItem } from '@/task/eventFolder'
 import { taskStore } from '@/task/taskStore'
 import { taskStreamManager, type TaskStreamHandle } from '@/task/taskStream'
 import { workspaceRegistry, type WorkspaceEntry } from '@/hub/workspaceRegistry'
@@ -720,13 +721,14 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
   // meta 补齐追加在后;title 取 resolveAgentTitle 优先,兜底 meta.title)。
   //
   // ── 名单「只增不减」 ──────────────────────────────────────────
-  // 上面两个数据源在运行中会**整瞬间清空**:任务状态从非活动翻回活动时聊天页会 stream.resync()
-  // (= open → folder.reset(),items/agentStates/agentMeta 全清后重拉),task.agents 台账也是
+  // 上面两个数据源在运行中会**整瞬间塌缩**:任务状态从非活动翻回活动时聊天页会 stream.resync()
+  // (= open → folder.reset(),items 全清后重拉——台账 store folder.ledger 不随 reset 清,
+  // 但 items 派生名单在重拉回填前仍有空窗),task.agents 台账也是
   // 异步补回。名单一旦塌成只剩主 agent,AgentListPanel 按「≤1 个 agent 不渲染」整行卸载,
   // 胶囊连同刚点上的选中描边一起消失、DOM 节点被拆掉后点击还会落空——这正是「选中效果一闪
   // 而逝」。一个任务的 agent 集合只会新增、不会消失,故此处按 agentId 单调累积名单:
   // **成员与顺序冻结**,标题/状态/用量仍每帧取实时值(见 agentListItems)。
-  const agentMeta = stream?.state.agentMeta
+  const agentMeta = stream?.folder.ledger.agentMeta
   const agentRosterRef = React.useRef<Map<string, string>>(new Map())
   const agents = React.useMemo(() => {
     const seen = new Map<string, string>()
@@ -759,11 +761,11 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
     return [...seen.entries()].map(([agentId, title]) => ({ agentId, title }))
   }, [items, stream, stableMainAgentId, agentMeta])
 
-  // agent 长条列表项:状态来自事件折叠器的 agentStates(主 agent 键 = mainAgentId,子 agent 键 = 子 id);
+  // agent 长条列表项:状态来自台账 store folder.ledger.agentStates(主 agent 键 = mainAgentId,子 agent 键 = 子 id);
   // meta 同源(键:主 = mainAgentId,子 = 子 id)→ 悬停信息卡数据 + 子 agent 胶囊底部上下文用量线
   // (contextRatio = contextUsed / contextWindow,clamp 到 0~1;无数据 undefined)。
   const agentListItems = React.useMemo<AgentListItem[]>(() => {
-    const states = stream?.state.agentStates ?? {}
+    const states = stream?.folder.ledger.agentStates ?? {}
     const metas = agentMeta ?? {}
     const entryStatus = entry?.status ?? 'idle'
     // 任务终态判定:completed/stopped/error 时,任务状态是主 agent 的权威状态。
@@ -780,9 +782,9 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
         agentId: agent.agentId,
         title: agent.title,
         status: isMain
-          // 主 agent:任务终态时,任务状态(entry.status)是权威——流事件 agentStates[mainAgentId]
-          // 可能因 resync reset 后丢失、或被 cancelled 等事件设为 stopped 而与实际任务
-          // 终态(completed)不一致;非终态时流事件优先(反映 running/waiting-user 实时状态)。
+          // 主 agent:任务终态时,任务状态(entry.status)是权威——流事件台账状态可能被
+          // cancelled 等事件设为 stopped 而与实际任务终态(completed)不一致;
+          // 非终态时流事件优先(反映 running/waiting-user 实时状态)。
           ? (entryStatusTerminaled
             ? entryStatus
             : (states[stableMainAgentId] ?? (entryStatus ?? 'idle')))
@@ -1101,7 +1103,7 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
  * 订阅任务实时流(折叠推进触发重渲染)。
  *
  * 返回 [stream, items]:stream 是共享句柄(含可变 state,供 taskModel/contextUsage/
- * agentStates/resolveAgentTitle/cancel 等消费);items 是**每次折叠推进都
+ * agent 台账(folder.ledger)/resolveAgentTitle/cancel 等消费);items 是**每次折叠推进都
  * 换引用的线程项副本**——既供 TaskRoundsPanel 消息区,也供派生 agent 列表(agents)。
  *
  * 关键:hub 的 TaskEventFolder.fold 对 state.items 做原地 push / 原地 mutate

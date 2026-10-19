@@ -2,10 +2,12 @@
  * TaskEventFolder 特征化测试(Phase 0 行为护栏,计划「任务线程统一条目与画板纯化」步骤 1)。
  *
  * 目的:锁定折叠器 + 事件注册表的**现状行为**(乱序 seq 归位/重放去重/流式聚合与定稿/
- * rounds 骨架折入升级/截断/agentMeta 台账/isMain 判定/线程项无折叠标记/defaultHandler
- * 兜底),为后续步骤 6/7(拆台账/骨架出画板)提供行为基线——先锁后删,
+ * rounds 骨架折入升级/截断/agent 台账镜像(folder.ledger)/isMain 判定/线程项无折叠标记/defaultHandler
+ * 兜底),为后续步骤 7(骨架出画板)提供行为基线——先锁后删,
  * 重构时同步更新断言而非绕过(foldRole 打标断言已随步骤 5「删除 foldRole 体系」移除,
- * 口径改为线程项无 foldRole 字段)。
+ * 口径改为线程项无 foldRole 字段;台账断言已随步骤 6「agentMeta/agentStates 拆出
+ * eventFolder」改指向独立台账 store folder.ledger——事件仍经 fold() 同一入口喂入,
+ * 锁的是 registry handler → 台账 store 的真实写路径,语义不变)。
  *
  * 纪律:只断言现状,不改源码;事件经 fold(FoldableTaskEvent) 喂入,handler 查表分发
  * (eventRegistry.ts),不 mock 网络。
@@ -298,17 +300,17 @@ describe('truncateAfterSeq 截断', () => {
 })
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 6. agentMeta 台账(seedAgents / usage 合并 / agentStates)
+// 6. agent 台账镜像(独立 store folder.ledger:seedAgents / usage 合并 / agentStates)
 // ─────────────────────────────────────────────────────────────────────────────
 
-describe('agentMeta 台账', () => {
+describe('agent 台账镜像(folder.ledger)', () => {
   function ledgerItem(overrides: Partial<TaskAgentLedgerItem> = {}): TaskAgentLedgerItem {
     return { agentId: SUB, title: '子代理', createdAt: 222, ...overrides }
   }
 
-  it('seedAgents 灌入基线(title/usage/context)并设定 mainAgentId;主 agent 状态不入台账状态表', () => {
-    const folder = newFolder()
-    const changed = folder.seedAgents([
+  it('seedAgents 灌入基线(title/usage/context);主 agent 状态不入台账状态表', () => {
+    const folder = newFolder(MAIN)
+    const changed = folder.ledger.seedAgents([
       ledgerItem({
         agentId: MAIN,
         title: '主代理',
@@ -323,9 +325,8 @@ describe('agentMeta 台账', () => {
       }),
     ], MAIN)
     expect(changed).toBe(true)
-    expect(folder.state.mainAgentId).toBe(MAIN)
 
-    const mainMeta = folder.state.agentMeta[MAIN]
+    const mainMeta = folder.ledger.agentMeta[MAIN]
     expect(mainMeta?.title).toBe('主代理')
     expect(mainMeta?.inputTokens).toBe(10)
     expect(mainMeta?.outputTokens).toBe(5)
@@ -334,17 +335,17 @@ describe('agentMeta 台账', () => {
     expect(mainMeta?.contextWindow).toBe(1000)
     expect(mainMeta?.model).toBe('model-a')
     expect(mainMeta?.updatedAt).toBe(500)
-    expect(folder.state.agentMeta[SUB]?.title).toBe('子代理')
-    expect(folder.state.agentMeta[SUB]?.totalTokens).toBe(33)
+    expect(folder.ledger.agentMeta[SUB]?.title).toBe('子代理')
+    expect(folder.ledger.agentMeta[SUB]?.totalTokens).toBe(33)
 
     // 主 agent 状态不被台账写入;子 agent 终态写入 agentStates
-    expect(folder.state.agentStates[MAIN]).toBeUndefined()
-    expect(folder.state.agentStates[SUB]).toBe('completed')
+    expect(folder.ledger.agentStates[MAIN]).toBeUndefined()
+    expect(folder.ledger.agentStates[SUB]).toBe('completed')
   })
 
   it('usage 事件字段级合并(undefined 不覆盖已有值,updatedAt 取大)', () => {
     const folder = newFolder(MAIN)
-    folder.seedAgents([ledgerItem({
+    folder.ledger.seedAgents([ledgerItem({
       agentId: MAIN,
       usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
       context: { inputTokens: 100, contextWindowTokens: 1000, model: 'model-a' },
@@ -359,7 +360,7 @@ describe('agentMeta 台账', () => {
         model: 'model-b',
       },
     }, MAIN, 800))
-    const meta = folder.state.agentMeta[MAIN]
+    const meta = folder.ledger.agentMeta[MAIN]
     expect(meta?.contextUsed).toBe(50)
     expect(meta?.contextWindow).toBe(4000)
     expect(meta?.model).toBe('model-b')
@@ -373,7 +374,7 @@ describe('agentMeta 台账', () => {
     folder.fold(ev(SEQ_150, 'usage', {
       data: { round: { inputTokens: 60, outputTokens: 6, totalTokens: 66 }, model: '' },
     }, MAIN, 300))
-    const meta2 = folder.state.agentMeta[MAIN]
+    const meta2 = folder.ledger.agentMeta[MAIN]
     expect(meta2?.updatedAt).toBe(800)
     expect(meta2?.model).toBe('model-b')
     expect(meta2?.contextWindow).toBe(4000)
@@ -384,23 +385,33 @@ describe('agentMeta 台账', () => {
     expect(folder.state.items).toHaveLength(0)
   })
 
-  it('agent.status 事件更新 agentStates(权威);子 agent 终态台账覆盖、非终态不覆盖;主 agent 状态不被台账覆盖', () => {
+  it('agent.status 事件更新台账 agentStates(权威);子 agent 终态台账覆盖、非终态不覆盖;主 agent 状态不被台账覆盖', () => {
     const folder = newFolder(MAIN)
     folder.fold(ev(SEQ_100, 'agent.status', { status: 'waiting-user' }, SUB, 1200))
-    expect(folder.state.agentStates[SUB]).toBe('waiting-user')
+    expect(folder.ledger.agentStates[SUB]).toBe('waiting-user')
 
     // 非终态台账不覆盖流事件实时状态
-    folder.seedAgents([ledgerItem({ status: 'running' })], MAIN)
-    expect(folder.state.agentStates[SUB]).toBe('waiting-user')
+    folder.ledger.seedAgents([ledgerItem({ status: 'running' })], MAIN)
+    expect(folder.ledger.agentStates[SUB]).toBe('waiting-user')
     // 终态台账覆盖(DataPusher 与 finish 驱逐竞态丢失 done 事件的兜底权威)
-    folder.seedAgents([ledgerItem({ status: 'completed' })], MAIN)
-    expect(folder.state.agentStates[SUB]).toBe('completed')
+    folder.ledger.seedAgents([ledgerItem({ status: 'completed' })], MAIN)
+    expect(folder.ledger.agentStates[SUB]).toBe('completed')
 
     // 主 agent:流事件状态不被台账终态按回(主 agent 状态是 per-run 的,交流事件)
     folder.fold(ev(SEQ_150, 'agent.status', { status: 'running' }, MAIN, 1300))
-    expect(folder.state.agentStates[MAIN]).toBe('running')
-    folder.seedAgents([ledgerItem({ agentId: MAIN, status: 'completed' })], MAIN)
-    expect(folder.state.agentStates[MAIN]).toBe('running')
+    expect(folder.ledger.agentStates[MAIN]).toBe('running')
+    folder.ledger.seedAgents([ledgerItem({ agentId: MAIN, status: 'completed' })], MAIN)
+    expect(folder.ledger.agentStates[MAIN]).toBe('running')
+  })
+
+  it('folder.reset() 只清线程项,不清台账(台账生命周期跟任务不跟 items 重置)', () => {
+    const folder = newFolder(MAIN)
+    folder.ledger.seedAgents([ledgerItem({ status: 'completed' })], MAIN)
+    folder.fold(ev(SEQ_100, 'user.message', { content: '用户' }, MAIN))
+    folder.reset()
+    expect(folder.state.items).toHaveLength(0)
+    expect(folder.ledger.agentStates[SUB]).toBe('completed')
+    expect(folder.ledger.agentMeta[SUB]?.title).toBe('子代理')
   })
 })
 

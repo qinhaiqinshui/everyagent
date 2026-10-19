@@ -7,16 +7,19 @@
  *
  * handler 接口极简：接收 (event, state, folder)，返回是否状态有变化（驱动重渲染）。
  * handler 通过组合调用 folder 上的公共 helper（insertMessage/appendRoundText/
- * completeMessage/upsertTraceBySeq/insertTrace/truncateAfterSeq/closeStreamingByAgent/
- * mergeAgentMeta 等）完成折叠。
+ * completeMessage/upsertTraceBySeq/insertTrace/truncateAfterSeq/closeStreamingByAgent
+ * 等）完成折叠;agent 台账类 handler 改写组合挂载的台账 store(folder.ledger:
+ * mergeAgentMeta/setStatus/setSubTitle,agentLedger.ts)。
  */
 import type { FoldableTaskEvent, TaskEventFolder, TaskThreadState } from './eventFolder'
 import {
-  readUsage,
   readNum,
   readStr,
-  mapAgentStatus,
 } from './eventFolder'
+import {
+  mapAgentStatus,
+  readUsage,
+} from './agentLedger'
 
 /** 事件处理器接口。 */
 export interface EventHandler {
@@ -199,7 +202,7 @@ registerEventKind('tool.result', {
   },
 })
 
-/** usage → 更新 agentMeta(每 agent 最近一轮占用/累计);任务级电池走 taskStore 的 worker 聚合值 */
+/** usage → 更新台账镜像 ledger.agentMeta(每 agent 最近一轮占用/累计);任务级电池走 taskStore 的 worker 聚合值 */
 registerEventKind('usage', {
   handle(event, state, folder) {
     const agentKey = agentKeyOf(event, folder)
@@ -207,7 +210,7 @@ registerEventKind('usage', {
     const data = dataOf(event) ?? {}
     const round = readUsage(data.round)
     const total = readUsage(data.total)
-    folder.mergeAgentMeta(agentKey, {
+    folder.ledger.mergeAgentMeta(agentKey, {
       contextUsed: round?.inputTokens,
       contextWindow: readNum(data.contextWindowTokens),
       model: readStr(data.model),
@@ -220,7 +223,7 @@ registerEventKind('usage', {
   },
 })
 
-/** agent.started → 更新 agentMeta + agentStates（兜底） */
+/** agent.started → 更新台账镜像 agentMeta + agentStates（兜底） */
 registerEventKind('agent.started', {
   handle(event, state, folder) {
     const seqKey = String(event.seq)
@@ -228,18 +231,18 @@ registerEventKind('agent.started', {
     const agentKey = agentKeyOf(event, folder)
     const ts = tsOf(event)
     const title = String(event.payload?.title ?? '')
-    if (agentKey) folder.setSubTitle(agentKey, title)
-    folder.mergeAgentMeta(agentKey, {
+    if (agentKey) folder.ledger.setSubTitle(agentKey, title)
+    folder.ledger.mergeAgentMeta(agentKey, {
       agentId: agentKey,
       title: title !== '' ? title : undefined,
       createdAt: ts,
     })
-    if (agentKey) state.agentStates[agentKey] = 'running'
+    if (agentKey) folder.ledger.setStatus(agentKey, 'running')
     return true
   },
 })
 
-/** agent.done → 更新 agentStates + agentMeta（收口用量） */
+/** agent.done → 更新台账镜像 agentStates + agentMeta（收口用量） */
 registerEventKind('agent.done', {
   handle(event, state, folder) {
     const seqKey = String(event.seq)
@@ -247,10 +250,10 @@ registerEventKind('agent.done', {
     const agentKey = agentKeyOf(event, folder)
     const ts = tsOf(event)
     folder.closeStreamingByAgent(agentKey)
-    state.agentStates[agentKey] = 'completed'
+    folder.ledger.setStatus(agentKey, 'completed')
     const data = dataOf(event)
     const doneUsage = readUsage(data?.usage)
-    folder.mergeAgentMeta(agentKey, {
+    folder.ledger.mergeAgentMeta(agentKey, {
       inputTokens: doneUsage?.inputTokens,
       outputTokens: doneUsage?.outputTokens,
       totalTokens: doneUsage?.totalTokens,
@@ -260,12 +263,12 @@ registerEventKind('agent.done', {
   },
 })
 
-/** agent.status → 更新 agentStates（权威状态事件） */
+/** agent.status → 更新台账镜像 agentStates（权威状态事件） */
 registerEventKind('agent.status', {
   handle(event, state, folder) {
     const agentKey = agentKeyOf(event, folder)
     const mapped = mapAgentStatus(String(event.payload?.status ?? ''))
-    if (mapped) state.agentStates[agentKey] = mapped
+    if (mapped) folder.ledger.setStatus(agentKey, mapped)
     return true
   },
 })
@@ -279,7 +282,7 @@ registerEventKind('error', {
     const ts = tsOf(event)
     const message = String(event.payload?.content ?? event.payload?.message ?? '')
     folder.closeStreamingByAgent(agentKey)
-    state.agentStates[agentKey] = 'error'
+    folder.ledger.setStatus(agentKey, 'error')
     folder.insertTrace(ts, {
       traceId: `t-${event.seq}`,
       taskId: state.taskId,
@@ -305,7 +308,7 @@ registerEventKind('cancelled', {
     const ts = tsOf(event)
     const data = dataOf(event)
     folder.closeStreamingByAgent(folder.mainKey())
-    state.agentStates[folder.mainKey()] = 'stopped'
+    folder.ledger.setStatus(folder.mainKey(), 'stopped')
     folder.insertTrace(ts, {
       traceId: `t-${event.seq}`,
       taskId: state.taskId,
@@ -373,7 +376,7 @@ registerEventKind('system.notice', {
 /** ask.create → 兜底：该 agent 挂起等待用户 */
 registerEventKind('ask.create', {
   handle(event, state, folder) {
-    state.agentStates[agentKeyOf(event, folder)] = 'waiting-user'
+    folder.ledger.setStatus(agentKeyOf(event, folder), 'waiting-user')
     return true
   },
 })
@@ -384,7 +387,7 @@ registerEventKind('ask.resolved', {
     const data = dataOf(event)
     const resolvedStatus = String(data?.status ?? event.payload?.status ?? '')
     if (resolvedStatus !== 'cancelled') {
-      state.agentStates[agentKeyOf(event, folder)] = 'running'
+      folder.ledger.setStatus(agentKeyOf(event, folder), 'running')
     }
     return true
   },
