@@ -1,9 +1,10 @@
 /**
  * 用户消息「复制原始内容」按钮（核心内置，经 ui.user_message_actions 扩展点渲染）。
  *
- * 渲染在每条用户消息气泡左侧（与 task-edit-resend 的编辑按钮并列）：
- * - 桌面端：hover 消息区域时显示（CSS 控制）；
- * - 触屏端（hover: none, pointer: coarse）：常显，避免移动端无 hover 入口；
+ * 渲染在每条用户消息气泡左侧的动作区容器（.nagent-msg__actions）内，
+ * 与 task-edit-resend 的编辑按钮并列；按钮显隐由该容器统一控制
+ * （桌面端 hover 消息区显示；移动端消息获得焦点显示、失去焦点隐藏），
+ * 本组件只管自身交互：
  * - 点击把该消息的 rawContent（含 `[[[[...]]]]` opaque token 串）写入剪贴板；
  *   粘贴回输入框时 InlineComposer 的 handlePaste 会用 splitComposerRawContent
  *   解析 opaque 串并还原成胶囊（见 InlineComposer §paste 文本分支注释），

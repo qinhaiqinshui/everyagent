@@ -130,24 +130,37 @@ export default function AgentMessageThread({
     const replaySegments = buildUserMessageReplaySegments(message)
     // 子 agent 输入判定:agentId 非空且 ≠ mainAgentId(空串安全:合成骨架/mainAgentId 未灌入时落回 false)。
     const isSubAgentInput = Boolean(message.agentId) && message.agentId !== mainAgentId
-    // 用户消息动作（扩展点 ui.user_message_actions，如编辑重发按钮）：
+    // 用户消息动作（扩展点 ui.user_message_actions，如复制原始内容/编辑重发按钮）：
     // messageId 格式为 `m-${原始seq字符串}`,从中提取精确 seq(避免 Number 精度丢失)。
     // 子 agent 输入不带扩展点(不可编辑重发)。
     const userMsgSeq = message.messageId?.startsWith('m-') ? message.messageId.slice(2) : null
     const userMessageActions = !isSubAgentInput && userMsgSeq != null
       ? pluginDispatcher.listRegisteredUserMessageActions() : []
+    const hasUserMessageActions = userMessageActions.length > 0
     return (
-      <div className={`nagent-msg nagent-msg--user${continuationClass}`}>
+      // tabIndex 仅在存在动作时挂载：移动端动作区显隐由「消息获得/失去焦点」驱动
+      // （:focus-within），触摸聚焦需要消息容器本身可聚焦（iOS Safari 要求 tabindex）。
+      <div
+        className={`nagent-msg nagent-msg--user${continuationClass}`}
+        tabIndex={hasUserMessageActions ? 0 : undefined}
+      >
         <div className="nagent-msg__body nagent-msg__body--user">
-          {userMessageActions.map((action) => (
-            <action.Component
-              key={action.id}
-              taskId={taskId}
-              seq={userMsgSeq!}
-              content={message.content ?? ''}
-              rawContent={message.rawContent}
-            />
-          ))}
+          {hasUserMessageActions ? (
+            // 动作区容器统一控制显隐（见 chatPanel.css .nagent-msg__actions）：
+            // 桌面端 hover 消息区显示；移动端消息获得焦点显示、失去焦点隐藏。
+            // 各动作按钮自身不再各自管理透明度。
+            <div className="nagent-msg__actions">
+              {userMessageActions.map((action) => (
+                <action.Component
+                  key={action.id}
+                  taskId={taskId}
+                  seq={userMsgSeq!}
+                  content={message.content ?? ''}
+                  rawContent={message.rawContent}
+                />
+              ))}
+            </div>
+          ) : null}
           <CollapsibleUserBubble
             className={`nagent-msg__bubble nagent-msg__bubble--user${isSubAgentInput ? ' nagent-msg__bubble--sub-agent' : ''}`}
             segments={replaySegments}

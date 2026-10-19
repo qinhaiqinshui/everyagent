@@ -1,4 +1,7 @@
-/* ─── 用户消息编辑按钮（task-edit-resend 插件，从核心 chatPanel.css 迁入）─── */
+/* ─── 用户消息编辑按钮（task-edit-resend 插件，从核心 chatPanel.css 迁入）───
+   显隐由核心动作区容器 .nagent-msg__actions 统一控制（桌面 hover 消息区显示；
+   移动端消息获得焦点显示、失去焦点隐藏），本类只管按钮自身视觉，不再各自
+   管理透明度（避免与容器双重控制）。 */
 .nagent-msg__edit-btn {
   flex-shrink: 0;
   display: flex;
@@ -12,25 +15,14 @@
   background: transparent;
   color: var(--text-tertiary, #999);
   cursor: pointer;
-  opacity: 0;
-  transition: opacity 0.15s, background 0.15s;
+  transition: background 0.15s, color 0.15s;
   position: relative;
-}
-/* 桌面端:hover 消息区域时显示 */
-.nagent-msg--user:hover .nagent-msg__edit-btn,
-.nagent-msg__edit-btn:focus-visible {
-  opacity: 1;
-}
-/* 移动端:点击用户消息后显示（插件组件打 --revealed 态） */
-.nagent-msg__edit-btn--revealed {
-  opacity: 1;
 }
 .nagent-msg__edit-btn:hover {
   color: var(--accent-blue, #4a9eff);
 }
-/* 编辑模式:当前正在编辑的消息,按钮常显 */
+/* 编辑模式:当前正在编辑的消息,按钮着色强调 */
 .nagent-msg__edit-btn--active {
-  opacity: 1 !important;
   color: var(--accent-blue, #4a9eff);
 }
 

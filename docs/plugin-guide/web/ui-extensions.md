@@ -246,6 +246,7 @@ ctx.ui.registerUserMessageAction({ id: 'my-plugin.copy-button', Component: MyBut
 
 消费链：每条用户消息渲染时同步 `listRegisteredUserMessageActions()` 并 map 渲染全部已注册动作（`AgentMessageThread.tsx:130-145`）；**只在能提取出 seq 时渲染**（messageId 不带 `m-` 前缀则空数组，`:132-133`）。
 
+- **显隐契约（容器统一控制，动作组件禁止自控透明度）**：所有动作渲染在 `.nagent-msg__actions` 容器内，显隐由容器 CSS 统一负责——桌面端 `:hover` 消息区显示；移动端消息容器（带 `tabIndex=0`）获得焦点（`:focus-within`，触摸聚焦）显示、失去焦点隐藏；隐藏时 `pointer-events:none`。动作组件只管自身视觉与交互，不要再写 `opacity:0` / hover 自显 / JS 切换 revealed 之类的自控显隐（会与容器双重控制失效）。
 - **坑**：`seq` 是字符串，别 `Number()` 转（超 2^53 丢精度）；动作组件自己管交互态（编辑模式等），与 §9 的提交贡献配合才完整。
 - **内置范例**：task-edit-resend（`every-agent-plugins/task-edit-resend/web/index.ts:17-20`，编辑重发按钮；按钮内部用 `ctx.ui.setComposerRawContent/appendComposerText` 回填草稿，`EditMessageButton.tsx:60,62`）。
 
