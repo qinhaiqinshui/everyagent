@@ -2,9 +2,10 @@
  * 任务流管理(单一线程真相源):TaskPacketView(仅订阅 worker 定向推送,不再轮询)×
  * eventFolder(折叠成线程)× askStore(卡片)。
  *
- * 打开任务(open)时一次性建齐骨架:
- * - task.rounds 全量轮次 → folder.foldRound 折入 user(rounds.jsonl userMessage)与闭合轮合成 final;
- * - 运行中未闭合尾轮 → task.roundTail 拉「最后一页」(200)与流式增量接上;
+ * 打开任务(open)时建齐数据源(画板 = 纯 wire 折叠产物,rounds 通道只做渲染投影,§8.3):
+ * - task.rounds 拉取轮次快照 → 只进渲染投影(轮面板据此合成 user 气泡/折叠条/final 摘要,
+ *   并以 startSeq/endSeq 作切片区间元数据),**不折入 items**;
+ * - 运行中未闭合尾轮 → task.roundTail 拉「最后一页」(200)与流式增量接上(wire 折叠);
  * - task.agents 拉子 agent 台账灌入独立台账 store folder.ledger(胶囊列表/悬停卡片数据源;
  *   eventFolder 只负责线程折叠,agentLedger.ts);
  * - 之后 worker 定向推送(stream 频道)的流式增量(delta/thinking/message/tool/子 agent 等)
@@ -15,7 +16,7 @@
  * loadRoundBackward 后向分页。
  *
  * 轮次开启/闭合由后端推送 round.opened/round.closed 信号事件(不落盘、不折入 items),
- * 收到后仅触发 rounds 快照刷新(重新 task.rounds + 幂等 foldRound),前端不在本地判开/闭。
+ * 收到后仅触发 rounds 快照刷新(重新拉取 task.rounds,更新渲染投影),前端不在本地判开/闭。
  * 插件自定义任务事件(plugin.* 前缀,如 file-change 轮末摘要直推)同样不折入 items,
  * 一律透传到领域事件总线由对应插件 web 端订阅消费(数据直推模型,宿主不感知业务语义,§7.15.2)。
  *
@@ -233,7 +234,7 @@ class ManagedStream {
       })
       return
     }
-    // round.opened / round.closed 是信号事件,不折入 items;仅触发 rounds 快照刷新(重新 task.rounds + 幂等 foldRound)。
+    // round.opened / round.closed 是信号事件,不折入 items;仅触发 rounds 快照刷新(重新拉取 task.rounds,更新渲染投影)。
     if (event.event === 'round.opened' || event.event === 'round.closed') {
       void this.refreshRounds()
       return
@@ -301,7 +302,7 @@ class ManagedStream {
 
   /**
    * rounds 快照刷新(round.opened/round.closed/agent.status 终态触发):重新拉取 task.rounds,
-   * **不重置 folder、不拉尾段**——仅增量 foldRound(幂等)更新轮次骨架。push stream 仍在
+   * **不重置 folder、不拉尾段**——仅刷新快照(渲染投影数据源)。push stream 仍在
    * 实时推送流式事件,reset 会清空 streaming anchors 导致后续 thinking 事件被丢弃(§偶现 bug:
    * 继续提问时思考只吐几字后停止)。失败不阻断(记 warn)。
    */
@@ -407,15 +408,18 @@ class ManagedStream {
   }
 
   /**
-   * 建齐「单一线程真相源」骨架:task.rounds 全量轮次(user 真实 userMessage + 闭合轮合成
-   * final)折入 items,过程内容一律由懒加载按需拉取(不再一次性全量)。运行中任务额外拉
-   * 未闭合尾轮「最后一页」(task.roundTail limit=200)与流式增量接上;终态未闭合尾轮不在此
-   * 拉,由 TaskRoundsPanel 常开视图懒加载。完成后 50ms 合并通知一次。
+   * 建齐「单一线程真相源」数据源:task.rounds 快照只进渲染投影(轮面板据此合成 user 气泡/
+   * 折叠条/final 摘要,并以 startSeq/endSeq 作切片区间元数据),**不折入 items**——画板 =
+   * 纯 wire 折叠产物(§8.3);items 只由 wire 事件折叠而成:运行中任务拉未闭合尾轮
+   * 「最后一页」(task.roundTail limit=200)与流式增量接上,闭合轮过程内容由轮面板展开时
+   * 懒加载,终态未闭合尾轮不在此拉、由常开视图懒加载。完成后 50ms 合并通知一次。
    *
    * @param soft 软刷新模式(round.opened/closed 等信号触发):不 reset folder、不拉 live
-   *   尾段(push stream 仍在实时推送,reset 会清空 streaming anchors 导致 thinking 丢失)。
-   *   仅增量 foldRound(幂等)更新轮次骨架 + 终态任务 ask.settle 补拉。初始 open/resync
-   *   走 full(soft=false)。
+   *   尾段(push stream 仍在实时推送,reset 会清空 streaming anchors 导致 thinking 丢失),
+   *   仅刷新 rounds 快照 + 终态任务 ask.settle 补拉。初始 open/resync 走 full(soft=false):
+   *   reset 清空 items(编辑重发后旧轮次 seq 已过期,混排会顺序错乱)并自增 resetEpoch——
+   *   轮面板观测到 epoch 变化即失效分页状态促重拉(已展开轮重新走懒加载首页,拉取层先查
+   *   items 缓存、缺才 RPC),items 重建来源 = 尾段 wire 回放 + 实时推送 + 懒加载重拉。
    */
   private async loadRoundsIntoFolder(soft = false): Promise<void> {
     const client = this.clientOrError()
@@ -427,39 +431,14 @@ class ManagedStream {
       // 重置 folder:resync/重连场景下旧 items(编辑前轮次,seq 已过期)必须清除,
       // 否则新旧轮次按 seq 混排会顺序错乱(如编辑轮 3 后旧轮 3 seq 更大排在新轮 3 后面)。
       // 软刷新(soft=true)跳过:push stream 仍在实时推送流式事件,reset 会清空
-      // streaming anchors 导致后续 thinking 事件被丢弃。
+      // streaming anchors 导致后续 thinking 事件被丢弃。reset 自增 resetEpoch,
+      // 渲染层(轮面板)据此失效分页状态促重拉。
       this.folder.reset()
-    }
-    // 全部轮折入骨架:user(foldRound 用 round.userMessage)+ 闭合轮合成 final(文本摘要);
-    // 后续懒加载把过程事件 / 权威 message 折入同一 items,按 seq 去重且不重复 user/final 项。
-    // foldRound 按 seq 幂等:已有真实项(push stream 折入)则跳过,不产生重复。
-    for (const round of res.rounds) {
-      this.folder.foldRound(round)
     }
     const lastRound: RoundSummary | undefined = res.rounds[res.rounds.length - 1]
     const tailStartSeq = lastRound?.endSeq === ''
       ? lastRound.startSeq
       : (res.open?.startSeq ?? null)
-    // 运行中 open 轮不在 rounds.jsonl 行时(旧任务首次 task.rounds 惰性重建会跳过运行中未闭合轮,
-    // 只落盘已闭合轮)→ rounds[] 无该轮 user 骨架,用 res.open 的 userMessage/user 兜底补一条,
-    // 保证运行中尾轮 user 气泡恒在(方案 5.7「或 res.open 的 userMessage」)。
-    if (tailStartSeq && res.live && res.open) {
-      const hasUserItem = this.folder.state.items.some(
-        (it) => it.type === 'agent_message' && it.message.messageId === `m-${tailStartSeq}`,
-      )
-      if (!hasUserItem) {
-        this.folder.foldRound({
-          roundId: 'open',
-          index: 0,
-          startSeq: tailStartSeq,
-          endSeq: '',
-          user: res.open.user,
-          finalReply: '',
-          subs: [],
-          userMessage: res.open.userMessage,
-        })
-      }
-    }
     if (!soft && tailStartSeq && res.live) {
       // 软刷新跳过 live 尾段拉取:push stream 仍在实时推送流式事件(thinking/delta),
       // 拉尾段会通过 foldWireEvent 二次折入已 push 的同 seq 事件,导致文本重复 +

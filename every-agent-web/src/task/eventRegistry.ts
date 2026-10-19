@@ -94,44 +94,20 @@ export function defaultHandler(event: FoldableTaskEvent, state: TaskThreadState,
 
 // ---- 注册全部现役 kind 的 handler ----
 
-/** user.message → role:'user' 消息(主/子 agent 共用同一事件名;线程项无折叠标记) */
+/** user.message → role:'user' 消息(主/子 agent 共用同一事件名与同一路径;线程项无折叠标记)。
+ * 骨架出画板后无 rounds.jsonl 合成骨架可升级——主/子 agent 均为「无同 seq 项则插入真实
+ * 消息、有则 seq 去重跳过」一条路径;渲染层按 agentId 区分样式(子 agent 气泡低调背景色)
+ * 与扩展点(子 agent 输入不带编辑重发动作)。 */
 registerEventKind('user.message', {
   handle(event, state, folder) {
     const seqKey = String(event.seq)
+    if (folder.hasSeq(seqKey)) return false
     const content = String(event.payload?.content ?? '')
     const data = dataOf(event)
     const rawContent = typeof data?.rawContent === 'string' && data.rawContent.length
       ? data.rawContent : content
     const agentKey = agentKeyOf(event, folder)
     const ts = tsOf(event)
-    // 主 agent:有合成骨架时先升级再跳过。
-    if (folder.isMain(agentKey)) {
-      if (folder.hasSeq(seqKey)) {
-        // 真实事件后到但骨架先入(loadRoundsIntoFolder(full) 的 reset 竞态):合成骨架可被
-        // 权威 payload 原地升级(骨架可能缺 data.rawContent → @文件胶囊丢失,真实事件是唯一权威)。
-        return folder.upgradeSyntheticUser(seqKey, {
-          content,
-          rawContent,
-          agentId: agentKey,
-          ts,
-        })
-      }
-      folder.insertMessage(agentKey, {
-        messageId: `m-${event.seq}`,
-        agentId: agentKey,
-        role: 'user',
-        content,
-        rawContent,
-        historyMode: 'thread_only',
-        createdAt: ts,
-        updatedAt: ts,
-        sequence: Number(event.seq),
-      }, seqKey)
-      return true
-    }
-    // 子 agent 的输入指令:同样以 role:'user' 消息插入(与主 agent 共用渲染组件)。
-    // agentId 区分主/子——渲染层据此区分样式(子 agent 气泡用低调背景色)且不带编辑重发扩展点。
-    if (folder.hasSeq(seqKey)) return false
     folder.insertMessage(agentKey, {
       messageId: `m-${event.seq}`,
       agentId: agentKey,

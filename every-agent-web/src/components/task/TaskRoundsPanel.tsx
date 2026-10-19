@@ -1,4 +1,5 @@
 import React from 'react'
+import type { AgentMessageRecord } from '@/types'
 import type { RoundSummary, TaskRoundsResult } from '@/task/types'
 import type { TaskStreamHandle } from '@/task/taskStream'
 import type { TaskThreadItem } from '@/task/eventFolder'
@@ -19,16 +20,18 @@ import {
   sliceTailItems,
   syntheticFinalRecord,
   syntheticUserRecord,
-  tailItemsAfterUser,
   terminalTailOf,
 } from './roundsView'
 import './TaskRoundsPanel.css'
 
 /**
- * 任务线程面板（懒加载形态）：
+ * 任务线程面板（懒加载形态;画板 = 纯 wire 折叠产物,§8.3）：
  *
- * - 轮次骨架（user / final / 折叠标记 / 耗时）来自 taskStream 的 rounds 快照（task.rounds 索引），
- *   user 气泡直接用 rounds.jsonl 的 userMessage 折入 items，不再单独补拉；
+ * - 轮次骨架（user 气泡 / 折叠条 / final 摘要 / 耗时）来自 taskStream 的 rounds 快照
+ *   （task.rounds 索引）**直接合成渲染**（rounds 通道只做渲染投影与切片区间元数据,
+ *   不折入 items——骨架出画板）:闭合轮 user/final 由 syntheticUserRecord/
+ *   syntheticFinalRecord 合成,尾轮 user 气泡同一口径（运行中尾轮用 open 轮快照,
+ *   终态尾轮用末行 round 的 userMessage）;
  * - 闭合轮保持「user 气泡 + 折叠条 + final 常显」，点击展开后才懒加载过程内容
  *   （前向分页，滚动到底部 forward sentinel 续拉，拉到 endSeq 停）；
  * - 终态未闭合尾轮：常开视图，从 startSeq 起前向懒加载（底部 forward sentinel）；
@@ -41,6 +44,9 @@ import './TaskRoundsPanel.css'
  *   避免未加载轮被误判「消失」。纯渲染派生——只过滤已加载内容，不新增任何拉取触发；
  *   用户展开/滚动加载折入的新内容经 items 引用变化自动纳入过滤，其他 agent 的流式增量
  *   被挡在视图外（DOM 不变 → MutationObserver 不触发 → 不会误贴底）。
+ * - 分页状态 key = roundId（运行中尾轮用 open.roundId,老 worker 缺失回退 'open'）;
+ *   items 被 reset 清空（resync/编辑重发 full 重载,经 folder.resetEpoch 观测）时
+ *   分页状态整体失效促重拉，已展开轮自动重新发起首页拉取。
  */
 export interface TaskRoundsPanelProps {
   /** 当前任务 ID。 */
@@ -73,7 +79,8 @@ export default function TaskRoundsPanel({
 }: TaskRoundsPanelProps): React.ReactNode {
   /** 已展开的轮 roundId 集合（多轮可同时展开）。 */
   const [expandedSet, setExpandedSet] = React.useState<ReadonlySet<string>>(() => new Set())
-  /** 每轮懒加载分页状态（key：闭合轮/终态尾轮 = roundId；运行中尾轮 = 'open'）。 */
+  /** 每轮懒加载分页状态（key：闭合轮/终态尾轮/运行中尾轮统一 = roundId；运行中尾轮取
+   *  open.roundId，老 worker 缺失回退 'open' 魔法串——must-ignore 双向兼容，仅作回退值）。 */
   const [pageStates, setPageStates] = React.useState<Record<string, RoundPageState>>({})
   const pageStatesRef = React.useRef(pageStates)
   pageStatesRef.current = pageStates
@@ -84,6 +91,10 @@ export default function TaskRoundsPanel({
   const open = roundsResult?.open ?? null
   const live = roundsResult?.live ?? false
   const openStartSeq = open?.startSeq ?? ''
+  /** 运行中尾轮分页 key = open.roundId（跨闭合稳定，轮换新开不复用上一轮旧游标）；老 worker 回退 'open'。 */
+  const openPageKey = open?.roundId ?? 'open'
+  /** items 重置纪元（taskStream full 重载 reset 后自增）：观测到变化即失效全部分页状态促重拉。 */
+  const resetEpoch = stream?.folder.resetEpoch ?? 0
   const workspaceRoot = taskStore.get(taskId)?.workspace || undefined
   const workerId = taskStore.get(taskId)?.workerId || undefined
 
@@ -92,6 +103,15 @@ export default function TaskRoundsPanel({
     setExpandedSet(new Set())
     setPageStates({})
   }, [taskId])
+
+  // items 被 reset 清空（resync/编辑重发 full 重载，经 folder.resetEpoch 观测）：分页状态
+  // 整体失效促重拉——骨架出画板后 items 重建来源只剩 wire 回放 + 懒加载,不清分页状态
+  // 会让已展开轮停留在 done=true 的旧游标上、内容缺失无重拉路径（展开集保留，用户视角
+  // 展开状态不丢）。失效后由下方「已展开轮缺分页状态」effect 重新发起首页拉取
+  // （拉取层先查 items 缓存,缺才 RPC）。
+  React.useEffect(() => {
+    setPageStates({})
+  }, [resetEpoch])
 
   /** 更新某轮分页状态（合并 patch）。 */
   const updatePageState = React.useCallback((key: string, patch: Partial<RoundPageState>) => {
@@ -145,7 +165,7 @@ export default function TaskRoundsPanel({
   /** 后向续拉运行中尾轮历史。 */
   const loadBackward = React.useCallback(
     async (startSeq: string, beforeSeq: string) => {
-      const key = 'open'
+      const key = openPageKey
       const cur = pageStatesRef.current[key]
       if (!stream || cur?.loading || cur?.done) return
       updatePageState(key, { loading: true })
@@ -157,13 +177,13 @@ export default function TaskRoundsPanel({
         updatePageState(key, { loading: false })
       }
     },
-    [stream, taskId, updatePageState],
+    [stream, taskId, updatePageState, openPageKey],
   )
 
   /** 开始/继续后向拉取：首次需当前最早尾事件 seq 作为 beforeSeq。 */
   const startBackward = React.useCallback(
     (startSeq: string, beforeSeq: string) => {
-      const key = 'open'
+      const key = openPageKey
       const cur = pageStatesRef.current[key]
       if (!cur) {
         updatePageState(key, { dir: 'backward', cursor: beforeSeq, loading: false, done: false })
@@ -172,7 +192,7 @@ export default function TaskRoundsPanel({
         void loadBackward(startSeq, cur.cursor)
       }
     },
-    [loadBackward, updatePageState],
+    [loadBackward, updatePageState, openPageKey],
   )
 
   const toggleExpanded = React.useCallback((roundId: string) => {
@@ -216,20 +236,30 @@ export default function TaskRoundsPanel({
     startForward(terminalTail)
   }, [tailStartSeq, live, terminalTail, startForward])
 
+  // 已展开轮缺分页状态（初始挂载的极端时序 / resetEpoch 失效促重拉后）：重新发起首页拉取,
+  // 与上方终态尾轮 effect 同款「无状态才启动」守卫(拉取层先查 items 缓存,缺才 RPC)。
+  React.useEffect(() => {
+    for (const round of closedRounds) {
+      if (expandedSet.has(round.roundId) && !pageStatesRef.current[round.roundId]) {
+        startForward(round)
+      }
+    }
+  }, [closedRounds, expandedSet, startForward, resetEpoch])
+
   // 运行中尾轮：原样订阅流 + 尾页起步；仅初始化 backward 分页状态（cursor=当前最早尾事件
   // seq），**不触发拉取**——真正的历史续拉等用户上滚把顶部 backward sentinel 滚入可视区
   // 经 onLoadMoreBackward 触发（懒加载语义，方案第 3 点）。
   React.useEffect(() => {
     if (!tailStartSeq || !live) return
-    const cur = pageStatesRef.current['open']
+    const cur = pageStatesRef.current[openPageKey]
     if (cur) return
     const firstEventSeq = firstTailEventSeq(items, tailStartSeq)
     if (!firstEventSeq) {
       // 尚无过程事件(刚发送 / 首 token 前):不初始化,等流式增量折入 items 后重试。
       return
     }
-    updatePageState('open', { dir: 'backward', cursor: firstEventSeq, loading: false, done: false })
-  }, [tailStartSeq, live, items, updatePageState])
+    updatePageState(openPageKey, { dir: 'backward', cursor: firstEventSeq, loading: false, done: false })
+  }, [tailStartSeq, live, items, updatePageState, openPageKey])
 
   /** agent 过滤谓词：'' = 不过滤（原样全过）；否则仅放行归属该 agent 的线程项。
    * 纯渲染派生，不触发任何拉取——被过滤掉的流式增量不产生 DOM 变化，不影响自动贴底。 */
@@ -238,21 +268,24 @@ export default function TaskRoundsPanel({
     [filterAgentId, mainAgentId],
   )
 
-  /** 尾轮线程项：从 items 中 tailStartSeq 起点开始切片（含 user 气泡）。
-   * 过滤态：切片后按归属过滤（子 agent 过滤会滤掉 user 气泡，但外层 tailUserItem 恒显，
-   * 视觉上 user 气泡不丢）。 */
+  /** 尾轮线程项：items 中 (tailStartSeq, ∞) 的全部线程项。
+   * 起点 user 气泡由区间排除在外（下方 tailUserMessage 从 rounds 快照合成单独渲染，
+   * 不依赖 items 含起点行——骨架出画板）；起点之后的子 agent 首条 user.message
+   * (seq 严格大于起点)天然保留。过滤态：切片后按归属过滤。 */
   const tailItems = React.useMemo<TaskThreadItem[]>(
     () => sliceTailItems(items, tailStartSeq, matches),
     [items, tailStartSeq, matches],
   )
 
-  /** 尾轮 user 项（items 中本条；foldRound 已由 rounds.jsonl userMessage 插入）。 */
-  const tailUserItem = React.useMemo<TaskThreadItem | undefined>(() => {
+  /** 尾轮 user 气泡（rounds 快照合成渲染投影，不在 items）：运行中尾轮用 open 轮快照
+   *  （userMessage/user），终态尾轮用末行 round 的 userMessage——与闭合轮
+   *  ClosedRoundView 的 syntheticUserRecord 同一口径（步骤 7 骨架出画板）。 */
+  const tailUserMessage = React.useMemo<AgentMessageRecord | undefined>(() => {
     if (!tailStartSeq) return undefined
-    return items.find(
-      (it) => it.type === 'agent_message' && it.message.messageId === `m-${tailStartSeq}`,
-    )
-  }, [items, tailStartSeq])
+    if (open) return syntheticUserRecord({ startSeq: open.startSeq, user: open.user, userMessage: open.userMessage })
+    if (terminalTail) return syntheticUserRecord(terminalTail)
+    return undefined
+  }, [tailStartSeq, open, terminalTail])
 
   const errorBar = roundsError ? (
     <div className="task-rounds__error" role="alert">
@@ -314,15 +347,15 @@ export default function TaskRoundsPanel({
         {tailStartSeq ? (
           <TailRoundView
             taskId={taskId}
-            userItem={tailUserItem}
+            userMessage={tailUserMessage}
             tailItems={tailItems}
             isGenerating={isGenerating}
             live={live}
             mainAgentId={mainAgentId}
-            pageState={live ? pageStates['open'] : (terminalTail ? pageStates[terminalTail.roundId] : undefined)}
+            pageState={live ? pageStates[openPageKey] : (terminalTail ? pageStates[terminalTail.roundId] : undefined)}
             scrollRoot={scrollRoot}
             onLoadMoreBackward={() => {
-              const cur = pageStatesRef.current['open']
+              const cur = pageStatesRef.current[openPageKey]
               if (cur && cur.cursor) startBackward(tailStartSeq, cur.cursor)
             }}
             onLoadMoreForward={() => terminalTail && startForward(terminalTail)}
@@ -464,10 +497,12 @@ function ClosedRoundView({
  * 尾轮视图（运行中未闭合尾轮 / 终态遗留未闭合尾轮）：
  * - 运行中：user 气泡 + 顶部 backward sentinel（上翻历史）+ 过程平铺 + 运行状态横幅；
  * - 终态：user 气泡 + 过程平铺 + 底部 forward sentinel（向下续拉）。
+ * user 气泡由 rounds 快照合成（userMessage prop，不依赖 items 含起点行——骨架出画板）；
+ * tailItems 已按 (startSeq, ∞) 区间切片（起点 user 不在内，无需再剥）。
  */
 function TailRoundView({
   taskId,
-  userItem,
+  userMessage,
   tailItems,
   isGenerating,
   live,
@@ -478,7 +513,7 @@ function TailRoundView({
   onLoadMoreForward,
 }: {
   taskId: string
-  userItem?: TaskThreadItem
+  userMessage?: AgentMessageRecord
   tailItems: TaskThreadItem[]
   isGenerating: boolean
   live: boolean
@@ -488,16 +523,10 @@ function TailRoundView({
   onLoadMoreBackward: () => void
   onLoadMoreForward: () => void
 }): React.ReactNode {
-  // 剥掉尾轮起点 user 气泡：它已由上层 userItem(tailUserItem) 单独渲染，留在 tailItems
-  // 里会重复。但只剥「本轮起点那条」(messageId === userItem)，不能只看 role==='user' ——
-  // agent 过滤态下起点 user 气泡(主 agent)被 matches 滤出 tailItems，此时 tailItems[0]
-  // 可能是子 agent 的首条 user.message(刚启动时给该 agent 的指令)，按 role 误剥就会
-  // 把它丢掉(后续续跑的 user.message 不在 [0] 故不受影响、正常显示)。
-  const afterUser = tailItemsAfterUser(tailItems, userItem)
   return (
     <div className="nagent-tail-round">
-      {userItem && userItem.type === 'agent_message' ? (
-        <AgentMessageThread message={userItem.message} taskId={taskId} mainAgentId={mainAgentId} />
+      {userMessage ? (
+        <AgentMessageThread message={userMessage} taskId={taskId} mainAgentId={mainAgentId} />
       ) : null}
       {live && pageState && !pageState.done ? (
         <LazyLoadSentinel
@@ -508,8 +537,8 @@ function TailRoundView({
           root={scrollRoot}
         />
       ) : null}
-      {afterUser.length > 0 ? (
-        <TaskThread taskId={taskId} items={afterUser} isGenerating={isGenerating} mainAgentId={mainAgentId} />
+      {tailItems.length > 0 ? (
+        <TaskThread taskId={taskId} items={tailItems} isGenerating={isGenerating} mainAgentId={mainAgentId} />
       ) : isGenerating ? (
         <TaskThread taskId={taskId} items={[]} isGenerating={isGenerating} mainAgentId={mainAgentId} />
       ) : null}

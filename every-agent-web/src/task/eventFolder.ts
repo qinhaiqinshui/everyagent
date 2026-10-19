@@ -41,8 +41,6 @@ import type {
   LLMToolCall,
 } from '@/types'
 import type {
-  RoundSummary,
-  TaskStatus,
   TaskTraceRecord,
 } from './types'
 import { getHandler, defaultHandler } from './eventRegistry'
@@ -110,6 +108,13 @@ export class TaskEventFolder {
    * (与 slashTokens/mainAgentId 同理)。
    */
   readonly ledger: AgentLedger = new AgentLedger()
+  /**
+   * reset 计数(每次 reset 自增,不随 reset 清零):渲染层(轮面板)观测 items 被整体
+   * 清空的信号——骨架出画板后 resync 重建来源 = wire 回放 + 分页状态失效促重拉
+   * (taskStream full 重载 reset 后,轮面板据此清空分页状态、已展开轮重新发起首页拉取,
+   * 避免 reset 误清已展开轮内容后无重拉路径,§8.3)。
+   */
+  resetEpoch = 0
   private anchors: FoldAnchors = { streaming: new Map(), toolNames: new Map() }
   /**
    * seq 键控索引(键 = String(event.seq)) → 线程项:
@@ -164,9 +169,11 @@ export class TaskEventFolder {
   }
 
   /**
-   * 重置:清空全部线程状态(items/bySeq/anchors;agent 台账镜像 ledger 不清,见类字段注释)。
-   * resync 时重新从 task.rounds 拉取并 foldRound 前调用,
-   * 避免旧 items(编辑前的轮次,seq 已过期)与新轮次混排。
+   * 重置:清空全部线程状态(items/bySeq/anchors;agent 台账镜像 ledger 不清,见类字段注释),
+   * 并自增 resetEpoch(渲染层观测信号,见字段注释)。
+   * resync/编辑重发的 full 重载时调用——旧 items(编辑前轮次,seq 已过期)必须清除,否则
+   * 新旧轮次按 seq 混排会顺序错乱;骨架出画板后 items 重建来源 = 尾段 wire 回放 + 实时推送 +
+   * 渲染层分页状态失效促重拉(不再有 rounds.jsonl 合成骨架折入兜底)。
    * 保留 taskId,重置其余字段到空态。
    * <p>slashTokens 不参与重置:它不是 rounds 折叠产物,真相源是 worker 持久化 +
    * slash.tokens.changed 事件通道(订阅初始回放会重推最新值)。若在此清空,
@@ -178,6 +185,7 @@ export class TaskEventFolder {
   reset(): void {
     this.state.items = []
     this.state.taskModel = null
+    this.resetEpoch++
     // mainAgentId 与 slashTokens 同理不参与重置:任务级身份,由 task 层(TaskSummary/
     // task.agents)传入,reset(编辑重发重拉)后不变;清掉会让随后折叠的事件回退
     // 空串键、isMain 误判。
@@ -216,73 +224,6 @@ export class TaskEventFolder {
     return changed
   }
 
-  /**
-   * 折叠一个轮次摘要(rounds.jsonl 的一行)为线程项:纯函数式数据入口,不引入轮询/网络。
-   * 与原始 stream 事件按 seq 幂等去重,不产生重复项、items 恒按 seq 升序:
-   * - 轮起点折入合成 user 消息(messageId=`m-${startSeq}`,role='user',
-   *   content/rawContent=round.user),由 {@link #insertMessage} 按 seq 升序定位插入;
-   * - 已闭合轮(endSeq 非空)折入合成 AI 最终回复(messageId=`m-${endSeq}`,role='assistant',
-   *   content=round.finalReply)。
-   * 两类合成项均带 metadata.synthetic=true 且无折叠标记(折叠窗口语义归 rounds.jsonl)。
-   * bySeq 已有同 seq 项(原始 user.message / 权威 message / 已合成项)则跳过,绝不重复插入;
-   * 二次调用同 startSeq 幂等(不改变已有项内容)。返回 true 表示状态有变化。
-   */
-  foldRound(round: RoundSummary): boolean {
-    const startSeqKey = String(round.startSeq)
-    if (!startSeqKey) return false
-    const now = Date.now()
-    let changed = false
-    if (!this.bySeq.has(startSeqKey)) {
-      // 完整 userMessage payload 优先(懒加载骨架起点);旧行缺失回退 user 文本摘要。
-      const userText = round.userMessage?.content ?? round.user
-      const userRaw = (round.userMessage?.data?.rawContent && round.userMessage.data.rawContent.length)
-        ? round.userMessage.data.rawContent
-        : userText
-      const userMessage: AgentMessageRecord = {
-        messageId: `m-${round.startSeq}`,
-        agentId: this.mainKey(),
-        role: 'user',
-        content: userText,
-        rawContent: userRaw,
-        historyMode: 'thread_only',
-        createdAt: now,
-        updatedAt: now,
-        sequence: Number(round.startSeq),
-        // 合成骨架项标记:缓存覆盖判定时不算「真实已拉取数据」(展开要看 thinking)。
-        metadata: { synthetic: true },
-      }
-      this.insertMessage('', userMessage, startSeqKey)
-      changed = true
-    }
-    if (round.endSeq) {
-      const endSeqKey = String(round.endSeq)
-      if (!this.bySeq.has(endSeqKey)) {
-        const finalMessage: AgentMessageRecord = {
-          messageId: `m-${round.endSeq}`,
-          agentId: this.mainKey(),
-          role: 'assistant',
-          content: round.finalReply,
-          rawContent: round.finalReply,
-          historyMode: 'thread_only',
-          createdAt: now,
-          updatedAt: now,
-          sequence: Number(round.endSeq),
-          // 合成 final 标记:不顶真实权威 message(真实 message 折入后会被清除)。
-          metadata: { synthetic: true },
-        }
-        // 合成 final:无折叠标记,复用 insertItemBySeq 按 seq 升序精确定位、登记 bySeq。
-        const item: TaskThreadItem = {
-          type: 'agent_message',
-          createdAt: now,
-          message: finalMessage,
-        }
-        this.insertItemBySeq(item, round.endSeq, endSeqKey)
-        changed = true
-      }
-    }
-    return changed
-  }
-
   /** 任务终态:定稿全部流式消息。 */
   finalize(): void {
     for (const seqKey of Array.from(this.anchors.streaming.keys())) {
@@ -305,16 +246,15 @@ export class TaskEventFolder {
   }
 
   /**
-   * 该轮区间 (startSeq, endSeq] 内已折入的「真实」agent_message 的最大 seq(字符串)。
-   * endSeq 传 null → 上界为 ∞(未闭合轮)。「真实」= 非 rounds.jsonl 合成骨架项
-   * (message.metadata.synthetic !== true)。无真实项返回 null。
-   * 供拉取层在 RPC 前查 items 缓存:maxReal >= endSeq 即整轮已完整覆盖。
+   * 该轮区间 (startSeq, endSeq] 内已折入的 agent_message 的最大 seq(字符串)。
+   * endSeq 传 null → 上界为 ∞(未闭合轮)。无命中返回 null。
+   * 供拉取层在 RPC 前查 items 缓存:maxReal >= endSeq 即整轮已完整覆盖
+   * (骨架出画板后区间内条目皆 wire 真实事件,无合成项跳过分支)。
    */
   roundRealFloor(startSeq: string, endSeq: string | null): string | null {
     let floor: string | null = null
     for (const item of this.state.items) {
       if (item.type !== 'agent_message') continue
-      if (item.message.metadata?.synthetic === true) continue // 合成骨架不顶真实数据
       const seq = seqFromMessageId(item.message.messageId)
       if (!seq) continue
       if (compareSeq(seq, startSeq) <= 0) continue // 不含起点 user
@@ -325,15 +265,14 @@ export class TaskEventFolder {
   }
 
   /**
-   * 该轮 [startSeq, beforeSeq) 内已折入的「真实」agent_message 的最小 seq(字符串)。
-   * 「真实」= 非合成骨架项。无真实项返回 null。
-   * 供拉取层 backward 查缓存:minReal <= startSeq 即已连到轮起点(无需再往前拉)。
+   * 该轮 [startSeq, beforeSeq) 内已折入的 agent_message 的最小 seq(字符串)。
+   * 无命中返回 null。供拉取层 backward 查缓存:minReal <= startSeq 即已连到轮起点
+   * (无需再往前拉)。
    */
   roundRealCeiling(startSeq: string, beforeSeq: string): string | null {
     let ceiling: string | null = null
     for (const item of this.state.items) {
       if (item.type !== 'agent_message') continue
-      if (item.message.metadata?.synthetic === true) continue
       const seq = seqFromMessageId(item.message.messageId)
       if (!seq) continue
       if (compareSeq(seq, startSeq) < 0) continue // 越过起点(不含 user)
@@ -348,33 +287,6 @@ export class TaskEventFolder {
   /** 检查某 seq 是否已折入（去重判定）。 */
   hasSeq(seqKey: string): boolean {
     return this.bySeq.has(seqKey)
-  }
-
-  /**
-   * 真实 user.message 事件到达但同 seq 已有项时,尝试把「rounds.jsonl 合成骨架」
-   * (metadata.synthetic=true 的 user 消息)原地升级为真实 payload(content/rawContent 权威)。
-   * <p>背景:loadRoundsIntoFolder(full) 的 reset() 可能清掉订阅后已实时折入的真实事件,
-   * 骨架随后重插;若无升级路径,后续权威数据会被 seq 去重永远挡在门外(拉取层 foldWireEvent
-   * 对同 seq 一律跳过),坏骨架永久占据该 seq——@文件胶囊即在此丢失(2026-10 排查实锤)。
-   * 与 completeMessage 对合成 final 的覆盖口径一致:真实事件清除 synthetic 标记。
-   * @return true 表示已升级(状态有变化);false = 无骨架可升级(真重复帧/非 user 项)。
-   */
-  upgradeSyntheticUser(seqKey: string, message: {
-    content: string
-    rawContent: string
-    agentId: string
-    ts: number
-  }): boolean {
-    const item = this.bySeq.get(seqKey)
-    if (!item || item.type !== 'agent_message') return false
-    const msg = item.message
-    if (msg.role !== 'user' || msg.metadata?.synthetic !== true) return false
-    msg.content = message.content
-    msg.rawContent = message.rawContent
-    msg.createdAt = msg.createdAt || message.ts
-    msg.updatedAt = message.ts
-    msg.metadata = { ...(msg.metadata ?? {}), synthetic: false }
-    return true
   }
 
   /** 获取工具名（callId → name，由 message 事件的 toolCalls 注册）。 */
@@ -665,11 +577,6 @@ export class TaskEventFolder {
       if (existing && existing.type === 'agent_message') {
         // 该轮 item 已存在(流式锚点被提前关闭,或 message 重复帧):更新同一条。
         message = existing.message
-        // 若该 item 是 rounds.jsonl 折入的合成 final(metadata.synthetic),现在被真实
-        // message 覆盖 → 清除 synthetic 标记,使其在缓存覆盖判定中算「真实已拉取」。
-        if (message.metadata?.synthetic) {
-          message.metadata = { ...message.metadata, synthetic: false }
-        }
       } else {
         message = {
           messageId: `m-${seq}`,

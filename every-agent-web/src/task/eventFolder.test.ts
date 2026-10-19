@@ -2,12 +2,15 @@
  * TaskEventFolder 特征化测试(Phase 0 行为护栏,计划「任务线程统一条目与画板纯化」步骤 1)。
  *
  * 目的:锁定折叠器 + 事件注册表的**现状行为**(乱序 seq 归位/重放去重/流式聚合与定稿/
- * rounds 骨架折入升级/截断/agent 台账镜像(folder.ledger)/isMain 判定/线程项无折叠标记/defaultHandler
- * 兜底),为后续步骤 7(骨架出画板)提供行为基线——先锁后删,
+ * 截断/agent 台账镜像(folder.ledger)/isMain 判定/线程项无折叠标记/defaultHandler
+ * 兜底),为后续重构提供行为基线——先锁后删,
  * 重构时同步更新断言而非绕过(foldRole 打标断言已随步骤 5「删除 foldRole 体系」移除,
  * 口径改为线程项无 foldRole 字段;台账断言已随步骤 6「agentMeta/agentStates 拆出
  * eventFolder」改指向独立台账 store folder.ledger——事件仍经 fold() 同一入口喂入,
- * 锁的是 registry handler → 台账 store 的真实写路径,语义不变)。
+ * 锁的是 registry handler → 台账 store 的真实写路径,语义不变;foldRound 合成折入/
+ * upgradeSyntheticUser 骨架升级/metadata.synthetic 标记用例已随步骤 7「rounds 骨架
+ * 出画板」删除——画板纯化为 wire 折叠产物,骨架行为不复存在,rounds 快照不再进 items;
+ * 另补 roundRealFloor/roundRealCeiling 区间缓存判定用例,锁定懒加载缓存语义)。
  *
  * 纪律:只断言现状,不改源码;事件经 fold(FoldableTaskEvent) 喂入,handler 查表分发
  * (eventRegistry.ts),不 mock 网络。
@@ -19,7 +22,6 @@ import {
   emptyThreadState,
 } from './eventFolder'
 import type { FoldableTaskEvent, TaskThreadItem } from './eventFolder'
-import type { RoundSummary } from './types'
 import type { TaskAgentLedgerItem } from './task-poll'
 
 // Snowflake 形态 seq(19 位十进制,> 2^53):Number() 会把仅末位不同的两个大数坍缩为
@@ -195,85 +197,47 @@ describe('thinking/delta 流式聚合与 message 权威定稿', () => {
 })
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 4. foldRound 骨架折入与升级
+// 4. roundRealFloor / roundRealCeiling 懒加载缓存判定(区间内条目皆 wire 真实事件)
 // ─────────────────────────────────────────────────────────────────────────────
 
-describe('foldRound 骨架折入与升级', () => {
-  function round(overrides: Partial<RoundSummary> = {}): RoundSummary {
-    return {
-      roundId: 'round-1',
-      index: 1,
-      startSeq: SEQ_100,
-      endSeq: SEQ_500,
-      user: '骨架用户输入',
-      finalReply: '骨架最终回复',
-      subs: [],
-      ...overrides,
-    }
-  }
-
-  it('闭合轮折入合成 user + 合成 final(synthetic 标记,按 seq 升序,无折叠标记)', () => {
+describe('roundRealFloor / roundRealCeiling 懒加载缓存判定', () => {
+  it('roundRealFloor:区间 (startSeq, endSeq] 内 agent_message 的最大 seq;endSeq null 上界 ∞;不含起点 user', () => {
     const folder = newFolder(MAIN)
-    expect(folder.foldRound(round())).toBe(true)
-    expect(folder.state.items).toHaveLength(2)
-    const user = findByMessageId(folder, `m-${SEQ_100}`)
-    expect(user.message.role).toBe('user')
-    expect(user.message.content).toBe('骨架用户输入')
-    expect(user.message.metadata?.synthetic).toBe(true)
-    expect(user).not.toHaveProperty('foldRole')
-    const final = findByMessageId(folder, `m-${SEQ_500}`)
-    expect(final.message.role).toBe('assistant')
-    expect(final.message.content).toBe('骨架最终回复')
-    expect(final.message.metadata?.synthetic).toBe(true)
-    expect(final).not.toHaveProperty('foldRole')
-    expect(folder.state.items.indexOf(user)).toBeLessThan(folder.state.items.indexOf(final))
-    // 幂等:重复折入同轮不变化
-    expect(folder.foldRound(round())).toBe(false)
-    expect(folder.state.items).toHaveLength(2)
+    folder.fold(ev(SEQ_100, 'user.message', { content: '用户' }, MAIN))
+    folder.fold(ev(SEQ_150, 'message', { content: '过程' }, MAIN))
+    folder.fold(ev(SEQ_200, 'message', { content: '最终' }, MAIN))
+    // 前向缓存判定:maxReal >= endSeq 即整轮已完整覆盖
+    expect(folder.roundRealFloor(SEQ_100, SEQ_200)).toBe(SEQ_200)
+    expect(folder.roundRealFloor(SEQ_100, SEQ_150)).toBe(SEQ_150)
+    // endSeq null(未闭合轮)上界 ∞
+    expect(folder.roundRealFloor(SEQ_100, null)).toBe(SEQ_200)
+    // 区间内无命中 → null(起点 user 因 seq <= startSeq 不计入)
+    expect(folder.roundRealFloor(SEQ_200, null)).toBeNull()
+    expect(folder.roundRealFloor(SEQ_300, null)).toBeNull()
   })
 
-  it('userMessage payload 优先于 user 文本摘要(content/rawContent)', () => {
+  it('roundRealFloor:trace 项不参与(只看 agent_message);大数 seq 精确比较', () => {
     const folder = newFolder(MAIN)
-    folder.foldRound(round({ userMessage: { content: '完整明文', data: { rawContent: '原始输入' } } }))
-    const user = findByMessageId(folder, `m-${SEQ_100}`)
-    expect(user.message.content).toBe('完整明文')
-    expect(user.message.rawContent).toBe('原始输入')
+    folder.fold(ev(SEQ_100, 'user.message', { content: '用户' }, MAIN))
+    folder.fold(ev(SEQ_150, 'future.kind', { content: 'x' }, MAIN)) // trace(t-150)
+    folder.fold(ev(SEQ_200, 'message', { content: '最终' }, MAIN))
+    expect(Number(SEQ_150)).toBe(Number(SEQ_200)) // 前置:Number 已坍缩,比较必须走字符串
+    // trace 不算覆盖终点;终点条目缺失 → 区间内最大真实 message 仍为 200
+    expect(folder.roundRealFloor(SEQ_100, SEQ_150)).toBeNull()
+    expect(folder.roundRealFloor(SEQ_100, SEQ_200)).toBe(SEQ_200)
   })
 
-  it('未闭合轮(endSeq 空串)只折入合成 user', () => {
+  it('roundRealCeiling:区间 [startSeq, beforeSeq) 内 agent_message 的最小 seq(起点 user 计入)', () => {
     const folder = newFolder(MAIN)
-    folder.foldRound(round({ endSeq: '' }))
-    expect(folder.state.items).toHaveLength(1)
-    expect(findByMessageId(folder, `m-${SEQ_100}`).message.metadata?.synthetic).toBe(true)
-  })
-
-  it('真实 user.message 到达时 upgradeSyntheticUser 原地升级(不重复插入)', () => {
-    const folder = newFolder(MAIN)
-    folder.foldRound(round())
-    expect(folder.fold(ev(SEQ_100, 'user.message', {
-      content: '真实用户输入',
-      data: { rawContent: '原始输入' },
-    }, MAIN, 2000))).toBe(true)
-    expect(folder.state.items).toHaveLength(2)
-    const upgraded = findByMessageId(folder, `m-${SEQ_100}`)
-    expect(upgraded.message.content).toBe('真实用户输入')
-    expect(upgraded.message.rawContent).toBe('原始输入')
-    expect(upgraded.message.metadata?.synthetic).toBe(false)
-    expect(upgraded).not.toHaveProperty('foldRole')
-    // 升级完成后再到的同 seq 事件 = 纯重复,返回 false
-    expect(folder.fold(ev(SEQ_100, 'user.message', { content: '真实用户输入' }, MAIN, 2100))).toBe(false)
-    expect(folder.state.items).toHaveLength(2)
-  })
-
-  it('合成 final 被真实 message 覆盖(清除 synthetic 标记)', () => {
-    const folder = newFolder(MAIN)
-    folder.foldRound(round())
-    folder.fold(ev(SEQ_500, 'message', { content: '真实最终回复' }, MAIN, 3000))
-    expect(folder.state.items).toHaveLength(2)
-    const real = findByMessageId(folder, `m-${SEQ_500}`)
-    expect(real.message.content).toBe('真实最终回复')
-    expect(real.message.metadata?.synthetic).toBe(false)
-    expect(real).not.toHaveProperty('foldRole')
+    folder.fold(ev(SEQ_100, 'user.message', { content: '用户' }, MAIN))
+    folder.fold(ev(SEQ_150, 'message', { content: '过程' }, MAIN))
+    folder.fold(ev(SEQ_200, 'message', { content: '最终' }, MAIN))
+    // backward 缓存判定:minReal <= startKey 即已连到轮起点(起点 user 在区间内)
+    expect(folder.roundRealCeiling(SEQ_100, SEQ_200)).toBe(SEQ_100)
+    expect(folder.roundRealCeiling(SEQ_100, SEQ_500)).toBe(SEQ_100)
+    expect(folder.roundRealCeiling(SEQ_150, SEQ_500)).toBe(SEQ_150)
+    // beforeSeq 自身不含:区间空 → null
+    expect(folder.roundRealCeiling(SEQ_150, SEQ_150)).toBeNull()
   })
 })
 
@@ -404,12 +368,14 @@ describe('agent 台账镜像(folder.ledger)', () => {
     expect(folder.ledger.agentStates[MAIN]).toBe('running')
   })
 
-  it('folder.reset() 只清线程项,不清台账(台账生命周期跟任务不跟 items 重置)', () => {
+  it('folder.reset() 只清线程项,不清台账;自增 resetEpoch(渲染层失效分页状态信号)', () => {
     const folder = newFolder(MAIN)
     folder.ledger.seedAgents([ledgerItem({ status: 'completed' })], MAIN)
     folder.fold(ev(SEQ_100, 'user.message', { content: '用户' }, MAIN))
+    const epochBefore = folder.resetEpoch
     folder.reset()
     expect(folder.state.items).toHaveLength(0)
+    expect(folder.resetEpoch).toBe(epochBefore + 1)
     expect(folder.ledger.agentStates[SUB]).toBe('completed')
     expect(folder.ledger.agentMeta[SUB]?.title).toBe('子代理')
   })

@@ -459,9 +459,10 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
   const isTaskRunning = isTaskActive(status)
 
   // ── 单一真相源消息区 ────────────────────────────────────────────────
-  // 线程渲染数据只来自 useTaskStream 返回的 items(store.state.items 实时快照),
-  // 已闭合轮的合成 user/final、未闭合尾轮尾段事件、worker 定向推送的流式事件
-  // 全部由 taskStream 折入同一份 items 并按 seq 去重排序。
+  // 线程渲染数据只来自 useTaskStream 返回的 items(store.state.items 实时快照):
+  // items = 纯 wire 折叠产物(未闭合尾轮尾段事件、懒加载分页、worker 定向推送的流式事件
+  // 全部由 taskStream 折入同一份并按 seq 去重排序);轮骨架(user 气泡/折叠条/final 摘要)
+  // 由 TaskRoundsPanel 按 rounds 快照合成渲染,不进 items(画板纯化,§8.3)。
 
   // 续跑校准:任务状态从非活动态翻回活动态(发送续跑 / 他端续跑)时——
   // 实时信号链重开(stream.resync:重拉 rounds + 重新订阅推送,续喂

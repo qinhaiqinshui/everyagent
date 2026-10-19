@@ -1,85 +1,62 @@
 /**
  * 轮次视图纯逻辑(TaskRoundsPanel / RoundDetail 共用的切片/过滤/合成纯函数)。
  *
- * 「任务线程统一条目与画板纯化」步骤 2 特征化测试的可测化改造:以下函数从
- * TaskRoundsPanel.tsx / RoundDetail.tsx **原位提取**(提取不改行为,组件侧改等价委托),
- * 本模块只含纯函数、不 import 任何 React 组件链(组件模块挂着 pluginDispatcher/
- * bridge 等副作用导入,测试无法在 node 环境安全加载),供 TaskRoundsPanel.test.ts
- * 特征化测试直测,锁定切片/过滤现状行为,作为步骤 7「rounds 骨架出画板」重构的行为护栏。
+ * 步骤 2 特征化测试的可测化提取(从 TaskRoundsPanel.tsx / RoundDetail.tsx 原位提取,
+ * 组件侧等价委托) + 步骤 7「rounds 骨架出画板」后的口径:切片一律按 **seq 区间比较**
+ * (`startSeq < seq <= endSeq`,BigInt 精确)——rounds 快照不再折入 items(画板 = 纯 wire
+ * 折叠产物,§8.3),`m-${startSeq}` 起点 user / `m-${endSeq}` 终点 final 端点锚点条目
+ * 可能不在 items,findIndex 端点定位(其 from=0/to=length 兜底)在 items 含其他轮条目时
+ * 会误切,已弃用。本模块只含纯函数、不 import 任何 React 组件链(组件模块挂着
+ * pluginDispatcher/bridge 等副作用导入,测试无法在 node 环境安全加载),供
+ * TaskRoundsPanel.test.ts 特征化测试直测,锁定切片/过滤行为。
  */
 import type { AgentMessageRecord } from '@/types'
-import type { RoundSummary } from '@/task/types'
+import type { RoundSummary, UserMessagePayload } from '@/task/types'
 import type { TaskThreadItem } from '@/task/eventFolder'
+import { compareSeq } from '@/task/eventFolder'
 
 // ─── 切片 ────────────────────────────────────────────────────────────────────
 
-/** 从 items 切出 [startSeq 之后, endSeq]（含终点、不含起点）的线程项（原对象直通）。 */
+/**
+ * 从 items 切出 (startSeq, endSeq] 的线程项(原对象直通;含终点 final、不含起点 user)。
+ * 按 seq 区间比较过滤,不依赖端点条目在 items 在场(骨架出画板后端点锚点可能不在);
+ * endSeq 为空串(未闭合轮)时上界为 ∞(切到 items 末尾)。task_trace 按其 traceId
+ * (`t-${seq}` 前缀)反推 seq 参与区间判定(步骤 8 统一五字段前的过渡口径)。
+ */
 export function sliceRound(items: TaskThreadItem[], round: RoundSummary): TaskThreadItem[] {
-  const startIdx = items.findIndex(
-    (it) => it.type === 'agent_message' && it.message.messageId === `m-${round.startSeq}`,
-  )
-  let endIdx = -1
-  if (round.endSeq) {
-    endIdx = items.findIndex(
-      (it) => it.type === 'agent_message' && it.message.messageId === `m-${round.endSeq}`,
-    )
-  }
-  const from = startIdx >= 0 ? startIdx + 1 : 0
-  const to = endIdx >= 0 ? endIdx + 1 : items.length
-  return items.slice(from, to)
+  const startSeq = String(round.startSeq)
+  const endSeq = round.endSeq ? String(round.endSeq) : null
+  return items.filter((it) => inSeqInterval(itemSeqOf(it), startSeq, endSeq))
 }
 
-/** 尾轮线程项切片：从 items 中 tailStartSeq 起点开始（含 user 气泡）。
- * 过滤态：切片后按归属过滤（子 agent 过滤会滤掉 user 气泡，但外层 tailUserItem 恒显，
- * 视觉上 user 气泡不丢）。TaskRoundsPanel 的 tailItems useMemo 等价委托此处（提取不改行为）。 */
+/**
+ * 尾轮线程项切片:(tailStartSeq, ∞) 的全部线程项(含 task_trace),切片后按归属过滤。
+ * 起点 user 气泡按区间**排除在外**——它由上层从 rounds 快照合成单独渲染
+ * (TaskRoundsPanel 的 tailUserMessage),留在切片里会重复;起点之后的子 agent 首条
+ * user.message(seq 严格大于起点)天然保留(ec050499 回归口径)。
+ * TaskRoundsPanel 的 tailItems useMemo 等价委托此处。
+ */
 export function sliceTailItems(
   items: TaskThreadItem[],
   tailStartSeq: string,
   matches: (item: TaskThreadItem) => boolean,
 ): TaskThreadItem[] {
   if (!tailStartSeq) return []
-  let idx = items.findIndex(
-    (it) => it.type === 'agent_message' && it.message.messageId === `m-${tailStartSeq}`,
+  return items.filter(
+    (it) => inSeqInterval(itemSeqOf(it), tailStartSeq, null) && matches(it),
   )
-  if (idx < 0) {
-    // 兜底:起点 user.message 缺失时,退化为「第一个排序 seq >= tailStartSeq 的 agent_message」。
-    idx = items.findIndex(
-      (it) => it.type === 'agent_message' && seqGeq(messageSeqOf(it), tailStartSeq),
-    )
-  }
-  if (idx < 0) return []
-  return items.slice(idx).filter(matches)
 }
 
-/** 剥掉尾轮起点 user 气泡：它已由上层 userItem(tailUserItem) 单独渲染，留在 tailItems
- * 里会重复。但只剥「本轮起点那条」(messageId === userItem)，不能只看 role==='user' ——
- * agent 过滤态下起点 user 气泡(主 agent)被 matches 滤出 tailItems，此时 tailItems[0]
- * 可能是子 agent 的首条 user.message(刚启动时给该 agent 的指令)，按 role 误剥就会
- * 把它丢掉(后续续跑的 user.message 不在 [0] 故不受影响、正常显示)。
- * (ec050499 修复;TailRoundView 的 afterUser 等价委托此处,提取不改行为。) */
-export function tailItemsAfterUser(
-  tailItems: TaskThreadItem[],
-  userItem?: TaskThreadItem,
-): TaskThreadItem[] {
-  return tailItems.length > 0
-    && tailItems[0].type === 'agent_message'
-    && tailItems[0].message.role === 'user'
-    && userItem?.type === 'agent_message'
-    && tailItems[0].message.messageId === userItem.message.messageId
-      ? tailItems.slice(1)
-      : tailItems
-}
-
-/** 尾轮 user 之后第一条 agent_message 的排序 seq（backward 首拉 beforeSeq）；无则 null。 */
+/**
+ * 尾轮 user 之后第一条 agent_message 的排序 seq(backward 首拉 beforeSeq);无则 null。
+ * 按 seq 区间比较取 (startSeq, ∞) 内首个 agent_message——不依赖起点 user 条目在 items
+ * 在场(骨架出画板后常态缺失),也不会误命中更早轮次的条目。
+ */
 export function firstTailEventSeq(items: TaskThreadItem[], startSeq: string): string | null {
-  const startIdx = items.findIndex(
-    (it) => it.type === 'agent_message' && it.message.messageId === `m-${startSeq}`,
-  )
-  for (let i = startIdx + 1; i < items.length; i++) {
-    const it = items[i]
+  for (const it of items) {
     if (it.type !== 'agent_message') continue
-    const mid = it.message.messageId
-    if (mid.startsWith('m-')) return mid.slice(2)
+    const seq = messageSeqOf(it)
+    if (seq && compareSeq(seq, startSeq) > 0) return seq
   }
   return null
 }
@@ -112,6 +89,25 @@ export function messageSeqOf(item: TaskThreadItem): string {
   return mid.startsWith('m-') ? mid.slice(2) : ''
 }
 
+/**
+ * 线程项的排序 seq(agent_message 剥 `m-` 前缀;task_trace 剥 `t-` 前缀;无前缀返回空串)。
+ * 与 eventFolder.seqOfItem 同口径;空串在区间判定中恒不命中(trace 族必有 `t-` 前缀,
+ * 空串只出现在防御分支)。步骤 8 五字段统一后 seq 为一等字段,此反推口径退役。
+ */
+function itemSeqOf(item: TaskThreadItem): string {
+  if (item.type === 'agent_message') return messageSeqOf(item)
+  const tid = item.trace.traceId
+  return tid.startsWith('t-') ? tid.slice(2) : ''
+}
+
+/** seq 区间判定:startSeq < seq <= endSeq(endSeq null = 上界 ∞);seq 空串恒不命中。 */
+function inSeqInterval(seq: string, startSeq: string, endSeq: string | null): boolean {
+  if (!seq) return false
+  if (compareSeq(seq, startSeq) <= 0) return false
+  if (endSeq != null && compareSeq(seq, endSeq) > 0) return false
+  return true
+}
+
 /** 十进制大整数字符串精确比较（雪花 ID 超 Number 安全整数，不能走 Number 近似）。 */
 export function seqGeq(a: string, b: string): boolean {
   if (!a) return false
@@ -124,18 +120,26 @@ export function seqGeq(a: string, b: string): boolean {
 
 // ─── 合成记录 ────────────────────────────────────────────────────────────────
 
-/** 合成轮 user 消息（rounds.jsonl 的 user 文本 → AgentMessageRecord）。 */
-export function syntheticUserRecord(round: RoundSummary): AgentMessageRecord {
+/** 合成轮 user 消息(rounds 快照 → AgentMessageRecord;渲染投影,不进 items)。
+ * 参数为结构化最小形状:闭合轮传 RoundSummary,运行中尾轮传 open 轮快照
+ * ({startSeq, user, userMessage})——两处 user 气泡同一口径(步骤 7 骨架出画板,
+ * 尾轮不再依赖 items 含起点行)。 */
+export function syntheticUserRecord(round: {
+  startSeq: string
+  user?: string
+  userMessage?: UserMessagePayload
+}): AgentMessageRecord {
   // rawContent 优先取 userMessage.data.rawContent(含 opaque token 串,回放还原 @文件胶囊);
-  // 缺失(旧行/纯文本输入)回退 round.user 纯文本摘要——与 eventFolder.foldRound 口径一致。
+  // 缺失(旧行/纯文本输入)回退 user 纯文本摘要——与 wire user.message 事件的口径一致。
   // 曾直接用 round.user,闭合轮折叠态渲染丢胶囊(2026-10 排查)。
+  const user = round.user ?? ''
   const raw = round.userMessage?.data?.rawContent
   return {
     messageId: `m-${round.startSeq}`,
     agentId: '',
     role: 'user',
-    content: round.user,
-    rawContent: raw && raw.length ? raw : round.user,
+    content: user,
+    rawContent: raw && raw.length ? raw : user,
     historyMode: 'thread_only',
     createdAt: 0,
     updatedAt: 0,
