@@ -105,7 +105,7 @@ function ToolCallRow({
           setOpen((value) => !value)
         }}
       >
-        <WrenchIcon size={14} className={`nagent-tool-batch__icon nagent-tool-batch__icon--${state}`} aria-hidden="true" />
+        <WrenchIcon size={12} className={`nagent-tool-batch__icon nagent-tool-batch__icon--${state}`} aria-hidden="true" />
         <span className="nagent-tool-batch__name">{detail.toolName}</span>
         <span className="nagent-tool-batch__preview">
           {preview.kind === 'comment' ? (

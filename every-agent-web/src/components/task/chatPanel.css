@@ -1281,9 +1281,6 @@
   flex: 0 0 auto;
   flex-shrink: 0;
   align-self: center;
-  /* summary 走 baseline 对齐,SVG 无文字基线,align-self:center 后仍略偏上,
-     下移 1px 与工具名视觉对齐(与 chevron 同模型但尺寸更大需微调)。 */
-  margin-top: 1px;
 }
 
 .nagent-tool-batch__icon--queued {
