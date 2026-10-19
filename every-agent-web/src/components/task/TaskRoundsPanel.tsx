@@ -304,6 +304,7 @@ export default function TaskRoundsPanel({
               taskId={taskId}
               workerId={workerId}
               workspaceRoot={workspaceRoot}
+              mainAgentId={mainAgentId}
               pageState={pageState}
               scrollRoot={scrollRoot}
               matches={matches}
@@ -319,6 +320,7 @@ export default function TaskRoundsPanel({
             tailItems={tailItems}
             isGenerating={isGenerating}
             live={live}
+            mainAgentId={mainAgentId}
             pageState={live ? pageStates['open'] : (terminalTail ? pageStates[terminalTail.roundId] : undefined)}
             scrollRoot={scrollRoot}
             onLoadMoreBackward={() => {
@@ -353,6 +355,7 @@ function ClosedRoundView({
   taskId,
   workerId,
   workspaceRoot,
+  mainAgentId,
   pageState,
   scrollRoot,
   matches,
@@ -365,6 +368,7 @@ function ClosedRoundView({
   taskId: string
   workerId?: string
   workspaceRoot?: string
+  mainAgentId?: string
   pageState?: RoundPageState
   scrollRoot?: HTMLElement | null
   /** agent 过滤谓词（「只看该 agent」）：透传 RoundDetail，只作用于展开态过程内容。 */
@@ -383,7 +387,7 @@ function ClosedRoundView({
   // 展开态由 RoundDetail 从 items 切片渲染,即使无工具调用也能看到最终轮的思考内容。
   return (
     <>
-      <AgentMessageThread message={userMessage} taskId={taskId} />
+      <AgentMessageThread message={userMessage} taskId={taskId} mainAgentId={mainAgentId} />
       <div className="nagent-round-collapse">
         <button
           type="button"
@@ -413,6 +417,7 @@ function ClosedRoundView({
               items={items}
               taskId={taskId}
               loading={pageState?.loading ?? false}
+              mainAgentId={mainAgentId}
               matches={matches}
             />
             {pageState && !pageState.done ? (
@@ -427,7 +432,7 @@ function ClosedRoundView({
           </>
         ) : (
           <div className="nagent-round-collapse__final">
-            <AgentMessageThread message={finalMessage} taskId={taskId} />
+            <AgentMessageThread message={finalMessage} taskId={taskId} mainAgentId={mainAgentId} />
           </div>
         )}
         {/* 轮末工具栏：`ui.round_tail_panels` 的全部贡献者（含核心内置的「复制」按钮）并排一行，
@@ -468,6 +473,7 @@ function TailRoundView({
   tailItems,
   isGenerating,
   live,
+  mainAgentId,
   pageState,
   scrollRoot,
   onLoadMoreBackward,
@@ -478,6 +484,7 @@ function TailRoundView({
   tailItems: TaskThreadItem[]
   isGenerating: boolean
   live: boolean
+  mainAgentId?: string
   pageState?: RoundPageState
   scrollRoot?: HTMLElement | null
   onLoadMoreBackward: () => void
@@ -490,7 +497,7 @@ function TailRoundView({
   return (
     <div className="nagent-tail-round">
       {userItem && userItem.type === 'agent_message' ? (
-        <AgentMessageThread message={userItem.message} taskId={taskId} />
+        <AgentMessageThread message={userItem.message} taskId={taskId} mainAgentId={mainAgentId} />
       ) : null}
       {live && pageState && !pageState.done ? (
         <LazyLoadSentinel
@@ -502,9 +509,9 @@ function TailRoundView({
         />
       ) : null}
       {afterUser.length > 0 ? (
-        <TaskThread taskId={taskId} items={afterUser} isGenerating={isGenerating} />
+        <TaskThread taskId={taskId} items={afterUser} isGenerating={isGenerating} mainAgentId={mainAgentId} />
       ) : isGenerating ? (
-        <TaskThread taskId={taskId} items={[]} isGenerating={isGenerating} />
+        <TaskThread taskId={taskId} items={[]} isGenerating={isGenerating} mainAgentId={mainAgentId} />
       ) : null}
       {!live && pageState && !pageState.done ? (
         <LazyLoadSentinel

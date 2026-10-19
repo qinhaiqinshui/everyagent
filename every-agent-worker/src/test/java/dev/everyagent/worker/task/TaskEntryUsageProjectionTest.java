@@ -49,6 +49,22 @@ class TaskEntryUsageProjectionTest {
                 null, null, null, null, data, EmitEvent.Mode.REPLACE));
     }
 
+    /** fullViewEst > 0 时随 usage 事件携带(= 该轮发送视图为全量未压缩;§7.5 冷启动种子)。 */
+    private static void emitUsage(TaskEntry t, String agentId, long in, long out, long window,
+            String model, long fullViewEst) {
+        var data = Json.obj();
+        data.put("model", model);
+        if (window > 0) {
+            data.put("contextWindowTokens", window);
+        }
+        if (fullViewEst > 0) {
+            data.put("fullViewEstTokens", fullViewEst);
+        }
+        data.set("round", Json.toJson(new Usage(in, out, in + out)));
+        t.events.emit(EmitEvent.of(SnowflakeId.next(), Events.USAGE, agentId,
+                null, null, null, null, data, EmitEvent.Mode.REPLACE));
+    }
+
     @Test
     void usageEventUpdatesSnapshotAndFiresBroadcastExactlyOnce() {
         AtomicInteger broadcasts = new AtomicInteger();
@@ -197,5 +213,62 @@ class TaskEntryUsageProjectionTest {
                 null, null, "hello", null, null, EmitEvent.Mode.REPLACE));
         assertNull(t.usageSummary(), "无 usage 事件时 summary 省略");
         assertEquals(0, broadcasts.get(), "非 usage 事件不触发广播");
+    }
+
+    // ---- 压缩冷启动校准种子(§7.5)投影/落盘/回灌 ----
+
+    @Test
+    void fullViewEstimateBecomesCompressionSeedAndIsSticky() {
+        TaskEntry first = entry(null);
+        // 全量视图轮次(携带 fullViewEstTokens):种子 = (实测, 估算, 模型)
+        emitUsage(first, "main-1", 123_297, 1_000, 256_000, "gpt-x", 233_413);
+
+        var seed = first.compressionSeed("main-1");
+        assertNotNull(seed, "全量视图轮次的 usage 事件投影出压缩冷启动种子");
+        assertEquals(123_297L, seed.measuredInputTokens());
+        assertEquals(233_413L, seed.estimatedSentTokens());
+        assertEquals("gpt-x", seed.model());
+
+        // 后续压缩视图轮次(不携带 fullViewEstTokens)不得覆盖种子——粘性保持全量视图样本
+        emitUsage(first, "main-1", 7_631, 500, 256_000, "gpt-x", 0);
+        var sticky = first.compressionSeed("main-1");
+        assertNotNull(sticky);
+        assertEquals(233_413L, sticky.estimatedSentTokens(),
+                "压缩视图轮次不得覆盖全量视图种子(比率不表征全量历史偏差)");
+
+        // 其他 agent → null(无种子)
+        assertNull(first.compressionSeed("sub-2"));
+    }
+
+    @Test
+    void seedPersistsIntoUsageByAgentAndRestoresOnRerun() {
+        TaskEntry first = entry(null);
+        emitUsage(first, "main-1", 123_297, 1_000, 256_000, "gpt-x", 233_413);
+
+        // 随 usageByAgent 落盘
+        var item = first.summaryJson().path("usageByAgent").path("main-1");
+        assertEquals(123_297L, item.path("seedInputTokens").asLong());
+        assertEquals(233_413L, item.path("seedEstTokens").asLong());
+        assertEquals("gpt-x", item.path("seedModel").asString());
+
+        // 再运行冷启动:seedUsageRounds 一并回灌,经 ExecContext.compressionSeed 暴露
+        TaskEntry second = entry(null);
+        second.seedUsageRounds(Json.parse(Json.write(first.summaryJson())).path("usageByAgent"));
+        var restored = second.compressionSeed("main-1");
+        assertNotNull(restored, "再运行冷启动应回灌压缩校准种子");
+        assertEquals(123_297L, restored.measuredInputTokens());
+        assertEquals(233_413L, restored.estimatedSentTokens());
+        assertEquals("gpt-x", restored.model());
+    }
+
+    @Test
+    void legacyTaskWithoutSeedFieldsDegradesGracefully() {
+        TaskEntry legacy = entry(null);
+        // 旧任务 meta 无 seedInputTokens/seedEstTokens 字段 → compressionSeed 返回 null
+        legacy.seedUsageRounds(Json.parse("{\"main-1\":{\"inputTokens\":100,\"outputTokens\":20,"
+                + "\"contextWindowTokens\":256000}}"));
+        assertNull(legacy.compressionSeed("main-1"),
+                "无种子字段的旧任务优雅降级(压缩 advisor 回退固定 reserve)");
+        assertNull(legacy.compressionSeed("sub-2"));
     }
 }

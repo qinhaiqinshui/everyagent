@@ -155,6 +155,19 @@ public interface AgentContext {
     /** 最近一轮所用模型名(空 = 未知)。 */
     String lastModel();
 
+    /**
+     * 最近一次「全量未压缩发送视图」的 token 估算(上下文压缩 advisor 每次模型请求前记账,
+     * 由事件 advisor 随本轮 {@code usage} 事件落盘为冷启动校准种子;0 = 无/当前为压缩视图——
+     * 压缩视图的估算/实测比率不表征全量历史的估算偏差,故不记)。
+     */
+    default long fullViewEstTokens() {
+        return 0;
+    }
+
+    /** 记账全量视图估算(仅上下文压缩 advisor 调用;压缩视图/未启用时传 0 清除)。 */
+    default void fullViewEstTokens(long est) {
+    }
+
     // ── 运行时方法 ──
 
     /** 累计 token 用量快照。 */

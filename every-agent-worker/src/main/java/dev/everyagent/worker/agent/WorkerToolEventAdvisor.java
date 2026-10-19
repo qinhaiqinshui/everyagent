@@ -222,6 +222,12 @@ public class WorkerToolEventAdvisor extends ToolCallingAdvisor {
                 ObjectNode usageData = Json.obj();
                 usageData.put("model", a.options.getModel());
                 usageData.put("contextWindowTokens", contextWindowTokens());
+                // 压缩冷启动种子(§7.5):仅「全量未压缩发送视图」的轮次携带估算(压缩 advisor
+                // 记账;压缩视图轮次为 0 不携带——其比率不表征全量历史的估算偏差)。
+                long fullViewEst = a.fullViewEstTokens();
+                if (fullViewEst > 0) {
+                    usageData.put("fullViewEstTokens", fullViewEst);
+                }
                 usageData.set("round", Json.toJson(roundUsage));
                 usageData.set("total", Json.toJson(a.usageRef().get()));
                 a.emitter.emit(EmitEvent.of(SnowflakeId.next(), Events.USAGE,

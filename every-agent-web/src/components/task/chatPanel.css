@@ -612,15 +612,20 @@
   margin: 16px 0;
 }
 
+/* 子 agent 输入气泡：复用用户气泡形态，背景换中性色以与真人用户消息区分，间距收窄。 */
+.nagent-msg__bubble--sub-agent {
+  background: var(--bg-tertiary);
+  margin: 8px 0;
+}
+
 /* ─── 用户消息气泡：超高折叠（无滚动条，溢出隐藏 + 渐变遮罩 + 展开按钮） ─── */
 .nagent-msg__bubble-content {
   width: 100%;
   min-width: 0;
 }
 
-/* 折叠态：内容限高 220px，溢出裁剪（不出滚动条），底部渐变淡出提示还有内容。 */
+/* 折叠态：内容限高（max-height 由 JS 内联 style 设置,支持子 agent 气泡用不同阈值），溢出裁剪（不出滚动条），底部渐变淡出提示还有内容。 */
 .nagent-msg__bubble--collapsed .nagent-msg__bubble-content {
-  max-height: 220px;
   overflow: hidden;
   -webkit-mask-image: linear-gradient(to bottom, #000 62%, transparent 96%);
   mask-image: linear-gradient(to bottom, #000 62%, transparent 96%);
@@ -1443,6 +1448,23 @@
 .nagent-trace-shell__empty {
   color: var(--text-muted);
   font-size: var(--text-xs);
+}
+
+/* 错误态 trace（tone:'error'，如 run_error）：图标/标题/摘要转红，
+   展开态边框与底色淡红；颜色全部走 token，明暗主题自动适配。
+   选择器特异性与 .nagent-trace-shell__summary:hover 同级且位置靠后，
+   hover 时仍保持红色不被覆盖。 */
+.nagent-trace-shell--error .nagent-trace-shell__summary,
+.nagent-trace-shell--error .nagent-trace-shell__icon,
+.nagent-trace-shell--error .nagent-trace-shell__title,
+.nagent-trace-shell--error .nagent-trace-shell__text,
+.nagent-trace-shell--error .nagent-trace-shell__chevron {
+  color: var(--accent-red);
+}
+
+.nagent-trace-shell--error.is-open {
+  border-color: color-mix(in srgb, var(--accent-red) 36%, var(--border-light));
+  background: var(--accent-red-dim);
 }
 
 /* ─── 底部输入区 ───────────────────────────────────────────── */

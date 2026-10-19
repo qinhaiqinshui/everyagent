@@ -35,6 +35,15 @@ import java.util.concurrent.TimeUnit;
  * <p><b>监视器内部化</b>:run/stopAll 互斥不再借用任务对象监视器,改锁 Manager
  * 自有的 per-subject 状态对象 {@link TaskSubState}——对执行主体对象的锁依赖消失。
  *
+ * <p><b>子 agent 是主体级(跨轮)资产,磁盘是唯一事实源</b>:{@code ctx.agents()} 是
+ * per-run 注册表(主体收口即销毁),子 agent 的历史不随单轮消失——每条指令经
+ * {@code user.message} 事件(必带 agentId)落盘 {@code <agentId>.jsonl}(与主 agent 同一落盘通道),
+ * 工具读侧(list/wait/stop)合并「本轮 live 实体 &gt; 磁盘台账 agents.json」两层
+ * (非在场实体的 running/waiting-user 一律归一 stopped,与 AgentLedger 冷启动归一同规则);
+ * {@code run_agent} 传历史 agentId 时经 {@link ExecContext#conversationArchive()}
+ * 档案口按 agentId 中性重建会话续跑(主/子/审议同一条重建路径,§5.3)——进程重启后
+ * 历史照常恢复,不再依赖任何进程内存。
+ *
  * <p><b>会话交替不变量</b>:子 agent 会话跨轮复用(同 agentId 的 run_agent 续跑),
  * 而 agent 执行链不回写会话内存(worker 的 {@code WorkerToolEventAdvisor} 只发
  * message 事件、{@code AgentRunner} 只把会话副本交给 ChatClient),故复用方必须自己
@@ -48,8 +57,12 @@ public class SubAgentManager {
     /** wait_agents 未显式传 timeoutMs 时的默认等待上限(毫秒),防长时间挂起主 agent。 */
     private static final long DEFAULT_WAIT_TIMEOUT_MS = 30_000;
 
-    /** 主体收口等待全部子 agent 的超时(毫秒)。 */
-    private static final long AWAIT_ALL_TIMEOUT_MS = 30_000;
+    /**
+     * 主体收口等待全部子 agent 的超时(毫秒)。架构 §7.14:安全超时默认 5 min——
+     * 主 agent 未调 wait_agents 就收口时,子 agent 仍被等待到自然完成(典型子任务
+     * 分钟级),只有超过安全上限才级联停。
+     */
+    private static final long AWAIT_ALL_TIMEOUT_MS = 300_000;
 
     /** 取消竞态定稿等待上限(毫秒):future 已取消但子线程尚未写终态时的有界等待。 */
     private static final long SETTLE_NUDGE_MS = 2_000;
@@ -111,6 +124,11 @@ public class SubAgentManager {
      * run_agent 工具入口:返回给主 agent 的文本。
      * 同 agentId 仅在"运行中"时拒绝;已落定(完成/停止/失败)→ 复用原实体续跑
      * (原会话追加新指令,不重做已完成部分,§5.6/agent-dispatch 技能)。
+     * <p>跨轮/跨重启:实体不在 {@code ctx.agents()}(per-run 注册表)→ 经
+     * {@link ExecContext#conversationArchive()} 档案口按 agentId 重建会话续跑
+     * (磁盘唯一事实源,worker 重启后历史照常恢复);磁盘亦无档案(凭空 id)→ 同 id 全新会话。
+     * <p>每条指令(新建/复用/重建三路径)都发 {@code user.message} 事件(带 agentId)落盘——
+     * {@code <agentId>.jsonl} 因此自包含(user → assistant 轮次完整),是续跑重建的依据。
      */
     public String run(ExecContext ctx, String input, String title, String agentId)
             throws InterruptedException {
@@ -156,9 +174,29 @@ public class SubAgentManager {
                 sub.conversation().add(new UserMessage(input));
                 // 复用路径不经过 build():agent.started 由 AgentStatusAdvisor 在本轮
                 // run() 的流入口自动发射(与新建路径同一发射点),此处不再手动补发。
+            } else if (agentId != null && !agentId.isEmpty()) {
+                // 指定 agentId 但本轮实体不在场:跨轮/跨重启续跑,或凭空 id 全新开始
+                List<org.springframework.ai.chat.messages.Message> prior = loadArchive(ctx, agentId);
+                if (!prior.isEmpty()) {
+                    sub = rebuildFromArchive(ctx, id, ledgerTitle(ctx, id, title), prior, input);
+                    log.info("[sub] 档案重建续跑 agentId={} subjectId={} 历史轮数={}",
+                            agentId, ctx.subjectId(), prior.size());
+                } else {
+                    sub = buildSubAgent(ctx, id, title == null || title.isEmpty() ? "子任务" : title, input);
+                    if (diskLedger(ctx).containsKey(agentId)) {
+                        log.warn("[sub] agentId={} 台账在场但档案为空(jsonl 缺失/损坏),同 id 全新会话 subjectId={}",
+                                agentId, ctx.subjectId());
+                    }
+                }
             } else {
                 sub = buildSubAgent(ctx, id, title == null || title.isEmpty() ? "子任务" : title, input);
             }
+
+            // 指令落盘(user.message,带 agentId——agent 层与主 agent 一视同仁;
+            // 展示差异归前端按 agentId 区分):<agentId>.jsonl 自包含的轮次起点,
+            // 跨轮/跨重启续跑重建的依据。新建/复用/重建三路径统一在此发射(先于子线程
+            // 首个 message 事件)。失败仅 warn:日志护栏满时任务本身已无法续写,不阻断启动。
+            emitInput(ctx, id, input);
 
             // FutureTask 先入册再执行:waitFor/stop/run 守卫看到的永远是当前运行,
             // 不存在 submit 与 put 之间被查询/完成的窗口。
@@ -175,6 +213,72 @@ public class SubAgentManager {
         }
 
         return "子 agent 已启动(异步): " + id;
+    }
+
+    /**
+     * 跨轮/跨重启续跑重建:磁盘档案作会话种子新建实体(新 emitter/新 ChatClient,绑定
+     * 本轮 ExecContext——直接复用旧实体会把事件发进已销毁的上一轮日志)。
+     * 档案由 {@link #loadArchive} 经中性档案口取得(不含 system 轮),此处补 system +
+     * 追加新指令;档案尾是孤立 user(中断早于任何回复)时补占位 assistant,保证
+     * user/assistant 交替不变量(§7.9)。
+     */
+    private Agent rebuildFromArchive(ExecContext ctx, String agentId, String title,
+            List<org.springframework.ai.chat.messages.Message> prior, String input) {
+        List<org.springframework.ai.chat.messages.Message> seed = new ArrayList<>(prior);
+        if (!seed.isEmpty() && seed.get(seed.size() - 1) instanceof UserMessage) {
+            seed.add(AssistantMessage.builder().content(NO_FINAL_ANSWER_PLACEHOLDER).build());
+        }
+        List<ToolCallback> toRemove = new ArrayList<>(List.of(ToolCallbacks.from(new SubAgentToolNames())));
+        return ctx.agentFactory().create(agentId)
+                .title(title == null || title.isEmpty() ? "子任务" : title)
+                .tools(toRemove, AgentBuilder.ModifyMode.REMOVE)
+                .systemPrompt(SUB_SYSTEM_PROMPT)
+                .creator("subagent")
+                .conversation(seed)
+                .userInput(input)
+                .build();
+    }
+
+    /** 经中性档案口读 agent 会话档案(端口未绑定/IO 失败返回空表,不抛)。 */
+    private static List<org.springframework.ai.chat.messages.Message> loadArchive(ExecContext ctx, String agentId) {
+        dev.everyagent.plugin.api.agent.ConversationArchive archive = ctx.conversationArchive();
+        if (archive == null) {
+            return List.of();
+        }
+        try {
+            List<org.springframework.ai.chat.messages.Message> prior = archive.load(agentId);
+            return prior != null ? prior : List.of();
+        } catch (RuntimeException e) {
+            log.warn("[sub] 会话档案读取失败(按无历史处理) agentId={} subject={}", agentId, ctx.subjectId(), e);
+            return List.of();
+        }
+    }
+
+    /** 续跑标题:title 参数优先,缺省回退磁盘台账的历史 title(沿用原身份,不重置为「子任务」)。 */
+    private static String ledgerTitle(ExecContext ctx, String agentId, String title) {
+        if (title != null && !title.isEmpty()) {
+            return title;
+        }
+        ObjectNode hist = diskLedger(ctx).get(agentId);
+        return hist == null ? null : hist.path("title").asString(null);
+    }
+
+    /** 发 {@code user.message} 事件(必带 agentId;端口未绑定/发射失败仅记日志,不阻断启动)。 */
+    private static void emitInput(ExecContext ctx, String agentId, String input) {
+        dev.everyagent.plugin.api.model.EventEmitter emitter = ctx.emitter();
+        if (emitter == null) {
+            return;
+        }
+        try {
+            emitter.emit(dev.everyagent.plugin.api.model.EmitEvent.of(
+                    dev.everyagent.plugin.api.proto.SnowflakeId.next(),
+                    dev.everyagent.plugin.api.event.Events.USER_MESSAGE,
+                    agentId, null, null, input, null, null,
+                    dev.everyagent.plugin.api.model.EmitEvent.Mode.REPLACE));
+        } catch (RuntimeException e) {
+            log.warn("[sub] user.message(子 agent 指令)落盘失败(续跑重建将缺本轮指令) agentId={} subject={}",
+                    agentId, ctx.subjectId(), e);
+        }
     }
 
     /**
@@ -272,6 +376,8 @@ public class SubAgentManager {
      * 摘要 = {agentId,title,createdAt,status,latestActivity}:status 终态为
      * completed/stopped/error,running 运行中,waiting-user 挂起等用户回答;
      * latestActivity 为最近一次 AI 返回的快照,不回灌完整历史。
+     * <p>跨轮可见:合并「本轮 live 实体 &gt; 磁盘台账 agents.json」两层——上一轮
+     * (乃至 worker 重启前)的子 agent 均在列表内,不随单轮收口消失(磁盘是唯一事实源)。
      */
     public String list(ExecContext ctx) throws InterruptedException {
         TaskSubState st = state(ctx);
@@ -285,26 +391,125 @@ public class SubAgentManager {
             }
         }
         ObjectNode r = Json.obj();
-        r.set("agents", agentsJsonMerged(ctx));
+        r.set("agents", agentsJsonMerged(ctx, st));
         return Json.write(r);
     }
 
     /**
-     * 遍历 ctx.agents() 返回 subagent 创建的 agent 摘要数组。
-     * 按顶级 creator=subagent 过滤,只展示本插件创建的子 agent。
+     * 遍历合并视图返回 subagent 创建的 agent 摘要数组:
+     * 磁盘台账(上一轮落定的终态基线,worker 重启后唯一来源)→ 本轮 live 实体覆盖
+     * (status/latestActivity 最新,createdAt/title 沿用基线——跨轮重建实体的 createdAt
+     * 是重建时刻,不能覆盖台账的原始创建时间)。按顶级 creator=subagent 过滤(旧条目无
+     * 顶级 creator 时回退 metadata.creator,两者皆空视为旧格式子 agent 保留,§7.20.1)。
      */
-    private ArrayNode agentsJsonMerged(ExecContext ctx) {
+    private ArrayNode agentsJsonMerged(ExecContext ctx, TaskSubState st) {
         java.util.LinkedHashMap<String, ObjectNode> merged = new java.util.LinkedHashMap<>();
+        // 1. 磁盘台账基线(终态;非在场实体的 running/waiting-user 归一 stopped——
+        //    与 AgentLedger 冷启动归一同规则,防止陈旧快照把死 agent 报成 running)
+        for (Map.Entry<String, ObjectNode> e : diskLedger(ctx).entrySet()) {
+            ObjectNode n = e.getValue().deepCopy();
+            n.put("status", normalizeHistorical(e.getKey(), n.path("status").asString("stopped"), st, ctx));
+            merged.put(e.getKey(), n);
+        }
+        // 2. 本轮 live 实体覆盖
         for (AgentContext s : ctx.agents().values()) {
             // 过滤:只展示 subagent 创建的 agent
             if (!"subagent".equals(s.creator())) continue;
-            merged.put(s.agentId(), summaryJson(ctx, s));
+            ObjectNode live = summaryJson(ctx, s);
+            ObjectNode base = merged.get(s.agentId());
+            merged.put(s.agentId(), base == null ? live : overlayLive(base, live));
         }
         java.util.List<ObjectNode> ordered = new java.util.ArrayList<>(merged.values());
         ordered.sort(java.util.Comparator.comparingLong(a -> a.path("createdAt").asLong(0)));
         ArrayNode agents = Json.arr();
         ordered.forEach(agents::add);
         return agents;
+    }
+
+    /** 历史条目状态归一:agentId 在本轮在场(实体或运行中 future)→ 原样;否则 running/waiting-user → stopped。 */
+    private static String normalizeHistorical(String agentId, String status, TaskSubState st, ExecContext ctx) {
+        boolean present = ctx.agents().containsKey(agentId) || st.subFutures.containsKey(agentId);
+        if (present) {
+            return status;
+        }
+        return "running".equals(status) || "waiting-user".equals(status) ? "stopped" : status;
+    }
+
+    /** live 摘要覆盖历史基线:状态/活动取 live(最新),createdAt/title 沿用基线(原始资产)。 */
+    private static ObjectNode overlayLive(ObjectNode base, ObjectNode live) {
+        ObjectNode n = base.deepCopy();
+        if (base.path("createdAt").asLong(0) <= 0) {
+            n.put("createdAt", live.path("createdAt").asLong(0));
+        }
+        String baseTitle = base.path("title").asString("");
+        if (baseTitle.isEmpty()) {
+            String liveTitle = live.path("title").asString("");
+            if (!liveTitle.isEmpty()) {
+                n.put("title", liveTitle);
+            }
+        }
+        String liveStatus = live.path("status").asString("");
+        if (!liveStatus.isEmpty()) {
+            n.put("status", liveStatus);
+        }
+        n.set("latestActivity", live.path("latestActivity").deepCopy());
+        return n;
+    }
+
+    /**
+     * 读主体 dataDir 下的磁盘台账 agents.json(worker AgentLedger 落盘,§7.14/§7.20.1;
+     * 30s 定时快照 + 收口终态快照两路径)。只保留 subagent 条目,按 agentId 索引。
+     * 文件缺失/形状异常/读取失败返回空表(台账非本插件所有,读侧容错不抛)。
+     */
+    private static Map<String, ObjectNode> diskLedger(ExecContext ctx) {
+        java.nio.file.Path dir = ctx.dataDir();
+        if (dir == null) {
+            return Map.of();
+        }
+        java.nio.file.Path f = dir.resolve("agents.json");
+        if (!java.nio.file.Files.isRegularFile(f)) {
+            return Map.of();
+        }
+        try {
+            String text = java.nio.file.Files.readString(f);
+            tools.jackson.databind.JsonNode root = Json.parse(text);
+            tools.jackson.databind.JsonNode arr = root == null ? null : root.path("agents");
+            if (arr == null || !arr.isArray()) {
+                return Map.of();
+            }
+            java.util.LinkedHashMap<String, ObjectNode> out = new java.util.LinkedHashMap<>();
+            for (tools.jackson.databind.JsonNode a : arr) {
+                if (!a.isObject()) continue;
+                ObjectNode o = (ObjectNode) a;
+                String id = o.path("agentId").asString("");
+                if (id.isEmpty() || !subagentEntry(o)) continue;
+                out.put(id, o);
+            }
+            return out;
+        } catch (java.io.IOException | RuntimeException e) {
+            log.debug("[sub] 磁盘台账读取失败(忽略) dir={}", dir, e);
+            return Map.of();
+        }
+    }
+
+    /** 台账条目是否 subagent 创建:顶级 creator,旧条目回退 metadata.creator;两者皆空视为旧格式子 agent(§7.20.1)。 */
+    private static boolean subagentEntry(ObjectNode entry) {
+        String c = entry.path("creator").asString("");
+        if (c.isEmpty()) {
+            c = entry.path("metadata").path("creator").asString("");
+        }
+        return c.isEmpty() || "subagent".equals(c);
+    }
+
+    /** 历史摘要查询(磁盘台账;无返回 null)——wait/stop 的跨轮入口。 */
+    private ObjectNode historicalSummary(TaskSubState st, ExecContext ctx, String agentId) {
+        ObjectNode disk = diskLedger(ctx).get(agentId);
+        if (disk != null) {
+            ObjectNode n = disk.deepCopy();
+            n.put("status", normalizeHistorical(agentId, n.path("status").asString("stopped"), st, ctx));
+            return n;
+        }
+        return null;
     }
 
 
@@ -323,6 +528,14 @@ public class SubAgentManager {
             AgentContext sub = ctx.agents().get(agentId);
             Future<?> f = st.subFutures.get(agentId);
             if (sub == null) {
+                // 跨轮历史 agent(上一轮收口的子 agent):终态即落定,直接返回最新摘要。
+                // f 仍在的异常形态(实体缺失)不走历史摘要,落入下方凭空 id 分支。
+                ObjectNode hist = f == null ? historicalSummary(st, ctx, agentId) : null;
+                if (hist != null) {
+                    r.put("waitStatus", "completed");
+                    r.set("agent", hist);
+                    return Json.write(r);
+                }
                 // agentId 不存在(凭空 id):最小摘要 + 说明,waitStatus=timeout
                 log.warn("wait_agents 未找到 agentId,返回最小摘要: {}", agentId);
                 ObjectNode a = Json.obj();
@@ -337,7 +550,19 @@ public class SubAgentManager {
                 return Json.write(r);
             }
             if (f == null || isTerminal(sub.status())) {
-                // 已落定(完成/停止/失败):直接返回最新摘要
+                // 已落定(完成/停止/失败):直接返回最新摘要。
+                // 竞态封口:实体终态先于运行体 finally(回写 assistant 轮)置位,
+                // 此时 future 尚未 done——必须等它退场再返回,否则调用方紧接的 run_agent 续跑
+                // 会撞上「已在运行」守卫,或读到未回写完成的会话。有界等(终态已定,退场是瞬时的)。
+                if (f != null && !f.isDone()) {
+                    try {
+                        f.get(timeout, TimeUnit.MILLISECONDS);
+                    } catch (java.util.concurrent.ExecutionException
+                            | java.util.concurrent.CancellationException
+                            | java.util.concurrent.TimeoutException ignored) {
+                        // 终态已由实体声明;future 异常形态不影响摘要取数
+                    }
+                }
                 r.put("waitStatus", "completed");
                 r.set("agent", summaryJson(ctx, sub));
                 return Json.write(r);
@@ -381,7 +606,7 @@ public class SubAgentManager {
         ObjectNode r = Json.obj();
         r.put("mode", "list");
         r.put("waitStatus", allSettled ? "completed" : "timeout");
-        r.set("agents", agentsJsonMerged(ctx));
+        r.set("agents", agentsJsonMerged(ctx, st));
         return Json.write(r);
     }
 
@@ -390,6 +615,11 @@ public class SubAgentManager {
         AgentContext sub = ctx.agents().get(agentId);
         Future<?> f = st.subFutures.get(agentId);
         if (f == null) {
+            // 跨轮历史 agent:已是终态(收口时落定),无需也无法停止
+            ObjectNode hist = historicalSummary(st, ctx, agentId);
+            if (hist != null) {
+                return "子 agent 已结束(" + hist.path("status").asString("stopped") + "),无需停止: " + agentId;
+            }
             return "子 agent 不存在: " + agentId;
         }
         if (sub != null && isTerminal(sub.status())) {

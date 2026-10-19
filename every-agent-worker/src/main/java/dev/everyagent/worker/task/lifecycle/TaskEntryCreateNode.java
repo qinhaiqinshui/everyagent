@@ -181,6 +181,7 @@ public final class TaskEntryCreateNode implements TaskLifecycleNode {
                 mainAgentId, props.getLimits().getMaxEventsPerTask());
         t.taskDir(store.dirOf(taskId, impl.workspaceId()));
         t.bindExecPorts(agentFactory, asks);
+        t.conversationArchive(agentId -> store.loadConversation(t.taskDir(), agentId));
         tasks.put(taskId, t);
         // 预登记 workspace 映射:RPC 应答(order=70)发出后,track(order=100,VT 异步)执行前,
         // slash.taskTokens.apply 等竞态 RPC 可经 dirOf(taskId) 定位任务目录。
@@ -230,6 +231,7 @@ public final class TaskEntryCreateNode implements TaskLifecycleNode {
                 props.getLimits().getMaxEventsPerTask());
         t.taskDir(st.dir());
         t.bindExecPorts(agentFactory, asks);
+        t.conversationArchive(agentId -> store.loadConversation(t.taskDir(), agentId));
         return t;
     }
 }

@@ -1,6 +1,7 @@
 package dev.everyagent.plugin.api.spi;
 
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
@@ -27,6 +28,8 @@ public final class ToolOutcomeLog {
 
     private final Map<String, ConcurrentLinkedQueue<ShellExit>> shellExits = new ConcurrentHashMap<>();
     private final Map<String, ConcurrentLinkedQueue<Boolean>> toolThrows = new ConcurrentHashMap<>();
+    /** 「曾抛过异常」键影子集合(非消费存在性查询的供体,见 {@link #toolThrew})。 */
+    private final Set<String> throwMarks = ConcurrentHashMap.newKeySet();
 
     /** 命令执行的结局（结构化）：退出码 + 是否被沙箱超时中止。 */
     public record ShellExit(int exitCode, boolean aborted) {
@@ -71,7 +74,9 @@ public final class ToolOutcomeLog {
         if (toolName == null) {
             return;
         }
-        queue(toolThrows, key(toolName, arguments == null ? "" : arguments)).add(Boolean.TRUE);
+        String k = key(toolName, arguments == null ? "" : arguments);
+        queue(toolThrows, k).add(Boolean.TRUE);
+        throwMarks.add(k);
     }
 
     /** 取出并移除一次「该次调用抛过异常」的记录（FIFO）；{@code false} 表示未记录（=成功）。 */
@@ -81,6 +86,27 @@ public final class ToolOutcomeLog {
         }
         ConcurrentLinkedQueue<Boolean> q = toolThrows.get(key(toolName, arguments == null ? "" : arguments));
         return q != null && q.poll() != null;
+    }
+
+    /**
+     * 非消费查询:该键在本 run 内是否曾记录过「抛异常」。
+     *
+     * <p><b>为什么需要它</b>:FIFO {@link #consumeToolThrow} 是<b>消费</b>语义,供首个查账者
+     * ({@code WorkerToolEventAdvisor} 的 {@code tool.result} status)按次精确裁决;但后置消费者
+     * (如 file-change 插件在下一轮请求入口补判工具成败)拿到的时序必然晚于首个查账者,
+     * 队列已被 poll 空——只能查「曾抛过」的存在性影子集合({@link #throwMarks},随 run 生命周期
+     * 累积,仅含抛过异常的键,量级极小)。
+     *
+     * <p><b>精度边界</b>:存在性 ≠ 按次精确。同键(工具名 + 入参逐字节相同的两次调用)一败一成时,
+     * 本查询对成功的那次也会返回 true(偏保守)。对 file-change 场景,同参数的 create_file/update_file
+     * 原样重发(失败后不改参数)概率≈0,可接受;需要按次精确裁决的消费方仍应走
+     * {@link #consumeToolThrow}。
+     */
+    public boolean toolThrew(String toolName, String arguments) {
+        if (toolName == null) {
+            return false;
+        }
+        return throwMarks.contains(key(toolName, arguments == null ? "" : arguments));
     }
 
     /** 键 = 工具名 + NUL 分隔 + 载荷（NUL 不出现在工具名与命令/JSON 文本里，避免歧义拼接）。 */

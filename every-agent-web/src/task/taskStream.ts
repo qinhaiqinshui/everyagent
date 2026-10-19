@@ -15,6 +15,8 @@
  *
  * 轮次开启/闭合由后端推送 round.opened/round.closed 信号事件(不落盘、不折入 items),
  * 收到后仅触发 rounds 快照刷新(重新 task.rounds + 幂等 foldRound),前端不在本地判开/闭。
+ * 插件自定义任务事件(plugin.* 前缀,如 file-change 轮末摘要直推)同样不折入 items,
+ * 一律透传到领域事件总线由对应插件 web 端订阅消费(数据直推模型,宿主不感知业务语义,§7.15.2)。
  *
  * 实时信号链(同一折叠器状态):agentStates(agent 列表)/agentMeta(子 agent 台账+用量快照)/
  * 上下文电池(taskStore 消费 worker usage 投影聚合值,不在流内维护)/
@@ -78,6 +80,8 @@ export interface TaskStreamHandle {
   workerId: string
   /** 当前折叠状态(可变引用,变更经 subscribe 通知重渲染)。 */
   state: TaskThreadState
+  /** 事件折叠器(isMain/mainKey 等主 agent 判定入口;mainAgentId = state.mainAgentId,task 层传入)。 */
+  folder: TaskEventFolder
   /** 线程变更订阅(折叠推进/缓存回放)。 */
   subscribe(fn: () => void): () => void
   /** 取消任务(task.cancel RPC)。 */
@@ -141,6 +145,9 @@ class ManagedStream {
 
   constructor(public taskId: string, public workerId: string) {
     this.folder = new TaskEventFolder(emptyThreadState(taskId))
+    // 主 agent 固定 id 尽早灌入(任务列表早已同步的 entry 就有):折叠器一切
+    // 「主 agent」判定的唯一依据;后续 open/seedAgents 各再补灌一次(幂等)。
+    this.folder.setMainAgentId(taskStore.get(taskId)?.mainAgentId ?? '')
   }
 
   /** 变更通知(50ms 合并):流式 delta 高频到达时按拍重渲染。 */
@@ -213,18 +220,19 @@ class ManagedStream {
       this.notify()
       return
     }
+    // 插件自定义任务事件(plugin.* 前缀):不折入线程 items,透传到领域事件总线,
+    // 由对应插件 web 端订阅消费(数据直推模型,宿主不感知业务语义,§7.15.2)。
+    if (event.event.startsWith('plugin.')) {
+      domainEventBus.emit(DOMAIN_EVENTS.PLUGIN_TASK_EVENT, {
+        taskId: this.taskId,
+        workerId: this.workerId,
+        event: event.event,
+        data: event.payload?.data,
+      })
+      return
+    }
     // round.opened / round.closed 是信号事件,不折入 items;仅触发 rounds 快照刷新(重新 task.rounds + 幂等 foldRound)。
     if (event.event === 'round.opened' || event.event === 'round.closed') {
-      // round.closed 另发一条通用领域事件(名不含任何业务语义):轮末旁路数据(如 file-change 插件
-      // 按轮落盘的变更分片)由插件自持文件提供,宿主只负责通知失效,核心不感知业务(§7.15.2)。
-      if (event.event === 'round.closed') {
-        const data = event.payload?.data
-        domainEventBus.emit(DOMAIN_EVENTS.TASK_ROUND_CLOSED, {
-          taskId: this.taskId,
-          startSeq: String(data?.startSeq ?? event.payload?.startSeq ?? ''),
-          endSeq: String(data?.endSeq ?? event.payload?.endSeq ?? ''),
-        })
-      }
       void this.refreshRounds()
       return
     }
@@ -235,9 +243,9 @@ class ManagedStream {
     // done/status 事件的流推送,台账(agents.json)是兜底权威,终态时重拉确保子 agent
     // 状态收敛(done → completed 等)。
     if (event.event === 'agent.status' && !event.initial) {
-      const agentKey = event.agentId ?? (event.payload?.agentId as string | undefined) ?? ''
+      const agentKey = this.folder.agentKeyOf(event)
       const status = String(event.payload?.status ?? '')
-      if (!agentKey && (status === 'done' || status === 'failed' || status === 'stopped')) {
+      if (this.folder.isMain(agentKey) && (status === 'done' || status === 'failed' || status === 'stopped')) {
         void this.refreshRounds()
         this.agentsSeeded = false
         void this.loadAgentsIntoFolder()
@@ -528,6 +536,11 @@ class ManagedStream {
    */
   private foldWireEvent(item: TaskPollWireEvent): void {
     const event = this.toFoldableEvent(item)
+    // plugin.* = 瞬态直推专用(不落盘,正常不会出现在历史回放);若出现则跳过不折入,
+    // 也不重发领域事件(避免回放风暴)。真相源在插件自持落盘 + 插件 RPC(§7.15.2)。
+    if (event.event.startsWith('plugin.')) {
+      return
+    }
     if (event.event === 'ask.create' || event.event === 'ask.state' || event.event === 'ask.resolved') {
       this.dispatchAskEvent({ ...event, initial: true })
     }
@@ -544,6 +557,8 @@ class ManagedStream {
     const opening = (async () => {
       // open 周期复位:重连 resync 再次 open 时允许重拉 task.agents 校准台账。
       this.agentsSeeded = false
+      // 主 agent 固定 id 补灌(构造时 entry 可能尚未同步;幂等,空值不覆盖)。
+      this.folder.setMainAgentId(taskStore.get(this.taskId)?.mainAgentId ?? '')
       // 归属每次重解析(不用创建期冻结的旧值):切换 worker 后 taskStore 才是权威来源。
       if (!this.resolveWorkerId()) {
         // 分页窗口外的老任务 / 重连后仍开的旧标签:镜像缺失时定向补齐归属 worker。
@@ -554,6 +569,8 @@ class ManagedStream {
           throw new Error('无法确定任务所属 worker(任务数据不可用)')
         }
         this.workerId = entry.workerId
+        // ensureLoaded 拿到的完整 entry 必有 mainAgentId——补灌兜底。
+        this.folder.setMainAgentId(entry.mainAgentId ?? '')
       }
       if (!hubSession.connected) {
         // 目录连接都没起来时不做无谓 RPC;错误态留给后续 onReconnect 重开时再判。
@@ -658,6 +675,7 @@ class TaskStreamManager {
       taskId: stream.taskId,
       get workerId() { return stream.workerId },
       get state() { return stream.folder.state },
+      get folder() { return stream.folder },
       subscribe: (fn) => {
         stream.listeners.add(fn)
         return () => stream.listeners.delete(fn)

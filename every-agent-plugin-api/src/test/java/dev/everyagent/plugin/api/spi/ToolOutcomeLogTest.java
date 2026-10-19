@@ -79,6 +79,21 @@ class ToolOutcomeLogTest {
     }
 
     @Test
+    void 非消费查询在FIFO消费后仍可命中() {
+        ToolOutcomeLog log = new ToolOutcomeLog();
+        log.recordToolThrow("create_file", "{\"path\":\"a\"}");
+
+        // 后置消费者(file-change 下一轮请求侧)的时序必然晚于首个查账者(tool.result status),
+        // FIFO 队列已被 poll 空——存在性影子集合仍可查(见 toolThrew javadoc)
+        assertTrue(log.consumeToolThrow("create_file", "{\"path\":\"a\"}"), "首个查账者消费掉 FIFO 记录");
+        assertTrue(log.toolThrew("create_file", "{\"path\":\"a\"}"), "非消费查询不受 FIFO 消费影响");
+        assertFalse(log.toolThrew("create_file", "{\"path\":\"b\"}"), "未记账的键不命中");
+        assertFalse(log.toolThrew("update_file", "{\"path\":\"a\"}"), "工具名不同不命中");
+        assertFalse(log.toolThrew(null, "{\"path\":\"a\"}"));
+        assertFalse(new ToolOutcomeLog().toolThrew("create_file", "{\"path\":\"a\"}"), "从未记账不命中");
+    }
+
+    @Test
     void 记账入参为空不抛异常() {
         ToolOutcomeLog log = new ToolOutcomeLog();
         log.recordShellExit(null, "cmd", 1, false);

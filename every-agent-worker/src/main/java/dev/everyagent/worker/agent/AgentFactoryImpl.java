@@ -94,6 +94,7 @@ public class AgentFactoryImpl {
         private dev.everyagent.plugin.api.agent.AgentBuilder.ModifyMode toolsMode;
         private String systemPrompt;
         private String userInput;
+        private List<org.springframework.ai.chat.messages.Message> conversationSeed;
         private Map<String, Object> agentMetadata = Map.of();
 
         AgentBuilderAdapter(String agentId, String configId, ExecContext exec) {
@@ -142,6 +143,13 @@ public class AgentFactoryImpl {
         }
 
         @Override
+        public dev.everyagent.plugin.api.agent.AgentBuilder conversation(
+                List<org.springframework.ai.chat.messages.Message> conversation) {
+            this.conversationSeed = conversation;
+            return this;
+        }
+
+        @Override
         public dev.everyagent.plugin.api.agent.AgentBuilder options(
                 Consumer<ChatOptions> customizer) {
             this.optionsCustomizer = customizer;
@@ -176,11 +184,27 @@ public class AgentFactoryImpl {
             if (tools != null && toolsMode != null) {
                 build.tools(tools, mapMode(toolsMode));
             }
-            if (systemPrompt != null) {
-                build.systemPrompt(systemPrompt);
-            }
-            if (userInput != null) {
-                build.userInput(userInput);
+            // 会话种子:与 systemPrompt/userInput 的组合固定为 [system?, ...prior, user?]
+            // 一次成型(worker Build.conversation 是整表替换语义,不能与 systemPrompt 分开叠加,
+            // 否则 system 轮会被随后的种子替换掉);null/空列表 = 无种子,走常规装配。
+            if (conversationSeed != null && !conversationSeed.isEmpty()) {
+                java.util.List<org.springframework.ai.chat.messages.Message> msgs =
+                        new java.util.ArrayList<>();
+                if (systemPrompt != null) {
+                    msgs.add(new org.springframework.ai.chat.messages.SystemMessage(systemPrompt));
+                }
+                msgs.addAll(conversationSeed);
+                if (userInput != null) {
+                    msgs.add(new org.springframework.ai.chat.messages.UserMessage(userInput));
+                }
+                build.conversation(msgs);
+            } else {
+                if (systemPrompt != null) {
+                    build.systemPrompt(systemPrompt);
+                }
+                if (userInput != null) {
+                    build.userInput(userInput);
+                }
             }
             build.agentMetadata(this.agentMetadata);
 

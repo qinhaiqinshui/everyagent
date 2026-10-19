@@ -261,7 +261,7 @@ await ctx.fs.delete(workspaceRoot, 'docs/draft.md')
 
 类型层面 `PluginDomainEvent` 只具名列 9 个事件名 + `(string & {})` 兜底（`index.ts:149-160`），但运行时**任意字符串都能订阅/发布**（TS 断言穿透，`pluginLoader.ts:236,243`）。
 
-现成范例：`every-agent-plugins/file-change/web/index.ts:24-33`（`ctx.events.on('task-round-closed'/'task-deleted', ...)` 作废缓存，Disposable 未持有——运行期无需中途停听，页面卸载时宿主统一清理，见 §9）、`every-agent-plugins/git/web/usePluginWorkspaces.ts:31`。
+现成范例：`every-agent-plugins/file-change/web/index.ts`（`ctx.events.on('plugin-task-event'/'task-deleted', ...)` 直推合入/清缓存，Disposable 未持有——运行期无需中途停听，页面卸载时宿主统一清理，见 §9）、`every-agent-plugins/git/web/usePluginWorkspaces.ts:31`。
 
 ## 8. `ctx.ui` —— 一笔带过
 

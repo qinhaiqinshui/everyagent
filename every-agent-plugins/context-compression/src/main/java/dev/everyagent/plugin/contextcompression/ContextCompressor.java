@@ -389,6 +389,31 @@ public final class ContextCompressor {
         return measuredInputTokens - estimatedLastSent;
     }
 
+    // ---- 冷启动校准种子 ----
+
+    /** 冷启动种子比率夹紧下限(实测/估算;防畸小样本把 precheck 压得过低而漏触发。t_ra74 实测 0.37,不被夹掉)。 */
+    public static final double SEED_RATIO_FLOOR = 0.35;
+
+    /** 冷启动种子比率夹紧上限(实测含工具定义/系统模板等固定开销,小视图轮次比率可能 >1)。 */
+    public static final double SEED_RATIO_CEIL = 2.0;
+
+    /**
+     * 冷启动种子比率:上一运行最近一次全量未压缩视图的 {@code 实测 inputTokens / 同视图估算},
+     * 夹紧到 [{@link #SEED_RATIO_FLOOR}, {@link #SEED_RATIO_CEIL}];入参非正返回 null(不可用)。
+     *
+     * <p>跨运行用比率而非加性 offset:历史跨运行持续增长时,加性修正量固定、占比越来越小
+     * (修正不足,粗估高估仍会误触发,2026-10 t_ngj2);比率随内容规模自缩放,且把工具定义/
+     * 系统模板等固定开销折算在内(旧视图更小、固定开销占比更大 → 比率偏高 → 方向保守不偏漏)。
+     * 首个实测回来后调用方自动回到 {@link #calibratedOverhead} 的每轮加性重算。
+     */
+    public static Double seedRatio(long measuredInputTokens, long estimatedSentTokens) {
+        if (measuredInputTokens <= 0 || estimatedSentTokens <= 0) {
+            return null;
+        }
+        double r = (double) measuredInputTokens / (double) estimatedSentTokens;
+        return Math.min(SEED_RATIO_CEIL, Math.max(SEED_RATIO_FLOOR, r));
+    }
+
     // ---- 轮次切分 ----
 
     /** 切分结果:prefix(system 等恒保留) + historyTurns + currentTurn(最新 user 及其后)。 */

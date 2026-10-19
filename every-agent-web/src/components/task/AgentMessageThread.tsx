@@ -28,6 +28,8 @@ export interface AgentMessageThreadProps {
   message: AgentMessageRecord
   /** 当前 Task ID，用于结构化输出块（如 `<plan>`）的执行按钮回灌。 */
   taskId?: string
+  /** 主 agent 稳定 Id（判定用户消息是否子 agent 输入用；渲染层消费 agentId 区分主/子）。 */
+  mainAgentId?: string
   /** 是否是连续同角色消息中的后续消息（非首条）。 */
   isContinuation?: boolean
   /** 合并展示的连续 tool 结果消息（多条结果合并为一条）。 */
@@ -83,6 +85,7 @@ const ROLE_META: Record<AgentMessageRecord['role'], {
 export default function AgentMessageThread({
   message,
   taskId,
+  mainAgentId = '',
   isContinuation,
   mergedToolMessages,
   resolveToolCallName,
@@ -125,10 +128,14 @@ export default function AgentMessageThread({
 
   if (message.role === 'user') {
     const replaySegments = buildUserMessageReplaySegments(message)
+    // 子 agent 输入判定:agentId 非空且 ≠ mainAgentId(空串安全:合成骨架/mainAgentId 未灌入时落回 false)。
+    const isSubAgentInput = Boolean(message.agentId) && message.agentId !== mainAgentId
     // 用户消息动作（扩展点 ui.user_message_actions，如编辑重发按钮）：
     // messageId 格式为 `m-${原始seq字符串}`,从中提取精确 seq(避免 Number 精度丢失)。
+    // 子 agent 输入不带扩展点(不可编辑重发)。
     const userMsgSeq = message.messageId?.startsWith('m-') ? message.messageId.slice(2) : null
-    const userMessageActions = userMsgSeq != null ? pluginDispatcher.listRegisteredUserMessageActions() : []
+    const userMessageActions = !isSubAgentInput && userMsgSeq != null
+      ? pluginDispatcher.listRegisteredUserMessageActions() : []
     return (
       <div className={`nagent-msg nagent-msg--user${continuationClass}`}>
         <div className="nagent-msg__body nagent-msg__body--user">
@@ -142,9 +149,10 @@ export default function AgentMessageThread({
             />
           ))}
           <CollapsibleUserBubble
-            className="nagent-msg__bubble nagent-msg__bubble--user"
+            className={`nagent-msg__bubble nagent-msg__bubble--user${isSubAgentInput ? ' nagent-msg__bubble--sub-agent' : ''}`}
             segments={replaySegments}
             taskId={taskId}
+            collapseHeight={isSubAgentInput ? SUB_AGENT_BUBBLE_COLLAPSE_HEIGHT : undefined}
           />
         </div>
       </div>
@@ -340,6 +348,9 @@ function UserMessageReplay({
 /** 用户消息气泡折叠阈值(px)：内容高度超过该值时折叠并显示展开按钮。 */
 const USER_BUBBLE_COLLAPSE_HEIGHT = 220
 
+/** 子 agent 输入气泡折叠阈值(px)：超过单行即折叠(更低调,避免抢占视觉焦点)。 */
+const SUB_AGENT_BUBBLE_COLLAPSE_HEIGHT = 26
+
 /**
  * 用户消息气泡：内容超过最大高度时折叠（隐藏溢出部分 + 底部渐变遮罩），
  * 并显示居中的展开/收起按钮；气泡内不出现滚动条。
@@ -348,6 +359,7 @@ function CollapsibleUserBubble({
   className,
   segments,
   taskId,
+  collapseHeight = USER_BUBBLE_COLLAPSE_HEIGHT,
 }: {
   className: string
   segments: Array<{
@@ -357,6 +369,8 @@ function CollapsibleUserBubble({
   }>
   /** 当前 Task ID（透传给 UserMessageReplay，点击 workspace_file 胶囊时反查工作区根）。 */
   taskId?: string
+  /** 折叠阈值(px)：内容高度超过该值时折叠；缺省 = 普通用户消息阈值(220px)。 */
+  collapseHeight?: number
 }) {
   const contentRef = React.useRef<HTMLDivElement>(null)
   const [overflowing, setOverflowing] = React.useState(false)
@@ -366,13 +380,13 @@ function CollapsibleUserBubble({
     const el = contentRef.current
     if (!el) return
     const check = () => {
-      setOverflowing(el.scrollHeight > USER_BUBBLE_COLLAPSE_HEIGHT + 1)
+      setOverflowing(el.scrollHeight > collapseHeight + 1)
     }
     check()
     const observer = new ResizeObserver(check)
     observer.observe(el)
     return () => observer.disconnect()
-  }, [])
+  }, [collapseHeight])
 
   const collapsed = overflowing && !expanded
 
@@ -380,7 +394,11 @@ function CollapsibleUserBubble({
     <div
       className={`${className}${collapsed ? ' nagent-msg__bubble--collapsed' : ''}`}
     >
-      <div ref={contentRef} className="nagent-msg__bubble-content">
+      <div
+        ref={contentRef}
+        className="nagent-msg__bubble-content"
+        style={collapsed ? { maxHeight: `${collapseHeight}px` } : undefined}
+      >
         <UserMessageReplay segments={segments} taskId={taskId} />
       </div>
       {overflowing ? (

@@ -31,7 +31,7 @@ public class SubAgentTools {
     public String run_agent(
             @ToolParam(description = "交给子 agent 的完整任务描述(需自包含,不能引用本对话内容)") String input,
             @ToolParam(description = "简短标题", required = false) String title,
-            @ToolParam(description = "指定复用的 agentId", required = false) String agentId) {
+            @ToolParam(description = "指定复用的 agentId(来自 list_agents,可跨轮续跑此前轮次的子 agent)", required = false) String agentId) {
         try {
             return subAgentManager.run(ctx, input, title, agentId);
         } catch (InterruptedException e) {
@@ -40,7 +40,7 @@ public class SubAgentTools {
         }
     }
 
-    @Tool(description = "列出当前任务下全部子 agent,返回 JSON {agents:[{agentId,title,createdAt,status,latestActivity}]};"
+    @Tool(description = "列出当前任务下全部子 agent(含此前轮次已收口的),返回 JSON {agents:[{agentId,title,createdAt,status,latestActivity}]};"
             + "status 终态为 completed/stopped/error,running 运行中,waiting-user 表示该子 agent 挂起等待用户回答;"
             + "latestActivity 是最近一次活动快照(reasoning/content/error/createdAt/updatedAt),不含完整历史。",
             resultConverter = PlainTextToolCallResultConverter.class)

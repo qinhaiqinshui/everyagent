@@ -12,6 +12,13 @@
  * 双 `//` 是 Unix 外部路径的专用标记,使其与工作区相对路径(`home/user/...` → `/home/user/...`)
  * 在业务坐标中可区分——否则 normalizeWorkspaceRelativePath 会剥掉 Unix 绝对路径的
  * 前导 `/`,导致两者不可区分(Windows 靠盘符天然可区分,无需双 `/`)。
+ *
+ * 单前导 `/` 的输入对 toBusinessAbsolutePath 而言**是已业务化的绝对形态**(工作区业务
+ * 路径 `/src/main.ts`),函数对其幂等;它与 Unix 机器原始路径(`/home/user/...`)在字面
+ * 上不可区分,故机器原始路径(AI 工具参数形态)一律走 machinePathToBusiness 显式转换,
+ * 不得复用 toBusinessAbsolutePath(曾把资源管理器子目录新建文件的 `/.everyagent/t.txt`
+ * 误判成 Unix 绝对路径叠加成 `//`,worker 侧当机器路径解析成盘符相对路径
+ * `C:\.everyagent\t.txt` 报 NOT_FOUND)。
  */
 
 /** 工作区根(展示形态,实际 API 用空串)。 */
@@ -36,15 +43,37 @@ export function normalizeWorkspaceRelativePath(value: string): string {
     .join('/')
 }
 
-/** 把任意形态的业务路径规范为「带前导 / 的绝对业务路径」(展示形态)。 */
+/**
+ * 把任意形态的**业务路径**规范为「带前导 / 的绝对业务路径」(展示形态)。
+ *
+ * 输入是业务坐标路径(工作区相对 `src/main.ts`、Windows 外部盘符 `C:/Users/...`、
+ * 或已是业务绝对形态的 `/src/main.ts`、`/C:/Users/...`、`//home/user/...`),
+ * 对已是业务形态的输入**幂等**:单前导 `/` 只视为工作区业务绝对形态补齐规范,
+ * 不再判定 Unix 绝对(否则 `/src/main.ts` → `//src/main.ts` 双标记叠加,后续
+ * 还原机器路径时被当成工作区外 Unix 绝对路径)。
+ * 机器原始路径(AI 工具参数,单 `/` 前导的 Unix 绝对路径与业务形态不可区分)
+ * 必须走 machinePathToBusiness。
+ */
 export function toBusinessAbsolutePath(value: string): string {
   const normalized = normalizeWorkspaceRelativePath(value)
-  // Unix 绝对路径(原值以 / 开头且非盘符)需用双 // 标记,使其与工作区相对路径可区分。
-  // Windows 盘符路径(C:/...)无前导 /,正常补单 / 即可(靠盘符区分)。
-  if (isUnixAbsolutePath(value)) {
+  // 已是业务形式的 Unix 外部路径(// 前缀)保持双 / 标记(幂等回显)。
+  if (value.replace(/\\/g, '/').startsWith('//')) {
     return '//' + normalized
   }
   return WORKSPACE_ROOT + normalized
+}
+
+/**
+ * 把**机器原始路径**(AI 工具参数形态:工作区相对 `src/main.ts`、Windows 盘符
+ * `C:/Users/...`、Unix 绝对 `/home/user/...`)转为业务绝对路径。
+ * 与 toBusinessAbsolutePath 的唯一差异:单前导 `/` 且非盘符的输入按 Unix 机器
+ * 绝对路径处理(→ 双 `//` 外部标记)——业务函数对同形态输入按已业务化处理(幂等)。
+ */
+export function machinePathToBusiness(value: string): string {
+  if (isUnixAbsolutePath(value)) {
+    return '//' + normalizeWorkspaceRelativePath(value)
+  }
+  return toBusinessAbsolutePath(value)
 }
 
 /**

@@ -16,13 +16,16 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 冷启动上下文重建(终态任务继续对话,架构 §5.3):
- * 读主 agent 的 &lt;mainAgentId&gt;.jsonl → Spring AI 会话消息序列:
- * user.message → UserMessage;message → AssistantMessage(正文 + 工具调用,真实 id);
- * tool.result → ToolResponseMessage;被中断的轮次(toolCalls 无配对 result)补合成结果。
+ * 冷启动上下文重建(按 agentId 中性,架构 §5.3):读指定 agent 的 &lt;agentId&gt;.jsonl →
+ * Spring AI 会话消息序列:user.message → UserMessage;message → AssistantMessage
+ * (正文 + 工具调用,真实 id);tool.result → ToolResponseMessage;被中断的轮次
+ * (toolCalls 无配对 result)补合成结果。
  * thinking 不进 conversation(自建 AssistantMessage 不带 reasoningContent,不回传 API)。
- * system 消息不进会话(主 agent 无预置 system;请求期 system 内容由 SkillAdvisor 等
- * advisor 注入)。子 agent 会话不重建(子 agent 一次性)。
+ * system 消息不进会话(主 agent 无预置 system;子 agent 的 system 由创建方装配时注入)。
+ * <p><b>角色中性</b>:主 agent(任务冷启动)、子 agent(跨轮/跨重启续跑)、AI 审议 agent
+ * 走同一事件名同一谓词同一入口,仅 agentId 不同——user.message 在 agent 层一视同仁
+ * (派生 agent 的指令同样以 user.message 落盘,带各自 agentId;主线程轮次语义与
+ * 前端主气泡是 task 层/展示层按 agentId 的职责,不进本回放器)。
  */
 public final class ConversationLoader {
 
@@ -34,17 +37,17 @@ public final class ConversationLoader {
     private ConversationLoader() {
     }
 
-    /** 磁盘 → 主 agent 会话前缀(不含 system;文件缺失/旧格式返回空列表)。 */
-    public static List<Message> load(TaskStore store, java.nio.file.Path dir, String mainAgentId) {
+    /** 磁盘 → 指定 agent 会话前缀(不含 system;文件缺失/旧格式返回空列表)。角色中性:传什么 agentId 重建谁。 */
+    public static List<Message> load(TaskStore store, java.nio.file.Path dir, String agentId) {
         List<Message> out = new ArrayList<>();
-        if (mainAgentId == null || mainAgentId.isEmpty()) {
+        if (agentId == null || agentId.isEmpty()) {
             return out; // 旧格式任务:无会话文件可重建
         }
         List<EventRecord> records;
         try {
-            records = store.readAgentEvents(dir, mainAgentId, 0, MAX);
+            records = store.readAgentEvents(dir, agentId, 0, MAX);
         } catch (java.io.IOException e) {
-            log.warn("会话重建读取失败 dir={} agent={}", dir, mainAgentId, e);
+            log.warn("会话重建读取失败 dir={} agent={}", dir, agentId, e);
             return out;
         }
         List<ToolCall> pending = null;

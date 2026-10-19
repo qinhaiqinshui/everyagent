@@ -1471,7 +1471,9 @@ const panelStyle: React.CSSProperties = {
 const bodyStyle: React.CSSProperties = {
   flex: 1,
   minHeight: 0,
-  overflowY: 'auto',
+  // 滚动职责归 SidebarScrollArea 的 viewport(overflow-y:auto + overflow-x:hidden);
+  // 内容层若再设 overflowY:auto,按 CSS 规范另一方向 visible 会被计算为 auto,
+  // 内容一旦超宽(超长文件名)这层就会自己变成双向滚动容器,冒出横向滚动条。
   display: 'flex',
   flexDirection: 'column',
   gap: 16,

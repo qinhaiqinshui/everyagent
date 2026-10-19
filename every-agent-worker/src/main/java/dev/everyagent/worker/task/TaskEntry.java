@@ -2,6 +2,7 @@ package dev.everyagent.worker.task;
 
 import dev.everyagent.plugin.api.agent.AgentContext;
 import dev.everyagent.plugin.api.agent.AgentFactory;
+import dev.everyagent.plugin.api.agent.CompressionSeed;
 import dev.everyagent.plugin.api.event.EventLogReader;
 import dev.everyagent.plugin.api.event.EventRecord;
 import dev.everyagent.plugin.api.event.Events;
@@ -204,6 +205,24 @@ public final class TaskEntry implements TaskRuntime {
         return bound;
     }
 
+    /** 会话档案口裸依赖(TaskManager → TaskEntryCreateNode 组装时注入;单测直构场景可缺)。 */
+    private volatile dev.everyagent.plugin.api.agent.ConversationArchive conversationArchive;
+
+    /**
+     * 已绑定本主体的会话档案口(角色中性,§5.3):按 agentId 经 TaskStore +
+     * ConversationLoader 从 {@code <agentId>.jsonl} 重建会话内存——主/子/审议 agent
+     * 一视同仁。未注入时返回 null(单测直构场景)。
+     */
+    @Override
+    public dev.everyagent.plugin.api.agent.ConversationArchive conversationArchive() {
+        return conversationArchive;
+    }
+
+    /** 注入会话档案口(TaskEntryCreateNode 创建本对象后调用)。 */
+    public void conversationArchive(dev.everyagent.plugin.api.agent.ConversationArchive archive) {
+        this.conversationArchive = archive;
+    }
+
     // ---- AgentContext 接口已删除，以下为 TaskEntry 自身方法 ----
 
     /** 工作区根路径。 */
@@ -271,6 +290,14 @@ public final class TaskEntry implements TaskRuntime {
     @Override
     public void truncateLogAfter(long targetSeq) {
         log.truncateAfter(targetSeq);
+    }
+
+    /** 指定 agent 的压缩冷启动校准种子(再运行回灌;供上下文压缩 advisor 首个请求比率折算,§7.5)。 */
+    @Override
+    public CompressionSeed compressionSeed(String agentId) {
+        synchronized (usageProjectionLock) {
+            return usageSeedByAgent.get(agentId);
+        }
     }
 
     public final Map<String, AgentEntity> agents = new ConcurrentHashMap<>();
@@ -356,6 +383,12 @@ public final class TaskEntry implements TaskRuntime {
     private final Map<String, Usage> usageRoundByAgent = new LinkedHashMap<>();
     /** 各 agent 最近一轮上下文窗口(与 usageRoundByAgent 同步维护)。 */
     private final Map<String, Long> usageWindowByAgent = new LinkedHashMap<>();
+    /**
+     * 各 agent 的压缩冷启动校准种子(§7.5;与 usageRoundByAgent 同锁维护)。
+     * <b>粘性</b>:仅携带 {@code fullViewEstTokens} 的轮次(= 全量未压缩发送视图)覆盖,
+     * 压缩视图轮次不更新——种子必须表征全量历史的估算偏差,才供再运行首个请求比率折算。
+     */
+    private final Map<String, CompressionSeed> usageSeedByAgent = new LinkedHashMap<>();
 
     /**
      * 订阅本主体事件流,把新增事件中的 {@code usage} 投影为任务级最近一轮占用。
@@ -413,6 +446,12 @@ public final class TaskEntry implements TaskRuntime {
         usageRoundByAgent.put(agentId, new Usage(in, out, total > 0 ? total : in + out));
         usageWindowByAgent.put(agentId,
                 ctxWindow > 0 ? ctxWindow : WorkerConfig.DEFAULT_CONTEXT_WINDOW_TOKENS);
+        // 压缩冷启动种子(§7.5):仅携带 fullViewEstTokens 的轮次(= 全量未压缩发送视图)更新;
+        // 压缩视图轮次不覆盖——其估算/实测比率不表征全量历史的估算偏差。
+        long fullViewEst = data.path("fullViewEstTokens").asLong(0);
+        if (fullViewEst > 0) {
+            usageSeedByAgent.put(agentId, new CompressionSeed(in, fullViewEst, model));
+        }
         recomputeAggregate(model.isEmpty() ? null : model);
         // 先更新后广播:钩子内组装 runtimeSummaryJson(此刻已含本轮占用)再 fanout tasks 频道。
         Runnable broadcast = onUsageBroadcast;
@@ -472,6 +511,15 @@ public final class TaskEntry implements TaskRuntime {
                 if (w != null && w > 0) {
                     item.put("contextWindowTokens", w);
                 }
+                // 压缩冷启动种子(§7.5):随 usageByAgent 落盘,供再运行首个请求比率折算
+                CompressionSeed seed = usageSeedByAgent.get(e.getKey());
+                if (seed != null && seed.usable()) {
+                    item.put("seedInputTokens", seed.measuredInputTokens());
+                    item.put("seedEstTokens", seed.estimatedSentTokens());
+                    if (seed.model() != null && !seed.model().isEmpty()) {
+                        item.put("seedModel", seed.model());
+                    }
+                }
             }
             return root;
         }
@@ -508,6 +556,13 @@ public final class TaskEntry implements TaskRuntime {
                 usageRoundByAgent.put(e.getKey(), new Usage(in, out, total > 0 ? total : in + out));
                 usageWindowByAgent.put(e.getKey(),
                         window > 0 ? window : WorkerConfig.DEFAULT_CONTEXT_WINDOW_TOKENS);
+                // 压缩冷启动种子(§7.5)成对回灌:无种子字段的旧任务/压缩视图收尾的运行天然跳过
+                long seedIn = item.path("seedInputTokens").asLong(0);
+                long seedEst = item.path("seedEstTokens").asLong(0);
+                if (seedIn > 0 && seedEst > 0) {
+                    usageSeedByAgent.put(e.getKey(),
+                            new CompressionSeed(seedIn, seedEst, item.path("seedModel").asString("")));
+                }
                 seeded = true;
             }
             // 一条都没恢复(旧任务 meta 无该字段/形状异常):保持 seedUsageMeta 的聚合基线原样,

@@ -712,8 +712,9 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
     setComposerBridge(composerDraftBridge)
   }, [composerDraftBridge, isActive])
 
-  // 从线程派生 agent 列表:主 agent(mainAgentId)恒在首位,子 agent 按首次出现顺序。
-  // 线程内主 agent 消息 agentId 为空串(缺省=主线程),此处归一到 mainAgentId 供列表/过滤使用。
+  // 从线程派生 agent 列表:主 agent(mainAgentId,task 层传入的固定 id)恒在首位,
+  // 子 agent 按首次出现顺序。折叠器内主 agent 键即 mainAgentId(缺 agentId 的旧形态
+  // 事件也已在折叠入口归一),此处 rawKey || stableMainAgentId 是双保险。
   // 除 items 外还并入 agentMeta 的子 agent 键(task.agents 台账 seed):历史任务过程内容
   // 未懒加载、items 尚无子 agent 消息时,胶囊列表也能显示全部子 agent(items 派生优先,
   // meta 补齐追加在后;title 取 resolveAgentTitle 优先,兜底 meta.title)。
@@ -741,8 +742,8 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
     }
     if (agentMeta) {
       for (const [agentId, meta] of Object.entries(agentMeta)) {
-        // 键语义:主 agent = ''(已由 mainAgentId 占位,跳过);子 = 子 id。
-        if (!agentId || seen.has(agentId)) {
+        // 键语义:主 agent = mainAgentId(已由名单首位占位,跳过);子 = 子 id。
+        if (stream?.folder.isMain(agentId) || seen.has(agentId)) {
           continue
         }
         seen.set(agentId, stream?.resolveAgentTitle(agentId) ?? meta.title ?? agentId)
@@ -758,8 +759,8 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
     return [...seen.entries()].map(([agentId, title]) => ({ agentId, title }))
   }, [items, stream, stableMainAgentId, agentMeta])
 
-  // agent 长条列表项:状态来自事件折叠器的 agentStates(主 agent 键为空串 '';子 agent 键 = 子 id);
-  // meta 同源(键:主 = '',子 = 子 id)→ 悬停信息卡数据 + 子 agent 胶囊底部上下文用量线
+  // agent 长条列表项:状态来自事件折叠器的 agentStates(主 agent 键 = mainAgentId,子 agent 键 = 子 id);
+  // meta 同源(键:主 = mainAgentId,子 = 子 id)→ 悬停信息卡数据 + 子 agent 胶囊底部上下文用量线
   // (contextRatio = contextUsed / contextWindow,clamp 到 0~1;无数据 undefined)。
   const agentListItems = React.useMemo<AgentListItem[]>(() => {
     const states = stream?.state.agentStates ?? {}
@@ -769,7 +770,7 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
     const entryStatusTerminaled = entryStatus === 'completed' || entryStatus === 'stopped' || entryStatus === 'error'
     return agents.map((agent) => {
       const isMain = agent.agentId === stableMainAgentId
-      const meta = metas[isMain ? '' : agent.agentId]
+      const meta = isMain ? metas[stableMainAgentId] : metas[agent.agentId]
       const contextUsed = meta?.contextUsed
       const contextWindow = meta?.contextWindow
       const contextRatio = contextUsed != null && contextWindow != null && contextWindow > 0
@@ -779,12 +780,12 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
         agentId: agent.agentId,
         title: agent.title,
         status: isMain
-          // 主 agent:任务终态时,任务状态(entry.status)是权威——流事件 agentStates['']
+          // 主 agent:任务终态时,任务状态(entry.status)是权威——流事件 agentStates[mainAgentId]
           // 可能因 resync reset 后丢失、或被 cancelled 等事件设为 stopped 而与实际任务
           // 终态(completed)不一致;非终态时流事件优先(反映 running/waiting-user 实时状态)。
           ? (entryStatusTerminaled
             ? entryStatus
-            : (states[''] ?? (entryStatus ?? 'idle')))
+            : (states[stableMainAgentId] ?? (entryStatus ?? 'idle')))
           : (states[agent.agentId] ?? 'idle'),
         isMain,
         meta,
@@ -804,7 +805,7 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
   // 徽标、不渲染 agentId 行):此前这里借主 agent 的 agentId/isMain 整形,电池详情卡因此
   // 长得像主 agent 的卡片、把「Σ 全部 agent」读成主 agent 自己的用量(2026-10 修复)。
   // 主 agent 卡片(agentListItems 中的 isMain 项)只显示其自身用量,数据源与子 agent
-  // 一致(agentMeta[''] ← 台账 + 流内 usage 事件)。
+  // 一致(agentMeta[mainAgentId] ← 台账 + 流内 usage 事件)。
   const batteryItem = React.useMemo<AgentListItem | null>(() => {
     const mainItem = agentListItems.find((item) => item.isMain) ?? null
     const metas = agentListItems

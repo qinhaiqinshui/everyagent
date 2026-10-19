@@ -2,6 +2,7 @@ package dev.everyagent.plugin.api.execution;
 
 import dev.everyagent.plugin.api.agent.AgentContext;
 import dev.everyagent.plugin.api.agent.AgentFactory;
+import dev.everyagent.plugin.api.agent.CompressionSeed;
 import dev.everyagent.plugin.api.interaction.InteractionService;
 import dev.everyagent.plugin.api.model.EventEmitter;
 import dev.everyagent.plugin.api.model.ModelConfig;
@@ -69,6 +70,25 @@ public interface ExecContext {
      * 与 emitter()/agentFactory() 同为预绑定端口。
      */
     InteractionService interaction();
+
+    /**
+     * 已绑定本主体的会话档案口：按 agentId 从磁盘事件档案重建该 agent 的会话内存
+     * (角色中性——主/子/审议一视同仁,见 {@link dev.everyagent.plugin.api.agent.ConversationArchive})。
+     * 跨轮续跑/冷重启后恢复派生 agent 历史上下文用;与 emitter()/agentFactory()/
+     * interaction() 同为预绑定端口。
+     */
+    default dev.everyagent.plugin.api.agent.ConversationArchive conversationArchive() {
+        return null;
+    }
+
+    /**
+     * 指定 agent 的上下文压缩冷启动校准种子(再运行时从 {@code meta.usageByAgent} 回灌;无则 null)。
+     * 与 conversationArchive() 同为角色中性的按 agentId 取数口;上下文压缩 advisor 在运行内
+     * 加性 offset 校准尚无数据的首个请求据此做比率折算(§7.5)。
+     */
+    default CompressionSeed compressionSeed(String agentId) {
+        return null;
+    }
 
     /**
      * 本主体的活动 agent 注册表（可读写 Map：put/get/values/containsKey）。

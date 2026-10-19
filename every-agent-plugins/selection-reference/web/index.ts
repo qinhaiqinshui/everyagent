@@ -15,7 +15,9 @@
  * 本插件只做两件事（全部经宿主通用扩展点，零菜单代码、零 DOM 操作、零 opaque 编码）：
  *   1) ui.editor_context_menu_actions → ctx.ui.registerEditorContextMenuAction()
  *      编辑器内容区右键「引用到AI对话框」：把选区经 ctx.ui.appendComposerToken 插入
- *      kind=file.selection 的胶囊（opaque token 编码由宿主单点负责）；
+ *      kind=file.selection 的胶囊（opaque token 编码由宿主单点负责）；打开草稿标签时
+ *      带上 workspace 预设（= 选区所属文件的工作区根），新任务即挂靠该工作区
+ *      （宿主 task 标签 createTab 的 `workspace` 参数 → 草稿预设，与任务页组「+」同范式）；
  *   2) ui.composer_chip_actions → ctx.ui.registerComposerChipAction()
  *      点击该胶囊：切回原文件标签并定位选区起始行（经 ctx.ui.openFileTab）。
  */
@@ -58,7 +60,10 @@ const selectionReferencePlugin: PluginModule = {
         // 先打开新草稿任务标签页（通用入口），再把选区胶囊写入该标签页草稿。
         // 新标签页的 TaskChat 可能尚未挂载、composerBridge 尚未注入，
         // 由宿主 appendComposerToken → 队列兜底，bridge 注入时自动 flush。
-        ctx.ui.openTab('task', { taskId: '__draft__' }, '新任务')
+        // workspace 预设 = 选区所属文件的工作区根：新任务必须挂靠文件所在工作区
+        // （task 标签 createTab 对 draft + workspace 会先切草稿预设，草稿文本保留）；
+        // 不带该参数时宿主会清空预设，草稿回退到注册表首选根 → 工作区选错。
+        ctx.ui.openTab('task', { taskId: '__draft__', workspace: c.workspaceRoot }, '新任务')
         // 展开为对象字面量以满足 appendComposerToken 的 Record<string, unknown> 形参
         // （interface 无索引签名，直接传会被 TS 判为不可赋值）。
         ctx.ui.appendComposerToken({

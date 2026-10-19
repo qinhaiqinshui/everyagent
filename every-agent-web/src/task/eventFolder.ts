@@ -8,7 +8,10 @@
  *
  * 折叠规则(与 n 的写入语义对齐):
  * 事件名不分主/子 agent——同一名事件,归属由 agentId 字段决定(空 = 主线程);
- * - user.message           → role:'user' 消息(payload.content + payload.data.rawContent)
+ * - user.message           → role:'user' 消息(payload.content + payload.data.rawContent);
+ *                           主/子 agent 共用同一事件名,foldRole='user' 仅主 agent 打标
+ *                           (折叠窗口起点);子 agent 的 user.message 同样以消息插入但不打标,
+ *                           作为过程内容落入折叠窗口内(渲染层按 agentId 区分样式与扩展点)
  * - thinking / delta       → 当前流式 assistant 消息的 reasoning / content 追加(瞬态,payload.content)
  * - message                → 一轮权威终结:完整 content/data.thinking/data.toolCalls(真实 toolCall id)
  *                           定稿该 agent 的流式消息
@@ -18,7 +21,7 @@
  * - tool.result            → role:'tool' 消息(TaskChat 按 callId 合并进下发块渲染)
  * - agent.started/done     → 子 agent trace(spawn 生命周期,必带 agentId);同时合并 agentMeta
  *                           (标题/创建时间/收口累计用量)
- * - error                  → trace(带 agentId = 子任务出错;缺省 = 任务出错)
+ * - error                  → trace(agentId = 事件真实归属;主/子标题按 isMain(agentKey === mainAgentId) 判定)
  * - cancelled              → trace
  * - retry / context.compression / model.failover / model.switch / auth.review / system.notice
  *                           → 统一纯显示 trace:按 seq 原地 upsert(有则覆盖内容、无则新增),
@@ -70,13 +73,13 @@ export interface TaskThreadState {
   taskId: string
   items: TaskThreadItem[]
   /**
-   * agent 状态表:agentId(主 agent = 空串 '') → 当前状态。
+   * agent 状态表:agentId(主 agent = mainAgentId,task 层传入的固定 id) → 当前状态。
    * 事件源:worker 的 agent.status(权威,持久);旧磁盘回放无该事件时由
    * agent.started/done/error/cancelled/ask.* 兜底推导。驱动输入框上方 agent 圆列表。
    */
   agentStates: Record<string, AgentStatus>
   /**
-   * 子 agent/主 agent 元数据快照表:键语义同 agentStates(主 agent = 空串 '',子 = 子 id)。
+   * 子 agent/主 agent 元数据快照表:键语义同 agentStates(主 agent = mainAgentId,子 = 子 id)。
    * 基线由 task.agents 台账(seedAgents,open 时一次)灌入,实时流事件
    * (usage/agent.started/agent.done)字段级覆盖;驱动子 agent 胶囊列表/悬停卡片。
    */
@@ -85,6 +88,13 @@ export interface TaskThreadState {
   taskModel?: TaskModelInfo | null
   /** slash 任务级 token(slash.tokens.changed 事件 REPLACE 更新;null=未收到)。 */
   slashTokens?: string[] | null
+  /**
+   * 主 agent 固定 id(task 层传入:task.agents 应答 / TaskSummary.mainAgentId)。
+   * 一切「主 agent」判定唯一依据(键控 agentStates/agentMeta、foldRole 折叠窗口、
+   * final_reply 打标等)——不使用「空串=主」魔法。open 早期未灌入时折叠器以
+   * isMain 的空串兼容回退兜底;事件缺 agentId(旧 wire 形态)归一到 mainAgentId。
+   */
+  mainAgentId: string
 }
 
 /** worker 流事件(SDK TaskEvent 同形;数据包模式下 seq 可为 Snowflake string)。 */
@@ -140,6 +150,43 @@ export class TaskEventFolder {
     // 防御:旧 state 形状可能缺 agentMeta(本项目前端不做持久化缓存,理论上无旧数据,
     // 折叠器实例仍可能被灌入外部构造的旧形状 state,这里兜底补空表)。
     if (!state.agentMeta) state.agentMeta = {}
+    if (!state.mainAgentId) state.mainAgentId = ''
+  }
+
+  /**
+   * 灌入主 agent 固定 id(task 层传入;open 流程尽早调用——TaskStream 构造/resolved
+   * 时从 TaskSummary.mainAgentId、task.agents 应答 seedAgents 时各灌一次,幂等)。
+   * 空值不覆盖(防陈旧回退);一经灌入即作为 isMain 的唯一判据。
+   */
+  setMainAgentId(mainAgentId: string): void {
+    if (mainAgentId && mainAgentId !== this.state.mainAgentId) {
+      this.state.mainAgentId = mainAgentId
+    }
+  }
+
+  /** 主 agent 键(mainAgentId 灌入前为空串,与旧形态键兼容)。 */
+  mainKey(): string {
+    return this.state.mainAgentId || ''
+  }
+
+  /**
+   * 是否主 agent:键 === mainAgentId(task 层传入的固定 id)。
+   * mainAgentId 尚未灌入(open 极早期)时回退旧形态空串判据,兜住先到的骨架/事件。
+   */
+  isMain(agentKey: string): boolean {
+    if (this.state.mainAgentId) return agentKey === this.state.mainAgentId
+    return agentKey === ''
+  }
+
+  /**
+   * 事件的 agent 键:payload.agentId 缺失(旧 wire 形态主 agent 事件不带 agentId)时
+   * 归一到 mainAgentId——新 wire 全事件必带真实 agentId(主=mainAgentId),旧数据经
+   * 此归一后与新数据键域一致。
+   */
+  agentKeyOf(event: FoldableTaskEvent): string {
+    return event.agentId
+      ?? (event.payload?.agentId as string | undefined)
+      ?? this.mainKey()
   }
 
   /**
@@ -157,6 +204,9 @@ export class TaskEventFolder {
     this.state.agentStates = {}
     this.state.agentMeta = {}
     this.state.taskModel = null
+    // mainAgentId 与 slashTokens 同理不参与重置:任务级身份,由 task 层(TaskSummary/
+    // task.agents)传入,reset(编辑重发重拉)后不变;清掉会让随后折叠的事件回退
+    // 空串键、isMain 误判。
     this.bySeq.clear()
     this.anchors.streaming.clear()
     this.anchors.toolNames.clear()
@@ -216,7 +266,7 @@ export class TaskEventFolder {
         : userText
       const userMessage: AgentMessageRecord = {
         messageId: `m-${round.startSeq}`,
-        agentId: '',
+        agentId: this.mainKey(),
         role: 'user',
         content: userText,
         rawContent: userRaw,
@@ -235,7 +285,7 @@ export class TaskEventFolder {
       if (!this.bySeq.has(endSeqKey)) {
         const finalMessage: AgentMessageRecord = {
           messageId: `m-${round.endSeq}`,
-          agentId: '',
+          agentId: this.mainKey(),
           role: 'assistant',
           content: round.finalReply,
           rawContent: round.finalReply,
@@ -271,22 +321,29 @@ export class TaskEventFolder {
    */
   seedAgents(agents: TaskAgentLedgerItem[], mainAgentId: string): boolean {
     let changed = false
+    // task 层传入的主 agent 固定 id:一经灌入即作为 isMain 的唯一判据(空值不覆盖)。
+    if (mainAgentId && mainAgentId !== this.state.mainAgentId) {
+      this.state.mainAgentId = mainAgentId
+      changed = true
+    }
     for (const item of agents) {
       if (!item || !item.agentId) continue
-      const key = item.agentId === mainAgentId ? '' : item.agentId
+      // 键 = 台账原生 agentId(主 agent 条目即 mainAgentId,子 = 子 id)——不再归一成
+      // 空串;「是否主 agent」一律经 isMain 判定。
+      const key = item.agentId
       // 状态兜底:历史任务打开时流事件(agent.status)不随 rounds 骨架折入,agentStates
       // 无该键 → 子 agent 胶囊落回灰色 idle。台账 status 落盘即权威(live 内存实时),
       // 终态(completed/stopped/error)始终覆盖——流推送可能因 DataPusher 与 finish
       // 驱逐的竞态丢失子 agent done 事件,台账是兜底权威;
       // 非终态(running/waiting-user)仅在 agentStates 尚无值时填入(不覆盖流事件实时状态)。
       //
-      // 主 agent(键 '') 例外:agent 状态是 **per-run()** 的(一条输入一轮,每轮
+      // 主 agent 例外:agent 状态是 **per-run()** 的(一条输入一轮,每轮
       // started→…→done,见 worker §7.20.1),队列连着多条输入时台账里主 agent 会是上一轮的
       // completed 而新一轮正在 running。台账快照可能晚于实时事件到达(主 agent 终态会触发
       // 重拉 task.agents),用它覆盖就会把正在跑的主胶囊按回「已完成」直到本轮结束。
       // 主 agent 的状态交给流事件,兜底由 TaskChat 用任务态(entry.status)做——那里已有
-      // `states[''] ?? entryStatus ?? 'idle'`;台账只为主 agent 提供 title/usage/context 基线。
-      if (item.status && key !== '') {
+      // `states[mainAgentId] ?? entryStatus ?? 'idle'`;台账只为主 agent 提供 title/usage/context 基线。
+      if (item.status && !this.isMain(key)) {
         const mapped = mapAgentStatus(String(item.status))
         if (mapped && (isTerminalAgentStatus(mapped) || this.state.agentStates[key] === undefined)) {
           if (this.state.agentStates[key] !== mapped) {
@@ -383,7 +440,7 @@ export class TaskEventFolder {
     return this.anchors.subTitles.get(agentId) ?? this.state.agentMeta[agentId]?.title
   }
 
-  /** agent 状态查询(agent 圆列表用)。key 语义同线程项:主 agent = 空串,子 agent = 子 id。 */
+  /** agent 状态查询(agent 圆列表用)。key 语义同线程项:主 agent = mainAgentId,子 agent = 子 id。 */
   resolveAgentStatus(agentId: string): AgentStatus {
     return this.state.agentStates[agentId] ?? 'idle'
   }
@@ -437,7 +494,7 @@ export class TaskEventFolder {
   /**
    * agentMeta 幂等合并(字段级:undefined 不覆盖已有值;updatedAt 双方都有时取较大者,
    * 保证 task.agents 台账 seed 不回退流事件已写入的更新时间)。键语义同 agentStates/
-   * 线程项:主 agent = 空串,子 agent = 子 id。返回 true 表示该键快照有变化。
+   * 线程项:主 agent = mainAgentId,子 agent = 子 id。返回 true 表示该键快照有变化。
    */
   mergeAgentMeta(agentKey: string, patch: Partial<AgentMetaSnapshot>): boolean {
     const prev = this.state.agentMeta[agentKey]
@@ -473,7 +530,9 @@ export class TaskEventFolder {
       type: 'agent_message',
       createdAt: message.createdAt,
       message,
-      foldRole: message.role === 'user' ? 'user' : undefined,
+      // 仅主 agent 的 user 消息标 foldRole='user'(折叠窗口起点);子 agent 的
+      // user.message 同样经此插入但不打标,作为过程内容落入折叠窗口内。
+      foldRole: message.role === 'user' && this.isMain(message.agentId || agentKey) ? 'user' : undefined,
     }
     this.insertItemBySeq(item, seqKey, seqKey)
   }
@@ -785,7 +844,7 @@ export class TaskEventFolder {
     }
     // 折叠扫描:权威 message 定稿后判定 AI 最终回复——
     // 主 agent 的 assistant 消息,无工具调用且有正文 = 折叠窗口终点(界面上左侧一条)。
-    if (agentKey === '' && toolCalls.length === 0 && (message.content ?? '').trim().length > 0) {
+    if (this.isMain(agentKey) && toolCalls.length === 0 && (message.content ?? '').trim().length > 0) {
       this.markFinalReply(message)
     }
   }
@@ -918,7 +977,7 @@ export function readUsage(value: unknown): { inputTokens: number; outputTokens: 
 
 /** 空状态。 */
 export function emptyThreadState(taskId: string): TaskThreadState {
-  return { taskId, items: [], agentStates: {}, agentMeta: {}, slashTokens: null }
+  return { taskId, items: [], agentStates: {}, agentMeta: {}, slashTokens: null, mainAgentId: '' }
 }
 
 /** agentMeta 快照字段级相等判定(mergeAgentMeta 变更检测;undefined 与缺失视为同值)。 */

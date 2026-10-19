@@ -29,7 +29,9 @@ import tools.jackson.databind.node.ObjectNode;
  *   <li>轮次级先以域中性 JSON 视图跑链(可裁剪 agentRanges),再 wire(seq 字符串化)。</li>
  * </ul>
  *
- * <p>wire 形态:主 agent 事件不带 payload.agentId(前端以缺省识别主线程),子 agent 事件必带;
+ * <p>wire 形态:**所有事件必带 payload.agentId**(主 agent = mainAgentId,派生 agent = 各自 id,
+ * agent 层一视同仁);前端按 task 层传入的 mainAgentId(task.agents 应答 / TaskSummary)判主,
+ * 旧任务事件行 agentId 缺失时前端归一到 mainAgentId。
  * seq 序列化为字符串(64 位 Snowflake &gt; JS Number.MAX_SAFE_INTEGER,wire 传输必须字符串)。
  */
 @Component
@@ -46,10 +48,11 @@ public class EgressProjector {
 
     /**
      * 事件级出网投影:先按 order 跑 {@link EventEgressFilter} 链(可丢/改),通过后执行原 wire 逻辑
-     * (把子 agent 事件注入 payload.agentId、seq 字符串化等)。
+     * (把事件的 agentId 注入 payload、seq 字符串化)。
      *
      * @param subjectId  主体 id(task 域 = taskId)
-     * @param mainAgentId 主 agent id(子 agent 事件据此判定是否注入 payload.agentId)
+     * @param mainAgentId 主 agent id(当前 wire 逻辑不再使用——事件必带自身 agentId;保留参数
+     *                    供过滤链按主体语义裁剪时取用)
      * @return 前端可合并的事件 JSON;被过滤链丢弃时返回 {@code null}(调用方跳过推送,但游标仍推进)
      */
     public ObjectNode projectEvent(String subjectId, String mainAgentId, EventRecord r) {
@@ -61,7 +64,7 @@ public class EgressProjector {
                 return null; // 丢弃(不进入任何出网口;事件仍照常落盘)
             }
         }
-        return wireEvent(cur, mainAgentId);
+        return wireEvent(cur);
     }
 
     /**
@@ -87,18 +90,21 @@ public class EgressProjector {
     // ---- 事件 wire(自 TaskEvents.wireEvent 原样迁入)----
 
     /**
-     * 单条记录 → 前端可合并的事件 JSON:子 agent 事件把 agentId 并入 payload;
-     * 主 agent 事件(agentId == mainAgentId)不并入——前端以 payload.agentId 缺省识别主线程。
+     * 单条记录 → 前端可合并的事件 JSON:**所有 agent 的 agentId 一律并入 payload**
+     * (主 agent = mainAgentId,派生 agent = 各自 id)——wire 上主/派生同构,前端按
+     * task 层传入的 mainAgentId 判主(task.agents 应答 / TaskSummary),不使用
+     * 「payload.agentId 缺省 = 主线程」魔法。旧任务事件行 agentId 缺失时前端归一到
+     * mainAgentId(见前端 TaskEventFolder.agentKeyOf)。
      * seq 序列化为字符串(64 位 Snowflake &gt; JS Number.MAX_SAFE_INTEGER,wire 传输必须字符串,
      * 否则前端 JSON.parse 丢精度会把相邻事件判为同 seq 丢弃)。
      */
-    private static ObjectNode wireEvent(EventRecord r, String mainAgentId) {
+    private static ObjectNode wireEvent(EventRecord r) {
         ObjectNode e = Json.obj();
         e.put("seq", String.valueOf(r.seq()));
         e.put("ts", r.ts());
         e.put("event", r.event());
         JsonNode payload = r.payload();
-        if (r.agentId() != null && !r.agentId().equals(mainAgentId)
+        if (r.agentId() != null && !r.agentId().isEmpty()
                 && payload != null && payload.isObject()) {
             ObjectNode merged = ((ObjectNode) payload).deepCopy();
             merged.put("agentId", r.agentId());

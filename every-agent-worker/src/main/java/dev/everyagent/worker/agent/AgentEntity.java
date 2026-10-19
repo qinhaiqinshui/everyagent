@@ -252,6 +252,19 @@ public final class AgentEntity implements Agent {
         return lastModel;
     }
 
+    /** 最近一次「全量未压缩发送视图」的 token 估算(上下文压缩 advisor 记账;usage 事件载荷供体,§7.5)。 */
+    private volatile long fullViewEstTokens;
+
+    @Override
+    public long fullViewEstTokens() {
+        return fullViewEstTokens;
+    }
+
+    @Override
+    public void fullViewEstTokens(long est) {
+        fullViewEstTokens = est;
+    }
+
     public void recordLastRound(Usage round, Usage total, Long contextWindowTokens, String model) {
         if (round != null) {
             lastRound = round;
