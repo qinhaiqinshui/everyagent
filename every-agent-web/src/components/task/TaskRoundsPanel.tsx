@@ -490,8 +490,17 @@ function TailRoundView({
   onLoadMoreBackward: () => void
   onLoadMoreForward: () => void
 }): React.ReactNode {
+  // 剥掉尾轮起点 user 气泡：它已由上层 userItem(tailUserItem) 单独渲染，留在 tailItems
+  // 里会重复。但只剥「本轮起点那条」(messageId === userItem)，不能只看 role==='user' ——
+  // agent 过滤态下起点 user 气泡(主 agent)被 matches 滤出 tailItems，此时 tailItems[0]
+  // 可能是子 agent 的首条 user.message(刚启动时给该 agent 的指令)，按 role 误剥就会
+  // 把它丢掉(后续续跑的 user.message 不在 [0] 故不受影响、正常显示)。
   const afterUser =
-    tailItems.length > 0 && tailItems[0].type === 'agent_message' && tailItems[0].message.role === 'user'
+    tailItems.length > 0
+    && tailItems[0].type === 'agent_message'
+    && tailItems[0].message.role === 'user'
+    && userItem?.type === 'agent_message'
+    && tailItems[0].message.messageId === userItem.message.messageId
       ? tailItems.slice(1)
       : tailItems
   return (
