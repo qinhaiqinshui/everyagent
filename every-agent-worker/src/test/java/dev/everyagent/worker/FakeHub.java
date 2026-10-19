@@ -4,6 +4,7 @@ import dev.everyagent.contract.frame.Frames;
 import dev.everyagent.contract.frame.StreamChannelParser;
 import dev.everyagent.contract.json.Json;
 import jakarta.websocket.OnClose;
+import jakarta.websocket.OnError;
 import jakarta.websocket.OnMessage;
 import jakarta.websocket.OnOpen;
 import jakarta.websocket.Session;
@@ -112,6 +113,12 @@ public class FakeHub {
             default -> {
             }
         }
+    }
+
+    /** 客户端断开/abort 的常规异常:无 @OnError 时 PojoEndpointBase 会打整段 ERROR 堆栈(测试噪音)。 */
+    @OnError
+    public void onError(Session session, Throwable error) {
+        // 测试里 worker 实例反复启停,连接被 abort 属预期路径,DEBUG 足够
     }
 
     @OnClose

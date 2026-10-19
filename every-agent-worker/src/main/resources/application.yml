@@ -184,12 +184,12 @@ spring:
 
 logging:
   level:
+    # 生产默认全 INFO:tools/os/task 的 DEBUG 属排障开关,已移 application-dev.yml——
+    # 此前写在打包默认里,生产 worker.log 被逐次 task.poll known 判定/生命周期 [chain]
+    # 追踪灌入上万行 DEBUG(实测占文件近两成)。需要时经 ~/.everyagent/application-worker.yaml
+    # 的 logging.level.dev.everyagent.worker.task: DEBUG 等条目随时恢复,无需改代码。
     dev.everyagent: INFO
     # AI 请求原始内容打印(排除 apiKey),走 DEBUG 级别:
     # 由 HttpRequestLoggingInterceptor 在 HTTP 层打印(真实报文,含 skill 渐进式披露索引等全部注入)。
     # 开发期设为 DEBUG 开启控制台打印,生产环境保持 INFO 即静默。
     dev.everyagent.worker.http.HttpRequestLoggingInterceptor: info
-
-    dev.everyagent.worker.tools: DEBUG
-    dev.everyagent.worker.os: DEBUG
-    dev.everyagent.worker.task: DEBUG
