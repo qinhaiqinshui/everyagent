@@ -108,9 +108,12 @@ class WorkerIntegrationTest {
                 ChatModelEnhancerRegistry enhancerRegistry,
                 ConfigStore configStore) {
             return new ChatModelFactory(props, enhancerRegistry, configStore) {
+                // 注意 override 的是 4 参 build:任务主路径(ThreadSubmitNode)经
+                // buildAgentModel 调 4 参重载,3 参 override 对主路径无效(曾致测试发真实 HTTP)。
                 @Override
                 public org.springframework.ai.chat.model.ChatModel build(ResolvedConfig cfg,
-                        org.springframework.ai.openai.OpenAiChatOptions options, String agentId) {
+                        org.springframework.ai.openai.OpenAiChatOptions options, String agentId,
+                        dev.everyagent.plugin.api.model.EventEmitter events) {
                     // 按模型名分派(模型池测试):model-b 正常回声;model-fail 抛运行时错误;
                     // model-net 抛 IO 错误;其余(默认 gpt-4o-mini)保持 FakeChatModel 既有行为。
                     String model = cfg.snapshot().model();
