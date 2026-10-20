@@ -56,6 +56,13 @@ public class WorkerProperties implements WorkerConfig {
      * {@code StreamResetException: stream was reset: CANCEL})。默认 10 分钟。
      */
     private long modelTimeoutMs = 600_000;
+    /**
+     * 模型流首帧看门狗(ms):流订阅成功后该时长内未收到任何 chunk → 以 TimeoutException
+     * 中断当前订阅,交瞬时错误退避重试;耗尽后任务显式报错。针对「连接建立但永不出数」的
+     * 静默挂起(okhttp 读超时可被网关 SSE 保活字节无限续命;或请求滞留 dispatcher 队列
+     * 不被执行,2026-10 t_6342)。首帧后 chunk 间隔上限取 model-timeout-ms。≤0 关闭。
+     */
+    private long modelFirstChunkTimeoutMs = 120_000;
     /** 进程沙箱配置(原生 Windows:Job Object + Restricted Token;其他平台安全降级)。 */
     private Sandbox sandbox = new Sandbox();
     /** 原生 git 执行配置(git.* RPC 由宿主原生 git argv 直传执行,架构 §7.12)。 */
@@ -1073,6 +1080,14 @@ public class WorkerProperties implements WorkerConfig {
 
     public void setModelTimeoutMs(long modelTimeoutMs) {
         this.modelTimeoutMs = modelTimeoutMs;
+    }
+
+    public long getModelFirstChunkTimeoutMs() {
+        return modelFirstChunkTimeoutMs;
+    }
+
+    public void setModelFirstChunkTimeoutMs(long modelFirstChunkTimeoutMs) {
+        this.modelFirstChunkTimeoutMs = modelFirstChunkTimeoutMs;
     }
 
     /** 进程沙箱配置。 */

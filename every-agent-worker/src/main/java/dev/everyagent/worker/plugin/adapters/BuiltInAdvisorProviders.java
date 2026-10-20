@@ -1,5 +1,6 @@
 package dev.everyagent.worker.plugin.adapters;
 
+import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.plugin.adapters.SkillAdvisorProvider;
 import dev.everyagent.worker.plugin.registry.AdvisorProviderRegistry;
 import dev.everyagent.worker.slash.SlashTokenHandler;
@@ -29,16 +30,19 @@ public class BuiltInAdvisorProviders {
     private final RoundIndexStore roundIndexStore;
     private final SlashTokenHandler slashTokenHandler;
     private final SkillAdvisorProvider skillAdvisorProvider;
+    private final WorkerProperties props;
 
     public BuiltInAdvisorProviders(
             AdvisorProviderRegistry registry,
             RoundIndexStore roundIndexStore,
             SlashTokenHandler slashTokenHandler,
-            SkillAdvisorProvider skillAdvisorProvider) {
+            SkillAdvisorProvider skillAdvisorProvider,
+            WorkerProperties props) {
         this.registry = registry;
         this.roundIndexStore = roundIndexStore;
         this.slashTokenHandler = slashTokenHandler;
         this.skillAdvisorProvider = skillAdvisorProvider;
+        this.props = props;
     }
 
     @PostConstruct
@@ -69,6 +73,11 @@ public class BuiltInAdvisorProviders {
         // EmptyResponseRetryAdvisor / TransientErrorRetryAdvisor 已迁入独立插件模块（步骤 3），
         // 由各插件自行注册，不再在此注册。
         // model-length-guard 插件 已迁入 model-length-guard 插件模块，由插件自行注册，不再在此注册。
+        // 模型流首帧看门狗(全链最内层，RateLimit +500 之内)：订阅成功但长时间无首 chunk 的
+        // 病态静默(okhttp 读超时可被网关保活字节无限续命 / 请求滞留 dispatcher 队列)按瞬时
+        // 超时中断，交 TransientErrorRetryAdvisor 既有退避重试（架构 §7.4.2，t_6342 静默挂起）。
+        registry.register(new FirstChunkWatchdogAdvisorProvider(
+                props.getModelFirstChunkTimeoutMs(), props.getModelTimeoutMs()));
 
         // 终层（800─999）
         // ContextCompressionAdvisor 已迁入 context-compression 插件模块（步骤 3），不再在此注册。

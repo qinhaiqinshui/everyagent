@@ -128,6 +128,12 @@ worker:
   # 模型调用超时(ms):spring-ai OpenAiChatOptions 默认 60s,reasoning 模型深度思考期间
   # 长时间无 chunk 会被 okhttp 超时主动 CANCEL 流;默认 10 分钟,过长可调小。
   model-timeout-ms: 600000
+  # 模型流首帧看门狗(ms):流订阅成功后该时长内未收到任何 chunk(首字节)即以瞬时超时
+  # 中断当前订阅,交 TransientErrorRetryAdvisor 退避重试,耗尽后任务显式报错——封堵
+  # 「连接建立但永不出数」的静默挂起(okhttp 读超时可被网关 SSE 保活字节无限续命;
+  # 请求也可能滞留 okhttp dispatcher 队列不被执行,2026-10 t_6342)。首帧后 chunk 间隔
+  # 上限沿用 model-timeout-ms。≤0 关闭。默认 120s。
+  model-first-chunk-timeout-ms: 120000
   # 搜索限制(架构 §8.5「搜索限制配置化」):搜索相关限制的显式默认(与代码默认一致),
   # 可在 ~/.everyagent/application-worker.yaml 覆盖。
   search:
