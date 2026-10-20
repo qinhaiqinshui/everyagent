@@ -5,11 +5,11 @@
  * ───────────────────────────────────────────────────────────── */
 
 /* ─── 工具批容器常量 ─────────────────────────────────────────
- * 多调用批 = 淡边框圆角盒(数量徽标压在顶部边框上,见 .nagent-tool-batch)。
- * 盒子的 padding-left + border-left 会让内部图标右移,这里用负 margin-left
- * 精确抵消(--tool-batch-inset),保证批内工具图标与单条调用的图标缩进一致。 */
+ * 多调用批 = 左边框竖线盒(×N 数量徽标挂在边框垂直中点,见 .nagent-tool-batch)。
+ * 左边框 + padding-left 会让内部图标右移,这里用负 margin-left 精确抵消
+ * (--tool-batch-inset),保证批内工具图标与单条调用的图标缩进一致。 */
 :root {
-  /* 批容器内边距(上下左右同值,视觉均衡) */
+  /* 批容器左内边距(内容与左边框的间距) */
   --tool-batch-pad: 6px;
   /* 批容器左缘吃掉的宽度 = padding-left + border-left,负 margin 抵消量 */
   --tool-batch-inset: calc(var(--tool-batch-pad) + 1px);
@@ -1245,39 +1245,41 @@
 }
 
 /* ─── 工具调用批容器(批 = 一次 message 下发的 toolCalls)─────
-   批 = 淡边框圆角盒,内部平铺各调用的 per-tool 美化视图(无批壳行/无二次折叠)。
-   ×N 数量徽标压在顶部边框上,用底色断开边框线,读作「盒子标签」。
-   缩进一致:盒子的 padding-left + border-left 用等量负 margin-left 抵消
+   批 = 只保留左边框的圆角竖线盒,内部平铺各调用的 per-tool 美化视图
+   (无批壳行/无二次折叠)。×N 数量徽标挂在左边框的垂直中点上,
+   用底色断开边框线,读作「线上的节点计数」。
+   缩进一致:左边框 + padding-left 用等量负 margin-left 抵消
    (宽度同额补回,右缘仍与消息体对齐),批内工具图标与单条调用的图标同一条竖线。
    单调用不套本容器。 */
 .nagent-tool-batch {
   box-sizing: border-box;
   /* 负 margin 抵消左缘 padding+border → 批内工具图标与单调用图标同一条竖线;
-     宽度只补左侧的抵消量 → 右缘仍与消息体右缘对齐(批内行比单调用行窄一个
-     padding+border ≈ 7px,chevron 位置差肉眼不可察,且不向滚动区外溢出)。 */
+     宽度只补左侧的抵消量 → 右缘仍与消息体右缘对齐。 */
   width: calc(100% + var(--tool-batch-inset));
   margin-top: 4px;
   margin-bottom: 4px;
   margin-left: calc(-1 * var(--tool-batch-inset));
   display: flex;
   flex-direction: column;
-  /* 比较淡的边框:只做分组暗示,不与内容抢视觉 */
-  border: 1px solid color-mix(in srgb, var(--border-light) 75%, transparent);
+  /* 只保留左边框:比较淡的竖线只做分组暗示,不与内容抢视觉;
+     圆角保留 → 竖线两端经圆弧平滑收头(左上/左下角作用于左边框)。 */
+  border-left: 1px solid color-mix(in srgb, var(--border-light) 75%, transparent);
   border-radius: var(--radius-md, 8px);
-  padding: var(--tool-batch-pad);
+  padding-left: var(--tool-batch-pad);
   /* 数量徽标的定位基准 */
   position: relative;
 }
 
 /* 数值来自本容器 data-tool-count = 本次下发的 toolCalls 条数;
-   压在顶部边框线上,底色与消息流背景一致,把边框线在数字处断开。 */
+   挂在左边框的垂直中点(left:0 相对 padding box,近似边框中心),
+   底色与消息流背景一致,把边框线在数字处断开。 */
 .nagent-tool-batch::after {
   content: '×' attr(data-tool-count);
   position: absolute;
-  left: 10px;
-  top: 0;
-  translate: 0 -50%;
-  padding: 0 4px;
+  left: 0;
+  top: 50%;
+  translate: -50% -50%;
+  padding: 0 3px;
   border-radius: 999px;
   background: var(--bg-primary);
   color: var(--text-muted);
@@ -1292,7 +1294,7 @@
 
 /* 中断批:边框与徽标转灰(已 started 调用黄显/未 started 灰显由各视图状态图标承载) */
 .nagent-tool-batch--interrupted {
-  border-color: color-mix(in srgb, var(--text-muted) 35%, transparent);
+  border-left-color: color-mix(in srgb, var(--text-muted) 35%, transparent);
 }
 
 .nagent-tool-batch--interrupted::after {
