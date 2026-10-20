@@ -320,9 +320,18 @@ export function hasActiveTextSelection(): boolean {
 /** 调用行运行态（与宿主 ToolCallState 对齐；状态图标 `nagent-tool-state--*` 的类名域）。 */
 export type ToolCallState = 'queued' | 'running' | 'done' | 'error' | 'interrupted' | 'skipped'
 
-/** 紧凑耗时文案：<10s 一位小数，分钟级 m:ss 补零；非法值返回空串。 */
+/**
+ * 紧凑耗时文案：亚秒级(<1s)精确到毫秒、不四舍五入、去无意义尾零
+ * （101→0.101s、120→0.12s、0→0s）；1s~10s 一位小数；10s~60s 整秒；
+ * 分钟级 m:ss 补零；非法值返回空串。
+ */
 export function formatToolDuration(ms: number | undefined): string {
   if (ms == null || !Number.isFinite(ms) || ms < 0) return ''
+  if (ms < 1000) {
+    // ms 是整数毫秒，真值即最多 3 位小数的有限小数：toFixed(3) 取精确 3 位
+    // （无第 4 位可舍入），再经 Number 归一化去掉无意义尾零。
+    return `${Number((ms / 1000).toFixed(3))}s`
+  }
   const seconds = ms / 1000
   if (seconds < 10) return `${seconds.toFixed(1)}s`
   if (seconds < 60) return `${Math.floor(seconds)}s`

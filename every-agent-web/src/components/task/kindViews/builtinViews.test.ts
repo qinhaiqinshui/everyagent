@@ -141,8 +141,14 @@ describe('message 视图工具块(多调用竖线容器 + per-tool 视图直挂)
     expect(html).toContain('nagent-msg__content')
   })
 
-  it('formatToolDuration 紧凑耗时口径(一位小数/整秒/分钟补零/非法值)', () => {
-    expect(formatToolDuration(0)).toBe('0.0s')
+  it('formatToolDuration 紧凑耗时口径(亚秒毫秒精确/一位小数/整秒/分钟补零/非法值)', () => {
+    // 亚秒级:精确到毫秒、不四舍五入、去无意义尾零
+    expect(formatToolDuration(0)).toBe('0s')
+    expect(formatToolDuration(40)).toBe('0.04s')
+    expect(formatToolDuration(101)).toBe('0.101s')
+    expect(formatToolDuration(120)).toBe('0.12s')
+    expect(formatToolDuration(999)).toBe('0.999s')
+    expect(formatToolDuration(1000)).toBe('1.0s')
     expect(formatToolDuration(1500)).toBe('1.5s')
     expect(formatToolDuration(9900)).toBe('9.9s')
     expect(formatToolDuration(25000)).toBe('25s')
