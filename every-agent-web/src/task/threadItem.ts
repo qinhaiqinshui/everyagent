@@ -53,6 +53,16 @@ export interface MessagePayload {
   streaming?: boolean
   /** 折叠层帧状态:思考阶段已结束(正文首达且已有思考置真;思考续增回退 false,驱动前端思考块自动折叠)。 */
   reasoningDone?: boolean
+  /**
+   * 思考开始时刻(毫秒,宿主时钟):首个 thinking 增量帧的 wire ts,tool.started.startedAt 同口径。
+   * 思考块实时读秒基准(now - thinkingStartedAt);历史回放由权威 message 的 thinkingStartedAt 还原。
+   */
+  thinkingStartedAt?: number
+  /**
+   * 思考耗时(毫秒):思考阶段真实流式耗时(末个 thinking 增量 - 首个)。
+   * 优先取权威 message 下发的值;worker 未下发时前端按「思考结束帧 ts - thinkingStartedAt」兜底。
+   */
+  thinkingDurationMs?: number
 }
 
 /** `tool.result` payload:单次工具调用结果(per-call 链上行段发射,callId 直配)。 */

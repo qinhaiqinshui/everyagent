@@ -21,6 +21,7 @@ import { clearTaskToolStarted, recordToolStarted } from '@/task/toolStartedRunti
 import TaskThread from '@/components/task/TaskThread'
 import { ThreadBoardProvider } from './threadBoardContext'
 import { MessageView, formatToolDuration } from './messageView'
+import { thinkingDurationText, thinkingDurationTint, thinkingDurationTintStyle } from './thinkingTiming'
 import { UserMessageView, buildUserMessageReplaySegments } from './userMessageView'
 import { ToolResultView } from './toolResultView'
 
@@ -140,6 +141,38 @@ describe('message 视图工具块(多调用竖线容器 + per-tool 视图直挂)
     expect(html).toContain('nagent-msg__reasoning-content--streaming')
     expect(html).toContain('想一下')
     expect(html).toContain('nagent-msg__content')
+  })
+
+  it('思考块流式中:折叠头常驻且展开,耗时实时读秒(未过起色阈值不染红)', () => {
+    // 起点 = 3s 前:流式中读秒(now - 起点),折叠头与图标常显、正文展开
+    const item = messageItem('10', {
+      content: '',
+      thinking: '想一下',
+      streaming: true,
+      thinkingStartedAt: Date.now() - 3000,
+    })
+    const html = renderMessage(item, [item])
+    expect(html).toContain('nagent-msg__reasoning-header')
+    expect(html).toContain('思考过程')
+    expect(html).toContain('nagent-msg__reasoning-toggle')
+    expect(html).toContain('nagent-msg__reasoning-content--streaming')
+    expect(html).toContain('想一下')
+    // 耗时 span 存在且读数走紧凑格式化(3.x s);3s 未过 10s → 色阶 0%(纯 muted)
+    expect(html).toContain('nagent-msg__reasoning-duration')
+    expect(html).toMatch(/>\d+(\.\d+)?s<\/span>/)
+    expect(html).toContain('--thinking-dur-tint:0%')
+  })
+
+  it('思考块完成后:自动折叠(正文不渲染)、折叠头常驻,耗时冻结并按长短染色', () => {
+    // 45s 思考:冻结耗时文本 + 色阶 76%(10s~60s 线性 20%~100%)
+    const item = messageItem('10', { content: '', thinking: '想完了', thinkingDurationMs: 45000 })
+    const html = renderMessage(item, [item])
+    expect(html).toContain('nagent-msg__reasoning-header')
+    expect(html).toContain('思考过程')
+    expect(html).toContain('45s')
+    expect(html).toContain('--thinking-dur-tint:76%')
+    // 折叠态:思考正文不渲染
+    expect(html).not.toContain('想完了')
   })
 
   it('formatToolDuration 紧凑耗时口径(亚秒毫秒精确/一位小数/整秒/分钟补零/非法值)', () => {
@@ -361,5 +394,31 @@ describe('TaskThread 分发切换(查表 + 兜底)', () => {
       React.createElement(TaskThread, { taskId: TASK_ID, items: [], isGenerating: true }),
     )
     expect(generating).not.toContain('当前 Task 还没有消息或追踪记录')
+  })
+})
+
+describe('思考耗时口径(起色阈值 10s / 封顶 60s;文本始终显示)', () => {
+  it('thinkingDurationTint:10s 起色、60s 封顶、区间线性;非法/缺失返回 0', () => {
+    expect(thinkingDurationTint(undefined)).toBe(0)
+    expect(thinkingDurationTint(null)).toBe(0)
+    expect(thinkingDurationTint(-1)).toBe(0)
+    expect(thinkingDurationTint(0)).toBe(0)
+    expect(thinkingDurationTint(9999)).toBe(0) // 未过起色阈值
+    expect(thinkingDurationTint(10000)).toBe(20) // 起点即最浅(20%)
+    expect(thinkingDurationTint(35000)).toBe(60) // 中点线性
+    expect(thinkingDurationTint(60000)).toBe(100) // 封顶
+    expect(thinkingDurationTint(600000)).toBe(100) // 超过封顶不再加深
+  })
+
+  it('thinkingDurationTintStyle:写 --thinking-dur-tint 自定义属性(不硬编码色值)', () => {
+    expect(thinkingDurationTintStyle(35000)).toEqual({ '--thinking-dur-tint': '60%' })
+  })
+
+  it('thinkingDurationText:非正数/缺失不渲染(与工具耗时 ≥10s 门槛不同,此处只挡 0)', () => {
+    expect(thinkingDurationText(undefined)).toBe('')
+    expect(thinkingDurationText(0)).toBe('')
+    expect(thinkingDurationText(-3)).toBe('')
+    expect(thinkingDurationText(500)).toBe('0.5s') // 亚秒也显示(无门槛)
+    expect(thinkingDurationText(45000)).toBe('45s')
   })
 })

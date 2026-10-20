@@ -1,8 +1,9 @@
 /**
  * `message` kind 视图(「任务线程统一条目与画板纯化」步骤 10)。
  *
- * thinking(AssistantReasoningBlock:流式且未 reasoningDone 展开、完成后自动折叠)与
- * 正文(RichMessageContent)自 AgentMessageThread 现状迁移(行为等价);工具块为
+ * thinking(AssistantReasoningBlock:折叠头常驻「思考过程 + 耗时/读秒 + 折叠图标」,
+ * 思考中展开并实时读秒、完成后自动折叠并冻结耗时)与正文(RichMessageContent)自
+ * AgentMessageThread 现状迁移(新增耗时读数,读秒/色阶口径参考工具调用);工具块为
  * **单调用直渲 / 多调用批容器**双形态:
  * - 单调用(toolCalls.length === 1):无包装,直接渲染 per-tool 美化视图(一次折叠
  *   即见参数与结果,状态图标 + 耗时在视图摘要行上);
@@ -23,6 +24,7 @@ import RichMessageContent from '@/components/task/RichMessageContent'
 import { getToolView } from '@/components/task/toolViews/registry'
 import type { AggregatedToolDetail, ToolCallState } from '@/components/task/toolViews/types'
 import { formatToolDuration } from '@/components/task/toolViews/helpers'
+import { thinkingDurationText, thinkingDurationTintStyle } from './thinkingTiming'
 import { useThreadBoard } from './threadBoardContext'
 import { detailOfCall, interruptedAfterMessage, resultsFor } from './toolDomain'
 import type { KindViewProps } from './registry'
@@ -107,15 +109,27 @@ function ToolCallsBlock({
 }
 
 /**
- * 思考块:流式中(思考进行中)展开,思考完成后默认折叠(保留「思考过程 >」折叠头)。
- * 自 AgentMessageThread 原位迁移(行为等价:reasoningDone 打标驱动自动折叠,见 eventFolder)。
+ * 思考块:折叠头常驻(「思考过程」+ 耗时/读秒 + 折叠图标),思考中展开、思考完成后自动折叠。
+ *
+ * - 流式中(isThinking):折叠头常显 + **展开**态,耗时按 `now - thinkingStartedAt` 实时读秒
+ *   (单一 1s tick,仅思考中挂载,卸载清理);
+ * - 完成后:自动折叠,耗时冻结为权威值(message 下发的 thinkingDurationMs;缺省用
+ *   「思考结束帧 ts - 起点」兜底,见 eventFolder)。
+ *
+ * 耗时在标题与折叠图标之间,始终显示(不像工具耗时那样 ≥10s 才显示),颜色按耗时长短渐变
+ * (见 thinkingTiming:10s 起色、60s 封顶)。
+ * 自 AgentMessageThread 原位迁移,reasoningDone 打标驱动自动折叠(见 eventFolder)。
  */
 function AssistantReasoningBlock({
   reasoning,
   isThinking,
+  startedAt,
+  durationMs,
 }: {
   reasoning: string
   isThinking: boolean
+  startedAt?: number
+  durationMs?: number
 }) {
   const [open, setOpen] = React.useState(isThinking)
   const previousThinkingRef = React.useRef(isThinking)
@@ -129,20 +143,32 @@ function AssistantReasoningBlock({
     previousThinkingRef.current = isThinking
   }, [isThinking])
 
-  if (isThinking) {
-    return (
-      <div className="nagent-msg__reasoning">
-        <div className="nagent-msg__reasoning-content nagent-msg__reasoning-content--streaming">
-          {reasoning}
-        </div>
-      </div>
-    )
-  }
+  // 实时读秒:仅思考中挂 1s tick(tool.started 读秒同款),停止后冻结为终值不再重渲染。
+  const [now, setNow] = React.useState(() => Date.now())
+  React.useEffect(() => {
+    if (!isThinking || startedAt == null) return
+    setNow(Date.now())
+    const timer = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [isThinking, startedAt])
+
+  const shownMs = isThinking && startedAt != null
+    ? Math.max(0, now - startedAt)
+    : durationMs
+  const durationText = thinkingDurationText(shownMs)
 
   return (
     <div className="nagent-msg__reasoning">
       <div className="nagent-msg__reasoning-header">
         <span>思考过程</span>
+        {durationText ? (
+          <span
+            className="nagent-msg__reasoning-duration"
+            style={thinkingDurationTintStyle(shownMs)}
+          >
+            {durationText}
+          </span>
+        ) : null}
         <button
           type="button"
           className="nagent-msg__reasoning-toggle"
@@ -155,7 +181,7 @@ function AssistantReasoningBlock({
         </button>
       </div>
       {open ? (
-        <div className="nagent-msg__reasoning-content">
+        <div className={`nagent-msg__reasoning-content${isThinking ? ' nagent-msg__reasoning-content--streaming' : ''}`}>
           {reasoning}
         </div>
       ) : null}
@@ -216,7 +242,12 @@ export function MessageView({
     <div className="nagent-msg nagent-msg--assistant">
       <div className="nagent-msg__body nagent-msg__body--assistant">
         {hasReasoning ? (
-          <AssistantReasoningBlock reasoning={reasoning ?? ''} isThinking={isThinking} />
+          <AssistantReasoningBlock
+            reasoning={reasoning ?? ''}
+            isThinking={isThinking}
+            startedAt={payload?.thinkingStartedAt}
+            durationMs={payload?.thinkingDurationMs}
+          />
         ) : null}
         {hasContent ? (
           <div className="nagent-msg__content">

@@ -869,6 +869,18 @@
   cursor: pointer;
 }
 
+/* 思考耗时(标题与折叠图标之间,始终显示——不像工具耗时那样设 ≥10s 门槛):
+   --thinking-dur-tint(0%~100%,由 thinkingDurationTintStyle 按思考耗时计算,
+   10s 起色、60s 封顶)在此插值 muted → --tool-slow-red(与工具耗时同一「慢」红 token)。
+   实时读秒逐跳时颜色平滑过渡,不刺眼闪变。 */
+.nagent-msg__reasoning-duration {
+  margin-left: 2px;
+  color: color-mix(in srgb, var(--tool-slow-red) var(--thinking-dur-tint, 0%), var(--text-muted));
+  transition: color var(--motion-duration-base) linear;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 .nagent-msg__reasoning-content {
   font-size: var(--text-xs);
   line-height: 1.7;
@@ -883,8 +895,10 @@
   margin-top: 0;
 }
 
+/* 思考进行中的正文:折叠头常驻(见上),故与完成态同为 4px 上间距;此修饰类仅作
+   「正在流式」的语义标记(供调试/扩展样式钩子),不再取消上间距。 */
 .nagent-msg__reasoning-content--streaming {
-  margin-top: 0;
+  margin-top: 4px;
 }
 
 .nagent-msg__reasoning-chevron {

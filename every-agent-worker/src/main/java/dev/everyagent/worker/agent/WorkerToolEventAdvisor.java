@@ -71,6 +71,14 @@ public class WorkerToolEventAdvisor extends ToolCallingAdvisor {
     private final AtomicReference<String> thinkingAcc = new AtomicReference<>("");
     /** 本轮事件 id(雪花):每轮模型响应首 chunk 分配,delta/thinking/message 共用;message 后清零。 */
     private final AtomicLong roundId = new AtomicLong(0);
+    /**
+     * 本轮思考计时起点(首个思考增量到达时刻,毫秒;每轮 message 后清零)。
+     * 前端思考块的实时读秒基准即此值(与 tool.started 的 startedAt 同口径:宿主时钟毫秒),
+     * 随权威 message 事件下发,历史回放也能还原思考耗时。
+     */
+    private final AtomicLong thinkingStartMs = new AtomicLong(0);
+    /** 本轮末个思考增量到达时刻(毫秒;与起点差值 = 思考阶段真实流式耗时,不含随后正文生成/工具执行)。 */
+    private final AtomicLong thinkingEndMs = new AtomicLong(0);
 
     public WorkerToolEventAdvisor(ToolCallingManager toolCallingManager, AgentEntity a) {
         super(toolCallingManager, DEFAULT_TOOL_EXECUTION_ELIGIBILITY_CHECKER, DEFAULT_ORDER, true);
@@ -125,10 +133,23 @@ public class WorkerToolEventAdvisor extends ToolCallingAdvisor {
         if (!thinking.isEmpty()) {
             String diff = diffThinking(thinking);
             if (!diff.isEmpty()) {
+                touchThinking();
                 a.emitter.emit(EmitEvent.transientOf(rid, Events.THINKING,
                         null, null, null, diff, null, null, EmitEvent.Mode.APPEND));
             }
         }
+    }
+
+    /**
+     * 记录思考增量到达时刻:首个增量定起点(compareAndSet 抢 0),每个增量推进终点。
+     * 起点/终点同取宿主时钟,差值即本轮思考的流式耗时;起点随权威 {@code message}
+     * 事件下发({@code thinkingStartedAt}/{@code thinkingDurationMs}),供前端实时读秒
+     * 与历史回放展示(与 tool.started/tool.result 的 startedAt/durationMs 同口径)。
+     */
+    private void touchThinking() {
+        long now = System.currentTimeMillis();
+        thinkingStartMs.compareAndSet(0, now);
+        thinkingEndMs.set(now);
     }
 
     @Override
@@ -167,6 +188,7 @@ public class WorkerToolEventAdvisor extends ToolCallingAdvisor {
         if (!thinking.isEmpty()) {
             String diff = diffThinking(thinking);
             if (!diff.isEmpty()) {
+                touchThinking();
                 a.emitter.emit(EmitEvent.transientOf(rid, Events.THINKING,
                         null, null, null, diff, null, null, EmitEvent.Mode.APPEND));
             }
@@ -190,11 +212,21 @@ public class WorkerToolEventAdvisor extends ToolCallingAdvisor {
         ObjectNode messageData = Json.obj();
         if (!thinking.isEmpty()) {
             messageData.put("thinking", thinking);
+            // 思考耗时口径(与 tool.result 的 startedAt/durationMs 同构):起点 = 本轮首个
+            // 思考增量到达时刻,时长 = 末个增量 - 首个增量(思考阶段真实流式耗时,不含随后的
+            // 正文生成/工具执行)。随权威 message 落盘,历史回放即可还原思考耗时。
+            long tStart = thinkingStartMs.get();
+            if (tStart > 0) {
+                messageData.put("thinkingStartedAt", tStart);
+                messageData.put("thinkingDurationMs", Math.max(0, thinkingEndMs.get() - tStart));
+            }
         }
         messageData.set("toolCalls", EventPayloads.toolCallsToJson(parts));
         a.emitter.emit(EmitEvent.of(rid, Events.MESSAGE,
                 null, null, null, text, null, messageData, EmitEvent.Mode.REPLACE));
         roundId.set(0);
+        thinkingStartMs.set(0);
+        thinkingEndMs.set(0);
         // 队列续跑的最终回答回写已归位 task 层:consumeInput 消费下一条排队输入前,经
         // ConversationLoader.catchUpRuntime 从本事件流追回(与冷启动重建同一谓词)。
         // 本 advisor 至此不再触碰会话内存,只负责事件发射与 agent 层会计(§7.20 域中性)。

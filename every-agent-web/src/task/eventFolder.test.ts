@@ -228,6 +228,57 @@ describe('thinking/delta 流式聚合与 message 权威定稿', () => {
     folder.fold(ev(SEQ_100, 'delta', { content: '(迟到)' }, MAIN, 1300))
     expect(payloadAs(itemAt(folder, 0, 'message'), 'message')?.content).toBe('权威')
   })
+
+  it('思考耗时:起点取首个 thinking 帧 ts;正文首达冻结「结束帧 - 起点」;思考续增作废兜底值', () => {
+    const folder = newFolder(MAIN)
+    folder.fold(ev(SEQ_100, 'thinking', { content: '思考A' }, MAIN, 1100))
+    folder.fold(ev(SEQ_100, 'thinking', { content: '思考B' }, MAIN, 1400))
+    let p = payloadAs(itemAt(folder, 0, 'message'), 'message')!
+    // 起点 = 首个 thinking 帧 ts(不是后续帧),实时读秒基准
+    expect(p.thinkingStartedAt).toBe(1100)
+    expect(p.thinkingDurationMs).toBeUndefined()
+    // 正文首达 → 冻结兜底耗时(结束帧 ts - 起点)
+    folder.fold(ev(SEQ_100, 'delta', { content: '正文' }, MAIN, 2000))
+    p = payloadAs(itemAt(folder, 0, 'message'), 'message')!
+    expect(p.reasoningDone).toBe(true)
+    expect(p.thinkingDurationMs).toBe(900)
+    // 思考续增(交织)→ 标记回退 + 兜底耗时作废,读秒续算
+    folder.fold(ev(SEQ_100, 'thinking', { content: '思考C' }, MAIN, 2500))
+    p = payloadAs(itemAt(folder, 0, 'message'), 'message')!
+    expect(p.reasoningDone).toBe(false)
+    expect(p.thinkingDurationMs).toBeUndefined()
+  })
+
+  it('思考耗时:message 权威值覆盖前端兜底(messageStartedAt/DurationMs 来自 worker)', () => {
+    const folder = newFolder(MAIN)
+    folder.fold(ev(SEQ_100, 'thinking', { content: '思考' }, MAIN, 1100))
+    folder.fold(ev(SEQ_100, 'delta', { content: '正文' }, MAIN, 2000))
+    folder.fold(ev(SEQ_100, 'message', {
+      content: '权威正文',
+      data: { thinking: '权威思考', thinkingStartedAt: 1050, thinkingDurationMs: 4200 },
+    }, MAIN, 2100))
+    const p = payloadAs(itemAt(folder, 0, 'message'), 'message')!
+    expect(p.thinkingStartedAt).toBe(1050)
+    expect(p.thinkingDurationMs).toBe(4200)
+  })
+
+  it('思考耗时:历史回放(无瞬态帧)由里程碑 message 的权威值还原;无值时不臆造', () => {
+    const folder = newFolder(MAIN)
+    folder.fold(ev(SEQ_100, 'message', {
+      content: '正文',
+      data: { thinking: '历史思考', thinkingStartedAt: 1000, thinkingDurationMs: 3300 },
+    }, MAIN, 5000))
+    const p = payloadAs(itemAt(folder, 0, 'message'), 'message')!
+    expect(p.thinkingStartedAt).toBe(1000)
+    expect(p.thinkingDurationMs).toBe(3300)
+
+    // 老任务(无该两字段):不臆造耗时/起点
+    const legacy = newFolder(MAIN)
+    legacy.fold(ev(SEQ_100, 'message', { content: '正文', data: { thinking: '老思考' } }, MAIN, 5000))
+    const lp = payloadAs(itemAt(legacy, 0, 'message'), 'message')!
+    expect(lp.thinkingStartedAt).toBeUndefined()
+    expect(lp.thinkingDurationMs).toBeUndefined()
+  })
 })
 
 // ─────────────────────────────────────────────────────────────────────────────

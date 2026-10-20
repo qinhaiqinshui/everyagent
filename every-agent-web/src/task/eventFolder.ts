@@ -14,7 +14,10 @@
  * - user.message           → kind:'user.message',payload{content, rawContent}(主/子 agent
  *                           共用同一事件名与同一路径,渲染层按 agentId 区分样式与扩展点)
  * - thinking / delta       → 当前流式 message 项的 payload.thinking / payload.content 追加
- *                           (瞬态增量帧,同 seq 复用同一条 kind:'message' 项)
+ *                           (瞬态增量帧,同 seq 复用同一条 kind:'message' 项);thinking 另维护
+ *                           思考计时(payload.thinkingStartedAt = 首个思考帧 wire ts;
+ *                           thinkingDurationMs = 正文首达冻结「结束帧 ts - 起点」的兜底值,
+ *                           权威 message 的 data 值到达后覆盖)
  * - message                → 一轮权威终结:payload.content/thinking/toolCalls(真实 toolCall id)
  *                           定稿该 agent 的流式消息(kind:'message')
  * - usage                  → 每 agent 最近一轮占用/累计用量/上下文快照维护台账镜像
@@ -403,17 +406,19 @@ export class TaskEventFolder {
       if (this.anchors.streaming.get(seqKey) === existing) {
         const message = existing.payload as MessagePayload
         if (kind === 'thinking') {
+          // 思考起点:首个思考增量帧的 wire ts(宿主时钟),实时读秒基准(now - 起点)。
+          if (message.thinkingStartedAt == null) message.thinkingStartedAt = ts
           message.thinking = (message.thinking ?? '') + text
           // 思考仍在增长:清除「思考已结束」标记。推理模型若 thinking/content 交织,
           // 正文(delta)先到会把 reasoningDone 置真,此处随后的 thinking 增量将其回退,
           // 避免把思考区提前折叠(只有思考真正停止后才折叠)。
-          this.markReasoningDone(message, false)
+          this.markReasoningDone(message, false, ts)
         } else {
           message.content = (message.content ?? '') + text
           // 正文首达且已有思考 → 视为思考阶段结束,驱动前端思考块自动折叠。
           // 若后续又有 thinking 增量,appendRoundText 会回退该标记(见上)。
           if ((message.thinking ?? '').trim().length > 0) {
-            this.markReasoningDone(message, true)
+            this.markReasoningDone(message, true, ts)
           }
         }
       }
@@ -425,6 +430,8 @@ export class TaskEventFolder {
       streaming: true,
     }
     if (kind === 'thinking') {
+      // 思考起点:首个思考增量帧的 wire ts(宿主时钟),实时读秒基准(now - 起点)。
+      message.thinkingStartedAt = ts
       message.thinking = text
     } else {
       message.content = text
@@ -443,9 +450,20 @@ export class TaskEventFolder {
   /**
    * 标记/清除「思考阶段已结束」:正文(delta)首达且已有思考时置真,思考(thinking)继续增长时回退为假。
    * 前端据此在思考完成后自动折叠思考块(正文仍继续流式),而不必等到整条消息定稿。
+   *
+   * <p>同时维护思考耗时兜底值(权威值随 message 到达后覆盖,见 completeMessage):
+   * 结束(真)= 冻结「本次结束帧 ts - 思考起点 ts」;续增(假)= 作废该兜底值,
+   * 让实时读秒从起点续算(推理模型 thinking/content 交织时重新计时)。
    */
-  private markReasoningDone(message: MessagePayload, done: boolean): void {
+  private markReasoningDone(message: MessagePayload, done: boolean, ts: number): void {
     message.reasoningDone = done
+    if (done) {
+      if (message.thinkingDurationMs == null && message.thinkingStartedAt != null) {
+        message.thinkingDurationMs = Math.max(0, ts - message.thinkingStartedAt)
+      }
+    } else {
+      message.thinkingDurationMs = undefined
+    }
   }
 
   /**
@@ -481,6 +499,8 @@ export class TaskEventFolder {
    * - 两者皆无(回放/冷启动) → 新建完成态插入。
    * 完成后关闭该轮流式锚点。
    * thinking 是完整整轮文本(替换式),toolCalls 为模型真实 id,与 tool.result 按 callId 配对。
+   * data.thinkingStartedAt/thinkingDurationMs 为 worker 权威思考计时(历史回放无瞬态帧时
+   * 的唯一来源);缺失(老任务)时保留前端兜底值。
    */
   completeMessage(agentKey: string, payload: Record<string, unknown>, ts: number, seq: number | string): void {
     const seqKey = String(seq)
@@ -489,6 +509,8 @@ export class TaskEventFolder {
     const thinking = typeof data?.thinking === 'string' ? data.thinking : ''
     const text = typeof payload?.content === 'string' ? payload.content : ''
     const toolCalls = readToolCalls(data?.toolCalls)
+    const authoritativeStart = typeof data?.thinkingStartedAt === 'number' ? data.thinkingStartedAt : undefined
+    const authoritativeDuration = typeof data?.thinkingDurationMs === 'number' ? data.thinkingDurationMs : undefined
     let message: MessagePayload
     let isNew = false
     const streaming = this.anchors.streaming.get(seqKey)
@@ -513,6 +535,18 @@ export class TaskEventFolder {
       message.thinking = thinking
     }
     message.content = text
+    // 思考计时:起点优先权威值(前端兜底起点可能因中途进入偏晚),耗时优先权威非零值
+    // (worker 兜底路径可能给出 0,此时保留前端「思考结束帧 - 起点」的更准值)。
+    if (authoritativeStart != null) {
+      message.thinkingStartedAt = authoritativeStart
+    }
+    if (authoritativeDuration != null && authoritativeDuration > 0) {
+      message.thinkingDurationMs = authoritativeDuration
+    } else if (message.thinkingDurationMs == null && message.thinkingStartedAt != null && thinking) {
+      // 无任何终值(纯工具轮:思考结束无正文 delta,未触发 reasoningDone 冻结)时按
+      // 「本轮 message ts - 思考起点」兜底(含随后的工具调用生成时间,轻微高估,可接受)。
+      message.thinkingDurationMs = Math.max(0, ts - message.thinkingStartedAt)
+    }
     if (toolCalls.length > 0) {
       // 按 callId 去重追加(同一轮 message 重复帧幂等,不会产生重复 toolCalls)。
       const seen = new Set((message.toolCalls ?? []).map((c) => c.id))
