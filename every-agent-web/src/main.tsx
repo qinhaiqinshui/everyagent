@@ -17,7 +17,9 @@ import './assets/styles/ui-overlays.css'
 import './assets/styles/ui-patterns.css'
 import './index.css'
 import type { ThemeMode } from './types'
-import { loadThemeMode } from './settings/localSettings'
+import { applyEditorFont, applyThemeBase } from './theme/applyTheme'
+import { loadEditorFont } from './settings/editorFont'
+import { loadThemeType } from './settings/localSettings'
 import { installGlobalErrorHandlers } from './utils/globalErrorHandler'
 import { GlobalErrorBoundary } from './components/shared/GlobalErrorBoundary'
 import { initializeTraceTypes } from './plugin/traceTypeRegistry'
@@ -90,9 +92,10 @@ hubSession.onWorkerConnectionsChanged(() => {
   void loadPlugins()
 })
 
-const initialThemeMode: ThemeMode = loadThemeMode()
-document.documentElement.setAttribute('data-theme', initialThemeMode)
-document.body.setAttribute('data-theme', initialThemeMode)
+const initialThemeType: ThemeMode = loadThemeType()
+applyThemeBase(initialThemeType)
+const initialEditorFont = loadEditorFont()
+applyEditorFont(initialEditorFont.fontFamily, initialEditorFont.fontSize)
 
 async function boot(): Promise<void> {
   // 浏览器宿主:注入默认的浏览器系统通知适配器(Web Notification API)。
@@ -108,7 +111,7 @@ async function boot(): Promise<void> {
     <React.StrictMode>
       <GlobalErrorBoundary>
         <HubProvider>
-          <Layout initialThemeMode={initialThemeMode} />
+          <Layout initialThemeType={initialThemeType} />
         </HubProvider>
       </GlobalErrorBoundary>
     </React.StrictMode>,

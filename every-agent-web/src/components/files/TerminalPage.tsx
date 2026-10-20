@@ -15,7 +15,7 @@ import { Dropdown } from 'antd'
 import type { MenuProps } from 'antd'
 import { channels } from '@every-agent/client'
 import { hubSession } from '@/hub/session'
-import { loadThemeMode } from '@/settings/localSettings'
+import { loadThemeType } from '@/settings/localSettings'
 import { domainEventBus, DOMAIN_EVENTS } from '@/events/eventBus'
 import { terminalGateway } from '@/platform/fs/terminalGateway'
 import { randomUUID } from '@/utils/uuid'
@@ -105,7 +105,7 @@ export default function TerminalPage({ tab }: TerminalPageProps) {
   const containerRef = React.useRef<HTMLDivElement>(null)
   const termRef = React.useRef<Terminal | null>(null)
   const [errorText, setErrorText] = React.useState<string | null>(null)
-  const [themeMode, setThemeMode] = React.useState<ThemeMode>(loadThemeMode)
+  const [themeMode, setThemeMode] = React.useState<ThemeMode>(loadThemeType)
   const [menuOpen, setMenuOpen] = React.useState(false)
 
   // ── 终端右键菜单(仿 VSCode:选中文字→复制,无选中→粘贴,子菜单含全选/清屏) ──
@@ -151,7 +151,7 @@ export default function TerminalPage({ tab }: TerminalPageProps) {
   React.useEffect(() => {
     const unsubscribe = domainEventBus.subscribe(
       DOMAIN_EVENTS.SETTINGS_THEME_PATCHED,
-      ({ themeMode: next }: { themeMode: ThemeMode }) => setThemeMode(next),
+      ({ type: next }: { type: ThemeMode }) => setThemeMode(next),
     )
     return unsubscribe
   }, [])
@@ -183,7 +183,7 @@ export default function TerminalPage({ tab }: TerminalPageProps) {
       fontFamily: "'Cascadia Code', 'Fira Code', 'Consolas', 'Courier New', monospace",
       fontSize: 13,
       letterSpacing: 0,
-      theme: themeFor(loadThemeMode()),
+      theme: themeFor(loadThemeType()),
     })
     termRef.current = term
     const fitAddon = new FitAddon()

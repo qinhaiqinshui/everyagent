@@ -100,6 +100,24 @@
 
   /* ── Font ───────────────────────────────────────────── */
   --font-mono: "Cascadia Code", "Fira Code", Consolas, "Courier New", monospace;
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Helvetica Neue', Arial, sans-serif;
+
+  /* ── Editor 文本区字体 / 字号（用户可配置，独立于主题）────
+   * 全站文本文件编辑器消费这两个 token；设置页「编辑器字体」段写入，应用层在
+   * documentElement 行内样式覆盖。
+   *  - `--editor-font-family`：代码类编辑器（CodeMirror），默认等宽；
+   *  - `--reading-font-family`：阅读类渲染（Markdown 预览 prose），默认 UI 无衬线；
+   *    —— 用户一旦设置字体，这两个 token 会被同时覆盖为同一值（见 applyEditorFont）。
+   * 对标 VSCode 的 editor.fontFamily / editor.fontSize——是编辑器设置，不是主题。 */
+  --editor-font-family: var(--font-mono);
+  --editor-font-size: 14px;
+  --reading-font-family: var(--font-sans);
+
+  /* ── 文件阅读区（专供阅读类主题覆盖）────────────────────
+   * 默认引用基底 token（CSS 惰性替换）：未覆盖时零视觉变化；
+   * 颜色主题只需覆盖这两个 token 即可「只改文件内容区配色、其余继承基底」。 */
+  --reading-bg: var(--bg-secondary);
+  --reading-fg: var(--text-primary);
 
   /* ── Layout 尺寸 ────────────────────────────────────── */
   --sidebar-width: 312px;
@@ -281,6 +299,13 @@
   --task-launcher-muted-surface-bg: var(--bg-hover);
   --task-launcher-message-header-bg: var(--task-launcher-muted-surface-bg);
   --task-launcher-message-body-bg: var(--task-launcher-muted-surface-bg);
+
+  /* 阅读区 / 编辑器字体：同为引用式默认（浅色基底自动跟随），显式声明以便图层覆盖与阅读。 */
+  --editor-font-family: var(--font-mono);
+  --editor-font-size: 14px;
+  --reading-font-family: var(--font-sans);
+  --reading-bg: var(--bg-secondary);
+  --reading-fg: var(--text-primary);
 }
 
 /* ── 移动端尺寸覆盖（新增，迁移自 index.css）────────────── */

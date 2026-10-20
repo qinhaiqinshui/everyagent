@@ -12,9 +12,7 @@ import React from 'react'
 import WorkspacePageShell from '@/components/shared/WorkspacePageShell'
 import { Button, Checkbox, TextInput } from '@/components/shared/ui'
 import { useHub } from '@/hub/HubProvider'
-import { useThemeMode } from '@/hooks/useThemeMode'
 import { useAppUi } from '@/components/app/AppUiContext'
-import { loadThemeMode, saveThemeMode } from '@/settings/localSettings'
 import {
   getSystemNotificationPermission,
   requestSystemNotificationPermission,
@@ -31,11 +29,17 @@ import ConfirmDialog from '@/components/shared/ConfirmDialog'
 import WorkerList from '@/components/system/WorkerList'
 import SkillListTable from '@/components/system/SkillListTable'
 import ModelConfigSection from '@/components/system/modelConfig/ModelConfigSection'
+import AppearanceSection from '@/components/system/AppearanceSection'
+import EditorFontSection from '@/components/system/EditorFontSection'
+import PluginSettingsSections from '@/components/system/PluginSettingsSections'
+import {
+  settingsSectionStyle as sectionStyle,
+  settingsSectionTitleStyle as sectionTitleStyle,
+} from '@/components/system/settingsSectionStyles'
 import { APP_NAME, APP_VERSION, APP_COPYRIGHT, APP_LICENSE } from '@/appInfo'
 
 export default function SettingsPanel() {
   const hub = useHub()
-  const themeMode = useThemeMode(loadThemeMode())
   const { showToast } = useAppUi()
 
   const [hubUrl, setHubUrl] = React.useState(hub.config?.hubUrl ?? 'ws://localhost:6101/ws')
@@ -305,16 +309,12 @@ export default function SettingsPanel() {
 
       <section style={sectionStyle}>
         <h3 style={sectionTitleStyle}>外观</h3>
-        <div style={actionsStyle}>
-          <Button
-            type="button"
-            variant="secondary"
-            style={secondaryButtonStyle}
-            onClick={() => void saveThemeMode(themeMode === 'dark' ? 'light' : 'dark')}
-          >
-            {themeMode === 'dark' ? '切换到浅色' : '切换到深色'}
-          </Button>
-        </div>
+        <AppearanceSection />
+      </section>
+
+      <section style={sectionStyle}>
+        <h3 style={sectionTitleStyle}>编辑器字体</h3>
+        <EditorFontSection />
       </section>
 
       <section style={sectionStyle}>
@@ -363,6 +363,8 @@ export default function SettingsPanel() {
           </div>
         </div>
       </section>
+
+      <PluginSettingsSections />
     </WorkspacePageShell>
   )
 }
@@ -385,20 +387,6 @@ const pageHeaderHintStyle: React.CSSProperties = {
   margin: 0,
   fontSize: 'var(--text-xs)',
   color: 'var(--text-muted)',
-}
-
-const sectionStyle: React.CSSProperties = {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 10,
-  padding: '16px 0',
-  borderBottom: '1px solid var(--border)',
-}
-
-const sectionTitleStyle: React.CSSProperties = {
-  margin: 0,
-  fontSize: 'var(--text-base)',
-  fontWeight: 700,
 }
 
 const fieldStyle: React.CSSProperties = {

@@ -100,7 +100,7 @@ has_children: false
 | `registerTaskAdmissionPolicy`（任务准入策略） | task-queue | `every-agent-plugins/task-queue/src/main/java/dev/everyagent/plugin/taskqueue/TaskQueuePlugin.java:25` | 全仓唯一使用者 |
 | `registerTaskLifecycleNode`（任务生命周期节点） | task-edit-resend | `every-agent-plugins/task-edit-resend/src/main/java/dev/everyagent/plugin/editresend/EditResendNode.java` | 单节点、职责单一（order=877）；多节点编排（15/870 双节点）看 task-input-queue，try/finally 成对形态看 task-queue 的 `QueueAdmissionNode` |
 
-### 3.4 前端扩展点（15 个）
+### 3.4 前端扩展点（17 个）
 
 | 想实现 | 推荐范本 | 源码相对路径 | 为什么推荐 |
 |---|---|---|---|
@@ -118,6 +118,8 @@ has_children: false
 | `ui.round_tail_panels`（轮次尾面板） | file-change | `every-agent-plugins/file-change/web/index.ts:22` | 唯一使用者；配套 `ctx.events.on('plugin-task-event')` 直推 upsert 轮末摘要范式（§7.15.2） |
 | `ui.editor_context_menu_actions`（编辑器内容区右键菜单） | selection-reference | `every-agent-plugins/selection-reference/web/index.ts:69` | 唯一使用者：仅当有选区时出现「引用到AI对话框」；`invoke` 经 `ctx.ui.openTab('task', { taskId:'__draft__', workspace:c.workspaceRoot })` 打开草稿标签（workspace 预设 = 选区所属工作区根，新任务挂靠该工作区），再经 `ctx.ui.appendComposerToken` 插入 `kind='file.selection'` 胶囊（opaque 编码由宿主单点负责） |
 | `ui.composer_chip_actions`（胶囊激活行为） | selection-reference | `every-agent-plugins/selection-reference/web/index.ts:75` | 插件侧样本：点击胶囊经 `ctx.ui.openFileTab(..., { lineNumber })` 切回原文件标签并定位起始行；核心 `system.workspace_file` 亦经此注册（`pluginId:'core'`） |
+| `ui.settings_sections`（设置页设置段） | **无内置范例** | — | 扩展点由外部插件 novel-reader 起用；设置段组件无 props、数据自持 |
+| `ui.themes`（全局颜色主题） | **无内置范例** | — | 扩展点由外部插件 novel-reader 起用；核心深/浅色为主题表内建项（不走该扩展点）；支持部分覆盖、其余继承 `type` 基底 |
 | 扩展点之外的自绘全局 UI（悬浮球等） | mobile-keyboard | `every-agent-plugins/mobile-keyboard/web/floatball.ts` | 唯一直接操作 `document.body` 的插件：15 个扩展点没有全局覆盖层位时，挂自有根元素 + 自管生命周期与可见性 |
 
 另有非 register\* 的服务通道 `WorkerServices.addRoundClosedListener`（`every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/WorkerServices.java:80`），唯一使用者 file-change（`FileChangePlugin.java:33`）。
@@ -372,7 +374,7 @@ Token 估算器（全仓唯一实现 BuiltinTokenEstimator）+ 在线校准 Advi
 - 各注册方法与类型的完整清单：[API 一屏索引](api-index.md)
 - 把范例跑起来（构建命令矩阵、cwd 陷阱、`build:plugins`）：[构建与运行](../guides/build-and-run.md)
 - Advisor 链与 order 语义详解：[Advisor 指南](../backend/advisors.md)
-- 前端 15 个扩展点的注册签名与渲染管线：[UI 扩展点](../web/ui-extensions.md)
+- 前端 17 个扩展点的注册签名与渲染管线：[UI 扩展点](../web/ui-extensions.md)
 
 ---
 

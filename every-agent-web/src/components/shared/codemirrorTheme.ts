@@ -11,18 +11,18 @@ import { tags as t } from '@lezer/highlight'
 /** 编辑器外观主题（背景/前景/字体/行号/选区/折叠槽等），全部映射到 CSS 变量。 */
 const editorTheme = EditorView.theme({
   '&': {
-    backgroundColor: 'var(--bg-secondary)',
-    color: 'var(--text-primary)',
+    backgroundColor: 'var(--reading-bg)',
+    color: 'var(--reading-fg)',
     height: '100%',
-    fontSize: '14px',
+    fontSize: 'var(--editor-font-size)',
   },
   '.cm-content': {
-    fontFamily: 'var(--font-mono)',
+    fontFamily: 'var(--editor-font-family)',
     caretColor: 'var(--accent-blue)',
     padding: '20px 0',
   },
   '.cm-gutters': {
-    backgroundColor: 'var(--bg-secondary)',
+    backgroundColor: 'var(--reading-bg)',
     color: 'var(--text-muted)',
     border: 'none',
     borderRight: '1px solid var(--border-light)',
@@ -32,8 +32,8 @@ const editorTheme = EditorView.theme({
   },
   '.cm-lineNumbers .cm-gutterElement': {
     padding: '0 12px 0 0',
-    fontFamily: 'var(--font-mono)',
-    fontSize: '14px',
+    fontFamily: 'var(--editor-font-family)',
+    fontSize: 'var(--editor-font-size)',
     opacity: 0.5,
     userSelect: 'none',
   },

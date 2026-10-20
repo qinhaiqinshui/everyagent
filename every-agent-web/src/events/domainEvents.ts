@@ -57,7 +57,8 @@ export type DomainEventMap = {
     displayTitle?: string
   }
   [DOMAIN_EVENTS.SETTINGS_THEME_PATCHED]: {
-    themeMode: ThemeMode
+    themeId: string
+    type: ThemeMode
   }
   [DOMAIN_EVENTS.RUNTIME_CONFIG_ERROR]: {
     message: string

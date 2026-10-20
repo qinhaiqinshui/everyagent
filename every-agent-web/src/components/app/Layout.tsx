@@ -20,6 +20,7 @@ import type {
 } from '@/types'
 import type { TaskChatTabInput } from '@/task/types'
 import { getAntdTheme } from '@/theme/antdTheme'
+import { applyCurrentAppearance } from '@/theme/applyCurrent'
 import {
   FilesIcon,
   
@@ -44,7 +45,7 @@ import { setShellBridge } from '@/plugin/pluginRuntimeBridge'
 import { domainEventBus, DOMAIN_EVENTS } from '@/events/eventBus'
 import { setActiveTabMirror } from '@/plugin/activeTabMirror'
 import { AppUiProvider, useAppUi } from './AppUiContext'
-import { useThemeMode } from '@/hooks/useThemeMode'
+import { useAppearance } from '@/hooks/useAppearance'
 import { useResponsiveViewport } from '@/hooks/useResponsiveViewport'
 import type { WorkspaceTabRenderContext } from '@/plugin/types'
 import { pluginDispatcher } from '@/plugin/PluginDispatcher'
@@ -92,10 +93,10 @@ function getMobileSidebarDefaultHeight(): number {
  * 应用根布局。
  * 负责维护壳层 UI 状态，并将业务数据读取留给子组件自行处理。
  */
-export default function Layout({ initialThemeMode = 'light' }: { initialThemeMode?: ThemeMode }) {
+export default function Layout({ initialThemeType = 'light' }: { initialThemeType?: ThemeMode }) {
   return (
     <AppUiProvider>
-      <LayoutContent initialThemeMode={initialThemeMode} />
+      <LayoutContent initialThemeType={initialThemeType} />
     </AppUiProvider>
   )
 }
@@ -104,11 +105,12 @@ export default function Layout({ initialThemeMode = 'light' }: { initialThemeMod
  * 布局内部实现。
  * 放在 AppUiProvider 内部，确保启动期错误可直接走本地 UI 提示。
  */
-function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
+function LayoutContent({ initialThemeType }: { initialThemeType: ThemeMode }) {
   const { showToast } = useAppUi()
   const hub = useHub()
 
-  const themeMode = useThemeMode(initialThemeMode)
+  const appearance = useAppearance(initialThemeType)
+  const themeType = appearance.type
   const { isMobile } = useResponsiveViewport()
   const mobileBottomBarHeight = 'var(--mobile-bottom-bar-height)'
   const mobileSidebarMaxHeight = getMobileSidebarMaxHeight()
@@ -209,10 +211,11 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
     ? activeWorkspaceTab.taskId
     : null
 
+  // 应用整体外观（颜色主题 + 编辑器字体）。依赖 appearance（主题 id/type）与插件扩展点
+  // 版本：插件在 activate() 里注册主题后需重新应用，才能把当前选中主题的覆盖色落上。
   React.useEffect(() => {
-    document.documentElement.setAttribute('data-theme', themeMode)
-    document.body.setAttribute('data-theme', themeMode)
-  }, [themeMode])
+    applyCurrentAppearance()
+  }, [appearance, pluginExtensionsVersion])
 
   React.useEffect(() => {
     if (prevIsMobileRef.current && !isMobile && !sidebarOpen) {
@@ -925,14 +928,14 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
   ]
 
   return (
-    <ConfigProvider theme={getAntdTheme(themeMode)}>
+    <ConfigProvider theme={getAntdTheme(themeType)}>
       <AntApp className="antd-root" style={{ height: '100%', display: 'flex' }}>
         <AntdAppBridge />
         <WorkspaceShellProvider value={shellValue}>
           <div
             className={`workspace-layout${isMobile ? ' is-mobile' : ' is-desktop'}`}
             style={{
-              colorScheme: themeMode,
+              colorScheme: themeType,
               display: 'flex',
               flexDirection: isMobile ? 'column' : 'row',
               height: '100dvh',
@@ -943,7 +946,7 @@ function LayoutContent({ initialThemeMode }: { initialThemeMode: ThemeMode }) {
               minWidth: 0,
               minHeight: 0,
             }}
-            data-theme={themeMode}
+            data-theme={themeType}
           >
             {isMobile && (
               <button

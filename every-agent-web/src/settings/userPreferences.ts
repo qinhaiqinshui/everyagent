@@ -7,7 +7,7 @@
  */
 import { hubSession } from '@/hub/session'
 import { domainEventBus, DOMAIN_EVENTS } from '@/events/eventBus'
-import { syncThemeFromWorker } from './localSettings'
+import { syncAppearanceFromWorker } from './localSettings'
 
 class UserPreferencesService {
   private wired = false
@@ -37,11 +37,11 @@ class UserPreferencesService {
     })
   }
 
-  /** 从 worker 拉取主题偏好,校正缓存并发领域事件。 */
+  /** 从 worker 拉取外观偏好(主题/自定义主题/编辑器字体),校正缓存并发领域事件。 */
   private async syncTheme(): Promise<void> {
-    const theme = await syncThemeFromWorker()
-    if (theme !== null) {
-      domainEventBus.emit(DOMAIN_EVENTS.SETTINGS_THEME_PATCHED, { themeMode: theme })
+    const appearance = await syncAppearanceFromWorker()
+    if (appearance !== null) {
+      domainEventBus.emit(DOMAIN_EVENTS.SETTINGS_THEME_PATCHED, appearance)
     }
   }
 }

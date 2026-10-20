@@ -1111,6 +1111,8 @@ const editorScopeStyle: React.CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
   overflow: 'hidden',
+  background: 'var(--reading-bg)',
+  color: 'var(--reading-fg)',
 }
 
 const metaActionButtonStyle: React.CSSProperties = {

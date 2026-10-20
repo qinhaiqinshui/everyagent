@@ -20,6 +20,8 @@ import type {
   SearchTypeDefinition,
   UiEditorContextMenuActionDefinition,
   ComposerChipActionDefinition,
+  UiSettingsSectionDefinition,
+  ThemeDefinition,
 } from '@everyagent/plugin-api'
 import { appendComposerTextQueued, getComposerBridge, getShellBridge } from './pluginRuntimeBridge'
 import { activeTabMirror } from './activeTabMirror'
@@ -60,6 +62,8 @@ const EXT_UI_OUTPUT_BLOCKS = 'ui.output_blocks'
 const EXT_UI_SEARCH_TYPES = 'ui.search_types'
 const EXT_UI_EDITOR_CONTEXT_MENU_ACTIONS = 'ui.editor_context_menu_actions'
 const EXT_UI_COMPOSER_CHIP_ACTIONS = 'ui.composer_chip_actions'
+const EXT_UI_SETTINGS_SECTIONS = 'ui.settings_sections'
+const EXT_UI_THEMES = 'ui.themes'
 
 // ── 扩展点注册表管理 ──
 
@@ -189,6 +193,14 @@ export interface RealPluginDispatcher {
   registerComposerChipAction: (def: ComposerChipActionDefinition) => Disposable
   /** 按 kind 查胶囊激活动作（先注册者胜，无命中返回 null）。 */
   findComposerChipAction: (kind: string) => ComposerChipActionDefinition | null
+  /** 注册设置页设置段（由 `ui.settings_sections` 扩展点产出）。 */
+  registerSettingsSection: (def: UiSettingsSectionDefinition) => Disposable
+  /** 同步获取插件注册的设置页设置段列表（供 SettingsPanel 渲染合并）。 */
+  listRegisteredSettingsSections: () => UiSettingsSectionDefinition[]
+  /** 注册全局颜色主题（由 `ui.themes` 扩展点产出）。 */
+  registerTheme: (def: ThemeDefinition) => Disposable
+  /** 同步获取插件注册的全局颜色主题列表（供主题解析合并）。 */
+  listRegisteredThemes: () => ThemeDefinition[]
   /** 同步获取插件注册的输入框上方面板列表（供 TaskChat 渲染合并）。 */
   listRegisteredComposerAbovePanels: () => UiComposerAbovePanelDefinition[]
   /** 查询当前激活的工作区标签（读宿主壳层镜像；无激活标签返回 null）。 */
@@ -256,6 +268,10 @@ export const pluginDispatcher: RealPluginDispatcher = {
       case EXT_UI_EDITOR_CONTEXT_MENU_ACTIONS:
         return getRegistry<T>(extensionPoint).getAll()
       case EXT_UI_COMPOSER_CHIP_ACTIONS:
+        return getRegistry<T>(extensionPoint).getAll()
+      case EXT_UI_SETTINGS_SECTIONS:
+        return getRegistry<T>(extensionPoint).getAll()
+      case EXT_UI_THEMES:
         return getRegistry<T>(extensionPoint).getAll()
       default:
         return []
@@ -370,6 +386,18 @@ export const pluginDispatcher: RealPluginDispatcher = {
   findComposerChipAction(kind) {
     // 先注册者胜：核心在首屏同步注册，故核心 kind 恒优先；插件不能顶替核心 kind。
     return getRegistry<ComposerChipActionDefinition>(EXT_UI_COMPOSER_CHIP_ACTIONS).getAll().find((item) => item.kind === kind) ?? null
+  },
+  registerSettingsSection(def) {
+    return getRegistry<UiSettingsSectionDefinition>(EXT_UI_SETTINGS_SECTIONS).register('', def)
+  },
+  listRegisteredSettingsSections() {
+    return getRegistry<UiSettingsSectionDefinition>(EXT_UI_SETTINGS_SECTIONS).getAll()
+  },
+  registerTheme(def) {
+    return getRegistry<ThemeDefinition>(EXT_UI_THEMES).register('', def)
+  },
+  listRegisteredThemes() {
+    return getRegistry<ThemeDefinition>(EXT_UI_THEMES).getAll()
   },
   getActiveTab() {
     return activeTabMirror.current
