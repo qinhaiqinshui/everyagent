@@ -107,8 +107,9 @@ describe('message 视图工具块(多调用竖线容器 + per-tool 视图直挂)
     expect(html).toContain('nagent-tool-state--done')
     expect(html).toContain('nagent-tool-state--error')
     expect(html).toContain('nagent-tool-state--queued')
-    // 权威耗时:c1=1500ms → 1.5s;c2=25000ms → 25s;排队行无耗时也不显示状态文案
-    expect(html).toContain('1.5s')
+    // 耗时仅慢调用显示(≥10s 门槛,与色阶起色同一阈值):c1=1500ms 快调用不显示;
+    // c2=25000ms → 25s;排队行无耗时也不显示状态文案
+    expect(html).not.toContain('1.5s')
     expect(html).toContain('25s')
     expect(html).not.toContain('排队中')
   })
@@ -162,7 +163,8 @@ describe('message 视图工具块(多调用竖线容器 + per-tool 视图直挂)
 describe('message 视图运行态读秒与中断态', () => {
   it('tool.started 瞬态按 callId 直配点亮 running + 读秒(单调用直渲视图摘要行)', () => {
     const item = messageItem('10', { toolCalls: [callOf('c1', 'shell', '{"command":"ping"}')] })
-    recordToolStarted(TASK_ID, { callId: 'c1', name: 'shell', arguments: '{}', startedAt: Date.now() - 400 })
+    // 读秒实现不动,只受显示条件(≥10s)约束:夹具给 10.4s,数字过门槛可见
+    recordToolStarted(TASK_ID, { callId: 'c1', name: 'shell', arguments: '{}', startedAt: Date.now() - 10400 })
     const html = renderMessage(item, [item])
     // 单调用不套批壳,直接渲染 per-tool 视图(DefaultToolView)
     expect(html).not.toContain('nagent-tool-batch')
@@ -203,7 +205,7 @@ describe('message 视图运行态读秒与中断态', () => {
     }
     const html = renderMessage(item, [item, result, cancelled])
     expect(html).toContain('nagent-tool-state--done')
-    expect(html).toContain('0.9s')
+    expect(html).not.toContain('0.9s')
   })
 })
 
@@ -343,7 +345,7 @@ describe('TaskThread 分发切换(查表 + 兜底)', () => {
     // message 命中(单调用直渲 per-tool 视图,不套批壳) + 被吸收的 tool.result 不重复出块
     expect(html).not.toContain('nagent-tool-batch')
     expect(html).toContain('nagent-tool--call')
-    expect(html).toContain('1.2s')
+    expect(html).not.toContain('1.2s')
     // 未注册 kind → FallbackView(TaskTraceShell 形状,内容零丢失)
     expect(html).toContain('nagent-trace-shell')
     expect(html).toContain('未来事件')

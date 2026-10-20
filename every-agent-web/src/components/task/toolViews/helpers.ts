@@ -190,17 +190,24 @@ export function toolStateClass(detail: AggregatedToolDetail): string {
   return state ? `nagent-tool-state--${state}` : ''
 }
 
-/** 详情 → 摘要行耗时文本(detail.durationMs;非法/缺失返回空串不渲染)。 */
-export function toolDurationText(detail: AggregatedToolDetail): string {
-  return formatToolDuration(detail.durationMs)
-}
-
-/** 慢调用色阶区间:10s 起色(刚过阈值就给 20% 明显染色),120s(2min)封顶,再慢不再加深。 */
+/** 慢调用阈值(10s):同一阈值承担两个职责——
+ *  ① 摘要行耗时数字的显示门槛(≥10s 才显示:快调用的耗时只是噪音;
+ *     运行中读秒逻辑不动,数字过 10s 自然浮现,与色阶起色同步);
+ *  ② 慢调用色阶起色点(见 toolDurationTint)。
+ *  120s(2min)封顶,再慢不再加深。 */
 const SLOW_TINT_START_MS = 10_000
 const SLOW_TINT_MAX_MS = 120_000
 /** 起色百分比 / 封顶百分比(color-mix 里 --tool-slow-red 的占比)。 */
 const SLOW_TINT_MIN_PCT = 20
 const SLOW_TINT_MAX_PCT = 100
+
+/** 详情 → 摘要行耗时文本:仅慢调用(≥SLOW_TINT_START_MS,与色阶起色同一阈值)显示;
+ *  非法/缺失/未过阈值返回空串,各视图按空串条件渲染(不渲染 <span>)。 */
+export function toolDurationText(detail: AggregatedToolDetail): string {
+  const ms = detail.durationMs
+  if (ms == null || !Number.isFinite(ms) || ms < SLOW_TINT_START_MS) return ''
+  return formatToolDuration(ms)
+}
 
 /**
  * 耗时 → 颜色深浅百分比(0~100),供 CSS 的 `color-mix(in srgb, --tool-slow-red P%, --text-muted)` 插值。
