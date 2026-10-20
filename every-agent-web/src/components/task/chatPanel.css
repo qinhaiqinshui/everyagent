@@ -1265,9 +1265,9 @@
   margin-left: calc(-1 * var(--tool-batch-inset));
   display: flex;
   flex-direction: column;
-  /* 只保留左边框:比较淡的竖线只做分组暗示,不与内容抢视觉;
-     圆角保留 → 竖线两端经圆弧平滑收头(左上/左下角作用于左边框)。 */
-  border-left: 1px solid color-mix(in srgb, var(--border-light) 75%, transparent);
+  /* 只保留左边框:常用淡蓝竖线做分组标识(与批徽标同色系,accent-blue 55% 透明度,
+     与历史批壳/批弧同强度),不与内容抢视觉;圆角保留 → 竖线两端经圆弧平滑收头。 */
+  border-left: 1px solid color-mix(in srgb, var(--accent-blue) 55%, transparent);
   border-radius: var(--radius-md, 8px);
   padding-left: var(--tool-batch-pad);
   /* 数量徽标的定位基准 */
@@ -1286,8 +1286,8 @@
   padding: 0 3px;
   border-radius: 999px;
   background: var(--bg-primary);
-  color: var(--text-muted);
-  font-size: var(--text-xs);
+  color: color-mix(in srgb, var(--accent-blue) 75%, var(--text-muted));
+  font-size: 10px;
   font-weight: 600;
   line-height: 1.1;
   font-variant-numeric: tabular-nums;
@@ -1296,7 +1296,7 @@
   user-select: none;
 }
 
-/* 中断批:边框与徽标转灰(已 started 调用黄显/未 started 灰显由各视图状态图标承载) */
+/* 中断批:淡蓝边框与徽标转灰(已 started 调用黄显/未 started 灰显由各视图状态图标承载) */
 .nagent-tool-batch--interrupted {
   border-left-color: color-mix(in srgb, var(--text-muted) 35%, transparent);
 }
