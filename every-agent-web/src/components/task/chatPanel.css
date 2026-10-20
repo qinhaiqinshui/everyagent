@@ -1276,9 +1276,14 @@
 
 /* 终端图标（TerminalIcon，powershell/bash）running 态专属：不整体旋转
    （终端框旋转观感差），改为 `_` 光标硬闪烁——steps 阶跃、无渐变，真实终端
-   光标手感；颜色仍由上方 nagent-tool-state--running 提供，此处的 animation:none
-   仅为关掉旋转，光标节点单独驱动。 */
-.nagent-tool__icon.nagent-tool-state--running .nagent-terminal-cursor {
+   光标手感。选择器用 nagent-glyph-terminal（CommandToolView 拼在图标上）
+   精确限定:既不误伤其他工具图标的旋转,也不影响终端标签页等无工具状态类
+   的同图标消费场景;颜色仍由上方 nagent-tool-state--running 提供。 */
+.nagent-tool__icon.nagent-glyph-terminal.nagent-tool-state--running {
+  animation: none;
+}
+
+.nagent-tool__icon.nagent-glyph-terminal.nagent-tool-state--running .nagent-terminal-cursor {
   animation: nagent-terminal-blink 1.1s steps(2, start) infinite;
 }
 
@@ -1292,7 +1297,7 @@
   }
 
   /* 光标闪烁同样尊重减弱动效偏好（静止常亮）。 */
-  .nagent-tool__icon.nagent-tool-state--running .nagent-terminal-cursor {
+  .nagent-tool__icon.nagent-glyph-terminal.nagent-tool-state--running .nagent-terminal-cursor {
     animation: none;
   }
 }
