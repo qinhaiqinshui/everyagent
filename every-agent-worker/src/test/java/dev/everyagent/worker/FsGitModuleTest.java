@@ -576,13 +576,20 @@ class FsGitModuleTest {
         assertTrue(taskId.startsWith("t_"), taskId);
         String list2 = rpc("workspaces.list", "{}");
         boolean registered = false;
+        String workspaceId = null;
         for (JsonNode wsn : Json.parse(list2).path("payload").path("result").path("workspaces")) {
-            registered |= stranger.normalize().toString().equals(wsn.path("root").asString());
+            if (stranger.normalize().toString().equals(wsn.path("root").asString())) {
+                registered = true;
+                workspaceId = wsn.path("id").asString(null);
+            }
         }
         assertTrue(registered, "task.run 注册工作区: " + list2);
-        assertTrue(Files.isRegularFile(workerProps.resolveWorkspacesDir().resolve("defaultworkspace").resolve("tasks").resolve(taskId)
-                .resolve("meta.json")),
-                "任务数据住系统目录 data/tasks/<taskId>,不落工作区");
+        // 任务数据住系统目录 workspaces/<workspaceId>/tasks/<taskId>/(不落工作区)
+        // workspaceId 由注册表给出:非默认工作区不复用 defaultworkspace 的 id。
+        assertTrue(workspaceId != null && !workspaceId.isEmpty(), "注册项带 workspaceId: " + list2);
+        assertTrue(Files.isRegularFile(workerProps.resolveWorkspacesDir().resolve(workspaceId)
+                .resolve("tasks").resolve(taskId).resolve("meta.json")),
+                "任务数据住系统目录 workspaces/<workspaceId>/tasks/<taskId>,不落工作区");
         rpc("task.cancel", "{\"taskId\":\"" + taskId + "\"}");
     }
 
