@@ -54,7 +54,7 @@
 }
 
 .nagent-agent__label {
-  font-size: 11px;
+  font-size: var(--text-2xs);
   font-weight: 500;
   letter-spacing: 0.2px;
   line-height: 1;
@@ -63,7 +63,7 @@
 }
 
 .nagent-agent__title {
-  font-size: 11px;
+  font-size: var(--text-2xs);
   line-height: 1;
   color: var(--text-muted);
   white-space: nowrap;
@@ -228,7 +228,7 @@
   border-radius: 999px;
   background: var(--bg-tertiary);
   color: var(--text-secondary);
-  font-size: 11px;
+  font-size: var(--text-2xs);
   line-height: 1.4;
   white-space: nowrap;
 }

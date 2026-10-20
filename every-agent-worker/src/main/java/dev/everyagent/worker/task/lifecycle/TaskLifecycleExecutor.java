@@ -129,9 +129,28 @@ public final class TaskLifecycleExecutor {
             Thread.currentThread().interrupt();
             return TaskOutcome.cancelled();
         } catch (Throwable t) {
-            // 最外层之外的兜底（节点否决异常等）
+            // 客户端可见错误(BAD_PARAMS / NOT_FOUND / SANDBOX_DENIED / AUTH_REQUIRED)原样上抛:
+            // RPC 阶段的节点参数/资源错误必须由 RpcDispatcher 的 catch 链译成对应错误码应答
+            // (BadParamsException 等由 RpcContext.strParam 抛出)。若在此吞成 TaskOutcome.failed,
+            // 该 RPC 永不应答(前端挂到超时)——2026-10 实测 workspace 缺失时 task.run 静默挂死。
+            if (isClientFacingError(t)) {
+                throw (RuntimeException) t;
+            }
+            // 其余(节点否决异常/内核异常等)兜底为任务结局
             return TaskOutcome.failed(t);
         }
+    }
+
+    /**
+     * 客户端可见错误:由 RPC 层按类型译成错误码的异常(与 RpcDispatcher 的 catch 链一一对应)。
+     * 这些异常在 RPC 阶段意味着「请求本身不合法/目标不存在」,必须回到 RPC 层应答,
+     * 不得被链执行器降级为「任务运行失败」结局。
+     */
+    private static boolean isClientFacingError(Throwable t) {
+        return t instanceof dev.everyagent.plugin.api.exception.BadParamsException
+                || t instanceof dev.everyagent.plugin.api.exception.NotFoundException
+                || t instanceof dev.everyagent.plugin.api.exception.AuthRequiredException
+                || t instanceof dev.everyagent.worker.rpc.SandboxViolationException;
     }
 
     /**

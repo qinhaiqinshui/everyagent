@@ -129,7 +129,8 @@ class MultiHubE2eTest {
             return new ChatModelFactory(props, enhancerRegistry, configStore) {
                 @Override
                 public org.springframework.ai.chat.model.ChatModel build(ResolvedConfig cfg,
-                        org.springframework.ai.openai.OpenAiChatOptions options, String agentId) {
+                        org.springframework.ai.openai.OpenAiChatOptions options, String agentId,
+                        dev.everyagent.plugin.api.model.EventEmitter events) {
                     return new FakeChatModel();
                 }
             };
@@ -242,19 +243,21 @@ class MultiHubE2eTest {
         List<JsonNode> firstRun = sync(feA1, taskId, 0);
         long firstRunLastSeq = firstRun.getLast().path("seq").asLong();
 
-        // 不做 owner 隔离:B 前端在 B 自己的 input 频道上对 A 的任务发输入 → 直接放行,触发冷启动再运行
-        feB.send(pub(Channels.workerInput(kB, workerProps.getWorkerId()), "task.input",
-                "{\"taskId\":\"" + taskId + "\",\"text\":\"THINK:跨用户追问\"}"));
+        // 不做 owner 隔离:B 前端直接用 B 自己的连接对 A 的任务续跑 →
+        // 直接放行,触发冷启动再运行(worker 级 task.input 通道已删除,统一走 task.run)
+        String rerun = rpc(feB, "task.run", Json.write(Json.obj()
+                .put("taskId", taskId).put("input", "THINK:跨用户追问")));
+        assertTrue(rerun.contains("rpc.ok"), "跨用户续跑放行: " + rerun);
         syncUntil(feA1, taskId, e -> e.path("event").asString().equals("user.message")
-                && e.path("payload").path("text").asString().contains("跨用户追问"), "跨用户 user.message");
+                && e.path("payload").path("content").asString().contains("跨用户追问"), "跨用户 user.message");
         // THINK 脚本带 150ms×2 延迟:等再运行末条 message 落盘再取最末 message(否则读到首轮回答)
         syncUntil(feA1, taskId, e -> e.path("event").asString().equals("message")
                 && e.path("seq").asLong() > firstRunLastSeq, "再运行 message");
         JsonNode secondAnswer = sync(feA1, taskId, 0).stream()
                 .filter(e -> e.path("event").asString().equals("message"))
                 .reduce((first, second) -> second).orElseThrow();
-        assertTrue(secondAnswer.path("payload").path("text").asString().contains("上下文2:"),
-                "再运行携带历史: " + secondAnswer.path("payload").path("text").asString());
+        assertTrue(secondAnswer.path("payload").path("content").asString().contains("上下文2:"),
+                "再运行携带历史: " + secondAnswer.path("payload").path("content").asString());
 
         // 不做 owner 隔离:任意连接(包括 B)均可删除该任务
         assertTrue(rpc(feB, "task.delete", "{\"taskId\":\"" + taskId + "\"}").contains("\"deleted\":true"));

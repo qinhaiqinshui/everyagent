@@ -105,7 +105,8 @@ class WorkerTaskPollTest {
             return new ChatModelFactory(props, enhancerRegistry, configStore) {
                 @Override
                 public org.springframework.ai.chat.model.ChatModel build(ResolvedConfig cfg,
-                        org.springframework.ai.openai.OpenAiChatOptions options, String agentId) {
+                        org.springframework.ai.openai.OpenAiChatOptions options, String agentId,
+                        dev.everyagent.plugin.api.model.EventEmitter events) {
                     return new FakeChatModel();
                 }
             };
@@ -317,9 +318,11 @@ class WorkerTaskPollTest {
         String taskId = create("第一轮问候");
         fe.await(t -> t.contains("\"event\":\"task.updated\"") && t.contains("\"status\":\"done\"")
                 && t.contains(taskId), "首轮 done");
-        // 终态冷启动再运行,凑出两轮 user.message
-        fe.send(pub(Channels.workerInput(k, workerProps.getWorkerId()), "task.input",
-                "{\"taskId\":\"" + taskId + "\",\"text\":\"THINK:第二轮追问\"}"));
+        // 终态 task.run{taskId} = 冷启动再运行,凑出两轮 user.message
+        // (worker 级 task.input 通道已于 bbe8c3b0 删除,入队/续跑统一走 task.run)
+        String rerun = rpc("task.run", Json.write(Json.obj()
+                .put("taskId", taskId).put("input", "THINK:第二轮追问")));
+        assertTrue(rerun.contains("rpc.ok"), rerun);
         // events 全量轮询直到两轮完成(live=false)且含 2 条 user.message
         PollResp two = pollUntil("{\"taskId\":\"" + taskId + "\",\"mode\":\"events\",\"afterSeq\":0}",
                 p -> !p.isErr() && !p.result.path("live").asBoolean(false)

@@ -147,6 +147,7 @@
   --space-12: 48px;
 
   /* ── Typography 刻度（新增）──────────────────────────── */
+  --text-2xs: 11px; /* 最小档：微小角标/计数/超小标签，比 --text-xs 还小一档 */
   --text-xs: 12px;
   --text-sm: 13px;
   --text-base: 14px;
