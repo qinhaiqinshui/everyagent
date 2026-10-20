@@ -54,6 +54,15 @@ class WorkspaceRegistryService {
   private wired = false
   private refreshTimer: ReturnType<typeof setTimeout> | null = null
   private refreshInFlight: Promise<void> | null = null
+  /**
+   * 在途刷新期间有新的刷新请求到达(worker.online/presence 变更等);当前刷新完成后自动重跑。
+   *
+   * <p>没有它,重启 worker 会永久卡「未挂靠工作区」:worker.offline 触发的 refresh 向离线
+   * worker 发 workspaces.list(hub 零缓冲、无订阅方,挂到 30s 超时),期间 worker 重启完成
+   * 回来的 worker.online → scheduleRefresh → refresh 命中 refreshInFlight 直接 return,
+   * 这次恢复请求被静默丢弃;30s 超时落定空注册表后再无事件触发,注册表永久为空。
+   */
+  private refreshPending = false
   /** 广播/add/remove 的变更版本号:refresh 拉取期间若变化,说明其快照可能陈旧,须丢弃覆盖。 */
   private mutation = 0
 
@@ -127,13 +136,26 @@ class WorkspaceRegistryService {
 
   /** 立即遍历所有已连 worker 校准并合并注册表。 */
   async refresh(): Promise<void> {
-    if (this.refreshInFlight) return this.refreshInFlight
+    if (this.refreshInFlight) {
+      // 刷新进行中(worker.online/presence 变更等):标记 pending,当前刷新完成后自动重跑,
+      // 避免用 worker 重启前的陈旧状态把「已恢复」的注册表重新清空。
+      this.refreshPending = true
+      return this.refreshInFlight
+    }
     const stamp = this.mutation
     this.refreshInFlight = (async () => {
       try {
         const results = new Map<string, WorkspaceRegistry | null>()
         const pending: Array<Promise<void>> = []
         hubSession.forEachConnectedWorker((workerId, client) => {
+          // presence 离线的 worker(前端 WS 仍 open,方案 B):hub 零缓冲、worker 未订阅
+          // cmd 频道,RPC 会挂到 30s 超时。直接判离线清空镜像,不在此轮发 RPC——
+          // 否则一根挂起 RPC 会把整轮 refresh 拖到 30s,期间 worker 重启完成的 worker.online
+          // 恢复请求命中 refreshInFlight 被丢弃,注册表永久空、任务全落「未挂靠工作区」。
+          if (!hubSession.isWorkerOnline(workerId)) {
+            results.set(workerId, null)
+            return
+          }
           pending.push((async () => {
             try {
               const registry = await client.rpc(workerId, 'workspaces.list') as WorkspaceRegistry
@@ -163,6 +185,12 @@ class WorkspaceRegistryService {
         // worker 离线/不支持:保留上次注册表,下次校准
       } finally {
         this.refreshInFlight = null
+        // 在途刷新期间 presence 变更等触发了新请求:重跑一次,用最新的 worker 在线态
+        // 重新校准(否则 worker 重启后注册表永久停在空,任务全落「未挂靠工作区」)。
+        if (this.refreshPending) {
+          this.refreshPending = false
+          void this.refresh()
+        }
       }
     })()
     return this.refreshInFlight
