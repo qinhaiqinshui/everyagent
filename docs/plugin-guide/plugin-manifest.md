@@ -31,7 +31,7 @@ worker 启动（@PostConstruct，全程只读一次）
 |---|---|---|
 | `BuiltInPluginScanner` | 仅 `enabled` | `every-agent-worker/src/main/java/dev/everyagent/worker/plugin/scanner/BuiltInPluginScanner.java:79-88`、`isEnabled` 实现 `:117-123` |
 | `ExternalPluginScanner` | 仅 `enabled`（与内置同语义） | `every-agent-worker/src/main/java/dev/everyagent/worker/plugin/scanner/ExternalPluginScanner.java`（`isEnabled` 同款私有实现） |
-| `PluginLoader` | `id/name/version/description/author/main/provides.spi.EveryAgentPlugin/webMain/icon/repository/license/homepage/categories/contributes.config.*.default` + 禁用名单 | `every-agent-worker/src/main/java/dev/everyagent/worker/plugin/loader/PluginLoader.java:221-290` |
+| `PluginLoader` | `id/name/version/description/author/main/provides.spi.EveryAgentPlugin/webMain/icon/repository/license/homepage/categories/contributes.config.*.default/skills` + 禁用名单 | `every-agent-worker/src/main/java/dev/everyagent/worker/plugin/loader/PluginLoader.java:221-290`（`skills` 物化见 `:300-321`） |
 | 前端 `pluginLoader.ts` | `plugin.list` 返回的 `active/hasWebMain/webMain/id`（清单字段一律不直接读文件） | `every-agent-web/src/plugin/pluginLoader.ts`（`webEntryJsPath` 消费 `webMain` 值） |
 
 ⚠️ **时机**：清单只在 `PluginLoader.init()`（`@PostConstruct`，`PluginLoader.java:151-154`）时读一次，改 `plugin.json` **必须重启 worker**；运行期没有重载入口（`scanAndLoad()` 的第二次调用只出现在单测里：`every-agent-worker/src/test/java/dev/everyagent/worker/plugin/loader/PluginLoaderDisabledTest.java:107,124`）。
@@ -56,6 +56,7 @@ worker 启动（@PostConstruct，全程只读一次）
 | `categories` | string[]（如 `["Git","任务管理"]`） | 否 | `[]` → 详情页无标签行 | `PluginLoader.java` → `plugin.list` 下发 `categories` 数组 | **纯展示**：扩展详情页标签（VSCode 扩展页 Category 角色）；非数组/元素非字符串时静默忽略 |
 | `enabled` | boolean | 否（建议显式写） | `true`（缺省**或解析失败**都算 true） | `BuiltInPluginScanner.java:81`、`:117-123`；`ExternalPluginScanner` 同款判定 | 内置与外部扫描器**都看它**（同语义：false → 整目录跳过、不加载、不进 `plugin.list`）。详见 §6 |
 | `contributes.config.<key>.default` | string / number / boolean | 否 | 无 `default` 键 = 该配置项不进入 map | `PluginLoader.java:248-258` → `PluginConfigImpl`（`every-agent-worker/.../plugin/PluginConfigImpl.java`） | 只有 `default` 被读；`type` / `description` **无人消费**（见 §2.2） |
+| `skills` | string（**插件目录内**的相对路径，如 `"skill"`） | 否 | `""` → 不物化 skill | `PluginLoader.loadPlugin()`（`PluginLoader.java:300-321`，禁用检查后、入口类检查前统一物化） | 声明 skill 目录路径：目录内**每个一级子目录即一个 skill**（`<skills>/<id>/skill.md`，id 仅允许 `[a-z0-9][a-z0-9-]*`），由 PluginLoader 物化到系统技能目录（`skillsDir`）后与用户自制 skill **完全同权**。**一插件可声明多个 skill**。**纯 web 插件也能带 skill**（不依赖 `main`，物化时 Java 代码零参与）。**禁用插件不贡献 skill**（物化发生在禁用检查之后）。IO 失败 WARN 降级、不阻断加载。详见 [`backend/advisors.md`](backend/advisors.md) §5 |
 
 ### 2.2 `contributes.config` 的实际链路（比想象短）
 

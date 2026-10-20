@@ -7,7 +7,7 @@ has_children: false
 
 # Advisor 与模型增强扩展点
 
-**一句话定位**：本篇讲挂在「模型调用链」与「模型构建」上的 5 个后端扩展点——向 agent 链注入 Advisor（`AdvisorProvider`）、在模型工厂构建期介入（`ChatModelEnhancer`）、替换 token 估算器（`TokenEstimator`）、提供搜索后端（`SearchProvider`）、参与授权决议链（`AuthorizationHandler`），外加插件的**技能包物化**（`SkillMaterializer`，§5——不是注册方法，是 `activate()` 里的一次落盘调用）。核心交付物是 **Advisor order 坐标图**（§2）——想给 agent 链插一个自己的 Advisor，先看那张表再选位置。
+**一句话定位**：本篇讲挂在「模型调用链」与「模型构建」上的 5 个后端扩展点——向 agent 链注入 Advisor（`AdvisorProvider`）、在模型工厂构建期介入（`ChatModelEnhancer`）、替换 token 估算器（`TokenEstimator`）、提供搜索后端（`SearchProvider`）、参与授权决议链（`AuthorizationHandler`），外加插件的**技能包物化**（`SkillMaterializer`，§5——不是注册方法，是 plugin.json 声明 `skills` 字段后由 PluginLoader 加载时统一落盘）。核心交付物是 **Advisor order 坐标图**（§2）——想给 agent 链插一个自己的 Advisor，先看那张表再选位置。
 
 注册方法全集见 [plugin.json 字段参考](../plugin-manifest.md) 与后端总览；本篇 5 个 SPI 的注册入口都是 `activate(ctx)` 里的 `ctx.register*` 一行。
 
@@ -225,27 +225,31 @@ public interface TokenEstimator {
 
 ## 5. 技能包物化（SkillMaterializer）—— 插件贡献 skill 的唯一方式
 
-**机制**：skill 的唯一真相源是 worker 系统技能目录 `skillsDir`（一目录一 skill，目录下必有带 frontmatter 的 `skill.md`）——**不存在代码注册通道**（旧版 skill 贡献 SPI 已整体删除，不兼容变更，见本节末尾迁移说明）。插件贡献 skill = 把 `skill/<id>/skill.md` 打进 jar，`activate()` 里调一次 plugin-api 的物化工具类落盘：
+**机制**：skill 的唯一真相源是 worker 系统技能目录 `skillsDir`（一目录一 skill，目录下必有带 frontmatter 的 `skill.md`）——**不存在代码注册通道**（旧版 skill 贡献 SPI 已整体删除，不兼容变更，见本节末尾迁移说明）。插件贡献 skill = 在 plugin.json 声明 `skills` 字段（值为相对插件根目录的 skill 目录路径），`PluginLoader.loadPlugin()` 加载时统一物化落盘，**插件 Java 代码零参与**：
 
-```java
-// 插件资源布局（根固定为 skill/，一级目录名 = skill id，仅允许 [a-z0-9][a-z0-9-]*）：
-//   src/main/resources/skill/agent-dispatch/skill.md
-WorkerConfig props = ctx.services().config();
-List<String> installed = SkillMaterializer.materializeAllFromClasspath(
-        props.resolveSkillsDir(), getClass().getClassLoader());   // 默认扫本插件 classpath 的 skill/*/skill.md
+```jsonc
+// plugin.json（与 skill/ 目录同级）
+{
+  "id": "subagent",
+  "skills": "skill"        // 声明 skill 目录（相对插件根目录）；不写 = 不物化 skill
+}
+// 插件目录布局（每个一级子目录 = 一个 skill，id 仅允许 [a-z0-9][a-z0-9-]*）：
+//   <pluginRoot>/skill/agent-dispatch/skill.md
 ```
 
-物化语义（`every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/skill/SkillMaterializer.java`）：幂等（与 classpath 内容**逐字节一致**则零写入，不一致覆盖）、原子写（`AtomicFiles.replace` 临时文件 + 原子替换，杜绝扫描读到半截文件）、并清理旧扁平 `<id>.md` 残留；资源缺失 / IO 失败抛 `IOException`，由插件 WARN 降级——不阻断 `activate()` 其余部分，代价是该 skill 暂时消失，可经设置页「重新读取 Skill 列表」或重装插件复原。
+**物化时机与三个关键性质**（`PluginLoader.java:300-321`）：① 物化发生在**禁用检查之后、入口类检查之前**——禁用插件不贡献 skill；② 物化不依赖 `main` 入口类——**纯 web 插件（无 Java 代码）也能带 skill**；③ `skills` 目录内**每个一级子目录即一个 skill**（`<skills>/<id>/skill.md`），一个插件可声明多个 skill。
+
+物化语义（`every-agent-plugin-api/src/main/java/dev/everyagent/plugin/api/skill/SkillMaterializer.java` 的 `materializeFromDirectory(Path, Path)`）：幂等（与源内容**逐字节一致**则零写入，不一致覆盖）、原子写（`AtomicFiles.replace` 临时文件 + 原子替换，杜绝扫描读到半截文件）、并清理旧扁平 `<id>.md` 残留；资源缺失 / IO 失败抛 `IOException`，由 PluginLoader WARN 降级——不阻断插件激活，代价是该 skill 暂时消失，重启 worker 复原。
 
 **落盘后与用户自制 skill 完全同权**：worker 的 `SkillCatalog` 扫 `skillsDir` 全部一级子目录（每次实扫、无缓存、不排除任何 id），统一进入 system prompt（`SkillAdvisor`，HP+100，渐进式披露索引——「标题 + 一句话描述 + 知识包绝对路径」，正文由 AI 按需 `read_file`）与 `/` 菜单（`SkillSlashProvider`，经 `slash.list` 出网；全部 skill 一律自动成为菜单项，无来源标记）。**两条通道同一份目录扫描数据**：不存在「对模型可见但对用户不可见」的 skill。是否进 system prompt 由 worker 侧**按工作区排除配置**决定（默认全部工作区自动暴露，用户在设置页按 skill 勾选「不自动暴露的工作区」；`/` 菜单不受该配置影响）——这是 worker 配置域，与插件无关，插件侧无从也无需干预。
 
-**两个资源根刻意不同（父委派隔离）**：插件技能包住 `skill/<id>/skill.md`；worker 内置技能包住 `builtin-skill/<id>/skill.md`（由 worker 的 `BuiltInSkillPacks` 在启动时物化，不经插件）。`PluginLoader` 的插件 classloader 以 worker loader 为 parent——若共用一个根，插件侧 `classpath*:` 扫描会经父委派看到 worker 的技能包、把内置包错当自己的代装（实测复现过）；根名隔离（`skill/` vs `builtin-skill/`）让「每个包只物化自己的 skill」零运行时成本成立，谁放错根，启动日志的物化 id 清单立即可见。**插件不要把技能包放进 `builtin-skill/` 根**——那是 worker 专用位。
+**两个资源根刻意不同（父委派隔离）**：worker 内置技能包住 classpath `builtin-skill/<id>/skill.md`（由 worker 的 `BuiltInSkillPacks` 在启动时物化，不经插件），与插件历史 jar 形态的 `skill/` 根**刻意不同**——`PluginLoader` 的插件 classloader 以 worker loader 为 parent，若共用一个根，插件侧 `classpath*:` 扫描会经父委派看到 worker 的技能包、把内置包错当自己的代装（实测复现过）。插件技能包改为从文件系统目录（`<pluginRoot>/skill/`）物化后，这一父委派隐患对插件侧不复存在；但内置包根名 `builtin-skill` 保留——**插件不要把技能包放进 `builtin-skill/` 根**——那是 worker 专用位。
 
 **`skill.md` frontmatter（仅展示元数据，只有两个键）**：首部允许一个 `---` 定界的元数据块，已知键只有 `name` / `description`、都**只影响展示**——`name` = 展示标题（`/` 菜单 title、prompt 条目标题、设置页表格 name 列；缺省回落目录名。**不与目录名做一致性校验**：id 是英文标识、`name` 是人读标题，如 `agent-dispatch` → 「子 Agent」，不一致是常态）；`description` = 一句话「何时用」（单行截断 200 字符，`/` 菜单副标题与 prompt 索引行）。**暴露控制不在 frontmatter**：`skill.md` 不含也无法声明「是否自动暴露」——那是 worker 侧按工作区的排除配置（见上一段）。
 
-**范例（rg `materializeAllFromClasspath` 唯一命中）**：subagent——jar 内 `skill/agent-dispatch/skill.md`（frontmatter `name: 子 Agent` + 一句话 `description`），`activate()` 里物化一行 + IO 失败 WARN 降级（`every-agent-plugins/subagent/src/main/java/dev/everyagent/plugin/subagent/SubAgentPlugin.java:47-57`）。
+**范例（rg `"skills"` 命中）**：subagent——插件根 `skill/agent-dispatch/skill.md`（frontmatter `name: 子 Agent` + 一句话 `description`），plugin.json 声明 `"skills": "skill"`（`every-agent-plugins/subagent/plugin.json`），Java 代码里没有任何物化调用。
 
-**不兼容迁移（写给曾用旧版 skill 注册 SPI 的第三方插件）**：plugin-api 中「插件向 worker 声明 skill 元数据」的那组接口（贡献者接口、skill 声明 record、`WorkerPluginContext` 上的对应注册方法）已整体删除。迁移 = ① 资源搬到 `src/main/resources/skill/<id>/skill.md`；② frontmatter 写 `name` + `description`（原声明里的 title/description 迁入；`toolIds` 之类声明字段无承接方——本就被零消费）；③ `activate()` 里调 `SkillMaterializer.materializeAllFromClasspath(props.resolveSkillsDir(), getClass().getClassLoader())`。统一口径见 [`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) §7.17「skill 目录结构与唯一真相源」。
+**不兼容迁移（写给曾用旧机制的第三方插件）**：旧机制「把 `skill/<id>/skill.md` 打进 jar（`src/main/resources/skill/`）+ `activate()` 里调 `SkillMaterializer.materializeAllFromClasspath`」已删除（`materializeAllFromClasspath()` 与 `PLUGIN_SKILL_ROOT` 一并移除）。迁移 = ① skill 文件从 jar 资源搬到插件根目录 `<pluginRoot>/skill/<id>/skill.md`（与 plugin.json 同级）；② plugin.json 声明 `"skills": "skill"`；③ 删除 `activate()` 里的物化调用（PluginLoader 统一物化，无需 Java 代码——纯 web 插件从此也能带 skill）；④ frontmatter 写 `name` + `description`。统一口径见 [`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) §7.17「skill 目录结构与唯一真相源」。
 
 ## 6. SearchProvider —— 搜索后端（统一 search 聚合 + mention.query 能力接口）
 
