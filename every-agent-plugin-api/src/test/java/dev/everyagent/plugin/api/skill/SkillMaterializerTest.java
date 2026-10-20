@@ -188,9 +188,6 @@ class SkillMaterializerTest {
 
             // 再次物化:磁盘已逐字节一致,但仍返回同一 id 清单(「已安装」与是否写入无关)
             assertEquals(ids, SkillMaterializer.materializeAll(skills, cl, "skill"));
-
-            // 默认根 = PLUGIN_SKILL_ROOT
-            assertEquals(ids, SkillMaterializer.materializeAllFromClasspath(temp.resolve("skills2"), cl));
         }
     }
 
@@ -232,7 +229,7 @@ class SkillMaterializerTest {
             // 插件视角:只物化自己的包,看不到 worker 的内置包(它们不在 skill/ 根下)
             Path skillsChild = temp.resolve("skills-child");
             assertEquals(List.of("agent-dispatch"),
-                    SkillMaterializer.materializeAll(skillsChild, child, SkillMaterializer.PLUGIN_SKILL_ROOT));
+                    SkillMaterializer.materializeAll(skillsChild, child, "skill"));
             assertFalse(Files.exists(skillsChild.resolve("plan/skill.md")), "不得代装 worker 的 plan");
             assertFalse(Files.exists(skillsChild.resolve("skill-creator/skill.md")));
             assertEquals("plugin agent-dispatch pack",

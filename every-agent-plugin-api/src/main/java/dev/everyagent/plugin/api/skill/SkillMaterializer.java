@@ -21,23 +21,21 @@ import java.util.TreeMap;
 import java.util.regex.Pattern;
 
 /**
- * 技能包物化工具(静态):把 classpath 上的技能包 {@code <root>/<id>/skill.md} 原子落盘为
- * {@code <skillsDir>/<id>/skill.md}。worker 内置包与外部插件共用本类,是「skill 目录唯一真相源」
- * 的落盘通道(规格见 docs/ARCHITECTURE.md §7.17)。
+ * 技能包物化工具(静态):把 classpath 或文件系统上的技能包 {@code <root>/<id>/skill.md}
+ * 原子落盘为 {@code <skillsDir>/<id>/skill.md}。worker 内置包与外部插件共用本类,是
+ * 「skill 目录唯一真相源」的落盘通道(规格见 docs/ARCHITECTURE.md §7.17)。
  *
- * <h2>两个资源根与父委派隔离</h2>
+ * <h2>两条物化通道</h2>
  * <ul>
- *   <li>{@link #PLUGIN_SKILL_ROOT}(= {@code skill}):插件 jar 侧的技能包根。插件在
- *       {@code activate()} 里调 {@link #materializeAllFromClasspath}。</li>
- *   <li>{@link #BUILTIN_SKILL_ROOT}(= {@code builtin-skill}):worker 内置技能包根,由 worker 启动时
- *       调 {@link #materializeAll(Path, ClassLoader, String)} 落盘。</li>
+ *   <li>{@link #materializeFromDirectory(Path, Path)}:从<b>文件系统目录</b>扫描
+ *       {@code <pluginSkillDir>/<id>/skill.md}。由系统核心(PluginLoader)在加载插件时统一调用,
+ *       纯 web 插件(无 Java 入口)也能带 skill——plugin.json 声明 {@code skills} 字段即可。</li>
+ *   <li>{@link #materializeAll(Path, ClassLoader, String)}:从 classpath 扫描
+ *       {@code <root>/<id>/skill.md}。worker 内置包({@link #BUILTIN_SKILL_ROOT})走这条通道,
+ *       由 worker 启动时调用。</li>
  * </ul>
- * 两个根<b>刻意不同</b>,这是父委派泄漏的隔离手段:插件 classloader 以 worker 的 classloader 为
- * parent(见 worker 侧 {@code PluginLoader}),{@code classpath*:} 扫描会经父委派看到 parent 上的
- * 同名根资源——若内置包与插件包共用一个根,任意先 activate 的插件都会把 worker 的内置包错当自己的
- * 代装(实测复现过)。worker 的 classpath 上不存在 {@code skill/} 根(内置包全部住在
- * {@code builtin-skill/} 下),插件扫 {@code skill/**} 时父 loader 上无此根,隔离零运行时成本成立;
- * 谁放错根,调用方日志里的物化 id 清单立即可见。
+ * 内置包根名 {@code builtin-skill} 与插件历史根名 {@code skill} <b>刻意不同</b>,是父委派泄漏的
+ * 隔离手段(详见 {@link #materializeAll} 的 javadoc)。
  *
  * <h2>发现 pattern:一级 &#42; 而非 &#42;&#42;</h2>
  * {@link #materializeAll} 用 pattern {@code classpath*} 前缀加 &lt;root&gt;/&#42;/skill.md
@@ -82,10 +80,7 @@ public final class SkillMaterializer {
     /** 合法 skill id:[a-z0-9][a-z0-9-]*(即目录名;realpath 必须仍在 skillsDir 内)。 */
     private static final Pattern ID_PATTERN = Pattern.compile("[a-z0-9][a-z0-9-]*");
 
-    /** 插件侧技能包根(相对 classpath):插件 jar 把技能包放在 {@code skill/<id>/skill.md}。 */
-    public static final String PLUGIN_SKILL_ROOT = "skill";
-
-    /** worker 内置技能包根(相对 classpath):与插件根不同名,是父委派泄漏的隔离手段(见类 javadoc)。 */
+    /** worker 内置技能包根(相对 classpath):与插件历史根名不同,是父委派泄漏的隔离手段(见类 javadoc)。 */
     public static final String BUILTIN_SKILL_ROOT = "builtin-skill";
 
     private SkillMaterializer() {
@@ -219,7 +214,7 @@ public final class SkillMaterializer {
      * @param skillsDir    系统技能目录
      * @param cl           资源查找用的 classloader(worker 内置包传 worker 自己的 loader,
      *                     插件传 {@code getClass().getClassLoader()})
-     * @param resourceRoot 资源根({@link #PLUGIN_SKILL_ROOT} 或 {@link #BUILTIN_SKILL_ROOT})
+     * @param resourceRoot 资源根({@code "skill"} 或 {@link #BUILTIN_SKILL_ROOT})
      * @return 已安装(发现并落盘,含幂等零写入)的 id 列表,按 id 升序
      * @throws IOException 发现或物化过程中的 IO 失败
      */
@@ -251,17 +246,58 @@ public final class SkillMaterializer {
     }
 
     /**
-     * 按插件根 {@link #PLUGIN_SKILL_ROOT} 物化 loader 上全部技能包——插件 {@code activate()} 的
-     * 标准一行调用。
+     * 从<b>文件系统目录</b>发现并物化全部技能包:扫 {@code <pluginSkillDir>/<id>/skill.md}。
      *
-     * @param skillsDir 系统技能目录
-     * @param cl        插件自己的 classloader
-     * @return 已安装的 id 列表,按 id 升序
+     * <p>由系统核心(PluginLoader)在加载插件时统一调用——plugin.json 声明 {@code skills} 字段,
+     * 纯 web 插件(无 Java 入口)也能带 skill。每个一级子目录就是一个 skill,id = 子目录名。
+     *
+     * <p>规则(与 {@link #materializeAll} 保持一致):
+     * <ul>
+     *   <li>id 不合 {@link #isValidId} 的目录跳过,但**打 ERROR**(附 {@link #ID_RULE_HINT},
+     *       不静默:加包者只用「物化 id 清单少了一项」无从归因);</li>
+     *   <li>目录不存在 → 返回空列表(不抛异常,静默跳过);</li>
+     *   <li>单个 skill 读取/物化失败 → 抛 {@link IOException},由调用方 WARN 降级;</li>
+     *   <li>幂等:逐字节比较、原子写(复用 {@link #materialize});</li>
+     *   <li>深嵌套 {@code <id>/sub/skill.md} 不受影响(只扫一级子目录)。</li>
+     * </ul>
+     *
+     * @param skillsDir     系统技能目录(物化目标,不存在则创建)
+     * @param pluginSkillDir 插件侧技能包目录(扫描源,不存在返回空列表)
+     * @return 已安装(发现并落盘,含幂等零写入)的 id 列表,按 id 升序
      * @throws IOException 发现或物化过程中的 IO 失败
      */
-    public static List<String> materializeAllFromClasspath(Path skillsDir, ClassLoader cl)
-            throws IOException {
-        return materializeAll(skillsDir, cl, PLUGIN_SKILL_ROOT);
+    public static List<String> materializeFromDirectory(Path skillsDir,
+                                                        Path pluginSkillDir) throws IOException {
+        Objects.requireNonNull(skillsDir, "skillsDir");
+        Objects.requireNonNull(pluginSkillDir, "pluginSkillDir");
+        if (!Files.isDirectory(pluginSkillDir)) {
+            return List.of();
+        }
+        Map<String, Path> byId = new TreeMap<>(); // TreeMap:同时完成去重与按 id 排序
+        try (var stream = Files.newDirectoryStream(pluginSkillDir)) {
+            for (Path child : stream) {
+                if (!Files.isDirectory(child)) {
+                    continue;
+                }
+                String id = child.getFileName().toString();
+                Path skillFile = child.resolve(SKILL_FILE_NAME);
+                if (!Files.isRegularFile(skillFile)) {
+                    continue; // 一级子目录下没有 skill.md,不是技能包,静默跳过
+                }
+                if (!isValidId(id)) {
+                    log.error("技能包目录名非法,已跳过(不会物化,模型与 / 菜单都看不到它): "
+                                    + "id=\"{}\",路径={} —— {}", id, child, ID_RULE_HINT);
+                    continue;
+                }
+                byId.put(id, skillFile);
+            }
+        }
+        List<String> installed = new ArrayList<>(byId.size());
+        for (Map.Entry<String, Path> entry : byId.entrySet()) {
+            materialize(skillsDir, entry.getKey(), Files.readAllBytes(entry.getValue()));
+            installed.add(entry.getKey());
+        }
+        return installed;
     }
 
     /**
