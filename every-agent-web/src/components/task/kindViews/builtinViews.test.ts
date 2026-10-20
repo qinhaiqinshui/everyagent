@@ -164,13 +164,13 @@ describe('message 视图工具块(多调用竖线容器 + per-tool 视图直挂)
   })
 
   it('思考块完成后:自动折叠(正文不渲染)、折叠头常驻,耗时冻结并按长短染色', () => {
-    // 45s 思考:冻结耗时文本 + 色阶 76%(10s~60s 线性 20%~100%)
+    // 45s 思考:冻结耗时文本 + 色阶 45%(10s~120s 线性 20%~100%)
     const item = messageItem('10', { content: '', thinking: '想完了', thinkingDurationMs: 45000 })
     const html = renderMessage(item, [item])
     expect(html).toContain('nagent-msg__reasoning-header')
     expect(html).toContain('思考过程')
     expect(html).toContain('45s')
-    expect(html).toContain('--thinking-dur-tint:76%')
+    expect(html).toContain('--thinking-dur-tint:45%')
     // 折叠态:思考正文不渲染
     expect(html).not.toContain('想完了')
   })
@@ -397,21 +397,21 @@ describe('TaskThread 分发切换(查表 + 兜底)', () => {
   })
 })
 
-describe('思考耗时口径(起色阈值 10s / 封顶 60s;文本始终显示)', () => {
-  it('thinkingDurationTint:10s 起色、60s 封顶、区间线性;非法/缺失返回 0', () => {
+describe('思考耗时口径(起色阈值 10s / 封顶 120s;文本始终显示)', () => {
+  it('thinkingDurationTint:10s 起色、120s 封顶、区间线性;非法/缺失返回 0', () => {
     expect(thinkingDurationTint(undefined)).toBe(0)
     expect(thinkingDurationTint(null)).toBe(0)
     expect(thinkingDurationTint(-1)).toBe(0)
     expect(thinkingDurationTint(0)).toBe(0)
     expect(thinkingDurationTint(9999)).toBe(0) // 未过起色阈值
     expect(thinkingDurationTint(10000)).toBe(20) // 起点即最浅(20%)
-    expect(thinkingDurationTint(35000)).toBe(60) // 中点线性
-    expect(thinkingDurationTint(60000)).toBe(100) // 封顶
+    expect(thinkingDurationTint(35000)).toBe(38) // 区间线性
+    expect(thinkingDurationTint(120000)).toBe(100) // 封顶
     expect(thinkingDurationTint(600000)).toBe(100) // 超过封顶不再加深
   })
 
   it('thinkingDurationTintStyle:写 --thinking-dur-tint 自定义属性(不硬编码色值)', () => {
-    expect(thinkingDurationTintStyle(35000)).toEqual({ '--thinking-dur-tint': '60%' })
+    expect(thinkingDurationTintStyle(35000)).toEqual({ '--thinking-dur-tint': '38%' })
   })
 
   it('thinkingDurationText:非正数/缺失不渲染(与工具耗时 ≥10s 门槛不同,此处只挡 0)', () => {

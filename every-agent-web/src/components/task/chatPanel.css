@@ -871,7 +871,7 @@
 
 /* 思考耗时(标题与折叠图标之间,始终显示——不像工具耗时那样设 ≥10s 门槛):
    --thinking-dur-tint(0%~100%,由 thinkingDurationTintStyle 按思考耗时计算,
-   10s 起色、60s 封顶)在此插值 muted → --tool-slow-red(与工具耗时同一「慢」红 token)。
+   10s 起色、120s 封顶)在此插值 muted → --tool-slow-red(与工具耗时同一「慢」红 token)。
    实时读秒逐跳时颜色平滑过渡,不刺眼闪变。 */
 .nagent-msg__reasoning-duration {
   margin-left: 2px;
