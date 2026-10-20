@@ -12,12 +12,18 @@ export interface RichMessageContentProps {
   taskId?: string
   /** 当前消息 ID。 */
   messageId?: string
+  /** 所属消息是否仍在流式输出（eventFolder payload.streaming；缺省视为已定稿）。 */
+  messageStreaming?: boolean
 }
 
 interface ContentSegment {
   type: 'text' | 'tag'
   tag?: string
   value: string
+  /** 未闭合段且消息仍在流式（AI 正在生成内容）。 */
+  streaming?: boolean
+  /** 未闭合段且消息已定稿（闭标签永远缺席，内容被截断）。 */
+  truncated?: boolean
 }
 
 function renderPlainText(value: string): React.ReactNode {
@@ -26,9 +32,10 @@ function renderPlainText(value: string): React.ReactNode {
 
 /**
  * 把消息内容按 `<tag>…</tag>` 切割成文本段与标签段。
- * 仅识别成对出现的标签；不成对的标签视作普通文本，不影响其他内容。
+ * 仅识别成对出现的标签；不成对的标签若已注册输出块则按未闭合段处理
+ * （流式中 → streaming / 已定稿 → truncated），否则视作普通文本。
  */
-function splitByOutputTags(content: string): ContentSegment[] {
+function splitByOutputTags(content: string, messageStreaming?: boolean): ContentSegment[] {
   const segments: ContentSegment[] = []
   const tagRegex = /<([a-zA-Z][\w-]*)>/g
   let lastIndex = 0
@@ -39,6 +46,23 @@ function splitByOutputTags(content: string): ContentSegment[] {
     const closeTag = `</${tag}>`
     const closeIndex = content.indexOf(closeTag, openIndex + match[0].length)
     if (closeIndex === -1) {
+      // 未闭合：若该标签已注册输出块，按流式段处理（渲染部分已到达内容）。
+      // 消息仍在流式 → streaming（生成中）；已定稿 → truncated（内容被截断）。
+      if (outputBlockRegistry.get(tag)) {
+        if (openIndex > lastIndex) {
+          const text = content.slice(lastIndex, openIndex)
+          if (text.trim()) {
+            segments.push({ type: 'text', value: text })
+          }
+        }
+        const inner = content.slice(openIndex + match[0].length)
+        if (messageStreaming) {
+          segments.push({ type: 'tag', tag, value: inner, streaming: true })
+        } else {
+          segments.push({ type: 'tag', tag, value: inner, truncated: true })
+        }
+        lastIndex = content.length
+      }
       break
     }
     if (openIndex > lastIndex) {
@@ -67,11 +91,11 @@ function splitByOutputTags(content: string): ContentSegment[] {
  * 命中已注册的输出块处理器则交给插件渲染，未命中则降级为通用代码块。
  * 纯文本消息原样渲染（保留换行）。
  */
-export default function RichMessageContent({ content, taskId, messageId }: RichMessageContentProps): React.ReactNode {
+export default function RichMessageContent({ content, taskId, messageId, messageStreaming }: RichMessageContentProps): React.ReactNode {
   if (!content?.trim()) {
     return null
   }
-  const segments = splitByOutputTags(content)
+  const segments = splitByOutputTags(content, messageStreaming)
   if (segments.length === 1 && segments[0].type === 'text') {
     return renderPlainText(content)
   }
@@ -82,7 +106,14 @@ export default function RichMessageContent({ content, taskId, messageId }: RichM
           return <React.Fragment key={index}>{renderPlainText(segment.value)}</React.Fragment>
         }
         const handler = segment.tag ? outputBlockRegistry.get(segment.tag) : undefined
-        const node = handler ? handler(segment.value, { taskId, messageId }) : null
+        const node = handler
+          ? handler(segment.value, {
+              taskId,
+              messageId,
+              streaming: segment.streaming,
+              truncated: segment.truncated,
+            })
+          : null
         if (node) {
           return <React.Fragment key={index}>{node}</React.Fragment>
         }

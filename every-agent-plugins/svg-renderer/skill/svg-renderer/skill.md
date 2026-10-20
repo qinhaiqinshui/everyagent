@@ -26,9 +26,17 @@ description: 当你需要输出 SVG 图形（流程图、架构图、数据示�
 - 标签内**直接放 SVG 源码**，以 `<svg>` 开头、`</svg>` 结尾
 - **不要加 ` ``` ` 代码围栏**——围栏内的内容不会被识别为 SVG
 
+## 流式渲染友好写法（重要）
+
+渲染器支持**流式渐进渲染**：AI 输出过程中，SVG 图形会自上而下逐步加载显示（无需等待全部输出完成）。为获得最佳渐进观感，书写时遵守：
+
+- **`<defs>` 前置**：`<marker>`（箭头）、渐变等定义必须放在 `<svg>` 的开头（第一个子元素），**不要放在结尾**。后置的 defs 在渐进渲染期间引用会暂时失效（`url(#arrow)` 找不到定义），导致箭头、渐变直到最后才突然出现，破坏渐进观感。
+- **`viewBox` 必写且放在 `<svg>` 起始标签内**：保证图形在输出过程中任意时刻都按正确比例显示，容器高度稳定不跳动。
+- **元素按视觉顺序自上而下书写**：渐进加载时图形从顶部逐渐呈现，与阅读顺序一致。
+
 ## 完整示例
 
-下面是一个简单流程图的完整输出示例：
+下面是一个简单流程图的完整输出示例（注意 `<defs>` 前置）：
 
 用户问：「帮我画一个用户登录流程图」
 
@@ -39,6 +47,11 @@ description: 当你需要输出 SVG 图形（流程图、架构图、数据示�
 
 <svg-image>
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 280">
+  <defs>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
+      <polygon points="0,0 8,3 0,6" fill="#333"/>
+    </marker>
+  </defs>
   <rect x="100" y="20" width="120" height="40" rx="6" fill="#4a6cf7"/>
   <text x="160" y="45" text-anchor="middle" fill="#fff" font-size="14">开始</text>
   <line x1="160" y1="60" x2="160" y2="90" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
@@ -49,11 +62,6 @@ description: 当你需要输出 SVG 图形（流程图、架构图、数据示�
   <text x="160" y="205" text-anchor="middle" fill="#333" font-size="13">验证通过?</text>
   <line x1="160" y1="240" x2="160" y2="270" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
   <rect x="100" y="260" width="120" height="0" rx="6" fill="#22c55e"/>
-  <defs>
-    <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
-      <polygon points="0,0 8,3 0,6" fill="#333"/>
-    </marker>
-  </defs>
 </svg>
 </svg-image>
 

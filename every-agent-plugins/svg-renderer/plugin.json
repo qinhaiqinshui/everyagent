@@ -1,7 +1,7 @@
 {
   "id": "svg-renderer",
   "name": "SVG 渲染器",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "在 AI 输出中渲染 SVG 图形：识别 <svg-image> 标签内容并内联渲染为图形",
   "author": "everyagent",
   "webMain": "web/index.ts",

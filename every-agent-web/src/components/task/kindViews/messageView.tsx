@@ -220,7 +220,7 @@ export function MessageView({
         ) : null}
         {hasContent ? (
           <div className="nagent-msg__content">
-            <RichMessageContent content={content} taskId={taskId} messageId={item.seq} />
+            <RichMessageContent content={content} taskId={taskId} messageId={item.seq} messageStreaming={isStreaming} />
           </div>
         ) : null}
         {toolCalls.length > 0 ? (

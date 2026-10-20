@@ -1,12 +1,19 @@
-import React, { useMemo } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
+import { closeSvgFragment } from './closeFragment'
 
 /**
  * SVG 输出块：把 <svg-image> 标签内的 SVG 源码消毒后渲染为图形。
+ *
+ * 流式渐进渲染：AI 输出过程中（streaming）闭合标签尚未到达时，经
+ * closeSvgFragment 容错闭合已到达片段并渲染部分图形，观感为图形自上而下
+ * 逐步加载；消息定稿但闭合标签缺席（truncated，输出中断）时同样尽力渲染，
+ * 并标注「内容不完整」。
  *
  * 安全策略（白名单）：
  *   - 只允许 SVG 图形元素进入输出，script 等一律丢弃；
  *   - 移除所有 on* 事件属性与 href / xlink:href 外部引用属性；
  *   - 仅使用浏览器内置 DOMParser / XMLSerializer，零第三方依赖。
+ *   - 渐进路径与终态共用同一消毒管线，流式期间不降低安全标准。
  */
 
 const SVG_NS = 'http://www.w3.org/2000/svg'
@@ -110,6 +117,50 @@ function sanitizeSvg(raw: string): SanitizeResult {
   return { html: new XMLSerializer().serializeToString(cleanRoot) }
 }
 
+/**
+ * 流式期间节流取值：每个窗口内首帧直通、后续更新合并为窗口末尾一次
+ * （leading + trailing），避免高频 chunk 全量重解析。intervalMs=0 直通
+ * （终态 / 已定稿内容不再变化，无节流必要）。
+ */
+function useThrottledValue<T>(value: T, intervalMs: number): T {
+  const [throttled, setThrottled] = useState(value)
+  const lastEmitRef = useRef(-Infinity)
+  const timerRef = useRef<number | null>(null)
+  const valueRef = useRef(value)
+  valueRef.current = value
+
+  useEffect(() => {
+    if (value === throttled) {
+      return
+    }
+    const elapsed = Date.now() - lastEmitRef.current
+    if (elapsed >= intervalMs) {
+      lastEmitRef.current = Date.now()
+      setThrottled(value)
+    } else if (timerRef.current == null) {
+      // trailing：窗口末尾取最新值（期间新值持续写 valueRef，天然合并）。
+      timerRef.current = window.setTimeout(() => {
+        timerRef.current = null
+        lastEmitRef.current = Date.now()
+        setThrottled(valueRef.current)
+      }, intervalMs - elapsed)
+    }
+    // 注意：不在此清理 trailing 定时器——高频更新会反复重跑本 effect，
+    // 中途清理会让末次更新丢失；卸载清理见下方独立 effect。
+  }, [value, throttled, intervalMs])
+
+  useEffect(() => {
+    return () => {
+      if (timerRef.current != null) {
+        window.clearTimeout(timerRef.current)
+        timerRef.current = null
+      }
+    }
+  }, [])
+
+  return throttled
+}
+
 const containerStyle: React.CSSProperties = {
   margin: '8px 0',
   padding: 12,
@@ -118,6 +169,27 @@ const containerStyle: React.CSSProperties = {
   background: 'var(--ea-bg-container, #fff)',
   overflow: 'auto',
   lineHeight: 0,
+}
+
+/** 渐进渲染状态提示（图下方小字）。 */
+const statusStyle: React.CSSProperties = {
+  margin: '8px 0 0',
+  fontSize: 12,
+  color: 'var(--ea-text-secondary, #888)',
+  lineHeight: 1.6,
+}
+
+/** 截断告示（内容不完整，比生成中提示更醒目）。 */
+const truncatedStyle: React.CSSProperties = {
+  ...statusStyle,
+  color: '#d48806',
+}
+
+/** 生成中占位行。 */
+const placeholderStyle: React.CSSProperties = {
+  ...statusStyle,
+  margin: 0,
+  padding: '4px 0',
 }
 
 const errorHintStyle: React.CSSProperties = {
@@ -140,23 +212,58 @@ const rawTextStyle: React.CSSProperties = {
 
 export interface SvgBlockProps {
   svgSource: string
+  /** 流式生成中（闭合标签未到达，消息仍在输出）。 */
+  streaming?: boolean
+  /** 消息已定稿但闭合标签缺席（输出中断，内容不完整）。 */
+  truncated?: boolean
 }
 
-export default function SvgBlock({ svgSource }: SvgBlockProps) {
-  const result = useMemo(() => sanitizeSvg(svgSource), [svgSource])
+export default function SvgBlock({ svgSource, streaming, truncated }: SvgBlockProps) {
+  const progressive = Boolean(streaming || truncated)
+  // 流式期间节流重解析；定稿 / 终态直通（内容已定型，intervalMs=0）。
+  const effectiveSource = useThrottledValue(svgSource, streaming ? 160 : 0)
+
+  const result = useMemo<SanitizeResult>(() => {
+    if (!progressive) {
+      return sanitizeSvg(effectiveSource)
+    }
+    // 渐进路径：容错闭合后走同一消毒管线（安全标准与终态一致）。
+    const fragment = closeSvgFragment(effectiveSource)
+    if (fragment.closed != null) {
+      const sanitized = sanitizeSvg(fragment.closed)
+      if (sanitized.html != null) {
+        return sanitized
+      }
+    }
+    // 根标签尚未完整到达（内容太早）或容错闭合仍解析失败。
+    return { html: null, error: '生成中' }
+  }, [effectiveSource, progressive])
 
   if (result.html !== null) {
     return (
       <div style={containerStyle}>
         {/* 消毒产物：白名单元素 + 已剔除 on* / href 属性，可安全注入 */}
         <div dangerouslySetInnerHTML={{ __html: result.html }} />
+        {streaming ? <p style={statusStyle}>▍图形生成中…</p> : null}
+        {truncated ? <p style={truncatedStyle}>⚠ 图形内容不完整（输出已中断）</p> : null}
+      </div>
+    )
+  }
+
+  // 生成中且暂无可渲染内容：占位等待（不倾倒源码——这正是本次要消除的体验）。
+  if (streaming) {
+    return (
+      <div style={containerStyle}>
+        <p style={placeholderStyle}>▍正在生成 SVG 图形…</p>
       </div>
     )
   }
 
   return (
     <div style={{ ...containerStyle, lineHeight: 1.6 }}>
-      <p style={errorHintStyle}>SVG 渲染失败（{result.error ?? '未知错误'}），显示原始内容：</p>
+      <p style={errorHintStyle}>
+        SVG 渲染失败（{truncated ? '输出中断，内容不完整' : result.error ?? '未知错误'}），显示原始内容：
+      </p>
       <pre style={rawTextStyle}>{svgSource}</pre>
     </div>
   )

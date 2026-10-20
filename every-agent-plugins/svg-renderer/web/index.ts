@@ -22,12 +22,20 @@ const disposables: Disposable[] = []
 const svgRendererPlugin: PluginModule = {
   activate(ctx: PluginContext) {
     // 扩展点 ui.output_blocks（ctx.ui.registerOutputBlock）：
-    //   - 第一个参数 tag：命中成对闭合标签名（这里是 svg-image）；
-    //   - handler(content, ctx)：收到标签内层文本（即 SVG 源码），返回 ReactNode 渲染。
+    //   - 第一个参数 tag：命中标签名（这里是 svg-image）；
+    //   - handler(content, ctx)：收到标签内层文本（即 SVG 源码）与上下文，返回 ReactNode 渲染。
+    //     ctx.streaming = 闭合标签未到达且消息仍在流式 → SvgBlock 渐进渲染（图形自上而下加载）；
+    //     ctx.truncated = 消息已定稿但闭合标签缺席 → 尽力渲染 + 标注内容不完整。
     //   - 返回 Disposable：请收集起来，在 deactivate() 里统一 dispose（见本文件底部）。
     disposables.push(
-      ctx.ui.registerOutputBlock('svg-image', (content) =>
-        React.createElement(SvgBlock, { svgSource: content }),
+      ctx.ui.registerOutputBlock(
+        'svg-image',
+        (content, blockCtx) =>
+          React.createElement(SvgBlock, {
+            svgSource: content,
+            streaming: blockCtx.streaming,
+            truncated: blockCtx.truncated,
+          }),
       ),
     )
   },

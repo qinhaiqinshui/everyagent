@@ -544,6 +544,10 @@ export interface TraceTypeDefinition<R extends PluginTraceRecord = PluginTraceRe
 export interface OutputBlockContext {
   taskId?: string
   messageId?: string
+  /** 标签未闭合且消息仍在流式输出中（AI 正在生成，可做渐进渲染）。 */
+  streaming?: boolean
+  /** 标签未闭合且消息已定稿（输出中断/截断，内容不完整，不应再显示「生成中」类提示）。 */
+  truncated?: boolean
 }
 
 /** 输出块渲染处理器。 */
