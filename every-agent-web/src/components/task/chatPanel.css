@@ -831,13 +831,32 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  /* 折叠头整体缩进:与工具图标占用宽度精确对齐(图标 13px + gap 8px = 21px),
+  /* 折叠头整体缩进:与工具图标占用宽度对齐(图标 13px + gap 8px = 21px),
+     缩进区左侧由 ::before 菱形占位(与工具行图标同一列),
      「思考过程」文字起点 = 工具名的起点,同一条竖线。
      只缩进折叠头;展开后的详情内容(__content)不缩进,保持与正文同基线。 */
   padding-left: 21px;
+  /* 菱形 ::before 的定位基准 */
+  position: relative;
   color: var(--text-muted);
   font-size: var(--text-xs);
   line-height: 1.5;
+}
+
+/* 菱形图标(思考过程的行标识):绝对定位落在 padding 缩进区内、与工具行的
+   状态图标同一列(中心 ≈ 6.5px,与 13px 工标中心一致),读作消息流的时间线标记。
+   垂直居中用 translate 属性(独立于 transform,不受其它变换干扰)。 */
+.nagent-msg__reasoning-header::before {
+  content: '';
+  position: absolute;
+  left: 3px;
+  top: 50%;
+  width: 7px;
+  height: 7px;
+  translate: 0 -50%;
+  transform: rotate(45deg);
+  background: currentColor;
+  opacity: 0.45;
 }
 
 .nagent-msg__reasoning-toggle {
