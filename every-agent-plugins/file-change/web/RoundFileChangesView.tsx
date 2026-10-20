@@ -2,6 +2,7 @@ import { useEffect, useState, useSyncExternalStore } from 'react'
 import type { RoundTailPanelProps } from '@everyagent/plugin-api'
 import { CaretDownOutlined, CaretRightOutlined } from '@ant-design/icons'
 import { getPluginContext } from './pluginRuntime'
+import { FileTypeIcon } from './FileTypeGlyphs'
 import './roundFileChanges.css'
 import {
   ensureRoundChanges,
@@ -51,9 +52,12 @@ function toDisplayPath(filePath: string): string {
 }
 
 /**
- * 轮末文件变更视图:渲染该轮文件变更轻量摘要行(文件名 + 完整路径 + A/M/D 标签),
- * 点击某行时按 roundId 经 task.fileChanges 拉全文(含 beforeContent/afterContent),
- * 再开 diff 标签对比。
+ * 轮末文件变更视图:渲染该轮文件变更轻量摘要行(**文件图标** + 文件名 + 完整路径 + A/M/D 标签),
+ * 一行两个点击目标:
+ * - **点文件图标** → 经 `ctx.ui.openFileTab` 打开(或激活)该文件的**文件标签页**(读写模式);
+ * - **点文件名(含路径/标签,即图标以外的整行)** → 按 roundId 经 `task.fileChanges` 拉全文
+ *   (含 beforeContent/afterContent),再开 **diff 标签**对比。
+ * 删除的文件**不渲染文件图标**(文件已不在磁盘,打开必失败),该行只剩 diff 入口。
  *
  * **布局**:本组件不包根容器,汇总头 pill 与展开的文件行列表是宿主轮末工具栏行
  * (`.nagent-round-collapse__tail`,一条 wrap flex 行)的两个并列 flex 项——点击汇总头
@@ -113,6 +117,17 @@ export default function RoundFileChangesView({
     })
   }
 
+  /**
+   * 点文件图标:打开(或激活)该文件的文件标签页。与宿主 diff 面板的「打开文件」同口径——
+   * 读写模式(方便用户直接改 AI 写过的文件),归属工作区取任务挂靠的 workspaceRoot。
+   * 调用点已保证「非删除 + workspaceRoot 已知」,此处再兜一层空路径守卫。
+   */
+  const openFile = (summary: RoundFileChangeSummary) => {
+    const displayPath = toDisplayPath(summary.filePath)
+    if (!workspaceRoot || !displayPath) return
+    getPluginContext().ui.openFileTab(workspaceRoot, displayPath, { mode: 'readwrite' })
+  }
+
   return (
     <>
       <button
@@ -132,27 +147,47 @@ export default function RoundFileChangesView({
         <div className="task-file-changes__list">
           {changes.map((change) => {
             const displayPath = toDisplayPath(change.filePath)
+            // 删除的文件不渲染文件图标:磁盘上已无该路径,打开只会得到一个报 NOT_FOUND 的
+            // 空标签页(与宿主 diff 面板打开前的存在性校验同一取舍,这里直接不给入口)。
+            // 任务未挂靠工作区(历史/未关联场景)时同样不渲染——openFileTab 必带工作区根。
+            const canOpenFile = change.changeType !== 'deleted' && Boolean(workspaceRoot)
             return (
-              <button
-                key={`${taskId}:${roundId}:${displayPath}`}
-                type="button"
-                className="task-file-changes__row"
-                onClick={() => void openDiff(change)}
-              >
-                <span className="task-file-changes__name">{change.fileName}</span>
-                {/* 前缀 LRM(零宽强 LTR 字符):路径列 direction:rtl(长路径从左截断显尾),
-                    前导 '/' 是中性字符会被 RTL 段落排到行尾(显示成 'foo.md/'),LRM 使整段
-                    解析为单一 LTR 渲染串;title 供截断时 hover 查看完整路径。 */}
-                <span className="task-file-changes__path" title={displayPath}>
-                  {'\u200E' + displayPath}
+              <div key={`${taskId}:${roundId}:${displayPath}`} className="task-file-changes__row">
+                {/* 图标槽常驻(只是图标按钮可缺):删除的行不显示图标,槽位仍占宽,文件名纵向对齐。 */}
+                <span className="task-file-changes__icon-slot">
+                  {canOpenFile ? (
+                    <button
+                      type="button"
+                      className="task-file-changes__open"
+                      title={`打开文件：${displayPath}`}
+                      aria-label={`打开文件 ${change.fileName}`}
+                      onClick={() => openFile(change)}
+                    >
+                      <FileTypeIcon fileName={change.fileName} size={15} />
+                    </button>
+                  ) : null}
                 </span>
-                <span
-                  className={`task-file-changes__tag task-file-changes__tag--${change.changeType}`}
-                  title={CHANGE_GIT_LETTER[change.changeType].title}
+                <button
+                  type="button"
+                  className="task-file-changes__diff"
+                  title={`查看变更对比：${displayPath}`}
+                  onClick={() => void openDiff(change)}
                 >
-                  {CHANGE_GIT_LETTER[change.changeType].letter}
-                </span>
-              </button>
+                  <span className="task-file-changes__name">{change.fileName}</span>
+                  {/* 前缀 LRM(零宽强 LTR 字符):路径列 direction:rtl(长路径从左截断显尾),
+                      前导 '/' 是中性字符会被 RTL 段落排到行尾(显示成 'foo.md/'),LRM 使整段
+                      解析为单一 LTR 渲染串;title 供截断时 hover 查看完整路径。 */}
+                  <span className="task-file-changes__path" title={displayPath}>
+                    {'\u200E' + displayPath}
+                  </span>
+                  <span
+                    className={`task-file-changes__tag task-file-changes__tag--${change.changeType}`}
+                    title={CHANGE_GIT_LETTER[change.changeType].title}
+                  >
+                    {CHANGE_GIT_LETTER[change.changeType].letter}
+                  </span>
+                </button>
+              </div>
             )
           })}
         </div>
