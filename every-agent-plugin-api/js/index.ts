@@ -330,6 +330,14 @@ export interface PluginToolCallDetail {
   arguments?: Record<string, unknown> | null
   /** 调用结果（成功且可解析为 JSON 时为对象，否则为原始文本）。 */
   result?: unknown
+  /**
+   * 调用行运行态（状态图标 `nagent-tool-state--*` 类的唯一来源）：宿主由
+   * 「结果 / 瞬态 tool.started / 批中断」三信号推导（messageView.rowStateOf）；
+   * 孤儿结果等缺省场景由视图按 status 回退推导（success→done / error→error）。
+   */
+  rowState?: 'queued' | 'running' | 'done' | 'error' | 'interrupted' | 'skipped'
+  /** 调用耗时（ms）：结果载荷的权威 durationMs；运行中由宿主灌入实时读秒值。 */
+  durationMs?: number
 }
 
 /** 插件工具视图组件的 props（与核心 ToolViewProps 最小化对齐）。 */

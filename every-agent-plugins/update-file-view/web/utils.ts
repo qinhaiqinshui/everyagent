@@ -315,6 +315,38 @@ export function hasActiveTextSelection(): boolean {
   return !!selection && !selection.isCollapsed && selection.toString().length > 0
 }
 
+// ─── 状态图标 / 耗时（复制自 @/components/task/toolViews/helpers） ─────────
+
+/** 调用行运行态（与宿主 ToolCallState 对齐；状态图标 `nagent-tool-state--*` 的类名域）。 */
+export type ToolCallState = 'queued' | 'running' | 'done' | 'error' | 'interrupted' | 'skipped'
+
+/** 紧凑耗时文案：<10s 一位小数，分钟级 m:ss 补零；非法值返回空串。 */
+export function formatToolDuration(ms: number | undefined): string {
+  if (ms == null || !Number.isFinite(ms) || ms < 0) return ''
+  const seconds = ms / 1000
+  if (seconds < 10) return `${seconds.toFixed(1)}s`
+  if (seconds < 60) return `${Math.floor(seconds)}s`
+  const minutes = Math.floor(seconds / 60)
+  const rest = Math.floor(seconds % 60)
+  return rest > 0 ? `${minutes}m${String(rest).padStart(2, '0')}s` : `${minutes}m`
+}
+
+/**
+ * 详情 → 状态图标 class（`nagent-tool-state--*` 颜色/动效单一来源）：
+ * 优先 detail.rowState（宿主批壳/单调用直渲灌入）；缺省时按 status 推导
+ * （孤儿兜底：success→done / error→error；status 空 = 结果未到，无状态色）。
+ */
+export function toolStateClass(detail: {
+  rowState?: ToolCallState
+  status?: string
+}): string {
+  const state: ToolCallState | null = detail.rowState
+    ?? (detail.status === 'error'
+      ? 'error'
+      : detail.status === 'success' ? 'done' : null)
+  return state ? `nagent-tool-state--${state}` : ''
+}
+
 // ─── 路径工具（复制自 @/platform/fs/pathUtils） ───────────────────────────
 
 const WORKSPACE_ROOT = '/'
