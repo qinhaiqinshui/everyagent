@@ -10,7 +10,7 @@
 import React from 'react'
 import { WrenchIcon, ChevronDownIcon, ChevronRightIcon } from '@/components/shared/AppGlyphs'
 import JsonBlock from '@/components/shared/JsonBlock'
-import { hasActiveTextSelection, toolStateClass, toolDurationText } from './helpers'
+import { hasActiveTextSelection, toolStateClass, toolDurationText, toolDurationTintStyle } from './helpers'
 import type { AggregatedToolDetail, ToolViewProps } from './types'
 
 function formatPrimitive(v: unknown): string {
@@ -103,7 +103,7 @@ function DefaultEntry({ detail }: { detail: AggregatedToolDetail }) {
         }}
       >
         <WrenchIcon size={13} className={`nagent-tool__icon${stateClass ? ` ${stateClass}` : ''}`} />
-        {durationText ? <span className="nagent-tool__duration">{durationText}</span> : null}
+        {durationText ? <span className="nagent-tool__duration" style={toolDurationTintStyle(detail)}>{durationText}</span> : null}
         <span className="nagent-tool__name">{detail.toolName || '工具调用'}</span>
         <span className="nagent-tool__inline-preview">{inlinePreview}</span>
         {open ? (

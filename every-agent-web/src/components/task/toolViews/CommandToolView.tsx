@@ -19,7 +19,7 @@
 
 import React from 'react'
 import { TerminalIcon, ChevronDownIcon, ChevronRightIcon } from '@/components/shared/AppGlyphs'
-import { hasActiveTextSelection, splitLeadingComment, toolStateClass, toolDurationText } from './helpers'
+import { hasActiveTextSelection, splitLeadingComment, toolStateClass, toolDurationText, toolDurationTintStyle } from './helpers'
 import type { AggregatedToolDetail, ToolViewDefinition, ToolViewProps } from './types'
 
 /** 从聚合结果中提取输出文本（兼容对象与字符串两种形态）。 */
@@ -82,7 +82,7 @@ function ExecEntry({ detail }: { detail: AggregatedToolDetail }) {
         {/* nagent-glyph-terminal:chatPanel.css 按此类关闭 running 整体旋转(改光标闪烁),
             不影响其他工具图标的旋转动效 */}
         <TerminalIcon size={13} className={`nagent-tool__icon nagent-glyph-terminal${stateClass ? ` ${stateClass}` : ''}`} />
-        {durationText ? <span className="nagent-tool__duration">{durationText}</span> : null}
+        {durationText ? <span className="nagent-tool__duration" style={toolDurationTintStyle(detail)}>{durationText}</span> : null}
         <span className="nagent-tool__name">{detail.toolName || '命令'}</span>
         <span className="nagent-tool__inline-preview">
           {preview ? (

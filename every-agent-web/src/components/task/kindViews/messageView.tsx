@@ -3,11 +3,12 @@
  *
  * thinking(AssistantReasoningBlock:流式且未 reasoningDone 展开、完成后自动折叠)与
  * 正文(RichMessageContent)自 AgentMessageThread 现状迁移(行为等价);工具块为
- * **单调用直渲 / 多调用竖线容器**双形态:
+ * **单调用直渲 / 多调用批容器**双形态:
  * - 单调用(toolCalls.length === 1):无包装,直接渲染 per-tool 美化视图(一次折叠
  *   即见参数与结果,状态图标 + 耗时在视图摘要行上);
- * - 多调用:仅一条左竖线容器标识「同一次请求下发」,内部平铺各调用的 per-tool
- *   美化视图(无批壳行/无二次折叠)。
+ * - 多调用:批容器**不吃任何宽度**,「同一次请求下发」画在左侧轨道里(弧线 + ×N 徽标),
+ *   内部平铺各调用的 per-tool 美化视图(无批壳行/无二次折叠)。
+ *   于是单条与并行批的文字起点逐像素一致(见 chatPanel.css 栅格常量)。
  *
  * 运行态读秒:`tool.started` 瞬态映射(toolStartedRuntime,按 callId 直配)点亮 running
  * + 计时 now - startedAt(单一 1s tick,卸载清理);对应 tool.result 到达冻结权威
@@ -49,8 +50,8 @@ function ToolDetailView({ detail }: { detail: AggregatedToolDetail }) {
 /**
  * 工具调用块:一次 message 下发的 toolCalls 为一批(= 同一次 AI 接口请求)。
  * - 单调用:直接渲染 per-tool 美化视图(无包装,一次折叠见详情);
- * - 多调用:仅一条左竖线容器标识「同一次请求下发」,内部直接平铺各调用的
- *   per-tool 视图(无批壳行/无二次折叠,状态图标 + 耗时在各自视图摘要行上)。
+ * - 多调用:批容器只在左侧轨道画弧线 + ×N 徽标(自身零 border/padding,不吃缩进),
+ *   内部直接平铺各调用的 per-tool 视图(无批壳行/无二次折叠,状态图标 + 耗时在各自视图摘要行上)。
  * 读秒走本组件单一 setInterval(1s,仅存在 running 调用时挂,卸载清理)。
  */
 function ToolCallsBlock({
@@ -91,9 +92,14 @@ function ToolCallsBlock({
     return <ToolDetailView detail={buildDetail(0)} />
   }
 
-  // 多调用:仅左竖线容器标识同批,内部平铺各调用视图。
+  // 多调用:批容器不吃任何宽度(无 border-left/padding-left),
+  // 「同批」由左侧轨道里的弧线与 ×N 徽标(::before/::after,读 data-tool-count)标识,
+  // 因此并行批与单条调用的文字起点完全一致。
   return (
-    <div className={`nagent-tool-batch${interrupted ? ' nagent-tool-batch--interrupted' : ''}`}>
+    <div
+      className={`nagent-tool-batch${interrupted ? ' nagent-tool-batch--interrupted' : ''}`}
+      data-tool-count={toolCalls.length}
+    >
       {toolCalls.map((call, idx) => (
         <ToolDetailView key={call.id || `call:${idx}`} detail={buildDetail(idx)} />
       ))}

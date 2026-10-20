@@ -30,7 +30,7 @@ import { machinePathToBusiness } from '@/platform/fs/pathUtils'
 import { workspaceGateway } from '@/platform/fs/workspaceGateway'
 import { workspaceRegistry } from '@/hub/workspaceRegistry'
 import { useTaskWorkspaceRoot } from '../TaskWorkspaceContext'
-import { extractFileName, hasActiveTextSelection, toolStateClass, toolDurationText } from './helpers'
+import { extractFileName, hasActiveTextSelection, toolStateClass, toolDurationText, toolDurationTintStyle } from './helpers'
 import type { AggregatedToolDetail } from './types'
 
 /** content 字段始终排在参数列表最后，避免开头被巨量正文占据。 */
@@ -146,7 +146,7 @@ export function FileToolEntry({ detail, inlineExtras }: FileToolEntryProps) {
         }}
       >
         <WrenchIcon size={13} className={`nagent-tool__icon${stateClass ? ` ${stateClass}` : ''}`} />
-        {durationText ? <span className="nagent-tool__duration">{durationText}</span> : null}
+        {durationText ? <span className="nagent-tool__duration" style={toolDurationTintStyle(detail)}>{durationText}</span> : null}
         <span className="nagent-tool__name">{detail.toolName || '文件工具'}</span>
         <span className="nagent-tool__inline-preview">
           {fullPath ? (
