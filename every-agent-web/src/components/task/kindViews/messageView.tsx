@@ -117,7 +117,7 @@ function ToolCallsBlock({
  *   「思考结束帧 ts - 起点」兜底,见 eventFolder)。
  *
  * 耗时在标题与折叠图标之间,始终显示(不像工具耗时那样 ≥10s 才显示),颜色按耗时长短渐变
- * (见 thinkingTiming:10s 起色、60s 封顶)。
+ * (见 thinkingTiming:10s 起色、120s 封顶)。
  * 自 AgentMessageThread 原位迁移,reasoningDone 打标驱动自动折叠(见 eventFolder)。
  */
 function AssistantReasoningBlock({
