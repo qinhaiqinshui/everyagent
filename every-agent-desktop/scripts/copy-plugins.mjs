@@ -17,6 +17,8 @@
  *   - 插件根 bin/ 目录:插件自带可执行文件(如 sandbox-windows-codex/bin/rg.exe)——插件
  *     运行期按 <pluginDir>/bin/<name> 定位附属资源(架构 §7.10 rg 三档解析的第一档),
  *     漏搬会让该资源在安装包里静默缺席,只能靠程序根 runtime/bin 回退兜住。
+ *   - 插件根 skill/ 目录:插件技能包(plugin.json 声明 "skills": "skill" 时由
+ *     PluginLoader 统一物化),漏搬会让 skill 在安装包里静默缺席。
  *
  * 防残留(硬性要求):staging 目录在脚本开头**整体清空重建**——
  *   - enabled=false 的插件(如 sandbox-*)不复制,上次打包留下的旧 jar 也不会残留;
@@ -185,6 +187,24 @@ for (const { name, dir, isJava, jars, webDir, hasWeb, binDir, hasBin } of enable
       const full = join(binDir, f)
       if (statSync(full).isFile()) copy(full, `bin/${f}`)
     }
+  }
+  // 插件根 skill/:插件技能包(plugin.json 声明 "skills": "skill" 时,PluginLoader
+  // 从 <pluginDir>/skill/<id>/skill.md 物化到系统技能目录)。一个插件可声明多个 skill,
+  // 目录内每个一级子目录即一个 skill(含 skill.md);整体递归 staging,不过滤后缀。
+  const skillDir = join(dir, 'skill')
+  if (existsSync(skillDir) && statSync(skillDir).isDirectory()) {
+    const walkSkill = (d, base) => {
+      for (const f of readdirSync(d)) {
+        const full = join(d, f)
+        const rel = base ? `${base}/${f}` : f
+        if (statSync(full).isDirectory()) {
+          walkSkill(full, rel)
+        } else {
+          copy(full, `skill/${rel}`)
+        }
+      }
+    }
+    walkSkill(skillDir, '')
   }
 }
 
