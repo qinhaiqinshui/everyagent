@@ -47,6 +47,10 @@
   --accent-cyan: #54d2e8;
   --accent-cyan-dim: rgba(84, 210, 232, 0.14);
 
+  /* 慢调用耗时封顶红(hsl 0°/100% 饱和):工具耗时色阶(--tool-dur-tint 100%)的
+     插值终点,必须比 --accent-red 更"正红"——慢调用是告警信号,封顶就是最红。 */
+  --tool-slow-red: #ff3333;
+
   /* ── Color · 标签页专用 ─────────────────────────────── */
   --agent-tab-bg: rgba(97, 165, 255, 0.08);
   --agent-tab-active-bg: rgba(97, 165, 255, 0.18);
@@ -224,6 +228,9 @@
   --accent-red-dim: rgba(217, 45, 66, 0.12);
   --accent-cyan: #0087a7;
   --accent-cyan-dim: rgba(0, 135, 167, 0.12);
+
+  /* 慢调用耗时封顶红:白底上的极饱和正红(hsl 0°/100%/42%),封顶即"红得无法再红" */
+  --tool-slow-red: #d50000;
 
   --agent-tab-bg: rgba(47, 111, 237, 0.08);
   --agent-tab-active-bg: rgba(47, 111, 237, 0.16);

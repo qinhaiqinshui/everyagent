@@ -999,15 +999,20 @@
   margin-bottom: 0;
 }
 
-/* 折叠态弱化：降低整体透明度与文字对比，避免抢视线 */
-.nagent-tool:not(.is-open) .nagent-tool__summary {
+/* 折叠态弱化：降低文字对比，避免抢视线。按片段设置而非 summary 整体 opacity——
+   整体 opacity 会把耗时数字一并稀释,慢调用告警(封顶纯红)在折叠态必须全额可见。 */
+.nagent-tool:not(.is-open) .nagent-tool__name,
+.nagent-tool:not(.is-open) .nagent-tool__icon {
+  /* ≈ 原整体 0.68 × 单独 0.85 的视觉等效值 */
+  opacity: 0.58;
+}
+
+.nagent-tool:not(.is-open) .nagent-tool__inline-preview {
   opacity: 0.68;
 }
 
-.nagent-tool:not(.is-open) .nagent-tool__name,
-.nagent-tool:not(.is-open) .nagent-tool__icon {
-  opacity: 0.85;
-}
+/* 耗时数字不参与折叠态弱化:快慢是跨折叠/展开的常显信号,
+   慢调用的红色深度在任何状态下都不打折。 */
 
 .nagent-tool__summary {
   display: flex;
@@ -1064,13 +1069,14 @@
 
 /* 工具视图摘要行耗时(图标与工具名之间,按内容占宽,不定宽右对齐)。
    慢调用用「颜色深浅」表达:--tool-dur-tint(0%~100%,由 toolDurationTintStyle
-   按 durationMs 计算,10s 起色、2min 封顶)在此插值 muted → accent-red。
+   按 durationMs 计算,10s 起色、2min 封顶)在此插值 muted → --tool-slow-red
+   (饱和度 100% 的正红 token,比 --accent-red 更红;封顶即"红得无法再红")。
    通道分工:图标的 state 色 = 成败(done 绿/error 红/interrupted 黄),
    文字色 = 快慢。同一条调用可以「图标绿 + 数字深红」= 成功但很慢,语义不打架。 */
 .nagent-tool__duration {
   flex: 0 0 auto;
   flex-shrink: 0;
-  color: color-mix(in srgb, var(--accent-red) var(--tool-dur-tint, 0%), var(--text-muted));
+  color: color-mix(in srgb, var(--tool-slow-red) var(--tool-dur-tint, 0%), var(--text-muted));
   /* 实时读秒逐跳时颜色平滑过渡,不刺眼闪变 */
   transition: color var(--motion-duration-base) linear;
   font-variant-numeric: tabular-nums;

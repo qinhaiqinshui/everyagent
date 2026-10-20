@@ -195,20 +195,21 @@ export function toolDurationText(detail: AggregatedToolDetail): string {
   return formatToolDuration(detail.durationMs)
 }
 
-/** 慢调用色阶区间:10s 起色(刚过阈值给 12% 淡染),120s(2min)封顶,再慢不再加深。 */
+/** 慢调用色阶区间:10s 起色(刚过阈值就给 20% 明显染色),120s(2min)封顶,再慢不再加深。 */
 const SLOW_TINT_START_MS = 10_000
 const SLOW_TINT_MAX_MS = 120_000
-/** 起色百分比 / 封顶百分比(color-mix 里 accent-red 的占比)。 */
-const SLOW_TINT_MIN_PCT = 12
+/** 起色百分比 / 封顶百分比(color-mix 里 --tool-slow-red 的占比)。 */
+const SLOW_TINT_MIN_PCT = 20
 const SLOW_TINT_MAX_PCT = 100
 
 /**
- * 耗时 → 颜色深浅百分比(0~100),供 CSS 的 `color-mix(in srgb, --accent-red P%, --text-muted)` 插值。
+ * 耗时 → 颜色深浅百分比(0~100),供 CSS 的 `color-mix(in srgb, --tool-slow-red P%, --text-muted)` 插值。
  *
  * <10s 返回 0(纯 --text-muted,与历史观感一致);10s~120s 线性升到封顶值;
- * ≥120s 恒定封顶——继续加深只会让满屏深红失去区分度,超过 2min 已是"极慢",无需再分级。
+ * ≥120s 恒定封顶——封顶色是饱和度 100% 的正红 token(--tool-slow-red),
+ * 已"红得无法再红",超过 2min 的"极慢"无需再分级。
  *
- * 通道分工:轨道图标的 state 色只表达**成败**(done 绿 / error 红 / interrupted 黄),
+ * 通道分工:图标的 state 色只表达**成败**(done 绿 / error 红 / interrupted 黄),
  * 本百分比只作用于**耗时数字**,于是「执行成功但耗时很久」= 图标绿 + 数字深红,
  * 两个信息各走各的颜色通道,不会互相误读。
  */
