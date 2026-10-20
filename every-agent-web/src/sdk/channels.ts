@@ -95,7 +95,8 @@ export const channels = {
   workers: (k: string) => `u.${k}.workers`,
   workerCmd: (k: string, workerId: string) => `u.${k}.worker.${workerId}.cmd`,
   workerEvt: (k: string, workerId: string) => `u.${k}.worker.${workerId}.evt`,
-  /** worker 级输入:task.input{taskId,text} / ask.reply{askId,answer}。 */
+  /** worker 级输入:ask.reply{askId,answer} / stream.ack{taskId,creditIndex}。
+ *  (旧 task.input 事件已删除:热任务入队与终态续跑统一走 task.run{taskId}。) */
   workerInput: (k: string, workerId: string) => `u.${k}.worker.${workerId}.input`,
   /**
    * 任务生命周期频道(worker 段必填,与 Java plugin-api 的 Channels.tasks 逐字对齐)。

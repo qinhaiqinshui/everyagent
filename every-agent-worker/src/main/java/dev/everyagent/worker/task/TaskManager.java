@@ -75,7 +75,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  * 生命周期纪律:agent 运行完成即销毁——finish 全程持任务监视器做
  * flush→updateMeta→写索引→untrack 双件套→tasks.remove,TaskEntry 连同 EventLog 丢弃;
  * 内存仅留磁盘路由索引(diskTasks,~150B/任务)。任务永久保留,用户主动 delete 是唯一删除路径。
- * 终态任务收到 task.input = 冷启动再运行(ConversationLoader 从磁盘重建上下文,一次普通运行)。
+ * 终态任务收到 task.run{taskId} = 冷启动再运行(ConversationLoader 从磁盘重建上下文,一次普通运行)。
  * 多 hub:任务不做 owner 隔离;任务事件经 EventSink.fanout 扇出到全部连接的 tasks 频道。
  */
 @Component

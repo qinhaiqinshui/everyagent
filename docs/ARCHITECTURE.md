@@ -169,7 +169,7 @@ wss://hub:6101/ws
 | `u.<K>.workers` | `worker.online` / `worker.offline`(hub 自动 presence,**仅 hub 可发布**) | 命名空间内任意订阅 |
 | `u.<K>.worker.<id>.cmd` | `rpc`(一切请求-命令的统一信封) | 命名空间内任意角色 |
 | `u.<K>.worker.<id>.evt` | `rpc.ok/rpc.err/rpc.data/rpc.progress` + 通知事件(`config.changed`、`fs.changed`、`workspaces.changed`) | 命名空间内任意角色 |
-| `u.<K>.worker.<id>.input` | **worker 级输入频道**:`task.input` / `ask.reply` / `stream.ack`(worker 每连接订阅一次,订阅数 O(worker×hub)) | 命名空间内任意角色 |
+| `u.<K>.worker.<id>.input` | **worker 级输入频道**:`ask.reply` / `stream.ack`(worker 每连接订阅一次,订阅数 O(worker×hub))。**`task.input` 事件已删除**:热任务入队与终态续跑统一走 `task.run{taskId}`(§5.5),worker 不再消费任何「输入事件」 | 命名空间内任意角色 |
 | `u.<K>.worker.<id>.tasks` | 任务生命周期:`task.created` / `task.updated` / `task.deleted`(**worker 段必填**:一台 worker 的任务事件只进自己的频道,payload 另带 `workerId`) | 命名空间内任意角色 |
 | `u.<K>.worker.<id>.task.<taskId>.stream` | **运行中任务实时增量**(worker 定向推送,`ext.target=sessionId` 只投该会话;worker 段用于区分同 apiKey 下的不同 worker) | 命名空间内任意角色 |
 | `u.<K>.term.<termId>.stream` | **内嵌终端实时输出**(worker 定向推送：event `term.output` payload `{data: base64}`；进程退出推 `term.exited`)。**不加 worker 段**:`termId` 由前端生成且 `term.open` RPC 已按 worker 定向,一台 worker 的 PTY 只对它自己可见,不构成串台 | 命名空间内任意角色 |
@@ -191,7 +191,7 @@ hub 对频道名不解释业务语义:它只做"前缀必须匹配本连接命�
 | evt | `rpc.data` | — | `reqId, batch, hasMore`(流式应答分批) |
 | evt | `rpc.progress` | — | `reqId, message, pct?` |
 | evt | `config.changed` / `fs.changed` / `workspaces.changed` | — | `{keys}` / `{workspace,path,kind}` / 注册表快照 |
-| `worker.<id>.tasks` | `task.created` / `task.updated` / `task.deleted` | — | 任务摘要(**必带 `workerId`**,与 `tasks.list` 的 TaskSummary 同形;含 `pendingInputs` 待消费输入快照,运行时态不落盘);deleted:`{taskId, workerId}` |
+| `worker.<id>.tasks` | `task.created` / `task.updated` / `task.deleted` | — | 任务摘要(**必带 `workerId`**,与 `tasks.list` 的 TaskSummary 同形)。**例外**:`pendingInputs` 待消费输入快照由 task-input-queue 插件在广播 payload 里自行补充(核心 `TaskSummary` 不含队列概念,`tasks.list` 也不含——队列专有数据的前端数据源是插件 RPC `task.queueSnapshot`,§5.5);deleted:`{taskId, workerId}` |
 | task.poll / stream | `user.message` | ✓ | 用户输入入日志:`{content, data:{rawContent?}}`(统一事件模型,content=AI 可见明文;rawContent=原始输入含 opaque token 串,仅用于前端回放还原胶囊,在 `data` 内、非顶层)。**agent 层一视同仁**:主 agent 任务输入与派生 agent(子/审议)收到的指令(spawn 初始任务/续跑新指令,subagent 插件发)同名落盘,仅 agentId 不同(主不带/派生必带)——`<agentId>.jsonl` 由此自包含,ConversationLoader 按 agentId 中性重建任意 agent 会话(§5.3/§7.14);主线程 user 气泡/轮次开合是 task 层职责(轮次索引只认主 agent 的 user.message 开轮),前端按 agentId 区分展示(派生 agent 的 user.message 不进主气泡,以 trace 形态展示) |
 | task.poll / stream | `delta` / `thinking` | ✗ 瞬态 | 逐 token / 推理增量(主/子同名,子带 agentId) |
 | task.poll / stream | `message` | ✓ | **每轮权威完成记录**:`{thinking, text, toolCalls:[{id,name,arguments}], agentId?}`,另可选 `thinkingStartedAt`/`thinkingDurationMs`(毫秒,思考阶段真实流式耗时:首个→末个思考增量,与 `tool.result` 的 startedAt/durationMs 同构;供前端思考块实时读秒与历史回放冻结展示,老事件缺失 must-ignore) |
@@ -206,7 +206,6 @@ hub 对频道名不解释业务语义:它只做"前缀必须匹配本连接命�
 | task.poll / stream | `task.trace` | ✓/✗ 按 ext | **统一纯显示 trace**(重试生命周期、任务耗时、模型容灾、授权审计等):`{traceId, kind, title, summary?, content?, status?, createdAt, metadata?}`;`ext.persist=false` 标记瞬态实例 |
 | task.poll / stream | `round.opened` / `round.closed` | ✗ 瞬态 | 轮次开/闭通知:`{startSeq,user}` / `{startSeq,endSeq,finalReply}` |
 | stream | `plugin.<pluginId>.*` | ✗ 瞬态 | 插件自定义任务直推事件(如 file-change 轮末摘要 `plugin.file-change.roundChanges`,§7.15.2):data 由插件自定;宿主前端 taskStream 不折入线程 items,一律透传领域事件 `plugin-task-event` 由插件 web 端消费;瞬态不落盘,历史/补齐走插件自持落盘 + 插件 RPC |
-| input | `task.input` | — | `{taskId, text, rawContent?}`(worker 级频道;热非终态入队/终态触发一次普通运行) |
 | input | `ask.reply` | — | `{askId, answer}` |
 | input | `stream.ack` | — | `{taskId, creditIndex}` 流消费进度回报(§7.13 背压) |
 
@@ -459,7 +458,7 @@ worker ── HubPool ──┬─ conn₁ (url₁, apiKey₁ → K₁)  订阅 
 (无) ──task.run(无taskId)──→ running ⇄ waiting-user ──→ done | failed | cancelled
                           ↑                          │
                           └── task.run{taskId} ──────┘  终态收到运行 = 从磁盘载入历史,
-                              (task.input 兼容触发)        作为一次普通运行(没有"续跑"概念)
+                              运行中=入队等待          作为一次普通运行(没有"续跑"概念)
 ```
 
 - **创建**:`task.run`(不传 taskId;必带 workspace)→ 建目录 → 任务驻留内存。
@@ -948,7 +947,7 @@ worker(进程)
 **状态机**:
 
 ```
-Task:   (无) → running ⇄ waiting-user → done|failed|cancelled;终态 --task.input--> running(冷启动普通运行)
+Task:   (无) → running ⇄ waiting-user → done|failed|cancelled;终态 --task.run{taskId}--> running(冷启动普通运行)
 Agent:  (main) running ⇄ waiting-user → done | failed | stopped(级联)
         (sub)  spawned → running ⇄ waiting-user → done | failed | stopped
 Ask:    pending → answered | timeout | cancelled

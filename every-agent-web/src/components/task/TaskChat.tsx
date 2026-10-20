@@ -11,7 +11,7 @@
  * taskStream 同时承担实时信号链:ask 卡片(全局 UserInteractionHost)、
  * agent 列表状态(agentStates)、上下文电池(usage)、taskModel、输入入队
  * (cancel)与重连校准。
- * 输入 = 纯文本(task.run 新建 / 运行中 task.input 入队 / 终态 task.run 续跑)。
+ * 输入 = 纯文本(task.run 新建 / 运行中 task.run{taskId} 入队 / 终态 task.run{taskId} 续跑)。
  *
  * 草稿态:taskId 为 DRAFT_TASK_ID 时渲染 TaskDraftComposerPanel(与 n 版
  * 启动台草稿面板同构),首次发送经 task.run 建任务后,把当前草稿标签

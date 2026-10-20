@@ -13,7 +13,7 @@ public final class TaskDtos {
     private TaskDtos() {
     }
 
-    /** created → running ⇄ waiting-user → done | failed | cancelled(终态可经 task.input 再次 running)。 */
+    /** created → running ⇄ waiting-user → done | failed | cancelled(终态可经 task.run{taskId} 再次 running)。 */
     public enum TaskStatus {
         CREATED, RUNNING, WAITING_USER, DONE, FAILED, CANCELLED;
 

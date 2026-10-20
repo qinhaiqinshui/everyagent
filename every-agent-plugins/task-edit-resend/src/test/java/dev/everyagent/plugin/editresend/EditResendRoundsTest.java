@@ -281,7 +281,7 @@ class EditResendRoundsTest {
     }
 
     /**
-     * 热路径编辑(任务运行中 task.input 携带 editSeq → truncateForEdit):
+     * 热路径编辑(任务运行中 task.run{taskId} 携带 editSeq → truncateForEdit):
      * SLOW 慢速轮进行中编辑该轮消息 → 截断磁盘+内存+重置落盘游标 → 队列消费新输入。
      * 断言:编辑点之前轮次(轮1)保留,被编辑轮删除、新轮 index 顺延。
      * <p>TODO: 迁移后热路径编辑需要 QueueDispatchNode(入队短路)+QueueLoopNode(消费队列)，
