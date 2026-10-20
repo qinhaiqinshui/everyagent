@@ -2045,10 +2045,6 @@
   color: var(--text-muted);
 }
 
-.nagent-composer__truncation {
-  margin-bottom: var(--space-2);
-}
-
 .nagent-composer__send {
   min-width: 96px;
   flex-shrink: 0;

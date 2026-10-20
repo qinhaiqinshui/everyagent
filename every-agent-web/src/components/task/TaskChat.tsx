@@ -986,14 +986,7 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
       )}
       composer={(
         <div className="nagent-composer-dock">
-          {status === 'error' ? (
-            <div className="ui-notice ui-notice--warn nagent-composer__truncation" role="status">
-              <div className="ui-notice__body">
-                <div className="ui-notice__title">本轮运行被提前结束</div>
-                <div>{entry?.error || 'worker 运行出错，任务被提前结束。'}</div>
-              </div>
-            </div>
-          ) : null}
+          {/* 任务级错误信息已由线程内 error 事件的红色 trace 承载，输入框上方不再重复弹提示条。 */}
           <TaskComposerSurface
             draft={draft}
             placeholder="继续输入，让当前 Task 创建新的 Agent 执行下一轮"
