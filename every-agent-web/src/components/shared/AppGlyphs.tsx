@@ -405,13 +405,37 @@ export function WrenchIcon({ size = 16, style, className, flipped = false }: App
  * 盾牌校验图标（AI 安全审议 auth.review trace 用）：盾牌轮廓 + 对勾。
  * 语义：AI 安全审议已对授权请求给出结论（放行/拒绝/升级）。
  */
-/** 终端图标（圆角窗口外框 + `>` 提示符 + 短横光标）。 */
-export function TerminalIcon({ size = 16, style }: AppGlyphProps) {
+/**
+ * 终端图标：终端窗口（圆角外框 + 标题栏分隔线）+ `>`_ 提示符。
+ * 消费方：终端文件标签页（terminalTabType / OpenFilesSidebarPanel）与
+ * powershell / bash 命令工具视图（CommandToolView，替代默认扳手）。
+ * `_` 光标节点带 `nagent-terminal-cursor` 类——命令工具 running 态由
+ * chatPanel.css 定制为光标硬闪烁（steps 阶跃，真实终端手感），**不**沿用
+ * 扳手的整体旋转（终端框旋转观感差）；颜色仍走 nagent-tool-state--* 单一来源。
+ * 闪烁选择器要求 `.nagent-tool__icon` + running 状态类，标签页等非工具场景不闪烁。
+ */
+export function TerminalIcon({ size = 16, style, className }: AppGlyphProps) {
   return (
-    <Svg size={size} style={style}>
-      <rect x="2.2" y="3" width="11.6" height="10" rx="1.4" stroke="currentColor" strokeWidth="1.4" />
-      <path d="M4.4 6.5L6.5 8L4.4 9.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M7.5 9.7H11" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+    <Svg size={size} style={style} className={className}>
+      {/* 终端窗口外框 + 标题栏分隔线 */}
+      <rect x="1.5" y="2.5" width="13" height="11" rx="2" stroke="currentColor" strokeWidth="1.5" />
+      <path d="M1.5 5.5H14.5" stroke="currentColor" strokeWidth="1.5" />
+      {/* `>` 提示符 */}
+      <path
+        d="M4.2 7.7 6 9.25 4.2 10.8"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      {/* `_` 光标：running 专属闪烁动画的目标节点（见 chatPanel.css） */}
+      <path
+        className="nagent-terminal-cursor"
+        d="M7.6 10.8H9.8"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+      />
     </Svg>
   )
 }

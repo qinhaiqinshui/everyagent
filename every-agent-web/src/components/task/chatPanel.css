@@ -1274,8 +1274,25 @@
   to { transform: rotate(360deg); }
 }
 
+/* 终端图标（TerminalIcon，powershell/bash）running 态专属：不整体旋转
+   （终端框旋转观感差），改为 `_` 光标硬闪烁——steps 阶跃、无渐变，真实终端
+   光标手感；颜色仍由上方 nagent-tool-state--running 提供，此处的 animation:none
+   仅为关掉旋转，光标节点单独驱动。 */
+.nagent-tool__icon.nagent-tool-state--running .nagent-terminal-cursor {
+  animation: nagent-terminal-blink 1.1s steps(2, start) infinite;
+}
+
+@keyframes nagent-terminal-blink {
+  to { visibility: hidden; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .nagent-tool-state--running {
+    animation: none;
+  }
+
+  /* 光标闪烁同样尊重减弱动效偏好（静止常亮）。 */
+  .nagent-tool__icon.nagent-tool-state--running .nagent-terminal-cursor {
     animation: none;
   }
 }
