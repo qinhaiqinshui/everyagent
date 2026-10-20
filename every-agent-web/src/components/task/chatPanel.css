@@ -831,6 +831,10 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  /* 折叠头整体缩进:取 24px > 工具图标占用宽度(图标 13px + gap 8px = 21px),
+     让「思考过程」文字起点明确落在工具行的图标区之外,层级一眼可辨。
+     只缩进折叠头;展开后的详情内容(__content)不缩进,保持与正文同基线。 */
+  padding-left: 24px;
   color: var(--text-muted);
   font-size: var(--text-xs);
   line-height: 1.5;
