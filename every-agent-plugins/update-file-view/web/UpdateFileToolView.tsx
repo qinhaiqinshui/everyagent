@@ -47,7 +47,8 @@ import {
   buildLineDiff,
   buildDiffRows,
   countChanges,
-  formatToolDuration,
+  toolDurationText,
+  toolDurationTintStyle,
   toolStateClass,
 } from './utils'
 import { UpdateFileDiff } from './UpdateFileDiff'
@@ -89,10 +90,12 @@ function UpdateFileEntry({ detail }: { detail: PluginToolCallDetail }) {
   const resultText = typeof result === 'string' ? result : JSON.stringify(result, null, 2)
 
   // 运行态与耗时（与核心 FileToolEntry 同构）：状态图标 class 优先宿主灌入的
-  // rowState（running 转圈 / done 绿 / error 红），耗时优先权威 durationMs
-  // （运行中由宿主批壳 1s tick 灌入实时读秒，结果到达冻结为权威值）。
+  // rowState（running 转圈 / done 绿 / error 红），耗时仅慢调用显示（≥10s 门槛，
+  // 与色阶起色同一阈值），tint 百分比写入 --tool-dur-tint 由宿主 CSS 插值
+  // （慢调用红色深度与核心工具行完全一致）。
   const stateClass = toolStateClass(detail)
-  const durationText = formatToolDuration(detail.durationMs)
+  const durationText = toolDurationText(detail)
+  const durationTintStyle = toolDurationTintStyle(detail)
 
   const [open, setOpen] = React.useState(false)
 
@@ -172,7 +175,7 @@ function UpdateFileEntry({ detail }: { detail: PluginToolCallDetail }) {
         }}
       >
         <WrenchIcon size={13} className={`nagent-tool__icon${stateClass ? ` ${stateClass}` : ''}`} />
-        {durationText ? <span className="nagent-tool__duration">{durationText}</span> : null}
+        {durationText ? <span className="nagent-tool__duration" style={durationTintStyle}>{durationText}</span> : null}
         <span className="nagent-tool__name">{detail.toolName || 'update_file'}</span>
         <span className="nagent-tool__inline-preview">
           {fullPath ? (
