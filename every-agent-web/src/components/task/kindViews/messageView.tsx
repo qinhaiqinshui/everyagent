@@ -7,7 +7,7 @@
  * **单调用直渲 / 多调用批容器**双形态:
  * - 单调用(toolCalls.length === 1):无包装,直接渲染 per-tool 美化视图(一次折叠
  *   即见参数与结果,状态图标 + 耗时在视图摘要行上);
- * - 多调用:只保留左边框的圆角批容器装住各调用,×N 数量徽标挂在左边框垂直中点
+ * - 多调用:只保留左边框的圆角批容器装住各调用,N 数量徽标挂在左边框垂直中点
  *   (读 data-tool-count),内部平铺各调用的 per-tool 美化视图(无批壳行/无二次折叠)。
  *   批容器的左边框 + padding-left 由 CSS 负 margin 抵消,批内图标与单调用缩进一致。
  *
@@ -52,7 +52,7 @@ function ToolDetailView({ detail }: { detail: AggregatedToolDetail }) {
 /**
  * 工具调用块:一次 message 下发的 toolCalls 为一批(= 同一次 AI 接口请求)。
  * - 单调用:直接渲染 per-tool 美化视图(无包装,一次折叠见详情);
- * - 多调用:左边框圆角批容器装住各调用,×N 徽标挂左边框垂直中点(读 data-tool-count),
+ * - 多调用:左边框圆角批容器装住各调用,N 徽标挂左边框垂直中点(读 data-tool-count),
  *   内部直接平铺各调用的 per-tool 视图(无批壳行/无二次折叠,状态图标 + 耗时在各自视图摘要行上)。
  * 读秒走本组件单一 setInterval(1s,仅存在 running 调用时挂,卸载清理)。
  */
@@ -94,7 +94,7 @@ function ToolCallsBlock({
     return <ToolDetailView detail={buildDetail(0)} />
   }
 
-  // 多调用:左边框圆角批容器装住各调用,×N 徽标挂左边框垂直中点(::after 读 data-tool-count);
+  // 多调用:左边框圆角批容器装住各调用,N 徽标挂左边框垂直中点(::after 读 data-tool-count);
   // 容器左缘 border+padding 由 CSS 负 margin 抵消,批内图标与单调用缩进一致。
   return (
     <div

@@ -5,12 +5,12 @@
  * ───────────────────────────────────────────────────────────── */
 
 /* ─── 工具批容器常量 ─────────────────────────────────────────
- * 多调用批 = 左边框竖线盒(×N 数量徽标挂在边框垂直中点,见 .nagent-tool-batch)。
+ * 多调用批 = 左边框竖线盒(N 数量徽标挂在边框垂直中点,见 .nagent-tool-batch)。
  * 左边框 + padding-left 会让内部图标右移,这里用负 margin-left 精确抵消
  * (--tool-batch-inset),保证批内工具图标与单条调用的图标缩进一致。 */
 :root {
   /* 批容器左内边距(内容与左边框的间距) */
-  --tool-batch-pad: 6px;
+  --tool-batch-pad: 4px;
   /* 批容器左缘吃掉的宽度 = padding-left + border-left,负 margin 抵消量 */
   --tool-batch-inset: calc(var(--tool-batch-pad) + 1px);
 }
@@ -1283,7 +1283,7 @@
 
 /* ─── 工具调用批容器(批 = 一次 message 下发的 toolCalls)─────
    批 = 只保留左边框的圆角竖线盒,内部平铺各调用的 per-tool 美化视图
-   (无批壳行/无二次折叠)。×N 数量徽标挂在左边框的垂直中点上,
+   (无批壳行/无二次折叠)。N 数量徽标挂在左边框的垂直中点上,
    用底色断开边框线,读作「线上的节点计数」。
    缩进一致:左边框 + padding-left 用等量负 margin-left 抵消
    (宽度同额补回,右缘仍与消息体对齐),批内工具图标与单条调用的图标同一条竖线。
@@ -1301,7 +1301,7 @@
   /* 只保留左边框:常用淡蓝竖线做分组标识(与批徽标同色系,accent-blue 55% 透明度,
      与历史批壳/批弧同强度),不与内容抢视觉;圆角保留 → 竖线两端经圆弧平滑收头。 */
   border-left: 1px solid color-mix(in srgb, var(--accent-blue) 55%, transparent);
-  border-radius: var(--radius-md, 8px);
+  border-radius: 4px;
   padding-left: var(--tool-batch-pad);
   /* 数量徽标的定位基准 */
   position: relative;
@@ -1311,7 +1311,7 @@
    挂在左边框的垂直中点(left:0 相对 padding box,近似边框中心),
    底色与消息流背景一致,把边框线在数字处断开。 */
 .nagent-tool-batch::after {
-  content: '×' attr(data-tool-count);
+  content: attr(data-tool-count);
   position: absolute;
   left: 0;
   top: 50%;

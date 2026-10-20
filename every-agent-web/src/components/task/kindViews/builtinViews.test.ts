@@ -115,7 +115,7 @@ describe('message 视图工具块(多调用竖线容器 + per-tool 视图直挂)
     expect(html).not.toContain('排队中')
   })
 
-  it('批内同名多调用不折叠(两个 read_file 各自独立视图,无「×N」聚合徽章)', () => {
+  it('批内同名多调用不折叠(两个 read_file 各自独立视图,无数量徽章聚合)', () => {
     const html = renderMessage(items[0], items)
     expect((html.match(/nagent-tool-state--/g) ?? []).length).toBe(3)
     expect(html).not.toContain('×2')
