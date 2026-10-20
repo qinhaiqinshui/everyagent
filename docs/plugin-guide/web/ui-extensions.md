@@ -693,7 +693,7 @@ export default plugin
 
 | 主题 `colors` | 效果 |
 |---|---|
-| 全部 ~65 个颜色 token | 整体换肤，与基底无关 |
+| 全部 68 个颜色 token | 整体换肤，与基底无关 |
 | 只写少数几个（如只写 `--reading-bg`） | **只有那几个 token 变**，其余全部沿用 `type` 基底 |
 | 缺省 / 空对象 | 纯基底（等价现在的深色 / 浅色） |
 
@@ -723,7 +723,7 @@ const plugin: PluginModule = {
 export default plugin
 ```
 
-### 19.4 可覆盖 token 白名单（颜色类，共 ~65 个）
+### 19.4 可覆盖 token 白名单（颜色类，共 68 个）
 
 分组列出，`colors` 的键必须取自此表（写表外 token 会被忽略）：
 
