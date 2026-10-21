@@ -71,7 +71,7 @@ final class WsTestClient implements AutoCloseable {
         ws.sendText(text, true).join();
     }
 
-    /** 等到出现满足条件的帧文本;超时抛 AssertionError。 */
+    /** 等到出现满足条件的帧文本;超时抛 AssertionError(附队列残留快照,便于 flaky 排查)。 */
     String await(Predicate<String> condition, String what) {
         long deadline = System.currentTimeMillis() + 5000;
         while (System.currentTimeMillis() < deadline) {
@@ -92,7 +92,28 @@ final class WsTestClient implements AutoCloseable {
                 throw new AssertionError("interrupted");
             }
         }
-        throw new AssertionError("timeout waiting for: " + what);
+        throw new AssertionError("timeout waiting for: " + what + "; pending frames: " + snapshot());
+    }
+
+    /** 队列残留帧快照(限 10 条,截断长帧),仅用于超时诊断。 */
+    private synchronized String snapshot() {
+        var sb = new StringBuilder("[");
+        int n = 0;
+        for (Frame f : collector.frames) {
+            if (n++ > 0) {
+                sb.append(", ");
+            }
+            if (n > 10) {
+                sb.append("...(").append(collector.frames.size()).append(" total)");
+                break;
+            }
+            String t = f.closed() ? "<closed>" : f.text();
+            if (t != null && t.length() > 200) {
+                t = t.substring(0, 200) + "...(" + t.length() + ")";
+            }
+            sb.append(t);
+        }
+        return sb.append(']').toString();
     }
 
     String awaitEvent(String eventName) {

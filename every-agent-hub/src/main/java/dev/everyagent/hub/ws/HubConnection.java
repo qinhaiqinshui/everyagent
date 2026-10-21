@@ -78,7 +78,11 @@ public final class HubConnection {
         // 有界出口队列 = 慢消费者保护:队列满时 emit 失败 → 断开该连接(前端重连后 sync 补齐)
         this.outbound = Sinks.many().unicast()
                 .onBackpressureBuffer(new ArrayBlockingQueue<>(props.getOutboundQueueLimit()));
-        this.pubBucket = new TokenBucket(props.getPubBurst(), props.getPubRatePerSecond());
+        // pub 令牌桶(默认 1000/s + 突发 2000,见 HubProperties.Limits 推导):防认证连接帧洪泛;
+        // hub.limits.pub-per-sec / pub-burst 任一为 0 = 显式关闭(null 桶 → 不限流)。
+        int pubPerSec = props.getLimits().getPubPerSec();
+        int pubBurst = props.getLimits().getPubBurst();
+        this.pubBucket = pubPerSec > 0 && pubBurst > 0 ? new TokenBucket(pubBurst, pubPerSec) : null;
     }
 
     // ---- 生命周期 ----
@@ -314,12 +318,13 @@ public final class HubConnection {
             sendError(Frames.E_ACL_DENIED, err);
             return;
         }
-        // [临时关闭] pub 限流:本地/单用户部署下 100/s 稳态 + 100 突发过小,单任务流式输出即触发 RATE_LIMITED 丢帧。
-        // 已在 AGENTS 复盘记录,后续若遇 hub 被单连接冲垮再恢复限流(或改为每任务/可配置)。
-        // if (!pubBucket.tryConsume(1)) {
-        //     sendError(Frames.E_RATE_LIMITED, "pub rate limit exceeded");
-        //     return;
-        // }
+        // pub 限流(安全整改 L-6 恢复):每连接令牌桶,默认 1000/s + 突发 2000——按流式输出峰值推算,
+        // 正常任务流(快模型 ~100帧/s × ≤4 并发)不误伤;超速只回 error 不断连(客户端可退避重试)。
+        // hub.limits.pub-per-sec / pub-burst 任一为 0 = 显式关闭(构造时桶为 null)。
+        if (pubBucket != null && !pubBucket.tryConsume(1)) {
+            sendError(Frames.E_RATE_LIMITED, "pub rate limit exceeded");
+            return;
+        }
         // 原样转发:只改 type 并附加已认证 from,event/seq/payload/ext(含未知字段)全部保留。
         // from 附带 sessionId(除 clientId/role 外):worker 据此识别「是哪条前端会话发的消息」,
         // 用于兜底补建定向推送器(worker 重启后前端不刷新,收不到 subscriber.join 通知)。

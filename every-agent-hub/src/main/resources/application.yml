@@ -29,8 +29,17 @@ hub:
   #   ${EVERYAGENT_HOME}/application-hub.yaml 的 hub.hub-key。桌面版由 desktop 注入 HUB_KEY。
   hub-key: ${HUB_KEY:}
   max-frame-bytes: 16777216        # 单帧上限 16 MiB(应用层温和拦截;传输层升级策略按同值+64KiB 余量)
-  pub-rate-per-second: 100         # 每连接 pub 令牌桶
-  pub-burst: 100
+  # pub 限流(安全整改 L-6 恢复):每连接令牌桶,防认证连接无限速率扇出帧(CPU/带宽放大)。
+  # 默认按「正常流量零误伤」推算:
+  #   pub-per-sec=1000 —— 快模型流式输出 ~100 帧/s × 并发任务 ≤4 ≈ 400 帧/s 峰值 ×2 余量;
+  #   pub-burst=2000   —— ≥ worker DataPusher 首挂回扫 FIRST_SWEEP_MAX=2000,覆盖 fs.read 等
+  #                       瞬时帧脉冲叠加在流式输出之上的场景。
+  # 任一为 0 = 显式关闭限流(仅建议可信环境临时排障);公网/多租户部署建议收紧(如 200/500),
+  # 并配合 hello-rate-per-minute 与 stale-read-ms。旧顶层 hub.pub-rate-per-second / pub-burst
+  # 已迁移到 hub.limits.*(阈值亦从 100/100 提至上述默认)。
+  limits:
+    pub-per-sec: 1000
+    pub-burst: 2000
   outbound-queue-limit: 1000       # 慢消费者保护:出口队列上限,溢出断开
   ping-interval-ms: 15000          # WS 协议层 ping 间隔
   stale-read-ms: 0                 # >0 时启用"无入站流量判死"(需 pong 可观测,默认关)
