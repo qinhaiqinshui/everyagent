@@ -11,13 +11,16 @@ import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RestController;
 import tools.jackson.databind.node.ObjectNode;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+
 /**
  * 管理端点(仅监听 127.0.0.1,与 /health 同端口):
  * <ul>
  *   <li>{@code GET /admin/identify} — 返回 worker 身份信息;</li>
  *   <li>{@code POST /admin/shutdown} — 异步延迟关闭 ApplicationContext。</li>
  * </ul>
- * 认证:请求头 {@code X-Admin-Key} 与 worker.hubs[0].apiKey 明文比对。
+ * 认证:请求头 {@code X-Admin-Key} 与 worker.hubs[0].apiKey 常数时间比对(MessageDigest.isEqual)。
  */
 @RestController
 public class ShutdownController {
@@ -46,7 +49,12 @@ public class ShutdownController {
             err.put("error", "apiKey not configured");
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(err);
         }
-        if (adminKey == null || !expected.equals(adminKey)) {
+        // 常数时间比较,防本地进程通过计时侧信道逐字节恢复 admin key。
+        // MessageDigest.isEqual(JDK17+)对内容与长度差异均不短路,行为与 String.equals 等价;
+        // adminKey 为 null 时先短路,与原 equals 的 null 语义一致。
+        if (adminKey == null
+                || !MessageDigest.isEqual(expected.getBytes(StandardCharsets.UTF_8),
+                        adminKey.getBytes(StandardCharsets.UTF_8))) {
             ObjectNode err = Json.obj();
             err.put("error", "unauthorized");
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(err);
