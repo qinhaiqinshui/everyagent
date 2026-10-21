@@ -22,7 +22,7 @@ import dev.everyagent.worker.plugin.PluginDirs;
 import dev.everyagent.worker.plugin.scanner.PluginScanner.ScannedPlugin;
 
 /**
- * 卸载墓碑的启动自愈(§8.5,known-issues #24 回归):
+ * 卸载墓碑的启动自愈(§8.5,卸载墓碑回归):
  *
  * <ul>
  *   <li>墓碑目录 → 启动扫描时递归删除,不再出现在扫描结果(已决定卸载的插件不得复活);</li>
@@ -68,7 +68,7 @@ class ExternalPluginScannerTombstoneTest {
         Path locked = writePlugin(pluginsDir, "locked-plugin");
         PluginDirs.writeUninstallTombstone(locked);
 
-        // 复现真实场景(known-issues #24 原始形态):子进程把 CWD 停在插件目录 →
+        // 复现真实场景:子进程把 CWD 停在插件目录 →
         // 文件可删、目录删不掉。Java NIO 句柄带 FILE_SHARE_DELETE 锁不住,须用真进程。
         Process holder = new ProcessBuilder("ping", "-n", "30", "127.0.0.1")
                 .directory(locked.toFile())

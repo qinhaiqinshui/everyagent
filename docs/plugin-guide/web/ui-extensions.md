@@ -79,7 +79,7 @@ export default plugin
 ### 2.3 宿主消费链与坑
 
 - **消费点 4 处**：活动栏图标条目 `buildSidebarActivityItems`（`Layout.tsx:1069-1086`）、面板槽位数组 `sidebarPanels`（`Layout.tsx:899-903`）、面板互斥高亮 `activeActivityItemIds`（`Layout.tsx:853-868`）、面板 id 合法性兜底（`Layout.tsx:276-284`，插件注销后回落到「任务」）。
-- **角标两条通道**：`badgeCount`（数字）与 `Badge`（组件）都经 `buildSidebarActivityItems` 透传、由 `SidebarActivityBar` 在图标内渲染（Badge 历史上是死字段，known-issues #2 已修复接线）。
+- **角标两条通道**：`badgeCount`（数字）与 `Badge`（组件）都经 `buildSidebarActivityItems` 透传、由 `SidebarActivityBar` 在图标内渲染（Badge 历史上是死字段，已修复接线）。
 - **坑**：① `order` 缺省 100 会排在所有内置项之后；② 内置范例：git（`every-agent-plugins/git/web/index.ts:28-37`，order=5 + GitChangeBadge）、plugin-manager（`every-agent-plugins/plugin-manager/web/index.ts:17-25`，order=9）。
 
 ## 3. 侧边栏 `order` 坐标系（专节）
@@ -328,7 +328,7 @@ ctx.ui.registerOutputBlock('my-report', (content, { taskId }) =>
 
 消费链：同样**不在 `dispatch()` switch 内**，旁路写入 `outputBlockRegistry`（`PluginDispatcher.ts:274-284`）；消息渲染时 `RichMessageContent` 把内容按**成对** `<tag>…</tag>` 切段（`RichMessageContent.tsx:30-58`，只识别字母开头、成对闭合的标签，不成对当普通文本），命中已注册 tag 交给 handler，未命中降级为通用代码块（`:83-90`）。
 
-- **坑**：① **重复注册同 tag 直接抛错**（`outputBlockRegistry.ts`），会炸掉整个 `activate()`——与 trace 的覆盖语义相反；② dispose 现已真清理（`outputBlockRegistry.unregister`，known-issues #3 修复前曾只清无人读的旁路 Map，注销后渲染照旧）；③ tag 大小写不敏感（两端都 toLowerCase）。
+- **坑**：① **重复注册同 tag 直接抛错**（`outputBlockRegistry.ts`），会炸掉整个 `activate()`——与 trace 的覆盖语义相反；② dispose 现已真清理（`outputBlockRegistry.unregister`；早期曾只清无人读的旁路 Map，注销后渲染照旧）；③ tag 大小写不敏感（两端都 toLowerCase）。
 - **内置范例**：**无**（`every-agent-plugins` 全目录 rg `registerOutputBlock` 零命中；注册表注释自证「保持空，未注册标签走纯文本降级」，`outputBlockRegistry.ts:1-5`）。
 
 ## 12. `ui.file_content_editors` —— 文件内容编辑器
@@ -381,7 +381,7 @@ ctx.ui.registerFileContentEditor(descriptor)
 - 注册与读取 API：`registerFileExplorerAction` / `listRegisteredFileExplorerActions`（`PluginDispatcher.ts`），扩展点名 `ui.file_explorer_actions`。
 - **消费点**：文件树右键/长按菜单构建处 `OpenFilesSidebarPanel.tsx` 的 `getFileActionItems`——先收集内置项（打开/新建/上传/属性/重命名/移动/搜索/下载/终端/系统文件管理器），再把插件注册项按 `isVisible(ctx)` 过滤后**追加到内置菜单项尾部**（与 `FileExplorerAction` 类型注释的约定一致）；面板订阅 `subscribeExtensionsChanged`，插件注册/注销后菜单即时刷新。
 - **内置范例**：git 的「显示 Git 历史」（`every-agent-plugins/git/web/index.ts:42-53`，invoke 里 `ctx.ui.openTab` 打开 git-history 标签）——右键文件树任意节点即可见。
-- 历史欠账：该扩展点曾长期无宿主消费点（known-issues #1），已接线修复。
+- 历史欠账：该扩展点曾长期无宿主消费点，已接线修复。
 
 ## 14. `ui.round_tail_panels` —— 轮末展示区
 
@@ -791,8 +791,8 @@ ctx.ui.openSettingsPage('models')
 
 ## 21. Disposable 与刷新
 
-- **dispose 语义是真的**：`ListExtensionRegistry.register` 返回的 Disposable 从数组 splice 并通知宿主重渲染（`ExtensionRegistry.ts:45-56`）——`ctx.events.on`、`ctx.commands.registerCommand` 同理（见[前端 ctx API](context-api.md) §9）。`registerTraceType` / `registerOutputBlock` 的 dispose 也已补齐侧路注销（`traceTypeRegistry.unregisterTraceType` / `outputBlockRegistry.unregister`，known-issues #3 修复前曾是不清真实消费方的假 Disposable）。
-- **宿主收集并在页面卸载时统一 dispose**：激活时 `ctx.ui` 等注册表都包了收集代理（`pluginLoader.ts` 的 `trackDisposables`），注册返回的 Disposable 全部进该插件的 `disposables`；页面卸载（`pagehide`）时宿主先调 `deactivate` 再逆序 dispose 全部注册项并移除插件 CSS（known-issues #8 修复前 disposables 恒为空数组、`deactivate` 零调用）。运行期没有热卸载——中途注销仍需自己持有 Disposable 调 dispose。
+- **dispose 语义是真的**：`ListExtensionRegistry.register` 返回的 Disposable 从数组 splice 并通知宿主重渲染（`ExtensionRegistry.ts:45-56`）——`ctx.events.on`、`ctx.commands.registerCommand` 同理（见[前端 ctx API](context-api.md) §9）。`registerTraceType` / `registerOutputBlock` 的 dispose 也已补齐侧路注销（`traceTypeRegistry.unregisterTraceType` / `outputBlockRegistry.unregister`；早期曾是不清真实消费方的假 Disposable）。
+- **宿主收集并在页面卸载时统一 dispose**：激活时 `ctx.ui` 等注册表都包了收集代理（`pluginLoader.ts` 的 `trackDisposables`），注册返回的 Disposable 全部进该插件的 `disposables`；页面卸载（`pagehide`）时宿主先调 `deactivate` 再逆序 dispose 全部注册项并移除插件 CSS（早期 disposables 恒为空数组、`deactivate` 零调用）。运行期没有热卸载——中途注销仍需自己持有 Disposable 调 dispose。
 - **刷新即丢**：注册表、订阅、blob 模块全是内存态，页面刷新全部清零并重新走加载链路（[加载链路](overview-and-loading.md)）；跨刷新要保留的状态用 `ctx.storage`（localStorage）。
 - **同一会话内的「更新」= 重新加载页面**：改了插件 web 代码要重跑 `npm run build:plugins` 再刷新（该脚本不在任何流水线内）；后端启停/装卸一律重启 worker（[plugin.json 字段参考](../plugin-manifest.md) §6；扩展面板「重新加载」按钮**仅在有待生效变更时显示**，待生效变更涉及含 `main` 的插件时会弹确认并自动完成重启 + 刷新）。
 

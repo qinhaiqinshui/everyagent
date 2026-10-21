@@ -12,7 +12,7 @@ has_children: false
 阅读约定：
 
 - 详解列全部为站内相对链接（`.md` + 小节锚点）；「§n」指目标文档小节。
-- ⚠️ = 写了不生效 / 全仓零使用的扩展点或字段（集中登记在 [known-issues](known-issues.md)，撰写中）。
+- ⚠️ = 写了不生效 / 全仓零使用的扩展点或字段。
 - 范例列的插件 id 均可在[内置插件范例索引 §2](builtin-plugins.md#2-总表30-个内置插件) 查到逐行解读；「想写 X 就抄 Y」反查见[同篇 §3](builtin-plugins.md#3-想写-x-就抄-y反查表)。
 
 ## 1. 后端 API 索引
@@ -205,7 +205,7 @@ has_children: false
 | `on` | `on(name: PluginDomainEvent, h: (payload: unknown) => void): Disposable` | [ctx §7](../web/context-api.md#7-ctxevents--领域事件总线) |
 | `emit` | `emit(name: PluginDomainEvent, payload: unknown): void` | 无监听者静默；4 个请求通道可反向驱动宿主（[事件 §3.2](../web/events.md#32-宿主从不-emit但插件可反向驱动的请求通道4-个)） |
 
-宿主 `DOMAIN_EVENTS` 共 **21** 个：**17 个真实会发生**（[事件 §3.1](../web/events.md#31-真实会发生的事件17-个)）、**4 个宿主监听的请求通道**（[事件 §3.2](../web/events.md#32-宿主从不-emit但插件可反向驱动的请求通道4-个)）——known-issues #4 清理后常量表已无零 emit 死事件。类型包具名 8 个（[事件 §2](../web/events.md#2-plugin-api-的具名事件)）**全部存活**：
+宿主 `DOMAIN_EVENTS` 共 **21** 个：**17 个真实会发生**（[事件 §3.1](../web/events.md#31-真实会发生的事件17-个)）、**4 个宿主监听的请求通道**（[事件 §3.2](../web/events.md#32-宿主从不-emit但插件可反向驱动的请求通道4-个)）——死事件清理后常量表已无零 emit 条目。类型包具名 8 个（[事件 §2](../web/events.md#2-plugin-api-的具名事件)）**全部存活**：
 
 | 具名事件 | 生死 | 具名事件 | 生死 |
 |---|---|---|---|
@@ -283,5 +283,5 @@ has_children: false
 ## 下一步读
 
 - 每个扩展点的逐行范例与 order 值占用：[内置插件范例索引](builtin-plugins.md)（order 速查在其 [§4](builtin-plugins.md#4-order-值占用速查)）
-- 死扩展点 / 未接线字段 / API 未发布等现状偏差：[known-issues](known-issues.md)（#1~#5、#8~#17、#19、#21~#23 已修复；#6/#7 已缓解）
+
 - 起步走读：[快速上手](../getting-started.md)（撰写中）

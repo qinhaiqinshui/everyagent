@@ -7,7 +7,7 @@ has_children: false
 
 # 前端事件
 
-**一句话定位**：`ctx.events` 是前端插件感知（和驱动）宿主 UI 的唯一事件通道——它是宿主进程内一条模块级事件总线的最薄委托。本文给出**全部 22 个宿主事件的逐个取证表**（载荷、触发时机、来源文件、监听价值）——known-issues #4 清理后，常量表里**不再有零 emit 的死事件**：18 个有真实 emit 调用点，其余 4 个是「宿主监听、插件可反向 emit 驱动宿主」的请求通道。事件名与载荷类型的唯一登记处是 `every-agent-web/src/events/domainEvents.ts`（常量表 `DOMAIN_EVENTS` + 载荷类型 `DomainEventMap`）。
+**一句话定位**：`ctx.events` 是前端插件感知（和驱动）宿主 UI 的唯一事件通道——它是宿主进程内一条模块级事件总线的最薄委托。本文给出**全部 22 个宿主事件的逐个取证表**（载荷、触发时机、来源文件、监听价值）——死事件清理后，常量表里**不再有零 emit 的死事件**：18 个有真实 emit 调用点，其余 4 个是「宿主监听、插件可反向 emit 驱动宿主」的请求通道。事件名与载荷类型的唯一登记处是 `every-agent-web/src/events/domainEvents.ts`（常量表 `DOMAIN_EVENTS` + 载荷类型 `DomainEventMap`）。
 
 ## 1. 事件系统架构：一个模块级单例总线
 
@@ -86,9 +86,9 @@ class EventBus {
 | `sidebar-panel-shown` | ✅ | §3.1、§5.4 |
 | `task-status-changed` | ✅ | §3.1 |
 | `plugin-task-event` | ✅ | §3.1 |
-| `task-created` | ✅（known-issues #4 修复后接线） | §3.1 |
-| `task-deleted` | ✅（known-issues #4 修复后接线） | §3.1 |
-| `plugins-loaded` | ✅（known-issues #4 修复后接线） | §3.1 |
+| `task-created` | ✅（曾长期零 emit，已补齐接线） | §3.1 |
+| `task-deleted` | ✅（曾长期零 emit，已补齐接线） | §3.1 |
+| `plugins-loaded` | ✅（曾长期零 emit，已补齐接线） | §3.1 |
 
 ⚠️ 具名清单是手维护的子集（8/21）——写订阅前仍先查 §3 的两张表。类型原文如下（`every-agent-plugin-api/js/index.ts` 摘录）：
 
@@ -113,7 +113,7 @@ export interface PluginEvents {
 
 ## 3. 宿主事件总表（21 个，逐一回源码复核）
 
-统计口径（rg 实测）：`DOMAIN_EVENTS` 常量表声明 **22** 个事件名；全仓（`every-agent-web/src` + `every-agent-plugins` + `every-agent-desktop`）`.emit(` 调用点命中其中 **18** 个，其余 4 个是宿主监听的请求通道。known-issues #4 清理前本表曾有 38 个声明、24 个零 emit——被折叠器/镜像订阅取代设计位的 17 个条目已连同载荷类型一起删除（`agent-run-event` 的 `AgentRunEvent`/`AgentRunEventPayload` 类型一并移除，其注释引用的幽灵文件 `src/task/agentRunEventBridge.ts` 随之消失）。
+统计口径（rg 实测）：`DOMAIN_EVENTS` 常量表声明 **22** 个事件名；全仓（`every-agent-web/src` + `every-agent-plugins` + `every-agent-desktop`）`.emit(` 调用点命中其中 **18** 个，其余 4 个是宿主监听的请求通道。历史上本表曾有 38 个声明、24 个零 emit——被折叠器/镜像订阅取代设计位的 17 个条目已连同载荷类型一起删除（`agent-run-event` 的 `AgentRunEvent`/`AgentRunEventPayload` 类型一并移除，其注释引用的幽灵文件 `src/task/agentRunEventBridge.ts` 随之消失）。
 
 ### 3.1 真实会发生的事件（18 个）
 
@@ -134,9 +134,9 @@ export interface PluginEvents {
 | `workspace-open-user-interaction-requested` | `{interactionId}`（`:311-314`） | 通知卡片/悬浮菜单被点击，请求把交互请求带到前台（`askStore.ts:203`、`BrowserNotificationHost.tsx:43`、`PendingUserInteractionIndicator.tsx:73`；消费方 `UserInteractionHost.tsx:111`） | 低。宿主内部导航协议 |
 | `workspace-focus-task-requested` | `{taskId}`（`:212-214`） | 浏览器系统通知被点击时（`BrowserNotificationHost.tsx:65`；消费方 `Layout.tsx:743`） | 中。**插件也可以 emit 它**让宿主聚焦某任务标签——这是单边接线事件里反向可用的一类（§3.2 说明） |
 | `workspace-search-panel-requested` | `{workerId, workspaceRoot, rootPath, label, target?}`（`:259-270`） | 文件树右键「搜索」/任务列表工作区组「搜索」（`OpenFilesSidebarPanel.tsx:681-688`、`TasksPanel.tsx:381-388`；消费方内置 `SearchPanel.tsx:510-511`） | 低。宿主内部跳转协议；`target` 现为搜索类型 id（旧 `files`/`tasks` 值保留一轮兼容）。插件可经 `ui.search_types`（[UI 扩展点](ui-extensions.md) §15）贡献搜索**类型**，但没有「接管整个搜索面板」的扩展点 |
-| `task-created` | `{taskId}`（`domainEvents.ts` `TASK_CREATED`） | worker 任务频道 `task.created` 帧入库时（`taskStore.ts` onFrame 处理，emit 于 upsert 之后；本端与其它端创建同权——**首拉列表/翻页不触发**） | 中。新任务感知/按 taskId 预取数据（known-issues #4 修复后接线） |
-| `task-deleted` | `{taskId}`（`domainEvents.ts` `TASK_DELETED`） | 任务删除唯一路径 `taskStore.remove()`（worker `task.deleted` 帧 → 删除镜像成功即 emit） | 中。作废该任务相关缓存的标准信号——file-change 插件的死订阅陷阱已随本条接线修复（known-issues #4） |
-| `plugins-loaded` | `{count}`（`domainEvents.ts` `PLUGINS_LOADED`） | 每轮 `loadPlugins()` 流程结束时（`pluginLoader.ts` doLoadPlugins 末尾，count 为当前已装载总数） | 低。宿主插件就绪脉冲；⚠️ fire-and-forget 无重放——晚于本轮 emit 才激活的插件收不到它（known-issues #4 修复后接线） |
+| `task-created` | `{taskId}`（`domainEvents.ts` `TASK_CREATED`） | worker 任务频道 `task.created` 帧入库时（`taskStore.ts` onFrame 处理，emit 于 upsert 之后；本端与其它端创建同权——**首拉列表/翻页不触发**） | 中。新任务感知/按 taskId 预取数据（曾长期零 emit，已补齐接线） |
+| `task-deleted` | `{taskId}`（`domainEvents.ts` `TASK_DELETED`） | 任务删除唯一路径 `taskStore.remove()`（worker `task.deleted` 帧 → 删除镜像成功即 emit） | 中。作废该任务相关缓存的标准信号——file-change 插件的死订阅陷阱已随本条接线修复 |
+| `plugins-loaded` | `{count}`（`domainEvents.ts` `PLUGINS_LOADED`） | 每轮 `loadPlugins()` 流程结束时（`pluginLoader.ts` doLoadPlugins 末尾，count 为当前已装载总数） | 低。宿主插件就绪脉冲；⚠️ fire-and-forget 无重放——晚于本轮 emit 才激活的插件收不到它（曾长期零 emit，已补齐接线） |
 
 ### 3.2 宿主从不 emit、但插件可反向驱动的请求通道（4 个）
 
@@ -149,11 +149,11 @@ export interface PluginEvents {
 | `workspace-reload-all-files-requested` | `{force?}` | `Layout.tsx:746`、`OpenFilesSidebarPanel.tsx:260` | 请求宿主重载全部文件标签 |
 | `runtime-config-error` | `{message}` | `Layout.tsx:686`（弹错误提示） | 插件 emit 会让宿主弹一条错误横幅（慎用） |
 
-用法建议浓缩成三句：**「要感知任务/文件变化，先查 §3.1 有没有现成事件；§3.2 的 4 个请求通道可以反过来被插件 emit 去驱动宿主；除此之外的名字不要订阅也不要 emit**——曾经的 24 个零 emit 死事件已随 known-issues #4 清理出常量表，`(string & {})` 兜底仍不拦拼写错误，自定义事件请按 §6.1 用 `<pluginId>:<verb>` 前缀。
+用法建议浓缩成三句：**「要感知任务/文件变化，先查 §3.1 有没有现成事件；§3.2 的 4 个请求通道可以反过来被插件 emit 去驱动宿主；除此之外的名字不要订阅也不要 emit**——曾经的 24 个零 emit 死事件已随死事件清理出常量表，`(string & {})` 兜底仍不拦拼写错误，自定义事件请按 §6.1 用 `<pluginId>:<verb>` 前缀。
 
 ### 3.3 为什么曾有一半事件是死的：前端五条通知通道的分工
 
-known-issues #4 清理前 38 声明 vs 14 实发不是单纯的烂尾，而是**通知通道分工**的结果——任务/消息的细粒度变化走了更高效的专用通道，领域总线只保留「跨模块、低频、边沿触发」的那部分：
+历史上 38 声明 vs 14 实发不是单纯的烂尾，而是**通知通道分工**的结果——任务/消息的细粒度变化走了更高效的专用通道，领域总线只保留「跨模块、低频、边沿触发」的那部分：
 
 | 通知通道 | 承载的数据 | 消费方式 | 与插件的关系 |
 |---|---|---|---|
@@ -163,13 +163,13 @@ known-issues #4 清理前 38 声明 vs 14 实发不是单纯的烂尾，而是**
 | `subscribeExtensionsChanged` + `getExtensionsVersion`（§4.3） | 扩展点注册表变化 | `useSyncExternalStore` | 插件注册即自动触发，无需自己发事件 |
 | Composer 面板 ctx 的 `subscribeTaskEvents`（[UI 扩展点](ui-extensions.md) §6） | `'task.updated'` / `'task.stream'` 刷新信号 | 面板组件 props 回调 | 只回发两个信号名、`agentId`/`payload` 恒 null，当刷新脉冲用 |
 
-一个迁移实例可以直接读到这种分工：`TaskChatTabLabel` 的头注释自述「旧版按激活任务订阅 domainEventBus 的 `TASK_STATUS_CHANGED`；hub 版任务真相源在 worker，前端镜像 taskStore……直接订阅 taskStore」（`every-agent-web/src/components/task/TaskChatTabLabel.tsx:6-9`，现行代码只订 taskStore、零事件调用）。因此 §3.2 之外那些 agent/task 细粒度类旧事件的合理解读是：**它们的设计位被折叠器/镜像订阅取代了**——known-issues #4 清理已把这 17 个被取代的条目连同载荷类型从 `DOMAIN_EVENTS` 常量表删除（含 `ContextBattery` 的 `task-context-monitor-changed` 死订阅，该组件改经 `monitor` prop 镜像更新）。
+一个迁移实例可以直接读到这种分工：`TaskChatTabLabel` 的头注释自述「旧版按激活任务订阅 domainEventBus 的 `TASK_STATUS_CHANGED`；hub 版任务真相源在 worker，前端镜像 taskStore……直接订阅 taskStore」（`every-agent-web/src/components/task/TaskChatTabLabel.tsx:6-9`，现行代码只订 taskStore、零事件调用）。因此 §3.2 之外那些 agent/task 细粒度类旧事件的合理解读是：**它们的设计位被折叠器/镜像订阅取代了**——死事件清理已把这 17 个被取代的条目连同载荷类型从 `DOMAIN_EVENTS` 常量表删除（含 `ContextBattery` 的 `task-context-monitor-changed` 死订阅，该组件改经 `monitor` prop 镜像更新）。
 
 ## 4. 高频事件、性能与「稳定快照」机制
 
 ### 4.1 真正的高频源
 
-实测会高频触发的基本只有 `workspace-file-changed`：流式任务里每个写文件工具调用都会产生一条 worker `fs.changed` 广播（`workspaceGateway.ts:186-194`），批量编辑时连续多发。其余活事件都是低频边沿（状态翻转、面板点亮、轮闭合）。注意方向：**流式文本增量完全不走这条总线**（旧 `agent-message-streaming`/`task-trace-changed` 等条目已随 known-issues #4 清理删除）——不要为了追流式输出来订阅事件，那是 taskStream 内部通道，插件侧的正确姿势是接 UI 扩展点（如 [UI 扩展点](ui-extensions.md) §7/§14）让宿主替你渲染。
+实测会高频触发的基本只有 `workspace-file-changed`：流式任务里每个写文件工具调用都会产生一条 worker `fs.changed` 广播（`workspaceGateway.ts:186-194`），批量编辑时连续多发。其余活事件都是低频边沿（状态翻转、面板点亮、轮闭合）。注意方向：**流式文本增量完全不走这条总线**（旧 `agent-message-streaming`/`task-trace-changed` 等条目已在死事件清理中删除）——不要为了追流式输出来订阅事件，那是 taskStream 内部通道，插件侧的正确姿势是接 UI 扩展点（如 [UI 扩展点](ui-extensions.md) §7/§14）让宿主替你渲染。
 
 ### 4.2 监听高频事件的纪律
 
@@ -183,15 +183,15 @@ known-issues #4 清理前 38 声明 vs 14 实发不是单纯的烂尾，而是**
 
 ## 5. 死事件与陷阱逐条核实
 
-### 5.1 `plugins-loaded`：已接线（known-issues #4 修复）
+### 5.1 `plugins-loaded`：已接线（曾长期零 emit，已补齐）
 
 `loadPlugins()` 每轮流程结束时 emit（`pluginLoader.ts` `doLoadPlugins` 末尾），载荷 `{count}`（当前已装载插件总数，含此前轮次）。两个注意点：① fire-and-forget 无重放——晚于本轮 emit 才激活的插件收不到它（§1.3），所以别把它当「所有插件就绪」的屏障用；② worker 不可达 / `plugin.list` 失败等静默降级路径**不 emit**（本轮根本没有装载动作）。
 
 ### 5.2 `agent-run-event`：已随 #4 清理删除（历史登记）
 
-该事件连同 `AgentRunEvent`（5 种 kind 联合）/`AgentRunEventPayload` 载荷类型曾长期零 emit、零订阅，其注释还引用了仓库中不存在的 `src/task/agentRunEventBridge.ts`（幽灵文件）。known-issues #4 清理时整组删除——任务/消息细粒度增量由 taskStream 折叠器内部通道承载，不需要总线形态的镜像事件；后续宿主若需要 agent 运行事件的对外发布，应先在 `DOMAIN_EVENTS` 落 emit 调用点再登记事件名。
+该事件连同 `AgentRunEvent`（5 种 kind 联合）/`AgentRunEventPayload` 载荷类型曾长期零 emit、零订阅，其注释还引用了仓库中不存在的 `src/task/agentRunEventBridge.ts`（幽灵文件）。死事件清理时整组删除——任务/消息细粒度增量由 taskStream 折叠器内部通道承载，不需要总线形态的镜像事件；后续宿主若需要 agent 运行事件的对外发布，应先在 `DOMAIN_EVENTS` 落 emit 调用点再登记事件名。
 
-### 5.3 `task-deleted`：已接线（known-issues #4 修复，曾经的内置插件死订阅）
+### 5.3 `task-deleted`：已接线（曾经的内置插件死订阅，已补齐 emit）
 
 file-change 插件订阅它清理轮次摘要缓存（`every-agent-plugins/file-change/web/index.ts`）。修复前任务删除的真实路径 `TasksPanel` → `task.delete` RPC → worker 频道 `task.deleted` 帧 → `taskStore.remove()` **不发领域事件**，该作废路径永不触发；修复后 `remove()` 删除镜像成功即 emit `{taskId}`——同插件里 `plugin-task-event`（活）与 `task-deleted`（修复前死、现活）的对照仍是最好的教训：**订阅前先在 §3.1 确认事件真的会响**，不要看名字合理就挂监听。
 
@@ -201,7 +201,7 @@ file-change 插件订阅它清理轮次摘要缓存（`every-agent-plugins/file-
 - **先过滤 panelId**：事件发给全体订阅者，git 的姿势是第一行就 `if (payload.panelId !== 'git') return`（`GitSidebarPanel.tsx:334-337`）。内置面板 id 也会出现（`tasks`/`files`/`search`/`settings`），别误把别人的脉冲当自己的。
 - **正确用途**：面板懒刷新——用户点亮面板时拉最新状态（git 同款）；**错误用途**：当「页面加载完成」或「插件激活完成」信号用。
 
-### 5.4.b 具名清单已对齐宿主实况（known-issues #4 修复后）
+### 5.4.b 具名清单已对齐宿主实况
 
 `PluginDomainEvent` 具名 8 个**全部有真实 emit**（§2 表）；曾具名却零 emit 的 `file-content-saved`、`task-trace-changed` 已从具名清单与宿主常量表同步删除。plugin-api 的具名清单仍是手维护快照——以 §3 两张表为准的习惯保持不变。
 

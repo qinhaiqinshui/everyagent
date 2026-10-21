@@ -16,7 +16,7 @@ import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.plugin.registry.SandboxProviderRegistry;
 
 /**
- * {@code spawnNative} 的 cwd 护栏(§8.5,known-issues #24 预防侧):
+ * {@code spawnNative} 的 cwd 护栏(§8.5,uninstall 墓碑预防侧):
  *
  * <ul>
  *   <li>cwd 位于外部插件目录内(含嵌套子目录) → 直接拒绝,不 spawn 进程,

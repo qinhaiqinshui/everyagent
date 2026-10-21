@@ -57,7 +57,7 @@ mvn -f every-agent-plugins\<id>\pom.xml package -q             # 静默模式，
 
 ### 2.2 首次准备：`install` plugin-parent 与 plugin-api（为什么不能省）
 
-`io.github.qinhaiqinshui:every-agent-plugin-parent`（插件 SDK parent）与 `io.github.qinhaiqinshui:every-agent-plugin-api` **首发 Maven Central 之前本地仓库是唯一来源**（发布链已就绪待首发，见[已知问题](../reference/known-issues.md) #18 与仓库 `CONTRIBUTING.md`「发布（维护者）」；首发完成后本节作废）。`-f` 单独构建插件时，Maven 解析这两者只会去**本地仓库**找——新 clone 的机器上没有它们，构建直接失败（Maven 标准报错形态：`Could not resolve artifact io.github.qinhaiqinshui:every-agent-plugin-parent ...`；此前尝试过联网解析的机器还可能残留 `.lastUpdated` 失败缓存，执行下面的 `install` 即一并解决）。所以一次性执行：
+`io.github.qinhaiqinshui:every-agent-plugin-parent`（插件 SDK parent）与 `io.github.qinhaiqinshui:every-agent-plugin-api` **首发 Maven Central 之前本地仓库是唯一来源**（发布链已就绪待首发，见仓库 `CONTRIBUTING.md`「发布（维护者）」；首发完成后本节作废）。`-f` 单独构建插件时，Maven 解析这两者只会去**本地仓库**找——新 clone 的机器上没有它们，构建直接失败（Maven 标准报错形态：`Could not resolve artifact io.github.qinhaiqinshui:every-agent-plugin-parent ...`；此前尝试过联网解析的机器还可能残留 `.lastUpdated` 失败缓存，执行下面的 `install` 即一并解决）。所以一次性执行：
 
 ```powershell
 # 仓库根，一次性：把插件 SDK parent 与 API（连同它们的 reactor 上游）装进本地 ~/.m2
@@ -271,7 +271,7 @@ java '-Dworker.hubs[0].url=ws://localhost:6111/ws' '-Dserver.port=6112' `
 
 **服务端部署同一命门**：`deploy.py` 部署 **worker** 时也已接上这条链——先 `python scripts/build-plugins.py` 构建全部内置插件，再 `node every-agent-desktop/scripts/copy-plugins.mjs --out=<release>/worker/every-agent-plugins` staging 后随 release 上传（`--skip-plugins` 可关，关掉后服务端 worker 扫不到任何插件）；host 模式的 systemd 单元 `WorkingDirectory=<remote>/current/worker`，正好命中 §4.2 的 cwd 默认解析。**反向的坑**：只跑 `deploy.py webapp` 只会换前端 dist，**对插件行为零影响**——插件 web 产物由 worker 经 `plugin.webSource` 读**自己磁盘上的** `every-agent-plugins/<id>/web/index.js`，改了插件就必须让 worker 侧拿到新产物（重新部署 worker、重跑 `npm run dist` 重装桌面版，或直接替换该文件后刷新页面——worker 每次 RPC 现读，无需重启）。
 
-**未实测声明**：桌面安装包端到端是否随包分发并在用户机器上加载全部内置插件——本文未跑 `dist` 链验证，按「未实测」登记，不断言；设计意图即上述链路，另一个佐证是 `BuiltInPluginScanner.java:60` 的 WARN 文案专门点名了桌面安装包场景。现状登记见[已知问题与现状偏差](../reference/known-issues.md)。
+**未实测声明**：桌面安装包端到端是否随包分发并在用户机器上加载全部内置插件——本文未跑 `dist` 链验证，按「未实测」登记，不断言；设计意图即上述链路，另一个佐证是 `BuiltInPluginScanner.java:60` 的 WARN 文案专门点名了桌面安装包场景。
 
 ## 8. 下一步读
 
@@ -279,4 +279,4 @@ java '-Dworker.hubs[0].url=ws://localhost:6111/ws' '-Dserver.port=6112' `
 | --- | --- |
 | 给插件写单测、看日志定位、五个调试剧本 | [调试与测试](debugging-and-testing.md) |
 | 把产物打成 `.eap` 分发 / 安装 / 卸载 / 启停 | [打包与安装](packaging-and-install.md) |
-| 现状偏差清单（API 未发布、死扩展点、桌面未实测等） | [已知问题与现状偏差](../reference/known-issues.md) |
+

@@ -87,7 +87,7 @@ node create-everyagent-plugin --id <id>    # java / web / full 三种形态，�
 
 ## 发布（维护者）
 
-对外发布两条线：**Maven Central**（插件 SDK 坐标，CI 自动）与 **npm**（脚手架 CLI + 前端类型包，手工）。背景与现状见 [known-issues #18](docs/plugin-guide/reference/known-issues.md)。
+对外发布两条线：**Maven Central**（插件 SDK 坐标，CI 自动）与 **npm**（脚手架 CLI + 前端类型包，手工）。
 
 ### Maven Central（插件 SDK，一次配置后全自动）
 

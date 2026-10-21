@@ -24,7 +24,7 @@ import dev.everyagent.worker.rpc.RpcContext;
 import dev.everyagent.worker.rpc.RpcDispatcher;
 
 /**
- * plugin.uninstall 的墓碑语义(§8.5,known-issues #24 回归):
+ * plugin.uninstall 的墓碑语义(§8.5,uninstall 墓碑回归):
  *
  * <ul>
  *   <li>成功路径:目录整体删除(墓碑随目录消失,不残留),应答 ok;再卸载同 id 得 NOT_FOUND

@@ -16,9 +16,9 @@ has_children: false
 - **没有包仓库**：不存在 `eap install <name>` 这种按名拉取；你得自己把文件送到目标机器。
 - **没有版本解析**：worker 不读 `.eap` 文件名，也没有「装 1.1 自动替换 1.0」的逻辑；版本只存在于两处——产物文件名 `<id>-<version>.eap` 与 `plugin.json` 的 `version` 字段（[plugin.json 字段参考](../plugin-manifest.md)）。
 - **没有依赖解析**：`.eap` 不声明也不解决依赖（见 §5 的冲突提示）。
-- **没有签名，只有校验和旁文件**：`pack` 会顺手产出 `<id>-<version>.eap.sha256`（§2，sha256sum 兼容格式），但它只服务于分发时的人工核对——worker 安装侧既不验签也不消费它（[已知问题](../reference/known-issues.md) #21）。
+- **没有签名，只有校验和旁文件**：`pack` 会顺手产出 `<id>-<version>.eap.sha256`（§2，sha256sum 兼容格式），但它只服务于分发时的人工核对——worker 安装侧既不验签也不消费它。
 
-另外记住现状：`@everyagent/plugin-api` **双侧待发布**（Java 侧坐标已定 `io.github.qinhaiqinshui`、发布链就绪待首发；npm 侧包已备好，详见[已知问题](../reference/known-issues.md) #18）——两侧首发之前，仓库外开发的插件工程必须自带类型副本 / 本地 `mvn install` 的 API jar，`.eap` 分发的是**你的插件产物**，不含 API 包。
+另外记住现状：`@everyagent/plugin-api` **双侧待发布**（Java 侧坐标已定 `io.github.qinhaiqinshui`、发布链就绪待首发；npm 侧包已备好，详见仓库 `CONTRIBUTING.md`「发布（维护者）」）——两侧首发之前，仓库外开发的插件工程必须自带类型副本 / 本地 `mvn install` 的 API jar，`.eap` 分发的是**你的插件产物**，不含 API 包。
 
 ## 2. `pack` 命令详解
 
@@ -38,7 +38,7 @@ node create-everyagent-plugin pack --help      # 子命令自己的帮助
 
 产物固定命名 `<id>-<version>.eap`，id / version 取自 `plugin.json`（`create-everyagent-plugin/lib/zip.mjs` 的 `packPlugin`：`path.join(absOutDir, `${manifest.id}-${manifest.version}.eap`)`）。
 
-**同时产出校验和旁文件 `<id>-<version>.eap.sha256`**（known-issues #21 的最小方案，`pack` 自动生成）：内容为一行 **sha256sum 兼容格式**——`64 位小写十六进制摘要` + **两个空格** + `.eap` 文件名 + 换行，摘要对 `.eap` **全文件**计算。zip 自带的 CRC32 只防传输意外损坏，不防篡改；分发 `.eap` 时把旁文件一起带走，安装前人工核对：
+**同时产出校验和旁文件 `<id>-<version>.eap.sha256`**（`pack` 自动生成）：内容为一行 **sha256sum 兼容格式**——`64 位小写十六进制摘要` + **两个空格** + `.eap` 文件名 + 换行，摘要对 `.eap` **全文件**计算。zip 自带的 CRC32 只防传输意外损坏，不防篡改；分发 `.eap` 时把旁文件一起带走，安装前人工核对：
 
 ```powershell
 # Windows（Get-FileHash 输出全大写，比对时忽略大小写）
@@ -47,7 +47,7 @@ Get-FileHash .\my-tool-0.1.0.eap -Algorithm SHA256
 sha256sum -c my-tool-0.1.0.eap.sha256
 ```
 
-注意：worker 侧 `plugin.install` / 手工解压**目前都不消费**该旁文件（安装侧自动校验见[已知问题](../reference/known-issues.md) #21），它服务于「自行分发、人工核对」的场景。
+注意：worker 侧 `plugin.install` / 手工解压**目前都不消费**该旁文件，它服务于「自行分发、人工核对」的场景。
 
 ### 2.2 包内布局
 
@@ -98,7 +98,7 @@ zip 由 `node:zlib` 手写（零 npm 依赖）：local file header + central dir
 3. **条目路径安全**（`/` 分隔、无 `..`、无绝对路径、无空段）；
 4. **顶层目录全部 = `<id>`**（与 `plugin.json` 的 id 一致）；
 5. **`<id>/plugin.json` 可解析**且 id / version 与源清单一致；
-6. **`.eap.sha256` 旁文件与盘上 `.eap` 复算摘要一致**（known-issues #21；顺带兜住写盘截断）。
+6. **`.eap.sha256` 旁文件与盘上 `.eap` 复算摘要一致**（顺带兜住写盘截断）。
 
 任一项失败即退出码 4（`打包自检失败：.eap 与预期不符（见上方 [失败] 行）`）。发布前跑一次 `pack --verify` 是最便宜的保险。
 
@@ -110,7 +110,7 @@ zip 由 `node:zlib` 手写（零 npm 依赖）：local file header + central dir
 
 | 路线 | 操作 | 前提 | 可操作性结论 |
 | --- | --- | --- | --- |
-| a. `plugin.install` RPC | 插件管理面板「安装…」选定 `.eap`（面板自动上传并代发 RPC）；或手工往 cmd 频道发一帧 | 面板路线：worker 在线且当前工作区可写；手工路线：能直连 worker 的 RPC 频道，文件已在 worker 本机 | 接口齐备且**前端已接线**（known-issues #19 修复前零调用点）；交互场景用面板，脚本场景用手工 RPC |
+| a. `plugin.install` RPC | 插件管理面板「安装…」选定 `.eap`（面板自动上传并代发 RPC）；或手工往 cmd 频道发一帧 | 面板路线：worker 在线且当前工作区可写；手工路线：能直连 worker 的 RPC 频道，文件已在 worker 本机 | 接口齐备且**前端已接线**（历史上前端零调用点，已接线）；交互场景用面板，脚本场景用手工 RPC |
 | b. 手工解压 / 复制目录 | `.eap` 解到 `~/.everyagent/plugins/<id>/`，或整目录拷贝 | 能访问 worker 机器文件系统 | 无 UI 访问 / 要脚本化时最可靠的一条路，零依赖 |
 | c. builtin 路径 | 插件目录进仓库 `every-agent-plugins/`，随仓库分发 | 拿得到目标部署的仓库（发 PR / 自部署） | 适合团队内长期维护；终端用户装不了 |
 
@@ -132,7 +132,7 @@ worker 侧方法表齐备（`every-agent-worker/src/main/java/dev/everyagent/wor
 
 另外 `__MACOSX` 条目与 `.DS_Store` 会被跳过（`:218`），同路径文件覆盖写（`REPLACE_EXISTING`，`:231`）——即**重复 install 同一个包 = 覆盖安装**。
 
-**产品化入口**：插件管理面板（侧边栏「扩展」）顶栏的「安装…」按钮已对接该 RPC（known-issues #19 修复前面板只调 `plugin.list` / `plugin.enable` / `plugin.disable`，`plugin.install` 前端零调用点）。因为 `{path}` 收的是 **worker 机器本地路径**，浏览器选中的文件先经 `fs.write` 以 base64 上传到当前工作区的暂存目录 `.everyagent/plugin-install/`（fs.* 按工作区 jailed，worker 侧自动建父目录），再用暂存文件的机器绝对路径调 `plugin.install` 解包，最后尽力清理暂存文件并刷新列表。边界要知道三条：上限 32 MB（base64 后约 43 MB wire 载荷）；worker 跑在远端时装到的是 **worker 机器**的插件目录（设计意图如此）；新插件**重启 worker 后**才出现在 `plugin.list`（面板成功提示即 RPC 原文「插件已安装，重启 worker 后生效」）。脚本/调试场景仍可直接手工发 RPC：
+**产品化入口**：插件管理面板（侧边栏「扩展」）顶栏的「安装…」按钮已对接该 RPC（历史上面板只调 `plugin.list` / `plugin.enable` / `plugin.disable`，`plugin.install` 前端零调用点）。因为 `{path}` 收的是 **worker 机器本地路径**，浏览器选中的文件先经 `fs.write` 以 base64 上传到当前工作区的暂存目录 `.everyagent/plugin-install/`（fs.* 按工作区 jailed，worker 侧自动建父目录），再用暂存文件的机器绝对路径调 `plugin.install` 解包，最后尽力清理暂存文件并刷新列表。边界要知道三条：上限 32 MB（base64 后约 43 MB wire 载荷）；worker 跑在远端时装到的是 **worker 机器**的插件目录（设计意图如此）；新插件**重启 worker 后**才出现在 `plugin.list`（面板成功提示即 RPC 原文「插件已安装，重启 worker 后生效」）。脚本/调试场景仍可直接手工发 RPC：
 
 调用示例（wire 帧结构，信封定义见 `every-agent-contract/src/main/java/dev/everyagent/contract/rpc/Rpc.java:35` 的 `RpcRequest(reqId, method, params)`；worker 在 cmd 频道上只认 `event = "rpc"`，`every-agent-worker/src/main/java/dev/everyagent/worker/rpc/RpcDispatcher.java:70-77`）：
 
@@ -283,4 +283,4 @@ sandbox-wsl-ubuntu
 
 - [构建与运行](build-and-run.md)——三形态构建矩阵、cwd 如何决定内置插件被扫到、`build:plugins` 的手工节奏；
 - [故障排查](troubleshooting.md)——装了没生效 / 图标不出现 / WARN 文案逐条对号；
-- [已知问题与现状偏差](../reference/known-issues.md)——API 包未发布、`.eap` 无签名校验等现状登记。
+

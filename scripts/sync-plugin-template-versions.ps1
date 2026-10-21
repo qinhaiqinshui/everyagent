@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-版本单点源 → 脚手架模板 / 插件文档站版本引用 一键同步（known-issues #23「缺统一 bump 脚本」项）。
+版本单点源 → 脚手架模板 / 插件文档站版本引用 一键同步。
 
 .DESCRIPTION
 改根 pom 的版本属性（spring-boot-starter-parent 父版本 / java.version / spring-ai.version /
@@ -19,7 +19,7 @@
   spring-ai    根 pom <properties>spring-ai.version         文档 spring-ai-client-chat <v> 引用
 
 铁律（不破并行协作与红线）：
-  - 文档站 docs/plugin-guide/web/ 子目录与 reference/known-issues.md 永不写入（另有归属）；
+  - 文档站 docs/plugin-guide/web/ 子目录永不写入（另有归属）；
     本脚本的文档目标全部显式登记在下方规则表里；
   - **pom 模板不在规则表内**：脚手架只有一份 pom 模板
     （create-everyagent-plugin/templates/java/pom.xml.tpl），它继承插件 SDK parent，
@@ -139,7 +139,7 @@ Write-Host ''
 # ---------- 规则表：槽位 → 文件 → (规则名, 正则, 替换串) ----------
 # 说明：
 #   - 替换串用 ${1}/${2} 引用捕获组（后跟数字也安全），版本值已校验不含 $；
-#   - 文档目标全部显式列出，web/ 与 reference/known-issues.md 永不进表。
+#   - 文档目标全部显式列出，web/ 永不进表。
 #   - pom 模板已不进规则表：脚手架只有一份 pom.xml.tpl，且不含任何版本字面量（详见文件头「铁律」）。
 
 $rules = @()
