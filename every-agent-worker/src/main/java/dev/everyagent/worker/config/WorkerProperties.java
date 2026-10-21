@@ -67,6 +67,8 @@ public class WorkerProperties implements WorkerConfig {
     private Sandbox sandbox = new Sandbox();
     /** 原生 git 执行配置(git.* RPC 由宿主原生 git argv 直传执行,架构 §7.12)。 */
     private Git git = new Git();
+    /** 内嵌终端配置(term.* RPC,架构 §7.18;shell 白名单见 Terminal)。 */
+    private Terminal terminal = new Terminal();
     /** 危险操作授权配置(PermissionGate:工作区外访问/危险命令须用户授权)。 */
     private Permissions permissions = new Permissions();
     /** 外部工具二进制配置(rg 等;rg-path 为空 = 程序根 runtime/bin/ 定位)。 */
@@ -1420,6 +1422,29 @@ public class WorkerProperties implements WorkerConfig {
         public long timeoutMs() { return getTimeoutMs(); }
     }
 
+    /**
+     * 内嵌终端配置(term.* RPC,架构 §7.18)。
+     *
+     * <p>shell 白名单(安全整改 M-7):term.open 的 shell 入参只允许 ① 白名单名称
+     * (经 PATH 解析)或 ② 系统信任目录内与白名单文件名匹配的绝对路径,
+     * 校验逻辑见 {@link dev.everyagent.worker.os.pty.ShellWhitelist}。
+     */
+    public static class Terminal {
+        /**
+         * shell 白名单扩展名称(与内置清单 powershell/pwsh/cmd/bash/sh/zsh/wsl 取并集;
+         * 大小写不敏感,Windows 忽略 .exe 后缀)。空 = 仅内置清单。
+         */
+        private List<String> allowedShells = new ArrayList<>();
+
+        public List<String> getAllowedShells() {
+            return allowedShells;
+        }
+
+        public void setAllowedShells(List<String> allowedShells) {
+            this.allowedShells = allowedShells == null ? new ArrayList<>() : allowedShells;
+        }
+    }
+
     public Sandbox getSandbox() {
         return sandbox;
     }
@@ -1434,6 +1459,14 @@ public class WorkerProperties implements WorkerConfig {
 
     public void setGit(Git git) {
         this.git = git;
+    }
+
+    public Terminal getTerminal() {
+        return terminal;
+    }
+
+    public void setTerminal(Terminal terminal) {
+        this.terminal = terminal == null ? new Terminal() : terminal;
     }
 
     public Permissions getPermissions() {

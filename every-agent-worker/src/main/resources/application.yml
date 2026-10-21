@@ -131,6 +131,13 @@ worker:
     executable: ""
     # 单个 git 命令超时(ms);clone/pull/push 大仓库可能较慢,默认 5 分钟。
     timeout-ms: 300000
+  # 内嵌终端(term.* RPC,架构 §7.18)。shell 白名单(安全整改 M-7):term.open 的 shell
+  # 只允许白名单名称(powershell/pwsh/cmd/bash/sh/zsh/wsl,经 PATH 解析)或系统信任目录
+  # (Windows: Windows/System32/SysWOW64/Program Files*;Linux: /usr/bin、/bin、/usr/local/bin)
+  # 内与白名单文件名匹配的绝对路径;不匹配拒绝(BAD_PARAMS),拒绝与成功均留 [term.open] 审计日志。
+  terminal:
+    # 白名单扩展名称(与内置清单并集);默认空 = 仅内置清单。
+    allowed-shells: []
   # 模型调用超时(ms):spring-ai OpenAiChatOptions 默认 60s,reasoning 模型深度思考期间
   # 长时间无 chunk 会被 okhttp 超时主动 CANCEL 流;默认 10 分钟,过长可调小。
   model-timeout-ms: 600000

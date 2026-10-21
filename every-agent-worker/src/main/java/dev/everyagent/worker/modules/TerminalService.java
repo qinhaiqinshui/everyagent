@@ -7,6 +7,7 @@ import dev.everyagent.worker.hub.HubLink;
 import dev.everyagent.worker.hub.HubPool;
 import dev.everyagent.worker.os.pty.TerminalPty;
 import dev.everyagent.worker.os.pty.TerminalPtyFactory;
+import dev.everyagent.worker.os.pty.ShellWhitelist;
 import dev.everyagent.plugin.api.event.Channels;
 import dev.everyagent.worker.proto.RpcMethods;
 import dev.everyagent.plugin.api.exception.BadParamsException;
@@ -127,8 +128,9 @@ public class TerminalService implements HubPool.Listener {
     // ---- RPC 方法实现 ----
 
     /**
-     * term.open:沙箱校验 workspace+path(必为目录)→ TerminalPtyFactory.open →
-     * 存入会话表 → 起虚拟线程读 PTY 输出推送到 termStream 频道 → 返回 {termId, pid}。
+     * term.open:沙箱校验 workspace+path(必为目录)→ shell 白名单校验(M-7)→
+     * TerminalPtyFactory.open → 存入会话表 → 起虚拟线程读 PTY 输出推送到 termStream
+     * 频道 → 审计日志 → 返回 {termId, pid}。
      */
     private void open(RpcContext ctx) throws IOException {
         Sandbox sb = new Sandbox(workspaces.resolve(ctx.strParam("workspace")));
@@ -144,6 +146,22 @@ public class TerminalService implements HubPool.Listener {
 
         if (cols < 1 || rows < 1) {
             throw new BadParamsException("cols/rows 必须 >= 1 (got cols=" + cols + ", rows=" + rows + ")");
+        }
+
+        // shell 白名单 + 系统信任目录校验(安全整改 M-7):shell 是 RPC 调用方自由字符串,
+        // 不校验直接 setCommand 拉起可指定任意可执行文件(如 C:\tools\malware.exe)伪装"终端"。
+        // 允许: ① 白名单名称(PATH 解析) ② 信任目录内与白名单文件名匹配的绝对路径;
+        // 可经 worker.terminal.allowed-shells 扩展。null/缺省 = 平台默认 shell(前端现状
+        // 不传 shell,行为不变),不经本校验。
+        ShellWhitelist.Checked checkedShell = null;
+        if (shell != null) {
+            try {
+                checkedShell = ShellWhitelist.check(shell, props.getTerminal().getAllowedShells());
+            } catch (BadParamsException e) {
+                log.warn("[term.open] 拒绝非法 shell: owner={} termId={} shell={}",
+                        ownerPrefix(ctx.ownerKey()), termId, shell);
+                throw e;
+            }
         }
 
         TerminalPty pty;
@@ -171,6 +189,10 @@ public class TerminalService implements HubPool.Listener {
 
         log.info("终端会话已打开: termId={}, pid={}, cwd={}, cols={}, rows={}, shell={}",
                 termId, pid, cwd, cols, rows, shell);
+
+        // 审计(M-7):term.open 成功留 [term.open] 审计日志(与命令工具 [exec] 审计同级语义);
+        // term.input 不逐键审计(量太大),仅 open 审计。
+        auditOpen(ctx.ownerKey(), termId, checkedShell, cwd);
 
         ctx.ok(Json.obj().put("termId", termId).put("pid", pid));
     }
@@ -228,6 +250,31 @@ public class TerminalService implements HubPool.Listener {
     }
 
     // ---- 内部工具 ----
+
+    /**
+     * term.open 审计日志(与命令工具的 [exec] 审计同级语义,主日志通道 INFO):
+     * 谁(ownerKey 前 8 位,最小化披露,全量 ownerKey 不入日志)/ termId / shell /
+     * realpath(名称形态标注 PATH 解析)/ cwd。包私有静态供测试断言。
+     */
+    static void auditOpen(String ownerKey, String termId, ShellWhitelist.Checked checked, Path cwd) {
+        String shell = checked != null ? checked.request() : "(平台默认)";
+        String realpath;
+        if (checked == null) {
+            realpath = "(平台默认)";
+        } else {
+            realpath = checked.realpath() != null ? checked.realpath() : "(PATH解析)";
+        }
+        log.info("[term.open] owner={} termId={} shell={} realpath={} cwd={}",
+                ownerPrefix(ownerKey), termId, shell, realpath, cwd);
+    }
+
+    /** ownerKey 前 8 位(审计标识;不足 8 位取全量,null → "-")。包私有静态供测试。 */
+    static String ownerPrefix(String ownerKey) {
+        if (ownerKey == null) {
+            return "-";
+        }
+        return ownerKey.substring(0, Math.min(8, ownerKey.length()));
+    }
 
     /**
      * 回收终端会话(幂等):从会话表移除 → close PTY → kill 子进程。
