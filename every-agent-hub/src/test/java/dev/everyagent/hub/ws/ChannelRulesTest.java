@@ -58,4 +58,19 @@ class ChannelRulesTest {
         assertEquals(64, key.length());
         assertEquals(key, key.toLowerCase());
     }
+
+    /** 定向投递命名空间校验(审计 M-6)依赖的前缀解析:只认 u.<K>. 结构,不校验字符集。 */
+    @Test
+    void ownerKeyOfParsesNamespacePrefix() {
+        assertEquals(k, ChannelRules.ownerKeyOf(prefix + "task.abc.stream"));
+        assertEquals(k, ChannelRules.ownerKeyOf(prefix + "workers"));
+        assertEquals("abc", ChannelRules.ownerKeyOf("u.abc.z"), "解析器不校验 K 的字符集(结构解析)");
+
+        assertNull(ChannelRules.ownerKeyOf(null));
+        assertNull(ChannelRules.ownerKeyOf(""));
+        assertNull(ChannelRules.ownerKeyOf("u"), "前缀未闭合");
+        assertNull(ChannelRules.ownerKeyOf("u."), "空 ownerKey");
+        assertNull(ChannelRules.ownerKeyOf("u..x"), "空 ownerKey");
+        assertNull(ChannelRules.ownerKeyOf("task.t1.stream"), "无命名空间前缀");
+    }
 }

@@ -325,4 +325,52 @@ class HubIntegrationTest {
             }
         }
     }
+
+    /** hello 并返回 welcome.sessionId(定向投递目标的会话 id,ext.target 用)。 */
+    private String helloCaptureSession(WsTestClient c, String role, String apiKey, String clientId) {
+        c.send("{\"type\":\"hello\",\"ver\":" + Frames.PROTOCOL_VERSION + ",\"role\":\"" + role
+                + "\",\"apiKey\":\"" + apiKey + "\",\"clientId\":\"" + clientId
+                + "\",\"hubKey\":\"" + HUB_KEY_RAW + "\"}");
+        String welcome = c.await(t -> t.contains("\"type\":\"welcome\""), "welcome");
+        String sessionId = dev.everyagent.contract.json.Json.parse(welcome).path("sessionId").asString();
+        assertTrue(sessionId.length() > 0, "welcome 应带 sessionId: " + welcome);
+        return sessionId;
+    }
+
+    /**
+     * M-6 定向投递命名空间校验:msg 帧 ext.target=sessionId 的定向路径同样受
+     * 「频道即鉴权边界」约束 —— 目标连接的 ownerKey 必须等于发布频道前缀 u.&lt;K&gt;. 的 K:
+     * ① 跨命名空间目标被拒(返回 0:目标未收到,也不降级广播给频道订阅者);
+     * ② 同命名空间目标正常送达(定向不经订阅簿,目标无需订阅该频道);
+     * ③ 无 ext.target 的广播行为不受影响。
+     */
+    @Test
+    void targetedDeliveryIsConfinedToChannelNamespace() {
+        try (WsTestClient sender = connect(); WsTestClient sameNs = connect(); WsTestClient crossNs = connect()) {
+            hello(sender, "frontend", KEY_A, "fe-1");
+            String sameNsSession = helloCaptureSession(sameNs, "frontend", KEY_A, "fe-2");
+            String crossNsSession = helloCaptureSession(crossNs, "frontend", KEY_B, "fe-3");
+
+            // ② 同命名空间:ext.target 指向 KEY_A 会话 → 送达(目标未订阅该频道也送达)
+            String stream = ch("task.t9.stream");
+            sender.send("{\"type\":\"pub\",\"channel\":\"" + stream + "\",\"event\":\"delta\","
+                    + "\"payload\":{\"text\":\"same-ns\"},\"ext\":{\"target\":\"" + sameNsSession + "\"}}");
+            String got = sameNs.awaitEvent("delta");
+            assertTrue(got.contains("\"text\":\"same-ns\""), got);
+            assertTrue(got.contains("\"target\":\"" + sameNsSession + "\""), "ext 原样转发: " + got);
+
+            // ① 跨命名空间:ext.target 指向 KEY_B 会话 → 拒绝;目标未收到,频道订阅者/发布者也不收到
+            sender.send("{\"type\":\"pub\",\"channel\":\"" + stream + "\",\"event\":\"delta\","
+                    + "\"payload\":{\"text\":\"cross-ns\"},\"ext\":{\"target\":\"" + crossNsSession + "\"}}");
+            assertNoFrame(crossNs, "cross-ns", 500);
+            assertNoFrame(sameNs, "cross-ns", 500);
+            assertNoFrame(sender, "cross-ns", 500);
+
+            // ③ 无 ext.target:广播不受影响(订阅者照常收到)
+            sub(sameNs, ch("room.bcast"));
+            pub(sender, ch("room.bcast"), "delta", "{\"text\":\"bcast-ok\"}");
+            String bcast = sameNs.await(t -> t.contains("\"text\":\"bcast-ok\""), "bcast");
+            assertTrue(bcast.contains("\"channel\":\"" + ch("room.bcast") + "\""), bcast);
+        }
+    }
 }
