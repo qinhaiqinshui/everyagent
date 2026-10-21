@@ -38,6 +38,13 @@ public final class Events {
     public static final String THINKING = "thinking";
     public static final String MESSAGE = "message";
     public static final String USAGE = "usage";
+    /**
+     * 单个工具调用开始执行的事实声明(per-call 工具执行链下行段发射,<b>瞬态不落盘</b>,
+     * 同 delta/thinking 路径):{callId, name, arguments, startedAt(毫秒)}。
+     * callId 与 message.toolCalls[].id 直配——前端调用行据此点亮 running + 读秒,
+     * 不依赖执行顺序;历史回放无此事件(直接展示 tool.result 的 durationMs)。
+     */
+    public static final String TOOL_STARTED = "tool.started";
     public static final String TOOL_RESULT = "tool.result";
     public static final String ASK_CREATE = "ask.create";
     public static final String ASK_STATE = "ask.state";

@@ -21,7 +21,6 @@ import org.springframework.ai.chat.client.advisor.api.StreamAdvisor;
 import org.springframework.ai.chat.client.advisor.api.StreamAdvisorChain;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
-import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.metadata.ChatGenerationMetadata;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
@@ -42,27 +41,26 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * {@link FileChangeAdvisor} 两阶段确认(主/子 agent 共享 collector)回归测试。
+ * {@link FileChangeAdvisor}(收口侧)+ {@link FileChangeRecordInterceptor}(per-call 链上行一阶段
+ * 记账)回归测试,架构 §7.15.2。
  *
- * <p>修复的 bug(两枚):
+ * <p>修复的 bug(两枚,既往两阶段确认时代引入,一阶段化后口径不变):
  * <ul>
- *   <li><b>失败写不记账(本批)</b>:模型流里看到 create_file/update_file 就立即记入 collector,
- *       而「文件已存在」「oldcontent 不唯一」「授权拒绝」等失败调用(工具抛异常,回灌
- *       [工具执行失败] 文本)也被落成假变更。修复后模型流侧只<b>暂存</b>(callId→记录),
- *       下一轮请求入口按 callId 配对 ToolResponseMessage,经 ToolOutcomeLog.toolThrew
- *       (结构化账本非消费查询)裁决:抛过异常即丢弃,正常返回才提交 collector。</li>
- *   <li><b>子 agent 共享 collector(既往)</b>:子 agent 工具调用的文件变更曾落入 per-run 私有
- *       collector,而收口守卫「只主 agent 收口」导致这些记录被静默丢弃。修复后主/子 agent 的
- *       advisor 经 execution().subjectId() 记录到 provider 的同一任务级 collector,来源按
- *       agentId==mainAgentId 标注 MAIN/SUB_AGENT;主 agent 最后一轮(无工具调用)收口暂存共享
- *       collector,轮闭合回调写出的分片含子 agent 的文件改动;子 agent 的无工具轮不收口。</li>
+ *   <li><b>失败写不记账</b>:「文件已存在」「oldcontent 不唯一」「授权拒绝」等失败调用
+ *       (工具抛异常,回灌 [工具执行失败] 前缀文本)不落成假变更——链上行按成败判定,
+ *       失败即丢弃(见 {@link FileChangeRecordInterceptorTest})。</li>
+ *   <li><b>子 agent 共享 collector</b>:主/子 agent 经 per-call 链上行记账到 provider 的
+ *       同一任务级 collector,来源按 agentId==mainAgentId 标注 MAIN/SUB_AGENT,主 agent
+ *       最后一轮(无工具调用)统一收口,轮闭合分片含子 agent 的文件改动。</li>
  * </ul>
  *
- * <p>时序契约:工具轮之后框架必递归出携带结果的下一轮请求,故每个待确认记录必经请求入口裁决;
- * 流截断等未裁决场景由收口守卫兜底(未确认一律丢弃,宁漏记勿假记)。
+ * <p>收口时序契约:工具轮(模型流含 toolCalls)框架必继续递归,收口延后;主 agent 末轮
+ * (无 toolCalls)收口暂存;流被取消/截断的 run 不收口,残留活跃实例由轮闭合回调清理
+ * (宁漏记)。
  *
  * <p>脚手架风格参考 {@code AdaptiveMaxTokensAdvisorTest}:手写桩链(免 Mockito),
  * §14.9 插件测试零 worker 依赖;账本用真实 {@link ToolOutcomeLog}。
@@ -74,49 +72,46 @@ class FileChangeAdvisorTest {
     private static final String SUB = "a_sub";
 
     @Test
-    void subAgentFileChangesLandInSharedCollectorAndShard() throws IOException {
+    void chainUpstreamRecordThenMainFinalizeWritesShardWithSubAgentChanges() throws Exception {
         TaskService taskService = taskService();
         ToolOutcomeLog outcomes = new ToolOutcomeLog();
         FileChangeAdvisorProvider provider = new FileChangeAdvisorProvider(taskService);
-        FileChangeAdvisor main = new FileChangeAdvisor(agent(MAIN), taskService, provider, outcomes);
-        FileChangeAdvisor sub = new FileChangeAdvisor(agent(SUB), taskService, provider, outcomes);
+        FileChangeRecordInterceptor recorder = new FileChangeRecordInterceptor(taskService, provider);
+        FileChangeAdvisor main = new FileChangeAdvisor(agent(MAIN), taskService, provider);
+        FileChangeAdvisor sub = new FileChangeAdvisor(agent(SUB), taskService, provider);
 
-        // 子 agent 两轮在前(真实并行链路中子 agent 必在主 agent 收口前落定;若把主 agent 的
-        // 确认收口放在前面,共享 collector 会被 markPending 退役,子 agent 只能写到新实例):
-        // 工具轮建 /b.md → 暂存;下一轮确认 → 记入同一共享 collector(修复点:此前落入子 agent 私有实例)
+        // 子 agent 两轮在前(真实并行链路中子 agent 必在主 agent 收口前落定):
+        // create /b.md 工具轮(模型流含 toolCalls → 子 agent 不收口,递归继续)
         StepVerifier.create(sub.adviseStream(request(), chain(toolCallChunk("call_s", "create_file",
                 "{\"path\":\"/b.md\",\"content\":\"B\"}"))))
                 .expectNextCount(1).verifyComplete();
-        StepVerifier.create(sub.adviseStream(request(toolResponse("call_s", "create_file", "已创建并保存到：/b.md")),
-                chain(textChunk("sub done"))))
-                .expectNextCount(1).verifyComplete();
+        // 工具真实执行完毕 → per-call 链上行一阶段记账(成功,落共享 collector)
+        outcomes.recordCallOutcome("call_s", false);
+        recorder.invoke(callCtx("call_s", "create_file",
+                "{\"path\":\"/b.md\",\"content\":\"B\"}", SUB, outcomes), ok("已创建并保存到：/b.md"));
         assertEquals(1, provider.activeCollector(TASK).buildSummaries().size(),
-                "子 agent 已确认的 /b.md 在共享 collector(此刻尚未收口,实例仍活跃)");
+                "子 agent 成功的 /b.md 已记入共享 collector");
 
-        // 主 agent 工具轮:改 /a.md → 只暂存,collector 此刻还没有主 agent 的记录
+        // 主 agent 工具轮:update /a.md(只识别工具轮,记账在链上行;此刻工具尚未执行,
+        // collector 还没有主 agent 的记录)
         StepVerifier.create(main.adviseStream(request(), chain(toolCallChunk("call_m", "update_file",
                 "{\"path\":\"/a.md\",\"oldcontent\":\"旧\",\"content\":\"新\"}"))))
                 .expectNextCount(1).verifyComplete();
         assertEquals(1, provider.activeCollector(TASK).buildSummaries().size(),
-                "主 agent 工具轮只暂存不记账");
-        // 主 agent 下一轮请求携带工具结果(未抛异常=成功) → 确认记入共享 collector;
-        // 本轮模型继续调用非文件写工具(read_file,不暂存)→ 不收口,先断言聚合状态
-        StepVerifier.create(main.adviseStream(request(toolResponse("call_m", "update_file", "已更新到：/a.md")),
-                chain(toolCallChunk("call_z", "read_file", "{\"path\":\"/x\"}"))))
-                .expectNextCount(1).verifyComplete();
-
-        // 同一实例 + 来源标注:MAIN / SUB_AGENT(按写入顺序:子 agent 先确认落账)
-        FileChangesCollector collector = provider.activeCollector(TASK);
-        JsonNode meta = collector.buildMetadata().path("changes");
-        assertEquals(2, meta.size());
-        assertEquals("SUB_AGENT", meta.get(0).path("source").asString());
-        assertEquals(SUB, meta.get(0).path("agentId").asString());
-        assertEquals("MAIN", meta.get(1).path("source").asString());
-        assertEquals(MAIN, meta.get(1).path("agentId").asString());
-
-        // 主 agent 最后一轮(无工具调用)收口 → 轮闭合写分片,含子 agent 的 /b.md
+                "模型流时刻工具未执行,不记账");
+        FileChangesCollector active = provider.activeCollector(TASK);
+        // 工具执行完毕 → 链上行记账(MAIN);随后主 agent 末轮(纯文本)收口
+        outcomes.recordCallOutcome("call_m", false);
+        recorder.invoke(callCtx("call_m", "update_file",
+                "{\"path\":\"/a.md\",\"oldcontent\":\"旧\",\"content\":\"新\"}", MAIN, outcomes),
+                ok("已更新到：/a.md"));
+        assertSame(active, provider.activeCollector(TASK), "收口前共享实例不变(工具轮不收口)");
         StepVerifier.create(main.adviseStream(request(), chain(textChunk("done"))))
                 .expectNextCount(1).verifyComplete();
+
+        // 收口退役活跃实例:新取的是空 collector(切断跨轮串扰),变更在暂存实例里等轮闭合落盘
+        JsonNode meta = provider.activeCollector(TASK).buildMetadata().path("changes");
+        assertEquals(0, meta.size(), "收口退役活跃实例后新取的是空 collector(切断跨轮串扰)");
         Path dir = Files.createTempDirectory("file-change-advisor-test");
         provider.onRoundsClosed(TASK, dir, List.of(new RoundClosedInfo("r_1", 1, 5L, 1)));
         JsonNode changes = Json.parse(
@@ -127,32 +122,25 @@ class FileChangeAdvisorTest {
     }
 
     @Test
-    void failedFileWriteIsNotRecorded() throws IOException {
+    void failedWriteLeavesEmptyRunAndNoShard() throws Exception {
         TaskService taskService = taskService();
         ToolOutcomeLog outcomes = new ToolOutcomeLog();
         FileChangeAdvisorProvider provider = new FileChangeAdvisorProvider(taskService);
-        FileChangeAdvisor main = new FileChangeAdvisor(agent(MAIN), taskService, provider, outcomes);
+        FileChangeRecordInterceptor recorder = new FileChangeRecordInterceptor(taskService, provider);
+        FileChangeAdvisor main = new FileChangeAdvisor(agent(MAIN), taskService, provider);
 
-        // 轮1:create_file(文件已存在,工具将抛异常)→ 暂存
-        String args = "{\"path\":\"/t.txt\",\"content\":\"1\"}";
-        StepVerifier.create(main.adviseStream(request(), chain(toolCallChunk("call_f", "create_file", args))))
+        // create_file 失败(文件已存在 → 前缀文本):链上行丢弃,不产生假变更
+        StepVerifier.create(main.adviseStream(request(), chain(toolCallChunk("call_f", "create_file",
+                "{\"path\":\"/t.txt\",\"content\":\"1\"}"))))
                 .expectNextCount(1).verifyComplete();
-        assertEquals(0, provider.activeCollector(TASK).buildSummaries().size(), "暂存期不记账");
-        // per-call 包装器记账「抛异常」(与真实链路同键:工具名 + 入参原串)
-        outcomes.recordToolThrow("create_file", args);
+        recorder.invoke(callCtx("call_f", "create_file",
+                "{\"path\":\"/t.txt\",\"content\":\"1\"}", MAIN, outcomes),
+                ok("[工具执行失败] 文件已存在,如需修改请用 update_file"));
 
-        // 轮2:请求携带工具结果(回灌 [工具执行失败] 文本;文本只是礼仪,裁决走结构化账本)
-        StepVerifier.create(main.adviseStream(
-                request(toolResponse("call_f", "create_file", "[工具执行失败] 文件已存在,如需修改请用 update_file")),
-                chain(textChunk("改用 update_file 吧"))))
-                .expectNextCount(1).verifyComplete();
-
-        // 修复点:失败调用被丢弃,不产生假变更
         assertEquals(0, provider.activeCollector(TASK).buildSummaries().size(),
                 "失败的 create_file 不得记为文件变更");
-
-        // 收口(最后一轮无工具调用):collector 空 → 不写分片
-        StepVerifier.create(main.adviseStream(request(), chain(textChunk("done"))))
+        // 主 agent 末轮收口:collector 空 → 跳过;轮闭合无分片
+        StepVerifier.create(main.adviseStream(request(), chain(textChunk("改用 update_file 吧"))))
                 .expectNextCount(1).verifyComplete();
         Path dir = Files.createTempDirectory("file-change-advisor-test");
         provider.onRoundsClosed(TASK, dir, List.of(new RoundClosedInfo("r_1", 1, 5L, 1)));
@@ -161,83 +149,64 @@ class FileChangeAdvisorTest {
     }
 
     @Test
-    void failedThenSucceededWritesOfSameRun() throws IOException {
+    void toolTurnDoesNotFinalize() throws Exception {
         TaskService taskService = taskService();
-        ToolOutcomeLog outcomes = new ToolOutcomeLog();
         FileChangeAdvisorProvider provider = new FileChangeAdvisorProvider(taskService);
-        FileChangeAdvisor main = new FileChangeAdvisor(agent(MAIN), taskService, provider, outcomes);
+        FileChangeAdvisor main = new FileChangeAdvisor(agent(MAIN), taskService, provider);
 
-        // 轮1:update_file 失败(oldcontent 不唯一)→ 暂存 + per-call 包装器记账异常
-        String badArgs = "{\"path\":\"/c.md\",\"oldcontent\":\"X\",\"content\":\"Y\"}";
-        StepVerifier.create(main.adviseStream(request(), chain(toolCallChunk("call_b", "update_file", badArgs))))
+        // 工具轮(模型流含 toolCalls):收口延后,共享实例保持活跃(同 run 后续轮继续记账)
+        StepVerifier.create(main.adviseStream(request(), chain(toolCallChunk("call_1", "read_file",
+                "{\"path\":\"/x\"}"))))
                 .expectNextCount(1).verifyComplete();
-        outcomes.recordToolThrow("update_file", badArgs);
-        // 轮2:请求携带失败结果 → 确认丢弃;模型看到失败文本后改参数重试(不同 arguments → 不同账本键)
-        String goodArgs = "{\"path\":\"/c.md\",\"oldcontent\":\"X\\n上下文\",\"content\":\"Y\"}";
-        StepVerifier.create(main.adviseStream(
-                request(toolResponse("call_b", "update_file", "[工具执行失败] oldcontent 在文档中出现多次,不唯一,无法确定替换位置")),
-                chain(toolCallChunk("call_g", "update_file", goodArgs))))
+        FileChangesCollector active = provider.activeCollector(TASK);
+        StepVerifier.create(main.adviseStream(request(), chain(toolCallChunk("call_2", "update_file",
+                "{\"path\":\"/a.md\",\"oldcontent\":\"x\",\"content\":\"y\"}"))))
                 .expectNextCount(1).verifyComplete();
-        assertEquals(0, provider.activeCollector(TASK).buildSummaries().size(), "失败调用被丢弃");
-
-        // 轮3:重试成功的结果到达 → 确认记账;本轮纯文本收口
-        StepVerifier.create(main.adviseStream(
-                request(toolResponse("call_g", "update_file", "已更新到：/c.md")),
-                chain(textChunk("done"))))
-                .expectNextCount(1).verifyComplete();
-
-        // 同 run 内失败后的成功重写仍要记账(真实变更),且只记成功的那次
-        Path dir = Files.createTempDirectory("file-change-advisor-test");
-        provider.onRoundsClosed(TASK, dir, List.of(new RoundClosedInfo("r_1", 1, 5L, 1)));
-        JsonNode changes = Json.parse(
-                Files.readString(dir.resolve("file-changes").resolve("r_1.json"))).path("changes");
-        assertEquals(1, changes.size(), "分片只含成功重写的一条");
-        assertEquals("/c.md", changes.get(0).path("filePath").asString());
-        assertEquals(1, changes.get(0).path("saveCount").asInt(), "失败的那次不计入 saveCount");
+        assertSame(active, provider.activeCollector(TASK), "工具轮不收口,实例跨轮内稳定");
     }
 
     @Test
-    void unconfirmedPendingDiscardedAtFinalize() throws IOException {
+    void subAgentFinalTurnDoesNotFinalize() throws Exception {
         TaskService taskService = taskService();
         FileChangeAdvisorProvider provider = new FileChangeAdvisorProvider(taskService);
-        FileChangeAdvisor main = new FileChangeAdvisor(agent(MAIN), taskService, provider, new ToolOutcomeLog());
+        FileChangeAdvisor sub = new FileChangeAdvisor(agent(SUB), taskService, provider);
+        FileChangeRecordInterceptor recorder = new FileChangeRecordInterceptor(taskService, provider);
 
-        // 轮1:create_file 暂存后,下一轮请求【不携带】工具结果(流截断/工具未执行的异常形态)
-        StepVerifier.create(main.adviseStream(request(), chain(toolCallChunk("call_x", "create_file",
-                "{\"path\":\"/d.md\",\"content\":\"D\"}"))))
-                .expectNextCount(1).verifyComplete();
-        // 轮2:空请求历史 + 纯文本 → 收口守卫应丢弃未确认记录(宁漏记勿假记)
-        StepVerifier.create(main.adviseStream(request(), chain(textChunk("done"))))
-                .expectNextCount(1).verifyComplete();
-        assertEquals(0, provider.activeCollector(TASK).buildSummaries().size(),
-                "未确认(结果未知)的调用不落账");
-    }
-
-    @Test
-    void subAgentFinalTurnDoesNotFinalize() throws IOException {
-        TaskService taskService = taskService();
-        FileChangeAdvisorProvider provider = new FileChangeAdvisorProvider(taskService);
-        FileChangeAdvisor sub = new FileChangeAdvisor(agent(SUB), taskService, provider, new ToolOutcomeLog());
-
-        // 子 agent 无工具轮(其 run 的最后一轮):不收口,轮闭合无暂存 → 不写分片
+        // 子 agent 记账后自己的末轮(无工具轮):不收口,轮闭合无暂存 → 不写分片
+        recorder.invoke(callCtx("call_s", "create_file",
+                "{\"path\":\"/d.md\",\"content\":\"D\"}", SUB, new ToolOutcomeLog()),
+                ok("已创建并保存到：/d.md"));
         StepVerifier.create(sub.adviseStream(request(), chain(textChunk("sub done"))))
                 .expectNextCount(1).verifyComplete();
         Path dir = Files.createTempDirectory("file-change-advisor-test");
         provider.onRoundsClosed(TASK, dir, List.of(new RoundClosedInfo("r_1", 1, 5L, 1)));
         assertFalse(Files.exists(dir.resolve("file-changes").resolve("r_1.json")),
-                "子 agent 不收口,不产生分片");
+                "子 agent 不收口,不产生分片(记录留给主 agent 统一收口)");
+    }
+
+    @Test
+    void cancelledRunNeverFinalizesAndRoundCloseCleansUp() throws Exception {
+        TaskService taskService = taskService();
+        FileChangeAdvisorProvider provider = new FileChangeAdvisorProvider(taskService);
+        FileChangeRecordInterceptor recorder = new FileChangeRecordInterceptor(taskService, provider);
+
+        // 已记账但流被取消(无末轮收口):残留活跃实例由轮闭合回调清理,不写分片(宁漏记)
+        recorder.invoke(callCtx("call_x", "create_file",
+                "{\"path\":\"/e.md\",\"content\":\"E\"}", MAIN, new ToolOutcomeLog()),
+                ok("已创建并保存到：/e.md"));
+        assertEquals(1, provider.activeCollector(TASK).buildSummaries().size(), "链上行已记账");
+        Path dir = Files.createTempDirectory("file-change-advisor-test");
+        provider.onRoundsClosed(TASK, dir, List.of(new RoundClosedInfo("r_1", 1, 5L, 1)));
+        assertFalse(Files.exists(dir.resolve("file-changes").resolve("r_1.json")),
+                "未收口的 run 不写分片");
+        assertEquals(0, provider.activeCollector(TASK).buildSummaries().size(),
+                "轮闭合清理残留活跃实例(防跨轮串数据)");
     }
 
     // ---- 测试脚手架(§14.9:自建桩,不依赖 worker) ----
 
     private static ChatClientRequest request(Message... messages) {
         return new ChatClientRequest(new Prompt(List.of(messages)), Map.of());
-    }
-
-    /** 工具结果消息桩(id 与 toolCallChunk 的 callId 配对;构造走公开 builder)。 */
-    private static ToolResponseMessage toolResponse(String callId, String name, String responseData) {
-        return ToolResponseMessage.builder().responses(List.of(
-                new ToolResponseMessage.ToolResponse(callId, name, responseData))).build();
     }
 
     /** 单源桩链:nextStream 返回按序携带给定 chunk 的 Flux。 */
@@ -276,6 +245,58 @@ class FileChangeAdvisorTest {
         Generation gen = new Generation(msg,
                 ChatGenerationMetadata.builder().finishReason("stop").build());
         return new ChatClientResponse(new ChatResponse(List.of(gen)), Map.of());
+    }
+
+    /** per-call 链上行记账桩:next 返回给定结果串(模拟工具真实执行完毕)。 */
+    private static dev.everyagent.plugin.api.spi.ToolExecutionChain ok(String result) {
+        return c -> result;
+    }
+
+    /** per-call ctx 桩:只填拦截器读取的字段(与 FileChangeRecordInterceptorTest 同构,保持本类自包含)。 */
+    private static ToolCallCtx callCtx(String callId, String name, String arguments, String agentId,
+            ToolOutcomeLog outcomes) {
+        return new ToolCallCtx(callId, name, arguments, agentId, outcomes);
+    }
+
+    private static final class ToolCallCtx
+            implements dev.everyagent.plugin.api.spi.ToolExecutionContext {
+        private final AssistantMessage.ToolCall toolCall;
+        private final String agentId;
+        private final ToolOutcomeLog outcomes;
+
+        ToolCallCtx(String callId, String name, String arguments, String agentId,
+                ToolOutcomeLog outcomes) {
+            this.toolCall = new AssistantMessage.ToolCall(callId, "function", name, arguments);
+            this.agentId = agentId;
+            this.outcomes = outcomes;
+        }
+
+        @Override public Prompt prompt() { return null; }
+        @Override public ChatResponse chatResponse() { return null; }
+        @Override public List<AssistantMessage.ToolCall> toolCalls() { return List.of(toolCall); }
+        @Override public AssistantMessage.ToolCall toolCall() { return toolCall; }
+        @Override public org.springframework.ai.tool.ToolCallback toolCallback() { return null; }
+        @Override public String arguments() { return toolCall.arguments(); }
+        @Override public void arguments(String arguments) { }
+        @Override public void synthesize(String result) { }
+        @Override public String synthesizedResult() { return null; }
+        @Override public long startedAt() { return 0; }
+        @Override public void startedAt(long epochMs) { }
+        @Override public ToolOutcomeLog toolOutcomes() { return outcomes; }
+        @Override public String agentId() { return agentId; }
+        @Override public String subjectId() { return TASK; }
+        @Override public String workspaceRoot() { return "/tmp"; }
+        @Override public String workspaceId() { return "w_1"; }
+        @Override public ModelConfig snapshot() { return null; }
+        @Override public EventEmitter emitter() { return e -> e.id(); }
+        @Override public AgentFactory agentFactory() { return null; }
+        @Override public Map<String, Object> metadata() { return Map.of(); }
+        @Override public Path dataDir() { return null; }
+        @Override public boolean terminal() { return false; }
+        @Override public dev.everyagent.plugin.api.interaction.InteractionService interaction() {
+            return null;
+        }
+        @Override public Map<String, AgentContext> agents() { return Map.of(); }
     }
 
     private static AgentContext agent(String agentId) {

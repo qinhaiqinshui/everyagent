@@ -36,8 +36,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * 定向推送(DataPusher)集成测试:混合模型的 worker 端推送侧验收。
  * 覆盖:join 建推送器 → 实时增量定向推送(ext.target=前端会话,thinking/delta=append、
  * message=replace);子 agent 增量帧带 payload.agentId(wire 口径与 task.poll 一致);
- * 终态任务订阅不推数据帧、task.input 再运行 → 新一轮输出换挂推送;退订销毁;
- * 前端断连清扫;worker 断链重连后 task.input 兜底重建推送器;非本 worker 任务忽略;
+ * 终态任务订阅不推数据帧、task.run{taskId} 再运行 → 新一轮输出换挂推送;退订销毁;
+ * 前端断连清扫;worker 断链重连后重订阅重建推送器;非本 worker 任务忽略;
  * 重复 join 幂等。
  * 复用 WorkerTaskPollTest 的测试基建(FakeHub + FakeChatModel + WsTestClient)。
  * FakeChatModel 的 THINK 流片间 150ms 延迟即为「create 返回 → sub 生效」预留窗口,
@@ -104,7 +104,8 @@ class WorkerDataPusherTest {
             return new ChatModelFactory(props, enhancerRegistry, configStore) {
                 @Override
                 public org.springframework.ai.chat.model.ChatModel build(ResolvedConfig cfg,
-                        org.springframework.ai.openai.OpenAiChatOptions options, String agentId) {
+                        org.springframework.ai.openai.OpenAiChatOptions options, String agentId,
+                        dev.everyagent.plugin.api.model.EventEmitter events) {
                     return new FakeChatModel();
                 }
             };
@@ -249,9 +250,11 @@ class WorkerDataPusherTest {
         awaitPusherCount(1, "终态任务订阅仍建推送器(归属磁盘校验通过)");
         assertTrue(fe.absentAfter(streamCh(taskId), 700), "终态任务不应推数据帧");
 
-        // 再运行:TaskResumeListener 唤醒推送器换挂新日志,新轮 thinking 增量实时推送
-        fe.send(pub(Channels.workerInput(k, workerProps.getWorkerId()), "task.input",
-                "{\"taskId\":\"" + taskId + "\",\"text\":\"THINK:再运行\"}"));
+        // 再运行:task.run{taskId}(worker 级 task.input 通道已删除)触发冷启动续跑,
+        // TaskResumeListener 唤醒推送器换挂新日志,新轮 thinking 增量实时推送
+        String rerunResp = rpc("task.run", Json.write(Json.obj()
+                .put("taskId", taskId).put("input", "THINK:再运行")));
+        assertTrue(rerunResp.contains("rpc.ok"), rerunResp);
         String rerun = fe.await(t -> t.contains(streamCh(taskId))
                 && t.contains("\"event\":\"thinking\"") && t.contains("\"operate\":\"append\""),
                 "再运行新输出推送");
@@ -284,7 +287,7 @@ class WorkerDataPusherTest {
     }
 
     @Test
-    void taskInputFallbackRebuildsPusherAfterWorkerReconnect() {
+    void resubscribeAfterWorkerReconnectRebuildsPusher() {
         String taskId = create("你好");
         awaitDone(taskId);
 
@@ -293,7 +296,7 @@ class WorkerDataPusherTest {
         pool.primary().forceReconnect();
         awaitPusherCount(0, "worker 断链清扫该连接的推送器");
 
-        // 等重连完成并留出重订阅落定窗口,再模拟「前端未刷新仍继续输入」
+        // 等重连完成并留出重订阅落定窗口
         long deadline = System.currentTimeMillis() + 20_000;
         while (!pool.anyConnected()) {
             assertTrue(System.currentTimeMillis() < deadline, "worker 未在 20s 内重连");
@@ -301,9 +304,18 @@ class WorkerDataPusherTest {
         }
         sleep(800);
 
-        fe.send(pub(Channels.workerInput(k, workerProps.getWorkerId()), "task.input",
-                "{\"taskId\":\"" + taskId + "\",\"text\":\"THINK:兜底重建\"}"));
-        awaitPusherCount(1, "task.input 兜底重建推送器");
+        // worker 断链清扫了推送器;旧「task.input 兜底重建」机制已随该通道删除
+        // (bbe8c3b0),重建来源 = 前端重连后的重订阅(hub 收 sub 即发 subscriber.join,
+        // 与前端 resync 同一条路径):重订阅 → 推送器重建 → 新一轮输出仍定向推到该会话。
+        sub(fe, streamCh(taskId));
+        awaitPusherCount(1, "重订阅重建推送器");
+
+        // 终态驱逐/磁盘索引落定的窄窗口:task.updated(done) 广播先于 tasks→diskTasks 收口,
+        // 立刻续跑可能撞上「内存终态 + 磁盘未索引」而拿到 NOT_FOUND,故等一拍。
+        sleep(300);
+        String rerunResp = rpc("task.run", Json.write(Json.obj()
+                .put("taskId", taskId).put("input", "THINK:兜底重建")));
+        assertTrue(rerunResp.contains("rpc.ok"), rerunResp);
         String rerun = fe.await(t -> t.contains(streamCh(taskId))
                 && t.contains("\"event\":\"thinking\"") && t.contains("\"target\":\""
                 + sessionId + "\""), "新轮输出仍定向推到该前端会话");

@@ -252,6 +252,18 @@ class HubSession {
   }
 
   /**
+   * 指定 worker 的 presence 在线态(worker→hub 的 presence 心跳,与前端 WS 是否 open 无关)。
+   *
+   * <p>方案 B 下 worker 离线仅 presence 变化、前端 WS 保持 open:此时向该 worker 发 RPC
+   * 会因 hub 零缓冲、worker 未订阅 cmd 频道而挂到 30s 超时。registry refresh 据本方法
+   * 跳过 presence 离线 worker(直接按离线清空其镜像),避免在途刷新被一根 30s 挂起 RPC 拖住,
+   * 致使 worker 重启完成后的 worker.online 恢复请求被 refreshInFlight 静默丢弃。
+   */
+  isWorkerOnline(workerId: string): boolean {
+    return this.workersOnline.get(workerId) ?? false
+  }
+
+  /**
    * 指定 worker 的连接(已建立,不论连接态;重连中也可用于 RPC 排队)。
    * 与 clientFor 的区别:不要求 state === 'open'——重连期间的 HubClient 仍可
    * 接受 RPC(入 pendingRpc 队列,等 welcome 后重放),不向业务层抛错误。

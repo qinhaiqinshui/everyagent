@@ -108,9 +108,12 @@ class WorkerIntegrationTest {
                 ChatModelEnhancerRegistry enhancerRegistry,
                 ConfigStore configStore) {
             return new ChatModelFactory(props, enhancerRegistry, configStore) {
+                // 注意 override 的是 4 参 build:任务主路径(ThreadSubmitNode)经
+                // buildAgentModel 调 4 参重载,3 参 override 对主路径无效(曾致测试发真实 HTTP)。
                 @Override
                 public org.springframework.ai.chat.model.ChatModel build(ResolvedConfig cfg,
-                        org.springframework.ai.openai.OpenAiChatOptions options, String agentId) {
+                        org.springframework.ai.openai.OpenAiChatOptions options, String agentId,
+                        dev.everyagent.plugin.api.model.EventEmitter events) {
                     // 按模型名分派(模型池测试):model-b 正常回声;model-fail 抛运行时错误;
                     // model-net 抛 IO 错误;其余(默认 gpt-4o-mini)保持 FakeChatModel 既有行为。
                     String model = cfg.snapshot().model();
@@ -261,18 +264,17 @@ class WorkerIntegrationTest {
             assertTrue(seqs.get(i) > seqs.get(i - 1), "seq 严格递增(洞合法)");
         }
         JsonNode message = events.get(names.indexOf("message"));
-        assertEquals("思考完成", message.path("payload").path("thinking").asString(),
+        assertEquals("思考完成", message.path("payload").path("data").path("thinking").asString(),
                 "message 行携带整轮 thinking");
-        assertTrue(message.path("payload").path("text").asString().contains("回声:"),
+        assertTrue(message.path("payload").path("content").asString().contains("回声:"),
                 "message 行携带完整正文");
         assertEquals(readMeta(taskId).path("mainAgentId").asString(),
                 message.path("payload").path("agentId").asString(),
                 "主 agent wire 事件也带 agentId(= mainAgentId,前端按 task 层传入的固定 id 判主)");
         JsonNode usageEv = events.stream().filter(e -> e.path("event").asString().equals("usage")).findFirst().orElse(null);
-        assertTrue(usageEv != null && usageEv.path("payload").has("total"), "usage 事件带 total 用量");
+        assertTrue(usageEv != null && usageEv.path("payload").path("data").has("total"), "usage 事件带 total 用量");
 
-        // 磁盘布局:按 agent 分文件;每行带 agentId,无 ext null 字段。
-        
+        // 磁盘布局:按 agent 分文件;每行带 agentId + ext(persist/operate),瞬态事件不落盘也不写占位行。
         JsonNode meta = readMeta(taskId);
         String mainAgentId = meta.path("mainAgentId").asString();
         assertTrue(mainAgentId.startsWith("a_"), mainAgentId);
@@ -283,15 +285,12 @@ class WorkerIntegrationTest {
         } catch (java.io.IOException e) {
             throw new AssertionError(e);
         }
-        long fullLines = lines.stream().filter(l -> l.length() >= 30).count();
-        assertEquals(names.size(), fullLines,
-                "完整事件行数与回放一致(瞬态占位行被读侧跳过): " + names);
+        assertEquals(names.size(), lines.size(),
+                "磁盘行数与回放一致(瞬态事件不落盘、不写占位行): " + names);
         for (String line : lines) {
-            if (line.length() < 30) {
-                continue; // 瞬态占位行 {"seq":N} 仅续号用,无 agentId/ext(豁免)
-            }
             assertTrue(line.contains("\"agentId\":\"" + mainAgentId + "\""), "每行记 agentId: " + line);
-            assertFalse(line.contains("\"ext\""), "ext null 不写行: " + line);
+            assertTrue(line.contains("\"ext\":{\"persist\":true,\"operate\":\""),
+                    "每行 ext 记落盘标记与 operate 语义: " + line);
         }
     }
 
@@ -302,10 +301,10 @@ class WorkerIntegrationTest {
         // FakeChatModel 即时触发工具 —— 按 G3 用 task.poll 轮询任务历史
         JsonNode askCreate = syncUntil(taskId,
                 e -> e.path("event").asString().equals("ask.create"), "ask.create");
-        String askId = askCreate.path("payload").path("askId").asString();
+        String askId = askCreate.path("payload").path("data").path("askId").asString();
         assertTrue(askId.startsWith("q_"), askId);
         // 多问题形态:ask.create 透传 questions 数组(含 worker 分配的 id)
-        JsonNode questions = askCreate.path("payload").path("questions");
+        JsonNode questions = askCreate.path("payload").path("data").path("questions");
         assertTrue(questions.isArray() && questions.size() == 1, "ask.create 含 questions: " + questions);
         assertTrue(questions.path(0).path("id").asString().startsWith(askId + "_"),
                 "子问题 id 与 askId 关联: " + questions);
@@ -325,17 +324,19 @@ class WorkerIntegrationTest {
         // 工具轮:message 带真实 toolCall id,tool.result 按 callId 配对
         JsonNode callMsg = events.stream().filter(e -> e.path("event").asString().equals("message"))
                 .findFirst().orElseThrow();
-        String callId = callMsg.path("payload").path("toolCalls").path(0).path("id").asString();
+        String callId = callMsg.path("payload").path("data").path("toolCalls").path(0).path("id").asString();
         JsonNode toolResult = events.stream().filter(e -> e.path("event").asString().equals("tool.result"))
                 .findFirst().orElseThrow();
-        assertEquals(callId, toolResult.path("payload").path("callId").asString(), "callId 配对");
+        assertEquals(callId, toolResult.path("payload").path("data").path("callId").asString(), "callId 配对");
+        // 终答轮 = toolCalls 为空的那条 message(data.toolCalls 恒存在,空数组即无下发)
         JsonNode answerMsg = events.stream()
-                .filter(e -> e.path("event").asString().equals("message") && !e.path("payload").has("toolCalls"))
+                .filter(e -> e.path("event").asString().equals("message")
+                        && e.path("payload").path("data").path("toolCalls").size() == 0)
                 .findFirst().orElseThrow();
-        assertTrue(answerMsg.path("payload").path("text").asString().contains("已确认"),
+        assertTrue(answerMsg.path("payload").path("content").asString().contains("已确认"),
                 "工具结果汇总进终答: " + answerMsg);
         // 工具结果本身写回了「题干：答案」(经 tool.result summary → 模型上下文)
-        assertTrue(answerMsg.path("payload").path("text").asString().contains("要继续吗：是"),
+        assertTrue(answerMsg.path("payload").path("content").asString().contains("要继续吗：是"),
                 "工具结果含问题+答案: " + answerMsg);
     }
 
@@ -355,16 +356,20 @@ class WorkerIntegrationTest {
     }
 
     @Test
-    void inputInjectedBetweenTurns() {
+    void inputQueuedBetweenTurnsIsConsumed() {
         String taskId = create("SLOW:第一轮");
         syncUntil(taskId, e -> e.path("event").asString().equals("delta"), "首片 delta");
-        fe.send(pub(Channels.workerInput(k, workerProps.getWorkerId()), "task.input",
-                "{\"taskId\":\"" + taskId + "\",\"text\":\"第二轮输入\"}"));
-        fe.await(t -> t.contains("\"event\":\"task.updated\"") && t.contains("\"status\":\"done\""),
-                "两轮后完成");
+        // 运行中 task.run{taskId} = 入队(worker 级 task.input 通道已于 bbe8c3b0 删除;
+        // 入队/续跑统一走 task.run 合一入口),轮间消费为第二轮 user.message。
+        String resp = rpc("task.run", Json.write(Json.obj()
+                .put("taskId", taskId).put("input", "第二轮输入")));
+        assertTrue(resp.contains("\"queued\":true"), "运行中入队: " + resp);
+        fe.await(t -> t.contains(taskId) && t.contains("\"event\":\"task.updated\"")
+                && t.contains("\"status\":\"done\""), "两轮后完成");
         List<JsonNode> events = sync(taskId, 0);
         long userMsgs = events.stream().filter(e -> e.path("event").asString().equals("user.message")).count();
-        assertEquals(2, userMsgs, "第二条输入必须注入为第二轮 user.message");
+        List<String> names = events.stream().map(e -> e.path("event").asString()).toList();
+        assertEquals(2, userMsgs, "入队的第二条输入必须消费为第二轮 user.message: " + names);
     }
 
     @Test
@@ -390,10 +395,10 @@ class WorkerIntegrationTest {
         assertTrue(names.contains("agent.done"), names.toString());
         // run_agent 下发:主 message.toolCalls + tool.result 配对
         JsonNode runAgentMsg = events.stream().filter(e -> e.path("event").asString().equals("message")
-                && e.path("payload").path("toolCalls").path(0).path("name").asString().equals("run_agent"))
+                && e.path("payload").path("data").path("toolCalls").path(0).path("name").asString().equals("run_agent"))
                 .findFirst().orElse(null);
         assertNotNull(runAgentMsg, "主 message 带 run_agent 工具调用下发");
-        String callId = runAgentMsg.path("payload").path("toolCalls").path(0).path("id").asString();
+        String callId = runAgentMsg.path("payload").path("data").path("toolCalls").path(0).path("id").asString();
         JsonNode subDone = events.stream()
                 .filter(e -> e.path("event").asString().equals("agent.done")
                         && subId.equals(e.path("payload").path("agentId").asString()))
@@ -405,7 +410,7 @@ class WorkerIntegrationTest {
         assertEquals(subId, subMsg.path("payload").path("agentId").asString(), "子事件与主事件同名,靠 agentId 区分");
         JsonNode toolResult = events.stream().filter(e -> e.path("event").asString().equals("tool.result"))
                 .findFirst().orElseThrow();
-        assertEquals(callId, toolResult.path("payload").path("callId").asString(), "run_agent 结果配对");
+        assertEquals(callId, toolResult.path("payload").path("data").path("callId").asString(), "run_agent 结果配对");
         // 磁盘:子 agent 独立文件
         JsonNode meta = readMeta(taskId);
         java.nio.file.Path dir = taskStore.dirOf(taskId);
@@ -423,7 +428,7 @@ class WorkerIntegrationTest {
     }
 
     @Test
-    void idempotencyAndBusy() {
+    void idempotencyAndConcurrencyLimit() {
         String busyId = create("SLOW:占位任务", "idem-busy");
         syncUntil(busyId, e -> e.path("event").asString().equals("delta"), "首片 delta");
 
@@ -434,8 +439,18 @@ class WorkerIntegrationTest {
         assertTrue(again.contains("\"deduplicated\":true"), again);
 
         String second = create("SLOW:第二个任务", "idem-two"); // 占满 2 并发
-        String third = rpc("task.run", "{\"input\":\"第三个任务\"}");
-        assertTrue(third.contains("BUSY"), "超过并发上限应 BUSY: " + third);
+
+        // 并发已满的第三条:两种模式都合法(§14.5)——无队列插件时核心硬拒绝 ERR_BUSY;
+        // task-queue 插件接管准入(always-admit)时进入排队准入,允许即正常开跑。
+        // 断言只锁「请求有明确应答、不被静默吞掉」,不锁具体模式。
+        String thirdResp = rpc("task.run", Json.write(Json.obj()
+                .put("input", "第三个任务").put("workspace", WS.toString())));
+        assertTrue(thirdResp.contains("BUSY") || thirdResp.contains("rpc.ok"),
+                "并发满不得静默丢请求(拒 BUSY 或准入开跑二选一): " + thirdResp);
+        if (thirdResp.contains("rpc.ok")) {
+            String thirdId = Json.parse(thirdResp).path("payload").path("result").path("taskId").asString();
+            rpc("task.cancel", "{\"taskId\":\"" + thirdId + "\"}");
+        }
 
         rpc("task.cancel", "{\"taskId\":\"" + busyId + "\"}");
         rpc("task.cancel", "{\"taskId\":\"" + second + "\"}");
@@ -493,18 +508,20 @@ class WorkerIntegrationTest {
     }
 
     @Test
-    void terminalTaskInputRerunsWithContext() {
+    void terminalTaskRerunKeepsContextAndSeq() {
         String taskId = create("第一轮问候");
         fe.await(t -> t.contains("\"event\":\"task.updated\"") && t.contains("\"status\":\"done\"")
                 && t.contains(taskId), "首轮 done");
         long createdAt = readMeta(taskId).path("createdAt").asLong();
         long firstRunLastSeq = sync(taskId, 0).getLast().path("seq").asLong();
 
-        // 终态直接发输入 = 冷启动再运行(无续跑概念,状态自动翻回)
-        fe.send(pub(Channels.workerInput(k, workerProps.getWorkerId()), "task.input",
-                "{\"taskId\":\"" + taskId + "\",\"text\":\"THINK:第二轮追问\"}"));
+        // 终态 task.run{taskId} = 冷启动再运行(无续跑概念,状态自动翻回;worker 级 task.input
+        // 通道已于 bbe8c3b0 删除,入队/续跑统一走 task.run 合一入口)。
+        String resp = rpc("task.run", Json.write(Json.obj()
+                .put("taskId", taskId).put("input", "THINK:第二轮追问")));
+        assertTrue(resp.contains("rpc.ok") && resp.contains(taskId), resp);
         syncUntil(taskId, e -> e.path("event").asString().equals("user.message")
-                && e.path("payload").path("text").asString().contains("第二轮追问"), "第二轮 user.message");
+                && e.path("payload").path("content").asString().contains("第二轮追问"), "第二轮 user.message");
         // THINK 脚本带 150ms×2 延迟:等第二轮末条 message 落盘再全量断言(避免读到运行中间态)
         syncUntil(taskId, e -> e.path("event").asString().equals("message")
                 && e.path("seq").asLong() > firstRunLastSeq, "第二轮 message");
@@ -521,9 +538,9 @@ class WorkerIntegrationTest {
         JsonNode secondAnswer = events.stream()
                 .filter(e -> e.path("event").asString().equals("message"))
                 .reduce((first, second) -> second).orElseThrow();
-        assertTrue(secondAnswer.path("payload").path("text").asString().contains("上下文2:"),
-                "二次回答含上文: " + secondAnswer.path("payload").path("text").asString());
-        assertEquals("思考完成", secondAnswer.path("payload").path("thinking").asString(),
+        assertTrue(secondAnswer.path("payload").path("content").asString().contains("上下文2:"),
+                "二次回答含上文: " + secondAnswer.path("payload").path("content").asString());
+        assertEquals("思考完成", secondAnswer.path("payload").path("data").path("thinking").asString(),
                 "再运行 message 仍带整轮 thinking");
         // createdAt 不随续写重置;mainAgentId 稳定(同一 jsonl 文件续写)
         JsonNode meta2 = readMeta(taskId);
@@ -570,8 +587,8 @@ class WorkerIntegrationTest {
         JsonNode secondAnswer = events.stream()
                 .filter(e -> e.path("event").asString().equals("message"))
                 .reduce((first, second) -> second).orElseThrow();
-        assertTrue(secondAnswer.path("payload").path("text").asString().contains("上下文2:"),
-                "续跑载入历史: " + secondAnswer.path("payload").path("text").asString());
+        assertTrue(secondAnswer.path("payload").path("content").asString().contains("上下文2:"),
+                "续跑载入历史: " + secondAnswer.path("payload").path("content").asString());
         assertEquals(createdAt, readMeta(taskId).path("createdAt").asLong(), "createdAt 沿用原值");
     }
 
@@ -595,14 +612,19 @@ class WorkerIntegrationTest {
         fe.await(t -> t.contains("\"event\":\"task.updated\"")
                 && t.contains("\"pendingInputs\":[\"queue-one\"]"), "入队即广播 pendingInputs");
 
-        // task.input 频道同路径再入一条
-        fe.send(pub(Channels.workerInput(k, workerProps.getWorkerId()), "task.input",
-                "{\"taskId\":\"" + taskId + "\",\"text\":\"queue-two\"}"));
+        // task.run{taskId} 同路径再入一条(worker 级 task.input 通道已删除)
+        String second = rpc("task.run", Json.write(Json.obj()
+                .put("taskId", taskId).put("input", "queue-two")));
+        assertTrue(second.contains("\"queued\":true"), second);
         fe.await(t -> t.contains("\"event\":\"task.updated\"")
                 && t.contains("\"pendingInputs\":[\"queue-one\",\"queue-two\"]"), "两条快照");
 
-        // 刷新重连可见:tasks.list 内存行与 task.updated 均带队列快照
-        assertTrue(rpc("tasks.list", "{}").contains("\"pendingInputs\""), "tasks.list 带队列");
+        // 刷新重连可见:队列专有数据不进核心 TaskSummary(tasks.list),
+        // 前端队列面板的数据源是插件自持的 task.queueSnapshot(§5.5)。
+        JsonNode snapshot = Json.parse(rpc("task.queueSnapshot",
+                "{\"taskId\":\"" + taskId + "\"}")).path("payload").path("result");
+        assertEquals("[\"queue-one\",\"queue-two\"]", snapshot.path("pendingInputs").toString(),
+                "task.queueSnapshot 带两条待消费输入: " + snapshot);
 
         // 消费:队列逐条缩短(user.message 同拍广播),终态清空不残留
         fe.await(t -> t.contains("\"event\":\"task.updated\"")
@@ -618,14 +640,16 @@ class WorkerIntegrationTest {
     }
 
     @Test
-    void failedTaskInputReruns() {
+    void failedTaskRerunsWithContext() {
         String taskId = create("FAIL:模拟故障");
         syncUntil(taskId, e -> e.path("event").asString().equals("error"), "首轮失败");
         fe.await(t -> t.contains("\"event\":\"task.updated\"") && t.contains("\"status\":\"failed\""),
                 "终态 failed");
 
-        fe.send(pub(Channels.workerInput(k, workerProps.getWorkerId()), "task.input",
-                "{\"taskId\":\"" + taskId + "\",\"text\":\"再试一次\"}"));
+        // 终态 task.run{taskId} = 冷启动再运行(worker 级 task.input 通道已删除)
+        String resp = rpc("task.run", Json.write(Json.obj()
+                .put("taskId", taskId).put("input", "再试一次")));
+        assertTrue(resp.contains("rpc.ok"), resp);
         fe.await(t -> t.contains("\"event\":\"task.updated\"") && t.contains("\"status\":\"done\"")
                 && t.contains(taskId), "二次运行完成");
         List<JsonNode> events = sync(taskId, 0);
@@ -633,8 +657,8 @@ class WorkerIntegrationTest {
         assertEquals(2, names.stream().filter("user.message"::equals).count());
         JsonNode answer = events.stream()
                 .filter(e -> e.path("event").asString().equals("message")).findFirst().orElseThrow();
-        assertTrue(answer.path("payload").path("text").asString().contains("上下文2:"),
-                "失败任务续问同样携带历史: " + answer.path("payload").path("text").asString());
+        assertTrue(answer.path("payload").path("content").asString().contains("上下文2:"),
+                "失败任务续问同样携带历史: " + answer.path("payload").path("content").asString());
     }
 
     @Test
@@ -651,9 +675,9 @@ class WorkerIntegrationTest {
         assertFalse(Files.exists(dir), "目录整体删除(用户删除是唯一出口)");
         assertFalse(rpc("tasks.list", "{}").contains(taskId), "列表不再包含");
         assertFalse(Files.exists(dir), "目录已删(sync 语义由磁盘目录承载)");
-        // 删除后 input 不再触发运行(fire-and-forget,warn 丢弃)
-        fe.send(pub(Channels.workerInput(k, workerProps.getWorkerId()), "task.input",
-                "{\"taskId\":\"" + taskId + "\",\"text\":\"复活?\"}"));
+        // 删除后 task.run{taskId} 不再触发运行:任务不存在 → NOT_FOUND(目录不重建)
+        assertTrue(rpc("task.run", "{\"taskId\":\"" + taskId + "\",\"input\":\"复活?\"}")
+                .contains("NOT_FOUND"), "已删任务续跑被拒");
         sleep(800);
         assertFalse(Files.exists(dir), "已删任务不复活(目录不重建)");
     }
@@ -677,26 +701,31 @@ class WorkerIntegrationTest {
         assertTrue(info.contains("test-worker") && info.contains("\"hubConnected\":true"), info);
 
         String taskId = create("列表里的任务");
-        fe.await(t -> t.contains("\"event\":\"task.updated\"") && t.contains("\"status\":\"done\""),
-                "任务完成");
+        fe.await(t -> t.contains(taskId) && t.contains("\"event\":\"task.updated\"")
+                && t.contains("\"status\":\"done\""), "任务完成");
         String list = rpc("tasks.list", "{}");
         assertTrue(list.contains(taskId), list);
     }
 
     @Test
     void tasksListPaginationAndTaskIdsFilter() {
+        // 独立工作区:本用例断言 total/分页窗口的绝对条数,必须与同 class 其他用例留下的任务隔离
+        // (否则总条数随执行顺序漂移)。
+        java.nio.file.Path ws = TestCleanup.register(
+                java.nio.file.Path.of("target/test-ws-page-" + System.nanoTime()).toAbsolutePath().normalize());
         // 逐个创建并等终态(并发上限 2):保持磁盘时序递增,「最近活跃」排序可预期。
         int n = 13;
         List<String> ids = new ArrayList<>();
         for (int i = 0; i < n; i++) {
-            String id = create("分页任务 " + i);
+            String id = create("分页任务 " + i, null, ws.toString());
             ids.add(id);
-            fe.await(t -> t.contains("\"event\":\"task.updated\"") && t.contains("\"status\":\"done\"")
-                    && t.contains(id), "任务完成 " + i);
+            fe.await(t -> t.contains(id) && t.contains("\"event\":\"task.updated\"")
+                    && t.contains("\"status\":\"done\""), "任务完成 " + i);
         }
 
         // 第一页:最近 10 个,hasMore=true
-        String page1 = rpc("tasks.list", Json.write(Json.obj().put("limit", 10).put("offset", 0)));
+        String page1 = rpc("tasks.list", Json.write(Json.obj()
+                .put("workspace", ws.toString()).put("limit", 10).put("offset", 0)));
         JsonNode res1 = Json.parse(page1).path("payload").path("result");
         assertEquals(13, res1.path("total").asLong(), "total: " + page1);
         assertTrue(res1.path("hasMore").asBoolean(), "首页有更多: " + page1);
@@ -709,7 +738,8 @@ class WorkerIntegrationTest {
         assertTrue(page1Ids.containsAll(ids.subList(3, n)), "首页含最近 10 个: " + page1Ids);
 
         // 第二页:offset=10 续拉,只剩 3 个,hasMore=false,且与首页无重叠
-        String page2 = rpc("tasks.list", Json.write(Json.obj().put("limit", 10).put("offset", 10)));
+        String page2 = rpc("tasks.list", Json.write(Json.obj()
+                .put("workspace", ws.toString()).put("limit", 10).put("offset", 10)));
         JsonNode res2 = Json.parse(page2).path("payload").path("result");
         assertEquals(3, res2.path("tasks").size(), "第二页 3 条: " + page2);
         assertFalse(res2.path("hasMore").asBoolean(), "第二页拉完: " + page2);
@@ -725,6 +755,7 @@ class WorkerIntegrationTest {
         // 定向拉取(分页窗口外老任务 / ensureLoaded 兜底):taskIds 过滤命中
         String targeted = rpc("tasks.list", Json.write(Json.obj()
                 .set("taskIds", Json.arr().add(ids.get(0)))
+                .put("workspace", ws.toString())
                 .put("limit", 1)));
         JsonNode res3 = Json.parse(targeted).path("payload").path("result");
         assertEquals(1, res3.path("tasks").size(), "定向拉取 1 条: " + targeted);
@@ -752,9 +783,9 @@ class WorkerIntegrationTest {
         String taskId = createWithConfig("你好,容灾", "pool-main");
         JsonNode msg = syncUntil(taskId,
                 e -> "message".equals(e.path("event").asString())
-                        && e.path("payload").path("text").asString().contains("回声:"),
+                        && e.path("payload").path("content").asString().contains("回声:"),
                 "容灾后模型B 应答");
-        assertTrue(msg.path("payload").path("text").asString().contains("你好,容灾"),
+        assertTrue(msg.path("payload").path("content").asString().contains("你好,容灾"),
                 "回声带原文: " + msg);
         // 旧任务级开关已移除:meta 不应再有 modelPoolFailover 字段
         assertFalse(readMeta(taskId).has("modelPoolFailover"),
@@ -768,10 +799,10 @@ class WorkerIntegrationTest {
                 .put("workspace", WS.toString())));
         assertTrue(again.contains("rpc.ok"), "再运行失败: " + again);
         JsonNode msg2 = syncUntil(taskId, e -> "message".equals(e.path("event").asString())
-                        && e.path("payload").path("text").asString().contains("回声:")
-                        && e.path("payload").path("text").asString().contains("第二问,容灾自动保持"),
+                        && e.path("payload").path("content").asString().contains("回声:")
+                        && e.path("payload").path("content").asString().contains("第二问,容灾自动保持"),
                 "第二轮容灾自动保持应答");
-        assertTrue(msg2.path("payload").path("text").asString().contains("第二问,容灾自动保持"),
+        assertTrue(msg2.path("payload").path("content").asString().contains("第二问,容灾自动保持"),
                 "第二轮回声带原文: " + msg2);
     }
 
@@ -787,12 +818,12 @@ class WorkerIntegrationTest {
         fe.await(t -> t.contains("\"event\":\"task.updated\"") && t.contains("\"status\":\"failed\"")
                 && t.contains(taskId), "网络错误任务失败");
         JsonNode err = syncUntil(taskId, e -> "error".equals(e.path("event").asString()), "网络错误事件");
-        assertTrue(err.path("payload").path("message").asString().contains("模拟网络中断"),
+        assertTrue(err.path("payload").path("content").asString().contains("模拟网络中断"),
                 "网络异常原样上抛不切换: " + err);
         List<JsonNode> events = sync(taskId, 0);
         assertTrue(events.stream()
                         .noneMatch(e -> "message".equals(e.path("event").asString())
-                                && e.path("payload").path("text").asString().contains("回声:")),
+                                && e.path("payload").path("content").asString().contains("回声:")),
                 "网络错误不得切换到池内模型(不得出现回声)");
     }
 

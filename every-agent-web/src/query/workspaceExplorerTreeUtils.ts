@@ -1,7 +1,8 @@
+import { isAbsoluteBusinessPath, WORKSPACE_ROOT } from '@/platform/fs/pathUtils'
 import type { WorkspaceExplorerNode } from '@/types/workspaceExplorer'
 
 /**
- * 懒加载资源树的纯函数工具:按路径查找节点、immutable 回填目录子节点。
+ * 懒加载资源树的纯函数工具:按路径查找节点、immutable 回填目录子节点、选中集合清理。
  * 供资源管理器面板(OpenFilesSidebarPanel)与路径选择器(WorkspacePathPicker)共享。
  */
 
@@ -59,4 +60,47 @@ export function mergeExplorerChildrenPreservingLoaded(
     }
     return fresh
   })
+}
+
+/**
+ * 从选中集合移除「被删路径本身及其子树」的 key,其余选中项保持。
+ * 无变化时返回原集合引用(调用方据此免去无谓的 state 更新)。
+ */
+export function removePathsFromSelection(selected: Set<string>, removedPaths: string[]): Set<string> {
+  if (selected.size === 0 || removedPaths.length === 0) return selected
+  const next = new Set(selected)
+  for (const path of selected) {
+    if (removedPaths.some((removed) => path === removed || path.startsWith(`${removed}/`))) {
+      next.delete(path)
+    }
+  }
+  return next.size === selected.size ? selected : next
+}
+
+/**
+ * 目录刷新后清理选中集合里已不存在的 key(「清理树选中的 key」):
+ * - 只清理「落在被刷新目录范围内」的工作区路径——范围外的选中项未被本次刷新影响,
+ *   且可能位于未加载子树里(按树存在性判定会把它们误删);
+ * - 工作区外绝对路径(业务形态 `/C:/...` 或 `//home/...`)本就不在树中,同样保留;
+ * - dirPath 为业务绝对路径,`WORKSPACE_ROOT`('/')表示工作区根:覆盖整棵树第一层及其子树。
+ * 无变化时返回原集合引用。
+ */
+export function pruneSelectionUnderDirectory(
+  dirPath: string,
+  tree: WorkspaceExplorerNode[],
+  selected: Set<string>,
+): Set<string> {
+  if (selected.size === 0) return selected
+  const isRoot = dirPath === WORKSPACE_ROOT
+  let changed = false
+  const next = new Set<string>()
+  for (const path of selected) {
+    const inScope = !isAbsoluteBusinessPath(path) && (isRoot || path.startsWith(`${dirPath}/`))
+    if (inScope && !findExplorerNode(tree, path)) {
+      changed = true
+      continue
+    }
+    next.add(path)
+  }
+  return changed ? next : selected
 }

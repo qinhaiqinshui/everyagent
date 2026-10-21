@@ -315,6 +315,85 @@ export function hasActiveTextSelection(): boolean {
   return !!selection && !selection.isCollapsed && selection.toString().length > 0
 }
 
+// ─── 状态图标 / 耗时（复制自 @/components/task/toolViews/helpers） ─────────
+
+/** 调用行运行态（与宿主 ToolCallState 对齐；状态图标 `nagent-tool-state--*` 的类名域）。 */
+export type ToolCallState = 'queued' | 'running' | 'done' | 'error' | 'interrupted' | 'skipped'
+
+/**
+ * 紧凑耗时文案：亚秒级(<1s)精确到毫秒、不四舍五入、去无意义尾零
+ * （101→0.101s、120→0.12s、0→0s）；1s~10s 一位小数；10s~60s 整秒；
+ * 分钟级 m:ss 补零；非法值返回空串。
+ */
+export function formatToolDuration(ms: number | undefined): string {
+  if (ms == null || !Number.isFinite(ms) || ms < 0) return ''
+  if (ms < 1000) {
+    // ms 是整数毫秒，真值即最多 3 位小数的有限小数：toFixed(3) 取精确 3 位
+    // （无第 4 位可舍入），再经 Number 归一化去掉无意义尾零。
+    return `${Number((ms / 1000).toFixed(3))}s`
+  }
+  const seconds = ms / 1000
+  if (seconds < 10) return `${seconds.toFixed(1)}s`
+  if (seconds < 60) return `${Math.floor(seconds)}s`
+  const minutes = Math.floor(seconds / 60)
+  const rest = Math.floor(seconds % 60)
+  return rest > 0 ? `${minutes}m${String(rest).padStart(2, '0')}s` : `${minutes}m`
+}
+
+// ─── 慢调用耗时显示门槛与色阶（与宿主 toolViews/helpers 同口径） ───────────
+
+/** 慢调用阈值(10s):同一阈值承担两个职责——
+ *  ① 摘要行耗时数字的显示门槛(≥10s 才显示:快调用的耗时只是噪音;
+ *     运行中读秒逻辑不动,数字过 10s 自然浮现,与色阶起色同步);
+ *  ② 慢调用色阶起色点(见 toolDurationTint)。
+ *  120s(2min)封顶,再慢不再加深。 */
+const SLOW_TINT_START_MS = 10_000
+const SLOW_TINT_MAX_MS = 120_000
+/** 起色百分比 / 封顶百分比(color-mix 里宿主 --tool-slow-red 的占比)。 */
+const SLOW_TINT_MIN_PCT = 20
+const SLOW_TINT_MAX_PCT = 100
+
+/** 详情 → 摘要行耗时文本:仅慢调用(≥SLOW_TINT_START_MS,与色阶起色同一阈值)显示;
+ *  非法/缺失/未过阈值返回空串,视图按空串条件渲染(不渲染 <span>)。 */
+export function toolDurationText(detail: { durationMs?: number }): string {
+  const ms = detail.durationMs
+  if (ms == null || !Number.isFinite(ms) || ms < SLOW_TINT_START_MS) return ''
+  return formatToolDuration(ms)
+}
+
+/** 耗时 → 颜色深浅百分比(0~100),供宿主 CSS 的
+ *  `color-mix(in srgb, --tool-slow-red P%, --text-muted)` 插值。
+ *  <10s 返回 0(纯 muted);10s~120s 线性升到封顶;≥120s 恒定 100%
+ *  (封顶色为饱和度 100% 正红 token,已"红得无法再红")。 */
+export function toolDurationTint(ms: number | undefined): number {
+  if (ms == null || !Number.isFinite(ms) || ms < SLOW_TINT_START_MS) return 0
+  const ratio = (ms - SLOW_TINT_START_MS) / (SLOW_TINT_MAX_MS - SLOW_TINT_START_MS)
+  const clamped = Math.min(1, Math.max(0, ratio))
+  return Math.round(SLOW_TINT_MIN_PCT + clamped * (SLOW_TINT_MAX_PCT - SLOW_TINT_MIN_PCT))
+}
+
+/** 详情 → 耗时内联样式:把 tint 百分比写成 `--tool-dur-tint` 自定义属性,
+ *  颜色插值留在宿主样式层(.nagent-tool__duration),插件只喂数值。 */
+export function toolDurationTintStyle(detail: { durationMs?: number }): Record<string, string> {
+  return { '--tool-dur-tint': `${toolDurationTint(detail.durationMs)}%` }
+}
+
+/**
+ * 详情 → 状态图标 class（`nagent-tool-state--*` 颜色/动效单一来源）：
+ * 优先 detail.rowState（宿主批壳/单调用直渲灌入）；缺省时按 status 推导
+ * （孤儿兜底：success→done / error→error；status 空 = 结果未到，无状态色）。
+ */
+export function toolStateClass(detail: {
+  rowState?: ToolCallState
+  status?: string
+}): string {
+  const state: ToolCallState | null = detail.rowState
+    ?? (detail.status === 'error'
+      ? 'error'
+      : detail.status === 'success' ? 'done' : null)
+  return state ? `nagent-tool-state--${state}` : ''
+}
+
 // ─── 路径工具（复制自 @/platform/fs/pathUtils） ───────────────────────────
 
 const WORKSPACE_ROOT = '/'

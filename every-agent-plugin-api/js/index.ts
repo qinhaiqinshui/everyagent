@@ -330,6 +330,14 @@ export interface PluginToolCallDetail {
   arguments?: Record<string, unknown> | null
   /** 调用结果（成功且可解析为 JSON 时为对象，否则为原始文本）。 */
   result?: unknown
+  /**
+   * 调用行运行态（状态图标 `nagent-tool-state--*` 类的唯一来源）：宿主由
+   * 「结果 / 瞬态 tool.started / 批中断」三信号推导（messageView.rowStateOf）；
+   * 孤儿结果等缺省场景由视图按 status 回退推导（success→done / error→error）。
+   */
+  rowState?: 'queued' | 'running' | 'done' | 'error' | 'interrupted' | 'skipped'
+  /** 调用耗时（ms）：结果载荷的权威 durationMs；运行中由宿主灌入实时读秒值。 */
+  durationMs?: number
 }
 
 /** 插件工具视图组件的 props（与核心 ToolViewProps 最小化对齐）。 */
@@ -440,7 +448,7 @@ export interface UiRoundTailPanelDefinition {
 export interface UserMessageActionProps {
   /** 当前任务 ID。 */
   taskId?: string
-  /** 用户消息 seq（字符串雪花 ID，从 messageId `m-<seq>` 提取）。 */
+  /** 用户消息 seq（字符串雪花 ID，= 线程项 item.seq，seq 即 id）。 */
   seq: string
   /** 消息纯文本内容。 */
   content: string
@@ -536,6 +544,10 @@ export interface TraceTypeDefinition<R extends PluginTraceRecord = PluginTraceRe
 export interface OutputBlockContext {
   taskId?: string
   messageId?: string
+  /** 标签未闭合且消息仍在流式输出中（AI 正在生成，可做渐进渲染）。 */
+  streaming?: boolean
+  /** 标签未闭合且消息已定稿（输出中断/截断，内容不完整，不应再显示「生成中」类提示）。 */
+  truncated?: boolean
 }
 
 /** 输出块渲染处理器。 */
@@ -808,6 +820,53 @@ export interface SearchTypeDefinition {
   ResultView?: ComponentType<SearchTypeResultViewProps>
 }
 
+// ─── 设置页设置段 ─────────────────────────────────────────────────────────
+
+/**
+ * 设置页设置段定义（由 `ui.settings_sections` 扩展点产出）。
+ *
+ * 宿主设置页把所有已注册段按 `order` 升序渲染在内置段之后、「关于」段之前，
+ * 每段由宿主包一层与内置段同款的 `<section>`（标题取 `title`）。`Component`
+ * 无 props，数据请用 `ctx.storage`（本地）或 `ctx.sdk.rpc`（后端）自持。
+ */
+export interface UiSettingsSectionDefinition {
+  /** 唯一 id（渲染 key）。 */
+  id: string
+  /** 段标题（渲染为 `<h3>`）。 */
+  title: string
+  /** float 升序（缺省 100；同值按注册先后），仅用于插件段之间的排序。 */
+  order?: number
+  /** 段内容组件（无 props）。 */
+  Component: ComponentType
+}
+
+// ─── 全局颜色主题 ─────────────────────────────────────────────────────────
+
+/**
+ * 全局颜色主题定义（由 `ui.themes` 扩展点产出）。
+ *
+ * 对标 VSCode `contributes.themes`：**只含颜色**——字体族 / 字号是独立的编辑器设置
+ * （宿主 `pref` 的 `editor.fontFamily` / `editor.fontSize`），不属主题。
+ *
+ * 继承模型：`type` 选定基底（内建深色 = `:root`、浅色 = `[data-theme='light']`
+ * 的整批 token），`colors` 逐项以行内样式覆盖（优先级高于基底）。故主题可覆盖
+ * 全部颜色 token、只覆盖少数几个（其余继承基底）、或完全留空（纯基底）。
+ */
+export interface ThemeDefinition {
+  /** 唯一 id；插件主题建议带插件前缀（如 `novel-reader.sepia`）。 */
+  id: string
+  /** 用户可见名称。 */
+  name: string
+  /** 基底：决定 `data-theme` 属性、antd 与终端明暗。 */
+  type: 'dark' | 'light'
+  /**
+   * 可选：覆盖的颜色 token 映射（键 = 宿主 CSS 变量名，含 `--` 前缀；值 = 合法
+   * 颜色表达式，可含 `var()` / `color-mix()`）。未列出的 token 继承 `type` 基底。
+   * 可覆盖白名单见插件指南 `docs/plugin-guide/web/ui-extensions.md` §19.4。
+   */
+  colors?: Record<string, string>
+}
+
 // ─── UI 注册表 ────────────────────────────────────────────────────────────
 
 export interface UiRegistry {
@@ -830,6 +889,10 @@ export interface UiRegistry {
   registerEditorContextMenuAction(def: UiEditorContextMenuActionDefinition): Disposable
   /** 注册胶囊激活动作（由 `ui.composer_chip_actions` 扩展点产出）。 */
   registerComposerChipAction(def: ComposerChipActionDefinition): Disposable
+  /** 注册设置页设置段（由 `ui.settings_sections` 扩展点产出）。 */
+  registerSettingsSection(def: UiSettingsSectionDefinition): Disposable
+  /** 注册全局颜色主题（由 `ui.themes` 扩展点产出）。 */
+  registerTheme(def: ThemeDefinition): Disposable
   /**
    * 查询当前激活的工作区标签（同步读宿主壳层镜像）；无激活标签时返回 null。
    * 变更通知请配 `workspace-tab-activated` / `workspace-tab-closed` 领域事件。

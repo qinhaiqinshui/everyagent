@@ -3,6 +3,7 @@ package dev.everyagent.worker.plugin.loader;
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.plugin.api.EveryAgentPlugin;
+import dev.everyagent.plugin.api.skill.SkillMaterializer;
 import dev.everyagent.worker.plugin.PluginConfigImpl;
 import dev.everyagent.worker.plugin.WorkerPluginContextImpl;
 import dev.everyagent.plugin.api.WorkerServices;
@@ -303,6 +304,21 @@ public class PluginLoader {
                     pluginDir, source, false, "已禁用(未激活)", entryClass, webMain,
                     icon, repository, license, homepage, categories));
             return;
+        }
+
+        // 物化技能包(plugin.json 声明 skills 目录时;纯 web 插件也能带 skill)
+        String skillsDir = json.path("skills").asString("");
+        if (!skillsDir.isBlank()) {
+            try {
+                Path pluginSkillDir = pluginDir.resolve(skillsDir);
+                List<String> installed = SkillMaterializer.materializeFromDirectory(
+                        props.resolveSkillsDir(), pluginSkillDir);
+                if (!installed.isEmpty()) {
+                    log.info("[plugins] 插件 {} 物化技能包: {}", pluginId, installed);
+                }
+            } catch (IOException e) {
+                log.warn("[plugins] 插件 {} 技能包物化失败(不阻断激活): {}", pluginId, e.getMessage(), e);
+            }
         }
 
         // 解析 contributes.config 默认值 → PluginConfig

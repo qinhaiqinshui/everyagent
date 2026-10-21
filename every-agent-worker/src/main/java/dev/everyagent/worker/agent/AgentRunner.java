@@ -20,8 +20,8 @@ import java.util.concurrent.TimeUnit;
  * 本类只负责"订阅流式 + 中断/dispose + 终态标记"，不再手写 while 循环/聚合。
  *
  * <p>解耦后：不依赖 {@code AgentClientFactory}，直接使用 {@link AgentEntity#chatClient}
- * （由 {@link AgentBuilder} 装配注入）。per-run 的 {@code properties} 通过
- * {@link InterceptingToolCallingManager} 构造参数传递（不再使用 ThreadLocal）。
+ * （由 {@link AgentBuilder} 装配注入）。per-run 上下文经 prompt options 的框架
+ * {@code ToolContext} 下行(见 {@link #run},不使用 ThreadLocal)。
  *
  * <p>纪律(AGENTS.md §13):agent 执行必须走 ChatClient + Advisor 生态,禁止手搓工具循环。
  */
@@ -39,9 +39,16 @@ public class AgentRunner {
             OpenAiChatOptions.Builder options = a.options.mutate();
             if (!a.tools.isEmpty()) {
                 options.toolCallbacks(a.tools.stream()
-                        .map(tc -> new SchemaStrippedToolCallback(tc, a.toolOutcomes))
+                        .map(SchemaStrippedToolCallback::new)
                         .toArray(ToolCallback[]::new));
             }
+            // per-run 四件套经框架 ToolContext map 下行(架构 §7.14.3):共享单例
+            // PerCallToolCallingManager 的切口由此取出 agentId(链节点 MAIN/SUB_AGENT 归属判定,
+            // file-change 一阶段记账消费)/agent 级 emitter(agentId 包装,链上事件自动带归属
+            // agentId)/ExecContext/ToolOutcomeLog 构造 per-call 链 ctx;框架 buildToolContext
+            // 原样透传,工具回调只按自己的键取值不受影响。
+            options.toolContext(PerCallToolCallingManager.RUN_CONTEXT_KEY,
+                    new PerCallToolCallingManager.RunContext(a.agentId, a.emitter, a.execution, a.toolOutcomes));
             Prompt prompt = new Prompt(new ArrayList<>(a.conversation), options.build());
 
             CountDownLatch done = new CountDownLatch(1);

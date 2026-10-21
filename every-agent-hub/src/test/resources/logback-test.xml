@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  测试专用 logback 配置(查找顺序 logback-test.xml 优先于 logback-spring.xml,
+  Spring Boot 测试上下文同样优先探测 test classpath 的本文件):
+  - 只写控制台,不注册任何 FILE appender —— 测试进程与正式日志彻底隔离,
+    避免测试把日志写进 ~/.everyagent/logs/hub.log(与 worker 侧同款隔离)。
+  - 级别默认 INFO;单测排障需要更细粒度时传
+    -Dlogging.level.dev.everyagent.hub=DEBUG 之类临时开启,不要改回写文件。
+-->
+<configuration>
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{HH:mm:ss.SSS} %-5level [%thread] %logger{24} - %msg%n</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+    </appender>
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+    </root>
+</configuration>

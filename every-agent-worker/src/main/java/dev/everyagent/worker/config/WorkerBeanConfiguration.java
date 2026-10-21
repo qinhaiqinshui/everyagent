@@ -1,6 +1,9 @@
 package dev.everyagent.worker.config;
 
 import dev.everyagent.plugin.api.spi.SandboxBackend.Access;
+import dev.everyagent.worker.agent.PerCallToolCallingManager;
+import dev.everyagent.worker.agent.ToolCallLimits;
+import dev.everyagent.worker.agent.ToolEventInterceptor;
 import dev.everyagent.worker.modules.SkillExposureStore;
 import dev.everyagent.worker.os.SandboxPathRegistry;
 import dev.everyagent.worker.plugin.adapters.SkillAdvisorProvider;
@@ -9,16 +12,21 @@ import dev.everyagent.worker.skill.SkillCatalog;
 import dev.everyagent.plugin.api.exception.AgentCancelledException;
 import dev.everyagent.plugin.api.shell.ExecResults;
 import dev.everyagent.worker.tools.MissingToolCallbackResolver;
+import org.springframework.ai.model.tool.ToolCallLimitBehavior;
 import org.springframework.ai.model.tool.ToolCallingManager;
 import org.springframework.ai.tool.execution.ToolExecutionException;
 import org.springframework.ai.tool.execution.ToolExecutionExceptionProcessor;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import java.util.Map;
+import java.util.Set;
+
 /**
  * Worker 核心 Bean 装配（从 AgentClientFactory 迁入）。
  *
- * <p>共享无状态 ToolCallingManager 单例 + SkillAdvisor 的 per-run 装配入口
+ * <p>共享无状态 {@link PerCallToolCallingManager} 单例(照抄 DefaultToolCallingManager +
+ * per-call 拦截链切口,§7.14.3)+ SkillAdvisor 的 per-run 装配入口
  * （SkillAdvisorProvider）的 @Bean 定义。
  */
 @Configuration
@@ -26,6 +34,8 @@ public class WorkerBeanConfiguration {
 
     /**
      * 工具执行异常处理器：取消类异常穿透框架向上抛（中断 agent 线程），其余异常转模型可读文本。
+     * 失败文本统一携带 {@link ExecResults#TOOL_FAILURE_PREFIX} 前缀——per-call 链上行
+     * {@code tool.result} 的 data.status 前缀判定约定(§5.3)。
      */
     private static final ToolExecutionExceptionProcessor CANCELLING_PROCESSOR = ex -> {
         Throwable cause = ex.getCause();
@@ -43,19 +53,22 @@ public class WorkerBeanConfiguration {
     };
 
     /**
-     * 基础工具调用管理器（无拦截器包装）。
-     * <p>per-run 的 InterceptingToolCallingManager 由 AgentBuilder 在
-     * {@code build()} 时新建，持 interceptorRegistry + properties，状态隔离。
+     * 基础工具调用管理器:per-call 化的照抄实现(PerCallToolCallingManager,§7.14.3)。
+     * <p>原 {@code ToolCallingManager.builder()} 四槽位显式传构造,行为逐位保真:
+     * 异常处理器(CANCELLING_PROCESSOR)/回调解析器(MissingToolCallbackResolver 兜底,
+     * resolutionFallback=true)/limits(maxCallsPerTool=200, maxTotalToolCalls=500,
+     * behavior=THROW 与 builder 缺省一致)/resolutionFallbackEnabled。
+     * per-call 切口的拦截链经 {@link ToolExecutionInterceptorRegistry} 查得;
+     * 内置发射节点(tool.started/tool.result)在此注册。per-run 上下文由 AgentRunner
+     * 经 prompt options 的 toolContext 下行,不依赖 ThreadLocal。
      */
     @Bean
-    public ToolCallingManager toolCallingManager() {
-        return ToolCallingManager.builder()
-                .toolExecutionExceptionProcessor(CANCELLING_PROCESSOR)
-                .toolCallbackResolver(new MissingToolCallbackResolver())
-                .resolutionFallbackEnabled(true)
-                .maxCallsPerTool(200)
-                .maxTotalToolCalls(500)
-                .build();
+    public ToolCallingManager toolCallingManager(ToolExecutionInterceptorRegistry interceptorRegistry) {
+        interceptorRegistry.register(new ToolEventInterceptor());
+        ToolCallLimits limits = new ToolCallLimits(200, Map.of(), Set.of(), 500,
+                ToolCallLimitBehavior.THROW);
+        return new PerCallToolCallingManager(new MissingToolCallbackResolver(),
+                CANCELLING_PROCESSOR, limits, true, interceptorRegistry);
     }
 
     /**

@@ -4,6 +4,10 @@ server:
 spring:
   application:
     name: every-agent-hub
+  # banner 走 stdout:desktop 重定向下会追加进永不轮转的 hub.out.log,默认关闭;
+  # dev profile 置 console 恢复 IDE 启动横幅(与 console-log-threshold 同理)
+  main:
+    banner-mode: "off"
   # 用户配置覆盖:存在 ~/.everyagent/application-hub.yaml 则覆盖本文件默认值(后加载、优先级更高);
   # optional: 前缀 = 文件不存在自动忽略,无自定义则零配置文件(hub 不感知部署方式)。
   # 注意必须用 spring.config.import 而非 additional-location:后者只在定位配置文件之前从
@@ -24,6 +28,12 @@ hub:
   ping-interval-ms: 15000          # WS 协议层 ping 间隔
   stale-read-ms: 0                 # >0 时启用"无入站流量判死"(需 pong 可观测,默认关)
   hello-rate-per-minute: 60        # 单 IP hello 限速(防 key 枚举)
+  # 控制台(CONSOLE appender)日志门槛:OFF=完全静默,本文件即「打包默认」。desktop 把 hub 的
+  # stdout/stderr 重定向进 ~/.everyagent/logs/hub.out.log 且永不轮转,CONSOLE 开着会与
+  # hub.log 双份落盘、无限膨胀(worker 侧同款问题);正式日志走 FILE(按日+按大小双维滚动,
+  # 保留 7 天,见 logback-spring.xml)。IDE/开发运行由 application-dev.yml 置 INFO 恢复;
+  # 打包环境临时排障:-Dhub.console-log-threshold=INFO
+  console-log-threshold: OFF
 
 logging:
   level:

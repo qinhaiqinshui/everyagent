@@ -141,6 +141,20 @@ public final class TaskEntryCreateNode implements TaskLifecycleNode {
         var rpcCtx = ctx.rpcContext();
         RpcContext rc = rpcCtx instanceof RpcContext r ? r : null;
 
+        // 指定 taskId 却内存/磁盘皆无 → NOT_FOUND(不落入新建路径)。
+        // 调用方带 taskId 只可能是「运行中入队 / 终态续跑」两种既有任务语义(task.run 合一入口,
+        // 新建一律不带 taskId);此处若继续下行,新建路径靠 RPC 的 workspace 参数定归属,
+        // 而续跑调用不带 workspace → dirOf(taskId, null) 直接 NPE,且 RPC 永不应答(前端挂死)。
+        // 旧 runExistingTask 的 NOT_FOUND 纪律在此恢复(d325c504 洋葱链重构时丢失)。
+        if (rc != null) {
+            String requestedId = rc.optStrParam("taskId", "");
+            if (requestedId != null && !requestedId.isEmpty()) {
+                rc.err(Rpc.ERR_NOT_FOUND, "任务不存在: " + requestedId);
+                log.debug("[entry] taskentry.create 指定 taskId 不存在 task={} → NOT_FOUND", requestedId);
+                return null;
+            }
+        }
+
         // 检查 tasks 中是否有同 taskId（已处理 above），到此说明是全新任务
         if (tasks.containsKey(taskId)) {
             // 被上面漏掉的终态（极小概率），按 rerun 走认领

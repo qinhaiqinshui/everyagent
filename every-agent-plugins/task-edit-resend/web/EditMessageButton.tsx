@@ -1,9 +1,9 @@
 /**
  * 用户消息编辑按钮（从核心 AgentMessageThread.tsx 迁入 task-edit-resend 插件）。
  *
- * 经 `ui.user_message_actions` 扩展点渲染在每条用户消息气泡旁：
- * - 桌面端：hover 消息区域时显示（CSS 控制）；
- * - 移动端：点击用户消息时显示（JS 切换 revealed 态）；
+ * 经 `ui.user_message_actions` 扩展点渲染在每条用户消息气泡旁的动作区容器
+ * （.nagent-msg__actions）内；按钮显隐由该容器统一控制（桌面端 hover 消息区显示；
+ * 移动端消息获得焦点显示、失去焦点隐藏），本组件只管自身交互：
  * - 点击编辑按钮 → 经核心草稿桥（ComposerDraftBridgeContext）把原消息内容追加到输入框末尾，
  *   并记录编辑目标 seq（useEditResend store）；再点 → 取消编辑（不清输入框）；
  * - "重新发送会删除此消息之后的所有 AI 回复和过程内容"提示仅在进入编辑模式后才显示；
@@ -20,22 +20,6 @@ export default function EditMessageButton({ taskId, seq, content, rawContent }: 
   // 宿主显式提供编辑上下文（旧挂载方式）时优先；缺省(null)走插件自身 store。
   const override = React.useContext(UserMessageEditContext)
   const { editTarget, startEdit, cancelEdit } = useEditResend(taskId)
-  // 移动端：点击用户消息时切换 revealed 态来显示/隐藏编辑按钮。
-  const [revealed, setRevealed] = React.useState(false)
-  const buttonRef = React.useRef<HTMLButtonElement | null>(null)
-  React.useEffect(() => {
-    const button = buttonRef.current
-    const container = button?.closest('.nagent-msg--user')
-    if (!button || !container) return
-    const onContainerClick = () => setRevealed((prev) => !prev)
-    const onContextMenu = (e: Event) => e.preventDefault()
-    container.addEventListener('click', onContainerClick)
-    container.addEventListener('contextmenu', onContextMenu)
-    return () => {
-      container.removeEventListener('click', onContainerClick)
-      container.removeEventListener('contextmenu', onContextMenu)
-    }
-  }, [])
 
   if (!taskId) return null
 
@@ -67,9 +51,8 @@ export default function EditMessageButton({ taskId, seq, content, rawContent }: 
 
   return (
     <button
-      ref={buttonRef}
       type="button"
-      className={`nagent-msg__edit-btn${isEditing ? ' nagent-msg__edit-btn--active' : ''}${revealed ? ' nagent-msg__edit-btn--revealed' : ''}`}
+      className={`nagent-msg__edit-btn${isEditing ? ' nagent-msg__edit-btn--active' : ''}`}
       title={isEditing ? '取消编辑' : '编辑并重新发送'}
       aria-label={isEditing ? '取消编辑' : '编辑并重新发送'}
       onClick={handleClick}

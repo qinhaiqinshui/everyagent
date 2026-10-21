@@ -4,30 +4,29 @@ import dev.everyagent.plugin.api.WorkerServices;
 import dev.everyagent.plugin.api.spi.ToolExecutionChain;
 import dev.everyagent.plugin.api.spi.ToolExecutionContext;
 import dev.everyagent.plugin.api.spi.ToolExecutionInterceptor;
-import org.springframework.ai.chat.messages.AssistantMessage;
-import org.springframework.ai.chat.messages.Message;
-import org.springframework.ai.chat.messages.ToolResponseMessage;
-import org.springframework.ai.chat.model.ChatResponse;
-import org.springframework.ai.chat.model.Generation;
-import org.springframework.ai.chat.prompt.Prompt;
-import org.springframework.ai.model.tool.ToolExecutionResult;
 import org.springframework.ai.util.JacksonUtils;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
-import java.util.ArrayList;
-import java.util.List;
-
 /**
- * 无人值守工具执行拦截器:任务级开关开启时拦截本轮 {@code ask_user} 调用并自动作答。
+ * 无人值守工具执行拦截器:任务级开关开启时,对 {@code ask_user} 调用<b>链下行合成</b>
+ * 自动作答(架构 §7.14.3 方案 B 切口)。
  *
  * <p>开关判定按任务级 {@code unattended.mode} slash token(见 {@link UnattendedToken#KIND})
  * —— 经 {@link WorkerServices#slashTokens()} 以磁盘为准查询,不再读任务 {@code metadata} 副本。
- * 命中且本轮为纯 {@code ask_user} 轮时,合成「题干：首选项」作答文本短路返回;否则放行。
+ *
+ * <p><b>per-call 合成</b>:逐调用判定——当前调用是 {@code ask_user} 且无人值守开启时
+ * {@code ctx.synthesize(「题干:首选项」)} + 照常 {@code next.proceed}(链尾见哨兵即跳过
+ * observation 与真实提问,合成串沿框架 ToolResponse 构造路径流经全部上行节点——
+ * secret-redaction 照常脱敏、发射点照常发 tool.result/start 计时)。<b>混合轮天然正确</b>:
+ * 同批下发的其他工具调用不走合成分支,照常真实执行;无历史轮整批短路的手工
+ * conversationHistory 构造(原批级实现已删)。
  */
 public class UnattendedToolInterceptor implements ToolExecutionInterceptor {
 
     private static final ObjectMapper MAPPER = JacksonUtils.getDefaultJsonMapper();
+
+    private static final String ASK_USER = "ask_user";
 
     private final WorkerServices services;
 
@@ -42,54 +41,17 @@ public class UnattendedToolInterceptor implements ToolExecutionInterceptor {
     public float order() { return 100f; }
 
     @Override
-    public ToolExecutionResult invoke(ToolExecutionContext ctx, ToolExecutionChain next) throws Exception {
+    public String invoke(ToolExecutionContext ctx, ToolExecutionChain next) throws Exception {
         // 开关真相源 = 任务级 unattended.mode token(磁盘为准,运行中/终态/重启一致)
         if (services == null || !services.slashTokens().hasKind(ctx.subjectId(), UnattendedToken.KIND)) {
-            return next.proceed(ctx); // 不是无人值守模式，放行
+            return next.proceed(ctx); // 不是无人值守模式,放行
         }
-        Prompt prompt = ctx.prompt();
-        ChatResponse chatResponse = ctx.chatResponse();
-        List<AssistantMessage.ToolCall> toolCalls = ctx.toolCalls();
-        // 检查本轮是否含 ask_user 调用
-        List<AssistantMessage.ToolCall> askUserCalls = toolCalls.stream()
-                .filter(tc -> "ask_user".equals(tc.name()))
-                .toList();
-        if (askUserCalls.isEmpty()) {
-            return next.proceed(ctx); // 本轮无 ask_user 调用，放行
+        if (ctx.toolCall() == null || !ASK_USER.equals(ctx.toolCall().name())) {
+            return next.proceed(ctx); // 当前调用不是 ask_user,放行(混合轮:其他工具真执行)
         }
-        // 找到 assistant 消息
-        AssistantMessage assistant = chatResponse.getResults().stream()
-                .filter(g -> g.getOutput() != null && g.getOutput().hasToolCalls())
-                .map(Generation::getOutput)
-                .findFirst()
-                .orElse(null);
-        if (assistant == null) {
-            return next.proceed(ctx);
-        }
-        // 为每个 ask_user 调用合成自动回答
-        List<ToolResponseMessage.ToolResponse> responses = new ArrayList<>();
-        for (AssistantMessage.ToolCall tc : toolCalls) {
-            if ("ask_user".equals(tc.name())) {
-                String autoAnswer = autoAnswer(tc.arguments());
-                responses.add(new ToolResponseMessage.ToolResponse(tc.id(), tc.name(), autoAnswer));
-            }
-            // 非 ask_user 的工具调用不在拦截器处理——如果本轮混合了 ask_user 和其他工具，
-            // 简单方案是只合成 ask_user 的结果，其他工具需真实执行。
-            // 但 ToolExecutionResult 是整轮的，无法部分短路。
-            // 最简单方案：如果本轮含 ask_user 且有其他工具，不拦截（放行让真实执行）。
-        }
-        // 如果本轮只有 ask_user 调用（纯 ask_user 轮），短路返回
-        if (responses.size() == toolCalls.size()) {
-            ToolResponseMessage msg = ToolResponseMessage.builder().responses(responses).build();
-            List<Message> history = new ArrayList<>(prompt.getInstructions());
-            history.add(assistant);
-            history.add(msg);
-            return ToolExecutionResult.builder()
-                    .conversationHistory(history)
-                    .returnDirect(false)
-                    .build();
-        }
-        // 混合轮（ask_user + 其他工具）：放行让真实执行
+        // 链下行合成:哨兵串走框架 ToolResponse 构造路径(不可终止批,循环继续推进)
+        String answer = autoAnswer(ctx.toolCall().arguments());
+        ctx.synthesize(answer);
         return next.proceed(ctx);
     }
 
@@ -100,7 +62,7 @@ public class UnattendedToolInterceptor implements ToolExecutionInterceptor {
             if (!questions.isArray() || questions.isEmpty()) {
                 return "未提供任何问题,跳过提问。";
             }
-            List<String> lines = new ArrayList<>();
+            java.util.List<String> lines = new java.util.ArrayList<>();
             for (JsonNode q : questions) {
                 String question = textOrEmpty(q.path("question"));
                 JsonNode options = q.path("options");

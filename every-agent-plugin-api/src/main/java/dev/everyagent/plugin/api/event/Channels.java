@@ -21,7 +21,9 @@ public final class Channels {
         return "u." + k + ".worker." + workerId + ".evt";
     }
 
-    /** worker 级输入频道:task.input / ask.reply 都走这里,taskId 入 payload(任务永久后不再按任务订阅)。 */
+    /** worker 级输入频道:ask.reply / stream.ack 走这里,askId/taskId 入 payload(任务永久后不再按任务订阅)。
+     *  <p>注:旧的 {@code task.input}(前端 input 事件触发入队/续跑)已删除——热任务入队与终态续跑
+     *  统一走 {@code task.run{taskId}}(§5.5),本频道不再承载「输入事件」。 */
     public static String workerInput(String k, String workerId) {
         return "u." + k + ".worker." + workerId + ".input";
     }

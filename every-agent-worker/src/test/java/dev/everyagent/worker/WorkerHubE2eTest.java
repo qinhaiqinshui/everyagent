@@ -109,7 +109,8 @@ class WorkerHubE2eTest {
             return new ChatModelFactory(props, enhancerRegistry, configStore) {
                 @Override
                 public org.springframework.ai.chat.model.ChatModel build(ResolvedConfig cfg,
-                        org.springframework.ai.openai.OpenAiChatOptions options, String agentId) {
+                        org.springframework.ai.openai.OpenAiChatOptions options, String agentId,
+                        dev.everyagent.plugin.api.model.EventEmitter events) {
                     return new FakeChatModel();
                 }
             };
@@ -197,7 +198,7 @@ class WorkerHubE2eTest {
         }
         JsonNode messageEv = events.stream()
                 .filter(e -> e.path("event").asString().equals("message")).findFirst().orElseThrow();
-        assertEquals("思考完成", messageEv.path("payload").path("thinking").asString(),
+        assertEquals("思考完成", messageEv.path("payload").path("data").path("thinking").asString(),
                 "message 行携带整轮 thinking");
 
         // 增量 sync:task.poll 支持按 seq 增量拉取(from last-1 → 仅最后一条事件)
@@ -214,16 +215,17 @@ class WorkerHubE2eTest {
         assertTrue(java.nio.file.Files.isRegularFile(taskDir.resolve(mainAgentId + ".jsonl")),
                 "主 agent 分文件落 data/tasks/<taskId>");
 
-        // 再运行(冷启动)经 task.input 触发:新一轮权威 message 与收口终态经 task.poll 纯拉取验证。
-        // (瞬态 delta 与 message 共享轮 seq,TaskManager 按 seq 归并后以 message 定稿,逐帧 delta
-        // 拉不到属正常;stream 频道推送随 DataPusher 删除。曾因 taskId 为大写 ULID 被 hub 频道
-        // 字符集 ACL 拒收的旧风险已无频道依赖。耗时不再发 task_duration trace,故以终态
-        // agent.status(done)作为收口信号。)
-        fe.send(pub(Channels.workerInput(k, workerProps.getWorkerId()), "task.input",
-                Json.write(Json.obj().put("taskId", taskId).put("text", "THINK:E2E:追问"))));
+        // 再运行(冷启动)经 task.run{taskId} 触发:新一轮权威 message 与收口终态经 task.poll 纯拉取验证。
+        // (worker 级 task.input 通道已于 bbe8c3b0 删除,入队/续跑统一走 task.run;
+        // 瞬态 delta 与 message 共享轮 seq,TaskManager 按 seq 归并后以 message 定稿,逐帧 delta
+        // 拉不到属正常;stream 频道推送随 DataPusher 删除。耗时不再发 task_duration trace,
+        // 故以 agent.status(done)作为收口信号。)
+        String rerun = rpc("task.run", Json.write(Json.obj()
+                .put("taskId", taskId).put("input", "THINK:E2E:追问")));
+        assertTrue(rerun.contains("rpc.ok"), rerun);
         syncUntil(taskId, e -> e.path("event").asString().equals("message")
                         && e.path("seq").asLong() > last
-                        && e.path("payload").path("text").asString().contains("追问"),
+                        && e.path("payload").path("content").asString().contains("追问"),
                 "再运行 message(task.poll 可拉取)");
         syncUntil(taskId, e -> e.path("event").asString().equals("agent.status")
                         && e.path("seq").asLong() > last
@@ -251,13 +253,14 @@ class WorkerHubE2eTest {
             assertTrue(System.currentTimeMillis() < deadline, "worker 重连成功");
             sleep(50);
         }
-        // 前端不刷新、不重新订阅(pull 模式无频道订阅),直接发下一轮输入:
-        // 重连后任务照常续跑,输出经 task.poll 可拉取。
-        fe.send(pub(Channels.workerInput(k, workerProps.getWorkerId()), "task.input",
-                Json.write(Json.obj().put("taskId", taskId).put("text", "THINK:E2E:重启后续跑"))));
+        // 前端不刷新、不重新订阅(pull 模式无频道订阅),直接发下一轮输入(task.run{taskId},
+        // worker 级 task.input 通道已删除):重连后任务照常续跑,输出经 task.poll 可拉取。
+        String rerun = rpc("task.run", Json.write(Json.obj()
+                .put("taskId", taskId).put("input", "THINK:E2E:重启后续跑")));
+        assertTrue(rerun.contains("rpc.ok"), rerun);
         syncUntil(taskId, e -> e.path("event").asString().equals("message")
                         && e.path("seq").asLong() > lastSeq
-                        && e.path("payload").path("text").asString().contains("重启后续跑"),
+                        && e.path("payload").path("content").asString().contains("重启后续跑"),
                 "重启后续跑 message(task.poll 可拉取)");
     }
 
@@ -275,7 +278,20 @@ class WorkerHubE2eTest {
         assertTrue(l.contains("e2e.txt"), l);
 
         String c = rpc("config.get", "{}");
-        assertTrue(c.contains("models") && !c.contains("\"apiKey\":\"sk-"), "apiKey 掩码: " + c);
+        // apiKey 恒为掩码(前 4 + … + 后 4,§5.5 config.get):不得出现完整明文密钥——
+        // 「含 sk- 前缀」不足以判定泄漏(掩码本身以 sk- 开头),故断言掩码形状。
+        assertTrue(c.contains("models"), "config.get 带 models: " + c);
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("\"apiKey\":\"([^\"]*)\"").matcher(c);
+        int keys = 0;
+        while (m.find()) {
+            keys++;
+            String masked = m.group(1);
+            assertTrue(masked.matches(".{4}….{4}") || masked.matches(".{2}….{2}")
+                            || masked.equals("******"),
+                    "apiKey 必须是掩码形态(前4+…+后4 / 前2+…+后2 / ******,不得明文): " + masked);
+        }
+        assertTrue(keys > 0, "至少一条模型配置带 apiKey 掩码: " + c);
 
         String methods = rpc("sys.methods", "{}");
         assertTrue(methods.contains("task.run") && methods.contains("git.status")

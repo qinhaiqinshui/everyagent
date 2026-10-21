@@ -7,17 +7,19 @@
  * 折叠态：工具图标 + 工具名 + 原样命令（command）。
  *         若命令首行是注释（意图说明），内联预览拆分为「正文样式注释 + 等宽命令」两段，
  *         注释以 AI 正文样式（无衬线 + 正文色）呈现，与等宽 muted 的命令体形成层次。
- *         工具执行失败时扳手图标转红（detail.status === 'error'，来自 worker
- *         tool.result 事件的 data.status；由 worker 按结构化结果记账判定
- *         （shell 退出码 / 超时 / 工具抛异常，见 plugin-api ToolOutcomeLog））。
+ *         图标为终端图标（TerminalIcon，powershell/bash 专属，区别于默认扳手）：
+ *         颜色走 nagent-tool-state--* 单一来源，工具执行失败时转红（detail.status
+ *         === 'error'，来自 worker tool.result 事件的 data.status；由 worker
+ *         按结构化结果记账判定（shell 退出码 / 超时 / 工具抛异常，见 plugin-api
+ *         ToolOutcomeLog））；running 态为光标硬闪烁而非旋转（chatPanel.css）。
  * 展开态：先展示参数块（完整命令，折叠行内联预览被截断时可在此看全量），
  *         再显示工具返回结果（stdout/stderr 合并文本，按原始换行渲染）。
  *         stderr 已由 worker 合并进结果文本（以 [stderr] 段标记），此处不再单独分支。
  */
 
 import React from 'react'
-import { WrenchIcon, ChevronDownIcon, ChevronRightIcon } from '@/components/shared/AppGlyphs'
-import { hasActiveTextSelection, splitLeadingComment } from './helpers'
+import { TerminalIcon, ChevronDownIcon, ChevronRightIcon } from '@/components/shared/AppGlyphs'
+import { hasActiveTextSelection, splitLeadingComment, toolStateClass, toolDurationText, toolDurationTintStyle } from './helpers'
 import type { AggregatedToolDetail, ToolViewDefinition, ToolViewProps } from './types'
 
 /** 从聚合结果中提取输出文本（兼容对象与字符串两种形态）。 */
@@ -61,6 +63,8 @@ function ExecEntry({ detail }: { detail: AggregatedToolDetail }) {
   const hasError = detail.status === 'error'
   const output = extractOutput(detail.result)
 
+  const stateClass = toolStateClass(detail)
+  const durationText = toolDurationText(detail)
   const [open, setOpen] = React.useState(false)
 
   return (
@@ -75,7 +79,10 @@ function ExecEntry({ detail }: { detail: AggregatedToolDetail }) {
           setOpen((value) => !value)
         }}
       >
-        <WrenchIcon size={13} className={`nagent-tool__icon${hasError ? ' nagent-tool__icon--error' : ''}`} />
+        {/* nagent-glyph-terminal:chatPanel.css 按此类关闭 running 整体旋转(改光标闪烁),
+            不影响其他工具图标的旋转动效 */}
+        <TerminalIcon size={13} className={`nagent-tool__icon nagent-glyph-terminal${stateClass ? ` ${stateClass}` : ''}`} />
+        {durationText ? <span className="nagent-tool__duration" style={toolDurationTintStyle(detail)}>{durationText}</span> : null}
         <span className="nagent-tool__name">{detail.toolName || '命令'}</span>
         <span className="nagent-tool__inline-preview">
           {preview ? (

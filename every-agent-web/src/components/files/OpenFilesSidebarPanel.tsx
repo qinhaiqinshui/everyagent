@@ -4,7 +4,13 @@ import { useAppUi } from '@/components/app/AppUiContext'
 import { domainEventBus, DOMAIN_EVENTS } from '@/events/eventBus'
 import { pluginDispatcher } from '@/plugin/PluginDispatcher'
 import { WORKSPACE_EXPLORER_ROOT_LABEL, workspaceExplorerQueryService } from '@/query/workspaceExplorerQueryService'
-import { findExplorerNode, mergeExplorerChildrenPreservingLoaded, upsertExplorerChildren } from '@/query/workspaceExplorerTreeUtils'
+import {
+  findExplorerNode,
+  mergeExplorerChildrenPreservingLoaded,
+  pruneSelectionUnderDirectory,
+  removePathsFromSelection,
+  upsertExplorerChildren,
+} from '@/query/workspaceExplorerTreeUtils'
 import { workspaceRegistry, type WorkspaceEntry } from '@/hub/workspaceRegistry'
 import { antdConfirm } from '@/utils/appAntdBridge'
 import { normalizeWorkspaceRelativePath, toBusinessAbsolutePath } from '@/platform/fs/pathUtils'
@@ -115,7 +121,11 @@ function WorkspaceGroupPanel({
   const expandedPathsRef = React.useRef(expandedPaths)
   expandedPathsRef.current = expandedPaths
   /** 文件变更事件合并刷新的暂存与定时器(一次 rename 会触发 delete+write+rename 多个事件,短窗合并只刷一次)。 */
-  const pendingFileChangedRef = React.useRef<Array<{ filePath: string; oldFilePath?: string }>>([])
+  const pendingFileChangedRef = React.useRef<Array<{
+    filePath: string
+    oldFilePath?: string
+    operation?: 'create' | 'modify' | 'delete' | 'rename'
+  }>>([])
   const fileChangedFlushTimerRef = React.useRef<number | null>(null)
   const [deleteTarget, setDeleteTarget] = React.useState<WorkspaceExplorerContextTarget | null>(null)
   const [deleting, setDeleting] = React.useState(false)
@@ -199,13 +209,71 @@ function WorkspaceGroupPanel({
   }, [workspaceRoot])
 
   /**
+   * 清理选中集合中已不存在的 key(目录刷新后):判定与范围过滤见
+   * workspaceExplorerTreeUtils.pruneSelectionUnderDirectory(纯函数,含特征化测试)。
+   */
+  const pruneStaleSelection = React.useCallback((dirPath: string, tree: WorkspaceExplorerNode[]) => {
+    const next = pruneSelectionUnderDirectory(dirPath, tree, selectionRef.current)
+    if (next === selectionRef.current) return
+    // 同步 ref:异步流程(右键动作闭包)随后读到的是清理后的集合。
+    selectionRef.current = next
+    applySelection(next)
+  }, [applySelection])
+
+  /**
+   * 只刷新指定目录的直接子项(「只刷新所在目录」,不做整树刷新):
+   * - 工作区根('/'):重拉第一层,按 path 保留仍存在且已加载的子目录子树;
+   * - 普通目录:仅在该目录已展开加载(loaded)时才重拉(未加载的目录展开时自然会取最新)。
+   * 刷新后清理该目录范围内已失效的选中 key。
+   */
+  const refreshDirectory = React.useCallback(async (dirPath: string) => {
+    const isRoot = dirPath === WORKSPACE_EXPLORER_ROOT_LABEL
+    try {
+      let fresh: WorkspaceExplorerNode[]
+      if (isRoot) {
+        fresh = (await workspaceExplorerQueryService.readTree(workspaceRoot, { includeInternalFiles: showInternalFiles })).nodes
+      } else {
+        const dirNode = findExplorerNode(treeNodesRef.current, dirPath)
+        if (!dirNode || dirNode.type !== 'directory' || !dirNode.loaded) return
+        fresh = await workspaceExplorerQueryService.loadChildren(workspaceRoot, dirNode, { includeInternalFiles: showInternalFiles })
+      }
+      const current = treeNodesRef.current
+      let next: WorkspaceExplorerNode[]
+      if (isRoot) {
+        next = mergeExplorerChildrenPreservingLoaded(current, fresh)
+      } else {
+        const dirNode = findExplorerNode(current, dirPath)
+        // 保留仍存在且已加载的子目录子树:loadChildren 返回的子目录节点一律
+        // loaded:false、无 children,直接整体替换会把幸存兄弟目录已展开的子树
+        // 清空(其路径仍在 expandedPaths → 图标显示展开却无子节点)。
+        const merged = mergeExplorerChildrenPreservingLoaded(
+          dirNode && dirNode.type === 'directory' ? dirNode.children : undefined,
+          fresh,
+        )
+        next = upsertExplorerChildren(current, dirPath, merged)
+      }
+      treeNodesRef.current = next
+      setTreeNodes(next)
+      pruneStaleSelection(dirPath, next)
+    } catch {
+      // 刷新失败静默:下次展开/整树刷新会带回最新状态
+    }
+  }, [pruneStaleSelection, showInternalFiles, workspaceRoot])
+
+  /**
    * 合并窗口内到达的文件变更事件一次性刷新(架构事件风暴防护):
    * 一次 rename 实际会广播 delete(from) + write(to) + rename 三个事件,若逐条刷新会
    * 连续 reload 互相覆盖,既闪烁又可能把展开态带偏。短窗(80ms)合并后:
    * - 先迁移目录展开态(rename 场景,旧路径 key 会残留导致刷新失败/图标错位);
-   * - 有根级事件 → 整树保持展开刷新一次;否则对受影响父目录增量刷新(去重)。
+   * - rename → 整树保持展开刷新一次(低频,且要给新路径补加载子节点);
+   * - 其余(新建/修改/删除)→ 只刷新受影响目录(按目录去重):根级条目刷第一层、
+   *   深层条目刷其所在目录,不做整树刷新(大项目整树重拉代价高,还会抖动无关目录的加载态)。
    */
-  const flushFileChangedEvents = React.useCallback(async (items: Array<{ filePath: string; oldFilePath?: string }>) => {
+  const flushFileChangedEvents = React.useCallback(async (items: Array<{
+    filePath: string
+    oldFilePath?: string
+    operation?: 'create' | 'modify' | 'delete' | 'rename'
+  }>) => {
     // 重命名/移动目录后,把展开集合中的旧路径前缀迁移为新路径,保持展开语义。
     for (const item of items) {
       if (item.oldFilePath && item.oldFilePath !== item.filePath) {
@@ -213,47 +281,42 @@ function WorkspaceGroupPanel({
         setExpandedPaths(expandedPathsRef.current)
       }
     }
-    const hasRootLevel = items.some((item) => {
-      const parts = (item.filePath ?? '').replace(/^\/+/, '').split('/').filter(Boolean)
-      return parts.length <= 1
-    })
     const hasRename = items.some((item) => Boolean(item.oldFilePath) && item.oldFilePath !== item.filePath)
-    // rename 低频且需要迁移展开态、给新目录补加载子节点:整树保持展开刷新一次到位;
-    // 其余高频单文件变更(create/modify/delete)走增量刷新,避免大项目全量重拉。
-    if (hasRename || hasRootLevel) {
+    if (hasRename) {
       await reloadTree(showInternalFiles, true)
       return
+    }
+    // 目录被删:清理其(及子孙)展开 key。行本身会随所在目录刷新消失,残留 key 会在
+    // 同名路径复用时呈现「图标展开但没有子节点」的错位。
+    for (const item of items) {
+      if (item.operation !== 'delete') continue
+      const nextExpanded = pruneExpandedPaths(expandedPathsRef.current, item.filePath)
+      if (nextExpanded !== expandedPathsRef.current) {
+        expandedPathsRef.current = nextExpanded
+        setExpandedPaths(nextExpanded)
+      }
     }
     const dirPaths = new Set<string>()
     for (const item of items) {
       const parts = (item.filePath ?? '').replace(/^\/+/, '').split('/').filter(Boolean)
-      if (parts.length <= 1) continue
+      // 根级条目:所在目录即工作区根(根节点不在树中,单独按「重拉第一层」处理)。
+      if (parts.length <= 1) {
+        dirPaths.add(WORKSPACE_EXPLORER_ROOT_LABEL)
+        continue
+      }
       dirPaths.add(`/${parts.slice(0, -1).join('/')}`)
     }
     for (const dirPath of dirPaths) {
-      const dirNode = findExplorerNode(treeNodesRef.current, dirPath)
-      if (!dirNode || dirNode.type !== 'directory' || !dirNode.loaded) continue
-      try {
-        const children = await workspaceExplorerQueryService.loadChildren(workspaceRoot, dirNode, { includeInternalFiles: showInternalFiles })
-        setTreeNodes((prev) => {
-          const currentDir = findExplorerNode(prev, dirPath)
-          // 保留仍存在且已加载的子目录子树:loadChildren 返回的子目录节点一律
-          // loaded:false、无 children,直接整体替换会把幸存兄弟目录已展开的子树
-          // 清空(其路径仍在 expandedPaths → 图标显示展开却无子节点)。
-          const merged = mergeExplorerChildrenPreservingLoaded(
-            currentDir && currentDir.type === 'directory' ? currentDir.children : undefined,
-            children,
-          )
-          return upsertExplorerChildren(prev, dirPath, merged)
-        })
-      } catch {
-        // 刷新失败静默:下次展开/整树刷新会带回最新状态
-      }
+      await refreshDirectory(dirPath)
     }
-  }, [reloadTree, showInternalFiles, workspaceRoot])
+  }, [refreshDirectory, reloadTree, showInternalFiles])
 
   /** 登记文件变更事件并在短窗内合并刷新。 */
-  const scheduleFileChanged = React.useCallback((payload: { filePath: string; oldFilePath?: string }) => {
+  const scheduleFileChanged = React.useCallback((payload: {
+    filePath: string
+    oldFilePath?: string
+    operation?: 'create' | 'modify' | 'delete' | 'rename'
+  }) => {
     pendingFileChangedRef.current.push(payload)
     if (fileChangedFlushTimerRef.current !== null) return
     fileChangedFlushTimerRef.current = window.setTimeout(() => {
@@ -272,12 +335,13 @@ function WorkspaceGroupPanel({
     const unsubscribeWorkspaceReload = domainEventBus.subscribe(DOMAIN_EVENTS.WORKSPACE_RELOAD_ALL_FILES_REQUESTED, () => {
       void reloadTree(showInternalFiles, true)
     })
-    // 细粒度文件变更由底层网关统一广播(带 workspaceRoot):短窗合并后增量刷新受影响目录,保持展开状态。
+    // 细粒度文件变更由底层网关统一广播(带 workspaceRoot):短窗合并后只刷新受影响目录(保持展开状态)。
     const unsubscribeFileChanged = domainEventBus.subscribe(DOMAIN_EVENTS.WORKSPACE_FILE_CHANGED, (payload) => {
       if (payload.workspaceRoot !== workspaceRoot) return
       scheduleFileChanged({
         filePath: payload.filePath,
         oldFilePath: payload.operation === 'rename' ? payload.oldFilePath : undefined,
+        operation: payload.operation,
       })
     })
     // 侧边栏切到本面板时（onShow）主动刷新，保持展开状态。
@@ -397,6 +461,18 @@ function WorkspaceGroupPanel({
     setDeleteTarget(target)
   }, [applySelection, handleRequestBatchDelete])
 
+  /**
+   * 从选中集合移除失效路径(被删项本身及其子树),其余选中项保持;清空即无选中。
+   * 删除落盘后必须走这里:选中 key 指向已不存在的路径会让行内高亮/标签联动/右键动作
+   * 的目标解析全部落在失效路径上。
+   */
+  const pruneSelection = React.useCallback((removedPaths: string[]) => {
+    const next = removePathsFromSelection(selectionRef.current, removedPaths)
+    if (next === selectionRef.current) return
+    selectionRef.current = next
+    applySelection(next)
+  }, [applySelection])
+
   const handleDeleteFile = React.useCallback(async () => {
     if (!deleteTarget || deleting) return
     setDeleting(true)
@@ -416,9 +492,8 @@ function WorkspaceGroupPanel({
         expandedPathsRef.current = nextExpanded
         setExpandedPaths(nextExpanded)
       }
-      if (selectedExplorerPath === deleteTarget.path || (deleteTarget.type === 'directory' && selectedExplorerPath?.startsWith(`${deleteTarget.path}/`))) {
-        applySelection(new Set())
-      }
+      // 删除后清理选中集合里已失效的 key(被删项本身及其子树),避免选中态指向已不存在的路径。
+      pruneSelection([deleteTarget.path])
       showToast(deleteTarget.type === 'directory' ? '已删除文件夹' : '已删除文件', 'success')
       setDeleteTarget(null)
     } catch (error) {
@@ -426,7 +501,7 @@ function WorkspaceGroupPanel({
     } finally {
       setDeleting(false)
     }
-  }, [applySelection, closeGlobalFileTab, deleteTarget, deleting, selectedExplorerPath, showToast, workspaceFileTabs, workspaceRoot])
+  }, [closeGlobalFileTab, deleteTarget, deleting, pruneSelection, showToast, workspaceFileTabs, workspaceRoot])
 
   const handleRequestRenameTarget = React.useCallback((target: WorkspaceExplorerContextTarget) => {
     setRenameTarget(target)

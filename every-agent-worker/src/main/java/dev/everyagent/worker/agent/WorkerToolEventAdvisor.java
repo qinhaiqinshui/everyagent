@@ -3,7 +3,6 @@ package dev.everyagent.worker.agent;
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.plugin.api.event.EventPayloads;
 import dev.everyagent.plugin.api.model.EmitEvent;
-import dev.everyagent.plugin.api.spi.ToolOutcomeLog;
 import dev.everyagent.worker.agent.AgentEntity;
 import dev.everyagent.plugin.api.config.WorkerConfig;
 import dev.everyagent.plugin.api.execution.ExecContext;
@@ -12,15 +11,12 @@ import dev.everyagent.plugin.api.event.Events;
 import dev.everyagent.plugin.api.event.Events.ToolCallPart;
 import dev.everyagent.plugin.api.proto.SnowflakeId;
 import dev.everyagent.plugin.api.event.Usage;
-import tools.jackson.databind.JsonNode;
-import dev.everyagent.contract.json.Json;
 import org.springframework.ai.chat.client.ChatClientRequest;
 import org.springframework.ai.chat.client.ChatClientResponse;
 import org.springframework.ai.chat.client.advisor.ToolCallingAdvisor;
 import org.springframework.ai.chat.client.advisor.api.StreamAdvisorChain;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
-import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.model.tool.ToolCallingManager;
 import org.springframework.ai.model.tool.ToolExecutionResult;
@@ -28,11 +24,7 @@ import reactor.core.publisher.Flux;
 import tools.jackson.databind.node.ObjectNode;
 
 import java.util.ArrayList;
-import java.util.HashSet;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -40,7 +32,7 @@ import java.util.concurrent.atomic.AtomicReference;
  * worker 事件发射 advisor(架构 §5.2 + 红线:一个 advisor 只负责一个功能)。
  *
  * <p>继承 {@link ToolCallingAdvisor},复用其递归工具循环(绝不手搓);仅重写受保护 hook,
- * 在工具循环的关键节点把 worker 事件协议({@code TaskEvents})发射出去——不改动循环逻辑本身:
+ * 在模型流的关键节点把 worker 事件协议({@code TaskEvents})发射出去——不改动循环逻辑本身:
  * <ul>
  *   <li>{@link #adviseStream}:逐 chunk 旁路发瞬态 {@code delta}(正文增量,真逐字流)
  *       + 瞬态 {@code thinking}(思考差分,同频逐字流;Spring AI 2.0.1 的
@@ -52,13 +44,11 @@ import java.util.concurrent.atomic.AtomicReference;
  *       {@link #adviseStream} 逐 chunk 发出,权威值由前端替换定稿;思考差分在此仅兜底
  *       acc 未追平的部分) + 实测 {@code usage};事件名不分主/子,归属由 agentId 决定;
  *       并把本轮正文写入 {@link AgentEntity#lastText}(最终轮即全文)。</li>
- *   <li>{@link #doGetNextInstructionsForToolCallStream}:工具执行完毕后,只从结果历史里挑出
- *       「本轮刚下发」(callId 命中本轮 message.toolCalls)的 {@link ToolResponseMessage} 发
- *       {@code tool.result}(落盘,callId 配对),历史轮次结果不重复发射;结果文本**原样**发射
- *       (事件侧不做任何截断),事件路径不再追加损失;并以 {@code data.status}
- *       ({@code success}/{@code error})把工具执行的成功/失败一并下发,供前端把失败工具块标红——
- *       判定走**结构化结果账本**({@link ToolOutcomeLog}:shell 退出码/超时 + 工具抛异常),
- *       不解析结果文本。</li>
+ *   <li>工具执行侧事件({@code tool.started}/{@code tool.result})<b>不在本类</b>:
+ *       已迁 per-call 工具执行拦截链的发射节点({@code ToolEventInterceptor},§7.14.3)
+ *       ——本类回归纯模型流事件;原 {@code doGetNextInstructionsForToolCallStream} 从
+ *       {@code conversationHistory} 回扫本轮结果并按「名字+入参」查账的发射段已删除
+ *       (框架 hook 保留默认转发,递归循环不受影响)。</li>
  * </ul>
  *
  * <p>设计纪律:本类不持有任何 per-task 可变状态(仅持有 {@link AgentEntity} 引用,运行期只读其
@@ -81,6 +71,14 @@ public class WorkerToolEventAdvisor extends ToolCallingAdvisor {
     private final AtomicReference<String> thinkingAcc = new AtomicReference<>("");
     /** 本轮事件 id(雪花):每轮模型响应首 chunk 分配,delta/thinking/message 共用;message 后清零。 */
     private final AtomicLong roundId = new AtomicLong(0);
+    /**
+     * 本轮思考计时起点(首个思考增量到达时刻,毫秒;每轮 message 后清零)。
+     * 前端思考块的实时读秒基准即此值(与 tool.started 的 startedAt 同口径:宿主时钟毫秒),
+     * 随权威 message 事件下发,历史回放也能还原思考耗时。
+     */
+    private final AtomicLong thinkingStartMs = new AtomicLong(0);
+    /** 本轮末个思考增量到达时刻(毫秒;与起点差值 = 思考阶段真实流式耗时,不含随后正文生成/工具执行)。 */
+    private final AtomicLong thinkingEndMs = new AtomicLong(0);
 
     public WorkerToolEventAdvisor(ToolCallingManager toolCallingManager, AgentEntity a) {
         super(toolCallingManager, DEFAULT_TOOL_EXECUTION_ELIGIBILITY_CHECKER, DEFAULT_ORDER, true);
@@ -135,10 +133,23 @@ public class WorkerToolEventAdvisor extends ToolCallingAdvisor {
         if (!thinking.isEmpty()) {
             String diff = diffThinking(thinking);
             if (!diff.isEmpty()) {
+                touchThinking();
                 a.emitter.emit(EmitEvent.transientOf(rid, Events.THINKING,
                         null, null, null, diff, null, null, EmitEvent.Mode.APPEND));
             }
         }
+    }
+
+    /**
+     * 记录思考增量到达时刻:首个增量定起点(compareAndSet 抢 0),每个增量推进终点。
+     * 起点/终点同取宿主时钟,差值即本轮思考的流式耗时;起点随权威 {@code message}
+     * 事件下发({@code thinkingStartedAt}/{@code thinkingDurationMs}),供前端实时读秒
+     * 与历史回放展示(与 tool.started/tool.result 的 startedAt/durationMs 同口径)。
+     */
+    private void touchThinking() {
+        long now = System.currentTimeMillis();
+        thinkingStartMs.compareAndSet(0, now);
+        thinkingEndMs.set(now);
     }
 
     @Override
@@ -177,6 +188,7 @@ public class WorkerToolEventAdvisor extends ToolCallingAdvisor {
         if (!thinking.isEmpty()) {
             String diff = diffThinking(thinking);
             if (!diff.isEmpty()) {
+                touchThinking();
                 a.emitter.emit(EmitEvent.transientOf(rid, Events.THINKING,
                         null, null, null, diff, null, null, EmitEvent.Mode.APPEND));
             }
@@ -200,11 +212,21 @@ public class WorkerToolEventAdvisor extends ToolCallingAdvisor {
         ObjectNode messageData = Json.obj();
         if (!thinking.isEmpty()) {
             messageData.put("thinking", thinking);
+            // 思考耗时口径(与 tool.result 的 startedAt/durationMs 同构):起点 = 本轮首个
+            // 思考增量到达时刻,时长 = 末个增量 - 首个增量(思考阶段真实流式耗时,不含随后的
+            // 正文生成/工具执行)。随权威 message 落盘,历史回放即可还原思考耗时。
+            long tStart = thinkingStartMs.get();
+            if (tStart > 0) {
+                messageData.put("thinkingStartedAt", tStart);
+                messageData.put("thinkingDurationMs", Math.max(0, thinkingEndMs.get() - tStart));
+            }
         }
         messageData.set("toolCalls", EventPayloads.toolCallsToJson(parts));
         a.emitter.emit(EmitEvent.of(rid, Events.MESSAGE,
                 null, null, null, text, null, messageData, EmitEvent.Mode.REPLACE));
         roundId.set(0);
+        thinkingStartMs.set(0);
+        thinkingEndMs.set(0);
         // 队列续跑的最终回答回写已归位 task 层:consumeInput 消费下一条排队输入前,经
         // ConversationLoader.catchUpRuntime 从本事件流追回(与冷启动重建同一谓词)。
         // 本 advisor 至此不再触碰会话内存,只负责事件发射与 agent 层会计(§7.20 域中性)。
@@ -243,120 +265,17 @@ public class WorkerToolEventAdvisor extends ToolCallingAdvisor {
         return chatClientResponse;
     }
 
+    /**
+     * 工具执行后的下一轮指令 hook:<b>本类不再发射任何事件</b>(纯 super 转发,框架
+     * 递归循环需要该 hook 继续工作)。{@code tool.started}/{@code tool.result} 已迁
+     * per-call 工具执行拦截链的发射节点({@code ToolEventInterceptor},每次调用一条,
+     * callId 直配,§7.14.3)。
+     */
     @Override
     protected List<Message> doGetNextInstructionsForToolCallStream(ChatClientRequest chatClientRequest,
             ChatClientResponse chatClientResponse, ToolExecutionResult toolExecutionResult) {
-        ExecContext exec = a.execution();
-        // 工具已执行:只发「本轮刚下发」的工具结果(callId 与 message.toolCalls[].id 配对)。
-        // 此前遍历整个 conversationHistory 会把历史所有 ToolResponseMessage 逐条重发,
-        // 导致同一 callId 的 tool.result 在每轮工具执行后都被再次落盘(前端按 seq 无法去重,
-        // 表现为「工具 ×N」的重复孤儿块)。这里以本轮 assistant 消息下发的 toolCall id 为
-        // 白名单,只发射匹配项,历史结果一律跳过。白名单为空(拿不到本轮 id 的异常形态)时
-        // 保守跳过发射,绝不重放历史,避免再次污染事件流。
-        Map<String, String> currentCalls = currentRoundToolCalls(chatClientResponse);
-        if (currentCalls.isEmpty()) {
-            return super.doGetNextInstructionsForToolCallStream(chatClientRequest, chatClientResponse,
-                    toolExecutionResult);
-        }
-        if (toolExecutionResult.conversationHistory() != null) {
-            for (Message m : toolExecutionResult.conversationHistory()) {
-                if (m instanceof ToolResponseMessage trm) {
-                    for (ToolResponseMessage.ToolResponse r : trm.getResponses()) {
-                        if (!currentCalls.containsKey(r.id())) {
-                            continue; // 历史轮次的工具结果:本轮未下发,不重复发射
-                        }
-                        // 防御:执行主体已收口时不再发射 tool.result(与 doAfterStream 同语义)
-                        if (exec.terminal()) {
-                            continue;
-                        }
-                        // 事件侧不截断:原样发射 ToolResponseMessage.responseData——它与工具循环交回模型的
-                        // 是同一份对象(secret-redaction 等链上改写对二者同时生效),事件/落盘/推送路径
-                        // 不再追加损失。体量上界由执行侧输出上限兜底(ExecResults/OsSandbox);模型侧若启用
-                        // 上下文压缩,发给模型的是压缩后文本(§5.3),不影响本事件的原样性。
-                        String summary = r.responseData() == null ? "(无返回)" : r.responseData();
-                        ObjectNode toolResultData = Json.obj();
-                        toolResultData.put("callId", r.id());
-                        toolResultData.put("name", r.name());
-                        // 成功/失败按**结构化结果账本**判定,完全不解析结果文本:
-                        // shell 退出码/超时由执行器记账,工具抛异常由 per-call 回调包装器记账,
-                        // 此处以「工具名 + 该次调用可复现载荷」查账(见 ToolOutcomeLog)。
-                        // 既往按失败文案匹配,会让「读/grep 到该文案源码」的命令自指误判为失败。
-                        toolResultData.put("status", toolStatus(r.name(), currentCalls.get(r.id())));
-                        a.emitter.emit(EmitEvent.of(SnowflakeId.next(), Events.TOOL_RESULT,
-                                null, null, summary, null, null, toolResultData,
-                                EmitEvent.Mode.REPLACE));
-                    }
-                }
-            }
-        }
-        return super.doGetNextInstructionsForToolCallStream(chatClientRequest, chatClientResponse, toolExecutionResult);
-    }
-
-    /**
-     * 取本轮 assistant 消息下发的工具调用(callId → 入参 JSON)。既用于过滤历史重复的
-     * tool.result,也用于按「工具名 + 入参」查结构化结果账本(status 判定)。
-     * 来源与 {@link #doAfterStream} 发射 message.toolCalls 的同一响应对象一致,保证覆盖
-     * 「本轮真正下发的工具」;响应缺失或无法解析时返回空表(调用方保守跳过发射)。
-     */
-    private static Map<String, String> currentRoundToolCalls(ChatClientResponse chatClientResponse) {
-        Map<String, String> calls = new LinkedHashMap<>();
-        if (chatClientResponse == null) {
-            return calls;
-        }
-        ChatResponse chatResponse = chatClientResponse.chatResponse();
-        if (chatResponse == null || chatResponse.getResult() == null) {
-            return calls;
-        }
-        AssistantMessage out = chatResponse.getResult().getOutput();
-        if (out == null || out.getToolCalls() == null) {
-            return calls;
-        }
-        for (AssistantMessage.ToolCall call : out.getToolCalls()) {
-            if (call.id() != null && !call.id().isBlank()) {
-                calls.put(call.id(), call.arguments() == null ? "" : call.arguments());
-            }
-        }
-        return calls;
-    }
-
-    /**
-     * 结构化判定一次工具调用的成败(不解析结果文本):
-     * <ol>
-     *   <li>shell 执行器的退出码/超时记账(非零退出码或沙箱超时 → error)——用户决策
-     *       2026-12「非 0 都标红」;</li>
-     *   <li>否则看工具回调包装器的「抛异常」记账;</li>
-     *   <li>都查不到 → success(执行器未接入/非 shell 工具正常返回)。</li>
-     * </ol>
-     * 账本为空(单测等未装配场景)时一律 success。
-     */
-    private String toolStatus(String toolName, String arguments) {
-        ToolOutcomeLog log = a.toolOutcomes;
-        if (log == null) {
-            return "success";
-        }
-        ToolOutcomeLog.ShellExit exit = log.consumeShellExit(toolName, commandOf(arguments));
-        if (exit != null) {
-            return exit.failed() ? "error" : "success";
-        }
-        return log.consumeToolThrow(toolName, arguments) ? "error" : "success";
-    }
-
-    /**
-     * 从工具调用入参 JSON 取 {@code command}(shell 工具入参专有字段)。
-     * 取不到(非 shell 工具 / 入参非对象 / 解析失败)返回 {@code null}——账本对 null 载荷
-     * 不记账也不命中,天然回退到「抛异常」判据。
-     */
-    private static String commandOf(String arguments) {
-        if (arguments == null || arguments.isBlank()) {
-            return null;
-        }
-        try {
-            JsonNode node = Json.parse(arguments);
-            JsonNode cmd = node == null ? null : node.path("command");
-            return cmd != null && cmd.isTextual() ? cmd.asText() : null;
-        } catch (RuntimeException e) {
-            return null;
-        }
+        return super.doGetNextInstructionsForToolCallStream(chatClientRequest, chatClientResponse,
+                toolExecutionResult);
     }
 
     /** 上下文窗口口径单点:委托 {@link ModelConfig#contextWindowTokens()}(未配置/非法回退默认窗口)。 */

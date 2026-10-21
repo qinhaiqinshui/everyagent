@@ -44,8 +44,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * 覆盖:不存在任务 NOT_FOUND / 缺 taskId BAD_PARAMS;
  * 旧任务(删除 rounds.jsonl 模拟)首次调用惰性全量生成且内容正确、二次调用直接读文件;
  * 取消任务(cancelled)由模型收尾 message 闭合(有最终回复即闭合;无收尾则保持开轮路径写入的 endSeq="" 行);
- * 运行中任务(waiting-user)open 正确且未闭合轮以 endSeq="" 落盘;
- * 续跑任务(rounds.jsonl 尾行未闭合 + 任务 live)open 由含锚点窗口重扫历史开轮(scanOpenRound 口径)。
+ * 运行中任务(SLOW 分片流式中 live,无插件依赖)open 正确且未闭合轮以 endSeq="" 落盘;
+ * 续跑任务(rounds.jsonl 尾行未闭合 + 任务 live)open 由含锚点窗口重扫历史开轮(scanOpenRound 口径);
+ * open 轮携带未闭合行 roundId(开轮即有、跨闭合稳定,旧行缺失 must-ignore 不携带)。
  * 复用 WorkerTaskPollTest 的测试基建(FakeHub + FakeChatModel + WsTestClient)。
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.DEFINED_PORT)
@@ -289,71 +290,71 @@ class TaskRoundsRpcTest {
 
     @Test
     void liveTaskOpenRoundPersistedAsUnclosedRow() throws java.io.IOException {
-        String taskId = create("ASK:继续吗");
-        fe.await(t -> t.contains("\"event\":\"task.updated\"")
-                && t.contains("\"status\":\"waiting-user\"") && t.contains(taskId), "等待用户输入(waiting-user)");
+        // SLOW:分片延迟输出 ~9s(纯模型替身路径,无 ask-user 插件依赖)——流式期间任务 live,
+        // 与 waiting-user 同为「运行中未闭合轮」场景;开轮行随 user.message 消费即落盘。
+        String taskId = create("SLOW:慢速轮次");
+        String userSeq = awaitUserMessageSeq(taskId);
 
-        // 交叉验证:events 模式取该任务 user.message 的 wire seq(open.startSeq 应与之相等)
-        RpcResp all = call("task.poll", "{\"taskId\":\"" + taskId + "\",\"mode\":\"events\",\"afterSeq\":0}");
-        assertFalse(all.isErr(), String.valueOf(all.err()));
-        String userSeq = all.data().stream()
-                .filter(e -> "user.message".equals(e.path("event").asString()))
-                .map(e -> e.path("seq").asString()).findFirst().orElse("");
-        assertFalse(userSeq.isEmpty(), "events 应含 user.message: " + all.data());
-
-        RpcResp r = call("task.rounds", "{\"taskId\":\"" + taskId + "\"}");
-        assertFalse(r.isErr(), String.valueOf(r.err()));
-        assertTrue(r.result().path("live").asBoolean(false), "waiting-user 非终态 live=true");
-        assertEquals("waiting-user", r.result().path("status").asString());
+        RpcResp r = awaitOpenRound(taskId);
+        assertTrue(r.result().path("live").asBoolean(false), "流式中 live=true");
         // 开轮即落盘:运行中未闭合轮以 endSeq="" 行持久化(不再是终态补写)。
         JsonNode rounds = r.result().path("rounds");
         assertEquals(1, rounds.size(), "运行中未闭合轮已落盘为 1 行: " + rounds);
         assertEquals(userSeq, rounds.get(0).path("startSeq").asString());
         assertEquals("", rounds.get(0).path("endSeq").asString(), "未闭合轮 endSeq 为空");
-        assertEquals("ASK:继续吗", rounds.get(0).path("user").asString());
+        assertEquals("SLOW:慢速轮次", rounds.get(0).path("user").asString());
         JsonNode open = r.result().path("open");
         assertFalse(open.isNull(), "运行中仍有未闭合轮 open: " + r.result());
         assertEquals(userSeq, open.path("startSeq").asString(), "open.startSeq = 当前未闭合轮 user.message seq");
-        assertEquals("ASK:继续吗", open.path("user").asString());
+        assertEquals("SLOW:慢速轮次", open.path("user").asString());
         assertTrue(Files.isRegularFile(store.dirOf(taskId).resolve("rounds.jsonl")),
                 "运行中未闭合轮已落盘(rounds.jsonl 应存在)");
+        // open 轮 roundId:取自 rounds.jsonl 未闭合行(开轮落盘即生成),与 rounds[] 该行相同
+        assertTrue(open.path("roundId").isTextual() && !open.path("roundId").asString().isBlank(),
+                "open 轮应携带未闭合行 roundId: " + open);
+        assertEquals(rounds.get(0).path("roundId").asString(), open.path("roundId").asString(),
+                "open.roundId = rounds[] 未闭合行的 roundId(同一行)");
+        String openRoundId = open.path("roundId").asString();
 
-        // 清理:取消并等待终态驱逐,释放并发槽位
-        RpcResp cancel = call("task.cancel", "{\"taskId\":\"" + taskId + "\"}");
-        assertFalse(cancel.isErr(), String.valueOf(cancel.err()));
-        awaitEvicted(taskId);
+        awaitEvicted(taskId); // SLOW 终片最终回复闭合该轮 → 终态驱逐
+
+        // 跨闭合稳定:闭合后重拉,该轮 roundId 与 open 轮相同(闭合改写沿用 prior.roundId,
+        // 开轮生成一次不再变)
+        RpcResp after = call("task.rounds", "{\"taskId\":\"" + taskId + "\"}");
+        assertFalse(after.isErr(), String.valueOf(after.err()));
+        JsonNode roundsAfter = after.result().path("rounds");
+        assertEquals(1, roundsAfter.size(), "仍是一轮: " + roundsAfter);
+        assertTrue(Long.parseLong(roundsAfter.get(0).path("endSeq").asString())
+                > Long.parseLong(roundsAfter.get(0).path("startSeq").asString()),
+                "SLOW 最终回复后该轮闭合: " + roundsAfter.get(0));
+        assertEquals(openRoundId, roundsAfter.get(0).path("roundId").asString(),
+                "闭合后 roundId 不变(开轮即有、跨闭合稳定)");
+        assertTrue(after.result().path("open").isNull(), "终态 open=null");
     }
 
     @Test
     void resumedLiveTaskOpenRoundScannedFromUnclosedTailRow() throws java.io.IOException {
-        String taskId = create("ASK:继续吗");
-        fe.await(t -> t.contains("\"event\":\"task.updated\"")
-                && t.contains("\"status\":\"waiting-user\"") && t.contains(taskId), "等待用户输入(waiting-user)");
+        String taskId = create("SLOW:续跑轮次");
+        String userSeq = awaitUserMessageSeq(taskId);
 
         // 模拟「中断后续跑」任务的落盘状态:开轮路径已写未闭合尾行(endSeq=""),
         // 任务重新 live(冷启动续跑入队/等待输入),open 须由含锚点窗口重扫出历史开轮。
-        // 交叉验证取该任务 user.message 的 wire seq:未闭合行 startSeq 应与之相等。
-        RpcResp all = call("task.poll", "{\"taskId\":\"" + taskId + "\",\"mode\":\"events\",\"afterSeq\":0}");
-        assertFalse(all.isErr(), String.valueOf(all.err()));
-        String userSeq = all.data().stream()
-                .filter(e -> "user.message".equals(e.path("event").asString()))
-                .map(e -> e.path("seq").asString()).findFirst().orElse("");
-        assertFalse(userSeq.isEmpty(), "events 应含 user.message: " + all.data());
-
+        // 预置行不带 roundId(旧行)→ open 不得携带 roundId(老数据 must-ignore)。
         Path roundsFile = store.dirOf(taskId).resolve("rounds.jsonl");
         Files.writeString(roundsFile, "{\"index\":1,\"startSeq\":\"" + userSeq + "\","
-                + "\"endSeq\":\"\",\"user\":\"ASK:继续吗\",\"finalReply\":\"\",\"subs\":[]}\n",
+                + "\"endSeq\":\"\",\"user\":\"SLOW:续跑轮次\",\"finalReply\":\"\",\"subs\":[]}\n",
                 StandardCharsets.UTF_8);
 
-        RpcResp r = call("task.rounds", "{\"taskId\":\"" + taskId + "\"}");
-        assertFalse(r.isErr(), String.valueOf(r.err()));
-        assertTrue(r.result().path("live").asBoolean(false), "waiting-user 非终态 live=true");
+        RpcResp r = awaitOpenRound(taskId);
+        assertTrue(r.result().path("live").asBoolean(false), "流式中 live=true");
         JsonNode open = r.result().path("open");
         assertFalse(open.isNull(), "未闭合尾行 + live:开轮 user.message(seq==anchor)须进窗口被重扫出: "
                 + r.result());
         assertEquals(userSeq, open.path("startSeq").asString(),
                 "open.startSeq = 未闭合尾行 startSeq(含锚点窗口重扫历史开轮)");
-        assertEquals("ASK:继续吗", open.path("user").asString(), "open.user = 开轮输入(非中间输入)");
+        assertEquals("SLOW:续跑轮次", open.path("user").asString(), "open.user = 开轮输入(非中间输入)");
+        assertTrue(!open.has("roundId"),
+                "预置旧行无 roundId 时 open 不携带该字段(老数据 must-ignore): " + open);
         // rounds 应答原样读文件:预置未闭合行在场;open 实时不落盘 → 文件行数不变
         JsonNode rounds = r.result().path("rounds");
         assertEquals(1, rounds.size(), "应答 rounds = 文件原样 1 行: " + rounds);
@@ -442,6 +443,40 @@ class TaskRoundsRpcTest {
             assertTrue(System.currentTimeMillis() < deadline, "任务未在 20s 内终态驱逐: " + taskId);
             sleep(50);
         }
+    }
+
+    /** 轮询 events 模式直到 user.message 出现,返回其 wire seq(开轮行随消费即落盘)。 */
+    private String awaitUserMessageSeq(String taskId) {
+        long deadline = System.currentTimeMillis() + 15_000;
+        while (System.currentTimeMillis() < deadline) {
+            RpcResp all = call("task.poll", "{\"taskId\":\"" + taskId + "\",\"mode\":\"events\",\"afterSeq\":0}");
+            assertFalse(all.isErr(), String.valueOf(all.err()));
+            String seq = all.data().stream()
+                    .filter(e -> "user.message".equals(e.path("event").asString()))
+                    .map(e -> e.path("seq").asString()).findFirst().orElse("");
+            if (!seq.isEmpty()) {
+                return seq;
+            }
+            sleep(200);
+        }
+        throw new AssertionError("15s 内未见 user.message: " + taskId);
+    }
+
+    /**
+     * 轮询 task.rounds 直到开轮行落盘且 open 出现(运行中任务实时扫描),返回该次应答。
+     * 开轮行落盘与 user.message 可见之间存在毫秒级竞态,轮询吸收(直播窗口内必达)。
+     */
+    private RpcResp awaitOpenRound(String taskId) {
+        long deadline = System.currentTimeMillis() + 15_000;
+        while (System.currentTimeMillis() < deadline) {
+            RpcResp r = call("task.rounds", "{\"taskId\":\"" + taskId + "\"}");
+            assertFalse(r.isErr(), String.valueOf(r.err()));
+            if (r.result().path("rounds").size() == 1 && !r.result().path("open").isNull()) {
+                return r;
+            }
+            sleep(200);
+        }
+        throw new AssertionError("15s 内未见 open 轮(开轮行落盘): " + taskId);
     }
 
     private void hello(WsTestClient c) {

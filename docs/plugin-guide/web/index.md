@@ -12,5 +12,5 @@ has_children: true
 |---|---|
 | [前端插件总览与加载链路](overview-and-loading.md) | 宿主如何发现与加载插件、bare import 白名单、为什么必须 `import type` |
 | [前端 ctx API](context-api.md) | `ctx.ui / sdk / events / fs / storage / commands` 逐个方法与 Disposable 语义 |
-| [前端 UI 扩展点](ui-extensions.md) | 15 个 UI 扩展点逐个成节：字段表 + 注册代码 + 排序规则 |
+| [前端 UI 扩展点](ui-extensions.md) | 17 个 UI 扩展点逐个成节：字段表 + 注册代码 + 排序规则 |
 | [前端事件](events.md) | 宿主事件全集与 plugin-api 具名事件、`subscribe` / `getExtensionsVersion` 快照机制 |

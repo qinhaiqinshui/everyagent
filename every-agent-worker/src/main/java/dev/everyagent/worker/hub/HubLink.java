@@ -24,6 +24,8 @@ import java.util.concurrent.TimeUnit;
  * 与单个 hub 的 WS 连接(架构 §5.2;多 hub 时每 {url, apiKey, hubKey} 一条,由 HubPool 编排):
  * JDK HttpClient 单连接;出站帧经单线程串行发送(JDK WS 禁止并发 sendText);
  * 断线指数退避重连(1s→30s + 抖动);重连后重发 hello 与全部订阅;
+ * 重连日志去重:同一离线窗口只打首条 WARN(失败原因)+ 恢复 INFO(离线时长/重试次数),
+ * 中间逐次重试与退避等待全部 DEBUG——hub 长时间不可达时不产生重复噪音;
  * 空闲时应用层心跳保活(每 5s 探测一次,仅本周期无帧才发 ping;ping 后 15s 无任何帧判死主动断连,§4.2);
  * 事件日志才是事实源,断线期间的出站帧允许丢弃(Shipper 重连即跳尾,前端 sync 补齐)。
  */
@@ -73,6 +75,10 @@ public class HubLink {
     private volatile long lastFrameAt = System.currentTimeMillis();
     /** 未应答 ping 的发出时间;0 表示无在途 ping(收到任何帧即清零)。 */
     private volatile long pingSentAt;
+    /** 本次离线窗口内连续连接失败次数(连接成功即清零);仅 connectThread 读写。 */
+    private int consecutiveFailures;
+    /** 本次离线窗口首次失败时间 ms(0=窗口未开启);恢复 INFO 汇总离线时长用。 */
+    private long firstFailureAt;
 
     public HubLink(String name, String url, String apiKey, String workerId, String hubKey,
             long initialBackoffMs, long maxBackoffMs) {
@@ -187,13 +193,19 @@ public class HubLink {
                 Thread.currentThread().interrupt();
                 return;
             } catch (Exception e) {
-                log.warn("[{}] hub 连接异常: {}", name, e.toString());
+                consecutiveFailures++;
+                if (consecutiveFailures == 1) {
+                    firstFailureAt = System.currentTimeMillis();
+                    log.warn("[{}] hub 连接失败,开始退避重连: {}", name, e.toString());
+                } else {
+                    log.debug("[{}] hub 重连失败(第 {} 次): {}", name, consecutiveFailures, e.toString());
+                }
             }
             if (stopped) {
                 return;
             }
             long sleep = backoffMs + ThreadLocalRandom.current().nextLong(0, backoffMs / 2 + 1);
-            log.info("{}ms 后重连 hub {}", sleep, url);
+            log.debug("{}ms 后重连 hub {}", sleep, url);
             try {
                 Thread.sleep(sleep);
             } catch (InterruptedException e) {
@@ -261,8 +273,17 @@ public class HubLink {
         // 新连接:重置心跳状态,避免上一条连接的旧时间戳误判本连接
         lastFrameAt = System.currentTimeMillis();
         pingSentAt = 0;
-        log.info("[{}] 已连接 hub,workerId={},hubKey={}", name, workerId,
-                hubKey.isEmpty() ? "未配置" : "已配置");
+        if (consecutiveFailures > 0) {
+            // 离线恢复:窗口内首败已 WARN,这里一条 INFO 汇总收口(离线时长 + 重试次数)
+            long offlineMs = firstFailureAt > 0 ? System.currentTimeMillis() - firstFailureAt : 0;
+            log.info("[{}] 已重连 hub(离线 {}ms,重试 {} 次后恢复),workerId={}", name,
+                    offlineMs, consecutiveFailures, workerId);
+            consecutiveFailures = 0;
+            firstFailureAt = 0;
+        } else {
+            log.info("[{}] 已连接 hub,workerId={},hubKey={}", name, workerId,
+                    hubKey.isEmpty() ? "未配置" : "已配置");
+        }
         for (Listener l : listeners) {
             try {
                 l.onHubConnected();

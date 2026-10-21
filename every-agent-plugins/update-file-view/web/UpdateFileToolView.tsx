@@ -4,8 +4,11 @@
  * 经 `ui.tool_call_views` 扩展点注册，命中 update_file 即整体接管渲染
  * （与核心内置 toolViews 同地位，优先级高于内置注册表）：
  *
- * 折叠态：工具图标 + 工具名 + 文件名 + 变更统计徽章（+a −r，无变更时显示「无变更」）
+ * 折叠态：工具图标 + 耗时 + 工具名 + 文件名 + 变更统计徽章（+a −r，无变更时显示「无变更」）
  *         + 完整路径 + 折叠箭头 —— 不展开即可看到改了哪个文件、改动量多大。
+ *         图标与耗时与核心 FileToolEntry 同构：状态类 `nagent-tool-state--*`
+ *         （rowState 优先，running 转圈 / done 绿 / error 红），耗时优先权威
+ *         durationMs（运行中宿主灌入实时读秒，结果到达冻结权威值）。
  * 展开态：头部（图标 + 工具名 + 可点击路径 chip）→ 内嵌 diff（oldcontent → content
  *         行级对比，先删后增 + 词级高亮，一律完整展开）→ 结果块 → 错误块。
  *
@@ -44,6 +47,9 @@ import {
   buildLineDiff,
   buildDiffRows,
   countChanges,
+  toolDurationText,
+  toolDurationTintStyle,
+  toolStateClass,
 } from './utils'
 import { UpdateFileDiff } from './UpdateFileDiff'
 
@@ -82,6 +88,14 @@ function UpdateFileEntry({ detail }: { detail: PluginToolCallDetail }) {
   const hasError = detail.status === 'error'
   const result = detail.result
   const resultText = typeof result === 'string' ? result : JSON.stringify(result, null, 2)
+
+  // 运行态与耗时（与核心 FileToolEntry 同构）：状态图标 class 优先宿主灌入的
+  // rowState（running 转圈 / done 绿 / error 红），耗时仅慢调用显示（≥10s 门槛，
+  // 与色阶起色同一阈值），tint 百分比写入 --tool-dur-tint 由宿主 CSS 插值
+  // （慢调用红色深度与核心工具行完全一致）。
+  const stateClass = toolStateClass(detail)
+  const durationText = toolDurationText(detail)
+  const durationTintStyle = toolDurationTintStyle(detail)
 
   const [open, setOpen] = React.useState(false)
 
@@ -160,7 +174,8 @@ function UpdateFileEntry({ detail }: { detail: PluginToolCallDetail }) {
           setOpen((value) => !value)
         }}
       >
-        <WrenchIcon size={13} className={`nagent-tool__icon${hasError ? ' nagent-tool__icon--error' : ''}`} />
+        <WrenchIcon size={13} className={`nagent-tool__icon${stateClass ? ` ${stateClass}` : ''}`} />
+        {durationText ? <span className="nagent-tool__duration" style={durationTintStyle}>{durationText}</span> : null}
         <span className="nagent-tool__name">{detail.toolName || 'update_file'}</span>
         <span className="nagent-tool__inline-preview">
           {fullPath ? (
@@ -183,7 +198,7 @@ function UpdateFileEntry({ detail }: { detail: PluginToolCallDetail }) {
         <div className="nagent-tool__detail">
           <div className="nagent-tool__result-item">
             <div className="nagent-tool__result-item-head">
-              <WrenchIcon size={12} className={`nagent-tool__icon${hasError ? ' nagent-tool__icon--error' : ''}`} />
+              <WrenchIcon size={12} className={`nagent-tool__icon${stateClass ? ` ${stateClass}` : ''}`} />
               <span className="nagent-tool__name">{detail.toolName || 'update_file'}</span>
               {fullPath ? (
                 <button

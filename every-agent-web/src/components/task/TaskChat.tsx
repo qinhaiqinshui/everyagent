@@ -11,7 +11,7 @@
  * taskStream 同时承担实时信号链:ask 卡片(全局 UserInteractionHost)、
  * agent 列表状态(agentStates)、上下文电池(usage)、taskModel、输入入队
  * (cancel)与重连校准。
- * 输入 = 纯文本(task.run 新建 / 运行中 task.input 入队 / 终态 task.run 续跑)。
+ * 输入 = 纯文本(task.run 新建 / 运行中 task.run{taskId} 入队 / 终态 task.run{taskId} 续跑)。
  *
  * 草稿态:taskId 为 DRAFT_TASK_ID 时渲染 TaskDraftComposerPanel(与 n 版
  * 启动台草稿面板同构),首次发送经 task.run 建任务后,把当前草稿标签
@@ -41,7 +41,8 @@ import { slashCommandRegistry } from '@/slash/slashCommandRegistry'
 import { createSnowflakeId } from '@/utils/snowflakeId'
 import { taskQueryService } from '@/query/taskQueryService'
 import { isTaskActive } from '@/task/taskStatusPresentation'
-import type { AgentMetaSnapshot, TaskThreadItem } from '@/task/eventFolder'
+import type { AgentMetaSnapshot } from '@/task/agentLedger'
+import type { ThreadItem } from '@/task/threadItem'
 import { taskStore } from '@/task/taskStore'
 import { taskStreamManager, type TaskStreamHandle } from '@/task/taskStream'
 import { workspaceRegistry, type WorkspaceEntry } from '@/hub/workspaceRegistry'
@@ -458,9 +459,10 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
   const isTaskRunning = isTaskActive(status)
 
   // ── 单一真相源消息区 ────────────────────────────────────────────────
-  // 线程渲染数据只来自 useTaskStream 返回的 items(store.state.items 实时快照),
-  // 已闭合轮的合成 user/final、未闭合尾轮尾段事件、worker 定向推送的流式事件
-  // 全部由 taskStream 折入同一份 items 并按 seq 去重排序。
+  // 线程渲染数据只来自 useTaskStream 返回的 items(store.state.items 实时快照):
+  // items = 纯 wire 折叠产物(未闭合尾轮尾段事件、懒加载分页、worker 定向推送的流式事件
+  // 全部由 taskStream 折入同一份并按 seq 去重排序);轮骨架(user 气泡/折叠条/final 摘要)
+  // 由 TaskRoundsPanel 按 rounds 快照合成渲染,不进 items(画板纯化,§8.3)。
 
   // 续跑校准:任务状态从非活动态翻回活动态(发送续跑 / 他端续跑)时——
   // 实时信号链重开(stream.resync:重拉 rounds + 重新订阅推送,续喂
@@ -720,13 +722,14 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
   // meta 补齐追加在后;title 取 resolveAgentTitle 优先,兜底 meta.title)。
   //
   // ── 名单「只增不减」 ──────────────────────────────────────────
-  // 上面两个数据源在运行中会**整瞬间清空**:任务状态从非活动翻回活动时聊天页会 stream.resync()
-  // (= open → folder.reset(),items/agentStates/agentMeta 全清后重拉),task.agents 台账也是
+  // 上面两个数据源在运行中会**整瞬间塌缩**:任务状态从非活动翻回活动时聊天页会 stream.resync()
+  // (= open → folder.reset(),items 全清后重拉——台账 store folder.ledger 不随 reset 清,
+  // 但 items 派生名单在重拉回填前仍有空窗),task.agents 台账也是
   // 异步补回。名单一旦塌成只剩主 agent,AgentListPanel 按「≤1 个 agent 不渲染」整行卸载,
   // 胶囊连同刚点上的选中描边一起消失、DOM 节点被拆掉后点击还会落空——这正是「选中效果一闪
   // 而逝」。一个任务的 agent 集合只会新增、不会消失,故此处按 agentId 单调累积名单:
   // **成员与顺序冻结**,标题/状态/用量仍每帧取实时值(见 agentListItems)。
-  const agentMeta = stream?.state.agentMeta
+  const agentMeta = stream?.folder.ledger.agentMeta
   const agentRosterRef = React.useRef<Map<string, string>>(new Map())
   const agents = React.useMemo(() => {
     const seen = new Map<string, string>()
@@ -734,7 +737,9 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
       seen.set(stableMainAgentId, '主 agent')
     }
     for (const item of items) {
-      const rawKey = item.type === 'agent_message' ? item.message.agentId : (item.trace.agentId ?? '')
+      // ThreadItem.agentId 即归属键(折叠器写入,事件缺 agentId 已在入口归一;
+      // 空串 = mainAgentId 未灌入的极早期形态,此处 || stableMainAgentId 双保险)。
+      const rawKey = item.agentId
       const agentKey = rawKey || stableMainAgentId
       if (agentKey && !seen.has(agentKey)) {
         seen.set(agentKey, stream?.resolveAgentTitle(rawKey) ?? rawKey)
@@ -759,11 +764,11 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
     return [...seen.entries()].map(([agentId, title]) => ({ agentId, title }))
   }, [items, stream, stableMainAgentId, agentMeta])
 
-  // agent 长条列表项:状态来自事件折叠器的 agentStates(主 agent 键 = mainAgentId,子 agent 键 = 子 id);
+  // agent 长条列表项:状态来自台账 store folder.ledger.agentStates(主 agent 键 = mainAgentId,子 agent 键 = 子 id);
   // meta 同源(键:主 = mainAgentId,子 = 子 id)→ 悬停信息卡数据 + 子 agent 胶囊底部上下文用量线
   // (contextRatio = contextUsed / contextWindow,clamp 到 0~1;无数据 undefined)。
   const agentListItems = React.useMemo<AgentListItem[]>(() => {
-    const states = stream?.state.agentStates ?? {}
+    const states = stream?.folder.ledger.agentStates ?? {}
     const metas = agentMeta ?? {}
     const entryStatus = entry?.status ?? 'idle'
     // 任务终态判定:completed/stopped/error 时,任务状态是主 agent 的权威状态。
@@ -780,9 +785,9 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
         agentId: agent.agentId,
         title: agent.title,
         status: isMain
-          // 主 agent:任务终态时,任务状态(entry.status)是权威——流事件 agentStates[mainAgentId]
-          // 可能因 resync reset 后丢失、或被 cancelled 等事件设为 stopped 而与实际任务
-          // 终态(completed)不一致;非终态时流事件优先(反映 running/waiting-user 实时状态)。
+          // 主 agent:任务终态时,任务状态(entry.status)是权威——流事件台账状态可能被
+          // cancelled 等事件设为 stopped 而与实际任务终态(completed)不一致;
+          // 非终态时流事件优先(反映 running/waiting-user 实时状态)。
           ? (entryStatusTerminaled
             ? entryStatus
             : (states[stableMainAgentId] ?? (entryStatus ?? 'idle')))
@@ -981,14 +986,7 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
       )}
       composer={(
         <div className="nagent-composer-dock">
-          {status === 'error' ? (
-            <div className="ui-notice ui-notice--warn nagent-composer__truncation" role="status">
-              <div className="ui-notice__body">
-                <div className="ui-notice__title">本轮运行被提前结束</div>
-                <div>{entry?.error || 'worker 运行出错，任务被提前结束。'}</div>
-              </div>
-            </div>
-          ) : null}
+          {/* 任务级错误信息已由线程内 error 事件的红色 trace 承载，输入框上方不再重复弹提示条。 */}
           <TaskComposerSurface
             draft={draft}
             placeholder="继续输入，让当前 Task 创建新的 Agent 执行下一轮"
@@ -1101,7 +1099,7 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
  * 订阅任务实时流(折叠推进触发重渲染)。
  *
  * 返回 [stream, items]:stream 是共享句柄(含可变 state,供 taskModel/contextUsage/
- * agentStates/resolveAgentTitle/cancel 等消费);items 是**每次折叠推进都
+ * agent 台账(folder.ledger)/resolveAgentTitle/cancel 等消费);items 是**每次折叠推进都
  * 换引用的线程项副本**——既供 TaskRoundsPanel 消息区,也供派生 agent 列表(agents)。
  *
  * 关键:hub 的 TaskEventFolder.fold 对 state.items 做原地 push / 原地 mutate
@@ -1109,7 +1107,7 @@ export default function TaskChat({ taskId, agentId, isActive = false }: TaskChat
  * 新引用,保证下游 memo / effect 的 [items] 依赖能感知折叠推进(新子 agent
  * 出现/标题更新/流式 delta 到达时刷新)。
  */
-function useTaskStream(taskId: string | null): [TaskStreamHandle | null, TaskThreadItem[]] {
+function useTaskStream(taskId: string | null): [TaskStreamHandle | null, ThreadItem[]] {
   const [version, setVersion] = React.useState(0)
   const stream = React.useMemo(
     () => (taskId ? taskStreamManager.get(taskId) : null),
@@ -1121,7 +1119,7 @@ function useTaskStream(taskId: string | null): [TaskStreamHandle | null, TaskThr
     return unsubscribe
   }, [stream])
   // 每次 notify(version 变)都产生新的 items 引用,驱动下游 memo / effect 刷新。
-  const items = React.useMemo<TaskThreadItem[]>(
+  const items = React.useMemo<ThreadItem[]>(
     () => (stream ? [...stream.state.items] : []),
     [stream, version],
   )

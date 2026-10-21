@@ -163,7 +163,7 @@ export default plugin
 
 前端插件能注册/调用的一切。常量名定义在 `every-agent-web/src/plugin/PluginDispatcher.ts:45-62`，类型声明在 `every-agent-plugin-api/js/index.ts:808-853`；逐扩展点字段表与注册代码见 [UI 扩展点](ui-extensions.md)。
 
-### 4.1 15 个 `ctx.ui.register*`（全部返回真清理的 Disposable）
+### 4.1 17 个 `ctx.ui.register*`（全部返回真清理的 Disposable）
 
 | 扩展点常量名 | register 方法 | 一句话 | 状态 |
 |---|---|---|---|
@@ -182,8 +182,10 @@ export default plugin
 | `ui.search_types` | `registerSearchType` | 注册搜索类型（id/label/kinds/filters/ResultView…） | 正常 |
 | `ui.editor_context_menu_actions` | `registerEditorContextMenuAction` | 编辑器内容区右键菜单项（仅在有选区且有可见项时接管，否则放行原生菜单） | 正常 |
 | `ui.composer_chip_actions` | `registerComposerChipAction` | 按 kind 接管输入框/消息回放胶囊点击（先注册者胜；核心 `system.workspace_file` 亦经此注册） | 正常 |
+| `ui.settings_sections` | `registerSettingsSection` | 设置页设置段（按 order 升序渲染在内置段之后） | 正常 |
+| `ui.themes` | `registerTheme` | 全局颜色主题（部分覆盖、其余继承 `type` 基底） | 正常 |
 
-注：`dispatch()` 的 switch 只列前述 13 个 `ui.*`/`task.*` 常量（`PluginDispatcher.ts:232-262`）；`ui.trace_types` / `ui.output_blocks` 走侧路注册表，不影响使用。
+注：`dispatch()` 的 switch 只列前述 15 个 `ui.*`/`task.*` 常量（`PluginDispatcher.ts:232-262`）；`ui.trace_types` / `ui.output_blocks` 走侧路注册表，不影响使用。
 
 ### 4.2 `ctx.ui` 的 6 个动作方法（触发宿主动作，不注册东西）
 
@@ -265,7 +267,7 @@ npm.cmd run typecheck
 ## 8. 下一步读
 
 - `ctx` 各成员（sdk/storage/commands/events/fs）的签名与坑：[前端 ctx API](context-api.md)
-- 15 个扩展点逐个字段表 + 注册代码：[UI 扩展点](ui-extensions.md)
+- 17 个扩展点逐个字段表 + 注册代码：[UI 扩展点](ui-extensions.md)
 - 21 个宿主事件与 8 个具名事件：[事件](events.md)
 - `webMain`/`hasWebMain`/禁用机制在清单侧的口径：[plugin.json 字段参考](../plugin-manifest.md)
 - 三形态构建矩阵与 cwd 陷阱：[构建与运行](../guides/build-and-run.md)

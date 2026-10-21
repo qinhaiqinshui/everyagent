@@ -7,7 +7,7 @@ has_children: false
 
 # 前端 UI 扩展点
 
-**一句话定位**：`ctx.ui`（`UiRegistry`）是前端插件往宿主 UI 里「贡献界面」的唯一通道——15 个 `register*` 扩展点 + 6 个动作方法。本文逐扩展点给出 Definition 字段表（抄自纯类型包 `every-agent-plugin-api/js/index.ts`）、注册代码、宿主消费链与坑；每条断言附宿主源码行号。`ctx.ui` 的宿主实现是单例 `pluginDispatcher`（接入方式见[前端 ctx API](context-api.md) §8）。
+**一句话定位**：`ctx.ui`（`UiRegistry`）是前端插件往宿主 UI 里「贡献界面」的唯一通道——17 个 `register*` 扩展点 + 6 个动作方法。本文逐扩展点给出 Definition 字段表（抄自纯类型包 `every-agent-plugin-api/js/index.ts`）、注册代码、宿主消费链与坑；每条断言附宿主源码行号。`ctx.ui` 的宿主实现是单例 `pluginDispatcher`（接入方式见[前端 ctx API](context-api.md) §8）。
 
 ## 0. 读前须知：所有扩展点共用的四条机制
 
@@ -16,7 +16,7 @@ has_children: false
 3. **两条读取通道**：异步 `dispatch('ui.xxx')` / `get*()`（仅文件页侧栏在用，`FileTabPage.tsx:166`）与同步 `listRegistered*()`（其余消费点的实际用法，下文逐个给出）。
 4. **示例代码约束**（详见[加载链路](overview-and-loading.md)）：入口 `web/index.ts` 只能 `import type ... from '@everyagent/plugin-api'` + 白名单 bare import（react / react-dom / react/jsx-runtime / antd / @ant-design/icons）；`.ts` 文件里用 `React.createElement`，组件放 `.tsx` 可用 JSX。
 
-## 1. 十五个扩展点总览
+## 1. 十七个扩展点总览
 
 | 扩展点（dispatch 名） | register 方法 | 一句话 | 内置范例 |
 |---|---|---|---|
@@ -35,6 +35,8 @@ has_children: false
 | `ui.search_types` | `registerSearchType` | 注册搜索类型（id/label/kinds/filters/ResultView…） | ⚠️ 无内置范例（内置三类型不走此扩展点） |
 | `ui.editor_context_menu_actions` | `registerEditorContextMenuAction` | 文件内容区（编辑器）右键菜单项 | selection-reference；核心内置「复制」项（`core.copy-selection`，见 §16.1） |
 | `ui.composer_chip_actions` | `registerComposerChipAction` | 按 kind 接管输入框/消息回放胶囊的点击行为 | selection-reference（核心 `system.workspace_file` 亦经此扩展点注册，见 §17） |
+| `ui.settings_sections` | `registerSettingsSection` | 向设置页贡献一个设置段 | **无**（novel-reader 起于此） |
+| `ui.themes` | `registerTheme` | 贡献一套全局颜色主题（可部分覆盖、其余继承基底） | **无**（novel-reader；核心深/浅色为主题表内建项） |
 
 ## 2. `ui.sidebar_items` —— 侧边栏活动栏项
 
@@ -246,6 +248,7 @@ ctx.ui.registerUserMessageAction({ id: 'my-plugin.copy-button', Component: MyBut
 
 消费链：每条用户消息渲染时同步 `listRegisteredUserMessageActions()` 并 map 渲染全部已注册动作（`AgentMessageThread.tsx:130-145`）；**只在能提取出 seq 时渲染**（messageId 不带 `m-` 前缀则空数组，`:132-133`）。
 
+- **显隐契约（容器统一控制，动作组件禁止自控透明度）**：所有动作渲染在 `.nagent-msg__actions` 容器内，显隐由容器 CSS 统一负责——桌面端 `:hover` 消息区显示；移动端消息容器（带 `tabIndex=0`）获得焦点（`:focus-within`，触摸聚焦）显示、失去焦点隐藏；隐藏时 `pointer-events:none`。动作组件只管自身视觉与交互，不要再写 `opacity:0` / hover 自显 / JS 切换 revealed 之类的自控显隐（会与容器双重控制失效）。
 - **坑**：`seq` 是字符串，别 `Number()` 转（超 2^53 丢精度）；动作组件自己管交互态（编辑模式等），与 §9 的提交贡献配合才完整。
 - **内置范例**：task-edit-resend（`every-agent-plugins/task-edit-resend/web/index.ts:17-20`，编辑重发按钮；按钮内部用 `ctx.ui.setComposerRawContent/appendComposerText` 回填草稿，`EditMessageButton.tsx:60,62`）。
 
@@ -408,6 +411,9 @@ ctx.ui.registerRoundTailPanel(def)
   - **统一高度约束**：这一行并排的 pill 高度由核心 Token 单点决定 —— `--round-tail-pill-height`（`assets/styles/ui-tokens.css`，`:root`，值 = 文本行盒 `--text-xs × 1.5` + 上下内边距 `2 × --space-1` = 26px）。核心「复制」按钮与 file-change 汇总头都用 `height: var(--round-tail-pill-height); box-sizing: border-box; padding: 0 9px`（纵向不吃 padding，内容靠 `align-items: center` 居中），故两枚 pill **等高由构造保证**，不再靠内边距/行高/图标尺寸「碰巧」凑成一样高（历史上正是此处差一点点而顶不齐）。**插件面板的汇总头 pill 请照此写法锚定该 token**（`var()` 经 `:root` 继承到此，无需 import）。
 - **坑（实测踩过）**：`web/*.css` 只是源码，宿主加载的是 esbuild 预编译产物 `web/index.css`（`plugin.webSource` RPC 从 worker 磁盘读，产物被 `.gitignore` 排除）。**只改 `roundFileChanges.css` 这类源文件而不重跑 `npm run build:plugins`，页面用的仍是旧 CSS**——表现为「改了样式毫无效果」，或「与核心按钮差 4px 对齐不上」。改完插件样式务必 `npm run build:plugins`（单插件可 `-- --only <id>`）再刷新；改后端 / `plugin.json` 才需重启 worker。
 - **展开详情要通栏占满整行（标签页式）**：面板把「汇总头」与「展开详情」渲染成**两个并列的 flex 项**（组件直接返回 Fragment、不包根容器），详情写 `flex: 1 1 100%` —— 在 wrap 行里必然另起一行并**通栏占满整行宽度**（左边缘与「复制」按钮对齐），效果即「点标签行里的汇总头 = 切到下方那块通栏详情区」；汇总头则写 `flex: 0 0 auto` 留在标签行、原地不动。file-change 即此形态（`RoundFileChangesView.tsx` 返回 Fragment + `.task-file-changes__list { flex: 1 1 100% }`）。
+- **行内多个点击目标：不要嵌套 `<button>`**。file-change 展开后的文件变更行有两个不同动作：**点文件图标**经 `ctx.ui.openFileTab(workspaceRoot, displayPath, { mode: 'readwrite' })` 打开（或激活）该文件的**文件标签页**；**点文件名（含路径与 A/M/D 标签）**经 `ctx.ui.openDiffTab(...)` 打开 **diff 标签**。`<button>` 不能相互嵌套，故该行是 `<div className="task-file-changes__row">` 包「图标按钮（`.task-file-changes__open`）+ diff 主按钮（`.task-file-changes__diff`）」两个并列项——行容器只负责悬停高亮与间距，动作按钮各自写 `background: transparent; padding: 0; border: none; font/color: inherit`。
+  - **已删除的文件不渲染图标按钮**（磁盘上已无该路径，`openFileTab` 只会得到一个报 `NOT_FOUND` 的空标签；宿主 diff 面板的「打开文件」是在点击时 `statRaw` 校验后给 toast，插件侧直接不给入口），但图标槽（`.task-file-changes__icon-slot`，固定 16px）仍常驻占位，保证各行文件名纵向对齐；任务未挂靠工作区（`workspaceRoot` 缺省）时同理不渲染——`openFileTab` 必带工作区根。
+  - 图标是插件自带的 ReactNode：file-change 按扩展名渲染语言徽章的那套图标**自宿主 `components/shared/FileTypeGlyphs` 复制**（与 git 插件内的副本同源），因为插件既不能 `@/` 引用宿主、也不能跨插件互相 import（[总览与加载链路](overview-and-loading.md) 约定 4）。
 - 无插件面板时（如某轮无文件变更），该行只剩核心复制按钮，左对齐。
 
 - **坑**：渲染 key 是 `pluginId`（`:445`）——同一 `pluginId` 注册两个轮末面板会 React key 冲突，一个 id 只应注册一个。
@@ -621,11 +627,134 @@ export default plugin
 - **核心已迁入**：核心自身的 `system.workspace_file` 胶囊点击行为已从两处宿主组件硬编码迁到本扩展点——`every-agent-web/src/plugin/coreComposerChipActions.ts`（`pluginId:'core'`，与 `coreRoundTailPanels` 同范式），在 `main.tsx` 里 `initializeCoreRoundTailPanels()` 之后、`void loadPlugins()` **之前**同步调用 `initializeCoreComposerChipActions()`（`every-agent-web/src/main.tsx:53`，`loadPlugins()` 在 `:55`）；`InlineComposer`/`AgentMessageThread` 里已无 kind 字面量分支。核心 action 语义：`readWorkspaceFileToken` 解析 payload（`coreComposerChipActions.ts:48`）+ `ctx.workspaceRoot` 非空 → `pluginDispatcher.openFileTab(workspaceRoot, target.filePath)`（`:50-54`）；缺任一条件则回落 `openSlashItemDetail(ctx.anchor, { token })`（`:58`）。行为与迁移前一致。
 - **降级**：未命中（无插件为该 kind 注册动作）→ 保持现状（弹只读详情层），不报错。
 - **同一 kind 两处走同一注册表**：插件用上下文里的 `source` 区分场景。
-- **坑**：① `payload` 是不透明袋——宿主只解码不解释，字段缺失 / 类型错要插件自己兜底降级（建议 payload 里自带定位所需的 `workspaceRoot`/`filePath`，别假设宿主侧解析出的工作区根一定等于原文件的工作区根）；② `source:'replay'` 时没有输入框草稿桥，只能靠 `openFileTab` 等宿主动作响应，别假设能写草稿；③ 往输入框插胶囊用 `appendComposerToken`（见 §18），别自实现 opaque 线格式。
+- **坑**：① `payload` 是不透明袋——宿主只解码不解释，字段缺失 / 类型错要插件自己兜底降级（建议 payload 里自带定位所需的 `workspaceRoot`/`filePath`，别假设宿主侧解析出的工作区根一定等于原文件的工作区根）；② `source:'replay'` 时没有输入框草稿桥，只能靠 `openFileTab` 等宿主动作响应，别假设能写草稿；③ 往输入框插胶囊用 `appendComposerToken`（见 §20），别自实现 opaque 线格式。
 - **坑（`appendComposerToken` 三则）**：① `appendComposerToken` 的 `payload` 形参是 `Record<string, unknown>`，插件侧 `interface`（如 `SelectionPayload`）**无索引签名** ⇒ 直接传会被 TS 判为不可赋值（TS2322），需展开成新对象字面量 `payload: { ...payload }`（见 §16.2 示例）；② 草稿桥（`setComposerBridge`）只在**激活**任务标签注入——`TaskChat.tsx` 的注入 effect 首行有 `if (!isActive) return` 守卫（`every-agent-web/src/components/task/TaskChat.tsx:711-713`），故没有激活任务标签时（或首个 `TaskChat` 尚未挂载）`appendComposerToken`/`appendComposerText` **静默丢弃**（同 `appendComposerText` 的时序坑）；③ `kind`/`label` 为空时由宿主 `buildOpaqueTokenText` **抛错**（`every-agent-web/src/composerToken/composerOpaqueToken.ts:52-56`，插件错误立刻可见），`appendComposerToken` 自身不做 kind 业务分支。
 - **内置范例**：`selection-reference`（`kind='file.selection'`，点击经 `openFileTab(..., { lineNumber })` 切回原文件标签并定位起始行）；核心 `system.workspace_file` 亦经此扩展点注册。
 
-## 18. UiRegistry 动作方法（6 个）
+## 18. `ui.settings_sections` —— 设置页设置段
+
+### 18.1 Definition 字段表（`UiSettingsSectionDefinition`，`js/index.ts`）
+
+| 字段 | 类型 | 必填 | 消费位置（宿主） | 说明 |
+|---|---|---|---|---|
+| `id` | `string` | ✅ | `SettingsPanel.tsx` | 渲染 key；全局唯一 |
+| `title` | `string` | ✅ | `SettingsPanel.tsx` | 段标题（渲染为 `<h3>`，与内置段同款） |
+| `order` | `number?` | — | `SettingsPanel.tsx` | float 升序；缺省 100。内置段恒在前、插件段在此之后按 order 排列 |
+| `Component` | `ComponentType` | ✅ | `SettingsPanel.tsx` | 段内容组件，无 props（数据靠 `ctx.storage` / `ctx.sdk.rpc` 自持） |
+
+### 18.2 注册示例
+
+```ts
+import React from 'react'
+import type { PluginModule } from '@everyagent/plugin-api'
+import { MySettings } from './MySettings'
+
+const plugin: PluginModule = {
+  activate(ctx) {
+    ctx.ui.registerSettingsSection({
+      id: 'my-plugin.settings',
+      title: '我的插件',
+      order: 100,
+      Component: MySettings,
+    })
+  },
+}
+export default plugin
+```
+
+### 18.3 宿主消费链与坑
+
+- **消费点**：`SettingsPanel`（`every-agent-web/src/components/system/SettingsPanel.tsx`）用 `useSyncExternalStore(pluginDispatcher.subscribeExtensionsChanged, pluginDispatcher.getExtensionsVersion)` 订阅扩展点版本号，注册/注销后立即重渲染；段列表取 `listRegisteredSettingsSections()`，按 `order ?? 100` 升序（稳定 sort，同值保持注册先后）渲染在内置段之后、「关于」段之前。
+- **样式约定**：段由宿主包一层与内置段同款的 `<section>`（下边框 + 纵向间距），组件只渲染段内容、不必自带上外边距；视觉值请引用宿主 token（`var(--text-xs)` / `var(--space-*)` / `var(--border)` 等，经 `:root` 继承，无需 import）。
+- **坑**：① 段内容组件拿不到宿主 React context（插件在 blob 模块里），需要的数据用 `ctx.storage`（本地）或 `ctx.sdk.rpc`（后端）自取；② `id` 重复会让 React key 冲突，一个插件一个 id。
+- **内置范例**：**无**（`novel-reader` 起于此扩展点；核心自身的设置段不走此扩展点，直接写在 `SettingsPanel` 内）。
+
+## 19. `ui.themes` —— 全局颜色主题
+
+### 19.1 Definition 字段表（`ThemeDefinition`，`js/index.ts`）
+
+| 字段 | 类型 | 必填 | 消费位置（宿主） | 说明 |
+|---|---|---|---|---|
+| `id` | `string` | ✅ | 主题解析（`resolveThemes`） | 全局唯一；插件主题建议带插件前缀（如 `novel-reader.sepia`） |
+| `name` | `string` | ✅ | 设置页「外观」主题列表 | 用户可见名称 |
+| `type` | `'dark' \| 'light'` | ✅ | `applyTheme` / antd / xterm | 基底：决定 `data-theme` 属性、antd 与终端明暗、`color-scheme` |
+| `colors` | `Record<string, string>?` | — | `applyTheme` | **可选**覆盖的颜色 token 映射；缺省/未列出的 token 一律**继承 `type` 基底** |
+
+`colors` 的键是宿主 CSS 变量名（含 `--` 前缀），值是任意合法 CSS 颜色表达式（可含 `var()` / `color-mix()`）。**可覆盖的 token 白名单见 §19.4**；结构性 token（间距 / 圆角 / 字号 / 动效 / z-index / 字体族）**不可**被主题覆盖。
+
+### 19.2 继承模型（核心）
+
+主题应用分两步，天然支持「部分覆盖 + 其余继承」：
+
+1. `document.documentElement.setAttribute('data-theme', type)` —— 选定**基底**（内建深色 = `:root`、浅色 = `:root[data-theme='light']` 的整批 token）。
+2. 把 `colors` 的每一项 `documentElement.style.setProperty(token, value)` —— 以**行内样式**覆盖，优先级高于 `:root` 与 `:root[data-theme='light']`。
+
+因此：
+
+| 主题 `colors` | 效果 |
+|---|---|
+| 全部 68 个颜色 token | 整体换肤，与基底无关 |
+| 只写少数几个（如只写 `--reading-bg`） | **只有那几个 token 变**，其余全部沿用 `type` 基底 |
+| 缺省 / 空对象 | 纯基底（等价现在的深色 / 浅色） |
+
+切换主题时宿主会**先清除上一主题设过的行内属性**再写新值，避免残留。CSS 自定义属性默认可继承，故 token 的传播对新旧主题一致。
+
+### 19.3 注册示例（`novel-reader` 只覆盖阅读区）
+
+```ts
+import type { PluginModule, ThemeDefinition } from '@everyagent/plugin-api'
+
+// 只改文件阅读区两个 token，其余（侧栏/标题栏/消息/按钮…）继承 light 基底。
+const sepia: ThemeDefinition = {
+  id: 'novel-reader.sepia',
+  name: '羊皮纸',
+  type: 'light',
+  colors: {
+    '--reading-bg': '#f5ecd8',
+    '--reading-fg': '#3b2f1e',
+    '--code-bg': '#f5ecd8',
+    '--code-text': '#3b2f1e',
+  },
+}
+
+const plugin: PluginModule = {
+  activate(ctx) { ctx.ui.registerTheme(sepia) },
+}
+export default plugin
+```
+
+### 19.4 可覆盖 token 白名单（颜色类，共 68 个）
+
+分组列出，`colors` 的键必须取自此表（写表外 token 会被忽略）：
+
+| 组 | token |
+|---|---|
+| 背景 / 表面 | `--bg-primary` `--bg-secondary` `--bg-tertiary` `--bg-table` `--bg-hover` `--bg-active` `--bg-elevated` `--bg-sunken` `--bg-soft` |
+| 边框 | `--border` `--border-light` `--border-strong` |
+| 文本 | `--text-primary` `--text-secondary` `--text-muted` `--text-faint` |
+| 强调色 | `--accent-blue` `--accent-blue-dim` `--accent-blue-soft` `--accent-green` `--accent-green-dim` `--accent-purple` `--accent-purple-dim` `--accent-amber` `--accent-amber-dim` `--accent-red` `--accent-red-dim` `--accent-cyan` `--accent-cyan-dim` `--tool-slow-red` |
+| 标签页 | `--agent-tab-bg` `--agent-tab-active-bg` `--agent-tab-border` `--agent-tab-border-active` `--agent-tab-text` `--agent-tab-text-active` `--agent-tab-icon` `--agent-tab-icon-active` `--file-tab-*`（同 8 项） |
+| 阴影 / 遮罩 | `--shadow-sm` `--shadow-md` `--shadow-lg` `--overlay` |
+| 代码 | `--code-bg` `--code-text` `--cm-selection-focused` `--cm-selection-unfocused` `--json-key` `--json-string` `--json-number` `--json-boolean` `--json-null` |
+| 滚动条 | `--scrollbar-thumb` `--scrollbar-thumb-hover` |
+| 标题栏 | `--titlebar-bg` `--titlebar-tab-bg` `--titlebar-tab-hover-bg` `--titlebar-tab-active-bg` `--titlebar-tab-border` |
+| **文件阅读区**（专供阅读类主题） | `--reading-bg` `--reading-fg` |
+
+> 白名单与 `every-agent-web/src/theme/themeTokens.ts` 的 `THEME_TOKEN_NAMES` 一一对应（改一处必同步另一处）。
+
+`--reading-bg` / `--reading-fg` 的消费范围：文件标签页内容区（Markdown 预览的 `.md-root` 正文、CodeMirror 编辑器与行号槽、Markdown 分栏/单栏面板、文件内容容器）。默认值 `var(--bg-secondary)` / `var(--text-primary)`——未覆盖时与不套主题完全一致。因此**只覆盖这两个 token 的主题 = 只换文件阅读区配色，其余 UI（侧栏/标题栏/消息/按钮）全部继承 `type` 基底**（`novel-reader` 即此形态）。
+
+**阅读区字号刻度（`--reading-font-xs/sm/md/xl/2xl`）**：由 `--editor-font-size` 派生（`calc(var(--editor-font-size) * 系数)`，系数取 `--text-*` 相对基准 14px 的比值），供 Markdown 预览的标题/正文/表格/行内码等排版使用——使「编辑器字号」设置能**整体等比缩放阅读区文字**，而全局 UI 的 `--text-*` 刻度不受影响。默认 14px 时与 `--text-*` 等价（零视觉变化）。
+
+### 19.5 宿主消费链与坑
+
+- **主题解析**：`resolveThemes()`（`every-agent-web/src/theme/resolveThemes.ts`）= `[内建「深色」「浅色」] + pluginDispatcher.listRegisteredThemes() + 用户自定义主题`（自定义存 `pref` 的 `theme.custom`），按 `id` 去重（先到者胜——内建优先，插件不能顶替内建 id）。当前选中存 `pref` 的 `theme`（主题 id；旧值 `dark`/`light` 自动映射到内建 id）。
+- **宿主消费点**：设置页「外观」段（`SettingsPanel.tsx`）列出全部主题、选中即 `applyTheme` 并持久化；`Layout.tsx` 在主题变化（含插件加载后新主题出现）时重新解析并应用，同时把 `type` 交给 antd `getAntdTheme(type)` 与终端 `themeFor(type)`。
+- **`type` 与 `colors` 的分工（重要边界）**：`type` 保证 antd 组件（Modal / Select / Dropdown 等，走 antd 自身 token 体系）与 xterm 终端跟随深/浅；**重覆盖的 `colors` 不改变 antd 内部配色**（antd 不读宿主 CSS 变量）。故「只覆盖阅读区」这类小范围主题最稳；若要整体换肤，antd 内部色仍按 `type` 的深/浅基底走。
+- **坑**：① 主题 id 建议带插件前缀，避免与内建 / 其它插件撞名；② 白名单外的键静默忽略；③ 主题不含字体 / 字号——字体族与字号是独立的编辑器设置项（`pref` 的 `editor.fontFamily` / `editor.fontSize`，对标 VSCode `editor.fontFamily` / `editor.fontSize`），不受主题影响。
+- **内置范例**：**无**（`novel-reader` 起于此扩展点；核心深色 / 浅色为主题表内建项，不注册）。
+
+## 20. UiRegistry 动作方法（6 个）
 
 动作方法不注册 UI，而是**驱动宿主**。实现链统一：`pluginDispatcher` 同步委托模块级 holder 桥（`pluginRuntimeBridge.ts`），宿主组件挂载时注入、未注入时静默降级（`pluginRuntimeBridge.ts:1-10` 注释）。
 
@@ -656,14 +785,14 @@ ctx.ui.appendComposerToken({ kind: 'file.selection', label: 'foo.ts:3-5', payloa
 
 注意两个时序坑：① 页面刚加载、`Layout`/`TaskChat` 尚未挂载时桥为 null，动作**静默丢失**（不抛错）；② 草稿桥只在**激活标签页**持有写权（`TaskChat.tsx:703-713` 注释解释竞态），多任务标签并存时写入的是当前激活的那个。
 
-## 19. Disposable 与刷新
+## 21. Disposable 与刷新
 
 - **dispose 语义是真的**：`ListExtensionRegistry.register` 返回的 Disposable 从数组 splice 并通知宿主重渲染（`ExtensionRegistry.ts:45-56`）——`ctx.events.on`、`ctx.commands.registerCommand` 同理（见[前端 ctx API](context-api.md) §9）。`registerTraceType` / `registerOutputBlock` 的 dispose 也已补齐侧路注销（`traceTypeRegistry.unregisterTraceType` / `outputBlockRegistry.unregister`，known-issues #3 修复前曾是不清真实消费方的假 Disposable）。
 - **宿主收集并在页面卸载时统一 dispose**：激活时 `ctx.ui` 等注册表都包了收集代理（`pluginLoader.ts` 的 `trackDisposables`），注册返回的 Disposable 全部进该插件的 `disposables`；页面卸载（`pagehide`）时宿主先调 `deactivate` 再逆序 dispose 全部注册项并移除插件 CSS（known-issues #8 修复前 disposables 恒为空数组、`deactivate` 零调用）。运行期没有热卸载——中途注销仍需自己持有 Disposable 调 dispose。
 - **刷新即丢**：注册表、订阅、blob 模块全是内存态，页面刷新全部清零并重新走加载链路（[加载链路](overview-and-loading.md)）；跨刷新要保留的状态用 `ctx.storage`（localStorage）。
 - **同一会话内的「更新」= 重新加载页面**：改了插件 web 代码要重跑 `npm run build:plugins` 再刷新（该脚本不在任何流水线内）；后端启停/装卸一律重启 worker（[plugin.json 字段参考](../plugin-manifest.md) §6；扩展面板「重新加载」按钮**仅在有待生效变更时显示**，待生效变更涉及含 `main` 的插件时会弹确认并自动完成重启 + 刷新）。
 
-## 20. 下一步读
+## 22. 下一步读
 
 - `ctx.ui` 之外的能力（rpc/storage/events/fs/commands）：[前端 ctx API](context-api.md)
 - 加载链路与 bare import 白名单：[加载链路](overview-and-loading.md)

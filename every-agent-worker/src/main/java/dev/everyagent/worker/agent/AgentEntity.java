@@ -120,8 +120,10 @@ public final class AgentEntity implements Agent {
      * 本 agent 的 per-run 工具执行结果账本({@code tool.result} 事件 status 的结构化判定源)。
      *
      * <p>由 {@code AgentBuilder} 在装配时创建(同一实例同时交给 {@link dev.everyagent.plugin.api.spi.ToolContext#toolOutcomes()}
-     * 供插件执行器记账、交给 per-call 工具回调包装器记异常、并由本实体供 advisor 查账),
-     * 随 run 结束回收。单元测试等直接 new 本类的场景可能为 null,使用方须判空。
+     * 供插件执行器记账(shell 退出码线)、经 {@code RunContext} 下行供 per-call 链上行写账
+     * ——发射点 {@code ToolEventInterceptor} 按前缀 + shell 退出码账判定成败后以 callId 落账,
+     * 供后置消费者按 callId 直查,见架构 §7.14.3),随 run 结束回收。单元测试等直接 new 本类的场景
+     * 可能为 null,使用方须判空。
      */
     public volatile ToolOutcomeLog toolOutcomes;
 

@@ -75,7 +75,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  * 生命周期纪律:agent 运行完成即销毁——finish 全程持任务监视器做
  * flush→updateMeta→写索引→untrack 双件套→tasks.remove,TaskEntry 连同 EventLog 丢弃;
  * 内存仅留磁盘路由索引(diskTasks,~150B/任务)。任务永久保留,用户主动 delete 是唯一删除路径。
- * 终态任务收到 task.input = 冷启动再运行(ConversationLoader 从磁盘重建上下文,一次普通运行)。
+ * 终态任务收到 task.run{taskId} = 冷启动再运行(ConversationLoader 从磁盘重建上下文,一次普通运行)。
  * 多 hub:任务不做 owner 隔离;任务事件经 EventSink.fanout 扇出到全部连接的 tasks 频道。
  */
 @Component
@@ -563,7 +563,8 @@ public class TaskManager implements TaskInputHandler, InteractionServiceImpl.Sta
 
     /**
      * task.rounds:任务轮次索引拉取(前端「双击打开任务」rounds 新流程的唯一取数口)。
-     * 参数:taskId 必填。应答:{rounds:[...], open:{startSeq,user}|null, status, live}:
+     * 参数:taskId 必填。应答:{rounds:[...], open:{startSeq, user, roundId?, userMessage?}|null,
+     * status, live}:
      * <ul>
      * <li>rounds = rounds.jsonl 全部行(wire:seq 一律字符串,endSeq 未闭合为 "",subs 恒数组);</li>
      * <li>rounds.jsonl 不存在(旧任务/Advisor 介入前创建)→ 惰性全量生成落盘后返回:
@@ -610,7 +611,8 @@ public class TaskManager implements TaskInputHandler, InteractionServiceImpl.Sta
             }
             ObjectNode open = null;
             if (isLive) {
-                open = scanOpenRound(taskId, live, mainAgentId); // 运行中:当前未闭合轮起点(不落盘)
+                // 运行中:当前未闭合轮起点(不落盘);传入已读 roundList 供 open 轮取未闭合行 roundId
+                open = scanOpenRound(taskId, live, mainAgentId, roundList);
             }
             ObjectNode result = Json.obj()
                     .set("rounds", rounds)
@@ -820,11 +822,18 @@ public class TaskManager implements TaskInputHandler, InteractionServiceImpl.Sta
      * (readSince/readAfterSeq 均为开区间原语,传 anchor-1 得「seq ≥ anchor」):尾行未闭合时
      * 其开轮 user.message 事件(startSeq == anchor)本身要进窗口,续跑任务的<b>历史</b>开轮
      * 才能被重扫出来(否则 scan 开不出轮,open 恒为 null)。anchor 为 0(无 rounds.jsonl)
-     * 时维持 0(全量)。扫描出的最后一轮未闭合时返回 {startSeq,user}——startSeq 即开轮输入,
+     * 时维持 0(全量)。扫描出的最后一轮未闭合时返回 {startSeq, user, roundId?, userMessage?}——
+     * startSeq 即开轮输入,
      * 续跑后队列消费的新 user.message 属中间输入,并入当前轮不改起点;全部闭合(或无轮)返回
      * null(闭合行由 Advisor 增量闭合,职责不变)。
+     *
+     * <p>应答携带 {@code roundId}(取自 rounds.jsonl 未闭合行——开轮落盘即生成、闭合原位改写
+     * 沿用不重生成,与该轮随后出现在 rounds 里的 roundId 相同;scan 结果本身不可信,扫描阶段
+     * roundId 恒 null,稳定主键只在磁盘行上)。未闭合行缺失(旧任务惰性重建不落盘未闭合轮)
+     * 或旧行无 roundId 时不写该字段——前端按可选字段 must-ignore 双向兼容(§5.6)。
      */
-    private ObjectNode scanOpenRound(String taskId, TaskEntry live, String mainAgentId)
+    private ObjectNode scanOpenRound(String taskId, TaskEntry live, String mainAgentId,
+            List<RoundIndex.Round> diskRounds)
             throws java.io.IOException {
         Path dir = store.dirOf(taskId);
         long anchor = store.lastRoundStartSeq(dir);
@@ -847,6 +856,13 @@ public class TaskManager implements TaskInputHandler, InteractionServiceImpl.Sta
         ObjectNode openNode = Json.obj()
                 .put("startSeq", String.valueOf(open.startSeq()))
                 .put("user", open.user());
+        // roundId:取磁盘未闭合行(按 startSeq 配对,沿用不重生成);旧行缺失不写(must-ignore)。
+        for (RoundIndex.Round d : diskRounds) {
+            if (!d.closed() && d.startSeq() == open.startSeq() && d.roundId() != null) {
+                openNode.put("roundId", d.roundId());
+                break;
+            }
+        }
         if (open.userMessage() != null) {
             openNode.set("userMessage", open.userMessage());
         }

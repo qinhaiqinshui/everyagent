@@ -329,6 +329,6 @@ export default function MyPanel(): React.ReactElement {
 ## 8. 下一步读
 
 - 事件挂探针、typecheck 与构建自检的调试流程：[调试与测试](../guides/debugging-and-testing.md)
-- 用事件做面板懒刷新的另一半——15 个 UI 扩展点：[前端 UI 扩展点](ui-extensions.md)
+- 用事件做面板懒刷新的另一半——17 个 UI 扩展点：[前端 UI 扩展点](ui-extensions.md)
 - `ctx.events` 在 ctx 全家桶里的位置与 `storage`/`sdk` 细节：[前端 ctx API](context-api.md)
 - 事件名为什么必须「不含业务语义」（§7.15.2 轮末旁路数据约定）：[后端持久化与状态](../backend/persistence-and-state.md)

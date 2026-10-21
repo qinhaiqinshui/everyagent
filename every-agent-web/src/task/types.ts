@@ -107,6 +107,12 @@ export interface TaskRoundsOpenRound {
   startSeq: string
   /** 未闭合轮的用户输入文本。 */
   user: string
+  /**
+   * 未闭合轮的轮次 ID（worker 开轮落盘即生成、闭合原位改写沿用不重生成，与该轮随后出现在
+   * rounds 里的 roundId 相同，天然是轮次分页 key）。老 worker / 老数据未闭合行缺失时不携带：
+   * 可选字段 must-ignore 双向兼容，消费方不得假设恒在，缺失时回退既有 key。
+   */
+  roundId?: string
   /** 未闭合轮起点的完整 user.message payload（懒加载骨架起点；旧 worker 缺失）。 */
   userMessage?: UserMessagePayload
 }

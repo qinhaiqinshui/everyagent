@@ -1,2 +1,9 @@
 server:
   port: 8100
+
+# 开发运行恢复控制台日志与启动横幅(打包默认 OFF,防 hub.out.log 无限膨胀,见 application.yml)
+hub:
+  console-log-threshold: INFO
+spring:
+  main:
+    banner-mode: console

@@ -381,13 +381,17 @@ export function FlaskIcon({ size = 16, style }: AppGlyphProps) {
 }
 
 export function WrenchIcon({ size = 16, style, className, flipped = false }: AppGlyphProps) {
+  // viewBox 22x22;路径 Y 范围 4.4~14.7(中心 9.55),相对画布中心 11 偏上 1.45。
+  // 用 transform 整体下移 1.45 使路径垂直居中,消除 baseline/align-self:center 对齐时的视觉偏移。
   const path = (
-    <path
-      d="M13.7 4.4A4.4 4.4 0 0 0 9.1 10l-4.7 4.7a1.4 1.4 0 0 0 0 2l.9.9a1.4 1.4 0 0 0 2 0l4.7-4.7a4.4 4.4 0 0 0 5.6-4.6l-2.6 1.4-2.4-2.4 1.5-2.9Z"
-      stroke="currentColor"
-      strokeWidth="1.5"
-      strokeLinejoin="round"
-    />
+    <g transform="translate(0 1.45)">
+      <path
+        d="M13.7 4.4A4.4 4.4 0 0 0 9.1 10l-4.7 4.7a1.4 1.4 0 0 0 0 2l.9.9a1.4 1.4 0 0 0 2 0l4.7-4.7a4.4 4.4 0 0 0 5.6-4.6l-2.6 1.4-2.4-2.4 1.5-2.9Z"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinejoin="round"
+      />
+    </g>
   )
   return (
     <Svg size={size} style={style} className={className} viewBox="0 0 22 22">
@@ -401,13 +405,37 @@ export function WrenchIcon({ size = 16, style, className, flipped = false }: App
  * 盾牌校验图标（AI 安全审议 auth.review trace 用）：盾牌轮廓 + 对勾。
  * 语义：AI 安全审议已对授权请求给出结论（放行/拒绝/升级）。
  */
-/** 终端图标（圆角窗口外框 + `>` 提示符 + 短横光标）。 */
-export function TerminalIcon({ size = 16, style }: AppGlyphProps) {
+/**
+ * 终端图标：终端窗口（圆角外框 + 标题栏分隔线）+ `>`_ 提示符。
+ * 消费方：终端文件标签页（terminalTabType / OpenFilesSidebarPanel）与
+ * powershell / bash 命令工具视图（CommandToolView，替代默认扳手）。
+ * `_` 光标节点带 `nagent-terminal-cursor` 类——命令工具 running 态由
+ * chatPanel.css 定制为光标硬闪烁（steps 阶跃，真实终端手感），**不**沿用
+ * 扳手的整体旋转（终端框旋转观感差）；颜色仍走 nagent-tool-state--* 单一来源。
+ * 闪烁选择器要求 `.nagent-tool__icon` + running 状态类，标签页等非工具场景不闪烁。
+ */
+export function TerminalIcon({ size = 16, style, className }: AppGlyphProps) {
   return (
-    <Svg size={size} style={style}>
-      <rect x="2.2" y="3" width="11.6" height="10" rx="1.4" stroke="currentColor" strokeWidth="1.4" />
-      <path d="M4.4 6.5L6.5 8L4.4 9.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M7.5 9.7H11" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+    <Svg size={size} style={style} className={className}>
+      {/* 终端窗口外框 + 标题栏分隔线 */}
+      <rect x="1.5" y="2.5" width="13" height="11" rx="2" stroke="currentColor" strokeWidth="1.5" />
+      <path d="M1.5 5.5H14.5" stroke="currentColor" strokeWidth="1.5" />
+      {/* `>` 提示符 */}
+      <path
+        d="M4.2 7.7 6 9.25 4.2 10.8"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      {/* `_` 光标：running 专属闪烁动画的目标节点（见 chatPanel.css） */}
+      <path
+        className="nagent-terminal-cursor"
+        d="M7.6 10.8H9.8"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+      />
     </Svg>
   )
 }

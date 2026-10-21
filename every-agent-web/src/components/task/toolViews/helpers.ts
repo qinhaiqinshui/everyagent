@@ -3,8 +3,8 @@
  * 只依赖类型，不依赖展示层，避免循环依赖。
  */
 
-import type { LLMToolCall, AgentMessageRecord } from '@/types'
-import type { AggregatedToolDetail } from './types'
+import type { CSSProperties } from 'react'
+import type { AggregatedToolDetail, ToolCallState } from './types'
 
 /**
  * 解析工具调用或工具结果的 JSON 负载。
@@ -43,46 +43,33 @@ function buildStructuredToolField(
 }
 
 /**
- * 聚合工具调用的展开详情：工具名 + 下发参数（arguments）+ 调用结果（result）。
- * arguments 来自按 toolCallId 取回的下发负载；result 来自 tool 角色消息 content。
+ * 工具结果内容 → 展示用 result 字段:JSON 可解析取解析值,否则保留原始文本字符串;
+ * 空内容返回 null。批壳调用行(detailFromCall)与孤儿结果(detailFromOrphanResult)
+ * 共用的结果解读规则(与旧聚合块的 buildStructuredToolField 同口径)。
  */
-export function buildAggregatedToolDetail(
-  message: AgentMessageRecord,
-  resolvedToolName: string,
-  args: Record<string, unknown> | null,
-): AggregatedToolDetail {
-  const structured = buildStructuredToolField(message.content, 'result', 'result') as Record<string, unknown>
-  return {
-    type: 'tool_call',
-    toolName: resolvedToolName?.trim() || message.toolName?.trim() || '工具',
-    toolCallId: message.toolCallId?.trim() || null,
-    status: message.status,
-    arguments: args,
-    result: structured.result ?? null,
-  }
+function readToolResult(content: string | undefined): unknown {
+  if (!content || !content.trim()) return null
+  return (buildStructuredToolField(content, 'result', 'result') as Record<string, unknown>).result ?? null
 }
 
 /**
- * 聚合工具调用的展开详情（下发视角）：以 assistant 的 toolCall 为锚点，
- * 把下发参数（call.function.arguments）与按 callId 匹配到的 tool 结果消息合并为同一
- * AggregatedToolDetail。与 buildAggregatedToolDetail 对称——后者以 tool 消息为锚点反查下发参数，
- * 两者产出同一形状，保证 live 下发块与历史 tool 块走同一套 View。
+ * 以 message 下发的 toolCall 为锚点聚合展示详情(ThreadItem 载荷 → 美化视图输入):
+ * 参数来自下发 arguments JSON(解析失败/为空 → null),结果/状态/耗时来自按 callId
+ * 配对到的 tool.result 载荷(未到 → null/undefined)。批壳调用行与孤儿兜底共用。
  */
-export function buildAggregatedToolDetailFromCall(
-  call: LLMToolCall,
-  resultMessage?: AgentMessageRecord | null,
+export function buildDetailFromCall(
+  call: { id: string; function: { name: string; arguments: string } },
+  result: { content?: string; status?: 'success' | 'error'; toolName?: string; durationMs?: number } | null,
 ): AggregatedToolDetail {
   const args = parseToolPayload(call.function.arguments)
-  const structured = resultMessage?.content
-    ? (buildStructuredToolField(resultMessage.content, 'result', 'result') as Record<string, unknown>)
-    : null
   return {
     type: 'tool_call',
-    toolName: resultMessage?.toolName?.trim() || call.function.name,
+    toolName: result?.toolName?.trim() || call.function.name,
     toolCallId: call.id,
-    status: resultMessage?.status,
+    status: result?.status,
     arguments: Object.keys(args).length > 0 ? args : null,
-    result: structured?.result ?? null,
+    result: result ? readToolResult(result.content) : null,
+    durationMs: result?.durationMs,
   }
 }
 
@@ -129,4 +116,122 @@ export function splitLeadingComment(command: string): { comment: string; rest: s
 export function hasActiveTextSelection(): boolean {
   const selection = typeof window !== 'undefined' ? window.getSelection() : null
   return !!selection && !selection.isCollapsed && selection.toString().length > 0
+}
+
+/** 调用行内联预览:文本(原样等宽)或「注释 + 命令」两段(注释走 AI 正文样式)。 */
+export type CallInlinePreview =
+  | { kind: 'comment'; comment: string; rest: string }
+  | { kind: 'text'; text: string }
+
+/**
+ * 调用行内联预览:取 detail 的 path / command / 文本参数摘要,无参时回退空串。
+ * command 首行是注释(意图说明)时拆分为「正文样式注释 + 等宽命令」两段,
+ * 与单条 CommandToolView 折叠态一致。原 ToolCallView 聚合壳的
+ * buildGroupInlinePreview 原位迁入(批壳调用行与孤儿兜底共用,行为不变)。
+ */
+export function buildCallInlinePreview(detail: AggregatedToolDetail): CallInlinePreview {
+  const args = (detail.arguments ?? {}) as Record<string, unknown>
+  // 优先 path(非命令工具);其次 command(bash/powershell),命中首行注释则拆分高亮。
+  const path = typeof args.path === 'string' ? args.path : ''
+  if (path.trim()) {
+    return { kind: 'text', text: truncateInlineText(path, 160) }
+  }
+  const command = typeof args.command === 'string' ? args.command : ''
+  if (command.trim()) {
+    const split = splitLeadingComment(command.trim())
+    if (split) {
+      return {
+        kind: 'comment',
+        comment: truncateInlineText(split.comment, 160),
+        rest: truncateInlineText(split.rest, 160),
+      }
+    }
+    return { kind: 'text', text: truncateInlineText(command, 160) }
+  }
+  // 退化:把若干标量参数以 "k=v · k=v" 形式铺平(够短),完全无参时给个占位。
+  const scalars = Object.entries(args)
+    .filter(([, v]) => v !== null && (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean'))
+    .slice(0, 3)
+    .map(([k, v]) => `${k}=${typeof v === 'string' ? v : JSON.stringify(v)}`)
+    .join(' · ')
+  return { kind: 'text', text: scalars ? truncateInlineText(scalars, 160) : '' }
+}
+
+/**
+ * 紧凑耗时文案:亚秒级(<1s)精确到毫秒、不四舍五入、去无意义尾零
+ * (101→0.101s、120→0.12s、0→0s);1s~10s 一位小数;10s~60s 整秒;分钟级 m:ss 补零;
+ * 非法值返回空串。
+ */
+export function formatToolDuration(ms: number | undefined): string {
+  if (ms == null || !Number.isFinite(ms) || ms < 0) return ''
+  if (ms < 1000) {
+    // ms 是整数毫秒,真值即最多 3 位小数的有限小数:toFixed(3) 取精确 3 位
+    // (无第 4 位可舍入),再经 Number 归一化去掉无意义尾零。
+    return `${Number((ms / 1000).toFixed(3))}s`
+  }
+  const seconds = ms / 1000
+  if (seconds < 10) return `${seconds.toFixed(1)}s`
+  if (seconds < 60) return `${Math.floor(seconds)}s`
+  const minutes = Math.floor(seconds / 60)
+  const rest = Math.floor(seconds % 60)
+  return rest > 0 ? `${minutes}m${String(rest).padStart(2, '0')}s` : `${minutes}m`
+}
+
+/**
+ * 详情 → 状态图标 class(nagent-tool-state--* 颜色/动效单一来源):
+ * 优先 detail.rowState(批壳/单调用直渲灌入);缺省时按 status 推导(孤儿兜底:
+ * 有结果 success→done/error→error;status 空 = 结果未到,无状态色)。
+ */
+export function toolStateClass(detail: AggregatedToolDetail): string {
+  const state: ToolCallState | null = detail.rowState
+    ?? (detail.status === 'error'
+      ? 'error'
+      : detail.status === 'success' ? 'done' : null)
+  return state ? `nagent-tool-state--${state}` : ''
+}
+
+/** 慢调用阈值(10s):同一阈值承担两个职责——
+ *  ① 摘要行耗时数字的显示门槛(≥10s 才显示:快调用的耗时只是噪音;
+ *     运行中读秒逻辑不动,数字过 10s 自然浮现,与色阶起色同步);
+ *  ② 慢调用色阶起色点(见 toolDurationTint)。
+ *  120s(2min)封顶,再慢不再加深。 */
+const SLOW_TINT_START_MS = 10_000
+const SLOW_TINT_MAX_MS = 120_000
+/** 起色百分比 / 封顶百分比(color-mix 里 --tool-slow-red 的占比)。 */
+const SLOW_TINT_MIN_PCT = 20
+const SLOW_TINT_MAX_PCT = 100
+
+/** 详情 → 摘要行耗时文本:仅慢调用(≥SLOW_TINT_START_MS,与色阶起色同一阈值)显示;
+ *  非法/缺失/未过阈值返回空串,各视图按空串条件渲染(不渲染 <span>)。 */
+export function toolDurationText(detail: AggregatedToolDetail): string {
+  const ms = detail.durationMs
+  if (ms == null || !Number.isFinite(ms) || ms < SLOW_TINT_START_MS) return ''
+  return formatToolDuration(ms)
+}
+
+/**
+ * 耗时 → 颜色深浅百分比(0~100),供 CSS 的 `color-mix(in srgb, --tool-slow-red P%, --text-muted)` 插值。
+ *
+ * <10s 返回 0(纯 --text-muted,与历史观感一致);10s~120s 线性升到封顶值;
+ * ≥120s 恒定封顶——封顶色是饱和度 100% 的正红 token(--tool-slow-red),
+ * 已"红得无法再红",超过 2min 的"极慢"无需再分级。
+ *
+ * 通道分工:图标的 state 色只表达**成败**(done 绿 / error 红 / interrupted 黄),
+ * 本百分比只作用于**耗时数字**,于是「执行成功但耗时很久」= 图标绿 + 数字深红,
+ * 两个信息各走各的颜色通道,不会互相误读。
+ */
+export function toolDurationTint(ms: number | undefined): number {
+  if (ms == null || !Number.isFinite(ms) || ms < SLOW_TINT_START_MS) return 0
+  const ratio = (ms - SLOW_TINT_START_MS) / (SLOW_TINT_MAX_MS - SLOW_TINT_START_MS)
+  const clamped = Math.min(1, Math.max(0, ratio))
+  return Math.round(SLOW_TINT_MIN_PCT + clamped * (SLOW_TINT_MAX_PCT - SLOW_TINT_MIN_PCT))
+}
+
+/**
+ * 详情 → 耗时列内联样式:把 tint 百分比写成 `--tool-dur-tint` 自定义属性,
+ * 颜色插值本身留在样式层(chatPanel.css 的 .nagent-tool__duration),
+ * 视图侧只负责喂数值,不各自硬编码色值。
+ */
+export function toolDurationTintStyle(detail: AggregatedToolDetail): CSSProperties {
+  return { '--tool-dur-tint': `${toolDurationTint(detail.durationMs)}%` } as CSSProperties
 }

@@ -37,12 +37,17 @@
     <springProperty name="EA_HOME_FROM_CONFIG" source="worker.home-dir" defaultValue="${user.home}/.everyagent"/>
     <property name="EA_LOG_DIR" value="${EVERYAGENT_HOME:-${EA_HOME_FROM_CONFIG}}/logs"/>
 
-    <!-- 主日志:worker 运行日志(含 INFO/DEBUG),每日滚动,保留 7 天 -->
+    <!-- 主日志:worker 运行日志(含 INFO/DEBUG),按日 + 按大小双维滚动:
+         单文件超 20MB 即切(%i 序号),保留 7 天,目录总量上限 200MB(totalSizeCap
+         超限时异步删除最旧归档)——此前纯按天滚动无大小上限,异常风暴(如 hub 不可达
+         重连刷屏)单日可写满磁盘 -->
     <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
         <file>${EA_LOG_DIR}/worker.log</file>
-        <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
-            <fileNamePattern>${EA_LOG_DIR}/worker.%d{yyyy-MM-dd}.log</fileNamePattern>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <fileNamePattern>${EA_LOG_DIR}/worker.%d{yyyy-MM-dd}.%i.log</fileNamePattern>
+            <maxFileSize>20MB</maxFileSize>
             <maxHistory>7</maxHistory>
+            <totalSizeCap>200MB</totalSizeCap>
         </rollingPolicy>
         <encoder>
             <charset>UTF-8</charset>
@@ -54,15 +59,17 @@
       AI 安全审议审计日志(独立文件):
       - 只承载 dev.everyagent.plugin.aireview.AiAuthReviewer 的审计数据(decision/confidence/reason/grantKey/prompt...)
       - 默认目录 <EVERYAGENT_HOME>/logs,可用环境变量 AUTH_REVIEW_LOG_DIR 覆盖
-      - 每天一个文件(auth-review.<yyyy-MM-dd>.log),最多保留 7 天(maxHistory=7)
+      - 按日 + 按大小滚动(单文件 10MB),保留 7 天,总量上限 100MB
     -->
     <property name="AUTH_REVIEW_LOG_DIR" value="${AUTH_REVIEW_LOG_DIR:-${EA_LOG_DIR}}"/>
 
     <appender name="AUTH_REVIEW" class="ch.qos.logback.core.rolling.RollingFileAppender">
         <file>${AUTH_REVIEW_LOG_DIR}/auth-review.log</file>
-        <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
-            <fileNamePattern>${AUTH_REVIEW_LOG_DIR}/auth-review.%d{yyyy-MM-dd}.log</fileNamePattern>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <fileNamePattern>${AUTH_REVIEW_LOG_DIR}/auth-review.%d{yyyy-MM-dd}.%i.log</fileNamePattern>
+            <maxFileSize>10MB</maxFileSize>
             <maxHistory>7</maxHistory>
+            <totalSizeCap>100MB</totalSizeCap>
         </rollingPolicy>
         <encoder>
             <charset>UTF-8</charset>

@@ -4,21 +4,12 @@ import dev.everyagent.plugin.api.shell.ExecResults;
 import dev.everyagent.plugin.api.spi.ToolExecutionChain;
 import dev.everyagent.plugin.api.spi.ToolExecutionContext;
 import dev.everyagent.plugin.api.spi.ToolExecutionInterceptor;
-import org.springframework.ai.chat.messages.AssistantMessage;
-import org.springframework.ai.chat.messages.Message;
-import org.springframework.ai.chat.messages.ToolResponseMessage;
-import org.springframework.ai.chat.messages.ToolResponseMessage.ToolResponse;
-import org.springframework.ai.model.tool.ToolExecutionResult;
 
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
 import java.util.Locale;
-import java.util.Map;
 import java.util.regex.Pattern;
 
 /**
- * shell 裸 rg 兜底提示拦截器（工具执行拦截链<b>上行段</b>，结果侧最后防线）。
+ * shell 裸 rg 兜底提示拦截器(per-call 工具执行拦截链<b>上行段</b>,结果侧最后防线)。
  *
  * <p><b>问题</b>：本环境 shell 工具（powershell / bash）经沙箱执行，stdin 非 tty——
  * 模型若在 shell 命令里写裸 {@code rg pattern}（不带路径参数），rg 检测到 stdin
@@ -29,8 +20,7 @@ import java.util.regex.Pattern;
  *
  * <p><b>判定条件（全部满足才命中，逐条保守）</b>：
  * <ol>
- *   <li>本轮 tool call 名为 powershell / bash（{@code ctx.toolCalls()}，与
- *       ToolResponse 按 callId 对应）；</li>
+ *   <li>当前 tool call 名为 powershell / bash（{@code ctx.toolCall()},per-call 直配）；</li>
  *   <li>结果文本 strip 后恰为 {@code [exit code: 1]}——即 format 的「stdout 数据段
  *       为空 + exit 1 尾注」形态（{@link ExecResults#format} 里占位符
  *       {@code [命令执行完成(无输出)]} 仅在完全空串时出现，exit 尾注非空故二者不叠加；
@@ -44,17 +34,14 @@ import java.util.regex.Pattern;
  * <p><b>抗误报</b>：显式带路径的 {@code rg pattern .} 真·无匹配时同样命中——hint 措辞
  * 条件化（「若本次确实是想搜内容」），此时出现也只是信息性提示，无害。
  *
- * <p><b>改写方式</b>：结果文本住在 {@link ToolExecutionResult#conversationHistory()} 的
- * {@link ToolResponseMessage} 里（{@code ToolResponse.responseData()}），改写 = 按
- * hit 重建对应 ToolResponse 与所在消息、重建 history 列表后经
- * {@link ToolExecutionResult#builder()} 返回（形态对照 secret-redaction 的
- * SecretRedactionInterceptor——改写一次即 tool.result 落盘 / DataPusher 推送 /
- * 回灌模型三条路全覆盖）。
+ * <p><b>改写方式</b>：per-call 结果串改写——{@code next.proceed} 返回当前调用的结果串,
+ * 命中则经 {@link ExecResults#appendNote} 追加 hint 后返回(落盘/推送/回灌三条路共享
+ * 同一串,改写一次全覆盖;形态对照 secret-redaction 的脱敏改写)。
  *
- * <p><b>order=0 的理由</b>：本类是纯信息性 hint，不依赖任何其他拦截器的改写产物；
- * 取 0 位于链最外层，上行后处理在所有内层结果改写型拦截器（如
- * secret-redaction=900 的脱敏重建）<b>之后</b>执行——既看到它们处理后的最终文本
- * （判定基于真实回灌内容），追加的 hint 也不会被它们覆盖或再加工。
+ * <p><b>order=0(链上顺序语义,架构 §7.14.3)</b>：链最外层(order 最小 = 下行最先 /
+ * 上行最后)——上行段在所有内层结果改写型节点（如 secret-redaction=900 的脱敏）之后
+ * 执行，既看到它们处理后的最终文本（判定基于真实回灌内容），追加的 hint 也不会被它们
+ * 覆盖或再加工。
  */
 public class RgHintInterceptor implements ToolExecutionInterceptor {
 
@@ -97,75 +84,32 @@ public class RgHintInterceptor implements ToolExecutionInterceptor {
     }
 
     @Override
-    public ToolExecutionResult invoke(ToolExecutionContext ctx, ToolExecutionChain next)
+    public String invoke(ToolExecutionContext ctx, ToolExecutionChain next)
             throws Exception {
-        ToolExecutionResult result = next.proceed(ctx);
-        if (result == null) {
-            return null;
-        }
-        List<Message> history = result.conversationHistory();
-        if (history == null || history.isEmpty()) {
-            return result;
-        }
-        // callId → 命令串，仅收 shell 工具的调用（历史轮/其他工具的结果不碰）
-        Map<String, String> shellCommands = shellCommands(ctx);
-        if (shellCommands.isEmpty()) {
-            return result;
-        }
-
-        List<Message> rebuilt = new ArrayList<>(history.size());
-        boolean changed = false;
-        for (Message m : history) {
-            if (!(m instanceof ToolResponseMessage trm) || trm.getResponses() == null) {
-                rebuilt.add(m);
-                continue;
-            }
-            List<ToolResponse> out = new ArrayList<>(trm.getResponses().size());
-            boolean msgChanged = false;
-            for (ToolResponse r : trm.getResponses()) {
-                String command = r == null ? null : shellCommands.get(r.id());
-                if (command == null || !shouldHint(r.responseData(), command)) {
-                    out.add(r);
-                    continue;
-                }
-                out.add(new ToolResponse(r.id(), r.name(), ExecResults.appendNote(r.responseData(), HINT)));
-                msgChanged = true;
-            }
-            rebuilt.add(msgChanged
-                    ? ToolResponseMessage.builder().responses(out).metadata(trm.getMetadata()).build()
-                    : m);
-            changed |= msgChanged;
-        }
-        if (!changed) {
-            return result;
+        String data = next.proceed(ctx);
+        String command = shellCommandOf(ctx);
+        if (command == null || !shouldHint(data, command)) {
+            return data;
         }
         LOG.log(System.Logger.Level.INFO,
                 "[ripgrep-tool] 检测到 shell 裸 rg 形态(exit 1 + 空输出),已追加改用 rg 工具的 hint: subject={0}",
                 ctx.subjectId());
-        return ToolExecutionResult.builder()
-                .conversationHistory(rebuilt)
-                .returnDirect(result.returnDirect())
-                .build();
+        return ExecResults.appendNote(data, HINT);
     }
 
-    /** 本轮 powershell / bash 调用的 callId → 命令串（无 shell 调用返回空 map，直接放行）。 */
-    private static Map<String, String> shellCommands(ToolExecutionContext ctx) {
-        List<AssistantMessage.ToolCall> toolCalls = ctx.toolCalls();
-        if (toolCalls == null || toolCalls.isEmpty()) {
-            return Map.of();
+    /**
+     * 当前调用若是 powershell / bash 则取其命令串（command 字段），否则返回 null
+     * （非 shell 工具/字段缺失 → 未命中,直接放行）。
+     */
+    private static String shellCommandOf(ToolExecutionContext ctx) {
+        if (ctx.toolCall() == null || ctx.toolCall().name() == null) {
+            return null;
         }
-        Map<String, String> byId = new HashMap<>();
-        for (AssistantMessage.ToolCall tc : toolCalls) {
-            if (tc == null || tc.id() == null || tc.name() == null) {
-                continue;
-            }
-            String name = tc.name().toLowerCase(Locale.ROOT);
-            if (!SHELL_POWERSHELL.equals(name) && !SHELL_BASH.equals(name)) {
-                continue;
-            }
-            byId.put(tc.id(), extractCommand(tc.arguments()));
+        String name = ctx.toolCall().name().toLowerCase(Locale.ROOT);
+        if (!SHELL_POWERSHELL.equals(name) && !SHELL_BASH.equals(name)) {
+            return null;
         }
-        return byId;
+        return extractCommand(ctx.arguments());
     }
 
     /**

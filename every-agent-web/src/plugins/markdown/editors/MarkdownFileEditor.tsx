@@ -290,7 +290,8 @@ const containerStyle: React.CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
   overflow: 'hidden',
-  background: 'var(--bg-primary)',
+  // 阅读区表面：跟随 --reading-bg，使颜色主题（只覆盖阅读区 token）覆盖整个文件内容区。
+  background: 'var(--reading-bg)',
 }
 
 const bodyStyle: React.CSSProperties = {

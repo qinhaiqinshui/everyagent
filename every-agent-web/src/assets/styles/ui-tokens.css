@@ -4,7 +4,7 @@
  * 规则：
  *  1. 本文件是项目唯一的视觉变量真相源。组件、原语、页面只引用
  *     token，不得硬编码颜色/圆角/阴影/间距。
- *  2. 深色为默认（:root），浅色通过 [data-theme='light'] 覆盖。
+ *  2. 深色为默认（:root），浅色通过 :root[data-theme='light'] 覆盖。
  *  3. 新增视觉值必须先加 token，再在组件里引用，禁止页面内联新色值。
  *  4. 移动端尺寸覆盖集中在文件末尾的 @media 块。
  * ============================================================= */
@@ -46,6 +46,10 @@
   --accent-red-dim: rgba(255, 107, 107, 0.14);
   --accent-cyan: #54d2e8;
   --accent-cyan-dim: rgba(84, 210, 232, 0.14);
+
+  /* 慢调用耗时封顶红(hsl 0°/100% 饱和):工具耗时色阶(--tool-dur-tint 100%)的
+     插值终点,必须比 --accent-red 更"正红"——慢调用是告警信号,封顶就是最红。 */
+  --tool-slow-red: #ff3333;
 
   /* ── Color · 标签页专用 ─────────────────────────────── */
   --agent-tab-bg: rgba(97, 165, 255, 0.08);
@@ -96,6 +100,35 @@
 
   /* ── Font ───────────────────────────────────────────── */
   --font-mono: "Cascadia Code", "Fira Code", Consolas, "Courier New", monospace;
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Helvetica Neue', Arial, sans-serif;
+
+  /* ── Editor 文本区字体 / 字号（用户可配置，独立于主题）────
+   * 全站文本文件编辑器消费这两个 token；设置页「编辑器字体」段写入，应用层在
+   * documentElement 行内样式覆盖。
+   *  - `--editor-font-family`：代码类编辑器（CodeMirror），默认等宽；
+   *  - `--reading-font-family`：阅读类渲染（Markdown 预览 prose），默认 UI 无衬线；
+   *    —— 用户一旦设置字体，这两个 token 会被同时覆盖为同一值（见 applyEditorFont）。
+   * 对标 VSCode 的 editor.fontFamily / editor.fontSize——是编辑器设置，不是主题。 */
+  --editor-font-family: var(--font-mono);
+  --editor-font-size: 14px;
+  --reading-font-family: var(--font-sans);
+
+  /* ── 文件阅读区（专供阅读类主题覆盖）────────────────────
+   * 默认引用基底 token（CSS 惰性替换）：未覆盖时零视觉变化；
+   * 颜色主题只需覆盖这两个 token 即可「只改文件内容区配色、其余继承基底」。 */
+  --reading-bg: var(--bg-secondary);
+  --reading-fg: var(--text-primary);
+
+  /* ── 阅读区字号刻度（派生自 --editor-font-size）──────────
+   * 文件阅读区（Markdown 预览的标题/正文/表格/行内码等）按此刻度排版，
+   * 使「编辑器字号」设置能**整体等比缩放**阅读区文字，而不影响全局 UI 的
+   * --text-* 刻度。系数取 --text-* 相对基准 14px 的比值，故默认 14px 时
+   * 与 --text-* 完全等价（零视觉变化）。 */
+  --reading-font-xs: calc(var(--editor-font-size) * 0.8571);  /* ≈ --text-xs 12/14 */
+  --reading-font-sm: calc(var(--editor-font-size) * 0.9286);  /* ≈ --text-sm 13/14 */
+  --reading-font-md: calc(var(--editor-font-size) * 1.0714);  /* ≈ --text-md 15/14 */
+  --reading-font-xl: calc(var(--editor-font-size) * 1.2857);  /* ≈ --text-xl 18/14 */
+  --reading-font-2xl: calc(var(--editor-font-size) * 1.5714); /* ≈ --text-2xl 22/14 */
 
   /* ── Layout 尺寸 ────────────────────────────────────── */
   --sidebar-width: 312px;
@@ -143,6 +176,7 @@
   --space-12: 48px;
 
   /* ── Typography 刻度（新增）──────────────────────────── */
+  --text-2xs: 11px; /* 最小档：微小角标/计数/超小标签，比 --text-xs 还小一档 */
   --text-xs: 12px;
   --text-sm: 13px;
   --text-base: 14px;
@@ -190,8 +224,14 @@
   --surface-glass: color-mix(in srgb, var(--bg-elevated) 88%, transparent);
 }
 
-/* ── 浅色主题覆盖 ──────────────────────────────────────── */
-[data-theme='light'] {
+/* ── 浅色主题覆盖（仅锚定 :root）────────────────────────────
+ * 必须写成 `:root[data-theme='light']`，**不能**是裸 `[data-theme='light']`：
+ * 宿主会在内层元素上同样打 `data-theme`（`body`、`.workspace-layout`），裸选择器
+ * 会在这些更深层的元素上**再次声明整套 token**，从而把 `documentElement` 上的
+ * 行内主题覆盖（如 `--reading-bg`）遮蔽掉——表现为「浅色基底的部分覆盖类主题
+ * （如只改阅读区配色）不生效，而深色基底的主题生效」。锚定 `:root` 后，
+ * 该块只作用于 html，行内覆盖恒胜。 */
+:root[data-theme='light'] {
   --bg-primary: #ffffff;
   --bg-secondary: #ffffff;
   --bg-tertiary: #ffffff;
@@ -224,6 +264,9 @@
   --accent-red-dim: rgba(217, 45, 66, 0.12);
   --accent-cyan: #0087a7;
   --accent-cyan-dim: rgba(0, 135, 167, 0.12);
+
+  /* 慢调用耗时封顶红:白底上的极饱和正红(hsl 0°/100%/42%),封顶即"红得无法再红" */
+  --tool-slow-red: #d50000;
 
   --agent-tab-bg: rgba(47, 111, 237, 0.08);
   --agent-tab-active-bg: rgba(47, 111, 237, 0.16);
@@ -273,6 +316,13 @@
   --task-launcher-muted-surface-bg: var(--bg-hover);
   --task-launcher-message-header-bg: var(--task-launcher-muted-surface-bg);
   --task-launcher-message-body-bg: var(--task-launcher-muted-surface-bg);
+
+  /* 阅读区 / 编辑器字体：同为引用式默认（浅色基底自动跟随），显式声明以便图层覆盖与阅读。 */
+  --editor-font-family: var(--font-mono);
+  --editor-font-size: 14px;
+  --reading-font-family: var(--font-sans);
+  --reading-bg: var(--bg-secondary);
+  --reading-fg: var(--text-primary);
 }
 
 /* ── 移动端尺寸覆盖（新增，迁移自 index.css）────────────── */

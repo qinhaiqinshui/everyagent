@@ -164,4 +164,8 @@ export default MarkdownPreview
 const rootStyle: React.CSSProperties = {
   width: '100%',
   minWidth: 0,
+  background: 'var(--reading-bg)',
+  color: 'var(--reading-fg)',
+  fontFamily: 'var(--reading-font-family)',
+  fontSize: 'var(--editor-font-size)',
 }

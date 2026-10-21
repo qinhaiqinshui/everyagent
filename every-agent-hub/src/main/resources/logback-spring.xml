@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+    <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
+
+    <!--
+      CONSOLE appender 本地定义(与 worker 同款),经 ThresholdFilter 由
+      hub.console-log-threshold 门控,默认 OFF(完全静默):
+      desktop 打包版把 hub 进程 stdout/stderr 重定向进 ~/.everyagent/logs/hub.out.log
+      且永不轮转,CONSOLE 若保持开启,每条日志会与 hub.log 双份落盘、该文件无限膨胀
+      (worker 侧 2026-10 实测同款问题 5 周 313MB)。正式日志通道是下方 FILE
+      (按日 + 按大小双维滚动,保留 7 天)。
+      - dev profile(application-dev.yml)置 INFO,IDE 运行恢复控制台输出;
+      - 打包环境临时排障:启动参数 -Dhub.console-log-threshold=INFO;
+      - JVM 原生崩溃输出(hs_err/OutOfMemoryError 到 stderr)不经本配置,仍落
+        hub.out.log 兜底——正常情况下该文件保持近零大小,仅作崩溃现场证据。
+      ThresholdFilter 取 OFF 时任何事件级别都达不到门槛 → 全部 DENY,stdout 零输出。
+    -->
+    <springProperty name="EA_CONSOLE_THRESHOLD" source="hub.console-log-threshold" defaultValue="OFF"/>
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <filter class="ch.qos.logback.classic.filter.ThresholdFilter">
+            <level>${EA_CONSOLE_THRESHOLD}</level>
+        </filter>
+        <encoder>
+            <pattern>${CONSOLE_LOG_PATTERN}</pattern>
+            <charset>${CONSOLE_LOG_CHARSET}</charset>
+        </encoder>
+    </appender>
+
+    <!--
+      日志目录:EVERYAGENT_HOME 环境变量(desktop 启动时注入,与 worker 同一来源)优先,
+      ~/.everyagent 兜底——与 application.yml 里 config.import 的解析口径一致。
+      hub 无独立 home-dir 属性(worker 的 dev 隔离目录对 hub 不适用:hub 零状态,
+      日志量小,dev 运行混写正式目录无实际危害)。
+    -->
+    <property name="EA_LOG_DIR" value="${EVERYAGENT_HOME:-${user.home}/.everyagent}/logs"/>
+
+    <!--
+      主日志:hub 运行日志,按日 + 按大小双维滚动:
+      单文件超 10MB 即切(%i 序号),保留 7 天,目录总量上限 100MB(totalSizeCap
+      超限时异步删除最旧归档)。hub 零状态、日志量小(连接/断开/慢消费者警告),
+      10MB 单文件足以覆盖单日异常风暴。
+    -->
+    <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>${EA_LOG_DIR}/hub.log</file>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <fileNamePattern>${EA_LOG_DIR}/hub.%d{yyyy-MM-dd}.%i.log</fileNamePattern>
+            <maxFileSize>10MB</maxFileSize>
+            <maxHistory>7</maxHistory>
+            <totalSizeCap>100MB</totalSizeCap>
+        </rollingPolicy>
+        <encoder>
+            <charset>UTF-8</charset>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%thread] %logger{36} - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="FILE"/>
+    </root>
+</configuration>
