@@ -4,7 +4,10 @@
  * - resolveSecret 三分支:生成 / 明文一次性迁移 / 密文沿用与损坏重生成
  *   (含 codec 不可用时 encoded===stored → changed:false 的升级兼容关键修正);
  * - ensureSecretKeys:密文落盘、明文迁移保留字段、无变化不重写、部分损坏只重生成该键;
- * - 下游接线(writeWorkerOverrideYml)拿到的是解码后的明文,而非 'safe:' 密文形态。
+ * - 下游接线(writeWorkerOverrideYml)拿到的是解码后的明文,而非 'safe:' 密文形态;
+ * - writeWorkerOverrideYml 合并语义:用户 application-worker.yaml 的远程 hub 条目
+ *   原序追加(hubs[0] 恒为本机)、回环条目剔除、${HUB_KEY:默认值} 占位符还原、
+ *   结构未识别退回仅本机并告警。
  * 真实 safeStorage 绑定 electron 运行时,无法在 node:test 进程内使用,故用 XOR
  * fakeCodec 模拟同形状的可逆编解码(safe: 前缀 + base64 + 往返校验,篡改即抛错)。
  */
@@ -17,6 +20,9 @@ import {
   PLAINTEXT_CODEC,
   SAFE_PREFIX,
   ensureSecretKeys,
+  isLoopbackWsUrl,
+  materializeHubKeyPlaceholder,
+  parseUserWorkerHubs,
   resolveSecret,
   writeWorkerOverrideYml,
   type SecretCodec,
@@ -311,6 +317,163 @@ test('writeWorkerOverrideYml:接线用的是解码后的明文,yml 不含 safe: 
     assert.ok(yml.includes(`hub-key: ${JSON.stringify(keys.hubKey)}`))
     assert.ok(!yml.includes(SAFE_PREFIX), 'worker 接线文件不得出现密文形态(其无法解密)')
   } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+/** 生成用户级 application-worker.yaml 到 home(模拟真实文件:注释、引号、占位符、models 兄弟块)。 */
+function writeUserWorkerYml(home: string, hubsBlock: string): void {
+  writeFileSync(
+    join(home, 'application-worker.yaml'),
+    [
+      '# 用户配置(注释应被忽略,包括行内注释)',
+      'worker:',
+      '  hubs:',
+      ...hubsBlock.split('\n'),
+      '  models:',
+      '    - config-id: "池"',
+      '      provider: model-pool',
+      '      model: "a,b"',
+      '      is-default: true',
+      '    - config-id: "智谱"',
+      '      provider: zai',
+      '      base-url: "https://open.bigmodel.cn/api"',
+      '      params:',
+      '        reasoningEffort: high',
+      '        contextWindowTokens: 1000000',
+    ].join('\n') + '\n',
+    'utf8',
+  )
+}
+
+test('parseUserWorkerHubs:提取 hubs 条目(含引号/行内注释/占位符),跳过 models 兄弟块', () => {
+  const text = [
+    '# 头部注释',
+    'worker:',
+    '  hubs:',
+    "    - url: ws://localhost:6101/ws   # 行内注释",
+    '      api-key: dev-key',
+    '      hub-key: ${HUB_KEY:sljlw23948LKS}',
+    '    - url: "ws://120.25.206.241:6101/ws"',
+    `      api-key: "worksdls*239sdfj # 引号内的#不是注释"`,
+    "      hub-key: '${HUB_KEY:HubLslwoo2452}'",
+    '  models:',
+    '    - config-id: "池"',
+    '      provider: model-pool',
+    '      params:',
+    '        reasoningEffort: high',
+  ].join('\n')
+  const hubs = parseUserWorkerHubs(text)
+  assert.ok(hubs, '应解析成功')
+  assert.equal(hubs.length, 2)
+  assert.equal(hubs[0].url, 'ws://localhost:6101/ws')
+  assert.equal(hubs[0].apiKey, 'dev-key')
+  assert.equal(hubs[0].hubKey, '${HUB_KEY:sljlw23948LKS}')
+  assert.equal(hubs[1].url, 'ws://120.25.206.241:6101/ws')
+  assert.equal(hubs[1].apiKey, 'worksdls*239sdfj # 引号内的#不是注释')
+  assert.equal(hubs[1].hubKey, '${HUB_KEY:HubLslwoo2452}')
+})
+
+test('parseUserWorkerHubs:hubs 值非块式列表(flow 形态)→ null(退回仅本机,不猜结构)', () => {
+  assert.equal(parseUserWorkerHubs('worker:\n  hubs: {url: x}\n'), null)
+  assert.equal(parseUserWorkerHubs('worker:\n  hubs: []\n'), null, 'flow 空列表同样未识别(告警,不静默覆盖用户意图)')
+  assert.equal(parseUserWorkerHubs('worker:\n  hubs:\n    ???\n'), null)
+  assert.deepEqual(parseUserWorkerHubs(''), [], '无 worker 块 = 无用户 hub 条目')
+})
+
+test('isLoopbackWsUrl:回环各形态判定;非回环/不可解析为 false', () => {
+  assert.ok(isLoopbackWsUrl('ws://localhost:6101/ws'))
+  assert.ok(isLoopbackWsUrl('ws://127.0.0.1:6101/ws'))
+  assert.ok(isLoopbackWsUrl('ws://[::1]:6101/ws'))
+  assert.ok(isLoopbackWsUrl('ws://0.0.0.0:6101/ws'))
+  assert.ok(!isLoopbackWsUrl('ws://120.25.206.241:6101/ws'))
+  assert.ok(!isLoopbackWsUrl('wss://example.com/ws'))
+  assert.ok(!isLoopbackWsUrl('not a url'))
+})
+
+test('materializeHubKeyPlaceholder:${HUB_KEY:默认值} → 默认值;无默认值保持原样', () => {
+  assert.equal(materializeHubKeyPlaceholder('${HUB_KEY:HubLslwoo2452}'), 'HubLslwoo2452')
+  assert.equal(materializeHubKeyPlaceholder('${ HUB_KEY : sk-x }'), 'sk-x')
+  assert.equal(materializeHubKeyPlaceholder('${HUB_KEY}'), '${HUB_KEY}', '无默认值=取 env,无可还原值,原样透传')
+  assert.equal(materializeHubKeyPlaceholder('${OTHER_VAR:a}'), '${OTHER_VAR:a}', '非 HUB_KEY 占位符不动')
+  assert.equal(materializeHubKeyPlaceholder('plain-value'), 'plain-value')
+})
+
+test('writeWorkerOverrideYml:合并用户远程 hub(占位符还原、回环剔除、本机恒为 hubs[0])', () => {
+  const home = tmpHome()
+  try {
+    writeUserWorkerYml(
+      home,
+      [
+        '    - url: ws://localhost:6101/ws',
+        '      api-key: dev-key',
+        '      hub-key: ${HUB_KEY:sljlw23948LKS}',
+        '    - url: ws://120.25.206.241:6101/ws',
+        '      api-key: worksdls*239sdfj',
+        '      hub-key: ${HUB_KEY:HubLslwoo2452}',
+      ].join('\n'),
+    )
+    writeWorkerOverrideYml(baseCfg(), home)
+    const yml = readFileSync(join(home, 'desktop', 'desktop-worker.yml'), 'utf8')
+    const entries = yml.split('\n').filter((l) => l.startsWith('    - url:'))
+    assert.equal(entries.length, 2, '本机 1 条 + 用户远程 1 条')
+    assert.ok(
+      entries[0].includes(`ws://127.0.0.1:6101/ws`),
+      'hubs[0] 恒为本机条目(/admin 认证与 hubs[0].api-key 比对)',
+    )
+    assert.ok(entries[1].includes('ws://120.25.206.241:6101/ws'), '远程条目原序追加')
+    assert.ok(yml.includes(`"worksdls*239sdfj"`), '远程 api-key 原样透传')
+    assert.ok(yml.includes(`"HubLslwoo2452"`), '${HUB_KEY:默认值} 还原为字面默认值')
+    const valueLines = yml.split('\n').filter((l) => !l.trimStart().startsWith('#'))
+    assert.ok(
+      !valueLines.some((l) => l.includes('${HUB_KEY')),
+      '值行不得残留 HUB_KEY 占位符(env 值是本机密钥,会解析成错误凭据)',
+    )
+    assert.ok(!yml.includes('dev-key') && !yml.includes('sljlw23948LKS'), '用户回环条目整体剔除(防凭据错配)')
+    assert.ok(yml.indexOf('ws://127.0.0.1:6101/ws') < yml.indexOf('ws://120.25.206.241:6101/ws'), '本机在前')
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('writeWorkerOverrideYml:用户文件仅回环条目 → 输出仅本机一条(不重复)', () => {
+  const home = tmpHome()
+  try {
+    writeUserWorkerYml(home, '    - url: ws://127.0.0.1:6101/ws\n      api-key: a\n      hub-key: b')
+    writeWorkerOverrideYml(baseCfg(), home)
+    const yml = readFileSync(join(home, 'desktop', 'desktop-worker.yml'), 'utf8')
+    assert.equal(yml.split('\n').filter((l) => l.startsWith('    - url:')).length, 1)
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('writeWorkerOverrideYml:用户文件结构未识别 → 退回仅本机并告警', () => {
+  const home = tmpHome()
+  const warn = captureWarn()
+  try {
+    writeFileSync(join(home, 'application-worker.yaml'), 'worker:\n  hubs:\n      ???\n', 'utf8')
+    writeWorkerOverrideYml(baseCfg(), home)
+    const yml = readFileSync(join(home, 'desktop', 'desktop-worker.yml'), 'utf8')
+    assert.equal(yml.split('\n').filter((l) => l.startsWith('    - url:')).length, 1, '退回仅本机条目')
+    assert.ok(warn.messages.some((m) => m.includes('未识别')), '应经 warn 告警解析失败')
+  } finally {
+    warn.restore()
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('writeWorkerOverrideYml:无用户配置文件 → 行为与旧版一致(仅本机一条,无告警)', () => {
+  const home = tmpHome()
+  const warn = captureWarn()
+  try {
+    writeWorkerOverrideYml(baseCfg({ hubPort: 7101 }), home)
+    const yml = readFileSync(join(home, 'desktop', 'desktop-worker.yml'), 'utf8')
+    assert.ok(yml.includes('"ws://127.0.0.1:7101/ws"'))
+    assert.equal(yml.split('\n').filter((l) => l.startsWith('    - url:')).length, 1)
+    assert.deepEqual(warn.messages, [])
+  } finally {
+    warn.restore()
     rmSync(home, { recursive: true, force: true })
   }
 })

@@ -406,11 +406,15 @@ export async function startBackend(
     // 程序附属文件(rg、eagent-run.py、镜像)随安装包分发到 <程序根>/runtime;
     // 程序根经 -Deveryagent.program-dir 显式注入(worker 侧 resolveRuntimeDir 优先读它),
     // cwd 落在 EVERYAGENT_HOME——绝不能落在安装目录内(CWD 会把目录锁死,卸载删不掉)。
-    // 凭据注入(安全审计 H-1):每次启动前重写 desktop-worker.yml(url=本机 hub,
+    // 凭据注入(安全审计 H-1):每次启动前重写 desktop-worker.yml(hubs[0]=本机 hub,
     // api-key/hub-key 与配置一致),经 --spring.config.additional-location 传入;
     // 实测优先级高于 jar 内默认值与 application-worker.yaml 用户覆盖,worker 不可能
-    // 再落回 jar 内公开默认密钥连接。
-    const workerOverrideUrl = writeWorkerOverrideYml(cfg, paths.home)
+    // 再落回 jar 内公开默认密钥连接。Spring 对 list 属性整表替换、不跨文件合并:
+    // 生成时把用户 application-worker.yaml 的远程 hub 条目合并进来(回环剔除、
+    // ${HUB_KEY:默认值} 占位符还原),否则用户自配的远程 hub 会被整体覆盖丢失。
+    const workerOverrideUrl = writeWorkerOverrideYml(cfg, paths.home, {
+      warn: (message) => log(`警告: ${message}`),
+    })
     log(`worker 凭据覆盖配置: ${workerOverrideUrl}`)
     worker = spawnJava(
       'worker',

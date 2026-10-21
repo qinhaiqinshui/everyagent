@@ -42,7 +42,10 @@
 - hub 子进程启动时以 `hubKey` 显式注入 `HUB_KEY` 环境变量(覆盖任何继承);worker 连接
   本机 hub 的 `api-key` / `hub-key` 由桌面版生成的 `<EVERYAGENT_HOME>/desktop/desktop-worker.yml`
   注入(`--spring.config.additional-location`,优先级高于 jar 内默认值与用户覆盖文件),
-  与 hub 凭据始终同源一致——不会落回 jar 内公开默认密钥。
+  与 hub 凭据始终同源一致——不会落回 jar 内公开默认密钥。**该文件同时是 worker 的最终
+  hub 列表**:Spring 对 list 属性跨文件整表替换,故生成时会合并用户
+  `application-worker.yaml` 的 `worker.hubs` 远程条目(本机条目恒为 hubs[0]、回环条目剔除、
+  `${HUB_KEY:默认值}` 占位符还原为字面默认值),否则用户自配的远程 hub 会被覆盖丢失。
 - 其余字段缺失/非法 → 回退默认值。
 - `EVERYAGENT_HOME` 未设置时默认 `~/.everyagent`。
 
@@ -130,7 +133,9 @@ JRE 缺失时回退系统 `java`(Windows 下 `windowsHide` 隐藏控制台)。
   `HUB_KEY` 显式注入(覆盖任何继承,杜绝落回 jar 内公开默认密钥),worker 经每次启动前重写的
   `<EVERYAGENT_HOME>/desktop/desktop-worker.yml`
   (`--spring.config.additional-location`,实测优先级高于 jar 内默认值与
-  `application-worker.yaml` 用户覆盖)拿到同一组凭据——worker 与 hub 凭据恒一致。
+  `application-worker.yaml` 用户覆盖)拿到同一组凭据——worker 与 hub 凭据恒一致;
+  该文件同时写全最终 hub 列表(hubs[0]=本机;用户 `worker.hubs` 的远程条目合并进来,
+  回环剔除、`${HUB_KEY:默认值}` 还原为字面值),防 Spring list 整表替换吃掉用户远程 hub。
 - **单实例锁**:二次启动聚焦已有窗口。
 - **优雅退出**:托盘「退出桌面」停 hub,worker 保留运行(下次启动自动复用);「全部退出」停 hub + 对所有 worker 发 `POST /admin/shutdown` 触发 Spring 优雅关闭——desktop 自己启动的 worker HTTP shutdown 超时后 `child.kill()` 兜底,外部 worker 超时只记日志(不按端口强杀,零误杀风险)。
 
