@@ -333,7 +333,8 @@ function showQuitProgress(): void {
       preload: join(__dirname, '..', 'preload', 'index.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      // preload 仅用 contextBridge/ipcRenderer(sandbox 模式同样可用),收紧为 sandbox 渲染进程。
+      sandbox: true,
     },
   })
   quitProgressWindow = win
@@ -453,7 +454,8 @@ function createWindow(html: string): void {
       preload: join(__dirname, '..', 'preload', 'index.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      // preload 仅用 contextBridge/ipcRenderer(sandbox 模式同样可用),收紧为 sandbox 渲染进程。
+      sandbox: true,
       // 窗口遮挡/最小化时不节流渲染进程:连接生死唯一由前端应用层心跳判定(§5.1),
       // 若渲染进程被挂起,心跳停摆 + WebSocket 被杀,回到前台必然断连重连、弹「正在
       // 重新连接」模态框。代价是窗口不可见时任务流推送与心跳照常运行(本地回环,可忽略)。
