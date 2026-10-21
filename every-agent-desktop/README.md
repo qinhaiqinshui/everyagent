@@ -8,7 +8,7 @@
 ┌────────────────────── every-agent-desktop(Electron) ──────────────────────┐
 │  main 进程                                                                 │
 │   ├─ spawn hub.jar   (env 注入 HUB_KEY=配置密钥,127.0.0.1:6101,等 /health) │
-│   ├─ spawn worker.jar (凭据经 desktop-worker.yml 注入,连本机 hub)          │
+│   ├─ spawn worker.jar (凭据经 desktop-worker.yml 注入,连本机+用户远程 hub) │
 │   └─ 本地静态服务 127.0.0.1:<随机端口> → 加载 resources/web(前端 dist)     │
 │  renderer(前端,经 preload 注入 bootstrap)                                  │
 │   └─ 自动 applyConfig(hub) + setWorkerApiKey(worker) → 开箱即用连接       │

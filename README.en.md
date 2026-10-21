@@ -105,9 +105,9 @@ The four modules — web / hub / worker / desktop — are **decoupled and each s
 - **Just want a single local machine** → use the desktop all-in-one bundle, ready out of the box.
 - **Want public multi-device remote control** → run only hub + web on a public server, and run a worker separately on your own computer.
 - **Worker is a first-class citizen** → one worker can register with **multiple hubs** simultaneously (`worker.hubs` list): connect to both a public hub and an intranet/backup hub; the same tasks and files are visible across hubs, providing mutual redundancy.
-- **Desktop also supports multi-hub** → the worker bundled in the desktop edition is a full worker; configure multiple `worker.hubs` entries in `~/.everyagent/application-worker.yaml` to register this "desktop worker" to both a local hub and a remote public hub — "out-of-the-box single machine" and "remote control from anywhere" hold simultaneously.
+- **Desktop also supports multi-hub** → the worker bundled in the desktop edition is a full worker; just put the **remote entries** in the `worker.hubs` list of `~/.everyagent/application-worker.yaml` — on every worker start, the desktop generates `desktop/desktop-worker.yml`, **merging** the local entry (always `hubs[0]`, credentials sourced from the local hub) with your remote entries into the final hub list (loopback entries dropped, `${HUB_KEY:default}` placeholders resolved to literal defaults), so this "desktop worker" registers with both the local hub and the remote public hub — "out-of-the-box single machine" and "remote control from anywhere" hold simultaneously.
 
-> Tip: `worker.hubs` is a list and is **replaced as a whole** — to keep both local and remote entries in an override file, you must write both entries.
+> Tip: Spring **replaces list properties like `worker.hubs` as a whole** across config files — when manually layering an override file via `--spring.config.additional-location`, you must rewrite the entire list in the override to keep existing entries; the desktop has already built the "local + user remote" merge into its startup flow (see [every-agent-desktop/README.md](every-agent-desktop/README.md)), so your file only needs the remote entries — no manual local entry required.
 
 ### 🏢 Intranet deployment for companies — integrate with existing systems with zero friction
 - **A single server is all it takes**: deploy hub + worker inside the company, and employees simply open a browser to start using it — all data stays on the company's own servers and never leaves the intranet;
@@ -210,7 +210,7 @@ In one sentence: **the sandbox ensures the AI can't break your system; the guard
 | 🌍 **Public remote (multi-device)** | Public server: `hub` + `web`; local: `worker` | Server runs hub + frontend static site; local worker connects outbound via wss to public hub | Remotely control your home computer from phone / anywhere, no public IP needed |
 | 🔁 **Multi-hub redundancy (multi-device × redundancy)** | Local/desktop `worker` + two or more `hub`s | `worker.hubs` list registers both public hub and intranet/backup hub simultaneously; same task is visible across hubs, mutually redundant | High reliability, multi-network insurance; desktop's built-in worker also applies |
 
-> Tip: `worker.hubs` is a list and is **replaced as a whole** — to keep both local and remote entries in an override file, you must write both entries.
+> Tip: Spring **replaces the `worker.hubs` list as a whole** across config files — the desktop already merges "local entry + user remote entries from `application-worker.yaml`" at startup, so your file only needs the remote entries; standalone workers layering override files manually must still rewrite the full list in the override.
 
 > For detailed design, see **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** (the single source of truth for architecture: protocol, data model, security model, implementation red lines).
 
@@ -311,7 +311,7 @@ After saving a manual edit, click **Reload model config** in the Settings page t
 **"I want the AI to do the work, but I don't want to babysit the computer"** — this is the founding principle of Every Agent.
 
 1. Deploy hub + frontend static site on a **public server** (see `docker-compose.yml` / `deploy.py`; production requires wss + TLS, LB WebSocket idle timeout ≥ 60s);
-2. Run worker on your **home/office PC**; in `application-worker.yaml`, set `worker.hubs` `url` to point to the public hub (each entry needs `url + api-key + hub-key`; multi-hub redundancy supported);
+2. Run worker on your **home/office PC**; in `application-worker.yaml`, set `worker.hubs` `url` to point to the public hub (each entry needs `url + api-key + hub-key`; multi-hub redundancy supported); desktop edition users don't need a separate worker — put only the remote entry in the desktop's `application-worker.yaml`, and it gets merged with the auto-generated local entry at startup;
 
    <details>
    <summary><code>application-worker.yaml</code> — multi-hub redundancy example</summary>
@@ -343,7 +343,7 @@ After saving a manual edit, click **Reload model config** in the Settings page t
 
 | Config | Description |
 |---|---|
-| `worker.hubs[].url / api-key / hub-key` | The only entry point for worker-to-hub connection (multi-hub list); if not configured, the worker doesn't connect to any hub; the packaged default entry ships with **empty credentials — startup is refused unless explicitly configured** (no built-in default keys) |
+| `worker.hubs[].url / api-key / hub-key` | The only entry point for worker-to-hub connection (multi-hub list); if not configured, the worker doesn't connect to any hub; the packaged default entry ships with **empty credentials — startup is refused unless explicitly configured** (no built-in default keys); for the desktop's built-in worker, the local entry is auto-generated by the desktop and merged with your remote entries, so your file only needs the remote entries |
 | `HUB_KEY` (env var) | Hub key in plaintext (sha256 computed at startup); **required** — the packaged default is empty and an unset value refuses to start (fail-closed). Configure via env var, the `hub.hub-key` property, or the `--hub.hub-key` CLI arg |
 | `WORKER_API_KEY` (env var) | Worker data-ownership key (feeds the packaged default `worker.hubs[0]` entry); the worker refuses to start if unset and no `application-worker.yaml` override provides credentials |
 | `SERVER_ADDRESS` (env var) | Hub listen address, defaults to `127.0.0.1` (loopback only); docker/compose and systemd deployment paths inject `0.0.0.0` explicitly |

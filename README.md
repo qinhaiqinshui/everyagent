@@ -107,9 +107,9 @@ web / hub / worker / desktop 四个模块**互相解耦、物尽其用**,可按�
 - **只想要本机单机** → 用 desktop 一体包,开箱即用;
 - **想要公网多端远程** → 公网服务器只跑 hub + web,自己电脑上单独跑一个 worker;
 - **worker 是一等公民** → 一个 worker 可同时注册到**多个 hub**(`worker.hubs` 列表):既连公网 hub 又连内网/备用 hub,同一份任务与文件在多个 hub 间同步可见,互为冗余;
-- **desktop 也能多 hub** → 桌面版内置的 worker 是完整的 worker,在 `~/.everyagent/application-worker.yaml` 里配多个 `worker.hubs` 条目,即可把这份「桌面 worker」同时注册到本地 hub 和远端公网 hub——「开箱即用的单机」与「到哪都能遥控的远程」同步成立。
+- **desktop 也能多 hub** → 桌面版内置的 worker 是完整的 worker,在 `~/.everyagent/application-worker.yaml` 的 `worker.hubs` 里**只写远程条目**即可——desktop 每次启动 worker 时自动生成 `desktop/desktop-worker.yml`,把本机条目(恒为 `hubs[0]`,凭据与本机 hub 同源)与你的远程条目**合并**为最终 hub 列表(回环地址条目自动剔除,`${HUB_KEY:默认值}` 占位符还原为字面默认值),这份「桌面 worker」便同时注册到本地 hub 和远端公网 hub——「开箱即用的单机」与「到哪都能遥控的远程」同步成立。
 
-> 提示:`worker.hubs` 为列表且**整表替换**——覆盖文件里想同时保留本地与远端,需把两个条目都写上。
+> 提示:Spring 对 `worker.hubs` 这类列表属性跨配置文件**整表替换**——手工以 `--spring.config.additional-location` 叠加覆盖文件时,想保留既有条目必须在覆盖文件里整表重写;desktop 已把「本机条目 + 用户远程条目」的合并做进启动流程(详见 [every-agent-desktop/README.md](every-agent-desktop/README.md)),用户文件只写远程条目即可,无需手写本机条目。
 
 ### 🏢 企业内部部署,接入已有系统零负担
 - **一台服务器即可私有化**:公司内部部署 hub + worker,员工打开浏览器就能用——数据全程留在企业自己的服务器上,不出内网;
@@ -201,7 +201,7 @@ web / hub / worker / desktop 四个模块**互相解耦、物尽其用**,可按�
 | 🌍 **公网远程(多端)** | 公网服务器:`hub` + `web`;本机:`worker` | 服务器跑 hub + 前端静态站;本机 worker 出站 wss 连公网 hub | 手机 / 异地随时遥控家中电脑,无需公网 IP |
 | 🔁 **多 hub 冗余(多端 × 冗余)** | 本机/桌面 `worker` + 两个及以上 `hub` | `worker.hubs` 列表同时注册公网 hub + 内网/备用 hub;同一任务多 hub 同步可见,互为冗余 | 可靠性要求高、多网络双保险;desktop 内置 worker 同样适用 |
 
-> 提示:`worker.hubs` 为列表且**整表替换**——覆盖文件里想同时保留本地与远端,需把两个条目都写上。
+> 提示:Spring 对 `worker.hubs` 列表跨配置文件**整表替换**——desktop 启动时已自动合并「本机条目 + 用户 `application-worker.yaml` 远程条目」,用户文件只写远程条目即可;手工叠加覆盖文件的独立 worker 仍须在覆盖文件里整表重写。
 
 > 详细设计见 **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**(唯一架构事实源,协议、数据模型、安全模型、实现红线)。
 
@@ -302,7 +302,7 @@ worker:
 **"我让 AI 干活,但我不想守在电脑前"** —— 这是 Every Agent 的立身之本。
 
 1. **公网服务器**上部署 hub + 前端静态站(见 `docker-compose.yml` / `deploy.py`;生产强制 wss + TLS,LB 的 WS 空闲超时 ≥ 60s);
-2. **家里/办公室的 PC** 上运行 worker,在 `application-worker.yaml` 的 `worker.hubs` 里把 `url` 指向公网 hub(每项 `url + api-key + hub-key` 必填,支持多 hub 冗余);
+2. **家里/办公室的 PC** 上运行 worker,在 `application-worker.yaml` 的 `worker.hubs` 里把 `url` 指向公网 hub(每项 `url + api-key + hub-key` 必填,支持多 hub 冗余);用桌面版的无需单独跑 worker——在 desktop 的 `application-worker.yaml` 里只写远程条目,启动时自动与本机条目合并注入;
 
   
    application-worker.yaml — 多 hub 配置示例
@@ -333,7 +333,7 @@ worker:
 
 | 配置 | 说明 |
 |---|---|
-| `worker.hubs[].url / api-key / hub-key` | worker 连 hub 的唯一入口(多 hub 列表);不配置则 worker 不连任何 hub;打包默认条目凭据为空(**未显式配置即拒绝启动**,无任何内置默认密钥) |
+| `worker.hubs[].url / api-key / hub-key` | worker 连 hub 的唯一入口(多 hub 列表);不配置则 worker 不连任何 hub;打包默认条目凭据为空(**未显式配置即拒绝启动**,无任何内置默认密钥);desktop 内置 worker 的本机条目由 desktop 自动生成并与用户远程条目合并,用户文件只写远程条目 |
 | `HUB_KEY`(环境变量) | hub key 原文(启动时自算 sha256);**必填**——打包默认值为空,未显式配置即拒绝启动(fail-closed)。配置方式:环境变量 / `hub.hub-key` 配置项 / `--hub.hub-key` 启动参数 |
 | `WORKER_API_KEY`(环境变量) | worker 数据归属密钥(打包默认 `worker.hubs[0]` 条目的 api-key 来源);未配置且无 `application-worker.yaml` 覆盖时 worker 拒绝启动 |
 | `SERVER_ADDRESS`(环境变量) | hub 监听地址,默认 `127.0.0.1`(仅回环);docker/compose 与 systemd 部署链路显式注入 `0.0.0.0` |
