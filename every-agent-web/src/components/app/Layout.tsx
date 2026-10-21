@@ -42,6 +42,7 @@ import ReconnectionModal from './ReconnectionModal'
 import MissingWorkspaceRepairHost from './MissingWorkspaceRepairHost'
 import { WorkspaceShellProvider } from './WorkspaceShellContext'
 import { setShellBridge } from '@/plugin/pluginRuntimeBridge'
+import { requestOpenSettingsPage } from '@/settings/settingsNavigation'
 import { domainEventBus, DOMAIN_EVENTS } from '@/events/eventBus'
 import { setActiveTabMirror } from '@/plugin/activeTabMirror'
 import { AppUiProvider, useAppUi } from './AppUiContext'
@@ -812,6 +813,12 @@ function LayoutContent({ initialThemeType }: { initialThemeType: ThemeMode }) {
         )
       },
       openDiffTab: (input) => openDiffTab(input),
+      openSettingsPage(sectionId?: string) {
+        // 先 openTab 保证设置页标签存在/聚焦，再记录跳转意图 + 发事件；
+        // 顺序不可倒置——面板消费侧依赖标签即将变为可见。
+        openTab('page:settings')
+        requestOpenSettingsPage(sectionId)
+      },
     })
     return () => setShellBridge(null)
   }, [openGlobalFileTab, openDiffTab, openTab])

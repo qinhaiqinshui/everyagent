@@ -12,6 +12,11 @@
  * 插件段用 def.id),目录唯一来源是扫描(useSettingsSectionDirectory)——桌面端左侧渲染
  * 目录列表,点击滚动到位、手动滚动高亮跟随;移动端单栏,header 常驻目录下拉(选中项跟随
  * 当前激活段),弹层宽度处理见 SettingsPanel.css。
+ *
+ * 块级跳转:ctx.ui.openSettingsPage 链路的消费侧(settings/settingsNavigation 发出
+ * pending 意图 + SETTINGS_SECTION_JUMP_REQUESTED 事件),面板挂载时消费 pending、
+ * 运行中订阅事件,待「标签可见 && 目标段已在 DOM」后 scrollToSection 定位
+ * (rAF 重试兜底,超时静默放弃,未注册 id 不抛错)。
  */
 import React from 'react'
 import { Select } from 'antd'
@@ -38,7 +43,8 @@ import ModelConfigSection from '@/components/system/modelConfig/ModelConfigSecti
 import AppearanceSection from '@/components/system/AppearanceSection'
 import EditorFontSection from '@/components/system/EditorFontSection'
 import PluginSettingsSections from '@/components/system/PluginSettingsSections'
-import { SETTINGS_SECTION_ID } from '@/components/system/settingsSectionIds'
+import { SETTINGS_SECTION_ID, SETTINGS_SECTION_ID_ATTR } from '@/components/system/settingsSectionIds'
+import { consumePendingSectionJump } from '@/settings/settingsNavigation'
 import useSettingsSectionDirectory from '@/components/system/useSettingsSectionDirectory'
 import { useResponsiveViewport } from '@/hooks/useResponsiveViewport'
 import {
@@ -48,6 +54,21 @@ import {
 import { APP_NAME, APP_VERSION, APP_COPYRIGHT, APP_LICENSE } from '@/appInfo'
 import './SettingsPanel.css'
 
+/** 块级跳转重试上限：约 3 秒 / 180 帧（60fps），超时静默放弃（未注册 id 的段落始终不出现）。 */
+const JUMP_RETRY_TIMEOUT_MS = 3000
+const JUMP_RETRY_MAX_FRAMES = 180
+
+/**
+ * 在滚动容器内查找 sectionId 对应段落元素。
+ * sectionId 来自插件（任意字符串），不做模板字符串拼选择器（防选择器注入）：
+ * 属性名是宿主常量，属性值在 JS 里等值比较（线性查找）。
+ */
+function findSectionElement(root: HTMLElement, sectionId: string): HTMLElement | null {
+  const element = Array.from(root.querySelectorAll<HTMLElement>(`[${SETTINGS_SECTION_ID_ATTR}]`))
+    .find((item) => item.getAttribute(SETTINGS_SECTION_ID_ATTR) === sectionId)
+  return element ?? null
+}
+
 export default function SettingsPanel() {
   const hub = useHub()
   const { showToast } = useAppUi()
@@ -55,6 +76,73 @@ export default function SettingsPanel() {
   const bodyRef = React.useRef<HTMLDivElement | null>(null)
   const { entries: directoryEntries, activeId, scrollToSection } = useSettingsSectionDirectory(bodyRef)
   const [hoveredDirectoryId, setHoveredDirectoryId] = React.useState<string | null>(null)
+
+  // ── 块级跳转（ctx.ui.openSettingsPage 链路消费侧，见 settings/settingsNavigation.ts）──
+  // 设置页标签常驻挂载、非激活仅 display:none：隐藏期滚动容器测不到位置，且 lazy
+  // 首挂 / 插件段晚注册时目标段落尚未进 DOM。故定位 = 等到「容器可见 && 段落已出现」
+  // 才 scrollToSection，此前 rAF 重试（上限约 3s / 180 帧），超时静默放弃
+  // （未注册 id 不抛错、不滚顶）。意图来源：挂载时消费 pending 单槽（事件错过兜底）
+  // + 订阅 SETTINGS_SECTION_JUMP_REQUESTED 领域事件（已挂载时的即时跳转）。
+  const jumpRafRef = React.useRef<number | null>(null)
+  /** 当前重试中的跳转目标段（cleanup 判断是否存在未竟尝试用）。 */
+  const jumpTargetRef = React.useRef<string | null>(null)
+  /** dev StrictMode 双挂载兜底：cleanup 中断的尝试记下目标，重挂后重启，行为对齐 prod。 */
+  const rearmJumpRef = React.useRef<string | null>(null)
+
+  const jumpToSection = React.useCallback((sectionId: string): void => {
+    if (jumpRafRef.current !== null) cancelAnimationFrame(jumpRafRef.current)
+    jumpTargetRef.current = sectionId
+    const deadline = Date.now() + JUMP_RETRY_TIMEOUT_MS
+    let frames = 0
+    const attempt = (): void => {
+      jumpRafRef.current = null
+      const root = bodyRef.current
+      if (root) {
+        // 可见判定：display:none 下 offsetParent 为 null 且 rect 零宽高，二者其一满足即视为可见。
+        const rect = root.getBoundingClientRect()
+        const containerVisible = root.offsetParent !== null || rect.width > 0 || rect.height > 0
+        if (containerVisible && findSectionElement(root, sectionId) !== null) {
+          jumpTargetRef.current = null
+          scrollToSection(sectionId)
+          return
+        }
+      }
+      if (Date.now() >= deadline || frames >= JUMP_RETRY_MAX_FRAMES) {
+        // 段落始终未出现（未注册 id）或标签迟迟不可见：超时静默放弃。
+        jumpTargetRef.current = null
+        return
+      }
+      frames += 1
+      jumpRafRef.current = requestAnimationFrame(attempt)
+    }
+    jumpRafRef.current = requestAnimationFrame(attempt)
+  }, [scrollToSection])
+
+  React.useEffect(() => {
+    // 挂载消费 pending 意图（lazy 首挂时事件早已错过，pending 兜底）；sectionId 空串 = 仅打开不定位。
+    const rearm = rearmJumpRef.current
+    rearmJumpRef.current = null
+    const pending = rearm !== null ? { sectionId: rearm } : consumePendingSectionJump()
+    if (pending && pending.sectionId) jumpToSection(pending.sectionId)
+
+    const unsubscribe = domainEventBus.subscribe(DOMAIN_EVENTS.SETTINGS_SECTION_JUMP_REQUESTED, ({ sectionId }) => {
+      // 事件到达说明面板已挂载、pending 槽不会被挂载消费读走——顺手清掉（与事件同源同值），
+      // 避免陈旧意图在下次卸载重挂时复跳；空串事件仅打开设置页，不定位。
+      consumePendingSectionJump()
+      if (sectionId) jumpToSection(sectionId)
+    })
+    return () => {
+      unsubscribe()
+      if (jumpRafRef.current !== null) {
+        cancelAnimationFrame(jumpRafRef.current)
+        jumpRafRef.current = null
+        if (jumpTargetRef.current !== null) {
+          rearmJumpRef.current = jumpTargetRef.current
+          jumpTargetRef.current = null
+        }
+      }
+    }
+  }, [jumpToSection])
 
   const [hubUrl, setHubUrl] = React.useState(hub.config?.hubUrl ?? 'ws://localhost:6101/ws')
   const [hubKey, setHubKey] = React.useState(hub.config?.hubKey ?? '')

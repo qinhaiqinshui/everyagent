@@ -20,6 +20,12 @@ export interface ShellBridge {
   openTab(type: string, data?: Record<string, string>, title?: string): string | null
   openFileTab(workspaceRoot: string, filePath: string, options?: { mode?: string; lineNumber?: number }): void
   openDiffTab(input: PluginDiffTabInput): string
+  /**
+   * 打开设置页标签（page:settings）并滚动到 sectionId 对应设置段（可省略）。
+   * 委托语义：宿主 Layout 注入的实现 = openTab('page:settings') 打开/聚焦标签，
+   * 再经 settingsNavigation 记录 pending 意图 + 发领域事件；未注册 id 静默忽略。
+   */
+  openSettingsPage(sectionId?: string): void
 }
 
 /** 输入框草稿桥接能力子集（来自 ComposerDraftBridgeContext）。 */

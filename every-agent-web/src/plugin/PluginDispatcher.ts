@@ -211,6 +211,8 @@ export interface RealPluginDispatcher {
   openFileTab: (workspaceRoot: string, filePath: string, options?: { mode?: string; lineNumber?: number }) => void
   /** 打开顶层 diff 对比标签（委托宿主 WorkspaceShellContext）。 */
   openDiffTab: (input: PluginDiffTabInput) => void
+  /** 打开设置页标签并滚动到指定设置段（委托宿主 ShellBridge：openTab + settingsNavigation）。 */
+  openSettingsPage: (sectionId?: string) => void
   /** 向当前输入框草稿末尾追加纯文本（委托宿主 ComposerDraftBridge）。 */
   appendComposerText: (text: string) => void
   /**
@@ -410,6 +412,9 @@ export const pluginDispatcher: RealPluginDispatcher = {
   },
   openDiffTab(input) {
     getShellBridge()?.openDiffTab(input)
+  },
+  openSettingsPage(sectionId) {
+    getShellBridge()?.openSettingsPage(sectionId)
   },
   appendComposerText(text) {
     appendComposerTextQueued(text)
