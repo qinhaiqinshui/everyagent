@@ -35,8 +35,10 @@ jobs:
           gpg-private-key: ${{ secrets.GPG_PRIVATE_KEY }}
           gpg-passphrase: GPG_PASSPHRASE
 
+      # 用仓库自带的 Maven Wrapper（钉死 3.9.16）：runner 自带 Maven 版本会漂移，
+      # 实测曾出现 bundle 缺 .pom 的发布失败（central-publishing 插件对非预期 Maven 版本敏感）
       - name: Deploy SDK 坐标到 Maven Central
-        run: mvn -B -ntp -Pcentral -pl every-agent-contract,every-agent-plugin-parent,every-agent-plugin-api -am deploy
+        run: ./mvnw -B -ntp -Pcentral -pl every-agent-contract,every-agent-plugin-parent,every-agent-plugin-api -am deploy
         env:
           CENTRAL_USERNAME: ${{ secrets.CENTRAL_USERNAME }}
           CENTRAL_TOKEN: ${{ secrets.CENTRAL_TOKEN }}

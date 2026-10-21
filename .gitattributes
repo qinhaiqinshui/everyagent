@@ -28,3 +28,6 @@
 # 可执行二进制
 runtime/bin/rg binary
 runtime/bin/rg.exe binary
+
+mvnw text eol=lf
+mvn.cmd text eol=crlf
