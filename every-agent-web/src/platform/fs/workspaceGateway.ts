@@ -17,6 +17,7 @@ import { channels } from '@every-agent/client'
 import { domainEventBus, DOMAIN_EVENTS } from '@/events/eventBus'
 import { hubSession } from '@/hub/session'
 import { workspaceRegistry } from '@/hub/workspaceRegistry'
+import { withRawAccessAuthorization } from './rawAccess'
 import { normalizeWorkspaceRelativePath, isAbsoluteBusinessPath, toBusinessAbsolutePath } from './pathUtils'
 
 /**
@@ -47,6 +48,14 @@ function rpcForWorkspace(workspace: string, method: string, params: Record<strin
     return hubSession.rpcTo(workerId, method, { ...params, workspace }, opts)
   }
   throw new Error('无法确定该工作区所属 worker(工作区未注册或 worker 离线)')
+}
+
+/**
+ * 注册 Raw 系列会话级用户放行目录(§5.5):仅在前端确认框「允许」后调用,
+ * worker 侧放行该路径所在目录(realpath),随后重试原 readRaw/writeRaw 即通过。
+ */
+function grantRawRoot(workerId: string, path: string): Promise<unknown> {
+  return hubSession.rpcTo(workerId, 'fs.grantRawRoot', { path })
 }
 
 export interface WorkspaceFileStat {
@@ -423,41 +432,46 @@ export const workspaceGateway = {
   },
 
   /**
-   * 按机器绝对路径读取文件(不经 workspace 沙箱;文件标签页用户操作专用)。
+   * 按机器绝对路径读取文件(文件标签页用户操作专用;worker 侧做 Raw 系列合法根校验,§5.5)。
    * 调 worker 的 fs.readRaw,应答形态与 fs.read 一致(小文件内联 base64、大文件分批)。
-   * 参数同 readBytes(workspaceRoot + path),内部解析为机器绝对路径后按绝对路径读盘。
+   * 参数同 readBytes(workspaceRoot + path),内部解析为机器绝对路径后按绝对路径读盘;
+   * 越界(SANDBOX_DENIED)时经确认框放行所在目录后自动重试一次(rawAccess)。
    */
   async readBytesRaw(workspaceRoot: string, path: string): Promise<Uint8Array> {
     wireFsChanged()
     const absPath = resolveMachinePath(workspaceRoot, path)
     const workerId = workspaceRegistry.workerIdOfRoot(workspaceRoot) ?? workspaceRegistry.primaryWorkerId()
     if (!workerId) throw new Error('无法确定该文件所属 worker(工作区未注册或 worker 离线)')
-    const parts: { offset: number; data: Uint8Array }[] = []
-    const result = await hubSession.rpcTo(workerId, 'fs.readRaw', { path: absPath }, {
-      timeoutMs: 120_000,
-      onData: (batch) => {
-        for (const item of batch as FsReadResult[]) {
-          if (item.base64 !== undefined) {
-            parts.push({ offset: item.offset ?? 0, data: base64ToBytes(item.base64) })
+    const doRead = async (): Promise<Uint8Array> => {
+      // parts 每次调用局部新建:确认放行重试时不与首次失败调用的残余帧混叠
+      const parts: { offset: number; data: Uint8Array }[] = []
+      const result = await hubSession.rpcTo(workerId, 'fs.readRaw', { path: absPath }, {
+        timeoutMs: 120_000,
+        onData: (batch) => {
+          for (const item of batch as FsReadResult[]) {
+            if (item.base64 !== undefined) {
+              parts.push({ offset: item.offset ?? 0, data: base64ToBytes(item.base64) })
+            }
           }
-        }
-      },
-    }) as FsReadResult
-    if (result.base64 !== undefined) {
-      return base64ToBytes(result.base64)
+        },
+      }) as FsReadResult
+      if (result.base64 !== undefined) {
+        return base64ToBytes(result.base64)
+      }
+      if (parts.length === 0) {
+        throw new Error(`读取文件失败: ${absPath}`)
+      }
+      parts.sort((a, b) => a.offset - b.offset)
+      const total = parts.reduce((sum, part) => sum + part.data.length, 0)
+      const merged = new Uint8Array(total)
+      let cursor = 0
+      for (const part of parts) {
+        merged.set(part.data, cursor)
+        cursor += part.data.length
+      }
+      return merged
     }
-    if (parts.length === 0) {
-      throw new Error(`读取文件失败: ${absPath}`)
-    }
-    parts.sort((a, b) => a.offset - b.offset)
-    const total = parts.reduce((sum, part) => sum + part.data.length, 0)
-    const merged = new Uint8Array(total)
-    let cursor = 0
-    for (const part of parts) {
-      merged.set(part.data, cursor)
-      cursor += part.data.length
-    }
-    return merged
+    return withRawAccessAuthorization({ workerId, path: absPath, op: 'read' }, grantRawRoot, doRead)
   },
 
   /** readBytesRaw 的文本包装(同 readTextFile 与 readBytes 的关系)。 */
@@ -465,14 +479,18 @@ export const workspaceGateway = {
     return bytesToText(await this.readBytesRaw(workspaceRoot, path))
   },
 
-  /** writeTextFileRaw 的字节版本(同 writeBytes 与 writeTextFile 的关系)。 */
+  /** writeTextFileRaw 的字节版本(同 writeBytes 与 writeTextFile 的关系;越界时确认放行重试)。 */
   async writeBytesRaw(workspaceRoot: string, path: string, content: Uint8Array): Promise<void> {
     const absPath = resolveMachinePath(workspaceRoot, path)
     const workerId = workspaceRegistry.workerIdOfRoot(workspaceRoot) ?? workspaceRegistry.primaryWorkerId()
     if (!workerId) throw new Error('无法确定该文件所属 worker(工作区未注册或 worker 离线)')
-    await hubSession.rpcTo(workerId, 'fs.writeRaw', { path: absPath, contentBase64: bytesToBase64(content) }, {
+    const doWrite = () => hubSession.rpcTo(workerId, 'fs.writeRaw', {
+      path: absPath,
+      contentBase64: bytesToBase64(content),
+    }, {
       timeoutMs: 120_000,
     })
+    await withRawAccessAuthorization({ workerId, path: absPath, op: 'write' }, grantRawRoot, doWrite)
   },
 
   /**
@@ -484,9 +502,11 @@ export const workspaceGateway = {
   },
 
   /**
-   * 按机器绝对路径获取文件属性(不经 workspace 沙箱;文件标签页用户操作专用)。
-   * 调 worker 的 fs.statRaw,返回与 stat 同构的 WorkspaceFileStat。
-   * 外部文件无工作区根,listDir 推导不可用,需专用 RPC 直接 stat。
+   * 按机器绝对路径获取文件属性(文件标签页用户操作专用;worker 侧做 Raw 系列合法根
+   * 校验,越界返回 SANDBOX_DENIED)。调 worker 的 fs.statRaw,返回与 stat 同构的
+   * WorkspaceFileStat。外部文件无工作区根,listDir 推导不可用,需专用 RPC 直接 stat;
+   * 越界时**不**自动弹确认(存在性探测等旁路消费不构成用户意图),由读取/保存路径
+   * (readBytesRaw/writeBytesRaw)统一触发确认放流。
    */
   async statRaw(workspaceRoot: string, path: string): Promise<WorkspaceFileStat> {
     const absPath = resolveMachinePath(workspaceRoot, path)

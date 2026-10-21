@@ -40,6 +40,7 @@ import BrowserNotificationHost from './BrowserNotificationHost'
 import BrowserNotificationGuide from './BrowserNotificationGuide'
 import ReconnectionModal from './ReconnectionModal'
 import MissingWorkspaceRepairHost from './MissingWorkspaceRepairHost'
+import RawAccessConfirmHost from '@/components/files/RawAccessConfirmHost'
 import { WorkspaceShellProvider } from './WorkspaceShellContext'
 import { setShellBridge } from '@/plugin/pluginRuntimeBridge'
 import { requestOpenSettingsPage } from '@/settings/settingsNavigation'
@@ -1070,6 +1071,7 @@ function LayoutContent({ initialThemeType }: { initialThemeType: ThemeMode }) {
         <BrowserNotificationGuide />
         <ReconnectionModal />
         <MissingWorkspaceRepairHost />
+        <RawAccessConfirmHost />
         <LazySearchModal open={searchModalOpen} onClose={() => setSearchModalOpen(false)} />
           </div>
         </WorkspaceShellProvider>

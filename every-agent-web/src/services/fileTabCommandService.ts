@@ -30,8 +30,9 @@ export interface FileTabSaveResult {
 /**
  * 文件页命令服务。
  * 统一承接文件保存、重命名等写操作。
- * 文件标签页是用户操作(非 AI 工具调用),不经沙箱/权限链路,统一走 fs.writeRaw
- * (网关内部解析 workspaceRoot + path 为机器绝对路径)。
+ * 文件标签页是用户操作(非 AI 工具调用),统一走 fs.writeRaw(网关内部解析
+ * workspaceRoot + path 为机器绝对路径)。worker 侧做 Raw 系列合法根校验(§5.5):
+ * 越界返回 SANDBOX_DENIED,网关层弹用户确认 → fs.grantRawRoot 会话放行 → 自动重试。
  * 工作区外绝对路径暂不支持重命名(需 worker 补 fs.moveRaw,v1 先跳过)。
  */
 export const fileTabCommandService = {

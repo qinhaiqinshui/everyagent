@@ -54,12 +54,17 @@ public final class RpcMethods {
     public static final String FS_DELETE = "fs.delete";
     /** 浏览目录(方案 B:列盘符/根,再逐层列子目录;不经 workspace 沙箱,依赖 worker 进程权限)。 */
     public static final String FS_BROWSE = "fs.browse";
-    /** 按机器绝对路径读取文件(不经 workspace 沙箱;文件标签页用户操作,非 AI 工具调用,不走权限链路)。 */
+    /** 按机器绝对路径读取文件(Raw 系列合法根校验,§5.5;文件标签页用户操作,非 AI 工具调用)。 */
     public static final String FS_READ_RAW = "fs.readRaw";
-    /** 按机器绝对路径写入文件(不经 workspace 沙箱;文件标签页用户操作,非 AI 工具调用,不走权限链路)。 */
+    /** 按机器绝对路径写入文件(Raw 系列合法根校验,§5.5;文件标签页用户保存,非 AI 工具调用)。 */
     public static final String FS_WRITE_RAW = "fs.writeRaw";
-    /** 按机器绝对路径获取文件属性(不经 workspace 沙箱;文件标签页用户操作专用)。 */
+    /** 按机器绝对路径获取文件属性(Raw 系列合法根校验,§5.5;文件标签页用户操作专用)。 */
     public static final String FS_STAT_RAW = "fs.statRaw";
+    /**
+     * 注册 Raw 系列会话级用户放行目录(§5.5):前端收到 SANDBOX_DENIED 弹确认框、
+     * 用户显式确认后调用;文件→取所在目录,放行粒度=目录 realpath,会话级内存态。
+     */
+    public static final String FS_GRANT_RAW_ROOT = "fs.grantRawRoot";
 
     // ---- 内嵌终端(§7.18) ----
 
