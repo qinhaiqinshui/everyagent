@@ -704,7 +704,10 @@ wsl-bwrap 后端的 seccomp 内核级提权拦截已随 bwrap 后端删除而移
 3. 认证失败 → 读工作区 `.everyagent/.git-credentials.enc` 该 host 条目 → 解密后按 ① 注入重试;
 4. 仍失败 → `rpc.err(AUTH_REQUIRED)` 弹凭证输入(判定 = 非零退出 **且** stderr 命中 `Authentication failed` / `could not read Username` / `could not read Password` 等关键字,避免网络错误/远端 404 误判)。
 
-- **加密存储**:每工作区一把密钥 `<workspaceRoot>/.everyagent/.git-credential.key`(首次启动自动生成 32B AES-256,与密文 `.git-credentials.enc` 同级);算法 AES/GCM/NoPadding,随机 IV,AAD=host 绑定条目;密文 JSON `{version, entries:{host:{iv,cipher,ts}}}` 存工作区 `.everyagent/.git-credentials.enc`,明文永不落盘。
+- **加密存储**:每工作区一把 32B AES-256 主密钥;算法 AES/GCM/NoPadding,随机 IV,AAD=host 绑定条目;密文 JSON `{version, entries:{host:{iv,cipher,ts}}}` 存工作区 `.everyagent/.git-credentials.enc`,明文永不落盘。主密钥**存放形态**(防"拷走工作区目录即同时拿到密文+钥匙"):
+    - Windows(常规):主密钥经 DPAPI(当前用户作用域)包裹为 v2 信封 JSON(`{"v":2,"k":"dpapi-user",...}`)落盘 `<workspaceRoot>/.everyagent/.git-credential.key`(与密文同路径)——信封离开本机/本用户即不可解;
+    - 非 Windows / DPAPI 不可用(回退):主密钥外置 `<home>/git-credential-keys/<sha256(workspace realpath)>.key`(工作区外),文件 600/目录 700;
+    - 旧版"明文 key 与密文同级"布局在下次使用时**懒迁移**(包裹/外置前先做解密自校验,失败保留旧文件幂等重试),主密钥值不变、仅换存放形态。
 - 前端 Git 面板捕获 `AUTH_REQUIRED(host)` → 凭证 Modal(账号/密码/「保存凭证到工作区(加密)」复选框)→ 先带临时凭证重试(克隆时根仍为空),成功后再 `git.credential.save` 落盘。
 - 凭证仅存工作区加密文件与 worker 内存,不经 hub / 前端 localStorage;协议不提供"读取凭证"RPC(save 只进不出)。
 - **多远端推送**:`git.push` 与自动同步(`syncRemote`)均推送到<b>所有</b>已配置远端(`git remote -v` 列出的每个 remote),而非仅 origin;自动同步仅从 origin 拉取、推送全远端;推送逐个远端执行,部分失败时仍尝试其余远端,最终汇总错误。推送始终显式指定当前分支名;分支无 upstream 时,首个远端自动带 `--set-upstream` 建立跟踪。
@@ -833,7 +836,7 @@ worker 的两条运行期责任链迁移为与任务洋葱同一的 filter 形�
 ```
 ~/.everyagent/                       # <home>(EVERYAGENT_HOME 可覆盖;docker 挂卷)
 ├─ defaultworkspace/                 # 默认工作区根(原 workspace/ 改名,自动注册 id=defaultworkspace)
-│   └─ .everyagent/                  # 工作区级 git 凭证加密存储(密文 .git-credentials.enc + 密钥 .git-credential.key 同级,§7.12)
+│   └─ .everyagent/                  # 工作区级 git 凭证加密存储(密文 .git-credentials.enc + 主密钥信封 .git-credential.key:Windows 为 DPAPI 用户态信封,其余平台外置 <home>/git-credential-keys/,§7.12)
 ├─ workspaces/
 │   ├─ workspaces.json               # 唯一工作区注册表 {id, root, addedTs, lastActivityTs?, externalRoots?}(默认工作区也在册)
 │   ├─ defaultworkspace/tasks/<taskId>/      # 默认工作区任务目录;永久保留
