@@ -742,6 +742,8 @@ export default plugin
 
 > 白名单与 `every-agent-web/src/theme/themeTokens.ts` 的 `THEME_TOKEN_NAMES` 一一对应（改一处必同步另一处）。
 
+`--reading-bg` / `--reading-fg` 的消费范围：文件标签页内容区（Markdown 预览的 `.md-root` 正文、CodeMirror 编辑器与行号槽、Markdown 分栏/单栏面板、文件内容容器）。默认值 `var(--bg-secondary)` / `var(--text-primary)`——未覆盖时与不套主题完全一致。因此**只覆盖这两个 token 的主题 = 只换文件阅读区配色，其余 UI（侧栏/标题栏/消息/按钮）全部继承 `type` 基底**（`novel-reader` 即此形态）。
+
 ### 19.5 宿主消费链与坑
 
 - **主题解析**：`resolveThemes()`（`every-agent-web/src/theme/resolveThemes.ts`）= `[内建「深色」「浅色」] + pluginDispatcher.listRegisteredThemes() + 用户自定义主题`（自定义存 `pref` 的 `theme.custom`），按 `id` 去重（先到者胜——内建优先，插件不能顶替内建 id）。当前选中存 `pref` 的 `theme`（主题 id；旧值 `dark`/`light` 自动映射到内建 id）。

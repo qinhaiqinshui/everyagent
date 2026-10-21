@@ -194,13 +194,23 @@ const taskCheckedStyle: React.CSSProperties = {
   marginTop: 1,
 }
 
+/**
+ * 文件阅读区（preview 变体）正文色：跟随 `--reading-fg`，使阅读类颜色主题
+ * （只覆盖 `--reading-bg`/`--reading-fg`）能整体生效，而不是只有底色变。
+ * 聊天（display 变体）不使用它，保持 `--text-*`，不受阅读主题影响。
+ */
+const READING_FG = 'var(--reading-fg)'
+const READING_FG_DIM = 'color-mix(in srgb, var(--reading-fg) 78%, transparent)'
+const READING_FG_FAINT = 'color-mix(in srgb, var(--reading-fg) 60%, transparent)'
+const READING_FG_SOFT = 'color-mix(in srgb, var(--reading-fg) 74%, transparent)'
+
 const previewHeadingStyles: Record<number, React.CSSProperties> = {
-  1: { margin: '24px 0 12px', fontSize: 'var(--text-2xl)', fontWeight: 600, lineHeight: 1.3, color: 'var(--text-primary)', borderBottom: '1px solid var(--border)', paddingBottom: 8 },
-  2: { margin: '20px 0 10px', fontSize: 'var(--text-xl)', fontWeight: 600, lineHeight: 1.35, color: 'var(--text-primary)' },
-  3: { margin: '16px 0 8px', fontSize: 'var(--text-md)', fontWeight: 600, lineHeight: 1.4, color: 'var(--text-primary)' },
-  4: { margin: '14px 0 6px', fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--text-primary)' },
-  5: { margin: '12px 0 4px', fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--text-secondary)' },
-  6: { margin: '10px 0 4px', fontSize: 'var(--text-xs)', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.02em' },
+  1: { margin: '24px 0 12px', fontSize: 'var(--text-2xl)', fontWeight: 600, lineHeight: 1.3, color: READING_FG, borderBottom: '1px solid var(--border)', paddingBottom: 8 },
+  2: { margin: '20px 0 10px', fontSize: 'var(--text-xl)', fontWeight: 600, lineHeight: 1.35, color: READING_FG },
+  3: { margin: '16px 0 8px', fontSize: 'var(--text-md)', fontWeight: 600, lineHeight: 1.4, color: READING_FG },
+  4: { margin: '14px 0 6px', fontSize: 'var(--text-sm)', fontWeight: 600, color: READING_FG },
+  5: { margin: '12px 0 4px', fontSize: 'var(--text-sm)', fontWeight: 600, color: READING_FG_DIM },
+  6: { margin: '10px 0 4px', fontSize: 'var(--text-xs)', fontWeight: 700, color: READING_FG_FAINT, letterSpacing: '0.02em' },
 }
 
 const displayHeadingStyles: Record<number, React.CSSProperties> = {
@@ -227,17 +237,17 @@ const variantStyles: Record<MarkdownVariant, {
   heading: Record<number, React.CSSProperties>
 }> = {
   preview: {
-    paragraph: { ...baseParagraphStyle, fontSize: 'var(--text-base)', lineHeight: 1.8, color: 'var(--text-primary)', marginBottom: 4 },
-    blockquote: { ...baseBlockquoteStyle, margin: '8px 0', color: 'var(--text-secondary)', fontSize: 'var(--text-sm)', background: 'var(--bg-tertiary)' },
+    paragraph: { ...baseParagraphStyle, fontSize: 'var(--text-base)', lineHeight: 1.8, color: READING_FG, marginBottom: 4 },
+    blockquote: { ...baseBlockquoteStyle, margin: '8px 0', color: READING_FG_SOFT, fontSize: 'var(--text-sm)', background: 'var(--bg-tertiary)' },
     list: { margin: '6px 0 8px', padding: 0, paddingLeft: '1.4em', listStyleType: 'disc', whiteSpace: 'normal' },
-    listItem: { fontSize: 'var(--text-base)', lineHeight: 1.6, color: 'var(--text-primary)', marginBottom: 2 },
+    listItem: { fontSize: 'var(--text-base)', lineHeight: 1.6, color: READING_FG, marginBottom: 2 },
     tableWrap: { ...baseTableWrapStyle, margin: '12px 0 16px', background: 'var(--bg-table)' },
     table: baseTableStyle,
-    th: { ...baseThStyle, color: 'var(--text-primary)', background: 'color-mix(in srgb, var(--bg-table) 92%, var(--text-muted))' },
-    td: { ...baseTdStyle, color: 'var(--text-primary)' },
+    th: { ...baseThStyle, color: READING_FG, background: 'color-mix(in srgb, var(--bg-table) 92%, var(--text-muted))' },
+    td: { ...baseTdStyle, color: READING_FG },
     hr: { ...baseHrStyle, margin: '16px 0', borderTopColor: 'var(--border)' },
-    code: { background: 'var(--bg-tertiary)', padding: '1px 5px', borderRadius: 4, color: 'var(--text-primary)', fontSize: 'var(--text-xs)', fontFamily: 'var(--font-mono)' },
-    strong: { fontWeight: 700, color: 'var(--text-primary)' },
+    code: { background: 'var(--bg-tertiary)', padding: '1px 5px', borderRadius: 4, color: READING_FG, fontSize: 'var(--text-xs)', fontFamily: 'var(--font-mono)' },
+    strong: { fontWeight: 700, color: READING_FG },
     heading: previewHeadingStyles,
   },
   display: {
