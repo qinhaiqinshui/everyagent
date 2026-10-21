@@ -111,7 +111,7 @@ export function formatNextSteps({ spec, vars, relTarget, absTarget }) {
     if (spec.kind === 'java' || spec.kind === 'full') {
       lines.push('1) 构建后端 jar（插件不进根 reactor，必须 -f 单独构建；需要先装好 plugin-parent 与 plugin-api）')
       lines.push('   ' + pomCmd)
-      lines.push('   首次构建若报找不到 dev.everyagent:every-agent-plugin-parent，先在仓库根执行：')
+      lines.push('   首次构建若报找不到 io.github.qinhaiqinshui:every-agent-plugin-parent，先在仓库根执行：')
       lines.push('   mvn -pl every-agent-plugin-parent,every-agent-plugin-api -am install -DskipTests')
       lines.push('')
     }

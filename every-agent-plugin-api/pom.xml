@@ -4,7 +4,7 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
     <parent>
-        <groupId>dev.everyagent</groupId>
+        <groupId>io.github.qinhaiqinshui</groupId>
         <artifactId>every-agent-parent</artifactId>
         <version>${revision}</version>
     </parent>
@@ -15,7 +15,7 @@
     <dependencies>
         <!-- 契约层 JSON 工具（EventPayloads / SlashTokenEncoder / FileChangesCollector 等引用） -->
         <dependency>
-            <groupId>dev.everyagent</groupId>
+            <groupId>io.github.qinhaiqinshui</groupId>
             <artifactId>every-agent-contract</artifactId>
         </dependency>
         <!-- 日志门面：契约层工具类的告警（如 SkillMaterializer 的「非法 id 已跳过」ERROR）走 slf4j，

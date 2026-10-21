@@ -38,7 +38,7 @@ builtin 形态（在**仓库根**执行；插件不进根 reactor，必须 `-f` 
 
 ```powershell
 mvn -f every-agent-plugins/{{pluginId}}/pom.xml package
-# 首次构建若报找不到 dev.everyagent:every-agent-plugin-parent，先在仓库根执行一次：
+# 首次构建若报找不到 io.github.qinhaiqinshui:every-agent-plugin-parent，先在仓库根执行一次：
 mvn -pl every-agent-plugin-parent,every-agent-plugin-api -am install -DskipTests
 ```
 

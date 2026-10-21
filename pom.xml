@@ -10,7 +10,7 @@
         <relativePath/>
     </parent>
 
-    <groupId>dev.everyagent</groupId>
+    <groupId>io.github.qinhaiqinshui</groupId>
     <artifactId>every-agent-parent</artifactId>
     <version>${revision}</version>
     <packaging>pom</packaging>
@@ -46,12 +46,12 @@
                 <scope>import</scope>
             </dependency>
             <dependency>
-                <groupId>dev.everyagent</groupId>
+                <groupId>io.github.qinhaiqinshui</groupId>
                 <artifactId>every-agent-contract</artifactId>
                 <version>${revision}</version>
             </dependency>
             <dependency>
-                <groupId>dev.everyagent</groupId>
+                <groupId>io.github.qinhaiqinshui</groupId>
                 <artifactId>every-agent-plugin-api</artifactId>
                 <version>${revision}</version>
             </dependency>

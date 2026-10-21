@@ -4,7 +4,7 @@
     <modelVersion>4.0.0</modelVersion>
 
     <parent>
-        <groupId>dev.everyagent</groupId>
+        <groupId>io.github.qinhaiqinshui</groupId>
         <artifactId>every-agent-plugin-parent</artifactId>
         <version>${revision}</version>
         <relativePath>../../every-agent-plugin-parent/pom.xml</relativePath>
@@ -18,7 +18,7 @@
 
     <dependencies>
         <dependency>
-            <groupId>dev.everyagent</groupId>
+            <groupId>io.github.qinhaiqinshui</groupId>
             <artifactId>every-agent-plugin-api</artifactId>
         </dependency>
         <!-- Spring AI OpenAI: SubAgentManager 用 OpenAiChatOptions / ToolCallbacks -->

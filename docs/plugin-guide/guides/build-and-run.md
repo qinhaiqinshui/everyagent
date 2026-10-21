@@ -53,11 +53,11 @@ mvn -f every-agent-plugins\<id>\pom.xml package -q             # 静默模式，
 2. 构建插件必须 `-f every-agent-plugins\<id>\pom.xml` 单独指过去（或 `cd` 进插件目录），这就是 §1.1 矩阵里所有 mvn 命令带 `-f` 的原因；
 3. 构建宿主（如 `mvn -pl every-agent-worker -am package`）同样不带任何插件（`task-edit-resend` 除外）——宿主与插件是两条构建线。
 
-插件 pom 的 parent 是 `dev.everyagent:every-agent-plugin-parent:1.0.1`（**插件 SDK parent**，坐标版本即根 pom 的工程版本，见根 pom 的 `<properties><revision>`；pom 里写的是 `${revision}` 表达式，靠 `relativePath ../../every-agent-plugin-parent/pom.xml` 在磁盘上定位，所以插件能脱离根 reactor 单独构建）。Java 版本 / 编码 / 依赖版本管理 / `plugin.json` 打包 / 测试栈全由它提供，所以插件 pom 只剩「坐标 + 自己额外需要的依赖」——通常整个 `<dependencies>` 只有 `every-agent-plugin-api`（**不写 `<version>`**，由 SDK parent 的 `dependencyManagement` 管），**零 worker 依赖**。⚠️ 插件的自身版本与工程版本**不同号**（脚手架默认给新插件 `0.1.0`），所以依赖里**不要写 `${project.version}`**——它解析的是本插件自己的版本。清单与字段逐项见[plugin.json 字段参考](../plugin-manifest.md)与[后端模型总览](../backend/overview.md)。
+插件 pom 的 parent 是 `io.github.qinhaiqinshui:every-agent-plugin-parent:1.0.1`（**插件 SDK parent**，坐标版本即根 pom 的工程版本，见根 pom 的 `<properties><revision>`；pom 里写的是 `${revision}` 表达式，靠 `relativePath ../../every-agent-plugin-parent/pom.xml` 在磁盘上定位，所以插件能脱离根 reactor 单独构建）。Java 版本 / 编码 / 依赖版本管理 / `plugin.json` 打包 / 测试栈全由它提供，所以插件 pom 只剩「坐标 + 自己额外需要的依赖」——通常整个 `<dependencies>` 只有 `every-agent-plugin-api`（**不写 `<version>`**，由 SDK parent 的 `dependencyManagement` 管），**零 worker 依赖**。⚠️ 插件的自身版本与工程版本**不同号**（脚手架默认给新插件 `0.1.0`），所以依赖里**不要写 `${project.version}`**——它解析的是本插件自己的版本。清单与字段逐项见[plugin.json 字段参考](../plugin-manifest.md)与[后端模型总览](../backend/overview.md)。
 
 ### 2.2 首次准备：`install` plugin-parent 与 plugin-api（为什么不能省）
 
-`dev.everyagent:every-agent-plugin-parent`（插件 SDK parent）与 `dev.everyagent:every-agent-plugin-api` **都未发布到 Maven Central**（repo1 上 `dev/everyagent/` 目录 404，实测）。`-f` 单独构建插件时，Maven 解析这两者只会去**本地仓库**找——新 clone 的机器上没有它们，构建直接失败（Maven 标准报错形态：`Could not resolve artifact dev.everyagent:every-agent-plugin-parent ...`；此前尝试过联网解析的机器还可能残留 `.lastUpdated` 失败缓存，执行下面的 `install` 即一并解决）。所以一次性执行：
+`io.github.qinhaiqinshui:every-agent-plugin-parent`（插件 SDK parent）与 `io.github.qinhaiqinshui:every-agent-plugin-api` **都未发布到 Maven Central**（repo1 上 `dev/everyagent/` 目录 404，实测）。`-f` 单独构建插件时，Maven 解析这两者只会去**本地仓库**找——新 clone 的机器上没有它们，构建直接失败（Maven 标准报错形态：`Could not resolve artifact io.github.qinhaiqinshui:every-agent-plugin-parent ...`；此前尝试过联网解析的机器还可能残留 `.lastUpdated` 失败缓存，执行下面的 `install` 即一并解决）。所以一次性执行：
 
 ```powershell
 # 仓库根，一次性：把插件 SDK parent 与 API（连同它们的 reactor 上游）装进本地 ~/.m2

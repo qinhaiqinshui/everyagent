@@ -234,7 +234,7 @@ npm.cmd run build:plugins
 java 与 full 的后端部分完全一致（full 只是多了 `web/index.ts` 与合并版 `plugin.json`）。要点：
 
 - **插件不进根 reactor**：根 `pom.xml` 的 `<modules>` 不包含 `every-agent-plugins/*`，所以必须 `-f` 单独构建，不能在仓库根裸跑 `mvn package` 指望带上网罗。
-- **首次需要装 plugin-parent 与 plugin-api**：`dev.everyagent:every-agent-plugin-parent` 与 `dev.everyagent:every-agent-plugin-api` 均未发布到 Maven Central（实测 404），本地仓库里得先有它们。正常环境在仓库根执行一次即可：
+- **首次需要装 plugin-parent 与 plugin-api**：`io.github.qinhaiqinshui:every-agent-plugin-parent` 与 `io.github.qinhaiqinshui:every-agent-plugin-api` 均未发布到 Maven Central（实测 404），本地仓库里得先有它们。正常环境在仓库根执行一次即可：
 
 ```powershell
 # ① 仓库根，一次性：把插件 SDK parent 与 API 装进本地仓库

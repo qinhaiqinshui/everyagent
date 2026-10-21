@@ -13,7 +13,7 @@
     <modelVersion>4.0.0</modelVersion>
 
     <parent>
-        <groupId>dev.everyagent</groupId>
+        <groupId>io.github.qinhaiqinshui</groupId>
         <artifactId>every-agent-parent</artifactId>
         <version>${revision}</version>
         <relativePath>../pom.xml</relativePath>
@@ -29,7 +29,7 @@
             <!-- 插件唯一需要面向的 API。版本随工程版本（= ${revision}），指向本 SDK 的编译基线；
                  插件 pom 里不写版本，升级工程版本时插件零改动。 -->
             <dependency>
-                <groupId>dev.everyagent</groupId>
+                <groupId>io.github.qinhaiqinshui</groupId>
                 <artifactId>every-agent-plugin-api</artifactId>
                 <version>${revision}</version>
             </dependency>

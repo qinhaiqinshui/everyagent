@@ -7,7 +7,7 @@
     <!-- 继承插件 SDK parent（every-agent-plugin-parent）：Java 25 / 编码 / 依赖版本管理 /
          plugin.json 打包 / 测试栈全由它提供，本 pom 无须再声明。内置与外部插件共用同一份脚手架模板。 -->
     <parent>
-        <groupId>dev.everyagent</groupId>
+        <groupId>io.github.qinhaiqinshui</groupId>
         <artifactId>every-agent-plugin-parent</artifactId>
         <version>${revision}</version>
         <relativePath>../../every-agent-plugin-parent/pom.xml</relativePath>
@@ -25,7 +25,7 @@
              （见本 pom 的 <version>），${project.version} 会被解析成本插件自己的版本。
              版本口径见根 pom 的 <revision> 单点源说明。 -->
         <dependency>
-            <groupId>dev.everyagent</groupId>
+            <groupId>io.github.qinhaiqinshui</groupId>
             <artifactId>every-agent-plugin-api</artifactId>
         </dependency>
         <!-- Jackson: AskUserTool 容错反序列化（LenientString/List），版本随 parent（同 sandbox-wsl-ubuntu 写法） -->
