@@ -4,6 +4,9 @@ import dev.everyagent.plugin.api.execution.ExecContext;
 import dev.everyagent.plugin.api.interaction.AskResult;
 import dev.everyagent.plugin.api.interaction.InteractionService;
 import dev.everyagent.plugin.api.model.ModelConfig;
+import dev.everyagent.plugin.api.permission.AuthorizationChain;
+import dev.everyagent.plugin.api.permission.AuthorizationHandler;
+import dev.everyagent.plugin.api.permission.AuthorizationHandler.AuthorizationDecision;
 import dev.everyagent.plugin.api.permission.AuthorizationHandler.AuthorizationRequest;
 import dev.everyagent.worker.config.WorkerProperties;
 import dev.everyagent.worker.modules.WorkspaceManager;
@@ -57,6 +60,32 @@ class GrantRegistryExecRootsTest {
         return asks;
     }
 
+    /**
+     * 显式授权链(本测试的 allowlist 声明):注册真实人工弹窗节点 + 打桩作答。
+     * 原先依赖「空链零节点兜底放行」的隐式行为——链尾兜底已改为 fail-closed 默认拒绝
+     * (§7.8),测试改为显式声明「谁在放行」:授权必须经真实弹窗决议(打桩答「本任务」),
+     * 而不是隐式吃链尾放行。
+     */
+    private static AuthorizationHandlerRegistry humanPopupRegistry(InteractionService asks) {
+        AuthorizationHandlerRegistry reg = new AuthorizationHandlerRegistry();
+        ExecContext popupCtx = mock(ExecContext.class);
+        when(popupCtx.interaction()).thenReturn(asks);
+        AuthorizationHandler popup = new AuthorizationHandler() {
+            @Override public String id() { return HumanAuthorizationHandler.ID; }
+            @Override public float order() { return 300f; }
+            @Override public AuthorizationDecision invoke(AuthorizationRequest req, AuthorizationChain next)
+                    throws Exception {
+                // 复用真实节点的弹窗与档位映射,仅把上下文换成打桩(不经 TaskEntry 绑定口)
+                HumanAuthorizationHandler real =
+                        new HumanAuthorizationHandler(new AuthorizationHandlerRegistry(), new WorkerProperties());
+                return real.invoke(
+                        new AuthorizationRequest(popupCtx, req.agentId(), req.grantKey(), req.prompt()), next);
+            }
+        };
+        reg.register(popup);
+        return reg;
+    }
+
     @Test
     void mergesExternalRootsFilteredAndDeduped(@TempDir Path ws) throws Exception {
         Path wsReal = ws.toRealPath();
@@ -67,7 +96,7 @@ class GrantRegistryExecRootsTest {
         GrantRegistry grants = new GrantRegistry(asksTaskScope(), new WorkerProperties(),
                 stubWorkspaceManager(wsReal,
                         List.of(extRoot.toRealPath(), wsParent, granted.toRealPath())),
-                new AuthorizationHandlerRegistry(), null);
+                humanPopupRegistry(asksTaskScope()), null);
         TaskEntry t = task(ws);
 
         // 用户对 granted 授权 EXEC(随附旧宽根 fsRoot 模拟历史 grants.json 载入的 C:\ 形态)
@@ -99,7 +128,7 @@ class GrantRegistryExecRootsTest {
         Path wsReal = ws.toRealPath();
         Path granted = Files.createDirectories(tempDir.resolve("legacy").resolve("g"));
         GrantRegistry grants = new GrantRegistry(asksTaskScope(), new WorkerProperties(),
-                stubWorkspaceManager(wsReal, List.of()), new AuthorizationHandlerRegistry(), null);
+                stubWorkspaceManager(wsReal, List.of()), humanPopupRegistry(asksTaskScope()), null);
         TaskEntry t = task(ws);
 
         grants.authorize(req(t, "main-agent", "p::exec::" + granted.toRealPath(), "读目录"),

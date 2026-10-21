@@ -35,6 +35,9 @@ import java.util.Map;
 @Component
 public class HumanAuthorizationHandler implements AuthorizationHandler {
 
+    /** 节点身份 ID(启动断言 {@link AuthorizationChainStartupCheck} 按此核对装配)。 */
+    public static final String ID = "human-authorization";
+
     static final List<AskOption> AUTHORIZE_OPTIONS = List.of(
             new AskOption("本轮运行内允许", "run", AskOption.TYPE_RADIO),
             new AskOption("本任务全程允许", "task", AskOption.TYPE_RADIO),
@@ -54,7 +57,7 @@ public class HumanAuthorizationHandler implements AuthorizationHandler {
     }
 
     @Override
-    public String id() { return "human-authorization"; }
+    public String id() { return ID; }
 
     @Override
     public float order() { return 300f; }

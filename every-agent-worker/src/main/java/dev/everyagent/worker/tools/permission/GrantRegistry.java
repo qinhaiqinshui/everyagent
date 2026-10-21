@@ -36,8 +36,8 @@ import java.util.concurrent.ConcurrentHashMap;
  * 授权状态 + 授权决议链宿主(架构 §5.5,自 PermissionGate 拆分):
  * 维护 per-task 授权状态(run/task 两档、inFlight 去重、grants.json 持久化),授权决议
  * 沿 AuthorizationHandler 责任链遍历(按 order 排序),任一环节给出 ALLOW/DENY 即收口,
- * 全部 PASS 则直接放行;拒绝/超时抛 {@link PermissionDeniedException} 回灌模型
- * (agent 循环不中断)。
+ * 全部 PASS 或零节点则链尾兜底拒绝(fail-closed,见 {@link #resolveScope});拒绝/超时抛
+ * {@link PermissionDeniedException} 回灌模型(agent 循环不中断)。
  *
  * <p>主/子 agent 按 taskId 共享授权;并发同 grantKey 只弹一张卡(inFlight future 去重,
  * 后来者 join 共享结论)。授权两档:run(内存,下一条用户输入清)/ task(grants.json,随任务删除)。
@@ -60,7 +60,7 @@ public class GrantRegistry {
     private final InteractionService asks;
     private final WorkerProperties props;
     private final WorkspaceManager workspaces;
-    /** 授权决议链节点注册表(按 order 排序);零节点 → 直接放行。 */
+    /** 授权决议链节点注册表(按 order 排序);零节点/全 PASS → 链尾兜底拒绝(fail-closed)。 */
     private final AuthorizationHandlerRegistry authHandlerRegistry;
     /** 沙箱授权账本(可为 null:单测直构场景 → 不下发,仅内存授权)。 */
     private final SandboxPathRegistry sandboxPaths;
@@ -191,7 +191,8 @@ public class GrantRegistry {
      * 授权决议入口:grant 已存在直接放行;否则沿决议链遍历 authHandlers(阻塞虚拟线程):
      * 第一个返回 ALLOW 的 handler 即放行,档位取其
      * {@link AuthorizationHandler.AuthorizationDecision#scope()}(未声明按 RUN);
-     * DENY → 抛 {@link PermissionDeniedException};全部 PASS 或零节点 → 直接放行(RUN 档)。
+     * DENY → 抛 {@link PermissionDeniedException};全部 PASS 或零节点 → 链尾兜底拒绝
+     * (fail-closed,「无授权决议者，默认拒绝」)。
      * rootsOnGrant 为该授权随附的 Sandbox 附加根;execRootsOnGrant 为命令 EXEC 授权随附的
      * Low 完整性标注根;sandboxRootsOnGrant 为下发给沙箱内核机制的范围(§7.8 P5)。
      */
@@ -252,7 +253,8 @@ public class GrantRegistry {
     /**
      * 授权决议链(责任链遍历):通过 {@link AuthorizationChainExecutor} 折叠 authHandlers
      * (按 order 排序)为嵌套链;任一节点返回 ALLOW → 放行(档位见 {@link #grantScopeOf});
-     * DENY → 抛 {@link PermissionDeniedException};全部 PASS 或零节点 → 链尾兜底放行(RUN 档)。
+     * DENY → 抛 {@link PermissionDeniedException};全部 PASS 或零节点 → 链尾兜底拒绝
+     * (fail-closed:「无授权决议者，默认拒绝」,§7.8)。
      * 核心不感知任何具体节点(AI 审议、无人值守、人工弹窗等均由各 handler 自行判断)。
      * future.complete 与 record 由 {@link #authorize} owner 路径统一执行,后来者 join 共享同一结论。
      */
@@ -261,7 +263,11 @@ public class GrantRegistry {
                 .run(authHandlerRegistry.sorted(), req);
         return switch (d.type()) {
             case ALLOW -> grantScopeOf(d);
-            case PASS -> GrantScope.RUN;
+            // 链尾兜底拒绝(fail-closed):链上没有任何节点愿意决策时,默认拒绝而非默认放行
+            // ——不替用户做「无决议者=允许」的承诺。人工弹窗节点恒决策(ALLOW/DENY,从不
+            // PASS),正常装配下本分支不可达;到达即决议链装配异常(链尾兜底与启动断言
+            // AuthorizationChainStartupCheck 构成双防线:前者兜运行期缺口,后者拦启动期)。
+            case PASS -> throw new PermissionDeniedException("无授权决议者，默认拒绝");
             case DENY -> throw denyException();
         };
     }
