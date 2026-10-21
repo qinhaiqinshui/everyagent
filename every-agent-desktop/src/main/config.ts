@@ -4,14 +4,16 @@
  *
  * 语义:desktop-config.json 承载 desktop 层自身的偏好与**连接凭据**(前端 bootstrap
  * 凭证、GPU 兼容开关)。凭据(hubKey/workerApiKey)不再内置默认值(安全审计 H-1:
- * 历史硬编码密钥已随仓库公开):缺失/为空时首启自动生成随机密钥并持久化,已有非空值
- * 保持不变(升级兼容);hub/worker 子进程凭据由 credentials.ts 接线(env HUB_KEY +
- * desktop-worker.yml),保证与 hub 一致且不落回 jar 内公开默认密钥。
+ * 历史硬编码密钥已随仓库公开):缺失/为空时首启自动生成随机密钥并持久化;密钥经
+ * SecretCodec 编码后落盘(生产为 safeStorage 密文,装配点在 safe-storage.ts;默认
+ * 明文降级 codec 供单测与无 electron 环境),已有值只迁移落盘形态、明文值不变(升级
+ * 兼容);hub/worker 子进程凭据由 credentials.ts 接线(env HUB_KEY + desktop-worker.yml),
+ * 保证与 hub 一致且不落回 jar 内公开默认密钥。
  */
 import { homedir } from 'node:os'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { ensureSecretKeys } from './credentials'
+import { ensureSecretKeys, PLAINTEXT_CODEC, type SecretCodec } from './credentials'
 
 export interface DesktopConfig {
   /** hub 级连接凭证(前端连接 hub 用)。 */
@@ -95,11 +97,13 @@ function coerceString(value: unknown, fallback: string): string {
 }
 
 /**
- * 读取配置(缺省用默认值)。hubKey/workerApiKey 缺失/为空时生成随机密钥并原子回写
- * desktop-config.json(credentials.ensureSecretKeys),生成先于 backend 拉起子进程
- * (index.ts 中 loadConfig 先于 startBackend)。其余字段缺省即默认,不写文件。
+ * 读取配置(缺省用默认值)。hubKey/workerApiKey 缺失/为空时生成随机密钥,旧明文一次性
+ * 迁移为密文,密文损坏时重新生成,并原子回写 desktop-config.json(credentials.ensureSecretKeys);
+ * 生成先于 backend 拉起子进程(index.ts 中 loadConfig 先于 startBackend)。codec 为密文
+ * codec(safeStorage)时必须在 app ready 之后调用(index.ts 已保证);默认明文降级 codec,
+ * 供 node:test 单测直接使用。其余字段缺省即默认,不写文件。
  */
-export function loadConfig(home: string): DesktopConfig {
+export function loadConfig(home: string, codec: SecretCodec = PLAINTEXT_CODEC): DesktopConfig {
   const p = pathsFor(home)
   let raw: Record<string, unknown> = {}
   if (existsSync(p.configFile)) {
@@ -111,7 +115,7 @@ export function loadConfig(home: string): DesktopConfig {
     }
   }
 
-  const keys = ensureSecretKeys(raw, p.configFile)
+  const keys = ensureSecretKeys(raw, p.configFile, codec)
   return {
     hubKey: keys.hubKey,
     workerApiKey: keys.workerApiKey,

@@ -30,19 +30,17 @@ rem 确保日志目录存在
 if not exist "%EVERYAGENT_HOME%\logs" mkdir "%EVERYAGENT_HOME%\logs"
 
 rem ------------------------------------------------------------------
-rem  准备 worker 连接凭据(安全审计 H-1:不再回退 jar 内公开默认密钥)
-rem  从 desktop-config.json 读取 hubKey/workerApiKey,生成 worker 覆盖配置
-rem  <EVERYAGENT_HOME>\desktop\desktop-worker.yml(与桌面版主程序生成同一份文件)。
-rem  hub 由 desktop 启动时以同一 hubKey 显式注入 HUB_KEY 环境变量,worker 必须用
-rem  同一组凭据连接本机 hub。配置文件缺失或密钥为空则报错退出——请先启动一次
-rem  Every Agent 桌面端完成首启密钥生成(首启自动生成随机密钥并持久化)。
-rem  注:拼接用独立变量再组数组——powershell -Command 对数组字面量内的
-rem  逗号后 + 拼接解析有缺陷(拆成多元素),不能直接内联。
+rem  worker 连接凭据:直接复用桌面端生成的 <EVERYAGENT_HOME>\desktop\desktop-worker.yml
+rem  (安全整改:desktop-config.json 中的 hubKey/workerApiKey 已改为 safeStorage 密文
+rem   落盘('safe:' 前缀,Windows DPAPI 绑定当前用户与机器),bat/PowerShell 无法解密,
+rem   不再从配置文件拼装 yml;该文件由桌面端主进程在每次拉起后端前于内存中解密并
+rem   生成/刷新,worker 与 hub 凭据恒一致)。
+rem  文件缺失则报错退出——请先启动一次 Every Agent 桌面端完成首启(生成随机密钥与该文件)。
 rem ------------------------------------------------------------------
 set "WORKER_YML=%EVERYAGENT_HOME%\desktop\desktop-worker.yml"
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $h=$env:EVERYAGENT_HOME; $cfgPath=Join-Path $h 'desktop-config.json'; if (-not (Test-Path $cfgPath)) { Write-Host '[start-backend] desktop-config.json not found; run the desktop app once to generate credentials'; exit 1 }; $cfg=Get-Content -Raw $cfgPath | ConvertFrom-Json; if (-not $cfg.hubKey -or -not $cfg.workerApiKey) { Write-Host '[start-backend] hubKey/workerApiKey empty in desktop-config.json; run the desktop app once to generate credentials'; exit 1 }; $dir=Join-Path $h 'desktop'; New-Item -ItemType Directory -Force -Path $dir | Out-Null; $port=if ($cfg.hubPort) { [int]$cfg.hubPort } else { 6101 }; $q=[string][char]34; $n=[string][char]10; $l1='worker:'; $l2='  hubs:'; $l3='    - url: '+$q+'ws://127.0.0.1:'+$port+'/ws'+$q; $l4='      api-key: '+$q+$cfg.workerApiKey+$q; $l5='      hub-key: '+$q+$cfg.hubKey+$q; $c=@($l1,$l2,$l3,$l4,$l5) -join $n; Set-Content -Path (Join-Path $dir 'desktop-worker.yml') -Value $c -Encoding UTF8; exit 0"
-if errorlevel 1 (
-    echo [%date% %time%] 无法准备 worker 连接凭据,脚本退出 ^(请先启动一次桌面端生成密钥^)
+if not exist "%WORKER_YML%" (
+    echo [%date% %time%] 未找到 "%WORKER_YML%" ^(桌面端尚未生成凭据文件^)
+    echo [%date% %time%] 请先启动一次 Every Agent 桌面端完成首启密钥生成,再运行本脚本
     exit /b 1
 )
 

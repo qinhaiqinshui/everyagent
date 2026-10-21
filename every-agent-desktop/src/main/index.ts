@@ -19,6 +19,7 @@ import {
 import { startBackend, type BackendHandles } from './backend'
 import { startStaticServer, type StaticServer } from './static-server'
 import { registerNotifyIpc } from './notify'
+import { resolveSecretCodec } from './safe-storage'
 import { webRoot } from './paths'
 
 // 必须在 app ready 之前:禁用「被遮挡窗口后台化」。
@@ -235,19 +236,23 @@ async function startup(): Promise<void> {
       pushStatus(`运行时目录 home=${home}`)
     }
 
-    pushStatus('加载运行时配置...')
-    cfg = loadConfig(home)
-    bootstrap = bootstrapFor(cfg)
-    pushStatus(
-      `配置就绪: hubPort=${cfg.hubPort}, workerPort=${cfg.workerPort}, workerId=${cfg.workerId}, gpuWorkaround=${cfg.gpuWorkaround}`,
-    )
-
+    // whenReady 提前到加载配置之前:凭据落盘/解密用 safeStorage(Windows DPAPI),
+    // 依赖 app ready;不提前会在 ready 前调用 safeStorage 导致凭据降级/解密异常。
     await app.whenReady()
     // 无边框自绘标题栏:去掉系统默认菜单(含 Alt 键临时弹出的菜单)。
     Menu.setApplicationMenu(null)
     // Windows toast 通知归属:与 electron-builder appId 一致,
     // 保证桌面系统通知正常显示(否则可能不弹或显示为 Electron)。
     app.setAppUserModelId('dev.everyagent.desktop')
+
+    pushStatus('加载运行时配置...')
+    // 凭据落盘 codec 装配:优先 safeStorage 密文(DPAPI,绑定用户+机器),不可用降级明文。
+    cfg = loadConfig(home, resolveSecretCodec())
+    bootstrap = bootstrapFor(cfg)
+    pushStatus(
+      `配置就绪: hubPort=${cfg.hubPort}, workerPort=${cfg.workerPort}, workerId=${cfg.workerId}, gpuWorkaround=${cfg.gpuWorkaround}`,
+    )
+
     pushStatus('app 已就绪,创建启动窗口...')
     createWindow(startingPage())
     createTray()

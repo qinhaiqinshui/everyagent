@@ -24,8 +24,8 @@
 
 ```json
 {
-  "hubKey": "<your-hub-key>",
-  "workerApiKey": "<your-worker-api-key>",
+  "hubKey": "safe:<safeStorage 密文>",
+  "workerApiKey": "safe:<safeStorage 密文>",
   "workerId": "company-pc",
   "hubPort": 6101,
   "workerPort": 6102
@@ -33,8 +33,12 @@
 ```
 
 - `hubKey` / `workerApiKey` **不内置任何默认密钥**(安全整改:历史硬编码默认密钥已随仓库公开)。
-  首次启动(文件不存在或字段为空)自动生成 32 字节随机密钥(base64url)并持久化到该文件;
-  已有非空值升级时保持不变,不会重新生成。
+  首次启动(文件不存在或字段为空)自动生成 32 字节随机密钥(base64url),并经 Electron
+  `safeStorage`(Windows DPAPI,绑定当前用户与机器)加密后以 `safe:` 前缀的密文形态落盘到该
+  文件——磁盘上不再出现明文密钥,明文仅在运行中的内存里持有。旧版本已落盘的明文密钥在下次
+  启动时**一次性迁移**为密文(值不变,ownerKey 数据归属不漂移);密文解密失败(换机器/系统
+  凭据库重置/文件损坏)时重新生成随机密钥并告警。`safeStorage` 不可用的受限环境自动降级为
+  明文存储并告警(行为与历史版本一致,不阻塞启动)。
 - hub 子进程启动时以 `hubKey` 显式注入 `HUB_KEY` 环境变量(覆盖任何继承);worker 连接
   本机 hub 的 `api-key` / `hub-key` 由桌面版生成的 `<EVERYAGENT_HOME>/desktop/desktop-worker.yml`
   注入(`--spring.config.additional-location`,优先级高于 jar 内默认值与用户覆盖文件),
@@ -120,8 +124,11 @@ JRE 缺失时回退系统 `java`(Windows 下 `windowsHide` 隐藏控制台)。
 ## 关键实现点
 
 - **凭据接线(安全整改)**:`desktop-config.json` 首启自动生成随机 `hubKey` / `workerApiKey`
-  (已有非空值不覆盖、不重写);hub 经子进程 env `HUB_KEY` 显式注入(覆盖任何继承,杜绝落回
-  jar 内公开默认密钥),worker 经每次启动前重写的 `<EVERYAGENT_HOME>/desktop/desktop-worker.yml`
+  (已有非空值不覆盖、不重写),并经 Electron `safeStorage`(DPAPI,绑定用户+机器)以 `safe:`
+  前缀密文落盘,旧明文在下次启动一次性迁移为密文(`safe-storage.ts` 是唯一 electron 装配点,
+  `credentials.ts` 零 electron 依赖、node:test 可单测;密文损坏重生成并告警);hub 经子进程 env
+  `HUB_KEY` 显式注入(覆盖任何继承,杜绝落回 jar 内公开默认密钥),worker 经每次启动前重写的
+  `<EVERYAGENT_HOME>/desktop/desktop-worker.yml`
   (`--spring.config.additional-location`,实测优先级高于 jar 内默认值与
   `application-worker.yaml` 用户覆盖)拿到同一组凭据——worker 与 hub 凭据恒一致。
 - **单实例锁**:二次启动聚焦已有窗口。
@@ -152,10 +159,10 @@ worker(:6102)提供两个管理端点,用于外部进程探测与优雅关闭:
 2. 操作 → 启动程序:程序填 `<安装根>\resources\start-backend.bat`。
 3. 脚本会自动检测 worker 是否已在运行(端口复用),避免重复启动。
 4. worker 启动后自动重试连接 hub;desktop 后续打开时检测到已有 worker,不重复启动。
-5. 凭据:脚本启动前从 `desktop-config.json` 读取 `hubKey` / `workerApiKey`,生成
-   `<EVERYAGENT_HOME>/desktop/desktop-worker.yml`(与桌面版主程序同一份文件)注入 worker,
-   保证与 hub 凭据一致;若配置文件缺失或密钥为空,脚本报错退出——请先启动一次桌面端
-   完成首启密钥生成(自动生成随机密钥并持久化)。
+5. 凭据:直接复用桌面端生成的 `<EVERYAGENT_HOME>/desktop/desktop-worker.yml` 注入 worker
+   (与桌面版主程序同一份文件;`desktop-config.json` 中的密钥已改为 safeStorage 密文落盘,
+   脚本无法解密,故不再从配置拼装该文件)。若文件不存在,脚本报错退出——请先启动一次
+   桌面端完成首启密钥生成(自动生成随机密钥并持久化,随后即生成该 yml)。
 
 **Desktop 交互**:
 - Desktop 启动时:hub 直接 spawn(检查端口是否被占);worker 调 `GET /admin/identify`(认证探测)判断是否已在运行。
