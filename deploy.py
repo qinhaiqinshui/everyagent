@@ -135,8 +135,13 @@ def mask_env_line(line: str) -> str:
 
 
 # 运行时使用的官方基础镜像（如需固定版本号，改这里即可）
+# TODO: pin @sha256:<digest>（联网后 docker manifest inspect 查询;流程见 docs/ops/image-pinning.md）
 HUB_IMAGE = "eclipse-temurin:25-jre"
+# TODO: pin @sha256:<digest>（同上）
 WORKER_IMAGE = "eclipse-temurin:25-jre"
+# 注意:docker 模式直接拉官方镜像运行(nginx root master,容器内 80),与仓库 docker-compose.yml
+# 构建的 every-agent-web/Dockerfile(非 root,容器内 8080)是两条独立链路,勿混用端口语义。
+# TODO: pin @sha256:<digest>（同上）
 WEB_IMAGE = "nginx:alpine"
 
 # 服务器端 docker-compose：官方镜像 + 挂载本地编译产物，不构建自定义镜像。
@@ -211,6 +216,8 @@ services:
     volumes:
       - ./webapp/dist:/usr/share/nginx/html:ro
     ports:
+      # 容器内 80 是官方 nginx:alpine 的默认监听(本模式不构建自定义镜像);
+      # 仓库 docker-compose.yml(构建 every-agent-web/Dockerfile,非 root)容器内为 8080。
       - "{web_port}:80"
     restart: unless-stopped
     depends_on:

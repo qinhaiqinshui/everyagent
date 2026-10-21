@@ -41,7 +41,7 @@ services:
       context: .
       dockerfile: every-agent-web/Dockerfile
     ports:
-      - "5174:80"
+      - "5174:8080"
     restart: unless-stopped
     depends_on:
       - hub
