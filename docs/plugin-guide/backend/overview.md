@@ -227,7 +227,7 @@ public class MyFirstPlugin implements EveryAgentPlugin {
 | 方法 | 行号 | 用途 |
 |---|---|---|
 | `sandbox()` | `:29` | 沙箱门面（SandboxBackend）：查 `id()` 判后端、委托挂载 |
-| `nativeExec()` | `:32` | 宿主原生进程执行器（argv 直传 + 超时 + 输出上限；git 等受控操作用） |
+| `nativeExec()` | `:32` | 宿主原生进程执行器（argv 直传 + 超时 + 输出上限；git 等受控操作用）。**cwd 不得位于插件目录**（worker 直接拒绝并返回失败结果——长驻子进程以插件目录为工作目录会锁死目录、令卸载必败），改用工作区或临时目录 |
 | `workspaces()` | `:35` | 工作区管理器（多工作区注册表、jailed 路径解析） |
 | `tokenEstimator()` | `:40` | Token 估算器（内置或插件注册的自定义实现）；`TokenEstimator` SPI 只含 `estimate(text, configId)` 一个方法 |
 | `slashTokens()` | `:43` | 任务级 slash token 只读查询（任务级开关的**真相源**读取口：`tokensOf(taskId)` / `hasKind(taskId, kind)`，见 `SlashTokenService`；AI 审议 / 无人值守 / 禁用网络的开关判定都经此，不再走 `metadata`） |

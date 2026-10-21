@@ -71,7 +71,7 @@ has_children: false
 | 方法 | 一句话 | 消费范例 |
 |---|---|---|
 | `SandboxBackend sandbox()` | 沙箱门面：查后端 id、委托挂载 | sandbox 三家 |
-| `nativeExec()` | 宿主原生进程执行器（argv 直传 + 超时 + 输出上限） | git |
+| `nativeExec()` | 宿主原生进程执行器（argv 直传 + 超时 + 输出上限）。cwd 不得位于插件目录（worker 拒绝） | git |
 | `workspaces()` | 多工作区注册表、jailed 路径解析 | git（每方法首行 `sandboxFor`） |
 | `tokenEstimator()` | token 估算器（内置或插件注册版） | token-estimator |
 | `SlashTokenService slashTokens()` | 任务级 slash token 只读查询：任务级开关的真相源读取口（`tokensOf(taskId)` / `hasKind(taskId, kind)`，见 `SlashTokenService`） | ai-review、unattended |

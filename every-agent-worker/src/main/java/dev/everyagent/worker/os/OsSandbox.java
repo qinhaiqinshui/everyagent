@@ -230,6 +230,17 @@ public final class OsSandbox implements SandboxBackend, NativeExec {
      * 同上,可自定义超时(clone/pull/push 大仓库可能较慢,走 worker.git.timeout-ms)。
      */
     public ExecResult spawnNative(String[] argv, Path cwd, Map<String, String> env, long timeoutMs) {
+        // cwd 护栏(架构 §8.5):插件目录内不得作为子进程工作目录 —— Windows 上进程 CWD
+        // 会锁死目录、令 plugin.uninstall 必败(文件可删、目录删不掉,即墓碑自愈要兜的坑)。
+        // 既有调用方(git/rg/命令执行器)均以工作区为 cwd,不受影响。
+        Path pluginsRoot = props.resolvePluginsDir();
+        if (cwd != null && cwd.toAbsolutePath().normalize().startsWith(pluginsRoot)) {
+            log.warn("[os-sandbox] 拒绝以插件目录为 cwd 的原生执行(防卸载目录锁死): cwd={} argv0={}",
+                    cwd, argv != null && argv.length > 0 ? argv[0] : "");
+            return new ExecResult("", "cwd 不得位于插件目录(" + pluginsRoot + ")内: "
+                    + "长驻进程以插件目录为工作目录会锁死目录、导致插件卸载失败;请改用工作区或临时目录",
+                    1, false);
+        }
         return runDirectCommand(java.util.List.of(argv), cwd, env, true, timeoutMs);
     }
 
