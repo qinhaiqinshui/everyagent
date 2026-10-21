@@ -4,7 +4,6 @@
  *
  * 仅在「尚未配置 / hub 地址不同 / 缺该 worker 凭证」时自动注入,尊重用户已保存的配置。
  */
-import { loadConnectionConfig } from '@/hub/connection'
 import { hubSession } from '@/hub/session'
 import { setNotificationAdapter } from '@/notification'
 import { createDesktopNotificationAdapter } from '@/notification/desktopAdapter'
@@ -66,7 +65,10 @@ export async function applyDesktopBootstrapIfPresent(): Promise<void> {
   setNotificationAdapter(createDesktopNotificationAdapter())
 
   try {
-    const current = loadConnectionConfig()
+    // 凭据迁移/解密(hydrate)先行:loadConnectionConfig 的 hubKey 明文可能尚未回填,
+    // 直接比较会误判为「配置不同」而反复覆盖用户配置。
+    await hubSession.ensureHydrated()
+    const current = hubSession.config
     const needHubConfig =
       !current || current.hubUrl !== boot.hubUrl || current.hubKey !== boot.hubKey
 
@@ -74,6 +76,8 @@ export async function applyDesktopBootstrapIfPresent(): Promise<void> {
       await hubSession.applyConfig({
         hubUrl: boot.hubUrl,
         hubKey: boot.hubKey,
+        // hubKeyEnc 由 applyConfig 内部加密生成(入参恒空占位)。
+        hubKeyEnc: '',
         workers: current?.workers ?? [],
       })
     }

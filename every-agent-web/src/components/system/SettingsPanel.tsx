@@ -35,6 +35,7 @@ import {
   saveBrowserNotificationsEnabled,
 } from '@/settings/browserNotifications'
 import { hubSession } from '@/hub/session'
+import { isSecretCryptoAvailable } from '@/settings/credentialsCrypto'
 import { domainEventBus, DOMAIN_EVENTS } from '@/events/eventBus'
 import ConfirmDialog from '@/components/shared/ConfirmDialog'
 import WorkerList from '@/components/system/WorkerList'
@@ -146,6 +147,14 @@ export default function SettingsPanel() {
 
   const [hubUrl, setHubUrl] = React.useState(hub.config?.hubUrl ?? 'ws://localhost:6101/ws')
   const [hubKey, setHubKey] = React.useState(hub.config?.hubKey ?? '')
+  // 凭据解密(hydrate)是异步的:首帧 config.hubKey 可能为空,解密完成后回填输入框
+  // (仅当用户尚未输入时,不覆盖正在编辑的草稿)。
+  const hydratedHubKey = hub.config?.hubKey ?? ''
+  React.useEffect(() => {
+    if (hydratedHubKey) {
+      setHubKey((prev) => (prev === '' ? hydratedHubKey : prev))
+    }
+  }, [hydratedHubKey])
   const [saving, setSaving] = React.useState(false)
   const [message, setMessage] = React.useState('')
   const [messageTone, setMessageTone] = React.useState<'ok' | 'error'>('ok')
@@ -157,6 +166,9 @@ export default function SettingsPanel() {
   const [restartHint, setRestartHint] = React.useState('')
   const [restartTone, setRestartTone] = React.useState<'ok' | 'error'>('ok')
   const isDesktopNotification = getNotificationAdapter()?.source === 'desktop'
+  /** 非安全上下文(http:// 非 localhost,无 crypto.subtle):凭据无法加密 → 保存路径
+   *  一律不落盘(本次会话内存使用),页面给出可见提示(审计 M-9)。 */
+  const insecureCredentialContext = !isSecretCryptoAvailable()
 
   const connected = hub.state === 'open'
   const connecting = hub.state === 'connecting' || hub.state === 'reconnecting'
@@ -174,6 +186,8 @@ export default function SettingsPanel() {
       await hub.applyConfig({
         hubUrl: hubUrl.trim(),
         hubKey: hubKey.trim(),
+        // hubKeyEnc 由 applyConfig 内部加密生成(入参恒空占位)。
+        hubKeyEnc: '',
         workers: hub.config?.workers ?? [],
       })
       domainEventBus.emit(DOMAIN_EVENTS.WORKER_DATA_CHANGED, {})
@@ -348,6 +362,11 @@ export default function SettingsPanel() {
                 spellCheck={false}
               />
             </div>
+            {insecureCredentialContext ? (
+              <div style={credentialContextWarningStyle}>
+                当前为非安全上下文(http),凭据不会保存,请使用 https 或桌面版。
+              </div>
+            ) : null}
             <div style={actionsStyle}>
               <Button
                 type="button"
@@ -392,6 +411,11 @@ export default function SettingsPanel() {
               连接 hub 后发现其下的全部 worker。为每台 worker 输入它自己的 apiKey 并连接;
               任务列表与工作区会合并所有已连接 worker 的数据。
             </p>
+            {insecureCredentialContext ? (
+              <div style={credentialContextWarningStyle}>
+                当前为非安全上下文(http),凭据不会保存,请使用 https 或桌面版。
+              </div>
+            ) : null}
             <WorkerList />
           </section>
 
@@ -679,6 +703,17 @@ const connectionErrorStyle: React.CSSProperties = {
   fontSize: 'var(--text-xs)',
   color: 'var(--accent-red)',
   border: '1px solid var(--accent-red)',
+  borderRadius: 'var(--radius-md)',
+  padding: '8px 10px',
+  maxWidth: 480,
+  lineHeight: 1.5,
+}
+
+/** 非安全上下文(http)凭据不落盘提示:amber 描边警示框,复用连接错误框的版式。 */
+const credentialContextWarningStyle: React.CSSProperties = {
+  fontSize: 'var(--text-xs)',
+  color: 'var(--accent-amber)',
+  border: '1px solid var(--accent-amber)',
   borderRadius: 'var(--radius-md)',
   padding: '8px 10px',
   maxWidth: 480,
