@@ -283,7 +283,11 @@ const themeCardStyle: React.CSSProperties = {
   minWidth: 132,
   padding: '8px 12px',
   borderRadius: 'var(--radius-md)',
-  border: '1px solid var(--border)',
+  // 拆成长写：active 态只改 borderColor，若基类用 `border` 简写会与长写混用
+  // （React 在重渲染时移除 borderColor 而 border 仍在 → 告警并可能产生样式 bug）。
+  borderWidth: 1,
+  borderStyle: 'solid',
+  borderColor: 'var(--border)',
   background: 'var(--bg-secondary)',
   color: 'var(--text-primary)',
   cursor: 'pointer',
