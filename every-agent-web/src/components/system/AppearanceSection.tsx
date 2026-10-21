@@ -102,8 +102,8 @@ function CustomThemeEditor({
             { value: 'dark', label: '深色' },
             { value: 'light', label: '浅色' },
           ]}
-          onChange={(event) =>
-            onChange({ ...draft, type: event.target.value === 'light' ? 'light' : 'dark' })
+          onChange={(value: string) =>
+            onChange({ ...draft, type: value === 'light' ? 'light' : 'dark' })
           }
         />
       </div>

@@ -20,6 +20,11 @@ const SIZE_STEP = 1
 const SIZE_MIN = 10
 const SIZE_MAX = 32
 
+/** 下拉哨兵值：预设「默认（等宽）」在设置里存空串，但空串作 antd Select 的 value 会被
+ *  当成未选中（显示 placeholder），故下拉用显式哨兵值，存取时再映射回空串。 */
+const SELECT_DEFAULT = '__default__'
+const SELECT_CUSTOM = '__custom__'
+
 function parseSize(fontSize: string): number {
   const n = Number.parseFloat(fontSize)
   return Number.isFinite(n) ? n : Number.parseFloat(DEFAULT_EDITOR_FONT.fontSize)
@@ -36,7 +41,13 @@ export default function EditorFontSection() {
   }
 
   const size = parseSize(font.fontSize)
-  const isPreset = EDITOR_FONT_PRESETS.some((p) => p.value === font.fontFamily)
+  // 「自定义」模式：用户在下拉里选了「自定义…」或直接在文本框里打字后置位，
+  // 使下拉显示「自定义…」而不弹回原预设（不置位时选中即弹回，交互割裂）。
+  const [customMode, setCustomMode] = React.useState(false)
+  const matchesPreset = EDITOR_FONT_PRESETS.some((p) => p.value === font.fontFamily)
+  const selectValue = customMode || !matchesPreset
+    ? SELECT_CUSTOM
+    : font.fontFamily === '' ? SELECT_DEFAULT : font.fontFamily
 
   const setSize = (delta: number) => {
     const clamped = Math.min(SIZE_MAX, Math.max(SIZE_MIN, size + delta))
@@ -52,23 +63,30 @@ export default function EditorFontSection() {
         <label style={labelStyle}>字体</label>
         <Select
           size="sm"
-          value={isPreset ? font.fontFamily : '__custom__'}
+          value={selectValue}
           options={[
-            ...EDITOR_FONT_PRESETS.map((p) => ({ value: p.value, label: p.label })),
-            { value: '__custom__', label: '自定义…' },
+            { value: SELECT_DEFAULT, label: '默认（等宽）' },
+            ...EDITOR_FONT_PRESETS.filter((p) => p.value !== '').map((p) => ({ value: p.value, label: p.label })),
+            { value: SELECT_CUSTOM, label: '自定义…' },
           ]}
-          onChange={(event) => {
-            const value = event.target.value
-            // 「自定义…」只切换下拉显示（值已非预设即显示它），不覆写现有字体串。
-            if (value === '__custom__') return
-            apply({ ...font, fontFamily: value })
+          onChange={(value: string) => {
+            // 注意：Select 是 antd 封装，onChange 回调给的是**值**（不是 DOM 事件）。
+            if (value === SELECT_CUSTOM) {
+              setCustomMode(true)
+              return
+            }
+            setCustomMode(false)
+            apply({ ...font, fontFamily: value === SELECT_DEFAULT ? '' : value })
           }}
         />
         <TextInput
           size="sm"
           value={font.fontFamily}
           placeholder="CSS font-family，如 &quot;LXGW WenKai&quot;, serif"
-          onChange={(event) => apply({ ...font, fontFamily: event.target.value })}
+          onChange={(event) => {
+            setCustomMode(true)
+            apply({ ...font, fontFamily: event.target.value })
+          }}
           spellCheck={false}
         />
       </div>
