@@ -7,8 +7,22 @@ dist/
 .vscode/
 *.iml
 .DS_Store
+# ---- 敏感文件:环境变量 / 私钥 / 证书 / 凭据,防误提交(M-13) ----
 .env
+.env.*
 deploy.env
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+id_rsa*
+id_ed25519*
+.git-credentials
+.git-credential.key
+.ssh/
+**/desktop-config.json
+# 注意:every-agent-desktop/.npmrc 是已跟踪历史文件(内容仅镜像 URL),刻意不加忽略
 every-agent-worker/data/
 /data/
 org/
