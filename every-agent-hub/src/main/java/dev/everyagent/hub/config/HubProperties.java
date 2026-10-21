@@ -43,13 +43,16 @@ public class HubProperties {
 
     /**
      * 启动 fail-fast + 派生:hub-key 必填(直接填原始密钥,程序自算 sha256,无需手填哈希)。
+     * 打包默认值为空(fail-closed,无任何内置默认密钥),未显式配置即拒绝启动。
      * 校验失败抛异常,应用拒绝启动;派生值供 hello 比对/管理目录频道使用。
      */
     @PostConstruct
     void validate() {
         if (hubKey == null || hubKey.isBlank()) {
-            throw new IllegalStateException("hub.hub-key 未配置:hub 只接受持正确 hub key 的连接,"
-                    + "配置项或环境变量 HUB_KEY 直接填原始 hub key 即可(启动时程序自行计算 sha256)");
+            throw new IllegalStateException("hub.hub-key 未配置(fail-closed:已移除打包默认密钥,空值不再放行):"
+                    + "请显式配置原始 hub key——①环境变量 HUB_KEY=xxx;②配置项 hub.hub-key"
+                    + "(jar 内 application.yml 或 ~/.everyagent/application-hub.yaml,支持 ${EVERYAGENT_HOME} 重定位);"
+                    + "③启动参数 --hub.hub-key=xxx。填原文即可(启动时程序自行计算 sha256)");
         }
         this.hubKeySha = Ids.ownerKey(hubKey.trim());
     }

@@ -1,5 +1,6 @@
 # dev 拓扑(架构 §8):hub 公网中转 + worker 出站连入 + 正式前端静态托管。
-# 用法:HUB_KEY=<你的hub密钥原文> docker-compose up --build(hub 启动自算 sha256)
+# 用法:HUB_KEY=<你的hub密钥原文> WORKER_API_KEY=<你的worker密钥> docker-compose up --build
+# (hub 启动自算 sha256;两密钥均必填,未配置对应服务拒绝启动——已无任何打包默认密钥)
 services:
   hub:
     build:
@@ -10,6 +11,8 @@ services:
     environment:
       # 必填:原始 hub key;hub 启动时自行计算 sha256,未配置拒绝启动
       HUB_KEY: ${HUB_KEY:-}
+      # 容器内必须绑 0.0.0.0(打包默认已收敛为 127.0.0.1 回环,不显式放开则发布的 6101 端口不可达)
+      SERVER_ADDRESS: 0.0.0.0
     restart: unless-stopped
 
   worker:
@@ -18,8 +21,12 @@ services:
       dockerfile: every-agent-worker/Dockerfile
     environment:
       WORKER_ID: ${WORKER_ID:-company-pc}
+      # 必填:worker 数据归属密钥(自定义非空串,前端连接 worker 时填同值);未配置 worker 拒绝启动
+      WORKER_API_KEY: ${WORKER_API_KEY:-}
       # 必填:原始 hub key(与 hub 侧同一密钥);未配置 worker 拒绝启动
       HUB_KEY: ${HUB_KEY:-}
+      # 容器内经服务名访问 hub(打包默认 url 是 localhost,容器网络里不对)
+      WORKER_HUB_URL: ws://hub:6101/ws
       # 系统目录(模型配置/默认工作区/数据)整体入卷;工作区可再经前端 workspace.set 切换
       EVERYAGENT_HOME: /everyagent
     volumes:

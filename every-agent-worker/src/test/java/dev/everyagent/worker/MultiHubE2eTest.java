@@ -32,6 +32,7 @@ import tools.jackson.databind.JsonNode;
 import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -72,8 +73,9 @@ class MultiHubE2eTest {
     private static final String KEY_A = "multi-key-a";
     private static final String KEY_B = "multi-key-b";
     private static final AtomicLong REQ = new AtomicLong();
-    /** 3 个真实 hub 的 hub-key(与 application.yml 默认值一致;worker 与 frontend hello 均须携带)。 */
-    private static final String HUB_KEY = "sljlw23948LKS";
+    /** 3 个真实 hub 的 hub-key(测试内随机生成,每次运行不同——打包默认已无任何内置密钥,
+     * hub 经 --hub.hub-key 启动参数注入本值,worker 与 frontend hello 均须携带)。 */
+    private static final String HUB_KEY = "e2e-hub-key-" + UUID.randomUUID();
     private static final java.nio.file.Path WS =
             java.nio.file.Path.of("target/test-ws-multi").toAbsolutePath().normalize();
     /** 系统目录(每次运行唯一,@AfterAll 统一清理)。 */

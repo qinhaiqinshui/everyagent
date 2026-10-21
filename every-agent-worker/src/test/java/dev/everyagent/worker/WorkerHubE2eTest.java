@@ -31,6 +31,7 @@ import tools.jackson.databind.JsonNode;
 import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -67,8 +68,9 @@ class WorkerHubE2eTest {
 
     private static final String KEY = "e2e-key-1";
     private static final AtomicLong REQ = new AtomicLong();
-    /** 真实 hub 的 hub-key(与 application.yml 默认值一致;worker 与 frontend 的 hello 均须携带)。 */
-    private static final String HUB_KEY = "sljlw23948LKS";
+    /** 真实 hub 的 hub-key(测试内随机生成,每次运行不同——打包默认已无任何内置密钥,
+     * hub 经 --hub.hub-key 启动参数注入本值,worker 与 frontend 的 hello 均须携带)。 */
+    private static final String HUB_KEY = "e2e-hub-key-" + UUID.randomUUID();
     /** 默认工作区(workspace-root 同值,task.run/fs 必填 workspace 参数)。 */
     private static final java.nio.file.Path WS =
             java.nio.file.Path.of("target/test-ws-e2e").toAbsolutePath().normalize();

@@ -239,12 +239,12 @@ worker:
 
 > 更多配置:多模型、模型池容灾、任意 OpenAI 兼容 provider 见下文「配置模型(必需)」。
 
-> 🎉 **连接零配置**:桌面版开箱即用,无需手动创建或修改任何连接配置文件——`~/.everyagent/desktop-config.json` 不存在时程序直接使用内置默认值(本地 hubKey / workerApiKey / workerId 与端口),前端自动填好并连上本地,装完即用。只有当你确实想换本地端口或自定义凭证时,才需要新建该文件覆盖对应字段 (hubKey / workerApiKey / workerId / hubPort / workerPort)。
+> 🎉 **连接零配置**:桌面版开箱即用,无需手动创建或修改任何连接配置文件——`~/.everyagent/desktop-config.json` 不存在或密钥字段为空时,程序首启自动生成**随机** hubKey / workerApiKey 并回写该文件(不内置任何默认密钥),前端自动填好并连上本地,装完即用。只有当你确实想换本地端口或自定义凭证时,才需要新建该文件覆盖对应字段 (hubKey / workerApiKey / workerId / hubPort / workerPort;已有非空值不会被覆盖)。
 
 ### 方式二:Docker(自己托管 hub + worker + web)
 
 ```bash
-HUB_KEY=你的hub密钥 docker-compose up --build
+HUB_KEY=你的hub密钥 WORKER_API_KEY=你的worker密钥 docker-compose up --build
 ```
 
 - hub:`ws://<主机>:6101/ws`(健康检查 `GET :6101/health`)
@@ -333,8 +333,10 @@ worker:
 
 | 配置 | 说明 |
 |---|---|
-| `worker.hubs[].url / api-key / hub-key` | worker 连 hub 的唯一入口(多 hub 列表);不配置则 worker 不连任何 hub |
-| `HUB_KEY`(环境变量) | hub key 原文(启动时自算 sha256);缺省回退 jar 内置开发默认密钥(仅限本机试玩),显式置空才拒绝启动——**公网部署必须显式配置强密钥** |
+| `worker.hubs[].url / api-key / hub-key` | worker 连 hub 的唯一入口(多 hub 列表);不配置则 worker 不连任何 hub;打包默认条目凭据为空(**未显式配置即拒绝启动**,无任何内置默认密钥) |
+| `HUB_KEY`(环境变量) | hub key 原文(启动时自算 sha256);**必填**——打包默认值为空,未显式配置即拒绝启动(fail-closed)。配置方式:环境变量 / `hub.hub-key` 配置项 / `--hub.hub-key` 启动参数 |
+| `WORKER_API_KEY`(环境变量) | worker 数据归属密钥(打包默认 `worker.hubs[0]` 条目的 api-key 来源);未配置且无 `application-worker.yaml` 覆盖时 worker 拒绝启动 |
+| `SERVER_ADDRESS`(环境变量) | hub 监听地址,默认 `127.0.0.1`(仅回环);docker/compose 与 systemd 部署链路显式注入 `0.0.0.0` |
 | `WORKER_ID`(环境变量) | worker 身份,前端按此寻址 |
 | `EVERYAGENT_HOME` | 系统目录(模型配置/默认工作区/数据),默认 `~/.everyagent` |
 | `worker.sandbox.type` | `auto`(默认,取可用沙箱插件中优先级最高者) / `wsl-ubuntu` / `windows-mic` / `none`(旧值 `wsl-direct`、`wsl-bwrap` 自动归一) |

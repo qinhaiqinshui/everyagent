@@ -1,5 +1,8 @@
 server:
   port: 6101
+  # 默认仅监听回环(安全整改:未配置时不再绑 0.0.0.0 全网卡);公网/容器部署由部署层显式放开
+  # (docker-compose.yml 与 deploy.py 均注入 SERVER_ADDRESS=0.0.0.0,保持既有对外行为)。
+  address: ${SERVER_ADDRESS:127.0.0.1}
 
 spring:
   application:
@@ -20,7 +23,11 @@ hub:
   # 必填。直接填原始 hub key(与前端设置页、worker hubs[].hub-key 同一密钥),程序启动时
   # 自行计算 sha256 用于比对——无需手填哈希。未配置 = 启动失败(apiKey 不做白名单:它定义
   # ownerKey 命名空间,连上 hub 只能"看到" worker 目录,动 worker 数据须另持该 worker 的 apiKey)。
-  hub-key: ${HUB_KEY:sljlw23948LKS}
+  # 安全整改(fail-closed):默认值为空,jar 内不再携带任何打包默认密钥——未显式配置即拒绝启动,
+  # 不存在"缺省可本机试玩"的旁路。配置方式(任选其一,优先级从高到低):
+  #   环境变量 HUB_KEY=xxx / 启动参数 --hub.hub-key=xxx / 本文件或
+  #   ${EVERYAGENT_HOME}/application-hub.yaml 的 hub.hub-key。桌面版由 desktop 注入 HUB_KEY。
+  hub-key: ${HUB_KEY:}
   max-frame-bytes: 16777216        # 单帧上限 16 MiB(应用层温和拦截;传输层升级策略按同值+64KiB 余量)
   pub-rate-per-second: 100         # 每连接 pub 令牌桶
   pub-burst: 100

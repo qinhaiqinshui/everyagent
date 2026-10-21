@@ -106,7 +106,7 @@ Every Agent 是一套「**公网可及、本机执行**」的 AI Agent 系统:AI
 
 ### 4.2 双道鉴权:hub key 管"连上",worker apiKey 管"访问"
 
-- **hub key(必填)**:hub 启动即强制校验 `hub.hub-key`(配置直接填原始密钥,程序启动自算 sha256)。jar 内 `application.yml` 给了开发默认密钥(`${HUB_KEY:sljlw23948LKS}`,缺省可本机试玩),**显式置空才 fail-fast 拒绝启动**——公网部署必须显式配置强密钥。所有 frontend/worker 连接必须在 hello 携带原始 `hubKey`,缺失/不符一律 `NOT_AUTHENTICATED`。
+- **hub key(必填)**:hub 启动即强制校验 `hub.hub-key`(配置直接填原始密钥,程序启动自算 sha256)。**必须显式配置**(安全整改:打包默认值为空 `${HUB_KEY:}`,jar 内不再携带任何开发默认密钥,fail-closed——未配置即启动失败,报错文案指明 HUB_KEY 环境变量 / hub.hub-key 配置项 / --hub.hub-key 启动参数三种配置方式);docker/systemd 部署链路(docker-compose.yml、deploy.py)均显式注入。所有 frontend/worker 连接必须在 hello 携带原始 `hubKey`,缺失/不符一律 `NOT_AUTHENTICATED`。
 - **worker apiKey(按 worker 各自配置)**:连上 hub 后,要访问某台 worker 的任务、文件、git 数据,必须持该 worker 的 apiKey 建立对应命名空间的连接;worker 端 RPC 按连接身份处理。
 - 前端因此有**两类连接**:一条"目录连接"(用 hubKey 连,订阅 `u.<sha256(hubKey)>.workers` 看在线 worker 目录)+ 每条 worker 一条"数据连接"(用该 worker 的 apiKey,订阅其 `u.<K>.worker.<id>.tasks` 与 `u.<K>.worker.<id>.evt`,任务与 RPC 走这条)。
 
@@ -294,7 +294,7 @@ hub 只解析信封的 `type` / `channel`(及 hello 握手字段);`event` / `seq
 
 ### 6.3 公网加固清单
 
-wss 强制 + 证书;hello 失败限速(防 key 枚举,60 次/分/单 IP);单帧上限;pub 令牌桶(100/s + 突发 100,**当前代码临时停用**——定向流式推送会被误限 RATE_LIMITED 丢帧,常量与配置保留、恢复只差取消注释);hub-key 连接鉴权(必填;缺省回退 jar 内置开发默认密钥,显式置空才 fail-fast,公网部署必须显式配置);apiKey 白名单不做(它定义命名空间边界)。
+wss 强制 + 证书;hello 失败限速(防 key 枚举,60 次/分/单 IP);单帧上限;pub 令牌桶(100/s + 突发 100,**当前代码临时停用**——定向流式推送会被误限 RATE_LIMITED 丢帧,常量与配置保留、恢复只差取消注释);hub-key 连接鉴权(必填;打包默认值为空,fail-closed——未显式配置即拒绝启动,无任何内置默认密钥,公网部署必须显式配置);apiKey 白名单不做(它定义命名空间边界)。
 
 ---
 
@@ -1452,12 +1452,12 @@ cd every-agent-web && npm run typecheck
 node create-everyagent-plugin --id <id>
 ```
 
-docker-compose 一键:`HUB_KEY=你的密钥 docker-compose up --build`;数据落在 named volume。
+docker-compose 一键:`HUB_KEY=你的密钥 WORKER_API_KEY=你的worker密钥 docker-compose up --build`;数据落在 named volume(hub 侧显式注入 `SERVER_ADDRESS=0.0.0.0`,worker 侧经 `WORKER_HUB_URL=ws://hub:6101/ws` 走容器网络)。
 
 ### 11.3 部署形态
 
 - **dev**:docker-compose,或本地 mvn ×2 + npm。
-- **prod**:hub 与前端静态站部署公网服务器(LB 的 WS 空闲超时 ≥ 60s);worker 在个人 PC 以出站 wss 连入(docker 或系统服务),通过 `worker.hubs` 配置(`worker.hubs[].url` 指向公网 hub,每项 `url + api-key + hub-key`);6102 管理端口仅绑定 127.0.0.1。
+- **prod**:hub 与前端静态站部署公网服务器(LB 的 WS 空闲超时 ≥ 60s);worker 在个人 PC 以出站 wss 连入(docker 或系统服务),通过 `worker.hubs` 配置(`worker.hubs[].url` 指向公网 hub,每项 `url + api-key + hub-key`,凭据必填、无打包默认值);6102 管理端口仅绑定 127.0.0.1;hub 监听地址打包默认收敛为 `127.0.0.1`(`${SERVER_ADDRESS:127.0.0.1}`),对外部署由 compose/systemd 单元显式放开。
 - **桌面版**:every-agent-desktop 安装包开箱即用,本地 6101/6102,与命令行/docker 共用 `EVERYAGENT_HOME` 数据。
 
 ---

@@ -221,7 +221,11 @@ public class WorkerProperties implements WorkerConfig {
                 if (apiKeyBlank || hubKeyBlank) {
                     throw new IllegalStateException("worker.hubs[" + i + "](" + h.getUrl()
                             + ") 缺" + (apiKeyBlank ? " api-key" : "") + (hubKeyBlank ? " hub-key" : "")
-                            + ":两者均必填(hub 强校验 hubKey,apiKey 定义数据归属),缺配置拒绝启动");
+                            + ":两者均必填(hub 强校验 hubKey,apiKey 定义数据归属),缺配置拒绝启动"
+                            + "(fail-closed:已移除打包默认密钥)。配置方式(任选):①环境变量 "
+                            + "WORKER_API_KEY / HUB_KEY(对应打包默认的 worker.hubs[0] 条目,url 用 WORKER_HUB_URL);"
+                            + "②${EVERYAGENT_HOME}/application-worker.yaml 的 worker.hubs 列表(整表替换,优先级更高);"
+                            + "③启动参数 --worker.hubs[0].api-key=... / --worker.hubs[0].hub-key=...");
                 }
                 out.add(h);
             }

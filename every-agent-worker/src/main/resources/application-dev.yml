@@ -1,12 +1,16 @@
 
 worker:
   worker-id: ${WORKER_ID:company-pc-dev}
+  # dev profile 同样不带任何默认密钥(fail-closed):本机起 hub 后 export 两个环境变量即可
+  #   HUB_KEY=<与 hub 相同的原始密钥>            # hub 侧 application-dev.yml 的 --hub.hub-key 同值
+  #   WORKER_API_KEY=<本地任选的非空串,如 dev>   # apiKey 定义数据归属,本地开发随便取
+  # (或写 ~/.everyagent-dev/application-worker.yaml 覆盖 worker.hubs 列表)
   hubs:
     - url: ws://localhost:8100/ws
-      api-key: dev-key
+      api-key: ${WORKER_API_KEY:}
       # 连接 hub 的凭证(对 hub 的保护);与 api-key 不同,由部署者统一配置。必填:
       # 原始密钥须与目标 hub 的 hub.hub-key(存其 sha256)对应,缺失该条目 worker 拒绝启动
-      hub-key: ${HUB_KEY:sljlw23948LKS}
+      hub-key: ${HUB_KEY:}
   # 系统目录(架构 §5.9):默认工作区 workspace/、数据 data/;空 = ~/.everyagent
   home-dir: ${user.home}/.everyagent-dev
   # 开发运行恢复控制台日志与启动横幅(打包默认 OFF,防 worker.out.log 无限膨胀,见 application.yml)

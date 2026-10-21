@@ -248,12 +248,12 @@ After saving a manual edit, click **Reload model config** in the Settings page t
 
 > More config: multiple models, model pool failover, any OpenAI-compatible provider — see "Configure Models (Required)" below.
 
-> 🎉 **Zero-config connection**: the desktop edition works out of the box; no need to manually create or modify any connection config file — when `~/.everyagent/desktop-config.json` doesn't exist, the program uses built-in defaults (local hubKey / workerApiKey / workerId and ports), the frontend auto-fills and connects locally. Only when you actually want to change local ports or custom credentials do you need to create this file to override the corresponding fields (hubKey / workerApiKey / workerId / hubPort / workerPort).
+> 🎉 **Zero-config connection**: the desktop edition works out of the box; no need to manually create or modify any connection config file — when `~/.everyagent/desktop-config.json` doesn't exist (or its key fields are empty), the program auto-generates **random** hubKey / workerApiKey on first start and persists them to that file (no built-in default credentials). The frontend auto-fills and connects locally. Only when you actually want to change local ports or custom credentials do you need to create this file to override the corresponding fields (hubKey / workerApiKey / workerId / hubPort / workerPort; existing non-empty values are never overwritten).
 
 ### Option 2: Docker (self-host hub + worker + web)
 
 ```bash
-HUB_KEY=your-hub-key docker-compose up --build
+HUB_KEY=your-hub-key WORKER_API_KEY=your-worker-key docker-compose up --build
 ```
 
 - Hub: `ws://<host>:6101/ws` (health check `GET :6101/health`)
@@ -343,8 +343,10 @@ After saving a manual edit, click **Reload model config** in the Settings page t
 
 | Config | Description |
 |---|---|
-| `worker.hubs[].url / api-key / hub-key` | The only entry point for worker-to-hub connection (multi-hub list); if not configured, the worker doesn't connect to any hub |
-| `HUB_KEY` (env var) | Hub key in plaintext (sha256 computed at startup); falls back to a built-in dev key when unset (local testing only) — an explicitly empty value refuses to start; **public deployments must set a strong key** |
+| `worker.hubs[].url / api-key / hub-key` | The only entry point for worker-to-hub connection (multi-hub list); if not configured, the worker doesn't connect to any hub; the packaged default entry ships with **empty credentials — startup is refused unless explicitly configured** (no built-in default keys) |
+| `HUB_KEY` (env var) | Hub key in plaintext (sha256 computed at startup); **required** — the packaged default is empty and an unset value refuses to start (fail-closed). Configure via env var, the `hub.hub-key` property, or the `--hub.hub-key` CLI arg |
+| `WORKER_API_KEY` (env var) | Worker data-ownership key (feeds the packaged default `worker.hubs[0]` entry); the worker refuses to start if unset and no `application-worker.yaml` override provides credentials |
+| `SERVER_ADDRESS` (env var) | Hub listen address, defaults to `127.0.0.1` (loopback only); docker/compose and systemd deployment paths inject `0.0.0.0` explicitly |
 | `WORKER_ID` (env var) | Worker identity; the frontend addresses by this |
 | `EVERYAGENT_HOME` | System directory (model config / default workspace / data), default `~/.everyagent` |
 | `worker.sandbox.type` | `auto` (default; picks the highest-priority available sandbox plugin) / `wsl-ubuntu` / `windows-mic` / `none` (legacy values `wsl-direct` / `wsl-bwrap` are auto-normalized) |

@@ -43,6 +43,9 @@ BuiltInPluginScanner 按 cwd 扫内置插件。不要这步时加 --skip-plugins
   #   python deploy.py all --config ~/.everyagent/deploy.env
   # 文件内容形如：
   #   HUB_KEY=你的hub密钥                        # 原文；hub/worker 启动时自算 sha256
+  #   WORKER_API_KEY=你的worker密钥              # worker 数据归属密钥(前端连接 worker 填同值)；
+  #                                              # docker 模式必填(worker 拒绝空凭据启动)，
+  #                                              # host 模式也可由服务器上 application-worker.yaml 提供
   #   WORKSPACE_ROOT=/srv/everyagent/workspaces
   #   DEPLOY_HOST=1.2.3.4
   #   DEPLOY_USER=ubuntu
@@ -109,6 +112,7 @@ def render_compose(cfg) -> str:
     并写入同名环境变量，使 worker 默认工作区指向宿主真实目录。"""
     ws = (getattr(cfg, "workspace_root", "") or "").strip()
     hub_key = getattr(cfg, "hub_key", "") or ""
+    worker_api_key = getattr(cfg, "worker_api_key", "") or ""
     web_port = getattr(cfg, "web_port", 80) or 80
     worker_volumes = [
         "      - ./worker/app.jar:/app/app.jar:ro",
@@ -122,6 +126,11 @@ def render_compose(cfg) -> str:
         # HUB_KEY / REMOTE_HUB_KEY,同一台 hub 时填同值)
         f'      HUB_KEY: "{hub_key}"',
         f'      REMOTE_HUB_KEY: "{hub_key}"',
+        # 打包默认已无任何密钥(fail-closed):worker 凭据必须显式注入——
+        # api-key=数据归属密钥(WORKER_API_KEY),hub-key=与 hub 同一密钥(HUB_KEY)
+        f'      WORKER_API_KEY: "{worker_api_key}"',
+        # 容器内经服务名访问 hub(打包默认 url=localhost,容器网络里不通)
+        '      WORKER_HUB_URL: "ws://hub:6101/ws"',
     ]
     if ws:
         if not ws.startswith("/"):
@@ -142,6 +151,8 @@ services:
       - "6101:6101"
     environment:
       HUB_KEY: "{hub_key}"
+      # 打包默认 server.address 已收敛为 127.0.0.1(安全整改);容器要发布 6101 端口必须绑 0.0.0.0
+      SERVER_ADDRESS: "0.0.0.0"
     restart: unless-stopped
 
   worker:
@@ -194,6 +205,10 @@ Type=simple
 WorkingDirectory={cur}/hub
 ExecStart={java_bin} -jar {cur}/hub/app.jar
 EnvironmentFile={cur}/.env
+# hub 打包默认只监听 127.0.0.1(安全整改);host 部署显式放开保持既有行为
+# (nginx 反代与跨机 worker 直连均可达;如确认 hub/worker/webapp 全部同机、且无需
+# 跨机直连 6101,可在 current/.env 里覆盖 SERVER_ADDRESS=127.0.0.1 收紧——.env 优先级更高)。
+Environment=SERVER_ADDRESS=0.0.0.0
 Restart=on-failure
 RestartSec=5
 
@@ -263,11 +278,19 @@ def render_runtime_env_file(cfg) -> str:
     供 worker.yml 第二条 hub 条目用,同一台 hub 时与 HUB_KEY 同值）。"""
     ws = (getattr(cfg, "workspace_root", "") or "").strip()
     hub_key = getattr(cfg, "hub_key", "") or ""
+    worker_api_key = getattr(cfg, "worker_api_key", "") or ""
     lines = [
         f"HUB_KEY={hub_key}",
         f"REMOTE_HUB_KEY={hub_key}",
+        # worker 数据归属密钥(host 模式通常由服务器上 ${EVERYAGENT_HOME}/application-worker.yaml
+        # 的 worker.hubs 列表提供凭据;留空时该文件可用 ${WORKER_API_KEY} 占位符引用本行)
+        f"WORKER_API_KEY={worker_api_key}",
         f"WORKER_ID={getattr(cfg, 'worker_id', 'company-pc') or 'company-pc'}",
         "EVERYAGENT_HOME=/var/lib/everyagent",
+        "# hub 监听地址由 systemd 单元(hub.service)注入 SERVER_ADDRESS=0.0.0.0 保持既有行为;",
+        "# 若 hub/worker/webapp 全部同机且无需跨机直连 6101,取消下一行注释收紧为仅回环",
+        "# (本文件优先级高于单元内的 Environment=;worker 不受影响——其 server.address 在打包 yml 固定回环)。",
+        "#SERVER_ADDRESS=127.0.0.1",
     ]
     if ws:
         lines.append(f"WORKSPACE_ROOT={ws}")
@@ -712,6 +735,10 @@ def deploy(cfg, services) -> None:
         else:
             log("[警告] 未设置 WORKSPACE_ROOT（--workspace-root / DEPLOY_WORKSPACE_ROOT），"
                 "worker 将使用 EVERYAGENT_HOME 默认工作区（/var/lib/everyagent），无法访问你指定的宿主目录。")
+    if "worker" in services and mode == "docker" and not (getattr(cfg, "worker_api_key", "") or "").strip():
+        log("[警告] docker 模式未提供 WORKER_API_KEY（--worker-api-key / DEPLOY_WORKER_API_KEY / 配置文件 WORKER_API_KEY=）："
+            "worker 凭据 fail-closed,容器将因缺 api-key 拒绝启动——"
+            "除非 EVERYAGENT_HOME 卷内已有提供凭据的 application-worker.yaml。")
     if cfg.dry_run:
         log("== DRY RUN: 仅本地预览, 不执行本地构建、不连接服务器 ==")
         print("\n---- 本地将执行的构建命令 ----")
@@ -827,6 +854,7 @@ def parse_args(argv):
     p.add_argument("--npm", help="本地 npm 可执行文件（默认 npm / DEPLOY_NPM）")
     p.add_argument("--workspace-root", help="宿主工作区根(绝对路径)；bind mount 进 worker 使工作区落在宿主真实目录。不填则 worker 用容器内默认目录（DEPLOY_WORKSPACE_ROOT）")
     p.add_argument("--hub-key", help="原始 hub key(必填,hub/worker 启动自算 sha256)；前端设置页与 worker hubs[].hub-key 填同一密钥。也可写在 --config 文件的 HUB_KEY= 一行。")
+    p.add_argument("--worker-api-key", help="worker 数据归属密钥(前端连接该 worker 时填同值)；docker 模式必填(worker 凭据 fail-closed,空则容器拒绝启动)，host 模式可留空(由服务器上 application-worker.yaml 提供凭据)。也可写在 --config 文件的 WORKER_API_KEY= 一行。")
     p.add_argument("--keep-releases", type=int, default=3, help="保留最近几个 release（默认 3）")
     p.add_argument("--no-deps", action="store_true", help="部署时不连带拉起所依赖的服务")
     p.add_argument("--pull", action="store_true", help="up 时强制拉取最新官方镜像")
@@ -874,6 +902,8 @@ def parse_args(argv):
     args.node = args.node or os.environ.get("DEPLOY_NODE") or local.get("DEPLOY_NODE", "node")
     args.workspace_root = args.workspace_root or os.environ.get("DEPLOY_WORKSPACE_ROOT") or local.get("WORKSPACE_ROOT", "")
     args.hub_key = args.hub_key or os.environ.get("DEPLOY_HUB_KEY") or local.get("HUB_KEY", "")
+    args.worker_api_key = (args.worker_api_key or os.environ.get("DEPLOY_WORKER_API_KEY")
+                           or local.get("WORKER_API_KEY", ""))
     args.web_port = args.web_port or int(os.environ.get("DEPLOY_WEB_PORT") or local.get("DEPLOY_WEB_PORT", "80"))
     args.compose = args.compose or os.environ.get("DEPLOY_COMPOSE") or local.get("DEPLOY_COMPOSE", "docker compose")
     args.mode = args.mode or os.environ.get("DEPLOY_MODE") or local.get("DEPLOY_MODE", "host")

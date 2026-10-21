@@ -146,7 +146,7 @@ node scripts\build-plugins.mjs --only <你的id> --watch     # 组合：只盯�
 | IDE | 主类 `dev.everyagent.worker.WorkerApplication`（声明于 `every-agent-worker/pom.xml:94`） | 务必核对运行配置的**工作目录**（§4.2） |
 | 桌面版 | Electron 拉起 | cwd = 安装包 resourcesPath，见 §7 |
 
-默认配置连 `ws://localhost:6101/ws`（`every-agent-worker/src/main/resources/application.yml:10-14`，api-key / hub-key 都有开发缺省值），**hub 没起也不影响插件加载**（§4.5 口径②第 1 条）；管理端口 6102 仅绑 127.0.0.1（`application.yml:135-137`）。冷启动到全部插件激活约 10 秒量级（25 内置 + 1 样例实测 10.3s，计划步骤 8）。
+默认配置连 `ws://localhost:6101/ws`（`every-agent-worker/src/main/resources/application.yml:16-21`，url/api-key/hub-key 均可经环境变量 `WORKER_HUB_URL` / `WORKER_API_KEY` / `HUB_KEY` 注入，**打包凭据为空、fail-closed：本地裸跑 worker 前先 export `WORKER_API_KEY` 与 `HUB_KEY`（任意非空本地值即可），否则启动即被凭据校验拒绝**），**hub 没起也不影响插件加载**（§4.5 口径②第 1 条）；管理端口 6102 仅绑 127.0.0.1（`application.yml:165-167`）。冷启动到全部插件激活约 10 秒量级（25 内置 + 1 样例实测 10.3s，计划步骤 8）。
 
 启动后 30 秒自检——三条日志定成败（同时落在 `<home>\logs\worker.log`，日志目录口径见[调试与测试](debugging-and-testing.md) §3.1）：
 
@@ -205,7 +205,7 @@ home 的解析顺序与派生（`WorkerProperties.java:213-216,221-251`）：`wo
 这条口径必须整体记住，两半都不能写错（均为计划步骤 8 真机实测 + 源码取证）：
 
 1. **hub 连接失败可容忍**：hub 连接是异步的——`HubPool` 先就绪再逐条 `start()`（`every-agent-worker/src/main/java/dev/everyagent/worker/hub/HubPool.java:98-101`），连不上按 1s→30s 退避重连（`WorkerProperties.java:46-47`）。**hub 没起、端口不通，worker 照常完成插件扫描与激活**——「插件加载不依赖 hub 连接」仅指这一情形，用来做纯插件验证时可以不起 hub。
-2. **hub 凭据校验失败终止启动，且发生在插件加载之前**：`worker.hubs` 条目 url 有效但 api-key / hub-key 任一为空时，`resolveHubs()` 直接抛 `IllegalStateException`（`WorkerProperties.java:201-204`，文案逐字：`worker.hubs[0](ws://...) 缺 api-key hub-key:两者均必填(hub 强校验 hubKey,apiKey 定义数据归属),缺配置拒绝启动`）。调用点是 `HubPool` 的 `@PostConstruct`（`HubPool.java:55-57`）——Spring 上下文启动中止，**插件扫描 / 激活根本不会开始**（实测：日志止于该异常，无任何 `[plugins]` 行）。
+2. **hub 凭据校验失败终止启动，且发生在插件加载之前**：`worker.hubs` 条目 url 有效但 api-key / hub-key 任一为空时，`resolveHubs()` 直接抛 `IllegalStateException`（`WorkerProperties.java:222-229`，文案：`worker.hubs[0](ws://...) 缺 api-key:两者均必填(hub 强校验 hubKey,apiKey 定义数据归属),缺配置拒绝启动(fail-closed:已移除打包默认密钥)。配置方式(任选):①环境变量 WORKER_API_KEY / HUB_KEY(对应打包默认的 worker.hubs[0] 条目,url 用 WORKER_HUB_URL);②${EVERYAGENT_HOME}/application-worker.yaml 的 worker.hubs 列表(整表替换,优先级更高);③启动参数 --worker.hubs[0].api-key=... / --worker.hubs[0].hub-key=...`）。调用点是 `HubPool` 的 `@PostConstruct`（`HubPool.java:55-57`）——Spring 上下文启动中止，**插件扫描 / 激活根本不会开始**（实测：日志止于该异常，无任何 `[plugins]` 行）。
 
 排查「插件一个都没加载」时，先确认启动没有早夭于凭据校验，再查 §4.2 的 cwd。
 
