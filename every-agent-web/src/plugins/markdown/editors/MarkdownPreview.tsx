@@ -5,7 +5,7 @@ import { buildMarkdownComponents } from '@/components/shared/markdown/sharedMark
 import { remarkFourTildeStrikethrough } from '@/components/shared/markdown/remarkFourTildeStrikethrough'
 import { useWorkspaceShell } from '@/components/app/WorkspaceShellContext'
 import { useAppUi } from '@/components/app/AppUiContext'
-import { resolveWorkspaceRelativePath, toBusinessAbsolutePath } from '@/platform/fs/pathUtils'
+import { resolveWorkspaceRelativePath, toBusinessAbsolutePath, decodeMarkdownUri } from '@/platform/fs/pathUtils'
 import { workspaceGateway } from '@/platform/fs/workspaceGateway'
 import { isExternalLinkUrl, openExternalLink } from '@/platform/externalLink'
 import { parseMarkdownHeadings, resolveMarkdownHeadingAnchor, type MarkdownHeading } from './markdownOutline'
@@ -80,14 +80,10 @@ const MarkdownPreview = React.forwardRef<MarkdownPreviewHandle, MarkdownPreviewP
 
   /** 工作区文件链接：剥离 #fragment、按 md 所在目录解析相对路径，存在性校验后开文件标签页。 */
   const openWorkspaceFileLink = React.useCallback((rawHref: string) => {
-    // fragment(目标文件内锚点)本预览无法承载——文件标签页定位体系只到行号；这里只管打开文件。
+    // fragment(目标文件内锚点)本预览无法承载——文件标签页定位体系只到行号;这里只管打开文件。
+    // 目的地被 CommonMark URI 规范化过(中文 → %XX 编码),先解码再解析。
     const pathPart = rawHref.split('#')[0] ?? ''
-    let target = pathPart
-    try {
-      target = decodeURIComponent(pathPart)
-    } catch {
-      /* 非法 percent 编码序列：按原文参与解析 */
-    }
+    const target = decodeMarkdownUri(pathPart)
     const rel = resolveWorkspaceRelativePath(baseDir ?? '', target)
     if (!rel) return
     const businessPath = toBusinessAbsolutePath(rel)

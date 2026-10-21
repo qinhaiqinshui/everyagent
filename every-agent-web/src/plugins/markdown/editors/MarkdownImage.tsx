@@ -9,7 +9,7 @@
  */
 import React from 'react'
 import { workspaceGateway } from '@/platform/fs/workspaceGateway'
-import { resolveWorkspaceRelativePath } from '@/platform/fs/pathUtils'
+import { resolveWorkspaceRelativePath, decodeMarkdownUri } from '@/platform/fs/pathUtils'
 import { bytesToDataUrl, imageMimeOf, isImageFileName } from '@/utils/imageAsset'
 
 type MarkdownImageProps = {
@@ -48,8 +48,16 @@ export default function MarkdownImage({ src, alt, workspaceRoot, baseDir }: Mark
       }
     }
 
-    const rel = resolveWorkspaceRelativePath(baseDir ?? '', trimmed)
-    if (!rel || !isImageFileName(rel)) {
+    // 目的地被 CommonMark URI 规范化过(中文 → %XX 编码):解码后解析为工作区路径;
+    // 解码结果与原文不同时保留原文候选兜底——文件名本身含 %xx 字面量(如 a%20b.svg)
+    // 时解码会指向错误路径,按序尝试、首个读取成功者生效。
+    const decoded = decodeMarkdownUri(trimmed)
+    const candidates: string[] = []
+    for (const value of [decoded, trimmed]) {
+      const rel = resolveWorkspaceRelativePath(baseDir ?? '', value)
+      if (rel && isImageFileName(rel) && !candidates.includes(rel)) candidates.push(rel)
+    }
+    if (candidates.length === 0) {
       setState({ status: 'error', message: `不支持的图片引用: ${trimmed}` })
       return () => {
         cancelled = true
@@ -57,15 +65,25 @@ export default function MarkdownImage({ src, alt, workspaceRoot, baseDir }: Mark
     }
 
     setState({ status: 'loading' })
-    workspaceGateway.readBytesRaw(workspaceRoot, rel)
-      .then((bytes) => {
-        if (cancelled) return
-        setState({ status: 'ready', url: bytesToDataUrl(bytes, imageMimeOf(rel)) })
-      })
-      .catch((loadError: unknown) => {
-        if (cancelled) return
-        setState({ status: 'error', message: loadError instanceof Error ? loadError.message : String(loadError) })
-      })
+    void (async () => {
+      let lastError: unknown = null
+      for (const rel of candidates) {
+        try {
+          const bytes = await workspaceGateway.readBytesRaw(workspaceRoot, rel)
+          if (cancelled) return
+          setState({ status: 'ready', url: bytesToDataUrl(bytes, imageMimeOf(rel)) })
+          return
+        } catch (readError) {
+          lastError = readError
+        }
+      }
+      if (!cancelled) {
+        setState({
+          status: 'error',
+          message: lastError instanceof Error ? lastError.message : String(lastError),
+        })
+      }
+    })()
 
     return () => {
       cancelled = true

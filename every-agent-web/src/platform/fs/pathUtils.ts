@@ -117,6 +117,23 @@ export function shouldHideWorkspacePath(path: string): boolean {
 }
 
 /**
+ * 尽最大努力解码 markdown 链接/图片目的地里的百分号编码。
+ *
+ * CommonMark 解析器(react-markdown 底层 micromark)按规范对目的地做 URI 规范化:
+ * 中文等非 ASCII 字符会被编码(`架构.svg` → `%E6%9E%B6%E6%9E%84.svg`)。把目的地
+ * 解析为工作区路径(文件链接 / 内嵌图片)前必须先还原,否则按编码后的字面量找文件
+ * 会 NOT_FOUND。文件名本身含裸 `%`(如 `100%.svg`)时 decodeURIComponent 抛
+ * URIError,此时按原文返回参与解析。
+ */
+export function decodeMarkdownUri(value: string): string {
+  try {
+    return decodeURIComponent(value)
+  } catch {
+    return value
+  }
+}
+
+/**
  * 把「baseDir 相对 target」合并为工作区相对路径,并防 `..` 越出工作区根。
  * 路径坐标系统一为工作区相对路径(无前导 /);markdown 内嵌图片/文件链接的
  * 相对路径解析共用(以 md 文件所在目录为基准)。
