@@ -1,0 +1,24 @@
+/* 移动端设置页目录下拉弹层宽度处理（同 TaskModelControls.css 的
+ * task-model-select-dropdown 方案）：视口窄时长标题（如插件段名）会把弹层
+ * 撑出屏幕，且 rc-trigger 的 adjustX 翻转定位可能把弹层顶出屏幕左侧。
+ * 因此这里固定左边缘与宽度，绕开翻转定位，选项保持完整宽度、超出时横向滚动。
+ */
+@media (max-width: 768px) {
+  .settings-directory-select-dropdown {
+    /* 固定左边缘 + 固定宽度，避免被 rc-trigger 翻转定位顶出屏幕左侧 */
+    left: 12px !important;
+    width: calc(100vw - 24px) !important;
+    max-width: none !important;
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+  }
+
+  /* 选项内容默认会被 text-overflow: ellipsis 省略，导致无溢出、无滚动条；
+     这里保持完整宽度（nowrap + visible），使其溢出弹层从而触发横向滚动。 */
+  .settings-directory-select-dropdown .ant-select-item-option-content {
+    flex: 0 0 auto !important;
+    white-space: nowrap;
+    overflow: visible !important;
+    text-overflow: clip !important;
+  }
+}

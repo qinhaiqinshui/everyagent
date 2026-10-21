@@ -9,10 +9,12 @@
  * 工作区注册表在资源管理器侧栏管理。
  *
  * 段落导航:每段容器打 data-settings-section-id 锚点(内置段用 SETTINGS_SECTION_ID 常量、
- * 插件段用 def.id),桌面端左侧渲染扫描式目录(useSettingsSectionDirectory)——点击滚动到位、
- * 手动滚动高亮跟随;移动端单栏保持现状(顶部下拉由后续步骤提供)。
+ * 插件段用 def.id),目录唯一来源是扫描(useSettingsSectionDirectory)——桌面端左侧渲染
+ * 目录列表,点击滚动到位、手动滚动高亮跟随;移动端单栏,header 常驻目录下拉(选中项跟随
+ * 当前激活段),弹层宽度处理见 SettingsPanel.css。
  */
 import React from 'react'
+import { Select } from 'antd'
 import WorkspacePageShell from '@/components/shared/WorkspacePageShell'
 import { Button, Checkbox, TextInput } from '@/components/shared/ui'
 import { useHub } from '@/hub/HubProvider'
@@ -44,6 +46,7 @@ import {
   settingsSectionTitleStyle as sectionTitleStyle,
 } from '@/components/system/settingsSectionStyles'
 import { APP_NAME, APP_VERSION, APP_COPYRIGHT, APP_LICENSE } from '@/appInfo'
+import './SettingsPanel.css'
 
 export default function SettingsPanel() {
   const hub = useHub()
@@ -185,7 +188,26 @@ export default function SettingsPanel() {
     <WorkspacePageShell
       header={(
         <div style={pageHeaderStyle}>
-          <h2 style={pageHeaderTitleStyle}>设置</h2>
+          {isMobile ? (
+            <div style={pageHeaderMobileRowStyle}>
+              <h2 style={pageHeaderTitleStyle}>设置</h2>
+              <Select
+                size="small"
+                variant="filled"
+                value={activeId ?? undefined}
+                placeholder="跳转到设置段"
+                notFoundContent="暂无设置段"
+                popupMatchSelectWidth={false}
+                options={directoryEntries.map((entry) => ({ value: entry.id, label: entry.title }))}
+                onChange={(value) => scrollToSection(value as string)}
+                style={settingsDirectorySelectStyle}
+                classNames={{ popup: { root: 'settings-directory-select-dropdown' } }}
+                aria-label="跳转到设置段"
+              />
+            </div>
+          ) : (
+            <h2 style={pageHeaderTitleStyle}>设置</h2>
+          )}
           <p style={pageHeaderHintStyle}>连接 hub 并纳管其下的 worker。任务运行时与模型配置在 worker 侧。</p>
         </div>
       )}
@@ -422,6 +444,21 @@ const pageHeaderHintStyle: React.CSSProperties = {
   margin: 0,
   fontSize: 'var(--text-xs)',
   color: 'var(--text-muted)',
+}
+
+/** 移动端 header 行：标题 + 目录下拉同行紧凑排布，空间不足由下拉收缩省略。 */
+const pageHeaderMobileRowStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+  minWidth: 0,
+}
+
+/** 移动端 header 目录下拉：compact 尺寸，宽度自适应选中项、限宽防溢出。 */
+const settingsDirectorySelectStyle: React.CSSProperties = {
+  flex: '0 1 auto',
+  minWidth: 96,
+  maxWidth: '60%',
 }
 
 /** 桌面端设置页两栏布局:左目录列 + 右内容列(移动端目录列不渲染,自然单栏)。 */
