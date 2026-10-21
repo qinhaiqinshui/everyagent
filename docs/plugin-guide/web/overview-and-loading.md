@@ -144,7 +144,7 @@ export default plugin
 ### 约定 4：禁 `@/` 宿主内部引用，UI 与图标自带
 
 - **为什么**：`@/` 是宿主 vite alias（`every-agent-web/src/*`），宿主模块不在插件 bundle 里、也不暴露任何全局；blob 模块里 `@/...` 必然解析失败。核实：全仓 `every-agent-plugins/**/*.ts(x)` 对 `from '@/` / `from "@/` 的引用**零命中**（rg 单双引号两种均零）——这不是软建议，是仓内既有事实。
-- **怎么做**：一切宿主能力经 `ctx`（`sdk`/`ui`/`events`/`fs`/`storage`/`commands`，逐成员见 [前端 ctx API](context-api.md)）；图标用 ReactNode 自带（emoji、SVG、`@ant-design/icons` 白名单组件均可）；需要宿主动作（开标签页、写输入框）用 `ctx.ui.openTab` 等 6 个动作方法（§4）。
+- **怎么做**：一切宿主能力经 `ctx`（`sdk`/`ui`/`events`/`fs`/`storage`/`commands`，逐成员见 [前端 ctx API](context-api.md)）；图标用 ReactNode 自带（emoji、SVG、`@ant-design/icons` 白名单组件均可）；需要宿主动作（开标签页、写输入框）用 `ctx.ui.openTab` 等 7 个动作方法（§4）。
 - **违反症状**：构建期 `Could not resolve "@/..."`，或产物里残留不可解析 import → 激活失败。
 
 ### 约定 5：产物手工构建、不入库，且不在 web dev/build 流水线里
@@ -187,9 +187,9 @@ export default plugin
 
 注：`dispatch()` 的 switch 只列前述 15 个 `ui.*`/`task.*` 常量（`PluginDispatcher.ts:232-262`）；`ui.trace_types` / `ui.output_blocks` 走侧路注册表，不影响使用。
 
-### 4.2 `ctx.ui` 的 6 个动作方法（触发宿主动作，不注册东西）
+### 4.2 `ctx.ui` 的 7 个动作方法（触发宿主动作，不注册东西）
 
-`openTab(type, data?, title?)` / `openFileTab(workspaceRoot, filePath, {mode?, lineNumber?})` / `openDiffTab(input)` / `appendComposerText(text)` / `appendComposerToken({kind, label, summary?, payload?, spaced?})` / `setComposerRawContent(raw)`（`index.ts:834-852`）。实现经模块级 holder 桥接（`every-agent-web/src/plugin/pluginRuntimeBridge.ts`）：这些能力原本只挂在 React Context 上，插件是非 React 模块拿不到 hook 结果，故由宿主组件挂载时注入——`Layout.tsx:803`（`setShellBridge`，卸载清 null `:814`）、`TaskChat.tsx:712`（`setComposerBridge`）。**未注入时静默降级**（dispatcher 里全是 `getShellBridge()?.xxx` 可选链，`pluginRuntimeBridge.ts:1-10` 注释自证「零状态、零缓冲……未注入时静默降级」）；时序上安全，因为 `activate` 总在 RPC 往返之后才执行，宿主组件通常已挂载。
+`openTab(type, data?, title?)` / `openFileTab(workspaceRoot, filePath, {mode?, lineNumber?})` / `openDiffTab(input)` / `openSettingsPage(sectionId?)` / `appendComposerText(text)` / `appendComposerToken({kind, label, summary?, payload?, spaced?})` / `setComposerRawContent(raw)`（`index.ts:834-852`）。实现经模块级 holder 桥接（`every-agent-web/src/plugin/pluginRuntimeBridge.ts`）：这些能力原本只挂在 React Context 上，插件是非 React 模块拿不到 hook 结果，故由宿主组件挂载时注入——`Layout.tsx:803`（`setShellBridge`，卸载清 null `:814`）、`TaskChat.tsx:712`（`setComposerBridge`）。**未注入时静默降级**（dispatcher 里全是 `getShellBridge()?.xxx` 可选链，`pluginRuntimeBridge.ts:1-10` 注释自证「零状态、零缓冲……未注入时静默降级」）；时序上安全，因为 `activate` 总在 RPC 往返之后才执行，宿主组件通常已挂载。
 
 ### 4.3 `ctx` 其余成员
 

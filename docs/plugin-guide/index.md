@@ -99,7 +99,7 @@ worker 侧的判定规则（`every-agent-worker/src/main/java/dev/everyagent/wor
 | 后端 | `WorkerPluginContext` 自身的 `register*` 方法 | 14 | 下表分组 |
 | 后端 | 继承自 `TaskPluginContext` 的 `register*` | 2 | [任务生命周期与 RPC](backend/task-and-rpc.md) |
 | 前端 | `ctx.ui` 的 `register*` 扩展点 | 17 | [UI 扩展点](web/ui-extensions.md) |
-| 前端 | `ctx.ui` 的动作方法（开 tab / 开文件 / 开 diff / 写 composer / 插胶囊） | 6 | [PluginContext API](web/context-api.md) |
+| 前端 | `ctx.ui` 的动作方法（开 tab / 开文件 / 开 diff / 开设置页 / 写 composer / 插胶囊） | 7 | [PluginContext API](web/context-api.md) |
 | 前端 | `ctx` 能力域（`ui` / `sdk` / `events` / `fs` / `storage` / `commands`） | 6 | [PluginContext API](web/context-api.md) |
 | 前端 | `PluginDomainEvent` 具名事件（其余靠 `(string & {})` 兜底） | 9 | [事件](web/events.md) |
 

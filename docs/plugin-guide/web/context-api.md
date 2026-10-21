@@ -36,7 +36,7 @@ const ctx: PluginContext = {
 | `ctx.sdk` | `PluginSdk`（`index.ts:130-146`） | `pluginLoader.ts:205-229` | RPC 通道 + 工作区注册表快照 + 当前 worker id |
 | `ctx.storage` | `PluginStorage`（`index.ts:200-204`） | `pluginLoader.ts:142-165` | localStorage，键前缀 `plugin:<pluginId>:`，值 JSON 序列化 |
 | `ctx.commands` | `CommandRegistry`（`index.ts:206-209`） | `pluginLoader.ts:167-189` | **本插件私有**的命令表（普通 `Map`），不跨插件、无宿主内置命令 |
-| `ctx.ui` | `UiRegistry`（`index.ts:808-853`） | `every-agent-web/src/plugin/PluginDispatcher.ts:218-401` | 17 个 `register*` + 6 个动作方法，详见 [UI 扩展点](ui-extensions.md) |
+| `ctx.ui` | `UiRegistry`（`index.ts:808-853`） | `every-agent-web/src/plugin/PluginDispatcher.ts:218-401` | 17 个 `register*` + 7 个动作方法，详见 [UI 扩展点](ui-extensions.md) |
 | `ctx.events` | `PluginEvents`（`index.ts:162-167`） | `pluginLoader.ts:232-249` | 最薄委托宿主 `domainEventBus`（进程内事件总线） |
 | `ctx.fs` | `PluginFs`（`index.ts:170-175`） | `pluginLoader.ts:251-265` | 委托宿主 `workspaceGateway` → worker `fs.list` / `fs.delete` RPC |
 
@@ -265,7 +265,7 @@ await ctx.fs.delete(workspaceRoot, 'docs/draft.md')
 
 ## 8. `ctx.ui` —— 一笔带过
 
-`UiRegistry` 有 17 个 `register*`（sidebar 项、工作区标签类型、工具调用视图、文件编辑器、编辑器右键菜单、胶囊激活、设置页设置段、全局颜色主题……）、6 个动作方法（`openTab`/`openFileTab`/`openDiffTab`/`appendComposerText`/`appendComposerToken`/`setComposerRawContent`）与 1 个查询方法（`getActiveTab()`——同步读宿主壳层维护的激活标签镜像，返回 `{id, tabType}` 或 null，变更通知配 `workspace-tab-activated`/`workspace-tab-closed` 事件），声明在 `index.ts:808-853`，宿主实现是单例 `pluginDispatcher`（ctx 里 `ui: pluginDispatcher as unknown as ...` 强转接入，`pluginLoader.ts:511`）。每个 `register*` 返回的 Disposable 都是**真清理**：`ListExtensionRegistry.register` 的 dispose 从数组 splice 并通知订阅者重渲染（`every-agent-web/src/plugin/ExtensionRegistry.ts:45-56`）。逐扩展点字段表与代码范例见 [UI 扩展点](ui-extensions.md)。
+`UiRegistry` 有 17 个 `register*`（sidebar 项、工作区标签类型、工具调用视图、文件编辑器、编辑器右键菜单、胶囊激活、设置页设置段、全局颜色主题……）、7 个动作方法（`openTab`/`openFileTab`/`openDiffTab`/`openSettingsPage`/`appendComposerText`/`appendComposerToken`/`setComposerRawContent`）与 1 个查询方法（`getActiveTab()`——同步读宿主壳层维护的激活标签镜像，返回 `{id, tabType}` 或 null，变更通知配 `workspace-tab-activated`/`workspace-tab-closed` 事件），声明在 `index.ts:808-853`，宿主实现是单例 `pluginDispatcher`（ctx 里 `ui: pluginDispatcher as unknown as ...` 强转接入，`pluginLoader.ts:511`）。每个 `register*` 返回的 Disposable 都是**真清理**：`ListExtensionRegistry.register` 的 dispose 从数组 splice 并通知订阅者重渲染（`every-agent-web/src/plugin/ExtensionRegistry.ts:45-56`）。逐扩展点字段表与代码范例见 [UI 扩展点](ui-extensions.md)。
 
 ## 9. 寿命与清理
 
