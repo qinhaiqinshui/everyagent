@@ -72,13 +72,18 @@ export const workspaceExplorerCommandService = {
   /**
    * 在指定目录下创建空文件。
    * 返回新建文件的完整相对路径。
+   *
+   * 走沙箱内相对路径写(fs.write)而非 fs.writeRaw 原语:与同族的 createDirectory
+   * (fs.mkdir)同源,且网关写成功后统一广播 WORKSPACE_FILE_CHANGED,资源树据此
+   * 刷新新文件所在目录。raw 原语不经网关事件(文件标签页按绝对路径保存专用)——
+   * 曾因此让「树内新建文件」落盘成功却无任何刷新信号,必须手动刷新才看到新文件。
    */
   async createFile(workspaceRoot: string, parentPath: string, name: string): Promise<string> {
     const fullPath = joinWorkspacePath(parentPath, name)
     if (await workspaceGateway.existsRaw(workspaceRoot, fullPath)) {
       throw new Error('同名文件或目录已存在')
     }
-    await workspaceGateway.writeTextFileRaw(workspaceRoot, fullPath, '')
+    await workspaceGateway.writeTextFile(workspaceRoot, fullPath, '')
     return fullPath
   },
 
@@ -125,6 +130,8 @@ export const workspaceExplorerCommandService = {
    * 上传文件到工作区目标目录下。
    * 多选文件时按文件名平铺写入；目录上传时按 webkitRelativePath 保持原层级。
    * 同名文件会被覆盖（二进制写入）。
+   * 与 createFile 同源走沙箱内相对路径写:上传同样要经网关广播 WORKSPACE_FILE_CHANGED,
+   * 否则新上传的文件同样不会出现在资源树里(需手动刷新)。
    */
   async uploadFiles(workspaceRoot: string, targetPath: string, files: File[]): Promise<void> {
     if (files.length === 0) return
@@ -132,7 +139,7 @@ export const workspaceExplorerCommandService = {
       const relativePath = getFileRelativePath(file)
       const targetFilePath = targetPath ? `${targetPath}/${relativePath}` : relativePath
       const buffer = new Uint8Array(await file.arrayBuffer())
-      await workspaceGateway.writeBytesRaw(workspaceRoot, targetFilePath, buffer)
+      await workspaceGateway.writeBytes(workspaceRoot, targetFilePath, buffer)
     }
   },
 }
