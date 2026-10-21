@@ -488,6 +488,7 @@ worker ── HubPool ──┬─ conn₁ (url₁, apiKey₁ → K₁)  订阅 
 - 多前端抢答:complete() 幂等,先到先得;ask.state 30s 重发 + 持久事件让重连/新上线前端必然看到挂起问题。
 - 超时(默认 30 分钟):向模型返回"用户未响应",由模型自决;同时广播 `ask.state{status:"timeout"}`。
 - 任务在等待期间转入 `waiting-user`;取消时 future 异常完成。
+- 前端 ask 卡片生命周期(`askStore`):**终态事件按 seq 判定**——线程折叠到 `error`/`cancelled` 时只结算 seq 早于该事件的挂起 ask;懒加载翻到的**历史终态事件**(如任务曾失败后重跑再 ask,上翻分页折入旧错误轮)不得误清当前挂起 ask。已落定的 ask 不因回放帧(initial)复活;`ask.resolved`/超时/用户作答等 **worker 已确认落定**的 ask 对迟到实时帧(如 30s refresher 与作答复活的竞态尾帧)也不复活;仅本地失效清理(worker 连接集合变化等)误清的 ask,由 worker 实时 `ask.create`/`ask.state(pending)`(非回放帧)复活——worker 仍在等待即应可见可答(G4)。
 
 #### 危险操作授权(PermissionGate)
 
