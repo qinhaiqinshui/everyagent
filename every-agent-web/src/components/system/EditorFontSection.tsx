@@ -1,12 +1,14 @@
 /**
  * 设置页「编辑器字体」段：字体族 + 字号（作用于全站文本文件编辑器）。
  *
+ * 字体只提供预设下拉（不含自定义输入）；字号为步进控件。
+ *
  * 对标 VSCode 的 editor.fontFamily / editor.fontSize——是编辑器设置，不进颜色主题。
  * 设置经 `editorFont` 存取（worker preferences 事实源 + localStorage 缓存），
  * 应用层按 `--editor-font-family` / `--reading-font-family` / `--editor-font-size` 落地。
  */
 import React from 'react'
-import { Button, Select, TextInput } from '@/components/shared/ui'
+import { Button, Select } from '@/components/shared/ui'
 import {
   DEFAULT_EDITOR_FONT,
   EDITOR_FONT_PRESETS,
@@ -23,7 +25,6 @@ const SIZE_MAX = 32
 /** 下拉哨兵值：预设「默认（等宽）」在设置里存空串，但空串作 antd Select 的 value 会被
  *  当成未选中（显示 placeholder），故下拉用显式哨兵值，存取时再映射回空串。 */
 const SELECT_DEFAULT = '__default__'
-const SELECT_CUSTOM = '__custom__'
 
 function parseSize(fontSize: string): number {
   const n = Number.parseFloat(fontSize)
@@ -41,13 +42,19 @@ export default function EditorFontSection() {
   }
 
   const size = parseSize(font.fontSize)
-  // 「自定义」模式：用户在下拉里选了「自定义…」或直接在文本框里打字后置位，
-  // 使下拉显示「自定义…」而不弹回原预设（不置位时选中即弹回，交互割裂）。
-  const [customMode, setCustomMode] = React.useState(false)
-  const matchesPreset = EDITOR_FONT_PRESETS.some((p) => p.value === font.fontFamily)
-  const selectValue = customMode || !matchesPreset
-    ? SELECT_CUSTOM
-    : font.fontFamily === '' ? SELECT_DEFAULT : font.fontFamily
+  // 字体只提供预设（无自定义输入）：把历史遗留的非预设值归一化回默认，避免下拉出现
+  // 「值不在选项里」的悬空显示。只跑一次，不覆盖用户后续选择。
+  const normalizedRef = React.useRef(false)
+  React.useEffect(() => {
+    if (normalizedRef.current) return
+    normalizedRef.current = true
+    if (!EDITOR_FONT_PRESETS.some((p) => p.value === font.fontFamily)) {
+      apply({ ...font, fontFamily: '' })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const selectValue = font.fontFamily === '' ? SELECT_DEFAULT : font.fontFamily
 
   const setSize = (delta: number) => {
     const clamped = Math.min(SIZE_MAX, Math.max(SIZE_MIN, size + delta))
@@ -64,30 +71,14 @@ export default function EditorFontSection() {
         <Select
           size="sm"
           value={selectValue}
-          options={[
-            { value: SELECT_DEFAULT, label: '默认（等宽）' },
-            ...EDITOR_FONT_PRESETS.filter((p) => p.value !== '').map((p) => ({ value: p.value, label: p.label })),
-            { value: SELECT_CUSTOM, label: '自定义…' },
-          ]}
+          options={EDITOR_FONT_PRESETS.map((p) => ({
+            value: p.value === '' ? SELECT_DEFAULT : p.value,
+            label: p.label,
+          }))}
           onChange={(value: string) => {
             // 注意：Select 是 antd 封装，onChange 回调给的是**值**（不是 DOM 事件）。
-            if (value === SELECT_CUSTOM) {
-              setCustomMode(true)
-              return
-            }
-            setCustomMode(false)
             apply({ ...font, fontFamily: value === SELECT_DEFAULT ? '' : value })
           }}
-        />
-        <TextInput
-          size="sm"
-          value={font.fontFamily}
-          placeholder="CSS font-family，如 &quot;LXGW WenKai&quot;, serif"
-          onChange={(event) => {
-            setCustomMode(true)
-            apply({ ...font, fontFamily: event.target.value })
-          }}
-          spellCheck={false}
         />
       </div>
       <div style={fieldStyle}>

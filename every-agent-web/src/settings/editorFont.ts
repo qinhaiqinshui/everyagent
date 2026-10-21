@@ -13,7 +13,8 @@ const PREF_KEY_FAMILY = 'editor.fontFamily'
 const PREF_KEY_SIZE = 'editor.fontSize'
 const LS_KEY = 'ea.web.editorFont'
 
-/** 内置字体栈选项（设置页下拉）。值为 CSS font-family 串；`editor` = 默认等宽。 */
+/** 内置字体栈选项（设置页「编辑器字体」下拉；**仅预设、无自定义输入**）。值为 CSS
+ *  font-family 串；空串 = 用 `ui-tokens.css` 默认（等宽）。 */
 export const EDITOR_FONT_PRESETS: ReadonlyArray<{ label: string; value: string }> = [
   { label: '默认（等宽）', value: '' },
   { label: 'Cascadia Code', value: '"Cascadia Code", "Fira Code", Consolas, monospace' },
