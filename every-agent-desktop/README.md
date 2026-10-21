@@ -7,8 +7,8 @@
 ```
 ┌────────────────────── every-agent-desktop(Electron) ──────────────────────┐
 │  main 进程                                                                 │
-│   ├─ spawn hub.jar   (jlink JRE javaw.exe,127.0.0.1:6101,等 /health)      │
-│   ├─ spawn worker.jar (连 ws://127.0.0.1:6101/ws,复用 EVERYAGENT_HOME)    │
+│   ├─ spawn hub.jar   (env 注入 HUB_KEY=配置密钥,127.0.0.1:6101,等 /health) │
+│   ├─ spawn worker.jar (凭据经 desktop-worker.yml 注入,连本机 hub)          │
 │   └─ 本地静态服务 127.0.0.1:<随机端口> → 加载 resources/web(前端 dist)     │
 │  renderer(前端,经 preload 注入 bootstrap)                                  │
 │   └─ 自动 applyConfig(hub) + setWorkerApiKey(worker) → 开箱即用连接       │
@@ -24,20 +24,27 @@
 
 ```json
 {
-  "hubKey": "sljlw23948LKS",
-  "workerApiKey": "dev-key",
+  "hubKey": "<your-hub-key>",
+  "workerApiKey": "<your-worker-api-key>",
   "workerId": "company-pc",
   "hubPort": 6101,
   "workerPort": 6102
 }
 ```
 
-- 文件不存在 → 首次启动自动生成带默认值的配置。
-- 字段缺失/非法 → 回退默认值。
+- `hubKey` / `workerApiKey` **不内置任何默认密钥**(安全整改:历史硬编码默认密钥已随仓库公开)。
+  首次启动(文件不存在或字段为空)自动生成 32 字节随机密钥(base64url)并持久化到该文件;
+  已有非空值升级时保持不变,不会重新生成。
+- hub 子进程启动时以 `hubKey` 显式注入 `HUB_KEY` 环境变量(覆盖任何继承);worker 连接
+  本机 hub 的 `api-key` / `hub-key` 由桌面版生成的 `<EVERYAGENT_HOME>/desktop/desktop-worker.yml`
+  注入(`--spring.config.additional-location`,优先级高于 jar 内默认值与用户覆盖文件),
+  与 hub 凭据始终同源一致——不会落回 jar 内公开默认密钥。
+- 其余字段缺失/非法 → 回退默认值。
 - `EVERYAGENT_HOME` 未设置时默认 `~/.everyagent`。
 
-> 要与命令行方式共用同一批任务,`workerApiKey`(决定 ownerKey 数据归属)与 `workerId` 必须与
-> 命令行 worker 一致;桌面版默认值已对齐 worker 生产默认(`dev-key` / `company-pc`)。
+> 要与命令行方式共用同一批任务:`workerApiKey` 决定 ownerKey 数据归属,须与命令行 worker
+> 配置(`<EVERYAGENT_HOME>/application-worker.yaml` 中 `worker.hubs[].api-key`)一致,
+> `workerId` 同理;桌面版 hub 的密钥以本文件 `hubKey` 为准(worker 由桌面版自动接线)。
 
 ## 日志
 
@@ -47,7 +54,7 @@
   “进程在但窗口不出现 / 后端没起来” 这类问题。
 - 启动占位页会实时显示启动进度(与 `desktop.log` 同源,经 IPC 推送);启动失败时窗口内也会给出错误信息与日志目录。
 - worker → `<EVERYAGENT_HOME>/logs/worker.log`(每日滚动,保留 7 天,见 worker logback-spring.xml)
-- hub → `<EVERYAGENT_HOME>/logs/hub.log`(由主进程生成的 desktop-hub.yml 指定 `logging.file.name`)
+- hub → `<EVERYAGENT_HOME>/logs/hub.log`(由 hub 内置 logback-spring.xml 指定,目录读 EVERYAGENT_HOME)
 - 进程 stdout/stderr → `<EVERYAGENT_HOME>/logs/{hub,worker}.out.log`(为空通常表示 java 进程未真正启动,
   需配合 `desktop.log` 查看 spawn 是否失败/健康检查是否超时)
 - **安装/卸载器 → `<EVERYAGENT_HOME>/logs/uninstall.log`(安装与卸载共用,追加式)**:
@@ -112,11 +119,11 @@ JRE 缺失时回退系统 `java`(Windows 下 `windowsHide` 隐藏控制台)。
 
 ## 关键实现点
 
-- **worker.hubs 覆盖**:Spring Boot 列表属性跨配置源按索引合并,仅覆盖 `[0]` 会残留 jar 内默认
-  远端 hub。桌面版用 `--spring.config.additional-location` 注入生成的 `desktop-worker.yml`,把每个
-  默认索引都写满(`[1]` 用空 url,worker `resolveHubs` 静默跳过),彻底剔除远端条目。
-- **配置注入**:`desktop-hub.yml` / `desktop-worker.yml` 生成到 `<EVERYAGENT_HOME>/desktop/`,
-  经 `--spring.config.additional-location=file:///...` 覆盖 jar 内默认值。
+- **凭据接线(安全整改)**:`desktop-config.json` 首启自动生成随机 `hubKey` / `workerApiKey`
+  (已有非空值不覆盖、不重写);hub 经子进程 env `HUB_KEY` 显式注入(覆盖任何继承,杜绝落回
+  jar 内公开默认密钥),worker 经每次启动前重写的 `<EVERYAGENT_HOME>/desktop/desktop-worker.yml`
+  (`--spring.config.additional-location`,实测优先级高于 jar 内默认值与
+  `application-worker.yaml` 用户覆盖)拿到同一组凭据——worker 与 hub 凭据恒一致。
 - **单实例锁**:二次启动聚焦已有窗口。
 - **优雅退出**:托盘「退出桌面」停 hub,worker 保留运行(下次启动自动复用);「全部退出」停 hub + 对所有 worker 发 `POST /admin/shutdown` 触发 Spring 优雅关闭——desktop 自己启动的 worker HTTP shutdown 超时后 `child.kill()` 兜底,外部 worker 超时只记日志(不按端口强杀,零误杀风险)。
 
@@ -145,6 +152,10 @@ worker(:6102)提供两个管理端点,用于外部进程探测与优雅关闭:
 2. 操作 → 启动程序:程序填 `<安装根>\resources\start-backend.bat`。
 3. 脚本会自动检测 worker 是否已在运行(端口复用),避免重复启动。
 4. worker 启动后自动重试连接 hub;desktop 后续打开时检测到已有 worker,不重复启动。
+5. 凭据:脚本启动前从 `desktop-config.json` 读取 `hubKey` / `workerApiKey`,生成
+   `<EVERYAGENT_HOME>/desktop/desktop-worker.yml`(与桌面版主程序同一份文件)注入 worker,
+   保证与 hub 凭据一致;若配置文件缺失或密钥为空,脚本报错退出——请先启动一次桌面端
+   完成首启密钥生成(自动生成随机密钥并持久化)。
 
 **Desktop 交互**:
 - Desktop 启动时:hub 直接 spawn(检查端口是否被占);worker 调 `GET /admin/identify`(认证探测)判断是否已在运行。

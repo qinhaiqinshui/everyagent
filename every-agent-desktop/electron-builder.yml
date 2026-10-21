@@ -5,7 +5,9 @@ directories:
   output: release
   buildResources: build
 files:
-  - dist/**/*
+  # 只打产品代码;dist/test(单测编译产物,仅开发本机存在)不得进包
+  - dist/main/**/*
+  - dist/preload/**/*
   - package.json
   # 系统托盘图标:主进程 createTray 从 app.getAppPath()/build/icon.png 读取,
   # 打包后经此 files 规则打进 asar(与源代码 build/icon.png 同路径)。

@@ -29,6 +29,23 @@ if not defined EVERYAGENT_HOME set EVERYAGENT_HOME=%USERPROFILE%\.everyagent
 rem 确保日志目录存在
 if not exist "%EVERYAGENT_HOME%\logs" mkdir "%EVERYAGENT_HOME%\logs"
 
+rem ------------------------------------------------------------------
+rem  准备 worker 连接凭据(安全审计 H-1:不再回退 jar 内公开默认密钥)
+rem  从 desktop-config.json 读取 hubKey/workerApiKey,生成 worker 覆盖配置
+rem  <EVERYAGENT_HOME>\desktop\desktop-worker.yml(与桌面版主程序生成同一份文件)。
+rem  hub 由 desktop 启动时以同一 hubKey 显式注入 HUB_KEY 环境变量,worker 必须用
+rem  同一组凭据连接本机 hub。配置文件缺失或密钥为空则报错退出——请先启动一次
+rem  Every Agent 桌面端完成首启密钥生成(首启自动生成随机密钥并持久化)。
+rem  注:拼接用独立变量再组数组——powershell -Command 对数组字面量内的
+rem  逗号后 + 拼接解析有缺陷(拆成多元素),不能直接内联。
+rem ------------------------------------------------------------------
+set "WORKER_YML=%EVERYAGENT_HOME%\desktop\desktop-worker.yml"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $h=$env:EVERYAGENT_HOME; $cfgPath=Join-Path $h 'desktop-config.json'; if (-not (Test-Path $cfgPath)) { Write-Host '[start-backend] desktop-config.json not found; run the desktop app once to generate credentials'; exit 1 }; $cfg=Get-Content -Raw $cfgPath | ConvertFrom-Json; if (-not $cfg.hubKey -or -not $cfg.workerApiKey) { Write-Host '[start-backend] hubKey/workerApiKey empty in desktop-config.json; run the desktop app once to generate credentials'; exit 1 }; $dir=Join-Path $h 'desktop'; New-Item -ItemType Directory -Force -Path $dir | Out-Null; $port=if ($cfg.hubPort) { [int]$cfg.hubPort } else { 6101 }; $q=[string][char]34; $n=[string][char]10; $l1='worker:'; $l2='  hubs:'; $l3='    - url: '+$q+'ws://127.0.0.1:'+$port+'/ws'+$q; $l4='      api-key: '+$q+$cfg.workerApiKey+$q; $l5='      hub-key: '+$q+$cfg.hubKey+$q; $c=@($l1,$l2,$l3,$l4,$l5) -join $n; Set-Content -Path (Join-Path $dir 'desktop-worker.yml') -Value $c -Encoding UTF8; exit 0"
+if errorlevel 1 (
+    echo [%date% %time%] 无法准备 worker 连接凭据,脚本退出 ^(请先启动一次桌面端生成密钥^)
+    exit /b 1
+)
+
 rem 选择 Java 可执行文件:优先 jlink 精简 JRE 的 javaw.exe,回退 java.exe / 系统 java
 set "JAVA_EXE=%PROGRAM_DIR%jre\bin\javaw.exe"
 if not exist "%JAVA_EXE%" set "JAVA_EXE=%PROGRAM_DIR%jre\bin\java.exe"
@@ -46,7 +63,7 @@ if !errorlevel! equ 0 (
 ) else (
     echo [%date% %time%] 启动 worker...
     cd /d "%EVERYAGENT_HOME%"
-    start "" "%JAVA_EXE%" "-Deveryagent.program-dir=%PROGRAM_DIR%" -jar "%PROGRAM_DIR%backend\worker.jar" 1>> "%EVERYAGENT_HOME%\logs\worker.out.log" 2>&1
+    start "" "%JAVA_EXE%" "-Deveryagent.program-dir=%PROGRAM_DIR%" -jar "%PROGRAM_DIR%backend\worker.jar" "--spring.config.additional-location=file:/%WORKER_YML:\=/%" 1>> "%EVERYAGENT_HOME%\logs\worker.out.log" 2>&1
 )
 
 rem 等待 worker 就绪(健康检查 + hub 连接,最多 120 秒)

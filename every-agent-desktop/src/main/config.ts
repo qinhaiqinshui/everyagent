@@ -2,14 +2,16 @@
  * 桌面版运行时配置:从 <EVERYAGENT_HOME>/desktop-config.json 读取,缺省用默认值。
  * EVERYAGENT_HOME 未设置时默认 ~/.everyagent(与 worker 系统目录一致,数据复用)。
  *
- * 语义:desktop-config.json **只承载 desktop 层自身的偏好**(前端 bootstrap 地址/凭证、
- * GPU 兼容开关),不传给 hub/worker 进程——hub/worker 进程配置由 jar 内 application.yml
- * 默认 + ~/.everyagent/application-*.yaml 用户覆盖决定(desktop 不感知)。
- * 文件不存在时不自动生成,直接使用内置默认(零配置文件)。
+ * 语义:desktop-config.json 承载 desktop 层自身的偏好与**连接凭据**(前端 bootstrap
+ * 凭证、GPU 兼容开关)。凭据(hubKey/workerApiKey)不再内置默认值(安全审计 H-1:
+ * 历史硬编码密钥已随仓库公开):缺失/为空时首启自动生成随机密钥并持久化,已有非空值
+ * 保持不变(升级兼容);hub/worker 子进程凭据由 credentials.ts 接线(env HUB_KEY +
+ * desktop-worker.yml),保证与 hub 一致且不落回 jar 内公开默认密钥。
  */
 import { homedir } from 'node:os'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { ensureSecretKeys } from './credentials'
 
 export interface DesktopConfig {
   /** hub 级连接凭证(前端连接 hub 用)。 */
@@ -39,8 +41,11 @@ export interface DesktopPaths {
 }
 
 const DEFAULTS: DesktopConfig = {
-  hubKey: 'sljlw23948LKS',
-  workerApiKey: 'dev-key',
+  // 安全审计 H-1:删除硬编码默认密钥(已随仓库公开,等同无鉴权)。空串 = 未配置:
+  // loadConfig 检测到空值即生成随机密钥并持久化(credentials.ensureSecretKeys);
+  // 已有配置文件的非空值保持不变(升级兼容,ownerKey 数据归属不漂移)。
+  hubKey: '',
+  workerApiKey: '',
   workerId: 'company-pc',
   hubPort: 6101,
   workerPort: 6102,
@@ -89,7 +94,11 @@ function coerceString(value: unknown, fallback: string): string {
   return typeof value === 'string' && value.trim() ? value.trim() : fallback
 }
 
-/** 读取配置(缺省用默认值);文件不存在时不生成,直接使用内置默认(零配置文件)。 */
+/**
+ * 读取配置(缺省用默认值)。hubKey/workerApiKey 缺失/为空时生成随机密钥并原子回写
+ * desktop-config.json(credentials.ensureSecretKeys),生成先于 backend 拉起子进程
+ * (index.ts 中 loadConfig 先于 startBackend)。其余字段缺省即默认,不写文件。
+ */
 export function loadConfig(home: string): DesktopConfig {
   const p = pathsFor(home)
   let raw: Record<string, unknown> = {}
@@ -102,9 +111,10 @@ export function loadConfig(home: string): DesktopConfig {
     }
   }
 
+  const keys = ensureSecretKeys(raw, p.configFile)
   return {
-    hubKey: coerceString(raw.hubKey, DEFAULTS.hubKey),
-    workerApiKey: coerceString(raw.workerApiKey, DEFAULTS.workerApiKey),
+    hubKey: keys.hubKey,
+    workerApiKey: keys.workerApiKey,
     workerId: coerceString(raw.workerId, DEFAULTS.workerId),
     hubPort: coercePort(raw.hubPort, DEFAULTS.hubPort),
     workerPort: coercePort(raw.workerPort, DEFAULTS.workerPort),
