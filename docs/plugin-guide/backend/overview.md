@@ -314,7 +314,7 @@ worker 的内部类在 parent 链上**技术可见**，但架构红线明令禁�
 
 违反的实际后果：
 
-- **外部插件根本构建不出**：worker 不发布到 Maven Central（`dev.everyagent/` 目录 404），仓库外拿不到 artifact；
+- **外部插件根本构建不出**：worker 不发布到 Maven Central（发布范围只有插件 SDK 链 4 坐标，见 [打包与安装](../guides/packaging-and-install.md)），仓库外拿不到 worker 的 artifact；
 - **内置插件编译能过但被红线拦截**：reactor 内互相可见，纯属 review/规范问题——但写进 pom 的那一刻就与 worker 内部实现焊死，worker 重构即碎；
 - **依赖它取「未公开服务」也属绕道**：正道是 `ctx.services()`（公开面）或 `ctx.getService(Class)`（Javadoc 明示外部插件不应依赖，`WorkerPluginContext.java:105-112`）；
 - 类型确需共享时**先下沉 plugin-api，文档先行**（红线原文收尾句）。若真在运行期 import 了 worker 内部类且该类不在插件可见的 classpath 上，表现为 `NoClassDefFoundError`（未实测构造此场景，机理推断）。

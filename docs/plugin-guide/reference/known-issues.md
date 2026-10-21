@@ -137,12 +137,13 @@ has_children: false
 
 ## C. 分发与生态
 
-### #18 `@everyagent/plugin-api` 双侧未发布（npm 404 / Maven 无 dev.everyagent）
+### #18 `@everyagent/plugin-api` 双侧待发布（发布链就绪，首发待维护者执行）
 
-- **现象**：npm registry 查 `@everyagent/plugin-api` → 404；Maven Central 无 `dev/everyagent` group（2025 调查实测，见计划记录 `.everyagent/plan-plugin-scaffold-docs.md`「已核实事实」）。本地包版本：js 与 Java 两侧已对齐 `1.0.0`（#23 收口）。
-- **影响**：**仓库外**开发插件拿不到类型包与 API jar——这是插件生态的硬阻塞项。
-- **规避**：脚手架 `standalone` 模式自动生成 `vendor/@everyagent/plugin-api/index.d.ts` 类型副本（[快速上手](../getting-started.md)）；Java 侧在仓库内 `mvn install` 到本地仓库后引用。
-- **待办**：发布双包（npm + Maven Central）；版本口径已就绪（#23 已收口对齐 1.0.0）。**优先级最高**（见文末 Top5）。
+- **现象**：npm registry 查 `@everyagent/plugin-api` → 404；Maven Central 尚无 `io.github.qinhaiqinshui` 命名空间（未首发）。本地包版本：js 与 Java 两侧同号随 `<revision>`（#23 收口）。
+- **影响**：**仓库外**开发插件拿不到类型包与 API jar——首发完成前仍是硬阻塞项（过渡期规避见下）。
+- **进展**（2026-10 坐标定案与发布链落地）：Maven 坐标从 `dev.everyagent` 迁移为 **`io.github.qinhaiqinshui`**（Central Portal 命名空间经 GitHub 账号验证，无需 everyagent.dev 域名；**仅 Maven groupId 层**，Java 包名 `dev.everyagent.*` 不变，插件作者 import 零影响）；根 pom 增 `central` profile（sources / javadoc / GPG / central-publishing-maven-plugin），CI 发布链 `.github/workflows/publish-maven-central.yml`（推 `v*` tag 触发，一次配置步骤见 `CONTRIBUTING.md`「发布（维护者）」）。npm 侧：CLI（`create-everyagent-plugin`）内嵌 `everyagent.sdkVersion` 保证仓库外生成工程钉对 SDK 版本，js 类型包规范为 `index.d.ts` 发布形态——两侧均已 publish-ready。
+- **规避（首发前）**：脚手架 `standalone` 模式自动生成 `vendor/@everyagent/plugin-api/index.d.ts` 类型副本（[快速上手](../getting-started.md)）；Java 侧克隆宿主仓库 `mvn -pl every-agent-plugin-parent,every-agent-plugin-api -am install -DskipTests` 后引用。首发完成后两条规避作废。
+- **待办**：维护者按 `CONTRIBUTING.md`「发布（维护者）」执行首发（Maven 推 tag + npm publish）。**将来商业化统一切回 `dev.everyagent` 坐标**（需持有 everyagent.dev 域名做 Central 命名空间验证）：届时全仓替换 pom 层 groupId（Java 包名不动）、双坐标并行过渡；`io.github.*` 已发版本不可撤回，此代价为当时定案所接受。**优先级最高**（见文末 Top5）。
 
 ### #19 `plugin.install` / `plugin.uninstall` 前端零调用点（✅ 安装入口已修复）
 
@@ -201,7 +202,7 @@ has_children: false
 
 以下为本页作者的判断，供排期参考；均为建议（除 #18/#20 外均已随修复关闭：#1/#4、#15、#17/#14、#8、#19、#9/#12、#21/#22/#23、#10/#11）。
 
-1. **API 双发布（#18）**——npm 与 Maven Central 同时发布 `@everyagent/plugin-api`。这是解锁仓库外开发的唯一硬阻塞，其余生态问题（安装侧校验、卸载入口）都排在其后。~~版本口径统一（原 #23 前置项）~~ ——✅ #23 已修复（js/Java 对齐 1.0.0，双脚本联动），发布前置条件已就绪。
+1. **API 双发布（#18）**——npm 与 Maven Central 双发。发布链已全部就绪（Maven 坐标 `io.github.qinhaiqinshui` + `central` profile + CI workflow；npm 双包 publish-ready + CLI 内嵌 SDK 版本兜底），**剩维护者执行首发**（步骤见 `CONTRIBUTING.md`「发布（维护者）」）。其余生态问题（安装侧校验、卸载入口）都排在其后。~~版本口径统一（原 #23 前置项）~~ ——✅ #23 已修复（js/Java 同号 `<revision>`，双脚本联动）。
 2. ~~**`ui.file_explorer_actions` 接或删（#1）**~~ ——✅ 已修复（宿主文件树右键菜单已接消费点，git 的「显示 Git 历史」生效）。
 3. ~~**死事件常量表清理（#4）**~~ ——✅ 已修复（17 个被取代条目删除、3 个事件补齐 emit，常量表 21 条全部可用）。
 4. ~~**`plugin.list` 增加 `status` + 插件管理安装入口（#15 + #19）**~~ ——✅ 均已修复：#15 `status` 经聚合链出网（`active` 保持旧语义）；#19 面板安装入口上线（`fs.write` 暂存 → 既有 `plugin.install` RPC，`status` 失败标识同步消费）。`plugin.uninstall` 前端入口另议。

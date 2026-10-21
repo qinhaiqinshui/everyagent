@@ -14,6 +14,7 @@ Every Agent 是一套「公网可及、本机执行」的个人 AI Agent 系统�
 - [提出功能建议](#提出功能建议)
 - [开发环境搭建](#开发环境搭建)
 - [开发一个插件](#开发一个插件)
+- [发布（维护者）](#发布维护者)
 - [提交 Pull Request](#提交-pull-request)
 - [代码与提交规范](#代码与提交规范)
 
@@ -83,6 +84,52 @@ node create-everyagent-plugin --id <id>    # java / web / full 三种形态，�
 ```
 
 从 [docs/plugin-guide/getting-started.md](docs/plugin-guide/getting-started.md) 开始（全站入口 [docs/plugin-guide/index.md](docs/plugin-guide/index.md)）。两条红线务必先读：插件**零 `every-agent-worker` 依赖**（[架构文档](docs/ARCHITECTURE.md) §14.9，唯一允许的实现依赖是 `every-agent-plugin-api`）；前端插件**禁止 `@/` 引用宿主模块**（§8.5，类型包只能 `import type`）。
+
+## 发布（维护者）
+
+对外发布两条线：**Maven Central**（插件 SDK 坐标，CI 自动）与 **npm**（脚手架 CLI + 前端类型包，手工）。背景与现状见 [known-issues #18](docs/plugin-guide/reference/known-issues.md)。
+
+### Maven Central（插件 SDK，一次配置后全自动）
+
+发布范围只有 SDK 链 4 坐标（`io.github.qinhaiqinshui:every-agent-parent` / `-contract` / `-plugin-parent` / `-plugin-api`）；hub / worker 不发布。坐标用 `io.github.qinhaiqinshui`（Central 命名空间经 GitHub 账号验证，无需域名；Java 包名保持 `dev.everyagent.*` 不受影响）。
+
+一次性配置：
+
+1. 注册 [central.sonatype.com](https://central.sonatype.com)（可用 GitHub 登录），在 Portal 里**验证命名空间** `io.github.qinhaiqinshui`（按 Portal 指引在 GitHub 账号下创建验证仓库）；
+2. 本机生成 GPG 发布密钥并把公钥上传到 [keyserver.ubuntu.com](https://keyserver.ubuntu.com)：
+   ```powershell
+   gpg --full-generate-key          # RSA 4096，有效期自定
+   gpg --keyserver keyserver.ubuntu.com --send-keys <密钥ID>
+   gpg --armor --export-secret-keys <密钥ID> > gpg-private.asc   # 填入下方 secret
+   ```
+3. Portal → Account → **Generate User Token**（得到用户名 / token 一对）；
+4. 仓库 Settings → Secrets and variables → Actions 配 4 个 secrets：`CENTRAL_USERNAME`、`CENTRAL_TOKEN`（上一步的 token 对）、`GPG_PRIVATE_KEY`（`gpg-private.asc` 全文）、`GPG_PASSPHRASE`（密钥口令）。
+
+日常发版（发布链：根 pom 的 `central` profile + [.github/workflows/publish-maven-central.yml](.github/workflows/publish-maven-central.yml)）：
+
+```powershell
+# 确认根 pom <revision> 已是待发版本（版本变更走 scripts/bump-version.py），然后：
+git tag v1.6.0
+git push origin v1.6.0        # 触发 workflow：签名 → 上传 Central Portal → 自动放行
+```
+
+注意：**Central 版本一经发布不可覆盖**，同版本重跑会在 Portal 校验阶段失败（预期行为）；发布前确保该版本号从未发过。本地验证发布配置（不真发）：`mvn -Pcentral -pl every-agent-contract,every-agent-plugin-api -am package "-DskipTests" "-Dgpg.skip=true"`。
+
+### npm（脚手架 CLI + 前端类型包，手工）
+
+前提：npm 账号 + `npm login`；`everyagent` scope（org）在 npm 上可用（`@everyagent/plugin-api` 发布前先确认 org 归属）。
+
+```powershell
+# ① 前端类型包（纯类型零运行时，入口 index.d.ts 由 scripts/sync-plugin-api-copy.ps1 保持与源码一致）
+cd every-agent-plugin-api/js
+npm publish --access public
+
+# ② 脚手架 CLI（版本须与 everyagent.sdkVersion/工程版本一致，由守卫测试钉住）
+cd create-everyagent-plugin
+npm publish --access public
+```
+
+发布后开发者即可 `npm create everyagent-plugin -- --id my-tool`（getting-started 的等价命令随之生效）。两侧版本都随根 pom `<revision>` 单点源（bump-version.py 联动），发什么版本查根 pom 即可。
 
 ## 提交 Pull Request
 

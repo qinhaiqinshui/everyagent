@@ -92,4 +92,81 @@
             </plugin>
         </plugins>
     </build>
+
+    <profiles>
+        <!-- 发布 Maven Central（维护者专用，见 CONTRIBUTING「发布（维护者）」）：
+             mvn -Pcentral -pl every-agent-contract,every-agent-plugin-parent,every-agent-plugin-api -am deploy
+             只发 SDK 链 4 坐标（-am 连带本聚合 pom = every-agent-parent）；hub / worker 不发布。
+             Central Portal 要求：GPG 签名 + sources/javadoc jar（pom 打包模块自动跳过后两者）。
+             本地无 GPG 密钥时验证构建可加 -Dgpg.skip=true。 -->
+        <profile>
+            <id>central</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-source-plugin</artifactId>
+                        <version>3.3.1</version>
+                        <executions>
+                            <execution>
+                                <id>attach-sources</id>
+                                <goals>
+                                    <goal>jar-no-fork</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-javadoc-plugin</artifactId>
+                        <version>3.11.2</version>
+                        <configuration>
+                            <!-- 历史代码注释不满足严格 doclint，发布只要求 jar 存在，关闭 lint -->
+                            <doclint>none</doclint>
+                            <failOnError>false</failOnError>
+                        </configuration>
+                        <executions>
+                            <execution>
+                                <id>attach-javadocs</id>
+                                <goals>
+                                    <goal>jar</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-gpg-plugin</artifactId>
+                        <version>3.2.7</version>
+                        <configuration>
+                            <skip>${gpg.skip}</skip>
+                        </configuration>
+                        <executions>
+                            <execution>
+                                <id>sign-artifacts</id>
+                                <phase>verify</phase>
+                                <goals>
+                                    <goal>sign</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <!-- Sonatype Central Portal 官方发布插件：收集 deploy 产物 + 签名并上传，
+                         autoPublish 上传后自动放行；凭证经 settings.xml 的 server（id=central，
+                         GitHub Actions 由 setup-java 注入，见 .github/workflows/publish-maven-central.yml）。 -->
+                    <plugin>
+                        <groupId>org.sonatype.central</groupId>
+                        <artifactId>central-publishing-maven-plugin</artifactId>
+                        <version>0.7.0</version>
+                        <extensions>true</extensions>
+                        <configuration>
+                            <publishingServerId>central</publishingServerId>
+                            <autoPublish>true</autoPublish>
+                            <waitUntil>published</waitUntil>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>

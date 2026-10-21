@@ -1,0 +1,43 @@
+# 发布插件 SDK 坐标到 Maven Central（维护者专用，一次性配置见 CONTRIBUTING「发布（维护者）」节）
+#
+# 触发：推送 v* tag（如 git tag v1.6.0 && git push origin v1.6.0），或 Actions 页手工运行（workflow_dispatch）。
+# 发布范围：SDK 链 4 坐标（io.github.qinhaiqinshui:every-agent-parent / -contract / -plugin-parent / -plugin-api），
+#           hub / worker 不发布。-am 连带根聚合 pom。
+# 前置 secrets（仓库 Settings → Secrets and variables → Actions）：
+#   CENTRAL_USERNAME / CENTRAL_TOKEN —— Sonatype Central Portal 的用户 token（Portal → Account → Generate User Token）
+#   GPG_PRIVATE_KEY / GPG_PASSPHRASE —— 发布签名密钥（gpg --armor --export-secret-keys <keyId> 的输出 / 口令）
+# 注意：Central 版本一经发布不可覆盖；同版本重跑会在 Portal 校验阶段失败，属预期。
+name: publish-maven-central
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+          # setup-java 负责三件事：装 JDK、把 GPG 私钥导入 keyring、
+          # 生成 ~/.m2/settings.xml（server id=central 的 Portal 凭证 + gpg.passphrase 属性）
+          server-id: central
+          server-username: CENTRAL_USERNAME
+          server-password: CENTRAL_TOKEN
+          gpg-private-key: ${{ secrets.GPG_PRIVATE_KEY }}
+          gpg-passphrase: GPG_PASSPHRASE
+
+      - name: Deploy SDK 坐标到 Maven Central
+        run: mvn -B -ntp -Pcentral -pl every-agent-contract,every-agent-plugin-parent,every-agent-plugin-api -am deploy
+        env:
+          CENTRAL_USERNAME: ${{ secrets.CENTRAL_USERNAME }}
+          CENTRAL_TOKEN: ${{ secrets.CENTRAL_TOKEN }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
