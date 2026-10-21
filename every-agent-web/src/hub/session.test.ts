@@ -1,11 +1,11 @@
 /**
- * hubSession 凭据策略测试(计划步骤 12「web 端凭据策略统一」,审计 M-9):
+ * hubSession 凭据策略测试(web 端凭据策略统一):
  *
  * - applyConfig:hubKey 内存保留明文、落盘只存 hubKeyEnc 密文(hubKey 与 apiKey 同策略);
  * - 重启流程:新会话经 ensureHydrated 从密文还原明文 hubKey,configured 不丢;
  * - 旧明文结构:ensureHydrated 自动迁移(hubKey → hubKeyEnc),连接不丢;
- * - 非安全上下文(http,无 crypto.subtle):setWorkerApiKey 拒绝持久化凭据
- *  (落盘密文为空、明文不进 storage),本会话内存可用(directory.hasApiKey)。
+ * - 非安全上下文(http,无 crypto.subtle):凭据回退 b64 混淆**仍落盘**
+ *  (b64: 前缀、明文不直接出现、可解回),directory.hasApiKey 正常。
  *
  * 网络层整体 mock('@every-agent/client' 的 HubClient:connect 恒成功、不触网),
  * channels/ownerKey 用真实实现(纯函数,无副作用);每条用例经 vi.resetModules +
@@ -114,7 +114,7 @@ describe('applyConfig:hubKey 加密落盘(与 apiKey 同策略)', () => {
     expect(await decrypt(parsed.hubKeyEnc as string)).toBe('hub-plain-key')
   })
 
-  it('非安全上下文:applyConfig 不落盘凭据,本会话内存仍可用', async () => {
+  it('非安全上下文:applyConfig 落盘 b64 混淆密文,明文不直接出现且可解回', async () => {
     const { hubSession, storage } = await freshSession()
     await withoutSubtle(async () => {
       await hubSession.applyConfig({
@@ -123,11 +123,16 @@ describe('applyConfig:hubKey 加密落盘(与 apiKey 同策略)', () => {
         hubKeyEnc: '',
         workers: [],
       })
+      // 运行时:明文在,configured 可用。
       expect(hubSession.config?.hubKey).toBe('http-plain-key')
-      expect(hubSession.config?.hubKeyEnc).toBe('')
+      expect(hubSession.configured).toBe(true)
+      // 落盘:b64 混淆(凭据仍持久化),明文不以明文形态出现。
       const parsed = JSON.parse(storage.getItem(STORAGE_KEY)!) as Record<string, unknown>
-      expect(parsed.hubKeyEnc).toBe('')
+      expect(parsed.hubKeyEnc).toMatch(/^b64:/)
       expect(storage.getItem(STORAGE_KEY)!).not.toContain('http-plain-key')
+      // 混淆值可解回(无需 crypto.subtle,重启后仍可用)。
+      const decrypt = await currentDecrypt()
+      expect(await decrypt(parsed.hubKeyEnc as string)).toBe('http-plain-key')
     })
   })
 })
@@ -177,8 +182,8 @@ describe('重启(hydrate)流程:密文还原、旧明文迁移', () => {
   })
 })
 
-describe('非安全上下文:setWorkerApiKey 凭据不落盘(本会话内存使用)', () => {
-  it('加密失败 → 落盘密文为空、明文不进 storage,directory 仍视为已配置', async () => {
+describe('非安全上下文:setWorkerApiKey 落盘 b64 混淆(凭据仍持久化)', () => {
+  it('b64: 前缀混淆值落盘、明文不直接出现、可解回,directory 仍视为已配置', async () => {
     const { hubSession, storage } = await freshSession({
       hubUrl: HUB_URL,
       hubKeyEnc: '',
@@ -190,17 +195,19 @@ describe('非安全上下文:setWorkerApiKey 凭据不落盘(本会话内存使�
 
     await withoutSubtle(async () => {
       const result = await hubSession.setWorkerApiKey('w1', 'worker-http-key')
-      // 保存路径拒绝持久化:密文为空,明文绝不出现在 storage。
+      // 落盘:b64 混淆(凭据仍持久化),明文不以明文形态出现。
       const raw = storage.getItem(STORAGE_KEY)!
       expect(raw).not.toContain('worker-http-key')
-      expect((JSON.parse(raw).workers as Array<Record<string, unknown>>)[0]).toMatchObject({
-        workerId: 'w1',
-        apiKeyEnc: '',
-      })
-      // 本会话内存可用:目录显示已配置,操作结果不算失败(worker 离线属预期)。
+      const enc = (JSON.parse(raw).workers as Array<{ workerId: string; apiKeyEnc: string }>)[0]
+        .apiKeyEnc
+      expect(enc).toMatch(/^b64:/)
+      // 混淆值可解回(无需 crypto.subtle,重启后仍可用)。
+      const decrypt = await currentDecrypt()
+      expect(await decrypt(enc)).toBe('worker-http-key')
+      // 目录显示已配置,操作结果不算失败(worker 离线属预期)。
       expect(hubSession.directory.find((w) => w.workerId === 'w1')?.hasApiKey).toBe(true)
       expect(result.ok).toBe(true)
-      // 启用校验放行会话级凭据(不再报 NO_CREDENTIAL)。
+      // 启用校验放行落盘凭据(不再报 NO_CREDENTIAL)。
       const enabled = await hubSession.setWorkerEnabled('w1', true)
       expect(enabled.error?.code).not.toBe('NO_CREDENTIAL')
     })

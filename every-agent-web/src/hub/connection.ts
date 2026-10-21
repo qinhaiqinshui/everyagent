@@ -5,8 +5,9 @@
  * - hubKey 保护 hub(连接 hub 的凭证,与 worker 进程一致);
  * - 每台 worker 一条前端连接,用该 worker 自己的 apiKey(保护 worker 数据)。
  *
- * 凭据策略(审计 M-9,与 apiKey 统一):hubKey 是 hub 级凭据(保护整条总线),落盘只存
- * AES-GCM 密文(hubKeyEnc,'v1:' 前缀);明文 hubKey 仅存在于运行时内存——
+ * 凭据策略(与 apiKey 统一):hubKey 是 hub 级凭据(保护整条总线),落盘只存密文
+ * (hubKeyEnc;安全上下文为 'v1:' AES-GCM 密文,非安全上下文 http 回退 'b64:' 混淆,
+ * 凭据仍持久化,设置页提示建议 https);明文 hubKey 仅存在于运行时内存——
  * saveConnectionConfig 按 allowlist 序列化({hubUrl, hubKeyEnc, workers}),运行时
  * 明文字段一律剥离。旧版明文结构({hubUrl, hubKey, workers})由 hydrateConnectionConfig
  * 一次性迁移(加密、重写存储、删除明文字段)。
@@ -62,8 +63,8 @@ export function loadConnectionConfig(): HubConnectionConfig | null {
 
 export function saveConnectionConfig(config: HubConnectionConfig): void {
   // allowlist 序列化:只写 {hubUrl, hubKeyEnc, workers[{workerId, apiKeyEnc, enabled,
-  // ownerKey?}]} —— 运行时明文 hubKey 及未来新增的内存字段一律不落盘(审计 M-9:
-  // 密文之外的凭据形态禁止进入 localStorage)。
+  // ownerKey?}]} —— 运行时明文 hubKey 及未来新增的内存字段一律不落盘(密文/混淆值
+  // 之外的凭据形态禁止进入 localStorage)。
   const persisted = {
     hubUrl: config.hubUrl,
     hubKeyEnc: config.hubKeyEnc,
@@ -82,8 +83,8 @@ export function saveConnectionConfig(config: HubConnectionConfig): void {
  * 凭据异步初始化(幂等;应用启动时调用,对应旧结构的「一次性迁移」):
  *
  * 1. 旧明文结构(hubKey 字段存在)→ 加密为 hubKeyEnc、重写存储(明文字段随之删除,
- *    已有 workers[].apiKeyEnc 结构不动);加密不可用(非安全上下文 http)时不改写
- *    存储 —— 明文仅本次会话内存使用,下次启动再试(迁移失败不阻断);
+ *    已有 workers[].apiKeyEnc 结构不动);非安全上下文(http)加密回退 b64 混淆,
+ *    迁移同样完成(凭据仍持久化);
  * 2. 新结构 → 解密 hubKeyEnc 回填运行时明文 hubKey;解密失败(本地加密密钥变更等)
  *    置空明文并告警,用户在设置页重新输入,不抛错阻断启动。
  *
@@ -102,11 +103,8 @@ export async function hydrateConnectionConfig(): Promise<HubConnectionConfig | n
     parsed.hubKey &&
     typeof parsed.hubKeyEnc !== 'string'
   ) {
+    // 非安全上下文回退 b64 混淆,迁移同样完成落盘(凭据仍持久化)。
     const enc = await encryptSecret(parsed.hubKey)
-    if (enc === null) {
-      // 非安全上下文:迁移失败不阻断 —— 明文本会话内存使用,存储保持原样(下次再试)。
-      return { hubUrl, hubKey: parsed.hubKey, hubKeyEnc: '', workers }
-    }
     const migrated: HubConnectionConfig = {
       hubUrl,
       hubKey: parsed.hubKey,

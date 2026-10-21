@@ -1,21 +1,22 @@
 /**
- * 前端本地凭证加密(防磁盘明文泄露,混淆级):
+ * 前端本地凭证加密(防磁盘明文直读,混淆级):
  *
- * - WebCrypto AES-GCM:随机 256 位密钥 + 12 字节 IV,密文与 IV 以 base64 合并存储;
- * - 密钥单独存 localStorage('ea.web.credkey'),与密文分离(同源混淆级,非抗本地攻击);
- * - 非安全上下文(http:// 局域网 IP)下 crypto.subtle 不可用:加密一律失败(返回 null),
- *   由调用方决定**不持久化**该凭据(本次会话内存使用,设置页给出提示)——不再回退
- *   base64 明文落盘(等价明文,审计 M-9);解密侧对历史遗留的 'b64:' 值保留读取兼容
- *   (老用户数据还能用),但新写入禁止。
+ * - 安全上下文(https / localhost / 桌面版):WebCrypto AES-GCM,随机 256 位密钥 +
+ *   12 字节 IV,密文与 IV 以 base64 合并存储('v1:' 前缀);密钥单独存
+ *   localStorage('ea.web.credkey'),与密文分离(同源混淆级,非抗本地攻击);
+ * - 非安全上下文(http:// 局域网 IP)下 crypto.subtle 不可用:凭据**仍持久化**,
+ *   回退 base64 混淆('b64:' 前缀,可逆编码,仅防磁盘明文直读)——不再拒绝落盘,
+ *   设置页据此提示「建议使用 https 或桌面版」。解密侧对 'b64:' 值天然兼容(无需
+ *   crypto.subtle,非安全上下文自己写入的凭据与历史遗留值都能读,跨上下文可用)。
  *
- * 应用场景(凭据策略统一,审计 M-9):hubKey 与每台 worker 的 apiKey 等一切本地凭据,
- * 经 encryptSecret 加密后分别存进 HubConnectionConfig.hubKeyEnc 与 workers[].apiKeyEnc;
- * 读取时 decryptSecret 还原为明文用于建连。
+ * 应用场景(hubKey 与 apiKey 统一策略):hubKey 与每台 worker 的 apiKey 等一切本地
+ * 凭据,经 encryptSecret 加密后分别存进 HubConnectionConfig.hubKeyEnc 与
+ * workers[].apiKeyEnc;读取时 decryptSecret 还原为明文用于建连。
  */
 const KEY_STORAGE = 'ea.web.credkey'
 
 /** 当前上下文是否支持凭据加密(需 WebCrypto SubtleCrypto:https / localhost / 桌面版)。
- *  设置页据此在非安全上下文提示「凭据不会保存,请使用 https 或桌面版」。 */
+ *  设置页据此在非安全上下文提示「凭据以混淆方式保存,建议使用 https 或桌面版」。 */
 export function isSecretCryptoAvailable(): boolean {
   return typeof globalThis !== 'undefined' && Boolean(globalThis.crypto?.subtle)
 }
@@ -61,13 +62,13 @@ async function getOrCreateKey(): Promise<CryptoKey | null> {
 }
 
 /** 加密明文为可持久化字符串;空串原样返回。
- *  非安全上下文(无 crypto.subtle)返回 null —— 凭据不加密就不落盘,由调用方
- *  拒绝持久化(本次会话内存使用)并向用户提示;不再回退 base64 明文(审计 M-9)。 */
-export async function encryptSecret(plain: string): Promise<string | null> {
+ *  安全上下文产出 'v1:' AES-GCM 密文;非安全上下文(无 crypto.subtle)回退
+ *  'b64:' 混淆 —— 凭据仍持久化(仅混淆级,非加密),设置页提示建议 https。 */
+export async function encryptSecret(plain: string): Promise<string> {
   if (!plain) return ''
   const key = await getOrCreateKey()
   if (!key) {
-    return null
+    return 'b64:' + b64encode(new TextEncoder().encode(plain))
   }
   const iv = globalThis.crypto.getRandomValues(new Uint8Array(12))
   const plainBytes = new TextEncoder().encode(plain)
@@ -79,8 +80,8 @@ export async function encryptSecret(plain: string): Promise<string | null> {
 }
 
 /** 解密 encryptSecret 产出的字符串;空串原样返回。格式非法时抛错。
- *  历史遗留的 'b64:' 值保留读取兼容(老版本写入的等价明文数据还能用,无需
- *  crypto.subtle);新写入已禁止该格式(见 encryptSecret)。 */
+ *  'v1:' 需 crypto.subtle(密钥解密);'b64:' 直接解码(非安全上下文写入的现役
+ *  格式 + 历史遗留值,均无需 crypto.subtle,重启后跨上下文可读)。 */
 export async function decryptSecret(enc: string): Promise<string> {
   if (!enc) return ''
   if (enc.startsWith('b64:')) {

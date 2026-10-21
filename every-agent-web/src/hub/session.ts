@@ -106,13 +106,6 @@ class HubSession {
    */
   private hydratePromise: Promise<void> | null = null
 
-  /**
-   * 会话级(非持久化)worker apiKey 明文:非安全上下文(http,无 crypto.subtle)下
-   * encryptSecret 失败 → 凭据不落盘,仅内存保留本会话可用(审计 M-9)。
-   * saveConnectionConfig 的 allowlist 序列化保证它永不进入 localStorage。
-   */
-  private readonly sessionApiKeys = new Map<string, string>()
-
   /** 目录连接状态。 */
   state: HubState = 'idle'
   rateLimited = false
@@ -251,7 +244,7 @@ class HubSession {
         online: this.workersOnline.get(workerId) ?? false,
         hostname: this.workerHostnames.get(workerId) || undefined,
         enabled: cred?.enabled ?? false,
-        hasApiKey: Boolean(cred?.apiKeyEnc) || this.sessionApiKeys.has(workerId),
+        hasApiKey: Boolean(cred?.apiKeyEnc),
         connecting: this.connectingWorkers.get(workerId) ?? false,
         connected: Boolean(this.workersOnline.get(workerId)) && this.workerClients.get(workerId)?.state === 'open',
         error: this.workerErrors.get(workerId) ?? null,
@@ -307,11 +300,11 @@ class HubSession {
   }
 
   async applyConfig(config: HubConnectionConfig): Promise<void> {
-    // hubKey 与 apiKey 同策略(审计 M-9):加密成功才落盘。非安全上下文(http,无
-    // crypto.subtle)加密失败 → hubKeyEnc 置空、凭据不落盘,本次会话内存使用
-    // (设置页对非安全上下文给出「凭据不会保存」提示)。
+    // hubKey 与 apiKey 同策略:安全上下文存 'v1:' AES-GCM 密文,非安全上下文
+    // (http,无 crypto.subtle)回退 'b64:' 混淆 —— 凭据均持久化,设置页对非安全
+    // 上下文提示「建议使用 https 或桌面版」。
     const enc = config.hubKey ? await encryptSecret(config.hubKey) : ''
-    const next: HubConnectionConfig = { ...config, hubKeyEnc: enc ?? '' }
+    const next: HubConnectionConfig = { ...config, hubKeyEnc: enc }
     saveConnectionConfig(next)
     this.config = next
     await this.reconnect()
@@ -326,8 +319,8 @@ class HubSession {
     await this.reconnect()
   }
 
-  /** 为指定 worker 保存 apiKey(加密)并(重)建其连接。
-   *  非安全上下文(http)下加密失败:凭据不落盘,仅本会话内存可用(sessionApiKeys)。 */
+  /** 为指定 worker 保存 apiKey(加密落盘)并(重)建其连接。
+   *  非安全上下文(http)下回退 b64 混淆,凭据同样持久化(设置页提示建议 https)。 */
   async setWorkerApiKey(workerId: string, apiKey: string): Promise<WorkerConnectResult> {
     if (!this.config) {
       return { ok: false, error: { code: 'NOT_CONFIGURED', detail: 'hub 尚未配置' } }
@@ -335,14 +328,8 @@ class HubSession {
     const plain = apiKey.trim()
     const k = await ownerKey(plain)
     const enc = await encryptSecret(plain)
-    if (enc === null) {
-      // 非安全上下文:不持久化凭据 —— 密文留空,明文仅本会话内存使用。
-      this.sessionApiKeys.set(workerId, plain)
-    } else {
-      this.sessionApiKeys.delete(workerId)
-    }
     const workers = this.config.workers.filter((w) => w.workerId !== workerId)
-    workers.push({ workerId, apiKeyEnc: enc ?? '', enabled: true, ownerKey: k })
+    workers.push({ workerId, apiKeyEnc: enc, enabled: true, ownerKey: k })
     this.config = { ...this.config, workers }
     saveConnectionConfig(this.config)
     // apiKey 变更即命名空间(K)变更:若已用旧 key 建连,必须先关闭再按新 key 重建,
@@ -367,7 +354,7 @@ class HubSession {
       return { ok: false, error: { code: 'NOT_CONFIGURED', detail: 'hub 尚未配置' } }
     }
     const cred = this.config.workers.find((w) => w.workerId === workerId)
-    if (!cred || !(cred.apiKeyEnc || this.sessionApiKeys.get(workerId))) {
+    if (!cred || !cred.apiKeyEnc) {
       return { ok: false, error: { code: 'NO_CREDENTIAL', detail: '未填写该 worker 的 apiKey' } }
     }
     const workers = this.config.workers.map((w) =>
@@ -391,7 +378,6 @@ class HubSession {
   removeWorker(workerId: string): void {
     if (!this.config) return
     this.closeWorker(workerId)
-    this.sessionApiKeys.delete(workerId)
     const workers = this.config.workers.filter((w) => w.workerId !== workerId)
     this.config = { ...this.config, workers }
     saveConnectionConfig(this.config)
@@ -570,12 +556,6 @@ class HubSession {
         const originalOnline = this.workersOnline.get(originalWorkerId) ?? false
         if (!originalOnline) {
           cred.workerId = workerId
-          // 会话级明文(非安全上下文本会话保存的 apiKey)随身份一并迁移。
-          const sessionKey = this.sessionApiKeys.get(originalWorkerId)
-          if (sessionKey !== undefined) {
-            this.sessionApiKeys.delete(originalWorkerId)
-            this.sessionApiKeys.set(workerId, sessionKey)
-          }
           saveConnectionConfig(config)
           console.info('[hub] worker 身份变更,已复用凭证:旧 workerId → ' + workerId)
         } else {
@@ -588,21 +568,19 @@ class HubSession {
     this.connectingWorkers.set(workerId, true)
     this.workerErrors.delete(workerId)
     this.notifyDirectory()
-    // apiKey 解析:优先本会话内存明文(非安全上下文下保存、未落盘的凭据),
-    // 其次解密落盘密文;都拿不到(密文为空/解密失败)则记错误并放弃建连。
-    let apiKey = this.sessionApiKeys.get(workerId) ?? ''
-    if (!apiKey) {
-      try {
-        apiKey = await decryptSecret(cred.apiKeyEnc)
-      } catch (error) {
-        this.workerErrors.set(workerId, {
-          code: 'CREDENTIAL_DECRYPT',
-          detail: error instanceof Error ? error.message : 'apiKey 解密失败',
-        })
-        this.connectingWorkers.delete(workerId)
-        this.notifyDirectory()
-        return
-      }
+    // apiKey 解析:解密落盘密文(安全上下文为 AES-GCM 密文,非安全上下文为 b64
+    // 混淆);密文为空则跳过,解密失败则记错误并放弃建连。
+    let apiKey = ''
+    try {
+      apiKey = await decryptSecret(cred.apiKeyEnc)
+    } catch (error) {
+      this.workerErrors.set(workerId, {
+        code: 'CREDENTIAL_DECRYPT',
+        detail: error instanceof Error ? error.message : 'apiKey 解密失败',
+      })
+      this.connectingWorkers.delete(workerId)
+      this.notifyDirectory()
+      return
     }
     if (!apiKey) {
       this.connectingWorkers.delete(workerId)

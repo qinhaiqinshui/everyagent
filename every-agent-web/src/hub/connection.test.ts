@@ -1,12 +1,12 @@
 /**
- * hub 连接配置凭据策略测试(计划步骤 12「web 端凭据策略统一」,审计 M-9):
+ * hub 连接配置凭据策略测试(web 端凭据策略统一):
  *
  * - 落盘 allowlist:saveConnectionConfig 剥离运行时明文 hubKey,localStorage 只存
  *   {hubUrl, hubKeyEnc, workers} 结构(hubKey 为密文);
  * - hubKeyEnc 加密保存/读取 roundtrip:load 只有密文,hydrate 解密回填运行时明文;
  * - 旧明文结构({hubUrl, hubKey, workers})一次性自动迁移:加密、重写存储、删除明文
  *   字段,已有 workers[].apiKeyEnc 结构不动,连接配置不丢(hubUrl/workers 保留);
- * - 非安全上下文:迁移失败不阻断 —— 明文本会话内存使用,存储保持原样(下次再试)。
+ * - 非安全上下文:迁移同样完成 —— 落盘 b64 混淆密文(凭据仍持久化)。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { decryptSecret, encryptSecret } from '@/settings/credentialsCrypto'
@@ -114,7 +114,7 @@ describe('hubKeyEnc 加密保存/读取 roundtrip', () => {
   it('保存(加密)→ 新页面 load(只有密文)→ hydrate(解密回填运行时明文)', async () => {
     // 保存路径:明文经 encryptSecret 加密为 hubKeyEnc 后落盘(与 applyConfig 同策略)。
     const enc = await encryptSecret('roundtrip-hub-key')
-    saveConnectionConfig({ hubUrl: HUB_URL, hubKey: 'roundtrip-hub-key', hubKeyEnc: enc!, workers: [] })
+    saveConnectionConfig({ hubUrl: HUB_URL, hubKey: 'roundtrip-hub-key', hubKeyEnc: enc, workers: [] })
     expect(storage.getItem(STORAGE_KEY)!).not.toContain('roundtrip-hub-key')
 
     // 新页面载入:同步 load 不做解密,明文为空、密文完整。
@@ -170,17 +170,20 @@ describe('旧明文 hubKey 自动迁移(一次性)', () => {
     expect(again.hubKeyEnc).toMatch(/^v1:/)
   })
 
-  it('非安全上下文:迁移失败不阻断 —— 明文本会话可用,存储保持原样(下次再试)', async () => {
+  it('非安全上下文:迁移同样完成 —— 落盘 b64 混淆密文,明文字段删除', async () => {
     seedLegacy()
     await withoutSubtle(async () => {
       const hydrated = (await hydrateConnectionConfig())!
-      // 回退:明文本次会话内存使用。
+      // 迁移完成:明文回填运行时,密文为 b64 混淆(凭据仍持久化)且可解回。
       expect(hydrated.hubKey).toBe('legacy-plain-key')
-      expect(hydrated.hubKeyEnc).toBe('')
-      // 存储未被改写:旧明文结构原样保留,供下次(安全上下文)再试。
+      expect(hydrated.hubKeyEnc).toMatch(/^b64:/)
+      expect(await decryptSecret(hydrated.hubKeyEnc)).toBe('legacy-plain-key')
+      // 存储已重写:明文字段删除,hubUrl/workers 保留(连接不丢)。
+      const raw = storage.getItem(STORAGE_KEY)!
+      expect(raw).not.toContain('legacy-plain-key')
       const parsed = readStored()
-      expect(parsed.hubKey).toBe('legacy-plain-key')
-      expect(parsed.hubKeyEnc).toBeUndefined()
+      expect(parsed.hubKey).toBeUndefined()
+      expect(parsed.hubUrl).toBe(HUB_URL)
     })
   })
 })

@@ -166,8 +166,8 @@ export default function SettingsPanel() {
   const [restartHint, setRestartHint] = React.useState('')
   const [restartTone, setRestartTone] = React.useState<'ok' | 'error'>('ok')
   const isDesktopNotification = getNotificationAdapter()?.source === 'desktop'
-  /** 非安全上下文(http:// 非 localhost,无 crypto.subtle):凭据无法加密 → 保存路径
-   *  一律不落盘(本次会话内存使用),页面给出可见提示(审计 M-9)。 */
+  /** 非安全上下文(http:// 非 localhost,无 crypto.subtle):凭据回退 b64 混淆落盘
+   *  (非加密,仍会保存),页面提示建议使用 https 或桌面版。 */
   const insecureCredentialContext = !isSecretCryptoAvailable()
 
   const connected = hub.state === 'open'
@@ -364,7 +364,7 @@ export default function SettingsPanel() {
             </div>
             {insecureCredentialContext ? (
               <div style={credentialContextWarningStyle}>
-                当前为非安全上下文(http),凭据不会保存,请使用 https 或桌面版。
+                当前为非安全上下文(http),凭据将以混淆方式保存在本地(非加密),建议使用 https 或桌面版。
               </div>
             ) : null}
             <div style={actionsStyle}>
@@ -413,7 +413,7 @@ export default function SettingsPanel() {
             </p>
             {insecureCredentialContext ? (
               <div style={credentialContextWarningStyle}>
-                当前为非安全上下文(http),凭据不会保存,请使用 https 或桌面版。
+                当前为非安全上下文(http),凭据将以混淆方式保存在本地(非加密),建议使用 https 或桌面版。
               </div>
             ) : null}
             <WorkerList />
@@ -709,7 +709,7 @@ const connectionErrorStyle: React.CSSProperties = {
   lineHeight: 1.5,
 }
 
-/** 非安全上下文(http)凭据不落盘提示:amber 描边警示框,复用连接错误框的版式。 */
+/** 非安全上下文(http)凭据混淆落盘提示:amber 描边警示框,复用连接错误框的版式。 */
 const credentialContextWarningStyle: React.CSSProperties = {
   fontSize: 'var(--text-xs)',
   color: 'var(--accent-amber)',

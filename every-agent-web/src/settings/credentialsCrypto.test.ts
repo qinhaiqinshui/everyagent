@@ -1,10 +1,11 @@
 /**
- * credentialsCrypto 行为护栏(计划步骤 12「web 端凭据策略统一」,审计 M-9):
+ * credentialsCrypto 行为护栏(web 端凭据策略统一):
  *
  * - 安全上下文:encryptSecret/decryptSecret AES-GCM roundtrip('v1:' 前缀,密文不含明文,
  *   随机 IV 保证同明文两次加密结果不同);
- * - 非安全上下文(无 crypto.subtle):encryptSecret 返回 null —— 不再回退 'b64:' 明文落盘;
- * - 解密侧保留历史遗留 'b64:' 值的读取兼容(老用户数据还能用,且不需要 crypto.subtle)。
+ * - 非安全上下文(无 crypto.subtle):encryptSecret 回退 'b64:' 混淆落盘(凭据仍持久化,
+ *   可解回且解密无需 crypto.subtle);
+ * - 'b64:' 值解密天然兼容(非安全上下文写入的现役格式 + 历史遗留值,均无需 crypto.subtle)。
  *
  * 环境说明:Node ≥ 20 自带 globalThis.crypto(WebCrypto);vitest 环境为 node,无
  * localStorage,用内存 stub(密钥与密文同存一处,与浏览器行为一致)。
@@ -95,11 +96,16 @@ describe('安全上下文:AES-GCM 加解密 roundtrip', () => {
   })
 })
 
-describe('非安全上下文(无 crypto.subtle):加密拒绝,不再产出 b64 明文', () => {
-  it('encryptSecret 返回 null(调用方据此不持久化凭据)', async () => {
+describe('非安全上下文(无 crypto.subtle):回退 b64 混淆落盘', () => {
+  it('encryptSecret 产出 b64: 前缀混淆值,可解回且明文不直接出现', async () => {
     await withoutSubtle(async () => {
       expect(isSecretCryptoAvailable()).toBe(false)
-      expect(await encryptSecret('plain-http-key')).toBeNull()
+      const enc = await encryptSecret('plain-http-key')
+      // 混淆落盘:凭据仍持久化,带 b64: 前缀,明文不以明文形态出现。
+      expect(enc).toMatch(/^b64:/)
+      expect(enc).not.toContain('plain-http-key')
+      // 解密无需 crypto.subtle(非安全上下文自己写入的值自己能读)。
+      expect(await decryptSecret(enc)).toBe('plain-http-key')
     })
   })
 
@@ -110,7 +116,7 @@ describe('非安全上下文(无 crypto.subtle):加密拒绝,不再产出 b64 �
   })
 })
 
-describe('历史遗留 b64 值:解密侧读取兼容(新写入已禁止)', () => {
+describe('b64 值解密兼容(非安全上下文写入的现役格式 + 历史遗留值)', () => {
   it('解密旧版写入的 b64: 值无需 crypto.subtle(非安全上下文也能用老数据)', async () => {
     await withoutSubtle(async () => {
       const legacy = 'b64:' + btoa('legacy-worker-key')
