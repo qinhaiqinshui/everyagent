@@ -2,6 +2,7 @@ package dev.everyagent.worker.plugin.scanner;
 
 import dev.everyagent.contract.json.Json;
 import dev.everyagent.worker.config.WorkerProperties;
+import dev.everyagent.worker.plugin.PluginDirs;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -23,6 +24,10 @@ import java.util.stream.Stream;
  * source={@code "external"}。{@code enabled=false} 的整目录跳过不加载
  * (外部插件「装上但默认禁用」即靠它声明);jar 产物约定放在各插件目录的
  * {@code lib/} 下,由 PluginLoader 统一加载时解析。
+ *
+ * <p><b>卸载墓碑自愈(§8.5)</b>:目录内含 {@code PluginDirs#UNINSTALL_TOMBSTONE}
+ * (.uninstall-pending)的 = 上次卸载被句柄占用残留 → 先尝试递归删除;仍被占用则
+ * WARN 跳过,绝不加载已决定卸载的插件,卸载意图跨重启最终一致。
  *
  * <p>根目录不存在时 INFO 日志并返回空列表,不报错。
  */
@@ -57,6 +62,26 @@ public class ExternalPluginScanner implements PluginScanner {
 
         List<ScannedPlugin> result = new ArrayList<>();
         for (Path dir : subDirs) {
+            // 卸载墓碑(§8.5):上次卸载被占用残留的目录 → 启动期自愈递归删除;
+            // 仍删不掉(依旧被占用)则 WARN 跳过 —— 绝不加载已决定卸载的插件。
+            if (PluginDirs.hasUninstallTombstone(dir)) {
+                try {
+                    PluginDirs.deleteRecursive(dir);
+                    log.info("[plugins-external] 已清理卸载残留目录: {}", dir);
+                } catch (IOException e) {
+                    // 删除尝试会先删掉墓碑与全部子文件、最后卡在被占用的目录上 —— 重写墓碑,
+                    // 保住「已决定卸载」的落盘事实,下次启动自愈链不断(§8.5)。
+                    try {
+                        PluginDirs.writeUninstallTombstone(dir);
+                    } catch (IOException tombstoneEx) {
+                        log.warn("[plugins-external] 卸载墓碑重写失败(下次启动可能残留待清理目录): {}",
+                                dir);
+                    }
+                    log.warn("[plugins-external] 卸载残留目录仍被占用,跳过加载(下次启动再试清理): {} ({})",
+                            dir, e.getMessage());
+                }
+                continue;
+            }
             Path manifest = dir.resolve("plugin.json");
             if (!Files.isRegularFile(manifest)) {
                 // 无 plugin.json 的目录不是插件,跳过

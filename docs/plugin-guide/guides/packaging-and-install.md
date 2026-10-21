@@ -210,11 +210,12 @@ Expand-Archive -Path .\my-tool-0.1.0.eap -DestinationPath "$HOME\.everyagent\plu
 
 ### 4.1 `plugin.uninstall`
 
-参数 `{ "pluginId": "<id>" }`（`PluginRpcMethods.java:131-154`）：校验 `<pluginsRoot>/<pluginId>` 是目录后递归删除（`deleteRecursive`，`:352-361`）。
+参数 `{ "pluginId": "<id>" }`（`PluginRpcMethods.java`）：校验 `<pluginsRoot>/<pluginId>` 是目录后，**先写卸载墓碑 `.uninstall-pending`**（一行卸载时间戳），再递归删除——删除成功墓碑随目录一起消失。
 
 - 缺参：`BAD_PARAMS` `缺少参数 pluginId`（`:116`）；
 - 目录不存在：`NOT_FOUND` `插件目录不存在: <id>`（`:122`）；
 - 成功：`{ "uninstalled": true, "pluginId": "<id>", "message": "插件已卸载，重启 worker 后生效" }`（`:131-135`，文案逐字）。
+- **目录被占用（Windows 常见）**：`INTERNAL`，文案 = `卸载失败: <原始异常>。插件目录: <路径>。常见原因: 有进程正以该目录为工作目录…占用进程退出后重试卸载即可;worker 重启时也会自动清理该残留目录`。机理：Windows 上进程把 CWD 停在插件目录（如插件 `activate()` 里用 `nativeExec()` 起的长驻后台进程、或手工开在该目录的终端）会锁死**目录本身**——文件能删、空目录删不掉，报「另一个程序正在使用此文件」。此时目录内已留有墓碑 `.uninstall-pending`：`ExternalPluginScanner` 下次 worker 启动扫描时见墓碑即递归删除自愈（仍被占用则 WARN 跳过、绝不加载该插件），占用进程退出后重发 `plugin.uninstall` 也可立即删净。插件作者侧的预防：`nativeExec()` 的 cwd **不得**传插件自身目录，用工作区或临时目录（worker 已在 `spawnNative` 加护栏拒绝）。
 
 **顶层目录 ≠ 清单 id 的 NOT_FOUND 陷阱**：uninstall 拿 `pluginId` 去 `pluginsRoot.resolve(pluginId)` 找**目录**（`:120`）。如果你用手工 zip 打的包顶层目录名 ≠ `plugin.json` 的 id（extractEap 解出来的目录名 = 顶层目录名，但登记的 id 以 `plugin.json` 为准），之后按 id 卸载就会 `插件目录不存在`。**`pack` 已保证顶层 = id**，自打 zip 时务必对齐。
 
