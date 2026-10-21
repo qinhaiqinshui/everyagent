@@ -2,7 +2,8 @@
  * 设置页的插件贡献段（`ui.settings_sections` 扩展点）。
  *
  * 宿主订阅扩展点版本号（插件 activate() 晚于首屏），按 order 升序渲染在内置段之后。
- * 每段包一层与内置段同款的 `<section>`（标题取 def.title），组件无 props。
+ * 每段包一层与内置段同款的 `<section>`（标题取 def.title，锚点 data-settings-section-id=def.id，
+ * 扫描式目录据此自动纳入插件段），组件无 props。
  */
 import React from 'react'
 import { pluginDispatcher } from '@/plugin/PluginDispatcher'
@@ -26,7 +27,7 @@ export default function PluginSettingsSections() {
   return (
     <>
       {sections.map((def) => (
-        <section key={def.id} style={settingsSectionStyle}>
+        <section key={def.id} style={settingsSectionStyle} data-settings-section-id={def.id}>
           <h3 style={settingsSectionTitleStyle}>{def.title}</h3>
           <def.Component />
         </section>
