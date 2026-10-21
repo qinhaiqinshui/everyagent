@@ -4,9 +4,18 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/icon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      生产 CSP(随构建发布):script-src 不含 unsafe-inline/unsafe-eval(生产 Vite 产物
+      无内联脚本,保留 blob: 供插件加载器 blob URL import());connect-src 收敛为
+      ws:/wss:(前端唯一真实出站是 hub WebSocket,无明文 http/https fetch)。
+      style-src 的 unsafe-inline 为 antd/React 内联 style 所需,勿动。
+      开发态由 vite.config.ts 的 csp-dev-relax 插件(apply: 'serve')在 serve 时把
+      script-src 放宽为含 unsafe-inline/unsafe-eval(react-refresh preamble 需要),
+      构建输出不受影响。
+    -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' ws: wss: http: https:; frame-src 'self' blob:;"
+      content="default-src 'self'; script-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' ws: wss:; frame-src 'self' blob:;"
     />
     <title>Every Agent</title>
   </head>
