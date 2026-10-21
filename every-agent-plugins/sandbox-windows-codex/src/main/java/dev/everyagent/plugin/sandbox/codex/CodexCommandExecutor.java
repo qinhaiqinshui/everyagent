@@ -206,7 +206,8 @@ public final class CodexCommandExecutor {
             return sessionFailure(options, command, e);
         }
         LOG.log(System.Logger.Level.INFO, "[exec] codex rc={0} timedOut={1} cmd={2}",
-                new Object[] { run.exitCode(), run.timedOut(), ExecResults.truncate(command, 200) });
+                new Object[] { run.exitCode(), run.timedOut(),
+                        ExecResults.truncate(SecretPatterns.maskSecrets(command), 200) });
         if (outcomes != null) {
             outcomes.recordShellExit(shell, command, run.exitCode(), run.timedOut());
         }
@@ -242,7 +243,7 @@ public final class CodexCommandExecutor {
             SessionRun run = runInSession(command, options);
             LOG.log(System.Logger.Level.INFO,
                     "[exec] codex 沙箱自愈成功,重试通过 cmd={0}",
-                    ExecResults.truncate(command, 200));
+                    ExecResults.truncate(SecretPatterns.maskSecrets(command), 200));
             if (outcomes != null) {
                 outcomes.recordShellExit(shell, command, run.exitCode(), run.timedOut());
             }
@@ -250,7 +251,7 @@ public final class CodexCommandExecutor {
         } catch (IOException | RuntimeException retry) {
             LOG.log(System.Logger.Level.WARNING,
                     "[exec] codex 沙箱自愈后重试仍失败 cmd={0}",
-                    ExecResults.truncate(command, 200) + " | " + retry);
+                    ExecResults.truncate(SecretPatterns.maskSecrets(command), 200) + " | " + retry);
             // 与通用失败路径同口径：物化缓存可能失真，丢弃后下一条命令重做物化
             RunnerMaterializer.invalidateRunnerClasspath(options.codexHome());
             return "[codex sandbox 执行失败] 账户/凭据自愈后重试仍失败: " + messageOf(retry);
@@ -316,7 +317,7 @@ public final class CodexCommandExecutor {
     /** 通用会话失败：日志 + 物化缓存失效 + 可读错误（原 execute 失败路径）。 */
     private String sessionFailure(CodexSandboxOptions options, String command, Exception e) {
         LOG.log(System.Logger.Level.WARNING, "[exec] codex 会话失败 cmd={0}",
-                ExecResults.truncate(command, 200) + " | " + e);
+                ExecResults.truncate(SecretPatterns.maskSecrets(command), 200) + " | " + e);
         // 物化缓存可能失真（.sandbox-bin 被外部清理/篡改）：丢弃缓存，
         // 下一条命令重做物化自愈（代价仅一次 ~150ms 校验）
         RunnerMaterializer.invalidateRunnerClasspath(options.codexHome());

@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
@@ -16,9 +17,13 @@ import java.util.regex.Pattern;
  * 都能直接读到宿主 shell 里散落的 API key，再原样写进工具输出、事件日志与模型上下文。
  * 环境变量因此是一条真实的凭据侧信道，与「工作区外路径」同级别，必须有一道统一闸门。
  *
- * <p>本类<b>只负责环境变量清理</b>（进程边界安全），不包含任何文本输出掩码/脱敏逻辑——
- * 后者已全部住在 {@code secret-redaction} 插件内（{@code SecretRedactor}），删除该插件即删除
- * 全部脱敏概念与功能，核心不持有脱敏逻辑也不依赖该插件。
+ * <p>本类负责两类<b>常驻</b>凭据纪律（进程边界安全，不随 {@code secret-redaction} 插件装卸而变化）：
+ * ①环境变量清理（{@code scrubEnv} 等判定 API）；②<b>日志出口形态掩码</b>（{@link #maskSecrets}，
+ * 架构 §7.17 ③，审计 L-3）——worker 与沙箱插件自身的运维日志（DEBUG HTTP 请求体、
+ * {@code [exec] cmd=} 命令审计）不得原文携带凭据。工具结果/事件流/模型上下文的<b>内容脱敏</b>
+ * （{@code redact}/{@code mask} 等）仍全部住在 {@code secret-redaction} 插件内
+ * （{@code SecretRedactor}），删除该插件即删除全部内容脱敏功能，核心不持有内容脱敏逻辑
+ * 也不依赖该插件。
  *
  * <p>两类规则，各自适用面严格分开（误杀代价与信息泄露代价的权衡）：
  * <ol>
@@ -36,6 +41,7 @@ import java.util.regex.Pattern;
  * {@code RunnerClient} 两处）、sandbox-windows-mic（{@code WindowsSandbox.buildEnvBlock}）、
  * worker（{@code OsSandbox} 两处 {@code ProcessBuilder}、{@code TerminalPtyFactory}）。
  * 进程边界不该由可选扩展决定存在与否，故这些调用点<b>不放在插件里</b>。
+ * {@link #maskSecrets} 同为常驻消费面（日志出口，见其 javadoc）。
  */
 public final class SecretPatterns {
 
@@ -165,6 +171,79 @@ public final class SecretPatterns {
     /** 宿主继承环境的清理版（{@code System.getenv()} 去掉凭据后的副本）。 */
     public static Map<String, String> inheritedEnv() {
         return scrubEnv(System.getenv()).env();
+    }
+
+    /** 日志出口掩码占位符（4 字符——短于全部规则的最小密钥长度，掩码结果不会再命中任何规则，幂等）。 */
+    private static final String MASK = "****";
+
+    /** 整段命中时保留的格式前缀上限（字母数；sk/ghp/xoxb/github 等已知格式前缀均 ≤6）。 */
+    private static final int MASK_PREFIX_LETTERS = 6;
+
+    /**
+     * 对任意文本做凭据形态掩码（架构 §7.17 ③ 日志出口纪律，审计 L-3）。
+     *
+     * <p>与 env 清理共用同一份 {@code RULES} 值形态指纹：命中即掩，未命中原文保留
+     * （零误杀——普通命令/JSON 不会长成 {@code sk-ant-…} 的形状）。整段命中的规则保留
+     * 「≤6 个字母的格式前缀 + 紧随的 {@code -}/{@code _} 分隔符」这一可读形态
+     * （{@code sk-…} → {@code sk-****}、{@code ghp_…} → {@code ghp_****}、
+     * {@code github_pat_…} → {@code github_****}）；字母段未以分隔符收尾的密钥
+     * （AWS {@code AKIA…}、JWT、PEM 标头等）不保留任何字符，整段掩为 {@code ****}。
+     * 带前缀写法（{@code Bearer xxx} / {@code api_key=xxx}，secretGroup&gt;0）只掩
+     * 密钥本体，前缀原样保留便于人读（与 {@code config.get} 的 apiKey 掩码同族思路）。
+     *
+     * <p><b>幂等</b>：占位符 {@code ****} 长度 4，小于全部规则的最小密钥长度
+     * （k=v 形态 8+，Bearer 16+，sk- 类 16+），二次掩码不产生新命中，输出稳定。
+     * 正则静态预编译、逐规则单趟扫描、未命中快速跳过——命令审计日志每条都过，
+     * 开销可控。null/空串原样返回。规则间顺序应用（前一轮的输出是下一轮的输入），
+     * 如 {@code Bearer sk-ant-…} 先被 sk-ant 规则掩为 {@code Bearer sk-****}。
+     *
+     * <p>消费面（常驻，只改写<b>日志字符串</b>，不触碰工具结果/事件流/模型上下文——
+     * 内容脱敏见 secret-redaction 插件）：worker 的 {@code HttpRequestLoggingInterceptor}
+     * （DEBUG 请求体，对话上下文可能含用户粘贴的密钥）、{@code CommandExecutor} 与
+     * sandbox-wsl-ubuntu / sandbox-windows-codex 的 {@code [exec] cmd=} 命令审计
+     * （掩码须在 200 字符截断<b>之前</b>）。
+     */
+    public static String maskSecrets(String text) {
+        if (text == null || text.isEmpty()) {
+            return text;
+        }
+        String result = text;
+        for (Rule rule : RULES) {
+            Matcher m = rule.pattern().matcher(result);
+            if (!m.find()) {
+                continue; // 未命中快速跳过(绝大多数命令/JSON 不含密钥)
+            }
+            StringBuilder sb = new StringBuilder(result.length() + 16);
+            int copied = 0;
+            do {
+                int group = rule.secretGroup();
+                int secretStart = group == 0 ? m.start() : m.start(group);
+                int secretEnd = group == 0 ? m.end() : m.end(group);
+                sb.append(result, copied, secretStart);
+                sb.append(group == 0
+                        ? maskWholeMatch(result.substring(secretStart, secretEnd)) : MASK);
+                copied = secretEnd;
+            } while (m.find());
+            sb.append(result, copied, result.length());
+            result = sb.toString();
+        }
+        return result;
+    }
+
+    /**
+     * 整段命中（secretGroup=0）时的可读前缀保留：仅当开头字母段（≤{@link #MASK_PREFIX_LETTERS}）
+     * 以 {@code -}/{@code _} 分隔符收尾才视为「格式前缀」保留（分隔符一并保留）；
+     * 否则（字母段超长、以数字/其他符号接续、或为空）不保留任何密钥字符，整段 {@code ****}。
+     */
+    private static String maskWholeMatch(String secret) {
+        int n = secret.length();
+        int keep = 0;
+        while (keep < n && keep < MASK_PREFIX_LETTERS && Character.isLetter(secret.charAt(keep))) {
+            keep++;
+        }
+        boolean separator = keep > 0 && keep < n
+                && (secret.charAt(keep) == '-' || secret.charAt(keep) == '_');
+        return separator ? secret.substring(0, keep + 1) + MASK : MASK;
     }
 
     /** 该名字是否属于凭据语义词族（不含豁免表）。 */
