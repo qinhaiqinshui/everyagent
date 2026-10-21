@@ -3,6 +3,7 @@ package dev.everyagent.worker.tools;
 
 import dev.everyagent.plugin.api.execution.ExecContext;
 import dev.everyagent.plugin.api.exception.NotFoundException;
+import dev.everyagent.plugin.api.spi.FileWriteListener;
 import dev.everyagent.plugin.api.tool.PlainTextToolCallResultConverter;
 
 import org.springframework.ai.tool.annotation.Tool;
@@ -233,6 +234,8 @@ public class FileTools {
                 throw new IllegalArgumentException("文件已存在,如需修改请用 update_file");
             }
             fs.writeText(task, agentId, path, finalContent, false);
+            // 写盘成功后锁内回调文件写监听器(before=null:文件此前不存在;架构 §7.15.2)
+            fs.notifyFileWritten(task, agentId, FileWriteListener.TOOL_CREATE_FILE, path, null, finalContent);
         } finally {
             lock.unlock();
         }
@@ -285,6 +288,9 @@ public class FileTools {
             String newContent = fromLf(toLf(content == null ? "" : content), eol);
             String replaced = existing.substring(0, start) + newContent + existing.substring(end);
             fs.writeText(task, agentId, path, replaced, false);
+            // 写盘成功后锁内回调文件写监听器:携带写前/写后<b>全文</b>(update_file 的入参
+            // oldcontent/content 只是被替换的局部片段,轮末 diff 等消费方必须以全文快照为准,架构 §7.15.2)
+            fs.notifyFileWritten(task, agentId, FileWriteListener.TOOL_UPDATE_FILE, path, existing, replaced);
             return "已更新到：" + path;
         } finally {
             lock.unlock();

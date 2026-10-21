@@ -32,10 +32,9 @@ public class FileChangePlugin implements EveryAgentPlugin {
         FileChangeAdvisorProvider provider = new FileChangeAdvisorProvider(services.task());
         services.addRoundClosedListener(provider);
         ctx.registerAdvisorProvider(provider);
-        ctx.registerToolExecutionInterceptor(
-                new FileChangeRecordInterceptor(services.task(), provider));
+        services.addFileWriteListener(new FileChangeRecorder(services.task(), provider));
         ctx.registerRpcMethod("task.fileChanges", this::rpcTaskFileChanges);
-        log.info("[file-change] 已注册 FileChangeRecordInterceptor(per-call 链一阶段记账)"
+        log.info("[file-change] 已注册 FileChangeRecorder(文件写监听一阶段记账)"
                 + " + FileChangeAdvisorProvider(收口) + RoundClosedListener + task.fileChanges RPC");
     }
 

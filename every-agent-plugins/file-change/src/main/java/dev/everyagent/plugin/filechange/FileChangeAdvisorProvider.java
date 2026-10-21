@@ -26,8 +26,8 @@ import java.util.concurrent.ConcurrentHashMap;
  * {@link FileChangeAdvisor} 适配器 + 轮闭合监听器。
  *
  * <p>每 run 新建 FileChangeAdvisor 实例（只剩收口侧）；collector 则由本 provider 维护为<b>任务级共享实例</b>
- * （activeCollectors，key=taskId）——主 agent 与全部子 agent 的记账（per-call 链上行节点
- * {@link FileChangeRecordInterceptor}）与收口（FileChangeAdvisor）定位到同一实例，
+ * （activeCollectors，key=taskId）——主 agent 与全部子 agent 的记账（文件工具写锁内回调
+ * {@link FileChangeRecorder}）与收口（FileChangeAdvisor）定位到同一实例，
  * 子 agent 的文件改动不丢失（由主 agent 收口统一暂存）。收口时把共享 collector 暂存到
  * pendingCollectors 并退役活跃实例（下一 run 重新建，切断跨轮串扰）。当 RoundIndexStore
  * 闭合轮后回调 onRoundsClosed 时，从 Map 取出 collector，按 roundId 写
@@ -67,8 +67,8 @@ public class FileChangeAdvisorProvider implements AdvisorProvider, RoundClosedLi
     @Override
     public Advisor create(AdvisorContext ctx) {
         AgentContext a = ctx.agentEntity();
-        // advisor 只剩收口侧(§7.15.2);写侧记账在 per-call 链上行节点
-        // FileChangeRecordInterceptor(update_file/create_file 成功调用一阶段记账)。
+        // advisor 只剩收口侧(§7.15.2);写侧记账在文件工具写锁内回调
+        // FileChangeRecorder(update_file/create_file 写盘成功一阶段记账)。
         return new FileChangeAdvisor(a, taskService, this);
     }
 

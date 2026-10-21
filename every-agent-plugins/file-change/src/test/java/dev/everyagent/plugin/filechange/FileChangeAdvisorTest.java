@@ -9,7 +9,7 @@ import dev.everyagent.plugin.api.event.EventLogReader;
 import dev.everyagent.plugin.api.execution.ExecContext;
 import dev.everyagent.plugin.api.model.EventEmitter;
 import dev.everyagent.plugin.api.model.ModelConfig;
-import dev.everyagent.plugin.api.spi.ToolOutcomeLog;
+import dev.everyagent.plugin.api.spi.FileWriteListener;
 import dev.everyagent.plugin.api.task.RoundClosedInfo;
 import dev.everyagent.plugin.api.task.StoredTaskInfo;
 import dev.everyagent.plugin.api.task.TaskRuntime;
@@ -45,17 +45,20 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * {@link FileChangeAdvisor}(收口侧)+ {@link FileChangeRecordInterceptor}(per-call 链上行一阶段
+ * {@link FileChangeAdvisor}(收口侧)+ {@link FileChangeRecorder}(文件写监听一阶段
  * 记账)回归测试,架构 §7.15.2。
  *
- * <p>修复的 bug(两枚,既往两阶段确认时代引入,一阶段化后口径不变):
+ * <p>修复的 bug(三枚,既往两阶段确认时代引入,一阶段化后口径不变):
  * <ul>
  *   <li><b>失败写不记账</b>:「文件已存在」「oldcontent 不唯一」「授权拒绝」等失败调用
- *       (工具抛异常,回灌 [工具执行失败] 前缀文本)不落成假变更——链上行按成败判定,
- *       失败即丢弃(见 {@link FileChangeRecordInterceptorTest})。</li>
- *   <li><b>子 agent 共享 collector</b>:主/子 agent 经 per-call 链上行记账到 provider 的
+ *       (工具抛异常,回灌 [工具执行失败] 前缀文本)不落成假变更——写盘成功才回调监听器,
+ *       失败即无回调(见 {@link FileChangeRecorderTest})。</li>
+ *   <li><b>子 agent 共享 collector</b>:主/子 agent 经写监听记账到 provider 的
  *       同一任务级 collector,来源按 agentId==mainAgentId 标注 MAIN/SUB_AGENT,主 agent
  *       最后一轮(无工具调用)统一收口,轮闭合分片含子 agent 的文件改动。</li>
+ *   <li><b>before/after 必须是文件级全文</b>:update_file 入参 oldcontent/content 只是
+ *       被替换的片段,同文件多次写聚合「首条 before + 末条 after」若取入参片段会把两段
+ *       不相干片段拼 diff(见 {@link FileChangeRecorderTest#sameFileTwoWritesAggregateFullSnapshots})。</li>
  * </ul>
  *
  * <p>收口时序契约:工具轮(模型流含 toolCalls)框架必继续递归,收口延后;主 agent 末轮
@@ -63,7 +66,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * (宁漏记)。
  *
  * <p>脚手架风格参考 {@code AdaptiveMaxTokensAdvisorTest}:手写桩链(免 Mockito),
- * §14.9 插件测试零 worker 依赖;账本用真实 {@link ToolOutcomeLog}。
+ * §14.9 插件测试零 worker 依赖。
  */
 class FileChangeAdvisorTest {
 
@@ -74,9 +77,9 @@ class FileChangeAdvisorTest {
     @Test
     void chainUpstreamRecordThenMainFinalizeWritesShardWithSubAgentChanges() throws Exception {
         TaskService taskService = taskService();
-        ToolOutcomeLog outcomes = new ToolOutcomeLog();
         FileChangeAdvisorProvider provider = new FileChangeAdvisorProvider(taskService);
-        FileChangeRecordInterceptor recorder = new FileChangeRecordInterceptor(taskService, provider);
+        FileChangeRecorder recorder = new FileChangeRecorder(taskService, provider);
+        ExecContext exec = runtime();
         FileChangeAdvisor main = new FileChangeAdvisor(agent(MAIN), taskService, provider);
         FileChangeAdvisor sub = new FileChangeAdvisor(agent(SUB), taskService, provider);
 
@@ -85,26 +88,22 @@ class FileChangeAdvisorTest {
         StepVerifier.create(sub.adviseStream(request(), chain(toolCallChunk("call_s", "create_file",
                 "{\"path\":\"/b.md\",\"content\":\"B\"}"))))
                 .expectNextCount(1).verifyComplete();
-        // 工具真实执行完毕 → per-call 链上行一阶段记账(成功,落共享 collector)
-        outcomes.recordCallOutcome("call_s", false);
-        recorder.invoke(callCtx("call_s", "create_file",
-                "{\"path\":\"/b.md\",\"content\":\"B\"}", SUB, outcomes), ok("已创建并保存到：/b.md"));
+        // 工具真实执行完毕(写盘成功) → 写锁内回调监听器一阶段记账(落共享 collector)
+        recorder.onFileWritten(exec, SUB, FileWriteListener.TOOL_CREATE_FILE, "/b.md", null, "B");
         assertEquals(1, provider.activeCollector(TASK).buildSummaries().size(),
                 "子 agent 成功的 /b.md 已记入共享 collector");
 
-        // 主 agent 工具轮:update /a.md(只识别工具轮,记账在链上行;此刻工具尚未执行,
+        // 主 agent 工具轮:update /a.md(只识别工具轮,记账在工具写盘回调;此刻工具尚未执行,
         // collector 还没有主 agent 的记录)
         StepVerifier.create(main.adviseStream(request(), chain(toolCallChunk("call_m", "update_file",
-                "{\"path\":\"/a.md\",\"oldcontent\":\"旧\",\"content\":\"新\"}"))))
+                "{\"path\":\"/a.md\",\"oldcontent\":\"旧片段\",\"content\":\"新片段\"}"))))
                 .expectNextCount(1).verifyComplete();
         assertEquals(1, provider.activeCollector(TASK).buildSummaries().size(),
                 "模型流时刻工具未执行,不记账");
         FileChangesCollector active = provider.activeCollector(TASK);
-        // 工具执行完毕 → 链上行记账(MAIN);随后主 agent 末轮(纯文本)收口
-        outcomes.recordCallOutcome("call_m", false);
-        recorder.invoke(callCtx("call_m", "update_file",
-                "{\"path\":\"/a.md\",\"oldcontent\":\"旧\",\"content\":\"新\"}", MAIN, outcomes),
-                ok("已更新到：/a.md"));
+        // 工具执行完毕(写盘成功,携带写前/写后全文) → 记账(MAIN);随后主 agent 末轮(纯文本)收口
+        recorder.onFileWritten(exec, MAIN, FileWriteListener.TOOL_UPDATE_FILE, "/a.md",
+                "文件全文(旧)", "文件全文(新)");
         assertSame(active, provider.activeCollector(TASK), "收口前共享实例不变(工具轮不收口)");
         StepVerifier.create(main.adviseStream(request(), chain(textChunk("done"))))
                 .expectNextCount(1).verifyComplete();
@@ -124,18 +123,13 @@ class FileChangeAdvisorTest {
     @Test
     void failedWriteLeavesEmptyRunAndNoShard() throws Exception {
         TaskService taskService = taskService();
-        ToolOutcomeLog outcomes = new ToolOutcomeLog();
         FileChangeAdvisorProvider provider = new FileChangeAdvisorProvider(taskService);
-        FileChangeRecordInterceptor recorder = new FileChangeRecordInterceptor(taskService, provider);
         FileChangeAdvisor main = new FileChangeAdvisor(agent(MAIN), taskService, provider);
 
-        // create_file 失败(文件已存在 → 前缀文本):链上行丢弃,不产生假变更
+        // create_file 失败(文件已存在 → 抛异常,无写盘):监听器不回调,不产生假变更
         StepVerifier.create(main.adviseStream(request(), chain(toolCallChunk("call_f", "create_file",
                 "{\"path\":\"/t.txt\",\"content\":\"1\"}"))))
                 .expectNextCount(1).verifyComplete();
-        recorder.invoke(callCtx("call_f", "create_file",
-                "{\"path\":\"/t.txt\",\"content\":\"1\"}", MAIN, outcomes),
-                ok("[工具执行失败] 文件已存在,如需修改请用 update_file"));
 
         assertEquals(0, provider.activeCollector(TASK).buildSummaries().size(),
                 "失败的 create_file 不得记为文件变更");
@@ -170,12 +164,10 @@ class FileChangeAdvisorTest {
         TaskService taskService = taskService();
         FileChangeAdvisorProvider provider = new FileChangeAdvisorProvider(taskService);
         FileChangeAdvisor sub = new FileChangeAdvisor(agent(SUB), taskService, provider);
-        FileChangeRecordInterceptor recorder = new FileChangeRecordInterceptor(taskService, provider);
+        FileChangeRecorder recorder = new FileChangeRecorder(taskService, provider);
 
         // 子 agent 记账后自己的末轮(无工具轮):不收口,轮闭合无暂存 → 不写分片
-        recorder.invoke(callCtx("call_s", "create_file",
-                "{\"path\":\"/d.md\",\"content\":\"D\"}", SUB, new ToolOutcomeLog()),
-                ok("已创建并保存到：/d.md"));
+        recorder.onFileWritten(runtime(), SUB, FileWriteListener.TOOL_CREATE_FILE, "/d.md", null, "D");
         StepVerifier.create(sub.adviseStream(request(), chain(textChunk("sub done"))))
                 .expectNextCount(1).verifyComplete();
         Path dir = Files.createTempDirectory("file-change-advisor-test");
@@ -188,13 +180,11 @@ class FileChangeAdvisorTest {
     void cancelledRunNeverFinalizesAndRoundCloseCleansUp() throws Exception {
         TaskService taskService = taskService();
         FileChangeAdvisorProvider provider = new FileChangeAdvisorProvider(taskService);
-        FileChangeRecordInterceptor recorder = new FileChangeRecordInterceptor(taskService, provider);
+        FileChangeRecorder recorder = new FileChangeRecorder(taskService, provider);
 
         // 已记账但流被取消(无末轮收口):残留活跃实例由轮闭合回调清理,不写分片(宁漏记)
-        recorder.invoke(callCtx("call_x", "create_file",
-                "{\"path\":\"/e.md\",\"content\":\"E\"}", MAIN, new ToolOutcomeLog()),
-                ok("已创建并保存到：/e.md"));
-        assertEquals(1, provider.activeCollector(TASK).buildSummaries().size(), "链上行已记账");
+        recorder.onFileWritten(runtime(), MAIN, FileWriteListener.TOOL_CREATE_FILE, "/e.md", null, "E");
+        assertEquals(1, provider.activeCollector(TASK).buildSummaries().size(), "写盘成功已记账");
         Path dir = Files.createTempDirectory("file-change-advisor-test");
         provider.onRoundsClosed(TASK, dir, List.of(new RoundClosedInfo("r_1", 1, 5L, 1)));
         assertFalse(Files.exists(dir.resolve("file-changes").resolve("r_1.json")),
@@ -245,58 +235,6 @@ class FileChangeAdvisorTest {
         Generation gen = new Generation(msg,
                 ChatGenerationMetadata.builder().finishReason("stop").build());
         return new ChatClientResponse(new ChatResponse(List.of(gen)), Map.of());
-    }
-
-    /** per-call 链上行记账桩:next 返回给定结果串(模拟工具真实执行完毕)。 */
-    private static dev.everyagent.plugin.api.spi.ToolExecutionChain ok(String result) {
-        return c -> result;
-    }
-
-    /** per-call ctx 桩:只填拦截器读取的字段(与 FileChangeRecordInterceptorTest 同构,保持本类自包含)。 */
-    private static ToolCallCtx callCtx(String callId, String name, String arguments, String agentId,
-            ToolOutcomeLog outcomes) {
-        return new ToolCallCtx(callId, name, arguments, agentId, outcomes);
-    }
-
-    private static final class ToolCallCtx
-            implements dev.everyagent.plugin.api.spi.ToolExecutionContext {
-        private final AssistantMessage.ToolCall toolCall;
-        private final String agentId;
-        private final ToolOutcomeLog outcomes;
-
-        ToolCallCtx(String callId, String name, String arguments, String agentId,
-                ToolOutcomeLog outcomes) {
-            this.toolCall = new AssistantMessage.ToolCall(callId, "function", name, arguments);
-            this.agentId = agentId;
-            this.outcomes = outcomes;
-        }
-
-        @Override public Prompt prompt() { return null; }
-        @Override public ChatResponse chatResponse() { return null; }
-        @Override public List<AssistantMessage.ToolCall> toolCalls() { return List.of(toolCall); }
-        @Override public AssistantMessage.ToolCall toolCall() { return toolCall; }
-        @Override public org.springframework.ai.tool.ToolCallback toolCallback() { return null; }
-        @Override public String arguments() { return toolCall.arguments(); }
-        @Override public void arguments(String arguments) { }
-        @Override public void synthesize(String result) { }
-        @Override public String synthesizedResult() { return null; }
-        @Override public long startedAt() { return 0; }
-        @Override public void startedAt(long epochMs) { }
-        @Override public ToolOutcomeLog toolOutcomes() { return outcomes; }
-        @Override public String agentId() { return agentId; }
-        @Override public String subjectId() { return TASK; }
-        @Override public String workspaceRoot() { return "/tmp"; }
-        @Override public String workspaceId() { return "w_1"; }
-        @Override public ModelConfig snapshot() { return null; }
-        @Override public EventEmitter emitter() { return e -> e.id(); }
-        @Override public AgentFactory agentFactory() { return null; }
-        @Override public Map<String, Object> metadata() { return Map.of(); }
-        @Override public Path dataDir() { return null; }
-        @Override public boolean terminal() { return false; }
-        @Override public dev.everyagent.plugin.api.interaction.InteractionService interaction() {
-            return null;
-        }
-        @Override public Map<String, AgentContext> agents() { return Map.of(); }
     }
 
     private static AgentContext agent(String agentId) {

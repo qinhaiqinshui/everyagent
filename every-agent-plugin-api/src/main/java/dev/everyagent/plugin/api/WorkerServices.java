@@ -95,6 +95,15 @@ public interface WorkerServices extends TaskServices {
     void addRoundClosedListener(dev.everyagent.plugin.api.task.RoundClosedListener listener);
 
     /**
+     * 注册文件写监听器（插件在 activate 时调用；架构 §7.15.2）。
+     *
+     * <p>worker 文件工具（update_file/create_file）写盘成功后在写锁内回调，
+     * 携带文件级写前/写后<b>全文</b>（非工具入参片段）与 agentId——轮末文件变更
+     * diff 等消费方据此聚合「首条 before + 末条 after」的文件级净状态。
+     */
+    void addFileWriteListener(dev.everyagent.plugin.api.spi.FileWriteListener listener);
+
+    /**
      * 宿主路径 → AI 沙箱内可见路径翻译。
      *
      * <p>经核心 {@code SandboxPathRegistry} 查表翻译;无映射则原样返回(DIRECT 场景

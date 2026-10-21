@@ -88,4 +88,22 @@ class FileChangesCollectorTest {
         assertEquals("SUB_AGENT", changes.get(1).path("source").asString());
         assertEquals("sub1", changes.get(1).path("agentId").asString());
     }
+
+    /**
+     * 同文件多次写聚合「首条 before 全文 + 末条 after 全文 + saveCount」——file-change
+     * 轮分片 diff 正确性的锚点:写入方必须提供文件级全文快照(经 FileWriteListener,
+     * 架构 §7.15.2),不得用 update_file 的入参片段(oldcontent/content 只是局部替换段,
+     * 两段不相干片段拼 diff 会呈错误变更)。
+     */
+    @Test
+    void sameFileSavesKeepFirstBeforeAndLastAfterFullSnapshots() {
+        save("/ch/ch1.md", "全文A", "全文B", "modified");
+        save("/ch/ch1.md", "全文B", "全文C", "modified");
+        var s = c.buildSummaries();
+        assertEquals(1, s.size(), "同文件聚合为一条");
+        assertEquals("全文A", s.get(0).beforeContent(), "before 取首次写前全文");
+        assertEquals("全文C", s.get(0).afterContent(), "after 取末次写后全文");
+        assertEquals(2, s.get(0).saveCount());
+        assertEquals("updated", s.get(0).changeType());
+    }
 }
