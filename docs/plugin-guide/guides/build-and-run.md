@@ -55,16 +55,16 @@ mvn -f every-agent-plugins\<id>\pom.xml package -q             # 静默模式，
 
 插件 pom 的 parent 是 `io.github.qinhaiqinshui:every-agent-plugin-parent:1.0.1`（**插件 SDK parent**，坐标版本即根 pom 的工程版本，见根 pom 的 `<properties><revision>`；pom 里写的是 `${revision}` 表达式，靠 `relativePath ../../every-agent-plugin-parent/pom.xml` 在磁盘上定位，所以插件能脱离根 reactor 单独构建）。Java 版本 / 编码 / 依赖版本管理 / `plugin.json` 打包 / 测试栈全由它提供，所以插件 pom 只剩「坐标 + 自己额外需要的依赖」——通常整个 `<dependencies>` 只有 `every-agent-plugin-api`（**不写 `<version>`**，由 SDK parent 的 `dependencyManagement` 管），**零 worker 依赖**。⚠️ 插件的自身版本与工程版本**不同号**（脚手架默认给新插件 `0.1.0`），所以依赖里**不要写 `${project.version}`**——它解析的是本插件自己的版本。清单与字段逐项见[plugin.json 字段参考](../plugin-manifest.md)与[后端模型总览](../backend/overview.md)。
 
-### 2.2 首次准备：`install` plugin-parent 与 plugin-api（为什么不能省）
+### 2.2 本地 `install` plugin-parent 与 plugin-api（仅 SDK 开发场景 / 失败缓存清理）
 
-`io.github.qinhaiqinshui:every-agent-plugin-parent`（插件 SDK parent）与 `io.github.qinhaiqinshui:every-agent-plugin-api` **首发 Maven Central 之前本地仓库是唯一来源**（发布链已就绪待首发，见仓库 `CONTRIBUTING.md`「发布（维护者）」；首发完成后本节作废）。`-f` 单独构建插件时，Maven 解析这两者只会去**本地仓库**找——新 clone 的机器上没有它们，构建直接失败（Maven 标准报错形态：`Could not resolve artifact io.github.qinhaiqinshui:every-agent-plugin-parent ...`；此前尝试过联网解析的机器还可能残留 `.lastUpdated` 失败缓存，执行下面的 `install` 即一并解决）。所以一次性执行：
+`io.github.qinhaiqinshui:every-agent-plugin-parent`（插件 SDK parent）与 `io.github.qinhaiqinshui:every-agent-plugin-api` **已发布 Maven Central**（首发 1.6.0）——标准构建（仓库内外）直接从 Central 解析，无需本节动作。本节 `install` 只剩两种用途：① **SDK 开发场景**——改了仓库内 SDK 源码，想让插件立即用上本地版本（本地构建覆盖本地仓库里的 Central 版本）；② **清理失败缓存**——在 SDK 发布之前尝试过联网解析的机器，本地仓库可能残留 `.lastUpdated` 失败标记导致 Central 上明明有却仍报 `Could not resolve artifact io.github.qinhaiqinshui:every-agent-plugin-parent ...`，此时执行下面的 `install`（或加 `-U` 强制刷新）一并解决：
 
 ```powershell
 # 仓库根，一次性：把插件 SDK parent 与 API（连同它们的 reactor 上游）装进本地 ~/.m2
 mvn -pl every-agent-plugin-parent,every-agent-plugin-api -am install -DskipTests
 ```
 
-`-pl` 指到 `every-agent-plugin-parent` 与 `every-agent-plugin-api`（都在 reactor 内所以 `-pl` 可用），`-am` 顺带构建其上游。正常环境执行这一次即可；`install` 会写 `~/.m2`，在写受限的环境里见下节替代方案。standalone 形态（仓库外工程）同样依赖这一步——SDK parent 与 API jar 只能这样本地供给，没有第二来源。
+`-pl` 指到 `every-agent-plugin-parent` 与 `every-agent-plugin-api`（都在 reactor 内所以 `-pl` 可用），`-am` 顺带构建其上游；`install` 会写 `~/.m2`，在写受限的环境里见下节替代方案。standalone 形态（仓库外工程）不需要本节——Maven Central 即其依赖来源。
 
 ### 2.3 离线 / 受限环境配方（技巧，非必需）
 

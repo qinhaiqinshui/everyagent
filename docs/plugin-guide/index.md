@@ -88,7 +88,7 @@ worker 侧的判定规则（`every-agent-worker/src/main/java/dev/everyagent/wor
 | bare import 白名单只有 7 项：`react`、`react-dom`、`react/jsx-runtime`、`antd`、`@ant-design/icons`、`react-markdown`、`remark-gfm`，运行时改写为 7 个 `window.__EA_*` 全局 | 同上 §4 |
 | 仓库内插件的 `web/*.ts` 由宿主 `every-agent-web/tsconfig.json` 的 `include` 覆盖，**无需自带 tsconfig** | `every-agent-web/tsconfig.json` |
 | `enable` / `disable` / `install` / `uninstall` 一律**重启 worker 才生效**（无热重载；`deactivate` 仅在 worker 优雅关闭时调用） | `../ARCHITECTURE.md` §8.5 |
-| `@everyagent/plugin-api`（js 与 Java 两侧同号，都随根 pom 的 `<revision>` 单点源走）**双侧待发布**：Java SDK 坐标已定 `io.github.qinhaiqinshui` 且发布链就绪（首发待维护者执行）；npm 侧包已备好待 `npm publish`——仓库外开发当前仍需类型副本 / 本地 `mvn install` | 仓库 `CONTRIBUTING.md`「发布（维护者）」 |
+| Java 侧插件 SDK（4 坐标，`io.github.qinhaiqinshui:every-agent-*`）**已发布 Maven Central**（首发 1.6.0）——仓库内外构建直接从 Central 解析；js 类型包 `@everyagent/plugin-api` 尚未发 npm，web × standalone 开发仍靠 vendor 类型副本（两包随根 pom `<revision>` 同号） | 仓库 `CONTRIBUTING.md`「发布（维护者）」 |
 
 ## 4. 能力面速查与术语
 

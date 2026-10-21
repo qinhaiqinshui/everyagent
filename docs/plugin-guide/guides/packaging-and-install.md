@@ -18,7 +18,7 @@ has_children: false
 - **没有依赖解析**：`.eap` 不声明也不解决依赖（见 §5 的冲突提示）。
 - **没有签名，只有校验和旁文件**：`pack` 会顺手产出 `<id>-<version>.eap.sha256`（§2，sha256sum 兼容格式），但它只服务于分发时的人工核对——worker 安装侧既不验签也不消费它。
 
-另外记住现状：`@everyagent/plugin-api` **双侧待发布**（Java 侧坐标已定 `io.github.qinhaiqinshui`、发布链就绪待首发；npm 侧包已备好，详见仓库 `CONTRIBUTING.md`「发布（维护者）」）——两侧首发之前，仓库外开发的插件工程必须自带类型副本 / 本地 `mvn install` 的 API jar，`.eap` 分发的是**你的插件产物**，不含 API 包。
+另外记住现状：Java 侧插件 SDK 已发布 Maven Central（`io.github.qinhaiqinshui`，首发 1.6.0），仓库外 java/full 工程直接从 Central 解析依赖；`@everyagent/plugin-api` js 类型包尚未发 npm，web × standalone 工程仍靠 vendor 类型副本（发布步骤见仓库 `CONTRIBUTING.md`「发布（维护者）」）。`.eap` 分发的是**你的插件产物**，不含 API 包。
 
 ## 2. `pack` 命令详解
 

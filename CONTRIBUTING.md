@@ -89,11 +89,13 @@ node create-everyagent-plugin --id <id>    # java / web / full 三种形态，�
 
 对外发布两条线：**Maven Central**（插件 SDK 坐标，CI 自动）与 **npm**（脚手架 CLI + 前端类型包，手工）。
 
+**首发状态（2026-10-21）**：Java 侧 SDK 4 坐标**已发布 Maven Central，首发版本 1.6.0**（https://repo1.maven.org/maven2/io/github/qinhaiqinshui/）；npm 侧双包待发（见下）。下方「一次性配置」已全部完成，留档备查（换密钥/换 token 时才需要）。
+
 ### Maven Central（插件 SDK，一次配置后全自动）
 
 发布范围只有 SDK 链 4 坐标（`io.github.qinhaiqinshui:every-agent-parent` / `-contract` / `-plugin-parent` / `-plugin-api`）；hub / worker 不发布。坐标用 `io.github.qinhaiqinshui`（Central 命名空间经 GitHub 账号验证，无需域名；Java 包名保持 `dev.everyagent.*` 不受影响）。
 
-一次性配置：
+一次性配置（✅ 已完成，留档）：
 
 1. 注册 [central.sonatype.com](https://central.sonatype.com)（可用 GitHub 登录），在 Portal 里**验证命名空间** `io.github.qinhaiqinshui`（按 Portal 指引在 GitHub 账号下创建验证仓库）；
 2. 本机生成 GPG 发布密钥并把公钥上传到 [keyserver.ubuntu.com](https://keyserver.ubuntu.com)：
@@ -109,11 +111,11 @@ node create-everyagent-plugin --id <id>    # java / web / full 三种形态，�
 
 ```powershell
 # 确认根 pom <revision> 已是待发版本（版本变更走 scripts/bump-version.py），然后：
-git tag v1.6.0
-git push origin v1.6.0        # 触发 workflow：签名 → 上传 Central Portal → 自动放行
+git tag v1.7.0
+git push origin v1.7.0        # 触发 workflow：签名 → 上传 Central Portal → 自动放行
 ```
 
-注意：**Central 版本一经发布不可覆盖**，同版本重跑会在 Portal 校验阶段失败（预期行为）；发布前确保该版本号从未发过。本地验证发布配置（不真发）：`mvn -Pcentral -pl every-agent-contract,every-agent-plugin-api -am package "-DskipTests" "-Dgpg.skip=true"`。
+注意：**Central 版本一经发布不可覆盖**（1.6.0 已占用），同版本重跑会在 Portal 校验阶段失败（预期行为）；每轮发版必须先 bump `<revision>` 到从未发布过的新版本。发布链技术栈：Maven Wrapper 钉死 3.9.16（runner 自带版本会漂移，曾致 bundle 缺 pom）、central-publishing 插件 0.12.0（0.7.0 对 Portal 的 warnings 字段解析崩溃——0.12.0 起生效，首个用它的发版在下轮）。本地验证发布配置（不真发）：`./mvnw -Pcentral -pl every-agent-contract,every-agent-plugin-api -am package "-DskipTests" "-Dgpg.skip=true"`。
 
 ### npm（脚手架 CLI + 前端类型包，手工）
 

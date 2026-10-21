@@ -234,10 +234,10 @@ npm.cmd run build:plugins
 java 与 full 的后端部分完全一致（full 只是多了 `web/index.ts` 与合并版 `plugin.json`）。要点：
 
 - **插件不进根 reactor**：根 `pom.xml` 的 `<modules>` 不包含 `every-agent-plugins/*`，所以必须 `-f` 单独构建，不能在仓库根裸跑 `mvn package` 指望带上网罗。
-- **首次需要装 plugin-parent 与 plugin-api**：插件 SDK 坐标为 `io.github.qinhaiqinshui:every-agent-plugin-parent` / `every-agent-plugin-api`（经 GitHub 命名空间验证，发布链见仓库 `.github/workflows/publish-maven-central.yml`）。**SDK 首发到 Maven Central 之前**（首发待维护者执行，见仓库 `CONTRIBUTING.md`「发布（维护者）」），本地仓库里得先有它们——在仓库根执行一次即可；**首发之后**此步作废（任何机器直接 `mvn package` 即可从 Central 拉到）：
+- **插件 SDK 已发布 Maven Central**：坐标 `io.github.qinhaiqinshui:every-agent-plugin-parent` / `every-agent-plugin-api`（首发 1.6.0，发布链见仓库 `.github/workflows/publish-maven-central.yml`）——仓库内外任何机器构建插件都直接从 Central 解析，**无需本地安装步骤**。下面的 `install` 只服务于一种开发场景：改了 SDK 源码想立即让插件用上（本地构建覆盖本地仓库里的 Central 版本）：
 
 ```powershell
-# ① 仓库根，一次性（仅 SDK 首发 Central 之前需要）：把插件 SDK parent 与 API 装进本地仓库
+# ①（仅开发场景）仓库根：把本地改过的 SDK parent 与 API 装进本地仓库
 mvn -pl every-agent-plugin-parent,every-agent-plugin-api -am install -DskipTests
 
 # ② 单独构建插件（-f 指向插件 pom；冒烟测试随 package 一起跑，报告在 target/surefire-reports/）
@@ -280,7 +280,7 @@ npm.cmd run build                # 即 node scripts/build.mjs，产物 web/index
   ```
 
   两份 standalone 模板副本（web-standalone / full-standalone）由该脚本一并覆盖；漂移由守卫测试 `create-everyagent-plugin/test/plugin-api-copy.test.mjs` 钉住（在该目录 `node --test`，副本落后即失败并打印修复命令）。
-- **standalone 插件不会被内置扫描发现**（在仓库外），分发安装走 [打包与安装](guides/packaging-and-install.md)：`node <宿主仓库根>\create-everyagent-plugin pack .` 打出 `<id>-<version>.eap`，或手工把产物放进 worker 机器的 `~/.everyagent/plugins/<id>/`（jar 在 `lib/`、bundle 在 `web/index.js`、`plugin.json` 在顶层），重启 worker 生效。java × standalone 的 Maven 前置同 §5：SDK 首发 Central 之前需先克隆宿主仓库 `mvn -pl every-agent-plugin-parent,every-agent-plugin-api -am install -DskipTests` 装好本地依赖，首发之后无需克隆、直接 `mvn package`。
+- **standalone 插件不会被内置扫描发现**（在仓库外），分发安装走 [打包与安装](guides/packaging-and-install.md)：`node <宿主仓库根>\create-everyagent-plugin pack .` 打出 `<id>-<version>.eap`，或手工把产物放进 worker 机器的 `~/.everyagent/plugins/<id>/`（jar 在 `lib/`、bundle 在 `web/index.js`、`plugin.json` 在顶层），重启 worker 生效。java × standalone 的 Maven 前置为零——SDK 已在 Maven Central（§5），插件目录直接 `mvn package` 即可。
 
 ## 7. 改点什么先试试（三个最小实验）
 
