@@ -23,6 +23,7 @@ import {
   slashCommandRegistry,
   type SlashCommandItem,
 } from '@/slash/slashCommandRegistry'
+import { sanitizeSlashIcon } from '@/slash/sanitizeSlashIcon'
 import { useAppUi } from '@/components/app/AppUiContext'
 import { workspaceRegistry } from '@/hub/workspaceRegistry'
 
@@ -736,8 +737,11 @@ export default function TaskComposerSurface({
                       {entry.icon ? (
                         <span
                           className="ui-menu__icon"
-                          // 注册中心内部可信来源（skill / 插件注册），非用户输入。
-                          dangerouslySetInnerHTML={{ __html: entry.icon }}
+                          // 审计 M-8：icon 虽来自注册中心，但第三方插件可经 worker 注册
+                          // slash provider 返回任意字符串（契约无校验），不视为可信——
+                          // 一律先过 SVG 净化器（单一来源 svg-renderer/web/sanitize）；
+                          // 非 SVG / 消毒后为空 → null → 注入空串占位，绝不原样注入。
+                          dangerouslySetInnerHTML={{ __html: sanitizeSlashIcon(entry.icon) ?? '' }}
                         />
                       ) : null}
                       <span className="ui-menu__label">{entry.title}</span>

@@ -2,6 +2,7 @@ import React from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import type { ChatComposerToken } from '@/types'
 import type { SlashCommandItem } from '@/slash/slashCommandRegistry'
+import { sanitizeSlashIcon } from '@/slash/sanitizeSlashIcon'
 
 /**
  * 胶囊详情弹层（纯展示）。
@@ -65,8 +66,11 @@ function DetailCard({ info, anchorRect, onClose }: DetailCardProps): React.React
       {item?.icon ? (
         <div
           className="nagent-slash-detail__icon"
-          // 来源为注册中心内部可信 SVG（skill / 插件），非用户输入。
-          dangerouslySetInnerHTML={{ __html: item.icon }}
+          // 审计 M-8：icon 虽来自注册中心，但第三方插件可经 worker 注册 slash
+          // provider 返回任意字符串（契约无校验），不视为可信——一律先过 SVG 净化器
+          // （单一来源 svg-renderer/web/sanitize）；非 SVG / 消毒后为空 → null →
+          // 注入空串占位，绝不原样注入。
+          dangerouslySetInnerHTML={{ __html: sanitizeSlashIcon(item.icon) ?? '' }}
         />
       ) : null}
       <div className="nagent-slash-detail__title">{item?.title ?? token.label}</div>
