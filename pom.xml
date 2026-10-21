@@ -157,7 +157,9 @@
                     <plugin>
                         <groupId>org.sonatype.central</groupId>
                         <artifactId>central-publishing-maven-plugin</artifactId>
-                        <version>0.7.0</version>
+                        <!-- 0.7.0 已知缺陷：Portal API 响应新增 warnings 字段后 Jackson 解析崩溃
+                             （UnrecognizedPropertyException，v1.6.0 首发第 3 次触发），升 0.12.0（当前最新） -->
+                        <version>0.12.0</version>
                         <extensions>true</extensions>
                         <configuration>
                             <publishingServerId>central</publishingServerId>
