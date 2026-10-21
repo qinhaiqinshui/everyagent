@@ -274,6 +274,7 @@ export default function SettingsPanel() {
 
   return (
     <WorkspacePageShell
+      bodyRef={bodyRef}
       header={(
         <div style={pageHeaderStyle}>
           {isMobile ? (
