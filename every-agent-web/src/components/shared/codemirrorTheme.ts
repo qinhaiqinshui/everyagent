@@ -18,6 +18,8 @@ const editorTheme = EditorView.theme({
   },
   '.cm-content': {
     fontFamily: 'var(--editor-font-family)',
+    // 显式声明字号（不依赖从 .cm-editor 继承），确保「编辑器字号」设置对所有文本编辑器生效。
+    fontSize: 'var(--editor-font-size)',
     caretColor: 'var(--accent-blue)',
     padding: '20px 0',
   },

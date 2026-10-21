@@ -119,6 +119,17 @@
   --reading-bg: var(--bg-secondary);
   --reading-fg: var(--text-primary);
 
+  /* ── 阅读区字号刻度（派生自 --editor-font-size）──────────
+   * 文件阅读区（Markdown 预览的标题/正文/表格/行内码等）按此刻度排版，
+   * 使「编辑器字号」设置能**整体等比缩放**阅读区文字，而不影响全局 UI 的
+   * --text-* 刻度。系数取 --text-* 相对基准 14px 的比值，故默认 14px 时
+   * 与 --text-* 完全等价（零视觉变化）。 */
+  --reading-font-xs: calc(var(--editor-font-size) * 0.8571);  /* ≈ --text-xs 12/14 */
+  --reading-font-sm: calc(var(--editor-font-size) * 0.9286);  /* ≈ --text-sm 13/14 */
+  --reading-font-md: calc(var(--editor-font-size) * 1.0714);  /* ≈ --text-md 15/14 */
+  --reading-font-xl: calc(var(--editor-font-size) * 1.2857);  /* ≈ --text-xl 18/14 */
+  --reading-font-2xl: calc(var(--editor-font-size) * 1.5714); /* ≈ --text-2xl 22/14 */
+
   /* ── Layout 尺寸 ────────────────────────────────────── */
   --sidebar-width: 312px;
   --mobile-sidebar-width: min(88vw, 360px);
