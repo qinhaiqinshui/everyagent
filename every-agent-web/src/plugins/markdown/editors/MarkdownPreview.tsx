@@ -10,6 +10,7 @@ import { workspaceGateway } from '@/platform/fs/workspaceGateway'
 import { isExternalLinkUrl, openExternalLink } from '@/platform/externalLink'
 import { parseMarkdownHeadings, resolveMarkdownHeadingAnchor, type MarkdownHeading } from './markdownOutline'
 import MarkdownImage from './MarkdownImage'
+import { rawHtmlRehypePlugins } from './rawHtmlPipeline'
 
 export type MarkdownPreviewHandle = {
   /** 大纲选中标题时调用；返回该 id 是否存在于当前文档（用于决定是否滚动）。不再有折叠展开逻辑。 */
@@ -148,7 +149,11 @@ const MarkdownPreview = React.forwardRef<MarkdownPreviewHandle, MarkdownPreviewP
 
   return (
     <div ref={rootRef} className="md-root" style={rootStyle}>
-      <Markdown remarkPlugins={[remarkGfm, remarkFourTildeStrikethrough]} components={components}>
+      <Markdown
+        remarkPlugins={[remarkGfm, remarkFourTildeStrikethrough]}
+        rehypePlugins={rawHtmlRehypePlugins}
+        components={components}
+      >
         {normalized}
       </Markdown>
     </div>
