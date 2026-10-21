@@ -7,7 +7,7 @@ has_children: false
 
 # 前端 UI 扩展点
 
-**一句话定位**：`ctx.ui`（`UiRegistry`）是前端插件往宿主 UI 里「贡献界面」的唯一通道——17 个 `register*` 扩展点 + 6 个动作方法。本文逐扩展点给出 Definition 字段表（抄自纯类型包 `every-agent-plugin-api/js/index.ts`）、注册代码、宿主消费链与坑；每条断言附宿主源码行号。`ctx.ui` 的宿主实现是单例 `pluginDispatcher`（接入方式见[前端 ctx API](context-api.md) §8）。
+**一句话定位**：`ctx.ui`（`UiRegistry`）是前端插件往宿主 UI 里「贡献界面」的唯一通道——17 个 `register*` 扩展点 + 7 个动作方法。本文逐扩展点给出 Definition 字段表（抄自纯类型包 `every-agent-plugin-api/js/index.ts`）、注册代码、宿主消费链与坑；每条断言附宿主源码行号。`ctx.ui` 的宿主实现是单例 `pluginDispatcher`（接入方式见[前端 ctx API](context-api.md) §8）。
 
 ## 0. 读前须知：所有扩展点共用的四条机制
 
@@ -637,9 +637,9 @@ export default plugin
 
 | 字段 | 类型 | 必填 | 消费位置（宿主） | 说明 |
 |---|---|---|---|---|
-| `id` | `string` | ✅ | `SettingsPanel.tsx` | 渲染 key；全局唯一 |
-| `title` | `string` | ✅ | `SettingsPanel.tsx` | 段标题（渲染为 `<h3>`，与内置段同款） |
-| `order` | `number?` | — | `SettingsPanel.tsx` | float 升序；缺省 100。内置段恒在前、插件段在此之后按 order 排列 |
+| `id` | `string` | ✅ | `SettingsPanel.tsx` | 渲染 key；同时是目录导航锚点 id 与 `openSettingsPage(sectionId)` 跳转目标（见 §18.3 / §20）；全局唯一 |
+| `title` | `string` | ✅ | `SettingsPanel.tsx` | 段标题（渲染为 `<h3>`，与内置段同款；目录项文本取自它） |
+| `order` | `number?` | — | `SettingsPanel.tsx` | float 升序；缺省 100。内置段（含「关于」）恒在前、插件段在此之后按 order 排列 |
 | `Component` | `ComponentType` | ✅ | `SettingsPanel.tsx` | 段内容组件，无 props（数据靠 `ctx.storage` / `ctx.sdk.rpc` 自持） |
 
 ### 18.2 注册示例
@@ -664,7 +664,8 @@ export default plugin
 
 ### 18.3 宿主消费链与坑
 
-- **消费点**：`SettingsPanel`（`every-agent-web/src/components/system/SettingsPanel.tsx`）用 `useSyncExternalStore(pluginDispatcher.subscribeExtensionsChanged, pluginDispatcher.getExtensionsVersion)` 订阅扩展点版本号，注册/注销后立即重渲染；段列表取 `listRegisteredSettingsSections()`，按 `order ?? 100` 升序（稳定 sort，同值保持注册先后）渲染在内置段之后、「关于」段之前。
+- **消费点**：`SettingsPanel`（`every-agent-web/src/components/system/SettingsPanel.tsx`）用 `useSyncExternalStore(pluginDispatcher.subscribeExtensionsChanged, pluginDispatcher.getExtensionsVersion)` 订阅扩展点版本号，注册/注销后立即重渲染；段列表取 `listRegisteredSettingsSections()`，按 `order ?? 100` 升序（稳定 sort，同值保持注册先后）渲染在**全部内置段（含「关于」段）之后**。
+- **目录导航（自动纳入，插件零成本）**：每个设置段容器由宿主打 `data-settings-section-id` 锚点属性，插件段锚点 id 即 `def.id`；宿主设置页提供**扫描式目录导航**——在滚动容器内 `querySelectorAll('[data-settings-section-id]')` 扫描段落元素、读段内 `<h3>` 文本生成目录项（点击滚动到对应段并处理 header 偏移、用户手动滚动时高亮跟随，rAF 节流），`MutationObserver` 感知段落增删（覆盖插件晚注册场景）。插件段因此**自动出现在目录里**（桌面端左侧 sticky 目录列 / 移动端 `WorkspacePageShell` header 下拉），无需任何额外注册；`def.id` 同时是 `ctx.ui.openSettingsPage(sectionId)`（§20）的跳转目标，建议带插件前缀，避免与内置段 id（`hub-connection` / `workers` / `models` / `skills` / `restart-worker` / `appearance` / `editor-font` / `notifications` / `about`，常量收敛在宿主 `settingsSectionIds.ts`）撞名。
 - **样式约定**：段由宿主包一层与内置段同款的 `<section>`（下边框 + 纵向间距），组件只渲染段内容、不必自带上外边距；视觉值请引用宿主 token（`var(--text-xs)` / `var(--space-*)` / `var(--border)` 等，经 `:root` 继承，无需 import）。
 - **坑**：① 段内容组件拿不到宿主 React context（插件在 blob 模块里），需要的数据用 `ctx.storage`（本地）或 `ctx.sdk.rpc`（后端）自取；② `id` 重复会让 React key 冲突，一个插件一个 id。
 - **内置范例**：**无**（`novel-reader` 起于此扩展点；核心自身的设置段不走此扩展点，直接写在 `SettingsPanel` 内）。
@@ -754,7 +755,7 @@ export default plugin
 - **坑**：① 主题 id 建议带插件前缀，避免与内建 / 其它插件撞名；② 白名单外的键静默忽略；③ 主题不含字体 / 字号——字体族与字号是独立的编辑器设置项（`pref` 的 `editor.fontFamily` / `editor.fontSize`，对标 VSCode `editor.fontFamily` / `editor.fontSize`），不受主题影响。
 - **内置范例**：**无**（`novel-reader` 起于此扩展点；核心深色 / 浅色为主题表内建项，不注册）。
 
-## 20. UiRegistry 动作方法（6 个）
+## 20. UiRegistry 动作方法（7 个）
 
 动作方法不注册 UI，而是**驱动宿主**。实现链统一：`pluginDispatcher` 同步委托模块级 holder 桥（`pluginRuntimeBridge.ts`），宿主组件挂载时注入、未注入时静默降级（`pluginRuntimeBridge.ts:1-10` 注释）。
 
@@ -763,6 +764,7 @@ export default plugin
 | `openTab` | `(type: string, data?: Record<string,string>, title?: string) => void` | `PluginDispatcher.ts:377-379` → `Layout.tsx:803-813` 注入（`setShellBridge`）→ `Layout.tsx:573` 实现 | 内置/插件统一的通用标签打开入口：按 `tabTypeKey` 查注册表取创建器（内置型自带 `createTab`，插件型/未注册型走通用兜底）创建标签，`openWorkspaceTab` 入栈；`data` 可选，原样存进 `tab.data`，由 §4 的 `renderTab` 读回（范例 `GitHistoryTabType.tsx:19-22,27-33` 的 `getData`） |
 | `openFileTab` | `(workspaceRoot, filePath, {mode?, lineNumber?}) => void` | `PluginDispatcher.ts:379-381` → `Layout.tsx:819-825` 注入 → `Layout.tsx:480-504` 实现（`openGlobalFileTab`） | 打开顶层文件标签；`mode:'readwrite'|'readonly'` 与 `lineNumber`（打开到指定行）透传。**`lineNumber` 透传链**：`PluginDispatcher.openFileTab`（`PluginDispatcher.ts:379-381`）→ `pluginRuntimeBridge.ShellBridge.openFileTab`（`pluginRuntimeBridge.ts:16`）→ `Layout` 注入的 `setShellBridge.openFileTab`（`Layout.tsx:819-825`）→ `openGlobalFileTab({ mode, lineNumber })`（`Layout.tsx:480-504`）；标签已存在时保留原 `reloadKey`（仅更新行定位字段 `lineNumber`/`lineLocateRequestedAt`，`Layout.tsx:490-500`），不重新读盘、编辑器不卸载重挂 |
 | `openDiffTab` | `(input: PluginDiffTabInput) => void` | `PluginDispatcher.ts:382-384` → `Layout.tsx:825` | 打开 diff 对比标签；`input` 字段见 `js/index.ts:189-209`（`filePath/fileName/changeType/beforeContent/afterContent/workspaceRoot?/title?/binary?/allowRestore?`） |
+| `openSettingsPage` | `(sectionId?: string) => void` | `PluginDispatcher.openSettingsPage` → `ShellBridge.openSettingsPage`（`pluginRuntimeBridge.ts`，`Layout` 挂载注入）→ `settings/settingsNavigation.ts` 服务（pending 意图 + 领域事件 `SETTINGS_SECTION_JUMP_REQUESTED`）→ `SettingsPanel` 订阅 | 打开设置页标签（`page:settings`）并滚动到 `sectionId` 对应设置段（锚点 `data-settings-section-id`，见 §18；省略则仅打开设置页）。设置页标签**常驻挂载、非激活仅 `display:none`**，订阅方须等标签可见后再滚动定位（隐藏期测不到位，重试兜底）；未注册 id **静默忽略不抛错**（不给插件炸 UI 的理由）；宿主内置消费：输入框模型列表为空的空态引导链接（`TaskModelControls`）直达「模型配置」段（`'models'`） |
 | `appendComposerText` | `(text) => void` | `PluginDispatcher.ts:385-387` → `TaskChat.tsx:690-696` 实现、`:711-713` 注入 | 向**当前激活**任务标签的草稿末尾追加纯文本 |
 | `setComposerRawContent` | `(raw) => void` | `PluginDispatcher.ts:398-400` → `TaskChat.tsx:697-703` | 用 rawContent（可含 opaque token 串）**整体替换**草稿（编辑重发回填用） |
 | `appendComposerToken` | `(input: {kind, label, summary?, payload?, spaced?}) => void` | `PluginDispatcher.ts:388-397` → `buildOpaqueTokenText`（`composerToken/composerOpaqueToken.ts:46`）→ `getComposerBridge()?.appendText`（`pluginRuntimeBridge.ts:45`） | 结构化插入一枚胶囊（宿主单点负责 opaque token 编码，插件不碰线格式）；`spaced ?? true` 时补两侧空格（`PluginDispatcher.ts:395-396`）；`kind`/`label` 为空由 `buildOpaqueTokenText` **抛错**（`composerOpaqueToken.ts:52-56`）；未绑定草稿（桥 null）**静默丢弃**；自身不做 kind 业务分支 |
@@ -781,6 +783,8 @@ ctx.ui.appendComposerText('\n\n（追加一段）')
 ctx.ui.openFileTab(workspaceRoot, filePath, { lineNumber: 42 })
 // 结构化插入一枚胶囊（宿主单点编码 opaque token；payload 需展开成对象字面量，见 §17 坑）
 ctx.ui.appendComposerToken({ kind: 'file.selection', label: 'foo.ts:3-5', payload: { ...payload } })
+// 打开设置页并直达某段（sectionId 即段锚点 id，见 §18；输入框模型空态引导直达 'models' 同款）
+ctx.ui.openSettingsPage('models')
 ```
 
 注意两个时序坑：① 页面刚加载、`Layout`/`TaskChat` 尚未挂载时桥为 null，动作**静默丢失**（不抛错）；② 草稿桥只在**激活标签页**持有写权（`TaskChat.tsx:703-713` 注释解释竞态），多任务标签并存时写入的是当前激活的那个。

@@ -168,16 +168,17 @@ has_children: false
 | `ui.search_types` | `registerSearchType(def)` | [UI §15](../web/ui-extensions.md#15-uisearch_types--搜索类型注册) | ⚠️ 无内置范例（内置三类型不走此扩展点） |
 | `ui.editor_context_menu_actions` | `registerEditorContextMenuAction(def)` | [UI §16](../web/ui-extensions.md#16-uieditor_context_menu_actions--编辑器内容区右键菜单) | selection-reference（编辑器选区右键「引用到AI对话框」）；核心内置「复制」项亦经此注册（`core.copy-selection`，order=10 恒居首） |
 | `ui.composer_chip_actions` | `registerComposerChipAction(def)` | [UI §17](../web/ui-extensions.md#17-uicomposer_chip_actions--胶囊激活行为) | selection-reference；核心 `system.workspace_file` 亦经此注册 |
-| `ui.settings_sections` | `registerSettingsSection(def)` | [UI §18](../web/ui-extensions.md#18-uisettings_sections--设置页设置段) | ⚠️ 无内置范例（novel-reader 起于此） |
+| `ui.settings_sections` | `registerSettingsSection(def)` | [UI §18](../web/ui-extensions.md#18-uisettings_sections--设置页设置段) | ⚠️ 无内置范例（novel-reader 起于此）；`def.id` 即目录导航锚点 id，插件段自动纳入设置页目录 |
 | `ui.themes` | `registerTheme(def: ThemeDefinition)` | [UI §19](../web/ui-extensions.md#19-uithemes--全局颜色主题) | ⚠️ 无内置范例（novel-reader；核心深/浅色为主题表内建项，不注册） |
 
-动作方法（不注册、只驱动宿主；桥未注入时静默降级）：详解全部在 [UI §20](../web/ui-extensions.md#20-uiregistry-动作方法6-个)。
+动作方法（不注册、只驱动宿主；桥未注入时静默降级）：详解全部在 [UI §20](../web/ui-extensions.md#20-uiregistry-动作方法7-个)。
 
 | 方法 | 一行签名 | 范例 |
 |---|---|---|
 | `openTab` | `(type: string, data?: Record<string,string>, title?: string) => void` | git |
 | `openFileTab` | `(workspaceRoot: string, filePath: string, opts?: { mode?: 'readwrite' \| 'readonly'; lineNumber?: number }) => void` | update-file-view |
 | `openDiffTab` | `(input: PluginDiffTabInput) => void` | git |
+| `openSettingsPage` | `(sectionId?: string) => void` | 宿主内置消费（TaskModelControls 模型空态引导直达 `'models'`）；未注册 id 静默忽略 |
 | `appendComposerText` | `(text: string) => void` | task-edit-resend |
 | `setComposerRawContent` | `(raw: string) => void` | task-edit-resend |
 | `appendComposerToken` | `(input: { kind: string; label: string; summary?: string; payload?: Record<string, unknown>; spaced?: boolean }) => void` | selection-reference |
