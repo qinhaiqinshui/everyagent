@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 600">
+  <defs>
+    <marker id="arrow" markerWidth="9" markerHeight="9" refX="8" refY="3.5" orient="auto">
+      <polygon points="0,0 9,3.5 0,7" fill="#475569"/>
+    </marker>
+    <linearGradient id="hubGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#6366f1"/>
+      <stop offset="1" stop-color="#4f46e5"/>
+    </linearGradient>
+    <linearGradient id="workerGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0ea5e9"/>
+      <stop offset="1" stop-color="#0284c7"/>
+    </linearGradient>
+  </defs>
+  <text x="380" y="34" text-anchor="middle" font-size="20" font-weight="bold" fill="#1e293b" font-family="sans-serif">EveryAgent 三层架构示意图</text>
+  <rect x="50" y="70" width="160" height="50" rx="10" fill="#e0f2fe" stroke="#0284c7" stroke-width="1.5"/>
+  <text x="130" y="100" text-anchor="middle" font-size="14" fill="#0c4a6e" font-family="sans-serif">Web 客户端</text>
+  <rect x="300" y="70" width="160" height="50" rx="10" fill="#e0f2fe" stroke="#0284c7" stroke-width="1.5"/>
+  <text x="380" y="100" text-anchor="middle" font-size="14" fill="#0c4a6e" font-family="sans-serif">CLI 客户端</text>
+  <rect x="550" y="70" width="160" height="50" rx="10" fill="#e0f2fe" stroke="#0284c7" stroke-width="1.5"/>
+  <text x="630" y="100" text-anchor="middle" font-size="14" fill="#0c4a6e" font-family="sans-serif">IDE 插件</text>
+  <line x1="130" y1="122" x2="288" y2="176" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <line x1="380" y1="122" x2="380" y2="176" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <line x1="630" y1="122" x2="472" y2="176" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <rect x="205" y="180" width="350" height="70" rx="12" fill="url(#hubGrad)"/>
+  <text x="380" y="210" text-anchor="middle" font-size="16" font-weight="bold" fill="#ffffff" font-family="sans-serif">Hub</text>
+  <text x="380" y="233" text-anchor="middle" font-size="12" fill="#e0e7ff" font-family="sans-serif">零状态 · 零缓冲 · 零业务逻辑 · 频道即鉴权</text>
+  <line x1="330" y1="252" x2="330" y2="306" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <text x="322" y="285" text-anchor="end" font-size="11" fill="#475569" font-family="sans-serif">推送（stream 频道）</text>
+  <line x1="430" y1="308" x2="430" y2="254" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <text x="438" y="285" text-anchor="start" font-size="11" fill="#475569" font-family="sans-serif">task.poll 拉取补齐</text>
+  <rect x="90" y="310" width="580" height="150" rx="12" fill="url(#workerGrad)"/>
+  <text x="380" y="338" text-anchor="middle" font-size="15" font-weight="bold" fill="#ffffff" font-family="sans-serif">Worker（虚拟线程 · 本地事件日志先行）</text>
+  <rect x="120" y="355" width="150" height="45" rx="8" fill="#ffffff" fill-opacity="0.92"/>
+  <text x="195" y="375" text-anchor="middle" font-size="13" fill="#0f172a" font-family="sans-serif">ChatClient</text>
+  <text x="195" y="391" text-anchor="middle" font-size="10" fill="#64748b" font-family="sans-serif">Spring AI 2</text>
+  <line x1="272" y1="377" x2="306" y2="377" stroke="#e0f2fe" stroke-width="1.8" marker-end="url(#arrow)"/>
+  <rect x="310" y="355" width="150" height="45" rx="8" fill="#ffffff" fill-opacity="0.92"/>
+  <text x="385" y="375" text-anchor="middle" font-size="13" fill="#0f172a" font-family="sans-serif">Advisor 链</text>
+  <text x="385" y="391" text-anchor="middle" font-size="10" fill="#64748b" font-family="sans-serif">skill / 记忆 / 护栏</text>
+  <line x1="462" y1="377" x2="496" y2="377" stroke="#e0f2fe" stroke-width="1.8" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+  <rect x="500" y="355" width="140" height="45" rx="8" fill="#ffffff" fill-opacity="0.92"/>
+  <text x="570" y="375" text-anchor="middle" font-size="13" fill="#0f172a" font-family="sans-serif">事件日志</text>
+  <text x="570" y="391" text-anchor="middle" font-size="10" fill="#64748b" font-family="sans-serif">seq 单调递增</text>
+  <text x="380" y="438" text-anchor="middle" font-size="11" fill="#e0f2fe" font-family="sans-serif">AgentRunner 为薄层：复用 ChatClient + Advisor 生态，禁止手搓循环</text>
+  <line x1="125" y1="462" x2="125" y2="486" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <line x1="295" y1="462" x2="295" y2="486" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <line x1="465" y1="462" x2="465" y2="486" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <line x1="635" y1="462" x2="635" y2="486" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <rect x="50" y="490" width="150" height="50" rx="10" fill="#f0fdf4" stroke="#16a34a" stroke-width="1.5"/>
+  <text x="125" y="511" text-anchor="middle" font-size="12" fill="#14532d" font-family="sans-serif">windows-codex</text>
+  <text x="125" y="528" text-anchor="middle" font-size="10" fill="#4ade80" font-family="sans-serif">默认 · 受限令牌</text>
+  <rect x="220" y="490" width="150" height="50" rx="10" fill="#fefce8" stroke="#ca8a04" stroke-width="1.5"/>
+  <text x="295" y="511" text-anchor="middle" font-size="12" fill="#713f12" font-family="sans-serif">windows-mic</text>
+  <text x="295" y="528" text-anchor="middle" font-size="10" fill="#a16207" font-family="sans-serif">Medium IL</text>
+  <rect x="390" y="490" width="150" height="50" rx="10" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.5"/>
+  <text x="465" y="511" text-anchor="middle" font-size="12" fill="#4c1d95" font-family="sans-serif">wsl-ubuntu</text>
+  <text x="465" y="528" text-anchor="middle" font-size="10" fill="#8b5cf6" font-family="sans-serif">Linux 环境</text>
+  <rect x="560" y="490" width="150" height="50" rx="10" fill="#f8fafc" stroke="#64748b" stroke-width="1.5"/>
+  <text x="635" y="511" text-anchor="middle" font-size="12" fill="#334155" font-family="sans-serif">DIRECT</text>
+  <text x="635" y="528" text-anchor="middle" font-size="10" fill="#94a3b8" font-family="sans-serif">无插件时直跑宿主</text>
+  <text x="380" y="572" text-anchor="middle" font-size="11" fill="#94a3b8" font-family="sans-serif">三层零依赖：hub / worker / client 仅依赖 every-agent-contract · 越界写由 PermissionGate 责任链兜底</text>
+</svg>
