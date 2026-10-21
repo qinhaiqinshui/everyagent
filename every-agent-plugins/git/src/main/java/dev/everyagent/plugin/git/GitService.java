@@ -440,10 +440,7 @@ public class GitService {
      */
     void clone(RpcContext ctx) throws IOException {
         WorkspaceSandbox sb = sandbox(ctx);
-        String url = ctx.strParam("url");
-        if (url == null || url.trim().isEmpty()) {
-            throw new BadParamsException("克隆需要远端 URL");
-        }
+        String url = requireSafeRemoteUrl(ctx.strParam("url"), "克隆");
         String dirParam = ctx.optStrParam("dir", "");
         Path target = dirParam == null || dirParam.isEmpty()
                 ? sb.root()
@@ -461,7 +458,7 @@ public class GitService {
                 }
             }
         }
-        NativeResult r = withAuth(ctx, sb, url, List.of("clone", url.trim(), target.toString()));
+        NativeResult r = withAuth(ctx, sb, url, List.of("clone", url, target.toString()));
         if (!r.ok()) {
             throw new RuntimeException("git.clone 失败: " + (r.stderr() == null ? "" : r.stderr()));
         }
@@ -472,16 +469,39 @@ public class GitService {
     void remoteAdd(RpcContext ctx) throws IOException {
         WorkspaceSandbox sb = sandbox(ctx);
         String name = ctx.optStrParam("name", "origin");
-        String url = ctx.strParam("url");
-        if (url == null || url.trim().isEmpty()) {
-            throw new BadParamsException("关联远程需要 URL");
-        }
-        NativeResult r = git.runWrite(sb.root(), List.of("remote", "add", name, url.trim()),
+        String url = requireSafeRemoteUrl(ctx.strParam("url"), "关联远程");
+        NativeResult r = git.runWrite(sb.root(), List.of("remote", "add", name, url),
                 CredentialSpec.none());
         if (!r.ok()) {
             throw new RuntimeException("git.remote.add 失败: " + (r.stderr() == null ? "" : r.stderr()));
         }
-        ctx.ok(Json.obj().put("added", true).put("name", name).put("url", url.trim()));
+        ctx.ok(Json.obj().put("added", true).put("name", name).put("url", url));
+    }
+
+    /**
+     * 校验并归一化远端 URL,防 git 参数注入(git.clone / git.remote.add 复用):
+     * argv 直传下,以 "-" 开头的 URL 会被 git 解释为选项(如 --upload-pack=… 注入),
+     * "ext::"/"fd::" 前缀是特殊传输,会让 git 调起任意 helper/命令。均拒绝;
+     * https/http/ssh/git@host/file 等常规 URL 放行。包可见仅为同包单测。
+     *
+     * @return trim 后的安全 URL(调用方直接作为 argv 传给 git)
+     */
+    static String requireSafeRemoteUrl(String url, String action) {
+        String u = url == null ? "" : url.trim();
+        if (u.isEmpty()) {
+            throw new BadParamsException(action + "需要远端 URL");
+        }
+        String echo = u.length() > 64 ? u.substring(0, 64) + "…" : u;
+        if (u.startsWith("-")) {
+            throw new BadParamsException("非法远端 URL \"" + echo
+                    + "\": 以 - 开头会被 git 解释为选项(参数注入,如 --upload-pack),已拒绝");
+        }
+        String lower = u.toLowerCase(java.util.Locale.ROOT);
+        if (lower.startsWith("ext::") || lower.startsWith("fd::")) {
+            throw new BadParamsException("非法远端 URL \"" + echo
+                    + "\": ext::/fd:: 特殊传输前缀会被 git 解释为可执行传输命令,已拒绝");
+        }
+        return u;
     }
 
     /** 列出已关联远程(供前端判断是否需要引导关联)。 */
