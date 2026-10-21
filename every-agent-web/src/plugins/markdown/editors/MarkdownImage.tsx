@@ -23,7 +23,7 @@ type MarkdownImageProps = {
 
 type LoadState =
   | { status: 'loading' }
-  | { status: 'ready'; url: string }
+  | { status: 'ready'; url: string; /** 外部 URL 徽章等内联小图:true=行内排布(多个徽章水平排列)。 */ inline: boolean }
   | { status: 'error'; message: string }
 
 export default function MarkdownImage({ src, alt, workspaceRoot, baseDir }: MarkdownImageProps) {
@@ -33,9 +33,9 @@ export default function MarkdownImage({ src, alt, workspaceRoot, baseDir }: Mark
     let cancelled = false
     const trimmed = src.trim()
 
-    // 外部 URL / data URL:浏览器直接加载。
+    // 外部 URL / data URL:浏览器直接加载。徽章等小图内联排布(多个水平排列)。
     if (/^(https?:|data:)/i.test(trimmed)) {
-      setState({ status: 'ready', url: trimmed })
+      setState({ status: 'ready', url: trimmed, inline: true })
       return () => {
         cancelled = true
       }
@@ -71,7 +71,7 @@ export default function MarkdownImage({ src, alt, workspaceRoot, baseDir }: Mark
         try {
           const bytes = await workspaceGateway.readBytesRaw(workspaceRoot, rel)
           if (cancelled) return
-          setState({ status: 'ready', url: bytesToDataUrl(bytes, imageMimeOf(rel)) })
+          setState({ status: 'ready', url: bytesToDataUrl(bytes, imageMimeOf(rel)), inline: false })
           return
         } catch (readError) {
           lastError = readError
@@ -110,7 +110,7 @@ export default function MarkdownImage({ src, alt, workspaceRoot, baseDir }: Mark
       src={state.url}
       alt={alt || src}
       loading="lazy"
-      style={imageStyle}
+      style={state.inline ? inlineImageStyle : imageStyle}
     />
   )
 }
@@ -124,6 +124,13 @@ const imageStyle: React.CSSProperties = {
   display: 'block',
   margin: '6px 0',
   borderRadius: 'var(--radius-md)',
+}
+
+/** 外部 URL 小图(徽章等)内联样式:同行水平排布,基线对齐(GitHub 徽章行观感)。 */
+const inlineImageStyle: React.CSSProperties = {
+  maxWidth: '100%',
+  verticalAlign: 'middle',
+  margin: '0 2px',
 }
 
 const placeholderStyle: React.CSSProperties = {
