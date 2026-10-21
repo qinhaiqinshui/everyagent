@@ -32,7 +32,7 @@
   "dependencies": {},
   "repository": {
     "type": "git",
-    "url": "https://github.com/everyagent/every-agent",
+    "url": "https://github.com/qinhaiqinshui/everyagent",
     "directory": "create-everyagent-plugin"
   },
   "os": [
@@ -40,5 +40,11 @@
     "linux",
     "darwin"
   ],
-  "private": false
+  "private": false,
+  "publishConfig": {
+    "access": "public"
+  },
+  "everyagent": {
+    "sdkVersion": "1.6.0"
+  }
 }

@@ -12,7 +12,10 @@
   java.version 根 pom <properties>java.version              模板/文档中「Java NN / JDK NN」字样
   revision     根 pom <properties>revision（工程版本单点源） 文档 every-agent-parent:<v> /
                every-agent-parent、plugin-api、worker        every-agent-plugin-api(:jar)：<v> /
-               三者的版本都等于它                              every-agent-worker-<v>-exec.jar 引用
+               三者的版本都等于它                              every-agent-worker-<v>-exec.jar 引用 /
+                                                         create-everyagent-plugin/package.json 的
+                                                         everyagent.sdkVersion（npm 发布后仓库外
+                                                         standalone 形态的 SDK 版本来源）
   spring-ai    根 pom <properties>spring-ai.version         文档 spring-ai-client-chat <v> 引用
 
 铁律（不破并行协作与红线）：
@@ -27,7 +30,9 @@
     （归 scripts/sync-plugin-api-copy.ps1 —— 它管类型副本的逐字节内容，并配
     create-everyagent-plugin/test/plugin-api-copy.test.mjs 漂移守卫测试）；
   - @everyagent/plugin-api js 包版本（every-agent-plugin-api/js/package.json）归
-    scripts/bump-version.py 统一管理（与 <revision> 同号）。
+    scripts/bump-version.py 统一管理（与 <revision> 同号）；CLI 内嵌 SDK 版本
+    （create-everyagent-plugin/package.json 的 everyagent.sdkVersion）归本脚本 revision 槽位，
+    守卫测试 create-everyagent-plugin/test/sdk-version.test.mjs 钉住不漂移。
 
 人工后置项（脚本只改版本字样，会打印提醒）：
   - spring-ai 槽位变化时，文档里「javap 实测」的常量值（ToolCallingAdvisor.DEFAULT_ORDER 等）
@@ -160,6 +165,9 @@ foreach ($f in @('docs/plugin-guide/index.md', 'docs/plugin-guide/guides/build-a
 $rules += @{ File = 'docs/plugin-guide/guides/debugging-and-testing.md'; Slot = 'plugin-api'; Name = '「every-agent-plugin-api:<v>」引用'
     Pattern = 'every-agent-plugin-api:[\d.]+'
     Replacement = ("every-agent-plugin-api:{0}" -f $apiNew) }
+$rules += @{ File = 'create-everyagent-plugin/package.json'; Slot = 'every-agent-parent'; Name = 'CLI 内嵌 SDK 版本（everyagent.sdkVersion，npm 发布后仓库外 standalone 形态的版本来源）'
+    Pattern = '("sdkVersion"\s*:\s*")[^"]*(")'
+    Replacement = ('${1}' + $parentNew + '${2}') }
 $rules += @{ File = 'docs/plugin-guide/guides/troubleshooting.md'; Slot = 'plugin-api'; Name = '「every-agent-plugin-api:jar:<v>」引用'
     Pattern = 'every-agent-plugin-api:jar:[\d.]+'
     Replacement = ("every-agent-plugin-api:jar:{0}" -f $apiNew) }

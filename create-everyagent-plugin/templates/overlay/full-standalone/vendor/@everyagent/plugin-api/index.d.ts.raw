@@ -911,6 +911,15 @@ export interface UiRegistry {
   openFileTab(workspaceRoot: string, filePath: string, options?: { mode?: 'readwrite' | 'readonly'; lineNumber?: number }): void
   /** 打开顶层 diff 对比标签（替代宿主 useWorkspaceShell().openDiffTab）。 */
   openDiffTab(input: PluginDiffTabInput): void
+  /**
+   * 打开设置页标签（page:settings）并滚动到 sectionId 对应设置段。
+   *
+   * sectionId 为设置段锚点 id（data-settings-section-id；内置段 id 见宿主文档
+   * ui-extensions.md §18，插件段 id 即注册 def.id）；省略则仅打开设置页。
+   * 设置页标签常驻挂载、非激活仅 display:none，宿主会等标签可见后再滚动定位；
+   * 未注册 id 静默忽略不抛错。
+   */
+  openSettingsPage(sectionId?: string): void
   /** 向当前输入框草稿末尾追加纯文本（替代宿主 composerDraftBridge）。 */
   appendComposerText(text: string): void
   /**

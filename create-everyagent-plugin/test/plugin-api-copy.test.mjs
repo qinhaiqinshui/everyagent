@@ -31,10 +31,12 @@ const repoRoot = resolve(packageRoot, '..')
 /** 宿主单点源（权威）。 */
 const SOURCE = join(repoRoot, 'every-agent-plugin-api', 'js', 'index.ts')
 
-/** 全部 vendor 类型副本（新增 standalone 模板时同步登记在此）。 */
+/** 全部类型镜像副本（新增 standalone 模板时同步登记在此）。除两份 vendor 副本外，
+ *  还包括 npm 发布包的类型入口 every-agent-plugin-api/js/index.d.ts（types 字段指向它）。 */
 const COPIES = [
   join(packageRoot, 'templates', 'overlay', 'web-standalone', 'vendor', '@everyagent', 'plugin-api', 'index.d.ts.raw'),
   join(packageRoot, 'templates', 'overlay', 'full-standalone', 'vendor', '@everyagent', 'plugin-api', 'index.d.ts.raw'),
+  join(repoRoot, 'every-agent-plugin-api', 'js', 'index.d.ts'),
 ]
 
 /**

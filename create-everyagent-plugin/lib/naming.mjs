@@ -20,7 +20,8 @@
  *   {{camelName}}   = camelCase(id)
  *   {{pluginParentVersion}}        = 插件 SDK parent 的版本
  *                                    builtin 形态为字面量 `${revision}`（跟随工程版本，升级零改动）
- *                                    standalone 形态为生成时的实际版本（外部工程解析不了 ${revision}）
+ *                                    standalone 形态为生成时的实际版本（外部工程解析不了 ${revision}；
+ *                                    仓库外跑 npm 发布版 CLI 时取内嵌 everyagent.sdkVersion，见 readEmbeddedSdkVersion）
  *   {{pluginParentRelativePath}}   = SDK parent 的相对路径
  *                                    builtin = ../../every-agent-plugin-parent/pom.xml
  *                                    standalone = 空（从本地仓库解析，需先 mvn install）
@@ -32,7 +33,11 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { ValidationError } from './errors.mjs'
+
+/** CLI 自身 package.json 的绝对路径（内嵌 SDK 版本 everyagent.sdkVersion 的读取位置）。 */
+const CLI_PACKAGE_JSON = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'package.json')
 
 /** id 长度下限 / 上限。 */
 export const ID_MIN = 2
@@ -81,6 +86,25 @@ export function readRepoRevision(repoRoot) {
 }
 
 /**
+ * 读 CLI 自身 package.json 内嵌的 SDK 版本（everyagent.sdkVersion）。
+ *
+ * 这是 CLI 发布到 npm 后（宿主仓库不在身边，`npm create everyagent-plugin` 场景）
+ * standalone 形态的唯一版本来源：该值由 scripts/sync-plugin-template-versions.ps1
+ * 随根 pom <revision> 联动，守卫测试 test/sdk-version.test.mjs 钉住不漂移。
+ * 仓库内运行时优先 readRepoRevision，仅当宿主 pom 读不到才落到这里。
+ * @returns {string|null}
+ */
+export function readEmbeddedSdkVersion() {
+  try {
+    const raw = fs.readFileSync(CLI_PACKAGE_JSON, 'utf8')
+    const v = JSON.parse(raw)?.everyagent?.sdkVersion
+    return typeof v === 'string' && v.trim() ? v.trim() : null
+  } catch {
+    return null
+  }
+}
+
+/**
  * 推导插件 SDK parent 的模板变量。
  *
  * 内置形态（仓库内）写 `${revision}` + relativePath：升级工程版本时插件 pom 零改动。
@@ -100,10 +124,13 @@ export function pluginParentVars({ mode, repoRoot, warn } = {}) {
       pluginParentRelativePath: PLUGIN_PARENT_RELATIVE_PATH,
     }
   }
-  const revision = readRepoRevision(repoRoot)
+  // 版本来源优先级：宿主仓库根 pom（仓库内开发，与本地将安装的 SDK 天然一致）
+  // → CLI 内嵌 everyagent.sdkVersion（npm 发布后仓库外运行）→ 兜底常量。
+  const revision = readRepoRevision(repoRoot) || readEmbeddedSdkVersion()
   if (!revision && typeof warn === 'function') {
     warn(
-      `未能从仓库根 pom.xml 读到 <revision>，插件 pom 的 parent 版本回退为 ` +
+      `未能确定插件 SDK 版本（仓库根 pom.xml 的 <revision> 与 CLI 内嵌 everyagent.sdkVersion ` +
+        `均不可用），插件 pom 的 parent 版本回退为 ` +
         `${PLUGIN_PARENT_FALLBACK_VERSION}，请自行核对。`,
     )
   }

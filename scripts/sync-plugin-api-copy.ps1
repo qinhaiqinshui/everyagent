@@ -12,6 +12,8 @@
                                                              vendor/@everyagent/plugin-api/index.d.ts.raw
                                                            create-everyagent-plugin/templates/overlay/full-standalone/
                                                              vendor/@everyagent/plugin-api/index.d.ts.raw
+                                                           every-agent-plugin-api/js/index.d.ts
+                                                             （npm 发布包的类型入口镜像，package.json 的 types 指向它）
 
 为什么需要本脚本：该副本是手工复制的，宿主每加一个 `ctx.ui.*` 方法 / 扩展点接口，副本就落后一点，
 且**不会报错**——standalone 插件在仓库外 `tsc` 时只会「少一个方法」，直到用户踩坑才发现。这个坑
@@ -47,7 +49,8 @@ $root = Split-Path -Parent $PSScriptRoot
 $sourceRel = 'every-agent-plugin-api/js/index.ts'
 $targetRels = @(
     'create-everyagent-plugin/templates/overlay/web-standalone/vendor/@everyagent/plugin-api/index.d.ts.raw',
-    'create-everyagent-plugin/templates/overlay/full-standalone/vendor/@everyagent/plugin-api/index.d.ts.raw'
+    'create-everyagent-plugin/templates/overlay/full-standalone/vendor/@everyagent/plugin-api/index.d.ts.raw',
+    'every-agent-plugin-api/js/index.d.ts'
 )
 
 $sourceAbs = Join-Path $root $sourceRel
