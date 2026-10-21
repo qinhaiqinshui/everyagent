@@ -93,11 +93,12 @@ worker 的内置扫描器把「java 插件」判定为 `target/classes/plugin.js
 
 ### 3.1 scripts 全集与分工
 
-`every-agent-web/package.json:6-12` 全部 6 个 script：
+`every-agent-web/package.json` 的 `scripts` 全部 8 个 script：
 
 | script | 命令 | 管什么 | 包含插件构建？ |
 | --- | --- | --- | --- |
-| `dev` | `vite --host 0.0.0.0` | 宿主页面开发服务器 | ✗ |
+| `dev` | `vite` | 宿主页面开发服务器（默认仅监听 localhost，安全默认） | ✗ |
+| `dev:lan` | `vite --host 0.0.0.0` | 同上，显式局域网调试（手机/其它主机访问开发机时用） | ✗ |
 | `build` | `tsc && vite build` | 宿主页面生产构建 | ✗ |
 | `build:plugins` | `node scripts/build-plugins.mjs` | **插件 bundle 的唯一构建入口** | ✓ |
 | `watch:plugins` | `node scripts/build-plugins.mjs --watch` | 常驻监听重编 | ✓ |

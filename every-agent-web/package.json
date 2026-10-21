@@ -4,7 +4,8 @@
   "private": true,
   "description": "every-agent 前端:n 分支 UI 壳接入 hub 管道(任务/文件树/git)",
   "scripts": {
-    "dev": "vite --host 0.0.0.0",
+    "dev": "vite",
+    "dev:lan": "vite --host 0.0.0.0",
     "build": "tsc && vite build",
     "build:plugins": "node scripts/build-plugins.mjs",
     "watch:plugins": "node scripts/build-plugins.mjs --watch",
