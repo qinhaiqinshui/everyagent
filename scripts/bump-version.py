@@ -18,6 +18,7 @@ Maven 侧只有一个版本写点:根 pom 的 <properties><revision>。
   -----------------------  --------------------------------------------------
   every-agent 工程版本      根 pom.xml 的 <revision>(Maven 侧唯一写点)
   @everyagent/plugin-api   every-agent-plugin-api/js/package.json 的 version
+  脚手架 CLI                create-everyagent-plugin/package.json 的 version
   桌面端                    every-agent-desktop/package.json 的 version
   浏览器端                  every-agent-web/package.json 的 version
 
@@ -67,6 +68,7 @@ _JSON_VERSION = re.compile(r'("version"\s*:\s*")([^"]+)(")')
 SLOTS = [
     ("pom.xml", [_REVISION]),
     ("every-agent-plugin-api/js/package.json", [_JSON_VERSION]),
+    ("create-everyagent-plugin/package.json", [_JSON_VERSION]),
     ("every-agent-desktop/package.json", [_JSON_VERSION]),
     ("every-agent-web/package.json", [_JSON_VERSION]),
 ]

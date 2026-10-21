@@ -1,6 +1,6 @@
 {
   "name": "create-everyagent-plugin",
-  "version": "0.1.0",
+  "version": "1.6.0",
   "type": "module",
   "license": "MIT",
   "description": "Every Agent 插件工程脚手架 CLI（create-react-app / create-vite 式）：交互问答或全 flag 传参，从内置模板生成 java / web / full 三种形态、builtin / standalone 两种模式的插件工程，并提供 .eap 打包子命令",
@@ -22,8 +22,7 @@
   "files": [
     "index.mjs",
     "lib",
-    "templates",
-    "vendor"
+    "templates"
   ],
   "scripts": {
     "check": "node --check index.mjs && node --check lib/args.mjs && node --check lib/errors.mjs && node --check lib/naming.mjs && node --check lib/prompts.mjs && node --check lib/render.mjs && node --check lib/tree.mjs && node --check lib/validate.mjs && node --check lib/zip.mjs",

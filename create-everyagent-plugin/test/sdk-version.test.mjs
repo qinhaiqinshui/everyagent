@@ -48,4 +48,12 @@ test('CLI 内嵌 everyagent.sdkVersion 与宿主根 pom <revision> 一致', (t) 
     `CLI 内嵌 SDK 版本（${embedded}）与宿主工程版本（${m[1].trim()}）漂移。修复：` +
       `powershell -ExecutionPolicy Bypass -File scripts\\sync-plugin-template-versions.ps1`,
   )
+  // CLI 自身版本与工程版本同号（随 <revision> 走，scripts/bump-version.py 联动）——
+  // CONTRIBUTING「发布（维护者）」声明的一致性由此钉住。
+  assert.equal(
+    String(pkg.version || '').trim(),
+    m[1].trim(),
+    `CLI 自身版本（${pkg.version}）与宿主工程版本（${m[1].trim()}）漂移。修复：` +
+      `python scripts\\bump-version.py <新版本>（或手工对齐 create-everyagent-plugin/package.json）`,
+  )
 })
