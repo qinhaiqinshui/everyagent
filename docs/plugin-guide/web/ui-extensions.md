@@ -686,8 +686,8 @@ export default plugin
 
 主题应用分两步，天然支持「部分覆盖 + 其余继承」：
 
-1. `document.documentElement.setAttribute('data-theme', type)` —— 选定**基底**（内建深色 = `:root`、浅色 = `[data-theme='light']` 的整批 token）。
-2. 把 `colors` 的每一项 `documentElement.style.setProperty(token, value)` —— 以**行内样式**覆盖，优先级高于 `:root` 与 `[data-theme='light']`。
+1. `document.documentElement.setAttribute('data-theme', type)` —— 选定**基底**（内建深色 = `:root`、浅色 = `:root[data-theme='light']` 的整批 token）。
+2. 把 `colors` 的每一项 `documentElement.style.setProperty(token, value)` —— 以**行内样式**覆盖，优先级高于 `:root` 与 `:root[data-theme='light']`。
 
 因此：
 

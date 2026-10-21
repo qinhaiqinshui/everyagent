@@ -3,9 +3,9 @@
  *
  * 两步（继承模型的核心）：
  *  1. `documentElement[data-theme] = type` —— 选定**基底**（内建深色 = `:root`、
- *     浅色 = `[data-theme='light']` 的整批 token）。
+ *     浅色 = `:root[data-theme='light']` 的整批 token）。
  *  2. `colors` 逐项 `documentElement.style.setProperty(token, value)` —— 以
- *     **行内样式**（优先级高于 `:root` / `[data-theme='light']`）覆盖；只写
+ *     **行内样式**（优先级高于 `:root` / `:root[data-theme='light']`）覆盖；只写
  *     `colors` 里列出的项，故未列出的 token 自然继承 `type` 基底。
  *
  * 切换主题前先清除上一主题设过的行内 token，避免残留。

@@ -4,7 +4,7 @@
  * 规则：
  *  1. 本文件是项目唯一的视觉变量真相源。组件、原语、页面只引用
  *     token，不得硬编码颜色/圆角/阴影/间距。
- *  2. 深色为默认（:root），浅色通过 [data-theme='light'] 覆盖。
+ *  2. 深色为默认（:root），浅色通过 :root[data-theme='light'] 覆盖。
  *  3. 新增视觉值必须先加 token，再在组件里引用，禁止页面内联新色值。
  *  4. 移动端尺寸覆盖集中在文件末尾的 @media 块。
  * ============================================================= */
@@ -213,8 +213,14 @@
   --surface-glass: color-mix(in srgb, var(--bg-elevated) 88%, transparent);
 }
 
-/* ── 浅色主题覆盖 ──────────────────────────────────────── */
-[data-theme='light'] {
+/* ── 浅色主题覆盖（仅锚定 :root）────────────────────────────
+ * 必须写成 `:root[data-theme='light']`，**不能**是裸 `[data-theme='light']`：
+ * 宿主会在内层元素上同样打 `data-theme`（`body`、`.workspace-layout`），裸选择器
+ * 会在这些更深层的元素上**再次声明整套 token**，从而把 `documentElement` 上的
+ * 行内主题覆盖（如 `--reading-bg`）遮蔽掉——表现为「浅色基底的部分覆盖类主题
+ * （如只改阅读区配色）不生效，而深色基底的主题生效」。锚定 `:root` 后，
+ * 该块只作用于 html，行内覆盖恒胜。 */
+:root[data-theme='light'] {
   --bg-primary: #ffffff;
   --bg-secondary: #ffffff;
   --bg-tertiary: #ffffff;
