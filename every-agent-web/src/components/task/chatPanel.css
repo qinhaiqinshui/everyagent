@@ -1073,7 +1073,7 @@
   gap: 8px;
   /* 显式 box-sizing 避免 <button> 内联元素被 content 撑破父宽。
      显式 overflow:hidden 兜底,即使某种渲染条件下 inline-preview 无法收缩到位,
-     也能保留在 summary button 边界内被裁掉(与 trace .nagent-trace-shell__summary 同模型)。 */
+     也能保留在 summary button 边界内被裁掉(与 trace .nagent-entry__summary 同模型)。 */
   box-sizing: border-box;
   width: 100%;
   max-width: 100%;
@@ -1149,7 +1149,7 @@
 .nagent-tool__inline-preview {
   min-width: 0;
   /* max-width 兜底:把 max-content 锁回父容器宽,确保 chevron 始终紧贴 inline-preview
-     右边缘、且保持在 body 最大宽度内可见(与 trace .nagent-trace-shell__text 同模型
+     右边缘、且保持在 body 最大宽度内可见(与 trace .nagent-entry__text 同模型
      —— width:100% + min-width:0 + ellipsis,chevron 紧贴而非推到屏幕外)。 */
   max-width: 100%;
   /* 第3块：参数随内容定宽、不增长（chevron 紧贴内容而非固定最右）；
@@ -1430,7 +1430,10 @@
   word-break: normal;
 }
 
-/* ─── Trace 通用壳 ─────────────────────────────────────────── */
+/* ─── Entry 折叠行壳(nagent-entry__*)+ trace 行容器 ──────────
+   折叠行子元素类归一为 nagent-entry__*(共享壳 EntryShell 输出),trace 行与
+   工具行(步骤 5 迁移)共用同一套;trace 行族专属的容器规则(统一文字栏缩进/
+   展开态边框/折叠态悬停抑制)保留在 .nagent-trace-shell 容器类上。 */
 .nagent-trace-shell {
   display: block;
   /* trace 是 .nagent-thread 直接子元素不走 .nagent-msg__body，
@@ -1456,7 +1459,7 @@
   background: var(--bg-secondary);
 }
 
-.nagent-trace-shell__summary {
+.nagent-entry__summary {
   display: flex;
   align-items: center;
   gap: var(--space-2);
@@ -1468,7 +1471,7 @@
   border: none;
   background: transparent;
   cursor: pointer;
-  /* 容器统一字号/字重/行高 → 所有子元素 (title / summary 文件名) 继承同一规格，
+  /* 容器统一字号/字重/行高 → 所有子元素 (name / text 摘要) 继承同一规格，
      保证在同一 baseline 上对齐 (与工具调用 .nagent-tool__summary 一致的"容器定字号"模型)。
      字号 --text-xs 与工具行/思考过程同一规格 → 整条消息流纵向节奏齐平。 */
   font-size: var(--text-xs);
@@ -1478,22 +1481,22 @@
   text-align: left;
 }
 
-.nagent-trace-shell__summary:hover {
+.nagent-entry__summary:hover {
   background: var(--bg-hover);
   color: var(--text-primary);
 }
 
 /* 折叠态：悬停也不显示背景，保持与折叠态一致的纯净外观（仅保留文字颜色强调）。 */
-.nagent-trace-shell:not(.is-open) .nagent-trace-shell__summary:hover {
+.nagent-trace-shell:not(.is-open) .nagent-entry__summary:hover {
   background: transparent;
 }
 
-/* 无 content 的 trace：不可展开，去掉点击态光标，避免误以为可交互。 */
-.nagent-trace-shell__summary--static {
+/* 静态行(expandable=false)：不可展开，去掉点击态光标，避免误以为可交互。 */
+.nagent-entry__summary--static {
   cursor: default;
 }
 
-.nagent-trace-shell__icon {
+.nagent-entry__icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1501,15 +1504,25 @@
   color: var(--text-secondary);
 }
 
-.nagent-trace-shell__title {
+/* 耗时槽(工具行用;trace 行不渲染该槽,规则与 .nagent-tool__duration 现值等价,步骤 5 迁移时复用)。 */
+.nagent-entry__duration {
+  flex: 0 0 auto;
+  flex-shrink: 0;
+  color: color-mix(in srgb, var(--tool-slow-red) var(--tool-dur-tint, 0%), var(--text-muted));
+  transition: color var(--motion-duration-base) linear;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.nagent-entry__name {
   flex: 0 0 auto;
   min-width: 0;
-  /* 字号/字重/行高继承 summary 容器，与下方 summary 文件名同基线对齐。 */
+  /* 字号/字重/行高继承 summary 容器，与摘要文本(text)同基线对齐。 */
   color: var(--text-primary);
   white-space: nowrap;
 }
 
-.nagent-trace-shell__text {
+.nagent-entry__text {
   flex: 0 1 auto;
   min-width: 0;
   /* 不增长：让折叠图标紧贴 summary 内容右侧（与工具调用一致），而非被推到最右。
@@ -1520,18 +1533,18 @@
   text-overflow: ellipsis;
 }
 
-.nagent-trace-shell__chevron {
+.nagent-entry__chevron {
   flex: 0 0 auto;
   /* 与工具调用一致：固定宽度、始终显示、紧贴内容右侧，不用 margin-left:auto 推到最右。 */
   color: var(--text-muted);
 }
 
-.nagent-trace-shell__content {
+.nagent-entry__content {
   border-top: 1px solid var(--border-subtle, var(--border-light));
   padding: var(--space-2) var(--space-3) var(--space-3);
 }
 
-.nagent-trace-shell__pre {
+.nagent-entry__pre {
   margin: 0;
   white-space: pre-wrap;
   word-break: break-word;
@@ -1540,7 +1553,7 @@
   line-height: 1.6;
 }
 
-.nagent-trace-shell__empty {
+.nagent-entry__empty {
   color: var(--text-muted);
   font-size: var(--text-xs);
 }
@@ -2382,7 +2395,7 @@
    仍可通过点击折叠行/头部整行触发。 */
 .nagent-msg__reasoning--system .nagent-msg__reasoning-toggle,
 .nagent-tool__chevron,
-.nagent-trace-shell__chevron {
+.nagent-entry__chevron {
   opacity: 0;
   transition: opacity 0.15s ease;
 }
@@ -2397,8 +2410,8 @@
   .nagent-msg__reasoning--system .nagent-msg__reasoning-toggle:focus-visible,
   .nagent-tool__summary:hover .nagent-tool__chevron,
   .nagent-tool__summary:focus-visible .nagent-tool__chevron,
-  .nagent-trace-shell__summary:hover .nagent-trace-shell__chevron,
-  .nagent-trace-shell__summary:focus-visible .nagent-trace-shell__chevron {
+  .nagent-entry__summary:hover .nagent-entry__chevron,
+  .nagent-entry__summary:focus-visible .nagent-entry__chevron {
     opacity: 1;
   }
 }

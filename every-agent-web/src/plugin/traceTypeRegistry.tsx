@@ -71,10 +71,10 @@ function renderFallbackContent(trace: {
 }): React.ReactNode {
   const text = stringifyTraceContent(trace.content).trim()
   if (!text) {
-    return <span className="nagent-trace-shell__empty">（空追踪）</span>
+    return <span className="nagent-entry__empty">（空追踪）</span>
   }
   return (
-    <pre className="nagent-trace-shell__pre">
+    <pre className="nagent-entry__pre">
       {text}
     </pre>
   )
@@ -164,7 +164,7 @@ export function initializeTraceTypes(): void {
     kind: 'model.failover',
     renderContent: (trace) => {
       const text = stringifyTraceContent(trace.content).trim() || trace.summary?.trim() || ''
-      return <pre className="nagent-trace-shell__pre">{text}</pre>
+      return <pre className="nagent-entry__pre">{text}</pre>
     },
     getSummary: (trace) => trace.summary?.trim() || stringifyTraceContent(trace.content),
     getIcon: (trace) => trace.icon,

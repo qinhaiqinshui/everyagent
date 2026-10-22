@@ -218,7 +218,7 @@ describe('FallbackView 渲染(renderToString,node 环境)', () => {
     expect(html).toContain('nagent-trace-shell')
     expect(html).toContain('重试通知')
     expect(html).toContain('第 2 次')
-    expect(html).toContain('nagent-trace-shell__summary--static')
+    expect(html).toContain('nagent-entry__summary--static')
     expect(html).not.toContain('aria-expanded')
   })
 
@@ -259,7 +259,7 @@ describe('FallbackView 渲染(renderToString,node 环境)', () => {
     })
     // 收起态只展示 summary(容灾切换模型:…),kind 兜底标题不再出现。
     expect(html).toContain('容灾切换模型：cfg-2 m-2')
-    expect(html).not.toContain('nagent-trace-shell__title')
+    expect(html).not.toContain('nagent-entry__name')
     // content 存在 → 可展开(完整切换链展开态可见)。
     expect(html).toContain('aria-expanded="false"')
   })

@@ -341,7 +341,7 @@ describe('error / cancelled 渲染(两级分发:第一层无专视图 → Fallba
     expect(html).toContain('nagent-trace-shell')
     expect(html).toContain('任务出错')
     // 第二级表 error 定义:getIcon 缺省 alert(三角警示 SVG 图标)
-    expect(html).toContain('nagent-trace-shell__icon')
+    expect(html).toContain('nagent-entry__icon')
     expect(html).toContain('<svg')
     // tone 链已删:不再有整行错误色类
     expect(html).not.toContain('nagent-trace-shell--error')
@@ -362,7 +362,7 @@ describe('error / cancelled 渲染(两级分发:第一层无专视图 → Fallba
     )
     expect(html).toContain('nagent-trace-shell')
     expect(html).toContain('任务已取消')
-    expect(html).toContain('nagent-trace-shell__summary--static')
+    expect(html).toContain('nagent-entry__summary--static')
     expect(html).not.toContain('aria-expanded')
   })
 })

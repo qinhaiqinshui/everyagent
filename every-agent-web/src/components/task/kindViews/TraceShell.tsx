@@ -1,17 +1,20 @@
 /**
  * 单条 trace 族线程项的呈现壳(payload = trace 形状:title/summary/content/data)。
  *
- * 步骤 9(kind 渲染注册表基建)由 TaskThread.tsx **原位提取**为独立组件文件:
- * 逻辑逐字节保持(提取不改行为);kindViews 注册表侧的 FallbackView 复用本壳呈现
- * (TaskTraceShell 形状兜底,内容零丢失)。渲染层两级分发统一化后 error/cancelled
- * 等一切未注册第一层视图的 kind 均经 FallbackView 落本壳,壳内按传入 kind(= wire
- * kind)直查第二级 traceTypeRegistry 取定义,不做任何 kind 改写。
+ * 步骤 9(kind 渲染注册表基建)由 TaskThread.tsx **原位提取**为独立组件文件;
+ * 渲染层两级分发统一化后 error/cancelled 等一切未注册第一层视图的 kind 均经
+ * FallbackView 落本壳,壳内按传入 kind(= wire kind)直查第二级 traceTypeRegistry
+ * 取定义,不做任何 kind 改写。
+ *
+ * 本组件只做「解析 + 填槽」:解析逻辑(getTraceType/PluginTraceRecord 合成/
+ * getSummary/expandable/renderContent)保留,折叠行结构与展开容器由共享壳
+ * EntryShell(槽位制)承担;外层容器类 nagent-trace-shell(trace 行族专属的
+ * 缩进/展开边框/悬停策略)与 nagent-msg、容器 title 属性保持原样。
  */
-import React from 'react'
 import type { ThreadItem, TracePayload } from '@/task/threadItem'
 import type { PluginTraceRecord } from '@everyagent/plugin-api'
 import { getTraceType, resolveTraceIcon, stringifyTraceContent } from '@/plugin/traceTypeRegistry'
-import { ChevronDownIcon, ChevronRightIcon } from '@/components/shared/AppGlyphs'
+import { EntryShell } from '@/components/task/entryViews/EntryShell'
 
 /** 单条 trace 族线程项(payload = trace 形状:title/summary/content/data)。 */
 export function TaskTraceShell({
@@ -22,7 +25,6 @@ export function TaskTraceShell({
   taskId: string
 }) {
   const payload: TracePayload = (item.payload as TracePayload | undefined) ?? { title: '' }
-  const [open, setOpen] = React.useState(false)
   // trace 类型解析 key = 传入 kind(wire kind)直配,error/cancelled 等 status 族
   // 也由第二级表按真键给定义,本壳不改写 kind。
   const traceTypeKey = item.kind
@@ -49,36 +51,18 @@ export function TaskTraceShell({
   const expandable = payload.content != null || traceType.canExpand?.(trace) === true
   const content = expandable ? (traceType.renderContent?.(trace, { taskId }) ?? null) : null
 
-  const summaryRow = expandable ? (
-    <button
-      type="button"
-      className="nagent-trace-shell__summary"
-      aria-expanded={open}
-      onClick={() => setOpen((current) => !current)}
-    >
-      {icon ? <span className="nagent-trace-shell__icon">{icon}</span> : null}
-      {showTitle ? <span className="nagent-trace-shell__title">{title}</span> : null}
-      {summary ? <span className="nagent-trace-shell__text">{summary}</span> : null}
-      <span className="nagent-trace-shell__chevron">
-        {open ? <ChevronDownIcon size={13} /> : <ChevronRightIcon size={13} />}
-      </span>
-    </button>
-  ) : (
-    <div className="nagent-trace-shell__summary nagent-trace-shell__summary--static">
-      {icon ? <span className="nagent-trace-shell__icon">{icon}</span> : null}
-      {showTitle ? <span className="nagent-trace-shell__title">{title}</span> : null}
-      {summary ? <span className="nagent-trace-shell__text">{summary}</span> : null}
-    </div>
-  )
-
   return (
-    <section
-      className={`nagent-trace-shell nagent-msg${open && expandable ? ' is-open' : ''}`}
+    <EntryShell
+      as="section"
+      className="nagent-trace-shell nagent-msg"
       title={titleText}
+      expandable={expandable}
+      icon={icon}
+      name={showTitle ? title : undefined}
+      summary={summary}
     >
-      {summaryRow}
-      {open && expandable ? <div className="nagent-trace-shell__content">{content}</div> : null}
-    </section>
+      {content}
+    </EntryShell>
   )
 }
 
