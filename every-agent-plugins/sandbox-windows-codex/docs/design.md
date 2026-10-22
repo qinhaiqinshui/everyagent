@@ -54,8 +54,8 @@ worker JVM(真实用户)                    setup helper JVM(管理员,UAC 一�
 | 环境分块传输(`--launch-payload-env`,16KiB×16MiB) | 暂缓 | payload 经管道帧(SpawnRequest.env)传递而非命令行,天然绕开 32,767 字符限制 |
 | deny-read walker 对账 | 二期 | 首期 setup 时一次性刷静态 deny-read;对账解决的是用户手删 ACE 的漂移 |
 | deny-read 动态列表 | 首期固定为空 | 读隔离主力是"账户基线无权读真实用户目录";沙箱数据目录靠组 DENY ACE |
-| SCM/常驻 runner 池、runner 复用 | 暂缓 | 每次会话新起 runner JVM,启动开销 ~200ms 可接受 |
-| managed network 代理强制(proxy_enforced、restricting SID) | 暂缓 | every-agent 网络策略只有放行/断网两档(§7.10);断网 = Offline 账户天然达成 |
+| SCM/常驻 runner 池、runner 复用 | **已落地(2026-12 阶段一)** | `RunnerPools` 常驻池化(按 codexHome+账户分池、每命令独占、复用前健康探测、空闲 TTL 发 shutdown 关会话、池上限、凭据自愈整池作废)+ runner 多命令帧循环;泄漏面从每命令 1 个登录会话降为每 worker 有界。配置开关 `codex.runner-pool-enabled`(默认开) |
+| managed network 代理强制(proxy_enforced、restricting SID) | offline 强制仍缓;**online loopback 代理已落地(2026-12 阶段二)** | online 账户本就全网直连,代理定位是沙箱 HTTPS/代理 env 的承载(§2.9);offline 的「唯一出口=代理」模型需要逐连接归因(restricting SID + GetExtendedTcpTable)才能不击穿密闭性,本项目未采用——offline 保持天然断网 |
 | UAC helper 的环境分块、launch payload 文件 | 简化 | payload base64 后经 helper 命令行单参数传递(自身 < 4KB);超限再落临时文件 |
 
 ### 1.3 不可简化的不变量(照抄 codex)
@@ -145,8 +145,62 @@ Maven 模块 `every-agent-plugins/sandbox-windows-codex`,包根 `dev.everyagent.
 | `CodexSandboxProvider` | id=`codex`;isAvailable=Windows ∧ marker+凭据就绪(setup 在 activate() 中同步完成,幂等;isAvailable 只读探测,不触发 setup/UAC);priority:就绪 8(明显低于 wsl-ubuntu 的 10,auto 不抢既有默认后端;高于 windows-mic 兜底 5——setup 完成即显式选用)、未 setup 0 |
 | `CodexSandboxBackend` | mount=恒等映射 + 把根登记进 `CodexSandboxManager`(供 CommandExecutor 组 RootPolicy);onWorkspaceRemoved=no-op(ACL 持久、由 state 文件对账,不在此清理;过期根 preflight 幂等跳过) |
 | `RootPolicy` | 读根/写根/deny-write 计算:RW 根=工作区根+externalRoots+skills;deny-write=codexHome 与 USERPROFILE 敏感子集 |
-| `CodexCommandExecutor` | 执行入口:readiness→preflight 刷 ACL→组 SpawnRequest→RunnerClient 会话→聚合 stdout/stderr(每流上限)→格式化(对照 WslUbuntuCommandExecutor) |
+| `CodexCommandExecutor` | 执行入口:readiness→preflight 刷 ACL→组 SpawnRequest→RunnerClient 会话→聚合 stdout/stderr(每流上限)→格式化(对照 WslUbuntuCommandExecutor);会话默认经 `RunnerPools` 池化获取(开关 `codex.runner-pool-enabled`),online 身份且代理在跑时注入代理 env(§2.9) |
 | `CodexBashToolProvider` | ToolProvider:appliesTo=`"codex".equals(ctx.sandbox().id())`;提供 `bash` 工具(描述同 wsl 形态:rg 优先、cwd=工作区根、stdin 无输入可用且不可交互——实现为关闭的 stdin 管道,非 NUL,见 §7.10) |
+
+### 2.9 `session`(runner 池)与 `proxy`(宿主 loopback 代理) — 连接管理(2026-12 阶段一/二)
+
+**Runner 池化(`session.RunnerPools`)**:进程级注册表按 `codexHome + 沙箱账户` 分池
+(username 必须进键——offline/online 是两个账户,受限令牌自登录账户派生,跨账户复用
+会把 offline 命令跑进 online 会话)。语义:每命令独占(acquire 借出即离池)/复用前
+健康探测(进程存活 + `-out` 管道连通且零残留字节,残留=上一命令陈旧帧会错位握手)/
+会话异常剔除(EOF/断管/帧错→作废重建)/池上限(满则限时等待,超时溢出新建+WARN——
+有界是目标但不以命令失败为代价)/空闲 TTL(后台清扫+机会式回收,到期发 `shutdown`
+帧让 runner 退出、登录会话随进程引用归零被系统回收)/凭据失配自愈整池作废(旧凭据
+代际的 runner 不复用)。runner 侧(`runner.CodexRunnerMain`)为「单读线程帧分发 +
+主线程串行多命令」循环:一个 runner 生命周期串行处理多条命令,`shutdown` 帧或管道
+EOF 退出;旧单命令语义向后兼容。泄漏面从每命令 1 个登录会话降为
+**池上限 × 键数(有界)**。配套 `accounts.LogonSessionMonitor`(LSA
+`LsaEnumerateLogonSessions`,secur32)周期审计会话总数:默认 30 分钟 INFO/超 64
+WARN 附「重启 worker 可回收」处置提示。
+
+**宿主 loopback 代理(`proxy.LoopbackHttpProxy`,对齐 codex network-proxy 默认形态)**:
+worker 进程内嵌(非独立进程、不进沙箱),仅绑 127.0.0.1;端口策略 = 配置首选端口
+(默认 3128)→ 管理段 3128..3159 顺序探测,**拒绝端口 0/绝不随机**(随机端口无法
+预声明、env 注入地址不稳定);CONNECT 隧道透传(host 级 `HostPolicy`:默认放行公网
+目标,拦 any-local/multicast/link-local/回环——NO_PROXY 已把 localhost 归直连,拦
+回环消除经代理打回宿主本机的 SSRF 绕行面;私网默认放行防内网制品服务器可用性回退,
+开关可拦;显式 deny 清单后缀匹配先于 DNS);明文 HTTP 绝对 URI 转发(origin-form
+改写 + Connection: close,双向泵到 EOF);阻断 403 + `x-proxy-error` 头(可观测而非
+静默);**不做 TLS 终结、不生成证书、不写系统证书库;SOCKS5 裁剪**(ALL_PROXY 回退
+http url,与 codex 关 socks 一致)。生命周期绑定 worker(`ProxyRegistry` 按
+codexHome 键,activate 启动/deactivate 全关;仅 online 身份——policy=offline 永不
+启动;执行侧 `endpointIfRunning` 纯查询,不在命令路径绑端口)。
+
+**防火墙协同(有意不接线)**:不把代理端口加入 `codex.proxy-ports` 放行清单/marker。
+该清单只约束 offline 账户环回 TCP;代理仅服务 online 账户——online 本无任何防火墙/
+WFP 规则,环回直连畅通无需放行;反向接线会击穿 offline 密闭性(本项目无 codex 的
+逐连接归因,无法区分 offline/online 调用方,offline 进程即可经代理获得全网出站)。
+codex 的「listener ⊆ proxy_ports + marker 对账」服务于其 offline 唯一出口模型,
+本项目未采用;端口确定性由固定管理段保证,无漂移对账面(详见 `ProxyRegistry`
+类 Javadoc)。
+
+**代理 env 注入(`proxy.ProxyEnv`,对齐 codex apply_proxy_env_overrides)**:仅
+online 身份且代理在跑时,对子进程 env 注入
+`HTTP(S)_PROXY/WS(S)_PROXY/ALL_PROXY/FTP_PROXY`(大小写成对)=
+`http://127.0.0.1:<port>`、`NO_PROXY/no_proxy=localhost,127.0.0.1,::1`(本项目
+允许本地直连,等价 codex allow_local_binding=true 语义)、`NODE_USE_ENV_PROXY=1`、
+`ELECTRON_GET_USE_PROXY=true`、活性标记 `EVERY_AGENT_PROXY_ACTIVE=1`;**用户显式
+值不覆盖**(putIfAbsent),带活性标记的旧托管 env(上层 EveryAgent 注入,可能携旧
+worker 旧端口)先剥离再按当前端口重注(对齐 strip_managed_proxy_env,防旧地址
+重放)。git 工作区命令另经 `GIT_CONFIG_KEY_n` env 机制自动追加
+`http.sslBackend=openssl`(Schannel 在受限令牌下 HTTPS 不可用,findings §2/§5;
+仅当 env 链未显式配置时;代理不在跑也注入——该缺陷与代理无关)。
+
+**Schannel 兜底 = 文档化(不做 MITM)**:codex 默认 `mode=full + mitm=false`,且
+受限令牌下 Schannel 死在 `AcquireCredentialsHandle` 凭据获取、先于证书校验——
+MITM 救不了它(只能帮 OpenSSL 系客户端,而它们经 CONNECT 隧道本来就能用)。限制
+与规避指引见 `https-sspi-restricted-token-findings.md` §8。
 
 ## 3. JNA 需补齐的 Win32 原语(已对照 jna-platform 5.16 实测)
 
@@ -252,6 +306,16 @@ SpawnRequest 不搬 codex 的 permission_profile 结构,改为自有 `writeRoots
 | `codex.setup.auto-uac` | ~~true~~ 已移除 | setup 已移入 activate() 同步执行,此键不再需要 |
 | `codex.extra-read-roots` / `codex.extra-deny-write-paths` | 空 | 追加读根 / deny-write 路径 |
 | `codex.java-home` | 当前 JVM | runner 启动用 java.exe 路径 |
+| `codex.runner-pool-enabled` | true | runner 常驻池化复用(登录会话有界化);false = 回到每命令新建 runner 的旧形态 |
+| `codex.runner-pool-max-size` | 2 | 每池(codexHome+账户)runner 数上限;并发超过上限时短暂溢出并告警 |
+| `codex.runner-pool-idle-ttl-ms` | 600000 | 空闲 runner 存活毫秒数,到期发 shutdown 帧关会话 |
+| `codex.logon-session-audit-interval-ms` | 1800000 | 沙箱账户登录会话数审计周期毫秒(<=0 关闭) |
+| `codex.logon-session-audit-threshold` | 64 | 登录会话总数告警阈值,超过打 WARN(提示重启 worker 回收) |
+| `codex.proxy-enabled` | true | 宿主侧 loopback 代理(仅 online 身份;沙箱命令注入代理 env);false = 直连行为 |
+| `codex.proxy-port` | 3128 | 代理首选端口;占用时按管理段 3128..3159 顺序探测;0/非法值视为未配置(绝不随机) |
+| `codex.proxy-allow-loopback-targets` | false | true = 允许经代理访问 127/8、::1 目标(默认拦:localhost 走 NO_PROXY 直连) |
+| `codex.proxy-block-private-targets` | false | true = 拦私网(RFC1918/IPv6 ULA)目标(默认放行:内网制品服务器是合法场景) |
+| `codex.proxy-deny-hosts` | 空 | 代理目标显式禁配清单(逗号/空白分隔,后缀匹配大小写不敏感) |
 | `codex.setup-timeout-ms` / `codex.exec-timeout-ms` | 120000 / 沙箱默认 | setup 与单命令看门狗 |
 
 ## 8. 测试策略
@@ -276,5 +340,5 @@ SpawnRequest 不搬 codex 的 permission_profile 结构,改为自有 `writeRoots
 
 ## 10. 风险与开放问题
 
-**风险**:① COM vtable 手工调用槽位易错(fwpol 接口方法序)——靠 windows-admin 单测 + LocalPolicyModifyState 自检双保险;② WFP 结构体 union 映射笔误 → 事务 Abort 兜底,任何失败拒绝执行;③ 企业策略禁 NetUserAdd/域控环境 setup 直接失败(fail-closed,报可读错误);④ 杀软/EDR 可能拦截 CreateProcessWithLogonW 与提权 helper;⑤ DPAPI 机器作用域 = 本机任意账户可解密(与 codex 同边界,只防拷走离线读);⑥ GPO 覆盖防火墙 → LocalPolicyModifyState 检出即拒绝,不静默降级;⑦ runner JVM 启动开销与内存(每会话一个 JVM,~50MB)。
-**开放问题**:① externalRoot 指向非 owner 目录时 preflight 刷 ACE 可能无 WRITE_DAC——首期拒绝并提示管理员 setup 授权,是否提供"提权刷 ACL"路径待定;② COM 若长期不稳,是否引入 Java 22+ FFM 小段绑定(需评估 JDK 25 模块封禁与 --enable-native-access 分发);③ 常驻 runner/runner 池与多工作区并发会话的桌面复用策略;④ deny-read walker 对账与动态 deny-read 列表(二期);⑤ 多 worker 实例同机共存时 setup 互斥粒度(目前全局互斥已够);⑥ Windows Home 无 secpol.msc 但 NetUserAdd 可用,需实测各 SKU。
+**风险**:① COM vtable 手工调用槽位易错(fwpol 接口方法序)——靠 windows-admin 单测 + LocalPolicyModifyState 自检双保险;② WFP 结构体 union 映射笔误 → 事务 Abort 兜底,任何失败拒绝执行;③ 企业策略禁 NetUserAdd/域控环境 setup 直接失败(fail-closed,报可读错误);④ 杀软/EDR 可能拦截 CreateProcessWithLogonW 与提权 helper;⑤ DPAPI 机器作用域 = 本机任意账户可解密(与 codex 同边界,只防拷走离线读);⑥ GPO 覆盖防火墙 → LocalPolicyModifyState 检出即拒绝,不静默降级;⑦ runner JVM 启动开销与内存(**池化后 = 每池 1~2 个常驻 JVM**,非每会话;空闲 TTL 到期自动关闭)。
+**开放问题**:① externalRoot 指向非 owner 目录时 preflight 刷 ACE 可能无 WRITE_DAC——首期拒绝并提示管理员 setup 授权,是否提供"提权刷 ACL"路径待定;② COM 若长期不稳,是否引入 Java 22+ FFM 小段绑定(需评估 JDK 25 模块封禁与 --enable-native-access 分发);③ ~~常驻 runner/runner 池与多工作区并发会话的桌面复用策略~~ **已落地(2026-12):`RunnerPools` 按 codexHome+账户分池、每命令独占、TTL 回收**,遗留的溢出新建仅在并发瞬时超上限时发生并告警;④ deny-read walker 对账与动态 deny-read 列表(二期);⑤ 多 worker 实例同机共存时 setup 互斥粒度(目前全局互斥已够);⑥ Windows Home 无 secpol.msc 但 NetUserAdd 可用,需实测各 SKU;⑦ loopback 代理对宿主本机其它进程可达(codex 同边界)——缓解 = 仅回环 + HostPolicy + worker 生命周期,配置 `codex.proxy-deny-hosts` 可收紧;⑧ MITM 模式(Schannel 救援)已论证不可行且不做,见 findings §8.2 与 §1.2。

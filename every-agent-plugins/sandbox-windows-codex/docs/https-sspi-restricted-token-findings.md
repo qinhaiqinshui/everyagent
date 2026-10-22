@@ -80,3 +80,54 @@ LSA 拒绝向受限令牌进程发放登录会话的缓存凭据（安全设计�
 - worker 自带精简 JRE（`resources/jre`）无 `jdk.compiler` 模块，**不支持
   `java Foo.java` 单文件源码模式**——诊断探针曾因此静默无输出（表现为
   "输出文件未生成"），后续排障注意
+
+## 8. 落地补记（2026-12，阶段一 Runner 池化 + 阶段二沙箱 HTTPS）
+
+### 8.1 池化落地结论：登录会话从「每命令 1 个」降为「池化有界」
+
+§7 第二条的 seclogon 泄漏已由 **runner 常驻池化**（阶段一，提交
+9519e588/198c84ef/8cef35ab）治理：worker 侧 `RunnerPools` 按
+`codexHome + 沙箱账户` 分池，复用空闲 runner（健康探测：进程存活 + `-out`
+管道连通且零残留字节）、每命令独占、空闲 TTL（默认 10 分钟）到期发
+`shutdown` 帧关会话、池上限默认 2、凭据失配自愈整池作废；runner 侧单命令
+循环改造为「单读线程帧分发 + 主线程串行多命令」。泄漏面由每命令 1 个登录
+会话降为**每 worker 有界个数（池上限 × 键数）**；配套
+`LogonSessionMonitor`（LSA `LsaEnumerateLogonSessions`，secur32）周期审计
+会话总数（默认 30 分钟 INFO / 超 64 WARN 附「重启 worker 可回收」提示）。
+实测快照（池化前）：total=180，EACodexOnline=169——正是本条所述泄漏。
+
+### 8.2 阶段二沙箱 HTTPS：宿主 loopback 代理已落地，Schannel 兜底 = 文档化
+
+对 openai/codex main 的源码实证（`.everyagent/codex-https-research.md`，
+ crate `codex-rs/network-proxy`）+ 用户决策「Codex 怎么实现本项目就怎么做」：
+
+- **已落地**：宿主（worker 进程）内嵌 `LoopbackHttpProxy`（`proxy` 包）——仅
+  绑 127.0.0.1，首选端口 3128 + 管理段 3128..3159 顺序探测（**拒绝端口 0，
+  绝不随机**）；CONNECT 隧道透传（默认不做 MITM、不生成任何证书、不写系统
+  证书库）；明文 HTTP 绝对 URI 转发；阻断 403 + `x-proxy-error` 头；SOCKS5
+  裁剪（ALL_PROXY 回退 http url，与 codex 关 socks 一致）。`ProxyEnv` 对
+  online 命令注入全套代理 env（HTTP(S)_PROXY/WS(S)_PROXY/ALL_PROXY/FTP_PROXY
+  大小写成对、NO_PROXY=localhost,127.0.0.1,::1、NODE_USE_ENV_PROXY=1、
+  ELECTRON_GET_USE_PROXY=true、EVERY_AGENT_PROXY_ACTIVE=1 活性标记），
+  用户显式值不覆盖、旧托管键先剥离再重注。**防火墙协同有意不接线**：
+  代理仅服务 online 账户（本无任何防火墙/WFP 规则，环回直连畅通），不把
+  代理端口加进 offline 放行清单——本项目无 codex 的逐连接归因
+  （restricting SID + GetExtendedTcpTable），加了会击穿 offline 密闭性；
+  端口确定性由固定管理段保证，无漂移对账面（详见 `ProxyRegistry` 类 Javadoc）。
+- **Schannel 兜底 = 本文档即兜底（不做 MITM）**：§6.3/§6.4 的论证被 codex
+  源码实证再次确认——codex 默认 `mode=full + mitm=false`（MITM 仅
+  limited/hooks/credential-broker 场景 opt-in），且全仓对
+  `AcquireCredentialsHandle`/`SEC_E_NO_CREDENTIALS` 零处理，Windows 代理
+  E2E 测试只跑裸 TCP/HTTP。**根因是凭据获取先于证书校验**——即便 MITM
+  动态签发证书，Schannel 客户端仍在 `AcquireCredentialsHandle` 一步死掉，
+  与信任链无关；MITM 只能帮「自带信任链可注入」的 OpenSSL 系客户端，而
+  它们经 CONNECT 隧道本来就能用。故本项目与 codex 同款默认：不做 MITM。
+- **§6.2 的建议已落地**：执行器对 git 工作区命令经 `GIT_CONFIG_KEY_n`
+  env 机制自动追加 `http.sslBackend=openssl`（仅当 env 链未显式配置时；
+  代理不在跑也注入——该缺陷与代理无关），git 开箱即用。
+- **规避指引（面向模型/用户，与 §5 一致并扩充）**：git（自动 openssl 注入）、
+  Java/JSSE、Node、Python/OpenSSL 天然可用；curl.exe/PowerShell/.NET
+  `SslStream` 等 Schannel 原生栈在沙箱内 **HTTPS 不可用（平台限制，非断网）**；
+  确需 curl 建议使用 openssl 构建的 curl。误判防护：代理阻断返回 403 +
+  `x-proxy-error`，与 Schannel 失败（`SEC_E_NO_CREDENTIALS`/「安全包中没有
+  可用的凭证」）可区分——前者是策略拦截、后者是平台限制。

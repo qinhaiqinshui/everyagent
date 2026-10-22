@@ -470,21 +470,63 @@ try {
 
 ---
 
-### TC-3.5 Online 账户联网——网络正常
+### TC-3.5 Online 账户联网——git(OpenSSL)/Java HTTPS 可用；Schannel 原生栈不可用（文档化限制）
 
-**前置**：`worker.sandbox.allow-network=true` 且 `codex.network-policy=auto`（或 `online`）
+**前置**：`worker.sandbox.allow-network=true` 且 `codex.network-policy=auto`（或 `online`）；插件默认配置（`codex.proxy-enabled=true`，代理监听 127.0.0.1:3128..3159 段内）
 
 **步骤**：
-1. 重启 worker 确保配置生效
-2. 在 AI 对话中执行：
+1. 重启 worker 确保配置生效（日志应出现 `[codex-proxy] 已启动 127.0.0.1:<port>`）
+2. 在 AI 对话中依次执行（git 工作区内）：
    ```
-   curl https://www.baidu.com -UseBasicParsing
+   git ls-remote https://github.com/git/git.git HEAD
+   python -c "import urllib.request;print(urllib.request.urlopen('https://www.baidu.com').status)"
+   curl.exe https://www.baidu.com -UseBasicParsing
    ```
+   （无 python 时可用 Node：`node -e "fetch('https://www.baidu.com').then(r=>console.log(r.status))"`——两者均为自带 TLS 栈）
+3. 观察子进程 env：`Get-ChildItem Env:HTTP_PROXY,Env:EVERY_AGENT_PROXY_ACTIVE`
 
 **预期**：
-- ✅ 命令执行成功
-- ✅ 返回百度首页 HTML 内容
-- ✅ 网络正常访问
+- ✅ git `ls-remote` 成功（执行器经 `GIT_CONFIG_KEY_n` 自动注入 `http.sslBackend=openssl`，代理 env 同步注入，CONNECT 隧道透传）
+- ✅ Java/JSSE 或 Python/OpenSSL HTTPS 成功（自带 TLS 栈不依赖 SSPI）
+- ✅ `HTTP_PROXY=http://127.0.0.1:<port>`、`EVERY_AGENT_PROXY_ACTIVE=1` 已注入；`NO_PROXY=localhost,127.0.0.1,::1`
+- ❌ `curl.exe`（Schannel 栈）HTTPS 失败：`SEC_E_NO_CREDENTIALS`——**平台限制，非断网、非代理故障**（受限令牌被 Windows 拒发 SSPI 凭据，根因在凭据获取、先于证书校验，与代理/证书无关）。限制说明与规避指引见 `https-sspi-restricted-token-findings.md` §2/§5/§8；HTTP 明文目标 curl 仍可用
+- 验证代理阻断可观测（可选）：`curl.exe -x http://127.0.0.1:<port> https://127.0.0.1/` → 403 + `x-proxy-error: target-loopback`
+
+---
+
+### TC-3.8 宿主 loopback 代理——行为与回退开关
+
+**前置**：TC-3.5 同配置；宿主（非沙箱）PowerShell 可执行 `Get-NetTCPConnection`
+
+**步骤**：
+1. 检查监听：`Get-NetTCPConnection -LocalPort 3128 -State Listen -ErrorAction SilentlyContinue`（或 3129..3159 段内某端口）
+2. 观察 worker 日志中 `[codex-proxy]` 打点（启动端口/阻断/关闭）
+3. 配置 `codex.proxy-enabled=false` 重启 worker，重复 TC-3.5 的 env 检查
+
+**预期**：
+- ✅ 代理仅监听 `127.0.0.1`（LocalAddress 为 Loopback，绝不 0.0.0.0）
+- ✅ 端口落在首选 3128 或管理段 3128..3159 内（绝不随机端口）
+- ✅ `codex.proxy-enabled=false` 后：不再监听、沙箱命令 env 无代理变量（回到直连行为），命令仍正常执行
+- ✅ `codex.network-policy=offline` 重启后：代理不启动（offline 策略不启动代理）
+
+---
+
+### TC-3.9 Runner 池化——连续命令的登录会话数有界（回归）
+
+**前置**：默认配置（`codex.runner-pool-enabled=true`，`max-size=2`）；宿主可执行 `query session` / worker 日志可见 `[runner-pool]` 打点与 `LogonSessionMonitor` 审计行
+
+**步骤**：
+1. 重启 worker（清零基线），记录初始登录会话数（worker 日志 `[logon-session]` 审计行或 `query session` 计数）
+2. 在 AI 对话中**串行**执行 10 条简单命令（如 10 次 `echo ok-N`）
+3. 再次观察 `[runner-pool]` 打点（`复用/新建/回收` 计数）与下一次审计行的会话总数
+4. 等待空闲 TTL（默认 10 分钟）后再执行一条命令，观察 `[runner-pool] 回收` 与 `shutdown` 打点
+
+**预期**：
+- ✅ 10 条串行命令只产生 **≤2 个**新登录会话（首条新建 1 个 runner 后复用；并发上限内允许池按需新建至 `max-size`）
+- ✅ `[runner-pool]` 打点可见 `复用` 计数 ≥ 8（串行场景第二条起全为复用）
+- ✅ 空闲 TTL 到期后 runner 被 `shutdown`，其登录会话数回落（泄漏面 = 池上限 × 账户数，有界）
+- ✅ 凭据失配自愈（TC-1.3）触发后池整代作废重建（`[runner-pool] 作废` 打点），命令照常恢复
+- 单测对应：`RunnerPoolTest`（并发 acquire/release、异常剔除、TTL 回收、池上限）、`CodexRunnerLoopTest`/`WindowsRunnerSmokeTest`（同一 runner 连续 ≥2 条命令）
 
 ---
 
@@ -1071,9 +1113,11 @@ Get-Process powershell | Where-Object { $_.StartTime -gt (Get-Date).AddMinutes(-
 | TC-3.2 | 网络 | Offline TCP 失败 | 连接失败 |
 | TC-3.3 | 网络 | Offline ping 失败 | ICMP 被拦 |
 | TC-3.4 | 网络 | Offline 环回被拦 | 本地服务不可达 |
-| TC-3.5 | 网络 | Online 联网正常 | 网络正常 |
+| TC-3.5 | 网络 | Online 联网（HTTPS） | git(OpenSSL)/Java/Node HTTPS 可用；Schannel 栈不可用（文档化限制）；代理 env 已注入 |
 | TC-3.6 | 网络 | 防火墙规则存在 | 4 条 block 规则 |
 | TC-3.7 | 网络 | WFP 过滤器存在 | 12 条 filter |
+| TC-3.8 | 网络 | loopback 代理行为 | 仅回环/固定端口段/回退开关/offline 不启动 |
+| TC-3.9 | 网络 | Runner 池化会话有界 | 连续 10 命令 ≤2 新会话；TTL 回收；自愈作废重建 |
 | TC-4.1 | 提权 | 直接提权拒绝 | 失败 |
 | TC-4.2 | 提权 | 脚本内部提权 | 失败 |
 | TC-4.3 | 提权 | sudo 命令 | 失败 |
