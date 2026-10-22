@@ -37,7 +37,7 @@ has_children: false
 | `ui.composer_chip_actions` | `registerComposerChipAction` | 按 kind 接管输入框/消息回放胶囊的点击行为 | selection-reference（核心 `system.workspace_file` 亦经此扩展点注册，见 §17） |
 | `ui.settings_sections` | `registerSettingsSection` | 向设置页贡献一个设置段 | **无**（novel-reader 起于此） |
 | `ui.themes` | `registerTheme` | 贡献一套全局颜色主题（可部分覆盖、其余继承基底） | **无**（novel-reader；核心深/浅色为主题表内建项） |
-| `ui.kind_views` | `registerKindView` | 按 kind 接管任务线程条目**整行**渲染（两级分发第一级） | **无**（规划定稿，宿主接线随代码跟进，见 §20） |
+| `ui.kind_views` | `registerKindView` | 按 kind 接管任务线程条目**整行**渲染（两级分发第一级） | **无**（见 §20） |
 
 ## 2. `ui.sidebar_items` —— 侧边栏活动栏项
 
@@ -764,7 +764,7 @@ export default plugin
 
 ## 20. `ui.kind_views` —— kind 视图接管（两级分发第一级）
 
-> **状态（规划定稿，文档先行）**：任务线程渲染的两级分发模型已定稿（ARCHITECTURE.md §8.7），核心侧第一级注册表（`every-agent-web/src/components/task/kindViews/registry.tsx`）与分发点已存在；`ctx.ui.registerKindView`、plugin-api 的 `KindViewDefinition`/`PluginKindViewProps` 类型与 dispatcher 接线**随代码跟进**——接线前本节为定稿契约，尚无可调用的注册方法。
+> **状态（已接线）**：两级分发模型（ARCHITECTURE.md §8.7）已落地——plugin-api `PluginKindViewProps`/`KindViewComponent` 类型、`ctx.ui.registerKindView(kind, Component)` 与 dispatcher 接线（`PluginDispatcher.ts` `EXT_UI_KIND_VIEWS`）均已生效。
 
 ### 20.1 两级分发模型（先懂模型再选扩展点）
 
@@ -772,18 +772,21 @@ export default plugin
 
 | 级 | 查表 | 注册来源 | 查不到时 |
 |---|---|---|---|
-| 第一级（分发） | TaskThread 按 `item.kind` 查 kindViewRegistry（`TaskThread.tsx:61`） | 内置五视图 `user.message`/`message`/`tool.result`/`error`/`cancelled`（`kindViews/builtins.ts:20-24`）+ 插件（本扩展点） | 查表返回 `undefined`，分发点 `?? FallbackView`（兜底是分发语义，不埋进注册表） |
-| 第二级（呈现） | `FallbackView` 与 `error`/`cancelled` 视图共用的 `TaskTraceShell` 壳按传入 kind 查 traceTypeRegistry（`kindViews/TraceShell.tsx:28-29`） | 插件 `ui.trace_types`（§10）+ 内置 core kinds | 返回通用降级定义 `getFallbackTraceType`（查表**永不返回 undefined**） |
+| 第一级（分发） | TaskThread 按 `item.kind` 查 kindViewRegistry（`TaskThread.tsx:61`；`getKindView` 内**插件优先**于核心，同 `getToolView` 合并模式） | 核心三类 `user.message`/`message`/`tool.result`（`kindViews/builtins.ts`）+ 插件（本扩展点） | 查表返回 `undefined`，分发点 `?? FallbackView`（兜底是分发语义，不埋进注册表） |
+| 第二级（呈现） | `FallbackView` 复用的 `TaskTraceShell` 壳按传入 kind 查 traceTypeRegistry（`kindViews/TraceShell.tsx`） | 插件 `ui.trace_types`（§10）+ 内置 wire-kind 键（`error`/`cancelled`/`retry`/`system.notice`/`model.switch`/`model.failover`/`context.compression`） | 返回通用降级定义 `getFallbackTraceType`（查表**永不返回 undefined**） |
 
 两级兜底语义的差异是刻意的：第一级兜底决定「由谁渲染**整行**」，第二级只决定「**壳内**怎么呈现」。两级都不注册的新 kind 自动可见、内容零丢失（FallbackView 宽松读取兜底）——**注册只为美化，不为可见**。
 
-### 20.2 Definition 字段表（`KindViewDefinition`）
+### 20.2 契约（`registerKindView`，双参签名）
 
-| 字段 | 类型 | 必填 | 消费位置（宿主） | 说明 |
-|---|---|---|---|---|
-| `pluginId` | `string` | ✅ | dispatcher 旁路注册 | 插件填自己的插件 id；仅归属展示与排查（kindViewRegistry 以 kind 为 key，pluginId 不参与查表） |
-| `kind` | `string` | ✅ | `kindViews/registry.tsx:46-52` | 查表 key；空串抛错（与核心 `registerKindView` 一致，`:47-51`） |
-| `Component` | `ComponentType<PluginKindViewProps>` | ✅ | `TaskThread.tsx:61` 分发 | 整行视图；props 见下 |
+```ts
+registerKindView: (kind: string, Component: KindViewComponent) => Disposable
+```
+
+| 参数 | 类型 | 说明 |
+|---|---|---|
+| `kind` | `string` | 查表 key（wire kind）；空/纯空白抛错；Disposable dispose 即注销回退核心渲染 |
+| `Component` | `ComponentType<PluginKindViewProps>` | 整行视图；props 见下 |
 
 `PluginKindViewProps`（与核心 `KindViewProps` 最小集对齐，plugin-api 侧独立声明）：`{ item, payload, taskId, mainAgentId }`——`item` 即五字段线程条目（`seq` 为字符串雪花大数、`ts` 毫秒、`agentId` 可空串、`kind`、`payload` 形状归 kind 所有）；`payload` 对未知 kind 为 `unknown`，插件自行收窄；**不含兄弟行 items**（叶子视图，见坑 ②）。
 
@@ -796,11 +799,10 @@ import { MyKindView } from './MyKindView'
 
 const plugin: PluginModule = {
   activate(ctx) {
-    ctx.ui.registerKindView({
-      pluginId: 'my-plugin',
-      kind: 'my-plugin.card',      // 插件事件 defaultHandler 折入线程的自定义 kind
-      Component: MyKindView,       // props: { item, payload, taskId, mainAgentId }
-    })
+    ctx.ui.registerKindView(
+      'my-plugin.card',      // 插件事件 defaultHandler 折入线程的自定义 kind
+      MyKindView,            // props: { item, payload, taskId, mainAgentId }
+    )
   },
 }
 export default plugin
@@ -808,8 +810,8 @@ export default plugin
 
 ### 20.4 消费链与坑
 
-- **消费链（规划，接线后生效）**：注册旁路写入核心 kindViewRegistry（与 `registerTraceType` 旁路写 traceTypeRegistry 同范式，先例 `PluginDispatcher.ts:326-336`）；渲染时 TaskThread 分发点 `getKindView(item.kind) ?? FallbackView`（`TaskThread.tsx:61`）；dispose 侧路注销 `unregisterKindView`（`kindViews/registry.tsx:59-65`，返回是否确实移除）。
-- **坑 ①（覆盖语义）**：重复注册同 kind **覆盖**，且能覆盖内置五 kind——接管 `message`/`tool.result` 等于扔掉批壳/工具调用行/读秒/吸收判定等全部内置行为，慎用内置 kind 同名；空 kind 抛错。
+- **消费链**：注册进 ExtensionRegistry（`ui.kind_views` 扩展点）；`getKindView` 查表先遍历 `pluginDispatcher.listRegisteredKindViews()`（命中返回，优先于核心注册表）再查核心 Map——单向依赖 `kindViews/registry → pluginDispatcher`（与 `toolViews/registry` 同构，无环）；渲染时 TaskThread 分发点 `getKindView(item.kind) ?? FallbackView`（`TaskThread.tsx:61`）；dispose 后该 kind 回退核心视图/FallbackView。插件晚注册经 `TaskChat` 的扩展版本号订阅（`useSyncExternalStore(subscribeExtensionsChanged, getExtensionsVersion)`）驱动线程重渲染。
+- **坑 ①（覆盖语义）**：重复注册同 kind **覆盖**，且可接管任意 kind（含内置 `message`/`tool.result` 等）——接管 `message` 等于扔掉批壳/工具调用行/读秒/吸收判定等全部内置行为，慎用内置 kind 同名；空 kind 抛错。
 - **坑 ②（叶子视图）**：props 不含兄弟行 items——`tool.result` 配对/吸收判定/批中断终态信号等兄弟行语义是内置视图经宿主 `useThreadBoard` 的职责，插件无法引用该宿主 context；需要兄弟行的场景改用 §7 `ui.tool_call_views`（或等宿主未来开放 board 读取通道）。
 - **坑 ③（不注册也可见）**：FallbackView → TaskTraceShell → 通用降级保证任意新 kind 自动可见、内容零丢失；为「让 kind 显示出来」注册视图是误解。
 - **坑 ④（组件约束）**：与所有扩展点一致，`Component` 只能 `import type` + 白名单 bare import（§0 第 4 条），不引宿主组件。

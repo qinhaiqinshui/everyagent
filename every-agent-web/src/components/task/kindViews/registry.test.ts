@@ -5,7 +5,8 @@
  * 不埋进注册表)/重复注册覆盖/注销/空 kind 抛错;FallbackView 宽松读取
  * (title+summary+content 对象 / content 字符串 / 非对象 payload 三形态与
  * stringify 零丢失兜底,经纯函数 readFallbackTraceShape 直测);useThreadBoard
- * 缺 Provider 行为(空 items + console.warn 恰一次)。
+ * 缺 Provider 行为(空 items + console.warn 恰一次);插件 kind 视图接管
+ * (ui.kind_views 扩展点:注册可见/插件优先于核心/dispose 回退)。
  *
  * 渲染断言取舍:react-dom/server 的 renderToString(node 环境可跑,零新依赖——
  * 不引 jsdom/@testing-library,对齐 §8.6 既有 node 测试口径);折叠展开前的
@@ -16,7 +17,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import React from 'react'
 import { renderToString } from 'react-dom/server'
+import type { Disposable, KindViewComponent, PluginKindViewProps } from '@everyagent/plugin-api'
 import type { ThreadItem } from '@/task/threadItem'
+import { pluginDispatcher } from '@/plugin/PluginDispatcher'
 import { initializeTraceTypes } from '@/plugin/traceTypeRegistry'
 import {
   FallbackView,
@@ -84,6 +87,65 @@ describe('kindViewRegistry 查表', () => {
   it('分发组合式 getKindView(kind) ?? FallbackView 编译期可配、运行时落到兜底', () => {
     const dispatch: KindView = getKindView('demo.absent') ?? FallbackView
     expect(dispatch).toBe(FallbackView)
+  })
+})
+
+describe('插件 kind 视图接管(ui.kind_views 扩展点,插件优先于核心)', () => {
+  /** 插件注册项的测试自清理:登记 dispose 桶,afterEach 统一注销。 */
+  const pluginDisposables: Disposable[] = []
+
+  afterEach(() => {
+    while (pluginDisposables.length > 0) {
+      pluginDisposables.pop()!.dispose()
+    }
+  })
+
+  it('registerKindView 注册后 listRegisteredKindViews 可见;空/纯空白 kind 抛错', () => {
+    const PluginView: KindViewComponent = () => null
+    pluginDisposables.push(pluginDispatcher.registerKindView('demo.plugin.kind', PluginView))
+    const listed = pluginDispatcher.listRegisteredKindViews()
+    expect(listed).toContainEqual({ kind: 'demo.plugin.kind', Component: PluginView })
+    expect(() => pluginDispatcher.registerKindView('', PluginView)).toThrowError(/不能为空/)
+    expect(() => pluginDispatcher.registerKindView('   ', PluginView)).toThrowError(/不能为空/)
+  })
+
+  it('getKindView 插件优先于核心:已接管 kind 返回插件组件并接管渲染', () => {
+    const CoreView: KindView = () => null
+    registerForTest('demo.takeover', CoreView)
+    function PluginView(props: PluginKindViewProps): React.ReactNode {
+      return React.createElement(
+        'div',
+        { className: 'plugin-takeover' },
+        `kind:${props.item.kind}`,
+      )
+    }
+    pluginDisposables.push(pluginDispatcher.registerKindView('demo.takeover', PluginView))
+    expect(getKindView('demo.takeover')).toBe(PluginView as unknown as KindView)
+    // props 契约(PluginKindViewProps)与核心 KindViewProps 运行时同形:经分发点渲染可见。
+    const item = itemOf('demo.takeover', { title: 'T' })
+    const View = getKindView(item.kind) ?? FallbackView
+    const html = renderToString(
+      React.createElement(View, { item, payload: item.payload, taskId: 'task-1', mainAgentId: 'main' }),
+    )
+    expect(html).toContain('plugin-takeover')
+    expect(html).toContain('kind:demo.takeover')
+  })
+
+  it('dispose 后回退核心视图;核心未注册则 undefined(分发点再落 FallbackView)', () => {
+    const CoreView: KindView = () => null
+    registerForTest('demo.fallback-core', CoreView)
+    const PluginView: KindViewComponent = () => null
+    const d1 = pluginDispatcher.registerKindView('demo.fallback-core', PluginView)
+    expect(getKindView('demo.fallback-core')).toBe(PluginView as unknown as KindView)
+    d1.dispose()
+    expect(getKindView('demo.fallback-core')).toBe(CoreView)
+
+    const d2 = pluginDispatcher.registerKindView('demo.fallback-absent', PluginView)
+    expect(getKindView('demo.fallback-absent')).toBe(PluginView as unknown as KindView)
+    d2.dispose()
+    expect(getKindView('demo.fallback-absent')).toBeUndefined()
+    // 注销项从扩展点注册表消失(不残留)
+    expect(pluginDispatcher.listRegisteredKindViews().some((def) => def.kind === 'demo.fallback-absent')).toBe(false)
   })
 })
 
@@ -172,15 +234,15 @@ describe('FallbackView 渲染(renderToString,node 环境)', () => {
     expect(html).toContain('aria-expanded="false"')
   })
 
-  it('kind=error 的错误色调已收敛为 kind 视图直配(FallbackView 不再改写 kind)', () => {
-    // 步骤 10 收敛:error → run_error 的旧 key 映射从 TraceShell 迁入 statusViews
-    // 的 ErrorView(kind 视图);FallbackView 只按传入 kind 查表,不改写——未注册路径
-    // 的 kind=error(仅测试直构场景)不再带错误色调。真实分发下 error 恒命中 ErrorView
-    // (builtins 注册),错误色调断言见 builtinViews.test.ts。
+  it('kind=error 落第二级表:alert 图标标识,无整行错误色类(tone 链已删)', () => {
+    // 渲染层两级分发统一化:error/cancelled 不再有第一层专视图(statusViews 已删),
+    // FallbackView 只按传入 kind(wire kind)查第二级 traceTypeRegistry 取定义——
+    // error 缺省 alert 三角警示图标;整行红显的 tone 链已删。
     initializeTraceTypes()
     const html = renderFallback('error', { title: '任务失败', summary: 'boom' })
     expect(html).toContain('nagent-trace-shell')
     expect(html).toContain('任务失败')
+    expect(html).toContain('<svg')
     expect(html).not.toContain('nagent-trace-shell--error')
   })
 

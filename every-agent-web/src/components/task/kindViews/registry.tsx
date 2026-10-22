@@ -14,6 +14,7 @@
  */
 import React from 'react'
 import type { KindPayloadMap, ThreadItem } from '@/task/threadItem'
+import { pluginDispatcher } from '@/plugin/PluginDispatcher'
 import { stringifyTraceContent } from '@/plugin/traceTypeRegistry'
 import { TaskTraceShell } from './TraceShell'
 
@@ -50,8 +51,21 @@ export function registerKindView<K extends string>(kind: K, View: KindView<K>): 
   kindViews.set(kind, View as KindView)
 }
 
-/** 按 kind 查视图。未注册返回 undefined(分发点显式 `?? FallbackView` 兜底)。 */
+/**
+ * 按 kind 查视图。未注册返回 undefined(分发点显式 `?? FallbackView` 兜底)。
+ *
+ * 解析优先级:插件注册的视图(`ui.kind_views` 扩展点,可接管任意 kind 含
+ * user.message)> 本模块核心注册表——与 toolViews/registry.getToolView 的
+ * 「插件 > 核心」优先级合并同款,核心只做优先级合并,不写业务分支。
+ */
 export function getKindView(kind: string): KindView | undefined {
+  for (const def of pluginDispatcher.listRegisteredKindViews()) {
+    if (def.kind === kind) {
+      // plugin-api 最小化 props 契约(PluginKindViewProps)与核心 KindViewProps
+      // 运行时同形,注册侧已强转(同 toolViews/registry 的 plugin def.Component 做法)。
+      return def.Component as unknown as KindView
+    }
+  }
   return kindViews.get(kind)
 }
 
@@ -121,8 +135,9 @@ export function readFallbackTraceShape(item: ThreadItem, payload: unknown): Fall
 /**
  * FallbackView:未注册 kind 的兜底视图(TaskTraceShell 形状:title/summary/content/pre)。
  * 呈现复用 TaskTraceShell——以宽松读取结果合成兼容 ThreadItem(payload 替换为归一
- * trace 形状;item.seq/ts/agentId/kind 原样保留,error/cancelled 错误色调等旧口径
- * 由 TraceShell 内部映射保持),两层均未注册的新 kind 自动可见、内容零丢失。
+ * trace 形状;item.seq/ts/agentId/kind 原样保留,壳内按传入 kind 查第二级
+ * traceTypeRegistry 取定义,如 error 的 alert 图标),两层均未注册的新 kind
+ * 自动可见、内容零丢失。
  */
 export function FallbackView({ item, payload, taskId }: KindViewProps) {
   const shape = readFallbackTraceShape(item, payload)

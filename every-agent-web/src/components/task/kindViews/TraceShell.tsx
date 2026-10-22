@@ -3,9 +3,9 @@
  *
  * 步骤 9(kind 渲染注册表基建)由 TaskThread.tsx **原位提取**为独立组件文件:
  * 逻辑逐字节保持(提取不改行为);kindViews 注册表侧的 FallbackView 复用本壳呈现
- * (TaskTraceShell 形状兜底,内容零丢失)。步骤 10 起 error/cancelled 的旧 trace.kind
- * 映射收敛为 kind 视图直配(statusViews 以 run_error/system_notice 传入),本壳只按
- * 传入 kind 查 traceTypeRegistry,不再做 kind 改写。
+ * (TaskTraceShell 形状兜底,内容零丢失)。渲染层两级分发统一化后 error/cancelled
+ * 等一切未注册第一层视图的 kind 均经 FallbackView 落本壳,壳内按传入 kind(= wire
+ * kind)直查第二级 traceTypeRegistry 取定义,不做任何 kind 改写。
  */
 import React from 'react'
 import type { ThreadItem, TracePayload } from '@/task/threadItem'
@@ -23,8 +23,8 @@ export function TaskTraceShell({
 }) {
   const payload: TracePayload = (item.payload as TracePayload | undefined) ?? { title: '' }
   const [open, setOpen] = React.useState(false)
-  // trace 类型解析 key = 传入 kind 直配(步骤 10 收敛:error/cancelled 的旧 key 映射
-  // 已迁 statusViews kind 视图,本壳不再改写)。
+  // trace 类型解析 key = 传入 kind(wire kind)直配,error/cancelled 等 status 族
+  // 也由第二级表按真键给定义,本壳不改写 kind。
   const traceTypeKey = item.kind
   const traceType = getTraceType(traceTypeKey)
   // traceTypeRegistry(插件 trace 类型扩展点)消费 PluginTraceRecord 形状:
@@ -73,7 +73,7 @@ export function TaskTraceShell({
 
   return (
     <section
-      className={`nagent-trace-shell nagent-msg${traceType.tone === 'error' ? ' nagent-trace-shell--error' : ''}${open && expandable ? ' is-open' : ''}`}
+      className={`nagent-trace-shell nagent-msg${open && expandable ? ' is-open' : ''}`}
       title={titleText}
     >
       {summaryRow}

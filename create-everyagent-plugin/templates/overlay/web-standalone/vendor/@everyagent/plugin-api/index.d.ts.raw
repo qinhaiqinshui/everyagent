@@ -556,11 +556,6 @@ export interface TraceTypeDefinition<R extends PluginTraceRecord = PluginTraceRe
   hideTitle?: boolean
   /** 是否允许展开。 */
   canExpand?: (trace: R) => boolean
-  /**
-   * 视觉色调（目前仅支持 `'error'`）：整条 trace 壳转错误色
-   * （图标/标题/摘要转红，展开态边框与底色淡红）。缺省为普通色。
-   */
-  tone?: 'error'
 }
 
 // ─── 输出块渲染 ───────────────────────────────────────────────────────────

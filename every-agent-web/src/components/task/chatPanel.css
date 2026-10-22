@@ -1545,23 +1545,6 @@
   font-size: var(--text-xs);
 }
 
-/* 错误态 trace（tone:'error'，如 run_error）：图标/标题/摘要转红，
-   展开态边框与底色淡红；颜色全部走 token，明暗主题自动适配。
-   选择器特异性与 .nagent-trace-shell__summary:hover 同级且位置靠后，
-   hover 时仍保持红色不被覆盖。 */
-.nagent-trace-shell--error .nagent-trace-shell__summary,
-.nagent-trace-shell--error .nagent-trace-shell__icon,
-.nagent-trace-shell--error .nagent-trace-shell__title,
-.nagent-trace-shell--error .nagent-trace-shell__text,
-.nagent-trace-shell--error .nagent-trace-shell__chevron {
-  color: var(--accent-red);
-}
-
-.nagent-trace-shell--error.is-open {
-  border-color: color-mix(in srgb, var(--accent-red) 36%, var(--border-light));
-  background: var(--accent-red-dim);
-}
-
 /* ─── 底部输入区 ───────────────────────────────────────────── */
 .nagent-composer-dock {
   border-top: none;

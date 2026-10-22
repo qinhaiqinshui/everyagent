@@ -5,10 +5,10 @@
  * 批内同名不折叠/无正文纯下发轮无占位文案/权威耗时冻结)、运行态读秒(tool.started
  * 瞬态点亮 running 旋转)、中断态(可见终态信号 interrupted 黄/skipped 灰,图标
  * 颜色承载状态,不显示中文文案)、user.message
- * 回放胶囊段与子 agent 低调样式、孤儿 tool.result 兜底、error/cancelled kind 直配
- * (run_error 错误色调/system_notice)、TaskThread 查表分发 + FallbackView 兜底。
- * 纯函数段(buildUserMessageReplaySegments)直测;渲染断言与 registry.test.ts 同款
- * react-dom/server 方案(零新依赖)。
+ * 回放胶囊段与子 agent 低调样式、孤儿 tool.result 兜底、error/cancelled 走
+ * FallbackView + 第二级 traceTypeRegistry(alert 图标/静态行)、TaskThread 查表
+ * 分发 + FallbackView 兜底。纯函数段(buildUserMessageReplaySegments)直测;渲染
+ * 断言与 registry.test.ts 同款 react-dom/server 方案(零新依赖)。
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import React from 'react'
@@ -33,7 +33,7 @@ vi.mock('@/components/app/WorkspaceShellContext', () => ({
 vi.mock('@/components/app/AppUiContext', () => ({
   useAppUi: () => ({ toasts: [], showToast: () => {}, removeToast: () => {} }),
 }))
-import { ErrorView, CancelledView } from './statusViews'
+import { FallbackView, getKindView } from './registry'
 
 const TASK_ID = 'task-builtin-views'
 const MAIN = 'agent-main'
@@ -325,34 +325,45 @@ describe('tool.result 视图(吸收判定)', () => {
   })
 })
 
-describe('error / cancelled 视图(kind 直配)', () => {
-  it('error → run_error 错误色调(alert 图标 tone)', () => {
+describe('error / cancelled 渲染(两级分发:第一层无专视图 → FallbackView 落第二级表)', () => {
+  it('error → getKindView 未注册走 FallbackView,TaskTraceShell + alert 图标标识(无错误色类)', () => {
     initializeTraceTypes()
+    // 第一层核心注册表已收敛(user.message/message/tool.result),error 不再有专视图。
+    expect(getKindView('error')).toBeUndefined()
     const item: ThreadItem = {
       seq: '10', ts: 1, agentId: MAIN, kind: 'error',
       payload: { title: '任务出错', summary: 'boom', content: 'boom' },
     }
     const html = renderBoarded(
-      React.createElement(ErrorView, { item, payload: item.payload as never, taskId: TASK_ID, mainAgentId: MAIN }),
+      React.createElement(FallbackView, { item, payload: item.payload as never, taskId: TASK_ID, mainAgentId: MAIN }),
       [item],
     )
-    expect(html).toContain('nagent-trace-shell--error')
+    expect(html).toContain('nagent-trace-shell')
     expect(html).toContain('任务出错')
+    // 第二级表 error 定义:getIcon 缺省 alert(三角警示 SVG 图标)
+    expect(html).toContain('nagent-trace-shell__icon')
+    expect(html).toContain('<svg')
+    // tone 链已删:不再有整行错误色类
+    expect(html).not.toContain('nagent-trace-shell--error')
+    // content 存在 → 可展开按钮
+    expect(html).toContain('aria-expanded="false"')
   })
 
-  it('cancelled → system_notice 形态,静态摘要行(无 content 不可展开)', () => {
+  it('cancelled → FallbackView 静态摘要行(无 content 不可展开,无展开按钮)', () => {
     initializeTraceTypes()
+    expect(getKindView('cancelled')).toBeUndefined()
     const item: ThreadItem = {
       seq: '10', ts: 1, agentId: '', kind: 'cancelled',
       payload: { title: '任务已取消', summary: '由 用户 取消' },
     }
     const html = renderBoarded(
-      React.createElement(CancelledView, { item, payload: item.payload as never, taskId: TASK_ID, mainAgentId: MAIN }),
+      React.createElement(FallbackView, { item, payload: item.payload as never, taskId: TASK_ID, mainAgentId: MAIN }),
       [item],
     )
     expect(html).toContain('nagent-trace-shell')
     expect(html).toContain('任务已取消')
     expect(html).toContain('nagent-trace-shell__summary--static')
+    expect(html).not.toContain('aria-expanded')
   })
 })
 
