@@ -99,7 +99,7 @@ public class ConfigStore {
      * 调用方负责广播 config.changed{keys:["models"]}。
      *
      * @return 落盘后的模型条目总数
-     * @throws IllegalArgumentException configId 为空/重复,或模型名/base-url/full-url 缺失
+     * @throws IllegalArgumentException configId 为空/重复、模型名缺失,或 base-url/full-url 未二选一
      */
     public synchronized int addModel(WorkerProperties.Model model) {
         if (model == null || model.getConfigId() == null || model.getConfigId().isBlank()) {
@@ -110,9 +110,13 @@ public class ConfigStore {
         if (model.getModel() == null || model.getModel().isBlank()) {
             throw new IllegalArgumentException("模型名不能为空");
         }
-        if ((model.getBaseUrl() == null || model.getBaseUrl().isBlank())
-                && (model.getFullUrl() == null || model.getFullUrl().isBlank())) {
-            throw new IllegalArgumentException("base-url 与 full-url 至少填一项");
+        boolean hasBaseUrl = model.getBaseUrl() != null && !model.getBaseUrl().isBlank();
+        boolean hasFullUrl = model.getFullUrl() != null && !model.getFullUrl().isBlank();
+        if (hasBaseUrl && hasFullUrl) {
+            throw new IllegalArgumentException("base-url 与 full-url 只能填一项");
+        }
+        if (!hasBaseUrl && !hasFullUrl) {
+            throw new IllegalArgumentException("base-url 与 full-url 必须填一项");
         }
         List<WorkerProperties.Model> current = props.getModels() == null
                 ? new ArrayList<>() : new ArrayList<>(props.getModels());

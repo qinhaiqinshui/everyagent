@@ -2,10 +2,11 @@
  * 「添加模型配置」对话框(独立组件,antd Modal + Form)。
  *
  * - 厂家下拉内置常见厂商(DeepSeek / 智谱 / OpenAI / 阿里百炼 / Kimi),选中后自动带出
- *   baseUrl / fullUrl,用户只需填 id、模型名、apiKey;
+ *   baseUrl,用户只需填 id、模型名、apiKey;
  * - 选「其他」:baseUrl / fullUrl / 厂家名由用户自行填写;
  * - 接口协议固定「OpenAI 兼容」(当前仅支持 OpenAI 格式接口);
- * - id 必填且不可重复(可中文);baseUrl 与 fullUrl 至少填一项;
+ * - id 必填且不可重复(可中文);baseUrl 与 fullUrl 二选一(填了一个,另一个自动禁用;
+ *   都不填校验不过);
  * - 提交结果由调用方(ModelConfigSection)经 config.model.add 落盘 application-worker.yaml。
  */
 import React from 'react'
@@ -52,13 +53,15 @@ export default function AddModelConfigDialog({
     fullUrl?: string
   }>()
   const providerPreset = Form.useWatch('providerPreset', form)
+  const baseUrlValue = (Form.useWatch('baseUrl', form) ?? '').trim()
+  const fullUrlValue = (Form.useWatch('fullUrl', form) ?? '').trim()
   const isOther = providerPreset === PROVIDER_OTHER_VALUE
 
-  // 切换厂家预设:自动带出 baseUrl / fullUrl;切「其他」则清空由用户自填。
+  // 切换厂家预设:自动带出 baseUrl(fullUrl 保持空,两者二选一);切「其他」则清空由用户自填。
   const handleProviderChange = (value: string) => {
     const preset = PROVIDER_PRESETS.find((p) => p.value === value)
     if (preset) {
-      form.setFieldsValue({ baseUrl: preset.baseUrl, fullUrl: preset.fullUrl, providerName: undefined })
+      form.setFieldsValue({ baseUrl: preset.baseUrl, fullUrl: '', providerName: undefined })
     } else {
       form.setFieldsValue({ baseUrl: '', fullUrl: '' })
     }
@@ -66,24 +69,26 @@ export default function AddModelConfigDialog({
 
   const currentPreset = PROVIDER_PRESETS.find((p) => p.value === providerPreset)
 
+  /** baseUrl / fullUrl 二选一校验(挂在两个字段上,互为 dependency 联动重校验)。 */
+  const validateUrlPair = () => {
+    if (baseUrlValue && fullUrlValue) {
+      return Promise.reject(new Error('baseUrl 与 fullUrl 只能填一项'))
+    }
+    if (!baseUrlValue && !fullUrlValue) {
+      return Promise.reject(new Error('baseUrl 与 fullUrl 必须填一项(二选一)'))
+    }
+    return Promise.resolve()
+  }
+
   const handleOk = async () => {
     const raw = await form.validateFields()
     const preset = PROVIDER_PRESETS.find((p) => p.value === raw.providerPreset)
     const provider = preset ? preset.label : (raw.providerName?.trim() || '其他')
-    const baseUrl = raw.baseUrl?.trim() || ''
-    const fullUrl = raw.fullUrl?.trim() || ''
-    if (!baseUrl && !fullUrl) {
-      form.setFields([
-        { name: 'baseUrl', errors: ['baseUrl 与 fullUrl 至少填一项'] },
-        { name: 'fullUrl', errors: ['baseUrl 与 fullUrl 至少填一项'] },
-      ])
-      return
-    }
     await onSubmit({
       configId: raw.configId.trim(),
       provider,
-      baseUrl: baseUrl || undefined,
-      fullUrl: fullUrl || undefined,
+      baseUrl: raw.baseUrl?.trim() || undefined,
+      fullUrl: raw.fullUrl?.trim() || undefined,
       model: raw.model.trim(),
       apiKey: raw.apiKey.trim(),
     })
@@ -111,7 +116,7 @@ export default function AddModelConfigDialog({
         initialValues={{
           providerPreset: PROVIDER_PRESETS[0].value,
           baseUrl: PROVIDER_PRESETS[0].baseUrl,
-          fullUrl: PROVIDER_PRESETS[0].fullUrl,
+          fullUrl: '',
         }}
         onValuesChange={(changed) => {
           if (Object.prototype.hasOwnProperty.call(changed, 'providerPreset')) {
@@ -123,7 +128,7 @@ export default function AddModelConfigDialog({
           name="providerPreset"
           label="模型厂家"
           rules={[{ required: true, message: '请选择模型厂家' }]}
-          extra={currentPreset ? '选中后自动填写 baseUrl / fullUrl' : '「其他」需自行填写 baseUrl 或 fullUrl'}
+          extra={currentPreset ? '选中后自动填写 baseUrl' : '「其他」需自行填写 baseUrl 或 fullUrl(二选一)'}
         >
           <Select options={providerOptions} />
         </Form.Item>
@@ -164,16 +169,28 @@ export default function AddModelConfigDialog({
         <Form.Item
           name="baseUrl"
           label="baseUrl"
-          tooltip="API 基础地址;fullUrl 非空时优先使用 fullUrl"
+          tooltip="API 基础地址(如 https://api.deepseek.com);与 fullUrl 二选一,填了 fullUrl 后本项禁用"
+          dependencies={['fullUrl']}
+          rules={[{ validator: validateUrlPair }]}
         >
-          <Input placeholder="https://…" allowClear />
+          <Input
+            placeholder={fullUrlValue ? '已填 fullUrl,清空后方可填 baseUrl' : 'https://…'}
+            allowClear
+            disabled={!!fullUrlValue}
+          />
         </Form.Item>
         <Form.Item
           name="fullUrl"
           label="fullUrl(完整端点 URL)"
-          tooltip="非空时优先于 baseUrl"
+          tooltip="完整端点 URL(如 https://api.deepseek.com/chat/completions);与 baseUrl 二选一,填了 baseUrl 后本项禁用"
+          dependencies={['baseUrl']}
+          rules={[{ validator: validateUrlPair }]}
         >
-          <Input placeholder="https://…/chat/completions" allowClear />
+          <Input
+            placeholder={baseUrlValue ? '已填 baseUrl,清空后方可填 fullUrl' : 'https://…/chat/completions'}
+            allowClear
+            disabled={!!baseUrlValue}
+          />
         </Form.Item>
         <Form.Item label="接口协议">
           <Input value="OpenAI 兼容(当前仅支持 OpenAI 格式接口)" disabled />
