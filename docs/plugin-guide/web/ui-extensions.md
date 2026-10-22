@@ -287,14 +287,16 @@ ctx.ui.registerTaskRunSubmitContributionProvider({
 
 **定位（两级分发的第二级）**：任务线程条目渲染是两级查表分发（ARCHITECTURE.md §8.7）——第一级按 `item.kind` 查 kindViewRegistry 决定「由谁渲染整行」（插件入口是 §20 `ui.kind_views`，规划定稿）；第二级是第一级兜底 `FallbackView` 与内置 `error`/`cancelled` 状态视图共用的 `TaskTraceShell` 壳，壳内按传入 kind 查本扩展点决定「壳内怎么呈现」。**选型**：只想给 trace 形状条目（title/summary/content/data）换展开内容/摘要/图标 → 用本扩展点（壳保留）；想整行接管某个 kind（含消息族）→ 用 §20；只想按工具名接管工具调用展开 → 用 §7 `ui.tool_call_views`。两级都不注册的新 kind 自动可见、内容零丢失。
 
+**注册键 = wire kind（定稿规则，宿主接线随代码跟进）**：`kind` 必须与事件名（wire 原样，点号形态）一致——如 `error`/`cancelled`/`retry`/`system.notice`/`model.switch`/`model.failover`/`context.compression`/`auth.review`；内置已按 wire kind 注册（耗时类事件 kind 见 ARCHITECTURE.md 渲染章节）。旧的下划线伪键（`run_error`/`system_notice` 等）已废除。
+
 ### 10.1 Definition 字段表（`TraceTypeDefinition`，`js/index.ts:521-539`；ctx `TraceContentRenderContext` `js/index.ts:510-513`）
 
 | 字段 | 类型 | 必填 | 消费位置（宿主） | 说明 |
 |---|---|---|---|---|
-| `kind` | `string` | ✅ | `traceTypeRegistry.tsx:89` | trace 类型 key；空串抛错（`:86-88`） |
+| `kind` | `string` | ✅ | `traceTypeRegistry.tsx:89` | trace 类型 key（= wire kind，点号形态事件名）；空串抛错（`:86-88`） |
 | `renderContent` | `(trace, ctx) => ReactNode?` | — | `kindViews/TraceShell.tsx:50` | 展开态内容；缺省回退通用 `<pre>` 渲染（`renderFallbackContent`，`traceTypeRegistry.tsx:59-72`，`getTraceType` 取用时补齐 `:106-109`） |
 | `getSummary` | `(trace) => string \| undefined?` | — | `kindViews/TraceShell.tsx:46` | 收起态摘要适配器 |
-| `getIcon` | `(trace) => string \| undefined?` | — | `kindViews/TraceShell.tsx:43` | 返回**图标 key 字符串**，`files`/`shield`/`alert` 已登记映射，未知 key 原样渲染文本（`traceTypeRegistry.tsx:16-29`） |
+| `getIcon` | `(trace) => string \| ReactNode \| undefined?` | — | `kindViews/TraceShell.tsx:43` | **双通道（定稿，类型放宽随代码跟进）**：返回 string = 内置图标 key（`files`/`shield`/`alert`，未登记 key 原样渲染文本，`traceTypeRegistry.tsx:16-29`）；返回 ReactNode = 插件自带图标节点（推荐 16 系 SVG、`stroke="currentColor"` 继承壳色） |
 | `hideTitle` | `boolean?` | — | `kindViews/TraceShell.tsx:45` | 收起态不渲染 title |
 | `canExpand` | `(trace) => boolean?` | — | `kindViews/TraceShell.tsx:49` | 数据在 `metadata`（无 content）时用它放开展开 |
 
@@ -313,7 +315,7 @@ ctx.ui.registerTraceType({
 
 消费链：本扩展点**不在 `dispatch()` switch 内**（`PluginDispatcher.ts:247` 起 switch 无此 case），注册时同步旁路写入 `traceTypeRegistry` 的 `Map<kind, def>`（`PluginDispatcher.ts:326-336` → `traceTypeRegistry.tsx:85-90`，dispose 双注销 `:331-334`）；渲染时 `TaskTraceShell` 按**传入 kind 直配**查表（`kindViews/TraceShell.tsx:28-29`，由 item 五字段 + payload 合成 `PluginTraceRecord` 兼容视图对象 `:32-42`），查不到走通用降级（`getFallbackTraceType`，`traceTypeRegistry.tsx:75-82`）。
 
-- **坑**：① `Map.set` 语义——**重复注册同 kind 覆盖**，且能覆盖内置 core kinds（`system_notice`/`run_error` 等，`initializeTraceTypes` 注册，`traceTypeRegistry.tsx:113` 起），慎用同名；② `getIcon` 返回字符串不是组件。
+- **坑**：① `Map.set` 语义——**重复注册同 kind 覆盖**，且能覆盖内置 core kinds（`error`/`cancelled`/`retry`/`system.notice` 等，`initializeTraceTypes` 按 wire kind 注册），慎用同名；② `getIcon` 双通道——string 走内置 key 表（未登记 key 会原样渲染为**文本**，不是报错），插件专属图标返回 ReactNode 自带（不要把插件语义图标塞进宿主 key 表）；③ **无 tone 字段**——整行色调不再是扩展点能力（error 行保留 alert 三角图标做标识，不再整行红显）。
 - **内置范例**：ai-review（`every-agent-plugins/ai-review/web/index.ts:16-32,36`，`kind='auth.review'` + `shield` 图标）。
 
 ## 11. `ui.output_blocks` —— 输出块渲染
