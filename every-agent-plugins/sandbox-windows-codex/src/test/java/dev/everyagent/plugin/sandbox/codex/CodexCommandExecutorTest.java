@@ -278,8 +278,8 @@ class CodexCommandExecutorTest {
         Map<String, String> env = CodexCommandExecutor.childEnv(ws, null);
         String root = ws.toAbsolutePath().normalize().toString().replace('\\', '/');
         int n = gitConfigBase();
-        assertEquals(String.valueOf(n + 4), env.get("GIT_CONFIG_COUNT"),
-                "树根+嵌套+提交身份两条(在外层基址后追加,外层条目原样保留)");
+        assertEquals(String.valueOf(n + 5), env.get("GIT_CONFIG_COUNT"),
+                "树根+嵌套+提交身份+sslBackend(在外层基址后追加,外层条目原样保留)");
         assertEquals("safe.directory", env.get("GIT_CONFIG_KEY_" + n));
         assertEquals(root, env.get("GIT_CONFIG_VALUE_" + n), "路径用 / (git 口径)");
         assertEquals("safe.directory", env.get("GIT_CONFIG_KEY_" + (n + 1)));
@@ -289,6 +289,31 @@ class CodexCommandExecutorTest {
                 "提交身份注入:沙箱 profile 无全局配置,裸 commit 否则 fatal(实测 128)");
         assertEquals("user.email", env.get("GIT_CONFIG_KEY_" + (n + 3)));
         assertEquals("everyagent@localhost", env.get("GIT_CONFIG_VALUE_" + (n + 3)));
+        assertEquals("http.sslBackend", env.get("GIT_CONFIG_KEY_" + (n + 4)),
+                "受限令牌下 Schannel 后端 HTTPS 不可用,自动切 openssl(findings §5)");
+        assertEquals("openssl", env.get("GIT_CONFIG_VALUE_" + (n + 4)));
+    }
+
+    @Test
+    void childEnvRespectsExplicitGitSslBackend() throws IOException {
+        Path ws = tempDir.resolve("ws-git-ssl");
+        Files.createDirectories(ws.resolve(".git"));
+        // 用户已显式配置 http.sslBackend(外层基址内)——不重复追加,已有 GIT_CONFIG_* 语义不破坏
+        int n = gitConfigBase();
+        Map<String, String> env = new java.util.LinkedHashMap<>();
+        env.put("GIT_CONFIG_COUNT", String.valueOf(n + 1));
+        env.put("GIT_CONFIG_KEY_" + n, "http.sslBackend");
+        env.put("GIT_CONFIG_VALUE_" + n, "schannel");
+        CodexCommandExecutor.injectGitConfig(env, ws);
+        assertEquals(String.valueOf(n + 5), env.get("GIT_CONFIG_COUNT"),
+                "已显式配置 sslBackend 时只追加 safe.directory 两条+身份两条,不再注 sslBackend");
+        assertEquals("safe.directory", env.get("GIT_CONFIG_KEY_" + (n + 1)));
+        assertEquals("schannel", env.get("GIT_CONFIG_VALUE_" + n),
+                "用户的 sslBackend=schannel 原样保留");
+        long sslBackendEntries = env.entrySet().stream()
+                .filter(e -> e.getKey().startsWith("GIT_CONFIG_KEY_"))
+                .filter(e -> "http.sslBackend".equals(e.getValue())).count();
+        assertEquals(1L, sslBackendEntries, "不重复注入 sslBackend");
     }
 
     @Test

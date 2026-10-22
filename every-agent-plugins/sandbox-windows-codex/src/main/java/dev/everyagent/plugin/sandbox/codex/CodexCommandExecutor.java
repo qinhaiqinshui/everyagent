@@ -10,6 +10,8 @@ import dev.everyagent.plugin.sandbox.codex.accounts.SandboxSecrets;
 import dev.everyagent.plugin.sandbox.codex.acl.ProvisioningAcl;
 import dev.everyagent.plugin.sandbox.codex.acl.ProvisioningRequest;
 import dev.everyagent.plugin.sandbox.codex.acl.RootPolicy;
+import dev.everyagent.plugin.sandbox.codex.proxy.ProxyEnv;
+import dev.everyagent.plugin.sandbox.codex.proxy.ProxyRegistry;
 import dev.everyagent.plugin.sandbox.codex.runner.FrameCodec;
 import dev.everyagent.plugin.sandbox.codex.runner.IpcMessage;
 import dev.everyagent.plugin.sandbox.codex.runner.IpcMessage.Exit;
@@ -393,9 +395,17 @@ public final class CodexCommandExecutor {
         } else {
             argv = commandArgv(command);
         }
+        // 代理 env 注入（阶段二 §6）：仅 online 身份且代理在跑。纯查询（零副作用——
+        // 不在命令路径上绑端口,启动在插件 activate）；offline 命令拿不到代理地址,
+        // 与断网语义互不渗透。用户显式设置的值不覆盖,旧托管键先剥离再重注
+        //（ProxyEnv 类 Javadoc）。
+        Map<String, String> env = childEnv(workspaceRoot, sandboxProfileDir(identity));
+        if (identity == NetworkIdentity.ONLINE && options.proxyEnabled()) {
+            ProxyRegistry.endpointIfRunning(home)
+                    .ifPresent(endpoint -> ProxyEnv.injectProxyEnv(env, endpoint.proxyUrl()));
+        }
         CodexSandboxSession.SessionSpec spec = new CodexSandboxSession.SessionSpec(
-                argv, workspaceRoot.toString(),
-                childEnv(workspaceRoot, sandboxProfileDir(identity)),
+                argv, workspaceRoot.toString(), env,
                 timeoutMs > 0 ? timeoutMs : null, policy.writeRoots(), List.of(),
                 CapSids.workspaceCapSidForCwd(home, workspaceRoot),
                 wireName(identity), false, null);
@@ -848,18 +858,15 @@ public final class CodexCommandExecutor {
         return env;
     }
 
-    /** git 提交身份(env 注入用):工作区由 agent 操作,署名恒为 agent 身份(§7.10 第四批,
-     * 描述里的「提交须带 -c user.name=...」提示随之退役——此前模型各自发挥,同一会话出现过
-     * 三个不同邮箱)。env 配置属 command 作用域,压过仓库本地 user.*,属有意选择。 */
     private static final String GIT_IDENTITY_NAME = "EveryAgent";
 
     private static final String GIT_IDENTITY_EMAIL = "everyagent@localhost";
 
     /**
      * git env 配置注入(safe.directory 对齐 codex 原生 {@code sandbox_utils::inject_git_safe_directory}
-     * 逐语义移植;提交身份为我们的扩展,§7.10 第四批):从 workspaceRoot 向上找含 {@code .git}
-     * 的树根({@code Files.exists}——worktree/子模块的 {@code .git} 是文件),经 git 的 env
-     * 配置机制 {@code GIT_CONFIG_COUNT/KEY_n/VALUE_n} 注入两组配置:
+     * 逐语义移植;提交身份与 sslBackend 为我们的扩展,§7.10 第四批/findings §5):从
+     * workspaceRoot 向上找含 {@code .git} 的树根({@code Files.exists}——worktree/子模块的
+     * {@code .git} 是文件),经 git 的 env 配置机制 {@code GIT_CONFIG_COUNT/KEY_n/VALUE_n} 注入:
      * <ul>
      *   <li>{@code safe.directory=<root>} 与 {@code <root>/*}(嵌套仓库一并信任)——仓库属主
      *       是宿主用户而命令跑在沙箱账户下,git ≥2.35.2 的 ownership 保护直接 fatal(实测);
@@ -870,21 +877,29 @@ public final class CodexCommandExecutor {
      *       注入后模型无需 {@code -c} 携带身份。<b>优先级</b>:env 配置属 command 作用域,
      *       <b>压过仓库本地 user.*</b>(实测)——工作区提交由 agent 操作,署名恒为 agent 属
      *       诚实归因,有意如此。</li>
+     *   <li>{@code http.sslBackend=openssl}——受限令牌下 Schannel 栈被 Windows 拒发 SSPI
+     *       凭据(SEC_E_NO_CREDENTIALS,findings §2/§5),git 默认 schannel 后端 HTTPS 全灭;
+     *       openssl 后端自带 ca-bundle 不走 SSPI,直连或经代理(CONNECT 隧道)均可恢复。
+     *       GIT_CONFIG_* 仅 git 读取=「仅 git 命令」语义;既有 env 链已显式配置
+     *       http.sslBackend 时不追加(不破坏用户 GIT_CONFIG_* 语义);代理不在跑也注入——
+     *       该缺陷与代理无关。</li>
      * </ul>
      * <p>为什么这样而非写 {@code ~/.gitconfig}:env 注入零落盘、每次 spawn 按当时
      * workspaceRoot 重算、且精确到本仓库树——比宿主原来的 {@code *} 更收紧。已存
      * {@code GIT_CONFIG_COUNT} 时在其后追加(codex 同款)。路径用 {@code /}(git 口径)。
-     * 无 .git 树根时整体不注入(不碰非 git 语境)。
+     * 无 .git 树根时整体不注入(不碰非 git 语境)。包可见以便单测。
      */
-    private static void injectGitConfig(Map<String, String> env, Path workspaceRoot) {
+    static void injectGitConfig(Map<String, String> env, Path workspaceRoot) {
         Path cur = workspaceRoot.toAbsolutePath().normalize();
         while (cur != null) {
             if (Files.exists(cur.resolve(".git"))) {
                 String root = cur.toString().replace('\\', '/');
                 int n = 0;
+                boolean countParsed = true;
                 try {
                     n = Integer.parseInt(env.getOrDefault("GIT_CONFIG_COUNT", "0"));
                 } catch (NumberFormatException ignore) {
+                    countParsed = false;
                     // 宿主残留非法值,从 0 起追加(覆盖)
                 }
                 env.put("GIT_CONFIG_KEY_" + n, "safe.directory");
@@ -895,11 +910,27 @@ public final class CodexCommandExecutor {
                 env.put("GIT_CONFIG_VALUE_" + (n + 2), GIT_IDENTITY_NAME);
                 env.put("GIT_CONFIG_KEY_" + (n + 3), "user.email");
                 env.put("GIT_CONFIG_VALUE_" + (n + 3), GIT_IDENTITY_EMAIL);
-                env.put("GIT_CONFIG_COUNT", String.valueOf(n + 4));
+                int next = n + 4;
+                if (!chainHasSslBackend(env, countParsed ? n : 0)) {
+                    env.put("GIT_CONFIG_KEY_" + next, "http.sslBackend");
+                    env.put("GIT_CONFIG_VALUE_" + next, "openssl");
+                    next++;
+                }
+                env.put("GIT_CONFIG_COUNT", String.valueOf(next));
                 return;
             }
             cur = cur.getParent();
         }
+    }
+
+    /** 既有 GIT_CONFIG_KEY_0..count-1 链里是否已显式配置 http.sslBackend（有则不重注）。 */
+    private static boolean chainHasSslBackend(Map<String, String> env, int count) {
+        for (int i = 0; i < count; i++) {
+            if ("http.sslBackend".equals(env.get("GIT_CONFIG_KEY_" + i))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
