@@ -5,8 +5,11 @@ import dev.everyagent.plugin.api.WorkerPluginContext;
 import dev.everyagent.plugin.api.config.WorkerConfig;
 
 import dev.everyagent.plugin.sandbox.codex.accounts.LogonSessionMonitor;
+import dev.everyagent.plugin.sandbox.codex.accounts.SandboxAccounts.NetworkIdentity;
+import dev.everyagent.plugin.sandbox.codex.proxy.ProxyRegistry;
 import dev.everyagent.plugin.sandbox.codex.session.RunnerPools;
 
+import java.io.IOException;
 import java.lang.System.Logger.Level;
 
 /**
@@ -65,13 +68,31 @@ public class CodexSandboxPlugin implements EveryAgentPlugin {
                             options.logonSessionAuditIntervalMs());
         }
 
+        // 4. 宿主侧 loopback 代理（阶段二沙箱 HTTPS）：仅 online 身份启动。activate 时
+        //    networkDenied 恒 false（accept 尚未发生）→ auto 兜底为 online 即启动；
+        //    policy=offline 永不启动。启动失败降级直连（不注入代理 env），沙箱命令不受阻。
+        if (com.sun.jna.Platform.isWindows() && options.proxyEnabled()
+                && options.networkIdentity(manager.networkDenied()) == NetworkIdentity.ONLINE) {
+            try {
+                ProxyRegistry.ensureStarted(options).ifPresent(ep -> LOG.log(Level.INFO,
+                        "[codex-proxy] online 策略:loopback 代理已就绪 {0}"
+                                + "（沙箱命令注入代理 env;关闭开关 codex.proxy-enabled=false）",
+                        ep.proxyUrl()));
+            } catch (IOException | RuntimeException e) {
+                LOG.log(Level.WARNING,
+                        "[codex-proxy] loopback 代理启动失败,沙箱命令将直连(不注入代理 env): {0}",
+                        e.toString());
+            }
+        }
+
         LOG.log(Level.INFO,
                 "sandbox-windows-codex 已激活（codexHome={0},账户前缀={1},网络策略={2},"
-                        + "runner池化={3}(max={4},idleTtl={5}ms)；"
+                        + "runner池化={3}(max={4},idleTtl={5}ms),代理={6}(首选端口={7})；"
                         + "setup 延迟到 codex 后端被选中时执行）",
                 new Object[] { options.codexHome(), options.accountPrefix(),
                         options.networkPolicy(), options.runnerPoolEnabled() ? "开" : "关",
-                        options.runnerPoolMaxSize(), options.runnerPoolIdleTtlMs() });
+                        options.runnerPoolMaxSize(), options.runnerPoolIdleTtlMs(),
+                        options.proxyEnabled() ? "开" : "关", options.proxyPreferredPort() });
     }
 
     @Override
@@ -83,5 +104,7 @@ public class CodexSandboxPlugin implements EveryAgentPlugin {
         }
         // 池化 runner 的登录会话随管道关闭/进程退出回收；主动发 shutdown 加速收口
         RunnerPools.invalidateAll(lastOptions != null ? lastOptions.codexHome() : null);
+        // loopback 代理随 worker 进程收口（在途隧道连接一并关闭）
+        ProxyRegistry.stopAll();
     }
 }
