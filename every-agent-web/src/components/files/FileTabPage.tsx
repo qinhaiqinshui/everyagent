@@ -1100,7 +1100,10 @@ const fileContentStyle: React.CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
   overflow: 'hidden',
-  background: 'var(--bg-secondary)',
+  // 阅读表面：本容器自带 8px 左内边距，若背景取 --bg-secondary，内边距区（不受
+  // 子元素背景覆盖）会在阅读主题下露出基底色形成白边；改用 --reading-bg 使其与
+  // 子内容同色无缝（无主题覆盖时 --reading-bg == --bg-secondary，视觉零变化）。
+  background: 'var(--reading-bg)',
   padding: '0 0 0 8px',
 }
 

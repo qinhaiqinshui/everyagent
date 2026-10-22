@@ -745,6 +745,8 @@ export default plugin
 
 `--reading-bg` / `--reading-fg` 的消费范围：文件标签页内容区（Markdown 预览的 `.md-root` 正文、CodeMirror 编辑器与行号槽、Markdown 分栏/单栏面板、文件内容容器）。默认值 `var(--bg-secondary)` / `var(--text-primary)`——未覆盖时与不套主题完全一致。因此**只覆盖这两个 token 的主题 = 只换文件阅读区配色，其余 UI（侧栏/标题栏/消息/按钮）全部继承 `type` 基底**（`novel-reader` 即此形态）。
 
+> **坑（padding 露底）**：阅读区链路上凡**自带 padding 的容器**，其背景也必须取 `--reading-bg`——padding 区不受子元素背景覆盖，若容器自己用 `--bg-secondary` 等非阅读 token，会在主题下露出一条基底色边（`FileTabPage` 的 `fileContentStyle` 就曾因 8px 左内边距露白边）。新增此类容器时对照检查。
+
 **阅读区字号刻度（`--reading-font-xs/sm/md/xl/2xl`）**：由 `--editor-font-size` 派生（`calc(var(--editor-font-size) * 系数)`，系数取 `--text-*` 相对基准 14px 的比值），供 Markdown 预览的标题/正文/表格/行内码等排版使用——使「编辑器字号」设置能**整体等比缩放阅读区文字**，而全局 UI 的 `--text-*` 刻度不受影响。默认 14px 时与 `--text-*` 等价（零视觉变化）。
 
 ### 19.5 宿主消费链与坑
