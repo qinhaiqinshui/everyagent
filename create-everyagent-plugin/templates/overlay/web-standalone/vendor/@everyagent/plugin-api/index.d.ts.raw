@@ -504,6 +504,28 @@ export interface TaskRunSubmitContributionProvider {
   onSubmitted?: (taskId: string) => void
 }
 
+// ─── Kind 视图接管（ui.kind_views） ────────────────────────────────────────
+
+/**
+ * 插件版 kind 视图组件 props（与核心内部 KindViewProps 最小化对齐）。
+ *
+ * 第一层分发的入口：按 kind 命中即**整体接管该线程项的渲染**，组件完全自治
+ * （可接管任意 kind，含 user.message / message 等核心 kind，插件优先于核心视图）。
+ */
+export interface PluginKindViewProps {
+  /** 线程条目（五字段：seq/ts/agentId/kind/payload）。 */
+  item: { seq: string; ts: number; agentId: string; kind: string; payload: unknown }
+  /** item.payload（插件侧为 unknown，自行宽松读取）。 */
+  payload: unknown
+  /** 当前 Task ID。 */
+  taskId: string
+  /** 主 agent 稳定 Id（消费方归一口径 `item.agentId || mainAgentId`）。 */
+  mainAgentId: string
+}
+
+/** kind 视图组件（由 `ui.kind_views` 扩展点产出，声明形态对齐 ToolCallView 的 Component）。 */
+export type KindViewComponent = ComponentType<PluginKindViewProps>
+
 // ─── Trace 类型 ──────────────────────────────────────────────────────────
 
 /** trace 详情渲染上下文。 */
@@ -525,8 +547,11 @@ export interface TraceTypeDefinition<R extends PluginTraceRecord = PluginTraceRe
   renderContent?: (trace: R, ctx: TraceContentRenderContext) => ReactNode
   /** 旧数据摘要适配器。 */
   getSummary?: (trace: R) => string | undefined
-  /** 旧数据图标适配器。 */
-  getIcon?: (trace: R) => string | undefined
+  /**
+   * 图标适配器。返回 string = 内置图标 key（files/shield/alert）；
+   * 返回 ReactNode = 插件自带图标节点（推荐 16 系 SVG、`stroke="currentColor"` 继承壳色）。
+   */
+  getIcon?: (trace: R) => string | ReactNode | undefined
   /** 收起态不渲染 title。 */
   hideTitle?: boolean
   /** 是否允许展开。 */
@@ -877,6 +902,8 @@ export interface UiRegistry {
   registerToolCallView(def: ToolCallViewDefinition): Disposable
   registerUserMessageAction(def: UiUserMessageActionDefinition): Disposable
   registerTaskRunSubmitContributionProvider(provider: TaskRunSubmitContributionProvider): Disposable
+  /** 注册 kind 视图（第一级分发，插件优先于核心视图；dispose 注销即回退核心渲染）。 */
+  registerKindView(kind: string, Component: KindViewComponent): Disposable
   registerTraceType(def: TraceTypeDefinition): Disposable
   registerOutputBlock(tag: string, handler: OutputBlockHandler): Disposable
   registerFileContentEditor(def: PluginFileContentEditorDescriptor): Disposable
