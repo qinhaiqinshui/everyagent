@@ -35,19 +35,33 @@ class WindowsSessionSmokeTest {
         int selfPid = (int) ProcessHandle.current().pid();
         try (RunnerPipe server = RunnerPipe.create(name, RunnerPaths.PIPE_ACCESS_INBOUND,
                 selfSid)) {
+            // 竞态护栏:客户端 CreateFile 后须等服务端 ConnectNamedPipe 完成再写+关——
+            // 否则负载下客户端先写完关管,服务端 connect 时对端已断(ERROR_NO_DATA 232)
+            java.util.concurrent.CountDownLatch serverConnected =
+                    new java.util.concurrent.CountDownLatch(1);
             Thread client = Thread.ofPlatform().name("codex-smoke-pipe-client").start(() -> {
                 WinNT.HANDLE h = openPipeClient(name, WinNT.FILE_GENERIC_WRITE);
+                try {
+                    if (!serverConnected.await(15, java.util.concurrent.TimeUnit.SECONDS)) {
+                        return;
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
                 FrameCodec.writeFrame(h, new SpawnReady(4242));
                 Kernel32Ex.INSTANCE.CloseHandle(h);
             });
             try {
                 server.connect(selfPid, 15_000); // 限时连接 + GetNamedPipeClientProcessId 校验
+                serverConnected.countDown();
                 FrameCodec.FramedMessage frame = FrameCodec.readFrame(server.handle());
                 assertNotNull(frame);
                 assertTrue(frame.message() instanceof SpawnReady, frame.message().toString());
                 assertEquals(4242, ((SpawnReady) frame.message()).processId());
                 assertEquals(IpcMessage.IPC_PROTOCOL_VERSION, frame.version());
             } finally {
+                serverConnected.countDown();
                 client.join(5_000);
             }
         }
