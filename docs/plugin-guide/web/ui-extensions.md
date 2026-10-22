@@ -7,7 +7,7 @@ has_children: false
 
 # 前端 UI 扩展点
 
-**一句话定位**：`ctx.ui`（`UiRegistry`）是前端插件往宿主 UI 里「贡献界面」的唯一通道——17 个 `register*` 扩展点 + 7 个动作方法。本文逐扩展点给出 Definition 字段表（抄自纯类型包 `every-agent-plugin-api/js/index.ts`）、注册代码、宿主消费链与坑；每条断言附宿主源码行号。`ctx.ui` 的宿主实现是单例 `pluginDispatcher`（接入方式见[前端 ctx API](context-api.md) §8）。
+**一句话定位**：`ctx.ui`（`UiRegistry`）是前端插件往宿主 UI 里「贡献界面」的唯一通道——18 个 `register*` 扩展点 + 7 个动作方法（其中 `ui.kind_views` 为两级分发模型定稿、宿主接线随代码跟进，见 §20）。本文逐扩展点给出 Definition 字段表（抄自纯类型包 `every-agent-plugin-api/js/index.ts`）、注册代码、宿主消费链与坑；每条断言附宿主源码行号。`ctx.ui` 的宿主实现是单例 `pluginDispatcher`（接入方式见[前端 ctx API](context-api.md) §8）。
 
 ## 0. 读前须知：所有扩展点共用的四条机制
 
@@ -16,7 +16,7 @@ has_children: false
 3. **两条读取通道**：异步 `dispatch('ui.xxx')` / `get*()`（仅文件页侧栏在用，`FileTabPage.tsx:166`）与同步 `listRegistered*()`（其余消费点的实际用法，下文逐个给出）。
 4. **示例代码约束**（详见[加载链路](overview-and-loading.md)）：入口 `web/index.ts` 只能 `import type ... from '@everyagent/plugin-api'` + 白名单 bare import（react / react-dom / react/jsx-runtime / antd / @ant-design/icons）；`.ts` 文件里用 `React.createElement`，组件放 `.tsx` 可用 JSX。
 
-## 1. 十七个扩展点总览
+## 1. 十八个扩展点总览
 
 | 扩展点（dispatch 名） | register 方法 | 一句话 | 内置范例 |
 |---|---|---|---|
@@ -37,6 +37,7 @@ has_children: false
 | `ui.composer_chip_actions` | `registerComposerChipAction` | 按 kind 接管输入框/消息回放胶囊的点击行为 | selection-reference（核心 `system.workspace_file` 亦经此扩展点注册，见 §17） |
 | `ui.settings_sections` | `registerSettingsSection` | 向设置页贡献一个设置段 | **无**（novel-reader 起于此） |
 | `ui.themes` | `registerTheme` | 贡献一套全局颜色主题（可部分覆盖、其余继承基底） | **无**（novel-reader；核心深/浅色为主题表内建项） |
+| `ui.kind_views` | `registerKindView` | 按 kind 接管任务线程条目**整行**渲染（两级分发第一级） | **无**（规划定稿，宿主接线随代码跟进，见 §20） |
 
 ## 2. `ui.sidebar_items` —— 侧边栏活动栏项
 
@@ -96,7 +97,7 @@ float 升序**统一混排**，不再有「内置在前、插件在后」的注�
 | 10 | 内置 settings「设置」 | `Layout.tsx:1078` |
 | 100 | 缺省 `DEFAULT_SIDEBAR_ORDER` | `Layout.tsx:1064` |
 
-注意 5 与 9 是**插件**取值不是内置位——插手别处请避开 1/2/3/10 四个内置占用；4（3 与 5 之间）、6~8、11~99 都是空位。其余 13 个扩展点**没有 order 字段**，一律「插件在前、按注册顺序」合并（§4/§7/§12 各自证据）。
+注意 5 与 9 是**插件**取值不是内置位——插手别处请避开 1/2/3/10 四个内置占用；4（3 与 5 之间）、6~8、11~99 都是空位。其余 14 个扩展点**没有 order 字段**，一律「插件在前、按注册顺序」合并（§4/§7/§12 各自证据）。
 
 ## 4. `ui.workspace_tab_types` —— 工作区标签类型
 
@@ -284,16 +285,18 @@ ctx.ui.registerTaskRunSubmitContributionProvider({
 
 ## 10. `ui.trace_types` —— trace 类型渲染
 
-### 10.1 Definition 字段表（`TraceTypeDefinition`，`js/index.ts:471-486`；ctx `TraceContentRenderContext` `js/index.ts:460-468`）
+**定位（两级分发的第二级）**：任务线程条目渲染是两级查表分发（ARCHITECTURE.md §8.7）——第一级按 `item.kind` 查 kindViewRegistry 决定「由谁渲染整行」（插件入口是 §20 `ui.kind_views`，规划定稿）；第二级是第一级兜底 `FallbackView` 与内置 `error`/`cancelled` 状态视图共用的 `TaskTraceShell` 壳，壳内按传入 kind 查本扩展点决定「壳内怎么呈现」。**选型**：只想给 trace 形状条目（title/summary/content/data）换展开内容/摘要/图标 → 用本扩展点（壳保留）；想整行接管某个 kind（含消息族）→ 用 §20；只想按工具名接管工具调用展开 → 用 §7 `ui.tool_call_views`。两级都不注册的新 kind 自动可见、内容零丢失。
+
+### 10.1 Definition 字段表（`TraceTypeDefinition`，`js/index.ts:521-539`；ctx `TraceContentRenderContext` `js/index.ts:510-513`）
 
 | 字段 | 类型 | 必填 | 消费位置（宿主） | 说明 |
 |---|---|---|---|---|
-| `kind` | `string` | ✅ | `traceTypeRegistry.tsx:95-96` | trace 类型 key；空串抛错（`:91-93`） |
-| `renderContent` | `(trace, ctx) => ReactNode?` | — | `TaskThread.tsx:452` | 展开态内容；缺省回退通用 `<pre>` 渲染（`traceTypeRegistry.tsx:98-104`） |
-| `getSummary` | `(trace) => string \| undefined?` | — | `TaskThread.tsx:448` | 收起态摘要适配器 |
-| `getIcon` | `(trace) => string \| undefined?` | — | `TaskThread.tsx:445` | 返回**图标 key 字符串**，仅 `files`/`shield` 已登记映射，未知 key 原样渲染文本（`traceTypeRegistry.tsx:18-33`） |
-| `hideTitle` | `boolean?` | — | `TaskThread.tsx:447` | 收起态不渲染 title |
-| `canExpand` | `(trace) => boolean?` | — | `TaskThread.tsx:450` | 数据在 `metadata`（无 content）时用它放开展开 |
+| `kind` | `string` | ✅ | `traceTypeRegistry.tsx:89` | trace 类型 key；空串抛错（`:86-88`） |
+| `renderContent` | `(trace, ctx) => ReactNode?` | — | `kindViews/TraceShell.tsx:50` | 展开态内容；缺省回退通用 `<pre>` 渲染（`renderFallbackContent`，`traceTypeRegistry.tsx:59-72`，`getTraceType` 取用时补齐 `:106-109`） |
+| `getSummary` | `(trace) => string \| undefined?` | — | `kindViews/TraceShell.tsx:46` | 收起态摘要适配器 |
+| `getIcon` | `(trace) => string \| undefined?` | — | `kindViews/TraceShell.tsx:43` | 返回**图标 key 字符串**，`files`/`shield`/`alert` 已登记映射，未知 key 原样渲染文本（`traceTypeRegistry.tsx:16-29`） |
+| `hideTitle` | `boolean?` | — | `kindViews/TraceShell.tsx:45` | 收起态不渲染 title |
+| `canExpand` | `(trace) => boolean?` | — | `kindViews/TraceShell.tsx:49` | 数据在 `metadata`（无 content）时用它放开展开 |
 
 ### 10.2 注册示例与消费链
 
@@ -308,9 +311,9 @@ ctx.ui.registerTraceType({
 })
 ```
 
-消费链：本扩展点**不在 `dispatch()` switch 内**（`PluginDispatcher.ts:197-220` 无此 case），注册时同步旁路写入 `traceTypeRegistry` 的 `Map<kind, def>`（`PluginDispatcher.ts:268-273` → `traceTypeRegistry.tsx:90-96`）；渲染时 `TaskTraceShell` 按 `trace.kind` 查表（`TaskThread.tsx:440-453`），查不到走通用降级（`getFallbackTraceType`，`traceTypeRegistry.tsx:73-80`）。
+消费链：本扩展点**不在 `dispatch()` switch 内**（`PluginDispatcher.ts:247` 起 switch 无此 case），注册时同步旁路写入 `traceTypeRegistry` 的 `Map<kind, def>`（`PluginDispatcher.ts:326-336` → `traceTypeRegistry.tsx:85-90`，dispose 双注销 `:331-334`）；渲染时 `TaskTraceShell` 按**传入 kind 直配**查表（`kindViews/TraceShell.tsx:28-29`，由 item 五字段 + payload 合成 `PluginTraceRecord` 兼容视图对象 `:32-42`），查不到走通用降级（`getFallbackTraceType`，`traceTypeRegistry.tsx:75-82`）。
 
-- **坑**：① `Map.set` 语义——**重复注册同 kind 覆盖**，且能覆盖内置 core kinds（`system_notice`/`run_error` 等，`traceTypeRegistry.tsx:109-136`），慎用同名；② `getIcon` 返回字符串不是组件。
+- **坑**：① `Map.set` 语义——**重复注册同 kind 覆盖**，且能覆盖内置 core kinds（`system_notice`/`run_error` 等，`initializeTraceTypes` 注册，`traceTypeRegistry.tsx:113` 起），慎用同名；② `getIcon` 返回字符串不是组件。
 - **内置范例**：ai-review（`every-agent-plugins/ai-review/web/index.ts:16-32,36`，`kind='auth.review'` + `shield` 图标）。
 
 ## 11. `ui.output_blocks` —— 输出块渲染
@@ -627,7 +630,7 @@ export default plugin
 - **核心已迁入**：核心自身的 `system.workspace_file` 胶囊点击行为已从两处宿主组件硬编码迁到本扩展点——`every-agent-web/src/plugin/coreComposerChipActions.ts`（`pluginId:'core'`，与 `coreRoundTailPanels` 同范式），在 `main.tsx` 里 `initializeCoreRoundTailPanels()` 之后、`void loadPlugins()` **之前**同步调用 `initializeCoreComposerChipActions()`（`every-agent-web/src/main.tsx:53`，`loadPlugins()` 在 `:55`）；`InlineComposer`/`AgentMessageThread` 里已无 kind 字面量分支。核心 action 语义：`readWorkspaceFileToken` 解析 payload（`coreComposerChipActions.ts:48`）+ `ctx.workspaceRoot` 非空 → `pluginDispatcher.openFileTab(workspaceRoot, target.filePath)`（`:50-54`）；缺任一条件则回落 `openSlashItemDetail(ctx.anchor, { token })`（`:58`）。行为与迁移前一致。
 - **降级**：未命中（无插件为该 kind 注册动作）→ 保持现状（弹只读详情层），不报错。
 - **同一 kind 两处走同一注册表**：插件用上下文里的 `source` 区分场景。
-- **坑**：① `payload` 是不透明袋——宿主只解码不解释，字段缺失 / 类型错要插件自己兜底降级（建议 payload 里自带定位所需的 `workspaceRoot`/`filePath`，别假设宿主侧解析出的工作区根一定等于原文件的工作区根）；② `source:'replay'` 时没有输入框草稿桥，只能靠 `openFileTab` 等宿主动作响应，别假设能写草稿；③ 往输入框插胶囊用 `appendComposerToken`（见 §20），别自实现 opaque 线格式。
+- **坑**：① `payload` 是不透明袋——宿主只解码不解释，字段缺失 / 类型错要插件自己兜底降级（建议 payload 里自带定位所需的 `workspaceRoot`/`filePath`，别假设宿主侧解析出的工作区根一定等于原文件的工作区根）；② `source:'replay'` 时没有输入框草稿桥，只能靠 `openFileTab` 等宿主动作响应，别假设能写草稿；③ 往输入框插胶囊用 `appendComposerToken`（见 §21），别自实现 opaque 线格式。
 - **坑（`appendComposerToken` 三则）**：① `appendComposerToken` 的 `payload` 形参是 `Record<string, unknown>`，插件侧 `interface`（如 `SelectionPayload`）**无索引签名** ⇒ 直接传会被 TS 判为不可赋值（TS2322），需展开成新对象字面量 `payload: { ...payload }`（见 §16.2 示例）；② 草稿桥（`setComposerBridge`）只在**激活**任务标签注入——`TaskChat.tsx` 的注入 effect 首行有 `if (!isActive) return` 守卫（`every-agent-web/src/components/task/TaskChat.tsx:711-713`），故没有激活任务标签时（或首个 `TaskChat` 尚未挂载）`appendComposerToken`/`appendComposerText` **静默丢弃**（同 `appendComposerText` 的时序坑）；③ `kind`/`label` 为空时由宿主 `buildOpaqueTokenText` **抛错**（`every-agent-web/src/composerToken/composerOpaqueToken.ts:52-56`，插件错误立刻可见），`appendComposerToken` 自身不做 kind 业务分支。
 - **内置范例**：`selection-reference`（`kind='file.selection'`，点击经 `openFileTab(..., { lineNumber })` 切回原文件标签并定位起始行）；核心 `system.workspace_file` 亦经此扩展点注册。
 
@@ -637,7 +640,7 @@ export default plugin
 
 | 字段 | 类型 | 必填 | 消费位置（宿主） | 说明 |
 |---|---|---|---|---|
-| `id` | `string` | ✅ | `SettingsPanel.tsx` | 渲染 key；同时是目录导航锚点 id 与 `openSettingsPage(sectionId)` 跳转目标（见 §18.3 / §20）；全局唯一 |
+| `id` | `string` | ✅ | `SettingsPanel.tsx` | 渲染 key；同时是目录导航锚点 id 与 `openSettingsPage(sectionId)` 跳转目标（见 §18.3 / §21）；全局唯一 |
 | `title` | `string` | ✅ | `SettingsPanel.tsx` | 段标题（渲染为 `<h3>`，与内置段同款；目录项文本取自它） |
 | `order` | `number?` | — | `SettingsPanel.tsx` | float 升序；缺省 100。内置段（含「关于」）恒在前、插件段在此之后按 order 排列 |
 | `Component` | `ComponentType` | ✅ | `SettingsPanel.tsx` | 段内容组件，无 props（数据靠 `ctx.storage` / `ctx.sdk.rpc` 自持） |
@@ -665,7 +668,7 @@ export default plugin
 ### 18.3 宿主消费链与坑
 
 - **消费点**：`SettingsPanel`（`every-agent-web/src/components/system/SettingsPanel.tsx`）用 `useSyncExternalStore(pluginDispatcher.subscribeExtensionsChanged, pluginDispatcher.getExtensionsVersion)` 订阅扩展点版本号，注册/注销后立即重渲染；段列表取 `listRegisteredSettingsSections()`，按 `order ?? 100` 升序（稳定 sort，同值保持注册先后）渲染在**全部内置段（含「关于」段）之后**。
-- **目录导航（自动纳入，插件零成本）**：每个设置段容器由宿主打 `data-settings-section-id` 锚点属性，插件段锚点 id 即 `def.id`；宿主设置页提供**扫描式目录导航**——在滚动容器内 `querySelectorAll('[data-settings-section-id]')` 扫描段落元素、读段内 `<h3>` 文本生成目录项（点击滚动到对应段并处理 header 偏移、用户手动滚动时高亮跟随，rAF 节流），`MutationObserver` 感知段落增删（覆盖插件晚注册场景）。插件段因此**自动出现在目录里**（桌面端左侧 sticky 目录列 / 移动端 `WorkspacePageShell` header 下拉），无需任何额外注册；`def.id` 同时是 `ctx.ui.openSettingsPage(sectionId)`（§20）的跳转目标，建议带插件前缀，避免与内置段 id（`hub-connection` / `workers` / `models` / `skills` / `restart-worker` / `appearance` / `editor-font` / `notifications` / `about`，常量收敛在宿主 `settingsSectionIds.ts`）撞名。
+- **目录导航（自动纳入，插件零成本）**：每个设置段容器由宿主打 `data-settings-section-id` 锚点属性，插件段锚点 id 即 `def.id`；宿主设置页提供**扫描式目录导航**——在滚动容器内 `querySelectorAll('[data-settings-section-id]')` 扫描段落元素、读段内 `<h3>` 文本生成目录项（点击滚动到对应段并处理 header 偏移、用户手动滚动时高亮跟随，rAF 节流），`MutationObserver` 感知段落增删（覆盖插件晚注册场景）。插件段因此**自动出现在目录里**（桌面端左侧 sticky 目录列 / 移动端 `WorkspacePageShell` header 下拉），无需任何额外注册；`def.id` 同时是 `ctx.ui.openSettingsPage(sectionId)`（§21）的跳转目标，建议带插件前缀，避免与内置段 id（`hub-connection` / `workers` / `models` / `skills` / `restart-worker` / `appearance` / `editor-font` / `notifications` / `about`，常量收敛在宿主 `settingsSectionIds.ts`）撞名。
 - **样式约定**：段由宿主包一层与内置段同款的 `<section>`（下边框 + 纵向间距），组件只渲染段内容、不必自带上外边距；视觉值请引用宿主 token（`var(--text-xs)` / `var(--space-*)` / `var(--border)` 等，经 `:root` 继承，无需 import）。
 - **坑**：① 段内容组件拿不到宿主 React context（插件在 blob 模块里），需要的数据用 `ctx.storage`（本地）或 `ctx.sdk.rpc`（后端）自取；② `id` 重复会让 React key 冲突，一个插件一个 id。
 - **内置范例**：**无**（`novel-reader` 起于此扩展点；核心自身的设置段不走此扩展点，直接写在 `SettingsPanel` 内）。
@@ -757,7 +760,59 @@ export default plugin
 - **坑**：① 主题 id 建议带插件前缀，避免与内建 / 其它插件撞名；② 白名单外的键静默忽略；③ 主题不含字体 / 字号——字体族与字号是独立的编辑器设置项（`pref` 的 `editor.fontFamily` / `editor.fontSize`，对标 VSCode `editor.fontFamily` / `editor.fontSize`），不受主题影响。
 - **内置范例**：**无**（`novel-reader` 起于此扩展点；核心深色 / 浅色为主题表内建项，不注册）。
 
-## 20. UiRegistry 动作方法（7 个）
+## 20. `ui.kind_views` —— kind 视图接管（两级分发第一级）
+
+> **状态（规划定稿，文档先行）**：任务线程渲染的两级分发模型已定稿（ARCHITECTURE.md §8.7），核心侧第一级注册表（`every-agent-web/src/components/task/kindViews/registry.tsx`）与分发点已存在；`ctx.ui.registerKindView`、plugin-api 的 `KindViewDefinition`/`PluginKindViewProps` 类型与 dispatcher 接线**随代码跟进**——接线前本节为定稿契约，尚无可调用的注册方法。
+
+### 20.1 两级分发模型（先懂模型再选扩展点）
+
+任务线程条目（五字段 `ThreadItem`：`seq`/`ts`/`agentId`/`kind`/`payload`）渲染分两级查表：
+
+| 级 | 查表 | 注册来源 | 查不到时 |
+|---|---|---|---|
+| 第一级（分发） | TaskThread 按 `item.kind` 查 kindViewRegistry（`TaskThread.tsx:61`） | 内置五视图 `user.message`/`message`/`tool.result`/`error`/`cancelled`（`kindViews/builtins.ts:20-24`）+ 插件（本扩展点） | 查表返回 `undefined`，分发点 `?? FallbackView`（兜底是分发语义，不埋进注册表） |
+| 第二级（呈现） | `FallbackView` 与 `error`/`cancelled` 视图共用的 `TaskTraceShell` 壳按传入 kind 查 traceTypeRegistry（`kindViews/TraceShell.tsx:28-29`） | 插件 `ui.trace_types`（§10）+ 内置 core kinds | 返回通用降级定义 `getFallbackTraceType`（查表**永不返回 undefined**） |
+
+两级兜底语义的差异是刻意的：第一级兜底决定「由谁渲染**整行**」，第二级只决定「**壳内**怎么呈现」。两级都不注册的新 kind 自动可见、内容零丢失（FallbackView 宽松读取兜底）——**注册只为美化，不为可见**。
+
+### 20.2 Definition 字段表（`KindViewDefinition`）
+
+| 字段 | 类型 | 必填 | 消费位置（宿主） | 说明 |
+|---|---|---|---|---|
+| `pluginId` | `string` | ✅ | dispatcher 旁路注册 | 插件填自己的插件 id；仅归属展示与排查（kindViewRegistry 以 kind 为 key，pluginId 不参与查表） |
+| `kind` | `string` | ✅ | `kindViews/registry.tsx:46-52` | 查表 key；空串抛错（与核心 `registerKindView` 一致，`:47-51`） |
+| `Component` | `ComponentType<PluginKindViewProps>` | ✅ | `TaskThread.tsx:61` 分发 | 整行视图；props 见下 |
+
+`PluginKindViewProps`（与核心 `KindViewProps` 最小集对齐，plugin-api 侧独立声明）：`{ item, payload, taskId, mainAgentId }`——`item` 即五字段线程条目（`seq` 为字符串雪花大数、`ts` 毫秒、`agentId` 可空串、`kind`、`payload` 形状归 kind 所有）；`payload` 对未知 kind 为 `unknown`，插件自行收窄；**不含兄弟行 items**（叶子视图，见坑 ②）。
+
+### 20.3 注册示例
+
+```ts
+import React from 'react'
+import type { PluginModule } from '@everyagent/plugin-api'
+import { MyKindView } from './MyKindView'
+
+const plugin: PluginModule = {
+  activate(ctx) {
+    ctx.ui.registerKindView({
+      pluginId: 'my-plugin',
+      kind: 'my-plugin.card',      // 插件事件 defaultHandler 折入线程的自定义 kind
+      Component: MyKindView,       // props: { item, payload, taskId, mainAgentId }
+    })
+  },
+}
+export default plugin
+```
+
+### 20.4 消费链与坑
+
+- **消费链（规划，接线后生效）**：注册旁路写入核心 kindViewRegistry（与 `registerTraceType` 旁路写 traceTypeRegistry 同范式，先例 `PluginDispatcher.ts:326-336`）；渲染时 TaskThread 分发点 `getKindView(item.kind) ?? FallbackView`（`TaskThread.tsx:61`）；dispose 侧路注销 `unregisterKindView`（`kindViews/registry.tsx:59-65`，返回是否确实移除）。
+- **坑 ①（覆盖语义）**：重复注册同 kind **覆盖**，且能覆盖内置五 kind——接管 `message`/`tool.result` 等于扔掉批壳/工具调用行/读秒/吸收判定等全部内置行为，慎用内置 kind 同名；空 kind 抛错。
+- **坑 ②（叶子视图）**：props 不含兄弟行 items——`tool.result` 配对/吸收判定/批中断终态信号等兄弟行语义是内置视图经宿主 `useThreadBoard` 的职责，插件无法引用该宿主 context；需要兄弟行的场景改用 §7 `ui.tool_call_views`（或等宿主未来开放 board 读取通道）。
+- **坑 ③（不注册也可见）**：FallbackView → TaskTraceShell → 通用降级保证任意新 kind 自动可见、内容零丢失；为「让 kind 显示出来」注册视图是误解。
+- **坑 ④（组件约束）**：与所有扩展点一致，`Component` 只能 `import type` + 白名单 bare import（§0 第 4 条），不引宿主组件。
+
+## 21. UiRegistry 动作方法（7 个）
 
 动作方法不注册 UI，而是**驱动宿主**。实现链统一：`pluginDispatcher` 同步委托模块级 holder 桥（`pluginRuntimeBridge.ts`），宿主组件挂载时注入、未注入时静默降级（`pluginRuntimeBridge.ts:1-10` 注释）。
 
@@ -791,14 +846,14 @@ ctx.ui.openSettingsPage('models')
 
 注意两个时序坑：① 页面刚加载、`Layout`/`TaskChat` 尚未挂载时桥为 null，动作**静默丢失**（不抛错）；② 草稿桥只在**激活标签页**持有写权（`TaskChat.tsx:703-713` 注释解释竞态），多任务标签并存时写入的是当前激活的那个。
 
-## 21. Disposable 与刷新
+## 22. Disposable 与刷新
 
 - **dispose 语义是真的**：`ListExtensionRegistry.register` 返回的 Disposable 从数组 splice 并通知宿主重渲染（`ExtensionRegistry.ts:45-56`）——`ctx.events.on`、`ctx.commands.registerCommand` 同理（见[前端 ctx API](context-api.md) §9）。`registerTraceType` / `registerOutputBlock` 的 dispose 也已补齐侧路注销（`traceTypeRegistry.unregisterTraceType` / `outputBlockRegistry.unregister`；早期曾是不清真实消费方的假 Disposable）。
 - **宿主收集并在页面卸载时统一 dispose**：激活时 `ctx.ui` 等注册表都包了收集代理（`pluginLoader.ts` 的 `trackDisposables`），注册返回的 Disposable 全部进该插件的 `disposables`；页面卸载（`pagehide`）时宿主先调 `deactivate` 再逆序 dispose 全部注册项并移除插件 CSS（早期 disposables 恒为空数组、`deactivate` 零调用）。运行期没有热卸载——中途注销仍需自己持有 Disposable 调 dispose。
 - **刷新即丢**：注册表、订阅、blob 模块全是内存态，页面刷新全部清零并重新走加载链路（[加载链路](overview-and-loading.md)）；跨刷新要保留的状态用 `ctx.storage`（localStorage）。
 - **同一会话内的「更新」= 重新加载页面**：改了插件 web 代码要重跑 `npm run build:plugins` 再刷新（该脚本不在任何流水线内）；后端启停/装卸一律重启 worker（[plugin.json 字段参考](../plugin-manifest.md) §6；扩展面板「重新加载」按钮**仅在有待生效变更时显示**，待生效变更涉及含 `main` 的插件时会弹确认并自动完成重启 + 刷新）。
 
-## 22. 下一步读
+## 23. 下一步读
 
 - `ctx.ui` 之外的能力（rpc/storage/events/fs/commands）：[前端 ctx API](context-api.md)
 - 加载链路与 bare import 白名单：[加载链路](overview-and-loading.md)
