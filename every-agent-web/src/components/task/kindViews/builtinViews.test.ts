@@ -203,7 +203,9 @@ describe('message 视图运行态读秒与中断态', () => {
     expect(html).not.toContain('nagent-tool-batch')
     expect(html).toContain('nagent-tool--call')
     expect(html).toContain('nagent-tool-state--running')
-    expect(html).toContain('nagent-tool__duration')
+    // 步骤 5 迁移 EntryShell:折叠行耗时槽类 = nagent-entry__duration(tint style 经壳 durationStyle 挂)
+    expect(html).toContain('nagent-entry__duration')
+    expect(html).toContain('nagent-tool__inline-preview')
     // 运行中只显示时间(不显示「运行中」中文提示)
     expect(html).not.toContain('运行中')
     // 历史回放(无瞬态)→ queued,不误点亮

@@ -32,6 +32,8 @@ export interface EntryShellProps {
   icon?: React.ReactNode
   /** 耗时槽(trace 行不用,工具行用):壳以 span.nagent-entry__duration 包裹。 */
   duration?: React.ReactNode
+  /** 耗时槽包裹 span 的内联样式(工具行挂 --tool-dur-tint 慢调用色阶自定义属性,色值插值留在样式层)。 */
+  durationStyle?: React.CSSProperties
   /** 名称槽(trace 行的 title/工具行的工具名):壳以 span.nagent-entry__name 包裹。 */
   name?: React.ReactNode
   /** 摘要槽(trace 行的摘要文本/工具行的内联参数预览):壳以 span.nagent-entry__text 包裹。 */
@@ -48,6 +50,7 @@ export function EntryShell({
   expandable = false,
   icon,
   duration,
+  durationStyle,
   name,
   summary,
   children,
@@ -57,7 +60,7 @@ export function EntryShell({
   const summaryRowContent = (
     <>
       {icon ? <span className="nagent-entry__icon">{icon}</span> : null}
-      {duration ? <span className="nagent-entry__duration">{duration}</span> : null}
+      {duration ? <span className="nagent-entry__duration" style={durationStyle}>{duration}</span> : null}
       {name ? <span className="nagent-entry__name">{name}</span> : null}
       {summary ? <span className="nagent-entry__text">{summary}</span> : null}
     </>

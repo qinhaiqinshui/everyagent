@@ -1050,8 +1050,11 @@
 }
 
 /* 折叠态弱化：降低文字对比，避免抢视线。按片段设置而非 summary 整体 opacity——
-   整体 opacity 会把耗时数字一并稀释,慢调用告警(封顶纯红)在折叠态必须全额可见。 */
+   整体 opacity 会把耗时数字一并稀释,慢调用告警(封顶纯红)在折叠态必须全额可见。
+   (步骤 5 迁移后折叠行工具名槽 = nagent-entry__name;nagent-tool__name 选择器保留
+   给展开态 result-item-head 与 update-file-view 插件旧结构消费方。) */
 .nagent-tool:not(.is-open) .nagent-tool__name,
+.nagent-tool:not(.is-open) .nagent-entry__name,
 .nagent-tool:not(.is-open) .nagent-tool__icon {
   /* ≈ 原整体 0.68 × 单独 0.85 的视觉等效值 */
   opacity: 0.58;
@@ -1064,6 +1067,11 @@
 /* 耗时数字不参与折叠态弱化:快慢是跨折叠/展开的常显信号,
    慢调用的红色深度在任何状态下都不打折。 */
 
+/* 以下 .nagent-tool__summary/__chevron/__duration(及展开态 result-item-head 消费的
+   __icon/__name)为工具行折叠行的旧结构规则:核心三视图步骤 5 已迁 EntryShell
+   (结构类 nagent-entry__* + 下方「工具调用行在共享壳上的行族差异」覆盖块),
+   本组规则按原值保留,继续服务尚未迁移的旧结构消费方(update-file-view 插件
+   自带折叠行仍用这些类)与展开态头部;不随迁移改值。 */
 .nagent-tool__summary {
   display: flex;
   /* baseline 对齐：工具名（无衬线 UI 字体）与参数预览（--font-mono）字体度量不同，
@@ -1110,11 +1118,6 @@
   flex-shrink: 0;
   /* 同 chevron：baseline 容器内的 SVG 图标单独居中。 */
   align-self: center;
-}
-
-.nagent-tool__icon--return {
-  color: var(--accent-cyan);
-  /* 返回扳手与下发扳手方向一致（flipped 镜像已移除） */
 }
 
 /* 工具视图摘要行耗时(图标与工具名之间,按内容占宽,不定宽右对齐)。
@@ -1504,7 +1507,9 @@
   color: var(--text-secondary);
 }
 
-/* 耗时槽(工具行用;trace 行不渲染该槽,规则与 .nagent-tool__duration 现值等价,步骤 5 迁移时复用)。 */
+/* 耗时槽(工具行用;trace 行不渲染该槽。逐项等于旧 .nagent-tool__duration 现值,
+   工具三视图步骤 5 迁移后由本规则供样式;tint 经 EntryShell 的 durationStyle
+   挂 --tool-dur-tint 自定义属性,色值插值仍在下方 color 一行)。 */
 .nagent-entry__duration {
   flex: 0 0 auto;
   flex-shrink: 0;
@@ -1556,6 +1561,55 @@
 .nagent-entry__empty {
   color: var(--text-muted);
   font-size: var(--text-xs);
+}
+
+/* ─── 工具调用行(nagent-tool 容器)在共享壳上的行族差异 ──────
+   工具三视图(DefaultToolView/CommandToolView/FileToolEntry)步骤 5 迁移
+   EntryShell 后折叠行结构类 = nagent-entry__*;本块按旧 .nagent-tool__summary
+   的现值逐项覆盖共享壳的 trace 基线值,保证迁移视觉零变化:
+   baseline 对齐(工具名 UI 字体与参数等宽字体的基线一致,center 会错位 1~2px)/
+   字重 500(trace 基线 400)/无右 padding(trace 行有 --space-3)/行高 1.6
+   (旧值继承自 body,共享壳基线为 1.4)/摘要禁选(inline-preview 子类局部放开
+   text)/悬停仅文字变色无底色(trace 行悬停带 bg-hover 底色)。
+   gap 8px 与 --space-2 同值(--space-2=8px),显式声明保住与
+   .nagent-tool__detail margin-left:21px(13px 图标 + 8px gap)的对齐耦合。 */
+.nagent-tool .nagent-entry__summary {
+  align-items: baseline;
+  gap: 8px;
+  box-sizing: border-box;
+  max-width: 100%;
+  padding: 0;
+  font-weight: 500;
+  line-height: 1.6;
+  user-select: none;
+  overflow: hidden;
+}
+
+.nagent-tool .nagent-entry__summary:hover {
+  background: transparent;
+}
+
+/* 图标/折叠箭头槽在 baseline 行内垂直居中(旧 .nagent-tool__icon/__chevron 的
+   align-self:center;SVG 无文字基线,不居中会以底边贴基线下沉)。 */
+.nagent-tool .nagent-entry__icon,
+.nagent-tool .nagent-entry__chevron {
+  align-self: center;
+}
+
+/* 工具名槽:次要色 + 超长省略(旧 .nagent-tool__name 现值;共享壳基线为正文色
+   且无省略——trace 标题不截断,工具名要截断让位参数预览)。 */
+.nagent-tool .nagent-entry__name {
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 展开容器:工具行展开态无分隔线、无壳内边距(旧 .nagent-tool__detail 直接挂
+   容器、不套内容框;trace 行才有的 border-top + 内边距在此归零,detail 自带的
+   margin-top/margin-left 经 margin 穿透保持原位,布局不变)。 */
+.nagent-tool .nagent-entry__content {
+  border-top: none;
+  padding: 0;
 }
 
 /* ─── 底部输入区 ───────────────────────────────────────────── */
