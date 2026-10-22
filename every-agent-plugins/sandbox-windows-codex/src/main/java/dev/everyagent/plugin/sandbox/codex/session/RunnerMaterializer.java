@@ -635,16 +635,25 @@ public final class RunnerMaterializer {
         if (cached != null) {
             return cached;
         }
-        List<Path> sources = new ArrayList<>(materializationSources(
-                System.getProperty("java.class.path"), System.getProperty("path.separator")));
-        sources.addAll(resolveFatJarSources(key, sources, groupSid));
-        Path binDir = SandboxDirs.sandboxBinDir(key);
-        String cp = classpathString(materialize(sources, binDir, groupSid));
-        ensureJnidispatch(sources, binDir, groupSid);
-        CACHED_CLASSPATHS.put(key, cp);
-        System.getLogger(RunnerMaterializer.class.getName()).log(System.Logger.Level.INFO,
-                "[runner] classpath 已物化（本进程不再重复校验）: {0}", binDir);
-        return cp;
+        // 单飞去重（池化配套）：并发首 acquire 会同时到达此处（每命令一个 executor，
+        // 池化后首两条命令可能在物化完成前并行）——per-key 互斥 + 双检，保证同一
+        // codexHome 的物化/校验（~150-300ms）只执行一次，其余等结果。
+        synchronized (MATERIALIZE_LOCKS.computeIfAbsent(key, k -> new Object())) {
+            cached = CACHED_CLASSPATHS.get(key);
+            if (cached != null) {
+                return cached;
+            }
+            List<Path> sources = new ArrayList<>(materializationSources(
+                    System.getProperty("java.class.path"), System.getProperty("path.separator")));
+            sources.addAll(resolveFatJarSources(key, sources, groupSid));
+            Path binDir = SandboxDirs.sandboxBinDir(key);
+            String cp = classpathString(materialize(sources, binDir, groupSid));
+            ensureJnidispatch(sources, binDir, groupSid);
+            CACHED_CLASSPATHS.put(key, cp);
+            System.getLogger(RunnerMaterializer.class.getName()).log(System.Logger.Level.INFO,
+                    "[runner] classpath 已物化（本进程不再重复校验）: {0}", binDir);
+            return cp;
+        }
     }
 
     /**
@@ -700,6 +709,10 @@ public final class RunnerMaterializer {
 
     /** {@code codexHome}（canonical）→ 已物化的 -cp 字符串。 */
     private static final java.util.concurrent.ConcurrentHashMap<Path, String> CACHED_CLASSPATHS =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** 物化单飞锁（per-key；见 ensureRunnerClasspath）。 */
+    private static final java.util.concurrent.ConcurrentHashMap<Path, Object> MATERIALIZE_LOCKS =
             new java.util.concurrent.ConcurrentHashMap<>();
 
     /**

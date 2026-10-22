@@ -5,7 +5,7 @@
  *   增删成功后 worker 广播 config.changed{keys:["models"]},列表自动刷新;
  * - 模型配置按 worker 各自维护(写 worker 侧 application-worker.yaml 的 worker.models 段),
  *   故按 worker 分组展示;每组表格上方有「添加」「删除」两个按钮:
- *   - 添加:弹 AddModelConfigDialog(厂家预设自动带出 baseUrl/fullUrl);
+ *   - 添加:弹 AddModelConfigDialog(厂家预设自动带出 baseUrl;baseUrl/fullUrl 二选一);
  *   - 删除:选中表格一行(radio)后删除,确认后 rpc config.model.remove;
  * - 「重新读取」按钮:手动热加载(应用外部手改 application-worker.yaml 的场景);
  * - 所有变更仅影响后续新建任务,运行中任务使用创建时冻结的快照。

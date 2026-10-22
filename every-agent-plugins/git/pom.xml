@@ -3,7 +3,7 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
     <parent>
-        <groupId>dev.everyagent</groupId>
+        <groupId>io.github.qinhaiqinshui</groupId>
         <artifactId>every-agent-plugin-parent</artifactId>
         <version>${revision}</version>
         <relativePath>../../every-agent-plugin-parent/pom.xml</relativePath>
@@ -14,8 +14,20 @@
     <description>Git 操作插件（原生 git RPC + 自动同步）</description>
     <dependencies>
         <dependency>
-            <groupId>dev.everyagent</groupId>
+            <groupId>io.github.qinhaiqinshui</groupId>
             <artifactId>every-agent-plugin-api</artifactId>
+        </dependency>
+        <!-- 凭证主密钥 DPAPI 包裹(安全整改 M-11):CryptProtectData 当前用户作用域;版本对齐
+             sandbox-windows-codex 先例。JNA 仅在 Windows 分支懒加载,非 Windows 自动走外置回退。 -->
+        <dependency>
+            <groupId>net.java.dev.jna</groupId>
+            <artifactId>jna</artifactId>
+            <version>5.16.0</version>
+        </dependency>
+        <dependency>
+            <groupId>net.java.dev.jna</groupId>
+            <artifactId>jna-platform</artifactId>
+            <version>5.16.0</version>
         </dependency>
     </dependencies>
 </project>

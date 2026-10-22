@@ -11,10 +11,13 @@ import dev.everyagent.worker.os.SandboxPathRegistry;
 
 import dev.everyagent.plugin.api.execution.ExecContext;
 import dev.everyagent.plugin.api.exception.NotFoundException;
+import dev.everyagent.plugin.api.spi.FileWriteListener;
 import dev.everyagent.plugin.api.util.AtomicFiles;
 import dev.everyagent.worker.rpc.SandboxViolationException;
 import tools.jackson.databind.node.ObjectNode;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
@@ -29,6 +32,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.locks.ReentrantLock;
 
 /**
@@ -52,6 +56,8 @@ import java.util.concurrent.locks.ReentrantLock;
 @Component
 public class FsToolSupport {
 
+    private static final Logger log = LoggerFactory.getLogger(FsToolSupport.class);
+
     private final WorkspaceManager workspaces;
     private final WorkerProperties props;
     private final HubPool pool;
@@ -68,6 +74,14 @@ public class FsToolSupport {
      * 各写一份,造成丢失更新 / 截断。键为规范化路径串;仅本进程内有效(跨进程由原子替换兜底)。
      */
     private final ConcurrentHashMap<String, ReentrantLock> pathLocks = new ConcurrentHashMap<>();
+
+    /**
+     * 文件写事件监听器(file-change 等插件经 {@code WorkerServices.addFileWriteListener} 注册,
+     * 架构 §7.15.2)。文件工具(update_file/create_file)写盘成功后在<b>写锁内</b>经
+     * {@link #notifyFileWritten} 回调——同文件并发写按 pathLock 串行,回调序=落盘序,
+     * 消费方按「首条 before + 末条 after」聚合文件级净状态不错位。
+     */
+    private final List<FileWriteListener> fileWriteListeners = new CopyOnWriteArrayList<>();
 
     public FsToolSupport(WorkspaceManager workspaces, WorkerProperties props, HubPool pool,
             PermissionGate gate) {
@@ -209,6 +223,29 @@ public class FsToolSupport {
             }
         } catch (IOException e) {
             return false;
+        }
+    }
+
+    /** 注册文件写监听器(插件 activate 时经 WorkerServices.addFileWriteListener 走到这里)。 */
+    public void addFileWriteListener(FileWriteListener listener) {
+        if (listener != null) {
+            fileWriteListeners.add(listener);
+        }
+    }
+
+    /**
+     * 文件写盘成功回调全部监听器(<b>调用方须持该路径 pathLock</b>,保证回调序=落盘序)。
+     * 单家异常隔离记 warn——监听器故障绝不影响工具执行结果。
+     */
+    public void notifyFileWritten(ExecContext t, String agentId, String tool, String rel,
+            String before, String after) {
+        for (FileWriteListener l : fileWriteListeners) {
+            try {
+                l.onFileWritten(t, agentId, tool, rel, before, after);
+            } catch (Exception e) {
+                log.warn("[fs] FileWriteListener 回调异常(已隔离,不影响工具结果) listener={} tool={} path={}",
+                        l.getClass().getName(), tool, rel, e);
+            }
         }
     }
 

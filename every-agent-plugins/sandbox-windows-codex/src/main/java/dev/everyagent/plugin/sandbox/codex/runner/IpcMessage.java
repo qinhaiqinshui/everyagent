@@ -32,6 +32,7 @@ public sealed interface IpcMessage {
     String TAG_EXIT = "exit";
     String TAG_ERROR = "error";
     String TAG_TERMINATE = "terminate";
+    String TAG_SHUTDOWN = "shutdown";
 
     /** 本消息的 wire tag。 */
     String tag();
@@ -137,6 +138,22 @@ public sealed interface IpcMessage {
         @Override
         public String tag() {
             return TAG_TERMINATE;
+        }
+    }
+
+    /**
+     * 请求关闭 runner 进程（父→runner，空载荷；池化新增）。
+     *
+     * <p>语义：worker 侧 RunnerPool 空闲 TTL 回收时发给常驻 runner 的优雅退出信号——
+     * runner 收到后终止当前子进程（若有）并以 0 退出，其登录会话随进程消亡被系统回收。
+     * 旧 runner（单命令语义）不认识本帧：其帧解码对未知 type 抛异常 → 输入循环视为读错
+     * → 杀子进程退出——安全降级；且旧 runner 在首条命令 exit 后即退出，池化 worker 的
+     * shutdown 帧只会写向已断管道（写失败即按「runner 已不在」处理），不会产生语义歧义。
+     */
+    record Shutdown() implements IpcMessage {
+        @Override
+        public String tag() {
+            return TAG_SHUTDOWN;
         }
     }
 

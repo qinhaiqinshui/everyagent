@@ -7,12 +7,18 @@ worker:
   # 连接 hub 的唯一配置入口是 worker.hubs 列表(架构 §5.3):每项含 url + api-key + hub-key,支持多 hub
   # (同 apiKey 多 hub = 可靠性冗余,不同 apiKey = 一台 worker 服务多个用户,数据按 K 隔离);
   # 不配置则 worker 不连任何 hub;url 有效但 api-key/hub-key 缺失 → 启动失败(凭据必填,无旁路)。
+  # 安全整改(fail-closed):jar 内不再携带任何打包默认密钥——api-key / hub-key 默认为空,
+  # 未显式配置即拒绝启动(resolveHubs 启动校验),不存在任何缺省密钥旁路。
+  # 打包默认条目的三要素均可经环境变量注入(url 用 WORKER_HUB_URL,见 docker-compose/deploy.py);
+  # 更完整的自定义(多 hub/多命名空间)写 ${EVERYAGENT_HOME}/application-worker.yaml 的
+  # worker.hubs 列表(整表替换本默认条目,优先级更高);桌面版由 desktop 生成的
+  # desktop-worker.yml 经 --spring.config.additional-location 注入,不受本默认值影响。
   hubs:
-    - url: ws://localhost:6101/ws
-      api-key: dev-key
+    - url: ${WORKER_HUB_URL:ws://localhost:6101/ws}
+      api-key: ${WORKER_API_KEY:}
       # 连接 hub 的凭证(对 hub 的保护);与 api-key 不同,由部署者统一配置。必填:
       # 原始密钥须与目标 hub 的 hub.hub-key(存其 sha256)对应,缺失该条目 worker 拒绝启动
-      hub-key: ${HUB_KEY:sljlw23948LKS}
+      hub-key: ${HUB_KEY:}
   # 系统目录(架构 §5.9):默认工作区 defaultworkspace/、workspaces/(注册表+任务数据)、
   # sandbox/ 顶级(沙箱持久状态);默认 ~/.everyagent(EVERYAGENT_HOME 优先)。
   # 默认值保持非空——logback 的日志目录经 springProperty 读本配置,空串会破坏回退链。
@@ -125,6 +131,13 @@ worker:
     executable: ""
     # 单个 git 命令超时(ms);clone/pull/push 大仓库可能较慢,默认 5 分钟。
     timeout-ms: 300000
+  # 内嵌终端(term.* RPC,架构 §7.18)。shell 白名单(安全整改 M-7):term.open 的 shell
+  # 只允许白名单名称(powershell/pwsh/cmd/bash/sh/zsh/wsl,经 PATH 解析)或系统信任目录
+  # (Windows: Windows/System32/SysWOW64/Program Files*;Linux: /usr/bin、/bin、/usr/local/bin)
+  # 内与白名单文件名匹配的绝对路径;不匹配拒绝(BAD_PARAMS),拒绝与成功均留 [term.open] 审计日志。
+  terminal:
+    # 白名单扩展名称(与内置清单并集);默认空 = 仅内置清单。
+    allowed-shells: []
   # 模型调用超时(ms):spring-ai OpenAiChatOptions 默认 60s,reasoning 模型深度思考期间
   # 长时间无 chunk 会被 okhttp 超时主动 CANCEL 流;默认 10 分钟,过长可调小。
   model-timeout-ms: 600000

@@ -23,9 +23,9 @@ has_children: false
 | **写前端界面**（侧边栏 / 编辑器 / 工具调用视图 / 事件） | [快速上手](getting-started.md) → [plugin.json 全字段](plugin-manifest.md) → [前端总览与加载链路](web/overview-and-loading.md) → [PluginContext API](web/context-api.md) → [UI 扩展点](web/ui-extensions.md) → [事件](web/events.md) |
 | **打包分发安装自己的插件** | [快速上手](getting-started.md) → [构建与运行](guides/build-and-run.md) → [打包与安装](guides/packaging-and-install.md) → [调试与测试](guides/debugging-and-testing.md) → [故障排查](guides/troubleshooting.md) |
 
-写完想对照现成实现，看 [内置插件清单](reference/builtin-plugins.md)；想查一个方法/字段的名字，看 [API 索引](reference/api-index.md)；现象对不上文档，先查 [已知问题与现状偏差](reference/known-issues.md)。
+写完想对照现成实现，看 [内置插件清单](reference/builtin-plugins.md)；想查一个方法/字段的名字，看 [API 索引](reference/api-index.md)；现象对不上文档，先查 [故障排查](guides/troubleshooting.md)。
 
-## 2. 全站目录（19 篇）
+## 2. 全站目录（18 篇）
 
 | 文档 | 讲什么 | 状态 |
 |---|---|---|
@@ -47,9 +47,9 @@ has_children: false
 | [guides/troubleshooting.md](guides/troubleshooting.md) | 以 `LoadedPlugin.status` 与 worker WARN 文案逐条为行的「现象→根因→修复」表 | **已成文** |
 | [reference/builtin-plugins.md](reference/builtin-plugins.md) | 内置插件 × 扩展点索引：形态 / 注册了什么 / 能当哪个范例 | **已成文** |
 | [reference/api-index.md](reference/api-index.md) | 后端注册点 + 前端类型包导出的一屏索引表 | **已成文** |
-| [reference/known-issues.md](reference/known-issues.md) | 现状偏差、API 包未发布等：现象 / 影响 / 修复·规避 / 待办（#1~#5 已修复） | **已成文** |
 
-> 目录由本文件冻结：正文按上表顺序阅读，`nav_order` 全局唯一、同级递增——本站首页 1、[架构说明](../ARCHITECTURE.md) 2、[架构全景图](../架构.md) 3、本页 4、[快速上手](getting-started.md) 5、[plugin.json 字段参考](plugin-manifest.md) 6；`backend` / `web` / `guides` / `reference` 四组各由一页**分组页**在侧栏折叠（`backend/index.md`「后端插件开发」7 / `web/index.md`「前端插件开发」9 / `guides/index.md`「构建 · 调试 · 分发」13 / `reference/index.md`「参考」17，均带 `has_children: true`），组内成员沿用 4~19 的相对顺序。各篇 `parent` 必须**精确等于**分组页 `title`。新增页面要同时改本表、本条编号与 §1 阅读路径。
+
+> 目录由本文件冻结：正文按上表顺序阅读，`nav_order` 全局唯一、同级递增——本站首页 1、[架构说明](../ARCHITECTURE.md) 2、[架构全景图](../架构.md) 3、本页 4、[快速上手](getting-started.md) 5、[plugin.json 字段参考](plugin-manifest.md) 6；`backend` / `web` / `guides` / `reference` 四组各由一页**分组页**在侧栏折叠（`backend/index.md`「后端插件开发」7 / `web/index.md`「前端插件开发」9 / `guides/index.md`「构建 · 调试 · 分发」13 / `reference/index.md`「参考」17，均带 `has_children: true`），组内成员按上表相对顺序递增。各篇 `parent` 必须**精确等于**分组页 `title`。新增页面要同时改本表、本条编号与 §1 阅读路径。
 
 ## 3. 5 分钟速览：一个插件由哪些部分组成
 
@@ -58,7 +58,7 @@ has_children: false
 ```
 every-agent-plugins/<id>/
 ├── plugin.json                      # 唯一清单：id / name / version / description / author / enabled + main / webMain
-├── pom.xml                          # 仅 java 形态需要；parent = dev.everyagent:every-agent-plugin-parent:1.0.1
+├── pom.xml                          # 仅 java 形态需要；parent = io.github.qinhaiqinshui:every-agent-plugin-parent:1.0.1
 ├── src/main/java/…/<Id>Plugin.java  # 实现 EveryAgentPlugin，activate(ctx) 里注册一切能力
 ├── web/
 │   ├── index.ts                     # 前端入口（源码）
@@ -88,7 +88,7 @@ worker 侧的判定规则（`every-agent-worker/src/main/java/dev/everyagent/wor
 | bare import 白名单只有 7 项：`react`、`react-dom`、`react/jsx-runtime`、`antd`、`@ant-design/icons`、`react-markdown`、`remark-gfm`，运行时改写为 7 个 `window.__EA_*` 全局 | 同上 §4 |
 | 仓库内插件的 `web/*.ts` 由宿主 `every-agent-web/tsconfig.json` 的 `include` 覆盖，**无需自带 tsconfig** | `every-agent-web/tsconfig.json` |
 | `enable` / `disable` / `install` / `uninstall` 一律**重启 worker 才生效**（无热重载；`deactivate` 仅在 worker 优雅关闭时调用） | `../ARCHITECTURE.md` §8.5 |
-| `@everyagent/plugin-api`（js 与 Java 两侧同号，都随根 pom 的 `<revision>` 单点源走）**均未发布**到公共仓库（npm / Maven Central 实测 404），故仓库外开发需自带类型副本 | `.everyagent/plan-plugin-scaffold-docs.md` |
+| Java 侧插件 SDK（4 坐标，`io.github.qinhaiqinshui:every-agent-*`）**已发布 Maven Central**（首发 1.6.0）——仓库内外构建直接从 Central 解析；js 类型包 `@everyagent/plugin-api` 尚未发 npm，web × standalone 开发仍靠 vendor 类型副本（两包随根 pom `<revision>` 同号） | 仓库 `CONTRIBUTING.md`「发布（维护者）」 |
 
 ## 4. 能力面速查与术语
 
@@ -99,7 +99,7 @@ worker 侧的判定规则（`every-agent-worker/src/main/java/dev/everyagent/wor
 | 后端 | `WorkerPluginContext` 自身的 `register*` 方法 | 14 | 下表分组 |
 | 后端 | 继承自 `TaskPluginContext` 的 `register*` | 2 | [任务生命周期与 RPC](backend/task-and-rpc.md) |
 | 前端 | `ctx.ui` 的 `register*` 扩展点 | 17 | [UI 扩展点](web/ui-extensions.md) |
-| 前端 | `ctx.ui` 的动作方法（开 tab / 开文件 / 开 diff / 写 composer / 插胶囊） | 6 | [PluginContext API](web/context-api.md) |
+| 前端 | `ctx.ui` 的动作方法（开 tab / 开文件 / 开 diff / 开设置页 / 写 composer / 插胶囊） | 7 | [PluginContext API](web/context-api.md) |
 | 前端 | `ctx` 能力域（`ui` / `sdk` / `events` / `fs` / `storage` / `commands`） | 6 | [PluginContext API](web/context-api.md) |
 | 前端 | `PluginDomainEvent` 具名事件（其余靠 `(string & {})` 兜底） | 9 | [事件](web/events.md) |
 
@@ -142,7 +142,7 @@ worker 侧的判定规则（`every-agent-worker/src/main/java/dev/everyagent/wor
 | 想给自己的插件存数据 | [持久化与插件私有状态](backend/persistence-and-state.md) |
 | 想在聊天流里自定义某类工具 / 某轮结果的展示 | [UI 扩展点](web/ui-extensions.md)（`ui.tool_call_views`、`ui.trace_types`、`ui.round_tail_panels`） |
 | 能不能引用 worker 的类、宿主 `@/` 模块 | 不能，见本页 §5 两条红线 |
-| 文档写的和代码不一样 | [已知问题与现状偏差](reference/known-issues.md)，并以 `../ARCHITECTURE.md` 为准 |
+| 文档写的和代码不一样 | 以 [架构说明](../ARCHITECTURE.md) 为准，现象级排查走 [故障排查](guides/troubleshooting.md) |
 
 ## 7. 写作与链接规范（给后续文档作者）
 

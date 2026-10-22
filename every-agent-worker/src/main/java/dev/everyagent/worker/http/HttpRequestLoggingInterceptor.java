@@ -1,5 +1,6 @@
 package dev.everyagent.worker.http;
 
+import dev.everyagent.plugin.api.util.SecretPatterns;
 import okhttp3.Interceptor;
 import okhttp3.Request;
 import okhttp3.RequestBody;
@@ -28,7 +29,10 @@ import java.nio.charset.StandardCharsets;
  * 便于区分同一 agent 的多轮请求。
  *
  * <p>脱敏:请求头 {@code Authorization} / {@code api-key} 的值一律替换为 {@code ***};
- * 请求体为 OpenAI 兼容协议 JSON,apiKey 不落 body(只在 header),故 body 原样打印。
+ * 请求体为 OpenAI 兼容协议 JSON,apiKey 不落 body(只在 header),但对话上下文可能
+ * 含用户粘贴/历史回显的密钥原文(审计 L-3),故 body 先经
+ * {@link SecretPatterns#maskSecrets} 形态掩码(sk-… → sk-****、Bearer xxx →
+ * Bearer **** 等)再落日志——只改写日志字符串,不改任何请求内容。
  *
  * <p>设计纪律:per-agent 实例化(构造时携带 agentId 仅用于日志前缀标识,只读不可变),
  * 多任务并发安全;是否打印由日志级别控制({@code Logger.debug}),
@@ -81,11 +85,12 @@ public class HttpRequestLoggingInterceptor implements Interceptor {
         }
 
         // 请求体:完整 JSON(OpenAI 兼容协议,messages 含 system 渐进式披露索引 / tools 等)。
+        // 对话上下文可能含密钥原文(审计 L-3)——形态掩码后落日志,截断不适用(调试需要完整结构)。
         RequestBody body = request.body();
         if (body == null) {
             sb.append("body: <empty>\n");
         } else {
-            sb.append("body:\n").append(readBody(body)).append('\n');
+            sb.append("body:\n").append(SecretPatterns.maskSecrets(readBody(body))).append('\n');
         }
         return sb.toString().stripTrailing();
     }

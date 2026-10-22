@@ -98,6 +98,16 @@ class IpcMessageJsonTest {
         assertTrue(payloadOf(new IpcMessage.Terminate(), "terminate").isEmpty());
     }
 
+    /** 池化新增 shutdown 帧：空载荷、tag=shutdown；旧形态帧不受影响。 */
+    @Test
+    void shutdownHasEmptyPayloadAndDistinctTag() {
+        assertTrue(payloadOf(new IpcMessage.Shutdown(), "shutdown").isEmpty());
+        assertEquals("shutdown", new IpcMessage.Shutdown().tag());
+        // 手工 wire 解码：未知 type 仍拒绝（对端旧版本把 shutdown 视为未知 type 是预期行为）
+        JsonNode root = parse("{\"version\":6,\"type\":\"shutdown\",\"payload\":{}}");
+        assertEquals(new IpcMessage.Shutdown(), IpcJson.fromJson(root));
+    }
+
     @Test
     void resizeKeepsRowsCols() {
         JsonNode payload = payloadOf(new IpcMessage.Resize(30, 120), "resize");

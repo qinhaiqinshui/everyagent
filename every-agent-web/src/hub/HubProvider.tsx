@@ -57,6 +57,11 @@ export function HubProvider({ children }: { children: React.ReactNode }) {
     const unsubFatal = hubSession.onFatalError(setFatalError)
     const unsubRateLimited = hubSession.onRateLimited(setRateLimited)
     const unsubReconnecting = hubSession.onReconnecting(setReconnecting)
+    // 凭据迁移/解密(hydrate)是异步的:完成后 config(hubKey 明文回填)同步进 React 状态,
+    // 设置页据此回填输入框;失败静默(hydrate 内部已告警并回退)。
+    void hubSession.ensureHydrated()
+      .then(() => setConfig(hubSession.config ? { ...hubSession.config } : null))
+      .catch(() => undefined)
     void hubSession.ensureConnected()
     return () => {
       unsubState()
@@ -77,7 +82,8 @@ export function HubProvider({ children }: { children: React.ReactNode }) {
     config,
     applyConfig: async (next) => {
       await hubSession.applyConfig(next)
-      setConfig({ ...next })
+      // 以会话侧为准回填(hubKeyEnc 由 applyConfig 内部加密生成,入参 next 不含密文)。
+      setConfig(hubSession.config ? { ...hubSession.config } : null)
       setDirectory(hubSession.directory)
     },
     disconnect: () => hubSession.disconnect(),

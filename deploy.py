@@ -18,6 +18,11 @@ BuiltInPluginScanner 按 cwd 扫内置插件。不要这步时加 --skip-plugins
 再把产物上传到服务器（默认 ~/every-agent/releases/<ts>，软链 current）。
 
 依赖：paramiko   （pip install paramiko；--list / --dry-run 不需要）
+SSH 主机密钥：严格校验 known_hosts（默认 ~/.everyagent/deploy_known_hosts，可用 --known-hosts /
+          DEPLOY_KNOWN_HOSTS 覆盖）。未知主机需在交互终端确认指纹后写入，绝不静默信任；
+          非交互(CI/管道)环境会直接报错，可先在有终端处跑一次，或经可信渠道核对指纹后
+          `ssh-keyscan -p <port> <host> >> ~/.everyagent/deploy_known_hosts` 预热。
+SSH 密码：优先级 DEPLOY_SSH_PASSWORD 环境变量 > 交互输入 > --password 参数（后者已弃用）。
 本地前置：能跑 mvn（Java 25）、npm（Node 22）与 node 以产出 jar / dist / 插件产物；
           worker 侧的内置插件 jar 被运行中的 worker 锁定时 clean 会失败——构建前请先停掉本机 worker。
 服务器前置（host 模式）：nginx（已装）、systemd；Java 25 需可用——可手动预装
@@ -43,6 +48,9 @@ BuiltInPluginScanner 按 cwd 扫内置插件。不要这步时加 --skip-plugins
   #   python deploy.py all --config ~/.everyagent/deploy.env
   # 文件内容形如：
   #   HUB_KEY=你的hub密钥                        # 原文；hub/worker 启动时自算 sha256
+  #   WORKER_API_KEY=你的worker密钥              # worker 数据归属密钥(前端连接 worker 填同值)；
+  #                                              # docker 模式必填(worker 拒绝空凭据启动)，
+  #                                              # host 模式也可由服务器上 application-worker.yaml 提供
   #   WORKSPACE_ROOT=/srv/everyagent/workspaces
   #   DEPLOY_HOST=1.2.3.4
   #   DEPLOY_USER=ubuntu
@@ -54,8 +62,13 @@ BuiltInPluginScanner 按 cwd 扫内置插件。不要这步时加 --skip-plugins
 from __future__ import annotations
 
 import argparse
+import base64
+import getpass
+import hashlib
 import os
+import shlex
 import shutil
+import socket
 import subprocess
 import sys
 import tarfile
@@ -93,9 +106,42 @@ def resolve_repo_path(arg: str) -> Path:
     return p if p.is_absolute() else REPO_ROOT / p
 
 
+# 敏感值打码：只用于日志/预览输出；真正写往服务器的 .env / docker-compose.yml 仍是原文。
+_SECRET_KEYS = ("HUB_KEY", "REMOTE_HUB_KEY", "WORKER_API_KEY", "DEPLOY_SSH_PASSWORD")
+
+
+def mask_secret(value: str) -> str:
+    """密钥打码：保留前 4 后 4 位，中间以 ... 代替；不超过 8 位时整体遮蔽；空值原样。"""
+    v = value or ""
+    if not v:
+        return v
+    if len(v) <= 8:
+        return "****"
+    return f"{v[:4]}...{v[-4:]}"
+
+
+def mask_env_line(line: str) -> str:
+    """对 .env 形式(KEY=VALUE) / compose 形式(KEY: "VALUE") 行中敏感 KEY 的值打码，
+    其余行原样返回。dry-run 预览等输出统一走这里，避免密钥原文漏到终端/CI 日志。"""
+    for k in _SECRET_KEYS:
+        if line.startswith(k + "="):
+            return f"{k}={mask_secret(line[len(k) + 1:])}"
+        stripped = line.lstrip()
+        if stripped.startswith(k + ":"):
+            indent = line[: len(line) - len(stripped)]
+            value = stripped[len(k) + 1:].strip().strip('"').strip("'")
+            return f'{indent}{k}: "{mask_secret(value)}"'
+    return line
+
+
 # 运行时使用的官方基础镜像（如需固定版本号，改这里即可）
+# TODO: pin @sha256:<digest>（联网后 docker manifest inspect 查询;流程见 docs/ops/image-pinning.md）
 HUB_IMAGE = "eclipse-temurin:25-jre"
+# TODO: pin @sha256:<digest>（同上）
 WORKER_IMAGE = "eclipse-temurin:25-jre"
+# 注意:docker 模式直接拉官方镜像运行(nginx root master,容器内 80),与仓库 docker-compose.yml
+# 构建的 every-agent-web/Dockerfile(非 root,容器内 8080)是两条独立链路,勿混用端口语义。
+# TODO: pin @sha256:<digest>（同上）
 WEB_IMAGE = "nginx:alpine"
 
 # 服务器端 docker-compose：官方镜像 + 挂载本地编译产物，不构建自定义镜像。
@@ -109,6 +155,7 @@ def render_compose(cfg) -> str:
     并写入同名环境变量，使 worker 默认工作区指向宿主真实目录。"""
     ws = (getattr(cfg, "workspace_root", "") or "").strip()
     hub_key = getattr(cfg, "hub_key", "") or ""
+    worker_api_key = getattr(cfg, "worker_api_key", "") or ""
     web_port = getattr(cfg, "web_port", 80) or 80
     worker_volumes = [
         "      - ./worker/app.jar:/app/app.jar:ro",
@@ -122,6 +169,11 @@ def render_compose(cfg) -> str:
         # HUB_KEY / REMOTE_HUB_KEY,同一台 hub 时填同值)
         f'      HUB_KEY: "{hub_key}"',
         f'      REMOTE_HUB_KEY: "{hub_key}"',
+        # 打包默认已无任何密钥(fail-closed):worker 凭据必须显式注入——
+        # api-key=数据归属密钥(WORKER_API_KEY),hub-key=与 hub 同一密钥(HUB_KEY)
+        f'      WORKER_API_KEY: "{worker_api_key}"',
+        # 容器内经服务名访问 hub(打包默认 url=localhost,容器网络里不通)
+        '      WORKER_HUB_URL: "ws://hub:6101/ws"',
     ]
     if ws:
         if not ws.startswith("/"):
@@ -142,6 +194,8 @@ services:
       - "6101:6101"
     environment:
       HUB_KEY: "{hub_key}"
+      # 打包默认 server.address 已收敛为 127.0.0.1(安全整改);容器要发布 6101 端口必须绑 0.0.0.0
+      SERVER_ADDRESS: "0.0.0.0"
     restart: unless-stopped
 
   worker:
@@ -162,6 +216,8 @@ services:
     volumes:
       - ./webapp/dist:/usr/share/nginx/html:ro
     ports:
+      # 容器内 80 是官方 nginx:alpine 的默认监听(本模式不构建自定义镜像);
+      # 仓库 docker-compose.yml(构建 every-agent-web/Dockerfile,非 root)容器内为 8080。
       - "{web_port}:80"
     restart: unless-stopped
     depends_on:
@@ -194,6 +250,10 @@ Type=simple
 WorkingDirectory={cur}/hub
 ExecStart={java_bin} -jar {cur}/hub/app.jar
 EnvironmentFile={cur}/.env
+# hub 打包默认只监听 127.0.0.1(安全整改);host 部署显式放开保持既有行为
+# (nginx 反代与跨机 worker 直连均可达;如确认 hub/worker/webapp 全部同机、且无需
+# 跨机直连 6101,可在 current/.env 里覆盖 SERVER_ADDRESS=127.0.0.1 收紧——.env 优先级更高)。
+Environment=SERVER_ADDRESS=0.0.0.0
 Restart=on-failure
 RestartSec=5
 
@@ -263,11 +323,19 @@ def render_runtime_env_file(cfg) -> str:
     供 worker.yml 第二条 hub 条目用,同一台 hub 时与 HUB_KEY 同值）。"""
     ws = (getattr(cfg, "workspace_root", "") or "").strip()
     hub_key = getattr(cfg, "hub_key", "") or ""
+    worker_api_key = getattr(cfg, "worker_api_key", "") or ""
     lines = [
         f"HUB_KEY={hub_key}",
         f"REMOTE_HUB_KEY={hub_key}",
+        # worker 数据归属密钥(host 模式通常由服务器上 ${EVERYAGENT_HOME}/application-worker.yaml
+        # 的 worker.hubs 列表提供凭据;留空时该文件可用 ${WORKER_API_KEY} 占位符引用本行)
+        f"WORKER_API_KEY={worker_api_key}",
         f"WORKER_ID={getattr(cfg, 'worker_id', 'company-pc') or 'company-pc'}",
         "EVERYAGENT_HOME=/var/lib/everyagent",
+        "# hub 监听地址由 systemd 单元(hub.service)注入 SERVER_ADDRESS=0.0.0.0 保持既有行为;",
+        "# 若 hub/worker/webapp 全部同机且无需跨机直连 6101,取消下一行注释收紧为仅回环",
+        "# (本文件优先级高于单元内的 Environment=;worker 不受影响——其 server.address 在打包 yml 固定回环)。",
+        "#SERVER_ADDRESS=127.0.0.1",
     ]
     if ws:
         lines.append(f"WORKSPACE_ROOT={ws}")
@@ -279,7 +347,7 @@ def host_deploy_command(cfg, services, ts: str) -> str:
     hub 由 nginx 的 /hub/ 反代对外暴露，worker 仍直连 localhost:6101。
     sudo 由 --sudo / DEPLOY_SUDO 控制（root 直连时留空，免密 sudo 时加 sudo -n）。
     --skip-install 时跳过所有 apt-get 安装，需提前手动装好 Java25 和 nginx。"""
-    rd = cfg.remote_dir.rstrip("/")
+    rd = shlex.quote(cfg.remote_dir.rstrip("/"))
     cur = f"{rd}/current"
     sudo = "sudo -n" if getattr(cfg, "sudo", False) else ""
     skip_install = getattr(cfg, "skip_install", False)
@@ -518,20 +586,105 @@ def make_archive(staging: Path) -> Path:
 
 
 # ----------------------------- SSH -----------------------------
+def _known_hosts_path(cfg) -> Path:
+    """known_hosts 文件路径：--known-hosts / DEPLOY_KNOWN_HOSTS / 默认 ~/.everyagent/deploy_known_hosts。"""
+    return resolve_repo_path(getattr(cfg, "known_hosts", "") or "~/.everyagent/deploy_known_hosts")
+
+
+def _known_hosts_entry(cfg) -> str:
+    """known_hosts 条目名：非 22 端口为 [host]:port（与 OpenSSH/paramiko 的校验规则一致）。"""
+    port = int(cfg.port or 22)
+    return cfg.host if port == 22 else f"[{cfg.host}]:{port}"
+
+
+def _fetch_remote_host_key(cfg, paramiko):
+    """不依赖登录流程，独立建 Transport 抓取服务器主机公钥（供未知主机的指纹确认用）。"""
+    sock = socket.create_connection((cfg.host, int(cfg.port or 22)), timeout=30)
+    transport = paramiko.Transport(sock)
+    try:
+        transport.start_client(timeout=30)
+        return transport.get_remote_server_key()
+    finally:
+        transport.close()
+
+
+def _confirm_unknown_host(cfg, client, paramiko, kh_path: Path) -> None:
+    """known_hosts 中无该主机时：抓公钥 → 交互确认指纹 → 追加写入文件。
+
+    非 TTY（管道/CI）环境直接报错退出并给出预热方式，绝不静默信任首次密钥（防中间人）。
+    """
+    entry = _known_hosts_entry(cfg)
+    if client.get_host_keys().lookup(entry):
+        return
+    key = _fetch_remote_host_key(cfg, paramiko)
+    fp_md5 = ":".join(f"{b:02x}" for b in key.get_fingerprint())
+    fp_sha256 = base64.b64encode(hashlib.sha256(key.asbytes()).digest()).rstrip(b"=").decode()
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        sys.exit(
+            f"未知主机 {cfg.host}:{cfg.port}: known_hosts({kh_path}) 中没有它的主机密钥，"
+            f"且当前非交互环境无法确认指纹，已拒绝连接。\n"
+            f"  预热方式一: 在有终端的机器上先跑一次本脚本，交互确认指纹后自动写入该文件；\n"
+            f"  预热方式二: 经可信渠道核对指纹后手动执行  ssh-keyscan -p {int(cfg.port or 22)} {cfg.host} >> {kh_path}"
+        )
+    print(f"[known_hosts] 首次连接 {cfg.host}:{cfg.port}，服务器 {key.get_name()} 主机公钥指纹:")
+    print(f"  SHA256:{fp_sha256}")
+    print(f"  MD5:{fp_md5}")
+    ans = input(f"确认指纹无误并信任该主机(写入 {kh_path})? [yes/N] ").strip().lower()
+    if ans not in ("y", "yes"):
+        sys.exit("已拒绝主机密钥，中止连接(known_hosts 未改动)")
+    on_disk = paramiko.hostkeys.HostKeys()
+    on_disk.load(str(kh_path))
+    on_disk.add(entry, key.get_name(), key)
+    on_disk.save(str(kh_path))
+    client.get_host_keys().add(entry, key.get_name(), key)
+    log(f"主机密钥已确认并追加 -> {kh_path}")
+
+
+def _resolve_ssh_password(cfg) -> str | None:
+    """SSH 密码来源优先级: DEPLOY_SSH_PASSWORD 环境变量 > getpass 交互输入 > --password CLI 参数。
+
+    --password 已弃用（会留在 shell 历史与进程列表），仅作最低优先级兜底；
+    已提供私钥(--key-file)时不提示输入密码。
+    """
+    env_pwd = os.environ.get("DEPLOY_SSH_PASSWORD")
+    if env_pwd:
+        return env_pwd
+    if not cfg.key_file and sys.stdin.isatty():
+        pwd = getpass.getpass(f"SSH 密码({cfg.user or ''}{('@' + cfg.host) if cfg.host else ''}, 回车跳过): ")
+        if pwd:
+            return pwd
+    return cfg.password or None
+
+
 def connect(cfg):
     try:
         import paramiko
     except ImportError:
         sys.exit("缺少依赖 paramiko，请先执行: pip install paramiko")
+    # 主机密钥严格校验：known_hosts 之外的机器一律拒绝(RejectPolicy)，
+    # 未知主机走 _confirm_unknown_host 的指纹交互确认，不再静默信任首次密钥。
+    kh_path = _known_hosts_path(cfg)
+    kh_path.parent.mkdir(parents=True, exist_ok=True)
+    if not kh_path.is_file():
+        kh_path.touch()
     client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    client.load_host_keys(str(kh_path))
+    client.set_missing_host_key_policy(paramiko.RejectPolicy())
+    _confirm_unknown_host(cfg, client, paramiko, kh_path)
+    password = _resolve_ssh_password(cfg)
     kwargs = dict(hostname=cfg.host, port=cfg.port, username=cfg.user, timeout=30)
-    if cfg.password:
-        kwargs["password"] = cfg.password
+    if password:
+        kwargs["password"] = password
     if cfg.key_file:
         kwargs["key_filename"] = cfg.key_file
     log(f"连接 {cfg.user}@{cfg.host}:{cfg.port} ...")
-    client.connect(**kwargs)
+    try:
+        client.connect(**kwargs)
+    except paramiko.BadHostKeyException as e:
+        sys.exit(
+            f"主机密钥与 {kh_path} 中记录不一致(疑似中间人攻击或服务器重装): {e}\n"
+            f"  请经可信渠道核实后，从该文件删除旧条目再重试。"
+        )
     return client
 
 
@@ -596,13 +749,14 @@ def ensure_privilege(cfg, client) -> None:
     )
 
 
-def sftp_put(client, local: Path, remote: str) -> None:
+def sftp_put(client, local: Path, remote: str, mode: int | None = None) -> None:
+    """上传文件到远端；mode 非空时上传后立即 chmod（.env 等敏感文件收紧权限用）。"""
     sftp = client.open_sftp()
     try:
         parent = remote.rsplit("/", 1)[0]
         if parent:
             # 用 SSH 建父目录：比 SFTP 自带的 mkdir 可靠，且能暴露权限错误
-            rc = remote_exec(client, f"mkdir -p {parent}")
+            rc = remote_exec(client, f"mkdir -p {shlex.quote(parent)}")
             if rc != 0:
                 raise RuntimeError(
                     f"无法在服务器创建目录: {parent}（mkdir -p 返回 {rc}）。\n"
@@ -621,13 +775,17 @@ def sftp_put(client, local: Path, remote: str) -> None:
                     last["p"] = p
 
         sftp.put(str(local), remote, callback=cb)
+        if mode is not None:
+            sftp.chmod(remote, mode)
+            log(f"  权限收紧: {remote} -> {oct(mode)}")
     finally:
         sftp.close()
 
 
 # --------------------------- 命令构造 ---------------------------
 def extract_command(cfg, services, ts: str) -> str:
-    rd = cfg.remote_dir.rstrip("/")
+    # 远端路径先 shlex.quote 再拼进 shell 命令，含空格/特殊字符的 remote_dir 不会被拆词或注入
+    rd = shlex.quote(cfg.remote_dir.rstrip("/"))
     rel = f"{rd}/releases/{ts}"
     cur = f"{rd}/current"
     sudo = "sudo -n " if getattr(cfg, "sudo", False) else ""
@@ -640,11 +798,13 @@ def extract_command(cfg, services, ts: str) -> str:
     # 保证 current（三个服务共用的快照）始终完整：部署单个服务不会让其它服务的
     # jar/dist 路径消失（否则 hub 一重启就挂、nginx root 指向空目录等）。
     lines.append("for svc in hub worker webapp; do")
-    lines.append(f'  if [ ! -e "{rel}/$svc" ] && [ -e "{cur}/$svc" ]; then')
-    lines.append(f'    ln -s "$(readlink -f "{cur}/$svc")" "{rel}/$svc"')
+    lines.append(f'  if [ ! -e {rel}/"$svc" ] && [ -e {cur}/"$svc" ]; then')
+    lines.append(f'    ln -s "$(readlink -f {cur}/"$svc")" {rel}/"$svc"')
     lines.append("  fi")
     lines.append("done")
     lines.append(f"rm -rf {cur}; ln -sfn {rel} {cur}")
+    # .env 内含 hub/worker 密钥原文：解包后立即收紧为 600，避免同机其它用户读取
+    lines.append(f"[ -f {rel}/.env ] && chmod 600 {rel}/.env || true")
     if "webapp" in services:
         # nginx 以 www-data 运行，站点根在用户 home 下时需保证其对整条路径
         # 有遍历(x)权限、对 dist 静态文件有读(r)权限，否则 stat 报 13: Permission denied。
@@ -656,7 +816,7 @@ def extract_command(cfg, services, ts: str) -> str:
 
 
 def deploy_command(cfg, services, ts: str) -> str:
-    rd = cfg.remote_dir.rstrip("/")
+    rd = shlex.quote(cfg.remote_dir.rstrip("/"))
     cur = f"{rd}/current"
     svcs = " ".join(services)
     nodeps = "--no-deps " if cfg.no_deps else ""
@@ -680,25 +840,23 @@ def release_prune_command(cfg) -> str:
     release，导致继承出来的服务路径失效。这里先收集 current 下所有仍被引用的
     release（readlink 解析后取所属 release），删除时跳过它们。
     """
-    rd = cfg.remote_dir.rstrip("/")
-    cur = f"{rd}/current"
+    # 路径统一在 shell 变量赋值处 shlex.quote 一次，随后在双引号内引用 "$rd"，
+    # 避免 remote_dir 含空格/特殊字符时逐处拼接被拆词或注入。
     keep = cfg.keep_releases
-    protect = (
-        'protect=""\n'
-        f"for p in {cur}/hub {cur}/worker {cur}/webapp {cur}/systemd {cur}/nginx {cur}/.env; do\n"
+    return (
+        f"rd={shlex.quote(cfg.remote_dir.rstrip('/'))}\n"
+        'protect=" "\n'
+        'for p in "$rd"/current/hub "$rd"/current/worker "$rd"/current/webapp '
+        '"$rd"/current/systemd "$rd"/current/nginx "$rd"/current/.env; do\n'
         '  t=$(readlink -f "$p" 2>/dev/null) || continue\n'
         '  case "$t" in\n'
-        f"    {rd}/releases/*) d=${{t#{rd}/releases/}}; d=${{d%%/*}}; "
-        f'protect="$protect {rd}/releases/$d" ;;\n'
-        "  esac\n"
-        "done\n"
-    )
-    prune = (
-        f"for r in $(ls -dt {rd}/releases/* 2>/dev/null | tail -n +{keep + 1}); do\n"
+        '    "$rd"/releases/*) d=${t#"$rd"/releases/}; d=${d%%/*}; protect="$protect $rd/releases/$d" ;;\n'
+        '  esac\n'
+        'done\n'
+        f'for r in $(ls -dt "$rd"/releases/* 2>/dev/null | tail -n +{keep + 1}); do\n'
         '  case " $protect " in *" $r "*) ;; *) rm -rf "$r" ;; esac\n'
-        "done\n"
+        'done\n'
     )
-    return protect + prune
 
 
 # ----------------------------- 部署 -----------------------------
@@ -712,6 +870,10 @@ def deploy(cfg, services) -> None:
         else:
             log("[警告] 未设置 WORKSPACE_ROOT（--workspace-root / DEPLOY_WORKSPACE_ROOT），"
                 "worker 将使用 EVERYAGENT_HOME 默认工作区（/var/lib/everyagent），无法访问你指定的宿主目录。")
+    if "worker" in services and mode == "docker" and not (getattr(cfg, "worker_api_key", "") or "").strip():
+        log("[警告] docker 模式未提供 WORKER_API_KEY（--worker-api-key / DEPLOY_WORKER_API_KEY / 配置文件 WORKER_API_KEY=）："
+            "worker 凭据 fail-closed,容器将因缺 api-key 拒绝启动——"
+            "除非 EVERYAGENT_HOME 卷内已有提供凭据的 application-worker.yaml。")
     if cfg.dry_run:
         log("== DRY RUN: 仅本地预览, 不执行本地构建、不连接服务器 ==")
         print("\n---- 本地将执行的构建命令 ----")
@@ -743,7 +905,13 @@ def deploy(cfg, services) -> None:
             print("  systemd/everyagent-hub.service")
             print("  systemd/everyagent-worker.service")
             print("  nginx/everyagent.conf")
-            print("  .env  (HUB_KEY 原文,hub/worker 启动自算 sha256)")
+            print("  .env  (HUB_KEY 原文,hub/worker 启动自算 sha256;解包后 chmod 600)")
+        # 预览统一打码(前4...后4)，密钥原文不落终端/CI 日志；
+        # 实际上传到服务器的 .env / docker-compose.yml 仍写原文(服务端运行需要)。
+        print("\n---- 运行期配置预览(敏感值已打码) ----")
+        preview = render_compose(cfg) if mode == "docker" else render_runtime_env_file(cfg)
+        for line in preview.splitlines():
+            print("  " + mask_env_line(line))
         print("\n---- 远端将执行的命令 ----")
         ts = "<timestamp>"
         print(extract_command(cfg, services, ts))
@@ -776,8 +944,9 @@ def deploy(cfg, services) -> None:
                 if not envp.exists():
                     log(f"警告: --env-file 指定文件不存在: {envp}")
                 else:
-                    # 原样上传(HUB_KEY 为原文,hub 启动时自算 sha256,脚本不做变换)
-                    sftp_put(client, envp, f"{cfg.remote_dir.rstrip('/')}/current/.env")
+                    # 原样上传(HUB_KEY 为原文,hub 启动时自算 sha256,脚本不做变换);
+                    # .env 含密钥原文，上传后立即收紧为 600
+                    sftp_put(client, envp, f"{cfg.remote_dir.rstrip('/')}/current/.env", mode=0o600)
             rc = remote_exec(client, deploy_command(cfg, services, ts))
         else:
             # host 模式的 .env 已随归档上传（render_runtime_env_file 生成,HUB_KEY 原文）
@@ -813,7 +982,11 @@ def parse_args(argv):
     p.add_argument("--sudo", action="store_true", help="远端 docker 命令前加 'sudo -n'（ubuntu 不在 docker 组时使用）")
     p.add_argument("--user", help="SSH 用户（或环境变量 DEPLOY_USER）")
     p.add_argument("-k", "--key-file", help="SSH 私钥路径（或环境变量 DEPLOY_KEY）")
-    p.add_argument("--password", help="SSH 密码（不推荐，优先用密钥）")
+    p.add_argument("--password", help="SSH 密码（已弃用：会留在 shell 历史与进程列表；优先用密钥，"
+                                      "其次 DEPLOY_SSH_PASSWORD 环境变量或交互输入。优先级: DEPLOY_SSH_PASSWORD > 交互输入 > 本参数）")
+    p.add_argument("--known-hosts", default=None,
+                   help="SSH known_hosts 文件（默认 ~/.everyagent/deploy_known_hosts / DEPLOY_KNOWN_HOSTS）；"
+                        "未知主机需交互确认指纹后写入，非交互环境会报错并提示 ssh-keyscan 预热方式")
     p.add_argument("--remote-dir", help="远端部署根目录（默认 ~/every-agent，即登录用户家目录下；或 DEPLOY_REMOTE_DIR）")
     p.add_argument("--env-file", help="要上传为远端 current/.env 的本地环境变量文件（相对路径按脚本目录解析）")
     p.add_argument("--config", default=None,
@@ -827,6 +1000,7 @@ def parse_args(argv):
     p.add_argument("--npm", help="本地 npm 可执行文件（默认 npm / DEPLOY_NPM）")
     p.add_argument("--workspace-root", help="宿主工作区根(绝对路径)；bind mount 进 worker 使工作区落在宿主真实目录。不填则 worker 用容器内默认目录（DEPLOY_WORKSPACE_ROOT）")
     p.add_argument("--hub-key", help="原始 hub key(必填,hub/worker 启动自算 sha256)；前端设置页与 worker hubs[].hub-key 填同一密钥。也可写在 --config 文件的 HUB_KEY= 一行。")
+    p.add_argument("--worker-api-key", help="worker 数据归属密钥(前端连接该 worker 时填同值)；docker 模式必填(worker 凭据 fail-closed,空则容器拒绝启动)，host 模式可留空(由服务器上 application-worker.yaml 提供凭据)。也可写在 --config 文件的 WORKER_API_KEY= 一行。")
     p.add_argument("--keep-releases", type=int, default=3, help="保留最近几个 release（默认 3）")
     p.add_argument("--no-deps", action="store_true", help="部署时不连带拉起所依赖的服务")
     p.add_argument("--pull", action="store_true", help="up 时强制拉取最新官方镜像")
@@ -867,6 +1041,12 @@ def parse_args(argv):
     args.port = args.port or int(os.environ.get("DEPLOY_PORT") or local.get("DEPLOY_PORT", "22"))
     args.user = args.user or os.environ.get("DEPLOY_USER") or local.get("DEPLOY_USER")
     args.key_file = args.key_file or os.environ.get("DEPLOY_KEY") or local.get("DEPLOY_KEY")
+    args.known_hosts = (args.known_hosts or os.environ.get("DEPLOY_KNOWN_HOSTS")
+                        or local.get("DEPLOY_KNOWN_HOSTS", "~/.everyagent/deploy_known_hosts"))
+    if args.password:
+        print("[DeprecationWarning] --password 已弃用: 密码会留在 shell 历史与进程列表中; "
+              "请改用 DEPLOY_SSH_PASSWORD 环境变量或交互输入(优先级: 环境变量 > 交互 > 本参数)",
+              file=sys.stderr)
     args.remote_dir = args.remote_dir or os.environ.get("DEPLOY_REMOTE_DIR") or local.get("DEPLOY_REMOTE_DIR", "~/every-agent")
     args.mvn = args.mvn or os.environ.get("DEPLOY_MVN") or local.get("DEPLOY_MVN", "mvn")
     args.npm = args.npm or os.environ.get("DEPLOY_NPM") or local.get("DEPLOY_NPM", "npm")
@@ -874,6 +1054,8 @@ def parse_args(argv):
     args.node = args.node or os.environ.get("DEPLOY_NODE") or local.get("DEPLOY_NODE", "node")
     args.workspace_root = args.workspace_root or os.environ.get("DEPLOY_WORKSPACE_ROOT") or local.get("WORKSPACE_ROOT", "")
     args.hub_key = args.hub_key or os.environ.get("DEPLOY_HUB_KEY") or local.get("HUB_KEY", "")
+    args.worker_api_key = (args.worker_api_key or os.environ.get("DEPLOY_WORKER_API_KEY")
+                           or local.get("WORKER_API_KEY", ""))
     args.web_port = args.web_port or int(os.environ.get("DEPLOY_WEB_PORT") or local.get("DEPLOY_WEB_PORT", "80"))
     args.compose = args.compose or os.environ.get("DEPLOY_COMPOSE") or local.get("DEPLOY_COMPOSE", "docker compose")
     args.mode = args.mode or os.environ.get("DEPLOY_MODE") or local.get("DEPLOY_MODE", "host")

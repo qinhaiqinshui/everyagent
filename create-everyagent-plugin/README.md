@@ -221,7 +221,7 @@ powershell -ExecutionPolicy Bypass -File scripts\sync-plugin-api-copy.ps1       
 ```
 
 - 与 `scripts/sync-plugin-template-versions.ps1` 的分工：那个管**版本字面量**（Java / Spring Boot / Spring AI / revision），本脚本管**类型副本的逐字节内容**；两个脚本各自在文件头声明「对方的事不归自己管」。
-- 漂移守卫：`test/plugin-api-copy.test.mjs`（`node --test`）断言两份副本与单点源逐字节一致，落后即失败并打印上述修复命令。**这个坑踩过两次**（`known-issues.md` #23 与 `openPluginTab` 更名），故立测试钉住。
+- 漂移守卫：`test/plugin-api-copy.test.mjs`（`node --test`）断言两份副本与单点源逐字节一致，落后即失败并打印上述修复命令。**这个坑踩过两次**（`ca0211e7` 重拷那次与 `openPluginTab` 更名），故立测试钉住。
 - 新增 standalone 模板副本时，需同步登记到该测试的 `COPIES` 清单与该脚本的 `$targetRels`。
 
 ## `.eap` 打包（`pack` 子命令）
@@ -238,7 +238,7 @@ node create-everyagent-plugin pack --help      # 子命令自己的帮助
 | `--verify` | 打包后用 CLI 自带的 zip 读侧把包解回内存自检（见下），不调用任何外部解压工具 |
 | `-h, --help` | 显示 pack 帮助 |
 
-产物固定命名 `<id>-<version>.eap`（id/version 取自 `plugin.json`），并**同时产出校验和旁文件 `<id>-<version>.eap.sha256`**（known-issues #21 最小方案）：内容为一行 sha256sum 兼容格式「64 位小写十六进制摘要 + 两个空格 + `.eap` 文件名 + 换行」，对 `.eap` 全文件计算。分发时两件一起带走，接收侧核对：
+产物固定命名 `<id>-<version>.eap`（id/version 取自 `plugin.json`），并**同时产出校验和旁文件 `<id>-<version>.eap.sha256`**：内容为一行 sha256sum 兼容格式「64 位小写十六进制摘要 + 两个空格 + `.eap` 文件名 + 换行」，对 `.eap` 全文件计算。分发时两件一起带走，接收侧核对：
 
 ```powershell
 # Windows

@@ -8,6 +8,7 @@ import { existsSync, mkdirSync, openSync } from 'node:fs'
 import { join } from 'node:path'
 import { app } from 'electron'
 import type { DesktopConfig, DesktopPaths } from './config'
+import { buildBackendEnv, writeWorkerOverrideYml } from './credentials'
 import { programRoot, hubJar, jreJavaExe, jreJavaExeFallback, workerJar } from './paths'
 
 export interface BackendHandles {
@@ -337,7 +338,16 @@ export async function startBackend(
   const childCwd = paths.home
   mkdirSync(childCwd, { recursive: true })
 
-  const env: NodeJS.ProcessEnv = { ...process.env, EVERYAGENT_HOME: paths.home }
+  // 凭据防线(安全审计 H-1):loadConfig 已保证密钥非空(首启自动生成并持久化),
+  // 这里再兜底校验——绝不允许以空密钥拉起后端(hub 会落回 jar 内公开默认密钥)。
+  if (!cfg.hubKey || !cfg.workerApiKey) {
+    throw new Error(
+      'desktop-config.json 的 hubKey/workerApiKey 为空,拒绝启动后端(首启自动生成逻辑未生效,请检查配置文件)',
+    )
+  }
+  // 子进程 env:显式注入 HUB_KEY(覆盖任何继承)——hub 的 hub.hub-key 读 ${HUB_KEY:...}
+  // 占位符,不注入则恒为 jar 内公开默认密钥;worker 侧另经 desktop-worker.yml 拿到同组凭据。
+  const env = buildBackendEnv(cfg, paths.home)
   const hubLog = join(paths.logsDir, 'hub.out.log')
   const workerLog = join(paths.logsDir, 'worker.out.log')
   const hubHealthUrl = `http://127.0.0.1:${cfg.hubPort}/health`
@@ -396,9 +406,25 @@ export async function startBackend(
     // 程序附属文件(rg、eagent-run.py、镜像)随安装包分发到 <程序根>/runtime;
     // 程序根经 -Deveryagent.program-dir 显式注入(worker 侧 resolveRuntimeDir 优先读它),
     // cwd 落在 EVERYAGENT_HOME——绝不能落在安装目录内(CWD 会把目录锁死,卸载删不掉)。
-    worker = spawnJava('worker', workerJarPath, [], workerLog, env, childCwd, [
-      `-Deveryagent.program-dir=${programRoot()}`,
-    ])
+    // 凭据注入(安全审计 H-1):每次启动前重写 desktop-worker.yml(hubs[0]=本机 hub,
+    // api-key/hub-key 与配置一致),经 --spring.config.additional-location 传入;
+    // 实测优先级高于 jar 内默认值与 application-worker.yaml 用户覆盖,worker 不可能
+    // 再落回 jar 内公开默认密钥连接。Spring 对 list 属性整表替换、不跨文件合并:
+    // 生成时把用户 application-worker.yaml 的远程 hub 条目合并进来(回环剔除、
+    // ${HUB_KEY:默认值} 占位符还原),否则用户自配的远程 hub 会被整体覆盖丢失。
+    const workerOverrideUrl = writeWorkerOverrideYml(cfg, paths.home, {
+      warn: (message) => log(`警告: ${message}`),
+    })
+    log(`worker 凭据覆盖配置: ${workerOverrideUrl}`)
+    worker = spawnJava(
+      'worker',
+      workerJarPath,
+      [`--spring.config.additional-location=${workerOverrideUrl}`],
+      workerLog,
+      env,
+      childCwd,
+      [`-Deveryagent.program-dir=${programRoot()}`],
+    )
     // 启动顺序关键:必须等到 worker 就绪(健康检查通过且 hub 连接建立)再加载前端,
     // 否则前端首屏 tasks.list 落在 worker 尚未订阅 cmd 频道的窗口,任务列表恒为空,
     // 只能去设置页手动「保存并连接」重建连接后才恢复。

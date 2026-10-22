@@ -36,6 +36,56 @@
         "type": "string",
         "default": "",
         "description": "runner JVM 的 java.exe 根目录；空 = 当前 JVM 的 java.home"
+      },
+      "codex.runner-pool-enabled": {
+        "type": "boolean",
+        "default": true,
+        "description": "runner 常驻池化复用（登录会话有界化）；false = 回到每命令新建 runner 的旧形态"
+      },
+      "codex.runner-pool-max-size": {
+        "type": "number",
+        "default": 2,
+        "description": "每池（codexHome+沙箱账户）runner 数上限；并发命令超过上限时短暂溢出并告警"
+      },
+      "codex.runner-pool-idle-ttl-ms": {
+        "type": "number",
+        "default": 600000,
+        "description": "空闲 runner 存活毫秒数（默认 10 分钟），到期发 shutdown 帧关闭其登录会话"
+      },
+      "codex.logon-session-audit-interval-ms": {
+        "type": "number",
+        "default": 1800000,
+        "description": "沙箱账户登录会话数审计周期毫秒（默认 30 分钟）；<=0 关闭审计"
+      },
+      "codex.logon-session-audit-threshold": {
+        "type": "number",
+        "default": 64,
+        "description": "沙箱账户登录会话总数告警阈值，超过打 WARN（提示重启 worker 回收）"
+      },
+      "codex.proxy-enabled": {
+        "type": "boolean",
+        "default": true,
+        "description": "宿主侧 loopback HTTP(S) 代理（沙箱命令注入 HTTP(S)_PROXY 等环境变量；仅 online 身份启用）。false = 关闭代理并回到直连行为"
+      },
+      "codex.proxy-port": {
+        "type": "number",
+        "default": 3128,
+        "description": "loopback 代理首选端口；被占用时按管理段 3128..3159 顺序探测。0/非法值视为未配置（绝不监听随机端口）"
+      },
+      "codex.proxy-allow-loopback-targets": {
+        "type": "boolean",
+        "default": false,
+        "description": "true = 允许经代理访问 127/8、::1 目标（默认拦截：合法 localhost 流量走 NO_PROXY 直连）"
+      },
+      "codex.proxy-block-private-targets": {
+        "type": "boolean",
+        "default": false,
+        "description": "true = 阻断经代理访问 RFC1918 私网/IPv6 ULA 目标（默认放行：内网制品服务器是 online 命令的合法场景）"
+      },
+      "codex.proxy-deny-hosts": {
+        "type": "string",
+        "default": "",
+        "description": "代理目标显式禁配清单（逗号/空白分隔，后缀匹配大小写不敏感，如 evil.com,.corp.internal）"
       }
     }
   },

@@ -10,6 +10,7 @@ import tools.jackson.databind.JsonNode;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Stream;
@@ -90,6 +91,7 @@ public class BuiltInPluginScanner implements PluginScanner {
             if (hasTargetClassesPluginJson(dir)) {
                 // Java 插件:target/classes/plugin.json 存在
                 if (hasTargetJars(dir)) {
+                    warnIfJarStale(dir);
                     result.add(new ScannedPlugin(dir, "builtin"));
                 } else {
                     log.warn("[plugins-builtin] 内置插件未构建,请先 mvn package: {}", dir.getFileName());
@@ -159,6 +161,65 @@ public class BuiltInPluginScanner implements PluginScanner {
      */
     public static boolean hasTargetJars(Path pluginDir) {
         return !findTargetJars(pluginDir).isEmpty();
+    }
+
+    /**
+     * jar 陈旧检测:target/classes 内最新文件比 target/ 下最新 jar 还新,说明
+     * 增量编译(如 IDEA 构建)后未重新 mvn package——本扫描器加载的是 jar 而非
+     * classes,worker 会把旧代码装进运行时,「改了源码不生效」且无任何征兆
+     * (实测事故:沙箱 https 重构全部落地后依旧失败,根因即加载了旧 jar)。
+     * 仅提示不阻断——时间戳口径可能误报(如 package 后又跑了一次 IDEA 全量
+     * 构建),由 WARN 文案引导;无法判定(无 jar / IO 失败)时返回 false。
+     *
+     * @param pluginDir 插件根目录
+     * @return true = classes 比 jar 新,疑似陈旧
+     */
+    static boolean isJarStale(Path pluginDir) {
+        List<Path> jars = findTargetJars(pluginDir);
+        if (jars.isEmpty()) {
+            return false;
+        }
+        Instant newestJar = jars.stream()
+                .map(BuiltInPluginScanner::mtimeOf)
+                .filter(java.util.Objects::nonNull)
+                .max(java.util.Comparator.naturalOrder())
+                .orElse(null);
+        Instant newestClass = newestMtimeUnder(pluginDir.resolve("target/classes"));
+        return newestJar != null && newestClass != null && newestClass.isAfter(newestJar);
+    }
+
+    /** {@link #isJarStale} 为真时打 WARN(不阻断加载)。 */
+    private static void warnIfJarStale(Path pluginDir) {
+        if (isJarStale(pluginDir)) {
+            log.warn("[plugins-builtin] 插件 jar 比 target/classes 陈旧(增量编译后未重新打包?),"
+                    + "worker 将加载旧 jar、源码改动不会生效,请重新 mvn package: {}",
+                    pluginDir.getFileName());
+        }
+    }
+
+    /** 文件 mtime;IO 失败返回 null(无法判定按不陈旧处理)。 */
+    private static Instant mtimeOf(Path file) {
+        try {
+            return Files.getLastModifiedTime(file).toInstant();
+        } catch (IOException e) {
+            return null;
+        }
+    }
+
+    /** 目录树内最新文件的 mtime;目录不存在/为空/IO 失败返回 null。 */
+    private static Instant newestMtimeUnder(Path dir) {
+        if (!Files.isDirectory(dir)) {
+            return null;
+        }
+        try (Stream<Path> files = Files.walk(dir)) {
+            return files.filter(Files::isRegularFile)
+                    .map(BuiltInPluginScanner::mtimeOf)
+                    .filter(java.util.Objects::nonNull)
+                    .max(java.util.Comparator.naturalOrder())
+                    .orElse(null);
+        } catch (IOException e) {
+            return null;
+        }
     }
 
     /**

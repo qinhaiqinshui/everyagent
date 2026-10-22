@@ -4,7 +4,7 @@
     <modelVersion>4.0.0</modelVersion>
 
     <parent>
-        <groupId>dev.everyagent</groupId>
+        <groupId>io.github.qinhaiqinshui</groupId>
         <artifactId>every-agent-plugin-parent</artifactId>
         <version>${revision}</version>
         <relativePath>../../every-agent-plugin-parent/pom.xml</relativePath>
@@ -49,7 +49,7 @@
 
     <dependencies>
         <dependency>
-            <groupId>dev.everyagent</groupId>
+            <groupId>io.github.qinhaiqinshui</groupId>
             <artifactId>every-agent-plugin-api</artifactId>
         </dependency>
         <!-- Windows 原生沙箱:JNA Win32 API + win 绑定层补齐原语（设计文档 §3） -->

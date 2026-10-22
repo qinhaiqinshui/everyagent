@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { CheckOutlined, CloseOutlined, CopyOutlined, DownloadOutlined } from '@ant-design/icons'
 import { closeSvgFragment } from './closeFragment'
+import { sanitizeSvgHtml, type SanitizeResult } from './sanitize'
 
 /**
  * SVG 输出块：把 <svg-image> 标签内的 SVG 源码消毒后渲染为图形。
@@ -10,113 +11,15 @@ import { closeSvgFragment } from './closeFragment'
  * 逐步加载；消息定稿但闭合标签缺席（truncated，输出中断）时同样尽力渲染，
  * 并标注「内容不完整」。
  *
- * 安全策略（白名单）：
- *   - 只允许 SVG 图形元素进入输出，script 等一律丢弃；
- *   - 移除所有 on* 事件属性与 href / xlink:href 外部引用属性；
+ * 安全策略（净化器单一来源 ./sanitize，供 icon 净化等场景复用，禁另写等价逻辑）：
+ *   - 只允许 SVG 图形元素进入输出，script / image / foreignObject / a 等一律丢弃
+ *     （image 经 innerHTML 的 HTML 解析器别名为 img，src 即任意外链图片加载，
+ *     审计 M-5 将其整体移出白名单）；
+ *   - 移除所有 on* 事件属性与 href / xlink:href / src / style 属性
+ *     （style 的 CSS url() 与 src 的外链资源均为外链信标信道，整体丢弃）；
  *   - 仅使用浏览器内置 DOMParser / XMLSerializer，零第三方依赖。
  *   - 渐进路径与终态共用同一消毒管线，流式期间不降低安全标准。
  */
-
-const SVG_NS = 'http://www.w3.org/2000/svg'
-
-/** 允许渲染的 SVG 元素白名单（含渐变 / 裁剪 / 文本等，不含 script / a / style）。 */
-const ALLOWED_TAGS = new Set([
-  'svg',
-  'g',
-  'path',
-  'circle',
-  'rect',
-  'line',
-  'polyline',
-  'polygon',
-  'ellipse',
-  'text',
-  'tspan',
-  'defs',
-  'use',
-  'symbol',
-  'marker',
-  'pattern',
-  'linearGradient',
-  'radialGradient',
-  'stop',
-  'clipPath',
-  'mask',
-  'title',
-  'desc',
-  'image',
-  'foreignObject',
-])
-
-/** 属性名命中即移除（小写后比较）。 */
-const BLOCKED_ATTRS = new Set(['href', 'xlink:href'])
-
-/** 去掉模型输出里可能包裹的 ``` 代码围栏（```svg / ```xml / 裸 ```）。 */
-function stripCodeFence(source: string): string {
-  const trimmed = source.trim()
-  const m = /^```[\w-]*\s*\n([\s\S]*?)\n?```\s*$/.exec(trimmed)
-  return m ? m[1].trim() : trimmed
-}
-
-/** 递归消毒：白名单元素 + 过滤危险属性，文本节点原样保留，其余节点丢弃。 */
-function sanitizeNode(node: Node, doc: XMLDocument): Node | null {
-  if (node.nodeType === Node.TEXT_NODE) {
-    return doc.createTextNode(node.textContent ?? '')
-  }
-  if (node.nodeType !== Node.ELEMENT_NODE) {
-    return null
-  }
-  const el = node as Element
-  if (!ALLOWED_TAGS.has(el.tagName)) {
-    return null
-  }
-  const clean = doc.createElementNS(SVG_NS, el.tagName)
-  for (const attr of Array.from(el.attributes)) {
-    const name = attr.name.toLowerCase()
-    if (name.startsWith('on') || BLOCKED_ATTRS.has(name)) {
-      continue
-    }
-    clean.setAttribute(attr.name, attr.value)
-  }
-  for (const child of Array.from(el.childNodes)) {
-    const safe = sanitizeNode(child, doc)
-    if (safe) {
-      clean.appendChild(safe)
-    }
-  }
-  return clean
-}
-
-interface SanitizeResult {
-  /** 消毒后可注入的 SVG 标记；解析失败或无根 svg 时为 null。 */
-  html: string | null
-  error?: string
-}
-
-function sanitizeSvg(raw: string): SanitizeResult {
-  const source = stripCodeFence(raw)
-  if (!source) {
-    return { html: null, error: '空内容' }
-  }
-  let doc: XMLDocument
-  try {
-    doc = new DOMParser().parseFromString(source, 'image/svg+xml')
-  } catch (e) {
-    return { html: null, error: e instanceof Error ? e.message : String(e) }
-  }
-  if (doc.querySelector('parsererror')) {
-    return { html: null, error: 'SVG 解析失败（XML 语法错误）' }
-  }
-  const root = doc.documentElement
-  if (!root || root.tagName !== 'svg') {
-    return { html: null, error: '内容不是合法的 <svg> 文档' }
-  }
-  const cleanRoot = sanitizeNode(root, doc) as Element | null
-  if (!cleanRoot) {
-    return { html: null, error: '消毒后没有可渲染内容' }
-  }
-  return { html: new XMLSerializer().serializeToString(cleanRoot) }
-}
 
 /**
  * 流式期间节流取值：每个窗口内首帧直通、后续更新合并为窗口末尾一次
@@ -405,12 +308,12 @@ export default function SvgBlock({ svgSource, streaming, truncated }: SvgBlockPr
 
   const result = useMemo<SanitizeResult>(() => {
     if (!progressive) {
-      return sanitizeSvg(effectiveSource)
+      return sanitizeSvgHtml(effectiveSource)
     }
     // 渐进路径：容错闭合后走同一消毒管线（安全标准与终态一致）。
     const fragment = closeSvgFragment(effectiveSource)
     if (fragment.closed != null) {
-      const sanitized = sanitizeSvg(fragment.closed)
+      const sanitized = sanitizeSvgHtml(fragment.closed)
       if (sanitized.html != null) {
         return sanitized
       }
@@ -426,7 +329,7 @@ export default function SvgBlock({ svgSource, streaming, truncated }: SvgBlockPr
         style={containerStyle}
         onClick={streaming ? undefined : touchMode ? () => setActionsOpen(v => !v) : undefined}
       >
-        {/* 消毒产物：白名单元素 + 已剔除 on* / href 属性，可安全注入 */}
+        {/* 消毒产物：白名单元素 + 已剔除 on* / href / src / style 属性，可安全注入 */}
         <div dangerouslySetInnerHTML={{ __html: result.html }} />
         {streaming ? null : <SvgActions svgMarkup={result.html} open={actionsOpen} />}
         {streaming ? <p style={statusStyle}>▍图形生成中…</p> : null}

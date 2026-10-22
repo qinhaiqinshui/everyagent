@@ -19,6 +19,7 @@ import {
 import { startBackend, type BackendHandles } from './backend'
 import { startStaticServer, type StaticServer } from './static-server'
 import { registerNotifyIpc } from './notify'
+import { resolveSecretCodec } from './safe-storage'
 import { webRoot } from './paths'
 
 // 必须在 app ready 之前:禁用「被遮挡窗口后台化」。
@@ -235,19 +236,23 @@ async function startup(): Promise<void> {
       pushStatus(`运行时目录 home=${home}`)
     }
 
-    pushStatus('加载运行时配置...')
-    cfg = loadConfig(home)
-    bootstrap = bootstrapFor(cfg)
-    pushStatus(
-      `配置就绪: hubPort=${cfg.hubPort}, workerPort=${cfg.workerPort}, workerId=${cfg.workerId}, gpuWorkaround=${cfg.gpuWorkaround}`,
-    )
-
+    // whenReady 提前到加载配置之前:凭据落盘/解密用 safeStorage(Windows DPAPI),
+    // 依赖 app ready;不提前会在 ready 前调用 safeStorage 导致凭据降级/解密异常。
     await app.whenReady()
     // 无边框自绘标题栏:去掉系统默认菜单(含 Alt 键临时弹出的菜单)。
     Menu.setApplicationMenu(null)
     // Windows toast 通知归属:与 electron-builder appId 一致,
     // 保证桌面系统通知正常显示(否则可能不弹或显示为 Electron)。
     app.setAppUserModelId('dev.everyagent.desktop')
+
+    pushStatus('加载运行时配置...')
+    // 凭据落盘 codec 装配:优先 safeStorage 密文(DPAPI,绑定用户+机器),不可用降级明文。
+    cfg = loadConfig(home, resolveSecretCodec())
+    bootstrap = bootstrapFor(cfg)
+    pushStatus(
+      `配置就绪: hubPort=${cfg.hubPort}, workerPort=${cfg.workerPort}, workerId=${cfg.workerId}, gpuWorkaround=${cfg.gpuWorkaround}`,
+    )
+
     pushStatus('app 已就绪,创建启动窗口...')
     createWindow(startingPage())
     createTray()
@@ -333,7 +338,8 @@ function showQuitProgress(): void {
       preload: join(__dirname, '..', 'preload', 'index.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      // preload 仅用 contextBridge/ipcRenderer(sandbox 模式同样可用),收紧为 sandbox 渲染进程。
+      sandbox: true,
     },
   })
   quitProgressWindow = win
@@ -453,7 +459,8 @@ function createWindow(html: string): void {
       preload: join(__dirname, '..', 'preload', 'index.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      // preload 仅用 contextBridge/ipcRenderer(sandbox 模式同样可用),收紧为 sandbox 渲染进程。
+      sandbox: true,
       // 窗口遮挡/最小化时不节流渲染进程:连接生死唯一由前端应用层心跳判定(§5.1),
       // 若渲染进程被挂起,心跳停摆 + WebSocket 被杀,回到前台必然断连重连、弹「正在
       // 重新连接」模态框。代价是窗口不可见时任务流推送与心跳照常运行(本地回环,可忽略)。

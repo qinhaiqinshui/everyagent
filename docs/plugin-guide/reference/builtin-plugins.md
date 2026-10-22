@@ -16,7 +16,7 @@ has_children: false
 - **新手路线**：从 §3 反查表找到你想实现的扩展点 → 点进推荐插件的源码目录 → 对照 §5 该插件小节里「值得看的点」按图索骥。
 - **order 选择**：写 Advisor / 生命周期节点 / 侧边栏项之前，**必须**先看 §4，新值要与相邻功能保持语义间距，不要复用已占用值。
 - **形态选择**：不知道该做纯 Java、纯 Web 还是混合？看 §2「形态」列，然后读 [plugin.json 字段参考](../plugin-manifest.md) §3 的三形态实例。
-- 本篇只做索引与点评，**不讲 API 细节**：注册方法的签名与生命周期见 [后端模型总览](../backend/overview.md)、[Advisor 指南](../backend/advisors.md)、[任务与 RPC](../backend/task-and-rpc.md)、[UI 扩展点](../web/ui-extensions.md)；已知偏差集中登记在 [已知问题与现状偏差](known-issues.md)。
+- 本篇只做索引与点评，**不讲 API 细节**：注册方法的签名与生命周期见 [后端模型总览](../backend/overview.md)、[Advisor 指南](../backend/advisors.md)、[任务与 RPC](../backend/task-and-rpc.md)、[UI 扩展点](../web/ui-extensions.md)。
 
 ## 2. 总表（30 个内置插件）
 
@@ -106,13 +106,13 @@ has_children: false
 |---|---|---|---|
 | `ui.sidebar_items`（活动栏项） | plugin-manager | `every-agent-plugins/plugin-manager/web/index.ts:18-25` | web-only 最小范本：一个 `registerSidebarItem` + `ctx.sdk.rpc` 调后端；带 Badge/图标/多面板的进阶版看 git |
 | `ui.workspace_tab_types`（工作区标签类型） | git | `every-agent-plugins/git/web/index.ts:39` | 唯一使用者；配套 `ctx.ui.openTab` / `openDiffTab` 动作方法可一并抄 |
-| `ui.file_sidebar_panels` | **无内置范例** | — | 扩展点已声明但零使用，接线情况见 [已知问题](known-issues.md) |
+| `ui.file_sidebar_panels` | **无内置范例** | — | 扩展点已声明但零使用 |
 | `ui.composer_above_panel`（输入框上方面板） | task-input-queue | `every-agent-plugins/task-input-queue/web/index.ts:17-20` | 三行注册 + 面板组件全交互（rpc 拉快照 / 广播刷新）齐全 |
 | `ui.tool_call_views`（工具调用视图接管） | update-file-view | `every-agent-plugins/update-file-view/web/index.ts:20-25` | 唯一使用者，整体接管 `update_file` 工具的渲染 |
 | `ui.user_message_actions`（用户消息动作） | task-edit-resend | `every-agent-plugins/task-edit-resend/web/index.ts:18-21` | 唯一使用者；配套 `setComposerRawContent` / `appendComposerText` 回写输入框 |
 | `task.submit_contributions`（提交期贡献） | task-edit-resend | `every-agent-plugins/task-edit-resend/web/index.ts:22` | 唯一使用者，与后端节点配合完整链路 |
 | `ui.trace_types`（trace 渲染类型） | ai-review | `every-agent-plugins/ai-review/web/index.ts:16-36` | 唯一使用者，descriptor 定义 + 注册一体 |
-| `ui.output_blocks` | **无内置范例** | — | 扩展点已声明但零使用，见 [已知问题](known-issues.md) |
+| `ui.output_blocks` | **无内置范例** | — | 扩展点已声明但零使用 |
 | `ui.file_content_editors`（文件内容编辑器） | pdf-viewer | `every-agent-plugins/pdf-viewer/web/index.ts:14-19` | 唯一使用者 + web-only 形态最小样本（无 pom 无 src） |
 | `ui.file_explorer_actions`（文件树右键动作） | git | `every-agent-plugins/git/web/index.ts:42-53` | 唯一注册者；动作追加到文件树右键菜单内置项尾部（[UI §13](../web/ui-extensions.md)） |
 | `ui.round_tail_panels`（轮次尾面板） | file-change | `every-agent-plugins/file-change/web/index.ts:22` | 唯一使用者；配套 `ctx.events.on('plugin-task-event')` 直推 upsert 轮末摘要范式（§7.15.2） |
@@ -229,7 +229,7 @@ has_children: false
 
 13 个 `git.*` RPC + 自动同步 Advisor + 完整 Web 界面（侧边栏 / 历史标签 / diff），both 形态的集大成者。
 - 关键文件：`~plugins/git/src/main/java/dev/everyagent/plugin/git/GitPlugin.java:33-54`；`~plugins/git/web/index.ts:28-53`。
-- ⚠️ `web/index.ts:2` 注释自称「纯 Web 插件」，实际 plugin.json 有 `main`（both 形态）；⚠️ `web/index.ts:4` 引用已删除的 `builtInPlugins.ts`；`SidebarItem.Badge`（GitChangeBadge）与 `ui.file_explorer_actions`（git-show-history）两处贡献均已接线生效（known-issues #1/#2 已修复）。
+- ⚠️ `web/index.ts:2` 注释自称「纯 Web 插件」，实际 plugin.json 有 `main`（both 形态）；⚠️ `web/index.ts:4` 引用已删除的 `builtInPlugins.ts`；`SidebarItem.Badge`（GitChangeBadge）与 `ui.file_explorer_actions`（git-show-history）两处贡献均已接线生效（曾为死贡献，均已修复接线）。
 - 值得看：`registerRpcMethod` 批量注册（方法名常量集中 `GitRpcMethods.java:4-16`）；前端 `ctx.fs.listDir/delete`、`ctx.sdk.workspace` 的用法。
 
 ### image-vision（图片识别）

@@ -5,6 +5,7 @@ import dev.everyagent.plugin.api.shell.ExecResults;
 import dev.everyagent.plugin.api.spi.ExecResult;
 import dev.everyagent.plugin.api.spi.ToolOutcomeLog;
 import dev.everyagent.plugin.api.spi.WorkspaceManager;
+import dev.everyagent.plugin.api.util.SecretPatterns;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -69,7 +70,7 @@ public class WslUbuntuCommandExecutor {
                 exec, ExecResults.MAX_OUTPUT_CHARS, allWorkspaces, allowNetwork);
 
         log.info("[exec] wsl-ubuntu rc={} aborted={} cmd={}", r.exitCode(), r.aborted(),
-                ExecResults.truncate(command, 200));
+                ExecResults.truncate(SecretPatterns.maskSecrets(command), 200));
         if (outcomes != null) {
             outcomes.recordShellExit(shell, command, r.exitCode(), r.aborted());
         }

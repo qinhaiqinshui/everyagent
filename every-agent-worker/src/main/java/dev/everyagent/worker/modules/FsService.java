@@ -11,6 +11,7 @@ import dev.everyagent.plugin.api.exception.BadParamsException;
 import dev.everyagent.plugin.api.exception.NotFoundException;
 import dev.everyagent.worker.rpc.RpcDispatcher;
 import dev.everyagent.worker.rpc.RpcContext;
+import dev.everyagent.worker.rpc.SandboxViolationException;
 import dev.everyagent.worker.tools.permission.GrantRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -35,6 +36,13 @@ import java.util.List;
  * 工作区文件模块(架构 §5.4 表):fs.list/tree/read/write/mkdir/move/delete,
  * 全部经 Sandbox jailed;每次调用按 workspace 参数绑定工作区根(多工作区并行);
  * 写操作后广播 fs.changed(带 workspace 字段,前端按当前工作区过滤)。
+ *
+ * <p>Raw 系列(readRaw/writeRaw/statRaw,机器绝对路径,§5.5):文件标签页用户操作专用,
+ * 不携带 workspace 参数,但**同样做合法根校验**(与 fs.* 沙箱同构,§14.6)——词法前缀 +
+ * 最近已存在祖先 realpath 双前缀校验,合法根 = 在册工作区根 ∪ 外部授权根 ∪ 技能目录 ∪
+ * PermissionGate 在途授权根 ∪ 会话用户放行目录({@link RawRootRegistry});越界抛
+ * {@link SandboxViolationException}(wire SANDBOX_DENIED,前端弹确认后经
+ * fs.grantRawRoot 放行重试)。fs.browse 保持全盘逐层浏览(仅列名,不返回内容)。
  */
 @Component
 public class FsService {
@@ -55,14 +63,17 @@ public class FsService {
     private final SkillsReadonlyRoots skillsReadonlyRoots;
     /** 授权根注册表:只读沙箱并入在途授权根(前端文件页读 AI 本任务经授权读过的文件)。 */
     private final GrantRegistry grants;
+    /** Raw 系列会话级用户放行目录(§5.5;fs.grantRawRoot 注册,readRaw/writeRaw/statRaw 校验)。 */
+    private final RawRootRegistry rawGrants;
 
     public FsService(RpcDispatcher dispatcher, WorkspaceManager workspaces, HubPool pool,
-            WorkerProperties props, GrantRegistry grants) {
+            WorkerProperties props, GrantRegistry grants, RawRootRegistry rawGrants) {
         this.workspaces = workspaces;
         this.pool = pool;
         this.props = props;
         this.skillsReadonlyRoots = new SkillsReadonlyRoots(props);
         this.grants = grants;
+        this.rawGrants = rawGrants;
 
         dispatcher.register(RpcMethods.FS_LIST, this::list);
         dispatcher.register(RpcMethods.FS_REVEAL, this::reveal);
@@ -76,15 +87,16 @@ public class FsService {
         dispatcher.register(RpcMethods.FS_READ_RAW, this::readRaw);
         dispatcher.register(RpcMethods.FS_WRITE_RAW, this::writeRaw);
         dispatcher.register(RpcMethods.FS_STAT_RAW, this::statRaw);
+        dispatcher.register(RpcMethods.FS_GRANT_RAW_ROOT, this::grantRawRoot);
     }
 
     /**
-     * 按机器绝对路径获取文件属性(不经 workspace 沙箱;文件标签页用户操作专用)。
-     * 与 fs.readRaw 同源:人工行为不走 PermissionGate/沙箱授权链路。
+     * 按机器绝对路径获取文件属性(文件标签页用户操作专用;合法根校验见类注释,§5.5)。
      * 返回与 fs.list 条目同构的字段(name/dir/size/modifiedTs/createdTs)。
      */
     private void statRaw(RpcContext ctx) throws IOException {
         Path file = requireMachineAbsolute(ctx.strParam("path"));
+        requireRawAllowed(ctx, file);
         if (!Files.exists(file)) {
             throw new NotFoundException("文件不存在: " + file);
         }
@@ -178,47 +190,56 @@ public class FsService {
     }
 
     /**
-     * 按机器绝对路径读取文件(不经 workspace 沙箱)。专供文件标签页的用户操作:
-     * 用户点击工具调用里的文件路径 chip 打开文件页,是人工行为而非 AI 工具调用,
-     * 不走 PermissionGate/沙箱授权链路(与 fs.browse 同源,依赖 worker 进程文件系统权限)。
-     * 应答形态与 fs.read 完全一致(小文件内联 base64、大文件 rpc.data 分批)。
+     * 按机器绝对路径读取文件(合法根校验见类注释,§5.5)。专供文件标签页的用户操作:
+     * 用户点击工具调用里的文件路径 chip 打开文件页,是人工行为而非 AI 工具调用。
+     * 应答形态与 fs.read 完全一致(小文件内联 base64、大文件 rpc.data 分批);
+     * 大文件**流式分批**读取(INLINE_MAX/CHUNK 同 fs.read),不整读进内存。
      */
     private void readRaw(RpcContext ctx) throws IOException {
         Path file = requireMachineAbsolute(ctx.strParam("path"));
+        requireRawAllowed(ctx, file);
         if (!Files.exists(file)) {
             throw new NotFoundException("文件不存在: " + file);
         }
         if (!Files.isRegularFile(file)) {
             throw new NotFoundException("不是文件: " + file);
         }
-        byte[] bytes = Files.readAllBytes(file);
-        if (bytes.length <= INLINE_MAX) {
+        long size = Files.size(file);
+        if (size <= INLINE_MAX) {
             ctx.ok(Json.obj()
                     .put("path", file.toString())
-                    .put("size", bytes.length)
-                    .put("base64", Base64.getEncoder().encodeToString(bytes)));
+                    .put("size", size)
+                    .put("base64", Base64.getEncoder().encodeToString(Files.readAllBytes(file))));
             return;
         }
+        // 大文件:流式按 CHUNK 分批 base64 rpc.data,末帧 ok 汇总(整读会占满堆,曾可被
+        // 任意命名空间连接指向超大文件打 OOM;分批语义与 fs.read 逐字节一致)
         Base64.Encoder enc = Base64.getEncoder();
-        for (int off = 0; off < bytes.length; off += CHUNK) {
-            int len = Math.min(CHUNK, bytes.length - off);
-            ObjectNode part = Json.obj()
-                    .put("offset", off)
-                    .put("size", len)
-                    .put("base64", enc.encodeToString(java.util.Arrays.copyOfRange(bytes, off, off + len)));
-            ctx.data(List.of(part), off + len < bytes.length);
+        try (java.io.InputStream in = Files.newInputStream(file)) {
+            byte[] buf = new byte[CHUNK];
+            long off = 0;
+            int n;
+            while ((n = in.readNBytes(buf, 0, CHUNK)) > 0) {
+                byte[] slice = n == buf.length ? buf : java.util.Arrays.copyOf(buf, n);
+                ObjectNode part = Json.obj()
+                        .put("offset", off)
+                        .put("size", n)
+                        .put("base64", enc.encodeToString(slice));
+                ctx.data(List.of(part), off + n < size);
+                off += n;
+            }
         }
-        ctx.ok(Json.obj().put("path", file.toString()).put("size", bytes.length));
+        ctx.ok(Json.obj().put("path", file.toString()).put("size", size));
     }
 
     /**
-     * 按机器绝对路径写入文件(不经 workspace 沙箱)。专供文件标签页的用户保存操作,
-     * 与 fs.readRaw 同源:人工行为不走 PermissionGate/沙箱授权链路。
+     * 按机器绝对路径写入文件(合法根校验见类注释,§5.5)。专供文件标签页的用户保存操作。
      * 应答形态与 fs.write 一致(返回 path + size);写后广播 fs.changed(workspace 字段
      * 置空,前端文件树按 workspaceRoot 过滤自然忽略,不影响标签页自身)。
      */
     private void writeRaw(RpcContext ctx) throws IOException {
         Path target = requireMachineAbsolute(ctx.strParam("path"));
+        requireRawAllowed(ctx, target);
         byte[] content = decode(ctx.optStrParam("contentBase64", ""));
         if (content.length > MAX_WRITE) {
             throw new BadParamsException("单次写入超过上限 " + MAX_WRITE + " 字节");
@@ -228,6 +249,16 @@ public class FsService {
         }
         Files.write(target, content);
         ctx.ok(Json.obj().put("path", target.toString()).put("size", content.length));
+    }
+
+    /**
+     * 注册 Raw 系列会话级用户放行目录(§5.5):前端收到越界 SANDBOX_DENIED、用户在确认框
+     * 显式点「允许」后调用;随后重试原 readRaw/writeRaw/statRaw 即放行。
+     * 仅此 RPC 能写 {@link RawRootRegistry}(readRaw 族绝不自动放行)。
+     */
+    private void grantRawRoot(RpcContext ctx) {
+        Path root = rawGrants.grant(ctx.ownerKey(), ctx.strParam("path"));
+        ctx.ok(Json.obj().put("root", root.toString()));
     }
 
     /**
@@ -351,6 +382,93 @@ public class FsService {
             throw new BadParamsException("path 必须是机器绝对路径: " + raw);
         }
         return path.normalize();
+    }
+
+    // ---- Raw 系列合法根校验(§5.5/§14.6) ----
+
+    /**
+     * Raw 系列合法根并集(realpath 为主、词法形态并存):全部在册工作区根(词法+realpath)
+     * ∪ 各工作区外部授权根(§7.17)∪ 系统技能目录(§7.17;Raw 系列读写均放行,设置页
+     * skill 编辑走 writeRaw)∪ PermissionGate 在途授权根(全主体并集,任务收口驱逐即失效)
+     * ∪ 本会话用户放行目录({@link RawRootRegistry})。依赖可为 null(单测直构场景)按空集退化。
+     */
+    private List<Path> rawAllowedRoots(RpcContext ctx) {
+        List<Path> roots = new ArrayList<>();
+        if (workspaces != null) {
+            for (WorkspaceManager.Registered r : workspaces.list()) {
+                try {
+                    WorkspaceManager.Root root = workspaces.resolve(r.root());
+                    roots.add(root.path());
+                    roots.add(root.realPath());
+                } catch (IOException | RuntimeException e) {
+                    // 缺失工作区(待纠正路径)跳过:其下路径本就不可达
+                }
+                for (String ext : r.externalRoots()) {
+                    roots.add(Path.of(ext));
+                }
+            }
+        }
+        roots.addAll(skillsReadonlyRoots.get());
+        if (grants != null) {
+            roots.addAll(grants.allExtraRoots());
+        }
+        if (rawGrants != null) {
+            roots.addAll(rawGrants.rootsOf(ctx.ownerKey()));
+        }
+        return roots;
+    }
+
+    /**
+     * Raw 系列越界校验:词法前缀(norm.startsWith)与最近已存在祖先 realpath 前缀
+     * **双前缀同时命中**任一合法根才放行(与 {@link Sandbox#resolveExisting}/
+     * {@code resolveTarget} 的 allowed/allowedReal 双闸同构,防中间符号链接逃逸)。
+     * 越界抛 {@link SandboxViolationException}(wire SANDBOX_DENIED,前端弹确认放行)。
+     */
+    private void requireRawAllowed(RpcContext ctx, Path target) {
+        Path norm = target.toAbsolutePath().normalize();
+        Path real = realAnchor(norm);
+        List<Path> roots = rawAllowedRoots(ctx);
+        boolean lexicalOk = false;
+        boolean realOk = false;
+        for (Path root : roots) {
+            if (!lexicalOk && norm.startsWith(root)) {
+                lexicalOk = true;
+            }
+            if (!realOk && real != null && real.startsWith(root)) {
+                realOk = true;
+            }
+        }
+        if (real != null && lexicalOk && realOk) {
+            return;
+        }
+        throw new SandboxViolationException("路径越界: " + norm
+                + "(fs.*Raw 仅允许工作区/外部授权根/技能目录/本会话已放行目录;"
+                + "需前端确认放行后经 fs.grantRawRoot 注册重试)");
+    }
+
+    /**
+     * 目标(或其最近已存在祖先)的 realpath:写入目标可不存在,对最近已存在祖先做
+     * realpath(父目录为符号链接指向工作区外同拒);祖先存在但跟随 realpath 失败
+     * (Windows 上不可解析的 reparse 点,如 LX symlink)回退 NOFOLLOW 读链接自身,
+     * 仍失败返回 null(按越界处理,交给存在性检查给出可读错误)。
+     */
+    private static Path realAnchor(Path norm) {
+        Path probe = norm;
+        while (probe != null && !Files.exists(probe)) {
+            probe = probe.getParent();
+        }
+        if (probe == null) {
+            return null;
+        }
+        try {
+            return probe.toRealPath();
+        } catch (IOException e) {
+            try {
+                return probe.toRealPath(LinkOption.NOFOLLOW_LINKS);
+            } catch (IOException e2) {
+                return null;
+            }
+        }
     }
 
     /**

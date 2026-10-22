@@ -36,6 +36,8 @@ import dev.everyagent.worker.slash.SlashCommandRegistry;
 import dev.everyagent.plugin.api.slash.SlashCommandItem;
 import dev.everyagent.worker.slash.SlashTokenHandler;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationContext;
 
 import tools.jackson.databind.JsonNode;
@@ -46,6 +48,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.regex.Pattern;
 
 /**
  * WorkerPluginContext 实现 —— 对标 VSCode 的 ExtensionContext。
@@ -54,6 +57,25 @@ import java.util.concurrent.atomic.AtomicReference;
  * 注册到对应的核心注册表。核心不直接知道有哪些插件，只通过注册表聚合。
  */
 public class WorkerPluginContextImpl implements WorkerPluginContext {
+
+    private static final Logger log = LoggerFactory.getLogger(WorkerPluginContextImpl.class);
+
+    /**
+     * slash 条目 icon 前置粗校验用的正则（审计 M-8 双防线的 worker 侧；最终防线是
+     * 前端 sanitizeSlashIcon → svg-renderer SVG 净化器，此处只做字符串级拦截）：
+     * <ul>
+     *   <li>{@link #SVG_ROOT} —— 合法 icon 必须以 {@code <svg}（后随空白/&gt;/自闭合斜杠）开头；</li>
+     *   <li>{@link #SCRIPT_BLOCK} / {@link #SCRIPT_TAIL} —— 整体剔除 {@code <script>} 元素
+     *       （成对闭合块优先，残留未闭合的从严自标签处截断到串尾）；</li>
+     *   <li>{@link #ON_EVENT_ATTR} —— 剔除 {@code on*} 事件属性（含前导空白；
+     *       值支持双引号/单引号/裸值三种形态）。</li>
+     * </ul>
+     */
+    private static final Pattern SVG_ROOT = Pattern.compile("<svg[\\s/>]", Pattern.CASE_INSENSITIVE);
+    private static final Pattern SCRIPT_BLOCK = Pattern.compile("(?is)<script\\b[^>]*>.*?(?:</script\\s*>|/>)");
+    private static final Pattern SCRIPT_TAIL = Pattern.compile("(?is)<script\\b[^>]*>.*");
+    private static final Pattern ON_EVENT_ATTR =
+            Pattern.compile("(?i)\\s+on[a-z0-9_-]+\\s*=\\s*(?:\"[^\"]*\"|'[^']*'|[^\\s>]+)");
 
     private final String pluginId;
     private final Path pluginDir;
@@ -228,10 +250,47 @@ public class WorkerPluginContextImpl implements WorkerPluginContext {
             List<?> items = provider.load();
             List<SlashCommandItem> result = new ArrayList<>(items.size());
             for (Object item : items) {
-                result.add((SlashCommandItem) item);
+                // 审计 M-8：第三方插件可经此返回任意字符串，icon 经 slash.list RPC 直达
+                // 前端 innerHTML——加载边界统一过 sanitizeIcon 粗校验（非 <svg 拒绝、
+                // 剔除 script/on*；前端 SVG 净化器为最终防线）。
+                result.add(sanitizeIcon((SlashCommandItem) item));
             }
             return result;
         });
+    }
+
+    /**
+     * slash 条目 icon 的前置粗校验（字符串级正则，不做完整净化）：
+     * <ul>
+     *   <li>null / 空白：原样放行（契约上 icon 可选）；</li>
+     *   <li>非 {@code <svg} 开头：置 null 拒绝（前端渲染占位图标）；</li>
+     *   <li>剔除 {@code <script>} 元素与 {@code on*} 事件属性；剔除后为空同样置 null。</li>
+     * </ul>
+     */
+    private SlashCommandItem sanitizeIcon(SlashCommandItem item) {
+        String icon = item.icon();
+        if (icon == null || icon.isBlank()) {
+            return item;
+        }
+        String cleaned = icon.trim();
+        if (!SVG_ROOT.matcher(cleaned).lookingAt()) {
+            log.warn("[slash] 插件 {} 条目 {} 的 icon 不是 <svg> 开头，已置空拒绝（审计 M-8）", pluginId, item.id());
+            return withIcon(item, null);
+        }
+        cleaned = SCRIPT_BLOCK.matcher(cleaned).replaceAll("");
+        cleaned = SCRIPT_TAIL.matcher(cleaned).replaceAll("");
+        cleaned = ON_EVENT_ATTR.matcher(cleaned).replaceAll("");
+        if (cleaned.isBlank()) {
+            log.warn("[slash] 插件 {} 条目 {} 的 icon 剔除 script/on* 后为空，已置空拒绝（审计 M-8）", pluginId, item.id());
+            return withIcon(item, null);
+        }
+        return withIcon(item, cleaned);
+    }
+
+    /** 复制条目并替换 icon（record 不可变，其余字段原样保留）。 */
+    private static SlashCommandItem withIcon(SlashCommandItem item, String icon) {
+        return new SlashCommandItem(item.id(), item.title(), item.subtitle(), icon, item.group(),
+                item.insertText(), item.selectHandler(), item.cancelHandler(), item.defaultSelected());
     }
 
     @Override

@@ -13,6 +13,10 @@
   --tool-batch-pad: 4px;
   /* 批容器左缘吃掉的宽度 = padding-left + border-left,负 margin 抵消量 */
   --tool-batch-inset: calc(var(--tool-batch-pad) + 1px);
+  /* 统一文字栏缩进 = 工具图标(13px) + 图标→工具名间距(8px) = 21px,即工具名起点:
+     正文、思考内容、思考折叠头、trace 整行均缩进到此,形成统一文字左基线
+     (左侧空出的图标列留给工具状态图标/思考菱形行标识)。 */
+  --text-column-indent: 21px;
 }
 
 /* ─── 顶部状态栏 ───────────────────────────────────────────── */
@@ -742,6 +746,14 @@
   overflow-wrap: anywhere;
 }
 
+/* 助手正文缩进到统一文字栏:与工具名、「思考过程」标题同一左基线
+   (用户回放正文在气泡内,不走本规则,不缩进)。
+   border-box:配合上方 width:100%,padding 计入宽度不外溢父容器。 */
+.nagent-msg__body--assistant .nagent-msg__content {
+  padding-left: var(--text-column-indent);
+  box-sizing: border-box;
+}
+
 .nagent-msg__content--user-replay {
   /* 用块级 + 左对齐让正文与引用 chip 自然行内流动，
      避免 flex-wrap 把开头的 @ 引用 chip 单独挤到一行。 */
@@ -831,11 +843,10 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  /* 折叠头整体缩进:与工具图标占用宽度对齐(图标 13px + gap 8px = 21px),
-     缩进区左侧由 ::before 菱形占位(与工具行图标同一列),
-     「思考过程」文字起点 = 工具名的起点,同一条竖线。
-     只缩进折叠头;展开后的详情内容(__content)不缩进,保持与正文同基线。 */
-  padding-left: 21px;
+  /* 折叠头缩进到统一文字栏(--text-column-indent):缩进区左侧由 ::before 菱形占位
+     (与工具行图标同一列),「思考过程」文字起点 = 工具名起点,同一条竖线;
+     展开后的思考内容(__content)同缩进,正文亦同,全列共用一条文字基线。 */
+  padding-left: var(--text-column-indent);
   /* 菱形 ::before 的定位基准 */
   position: relative;
   color: var(--text-muted);
@@ -889,6 +900,8 @@
   word-break: break-word;
   overflow-wrap: anywhere;
   margin-top: 4px;
+  /* 思考内容缩进到统一文字栏:与折叠头「思考过程」标题、正文同一左基线 */
+  padding-left: var(--text-column-indent);
 }
 
 .nagent-msg__reasoning-content > *:first-child {
@@ -1421,8 +1434,11 @@
 .nagent-trace-shell {
   display: block;
   /* trace 是 .nagent-thread 直接子元素不走 .nagent-msg__body，
-     与消息正文一样无最大宽度限制，width:100% 铺满消息流容器。 */
-  width: 100%;
+     与消息正文一样无最大宽度限制；整行右移到统一文字栏
+     (--text-column-indent,左侧图标列让位给工具状态图标/思考菱形),
+     宽度等量扣减 → 右缘仍与消息流容器对齐。 */
+  margin-left: var(--text-column-indent);
+  width: calc(100% - var(--text-column-indent));
   min-width: 0;
   /* 防止在 .nagent-thread flex 列里被 flex-shrink 压成 0：
      overflow:hidden 会让 flex 子项的 min-height:auto 解析为 0，从而被压缩消失 */
@@ -1446,8 +1462,8 @@
   gap: var(--space-2);
   width: 100%;
   min-width: 0;
-  /* 左内边距归零：左侧 18px 缩进由 .nagent-msg 提供，使 trace 内容与消息同一左基线；
-     仅保留右侧 --space-3，避免折叠图标贴边。 */
+  /* 左内边距归零：整行缩进由 .nagent-trace-shell 的 margin-left 提供
+     (统一文字栏)，仅保留右侧 --space-3，避免折叠图标贴边。 */
   padding: 0 var(--space-3) 0 0;
   border: none;
   background: transparent;

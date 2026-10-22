@@ -78,6 +78,8 @@ description: 当你需要输出 SVG 图形（流程图、架构图、数据示�
 
 4. **禁止 `on*` 事件属性**：如 `onclick`、`onload`、`onmouseover` 等事件属性会被安全过滤。
 
-5. **禁止外部引用**：不要在 SVG 中使用指向外部资源的 `href="http://..."` 或 `xlink:href="http://..."` 引用，这些外部链接会被过滤。
+5. **禁止外部引用**：不要在 SVG 中使用指向外部资源的 `href="http://..."`、`xlink:href="http://..."` 或 `src="http://..."` 引用，这些属性会被过滤；`<image>` 标签会被整体移除（浏览器 innerHTML 会把 image 当作 img 处理，src 可加载任意外链图片）。
 
-6. **标签外内容不受影响**：`<svg-image>` 标签之外的正常文字内容不受影响，会照常以 Markdown 渲染输出。
+6. **禁止内联样式与嵌入容器**：`style` 属性会被过滤（CSS `url()` 可向外发起请求）；`<foreignObject>` 元素会被移除。
+
+7. **标签外内容不受影响**：`<svg-image>` 标签之外的正常文字内容不受影响，会照常以 Markdown 渲染输出。

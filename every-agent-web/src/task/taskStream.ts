@@ -263,12 +263,14 @@ class ManagedStream {
     const changed = this.folder.fold(event)
     if (isTerminalEvent(event.event)) {
       this.folder.finalize()
-      clearAsksOfTask(this.taskId)
+      // 携带终态事件 seq:只有早于它的 ask 才随之落定;懒加载折入的历史终态事件
+      // (旧轮 error/cancelled)不得误清当前挂起 ask(askStore.clearAsksOfTask)。
+      clearAsksOfTask(this.taskId, event.seq)
     }
     if (changed) this.notify()
   }
 
-  private dispatchAskEvent(event: { event: string; payload: any; initial?: boolean }): void {
+  private dispatchAskEvent(event: { event: string; payload: any; initial?: boolean; seq?: number | string | null }): void {
     const payload = event.payload ?? {}
     // 新 wire 形状：ask 专属数据在 payload.data 中，agentId 在 payload 顶层。
     const data = (payload.data != null && typeof payload.data === 'object' && !Array.isArray(payload.data))
@@ -276,18 +278,20 @@ class ManagedStream {
     const askId = String(data.askId ?? payload.askId ?? '')
     if (!askId) return
     if (event.event === 'ask.resolved') {
-      settleAsk(askId)
+      // worker 已确认落定:迟到实时帧(如 refresher 竞态尾帧)不复活。
+      settleAsk(askId, { workerConfirmed: true })
       return
     }
     const askStatus = String(data.status ?? payload.status ?? '')
     if (event.event === 'ask.state' && askStatus !== 'pending') {
-      settleAsk(askId)
+      // 旧数据兼容的 ask.state(timeout) 同为 worker 确认落定。
+      settleAsk(askId, { workerConfirmed: true })
       return
     }
     // 历史回放(initial=true)的 ask.create 静默注册,由 askStore debounce flush 决定是否弹出:
     // 已完成任务回放时 ask.resolved 紧随其后,flush 前 ask 被 settle → 跳过 emit,悬浮窗不闪;
     // 运行中任务刷新页面时 50ms 内无新帧 → flush 统一 emit,立即弹出弹窗/悬浮窗。
-    // 实时(非 initial)ask.create 走完整弹出路径。
+    // 实时(非 initial)ask.create 走完整弹出路径。seq 随事件透传,供终态清理按 seq 判定。
     const askPayload: WorkerAskPayload = {
       askId,
       kind: data.kind as string | undefined,
@@ -297,7 +301,7 @@ class ManagedStream {
       status: askStatus || undefined,
       agentId: payload.agentId as string | undefined,
     }
-    upsertPendingAsk(this.taskId, askPayload, { initial: event.initial ?? false })
+    upsertPendingAsk(this.taskId, askPayload, { initial: event.initial ?? false, seq: event.seq })
   }
 
   /**
@@ -516,7 +520,9 @@ class ManagedStream {
    * 与实时推送 {@link #onEvent} 同口径处理——ask 事件分发到 askStore(卡片生命周期)、
    * 终态事件清残留 ask;否则 hidden 期间错过的 ask.resolved(如 timeout)不会被 settle,
    * 弹窗残留不关闭。标 initial=true:ask.create 静默注册(防已完成任务回放闪烁),
-   * agent.status 终态兜底跳过(历史加载已含 rounds)。
+   * agent.status 终态兜底跳过(历史加载已含 rounds)。终态清理携带事件 seq:上翻分页/
+   * 展开旧轮折入的**历史**终态事件(旧 error/cancelled 轮)早于新一轮 ask.create,
+   * 不得误清当前挂起 ask(regression:t_tb2g)。
    */
   private foldWireEvent(item: TaskPollWireEvent): void {
     const event = this.toFoldableEvent(item)
@@ -544,7 +550,9 @@ class ManagedStream {
     const changed = this.folder.fold(event)
     if (isTerminalEvent(event.event)) {
       this.folder.finalize()
-      clearAsksOfTask(this.taskId)
+      // 携带终态事件 seq:只有早于它的 ask 才随之落定;本路径折入的多为历史事件
+      // (上翻分页/展开旧轮),历史终态事件不得误清当前挂起 ask(askStore.clearAsksOfTask)。
+      clearAsksOfTask(this.taskId, event.seq)
     }
     if (changed) this.notify()
   }

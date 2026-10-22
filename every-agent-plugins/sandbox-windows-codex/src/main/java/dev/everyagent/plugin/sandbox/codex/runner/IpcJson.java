@@ -11,6 +11,7 @@ import dev.everyagent.plugin.sandbox.codex.runner.IpcMessage.ErrorStage;
 import dev.everyagent.plugin.sandbox.codex.runner.IpcMessage.Exit;
 import dev.everyagent.plugin.sandbox.codex.runner.IpcMessage.Output;
 import dev.everyagent.plugin.sandbox.codex.runner.IpcMessage.Resize;
+import dev.everyagent.plugin.sandbox.codex.runner.IpcMessage.Shutdown;
 import dev.everyagent.plugin.sandbox.codex.runner.IpcMessage.SpawnReady;
 import dev.everyagent.plugin.sandbox.codex.runner.IpcMessage.SpawnRequest;
 import dev.everyagent.plugin.sandbox.codex.runner.IpcMessage.Stdin;
@@ -82,6 +83,7 @@ final class IpcJson {
                 }
             }
             case Terminate r -> { /* EmptyPayload：空对象 */ }
+            case Shutdown r -> { /* EmptyPayload：空对象（池化新增，同 terminate 形态） */ }
         }
         return root;
     }
@@ -122,6 +124,7 @@ final class IpcJson {
                     p.path("windows_error_code").isNumber()
                             ? p.path("windows_error_code").asInt() : null);
             case IpcMessage.TAG_TERMINATE -> new Terminate();
+            case IpcMessage.TAG_SHUTDOWN -> new Shutdown();
             default -> throw new FrameCodec.FrameException("unknown IPC message type: " + type);
         };
     }

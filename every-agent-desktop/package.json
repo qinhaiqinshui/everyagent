@@ -1,11 +1,13 @@
 {
   "name": "every-agent-desktop",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "private": true,
   "description": "Every Agent 桌面版:Electron 承载 frontend + hub + worker 一体运行",
   "main": "dist/main/index.js",
   "scripts": {
     "compile": "tsc -p tsconfig.main.json && tsc -p tsconfig.preload.json",
+    "compile:test": "tsc -p tsconfig.test.json",
+    "test": "npm run compile:test && node --test \"dist/test/**/*.test.js\"",
     "start": "electron .",
     "build:backend": "node scripts/build-backend.mjs",
     "build:plugins": "python ../scripts/build-plugins.py",

@@ -1,6 +1,7 @@
 package dev.everyagent.worker.plugin.loader;
 
 import dev.everyagent.contract.json.Json;
+import dev.everyagent.worker.plugin.PluginDirs;
 import dev.everyagent.worker.plugin.registry.PluginManifest;
 import dev.everyagent.worker.plugin.registry.PluginRegistry;
 import dev.everyagent.worker.proto.RpcMethods;
@@ -127,8 +128,8 @@ public class PluginRpcMethods {
         ctx.ok(result);
     }
 
-    /** plugin.uninstall — 从 plugins 目录删除外部插件。 */
-    private void uninstall(dev.everyagent.worker.rpc.RpcContext ctx) {
+    /** plugin.uninstall — 从 plugins 目录删除外部插件(删除前落墓碑,失败给排查指引;§8.5)。 */
+    void uninstall(dev.everyagent.worker.rpc.RpcContext ctx) {
         String pluginId = ctx.params().path("pluginId").asString("");
         if (pluginId.isEmpty()) {
             ctx.err("BAD_PARAMS", "缺少参数 pluginId");
@@ -140,10 +141,25 @@ public class PluginRpcMethods {
             ctx.err("NOT_FOUND", "插件目录不存在: " + pluginId);
             return;
         }
+        // 先落墓碑(§8.5 卸载墓碑与启动自愈):删除成功随目录一起消失;失败则留在目录内,
+        // ExternalPluginScanner 下次 worker 启动扫描时自愈清理并不再加载该插件。
         try {
-            deleteRecursive(pluginDir);
+            PluginDirs.writeUninstallTombstone(pluginDir);
         } catch (IOException e) {
-            ctx.err("INTERNAL", "卸载失败: " + e.getMessage());
+            log.warn("[plugins] 卸载墓碑写入失败(继续尝试删除,重启自愈将缺失): {}: {}", pluginDir, e.getMessage());
+        }
+        try {
+            PluginDirs.deleteRecursive(pluginDir);
+        } catch (IOException e) {
+            // 删除尝试会先删掉墓碑与全部子文件、最后卡在被占用的目录上 —— 重写墓碑,
+            // 保住「已决定卸载」的落盘事实,下次启动的自愈链不断(§8.5)。
+            try {
+                PluginDirs.writeUninstallTombstone(pluginDir);
+            } catch (IOException tombstoneEx) {
+                log.warn("[plugins] 卸载墓碑重写失败(下次启动可能残留待清理目录): {}: {}",
+                        pluginDir, tombstoneEx.getMessage());
+            }
+            ctx.err("INTERNAL", lockedMessage(pluginDir, e));
             return;
         }
         ObjectNode result = Json.obj();
@@ -151,6 +167,18 @@ public class PluginRpcMethods {
         result.put("pluginId", pluginId);
         result.put("message", "插件已卸载，重启 worker 后生效");
         ctx.ok(result);
+    }
+
+    /**
+     * 卸载失败(目录/文件被占用)的可排查错误文案:附插件目录路径 + 常见原因 + 两条出路
+     * (占用退出后重试卸载 / worker 重启自动清理墓碑目录)。
+     */
+    static String lockedMessage(Path pluginDir, IOException cause) {
+        return "卸载失败: " + cause.getMessage()
+                + "。插件目录: " + pluginDir
+                + "。常见原因: 有进程正以该目录为工作目录(如插件启动的后台进程、打开的终端),"
+                + "或文件被占用(文件可删而目录删不掉多为前者)。"
+                + "占用进程退出后重试卸载即可;worker 重启时也会自动清理该残留目录(已写入卸载墓碑)。";
     }
 
     /** plugin.enable — 启用插件（运行时生效，经 PluginRegistry）。 */
@@ -347,16 +375,5 @@ public class PluginRpcMethods {
             }
         }
         return pluginId != null ? pluginId : "unknown";
-    }
-
-    private void deleteRecursive(Path dir) throws IOException {
-        if (Files.isDirectory(dir)) {
-            try (var stream = Files.list(dir)) {
-                for (Path child : stream.toList()) {
-                    deleteRecursive(child);
-                }
-            }
-        }
-        Files.deleteIfExists(dir);
     }
 }

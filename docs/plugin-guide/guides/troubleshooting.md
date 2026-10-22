@@ -19,7 +19,7 @@ has_children: false
 
 1. 插件加载发生在 worker 启动的 `@PostConstruct`（`PluginLoader.java:151-154` 的 `init()` → `scanAndLoad()`），**没有任何热路径**——启停 / 装卸 / 换 jar 一律重启 worker 才生效（[持久化与状态](../backend/persistence-and-state.md) §5）。
 2. `plugin.list` RPC **不返回 status**（`PluginManifest.java:22-24` 无此字段），且 `active` 只反映禁用名单——**worker 日志是插件真实状态的唯一真相源**。
-3. 前端宿主按 `webMain` 换算产物路径（源码路径去扩展名拼 `.js`，约定 `"web/index.ts"` → `web/index.js`；known-issues #5 修复前曾硬编码），源码 `web/index.ts` 不上屏；改前端 = 重新构建 + 刷新页面。
+3. 前端宿主按 `webMain` 换算产物路径（源码路径去扩展名拼 `.js`，约定 `"web/index.ts"` → `web/index.js`；早期曾硬编码），源码 `web/index.ts` 不上屏；改前端 = 重新构建 + 刷新页面。
 
 | 第一眼症状 | 直达 |
 | --- | --- |
@@ -125,8 +125,8 @@ has_children: false
 
 | 现象（逐字文案） | 根因 | 定位 · 取证 | 修复 | 详解 |
 | --- | --- | --- | --- | --- |
-| `Could not find artifact dev.everyagent:every-agent-plugin-parent:jar:1.0.1 in central (https://repo.maven.apache.org/maven2)`（或同形态的 `every-agent-plugin-api:jar:1.0.1`；伴随 WARNING `The POM for dev.everyagent:every-agent-plugin-api:jar:1.0.1 is missing, no dependency information available`） | 插件 SDK parent 与 API 均未发布到任何远程仓（Maven Central `dev/everyagent/` 目录 404），本地仓库又没装过——新克隆的仓库 / 新机器直接构建插件就会撞上 | — | 仓库根一次性：`mvn -pl every-agent-plugin-parent,every-agent-plugin-api -am install -DskipTests` | [快速上手](../getting-started.md) §5 |
-| `Non-resolvable parent POM … dev.everyagent:every-agent-plugin-parent:pom:${revision} (absent)`，伴随 `'parent.relativePath' points at wrong local POM` | 工程**没落在 `<仓库根>/every-agent-plugins/<id>/` 下**：builtin 形态的 pom 靠 `relativePath ../../every-agent-plugin-parent/pom.xml` 在磁盘上找 SDK parent，位置错了就找不到（与上一行的区别看坐标：写 `${revision}` 表达式 = 落点问题；写实版本号 = 本地仓库没装） | 看工程相对仓库根的位置（`git status` 里冒出来的仓库根目录最典型） | 移进 `every-agent-plugins/<id>/`；或重新生成：`node create-everyagent-plugin --id <id> --kind … --mode builtin --yes`（脚手架现在会在写盘前拦住这种落点）；要建到仓库外就改 `--mode standalone` | [脚手架 README](../../../create-everyagent-plugin/README.md#位置参数) |
+| `Could not find artifact io.github.qinhaiqinshui:every-agent-plugin-parent:jar:<v> in central (https://repo.maven.apache.org/maven2)`（或同形态的 `every-agent-plugin-api:jar:<v>`；伴随 WARNING `The POM for io.github.qinhaiqinshui:every-agent-plugin-api:jar:<v> is missing, no dependency information available`） | 三种可能：① `<v>` 高于 Central 已发布版本（SDK 已首发 1.6.0，更高版本需等下轮发版或本地 install）；② SDK 发布前尝试过联网解析的机器残留 `.lastUpdated` 失败缓存，Central 上明明有却仍报找不到；③ 更早版本工程引用旧坐标 `dev.everyagent:…`（已迁移，见仓库 git 历史） | — | 按因施治：① 用已发布版本，或仓库根 `mvn -pl every-agent-plugin-parent,every-agent-plugin-api -am install -DskipTests` 装本地新版本；② 同一命令顺带清缓存，或构建加 `-U`；③ 重新生成工程换新坐标 | [快速上手](../getting-started.md) §5 |
+| `Non-resolvable parent POM … io.github.qinhaiqinshui:every-agent-plugin-parent:pom:${revision} (absent)`，伴随 `'parent.relativePath' points at wrong local POM` | 工程**没落在 `<仓库根>/every-agent-plugins/<id>/` 下**：builtin 形态的 pom 靠 `relativePath ../../every-agent-plugin-parent/pom.xml` 在磁盘上找 SDK parent，位置错了就找不到（与上一行的区别看坐标：写 `${revision}` 表达式 = 落点问题；写实版本号 = 本地仓库没装） | 看工程相对仓库根的位置（`git status` 里冒出来的仓库根目录最典型） | 移进 `every-agent-plugins/<id>/`；或重新生成：`node create-everyagent-plugin --id <id> --kind … --mode builtin --yes`（脚手架现在会在写盘前拦住这种落点）；要建到仓库外就改 `--mode standalone` | [脚手架 README](../../../create-everyagent-plugin/README.md#位置参数) |
 | 测试启动时 `WARNING: A Java agent has been loaded dynamically ...` 与 `Mockito is currently self-attaching ...` | Mockito inline-mock-maker 在 JDK 25 上动态自挂 agent | — | **无害，忽略**（实测测试全绿时即有此警告） | [调试与测试](debugging-and-testing.md) §1.5 |
 | `[build-plugins] 构建失败:` + 错误对象（build-plugins.mjs:187） | esbuild 打包失败：`web/index.ts` 语法错 / import 了白名单（react 系、antd、icons、react-markdown、remark-gfm 共 7 项）之外的裸包 / 引用不存在的文件 | 看其后跟随的 esbuild 诊断（含文件与行列号） | 按诊断修源码后重跑 | [前端总览](../web/overview-and-loading.md) 约定 3 |
 | `[build-plugins] 错误:--only 中不存在的插件 id: <id>` + 可用 id 清单（build-plugins.mjs:116-119） | id 拼错；或该插件没有 `web/index.ts` 入口（java-only 插件不在 web 构建范围） | 看随后列出的 `[build-plugins] 可用的插件 id:` | 更正 id；java-only 不需要 web 构建 | [调试与测试](debugging-and-testing.md) §2.2 |
@@ -146,7 +146,7 @@ has_children: false
 | 工具注册了，AI 就是不调用 | `ToolProvider.appliesTo` 的沙箱后端判据不匹配；`createTools` 拿不到依赖静默返回空；`@Tool` 描述没说清何时该用 | 剧本 b 三步（后端 id / 空返回 / 描述质量） | 对照常见坑表修 | [调试与测试](debugging-and-testing.md) §4 剧本 b、[工具与沙箱](../backend/tools-and-sandbox.md) §1.5 |
 | `插件 {} 尝试注册生命周期节点 {} 的 order={} 落入临界段 [420,850]，已拒绝`（WARN，TaskLifecycleRegistry.java:46） | `TaskLifecycleNode` 的 order 落进洋葱保留段（worker 自用临界段，注册时拒绝） | 对照 Lifecycle order 分配表 | 挪出 [420,850]（用空档段），重启 worker | [任务与 RPC](../backend/task-and-rpc.md) |
 | 前端 `ctx.sdk.rpc` 报错或无响应；worker 日志见 `rpc {} 执行异常`（ERROR，RpcDispatcher.java:107）或 `rpc 请求缺 reqId/method: {}`（WARN，:77） | 方法名两边不一致（没注册 / 拼错）；参数形状不对；handler 抛异常 | 先 grep 这两条（执行异常带完整堆栈） | 逐字核对 `registerRpcMethod` 与 `ctx.sdk.rpc` 的方法名 | [调试与测试](debugging-and-testing.md) §4 剧本 e、[任务与 RPC](../backend/task-and-rpc.md) |
-| `ctx.events.on(...)` 永不触发 | 订阅了不存在的**死事件名**（known-issues #4 清理后常量表 21 个全部可用，但 `(string & {})` 兜底仍放行任意拼写错误/已删除的旧名，如 `file-content-saved`、`task-trace-changed`）；拼错事件名也不报错 | 对照事件总表两张表 | 换 17 个活事件或 4 个请求通道，或改走 UI 扩展点 / `ctx.sdk.rpc` | [前端事件](../web/events.md) §3.1/§3.2 |
+| `ctx.events.on(...)` 永不触发 | 订阅了不存在的**死事件名**（死事件清理后常量表 21 个全部可用，但 `(string & {})` 兜底仍放行任意拼写错误/已删除的旧名，如 `file-content-saved`、`task-trace-changed`）；拼错事件名也不报错 | 对照事件总表两张表 | 换 17 个活事件或 4 个请求通道，或改走 UI 扩展点 / `ctx.sdk.rpc` | [前端事件](../web/events.md) §3.1/§3.2 |
 | `/` 菜单里没有我的斜杠命令候选 | 插件被禁用 ⇒ `activate` 根本没被调，一个贡献都不会注册（`PluginLoader.java:237-239` 注释自证「"/菜单"里也就没有它的候选」）；或没调 `registerSlashProvider` | 日志 grep `插件已禁用,跳过激活`；读 activate 源码 | 启用插件（重启生效）；补注册调用 | [任务与 RPC](../backend/task-and-rpc.md) |
 
 ### 2.6 安装组
@@ -220,5 +220,5 @@ Select-String -Path "$HOME\.everyagent\logs\worker.log" -Pattern "扫描到|加�
 - [前端总览](../web/overview-and-loading.md) §1——加载链路每一步的失败症状表（§2.3 的流程图版）；
 - [持久化与状态](../backend/persistence-and-state.md)——`active=true` 陷阱、禁用双机制、plugin.json 双份不对称的完整解释；
 - [打包与安装](packaging-and-install.md)——六个 `plugin.*` RPC 与 `.eap` 布局约定（本表 §2.6 的详解源）；
-- [已知问题](../reference/known-issues.md)——排查前先对一眼：23 条已知陷阱里可能就有你撞上的这堵墙；
+
 - [plugin.json 参考](../plugin-manifest.md) §7——「常见错误」表与本表 §2.1 互为镜像：那边按**字段写错**分类，这边按**日志行**对号。

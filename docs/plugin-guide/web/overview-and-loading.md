@@ -124,7 +124,7 @@ export default plugin
 
 ### 约定 1：入口契约 —— `webMain: "web/index.ts"` 非空 + `export default { activate(ctx) }`
 
-- **为什么**：`webMain` 非空决定 `hasWebMain` 真假（`PluginRpcMethods.java`），其**值也被前端消费**——产物路径 = `webMain` 去扩展名拼 `.js`（`pluginLoader.ts` 的 `webEntryJsPath`，空值/旧 worker 回退 `web/index.js`；known-issues #5 修复前该值不被消费、路径硬编码）。加载后取 `mod.default ?? mod`，所以入口必须 default 导出一个带 `activate` 的对象（类型声明 `every-agent-plugin-api/js/index.ts`）。
+- **为什么**：`webMain` 非空决定 `hasWebMain` 真假（`PluginRpcMethods.java`），其**值也被前端消费**——产物路径 = `webMain` 去扩展名拼 `.js`（`pluginLoader.ts` 的 `webEntryJsPath`，空值/旧 worker 回退 `web/index.js`；早期该值不被消费、路径硬编码）。加载后取 `mod.default ?? mod`，所以入口必须 default 导出一个带 `activate` 的对象（类型声明 `every-agent-plugin-api/js/index.ts`）。
 - **怎么做**：`plugin.json` 写 `"webMain": "web/index.ts"`（仓内 8 个含 web 的插件全是这个值，与 `build-plugins.mjs` 的产物位换算一致）；入口 `export default plugin`，`activate(ctx)` 里注册全部贡献。
 - **违反症状**：`webMain` 空 → 插件在前端**静默消失**；没 default 导出 / default 无 `activate` → **静默跳过，控制台无输出**；`webMain` 写了非约定路径而产物仍落在 `web/index.js` → `plugin.webSource` 读不到文件，加载失败。
 
@@ -144,7 +144,7 @@ export default plugin
 ### 约定 4：禁 `@/` 宿主内部引用，UI 与图标自带
 
 - **为什么**：`@/` 是宿主 vite alias（`every-agent-web/src/*`），宿主模块不在插件 bundle 里、也不暴露任何全局；blob 模块里 `@/...` 必然解析失败。核实：全仓 `every-agent-plugins/**/*.ts(x)` 对 `from '@/` / `from "@/` 的引用**零命中**（rg 单双引号两种均零）——这不是软建议，是仓内既有事实。
-- **怎么做**：一切宿主能力经 `ctx`（`sdk`/`ui`/`events`/`fs`/`storage`/`commands`，逐成员见 [前端 ctx API](context-api.md)）；图标用 ReactNode 自带（emoji、SVG、`@ant-design/icons` 白名单组件均可）；需要宿主动作（开标签页、写输入框）用 `ctx.ui.openTab` 等 6 个动作方法（§4）。
+- **怎么做**：一切宿主能力经 `ctx`（`sdk`/`ui`/`events`/`fs`/`storage`/`commands`，逐成员见 [前端 ctx API](context-api.md)）；图标用 ReactNode 自带（emoji、SVG、`@ant-design/icons` 白名单组件均可）；需要宿主动作（开标签页、写输入框）用 `ctx.ui.openTab` 等 7 个动作方法（§4）。
 - **违反症状**：构建期 `Could not resolve "@/..."`，或产物里残留不可解析 import → 激活失败。
 
 ### 约定 5：产物手工构建、不入库，且不在 web dev/build 流水线里
@@ -155,7 +155,7 @@ export default plugin
 
 ### 约定 6：生效边界 —— 刷新页面 / 重启 worker；运行期不卸载，页面卸载时统一停用
 
-- **为什么**：启停/装卸走 worker 的 `plugin.*` RPC，文案自证「重启 worker 后生效」；前端侧激活时 `ctx.ui` / `ctx.commands` / `ctx.events` 都包了收集代理（`pluginLoader.ts` 的 `trackDisposables`），注册方法返回的 Disposable 全部进该插件的 `disposables`——页面卸载（`pagehide`，涵盖刷新/关闭/跳转，即插件面板「重新加载」按钮触发的 `location.reload()`）时宿主统一调 `module.deactivate?()` 再逆序 dispose 全部注册项、移除插件 CSS（`unloadPlugin` / `unloadAllPlugins`，known-issues #8 修复前 disposables 恒为空数组、deactivate 零调用）。这是与后端 worker 优雅关闭（`@PreDestroy` → `deactivate`）对齐的尽力而为钩子；**运行期禁用插件不做前端热卸载**——worker 侧 Java 贡献要到下一次启动才摘除，前端单独摘除会两侧不同步。页面刷新即内存态全部清零（blob 模块、注册表、事件订阅），活下来的只有 `ctx.storage`（localStorage）与 worker 侧数据。注册后的**上屏**不靠刷新，靠订阅：`ExtensionRegistry.register/dispose` 都会 notify（`ExtensionRegistry.ts:45-56`），`PluginDispatcher` 聚合成 `subscribeExtensionsChanged` + 自增 int `getExtensionsVersion()`（`PluginDispatcher.ts:69-92`），宿主用 `React.useSyncExternalStore` 消费（`Layout.tsx:139-142`、`TaskChat.tsx:818`）——版本号而非数组作快照，正是为了避免「新数组引用导致无限重渲染」（`PluginDispatcher.ts:66-68` 注释）。
+- **为什么**：启停/装卸走 worker 的 `plugin.*` RPC，文案自证「重启 worker 后生效」；前端侧激活时 `ctx.ui` / `ctx.commands` / `ctx.events` 都包了收集代理（`pluginLoader.ts` 的 `trackDisposables`），注册方法返回的 Disposable 全部进该插件的 `disposables`——页面卸载（`pagehide`，涵盖刷新/关闭/跳转，即插件面板「重新加载」按钮触发的 `location.reload()`）时宿主统一调 `module.deactivate?()` 再逆序 dispose 全部注册项、移除插件 CSS（`unloadPlugin` / `unloadAllPlugins`；早期 disposables 恒为空数组、deactivate 零调用）。这是与后端 worker 优雅关闭（`@PreDestroy` → `deactivate`）对齐的尽力而为钩子；**运行期禁用插件不做前端热卸载**——worker 侧 Java 贡献要到下一次启动才摘除，前端单独摘除会两侧不同步。页面刷新即内存态全部清零（blob 模块、注册表、事件订阅），活下来的只有 `ctx.storage`（localStorage）与 worker 侧数据。注册后的**上屏**不靠刷新，靠订阅：`ExtensionRegistry.register/dispose` 都会 notify（`ExtensionRegistry.ts:45-56`），`PluginDispatcher` 聚合成 `subscribeExtensionsChanged` + 自增 int `getExtensionsVersion()`（`PluginDispatcher.ts:69-92`），宿主用 `React.useSyncExternalStore` 消费（`Layout.tsx:139-142`、`TaskChat.tsx:818`）——版本号而非数组作快照，正是为了避免「新数组引用导致无限重渲染」（`PluginDispatcher.ts:66-68` 注释）。
 - **怎么做**：改前端 = `build:plugins` + 刷新页面；启停/装卸 = 对应 RPC + 重启 worker（扩展面板「重新加载」按钮会按待生效变更分流：仅前端插件变更只刷新页面；涉及含 `main` 的后端插件时弹确认——告知将重启 worker、进行中任务被迫停止——确认后自动执行 `worker.restart` + 等待 worker 恢复 + 刷新页面）；清理逻辑写进 `deactivate`（页面卸载时被调用，异步部分尽力而为），注册类 Disposable 可交宿主统一 dispose，运行期中途停听才需自己持有。
 - **违反症状**：改了 `web/index.ts` 不重跑构建 → 刷新也看不到变化（浏览器执行的是旧 `index.js`）；`plugin.disable` 后不重启 worker → 插件照常运行。
 
@@ -177,7 +177,7 @@ export default plugin
 | `ui.trace_types` | `registerTraceType` | trace 记录渲染类型（侧路同步进 traceTypeRegistry，`PluginDispatcher.ts:307-317`） | 正常 |
 | `ui.output_blocks` | `registerOutputBlock` | 按 tag 渲染输出块（侧路 outputBlockRegistry，`:318-326`） | 正常 |
 | `ui.file_content_editors` | `registerFileContentEditor` | 按扩展名注册文件编辑器（可覆盖内置） | 正常 |
-| `ui.file_explorer_actions` | `registerFileExplorerAction` | 文件树右键动作 | git「显示 Git 历史」（known-issues #1 修复前曾为死扩展点） |
+| `ui.file_explorer_actions` | `registerFileExplorerAction` | 文件树右键动作 | git「显示 Git 历史」（早期曾为死扩展点，已接线） |
 | `ui.round_tail_panels` | `registerRoundTailPanel` | 任务轮末展示区组件 | 正常 |
 | `ui.search_types` | `registerSearchType` | 注册搜索类型（id/label/kinds/filters/ResultView…） | 正常 |
 | `ui.editor_context_menu_actions` | `registerEditorContextMenuAction` | 编辑器内容区右键菜单项（仅在有选区且有可见项时接管，否则放行原生菜单） | 正常 |
@@ -187,9 +187,9 @@ export default plugin
 
 注：`dispatch()` 的 switch 只列前述 15 个 `ui.*`/`task.*` 常量（`PluginDispatcher.ts:232-262`）；`ui.trace_types` / `ui.output_blocks` 走侧路注册表，不影响使用。
 
-### 4.2 `ctx.ui` 的 6 个动作方法（触发宿主动作，不注册东西）
+### 4.2 `ctx.ui` 的 7 个动作方法（触发宿主动作，不注册东西）
 
-`openTab(type, data?, title?)` / `openFileTab(workspaceRoot, filePath, {mode?, lineNumber?})` / `openDiffTab(input)` / `appendComposerText(text)` / `appendComposerToken({kind, label, summary?, payload?, spaced?})` / `setComposerRawContent(raw)`（`index.ts:834-852`）。实现经模块级 holder 桥接（`every-agent-web/src/plugin/pluginRuntimeBridge.ts`）：这些能力原本只挂在 React Context 上，插件是非 React 模块拿不到 hook 结果，故由宿主组件挂载时注入——`Layout.tsx:803`（`setShellBridge`，卸载清 null `:814`）、`TaskChat.tsx:712`（`setComposerBridge`）。**未注入时静默降级**（dispatcher 里全是 `getShellBridge()?.xxx` 可选链，`pluginRuntimeBridge.ts:1-10` 注释自证「零状态、零缓冲……未注入时静默降级」）；时序上安全，因为 `activate` 总在 RPC 往返之后才执行，宿主组件通常已挂载。
+`openTab(type, data?, title?)` / `openFileTab(workspaceRoot, filePath, {mode?, lineNumber?})` / `openDiffTab(input)` / `openSettingsPage(sectionId?)` / `appendComposerText(text)` / `appendComposerToken({kind, label, summary?, payload?, spaced?})` / `setComposerRawContent(raw)`（`index.ts:834-852`）。实现经模块级 holder 桥接（`every-agent-web/src/plugin/pluginRuntimeBridge.ts`）：这些能力原本只挂在 React Context 上，插件是非 React 模块拿不到 hook 结果，故由宿主组件挂载时注入——`Layout.tsx:803`（`setShellBridge`，卸载清 null `:814`）、`TaskChat.tsx:712`（`setComposerBridge`）。**未注入时静默降级**（dispatcher 里全是 `getShellBridge()?.xxx` 可选链，`pluginRuntimeBridge.ts:1-10` 注释自证「零状态、零缓冲……未注入时静默降级」）；时序上安全，因为 `activate` 总在 RPC 往返之后才执行，宿主组件通常已挂载。
 
 ### 4.3 `ctx` 其余成员
 
@@ -229,14 +229,14 @@ export default plugin
 
 ## 6. 与架构文档 §8.5 的差异与已知限制
 
-[../../ARCHITECTURE.md](../../ARCHITECTURE.md) §8.5（`docs/ARCHITECTURE.md:1128-1139`）描述的统一加载架构与代码主体一致，但有以下已核实的偏差/限制（完整登记见 [已知问题与现状偏差](../reference/known-issues.md)）：
+[../../ARCHITECTURE.md](../../ARCHITECTURE.md) §8.5（`docs/ARCHITECTURE.md:1128-1139`）描述的统一加载架构与代码主体一致，但有以下已核实的偏差/限制：
 
 1. **两套扩展机制并存**：§8.5 写「不再有 `import.meta.glob` / `builtInPlugins.ts`」（`docs/ARCHITECTURE.md:1137`），这只对**插件加载**成立；宿主内部注册表仍在用 glob——实际用 glob 的文件仅两个：`every-agent-web/src/components/files/editors/registry.ts:11`（模式含 `../../../plugins/*/editors/*FileEditor.tsx`，顺带发现 `src/plugins/{image,markdown}/editors/` 下的内置编辑器）与 `every-agent-web/src/components/task/toolViews/registry.ts:15`。⇒ 宿主内置编辑器是 `@/` 内部代码**不是插件**，不受本文约定约束。
 2. ~~**§8.5 的 external 清单漏了 `react/jsx-runtime`**~~：已修正——§8.5 现列全部 7 项 external（react/react-dom/react/jsx-runtime/antd/@ant-design/icons/react-markdown/remark-gfm），与代码三处锁定清单一致。
 3. **4 个插件的头注释仍写「经 builtInPlugins.ts 自动发现加载」**（该文件已删，真实加载走 `plugin.list` RPC）：`every-agent-plugins/pdf-viewer/web/index.ts:4`、`update-file-view/web/index.ts:4`、`ai-review/web/index.ts:4`、`git/web/index.ts:4`。
 4. **`git/web/index.ts:2` 自称「纯 Web 插件」**，实际其 `plugin.json` 同时有 `main`（java+web 混合形态），注释失真。
-5. ~~**`plugins-loaded` 是死事件**~~：known-issues #4 修复后 `loadPlugins()` 每轮流程末尾 emit `{count}`——可订阅它感知本轮装载完成；仍要注意 fire-and-forget（晚激活的插件收不到早于自己的 emit）。
-6. ~~**两个「注册了也不显示」的死贡献**~~：`ui.file_explorer_actions`（文件树右键菜单）与 `UiSidebarItemDefinition.Badge`（活动栏角标组件）均已接线（known-issues #1/#2 修复）——git 的「显示 Git 历史」右键项与 `GitChangeBadge` 角标现均生效。
+5. ~~**`plugins-loaded` 是死事件**~~：死事件修复后 `loadPlugins()` 每轮流程末尾 emit `{count}`——可订阅它感知本轮装载完成；仍要注意 fire-and-forget（晚激活的插件收不到早于自己的 emit）。
+6. ~~**两个「注册了也不显示」的死贡献**~~：`ui.file_explorer_actions`（文件树右键菜单）与 `UiSidebarItemDefinition.Badge`（活动栏角标组件）均已接线（曾经的死贡献，均已修复）——git 的「显示 Git 历史」右键项与 `GitChangeBadge` 角标现均生效。
 7. **`register(pluginId, …)` 的 pluginId 形参被忽略**：接口带该参数（`ExtensionRegistry.ts:18,45`）但实现只 `items.push(item)`（`:46`），`PluginDispatcher` 15 个 register 一律传 `''`（如 `:242,245,248`）——注册项无法按插件归属过滤。
 8. **`build:plugins` 流水线口径**：web 侧 `dev`/`build` 确实不含它；但桌面 `build:assets` **会**经 `scripts/build-plugins.py` 间接调用（`every-agent-desktop/package.json:11,16` → `scripts/build-plugins.py:219`），与「不在任何流水线」的旧说法不符——本文以代码为准。
 
@@ -271,4 +271,4 @@ npm.cmd run typecheck
 - 21 个宿主事件与 8 个具名事件：[事件](events.md)
 - `webMain`/`hasWebMain`/禁用机制在清单侧的口径：[plugin.json 字段参考](../plugin-manifest.md)
 - 三形态构建矩阵与 cwd 陷阱：[构建与运行](../guides/build-and-run.md)
-- 现象对不上本文时的逐条排查：[故障排查](../guides/troubleshooting.md)、[已知问题与现状偏差](../reference/known-issues.md)
+- 现象对不上本文时的逐条排查：[故障排查](../guides/troubleshooting.md)

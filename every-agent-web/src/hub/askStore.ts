@@ -26,6 +26,12 @@ interface PendingAskEntry {
   request: UserInteractionRequest
   notificationId: string
   /**
+   * ask.create 事件的 seq(wire 字符串;雪花 ID 超 2^53 不能转 number 比较)。
+   * 终态事件(error/cancelled)按 seq 判定是否连带结算本 ask(见 clearAsksOfTask);
+   * 旧数据缺省 null = 不参与 seq 判定,保持「任务终态清全部」原语义。
+   */
+  seq: string | null
+  /**
    * 是否已向外广播过 USER_INTERACTION_REQUESTED(弹窗/悬浮窗)。
    * 历史回放(DataPusher 回扫段,initial=true)的 ask.create 静默注册(emitted=false),
    * 待 debounce flush 时统一 emit;若 flush 前 ask.resolved 已到(已完成任务回放),
@@ -68,6 +74,27 @@ export interface WorkerAskOption {
 const pendingAsks = new Map<string, PendingAskEntry>()
 /** 已落定的 askId(本地作答或 worker 广播 resolved/timeout):迟到的 state 重发不再复活卡片。 */
 const settledAskIds = new Set<string>()
+/**
+ * worker 已确认落定(ask.resolved 事件 / 超时 / 用户作答回执)的 askId。
+ * 这些 ask 对迟到的**实时**帧也不复活——防 30s refresher 与作答的竞态尾帧把已答 ask
+ * 拉回台面;不在此集合的落定(本地失效清理,如 worker 连接集合变化误清)可由 worker
+ * 实时 ask.create/ask.state(pending) 复活(worker 仍在等待即应可见可答,G4)。
+ */
+const workerConfirmedAskIds = new Set<string>()
+
+/**
+ * seq 比较(雪花 ID 字符串按 BigInt 数值序;任一侧无法解析返回 null 表示不可比)。
+ * 不复用 task 域的 compareSeq,保持 hub/askStore 对 task 层零依赖(依赖方向:task → hub)。
+ */
+function compareAskSeq(a: string, b: string): number | null {
+  try {
+    const x = BigInt(a)
+    const y = BigInt(b)
+    return x < y ? -1 : x > y ? 1 : 0
+  } catch {
+    return null
+  }
+}
 
 /**
  * 用户作答草稿(实时缓存)。
@@ -248,11 +275,20 @@ function scheduleFlush(): void {
 export function upsertPendingAsk(
   taskId: string,
   payload: WorkerAskPayload,
-  opts?: { initial?: boolean },
+  opts?: { initial?: boolean; seq?: number | string | null },
 ): void {
   const initial = Boolean(opts?.initial)
   if (!payload.askId) return
-  if (settledAskIds.has(payload.askId)) return
+  if (settledAskIds.has(payload.askId)) {
+    // 已落定的 ask 默认不复活,两类例外:
+    // - 回放帧(initial)不复活:已完成任务回放时 ask.resolved 紧随其后,复活会闪烁;
+    // - worker 已确认落定(resolved/timeout/作答回执)不复活:迟到实时帧(如 30s refresher
+    //   与作答的竞态尾帧)不能把已答 ask 拉回台面;
+    // - 其余落定(本地失效清理,如 worker 连接集合变化误清)由 worker 实时 pending 重发
+    //   复活——worker 仍在等待即应可见可答(G4),30s 内自愈恢复入口。
+    if (initial || workerConfirmedAskIds.has(payload.askId)) return
+    settledAskIds.delete(payload.askId)
+  }
   if (pendingAsks.has(payload.askId)) {
     // ask.state 周期重发或实时 ask.create 重复到达:不重建卡片、不再弹通知。
     // 若 ask 在回放期间静默注册(emitted=false)、此时收到实时帧(非 initial)→ 补发。
@@ -274,6 +310,7 @@ export function upsertPendingAsk(
     agentId: payload.agentId ?? '',
     request,
     notificationId: `ask-${payload.askId}`,
+    seq: opts?.seq != null && String(opts.seq) !== '' ? String(opts.seq) : null,
     emitted: !initial,
   }
   pendingAsks.set(payload.askId, entry)
@@ -290,10 +327,19 @@ export function upsertPendingAsk(
   }
 }
 
-/** ask.resolved / ask.state(timeout) → 移除卡片。 */
-export function settleAsk(askId: string): void {
+/**
+ * ask.resolved / ask.state(timeout) → 移除卡片。
+ *
+ * @param opts.workerConfirmed worker 已确认落定(ask.resolved 事件 / 超时 / 用户作答回执):
+ *  记入 workerConfirmedAskIds,迟到的实时帧不再复活(防 refresher 竞态尾帧);
+ *  本地失效清理(worker 连接集合变化等)不置位——worker 若仍在等待,实时 pending 重发可复活。
+ */
+export function settleAsk(askId: string, opts?: { workerConfirmed?: boolean }): void {
   if (!askId) return
   settledAskIds.add(askId)
+  if (opts?.workerConfirmed) {
+    workerConfirmedAskIds.add(askId)
+  }
   // 真正落定(提交/超时/取消)时清掉作答草稿,避免旧草稿复活。
   clearAskDraft(askId)
   const entry = pendingAsks.get(askId)
@@ -310,13 +356,25 @@ export function settleAsk(askId: string): void {
   })
 }
 
-/** 任务终态时清掉该任务残留的挂起 ask(任务结束,问答无意义)。 */
-export function clearAsksOfTask(taskId: string): void {
+/**
+ * 任务终态时清掉该任务残留的挂起 ask(任务结束,问答无意义)。
+ *
+ * @param beforeSeq 触发清理的终态事件 seq(wire 字符串)。提供时**只结算 seq 早于该事件的
+ *  ask**:懒加载翻页/展开旧轮会从磁盘折入**历史**终态事件(如任务曾失败后重跑再 ask,
+ *  上翻 sentinel 折入旧 error 轮),它们早于新一轮的 ask.create,不得误清当前挂起 ask
+ *  (regression:t_tb2g 旧 error 轮把新一轮 pending ask 清掉且 settledAskIds 永久压制,
+ *  弹窗消失且无入口重开)。缺省(无 seq 语境,如 worker 连接失效的任务级清理)清全部。
+ */
+export function clearAsksOfTask(taskId: string, beforeSeq?: number | string | null): void {
+  const bound = beforeSeq != null && String(beforeSeq) !== '' ? String(beforeSeq) : null
   for (const askId of Array.from(pendingAsks.keys())) {
     const entry = pendingAsks.get(askId)!
-    if (entry.taskId === taskId) {
-      settleAsk(askId)
+    if (entry.taskId !== taskId) continue
+    if (bound != null && entry.seq != null) {
+      const cmp = compareAskSeq(entry.seq, bound)
+      if (cmp != null && cmp > 0) continue // ask 晚于终态事件:新一轮挂起,仍有效
     }
+    settleAsk(askId)
   }
 }
 
@@ -350,7 +408,8 @@ export function submitRuntimeUserInteractionResult(
     interactionId,
     submittedAt: Date.now(),
   }
-  settleAsk(interactionId)
+  // 用户作答 = worker 已确认落定(ask.resolved 事件随后到达):迟到实时帧不复活。
+  settleAsk(interactionId, { workerConfirmed: true })
   replySender?.(entry.taskId, interactionId, toAnswerText(result, entry.request))
   domainEventBus.emit(DOMAIN_EVENTS.USER_INTERACTION_RESOLVED, {
     taskId: entry.taskId,

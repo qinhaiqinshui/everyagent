@@ -4,7 +4,7 @@
     <modelVersion>4.0.0</modelVersion>
 
     <parent>
-        <groupId>dev.everyagent</groupId>
+        <groupId>io.github.qinhaiqinshui</groupId>
         <artifactId>every-agent-plugin-parent</artifactId>
         <version>${revision}</version>
         <relativePath>../../every-agent-plugin-parent/pom.xml</relativePath>
@@ -20,24 +20,24 @@
 
     <dependencies>
         <dependency>
-            <groupId>dev.everyagent</groupId>
+            <groupId>io.github.qinhaiqinshui</groupId>
             <artifactId>every-agent-plugin-api</artifactId>
         </dependency>
         <dependency>
-            <groupId>dev.everyagent</groupId>
+            <groupId>io.github.qinhaiqinshui</groupId>
             <artifactId>every-agent-contract</artifactId>
         </dependency>
 
         <!-- 集成测试宿主:worker 主 jar(普通 jar,classifier=exec 已把可执行 jar 分离) -->
         <dependency>
-            <groupId>dev.everyagent</groupId>
+            <groupId>io.github.qinhaiqinshui</groupId>
             <artifactId>every-agent-worker</artifactId>
             <version>${revision}</version>
             <scope>test</scope>
         </dependency>
         <!-- worker 测试夹具(FakeHub / FakeChatModel / WsTestClient / TestCleanup) -->
         <dependency>
-            <groupId>dev.everyagent</groupId>
+            <groupId>io.github.qinhaiqinshui</groupId>
             <artifactId>every-agent-worker</artifactId>
             <version>${revision}</version>
             <type>test-jar</type>

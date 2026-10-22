@@ -153,7 +153,7 @@ export function formatPlan({
   overwritten = [],
 }) {
   const title = displayTarget.replace(/\/+$/, '').split('/').pop() || vars.pluginId
-  // 入口行按 kind 分支（known-issues #22）：web 形态的工程没有 Java 入口类，展示前端入口（webMain）
+  // 入口行按 kind 分支：web 形态的工程没有 Java 入口类，展示前端入口（webMain）
   // 代替；webMain 的值与模板 web/plugin.json.tpl、overlay/full/plugin.json.tpl 的约定一致（web/index.ts）。
   const entryLines =
     spec.kind === 'web'

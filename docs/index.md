@@ -27,7 +27,7 @@ has_children: false
 | 写前端界面（侧边栏 / 编辑器 / 工具调用视图 / 事件） | [前端插件总览与加载链路](plugin-guide/web/overview-and-loading.md) → [前端 ctx API](plugin-guide/web/context-api.md) → [前端 UI 扩展点](plugin-guide/web/ui-extensions.md) → [前端事件](plugin-guide/web/events.md) |
 | 打包分发安装自己的插件 | [构建与运行](plugin-guide/guides/build-and-run.md) → [打包与安装](plugin-guide/guides/packaging-and-install.md) → [调试与测试](plugin-guide/guides/debugging-and-testing.md) → [故障排查](plugin-guide/guides/troubleshooting.md) |
 
-想对照现成实现，看[内置插件范例索引](plugin-guide/reference/builtin-plugins.md)；想查一个方法/字段的名字，看 [API 索引](plugin-guide/reference/api-index.md)；现象对不上文档，先查[已知问题与开放项](plugin-guide/reference/known-issues.md)。
+想对照现成实现，看[内置插件范例索引](plugin-guide/reference/builtin-plugins.md)；想查一个方法/字段的名字，看 [API 索引](plugin-guide/reference/api-index.md)。
 
 ## 3. 维护须知（改本站前必读）
 

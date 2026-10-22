@@ -586,7 +586,7 @@ public final class RunnerClient {
     }
 
     /** 已连接的 runner 通道（AutoCloseable：进程句柄 + 双管道）。 */
-    public static final class Channel implements AutoCloseable {
+    public static final class Channel implements RunnerChannel {
         private final RunnerPipe in; // 父写 runner 读
         private final RunnerPipe out; // runner 写父读
         private final WinBase.PROCESS_INFORMATION pi;
@@ -659,6 +659,29 @@ public final class RunnerClient {
         /** TerminateProcess 收尸（握手失败/会话中止兜底）。 */
         public void terminateRunner() {
             Kernel32Ex.INSTANCE.TerminateProcess(pi.hProcess, 1);
+        }
+
+        /**
+         * runner 进程是否仍存活：WaitForSingleObject(句柄, 0)——WAIT_TIMEOUT(258)=仍在
+         * 运行；WAIT_OBJECT_0（已发信=退出）或探测失败一律视为不存活（fail-closed）。
+         */
+        @Override
+        public boolean runnerAlive() {
+            int r = Kernel32.INSTANCE.WaitForSingleObject(pi.hProcess, 0);
+            return r == 0x00000102; // WAIT_TIMEOUT
+        }
+
+        /**
+         * {@code -out} 管道内已缓冲字节（PeekNamedPipe）；管道断开返回 -1。
+         * 池化复用前必须为 0（残留帧=上一条命令的陈旧输出，复用会错位握手）。
+         */
+        @Override
+        public int bufferedOutputBytes() {
+            IntByReference avail = new IntByReference();
+            if (!Kernel32.INSTANCE.PeekNamedPipe(out.handle(), null, 0, null, avail, null)) {
+                return -1;
+            }
+            return avail.getValue();
         }
 
         /** 清理：进程句柄 + 双管道（管道关闭即 runner 退出信号）。 */

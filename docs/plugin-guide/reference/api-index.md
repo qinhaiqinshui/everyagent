@@ -12,7 +12,7 @@ has_children: false
 阅读约定：
 
 - 详解列全部为站内相对链接（`.md` + 小节锚点）；「§n」指目标文档小节。
-- ⚠️ = 写了不生效 / 全仓零使用的扩展点或字段（集中登记在 [known-issues](known-issues.md)，撰写中）。
+- ⚠️ = 写了不生效 / 全仓零使用的扩展点或字段。
 - 范例列的插件 id 均可在[内置插件范例索引 §2](builtin-plugins.md#2-总表30-个内置插件) 查到逐行解读；「想写 X 就抄 Y」反查见[同篇 §3](builtin-plugins.md#3-想写-x-就抄-y反查表)。
 
 ## 1. 后端 API 索引
@@ -71,7 +71,7 @@ has_children: false
 | 方法 | 一句话 | 消费范例 |
 |---|---|---|
 | `SandboxBackend sandbox()` | 沙箱门面：查后端 id、委托挂载 | sandbox 三家 |
-| `nativeExec()` | 宿主原生进程执行器（argv 直传 + 超时 + 输出上限） | git |
+| `nativeExec()` | 宿主原生进程执行器（argv 直传 + 超时 + 输出上限）。cwd 不得位于插件目录（worker 拒绝） | git |
 | `workspaces()` | 多工作区注册表、jailed 路径解析 | git（每方法首行 `sandboxFor`） |
 | `tokenEstimator()` | token 估算器（内置或插件注册版） | token-estimator |
 | `SlashTokenService slashTokens()` | 任务级 slash token 只读查询：任务级开关的真相源读取口（`tokensOf(taskId)` / `hasKind(taskId, kind)`，见 `SlashTokenService`） | ai-review、unattended |
@@ -168,16 +168,17 @@ has_children: false
 | `ui.search_types` | `registerSearchType(def)` | [UI §15](../web/ui-extensions.md#15-uisearch_types--搜索类型注册) | ⚠️ 无内置范例（内置三类型不走此扩展点） |
 | `ui.editor_context_menu_actions` | `registerEditorContextMenuAction(def)` | [UI §16](../web/ui-extensions.md#16-uieditor_context_menu_actions--编辑器内容区右键菜单) | selection-reference（编辑器选区右键「引用到AI对话框」）；核心内置「复制」项亦经此注册（`core.copy-selection`，order=10 恒居首） |
 | `ui.composer_chip_actions` | `registerComposerChipAction(def)` | [UI §17](../web/ui-extensions.md#17-uicomposer_chip_actions--胶囊激活行为) | selection-reference；核心 `system.workspace_file` 亦经此注册 |
-| `ui.settings_sections` | `registerSettingsSection(def)` | [UI §18](../web/ui-extensions.md#18-uisettings_sections--设置页设置段) | ⚠️ 无内置范例（novel-reader 起于此） |
+| `ui.settings_sections` | `registerSettingsSection(def)` | [UI §18](../web/ui-extensions.md#18-uisettings_sections--设置页设置段) | ⚠️ 无内置范例（novel-reader 起于此）；`def.id` 即目录导航锚点 id，插件段自动纳入设置页目录 |
 | `ui.themes` | `registerTheme(def: ThemeDefinition)` | [UI §19](../web/ui-extensions.md#19-uithemes--全局颜色主题) | ⚠️ 无内置范例（novel-reader；核心深/浅色为主题表内建项，不注册） |
 
-动作方法（不注册、只驱动宿主；桥未注入时静默降级）：详解全部在 [UI §20](../web/ui-extensions.md#20-uiregistry-动作方法6-个)。
+动作方法（不注册、只驱动宿主；桥未注入时静默降级）：详解全部在 [UI §20](../web/ui-extensions.md#20-uiregistry-动作方法7-个)。
 
 | 方法 | 一行签名 | 范例 |
 |---|---|---|
 | `openTab` | `(type: string, data?: Record<string,string>, title?: string) => void` | git |
 | `openFileTab` | `(workspaceRoot: string, filePath: string, opts?: { mode?: 'readwrite' \| 'readonly'; lineNumber?: number }) => void` | update-file-view |
 | `openDiffTab` | `(input: PluginDiffTabInput) => void` | git |
+| `openSettingsPage` | `(sectionId?: string) => void` | 宿主内置消费（TaskModelControls 模型空态引导直达 `'models'`）；未注册 id 静默忽略 |
 | `appendComposerText` | `(text: string) => void` | task-edit-resend |
 | `setComposerRawContent` | `(raw: string) => void` | task-edit-resend |
 | `appendComposerToken` | `(input: { kind: string; label: string; summary?: string; payload?: Record<string, unknown>; spaced?: boolean }) => void` | selection-reference |
@@ -204,7 +205,7 @@ has_children: false
 | `on` | `on(name: PluginDomainEvent, h: (payload: unknown) => void): Disposable` | [ctx §7](../web/context-api.md#7-ctxevents--领域事件总线) |
 | `emit` | `emit(name: PluginDomainEvent, payload: unknown): void` | 无监听者静默；4 个请求通道可反向驱动宿主（[事件 §3.2](../web/events.md#32-宿主从不-emit但插件可反向驱动的请求通道4-个)） |
 
-宿主 `DOMAIN_EVENTS` 共 **21** 个：**17 个真实会发生**（[事件 §3.1](../web/events.md#31-真实会发生的事件17-个)）、**4 个宿主监听的请求通道**（[事件 §3.2](../web/events.md#32-宿主从不-emit但插件可反向驱动的请求通道4-个)）——known-issues #4 清理后常量表已无零 emit 死事件。类型包具名 8 个（[事件 §2](../web/events.md#2-plugin-api-的具名事件)）**全部存活**：
+宿主 `DOMAIN_EVENTS` 共 **21** 个：**17 个真实会发生**（[事件 §3.1](../web/events.md#31-真实会发生的事件17-个)）、**4 个宿主监听的请求通道**（[事件 §3.2](../web/events.md#32-宿主从不-emit但插件可反向驱动的请求通道4-个)）——死事件清理后常量表已无零 emit 条目。类型包具名 8 个（[事件 §2](../web/events.md#2-plugin-api-的具名事件)）**全部存活**：
 
 | 具名事件 | 生死 | 具名事件 | 生死 |
 |---|---|---|---|
@@ -282,5 +283,5 @@ has_children: false
 ## 下一步读
 
 - 每个扩展点的逐行范例与 order 值占用：[内置插件范例索引](builtin-plugins.md)（order 速查在其 [§4](builtin-plugins.md#4-order-值占用速查)）
-- 死扩展点 / 未接线字段 / API 未发布等现状偏差：[known-issues](known-issues.md)（#1~#5、#8~#17、#19、#21~#23 已修复；#6/#7 已缓解）
+
 - 起步走读：[快速上手](../getting-started.md)（撰写中）

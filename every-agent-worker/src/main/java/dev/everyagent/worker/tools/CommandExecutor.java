@@ -4,6 +4,7 @@ import dev.everyagent.plugin.api.execution.ExecContext;
 import dev.everyagent.plugin.api.shell.ExecResults;
 import dev.everyagent.plugin.api.spi.ExecResult;
 import dev.everyagent.plugin.api.spi.ToolOutcomeLog;
+import dev.everyagent.plugin.api.util.SecretPatterns;
 import dev.everyagent.worker.os.OsSandbox;
 
 import java.nio.file.Path;
@@ -146,7 +147,7 @@ public class CommandExecutor {
         }
         log.info("[exec] task={} backend={} rc={} aborted={} cmd={}", task.subjectId(),
                 sandbox.id(),
-                r.exitCode(), r.aborted(), ExecResults.truncate(command, 200));
+                r.exitCode(), r.aborted(), ExecResults.truncate(SecretPatterns.maskSecrets(command), 200));
         // 结构化结果记账(判定不依赖结果文本):shell 参数即工具名(ShellTool 回调传入 name),
         // 与发射侧按工具名 + 命令原文查账同键。
         if (toolOutcomes != null) {

@@ -56,6 +56,25 @@ class HubIntegrationTest {
         c.send("{\"type\":\"sub\",\"channel\":\"" + channel + "\"}");
     }
 
+    /**
+     * sub + 通路让步:sub 经由该连接异步路由,发布端(pub 走另一条连接)的帧若先于
+     * sub 注册到达 hub,广播会被合法丢弃(hub 无 sub 回执,无法确认生效)。
+     * 跨连接 sub→pub 的测试必须经本助手消除竞态,否则偶发「最后一帧收不到」。
+     */
+    private static void subSettled(WsTestClient c, String channel) {
+        c.send("{\"type\":\"sub\",\"channel\":\"" + channel + "\"}");
+        sleep(200);
+    }
+
+    private static void sleep(long ms) {
+        try {
+            Thread.sleep(ms);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError("interrupted");
+        }
+    }
+
     private void pub(WsTestClient c, String channel, String event, String payloadJson) {
         c.send("{\"type\":\"pub\",\"mid\":\"m-1\",\"channel\":\"" + channel + "\",\"event\":\"" + event
                 + "\",\"ts\":1,\"payload\":" + payloadJson + "}");
@@ -67,8 +86,8 @@ class HubIntegrationTest {
             hello(tab1, "frontend", KEY_A, "fe-1");
             hello(tab2, "frontend", KEY_A, "fe-2");
             String echo = ch("room.echo"); // 前端自建频道(前端间协作)
-            sub(tab1, echo);
-            sub(tab2, echo);
+            subSettled(tab1, echo);
+            subSettled(tab2, echo);
             pub(tab1, echo, "delta", "{\"text\":\"你好\"}");
 
             String got1 = tab1.awaitEvent("delta");
@@ -310,6 +329,32 @@ class HubIntegrationTest {
         }
     }
 
+    /**
+     * pub 限流默认值(hub.limits.pub-per-sec=1000 / pub-burst=2000)不误伤正常流量:
+     * 单连接瞬时连发 150 帧(模拟快模型流式输出叠加回扫脉冲,仍远低于稳态 1000/s)
+     * → 全部送达、零 RATE_LIMITED。安全整改 L-6 恢复限流的回归底线。
+     * (帧量取 150 而非更高:同类共享 JVM 的 WsTestClient/HttpClient 资源有限,过大的帧洪
+     * 会外溢拖慢同类其他方法的 5s await,诱发 flaky。)
+     */
+    @Test
+    void defaultPubLimitsDoNotThrottleNormalTraffic() {
+        try (WsTestClient sender = connect(); WsTestClient listener = connect()) {
+            hello(sender, "frontend", KEY_A, "fe-1");
+            hello(listener, "frontend", KEY_A, "fe-2");
+            String channel = ch("task.t150.stream");
+            subSettled(listener, channel);
+
+            for (int i = 0; i < 150; i++) {
+                pub(sender, channel, "delta", "{\"i\":" + i + "}");
+            }
+            for (int i = 0; i < 150; i++) {
+                String got = listener.awaitEvent("delta");
+                assertTrue(got.contains("\"i\":" + i), "帧应按序全量送达: " + got);
+            }
+            assertNoFrame(sender, "RATE_LIMITED", 500);
+        }
+    }
+
     /** 负向断言:ms 内不应出现含 needle 的帧(排空式,同 differentKeysAreIsolated)。 */
     private static void assertNoFrame(WsTestClient c, String needle, long ms) {
         long deadline = System.currentTimeMillis() + ms;
@@ -323,6 +368,54 @@ class HubIntegrationTest {
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             }
+        }
+    }
+
+    /** hello 并返回 welcome.sessionId(定向投递目标的会话 id,ext.target 用)。 */
+    private String helloCaptureSession(WsTestClient c, String role, String apiKey, String clientId) {
+        c.send("{\"type\":\"hello\",\"ver\":" + Frames.PROTOCOL_VERSION + ",\"role\":\"" + role
+                + "\",\"apiKey\":\"" + apiKey + "\",\"clientId\":\"" + clientId
+                + "\",\"hubKey\":\"" + HUB_KEY_RAW + "\"}");
+        String welcome = c.await(t -> t.contains("\"type\":\"welcome\""), "welcome");
+        String sessionId = dev.everyagent.contract.json.Json.parse(welcome).path("sessionId").asString();
+        assertTrue(sessionId.length() > 0, "welcome 应带 sessionId: " + welcome);
+        return sessionId;
+    }
+
+    /**
+     * M-6 定向投递命名空间校验:msg 帧 ext.target=sessionId 的定向路径同样受
+     * 「频道即鉴权边界」约束 —— 目标连接的 ownerKey 必须等于发布频道前缀 u.&lt;K&gt;. 的 K:
+     * ① 跨命名空间目标被拒(返回 0:目标未收到,也不降级广播给频道订阅者);
+     * ② 同命名空间目标正常送达(定向不经订阅簿,目标无需订阅该频道);
+     * ③ 无 ext.target 的广播行为不受影响。
+     */
+    @Test
+    void targetedDeliveryIsConfinedToChannelNamespace() {
+        try (WsTestClient sender = connect(); WsTestClient sameNs = connect(); WsTestClient crossNs = connect()) {
+            hello(sender, "frontend", KEY_A, "fe-1");
+            String sameNsSession = helloCaptureSession(sameNs, "frontend", KEY_A, "fe-2");
+            String crossNsSession = helloCaptureSession(crossNs, "frontend", KEY_B, "fe-3");
+
+            // ② 同命名空间:ext.target 指向 KEY_A 会话 → 送达(目标未订阅该频道也送达)
+            String stream = ch("task.t9.stream");
+            sender.send("{\"type\":\"pub\",\"channel\":\"" + stream + "\",\"event\":\"delta\","
+                    + "\"payload\":{\"text\":\"same-ns\"},\"ext\":{\"target\":\"" + sameNsSession + "\"}}");
+            String got = sameNs.awaitEvent("delta");
+            assertTrue(got.contains("\"text\":\"same-ns\""), got);
+            assertTrue(got.contains("\"target\":\"" + sameNsSession + "\""), "ext 原样转发: " + got);
+
+            // ① 跨命名空间:ext.target 指向 KEY_B 会话 → 拒绝;目标未收到,频道订阅者/发布者也不收到
+            sender.send("{\"type\":\"pub\",\"channel\":\"" + stream + "\",\"event\":\"delta\","
+                    + "\"payload\":{\"text\":\"cross-ns\"},\"ext\":{\"target\":\"" + crossNsSession + "\"}}");
+            assertNoFrame(crossNs, "cross-ns", 500);
+            assertNoFrame(sameNs, "cross-ns", 500);
+            assertNoFrame(sender, "cross-ns", 500);
+
+            // ③ 无 ext.target:广播不受影响(订阅者照常收到)
+            subSettled(sameNs, ch("room.bcast"));
+            pub(sender, ch("room.bcast"), "delta", "{\"text\":\"bcast-ok\"}");
+            String bcast = sameNs.await(t -> t.contains("\"text\":\"bcast-ok\""), "bcast");
+            assertTrue(bcast.contains("\"channel\":\"" + ch("room.bcast") + "\""), bcast);
         }
     }
 }

@@ -29,6 +29,21 @@ if not defined EVERYAGENT_HOME set EVERYAGENT_HOME=%USERPROFILE%\.everyagent
 rem 确保日志目录存在
 if not exist "%EVERYAGENT_HOME%\logs" mkdir "%EVERYAGENT_HOME%\logs"
 
+rem ------------------------------------------------------------------
+rem  worker 连接凭据:直接复用桌面端生成的 <EVERYAGENT_HOME>\desktop\desktop-worker.yml
+rem  (安全整改:desktop-config.json 中的 hubKey/workerApiKey 已改为 safeStorage 密文
+rem   落盘('safe:' 前缀,Windows DPAPI 绑定当前用户与机器),bat/PowerShell 无法解密,
+rem   不再从配置文件拼装 yml;该文件由桌面端主进程在每次拉起后端前于内存中解密并
+rem   生成/刷新,worker 与 hub 凭据恒一致)。
+rem  文件缺失则报错退出——请先启动一次 Every Agent 桌面端完成首启(生成随机密钥与该文件)。
+rem ------------------------------------------------------------------
+set "WORKER_YML=%EVERYAGENT_HOME%\desktop\desktop-worker.yml"
+if not exist "%WORKER_YML%" (
+    echo [%date% %time%] 未找到 "%WORKER_YML%" ^(桌面端尚未生成凭据文件^)
+    echo [%date% %time%] 请先启动一次 Every Agent 桌面端完成首启密钥生成,再运行本脚本
+    exit /b 1
+)
+
 rem 选择 Java 可执行文件:优先 jlink 精简 JRE 的 javaw.exe,回退 java.exe / 系统 java
 set "JAVA_EXE=%PROGRAM_DIR%jre\bin\javaw.exe"
 if not exist "%JAVA_EXE%" set "JAVA_EXE=%PROGRAM_DIR%jre\bin\java.exe"
@@ -46,7 +61,7 @@ if !errorlevel! equ 0 (
 ) else (
     echo [%date% %time%] 启动 worker...
     cd /d "%EVERYAGENT_HOME%"
-    start "" "%JAVA_EXE%" "-Deveryagent.program-dir=%PROGRAM_DIR%" -jar "%PROGRAM_DIR%backend\worker.jar" 1>> "%EVERYAGENT_HOME%\logs\worker.out.log" 2>&1
+    start "" "%JAVA_EXE%" "-Deveryagent.program-dir=%PROGRAM_DIR%" -jar "%PROGRAM_DIR%backend\worker.jar" "--spring.config.additional-location=file:/%WORKER_YML:\=/%" 1>> "%EVERYAGENT_HOME%\logs\worker.out.log" 2>&1
 )
 
 rem 等待 worker 就绪(健康检查 + hub 连接,最多 120 秒)

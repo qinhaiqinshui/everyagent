@@ -39,6 +39,7 @@ export const DOMAIN_EVENTS = {
   WORKER_DATA_CHANGED: 'worker-data-changed',
   WORKSPACE_TAB_CLOSED: 'workspace-tab-closed',
   WORKSPACE_TAB_ACTIVATED: 'workspace-tab-activated',
+  SETTINGS_SECTION_JUMP_REQUESTED: 'settings-section-jump-requested',
 } as const
 
 export type DomainEventMap = {
@@ -177,6 +178,10 @@ export type DomainEventMap = {
     tabId: string
     /** 被激活的标签类型判别式（'task' / 'file' / 'terminal' / ...）。 */
     tabType: string
+  }
+  [DOMAIN_EVENTS.SETTINGS_SECTION_JUMP_REQUESTED]: {
+    /** 目标设置段锚点 id（data-settings-section-id 属性值）；空串 = 仅打开设置页不定位。 */
+    sectionId: string
   }
 }
 

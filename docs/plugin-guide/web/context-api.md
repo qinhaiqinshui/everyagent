@@ -32,11 +32,11 @@ const ctx: PluginContext = {
 | 成员 | 类型（声明处） | 宿主实现 | 一句话行为 |
 |---|---|---|---|
 | `ctx.pluginId` | `readonly string`（`index.ts:637`） | `pluginLoader.ts:384` | 等于 `plugin.list` 返回的 `id`（即 plugin.json 的 `id`） |
-| `ctx.extensionPath` | `readonly string`（`index.ts:638`） | `pluginLoader.ts`（`webEntryJsPath`） | `webMain` 换算出的产物路径（约定 `"web/index.ts"` → `'web/index.js'`；known-issues #5 修复前恒为字面量），不是 URL、不是磁盘路径 |
+| `ctx.extensionPath` | `readonly string`（`index.ts:638`） | `pluginLoader.ts`（`webEntryJsPath`） | `webMain` 换算出的产物路径（约定 `"web/index.ts"` → `'web/index.js'`；早期该值不被消费、恒为字面量），不是 URL、不是磁盘路径 |
 | `ctx.sdk` | `PluginSdk`（`index.ts:130-146`） | `pluginLoader.ts:205-229` | RPC 通道 + 工作区注册表快照 + 当前 worker id |
 | `ctx.storage` | `PluginStorage`（`index.ts:200-204`） | `pluginLoader.ts:142-165` | localStorage，键前缀 `plugin:<pluginId>:`，值 JSON 序列化 |
 | `ctx.commands` | `CommandRegistry`（`index.ts:206-209`） | `pluginLoader.ts:167-189` | **本插件私有**的命令表（普通 `Map`），不跨插件、无宿主内置命令 |
-| `ctx.ui` | `UiRegistry`（`index.ts:808-853`） | `every-agent-web/src/plugin/PluginDispatcher.ts:218-401` | 17 个 `register*` + 6 个动作方法，详见 [UI 扩展点](ui-extensions.md) |
+| `ctx.ui` | `UiRegistry`（`index.ts:808-853`） | `every-agent-web/src/plugin/PluginDispatcher.ts:218-401` | 17 个 `register*` + 7 个动作方法，详见 [UI 扩展点](ui-extensions.md) |
 | `ctx.events` | `PluginEvents`（`index.ts:162-167`） | `pluginLoader.ts:232-249` | 最薄委托宿主 `domainEventBus`（进程内事件总线） |
 | `ctx.fs` | `PluginFs`（`index.ts:170-175`） | `pluginLoader.ts:251-265` | 委托宿主 `workspaceGateway` → worker `fs.list` / `fs.delete` RPC |
 
@@ -54,7 +54,7 @@ import type { PluginContext, PluginModule } from '@everyagent/plugin-api'
 | 字段 | 赋值处 | 实际值 |
 |---|---|---|
 | `pluginId` | `pluginLoader.ts:384`（`pluginId: plugin.id`） | `plugin.list` RPC 返回的 `id`；它与目录名、`.eap` 顶层目录、localStorage 前缀共用同一字符串（三重身份详见 [plugin.json 字段参考](../plugin-manifest.md) §4） |
-| `extensionPath` | `pluginLoader.ts`（`webEntryJsPath`） | `webMain` 换算出的产物路径（与 `plugin.webSource` 请求的 path 一致；约定即 `'web/index.js'`，known-issues #5 修复前硬编码） |
+| `extensionPath` | `pluginLoader.ts`（`webEntryJsPath`） | `webMain` 换算出的产物路径（与 `plugin.webSource` 请求的 path 一致；约定即 `'web/index.js'`，早期为硬编码） |
 
 注意 `extensionPath` **不是**插件源码路径 `web/index.ts`（那是 `webMain` 的约定值），也不是 blob URL。别拿它做任何字符串拼接。
 
@@ -265,11 +265,11 @@ await ctx.fs.delete(workspaceRoot, 'docs/draft.md')
 
 ## 8. `ctx.ui` —— 一笔带过
 
-`UiRegistry` 有 17 个 `register*`（sidebar 项、工作区标签类型、工具调用视图、文件编辑器、编辑器右键菜单、胶囊激活、设置页设置段、全局颜色主题……）、6 个动作方法（`openTab`/`openFileTab`/`openDiffTab`/`appendComposerText`/`appendComposerToken`/`setComposerRawContent`）与 1 个查询方法（`getActiveTab()`——同步读宿主壳层维护的激活标签镜像，返回 `{id, tabType}` 或 null，变更通知配 `workspace-tab-activated`/`workspace-tab-closed` 事件），声明在 `index.ts:808-853`，宿主实现是单例 `pluginDispatcher`（ctx 里 `ui: pluginDispatcher as unknown as ...` 强转接入，`pluginLoader.ts:511`）。每个 `register*` 返回的 Disposable 都是**真清理**：`ListExtensionRegistry.register` 的 dispose 从数组 splice 并通知订阅者重渲染（`every-agent-web/src/plugin/ExtensionRegistry.ts:45-56`）。逐扩展点字段表与代码范例见 [UI 扩展点](ui-extensions.md)。
+`UiRegistry` 有 17 个 `register*`（sidebar 项、工作区标签类型、工具调用视图、文件编辑器、编辑器右键菜单、胶囊激活、设置页设置段、全局颜色主题……）、7 个动作方法（`openTab`/`openFileTab`/`openDiffTab`/`openSettingsPage`/`appendComposerText`/`appendComposerToken`/`setComposerRawContent`）与 1 个查询方法（`getActiveTab()`——同步读宿主壳层维护的激活标签镜像，返回 `{id, tabType}` 或 null，变更通知配 `workspace-tab-activated`/`workspace-tab-closed` 事件），声明在 `index.ts:808-853`，宿主实现是单例 `pluginDispatcher`（ctx 里 `ui: pluginDispatcher as unknown as ...` 强转接入，`pluginLoader.ts:511`）。每个 `register*` 返回的 Disposable 都是**真清理**：`ListExtensionRegistry.register` 的 dispose 从数组 splice 并通知订阅者重渲染（`every-agent-web/src/plugin/ExtensionRegistry.ts:45-56`）。逐扩展点字段表与代码范例见 [UI 扩展点](ui-extensions.md)。
 
 ## 9. 寿命与清理
 
-**Disposable 语义是真的**：`events.on`（unsubscribe）、`ui.register*`（splice + notify）、`commands.registerCommand`（Map.delete）三种 Disposable 调 `dispose()` 都会立即生效（证据见各节）。宿主侧的代管与停用钩子有三条事实（known-issues #8 修复后口径）：
+**Disposable 语义是真的**：`events.on`（unsubscribe）、`ui.register*`（splice + notify）、`commands.registerCommand`（Map.delete）三种 Disposable 调 `dispose()` 都会立即生效（证据见各节）。宿主侧的代管与停用钩子有三条事实（前端卸载钩子上线后的口径）：
 
 1. **宿主跟踪你的 Disposable**：激活时 `ctx.ui` / `ctx.commands` / `ctx.events` 都包了一层收集代理（`pluginLoader.ts` 的 `trackDisposables`），注册方法返回的 Disposable 全部记入该插件的 `disposables` 数组。你自己持有的 Disposable 依然有效——各注册点的 dispose 幂等，宿主随后的统一 dispose 无害。
 2. **`deactivate` 在页面卸载时被调用**：`window` 的 `pagehide`（刷新/关闭/跳转，含插件面板「重新加载」按钮触发的页面刷新——涉及后端插件变更时该按钮先经 `worker.restart` 重启 worker，终点仍是 `location.reload()`）时，宿主对全部已激活插件先调 `module.deactivate?()`，再逆序 dispose 收集的全部注册项、移除注入的插件 CSS（`pluginLoader.ts` 的 `unloadPlugin` / `unloadAllPlugins`）。这是与后端 worker 优雅关闭（`@PreDestroy` → `deactivate`，[后端总览](../backend/overview.md) §3.2）对齐的**尽力而为**钩子：同步清理一定执行，异步 `deactivate`（`await` 之后的代码）不保证在页面卸载前跑完。**运行期**禁用插件不会触发热卸载——worker 侧 Java 贡献要到下一次启动才摘除，前端单独摘除会造成两侧不同步，生效边界统一维持「重启 worker + 刷新页面」。

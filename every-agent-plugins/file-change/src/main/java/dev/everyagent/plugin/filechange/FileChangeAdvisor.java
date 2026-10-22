@@ -20,10 +20,10 @@ import reactor.core.publisher.Flux;
  * <p>位置:order = {@link Ordered#HIGHEST_PRECEDENCE} + 301,位于工具调用 advisor 内层。
  * 通过 {@link #adviseStream} 的 {@code doOnNext} 直接看到模型流。
  *
- * <p>职责只剩<b>收口侧</b>(写侧记账已迁 per-call 工具执行拦截链上行节点
- * {@link FileChangeRecordInterceptor},架构 §7.15.2——update_file/create_file 调用完成即按
- * callId+成败一阶段记账,旧「模型流暂存 pendingByCallId → 下一轮请求侧配对 ToolResponseMessage
- * 确认」两阶段已删):
+ * <p>职责只剩<b>收口侧</b>(写侧记账已迁文件工具写锁内的 {@link FileChangeRecorder}
+ * 监听器回调,架构 §7.15.2——update_file/create_file 写盘成功即携带写前/写后全文一阶段
+ * 记账,旧「模型流暂存 pendingByCallId → 下一轮请求侧配对 ToolResponseMessage 确认」
+ * 两阶段与更早的「per-call 链解析入参当全文」均已删):
  * <ul>
  *   <li><b>工具轮识别</b>:模型流出现 toolCalls 即记 {@code turnHasToolCalls}——工具轮框架
  *       必继续递归,收口延后到之后的无工具轮(run 完成)。</li>
@@ -76,7 +76,7 @@ public class FileChangeAdvisor implements StreamAdvisor {
         taskId = exec == null ? null : exec.subjectId();
         mainAgent = resolveMainAgent();
         // 任务级共享 collector:主 agent 与子 agent 收口定位到同一实例
-        // (记账在链上行 FileChangeRecordInterceptor,记入的也是这同一实例)
+        // (记账在文件工具写锁内回调 FileChangeRecorder,记入的也是这同一实例)
         collector = taskId == null ? null : provider.activeCollector(taskId);
         turnHasToolCalls = false;
         return streamAdvisorChain.nextStream(chatClientRequest)
@@ -84,7 +84,7 @@ public class FileChangeAdvisor implements StreamAdvisor {
                 .doOnComplete(this::finalizeIfLastTurn);
     }
 
-    /** 模型流侧:只识别工具轮(收口延后);记账在链上行 FileChangeRecordInterceptor。 */
+    /** 模型流侧:只识别工具轮(收口延后);记账在文件工具写锁内回调 FileChangeRecorder。 */
     private void trackToolCalls(ChatClientResponse chunk) {
         ChatResponse cr = chunk.chatResponse();
         if (cr == null || cr.getResult() == null) {

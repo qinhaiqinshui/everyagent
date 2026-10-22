@@ -7,7 +7,7 @@ has_children: false
 
 # 前端 UI 扩展点
 
-**一句话定位**：`ctx.ui`（`UiRegistry`）是前端插件往宿主 UI 里「贡献界面」的唯一通道——17 个 `register*` 扩展点 + 6 个动作方法。本文逐扩展点给出 Definition 字段表（抄自纯类型包 `every-agent-plugin-api/js/index.ts`）、注册代码、宿主消费链与坑；每条断言附宿主源码行号。`ctx.ui` 的宿主实现是单例 `pluginDispatcher`（接入方式见[前端 ctx API](context-api.md) §8）。
+**一句话定位**：`ctx.ui`（`UiRegistry`）是前端插件往宿主 UI 里「贡献界面」的唯一通道——17 个 `register*` 扩展点 + 7 个动作方法。本文逐扩展点给出 Definition 字段表（抄自纯类型包 `every-agent-plugin-api/js/index.ts`）、注册代码、宿主消费链与坑；每条断言附宿主源码行号。`ctx.ui` 的宿主实现是单例 `pluginDispatcher`（接入方式见[前端 ctx API](context-api.md) §8）。
 
 ## 0. 读前须知：所有扩展点共用的四条机制
 
@@ -79,7 +79,7 @@ export default plugin
 ### 2.3 宿主消费链与坑
 
 - **消费点 4 处**：活动栏图标条目 `buildSidebarActivityItems`（`Layout.tsx:1069-1086`）、面板槽位数组 `sidebarPanels`（`Layout.tsx:899-903`）、面板互斥高亮 `activeActivityItemIds`（`Layout.tsx:853-868`）、面板 id 合法性兜底（`Layout.tsx:276-284`，插件注销后回落到「任务」）。
-- **角标两条通道**：`badgeCount`（数字）与 `Badge`（组件）都经 `buildSidebarActivityItems` 透传、由 `SidebarActivityBar` 在图标内渲染（Badge 历史上是死字段，known-issues #2 已修复接线）。
+- **角标两条通道**：`badgeCount`（数字）与 `Badge`（组件）都经 `buildSidebarActivityItems` 透传、由 `SidebarActivityBar` 在图标内渲染（Badge 历史上是死字段，已修复接线）。
 - **坑**：① `order` 缺省 100 会排在所有内置项之后；② 内置范例：git（`every-agent-plugins/git/web/index.ts:28-37`，order=5 + GitChangeBadge）、plugin-manager（`every-agent-plugins/plugin-manager/web/index.ts:17-25`，order=9）。
 
 ## 3. 侧边栏 `order` 坐标系（专节）
@@ -328,7 +328,7 @@ ctx.ui.registerOutputBlock('my-report', (content, { taskId }) =>
 
 消费链：同样**不在 `dispatch()` switch 内**，旁路写入 `outputBlockRegistry`（`PluginDispatcher.ts:274-284`）；消息渲染时 `RichMessageContent` 把内容按**成对** `<tag>…</tag>` 切段（`RichMessageContent.tsx:30-58`，只识别字母开头、成对闭合的标签，不成对当普通文本），命中已注册 tag 交给 handler，未命中降级为通用代码块（`:83-90`）。
 
-- **坑**：① **重复注册同 tag 直接抛错**（`outputBlockRegistry.ts`），会炸掉整个 `activate()`——与 trace 的覆盖语义相反；② dispose 现已真清理（`outputBlockRegistry.unregister`，known-issues #3 修复前曾只清无人读的旁路 Map，注销后渲染照旧）；③ tag 大小写不敏感（两端都 toLowerCase）。
+- **坑**：① **重复注册同 tag 直接抛错**（`outputBlockRegistry.ts`），会炸掉整个 `activate()`——与 trace 的覆盖语义相反；② dispose 现已真清理（`outputBlockRegistry.unregister`；早期曾只清无人读的旁路 Map，注销后渲染照旧）；③ tag 大小写不敏感（两端都 toLowerCase）。
 - **内置范例**：**无**（`every-agent-plugins` 全目录 rg `registerOutputBlock` 零命中；注册表注释自证「保持空，未注册标签走纯文本降级」，`outputBlockRegistry.ts:1-5`）。
 
 ## 12. `ui.file_content_editors` —— 文件内容编辑器
@@ -381,7 +381,7 @@ ctx.ui.registerFileContentEditor(descriptor)
 - 注册与读取 API：`registerFileExplorerAction` / `listRegisteredFileExplorerActions`（`PluginDispatcher.ts`），扩展点名 `ui.file_explorer_actions`。
 - **消费点**：文件树右键/长按菜单构建处 `OpenFilesSidebarPanel.tsx` 的 `getFileActionItems`——先收集内置项（打开/新建/上传/属性/重命名/移动/搜索/下载/终端/系统文件管理器），再把插件注册项按 `isVisible(ctx)` 过滤后**追加到内置菜单项尾部**（与 `FileExplorerAction` 类型注释的约定一致）；面板订阅 `subscribeExtensionsChanged`，插件注册/注销后菜单即时刷新。
 - **内置范例**：git 的「显示 Git 历史」（`every-agent-plugins/git/web/index.ts:42-53`，invoke 里 `ctx.ui.openTab` 打开 git-history 标签）——右键文件树任意节点即可见。
-- 历史欠账：该扩展点曾长期无宿主消费点（known-issues #1），已接线修复。
+- 历史欠账：该扩展点曾长期无宿主消费点，已接线修复。
 
 ## 14. `ui.round_tail_panels` —— 轮末展示区
 
@@ -637,9 +637,9 @@ export default plugin
 
 | 字段 | 类型 | 必填 | 消费位置（宿主） | 说明 |
 |---|---|---|---|---|
-| `id` | `string` | ✅ | `SettingsPanel.tsx` | 渲染 key；全局唯一 |
-| `title` | `string` | ✅ | `SettingsPanel.tsx` | 段标题（渲染为 `<h3>`，与内置段同款） |
-| `order` | `number?` | — | `SettingsPanel.tsx` | float 升序；缺省 100。内置段恒在前、插件段在此之后按 order 排列 |
+| `id` | `string` | ✅ | `SettingsPanel.tsx` | 渲染 key；同时是目录导航锚点 id 与 `openSettingsPage(sectionId)` 跳转目标（见 §18.3 / §20）；全局唯一 |
+| `title` | `string` | ✅ | `SettingsPanel.tsx` | 段标题（渲染为 `<h3>`，与内置段同款；目录项文本取自它） |
+| `order` | `number?` | — | `SettingsPanel.tsx` | float 升序；缺省 100。内置段（含「关于」）恒在前、插件段在此之后按 order 排列 |
 | `Component` | `ComponentType` | ✅ | `SettingsPanel.tsx` | 段内容组件，无 props（数据靠 `ctx.storage` / `ctx.sdk.rpc` 自持） |
 
 ### 18.2 注册示例
@@ -664,7 +664,8 @@ export default plugin
 
 ### 18.3 宿主消费链与坑
 
-- **消费点**：`SettingsPanel`（`every-agent-web/src/components/system/SettingsPanel.tsx`）用 `useSyncExternalStore(pluginDispatcher.subscribeExtensionsChanged, pluginDispatcher.getExtensionsVersion)` 订阅扩展点版本号，注册/注销后立即重渲染；段列表取 `listRegisteredSettingsSections()`，按 `order ?? 100` 升序（稳定 sort，同值保持注册先后）渲染在内置段之后、「关于」段之前。
+- **消费点**：`SettingsPanel`（`every-agent-web/src/components/system/SettingsPanel.tsx`）用 `useSyncExternalStore(pluginDispatcher.subscribeExtensionsChanged, pluginDispatcher.getExtensionsVersion)` 订阅扩展点版本号，注册/注销后立即重渲染；段列表取 `listRegisteredSettingsSections()`，按 `order ?? 100` 升序（稳定 sort，同值保持注册先后）渲染在**全部内置段（含「关于」段）之后**。
+- **目录导航（自动纳入，插件零成本）**：每个设置段容器由宿主打 `data-settings-section-id` 锚点属性，插件段锚点 id 即 `def.id`；宿主设置页提供**扫描式目录导航**——在滚动容器内 `querySelectorAll('[data-settings-section-id]')` 扫描段落元素、读段内 `<h3>` 文本生成目录项（点击滚动到对应段并处理 header 偏移、用户手动滚动时高亮跟随，rAF 节流），`MutationObserver` 感知段落增删（覆盖插件晚注册场景）。插件段因此**自动出现在目录里**（桌面端左侧 sticky 目录列 / 移动端 `WorkspacePageShell` header 下拉），无需任何额外注册；`def.id` 同时是 `ctx.ui.openSettingsPage(sectionId)`（§20）的跳转目标，建议带插件前缀，避免与内置段 id（`hub-connection` / `workers` / `models` / `skills` / `restart-worker` / `appearance` / `editor-font` / `notifications` / `about`，常量收敛在宿主 `settingsSectionIds.ts`）撞名。
 - **样式约定**：段由宿主包一层与内置段同款的 `<section>`（下边框 + 纵向间距），组件只渲染段内容、不必自带上外边距；视觉值请引用宿主 token（`var(--text-xs)` / `var(--space-*)` / `var(--border)` 等，经 `:root` 继承，无需 import）。
 - **坑**：① 段内容组件拿不到宿主 React context（插件在 blob 模块里），需要的数据用 `ctx.storage`（本地）或 `ctx.sdk.rpc`（后端）自取；② `id` 重复会让 React key 冲突，一个插件一个 id。
 - **内置范例**：**无**（`novel-reader` 起于此扩展点；核心自身的设置段不走此扩展点，直接写在 `SettingsPanel` 内）。
@@ -744,6 +745,8 @@ export default plugin
 
 `--reading-bg` / `--reading-fg` 的消费范围：文件标签页内容区（Markdown 预览的 `.md-root` 正文、CodeMirror 编辑器与行号槽、Markdown 分栏/单栏面板、文件内容容器）。默认值 `var(--bg-secondary)` / `var(--text-primary)`——未覆盖时与不套主题完全一致。因此**只覆盖这两个 token 的主题 = 只换文件阅读区配色，其余 UI（侧栏/标题栏/消息/按钮）全部继承 `type` 基底**（`novel-reader` 即此形态）。
 
+> **坑（padding 露底）**：阅读区链路上凡**自带 padding 的容器**，其背景也必须取 `--reading-bg`——padding 区不受子元素背景覆盖，若容器自己用 `--bg-secondary` 等非阅读 token，会在主题下露出一条基底色边（`FileTabPage` 的 `fileContentStyle` 就曾因 8px 左内边距露白边）。新增此类容器时对照检查。
+
 **阅读区字号刻度（`--reading-font-xs/sm/md/xl/2xl`）**：由 `--editor-font-size` 派生（`calc(var(--editor-font-size) * 系数)`，系数取 `--text-*` 相对基准 14px 的比值），供 Markdown 预览的标题/正文/表格/行内码等排版使用——使「编辑器字号」设置能**整体等比缩放阅读区文字**，而全局 UI 的 `--text-*` 刻度不受影响。默认 14px 时与 `--text-*` 等价（零视觉变化）。
 
 ### 19.5 宿主消费链与坑
@@ -754,7 +757,7 @@ export default plugin
 - **坑**：① 主题 id 建议带插件前缀，避免与内建 / 其它插件撞名；② 白名单外的键静默忽略；③ 主题不含字体 / 字号——字体族与字号是独立的编辑器设置项（`pref` 的 `editor.fontFamily` / `editor.fontSize`，对标 VSCode `editor.fontFamily` / `editor.fontSize`），不受主题影响。
 - **内置范例**：**无**（`novel-reader` 起于此扩展点；核心深色 / 浅色为主题表内建项，不注册）。
 
-## 20. UiRegistry 动作方法（6 个）
+## 20. UiRegistry 动作方法（7 个）
 
 动作方法不注册 UI，而是**驱动宿主**。实现链统一：`pluginDispatcher` 同步委托模块级 holder 桥（`pluginRuntimeBridge.ts`），宿主组件挂载时注入、未注入时静默降级（`pluginRuntimeBridge.ts:1-10` 注释）。
 
@@ -763,6 +766,7 @@ export default plugin
 | `openTab` | `(type: string, data?: Record<string,string>, title?: string) => void` | `PluginDispatcher.ts:377-379` → `Layout.tsx:803-813` 注入（`setShellBridge`）→ `Layout.tsx:573` 实现 | 内置/插件统一的通用标签打开入口：按 `tabTypeKey` 查注册表取创建器（内置型自带 `createTab`，插件型/未注册型走通用兜底）创建标签，`openWorkspaceTab` 入栈；`data` 可选，原样存进 `tab.data`，由 §4 的 `renderTab` 读回（范例 `GitHistoryTabType.tsx:19-22,27-33` 的 `getData`） |
 | `openFileTab` | `(workspaceRoot, filePath, {mode?, lineNumber?}) => void` | `PluginDispatcher.ts:379-381` → `Layout.tsx:819-825` 注入 → `Layout.tsx:480-504` 实现（`openGlobalFileTab`） | 打开顶层文件标签；`mode:'readwrite'|'readonly'` 与 `lineNumber`（打开到指定行）透传。**`lineNumber` 透传链**：`PluginDispatcher.openFileTab`（`PluginDispatcher.ts:379-381`）→ `pluginRuntimeBridge.ShellBridge.openFileTab`（`pluginRuntimeBridge.ts:16`）→ `Layout` 注入的 `setShellBridge.openFileTab`（`Layout.tsx:819-825`）→ `openGlobalFileTab({ mode, lineNumber })`（`Layout.tsx:480-504`）；标签已存在时保留原 `reloadKey`（仅更新行定位字段 `lineNumber`/`lineLocateRequestedAt`，`Layout.tsx:490-500`），不重新读盘、编辑器不卸载重挂 |
 | `openDiffTab` | `(input: PluginDiffTabInput) => void` | `PluginDispatcher.ts:382-384` → `Layout.tsx:825` | 打开 diff 对比标签；`input` 字段见 `js/index.ts:189-209`（`filePath/fileName/changeType/beforeContent/afterContent/workspaceRoot?/title?/binary?/allowRestore?`） |
+| `openSettingsPage` | `(sectionId?: string) => void` | `PluginDispatcher.openSettingsPage` → `ShellBridge.openSettingsPage`（`pluginRuntimeBridge.ts`，`Layout` 挂载注入）→ `settings/settingsNavigation.ts` 服务（pending 意图 + 领域事件 `SETTINGS_SECTION_JUMP_REQUESTED`）→ `SettingsPanel` 订阅 | 打开设置页标签（`page:settings`）并滚动到 `sectionId` 对应设置段（锚点 `data-settings-section-id`，见 §18；省略则仅打开设置页）。设置页标签**常驻挂载、非激活仅 `display:none`**，订阅方须等标签可见后再滚动定位（隐藏期测不到位，重试兜底）；未注册 id **静默忽略不抛错**（不给插件炸 UI 的理由）；宿主内置消费：输入框模型列表为空的空态引导链接（`TaskModelControls`）直达「模型配置」段（`'models'`） |
 | `appendComposerText` | `(text) => void` | `PluginDispatcher.ts:385-387` → `TaskChat.tsx:690-696` 实现、`:711-713` 注入 | 向**当前激活**任务标签的草稿末尾追加纯文本 |
 | `setComposerRawContent` | `(raw) => void` | `PluginDispatcher.ts:398-400` → `TaskChat.tsx:697-703` | 用 rawContent（可含 opaque token 串）**整体替换**草稿（编辑重发回填用） |
 | `appendComposerToken` | `(input: {kind, label, summary?, payload?, spaced?}) => void` | `PluginDispatcher.ts:388-397` → `buildOpaqueTokenText`（`composerToken/composerOpaqueToken.ts:46`）→ `getComposerBridge()?.appendText`（`pluginRuntimeBridge.ts:45`） | 结构化插入一枚胶囊（宿主单点负责 opaque token 编码，插件不碰线格式）；`spaced ?? true` 时补两侧空格（`PluginDispatcher.ts:395-396`）；`kind`/`label` 为空由 `buildOpaqueTokenText` **抛错**（`composerOpaqueToken.ts:52-56`）；未绑定草稿（桥 null）**静默丢弃**；自身不做 kind 业务分支 |
@@ -781,14 +785,16 @@ ctx.ui.appendComposerText('\n\n（追加一段）')
 ctx.ui.openFileTab(workspaceRoot, filePath, { lineNumber: 42 })
 // 结构化插入一枚胶囊（宿主单点编码 opaque token；payload 需展开成对象字面量，见 §17 坑）
 ctx.ui.appendComposerToken({ kind: 'file.selection', label: 'foo.ts:3-5', payload: { ...payload } })
+// 打开设置页并直达某段（sectionId 即段锚点 id，见 §18；输入框模型空态引导直达 'models' 同款）
+ctx.ui.openSettingsPage('models')
 ```
 
 注意两个时序坑：① 页面刚加载、`Layout`/`TaskChat` 尚未挂载时桥为 null，动作**静默丢失**（不抛错）；② 草稿桥只在**激活标签页**持有写权（`TaskChat.tsx:703-713` 注释解释竞态），多任务标签并存时写入的是当前激活的那个。
 
 ## 21. Disposable 与刷新
 
-- **dispose 语义是真的**：`ListExtensionRegistry.register` 返回的 Disposable 从数组 splice 并通知宿主重渲染（`ExtensionRegistry.ts:45-56`）——`ctx.events.on`、`ctx.commands.registerCommand` 同理（见[前端 ctx API](context-api.md) §9）。`registerTraceType` / `registerOutputBlock` 的 dispose 也已补齐侧路注销（`traceTypeRegistry.unregisterTraceType` / `outputBlockRegistry.unregister`，known-issues #3 修复前曾是不清真实消费方的假 Disposable）。
-- **宿主收集并在页面卸载时统一 dispose**：激活时 `ctx.ui` 等注册表都包了收集代理（`pluginLoader.ts` 的 `trackDisposables`），注册返回的 Disposable 全部进该插件的 `disposables`；页面卸载（`pagehide`）时宿主先调 `deactivate` 再逆序 dispose 全部注册项并移除插件 CSS（known-issues #8 修复前 disposables 恒为空数组、`deactivate` 零调用）。运行期没有热卸载——中途注销仍需自己持有 Disposable 调 dispose。
+- **dispose 语义是真的**：`ListExtensionRegistry.register` 返回的 Disposable 从数组 splice 并通知宿主重渲染（`ExtensionRegistry.ts:45-56`）——`ctx.events.on`、`ctx.commands.registerCommand` 同理（见[前端 ctx API](context-api.md) §9）。`registerTraceType` / `registerOutputBlock` 的 dispose 也已补齐侧路注销（`traceTypeRegistry.unregisterTraceType` / `outputBlockRegistry.unregister`；早期曾是不清真实消费方的假 Disposable）。
+- **宿主收集并在页面卸载时统一 dispose**：激活时 `ctx.ui` 等注册表都包了收集代理（`pluginLoader.ts` 的 `trackDisposables`），注册返回的 Disposable 全部进该插件的 `disposables`；页面卸载（`pagehide`）时宿主先调 `deactivate` 再逆序 dispose 全部注册项并移除插件 CSS（早期 disposables 恒为空数组、`deactivate` 零调用）。运行期没有热卸载——中途注销仍需自己持有 Disposable 调 dispose。
 - **刷新即丢**：注册表、订阅、blob 模块全是内存态，页面刷新全部清零并重新走加载链路（[加载链路](overview-and-loading.md)）；跨刷新要保留的状态用 `ctx.storage`（localStorage）。
 - **同一会话内的「更新」= 重新加载页面**：改了插件 web 代码要重跑 `npm run build:plugins` 再刷新（该脚本不在任何流水线内）；后端启停/装卸一律重启 worker（[plugin.json 字段参考](../plugin-manifest.md) §6；扩展面板「重新加载」按钮**仅在有待生效变更时显示**，待生效变更涉及含 `main` 的插件时会弹确认并自动完成重启 + 刷新）。
 

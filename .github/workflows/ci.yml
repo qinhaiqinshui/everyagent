@@ -1,0 +1,79 @@
+# 最小权限 CI 流水线(L-7 整改)
+# 注意:以下 action 引用均为官方 major tag;TODO(安全):上线后 pin 到 commit SHA 并用
+# Dependabot/github-config 自动更新,避免 tag 被劫持的供应链风险(当前离线环境无法核实真实 SHA,不编造)。
+name: CI
+
+on:
+  push:
+    branches: [main] # 仓库默认分支为 main(origin/HEAD 与 gitee/HEAD 均指向 main)
+  pull_request:
+
+# 最小权限:流水线仅需读取仓库内容,禁写
+permissions:
+  contents: read
+
+# 同一分支/PR 新推送取消旧跑,节省额度
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  java:
+    name: Java (Maven, JDK 25)
+    runs-on: ubuntu-latest
+    steps:
+      # TODO: pin 到 commit SHA
+      - uses: actions/checkout@v5
+      # TODO: pin 到 commit SHA
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "25"
+          cache: maven
+      - name: Build & Test
+        # 仓库无 maven wrapper,使用 runner 内置 mvn;
+        # 全量 package(含各模块测试)——若首跑暴露环境性失败再降级 -DskipTests + 单跑核心模块测试
+        run: mvn -B -ntp package
+
+  web:
+    name: Web (every-agent-web)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: every-agent-web
+    steps:
+      # TODO: pin 到 commit SHA
+      - uses: actions/checkout@v5
+      # TODO: pin 到 commit SHA
+      - uses: actions/setup-node@v4
+        with:
+          # package.json 无 engines 字段,取默认 22(LTS)
+          node-version: 22
+          cache: npm
+          cache-dependency-path: every-agent-web/package-lock.json
+      - run: npm ci
+      - run: npm run build # tsc && vite build
+      - run: npm test # vitest run
+
+  desktop:
+    name: Desktop (every-agent-desktop)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: every-agent-desktop
+    steps:
+      # TODO: pin 到 commit SHA
+      - uses: actions/checkout@v5
+      # TODO: pin 到 commit SHA
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: every-agent-desktop/package-lock.json
+      # compile/test 仅用 tsc 与 node 内置 test runner,不需要 Electron 二进制
+      - name: npm ci
+        run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: 1 # 免下 ~100MB 二进制,保持 job 轻量
+      - run: npm run compile # tsc(main + preload)
+      - run: npm test # compile:test + node --test

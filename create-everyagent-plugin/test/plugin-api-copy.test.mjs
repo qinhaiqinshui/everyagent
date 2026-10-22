@@ -7,7 +7,7 @@
  *
  * 这个副本是手工复制的，宿主每加一个 `ctx.ui.*` 方法 / 扩展点接口它就落后一点，而且**不会报错**——
  * standalone 插件在仓库外 `tsc` 时只是「少一个方法」，用户踩坑才发现。此坑已发生两次：
- *   - `known-issues.md` #23（提交 `ca0211e7` 逐字节重拷）；
+ *   - 提交 `ca0211e7` 那次逐字节重拷；
  *   - `openPluginTab` 更名 `openTab` 那次（副本里还留着旧名 `openPluginTab`）。
  * 故本测试钉住「副本 == 单点源」，drift 时 `node --test` 直接失败。
  *
@@ -31,10 +31,12 @@ const repoRoot = resolve(packageRoot, '..')
 /** 宿主单点源（权威）。 */
 const SOURCE = join(repoRoot, 'every-agent-plugin-api', 'js', 'index.ts')
 
-/** 全部 vendor 类型副本（新增 standalone 模板时同步登记在此）。 */
+/** 全部类型镜像副本（新增 standalone 模板时同步登记在此）。除两份 vendor 副本外，
+ *  还包括 npm 发布包的类型入口 every-agent-plugin-api/js/index.d.ts（types 字段指向它）。 */
 const COPIES = [
   join(packageRoot, 'templates', 'overlay', 'web-standalone', 'vendor', '@everyagent', 'plugin-api', 'index.d.ts.raw'),
   join(packageRoot, 'templates', 'overlay', 'full-standalone', 'vendor', '@everyagent', 'plugin-api', 'index.d.ts.raw'),
+  join(repoRoot, 'every-agent-plugin-api', 'js', 'index.d.ts'),
 ]
 
 /**

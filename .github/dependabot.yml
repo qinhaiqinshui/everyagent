@@ -1,0 +1,33 @@
+# 依赖更新与漏洞扫描(L-7 整改):weekly 巡检 Maven / npm / GitHub Actions
+version: 2
+updates:
+  - package-ecosystem: maven
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "chore(deps)"
+      prefix-development: "chore(dev-deps)"
+
+  - package-ecosystem: npm
+    directory: /every-agent-web
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "chore(deps-web)"
+      prefix-development: "chore(dev-deps-web)"
+
+  - package-ecosystem: npm
+    directory: /every-agent-desktop
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "chore(deps-desktop)"
+      prefix-development: "chore(dev-deps-desktop)"
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "chore(ci)"

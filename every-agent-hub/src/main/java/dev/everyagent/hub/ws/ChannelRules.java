@@ -33,4 +33,16 @@ public final class ChannelRules {
     public static String suffix(String channel, String ownerKey) {
         return channel.substring(Channels.ns(ownerKey).length());
     }
+
+    /**
+     * 从频道名解析 ownerKey(前缀 {@code u.<K>.} 中的 K);非该形态(含 null)返回 null。
+     * 定向投递命名空间校验用(审计 M-6):只做前缀结构解析,不校验字符集。
+     */
+    public static String ownerKeyOf(String channel) {
+        if (channel == null || !channel.startsWith("u.")) {
+            return null;
+        }
+        int end = channel.indexOf('.', 2);
+        return end > 2 ? channel.substring(2, end) : null;
+    }
 }

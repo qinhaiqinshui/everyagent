@@ -7,7 +7,6 @@ import dev.everyagent.plugin.sandbox.codex.runner.IpcMessage.Exit;
 import dev.everyagent.plugin.sandbox.codex.runner.IpcMessage.Output;
 import dev.everyagent.plugin.sandbox.codex.runner.IpcMessage.SpawnReady;
 import dev.everyagent.plugin.sandbox.codex.runner.IpcMessage.SpawnRequest;
-import dev.everyagent.plugin.sandbox.codex.session.RunnerClient.Channel;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -33,11 +32,11 @@ import java.util.Set;
  */
 public final class CodexSandboxSession implements AutoCloseable {
 
-    private final Channel channel;
+    private final RunnerChannel channel;
     private final int childPid;
     private volatile boolean closed;
 
-    private CodexSandboxSession(Channel channel, int childPid) {
+    private CodexSandboxSession(RunnerChannel channel, int childPid) {
         this.channel = channel;
         this.childPid = childPid;
     }
@@ -101,29 +100,39 @@ public final class CodexSandboxSession implements AutoCloseable {
      */
     public static CodexSandboxSession open(RunnerClient.RunnerConfig cfg, SessionSpec spec)
             throws IOException {
-        SpawnRequest request = buildSpawnRequest(spec);
-        Channel channel = RunnerClient.start(cfg);
+        RunnerChannel channel = RunnerClient.start(cfg);
         try {
-            channel.send(request);
-            FrameCodec.FramedMessage first = channel.readFrame(RunnerClient.SPAWN_READY_TIMEOUT_MS);
-            if (first == null) {
-                throw new IOException("runner pipe closed before spawn_ready");
-            }
-            if (first.version() != IpcMessage.IPC_PROTOCOL_VERSION) {
-                throw new IOException("runner protocol version mismatch: " + first.version());
-            }
-            switch (first.message()) {
-                case SpawnReady ready -> {
-                    return new CodexSandboxSession(channel, ready.processId());
-                }
-                case IpcMessage.Error e -> throw new RunnerStartupException(e);
-                default -> throw new IOException("expected spawn_ready from runner, got "
-                        + first.message().tag());
-            }
+            return openOnChannel(channel, spec);
         } catch (IOException | RuntimeException e) {
             channel.terminateRunner(); // 收尸（对齐 spawn_runner_transport 失败路径）
             channel.close();
             throw e;
+        }
+    }
+
+    /**
+     * 在既有通道上开命令会话（池化复用路径）：通道来自 {@link RunnerPools}——
+     * 已连接的常驻 runner，本方法只做 spawn_request → spawn_ready 握手，<b>不接管
+     * 通道生命周期</b>（失败/关闭后的通道处置归调用方：归还或作废）。
+     */
+    public static CodexSandboxSession openOnChannel(RunnerChannel channel, SessionSpec spec)
+            throws IOException {
+        SpawnRequest request = buildSpawnRequest(spec);
+        channel.send(request);
+        FrameCodec.FramedMessage first = channel.readFrame(RunnerClient.SPAWN_READY_TIMEOUT_MS);
+        if (first == null) {
+            throw new IOException("runner pipe closed before spawn_ready");
+        }
+        if (first.version() != IpcMessage.IPC_PROTOCOL_VERSION) {
+            throw new IOException("runner protocol version mismatch: " + first.version());
+        }
+        switch (first.message()) {
+            case SpawnReady ready -> {
+                return new CodexSandboxSession(channel, ready.processId());
+            }
+            case IpcMessage.Error e -> throw new RunnerStartupException(e);
+            default -> throw new IOException("expected spawn_ready from runner, got "
+                    + first.message().tag());
         }
     }
 

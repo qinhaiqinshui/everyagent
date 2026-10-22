@@ -23,6 +23,7 @@ import {
   type MsgFrame,
 } from '@every-agent/client'
 import {
+  hydrateConnectionConfig,
   loadConnectionConfig,
   saveConnectionConfig,
   type HubConnectionConfig,
@@ -97,6 +98,13 @@ class HubSession {
   workerClients = new Map<string, HubClient>()
 
   config: HubConnectionConfig | null = loadConnectionConfig()
+
+  /**
+   * 凭据异步初始化(旧明文迁移/密文解密)的共享 Promise;null = 尚未开始。
+   * loadConnectionConfig 是同步的,页面刚载入时 config.hubKey 可能为空串,
+   * 建连/比较配置前必须先 await ensureHydrated()。
+   */
+  private hydratePromise: Promise<void> | null = null
 
   /** 目录连接状态。 */
   state: HubState = 'idle'
@@ -276,27 +284,50 @@ class HubSession {
 
   // ---- 配置 ----
 
+  /** 凭据异步初始化(幂等;并发调用共享同一 Promise):
+   *  旧明文 hubKey 一次性迁移为 hubKeyEnc / 解密 hubKeyEnc 回填运行时明文 hubKey。 */
+  ensureHydrated(): Promise<void> {
+    this.hydratePromise ??= (async () => {
+      try {
+        const hydrated = await hydrateConnectionConfig()
+        if (hydrated) this.config = hydrated
+      } catch (error) {
+        // 迁移/解密失败不阻断:保持 loadConnectionConfig 的结果(旧明文可用则本会话继续)。
+        console.warn('[hub] 连接配置凭据初始化失败(本次会话回退,下次启动再试):', error)
+      }
+    })()
+    return this.hydratePromise
+  }
+
   async applyConfig(config: HubConnectionConfig): Promise<void> {
-    saveConnectionConfig(config)
-    this.config = config
+    // hubKey 与 apiKey 同策略:安全上下文存 'v1:' AES-GCM 密文,非安全上下文
+    // (http,无 crypto.subtle)回退 'b64:' 混淆 —— 凭据均持久化,设置页对非安全
+    // 上下文提示「建议使用 https 或桌面版」。
+    const enc = config.hubKey ? await encryptSecret(config.hubKey) : ''
+    const next: HubConnectionConfig = { ...config, hubKeyEnc: enc }
+    saveConnectionConfig(next)
+    this.config = next
     await this.reconnect()
   }
 
   /** 用当前配置连接;未配置时静默保持 idle。 */
   async ensureConnected(): Promise<void> {
+    await this.ensureHydrated()
     if (!this.configured || this.client || this.state === 'connecting' || this.state === 'reconnecting') {
       return
     }
     await this.reconnect()
   }
 
-  /** 为指定 worker 保存 apiKey(加密)并(重)建其连接。 */
+  /** 为指定 worker 保存 apiKey(加密落盘)并(重)建其连接。
+   *  非安全上下文(http)下回退 b64 混淆,凭据同样持久化(设置页提示建议 https)。 */
   async setWorkerApiKey(workerId: string, apiKey: string): Promise<WorkerConnectResult> {
     if (!this.config) {
       return { ok: false, error: { code: 'NOT_CONFIGURED', detail: 'hub 尚未配置' } }
     }
-    const k = await ownerKey(apiKey.trim())
-    const enc = await encryptSecret(apiKey.trim())
+    const plain = apiKey.trim()
+    const k = await ownerKey(plain)
+    const enc = await encryptSecret(plain)
     const workers = this.config.workers.filter((w) => w.workerId !== workerId)
     workers.push({ workerId, apiKeyEnc: enc, enabled: true, ownerKey: k })
     this.config = { ...this.config, workers }
@@ -537,6 +568,8 @@ class HubSession {
     this.connectingWorkers.set(workerId, true)
     this.workerErrors.delete(workerId)
     this.notifyDirectory()
+    // apiKey 解析:解密落盘密文(安全上下文为 AES-GCM 密文,非安全上下文为 b64
+    // 混淆);密文为空则跳过,解密失败则记错误并放弃建连。
     let apiKey = ''
     try {
       apiKey = await decryptSecret(cred.apiKeyEnc)

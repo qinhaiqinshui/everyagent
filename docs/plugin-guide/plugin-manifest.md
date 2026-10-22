@@ -179,7 +179,7 @@ worker 启动（@PostConstruct，全程只读一次）
 
 命名建议：**小写字母 + 数字 + 连字符**，正则 `^[a-z0-9][a-z0-9-]{1,38}$`（脚手架 `create-everyagent-plugin` 的 id 校验同此）；实测仓内 30 个内置插件的 `id` 全部符合，例：`image-vision`、`task-edit-resend`。不要用中文、空格、下划线、点号；也不要和内置插件撞名（30 个现存 id 见 [内置插件清单](reference/builtin-plugins.md)）。
 
-## 5. `webMain` 消费链与产物路径约定（known-issues #5 修复后）
+## 5. `webMain` 消费链与产物路径约定
 
 **`webMain` 的值已被前端真实消费。** 链路三行：
 
@@ -253,4 +253,4 @@ CSS 同走换算路径：esbuild 把样式抽到与入口同名的 `.css`，宿�
 - `webMain` → `web/index.js` 之后发生的事（bare import 改写、`window.__EA_*`、`activate(ctx)`）：[前端总览与加载链路](web/overview-and-loading.md)
 - 三形态各自的构建命令、cwd 如何决定内置插件是否被加载：[构建与运行](guides/build-and-run.md)
 - `.eap` 包内部布局与 `plugin.install` 的目录规则（§4 身份 ② 的完整版）：[打包与安装](guides/packaging-and-install.md)
-- 现象对不上本文：[故障排查](guides/troubleshooting.md) 与 [已知问题与现状偏差](reference/known-issues.md)
+- 现象对不上本文：[故障排查](guides/troubleshooting.md)

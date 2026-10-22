@@ -48,6 +48,8 @@ class ConfigStoreTest {
         Path external = homeDir.resolve("application-worker.yaml");
         Files.writeString(external, "worker:\n  worker-id: test-worker\n");
         WorkerProperties.Model added = model("b", "pb", "mb");
+        // base-url/full-url 二选一:填 fullUrl 须清空 baseUrl。
+        added.setBaseUrl(null);
         added.setFullUrl("https://api.example.com/chat/completions");
         assertEquals(2, store.addModel(added));
         assertEquals(2, store.list().size());
@@ -59,6 +61,10 @@ class ConfigStoreTest {
         WorkerProperties.Model noUrl = model("c", "pc", "mc");
         noUrl.setBaseUrl(null);
         assertThrows(IllegalArgumentException.class, () -> store.addModel(noUrl));
+        // base-url 与 full-url 同时填 → 拒绝(二选一)。
+        WorkerProperties.Model both = model("c", "pc", "mc");
+        both.setFullUrl("https://api.example.com/v1/chat/completions");
+        assertThrows(IllegalArgumentException.class, () -> store.addModel(both));
         // 文件断言:models 段含 a/b 两条,其他键保留。
         try (InputStream in = Files.newInputStream(external)) {
             Map<String, Object> root = new Yaml().load(in);

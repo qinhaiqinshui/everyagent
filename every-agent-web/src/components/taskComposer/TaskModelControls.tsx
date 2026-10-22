@@ -2,6 +2,8 @@ import React from 'react'
 import { Empty, Select } from 'antd'
 import type { LLMConfigProfile } from '@/types'
 import { useWorkspaceShell } from '@/components/app/WorkspaceShellContext'
+import { SETTINGS_SECTION_ID } from '@/components/system/settingsSectionIds'
+import { requestOpenSettingsPage } from '@/settings/settingsNavigation'
 import './TaskModelControls.css'
 
 /**
@@ -71,7 +73,10 @@ export default function TaskModelControls({
             <a
               onClick={(e) => {
                 e.preventDefault()
+                // 先 openTab 保证设置页标签存在/聚焦，再记录意图直达「模型配置」块
+                //（顺序与 Layout 中 openSettingsPage 桥实现一致，不可倒置）。
                 openTab('page:settings')
+                requestOpenSettingsPage(SETTINGS_SECTION_ID.MODELS)
               }}
             >
               前往「设置」页配置模型

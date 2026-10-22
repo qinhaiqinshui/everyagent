@@ -3,7 +3,10 @@ package dev.everyagent.hub.reg;
 import dev.everyagent.contract.frame.Frames;
 import dev.everyagent.contract.frame.StreamChannelParser;
 import dev.everyagent.contract.json.Json;
+import dev.everyagent.hub.ws.ChannelRules;
 import dev.everyagent.hub.ws.HubConnection;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import java.util.Set;
@@ -24,6 +27,8 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 @Component
 public class ChannelRegistry {
+
+    private static final Logger log = LoggerFactory.getLogger(ChannelRegistry.class);
 
     private final ConcurrentHashMap<String, Set<HubConnection>> byChannel = new ConcurrentHashMap<>();
     private final ConnectionRegistry connections;
@@ -76,6 +81,15 @@ public class ChannelRegistry {
             if (conn == null) {
                 return 0;
             }
+            // 频道即鉴权边界(§3.2)对定向路径同样成立(审计 M-6):目标连接的 ownerKey
+            // 必须等于发布频道前缀 u.<K>. 解析出的 K,否则跨命名空间会话可被定向注入
+            // (findBySession 是全局索引,本身不带命名空间过滤)。不匹配 → 返回 0,且不降级广播。
+            String channelOwner = ChannelRules.ownerKeyOf(channel);
+            if (channelOwner == null || !channelOwner.equals(conn.ownerKey())) {
+                log.warn("targeted delivery denied: namespace mismatch, channelOwner={} targetOwner={} targetSession={}",
+                        briefOwnerKey(channelOwner), briefOwnerKey(conn.ownerKey()), target);
+                return 0;
+            }
             return conn.deliver(wire) ? 1 : 0;
         }
         Set<HubConnection> set = byChannel.get(channel);
@@ -111,6 +125,14 @@ public class ChannelRegistry {
         } catch (RuntimeException e) {
             return null; // wire 非法 JSON:保持原广播行为
         }
+    }
+
+    /** 日志脱敏:ownerKey(64 位 hex 身份标识)只保留前 8 位,空/null 记为 "?"。 */
+    private static String briefOwnerKey(String ownerKey) {
+        if (ownerKey == null || ownerKey.isEmpty()) {
+            return "?";
+        }
+        return ownerKey.substring(0, Math.min(8, ownerKey.length()));
     }
 
     public int subscriberCount(String channel) {

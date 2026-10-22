@@ -1,6 +1,33 @@
-# Java 构建层只 COPY 源码,本地产物/依赖不入镜像
+# 构建上下文为仓库根;hub/worker/web 三个 Dockerfile 均为白名单式 COPY
+# (仅:根 pom.xml、各模块 pom.xml、every-agent-contract/hub/worker/web 目录)。
+# 以下忽略项已逐一与 COPY 源路径静态核对,无交集,不影响构建;
+# 目的:减小 context,并避免敏感文件/本地冗余目录整树发给 Docker daemon。
+
+# 敏感文件/目录(.everyagent 内含 .git-credentials.enc/.git-credential.key,绝不进 context)
+.everyagent
+.env
+.env.*
+deploy.env
+**/*.pem
+**/*.key
+**/desktop-config.json
+
+# 版本库与 IDE/编辑器本地目录
 .git
+.idea
+.vscode
+
+# 构建产物与依赖(本地产物不入镜像,镜像内自行构建)
 **/target
-docs
+dist
+node_modules
+**/__pycache__
 every-agent-web/node_modules
 every-agent-web/dist
+
+# 运行时数据与本地杂项(与镜像无关)
+runtime
+screenshots
+everyagent-web
+every-agent-desktop
+docs

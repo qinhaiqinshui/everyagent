@@ -38,15 +38,19 @@ builtin 形态（在**仓库根**执行；插件不进根 reactor，必须 `-f` 
 
 ```powershell
 mvn -f every-agent-plugins/{{pluginId}}/pom.xml package
-# 首次构建若报找不到 dev.everyagent:every-agent-plugin-parent，先在仓库根执行一次：
+# 首次构建若报找不到 io.github.qinhaiqinshui:every-agent-plugin-parent，先在仓库根执行一次：
 mvn -pl every-agent-plugin-parent,every-agent-plugin-api -am install -DskipTests
 ```
 
-standalone 形态（在**本目录**执行；插件 SDK parent 与 API 均未发布到 Maven Central，需先从宿主仓库装进本地仓库）：
+standalone 形态（在**本目录**执行；插件 SDK 坐标 io.github.qinhaiqinshui:every-agent-plugin-parent / -plugin-api）：
 
 ```powershell
-mvn -pl every-agent-plugin-parent,every-agent-plugin-api -am install -DskipTests   # 宿主 everyagent 仓库根，仅需一次
+# SDK 首发到 Maven Central 之后：直接构建即可
 mvn package                                              # 本插件目录
+
+# SDK 首发 Central 之前的过渡：先克隆宿主仓库（https://github.com/qinhaiqinshui/everyagent），
+# 在其仓库根执行一次（装进本地 Maven 仓库），再回本目录 mvn package：
+# mvn -pl every-agent-plugin-parent,every-agent-plugin-api -am install -DskipTests
 ```
 
 验证：`package` 已包含冒烟测试（`target/surefire-reports/`）；产物为 `target/*.jar`，jar 内须含 `plugin.json`（`jar tf target/*.jar | findstr plugin.json`）。

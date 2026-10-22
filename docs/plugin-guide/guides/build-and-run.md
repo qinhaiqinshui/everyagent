@@ -53,18 +53,18 @@ mvn -f every-agent-plugins\<id>\pom.xml package -q             # 静默模式，
 2. 构建插件必须 `-f every-agent-plugins\<id>\pom.xml` 单独指过去（或 `cd` 进插件目录），这就是 §1.1 矩阵里所有 mvn 命令带 `-f` 的原因；
 3. 构建宿主（如 `mvn -pl every-agent-worker -am package`）同样不带任何插件（`task-edit-resend` 除外）——宿主与插件是两条构建线。
 
-插件 pom 的 parent 是 `dev.everyagent:every-agent-plugin-parent:1.0.1`（**插件 SDK parent**，坐标版本即根 pom 的工程版本，见根 pom 的 `<properties><revision>`；pom 里写的是 `${revision}` 表达式，靠 `relativePath ../../every-agent-plugin-parent/pom.xml` 在磁盘上定位，所以插件能脱离根 reactor 单独构建）。Java 版本 / 编码 / 依赖版本管理 / `plugin.json` 打包 / 测试栈全由它提供，所以插件 pom 只剩「坐标 + 自己额外需要的依赖」——通常整个 `<dependencies>` 只有 `every-agent-plugin-api`（**不写 `<version>`**，由 SDK parent 的 `dependencyManagement` 管），**零 worker 依赖**。⚠️ 插件的自身版本与工程版本**不同号**（脚手架默认给新插件 `0.1.0`），所以依赖里**不要写 `${project.version}`**——它解析的是本插件自己的版本。清单与字段逐项见[plugin.json 字段参考](../plugin-manifest.md)与[后端模型总览](../backend/overview.md)。
+插件 pom 的 parent 是 `io.github.qinhaiqinshui:every-agent-plugin-parent:1.0.1`（**插件 SDK parent**，坐标版本即根 pom 的工程版本，见根 pom 的 `<properties><revision>`；pom 里写的是 `${revision}` 表达式，靠 `relativePath ../../every-agent-plugin-parent/pom.xml` 在磁盘上定位，所以插件能脱离根 reactor 单独构建）。Java 版本 / 编码 / 依赖版本管理 / `plugin.json` 打包 / 测试栈全由它提供，所以插件 pom 只剩「坐标 + 自己额外需要的依赖」——通常整个 `<dependencies>` 只有 `every-agent-plugin-api`（**不写 `<version>`**，由 SDK parent 的 `dependencyManagement` 管），**零 worker 依赖**。⚠️ 插件的自身版本与工程版本**不同号**（脚手架默认给新插件 `0.1.0`），所以依赖里**不要写 `${project.version}`**——它解析的是本插件自己的版本。清单与字段逐项见[plugin.json 字段参考](../plugin-manifest.md)与[后端模型总览](../backend/overview.md)。
 
-### 2.2 首次准备：`install` plugin-parent 与 plugin-api（为什么不能省）
+### 2.2 本地 `install` plugin-parent 与 plugin-api（仅 SDK 开发场景 / 失败缓存清理）
 
-`dev.everyagent:every-agent-plugin-parent`（插件 SDK parent）与 `dev.everyagent:every-agent-plugin-api` **都未发布到 Maven Central**（repo1 上 `dev/everyagent/` 目录 404，实测）。`-f` 单独构建插件时，Maven 解析这两者只会去**本地仓库**找——新 clone 的机器上没有它们，构建直接失败（Maven 标准报错形态：`Could not resolve artifact dev.everyagent:every-agent-plugin-parent ...`；此前尝试过联网解析的机器还可能残留 `.lastUpdated` 失败缓存，执行下面的 `install` 即一并解决）。所以一次性执行：
+`io.github.qinhaiqinshui:every-agent-plugin-parent`（插件 SDK parent）与 `io.github.qinhaiqinshui:every-agent-plugin-api` **已发布 Maven Central**（首发 1.6.0）——标准构建（仓库内外）直接从 Central 解析，无需本节动作。本节 `install` 只剩两种用途：① **SDK 开发场景**——改了仓库内 SDK 源码，想让插件立即用上本地版本（本地构建覆盖本地仓库里的 Central 版本）；② **清理失败缓存**——在 SDK 发布之前尝试过联网解析的机器，本地仓库可能残留 `.lastUpdated` 失败标记导致 Central 上明明有却仍报 `Could not resolve artifact io.github.qinhaiqinshui:every-agent-plugin-parent ...`，此时执行下面的 `install`（或加 `-U` 强制刷新）一并解决：
 
 ```powershell
 # 仓库根，一次性：把插件 SDK parent 与 API（连同它们的 reactor 上游）装进本地 ~/.m2
 mvn -pl every-agent-plugin-parent,every-agent-plugin-api -am install -DskipTests
 ```
 
-`-pl` 指到 `every-agent-plugin-parent` 与 `every-agent-plugin-api`（都在 reactor 内所以 `-pl` 可用），`-am` 顺带构建其上游。正常环境执行这一次即可；`install` 会写 `~/.m2`，在写受限的环境里见下节替代方案。standalone 形态（仓库外工程）同样依赖这一步——SDK parent 与 API jar 只能这样本地供给，没有第二来源。
+`-pl` 指到 `every-agent-plugin-parent` 与 `every-agent-plugin-api`（都在 reactor 内所以 `-pl` 可用），`-am` 顺带构建其上游；`install` 会写 `~/.m2`，在写受限的环境里见下节替代方案。standalone 形态（仓库外工程）不需要本节——Maven Central 即其依赖来源。
 
 ### 2.3 离线 / 受限环境配方（技巧，非必需）
 
@@ -93,11 +93,12 @@ worker 的内置扫描器把「java 插件」判定为 `target/classes/plugin.js
 
 ### 3.1 scripts 全集与分工
 
-`every-agent-web/package.json:6-12` 全部 6 个 script：
+`every-agent-web/package.json` 的 `scripts` 全部 8 个 script：
 
 | script | 命令 | 管什么 | 包含插件构建？ |
 | --- | --- | --- | --- |
-| `dev` | `vite --host 0.0.0.0` | 宿主页面开发服务器 | ✗ |
+| `dev` | `vite` | 宿主页面开发服务器（默认仅监听 localhost，安全默认） | ✗ |
+| `dev:lan` | `vite --host 0.0.0.0` | 同上，显式局域网调试（手机/其它主机访问开发机时用） | ✗ |
 | `build` | `tsc && vite build` | 宿主页面生产构建 | ✗ |
 | `build:plugins` | `node scripts/build-plugins.mjs` | **插件 bundle 的唯一构建入口** | ✓ |
 | `watch:plugins` | `node scripts/build-plugins.mjs --watch` | 常驻监听重编 | ✓ |
@@ -146,7 +147,7 @@ node scripts\build-plugins.mjs --only <你的id> --watch     # 组合：只盯�
 | IDE | 主类 `dev.everyagent.worker.WorkerApplication`（声明于 `every-agent-worker/pom.xml:94`） | 务必核对运行配置的**工作目录**（§4.2） |
 | 桌面版 | Electron 拉起 | cwd = 安装包 resourcesPath，见 §7 |
 
-默认配置连 `ws://localhost:6101/ws`（`every-agent-worker/src/main/resources/application.yml:10-14`，api-key / hub-key 都有开发缺省值），**hub 没起也不影响插件加载**（§4.5 口径②第 1 条）；管理端口 6102 仅绑 127.0.0.1（`application.yml:135-137`）。冷启动到全部插件激活约 10 秒量级（25 内置 + 1 样例实测 10.3s，计划步骤 8）。
+默认配置连 `ws://localhost:6101/ws`（`every-agent-worker/src/main/resources/application.yml:16-21`，url/api-key/hub-key 均可经环境变量 `WORKER_HUB_URL` / `WORKER_API_KEY` / `HUB_KEY` 注入，**打包凭据为空、fail-closed：本地裸跑 worker 前先 export `WORKER_API_KEY` 与 `HUB_KEY`（任意非空本地值即可），否则启动即被凭据校验拒绝**），**hub 没起也不影响插件加载**（§4.5 口径②第 1 条）；管理端口 6102 仅绑 127.0.0.1（`application.yml:165-167`）。冷启动到全部插件激活约 10 秒量级（25 内置 + 1 样例实测 10.3s，计划步骤 8）。
 
 启动后 30 秒自检——三条日志定成败（同时落在 `<home>\logs\worker.log`，日志目录口径见[调试与测试](debugging-and-testing.md) §3.1）：
 
@@ -205,7 +206,7 @@ home 的解析顺序与派生（`WorkerProperties.java:213-216,221-251`）：`wo
 这条口径必须整体记住，两半都不能写错（均为计划步骤 8 真机实测 + 源码取证）：
 
 1. **hub 连接失败可容忍**：hub 连接是异步的——`HubPool` 先就绪再逐条 `start()`（`every-agent-worker/src/main/java/dev/everyagent/worker/hub/HubPool.java:98-101`），连不上按 1s→30s 退避重连（`WorkerProperties.java:46-47`）。**hub 没起、端口不通，worker 照常完成插件扫描与激活**——「插件加载不依赖 hub 连接」仅指这一情形，用来做纯插件验证时可以不起 hub。
-2. **hub 凭据校验失败终止启动，且发生在插件加载之前**：`worker.hubs` 条目 url 有效但 api-key / hub-key 任一为空时，`resolveHubs()` 直接抛 `IllegalStateException`（`WorkerProperties.java:201-204`，文案逐字：`worker.hubs[0](ws://...) 缺 api-key hub-key:两者均必填(hub 强校验 hubKey,apiKey 定义数据归属),缺配置拒绝启动`）。调用点是 `HubPool` 的 `@PostConstruct`（`HubPool.java:55-57`）——Spring 上下文启动中止，**插件扫描 / 激活根本不会开始**（实测：日志止于该异常，无任何 `[plugins]` 行）。
+2. **hub 凭据校验失败终止启动，且发生在插件加载之前**：`worker.hubs` 条目 url 有效但 api-key / hub-key 任一为空时，`resolveHubs()` 直接抛 `IllegalStateException`（`WorkerProperties.java:222-229`，文案：`worker.hubs[0](ws://...) 缺 api-key:两者均必填(hub 强校验 hubKey,apiKey 定义数据归属),缺配置拒绝启动(fail-closed:已移除打包默认密钥)。配置方式(任选):①环境变量 WORKER_API_KEY / HUB_KEY(对应打包默认的 worker.hubs[0] 条目,url 用 WORKER_HUB_URL);②${EVERYAGENT_HOME}/application-worker.yaml 的 worker.hubs 列表(整表替换,优先级更高);③启动参数 --worker.hubs[0].api-key=... / --worker.hubs[0].hub-key=...`）。调用点是 `HubPool` 的 `@PostConstruct`（`HubPool.java:55-57`）——Spring 上下文启动中止，**插件扫描 / 激活根本不会开始**（实测：日志止于该异常，无任何 `[plugins]` 行）。
 
 排查「插件一个都没加载」时，先确认启动没有早夭于凭据校验，再查 §4.2 的 cwd。
 
@@ -270,7 +271,7 @@ java '-Dworker.hubs[0].url=ws://localhost:6111/ws' '-Dserver.port=6112' `
 
 **服务端部署同一命门**：`deploy.py` 部署 **worker** 时也已接上这条链——先 `python scripts/build-plugins.py` 构建全部内置插件，再 `node every-agent-desktop/scripts/copy-plugins.mjs --out=<release>/worker/every-agent-plugins` staging 后随 release 上传（`--skip-plugins` 可关，关掉后服务端 worker 扫不到任何插件）；host 模式的 systemd 单元 `WorkingDirectory=<remote>/current/worker`，正好命中 §4.2 的 cwd 默认解析。**反向的坑**：只跑 `deploy.py webapp` 只会换前端 dist，**对插件行为零影响**——插件 web 产物由 worker 经 `plugin.webSource` 读**自己磁盘上的** `every-agent-plugins/<id>/web/index.js`，改了插件就必须让 worker 侧拿到新产物（重新部署 worker、重跑 `npm run dist` 重装桌面版，或直接替换该文件后刷新页面——worker 每次 RPC 现读，无需重启）。
 
-**未实测声明**：桌面安装包端到端是否随包分发并在用户机器上加载全部内置插件——本文未跑 `dist` 链验证，按「未实测」登记，不断言；设计意图即上述链路，另一个佐证是 `BuiltInPluginScanner.java:60` 的 WARN 文案专门点名了桌面安装包场景。现状登记见[已知问题与现状偏差](../reference/known-issues.md)。
+**未实测声明**：桌面安装包端到端是否随包分发并在用户机器上加载全部内置插件——本文未跑 `dist` 链验证，按「未实测」登记，不断言；设计意图即上述链路，另一个佐证是 `BuiltInPluginScanner.java:60` 的 WARN 文案专门点名了桌面安装包场景。
 
 ## 8. 下一步读
 
@@ -278,4 +279,4 @@ java '-Dworker.hubs[0].url=ws://localhost:6111/ws' '-Dserver.port=6112' `
 | --- | --- |
 | 给插件写单测、看日志定位、五个调试剧本 | [调试与测试](debugging-and-testing.md) |
 | 把产物打成 `.eap` 分发 / 安装 / 卸载 / 启停 | [打包与安装](packaging-and-install.md) |
-| 现状偏差清单（API 未发布、死扩展点、桌面未实测等） | [已知问题与现状偏差](../reference/known-issues.md) |
+

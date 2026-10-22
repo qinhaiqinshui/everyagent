@@ -227,7 +227,7 @@ public class MyFirstPlugin implements EveryAgentPlugin {
 | 方法 | 行号 | 用途 |
 |---|---|---|
 | `sandbox()` | `:29` | 沙箱门面（SandboxBackend）：查 `id()` 判后端、委托挂载 |
-| `nativeExec()` | `:32` | 宿主原生进程执行器（argv 直传 + 超时 + 输出上限；git 等受控操作用） |
+| `nativeExec()` | `:32` | 宿主原生进程执行器（argv 直传 + 超时 + 输出上限；git 等受控操作用）。**cwd 不得位于插件目录**（worker 直接拒绝并返回失败结果——长驻子进程以插件目录为工作目录会锁死目录、令卸载必败），改用工作区或临时目录 |
 | `workspaces()` | `:35` | 工作区管理器（多工作区注册表、jailed 路径解析） |
 | `tokenEstimator()` | `:40` | Token 估算器（内置或插件注册的自定义实现）；`TokenEstimator` SPI 只含 `estimate(text, configId)` 一个方法 |
 | `slashTokens()` | `:43` | 任务级 slash token 只读查询（任务级开关的**真相源**读取口：`tokensOf(taskId)` / `hasKind(taskId, kind)`，见 `SlashTokenService`；AI 审议 / 无人值守 / 禁用网络的开关判定都经此，不再走 `metadata`） |
@@ -314,7 +314,7 @@ worker 的内部类在 parent 链上**技术可见**，但架构红线明令禁�
 
 违反的实际后果：
 
-- **外部插件根本构建不出**：worker 不发布到 Maven Central（`dev.everyagent/` 目录 404），仓库外拿不到 artifact；
+- **外部插件根本构建不出**：worker 不发布到 Maven Central（发布范围只有插件 SDK 链 4 坐标，见 [打包与安装](../guides/packaging-and-install.md)），仓库外拿不到 worker 的 artifact；
 - **内置插件编译能过但被红线拦截**：reactor 内互相可见，纯属 review/规范问题——但写进 pom 的那一刻就与 worker 内部实现焊死，worker 重构即碎；
 - **依赖它取「未公开服务」也属绕道**：正道是 `ctx.services()`（公开面）或 `ctx.getService(Class)`（Javadoc 明示外部插件不应依赖，`WorkerPluginContext.java:105-112`）；
 - 类型确需共享时**先下沉 plugin-api，文档先行**（红线原文收尾句）。若真在运行期 import 了 worker 内部类且该类不在插件可见的 classpath 上，表现为 `NoClassDefFoundError`（未实测构造此场景，机理推断）。

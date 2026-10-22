@@ -49,6 +49,29 @@ child 进程（WRITE_RESTRICTED 令牌 + Job + 句柄白名单 + 私有桌面）
 - 命令跑在**宿主路径**（无路径重写），读写边界由账户基线 DACL + capability SID ACE 表达——这是与 wsl-ubuntu（路径翻译）的根本差异。
 - 与 PermissionGate 的分工：gate 仍是工作区外路径访问的前置授权（fs.\*/命令越界先弹 ask）；授权通过的 externalRoots 进入 mount(RW) → 写根 → preflight 落 allow-write ACE。沙箱内 IO 另有 OS 级兜底：即便 gate 被绕过，沙箱账户对未授权路径默认拒绝写（mic 后端没有的第二道闸）。
 
+### 2.1 Runner 池化与宿主 loopback 代理（2026-12 阶段一/二）
+
+```
+worker JVM（真实用户）
+├── RunnerPools（进程级注册表，键=codexHome+沙箱账户）
+│     ├── 复用：健康探测（进程存活 + -out 管道零残留）→ 同一 runner 串行跑多条命令
+│     ├── 每命令独占 / 池上限(默认2) / 空闲 TTL(默认10min) 到期发 shutdown 关登录会话
+│     └── 凭据失配自愈 → 整池作废重建
+│   ↳ 泄漏面：每命令 1 个 seclogon 登录会话 → 每 worker 有界（池上限×账户数）
+│   ↳ 可观测：LogonSessionMonitor 周期审计会话总数（30min INFO / >64 WARN）
+└── LoopbackHttpProxy（仅 127.0.0.1，首选 3128 + 段 3128..3159 fallback，绝不随机）
+      ├── CONNECT 隧道透传（不做 MITM、不生成证书、不写系统证书库；SOCKS5 裁剪）
+      ├── 明文 HTTP 绝对 URI 转发；阻断 403 + x-proxy-error（可观测）
+      └── 仅 online 身份启动/注入 env（offline 策略不启动；proxy-enabled=false 回退直连）
+          HTTP(S)_PROXY/WS(S)_PROXY/ALL_PROXY/FTP_PROXY(±小写)=http://127.0.0.1:<port>
+          NO_PROXY=localhost,127.0.0.1,::1；NODE_USE_ENV_PROXY=1；EVERY_AGENT_PROXY_ACTIVE=1
+          用户显式值不覆盖；上层注入的旧托管 env 先剥离再重注（防旧端口重放）
+```
+
+- **git HTTPS 开箱即用**：git 工作区命令经 `GIT_CONFIG_KEY_n` 自动追加 `http.sslBackend=openssl`（受限令牌下 Schannel 后端 HTTPS 不可用，OpenSSL 后端正常；与代理是否开启无关）。
+- **Schannel 原生栈（curl.exe/PowerShell/.NET SslStream）HTTPS 在沙箱内不可用**：Windows 拒向受限令牌进程发放 SSPI 缓存凭据（`SEC_E_NO_CREDENTIALS`），根因在凭据获取、先于证书校验，与代理/证书无关（代理/MITM 均救不了，codex 同样不处理）。规避指引见 [docs/https-sspi-restricted-token-findings.md](docs/https-sspi-restricted-token-findings.md) §5/§8。
+- **防火墙协同（有意不接线）**：代理仅服务 online 账户（本就无防火墙/WFP 规则，环回直连畅通），不把代理端口加进 offline 的 `codex.proxy-ports` 放行清单——本项目无 codex 的逐连接归因，加了会让 offline 进程经代理获得全网出站、击穿密闭性。端口确定性由固定管理段保证，无漂移对账面（详见 `ProxyRegistry` 类 Javadoc / design.md §2.9）。
+
 ## 3. 安装（setup 流程）
 
 setup 是**延迟触发**的——`Provider.isAvailable` 仅探测 Windows 平台（不查 marker），`priority=8`。沙箱选择器在所有后端注册完毕后按优先级选出最高者。只有当 codex 真正胜出（即没有 WSL 等更高优先级沙箱可用）时，`Provider.create()` 才被调用，此时才同步执行 setup（会弹 UAC）。
@@ -89,6 +112,16 @@ setup 是**延迟触发**的——`Provider.isAvailable` 仅探测 Windows 平�
 | `codex.proxy-ports` | 空 | ✅ | offline 放行的环回 TCP 代理端口列表（setup 时生成规则） |
 | `codex.allow-local-binding` | `false` | ✅ | true = 移除环回 block 规则 |
 | `codex.java-home` | 当前 JVM | ✅ | runner 启动用 java.exe 根目录 |
+| `codex.runner-pool-enabled` | `true` | ✅ | runner 常驻池化复用（登录会话有界化）；false = 回到每命令新建 runner 旧形态 |
+| `codex.runner-pool-max-size` | `2` | ✅ | 每池（codexHome+账户）runner 数上限；并发瞬时超上限时溢出新建并告警 |
+| `codex.runner-pool-idle-ttl-ms` | `600000` | ✅ | 空闲 runner 存活毫秒数，到期发 shutdown 帧关会话 |
+| `codex.logon-session-audit-interval-ms` | `1800000` | ✅ | 沙箱账户登录会话数审计周期毫秒（<=0 关闭） |
+| `codex.logon-session-audit-threshold` | `64` | ✅ | 会话总数告警阈值，超过打 WARN（提示重启 worker 回收） |
+| `codex.proxy-enabled` | `true` | ✅ | 宿主侧 loopback 代理（仅 online 身份；沙箱命令注入代理 env）；false = 直连 |
+| `codex.proxy-port` | `3128` | ✅ | 代理首选端口；占用时按管理段 3128..3159 顺序探测；0/非法值视为未配置（绝不随机） |
+| `codex.proxy-allow-loopback-targets` | `false` | ✅ | true = 允许经代理访问 127/8、::1 目标（默认拦：localhost 走 NO_PROXY 直连） |
+| `codex.proxy-block-private-targets` | `false` | ✅ | true = 拦私网（RFC1918/IPv6 ULA）目标（默认放行：内网制品服务器是合法场景） |
+| `codex.proxy-deny-hosts` | 空 | ✅ | 代理目标显式禁配清单（逗号/空白分隔，后缀匹配大小写不敏感） |
 | `codex.extra-read-roots` | 空 | ⏳ 未接线 | 追加读根（见 §7 TODO） |
 | `codex.extra-deny-write-paths` | 空 | ⏳ 未接线 | 追加 deny-write 路径 |
 | `codex.setup.auto-uac` | `true` | ⏳ 未接线 | 已移入 activate() 同步执行，此键不再需要 |
@@ -118,6 +151,7 @@ setup 是**延迟触发**的——`Provider.isAvailable` 仅探测 Windows 平�
 
 ## 7. 限制与遗留 TODO
 
+- **沙箱内 Schannel 栈 HTTPS 不可用（平台限制，非断网）**：curl.exe / PowerShell / .NET `SslStream` 报 `SEC_E_NO_CREDENTIALS`——Windows 拒向受限令牌进程发放 SSPI 缓存凭据，先于证书校验、与代理/证书无关（loopback 代理与 MITM 均救不了；codex 对此同样零处理，本插件与 codex 同款决策：不做 MITM）。规避：git 自动 openssl 注入、Java/Node/Python 自带 TLS 栈可用。详见 [docs/https-sspi-restricted-token-findings.md](docs/https-sspi-restricted-token-findings.md)。
 - **PrivateDesktop**：`ChildProcess` 已支持 lpDesktop，会话层尚未接线（`privateDesktopName=null`；受限令牌不设桌面时 PowerShell 会 `STATUS_DLL_INIT_FAILED`——cmd 首期不受影响）。
 - **ConPTY**：暂缓（pipe + stdio 桥；AI 命令非交互、stdin 无输入可用且不可交互——**实现为「关闭的 stdin 管道」而非 NUL**：NUL 虽是字符设备能读到立即 EOF，但会让 Windows CRT `_isatty()` 误判为终端、反破坏「不可交互」，见 §7.10；无 TTY 需求）。
 - **windows-admin 端到端**：setup 幂等/越界拦截/Offline 断网/卸载的端到端冒烟标记 `@Tag("windows-admin")`，需管理员 Windows 手动回归（对齐 codex `sandbox_smoketests.py` 断言面）。
@@ -148,9 +182,9 @@ dev.everyagent.plugin.sandbox.codex
 ├── CodexSandboxOptions/Manager   # 插件配置快照 / 挂载根登记簿（无复杂状态）
 ├── CodexSandboxProvider          # id=codex；isAvailable 只探测（绝不自动 UAC）；priority 8/0
 ├── CodexSandboxBackend           # mount=恒等映射 + 根登记；onWorkspaceRemoved=no-op
-├── CodexCommandExecutor          # readiness→preflight→SpawnRequest→会话→聚合/格式化
+├── CodexCommandExecutor          # readiness→preflight→SpawnRequest→池化会话→聚合/格式化；online 注入代理 env + git openssl
 ├── CodexBashToolProvider         # cmd 工具（appliesTo=codex 后端）
 ├── CodexSandboxProvider/Backend    # 后端 id=codex
-├── accounts/ acl/ setup/ fw/ session/ runner/ win/   # 域代码（步骤 1-6 交付）
+├── accounts/ acl/ setup/ fw/ session/ runner/ proxy/ win/   # 域代码（proxy=宿主 loopback 代理，session 含 RunnerPools）
 └── docs/ design.md codex-analysis.md parts/
 ```

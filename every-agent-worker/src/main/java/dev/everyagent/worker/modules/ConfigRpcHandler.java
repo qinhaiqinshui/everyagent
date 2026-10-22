@@ -133,7 +133,7 @@ public class ConfigRpcHandler {
     /**
      * config.model.add:新增模型配置(设置页「模型配置」表格)。
      * 参数:{configId, provider, baseUrl?, fullUrl?, model, apiKey?, params?, isDefault?}。
-     * 校验 configId 非空且不重复、model 非空、baseUrl/fullUrl 至少其一;
+     * 校验 configId 非空且不重复、model 非空、baseUrl/fullUrl 二选一(都填或都不填拒绝);
      * 成功后落盘 application-worker.yaml 并热重建,广播 config.changed{keys:["models"]}。
      * 仅影响后续新建任务的模型解析;运行中任务使用创建时冻结的快照,不受影响。
      */

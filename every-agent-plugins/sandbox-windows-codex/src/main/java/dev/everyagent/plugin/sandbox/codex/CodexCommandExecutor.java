@@ -10,6 +10,8 @@ import dev.everyagent.plugin.sandbox.codex.accounts.SandboxSecrets;
 import dev.everyagent.plugin.sandbox.codex.acl.ProvisioningAcl;
 import dev.everyagent.plugin.sandbox.codex.acl.ProvisioningRequest;
 import dev.everyagent.plugin.sandbox.codex.acl.RootPolicy;
+import dev.everyagent.plugin.sandbox.codex.proxy.ProxyEnv;
+import dev.everyagent.plugin.sandbox.codex.proxy.ProxyRegistry;
 import dev.everyagent.plugin.sandbox.codex.runner.FrameCodec;
 import dev.everyagent.plugin.sandbox.codex.runner.IpcMessage;
 import dev.everyagent.plugin.sandbox.codex.runner.IpcMessage.Exit;
@@ -17,6 +19,7 @@ import dev.everyagent.plugin.sandbox.codex.runner.IpcMessage.Output;
 import dev.everyagent.plugin.sandbox.codex.session.CodexSandboxSession;
 import dev.everyagent.plugin.sandbox.codex.session.RunnerClient;
 import dev.everyagent.plugin.sandbox.codex.session.RunnerMaterializer;
+import dev.everyagent.plugin.sandbox.codex.session.RunnerPools;
 import dev.everyagent.plugin.sandbox.codex.setup.SandboxDirs;
 import dev.everyagent.plugin.sandbox.codex.setup.SetupMarker;
 import dev.everyagent.plugin.sandbox.codex.setup.SetupPayload;
@@ -126,7 +129,7 @@ public final class CodexCommandExecutor {
 
     public CodexCommandExecutor(CodexSandboxManager manager, Path workspaceRoot) {
         this(manager, workspaceRoot, true, detectShell(),
-                (cfg, spec) -> adapt(CodexSandboxSession.open(cfg, spec)),
+                defaultSessionOpener(manager.options()),
                 CodexCommandExecutor::refreshWriteRootAces,
                 CodexCommandExecutor::createRunnerConfig,
                 CodexSetupCoordinator::rotateCredentials);
@@ -206,7 +209,8 @@ public final class CodexCommandExecutor {
             return sessionFailure(options, command, e);
         }
         LOG.log(System.Logger.Level.INFO, "[exec] codex rc={0} timedOut={1} cmd={2}",
-                new Object[] { run.exitCode(), run.timedOut(), ExecResults.truncate(command, 200) });
+                new Object[] { run.exitCode(), run.timedOut(),
+                        ExecResults.truncate(SecretPatterns.maskSecrets(command), 200) });
         if (outcomes != null) {
             outcomes.recordShellExit(shell, command, run.exitCode(), run.timedOut());
         }
@@ -238,11 +242,14 @@ public final class CodexCommandExecutor {
                     + messageOf(setupFailure)
                     + "(未提权时修复需在 UAC 弹窗中同意,拒绝后可重发命令再次触发自愈)";
         }
+        // 池中既有 runner 与旧凭据/旧账户代际绑定（其受限令牌自旧登录会话派生）：
+        // 全部作废，重试命令按新凭据重建（design.md §4.3.1 自愈矩阵的池化配套）。
+        RunnerPools.invalidateAll(options.codexHome());
         try {
             SessionRun run = runInSession(command, options);
             LOG.log(System.Logger.Level.INFO,
                     "[exec] codex 沙箱自愈成功,重试通过 cmd={0}",
-                    ExecResults.truncate(command, 200));
+                    ExecResults.truncate(SecretPatterns.maskSecrets(command), 200));
             if (outcomes != null) {
                 outcomes.recordShellExit(shell, command, run.exitCode(), run.timedOut());
             }
@@ -250,7 +257,7 @@ public final class CodexCommandExecutor {
         } catch (IOException | RuntimeException retry) {
             LOG.log(System.Logger.Level.WARNING,
                     "[exec] codex 沙箱自愈后重试仍失败 cmd={0}",
-                    ExecResults.truncate(command, 200) + " | " + retry);
+                    ExecResults.truncate(SecretPatterns.maskSecrets(command), 200) + " | " + retry);
             // 与通用失败路径同口径：物化缓存可能失真，丢弃后下一条命令重做物化
             RunnerMaterializer.invalidateRunnerClasspath(options.codexHome());
             return "[codex sandbox 执行失败] 账户/凭据自愈后重试仍失败: " + messageOf(retry);
@@ -275,6 +282,8 @@ public final class CodexCommandExecutor {
             return "[codex sandbox 未完成 setup;自动修复后双闸门仍未就绪,请检查 UAC 是否被拒绝"
                     + "或重新启动 worker]";
         }
+        // 自愈链路配套：重 setup 可能轮换凭据/重建账户，池中 runner 一律作废重建
+        RunnerPools.invalidateAll(options.codexHome());
         return null;
     }
 
@@ -316,7 +325,7 @@ public final class CodexCommandExecutor {
     /** 通用会话失败：日志 + 物化缓存失效 + 可读错误（原 execute 失败路径）。 */
     private String sessionFailure(CodexSandboxOptions options, String command, Exception e) {
         LOG.log(System.Logger.Level.WARNING, "[exec] codex 会话失败 cmd={0}",
-                ExecResults.truncate(command, 200) + " | " + e);
+                ExecResults.truncate(SecretPatterns.maskSecrets(command), 200) + " | " + e);
         // 物化缓存可能失真（.sandbox-bin 被外部清理/篡改）：丢弃缓存，
         // 下一条命令重做物化自愈（代价仅一次 ~150ms 校验）
         RunnerMaterializer.invalidateRunnerClasspath(options.codexHome());
@@ -386,9 +395,17 @@ public final class CodexCommandExecutor {
         } else {
             argv = commandArgv(command);
         }
+        // 代理 env 注入（阶段二 §6）：仅 online 身份且代理在跑。纯查询（零副作用——
+        // 不在命令路径上绑端口,启动在插件 activate）；offline 命令拿不到代理地址,
+        // 与断网语义互不渗透。用户显式设置的值不覆盖,旧托管键先剥离再重注
+        //（ProxyEnv 类 Javadoc）。
+        Map<String, String> env = childEnv(workspaceRoot, sandboxProfileDir(identity));
+        if (identity == NetworkIdentity.ONLINE && options.proxyEnabled()) {
+            ProxyRegistry.endpointIfRunning(home)
+                    .ifPresent(endpoint -> ProxyEnv.injectProxyEnv(env, endpoint.proxyUrl()));
+        }
         CodexSandboxSession.SessionSpec spec = new CodexSandboxSession.SessionSpec(
-                argv, workspaceRoot.toString(),
-                childEnv(workspaceRoot, sandboxProfileDir(identity)),
+                argv, workspaceRoot.toString(), env,
                 timeoutMs > 0 ? timeoutMs : null, policy.writeRoots(), List.of(),
                 CapSids.workspaceCapSidForCwd(home, workspaceRoot),
                 wireName(identity), false, null);
@@ -405,6 +422,13 @@ public final class CodexCommandExecutor {
                 // 回退只发生在 PS 分支;行为不变但报错定位质量回退,让模型知情(ISSUES 一.5)
                 run = new SessionRun(run.stdout(),
                         ExecResults.appendNote(run.stderr(), ExecResults.SCRIPT_FALLBACK_NOTE),
+                        run.exitCode(), run.timedOut(), run.interrupted(), run.truncated());
+            }
+            if (schannelCredentialFailure(run.stdout(), run.stderr())) {
+                // Schannel 凭据失败(平台限制)自我说明:模型一误判就是「断网」结论,
+                // 实测 5 轮排查才定位(findings §1/§5)——结果尾部直接给规避指引
+                run = new SessionRun(run.stdout(),
+                        ExecResults.appendNote(run.stderr(), SCHANNEL_HINT_NOTE),
                         run.exitCode(), run.timedOut(), run.interrupted(), run.truncated());
             }
             LOG.log(System.Logger.Level.INFO,
@@ -841,18 +865,15 @@ public final class CodexCommandExecutor {
         return env;
     }
 
-    /** git 提交身份(env 注入用):工作区由 agent 操作,署名恒为 agent 身份(§7.10 第四批,
-     * 描述里的「提交须带 -c user.name=...」提示随之退役——此前模型各自发挥,同一会话出现过
-     * 三个不同邮箱)。env 配置属 command 作用域,压过仓库本地 user.*,属有意选择。 */
     private static final String GIT_IDENTITY_NAME = "EveryAgent";
 
     private static final String GIT_IDENTITY_EMAIL = "everyagent@localhost";
 
     /**
      * git env 配置注入(safe.directory 对齐 codex 原生 {@code sandbox_utils::inject_git_safe_directory}
-     * 逐语义移植;提交身份为我们的扩展,§7.10 第四批):从 workspaceRoot 向上找含 {@code .git}
-     * 的树根({@code Files.exists}——worktree/子模块的 {@code .git} 是文件),经 git 的 env
-     * 配置机制 {@code GIT_CONFIG_COUNT/KEY_n/VALUE_n} 注入两组配置:
+     * 逐语义移植;提交身份与 sslBackend 为我们的扩展,§7.10 第四批/findings §5):从
+     * workspaceRoot 向上找含 {@code .git} 的树根({@code Files.exists}——worktree/子模块的
+     * {@code .git} 是文件),经 git 的 env 配置机制 {@code GIT_CONFIG_COUNT/KEY_n/VALUE_n} 注入:
      * <ul>
      *   <li>{@code safe.directory=<root>} 与 {@code <root>/*}(嵌套仓库一并信任)——仓库属主
      *       是宿主用户而命令跑在沙箱账户下,git ≥2.35.2 的 ownership 保护直接 fatal(实测);
@@ -863,21 +884,29 @@ public final class CodexCommandExecutor {
      *       注入后模型无需 {@code -c} 携带身份。<b>优先级</b>:env 配置属 command 作用域,
      *       <b>压过仓库本地 user.*</b>(实测)——工作区提交由 agent 操作,署名恒为 agent 属
      *       诚实归因,有意如此。</li>
+     *   <li>{@code http.sslBackend=openssl}——受限令牌下 Schannel 栈被 Windows 拒发 SSPI
+     *       凭据(SEC_E_NO_CREDENTIALS,findings §2/§5),git 默认 schannel 后端 HTTPS 全灭;
+     *       openssl 后端自带 ca-bundle 不走 SSPI,直连或经代理(CONNECT 隧道)均可恢复。
+     *       GIT_CONFIG_* 仅 git 读取=「仅 git 命令」语义;既有 env 链已显式配置
+     *       http.sslBackend 时不追加(不破坏用户 GIT_CONFIG_* 语义);代理不在跑也注入——
+     *       该缺陷与代理无关。</li>
      * </ul>
      * <p>为什么这样而非写 {@code ~/.gitconfig}:env 注入零落盘、每次 spawn 按当时
      * workspaceRoot 重算、且精确到本仓库树——比宿主原来的 {@code *} 更收紧。已存
      * {@code GIT_CONFIG_COUNT} 时在其后追加(codex 同款)。路径用 {@code /}(git 口径)。
-     * 无 .git 树根时整体不注入(不碰非 git 语境)。
+     * 无 .git 树根时整体不注入(不碰非 git 语境)。包可见以便单测。
      */
-    private static void injectGitConfig(Map<String, String> env, Path workspaceRoot) {
+    static void injectGitConfig(Map<String, String> env, Path workspaceRoot) {
         Path cur = workspaceRoot.toAbsolutePath().normalize();
         while (cur != null) {
             if (Files.exists(cur.resolve(".git"))) {
                 String root = cur.toString().replace('\\', '/');
                 int n = 0;
+                boolean countParsed = true;
                 try {
                     n = Integer.parseInt(env.getOrDefault("GIT_CONFIG_COUNT", "0"));
                 } catch (NumberFormatException ignore) {
+                    countParsed = false;
                     // 宿主残留非法值,从 0 起追加(覆盖)
                 }
                 env.put("GIT_CONFIG_KEY_" + n, "safe.directory");
@@ -888,11 +917,27 @@ public final class CodexCommandExecutor {
                 env.put("GIT_CONFIG_VALUE_" + (n + 2), GIT_IDENTITY_NAME);
                 env.put("GIT_CONFIG_KEY_" + (n + 3), "user.email");
                 env.put("GIT_CONFIG_VALUE_" + (n + 3), GIT_IDENTITY_EMAIL);
-                env.put("GIT_CONFIG_COUNT", String.valueOf(n + 4));
+                int next = n + 4;
+                if (!chainHasSslBackend(env, countParsed ? n : 0)) {
+                    env.put("GIT_CONFIG_KEY_" + next, "http.sslBackend");
+                    env.put("GIT_CONFIG_VALUE_" + next, "openssl");
+                    next++;
+                }
+                env.put("GIT_CONFIG_COUNT", String.valueOf(next));
                 return;
             }
             cur = cur.getParent();
         }
+    }
+
+    /** 既有 GIT_CONFIG_KEY_0..count-1 链里是否已显式配置 http.sslBackend（有则不重注）。 */
+    private static boolean chainHasSslBackend(Map<String, String> env, int count) {
+        for (int i = 0; i < count; i++) {
+            if ("http.sslBackend".equals(env.get("GIT_CONFIG_KEY_" + i))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -978,6 +1023,35 @@ public final class CodexCommandExecutor {
                 run.timedOut(), run.interrupted(), run.truncated());
     }
 
+    /**
+     * Schannel TLS 凭据失败提示：受限令牌沙箱里 LSA 拒发 SSPI 缓存凭据
+     * （SEC_E_NO_CREDENTIALS）,curl.exe/Invoke-WebRequest/WebClient 等凡走
+     * Schannel 的客户端一律无法发起 TLS——与网络无关,代理也救不了(失败点在
+     * 本地凭据获取,先于握手)。模型不知情时会误判为「断网/https 坏了」,
+     * 此提示在结果尾部给出正确归因与替代工具。
+     */
+    static final String SCHANNEL_HINT_NOTE = "[codex-sandbox] Schannel TLS 凭据失败"
+            + "(SEC_E_NO_CREDENTIALS)是 Windows 受限令牌沙箱的平台限制: curl.exe/"
+            + "Invoke-WebRequest 等走 Schannel 的客户端无法发起任何 TLS,与网络连通无关"
+            + "(不代表断网,代理/直连同样失败)。https 请改用自带 TLS 栈的工具: "
+            + "git/node/python/pip/npm/java;连通性排查可用明文 http 目标。";
+
+    /**
+     * 输出是否含 Schannel 凭据失败特征（大小写不敏感;覆盖 curl 的
+     * {@code schannel: AcquireCredentialsHandle failed: SEC_E_NO_CREDENTIALS (0x8009030e)}
+     * 与 .NET 中英文文案「安全包中没有可用的凭证 / No credentials are available
+     * in the security package」）。仅追加提示,不改变退出码与判定。
+     */
+    static boolean schannelCredentialFailure(String stdout, String stderr) {
+        String text = ((stdout == null ? "" : stdout) + "\n" + (stderr == null ? "" : stderr))
+                .toLowerCase(Locale.ROOT);
+        return text.contains("sec_e_no_credentials")
+                || text.contains("acquirecredentialshandle")
+                || text.contains("8009030e")
+                || text.contains("no credentials are available in the security package")
+                || text.contains("安全包中没有可用的凭证");
+    }
+
     /** 工作区根不在登记表时补为首根（防御：mount 晚于首次执行）。 */
     List<Path> sessionWriteRoots() {
         List<Path> roots = new ArrayList<>(manager.writeRoots());
@@ -991,6 +1065,99 @@ public final class CodexCommandExecutor {
     }
 
     // ---- 生产 seam 默认实现（Windows 原生） ----
+
+    /**
+     * 生产会话 opener 组装：池化开关分流（默认开）。
+     *
+     * <p>池化路径经 {@link RunnerPools} 复用常驻 runner（登录会话有界化）；关闭即回到
+     * 每命令 spawn 的旧形态（行为与池化前完全一致，回退开关）。
+     */
+    static SessionOpener defaultSessionOpener(CodexSandboxOptions options) {
+        RunnerPools.Settings poolSettings = new RunnerPools.Settings(
+                options.runnerPoolEnabled(), options.runnerPoolMaxSize(),
+                options.runnerPoolIdleTtlMs(), RunnerPools.Settings.DEFAULT_ACQUIRE_TIMEOUT_MS,
+                RunnerPools.Settings.DEFAULT_SWEEP_INTERVAL_MS);
+        if (!poolSettings.enabled()) {
+            return (cfg, spec) -> adapt(CodexSandboxSession.open(cfg, spec));
+        }
+        return (cfg, spec) -> openPooledSession(poolSettings, cfg, spec);
+    }
+
+    /**
+     * 池化会话获取：acquire 独占租约 → 既有通道上 spawn_request/spawn_ready 握手 →
+     * 包一层 {@link PooledSession}（跟踪命令是否干净收口：见到 Exit 帧且无 EOF/异常，
+     * close 时归还池；否则作废 runner 重建）。握手失败直接作废（fail-closed）。
+     */
+    private static ExecSession openPooledSession(RunnerPools.Settings poolSettings,
+            RunnerClient.RunnerConfig cfg, CodexSandboxSession.SessionSpec spec)
+            throws IOException {
+        RunnerPools.RunnerLease lease = RunnerPools.acquire(cfg, poolSettings);
+        CodexSandboxSession session;
+        try {
+            session = CodexSandboxSession.openOnChannel(lease.channel(), spec);
+        } catch (IOException | RuntimeException e) {
+            lease.discard(); // 握手失败:runner 状态不可信,终止并出池
+            throw e;
+        }
+        return new PooledSession(session, lease);
+    }
+
+    /**
+     * 池化会话包装：转发帧收发/终止，并在 close 时按「命令是否干净收口」决定归还或作废
+     * ——正常 Exit 帧 = runner 可复用；EOF/收帧异常/提前关闭 = 状态不可信，绝不回池。
+     * 注意不调用 {@link CodexSandboxSession#close()}（那会关管道杀 runner）：归还路径
+     * 管道必须保持打开；作废路径由 lease.discard() 终止进程并关句柄。
+     */
+    static final class PooledSession implements ExecSession {
+        private final CodexSandboxSession session;
+        private final RunnerPools.RunnerLease lease;
+        private boolean exitSeen;
+        private boolean broken;
+
+        PooledSession(CodexSandboxSession session, RunnerPools.RunnerLease lease) {
+            this.session = session;
+            this.lease = lease;
+        }
+
+        @Override
+        public FrameCodec.FramedMessage receive() {
+            FrameCodec.FramedMessage frame = mark(session.receive());
+            return frame;
+        }
+
+        @Override
+        public FrameCodec.FramedMessage receive(long timeoutMs) throws IOException {
+            try {
+                return mark(session.receive(timeoutMs));
+            } catch (IOException e) {
+                broken = true; // 等帧超时/管道异常:会话不可复用(由上层决定是否 terminate)
+                throw e;
+            }
+        }
+
+        private FrameCodec.FramedMessage mark(FrameCodec.FramedMessage frame) {
+            if (frame == null) {
+                broken = true; // EOF:runner 已退出
+            } else if (frame.message() instanceof Exit) {
+                exitSeen = true; // 命令干净收口:runner 可复用
+            }
+            return frame;
+        }
+
+        @Override
+        public void terminate() {
+            session.terminate(); // 终止的是子进程树;runner 本体存活可继续复用
+        }
+
+        @Override
+        public void close() {
+            if (exitSeen && !broken) {
+                lease.close(); // 归还空闲队列(健康探测不过则池内作废)
+            } else {
+                lease.discard(); // 作废:terminate + 关管道,下一条命令重建
+            }
+        }
+    }
 
     private static ExecSession adapt(CodexSandboxSession session) {
         return new ExecSession() {

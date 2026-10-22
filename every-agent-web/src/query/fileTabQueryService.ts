@@ -6,9 +6,11 @@ import { bytesToDataUrl, mimeOf } from '@/utils/imageAsset'
  * 文件页查询服务。
  * 统一承接文件页读取文本查询。
  *
- * 文件标签页是用户操作(非 AI 工具调用),不经沙箱/权限链路,统一走 fs.readRaw
- * (工作区内文件由网关内部拼 workspaceRoot + rel 为机器绝对路径;工作区外
- * 绝对路径直接使用)。应答形态与 fs.read 一致(内联 base64 / rpc.data 分批)。
+ * 文件标签页是用户操作(非 AI 工具调用),统一走 fs.readRaw(工作区内文件由网关内部
+ * 拼 workspaceRoot + rel 为机器绝对路径;工作区外绝对路径直接使用)。worker 侧做
+ * Raw 系列合法根校验(§5.5):越界返回 SANDBOX_DENIED,网关层弹用户确认 →
+ * fs.grantRawRoot 会话放行 → 自动重试。应答形态与 fs.read 一致(内联 base64 /
+ * rpc.data 分批)。
  */
 export const fileTabQueryService = {
   /** 读取文件页当前文件的文本内容。 */

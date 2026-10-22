@@ -28,6 +28,7 @@ import dev.everyagent.worker.task.RoundIndexStore;
 import dev.everyagent.worker.task.TaskStore;
 import dev.everyagent.worker.ship.StreamSourceRegistry;
 import dev.everyagent.worker.slash.SlashTaskScopeStore;
+import dev.everyagent.worker.tools.FsToolSupport;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Component;
 
@@ -54,6 +55,8 @@ public class WorkerServicesImpl implements WorkerServices {
     private final UserInputMaterializer userInputMaterializer;
     /** slash 任务级 token 存储:构造器依赖 WorkerServices(本类),用 @Lazy 打断循环依赖。 */
     private final SlashTaskScopeStore slashStore;
+    /** 文件工具共享层:文件写监听器注册通道(addFileWriteListener,架构 §7.15.2)。 */
+    private final FsToolSupport fsToolSupport;
 
     public WorkerServicesImpl(OsSandbox sandbox, SandboxPathRegistry pathRegistry,
             WorkspaceManager workspaces,
@@ -64,7 +67,8 @@ public class WorkerServicesImpl implements WorkerServices {
             WorkerProperties workerProperties, EventSink eventSink,
             StreamSourceRegistry streamSources,
             UserInputMaterializer userInputMaterializer,
-            @Lazy SlashTaskScopeStore slashStore) {
+            @Lazy SlashTaskScopeStore slashStore,
+            FsToolSupport fsToolSupport) {
         this.sandbox = sandbox;
         this.pathRegistry = pathRegistry;
         this.workspaces = workspaces;
@@ -78,6 +82,7 @@ public class WorkerServicesImpl implements WorkerServices {
         this.streamSources = streamSources;
         this.userInputMaterializer = userInputMaterializer;
         this.slashStore = slashStore;
+        this.fsToolSupport = fsToolSupport;
         this.idGenerator = new IdGenerator() {
             @Override
             public long next() {
@@ -196,6 +201,11 @@ public class WorkerServicesImpl implements WorkerServices {
     @Override
     public void addRoundClosedListener(RoundClosedListener listener) {
         roundIndexStore.addRoundClosedListener(listener);
+    }
+
+    @Override
+    public void addFileWriteListener(dev.everyagent.plugin.api.spi.FileWriteListener listener) {
+        fsToolSupport.addFileWriteListener(listener);
     }
 
     @Override

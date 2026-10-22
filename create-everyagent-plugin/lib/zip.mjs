@@ -20,7 +20,7 @@
  * 时回退用 zip 文件名去 .eap 并把文件摊进 plugins 根（扫描器发现不了）——pack 恒产出 <id>/ 前缀，
  * 不会出现这两种坑。
  *
- * 校验和旁文件（known-issues #21 最小方案）：pack 同时产出 <id>-<version>.eap.sha256，内容为一行
+ * 校验和旁文件：pack 同时产出 <id>-<version>.eap.sha256，内容为一行
  * sha256sum 兼容格式「<64 位小写十六进制摘要>␣␣<.eap 文件名>」（两个空格 + 换行），对 .eap 全文件
  * 计算；--verify 会重读盘上 .eap 复算摘要并与旁文件核对。安装侧（worker extractEap）目前不消费它。
  *
@@ -506,7 +506,7 @@ function verifyZipFile(target, manifest, expectedNames, out) {
   }
   out.write(`  [${manifestOk ? 'ok' : '失败'}] ${manifest.id}/plugin.json 可解析（${detail}）\n`)
 
-  // 第 6 项（known-issues #21）：旁文件摘要与「重读盘上 .eap 复算」一致——顺带兜住写盘截断。
+  // 第 6 项：旁文件摘要与「重读盘上 .eap 复算」一致——顺带兜住写盘截断。
   const shaName = `${path.basename(target)}.sha256`
   let shaOk = false
   let shaDetail = `找不到旁文件 ${shaName}`
@@ -566,7 +566,7 @@ export async function packPlugin({ pluginDir, outDir, verify = false, io = proce
     throw new WriteError(`写入 .eap 失败：${target}（${err && err.message ? err.message : err}）`)
   }
 
-  // 校验和旁文件（known-issues #21 最小方案）：对 .eap 全文件做 sha256，
+  // 校验和旁文件：对 .eap 全文件做 sha256，
   // 内容一行「摘要 + 两个空格 + 文件名 + 换行」——sha256sum -c 直接可用（两个空格 = 二进制口径）。
   const sha256 = createHash('sha256').update(zipBuf).digest('hex')
   const shaFile = `${target}.sha256`
