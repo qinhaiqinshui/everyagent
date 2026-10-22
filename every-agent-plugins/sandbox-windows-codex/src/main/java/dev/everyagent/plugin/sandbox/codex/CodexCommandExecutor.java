@@ -424,6 +424,13 @@ public final class CodexCommandExecutor {
                         ExecResults.appendNote(run.stderr(), ExecResults.SCRIPT_FALLBACK_NOTE),
                         run.exitCode(), run.timedOut(), run.interrupted(), run.truncated());
             }
+            if (schannelCredentialFailure(run.stdout(), run.stderr())) {
+                // Schannel 凭据失败(平台限制)自我说明:模型一误判就是「断网」结论,
+                // 实测 5 轮排查才定位(findings §1/§5)——结果尾部直接给规避指引
+                run = new SessionRun(run.stdout(),
+                        ExecResults.appendNote(run.stderr(), SCHANNEL_HINT_NOTE),
+                        run.exitCode(), run.timedOut(), run.interrupted(), run.truncated());
+            }
             LOG.log(System.Logger.Level.INFO,
                     "[exec] timing preflight={0}ms runnerCfg={1}ms sessionExec={2}ms",
                     new Object[] { (tPreflight - tStart) / 1_000_000L,
@@ -1014,6 +1021,35 @@ public final class CodexCommandExecutor {
     static String format(SessionRun run) {
         return ExecResults.format(run.stdout(), run.stderr(), run.exitCode(),
                 run.timedOut(), run.interrupted(), run.truncated());
+    }
+
+    /**
+     * Schannel TLS 凭据失败提示：受限令牌沙箱里 LSA 拒发 SSPI 缓存凭据
+     * （SEC_E_NO_CREDENTIALS）,curl.exe/Invoke-WebRequest/WebClient 等凡走
+     * Schannel 的客户端一律无法发起 TLS——与网络无关,代理也救不了(失败点在
+     * 本地凭据获取,先于握手)。模型不知情时会误判为「断网/https 坏了」,
+     * 此提示在结果尾部给出正确归因与替代工具。
+     */
+    static final String SCHANNEL_HINT_NOTE = "[codex-sandbox] Schannel TLS 凭据失败"
+            + "(SEC_E_NO_CREDENTIALS)是 Windows 受限令牌沙箱的平台限制: curl.exe/"
+            + "Invoke-WebRequest 等走 Schannel 的客户端无法发起任何 TLS,与网络连通无关"
+            + "(不代表断网,代理/直连同样失败)。https 请改用自带 TLS 栈的工具: "
+            + "git/node/python/pip/npm/java;连通性排查可用明文 http 目标。";
+
+    /**
+     * 输出是否含 Schannel 凭据失败特征（大小写不敏感;覆盖 curl 的
+     * {@code schannel: AcquireCredentialsHandle failed: SEC_E_NO_CREDENTIALS (0x8009030e)}
+     * 与 .NET 中英文文案「安全包中没有可用的凭证 / No credentials are available
+     * in the security package」）。仅追加提示,不改变退出码与判定。
+     */
+    static boolean schannelCredentialFailure(String stdout, String stderr) {
+        String text = ((stdout == null ? "" : stdout) + "\n" + (stderr == null ? "" : stderr))
+                .toLowerCase(Locale.ROOT);
+        return text.contains("sec_e_no_credentials")
+                || text.contains("acquirecredentialshandle")
+                || text.contains("8009030e")
+                || text.contains("no credentials are available in the security package")
+                || text.contains("安全包中没有可用的凭证");
     }
 
     /** 工作区根不在登记表时补为首根（防御：mount 晚于首次执行）。 */

@@ -251,7 +251,7 @@ public final class LoopbackHttpProxy implements AutoCloseable {
             writeErrorResponse(client, 403, decision.reason());
             return;
         }
-        Socket upstream = connectUpstream(decision);
+        Socket upstream = connectUpstream(decision, authority);
         if (upstream == null) {
             writeErrorResponse(client, 502, "upstream-connect-failed:" + authority);
             return;
@@ -297,7 +297,7 @@ public final class LoopbackHttpProxy implements AutoCloseable {
             writeErrorResponse(client, 403, decision.reason());
             return;
         }
-        Socket upstream = connectUpstream(decision);
+        Socket upstream = connectUpstream(decision, uri.getHost() + ":" + port);
         if (upstream == null) {
             writeErrorResponse(client, 502, "upstream-connect-failed:" + uri.getHost());
             return;
@@ -355,7 +355,7 @@ public final class LoopbackHttpProxy implements AutoCloseable {
 
     // ---- 共用底层 ----
 
-    private Socket connectUpstream(HostPolicy.Decision decision) {
+    private Socket connectUpstream(HostPolicy.Decision decision, String targetDesc) {
         IOException last = null;
         for (InetSocketAddress target : decision.targets()) {
             Socket socket = new Socket();
@@ -369,8 +369,9 @@ public final class LoopbackHttpProxy implements AutoCloseable {
             }
         }
         failed.incrementAndGet();
-        LOG.log(System.Logger.Level.INFO, "[codex-proxy] 上游连接失败: {0}",
-                String.valueOf(last));
+        LOG.log(System.Logger.Level.INFO,
+                "[codex-proxy] 上游连接失败 {0} 尝试{1}个地址: {2}",
+                new Object[] { targetDesc, decision.targets().size(), String.valueOf(last) });
         return null;
     }
 
