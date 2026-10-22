@@ -17,6 +17,7 @@ import dev.everyagent.plugin.sandbox.codex.runner.IpcMessage.Output;
 import dev.everyagent.plugin.sandbox.codex.session.CodexSandboxSession;
 import dev.everyagent.plugin.sandbox.codex.session.RunnerClient;
 import dev.everyagent.plugin.sandbox.codex.session.RunnerMaterializer;
+import dev.everyagent.plugin.sandbox.codex.session.RunnerPools;
 import dev.everyagent.plugin.sandbox.codex.setup.SandboxDirs;
 import dev.everyagent.plugin.sandbox.codex.setup.SetupMarker;
 import dev.everyagent.plugin.sandbox.codex.setup.SetupPayload;
@@ -126,7 +127,7 @@ public final class CodexCommandExecutor {
 
     public CodexCommandExecutor(CodexSandboxManager manager, Path workspaceRoot) {
         this(manager, workspaceRoot, true, detectShell(),
-                (cfg, spec) -> adapt(CodexSandboxSession.open(cfg, spec)),
+                defaultSessionOpener(manager.options()),
                 CodexCommandExecutor::refreshWriteRootAces,
                 CodexCommandExecutor::createRunnerConfig,
                 CodexSetupCoordinator::rotateCredentials);
@@ -239,6 +240,9 @@ public final class CodexCommandExecutor {
                     + messageOf(setupFailure)
                     + "(未提权时修复需在 UAC 弹窗中同意,拒绝后可重发命令再次触发自愈)";
         }
+        // 池中既有 runner 与旧凭据/旧账户代际绑定（其受限令牌自旧登录会话派生）：
+        // 全部作废，重试命令按新凭据重建（design.md §4.3.1 自愈矩阵的池化配套）。
+        RunnerPools.invalidateAll(options.codexHome());
         try {
             SessionRun run = runInSession(command, options);
             LOG.log(System.Logger.Level.INFO,
@@ -276,6 +280,8 @@ public final class CodexCommandExecutor {
             return "[codex sandbox 未完成 setup;自动修复后双闸门仍未就绪,请检查 UAC 是否被拒绝"
                     + "或重新启动 worker]";
         }
+        // 自愈链路配套：重 setup 可能轮换凭据/重建账户，池中 runner 一律作废重建
+        RunnerPools.invalidateAll(options.codexHome());
         return null;
     }
 
@@ -992,6 +998,99 @@ public final class CodexCommandExecutor {
     }
 
     // ---- 生产 seam 默认实现（Windows 原生） ----
+
+    /**
+     * 生产会话 opener 组装：池化开关分流（默认开）。
+     *
+     * <p>池化路径经 {@link RunnerPools} 复用常驻 runner（登录会话有界化）；关闭即回到
+     * 每命令 spawn 的旧形态（行为与池化前完全一致，回退开关）。
+     */
+    static SessionOpener defaultSessionOpener(CodexSandboxOptions options) {
+        RunnerPools.Settings poolSettings = new RunnerPools.Settings(
+                options.runnerPoolEnabled(), options.runnerPoolMaxSize(),
+                options.runnerPoolIdleTtlMs(), RunnerPools.Settings.DEFAULT_ACQUIRE_TIMEOUT_MS,
+                RunnerPools.Settings.DEFAULT_SWEEP_INTERVAL_MS);
+        if (!poolSettings.enabled()) {
+            return (cfg, spec) -> adapt(CodexSandboxSession.open(cfg, spec));
+        }
+        return (cfg, spec) -> openPooledSession(poolSettings, cfg, spec);
+    }
+
+    /**
+     * 池化会话获取：acquire 独占租约 → 既有通道上 spawn_request/spawn_ready 握手 →
+     * 包一层 {@link PooledSession}（跟踪命令是否干净收口：见到 Exit 帧且无 EOF/异常，
+     * close 时归还池；否则作废 runner 重建）。握手失败直接作废（fail-closed）。
+     */
+    private static ExecSession openPooledSession(RunnerPools.Settings poolSettings,
+            RunnerClient.RunnerConfig cfg, CodexSandboxSession.SessionSpec spec)
+            throws IOException {
+        RunnerPools.RunnerLease lease = RunnerPools.acquire(cfg, poolSettings);
+        CodexSandboxSession session;
+        try {
+            session = CodexSandboxSession.openOnChannel(lease.channel(), spec);
+        } catch (IOException | RuntimeException e) {
+            lease.discard(); // 握手失败:runner 状态不可信,终止并出池
+            throw e;
+        }
+        return new PooledSession(session, lease);
+    }
+
+    /**
+     * 池化会话包装：转发帧收发/终止，并在 close 时按「命令是否干净收口」决定归还或作废
+     * ——正常 Exit 帧 = runner 可复用；EOF/收帧异常/提前关闭 = 状态不可信，绝不回池。
+     * 注意不调用 {@link CodexSandboxSession#close()}（那会关管道杀 runner）：归还路径
+     * 管道必须保持打开；作废路径由 lease.discard() 终止进程并关句柄。
+     */
+    static final class PooledSession implements ExecSession {
+        private final CodexSandboxSession session;
+        private final RunnerPools.RunnerLease lease;
+        private boolean exitSeen;
+        private boolean broken;
+
+        PooledSession(CodexSandboxSession session, RunnerPools.RunnerLease lease) {
+            this.session = session;
+            this.lease = lease;
+        }
+
+        @Override
+        public FrameCodec.FramedMessage receive() {
+            FrameCodec.FramedMessage frame = mark(session.receive());
+            return frame;
+        }
+
+        @Override
+        public FrameCodec.FramedMessage receive(long timeoutMs) throws IOException {
+            try {
+                return mark(session.receive(timeoutMs));
+            } catch (IOException e) {
+                broken = true; // 等帧超时/管道异常:会话不可复用(由上层决定是否 terminate)
+                throw e;
+            }
+        }
+
+        private FrameCodec.FramedMessage mark(FrameCodec.FramedMessage frame) {
+            if (frame == null) {
+                broken = true; // EOF:runner 已退出
+            } else if (frame.message() instanceof Exit) {
+                exitSeen = true; // 命令干净收口:runner 可复用
+            }
+            return frame;
+        }
+
+        @Override
+        public void terminate() {
+            session.terminate(); // 终止的是子进程树;runner 本体存活可继续复用
+        }
+
+        @Override
+        public void close() {
+            if (exitSeen && !broken) {
+                lease.close(); // 归还空闲队列(健康探测不过则池内作废)
+            } else {
+                lease.discard(); // 作废:terminate + 关管道,下一条命令重建
+            }
+        }
+    }
 
     private static ExecSession adapt(CodexSandboxSession session) {
         return new ExecSession() {

@@ -36,6 +36,31 @@
         "type": "string",
         "default": "",
         "description": "runner JVM 的 java.exe 根目录；空 = 当前 JVM 的 java.home"
+      },
+      "codex.runner-pool-enabled": {
+        "type": "boolean",
+        "default": true,
+        "description": "runner 常驻池化复用（登录会话有界化）；false = 回到每命令新建 runner 的旧形态"
+      },
+      "codex.runner-pool-max-size": {
+        "type": "number",
+        "default": 2,
+        "description": "每池（codexHome+沙箱账户）runner 数上限；并发命令超过上限时短暂溢出并告警"
+      },
+      "codex.runner-pool-idle-ttl-ms": {
+        "type": "number",
+        "default": 600000,
+        "description": "空闲 runner 存活毫秒数（默认 10 分钟），到期发 shutdown 帧关闭其登录会话"
+      },
+      "codex.logon-session-audit-interval-ms": {
+        "type": "number",
+        "default": 1800000,
+        "description": "沙箱账户登录会话数审计周期毫秒（默认 30 分钟）；<=0 关闭审计"
+      },
+      "codex.logon-session-audit-threshold": {
+        "type": "number",
+        "default": 64,
+        "description": "沙箱账户登录会话总数告警阈值，超过打 WARN（提示重启 worker 回收）"
       }
     }
   },

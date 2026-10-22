@@ -27,7 +27,21 @@ import java.util.Locale;
  * @param proxyPorts       offline 账户放行的环回 TCP 代理端口（键 codex.proxy-ports，
  *                         逗号分隔）
  * @param allowLocalBinding true=移除环回 block 规则（键 codex.allow-local-binding）
- * @param javaHome         runner 启动 java.exe 根；空 = 当前 JVM（键 codex.java-home）
+ * @param javaHome         runner JVM 的 java.exe 根；空 = 当前 JVM（键 codex.java-home）
+ * @param runnerPoolEnabled runner 常驻池化开关（键 codex.runner-pool-enabled，默认 true；
+ *                         false = 回到每命令 spawn 旧形态）
+ * @param runnerPoolMaxSize 每键（codexHome+账户）池大小上限（键
+ *                         codex.runner-pool-max-size，默认
+ *                         {@link #DEFAULT_RUNNER_POOL_MAX_SIZE}）
+ * @param runnerPoolIdleTtlMs 空闲 runner TTL 毫秒（键 codex.runner-pool-idle-ttl-ms，
+ *                         默认 {@link #DEFAULT_RUNNER_POOL_IDLE_TTL_MS}，到期发 shutdown
+ *                         关会话、登录会话回收）
+ * @param logonSessionAuditIntervalMs 沙箱账户登录会话数审计周期毫秒（键
+ *                         codex.logon-session-audit-interval-ms，默认
+ *                         {@link #DEFAULT_LOGON_SESSION_AUDIT_INTERVAL_MS}；&lt;=0 关闭）
+ * @param logonSessionAuditThreshold 登录会话总数告警阈值（键
+ *                         codex.logon-session-audit-threshold，默认
+ *                         {@link #DEFAULT_LOGON_SESSION_AUDIT_THRESHOLD}，超过打 WARN）
  */
 public record CodexSandboxOptions(
         Path codexHome,
@@ -35,12 +49,33 @@ public record CodexSandboxOptions(
         String networkPolicy,
         List<Integer> proxyPorts,
         boolean allowLocalBinding,
-        String javaHome) {
+        String javaHome,
+        boolean runnerPoolEnabled,
+        int runnerPoolMaxSize,
+        long runnerPoolIdleTtlMs,
+        long logonSessionAuditIntervalMs,
+        int logonSessionAuditThreshold) {
 
     /** network-policy 合法值。 */
     public static final String POLICY_AUTO = "auto";
     public static final String POLICY_OFFLINE = "offline";
     public static final String POLICY_ONLINE = "online";
+
+    /** runner 池化默认值（与 RunnerPools.Settings 对齐；在此重复声明避免 options→pool 反向依赖）。 */
+    public static final int DEFAULT_RUNNER_POOL_MAX_SIZE = 2;
+    public static final long DEFAULT_RUNNER_POOL_IDLE_TTL_MS = 10 * 60 * 1000;
+    /** 登录会话审计默认周期（30 分钟）。 */
+    public static final long DEFAULT_LOGON_SESSION_AUDIT_INTERVAL_MS = 30 * 60 * 1000;
+    /** 登录会话总数默认告警阈值。 */
+    public static final int DEFAULT_LOGON_SESSION_AUDIT_THRESHOLD = 64;
+
+    /** 兼容构造（池化/审计项取默认值）：既有调用点与测试不受新增配置项影响。 */
+    public CodexSandboxOptions(Path codexHome, String accountPrefix, String networkPolicy,
+            List<Integer> proxyPorts, boolean allowLocalBinding, String javaHome) {
+        this(codexHome, accountPrefix, networkPolicy, proxyPorts, allowLocalBinding, javaHome,
+                true, DEFAULT_RUNNER_POOL_MAX_SIZE, DEFAULT_RUNNER_POOL_IDLE_TTL_MS,
+                DEFAULT_LOGON_SESSION_AUDIT_INTERVAL_MS, DEFAULT_LOGON_SESSION_AUDIT_THRESHOLD);
+    }
 
     public CodexSandboxOptions {
         accountPrefix = accountPrefix == null || accountPrefix.isBlank()
@@ -48,6 +83,9 @@ public record CodexSandboxOptions(
         networkPolicy = normalizePolicy(networkPolicy);
         proxyPorts = proxyPorts == null ? List.of() : List.copyOf(proxyPorts);
         javaHome = javaHome == null ? "" : javaHome;
+        runnerPoolMaxSize = Math.max(1, runnerPoolMaxSize);
+        runnerPoolIdleTtlMs = Math.max(1, runnerPoolIdleTtlMs);
+        logonSessionAuditThreshold = Math.max(1, logonSessionAuditThreshold);
     }
 
     /** 从插件配置 + worker 配置解析（activate 一次性调用）。 */
@@ -61,7 +99,19 @@ public record CodexSandboxOptions(
                 cfg == null ? null : cfg.getString("codex.network-policy", POLICY_AUTO),
                 parsePorts(cfg == null ? "" : cfg.getString("codex.proxy-ports", "")),
                 cfg != null && cfg.getBoolean("codex.allow-local-binding", false),
-                cfg == null ? "" : cfg.getString("codex.java-home", ""));
+                cfg == null ? "" : cfg.getString("codex.java-home", ""),
+                cfg == null || cfg.getBoolean("codex.runner-pool-enabled", true),
+                cfg == null ? DEFAULT_RUNNER_POOL_MAX_SIZE
+                        : cfg.getInt("codex.runner-pool-max-size", DEFAULT_RUNNER_POOL_MAX_SIZE),
+                cfg == null ? DEFAULT_RUNNER_POOL_IDLE_TTL_MS
+                        : cfg.get("codex.runner-pool-idle-ttl-ms", Long.class,
+                                DEFAULT_RUNNER_POOL_IDLE_TTL_MS),
+                cfg == null ? DEFAULT_LOGON_SESSION_AUDIT_INTERVAL_MS
+                        : cfg.get("codex.logon-session-audit-interval-ms", Long.class,
+                                DEFAULT_LOGON_SESSION_AUDIT_INTERVAL_MS),
+                cfg == null ? DEFAULT_LOGON_SESSION_AUDIT_THRESHOLD
+                        : cfg.getInt("codex.logon-session-audit-threshold",
+                                DEFAULT_LOGON_SESSION_AUDIT_THRESHOLD));
     }
 
     /** 网络身份决策：offline/online 强制，auto 随 worker 全局 networkDenied。 */
