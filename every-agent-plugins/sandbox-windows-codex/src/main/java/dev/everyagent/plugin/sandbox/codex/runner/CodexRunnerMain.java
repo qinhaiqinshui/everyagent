@@ -50,6 +50,18 @@ public final class CodexRunnerMain {
     private static final java.util.List<String> PENDING = new java.util.ArrayList<>();
     private static volatile boolean teeReady;
 
+    /**
+     * 控制台码页探测开关：默认随 EA_CONPROBE（非 "0" 即启用）。声明为可写静态而非每次
+     * 读 env，是为了同 JVM 内嵌跑 runner 主循环的冒烟测试能显式关掉探测（探测会 spawn
+     * powershell 探针，与被测的多命令会话互不干扰；生产路径行为不变）。
+     */
+    static volatile boolean consoleProbeEnabled = !"0".equals(System.getenv("EA_CONPROBE"));
+
+    /** 测试钩子：关闭本 JVM 内的 runner 控制台码页探测。 */
+    static void disableConsoleProbeForTest() {
+        consoleProbeEnabled = false;
+    }
+
     private CodexRunnerMain() {
     }
 
@@ -185,7 +197,7 @@ public final class CodexRunnerMain {
         // 并在后台线程里跑——它既不能压 pipe-connect 预算，也不能压 spawn_ready 预算。
         // 结论落地是"后续命令的 spawn 形态可能变化"(探测完成前的首条命令仍按现状 spawn,
         // 可接受)；复测不通过自动回退 CREATE_NO_WINDOW(见 ConsoleProbe)。
-        if (!"0".equals(System.getenv("EA_CONPROBE"))) {
+        if (consoleProbeEnabled) {
             Thread.ofVirtual().name("codex-console-probe").start(() -> {
                 try {
                     ConsoleProbe.runOnce(java.nio.file.Path.of(System.getProperty("user.dir")));
@@ -204,8 +216,135 @@ public final class CodexRunnerMain {
         }
         Object writeLock = new Object(); // output 读线程与主线程共用 -out 管写端
         try {
-            // 1) 先读 spawn_request（写 spawn_ready 之前必须等到）
-            SpawnRequest req = readSpawnRequest(in, out, writeLock);
+            // 池化多命令会话：单一读线程终身持有 -in 管道做帧分发（消除主线程/输入线程
+            // 争读同一管道的竞态），主线程串行执行命令（spawn_request → … → exit 后回到
+            // 等待下一条 spawn_request）；shutdown 帧或管道 EOF 终结整个 runner。
+            RunnerState state = new RunnerState();
+            Thread.ofVirtual().name("codex-runner-frames")
+                    .start(() -> frameReaderLoop(in, state));
+            return commandLoop(out, writeLock, state);
+        } finally {
+            closeQuietly(in);
+            closeQuietly(out);
+        }
+    }
+
+    /**
+     * runner 生命周期状态：读线程（唯一的 -in 管道读者）与命令执行主线程之间的交接面。
+     * 命令队列容量 1 ——「每命令独占」由 worker 侧 RunnerPool 保证，runner 侧对并发
+     * 第二条 spawn_request 按协议违规处理（杀子进程退出）而非排队积压。
+     */
+    static final class RunnerState {
+        /** 投毒哨兵：读线程终结（EOF/读错/shutdown）后唤醒执行线程收场。 */
+        private static final FramedMessage POISON = new FramedMessage(-1, new IpcMessage.Terminate());
+
+        private final java.util.concurrent.LinkedBlockingQueue<FramedMessage> commands =
+                new java.util.concurrent.LinkedBlockingQueue<>(1);
+        private final java.util.concurrent.atomic.AtomicReference<ChildProcess> current =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        private volatile boolean stopped;
+
+        /** 读线程投递新命令；已终结或上一条仍在队列 → false（协议违规）。 */
+        boolean offerCommand(FramedMessage frame) {
+            if (stopped) {
+                return false;
+            }
+            return commands.offer(frame);
+        }
+
+        /** 阻塞取下一条命令；投毒/中断返回 null（runner 收场）。 */
+        FramedMessage takeCommand() {
+            try {
+                FramedMessage f = commands.take();
+                return f == POISON ? null : f;
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return null;
+            }
+        }
+
+        /** 读线程终结：终止当前子进程（父管道关闭 = 会话终结，codex 同款）并投毒。 */
+        void end() {
+            stopped = true;
+            ChildProcess child = current.get();
+            if (child != null) {
+                child.terminate();
+            }
+            // 父进程已离开：队列里未被取走的命令没有执行意义，清掉保证投毒必然落位
+            commands.clear();
+            commands.offer(POISON);
+        }
+    }
+
+    /**
+     * 帧读分发线程（runner 生命周期内唯一读 -in 管道的线程）：stdin/close_stdin/
+     * terminate/resize 路由到当前子进程；spawn_request 入命令队列；shutdown/EOF/读错
+     * → 终结。命令间无共享可变状态（每条命令的子进程/令牌均新建），串扰面为零。
+     */
+    private static void frameReaderLoop(WinNT.HANDLE in, RunnerState state) {
+        while (true) {
+            FramedMessage frame;
+            try {
+                frame = FrameCodec.readFrame(in);
+            } catch (RuntimeException e) {
+                System.err.println("[codex-runner] input read failed: " + e.getMessage());
+                state.end();
+                return;
+            }
+            if (frame == null) { // 父进程关闭管道 → 会话终结
+                System.err.println("[codex-runner] parent pipe closed; stopping");
+                state.end();
+                return;
+            }
+            ChildProcess child = state.current.get();
+            switch (frame.message()) {
+                case IpcMessage.Stdin s -> {
+                    if (child != null) {
+                        child.writeStdin(IpcMessage.decodeBytes(s.dataBase64()));
+                    }
+                }
+                case IpcMessage.CloseStdin c -> {
+                    if (child != null) {
+                        child.closeStdin();
+                    }
+                }
+                case IpcMessage.Terminate t -> {
+                    if (child != null) {
+                        child.terminate();
+                    }
+                }
+                case IpcMessage.Resize r -> { /* no-op：ConPTY 暂缓（设计 §1.2），帧合法仅忽略 */ }
+                case IpcMessage.SpawnRequest req -> {
+                    if (!state.offerCommand(frame)) { // 上一条仍在执行/队列：协议违规
+                        System.err.println("[codex-runner] spawn_request while busy"
+                                + " (pooling exclusive-use violation); stopping");
+                        state.end();
+                        return;
+                    }
+                }
+                case IpcMessage.Shutdown s -> { // 池化回收信号：优雅退出
+                    System.err.println("[codex-runner] shutdown frame received; exiting");
+                    state.end();
+                    return;
+                }
+                default -> { /* spawn_ready/output/exit/error：非输入帧，忽略 */ }
+            }
+        }
+    }
+
+    /**
+     * 命令执行主循环：取 spawn_request → 受限令牌 + 子进程 → spawn_ready → 帧会话 →
+     * exit 帧 → 回到等待下一条。旧单命令语义兼容：无 shutdown 帧时，父进程在 exit 后
+     * 关闭管道（旧 worker 行为）→ 读线程 EOF 投毒 → 本循环退出，行为与旧版一致。
+     * 启动失败（读帧/派生/写 spawn_ready）发 error 帧并返回 1（对齐旧版）。
+     */
+    private static int commandLoop(WinNT.HANDLE out, Object writeLock, RunnerState state) {
+        while (true) {
+            FramedMessage frame = state.takeCommand();
+            if (frame == null) {
+                return 0; // shutdown / 管道 EOF：runner 干净收场
+            }
+            SpawnRequest req = validateSpawnRequest(frame, out, writeLock);
             if (req == null) {
                 return 1;
             }
@@ -216,6 +355,7 @@ public final class CodexRunnerMain {
                 return 1;
             }
             stage("token+child spawned pid=" + child.processId());
+            state.current.set(child);
             try {
                 if (!req.stdinOpen()) {
                     child.closeStdin(); // stdin 关闭 = 子进程读 EOF
@@ -231,19 +371,16 @@ public final class CodexRunnerMain {
                     return 1;
                 }
                 stage("spawn_ready sent");
-                // 4) 帧循环：输出转发 + 输入处理 + 等待退出
-                runSession(in, out, writeLock, req, child);
-                return 0;
+                // 4) 帧会话：输出转发 + 等待退出（输入处理在读线程）
+                runSession(out, writeLock, req, child);
             } finally {
+                state.current.compareAndSet(child, null);
                 child.close();
             }
-        } finally {
-            closeQuietly(in);
-            closeQuietly(out);
         }
     }
 
-    private static void runSession(WinNT.HANDLE in, WinNT.HANDLE out, Object writeLock,
+    private static void runSession(WinNT.HANDLE out, Object writeLock,
             SpawnRequest req, ChildProcess child) {
         java.util.concurrent.atomic.AtomicBoolean firstOutput =
                 new java.util.concurrent.atomic.AtomicBoolean();
@@ -253,8 +390,6 @@ public final class CodexRunnerMain {
             }
             sendOutput(out, writeLock, chunk, stderr);
         });
-        Thread input = Thread.ofVirtual().name("codex-runner-input")
-                .start(() -> inputLoop(in, child));
         ChildProcess.ExitResult r = child.waitForExit(req.timeoutMs());
         stage("child exited rc=" + r.exitCode() + " timedOut=" + r.timedOut());
         if (!r.terminatedCleanly()) {
@@ -275,7 +410,7 @@ public final class CodexRunnerMain {
             System.err.println("[codex-runner] exit write failed: " + e.getMessage());
         }
         stage("exit frame sent");
-        // input 虚拟线程随 System.exit 消亡，不阻塞退出
+        // 读线程随 run() 收口消亡;主线程回到等待下一条 spawn_request
     }
 
     /**
@@ -291,46 +426,9 @@ public final class CodexRunnerMain {
         }
     }
 
-    /** stdin/close_stdin/terminate/resize；管道 EOF 或读错 → 杀树（codex 同款）。 */
-    private static void inputLoop(WinNT.HANDLE in, ChildProcess child) {
-        while (true) {
-            FramedMessage frame;
-            try {
-                frame = FrameCodec.readFrame(in);
-            } catch (RuntimeException e) {
-                System.err.println("[codex-runner] input read failed: " + e.getMessage());
-                child.terminate();
-                return;
-            }
-            if (frame == null) { // 父进程关闭管道 → 会话终结
-                child.terminate();
-                return;
-            }
-            switch (frame.message()) {
-                case IpcMessage.Stdin s -> child.writeStdin(IpcMessage.decodeBytes(s.dataBase64()));
-                case IpcMessage.CloseStdin c -> child.closeStdin();
-                case IpcMessage.Terminate t -> child.terminate();
-                case IpcMessage.Resize r -> { /* no-op：ConPTY 暂缓（设计 §1.2），帧合法仅忽略 */ }
-                default -> { /* spawn_request/spawn_ready/output/exit/error：非输入帧，忽略 */ }
-            }
-        }
-    }
-
-    private static SpawnRequest readSpawnRequest(WinNT.HANDLE in, WinNT.HANDLE out,
+    /** 校验已读入的 spawn_request 帧（版本/类型/必填字段；失败发 error 帧返回 null）。 */
+    private static SpawnRequest validateSpawnRequest(FramedMessage frame, WinNT.HANDLE out,
             Object writeLock) {
-        FramedMessage frame;
-        try {
-            frame = FrameCodec.readFrame(in);
-        } catch (RuntimeException e) {
-            sendError(out, writeLock, ErrorStage.READ_SPAWN_REQUEST, null,
-                    "read spawn_request failed: " + e.getMessage());
-            return null;
-        }
-        if (frame == null) {
-            sendError(out, writeLock, ErrorStage.READ_SPAWN_REQUEST, null,
-                    "runner pipe closed before spawn_request");
-            return null;
-        }
         if (frame.version() != IpcMessage.IPC_PROTOCOL_VERSION) {
             sendError(out, writeLock, ErrorStage.READ_SPAWN_REQUEST, null,
                     "runner: unsupported protocol version " + frame.version());

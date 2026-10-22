@@ -44,6 +44,24 @@ class FrameCodecTest {
         }
     }
 
+    /** 池化新增的 shutdown 帧：空载荷、父→runner 方向、与 terminate 同 wire 形态。 */
+    @Test
+    void shutdownFrameRoundTripsWithEmptyPayload() {
+        FrameCodec.FramedMessage back = FrameCodec.decodeFrame(
+                FrameCodec.encodeFrame(new IpcMessage.Shutdown()));
+        assertEquals(IpcMessage.IPC_PROTOCOL_VERSION, back.version());
+        assertEquals(new IpcMessage.Shutdown(), back.message());
+        assertEquals("shutdown", back.message().tag());
+
+        // 与 terminate 一样是 EmptyPayload：手工 wire 断言（空对象、无额外字段）
+        byte[] frame = FrameCodec.encodeFrame(new IpcMessage.Shutdown());
+        int len = FrameCodec.readLenPrefix(frame);
+        String json = new String(frame, FrameCodec.LEN_PREFIX, len,
+                java.nio.charset.StandardCharsets.UTF_8);
+        assertTrue(json.contains("\"type\":\"shutdown\""), json);
+        assertTrue(json.contains("\"payload\":{}"), json);
+    }
+
     @Test
     void lengthPrefixIs4ByteLittleEndian() {
         byte[] probe = new byte[4];
