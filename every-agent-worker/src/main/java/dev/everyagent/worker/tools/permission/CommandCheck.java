@@ -207,6 +207,11 @@ public class CommandCheck implements PermissionCheck {
             return PermissionDecision.allow("命令授权检查通过");
         } catch (PermissionDeniedException e) {
             return PermissionDecision.deny(e);
+        } catch (java.nio.file.AccessDeniedException e) {
+            // toRealPath 拒绝的裸路径 message 不可读(§7.8 可读化):给出原因与排查方向,
+            // 不再把裸路径当「不存在/工具损坏」误导
+            return PermissionDecision.deny(new PermissionDeniedException(
+                    "execute: " + PathSupport.accessDeniedHint(e.getFile())));
         } catch (IOException e) {
             return PermissionDecision.deny(
                     new PermissionDeniedException("execute: 授权检查失败 " + e.getMessage()));

@@ -63,7 +63,7 @@ public final class Sandbox implements WorkspaceSandbox {
         }
         Path real;
         try {
-            real = norm.toRealPath();
+            real = toRealPathReadable(norm, rel);
         } catch (java.nio.file.NoSuchFileException e) {
             throw new NotFoundException("路径不存在: " + rel);
         }
@@ -83,7 +83,7 @@ public final class Sandbox implements WorkspaceSandbox {
         if (!Files.exists(parent)) {
             Files.createDirectories(parent);
         }
-        Path target = parent.toRealPath().resolve(norm.getFileName());
+        Path target = toRealPathReadable(parent, rel).resolve(norm.getFileName());
         if (!allowedReal(target)) {
             throw new SandboxViolationException("路径越界: " + rel);
         }
@@ -103,13 +103,13 @@ public final class Sandbox implements WorkspaceSandbox {
         }
         Path real;
         if (Files.exists(norm)) {
-            real = norm.toRealPath();
+            real = toRealPathReadable(norm, rel);
         } else {
             Path ancestor = norm.getParent();
             while (ancestor != null && !Files.exists(ancestor)) {
                 ancestor = ancestor.getParent();
             }
-            real = ancestor == null ? null : ancestor.toRealPath();
+            real = ancestor == null ? null : toRealPathReadable(ancestor, rel);
         }
         if (real != null && !allowedReal(real)) {
             throw new SandboxViolationException("符号链接逃逸: " + rel);
@@ -130,8 +130,7 @@ public final class Sandbox implements WorkspaceSandbox {
     }
 
     /** 词法前缀放行:工作区根 ∨ 任一授权附加根。 */
-    private boolean allowed(Path norm) {
-        if (norm.startsWith(root.path())) {
+    private boolean allowed(Path norm) {        if (norm.startsWith(root.path())) {
             return true;
         }
         for (Path extra : extraRoots) {
@@ -165,5 +164,20 @@ public final class Sandbox implements WorkspaceSandbox {
             }
         }
         return false;
+    }
+
+    /**
+     * {@code toRealPath} 的访问拒绝可读化(§7.8):{@link java.nio.file.AccessDeniedException}
+     * 原生 message 是裸路径(无原因无类型),直接上抛会误导排查(2026-10-23 事故中被误判为
+     * 「文件不存在」)。此处包装为带原因提示的 IOException(保留 cause;其余异常原样上抛,
+     * NoSuchFileException 的既有翻译不受影响)。
+     */
+    private static Path toRealPathReadable(Path p, String rel) throws IOException {
+        try {
+            return p.toRealPath();
+        } catch (java.nio.file.AccessDeniedException e) {
+            throw new IOException("路径 " + rel + " 解析被拒(读取安全上下文失败;"
+                    + "常见原因:安全软件拦截或该路径 ACL 损坏)", e);
+        }
     }
 }
