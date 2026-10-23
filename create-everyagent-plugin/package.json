@@ -1,6 +1,6 @@
 {
   "name": "create-everyagent-plugin",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "type": "module",
   "license": "MIT",
   "description": "Every Agent 插件工程脚手架 CLI（create-react-app / create-vite 式）：交互问答或全 flag 传参，从内置模板生成 java / web / full 三种形态、builtin / standalone 两种模式的插件工程，并提供 .eap 打包子命令",
