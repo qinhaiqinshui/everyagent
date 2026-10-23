@@ -20,7 +20,7 @@
     "dist:dir": "npm run compile && npm run build:assets && electron-builder --dir"
   },
   "devDependencies": {
-    "electron": "^44.2.0",
+    "electron": "^44.9.1",
     "electron-builder": "^24.13.3",
     "typescript": "^5.2.2",
     "@types/node": "^20.14.0"
