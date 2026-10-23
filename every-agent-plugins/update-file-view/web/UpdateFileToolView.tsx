@@ -28,8 +28,16 @@
  * 是统一加前导 `/` 的内部坐标（工作区外绝对路径会变成 `/C:/Users/...`），只用于
  * fs 探测与 openFileTab，直接展示会凭空空出一个 `/` 前缀。
  *
- * 结构与 FileToolEntry 同构（复用 chatPanel.css 的 nagent-tool__* 类与插件内
- * helpers 的选区守卫/文件名提取），独立演进不反向侵入核心。
+ * 折叠行结构类与宿主 EntryShell 输出同构：槽位类统一 nagent-entry__*
+ * (summary/icon/duration/name/text/chevron/content)，行族差异由宿主 chatPanel.css
+ * 的「.nagent-tool 在共享壳上的行族差异」覆盖块供给——插件不可引用宿主模块，
+ * 故本地按同一 DOM 结构渲染（button.nagent-entry__summary + 各槽 span +
+ * nagent-entry__content 展开容器），不复制宿主组件。图标 svg 自身的
+ * nagent-tool__icon(state 类)、折叠行 nagent-tool__inline-* 与展开态 detail 域
+ * nagent-tool__* 类原样保留。
+ *
+ * 结构与核心 FileToolEntry 同构（同槽位同类名，插件内 helpers 提供选区
+ * 守卫/文件名提取），独立演进不反向侵入核心。
  */
 
 import React from 'react'
@@ -164,9 +172,11 @@ function UpdateFileEntry({ detail }: { detail: PluginToolCallDetail }) {
 
   return (
     <div className={`nagent-tool nagent-tool--filewrite${open ? ' is-open' : ''}`}>
+      {/* 折叠行 DOM 与宿主 EntryShell(expandable) 输出同构，类名一一对应；
+          选区守卫与折叠行为(点击摘要行切换、拖选不误触)同核心工具行。 */}
       <button
         type="button"
-        className="nagent-tool__summary"
+        className="nagent-entry__summary"
         aria-expanded={open}
         onClick={() => {
           // 拖选文本（选区非空）时不切换折叠，保证文本可选中复制。
@@ -174,79 +184,83 @@ function UpdateFileEntry({ detail }: { detail: PluginToolCallDetail }) {
           setOpen((value) => !value)
         }}
       >
-        <WrenchIcon size={13} className={`nagent-tool__icon${stateClass ? ` ${stateClass}` : ''}`} />
-        {durationText ? <span className="nagent-tool__duration" style={durationTintStyle}>{durationText}</span> : null}
-        <span className="nagent-tool__name">{detail.toolName || 'update_file'}</span>
-        <span className="nagent-tool__inline-preview">
-          {fullPath ? (
-            <>
-              <span className="nagent-tool__inline-file-name">{extractFileName(fullPath)}</span>
-              {diff ? <StatBadge added={diff.stat.added} removed={diff.stat.removed} /> : null}
-              <span className="nagent-tool__inline-file-path">{fullPath}</span>
-            </>
-          ) : (
-            '（无路径）'
-          )}
+        <span className="nagent-entry__icon">
+          <WrenchIcon size={13} className={`nagent-tool__icon${stateClass ? ` ${stateClass}` : ''}`} />
         </span>
-        {open ? (
-          <ChevronDownIcon size={13} className="nagent-tool__chevron" />
-        ) : (
-          <ChevronRightIcon size={13} className="nagent-tool__chevron" />
-        )}
+        {durationText ? <span className="nagent-entry__duration" style={durationTintStyle}>{durationText}</span> : null}
+        <span className="nagent-entry__name">{detail.toolName || 'update_file'}</span>
+        <span className="nagent-entry__text">
+          <span className="nagent-tool__inline-preview">
+            {fullPath ? (
+              <>
+                <span className="nagent-tool__inline-file-name">{extractFileName(fullPath)}</span>
+                {diff ? <StatBadge added={diff.stat.added} removed={diff.stat.removed} /> : null}
+                <span className="nagent-tool__inline-file-path">{fullPath}</span>
+              </>
+            ) : (
+              '（无路径）'
+            )}
+          </span>
+        </span>
+        <span className="nagent-entry__chevron">
+          {open ? <ChevronDownIcon size={13} /> : <ChevronRightIcon size={13} />}
+        </span>
       </button>
       {open ? (
-        <div className="nagent-tool__detail">
-          <div className="nagent-tool__result-item">
-            <div className="nagent-tool__result-item-head">
-              <WrenchIcon size={12} className={`nagent-tool__icon${stateClass ? ` ${stateClass}` : ''}`} />
-              <span className="nagent-tool__name">{detail.toolName || 'update_file'}</span>
-              {fullPath ? (
-                <button
-                  type="button"
-                  className="nagent-tool__detail-path"
-                  title={`打开文件：${fullPath}`}
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    void handleOpenFile()
-                  }}
-                >
-                  {fullPath}
-                </button>
+        <div className="nagent-entry__content">
+          <div className="nagent-tool__detail">
+            <div className="nagent-tool__result-item">
+              <div className="nagent-tool__result-item-head">
+                <WrenchIcon size={12} className={`nagent-tool__icon${stateClass ? ` ${stateClass}` : ''}`} />
+                <span className="nagent-tool__name">{detail.toolName || 'update_file'}</span>
+                {fullPath ? (
+                  <button
+                    type="button"
+                    className="nagent-tool__detail-path"
+                    title={`打开文件：${fullPath}`}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      void handleOpenFile()
+                    }}
+                  >
+                    {fullPath}
+                  </button>
+                ) : null}
+              </div>
+              {diff ? (
+                <div className="nagent-tool__result-block">
+                  <UpdateFileDiff
+                    rows={diff.rows}
+                    added={diff.stat.added}
+                    removed={diff.stat.removed}
+                    unapplied={hasError}
+                  />
+                </div>
+              ) : (
+                <div className="nagent-tool__result-block">
+                  <div className="nagent-tool__result-head">
+                    <span className="nagent-tool__result-title">参数</span>
+                  </div>
+                  <pre className="nagent-tool__result-text">{formatArgLines(args).join('\n')}</pre>
+                </div>
+              )}
+              {resultText.trim() && !hasError ? (
+                <div className="nagent-tool__result-block">
+                  <div className="nagent-tool__result-head">
+                    <span className="nagent-tool__result-title">结果</span>
+                  </div>
+                  <pre className="nagent-tool__result-text">{resultText}</pre>
+                </div>
+              ) : null}
+              {hasError ? (
+                <div className="nagent-tool__result-block">
+                  <div className="nagent-tool__result-head">
+                    <span className="nagent-tool__result-title">错误输出</span>
+                  </div>
+                  <pre className="nagent-tool__result-text">{resultText.trim() ? resultText : '（错误）'}</pre>
+                </div>
               ) : null}
             </div>
-            {diff ? (
-              <div className="nagent-tool__result-block">
-                <UpdateFileDiff
-                  rows={diff.rows}
-                  added={diff.stat.added}
-                  removed={diff.stat.removed}
-                  unapplied={hasError}
-                />
-              </div>
-            ) : (
-              <div className="nagent-tool__result-block">
-                <div className="nagent-tool__result-head">
-                  <span className="nagent-tool__result-title">参数</span>
-                </div>
-                <pre className="nagent-tool__result-text">{formatArgLines(args).join('\n')}</pre>
-              </div>
-            )}
-            {resultText.trim() && !hasError ? (
-              <div className="nagent-tool__result-block">
-                <div className="nagent-tool__result-head">
-                  <span className="nagent-tool__result-title">结果</span>
-                </div>
-                <pre className="nagent-tool__result-text">{resultText}</pre>
-              </div>
-            ) : null}
-            {hasError ? (
-              <div className="nagent-tool__result-block">
-                <div className="nagent-tool__result-head">
-                  <span className="nagent-tool__result-title">错误输出</span>
-                </div>
-                <pre className="nagent-tool__result-text">{resultText.trim() ? resultText : '（错误）'}</pre>
-              </div>
-            ) : null}
           </div>
         </div>
       ) : null}

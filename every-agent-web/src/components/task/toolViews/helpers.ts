@@ -229,7 +229,7 @@ export function toolDurationTint(ms: number | undefined): number {
 
 /**
  * 详情 → 耗时列内联样式:把 tint 百分比写成 `--tool-dur-tint` 自定义属性,
- * 颜色插值本身留在样式层(chatPanel.css 的 .nagent-tool__duration),
+ * 颜色插值本身留在样式层(chatPanel.css 的 .nagent-entry__duration),
  * 视图侧只负责喂数值,不各自硬编码色值。
  */
 export function toolDurationTintStyle(detail: AggregatedToolDetail): CSSProperties {
