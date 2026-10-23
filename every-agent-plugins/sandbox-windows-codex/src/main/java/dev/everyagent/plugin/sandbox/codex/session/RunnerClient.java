@@ -33,8 +33,9 @@ import java.util.Map;
  * <p>{@link CreateProcessWithLogonW}：账户=沙箱用户名、域 {@code "."}、密码 =
  * {@link SandboxSecrets#readPassword} 解出的明文（JNA UNICODE_OPTIONS 把 String/WString
  * 直接按 UTF-16LE 编组，全程不经平台默认 charset）；旗标
- * CREATE_NO_WINDOW|CREATE_UNICODE_ENVIRONMENT、STARTF_FORCEOFFFEEDBACK、不传
- * LOGON_WITH_PROFILE（无 execution alias，免建 profile）；runner 的 TEMP/TMP 显式指到
+ * CREATE_NO_WINDOW|CREATE_UNICODE_ENVIRONMENT|LOGON_WITH_PROFILE（真 profile 常态供给
+ * ——沙箱账户有可用的 HKCU/USERPROFILE；profile 一致性治理见 design.md §4.3.1 #8 与
+ * setup 的 ProfileDoctor）、STARTF_FORCEOFFFEEDBACK；runner 的 TEMP/TMP 显式指到
  * {@code <codexHome>/.sandbox/tmp}；spawn 前后 SetErrorMode(0x3) 保存恢复。
  *
  * <p>失败分类（对齐 runner_client.rs::retry_runner_spawn_once /

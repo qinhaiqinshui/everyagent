@@ -800,6 +800,31 @@ class CodexCommandExecutorTest {
         assertEquals(2, opened.get());
     }
 
+    /**
+     * runner error 帧 stage=hkcu_profile_check（账户 profile 失真：HKCU 拒读,PS 5.1
+     * 启动读 GPO 策略键即崩——design.md §4.3.1 #8）→ 按 stage 触发自愈（错误码 5 过于
+     * 通用,不进全局码表）,重 setup(含 ProfileDoctor 重建 profile)后原地重试一次。
+     */
+    @Test
+    void hkcuProfileCheckStageTriggersHealing() {
+        FakeSession session = new FakeSession(out("ok", Stream.STDOUT),
+                new FramedMessage(6, new Exit(0, false)));
+        AtomicInteger opened = new AtomicInteger();
+        AtomicInteger reprovisioned = new AtomicInteger();
+        CodexCommandExecutor exec = healingExecutor(manager(), (cfg, spec) -> {
+            if (opened.incrementAndGet() == 1) {
+                throw new RunnerStartupException(new IpcMessage.Error(
+                        "HKCU unreadable (error 5): sandbox account profile"
+                                + " is stale/foreign", ErrorStage.HKCU_PROFILE_CHECK, 5));
+            }
+            return session;
+        }, m -> reprovisioned.incrementAndGet());
+        assertEquals("ok", exec.execute("Write-Host test", "powershell"),
+                "HKCU 失真 → 自愈(profile 重建)后重试通过");
+        assertEquals(1, reprovisioned.get(), "强制重 setup 恰触发一次");
+        assertEquals(2, opened.get(), "同一条命令原地重试一次");
+    }
+
     /** runner error 帧的非凭据类码（如 5）走通用失败路径，不重建。 */
     @Test
     void runnerStartupNonCredentialCodeDoesNotReprovision() {

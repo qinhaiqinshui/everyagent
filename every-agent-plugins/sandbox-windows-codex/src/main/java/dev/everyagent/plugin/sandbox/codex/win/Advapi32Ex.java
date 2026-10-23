@@ -150,8 +150,12 @@ public interface Advapi32Ex extends Advapi32 {
     /** EXPLICIT_ACCESS_W.grfInheritance：仅继承不生效于自身。 */
     int INHERIT_ONLY_ACE = 0x00000008;
 
+    /** Get/SetSecurityInfo：OWNER 信息（ProfileDoctor 读 NTUSER.DAT 属主用）。 */
+    int OWNER_SECURITY_INFORMATION = 0x00000001;
+
     /** SetNamedSecurityInfo：DACL 信息。 */
     int DACL_SECURITY_INFORMATION = 0x00000004;
+
     /** SetNamedSecurityInfo：切断继承（Protected DACL，SandboxDirLocker 用）。 */
     int PROTECTED_DACL_SECURITY_INFORMATION = 0x00000800;
 }
