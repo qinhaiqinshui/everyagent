@@ -78,6 +78,7 @@ public final class ProvisioningAcl {
             if (!Files.exists(rootPath)) {
                 continue; // 缺失写根跳过（对齐 run_setup_full）
             }
+            AclTargetGuard.requireSafeTarget(rootPath, "write root"); // 盘根/系统目录 fail-closed(§7.10 目标域守卫)
             String capSid = lookupCapSid(req.capSids(), root);
             if (capSid == null) {
                 throw new IOException("write root " + root
@@ -107,6 +108,7 @@ public final class ProvisioningAcl {
                 continue;
             }
             Path path = Path.of(denyPath);
+            AclTargetGuard.requireSafeTarget(path, "deny-write target"); // 先于物化:系统目录内不得创建目录/挂 deny(§7.10)
             if (!Files.exists(path)) {
                 Files.createDirectories(path); // 物化失败 = 致命（对齐 codex create_dir_all?）
             }
@@ -137,6 +139,10 @@ public final class ProvisioningAcl {
                 }
                 if (!ops.pathMaskAllows(rootPath, List.of(req.groupSid()),
                         AclMasks.READ_EXECUTE_MASK, true)) {
+                    // 即将真正写 ACE(内建主体已持 RX 的系统目录如 C:\Windows 在上一步已跳过、
+                    // 行为不变):目标域守卫命中 → 抛 IOException 交 catch 转 best-effort 错误
+                    // 条目跳过该根——读授权缺失是可用性软失败,不因 legacy 脏配置阻断整个 setup(§7.10)
+                    AclTargetGuard.requireSafeTarget(rootPath, "read root");
                     ops.ensureReadExecuteAces(rootPath, List.of(req.groupSid()));
                 }
                 // 无论本次新增还是既有确认，都归本主体的读授权账本——撤销时才有据可撤

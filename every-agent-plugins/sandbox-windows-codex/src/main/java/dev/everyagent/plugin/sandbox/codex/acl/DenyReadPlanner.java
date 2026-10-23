@@ -56,6 +56,9 @@ public final class DenyReadPlanner {
                 throw new IOException("refusing to apply a deny-read ACE to filesystem root "
                         + path);
             }
+            // 目标域守卫(§7.10):系统关键目录同样拒绝——对系统目录挂 deny-read 会令
+            // 沙箱组整体失去系统树可读性,与盘根同属不可接受目标(fail-closed,同上)
+            AclTargetGuard.requireSafeTarget(path, "deny-read target");
         }
         return planned;
     }

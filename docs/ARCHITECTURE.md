@@ -526,6 +526,8 @@ ask 管道承载第二类阻塞请求:**危险操作授权**。`PermissionGate` 
 
 **拒绝语义**:抛 `PermissionDeniedException` → 统一转「[工具执行失败]」文本回灌模型,agent 循环不中断。
 
+**路径解析异常的可读化(2026-10-23)**:`toRealPath` 链上的 `AccessDeniedException` 原生 message 是**裸路径**(无原因、无类型),直接回灌会误导排查方向(本次事故中被长期误判为「文件不存在/工具损坏」,实为 `C:\` 根 ACL 损坏 + 安全软件拦截)。现于三处统一包装为可读错误(文案单点 `PathSupport.accessDeniedHint`):`PermissionGate.requirePath`(转 `PermissionDeniedException` 回灌模型)、`CommandCheck`(EXEC 路径检查的 IOException 分支特判)、`Sandbox.resolveExisting/resolveTarget/resolveLoose`(保留 cause)。
+
 **授权决议链契约(域中性,§7.20/§14.11)**:决议请求 `AuthorizationRequest(ExecContext context, agentId, grantKey, prompt)`——链节点(Unattended/AiReview/Human)只见 ExecContext 槽位(经 `WorkerServices.slashTokens()` 判任务级 slash token 开关、`interaction()` 弹窗(subjectId 已绑定)、`agentFactory()` 建审议 agent、`emitter()` 落审计),不接触 `TaskEntry/TaskRuntime/TaskInfo`;`GrantRegistry` 按 `subjectId()` 分区授权状态、`dataDir()` 落盘 grants.json(今天二者=taskId/任务数据目录)。未来工作流层构造自己的 ExecContext 即走同一条链,链代码零改动。
 
 ### 7.9 AI 安全审议与无人值守
@@ -610,6 +612,7 @@ ShellExecutor gated = (cmd, shell) -> { ctx.commandGate().authorize(cmd); return
 
 - **写侧为何不撤 ACE**:cap SID 门控已让陈旧 ACE 失效(**安全已达标**);而物理撤销会打断**仍持有该 SID 的存活子进程**(命令可起后台进程,活得比 launcher 久)——codex 原生正因此选择「ACL 留在原地 + SID 门控」,本仓同构。
 - **读侧为何必须撤**:无门控手段可用;`ReadGrantState`(`<sandbox>/.sandbox/read_grants_state.json`,按组 SID 分区)记录「我们施过读授权的路径」,每次 preflight 先补齐/确认当前读根,再对本轮不再是读根的旧路径 `revokeAce`(下一条命令启动前完成 → 即刻系统级拒绝)。两条保护:①**当前写根**只遗忘不撤(写 ACE 是组+cap 双主体,撤组会连带丢掉读;且写根本身可能由读根升级而来);②**当前 deny-read 目标**只遗忘不撤(`revokeAce` 删该 SID 全部显式 ACE,会连带删掉 deny → 反而放宽)。系统本就放行读的路径(Everyone/Users/Authenticated Users 已持 RX)不入账——我们没施加任何东西。
+- **ACL 目标域守卫(fail-closed,2026-10-23 事故加固)**:codex 后端对任何路径施加 ACL(写根 allow / deny-write / deny-read / 读根 allow)前经 `AclTargetGuard` 单点校验——**盘根**与**系统关键目录**一律拒做目标:`%SystemRoot%`/`%ProgramFiles%`(含 x86/W6432 变体)的**自身·其下·其祖先**全拒(祖先放行等于整体覆盖系统树);`%ProgramData%` 与 `<SystemDrive>\Users` 拒**自身与祖先**、其下放行(WER 报告目录与沙箱账户 profile 是 codex 原版合法目标)。词法 + realpath 双形态判定(防 reparse point 绕过)。失败语义分级:写根/deny-write/deny-read 命中即**抛 IOException**(setup fail-closed,错误直达 setup_error.json,用户可见);读根仅在「内建主体已持 RX」跳过失效、**即将真正写 ACE** 时命中 → 跳过该根并入 best-effort 错误列表(读授权缺失是可用性软失败,不因 legacy 脏配置搞挂整个 setup)。背景:工作区外部授权根曾含历史整盘 `C:\` 授权,经 `SandboxPathRegistry`(READ_WRITE)→ 后端写根 → `ProvisioningAcl` SET_ACCESS 一路无守卫直达 `C:\` 根 DACL,异常 ACE 令全机 Java 进程 `toRealPath` 全灭(文件工具/命令授权链瘫痪,修复需手工恢复根 ACL)。worker 侧同步加**下发过滤**:`WorkspaceManager.syncSandboxRoots` 对 externalRoots 中的系统关键目录/盘根拒不下发(log.warn 提示移除),legacy 注册表脏数据兜底;注册入口 `addExternalRoot` 维持既有 `OverBroadRootCheck` 语义不变(系统目录与普通区外目录同权走授权决议链,§7.8)。
 
 **任务级授权不进意图表(历史约束,现已被上面的 `grants:` owner supersede)**:原设计为避免 run 档授权经持久 drvfs 挂载泄漏成跨任务可读根,曾规定「单次授权只在授权决议层放行、不进沙箱」。现改为**路径级、无语义的 grant/revoke 通道**:沙箱侧只见到路径,由 worker 聚合账本按主体生命周期增删,故 run 档授权不会沉淀(主体边界即回收边界);wsl 侧仍是持久 drvfs 挂载,但其可见性由同一份账本驱动。
 

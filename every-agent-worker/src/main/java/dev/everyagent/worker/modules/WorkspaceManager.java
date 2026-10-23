@@ -713,7 +713,15 @@ public class WorkspaceManager implements dev.everyagent.plugin.api.spi.Workspace
         for (Registered r : list()) {
             grants.add(new PathGrant(Path.of(r.root()), Access.READ_WRITE));
             for (String raw : r.externalRoots()) {
-                grants.add(new PathGrant(Path.of(raw), Access.READ_WRITE));
+                Path root = Path.of(raw);
+                if (isUnsafeSandboxRoot(root)) {
+                    // legacy 脏数据兜底(§7.10):系统关键目录/盘根一旦 READ_WRITE 下发,
+                    // 沙箱后端(codex)会对其施加 ACL——2026-10-23 曾因此污染 C:\ 根 DACL。
+                    // 注册入口 addExternalRoot 不变(OverBroadRootCheck 语义),只挡下发。
+                    log.warn("外部授权根 {} 为系统关键目录/盘根,拒不下发沙箱(请从工作区设置移除)", root);
+                    continue;
+                }
+                grants.add(new PathGrant(root, Access.READ_WRITE));
             }
         }
         try {
@@ -721,6 +729,63 @@ public class WorkspaceManager implements dev.everyagent.plugin.api.spi.Workspace
         } catch (RuntimeException e) {
             log.warn("沙箱授权根对齐失败(不影响注册表广播): {}", e.getMessage());
         }
+    }
+
+    /**
+     * 沙箱下发根安全谓词(§7.10 目标域守卫的 worker 侧下发防线):
+     * ① 文件系统根;② 系统关键目录——{@code %SystemRoot%} 与 {@code %ProgramFiles%} 系
+     * (含 x86/W6432 变体)的自身/其下/其祖先;③ {@code %ProgramData%} 与
+     * {@code <SystemDrive>\Users} 的自身/其祖先。语义与插件侧
+     * {@code AclTargetGuard} 对齐(worker 不得依赖插件,独立实现;env 解析不硬编码盘符)。
+     */
+    static boolean isUnsafeSandboxRoot(Path root) {
+        String sd = envOrDefault("SystemDrive", "C:");
+        return isUnsafeSandboxRoot(root,
+                List.of(Path.of(envOrDefault("SystemRoot", sd + "\\Windows")),
+                        Path.of(envOrDefault("ProgramFiles", sd + "\\Program Files")),
+                        Path.of(envOrDefault("ProgramFiles(x86)", sd + "\\Program Files (x86)")),
+                        Path.of(envOrDefault("ProgramW6432", sd + "\\Program Files"))),
+                List.of(Path.of(envOrDefault("ProgramData", sd + "\\ProgramData")),
+                        Path.of(sd, "Users")));
+    }
+
+    /**
+     * 可注入形态(单测用临时目录构造定位;语义同 {@link #isUnsafeSandboxRoot(Path)}):
+     * fullCover = 自身/其下/其祖先全拒;surfaceOnly = 自身/其祖先拒、其下放行
+     * (WER 目录与用户 profile 是合法授权根)。
+     */
+    static boolean isUnsafeSandboxRoot(Path root, List<Path> fullCover, List<Path> surfaceOnly) {
+        Path norm = root.toAbsolutePath().normalize();
+        if (norm.getRoot() != null && norm.getRoot().equals(norm)) {
+            return true; // 盘根
+        }
+        String k = safetyKey(norm);
+        for (Path dir : fullCover) {
+            String d = safetyKey(dir);
+            if (k.equals(d) || k.startsWith(d + "/") || d.startsWith(k + "/")) {
+                return true;
+            }
+        }
+        for (Path dir : surfaceOnly) {
+            String d = safetyKey(dir);
+            if (k.equals(d) || d.startsWith(k + "/")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static String envOrDefault(String name, String fallback) {
+        String value = System.getenv(name);
+        return value == null || value.isBlank() ? fallback : value;
+    }
+
+    private static String safetyKey(Path path) {
+        String k = path.toAbsolutePath().normalize().toString().replace('\\', '/');
+        while (k.endsWith("/") && k.length() > 3) {
+            k = k.substring(0, k.length() - 1);
+        }
+        return k.toLowerCase(java.util.Locale.ROOT);
     }
 
     /** 载入注册表 workspaces/workspaces.json;旧文件无 id 字段时按规则补分配并原子写回。 */

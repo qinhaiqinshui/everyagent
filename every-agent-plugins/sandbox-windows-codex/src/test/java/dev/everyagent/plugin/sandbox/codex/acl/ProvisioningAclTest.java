@@ -11,6 +11,7 @@ import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -208,6 +209,80 @@ class ProvisioningAclTest {
                 Map.of("C:/ws", WS_CAP, "C:/extra", EXTRA_CAP),
                 List.of("C:\\ws", "C:\\extra"), Path.of("D:\\elsewhere"));
         assertEquals(List.of(WS_CAP, EXTRA_CAP), fallback, "无命中回退全部活动根");
+    }
+
+    // ---- ACL 目标域守卫(§7.10;定位经 AclTargetGuard.override 注入临时目录) ----
+
+    /** 注入守卫定位(protect=全覆盖,users=仅自身),返回原 override 以便恢复。 */
+    private AclTargetGuard.SystemLocations armGuard(Path protect, Path users) {
+        AclTargetGuard.SystemLocations prev = AclTargetGuard.override;
+        AclTargetGuard.override = new AclTargetGuard.SystemLocations(
+                List.of(protect), List.of(users));
+        return prev;
+    }
+
+    private void restoreGuard(AclTargetGuard.SystemLocations prev) {
+        AclTargetGuard.override = prev;
+    }
+
+    @Test
+    void unsafeWriteRootFailsClosedBeforeAnyAce() throws IOException {
+        Path ws = Files.createDirectories(tmp.resolve("workspace"));
+        Path protect = Files.createDirectories(tmp.resolve("protect"));
+        RecordingAclOperations ops = new RecordingAclOperations();
+        AclTargetGuard.SystemLocations prev = armGuard(protect, tmp.resolve("users"));
+        try {
+            ProvisioningRequest.Builder request = ProvisioningRequest.builder(GROUP,
+                    tmp.resolve(".sandbox")).writeRoot(protect.toString(), WS_CAP)
+                    .writeRoot(ws.toString(), EXTRA_CAP);
+            IOException error = assertThrows(IOException.class,
+                    () -> new ProvisioningAcl(ops).applyProvisioning(request.build()));
+            assertTrue(error.getMessage().contains("refusing to apply ACL"), error.getMessage());
+            assertTrue(ops.calls.stream().noneMatch(c -> c.op().equals("allowWrite")),
+                    "守卫命中后不得对任何根施加写 ACE(fail-closed 先于施加)");
+        } finally {
+            restoreGuard(prev);
+        }
+    }
+
+    @Test
+    void unsafeDenyWriteTargetFailsClosedBeforeMaterialization() throws IOException {
+        Path ws = Files.createDirectories(tmp.resolve("workspace"));
+        Path protect = Files.createDirectories(tmp.resolve("protect"));
+        Path carveout = protect.resolve("carveout"); // 不存在:若守卫缺位会被物化
+        RecordingAclOperations ops = new RecordingAclOperations();
+        AclTargetGuard.SystemLocations prev = armGuard(protect, tmp.resolve("users"));
+        try {
+            IOException error = assertThrows(IOException.class,
+                    () -> new ProvisioningAcl(ops).applyProvisioning(request(ws)
+                            .denyWritePaths(List.of(carveout.toString())).build()));
+            assertTrue(error.getMessage().contains("refusing to apply ACL"), error.getMessage());
+            assertFalse(Files.exists(carveout), "系统目录内不得物化 carveout 目录");
+        } finally {
+            restoreGuard(prev);
+        }
+    }
+
+    @Test
+    void unsafeReadRootSkippedBestEffortNotFatal() throws IOException {
+        Path ws = Files.createDirectories(tmp.resolve("workspace"));
+        Path protect = Files.createDirectories(tmp.resolve("protect"));
+        RecordingAclOperations ops = new RecordingAclOperations();
+        ops.maskAllows = false; // 内建主体不持 RX → 会走到「即将写 ACE」分支
+        AclTargetGuard.SystemLocations prev = armGuard(protect, tmp.resolve("users"));
+        try {
+            assertDoesNotThrow(() -> new ProvisioningAcl(ops).applyProvisioning(request(ws)
+                    .readRoots(List.of(protect.toString())).build()),
+                    "读根命中守卫是软失败(跳过+记错),不得阻断整个 setup");
+            assertFalse(ops.calls.stream().anyMatch(
+                    c -> c.op().equals("readExec") && c.path().equals(protect)),
+                    "系统目录不得施加读 ACE");
+            assertFalse(DenyReadState.load(ReadGrantState.stateFile(tmp.resolve(".sandbox")))
+                    .getOrDefault(GROUP, List.of()).contains(protect.toString()),
+                    "被跳过的读根不得入账(否则撤销无据可依)");
+        } finally {
+            restoreGuard(prev);
+        }
     }
 }
 
