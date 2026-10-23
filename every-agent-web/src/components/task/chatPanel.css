@@ -1383,12 +1383,15 @@
    展开态边框/折叠态悬停抑制)保留在 .nagent-trace-shell 容器类上。 */
 .nagent-trace-shell {
   display: block;
-  /* trace 是 .nagent-thread 直接子元素不走 .nagent-msg__body，
-     与消息正文一样无最大宽度限制；整行右移到统一文字栏
-     (--text-column-indent,左侧图标列让位给工具状态图标/思考菱形),
-     宽度等量扣减 → 右缘仍与消息流容器对齐。 */
-  margin-left: var(--text-column-indent);
-  width: calc(100% - var(--text-column-indent));
+  /* trace 是 .nagent-thread 直接子元素不走 .nagent-msg__body，与消息正文一样无最大宽度限制。
+     列几何与工具行**同构**(§8.7「trace 折叠行与工具行同列同尺寸」):整行左缘留在 0(与工具行
+     同一条竖线),统一文字栏缩进改由折叠行的 padding-left 承担(见下方
+     `.nagent-trace-shell .nagent-entry__summary`),图标槽再以等量负 margin 挂进那块 padding
+     ——图标因此落在工具图标同一列,且不会因负 out 出**容器**边界被本容器的 overflow:hidden 裁掉
+     (旧写法是容器 margin-left: --text-column-indent,整条 trace 行比工具行深一个缩进、
+     图标与工具图标不同列)。 */
+  margin-left: 0;
+  width: 100%;
   min-width: 0;
   /* 防止在 .nagent-thread flex 列里被 flex-shrink 压成 0：
      overflow:hidden 会让 flex 子项的 min-height:auto 解析为 0，从而被压缩消失 */
@@ -1406,14 +1409,38 @@
   background: var(--bg-secondary);
 }
 
+/* trace 折叠行的左缩进挂在行内 padding 上(容器不再自带缩进,见上条注释):
+   文字起点 = 统一文字栏,与工具名/思考标题同一条竖线;无图标的 trace 行
+   (cancelled 等)文字亦恒在此列。悬停底色随之从行左缘起,与工具行一致。 */
+.nagent-trace-shell .nagent-entry__summary {
+  padding-left: var(--text-column-indent);
+}
+
+/* trace 图标列 = 工具行图标列(同列同尺寸):槽宽 13px(与工具图标 WrenchIcon/
+   TerminalIcon size=13 一致)、负 margin 挂进上面的 padding 区 → 图标左缘与
+   工具图标对齐,文字起点仍是 13 + gap 8 = 21px = 统一文字栏(与
+   .nagent-tool__detail margin-left:21px 的「图标 + gap」耦合口径同源)。 */
+.nagent-trace-shell .nagent-entry__icon {
+  box-sizing: border-box;
+  width: calc(var(--text-column-indent) - var(--space-2));
+  margin-left: calc(-1 * var(--text-column-indent));
+  justify-content: flex-start;
+}
+
+/* 展开态内容左缘 = 统一文字栏 + 壳内边距(容器缩进改到行内后等量补回,展开卡片位置零变化)。 */
+.nagent-trace-shell .nagent-entry__content {
+  padding-left: calc(var(--text-column-indent) + var(--space-3));
+}
+
 .nagent-entry__summary {
   display: flex;
   align-items: center;
   gap: var(--space-2);
   width: 100%;
   min-width: 0;
-  /* 左内边距归零：整行缩进由 .nagent-trace-shell 的 margin-left 提供
-     (统一文字栏)，仅保留右侧 --space-3，避免折叠图标贴边。 */
+  /* 左内边距归零、只保留右侧 --space-3(避免折叠图标贴边)：trace 行的左缩进不在这里,
+     由 `.nagent-trace-shell .nagent-entry__summary` 挂 padding-left 到统一文字栏;
+     工具行自带 padding:0(图标天然在文档流首位)。 */
   padding: 0 var(--space-3) 0 0;
   border: none;
   background: transparent;

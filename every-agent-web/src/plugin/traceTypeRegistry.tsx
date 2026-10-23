@@ -41,7 +41,10 @@ export function resolveTraceIcon(icon?: string | React.ReactNode): React.ReactNo
   }
   const Glyph = TRACE_ICON_COMPONENTS[icon]
   if (Glyph) {
-    return <Glyph size={14} />
+    // 13px = 工具行折叠行图标尺寸(WrenchIcon/TerminalIcon size=13):trace 图标与工具图标
+    // 同列同尺寸(样式侧图标槽宽亦按 13px 算,见 chatPanel.css
+    // `.nagent-trace-shell .nagent-entry__icon`)。
+    return <Glyph size={13} />
   }
   return icon
 }

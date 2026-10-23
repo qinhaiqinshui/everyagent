@@ -8,22 +8,35 @@
  * - 问号 path 取自宿主 AppGlyphs.QuestionMarkIcon（同款视觉，问号弧线 1.3 与宿主一致）；
  * - 盾叉为盾形轮廓 + 两条短交叉线（圆头端点，风格与对勾一致）。
  *
- * 默认 size=14：与宿主 resolveTraceIcon 的 string 通道渲染尺寸 `<Glyph size={14}/>` 对齐，
- * getIcon 走 ReactNode 通道直渲染时即为本默认尺寸。
+ * 默认 size=13：与宿主工具行折叠行图标（WrenchIcon/TerminalIcon size=13）及宿主
+ * resolveTraceIcon 的 string 通道渲染尺寸一致——trace 折叠行的图标列宽按 13px 与工具图标列
+ * 对齐（宿主样式 `.nagent-trace-shell .nagent-entry__icon`），插件走 ReactNode 通道直渲染时
+ * 必须同尺寸，否则图标会把文字推偏。
+ *
+ * className 透传到 svg：三态着色（allow 绿 / deny 红 / escalate 琥珀）由 index.ts 的 getIcon
+ * 挂 `auth-review-glyph--*` 类，色值定义在 authReview.css——「审议结论 → 颜色」是本插件的
+ * 领域语义，不塞进宿主（宿主 trace 扩展点无 tone 字段，§8.7）。
  */
 import type { ReactNode } from 'react'
+
+/** 图标公共 props：尺寸 + 透传给 svg 的 className（三态着色通道）。 */
+export interface GlyphProps {
+  size?: number
+  className?: string
+}
 
 /** 盾形轮廓 path（取自宿主 AppGlyphs.ShieldCheckIcon，同款视觉）。 */
 const SHIELD_PATH = 'M8 2.5L13.1 4.2V7.6C13.1 10.7 10.9 13.2 8 14.1C5.1 13.2 2.9 10.7 2.9 7.6V4.2L8 2.5Z'
 
 /** 16 系图标公共 svg 骨架（与宿主 AppGlyphs 的 Svg 包装同款）。 */
-function GlyphSvg({ size, children }: { size: number; children: ReactNode }) {
+function GlyphSvg({ size, className, children }: { size: number; className?: string; children: ReactNode }) {
   return (
     <svg
       width={size}
       height={size}
       viewBox="0 0 16 16"
       aria-hidden="true"
+      className={className}
       style={{ display: 'block', flexShrink: 0 }}
       fill="none"
     >
@@ -33,9 +46,9 @@ function GlyphSvg({ size, children }: { size: number; children: ReactNode }) {
 }
 
 /** 盾 + 勾：审议通过（ALLOW，及结论缺省兜底）。盾形轮廓与勾形 path 与宿主 ShieldCheckIcon 同款。 */
-export function ShieldCheckIcon({ size = 14 }: { size?: number }) {
+export function ShieldCheckIcon({ size = 13, className }: GlyphProps) {
   return (
-    <GlyphSvg size={size}>
+    <GlyphSvg size={size} className={className}>
       <path d={SHIELD_PATH} stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
       <path
         d="M5.9 8L7.2 9.3L10.1 6.5"
@@ -49,9 +62,9 @@ export function ShieldCheckIcon({ size = 14 }: { size?: number }) {
 }
 
 /** 盾 + 叉：审议拒绝（DENY）。盾形轮廓同宿主，内部换两条短交叉线（圆头端点，风格与勾一致）。 */
-export function ShieldXIcon({ size = 14 }: { size?: number }) {
+export function ShieldXIcon({ size = 13, className }: GlyphProps) {
   return (
-    <GlyphSvg size={size}>
+    <GlyphSvg size={size} className={className}>
       <path d={SHIELD_PATH} stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
       <path d="M6.15 6.65L9.85 9.55" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
       <path d="M9.85 6.65L6.15 9.55" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
@@ -60,9 +73,9 @@ export function ShieldXIcon({ size = 14 }: { size?: number }) {
 }
 
 /** 问号：审议升级转人工（ESCALATE）。path 复用宿主 AppGlyphs.QuestionMarkIcon 同款视觉。 */
-export function QuestionMarkIcon({ size = 14 }: { size?: number }) {
+export function QuestionMarkIcon({ size = 13, className }: GlyphProps) {
   return (
-    <GlyphSvg size={size}>
+    <GlyphSvg size={size} className={className}>
       <circle cx="8" cy="8" r="5.6" stroke="currentColor" strokeWidth="1.4" />
       <path
         d="M6.2 6.3C6.2 5.1 7.1 4.4 8 4.4C8.9 4.4 9.8 5.1 9.8 6.3C9.8 7.1 9.3 7.5 8.6 7.9C8.1 8.2 8 8.4 8 9V9.3"
